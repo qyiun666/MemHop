@@ -1,17 +1,16 @@
 # MemHop — Agent 专用嵌入式联想记忆数据库 · 系统设计方案
 
-**日期**：2026-05-19（更新）
-**工作流**：系统设计（工作流 2）
-**参与成员**：甄宇航（Zhen）· 工程督导
-**版本**：v1.1 — 新增编码器可插拔设计、中文短词解决方案、提示词定位澄清
+**日期**：2026-05-19
+**版本**：v2.0 — Rust 优先，pyo3 绑定；ngram 默认编码器；最终版设计
 
 ---
 
 ## 📌 TL;DR（执行摘要）
 
 - **定位**："SQLite for associative memory" — 专为 AI Agent 设计的嵌入式联想记忆数据库
-- **核心机制**：稀疏编码 → Modern Hopfield Network 吸引子 → O(1) 单条记忆召回（非 Top-K）
-- **技术栈**：Python 原型验证 → Rust + pyo3 生产实现，LMDB 持久化，单文件零配置
+- **核心机制**：字符 n-gram 哈希编码 → Modern Hopfield Network 吸引子 → O(1) 单条记忆召回（非 Top-K）
+- **编码器**：默认 ngram 哈希（零模型，全语言），可选 BGE-M3（语义增强）
+- **技术栈**：Rust + pyo3，LMDB 持久化，单文件零配置
 - **当前 MeowAgent 有 27 个独立持久化组件**，其中 11 个可被 MemHop 直接替换，8 个可渐进迁移
 - **语言无关**：embedding 层处理多语言，无需中英文分路径
 - **关键空白市场**：不存在嵌入式、持久化、单文件、零配置的联想记忆数据库
@@ -24,7 +23,7 @@
 |------|------|
 | 项目名称 | **MemHop**（Memory + Hopfield） |
 | 整体定位 | 嵌入式联想记忆数据库，人脑 O(1) 检索模型 |
-| 技术栈 | Python 原型 → Rust/pyo3 生产 |
+| 技术栈 | Rust + pyo3 生产 |
 | 存储后端 | LMDB（单文件，mmap，零配置） |
 | 核心算法 | Sparse Coding + Modern Hopfield Networks |
 | API 接口 | `remember(text, meta)` / `recall(cue)` → 单条完整记忆 |
@@ -51,10 +50,11 @@
 | 检索复杂度 | **真正 O(1)** — 与记忆总量无关 |
 | 召回方式 | 单条完整记忆（非 Top-K 列表） |
 | 存储格式 | 单文件，零配置 |
-| 内存占用 | < 50MB 运行时（100 万条记忆） |
+| 内存占用 | < 50MB 运行时（100K 记忆，Rust f16 + mmap 懒加载） |
 | 持久化延迟 | < 10ms 写入 |
-| 检索延迟 | < 5ms 召回 |
-| 嵌入方式 | pip install / Cargo.toml 一行依赖 |
+| 检索延迟 | < 1ms 召回（进程内函数调用，无网络） |
+| 嵌入方式 | `import memhop` / `Cargo.toml` 一行依赖，无端口 |
+| 默认编码器 | 字符 n-gram 哈希（0MB 模型，全语言，< 0.1ms） |
 
 ### 1.3 人脑 O(1) 模型
 
@@ -97,6 +97,80 @@ MemHop **不是提示词的替代品**，而是替代提示词里最占 token �
 
 **核心区分**：提示词是"怎么做事"的章程（不变），MemHop 是"记得什么"的笔记（海量需检索）。两者互补，不互替。MemHop 的实际价值是把 MeowAgent 当前的 O(0) 全量压缩注入变成 O(1) 精准检索注入——对话 100 轮不再压缩成一坨摘要塞进 prompt，而是精准 recall 3~5 条相关记忆，token 成本从 $$$ 降到几乎为零。
 
+### 1.5 三层记忆模型
+
+MemHop 承载 MeowAgent 的三类记忆，形成 **纠缠图 → 知识树 → 原文索引** 的层次结构：
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    纠缠图 (Entity Layer)                          │
+│  layer="entity"                                                  │
+│  ┌──────────┐   relation    ┌──────────┐                        │
+│  │ e_001    │────caused_by──▶│ e_002    │                        │
+│  │ "支付bug" │               │ "空指针"  │                        │
+│  └────┬─────┘               └────┬─────┘                        │
+│       │ connections              │ connections                   │
+├───────┼──────────────────────────┼──────────────────────────────┤
+│       ▼                          ▼                               │
+│  知识树 (Knowledge Layer)     layer="knowledge"                  │
+│  ┌──────────────────────────────────────────┐                    │
+│  │ domain="code"  path="payment.py"         │                    │
+│  │ ┌─────────┐    ┌─────────┐               │                    │
+│  │ │ k_010   │───▶│ k_011   │───▶ ...       │                    │
+│  │ │ 模块结构 │    │ 函数签名 │               │                    │
+│  │ └────┬────┘    └────┬────┘               │                    │
+│  │      │ parent       │ parent              │                    │
+│  └──────┼──────────────┼────────────────────┘                    │
+│         ▼              ▼                                         │
+├──────────────────────────────────────────────────────────────────┤
+│  原文索引 (Episode Layer)     layer="episode"                     │
+│  ┌──────────────────┐  ┌──────────────────┐                      │
+│  │ turn_042         │  │ turn_043         │                      │
+│  │ "这个bug是昨天的  │  │ "改好了,加了个    │                      │
+│  │  空指针引起的"    │  │  null check"     │                      │
+│  │ session_id="s_7" │  │ session_id="s_7" │                      │
+│  └──────────────────┘  └──────────────────┘                      │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**层次关系**：
+- **纠缠图 entity** 通过 `connections[].to` 指向其他 entity，形成关系网
+- **知识树 node** 通过 `parent` 指向父节点，`path` 关联源文件
+- **原文 turn** 记录原始对话，`session_id` 关联会话
+
+**三类记忆统一存储，通过 `meta.layer` 字段区分，`search()` 按层过滤。**
+
+### 1.6 衰减与自动清理
+
+MemHop 本身不做复杂的衰减策略（那是 meowagent 应用层的事），但提供基础清理能力防止数据库无限膨胀：
+
+| 能力 | 接口 | 说明 |
+|------|------|------|
+| 按时间清理 | `purge_before(datetime)` | 删除 `created_at` 早于指定时间的记忆 |
+| 保护级别 | `meta.protection` | `"permanent"` 永不删除，`"protected"` 需显式确认，`"normal"` 可自动清理 |
+| 休眠标记 | `meta.is_dormant` | 标记为休眠的记忆不参与 `recall()`，但 `search()` 可见 |
+| 最大条数 | `memhop.open(max_memories=N)` | 超出上限时触发 FIFO 淘汰（仅删除 `"normal"` 级别） |
+
+**不在 MemHop 范围内的**（由 meowagent 处理）：时间衰减策略、热点检测、语义去重、噪音过滤。
+
+### 1.7 MeowAgent 对接需求
+
+完整需求规格：`deliverables/engineering-assurance/memhop-requirements-from-meowagent-2026-05-19.md`
+
+核心 API 需求（当前实现 vs 需求差异见 ROADMAP.md §Phase 2）：
+
+| 接口 | 需求 | 当前状态 |
+|------|------|:--:|
+| `remember_batch(items)` | 批量写入 | ❌ |
+| `recent(limit)` | 最近 N 条 | ❌ |
+| `search(filters, limit)` | 任意 meta 字段过滤 | ⚠️ 仅 tags + text_contains |
+| `created_at` 字段 | Memory 含时间戳 | ❌ |
+| upsert on same key | 同 key 去重 | ❌ |
+| `is_dormant` | 休眠标记 | ❌ |
+| `protection` | 保护级别 | ❌ |
+| `connections_to` 查询 | 关联引用查询 | ❌ |
+| close 后错误 | MemHopClosedError | ❌ |
+
 ---
 
 ## 2. 高层设计
@@ -111,8 +185,8 @@ MemHop **不是提示词的替代品**，而是替代提示词里最占 token �
 ├─────────────────────────────────────────────────────────┤
 │  第一层：编码层 (Pluggable Encoder)                       │
 │  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐     │
-│  │ API (默认)    │ │ BGE-M3 本地  │ │ 自定义编码器  │     │
-│  │ DeepSeek Emb  │ │ 300MB INT8   │ │ 任意兼容实现  │     │
+│  │ ngram (默认)  │ │ BGE-M3 本地  │ │ 自定义编码器  │     │
+│  │ 零模型 <0.1ms │ │ 300MB INT8   │ │ 任意兼容实现  │     │
 │  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘     │
 │         └────────────────┼────────────────┘             │
 │                          ▼                               │
@@ -162,7 +236,7 @@ MemHop **不是提示词的替代品**，而是替代提示词里最占 token �
 │                    LMDB Storage                      │
 │  ┌──────────┐ ┌──────────┐ ┌──────────────────┐    │
 │  │ Patterns │ │  Blobs   │ │  Meta Index       │    │
-│  │ (float32 │ │ (zstd    │ │  (id → offset,    │    │
+│  │ (f16    │ │ (zstd   │ │ (timestamp, confidence,) │    │
 │  │  matrix) │ │  text)   │ │   timestamp, tags)│    │
 │  └──────────┘ └──────────┘ └──────────────────┘    │
 │                   single file: memhop.db             │
@@ -196,24 +270,27 @@ MemHop **不是提示词的替代品**，而是替代提示词里最占 token �
 
 编码器与存储引擎解耦。用户根据场景选择，MemHop 只要求实现统一接口：
 
-```
-Encoder 接口:
-  encode(text: str) → EncoderOutput(
-    dense:     ndarray[1024, float32],   # 稠密语义向量
-    sparse:    dict[str, float] | None,  # 稀疏词袋向量 (BGE-M3 等)
-    multi:     ndarray[N, 1024] | None,  # 多向量 / token 级 (ColBERT 风格)
-  )
+```rust
+// Rust Encoder trait（见 REQUIREMENTS.md §6.1 完整定义）
+pub trait Encoder: Send + Sync {
+    fn encode(&self, text: &str) -> Result<EncoderOutput, MemHopError>;
+}
+
+pub struct EncoderOutput {
+    pub dense: Vec<f16>,              // [1024] float16, L2 归一化
+    pub sparse: HashMap<String, f32>, // ngram 字面权重 / BGE-M3 lexical weights
+}
 ```
 
 | 模式 | 编码器 | 本地内存 | 延迟 | 适用场景 |
 |------|--------|---------|------|---------|
-| **API（默认）** | DeepSeek / OpenAI Embedding API | **0** | ~100ms | 快速接入，零内存门槛 |
-| **本地（推荐）** | BGE-M3 (ONNX INT8) | **~300MB** | < 5ms | 高性能，离线可用 |
-| **自定义** | 任意 Encoder 接口实现 | 不定 | 不定 | 特殊领域需求 |
+| **ngram（默认）** | 字符 n-gram 哈希 | **0** | < 0.1ms | 零模型，全语言，开箱即用 |
+| **bge（可选）** | BGE-M3 ONNX INT8 | **~300MB** | < 5ms | 需要强语义召回时 |
+| **自定义** | 任意 Encoder trait 实现 | 不定 | 不定 | 特殊领域需求 |
 
-**默认选择 API 的原因**：MeowAgent 当前 A/B 模型也是 API 调用，不加本地模型负荷。用户需要极致性能或离线场景时，`pip install memhop[local]` 自动拉 BGE-M3。
+**默认选择 ngram 哈希**：零模型 = 真正的零配置。MemHop 定位 "SQLite for associative memory"——SQLite 不需要下载模型才能用，MemHop 同理。字符 n-gram 的全语言特性确保外国人跟中国人一样开箱即用。需要更强的语义理解时 `pip install memhop[semantic]` 切换 BGE-M3。
 
-**关于 BGE-M3**：智源研究院 (BAAI) 开源的多语言嵌入模型。568M 参数，MIT 许可，是目前**唯一**同时支持 dense + sparse + multi-vector 三种检索模式的模型。CMTEB 中文排行榜第 2，ONNX INT8 量化后仅 ~300MB。Sparse 输出对中文短词字面匹配尤为关键。
+> **关于 BGE-M3（可选增强）**：智源研究院 (BAAI) 开源。目前**唯一**同时支持 dense + sparse + multi-vector 三种检索模式的模型。中文 CMTEB 第 2，ONNX INT8 量化 ~300MB。作为语义增强的可选方案，不需要时完全不用装。
 
 ### 2.5 中文短词场景：五层防护方案
 
@@ -221,18 +298,18 @@ MHN 在中文短词上的挑战不在算法本身，而在嵌入向量的输入�
 
 | 层 | 方案 | 原理 | 成熟度 |
 |---|------|------|:---:|
-| 1 | **BGE-M3 混合编码** | dense + sparse + multi-vector 三输出，sparse 保底字面匹配 | 🟢 生产可用 |
-| 2 | **多向量 (ColBERT-style)** | 每 token 独立向量，短词不丢失逐字信号 | 🟢 生产可用 |
-| 3 | **Query Expansion** | 短词扩展为短语再编码（"早餐"→"早餐 早饭 豆浆油条"） | 🟡 需领域调优 |
-| 4 | **HEN 编码器** (Hopfield Encoding Networks, 2024) | VQ-VAE 可学习编码器，最大化模式分离 | 🟡 论文阶段 |
-| 5 | **两阶段检索** | Sparse 粗筛（字面匹配淘汰 99% 不相关）→ MHN 精排 | 🟢 生产可用 |
+| 1 | **ngram 字面重叠（默认）** | n=2/3/4 字符片段哈希，短词天然高重叠（"早餐"→"早"/"餐"/"早餐" n-gram 自覆盖） | 🟢 生产可用 |
+| 2 | **BGE-M3 混合编码（可选）** | 安装 bge 模式后，dense + sparse + multi-vector 三输出增强语义 | 🟢 生产可用 |
+| 3 | **多向量 (ColBERT-style)（可选）** | 每 token 独立向量，短词不丢失逐字信号（需 BGE-M3 multi-vector） | 🟢 生产可用 |
+| 4 | **Query Expansion（可选）** | 短词扩展为短语再编码（需 BGE-M3 语义理解） | 🟡 需领域调优 |
+| 5 | **两阶段检索** | Sparse 粗筛（ngram 字面匹配 → 500 候选）+ MHN 精排 | 🟢 生产可用 |
 
-**MemHop 默认启用第 1、2、5 层**（无需额外训练）。第 3 层作为可选优化，第 4 层在 Phase 2 后评估是否引入。
+**默认启用第 1、5 层**（零模型依赖）。第 2-4 层需安装 `pip install memhop[semantic]` 获得 BGE-M3 支持。
 
 **两阶段检索流程**：
 ```
 recall("早餐")
-  → 阶段一 (Sparse): BGE-M3 sparse 字面匹配 → 1M 记忆 → 500 候选
+  → 阶段一 (Sparse): ngram 字面权重匹配 → 1M 记忆 → 500 候选
   → 阶段二 (MHN):   dense 向量 Hopfield 收敛 → 1 条完整记忆
   → confidence < 0.7? → None (安全兜底，防止错误召回)
 ```
@@ -338,26 +415,35 @@ let memory = db.recall("今天早上吃了什么")?;
 
 **决策**：稀疏编码 + LSH，与 O(1) 目标一致。
 
-### ADR-004: Python 原型 → Rust 生产
+### ADR-004: Rust 优先，pyo3 绑定
 
 | 阶段 | 语言 | 目标 |
 |------|------|------|
-| Phase 1 | Python (numpy + lmdb) | 算法验证，API 迭代 |
-| Phase 2 | Rust (nalgebra + heed) | 性能优化，pyo3 绑定 |
+| Phase 1 | Rust (heed + pyo3) | 核心引擎 + Python 绑定，直接生产可用 |
+| Phase 2 | Rust feature flags | BGE-M3 语义增强（`semantic` feature） |
 | Phase 3 | Rust + C FFI | 语言无关（Go/JS/Flutter 均可调用） |
 
-**决策**：Python 快速验证核心算法，Rust 做生产级实现。
+**决策**：Rust 直接作为主要开发语言。理由：
+1. **避免维护两套实现** — Python 原型和 Rust 生产版需要双倍维护，API 差异导致迁移成本高
+2. **pyo3 成熟度足够** — v0.23+ 的 pyo3 对 Rust struct/enum 的 Python 暴露已非常流畅
+3. **LMDB 的 Rust 生态优于 Python** — heed crate 原生 mmap 零拷贝，Python lmdb 封装有 GIL 开销
+4. **ngram 编码器零依赖** — 不涉及复杂数值计算（不像 BGE-M3 需要 Python 的 ONNX 推理栈），Rust 原生实现更干净
 
-### ADR-005: 编码器可插拔，默认 API、可选本地 BGE-M3
+### ADR-005: 编码器可插拔，默认字符 n-gram 哈希（零模型）
 
-| 方案 | 本地内存 | 嵌入质量 | 延迟 | 离线 |
-|------|---------|---------|------|:--:|
-| API Embedding (DeepSeek) | 0 | ⭐⭐⭐ | ~100ms | ❌ |
-| BGE-M3 本地 (INT8) | ~300MB | ⭐⭐⭐⭐⭐ | < 5ms | ✅ |
-| A 模型当编码器 (API) | 0 | ❌ 拿不到 hidden state | — | — |
-| A 模型当编码器 (Ollama) | ~14GB | ⭐⭐⭐ | 50~200ms | ✅ |
+| 方案 | 本地内存 | 嵌入质量 | 延迟 | 离线 | 语言 |
+|------|---------|---------|------|:--:|------|
+| **ngram 哈希（默认）** | **0** | ⭐⭐⭐ | < 0.1ms | ✅ | **全语言** |
+| BGE-M3 本地 (INT8) | ~300MB | ⭐⭐⭐⭐⭐ | < 5ms | ✅ | 中英为主 |
 
-**决策**：默认 API（与 MeowAgent A/B 模型同为 API 调用，零额外内存），可选 BGE-M3 本地。A 模型不适合作编码器——API 模式拿不到 hidden states，本地模式内存是 BGE-M3 的 50 倍且嵌入质量不如专用模型。BGE-M3 568M 参数 ONNX INT8 量化仅 300MB，不到 7B LLM 的 1/50。
+**决策**：默认字符 n-gram 哈希。理由：
+1. **零模型** — 不需要下载 300MB 的 BGE-M3，不需要 API Key。`pip install memhop` 即用
+2. **全语言** — 只在字符层面操作，中文、英文、日文、阿拉伯文……任何语言同等对待
+3. **外国人开箱即用** — 不存在"下载一个中文 embedding 模型才能用"的门槛
+4. **Hopfield 不需要强语义** — MHN 做的是吸引子收敛，相似输入 → 相近向量区域即可。字符 n-gram 的字面重叠性天然满足
+5. **两阶段检索保底** — ngram sparse 权重做粗筛，字面匹配兜住短词场景
+
+BGE-M3 降级为可选增强（`pip install memhop[semantic]`），需要更强语义召回时自行安装。
 
 ### ADR-006: 两阶段检索以应对中文短词
 
@@ -439,33 +525,87 @@ let memory = db.recall("今天早上吃了什么")?;
 
 ## 5. 可运维性
 
-### 5.1 部署模型
+### 5.1 部署模型：嵌入式，非服务
+
+MemHop 是**嵌入式库**，不是独立服务。无端口、无 HTTP、无 gRPC。
 
 ```
 MeowAgent 使用 MemHop：
-  pip install memhop  # 或 Cargo.toml: memhop = "0.1"
+  pip install memhop  # 默认 ngram，零模型依赖，< 5MB
 
   from memhop import MemHop
-  db = MemHop.open("memhop.db")
-  # 替代原先的 sqlite_graph_store + vector_store + shared_store + ...
+  db = MemHop.open("memhop.db")  # 直接打开文件，不走网络
+  # 开箱即用，MeowAgent 已有服务端口，MemHop 只嵌入
 
   无需：
     ❌ ChromaDB server
     ❌ FAISS build 工具链
     ❌ SQLite FTS5 扩展
+    ❌ 独立端口、独立进程
+    ❌ 大模型下载
 ```
 
-### 5.2 性能预估
+**嵌入式 vs 独立服务对比**：
 
-| 指标 | 1 万条记忆 | 10 万条 | 100 万条 |
-|------|-----------|---------|----------|
-| recall() 延迟 | < 1ms | < 2ms | < 5ms |
-| remember() 延迟 | < 3ms | < 5ms | < 10ms |
-| 内存占用 | ~5MB | ~15MB | ~50MB |
-| 磁盘占用 | ~5MB | ~50MB | ~500MB |
-| 启动时间 | < 10ms | < 50ms | < 200ms |
+| | 嵌入式（MemHop） | 独立服务（如 Redis） |
+|---|---|---|
+| 调用方式 | `db.recall("hello")` 进程内 | `GET /recall?cue=hello` 网络 |
+| 延迟 | < 1ms（函数调用） | 1-10ms（网络 + 序列化） |
+| 数据访问 | mmap 直接映射，零拷贝 | JSON/protobuf 序列化 |
+| 崩溃面 | 同宿主进程生灭 | 网络分区 + 独立进程 |
 
-### 5.3 故障模式
+### 5.2 冷启动 vs 热启动
+
+| 阶段 | Rust 生产版 |
+|------|-----------|
+| LMDB 打开 | < 1ms（mmap） |
+| 模式矩阵 | mmap 懒加载（OS 缺页），f16 精度 |
+| 索引加载 | **mmap 直接映射（< 1ms）** — 索引导出到 LMDB 第 4 子库 `i`，启动时零重建 |
+
+每次 `open()` 直接从 LMDB 子库 `i` mmap 加载索引快照，无需扫描重建。模式矩阵按需缺页加载，冷启动 < 2ms。
+
+### 5.3 存储架构（Rust 生产版）：全部 mmap，按需缺页
+
+```
+memhop.db（单文件）
+┌──────────────────────────────────────────┐
+│ Header: 魔数、版本、统计                  │
+├──────────────────────────────────────────┤
+│ Pattern Region: [f16; 1024] × N          │
+│   磁盘占用 = N × 2KB                      │
+│   实际 RAM = 仅实际访问的页（缺页加载）     │
+├──────────────────────────────────────────┤
+│ Blob Region: 原文 + meta，zstd 压缩        │
+│   磁盘占用 = ~500MB / 100万条              │
+│   实际 RAM = 仅解压时暂存                  │
+├──────────────────────────────────────────┤
+│ Index Region: 扁平哈希表                  │
+│   磁盘占用 = ~30MB / 100万条               │
+│   启动时 mmap，零重建，零 RAM 浪费         │
+└──────────────────────────────────────────┘
+```
+
+**核心设计**：模式矩阵、原文、知识树都在磁盘上 mmap 映射。OS 按 4KB 缺页加载，只有被 `recall()` 实际访问的记忆才会进入 RAM。100K 记忆的稳定态内存 ~100MB（索引 + 热页），远小于全量加载的 ~1GB。
+
+### 5.4 内存占用预估
+
+| 规模 | Rust 生产版 (f16 + mmap 懒加载) |
+|------|------------------------------|
+| 1K | ~10MB |
+| 10K | ~25MB |
+| 100K | **~100MB** |
+| 100 万 | **~800MB** |
+
+### 5.5 性能预估
+
+| 指标 | 1K | 10K | 100K | 100 万 |
+|------|----|-----|------|--------|
+| recall() 延迟 | < 0.5ms | < 1ms | < 2ms | < 5ms |
+| remember() 延迟 | < 1ms | < 3ms | < 5ms | < 10ms |
+| 启动时间（Rust） | < 1ms | < 1ms | < 2ms | < 5ms |
+| 磁盘占用 | ~1MB | ~10MB | ~100MB | ~1GB |
+
+### 5.6 故障模式
 
 | 故障 | 影响 | 缓解 |
 |------|------|------|
@@ -541,9 +681,9 @@ memhop/
 |------|------|------|
 | MHN 在中文短词场景效果待验证 | 🟡 中 | 五层防护（见 §2.5），两阶段检索 + BGE-M3 sparse 保底 |
 | LSH 桶冲突率 | 🟡 中 | 多层编码 + residual connection |
-| BGE-M3 本地内存 300MB | 🟢 低 | 默认用 API，本地可选。300MB 不到 7B LLM 的 1/50 |
+| BGE-M3 本地内存 300MB | 🟢 低 | BGE-M3 是可选的 feature flag（`semantic`），默认零模型的 ngram 就够用。300MB 不到 7B LLM 的 1/50 |
 | LMDB mmap 在 32 位系统受限 | 🟢 低 | 目标用户均为 64 位 |
-| Rust 开发周期长 | 🟡 中 | Python 原型先跑通，再迁移 Rust |
+| Rust 开发周期长 | 🟡 中 | pyo3 成熟度高，heed + nalgebra 生态稳定。分阶段交付 v0.1.* 逐步迭代 |
 | 与现有 ChromaDB/FAISS 的兼容过渡 | 🟡 中 | 提供双写迁移期 adapter |
 | Hopfield 收敛到错误吸引子 | 🟡 中 | β 温度参数调优 + confidence 阈值兜底 |
 | 市场认知（"又一个新的数据库?"） | 🟢 低 | 定位清晰："SQLite for associative memory" |
@@ -552,50 +692,46 @@ memhop/
 
 ## 9. 实现路线图
 
-### Phase 1: Python 原型（2-3 周）
+### Phase 1: Rust 核心引擎（配合 pyo3 Python 绑定）
 
 ```
-□ 可插拔编码器接口 + API 编码器实现 (DeepSeek Embedding)
-□ BGE-M3 本地编码器实现 (ONNX INT8, 可选)
-□ Modern Hopfield Network 实现 (PyTorch → 纯 numpy)
-□ 两阶段检索管线 (Sparse 粗筛 + MHN 精排)
-□ LMDB 读写封装
-□ remember() / recall() / forget() API
-□ 中文短词场景专项测试 (核心风险验证)
-□ 基本测试套件（10+ 核心用例）
-□ 性能基准（vs FTS5 vs ChromaDB）
+□ Rust 项目骨架：Cargo.toml (heed, zstd, serde, bincode, rand, pyo3)
+□ NgramEncoder 实现（字符 2/3/4-gram 哈希，零模型依赖）
+□ ModernHopfield 实现（nalgebra f16 矩阵，一步 softmax 收敛）
+□ LmdbStorage 实现（heed 封装，4 子库 p/b/m/i）
+□ SearchIndex 实现（内存倒排索引，索引导出 mmap 快照）
+□ MemHopEngine 完整 API：remember / recall / forget / update / search / recent / remember_batch / purge_before / close
+□ pyo3 绑定：暴露 memhop.open() 及全部 Python API
+□ maturin 构建配置 + pyproject.toml，pip install 可用
+□ 基本测试套件（22 验收用例，见 REQUIREMENTS.md §13）
+□ 性能基准（vs MeowAgent FTS5）
 ```
 
-### Phase 2: Rust 生产实现（4-6 周）
+### Phase 2: 语义增强（可选 feature flag）
 
 ```
-□ nalgebra 矩阵运算
-□ heed (LMDB Rust binding) 封装
-□ pyo3 Python 绑定
-□ 完整测试套件（100+ tests）
-□ pip 发布
-□ Cargo 发布
+□ BgeEncoder 实现（ort crate + BGE-M3 ONNX INT8, feature = "semantic"）
+□ 两阶段检索激活（总记忆 > 500 时 ngram sparse 粗筛 + dense MHN 精排）
+□ 中文短词专项验证
 ```
 
-### Phase 3: MeowAgent 集成（2-3 周）
+### Phase 3: MeowAgent 集成
 
 ```
 □ MemHopGraphStore（替代 SqliteGraphStore）
 □ MemHopVectorStore（替代 ChromaDB + FAISS）
 □ MemHopSharedStore（替代 JsonSharedStore）
 □ Thalamus 路由改造（MemHop.recall 替代 FTS5 搜索）
-□ DecayEngine 适配（Hopfield 能量值作为衰减依据）
 □ 渐进迁移脚本（从旧格式到 memhop.db）
 ```
 
-### Phase 4: 生态扩展（持续）
+### Phase 4: 生态扩展
 
 ```
 □ Go binding (cgo)
 □ JavaScript/TypeScript binding (napi-rs)
 □ Flutter/Dart FFI
 □ 可视化工具（Hopfield 能量景观 3D 图）
-□ 云端托管版（可选）
 ```
 
 ---
@@ -604,11 +740,11 @@ memhop/
 
 | # | 行动 | 负责 | 紧急度 | 预期完成 |
 |---|------|------|--------|---------|
-| 1 | 确认项目命名（MemHop） | Zhen | P0 | 立即 |
-| 2 | 启动 Phase 1 Python 原型开发 | Zhen | P0 | 2 周内 |
-| 3 | 中文短词场景验证（核心风险点） | Zhen | P0 | Phase 1 第 1 周 |
-| 4 | 设计 MeowAgent 迁移 adapter 接口 | Zhen | P1 | Phase 2 完成后 |
-| 5 | 准备开源发布材料（README/DESIGN/对比 benchmark） | Zhen | P2 | Phase 2 完成后 |
+| 1 | 确认项目命名（MemHop） | Zhen | P0 | 已完成 |
+| 2 | 启动 Phase 1 Rust 核心引擎开发 | AI 团队 | P0 | 立即 |
+| 3 | 中文短词场景验证（核心风险点） | AI 团队 | P0 | Phase 1 第 1 周 |
+| 4 | 设计 MeowAgent 迁移 adapter 接口 | Zhen | P1 | Phase 3 |
+| 5 | 准备开源发布材料（README/DESIGN/benchmark） | Zhen | P2 | Phase 2 后 |
 | 6 | 评估与 mhn-ai-agent-memory 的差异化竞争定位 | Zhen | P2 | Phase 1 期间 |
 
 ---

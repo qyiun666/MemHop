@@ -1,54 +1,40 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "memhop"
-version = "0.1.0"
-description = "SQLite for associative memory — embedded, single-file, zero-config associative memory database for AI Agents"
+version = "0.2.0"
+description = "SQLite for associative memory — embedded, single-file, zero-config associative memory engine powered by Modern Hopfield Networks"
+authors = [{name = "MemHop Contributors"}]
+license = "MIT"
 readme = "README.md"
-license = {text = "MIT"}
 requires-python = ">=3.10"
-authors = [
-    {name = "Zhen Yuhang", email = "zhen@meowagent.dev"},
-]
+keywords = ["memory", "associative", "hopfield", "embedding", "lmdb", "vector"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-]
-dependencies = [
-    "numpy>=1.24.0",
-    "lmdb>=1.4.0",
-    "httpx>=0.25.0",
-    "pydantic>=2.0.0",
-]
-
-[project.optional-dependencies]
-local = [
-    "onnxruntime>=1.16.0",
-    "FlagEmbedding>=1.2.0",
-]
-dev = [
-    "pytest>=8.0",
-    "pytest-benchmark>=4.0",
-    "pytest-asyncio>=0.23.0",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 
 [project.urls]
-Homepage = "https://github.com/meowagent/memhop"
-Documentation = "https://github.com/meowagent/memhop#readme"
-Repository = "https://github.com/meowagent/memhop"
+Repository = "https://github.com/qyiun666/MemHop"
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-benchmark>=4.0"]
 
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "memhop._core"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]

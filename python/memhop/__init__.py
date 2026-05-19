@@ -1,22 +1,8 @@
+"""MemHop - SQLite for associative memory.
+
+Supports text memories with optional binary blob attachments (images, audio, etc).
+The encoder only processes the text description; blobs are stored as-is with zstd compression.
 """
-MemHop — SQLite for associative memory.
-
-Embedded, single-file, zero-config associative memory database
-for AI Agents. O(1) recall via Modern Hopfield Networks.
-
-This is the Rust+pyo3 implementation (v0.2.0).
-The Python prototype under src/memhop/ is deprecated.
-
-Usage:
-    import memhop
-
-    db = memhop.open("memhop.db")
-    mid = db.remember("今天早上吃了豆浆油条", meta={"time": "2026-05-19T07:30"})
-    memory = db.recall("今天早上吃了什么")
-    # → Memory(id="m_001", text="今天早上吃了豆浆油条", confidence=0.94)
-"""
-
-# Bridge to the Rust+pyo3 core implementation
 from memhop._core import (
     MemHopEngine,
     Memory,

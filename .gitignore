@@ -1,6 +1,13 @@
 # macOS
 .DS_Store
 
+# Rust
+/target/
+*.so
+*.dylib
+*.pyd
+Cargo.lock
+
 # Python
 __pycache__/
 *.pyc
@@ -22,3 +29,7 @@ env/
 # WorkBuddy & other tools
 .workbuddy/
 .qoder/
+
+# Benchmarks
+.benchmarks/
+.pytest_cache/

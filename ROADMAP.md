@@ -4,316 +4,362 @@
 
 ---
 
-## 📌 项目现状 (v0.1.0 骨架)
+## 📌 版本方案
 
 ```
-已完成：
-✅ types.py      — Memory, EncoderOutput, EncoderConfig 数据类型
-✅ hopfield.py   — Modern Hopfield Network 核心 (one-step recall)
-✅ storage.py    — LMDB 三子库持久化 (patterns/blobs/meta)
-✅ encoder.py    — 可插拔编码器接口 (ApiEncoder / LocalEncoder / MockEncoder)
-✅ engine.py     — MemHopEngine 编排层 (remember/recall/forget/search)
-✅ pyproject.toml — 项目配置，pip install -e 可用
-✅ __init__.py   — memhop.open() 入口
-
-待完成：
-⚠️ Mock 编码器是随机向量 — 无法做语义召回验证
-⚠️ 两阶段检索 (sparse + MHN) 是 TODO 空壳
-⚠️ BGE-M3 本地编码器未验证 (缺 onnxruntime 依赖)
-⚠️ 0 个测试
-⚠️ 0 个性能基准
-⚠️ 中文短词验证未跑
+v0.1.0  ← 当前 (项目骨架)
+v0.1.1  ← 下一个
+v0.1.2
+ ...
+v0.1.N  ← Phase 1 完成前都在 0.1.* 递增
+v1.0.0  ← Phase 1 全部完成
 ```
+
+---
 
 ## 📖 关键文档
 
 | 文档 | 路径 | 用途 |
 |------|------|------|
+| 需求规格 | `REQUIREMENTS.md` | **完整 API 契约、数据模型、验收标准（先读这个）** |
 | 系统设计 | `DESIGN.md` | 架构决策、算法推导、ADR |
 | 本文档 | `ROADMAP.md` | 开发任务清单 |
+| MeowAgent 需求 | `../meowagent/deliverables/engineering-assurance/memhop-requirements-from-meowagent-2026-05-19.md` | 对接需求原文 |
 | 项目介绍 | `README.md` | 快速开始 |
-
-**开发原则**：先读 `DESIGN.md` 理解"为什么"，再按 `ROADMAP.md` 执行"做什么"。
 
 ---
 
-## Phase 1: Python 原型（当前阶段）
+## 📌 项目现状 (v0.1.0 骨架)
 
-### Task 1.1 — 编码器验证：API 模式真实调用
+> ⚠️ **当前骨架是 Python 原型**（算法验证用）。目标产出是 **Rust + pyo3** 生产版（见 REQUIREMENTS.md §3 Rust 项目结构）。Phase 1 任务在 Python 骨架上验证核心算法正确性，验证通过后按 REQUIREMENTS.md 的 Rust 项目结构重写。
 
-**目标**：验证 ApiEncoder 能正确调用 DeepSeek Embedding API，返回语义有意义的密集向量。
+```
+✅ types.py       — Memory, EncoderOutput, EncoderConfig
+✅ hopfield.py    — Modern Hopfield Network 核心 (one-step recall)
+✅ storage.py     — LMDB 三子库 (patterns/blobs/meta)
+✅ encoder.py     — ApiEncoder / LocalEncoder / MockEncoder
+✅ engine.py      — MemHopEngine (remember/recall/forget/search)
+✅ pyproject.toml — pip install -e 可用
+✅ __init__.py    — memhop.open(path, encoder, ...) ← path 可配
 
-**当前状态**：代码已写 (`encoder.py:ApiEncoder`)，Mock 编码器是随机向量。
-
-**执行步骤**：
-1. 确保 `DEEPSEEK_API_KEY` 环境变量已设置
-2. 创建 `tests/test_encoder.py`，编写测试：
-
-```python
-# 测试用例
-def test_api_encoder_basic():
-    enc = ApiEncoder()
-    out = enc.encode("今天天气真好")
-    assert out.dense.shape == (1024,)
-    assert -1.0 <= out.dense[0] <= 1.0
-
-def test_api_encoder_empty():
-    enc = ApiEncoder()
-    out = enc.encode("")
-    assert out.dense.shape == (1024,)
-    assert np.allclose(out.dense, np.zeros(1024))
-
-def test_semantic_similarity():
-    enc = ApiEncoder()
-    a = enc.encode("今天吃了豆浆油条").dense
-    b = enc.encode("今天早餐吃了什么").dense
-    c = enc.encode("火星探测任务").dense
-    sim_ab = float(a @ b)  # 归一化后 dot = cosine
-    sim_ac = float(a @ c)
-    assert sim_ab > sim_ac, f"语义相似度异常: ab={sim_ab:.3f} ac={sim_ac:.3f}"
+⚠️ Mock 编码器是随机向量 — 语义 recall 未验证
+⚠️ 两阶段检索是 TODO 空壳
+⚠️ search() 仅支持 tags + text_contains — 缺少 meta 字段索引
+⚠️ Memory 缺 created_at 字段
+⚠️ 缺少 recent() / remember_batch() / purge_before()
+⚠️ 缺少 is_dormant / protection / upsert / connections_to
+⚠️ 0 个测试
+⚠️ 0 个性能基准
 ```
 
-3. 运行：`pytest tests/test_encoder.py -v`
-4. **验收标准**：`sim_ab > 0.7`，`sim_ac < 0.3`
+---
+
+## Phase 1: 核心能力（当前阶段）
+
+### Task 1.1 — 编码器验证：ngram 哈希模式
+
+**目标**：验证 NgramEncoder 的字符 n-gram 哈希向量有效，相似文本向量相近。
 
 **涉及文件**：`tests/test_encoder.py`（新建）
+**依赖**：无（零模型依赖）
 
-**依赖**：`DEEPSEEK_API_KEY` 环境变量
+**验收标准**：
+- `sim("今天吃了豆浆油条", "今天早餐吃了什么") > 0.7`
+- `sim("今天吃了豆浆油条", "火星探测任务") < 0.3`
 
 ---
 
 ### Task 1.2 — 语义召回端到端验证
 
-**目标**：接入真实 API 编码器后，验证 `remember → recall` 全链路语义召回正确。
-
-**执行步骤**：
-1. 创建 `tests/test_e2e.py`
-2. 记住 10 条不同主题的记忆，用语义相近的 cue 召回，验证返回正确记忆：
-
-```python
-def test_e2e_semantic_recall():
-    db = memhop.open(":temp:", encoder=EncoderConfig(mode="api"))
-    
-    db.remember("今天早上吃了豆浆油条", meta={"tags": ["早餐"]})
-    db.remember("昨天下午开了三小时架构评审会", meta={"tags": ["工作"]})
-    db.remember("周末去了海边游泳", meta={"tags": ["休闲"]})
-    
-    r = db.recall("今天吃了什么早餐")
-    assert r is not None
-    assert "豆浆油条" in r.text
-    assert r.confidence > 0.7
-
-def test_no_match_returns_none():
-    db = memhop.open(":temp:", encoder=EncoderConfig(mode="api"))
-    db.remember("今天天气很好")
-    
-    r = db.recall("量子力学的基本原理是什么")
-    assert r is None
-```
-
-3. `pytest tests/test_e2e.py -v`
-4. **验收标准**：语义相近的 cue 召回正确记忆，无关内容返回 None
+**目标**：`remember → recall` 全链路语义召回正确。
 
 **涉及文件**：`tests/test_e2e.py`（新建）
-
 **依赖**：Task 1.1
 
+**验收标准**：
+- cue "今天吃了什么早餐" → 召回到 "豆浆油条"，confidence > 0.7
+- cue "量子力学" → None
+
 ---
 
-### Task 1.3 — Mock 编码器改名为确定性伪语义编码器
+### Task 1.3 — Mock 编码器改为确定性伪语义
 
-**目标**：让 Mock 编码器不依赖 API Key 也能做基本的语义区分，便于本地快速迭代测试。
+**目标**：不依赖 API Key 也能做基本区分，加速本地迭代。
 
-**执行步骤**：
-1. 重写 `MockEncoder.encode()` — 不再用随机数，改为字符级嵌入：
-
-```python
-# 思路：取 text 字符的 Unicode 码点，投影到 1024 维空间
-# 并非真正语义编码，但相同文本相同向量，相似文本有较高余弦相似度
-class MockEncoder(Encoder):
-    def encode(self, text: str) -> EncoderOutput:
-        import hashlib
-        # 用 rolling hash 生成 deterministic vector
-        h = hashlib.sha256(text.encode()).digest()
-        vec = np.zeros(VECTOR_DIM, dtype=np.float32)
-        for i in range(32):
-            idx = (i * 32) % VECTOR_DIM
-            vec[idx] = (h[i] - 127.5) / 127.5  # [-1, 1]
-        # 平滑: 对相邻维度插值
-        from scipy.ndimage import gaussian_filter1d
-        vec = gaussian_filter1d(vec, sigma=2.0).astype(np.float32)
-        vec /= np.linalg.norm(vec) + 1e-8
-        return EncoderOutput(dense=vec)
-```
-
-2. 验证短词的确定性：`encode("豆浆油条")` 每次都返回相同向量
-3. 验证 recall 通路：mock 模式下 `recall("今天吃了什么")` 不再总是返回 None
-
-**涉及文件**：`src/memhop/encoder.py`，`tests/test_encoder.py`
+**涉及文件**：`src/memhop/encoder.py`
 **依赖**：无
 
+**验收标准**：相同文本相同向量，recall 通路不总是返回 None
+
 ---
 
-### Task 1.4 — 两阶段检索实现
+### Task 1.4 — 两阶段检索
 
-**目标**：实现 Sparse 粗筛 → MHN 精排的两阶段管线，解决中文短词场景。
+**目标**：Sparse 粗筛 → MHN 精排，解决中文短词。
 
-**当前状态**：`engine.py:recall()` 中 sparse 粗筛是 TODO 空壳。
+**涉及文件**：`src/memhop/engine.py`，`src/memhop/hopfield.py`
+**依赖**：Task 1.1 或 Task 1.3
 
-**执行步骤**：
-1. 在 `engine.py` 中实现 SparsScreener 类：
-
-```python
-class SparseScreener:
-    """用 sparse 词汇向量做粗筛，桶内候选 → MHN 精排"""
-    
-    def screen(
-        self,
-        query_sparse: dict[str, float],
-        mhn: ModernHopfield,
-        max_candidates: int = 500,
-    ) -> list[str]:
-        # 1. 对每个记忆的 sparse 向量计算 Jaccard 或加权重叠
-        # 2. 取 top max_candidates
-        # 3. 返回候选 memory_id 列表
-        ...
-```
-
-2. 修改 `MemHopEngine.recall()`：当 `output.sparse` 存在且记忆数 > 500 时，先粗筛再精排
-3. 改造 `ModernHopfield` 支持子集召回：新增 `recall_subset(query, candidate_indices)`
-4. 写测试验证两阶段逻辑
-
-**验收标准**：
-- 中文短词 "早餐" 召回正确率 > 90%（需真实向量）
-- recall 延迟保持 < 5ms
-
-**涉及文件**：`src/memhop/engine.py`，`src/memhop/hopfield.py`，`tests/test_two_stage.py`
+**验收标准**：中文短词 "早餐" 召回正确率 > 90%
 
 ---
 
 ### Task 1.5 — 核心测试套件（10 用例）
 
-**目标**：覆盖 DESIGN.md §6.1 的 10 个核心测试用例。
+覆盖 DESIGN.md §6.1 全部 10 个核心用例。
 
-**新建文件**：`tests/test_core.py`
-
-| # | 测试场景 | 预期结果 |
-|---|---------|---------|
-| 1 | 基本写入召回 | `remember → recall` 返回相同记忆 |
-| 2 | 语义相似召回 | "吃了什么" → "豆浆油条" |
-| 3 | 无匹配 | `recall("无关话题") → None` |
-| 4 | 多记忆区分 | 100 条相似记忆 → 每条精确区分 |
-| 5 | 大规模压力 | 1000 条记忆 → `recall < 5ms` |
-| 6 | 并发写入 | 多线程 `remember` → 无数据损坏 |
-| 7 | 崩溃恢复 | kill -9 → 重启后数据完整 |
-| 8 | 中文短词 | "早餐" → 正确记忆 |
-| 9 | 遗忘 | `forget → recall → None` |
-| 10 | 更新 | `update` 文本 → `recall` 返回新内容 |
+| # | 场景 | 预期 |
+|---|------|------|
+| 1 | 基本写入召回 | `remember → recall` 一致 |
+| 2 | 语义相似 | "吃了什么" → "豆浆油条" |
+| 3 | 无匹配 | `recall("无关")` → None |
+| 4 | 多记忆区分 | 100 条 → 精确区分 |
+| 5 | 大规模压力 | 1000 条 → recall < 5ms |
+| 6 | 并发写入 | 多线程无损坏 |
+| 7 | 崩溃恢复 | kill -9 重启完整 |
+| 8 | 中文短词 | "早餐" → 正确 |
+| 9 | 遗忘 | `forget → recall` → None |
+| 10 | 更新 | `update` → 新内容 |
 
 **涉及文件**：`tests/test_core.py`（新建）
-**依赖**：Task 1.1 (需要真实向量做 #2/#4/#8)
+**依赖**：Task 1.1
 
 ---
 
 ### Task 1.6 — 性能基准
 
-**目标**：实现 DESIGN.md §6.2 的对比基准。
+实现 DESIGN.md §6.2 对比基准。
 
-**命令**：`python examples/benchmark.py`
+| 规模 | MeowAgent FTS5 | MemHop 目标 |
+|------|---------------|-------------|
+| 1K | ~2ms | < 1ms |
+| 10K | ~15ms | < 2ms |
+| 100K | ~150ms | < 5ms |
 
-| 基准 | MeowAgent FTS5 (当前) | MemHop 目标 |
-|------|----------------------|-------------|
-| 1K 记忆 | ~2ms | < 1ms |
-| 10K 记忆 | ~15ms | < 2ms |
-| 100K 记忆 | ~150ms | < 5ms |
-
-**涉及文件**：`examples/benchmark.py`（新建），`tests/test_perf.py`（新建）
-
----
-
-### Task 1.7 — BGE-M3 本地编码器验证
-
-**目标**：验证 LocalEncoder 在 macOS ARM64 上正常工作。
-
-**执行步骤**：
-1. `pip install memhop[local]` 安装 onnxruntime + FlagEmbedding
-2. 下载 BGE-M3 模型 (~2.2GB 原始, ~600MB fp16)
-3. 写 `tests/test_encoder_local.py`，验证：
-   - `encode()` 返回 dense(1024) + sparse(dict) + multi(N, 1024)
-   - 编码延迟 < 10ms
-   - 中文语义相似度与 API 模式可比
-
-**涉及文件**：`tests/test_encoder_local.py`（新建）
-**依赖**：Task 1.1
+**涉及文件**：`examples/benchmark.py`，`tests/test_perf.py`
+**依赖**：Task 1.5
 
 ---
 
-### Task 1.8 — 边界场景与错误处理
+### Task 1.7 — BGE-M3 编码器（可选语义增强）
 
-**目标**：处理异常路径，让库更健壮。
+**目标**：验证 BgeM3Encoder 可工作，提供语义增强能力。
 
-**执行步骤**：
-1. API 调用失败 → 重试 + 兜底错误
-2. 磁盘满 → 捕获 LMDB MDB_MAP_FULL 异常
-3. 空数据库 `recall()` → 返回 None
-4. 超大文本 (>100KB) → 截断警告
-5. 重复 ID `remember()` → 覆盖或报错
+**涉及文件**：`tests/test_encoder_bge.py`
+**依赖**：`pip install memhop[semantic]`（自动下载 BGE-M3 ONNX 模型）
 
-**涉及文件**：`src/memhop/engine.py`，`src/memhop/storage.py`，`tests/test_edge_cases.py`
+---
+
+### Task 1.8 — 边界错误处理
+
+**涉及文件**：`src/memhop/engine.py`，`src/memhop/storage.py`
+**依赖**：Task 1.2
+
+---
+
+## Phase 2: MeowAgent 需求对齐（新增）
+
+> **来源**：`memhop-requirements-from-meowagent-2026-05-19.md`
+
+### Task 2.1 — Memory 数据模型补全
+
+**目标**：Memory 增加 `created_at` 字段，`remember()` 自动填充 ISO 8601 时间戳。
+
+**涉及文件**：`src/memhop/types.py`，`src/memhop/engine.py`
+
+**验收标准**：
+```python
+mid = db.remember("test")
+m = db.recall("test")
+assert m.created_at  # "2026-05-19T18:30:00"
+```
+
+---
+
+### Task 2.2 — `recent()` 和 `remember_batch()` 接口
+
+**目标**：补齐缺失的两个 API。
+
+```python
+def recent(self, limit: int = 5) -> list[Memory]:
+    """最近写入的记忆，按 created_at 倒序"""
+
+def remember_batch(self, items: list[dict]) -> list[str]:
+    """批量写入。items = [{"text": "...", "meta": {...}}, ...]"""
+```
+
+**涉及文件**：`src/memhop/engine.py`
+
+**验收标准**：
+- `recent(3)` 返回最近 3 条
+- `remember_batch` 原子写入，全成功或全失败
+
+---
+
+### Task 2.3 — `search()` 支持任意 meta 字段过滤
+
+**目标**：当前 `search()` 只支持 `tags` 和 `text_contains`。改为支持任意 meta key。
+
+```python
+db.search({"layer": "entity", "domain": "code", "importance_gt": 0.7})
+db.search({"is_dormant": False, "protection": "permanent"})
+```
+
+**支持的比较操作符**：
+- 等值：`"key": "value"`
+- 大于/小于：`"key_gt": 0.7` / `"key_lt": 0.3`
+- 包含：`"tags_contains": "早餐"` (列表字段)
+
+**涉及文件**：`src/memhop/engine.py`
+
+**验收标准**：所有 10 个 meta 字段均可过滤
+
+---
+
+### Task 2.4 — upsert 同 key 去重
+
+**目标**：同 `text` + 同 `meta.key` 时自动覆盖。
+
+```python
+db.remember("买咖啡", meta={"key": "daily_001"})
+db.remember("买咖啡和面包", meta={"key": "daily_001"})
+# → 第二条覆盖第一条，memhop.db 只有一条记录
+```
+
+**涉及文件**：`src/memhop/engine.py`，`src/memhop/storage.py`
+
+---
+
+### Task 2.5 — `is_dormant` 休眠标记
+
+**目标**：`meta.is_dormant=True` 的记忆不参与 `recall()`，但 `search()` 可见。
+
+**涉及文件**：`src/memhop/engine.py`，`src/memhop/hopfield.py`
+
+**实现方式**：在 MHN 中维护 dormant mask，recall 时排除；search 时包含。
+
+---
+
+### Task 2.6 — `protection` 保护级别
+
+**目标**：三级保护。
+
+| 级别 | 行为 |
+|------|------|
+| `"permanent"` | 永不删除，`forget()` 和 `purge_before()` 均无效 |
+| `"protected"` | `purge_before()` 跳过，`forget()` 有效 |
+| `"normal"` | 正常参与所有操作 |
+
+**涉及文件**：`src/memhop/engine.py`
+
+---
+
+### Task 2.7 — `connections_to` 关联引用查询
+
+**目标**：支持查询"哪些 entity 指向了某 entity"。
+
+```python
+db.search({"connections_to": "e_017"})
+# → 返回所有 connections 中包含 {"to": "e_017"} 的 entity
+```
+
+**涉及文件**：`src/memhop/engine.py`
+
+---
+
+### Task 2.8 — 衰减清理：`purge_before()` + `max_memories` 淘汰
+
+**目标**：防止数据库无限膨胀。
+
+```python
+# 清理 N 天前的 normal 级别记忆
+db.purge_before(datetime(2026, 4, 1))
+
+# 超出上限时 FIFO 淘汰 normal 级别
+db = memhop.open(max_memories=100000)
+```
+
+**淘汰优先级**：oldest normal → oldest protected → (never permanent)
+
+**涉及文件**：`src/memhop/engine.py`，`src/memhop/storage.py`
+
+---
+
+### Task 2.9 — `close()` 后操作抛 `MemHopClosedError`
+
+**目标**：`close()` 后调用任何方法应抛 `MemHopClosedError`，不是奇怪的底层错误。
+
+**涉及文件**：`src/memhop/engine.py`，`src/memhop/types.py`
+
+---
+
+### Task 2.10 — 三层记忆模型集成测试
+
+**目标**：模拟 MeowAgent 真实场景：纠缠图 entity + 知识树 node + 原文 turn 并存于同一 memhop.db。
+
+```python
+# entity
+db.remember("支付模块空指针bug", meta={
+    "layer": "entity", "type": "code", "domain": "code",
+    "connections": [{"to": "e_002", "relation": "caused_by"}],
+})
+
+# knowledge
+db.remember("payment.py 模块结构", meta={
+    "layer": "knowledge", "domain": "code",
+    "path": "payment.py", "parent": "k_root",
+})
+
+# episode
+db.remember("用户: 支付报错了\nAI: 我来看看", meta={
+    "layer": "episode", "session_id": "s_007",
+})
+```
+
+**涉及文件**：`tests/test_three_layer.py`（新建）
+**依赖**：Task 2.1 ~ 2.9
 
 ---
 
 ## 任务依赖图
 
 ```
-Task 1.1 (API编码器验证)
-  ├── Task 1.2 (端到端语义召回)
-  ├── Task 1.5 (核心测试 #2,#4,#8)
-  │     └── Task 1.6 (性能基准)
-  └── Task 1.7 (BGE-M3本地编码器)
+Phase 1 (核心能力):
+Task 1.1 (ngram编码器) ─┬─ Task 1.2 (端到端召回) ─┬─ Task 1.5 (核心测试) ── Task 1.6 (性能基准)
+                         │                         └─ Task 1.8 (错误处理)
+                         └─ Task 1.4 (两阶段检索)
 
-Task 1.3 (Mock改造) — 独立，无依赖
+Task 1.3 (Mock改造) ── 独立
+Task 1.7 (BGE-M3编码器) ── 可选增强
 
-Task 1.4 (两阶段检索) — 依赖 Task 1.1 或 Task 1.3
+Phase 2 (MeowAgent 对齐):
+Task 2.1 (created_at) ── Task 2.2 (recent+batch) ── Task 2.3 (search增强)
+                                                    └─ Task 2.4 (upsert)
+Task 2.5 (dormant) ── 独立
+Task 2.6 (protection) ── Task 2.8 (衰减清理)
+Task 2.7 (connections_to) ── Task 2.3 后
+Task 2.9 (close error) ── 独立
+Task 2.10 (三层集成测试) ── Phase 2 全部
 
-Task 1.8 (边界错误处理) — 依赖 Task 1.2
+Phase 1 和 Phase 2 之间无硬依赖，可并行推进。
 ```
 
 ---
 
 ## 可并行执行
 
-- **组 A**：Task 1.1 → 1.2 → 1.5
-- **组 B**：Task 1.3 → 1.4
-- **组 C**：Task 1.7（安装 BGE-M3 后独立测）
+| 组 | 任务 | 依赖 |
+|----|------|------|
+| **A** (编码器) | 1.1 → 1.2 → 1.5 → 1.6 | 无 |
+| **B** (检索) | 1.3 → 1.4 | 无 |
+| **C** (BGE-M3可选) | 1.7 | BGE-M3 模型 |
+| **D** (错误处理) | 1.8 | 1.2 |
+| **E** (数据模型) | 2.1 → 2.2 → 2.3 → 2.4 | 无 |
+| **F** (生命周期) | 2.5 → 2.6 → 2.8 | 无 |
+| **G** (引用查询) | 2.7 | 2.3 |
+| **H** (close错误) | 2.9 | 无 |
 
-组 A / B / C 之间无依赖，可并行。
-
----
-
-## 快速启动
-
-```bash
-cd /Volumes/zt_hd/projects/meow/memhop
-
-# 安装
-pip install -e ".[dev]"
-
-# 跑现有代码
-python -c "
-import memhop
-db = memhop.open('test.db', encoder=memhop.EncoderConfig(mode='mock'))
-db.remember('hello world')
-print(db.stats)
-db.close()
-"
-
-# 开发流程
-# 1. 读相关源码 (src/memhop/)
-# 2. 读 DESIGN.md 对应章节
-# 3. 按上面 Task 执行
-# 4. pytest tests/ -v 验证
-```
+A~D 和 E~H 之间完全独立，可并行。
 
 ---
 
@@ -321,12 +367,40 @@ db.close()
 
 | 版本 | 内容 | 发布条件 |
 |------|------|---------|
-| **v0.1.0** ✅ | 项目骨架 | 代码结构就绪 |
-| **v0.2.0** | API 编码器可用 | Task 1.1 + 1.2 通过 |
-| **v0.3.0** | 两阶段检索 | Task 1.4 通过 |
-| **v0.4.0** | 测试套件完整 | Task 1.5 全部通过 |
-| **v0.5.0** | BGE-M3 本地可用 | Task 1.7 通过 |
-| **v1.0.0** | Phase 1 完成 | 全部 8 个 Task 通过 + 性能达标 |
+| **v0.1.0** ✅ | 项目骨架 | 代码结构就绪，mock 通路跑通 |
+| **v0.1.1** | ngram 召回可用 | Task 1.1 + 1.2 通过（ngram 语义召回） |
+| **v0.1.2** | 两阶段检索 | Task 1.4 通过 |
+| **v0.1.3** | 数据模型完整 | Task 2.1 + 2.2 通过 |
+| **v0.1.4** | 搜索增强 | Task 2.3 + 2.4 通过 |
+| **v0.1.5** | 生命周期 | Task 2.5 + 2.6 + 2.8 通过 |
+| **v0.1.6** | 引用查询 | Task 2.7 + 2.9 通过 |
+| **v0.1.7** | BGE-M3 可选 | Task 1.7 通过（可选） |
+| **v0.1.8** | 核心测试全绿 | Task 1.5 + 1.6 通过 |
+| **v0.1.9** | 三层集成验证 | Task 2.10 通过 |
+| **v1.0.0** | Phase 1+2 完成 | 全部 Task 通过 + 性能达标 |
+
+---
+
+## 快速启动
+
+```bash
+cd /Volumes/zt_hd/projects/meow/memhop
+pip install -e ".[dev]"
+
+# 验证骨架
+python -c "
+import memhop
+db = memhop.open('test.db', encoder=memhop.EncoderConfig(mode='mock'))
+db.remember('hello', meta={'layer': 'entity'})
+print(db.stats)
+db.close()
+"
+
+# 开发流程
+# 1. 读 DESIGN.md 相关章节
+# 2. 按上面 Task 执行
+# 3. pytest tests/ -v 验证
+```
 
 ---
 

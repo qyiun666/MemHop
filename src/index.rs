@@ -1,0 +1,288 @@
+/// Sparse inverted index for two-stage retrieval.
+///
+/// Stage 1: Sparse coarse screening via inverted index (ngram → memory_ids).
+/// Stage 2: MHN fine ranking via Hopfield recall_among.
+///
+/// This improves recall quality for short Chinese text by ensuring
+/// ngram-overlapping documents are always in the candidate set,
+/// even when dense-vector similarity alone might miss them.
+
+use std::collections::{HashMap, HashSet};
+
+use serde::{Deserialize, Serialize};
+
+/// Sparse inverted index for two-stage retrieval (stage 1: coarse screening).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SparseIndex {
+    /// ngram → set of memory_ids containing this ngram
+    inverted: HashMap<String, HashSet<String>>,
+    /// memory_id → sparse weights (ngram → weight) for this memory
+    forward: HashMap<String, HashMap<String, f32>>,
+}
+
+impl SparseIndex {
+    pub fn new() -> Self {
+        SparseIndex {
+            inverted: HashMap::new(),
+            forward: HashMap::new(),
+        }
+    }
+
+    /// Add a memory's sparse representation to the index.
+    pub fn add(&mut self, id: &str, sparse: &HashMap<String, f32>) {
+        // If id already exists, remove old entries first
+        if self.forward.contains_key(id) {
+            self.remove(id);
+        }
+
+        // Build forward index
+        self.forward.insert(id.to_string(), sparse.clone());
+
+        // Build inverted index
+        for ngram in sparse.keys() {
+            self.inverted
+                .entry(ngram.clone())
+                .or_insert_with(HashSet::new)
+                .insert(id.to_string());
+        }
+    }
+
+    /// Remove a memory from the index.
+    pub fn remove(&mut self, id: &str) {
+        if let Some(old_sparse) = self.forward.remove(id) {
+            for ngram in old_sparse.keys() {
+                if let Some(doc_set) = self.inverted.get_mut(ngram) {
+                    doc_set.remove(id);
+                    if doc_set.is_empty() {
+                        self.inverted.remove(ngram);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Update a memory's sparse representation (remove old, add new).
+    pub fn update(&mut self, id: &str, sparse: &HashMap<String, f32>) {
+        self.remove(id);
+        self.add(id, sparse);
+    }
+
+    /// Coarse screening: given query's sparse weights, return candidate IDs
+    /// sorted by sparse score (dot product of shared ngram weights) descending.
+    ///
+    /// `max_candidates`: maximum number of candidates to return.
+    pub fn search(&self, query_sparse: &HashMap<String, f32>, max_candidates: usize) -> Vec<String> {
+        let mut scores: HashMap<String, f32> = HashMap::new();
+
+        for (ngram, q_weight) in query_sparse {
+            if let Some(doc_ids) = self.inverted.get(ngram) {
+                for doc_id in doc_ids {
+                    if let Some(doc_sparse) = self.forward.get(doc_id) {
+                        if let Some(d_weight) = doc_sparse.get(ngram) {
+                            *scores.entry(doc_id.clone()).or_insert(0.0) += q_weight * d_weight;
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut candidates: Vec<(String, f32)> = scores.into_iter().collect();
+        candidates.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        candidates.truncate(max_candidates);
+        candidates.into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// Serialize the index to bytes (for LMDB index_db persistence).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap_or_default()
+    }
+
+    /// Deserialize the index from bytes.
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        bincode::deserialize(data).ok()
+    }
+
+    /// Number of indexed memories.
+    pub fn len(&self) -> usize {
+        self.forward.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.forward.is_empty()
+    }
+}
+
+impl Default for SparseIndex {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Tests ──────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_sparse(pairs: &[(&str, f32)]) -> HashMap<String, f32> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), *v))
+            .collect()
+    }
+
+    #[test]
+    fn test_add_and_search() {
+        let mut idx = SparseIndex::new();
+
+        idx.add("doc1", &make_sparse(&[("机器", 1.0), ("学习", 1.5)]));
+        idx.add("doc2", &make_sparse(&[("数据库", 2.0), ("查询", 1.0)]));
+        idx.add("doc3", &make_sparse(&[("机器", 1.0), ("视觉", 1.5)]));
+
+        let query = make_sparse(&[("机器", 1.0)]);
+        let results = idx.search(&query, 10);
+
+        // doc1 and doc3 both contain "机器", doc2 does not
+        assert!(results.contains(&"doc1".to_string()));
+        assert!(results.contains(&"doc3".to_string()));
+        assert!(!results.contains(&"doc2".to_string()));
+    }
+
+    #[test]
+    fn test_remove() {
+        let mut idx = SparseIndex::new();
+
+        idx.add("doc1", &make_sparse(&[("机器", 1.0)]));
+        idx.add("doc2", &make_sparse(&[("机器", 1.5)]));
+
+        idx.remove("doc1");
+
+        let query = make_sparse(&[("机器", 1.0)]);
+        let results = idx.search(&query, 10);
+
+        assert!(!results.contains(&"doc1".to_string()));
+        assert!(results.contains(&"doc2".to_string()));
+        assert_eq!(idx.len(), 1);
+    }
+
+    #[test]
+    fn test_score_ordering() {
+        let mut idx = SparseIndex::new();
+
+        // doc1 shares 2 ngrams with query → higher score
+        idx.add("doc1", &make_sparse(&[("机器", 2.0), ("学习", 2.0)]));
+        // doc2 shares 1 ngram with query → lower score
+        idx.add("doc2", &make_sparse(&[("机器", 1.0)]));
+
+        let query = make_sparse(&[("机器", 1.0), ("学习", 1.0)]);
+        let results = idx.search(&query, 10);
+
+        assert_eq!(results[0], "doc1", "doc1 should rank higher (more shared ngrams)");
+        assert_eq!(results[1], "doc2");
+    }
+
+    #[test]
+    fn test_serialization_roundtrip() {
+        let mut idx = SparseIndex::new();
+
+        idx.add("doc1", &make_sparse(&[("机器", 1.0), ("学习", 1.5)]));
+        idx.add("doc2", &make_sparse(&[("数据库", 2.0)]));
+
+        let bytes = idx.to_bytes();
+        let restored = SparseIndex::from_bytes(&bytes).unwrap();
+
+        assert_eq!(restored.len(), 2);
+
+        let query = make_sparse(&[("机器", 1.0)]);
+        let original_results = idx.search(&query, 10);
+        let restored_results = restored.search(&query, 10);
+        assert_eq!(original_results, restored_results);
+    }
+
+    #[test]
+    fn test_update() {
+        let mut idx = SparseIndex::new();
+
+        idx.add("doc1", &make_sparse(&[("机器", 1.0)]));
+        idx.update("doc1", &make_sparse(&[("数据库", 2.0)]));
+
+        // Old ngram should no longer match
+        let query_old = make_sparse(&[("机器", 1.0)]);
+        assert!(!idx.search(&query_old, 10).contains(&"doc1".to_string()));
+
+        // New ngram should match
+        let query_new = make_sparse(&[("数据库", 1.0)]);
+        assert!(idx.search(&query_new, 10).contains(&"doc1".to_string()));
+    }
+
+    #[test]
+    fn test_max_candidates() {
+        let mut idx = SparseIndex::new();
+
+        for i in 0..10 {
+            idx.add(&format!("doc{}", i), &make_sparse(&[("机器", 1.0)]));
+        }
+
+        let query = make_sparse(&[("机器", 1.0)]);
+        let results = idx.search(&query, 3);
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_empty_index() {
+        let idx = SparseIndex::new();
+        let query = make_sparse(&[("机器", 1.0)]);
+        let results = idx.search(&query, 10);
+        assert!(results.is_empty());
+        assert!(idx.is_empty());
+        assert_eq!(idx.len(), 0);
+    }
+
+    #[test]
+    fn test_no_matching_ngrams() {
+        let mut idx = SparseIndex::new();
+        idx.add("doc1", &make_sparse(&[("机器", 1.0)]));
+
+        let query = make_sparse(&[("网络", 1.0)]);
+        let results = idx.search(&query, 10);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_chinese_short_text_recall() {
+        let mut idx = SparseIndex::new();
+
+        // Simulate 100 memories across 10 topics
+        let topics = [
+            "Python编程", "机器学习", "数据库设计", "网络安全", "前端开发",
+            "算法竞赛", "云计算架构", "自然语言处理", "计算机视觉", "操作系统",
+        ];
+        for (i, topic) in topics.iter().enumerate() {
+            let _text = format!("{}的知识点：这是关于{}的详细内容描述", topic, topic);
+            let mut sparse = HashMap::new();
+            // Simulate ngram extraction: add 2-grams from topic name
+            let chars: Vec<char> = topic.chars().collect();
+            for w in chars.windows(2) {
+                let ngram: String = w.iter().collect::<String>();
+                *sparse.entry(ngram).or_insert(0.0) += 1.0;
+            }
+            idx.add(&format!("mem_{}", i), &sparse);
+        }
+
+        // Query for "Python编程"
+        let query_text = "Python编程";
+        let mut query_sparse = HashMap::new();
+        let chars: Vec<char> = query_text.chars().collect();
+        for w in chars.windows(2) {
+            let ngram: String = w.iter().collect::<String>();
+            *query_sparse.entry(ngram).or_insert(0.0) += 1.0;
+        }
+
+        let results = idx.search(&query_sparse, 5);
+        assert!(!results.is_empty(), "should find matching documents");
+        assert_eq!(results[0], "mem_0", "Python编程 should rank first");
+    }
+}

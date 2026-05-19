@@ -1,0 +1,31 @@
+[package]
+name = "memhop"
+version = "0.2.0"
+edition = "2024"
+description = "SQLite for associative memory - embedded associative memory engine powered by Modern Hopfield Networks"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+heed = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "1"
+zstd = "0.13"
+half = { version = "2", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+
+[profile.release]
+# Security hardening: make reverse engineering harder
+strip = true         # Remove debug symbols
+lto = true           # Link-time optimization (obfuscates call graph)
+panic = "abort"      # Remove panic unwinding machinery
+codegen-units = 1    # Maximize optimization, harder to analyze
+opt-level = "s"      # Optimize for size (-Os equivalent)
+
+[dev-dependencies]
+tempfile = "3"

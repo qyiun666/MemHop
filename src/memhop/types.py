@@ -1,6 +1,7 @@
 """Core data types for MemHop."""
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any
 
@@ -9,6 +10,31 @@ import numpy as np
 
 # ── Dense vector dimension ─────────────────────────────────
 VECTOR_DIM = 1024
+
+
+# ── Protection levels ──────────────────────────────────────
+
+class Protection(str, Enum):
+    """Memory protection level for forget/purge operations."""
+
+    PERMANENT = "permanent"  # Never deleted by forget() or purge_before()
+    PROTECTED = "protected"  # purge_before() skips, forget() allowed
+    NORMAL = "normal"        # All operations allowed
+
+
+# ── Exceptions ─────────────────────────────────────────────
+
+class MemHopError(Exception):
+    """Base exception for all MemHop errors."""
+    pass
+
+
+class MemHopClosedError(MemHopError):
+    """Raised when operating on a closed database."""
+
+    def __init__(self, method: str = ""):
+        msg = f"MemHop database is closed. Cannot call {method}() after close()."
+        super().__init__(msg)
 
 
 # ── Memory ─────────────────────────────────────────────────
@@ -21,6 +47,7 @@ class Memory:
     text: str
     meta: dict[str, Any] = field(default_factory=dict)
     confidence: float = 0.0  # 0.0–1.0, Hopfield attractor convergence score
+    created_at: str = ""     # ISO 8601 timestamp, auto-filled by remember()
 
 
 # ── Encoder output ─────────────────────────────────────────
