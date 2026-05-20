@@ -3,7 +3,7 @@ name = "memhop"
 version = "0.2.0"
 edition = "2024"
 description = "SQLite for associative memory - embedded associative memory engine powered by Modern Hopfield Networks"
-license = "MIT"
+# Proprietary - All Rights Reserved
 
 [lib]
 crate-type = ["cdylib", "rlib"]
@@ -21,11 +21,14 @@ rand = "0.8"
 
 [profile.release]
 # Security hardening: make reverse engineering harder
-strip = true         # Remove debug symbols
-lto = true           # Link-time optimization (obfuscates call graph)
-panic = "abort"      # Remove panic unwinding machinery
-codegen-units = 1    # Maximize optimization, harder to analyze
-opt-level = "s"      # Optimize for size (-Os equivalent)
+strip = true              # Remove debug symbols
+lto = true                # Link-time optimization (obfuscates call graph)
+panic = "abort"           # Remove panic unwinding machinery
+codegen-units = 1         # Maximize optimization, harder to analyze
+opt-level = "z"           # Optimize for size aggressively (-Oz)
+debug = false             # No debug info
+overflow-checks = false   # Slight perf boost, harder to trace
+rpath = false             # No rpath embedding
 
 [dev-dependencies]
 tempfile = "3"

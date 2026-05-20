@@ -7,14 +7,14 @@ name = "memhop"
 version = "0.2.0"
 description = "SQLite for associative memory — embedded, single-file, zero-config associative memory engine powered by Modern Hopfield Networks"
 authors = [{name = "MemHop Contributors"}]
-license = "MIT"
+license = {text = "Proprietary"}
 readme = "README.md"
 requires-python = ">=3.10"
 keywords = ["memory", "associative", "hopfield", "embedding", "lmdb", "vector"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: 3.10",
