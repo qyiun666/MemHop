@@ -41,3 +41,6 @@ ROADMAP.md
 VERIFICATION_REPORT.md
 CONTEXTUAL_RECALL_GUIDE.md
 docs/
+
+# Python prototype (not for public repo)
+src/memhop/
