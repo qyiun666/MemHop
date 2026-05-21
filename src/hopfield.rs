@@ -13,6 +13,7 @@
 /// converted to f32 on-the-fly during dot product computation.
 
 use half::f16;
+use rayon::prelude::*;
 use std::collections::HashMap;
 
 // ── Numerically stable softmax ───────────────────────────────
@@ -45,9 +46,15 @@ fn l2_normalize_f16(v: &[f16]) -> Vec<f16> {
     v.iter().map(|x| f16::from_f32(x.to_f32() / norm)).collect()
 }
 
-/// Dot product: f16 pattern · f32 query (converted on-the-fly).
+/// Dot product: f16 pattern · f32 query.
+/// LLVM auto-vectorizes this simple loop into SIMD instructions.
+#[inline]
 fn dot_f16_f32(a: &[f16], b: &[f32]) -> f32 {
-    a.iter().zip(b).map(|(x, y)| x.to_f32() * y).sum()
+    let mut sum = 0.0f32;
+    for i in 0..a.len() {
+        sum += a[i].to_f32() * b[i];
+    }
+    sum
 }
 
 // ── ModernHopfield ───────────────────────────────────────────
@@ -120,6 +127,7 @@ impl ModernHopfield {
 
     /// Associative recall: returns (winner_id, confidence).
     /// query is f32 (converted from f16 encoder output once by caller).
+    /// Dot products computed in parallel via rayon.
     pub fn recall(&self, query: &[f32]) -> Option<(String, f32)> {
         let n = self.len();
         if n == 0 {
@@ -127,12 +135,13 @@ impl ModernHopfield {
         }
         assert_eq!(query.len(), self.dim, "query dimension mismatch");
 
-        let mut similarities = Vec::with_capacity(n);
-        for i in 0..n {
-            let pattern = &self.patterns[i * self.dim..(i + 1) * self.dim];
-            let d = dot_f16_f32(pattern, query);
-            similarities.push(self.beta * d);
-        }
+        let similarities: Vec<f32> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let pattern = &self.patterns[i * self.dim..(i + 1) * self.dim];
+                self.beta * dot_f16_f32(pattern, query)
+            })
+            .collect();
 
         let weights = softmax(&similarities);
 
@@ -145,6 +154,7 @@ impl ModernHopfield {
     }
 
     /// Top-K recall: returns [(id, confidence)] sorted by confidence descending.
+    /// Dot products computed in parallel via rayon.
     pub fn recall_topk(&self, query: &[f32], k: usize) -> Vec<(String, f32)> {
         let n = self.len();
         if n == 0 || k == 0 {
@@ -152,12 +162,13 @@ impl ModernHopfield {
         }
         assert_eq!(query.len(), self.dim, "query dimension mismatch");
 
-        let mut similarities = Vec::with_capacity(n);
-        for i in 0..n {
-            let pattern = &self.patterns[i * self.dim..(i + 1) * self.dim];
-            let d = dot_f16_f32(pattern, query);
-            similarities.push(self.beta * d);
-        }
+        let similarities: Vec<f32> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let pattern = &self.patterns[i * self.dim..(i + 1) * self.dim];
+                self.beta * dot_f16_f32(pattern, query)
+            })
+            .collect();
 
         let weights = softmax(&similarities);
 
@@ -181,6 +192,7 @@ impl ModernHopfield {
     }
 
     /// Recall among a subset of candidate ids (for two-stage retrieval).
+    /// Dot products computed in parallel via rayon.
     pub fn recall_among(&self, query: &[f32], candidate_ids: &[&str]) -> Option<(String, f32)> {
         if candidate_ids.is_empty() {
             return None;
@@ -196,12 +208,13 @@ impl ModernHopfield {
             return None;
         }
 
-        let mut similarities = Vec::with_capacity(indices.len());
-        for &idx in &indices {
-            let pattern = &self.patterns[idx * self.dim..(idx + 1) * self.dim];
-            let d = dot_f16_f32(pattern, query);
-            similarities.push(self.beta * d);
-        }
+        let similarities: Vec<f32> = indices
+            .par_iter()
+            .map(|&idx| {
+                let pattern = &self.patterns[idx * self.dim..(idx + 1) * self.dim];
+                self.beta * dot_f16_f32(pattern, query)
+            })
+            .collect();
 
         let weights = softmax(&similarities);
 
@@ -212,6 +225,40 @@ impl ModernHopfield {
 
         let global_idx = indices[local_winner];
         Some((self.idx_to_id[global_idx].clone(), confidence))
+    }
+
+    /// Recall among candidates, returning raw dot products (no softmax).
+    /// Used by engine-layer strategies (time_alpha, importance_alpha) that
+    /// need raw scores for custom logit adjustments.
+    pub fn recall_among_raw(
+        &self,
+        query: &[f32],
+        candidate_ids: &[&str],
+    ) -> Vec<(String, f32)> {
+        if candidate_ids.is_empty() {
+            return Vec::new();
+        }
+        assert_eq!(query.len(), self.dim, "query dimension mismatch");
+
+        let indices: Vec<usize> = candidate_ids
+            .iter()
+            .filter_map(|id| self.id_to_idx.get(*id).copied())
+            .collect();
+
+        if indices.is_empty() {
+            return Vec::new();
+        }
+
+        let raw_scores: Vec<(String, f32)> = indices
+            .par_iter()
+            .map(|&idx| {
+                let pattern = &self.patterns[idx * self.dim..(idx + 1) * self.dim];
+                let score = self.beta * dot_f16_f32(pattern, query);
+                (self.idx_to_id[idx].clone(), score)
+            })
+            .collect();
+
+        raw_scores
     }
 }
 

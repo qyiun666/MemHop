@@ -3,128 +3,37 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::IntoPyObjectExt;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
 use crate::types::{PyMemory, MemHopClosedError, MemHopError, Protection, VECTOR_DIM};
 use crate::encoder::{NgramEncoder, Encoder};
 use crate::storage::{LmdbStorage, BlobRecord, MetaRecord, StorageError};
 use crate::hopfield::ModernHopfield;
 use crate::index::SparseIndex;
+use crate::meta_index::MetaIndex;
+use crate::recall_strategies::{RecallScope, TimeRange, scope_to_candidates};
 
-// ── MetaIndex for O(1) equality-filter acceleration ────────
+const INDEX_VERSION: u32 = 1;
 
-struct MetaIndex {
-    /// field_name → (field_value → set of memory_ids)
-    by_layer: HashMap<String, HashSet<String>>,
-    by_type: HashMap<String, HashSet<String>>,
-    by_domain: HashMap<String, HashSet<String>>,
-    by_session_id: HashMap<String, HashSet<String>>,
-    by_path: HashMap<String, HashSet<String>>,
-    by_parent: HashMap<String, HashSet<String>>,
+fn rebuild_indices(
+    encoder: &NgramEncoder,
+    storage: &LmdbStorage,
+) -> (SparseIndex, MetaIndex) {
+    let mut sparse_index = SparseIndex::new();
+    let mut meta_index = MetaIndex::new();
+    let all_blobs = match storage.all_blobs() {
+        Ok(blobs) => blobs,
+        Err(_) => return (sparse_index, meta_index),
+    };
+    for (id, blob) in &all_blobs {
+        let output = encoder.encode(&blob.text);
+        sparse_index.add(id, &output.sparse);
+        meta_index.add(id, &blob.meta);
+    }
+    (sparse_index, meta_index)
 }
 
-impl MetaIndex {
-    fn new() -> Self {
-        MetaIndex {
-            by_layer: HashMap::new(),
-            by_type: HashMap::new(),
-            by_domain: HashMap::new(),
-            by_session_id: HashMap::new(),
-            by_path: HashMap::new(),
-            by_parent: HashMap::new(),
-        }
-    }
 
-    fn add(&mut self, id: &str, meta: &HashMap<String, serde_json::Value>) {
-        MetaIndex::insert_to(&mut self.by_layer, "layer", id, meta);
-        MetaIndex::insert_to(&mut self.by_type, "type", id, meta);
-        MetaIndex::insert_to(&mut self.by_domain, "domain", id, meta);
-        MetaIndex::insert_to(&mut self.by_session_id, "session_id", id, meta);
-        MetaIndex::insert_to(&mut self.by_path, "path", id, meta);
-        MetaIndex::insert_to(&mut self.by_parent, "parent", id, meta);
-    }
-
-    fn remove(&mut self, id: &str, meta: &HashMap<String, serde_json::Value>) {
-        MetaIndex::remove_from(&mut self.by_layer, "layer", id, meta);
-        MetaIndex::remove_from(&mut self.by_type, "type", id, meta);
-        MetaIndex::remove_from(&mut self.by_domain, "domain", id, meta);
-        MetaIndex::remove_from(&mut self.by_session_id, "session_id", id, meta);
-        MetaIndex::remove_from(&mut self.by_path, "path", id, meta);
-        MetaIndex::remove_from(&mut self.by_parent, "parent", id, meta);
-    }
-
-    fn update(&mut self, id: &str, old_meta: &HashMap<String, serde_json::Value>, new_meta: &HashMap<String, serde_json::Value>) {
-        self.remove(id, old_meta);
-        self.add(id, new_meta);
-    }
-
-    /// Get candidate IDs matching an equality filter. Returns None if field is not indexed
-    /// or value not found (caller should fall back to full scan).
-    fn get_candidates(
-        &self,
-        layer: Option<&str>,
-        r#type: Option<&str>,
-        domain: Option<&str>,
-        session_id: Option<&str>,
-        path: Option<&str>,
-        parent: Option<&str>,
-    ) -> Option<HashSet<String>> {
-        if layer.is_none() && r#type.is_none() && domain.is_none()
-            && session_id.is_none() && path.is_none() && parent.is_none() {
-            return None;
-        }
-
-        let mut result: Option<HashSet<String>> = None;
-        for (map, val) in [
-            (&self.by_layer, layer),
-            (&self.by_type, r#type),
-            (&self.by_domain, domain),
-            (&self.by_session_id, session_id),
-            (&self.by_path, path),
-            (&self.by_parent, parent),
-        ] {
-            if let Some(v) = val {
-                let set = map.get(v).cloned().unwrap_or_default();
-                result = match result {
-                    None => Some(set),
-                    Some(r) => Some(r.intersection(&set).cloned().collect()),
-                };
-            }
-        }
-
-        if let Some(ref r) = result {
-            if r.is_empty() {
-                return Some(HashSet::new());
-            }
-        }
-        result
-    }
-
-    fn insert_to(
-        map: &mut HashMap<String, HashSet<String>>,
-        field: &str, id: &str, meta: &HashMap<String, serde_json::Value>,
-    ) {
-        if let Some(serde_json::Value::String(v)) = meta.get(field) {
-            map.entry(v.clone()).or_default().insert(id.to_string());
-        }
-    }
-
-    fn remove_from(
-        map: &mut HashMap<String, HashSet<String>>,
-        field: &str, id: &str, meta: &HashMap<String, serde_json::Value>,
-    ) {
-        if let Some(serde_json::Value::String(v)) = meta.get(field) {
-            if let Some(set) = map.get_mut(v) {
-                set.remove(id);
-                if set.is_empty() {
-                    map.remove(v);
-                }
-            }
-        }
-    }
-}
-
-// ── EngineInner ──────────────────────────────────────────
 
 struct EngineInner {
     storage: LmdbStorage,
@@ -144,7 +53,7 @@ struct EngineInner {
 
 #[pyclass]
 pub struct MemHopEngine {
-    inner: Arc<Mutex<EngineInner>>,
+    inner: Arc<RwLock<EngineInner>>,
 }
 
 // ── Helpers ──────────────────────────────────────────────
@@ -232,6 +141,26 @@ fn extract_importance(json_meta: &HashMap<String, serde_json::Value>) -> f32 {
         .unwrap_or(0.5) as f32
 }
 
+fn extract_importance_decay_rate(json_meta: &HashMap<String, serde_json::Value>) -> Option<f32> {
+    json_meta
+        .get("importance_decay_rate")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as f32)
+}
+
+/// Compute effective importance considering time decay.
+/// effective = importance × decay_rate^(days_elapsed)
+fn effective_importance(meta: &MetaRecord, now_ms: i64) -> f32 {
+    match meta.importance_decay_rate {
+        Some(rate) => {
+            let elapsed_ms = (now_ms - meta.created_at).max(0);
+            let days = elapsed_ms as f64 / (24.0 * 3600.0 * 1000.0);
+            meta.importance * rate.powf(days as f32)
+        }
+        None => meta.importance,
+    }
+}
+
 fn storage_to_py(err: StorageError) -> PyErr {
     MemHopError::new_err(err.to_string())
 }
@@ -240,89 +169,7 @@ fn storage_to_py(err: StorageError) -> PyErr {
 fn f16_to_f32(v: &[f16]) -> Vec<f32> {
     v.iter().map(|x| x.to_f32()).collect()
 }
-
-/// Convert a Python value (Bound<'_, PyAny>) to serde_json::Value.
-fn bound_to_json_value(val: &Bound<'_, PyAny>) -> serde_json::Value {
-    if val.is_none() {
-        return serde_json::Value::Null;
-    }
-    if let Ok(b) = val.extract::<bool>() {
-        return serde_json::Value::Bool(b);
-    }
-    if let Ok(i) = val.extract::<i64>() {
-        return serde_json::Value::Number(i.into());
-    }
-    if let Ok(f) = val.extract::<f64>() {
-        return serde_json::Number::from_f64(f)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null);
-    }
-    if let Ok(s) = val.extract::<String>() {
-        return serde_json::Value::String(s);
-    }
-    let py = val.py();
-    if let Ok(list) = val.extract::<Vec<PyObject>>() {
-        let arr: Vec<serde_json::Value> = list
-            .iter()
-            .map(|item| bound_to_json_value(item.bind(py)))
-            .collect();
-        return serde_json::Value::Array(arr);
-    }
-    if let Ok(dict_map) = val.extract::<HashMap<String, PyObject>>() {
-        let mut map = serde_json::Map::new();
-        for (k, v) in &dict_map {
-            map.insert(k.clone(), bound_to_json_value(v.bind(py)));
-        }
-        return serde_json::Value::Object(map);
-    }
-    serde_json::Value::Null
-}
-
-fn pydict_to_json_map(
-    meta: &HashMap<String, PyObject>,
-    py: Python<'_>,
-) -> HashMap<String, serde_json::Value> {
-    meta.iter()
-        .map(|(k, v)| (k.clone(), bound_to_json_value(v.bind(py))))
-        .collect()
-}
-
-fn json_value_to_pyobj(py: Python<'_>, val: &serde_json::Value) -> PyObject {
-    match val {
-        serde_json::Value::Null => py.None(),
-        serde_json::Value::Bool(b) => b.into_py_any(py).unwrap(),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                i.into_py_any(py).unwrap()
-            } else if let Some(f) = n.as_f64() {
-                f.into_py_any(py).unwrap()
-            } else {
-                py.None()
-            }
-        }
-        serde_json::Value::String(s) => s.into_py_any(py).unwrap(),
-        serde_json::Value::Array(arr) => {
-            let items: Vec<PyObject> = arr.iter().map(|v| json_value_to_pyobj(py, v)).collect();
-            items.into_py_any(py).unwrap()
-        }
-        serde_json::Value::Object(map) => {
-            let dict = PyDict::new(py);
-            for (k, v) in map {
-                dict.set_item(k, json_value_to_pyobj(py, v)).unwrap();
-            }
-            dict.into()
-        }
-    }
-}
-
-fn json_map_to_pydict(
-    py: Python<'_>,
-    map: &HashMap<String, serde_json::Value>,
-) -> HashMap<String, PyObject> {
-    map.iter()
-        .map(|(k, v)| (k.clone(), json_value_to_pyobj(py, v)))
-        .collect()
-}
+use crate::python_conv::*;
 
 fn check_closed(inner: &EngineInner) -> PyResult<()> {
     if inner.closed {
@@ -436,28 +283,24 @@ fn matches_filters(blob: &BlobRecord, meta: &MetaRecord, criteria: &FilterCriter
         }
     }
 
-    if let Some(dormant) = criteria.is_dormant {
-        if meta.is_dormant != dormant {
+    if let Some(dormant) = criteria.is_dormant
+        && meta.is_dormant != dormant {
             return false;
         }
-    }
 
-    if let Some(ref prot_str) = criteria.protection {
-        if meta.protection != protection_str_to_u8(prot_str) {
+    if let Some(ref prot_str) = criteria.protection
+        && meta.protection != protection_str_to_u8(prot_str) {
             return false;
         }
-    }
 
-    if let Some(gt) = criteria.importance_gt {
-        if meta.importance <= gt {
+    if let Some(gt) = criteria.importance_gt
+        && meta.importance <= gt {
             return false;
         }
-    }
-    if let Some(lt) = criteria.importance_lt {
-        if meta.importance >= lt {
+    if let Some(lt) = criteria.importance_lt
+        && meta.importance >= lt {
             return false;
         }
-    }
 
     if let Some(ref tag) = criteria.tags_contains {
         match blob.meta.get("tags") {
@@ -486,6 +329,63 @@ fn matches_filters(blob: &BlobRecord, meta: &MetaRecord, criteria: &FilterCriter
     true
 }
 
+/// Parse a Python scope dict into RecallScope.
+fn parse_recall_scope(scope_dict: &HashMap<String, PyObject>, py: Python<'_>) -> RecallScope {
+    let mut scope = RecallScope::default();
+
+    for (k, v) in scope_dict {
+        match k.as_str() {
+            "domain" | "layer" | "knowledge_tree" | "session_id" => {
+                if let Ok(s) = v.bind(py).extract::<String>() {
+                    match k.as_str() {
+                        "domain" => scope.domain = Some(s),
+                        "layer" => scope.layer = Some(s),
+                        "knowledge_tree" => scope.knowledge_tree = Some(s),
+                        "session_id" => scope.session_id = Some(s),
+                        _ => {}
+                    }
+                }
+            }
+            "time_range" => {
+                if let Ok(tr_dict) = v.bind(py).downcast::<PyDict>() {
+                    let mut after_ms: Option<i64> = None;
+                    let mut before_ms: Option<i64> = None;
+
+                    if let Ok(Some(val)) = tr_dict.get_item("hours")
+                        && let Ok(hours) = val.extract::<f64>() {
+                            after_ms = Some(now_millis() - (hours * 3600.0 * 1000.0) as i64);
+                        }
+                    if let Ok(Some(val)) = tr_dict.get_item("days")
+                        && let Ok(days) = val.extract::<f64>() {
+                            let threshold = now_millis() - (days * 86400.0 * 1000.0) as i64;
+                            if after_ms.is_none_or(|a| threshold > a) {
+                                after_ms = Some(threshold);
+                            }
+                        }
+                    if let Ok(Some(val)) = tr_dict.get_item("after")
+                        && let Ok(s) = val.extract::<String>()
+                            && let Ok(ms) = parse_datetime_to_millis(&s) {
+                                after_ms = Some(ms);
+                            }
+                    if let Ok(Some(val)) = tr_dict.get_item("before")
+                        && let Ok(s) = val.extract::<String>()
+                            && let Ok(ms) = parse_datetime_to_millis(&s) {
+                                before_ms = Some(ms);
+                            }
+
+                    if after_ms.is_some() || before_ms.is_some() {
+                        scope.time_range = Some(TimeRange { after_ms, before_ms });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    scope
+}
+
+
 // ── pymethods ────────────────────────────────────────────
 
 #[pymethods]
@@ -513,23 +413,41 @@ impl MemHopEngine {
         let storage = LmdbStorage::open(path).map_err(storage_to_py)?;
         let ngram_encoder = NgramEncoder::default_encoder();
         let mut hopfield = ModernHopfield::new(VECTOR_DIM, beta as f32);
-        let mut sparse_index = SparseIndex::new();
-        let mut meta_index = MetaIndex::new();
 
-        // Startup recovery: load all existing patterns into hopfield + sparse index
+        // Startup recovery: load all existing patterns into hopfield
         let all_patterns = storage.all_patterns().map_err(storage_to_py)?;
-        let all_blobs = storage.all_blobs().map_err(storage_to_py)?;
-
         for (id, pattern) in &all_patterns {
             hopfield.add_pattern(id, pattern);
         }
 
-        // Rebuild sparse index + meta index by re-encoding stored texts
-        for (id, blob) in &all_blobs {
-            let output = ngram_encoder.encode(&blob.text);
-            sparse_index.add(id, &output.sparse);
-            meta_index.add(id, &blob.meta);
-        }
+        // Try to load cached indices (sparse + meta + version)
+        let keepsake_sparse = storage.load_index("sparse").unwrap_or(None);
+        let cached_meta = storage.load_index("meta").unwrap_or(None);
+        let cached_version = storage.load_index("version").unwrap_or(None);
+
+        let (sparse_index, meta_index) = if let (
+            Some(sparse_data),
+            Some(meta_data),
+            Some(version_data),
+        ) = (&keepsake_sparse, &cached_meta, &cached_version)
+        {
+            let stored_version: u32 = bincode::deserialize(version_data).unwrap_or(0);
+            if stored_version == INDEX_VERSION {
+                if let Some(si) = SparseIndex::from_bytes(sparse_data) {
+                    if let Some(mi) = MetaIndex::from_bytes(meta_data) {
+                        (si, mi)
+                    } else {
+                        rebuild_indices(&ngram_encoder, &storage)
+                    }
+                } else {
+                    rebuild_indices(&ngram_encoder, &storage)
+                }
+            } else {
+                rebuild_indices(&ngram_encoder, &storage)
+            }
+        } else {
+            rebuild_indices(&ngram_encoder, &storage)
+        };
 
         let inner = EngineInner {
             storage,
@@ -546,7 +464,7 @@ impl MemHopEngine {
         };
 
         Ok(MemHopEngine {
-            inner: Arc::new(Mutex::new(inner)),
+            inner: Arc::new(RwLock::new(inner)),
         })
     }
 
@@ -560,7 +478,7 @@ impl MemHopEngine {
         content_type: Option<String>,
         blob: Option<Vec<u8>>,
     ) -> PyResult<String> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         check_closed(&inner)?;
 
         let output = inner.encoder.encode(text);
@@ -572,6 +490,7 @@ impl MemHopEngine {
         };
 
         let importance = extract_importance(&json_meta);
+        let importance_decay_rate = extract_importance_decay_rate(&json_meta);
         let protection = extract_protection(&json_meta);
         let is_dormant = extract_is_dormant(&json_meta);
 
@@ -603,6 +522,7 @@ impl MemHopEngine {
             protection: protection_to_u8(&protection),
             is_dormant,
             key: dedup_key,
+            importance_decay_rate,
         };
 
         let blob_record = BlobRecord {
@@ -628,8 +548,9 @@ impl MemHopEngine {
         Ok(id)
     }
 
-    fn recall(&self, cue: &str, py: Python<'_>) -> PyResult<Option<PyMemory>> {
-        let inner = self.inner.lock().unwrap();
+    #[pyo3(signature = (cue, *, include_blob = true, scope = None, time_alpha = 0.0, importance_alpha = 0.0))]
+    fn recall(&self, cue: &str, py: Python<'_>, include_blob: bool, scope: Option<HashMap<String, PyObject>>, time_alpha: f64, importance_alpha: f64) -> PyResult<Option<PyMemory>> {
+        let inner = self.inner.read().unwrap();
         check_closed(&inner)?;
 
         let output = inner.encoder.encode(cue);
@@ -640,19 +561,96 @@ impl MemHopEngine {
             return Ok(None);
         }
 
-        let recall_result = if n <= 500 {
-            inner.hopfield.recall(&query_f32)
-        } else {
-            let max_candidates = 500.min(n);
-            let candidates = inner.sparse_index.search(&output.sparse, max_candidates);
+        let comprehensive = time_alpha > 0.0 || importance_alpha > 0.0;
+        let ta = time_alpha as f32;
+        let ia = importance_alpha as f32;
 
-            if candidates.is_empty() {
-                inner.hopfield.recall(&query_f32)
-            } else {
-                let candidate_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
-                inner.hopfield.recall_among(&query_f32, &candidate_refs)
-            }
+        // Resolve scope to candidate set, if any
+        let scope_candidates = if let Some(ref scope_dict) = scope {
+            let rc = parse_recall_scope(scope_dict, py);
+            scope_to_candidates(&rc, &inner.meta_index, &inner.storage, now_millis())
+                .map_err(storage_to_py)?
+        } else {
+            None
         };
+
+        // Early exit for empty scope
+        if let Some(ref scoped_ids) = scope_candidates
+            && scoped_ids.is_empty() {
+                return Ok(None);
+            }
+
+        // Pre-build candidate list for comprehensive recall
+        let comprehensive_ids: Option<Vec<String>> = if comprehensive {
+            let ids = if let Some(ref scoped_ids) = scope_candidates {
+                scoped_ids.iter().cloned().collect()
+            } else if n <= 500 {
+                inner.storage.all_ids().map_err(storage_to_py)?
+            } else {
+                let max_candidates = 500.min(n);
+                inner.sparse_index.search(&output.sparse, max_candidates)
+            };
+            if ids.is_empty() {
+                return Ok(None);
+            }
+            Some(ids)
+        } else {
+            None
+        };
+
+        let recall_result = py.allow_threads(|| {
+            if let Some(ref cand_ids) = comprehensive_ids {
+                let refs: Vec<&str> = cand_ids.iter().map(|s| s.as_str()).collect();
+                let mut raw = inner.hopfield.recall_among_raw(&query_f32, &refs);
+                let now = now_millis();
+
+                for (id, score) in &mut raw {
+                    if let Ok(Some(meta)) = inner.storage.get_meta(id) {
+                        if ta != 0.0 {
+                            let days = ((now - meta.created_at).max(0) as f64) / (24.0 * 3600.0 * 1000.0);
+                            let recency = 1.0f32 / (1.0 + days as f32 / 30.0);
+                            *score += ta * recency;
+                        }
+                        if ia != 0.0 {
+                            *score += ia * effective_importance(&meta, now);
+                        }
+                    }
+                }
+
+                if raw.is_empty() {
+                    return None;
+                }
+
+                let sims: Vec<f32> = raw.iter().map(|(_, s)| *s).collect();
+                let max_s = sims.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let exps: Vec<f32> = sims.iter().map(|&s| (s - max_s).exp()).collect();
+                let sum: f32 = exps.iter().sum();
+                if sum == 0.0 {
+                    return None;
+                }
+                let weights: Vec<f32> = exps.iter().map(|&e| e / sum).collect();
+                let (best_idx, _) = weights.iter().enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())?;
+                Some((raw[best_idx].0.clone(), weights[best_idx]))
+            } else if let Some(ref scoped_ids) = scope_candidates {
+                let refs: Vec<&str> = scoped_ids.iter().map(|s| s.as_str()).collect();
+                inner.hopfield.recall_among(&query_f32, &refs)
+            } else {
+                if n <= 500 {
+                    inner.hopfield.recall(&query_f32)
+                } else {
+                    let max_candidates = 500.min(n);
+                    let candidates = inner.sparse_index.search(&output.sparse, max_candidates);
+
+                    if candidates.is_empty() {
+                        inner.hopfield.recall(&query_f32)
+                    } else {
+                        let candidate_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+                        inner.hopfield.recall_among(&query_f32, &candidate_refs)
+                    }
+                }
+            }
+        });
 
         match recall_result {
             Some((id, confidence)) => {
@@ -672,7 +670,7 @@ impl MemHopEngine {
                                 confidence as f64,
                                 millis_to_iso(meta_rec.created_at),
                                 blob.content_type.clone(),
-                                blob.blob_data.clone(),
+                                if include_blob { blob.blob_data.clone() } else { None },
                             )));
                         }
                     }
@@ -684,15 +682,106 @@ impl MemHopEngine {
         }
     }
 
-    #[pyo3(signature = (cue, k=5))]
-    fn recall_topk(&self, cue: &str, k: usize, py: Python<'_>) -> PyResult<Vec<PyMemory>> {
-        let inner = self.inner.lock().unwrap();
+    #[pyo3(signature = (cue, k=5, *, include_blob = true, scope = None, time_alpha = 0.0, importance_alpha = 0.0))]
+    fn recall_topk(&self, cue: &str, k: usize, py: Python<'_>, include_blob: bool, scope: Option<HashMap<String, PyObject>>, time_alpha: f64, importance_alpha: f64) -> PyResult<Vec<PyMemory>> {
+        let inner = self.inner.read().unwrap();
         check_closed(&inner)?;
 
         let output = inner.encoder.encode(cue);
         let query_f32 = f16_to_f32(&output.dense);
+
+        let comprehensive = time_alpha > 0.0 || importance_alpha > 0.0;
+        let ta = time_alpha as f32;
+        let ia = importance_alpha as f32;
+
+        // Resolve scope to candidate set, if any
+        let scope_candidates = if let Some(ref scope_dict) = scope {
+            let rc = parse_recall_scope(scope_dict, py);
+            scope_to_candidates(&rc, &inner.meta_index, &inner.storage, now_millis())
+                .map_err(storage_to_py)?
+        } else {
+            None
+        };
+
+        // Early exit for empty scope
+        if let Some(ref scoped_ids) = scope_candidates
+            && scoped_ids.is_empty() {
+                return Ok(Vec::new());
+            }
+
         let lookup_k = (k * 3).max(20);
-        let results = inner.hopfield.recall_topk(&query_f32, lookup_k);
+
+        // Pre-build candidate list for comprehensive recall
+        let comprehensive_ids: Option<Vec<String>> = if comprehensive {
+            let ids = if let Some(ref scoped_ids) = scope_candidates {
+                scoped_ids.iter().cloned().collect()
+            } else {
+                let n = inner.hopfield.len();
+                let max_candidates = 2000.min(n);
+                inner.sparse_index.search(&output.sparse, max_candidates)
+            };
+            if ids.is_empty() {
+                return Ok(Vec::new());
+            }
+            Some(ids)
+        } else {
+            None
+        };
+
+        let results = py.allow_threads(|| {
+            if let Some(ref cand_ids) = comprehensive_ids {
+                let refs: Vec<&str> = cand_ids.iter().map(|s| s.as_str()).collect();
+                let mut raw = inner.hopfield.recall_among_raw(&query_f32, &refs);
+                let now = now_millis();
+
+                for (id, score) in &mut raw {
+                    if let Ok(Some(meta)) = inner.storage.get_meta(id) {
+                        if ta != 0.0 {
+                            let days = ((now - meta.created_at).max(0) as f64) / (24.0 * 3600.0 * 1000.0);
+                            let recency = 1.0f32 / (1.0 + days as f32 / 30.0);
+                            *score += ta * recency;
+                        }
+                        if ia != 0.0 {
+                            *score += ia * effective_importance(&meta, now);
+                        }
+                    }
+                }
+
+                raw.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                raw.truncate(lookup_k);
+                // Softmax
+                if !raw.is_empty() {
+                    let sims: Vec<f32> = raw.iter().map(|(_, s)| *s).collect();
+                    let max_s = sims.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let exps: Vec<f32> = sims.iter().map(|&s| (s - max_s).exp()).collect();
+                    let sum: f32 = exps.iter().sum();
+                    if sum > 0.0 {
+                        for (i, (_, conf)) in raw.iter_mut().enumerate() {
+                            *conf = exps[i] / sum;
+                        }
+                    }
+                }
+                raw
+            } else if let Some(ref scoped_ids) = scope_candidates {
+                let refs: Vec<&str> = scoped_ids.iter().map(|s| s.as_str()).collect();
+                let mut raw = inner.hopfield.recall_among_raw(&query_f32, &refs);
+                raw.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                raw.truncate(lookup_k);
+                if !raw.is_empty() {
+                    let max_s = raw.iter().map(|(_, s)| *s).fold(f32::NEG_INFINITY, f32::max);
+                    let exps: Vec<f32> = raw.iter().map(|(_, s)| (s - max_s).exp()).collect();
+                    let sum: f32 = exps.iter().sum();
+                    if sum > 0.0 {
+                        for (i, (_, conf)) in raw.iter_mut().enumerate() {
+                            *conf = exps[i] / sum;
+                        }
+                    }
+                }
+                raw
+            } else {
+                inner.hopfield.recall_topk(&query_f32, lookup_k)
+            }
+        });
 
         let mut memories = Vec::with_capacity(k);
         for (id, confidence) in results {
@@ -715,7 +804,320 @@ impl MemHopEngine {
                             confidence as f64,
                             millis_to_iso(meta_rec.created_at),
                             blob.content_type.clone(),
-                            blob.blob_data.clone(),
+                            if include_blob { blob.blob_data.clone() } else { None },
+                        ));
+                    }
+                }
+                _ => continue,
+            }
+        }
+
+        Ok(memories)
+    }
+
+    /// Fuse multiple cues via weighted averaging for multi-aspect recall.
+    #[pyo3(signature = (cues, *, weights = None, include_blob = true, scope = None, time_alpha = 0.0, importance_alpha = 0.0))]
+    fn fuse_recall(&self, cues: Vec<String>, py: Python<'_>, weights: Option<Vec<f64>>, include_blob: bool, scope: Option<HashMap<String, PyObject>>, time_alpha: f64, importance_alpha: f64) -> PyResult<Option<PyMemory>> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+
+        if cues.is_empty() {
+            return Err(MemHopError::new_err("fuse_recall: at least one cue required"));
+        }
+
+        // Normalize weights
+        let w: Vec<f32> = match weights {
+            Some(ref wv) if wv.len() == cues.len() => {
+                let sum: f64 = wv.iter().sum();
+                if sum <= 0.0 {
+                    return Err(MemHopError::new_err("fuse_recall: weights sum must be positive"));
+                }
+                wv.iter().map(|x| (*x / sum) as f32).collect()
+            }
+            _ => vec![1.0f32 / cues.len() as f32; cues.len()],
+        };
+
+        // Encode each cue and fuse via weighted average
+        let vd = VECTOR_DIM;
+        let mut fused = vec![0.0f32; vd];
+        for (i, cue) in cues.iter().enumerate() {
+            let output = inner.encoder.encode(cue);
+            for j in 0..vd {
+                fused[j] += w[i] * output.dense[j].to_f32();
+            }
+        }
+
+        // L2-normalize the fused query
+        let norm: f32 = fused.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for x in &mut fused {
+                *x /= norm;
+            }
+        }
+
+        let n = inner.hopfield.len();
+        if n == 0 {
+            return Ok(None);
+        }
+
+        let comprehensive = time_alpha > 0.0 || importance_alpha > 0.0;
+        let ta = time_alpha as f32;
+        let ia = importance_alpha as f32;
+
+        // Resolve scope
+        let scope_candidates = if let Some(ref scope_dict) = scope {
+            let rc = parse_recall_scope(scope_dict, py);
+            scope_to_candidates(&rc, &inner.meta_index, &inner.storage, now_millis())
+                .map_err(storage_to_py)?
+        } else {
+            None
+        };
+
+        if let Some(ref scoped_ids) = scope_candidates
+            && scoped_ids.is_empty() {
+                return Ok(None);
+            }
+
+        // Pre-build candidate list for comprehensive mode
+        let comprehensive_ids: Option<Vec<String>> = if comprehensive {
+            let ids = if let Some(ref scoped_ids) = scope_candidates {
+                scoped_ids.iter().cloned().collect()
+            } else if n <= 500 {
+                inner.storage.all_ids().map_err(storage_to_py)?
+            } else {
+                let encoded = inner.encoder.encode(&cues[0]);
+                let max_c = 500.min(n);
+                inner.sparse_index.search(&encoded.sparse, max_c)
+            };
+            if ids.is_empty() {
+                return Ok(None);
+            }
+            Some(ids)
+        } else {
+            None
+        };
+
+        let recall_result = py.allow_threads(|| {
+            if let Some(ref cand_ids) = comprehensive_ids {
+                let refs: Vec<&str> = cand_ids.iter().map(|s| s.as_str()).collect();
+                let mut raw = inner.hopfield.recall_among_raw(&fused, &refs);
+                let now = now_millis();
+
+                for (id, score) in &mut raw {
+                    if let Ok(Some(meta)) = inner.storage.get_meta(id) {
+                        if ta != 0.0 {
+                            let days = ((now - meta.created_at).max(0) as f64) / (24.0 * 3600.0 * 1000.0);
+                            let recency = 1.0f32 / (1.0 + days as f32 / 30.0);
+                            *score += ta * recency;
+                        }
+                        if ia != 0.0 {
+                            *score += ia * effective_importance(&meta, now);
+                        }
+                    }
+                }
+
+                if raw.is_empty() { return None; }
+
+                let sims: Vec<f32> = raw.iter().map(|(_, s)| *s).collect();
+                let max_s = sims.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let exps: Vec<f32> = sims.iter().map(|&s| (s - max_s).exp()).collect();
+                let sum: f32 = exps.iter().sum();
+                if sum == 0.0 { return None; }
+                let weights: Vec<f32> = exps.iter().map(|&e| e / sum).collect();
+                let (best_idx, _) = weights.iter().enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())?;
+                Some((raw[best_idx].0.clone(), weights[best_idx]))
+            } else if let Some(ref scoped_ids) = scope_candidates {
+                let refs: Vec<&str> = scoped_ids.iter().map(|s| s.as_str()).collect();
+                inner.hopfield.recall_among(&fused, &refs)
+            } else {
+                if n <= 500 {
+                    inner.hopfield.recall(&fused)
+                } else {
+                    let encoded = inner.encoder.encode(&cues[0]);
+                    let max_c = 500.min(n);
+                    let candidates = inner.sparse_index.search(&encoded.sparse, max_c);
+                    if candidates.is_empty() {
+                        inner.hopfield.recall(&fused)
+                    } else {
+                        let candidate_refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+                        inner.hopfield.recall_among(&fused, &candidate_refs)
+                    }
+                }
+            }
+        });
+
+        match recall_result {
+            Some((id, confidence)) => {
+                if confidence < inner.confidence_threshold {
+                    return Ok(None);
+                }
+                let meta_rec = inner.storage.get_meta(&id).map_err(storage_to_py)?;
+                match meta_rec {
+                    Some(meta_rec) if !meta_rec.is_dormant => {
+                        let blob = inner.storage.get_blob(&id).map_err(storage_to_py)?;
+                        if let Some(blob) = blob {
+                            let py_meta = json_map_to_pydict(py, &blob.meta);
+                            return Ok(Some(PyMemory::create(
+                                id,
+                                blob.text,
+                                py_meta,
+                                confidence as f64,
+                                millis_to_iso(meta_rec.created_at),
+                                blob.content_type.clone(),
+                                if include_blob { blob.blob_data.clone() } else { None },
+                            )));
+                        }
+                    }
+                    _ => {}
+                }
+                Ok(None)
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Fuse multiple cues for top-K recall.
+    #[pyo3(signature = (cues, k=5, *, weights = None, include_blob = true, scope = None, time_alpha = 0.0, importance_alpha = 0.0))]
+    fn fuse_recall_topk(&self, cues: Vec<String>, k: usize, py: Python<'_>, weights: Option<Vec<f64>>, include_blob: bool, scope: Option<HashMap<String, PyObject>>, time_alpha: f64, importance_alpha: f64) -> PyResult<Vec<PyMemory>> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+
+        if cues.is_empty() {
+            return Err(MemHopError::new_err("fuse_recall_topk: at least one cue required"));
+        }
+
+        // Normalize weights
+        let w: Vec<f32> = match weights {
+            Some(ref wv) if wv.len() == cues.len() => {
+                let sum: f64 = wv.iter().sum();
+                if sum <= 0.0 {
+                    return Err(MemHopError::new_err("fuse_recall_topk: weights sum must be positive"));
+                }
+                wv.iter().map(|x| (*x / sum) as f32).collect()
+            }
+            _ => vec![1.0f32 / cues.len() as f32; cues.len()],
+        };
+
+        // Encode and fuse
+        let vd = VECTOR_DIM;
+        let mut fused = vec![0.0f32; vd];
+        for (i, cue) in cues.iter().enumerate() {
+            let output = inner.encoder.encode(cue);
+            for j in 0..vd {
+                fused[j] += w[i] * output.dense[j].to_f32();
+            }
+        }
+
+        let norm: f32 = fused.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm > 0.0 {
+            for x in &mut fused { *x /= norm; }
+        }
+
+        let n = inner.hopfield.len();
+        let comprehensive = time_alpha > 0.0 || importance_alpha > 0.0;
+        let ta = time_alpha as f32;
+        let ia = importance_alpha as f32;
+
+        let scope_candidates = if let Some(ref scope_dict) = scope {
+            let rc = parse_recall_scope(scope_dict, py);
+            scope_to_candidates(&rc, &inner.meta_index, &inner.storage, now_millis())
+                .map_err(storage_to_py)?
+        } else {
+            None
+        };
+
+        if let Some(ref scoped_ids) = scope_candidates
+            && scoped_ids.is_empty() { return Ok(Vec::new()); }
+
+        let lookup_k = (k * 3).max(20);
+
+        let comprehensive_ids: Option<Vec<String>> = if comprehensive {
+            let ids = if let Some(ref scoped_ids) = scope_candidates {
+                scoped_ids.iter().cloned().collect()
+            } else {
+                let encoded = inner.encoder.encode(&cues[0]);
+                let max_c = 2000.min(n);
+                inner.sparse_index.search(&encoded.sparse, max_c)
+            };
+            if ids.is_empty() { return Ok(Vec::new()); }
+            Some(ids)
+        } else {
+            None
+        };
+
+        let results = py.allow_threads(|| {
+            if let Some(ref cand_ids) = comprehensive_ids {
+                let refs: Vec<&str> = cand_ids.iter().map(|s| s.as_str()).collect();
+                let mut raw = inner.hopfield.recall_among_raw(&fused, &refs);
+                let now = now_millis();
+
+                for (id, score) in &mut raw {
+                    if let Ok(Some(meta)) = inner.storage.get_meta(id) {
+                        if ta != 0.0 {
+                            let days = ((now - meta.created_at).max(0) as f64) / (24.0 * 3600.0 * 1000.0);
+                            let recency = 1.0f32 / (1.0 + days as f32 / 30.0);
+                            *score += ta * recency;
+                        }
+                        if ia != 0.0 {
+                            *score += ia * effective_importance(&meta, now);
+                        }
+                    }
+                }
+
+                raw.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                raw.truncate(lookup_k);
+                if !raw.is_empty() {
+                    let sims: Vec<f32> = raw.iter().map(|(_, s)| *s).collect();
+                    let max_s = sims.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                    let exps: Vec<f32> = sims.iter().map(|&s| (s - max_s).exp()).collect();
+                    let sum: f32 = exps.iter().sum();
+                    if sum > 0.0 {
+                        for (i, (_, conf)) in raw.iter_mut().enumerate() {
+                            *conf = exps[i] / sum;
+                        }
+                    }
+                }
+                raw
+            } else if let Some(ref scoped_ids) = scope_candidates {
+                let refs: Vec<&str> = scoped_ids.iter().map(|s| s.as_str()).collect();
+                let mut raw = inner.hopfield.recall_among_raw(&fused, &refs);
+                raw.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                raw.truncate(lookup_k);
+                if !raw.is_empty() {
+                    let max_s = raw.iter().map(|(_, s)| *s).fold(f32::NEG_INFINITY, f32::max);
+                    let exps: Vec<f32> = raw.iter().map(|(_, s)| (s - max_s).exp()).collect();
+                    let sum: f32 = exps.iter().sum();
+                    if sum > 0.0 {
+                        for (i, (_, conf)) in raw.iter_mut().enumerate() {
+                            *conf = exps[i] / sum;
+                        }
+                    }
+                }
+                raw
+            } else {
+                inner.hopfield.recall_topk(&fused, lookup_k)
+            }
+        });
+
+        let mut memories = Vec::with_capacity(k);
+        for (id, confidence) in results {
+            if memories.len() >= k { break; }
+            if confidence < inner.confidence_threshold { break; }
+            let meta_rec = inner.storage.get_meta(&id).map_err(storage_to_py)?;
+            match meta_rec {
+                Some(meta_rec) if !meta_rec.is_dormant => {
+                    let blob = inner.storage.get_blob(&id).map_err(storage_to_py)?;
+                    if let Some(blob) = blob {
+                        let py_meta = json_map_to_pydict(py, &blob.meta);
+                        memories.push(PyMemory::create(
+                            id,
+                            blob.text,
+                            py_meta,
+                            confidence as f64,
+                            millis_to_iso(meta_rec.created_at),
+                            blob.content_type.clone(),
+                            if include_blob { blob.blob_data.clone() } else { None },
                         ));
                     }
                 }
@@ -727,7 +1129,7 @@ impl MemHopEngine {
     }
 
     fn forget(&self, memory_id: &str) -> PyResult<bool> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         check_closed(&inner)?;
 
         let meta = inner.storage.get_meta(memory_id).map_err(storage_to_py)?;
@@ -752,9 +1154,103 @@ impl MemHopEngine {
         Ok(true)
     }
 
+    /// Create a directed link between two memories.
+    /// Stores the link in the from-memory's connections array.
+    #[pyo3(signature = (from_id, to_id, link_type = "related"))]
+    fn link_to(&self, from_id: &str, to_id: &str, link_type: &str) -> PyResult<bool> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+
+        if inner.storage.get_pattern(from_id).map_err(storage_to_py)?.is_none() {
+            return Ok(false);
+        }
+        if inner.storage.get_pattern(to_id).map_err(storage_to_py)?.is_none() {
+            return Ok(false);
+        }
+
+        let blob = inner.storage.get_blob(from_id).map_err(storage_to_py)?;
+        if let Some(mut blob) = blob {
+            let old_json = blob.meta.clone();
+            let mut connections: Vec<serde_json::Value> = match blob.meta.get("connections") {
+                Some(serde_json::Value::Array(arr)) => arr.clone(),
+                _ => Vec::new(),
+            };
+
+            // Avoid duplicate links
+            let already_linked = connections.iter().any(|c| {
+                c.get("to").and_then(|v| v.as_str()) == Some(to_id)
+                    && c.get("type").and_then(|v| v.as_str()) == Some(link_type)
+            });
+
+            if !already_linked {
+                let mut link = serde_json::Map::new();
+                link.insert("to".to_string(), serde_json::Value::String(to_id.to_string()));
+                link.insert("type".to_string(), serde_json::Value::String(link_type.to_string()));
+                connections.push(serde_json::Value::Object(link));
+                blob.meta.insert("connections".to_string(), serde_json::Value::Array(connections));
+                inner.meta_index.update(from_id, &old_json, &blob.meta);
+                inner.storage.update_blob(from_id, &blob).map_err(storage_to_py)?;
+                return Ok(true);
+            }
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Get all outgoing links from a memory.
+    fn links_of(&self, memory_id: &str, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+
+        let blob = inner.storage.get_blob(memory_id).map_err(storage_to_py)?;
+        match blob {
+            Some(b) => match b.meta.get("connections") {
+                Some(serde_json::Value::Array(arr)) => {
+                    let result: Vec<PyObject> = arr.iter()
+                        .map(|v| json_value_to_pyobj(py, v))
+                        .collect();
+                    Ok(result)
+                }
+                _ => Ok(Vec::new()),
+            },
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Find all memories that link TO the given memory (incoming links).
+    /// NOTE: This scans all blobs since we don't maintain a reverse index.
+    #[pyo3(signature = (memory_id))]
+    fn links_to(&self, memory_id: &str, py: Python<'_>) -> PyResult<Vec<PyObject>> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+
+        let all_blobs = inner.storage.all_blobs().map_err(storage_to_py)?;
+        let mut result = Vec::new();
+
+        for (from_id, blob) in &all_blobs {
+            if let Some(serde_json::Value::Array(conns)) = blob.meta.get("connections") {
+                for link in conns {
+                    if link.get("to").and_then(|v| v.as_str()) == Some(memory_id) {
+                        let mut entry = serde_json::Map::new();
+                        entry.insert("from".to_string(), serde_json::Value::String(from_id.clone()));
+                        if let Some(lt) = link.get("type") {
+                            entry.insert("type".to_string(), lt.clone());
+                        }
+                        result.push(json_value_to_pyobj(py, &serde_json::Value::Object(entry)));
+                    }
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+
     #[pyo3(signature = (before_datetime))]
     fn purge_before(&self, before_datetime: &str) -> PyResult<u64> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         check_closed(&inner)?;
 
         let cutoff = parse_datetime_to_millis(before_datetime)?;
@@ -778,7 +1274,7 @@ impl MemHopEngine {
 
     #[pyo3(signature = (limit=5))]
     fn recent(&self, py: Python<'_>, limit: usize) -> PyResult<Vec<PyMemory>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         check_closed(&inner)?;
 
         let mut all_metas = inner.storage.all_metas().map_err(storage_to_py)?;
@@ -804,13 +1300,229 @@ impl MemHopEngine {
         Ok(results)
     }
 
+    /// Build an entity graph showing domain-level connections.
+    /// Each node is a domain; edges represent linked memories across domains.
+    fn entity_graph(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+
+        let all_blobs = inner.storage.all_blobs().map_err(storage_to_py)?;
+        let mut domains = HashMap::new();
+        let mut edges: Vec<(String, String, String)> = Vec::new();
+
+        // Collect domain info
+        for (id, blob) in &all_blobs {
+            if let Some(serde_json::Value::String(domain)) = blob.meta.get("domain") {
+                let entry = domains.entry(domain.clone()).or_insert_with(|| (0usize, Vec::new()));
+                entry.0 += 1;
+                entry.1.push(id.clone());
+            }
+            // Extract connections for edges
+            if let Some(serde_json::Value::Array(conns)) = blob.meta.get("connections") {
+                let from_domain = blob.meta.get("domain")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+                for conn in conns {
+                    if let (Some(to), Some(link_type)) = (
+                        conn.get("to").and_then(|v| v.as_str()),
+                        conn.get("type").and_then(|v| v.as_str()),
+                    ) {
+                        // Find target domain
+                        let to_domain = inner.storage.get_blob(to)
+                            .map_err(storage_to_py)?
+                            .and_then(|b| b.meta.get("domain").and_then(|v| v.as_str().map(|s| s.to_string())))
+                            .unwrap_or_else(|| "unknown".to_string());
+                        edges.push((from_domain.to_string(), to_domain, link_type.to_string()));
+                    }
+                }
+            }
+        }
+
+        let dict = PyDict::new(py);
+        // Nodes
+        let nodes: Vec<PyObject> = domains.iter().map(|(name, (count, _ids))| {
+            let nd = PyDict::new(py);
+            let _ = nd.set_item("domain", name);
+            let _ = nd.set_item("count", *count as u64);
+            nd.into()
+        }).collect();
+        dict.set_item("nodes", nodes)?;
+
+        // Edges (deduplicated)
+        edges.sort();
+        edges.dedup();
+        let edge_objs: Vec<PyObject> = edges.iter().map(|(from, to, link_type)| {
+            let ed = PyDict::new(py);
+            let _ = ed.set_item("from", from);
+            let _ = ed.set_item("to", to);
+            let _ = ed.set_item("type", link_type);
+            ed.into()
+        }).collect();
+        dict.set_item("edges", edge_objs)?;
+
+        Ok(dict.into())
+    }
+
+    /// Build a knowledge tree from parent/child relationships.
+    fn knowledge_tree(&self, py: Python<'_>) -> PyResult<PyObject> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+
+        let all_blobs = inner.storage.all_blobs().map_err(storage_to_py)?;
+
+        // Build tree: id → (children, text snippet)
+        let mut children_map: HashMap<String, Vec<String>> = HashMap::new();
+        let mut node_info: HashMap<String, (String, String)> = HashMap::new(); // (text[:50], layer/domain)
+
+        // First pass: find all nodes and their parent relationships
+        for (id, blob) in &all_blobs {
+            let text_snippet = if blob.text.len() > 50 {
+                format!("{}...", &blob.text[..50])
+            } else {
+                blob.text.clone()
+            };
+            let layer = blob.meta.get("layer").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            node_info.insert(id.clone(), (text_snippet, layer));
+
+            if let Some(serde_json::Value::String(parent)) = blob.meta.get("parent") {
+                children_map.entry(parent.clone()).or_default().push(id.clone());
+            }
+        }
+
+        // Find roots (nodes with no parent)
+        let roots: Vec<String> = all_blobs.iter()
+            .filter(|(id, _)| !node_info.contains_key(id) || {
+                all_blobs.iter().all(|(_, b)| {
+                    b.meta.get("parent").and_then(|v| v.as_str()) != Some(id.as_str())
+                })
+            })
+            .map(|(id, _)| id.clone())
+            .filter(|id| children_map.contains_key(id)) // only nodes that have children
+            .collect();
+
+        fn build_subtree(
+            root: &str,
+            children_map: &HashMap<String, Vec<String>>,
+            node_info: &HashMap<String, (String, String)>,
+            py: Python<'_>,
+        ) -> PyObject {
+            let node = PyDict::new(py);
+            let _ = node.set_item("id", root);
+            if let Some((text, layer)) = node_info.get(root) {
+                let _ = node.set_item("text", text);
+                let _ = node.set_item("layer", layer);
+            }
+            if let Some(children) = children_map.get(root) {
+                let child_objs: Vec<PyObject> = children.iter()
+                    .map(|c| build_subtree(c, children_map, node_info, py))
+                    .collect();
+                let _ = node.set_item("children", child_objs);
+            }
+            node.into()
+        }
+
+        let tree: Vec<PyObject> = roots.into_iter()
+            .map(|r| build_subtree(&r, &children_map, &node_info, py))
+            .collect();
+
+        Ok(tree.into_py_any(py).unwrap())
+    }
+
+    /// Get memories ordered by time, optionally filtered by session_id or layer.
+    #[pyo3(signature = (session_id=None, layer=None, limit=50))]
+    fn episode_thread(&self, py: Python<'_>, session_id: Option<String>, layer: Option<String>, limit: usize) -> PyResult<Vec<PyMemory>> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+
+        let all_blobs = inner.storage.all_blobs().map_err(storage_to_py)?;
+        let all_metas = inner.storage.all_metas().map_err(storage_to_py)?;
+        let meta_map: HashMap<&str, &MetaRecord> = all_metas.iter()
+            .map(|(id, m)| (id.as_str(), m))
+            .collect();
+
+        let mut filtered: Vec<(i64, String)> = all_blobs.iter()
+            .filter(|(_id, blob)| {
+                if let Some(ref sid) = session_id {
+                    blob.meta.get("session_id").and_then(|v| v.as_str()) == Some(sid.as_str())
+                } else { true }
+            })
+            .filter(|(_, blob)| {
+                if let Some(ref l) = layer {
+                    blob.meta.get("layer").and_then(|v| v.as_str()) == Some(l.as_str())
+                } else { true }
+            })
+            .filter_map(|(id, _)| {
+                meta_map.get(id.as_str()).map(|m| (m.created_at, id.clone()))
+            })
+            .collect();
+
+        filtered.sort_by_key(|(ts, _)| *ts);
+        filtered.truncate(limit);
+
+        let mut results = Vec::with_capacity(filtered.len());
+        for (_, id) in &filtered {
+            if let Some(meta_rec) = meta_map.get(id.as_str())
+                && let Some(blob) = inner.storage.get_blob(id).map_err(storage_to_py)? {
+                    let py_meta = json_map_to_pydict(py, &blob.meta);
+                    results.push(PyMemory::create(
+                        id.clone(),
+                        blob.text,
+                        py_meta,
+                        0.0,
+                        millis_to_iso(meta_rec.created_at),
+                        blob.content_type.clone(),
+                        blob.blob_data.clone(),
+                    ));
+                }
+        }
+
+        Ok(results)
+    }
+
+    /// Group memories by their layer metadata.
+    #[pyo3(signature = (layer=None))]
+    fn memories_by_layer(&self, py: Python<'_>, layer: Option<String>) -> PyResult<PyObject> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+
+        let all_blobs = inner.storage.all_blobs().map_err(storage_to_py)?;
+        let mut layers: HashMap<String, Vec<PyObject>> = HashMap::new();
+
+        for (id, blob) in &all_blobs {
+            let layer_val = blob.meta.get("layer")
+                .and_then(|v| v.as_str())
+                .unwrap_or("_ungrouped");
+            if let Some(ref l) = layer
+                && layer_val != l { continue; }
+            let item = PyDict::new(py);
+            let _ = item.set_item("id", id);
+            let text_snippet = if blob.text.len() > 80 {
+                format!("{}...", &blob.text[..80])
+            } else {
+                blob.text.clone()
+            };
+            let _ = item.set_item("text", text_snippet);
+            if let Some(serde_json::Value::String(domain)) = blob.meta.get("domain") {
+                let _ = item.set_item("domain", domain);
+            }
+            layers.entry(layer_val.to_string()).or_default().push(item.into());
+        }
+
+        let dict = PyDict::new(py);
+        for (name, memories) in &layers {
+            dict.set_item(name, memories)?;
+        }
+        Ok(dict.into())
+    }
+
+
     #[pyo3(signature = (items))]
     fn remember_batch(
         &self,
         py: Python<'_>,
         items: Vec<Bound<'_, PyDict>>,
     ) -> PyResult<Vec<String>> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         check_closed(&inner)?;
 
         let mut ids = Vec::with_capacity(items.len());
@@ -849,6 +1561,7 @@ impl MemHopEngine {
             let output = inner.encoder.encode(&text);
 
             let importance = extract_importance(&json_meta);
+            let importance_decay_rate = extract_importance_decay_rate(&json_meta);
             let protection = extract_protection(&json_meta);
             let is_dormant = extract_is_dormant(&json_meta);
 
@@ -858,6 +1571,7 @@ impl MemHopEngine {
                 protection: protection_to_u8(&protection),
                 is_dormant,
                 key: None,
+                importance_decay_rate,
             };
 
             let blob_record = BlobRecord {
@@ -905,7 +1619,7 @@ impl MemHopEngine {
         blob: Option<Vec<u8>>,
         py: Python<'_>,
     ) -> PyResult<bool> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         check_closed(&inner)?;
 
         if inner
@@ -969,8 +1683,8 @@ impl MemHopEngine {
                     .update_blob(memory_id, &blob_rec)
                     .map_err(storage_to_py)?;
             }
-        } else if content_type.is_some() || blob.is_some() {
-            if let Some(mut blob_rec) = old_blob {
+        } else if (content_type.is_some() || blob.is_some())
+            && let Some(mut blob_rec) = old_blob {
                 if let Some(ref ct) = content_type {
                     blob_rec.content_type = Some(ct.clone());
                 }
@@ -982,7 +1696,6 @@ impl MemHopEngine {
                     .update_blob(memory_id, &blob_rec)
                     .map_err(storage_to_py)?;
             }
-        }
 
         if let Some(ref nj) = new_json {
             let existing_meta = inner.storage.get_meta(memory_id).map_err(storage_to_py)?;
@@ -1025,7 +1738,7 @@ impl MemHopEngine {
         filters: &Bound<'_, PyDict>,
         limit: Option<usize>,
     ) -> PyResult<Vec<PyMemory>> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         check_closed(&inner)?;
 
         let limit = limit.unwrap_or(20);
@@ -1137,10 +1850,12 @@ impl MemHopEngine {
     }
 
     fn close(&self) -> PyResult<()> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.write().unwrap();
         if inner.closed {
             return Ok(());
         }
+        // Persist indices for fast startup recovery
+        persist_indices(&inner)?;
         inner.closed = true;
         inner.storage.close().map_err(storage_to_py)?;
         Ok(())
@@ -1148,14 +1863,14 @@ impl MemHopEngine {
 
     #[getter]
     fn count(&self) -> PyResult<u64> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         check_closed(&inner)?;
         inner.storage.count().map_err(storage_to_py)
     }
 
     #[getter]
     fn stats(&self, py: Python<'_>) -> PyResult<PyObject> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         let dict = PyDict::new(py);
         let count = inner.storage.count().map_err(storage_to_py)?;
         let index_size = inner.storage.index_size_bytes().map_err(storage_to_py)?;
@@ -1166,6 +1881,36 @@ impl MemHopEngine {
         dict.set_item("threshold", inner.confidence_threshold as f64)?;
         dict.set_item("max_memories", inner.max_memories)?;
         dict.set_item("index_size_bytes", index_size)?;
+
+        // Enhanced stats from MetaIndex + storage scan
+        let all_metas = inner.storage.all_metas().map_err(storage_to_py)?;
+        let all_blobs = inner.storage.all_blobs().map_err(storage_to_py)?;
+
+        let active = all_metas.iter().filter(|(_, m)| !m.is_dormant).count() as u64;
+        dict.set_item("active_memories", active)?;
+
+        let avg_importance = if all_metas.is_empty() { 0.0 }
+            else { all_metas.iter().map(|(_, m)| m.importance as f64).sum::<f64>() / all_metas.len() as f64 };
+        dict.set_item("avg_importance", avg_importance)?;
+
+        // Counts by layer and domain
+        let mut layer_counts = HashMap::new();
+        let mut domain_counts = HashMap::new();
+        for (_, blob) in &all_blobs {
+            if let Some(serde_json::Value::String(l)) = blob.meta.get("layer") {
+                *layer_counts.entry(l.clone()).or_insert(0u64) += 1;
+            }
+            if let Some(serde_json::Value::String(d)) = blob.meta.get("domain") {
+                *domain_counts.entry(d.clone()).or_insert(0u64) += 1;
+            }
+        }
+        let py_layer_counts: HashMap<String, u64> = layer_counts;
+        let py_domain_counts: HashMap<String, u64> = domain_counts;
+        dict.set_item("layer_counts", py_layer_counts)?;
+        dict.set_item("domain_counts", py_domain_counts)?;
+
+        dict.set_item("hopfield_patterns", inner.hopfield.len() as u64)?;
+
         Ok(dict.into())
     }
 
@@ -1187,7 +1932,7 @@ impl MemHopEngine {
     }
 
     fn __repr__(&self) -> String {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.read().unwrap();
         format!(
             "MemHopEngine(closed={}, count={})",
             inner.closed,
@@ -1197,6 +1942,17 @@ impl MemHopEngine {
 }
 
 // ── Eviction helper ────────────────────────────────────────
+
+fn persist_indices(inner: &EngineInner) -> PyResult<()> {
+    let sparse_bytes = inner.sparse_index.to_bytes();
+    inner.storage.save_index("sparse", &sparse_bytes).map_err(storage_to_py)?;
+    let meta_bytes = inner.meta_index.to_bytes();
+    inner.storage.save_index("meta", &meta_bytes).map_err(storage_to_py)?;
+    let version_bytes = bincode::serialize(&INDEX_VERSION)
+        .map_err(|e| MemHopError::new_err(format!("version serialize: {}", e)))?;
+    inner.storage.save_index("version", &version_bytes).map_err(storage_to_py)?;
+    Ok(())
+}
 
 fn evict_oldest(inner: &mut EngineInner) -> PyResult<()> {
     let count = inner.storage.count().map_err(storage_to_py)?;

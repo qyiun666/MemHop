@@ -50,6 +50,8 @@ pub struct MetaRecord {
     pub protection: u8,
     pub is_dormant: bool,
     pub key: Option<String>,
+    #[serde(default)]
+    pub importance_decay_rate: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -406,6 +408,7 @@ mod tests {
             protection: 0,
             is_dormant: false,
             key: None,
+            importance_decay_rate: None,
         }
     }
 

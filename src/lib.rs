@@ -6,6 +6,9 @@ mod encoder;
 mod hopfield;
 mod storage;
 mod index;
+mod python_conv;
+mod meta_index;
+mod recall_strategies;
 
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {

@@ -42,7 +42,7 @@ impl SparseIndex {
         for ngram in sparse.keys() {
             self.inverted
                 .entry(ngram.clone())
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(id.to_string());
         }
     }
@@ -77,11 +77,10 @@ impl SparseIndex {
         for (ngram, q_weight) in query_sparse {
             if let Some(doc_ids) = self.inverted.get(ngram) {
                 for doc_id in doc_ids {
-                    if let Some(doc_sparse) = self.forward.get(doc_id) {
-                        if let Some(d_weight) = doc_sparse.get(ngram) {
+                    if let Some(doc_sparse) = self.forward.get(doc_id)
+                        && let Some(d_weight) = doc_sparse.get(ngram) {
                             *scores.entry(doc_id.clone()).or_insert(0.0) += q_weight * d_weight;
                         }
-                    }
                 }
             }
         }
