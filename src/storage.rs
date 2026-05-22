@@ -159,6 +159,21 @@ impl LmdbStorage {
         Ok(())
     }
 
+    /// Batch-write pattern vectors in a single transaction.
+    /// Used for persisting plasticity-drifted patterns on close().
+    pub fn persist_patterns_batch(
+        &self,
+        items: &[(String, Vec<f16>)],
+    ) -> Result<(), StorageError> {
+        let mut wtxn = self.env.write_txn()?;
+        for (id, pattern) in items {
+            let key = id.as_bytes();
+            self.patterns_db.put(&mut wtxn, key, &serialize_pattern(pattern)?)?;
+        }
+        wtxn.commit()?;
+        Ok(())
+    }
+
     /// Read the pattern vector for a memory.
     pub fn get_pattern(&self, id: &str) -> Result<Option<Vec<f16>>, StorageError> {
         let rtxn = self.env.read_txn()?;

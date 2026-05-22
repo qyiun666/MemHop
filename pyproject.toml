@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "memhop"
-version = "0.3.0"
+version = "0.4.0"
 description = "SQLite for associative memory — embedded, single-file, zero-config associative memory engine powered by Modern Hopfield Networks"
 authors = [{name = "MemHop Contributors"}]
 license = {text = "Proprietary"}
@@ -26,7 +26,7 @@ classifiers = [
 ]
 
 [project.urls]
-Repository = "https://github.com/qyiun666/MemHop"
+Homepage = "https://pypi.org/project/memhop/"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "pytest-benchmark>=4.0"]

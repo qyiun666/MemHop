@@ -1,6 +1,8 @@
 """Type stubs for memhop — SQLite for associative memory."""
 
-from typing import Any, Optional, Literal
+from __future__ import annotations
+
+from typing import Any, Optional
 
 
 class Memory:
@@ -50,6 +52,8 @@ class MemHopEngine:
         beta: float = ...,
         max_memories: int = ...,
         timezone: str = ...,
+        gating_enabled: bool = ...,
+        gating_threshold: float = ...,
     ) -> None: ...
 
     def remember(
@@ -157,6 +161,42 @@ class MemHopEngine:
         layer: Optional[str] = ...,
     ) -> dict[str, list[dict[str, Any]]]: ...
 
+    # ── v0.4.0: Plasticity API ──
+
+    def recall_with_plasticity(
+        self,
+        cue: str,
+        *,
+        include_blob: bool = ...,
+    ) -> Optional[Memory]: ...
+
+    def enable_plasticity(self, enabled: bool) -> None: ...
+
+    def set_plasticity_config(
+        self,
+        min_drift_attention: float = ...,
+        discrimination_threshold: float = ...,
+        reinforce_rate: float = ...,
+        discriminate_rate: float = ...,
+        decay_threshold_days: int = ...,
+        decay_rate: float = ...,
+    ) -> None: ...
+
+    def get_memory_stats(self, memory_id: str) -> Optional[dict[str, int]]: ...
+
+    def trigger_decay(self) -> int: ...
+
+    # ── v0.4.0: Encoder IDF API ──
+
+    def set_encoder_idf(self, idf_dict: dict[str, float]) -> None: ...
+    def clear_encoder_idf(self) -> None: ...
+
+    # ── v0.4.0: Scene Gating API ──
+
+    def set_gating(self, enabled: bool) -> None: ...
+    def set_gating_threshold(self, threshold: float) -> None: ...
+    def reset_scene(self) -> None: ...
+
     def close(self) -> None: ...
 
     @property
@@ -182,6 +222,8 @@ def open(
     beta: float = ...,
     max_memories: int = ...,
     timezone: str = ...,
+    gating_enabled: bool = ...,
+    gating_threshold: float = ...,
 ) -> MemHopEngine: ...
 
 

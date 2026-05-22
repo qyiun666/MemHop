@@ -98,6 +98,16 @@ impl MetaIndex {
         result
     }
 
+    /// Get all session IDs that have been indexed.
+    pub(crate) fn all_session_ids(&self) -> impl Iterator<Item = &String> {
+        self.by_session_id.keys()
+    }
+
+    /// Get memory IDs belonging to a specific session.
+    pub(crate) fn session_memory_ids(&self, session_id: &str) -> Option<&HashSet<String>> {
+        self.by_session_id.get(session_id)
+    }
+
     pub(crate) fn insert_to(
         map: &mut HashMap<String, HashSet<String>>,
         field: &str, id: &str, meta: &HashMap<String, serde_json::Value>,

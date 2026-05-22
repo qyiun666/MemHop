@@ -10,13 +10,15 @@ from memhop._core import (
     MemHopClosedError,
 )
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "open",
     "MemHopEngine",
     "Memory",
     "MemHopError",
     "MemHopClosedError",
+    "build_idf",
+    "normalize_time",
 ]
 
 
@@ -28,6 +30,8 @@ def open(
     beta: float = 8.0,
     max_memories: int = 1_000_000,
     timezone: str = "UTC",
+    gating_enabled: bool = True,
+    gating_threshold: float = 0.6,
 ) -> MemHopEngine:
     """Open or create a MemHop database.
 
@@ -38,6 +42,8 @@ def open(
         beta: Hopfield temperature parameter.
         max_memories: Soft cap, FIFO eviction of normal memories when exceeded.
         timezone: Timezone for timestamps (currently UTC only).
+        gating_enabled: Enable scene-gated recall (v0.4.0).
+        gating_threshold: Cosine similarity threshold for fingerprint matching.
     """
     return MemHopEngine(
         path=path,
@@ -46,4 +52,6 @@ def open(
         beta=beta,
         max_memories=max_memories,
         timezone=timezone,
+        gating_enabled=gating_enabled,
+        gating_threshold=gating_threshold,
     )

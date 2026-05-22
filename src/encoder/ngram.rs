@@ -34,15 +34,34 @@ fn fnv1a_hash(data: &[u8]) -> u64 {
 /// - Output: f16 dense vector for memory efficiency (2KB/record vs 4KB)
 pub struct NgramEncoder {
     dim: usize,
+    /// v0.4.0: Optional IDF map for term reweighting.
+    /// When set, each ngram's contribution to the dense vector is multiplied
+    /// by its IDF factor. High-frequency ngrams are downweighted,
+    /// rare/important ngrams are emphasized.
+    idf: Option<HashMap<String, f32>>,
 }
 
 impl NgramEncoder {
     pub fn new(dim: usize) -> Self {
-        NgramEncoder { dim }
+        NgramEncoder { dim, idf: None }
+    }
+
+    pub fn new_with_idf(dim: usize, idf: HashMap<String, f32>) -> Self {
+        NgramEncoder { dim, idf: Some(idf) }
     }
 
     pub fn default_encoder() -> Self {
         NgramEncoder::new(DEFAULT_DIM)
+    }
+
+    /// Set IDF map at runtime. Replaces any existing IDF map.
+    pub fn set_idf(&mut self, idf_map: HashMap<String, f32>) {
+        self.idf = Some(idf_map);
+    }
+
+    /// Clear IDF map, restoring uniform weighting.
+    pub fn clear_idf(&mut self) {
+        self.idf = None;
     }
 
     /// Extract character-level n-grams with weighted accumulation.
@@ -85,11 +104,19 @@ impl Encoder for NgramEncoder {
 
         let ngram_weights = Self::extract_ngrams(trimmed);
 
-        // Build dense vector in f32 for precision during accumulation, then convert to f16
+        // Build dense vector in f32 with IDF-weighted accumulation
         let mut dense_f32 = vec![0.0f32; self.dim];
-        for (ngram, weight) in &ngram_weights {
-            let idx = (fnv1a_hash(ngram.as_bytes()) % self.dim as u64) as usize;
-            dense_f32[idx] += *weight;
+        if let Some(ref idf_map) = self.idf {
+            for (ngram, weight) in &ngram_weights {
+                let idx = (fnv1a_hash(ngram.as_bytes()) % self.dim as u64) as usize;
+                let idf_factor = idf_map.get(ngram).copied().unwrap_or(1.0);
+                dense_f32[idx] += *weight * idf_factor;
+            }
+        } else {
+            for (ngram, weight) in &ngram_weights {
+                let idx = (fnv1a_hash(ngram.as_bytes()) % self.dim as u64) as usize;
+                dense_f32[idx] += *weight;
+            }
         }
 
         // L2 normalize in f32

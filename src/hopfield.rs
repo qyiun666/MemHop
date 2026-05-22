@@ -14,7 +14,7 @@
 
 use half::f16;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ── Numerically stable softmax ───────────────────────────────
 
@@ -46,6 +46,14 @@ fn l2_normalize_f16(v: &[f16]) -> Vec<f16> {
     v.iter().map(|x| f16::from_f32(x.to_f32() / norm)).collect()
 }
 
+fn l2_normalize_f32(v: &[f32]) -> Vec<f32> {
+    let norm: f32 = v.iter().map(|x| x.powi(2)).sum::<f32>().sqrt();
+    if norm == 0.0 {
+        return v.to_vec();
+    }
+    v.iter().map(|x| x / norm).collect()
+}
+
 /// Dot product: f16 pattern · f32 query.
 /// LLVM auto-vectorizes this simple loop into SIMD instructions.
 #[inline]
@@ -55,6 +63,38 @@ fn dot_f16_f32(a: &[f16], b: &[f32]) -> f32 {
         sum += a[i].to_f32() * b[i];
     }
     sum
+}
+
+// ── PlasticityConfig ─────────────────────────────────────────
+
+/// Configuration for pattern plasticity — controls how memories evolve during use.
+#[derive(Debug, Clone)]
+pub struct PlasticityConfig {
+    /// Attention below this threshold does not drift (default 0.05)
+    pub min_drift_attention: f32,
+    /// Attention above this threshold triggers discrimination (default 0.15)
+    pub discrimination_threshold: f32,
+    /// Learning rate for reinforcement of the winner (default 0.01)
+    pub reinforce_rate: f32,
+    /// Learning rate for discrimination of non-winners (default 0.005)
+    pub discriminate_rate: f32,
+    /// Days since last access before decay kicks in (default 90)
+    pub decay_threshold_days: u32,
+    /// Decay rate per additional day past threshold (default 0.001)
+    pub decay_rate: f32,
+}
+
+impl Default for PlasticityConfig {
+    fn default() -> Self {
+        PlasticityConfig {
+            min_drift_attention: 0.05,
+            discrimination_threshold: 0.15,
+            reinforce_rate: 0.01,
+            discriminate_rate: 0.005,
+            decay_threshold_days: 90,
+            decay_rate: 0.001,
+        }
+    }
 }
 
 // ── ModernHopfield ───────────────────────────────────────────
@@ -68,6 +108,16 @@ pub struct ModernHopfield {
     idx_to_id: Vec<String>,
     /// Flattened pattern matrix: N rows × dim cols, row-major, f16 storage
     patterns: Vec<f16>,
+
+    // ── v0.4.0 plasticity fields ──
+    /// Number of times each pattern has been accessed via plasticity recall
+    pub access_counts: Vec<u64>,
+    /// Last access timestamp in unix millis
+    pub last_access: Vec<u64>,
+    /// Whether pattern plasticity is enabled (default false)
+    pub drift_enabled: bool,
+    /// Plasticity configuration
+    pub plasticity_cfg: PlasticityConfig,
 }
 
 impl ModernHopfield {
@@ -78,11 +128,16 @@ impl ModernHopfield {
             id_to_idx: HashMap::new(),
             idx_to_id: Vec::new(),
             patterns: Vec::new(),
+            access_counts: Vec::new(),
+            last_access: Vec::new(),
+            drift_enabled: false,
+            plasticity_cfg: PlasticityConfig::default(),
         }
     }
 
     /// Add a pattern (f16, L2-normalized before storage).
-    /// If the id already exists, the pattern is replaced in-place.
+    /// If the id already exists, the pattern is replaced in-place
+    /// but access_count and last_access are preserved.
     pub fn add_pattern(&mut self, id: &str, pattern: &[f16]) {
         assert_eq!(pattern.len(), self.dim, "pattern dimension mismatch");
 
@@ -96,10 +151,13 @@ impl ModernHopfield {
             self.idx_to_id.push(id.to_string());
             self.id_to_idx.insert(id.to_string(), idx);
             self.patterns.extend_from_slice(&normalized);
+            self.access_counts.push(0);
+            self.last_access.push(0);
         }
     }
 
     /// Remove a pattern by id using swap-remove.
+    /// Also maintains access_counts and last_access vectors.
     pub fn remove_pattern(&mut self, id: &str) -> bool {
         let idx = match self.id_to_idx.remove(id) {
             Some(i) => i,
@@ -109,11 +167,17 @@ impl ModernHopfield {
         let last_idx = self.idx_to_id.len() - 1;
 
         if idx != last_idx {
+            // Swap patterns
             let src_start = last_idx * self.dim;
             let dst_start = idx * self.dim;
             let src_slice = self.patterns[src_start..src_start + self.dim].to_vec();
             self.patterns[dst_start..dst_start + self.dim].copy_from_slice(&src_slice);
 
+            // Swap access stats
+            self.access_counts[idx] = self.access_counts[last_idx];
+            self.last_access[idx] = self.last_access[last_idx];
+
+            // Swap id mapping
             let swapped_id = self.idx_to_id[last_idx].clone();
             self.id_to_idx.insert(swapped_id.clone(), idx);
             self.idx_to_id[idx] = swapped_id;
@@ -121,6 +185,8 @@ impl ModernHopfield {
 
         self.idx_to_id.pop();
         self.patterns.truncate(self.patterns.len() - self.dim);
+        self.access_counts.pop();
+        self.last_access.pop();
 
         true
     }
@@ -259,6 +325,168 @@ impl ModernHopfield {
             .collect();
 
         raw_scores
+    }
+
+    // ── v0.4.0 Plasticity ─────────────────────────────────
+
+    /// Recall with pattern plasticity: drift patterns toward/away from query.
+    ///
+    /// Winner pattern reinforces toward query; high-attention non-winners
+    /// discriminate away. Operates on all stored patterns (full softmax).
+    ///
+    /// Requires `&mut self` (write lock) — callers must hold write access.
+    /// Returns (winner_id, confidence, drifted_indices) — the third element
+    /// contains the Hopfield row indices that were modified by drift.
+    pub fn recall_with_plasticity(
+        &mut self,
+        query: &[f32],
+        now_ms: u64,
+    ) -> Option<(String, f32, Vec<usize>)> {
+        if !self.drift_enabled || self.is_empty() {
+            return self.recall(query).map(|(id, conf)| (id, conf, Vec::new()));
+        }
+
+        let n = self.len();
+        assert_eq!(query.len(), self.dim, "query dimension mismatch");
+
+        // Step 1: compute similarities + softmax weights (same as recall)
+        let similarities: Vec<f32> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let pattern = &self.patterns[i * self.dim..(i + 1) * self.dim];
+                self.beta * dot_f16_f32(pattern, query)
+            })
+            .collect();
+
+        let weights = softmax(&similarities);
+
+        // Step 2: find winner
+        let (winner_idx, &confidence) = weights
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())?;
+
+        let cfg = &self.plasticity_cfg;
+        let mut drifted_indices = Vec::new();
+
+        // Step 3: drift all eligible patterns
+        for i in 0..n {
+            let attention = weights[i];
+            if attention < cfg.min_drift_attention {
+                continue;
+            }
+
+            let direction = if i == winner_idx {
+                cfg.reinforce_rate
+            } else if attention > cfg.discrimination_threshold {
+                -cfg.discriminate_rate
+            } else {
+                continue;
+            };
+
+            // Convert pattern to f32, apply drift, L2 normalize, convert back
+            let start = i * self.dim;
+            let mut pattern_f32: Vec<f32> = (0..self.dim)
+                .map(|j| self.patterns[start + j].to_f32())
+                .collect();
+
+            for j in 0..self.dim {
+                pattern_f32[j] += direction * attention * query[j];
+            }
+
+            let drifted = l2_normalize_f32(&pattern_f32);
+            for j in 0..self.dim {
+                self.patterns[start + j] = f16::from_f32(drifted[j]);
+            }
+
+            self.access_counts[i] += 1;
+            self.last_access[i] = now_ms;
+            drifted_indices.push(i);
+        }
+
+        Some((self.idx_to_id[winner_idx].clone(), confidence, drifted_indices))
+    }
+
+    /// Get access statistics for a memory.
+    pub fn get_access_stats(&self, id: &str) -> Option<(u64, u64)> {
+        self.id_to_idx.get(id).map(|&idx| {
+            (self.access_counts[idx], self.last_access[idx])
+        })
+    }
+
+    /// Collect (id, pattern) pairs for a set of row indices.
+    /// Used by engine on close() to persist drifted patterns to LMDB.
+    pub fn collect_patterns_by_indices(&self, indices: &HashSet<usize>) -> Vec<(String, Vec<f16>)> {
+        let mut result = Vec::with_capacity(indices.len());
+        for &idx in indices {
+            if idx >= self.len() {
+                continue;
+            }
+            let start = idx * self.dim;
+            let pattern = self.patterns[start..start + self.dim].to_vec();
+            result.push((self.idx_to_id[idx].clone(), pattern));
+        }
+        result
+    }
+
+    /// Enable or disable pattern drift.
+    pub fn enable_plasticity(&mut self, enabled: bool) {
+        self.drift_enabled = enabled;
+    }
+
+    /// Update plasticity configuration.
+    pub fn set_plasticity_config(&mut self, cfg: PlasticityConfig) {
+        self.plasticity_cfg = cfg;
+    }
+
+    /// Apply natural decay: attenuate patterns that haven't been accessed
+    /// beyond the decay threshold. Patterns with extremely low L2 norm
+    /// are flagged (caller should mark them as dormant).
+    ///
+    /// Returns a list of memory IDs that have decayed below the dormant threshold.
+    pub fn apply_decay(&mut self, now_ms: u64) -> Vec<String> {
+        if self.is_empty() {
+            return Vec::new();
+        }
+
+        let cfg = &self.plasticity_cfg;
+        let threshold_days = cfg.decay_threshold_days as u64;
+        let mut dormant_candidates = Vec::new();
+
+        let dim = self.dim;
+        let ln_1 = |x: f64| (1.0 + x).ln();
+
+        for i in 0..self.len() {
+            let days_since_access = if self.last_access[i] == 0 {
+                // Never accessed via plasticity — skip decay
+                continue;
+            } else {
+                let elapsed = now_ms.saturating_sub(self.last_access[i]);
+                elapsed / 86400000
+            };
+
+            if days_since_access <= threshold_days {
+                continue;
+            }
+
+            let extra_days = (days_since_access - threshold_days) as f64;
+            let scale = 1.0f64 - (cfg.decay_rate as f64) * ln_1(extra_days);
+            let scale = scale.max(0.0) as f32;
+
+            let start = i * dim;
+            for j in 0..dim {
+                let val = self.patterns[start + j].to_f32() * scale;
+                self.patterns[start + j] = f16::from_f32(val);
+            }
+
+            // Check if pattern's L2 norm has dropped below dormant threshold
+            let norm = l2_norm_f16(&self.patterns[start..start + dim]);
+            if norm < 0.1 {
+                dormant_candidates.push(self.idx_to_id[i].clone());
+            }
+        }
+
+        dormant_candidates
     }
 }
 
@@ -470,5 +698,175 @@ mod tests {
         assert_eq!(id, "p1");
         let (id, _) = mhn.recall(&to_f32_vec(&vs[3])).unwrap();
         assert_eq!(id, "p3");
+    }
+
+    // ── v0.4.0 plasticity tests ────────────────────────────
+
+    #[test]
+    fn test_drift_disabled_equals_recall() {
+        let dim = 64;
+        let mut mhn = ModernHopfield::new(dim, 8.0);
+
+        for i in 0..5 {
+            let v = make_f16_vector(dim, i * 131);
+            mhn.add_pattern(&format!("m{i}"), &v);
+        }
+
+        let query = make_f16_vector(dim, 42);
+        let query_f32 = to_f32_vec(&query);
+
+        // drift_enabled is false by default
+        let (id1, conf1) = mhn.recall(&query_f32).unwrap();
+        let (id2, conf2, _drifted) = mhn.recall_with_plasticity(&query_f32, 0).unwrap();
+
+        assert_eq!(id1, id2);
+        assert!((conf1 - conf2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_winner_reinforcement() {
+        let dim = 128;
+        let mut mhn = ModernHopfield::new(dim, 8.0);
+        mhn.enable_plasticity(true);
+
+        // Add a close pattern and distant patterns
+        let target = make_f16_vector(dim, 1000);
+        let target_f32 = to_f32_vec(&target);
+        mhn.add_pattern("target", &target);
+
+        for i in 1..5 {
+            let v = make_f16_vector(dim, 1000 + i * 7777);
+            mhn.add_pattern(&format!("dist{i}"), &v);
+        }
+
+        // Record similarity before drift
+        let (_, conf_before) = mhn.recall(&target_f32).unwrap();
+
+        // Drift toward target
+        mhn.recall_with_plasticity(&target_f32, 1000);
+
+        // After drift, target should be even closer
+        let (id_after, conf_after) = mhn.recall(&target_f32).unwrap();
+        assert_eq!(id_after, "target");
+        assert!(
+            conf_after >= conf_before - 0.01,
+            "winner confidence should not decrease: before={conf_before}, after={conf_after}"
+        );
+    }
+
+    #[test]
+    fn test_access_counts_increment() {
+        let dim = 32;
+        let mut mhn = ModernHopfield::new(dim, 8.0);
+        mhn.enable_plasticity(true);
+
+        let v = make_f16_vector(dim, 42);
+        let q = to_f32_vec(&v);
+        mhn.add_pattern("a", &v);
+
+        let (id, _, _) = mhn.recall_with_plasticity(&q, 5000).unwrap();
+        assert_eq!(id, "a");
+
+        let (count, last_access) = mhn.get_access_stats("a").unwrap();
+        assert_eq!(count, 1);
+        assert_eq!(last_access, 5000);
+    }
+
+    #[test]
+    fn test_get_access_stats_nonexistent() {
+        let mhn = ModernHopfield::new(16, 8.0);
+        assert!(mhn.get_access_stats("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_enable_plasticity_toggle() {
+        let mut mhn = ModernHopfield::new(8, 8.0);
+        assert!(!mhn.drift_enabled, "default should be disabled");
+
+        mhn.enable_plasticity(true);
+        assert!(mhn.drift_enabled);
+
+        mhn.enable_plasticity(false);
+        assert!(!mhn.drift_enabled);
+    }
+
+    #[test]
+    fn test_set_plasticity_config() {
+        let mut mhn = ModernHopfield::new(8, 8.0);
+        let mut cfg = PlasticityConfig::default();
+        cfg.reinforce_rate = 0.02;
+        cfg.discriminate_rate = 0.01;
+
+        mhn.set_plasticity_config(cfg.clone());
+
+        assert!((mhn.plasticity_cfg.reinforce_rate - 0.02).abs() < 1e-6);
+        assert!((mhn.plasticity_cfg.discriminate_rate - 0.01).abs() < 1e-6);
+    }
+
+    #[test]
+    fn test_apply_decay_triggers_after_threshold() {
+        let dim = 16;
+        let mut mhn = ModernHopfield::new(dim, 8.0);
+
+        let v = make_f16_vector(dim, 42);
+        mhn.add_pattern("old_mem", &v);
+
+        // Set a low decay threshold so decay kicks in quickly
+        mhn.plasticity_cfg.decay_threshold_days = 1;
+        mhn.plasticity_cfg.decay_rate = 0.5;
+
+        // Mark as accessed in the past
+        mhn.last_access[0] = 0;  // Never accessed via plasticity
+
+        // apply_decay skips patterns with last_access=0
+        let dormant = mhn.apply_decay(1000000);
+        assert!(dormant.is_empty(), "patterns with last_access=0 should not decay");
+
+        // Now set last_access in the past
+        let past = 1000; // 1000 ms after epoch = way in the past
+        mhn.last_access[0] = past;
+
+        let _dormant = mhn.apply_decay(past + 3 * 86400000); // 3 days after past
+        // Pattern should have decayed
+        let decayed_norm = l2_norm_f16(&mhn.patterns[0..dim]);
+        assert!(
+            decayed_norm < 1.0,
+            "decayed pattern should have lower norm: {decayed_norm}"
+        );
+    }
+
+    #[test]
+    fn test_remove_pattern_maintains_access_stats() {
+        let dim = 8;
+        let mut mhn = ModernHopfield::new(dim, 8.0);
+
+        let v1 = make_f16_vector(dim, 10);
+        let v2 = make_f16_vector(dim, 20);
+        let v3 = make_f16_vector(dim, 30);
+
+        mhn.add_pattern("a", &v1);
+        mhn.add_pattern("b", &v2);
+        mhn.add_pattern("c", &v3);
+
+        mhn.access_counts[0] = 5;
+        mhn.last_access[0] = 100;
+        mhn.access_counts[1] = 3;
+        mhn.last_access[1] = 200;
+
+        // Remove middle element
+        mhn.remove_pattern("b");
+
+        // "a" should still have its stats
+        let (count, access) = mhn.get_access_stats("a").unwrap();
+        assert_eq!(count, 5);
+        assert_eq!(access, 100);
+
+        // "c" should still have its stats
+        let (count, access) = mhn.get_access_stats("c").unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(access, 0);
+
+        assert_eq!(mhn.access_counts.len(), 2);
+        assert_eq!(mhn.last_access.len(), 2);
     }
 }

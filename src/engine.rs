@@ -8,10 +8,11 @@ use std::sync::{Arc, RwLock};
 use crate::types::{PyMemory, MemHopClosedError, MemHopError, Protection, VECTOR_DIM};
 use crate::encoder::{NgramEncoder, Encoder};
 use crate::storage::{LmdbStorage, BlobRecord, MetaRecord, StorageError};
-use crate::hopfield::ModernHopfield;
+use crate::hopfield::{ModernHopfield, PlasticityConfig};
 use crate::index::SparseIndex;
 use crate::meta_index::MetaIndex;
 use crate::recall_strategies::{RecallScope, TimeRange, scope_to_candidates};
+use crate::scene_gating::SceneState;
 
 const INDEX_VERSION: u32 = 1;
 
@@ -47,6 +48,10 @@ struct EngineInner {
     beta: f32,
     max_memories: u64,
     closed: bool,
+    /// Set of Hopfield row indices that have been modified by plasticity drift
+    dirty_patterns: HashSet<usize>,
+    /// Scene-gated recall state (v0.4.0)
+    scene_state: SceneState,
 }
 
 // ── MemHopEngine ─────────────────────────────────────────
@@ -385,13 +390,56 @@ fn parse_recall_scope(scope_dict: &HashMap<String, PyObject>, py: Python<'_>) ->
     scope
 }
 
+// ── Scene gating helper ────────────────────────────────────
+
+/// Attempt to build an auto-scope from scene gating.
+/// Returns Ok(None) when no gate matches (same as no scope).
+fn scene_gating_to_auto_scope(
+    scene_state: &SceneState,
+    query_f32: &[f32],
+    meta_index: &MetaIndex,
+    storage: &LmdbStorage,
+    now_ms: i64,
+) -> Result<Option<HashSet<String>>, StorageError> {
+    if !scene_state.gating_enabled {
+        return Ok(None);
+    }
+
+    // Layer 1: session fingerprint match
+    if let Some(sid) = scene_state.match_session_fingerprint(query_f32) {
+        let mut rc = RecallScope::default();
+        rc.session_id = Some(sid);
+        return scope_to_candidates(&rc, meta_index, storage, now_ms);
+    }
+
+    // Layer 2: knowledge tree path prediction
+    if let Some(tree_root) = scene_state.predict_tree_path(query_f32) {
+        let mut rc = RecallScope::default();
+        rc.knowledge_tree = Some(tree_root);
+        return scope_to_candidates(&rc, meta_index, storage, now_ms);
+    }
+
+    // Layer 3: active scene anchoring
+    if let Some(ref active) = scene_state.active_scene {
+        if active.miss_count < 3 {
+            if let Some(ref sid) = active.session_id {
+                let mut rc = RecallScope::default();
+                rc.session_id = Some(sid.clone());
+                return scope_to_candidates(&rc, meta_index, storage, now_ms);
+            }
+        }
+    }
+
+    Ok(None)
+}
+
 
 // ── pymethods ────────────────────────────────────────────
 
 #[pymethods]
 impl MemHopEngine {
     #[new]
-    #[pyo3(signature = (path="memhop.db", encoder="ngram", confidence_threshold=0.7, beta=8.0, max_memories=1_000_000, timezone="UTC"))]
+    #[pyo3(signature = (path="memhop.db", encoder="ngram", confidence_threshold=0.7, beta=8.0, max_memories=1_000_000, timezone="UTC", gating_enabled=true, gating_threshold=0.6))]
     fn new(
         path: &str,
         encoder: &str,
@@ -399,6 +447,8 @@ impl MemHopEngine {
         beta: f64,
         max_memories: u64,
         timezone: &str,
+        gating_enabled: bool,
+        gating_threshold: f64,
     ) -> PyResult<Self> {
         let encoder_mode = encoder.to_string();
         let _tz = timezone.to_string();
@@ -449,7 +499,7 @@ impl MemHopEngine {
             rebuild_indices(&ngram_encoder, &storage)
         };
 
-        let inner = EngineInner {
+        let mut inner = EngineInner {
             storage,
             encoder: ngram_encoder,
             encoder_mode,
@@ -461,7 +511,16 @@ impl MemHopEngine {
             beta: beta as f32,
             max_memories,
             closed: false,
+            dirty_patterns: HashSet::new(),
+            scene_state: SceneState {
+                gating_enabled,
+                gating_threshold: gating_threshold as f32,
+                ..SceneState::new()
+            },
         };
+
+        // Rebuild scene fingerprints for startup
+        let _ = inner.scene_state.rebuild_fingerprints(&inner.storage, &inner.meta_index);
 
         Ok(MemHopEngine {
             inner: Arc::new(RwLock::new(inner)),
@@ -540,6 +599,16 @@ impl MemHopEngine {
         inner.sparse_index.add(&id, &output.sparse);
         inner.meta_index.add(&id, &json_meta);
 
+        // Update scene fingerprints (v0.4.0)
+        if inner.scene_state.gating_enabled {
+            if let Some(serde_json::Value::String(sid)) = json_meta.get("session_id") {
+                inner.scene_state.update_session_fingerprint(sid, &output.dense);
+            }
+            if let Some(serde_json::Value::String(parent)) = json_meta.get("parent") {
+                inner.scene_state.update_node_fingerprint(parent, &output.dense);
+            }
+        }
+
         let count = inner.storage.count().map_err(storage_to_py)?;
         if count > inner.max_memories {
             evict_oldest(&mut inner)?;
@@ -565,13 +634,15 @@ impl MemHopEngine {
         let ta = time_alpha as f32;
         let ia = importance_alpha as f32;
 
-        // Resolve scope to candidate set, if any
+        // Resolve scope to candidate set, if any (explicit scope or auto-gating)
         let scope_candidates = if let Some(ref scope_dict) = scope {
             let rc = parse_recall_scope(scope_dict, py);
             scope_to_candidates(&rc, &inner.meta_index, &inner.storage, now_millis())
                 .map_err(storage_to_py)?
         } else {
-            None
+            scene_gating_to_auto_scope(
+                &inner.scene_state, &query_f32, &inner.meta_index, &inner.storage, now_millis()
+            ).map_err(storage_to_py)?
         };
 
         // Early exit for empty scope
@@ -694,13 +765,15 @@ impl MemHopEngine {
         let ta = time_alpha as f32;
         let ia = importance_alpha as f32;
 
-        // Resolve scope to candidate set, if any
+        // Resolve scope to candidate set, if any (explicit scope or auto-gating)
         let scope_candidates = if let Some(ref scope_dict) = scope {
             let rc = parse_recall_scope(scope_dict, py);
             scope_to_candidates(&rc, &inner.meta_index, &inner.storage, now_millis())
                 .map_err(storage_to_py)?
         } else {
-            None
+            scene_gating_to_auto_scope(
+                &inner.scene_state, &query_f32, &inner.meta_index, &inner.storage, now_millis()
+            ).map_err(storage_to_py)?
         };
 
         // Early exit for empty scope
@@ -1128,6 +1201,165 @@ impl MemHopEngine {
         Ok(memories)
     }
 
+    // ── v0.4.0 Plasticity API ──────────────────────────────
+
+    #[pyo3(signature = (cue, *, include_blob = true))]
+    fn recall_with_plasticity(
+        &self,
+        cue: &str,
+        include_blob: bool,
+        py: Python<'_>,
+    ) -> PyResult<Option<PyMemory>> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+
+        let output = inner.encoder.encode(cue);
+        let query_f32 = f16_to_f32(&output.dense);
+
+        let n = inner.hopfield.len();
+        if n == 0 {
+            return Ok(None);
+        }
+
+        let now = now_millis();
+
+        let recall_result = inner.hopfield.recall_with_plasticity(&query_f32, now as u64);
+
+        match recall_result {
+            Some((id, confidence, drifted_indices)) => {
+                // Track drifted pattern indices for persistence on close()
+                for idx in drifted_indices {
+                    inner.dirty_patterns.insert(idx);
+                }
+
+                if confidence < inner.confidence_threshold {
+                    return Ok(None);
+                }
+                let meta_rec = inner.storage.get_meta(&id).map_err(storage_to_py)?;
+                match meta_rec {
+                    Some(meta_rec) if !meta_rec.is_dormant => {
+                        let blob = inner.storage.get_blob(&id).map_err(storage_to_py)?;
+                        if let Some(blob) = blob {
+                            let py_meta = json_map_to_pydict(py, &blob.meta);
+                            return Ok(Some(PyMemory::create(
+                                id,
+                                blob.text,
+                                py_meta,
+                                confidence as f64,
+                                millis_to_iso(meta_rec.created_at),
+                                blob.content_type.clone(),
+                                if include_blob { blob.blob_data.clone() } else { None },
+                            )));
+                        }
+                    }
+                    _ => {}
+                }
+                Ok(None)
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn enable_plasticity(&self, enabled: bool) -> PyResult<()> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+        inner.hopfield.enable_plasticity(enabled);
+        Ok(())
+    }
+
+    fn set_plasticity_config(&self, min_drift_attention: f64, discrimination_threshold: f64, reinforce_rate: f64, discriminate_rate: f64, decay_threshold_days: u64, decay_rate: f64) -> PyResult<()> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+        let cfg = PlasticityConfig {
+            min_drift_attention: min_drift_attention as f32,
+            discrimination_threshold: discrimination_threshold as f32,
+            reinforce_rate: reinforce_rate as f32,
+            discriminate_rate: discriminate_rate as f32,
+            decay_threshold_days: decay_threshold_days as u32,
+            decay_rate: decay_rate as f32,
+        };
+        inner.hopfield.set_plasticity_config(cfg);
+        Ok(())
+    }
+
+    fn get_memory_stats(&self, memory_id: &str) -> PyResult<Option<HashMap<String, u64>>> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+        match inner.hopfield.get_access_stats(memory_id) {
+            Some((count, last_access)) => {
+                let mut map = HashMap::new();
+                map.insert("access_count".to_string(), count);
+                map.insert("last_access_ms".to_string(), last_access);
+                Ok(Some(map))
+            }
+            None => Ok(None),
+        }
+    }
+
+    fn trigger_decay(&self) -> PyResult<u64> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+        let now = now_millis() as u64;
+        let dormant_candidates = inner.hopfield.apply_decay(now);
+        // Mark strongly decayed memories as dormant
+        for id in &dormant_candidates {
+            if let Some(mut blob) = inner.storage.get_blob(id).map_err(storage_to_py)? {
+                let old_json = blob.meta.clone();
+                blob.meta.insert("is_dormant".to_string(), serde_json::Value::Bool(true));
+                inner.meta_index.update(id, &old_json, &blob.meta);
+                inner.storage.update_blob(id, &blob).map_err(storage_to_py)?;
+            }
+        }
+        // Track all modified indices for persistence
+        for i in 0..inner.hopfield.len() {
+            inner.dirty_patterns.insert(i);
+        }
+        Ok(dormant_candidates.len() as u64)
+    }
+
+    // ── v0.4.0 Encoder IDF API ────────────────────────────
+
+    fn set_encoder_idf(&self, idf_dict: HashMap<String, f64>) -> PyResult<()> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+        let idf_f32: HashMap<String, f32> = idf_dict
+            .into_iter()
+            .map(|(k, v)| (k, v as f32))
+            .collect();
+        inner.encoder.set_idf(idf_f32);
+        Ok(())
+    }
+
+    fn clear_encoder_idf(&self) -> PyResult<()> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+        inner.encoder.clear_idf();
+        Ok(())
+    }
+
+    // ── v0.4.0 Scene Gating API ───────────────────────────
+
+    fn set_gating(&self, enabled: bool) -> PyResult<()> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+        inner.scene_state.gating_enabled = enabled;
+        Ok(())
+    }
+
+    fn set_gating_threshold(&self, threshold: f64) -> PyResult<()> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+        inner.scene_state.gating_threshold = threshold as f32;
+        Ok(())
+    }
+
+    fn reset_scene(&self) -> PyResult<()> {
+        let mut inner = self.inner.write().unwrap();
+        check_closed(&inner)?;
+        inner.scene_state.reset_scene();
+        Ok(())
+    }
+
     fn forget(&self, memory_id: &str) -> PyResult<bool> {
         let mut inner = self.inner.write().unwrap();
         check_closed(&inner)?;
@@ -1150,6 +1382,8 @@ impl MemHopEngine {
         inner.storage.delete(memory_id).map_err(storage_to_py)?;
         inner.hopfield.remove_pattern(memory_id);
         inner.sparse_index.remove(memory_id);
+        // Clear dirty tracking — swap-remove invalidates row indices
+        inner.dirty_patterns.clear();
 
         Ok(true)
     }
@@ -1268,6 +1502,7 @@ impl MemHopEngine {
                 deleted += 1;
             }
         }
+        inner.dirty_patterns.clear();
 
         Ok(deleted)
     }
@@ -1854,6 +2089,9 @@ impl MemHopEngine {
         if inner.closed {
             return Ok(());
         }
+        // Persist drifted patterns before indices
+        persist_dirty_patterns(&inner)?;
+        inner.dirty_patterns.clear();
         // Persist indices for fast startup recovery
         persist_indices(&inner)?;
         inner.closed = true;
@@ -1943,6 +2181,15 @@ impl MemHopEngine {
 
 // ── Eviction helper ────────────────────────────────────────
 
+fn persist_dirty_patterns(inner: &EngineInner) -> PyResult<()> {
+    if inner.dirty_patterns.is_empty() {
+        return Ok(());
+    }
+    let patterns = inner.hopfield.collect_patterns_by_indices(&inner.dirty_patterns);
+    inner.storage.persist_patterns_batch(&patterns).map_err(storage_to_py)?;
+    Ok(())
+}
+
 fn persist_indices(inner: &EngineInner) -> PyResult<()> {
     let sparse_bytes = inner.sparse_index.to_bytes();
     inner.storage.save_index("sparse", &sparse_bytes).map_err(storage_to_py)?;
@@ -2003,5 +2250,6 @@ fn evict_oldest(inner: &mut EngineInner) -> PyResult<()> {
         }
     }
 
+    inner.dirty_patterns.clear();
     Ok(())
 }

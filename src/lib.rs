@@ -9,6 +9,7 @@ mod index;
 mod python_conv;
 mod meta_index;
 mod recall_strategies;
+mod scene_gating;
 
 #[pymodule]
 fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {

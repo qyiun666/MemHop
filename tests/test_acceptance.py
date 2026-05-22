@@ -31,8 +31,8 @@ def test_import_memhop():
 
 
 def test_version():
-    """memhop.__version__ == '0.3.0'."""
-    assert memhop.__version__ == "0.3.0"
+    """memhop.__version__ == '0.4.0'."""
+    assert memhop.__version__ == "0.4.0"
 
 
 def test_public_api_exports():
