@@ -197,6 +197,15 @@ class MemHopEngine:
     def set_gating_threshold(self, threshold: float) -> None: ...
     def reset_scene(self) -> None: ...
 
+    # ── v0.5.3: Spread activation ──
+
+    def spread_activation(
+        self,
+        cue: str,
+        *,
+        max_hops: int = ...,
+    ) -> list[dict[str, Any]]: ...
+
     def close(self) -> None: ...
 
     @property
@@ -226,6 +235,8 @@ class BrainConfig:
     auto_consolidate: bool
     scene_aware: bool
     plasticity_enabled: bool
+    calibrate_threshold: int
+    fast_path_threshold: float
 
     def __init__(
         self,
@@ -235,6 +246,8 @@ class BrainConfig:
         auto_consolidate: bool = ...,
         scene_aware: bool = ...,
         plasticity_enabled: bool = ...,
+        calibrate_threshold: int = ...,
+        fast_path_threshold: float = ...,
     ) -> None: ...
     def __repr__(self) -> str: ...
 
@@ -243,7 +256,6 @@ class HttpThinker:
     """OpenAI-compatible HTTP LLM provider."""
 
     endpoint: str
-    api_key: str
     model: str
     fast_model: str
 
