@@ -13,6 +13,13 @@ use crate::index::SparseIndex;
 use crate::meta_index::MetaIndex;
 use crate::recall_strategies::{RecallScope, TimeRange, scope_to_candidates};
 use crate::scene_gating::SceneState;
+use crate::python_conv::*;
+
+mod helpers;
+mod filter;
+
+use self::helpers::*;
+use self::filter::*;
 
 const INDEX_VERSION: u32 = 1;
 
@@ -61,120 +68,7 @@ pub struct MemHopEngine {
     inner: Arc<RwLock<EngineInner>>,
 }
 
-// ── Helpers ──────────────────────────────────────────────
-
-fn generate_memory_id() -> String {
-    use rand::Rng;
-    let mut rng = rand::thread_rng();
-    let bytes: [u8; 6] = rng.r#gen();
-    format!(
-        "m_{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5]
-    )
-}
-
-fn now_millis() -> i64 {
-    chrono::Utc::now().timestamp_millis()
-}
-
-fn millis_to_iso(millis: i64) -> String {
-    chrono::DateTime::from_timestamp_millis(millis)
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_default()
-}
-
-fn protection_to_u8(p: &Protection) -> u8 {
-    match p {
-        Protection::Normal => 0,
-        Protection::Protected => 1,
-        Protection::Permanent => 2,
-    }
-}
-
-fn u8_to_protection(v: u8) -> Protection {
-    match v {
-        0 => Protection::Normal,
-        1 => Protection::Protected,
-        2 => Protection::Permanent,
-        _ => Protection::Normal,
-    }
-}
-
-fn parse_datetime_to_millis(s: &str) -> Result<i64, PyErr> {
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Ok(dt.timestamp_millis());
-    }
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S") {
-        return Ok(naive.and_utc().timestamp_millis());
-    }
-    if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f") {
-        return Ok(naive.and_utc().timestamp_millis());
-    }
-    if let Ok(naive) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
-        let dt = naive.and_hms_opt(0, 0, 0).unwrap().and_utc();
-        return Ok(dt.timestamp_millis());
-    }
-    Err(MemHopError::new_err(format!(
-        "Invalid datetime format: '{}'. Expected ISO 8601 (e.g. 2024-01-01T00:00:00Z)",
-        s
-    )))
-}
-
-fn extract_protection(json_meta: &HashMap<String, serde_json::Value>) -> Protection {
-    if let Some(serde_json::Value::String(s)) = json_meta.get("protection") {
-        match s.as_str() {
-            "protected" => Protection::Protected,
-            "permanent" => Protection::Permanent,
-            _ => Protection::Normal,
-        }
-    } else {
-        Protection::Normal
-    }
-}
-
-fn extract_is_dormant(json_meta: &HashMap<String, serde_json::Value>) -> bool {
-    json_meta
-        .get("is_dormant")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-fn extract_importance(json_meta: &HashMap<String, serde_json::Value>) -> f32 {
-    json_meta
-        .get("importance")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.5) as f32
-}
-
-fn extract_importance_decay_rate(json_meta: &HashMap<String, serde_json::Value>) -> Option<f32> {
-    json_meta
-        .get("importance_decay_rate")
-        .and_then(|v| v.as_f64())
-        .map(|v| v as f32)
-}
-
-/// Compute effective importance considering time decay.
-/// effective = importance × decay_rate^(days_elapsed)
-fn effective_importance(meta: &MetaRecord, now_ms: i64) -> f32 {
-    match meta.importance_decay_rate {
-        Some(rate) => {
-            let elapsed_ms = (now_ms - meta.created_at).max(0);
-            let days = elapsed_ms as f64 / (24.0 * 3600.0 * 1000.0);
-            meta.importance * rate.powf(days as f32)
-        }
-        None => meta.importance,
-    }
-}
-
-fn storage_to_py(err: StorageError) -> PyErr {
-    MemHopError::new_err(err.to_string())
-}
-
-/// Convert f16 dense vector to f32 for Hopfield query.
-fn f16_to_f32(v: &[f16]) -> Vec<f32> {
-    v.iter().map(|x| x.to_f32()).collect()
-}
-use crate::python_conv::*;
+// ── Closed check ─────────────────────────────────────────
 
 fn check_closed(inner: &EngineInner) -> PyResult<()> {
     if inner.closed {
@@ -182,257 +76,6 @@ fn check_closed(inner: &EngineInner) -> PyResult<()> {
     }
     Ok(())
 }
-
-// ── Search filter types ────────────────────────────────────
-
-struct FilterCriteria {
-    layer: Option<String>,
-    r#type: Option<String>,
-    domain: Option<String>,
-    is_dormant: Option<bool>,
-    protection: Option<String>,
-    session_id: Option<String>,
-    path: Option<String>,
-    parent: Option<String>,
-    importance_gt: Option<f32>,
-    importance_lt: Option<f32>,
-    tags_contains: Option<String>,
-    connections_to: Option<String>,
-}
-
-fn parse_filters(filters: &Bound<'_, PyDict>) -> PyResult<FilterCriteria> {
-    let mut c = FilterCriteria {
-        layer: None,
-        r#type: None,
-        domain: None,
-        is_dormant: None,
-        protection: None,
-        session_id: None,
-        path: None,
-        parent: None,
-        importance_gt: None,
-        importance_lt: None,
-        tags_contains: None,
-        connections_to: None,
-    };
-
-    for (key, val) in filters.iter() {
-        let key_str: String = key.extract()?;
-        match key_str.as_str() {
-            "layer" => c.layer = Some(val.extract()?),
-            "type" => c.r#type = Some(val.extract()?),
-            "domain" => c.domain = Some(val.extract()?),
-            "is_dormant" => c.is_dormant = Some(val.extract()?),
-            "protection" => c.protection = Some(val.extract()?),
-            "session_id" => c.session_id = Some(val.extract()?),
-            "path" => c.path = Some(val.extract()?),
-            "parent" => c.parent = Some(val.extract()?),
-            "importance_gt" => c.importance_gt = Some(val.extract::<f64>()? as f32),
-            "importance_lt" => c.importance_lt = Some(val.extract::<f64>()? as f32),
-            "tags_contains" => c.tags_contains = Some(val.extract()?),
-            "connections_to" => c.connections_to = Some(val.extract()?),
-            other => {
-                return Err(MemHopError::new_err(format!(
-                    "Unknown filter key: '{}'",
-                    other
-                )));
-            }
-        }
-    }
-    Ok(c)
-}
-
-fn protection_str_to_u8(s: &str) -> u8 {
-    match s {
-        "protected" => 1,
-        "permanent" => 2,
-        _ => 0,
-    }
-}
-
-fn matches_filters(blob: &BlobRecord, meta: &MetaRecord, criteria: &FilterCriteria) -> bool {
-    if let Some(ref layer) = criteria.layer {
-        match blob.meta.get("layer") {
-            Some(serde_json::Value::String(v)) if v == layer => {}
-            _ => return false,
-        }
-    }
-    if let Some(ref t) = criteria.r#type {
-        match blob.meta.get("type") {
-            Some(serde_json::Value::String(v)) if v == t => {}
-            _ => return false,
-        }
-    }
-    if let Some(ref domain) = criteria.domain {
-        match blob.meta.get("domain") {
-            Some(serde_json::Value::String(v)) if v == domain => {}
-            _ => return false,
-        }
-    }
-    if let Some(ref session_id) = criteria.session_id {
-        match blob.meta.get("session_id") {
-            Some(serde_json::Value::String(v)) if v == session_id => {}
-            _ => return false,
-        }
-    }
-    if let Some(ref path) = criteria.path {
-        match blob.meta.get("path") {
-            Some(serde_json::Value::String(v)) if v == path => {}
-            _ => return false,
-        }
-    }
-    if let Some(ref parent) = criteria.parent {
-        match blob.meta.get("parent") {
-            Some(serde_json::Value::String(v)) if v == parent => {}
-            _ => return false,
-        }
-    }
-
-    if let Some(dormant) = criteria.is_dormant
-        && meta.is_dormant != dormant {
-            return false;
-        }
-
-    if let Some(ref prot_str) = criteria.protection
-        && meta.protection != protection_str_to_u8(prot_str) {
-            return false;
-        }
-
-    if let Some(gt) = criteria.importance_gt
-        && meta.importance <= gt {
-            return false;
-        }
-    if let Some(lt) = criteria.importance_lt
-        && meta.importance >= lt {
-            return false;
-        }
-
-    if let Some(ref tag) = criteria.tags_contains {
-        match blob.meta.get("tags") {
-            Some(serde_json::Value::Array(tags)) => {
-                if !tags.iter().any(|t| t.as_str() == Some(tag.as_str())) {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-    }
-
-    if let Some(ref target) = criteria.connections_to {
-        match blob.meta.get("connections") {
-            Some(serde_json::Value::Array(conns)) => {
-                if !conns.iter().any(|c| {
-                    c.get("to").and_then(|t| t.as_str()) == Some(target.as_str())
-                }) {
-                    return false;
-                }
-            }
-            _ => return false,
-        }
-    }
-
-    true
-}
-
-/// Parse a Python scope dict into RecallScope.
-fn parse_recall_scope(scope_dict: &HashMap<String, PyObject>, py: Python<'_>) -> RecallScope {
-    let mut scope = RecallScope::default();
-
-    for (k, v) in scope_dict {
-        match k.as_str() {
-            "domain" | "layer" | "knowledge_tree" | "session_id" => {
-                if let Ok(s) = v.bind(py).extract::<String>() {
-                    match k.as_str() {
-                        "domain" => scope.domain = Some(s),
-                        "layer" => scope.layer = Some(s),
-                        "knowledge_tree" => scope.knowledge_tree = Some(s),
-                        "session_id" => scope.session_id = Some(s),
-                        _ => {}
-                    }
-                }
-            }
-            "time_range" => {
-                if let Ok(tr_dict) = v.bind(py).downcast::<PyDict>() {
-                    let mut after_ms: Option<i64> = None;
-                    let mut before_ms: Option<i64> = None;
-
-                    if let Ok(Some(val)) = tr_dict.get_item("hours")
-                        && let Ok(hours) = val.extract::<f64>() {
-                            after_ms = Some(now_millis() - (hours * 3600.0 * 1000.0) as i64);
-                        }
-                    if let Ok(Some(val)) = tr_dict.get_item("days")
-                        && let Ok(days) = val.extract::<f64>() {
-                            let threshold = now_millis() - (days * 86400.0 * 1000.0) as i64;
-                            if after_ms.is_none_or(|a| threshold > a) {
-                                after_ms = Some(threshold);
-                            }
-                        }
-                    if let Ok(Some(val)) = tr_dict.get_item("after")
-                        && let Ok(s) = val.extract::<String>()
-                            && let Ok(ms) = parse_datetime_to_millis(&s) {
-                                after_ms = Some(ms);
-                            }
-                    if let Ok(Some(val)) = tr_dict.get_item("before")
-                        && let Ok(s) = val.extract::<String>()
-                            && let Ok(ms) = parse_datetime_to_millis(&s) {
-                                before_ms = Some(ms);
-                            }
-
-                    if after_ms.is_some() || before_ms.is_some() {
-                        scope.time_range = Some(TimeRange { after_ms, before_ms });
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    scope
-}
-
-// ── Scene gating helper ────────────────────────────────────
-
-/// Attempt to build an auto-scope from scene gating.
-/// Returns Ok(None) when no gate matches (same as no scope).
-fn scene_gating_to_auto_scope(
-    scene_state: &SceneState,
-    query_f32: &[f32],
-    meta_index: &MetaIndex,
-    storage: &LmdbStorage,
-    now_ms: i64,
-) -> Result<Option<HashSet<String>>, StorageError> {
-    if !scene_state.gating_enabled {
-        return Ok(None);
-    }
-
-    // Layer 1: session fingerprint match
-    if let Some(sid) = scene_state.match_session_fingerprint(query_f32) {
-        let mut rc = RecallScope::default();
-        rc.session_id = Some(sid);
-        return scope_to_candidates(&rc, meta_index, storage, now_ms);
-    }
-
-    // Layer 2: knowledge tree path prediction
-    if let Some(tree_root) = scene_state.predict_tree_path(query_f32) {
-        let mut rc = RecallScope::default();
-        rc.knowledge_tree = Some(tree_root);
-        return scope_to_candidates(&rc, meta_index, storage, now_ms);
-    }
-
-    // Layer 3: active scene anchoring
-    if let Some(ref active) = scene_state.active_scene {
-        if active.miss_count < 3 {
-            if let Some(ref sid) = active.session_id {
-                let mut rc = RecallScope::default();
-                rc.session_id = Some(sid.clone());
-                return scope_to_candidates(&rc, meta_index, storage, now_ms);
-            }
-        }
-    }
-
-    Ok(None)
-}
-
 
 // ── pymethods ────────────────────────────────────────────
 
@@ -599,7 +242,7 @@ impl MemHopEngine {
         inner.sparse_index.add(&id, &output.sparse);
         inner.meta_index.add(&id, &json_meta);
 
-        // Update scene fingerprints (v0.4.0)
+        // Update scene fingerprints (v0.4.0) and recent turn summary
         if inner.scene_state.gating_enabled {
             if let Some(serde_json::Value::String(sid)) = json_meta.get("session_id") {
                 inner.scene_state.update_session_fingerprint(sid, &output.dense);
@@ -607,6 +250,8 @@ impl MemHopEngine {
             if let Some(serde_json::Value::String(parent)) = json_meta.get("parent") {
                 inner.scene_state.update_node_fingerprint(parent, &output.dense);
             }
+            // Always update rolling recent-turn summary for every remember
+            inner.scene_state.update_recent_turns(&output.dense);
         }
 
         let count = inner.storage.count().map_err(storage_to_py)?;
@@ -2152,6 +1797,35 @@ impl MemHopEngine {
         Ok(dict.into())
     }
 
+    /// Perform activation spreading: Hopfield recall → BFS through connections.
+    ///
+    /// Returns a list of dicts `[{id, activation}]`, sorted by activation descending.
+    /// Activation decays by 50% per hop.
+    #[pyo3(signature = (cue, *, max_hops = 2))]
+    fn spread_activation(
+        &self,
+        cue: &str,
+        max_hops: usize,
+        py: Python<'_>,
+    ) -> PyResult<Vec<PyObject>> {
+        let inner = self.inner.read().unwrap();
+        check_closed(&inner)?;
+
+        let results = spread_activation(&inner, cue, max_hops);
+
+        let py_results: PyResult<Vec<PyObject>> = results
+            .into_iter()
+            .map(|(id, score)| {
+                let d = PyDict::new(py);
+                d.set_item("id", &id)?;
+                d.set_item("activation", score as f64)?;
+                Ok(d.into())
+            })
+            .collect();
+
+        py_results
+    }
+
     // ── Context manager ───────────────────────────────────
 
     fn __enter__(slf: PyRef<Self>) -> PyRef<Self> {
@@ -2252,4 +1926,87 @@ fn evict_oldest(inner: &mut EngineInner) -> PyResult<()> {
 
     inner.dirty_patterns.clear();
     Ok(())
+}
+
+// ── Spread activation ─────────────────────────────────────
+
+/// Perform activation spreading from a cue through the connection graph.
+///
+/// 1. Standard Hopfield recall → seed memory
+/// 2. BFS through blob.meta["connections"] up to `max_hops` depth
+/// 3. Return all activated memory IDs with activation scores
+///
+/// Activation score = base_confidence × decay_factor^hop_distance
+pub(crate) fn spread_activation(
+    inner: &EngineInner,
+    cue: &str,
+    max_hops: usize,
+) -> Vec<(String, f32)> {
+    let output = inner.encoder.encode(cue);
+    let query_f32 = f16_to_f32(&output.dense);
+
+    let n = inner.hopfield.len();
+    if n == 0 {
+        return Vec::new();
+    }
+
+    // Step 1: Hopfield recall for seed
+    let seed = match inner.hopfield.recall(&query_f32) {
+        Some(s) => s,
+        None => return Vec::new(),
+    };
+    let (seed_id, seed_conf) = seed;
+
+    if seed_conf < inner.confidence_threshold {
+        return Vec::new();
+    }
+
+    // Step 2: BFS from seed through connections
+    let mut visited: HashMap<String, f32> = HashMap::new();
+    let mut frontier: Vec<(String, usize)> = vec![(seed_id.clone(), 0)];
+    visited.insert(seed_id, seed_conf);
+
+    let decay: f32 = 0.5; // activation decays by 50% per hop
+
+    while let Some((current_id, hop)) = frontier.pop() {
+        let next_hop = hop + 1;
+        if next_hop > max_hops {
+            continue;
+        }
+
+        // Read connections from blob.meta
+        let connections = match inner.storage.get_blob(&current_id) {
+            Ok(Some(blob)) => {
+                match blob.meta.get("connections") {
+                    Some(serde_json::Value::Array(arr)) => arr.clone(),
+                    _ => continue,
+                }
+            }
+            _ => continue,
+        };
+
+        for conn in &connections {
+            if let Some(target_id) = conn.get("to").and_then(|t| t.as_str()) {
+                if !visited.contains_key(target_id) {
+                    let activation = seed_conf * decay.powi(next_hop as i32);
+                    visited.insert(target_id.to_string(), activation);
+                    frontier.push((target_id.to_string(), next_hop));
+                }
+            }
+        }
+    }
+
+    // Sort by activation descending
+    let mut results: Vec<(String, f32)> = visited.into_iter().collect();
+    results.sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+    results
+}
+
+// ── Crate-only accessor ─────────────────────────────────
+
+impl MemHopEngine {
+    /// Expose the inner `EngineInner` for crate-internal use (Dream Mode, etc.)
+    pub(crate) fn inner(&self) -> std::sync::Arc<std::sync::RwLock<EngineInner>> {
+        self.inner.clone()
+    }
 }

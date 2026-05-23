@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::encoder::Encoder;
 use crate::engine::EngineInner;
+use crate::thinker::Thinker;
 use crate::storage::{BlobRecord, MetaRecord};
-use crate::calibrator::Calibrator;
 
 /// Default Jaccard similarity threshold for near-duplicate detection (compress)
 const DEFAULT_SIMILARITY_THRESHOLD: f32 = 0.85;
@@ -99,7 +99,7 @@ impl GrowthManager {
     /// Returns the count of duplicate groups found.
     ///
     /// The actual merging/marking happens in [`consolidate`].
-    pub fn compress(&mut self, engine: &EngineInner, _calibrator: &dyn Calibrator) -> u64 {
+    pub fn compress(&mut self, engine: &EngineInner, _thinker: &dyn Thinker) -> u64 {
         let all_blobs = match engine.storage.all_blobs() {
             Ok(blobs) => blobs,
             Err(_) => return 0,

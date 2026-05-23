@@ -91,6 +91,12 @@ pub struct SceneState {
     pub gating_enabled: bool,
     /// Cosine similarity threshold for fingerprint matching (default 0.6)
     pub gating_threshold: f32,
+    /// Rolling average of recent turn vectors for context-aware matching
+    pub recent_turn_summary: Option<Vec<f16>>,
+    /// How many turns the rolling summary tracks (default 5)
+    pub recent_turn_window: usize,
+    /// Current count of turns in the rolling summary
+    pub recent_turn_count: usize,
 }
 
 impl SceneState {
@@ -102,6 +108,9 @@ impl SceneState {
             active_scene: None,
             gating_enabled: true,
             gating_threshold: 0.6,
+            recent_turn_summary: None,
+            recent_turn_window: 5,
+            recent_turn_count: 0,
         }
     }
 
@@ -152,6 +161,30 @@ impl SceneState {
         }
     }
 
+    /// Update the rolling recent-turn summary with a new turn's pattern.
+    /// Uses a running average: new = α * new_turn + (1-α) * old_summary
+    /// where α = min(1.0, 1.0 / recent_turn_window).
+    pub fn update_recent_turns(&mut self, pattern: &[f16]) {
+        let alpha = 1.0f32 / self.recent_turn_window.max(1) as f32;
+        let normalized = l2_normalize_f16(pattern);
+
+        match self.recent_turn_summary {
+            Some(ref existing) => {
+                let dim = existing.len().min(normalized.len());
+                let mut merged = Vec::with_capacity(dim);
+                for i in 0..dim {
+                    let val = normalized[i].to_f32() * alpha + existing[i].to_f32() * (1.0 - alpha);
+                    merged.push(f16::from_f32(val));
+                }
+                self.recent_turn_summary = Some(l2_normalize_f16(&merged));
+            }
+            None => {
+                self.recent_turn_summary = Some(normalized);
+            }
+        }
+        self.recent_turn_count = self.recent_turn_count.saturating_add(1);
+    }
+
     /// Layer 1: Match query against all session fingerprints.
     /// Returns the session_id with the highest cosine similarity above threshold.
     pub fn match_session_fingerprint(&self, query: &[f32]) -> Option<String> {
@@ -159,13 +192,23 @@ impl SceneState {
             return None;
         }
 
+        let context_f32 = self.recent_turn_summary.as_ref().map(|v| f16_to_f32(v));
+
         let mut best_id: Option<String> = None;
         let mut best_sim = 0.0f32;
 
         for (sid, fp) in &self.session_fingerprints {
-            let sim = cosine_sim_f16_f32(fp, query);
-            if sim > best_sim {
-                best_sim = sim;
+            let query_sim = cosine_sim_f16_f32(fp, query);
+            let combined = match &context_f32 {
+                Some(ctx) => {
+                    // Weighted average: 60% query, 40% recent context
+                    let ctx_sim = cosine_sim_f16_f32(fp, ctx);
+                    query_sim * 0.6 + ctx_sim * 0.4
+                }
+                None => query_sim,
+            };
+            if combined > best_sim {
+                best_sim = combined;
                 best_id = Some(sid.clone());
             }
         }

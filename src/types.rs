@@ -226,6 +226,8 @@ pub struct BrainConfig {
     pub plasticity_enabled: bool,
     #[pyo3(get, set)]
     pub calibrate_threshold: u64,
+    #[pyo3(get, set)]
+    pub fast_path_threshold: f32,
 }
 
 #[pymethods]
@@ -239,6 +241,7 @@ impl BrainConfig {
         scene_aware=true,
         plasticity_enabled=true,
         calibrate_threshold=20,
+        fast_path_threshold=0.85,
     ))]
     fn py_new(
         max_attempts: u8,
@@ -248,6 +251,7 @@ impl BrainConfig {
         scene_aware: bool,
         plasticity_enabled: bool,
         calibrate_threshold: u64,
+        fast_path_threshold: f32,
     ) -> Self {
         BrainConfig {
             max_attempts,
@@ -257,6 +261,7 @@ impl BrainConfig {
             scene_aware,
             plasticity_enabled,
             calibrate_threshold,
+            fast_path_threshold,
         }
     }
 
@@ -278,6 +283,7 @@ impl Default for BrainConfig {
             scene_aware: true,
             plasticity_enabled: true,
             calibrate_threshold: 20,
+            fast_path_threshold: 0.85,
         }
     }
 }

@@ -12,18 +12,15 @@
 //!   Step 8:  Cerebrum — LLM thinking loop (up to max_attempts)
 //!   Step 9:  Gate — result validation + optional route upgrade + re-recall
 //!   Step 10: Tool detection → NeedBody (pause for body action)
-//!   Step 11: Finalize — remember + compress + consolidate + calibrate + Done
+//!   Step 11: Finalize — remember + compress + consolidate + Done
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
 use half::f16;
 
-use crate::calibrator::Calibrator;
-use crate::calibration::CalibrationEngine;
 use crate::encoder::Encoder;
 use crate::engine::EngineInner;
-use crate::router::ModelRouter;
 use crate::storage::{BlobRecord, MetaRecord};
 use crate::thinker::{Cerebellum, Thinker};
 use crate::types::*;
@@ -46,13 +43,12 @@ struct ToolCall {
 ///
 /// Fields:
 /// - `inner`: optional engine reference (wired in later sub-tasks)
-/// - `router`: task router (thinker + calibrator)
+/// - `thinker`: injected LLM reasoning provider
 /// - `cerebellum`: injected reflex rules
 /// - `gate`: routing + safety + confidence
 /// - `cortex`: worldview beliefs
 /// - `prompt`: template assembly + output formatting
 /// - `growth`: self-growth (compress + consolidate)
-/// - `calibration`: calibration engine
 /// - `frontal_hotspots`: hot topic tracker (HashMap<String, count>)
 /// - `memory_history`: transcript of the current turn
 /// - `llm_attempt_counter`: how many LLM calls this turn
@@ -64,8 +60,8 @@ struct ToolCall {
 pub struct BrainLoop {
     /// Engine reference (None for testing, wired in later)
     pub inner: Option<Arc<RwLock<EngineInner>>>,
-    /// Task router (thinker + calibrator)
-    pub router: ModelRouter,
+    /// Injected LLM provider
+    pub thinker: Box<dyn Thinker>,
     /// Injected reflex rules
     pub cerebellum: Box<dyn Cerebellum>,
     /// Routing + safety + confidence
@@ -76,8 +72,6 @@ pub struct BrainLoop {
     pub prompt: PromptEngine,
     /// Self-growth (compress + consolidate)
     pub growth: GrowthManager,
-    /// Calibration engine
-    pub calibration: CalibrationEngine,
 
     // ── Loop state ──
     /// Hot topics (keyword → occurrence count)
@@ -100,40 +94,20 @@ pub struct BrainLoop {
 
 impl BrainLoop {
     /// Create a new BrainLoop with injected dependencies.
-    ///
-    /// `calibrator` is optional — if `None`, a `ThinkerBackedCalibrator`
-    /// is created internally from the provided `thinker`.
     pub fn new(
         inner: Option<Arc<RwLock<EngineInner>>>,
         thinker: Box<dyn Thinker>,
         cerebellum: Box<dyn Cerebellum>,
         config: BrainConfig,
-        calibrator: Option<Box<dyn Calibrator>>,
     ) -> Self {
-        // Build calibrator: use provided one or fall back to ThinkerBackedCalibrator
-        let calibrator: Box<dyn Calibrator> = calibrator.unwrap_or_else(|| {
-            Box::new(crate::calibrator::ThinkerBackedCalibrator::new(
-                // Create a second lightweight HttpThinker as fallback calibrator
-                // In production, PyBrainLoop always provides a calibrator
-                Box::new(crate::http_thinker::HttpThinker::new(
-                    "https://api.openai.com/v1/chat/completions".into(),
-                    "".into(),
-                    "gpt-4o-mini".into(),
-                    "gpt-4o-mini".into(),
-                ))
-            ))
-        });
-        let router = ModelRouter::new(thinker, calibrator);
-
         BrainLoop {
             inner,
-            router,
+            thinker,
             cerebellum,
             gate: Gate::new(),
             cortex: CortexStorage::new(),
             prompt: PromptEngine::new(),
             growth: GrowthManager::new(),
-            calibration: CalibrationEngine,
             frontal_hotspots: HashMap::new(),
             memory_history: Vec::new(),
             llm_attempt_counter: 0,
@@ -199,6 +173,21 @@ impl BrainLoop {
         }
 
         // ═══════════════════════════════════════════════════
+        // Step 5.5: Gate — FastPath decision (skip LLM if confident enough)
+        // ═══════════════════════════════════════════════════
+        let has_sufficient_context = !valid.is_empty() && !user_input.is_empty();
+        match self.gate.decide(has_sufficient_context) {
+            crate::brain::gate::GateDecision::FastPath => {
+                if let Some(top) = valid.first() {
+                    let fast_result = top.text.clone();
+                    self.memory_history.push(format!("AI: {}", truncate(&fast_result, 200)));
+                    return self.finalize(&fast_result, false);
+                }
+            }
+            _ => {} // Continue to LLM
+        }
+
+        // ═══════════════════════════════════════════════════
         // Step 6: Cortex — worldview injection
         // ═══════════════════════════════════════════════════
         let worldview = self.cortex.current_beliefs();
@@ -217,7 +206,10 @@ impl BrainLoop {
         for _attempt in 0..self.config.max_attempts {
             self.llm_attempt_counter += 1;
 
-            let result = self.router.route_reasoning(&prompt, &current_route);
+            let result = match &current_route {
+                Route::Fast => self.thinker.think_fast(&prompt),
+                Route::Deep | Route::Reasoning => self.thinker.think_deep(&prompt),
+            };
 
             let result = match result {
                 Ok(r) => r,
@@ -270,7 +262,7 @@ impl BrainLoop {
         }
 
         // ═══════════════════════════════════════════════════
-        // Step 11: Finalize — remember + compress + consolidate + calibrate + Done
+        // Step 11: Finalize — remember + compress + consolidate + Done
         // ═══════════════════════════════════════════════════
         self.finalize(&final_result, false)
     }
@@ -285,7 +277,6 @@ impl BrainLoop {
         on_chunk: &mut dyn FnMut(&str),
     ) -> BrainAction {
         self.memory_history.clear();
-        self.memory_history.push(format!("用户: {}", user_input));
         self.llm_attempt_counter = 0;
 
         // Steps 1-7: identical to non-streaming process
@@ -313,11 +304,14 @@ impl BrainLoop {
             };
         }
 
+        // Danger cleared — record user input in memory history
+        self.memory_history.push(format!("用户: {}", user_input));
+
         let worldview = self.cortex.current_beliefs();
         let prompt = self.prompt.assemble(user_input, &self.current_route, &valid, &worldview);
 
         // ═══ Step 8: Streaming LLM thinking ★ ═══
-        let stream_result = self.router.route_stream(&prompt, &mut |chunk| {
+        let stream_result = self.thinker.think_stream(&prompt, &mut |chunk| {
             // Gate real-time chunk filtering
             if !self.gate.block_chunk(chunk) {
                 on_chunk(chunk);
@@ -387,7 +381,7 @@ impl BrainLoop {
 
         // Run thinker again with the updated context
         self.llm_attempt_counter += 1;
-        let result = self.router.route_reasoning(&prompt, &Route::Deep);
+        let result = self.thinker.think_deep(&prompt);
 
         match result {
             Ok(text) => {
@@ -413,7 +407,7 @@ impl BrainLoop {
 
     // ── Finalize ──────────────────────────────────────────
 
-    /// Complete the turn: remember, compress, consolidate, calibrate, format output.
+    /// Complete the turn: remember, compress, consolidate, format output.
     fn finalize(&mut self, result: &str, _has_streamed: bool) -> BrainAction {
         self.turn_counter += 1;
 
@@ -436,7 +430,7 @@ impl BrainLoop {
         if compressed {
             if let Some(ref inner) = self.inner {
                 if let Ok(engine) = inner.read() {
-                    self.growth.compress(&engine, &*self.router.calibrator);
+                    self.growth.compress(&engine, &*self.thinker);
                 }
             }
         }
@@ -455,19 +449,6 @@ impl BrainLoop {
         } else {
             0
         };
-
-        // ★ v0.5.1: Calibration — every calibrate_threshold turns
-        if self.turn_counter > 0
-            && self.turn_counter % self.config.calibrate_threshold == 0
-        {
-            if let Some(ref inner) = self.inner {
-                if let Ok(mut engine) = inner.write() {
-                    let t = self.config.calibrate_threshold as u32;
-                    CalibrationEngine::run_importance_scoring(&mut engine, &self.router, 0.3);
-                    CalibrationEngine::run_semantic_dedup(&mut engine, &self.router, t);
-                }
-            }
-        }
 
         // 4. Format output
         let for_user = self.prompt.format_output(result);
@@ -731,7 +712,6 @@ fn generate_turn_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::calibrator::{Calibrator, CalibrationContext, DedupResult, LinkValidation};
     use crate::thinker::{Cerebellum, Thinker};
     use crate::types::BrainError;
     use std::collections::HashMap;
@@ -785,6 +765,8 @@ mod tests {
 
     impl Thinker for MockThinker {
         fn think_fast(&self, _prompt: &str) -> Result<String, BrainError> {
+            // Simulate failures for the first N calls
+            // Can't mutate, so use static approach
             Ok(self.fast_response.clone())
         }
 
@@ -832,22 +814,6 @@ mod tests {
         }
     }
 
-    // ── Mock Calibrator for tests ────────────────────────
-
-    struct MockCalibrator;
-
-    impl Calibrator for MockCalibrator {
-        fn cal_importance(&self, _: &str, _: &CalibrationContext) -> Result<f32, BrainError> {
-            Ok(0.5)
-        }
-        fn cal_dedup(&self, _: &str, _: &str) -> Result<DedupResult, BrainError> {
-            Ok(DedupResult { is_duplicate: false, confidence: 1.0, merge_suggestion: None })
-        }
-        fn cal_link(&self, _: &str, _: &str, _: &str) -> Result<LinkValidation, BrainError> {
-            Ok(LinkValidation { is_valid: true, confidence: 1.0 })
-        }
-    }
-
     // ── Test helpers ─────────────────────────────────────
 
     fn make_brain(thinker: MockThinker, cerebellum: MockCerebellum) -> BrainLoop {
@@ -856,7 +822,6 @@ mod tests {
             Box::new(thinker),
             Box::new(cerebellum),
             BrainConfig::default(),
-            Some(Box::new(MockCalibrator)),
         )
     }
 
@@ -1251,7 +1216,7 @@ mod tests {
     fn test_growth_manager_stub_methods() {
         // GrowthManager compress/consolidate require a real EngineInner
         // which cannot be created from unit tests. They are tested indirectly
-        // through the BrainLoop flow and in integration tests.
+        // through the BrainLoop flow and in integration tests (sub-task 8).
     }
 
     #[test]
@@ -1268,18 +1233,5 @@ mod tests {
             }
             other => panic!("Expected NeedBody, got: {:?}", other),
         }
-    }
-
-    #[test]
-    fn test_calibrator_is_always_present() {
-        // Verify that even without providing one, a calibrator exists
-        let brain = make_brain(MockThinker::new(), MockCerebellum::new());
-        let ctx = CalibrationContext {
-            domain: None,
-            layer: None,
-            recent_count: 0,
-        };
-        let score = brain.router.calibrator.cal_importance("test", &ctx).unwrap();
-        assert!((score - 0.5).abs() < 1e-4);
     }
 }

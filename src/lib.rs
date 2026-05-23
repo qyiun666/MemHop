@@ -18,6 +18,10 @@ mod calibrator;
 mod router;
 mod calibration;
 mod http_calibrator;
+mod snapshot;
+mod dream;
+mod intuition;
+mod fingerprint;
 
 use brain::brain_loop::BrainLoop;
 use types::*;
@@ -66,7 +70,7 @@ impl PyBrainLoop {
                     &s.model,
                 ))
             };
-            let calibrator: Box<dyn crate::calibrator::Calibrator> = if slots.len() > 1 {
+            let _cal: Box<dyn crate::calibrator::Calibrator> = if slots.len() > 1 {
                 let s = &slots[1];
                 Box::new(http_calibrator::HttpCalibrator::new(
                     &s.endpoint,
@@ -89,7 +93,7 @@ impl PyBrainLoop {
             let cerebellum: Box<dyn crate::thinker::Cerebellum> = cerebellum
                 .map(|c| Box::new(c) as Box<dyn crate::thinker::Cerebellum>)
                 .unwrap_or_else(|| Box::new(fast_reflex::FastReflex::new()));
-            let brain = BrainLoop::new(None, thinker, cerebellum, cfg, Some(calibrator));
+            let brain = BrainLoop::new(None, thinker, cerebellum, cfg);
             return PyBrainLoop { inner: brain };
         }
 
@@ -105,7 +109,7 @@ impl PyBrainLoop {
         let cerebellum: Box<dyn crate::thinker::Cerebellum> = cerebellum
             .map(|c| Box::new(c) as Box<dyn crate::thinker::Cerebellum>)
             .unwrap_or_else(|| Box::new(fast_reflex::FastReflex::new()));
-        let brain = BrainLoop::new(None, thinker, cerebellum, cfg, None);
+        let brain = BrainLoop::new(None, thinker, cerebellum, cfg);
         PyBrainLoop { inner: brain }
     }
 

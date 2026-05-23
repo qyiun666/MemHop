@@ -9,6 +9,23 @@
 
 use crate::types::{PyMemory, Route};
 
+// ── GateDecision ───────────────────────────────────────────
+
+/// Decision about whether to call an LLM or return from fast-path.
+///
+/// Decided after recall, based on how confident the Gate is in the
+/// retrieved memories.  The goal is to reduce LLM calls when the
+/// Hopfield recall already provides sufficient information.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GateDecision {
+    /// Confidence > fast_path_threshold → no LLM, return recall directly
+    FastPath,
+    /// 0.5 < confidence < threshold → call LLM with standard context
+    DeepPath,
+    /// confidence < 0.5 → call LLM with additional reasoning effort
+    ReasoningPath,
+}
+
 // ── DangerWarning ──────────────────────────────────────────
 
 /// Emitted when the Gate detects potentially dangerous or harmful input.
@@ -46,6 +63,8 @@ pub struct Gate {
     rejection_reason: String,
     session_confidences: Vec<f32>,
     last_confidence: f32,
+    /// Confidence above which FastPath is taken (no LLM call, 0.0-1.0)
+    fast_path_threshold: f32,
 }
 
 impl Gate {
@@ -56,6 +75,7 @@ impl Gate {
             rejection_reason: String::new(),
             session_confidences: Vec::new(),
             last_confidence: 0.0,
+            fast_path_threshold: 0.85,
         }
     }
 
@@ -443,6 +463,28 @@ impl Gate {
             return 0.0;
         }
         self.session_confidences.iter().sum::<f32>() / n as f32
+    }
+
+    /// Set the FastPath threshold.
+    pub fn set_fast_path_threshold(&mut self, threshold: f32) {
+        self.fast_path_threshold = threshold.clamp(0.0, 1.0);
+    }
+
+    /// Decide whether to go FastPath (no LLM), DeepPath (standard LLM),
+    /// or ReasoningPath (LLM with extra reasoning).
+    ///
+    /// Uses the *average* confidence from the latest filtering pass,
+    /// combined with context sufficiency heuristic.
+    pub fn decide(&self, has_sufficient_context: bool) -> GateDecision {
+        let avg = self.avg_confidence();
+
+        if avg > self.fast_path_threshold && has_sufficient_context {
+            GateDecision::FastPath
+        } else if avg > 0.5 {
+            GateDecision::DeepPath
+        } else {
+            GateDecision::ReasoningPath
+        }
     }
 }
 

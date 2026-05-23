@@ -25,8 +25,8 @@ pub struct HttpThinker {
     /// API endpoint URL (e.g. https://api.openai.com/v1/chat/completions)
     #[pyo3(get, set)]
     pub endpoint: String,
-    /// API key / bearer token
-    #[pyo3(get, set)]
+    /// API key / bearer token — writable from Python but NOT readable (security)
+    #[pyo3(set)]
     pub api_key: String,
     /// Primary model name (used for deep reasoning + streaming)
     #[pyo3(get, set)]
@@ -193,5 +193,31 @@ impl Thinker for HttpThinker {
         }
 
         Ok(full)
+    }
+}
+
+// ── Batch support (Rayon parallelization) ─────────────────
+
+impl HttpThinker {
+    /// Send multiple deep-reasoning prompts in parallel using Rayon.
+    ///
+    /// Each prompt is sent concurrently via the shared blocking client.
+    /// Total wall time ≈ the slowest individual request.
+    /// Results are returned in the same order as the input prompts.
+    pub fn think_deep_batch(&self, prompts: &[&str]) -> Vec<Result<String, BrainError>> {
+        use rayon::prelude::*;
+        prompts
+            .par_iter()
+            .map(|p| self.call_non_streaming(p, &self.model))
+            .collect()
+    }
+
+    /// Send multiple fast-reasoning prompts in parallel using Rayon.
+    pub fn think_fast_batch(&self, prompts: &[&str]) -> Vec<Result<String, BrainError>> {
+        use rayon::prelude::*;
+        prompts
+            .par_iter()
+            .map(|p| self.call_non_streaming(p, &self.fast_model))
+            .collect()
     }
 }
