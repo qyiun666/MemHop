@@ -1,6 +1,6 @@
 [package]
 name = "memhop"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 description = "SQLite for associative memory - embedded associative memory engine powered by Modern Hopfield Networks"
 # Proprietary - All Rights Reserved
@@ -19,6 +19,7 @@ half = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 rayon = "1"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
 
 [profile.release]
 # Security hardening: make reverse engineering harder

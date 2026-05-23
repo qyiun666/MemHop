@@ -1,8 +1,8 @@
-"""Type stubs for memhop — SQLite for associative memory."""
+"""Type stubs for memhop — SQLite for associative memory (v0.5.0)."""
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 
 class Memory:
@@ -212,6 +212,151 @@ class MemHopEngine:
         exc_tb: Any,
     ) -> None: ...
     def __repr__(self) -> str: ...
+
+
+# ── v0.5.0 BrainLoop types ──
+
+
+class BrainConfig:
+    """BrainLoop configuration."""
+
+    max_attempts: int
+    confidence_threshold: float
+    compress_threshold: int
+    auto_consolidate: bool
+    scene_aware: bool
+    plasticity_enabled: bool
+
+    def __init__(
+        self,
+        max_attempts: int = ...,
+        confidence_threshold: float = ...,
+        compress_threshold: int = ...,
+        auto_consolidate: bool = ...,
+        scene_aware: bool = ...,
+        plasticity_enabled: bool = ...,
+    ) -> None: ...
+    def __repr__(self) -> str: ...
+
+
+class HttpThinker:
+    """OpenAI-compatible HTTP LLM provider."""
+
+    endpoint: str
+    api_key: str
+    model: str
+    fast_model: str
+
+    def __init__(
+        self,
+        endpoint: str = ...,
+        api_key: str = ...,
+        model: str = ...,
+        fast_model: str = ...,
+    ) -> None: ...
+    def __repr__(self) -> str: ...
+
+
+class FastReflex:
+    """Rule-based reflex system."""
+
+    def __init__(self) -> None: ...
+    def __repr__(self) -> str: ...
+    def add_rule(self, pattern: str, response: str) -> None: ...
+
+
+class CognitionHealth:
+    """Cognitive health metrics for each turn."""
+
+    @property
+    def llm_calls(self) -> int: ...
+    @property
+    def tokens_used(self) -> int: ...
+    @property
+    def total_memories(self) -> int: ...
+    @property
+    def avg_confidence(self) -> float: ...
+    @property
+    def strategy_hint(self) -> Optional[str]: ...
+
+
+class BrainNotifications:
+    """Meta-notifications from brain to body."""
+
+    @property
+    def new_knowledge_count(self) -> int: ...
+    @property
+    def compression_triggered(self) -> bool: ...
+    @property
+    def cognition_health(self) -> CognitionHealth: ...
+
+
+class BodyAction:
+    """Actions the body must perform."""
+
+    @property
+    def action_type(self) -> str: ...
+    @property
+    def name(self) -> Optional[str]: ...
+    @property
+    def params(self) -> Optional[str]: ...
+    @property
+    def question(self) -> Optional[str]: ...
+    @property
+    def options(self) -> Optional[list[str]]: ...
+    @property
+    def danger_level(self) -> Optional[str]: ...
+    @property
+    def prompt(self) -> Optional[str]: ...
+    @property
+    def path(self) -> Optional[str]: ...
+
+
+class BodyResult:
+    """Output from body actions fed back into brain."""
+
+    source: str
+    text: str
+    meta: dict[str, str]
+
+    def __init__(self, source: str = ..., text: str = ..., meta: Optional[dict[str, str]] = ...) -> None: ...
+
+
+class BrainAction:
+    """Output from BrainLoop cognitive cycle."""
+
+    @property
+    def action_type(self) -> str: ...
+    @property
+    def chunk(self) -> Optional[str]: ...
+    @property
+    def actions(self) -> Optional[list[BodyAction]]: ...
+    @property
+    def context(self) -> Optional[str]: ...
+    @property
+    def for_user(self) -> Optional[str]: ...
+    @property
+    def notifications(self) -> Optional[BrainNotifications]: ...
+
+
+class BrainLoop:
+    """Complete cognitive loop — MeowHop brain."""
+
+    def __init__(
+        self,
+        db_path: Optional[str] = ...,
+        thinker: Optional[HttpThinker] = ...,
+        cerebellum: Optional[FastReflex] = ...,
+        config: Optional[BrainConfig] = ...,
+    ) -> None: ...
+
+    def process(self, user_input: str) -> BrainAction: ...
+    def process_streaming(self, user_input: str, on_chunk: Callable[[str], None]) -> BrainAction: ...
+    def feed_body_result(self, results: list[BodyResult]) -> BrainAction: ...
+    def __repr__(self) -> str: ...
+
+
+# ── Top-level ──
 
 
 def open(

@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "memhop"
-version = "0.4.0"
+version = "0.5.0"
 description = "SQLite for associative memory — embedded, single-file, zero-config associative memory engine powered by Modern Hopfield Networks"
 authors = [{name = "MemHop Contributors"}]
 license = {text = "Proprietary"}

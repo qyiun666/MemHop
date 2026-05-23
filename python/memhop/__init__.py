@@ -8,15 +8,33 @@ from memhop._core import (
     Memory,
     MemHopError,
     MemHopClosedError,
+    BrainLoop,
+    BrainConfig,
+    BrainAction,
+    BodyAction,
+    BrainNotifications,
+    CognitionHealth,
+    BodyResult,
+    HttpThinker,
+    FastReflex,
 )
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "open",
     "MemHopEngine",
     "Memory",
     "MemHopError",
     "MemHopClosedError",
+    "BrainLoop",
+    "BrainConfig",
+    "BrainAction",
+    "BodyAction",
+    "BrainNotifications",
+    "CognitionHealth",
+    "BodyResult",
+    "HttpThinker",
+    "FastReflex",
     "build_idf",
     "normalize_time",
 ]

@@ -36,22 +36,22 @@ fn rebuild_indices(
 
 
 
-struct EngineInner {
-    storage: LmdbStorage,
-    encoder: NgramEncoder,
-    encoder_mode: String,
-    storage_path: String,
-    hopfield: ModernHopfield,
-    sparse_index: SparseIndex,
-    meta_index: MetaIndex,
-    confidence_threshold: f32,
-    beta: f32,
-    max_memories: u64,
-    closed: bool,
+pub(crate) struct EngineInner {
+    pub(crate) storage: LmdbStorage,
+    pub(crate) encoder: NgramEncoder,
+    pub(crate) encoder_mode: String,
+    pub(crate) storage_path: String,
+    pub(crate) hopfield: ModernHopfield,
+    pub(crate) sparse_index: SparseIndex,
+    pub(crate) meta_index: MetaIndex,
+    pub(crate) confidence_threshold: f32,
+    pub(crate) beta: f32,
+    pub(crate) max_memories: u64,
+    pub(crate) closed: bool,
     /// Set of Hopfield row indices that have been modified by plasticity drift
-    dirty_patterns: HashSet<usize>,
+    pub(crate) dirty_patterns: HashSet<usize>,
     /// Scene-gated recall state (v0.4.0)
-    scene_state: SceneState,
+    pub(crate) scene_state: SceneState,
 }
 
 // ── MemHopEngine ─────────────────────────────────────────
