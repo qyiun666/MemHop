@@ -17,9 +17,11 @@ from memhop._core import (
     BodyResult,
     HttpThinker,
     FastReflex,
+    HttpCalibrator,
+    ModelSlot,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 __all__ = [
     "open",
     "MemHopEngine",
@@ -35,6 +37,8 @@ __all__ = [
     "BodyResult",
     "HttpThinker",
     "FastReflex",
+    "HttpCalibrator",
+    "ModelSlot",
     "build_idf",
     "normalize_time",
 ]

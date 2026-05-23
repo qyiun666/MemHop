@@ -26,7 +26,7 @@ def test_import_memhop():
 
 def test_version():
     """memhop.__version__ == '0.5.0'."""
-    assert memhop.__version__ == "0.5.0"
+    assert memhop.__version__ == "0.5.1"
 
 
 def test_brain_types_exported():

@@ -224,6 +224,8 @@ pub struct BrainConfig {
     pub scene_aware: bool,
     #[pyo3(get, set)]
     pub plasticity_enabled: bool,
+    #[pyo3(get, set)]
+    pub calibrate_threshold: u64,
 }
 
 #[pymethods]
@@ -236,6 +238,7 @@ impl BrainConfig {
         auto_consolidate=true,
         scene_aware=true,
         plasticity_enabled=true,
+        calibrate_threshold=20,
     ))]
     fn py_new(
         max_attempts: u8,
@@ -244,6 +247,7 @@ impl BrainConfig {
         auto_consolidate: bool,
         scene_aware: bool,
         plasticity_enabled: bool,
+        calibrate_threshold: u64,
     ) -> Self {
         BrainConfig {
             max_attempts,
@@ -252,6 +256,7 @@ impl BrainConfig {
             auto_consolidate,
             scene_aware,
             plasticity_enabled,
+            calibrate_threshold,
         }
     }
 
@@ -272,7 +277,46 @@ impl Default for BrainConfig {
             auto_consolidate: true,
             scene_aware: true,
             plasticity_enabled: true,
+            calibrate_threshold: 20,
         }
+    }
+}
+
+// ── ModelSlot ─────────────────────────────────────────────
+
+/// A model configuration slot — position determines role.
+///
+/// In a dual-model setup:
+/// - `models[0]` = thinker (deep reasoning, required)
+/// - `models[1]` = calibrator (memory maintenance, optional)
+#[pyclass(name = "ModelSlot")]
+#[derive(Debug, Clone)]
+pub struct ModelSlot {
+    #[pyo3(get, set)]
+    pub endpoint: String,
+    #[pyo3(get, set)]
+    pub api_key: Option<String>,
+    #[pyo3(get, set)]
+    pub model: String,
+}
+
+#[pymethods]
+impl ModelSlot {
+    #[new]
+    #[pyo3(signature = (endpoint, api_key=None, model="gpt-4o"))]
+    fn new(endpoint: &str, api_key: Option<String>, model: &str) -> Self {
+        ModelSlot {
+            endpoint: endpoint.to_string(),
+            api_key: api_key.filter(|k| !k.is_empty()),
+            model: model.to_string(),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "ModelSlot(endpoint='{}', model='{}')",
+            self.endpoint, self.model
+        )
     }
 }
 
@@ -283,6 +327,8 @@ pub enum BrainError {
     GateRejected(String),
     MaxAttemptsExceeded,
     Internal(String),
+    CalibratorFailed(String),
+    ParseError,
 }
 
 impl fmt::Display for BrainError {
@@ -292,6 +338,8 @@ impl fmt::Display for BrainError {
             BrainError::GateRejected(msg) => write!(f, "Gate rejected: {}", msg),
             BrainError::MaxAttemptsExceeded => write!(f, "Max attempts exceeded"),
             BrainError::Internal(msg) => write!(f, "Internal error: {}", msg),
+            BrainError::CalibratorFailed(msg) => write!(f, "Calibrator failed: {}", msg),
+            BrainError::ParseError => write!(f, "Parse error"),
         }
     }
 }

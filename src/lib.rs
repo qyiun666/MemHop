@@ -14,6 +14,10 @@ mod brain;
 mod thinker;
 mod http_thinker;
 mod fast_reflex;
+mod calibrator;
+mod router;
+mod calibration;
+mod http_calibrator;
 
 use brain::brain_loop::BrainLoop;
 use types::*;
@@ -23,7 +27,8 @@ use types::*;
 /// Python-facing BrainLoop — the complete cognitive loop.
 ///
 /// Wraps the Rust BrainLoop state machine and exposes it to Python
-/// via pyo3. Accepts HttpThinker, FastReflex, and BrainConfig.
+/// via pyo3. Supports both v0.5.0 single-model (thinker) and
+/// v0.5.1 dual-model (models) construction.
 #[pyclass(name = "BrainLoop")]
 struct PyBrainLoop {
     inner: BrainLoop,
@@ -37,14 +42,58 @@ impl PyBrainLoop {
         thinker=None,
         cerebellum=None,
         config=None,
+        models=None,
     ))]
     fn new(
         db_path: Option<String>,
         thinker: Option<http_thinker::HttpThinker>,
         cerebellum: Option<fast_reflex::FastReflex>,
         config: Option<BrainConfig>,
+        models: Option<Vec<ModelSlot>>,
     ) -> Self {
         let _ = db_path; // engine integration deferred to v0.5.0+ Phase 3
+        let cfg = config.unwrap_or_default();
+
+        // v0.5.1 dual-model path
+        if let Some(slots) = models {
+            assert!(!slots.is_empty(), "models must have at least 1 element");
+            let thinker: Box<dyn crate::thinker::Thinker> = {
+                let s = &slots[0];
+                Box::new(http_thinker::HttpThinker::new(
+                    &s.endpoint,
+                    s.api_key.as_deref().unwrap_or(""),
+                    &s.model,
+                    &s.model,
+                ))
+            };
+            let calibrator: Box<dyn crate::calibrator::Calibrator> = if slots.len() > 1 {
+                let s = &slots[1];
+                Box::new(http_calibrator::HttpCalibrator::new(
+                    &s.endpoint,
+                    s.api_key.clone(),
+                    &s.model,
+                ))
+            } else {
+                // Fallback: create a second HttpThinker from models[0]
+                let s = &slots[0];
+                let fallback_thinker = http_thinker::HttpThinker::new(
+                    &s.endpoint,
+                    s.api_key.as_deref().unwrap_or(""),
+                    &s.model,
+                    &s.model,
+                );
+                Box::new(crate::calibrator::ThinkerBackedCalibrator::new(
+                    Box::new(fallback_thinker),
+                ))
+            };
+            let cerebellum: Box<dyn crate::thinker::Cerebellum> = cerebellum
+                .map(|c| Box::new(c) as Box<dyn crate::thinker::Cerebellum>)
+                .unwrap_or_else(|| Box::new(fast_reflex::FastReflex::new()));
+            let brain = BrainLoop::new(None, thinker, cerebellum, cfg, Some(calibrator));
+            return PyBrainLoop { inner: brain };
+        }
+
+        // Legacy v0.5.0 single-model path
         let thinker: Box<dyn crate::thinker::Thinker> = thinker
             .map(|t| Box::new(t) as Box<dyn crate::thinker::Thinker>)
             .unwrap_or_else(|| Box::new(http_thinker::HttpThinker::new(
@@ -56,9 +105,7 @@ impl PyBrainLoop {
         let cerebellum: Box<dyn crate::thinker::Cerebellum> = cerebellum
             .map(|c| Box::new(c) as Box<dyn crate::thinker::Cerebellum>)
             .unwrap_or_else(|| Box::new(fast_reflex::FastReflex::new()));
-        let cfg = config.unwrap_or_default();
-
-        let brain = BrainLoop::new(None, thinker, cerebellum, cfg);
+        let brain = BrainLoop::new(None, thinker, cerebellum, cfg, None);
         PyBrainLoop { inner: brain }
     }
 
@@ -119,6 +166,10 @@ fn _core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBodyResult>()?;
     m.add_class::<http_thinker::HttpThinker>()?;
     m.add_class::<fast_reflex::FastReflex>()?;
+
+    // v0.5.1 Calibrator exports
+    m.add_class::<http_calibrator::HttpCalibrator>()?;
+    m.add_class::<ModelSlot>()?;
 
     Ok(())
 }

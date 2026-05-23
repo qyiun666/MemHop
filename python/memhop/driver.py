@@ -4,7 +4,7 @@ Wraps the BrainLoop Rust state machine into a simple driver with
 non-streaming and streaming message handling.
 """
 
-from typing import Callable, Optional
+from typing import Callable, Optional, list
 
 import memhop
 
@@ -33,24 +33,36 @@ class MeowAgentDriver:
 
     def __init__(
         self,
+        # v0.5.1 dual-model support (recommended)
+        models: Optional[list[memhop.ModelSlot]] = None,
+        # Legacy v0.5.0 single-model support (backward compatible)
         llm_endpoint: str = "https://api.openai.com/v1/chat/completions",
         api_key: str = "",
         model: str = "gpt-4o",
         fast_model: str = "gpt-4o-mini",
         config: Optional[memhop.BrainConfig] = None,
     ):
-        thinker = memhop.HttpThinker(
-            endpoint=llm_endpoint,
-            api_key=api_key,
-            model=model,
-            fast_model=fast_model,
-        )
-        cerebellum = memhop.FastReflex()
-        self.brain = memhop.BrainLoop(
-            thinker=thinker,
-            cerebellum=cerebellum,
-            config=config or memhop.BrainConfig(),
-        )
+        if models is not None:
+            # v0.5.1 dual-model path
+            self.brain = memhop.BrainLoop(
+                models=models,
+                cerebellum=memhop.FastReflex(),
+                config=config or memhop.BrainConfig(),
+            )
+        else:
+            # Legacy v0.5.0 single-model path
+            thinker = memhop.HttpThinker(
+                endpoint=llm_endpoint,
+                api_key=api_key,
+                model=model,
+                fast_model=fast_model,
+            )
+            cerebellum = memhop.FastReflex()
+            self.brain = memhop.BrainLoop(
+                thinker=thinker,
+                cerebellum=cerebellum,
+                config=config or memhop.BrainConfig(),
+            )
 
     def handle_message(self, user_input: str) -> str:
         """Process a user message (non-streaming).
