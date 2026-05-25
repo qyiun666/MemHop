@@ -1,29 +1,65 @@
 # MemHop
 
-嵌入式联想记忆引擎。O(1) 召回，单文件 LMDB 存储，零配置，零网络依赖。
+嵌入式联想记忆引擎。Modern Hopfield Network O(1) 召回，LMDB 单文件存储，零外部模型依赖。
 
 ## 安装
 
-```bash
-pip install memhop
+**Rust 库**（lib crate）：
+
+```toml
+[dependencies]
+memhop = "0.6.0"
 ```
 
-Python 3.10+，预编译 wheel，macOS/Linux/Windows。
+**MCP Server**（二进制）：
+
+```bash
+cargo install memhop-mcp-server
+# 或从源码构建
+cargo build --release --workspace
+```
+
+纯 Rust，Rust 2024 edition。依赖：heed (LMDB)、serde、rayon、half、zstd。
 
 ## Quick Start
 
-```python
-import memhop
+### 作为 Rust 库
 
-with memhop.open("brain.db") as db:
-    # 写入记忆
-    id = db.remember("今天吃了豆浆油条", meta={"tags": ["早餐"], "session_id": "s01"})
+```rust
+use memhop::{MemHop, StoreOptions};
 
-    # O(1) 联想召回
-    m = db.recall("早餐吃了什么")
-    print(m.text)       # "今天吃了豆浆油条"
-    print(m.confidence) # 0.94
+let mut db = MemHop::open("brain.db")?;
+
+// 写入记忆
+let id = db.store("今天吃了豆浆油条", None, &StoreOptions::default())?;
+
+// O(1) 联想召回
+let m = db.recall("早餐吃了什么", None)?.unwrap();
+println!("{} (confidence: {:.2})", m.text, m.confidence);
+
+// 多域知识树
+db.create_tree("work")?;
+db.store("GraphRAG 方案评审通过", Some("work"), &StoreOptions::default())?;
+
+db.close()?;
 ```
+
+### 作为 MCP 工具
+
+配置 Claude Desktop `claude_desktop_config.json`：
+
+```json
+{
+  "mcpServers": {
+    "memhop": {
+      "command": "/path/to/memhop-mcp-server",
+      "env": { "MEMHOP_DB_PATH": "/path/to/brain.db" }
+    }
+  }
+}
+```
+
+支持 12 个 MCP 工具：`memhop_store`、`memhop_recall`、`memhop_recall_topk`、`memhop_search`、`memhop_recent`、`memhop_forget`、`memhop_dream`、`memhop_stats`、`memhop_count`、`memhop_create_tree`、`memhop_list_trees`、`memhop_remove_tree`。
 
 ## 核心 API
 
@@ -31,77 +67,95 @@ with memhop.open("brain.db") as db:
 
 | 方法 | 说明 |
 |------|------|
-| `remember(text, meta?)` | 写入记忆，返回记忆 ID |
-| `remember_batch(items)` | 批量写入（去重+快 3x） |
-| `recall(cue)` | O(1) 联想召回，最佳匹配 |
-| `recall_topk(cue, k=5)` | Top-K 召回 |
-| `fuse_recall(cues, weights?)` | 多 cue 融合召回 |
-| `fuse_recall_topk(cues, k, weights?)` | 多 cue Top-K |
-| `search(filters, limit?)` | 按 meta 字段精确过滤 |
-| `recent(limit=5)` | 最近写入的记忆 |
-| `forget(id)` | 删除 |
-| `update(id, text?, meta?)` | 更新 |
+| `MemHop::open(path)` | 打开/创建数据库 |
+| `db.store(text, tree?, opts)` | 写入记忆，返回记忆 ID |
+| `db.recall(query, tree?)` | O(1) 联想召回，最高置信度匹配 |
+| `db.recall_topk(query, k, tree?)` | Top-K 召回 |
+| `db.search(filters, limit)` | 按 meta 字段精确过滤 |
+| `db.recent(limit, tree?)` | 最近写入的记忆 |
+| `db.forget(memory_id)` | 删除 |
+| `db.update(memory_id, text?, meta?)` | 更新 |
+| `db.close()` | 关闭引擎，持久化所有数据 |
 
-### 链路
-
-| 方法 | 说明 |
-|------|------|
-| `link_to(from_id, to_id, type)` | 创建记忆之间连接 |
-| `links_of(id)` | 出链 → `[{to, type}]` |
-| `links_to(id)` | 入链 ← `[{from, type}]` |
-
-### 场景门控 v0.4.0+
-
-自动根据对话场景缩小召回范围，无需手动传 scope：
+### 知识树
 
 | 方法 | 说明 |
 |------|------|
-| `set_gating(enabled)` | 启用/禁用 |
-| `set_gating_threshold(t)` | 余弦相似度阈值（默认 0.6） |
-| `reset_scene()` | 清除当前场景锚定 |
+| `db.create_tree(name)` | 创建独立知识域 |
+| `db.remove_tree(name)` | 删除知识域 |
+| `db.list_trees()` | 列出所有知识域 |
 
-场景路由（v0.5.3）引入 `recent_turn_summary`，在 `remember` 时自动累积滚动摘要，`recall` 时结合 query + recent 上下文做联合匹配。连续 miss ≥ 3 自动切场景。
+### 记忆巩固
 
-### 纠缠扩散 v0.5.3
+| 方法 | 说明 |
+|------|------|
+| `db.dream(config?)` | 触发记忆巩固（模式合并/弱化） |
+| `db.stats()` | 引擎统计（总数/活跃/域数量） |
+| `db.count()` | 记忆总数 |
 
-```python
-with memhop.open("brain.db") as db:
-    results = db.spread_activation("God Object", max_hops=2)
-    # → [{id: "...", activation: 0.85}, {id: "...", activation: 0.42}]
+### StoreOptions
+
+```rust
+StoreOptions {
+    auto_entangle: true,              // 自动发现关联创建纠缠边
+    context_snippet: None,            // 存储时上下文
+    manual_links: vec![],             // 手动指定关联记忆 ID
+}
 ```
 
-从 Hopfield 召回种子 → BFS 遍历 `link_to` 连接 → 返回激活量降序列表。衰减系数 0.5/跳。
+### DreamConfig
 
-### 可塑性
-
-| 方法 | 说明 |
-|------|------|
-| `recall_with_plasticity(cue)` | 召回 + 吸引子漂移 |
-| `enable_plasticity(bool)` | 启用/禁用 |
-| `get_memory_stats(id)` | 访问统计 |
-| `trigger_decay()` | 强制执行衰减 |
-
-### 引擎信息
-
-| 方法 | 说明 |
-|------|------|
-| `stats` | 引擎统计（总数/活跃/平均重要性/Layer分布） |
-| `count` | 记忆总数 |
-| `entity_graph()` | 纠缠图（Layer 1 → entity 链路） |
-| `knowledge_tree()` | 知识树 |
-| `episode_thread(session_id?)` | 会话线程 |
-| `memories_by_layer(layer?)` | 按 Layer 分组 |
-| `purge_before(datetime)` | 清理旧记忆 |
+```rust
+DreamConfig {
+    auto_trigger_interval: 100,       // 每 N 次 store 自动触发
+    merge_threshold: 0.95,            // 余弦相似度 > 此值触发合并
+    weaken_threshold: 0.3,             // 置信度 < 此值触发弱化
+    max_duration_ms: 500,             // 最大持续时间
+}
+```
 
 ## 核心特性
 
-- **O(1) 召回**: Modern Hopfield Network，与记忆总量无关
-- **单文件**: LMDB 持久化，`brain.db` 即走即拷
-- **零模型默认**: 字符 n-gram 哈希编码，无需下载任何模型
-- **三层记忆**: entity（纠缠图）/ knowledge（知识树）/ episode（原文）
-- **场景门控**: 自动按 session/tree/anchor 过滤候选集
-- **纠缠扩散**: 沿连接图 BFS 激活，类似认知联想
-- **无 Calibrator**: Dream Mode 纯本地统计，不发起任何网络请求（v0.5.3）
+- **O(1) 召回**：Modern Hopfield Network，召回时间与记忆总量无关
+- **单文件存储**：LMDB 持久化，`brain.db` 即走即拷
+- **零模型依赖**：字符 n-gram 哈希编码 (1024 维 f16)，无需下载任何模型
+- **Domain Tree**：独立知识域，每个域有独立的 Hopfield 网络 + 索引 + 存储
+- **Auto Entangle**：存入记忆时自动发现关联（top-5 召回，置信度 > 0.5 自动建边）
+- **Dream 模式**：纯本地统计的记忆巩固（合并相似模式、弱化低置信度模式）
+- **f16 半精度**：向量存储使用 half-precision float，节省 50% 存储
+- **场景门控**：三层自动上下文过滤（fingerprint/tree/anchor），v0.6.2 启用
+- **MCP 集成**：标准 Model Context Protocol server，可直接接入 Claude Desktop
+
+## 架构
+
+```
+memhop (lib crate, 0.6.0)
+├── engine/         MemHop 引擎（API 门面 + domain tree 路由）
+├── hopfield.rs     Modern Hopfield Network (499 行)
+├── encoder/        N-gram 哈希编码器
+├── storage.rs      LMDB 持久化层 (546 行)
+├── index.rs        稀疏索引 (288 行)
+├── meta_index.rs   元数据索引 (153 行)
+├── scene_gating.rs 场景门控 (414 行, v0.6.2 启用)
+├── dream.rs        记忆巩固 (156 行)
+└── filter.rs       过滤器 (161 行)
+
+memhop-mcp-server (binary crate, 0.6.0)
+└── main.rs         MCP JSON-RPC server (124 行)
+```
+
+## 构建与测试
+
+```bash
+# 编译
+cargo build --workspace
+
+# 测试
+cargo test --workspace
+
+# Clippy
+cargo clippy --workspace -- -D warnings
+```
 
 ## License
 
