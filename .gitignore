@@ -38,11 +38,6 @@ env/
 .pytest_cache/
 
 # Design docs (not for public repo)
-DESIGN.md
-REQUIREMENTS.md
-ROADMAP.md
-VERIFICATION_REPORT.md
-CONTEXTUAL_RECALL_GUIDE.md
 docs/
 
 # Python prototype (not for public repo)
