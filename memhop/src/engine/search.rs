@@ -32,7 +32,7 @@ impl EngineInner {
         self.check_closed()?;
         let tree = self.get_tree(tree_name)?;
         let mut metas = tree.storage.all_metas()?;
-        metas.sort_by(|a, b| b.1.created_at.cmp(&a.1.created_at));
+        metas.sort_by_key(|b| std::cmp::Reverse(b.1.created_at));
         let mut results = Vec::new();
         for (id, meta) in metas.iter().take(limit) {
             if let Some(blob) = tree.storage.get_blob(id)? {
