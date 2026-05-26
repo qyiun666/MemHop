@@ -265,3 +265,39 @@ impl Default for EmotionalContext {
         Self::new()
     }
 }
+
+
+// ── Plan-level types (v0.8.0 Plan architecture) ────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum PlanHint { Continuing, NewTopicLikely, TimeoutNewPlan }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PlanLevel { SubTask = 0, Plan = 1, Version = 2, MajorVersion = 3, Domain = 4 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum PlanState { Active, Paused, Completed, Archived }
+
+#[derive(Debug, Clone)]
+pub struct PlanInfo { pub name: String, pub level: PlanLevel, pub state: PlanState, pub created_at: i64 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StyleCompact { pub avg_sentence_len: f32, pub question_ratio: f32, pub exclamation_count: u32 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToneMeta { pub valence: f32, pub arousal: f32, pub tone_tags: Vec<String>, pub filler_ratio: f32, pub sentence_style: StyleCompact }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanNode { pub id: String, pub parent_id: Option<String>, pub name: String, pub level: PlanLevel, pub centroid_vector: Vec<f16>, pub dialogue_count: u32, pub compressed_summary: Option<String>, pub state: PlanState, pub created_at: i64, pub completed_at: Option<i64>, pub meta: HashMap<String, serde_json::Value> }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DialogueTurn { pub id: String, pub plan_id: String, pub user_input: String, pub agent_response: String, pub user_tone: ToneMeta, pub agent_tone: ToneMeta, pub timestamp: i64, pub vector: Vec<f16> }
+
+#[derive(Debug, Clone)]
+pub struct DomainStats { pub plan_count: u32, pub dialogue_count: u32, pub avg_valence: f32, pub top_keywords: Vec<String> }
+
+#[derive(Debug, Clone)]
+pub struct TopicDistribution { pub domains: HashMap<String, DomainStats> }
+
+#[derive(Debug, Clone)]
+pub struct ToneAggregate { pub time_range_start: i64, pub time_range_end: i64, pub avg_valence: f32, pub avg_arousal: f32, pub valence_trend: f32, pub top_tone_tags: Vec<(String, u32)>, pub filler_ratio_trend: f32 }

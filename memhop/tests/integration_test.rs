@@ -39,6 +39,9 @@ fn perception(text: &str, session: &str) -> PerceptionInput {
         protection: Protection::Normal,
         manual_links: vec![],
         meta: HashMap::new(),
+        plan_id: None,
+        agent_response: None,
+        dialogue_timestamp: None,
     }
 }
 
@@ -64,7 +67,7 @@ fn test_brain_reopen_is_stable() {
         let mut brain = Brain::open(path.to_str().unwrap(), BrainConfig::default(), None)
             .expect("open-1");
         let id = brain.perceive(perception("first memory", "s1")).expect("perceive-1");
-        assert!(!id.is_empty());
+        assert!(!id.engram_id.is_empty());
     }
 
     // Second session — open the same DB
@@ -73,7 +76,7 @@ fn test_brain_reopen_is_stable() {
             .expect("open-2");
         // Should still be functional
         let id = brain.perceive(perception("second memory", "s1")).expect("perceive-2");
-        assert!(!id.is_empty());
+        assert!(!id.engram_id.is_empty());
         // Open is idempotent: no bootstrap data corruption
         assert!(brain.cortex_len() > 0 || brain.hippocampus_len() > 0);
     }
@@ -87,7 +90,7 @@ fn test_brain_reopen_is_stable() {
 fn test_perceive_returns_id() {
     let (mut brain, _dir) = setup();
     let id = brain.perceive(perception("hello world", "s1")).expect("perceive");
-    assert!(!id.is_empty(), "perceive should return a non-empty ID");
+    assert!(!id.engram_id.is_empty(), "perceive should return a non-empty ID");
 }
 
 #[test]
@@ -123,9 +126,12 @@ fn test_perceive_with_emotional_state() {
         protection: Protection::Normal,
         manual_links: vec![],
         meta: HashMap::new(),
+            plan_id: None,
+        agent_response: None,
+        dialogue_timestamp: None,
     };
     let id = brain.perceive(input).expect("perceive");
-    assert!(!id.is_empty());
+    assert!(!id.engram_id.is_empty());
     // Emotional context should reflect the update
     let ctx = brain.emotional_context();
     assert!((ctx.state.valence - 0.8).abs() < 0.01);
@@ -381,6 +387,9 @@ fn test_emotional_context_updates_on_perceive() {
         protection: Protection::Normal,
         manual_links: vec![],
         meta: HashMap::new(),
+            plan_id: None,
+        agent_response: None,
+        dialogue_timestamp: None,
     };
     brain.perceive(input).expect("perceive");
     let ctx = brain.emotional_context();
@@ -416,7 +425,7 @@ fn test_multiple_sessions_independent_cortex() {
 fn test_perceive_empty_content() {
     let (mut brain, _dir) = setup();
     let id = brain.perceive(perception("", "s1")).expect("perceive");
-    assert!(!id.is_empty(), "empty content should still produce an ID");
+    assert!(!id.engram_id.is_empty(), "empty content should still produce an ID");
 }
 
 #[test]
@@ -426,7 +435,7 @@ fn test_very_long_content() {
     let id = brain
         .perceive(perception(&long_text, "s1"))
         .expect("perceive");
-    assert!(!id.is_empty());
+    assert!(!id.engram_id.is_empty());
 }
 
 #[test]
@@ -483,6 +492,9 @@ fn test_schema_emergence_after_dream() {
             protection: Protection::Normal,
             manual_links: vec![],
             meta: HashMap::new(),
+            plan_id: None,
+            agent_response: None,
+            dialogue_timestamp: None,
         };
         brain.perceive(input).unwrap();
     }
@@ -550,9 +562,12 @@ fn test_memory_belongs_to_multiple_anchors() {
         protection: Protection::Normal,
         manual_links: vec![],
         meta: HashMap::new(),
+            plan_id: None,
+        agent_response: None,
+        dialogue_timestamp: None,
     };
     let id = brain.perceive(input).unwrap();
-    assert!(!id.is_empty(), "should produce an ID");
+    assert!(!id.engram_id.is_empty(), "should produce an ID");
 
     // Recall with one anchor should find the memory
     let resp = brain.recall(&RecallRequest {

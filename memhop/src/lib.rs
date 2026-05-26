@@ -31,6 +31,8 @@ mod vitality;        // 生命力衰减 + 再巩固
 mod schema;          // Schema 涌现 + 稳定度
 mod llm_provider;    // LLM Provider trait + PromptTemplates
 mod scene_gating;    // Anchor 倒排索引 + 场景门控
+pub mod plan_gate;   // Plan 边界检测 + PlanIndex (v0.8.0)
+pub(crate) mod tone_extractor;  // Rule-based tone extraction
 
 // ── 旧版引擎（向后兼容） ────────────────────────────────────
 mod engine;      // MemHop 旧版引擎
@@ -45,7 +47,7 @@ mod brain;       // 新版 Brain 三层架构 API
 // ── 新版 Brain API ─────────────────────────────────────────
 pub use brain::Brain;
 pub use types::{
-    BrainConfig, ConflictItem, DreamReport, InnateSchema, PerceptionInput,
+    BrainConfig, ConflictItem, DreamReport, InnateSchema, PerceptionInput, PerceptionOutput,
     RecallRequest, RecallResponse, RecallTrace, ReflectionInput, ReflectionKind,
 };
 
@@ -53,6 +55,9 @@ pub use types::{
 pub use engram::{
     Association, AssociationKind, EmotionalContext, EmotionalState, Engram, EngramKind,
     Protection, SchemaExtra, VECTOR_DIM,
+    PlanHint, PlanLevel, PlanState, PlanInfo, PlanNode,
+    DialogueTurn, ToneMeta, StyleCompact,
+    ToneAggregate, TopicDistribution, DomainStats,
 };
 
 // ── 旧版引擎 API（向后兼容） ────────────────────────────────

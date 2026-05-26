@@ -30,7 +30,7 @@ fn main() {
         let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
         let result: Result<Value, String> = match method {
-            "initialize" => Ok(json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"memhop-mcp-server","version":"0.7.3"},"capabilities":{"tools":{}}})),
+            "initialize" => Ok(json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"memhop-mcp-server","version":"0.8.0"},"capabilities":{"tools":{}}})),
             "notifications/initialized" => continue,
             "tools/list" => Ok(tools_list()),
             "tools/call" => {
@@ -67,7 +67,11 @@ fn tools_list() -> Value {
         {"name":"memhop_reflect","description":"Create a reflection engram","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"kind":{"type":"string"},"session_id":{"type":"string"}},"required":["content","kind"]}},
         {"name":"memhop_dream","description":"Run Dream consolidation cycle","inputSchema":{"type":"object","properties":{}}},
         {"name":"memhop_stats","description":"Get brain statistics","inputSchema":{"type":"object","properties":{}}},
-        {"name":"memhop_count","description":"Get total engram count","inputSchema":{"type":"object","properties":{}}}
+        {"name":"memhop_count","description":"Get total engram count","inputSchema":{"type":"object","properties":{}}},
+        {"name":"memhop_complete_plan","description":"Complete a plan (mark as Completed, optionally summarize)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}},"required":["plan_id"]}},
+        {"name":"memhop_get_plan_tree","description":"Get the plan tree (all root plans or descendants of a given plan)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}}}},
+        {"name":"memhop_get_chat_history","description":"Get archived dialogue turns for a plan","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}},"required":["plan_id"]}},
+        {"name":"memhop_plan_stats","description":"Get aggregated plan statistics (domain distribution + tone trends)","inputSchema":{"type":"object","properties":{"start_time":{"type":"integer"},"end_time":{"type":"integer"}}}}
     ]})
 }
 
@@ -83,6 +87,10 @@ fn tool_call(brain: &mut Brain, params: Option<&Value>) -> Result<Value, String>
         "memhop_dream" => tool_dream(brain, args),
         "memhop_stats" => tool_stats(brain, args),
         "memhop_count" => tool_count(brain, args),
+        "memhop_complete_plan" => tool_complete_plan(brain, args),
+        "memhop_get_plan_tree" => tool_get_plan_tree(brain, args),
+        "memhop_get_chat_history" => tool_get_chat_history(brain, args),
+        "memhop_plan_stats" => tool_plan_stats(brain, args),
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
@@ -115,10 +123,18 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         protection: Protection::Normal,
         manual_links: vec![],
         meta: std::collections::HashMap::new(),
+        plan_id: None,
+        agent_response: None,
+        dialogue_timestamp: None,
     };
 
-    let id = brain.perceive(input).map_err(|e| e.to_string())?;
-    Ok(json!({"memory_id": id}))
+    let output = brain.perceive(input).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "memory_id": output.engram_id,
+        "plan_id": output.current_plan_id,
+        "plan_hint": format!("{:?}", output.plan_hint),
+        "plan_name": output.plan_name,
+    }))
 }
 
 fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
@@ -139,6 +155,11 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         recent_limit: limit,
         spread_depth: 3,
         spread_top_k: limit,
+        active_plan_id: None,
+        deep_search: false,
+        deep_search_plan_id: None,
+        domain_filter: vec![],
+        limit: 10,
     };
 
     let resp = brain.recall(&req).map_err(|e| e.to_string())?;
@@ -219,4 +240,85 @@ fn tool_stats(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
 
 fn tool_count(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
     Ok(json!({"count": brain.memory_count() + brain.hippocampus_len()}))
+}
+
+// ── v0.8.0: New Plan tools ─────────────────────────────────────
+
+fn tool_complete_plan(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let plan_id = s(args, "plan_id")?;
+    brain.complete_plan(&plan_id).map_err(|e| e.to_string())?;
+    Ok(json!({"status": "completed"}))
+}
+
+fn tool_get_plan_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let plan_id = args.get("plan_id").and_then(|v| v.as_str());
+    let tree = brain.get_plan_tree(plan_id).map_err(|e| e.to_string())?;
+    let nodes: Vec<Value> = tree.iter().map(|p| {
+        json!({
+            "id": p.id,
+            "parent_id": p.parent_id,
+            "name": p.name,
+            "level": format!("{:?}", p.level),
+            "state": format!("{:?}", p.state),
+            "dialogue_count": p.dialogue_count,
+            "compressed_summary": p.compressed_summary,
+            "created_at": p.created_at,
+            "completed_at": p.completed_at,
+        })
+    }).collect();
+    Ok(json!({"tree": nodes}))
+}
+
+fn tool_get_chat_history(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let plan_id = s(args, "plan_id")?;
+    let turns = brain.archived_dialogue(&plan_id).map_err(|e| e.to_string())?;
+    let result: Vec<Value> = turns.iter().map(|t| {
+        json!({
+            "id": t.id,
+            "plan_id": t.plan_id,
+            "user_input": t.user_input,
+            "agent_response": t.agent_response,
+            "user_tone": {"valence": t.user_tone.valence, "arousal": t.user_tone.arousal, "tags": t.user_tone.tone_tags},
+            "timestamp": t.timestamp,
+        })
+    }).collect();
+    Ok(json!({"turns": result, "total": result.len()}))
+}
+
+fn tool_plan_stats(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let start_time = args.get("start_time")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    let end_time = args.get("end_time")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(i64::MAX);
+
+    let domain_distribution = brain.get_topic_distribution()
+        .map_err(|e| e.to_string())?;
+
+    let tone_trend = brain.get_tone_aggregates(start_time, end_time)
+        .map_err(|e| e.to_string())?;
+
+    let mut domains: Vec<Value> = Vec::new();
+    let mut plan_count = 0u32;
+    for (name, stats) in &domain_distribution.domains {
+        plan_count += stats.plan_count;
+        domains.push(json!({
+            "domain": name,
+            "plan_count": stats.plan_count,
+            "dialogue_count": stats.dialogue_count,
+            "avg_valence": stats.avg_valence,
+        }));
+    }
+
+    Ok(json!({
+        "plan_count": plan_count,
+        "domain_distribution": domains,
+        "tone_trend": {
+            "avg_valence": tone_trend.avg_valence,
+            "avg_arousal": tone_trend.avg_arousal,
+            "valence_trend": tone_trend.valence_trend,
+            "top_tone_tags": tone_trend.top_tone_tags,
+        }
+    }))
 }

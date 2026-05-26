@@ -140,6 +140,9 @@ fn make_perception(text: &str) -> PerceptionInput {
         protection: Protection::Normal,
         manual_links: vec![],
         meta: std::collections::HashMap::new(),
+        plan_id: None,
+        agent_response: None,
+        dialogue_timestamp: None,
     }
 }
 

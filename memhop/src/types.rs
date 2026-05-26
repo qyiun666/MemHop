@@ -81,6 +81,8 @@ pub struct BrainConfig {
     pub hippocampus_capacity: usize,
     pub dream_interval: usize,
     pub dream_max_ms: u64,
+    /// v0.8.0: Optional override for PlanGate boundary threshold (default 0.55).
+    pub plan_boundary_threshold: Option<f32>,
 }
 
 impl Default for BrainConfig {
@@ -93,6 +95,7 @@ impl Default for BrainConfig {
             hippocampus_capacity: 500,
             dream_interval: 50,
             dream_max_ms: 500,
+            plan_boundary_threshold: None,
         }
     }
 }
@@ -119,6 +122,25 @@ pub struct PerceptionInput {
     pub protection: Protection,
     pub manual_links: Vec<String>,
     pub meta: HashMap<String, serde_json::Value>,
+    /// v0.8.0: Agent-optional plan ID (auto-matched by PlanGate when None).
+    pub plan_id: Option<String>,
+    /// v0.8.0: Agent's response for this turn (creates DialogueTurn).
+    pub agent_response: Option<String>,
+    /// v0.8.0: Dialogue timestamp (Unix ms, defaults to now).
+    pub dialogue_timestamp: Option<i64>,
+}
+
+/// v0.8.0: Return type of Brain::perceive() after plan-gating integration.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PerceptionOutput {
+    /// The newly created engram ID.
+    pub engram_id: String,
+    /// The plan this engram was assigned to.
+    pub current_plan_id: String,
+    /// Hint for the Agent about plan boundary status.
+    pub plan_hint: crate::engram::PlanHint,
+    /// Human-readable name of the current plan.
+    pub plan_name: String,
 }
 
 // ── RecallRequest ─────────────────────────────────────────
@@ -134,6 +156,16 @@ pub struct RecallRequest {
     pub recent_limit: usize,
     pub spread_depth: usize,
     pub spread_top_k: usize,
+    /// v0.8.0: Currently active plan ID (narrows PGT search).
+    pub active_plan_id: Option<String>,
+    /// v0.8.0: Whether to deep-search archived dialogue turns.
+    pub deep_search: bool,
+    /// v0.8.0: Plan ID to deep-search within.
+    pub deep_search_plan_id: Option<String>,
+    /// v0.8.0: Domain filter for PGT retrieval.
+    pub domain_filter: Vec<String>,
+    /// v0.8.0: Expected number of results (PGT accumulates toward this target).
+    pub limit: usize,
 }
 
 impl Default for RecallRequest {
@@ -148,6 +180,11 @@ impl Default for RecallRequest {
             recent_limit: 5,
             spread_depth: 3,
             spread_top_k: 10,
+            active_plan_id: None,
+            deep_search: false,
+            deep_search_plan_id: None,
+            domain_filter: Vec::new(),
+            limit: 10,
         }
     }
 }
@@ -182,6 +219,8 @@ pub struct RecallTrace {
     pub hopfield_candidates: usize,
     pub spread_steps: usize,
     pub post_inhibition_count: usize,
+    /// v0.8.0: The PGT layer that produced the results (L0/L1/L2/L3/hopfield/None).
+    pub pgt_layer: Option<String>,
 }
 
 // ── ReflectionInput ───────────────────────────────────────

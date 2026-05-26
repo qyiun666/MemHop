@@ -1,4 +1,4 @@
-//! LMDB storage layer for the Brain — 6 sub-databases.
+//! LMDB storage layer for the Brain — 8 sub-databases.
 //!
 //! Sub-databases:
 //!   engrams         — id → bincode(Engram)
@@ -7,6 +7,8 @@
 //!   schemas         — id → bincode(SchemaExtra)
 //!   anchor_index    — anchor_name → bincode(Vec<engram_id>)
 //!   config          — key → bincode(value)
+//!   dialogue_turns  — turn_id → bincode(DialogueTurn)     (v0.8.0)
+//!   plan_tree       — plan_id → bincode(PlanNode)         (v0.8.0)
 
 #![allow(dead_code)]
 
@@ -14,7 +16,8 @@ use heed::types::{Bytes, Str};
 use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
 use std::path::Path;
 
-use crate::engram::{Association, Engram, SchemaExtra};
+use crate::engram::{Association, DialogueTurn, Engram, PlanNode, SchemaExtra};
+use crate::plan_gate::PlanIndex;
 
 // ── StorageError ──────────────────────────────────────────────
 
@@ -54,31 +57,36 @@ pub(crate) struct BrainDb {
     pub schemas: Database<Str, Bytes>,
     pub anchor_index: Database<Str, Bytes>,
     pub config: Database<Str, Bytes>,
+    /// v0.8.0: turn_id → bincode(DialogueTurn)
+    pub dialogue_turns: Database<Str, Bytes>,
+    /// v0.8.0: plan_id → bincode(PlanNode)
+    pub plan_tree: Database<Str, Bytes>,
 }
 
 // ── LmdbStorage ──────────────────────────────────────────────
 
-/// LMDB storage for the Brain — manages open/close/read/write for 6 sub-dbs.
+/// LMDB storage for the Brain — manages open/close/read/write for 8 sub-dbs.
 pub struct LmdbStorage {
     env: Env,
     pub(crate) db: BrainDb,
+    /// v0.8.0: In-memory auxiliary index for fast plan lookups.
+    pub(crate) plan_index: PlanIndex,
 }
 
 unsafe impl Send for LmdbStorage {}
 unsafe impl Sync for LmdbStorage {}
 
 impl LmdbStorage {
-    /// Open (or create) an LMDB environment at `path` and create/open the 6 sub-databases.
+    /// Open (or create) an LMDB environment at `path` and create/open the 8 sub-databases.
     pub fn open(path: &str) -> Result<Self, StorageError> {
         let db_path = Path::new(path);
         std::fs::create_dir_all(db_path)
             .map_err(|e| StorageError::Open(format!("create dir {}: {}", path, e)))?;
-        // 2GiB map size, 2 writers.
         let env = unsafe {
             EnvOpenOptions::new()
                 .map_size(2 * 1024 * 1024 * 1024)
                 .max_readers(128)
-                .max_dbs(8)
+                .max_dbs(10)
                 .open(db_path)
                 .map_err(|e| StorageError::Open(format!("env open: {}", e)))?
         };
@@ -105,6 +113,12 @@ impl LmdbStorage {
         let config = env
             .create_database(&mut wtxn, Some("config"))
             .map_err(|e| StorageError::Open(format!("config db: {}", e)))?;
+        let dialogue_turns = env
+            .create_database(&mut wtxn, Some("dialogue_turns"))
+            .map_err(|e| StorageError::Open(format!("dialogue_turns db: {}", e)))?;
+        let plan_tree = env
+            .create_database(&mut wtxn, Some("plan_tree"))
+            .map_err(|e| StorageError::Open(format!("plan_tree db: {}", e)))?;
 
         wtxn
             .commit()
@@ -119,7 +133,10 @@ impl LmdbStorage {
                 schemas,
                 anchor_index,
                 config,
+                dialogue_turns,
+                plan_tree,
             },
+            plan_index: PlanIndex::new(),
         })
     }
 
@@ -136,7 +153,6 @@ impl LmdbStorage {
     }
 
     pub fn close(&self) -> Result<(), StorageError> {
-        // LMDB env is closed on drop; nothing explicit to do.
         Ok(())
     }
 
@@ -482,6 +498,137 @@ impl LmdbStorage {
             Ok(None) => Ok(None),
             Err(e) => Err(StorageError::Read(format!("get config: {}", e))),
         }
+    }
+
+    // ── DialogueTurn read/write (v0.8.0) ─────────────────────
+
+    pub fn put_dialogue(
+        &self,
+        txn: &mut RwTxn<'_>,
+        turn: &DialogueTurn,
+    ) -> Result<(), StorageError> {
+        let bytes = bincode::serialize(turn)
+            .map_err(|e| StorageError::Write(format!("serialize dialogue: {}", e)))?;
+        self.db
+            .dialogue_turns
+            .put(txn, &turn.id as &str, &bytes)
+            .map_err(|e| StorageError::Write(format!("put dialogue: {}", e)))
+    }
+
+    pub fn get_dialogue(
+        &self,
+        txn: &RoTxn<'_>,
+        id: &str,
+    ) -> Result<Option<DialogueTurn>, StorageError> {
+        match self.db.dialogue_turns.get(txn, id) {
+            Ok(Some(bytes)) => {
+                let turn: DialogueTurn = bincode::deserialize(bytes)
+                    .map_err(|e| StorageError::Read(format!("deserialize dialogue: {}", e)))?;
+                Ok(Some(turn))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Read(format!("get dialogue: {}", e))),
+        }
+    }
+
+    /// Get all DialogueTurns belonging to a plan, sorted by timestamp.
+    pub fn get_dialogues_by_plan(
+        &self,
+        txn: &RoTxn<'_>,
+        plan_id: &str,
+    ) -> Result<Vec<DialogueTurn>, StorageError> {
+        let mut turns: Vec<DialogueTurn> = Vec::new();
+        let iter = self
+            .db
+            .dialogue_turns
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter dialogues: {}", e)))?;
+        for result in iter {
+            let (_, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            let turn: DialogueTurn = bincode::deserialize(val)
+                .map_err(|e| StorageError::Read(format!("deserialize: {}", e)))?;
+            if turn.plan_id == plan_id {
+                turns.push(turn);
+            }
+        }
+        turns.sort_by_key(|t| t.timestamp);
+        Ok(turns)
+    }
+
+    /// Get all DialogueTurns (full scan).
+    pub fn all_dialogues(&self, txn: &RoTxn<'_>) -> Result<Vec<DialogueTurn>, StorageError> {
+        let mut turns: Vec<DialogueTurn> = Vec::new();
+        let iter = self
+            .db
+            .dialogue_turns
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter dialogues: {}", e)))?;
+        for result in iter {
+            let (_, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            let turn: DialogueTurn = bincode::deserialize(val)
+                .map_err(|e| StorageError::Read(format!("deserialize: {}", e)))?;
+            turns.push(turn);
+        }
+        Ok(turns)
+    }
+
+    // ── PlanNode read/write (v0.8.0) ──────────────────────────
+
+    pub fn put_plan(
+        &self,
+        txn: &mut RwTxn<'_>,
+        plan: &PlanNode,
+    ) -> Result<(), StorageError> {
+        let bytes = bincode::serialize(plan)
+            .map_err(|e| StorageError::Write(format!("serialize plan: {}", e)))?;
+        self.db
+            .plan_tree
+            .put(txn, &plan.id as &str, &bytes)
+            .map_err(|e| StorageError::Write(format!("put plan: {}", e)))
+    }
+
+    pub fn get_plan(
+        &self,
+        txn: &RoTxn<'_>,
+        id: &str,
+    ) -> Result<Option<PlanNode>, StorageError> {
+        match self.db.plan_tree.get(txn, id) {
+            Ok(Some(bytes)) => {
+                let plan: PlanNode = bincode::deserialize(bytes)
+                    .map_err(|e| StorageError::Read(format!("deserialize plan: {}", e)))?;
+                Ok(Some(plan))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Read(format!("get plan: {}", e))),
+        }
+    }
+
+    /// Iterate all PlanNode entries.
+    pub fn get_all_plans(&self, txn: &RoTxn<'_>) -> Result<Vec<PlanNode>, StorageError> {
+        let mut plans: Vec<PlanNode> = Vec::new();
+        let iter = self
+            .db
+            .plan_tree
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter plans: {}", e)))?;
+        for result in iter {
+            let (_, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            let plan: PlanNode = bincode::deserialize(val)
+                .map_err(|e| StorageError::Read(format!("deserialize: {}", e)))?;
+            plans.push(plan);
+        }
+        Ok(plans)
+    }
+
+    pub fn delete_plan(
+        &self,
+        txn: &mut RwTxn<'_>,
+        id: &str,
+    ) -> Result<bool, StorageError> {
+        self.db
+            .plan_tree
+            .delete(txn, id)
+            .map_err(|e| StorageError::Write(format!("delete plan: {}", e)))
     }
 }
 

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use half::f16;
 
-use crate::engram::{Engram, EngramKind, SchemaExtra};
+use crate::engram::{Engram, EngramKind, PlanLevel, PlanState, SchemaExtra};
 use crate::hopfield::cosine_similarity_f16;
 
 // ── Schema Stability ─────────────────────────────────────────
@@ -180,4 +180,47 @@ pub fn is_cluster_valid(vectors: &[&[f16]], threshold: f32) -> bool {
     }
     let (_, _, mean_sim) = pairwise_similarities(vectors);
     mean_sim >= threshold
+}
+
+// ── v0.8.0: Cross-Plan Schema Emergence ───────────────────────
+
+/// Dream REM-2 extension: scan plans across different contexts for
+/// semantic overlap (cross-plan pattern discovery).
+///
+/// For the v0.8 MVP, this is a lightweight placeholder that scans active
+/// Plan-level nodes for high centroid cosine similarity (>0.8) and logs them.
+/// Full schema writing will be added in a future version.
+pub(crate) fn cross_plan_schema_emergence(
+    brain: &crate::brain::Brain,
+) -> Result<(), crate::error::MemHopError> {
+    let plans = brain.get_plan_tree(None)?;
+    let active: Vec<&crate::engram::PlanNode> = plans
+        .iter()
+        .filter(|p| {
+            p.state == PlanState::Active
+                && p.level == PlanLevel::Plan
+                && !p.centroid_vector.is_empty()
+        })
+        .collect();
+
+    if active.len() < 2 {
+        return Ok(());
+    }
+
+    for i in 0..active.len() {
+        for j in (i + 1)..active.len() {
+            let sim = cosine_similarity_f16(
+                &active[i].centroid_vector,
+                &active[j].centroid_vector,
+            );
+            if sim > 0.8 {
+                eprintln!(
+                    "[cross-plan-schema] high similarity ({:.3}) between plan '{}' ({}) and '{}' ({})",
+                    sim, active[i].name, active[i].id, active[j].name, active[j].id,
+                );
+            }
+        }
+    }
+
+    Ok(())
 }

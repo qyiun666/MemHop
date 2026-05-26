@@ -20,19 +20,21 @@ use crate::activation;
 use crate::cortex::Cortex;
 use crate::encoder::{Encoder, NgramEncoder};
 use crate::engram::{
-    AssociationKind, EmotionalContext, Engram, EngramKind, Protection,
+    AssociationKind, DialogueTurn, EmotionalContext, Engram, EngramKind, PlanLevel, PlanNode, PlanState,
+    Protection, StyleCompact, ToneMeta,
 };
 use crate::error::{MemHopError, Result};
 use crate::hippocampus::Hippocampus;
 use crate::hopfield::ModernHopfield;
 use crate::llm_provider::LlmProvider;
 use crate::personality::{GrowthState, Personality};
+use crate::plan_gate::{PlanContext, PlanGate, PlanIndex};
 use crate::scene_gating::SceneGate;
 use crate::schema;
 use crate::storage::LmdbStorage;
 use crate::types::{
-    BrainConfig, ConflictItem, DreamReport, InnateSchema, PerceptionInput, RecallRequest,
-    RecallResponse, RecallTrace, ReflectionInput,
+    BrainConfig, ConflictItem, DreamReport, InnateSchema, PerceptionInput, PerceptionOutput,
+    RecallRequest, RecallResponse, RecallTrace, ReflectionInput,
 };
 use crate::unified_graph::UnifiedGraph;
 use crate::vitality;
@@ -61,6 +63,11 @@ pub struct Brain {
     #[allow(dead_code)]
     llm: Option<Box<dyn LlmProvider>>,
     ngram_encoder: NgramEncoder,
+    plan_gate: PlanGate,
+    /// Timestamp (Unix ms) of last perceive call — for PlanGate time-gap.
+    last_perceive_at: i64,
+    /// v0.8.0: In-memory auxiliary index for fast plan lookups.
+    plan_index: RefCell<PlanIndex>,
 
     /// Recall buffer: IDs recalled since last Dream, for reconsolidation.
     recalled_buffer: RefCell<Vec<String>>,
@@ -96,6 +103,18 @@ impl Brain {
             }
         }
 
+        // v0.8.0: Rebuild PlanIndex from stored PlanNodes
+        let plan_index = {
+            let mut pi = PlanIndex::new();
+            let ro_txn = storage
+                .begin_read()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            if let Ok(plans) = storage.get_all_plans(&ro_txn) {
+                pi.rebuild(&plans);
+            }
+            pi
+        };
+
         Ok(Brain {
             cortex: Cortex::new(config.cortex_capacity),
             hippocampus,
@@ -105,23 +124,110 @@ impl Brain {
             emotional_ctx: EmotionalContext::new(),
             growth: GrowthState::new(),
             personality,
-            config,
             store_count: 0,
             llm,
             ngram_encoder: NgramEncoder::new(crate::engram::VECTOR_DIM),
+            plan_gate: PlanGate::new(
+                config.plan_boundary_threshold.unwrap_or(0.55),
+                3,
+                24,
+            ),
+            plan_index: RefCell::new(plan_index),
+            config,
             recalled_buffer: RefCell::new(Vec::new()),
+            last_perceive_at: 0,
         })
     }
 
     // ── perceive ──────────────────────────────────────────
 
     /// 存入新感知到 Hippocampus。同步，<1ms。
-    pub fn perceive(&mut self, input: PerceptionInput) -> Result<String> {
+    pub fn perceive(&mut self, input: PerceptionInput) -> Result<PerceptionOutput> {
         let now = now_millis();
         let id = generate_id();
 
         self.emotional_ctx
             .update(input.emotional_state.valence, input.emotional_state.arousal);
+
+        // ── v0.8.0: Plan-gating — PlanGate boundary detection & decision ──
+
+        // 1. Convert embedding to f32 for PlanGate
+        let query_f32: Vec<f32> = input.vector.iter().map(|x| x.to_f32()).collect();
+
+        // 2. Get plan centroid from PlanIndex (may be None for new brain)
+        let plan_centroid: Option<Vec<f32>> = {
+            let idx = self.plan_index.borrow();
+            idx.active_plan_id
+                .as_ref()
+                .and_then(|pid| {
+                    idx.centroids
+                        .get(pid)
+                        .map(|c| c.iter().map(|x: &half::f16| x.to_f32()).collect())
+                })
+        };
+
+        // 3. Time gap since last perceive (minutes)
+        let time_gap_minutes = if self.last_perceive_at > 0 {
+            ((now - self.last_perceive_at).max(0) as f64) / 60_000.0
+        } else {
+            0.0
+        };
+        self.last_perceive_at = now;
+
+        // 4. Extract user tone from text (rule-based, no LLM)
+        let current_tone = crate::tone_extractor::extract_tone(&input.content);
+
+        // 5. Compute boundary score
+        let boundary = self.plan_gate.boundary_score(
+            &query_f32,
+            &current_tone,
+            &input.attention_anchors,
+            PlanContext {
+                centroid: plan_centroid.as_deref(),
+                avg_tone: None,
+                anchors: &[],
+            },
+            time_gap_minutes,
+        );
+
+        // 6. Match to plan
+        let matched_plan = self.plan_gate.match_to_plan(
+            input.plan_id.as_deref(),
+            &self.plan_index.borrow(),
+            &query_f32,
+            boundary,
+        );
+
+        // 7. Determine plan_id: explicit match → use it; otherwise anonymous
+        let plan_id = matched_plan.unwrap_or_else(|| format!("plan_{}", now));
+
+        // 8. Decide plan hint (accumulates boundary scores over rounds)
+        let plan_hint = self.plan_gate.decide(boundary, now);
+
+        // 9. Plan name from explicit input or default
+        let plan_name = input
+            .plan_id
+            .as_deref()
+            .unwrap_or("Unnamed Plan")
+            .to_string();
+
+        // ── v0.8.0: Populate PlanIndex ──
+        {
+            let mut pi = self.plan_index.borrow_mut();
+            pi.add_engram(&plan_id, &id);
+            pi.update_centroid(&plan_id, &query_f32);
+            if pi.active_plan_id.is_none() {
+                pi.active_plan_id = Some(plan_id.clone());
+            }
+        }
+
+        // Save data for DialogueTurn before input is consumed
+        let saved_content = input.content.clone();
+        let saved_vector = input.vector.clone();
+        let saved_agent_response = input.agent_response.clone();
+        let saved_dialogue_timestamp = input.dialogue_timestamp;
+
+        // ── Create engram ────────────────────────────────────
 
         let engram = Engram::new_episode(
             id.clone(),
@@ -161,12 +267,268 @@ impl Brain {
             let _ = SceneGate::add_to_anchors(&self.storage, &id, &input.attention_anchors);
         }
 
+        // ── v0.8.0: Persist PlanNode & DialogueTurn ──
+        {
+            // Persist PlanNode to LMDB (upsert pattern)
+            let plan = PlanNode {
+                id: plan_id.clone(),
+                parent_id: None,
+                name: plan_name.clone(),
+                level: PlanLevel::Plan,
+                centroid_vector: query_f32.iter().map(|&x| f16::from_f32(x)).collect(),
+                dialogue_count: 1,
+                compressed_summary: None,
+                state: PlanState::Active,
+                created_at: now,
+                completed_at: None,
+                meta: HashMap::new(),
+            };
+            let mut txn = self.storage
+                .begin_write()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            self.storage
+                .put_plan(&mut txn, &plan)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+            // v0.8.0: Create DialogueTurn if agent_response is present
+            if let Some(ref agent_resp) = saved_agent_response {
+                let turn = DialogueTurn {
+                    id: format!("turn_{}_{}", now, self.store_count),
+                    plan_id: plan_id.clone(),
+                    user_input: saved_content,
+                    agent_response: agent_resp.clone(),
+                    user_tone: current_tone,
+                    agent_tone: ToneMeta {
+                        valence: 0.0,
+                        arousal: 0.0,
+                        tone_tags: vec![],
+                        filler_ratio: 0.0,
+                        sentence_style: StyleCompact {
+                            avg_sentence_len: 0.0,
+                            question_ratio: 0.0,
+                            exclamation_count: 0,
+                        },
+                    },
+                    timestamp: saved_dialogue_timestamp.unwrap_or(now),
+                    vector: saved_vector,
+                };
+                self.storage
+                    .put_dialogue(&mut txn, &turn)
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            }
+
+            txn.commit()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        }
+
         if self.store_count >= self.config.dream_interval {
             self.store_count = 0;
             let _ = self.dream_internal();
         }
 
-        Ok(id)
+        Ok(PerceptionOutput {
+            engram_id: id,
+            current_plan_id: plan_id,
+            plan_hint,
+            plan_name,
+        })
+    }
+
+    // ── PGT recall (v0.8.0) ────────────────────────────
+
+    /// Four-layer Plan-Gated Temporal recall.
+    ///
+    /// Returns (results sorted by score descending, layer name).
+    /// Layers are tried in order L0→L3, accumulating until `need` is met.
+    fn pgt_recall(
+        &self,
+        query_text: &str,
+        query_emb: &[f32],
+        req: &RecallRequest,
+    ) -> (Vec<(String, f32)>, Option<String>) {
+        let plan_id = match &req.active_plan_id {
+            Some(pid) => pid,
+            None => return (Vec::new(), None),
+        };
+        let need = req.limit;
+        let mut results: Vec<(String, f32)> = Vec::new();
+        let mut exclude: HashSet<String> = HashSet::new();
+
+        // L0: Plan-scoped n-gram search
+        let plan_candidates = self.plan_index.borrow().candidates(Some(plan_id));
+        if let Ok(l0) = self.recall_layer0(query_text, &plan_candidates, need) {
+            for (id, _) in &l0 { exclude.insert(id.clone()); }
+            results.extend(l0);
+        }
+        if results.len() >= need {
+            return (results, Some("L0".to_string()));
+        }
+
+        // L1: Graph BFS from L0 seeds
+        let l1 = self.recall_layer1(query_emb, &results, need - results.len(), &exclude);
+        for (id, _) in &l1 { exclude.insert(id.clone()); }
+        results.extend(l1);
+        if results.len() >= need {
+            return (results, Some("L1".to_string()));
+        }
+
+        // L2: Temporal recency
+        if let Ok(l2) = self.recall_layer2(plan_id, need - results.len(), &exclude) {
+            for (id, _) in &l2 { exclude.insert(id.clone()); }
+            results.extend(l2);
+        }
+        if results.len() >= need {
+            return (results, Some("L2".to_string()));
+        }
+
+        // L3: Global n-gram fallback
+        if let Ok(l3) = self.recall_layer3(query_text, need - results.len(), &exclude) {
+            results.extend(l3);
+        }
+
+        let layer = if results.is_empty() { "None" } else { "L3" };
+        (results, Some(layer.to_string()))
+    }
+
+    /// L0: Plan-scoped n-gram — trigram Jaccard overlap within the plan's engrams.
+    fn recall_layer0(
+        &self,
+        query_text: &str,
+        candidates: &[String],
+        need: usize,
+    ) -> Result<Vec<(String, f32)>> {
+        if candidates.is_empty() || need == 0 {
+            return Ok(Vec::new());
+        }
+        let txn = self
+            .storage
+            .begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+        let mut scored: Vec<(String, f32)> = Vec::with_capacity(candidates.len().min(need * 4));
+        for id in candidates.iter().take(candidates.len().min(need * 4)) {
+            if let Ok(Some(engram)) = self.storage.get_hippocampus(&txn, id) {
+                let score = ngram_overlap(query_text, &engram.text);
+                if score > 0.0 {
+                    scored.push((id.clone(), score));
+                }
+            }
+        }
+        drop(txn);
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(need);
+        Ok(scored)
+    }
+
+    /// L1: Graph BFS — expand from seed IDs using graph edges.
+    fn recall_layer1(
+        &self,
+        _query_emb: &[f32],
+        seeds: &[(String, f32)],
+        need: usize,
+        exclude: &HashSet<String>,
+    ) -> Vec<(String, f32)> {
+        if seeds.is_empty() || need == 0 {
+            return Vec::new();
+        }
+        let mut neighbor_scores: HashMap<String, f32> = HashMap::new();
+
+        for (seed_id, seed_score) in seeds {
+            for edge in self.graph.edges_of(seed_id) {
+                if exclude.contains(&edge.target_id) || edge.target_id == *seed_id {
+                    continue;
+                }
+                let score = edge.weight * seed_score;
+                let entry = neighbor_scores.entry(edge.target_id.clone()).or_insert(0.0);
+                *entry = entry.max(score);
+            }
+        }
+
+        let mut scored: Vec<(String, f32)> = neighbor_scores.into_iter().collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(need);
+        scored
+    }
+
+    /// L2: Temporal recency — most recent engrams in the active plan.
+    fn recall_layer2(
+        &self,
+        active_plan_id: &str,
+        need: usize,
+        exclude: &HashSet<String>,
+    ) -> Result<Vec<(String, f32)>> {
+        if need == 0 {
+            return Ok(Vec::new());
+        }
+        let candidates = self.plan_index.borrow().candidates(Some(active_plan_id));
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let txn = self
+            .storage
+            .begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+        let now = now_millis();
+        let mut with_times: Vec<(String, f32)> = Vec::with_capacity(candidates.len());
+
+        for id in &candidates {
+            if exclude.contains(id) {
+                continue;
+            }
+            if let Ok(Some(engram)) = self.storage.get_hippocampus(&txn, id) {
+                let hours_ago = ((now - engram.created_at).max(0) as f64) / 3_600_000.0;
+                let recency = 1.0f64 / (1.0 + hours_ago / 24.0);
+                with_times.push((id.to_string(), recency as f32));
+            }
+        }
+        drop(txn);
+
+        with_times.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        with_times.truncate(need);
+        Ok(with_times)
+    }
+
+    /// L3: Global n-gram fallback — scan all engrams (not just active plan).
+    fn recall_layer3(
+        &self,
+        query_text: &str,
+        need: usize,
+        exclude: &HashSet<String>,
+    ) -> Result<Vec<(String, f32)>> {
+        if need == 0 {
+            return Ok(Vec::new());
+        }
+        let candidates = self.plan_index.borrow().candidates(None);
+        let filtered: Vec<String> = candidates
+            .into_iter()
+            .filter(|id| !exclude.contains(id))
+            .collect();
+        self.recall_layer0(query_text, &filtered, need)
+    }
+
+    /// Hopfield fallback: recall among candidates within the active plan.
+    fn hopfield_candidates_in_plan(
+        &self,
+        query_emb: &[f32],
+        plan_id: &str,
+        top_k: usize,
+        exclude: &HashSet<String>,
+    ) -> Vec<(String, f32)> {
+        if self.hopfield.is_empty() {
+            return Vec::new();
+        }
+        let candidates = self.plan_index.borrow().candidates(Some(plan_id));
+        let candidate_refs: Vec<&str> = candidates.iter().map(|s: &String| s.as_str()).collect();
+
+        self.hopfield
+            .recall_among_raw(query_emb, &candidate_refs)
+            .into_iter()
+            .filter(|(id, _)| !exclude.contains(id))
+            .take(top_k)
+            .collect()
     }
 
     // ── recall ────────────────────────────────────────────
@@ -185,32 +547,64 @@ impl Brain {
         // 2. L0 Cortex — 工作记忆
         let working_memory = self.cortex.recent(&req.session_id, req.recent_limit);
 
-        // 3. Hopfield top-K — 语义近似候选
-        let hopfield_candidates: Vec<(String, f32)> = if self.hopfield.is_empty() {
-            Vec::new()
+        // 3. PGT recall (v0.8.0: four-layer plan-gated retrieval)
+        let (pgt_results, pgt_layer) = if req.active_plan_id.is_some() {
+            self.pgt_recall(&req.query, &query_f32, req)
         } else {
-            self.hopfield.recall_topk(&query_f32, HOPFIELD_TOP_K)
+            (Vec::new(), None)
         };
 
-        // 3b. Scene gating — 按 attention_anchors 过滤候选集
-        let hopfield_candidates = if !req.attention_anchors.is_empty() {
-            if let Ok(Some(candidates)) = SceneGate::get_candidates(&self.storage, &req.attention_anchors) {
-                hopfield_candidates.into_iter()
-                    .filter(|(id, _)| candidates.contains(id))
-                    .collect()
+        // 4. Build seeds — PGT-first, Hopfield fallback
+        let mut hopfield_count: usize = 0;
+        let seeds: HashMap<String, f32> = if pgt_results.len() >= req.limit {
+            // PGT produced enough — skip Hopfield entirely
+            pgt_results
+                .into_iter()
+                .take(req.spread_top_k * 2)
+                .collect()
+        } else if let Some(ref plan_id) = req.active_plan_id {
+            // PGT not enough — supplement with Hopfield in plan scope
+            let exclude: HashSet<String> =
+                pgt_results.iter().map(|(id, _): &(String, f32)| id.clone()).collect();
+            let remaining = req.spread_top_k * 2 - pgt_results.len();
+            let hopfield_supp = self.hopfield_candidates_in_plan(
+                &query_f32, plan_id, remaining, &exclude,
+            );
+            hopfield_count = hopfield_supp.len();
+            pgt_results
+                .into_iter()
+                .chain(hopfield_supp)
+                .take(req.spread_top_k * 2)
+                .collect()
+        } else {
+            // No active plan — classic Hopfield top-K path
+            let hopfield_candidates: Vec<(String, f32)> = if self.hopfield.is_empty() {
+                Vec::new()
+            } else {
+                self.hopfield.recall_topk(&query_f32, HOPFIELD_TOP_K)
+            };
+
+            // Scene gating
+            let hopfield_candidates = if !req.attention_anchors.is_empty() {
+                if let Ok(Some(candidates)) =
+                    SceneGate::get_candidates(&self.storage, &req.attention_anchors)
+                {
+                    hopfield_candidates
+                        .into_iter()
+                        .filter(|(id, _)| candidates.contains(id))
+                        .collect()
+                } else {
+                    hopfield_candidates
+                }
             } else {
                 hopfield_candidates
-            }
-        } else {
+            };
+            hopfield_count = hopfield_candidates.len();
             hopfield_candidates
+                .into_iter()
+                .take(req.spread_top_k * 2)
+                .collect()
         };
-
-        // 4. 构建种子激活图: id → Hopfield 相似度
-        let seeds: HashMap<String, f32> = hopfield_candidates
-            .iter()
-            .take(req.spread_top_k * 2)
-            .map(|(id, score)| (id.clone(), *score))
-            .collect();
 
         // 5. 竞争性扩散激活（内部包含矛盾抑制）
         let spread_result = activation::competitive_spread(
@@ -287,9 +681,10 @@ impl Brain {
             trace: RecallTrace {
                 latency_us,
                 gated_anchors: req.attention_anchors.clone(),
-                hopfield_candidates: hopfield_candidates.len(),
+                hopfield_candidates: hopfield_count,
                 spread_steps: 3,
                 post_inhibition_count: spread_result.activated.len(),
+                pgt_layer,
             },
         })
     }
@@ -398,6 +793,11 @@ impl Brain {
         // REM-3: 跨 Anchor 发现
         if let Err(e) = self.rem_cross_anchor_discovery(&mut report) {
             eprintln!("[dream] REM-3 error: {}", e);
+        }
+
+        // REM-4: v0.8.0 Cross-plan schema emergence
+        if let Err(e) = schema::cross_plan_schema_emergence(self) {
+            eprintln!("[dream] REM-4 cross-plan-schema error: {}", e);
         }
 
         self.growth.dream_cycles += 1;
@@ -812,6 +1212,362 @@ impl Brain {
         Ok(())
     }
 
+    // ── v0.8.0: Plan 管理方法 ─────────────────────────────
+
+    /// 1. Set the name of a plan.
+    pub fn set_plan_name(&self, plan_id: &str, name: &str) -> Result<()> {
+        let mut txn = self.storage.begin_write()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut plan = self.storage.get_plan(&txn, plan_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            .ok_or_else(|| MemHopError::Storage(format!("plan {} not found", plan_id)))?;
+        plan.name = name.to_string();
+        self.storage.put_plan(&mut txn, &plan)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        txn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 2. Get the plan tree. If plan_id is None, returns all root plans.
+    ///    If plan_id is Some, returns that plan and all its descendants (flat list).
+    pub fn get_plan_tree(
+        &self,
+        plan_id: Option<&str>,
+    ) -> Result<Vec<crate::engram::PlanNode>> {
+        let txn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let all = self.storage.get_all_plans(&txn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        match plan_id {
+            None => Ok(all.into_iter().filter(|p| p.parent_id.is_none()).collect()),
+            Some(pid) => {
+                let mut result = Vec::new();
+                let mut queue: Vec<String> = vec![pid.to_string()];
+                while let Some(id) = queue.pop() {
+                    for plan in &all {
+                        if plan.id == id {
+                            result.push(plan.clone());
+                            break;
+                        }
+                    }
+                    for plan in &all {
+                        if plan.parent_id.as_deref() == Some(&id) {
+                            queue.push(plan.id.clone());
+                        }
+                    }
+                }
+                Ok(result)
+            }
+        }
+    }
+
+    /// 3. Set the LLM provider for optional Dream-layer enhancement.
+    pub fn set_llm(&mut self, llm: Box<dyn LlmProvider>) {
+        self.llm = Some(llm);
+    }
+
+    /// 4. Complete a plan: change state to Completed, set completed_at,
+    ///    optionally generate compressed summary via LLM.
+    ///    All-or-nothing transaction semantics.
+    pub fn complete_plan(&mut self, plan_id: &str) -> Result<()> {
+        let mut txn = self.storage.begin_write()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut plan = self.storage.get_plan(&txn, plan_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            .ok_or_else(|| MemHopError::Storage(format!("plan {} not found", plan_id)))?;
+
+        let now = now_millis();
+        plan.state = PlanState::Completed;
+        plan.completed_at = Some(now);
+
+        // Generate compressed summary if LLM is available
+        if let Some(ref llm) = self.llm {
+            let turns = self.storage.get_dialogues_by_plan(&txn, plan_id)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            if !turns.is_empty() {
+                let content: String = turns.iter()
+                    .flat_map(|t| vec![t.user_input.as_str(), t.agent_response.as_str()])
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let prompt = crate::llm_provider::PromptTemplates::summarize(&content);
+                match llm.generate(&prompt, 256) {
+                    Ok(summary) => { plan.compressed_summary = Some(summary); }
+                    Err(e) => eprintln!("[brain] LLM summary failed for plan {}: {}", plan_id, e),
+                }
+            }
+        }
+
+        self.storage.put_plan(&mut txn, &plan)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        txn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 5. Compress a plan's dialogue turns into a summary.
+    pub fn compress_plan(&mut self, plan_id: &str) -> Result<String> {
+        let rtxn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let turns = self.storage.get_dialogues_by_plan(&rtxn, plan_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(rtxn);
+
+        let summary = if let Some(ref llm) = self.llm {
+            let content: String = turns.iter()
+                .flat_map(|t| vec![t.user_input.as_str(), t.agent_response.as_str()])
+                .collect::<Vec<_>>()
+                .join("\n");
+            let prompt = crate::llm_provider::PromptTemplates::summarize(&content);
+            llm.generate(&prompt, 256).unwrap_or_else(|e| {
+                eprintln!("[brain] LLM summary failed: {}", e);
+                fallback_summary(&turns)
+            })
+        } else {
+            fallback_summary(&turns)
+        };
+
+        let mut wtxn = self.storage.begin_write()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut plan = self.storage.get_plan(&wtxn, plan_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            .ok_or_else(|| MemHopError::Storage(format!("plan {} not found", plan_id)))?;
+        plan.compressed_summary = Some(summary.clone());
+        self.storage.put_plan(&mut wtxn, &plan)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        wtxn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+        Ok(summary)
+    }
+
+    /// 6a. Compress a Version-level plan: recursively merge child summaries.
+    pub fn compress_version(&mut self, version_id: &str) -> Result<String> {
+        self.compress_level(version_id)
+    }
+
+    /// 6b. Compress a MajorVersion-level plan: recursively merge child summaries.
+    pub fn compress_major_version(&mut self, major_version_id: &str) -> Result<String> {
+        self.compress_level(major_version_id)
+    }
+
+    /// Helper: compress a parent plan by collecting child summaries.
+    fn compress_level(&mut self, parent_id: &str) -> Result<String> {
+        let rtxn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let all = self.storage.get_all_plans(&rtxn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(rtxn);
+
+        let children: Vec<crate::engram::PlanNode> = all.into_iter()
+            .filter(|p| p.parent_id.as_deref() == Some(parent_id))
+            .collect();
+
+        let merged = if let Some(ref llm) = self.llm {
+            let summaries: Vec<&str> = children.iter()
+                .filter_map(|c| c.compressed_summary.as_deref())
+                .collect();
+            if summaries.is_empty() {
+                "(no child summaries)".to_string()
+            } else {
+                let prompt = format!(
+                    "Merge the following summaries into one concise summary:\n\n{}\n\nMerged:",
+                    summaries.join("\n---\n")
+                );
+                llm.generate(&prompt, 256).unwrap_or_else(|_| summaries.join(" | "))
+            }
+        } else {
+            children.iter()
+                .filter_map(|c| c.compressed_summary.as_deref())
+                .collect::<Vec<_>>()
+                .join(" | ")
+        };
+
+        let mut wtxn = self.storage.begin_write()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut plan = self.storage.get_plan(&wtxn, parent_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            .ok_or_else(|| MemHopError::Storage(format!("plan {} not found", parent_id)))?;
+        plan.compressed_summary = Some(merged.clone());
+        self.storage.put_plan(&mut wtxn, &plan)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        wtxn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+        Ok(merged)
+    }
+
+    /// 7. Get all domain-level plan names (deduplicated).
+    pub fn get_all_domains(&self) -> Result<Vec<String>> {
+        let txn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let plans = self.storage.get_all_plans(&txn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut domains: Vec<String> = plans.into_iter()
+            .filter(|p| p.level == PlanLevel::Domain)
+            .map(|p| p.name)
+            .collect();
+        domains.sort();
+        domains.dedup();
+        Ok(domains)
+    }
+
+    /// 8. Get archived dialogue turns for a plan, sorted by timestamp.
+    pub fn archived_dialogue(
+        &self,
+        plan_id: &str,
+    ) -> Result<Vec<crate::engram::DialogueTurn>> {
+        let txn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        self.storage.get_dialogues_by_plan(&txn, plan_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
+    /// 9. Randomly sample up to max_turns dialogue turns from a plan.
+    pub fn extract_dialogue_sample(
+        &self,
+        plan_id: &str,
+        max_turns: usize,
+    ) -> Result<Vec<crate::engram::DialogueTurn>> {
+        let txn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let turns = self.storage.get_dialogues_by_plan(&txn, plan_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        if turns.len() <= max_turns {
+            return Ok(turns);
+        }
+        // Simple random sampling: shuffle and take first max_turns
+        use rand::seq::SliceRandom;
+        let mut rng = rand::thread_rng();
+        let mut sample = turns;
+        sample.shuffle(&mut rng);
+        sample.truncate(max_turns);
+        Ok(sample)
+    }
+
+    /// 10. Aggregate tone statistics over a time range.
+    pub fn get_tone_aggregates(
+        &self,
+        start_time: i64,
+        end_time: i64,
+    ) -> Result<crate::engram::ToneAggregate> {
+        let txn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let all_turns = self.storage.all_dialogues(&txn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(txn);
+
+        let turns: Vec<&crate::engram::DialogueTurn> = all_turns.iter()
+            .filter(|t| t.timestamp >= start_time && t.timestamp <= end_time)
+            .collect();
+
+        if turns.is_empty() {
+            return Ok(crate::engram::ToneAggregate {
+                time_range_start: start_time,
+                time_range_end: end_time,
+                avg_valence: 0.0,
+                avg_arousal: 0.0,
+                valence_trend: 0.0,
+                top_tone_tags: Vec::new(),
+                filler_ratio_trend: 0.0,
+            });
+        }
+
+        let n = turns.len() as f32;
+        let sum_valence: f32 = turns.iter().map(|t| t.user_tone.valence).sum();
+        let sum_arousal: f32 = turns.iter().map(|t| t.user_tone.arousal).sum();
+        let avg_valence = sum_valence / n;
+        let avg_arousal = sum_arousal / n;
+
+        // Valence trend: early half vs late half
+        let mid = turns.len() / 2;
+        let early_val: f32 = turns[..mid].iter().map(|t| t.user_tone.valence).sum::<f32>() / mid as f32;
+        let late_val: f32 = turns[mid..].iter().map(|t| t.user_tone.valence).sum::<f32>() / (turns.len() - mid) as f32;
+        let valence_trend = late_val - early_val;
+
+        // Tone tag frequency
+        let mut tag_counts: HashMap<&str, u32> = HashMap::new();
+        for t in &turns {
+            for tag in &t.user_tone.tone_tags {
+                *tag_counts.entry(tag.as_str()).or_default() += 1;
+            }
+        }
+        let mut top_tone_tags: Vec<(String, u32)> = tag_counts.into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect();
+        top_tone_tags.sort_by(|a, b| b.1.cmp(&a.1));
+        top_tone_tags.truncate(10);
+
+        // Filler ratio trend
+        let early_fill: f32 = turns[..mid].iter().map(|t| t.user_tone.filler_ratio).sum::<f32>() / mid as f32;
+        let late_fill: f32 = turns[mid..].iter().map(|t| t.user_tone.filler_ratio).sum::<f32>() / (turns.len() - mid) as f32;
+        let filler_ratio_trend = late_fill - early_fill;
+
+        Ok(crate::engram::ToneAggregate {
+            time_range_start: start_time,
+            time_range_end: end_time,
+            avg_valence,
+            avg_arousal,
+            valence_trend,
+            top_tone_tags,
+            filler_ratio_trend,
+        })
+    }
+
+    /// 11. Get topic distribution across all domain-level plans.
+    pub fn get_topic_distribution(
+        &self,
+    ) -> Result<crate::engram::TopicDistribution> {
+        let txn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let plans = self.storage.get_all_plans(&txn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(txn);
+
+        let mut domains: HashMap<String, crate::engram::DomainStats> = HashMap::new();
+        for plan in &plans {
+            if plan.level != PlanLevel::Domain {
+                continue;
+            }
+            let entry = domains.entry(plan.name.clone()).or_insert_with(|| {
+                crate::engram::DomainStats {
+                    plan_count: 0,
+                    dialogue_count: 0,
+                    avg_valence: 0.0,
+                    top_keywords: Vec::new(),
+                }
+            });
+            entry.plan_count += 1;
+            entry.dialogue_count += plan.dialogue_count;
+        }
+
+        Ok(crate::engram::TopicDistribution { domains })
+    }
+
+    /// 12. Search chat history by n-gram overlap.
+    pub fn search_chat_history(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<crate::engram::DialogueTurn>> {
+        let txn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let all_turns = self.storage.all_dialogues(&txn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(txn);
+
+        let query_lower = query.to_lowercase();
+        let mut scored: Vec<(f32, crate::engram::DialogueTurn)> = all_turns.into_iter()
+            .map(|t| {
+                let user_score = ngram_overlap(&query_lower, &t.user_input.to_lowercase());
+                let agent_score = ngram_overlap(&query_lower, &t.agent_response.to_lowercase());
+                let score = user_score.max(agent_score);
+                (score, t)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+
+        Ok(scored.into_iter().filter(|(s, _)| *s > 0.0).map(|(_, t)| t).collect())
+    }
+
     // ── 访问器 ───────────────────────────────────────────
 
     pub fn cortex_len(&self) -> usize {
@@ -851,15 +1607,40 @@ fn now_millis() -> i64 {
         .as_millis() as i64
 }
 
+/// Compute character-level trigram overlap between query and text.
+fn ngram_overlap(query: &str, text: &str) -> f32 {
+    if query.is_empty() || text.len() < 3 {
+        return 0.0;
+    }
+    let q_trigrams: HashSet<&[u8]> = query.as_bytes().windows(3).collect();
+    let t_trigrams: HashSet<&[u8]> = text.as_bytes().windows(3).collect();
+    if q_trigrams.is_empty() {
+        return 0.0;
+    }
+    let overlap = q_trigrams.intersection(&t_trigrams).count();
+    overlap as f32 / q_trigrams.len() as f32
+}
+
 /// Compute keyword overlap score between two keyword lists.
 fn keyword_overlap(a: &[String], b: &[String]) -> f32 {
     if a.is_empty() || b.is_empty() {
         return 0.0;
     }
-    let set_a: HashSet<&str> = a.iter().map(|s| s.as_str()).collect();
-    let set_b: HashSet<&str> = b.iter().map(|s| s.as_str()).collect();
+    let set_a: HashSet<&str> = a.iter().map(|s: &String| s.as_str()).collect();
+    let set_b: HashSet<&str> = b.iter().map(|s: &String| s.as_str()).collect();
     let intersection = set_a.intersection(&set_b).count();
     intersection as f32 / set_a.len().min(set_b.len()) as f32
+}
+
+/// Fallback summary: concatenate first N turns' content when no LLM is available.
+fn fallback_summary(turns: &[crate::engram::DialogueTurn]) -> String {
+    let n = turns.len().min(5);
+    turns.iter()
+        .take(n)
+        .flat_map(|t| vec![t.user_input.as_str(), t.agent_response.as_str()])
+        .map(|s| s.chars().take(80).collect::<String>())
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 // ── 测试 ─────────────────────────────────────────────────────
@@ -886,6 +1667,9 @@ mod tests {
             protection: Protection::Normal,
             manual_links: Vec::new(),
             meta: HashMap::new(),
+            plan_id: None,
+            agent_response: None,
+            dialogue_timestamp: None,
         }
     }
 
@@ -893,8 +1677,8 @@ mod tests {
     fn test_brain_open_and_perceive() {
         let path = test_storage_path();
         let mut brain = Brain::open(&path, BrainConfig::default(), None).unwrap();
-        let id = brain.perceive(simple_input("hello world", "s1")).unwrap();
-        assert!(!id.is_empty());
+        let output = brain.perceive(simple_input("hello world", "s1")).unwrap();
+        assert!(!output.engram_id.is_empty());
         assert_eq!(brain.cortex_len(), 1);
         assert_eq!(brain.hippocampus_len(), 1);
     }

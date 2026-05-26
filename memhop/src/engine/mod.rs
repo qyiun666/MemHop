@@ -141,6 +141,7 @@ impl MemHop {
             hopfield_candidates: all.len(),
             spread_steps: 1,
             post_inhibition_count: scored.len(),
+            pgt_layer: None,
         };
 
         let results: Vec<Engram> = scored.into_iter()
