@@ -1,192 +1,189 @@
-//! MemHop engine — pure Rust.
+//! MemHop engine — lightweight wrapper around LmdbStorage for v0.7.3+.
 
 pub(crate) mod helpers;
-pub(crate) mod store;
-pub(crate) mod recall;
-pub(crate) mod tree;
-pub(crate) mod search;
 
-use crate::encoder::NgramEncoder;
+use half::f16;
+
+use crate::engram::Engram;
+use crate::encoder::{Encoder, NgramEncoder};
 use crate::error::{MemHopError, Result};
-use crate::types::{DomainTree, VECTOR_DIM};
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use crate::storage::LmdbStorage;
+use crate::types::{PerceptionInput, RecallRequest, RecallResponse, RecallTrace};
+use std::sync::{Arc, Mutex};
+use std::collections::HashMap;
+use std::time::Instant;
 
-// ── EngineInner ───────────────────────────────────────────
-
-pub(crate) struct EngineInner {
-    pub encoder: NgramEncoder,
-    pub storage_path: String,
-    pub confidence_threshold: f32,
-    pub closed: bool,
-    pub dirty_patterns: HashSet<usize>,
-    pub trees: HashMap<String, DomainTree>,
-    pub default_tree: String,
-    /// Number of store() calls since last dream trigger.
-    pub store_count_since_dream: usize,
+/// Growth statistics.
+pub struct GrowthState {
+    pub total_engrams_created: u64,
+    #[allow(dead_code)]
+    pub total_forgotten: u64,
+    pub total_recalls: u64,
+    pub dream_cycles: u64,
 }
 
-// ── MemHop — public API ──────────────────────────────────
+impl GrowthState {
+    pub fn new() -> Self {
+        GrowthState {
+            total_engrams_created: 0,
+            total_forgotten: 0,
+            total_recalls: 0,
+            dream_cycles: 0,
+        }
+    }
+}
 
+impl Default for GrowthState {
+    fn default() -> Self { Self::new() }
+}
+
+/// Brain — the v0.7.3 public API for associative memory.
 pub struct MemHop {
-    pub(crate) inner: Arc<RwLock<EngineInner>>,
+    pub(crate) storage: Arc<LmdbStorage>,
+    pub(crate) growth: Arc<Mutex<GrowthState>>,
+    pub(crate) closed: Arc<Mutex<bool>>,
 }
 
 impl MemHop {
-    /// Open (or create) a MemHop database at `path`.
+    /// Open a Brain database at the given path. Creates it if it does not exist.
     pub fn open(path: &str) -> Result<Self> {
-        let inner = EngineInner::open(path)?;
+        let storage = LmdbStorage::open(path)
+            .map_err(|e| MemHopError::Internal(format!("storage open: {}", e)))?;
         Ok(MemHop {
-            inner: Arc::new(RwLock::new(inner)),
+            storage: Arc::new(storage),
+            growth: Arc::new(Mutex::new(GrowthState::new())),
+            closed: Arc::new(Mutex::new(false)),
         })
     }
 
-    /// Close the engine, persisting all indices and patterns.
+    /// Close the engine, flushing all pending writes.
     pub fn close(&self) -> Result<()> {
-        let mut engine = self.inner.write().map_err(|e| {
-            MemHopError::Internal(format!("lock poisoned: {}", e))
-        })?;
-        engine.close()
+        let mut closed = self.closed.lock().map_err(|e| MemHopError::Internal(e.to_string()))?;
+        *closed = true;
+        self.storage.close()
+            .map_err(|e| MemHopError::Internal(format!("close: {}", e)))
     }
 
-    /// Number of memories across all trees.
-    pub fn count(&self) -> usize {
-        let engine = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        engine.trees.values().map(|t| t.hopfield.len()).sum()
+    /// Store a perception (episode) into hippocampus.
+    pub fn store(&self, input: &PerceptionInput) -> Result<String> {
+        let mut wtxn = self.storage.begin_write()
+            .map_err(|e| MemHopError::Internal(format!("write txn: {}", e)))?;
+        let now = helpers::now_millis();
+        let id = format!("e_{:020}", now);
+
+        let engram = Engram::new_episode(
+            id.clone(),
+            input.content.clone(),
+            input.vector.clone(),
+            Vec::new(),
+            input.emotional_state.valence,
+            input.emotional_state.arousal,
+            now,
+        );
+
+        self.storage.put_hippocampus(&mut wtxn, &id, &engram)
+            .map_err(|e| MemHopError::Internal(format!("put: {}", e)))?;
+        wtxn.commit()
+            .map_err(|e| MemHopError::Internal(format!("commit: {}", e)))?;
+
+        let mut growth = self.growth.lock().map_err(|e| MemHopError::Internal(e.to_string()))?;
+        growth.total_engrams_created += 1;
+
+        // Push to cortex (if configured)
+        crate::cortex::push_to_cortex(&engram);
+
+        Ok(id)
     }
 
-    /// Statistics across all trees.
-    pub fn stats(&self) -> HashMap<String, serde_json::Value> {
-        let engine = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        engine.stats()
-    }
+    /// Recall by text or query vector — returns closest matches from hippocampus + neocortex.
+    pub fn recall(&self, req: &RecallRequest) -> Result<RecallResponse> {
+        let start = Instant::now();
 
-    // ── Delegation methods ────────────────────────────────
-
-    pub fn create_tree(&mut self, name: &str) -> Result<()> {
-        let mut engine = self.inner.write().map_err(|e| MemHopError::Internal(format!("lock: {}", e)))?;
-        engine.create_tree(name)
-    }
-    pub fn remove_tree(&mut self, name: &str) -> Result<()> {
-        let mut engine = self.inner.write().map_err(|e| MemHopError::Internal(format!("lock: {}", e)))?;
-        engine.remove_tree(name)
-    }
-    pub fn list_trees(&self) -> Vec<String> {
-        let engine = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        engine.list_trees()
-    }
-    pub fn store(&mut self, text: &str, tree: Option<&str>, opts: &crate::types::StoreOptions) -> Result<String> {
-        let mut engine = self.inner.write().map_err(|e| MemHopError::Internal(format!("lock: {}", e)))?;
-        engine.store(text, tree, opts)
-    }
-    pub fn recall(&self, query: &str, tree: Option<&str>) -> Result<Option<crate::types::Memory>> {
-        let engine = self.inner.read().map_err(|e| MemHopError::Internal(format!("lock: {}", e)))?;
-        engine.recall(query, tree)
-    }
-    pub fn recall_topk(&self, query: &str, k: usize, tree: Option<&str>) -> Vec<crate::types::Memory> {
-        let engine = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        engine.recall_topk(query, k, tree)
-    }
-    pub fn forget(&mut self, memory_id: &str) -> Result<bool> {
-        let mut engine = self.inner.write().map_err(|e| MemHopError::Internal(format!("lock: {}", e)))?;
-        engine.forget(memory_id)
-    }
-    pub fn update(&mut self, memory_id: &str, text: Option<&str>, meta: Option<&HashMap<String, serde_json::Value>>) -> Result<bool> {
-        let mut engine = self.inner.write().map_err(|e| MemHopError::Internal(format!("lock: {}", e)))?;
-        engine.update(memory_id, text, meta)
-    }
-    pub fn search(&self, filters: &serde_json::Value, limit: usize) -> Result<Vec<crate::types::Memory>> {
-        let engine = self.inner.read().map_err(|e| MemHopError::Internal(format!("lock: {}", e)))?;
-        let mut criteria_map = HashMap::new();
-        if let Some(obj) = filters.as_object() {
-            for (k, v) in obj { criteria_map.insert(k.clone(), v.clone()); }
-        }
-        let criteria = crate::filter::parse_filters(&criteria_map)?;
-        engine.search(&criteria, limit)
-    }
-    pub fn recent(&self, limit: usize, tree: Option<&str>) -> Result<Vec<crate::types::Memory>> {
-        let engine = self.inner.read().map_err(|e| MemHopError::Internal(format!("lock: {}", e)))?;
-        engine.recent(limit, tree)
-    }
-    pub fn dream(&mut self, config: Option<&crate::types::DreamConfig>) {
-        let dream_cfg = match config {
-            Some(cfg) => crate::dream::DreamConfig::from(cfg.clone()),
-            None => crate::dream::DreamConfig::default(),
+        // 1. Query vector
+        let query: Vec<f32> = match &req.query_vector {
+            Some(v) => v.iter().map(|x| x.to_f32()).collect(),
+            None => {
+                let encoder = NgramEncoder::new(crate::engram::VECTOR_DIM);
+                let encoded = encoder.encode(&req.query);
+                encoded.dense.iter().map(|&x| x.to_f32()).collect()
+            }
         };
-        let inner = self.inner.clone();
-        let _ = crate::dream::DreamMode::new(dream_cfg).dream(Some(&inner));
-    }
-}
+        let query_f16: Vec<f16> = query.iter().map(|&x| f16::from_f32(x)).collect();
 
-impl EngineInner {
-    fn open(path: &str) -> Result<Self> {
-        let storage_path = path.to_string();
-        let default_tree = DomainTree::create(&storage_path, "default")?;
+        // 2. Scan hippocampus + neocortex
+        let rtxn = match self.storage.begin_read() {
+            Ok(t) => t,
+            Err(e) => return Err(MemHopError::Internal(format!("read txn: {}", e))),
+        };
 
-        Ok(EngineInner {
-            encoder: NgramEncoder::new(VECTOR_DIM),
-            storage_path,
-            confidence_threshold: 0.3,
-            closed: false,
-            dirty_patterns: HashSet::new(),
-            trees: {
-                let mut m = HashMap::new();
-                m.insert("default".to_string(), default_tree);
-                m
-            },
-            default_tree: "default".to_string(),
-            store_count_since_dream: 0,
+        let all = match self.storage.all_hippocampus_entries(&rtxn) {
+            Ok(a) => a,
+            Err(e) => return Err(MemHopError::Internal(format!("hippocampus entries: {}", e))),
+        };
+
+        let mut scored: Vec<(String, f32)> = all.iter()
+            .filter(|(_, e)| e.kind == crate::engram::EngramKind::Episode)
+            .filter(|(_, e)| !e.is_archived)
+            .map(|(id, e)| {
+                let sim = crate::hopfield::cosine_similarity_f16(&query_f16, &e.vector);
+                (id.clone(), sim)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let top_k = if req.spread_top_k > 0 { req.spread_top_k } else { 5 };
+        scored.truncate(top_k);
+
+        let latency_us = start.elapsed().as_micros() as u64;
+        let trace = RecallTrace {
+            latency_us,
+            gated_anchors: req.attention_anchors.clone(),
+            hopfield_candidates: all.len(),
+            spread_steps: 1,
+            post_inhibition_count: scored.len(),
+        };
+
+        let results: Vec<Engram> = scored.into_iter()
+            .filter_map(|(id, _)| all.iter().find(|(i, _)| *i == id))
+            .map(|(_, e)| e.clone())
+            .collect();
+
+        drop(rtxn);
+
+        let mut growth = self.growth.lock().map_err(|e| MemHopError::Internal(e.to_string()))?;
+        growth.total_recalls += 1;
+
+        Ok(RecallResponse {
+            working_memory: Vec::new(),
+            associations: results,
+            schemas: Vec::new(),
+            emotional_echoes: Vec::new(),
+            conflicts: Vec::new(),
+            trace,
         })
     }
 
-    fn close(&mut self) -> Result<()> {
-        if self.closed {
-            return Ok(());
-        }
-        self.closed = true;
-        for tree in self.trees.values_mut() {
-            tree.storage.close().map_err(MemHopError::from)?;
-        }
-        Ok(())
+    /// Count total engrams.
+    pub fn count(&self) -> usize {
+        let rtxn = match self.storage.begin_read() {
+            Ok(t) => t,
+            Err(_) => return 0,
+        };
+        self.storage.all_engram_ids(&rtxn).map(|v| v.len()).unwrap_or(0)
     }
 
-    fn stats(&self) -> HashMap<String, serde_json::Value> {
+    /// Statistics.
+    pub fn stats(&self) -> HashMap<String, serde_json::Value> {
         let mut s = HashMap::new();
-        let total: usize = self.trees.values().map(|t| t.hopfield.len()).sum();
-        s.insert("total_memories".to_string(), serde_json::Value::Number(total.into()));
-        s.insert("tree_count".to_string(), serde_json::Value::Number(self.trees.len().into()));
-        s.insert("confidence_threshold".to_string(), serde_json::Value::Number(
-            serde_json::Number::from_f64(self.confidence_threshold as f64).unwrap_or(serde_json::Number::from(0)),
+        let count = self.count();
+        let growth = self.growth.lock().ok();
+        s.insert("total_memories".to_string(), serde_json::Value::Number(count.into()));
+        s.insert("total_recalls".to_string(), serde_json::Value::Number(
+            growth.as_ref().map(|g| g.total_recalls).unwrap_or(0).into()
+        ));
+        s.insert("dream_cycles".to_string(), serde_json::Value::Number(
+            growth.as_ref().map(|g| g.dream_cycles).unwrap_or(0).into()
         ));
         s
-    }
-
-    fn check_closed(&self) -> Result<()> {
-        if self.closed {
-            return Err(MemHopError::Internal("engine is closed".into()));
-        }
-        Ok(())
-    }
-
-    fn get_tree(&self, name: Option<&str>) -> Result<&DomainTree> {
-        let tree_name = name.unwrap_or(&self.default_tree);
-        self.trees.get(tree_name).ok_or_else(|| {
-            MemHopError::NotFound(format!("tree '{}' not found", tree_name))
-        })
-    }
-}
-
-impl DomainTree {
-    fn create(storage_path: &str, name: &str) -> Result<Self> {
-        let tree_path = format!("{}/{}", storage_path, name);
-        let storage = crate::storage::LmdbStorage::open(&tree_path)
-            .map_err(MemHopError::from)?;
-        Ok(DomainTree {
-            name: name.to_string(),
-            hopfield: crate::hopfield::ModernHopfield::new(crate::types::VECTOR_DIM, 8.0),
-            sparse_index: crate::index::SparseIndex::new(),
-            meta_index: crate::meta_index::MetaIndex::new(),
-            storage,
-        })
     }
 }

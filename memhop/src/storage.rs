@@ -1,35 +1,38 @@
-//! LMDB-backed persistent storage.
-#![allow(dead_code)] // batch/index persistence methods reserved for v0.6.x optimization
+//! LMDB storage layer for the Brain — 6 sub-databases.
 //!
-//! Four logical databases within a single env:
-//!     p: memory_id → f16 embedding vector (bincode)
-//!     b: memory_id → zstd-compressed text + meta (JSON)
-//!     m: memory_id → timestamp + importance + protection (bincode)
-//!     i: index_name → serialized index snapshot (bincode)
+//! Sub-databases:
+//!   engrams         — id → bincode(Engram)
+//!   hippocampus     — id → bincode(Engram)
+//!   graph_edges     — source_id → bincode(Vec<Association>)
+//!   schemas         — id → bincode(SchemaExtra)
+//!   anchor_index    — anchor_name → bincode(Vec<engram_id>)
+//!   config          — key → bincode(value)
 
-use half::f16;
-use std::collections::HashMap;
+#![allow(dead_code)]
+
+use heed::types::{Bytes, Str};
+use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
 use std::path::Path;
 
-use heed::{Database, Env, EnvOpenOptions};
-use heed::types::{Bytes, Str};
-use serde::{Deserialize, Serialize};
+use crate::engram::{Association, Engram, SchemaExtra};
 
-// ── Error type ─────────────────────────────────────────────
+// ── StorageError ──────────────────────────────────────────────
 
 #[derive(Debug)]
 pub enum StorageError {
-    Lmdb(String),
-    Serialization(String),
-    NotFound(String),
+    Open(String),
+    Read(String),
+    Write(String),
+    Close(String),
 }
 
 impl std::fmt::Display for StorageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            StorageError::Lmdb(msg) => write!(f, "LMDB error: {}", msg),
-            StorageError::Serialization(msg) => write!(f, "Serialization error: {}", msg),
-            StorageError::NotFound(msg) => write!(f, "Not found: {}", msg),
+            StorageError::Open(msg) => write!(f, "open: {}", msg),
+            StorageError::Read(msg) => write!(f, "read: {}", msg),
+            StorageError::Write(msg) => write!(f, "write: {}", msg),
+            StorageError::Close(msg) => write!(f, "close: {}", msg),
         }
     }
 }
@@ -38,509 +41,509 @@ impl std::error::Error for StorageError {}
 
 impl From<heed::Error> for StorageError {
     fn from(err: heed::Error) -> Self {
-        StorageError::Lmdb(err.to_string())
+        StorageError::Open(err.to_string())
     }
 }
 
-// ── Records ────────────────────────────────────────────────
+// ── Sub-database handles ─────────────────────────────────────
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MetaRecord {
-    pub created_at: i64,
-    pub importance: f32,
-    pub protection: u8,
-    pub is_dormant: bool,
-    pub key: Option<String>,
-    #[serde(default)]
-    pub importance_decay_rate: Option<f32>,
+pub(crate) struct BrainDb {
+    pub engrams: Database<Str, Bytes>,
+    pub hippocampus: Database<Str, Bytes>,
+    pub graph_edges: Database<Str, Bytes>,
+    pub schemas: Database<Str, Bytes>,
+    pub anchor_index: Database<Str, Bytes>,
+    pub config: Database<Str, Bytes>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BlobRecord {
-    pub text: String,
-    pub meta: HashMap<String, serde_json::Value>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_type: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub blob_data: Option<Vec<u8>>,
-}
+// ── LmdbStorage ──────────────────────────────────────────────
 
-// ── LmdbStorage ────────────────────────────────────────────
-
+/// LMDB storage for the Brain — manages open/close/read/write for 6 sub-dbs.
 pub struct LmdbStorage {
     env: Env,
-    patterns_db: Database<Bytes, Bytes>,
-    blobs_db: Database<Bytes, Bytes>,
-    meta_db: Database<Bytes, Bytes>,
-    index_db: Database<Str, Bytes>,
+    pub(crate) db: BrainDb,
 }
 
-// Safety: heed::Env and Database are Send + Sync
 unsafe impl Send for LmdbStorage {}
 unsafe impl Sync for LmdbStorage {}
 
 impl LmdbStorage {
-    const MAP_SIZE: usize = 1024 * 1024 * 1024; // 1 GB
-    const MAX_DBS: u32 = 4;
-    const ZSTD_LEVEL: i32 = 3;
-
-    /// Open or create the database environment.
+    /// Open (or create) an LMDB environment at `path` and create/open the 6 sub-databases.
     pub fn open(path: &str) -> Result<Self, StorageError> {
-        let dir = Path::new(path);
-        if !dir.exists() {
-            std::fs::create_dir_all(dir)
-                .map_err(|e| StorageError::Lmdb(format!("failed to create directory: {}", e)))?;
-        }
-
+        let db_path = Path::new(path);
+        std::fs::create_dir_all(db_path)
+            .map_err(|e| StorageError::Open(format!("create dir {}: {}", path, e)))?;
+        // 2GiB map size, 2 writers.
         let env = unsafe {
             EnvOpenOptions::new()
-                .map_size(Self::MAP_SIZE)
-                .max_dbs(Self::MAX_DBS)
-                .open(dir)?
+                .map_size(2 * 1024 * 1024 * 1024)
+                .max_readers(128)
+                .max_dbs(8)
+                .open(db_path)
+                .map_err(|e| StorageError::Open(format!("env open: {}", e)))?
         };
 
-        let mut wtxn = env.write_txn()?;
+        let mut wtxn = env
+            .write_txn()
+            .map_err(|e| StorageError::Open(format!("write txn: {}", e)))?;
 
-        let patterns_db = env.create_database::<Bytes, Bytes>(&mut wtxn, Some("p"))?;
-        let blobs_db = env.create_database::<Bytes, Bytes>(&mut wtxn, Some("b"))?;
-        let meta_db = env.create_database::<Bytes, Bytes>(&mut wtxn, Some("m"))?;
-        let index_db = env.create_database::<Str, Bytes>(&mut wtxn, Some("i"))?;
+        let engrams = env
+            .create_database(&mut wtxn, Some("engrams"))
+            .map_err(|e| StorageError::Open(format!("engrams db: {}", e)))?;
+        let hippocampus = env
+            .create_database(&mut wtxn, Some("hippocampus"))
+            .map_err(|e| StorageError::Open(format!("hippocampus db: {}", e)))?;
+        let graph_edges = env
+            .create_database(&mut wtxn, Some("graph_edges"))
+            .map_err(|e| StorageError::Open(format!("graph_edges db: {}", e)))?;
+        let schemas = env
+            .create_database(&mut wtxn, Some("schemas"))
+            .map_err(|e| StorageError::Open(format!("schemas db: {}", e)))?;
+        let anchor_index = env
+            .create_database(&mut wtxn, Some("anchor_index"))
+            .map_err(|e| StorageError::Open(format!("anchor_index db: {}", e)))?;
+        let config = env
+            .create_database(&mut wtxn, Some("config"))
+            .map_err(|e| StorageError::Open(format!("config db: {}", e)))?;
 
-        wtxn.commit()?;
+        wtxn
+            .commit()
+            .map_err(|e| StorageError::Open(format!("commit: {}", e)))?;
 
         Ok(LmdbStorage {
             env,
-            patterns_db,
-            blobs_db,
-            meta_db,
-            index_db,
+            db: BrainDb {
+                engrams,
+                hippocampus,
+                graph_edges,
+                schemas,
+                anchor_index,
+                config,
+            },
         })
     }
 
-    /// Flush data to disk.
+    pub fn begin_read(&self) -> Result<RoTxn<'_>, StorageError> {
+        self.env
+            .read_txn()
+            .map_err(|e| StorageError::Read(format!("begin read: {}", e)))
+    }
+
+    pub fn begin_write(&self) -> Result<RwTxn<'_>, StorageError> {
+        self.env
+            .write_txn()
+            .map_err(|e| StorageError::Write(format!("begin write: {}", e)))
+    }
+
     pub fn close(&self) -> Result<(), StorageError> {
-        self.env.force_sync()?;
+        // LMDB env is closed on drop; nothing explicit to do.
         Ok(())
     }
 
-    /// Write a single memory record (one write transaction).
-    pub fn put(
+    // ── Engram read/write ──────────────────────────────────────
+
+    pub fn put_engram(
         &self,
+        txn: &mut RwTxn<'_>,
         id: &str,
-        pattern: &[f16],
-        blob: &BlobRecord,
-        meta: &MetaRecord,
+        engram: &Engram,
     ) -> Result<(), StorageError> {
-        let mut wtxn = self.env.write_txn()?;
-
-        let key = id.as_bytes();
-        self.patterns_db.put(&mut wtxn, key, &serialize_pattern(pattern)?)?;
-        self.blobs_db.put(&mut wtxn, key, &serialize_blob(blob)?)?;
-        self.meta_db.put(&mut wtxn, key, &serialize_meta(meta)?)?;
-
-        wtxn.commit()?;
-        Ok(())
+        let bytes = bincode::serialize(engram)
+            .map_err(|e| StorageError::Write(format!("serialize engram: {}", e)))?;
+        self.db
+            .engrams
+            .put(txn, id, &bytes)
+            .map_err(|e| StorageError::Write(format!("put engram: {}", e)))
     }
 
-    /// Batch write in a single transaction.
-    pub fn put_batch(
+    pub fn get_engram(
         &self,
-        items: &[(String, Vec<f16>, BlobRecord, MetaRecord)],
-    ) -> Result<(), StorageError> {
-        let mut wtxn = self.env.write_txn()?;
-
-        for (id, pattern, blob, meta) in items {
-            let key = id.as_bytes();
-            self.patterns_db.put(&mut wtxn, key, &serialize_pattern(pattern)?)?;
-            self.blobs_db.put(&mut wtxn, key, &serialize_blob(blob)?)?;
-            self.meta_db.put(&mut wtxn, key, &serialize_meta(meta)?)?;
+        txn: &RoTxn<'_>,
+        id: &str,
+    ) -> Result<Option<Engram>, StorageError> {
+        match self.db.engrams.get(txn, id) {
+            Ok(Some(bytes)) => {
+                let engram: Engram = bincode::deserialize(bytes)
+                    .map_err(|e| StorageError::Read(format!("deserialize engram: {}", e)))?;
+                Ok(Some(engram))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Read(format!("get engram: {}", e))),
         }
-
-        wtxn.commit()?;
-        Ok(())
     }
 
-    /// Batch-write pattern vectors in a single transaction.
-    /// Used for persisting plasticity-drifted patterns on close().
-    pub fn persist_patterns_batch(
+    pub fn delete_engram(
         &self,
-        items: &[(String, Vec<f16>)],
-    ) -> Result<(), StorageError> {
-        let mut wtxn = self.env.write_txn()?;
-        for (id, pattern) in items {
-            let key = id.as_bytes();
-            self.patterns_db.put(&mut wtxn, key, &serialize_pattern(pattern)?)?;
-        }
-        wtxn.commit()?;
-        Ok(())
+        txn: &mut RwTxn<'_>,
+        id: &str,
+    ) -> Result<bool, StorageError> {
+        self.db
+            .engrams
+            .delete(txn, id)
+            .map_err(|e| StorageError::Write(format!("delete engram: {}", e)))
     }
 
-    /// Read the pattern vector for a memory.
-    pub fn get_pattern(&self, id: &str) -> Result<Option<Vec<f16>>, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let raw = self.patterns_db.get(&rtxn, id.as_bytes())?;
-        match raw {
-            Some(bytes) => Ok(Some(deserialize_pattern(bytes)?)),
-            None => Ok(None),
-        }
+    pub fn engram_exists(
+        &self,
+        txn: &RoTxn<'_>,
+        id: &str,
+    ) -> Result<bool, StorageError> {
+        self.db.engrams.get(txn, id).map(|v| v.is_some()).map_err(|e| {
+            StorageError::Read(format!("engram exists: {}", e))
+        })
     }
 
-    /// Read the blob record for a memory.
-    pub fn get_blob(&self, id: &str) -> Result<Option<BlobRecord>, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let raw = self.blobs_db.get(&rtxn, id.as_bytes())?;
-        match raw {
-            Some(bytes) => Ok(Some(deserialize_blob(bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    /// Read the meta record for a memory.
-    pub fn get_meta(&self, id: &str) -> Result<Option<MetaRecord>, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let raw = self.meta_db.get(&rtxn, id.as_bytes())?;
-        match raw {
-            Some(bytes) => Ok(Some(deserialize_meta(bytes)?)),
-            None => Ok(None),
-        }
-    }
-
-    /// Delete a memory from all sub-databases. Returns true if the memory existed.
-    pub fn delete(&self, id: &str) -> Result<bool, StorageError> {
-        let mut wtxn = self.env.write_txn()?;
-        let key = id.as_bytes();
-
-        let existed = self.patterns_db.delete(&mut wtxn, key)?;
-        self.blobs_db.delete(&mut wtxn, key)?;
-        self.meta_db.delete(&mut wtxn, key)?;
-
-        wtxn.commit()?;
-        Ok(existed)
-    }
-
-    /// Get all memory IDs.
-    pub fn all_ids(&self) -> Result<Vec<String>, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let iter = self.patterns_db.iter(&rtxn)?;
+    /// Iterate all engram IDs in the engrams database.
+    pub fn all_engram_ids(&self, txn: &RoTxn<'_>) -> Result<Vec<String>, StorageError> {
         let mut ids = Vec::new();
+        let iter = self
+            .db
+            .engrams
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter engrams: {}", e)))?;
         for result in iter {
-            let (key, _) = result?;
-            let id = String::from_utf8(key.to_vec())
-                .map_err(|e| StorageError::Serialization(format!("invalid utf8 key: {}", e)))?;
-            ids.push(id);
+            let (key, _) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            ids.push(key.to_string());
         }
         Ok(ids)
     }
 
-    /// Get all patterns (id + f16 vector).
-    pub fn all_patterns(&self) -> Result<Vec<(String, Vec<f16>)>, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let iter = self.patterns_db.iter(&rtxn)?;
+    /// Iterate all engrams (id + value).
+    pub fn all_engrams(&self, txn: &RoTxn<'_>) -> Result<Vec<(String, Engram)>, StorageError> {
         let mut out = Vec::new();
+        let iter = self
+            .db
+            .engrams
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter engrams: {}", e)))?;
         for result in iter {
-            let (key, val) = result?;
-            let id = String::from_utf8(key.to_vec())
-                .map_err(|e| StorageError::Serialization(format!("invalid utf8 key: {}", e)))?;
-            let pattern = deserialize_pattern(val)?;
-            out.push((id, pattern));
+            let (key, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            let engram: Engram = bincode::deserialize(val)
+                .map_err(|e| StorageError::Read(format!("deserialize: {}", e)))?;
+            out.push((key.to_string(), engram));
         }
         Ok(out)
     }
 
-    /// Get all meta records.
-    pub fn all_metas(&self) -> Result<Vec<(String, MetaRecord)>, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let iter = self.meta_db.iter(&rtxn)?;
-        let mut out = Vec::new();
+    // ── Hippocampus read/write ────────────────────────────────
+
+    pub fn put_hippocampus(
+        &self,
+        txn: &mut RwTxn<'_>,
+        id: &str,
+        engram: &Engram,
+    ) -> Result<(), StorageError> {
+        let bytes = bincode::serialize(engram)
+            .map_err(|e| StorageError::Write(format!("serialize hippocampus: {}", e)))?;
+        self.db
+            .hippocampus
+            .put(txn, id, &bytes)
+            .map_err(|e| StorageError::Write(format!("put hippocampus: {}", e)))
+    }
+
+    pub fn get_hippocampus(
+        &self,
+        txn: &RoTxn<'_>,
+        id: &str,
+    ) -> Result<Option<Engram>, StorageError> {
+        match self.db.hippocampus.get(txn, id) {
+            Ok(Some(bytes)) => {
+                let engram: Engram = bincode::deserialize(bytes)
+                    .map_err(|e| StorageError::Read(format!("deserialize hippocampus: {}", e)))?;
+                Ok(Some(engram))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Read(format!("get hippocampus: {}", e))),
+        }
+    }
+
+    pub fn delete_hippocampus(
+        &self,
+        txn: &mut RwTxn<'_>,
+        id: &str,
+    ) -> Result<bool, StorageError> {
+        self.db
+            .hippocampus
+            .delete(txn, id)
+            .map_err(|e| StorageError::Write(format!("delete hippocampus: {}", e)))
+    }
+
+    pub fn hippocampus_len(&self, txn: &RoTxn<'_>) -> Result<u64, StorageError> {
+        self.db
+            .hippocampus
+            .len(txn)
+            .map_err(|e| StorageError::Read(format!("hippocampus len: {}", e)))
+    }
+
+    /// Iterate all hippocampus entries.
+    pub fn all_hippocampus_entries(
+        &self,
+        txn: &RoTxn<'_>,
+    ) -> Result<Vec<(String, Engram)>, StorageError> {
+        let mut entries = Vec::new();
+        let iter = self
+            .db
+            .hippocampus
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter hippocampus: {}", e)))?;
         for result in iter {
-            let (key, val) = result?;
-            let id = String::from_utf8(key.to_vec())
-                .map_err(|e| StorageError::Serialization(format!("invalid utf8 key: {}", e)))?;
-            let meta = deserialize_meta(val)?;
-            out.push((id, meta));
+            let (key, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            let engram: Engram = bincode::deserialize(val)
+                .map_err(|e| StorageError::Read(format!("deserialize: {}", e)))?;
+            entries.push((key.to_string(), engram));
         }
-        Ok(out)
+        Ok(entries)
     }
 
-    /// Get all blob records.
-    pub fn all_blobs(&self) -> Result<Vec<(String, BlobRecord)>, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let iter = self.blobs_db.iter(&rtxn)?;
-        let mut out = Vec::new();
+    // ── Graph edges read/write ─────────────────────────────────
+
+    pub fn put_edges(
+        &self,
+        txn: &mut RwTxn<'_>,
+        source_id: &str,
+        edges: &[Association],
+    ) -> Result<(), StorageError> {
+        let bytes = bincode::serialize(edges)
+            .map_err(|e| StorageError::Write(format!("serialize edges: {}", e)))?;
+        self.db
+            .graph_edges
+            .put(txn, source_id, &bytes)
+            .map_err(|e| StorageError::Write(format!("put edges: {}", e)))
+    }
+
+    pub fn get_edges(
+        &self,
+        txn: &RoTxn<'_>,
+        source_id: &str,
+    ) -> Result<Option<Vec<Association>>, StorageError> {
+        match self.db.graph_edges.get(txn, source_id) {
+            Ok(Some(bytes)) => {
+                let edges: Vec<Association> = bincode::deserialize(bytes)
+                    .map_err(|e| StorageError::Read(format!("deserialize edges: {}", e)))?;
+                Ok(Some(edges))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Read(format!("get edges: {}", e))),
+        }
+    }
+
+    pub fn delete_edges(
+        &self,
+        txn: &mut RwTxn<'_>,
+        source_id: &str,
+    ) -> Result<bool, StorageError> {
+        self.db
+            .graph_edges
+            .delete(txn, source_id)
+            .map_err(|e| StorageError::Write(format!("delete edges: {}", e)))
+    }
+
+    // ── Schema read/write ─────────────────────────────────────
+
+    pub fn put_schema(
+        &self,
+        txn: &mut RwTxn<'_>,
+        id: &str,
+        schema: &SchemaExtra,
+    ) -> Result<(), StorageError> {
+        let bytes = bincode::serialize(schema)
+            .map_err(|e| StorageError::Write(format!("serialize schema: {}", e)))?;
+        self.db
+            .schemas
+            .put(txn, id, &bytes)
+            .map_err(|e| StorageError::Write(format!("put schema: {}", e)))
+    }
+
+    pub fn get_schema(
+        &self,
+        txn: &RoTxn<'_>,
+        id: &str,
+    ) -> Result<Option<SchemaExtra>, StorageError> {
+        match self.db.schemas.get(txn, id) {
+            Ok(Some(bytes)) => {
+                let schema: SchemaExtra = bincode::deserialize(bytes)
+                    .map_err(|e| StorageError::Read(format!("deserialize schema: {}", e)))?;
+                Ok(Some(schema))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Read(format!("get schema: {}", e))),
+        }
+    }
+
+    pub fn delete_schema(
+        &self,
+        txn: &mut RwTxn<'_>,
+        id: &str,
+    ) -> Result<bool, StorageError> {
+        self.db
+            .schemas
+            .delete(txn, id)
+            .map_err(|e| StorageError::Write(format!("delete schema: {}", e)))
+    }
+
+    pub fn all_schema_ids(&self, txn: &RoTxn<'_>) -> Result<Vec<String>, StorageError> {
+        let mut ids = Vec::new();
+        let iter = self
+            .db
+            .schemas
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter schemas: {}", e)))?;
         for result in iter {
-            let (key, val) = result?;
-            let id = String::from_utf8(key.to_vec())
-                .map_err(|e| StorageError::Serialization(format!("invalid utf8 key: {}", e)))?;
-            let blob = deserialize_blob(val)?;
-            out.push((id, blob));
+            let (key, _) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            ids.push(key.to_string());
         }
-        Ok(out)
+        Ok(ids)
     }
 
-    /// Count total memories.
-    pub fn count(&self) -> Result<u64, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        Ok(self.patterns_db.len(&rtxn)?)
+    // ── Anchor index read/write ───────────────────────────────
+
+    pub fn put_anchor_engrams(
+        &self,
+        txn: &mut RwTxn<'_>,
+        anchor_name: &str,
+        ids: &[String],
+    ) -> Result<(), StorageError> {
+        let bytes = bincode::serialize(ids)
+            .map_err(|e| StorageError::Write(format!("serialize anchor: {}", e)))?;
+        self.db
+            .anchor_index
+            .put(txn, anchor_name, &bytes)
+            .map_err(|e| StorageError::Write(format!("put anchor: {}", e)))
     }
 
-    /// Update the pattern vector for an existing memory.
-    pub fn update_pattern(&self, id: &str, pattern: &[f16]) -> Result<(), StorageError> {
-        let mut wtxn = self.env.write_txn()?;
-        let key = id.as_bytes();
-        if self.patterns_db.get(&wtxn, key)?.is_none() {
-            return Err(StorageError::NotFound(id.to_string()));
+    pub fn get_anchor_engrams(
+        &self,
+        txn: &RoTxn<'_>,
+        anchor_name: &str,
+    ) -> Result<Option<Vec<String>>, StorageError> {
+        match self.db.anchor_index.get(txn, anchor_name) {
+            Ok(Some(bytes)) => {
+                let ids: Vec<String> = bincode::deserialize(bytes)
+                    .map_err(|e| StorageError::Read(format!("deserialize anchor: {}", e)))?;
+                Ok(Some(ids))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Read(format!("get anchor: {}", e))),
         }
-        self.patterns_db.put(&mut wtxn, key, &serialize_pattern(pattern)?)?;
-        wtxn.commit()?;
-        Ok(())
     }
 
-    /// Update the blob record for an existing memory.
-    pub fn update_blob(&self, id: &str, blob: &BlobRecord) -> Result<(), StorageError> {
-        let mut wtxn = self.env.write_txn()?;
-        let key = id.as_bytes();
-        if self.patterns_db.get(&wtxn, key)?.is_none() {
-            return Err(StorageError::NotFound(id.to_string()));
-        }
-        self.blobs_db.put(&mut wtxn, key, &serialize_blob(blob)?)?;
-        wtxn.commit()?;
-        Ok(())
+    pub fn delete_anchor(
+        &self,
+        txn: &mut RwTxn<'_>,
+        anchor_name: &str,
+    ) -> Result<bool, StorageError> {
+        self.db
+            .anchor_index
+            .delete(txn, anchor_name)
+            .map_err(|e| StorageError::Write(format!("delete anchor: {}", e)))
     }
 
-    /// Update the meta record for an existing memory.
-    pub fn update_meta(&self, id: &str, meta: &MetaRecord) -> Result<(), StorageError> {
-        let mut wtxn = self.env.write_txn()?;
-        let key = id.as_bytes();
-        if self.patterns_db.get(&wtxn, key)?.is_none() {
-            return Err(StorageError::NotFound(id.to_string()));
-        }
-        self.meta_db.put(&mut wtxn, key, &serialize_meta(meta)?)?;
-        wtxn.commit()?;
-        Ok(())
-    }
-
-    /// Find a memory by its upsert dedup key (linear scan over meta_db).
-    pub fn find_by_key(&self, key: &str) -> Result<Option<String>, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let iter = self.meta_db.iter(&rtxn)?;
+    pub fn all_anchor_names(&self, txn: &RoTxn<'_>) -> Result<Vec<String>, StorageError> {
+        let mut names = Vec::new();
+        let iter = self
+            .db
+            .anchor_index
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter anchors: {}", e)))?;
         for result in iter {
-            let (k, val) = result?;
-            let meta: MetaRecord = deserialize_meta(val)?;
-            if meta.key.as_deref() == Some(key) {
-                let id = String::from_utf8(k.to_vec())
-                    .map_err(|e| StorageError::Serialization(format!("invalid utf8 key: {}", e)))?;
-                return Ok(Some(id));
+            let (key, _) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            names.push(key.to_string());
+        }
+        Ok(names)
+    }
+
+    // ── Config read/write ─────────────────────────────────────
+
+    pub fn put_config<T: serde::Serialize>(
+        &self,
+        txn: &mut RwTxn<'_>,
+        key: &str,
+        value: &T,
+    ) -> Result<(), StorageError> {
+        let bytes = bincode::serialize(value)
+            .map_err(|e| StorageError::Write(format!("serialize: {}", e)))?;
+        self.db
+            .config
+            .put(txn, key, &bytes)
+            .map_err(|e| StorageError::Write(format!("put config: {}", e)))
+    }
+
+    pub fn get_config<T: serde::de::DeserializeOwned>(
+        &self,
+        txn: &RoTxn<'_>,
+        key: &str,
+    ) -> Result<Option<T>, StorageError> {
+        match self.db.config.get(txn, key) {
+            Ok(Some(bytes)) => {
+                let val: T = bincode::deserialize(bytes)
+                    .map_err(|e| StorageError::Read(format!("deserialize config: {}", e)))?;
+                Ok(Some(val))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Read(format!("get config: {}", e))),
+        }
+    }
+}
+
+impl LmdbStorage {
+    /// Get all engram IDs for an anchor (empty vec if anchor doesn't exist).
+    pub fn anchor_get_ids(
+        &self,
+        txn: &RoTxn<'_>,
+        name: &str,
+    ) -> Result<Vec<String>, StorageError> {
+        Ok(self.get_anchor_engrams(txn, name)?.unwrap_or_default())
+    }
+
+    /// Compute the candidate set for a set of anchors (union).
+    /// Returns Ok(None) when anchors is empty.
+    pub fn anchor_candidates(
+        &self,
+        txn: &RoTxn<'_>,
+        names: &[String],
+    ) -> Result<Option<std::collections::HashSet<String>>, StorageError> {
+        if names.is_empty() {
+            return Ok(None);
+        }
+        let mut result = std::collections::HashSet::new();
+        for name in names {
+            for id in self.anchor_get_ids(txn, name)? {
+                result.insert(id);
             }
         }
-        Ok(None)
+        Ok(Some(result))
     }
 
-    /// Save an index snapshot.
-    pub fn save_index(&self, name: &str, data: &[u8]) -> Result<(), StorageError> {
-        let mut wtxn = self.env.write_txn()?;
-        self.index_db.put(&mut wtxn, name, data)?;
-        wtxn.commit()?;
+    /// Add an engram ID to an anchor (creates the anchor if it doesn't exist).
+    pub fn anchor_add(
+        &self,
+        txn: &mut RwTxn<'_>,
+        anchor: &str,
+        engram_id: &str,
+    ) -> Result<(), StorageError> {
+        let mut ids = self.get_anchor_engrams(txn, anchor)?.unwrap_or_default();
+        if !ids.contains(&engram_id.to_string()) {
+            ids.push(engram_id.to_string());
+            self.put_anchor_engrams(txn, anchor, &ids)?;
+        }
         Ok(())
     }
 
-    /// Load an index snapshot.
-    pub fn load_index(&self, name: &str) -> Result<Option<Vec<u8>>, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let raw = self.index_db.get(&rtxn, name)?;
-        Ok(raw.map(|b| b.to_vec()))
-    }
-
-    /// Estimate index size in bytes from the index_db sub-database.
-    pub fn index_size_bytes(&self) -> Result<usize, StorageError> {
-        let rtxn = self.env.read_txn()?;
-        let mut total = 0usize;
-        let iter = self.index_db.iter(&rtxn)?;
-        for result in iter {
-            let (key, val) = result?;
-            total += key.len() + val.len();
+    /// Remove an engram ID from an anchor.
+    pub fn anchor_remove(
+        &self,
+        txn: &mut RwTxn<'_>,
+        anchor: &str,
+        engram_id: &str,
+    ) -> Result<(), StorageError> {
+        let mut ids = self.get_anchor_engrams(txn, anchor)?.unwrap_or_default();
+        let before = ids.len();
+        ids.retain(|id| id != engram_id);
+        if ids.is_empty() {
+            self.delete_anchor(txn, anchor)?;
+        } else if ids.len() < before {
+            self.put_anchor_engrams(txn, anchor, &ids)?;
         }
-        Ok(total)
-    }
-}
-
-// ── Serialization helpers ──────────────────────────────────
-
-fn serialize_pattern(pattern: &[f16]) -> Result<Vec<u8>, StorageError> {
-    bincode::serialize(pattern).map_err(|e| StorageError::Serialization(e.to_string()))
-}
-
-fn deserialize_pattern(bytes: &[u8]) -> Result<Vec<f16>, StorageError> {
-    bincode::deserialize(bytes).map_err(|e| StorageError::Serialization(e.to_string()))
-}
-
-fn serialize_blob(blob: &BlobRecord) -> Result<Vec<u8>, StorageError> {
-    let json = serde_json::to_vec(blob).map_err(|e| StorageError::Serialization(e.to_string()))?;
-    let compressed = std::io::Cursor::new(Vec::new());
-    let mut encoder = zstd::Encoder::new(compressed, LmdbStorage::ZSTD_LEVEL)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    use std::io::Write;
-    encoder
-        .write_all(&json)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    let compressed = encoder
-        .finish()
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    Ok(compressed.into_inner())
-}
-
-fn deserialize_blob(bytes: &[u8]) -> Result<BlobRecord, StorageError> {
-    let decompressed = zstd::decode_all(bytes)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    serde_json::from_slice(&decompressed).map_err(|e| StorageError::Serialization(e.to_string()))
-}
-
-fn serialize_meta(meta: &MetaRecord) -> Result<Vec<u8>, StorageError> {
-    bincode::serialize(meta).map_err(|e| StorageError::Serialization(e.to_string()))
-}
-
-fn deserialize_meta(bytes: &[u8]) -> Result<MetaRecord, StorageError> {
-    bincode::deserialize(bytes).map_err(|e| StorageError::Serialization(e.to_string()))
-}
-
-// ── Tests ──────────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_blob(text: &str) -> BlobRecord {
-        BlobRecord {
-            text: text.to_string(),
-            meta: HashMap::new(),
-            content_type: None,
-            blob_data: None,
-        }
-    }
-
-    fn make_meta() -> MetaRecord {
-        MetaRecord {
-            created_at: 1700000000000,
-            importance: 0.8,
-            protection: 0,
-            is_dormant: false,
-            key: None,
-            importance_decay_rate: None,
-        }
-    }
-
-    fn make_f16_pattern(values: &[f32]) -> Vec<f16> {
-        values.iter().map(|&x| f16::from_f32(x)).collect()
-    }
-
-    fn temp_storage(_prefix: &str) -> LmdbStorage {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.keep().to_string_lossy().to_string();
-        let path = Box::leak(path.into_boxed_str());
-        LmdbStorage::open(path).unwrap()
-    }
-
-    #[test]
-    fn test_put_and_get() {
-        let storage = temp_storage("put_get");
-
-        let id = "m_000000000001";
-        let pattern = make_f16_pattern(&[0.1, 0.2, 0.3, 0.4]);
-        let blob = make_blob("hello world");
-        let meta = make_meta();
-
-        storage.put(id, &pattern, &blob, &meta).unwrap();
-
-        let got_pattern = storage.get_pattern(id).unwrap().unwrap();
-        assert_eq!(got_pattern.len(), 4);
-        assert!((got_pattern[0].to_f32() - 0.1).abs() < 0.01);
-        assert!((got_pattern[3].to_f32() - 0.4).abs() < 0.01);
-
-        let got_blob = storage.get_blob(id).unwrap().unwrap();
-        assert_eq!(got_blob.text, "hello world");
-
-        let got_meta = storage.get_meta(id).unwrap().unwrap();
-        assert_eq!(got_meta.created_at, 1700000000000);
-        assert!((got_meta.importance - 0.8).abs() < 1e-6);
-        assert_eq!(got_meta.protection, 0);
-        assert!(!got_meta.is_dormant);
-    }
-
-    #[test]
-    fn test_persistence() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().to_string_lossy().to_string();
-
-        {
-            let storage = LmdbStorage::open(&path).unwrap();
-            let id = "m_000000000002";
-            let pattern = make_f16_pattern(&[1.0, 2.0, 3.0]);
-            let blob = make_blob("persist test");
-            let meta = make_meta();
-            storage.put(id, &pattern, &blob, &meta).unwrap();
-            storage.close().unwrap();
-        }
-
-        {
-            let storage = LmdbStorage::open(&path).unwrap();
-            let got_pattern = storage.get_pattern("m_000000000002").unwrap().unwrap();
-            assert_eq!(got_pattern.len(), 3);
-            assert!((got_pattern[0].to_f32() - 1.0).abs() < 0.01);
-
-            let got_blob = storage.get_blob("m_000000000002").unwrap().unwrap();
-            assert_eq!(got_blob.text, "persist test");
-        }
-    }
-
-    #[test]
-    fn test_put_batch_and_count() {
-        let storage = temp_storage("batch");
-
-        let items: Vec<(String, Vec<f16>, BlobRecord, MetaRecord)> = (0..10)
-            .map(|i| {
-                let id = format!("m_{:012}", i);
-                let pattern = make_f16_pattern(&[i as f32]);
-                let blob = make_blob(&format!("item {}", i));
-                let mut meta = make_meta();
-                meta.key = if i == 5 { Some("unique_key".to_string()) } else { None };
-                (id, pattern, blob, meta)
-            })
-            .collect();
-
-        storage.put_batch(&items).unwrap();
-        assert_eq!(storage.count().unwrap(), 10);
-    }
-
-    #[test]
-    fn test_delete() {
-        let storage = temp_storage("delete");
-
-        let id = "m_000000000099";
-        let pattern = make_f16_pattern(&[0.5]);
-        storage.put(id, &pattern, &make_blob("to delete"), &make_meta()).unwrap();
-        assert!(storage.get_pattern(id).unwrap().is_some());
-
-        let existed = storage.delete(id).unwrap();
-        assert!(existed);
-        assert!(storage.get_pattern(id).unwrap().is_none());
-        assert!(storage.get_blob(id).unwrap().is_none());
-        assert!(storage.get_meta(id).unwrap().is_none());
-    }
-
-    #[test]
-    fn test_find_by_key() {
-        let storage = temp_storage("find_key");
-
-        let mut meta = make_meta();
-        meta.key = Some("dedup_abc".to_string());
-        let pattern = make_f16_pattern(&[0.1]);
-        storage.put("m_000000000010", &pattern, &make_blob("with key"), &meta).unwrap();
-        let pattern2 = make_f16_pattern(&[0.2]);
-        storage.put("m_000000000011", &pattern2, &make_blob("no key"), &make_meta()).unwrap();
-
-        let found = storage.find_by_key("dedup_abc").unwrap();
-        assert_eq!(found, Some("m_000000000010".to_string()));
-
-        let not_found = storage.find_by_key("nonexistent").unwrap();
-        assert!(not_found.is_none());
+        Ok(())
     }
 }

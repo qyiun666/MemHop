@@ -22,6 +22,7 @@ pub(crate) struct MetaIndex {
 }
 
 impl MetaIndex {
+    #[allow(dead_code)]
     pub(crate) fn new() -> Self {
         MetaIndex {
             by_layer: HashMap::new(),

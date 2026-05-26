@@ -1,5 +1,7 @@
 //! Standalone helper functions for the engine module.
 
+#![allow(dead_code)]
+
 use half::f16;
 
 use crate::types::Protection;

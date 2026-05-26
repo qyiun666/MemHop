@@ -69,6 +69,7 @@ fn dot_f16_f32(a: &[f16], b: &[f32]) -> f32 {
 
 /// Configuration for pattern plasticity — controls how memories evolve during use.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct PlasticityConfig {
     /// Attention below this threshold does not drift (default 0.05)
     pub min_drift_attention: f32,
@@ -115,6 +116,7 @@ pub struct ModernHopfield {
     /// Last access timestamp in unix millis
     pub last_access: Vec<u64>,
     /// Whether pattern plasticity is enabled (default false)
+    #[allow(dead_code)]
     pub drift_enabled: bool,
     /// Plasticity configuration
     pub plasticity_cfg: PlasticityConfig,
@@ -158,6 +160,7 @@ impl ModernHopfield {
 
     /// Remove a pattern by id using swap-remove.
     /// Also maintains access_counts and last_access vectors.
+    #[allow(dead_code)]
     pub fn remove_pattern(&mut self, id: &str) -> bool {
         let idx = match self.id_to_idx.remove(id) {
             Some(i) => i,
@@ -194,6 +197,7 @@ impl ModernHopfield {
     /// Associative recall: returns (winner_id, confidence).
     /// query is f32 (converted from f16 encoder output once by caller).
     /// Dot products computed in parallel via rayon.
+    #[allow(dead_code)]
     pub fn recall(&self, query: &[f32]) -> Option<(String, f32)> {
         let n = self.len();
         if n == 0 {
@@ -338,6 +342,7 @@ impl ModernHopfield {
     /// Requires `&mut self` (write lock) — callers must hold write access.
     /// Returns (winner_id, confidence, drifted_indices) — the third element
     /// contains the Hopfield row indices that were modified by drift.
+    #[allow(dead_code)]
     pub fn recall_with_plasticity(
         &mut self,
         query: &[f32],
@@ -408,6 +413,7 @@ impl ModernHopfield {
     }
 
     /// Get access statistics for a memory.
+    #[allow(dead_code)]
     pub fn get_access_stats(&self, id: &str) -> Option<(u64, u64)> {
         self.id_to_idx.get(id).map(|&idx| {
             (self.access_counts[idx], self.last_access[idx])
@@ -430,6 +436,7 @@ impl ModernHopfield {
     }
 
     /// Enable or disable pattern drift.
+    #[allow(dead_code)]
     pub fn enable_plasticity(&mut self, enabled: bool) {
         self.drift_enabled = enabled;
     }
@@ -445,6 +452,7 @@ impl ModernHopfield {
     /// are flagged (caller should mark them as dormant).
     ///
     /// Returns a list of memory IDs that have decayed below the dormant threshold.
+    #[allow(dead_code)]
     pub fn apply_decay(&mut self, now_ms: u64) -> Vec<String> {
         if self.is_empty() {
             return Vec::new();
@@ -489,6 +497,25 @@ impl ModernHopfield {
 
         dormant_candidates
     }
+}
+
+/// Compute cosine similarity between two f16 vectors.
+pub fn cosine_similarity_f16(a: &[half::f16], b: &[half::f16]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0_f64;
+    let mut na = 0.0_f64;
+    let mut nb = 0.0_f64;
+    for (x, y) in a.iter().zip(b.iter()) {
+        let xf = x.to_f32() as f64;
+        let yf = y.to_f32() as f64;
+        dot += xf * yf;
+        na += xf * xf;
+        nb += yf * yf;
+    }
+    let denom = (na.sqrt() * nb.sqrt()).max(f64::EPSILON);
+    (dot / denom) as f32
 }
 
 // ── Tests ────────────────────────────────────────────────────
