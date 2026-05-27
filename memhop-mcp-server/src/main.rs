@@ -70,8 +70,8 @@ fn tools_list() -> Value {
         {"name":"memhop_count","description":"Get total engram count","inputSchema":{"type":"object","properties":{}}},
         {"name":"memhop_complete_plan","description":"Complete a plan (mark as Completed, optionally summarize)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}},"required":["plan_id"]}},
         {"name":"memhop_get_plan_tree","description":"Get the plan tree (all root plans or descendants of a given plan)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}}}},
-        {"name":"memhop_get_chat_history","description":"Get archived dialogue turns for a plan","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}},"required":["plan_id"]}},
-        {"name":"memhop_plan_stats","description":"Get aggregated plan statistics (domain distribution + tone trends)","inputSchema":{"type":"object","properties":{"start_time":{"type":"integer"},"end_time":{"type":"integer"}}}}
+        {"name":"memhop_get_chat_history","description":"Get archived dialogue turns for a plan","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["plan_id"]}},
+        {"name":"memhop_plan_stats","description":"Get aggregated plan statistics (domain distribution + tone trends)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"},"start_time":{"type":"integer"},"end_time":{"type":"integer"}}}}
     ]})
 }
 
@@ -271,7 +271,9 @@ fn tool_get_plan_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> 
 
 fn tool_get_chat_history(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     let plan_id = s(args, "plan_id")?;
-    let turns = brain.archived_dialogue(&plan_id).map_err(|e| e.to_string())?;
+    let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+    let turns = brain.archived_dialogue(&plan_id, offset, limit).map_err(|e| e.to_string())?;
     let result: Vec<Value> = turns.iter().map(|t| {
         json!({
             "id": t.id,
@@ -286,6 +288,7 @@ fn tool_get_chat_history(brain: &mut Brain, args: &Value) -> Result<Value, Strin
 }
 
 fn tool_plan_stats(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let _plan_id = args.get("plan_id").and_then(|v| v.as_str());
     let start_time = args.get("start_time")
         .and_then(|v| v.as_i64())
         .unwrap_or(0);

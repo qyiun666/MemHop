@@ -1,11 +1,23 @@
 [package]
 name = "memhop"
-version = "0.6.0"
+version = "0.8.0"
 edition = "2024"
 description = "Embedded associative memory engine powered by Modern Hopfield Networks — SQLite for associative memory"
 
 [lib]
 crate-type = ["rlib"]
+
+[features]
+default = []
+# Optional semantic encoder backed by a local ONNX model (e.g. BGE-M3,
+# BGE-small, E5). Pulls in `ort`, `tokenizers`, `ndarray`. Disabled by
+# default so the base build stays dependency-light and compiles on any
+# platform without a C/C++ toolchain for onnxruntime.
+onnx = ["dep:ort", "dep:tokenizers"]
+# Generic OpenAI-compatible HTTP embedding encoder. Pulls in `reqwest`
+# (blocking + JSON). Disabled by default so the base build performs
+# zero outbound network calls and adds no TLS / HTTP dependencies.
+api-encoder = ["dep:reqwest"]
 
 [dependencies]
 heed = "0.20"
@@ -17,6 +29,16 @@ half = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 rayon = "1"
+# `load-dynamic` lets the host process resolve `libonnxruntime` at
+# runtime (via `ORT_DYLIB_PATH` or a system-installed dylib) instead
+# of relying on `ort`'s prebuilt binaries — which are unavailable for
+# some macOS / aarch64 host combinations. Agents that prefer the
+# bundled binaries can override this at the workspace level.
+ort = { version = "2.0.0-rc.12", optional = true, features = ["load-dynamic"] }
+tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
+# Used only when the `api-encoder` feature is enabled. Blocking client
+# because the `Encoder` trait is synchronous (`&self`).
+reqwest = { version = "0.12", optional = true, default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -1409,15 +1409,19 @@ impl Brain {
         Ok(domains)
     }
 
-    /// 8. Get archived dialogue turns for a plan, sorted by timestamp.
+    /// 8. Get archived dialogue turns for a plan, sorted by timestamp, with pagination.
     pub fn archived_dialogue(
         &self,
         plan_id: &str,
+        offset: usize,
+        limit: usize,
     ) -> Result<Vec<crate::engram::DialogueTurn>> {
         let txn = self.storage.begin_read()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        self.storage.get_dialogues_by_plan(&txn, plan_id)
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+        let turns = self.storage.get_dialogues_by_plan(&txn, plan_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let turns: Vec<_> = turns.into_iter().skip(offset).take(limit).collect();
+        Ok(turns)
     }
 
     /// 9. Randomly sample up to max_turns dialogue turns from a plan.
@@ -1541,10 +1545,12 @@ impl Brain {
         Ok(crate::engram::TopicDistribution { domains })
     }
 
-    /// 12. Search chat history by n-gram overlap.
+    /// 12. Search chat history by n-gram overlap, with optional plan filter and pagination.
     pub fn search_chat_history(
         &self,
         query: &str,
+        plan_id: Option<&str>,
+        offset: usize,
         limit: usize,
     ) -> Result<Vec<crate::engram::DialogueTurn>> {
         let txn = self.storage.begin_read()
@@ -1553,8 +1559,14 @@ impl Brain {
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         drop(txn);
 
+        // Optional plan filter
+        let turns: Vec<crate::engram::DialogueTurn> = match plan_id {
+            Some(pid) => all_turns.into_iter().filter(|t| t.plan_id == pid).collect(),
+            None => all_turns,
+        };
+
         let query_lower = query.to_lowercase();
-        let mut scored: Vec<(f32, crate::engram::DialogueTurn)> = all_turns.into_iter()
+        let mut scored: Vec<(f32, crate::engram::DialogueTurn)> = turns.into_iter()
             .map(|t| {
                 let user_score = ngram_overlap(&query_lower, &t.user_input.to_lowercase());
                 let agent_score = ngram_overlap(&query_lower, &t.agent_response.to_lowercase());
@@ -1564,9 +1576,9 @@ impl Brain {
             .collect();
 
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        scored.truncate(limit);
+        scored.truncate(limit + offset);
 
-        Ok(scored.into_iter().filter(|(s, _)| *s > 0.0).map(|(_, t)| t).collect())
+        Ok(scored.into_iter().skip(offset).filter(|(s, _)| *s > 0.0).map(|(_, t)| t).collect())
     }
 
     // ── 访问器 ───────────────────────────────────────────
