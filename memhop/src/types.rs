@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use half::f16;
 
-use crate::engram::Engram;
+use crate::engram::{Engram, DialogueTurn};
 use crate::personality::Personality;
 
 // ── Protection levels (backward compat) ───────────────────
@@ -199,6 +199,8 @@ pub struct RecallResponse {
     pub emotional_echoes: Vec<Engram>,
     pub conflicts: Vec<ConflictItem>,
     pub trace: RecallTrace,
+    /// Deep-search archive results (future). Always None for now.
+    pub archive_results: Option<Vec<DialogueTurn>>,
 }
 
 // ── ConflictItem ──────────────────────────────────────────

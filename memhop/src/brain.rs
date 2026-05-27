@@ -678,6 +678,7 @@ impl Brain {
             schemas,
             emotional_echoes,
             conflicts,
+            archive_results: None,
             trace: RecallTrace {
                 latency_us,
                 gated_anchors: req.attention_anchors.clone(),

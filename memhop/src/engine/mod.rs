@@ -160,6 +160,7 @@ impl MemHop {
             schemas: Vec::new(),
             emotional_echoes: Vec::new(),
             conflicts: Vec::new(),
+            archive_results: None,
             trace,
         })
     }
