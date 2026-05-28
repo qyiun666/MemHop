@@ -579,6 +579,16 @@ impl LmdbStorage {
         Ok(turns)
     }
 
+    /// v0.9.1: Delete a DialogueTurn by ID.
+    pub fn delete_dialogue(
+        &self,
+        txn: &mut RwTxn<'_>,
+        turn_id: &str,
+    ) -> Result<bool, StorageError> {
+        self.db.dialogue_turns.delete(txn, turn_id)
+            .map_err(|e| StorageError::Write(format!("delete dialogue: {}", e)))
+    }
+
     // ── PlanNode read/write (v0.8.0) ──────────────────────────
 
     pub fn put_plan(

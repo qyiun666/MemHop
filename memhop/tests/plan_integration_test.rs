@@ -26,6 +26,10 @@ fn perception(text: &str, session: &str) -> PerceptionInput {
         agent_response: None,
         dialogue_timestamp: None,
         source: None,
+        turn_id: String::new(),
+        turn_index: 0,
+        segment_index: 0,
+        topic_label: None,
     }
 }
 

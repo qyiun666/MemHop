@@ -192,6 +192,14 @@ pub struct PerceptionInput {
     pub dialogue_timestamp: Option<i64>,
     /// v0.9.0: Knowledge source identifier (e.g. shelf_id, file path).
     pub source: Option<String>,
+    /// v0.9.1: Turn-level identifier (auto-generated if empty).
+    pub turn_id: String,
+    /// v0.9.1: 0-based turn index within session.
+    pub turn_index: u32,
+    /// v0.9.1: Segment index for long text / multi-topic turns (0 = first segment).
+    pub segment_index: u32,
+    /// v0.9.1: Optional topic label (e.g. "jwt", "logo") for single-turn multi-topic.
+    pub topic_label: Option<String>,
 }
 
 /// v0.8.0: Return type of Brain::perceive() after plan-gating integration.
@@ -271,6 +279,10 @@ pub struct RecallResponse {
     pub trace: RecallTrace,
     /// Deep-search archive results (future). Always None for now.
     pub archive_results: Option<Vec<DialogueTurn>>,
+    /// v0.9.1: Per-turn hits with scores and snippets.
+    pub hit_turns: Vec<TurnHit>,
+    /// v0.9.1: Per-session aggregated scores.
+    pub aggregated_sessions: Vec<SessionScore>,
 }
 
 // ── ConflictItem ──────────────────────────────────────────
@@ -280,6 +292,26 @@ pub struct ConflictItem {
     pub memory_a_id: String,
     pub memory_b_id: String,
     pub conflict_type: String,
+}
+
+// ── v0.9.1: Turn-level types ────────────────────────────────
+
+/// A dialogue turn hit during recall.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TurnHit {
+    pub engram_id: String,
+    pub turn_id: String,
+    pub session_id: String,
+    pub score: f32,
+    pub snippet: String,
+}
+
+/// Per-session aggregation of turn hits.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SessionScore {
+    pub session_id: String,
+    pub total_score: f32,
+    pub top_turn_ids: Vec<String>,
 }
 
 // ── RecallTrace ───────────────────────────────────────────
@@ -346,4 +378,6 @@ pub struct DreamReport {
     pub llm_keywords_added: usize,
     /// v0.9.0: Number of contradictions confirmed by LLM.
     pub llm_contradictions: usize,
+    /// v0.9.1: Number of turn clusters merged into schemas by crystallizer.
+    pub turn_schemas_created: usize,
 }

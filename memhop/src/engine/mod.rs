@@ -161,6 +161,8 @@ impl MemHop {
             emotional_echoes: Vec::new(),
             conflicts: Vec::new(),
             archive_results: None,
+            hit_turns: Vec::new(),
+            aggregated_sessions: Vec::new(),
             trace,
         })
     }

@@ -39,6 +39,9 @@ pub struct Engram {
     pub meta: HashMap<String, serde_json::Value>,
     pub is_archived: bool,
     pub is_dormant: bool,
+    /// v0.9.1: Reference to the DialogueTurn this engram belongs to.
+    #[serde(default)]
+    pub turn_id: Option<String>,
 }
 
 impl Engram {
@@ -70,6 +73,7 @@ impl Engram {
             meta: HashMap::new(),
             is_archived: false,
             is_dormant: false,
+            turn_id: None,
         }
     }
 
@@ -287,11 +291,22 @@ pub struct StyleCompact { pub avg_sentence_len: f32, pub question_ratio: f32, pu
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToneMeta { pub valence: f32, pub arousal: f32, pub tone_tags: Vec<String>, pub filler_ratio: f32, pub sentence_style: StyleCompact }
 
+/// v0.9.1: Source of a dialogue turn.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnSource {
+    #[default]
+    User,
+    Agent,
+    System,
+    External,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlanNode { pub id: String, pub parent_id: Option<String>, pub name: String, pub level: PlanLevel, pub centroid_vector: Vec<f16>, pub dialogue_count: u32, pub compressed_summary: Option<String>, pub state: PlanState, pub created_at: i64, pub completed_at: Option<i64>, pub meta: HashMap<String, serde_json::Value> }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DialogueTurn { pub id: String, pub plan_id: String, pub user_input: String, pub agent_response: String, pub user_tone: ToneMeta, pub agent_tone: ToneMeta, pub timestamp: i64, pub vector: Vec<f16> }
+pub struct DialogueTurn { pub id: String, pub plan_id: String, pub user_input: String, pub agent_response: String, pub user_tone: ToneMeta, pub agent_tone: ToneMeta, pub timestamp: i64, pub vector: Vec<f16>, #[serde(default)] pub session_id: String, #[serde(default)] pub turn_index: u32, #[serde(default)] pub segment_count: u32, #[serde(default)] pub source: TurnSource, #[serde(default)] pub topic_label: Option<String> }
 
 #[derive(Debug, Clone)]
 pub struct DomainStats { pub plan_count: u32, pub dialogue_count: u32, pub avg_valence: f32, pub top_keywords: Vec<String> }

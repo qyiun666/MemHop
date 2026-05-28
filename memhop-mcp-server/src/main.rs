@@ -8,7 +8,7 @@ use memhop::{
     ShelfManager, ShelfDomain,
 };
 
-const VERSION: &str = "0.9.0";
+const VERSION: &str = "0.9.1";
 
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 
@@ -69,7 +69,7 @@ fn main() {
 
 fn tools_list() -> Value {
     json!({"tools":[
-        {"name":"memhop_store","description":"Store a new perception/memory","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"session_id":{"type":"string"},"valence":{"type":"number"},"arousal":{"type":"number"}},"required":["text"]}},
+        {"name":"memhop_store","description":"Store a new perception/memory","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"session_id":{"type":"string"},"valence":{"type":"number"},"arousal":{"type":"number"},"turn_id":{"type":"string"},"turn_index":{"type":"integer"},"topic_label":{"type":"string"}},"required":["text"]}},
         {"name":"memhop_recall","description":"Recall memories matching a query. Optionally accepts pre-encoded query_vector for external encoder benchmarks.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"session_id":{"type":"string"},"limit":{"type":"integer"},"max_tokens":{"type":"integer"},"query_vector":{"type":"array","items":{"type":"number"}}},"required":["query"]}},
         {"name":"memhop_reflect","description":"Create a reflection engram","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"kind":{"type":"string"},"session_id":{"type":"string"}},"required":["content","kind"]}},
         {"name":"memhop_dream","description":"Run Dream consolidation cycle","inputSchema":{"type":"object","properties":{}}},
@@ -82,7 +82,8 @@ fn tools_list() -> Value {
         {"name":"memhop_plan_stats","description":"Get aggregated plan statistics (domain distribution + tone trends)","inputSchema":{"type":"object","properties":{"start_time":{"type":"integer"},"end_time":{"type":"integer"}}}},
         {"name":"memhop_mount_shelf","description":"Mount a knowledge shelf from a file or directory path","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"domain":{"type":"string"}},"required":["path"]}},
         {"name":"memhop_knowledge_search","description":"Search within a mounted knowledge shelf","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"shelf_id":{"type":"string"},"limit":{"type":"integer"},"max_tokens":{"type":"integer"}},"required":["query","shelf_id"]}},
-        {"name":"memhop_unmount_shelf","description":"Unmount and remove a knowledge shelf","inputSchema":{"type":"object","properties":{"shelf_id":{"type":"string"}},"required":["shelf_id"]}}
+        {"name":"memhop_unmount_shelf","description":"Unmount and remove a knowledge shelf","inputSchema":{"type":"object","properties":{"shelf_id":{"type":"string"}},"required":["shelf_id"]}},
+        {"name":"memhop_forget","description":"Forget a dialogue turn and its associated engrams","inputSchema":{"type":"object","properties":{"turn_id":{"type":"string"}},"required":["turn_id"]}}
     ]})
 }
 
@@ -106,6 +107,7 @@ fn tool_call(brain: &mut Brain, params: Option<&Value>) -> Result<Value, String>
         "memhop_mount_shelf" => tool_mount_shelf(brain, args),
         "memhop_knowledge_search" => tool_knowledge_search(brain, args),
         "memhop_unmount_shelf" => tool_unmount_shelf(brain, args),
+        "memhop_forget" => tool_forget(brain, args),
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
@@ -149,6 +151,17 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         .to_string();
     let valence = args.get("valence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let arousal = args.get("arousal").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+    // v0.9.1: Optional turn-level fields
+    let turn_id = args.get("turn_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let turn_index = args.get("turn_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as u32;
+    let topic_label = args.get("topic_label")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
 
     let vector = brain.encode_text(&text);
 
@@ -166,6 +179,10 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         agent_response: None,
         dialogue_timestamp: None,
         source: None,
+        turn_id,
+        turn_index,
+        segment_index: 0,
+        topic_label,
     };
 
     let output = brain.perceive(input).map_err(|e| e.to_string())?;
@@ -243,6 +260,8 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     Ok(json!({
         "results": results,
         "schemas": resp.schemas.iter().map(|e| json!({"id": e.id, "text": e.text})).collect::<Vec<_>>(),
+        "hit_turns": resp.hit_turns,
+        "aggregated_sessions": resp.aggregated_sessions,
         "trace": {
             "latency_us": resp.trace.latency_us,
             "hopfield_candidates": resp.trace.hopfield_candidates,
@@ -287,6 +306,14 @@ fn tool_dream(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
         "pruned_edges": report.pruned_edges,
         "duration_ms": report.duration_ms,
     }))
+}
+
+// ── v0.9.1: Forget tool ────────────────────────────────────────
+
+fn tool_forget(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let turn_id = s(args, "turn_id")?;
+    brain.forget(&turn_id).map_err(|e| e.to_string())?;
+    Ok(json!({"status": "ok"}))
 }
 
 fn tool_stats(brain: &mut Brain, _args: &Value) -> Result<Value, String> {

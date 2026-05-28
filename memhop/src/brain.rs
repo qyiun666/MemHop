@@ -97,6 +97,8 @@ pub struct Brain {
     sparse_index: SparseIndex,
     /// v0.9.0: HNSW NodeId → engram string ID reverse mapping.
     hnsw_id_map: HashMap<u64, String>,
+    /// v0.9.0: Monotonic counter for HNSW node IDs (replaces hash-based IDs).
+    next_node_id: u64,
     storage: Arc<LmdbStorage>,
 
     emotional_ctx: EmotionalContext,
@@ -134,6 +136,24 @@ impl Brain {
                 .map_err(|e| MemHopError::Storage(e.to_string()))?,
         );
 
+        // v0.9.1: Schema version — mark for future migrations
+        {
+            let rtxn = storage.begin_read()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            let ver: Option<String> = storage.get_config(&rtxn, "schema_version")
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            drop(rtxn);
+
+            if ver.as_deref() != Some("0.9.1") {
+                let mut wtxn = storage.begin_write()
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                storage.put_config(&mut wtxn, "schema_version", &"0.9.1".to_string())
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                wtxn.commit()
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            }
+        }
+
         let personality = config.personality;
         let hippocampus = Hippocampus::rebuild(&storage, config.hippocampus_capacity)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -147,13 +167,16 @@ impl Brain {
         let engram_cache = RefCell::new(EngramCache::new(1000));
 
         // v0.9.0: Load or rebuild HNSW index from storage
+        let mut counter: u64 = 0;
         let (hnsw, hnsw_id_map) = match HnswIndex::load_from_storage(&storage) {
             Ok(Some(idx)) => {
                 let mut id_map = HashMap::new();
                 if let Ok(txn) = storage.begin_read() {
                     if let Ok(entries) = storage.all_hippocampus_entries(&txn) {
                         for (id_str, _) in &entries {
-                            id_map.insert(string_id_to_u64(id_str), id_str.clone());
+                            let node_id = counter;
+                            counter += 1;
+                            id_map.insert(node_id, id_str.clone());
                         }
                     }
                 }
@@ -167,7 +190,8 @@ impl Brain {
                         // v0.9.0: Pre-warm engram cache during HNSW rebuild
                         let engram_cache_ref = &engram_cache;
                         for (id_str, engram) in &entries {
-                            let node_id = string_id_to_u64(id_str);
+                            let node_id = counter;
+                            counter += 1;
                             id_map.insert(node_id, id_str.clone());
                             idx.insert(node_id, &engram.vector);
                             engram_cache_ref.borrow_mut().insert(id_str.clone(), engram.clone());
@@ -212,6 +236,8 @@ impl Brain {
             pi
         };
 
+        let hnsw_id_map_len = hnsw_id_map.len() as u64;
+
         Ok(Brain {
             cortex: Cortex::new(config.cortex_capacity),
             hippocampus,
@@ -220,6 +246,7 @@ impl Brain {
             hnsw,
             sparse_index,
             hnsw_id_map,
+            next_node_id: hnsw_id_map_len,
             storage,
             emotional_ctx: EmotionalContext::new(),
             growth: GrowthState::new(),
@@ -246,6 +273,12 @@ impl Brain {
     pub fn perceive(&mut self, input: PerceptionInput) -> Result<PerceptionOutput> {
         let now = now_millis();
         let id = generate_id();
+        // v0.9.1: Auto-generate turn_id if empty
+        let turn_id = if input.turn_id.is_empty() {
+            format!("turn_{}_{}", now, input.turn_index)
+        } else {
+            input.turn_id.clone()
+        };
 
         self.emotional_ctx
             .update(input.emotional_state.valence, input.emotional_state.arousal);
@@ -328,53 +361,97 @@ impl Brain {
         let saved_agent_response = input.agent_response.clone();
         let saved_dialogue_timestamp = input.dialogue_timestamp;
 
-        // ── Create engram ────────────────────────────────────
+        // ── v0.9.1: Long text segmentation ──
+        const MAX_SEGMENT_CHARS: usize = 5000;
+        let segments: Vec<String> = if saved_content.len() > MAX_SEGMENT_CHARS {
+            split_text_at_boundaries(&saved_content, MAX_SEGMENT_CHARS)
+        } else {
+            vec![saved_content.clone()]
+        };
+        let segment_count = segments.len() as u32;
+        let text_was_split = segments.len() > 1;
 
-        let engram = Engram::new_episode(
-            id.clone(),
-            input.content,
-            input.vector,
-            Vec::new(),
-            input.emotional_state.valence,
-            input.emotional_state.arousal,
-            now,
-        );
+        // ── Create engrams (one per segment) ──
+        let mut engram_ids: Vec<String> = Vec::new();
+        for (seg_idx, segment_text) in segments.iter().enumerate() {
+            let seg_id = if seg_idx == 0 {
+                id.clone()
+            } else {
+                generate_id()
+            };
 
-        self.cortex.push(engram.clone(), &input.session_id);
-        self.hippocampus.store(&self.storage, &engram)?;
-        // v0.9.0: Populate engram cache for recall speed
-        self.engram_cache.borrow_mut().insert(id.clone(), engram.clone());
-        self.hopfield.add_pattern(&id, &engram.vector);
-        // v0.9.0: Insert into HNSW index
-        self.hnsw.insert(string_id_to_u64(&id), &engram.vector);
-        // v0.9.0: Add to sparse index and HNSW ID map for RRF fusion
-        let output = self.ngram_encoder.encode(&engram.text);
-        self.sparse_index.add(&id, &output.sparse);
-        self.hnsw_id_map.insert(string_id_to_u64(&id), id.clone());
+            // Re-encode per segment if text was split, else use original vector
+            let seg_vector = if text_was_split {
+                self.encode_text(segment_text)
+            } else {
+                input.vector.clone()
+            };
 
-        // 建立时间边（与 Hippocampus 中最近 3 条）
+            let engram = Engram {
+                id: seg_id.clone(),
+                text: segment_text.clone(),
+                summary: None,
+                vector: seg_vector,
+                keywords: Vec::new(),
+                content_type: None,
+                valence: input.emotional_state.valence,
+                arousal: input.emotional_state.arousal,
+                vitality: 1.0,
+                protection: Protection::Normal,
+                created_at: now,
+                last_activated: now,
+                activation_count: 1,
+                kind: EngramKind::Episode,
+                meta: HashMap::new(),
+                is_archived: false,
+                is_dormant: false,
+                turn_id: Some(turn_id.clone()),
+            };
+
+            self.cortex.push(engram.clone(), &input.session_id);
+            self.hippocampus.store(&self.storage, &engram)?;
+            self.engram_cache.borrow_mut().insert(seg_id.clone(), engram.clone());
+            self.hopfield.add_pattern(&seg_id, &engram.vector);
+            let node_id = self.next_node_id;
+            self.next_node_id += 1;
+            self.hnsw.insert(node_id, &engram.vector);
+            let output = self.ngram_encoder.encode(&engram.text);
+            self.sparse_index.add(&seg_id, &output.sparse);
+            self.hnsw_id_map.insert(node_id, seg_id.clone());
+            engram_ids.push(seg_id);
+        }
+
+        // 建立时间边（与 Hippocampus 中最近 3 条），只连接最后一个 segment
+        let last_seg_id = engram_ids.last().cloned().unwrap_or_default();
         let recent_entries = self
             .hippocampus
             .batch_entries(&self.storage, self.hippocampus.len().saturating_sub(4), 3)?;
         for (recent_id, _) in &recent_entries {
-            if recent_id.as_str() != id.as_str() {
+            if recent_id.as_str() != last_seg_id.as_str() {
                 self.graph.add_edge(
-                    &self.storage, &id, recent_id, 0.5, AssociationKind::Temporal, now,
+                    &self.storage, &last_seg_id, recent_id, 0.5, AssociationKind::Temporal, now,
                 )?;
                 self.graph.add_edge(
-                    &self.storage, recent_id, &id, 0.5, AssociationKind::Temporal, now,
+                    &self.storage, recent_id, &last_seg_id, 0.5, AssociationKind::Temporal, now,
                 )?;
             }
         }
 
         self.growth.total_perceptions += 1;
-        self.growth.total_engrams_created += 1;
+        self.growth.total_engrams_created += engram_ids.len() as u64;
         self.store_count += 1;
 
-        // 记录到 Anchor 索引
+        // 记录到 Anchor 索引（所有 segment 都关联）
         if !input.attention_anchors.is_empty() {
-            let _ = SceneGate::add_to_anchors(&self.storage, &id, &input.attention_anchors);
+            for seg_id in &engram_ids {
+                let _ = SceneGate::add_to_anchors(&self.storage, seg_id, &input.attention_anchors);
+            }
         }
+
+        // Parse turn source
+        let turn_source = input.source.as_deref()
+            .map(parse_turn_source)
+            .unwrap_or(crate::engram::TurnSource::User);
 
         // ── v0.8.0: Persist PlanNode & DialogueTurn ──
         {
@@ -402,7 +479,7 @@ impl Brain {
             // v0.8.0: Create DialogueTurn if agent_response is present
             if let Some(ref agent_resp) = saved_agent_response {
                 let turn = DialogueTurn {
-                    id: format!("turn_{}_{}", now, self.store_count),
+                    id: turn_id.clone(),
                     plan_id: plan_id.clone(),
                     user_input: saved_content,
                     agent_response: agent_resp.clone(),
@@ -420,6 +497,11 @@ impl Brain {
                     },
                     timestamp: saved_dialogue_timestamp.unwrap_or(now),
                     vector: saved_vector,
+                    session_id: input.session_id.clone(),
+                    turn_index: input.turn_index,
+                    segment_count,
+                    source: turn_source,
+                    topic_label: input.topic_label.clone(),
                 };
                 self.storage
                     .put_dialogue(&mut txn, &turn)
@@ -734,6 +816,8 @@ impl Brain {
         let spread_result = activation::competitive_spread(
             &self.graph, &seeds, &self.personality, req.spread_top_k,
         );
+        // v0.9.1: Capture scores for turn-level aggregation
+        let score_map: HashMap<String, f32> = spread_result.activated.iter().cloned().collect();
 
         // 6. 从存储加载激活的 Engram，按类型分类
         let mut associations: Vec<Engram> = Vec::new();
@@ -805,6 +889,10 @@ impl Brain {
             }
         }
 
+        // v0.9.1: Build turn-level hits from associated engrams
+        let (hit_turns, aggregated_sessions) = self.build_turn_hits(&associations, &score_map)
+            .unwrap_or_default();
+
         let latency_us = start.elapsed().as_micros() as u64;
 
         Ok(RecallResponse {
@@ -814,6 +902,8 @@ impl Brain {
             emotional_echoes,
             conflicts,
             archive_results: None,
+            hit_turns,
+            aggregated_sessions,
             trace: RecallTrace {
                 latency_us,
                 gated_anchors: req.attention_anchors.clone(),
@@ -938,6 +1028,8 @@ impl Brain {
         let mut schemas: Vec<Engram> = Vec::new();
         let mut emotional_echoes: Vec<Engram> = Vec::new();
         let conflicts: Vec<ConflictItem> = Vec::new();
+        // v0.9.1: Capture scores for turn-level aggregation
+        let score_map: HashMap<String, f32> = sorted.iter().cloned().collect();
 
         if let Ok(rtxn) = self.storage.begin_read() {
             for (id, _score) in &sorted {
@@ -976,6 +1068,10 @@ impl Brain {
             }
         }
 
+        // v0.9.1: Build turn-level hits from associated engrams
+        let (hit_turns, aggregated_sessions) = self.build_turn_hits(&associations, &score_map)
+            .unwrap_or_default();
+
         // Step 7: L0 Cortex (working memory)
         let working_memory = self.cortex.recent(&req.session_id, req.recent_limit);
 
@@ -988,6 +1084,8 @@ impl Brain {
             emotional_echoes,
             conflicts,
             archive_results: None,
+            hit_turns,
+            aggregated_sessions,
             trace: RecallTrace {
                 latency_us,
                 gated_anchors: req.attention_anchors.clone(),
@@ -1041,6 +1139,7 @@ impl Brain {
             meta,
             is_archived: false,
             is_dormant: false,
+            turn_id: None,
         };
 
         self.hippocampus.store(&self.storage, &engram)?;
@@ -1056,6 +1155,81 @@ impl Brain {
         self.growth.total_engrams_created += 1;
 
         Ok(id)
+    }
+
+    // ── v0.9.1: Turn Crystallizer ──────────────────────────
+
+    /// NREM-2b: Semantic clustering of DialogueTurns into Schema engrams.
+    fn nrem_turn_crystallizer(&mut self, report: &mut DreamReport) -> Result<()> {
+        let rtxn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let turns = self.storage.all_dialogues(&rtxn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(rtxn);
+
+        if turns.len() < 3 {
+            return Ok(());
+        }
+
+        let now = now_millis();
+        let schemas = crate::schema::turn_cluster_emergence(&turns, 0.85, now);
+
+        for (schema_engram, schema_extra) in schemas {
+            self.hippocampus.store(&self.storage, &schema_engram)?;
+            self.hopfield.add_pattern(&schema_engram.id, &schema_engram.vector);
+            let mut txn = self.storage.begin_write()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            self.storage.put_schema(&mut txn, &schema_engram.id, &schema_extra)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            txn.commit()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            report.turn_schemas_created += 1;
+        }
+        Ok(())
+    }
+
+    // ── v0.9.1: Forget / Update ─────────────────────────
+
+    /// Forget all engrams and the DialogueTurn for a given turn_id.
+    pub fn forget(&mut self, turn_id: &str) -> Result<()> {
+        // Find all engrams with this turn_id
+        let rtxn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let entries = self.storage.all_hippocampus_entries(&rtxn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(rtxn);
+
+        let to_remove: Vec<String> = entries.iter()
+            .filter(|(_, e)| e.turn_id.as_deref() == Some(turn_id))
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for id in &to_remove {
+            self.hopfield.remove_pattern(id);
+            let mut wtxn = self.storage.begin_write()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            self.storage.delete_hippocampus(&mut wtxn, id)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            wtxn.commit()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            // Note: v0.9.1 skip HNSW removal (no delete API)
+            // Note: v0.9.1 skip sparse_index removal
+        }
+
+        let mut txn = self.storage.begin_write()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        self.storage.delete_dialogue(&mut txn, turn_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        txn.commit()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Update a turn with new content (forget + perceive).
+    pub fn update(&mut self, turn_id: &str, input: PerceptionInput) -> Result<PerceptionOutput> {
+        self.forget(turn_id)?;
+        self.perceive(input)
     }
 
     // ── dream ─────────────────────────────────────────────
@@ -1083,6 +1257,11 @@ impl Brain {
             && let Ok(extra) = self.graph.prune_to_max_degree(&self.storage, 30)
         {
             report.pruned_edges += extra;
+        }
+
+        // NREM-2b: v0.9.1 — Turn Crystallizer
+        if let Err(e) = self.nrem_turn_crystallizer(&mut report) {
+            eprintln!("[dream] NREM-2b error: {}", e);
         }
 
         // REM-1: Hippocampus → Neocortex 整合
@@ -2018,6 +2197,109 @@ impl Brain {
     pub fn emotional_context(&self) -> &EmotionalContext {
         &self.emotional_ctx
     }
+
+    /// v0.9.1: Build per-turn hit list and per-session aggregation from associated engrams.
+    fn build_turn_hits(
+        &self,
+        associations: &[Engram],
+        score_map: &HashMap<String, f32>,
+    ) -> Result<(Vec<crate::types::TurnHit>, Vec<crate::types::SessionScore>)> {
+        // Group engrams by turn_id
+        let mut turn_groups: HashMap<String, Vec<(f32, &Engram)>> = HashMap::new();
+        for engram in associations {
+            if let Some(ref turn_id) = engram.turn_id {
+                let score = score_map.get(&engram.id).copied().unwrap_or(0.0);
+                turn_groups.entry(turn_id.clone()).or_default().push((score, engram));
+            }
+        }
+
+        if turn_groups.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+
+        let rtxn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut hit_turns = Vec::new();
+        let mut session_agg: HashMap<String, (f32, Vec<String>)> = HashMap::new();
+
+        for (turn_id, entries) in &turn_groups {
+            let (best_score, best_engram) = entries.iter()
+                .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+                .unwrap();
+            let snippet = best_engram.text.chars().take(200).collect::<String>();
+
+            if let Ok(Some(turn)) = self.storage.get_dialogue(&rtxn, turn_id) {
+                hit_turns.push(crate::types::TurnHit {
+                    engram_id: best_engram.id.clone(),
+                    turn_id: turn_id.clone(),
+                    session_id: turn.session_id.clone(),
+                    score: *best_score,
+                    snippet,
+                });
+                let entry = session_agg.entry(turn.session_id).or_default();
+                entry.0 += *best_score;
+                entry.1.push(turn_id.clone());
+            }
+        }
+
+        hit_turns.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        let mut aggregated_sessions: Vec<crate::types::SessionScore> = session_agg
+            .into_iter()
+            .map(|(sid, (total, ids))| crate::types::SessionScore {
+                session_id: sid,
+                total_score: total,
+                top_turn_ids: ids.into_iter().take(5).collect(),
+            })
+            .collect();
+        aggregated_sessions.sort_by(|a, b| b.total_score.partial_cmp(&a.total_score).unwrap_or(std::cmp::Ordering::Equal));
+
+        Ok((hit_turns, aggregated_sessions))
+    }
+}
+
+// ── v0.9.1: Helper functions ──────────────────────────────────
+
+/// Split text at sentence boundaries near `max_chars` chunks.
+fn split_text_at_boundaries(text: &str, max_chars: usize) -> Vec<String> {
+    let mut segments: Vec<String> = Vec::new();
+    let mut start = 0;
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+
+    while start < len {
+        if start + max_chars >= len {
+            segments.push(chars[start..].iter().collect());
+            break;
+        }
+        // Find the last sentence boundary at or before start + max_chars
+        let end = chars[start..start + max_chars]
+            .iter()
+            .rposition(|&c| c == '.' || c == '!' || c == '?' || c == '\n')
+            .map(|pos| start + pos + 1)
+            .unwrap_or(start + max_chars);
+
+        // Ensure minimum segment size (500 chars), merge if too short
+        if !segments.is_empty() && end - start < 500 {
+            // Merge with previous segment
+            let last = segments.last_mut().unwrap();
+            last.extend(chars[start..end].iter());
+        } else {
+            segments.push(chars[start..end].iter().collect());
+        }
+        start = end;
+    }
+
+    segments
+}
+
+/// Parse a string into a TurnSource, defaulting to User on unrecognized values.
+fn parse_turn_source(s: &str) -> crate::engram::TurnSource {
+    match s.to_lowercase().as_str() {
+        "agent" => crate::engram::TurnSource::Agent,
+        "system" => crate::engram::TurnSource::System,
+        "external" => crate::engram::TurnSource::External,
+        _ => crate::engram::TurnSource::User,
+    }
 }
 
 // ── ID 生成 ──────────────────────────────────────────────────
@@ -2045,15 +2327,6 @@ fn now_millis() -> i64 {
 fn rrf_score(rank: usize) -> f32 {
     1.0 / (RRF_K + rank as f32)
 }
-
-/// Map an engram string ID to a u64 for HNSW index.
-fn string_id_to_u64(id: &str) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    id.hash(&mut hasher);
-    hasher.finish()
-}
-
 /// Compute character-level trigram overlap between query and text.
 fn ngram_overlap(query: &str, text: &str) -> f32 {
     if query.is_empty() || text.len() < 3 {
@@ -2118,6 +2391,10 @@ mod tests {
             agent_response: None,
             dialogue_timestamp: None,
             source: None,
+            turn_id: String::new(),
+            turn_index: 0,
+            segment_index: 0,
+            topic_label: None,
         }
     }
 

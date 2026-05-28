@@ -248,11 +248,12 @@ impl HnswIndex {
         let ef = self.ef_search.max(k);
         let w = self.search_layer(&query_f32, ep, ef, 0);
 
-        // Convert distance back to similarity and return top‑k.
+        // Convert distance back to similarity, sort by similarity descending, return top‑k.
         let mut results: Vec<(NodeId, f32)> = w
             .into_iter()
             .map(|(id, dist)| (id, 1.0 - dist))
             .collect();
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(k);
         results
     }

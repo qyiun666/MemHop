@@ -1,54 +1,54 @@
-# MemHop
+# MemHop v0.9.0
 
-嵌入式联想记忆引擎。Modern Hopfield Network O(1) 召回，LMDB 单文件存储，零外部模型依赖。
+**脑启发记忆引擎。** Hopfield 模式补全 + HNSW 语义检索 + Hebbian 图学习。单进程 MCP Server，全机统一记忆底座。
+
+## 🎯 第一梯队检索
+
+| Benchmark | 指标 | 结果 |
+|-----------|------|------|
+| 合成检索 (BGE-M3, 200 docs) | NDCG@10 | **0.979** = 99.9% 余弦上限 |
+| BEIR nfcorpus (300 docs) | NDCG@10 | **0.183** = 98.0% 余弦上限 |
+| HNSW 检索延迟 | P50 | **< 1ms** |
+| 检索延迟改善 (10K) | P99 | **541ms → 165ms (-70%)** |
+
+> 检索管线无损 — HNSW 近似搜索质量紧贴纯余弦理论上限。延迟从 O(N) 降到 O(log N)。
+
+## vs agentmemory
+
+| 维度 | agentmemory | MemHop v0.9.0 |
+|------|------------|---------------|
+| 嵌入模型 | all-MiniLM-L6-v2 (384d) | **BGE-M3 (1024d)** |
+| 检索 | BM25 + 向量 + 图谱 RRF | **HNSW + SparseIndex RRF** |
+| 模式补全 | ❌ | **✅ Hopfield 收敛** |
+| 图学习 | 静态共现 | **✅ Hebbian 动态边权** |
+| 实时性 | SessionEnd 批量 | **✅ 逐轮实时** |
+| 部署 | Node.js + SQLite | **Rust 单二进制 + LMDB** |
+| 延迟 | 14ms | **< 1ms** |
+| 多猫内存 | 共享 | **单进程 1×BGE-M3 (2GB)** |
+| LongMemEval-S R@5 | 95.2% | 待跑 (`benchmarks/run_longmemeval.py`) |
 
 ## 安装
 
-**Rust 库**（lib crate）：
-
-```toml
-[dependencies]
-memhop = "0.6.0"
-```
-
-**MCP Server**（二进制）：
-
 ```bash
-cargo install memhop-mcp-server
-# 或从源码构建
-cargo build --release --workspace
+# MCP Server（二进制）
+cargo build --release --features onnx,api-encoder
+./target/release/memhop-mcp-server
+
+# 作为 Rust 库
+cargo add memhop
 ```
 
-纯 Rust，Rust 2024 edition。依赖：heed (LMDB)、serde、rayon、half、zstd。
+要求 Rust 1.85+。可选依赖：ONNX Runtime (BGE-M3 编码)、API encoder (OpenAI 兼容)。
 
 ## Quick Start
 
-### 作为 Rust 库
+### MCP Server (推荐)
 
-```rust
-use memhop::{MemHop, StoreOptions};
+```bash
+# 启动 MCP Server
+MEMHOP_DB_PATH=/path/to/brain.db ./target/release/memhop-mcp-server
 
-let mut db = MemHop::open("brain.db")?;
-
-// 写入记忆
-let id = db.store("今天吃了豆浆油条", None, &StoreOptions::default())?;
-
-// O(1) 联想召回
-let m = db.recall("早餐吃了什么", None)?.unwrap();
-println!("{} (confidence: {:.2})", m.text, m.confidence);
-
-// 多域知识树
-db.create_tree("work")?;
-db.store("GraphRAG 方案评审通过", Some("work"), &StoreOptions::default())?;
-
-db.close()?;
-```
-
-### 作为 MCP 工具
-
-配置 Claude Desktop `claude_desktop_config.json`：
-
-```json
+# 或在 Claude Desktop / Cursor 中配置
 {
   "mcpServers": {
     "memhop": {
@@ -59,102 +59,151 @@ db.close()?;
 }
 ```
 
-支持 12 个 MCP 工具：`memhop_store`、`memhop_recall`、`memhop_recall_topk`、`memhop_search`、`memhop_recent`、`memhop_forget`、`memhop_dream`、`memhop_stats`、`memhop_count`、`memhop_create_tree`、`memhop_list_trees`、`memhop_remove_tree`。
+MCP Tools：`memhop_store` `memhop_recall` `memhop_mount_shelf` `memhop_knowledge_search` `memhop_forget` `memhop_update` `memhop_dream` `memhop_stats` `memhop_health`
 
-## 核心 API
-
-### 读写
-
-| 方法 | 说明 |
-|------|------|
-| `MemHop::open(path)` | 打开/创建数据库 |
-| `db.store(text, tree?, opts)` | 写入记忆，返回记忆 ID |
-| `db.recall(query, tree?)` | O(1) 联想召回，最高置信度匹配 |
-| `db.recall_topk(query, k, tree?)` | Top-K 召回 |
-| `db.search(filters, limit)` | 按 meta 字段精确过滤 |
-| `db.recent(limit, tree?)` | 最近写入的记忆 |
-| `db.forget(memory_id)` | 删除 |
-| `db.update(memory_id, text?, meta?)` | 更新 |
-| `db.close()` | 关闭引擎，持久化所有数据 |
-
-### 知识树
-
-| 方法 | 说明 |
-|------|------|
-| `db.create_tree(name)` | 创建独立知识域 |
-| `db.remove_tree(name)` | 删除知识域 |
-| `db.list_trees()` | 列出所有知识域 |
-
-### 记忆巩固
-
-| 方法 | 说明 |
-|------|------|
-| `db.dream(config?)` | 触发记忆巩固（模式合并/弱化） |
-| `db.stats()` | 引擎统计（总数/活跃/域数量） |
-| `db.count()` | 记忆总数 |
-
-### StoreOptions
+### Rust Library
 
 ```rust
-StoreOptions {
-    auto_entangle: true,              // 自动发现关联创建纠缠边
-    context_snippet: None,            // 存储时上下文
-    manual_links: vec![],             // 手动指定关联记忆 ID
-}
-```
+use memhop::{Brain, BrainConfig, PerceptionInput, RecallRequest, EmotionalState, Protection};
 
-### DreamConfig
+let mut brain = Brain::open("brain.db", BrainConfig::default(), None)?;
 
-```rust
-DreamConfig {
-    auto_trigger_interval: 100,       // 每 N 次 store 自动触发
-    merge_threshold: 0.95,            // 余弦相似度 > 此值触发合并
-    weaken_threshold: 0.3,             // 置信度 < 此值触发弱化
-    max_duration_ms: 500,             // 最大持续时间
-}
+// 存储记忆
+let out = brain.perceive(PerceptionInput {
+    content: "今天学了 Rust ownership".into(),
+    vector: vec![], // BGE-M3 编码器自动填充
+    session_id: "chat-001".into(),
+    ..Default::default()
+})?;
+
+// 检索 (Retrieval Mode — 纯语义)
+let resp = brain.recall(&RecallRequest {
+    query: "Rust 内存管理".into(),
+    limit: 5,
+    ..Default::default()
+})?;
+
+// 类脑联想 (Associative Mode — 情绪 + 图扩散)
+let resp = brain.recall(&RecallRequest {
+    query: "上次那个 Rust 的 bug".into(),
+    mode: RecallMode::Associative,
+    limit: 5,
+    ..Default::default()
+})?;
+
+// 挂载知识库
+brain.mount_shelf("/Users/me/books/rust-book", ShelfDomain::Book)?;
+let results = brain.knowledge_search("ownership rules", "rust-book", 5)?;
+
+// 记忆巩固
+brain.dream()?;
 ```
 
 ## 核心特性
 
-- **O(1) 召回**：Modern Hopfield Network，召回时间与记忆总量无关
-- **单文件存储**：LMDB 持久化，`brain.db` 即走即拷
-- **零模型依赖**：字符 n-gram 哈希编码 (1024 维 f16)，无需下载任何模型
-- **Domain Tree**：独立知识域，每个域有独立的 Hopfield 网络 + 索引 + 存储
-- **Auto Entangle**：存入记忆时自动发现关联（top-5 召回，置信度 > 0.5 自动建边）
-- **Dream 模式**：纯本地统计的记忆巩固（合并相似模式、弱化低置信度模式）
-- **f16 半精度**：向量存储使用 half-precision float，节省 50% 存储
-- **场景门控**：三层自动上下文过滤（fingerprint/tree/anchor），v0.6.2 启用
-- **MCP 集成**：标准 Model Context Protocol server，可直接接入 Claude Desktop
+### 双模式检索
+- **Retrieval Mode**：HNSW → cosine sort → [Cross-Encoder] → 纯质量，对标 FAISS
+- **Associative Mode**：HNSW → Hopfield spread → 情绪/ngram boost → 类脑联想
+
+### 三层架构
+```
+L0 Cortex (VecDeque, 7 entries)     → 工作记忆，当前会话
+L1 Hippocampus (LMDB, ~500 entries) → 暂存区，高保真
+L2 Hopfield + EntangleGraph         → 长期记忆，模式补全 + 图关联扩散
+```
+
+### 知识库挂载
+```
+MeowAgent 传入路径 → MemHop 自动切片 → BGE-M3 编码 → HNSW 索引
+支持: code (AST) / doc (heading) / book (chapter) / paper / custom
+```
+
+### Dream 记忆巩固
+- NREM：遗忘弱记忆 + 合并相似模式
+- REM：跨域关联发现 + 矛盾检测 + Schema 命名
+- LLM 可选注入 (不在检索热路径)
+
+### Plan-Gated Retrieval (PGT)
+四层计划门控检索 (L0-L3)：计划内 ngram → 图 BFS → 时序 → 全局回退
+
+### EntangleGraph
+四种边类型：Semantic / Temporal / Manual / CrossTree。Hebbian 学习：频繁共召回自动增强边权。竞争扩散激活 + 横向抑制。
+
+### 编码器策略
+```
+api-encoder (OpenAI) > ONNX BGE-M3 (1024d) > NgramEncoder (fallback)
+单进程加载一份 BGE-M3 (2GB)，所有猫共享
+```
+
+### 隐私过滤
+`memhop_store` 自动剥离 API key、secret、`<private>` 标签
+
+## 部署架构
+
+```
+全机一个 memhop-mcp-server 进程
+├── BGE-M3 ONNX (1×2GB)
+├── Brain(cat_a) → LMDB: /data/cats/A/
+├── Brain(cat_b) → LMDB: /data/cats/B/
+├── Shelf(rust-book) → HNSW-only 知识索引
+└── Dream Scheduler → 轮询所有 Brain
+```
 
 ## 架构
 
 ```
-memhop (lib crate, 0.6.0)
-├── engine/         MemHop 引擎（API 门面 + domain tree 路由）
-├── hopfield.rs     Modern Hopfield Network (499 行)
-├── encoder/        N-gram 哈希编码器
-├── storage.rs      LMDB 持久化层 (546 行)
-├── index.rs        稀疏索引 (288 行)
-├── meta_index.rs   元数据索引 (153 行)
-├── scene_gating.rs 场景门控 (414 行, v0.6.2 启用)
-├── dream.rs        记忆巩固 (156 行)
-└── filter.rs       过滤器 (161 行)
+memhop (lib crate, v0.9.0)
+├── brain.rs         顶层 API (Retrieval/Associative 双模式)
+├── hnsw.rs          HNSW 图搜索索引 (719 行, O(log N))
+├── hopfield.rs      Modern Hopfield Network (模式补全)
+├── activation.rs    竞争扩散 + 情绪对齐
+├── shelf.rs         知识库挂载 (334 行)
+├── encoder/
+│   ├── hybrid.rs    Ngram+ONNX 融合编码
+│   ├── onnx.rs      BGE-M3 ONNX 编码器
+│   ├── api.rs       OpenAI 兼容 API 编码器
+│   ├── ngram.rs     N-gram 哈希编码 (fallback)
+│   └── reranker.rs  Cross-Encoder 精排 (147 行)
+├── storage.rs       LMDB 持久化层
+├── index.rs         SparseIndex (ngram 倒排)
+├── unified_graph.rs EntangleGraph + Hebbian 学习
+├── dream.rs         六阶段记忆巩固
+├── plan_gate.rs     Plan-Gated Retrieval
+└── types.rs         配置 + 请求/响应类型
 
-memhop-mcp-server (binary crate, 0.6.0)
-└── main.rs         MCP JSON-RPC server (124 行)
+memhop-mcp-server (binary crate, v0.9.0)
+└── main.rs          MCP JSON-RPC (多数据库路径 + health + 隐私过滤)
 ```
 
-## 构建与测试
+## Benchmark
 
 ```bash
-# 编译
-cargo build --workspace
+# 构建
+cargo build --release --features onnx
 
-# 测试
+# 单元测试 (144+ tests)
 cargo test --workspace
 
-# Clippy
-cargo clippy --workspace -- -D warnings
+# 延迟 benchmark
+./target/release/latency_bench --scales 1000,5000,10000,50000
+
+# 质量 benchmark (需 Python 环境)
+pip install sentence-transformers numpy
+python3 -c "
+from sentence_transformers import SentenceTransformer
+# ... 生成 BGE-M3 编码的测试数据 ...
+"
+./target/release/quality_bench --input /tmp/input.json --output /tmp/output.json --mode retrieval
+
+# LongMemEval-S (对标 agentmemory)
+python3 benchmarks/run_longmemeval.py 500
+```
+
+## 测试
+
+```bash
+cargo test --workspace
+# 99 lib tests + 30 integration + 15 plan_integration = 144 total
 ```
 
 ## License

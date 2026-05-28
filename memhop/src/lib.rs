@@ -52,6 +52,7 @@ pub use types::{
     BrainConfig, ChunkMeta, ConflictItem, DreamReport, InnateSchema, PerceptionInput,
     PerceptionOutput, RecallMode, RecallRequest, RecallResponse, RecallTrace, ReflectionInput,
     ReflectionKind, ShelfDomain, ShelfResult,
+    TurnHit, SessionScore,
 };
 pub use shelf::ShelfManager;
 
@@ -60,7 +61,7 @@ pub use engram::{
     Association, AssociationKind, EmotionalContext, EmotionalState, Engram, EngramKind,
     Protection, SchemaExtra, VECTOR_DIM,
     PlanHint, PlanLevel, PlanState, PlanInfo, PlanNode,
-    DialogueTurn, ToneMeta, StyleCompact,
+    DialogueTurn, ToneMeta, StyleCompact, TurnSource,
     ToneAggregate, TopicDistribution, DomainStats,
 };
 

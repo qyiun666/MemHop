@@ -1,0 +1,28 @@
+{
+  "benchmark": "MemHop v0.9.0 Encoder Comparison",
+  "timestamp": "20260528_191436",
+  "docs": 500,
+  "queries": 32,
+  "results": [
+    {
+      "model": "BGE-M3",
+      "model_id": "BAAI/bge-m3",
+      "dim": 1024,
+      "params_m": 567.8,
+      "load_sec": 8.7,
+      "encode_sec": 19.0,
+      "recall_sec": 72.5,
+      "total_sec": 104.2,
+      "ndcg@10": 0.2249,
+      "mrr": 0.3777,
+      "r@1": 0.0382,
+      "r@5": 0.1591,
+      "r@10": 0.1896,
+      "失忆率(1-R@1)": 0.9618,
+      "幻听率(≈1-R@5)": 0.8409,
+      "cos_ndcg@10": 0.2183,
+      "ratio": 103.0,
+      "avg_latency_us": 5513
+    }
+  ]
+}

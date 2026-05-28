@@ -177,6 +177,10 @@ fn make_perception(text: &str, vector: Vec<f16>) -> PerceptionInput {
         agent_response: None,
         dialogue_timestamp: None,
         source: None,
+        turn_id: String::new(),
+        turn_index: 0,
+        segment_index: 0,
+        topic_label: None,
     }
 }
 
@@ -257,13 +261,15 @@ fn main() {
         }
     };
 
-    // Pre-encode documents
+    // Pre-encode documents (pad/truncate to VECTOR_DIM)
     let doc_embeddings: Vec<Vec<f16>> = if has_vectors {
         input.documents.iter().map(|d| {
-            d.vector.as_ref().map(|v| v.iter().map(|x| f16::from_f32(*x)).collect())
+            let mut v: Vec<f16> = d.vector.as_ref().map(|v| v.iter().map(|x| f16::from_f32(*x)).collect())
                 .unwrap_or_else(|| {
                     hybrid.as_ref().expect("no encoder available").encode(&d.text).dense
-                })
+                });
+            v.resize(VECTOR_DIM, f16::ZERO);
+            v
         }).collect()
     } else {
         let enc = hybrid.as_ref().expect("no encoder available");
@@ -272,13 +278,15 @@ fn main() {
 
     eprintln!("  encoded {} documents", doc_embeddings.len());
 
-    // Pre-encode queries
+    // Pre-encode queries (pad/truncate to VECTOR_DIM)
     let query_embeddings: Vec<Vec<f16>> = if has_vectors {
         input.queries.iter().map(|q| {
-            q.vector.as_ref().map(|v| v.iter().map(|x| f16::from_f32(*x)).collect())
+            let mut v: Vec<f16> = q.vector.as_ref().map(|v| v.iter().map(|x| f16::from_f32(*x)).collect())
                 .unwrap_or_else(|| {
                     hybrid.as_ref().expect("no encoder available").encode(&q.text).dense
-                })
+                });
+            v.resize(VECTOR_DIM, f16::ZERO);
+            v
         }).collect()
     } else {
         let enc = hybrid.as_ref().expect("no encoder available");
@@ -358,9 +366,9 @@ fn main() {
             }).expect("recall");
             latencies.push(t.elapsed().as_micros() as f64);
 
-            // Map engram_id -> doc_id
-            let ranked: Vec<String> = resp.working_memory.iter()
-                .chain(resp.associations.iter())
+            // Map engram_id -> doc_id (associations only — benchmarks retrieval quality,
+            // not recency-biased working memory)
+            let ranked: Vec<String> = resp.associations.iter()
                 .filter_map(|e| {
                     id_map.iter()
                         .find(|(_, v)| *v == &e.id)
@@ -438,8 +446,7 @@ fn main() {
                 ..Default::default()
             }).expect("recall");
 
-            let ranked: Vec<String> = resp.working_memory.iter()
-                .chain(resp.associations.iter())
+            let ranked: Vec<String> = resp.associations.iter()
                 .filter_map(|e| {
                     id_map.iter()
                         .find(|(_, v)| *v == &e.id)
@@ -515,8 +522,7 @@ fn main() {
                 ..Default::default()
             }).expect("recall");
 
-            let ranked: Vec<String> = resp.working_memory.iter()
-                .chain(resp.associations.iter())
+            let ranked: Vec<String> = resp.associations.iter()
                 .filter_map(|e| {
                     id_map.iter()
                         .find(|(_, v)| *v == &e.id)
