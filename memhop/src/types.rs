@@ -106,19 +106,14 @@ impl Default for BrainConfig {
 // ── RecallMode (v0.9.0) ───────────────────────────────────
 
 /// v0.9.0: Dual recall mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RecallMode {
     /// Pure semantic retrieval: HNSW → cosine sort → return.
     /// Skips emotional_alignment and ngram_overlap main ranking.
+    #[default]
     Retrieval,
     /// Associative recall: HNSW → Hopfield spread → emotional/ngram boost (×0.9-1.1).
     Associative,
-}
-
-impl Default for RecallMode {
-    fn default() -> Self {
-        RecallMode::Retrieval
-    }
 }
 
 // ── InnateSchema ──────────────────────────────────────────

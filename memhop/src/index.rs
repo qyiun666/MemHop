@@ -20,6 +20,7 @@ pub struct SparseIndex {
     forward: HashMap<String, HashMap<String, f32>>,
 }
 
+#[allow(dead_code)]
 impl SparseIndex {
     pub fn new() -> Self {
         SparseIndex {

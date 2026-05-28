@@ -92,13 +92,13 @@ fn throughput(lats: &[Duration]) -> f64 {
 }
 
 fn dir_size_mb(path: &Path) -> f64 {
-    if let Ok(out) = Command::new("du").arg("-sk").arg(path).output() {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout);
-            if let Some(n) = s.split_whitespace().next().and_then(|n| n.parse::<u64>().ok()) {
-                return n as f64 / 1024.0;
-            }
-        }
+    if let Ok(out) = Command::new("du").arg("-sk").arg(path).output()
+        && out.status.success()
+        && let Some(n) = String::from_utf8_lossy(&out.stdout)
+            .split_whitespace().next()
+            .and_then(|n| n.parse::<u64>().ok())
+    {
+        return n as f64 / 1024.0;
     }
     0.0
 }
@@ -196,7 +196,7 @@ fn main() {
             store_p50, store_p95, store_p99, store_ops);
 
         // ── Recall ──
-        let queries: Vec<String> = (0..num_queries).map(|i| make_query(i)).collect();
+        let queries: Vec<String> = (0..num_queries).map(make_query).collect();
         let mut recall_lats: Vec<Duration> = Vec::with_capacity(num_queries);
 
         for q_text in &queries {

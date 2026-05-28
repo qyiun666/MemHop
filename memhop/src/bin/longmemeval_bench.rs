@@ -74,6 +74,7 @@ struct Question {
 
 #[derive(Debug)]
 struct QuestionResult {
+    #[allow(dead_code)]
     q_id: String,
     q_type: String,
     /// Position in combined ranked list (working_memory + associations).
@@ -84,6 +85,7 @@ struct QuestionResult {
 
 #[derive(Debug)]
 struct ProblemResult {
+    #[allow(dead_code)]
     id: String,
     results: Vec<QuestionResult>,
 }

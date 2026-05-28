@@ -73,10 +73,10 @@ impl EngramCache {
         if self.cache.contains_key(&id) {
             return;
         }
-        if self.order.len() >= self.max_size {
-            if let Some(old) = self.order.pop_front() {
-                self.cache.remove(&old);
-            }
+        if self.order.len() >= self.max_size
+            && let Some(old) = self.order.pop_front()
+        {
+            self.cache.remove(&old);
         }
         self.order.push_back(id.clone());
         self.cache.insert(id, engram);
@@ -171,22 +171,21 @@ impl Brain {
         let (hnsw, hnsw_id_map) = match HnswIndex::load_from_storage(&storage) {
             Ok(Some(idx)) => {
                 let mut id_map = HashMap::new();
-                if let Ok(txn) = storage.begin_read() {
-                    if let Ok(entries) = storage.all_hippocampus_entries(&txn) {
+                if let Ok(txn) = storage.begin_read()
+                    && let Ok(entries) = storage.all_hippocampus_entries(&txn) {
                         for (id_str, _) in &entries {
                             let node_id = counter;
                             counter += 1;
                             id_map.insert(node_id, id_str.clone());
                         }
                     }
-                }
                 (idx, id_map)
             }
             _ => {
                 let mut idx = HnswIndex::new(crate::engram::VECTOR_DIM);
                 let mut id_map = HashMap::new();
-                if let Ok(txn) = storage.begin_read() {
-                    if let Ok(entries) = storage.all_hippocampus_entries(&txn) {
+                if let Ok(txn) = storage.begin_read()
+                    && let Ok(entries) = storage.all_hippocampus_entries(&txn) {
                         // v0.9.0: Pre-warm engram cache during HNSW rebuild
                         let engram_cache_ref = &engram_cache;
                         for (id_str, engram) in &entries {
@@ -197,7 +196,6 @@ impl Brain {
                             engram_cache_ref.borrow_mut().insert(id_str.clone(), engram.clone());
                         }
                     }
-                }
                 (idx, id_map)
             }
         };
@@ -205,15 +203,14 @@ impl Brain {
         // v0.9.0: Rebuild sparse index from stored engrams
         let sparse_index = {
             let mut si = SparseIndex::new();
-            if let Ok(txn) = storage.begin_read() {
-                if let Ok(entries) = storage.all_hippocampus_entries(&txn) {
+            if let Ok(txn) = storage.begin_read()
+                && let Ok(entries) = storage.all_hippocampus_entries(&txn) {
                     let tmp_enc = NgramEncoder::new(crate::engram::VECTOR_DIM);
                     for (id_str, engram) in &entries {
                         let sparse = tmp_enc.encode(&engram.text).sparse;
                         si.add(id_str, &sparse);
                     }
                 }
-            }
             si
         };
 
@@ -2086,7 +2083,7 @@ impl Brain {
         let mut top_tone_tags: Vec<(String, u32)> = tag_counts.into_iter()
             .map(|(k, v)| (k.to_string(), v))
             .collect();
-        top_tone_tags.sort_by(|a, b| b.1.cmp(&a.1));
+        top_tone_tags.sort_by_key(|b| std::cmp::Reverse(b.1));
         top_tone_tags.truncate(10);
 
         // Filler ratio trend

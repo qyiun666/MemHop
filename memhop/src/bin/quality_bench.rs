@@ -49,6 +49,9 @@ struct BenchInput {
     spread_top_k: usize,
     #[serde(default = "default_limit")]
     limit: usize,
+    /// v0.9.1: If "turn", aggregate per-turn hits into session-level metrics.
+    #[serde(default)]
+    aggregate_mode: Option<String>,
 }
 
 fn default_dream_interval() -> usize { 50 }
@@ -60,6 +63,18 @@ struct DocInput {
     id: String,
     text: String,
     vector: Option<Vec<f32>>,
+    /// v0.9.1: Session identifier for turn-level aggregation.
+    #[serde(default)]
+    session_id: Option<String>,
+    /// v0.9.1: Turn identifier within session.
+    #[serde(default)]
+    turn_id: Option<String>,
+    /// v0.9.1: 0-based turn index within session.
+    #[serde(default)]
+    turn_index: Option<u32>,
+    /// v0.9.1: Optional topic label.
+    #[serde(default)]
+    topic_label: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -185,13 +200,13 @@ fn make_perception(text: &str, vector: Vec<f16>) -> PerceptionInput {
 }
 
 fn dir_size_mb(path: &Path) -> f64 {
-    if let Ok(out) = Command::new("du").arg("-sk").arg(path).output() {
-        if out.status.success() {
-            let s = String::from_utf8_lossy(&out.stdout);
-            if let Some(n) = s.split_whitespace().next().and_then(|n| n.parse::<u64>().ok()) {
-                return n as f64 / 1024.0;
-            }
-        }
+    if let Ok(out) = Command::new("du").arg("-sk").arg(path).output()
+        && out.status.success()
+        && let Some(n) = String::from_utf8_lossy(&out.stdout)
+            .split_whitespace().next()
+            .and_then(|n| n.parse::<u64>().ok())
+    {
+        return n as f64 / 1024.0;
     }
     0.0
 }
@@ -335,8 +350,20 @@ fn main() {
         // Store
         let mut id_map: HashMap<usize, String> = HashMap::new(); // doc_idx -> engram_id
         for (i, doc) in input.documents.iter().enumerate() {
-            let out = brain.perceive(make_perception(&doc.text, doc_embeddings[i].clone()))
-                .expect("perceive");
+            let mut p = make_perception(&doc.text, doc_embeddings[i].clone());
+            if let Some(ref sid) = doc.session_id {
+                p.session_id = sid.clone();
+            }
+            if let Some(ref tid) = doc.turn_id {
+                p.turn_id = tid.clone();
+            }
+            if let Some(ti) = doc.turn_index {
+                p.turn_index = ti;
+            }
+            if let Some(tl) = doc.topic_label.clone() {
+                p.topic_label = Some(tl);
+            }
+            let out = brain.perceive(p).expect("perceive");
             id_map.insert(i, out.engram_id);
         }
 
@@ -366,15 +393,30 @@ fn main() {
             }).expect("recall");
             latencies.push(t.elapsed().as_micros() as f64);
 
-            // Map engram_id -> doc_id (associations only — benchmarks retrieval quality,
-            // not recency-biased working memory)
-            let ranked: Vec<String> = resp.associations.iter()
-                .filter_map(|e| {
-                    id_map.iter()
-                        .find(|(_, v)| *v == &e.id)
-                        .map(|(k, _)| input.documents[*k].id.clone())
-                })
-                .collect();
+            // v0.9.1: Turn-level aggregation mode
+            let ranked: Vec<String> = if input.aggregate_mode.as_deref() == Some("turn") {
+                // Group hit_turns by session, rank sessions by best turn score
+                let mut session_best: HashMap<String, f32> = HashMap::new();
+                for ht in &resp.hit_turns {
+                    let sid = if ht.session_id.is_empty() { ht.turn_id.clone() } else { ht.session_id.clone() };
+                    let e = session_best.entry(sid).or_insert(0.0);
+                    if ht.score > *e { *e = ht.score; }
+                }
+                // Sort sessions by score descending
+                let mut sorted: Vec<(String, f32)> = session_best.into_iter().collect();
+                sorted.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                sorted.truncate(input.limit);
+                sorted.into_iter().map(|(sid, _)| sid).collect()
+            } else {
+                // Default: use associations (doc-level)
+                resp.associations.iter()
+                    .filter_map(|e| {
+                        id_map.iter()
+                            .find(|(_, v)| *v == &e.id)
+                            .map(|(k, _)| input.documents[*k].id.clone())
+                    })
+                    .collect()
+            };
 
             ndcg_scores.push(ndcg_at_k(&ranked, rel_set, 10));
             mrr_scores.push(mrr_score(&ranked, rel_set));

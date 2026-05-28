@@ -236,8 +236,7 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     const MAX_PER_SESSION: usize = 3;
 
     let mut results: Vec<Value> = Vec::new();
-    let mut session_count: usize = 0;
-    for e in &resp.working_memory {
+    for (session_count, e) in resp.working_memory.iter().enumerate() {
         if session_count >= MAX_PER_SESSION {
             break;
         }
@@ -246,7 +245,6 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
             None => e.text.clone(),
         };
         results.push(json!({"id": e.id, "text": text, "kind": format!("{}", e.kind), "source": "working_memory"}));
-        session_count += 1;
     }
     for e in &resp.associations {
         let text = match max_tokens {
@@ -341,7 +339,7 @@ fn tool_count(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
 
 fn tool_health(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
     let g = brain.growth_state();
-    let uptime_secs = START_TIME.get_or_init(|| Instant::now()).elapsed().as_secs();
+    let uptime_secs = START_TIME.get_or_init(Instant::now).elapsed().as_secs();
     Ok(json!({
         "status": "ok",
         "version": VERSION,

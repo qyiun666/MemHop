@@ -178,22 +178,21 @@ impl ShelfManager {
             for entry in entries {
                 let entry = entry.map_err(|e| format!("Dir entry error: {}", e))?;
                 let entry_path = entry.path();
-                if entry_path.is_file() {
-                    if let Some(ext) = entry_path.extension() {
-                        if extensions.contains(&ext.to_str().unwrap_or("")) {
-                            let file_path = entry_path.to_string_lossy().to_string();
-                            if let Ok(text) = std::fs::read_to_string(&file_path) {
-                                let chunks = match domain {
-                                    ShelfDomain::Code => chunk_code_file(&file_path, &text),
-                                    ShelfDomain::Doc => chunk_by_heading(&text),
-                                    ShelfDomain::Book | ShelfDomain::Paper => {
-                                        chunk_by_paragraph(&text)
-                                    }
-                                    ShelfDomain::Custom => chunk_by_tokens(&text, 512),
-                                };
-                                all_chunks.extend(chunks);
+                if entry_path.is_file()
+                    && let Some(ext) = entry_path.extension()
+                    && extensions.contains(&ext.to_str().unwrap_or(""))
+                {
+                    let file_path = entry_path.to_string_lossy().to_string();
+                    if let Ok(text) = std::fs::read_to_string(&file_path) {
+                        let chunks = match domain {
+                            ShelfDomain::Code => chunk_code_file(&file_path, &text),
+                            ShelfDomain::Doc => chunk_by_heading(&text),
+                            ShelfDomain::Book | ShelfDomain::Paper => {
+                                chunk_by_paragraph(&text)
                             }
-                        }
+                            ShelfDomain::Custom => chunk_by_tokens(&text, 512),
+                        };
+                        all_chunks.extend(chunks);
                     }
                 }
             }
