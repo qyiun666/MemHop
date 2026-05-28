@@ -1,9 +1,16 @@
 use std::io::{BufRead, BufReader, Write};
+use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 use serde_json::{json, Value};
 use memhop::{
     Brain, BrainConfig, PerceptionInput, RecallRequest,
     EmotionalState, Protection, ReflectionInput, ReflectionKind,
+    ShelfManager, ShelfDomain,
 };
+
+const VERSION: &str = "0.9.0";
+
+static START_TIME: OnceLock<Instant> = OnceLock::new();
 
 fn main() {
     let db_path = std::env::var("MEMHOP_DB_PATH")
@@ -30,7 +37,7 @@ fn main() {
         let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
         let result: Result<Value, String> = match method {
-            "initialize" => Ok(json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"memhop-mcp-server","version":"0.8.0"},"capabilities":{"tools":{}}})),
+            "initialize" => Ok(json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"memhop-mcp-server","version":VERSION},"capabilities":{"tools":{}}})),
             "notifications/initialized" => continue,
             "tools/list" => Ok(tools_list()),
             "tools/call" => {
@@ -63,15 +70,19 @@ fn main() {
 fn tools_list() -> Value {
     json!({"tools":[
         {"name":"memhop_store","description":"Store a new perception/memory","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"session_id":{"type":"string"},"valence":{"type":"number"},"arousal":{"type":"number"}},"required":["text"]}},
-        {"name":"memhop_recall","description":"Recall memories matching a query","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"session_id":{"type":"string"},"limit":{"type":"integer"}},"required":["query"]}},
+        {"name":"memhop_recall","description":"Recall memories matching a query. Optionally accepts pre-encoded query_vector for external encoder benchmarks.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"session_id":{"type":"string"},"limit":{"type":"integer"},"max_tokens":{"type":"integer"},"query_vector":{"type":"array","items":{"type":"number"}}},"required":["query"]}},
         {"name":"memhop_reflect","description":"Create a reflection engram","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"kind":{"type":"string"},"session_id":{"type":"string"}},"required":["content","kind"]}},
         {"name":"memhop_dream","description":"Run Dream consolidation cycle","inputSchema":{"type":"object","properties":{}}},
         {"name":"memhop_stats","description":"Get brain statistics","inputSchema":{"type":"object","properties":{}}},
         {"name":"memhop_count","description":"Get total engram count","inputSchema":{"type":"object","properties":{}}},
+        {"name":"memhop_health","description":"Get health metrics (uptime, version, basic stats)","inputSchema":{"type":"object","properties":{}}},
         {"name":"memhop_complete_plan","description":"Complete a plan (mark as Completed, optionally summarize)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}},"required":["plan_id"]}},
         {"name":"memhop_get_plan_tree","description":"Get the plan tree (all root plans or descendants of a given plan)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}}}},
-        {"name":"memhop_get_chat_history","description":"Get archived dialogue turns for a plan","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"},"offset":{"type":"integer"},"limit":{"type":"integer"}},"required":["plan_id"]}},
-        {"name":"memhop_plan_stats","description":"Get aggregated plan statistics (domain distribution + tone trends)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"},"start_time":{"type":"integer"},"end_time":{"type":"integer"}}}}
+        {"name":"memhop_get_chat_history","description":"Get archived dialogue turns for a plan","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}},"required":["plan_id"]}},
+        {"name":"memhop_plan_stats","description":"Get aggregated plan statistics (domain distribution + tone trends)","inputSchema":{"type":"object","properties":{"start_time":{"type":"integer"},"end_time":{"type":"integer"}}}},
+        {"name":"memhop_mount_shelf","description":"Mount a knowledge shelf from a file or directory path","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"domain":{"type":"string"}},"required":["path"]}},
+        {"name":"memhop_knowledge_search","description":"Search within a mounted knowledge shelf","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"shelf_id":{"type":"string"},"limit":{"type":"integer"},"max_tokens":{"type":"integer"}},"required":["query","shelf_id"]}},
+        {"name":"memhop_unmount_shelf","description":"Unmount and remove a knowledge shelf","inputSchema":{"type":"object","properties":{"shelf_id":{"type":"string"}},"required":["shelf_id"]}}
     ]})
 }
 
@@ -87,10 +98,14 @@ fn tool_call(brain: &mut Brain, params: Option<&Value>) -> Result<Value, String>
         "memhop_dream" => tool_dream(brain, args),
         "memhop_stats" => tool_stats(brain, args),
         "memhop_count" => tool_count(brain, args),
+        "memhop_health" => tool_health(brain, args),
         "memhop_complete_plan" => tool_complete_plan(brain, args),
         "memhop_get_plan_tree" => tool_get_plan_tree(brain, args),
         "memhop_get_chat_history" => tool_get_chat_history(brain, args),
         "memhop_plan_stats" => tool_plan_stats(brain, args),
+        "memhop_mount_shelf" => tool_mount_shelf(brain, args),
+        "memhop_knowledge_search" => tool_knowledge_search(brain, args),
+        "memhop_unmount_shelf" => tool_unmount_shelf(brain, args),
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
@@ -102,8 +117,32 @@ fn s(val: &Value, key: &str) -> Result<String, String> {
         .ok_or_else(|| format!("Missing required parameter: {}", key))
 }
 
+/// v0.9.0: Simple privacy filter — strip suspected secrets from text before storage.
+fn privacy_filter(text: &str) -> String {
+    let mut result = String::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Skip lines that look like standalone API keys
+        if trimmed.starts_with("sk-") && trimmed.len() > 20 {
+            continue;
+        }
+        // Mask inline secret keywords
+        let masked = line
+            .replace("api_key", "***")
+            .replace("API_KEY", "***")
+            .replace("api-key", "***")
+            .replace("secret", "***")
+            .replace("password", "***")
+            .replace("token", "***");
+        result.push_str(&masked);
+        result.push('\n');
+    }
+    result.trim_end().to_string()
+}
+
 fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
-    let text = s(args, "text")?;
+    let raw_text = s(args, "text")?;
+    let text = privacy_filter(&raw_text);
     let session_id = args.get("session_id")
         .and_then(|v| v.as_str())
         .unwrap_or("default")
@@ -111,7 +150,7 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     let valence = args.get("valence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let arousal = args.get("arousal").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
 
-    let vector = vec![half::f16::from_f32(0.0); memhop::VECTOR_DIM];
+    let vector = brain.encode_text(&text);
 
     let input = PerceptionInput {
         content: text,
@@ -126,6 +165,7 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         plan_id: None,
         agent_response: None,
         dialogue_timestamp: None,
+        source: None,
     };
 
     let output = brain.perceive(input).map_err(|e| e.to_string())?;
@@ -144,10 +184,20 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         .unwrap_or("")
         .to_string();
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as usize);
+
+    // Accept pre-encoded query_vector for external encoder benchmarks
+    let query_vector: Option<Vec<half::f16>> = args.get("query_vector")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_f64().map(|f| half::f16::from_f32(f as f32)))
+                .collect()
+        });
 
     let req = RecallRequest {
         query,
-        query_vector: None,
+        query_vector,
         session_id,
         emotional_state: EmotionalState::default(),
         attention_anchors: vec![],
@@ -160,16 +210,33 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         deep_search_plan_id: None,
         domain_filter: vec![],
         limit: 10,
+        mode: memhop::RecallMode::Retrieval,
+        use_reranker: false,
     };
 
     let resp = brain.recall(&req).map_err(|e| e.to_string())?;
 
+    const MAX_PER_SESSION: usize = 3;
+
     let mut results: Vec<Value> = Vec::new();
+    let mut session_count: usize = 0;
     for e in &resp.working_memory {
-        results.push(json!({"id": e.id, "text": e.text, "kind": format!("{}", e.kind), "source": "working_memory"}));
+        if session_count >= MAX_PER_SESSION {
+            break;
+        }
+        let text = match max_tokens {
+            Some(n) => truncate_to_tokens(&e.text, n),
+            None => e.text.clone(),
+        };
+        results.push(json!({"id": e.id, "text": text, "kind": format!("{}", e.kind), "source": "working_memory"}));
+        session_count += 1;
     }
     for e in &resp.associations {
-        results.push(json!({"id": e.id, "text": e.text, "kind": format!("{}", e.kind), "source": "association"}));
+        let text = match max_tokens {
+            Some(n) => truncate_to_tokens(&e.text, n),
+            None => e.text.clone(),
+        };
+        results.push(json!({"id": e.id, "text": text, "kind": format!("{}", e.kind), "source": "association"}));
     }
     results.truncate(limit);
 
@@ -235,11 +302,30 @@ fn tool_stats(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
         "dream_cycles": g.dream_cycles,
         "total_schemas_emerged": g.total_schemas_emerged,
         "total_contradictions": g.total_contradictions,
+        "version": VERSION,
     }))
 }
 
 fn tool_count(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
     Ok(json!({"count": brain.memory_count() + brain.hippocampus_len()}))
+}
+
+// ── v0.9.0: Health tool ────────────────────────────────────────
+
+fn tool_health(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
+    let g = brain.growth_state();
+    let uptime_secs = START_TIME.get_or_init(|| Instant::now()).elapsed().as_secs();
+    Ok(json!({
+        "status": "ok",
+        "version": VERSION,
+        "uptime_secs": uptime_secs,
+        "total_memories": brain.memory_count() + brain.hippocampus_len(),
+        "cortex_len": brain.cortex_len(),
+        "hippocampus_len": brain.hippocampus_len(),
+        "total_engrams_created": g.total_engrams_created,
+        "total_consolidated": g.total_consolidated,
+        "dream_cycles": g.dream_cycles,
+    }))
 }
 
 // ── v0.8.0: New Plan tools ─────────────────────────────────────
@@ -271,9 +357,7 @@ fn tool_get_plan_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> 
 
 fn tool_get_chat_history(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     let plan_id = s(args, "plan_id")?;
-    let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
-    let turns = brain.archived_dialogue(&plan_id, offset, limit).map_err(|e| e.to_string())?;
+    let turns = brain.archived_dialogue(&plan_id, 0, 1000).map_err(|e| e.to_string())?;
     let result: Vec<Value> = turns.iter().map(|t| {
         json!({
             "id": t.id,
@@ -325,3 +409,82 @@ fn tool_plan_stats(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         }
     }))
 }
+
+// ── v0.9.0: Knowledge Shelf tools ──────────────────────────
+
+fn get_shelf_manager() -> &'static Mutex<ShelfManager> {
+    static MANAGER: OnceLock<Mutex<ShelfManager>> = OnceLock::new();
+    MANAGER.get_or_init(|| Mutex::new(ShelfManager::new()))
+}
+
+fn truncate_to_tokens(text: &str, max_tokens: usize) -> String {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    if words.len() <= max_tokens {
+        text.to_string()
+    } else {
+        words[..max_tokens].join(" ")
+    }
+}
+
+fn tool_mount_shelf(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let path = s(args, "path")?;
+    let domain_str = args
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("doc");
+    let domain = match domain_str {
+        "code" => ShelfDomain::Code,
+        "book" => ShelfDomain::Book,
+        "paper" => ShelfDomain::Paper,
+        _ => ShelfDomain::Doc,
+    };
+
+    let mut manager = get_shelf_manager().lock().map_err(|e| e.to_string())?;
+    let shelf_id = manager.mount(&path, domain)?;
+    manager.encode_shelf(&shelf_id, |text| brain.encode_text(text))?;
+
+    Ok(json!({"shelf_id": shelf_id}))
+}
+
+fn tool_knowledge_search(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let query = s(args, "query")?;
+    let shelf_id = s(args, "shelf_id")?;
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5) as usize;
+    let max_tokens = args
+        .get("max_tokens")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+
+    let query_vector = brain.encode_text(&query);
+    let manager = get_shelf_manager().lock().map_err(|e| e.to_string())?;
+    let results = manager.search(&shelf_id, &query_vector, limit)?;
+
+    let out: Vec<Value> = results
+        .into_iter()
+        .map(|r| {
+            let text = match max_tokens {
+                Some(n) => truncate_to_tokens(&r.text, n),
+                None => r.text,
+            };
+            json!({
+                "text": text,
+                "location": r.location,
+                "score": r.score,
+                "source": r.source,
+            })
+        })
+        .collect();
+
+    Ok(json!({"status": "ok", "results": out}))
+}
+
+fn tool_unmount_shelf(_brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let shelf_id = s(args, "shelf_id")?;
+    let mut manager = get_shelf_manager().lock().map_err(|e| e.to_string())?;
+    manager.unmount(&shelf_id)?;
+    Ok(json!({"status": "ok"}))
+}
+

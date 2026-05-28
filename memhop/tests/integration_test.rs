@@ -42,6 +42,7 @@ fn perception(text: &str, session: &str) -> PerceptionInput {
         plan_id: None,
         agent_response: None,
         dialogue_timestamp: None,
+        source: None,
     }
 }
 
@@ -129,6 +130,7 @@ fn test_perceive_with_emotional_state() {
             plan_id: None,
         agent_response: None,
         dialogue_timestamp: None,
+        source: None,
     };
     let id = brain.perceive(input).expect("perceive");
     assert!(!id.engram_id.is_empty());
@@ -390,6 +392,7 @@ fn test_emotional_context_updates_on_perceive() {
             plan_id: None,
         agent_response: None,
         dialogue_timestamp: None,
+        source: None,
     };
     brain.perceive(input).expect("perceive");
     let ctx = brain.emotional_context();
@@ -495,6 +498,7 @@ fn test_schema_emergence_after_dream() {
             plan_id: None,
             agent_response: None,
             dialogue_timestamp: None,
+            source: None,
         };
         brain.perceive(input).unwrap();
     }
@@ -565,6 +569,7 @@ fn test_memory_belongs_to_multiple_anchors() {
             plan_id: None,
         agent_response: None,
         dialogue_timestamp: None,
+        source: None,
     };
     let id = brain.perceive(input).unwrap();
     assert!(!id.engram_id.is_empty(), "should produce an ID");

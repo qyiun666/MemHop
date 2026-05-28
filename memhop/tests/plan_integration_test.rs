@@ -25,6 +25,7 @@ fn perception(text: &str, session: &str) -> PerceptionInput {
         plan_id: None,
         agent_response: None,
         dialogue_timestamp: None,
+        source: None,
     }
 }
 

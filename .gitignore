@@ -42,3 +42,7 @@ docs/
 
 # Python prototype (not for public repo)
 src/memhop/
+# v0.9.0: Large model files (user-downloaded)
+/models/
+# Node.js
+/node_modules/

@@ -1,5 +1,4 @@
 //! Sparse inverted index for two-stage retrieval.
-#![allow(dead_code)] // serialization/search methods reserved for v0.6.x two-stage retrieval
 //!
 //! Stage 1: Sparse coarse screening via inverted index (ngram → memory_ids).
 //! Stage 2: MHN fine ranking via Hopfield recall_among.
@@ -82,6 +81,57 @@ impl SparseIndex {
                         && let Some(d_weight) = doc_sparse.get(ngram) {
                             *scores.entry(doc_id.clone()).or_insert(0.0) += q_weight * d_weight;
                         }
+                }
+            }
+        }
+
+        let mut candidates: Vec<(String, f32)> = scores.into_iter().collect();
+        candidates.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        candidates.truncate(max_candidates);
+        candidates.into_iter().map(|(id, _)| id).collect()
+    }
+
+    /// Compute IDF map from current index state.
+    /// Returns ngram → idf = ln(N / df) where N = total docs, df = docs containing ngram.
+    /// Rare ngrams get high IDF weights, making them more discriminative.
+    pub fn idf_map(&self) -> HashMap<String, f32> {
+        let n = self.forward.len() as f32;
+        if n < 2.0 {
+            return HashMap::new();
+        }
+        self.inverted
+            .iter()
+            .map(|(ngram, docs)| {
+                let df = docs.len() as f32;
+                // Smoothed IDF: 1 + ln(N / df) — clamps to minimum 0.5
+                let idf = 1.0 + (n / df.max(1.0)).ln();
+                (ngram.clone(), idf.max(0.5))
+            })
+            .collect()
+    }
+
+    /// Search with IDF weighting: score = q_weight × d_weight × idf(ngram).
+    /// Rare ngrams contribute more, making results more discriminative.
+    pub fn search_weighted(
+        &self,
+        query_sparse: &HashMap<String, f32>,
+        idf: &HashMap<String, f32>,
+        max_candidates: usize,
+    ) -> Vec<String> {
+        let mut scores: HashMap<String, f32> = HashMap::new();
+
+        for (ngram, q_weight) in query_sparse {
+            let idf_w = idf.get(ngram).copied().unwrap_or(1.0);
+            if let Some(doc_ids) = self.inverted.get(ngram) {
+                for doc_id in doc_ids {
+                    if let Some(doc_sparse) = self.forward.get(doc_id)
+                        && let Some(d_weight) = doc_sparse.get(ngram)
+                    {
+                        *scores.entry(doc_id.clone()).or_insert(0.0) += q_weight * d_weight * idf_w;
+                    }
                 }
             }
         }

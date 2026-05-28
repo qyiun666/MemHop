@@ -1,0 +1,72 @@
+# MemHop Benchmark Configuration
+# ============================================================
+
+# BGE-M3 model for fair comparison across all systems
+encoder:
+  model: "BAAI/bge-m3"
+  device: "cpu"               # cpu | cuda
+
+# ONNX model for Rust quality_bench (must match models/bge-m3/)
+onnx_model_path: "../models/bge-m3"
+
+# Paths
+paths:
+  data_dir: "./data"           # cached datasets / pre-encoded vectors
+  reports_dir: "./reports"     # output reports
+
+# Competitors to benchmark against
+competitors:
+  faiss:
+    enabled: true
+    indices: ["IVF", "HNSW"]
+  chromadb:
+    enabled: true
+    collection_prefix: "memhop_bench"
+  milvus:
+    enabled: true
+    collection_prefix: "memhop_bench"
+
+# Benchmark scales for latency tests
+latency_scales: [1000, 5000, 10000, 50000]
+
+# Dream interval for quality benchmarks (0 = disabled)
+dream_interval: 50
+
+# Recall parameters
+recall:
+  spread_top_k: 10
+  limit: 10
+
+# C-MTEB tasks — only retrieval tasks (what MemHop does)
+c_mteb:
+  retrieval_tasks:
+    - "T2Retrieval"
+    - "MMarcoRetrieval"
+    - "DuRetrieval"
+    - "CovidRetrieval"
+    - "CmedqaRetrieval"
+    - "EcomRetrieval"
+    - "MedicalRetrieval"
+    - "VideoRetrieval"
+  # For MMarcoRetrieval (8.8M docs), use subset
+  subset_size: 100000
+
+# BEIR datasets — zero-shot IR evaluation
+beir:
+  datasets:
+    - "nfcorpus"
+    - "fiqa"
+    - "scidocs"
+    - "scifact"
+    - "arguana"
+    - "webis-touche2020"
+    - "cqadupstack"
+    - "quora"
+    - "dbpedia-entity"
+    - "trec-covid"
+    - "climate-fever"
+    - "fever"
+    - "hotpotqa"
+    - "nq"
+  # BEIR datasets can be large; subset for fair comparison
+  subset_size: 100000

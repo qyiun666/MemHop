@@ -28,3 +28,29 @@ pub trait Encoder: Send + Sync {
 mod ngram;
 
 pub use ngram::NgramEncoder;
+
+// ── Hybrid encoder ──────────────────────────────────────
+
+mod hybrid;
+pub use hybrid::HybridEncoder;
+
+// ── ONNX encoder (feature-gated) ──────────────────────────
+
+#[cfg(feature = "onnx")]
+mod onnx;
+#[cfg(feature = "onnx")]
+pub use onnx::OnnxEncoder;
+
+// ── ONNX cross-encoder reranker (feature-gated) ──────────
+
+#[cfg(feature = "onnx")]
+pub mod reranker;
+#[cfg(feature = "onnx")]
+pub use reranker::Reranker;
+
+// ── API encoder (feature-gated) ───────────────────────────
+
+#[cfg(feature = "api-encoder")]
+mod api;
+#[cfg(feature = "api-encoder")]
+pub use api::ApiEncoder;

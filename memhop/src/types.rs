@@ -83,6 +83,8 @@ pub struct BrainConfig {
     pub dream_max_ms: u64,
     /// v0.8.0: Optional override for PlanGate boundary threshold (default 0.55).
     pub plan_boundary_threshold: Option<f32>,
+    /// v0.9.0: Optional API base URL for the ApiEncoder (e.g. SiliconFlow, OpenAI).
+    pub api_base_url: Option<String>,
 }
 
 impl Default for BrainConfig {
@@ -96,7 +98,26 @@ impl Default for BrainConfig {
             dream_interval: 50,
             dream_max_ms: 500,
             plan_boundary_threshold: None,
+            api_base_url: None,
         }
+    }
+}
+
+// ── RecallMode (v0.9.0) ───────────────────────────────────
+
+/// v0.9.0: Dual recall mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecallMode {
+    /// Pure semantic retrieval: HNSW → cosine sort → return.
+    /// Skips emotional_alignment and ngram_overlap main ranking.
+    Retrieval,
+    /// Associative recall: HNSW → Hopfield spread → emotional/ngram boost (×0.9-1.1).
+    Associative,
+}
+
+impl Default for RecallMode {
+    fn default() -> Self {
+        RecallMode::Retrieval
     }
 }
 
@@ -107,6 +128,47 @@ pub struct InnateSchema {
     pub name: String,
     pub description: String,
     pub keywords: Vec<String>,
+}
+
+// ── Shelf types (v0.9.0) ─────────────────────────────────
+
+/// v0.9.0: Knowledge base domain type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum ShelfDomain {
+    Code,
+    Doc,
+    Book,
+    Paper,
+    Custom,
+}
+
+impl std::fmt::Display for ShelfDomain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShelfDomain::Code => write!(f, "code"),
+            ShelfDomain::Doc => write!(f, "doc"),
+            ShelfDomain::Book => write!(f, "book"),
+            ShelfDomain::Paper => write!(f, "paper"),
+            ShelfDomain::Custom => write!(f, "custom"),
+        }
+    }
+}
+
+/// v0.9.0: Metadata for a chunk from a knowledge source.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ChunkMeta {
+    pub source: String,       // Original file path or URL
+    pub location: String,     // Location within source (e.g., line range, heading)
+    pub url: Option<String>,  // URL if source is a web resource
+}
+
+/// v0.9.0: Result of a knowledge shelf search.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ShelfResult {
+    pub text: String,
+    pub location: String,
+    pub score: f32,
+    pub source: String,
 }
 
 // ── PerceptionInput ───────────────────────────────────────
@@ -128,6 +190,8 @@ pub struct PerceptionInput {
     pub agent_response: Option<String>,
     /// v0.8.0: Dialogue timestamp (Unix ms, defaults to now).
     pub dialogue_timestamp: Option<i64>,
+    /// v0.9.0: Knowledge source identifier (e.g. shelf_id, file path).
+    pub source: Option<String>,
 }
 
 /// v0.8.0: Return type of Brain::perceive() after plan-gating integration.
@@ -166,6 +230,10 @@ pub struct RecallRequest {
     pub domain_filter: Vec<String>,
     /// v0.8.0: Expected number of results (PGT accumulates toward this target).
     pub limit: usize,
+    /// v0.9.0: Recall mode (Retrieval by default).
+    pub mode: RecallMode,
+    /// v0.9.0: Whether to use Cross-Encoder reranking on top-k results.
+    pub use_reranker: bool,
 }
 
 impl Default for RecallRequest {
@@ -185,6 +253,8 @@ impl Default for RecallRequest {
             deep_search_plan_id: None,
             domain_filter: Vec::new(),
             limit: 10,
+            mode: RecallMode::Retrieval,
+            use_reranker: false,
         }
     }
 }
@@ -272,4 +342,8 @@ pub struct DreamReport {
     pub schemas_dissolved: usize,
     pub conflicts_detected: usize,
     pub duration_ms: u64,
+    /// v0.9.0: Number of engrams that received LLM-suggested keywords.
+    pub llm_keywords_added: usize,
+    /// v0.9.0: Number of contradictions confirmed by LLM.
+    pub llm_contradictions: usize,
 }

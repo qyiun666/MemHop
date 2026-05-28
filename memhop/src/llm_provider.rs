@@ -12,7 +12,7 @@
 
 #![allow(dead_code)]
 
-use crate::error::MemHopError;
+use crate::error::Result;
 
 /// Pluggable Large Language Model provider used exclusively by Dream-layer
 /// enhancements.
@@ -37,7 +37,7 @@ pub trait LlmProvider: Send + Sync {
     /// Generate a text completion for `prompt`, capped at `max_tokens` output
     /// tokens. Implementations should treat `max_tokens` as an upper bound and
     /// may return shorter strings on early stop.
-    fn generate(&self, prompt: &str, max_tokens: usize) -> Result<String, MemHopError>;
+    fn generate(&self, prompt: &str, max_tokens: usize) -> Result<String>;
 }
 
 /// Built-in Dream-layer prompt templates.
@@ -127,6 +127,33 @@ Score:",
             memory
         )
     }
+}
+
+/// Ask an LLM to suggest 3-5 keywords / topics for a memory text.
+pub fn llm_suggest_keywords(llm: &dyn LlmProvider, text: &str) -> Result<Vec<String>> {
+    let prompt = format!(
+        "Extract 3-5 key topics or keywords from the following text. \
+         Return them as a comma-separated list, nothing else.\n\nText: {}",
+        text
+    );
+    let response = llm.generate(&prompt, 100)?;
+    let keywords: Vec<String> = response
+        .split(',')
+        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    Ok(keywords)
+}
+
+/// Ask an LLM whether two texts contradict each other on any factual point.
+pub fn llm_detect_contradiction(
+    llm: &dyn LlmProvider,
+    text_a: &str,
+    text_b: &str,
+) -> Result<bool> {
+    let prompt = PromptTemplates::conflict_detect(text_a, text_b);
+    let response = llm.generate(&prompt, 50)?;
+    Ok(response.trim().to_uppercase().contains("YES"))
 }
 
 #[cfg(test)]

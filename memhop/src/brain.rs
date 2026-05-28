@@ -10,7 +10,7 @@
 //!   - recall()   接收预计算 query_vector (None 时降级用 NgramEncoder)
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -25,7 +25,9 @@ use crate::engram::{
 };
 use crate::error::{MemHopError, Result};
 use crate::hippocampus::Hippocampus;
+use crate::hnsw::HnswIndex;
 use crate::hopfield::ModernHopfield;
+use crate::index::SparseIndex;
 use crate::llm_provider::LlmProvider;
 use crate::personality::{GrowthState, Personality};
 use crate::plan_gate::{PlanContext, PlanGate, PlanIndex};
@@ -34,7 +36,7 @@ use crate::schema;
 use crate::storage::LmdbStorage;
 use crate::types::{
     BrainConfig, ConflictItem, DreamReport, InnateSchema, PerceptionInput, PerceptionOutput,
-    RecallRequest, RecallResponse, RecallTrace, ReflectionInput,
+    RecallMode, RecallRequest, RecallResponse, RecallTrace, ReflectionInput,
 };
 use crate::unified_graph::UnifiedGraph;
 use crate::vitality;
@@ -43,6 +45,43 @@ use crate::vitality;
 
 const HOPFIELD_BETA: f32 = 8.0;
 const HOPFIELD_TOP_K: usize = 200;
+const RRF_K: f32 = 60.0;
+
+// ── v0.9.0: Engram cache ───────────────────────────────────
+
+/// Bounded FIFO cache for hot engrams, reducing LMDB read latency.
+struct EngramCache {
+    cache: HashMap<String, Engram>,
+    order: VecDeque<String>,
+    max_size: usize,
+}
+
+impl EngramCache {
+    fn new(max_size: usize) -> Self {
+        EngramCache {
+            cache: HashMap::new(),
+            order: VecDeque::new(),
+            max_size,
+        }
+    }
+
+    fn get(&self, id: &str) -> Option<&Engram> {
+        self.cache.get(id)
+    }
+
+    fn insert(&mut self, id: String, engram: Engram) {
+        if self.cache.contains_key(&id) {
+            return;
+        }
+        if self.order.len() >= self.max_size {
+            if let Some(old) = self.order.pop_front() {
+                self.cache.remove(&old);
+            }
+        }
+        self.order.push_back(id.clone());
+        self.cache.insert(id, engram);
+    }
+}
 
 // ── Brain ────────────────────────────────────────────────────
 
@@ -52,6 +91,12 @@ pub struct Brain {
     hippocampus: Hippocampus,
     graph: UnifiedGraph,
     hopfield: ModernHopfield,
+    /// v0.9.0: HNSW index for fast approximate nearest neighbor search.
+    pub hnsw: HnswIndex,
+    /// v0.9.0: Sparse inverted index for ngram-based retrieval (RRF fusion).
+    sparse_index: SparseIndex,
+    /// v0.9.0: HNSW NodeId → engram string ID reverse mapping.
+    hnsw_id_map: HashMap<u64, String>,
     storage: Arc<LmdbStorage>,
 
     emotional_ctx: EmotionalContext,
@@ -71,6 +116,8 @@ pub struct Brain {
 
     /// Recall buffer: IDs recalled since last Dream, for reconsolidation.
     recalled_buffer: RefCell<Vec<String>>,
+    /// v0.9.0: Hot engram cache for recall speed optimization.
+    engram_cache: RefCell<EngramCache>,
 }
 
 impl Brain {
@@ -96,6 +143,56 @@ impl Brain {
 
         let hopfield = Self::rebuild_hopfield(&storage)?;
 
+        // v0.9.0: Engram cache for recall speed — bounded FIFO
+        let engram_cache = RefCell::new(EngramCache::new(1000));
+
+        // v0.9.0: Load or rebuild HNSW index from storage
+        let (hnsw, hnsw_id_map) = match HnswIndex::load_from_storage(&storage) {
+            Ok(Some(idx)) => {
+                let mut id_map = HashMap::new();
+                if let Ok(txn) = storage.begin_read() {
+                    if let Ok(entries) = storage.all_hippocampus_entries(&txn) {
+                        for (id_str, _) in &entries {
+                            id_map.insert(string_id_to_u64(id_str), id_str.clone());
+                        }
+                    }
+                }
+                (idx, id_map)
+            }
+            _ => {
+                let mut idx = HnswIndex::new(crate::engram::VECTOR_DIM);
+                let mut id_map = HashMap::new();
+                if let Ok(txn) = storage.begin_read() {
+                    if let Ok(entries) = storage.all_hippocampus_entries(&txn) {
+                        // v0.9.0: Pre-warm engram cache during HNSW rebuild
+                        let engram_cache_ref = &engram_cache;
+                        for (id_str, engram) in &entries {
+                            let node_id = string_id_to_u64(id_str);
+                            id_map.insert(node_id, id_str.clone());
+                            idx.insert(node_id, &engram.vector);
+                            engram_cache_ref.borrow_mut().insert(id_str.clone(), engram.clone());
+                        }
+                    }
+                }
+                (idx, id_map)
+            }
+        };
+
+        // v0.9.0: Rebuild sparse index from stored engrams
+        let sparse_index = {
+            let mut si = SparseIndex::new();
+            if let Ok(txn) = storage.begin_read() {
+                if let Ok(entries) = storage.all_hippocampus_entries(&txn) {
+                    let tmp_enc = NgramEncoder::new(crate::engram::VECTOR_DIM);
+                    for (id_str, engram) in &entries {
+                        let sparse = tmp_enc.encode(&engram.text).sparse;
+                        si.add(id_str, &sparse);
+                    }
+                }
+            }
+            si
+        };
+
         if hopfield.is_empty() && !config.innate_schemas.is_empty() {
             let now = now_millis();
             for innate in &config.innate_schemas {
@@ -120,6 +217,9 @@ impl Brain {
             hippocampus,
             graph,
             hopfield,
+            hnsw,
+            sparse_index,
+            hnsw_id_map,
             storage,
             emotional_ctx: EmotionalContext::new(),
             growth: GrowthState::new(),
@@ -135,6 +235,7 @@ impl Brain {
             plan_index: RefCell::new(plan_index),
             config,
             recalled_buffer: RefCell::new(Vec::new()),
+            engram_cache: RefCell::new(EngramCache::new(1000)),
             last_perceive_at: 0,
         })
     }
@@ -241,7 +342,15 @@ impl Brain {
 
         self.cortex.push(engram.clone(), &input.session_id);
         self.hippocampus.store(&self.storage, &engram)?;
+        // v0.9.0: Populate engram cache for recall speed
+        self.engram_cache.borrow_mut().insert(id.clone(), engram.clone());
         self.hopfield.add_pattern(&id, &engram.vector);
+        // v0.9.0: Insert into HNSW index
+        self.hnsw.insert(string_id_to_u64(&id), &engram.vector);
+        // v0.9.0: Add to sparse index and HNSW ID map for RRF fusion
+        let output = self.ngram_encoder.encode(&engram.text);
+        self.sparse_index.add(&id, &output.sparse);
+        self.hnsw_id_map.insert(string_id_to_u64(&id), id.clone());
 
         // 建立时间边（与 Hippocampus 中最近 3 条）
         let recent_entries = self
@@ -533,6 +642,11 @@ impl Brain {
 
     // ── recall ────────────────────────────────────────────
 
+    /// v0.9.0: Encode text to a 1024-dim f16 vector using the built-in NgramEncoder.
+    pub fn encode_text(&self, text: &str) -> Vec<half::f16> {
+        self.ngram_encoder.encode(text).dense
+    }
+
     /// 召回。p99 < 2ms @ 100K。
     pub fn recall(&self, req: &RecallRequest) -> Result<RecallResponse> {
         let start = Instant::now();
@@ -543,6 +657,16 @@ impl Brain {
             None => self.ngram_encoder.encode(&req.query).dense,
         };
         let query_f32: Vec<f32> = query_vector.iter().map(|&x| x.to_f32()).collect();
+
+        // v0.9.0: Mode dispatch — Retrieval mode uses HNSW + RRF fusion
+        match req.mode {
+            RecallMode::Retrieval => {
+                return self.recall_retrieval(req, &query_vector, start);
+            }
+            RecallMode::Associative => {
+                // Fall through to existing recall path
+            }
+        }
 
         // 2. L0 Cortex — 工作记忆
         let working_memory = self.cortex.recent(&req.session_id, req.recent_limit);
@@ -620,16 +744,27 @@ impl Brain {
         if let Ok(rtxn) = self.storage.begin_read() {
             let activated_ids: Vec<String> = spread_result.activated.iter().map(|(id, _)| id.clone()).collect();
             for id in &activated_ids {
-                if let Ok(Some(engram)) = self.storage.get_hippocampus(&rtxn, id) {
-                    match engram.kind {
-                        EngramKind::Schema => schemas.push(engram),
-                        _ => {
-                            // 高 arousal 记忆标记为情绪回声
-                            if engram.arousal > 0.7 {
-                                emotional_echoes.push(engram.clone());
-                            }
-                            associations.push(engram);
+                // v0.9.0: Try cache first, fall back to storage
+                let engram = self.engram_cache.borrow().get(id).cloned();
+                let engram = match engram {
+                    Some(e) => e,
+                    None => {
+                        if let Ok(Some(e)) = self.storage.get_hippocampus(&rtxn, id) {
+                            self.engram_cache.borrow_mut().insert(id.clone(), e.clone());
+                            e
+                        } else {
+                            continue;
                         }
+                    }
+                };
+                match engram.kind {
+                    EngramKind::Schema => schemas.push(engram),
+                    _ => {
+                        // 高 arousal 记忆标记为情绪回声
+                        if engram.arousal > 0.7 {
+                            emotional_echoes.push(engram.clone());
+                        }
+                        associations.push(engram);
                     }
                 }
             }
@@ -686,6 +821,180 @@ impl Brain {
                 spread_steps: 3,
                 post_inhibition_count: spread_result.activated.len(),
                 pgt_layer,
+            },
+        })
+    }
+
+    /// v0.9.0: Retrieval mode — HNSW + RRF fusion.
+    ///
+    /// Returns items sorted by Reciprocal Rank Fusion score (k=60)
+    /// combining HNSW cosine rank + SparseIndex ngram rank.
+    fn recall_retrieval(
+        &self,
+        req: &RecallRequest,
+        query_vector: &[f16],
+        start: std::time::Instant,
+    ) -> Result<RecallResponse> {
+        const HNSW_SEARCH_K: usize = 80;
+
+        // Step 1: HNSW search — get candidates
+        let hnsw_results = self.hnsw.search(query_vector, HNSW_SEARCH_K);
+
+        // Step 2: Map HNSW results to string IDs with rank
+        let hnsw_strings: Vec<(String, f32)> = hnsw_results
+            .iter()
+            .filter_map(|(node_id, sim)| {
+                self.hnsw_id_map
+                    .get(node_id)
+                    .map(|sid| (sid.clone(), *sim))
+            })
+            .collect();
+        let hnsw_ranked: HashMap<String, usize> = hnsw_strings
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _))| (id.clone(), i))
+            .collect();
+
+        // Step 3: SparseIndex search with IDF weighting
+        let query_sparse = self.ngram_encoder.encode(&req.query).sparse;
+        let idf = self.sparse_index.idf_map();
+        let sparse_results: Vec<String> =
+            self.sparse_index.search_weighted(&query_sparse, &idf, HNSW_SEARCH_K);
+        let sparse_ranked: HashMap<String, usize> = sparse_results
+            .iter()
+            .enumerate()
+            .map(|(i, id)| (id.clone(), i))
+            .collect();
+
+        // Step 4: RRF fusion (k = 60)
+        let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+
+        for (id, rank) in &hnsw_ranked {
+            rrf_scores.insert(id.clone(), rrf_score(*rank));
+        }
+        for (id, rank) in &sparse_ranked {
+            *rrf_scores.entry(id.clone()).or_insert(0.0) += rrf_score(*rank);
+        }
+
+        let mut sorted: Vec<(String, f32)> = rrf_scores.into_iter().collect();
+        sorted.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        sorted.truncate(req.limit);
+
+        // v0.9.0: Optional Cross-Encoder reranking (feature-gated behind `onnx`)
+        if req.use_reranker {
+            #[cfg(feature = "onnx")]
+            {
+                if let Ok(reranker) =
+                    crate::encoder::reranker::Reranker::from_path("models/bge-reranker-v2-m3")
+                {
+                    if let Ok(rtxn) = self.storage.begin_read() {
+                        let candidate_texts: Vec<String> = sorted
+                            .iter()
+                            .map(|(id, _)| {
+                                self.storage
+                                    .get_hippocampus(&rtxn, id)
+                                    .ok()
+                                    .flatten()
+                                    .map(|e| e.text)
+                                    .unwrap_or_default()
+                            })
+                            .collect();
+                        let candidate_refs: Vec<&str> =
+                            candidate_texts.iter().map(|s| s.as_str()).collect();
+
+                        let reranked = reranker
+                            .rerank(&req.query, &candidate_refs)
+                            .unwrap_or_else(|e| {
+                                eprintln!("memhop: reranker error, falling back: {e}");
+                                sorted.iter().enumerate().map(|(i, _)| (i, 0.0_f32)).collect()
+                            });
+
+                        let original = std::mem::take(&mut sorted);
+                        let mut reordered = Vec::with_capacity(reranked.len());
+                        for (orig_idx, _) in reranked {
+                            if orig_idx < original.len() {
+                                reordered.push(original[orig_idx].clone());
+                            }
+                        }
+                        sorted = reordered;
+                    } else {
+                        eprintln!("memhop: failed to open read txn for reranker, skipping");
+                    }
+                } else {
+                    eprintln!("memhop: reranker not found at models/bge-reranker-v2-m3, skipping");
+                }
+            }
+            #[cfg(not(feature = "onnx"))]
+            {
+                eprintln!("memhop: reranker requires `onnx` feature, skipping");
+            }
+        }
+
+        // Step 5: Load engrams from storage, classify by kind
+        let mut associations: Vec<Engram> = Vec::new();
+        let mut schemas: Vec<Engram> = Vec::new();
+        let mut emotional_echoes: Vec<Engram> = Vec::new();
+        let conflicts: Vec<ConflictItem> = Vec::new();
+
+        if let Ok(rtxn) = self.storage.begin_read() {
+            for (id, _score) in &sorted {
+                // v0.9.0: Try cache first, fall back to storage
+                let engram = self.engram_cache.borrow().get(id).cloned();
+                let engram = match engram {
+                    Some(e) => e,
+                    None => {
+                        if let Ok(Some(e)) = self.storage.get_hippocampus(&rtxn, id) {
+                            self.engram_cache.borrow_mut().insert(id.clone(), e.clone());
+                            e
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+                match engram.kind {
+                    EngramKind::Schema => schemas.push(engram),
+                    _ => {
+                        if engram.arousal > 0.7 {
+                            emotional_echoes.push(engram.clone());
+                        }
+                        associations.push(engram);
+                    }
+                }
+            }
+        }
+
+        // Step 6: Record recalled IDs for Dream reconsolidation
+        {
+            let mut buf = self.recalled_buffer.borrow_mut();
+            for (id, _) in &sorted {
+                if !buf.contains(id) {
+                    buf.push(id.clone());
+                }
+            }
+        }
+
+        // Step 7: L0 Cortex (working memory)
+        let working_memory = self.cortex.recent(&req.session_id, req.recent_limit);
+
+        let latency_us = start.elapsed().as_micros() as u64;
+
+        Ok(RecallResponse {
+            working_memory,
+            associations,
+            schemas,
+            emotional_echoes,
+            conflicts,
+            archive_results: None,
+            trace: RecallTrace {
+                latency_us,
+                gated_anchors: req.attention_anchors.clone(),
+                hopfield_candidates: sorted.len(),
+                spread_steps: 0,
+                post_inhibition_count: sorted.len(),
+                pgt_layer: None,
             },
         })
     }
@@ -801,6 +1110,18 @@ impl Brain {
             eprintln!("[dream] REM-4 cross-plan-schema error: {}", e);
         }
 
+        // v0.9.0: LLM-enhanced dream phases (fire-and-forget, errors are logged)
+        let saved_llm = self.llm.take();
+        if let Some(ref llm) = saved_llm {
+            if let Err(e) = self.dream_llm_keywords(&**llm, &mut report) {
+                eprintln!("[dream] LLM keywords error: {}", e);
+            }
+            if let Err(e) = self.dream_llm_contradictions(&**llm, &mut report) {
+                eprintln!("[dream] LLM contradictions error: {}", e);
+            }
+        }
+        self.llm = saved_llm;
+
         self.growth.dream_cycles += 1;
         report.duration_ms = start.elapsed().as_millis() as u64;
         Ok(report)
@@ -808,6 +1129,96 @@ impl Brain {
 
     fn dream_internal(&mut self) -> Result<()> {
         let _ = self.dream()?;
+        Ok(())
+    }
+
+    // ─ v0.9.0: LLM-enhanced dream phases ──────────────────
+
+    /// If an LlmProvider is configured, suggest keywords for every engram in
+    /// Hippocampus whose keyword list is empty. Updated engrams are written
+    /// back to storage in-place.
+    fn dream_llm_keywords(&self, llm: &dyn LlmProvider, report: &mut DreamReport) -> Result<()> {
+        let entries = self.hippocampus.all_entries(&self.storage)?;
+        let mut count = 0usize;
+
+        for (id, mut engram) in entries {
+            if !engram.keywords.is_empty() {
+                continue;
+            }
+            match crate::llm_provider::llm_suggest_keywords(llm, &engram.text) {
+                Ok(kws) if !kws.is_empty() => {
+                    engram.keywords = kws;
+                    let mut txn = self.storage.begin_write()?;
+                    self.storage.put_hippocampus(&mut txn, &id, &engram)?;
+                    txn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    count += 1;
+                }
+                Ok(_) => { /* LLM returned empty list -- skip */ }
+                Err(e) => eprintln!("[dream] LLM suggest_keywords for {}: {}", id, e),
+            }
+        }
+
+        report.llm_keywords_added = count;
+        Ok(())
+    }
+
+    /// If an LlmProvider is configured, verify high-cosine, low-keyword-overlap
+    /// pairs with the LLM before marking them as contradictions. This runs in
+    /// addition to (not instead of) the heuristic check in nrem_contradiction_detection.
+    fn dream_llm_contradictions(&mut self, llm: &dyn LlmProvider, report: &mut DreamReport) -> Result<()> {
+        let entries = self.hippocampus.all_entries(&self.storage)?;
+        let episodes: Vec<(String, Engram)> = entries
+            .into_iter()
+            .filter(|(_, e)| e.kind == EngramKind::Episode)
+            .collect();
+
+        if episodes.len() < 2 {
+            return Ok(());
+        }
+
+        let now = now_millis();
+        let mut detected = 0usize;
+
+        for i in 0..episodes.len() {
+            let query_f32: Vec<f32> = episodes[i].1.vector.iter().map(|x| x.to_f32()).collect();
+            let neighbors = self.hopfield.recall_topk(&query_f32, 20);
+
+            for (neighbor_id, sim) in &neighbors {
+                if *sim <= 0.8 {
+                    continue;
+                }
+                if let Some(j) = episodes.iter().position(|(id, _)| id.as_str() == neighbor_id.as_str()) {
+                    if j <= i {
+                        continue;
+                    }
+                    let overlap = keyword_overlap(&episodes[i].1.keywords, &episodes[j].1.keywords);
+                    if overlap < 0.3 {
+                        match crate::llm_provider::llm_detect_contradiction(
+                            llm,
+                            &episodes[i].1.text,
+                            &episodes[j].1.text,
+                        ) {
+                            Ok(true) => {
+                                self.graph.add_edge(
+                                    &self.storage, &episodes[i].0, neighbor_id,
+                                    *sim, AssociationKind::Contradicts, now,
+                                )?;
+                                self.graph.add_edge(
+                                    &self.storage, neighbor_id, &episodes[i].0,
+                                    *sim, AssociationKind::Contradicts, now,
+                                )?;
+                                detected += 1;
+                            }
+                            Ok(false) => { /* LLM says not contradictory -- skip */ }
+                            Err(e) => eprintln!("[dream] LLM contradiction check: {}", e),
+                        }
+                    }
+                }
+            }
+        }
+
+        report.llm_contradictions = detected;
+        self.growth.total_contradictions += detected as u64;
         Ok(())
     }
 
@@ -1583,6 +1994,15 @@ impl Brain {
 
     // ── 访问器 ───────────────────────────────────────────
 
+    // ── v0.9.0: Save / close ────────────────────────────
+
+    /// Persist HNSW index before the Brain is discarded.
+    pub fn close(&self) -> Result<()> {
+        self.hnsw
+            .save_to_storage(&self.storage)
+            .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
     pub fn cortex_len(&self) -> usize {
         self.cortex.len()
     }
@@ -1618,6 +2038,20 @@ fn now_millis() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("Time went backwards")
         .as_millis() as i64
+}
+
+/// RRF score for a given rank: 1 / (k + rank).
+/// Used in Reciprocal Rank Fusion to combine multi-system rankings.
+fn rrf_score(rank: usize) -> f32 {
+    1.0 / (RRF_K + rank as f32)
+}
+
+/// Map an engram string ID to a u64 for HNSW index.
+fn string_id_to_u64(id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Compute character-level trigram overlap between query and text.
@@ -1683,6 +2117,7 @@ mod tests {
             plan_id: None,
             agent_response: None,
             dialogue_timestamp: None,
+            source: None,
         }
     }
 

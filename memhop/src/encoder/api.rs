@@ -90,9 +90,10 @@ use std::time::Duration;
 use half::f16;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-use crate::encoder::Encoder;
-use crate::types::VECTOR_DIM;
+use crate::encoder::{Encoder, EncoderOutput};
+use crate::engram::VECTOR_DIM;
 
 /// Default request timeout. Embedding endpoints are normally fast
 /// (<1 s) but cold-start on shared inference services can spike to a
@@ -262,12 +263,12 @@ impl ApiEncoder {
 }
 
 impl Encoder for ApiEncoder {
-    fn encode(&self, text: &str) -> Vec<f16> {
+    fn encode(&self, text: &str) -> EncoderOutput {
         // Empty / whitespace-only inputs map to a zero vector. Mirrors
         // [`OnnxEncoder`] so HybridEncoder can degrade to the primary
         // ngram side without an extra branch.
         if text.trim().is_empty() {
-            return vec![f16::ZERO; VECTOR_DIM];
+            return EncoderOutput { dense: vec![f16::ZERO; VECTOR_DIM], sparse: HashMap::new() };
         }
 
         let raw = match self.raw_embedding(text) {
@@ -276,21 +277,14 @@ impl Encoder for ApiEncoder {
                 // Log + degrade. The trait can't return Result so a
                 // crash here would take down the whole recall path.
                 eprintln!("memhop::ApiEncoder: encode failed ({}); returning zero vector", redact(&self.api_key, &e));
-                return vec![f16::ZERO; VECTOR_DIM];
+                return EncoderOutput { dense: vec![f16::ZERO; VECTOR_DIM], sparse: HashMap::new() };
             }
         };
 
         let normalized = l2_normalize(raw);
         let projected = project_to_dim(normalized, VECTOR_DIM);
-        projected.into_iter().map(f16::from_f32).collect()
-    }
-
-    fn sparse(&self, _text: &str) -> Vec<(u64, f32)> {
-        // Remote embedding services don't own MemHop's FNV-1a ngram
-        // hash space, and HybridEncoder always routes `sparse()` to
-        // its primary ngram encoder. Returning an empty list is the
-        // correct contract — see `onnx.rs` for the same rationale.
-        Vec::new()
+        let dense = projected.into_iter().map(f16::from_f32).collect();
+        EncoderOutput { dense, sparse: HashMap::new() }
     }
 
     fn dim(&self) -> usize {

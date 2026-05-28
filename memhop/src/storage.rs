@@ -1,4 +1,4 @@
-//! LMDB storage layer for the Brain — 8 sub-databases.
+//! LMDB storage layer for the Brain — 9 sub-databases.
 //!
 //! Sub-databases:
 //!   engrams         — id → bincode(Engram)
@@ -9,6 +9,7 @@
 //!   config          — key → bincode(value)
 //!   dialogue_turns  — turn_id → bincode(DialogueTurn)     (v0.8.0)
 //!   plan_tree       — plan_id → bincode(PlanNode)         (v0.8.0)
+//!   hnsw_index      — "hnsw" → bincode(HnswIndex bytes)   (v0.9.0)
 
 #![allow(dead_code)]
 
@@ -61,6 +62,8 @@ pub(crate) struct BrainDb {
     pub dialogue_turns: Database<Str, Bytes>,
     /// v0.8.0: plan_id → bincode(PlanNode)
     pub plan_tree: Database<Str, Bytes>,
+    /// v0.9.0: "hnsw" → bincode(HnswIndex serialized bytes)
+    pub hnsw_index: Database<Str, Bytes>,
 }
 
 // ── LmdbStorage ──────────────────────────────────────────────
@@ -119,6 +122,9 @@ impl LmdbStorage {
         let plan_tree = env
             .create_database(&mut wtxn, Some("plan_tree"))
             .map_err(|e| StorageError::Open(format!("plan_tree db: {}", e)))?;
+        let hnsw_index: Database<Str, Bytes> = env
+            .create_database(&mut wtxn, Some("hnsw_index"))
+            .map_err(|e| StorageError::Open(format!("hnsw_index db: {}", e)))?;
 
         wtxn
             .commit()
@@ -135,6 +141,7 @@ impl LmdbStorage {
                 config,
                 dialogue_turns,
                 plan_tree,
+                hnsw_index,
             },
             plan_index: PlanIndex::new(),
         })
@@ -629,6 +636,43 @@ impl LmdbStorage {
             .plan_tree
             .delete(txn, id)
             .map_err(|e| StorageError::Write(format!("delete plan: {}", e)))
+    }
+
+    // ── HNSW index read/write (v0.9.0) ─────────────────────────
+
+    /// Store the serialized HNSW index blob under the key "hnsw".
+    pub fn put_hnsw_index(
+        &self,
+        txn: &mut RwTxn<'_>,
+        data: &[u8],
+    ) -> Result<(), StorageError> {
+        self.db
+            .hnsw_index
+            .put(txn, "hnsw", data)
+            .map_err(|e| StorageError::Write(format!("put hnsw: {}", e)))
+    }
+
+    /// Retrieve the serialized HNSW index blob.
+    pub fn get_hnsw_index(
+        &self,
+        txn: &RoTxn<'_>,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        self.db
+            .hnsw_index
+            .get(txn, "hnsw")
+            .map(|opt| opt.map(|bytes| bytes.to_vec()))
+            .map_err(|e| StorageError::Read(format!("get hnsw: {}", e)))
+    }
+
+    /// Delete the HNSW index from storage.
+    pub fn delete_hnsw_index(
+        &self,
+        txn: &mut RwTxn<'_>,
+    ) -> Result<bool, StorageError> {
+        self.db
+            .hnsw_index
+            .delete(txn, "hnsw")
+            .map_err(|e| StorageError::Write(format!("delete hnsw: {}", e)))
     }
 }
 
