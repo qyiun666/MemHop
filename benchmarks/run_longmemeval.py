@@ -7,6 +7,7 @@ import json, os, subprocess, shutil, math, time, signal, sys
 import numpy as np
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_HUB_OFFLINE"] = "1"
 
 DATA_PATH = "/Volumes/zt_hd/projects/meow/LongMemEval/data/longmemeval_s_cleaned.json"
 BINARY = os.path.join(os.path.dirname(__file__), "../target/release/quality_bench")

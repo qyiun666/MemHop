@@ -42,6 +42,13 @@ pub struct Engram {
     /// v0.9.1: Reference to the DialogueTurn this engram belongs to.
     #[serde(default)]
     pub turn_id: Option<String>,
+    /// v0.11.0: Knowledge engram source fields
+    #[serde(default)]
+    pub tree_path: Option<String>,
+    #[serde(default)]
+    pub source_path: Option<String>,
+    #[serde(default)]
+    pub source_textunit: Option<String>,
 }
 
 impl Engram {
@@ -74,6 +81,9 @@ impl Engram {
             is_archived: false,
             is_dormant: false,
             turn_id: None,
+            tree_path: None,
+            source_path: None,
+            source_textunit: None,
         }
     }
 
@@ -81,6 +91,41 @@ impl Engram {
     pub fn touch(&mut self, now: i64) {
         self.last_activated = now;
         self.activation_count = self.activation_count.saturating_add(1);
+    }
+
+    /// Create a new Knowledge engram for externally mounted knowledge.
+    pub fn new_knowledge(
+        id: String,
+        text: String,
+        vector: Vec<f16>,
+        tree_path: String,
+        source_path: String,
+        source_textunit: String,
+        now: i64,
+    ) -> Self {
+        Engram {
+            id,
+            text,
+            summary: None,
+            vector,
+            keywords: vec![],
+            content_type: None,
+            valence: 0.0,
+            arousal: 0.5,
+            vitality: 1.0,
+            protection: Protection::Normal,
+            created_at: now,
+            last_activated: now,
+            activation_count: 1,
+            kind: EngramKind::Knowledge,
+            meta: HashMap::new(),
+            is_archived: false,
+            is_dormant: false,
+            turn_id: None,
+            tree_path: Some(tree_path),
+            source_path: Some(source_path),
+            source_textunit: Some(source_textunit),
+        }
     }
 }
 
@@ -97,6 +142,8 @@ pub enum EngramKind {
     Anchor,
     /// A self-reflective analysis (pattern, evaluation, intention, confusion).
     Reflection,
+    /// Externally mounted knowledge (code, doc, book, paper, etc.).
+    Knowledge,
 }
 
 impl std::fmt::Display for EngramKind {
@@ -106,6 +153,7 @@ impl std::fmt::Display for EngramKind {
             EngramKind::Schema => write!(f, "schema"),
             EngramKind::Anchor => write!(f, "anchor"),
             EngramKind::Reflection => write!(f, "reflection"),
+            EngramKind::Knowledge => write!(f, "knowledge"),
         }
     }
 }
@@ -143,6 +191,8 @@ pub enum AssociationKind {
     Hierarchical,
     Contradicts,
     Manual,
+    /// v0.11.0: Co-located in the same knowledge tree (adjacent chunks).
+    CoShelf,
 }
 
 impl std::fmt::Display for AssociationKind {
@@ -155,6 +205,7 @@ impl std::fmt::Display for AssociationKind {
             AssociationKind::Hierarchical => write!(f, "hierarchical"),
             AssociationKind::Contradicts => write!(f, "contradicts"),
             AssociationKind::Manual => write!(f, "manual"),
+            AssociationKind::CoShelf => write!(f, "co_shelf"),
         }
     }
 }
@@ -170,6 +221,19 @@ pub struct SchemaExtra {
     pub stability: f32,
     pub internal_consistency: f32,
     pub contradiction_count: u32,
+}
+
+impl Default for SchemaExtra {
+    fn default() -> Self {
+        Self {
+            source_episodes: Vec::new(),
+            centroid_vector: Vec::new(),
+            match_count: 0,
+            stability: 0.0,
+            internal_consistency: 0.0,
+            contradiction_count: 0,
+        }
+    }
 }
 
 impl SchemaExtra {

@@ -120,6 +120,11 @@ pub struct ModernHopfield {
     pub drift_enabled: bool,
     /// Plasticity configuration
     pub plasticity_cfg: PlasticityConfig,
+
+    // ── v0.11.0 weighted pattern recall ──
+    /// Per-pattern weights for weighted recall (index i matches pattern i).
+    /// weight=1.0 for Episode, weight=0.5 for Knowledge (per PRD §4.10).
+    pub pattern_weights: Vec<f32>,
 }
 
 impl ModernHopfield {
@@ -134,6 +139,7 @@ impl ModernHopfield {
             last_access: Vec::new(),
             drift_enabled: false,
             plasticity_cfg: PlasticityConfig::default(),
+            pattern_weights: Vec::new(),
         }
     }
 
@@ -155,6 +161,22 @@ impl ModernHopfield {
             self.patterns.extend_from_slice(&normalized);
             self.access_counts.push(0);
             self.last_access.push(0);
+            // v0.11.0: Default weight = 1.0 for new patterns
+            self.pattern_weights.push(1.0);
+        }
+    }
+
+    /// v0.11.0: Add a pattern with an explicit weight.
+    /// weight=1.0 for Episode, weight=0.5 for Knowledge (per PRD §4.10).
+    pub fn add_pattern_weighted(&mut self, id: &str, pattern: &[f16], weight: f32) {
+        // Reuse core insertion logic from add_pattern
+        self.add_pattern(id, pattern);
+        // Override the weight at the pattern's index
+        if let Some(&idx) = self.id_to_idx.get(id) {
+            while self.pattern_weights.len() <= idx {
+                self.pattern_weights.push(1.0);
+            }
+            self.pattern_weights[idx] = weight;
         }
     }
 
@@ -179,6 +201,8 @@ impl ModernHopfield {
             // Swap access stats
             self.access_counts[idx] = self.access_counts[last_idx];
             self.last_access[idx] = self.last_access[last_idx];
+            // v0.11.0: Swap pattern weights
+            self.pattern_weights[idx] = self.pattern_weights[last_idx];
 
             // Swap id mapping
             let swapped_id = self.idx_to_id[last_idx].clone();
@@ -190,6 +214,8 @@ impl ModernHopfield {
         self.patterns.truncate(self.patterns.len() - self.dim);
         self.access_counts.pop();
         self.last_access.pop();
+        // v0.11.0: Pop pattern weight
+        self.pattern_weights.pop();
 
         true
     }
@@ -209,7 +235,9 @@ impl ModernHopfield {
             .into_par_iter()
             .map(|i| {
                 let pattern = &self.patterns[i * self.dim..(i + 1) * self.dim];
-                self.beta * dot_f16_f32(pattern, query)
+                let sim = self.beta * dot_f16_f32(pattern, query);
+                // v0.11.0: Apply pattern weight before softmax
+                sim * self.pattern_weights.get(i).copied().unwrap_or(1.0)
             })
             .collect();
 
@@ -236,7 +264,9 @@ impl ModernHopfield {
             .into_par_iter()
             .map(|i| {
                 let pattern = &self.patterns[i * self.dim..(i + 1) * self.dim];
-                self.beta * dot_f16_f32(pattern, query)
+                let sim = self.beta * dot_f16_f32(pattern, query);
+                // v0.11.0: Apply pattern weight before softmax
+                sim * self.pattern_weights.get(i).copied().unwrap_or(1.0)
             })
             .collect();
 
@@ -283,7 +313,9 @@ impl ModernHopfield {
             .par_iter()
             .map(|&idx| {
                 let pattern = &self.patterns[idx * self.dim..(idx + 1) * self.dim];
-                self.beta * dot_f16_f32(pattern, query)
+                let sim = self.beta * dot_f16_f32(pattern, query);
+                // v0.11.0: Apply pattern weight before softmax
+                sim * self.pattern_weights.get(idx).copied().unwrap_or(1.0)
             })
             .collect();
 
@@ -325,7 +357,9 @@ impl ModernHopfield {
             .map(|&idx| {
                 let pattern = &self.patterns[idx * self.dim..(idx + 1) * self.dim];
                 let score = self.beta * dot_f16_f32(pattern, query);
-                (self.idx_to_id[idx].clone(), score)
+                // v0.11.0: Apply pattern weight for consistent ranking
+                let weighted = score * self.pattern_weights.get(idx).copied().unwrap_or(1.0);
+                (self.idx_to_id[idx].clone(), weighted)
             })
             .collect();
 
@@ -360,7 +394,9 @@ impl ModernHopfield {
             .into_par_iter()
             .map(|i| {
                 let pattern = &self.patterns[i * self.dim..(i + 1) * self.dim];
-                self.beta * dot_f16_f32(pattern, query)
+                let sim = self.beta * dot_f16_f32(pattern, query);
+                // v0.11.0: Apply pattern weight before softmax
+                sim * self.pattern_weights.get(i).copied().unwrap_or(1.0)
             })
             .collect();
 

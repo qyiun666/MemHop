@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use half::f16;
 
-use crate::engram::{Engram, DialogueTurn};
+use crate::engram::{AssociationKind, Engram, DialogueTurn, EngramKind};
 use crate::personality::Personality;
 
 // ── Protection levels (backward compat) ───────────────────
@@ -85,6 +85,18 @@ pub struct BrainConfig {
     pub plan_boundary_threshold: Option<f32>,
     /// v0.9.0: Optional API base URL for the ApiEncoder (e.g. SiliconFlow, OpenAI).
     pub api_base_url: Option<String>,
+    /// v0.10.0: Path to Cross-Encoder reranker model directory (e.g. "models/bge-reranker-v2-m3").
+    /// None disables reranker. Default: Some("models/bge-reranker-v2-m3").
+    pub reranker_model_path: Option<String>,
+    /// v0.11.0: Path to ONNX encoder model directory (e.g. "models/bge-m3").
+    /// When set, replaces the built-in NgramEncoder for semantic dense vectors.
+    /// NgramEncoder is still used for sparse indexing. None uses NgramEncoder.
+    /// Default: None.
+    pub onnx_model_path: Option<String>,
+    /// v0.11.0: Vitality decay configuration (per kind).
+    pub vitality: VitalityConfig,
+    /// v0.11.0: Hopfield network configuration.
+    pub hopfield: HopfieldConfig,
 }
 
 impl Default for BrainConfig {
@@ -99,6 +111,10 @@ impl Default for BrainConfig {
             dream_max_ms: 500,
             plan_boundary_threshold: None,
             api_base_url: None,
+            reranker_model_path: Some("models/bge-reranker-v2-m3".into()),
+            onnx_model_path: None,
+            vitality: VitalityConfig::default(),
+            hopfield: HopfieldConfig::default(),
         }
     }
 }
@@ -130,6 +146,8 @@ pub struct InnateSchema {
 /// v0.9.0: Knowledge base domain type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ShelfDomain {
+    /// v0.11.0: Generic domain for externally mounted knowledge.
+    Generic,
     Code,
     Doc,
     Book,
@@ -140,6 +158,7 @@ pub enum ShelfDomain {
 impl std::fmt::Display for ShelfDomain {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ShelfDomain::Generic => write!(f, "generic"),
             ShelfDomain::Code => write!(f, "code"),
             ShelfDomain::Doc => write!(f, "doc"),
             ShelfDomain::Book => write!(f, "book"),
@@ -164,6 +183,17 @@ pub struct ShelfResult {
     pub location: String,
     pub score: f32,
     pub source: String,
+}
+
+/// v0.11.0: Confidence level for Knowledge engram extraction.
+#[allow(dead_code)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Confidence {
+    Extracted,
+    Verified,
+    Inferred,
+    Contradicted,
 }
 
 // ── PerceptionInput ───────────────────────────────────────
@@ -237,6 +267,10 @@ pub struct RecallRequest {
     pub mode: RecallMode,
     /// v0.9.0: Whether to use Cross-Encoder reranking on top-k results.
     pub use_reranker: bool,
+    /// v0.11.0: Optional tree path filter. None = all, tree = tree + conversation.
+    pub tree: Option<String>,
+    /// v0.11.0: Optional kind filter. Empty = all kinds.
+    pub kind_filter: Vec<EngramKind>,
 }
 
 impl Default for RecallRequest {
@@ -258,6 +292,8 @@ impl Default for RecallRequest {
             limit: 10,
             mode: RecallMode::Retrieval,
             use_reranker: false,
+            tree: None,
+            kind_filter: vec![],
         }
     }
 }
@@ -278,6 +314,12 @@ pub struct RecallResponse {
     pub hit_turns: Vec<TurnHit>,
     /// v0.9.1: Per-session aggregated scores.
     pub aggregated_sessions: Vec<SessionScore>,
+    /// v0.11.0: Knowledge engrams in recall results.
+    pub knowledge_memories: Vec<Engram>,
+    /// v0.11.0: Knowledge tree contexts for returned results.
+    pub tree_contexts: Vec<TreeContext>,
+    /// v0.11.0: Cross-engram associations discovered by EntangleGraph.
+    pub graph_associations: Vec<GraphAssociation>,
 }
 
 // ── ConflictItem ──────────────────────────────────────────
@@ -375,4 +417,120 @@ pub struct DreamReport {
     pub llm_contradictions: usize,
     /// v0.9.1: Number of turn clusters merged into schemas by crystallizer.
     pub turn_schemas_created: usize,
+    /// v0.10.0: Number of turn-type engrams archived by piggyback detection (>30 days inactive).
+    pub turns_archived: usize,
+    /// v0.11.0: Number of Knowledge engrams processed in Dream.
+    pub knowledge_processed: usize,
+    /// v0.11.0: New cross-kind associations discovered (Knowledge<->Episode).
+    pub cross_kind_new_associations: usize,
+    /// v0.11.0: Number of tombstoned nodes removed from HNSW by compact.
+    pub hnsw_compacted: usize,
+}
+
+// ── v0.11.0: New types ───────────────────────────────────────
+
+/// v0.11.0: Vitality decay configuration, per EngramKind.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct VitalityConfig {
+    /// Episode base decay rate (fraction reduced per dream cycle).
+    pub episode_decay_rate: f32,
+    /// Knowledge base decay rate (~3-5x slower than Episode).
+    pub knowledge_decay_rate: f32,
+    /// Vitality boost for recently-activated engrams.
+    pub activation_boost: f32,
+    /// Vitality floor before engram enters sleep.
+    pub sleep_threshold: f32,
+    /// Vitality floor before engram enters archive.
+    pub archive_threshold: f32,
+}
+
+impl Default for VitalityConfig {
+    fn default() -> Self {
+        VitalityConfig {
+            episode_decay_rate: 0.05,
+            knowledge_decay_rate: 0.015,
+            activation_boost: 0.1,
+            sleep_threshold: 0.1,
+            archive_threshold: 0.01,
+        }
+    }
+}
+
+/// v0.11.0: Hopfield network configuration for weighted pattern participation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HopfieldConfig {
+    /// Whether Knowledge engrams participate in Hopfield.
+    pub include_knowledge: bool,
+    /// Pattern weight multiplier for Knowledge engrams (0.5 = auxiliary).
+    pub knowledge_pattern_weight: f32,
+    /// Maximum number of patterns stored in Hopfield.
+    pub max_patterns: usize,
+}
+
+impl Default for HopfieldConfig {
+    fn default() -> Self {
+        HopfieldConfig {
+            include_knowledge: true,
+            knowledge_pattern_weight: 0.5,
+            max_patterns: 200_000,
+        }
+    }
+}
+
+/// v0.11.0: Result of an ADD-only store() operation.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct StoreResult {
+    pub engram_id: String,
+    pub status: StoreStatus,
+    pub duplicate_of: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StoreStatus {
+    Stored,
+    Duplicate,
+}
+
+/// v0.11.0: Filter for forget_batch deletion.
+#[allow(clippy::enum_variant_names)]
+#[derive(Debug, Clone)]
+pub enum ForgetFilter {
+    ByTreePath(String),
+    ByTurnId(String),
+    ByEngramId(String),
+}
+
+/// v0.11.0: Result of mount_tree.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MountResult {
+    pub tree_path: String,
+    pub chunk_count: usize,
+    pub domain: String,
+    pub warnings: Vec<String>,
+}
+
+/// v0.11.0: Result of unmount_tree.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct UnmountResult {
+    pub tree_path: String,
+    pub deleted_count: usize,
+}
+
+/// v0.11.0: Context information for a knowledge tree in recall results.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TreeContext {
+    pub tree_path: String,
+    pub domain: String,
+    pub source_count: usize,
+}
+
+/// v0.11.0: A cross-engram association discovered by EntangleGraph.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GraphAssociation {
+    pub source_id: String,
+    pub target_id: String,
+    pub kind: AssociationKind,
+    pub weight: f32,
+    pub description: String,
 }

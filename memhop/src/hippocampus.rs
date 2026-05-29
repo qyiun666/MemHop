@@ -119,6 +119,15 @@ impl Hippocampus {
         self.order.len()
     }
 
+    /// Add an ID to the in-memory order without writing to LMDB.
+    /// Used by store_engram which handles the LMDB write itself.
+    pub fn push_id(&mut self, id: &str) {
+        self.order.push_back(id.to_string());
+        if self.order.len() > self.capacity {
+            self.order.pop_front();
+        }
+    }
+
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.order.is_empty()

@@ -1,16 +1,8 @@
 [package]
 name = "memhop"
-version = "0.9.1"
+version = "0.11.0"
 edition = "2024"
 description = "Embedded associative memory engine powered by Modern Hopfield Networks — SQLite for associative memory"
-
-[[bin]]
-name = "quality_bench"
-path = "src/bin/quality_bench.rs"
-
-[[bin]]
-name = "latency_bench"
-path = "src/bin/latency_bench.rs"
 
 [lib]
 crate-type = ["rlib"]

@@ -8,6 +8,7 @@ import numpy as np
 
 # 消 tokenizers fork 警告
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_HUB_OFFLINE"] = "1"
 
 # ═══════════════════════════════════════════════════════════════
 # 配置

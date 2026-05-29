@@ -120,6 +120,11 @@ pub struct HnswIndex {
 
     /// Level multiplier `1 / ln(M)`.
     ml: f32,
+
+    /// v0.11.0: Soft-delete tombstone set. Nodes in this set are skipped during search.
+    /// Not serialized (rebuild from LMDB config on restart).
+    #[serde(skip)]
+    pub tombstones: HashSet<u64>,
 }
 
 impl HnswIndex {
@@ -139,6 +144,7 @@ impl HnswIndex {
             ef_search: 50,
             node_count: 0,
             ml: 1.0 / (m as f32).ln(),
+            tombstones: HashSet::new(),
         }
     }
 
@@ -254,6 +260,10 @@ impl HnswIndex {
             .map(|(id, dist)| (id, 1.0 - dist))
             .collect();
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // v0.11.0: Filter out tombstoned (soft-deleted) nodes.
+        results.retain(|(id, _)| !self.tombstones.contains(id));
+
         results.truncate(k);
         results
     }
@@ -310,6 +320,59 @@ impl HnswIndex {
     /// Whether the index is empty.
     pub fn is_empty(&self) -> bool {
         self.node_count == 0
+    }
+
+    // ── v0.11.0: Soft-delete (tombstone) API ────────────────────────────
+
+    /// Soft-delete a node by `node_id`. The node is skipped in search results.
+    pub fn mark_deleted(&mut self, node_id: u64) {
+        self.tombstones.insert(node_id);
+    }
+
+    /// Ratio of tombstoned nodes to total nodes.
+    pub fn tombstone_ratio(&self) -> f32 {
+        if self.is_empty() {
+            return 0.0;
+        }
+        self.tombstones.len() as f32 / self.len() as f32
+    }
+
+    /// Rebuild HNSW index without tombstoned nodes.
+    ///
+    /// Extracts all non-tombstoned node vectors, clears the index, and
+    /// re-inserts them with their original `node_id`s.  Returns the number
+    /// of removed nodes.
+    pub fn compact(&mut self) -> usize {
+        let removed = self.tombstones.len();
+        if removed == 0 {
+            return 0;
+        }
+
+        // Collect active (non-tombstoned) nodes' vectors.
+        let mut active_nodes: Vec<(NodeId, Vec<f16>)> = Vec::new();
+        for (internal_idx, &node_id) in self.node_ids.iter().enumerate() {
+            if !self.tombstones.contains(&node_id) {
+                let offset = internal_idx * self.dim;
+                let vector = self.vectors[offset..offset + self.dim].to_vec();
+                active_nodes.push((node_id, vector));
+            }
+        }
+
+        // Clear the current index.
+        self.vectors.clear();
+        self.graphs.clear();
+        self.node_ids.clear();
+        self.internal_map.clear();
+        self.entry_point = None;
+        self.node_count = 0;
+        self.tombstones.clear();
+
+        // Re-insert all active nodes with their original node_ids.
+        for (node_id, vector) in &active_nodes {
+            self.insert(*node_id, vector);
+        }
+
+        removed
     }
 
     // ── Internal helpers ────────────────────────────────────────────────
@@ -686,8 +749,6 @@ mod tests {
         // Orthogonal vectors → similarity close to 0.0
         let mut b_f16 = vec![f16::from_f32(0.0); 16];
         b_f16[0] = f16::from_f32(1.0);
-        let mut b_f32 = vec![0.0f32; 16];
-        b_f32[0] = 1.0;
 
         let mut c_f16 = vec![f16::from_f32(0.0); 16];
         c_f16[1] = f16::from_f32(1.0);

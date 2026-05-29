@@ -8,6 +8,12 @@ pub enum MemHopError {
     InvalidArgument(String),
     NotFound(String),
     Internal(String),
+    /// v0.11.0: LMDB schema version mismatch.
+    IncompatibleSchema {
+        found: String,
+        expected: &'static str,
+        hint: &'static str,
+    },
 }
 
 impl std::fmt::Display for MemHopError {
@@ -17,6 +23,9 @@ impl std::fmt::Display for MemHopError {
             MemHopError::InvalidArgument(msg) => write!(f, "invalid argument: {}", msg),
             MemHopError::NotFound(msg) => write!(f, "not found: {}", msg),
             MemHopError::Internal(msg) => write!(f, "internal: {}", msg),
+            MemHopError::IncompatibleSchema { found, expected, hint } => {
+                write!(f, "incompatible schema: found '{}', expected '{}'. {}", found, expected, hint)
+            }
         }
     }
 }

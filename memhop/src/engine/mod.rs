@@ -163,6 +163,9 @@ impl MemHop {
             archive_results: None,
             hit_turns: Vec::new(),
             aggregated_sessions: Vec::new(),
+            knowledge_memories: vec![],
+            tree_contexts: vec![],
+            graph_associations: vec![],
             trace,
         })
     }

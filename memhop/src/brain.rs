@@ -19,6 +19,8 @@ use half::f16;
 use crate::activation;
 use crate::cortex::Cortex;
 use crate::encoder::{Encoder, NgramEncoder};
+#[cfg(feature = "onnx")]
+use crate::encoder::reranker::Reranker;
 use crate::engram::{
     AssociationKind, DialogueTurn, EmotionalContext, Engram, EngramKind, PlanLevel, PlanNode, PlanState,
     Protection, StyleCompact, ToneMeta,
@@ -34,9 +36,11 @@ use crate::plan_gate::{PlanContext, PlanGate, PlanIndex};
 use crate::scene_gating::SceneGate;
 use crate::schema;
 use crate::storage::LmdbStorage;
+use crate::storage::CURRENT_SCHEMA;
 use crate::types::{
-    BrainConfig, ConflictItem, DreamReport, InnateSchema, PerceptionInput, PerceptionOutput,
-    RecallMode, RecallRequest, RecallResponse, RecallTrace, ReflectionInput,
+    BrainConfig, ConflictItem, DreamReport, ForgetFilter, GraphAssociation, InnateSchema,
+    PerceptionInput, PerceptionOutput, RecallMode, RecallRequest, RecallResponse, RecallTrace,
+    ReflectionInput, StoreResult, StoreStatus, TreeContext,
 };
 use crate::unified_graph::UnifiedGraph;
 use crate::vitality;
@@ -45,7 +49,6 @@ use crate::vitality;
 
 const HOPFIELD_BETA: f32 = 8.0;
 const HOPFIELD_TOP_K: usize = 200;
-const RRF_K: f32 = 60.0;
 
 // ── v0.9.0: Engram cache ───────────────────────────────────
 
@@ -81,6 +84,11 @@ impl EngramCache {
         self.order.push_back(id.clone());
         self.cache.insert(id, engram);
     }
+
+    fn remove(&mut self, id: &str) {
+        self.cache.remove(id);
+        self.order.retain(|x| x != id);
+    }
 }
 
 // ── Brain ────────────────────────────────────────────────────
@@ -99,7 +107,7 @@ pub struct Brain {
     hnsw_id_map: HashMap<u64, String>,
     /// v0.9.0: Monotonic counter for HNSW node IDs (replaces hash-based IDs).
     next_node_id: u64,
-    storage: Arc<LmdbStorage>,
+    pub(crate) storage: Arc<LmdbStorage>,
 
     emotional_ctx: EmotionalContext,
     growth: GrowthState,
@@ -110,6 +118,12 @@ pub struct Brain {
     #[allow(dead_code)]
     llm: Option<Box<dyn LlmProvider>>,
     ngram_encoder: NgramEncoder,
+    /// v0.11.0: Optional ONNX semantic encoder (loaded when config.onnx_model_path is set).
+    #[cfg(feature = "onnx")]
+    onnx_encoder: Option<crate::encoder::OnnxEncoder>,
+    /// v0.10.0: Persistent Cross-Encoder reranker (loaded once at open).
+    #[cfg(feature = "onnx")]
+    reranker: Option<Reranker>,
     plan_gate: PlanGate,
     /// Timestamp (Unix ms) of last perceive call — for PlanGate time-gap.
     last_perceive_at: i64,
@@ -120,6 +134,8 @@ pub struct Brain {
     recalled_buffer: RefCell<Vec<String>>,
     /// v0.9.0: Hot engram cache for recall speed optimization.
     engram_cache: RefCell<EngramCache>,
+    /// v0.11.0: Track last chunk per knowledge tree for CoShelf edge creation.
+    last_chunk_per_tree: HashMap<String, String>,
 }
 
 impl Brain {
@@ -136,7 +152,7 @@ impl Brain {
                 .map_err(|e| MemHopError::Storage(e.to_string()))?,
         );
 
-        // v0.9.1: Schema version — mark for future migrations
+        // v0.11.0: Schema version check — must happen before any data deserialization.
         {
             let rtxn = storage.begin_read()
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -144,13 +160,27 @@ impl Brain {
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
             drop(rtxn);
 
-            if ver.as_deref() != Some("0.9.1") {
-                let mut wtxn = storage.begin_write()
-                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
-                storage.put_config(&mut wtxn, "schema_version", &"0.9.1".to_string())
-                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
-                wtxn.commit()
-                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            match ver {
+                Some(ref v) if v == CURRENT_SCHEMA => {
+                    // Schema matches — proceed
+                }
+                Some(ref v) => {
+                    // Incompatible old version
+                    return Err(MemHopError::IncompatibleSchema {
+                        found: v.clone(),
+                        expected: CURRENT_SCHEMA,
+                        hint: "This version is not backward compatible. Delete the old database or continue using v0.10.x.",
+                    });
+                }
+                None => {
+                    // New/empty database — write current version
+                    let mut wtxn = storage.begin_write()
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    storage.put_config(&mut wtxn, "schema_version", &CURRENT_SCHEMA.to_string())
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    wtxn.commit()
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                }
             }
         }
 
@@ -161,14 +191,14 @@ impl Brain {
         let graph = UnifiedGraph::rebuild(&storage)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
-        let hopfield = Self::rebuild_hopfield(&storage)?;
+        let hopfield = Self::rebuild_hopfield(&storage, config.hopfield.knowledge_pattern_weight)?;
 
         // v0.9.0: Engram cache for recall speed — bounded FIFO
         let engram_cache = RefCell::new(EngramCache::new(1000));
 
         // v0.9.0: Load or rebuild HNSW index from storage
         let mut counter: u64 = 0;
-        let (hnsw, hnsw_id_map) = match HnswIndex::load_from_storage(&storage) {
+        let (mut hnsw, hnsw_id_map) = match HnswIndex::load_from_storage(&storage) {
             Ok(Some(idx)) => {
                 let mut id_map = HashMap::new();
                 if let Ok(txn) = storage.begin_read()
@@ -200,6 +230,17 @@ impl Brain {
             }
         };
 
+        // v0.11.0: Restore HNSW tombstones from LMDB config
+        {
+            if let Ok(rtxn) = storage.begin_read()
+                && let Ok(Some(ids)) = storage.get_config::<Vec<u64>>(&rtxn, "hnsw_tombstones")
+            {
+                for id in ids {
+                    hnsw.tombstones.insert(id);
+                }
+            }
+        }
+
         // v0.9.0: Rebuild sparse index from stored engrams
         let sparse_index = {
             let mut si = SparseIndex::new();
@@ -208,7 +249,7 @@ impl Brain {
                     let tmp_enc = NgramEncoder::new(crate::engram::VECTOR_DIM);
                     for (id_str, engram) in &entries {
                         let sparse = tmp_enc.encode(&engram.text).sparse;
-                        si.add(id_str, &sparse);
+                        si.add(id_str, &sparse, engram.text.chars().count());
                     }
                 }
             si
@@ -235,6 +276,51 @@ impl Brain {
 
         let hnsw_id_map_len = hnsw_id_map.len() as u64;
 
+        // v0.11.0: Initialize ONNX encoder from config (replaces NgramEncoder for dense vectors)
+        #[cfg(feature = "onnx")]
+        let onnx_encoder: Option<crate::encoder::OnnxEncoder> = {
+            if let Some(model_path) = &config.onnx_model_path {
+                match crate::encoder::OnnxEncoder::from_path(model_path) {
+                    Ok(enc) => {
+                        eprintln!(
+                            "memhop: loaded ONNX encoder from '{}' (dim={})",
+                            model_path,
+                            enc.dim()
+                        );
+                        Some(enc)
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "memhop: failed to load ONNX encoder from '{}': {}, falling back to NgramEncoder",
+                            model_path, e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
+        // v0.10.0: Initialize reranker from config
+        #[cfg(feature = "onnx")]
+        let reranker = {
+            if let Some(model_path) = &config.reranker_model_path {
+                match crate::encoder::reranker::Reranker::from_path(model_path) {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        eprintln!(
+                            "memhop: failed to load reranker from '{}': {}, reranker disabled",
+                            model_path, e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        };
+
         Ok(Brain {
             cortex: Cortex::new(config.cortex_capacity),
             hippocampus,
@@ -251,6 +337,10 @@ impl Brain {
             store_count: 0,
             llm,
             ngram_encoder: NgramEncoder::new(crate::engram::VECTOR_DIM),
+            #[cfg(feature = "onnx")]
+            onnx_encoder,
+            #[cfg(feature = "onnx")]
+            reranker,
             plan_gate: PlanGate::new(
                 config.plan_boundary_threshold.unwrap_or(0.55),
                 3,
@@ -260,6 +350,7 @@ impl Brain {
             config,
             recalled_buffer: RefCell::new(Vec::new()),
             engram_cache: RefCell::new(EngramCache::new(1000)),
+            last_chunk_per_tree: HashMap::new(),
             last_perceive_at: 0,
         })
     }
@@ -403,18 +494,14 @@ impl Brain {
                 is_archived: false,
                 is_dormant: false,
                 turn_id: Some(turn_id.clone()),
+                tree_path: None,
+                source_path: None,
+                source_textunit: None,
             };
 
             self.cortex.push(engram.clone(), &input.session_id);
-            self.hippocampus.store(&self.storage, &engram)?;
-            self.engram_cache.borrow_mut().insert(seg_id.clone(), engram.clone());
-            self.hopfield.add_pattern(&seg_id, &engram.vector);
-            let node_id = self.next_node_id;
-            self.next_node_id += 1;
-            self.hnsw.insert(node_id, &engram.vector);
-            let output = self.ngram_encoder.encode(&engram.text);
-            self.sparse_index.add(&seg_id, &output.sparse);
-            self.hnsw_id_map.insert(node_id, seg_id.clone());
+            // v0.11.0: Use store_engram for unified index writes (LMDB, HNSW, Hopfield, SparseIndex, cache)
+            self.store_engram(engram)?;
             engram_ids.push(seg_id);
         }
 
@@ -435,8 +522,6 @@ impl Brain {
         }
 
         self.growth.total_perceptions += 1;
-        self.growth.total_engrams_created += engram_ids.len() as u64;
-        self.store_count += 1;
 
         // 记录到 Anchor 索引（所有 segment 都关联）
         if !input.attention_anchors.is_empty() {
@@ -721,8 +806,12 @@ impl Brain {
 
     // ── recall ────────────────────────────────────────────
 
-    /// v0.9.0: Encode text to a 1024-dim f16 vector using the built-in NgramEncoder.
+    /// v0.11.0: Encode text to f16 vector. Uses ONNX model when configured, otherwise NgramEncoder.
     pub fn encode_text(&self, text: &str) -> Vec<half::f16> {
+        #[cfg(feature = "onnx")]
+        if let Some(ref onnx) = self.onnx_encoder {
+            return onnx.encode(text).dense;
+        }
         self.ngram_encoder.encode(text).dense
     }
 
@@ -733,7 +822,7 @@ impl Brain {
         // 1. Query vector
         let query_vector: Vec<f16> = match &req.query_vector {
             Some(v) => v.clone(),
-            None => self.ngram_encoder.encode(&req.query).dense,
+            None => self.encode_text(&req.query),
         };
         let query_f32: Vec<f32> = query_vector.iter().map(|&x| x.to_f32()).collect();
 
@@ -820,6 +909,7 @@ impl Brain {
         let mut associations: Vec<Engram> = Vec::new();
         let mut schemas: Vec<Engram> = Vec::new();
         let mut emotional_echoes: Vec<Engram> = Vec::new();
+        let mut knowledge_memories: Vec<Engram> = Vec::new();
         let mut conflicts: Vec<ConflictItem> = Vec::new();
 
         if let Ok(rtxn) = self.storage.begin_read() {
@@ -838,7 +928,19 @@ impl Brain {
                         }
                     }
                 };
+                // v0.11.0: Apply kind_filter
+                if !req.kind_filter.is_empty() && !req.kind_filter.contains(&engram.kind) {
+                    continue;
+                }
+                // v0.11.0: Apply tree filter
+                if let Some(ref tree_path) = req.tree
+                    && engram.kind == EngramKind::Knowledge
+                    && engram.tree_path.as_deref() != Some(tree_path.as_str())
+                {
+                    continue;
+                }
                 match engram.kind {
+                    EngramKind::Knowledge => knowledge_memories.push(engram),
                     EngramKind::Schema => schemas.push(engram),
                     _ => {
                         // 高 arousal 记忆标记为情绪回声
@@ -876,6 +978,52 @@ impl Brain {
             }
         }
 
+        // v0.11.0: Build tree_contexts from knowledge_memories
+        let mut tree_contexts: Vec<TreeContext> = Vec::new();
+        for e in &knowledge_memories {
+            if let Some(ref tree_path) = e.tree_path {
+                let domain = e.meta.get("domain")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("generic");
+                if !tree_contexts.iter().any(|tc: &TreeContext| tc.tree_path == *tree_path) {
+                    let source_count = knowledge_memories.iter()
+                        .filter(|ke| ke.tree_path.as_deref() == Some(tree_path.as_str()))
+                        .count();
+                    tree_contexts.push(TreeContext {
+                        tree_path: tree_path.clone(),
+                        domain: domain.to_string(),
+                        source_count,
+                    });
+                }
+            }
+        }
+
+        // v0.11.0: Build graph_associations from top results
+        let mut graph_associations: Vec<GraphAssociation> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for (id, _score) in &spread_result.activated {
+            let edges = self.graph.edges_of(id);
+            for edge in edges {
+                let pair_key = if *id < edge.target_id {
+                    format!("{}|{}", id, edge.target_id)
+                } else {
+                    format!("{}|{}", edge.target_id, id)
+                };
+                if seen.contains(&pair_key) { continue; }
+                seen.insert(pair_key);
+
+                if edge.kind == AssociationKind::CoShelf {
+                    graph_associations.push(GraphAssociation {
+                        source_id: id.clone(),
+                        target_id: edge.target_id.clone(),
+                        kind: edge.kind.clone(),
+                        weight: edge.weight,
+                        description: "CoShelf: same knowledge tree".to_string(),
+                    });
+                }
+            }
+        }
+
         // 8. 记录被召回的记忆 ID，供 Dream reconsolidation 处理
         {
             let mut buf = self.recalled_buffer.borrow_mut();
@@ -901,6 +1049,9 @@ impl Brain {
             archive_results: None,
             hit_turns,
             aggregated_sessions,
+            knowledge_memories,
+            tree_contexts,
+            graph_associations,
             trace: RecallTrace {
                 latency_us,
                 gated_anchors: req.attention_anchors.clone(),
@@ -936,34 +1087,43 @@ impl Brain {
                     .map(|sid| (sid.clone(), *sim))
             })
             .collect();
-        let hnsw_ranked: HashMap<String, usize> = hnsw_strings
-            .iter()
-            .enumerate()
-            .map(|(i, (id, _))| (id.clone(), i))
-            .collect();
 
-        // Step 3: SparseIndex search with IDF weighting
+        // Step 3: SparseIndex BM25 search (v0.10.0: replaces IDF-weighted search)
         let query_sparse = self.ngram_encoder.encode(&req.query).sparse;
         let idf = self.sparse_index.idf_map();
-        let sparse_results: Vec<String> =
-            self.sparse_index.search_weighted(&query_sparse, &idf, HNSW_SEARCH_K);
-        let sparse_ranked: HashMap<String, usize> = sparse_results
-            .iter()
-            .enumerate()
-            .map(|(i, id)| (id.clone(), i))
-            .collect();
+        let sparse_results = self.sparse_index.bm25_search(&query_sparse, &idf, HNSW_SEARCH_K);
 
-        // Step 4: RRF fusion (k = 60)
-        let mut rrf_scores: HashMap<String, f32> = HashMap::new();
+        // Step 4: BM25 score-based fusion (v0.10.0: replaces RRF rank-based)
+        // BM25 scores min-max normalized to [0, 1], then linear weighted with HNSW cosine sim
+        let mut bm25_map: HashMap<String, f32> = sparse_results.into_iter().collect();
+        let hnsw_map: HashMap<String, f32> = hnsw_strings.iter().cloned().collect();
 
-        for (id, rank) in &hnsw_ranked {
-            rrf_scores.insert(id.clone(), rrf_score(*rank));
+        // Min-max normalize BM25 scores
+        let bm25_min = bm25_map.values().cloned().fold(f32::MAX, f32::min);
+        let bm25_max = bm25_map.values().cloned().fold(f32::MIN, f32::max);
+        for score in bm25_map.values_mut() {
+            if (bm25_max - bm25_min).abs() < f32::EPSILON {
+                *score = 0.5; // degenerate case: all equal scores
+            } else {
+                *score = (*score - bm25_min) / (bm25_max - bm25_min);
+            }
         }
-        for (id, rank) in &sparse_ranked {
-            *rrf_scores.entry(id.clone()).or_insert(0.0) += rrf_score(*rank);
+
+        // Fuse scores: 0.4 * BM25 + 0.6 * HNSW cosine similarity
+        let mut fused: HashMap<String, f32> = HashMap::new();
+        // Add all BM25 candidates with their normalized scores
+        for (id, norm_score) in &bm25_map {
+            let cos_sim = hnsw_map.get(id).copied().unwrap_or(0.0);
+            fused.insert(id.clone(), 0.4 * norm_score + 0.6 * cos_sim);
+        }
+        // Add HNSW-only candidates (not in BM25 results)
+        for (id, cos_sim) in &hnsw_map {
+            if !fused.contains_key(id) {
+                fused.insert(id.clone(), 0.6 * *cos_sim);
+            }
         }
 
-        let mut sorted: Vec<(String, f32)> = rrf_scores.into_iter().collect();
+        let mut sorted: Vec<(String, f32)> = fused.into_iter().collect();
         sorted.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -974,9 +1134,7 @@ impl Brain {
         if req.use_reranker {
             #[cfg(feature = "onnx")]
             {
-                if let Ok(reranker) =
-                    crate::encoder::reranker::Reranker::from_path("models/bge-reranker-v2-m3")
-                {
+                if let Some(reranker) = self.reranker.as_ref() {
                     if let Ok(rtxn) = self.storage.begin_read() {
                         let candidate_texts: Vec<String> = sorted
                             .iter()
@@ -1011,7 +1169,12 @@ impl Brain {
                         eprintln!("memhop: failed to open read txn for reranker, skipping");
                     }
                 } else {
-                    eprintln!("memhop: reranker not found at models/bge-reranker-v2-m3, skipping");
+                    // Warn only once about missing reranker to avoid log spam
+                    static WARNED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+                    WARNED.get_or_init(|| {
+                        eprintln!("memhop: reranker not loaded (model path not configured or load failed), skipping rerank");
+                        true
+                    });
                 }
             }
             #[cfg(not(feature = "onnx"))]
@@ -1020,10 +1183,26 @@ impl Brain {
             }
         }
 
+        // v0.10.0: Archived penalty — multiply score by 0.3 for archived engrams
+        if let Ok(rtxn) = self.storage.begin_read() {
+            for (id, score) in sorted.iter_mut() {
+                if let Ok(Some(engram)) = self.storage.get_hippocampus(&rtxn, id)
+                    && engram.is_archived
+                {
+                    *score *= 0.3;
+                }
+            }
+        }
+        sorted.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
         // Step 5: Load engrams from storage, classify by kind
         let mut associations: Vec<Engram> = Vec::new();
         let mut schemas: Vec<Engram> = Vec::new();
         let mut emotional_echoes: Vec<Engram> = Vec::new();
+        let mut knowledge_memories: Vec<Engram> = Vec::new();
         let conflicts: Vec<ConflictItem> = Vec::new();
         // v0.9.1: Capture scores for turn-level aggregation
         let score_map: HashMap<String, f32> = sorted.iter().cloned().collect();
@@ -1043,7 +1222,19 @@ impl Brain {
                         }
                     }
                 };
+                // v0.11.0: Apply kind_filter
+                if !req.kind_filter.is_empty() && !req.kind_filter.contains(&engram.kind) {
+                    continue;
+                }
+                // v0.11.0: Apply tree filter
+                if let Some(ref tree_path) = req.tree
+                    && engram.kind == EngramKind::Knowledge
+                    && engram.tree_path.as_deref() != Some(tree_path.as_str())
+                {
+                    continue;
+                }
                 match engram.kind {
+                    EngramKind::Knowledge => knowledge_memories.push(engram),
                     EngramKind::Schema => schemas.push(engram),
                     _ => {
                         if engram.arousal > 0.7 {
@@ -1051,6 +1242,52 @@ impl Brain {
                         }
                         associations.push(engram);
                     }
+                }
+            }
+        }
+
+        // v0.11.0: Build tree_contexts from knowledge_memories
+        let mut tree_contexts: Vec<TreeContext> = Vec::new();
+        for e in &knowledge_memories {
+            if let Some(ref tree_path) = e.tree_path {
+                let domain = e.meta.get("domain")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("generic");
+                if !tree_contexts.iter().any(|tc: &TreeContext| tc.tree_path == *tree_path) {
+                    let source_count = knowledge_memories.iter()
+                        .filter(|ke| ke.tree_path.as_deref() == Some(tree_path.as_str()))
+                        .count();
+                    tree_contexts.push(TreeContext {
+                        tree_path: tree_path.clone(),
+                        domain: domain.to_string(),
+                        source_count,
+                    });
+                }
+            }
+        }
+
+        // v0.11.0: Build graph_associations from top results
+        let mut graph_associations: Vec<GraphAssociation> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for (id, _score) in &sorted {
+            let edges = self.graph.edges_of(id);
+            for edge in edges {
+                let pair_key = if *id < edge.target_id {
+                    format!("{}|{}", id, edge.target_id)
+                } else {
+                    format!("{}|{}", edge.target_id, id)
+                };
+                if seen.contains(&pair_key) { continue; }
+                seen.insert(pair_key);
+
+                if edge.kind == AssociationKind::CoShelf {
+                    graph_associations.push(GraphAssociation {
+                        source_id: id.clone(),
+                        target_id: edge.target_id.clone(),
+                        kind: edge.kind.clone(),
+                        weight: edge.weight,
+                        description: "CoShelf: same knowledge tree".to_string(),
+                    });
                 }
             }
         }
@@ -1083,6 +1320,9 @@ impl Brain {
             archive_results: None,
             hit_turns,
             aggregated_sessions,
+            knowledge_memories: vec![],
+            tree_contexts: vec![],
+            graph_associations: vec![],
             trace: RecallTrace {
                 latency_us,
                 gated_anchors: req.attention_anchors.clone(),
@@ -1137,6 +1377,9 @@ impl Brain {
             is_archived: false,
             is_dormant: false,
             turn_id: None,
+            tree_path: None,
+            source_path: None,
+            source_textunit: None,
         };
 
         self.hippocampus.store(&self.storage, &engram)?;
@@ -1180,6 +1423,24 @@ impl Brain {
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
             txn.commit()
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+            // Hebbian-enhanced bidirectional edges: turn → Schema (weight=2.0, Hierarchical)
+            for turn_id in &schema_extra.source_episodes {
+                if let Err(e) = self.graph.add_bidirectional_edge(
+                    &self.storage,
+                    turn_id,
+                    &schema_engram.id,
+                    2.0,
+                    AssociationKind::Hierarchical,
+                    now,
+                ) {
+                    eprintln!(
+                        "[dream] Hebbian edge failed for turn {} → schema {}: {e}",
+                        turn_id, schema_engram.id
+                    );
+                }
+            }
+
             report.turn_schemas_created += 1;
         }
         Ok(())
@@ -1188,45 +1449,168 @@ impl Brain {
     // ── v0.9.1: Forget / Update ─────────────────────────
 
     /// Forget all engrams and the DialogueTurn for a given turn_id.
+    #[deprecated(note = "use forget_batch with ForgetFilter::ByTurnId")]
     pub fn forget(&mut self, turn_id: &str) -> Result<()> {
-        // Find all engrams with this turn_id
-        let rtxn = self.storage.begin_read()
+        let count = self.forget_batch(&ForgetFilter::ByTurnId(turn_id.to_string()))?;
+        // Also delete the dialogue turn for backward compatibility.
+        if let Ok(wtxn) = self.storage.begin_write() {
+            let mut txn = wtxn;
+            let _ = self.storage.delete_dialogue(&mut txn, turn_id);
+            let _ = txn.commit();
+        }
+        if count == 0 {
+            return Err(MemHopError::NotFound(format!(
+                "turn_id not found: {}",
+                turn_id
+            )));
+        }
+        Ok(())
+    }
+
+    /// Batch delete engrams matching a filter.
+    ///
+    /// Removes from all indexes: Hopfield, HNSW (soft-delete tombstone),
+    /// SparseIndex, UnifiedGraph, LMDB, EngramCache, and last_chunk_per_tree.
+    /// HNSW tombstones are persisted to LMDB config after all deletions.
+    pub fn forget_batch(&mut self, filter: &ForgetFilter) -> Result<usize> {
+        // 1. Read all hippocampus entries from LMDB
+        let rtxn = self
+            .storage
+            .begin_read()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        let entries = self.storage.all_hippocampus_entries(&rtxn)
+        let entries = self
+            .storage
+            .all_hippocampus_entries(&rtxn)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         drop(rtxn);
 
-        let to_remove: Vec<String> = entries.iter()
-            .filter(|(_, e)| e.turn_id.as_deref() == Some(turn_id))
-            .map(|(id, _)| id.clone())
+        // 2. Filter entries by the given filter criteria
+        let to_remove: Vec<(String, Engram)> = entries
+            .into_iter()
+            .filter(|(_, e)| match filter {
+                ForgetFilter::ByTreePath(tp) => {
+                    e.kind == EngramKind::Knowledge
+                        && e.tree_path.as_deref() == Some(tp.as_str())
+                }
+                ForgetFilter::ByTurnId(tid) => e.turn_id.as_deref() == Some(tid.as_str()),
+                ForgetFilter::ByEngramId(eid) => &e.id == eid,
+            })
             .collect();
 
-        for id in &to_remove {
-            self.hopfield.remove_pattern(id);
-            let mut wtxn = self.storage.begin_write()
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
-            self.storage.delete_hippocampus(&mut wtxn, id)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
-            wtxn.commit()
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
-            // Note: v0.9.1 skip HNSW removal (no delete API)
-            // Note: v0.9.1 skip sparse_index removal
+        let count = to_remove.len();
+        if count == 0 {
+            return Ok(0);
         }
 
-        let mut txn = self.storage.begin_write()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        self.storage.delete_dialogue(&mut txn, turn_id)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        txn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        // Log the deletion
+        let kind_summary = if to_remove
+            .first()
+            .map(|(_, e)| e.kind == EngramKind::Knowledge)
+            .unwrap_or(false)
+        {
+            "knowledge"
+        } else {
+            "memory"
+        };
+        eprintln!(
+            "[memhop] forget_batch: removing {} {} engrams",
+            count, kind_summary
+        );
 
-        Ok(())
+        // 3. Remove from each index/system
+        for (id, engram) in &to_remove {
+            // A. Hopfield remove
+            self.hopfield.remove_pattern(id);
+
+            // B. HNSW mark_deleted
+            let found: Vec<u64> = self
+                .hnsw_id_map
+                .iter()
+                .filter(|(_, sid)| *sid == id)
+                .map(|(nid, _)| *nid)
+                .collect();
+            for node_id in found {
+                self.hnsw.mark_deleted(node_id);
+            }
+
+            // C. SparseIndex remove
+            self.sparse_index.remove(id);
+
+            // D. Graph remove node (removes all incident edges)
+            let _ = self.graph.remove_node(&self.storage, id);
+
+            // E. LMDB delete
+            {
+                let mut wtxn = self
+                    .storage
+                    .begin_write()
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                self.storage
+                    .delete_hippocampus(&mut wtxn, id)
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                wtxn
+                    .commit()
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            }
+
+            // F. Remove from EngramCache if present
+            self.engram_cache.borrow_mut().remove(id);
+
+            // G. Clean up last_chunk_per_tree
+            if engram.kind == EngramKind::Knowledge
+                && let Some(ref tp) = engram.tree_path
+                && self.last_chunk_per_tree.get(tp) == Some(id)
+            {
+                self.last_chunk_per_tree.remove(tp);
+            }
+        }
+
+        // 4. Persist HNSW tombstones to LMDB config
+        {
+            let mut wtxn = self
+                .storage
+                .begin_write()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            let tombstone_ids: Vec<u64> = self.hnsw.tombstones.iter().copied().collect();
+            self.storage
+                .put_config(&mut wtxn, "hnsw_tombstones", &tombstone_ids)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            wtxn
+                .commit()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        }
+
+        Ok(count)
     }
 
     /// Update a turn with new content (forget + perceive).
     pub fn update(&mut self, turn_id: &str, input: PerceptionInput) -> Result<PerceptionOutput> {
-        self.forget(turn_id)?;
+        self.forget_batch(&ForgetFilter::ByTurnId(turn_id.to_string()))?;
+        // Also delete the dialogue turn for backward compatibility.
+        if let Ok(mut wtxn) = self.storage.begin_write() {
+            let _ = self.storage.delete_dialogue(&mut wtxn, turn_id);
+            let _ = wtxn.commit();
+        }
         self.perceive(input)
+    }
+
+    /// List all schema engrams with their metadata.
+    pub fn list_schemas(&self) -> Result<Vec<(Engram, crate::engram::SchemaExtra)>> {
+        let rtxn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let ids = self.storage.all_schema_ids(&rtxn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut results = Vec::new();
+        for id in &ids {
+            let engram = self.storage.get_hippocampus(&rtxn, id)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?
+                .ok_or_else(|| MemHopError::Storage(format!("schema engram not found: {}", id)))?;
+            let extra = self.storage.get_schema(&rtxn, id)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?
+                .unwrap_or_default();
+            results.push((engram, extra));
+        }
+        Ok(results)
     }
 
     // ── dream ─────────────────────────────────────────────
@@ -1297,6 +1681,29 @@ impl Brain {
             }
         }
         self.llm = saved_llm;
+
+        // v0.11.0: HNSW compact — rebuild index without tombstoned nodes
+        {
+            let ratio = self.hnsw.tombstone_ratio();
+            if ratio > 0.3 {
+                eprintln!("[dream] HNSW tombstone ratio {:.2} > 0.3, compacting", ratio);
+                let removed = self.hnsw.compact();
+                if removed > 0 {
+                    let _ = self.hnsw.save_to_storage(&self.storage);
+                    // Clear tombstones from LMDB config
+                    let mut wtxn = match self.storage.begin_write() {
+                        Ok(t) => t,
+                        Err(e) => {
+                            eprintln!("[dream] failed to open txn after compact: {e}");
+                            return Ok(report);
+                        }
+                    };
+                    let _ = self.storage.put_config(&mut wtxn, "hnsw_tombstones", &Vec::<u64>::new());
+                    let _ = wtxn.commit();
+                    report.hnsw_compacted = removed;
+                }
+            }
+        }
 
         self.growth.dream_cycles += 1;
         report.duration_ms = start.elapsed().as_millis() as u64;
@@ -1433,17 +1840,37 @@ impl Brain {
         let mut decayed = 0u64;
         let mut archived = 0u64;
         let mut forgotten = 0u64;
+        let mut knowledge_count = 0u64;
 
         // Collect IDs to forget before mutating self
         let mut to_forget: Vec<String> = Vec::new();
 
         for (id, mut engram) in entries {
-            // 只处理 Episode 类型的记忆
-            if engram.kind != EngramKind::Episode {
-                continue;
+            // v0.11.0: Both Episode and Knowledge engrams participate.
+            // Episode uses default decay scale (1.0), Knowledge uses slower rate.
+            let kind_decay_scale = match engram.kind {
+                EngramKind::Knowledge => {
+                    self.config.vitality.knowledge_decay_rate / self.config.vitality.episode_decay_rate
+                }
+                _ => 1.0,
+            };
+
+            if engram.kind == EngramKind::Knowledge {
+                knowledge_count += 1;
             }
+
             // 永久保护的不参与衰减
             if engram.protection == Protection::Permanent {
+                continue;
+            }
+
+            // v0.10.0: Piggyback archive — turn-type engrams inactive >30 days
+            if engram.turn_id.is_some() && (now - engram.last_activated) > 30 * 24 * 3600 * 1000 {
+                engram.is_archived = true;
+                let mut txn = self.storage.begin_write()?;
+                self.storage.put_hippocampus(&mut txn, &id, &engram)?;
+                txn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+                report.turns_archived += 1;
                 continue;
             }
 
@@ -1475,6 +1902,7 @@ impl Brain {
                 engram.activation_count,
                 engram.last_activated,
                 &ctx,
+                kind_decay_scale,
             );
 
             if new_vitality < 0.01 {
@@ -1512,6 +1940,7 @@ impl Brain {
         report.vitality_decayed = decayed as usize;
         report.archived_count = archived as usize;
         report.forgotten_count = forgotten as usize;
+        report.knowledge_processed = knowledge_count as usize;
         self.growth.total_forgotten += forgotten;
         Ok(())
     }
@@ -1581,14 +2010,17 @@ impl Brain {
 
     // ── REM-2: Schema 涌现 ───────────────────────────────
 
-    /// 对 Hippocampus 中的 Episode 进行增量聚类。
+    /// 对 Hippocampus 中的 Episode 和 Knowledge 进行增量聚类。
     /// cosine > 0.7 → 归入同一簇
     /// 簇大小 ≥3 → 调用 try_emerge_schema() 创建 Schema 节点
     fn rem_schema_emergence(&mut self, report: &mut DreamReport) -> Result<()> {
         let entries = self.hippocampus.all_entries(&self.storage)?;
+        // v0.11.0: Include both Episode and Knowledge engrams for schema emergence
         let episodes: Vec<(String, Engram)> = entries
             .into_iter()
-            .filter(|(_, e)| e.kind == EngramKind::Episode && !e.is_archived)
+            .filter(|(_, e)| {
+                (e.kind == EngramKind::Episode || e.kind == EngramKind::Knowledge) && !e.is_archived
+            })
             .collect();
 
         if episodes.len() < 3 {
@@ -1622,6 +2054,13 @@ impl Brain {
             assigned.insert(i);
 
             if cluster.len() >= 3 {
+                // v0.11.0: Detect cross-kind clusters (Episode + Knowledge)
+                let has_episode = cluster.iter().any(|&idx| episodes[idx].1.kind == EngramKind::Episode);
+                let has_knowledge = cluster.iter().any(|&idx| episodes[idx].1.kind == EngramKind::Knowledge);
+                if has_episode && has_knowledge {
+                    report.cross_kind_new_associations += 1;
+                }
+
                 let cluster_ids: Vec<String> = cluster.iter().map(|&idx| episodes[idx].0.clone()).collect();
                 let cluster_engrams: Vec<&Engram> = cluster.iter().map(|&idx| &episodes[idx].1).collect();
 
@@ -1775,7 +2214,7 @@ impl Brain {
 
     // ── 私有辅助 ─────────────────────────────────────────
 
-    fn rebuild_hopfield(storage: &LmdbStorage) -> Result<ModernHopfield> {
+    fn rebuild_hopfield(storage: &LmdbStorage, knowledge_weight: f32) -> Result<ModernHopfield> {
         let txn = storage
             .begin_read()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -1786,7 +2225,11 @@ impl Brain {
 
         let mut hopfield = ModernHopfield::new(crate::engram::VECTOR_DIM, HOPFIELD_BETA);
         for (id, engram) in &entries {
-            hopfield.add_pattern(id, &engram.vector);
+            let weight = match engram.kind {
+                EngramKind::Knowledge => knowledge_weight,
+                _ => 1.0,
+            };
+            hopfield.add_pattern_weighted(id, &engram.vector, weight);
         }
         Ok(hopfield)
     }
@@ -1798,6 +2241,214 @@ impl Brain {
         _now: i64,
     ) -> Result<()> {
         Ok(())
+    }
+
+    // ── v0.11.0: 去重检查 ────────────────────────────────
+
+    /// Check if a candidate engram is a duplicate of an existing one.
+    /// Episode: cosine similarity > 0.95 → duplicate.
+    /// Knowledge: cosine similarity > 0.9 AND same tree_path+source_path → duplicate.
+    fn check_duplicate(
+        &self,
+        vector: &[f16],
+        kind: &EngramKind,
+        tree_path: Option<&str>,
+        source_path: Option<&str>,
+    ) -> Option<String> {
+        let threshold = match kind {
+            EngramKind::Knowledge => 0.9,
+            _ => 0.95,
+        };
+
+        let cache = self.engram_cache.borrow();
+        let vec_f32: Vec<f32> = vector.iter().map(|x| x.to_f32()).collect();
+
+        for (id, existing) in cache.cache.iter() {
+            if existing.kind != *kind {
+                continue;
+            }
+
+            // For Knowledge, also check tree_path + source_path match
+            if *kind == EngramKind::Knowledge {
+                let etp = existing.tree_path.as_deref();
+                let esp = existing.source_path.as_deref();
+                if etp != tree_path || esp != source_path {
+                    continue;
+                }
+            }
+
+            let existing_f32: Vec<f32> = existing.vector.iter().map(|x| x.to_f32()).collect();
+            let sim = cosine_similarity(&vec_f32, &existing_f32);
+            if sim > threshold {
+                return Some(id.clone());
+            }
+        }
+        None
+    }
+
+    // ── v0.11.0: 核心写入管线 ─────────────────────────────
+
+    /// Core engram writing pipeline. "LMDB is source of truth, indexes are best-effort."
+    ///
+    /// Written by both perceive() and store(). store_engram itself does NOT deduplicate;
+    /// the caller (store) checks for duplicates first.
+    fn store_engram(&mut self, mut engram: Engram) -> Result<String> {
+        let id = if engram.id.is_empty() {
+            generate_id()
+        } else {
+            engram.id.clone()
+        };
+        engram.id = id.clone();
+
+        // Text truncation: Knowledge engrams are capped at 2000 chars (PRD R2)
+        if engram.kind == EngramKind::Knowledge && engram.text.len() > 2000 {
+            engram.text = engram.text.chars().take(2000).collect();
+        }
+
+        let now = now_millis();
+        if engram.created_at == 0 {
+            engram.created_at = now;
+        }
+        if engram.last_activated == 0 {
+            engram.last_activated = now;
+        }
+        if engram.activation_count == 0 {
+            engram.activation_count = 1;
+        }
+
+        // 1. LMDB write (source of truth)
+        {
+            let mut wtxn = self
+                .storage
+                .begin_write()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            self.storage
+                .put_hippocampus(&mut wtxn, &id, &engram)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            wtxn
+                .commit()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        }
+
+        // 1b. Maintain in-memory hippocampus order (for len() and Dream iteration)
+        self.hippocampus.push_id(&id);
+
+        // 2. EngramCache (hot cache)
+        self.engram_cache.borrow_mut().insert(id.clone(), engram.clone());
+
+        // 3. HNSW insert (best-effort)
+        let node_id = self.next_node_id;
+        self.next_node_id += 1;
+        self.hnsw.insert(node_id, &engram.vector);
+        self.hnsw_id_map.insert(node_id, id.clone());
+
+        // 4. SparseIndex add (best-effort)
+        let encoded = self.ngram_encoder.encode(&engram.text);
+        let doc_length = engram.text.chars().count();
+        self.sparse_index.add(&id, &encoded.sparse, doc_length);
+
+        // 5. Hopfield add (best-effort, with weight)
+        let weight = match engram.kind {
+            EngramKind::Knowledge => self.config.hopfield.knowledge_pattern_weight,
+            _ => 1.0,
+        };
+        self.hopfield.add_pattern_weighted(&id, &engram.vector, weight);
+
+        // 6. CoShelf edge creation (for Knowledge engrams with adjacent chunks)
+        if engram.kind == EngramKind::Knowledge
+            && let Some(ref tree_path) = engram.tree_path
+        {
+                let key = tree_path.clone();
+                if let Some(prev_id) = self.last_chunk_per_tree.get(&key) {
+                    let now = now_millis();
+                    // Create bidirectional CoShelf edge with weight 0.7
+                    let _ = self.graph.add_edge(
+                        &self.storage,
+                        prev_id,
+                        &id,
+                        0.7,
+                        AssociationKind::CoShelf,
+                        now,
+                    );
+                    let _ = self.graph.add_edge(
+                        &self.storage,
+                        &id,
+                        prev_id,
+                        0.7,
+                        AssociationKind::CoShelf,
+                        now,
+                    );
+                }
+                self.last_chunk_per_tree.insert(key, id.clone());
+        }
+
+        self.growth.total_engrams_created += 1;
+        self.store_count += 1;
+
+        Ok(id)
+    }
+
+    // ── v0.11.0: 公共 store API ───────────────────────────
+
+    /// Public ADD-only store API.
+    /// Returns StoreResult indicating whether stored or duplicate.
+    pub fn store(
+        &mut self,
+        text: &str,
+        vector: &[f16],
+        kind: EngramKind,
+        tree_path: Option<String>,
+        source_path: Option<String>,
+        source_textunit: Option<String>,
+    ) -> Result<StoreResult> {
+        // Dedup check
+        if let Some(dup_id) = self.check_duplicate(
+            vector,
+            &kind,
+            tree_path.as_deref(),
+            source_path.as_deref(),
+        ) {
+            return Ok(StoreResult {
+                engram_id: String::new(),
+                status: StoreStatus::Duplicate,
+                duplicate_of: Some(dup_id),
+            });
+        }
+
+        let id = generate_id();
+        let now = now_millis();
+
+        let engram = Engram {
+            id: id.clone(),
+            text: text.to_string(),
+            summary: None,
+            vector: vector.to_vec(),
+            keywords: vec![],
+            content_type: None,
+            valence: 0.0,
+            arousal: 0.5,
+            vitality: 1.0,
+            protection: Protection::Normal,
+            created_at: now,
+            last_activated: now,
+            activation_count: 1,
+            kind,
+            meta: HashMap::new(),
+            is_archived: false,
+            is_dormant: false,
+            turn_id: None,
+            tree_path,
+            source_path,
+            source_textunit,
+        };
+
+        let stored_id = self.store_engram(engram)?;
+
+        Ok(StoreResult {
+            engram_id: stored_id,
+            status: StoreStatus::Stored,
+            duplicate_of: None,
+        })
     }
 
     // ── v0.8.0: Plan 管理方法 ─────────────────────────────
@@ -2220,9 +2871,13 @@ impl Brain {
         let mut session_agg: HashMap<String, (f32, Vec<String>)> = HashMap::new();
 
         for (turn_id, entries) in &turn_groups {
-            let (best_score, best_engram) = entries.iter()
+            let (best_score, best_engram) = if let Some(best) = entries.iter()
                 .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-                .unwrap();
+            {
+                best
+            } else {
+                continue;
+            };
             let snippet = best_engram.text.chars().take(200).collect::<String>();
 
             if let Ok(Some(turn)) = self.storage.get_dialogue(&rtxn, turn_id) {
@@ -2319,11 +2974,6 @@ fn now_millis() -> i64 {
         .as_millis() as i64
 }
 
-/// RRF score for a given rank: 1 / (k + rank).
-/// Used in Reciprocal Rank Fusion to combine multi-system rankings.
-fn rrf_score(rank: usize) -> f32 {
-    1.0 / (RRF_K + rank as f32)
-}
 /// Compute character-level trigram overlap between query and text.
 fn ngram_overlap(query: &str, text: &str) -> f32 {
     if query.is_empty() || text.len() < 3 {
@@ -2347,6 +2997,17 @@ fn keyword_overlap(a: &[String], b: &[String]) -> f32 {
     let set_b: HashSet<&str> = b.iter().map(|s: &String| s.as_str()).collect();
     let intersection = set_a.intersection(&set_b).count();
     intersection as f32 / set_a.len().min(set_b.len()) as f32
+}
+
+/// Compute cosine similarity between two f32 vectors.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
+    (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
 }
 
 /// Fallback summary: concatenate first N turns' content when no LLM is available.

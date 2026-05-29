@@ -53,6 +53,7 @@ pub fn compute_vitality(
     activation_count: u32,
     _last_activated: i64,
     ctx: &DecayContext,
+    kind_decay_scale: f32,
 ) -> f32 {
     // ── 1. Time-based decay ────────────────────────────────────────
     let hours = ctx.hours_since_last_activated as f32;
@@ -77,7 +78,8 @@ pub fn compute_vitality(
         - ctx.arousal_beta * arousal
         - activation_penalty;
 
-    let decay_rate = decay_rate.clamp(0.0, 0.95);
+    // v0.11.0: Scale by kind-specific decay rate (Knowledge decays slower)
+    let decay_rate = (decay_rate * kind_decay_scale).clamp(0.0, 0.95);
     (vitality * (1.0 - decay_rate)).clamp(0.0, 1.0)
 }
 
@@ -177,7 +179,7 @@ mod tests {
         let ctx = ctx_basic();
 
         // Typical case — should stay well within [0, 1]
-        let result = compute_vitality(0.8, 0.3, 5, 1700000000000, &ctx);
+        let result = compute_vitality(0.8, 0.3, 5, 1700000000000, &ctx, 1.0);
         assert!(
             (0.0..=1.0).contains(&result),
             "vitality must be in [0, 1], got {}",
@@ -191,8 +193,8 @@ mod tests {
         ctx.recent_similar = vec![0.95, 0.92, 0.88, 0.85]; // high similarity → more interference
         ctx.interference_alpha = 0.5; // high sensitivity to interference
 
-        let quiet = compute_vitality(0.8, 0.3, 5, 1700000000000, &ctx_basic());
-        let noisy = compute_vitality(0.8, 0.3, 5, 1700000000000, &ctx);
+        let quiet = compute_vitality(0.8, 0.3, 5, 1700000000000, &ctx_basic(), 1.0);
+        let noisy = compute_vitality(0.8, 0.3, 5, 1700000000000, &ctx, 1.0);
 
         assert!(
             noisy <= quiet,
@@ -206,8 +208,8 @@ mod tests {
     fn test_compute_vitality_higher_with_more_activation() {
         let ctx = ctx_basic();
 
-        let low_act = compute_vitality(0.5, 0.3, 0, 1700000000000, &ctx);
-        let high_act = compute_vitality(0.5, 0.3, 100, 1700000000000, &ctx);
+        let low_act = compute_vitality(0.5, 0.3, 0, 1700000000000, &ctx, 1.0);
+        let high_act = compute_vitality(0.5, 0.3, 100, 1700000000000, &ctx, 1.0);
 
         assert!(
             high_act >= low_act,
@@ -222,11 +224,11 @@ mod tests {
         let ctx = ctx_basic();
 
         // Very low vitality — should not go below 0
-        let low = compute_vitality(0.01, 0.0, 0, 1700000000000, &ctx);
+        let low = compute_vitality(0.01, 0.0, 0, 1700000000000, &ctx, 1.0);
         assert!(low >= 0.0, "vitality should never go below 0, got {}", low);
 
         // Very high vitality — should not exceed 1
-        let high = compute_vitality(1.0, 1.0, 1000, 1700000000000, &ctx);
+        let high = compute_vitality(1.0, 1.0, 1000, 1700000000000, &ctx, 1.0);
         assert!(
             high <= 1.0,
             "vitality should never exceed 1, got {}",

@@ -297,9 +297,7 @@ fn test_enable_plasticity_toggle() {
 #[test]
 fn test_set_plasticity_config() {
     let mut mhn = ModernHopfield::new(8, 8.0);
-    let mut cfg = PlasticityConfig::default();
-    cfg.reinforce_rate = 0.02;
-    cfg.discriminate_rate = 0.01;
+    let cfg = PlasticityConfig { reinforce_rate: 0.02, discriminate_rate: 0.01, ..Default::default() };
 
     mhn.set_plasticity_config(cfg.clone());
 

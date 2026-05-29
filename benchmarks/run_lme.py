@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""MemHop v0.9.1 — LongMemEval-S (turn-level, 对标 agentmemory)
+"""MemHop v0.10.0 — LongMemEval-S (turn-level, 对标 agentmemory)
 Usage: python3 benchmarks/run_lme.py [N_problems]
 
 每条 turn 独立存 MemHop，recall → hit_turns → 按 session 聚合 → 对标 agentmemory
@@ -8,6 +8,7 @@ import json, os, subprocess, shutil, math, time, sys
 import numpy as np
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["HF_HUB_OFFLINE"] = "1"
 
 BINARY = os.path.join(os.path.dirname(__file__), "../target/release/quality_bench")
 LME_DATA = "/Volumes/zt_hd/projects/meow/LongMemEval/data/longmemeval_s_cleaned.json"
@@ -15,7 +16,7 @@ N = int(sys.argv[1]) if len(sys.argv) > 1 else 100
 
 
 def main():
-    print(f"v0.9.1 LongMemEval-S ({N}题, turn-level)")
+    print(f"v0.10.0 LongMemEval-S ({N}题, turn-level)")
     print("=" * 60)
 
     # 1. Load
@@ -62,7 +63,7 @@ def main():
         "queries": queries_in,
         "qrels": qrels,
         "limit": 10,
-        "spread_top_k": 50,
+        "spread_top_k": 10,
         "dream_interval": 999999,
         "aggregate_mode": "turn",
     }
@@ -79,8 +80,8 @@ def main():
     t1 = time.time()
     r = subprocess.run(
         [BINARY, "--input", "/tmp/lme_v091/i.json", "--output", "/tmp/lme_v091/o.json",
-         "--db-dir", db, "--mode", "associative"],
-        capture_output=True, text=True, timeout=1200,
+         "--db-dir", db, "--mode", "retrieval"],
+        capture_output=True, text=True, timeout=7200,
     )
     print(f"  {time.time()-t1:.0f}s")
 

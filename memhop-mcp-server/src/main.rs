@@ -3,18 +3,20 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use serde_json::{json, Value};
 use memhop::{
-    Brain, BrainConfig, PerceptionInput, RecallRequest,
+    Brain, BrainConfig, EngramKind, PerceptionInput, RecallRequest,
     EmotionalState, Protection, ReflectionInput, ReflectionKind,
     ShelfManager, ShelfDomain,
+    StoreResult,
 };
 
-const VERSION: &str = "0.9.1";
+const VERSION: &str = "0.11.0";
 
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 
 fn main() {
     let db_path = std::env::var("MEMHOP_DB_PATH")
         .unwrap_or_else(|_| "/tmp/memhop-mcp.db".to_string());
+    let onnx_model_path = std::env::var("MEMHOP_ONNX_MODEL").ok();
     let mut brain: Option<Brain> = None;
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
@@ -42,8 +44,19 @@ fn main() {
             "tools/list" => Ok(tools_list()),
             "tools/call" => {
                 if brain.is_none() {
-                    match Brain::open(&db_path, BrainConfig::default(), None) {
-                        Ok(b) => brain = Some(b),
+                    let mut brain_config = BrainConfig::default();
+                    if let Some(ref path) = onnx_model_path {
+                        brain_config.onnx_model_path = Some(path.clone());
+                        eprintln!("memhop-mcp-server: using ONNX model from {}", path);
+                    }
+                    match Brain::open(&db_path, brain_config, None) {
+                        Ok(b) => {
+                            // v0.11.0: Rebuild shelf registry from LMDB
+                            if let Ok(mut manager) = get_shelf_manager().lock() {
+                                let _ = manager.rebuild_registry(&b);
+                            }
+                            brain = Some(b);
+                        }
                         Err(e) => {
                             let resp = json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":format!("failed to open brain: {}", e)}});
                             let _ = writeln!(stdout, "{}", resp);
@@ -69,10 +82,10 @@ fn main() {
 
 fn tools_list() -> Value {
     json!({"tools":[
-        {"name":"memhop_store","description":"Store a new perception/memory","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"session_id":{"type":"string"},"valence":{"type":"number"},"arousal":{"type":"number"},"turn_id":{"type":"string"},"turn_index":{"type":"integer"},"topic_label":{"type":"string"}},"required":["text"]}},
-        {"name":"memhop_recall","description":"Recall memories matching a query. Optionally accepts pre-encoded query_vector for external encoder benchmarks.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"session_id":{"type":"string"},"limit":{"type":"integer"},"max_tokens":{"type":"integer"},"query_vector":{"type":"array","items":{"type":"number"}}},"required":["query"]}},
+        {"name":"memhop_store","description":"Store a new memory/episode or knowledge chunk (ADD-only, auto-dedup).","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"kind":{"type":"string","description":"'episode' (default) or 'knowledge'"},"session_id":{"type":"string"},"tree_path":{"type":"string","description":"Knowledge tree path (required for kind=knowledge)"},"source_path":{"type":"string","description":"Original file path (for knowledge)"},"source_textunit":{"type":"string","description":"Text unit reference (e.g., '§3.2')"},"valence":{"type":"number"},"arousal":{"type":"number"}},"required":["text"]}},
+        {"name":"memhop_recall","description":"Recall memories matching a query. Returns unified results across all types.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"session_id":{"type":"string"},"limit":{"type":"integer"},"kind_filter":{"type":"array","items":{"type":"string"},"description":"Filter by kind: 'episode', 'knowledge'. Empty = all."},"tree":{"type":"string","description":"Filter by knowledge tree path."},"query_vector":{"type":"array","items":{"type":"number"}}},"required":["query"]}},
         {"name":"memhop_reflect","description":"Create a reflection engram","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"kind":{"type":"string"},"session_id":{"type":"string"}},"required":["content","kind"]}},
-        {"name":"memhop_dream","description":"Run Dream consolidation cycle","inputSchema":{"type":"object","properties":{}}},
+        {"name":"memhop_dream","description":"Run Dream consolidation cycle (includes Knowledge engrams).","inputSchema":{"type":"object","properties":{}}},
         {"name":"memhop_stats","description":"Get brain statistics","inputSchema":{"type":"object","properties":{}}},
         {"name":"memhop_count","description":"Get total engram count","inputSchema":{"type":"object","properties":{}}},
         {"name":"memhop_health","description":"Get health metrics (uptime, version, basic stats)","inputSchema":{"type":"object","properties":{}}},
@@ -80,10 +93,12 @@ fn tools_list() -> Value {
         {"name":"memhop_get_plan_tree","description":"Get the plan tree (all root plans or descendants of a given plan)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}}}},
         {"name":"memhop_get_chat_history","description":"Get archived dialogue turns for a plan","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}},"required":["plan_id"]}},
         {"name":"memhop_plan_stats","description":"Get aggregated plan statistics (domain distribution + tone trends)","inputSchema":{"type":"object","properties":{"start_time":{"type":"integer"},"end_time":{"type":"integer"}}}},
-        {"name":"memhop_mount_shelf","description":"Mount a knowledge shelf from a file or directory path","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"domain":{"type":"string"}},"required":["path"]}},
-        {"name":"memhop_knowledge_search","description":"Search within a mounted knowledge shelf","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"shelf_id":{"type":"string"},"limit":{"type":"integer"},"max_tokens":{"type":"integer"}},"required":["query","shelf_id"]}},
-        {"name":"memhop_unmount_shelf","description":"Unmount and remove a knowledge shelf","inputSchema":{"type":"object","properties":{"shelf_id":{"type":"string"}},"required":["shelf_id"]}},
-        {"name":"memhop_forget","description":"Forget a dialogue turn and its associated engrams","inputSchema":{"type":"object","properties":{"turn_id":{"type":"string"}},"required":["turn_id"]}}
+        {"name":"memhop_mount_tree","description":"Mount a knowledge tree from a file or directory path. Path is the identity.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"domain":{"type":"string","description":"'code', 'book', 'paper', 'doc', or 'generic'"}},"required":["path"]}},
+        {"name":"memhop_unmount_tree","description":"Unmount a knowledge tree by tree path.","inputSchema":{"type":"object","properties":{"tree_path":{"type":"string"}},"required":["tree_path"]}},
+        {"name":"memhop_tree_status","description":"List all mounted knowledge trees with metadata.","inputSchema":{"type":"object","properties":{"tree_path":{"type":"string","description":"Optional: get status for a specific tree. Returns all trees if omitted."}}}},
+        {"name":"memhop_knowledge_search","description":"[DEPRECATED] Use memhop_recall with tree and kind_filter instead.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"shelf_id":{"type":"string"},"limit":{"type":"integer"}},"required":["query","shelf_id"]}},
+        {"name":"memhop_forget","description":"Forget a dialogue turn and its associated engrams","inputSchema":{"type":"object","properties":{"turn_id":{"type":"string"}},"required":["turn_id"]}},
+        {"name":"memhop_list_schemas","description":"List all emerged schema engrams","inputSchema":{"type":"object","properties":{}}}
     ]})
 }
 
@@ -104,10 +119,22 @@ fn tool_call(brain: &mut Brain, params: Option<&Value>) -> Result<Value, String>
         "memhop_get_plan_tree" => tool_get_plan_tree(brain, args),
         "memhop_get_chat_history" => tool_get_chat_history(brain, args),
         "memhop_plan_stats" => tool_plan_stats(brain, args),
-        "memhop_mount_shelf" => tool_mount_shelf(brain, args),
-        "memhop_knowledge_search" => tool_knowledge_search(brain, args),
-        "memhop_unmount_shelf" => tool_unmount_shelf(brain, args),
+        "memhop_mount_tree" => tool_mount_tree(brain, args),
+        "memhop_unmount_tree" => tool_unmount_tree(brain, args),
+        "memhop_tree_status" => tool_tree_status(brain, args),
+        "memhop_knowledge_search" => tool_knowledge_search_deprecated(brain, args),
+        // ── v0.11.0: Deprecated aliases (backward compat) ──
+        "memhop_mount_shelf" => {
+            eprintln!("[memhop] DEPRECATION: memhop_mount_shelf is deprecated, use memhop_mount_tree");
+            tool_mount_tree(brain, args)
+        },
+        "memhop_unmount_shelf" => {
+            eprintln!("[memhop] DEPRECATION: memhop_unmount_shelf is deprecated, use memhop_unmount_tree");
+            tool_unmount_tree(brain, args)
+        },
+        // ── Old tools ──
         "memhop_forget" => tool_forget(brain, args),
+        "memhop_list_schemas" => tool_list_schemas(brain, args),
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
@@ -145,53 +172,75 @@ fn privacy_filter(text: &str) -> String {
 fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     let raw_text = s(args, "text")?;
     let text = privacy_filter(&raw_text);
-    let session_id = args.get("session_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("default")
-        .to_string();
-    let valence = args.get("valence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
-    let arousal = args.get("arousal").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
-    // v0.9.1: Optional turn-level fields
-    let turn_id = args.get("turn_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let turn_index = args.get("turn_index")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as u32;
-    let topic_label = args.get("topic_label")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
+    let kind_str = args.get("kind").and_then(|v| v.as_str()).unwrap_or("episode");
 
-    let vector = brain.encode_text(&text);
+    match kind_str {
+        "episode" => {
+            let session_id = args.get("session_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string();
+            let valence = args.get("valence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
+            let arousal = args.get("arousal").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
 
-    let input = PerceptionInput {
-        content: text,
-        vector,
-        emotional_state: EmotionalState::new(valence, arousal),
-        attention_anchors: vec![],
-        perceived_importance: 0.5,
-        session_id,
-        protection: Protection::Normal,
-        manual_links: vec![],
-        meta: std::collections::HashMap::new(),
-        plan_id: None,
-        agent_response: None,
-        dialogue_timestamp: None,
-        source: None,
-        turn_id,
-        turn_index,
-        segment_index: 0,
-        topic_label,
-    };
+            let vector = brain.encode_text(&text);
 
-    let output = brain.perceive(input).map_err(|e| e.to_string())?;
-    Ok(json!({
-        "memory_id": output.engram_id,
-        "plan_id": output.current_plan_id,
-        "plan_hint": format!("{:?}", output.plan_hint),
-        "plan_name": output.plan_name,
-    }))
+            let input = PerceptionInput {
+                content: text,
+                vector,
+                emotional_state: EmotionalState::new(valence, arousal),
+                attention_anchors: vec![],
+                perceived_importance: 0.5,
+                session_id,
+                protection: Protection::Normal,
+                manual_links: vec![],
+                meta: std::collections::HashMap::new(),
+                plan_id: None,
+                agent_response: None,
+                dialogue_timestamp: None,
+                source: None,
+                turn_id: String::new(),
+                turn_index: 0,
+                segment_index: 0,
+                topic_label: None,
+            };
+
+            let output = brain.perceive(input).map_err(|e| e.to_string())?;
+            Ok(json!({
+                "status": "stored",
+                "engram_id": output.engram_id,
+                "plan_id": output.current_plan_id,
+                "plan_hint": format!("{:?}", output.plan_hint),
+                "plan_name": output.plan_name,
+            }))
+        }
+        "knowledge" => {
+            let tree_path = s(args, "tree_path")?;
+            let source_path = args.get("source_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let source_textunit = args.get("source_textunit")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let vector = brain.encode_text(&text);
+            let result: StoreResult = brain.store(
+                &text,
+                &vector,
+                EngramKind::Knowledge,
+                Some(tree_path),
+                Some(source_path),
+                Some(source_textunit),
+            ).map_err(|e| e.to_string())?;
+            Ok(json!({
+                "status": format!("{:?}", result.status),
+                "engram_id": result.engram_id,
+                "duplicate_of": result.duplicate_of,
+            }))
+        }
+        _ => Err(format!("Invalid kind '{}'. Must be 'episode' or 'knowledge'.", kind_str)),
+    }
 }
 
 fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
@@ -201,9 +250,23 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         .unwrap_or("")
         .to_string();
     let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-    let max_tokens = args.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as usize);
 
-    // Accept pre-encoded query_vector for external encoder benchmarks
+    // v0.11.0: Parse kind_filter and tree
+    let kind_filter: Vec<EngramKind> = args.get("kind_filter")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|x| x.as_str())
+                .filter_map(|s| match s {
+                    "episode" => Some(EngramKind::Episode),
+                    "knowledge" => Some(EngramKind::Knowledge),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let tree = args.get("tree").and_then(|v| v.as_str()).map(|s| s.to_string());
+
     let query_vector: Option<Vec<half::f16>> = args.get("query_vector")
         .and_then(|v| v.as_array())
         .map(|arr| {
@@ -229,37 +292,44 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         limit: 10,
         mode: memhop::RecallMode::Retrieval,
         use_reranker: false,
+        tree,
+        kind_filter,
     };
 
     let resp = brain.recall(&req).map_err(|e| e.to_string())?;
 
-    const MAX_PER_SESSION: usize = 3;
-
     let mut results: Vec<Value> = Vec::new();
-    for (session_count, e) in resp.working_memory.iter().enumerate() {
-        if session_count >= MAX_PER_SESSION {
-            break;
-        }
-        let text = match max_tokens {
-            Some(n) => truncate_to_tokens(&e.text, n),
-            None => e.text.clone(),
-        };
-        results.push(json!({"id": e.id, "text": text, "kind": format!("{}", e.kind), "source": "working_memory"}));
+    for e in &resp.working_memory {
+        results.push(json!({
+            "id": e.id, "text": e.text,
+            "kind": format!("{}", e.kind), "source": "episode",
+            "tree_path": e.tree_path,
+        }));
     }
-    for e in &resp.associations {
-        let text = match max_tokens {
-            Some(n) => truncate_to_tokens(&e.text, n),
-            None => e.text.clone(),
-        };
-        results.push(json!({"id": e.id, "text": text, "kind": format!("{}", e.kind), "source": "association"}));
+    for e in &resp.knowledge_memories {
+        results.push(json!({
+            "id": e.id, "text": e.text,
+            "kind": "knowledge", "source": "knowledge",
+            "tree_path": e.tree_path,
+            "source_path": e.source_path,
+            "source_textunit": e.source_textunit,
+        }));
     }
     results.truncate(limit);
 
     Ok(json!({
         "results": results,
+        "knowledge_memories": resp.knowledge_memories.iter().map(|e| json!({
+            "id": e.id, "text": &e.text,
+            "tree_path": e.tree_path,
+            "source_path": e.source_path,
+            "source_textunit": e.source_textunit,
+        })).collect::<Vec<_>>(),
         "schemas": resp.schemas.iter().map(|e| json!({"id": e.id, "text": e.text})).collect::<Vec<_>>(),
         "hit_turns": resp.hit_turns,
         "aggregated_sessions": resp.aggregated_sessions,
+        "tree_contexts": resp.tree_contexts,
+        "graph_associations": resp.graph_associations,
         "trace": {
             "latency_us": resp.trace.latency_us,
             "hopfield_candidates": resp.trace.hopfield_candidates,
@@ -303,6 +373,9 @@ fn tool_dream(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
         "consolidated_count": report.consolidated_count,
         "pruned_edges": report.pruned_edges,
         "duration_ms": report.duration_ms,
+        "knowledge_processed": report.knowledge_processed,
+        "cross_kind_new_associations": report.cross_kind_new_associations,
+        "hnsw_compacted": report.hnsw_compacted,
     }))
 }
 
@@ -310,8 +383,29 @@ fn tool_dream(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
 
 fn tool_forget(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     let turn_id = s(args, "turn_id")?;
-    brain.forget(&turn_id).map_err(|e| e.to_string())?;
+    brain.forget_batch(&memhop::ForgetFilter::ByTurnId(turn_id.to_string()))
+        .map_err(|e| e.to_string())?;
     Ok(json!({"status": "ok"}))
+}
+
+// ── v0.9.1: List schemas tool ──────────────────────────────
+
+fn tool_list_schemas(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
+    let schemas = brain.list_schemas().map_err(|e| e.to_string())?;
+    let result: Vec<Value> = schemas.iter().map(|(engram, extra)| {
+        json!({
+            "id": engram.id,
+            "text": engram.text,
+            "summary": engram.summary,
+            "keywords": engram.keywords,
+            "stability": extra.stability,
+            "internal_consistency": extra.internal_consistency,
+            "match_count": extra.match_count,
+            "contradiction_count": extra.contradiction_count,
+            "activation_count": engram.activation_count,
+        })
+    }).collect();
+    Ok(json!({"schemas": result}))
 }
 
 fn tool_stats(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
@@ -435,81 +529,127 @@ fn tool_plan_stats(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     }))
 }
 
-// ── v0.9.0: Knowledge Shelf tools ──────────────────────────
+// ── v0.11.0: Knowledge Tree tools ─────────────────────────
 
 fn get_shelf_manager() -> &'static Mutex<ShelfManager> {
     static MANAGER: OnceLock<Mutex<ShelfManager>> = OnceLock::new();
     MANAGER.get_or_init(|| Mutex::new(ShelfManager::new()))
 }
 
-fn truncate_to_tokens(text: &str, max_tokens: usize) -> String {
-    let words: Vec<&str> = text.split_whitespace().collect();
-    if words.len() <= max_tokens {
-        text.to_string()
-    } else {
-        words[..max_tokens].join(" ")
-    }
-}
 
-fn tool_mount_shelf(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+fn tool_mount_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     let path = s(args, "path")?;
     let domain_str = args
         .get("domain")
         .and_then(|v| v.as_str())
-        .unwrap_or("doc");
+        .unwrap_or("generic");
     let domain = match domain_str {
         "code" => ShelfDomain::Code,
         "book" => ShelfDomain::Book,
         "paper" => ShelfDomain::Paper,
-        _ => ShelfDomain::Doc,
+        "doc" => ShelfDomain::Doc,
+        _ => ShelfDomain::Generic,
     };
 
     let mut manager = get_shelf_manager().lock().map_err(|e| e.to_string())?;
-    let shelf_id = manager.mount(&path, domain)?;
-    manager.encode_shelf(&shelf_id, |text| brain.encode_text(text))?;
+    let result = manager.mount(brain, &path, domain)?;
 
-    Ok(json!({"shelf_id": shelf_id}))
+    Ok(json!({
+        "tree_path": result.tree_path,
+        "chunk_count": result.chunk_count,
+        "domain": result.domain,
+        "warnings": result.warnings,
+    }))
 }
 
-fn tool_knowledge_search(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+fn tool_knowledge_search_deprecated(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    eprintln!("[memhop] DEPRECATION: memhop_knowledge_search is deprecated. Use memhop_recall with tree=...&kind_filter=[\"knowledge\"] instead.");
     let query = s(args, "query")?;
     let shelf_id = s(args, "shelf_id")?;
     let limit = args
         .get("limit")
         .and_then(|v| v.as_u64())
         .unwrap_or(5) as usize;
-    let max_tokens = args
-        .get("max_tokens")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize);
 
     let query_vector = brain.encode_text(&query);
-    let manager = get_shelf_manager().lock().map_err(|e| e.to_string())?;
-    let results = manager.search(&shelf_id, &query_vector, limit)?;
 
-    let out: Vec<Value> = results
-        .into_iter()
-        .map(|r| {
-            let text = match max_tokens {
-                Some(n) => truncate_to_tokens(&r.text, n),
-                None => r.text,
-            };
+    let req = RecallRequest {
+        query: query.clone(),
+        query_vector: Some(query_vector),
+        session_id: String::new(),
+        emotional_state: EmotionalState::default(),
+        attention_anchors: vec![],
+        current_goal: None,
+        recent_limit: limit,
+        spread_depth: 1,
+        spread_top_k: limit,
+        active_plan_id: None,
+        deep_search: false,
+        deep_search_plan_id: None,
+        domain_filter: vec![],
+        limit,
+        mode: memhop::RecallMode::Retrieval,
+        use_reranker: false,
+        tree: Some(shelf_id),
+        kind_filter: vec![EngramKind::Knowledge],
+    };
+
+    let resp = brain.recall(&req).map_err(|e| e.to_string())?;
+
+    let out: Vec<Value> = resp
+        .knowledge_memories
+        .iter()
+        .take(limit)
+        .map(|e| {
             json!({
-                "text": text,
-                "location": r.location,
-                "score": r.score,
-                "source": r.source,
+                "text": &e.text,
+                "score": 0.0,
+                "source": e.source_path,
+                "location": e.source_textunit,
             })
         })
         .collect();
 
-    Ok(json!({"status": "ok", "results": out}))
+    Ok(json!({
+        "status": "ok",
+        "results": out,
+        "deprecation_warning": "Use memhop_recall with tree and kind_filter instead.",
+    }))
 }
 
-fn tool_unmount_shelf(_brain: &mut Brain, args: &Value) -> Result<Value, String> {
-    let shelf_id = s(args, "shelf_id")?;
+fn tool_unmount_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let tree_path = s(args, "tree_path")?;
     let mut manager = get_shelf_manager().lock().map_err(|e| e.to_string())?;
-    manager.unmount(&shelf_id)?;
-    Ok(json!({"status": "ok"}))
+    let result = manager.unmount(brain, &tree_path)?;
+    Ok(json!({
+        "tree_path": result.tree_path,
+        "deleted_count": result.deleted_count,
+    }))
+}
+
+fn tool_tree_status(_brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let manager = get_shelf_manager().lock().map_err(|e| e.to_string())?;
+    if let Some(tree_path) = args.get("tree_path").and_then(|v| v.as_str()) {
+        match manager.get_tree(tree_path) {
+            Some(meta) => Ok(json!({
+                "tree_path": meta.tree_path,
+                "domain": format!("{:?}", meta.domain),
+                "chunk_count": meta.chunk_count,
+                "file_count": meta.file_count,
+                "mounted_at": meta.mounted_at,
+            })),
+            None => Err(format!("Tree not found: {}", tree_path)),
+        }
+    } else {
+        let trees: Vec<Value> = manager.get_trees().iter().map(|meta| {
+            json!({
+                "tree_path": meta.tree_path,
+                "domain": format!("{:?}", meta.domain),
+                "chunk_count": meta.chunk_count,
+                "file_count": meta.file_count,
+            })
+        }).collect();
+        Ok(json!({"trees": trees, "count": trees.len()}))
+    }
 }
 

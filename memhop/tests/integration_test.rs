@@ -221,7 +221,7 @@ fn test_recall_respects_session_filter() {
             ..Default::default()
         })
         .expect("recall");
-    assert!(resp_a.working_memory.len() >= 1, "session A should find its memory");
+    assert!(!resp_a.working_memory.is_empty(), "session A should find its memory");
 }
 
 #[test]
@@ -369,7 +369,7 @@ fn test_memory_count_increases() {
     brain.perceive(perception("count test", "s1")).expect("perceive");
     // memory_count tracks Hopfield patterns (hippocampus entries pushed to Hopfield)
     // The count may or may not increase immediately depending on perceive implementation
-    assert!(brain.hippocampus_len() >= count_before + 1);
+    assert!(brain.hippocampus_len() > count_before);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -547,14 +547,14 @@ fn test_contradiction_detected_in_recall() {
 
     // Manually establish a Contradicts edge between them
     // Access graph via the edge storage directly
-    let _storage = {
+    {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("tmp.db");
         let brain2 = Brain::open(path.to_str().unwrap(), BrainConfig::default(), None).unwrap();
         // Can't access internal graph, so skip this part
         drop(brain2);
         drop(dir);
-    };
+    }
 
     // Verify recall returns conflicts (may be empty without Contradicts edges)
     let resp = brain.recall(&RecallRequest {

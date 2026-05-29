@@ -106,7 +106,7 @@ fn test_boundary_score_emotional_shift() {
         PlanContext { centroid: None, avg_tone: Some(&avg), anchors: &[] },
         0.0,
     );
-    assert!(score >= 0.35 && score <= 0.40, "emotional shift, got {}", score);
+    assert!((0.35..=0.40).contains(&score), "emotional shift, got {}", score);
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn test_boundary_score_anchor_change() {
         PlanContext { centroid: None, avg_tone: None, anchors: &prev },
         0.0,
     );
-    assert!(score >= 0.20 && score <= 0.30, "disjoint anchors, got {}", score);
+    assert!((0.20..=0.30).contains(&score), "disjoint anchors, got {}", score);
 }
 
 #[test]

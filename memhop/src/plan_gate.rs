@@ -358,7 +358,7 @@ mod tests {
             PlanContext { centroid: None, avg_tone: Some(&avg_tone), anchors: &[] },
             0.0,
         );
-        assert!(score >= 0.35 && score <= 0.40);
+        assert!((0.35..=0.40).contains(&score));
     }
 
     #[test]
@@ -373,7 +373,7 @@ mod tests {
             PlanContext { centroid: None, avg_tone: None, anchors: &plan_anchors },
             0.0,
         );
-        assert!(score >= 0.20 && score <= 0.30);
+        assert!((0.20..=0.30).contains(&score));
     }
 
     #[test]

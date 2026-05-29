@@ -1,6 +1,6 @@
 //! MemHop — 人脑启发的记忆系统（纯 Rust）。
 //!
-//! v0.7.3 新增 Brain 三层架构 API，与原有 MemHop 引擎共存。
+//! v0.10.0: HNSW + BM25 + Cross-Encoder 三层检索，知识树 (Shelf) 挂载，Dream Crystallizer。
 
 // ============================================================
 // 内部模块（按依赖顺序声明）
@@ -49,12 +49,13 @@ mod brain;       // 新版 Brain 三层架构 API
 // ── 新版 Brain API ─────────────────────────────────────────
 pub use brain::Brain;
 pub use types::{
-    BrainConfig, ChunkMeta, ConflictItem, DreamReport, InnateSchema, PerceptionInput,
+    BrainConfig, ChunkMeta, ConflictItem, DreamReport, ForgetFilter, InnateSchema, MountResult, PerceptionInput,
     PerceptionOutput, RecallMode, RecallRequest, RecallResponse, RecallTrace, ReflectionInput,
-    ReflectionKind, ShelfDomain, ShelfResult,
-    TurnHit, SessionScore,
+    ReflectionKind, ShelfDomain, ShelfResult, StoreResult, StoreStatus,
+    TurnHit, SessionScore, UnmountResult,
 };
 pub use shelf::ShelfManager;
+pub use shelf::TreeMeta;
 
 // ── 新版数据类型 ────────────────────────────────────────────
 pub use engram::{

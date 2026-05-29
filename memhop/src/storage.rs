@@ -20,6 +20,11 @@ use std::path::Path;
 use crate::engram::{Association, DialogueTurn, Engram, PlanNode, SchemaExtra};
 use crate::plan_gate::PlanIndex;
 
+// ── Schema version ──────────────────────────────────────────
+
+/// Current LMDB schema version for v0.11.0.
+pub const CURRENT_SCHEMA: &str = "0.11.0";
+
 // ── StorageError ──────────────────────────────────────────────
 
 #[derive(Debug)]

@@ -130,6 +130,9 @@ pub fn try_emerge_schema(
         is_archived: false,
         is_dormant: false,
         turn_id: None,
+        tree_path: None,
+        source_path: None,
+        source_textunit: None,
     };
 
     Some((schema_engram, schema_extra))
@@ -338,6 +341,9 @@ pub fn turn_cluster_emergence(
             is_archived: false,
             is_dormant: false,
             turn_id: None,
+            tree_path: None,
+            source_path: None,
+            source_textunit: None,
         };
 
         schemas.push((schema_engram, schema_extra));
