@@ -53,11 +53,14 @@ impl Reranker {
             .get_or_init(|| Mutex::new(())).lock().unwrap();
 
         let mut builder = Session::builder()?;
+        // Level1 (basic) instead of Level3 (full) — Level3 can take minutes
+        // for 500+ MB models like BGE-Reranker-v2-m3 on macOS.
         builder = builder
-            .with_optimization_level(GraphOptimizationLevel::Level3)
+            .with_optimization_level(GraphOptimizationLevel::Level1)
             .map_err(|e| format!("optimization level: {e}"))?;
+        // Single intra-op thread avoids potential deadlocks on some ort builds.
         builder = builder
-            .with_intra_threads(4)
+            .with_intra_threads(1)
             .map_err(|e| format!("intra threads: {e}"))?;
         let session = builder
             .commit_from_file(&model_path)

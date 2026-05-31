@@ -97,6 +97,16 @@ pub struct BrainConfig {
     pub vitality: VitalityConfig,
     /// v0.11.0: Hopfield network configuration.
     pub hopfield: HopfieldConfig,
+    /// v0.12.0: Warmup rounds before full context matching activates.
+    pub warmup_rounds: u32,
+    /// v0.12.0: Active context match cosine threshold.
+    pub context_match_threshold: f32,
+    /// v0.12.0: Time decay half-life in hours for context match score.
+    pub context_half_life_hours: f32,
+    /// v0.12.0: Maximum number of active contexts.
+    pub max_active_contexts: usize,
+    /// v0.12.0: Early recall limit for warmup phase.
+    pub early_recall_limit: usize,
 }
 
 impl Default for BrainConfig {
@@ -115,6 +125,11 @@ impl Default for BrainConfig {
             onnx_model_path: None,
             vitality: VitalityConfig::default(),
             hopfield: HopfieldConfig::default(),
+            warmup_rounds: 5,
+            context_match_threshold: 0.75,
+            context_half_life_hours: 12.0,
+            max_active_contexts: 5,
+            early_recall_limit: 3,
         }
     }
 }
@@ -238,6 +253,12 @@ pub struct PerceptionOutput {
     pub plan_hint: crate::engram::PlanHint,
     /// Human-readable name of the current plan.
     pub plan_name: String,
+    /// v0.12.0: Context ID for active context tracking.
+    #[serde(default)]
+    pub context_id: Option<String>,
+    /// v0.12.0: Phase of memory processing (warmup, early, full).
+    #[serde(default)]
+    pub phase: String,
 }
 
 // ── RecallRequest ─────────────────────────────────────────
@@ -271,6 +292,14 @@ pub struct RecallRequest {
     pub tree: Option<String>,
     /// v0.11.0: Optional kind filter. Empty = all kinds.
     pub kind_filter: Vec<EngramKind>,
+    /// v0.12.0: Earliest timestamp (Unix ms) for time-based filtering.
+    pub time_from: Option<i64>,
+    /// v0.12.0: Latest timestamp (Unix ms) for time-based filtering.
+    pub time_to: Option<i64>,
+    /// v0.12.0: Whether to include knowledge engrams in recall results.
+    pub attach_knowledge: bool,
+    /// v0.12.0: Context ID to scope recall within.
+    pub context_id: Option<String>,
 }
 
 impl Default for RecallRequest {
@@ -294,6 +323,10 @@ impl Default for RecallRequest {
             use_reranker: false,
             tree: None,
             kind_filter: vec![],
+            time_from: None,
+            time_to: None,
+            attach_knowledge: true,
+            context_id: None,
         }
     }
 }

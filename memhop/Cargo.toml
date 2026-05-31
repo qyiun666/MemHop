@@ -8,11 +8,12 @@ description = "Embedded associative memory engine powered by Modern Hopfield Net
 crate-type = ["rlib"]
 
 [features]
-default = ["onnx"]
-# Optional semantic encoder backed by a local ONNX model (e.g. BGE-M3,
-# BGE-small, E5). Pulls in `ort`, `tokenizers`, `ndarray`. Disabled by
-# default so the base build stays dependency-light and compiles on any
-# platform without a C/C++ toolchain for onnxruntime.
+default = ["candle"]
+# Pure-Rust encoder backed by HuggingFace Candle (BERT/safetensors).
+# Zero C dependencies — works on Windows/macOS/Linux out of the box.
+candle = ["dep:candle-core", "dep:candle-transformers", "dep:candle-nn", "dep:hf-hub", "dep:safetensors", "dep:tokenizers"]
+# Legacy ONNX encoder (ort crate + system libonnxruntime). Unreliable
+# on some macOS versions. Prefer `candle`.
 onnx = ["dep:ort", "dep:tokenizers"]
 # Generic OpenAI-compatible HTTP embedding encoder. Pulls in `reqwest`
 # (blocking + JSON). Disabled by default so the base build performs
@@ -29,6 +30,13 @@ half = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
 rayon = "1"
+# Candle — pure-Rust ML inference (BERT embeddings, no C deps)
+candle-core = { version = "0.8", optional = true }
+candle-transformers = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+hf-hub = { version = "0.4", optional = true }
+safetensors = { version = "0.5", optional = true }
+# Legacy ONNX runtime (ort crate). Unreliable; prefer candle.
 # `load-dynamic` lets the host process resolve `libonnxruntime` at
 # runtime (via `ORT_DYLIB_PATH` or a system-installed dylib) instead
 # of relying on `ort`'s prebuilt binaries — which are unavailable for

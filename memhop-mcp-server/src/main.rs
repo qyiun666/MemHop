@@ -17,6 +17,7 @@ fn main() {
     let db_path = std::env::var("MEMHOP_DB_PATH")
         .unwrap_or_else(|_| "/tmp/memhop-mcp.db".to_string());
     let onnx_model_path = std::env::var("MEMHOP_ONNX_MODEL").ok();
+    let reranker_model_path = std::env::var("MEMHOP_RERANKER_MODEL").ok();
     let mut brain: Option<Brain> = None;
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
@@ -39,33 +40,44 @@ fn main() {
         let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
 
         let result: Result<Value, String> = match method {
-            "initialize" => Ok(json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"memhop-mcp-server","version":VERSION},"capabilities":{"tools":{}}})),
-            "notifications/initialized" => continue,
-            "tools/list" => Ok(tools_list()),
-            "tools/call" => {
+            "initialize" => {
+                // Open Brain during initialize so warmup happens early,
+                // not during the first tools/call.
                 if brain.is_none() {
                     let mut brain_config = BrainConfig::default();
                     if let Some(ref path) = onnx_model_path {
                         brain_config.onnx_model_path = Some(path.clone());
                         eprintln!("memhop-mcp-server: using ONNX model from {}", path);
                     }
-                    match Brain::open(&db_path, brain_config, None) {
-                        Ok(b) => {
-                            // v0.11.0: Rebuild shelf registry from LMDB
+                    if let Some(ref path) = reranker_model_path {
+                        brain_config.reranker_model_path = Some(path.clone());
+                        eprintln!("memhop-mcp-server: using reranker model from {}", path);
+                    }
+                    // Use `if let` to avoid `?` in main() which returns ()
+                    if let Err(e) = Brain::open(&db_path, brain_config, None)
+                        .map(|b| {
                             if let Ok(mut manager) = get_shelf_manager().lock() {
                                 let _ = manager.rebuild_registry(&b);
                             }
                             brain = Some(b);
-                        }
-                        Err(e) => {
-                            let resp = json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":format!("failed to open brain: {}", e)}});
-                            let _ = writeln!(stdout, "{}", resp);
-                            let _ = stdout.flush();
-                            continue;
-                        }
+                        })
+                    {
+                        let resp = json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":format!("failed to open brain: {}", e)}});
+                        let _ = writeln!(stdout, "{}", resp);
+                        let _ = stdout.flush();
+                        continue;
                     }
                 }
-                tool_call(brain.as_mut().unwrap(), req.get("params"))
+                Ok(json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"memhop-mcp-server","version":VERSION},"capabilities":{"tools":{}}}))
+            }
+            "notifications/initialized" => continue,
+            "tools/list" => Ok(tools_list()),
+            "tools/call" => {
+                let b = brain.as_mut().ok_or_else(|| "Brain not initialized. Did you call initialize first?".to_string());
+                match b {
+                    Ok(b) => tool_call(b, req.get("params")),
+                    Err(e) => Err(e),
+                }
             }
             _ => Err(format!("Method not found: {}", method)),
         };
@@ -83,7 +95,7 @@ fn main() {
 fn tools_list() -> Value {
     json!({"tools":[
         {"name":"memhop_store","description":"Store a new memory/episode or knowledge chunk (ADD-only, auto-dedup).","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"kind":{"type":"string","description":"'episode' (default) or 'knowledge'"},"session_id":{"type":"string"},"tree_path":{"type":"string","description":"Knowledge tree path (required for kind=knowledge)"},"source_path":{"type":"string","description":"Original file path (for knowledge)"},"source_textunit":{"type":"string","description":"Text unit reference (e.g., '§3.2')"},"valence":{"type":"number"},"arousal":{"type":"number"}},"required":["text"]}},
-        {"name":"memhop_recall","description":"Recall memories matching a query. Returns unified results across all types.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"session_id":{"type":"string"},"limit":{"type":"integer"},"kind_filter":{"type":"array","items":{"type":"string"},"description":"Filter by kind: 'episode', 'knowledge'. Empty = all."},"tree":{"type":"string","description":"Filter by knowledge tree path."},"query_vector":{"type":"array","items":{"type":"number"}}},"required":["query"]}},
+        {"name":"memhop_recall","description":"Recall memories matching a query. Returns unified results across all types.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"session_id":{"type":"string"},"limit":{"type":"integer"},"mode":{"type":"string","description":"'retrieval' (HNSW+CrossEncoder, default) or 'associative' (Hopfield+spread)"},"use_reranker":{"type":"boolean","description":"Enable CrossEncoder reranking (Retrieval mode only, default: true)"},"kind_filter":{"type":"array","items":{"type":"string"},"description":"Filter by kind: 'episode', 'knowledge'. Empty = all."},"tree":{"type":"string","description":"Filter by knowledge tree path."},"query_vector":{"type":"array","items":{"type":"number"}}},"required":["query"]}},
         {"name":"memhop_reflect","description":"Create a reflection engram","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"kind":{"type":"string"},"session_id":{"type":"string"}},"required":["content","kind"]}},
         {"name":"memhop_dream","description":"Run Dream consolidation cycle (includes Knowledge engrams).","inputSchema":{"type":"object","properties":{}}},
         {"name":"memhop_stats","description":"Get brain statistics","inputSchema":{"type":"object","properties":{}}},
@@ -174,6 +186,32 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     let text = privacy_filter(&raw_text);
     let kind_str = args.get("kind").and_then(|v| v.as_str()).unwrap_or("episode");
 
+    // Accept pre-computed vector from external encoder (e.g. Python sentence-transformers).
+    // Falls back to brain.encode_text() when not provided.
+    // Pads to VECTOR_DIM (1024) if the external model produces fewer dims (e.g. all-MiniLM=384).
+    let external_vector: Option<Vec<half::f16>> = args.get("vector")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            let raw: Vec<half::f16> = arr.iter()
+                .filter_map(|x| x.as_f64().map(|f| half::f16::from_f32(f as f32)))
+                .collect();
+            // Pad to VECTOR_DIM (1024) and re-normalize
+            let mut padded = raw;
+            padded.resize(memhop::VECTOR_DIM, half::f16::ZERO);
+            let norm: f32 = padded.iter()
+                .map(|x| f32::from(*x).powi(2))
+                .sum::<f32>()
+                .sqrt();
+            if norm > 1e-8 {
+                let scale = half::f16::from_f32(1.0 / norm);
+                for x in &mut padded {
+                    let v: f32 = f32::from(*x) * f32::from(scale);
+                    *x = half::f16::from_f32(v);
+                }
+            }
+            padded
+        });
+
     match kind_str {
         "episode" => {
             let session_id = args.get("session_id")
@@ -183,7 +221,18 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
             let valence = args.get("valence").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
             let arousal = args.get("arousal").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
 
-            let vector = brain.encode_text(&text);
+            let vector = external_vector.unwrap_or_else(|| brain.encode_text(&text));
+
+            let turn_id = args.get("turn_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let turn_index = args.get("turn_index")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0) as u32;
+            let topic_label = args.get("topic_label")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
             let input = PerceptionInput {
                 content: text,
@@ -199,10 +248,10 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
                 agent_response: None,
                 dialogue_timestamp: None,
                 source: None,
-                turn_id: String::new(),
-                turn_index: 0,
+                turn_id,
+                turn_index,
                 segment_index: 0,
-                topic_label: None,
+                topic_label,
             };
 
             let output = brain.perceive(input).map_err(|e| e.to_string())?;
@@ -224,7 +273,7 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            let vector = brain.encode_text(&text);
+            let vector = external_vector.unwrap_or_else(|| brain.encode_text(&text));
             let result: StoreResult = brain.store(
                 &text,
                 &vector,
@@ -270,10 +319,31 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     let query_vector: Option<Vec<half::f16>> = args.get("query_vector")
         .and_then(|v| v.as_array())
         .map(|arr| {
-            arr.iter()
+            let mut v: Vec<half::f16> = arr.iter()
                 .filter_map(|x| x.as_f64().map(|f| half::f16::from_f32(f as f32)))
-                .collect()
+                .collect();
+            v.resize(memhop::VECTOR_DIM, half::f16::ZERO);
+            // Re-normalize in f16 space to match stored vector pipeline
+            let norm: f32 = v.iter().map(|x| f32::from(*x).powi(2)).sum::<f32>().sqrt();
+            if norm > 1e-8 {
+                let scale = half::f16::from_f32(1.0 / norm);
+                for x in &mut v {
+                    let val: f32 = f32::from(*x) * f32::from(scale);
+                    *x = half::f16::from_f32(val);
+                }
+            }
+            v
         });
+
+    // v0.11.1: Read mode from args, default to Retrieval (HNSW + CrossEncoder)
+    let mode = match args.get("mode").and_then(|v| v.as_str()).unwrap_or("retrieval") {
+        "associative" => memhop::RecallMode::Associative,
+        _ => memhop::RecallMode::Retrieval,
+    };
+    // v0.11.1: Read use_reranker from args, default to true in Retrieval mode
+    let use_reranker = args.get("use_reranker")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(mode == memhop::RecallMode::Retrieval);
 
     let req = RecallRequest {
         query,
@@ -290,13 +360,21 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         deep_search_plan_id: None,
         domain_filter: vec![],
         limit: 10,
-        mode: memhop::RecallMode::Retrieval,
-        use_reranker: false,
+        mode,
+        use_reranker,
         tree,
         kind_filter,
+        time_from: None,
+        time_to: None,
+        attach_knowledge: true,
+        context_id: None,
     };
 
+    eprintln!("memhop-recall: hopfield_empty={} hnsw_empty={} memory_count={}",
+        brain.hopfield_is_empty(), brain.hnsw_is_empty(), brain.memory_count());
     let resp = brain.recall(&req).map_err(|e| e.to_string())?;
+    eprintln!("memhop-recall: got {} wm + {} km",
+        resp.working_memory.len(), resp.knowledge_memories.len());
 
     let mut results: Vec<Value> = Vec::new();
     for e in &resp.working_memory {
@@ -314,6 +392,16 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
             "source_path": e.source_path,
             "source_textunit": e.source_textunit,
         }));
+    }
+    for e in &resp.associations {
+        // Only add associations that are not already in working_memory or knowledge_memories
+        if !results.iter().any(|r| r["id"] == e.id) {
+            results.push(json!({
+                "id": e.id, "text": e.text,
+                "kind": format!("{}", e.kind), "source": "episode",
+                "tree_path": e.tree_path,
+            }));
+        }
     }
     results.truncate(limit);
 
@@ -589,9 +677,13 @@ fn tool_knowledge_search_deprecated(brain: &mut Brain, args: &Value) -> Result<V
         domain_filter: vec![],
         limit,
         mode: memhop::RecallMode::Retrieval,
-        use_reranker: false,
+        use_reranker: true,
         tree: Some(shelf_id),
         kind_filter: vec![EngramKind::Knowledge],
+        time_from: None,
+        time_to: None,
+        attach_knowledge: true,
+        context_id: None,
     };
 
     let resp = brain.recall(&req).map_err(|e| e.to_string())?;

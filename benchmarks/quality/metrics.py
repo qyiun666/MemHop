@@ -169,3 +169,56 @@ def aggregate_metrics(
         "precision_10": stats(p10_scores),
         "num_queries": len(rankings),
     }
+
+
+# ── LoCoMo-style F1 metrics ───────────────────────────────
+
+
+def locomo_f1_at_k(
+    recalled_texts: list[str],
+    answer_text: str,
+    k: int = 10,
+) -> float:
+    """LoCoMo-style F1: answer text contained in any of the top-K recalled texts.
+
+    Returns 1.0 if a match is found, 0.0 otherwise.
+    Match = answer text (case-insensitive) is a substring of any recalled text.
+    """
+    if not answer_text:
+        return 0.0
+    ans_lower = str(answer_text).strip().lower()
+    if not ans_lower:
+        return 0.0
+    for text in recalled_texts[:k]:
+        if ans_lower in text.lower():
+            return 1.0
+    return 0.0
+
+
+def aggregate_locomo_f1(
+    recalled_texts_per_query: list[list[str]],
+    answer_texts: list[str],
+    k: int = 10,
+) -> dict:
+    """Aggregate LoCoMo F1 scores across all queries.
+
+    Args:
+        recalled_texts_per_query: For each query, the ordered list of recalled texts.
+        answer_texts: The ground-truth answer for each query.
+        k: Cutoff rank for evaluation.
+
+    Returns:
+        dict with "f1" (mean, std) and "num_queries".
+    """
+    scores = [
+        locomo_f1_at_k(recalled, ans, k)
+        for recalled, ans in zip(recalled_texts_per_query, answer_texts)
+    ]
+    arr = np.array(scores)
+    return {
+        "f1": {
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0,
+        },
+        "num_queries": len(scores),
+    }

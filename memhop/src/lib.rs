@@ -9,6 +9,7 @@
 // ── 数据模型 ────────────────────────────────────────────────
 mod types;       // 公开 API 类型 + 向后兼容类型
 mod engram;      // 新版 Brain 核心数据结构（Engram, Association 等）
+mod context;     // v0.12.0: 活跃上下文跟踪
 
 // ── 基础设施 ────────────────────────────────────────────────
 mod error;
@@ -59,12 +60,13 @@ pub use shelf::TreeMeta;
 
 // ── 新版数据类型 ────────────────────────────────────────────
 pub use engram::{
-    Association, AssociationKind, EmotionalContext, EmotionalState, Engram, EngramKind,
+    Association, AssociationKind, CompressResult, EmotionalContext, EmotionalState, Engram, EngramKind,
     Protection, SchemaExtra, VECTOR_DIM,
     PlanHint, PlanLevel, PlanState, PlanInfo, PlanNode,
     DialogueTurn, ToneMeta, StyleCompact, TurnSource,
     ToneAggregate, TopicDistribution, DomainStats,
 };
+pub use context::{Phase, ContextSnapshot, ActiveContextSet};
 
 
 // ── 编码器 — 公开类型 ──────────────────────────────────────

@@ -4,9 +4,12 @@ All adapters (C-MTEB, BEIR, self-built) produce this format.
 All competitors (FAISS, ChromaDB, Milvus) consume this format.
 """
 
-from dataclasses import dataclass, field
+from __future__ import annotations
+
+from dataclasses import dataclass, field, asdict
 from typing import Optional
 import json
+import time
 import numpy as np
 
 
@@ -179,3 +182,124 @@ class LatencyResult:
             "disk_size_mb": round(self.disk_size_mb, 2),
             "memory_mb": round(self.memory_mb, 2),
         }
+
+
+# ---------------------------------------------------------------------------
+# Unified benchmark report schema (PRD v0.11.0)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EncoderInfo:
+    """Encoder metadata for benchmark runs."""
+
+    model_id: str                          # "BAAI/bge-m3"
+    alt_model_id: Optional[str] = None     # second model ID for dual-encoder
+    dim: int = 1024                        # primary embedding dimension
+    device: str = "cpu"                    # "cpu" | "cuda" | "mps"
+    source: str = "mcp_builtin"            # "mcp_builtin" | "python"
+    tree_dims: Optional[dict[str, int]] = None  # per-tree dims, e.g. {"zh": 512, "en": 384}
+
+
+@dataclass
+class DatasetInfo:
+    """Dataset metadata for benchmark runs."""
+
+    name: str                              # "LongMemEval-S"
+    num_docs: int = 0
+    num_queries: int = 0
+    storage_mode: str = "per-turn"         # "per-turn" | "per-session"
+    subset: Optional[int] = None
+
+
+@dataclass
+class SystemInfo:
+    """System configuration for benchmark runs."""
+
+    name: str = "memhop"
+    mode: str = "associative"              # "retrieval" | "associative"
+    dream: bool = True
+    dream_result: Optional[dict] = None    # return value of dream()
+
+
+@dataclass
+class LatencyInfo:
+    """Latency statistics summary."""
+
+    avg_recall_us: float = 0.0
+    avg_store_us: float = 0.0
+    p95_recall_us: float = 0.0
+
+
+@dataclass
+class BenchmarkResult:
+    """Unified benchmark report (PRD v0.11.0)."""
+
+    schema_version: str = "1.0"
+    timestamp: str = ""                    # ISO 8601 with timezone
+    memhop_version: str = ""
+    encoder: Optional[EncoderInfo] = None
+    dataset: Optional[DatasetInfo] = None
+    system: Optional[SystemInfo] = None
+    metrics: Optional[dict] = None         # {metric_name: {"mean": float, "std": float}}
+    latency: Optional[LatencyInfo] = None
+    competitor_comparison: Optional[dict] = None  # competitor reference data
+
+    def _recursive_asdict(self, obj):
+        """Recursively convert nested dataclass to dict.
+
+        Handles None, dict, list, and dataclass values.
+        """
+        if obj is None:
+            return None
+        if isinstance(obj, dict):
+            return {k: self._recursive_asdict(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._recursive_asdict(v) for v in obj]
+        if hasattr(obj, "__dataclass_fields__"):
+            return asdict(obj)
+        return obj
+
+    def to_dict(self) -> dict:
+        """Recursively serialize all nested dataclasses to dict."""
+        return self._recursive_asdict(self)
+
+    def to_json(self, path: str):
+        """Write benchmark report to a JSON file."""
+        data = self.to_dict()
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+    @classmethod
+    def _try_construct(cls, data, target_cls):
+        """Try to construct a dataclass from dict data, or return data as-is."""
+        if data is None:
+            return None
+        if not isinstance(data, dict):
+            return data
+        try:
+            return target_cls(**data)
+        except (TypeError, ValueError):
+            return data
+
+    @classmethod
+    def from_dict(cls, data: dict) -> BenchmarkResult:
+        """Deserialize a dict into a BenchmarkResult."""
+        return cls(
+            schema_version=data.get("schema_version", "1.0"),
+            timestamp=data.get("timestamp", ""),
+            memhop_version=data.get("memhop_version", ""),
+            encoder=cls._try_construct(data.get("encoder"), EncoderInfo),
+            dataset=cls._try_construct(data.get("dataset"), DatasetInfo),
+            system=cls._try_construct(data.get("system"), SystemInfo),
+            metrics=data.get("metrics"),
+            latency=cls._try_construct(data.get("latency"), LatencyInfo),
+            competitor_comparison=data.get("competitor_comparison"),
+        )
+
+    @classmethod
+    def from_json(cls, path: str) -> BenchmarkResult:
+        """Load a benchmark report from a JSON file."""
+        with open(path, "r") as f:
+            data = json.load(f)
+        return cls.from_dict(data)

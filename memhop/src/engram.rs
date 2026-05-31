@@ -49,6 +49,12 @@ pub struct Engram {
     pub source_path: Option<String>,
     #[serde(default)]
     pub source_textunit: Option<String>,
+    /// v0.12.0: Compressed Knowledge/Schema includes original dialogue turn IDs.
+    #[serde(default)]
+    pub turn_ids: Vec<String>,
+    /// v0.12.0: Context ID this engram belongs to (runtime-only, not persisted).
+    #[serde(default)]
+    pub context_id: Option<String>,
 }
 
 impl Engram {
@@ -84,6 +90,8 @@ impl Engram {
             tree_path: None,
             source_path: None,
             source_textunit: None,
+            turn_ids: Vec::new(),
+            context_id: None,
         }
     }
 
@@ -125,6 +133,8 @@ impl Engram {
             tree_path: Some(tree_path),
             source_path: Some(source_path),
             source_textunit: Some(source_textunit),
+            turn_ids: Vec::new(),
+            context_id: None,
         }
     }
 }
@@ -380,3 +390,12 @@ pub struct TopicDistribution { pub domains: HashMap<String, DomainStats> }
 
 #[derive(Debug, Clone)]
 pub struct ToneAggregate { pub time_range_start: i64, pub time_range_end: i64, pub avg_valence: f32, pub avg_arousal: f32, pub valence_trend: f32, pub top_tone_tags: Vec<(String, u32)>, pub filler_ratio_trend: f32 }
+
+/// v0.12.0: Result of compressing a plan's dialogue turns into a Knowledge engram.
+#[derive(Debug, Clone)]
+pub struct CompressResult {
+    pub knowledge_id: String,
+    pub archived_count: usize,
+    pub summary: String,
+    pub skipped: bool,
+}

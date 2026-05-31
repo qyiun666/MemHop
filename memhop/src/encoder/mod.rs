@@ -41,6 +41,13 @@ mod onnx;
 #[cfg(feature = "onnx")]
 pub use onnx::OnnxEncoder;
 
+// ── Candle encoder (feature-gated, pure Rust) ─────────────
+
+#[cfg(feature = "candle")]
+mod candle;
+#[cfg(feature = "candle")]
+pub use candle::CandleEncoder;
+
 // ── ONNX cross-encoder reranker (feature-gated) ──────────
 
 #[cfg(feature = "onnx")]

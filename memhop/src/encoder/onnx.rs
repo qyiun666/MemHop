@@ -46,45 +46,41 @@ impl OnnxEncoder {
         let _guard = ORT_BUILD_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
 
         let mut builder = Session::builder()?;
-        builder = builder.with_optimization_level(GraphOptimizationLevel::Level3)
+        // Level1 (basic) — Level3 (full) can take 10+ minutes for 500+ MB
+        // models like BGE-M3 on macOS. Level1 is a good balance of startup
+        // time and inference speed. First startup takes 30-120s.
+        builder = builder.with_optimization_level(GraphOptimizationLevel::Level1)
             .map_err(|e| format!("optimization level: {e}"))?;
-        builder = builder.with_intra_threads(4)
+        // Single intra-op thread avoids potential deadlocks on some ort builds.
+        builder = builder.with_intra_threads(1)
             .map_err(|e| format!("intra threads: {e}"))?;
         let session = builder.commit_from_file(&model_path)
             .map_err(|e| format!("load model: {e}"))?;
 
-        let dummy = tokenizer.encode("a", false)
-            .map_err(|e| format!("tokenizer encode: {e}"))?;
-        let ids: Vec<i64> = dummy.get_ids().iter().map(|&x| x as i64).collect();
-        let mask: Vec<i64> = dummy.get_attention_mask().iter().map(|&x| x as i64).collect();
-        let n = ids.len();
+        // Determine token_type_ids need from session input count
+        // (no inference needed — just inspect the graph signature).
         let needs_token_type_ids = session.inputs().len() > 2;
 
-        let input_tensor = Tensor::from_array((vec![1i64, n as i64], ids))
-            .map_err(|e| format!("input tensor: {e}"))?;
-        let mask_tensor = Tensor::from_array((vec![1i64, n as i64], mask))
-            .map_err(|e| format!("mask tensor: {e}"))?;
-
-        let mut sess = session;
-        let (model_dim, _) = if needs_token_type_ids {
-            let tt: Vec<i64> = vec![0i64; n];
-            let tt_tensor = Tensor::from_array((vec![1i64, n as i64], tt))
-                .map_err(|e| format!("tt tensor: {e}"))?;
-            let outputs = sess.run(ort::inputs!["input_ids" => input_tensor, "attention_mask" => mask_tensor, "token_type_ids" => tt_tensor])
-                .map_err(|e| format!("onnx run: {e}"))?;
-            let (_, data) = outputs[0].try_extract_tensor::<f32>()
-                .map_err(|e| format!("extract: {e}"))?;
-            (data.len() / n, ())
+        // BGE-M3 hidden dim is 1024; we detect from model config if available,
+        // otherwise fall back to the standard dim.
+        let config_path = dir.join("config.json");
+        let model_dim = if config_path.exists() {
+            let cfg: serde_json::Value = serde_json::from_reader(
+                std::fs::File::open(&config_path)
+                    .map_err(|e| format!("open config.json: {e}"))?,
+            )
+            .map_err(|e| format!("parse config.json: {e}"))?;
+            cfg.get("hidden_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1024) as usize
         } else {
-            let outputs = sess.run(ort::inputs!["input_ids" => input_tensor, "attention_mask" => mask_tensor])
-                .map_err(|e| format!("onnx run: {e}"))?;
-            let (_, data) = outputs[0].try_extract_tensor::<f32>()
-                .map_err(|e| format!("extract: {e}"))?;
-            (data.len() / n, ())
+            1024
         };
 
+        eprintln!("memhop-onnx: session created, dim={model_dim} (warm-up deferred to first encode)");
+
         Ok(OnnxEncoder {
-            session: Mutex::new(sess),
+            session: Mutex::new(session),
             tokenizer,
             model_dim,
             needs_token_type_ids,

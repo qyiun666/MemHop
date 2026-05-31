@@ -22,8 +22,8 @@ use crate::plan_gate::PlanIndex;
 
 // ── Schema version ──────────────────────────────────────────
 
-/// Current LMDB schema version for v0.11.0.
-pub const CURRENT_SCHEMA: &str = "0.11.0";
+/// Current LMDB schema version for v0.12.0.
+pub const CURRENT_SCHEMA: &str = "0.12.0";
 
 // ── StorageError ──────────────────────────────────────────────
 

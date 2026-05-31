@@ -13,16 +13,18 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
+use std::path::Path;
 
 use half::f16;
 
 use crate::activation;
 use crate::cortex::Cortex;
+use crate::context::{ActiveContextSet, Phase};
 use crate::encoder::{Encoder, NgramEncoder};
 #[cfg(feature = "onnx")]
 use crate::encoder::reranker::Reranker;
 use crate::engram::{
-    AssociationKind, DialogueTurn, EmotionalContext, Engram, EngramKind, PlanLevel, PlanNode, PlanState,
+    AssociationKind, CompressResult, DialogueTurn, EmotionalContext, Engram, EngramKind, PlanLevel, PlanNode, PlanState,
     Protection, StyleCompact, ToneMeta,
 };
 use crate::error::{MemHopError, Result};
@@ -49,6 +51,11 @@ use crate::vitality;
 
 const HOPFIELD_BETA: f32 = 8.0;
 const HOPFIELD_TOP_K: usize = 200;
+
+// v0.12.0: 知识自动附带常量
+const KNOWLEDGE_ATTACH_LIMIT: usize = 5;
+const KNOWLEDGE_ATTACH_MAX: usize = 10;
+const KNOWLEDGE_THRESHOLD: f32 = 0.6;
 
 // ── v0.9.0: Engram cache ───────────────────────────────────
 
@@ -118,9 +125,9 @@ pub struct Brain {
     #[allow(dead_code)]
     llm: Option<Box<dyn LlmProvider>>,
     ngram_encoder: NgramEncoder,
-    /// v0.11.0: Optional ONNX semantic encoder (loaded when config.onnx_model_path is set).
-    #[cfg(feature = "onnx")]
-    onnx_encoder: Option<crate::encoder::OnnxEncoder>,
+    /// v0.12.0: Optional Candle semantic encoder (pure Rust, no C deps).
+    #[cfg(feature = "candle")]
+    candle_encoder: Option<crate::encoder::CandleEncoder>,
     /// v0.10.0: Persistent Cross-Encoder reranker (loaded once at open).
     #[cfg(feature = "onnx")]
     reranker: Option<Reranker>,
@@ -136,6 +143,10 @@ pub struct Brain {
     engram_cache: RefCell<EngramCache>,
     /// v0.11.0: Track last chunk per knowledge tree for CoShelf edge creation.
     last_chunk_per_tree: HashMap<String, String>,
+    /// v0.12.0: Active context tracking set.
+    active_contexts: ActiveContextSet,
+    /// v0.12.0: Current memory processing phase.
+    phase: Phase,
 }
 
 impl Brain {
@@ -276,31 +287,70 @@ impl Brain {
 
         let hnsw_id_map_len = hnsw_id_map.len() as u64;
 
-        // v0.11.0: Initialize ONNX encoder from config (replaces NgramEncoder for dense vectors)
-        #[cfg(feature = "onnx")]
-        let onnx_encoder: Option<crate::encoder::OnnxEncoder> = {
-            if let Some(model_path) = &config.onnx_model_path {
-                match crate::encoder::OnnxEncoder::from_path(model_path) {
+        // ── v0.12.1: Load Candle encoder — no ONNX, no Ngram fallback ──
+        // Candle is a pure Rust BERT/XLM-RoBERTa encoder via safetensors.
+        // BGE-M3 (xlm-roberta), BGE-Small/BGE-Base (bert) all work.
+        // If onnx_model_path is set but Candle fails, return a hard error.
+
+        let encoder_loaded: bool;
+        #[cfg(feature = "candle")]
+        let candle_encoder: Option<crate::encoder::CandleEncoder>;
+        #[cfg(not(feature = "candle"))]
+        let candle_encoder: Option<crate::encoder::CandleEncoder> = None;
+
+        if let Some(model_path) = &config.onnx_model_path {
+            let safetensors_path = Path::new(model_path).join("model.safetensors");
+
+            if !safetensors_path.exists() {
+                return Err(MemHopError::Internal(format!(
+                    "Candle encoder requires model.safetensors in '{}'. File not found.",
+                    model_path
+                )));
+            }
+
+            // Try loading with Candle (supports BERT, XLM-RoBERTa, and similar architectures)
+            #[cfg(feature = "candle")]
+            {
+                eprintln!("memhop: loading Candle encoder from '{}'...", model_path);
+                let start = std::time::Instant::now();
+                match crate::encoder::CandleEncoder::from_path(model_path) {
                     Ok(enc) => {
+                        let elapsed = start.elapsed();
                         eprintln!(
-                            "memhop: loaded ONNX encoder from '{}' (dim={})",
-                            model_path,
-                            enc.dim()
+                            "memhop: Candle encoder ready (dim={}, {:.1}s)",
+                            enc.dim(),
+                            elapsed.as_secs_f64()
                         );
-                        Some(enc)
+                        candle_encoder = Some(enc);
+                        encoder_loaded = true;
                     }
                     Err(e) => {
-                        eprintln!(
-                            "memhop: failed to load ONNX encoder from '{}': {}, falling back to NgramEncoder",
+                        #[allow(unused_assignments)]
+                        { candle_encoder = None; encoder_loaded = false; }
+                        return Err(MemHopError::Internal(format!(
+                            "Candle encoder failed to load from '{}': {}. \
+                             Check model files are valid. MemHop does NOT fall back to ONNX or Ngram.",
                             model_path, e
-                        );
-                        None
+                        )));
                     }
                 }
-            } else {
-                None
             }
-        };
+            #[cfg(not(feature = "candle"))]
+            {
+                return Err(MemHopError::Internal(format!(
+                    "Candle encoder feature is not enabled. Build with --features candle. \
+                     MemHop does NOT support ONNX or Ngram fallback."
+                )));
+            }
+        } else {
+            candle_encoder = None;
+            encoder_loaded = false;
+            eprintln!("memhop: no external model configured, using built-in NgramEncoder.");
+        }
+
+        if encoder_loaded {
+            eprintln!("memhop: semantic encoder active — NgramEncoder disabled.");
+        }
 
         // v0.10.0: Initialize reranker from config
         #[cfg(feature = "onnx")]
@@ -321,7 +371,14 @@ impl Brain {
             }
         };
 
-        Ok(Brain {
+        // v0.12.0: Initialize active context set
+        let active_contexts = ActiveContextSet::new(
+            config.max_active_contexts,
+            config.context_match_threshold,
+            config.context_half_life_hours,
+        );
+
+        let brain = Brain {
             cortex: Cortex::new(config.cortex_capacity),
             hippocampus,
             graph,
@@ -337,8 +394,8 @@ impl Brain {
             store_count: 0,
             llm,
             ngram_encoder: NgramEncoder::new(crate::engram::VECTOR_DIM),
-            #[cfg(feature = "onnx")]
-            onnx_encoder,
+            #[cfg(feature = "candle")]
+            candle_encoder,
             #[cfg(feature = "onnx")]
             reranker,
             plan_gate: PlanGate::new(
@@ -352,7 +409,30 @@ impl Brain {
             engram_cache: RefCell::new(EngramCache::new(1000)),
             last_chunk_per_tree: HashMap::new(),
             last_perceive_at: 0,
-        })
+            phase: Phase::Warmup,
+            active_contexts,
+        };
+
+        // Warm up the encoder (ONNX/Candle) at startup to avoid
+        // long delay on the first perceive() call.
+        brain.warmup_encoder();
+
+        Ok(brain)
+    }
+
+    /// Warm up the ONNX/Candle encoder by encoding a short text.
+    /// This forces ONNX Runtime session compilation at startup
+    /// rather than on the first perceive() call.
+    fn warmup_encoder(&self) {
+        #[cfg(any(feature = "onnx", feature = "candle"))]
+        {
+            let warmup_start = std::time::Instant::now();
+            let _ = self.encode_text("warmup");
+            let elapsed = warmup_start.elapsed();
+            if elapsed.as_secs_f32() > 0.1 {
+                eprintln!("memhop: encoder warmup completed in {:.1}s", elapsed.as_secs_f32());
+            }
+        }
     }
 
     // ── perceive ──────────────────────────────────────────
@@ -412,6 +492,9 @@ impl Brain {
             time_gap_minutes,
         );
 
+        // ── v0.12.0: 保存旧 plan_id 用于 compress ──
+        let old_plan_id = self.plan_index.borrow().active_plan_id.clone().unwrap_or_default();
+
         // 6. Match to plan
         let matched_plan = self.plan_gate.match_to_plan(
             input.plan_id.as_deref(),
@@ -433,6 +516,12 @@ impl Brain {
             .unwrap_or("Unnamed Plan")
             .to_string();
 
+        // ── v0.12.0: Full 模式下边界检测 → 自动压缩 ──
+        if self.phase == Phase::Full && plan_hint == crate::engram::PlanHint::NewTopicLikely
+            && !old_plan_id.is_empty() && old_plan_id != plan_id {
+            let _ = self.compress_plan(&old_plan_id);
+        }
+
         // ── v0.8.0: Populate PlanIndex ──
         {
             let mut pi = self.plan_index.borrow_mut();
@@ -441,6 +530,32 @@ impl Brain {
             if pi.active_plan_id.is_none() {
                 pi.active_plan_id = Some(plan_id.clone());
             }
+        }
+
+        // ── v0.12.0: Phase 判断 ──
+        let phase = if self.growth.total_perceptions < self.config.warmup_rounds as u64 {
+            Phase::Warmup
+        } else if self.growth.total_perceptions < (self.config.warmup_rounds as u64) * 2 {
+            Phase::Early
+        } else {
+            Phase::Full
+        };
+        self.phase = phase;
+
+        // ── v0.12.0: 活跃上下文匹配（Warmup 不做） ──
+        let mut matched_ctx_id: Option<String> = None;
+        if self.phase != Phase::Warmup {
+            if let Some(ctx) = self.active_contexts.match_context(&query_f32, now) {
+                matched_ctx_id = Some(ctx.id.clone());
+                // Note: Context's plan_id overrides PlanGate result here in future iterations.
+                // PlanGate boundary detection is still preserved for compress-on-boundary logic.
+            } else {
+                // 没有匹配到上下文 → 使用 PlanGate 的结果创建新上下文
+                let tree_id = None; // 将来可从 identify_tree 获取
+                self.active_contexts.create(tree_id, plan_id.clone(), input.vector.clone(), now);
+            }
+            // 淘汰过期的上下文
+            self.active_contexts.evict_stale();
         }
 
         // Save data for DialogueTurn before input is consumed
@@ -497,6 +612,8 @@ impl Brain {
                 tree_path: None,
                 source_path: None,
                 source_textunit: None,
+                turn_ids: Vec::new(),
+                context_id: matched_ctx_id.clone(),
             };
 
             self.cortex.push(engram.clone(), &input.session_id);
@@ -558,37 +675,36 @@ impl Brain {
                 .put_plan(&mut txn, &plan)
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
-            // v0.8.0: Create DialogueTurn if agent_response is present
-            if let Some(ref agent_resp) = saved_agent_response {
-                let turn = DialogueTurn {
-                    id: turn_id.clone(),
-                    plan_id: plan_id.clone(),
-                    user_input: saved_content,
-                    agent_response: agent_resp.clone(),
-                    user_tone: current_tone,
-                    agent_tone: ToneMeta {
-                        valence: 0.0,
-                        arousal: 0.0,
-                        tone_tags: vec![],
-                        filler_ratio: 0.0,
-                        sentence_style: StyleCompact {
-                            avg_sentence_len: 0.0,
-                            question_ratio: 0.0,
-                            exclamation_count: 0,
-                        },
+            // v0.11.0: Always create DialogueTurn for session-level aggregation,
+            // regardless of whether agent_response is present.
+            let turn = DialogueTurn {
+                id: turn_id.clone(),
+                plan_id: plan_id.clone(),
+                user_input: saved_content.clone(),
+                agent_response: saved_agent_response.clone().unwrap_or_default(),
+                user_tone: current_tone,
+                agent_tone: ToneMeta {
+                    valence: 0.0,
+                    arousal: 0.0,
+                    tone_tags: vec![],
+                    filler_ratio: 0.0,
+                    sentence_style: StyleCompact {
+                        avg_sentence_len: 0.0,
+                        question_ratio: 0.0,
+                        exclamation_count: 0,
                     },
-                    timestamp: saved_dialogue_timestamp.unwrap_or(now),
-                    vector: saved_vector,
-                    session_id: input.session_id.clone(),
-                    turn_index: input.turn_index,
-                    segment_count,
-                    source: turn_source,
-                    topic_label: input.topic_label.clone(),
-                };
-                self.storage
-                    .put_dialogue(&mut txn, &turn)
+                },
+                timestamp: saved_dialogue_timestamp.unwrap_or(now),
+                vector: saved_vector.clone(),
+                session_id: input.session_id.clone(),
+                turn_index: input.turn_index,
+                segment_count,
+                source: turn_source,
+                topic_label: input.topic_label.clone(),
+            };
+            self.storage
+                .put_dialogue(&mut txn, &turn)
                     .map_err(|e| MemHopError::Storage(e.to_string()))?;
-            }
 
             txn.commit()
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -604,6 +720,8 @@ impl Brain {
             current_plan_id: plan_id,
             plan_hint,
             plan_name,
+            context_id: matched_ctx_id,
+            phase: format!("{}", self.phase),
         })
     }
 
@@ -806,11 +924,11 @@ impl Brain {
 
     // ── recall ────────────────────────────────────────────
 
-    /// v0.11.0: Encode text to f16 vector. Uses ONNX model when configured, otherwise NgramEncoder.
+    /// v0.12.0: Encode text to f16 vector. Prefers Candle → ONNX → NgramEncoder.
     pub fn encode_text(&self, text: &str) -> Vec<half::f16> {
-        #[cfg(feature = "onnx")]
-        if let Some(ref onnx) = self.onnx_encoder {
-            return onnx.encode(text).dense;
+        #[cfg(feature = "candle")]
+        if let Some(ref candle) = self.candle_encoder {
+            return candle.encode(text).dense;
         }
         self.ngram_encoder.encode(text).dense
     }
@@ -818,6 +936,8 @@ impl Brain {
     /// 召回。p99 < 2ms @ 100K。
     pub fn recall(&self, req: &RecallRequest) -> Result<RecallResponse> {
         let start = Instant::now();
+
+        // 1. Query vector
 
         // 1. Query vector
         let query_vector: Vec<f16> = match &req.query_vector {
@@ -938,6 +1058,14 @@ impl Brain {
                     && engram.tree_path.as_deref() != Some(tree_path.as_str())
                 {
                     continue;
+                }
+                // v0.12.0: Apply time filter
+                if req.time_from.is_some() || req.time_to.is_some() {
+                    let after = req.time_from.is_none_or(|t| engram.created_at >= t);
+                    let before = req.time_to.is_none_or(|t| engram.created_at <= t);
+                    if !(after && before) {
+                        continue;
+                    }
                 }
                 match engram.kind {
                     EngramKind::Knowledge => knowledge_memories.push(engram),
@@ -1094,7 +1222,6 @@ impl Brain {
         let sparse_results = self.sparse_index.bm25_search(&query_sparse, &idf, HNSW_SEARCH_K);
 
         // Step 4: BM25 score-based fusion (v0.10.0: replaces RRF rank-based)
-        // BM25 scores min-max normalized to [0, 1], then linear weighted with HNSW cosine sim
         let mut bm25_map: HashMap<String, f32> = sparse_results.into_iter().collect();
         let hnsw_map: HashMap<String, f32> = hnsw_strings.iter().cloned().collect();
 
@@ -1103,7 +1230,7 @@ impl Brain {
         let bm25_max = bm25_map.values().cloned().fold(f32::MIN, f32::max);
         for score in bm25_map.values_mut() {
             if (bm25_max - bm25_min).abs() < f32::EPSILON {
-                *score = 0.5; // degenerate case: all equal scores
+                *score = 0.5;
             } else {
                 *score = (*score - bm25_min) / (bm25_max - bm25_min);
             }
@@ -1111,12 +1238,10 @@ impl Brain {
 
         // Fuse scores: 0.4 * BM25 + 0.6 * HNSW cosine similarity
         let mut fused: HashMap<String, f32> = HashMap::new();
-        // Add all BM25 candidates with their normalized scores
         for (id, norm_score) in &bm25_map {
             let cos_sim = hnsw_map.get(id).copied().unwrap_or(0.0);
             fused.insert(id.clone(), 0.4 * norm_score + 0.6 * cos_sim);
         }
-        // Add HNSW-only candidates (not in BM25 results)
         for (id, cos_sim) in &hnsw_map {
             if !fused.contains_key(id) {
                 fused.insert(id.clone(), 0.6 * *cos_sim);
@@ -1233,6 +1358,14 @@ impl Brain {
                 {
                     continue;
                 }
+                // v0.12.0: Apply time filter
+                if req.time_from.is_some() || req.time_to.is_some() {
+                    let after = req.time_from.is_none_or(|t| engram.created_at >= t);
+                    let before = req.time_to.is_none_or(|t| engram.created_at <= t);
+                    if !(after && before) {
+                        continue;
+                    }
+                }
                 match engram.kind {
                     EngramKind::Knowledge => knowledge_memories.push(engram),
                     EngramKind::Schema => schemas.push(engram),
@@ -1244,6 +1377,11 @@ impl Brain {
                     }
                 }
             }
+        }
+
+        // v0.12.0: 知识自动附带 — 从书架检索附加知识
+        if req.attach_knowledge && self.phase != Phase::Warmup {
+            knowledge_memories = self.recall_knowledge_attached(query_vector);
         }
 
         // v0.11.0: Build tree_contexts from knowledge_memories
@@ -1320,9 +1458,9 @@ impl Brain {
             archive_results: None,
             hit_turns,
             aggregated_sessions,
-            knowledge_memories: vec![],
-            tree_contexts: vec![],
-            graph_associations: vec![],
+            knowledge_memories,
+            tree_contexts,
+            graph_associations,
             trace: RecallTrace {
                 latency_us,
                 gated_anchors: req.attention_anchors.clone(),
@@ -1332,6 +1470,70 @@ impl Brain {
                 pgt_layer: None,
             },
         })
+    }
+
+    /// v0.12.0: 从书架知识树中检索附带知识。
+    ///
+    /// 使用 HNSW 搜索 Knowledge engrams，应用余弦阈值过滤，
+    /// 返回最多 KNOWLEDGE_ATTACH_MAX 条结果。
+    fn recall_knowledge_attached(&self, query: &[f16]) -> Vec<Engram> {
+        const HNSW_K: usize = KNOWLEDGE_ATTACH_LIMIT * 10;
+
+        let hnsw_results = self.hnsw.search(query, HNSW_K);
+        let hnsw_strings: Vec<(String, f32)> = hnsw_results
+            .iter()
+            .filter_map(|(node_id, sim)| {
+                self.hnsw_id_map
+                    .get(node_id)
+                    .map(|sid| (sid.clone(), *sim))
+            })
+            .collect();
+
+        // Filter candidates by cosine threshold and kind
+        let mut candidates: Vec<(String, f32)> = Vec::new();
+        if let Ok(rtxn) = self.storage.begin_read() {
+            for (id, cos_sim) in &hnsw_strings {
+                if *cos_sim <= KNOWLEDGE_THRESHOLD {
+                    continue;
+                }
+                let engram = self.engram_cache.borrow().get(id).cloned();
+                let engram = match engram {
+                    Some(e) => e,
+                    None => {
+                        if let Ok(Some(e)) = self.storage.get_hippocampus(&rtxn, id) {
+                            self.engram_cache
+                                .borrow_mut()
+                                .insert(id.clone(), e.clone());
+                            e
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+                if engram.kind != EngramKind::Knowledge {
+                    continue;
+                }
+                candidates.push((id.clone(), *cos_sim));
+            }
+        }
+
+        // Sort by HNSW cosine similarity descending
+        candidates.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        candidates.truncate(KNOWLEDGE_ATTACH_MAX);
+
+        // Load full engrams
+        let mut results = Vec::with_capacity(candidates.len());
+        if let Ok(rtxn) = self.storage.begin_read() {
+            for (id, _) in &candidates {
+                if let Ok(Some(engram)) = self.storage.get_hippocampus(&rtxn, id) {
+                    results.push(engram);
+                }
+            }
+        }
+        results
     }
 
     // ── reflect ───────────────────────────────────────────
@@ -1380,6 +1582,8 @@ impl Brain {
             tree_path: None,
             source_path: None,
             source_textunit: None,
+            turn_ids: Vec::new(),
+            context_id: None,
         };
 
         self.hippocampus.store(&self.storage, &engram)?;
@@ -2440,6 +2644,8 @@ impl Brain {
             tree_path,
             source_path,
             source_textunit,
+            turn_ids: Vec::new(),
+            context_id: None,
         };
 
         let stored_id = self.store_engram(engram)?;
@@ -2542,39 +2748,164 @@ impl Brain {
         Ok(())
     }
 
-    /// 5. Compress a plan's dialogue turns into a summary.
-    pub fn compress_plan(&mut self, plan_id: &str) -> Result<String> {
+    /// 5. Compress a plan's dialogue turns into a Knowledge engram and archive the originals.
+    ///    v0.12.0: Full compression — heuristic summary, Knowledge engram creation,
+    ///    Episode engram archiving, PlanNode state update to Completed.
+    pub fn compress_plan(&mut self, plan_id: &str) -> Result<CompressResult> {
+        let now = now_millis();
+
+        // 1. Get PlanNode
+        let rtxn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let plan_option = self.storage.get_plan(&rtxn, plan_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(rtxn);
+
+        let plan = match plan_option {
+            Some(p) => p,
+            None => return Ok(CompressResult {
+                knowledge_id: String::new(),
+                archived_count: 0,
+                summary: String::new(),
+                skipped: true,
+            }),
+        };
+
+        // 2. Read all DialogueTurns
         let rtxn = self.storage.begin_read()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         let turns = self.storage.get_dialogues_by_plan(&rtxn, plan_id)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         drop(rtxn);
 
-        let summary = if let Some(ref llm) = self.llm {
-            let content: String = turns.iter()
-                .flat_map(|t| vec![t.user_input.as_str(), t.agent_response.as_str()])
-                .collect::<Vec<_>>()
-                .join("\n");
-            let prompt = crate::llm_provider::PromptTemplates::summarize(&content);
-            llm.generate(&prompt, 256).unwrap_or_else(|e| {
-                eprintln!("[brain] LLM summary failed: {}", e);
-                fallback_summary(&turns)
-            })
-        } else {
-            fallback_summary(&turns)
+        // 3. If < 3 turns, skip (not enough to compress meaningfully)
+        if turns.len() < 3 {
+            return Ok(CompressResult {
+                knowledge_id: String::new(),
+                archived_count: 0,
+                summary: String::new(),
+                skipped: true,
+            });
+        }
+
+        // 4. Generate heuristic summary (no LLM)
+        let summary = self.heuristic_compress(&turns, &plan.name);
+
+        // 5. Find associated engram IDs via PlanIndex
+        let engram_ids: Vec<String> = {
+            let pi = self.plan_index.borrow();
+            pi.candidates(Some(plan_id))
         };
 
-        let mut wtxn = self.storage.begin_write()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        let mut plan = self.storage.get_plan(&wtxn, plan_id)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
-            .ok_or_else(|| MemHopError::Storage(format!("plan {} not found", plan_id)))?;
-        plan.compressed_summary = Some(summary.clone());
-        self.storage.put_plan(&mut wtxn, &plan)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        wtxn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+        // 6. Create Knowledge Engram
+        let knowledge_id = generate_id();
+        let summary_vector = self.encode_text(&summary);
+        let turn_ids: Vec<String> = turns.iter().map(|t| t.id.clone()).collect();
+        let knowledge_engram = Engram {
+            id: knowledge_id.clone(),
+            text: summary.clone(),
+            summary: None,
+            vector: summary_vector,
+            keywords: Vec::new(),
+            content_type: None,
+            valence: 0.0,
+            arousal: 0.5,
+            vitality: 1.0,
+            protection: Protection::Normal,
+            created_at: now,
+            last_activated: now,
+            activation_count: 1,
+            kind: EngramKind::Knowledge,
+            meta: {
+                let mut m = HashMap::new();
+                m.insert("compressed_from_plan".to_string(), serde_json::json!(plan_id));
+                m.insert("turn_count".to_string(), serde_json::json!(turns.len()));
+                m
+            },
+            is_archived: false,
+            is_dormant: false,
+            turn_id: None,
+            tree_path: None,
+            source_path: None,
+            source_textunit: None,
+            turn_ids,
+            context_id: None,
+        };
 
-        Ok(summary)
+        // 7. Store Knowledge Engram (updates all indexes)
+        self.store_engram(knowledge_engram)?;
+
+        // 8. Archive original Episode engrams (mark is_archived in LMDB)
+        let archived_count = engram_ids.len();
+        for engram_id in &engram_ids {
+            let rtxn = self.storage.begin_read()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            let mut engram = match self.storage.get_hippocampus(&rtxn, engram_id) {
+                Ok(Some(e)) => e,
+                _ => { drop(rtxn); continue; }
+            };
+            drop(rtxn);
+
+            engram.is_archived = true;
+
+            let mut wtxn = self.storage.begin_write()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            self.storage.put_hippocampus(&mut wtxn, engram_id, &engram)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            wtxn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+        }
+
+        // 9. Update PlanNode: set compressed_summary, state=Completed, completed_at
+        {
+            let mut wtxn = self.storage.begin_write()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            let mut plan_to_update = plan.clone();
+            plan_to_update.compressed_summary = Some(summary.clone());
+            plan_to_update.state = PlanState::Completed;
+            plan_to_update.completed_at = Some(now);
+            self.storage.put_plan(&mut wtxn, &plan_to_update)
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            wtxn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+        }
+
+        // 10. Update PlanIndex (in-memory)
+        {
+            let mut pi = self.plan_index.borrow_mut();
+            if let Some(info) = pi.plan_info.get_mut(plan_id) {
+                info.state = PlanState::Completed;
+            }
+            if pi.active_plan_id.as_deref() == Some(plan_id) {
+                pi.active_plan_id = None;
+            }
+        }
+
+        Ok(CompressResult {
+            knowledge_id,
+            archived_count,
+            summary,
+            skipped: false,
+        })
+    }
+
+    /// v0.12.0: Heuristic compression without LLM.
+    /// Takes the last agent response as base, prepends up to 3 non-empty user inputs as keywords.
+    fn heuristic_compress(&self, turns: &[DialogueTurn], plan_name: &str) -> String {
+        let last_response = turns.last()
+            .map(|t| t.agent_response.as_str())
+            .unwrap_or("");
+
+        if last_response.is_empty() {
+            return format!("{}: 对话完成", plan_name);
+        }
+
+        // Extract keywords from user inputs (first 3 different non-empty inputs)
+        let keywords: Vec<&str> = turns.iter()
+            .map(|t| t.user_input.trim())
+            .filter(|s| !s.is_empty())
+            .take(3)
+            .collect();
+
+        format!("{}: {} — {}", plan_name, keywords.join("; "), last_response)
     }
 
     /// 6a. Compress a Version-level plan: recursively merge child summaries.
@@ -2839,6 +3170,12 @@ impl Brain {
     pub fn memory_count(&self) -> usize {
         self.hopfield.len()
     }
+    pub fn hopfield_is_empty(&self) -> bool {
+        self.hopfield.is_empty()
+    }
+    pub fn hnsw_is_empty(&self) -> bool {
+        self.hnsw.is_empty()
+    }
     pub fn growth_state(&self) -> &GrowthState {
         &self.growth
     }
@@ -3010,16 +3347,51 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     (dot / (norm_a * norm_b)).clamp(-1.0, 1.0)
 }
 
-/// Fallback summary: concatenate first N turns' content when no LLM is available.
-fn fallback_summary(turns: &[crate::engram::DialogueTurn]) -> String {
-    let n = turns.len().min(5);
-    turns.iter()
-        .take(n)
-        .flat_map(|t| vec![t.user_input.as_str(), t.agent_response.as_str()])
-        .map(|s| s.chars().take(80).collect::<String>())
-        .collect::<Vec<_>>()
-        .join(" | ")
+/// v0.12.0: Compute cosine similarity between two f16 vectors.
+#[allow(dead_code)]
+fn cosine_similarity_f16(a: &[f16], b: &[f16]) -> f32 {
+    let len = a.len().min(b.len());
+    if len == 0 {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for i in 0..len {
+        let av = a[i].to_f32();
+        let bv = b[i].to_f32();
+        dot += av * bv;
+        norm_a += av * av;
+        norm_b += bv * bv;
+    }
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom < 1e-10 {
+        0.0
+    } else {
+        dot / denom
+    }
 }
+
+/// v0.12.0: Build tree context information from knowledge memories.
+#[allow(dead_code)]
+fn build_tree_contexts(memories: &[Engram]) -> Vec<TreeContext> {
+    let mut tree_map: HashMap<String, (String, usize)> = HashMap::new();
+    for eng in memories {
+        if let Some(ref tp) = eng.tree_path {
+            let entry = tree_map.entry(tp.clone()).or_insert_with(|| ("generic".to_string(), 0));
+            entry.1 += 1;
+        }
+    }
+    tree_map
+        .into_iter()
+        .map(|(path, (domain, count))| TreeContext {
+            tree_path: path,
+            domain,
+            source_count: count,
+        })
+        .collect()
+}
+
 
 // ── 测试 ─────────────────────────────────────────────────────
 
