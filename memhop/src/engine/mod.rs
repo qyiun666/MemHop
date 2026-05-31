@@ -1,4 +1,5 @@
 //! MemHop engine — lightweight wrapper around LmdbStorage for v0.7.3+.
+#![allow(dead_code)]
 
 pub(crate) mod helpers;
 

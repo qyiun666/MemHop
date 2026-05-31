@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
@@ -18,7 +19,7 @@ fn main() {
         .unwrap_or_else(|_| "/tmp/memhop-mcp.db".to_string());
     let onnx_model_path = std::env::var("MEMHOP_ONNX_MODEL").ok();
     let reranker_model_path = std::env::var("MEMHOP_RERANKER_MODEL").ok();
-    let mut brain: Option<Brain> = None;
+    let mut brains: HashMap<String, Brain> = HashMap::new();
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
     let mut stdout = std::io::stdout();
@@ -43,7 +44,7 @@ fn main() {
             "initialize" => {
                 // Open Brain during initialize so warmup happens early,
                 // not during the first tools/call.
-                if brain.is_none() {
+                if !brains.contains_key(&db_path) {
                     let mut brain_config = BrainConfig::default();
                     if let Some(ref path) = onnx_model_path {
                         brain_config.onnx_model_path = Some(path.clone());
@@ -59,7 +60,7 @@ fn main() {
                             if let Ok(mut manager) = get_shelf_manager().lock() {
                                 let _ = manager.rebuild_registry(&b);
                             }
-                            brain = Some(b);
+                            brains.insert(db_path.clone(), b);
                         })
                     {
                         let resp = json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":format!("failed to open brain: {}", e)}});
@@ -73,9 +74,23 @@ fn main() {
             "notifications/initialized" => continue,
             "tools/list" => Ok(tools_list()),
             "tools/call" => {
-                let b = brain.as_mut().ok_or_else(|| "Brain not initialized. Did you call initialize first?".to_string());
+                let params = req.get("params");
+                // Determine agent_path from tool arguments or use default
+                let agent_path = params
+                    .and_then(|p| p.get("arguments"))
+                    .and_then(|a| a.get("agent_path"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&db_path);
+                // Compute brains count before mutable borrow on get_or_open_brain
+                let brains_count = brains.len();
+                let b = get_or_open_brain(
+                    &mut brains,
+                    agent_path,
+                    &onnx_model_path,
+                    &reranker_model_path,
+                );
                 match b {
-                    Ok(b) => tool_call(b, req.get("params")),
+                    Ok(b) => tool_call(b, params, brains_count),
                     Err(e) => Err(e),
                 }
             }
@@ -124,7 +139,40 @@ fn tools_list() -> Value {
     ]})
 }
 
-fn tool_call(brain: &mut Brain, params: Option<&Value>) -> Result<Value, String> {
+/// Get or open a Brain for the given `db_path`.
+///
+/// Opens a new Brain if one is not already cached for this path, then
+/// returns a mutable reference to it. Also rebuilds the shelf registry
+/// after opening a new Brain.
+fn get_or_open_brain<'a>(
+    brains: &'a mut HashMap<String, Brain>,
+    db_path: &'a str,
+    onnx_model_path: &'a Option<String>,
+    reranker_model_path: &'a Option<String>,
+) -> Result<&'a mut Brain, String> {
+    if !brains.contains_key(db_path) {
+        let mut brain_config = BrainConfig::default();
+        if let Some(path) = onnx_model_path {
+            brain_config.onnx_model_path = Some(path.clone());
+            eprintln!("memhop-mcp-server: using ONNX model from {}", path);
+        }
+        if let Some(path) = reranker_model_path {
+            brain_config.reranker_model_path = Some(path.clone());
+            eprintln!("memhop-mcp-server: using reranker model from {}", path);
+        }
+        let brain =
+            Brain::open(db_path, brain_config, None).map_err(|e| format!("failed to open brain: {}", e))?;
+        if let Ok(mut manager) = get_shelf_manager().lock() {
+            let _ = manager.rebuild_registry(&brain);
+        }
+        brains.insert(db_path.to_string(), brain);
+    }
+    brains
+        .get_mut(db_path)
+        .ok_or_else(|| "Brain not found after open".to_string())
+}
+
+fn tool_call(brain: &mut Brain, params: Option<&Value>, brains_count: usize) -> Result<Value, String> {
     let p = params.ok_or("Missing params")?;
     let name = p.get("name").and_then(|n| n.as_str()).ok_or("Missing tool name")?;
     let args = p.get("arguments").unwrap_or(&Value::Null);
@@ -136,7 +184,7 @@ fn tool_call(brain: &mut Brain, params: Option<&Value>) -> Result<Value, String>
         "memhop_dream" => tool_dream(brain, args),
         "memhop_stats" => tool_stats(brain, args),
         "memhop_count" => tool_count(brain, args),
-        "memhop_health" => tool_health(brain, args),
+        "memhop_health" => tool_health(brain, args, brains_count),
         "memhop_complete_plan" => tool_complete_plan(brain, args),
         "memhop_get_plan_tree" => tool_get_plan_tree(brain, args),
         "memhop_get_chat_history" => tool_get_chat_history(brain, args),
@@ -275,6 +323,7 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
                 turn_index,
                 segment_index: 0,
                 topic_label,
+                tree_id: args.get("tree_id").and_then(|v| v.as_str()).map(|s| s.to_string()),
             };
 
             let output = brain.perceive(input).map_err(|e| e.to_string())?;
@@ -543,13 +592,14 @@ fn tool_count(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
 
 // ── v0.9.0: Health tool ────────────────────────────────────────
 
-fn tool_health(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
+fn tool_health(brain: &mut Brain, _args: &Value, active_brains: usize) -> Result<Value, String> {
     let g = brain.growth_state();
     let uptime_secs = START_TIME.get_or_init(Instant::now).elapsed().as_secs();
     Ok(json!({
         "status": "ok",
         "version": VERSION,
         "uptime_secs": uptime_secs,
+        "active_brains": active_brains,
         "total_memories": brain.memory_count() + brain.hippocampus_len(),
         "cortex_len": brain.cortex_len(),
         "hippocampus_len": brain.hippocampus_len(),

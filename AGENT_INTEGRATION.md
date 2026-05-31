@@ -1,4 +1,4 @@
-# MemHop v0.12.1 — Agent 层接入指南
+# MemHop v0.12.2 — Agent 层接入指南
 
 > 面向 MeowAgent 开发者。MemHop 通过 MCP JSON-RPC 协议暴露，不需要 Cargo 依赖。
 
@@ -7,23 +7,32 @@
 ## 一、概念模型
 
 ```
-猫 = 一只 AI Agent
-脑 = 一个 MemHop MCP 进程 (brain.db)
-知识树 = 一个挂载到脑上的外部目录（书架）
-上下文 = 当前会话中的活跃话题窗口（最大 5 个，自动管理）
-
-猫在哪，脑就在哪。一只猫一个脑，脑里有对话记忆 + 若干知识树。
-脑自动跟踪当前话题，Agent 不需要管理上下文。
+┌─ memhop（一个进程，无状态）───────────────────┐
+│  BGE-M3 向量模型 + LMDB 存储                 │
+│  收到请求→开DB→处理→返回                     │
+│  不记住任何 agent 的会话状态                   │
+│  多个 agent 可共用（传自己的 agent_path）       │
+└─────────────────────────────────────────────┘
+           ▲ MCP (stdio)
+           │
+┌──────────┴───────────┐
+│  meowAgent（有状态）    │
+│  cortex（工作记忆）     │
+│  session（当前话题）    │
+│  自主调 memhop 存/取   │
+└──────────────────────┘
 ```
 
-```
-~/meow/cats/rust-cat/            ← 猫的工作目录
-├── brain.db                     ← 这只猫的记忆（对话+知识）
-└── knowledge/                   ← 默认知识树
+**MemHop 完全无状态**，不维护任何 agent 会话上下文。Agent 进程维护自己的 cortex（工作记忆）和 session（当前话题）。每轮调用时传 `agent_path`，memhop 开对应 DB 处理完返回。多个 agent 可共享同一个 memhop 进程。
 
-~/projects/rust-learning/        ← 知识树（书架）
-~/projects/travel-guide/         ← 知识树（书架）
-~/books/rust-async/              ← 知识树（书架）
+```
+~/meow/cats/rust-cat/            ← Agent A 的数据目录
+├── brain.db                     ← A 的记忆
+└── knowledge/                   ← A 的知识树
+
+~/meow/cats/python-agent/        ← Agent B 的数据目录
+├── brain.db                     ← B 的记忆
+└── knowledge/                   ← B 的知识树
 ```
 
 ---
@@ -39,8 +48,8 @@ MEMHOP_DB_PATH=~/meow/cats/rust-cat/brain.db \
 
 | 变量 | 用途 | 默认 |
 |------|------|------|
-| `MEMHOP_DB_PATH` | 脑文件路径。一只猫一个 db | `./memhop.db` |
-| `MEMHOP_ONNX_MODEL` | ONNX 编码器路径（BGE-M3） | 内置 ngram 降级 |
+| `MEMHOP_DB_PATH` | 脑文件路径。多 agent 时传各自的 agent_path | `./memhop.db` |
+| `MEMHOP_ONNX_MODEL` | Candle 编码器路径（BGE-M3） | 内置 ngram 降级 |
 | `MEMHOP_RERANKER_PATH` | CrossEncoder 重排模型路径 | 不开启重排 |
 | `MEMHOP_WARMUP_ROUNDS` | 暖场轮数（见 §4） | `5` |
 
@@ -533,3 +542,259 @@ recall 新增 `tree_id` 参数，只返回指定树的记忆：
 | `tree_path: Option<String>` | `tree_ref: Option<TreeRef>` | 保留，deprecated |
 | `AssociationKind::CrossTree` | `EntanglementEvent` | 保留，补充层 |
 | — | `WorldviewPattern` | 全新 |
+
+---
+
+## 十一、v0.12.2 架构变更
+
+### 11.1 无状态架构
+
+v0.12.2 将 memhop 改造为**无状态记忆引擎**：
+
+- **MemHop 进程**：无状态，只存储+检索，不维护任何 agent 会话上下文
+- **Agent 进程**：维护自己的 cortex（工作记忆）和 session（当前话题状态）
+- **共享模型**：BGE-M3 向量模型只加载一份，所有 agent 共享
+
+### 11.2 多 Agent 共享
+
+```json
+// 所有 MCP 工具新增 agent_path 可选参数
+{"name":"memhop_store",  "arguments":{
+    "text":"...", "agent_path":"~/agent_a/memhop"}}
+{"name":"memhop_recall", "arguments":{
+    "query":"...", "agent_path":"~/agent_a/memhop"}}
+{"name":"memhop_dream",  "arguments":{
+    "agent_path":"~/agent_a/memhop"}}
+```
+
+- `agent_path` 缺省时走 `MEMHOP_DB_PATH` 环境变量
+- memhop 内部按路径缓存 Brain 实例
+- 同一 agent 的连续调用共享同一个 Brain（含 HNSW/Hopfield 内存索引）
+
+### 11.3 架构重构
+
+| 变化 | 说明 |
+|------|------|
+| Dream 阶段抽出 dream/ 模块 | brain.rs 减少 ~900 行 |
+| 新增 organize/ 模块 | 每轮 perceive 后自动提取实体+链接图+边界检测 |
+| 新增 session/ 模块 | Agent 侧会话上下文聚合（Cortex + ActiveContexts） |
+| main.rs 多 Brain 缓存 | HashMap<String, Brain> 按 agent_path 路由 |
+| Agent 自主控制 Dream | memhop 不再自动触发 dream，由 agent 决定时机 |
+
+### 11.4 Agent 推荐接入模式
+
+```
+每轮对话（v0.12.2 推荐）:
+
+1. agent 从自己的 Session 中取出 cortex（工作记忆）
+2. memhop_recall(query, agent_path) → 返回 L2 联想召回结果
+3. agent 组装精简上下文：cortex(最近N轮) + recall(相关记忆)
+4. LLM 生成回复
+5. memhop_store(input, response, agent_path) → 自动触发 organize
+6. agent 更新自己的 Session（cortex、话题等）
+7. agent 自主决定何时调 dream / 读 worldview
+```
+
+### v0.12.3 清理
+
+P0: 删除 engine/ 僵尸代码（4空文件+旧API）
+P1: 8个方法从 brain.rs 搬到 entanglement/worldview/organize 正确模块
+Dream：完全移除内部自动触发，Dream 仅由 agent 通过 memhop_dream 显式调用
+brain.rs 从 v0.12.1 的 4195 行 → v0.12.3 的 ~3040 行（净减 ~1150 行）
+
+---
+
+## 附录 A: MemoryOrgan trait 完整适配映射
+
+### 方法级映射
+
+| MemoryOrgan trait | MCP 工具 | JSON-RPC 工具名 | 适配状态 |
+|------------------|---------|----------------|---------|
+| `store(req: StoreRequest)` | memhop_store | tools/call | ✅ 已适配 |
+| `recall(req: RecallRequest)` | memhop_recall | tools/call | ✅ 已适配 |
+| `forget(id: &str)` | memhop_forget | tools/call | ✅ 已适配 |
+| `reflect(input: ReflectInput)` | memhop_reflect | tools/call | ✅ 已适配 |
+| `list_schemas()` | memhop_list_schemas | tools/call | ✅ 已适配 |
+| `create_tree(name: &str)` | memhop_create_tree | tools/call | ❌ 返回 no-op，待实现 |
+| `remove_tree(name: &str)` | memhop_delete_tree | tools/call | ❌ 返回 no-op，待实现 |
+| `update(id: &str, data: Value)` | — | — | ❌ 返回 no-op，memhop 无对应工具 |
+
+### StoreRequest 字段映射
+
+| meowAgent StoreRequest 字段 | memhop_store 参数 | 转换逻辑 |
+|----------------------------|-------------------|---------|
+| `text: String` | `content` | 直接映射 |
+| `layer: MemoryLayer` | `emotional_state` | layer → (valence, arousal) 映射表见下 |
+| `meta: Value` | `meta` | 直接映射为 JSON object |
+| `tree: Option<String>` | `tree_id` | v0.12.1 新增映射 |
+| `turn_id: Option<String>` | `turn_id` | 直接映射 |
+| `turn_index: Option<usize>` | `segment_index` | 类型转换 usize → u32 |
+| `topic_label: Option<String>` | `topic_label` | 直接映射 |
+
+**MemoryLayer → EmotionalState 映射** (在 `memory_memhop.rs:310-317`):
+
+| MemoryLayer | valence | arousal | 语义 |
+|------------|---------|---------|------|
+| `Working` | 0.2 | 0.4 | 中性，中度唤醒 |
+| `Episodic` | 0.1 | 0.5 | 略偏负面，高唤醒 |
+| `Semantic` | 0.0 | 0.3 | 中性，低唤醒 |
+| `Procedural` | 0.0 | 0.2 | 中性，低唤醒 |
+
+### RecallRequest 字段映射
+
+| meowAgent RecallRequest 字段 | memhop_recall 参数 | 转换逻辑 |
+|----------------------------|-------------------|---------|
+| `query: String` | `query` | 直接映射 |
+| `k: usize` | `limit` | 直接映射 |
+| `scope: Option<RecallScope>` | `kind_filter` + `tree_id` | 枚举展开 |
+| `recent_turns: Vec<String>` | — | v0.12.1 暂未使用 |
+| `tree: Option<String>` | `tree_id` | 直接映射 |
+
+**RecallScope → memhop 参数映射建议:**
+
+| RecallScope | kind_filter | tree_id | limit 调整 |
+|-------------|-------------|---------|-----------|
+| `All` | `[]` (空) | null | 不变 |
+| `Episodes` | `["episode"]` | null | 不变 |
+| `Knowledge` | `["knowledge"]` | null | 不变 |
+| `Tree(id)` | `[]` | `id` | 不变 |
+
+### 接口未使用的 memhop 能力
+
+以下是 meowAgent 的 MemoryOrgan trait 当前**没有暴露**但 memhop 支持的能力。建议在 MemoryOrgan trait 中新增方法或扩展参数：
+
+| 缺失能力 | 对应 MCP 工具 | 实现方式 | 优先级 |
+|---------|-------------|---------|--------|
+| 创建/删除逻辑树 | `memhop_create_tree` / `memhop_delete_tree` | 修复 create_tree/remove_tree no-op | **P0** |
+| 列出所有树 | `memhop_list_trees` | 新增方法 | **P0** |
+| 获取三观摘要 | `memhop_my_worldview` | 新增方法，注入 system prompt | **P0** |
+| 列出纠缠事件 | `memhop_list_entanglements` | 新增方法，用于跨领域联想 | **P0** |
+| 列出三观模式 | `memhop_list_worldviews` | 新增方法 | **P0** |
+| 手动触发 Dream | `memhop_dream` | 新增方法，定期调用 | P1 |
+| Plan 统计 | `memhop_plan_stats` | 新增方法，了解话题分布 | P1 |
+
+---
+
+## 附录 B: 26 个 MCP 工具 JSON-RPC Schema 参考
+
+### B.1 核心记忆操作
+
+| # | 工具 | 请求参数 | 响应字段 |
+|---|------|---------|---------|
+| 1 | **memhop_store** | `{content, vector?, emotional_state, attention_anchors, session_id, plan_id?, turn_id?, tree_id?, ...}` | `{engram_id, current_plan_id, plan_hint, context_id?, phase?}` |
+| 2 | **memhop_recall** | `{query, query_vector?, session_id, emotional_state, limit, mode, use_reranker?, tree_id?, kind_filter?, time_from?, time_to?, attach_knowledge?, ...}` | `{working_memory[], associations[], schemas[], knowledge_memories[], tree_contexts{}, worldview_context[], cognitive_conflicts[]}` |
+| 3 | **memhop_reflect** | `{content, kind, session_id}` | `{reflection_id, ...}` |
+| 4 | **memhop_dream** | `{}` | `{engrams_consolidated, schemas_emerged, entanglements, worldview_updates}` |
+| 5 | **memhop_forget** | `{turn_id}` | `{success}` |
+
+### B.2 查询与统计
+
+| # | 工具 | 请求参数 | 响应字段 |
+|---|------|---------|---------|
+| 6 | **memhop_stats** | `{}` | `{total_engrams, config, growth_state, personality, ...}` |
+| 7 | **memhop_count** | `{}` | `{count}` |
+| 8 | **memhop_health** | `{}` | `{uptime, version, phase, total_engrams, ...}` |
+| 9 | **memhop_list_schemas** | `{}` | `{schemas: [{id, text, summary, keywords, extra: {stability, consistency, ...}}]}` |
+
+### B.3 Plan 管理
+
+| # | 工具 | 请求参数 | 响应字段 |
+|---|------|---------|---------|
+| 10 | **memhop_complete_plan** | `{plan_id}` | `{compressed_to_knowledge_id?, status}` |
+| 11 | **memhop_get_plan_tree** | `{}` | `{tree: [{id, name, state, compressed_summary, dialogue_count}]}` |
+| 12 | **memhop_get_chat_history** | `{plan_id}` | `{turns: [{id, user_input, agent_response, timestamp}]}` |
+| 13 | **memhop_plan_stats** | `{start_time?, end_time?}` | `{plan_count, domain_distribution[], tone_trend}` |
+
+### B.4 知识树挂载 (Shelf, v0.11.0)
+
+| # | 工具 | 请求参数 | 响应字段 |
+|---|------|---------|---------|
+| 14 | **memhop_mount_tree** | `{path, domain?}` | `{tree_path, chunk_count, domain, warnings[]}` |
+| 15 | **memhop_unmount_tree** | `{tree_path}` | `{tree_path, deleted_count}` |
+| 16 | **memhop_tree_status** | `{tree_path?}` | `{trees: [{tree_path, domain, chunk_count}], count}` |
+
+### B.5 逻辑知识树 (Tree, v0.12.1)
+
+| # | 工具 | 请求参数 | 响应字段 |
+|---|------|---------|---------|
+| 17 | **memhop_create_tree** | `{name, domain}` | `{tree_id, name, domain}` |
+| 18 | **memhop_list_trees** | `{}` | `[{id, name, domain, memory_count, last_active_at, shelf_paths}]` |
+| 19 | **memhop_get_tree** | `{tree_id}` | `{id, name, domain, description, memory_count, last_active_at, shelf_paths, created_at}` |
+| 20 | **memhop_move_to_tree** | `{engram_id, tree_id}` | `{status}` |
+| 21 | **memhop_delete_tree** | `{tree_id}` | `{status}` |
+
+### B.6 纠缠事件 (v0.12.1)
+
+| # | 工具 | 请求参数 | 响应字段 |
+|---|------|---------|---------|
+| 22 | **memhop_list_entanglements** | `{}` | `[{id, nodes[], tree_ids[], context, trigger, strength, plan_ids[], created_at, last_hit_at, hit_count}]` |
+| 23 | **memhop_entanglement_detail** | `{event_id}` | `{id, nodes[], tree_ids[], context, trigger, strength, plan_ids[], created_at, last_hit_at, hit_count}` |
+
+### B.7 三观 (v0.12.1)
+
+| # | 工具 | 请求参数 | 响应字段 |
+|---|------|---------|---------|
+| 24 | **memhop_list_worldviews** | `{}` | `[{id, pattern, category, stability, occurrence_count, emerged_at}]` |
+| 25 | **memhop_worldview_detail** | `{wv_id}` | `{id, pattern, category, stability, source_events[], occurrence_count, emerged_at, last_reinforced_at}` |
+| 26 | **memhop_my_worldview** | `{}` | `{summary: "自然语言描述...", patterns: [...]}` |
+
+---
+
+## 附录 C: P0 建议 — MeowAgent 优先接入的特性
+
+以下特性对 Agent 能力提升最大，建议优先适配：
+
+### P0-1: create_tree / remove_tree (修复 no-op)
+
+当前 `MemoryOrgan` trait 的这两个方法返回空操作。v0.12.1 提供完整实现：
+
+```rust
+// memory_memhop.rs
+async fn create_tree(&self, name: &str) -> Result<()> {
+    let result = self.mcp.call("memhop_create_tree", json!({
+        "name": name,
+        "domain": "generic"
+    })).await?;
+    // 处理返回的 tree_id
+    Ok(())
+}
+
+async fn remove_tree(&self, name: &str) -> Result<()> {
+    // 先通过 list_trees 找到 tree_id
+    let trees = self.mcp.call("memhop_list_trees", json!({})).await?;
+    if let Some(tree_id) = find_tree_by_name(trees, name) {
+        self.mcp.call("memhop_delete_tree", json!({"tree_id": tree_id})).await?;
+    }
+    Ok(())
+}
+```
+
+### P0-2: memhop_my_worldview (注入 system prompt)
+
+每次用户对话前，获取 MemHop 对用户的"三观摘要"，注入 LLM 的 system prompt：
+
+```python
+# 每 session 开始时
+worldview = mcp.call("memhop_my_worldview")
+system_prompt += f"\n## 对用户的了解\n{worldview['summary']}"
+```
+
+效果：LLM 回复更贴合用户的思维方式和偏好。
+
+### P0-3: memhop_list_trees (对话中感知领域)
+
+```python
+# 感知当前在聊什么
+trees = mcp.call("memhop_list_trees")
+active_trees = [t for t in trees if t["last_active_at"] > (now - 3600000)]
+# → 知道最近在聊哪些领域
+```
+
+### P0-4: memhop_list_entanglements (知识联想)
+
+```python
+# 当用户问题涉及混合领域时
+entanglements = mcp.call("memhop_list_entanglements")
+strong_crossings = [e for e in entanglements if e["strength"] > 0.5]
+# → 用于激发更丰富的联想
+```

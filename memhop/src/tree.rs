@@ -3,7 +3,11 @@
 //! v0.12.1: Replaces the flat `tree_path: Option<String>` field on Engram
 //! with a proper entity that carries statistics, shelf associations, and
 //! lifecycle metadata.
+//!
+//! v0.12.2: Tree CRUD methods extracted from brain.rs.
 
+use crate::brain::{now_millis, Brain};
+use crate::error::{MemHopError, Result};
 use serde::{Deserialize, Serialize};
 
 /// 知识树 — 人脑中的一个领域（工作、旅游、孩子...）。
@@ -48,4 +52,117 @@ pub struct TreeRef {
     pub tree_name: String,
     /// 树所属领域
     pub tree_domain: String,
+}
+
+// ── Tree CRUD (v0.12.2: extracted from brain.rs) ─────────────
+
+/// v0.12.1: 创建知识树
+pub(crate) fn create_tree(brain: &mut Brain, name: &str, domain: &str) -> Result<Tree> {
+    let now = now_millis();
+    let id = format!("tree_{}", now);
+    let tree = Tree {
+        id: id.clone(),
+        name: name.to_string(),
+        domain: domain.to_string(),
+        description: None,
+        memory_count: 0,
+        last_active_at: now,
+        shelf_paths: vec![],
+        created_at: now,
+    };
+    let mut wtxn = brain
+        .storage
+        .begin_write()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    brain
+        .storage
+        .put_tree(&mut wtxn, &tree)
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    wtxn
+        .commit()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    Ok(tree)
+}
+
+/// v0.12.1: 列出所有知识树
+pub(crate) fn list_trees(brain: &Brain) -> Result<Vec<Tree>> {
+    let rtxn = brain
+        .storage
+        .begin_read()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    let trees = brain
+        .storage
+        .get_all_trees(&rtxn)
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    Ok(trees)
+}
+
+/// v0.12.1: 获取单个知识树
+pub(crate) fn get_tree(brain: &Brain, tree_id: &str) -> Result<Option<Tree>> {
+    let rtxn = brain
+        .storage
+        .begin_read()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    brain
+        .storage
+        .get_tree(&rtxn, tree_id)
+        .map_err(|e| MemHopError::Storage(e.to_string()))
+}
+
+/// v0.12.1: 删除知识树（不解绑 engram）
+pub(crate) fn delete_tree(brain: &mut Brain, tree_id: &str) -> Result<()> {
+    let mut wtxn = brain
+        .storage
+        .begin_write()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    brain
+        .storage
+        .delete_tree(&mut wtxn, tree_id)
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    wtxn
+        .commit()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    Ok(())
+}
+
+/// v0.12.1: 将 engram 移动到指定树
+pub(crate) fn move_to_tree(brain: &mut Brain, engram_id: &str, tree_id: &str) -> Result<()> {
+    // 1. Read engram from hippocampus
+    let rtxn = brain
+        .storage
+        .begin_read()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    let mut engram = brain
+        .storage
+        .get_hippocampus(&rtxn, engram_id)
+        .map_err(|e| MemHopError::Storage(e.to_string()))?
+        .ok_or_else(|| MemHopError::NotFound(format!("engram '{}' not found", engram_id)))?;
+    drop(rtxn);
+
+    // 2. Read Tree to get name and domain
+    let tree = get_tree(brain, tree_id)?
+        .ok_or_else(|| MemHopError::NotFound(format!("tree '{}' not found", tree_id)))?;
+
+    // 3. Update tree_ref and deprecated tree_path
+    engram.tree_ref = Some(TreeRef {
+        tree_id: tree.id.clone(),
+        tree_name: tree.name.clone(),
+        tree_domain: tree.domain.clone(),
+    });
+    engram.tree_path = Some(tree.name.clone());
+
+    // 4. Write back
+    let mut wtxn = brain
+        .storage
+        .begin_write()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    brain
+        .storage
+        .put_hippocampus(&mut wtxn, engram_id, &engram)
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    wtxn
+        .commit()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+    Ok(())
 }

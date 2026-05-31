@@ -1,6 +1,6 @@
 [package]
 name = "memhop"
-version = "0.11.0"
+version = "0.12.3"
 edition = "2024"
 description = "Embedded associative memory engine powered by Modern Hopfield Networks — SQLite for associative memory"
 

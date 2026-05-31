@@ -38,12 +38,19 @@ pub(crate) mod llm_provider;    // LLM Provider trait + PromptTemplates
 mod scene_gating;    // Anchor 倒排索引 + 场景门控
 pub mod plan_gate;   // Plan 边界检测 + PlanIndex (v0.8.0)
 pub(crate) mod tone_extractor;  // Rule-based tone extraction
+mod organize;                    // v0.12.2: 每轮对话自动整理
+pub mod session;                 // v0.12.2: Session 上下文聚合
 
 // ── 旧版引擎（向后兼容） ────────────────────────────────────
 mod engine;      // MemHop 旧版引擎
 
 // ── 顶层 Brain API ──────────────────────────────────────────
 mod brain;       // 新版 Brain 三层架构 API
+pub(crate) mod recall; // v0.12.2: Recall subsystem
+pub(crate) mod store;  // v0.12.2: Store/forget (moved from brain.rs)
+pub(crate) mod query;  // v0.12.2: Query helpers (moved from brain.rs)
+pub(crate) mod perceive; // v0.12.2: Perceive (moved from brain.rs)
+mod dream;       // Dream 整合引擎
 
 // ============================================================
 // 公开 API
@@ -87,8 +94,6 @@ pub use encoder::{Encoder, EncoderOutput, NgramEncoder, HybridEncoder};
 pub use encoder::OnnxEncoder;
 #[cfg(feature = "api-encoder")]
 pub use encoder::ApiEncoder;
-// ── 旧版引擎 API（向后兼容） ────────────────────────────────
-pub use engine::MemHop;
 pub use error::{MemHopError, Result};
 pub use types::{DreamConfig, Memory, StoreOptions};
 

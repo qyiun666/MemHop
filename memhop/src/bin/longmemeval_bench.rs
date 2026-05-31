@@ -130,6 +130,7 @@ fn make_perception(text: &str, vector: Vec<f16>, session_id: &str) -> Perception
         turn_index: 0,
         segment_index: 0,
         topic_label: None,
+        tree_id: None,
     }
 }
 
@@ -150,6 +151,7 @@ fn run_problem(
         BrainConfig {
             dream_interval: 50,
             hippocampus_capacity: 1000,
+            allow_fallback_encoder: true,
             ..Default::default()
         },
         None,

@@ -66,7 +66,12 @@ MCP Tools：`memhop_store` `memhop_recall` `memhop_mount_shelf` `memhop_knowledg
 ```rust
 use memhop::{Brain, BrainConfig, PerceptionInput, RecallRequest, EmotionalState, Protection};
 
-let mut brain = Brain::open("brain.db", BrainConfig::default(), None)?;
+// Candle encoder is required. Set onnx_model_path to the model directory.
+let config = BrainConfig {
+    onnx_model_path: Some("models/bge-m3".into()),
+    ..Default::default()
+};
+let mut brain = Brain::open("brain.db", config, None)?;
 
 // 存储记忆
 let out = brain.perceive(PerceptionInput {

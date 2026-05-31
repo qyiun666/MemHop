@@ -30,6 +30,7 @@ fn perception(text: &str, session: &str) -> PerceptionInput {
         turn_index: 0,
         segment_index: 0,
         topic_label: None,
+        tree_id: None,
     }
 }
 
@@ -226,7 +227,7 @@ fn test_plan_lifecycle_simulation() {
 fn test_brain_perceive_with_plan_gate() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().to_string_lossy().to_string();
-    let mut brain = memhop::Brain::open(&path, BrainConfig::default(), None).unwrap();
+    let mut brain = memhop::Brain::open(&path, BrainConfig { allow_fallback_encoder: true, ..Default::default() }, None).unwrap();
 
     let output = brain.perceive(perception("hello world", "s1")).unwrap();
     assert!(!output.engram_id.is_empty());
@@ -240,7 +241,7 @@ fn test_brain_perceive_with_plan_gate() {
 fn test_brain_perceive_with_explicit_plan_id() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().to_string_lossy().to_string();
-    let mut brain = memhop::Brain::open(&path, BrainConfig::default(), None).unwrap();
+    let mut brain = memhop::Brain::open(&path, BrainConfig { allow_fallback_encoder: true, ..Default::default() }, None).unwrap();
 
     let mut input = perception("hello world", "s1");
     input.plan_id = Some("my_plan".to_string());

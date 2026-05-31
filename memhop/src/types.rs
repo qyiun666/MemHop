@@ -107,6 +107,9 @@ pub struct BrainConfig {
     pub max_active_contexts: usize,
     /// v0.12.0: Early recall limit for warmup phase.
     pub early_recall_limit: usize,
+    /// v0.12.2: Allow fallback to NgramEncoder when Candle is not configured.
+    /// Default: false (Candle is required for production).
+    pub allow_fallback_encoder: bool,
 }
 
 impl Default for BrainConfig {
@@ -130,6 +133,7 @@ impl Default for BrainConfig {
             context_half_life_hours: 12.0,
             max_active_contexts: 5,
             early_recall_limit: 3,
+            allow_fallback_encoder: false,
         }
     }
 }
@@ -240,6 +244,9 @@ pub struct PerceptionInput {
     pub segment_index: u32,
     /// v0.9.1: Optional topic label (e.g. "jwt", "logo") for single-turn multi-topic.
     pub topic_label: Option<String>,
+    /// v0.12.1: Optional knowledge tree ID for this perception.
+    /// When set, the engram is automatically associated with the specified tree.
+    pub tree_id: Option<String>,
 }
 
 /// v0.8.0: Return type of Brain::perceive() after plan-gating integration.
