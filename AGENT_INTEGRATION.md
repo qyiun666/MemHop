@@ -1,4 +1,4 @@
-# MemHop v0.12.0 — Agent 层接入指南
+# MemHop v0.12.1 — Agent 层接入指南
 
 > 面向 MeowAgent 开发者。MemHop 通过 MCP JSON-RPC 协议暴露，不需要 Cargo 依赖。
 
@@ -444,3 +444,92 @@ pub struct BrainConfig {
 | 启动时间 | < 3s | @ 100K engrams |
 | 内存占用（BGE-M3） | < 2GB | @ 200K engrams |
 | 内存占用（BGE-Small-ZH） | < 1GB | @ 200K engrams |
+
+---
+
+## 十、v0.12.1 新功能：知识树 · 纠缠 · 三观
+
+### 10.1 知识树（Tree）
+
+知识树是人脑中的"领域"概念——工作、旅游、孩子、编程……每棵树独立管理记忆。
+
+Agent 可以通过 MCP 工具创建和管理知识树：
+
+```json
+// 创建知识树
+{
+  "name": "memhop_create_tree",
+  "arguments": { "name": "Rust 学习", "domain": "programming" }
+}
+// 返回: {"tree_id": "tree_1717000000000", "name": "Rust 学习", "domain": "programming"}
+
+// 列出所有树
+{ "name": "memhop_list_trees", "arguments": {} }
+
+// 获取单棵树
+{ "name": "memhop_get_tree", "arguments": { "tree_id": "tree_xxx" } }
+
+// 将记忆移动到指定树
+{ "name": "memhop_move_to_tree", "arguments": { "engram_id": "eng_xxx", "tree_id": "tree_xxx" } }
+
+// 删除树（不解绑 engram）
+{ "name": "memhop_delete_tree", "arguments": { "tree_id": "tree_xxx" } }
+```
+
+recall 新增 `tree_id` 参数，只返回指定树的记忆：
+```json
+{
+  "name": "memhop_recall",
+  "arguments": {
+    "query": "async/await",
+    "tree_id": "tree_xxx",
+    "limit": 10
+  }
+}
+```
+
+### 10.2 纠缠事件（EntanglementEvent）
+
+当 recall 结果来自 ≥ 2 棵不同树时，MemHop 自动创建纠缠事件——记录"跨领域的认知迁移"。
+
+```json
+// 列出所有纠缠事件（按强度排序）
+{ "name": "memhop_list_entanglements", "arguments": {} }
+
+// 查看单个事件详情
+{ "name": "memhop_entanglement_detail", "arguments": { "event_id": "ent_xxx" } }
+```
+
+纠缠事件自动在以下时机创建：
+- **recall 时**：结果跨树命中 ≥ 2 棵 → 创建 `RecallCrossTree` 事件
+- **Plan 压缩时**：涉及 ≥ 2 棵树 → 创建 `PlanCompression` 事件
+- **Dream 时**：跨 Anchor 发现跨树关联 → 创建 `DreamEmergence` 事件
+
+事件衰减：30 天未再次触发 → 每天强度衰减 10%，< 0.1 自动删除。
+
+### 10.3 三观模式（WorldviewPattern）
+
+纠缠事件积累 ≥ 10 个后，Dream REM 阶段自动聚类涌现出用户的稳定思维模式。
+
+```json
+// 列出所有三观模式
+{ "name": "memhop_list_worldviews", "arguments": {} }
+
+// 查看单个模式详情
+{ "name": "memhop_worldview_detail", "arguments": { "wv_id": "wv_xxx" } }
+
+// 自然语言摘要
+{ "name": "memhop_my_worldview", "arguments": {} }
+// 返回: {"summary": "[ThinkingStyle] 倾向于先抽象再具体 (稳定度: 0.8)\n...", "patterns": [...]}
+```
+
+三观召回介入：稳定度 > 0.7 的模式自动附加到 recall 的 `worldview_context` 字段。
+认知冲突检测：用户输入包含否定/转折词时，标记可能的认知冲突。
+
+### 10.4 和旧版本的兼容
+
+| 旧字段 | v0.12.1 替代 | 状态 |
+|--------|-------------|------|
+| `tree_path: Option<String>` | `tree_ref: Option<TreeRef>` | 保留，deprecated |
+| `AssociationKind::CrossTree` | `EntanglementEvent` | 保留，补充层 |
+| — | `WorldviewPattern` | 全新 |

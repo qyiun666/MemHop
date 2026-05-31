@@ -39,6 +39,8 @@ use crate::scene_gating::SceneGate;
 use crate::schema;
 use crate::storage::LmdbStorage;
 use crate::storage::CURRENT_SCHEMA;
+use crate::tree::{Tree, TreeRef};
+use crate::entanglement::{EntanglementEvent, EntanglementTrigger};
 use crate::types::{
     BrainConfig, ConflictItem, DreamReport, ForgetFilter, GraphAssociation, InnateSchema,
     PerceptionInput, PerceptionOutput, RecallMode, RecallRequest, RecallResponse, RecallTrace,
@@ -46,6 +48,7 @@ use crate::types::{
 };
 use crate::unified_graph::UnifiedGraph;
 use crate::vitality;
+use crate::worldview::{PatternCategory, WorldviewPattern};
 
 // ── 常量 ─────────────────────────────────────────────────────
 
@@ -544,11 +547,11 @@ impl Brain {
 
         // ── v0.12.0: 活跃上下文匹配（Warmup 不做） ──
         let mut matched_ctx_id: Option<String> = None;
+        let mut matched_tree_id: Option<String> = None; // v0.12.1
         if self.phase != Phase::Warmup {
             if let Some(ctx) = self.active_contexts.match_context(&query_f32, now) {
                 matched_ctx_id = Some(ctx.id.clone());
-                // Note: Context's plan_id overrides PlanGate result here in future iterations.
-                // PlanGate boundary detection is still preserved for compress-on-boundary logic.
+                matched_tree_id = ctx.tree_id.clone(); // v0.12.1: capture tree_id from context
             } else {
                 // 没有匹配到上下文 → 使用 PlanGate 的结果创建新上下文
                 let tree_id = None; // 将来可从 identify_tree 获取
@@ -557,6 +560,17 @@ impl Brain {
             // 淘汰过期的上下文
             self.active_contexts.evict_stale();
         }
+
+        // v0.12.1: 从匹配上下文的 tree_id 查找 Tree，构建 tree_ref
+        let engram_tree_ref: Option<TreeRef> = if let Some(ref tid) = matched_tree_id {
+            self.get_tree(tid).ok().flatten().map(|tree| TreeRef {
+                tree_id: tree.id,
+                tree_name: tree.name,
+                tree_domain: tree.domain,
+            })
+        } else {
+            None
+        };
 
         // Save data for DialogueTurn before input is consumed
         let saved_content = input.content.clone();
@@ -614,6 +628,7 @@ impl Brain {
                 source_textunit: None,
                 turn_ids: Vec::new(),
                 context_id: matched_ctx_id.clone(),
+                tree_ref: engram_tree_ref.clone(),
             };
 
             self.cortex.push(engram.clone(), &input.session_id);
@@ -1059,6 +1074,12 @@ impl Brain {
                 {
                     continue;
                 }
+                // v0.12.1: Apply tree_id filter (via tree_ref)
+                if let Some(ref tree_id) = req.tree_id
+                    && engram.tree_ref.as_ref().map(|tr| &tr.tree_id) != Some(tree_id)
+                {
+                    continue;
+                }
                 // v0.12.0: Apply time filter
                 if req.time_from.is_some() || req.time_to.is_some() {
                     let after = req.time_from.is_none_or(|t| engram.created_at >= t);
@@ -1162,6 +1183,31 @@ impl Brain {
             }
         }
 
+        // v0.12.1: 检测跨树命中 → 创建纠缠事件
+        if self.phase == Phase::Full {
+            let mut tree_ids_set: HashSet<String> = HashSet::new();
+            let mut node_ids: Vec<String> = Vec::new();
+            for eng in associations.iter().chain(knowledge_memories.iter()) {
+                if let Some(ref tr) = eng.tree_ref {
+                    tree_ids_set.insert(tr.tree_id.clone());
+                    node_ids.push(eng.id.clone());
+                }
+            }
+            if tree_ids_set.len() >= 2 && node_ids.len() >= 2 {
+                let context = "记忆在查询中跨树关联".to_string();
+                let tree_ids: Vec<String> = tree_ids_set.into_iter().collect();
+                self.create_or_update_entanglement(
+                    node_ids, tree_ids, context, EntanglementTrigger::RecallCrossTree,
+                );
+            }
+        }
+
+        // v0.12.1: 展开纠缠事件节点 — 将 strength > 0.5 的关联节点加入结果
+        self.expand_entangled_results(&mut associations);
+
+        // v0.12.1: 三观模式介入
+        let (worldview_context, cognitive_conflicts) = self.extract_worldview_context(&req.query);
+
         // v0.9.1: Build turn-level hits from associated engrams
         let (hit_turns, aggregated_sessions) = self.build_turn_hits(&associations, &score_map)
             .unwrap_or_default();
@@ -1180,6 +1226,8 @@ impl Brain {
             knowledge_memories,
             tree_contexts,
             graph_associations,
+            worldview_context,
+            cognitive_conflicts,
             trace: RecallTrace {
                 latency_us,
                 gated_anchors: req.attention_anchors.clone(),
@@ -1358,6 +1406,12 @@ impl Brain {
                 {
                     continue;
                 }
+                // v0.12.1: Apply tree_id filter (via tree_ref)
+                if let Some(ref tree_id) = req.tree_id
+                    && engram.tree_ref.as_ref().map(|tr| &tr.tree_id) != Some(tree_id)
+                {
+                    continue;
+                }
                 // v0.12.0: Apply time filter
                 if req.time_from.is_some() || req.time_to.is_some() {
                     let after = req.time_from.is_none_or(|t| engram.created_at >= t);
@@ -1440,6 +1494,31 @@ impl Brain {
             }
         }
 
+        // v0.12.1: 检测跨树命中 → 创建纠缠事件
+        if self.phase == Phase::Full {
+            let mut tree_ids_set: HashSet<String> = HashSet::new();
+            let mut node_ids: Vec<String> = Vec::new();
+            for eng in associations.iter().chain(knowledge_memories.iter()) {
+                if let Some(ref tr) = eng.tree_ref {
+                    tree_ids_set.insert(tr.tree_id.clone());
+                    node_ids.push(eng.id.clone());
+                }
+            }
+            if tree_ids_set.len() >= 2 && node_ids.len() >= 2 {
+                let context = "记忆在查询中跨树关联".to_string();
+                let tree_ids: Vec<String> = tree_ids_set.into_iter().collect();
+                self.create_or_update_entanglement(
+                    node_ids, tree_ids, context, EntanglementTrigger::RecallCrossTree,
+                );
+            }
+        }
+
+        // v0.12.1: 展开纠缠事件节点
+        self.expand_entangled_results(&mut associations);
+
+        // v0.12.1: 三观模式介入
+        let (worldview_context, cognitive_conflicts) = self.extract_worldview_context(&req.query);
+
         // v0.9.1: Build turn-level hits from associated engrams
         let (hit_turns, aggregated_sessions) = self.build_turn_hits(&associations, &score_map)
             .unwrap_or_default();
@@ -1461,6 +1540,8 @@ impl Brain {
             knowledge_memories,
             tree_contexts,
             graph_associations,
+            worldview_context,
+            cognitive_conflicts,
             trace: RecallTrace {
                 latency_us,
                 gated_anchors: req.attention_anchors.clone(),
@@ -1536,6 +1617,107 @@ impl Brain {
         results
     }
 
+    // ── v0.12.1: Tree API ──────────────────────────────────
+
+    /// v0.12.1: 创建知识树
+    pub fn create_tree(&mut self, name: &str, domain: &str) -> Result<Tree> {
+        let now = now_millis();
+        let id = format!("tree_{}", now);
+        let tree = Tree {
+            id: id.clone(),
+            name: name.to_string(),
+            domain: domain.to_string(),
+            description: None,
+            memory_count: 0,
+            last_active_at: now,
+            shelf_paths: vec![],
+            created_at: now,
+        };
+        let mut wtxn = self.storage
+            .begin_write()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        self.storage
+            .put_tree(&mut wtxn, &tree)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        wtxn
+            .commit()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        Ok(tree)
+    }
+
+    /// v0.12.1: 列出所有知识树
+    pub fn list_trees(&self) -> Result<Vec<Tree>> {
+        let rtxn = self.storage
+            .begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let trees = self.storage
+            .get_all_trees(&rtxn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        Ok(trees)
+    }
+
+    /// v0.12.1: 获取单个知识树
+    pub fn get_tree(&self, tree_id: &str) -> Result<Option<Tree>> {
+        let rtxn = self.storage
+            .begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        self.storage
+            .get_tree(&rtxn, tree_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
+    /// v0.12.1: 删除知识树（不解绑 engram）
+    pub fn delete_tree(&mut self, tree_id: &str) -> Result<()> {
+        let mut wtxn = self.storage
+            .begin_write()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        self.storage
+            .delete_tree(&mut wtxn, tree_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        wtxn
+            .commit()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// v0.12.1: 将 engram 移动到指定树
+    pub fn move_to_tree(&mut self, engram_id: &str, tree_id: &str) -> Result<()> {
+        // 1. Read engram from hippocampus
+        let rtxn = self.storage
+            .begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut engram = self.storage
+            .get_hippocampus(&rtxn, engram_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            .ok_or_else(|| MemHopError::NotFound(format!("engram '{}' not found", engram_id)))?;
+        drop(rtxn);
+
+        // 2. Read Tree to get name and domain
+        let tree = self.get_tree(tree_id)?
+            .ok_or_else(|| MemHopError::NotFound(format!("tree '{}' not found", tree_id)))?;
+
+        // 3. Update tree_ref and deprecated tree_path
+        engram.tree_ref = Some(TreeRef {
+            tree_id: tree.id.clone(),
+            tree_name: tree.name.clone(),
+            tree_domain: tree.domain.clone(),
+        });
+        engram.tree_path = Some(tree.name.clone());
+
+        // 4. Write back
+        let mut wtxn = self.storage
+            .begin_write()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        self.storage
+            .put_hippocampus(&mut wtxn, engram_id, &engram)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        wtxn
+            .commit()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+        Ok(())
+    }
+
     // ── reflect ───────────────────────────────────────────
 
     /// 创建 Reflection 类型 Engram。
@@ -1584,6 +1766,7 @@ impl Brain {
             source_textunit: None,
             turn_ids: Vec::new(),
             context_id: None,
+            tree_ref: None,
         };
 
         self.hippocampus.store(&self.storage, &engram)?;
@@ -1817,6 +2000,265 @@ impl Brain {
         Ok(results)
     }
 
+    // ── v0.12.1: EntanglementEvent decay (NREM phase) ──────
+
+    /// v0.12.1: 衰减纠缠事件强度。
+    /// 超过 30 天未命中的事件每天衰减 10%，强度 < 0.1 时删除。
+    fn nrem_entanglement_decay(&mut self, report: &mut DreamReport) -> Result<()> {
+        let now = now_millis();
+        let rtxn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let events = self.storage.get_all_entanglements(&rtxn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(rtxn);
+
+        for event in &events {
+            let days_since = (now - event.last_hit_at).max(0) / 86_400_000;
+            if days_since > 30 {
+                let decay = 0.9_f32.powi((days_since - 30) as i32);
+                let new_strength = event.strength * decay;
+
+                if new_strength < 0.1 {
+                    // Delete the event
+                    let mut wtxn = self.storage.begin_write()
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    for node_id in &event.nodes {
+                        let _ = self.storage.remove_entanglement_node(&mut wtxn, node_id, &event.id);
+                    }
+                    self.storage.delete_entanglement(&mut wtxn, &event.id)
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    wtxn.commit()
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    report.entanglements_decayed += 1;
+                } else {
+                    // Update strength
+                    let mut wtxn = self.storage.begin_write()
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    let mut updated = event.clone();
+                    updated.strength = new_strength;
+                    self.storage.put_entanglement(&mut wtxn, &updated)
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    wtxn.commit()
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    // ── v0.12.1: EntanglementEvent creation (REM phase) ────
+
+    /// v0.12.1: Dream REM 阶段 — 检测跨 Anchor 的跨树纠缠，创建 EntanglementEvent。
+    fn rem_entanglement_creation(&mut self, report: &mut DreamReport) -> Result<()> {
+        let txn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let anchor_names = self.storage.all_anchor_names(&txn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(txn);
+
+        if anchor_names.len() < 2 {
+            return Ok(());
+        }
+
+        for i in 0..anchor_names.len() {
+            let txn = self.storage.begin_read()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            let ids_a = self.storage.anchor_get_ids(&txn, &anchor_names[i])
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            drop(txn);
+
+            for other_name in anchor_names.iter().skip(i + 1) {
+                let txn = self.storage.begin_read()
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                let ids_b = self.storage.anchor_get_ids(&txn, other_name)
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                drop(txn);
+
+                // Collect engrams with tree_refs from both anchors
+                let mut tree_ids_set: HashSet<String> = HashSet::new();
+                let mut node_ids: Vec<String> = Vec::new();
+
+                for id in ids_a.iter().chain(ids_b.iter()) {
+                    let txn = self.storage.begin_read()
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    if let Ok(Some(engram)) = self.storage.get_hippocampus(&txn, id)
+                        && let Some(ref tr) = engram.tree_ref
+                    {
+                        tree_ids_set.insert(tr.tree_id.clone());
+                        if !node_ids.contains(&engram.id) {
+                            node_ids.push(engram.id.clone());
+                        }
+                    }
+                    drop(txn);
+                }
+
+                if tree_ids_set.len() >= 2 && node_ids.len() >= 2 {
+                    let context = format!(
+                        "Dream REM 跨 Anchor 纠缠: {} <-> {}",
+                        anchor_names[i], other_name,
+                    );
+                    let tree_ids: Vec<String> = tree_ids_set.into_iter().collect();
+                    self.create_or_update_entanglement(
+                        node_ids,
+                        tree_ids,
+                        context,
+                        EntanglementTrigger::DreamEmergence,
+                    );
+                    report.entanglements_created += 1;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    // ── v0.12.1: REM 三观涌现 ─────────────────────────────
+
+    /// v0.12.1: REM 阶段 — 从纠缠事件涌现三观模式。
+    ///
+    /// 对 strength > 0.5 的纠缠事件按 context 关键词聚类，
+    /// 每类 ≥3 事件且平均稳定度 ≥0.3 则创建或更新 WorldviewPattern。
+    fn rem_worldview_emergence(&mut self, report: &mut DreamReport) -> Result<()> {
+        let rtxn = self.storage.begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+
+        // 1. 获取所有纠缠事件（strength > 0.5）
+        let events = self.storage.get_all_entanglements(&rtxn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        drop(rtxn);
+
+        if events.len() < 10 {
+            return Ok(());
+        }
+
+        let strong_events: Vec<&EntanglementEvent> = events.iter()
+            .filter(|e| e.strength > 0.5)
+            .collect();
+
+        if strong_events.len() < 5 {
+            return Ok(());
+        }
+
+        // 2. 对 event.context 做简单语义聚类（按关键词重叠分组）
+        let mut clusters: Vec<Vec<(&EntanglementEvent, Vec<String>)>> = Vec::new();
+
+        for event in &strong_events {
+            let keywords: Vec<String> = event.context
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|s| s.len() > 1)
+                .map(|s| s.to_lowercase())
+                .collect();
+
+            // 找最匹配的已有聚类
+            let mut best_cluster = None;
+            for (ci, cluster) in clusters.iter().enumerate() {
+                let cluster_keywords: Vec<&str> = cluster.iter()
+                    .flat_map(|(_, kw)| kw.iter().map(|s| s.as_str()))
+                    .collect();
+                let overlap = keywords.iter()
+                    .filter(|k| cluster_keywords.contains(&k.as_str()))
+                    .count();
+                if overlap >= 2 {
+                    best_cluster = Some(ci);
+                    break;
+                }
+            }
+
+            if let Some(ci) = best_cluster {
+                clusters[ci].push((event, keywords));
+            } else {
+                clusters.push(vec![(event, keywords)]);
+            }
+        }
+
+        // 3. 为每个类簇创建或更新 WorldviewPattern
+        let now = now_millis();
+        let mut emerged = 0usize;
+
+        for cluster in &clusters {
+            if cluster.len() < 3 {
+                continue;
+            }
+
+            let avg_strength: f32 = cluster.iter().map(|(e, _)| e.strength).sum::<f32>() / cluster.len() as f32;
+            let occurrence = cluster.len() as u64;
+            let stability = (1.0_f32.min(occurrence as f32 / 10.0)) * avg_strength;
+
+            if stability < 0.3 {
+                continue;
+            }
+
+            // 生成模式描述
+            let source_ids: Vec<String> = cluster.iter().map(|(e, _)| e.id.clone()).collect();
+            let contexts: Vec<&str> = cluster.iter().map(|(e, _)| e.context.as_str()).collect();
+            let pattern_text = contexts.join("; ");
+
+            // 分类（简化版）
+            let category = PatternCategory::ThinkingStyle;
+
+            // 检查是否已有类似的世界观（通过 source_events 重叠）
+            let rtxn = self.storage.begin_read()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            let existing = self.storage.get_all_worldviews(&rtxn)
+                .unwrap_or_default();
+            drop(rtxn);
+
+            let mut updated = false;
+            for old_wv in &existing {
+                let old_events: Vec<&str> = old_wv.source_events.iter().map(|s| s.as_str()).collect();
+                let new_events: Vec<&str> = source_ids.iter().map(|s| s.as_str()).collect();
+                let overlap = old_events.iter().filter(|e| new_events.contains(e)).count();
+                if overlap >= 2 {
+                    // 更新已有模式
+                    let mut wtxn = self.storage.begin_write()
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    let mut updated_wv = old_wv.clone();
+                    updated_wv.occurrence_count += occurrence;
+                    updated_wv.stability = (updated_wv.stability + stability) / 2.0;
+                    updated_wv.last_reinforced_at = now;
+                    // 合并 source_events（去重）
+                    for sid in &source_ids {
+                        if !updated_wv.source_events.contains(sid) {
+                            updated_wv.source_events.push(sid.clone());
+                        }
+                    }
+                    self.storage.put_worldview(&mut wtxn, &updated_wv)
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    wtxn.commit()
+                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    updated = true;
+                    break;
+                }
+            }
+
+            if !updated {
+                // 创建新 WorldviewPattern
+                let id = generate_id();
+                let wv = WorldviewPattern {
+                    id: id.clone(),
+                    source_events: source_ids,
+                    pattern: pattern_text.chars().take(200).collect(),
+                    category,
+                    occurrence_count: occurrence,
+                    stability,
+                    emerged_at: now,
+                    last_reinforced_at: now,
+                };
+                let mut wtxn = self.storage.begin_write()
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                self.storage.put_worldview(&mut wtxn, &wv)
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                wtxn.commit()
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                emerged += 1;
+            }
+        }
+
+        report.worldviews_emerged = emerged;
+        Ok(())
+    }
+
     // ── dream ─────────────────────────────────────────────
 
     /// 执行 Dream 整合（6 阶段）。
@@ -1864,9 +2306,24 @@ impl Brain {
             eprintln!("[dream] NREM-3 error: {}", e);
         }
 
+        // v0.12.1: NREM — EntanglementEvent 衰减
+        if let Err(e) = self.nrem_entanglement_decay(&mut report) {
+            eprintln!("[dream] NREM entanglement decay error: {}", e);
+        }
+
         // REM-3: 跨 Anchor 发现
         if let Err(e) = self.rem_cross_anchor_discovery(&mut report) {
             eprintln!("[dream] REM-3 error: {}", e);
+        }
+
+        // v0.12.1: REM — EntanglementEvent 创建（跨 Anchor 跨树检测）
+        if let Err(e) = self.rem_entanglement_creation(&mut report) {
+            eprintln!("[dream] REM entanglement creation error: {}", e);
+        }
+
+        // v0.12.1: REM — 三观模式涌现
+        if let Err(e) = self.rem_worldview_emergence(&mut report) {
+            eprintln!("[dream] REM worldview emergence error: {}", e);
         }
 
         // REM-4: v0.8.0 Cross-plan schema emergence
@@ -2416,6 +2873,229 @@ impl Brain {
         Ok(())
     }
 
+    // ── v0.12.1: EntanglementEvent 创建/更新 ───────────────
+
+    /// v0.12.1: 创建或更新跨树纠缠事件。
+    /// 检查是否已有相同节点集合的事件，有则更新强度，无则新建。
+    fn create_or_update_entanglement(
+        &self,
+        nodes: Vec<String>,
+        tree_ids: Vec<String>,
+        context: String,
+        trigger: EntanglementTrigger,
+    ) {
+        let now = now_millis();
+
+        // Check if an existing event covers these same nodes
+        let rtxn = match self.storage.begin_read() {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!("[entanglement] begin_read error: {}", e);
+                return;
+            }
+        };
+
+        let existing_event_ids = if let Some(first_node) = nodes.first() {
+            self.storage
+                .get_entanglement_ids_for_node(&rtxn, first_node)
+                .unwrap_or_default()
+        } else {
+            vec![]
+        };
+        let rtxn_ref = &rtxn; // borrow for the find_map closure
+
+        let found = existing_event_ids.iter().find_map(|eid| {
+            match self.storage.get_entanglement(rtxn_ref, eid) {
+                Ok(Some(event)) => {
+                    if event.nodes.len() == nodes.len()
+                        && event.nodes.iter().all(|n| nodes.contains(n))
+                    {
+                        Some(event.clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        });
+        drop(rtxn);
+
+        if let Some(mut existing) = found {
+            // Update existing event
+            existing.hit_count += 1;
+            existing.strength = (existing.strength + 0.2).min(1.0);
+            existing.last_hit_at = now;
+
+            let mut wtxn = match self.storage.begin_write() {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("[entanglement] begin_write error: {}", e);
+                    return;
+                }
+            };
+            if let Err(e) = self.storage.put_entanglement(&mut wtxn, &existing) {
+                eprintln!("[entanglement] put error: {}", e);
+            }
+            let _ = wtxn.commit();
+        } else {
+            // Create new event
+            let id = generate_id();
+            let event = EntanglementEvent {
+                id: id.clone(),
+                nodes: nodes.clone(),
+                tree_ids,
+                context,
+                trigger,
+                strength: 0.3,
+                plan_ids: vec![],
+                created_at: now,
+                last_hit_at: now,
+                hit_count: 1,
+            };
+
+            let mut wtxn = match self.storage.begin_write() {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("[entanglement] begin_write error: {}", e);
+                    return;
+                }
+            };
+            if let Err(e) = self.storage.put_entanglement(&mut wtxn, &event) {
+                eprintln!("[entanglement] put error: {}", e);
+                let _ = wtxn.commit();
+                return;
+            }
+            // Build node reverse index
+            for node_id in &nodes {
+                if let Err(e) = self.storage.add_entanglement_node(&mut wtxn, node_id, &id) {
+                    eprintln!("[entanglement] add_node error: {}", e);
+                    break;
+                }
+            }
+            let _ = wtxn.commit();
+        }
+    }
+
+    /// v0.12.1: 展开纠缠事件中的节点 — 将 strength > 0.5 的事件中
+    /// 尚未在结果中的 engram 添加到 associations。
+    fn expand_entangled_results(&self, associations: &mut Vec<Engram>) {
+        let mut included_ids: HashSet<String> = HashSet::new();
+        for eng in associations.iter() {
+            included_ids.insert(eng.id.clone());
+        }
+
+        let rtxn = match self.storage.begin_read() {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+
+        let mut to_add: Vec<Engram> = Vec::new();
+        for eng in associations.iter() {
+            let event_ids = match self.storage.get_entanglement_ids_for_node(&rtxn, &eng.id) {
+                Ok(ids) => ids,
+                Err(_) => continue,
+            };
+            for eid in &event_ids {
+                let event = match self.storage.get_entanglement(&rtxn, eid) {
+                    Ok(Some(e)) => e,
+                    _ => continue,
+                };
+                if event.strength > 0.5 {
+                    for node_id in &event.nodes {
+                        if !included_ids.contains(node_id)
+                            && let Ok(Some(extra)) =
+                                self.storage.get_hippocampus(&rtxn, node_id)
+                        {
+                            included_ids.insert(node_id.clone());
+                            to_add.push(extra);
+                        }
+                    }
+                }
+            }
+        }
+        drop(rtxn);
+
+        associations.extend(to_add);
+    }
+
+    /// v0.12.1: 三观模式介入 — 提取稳定度 > 0.7 的模式上下文和认知冲突。
+    fn extract_worldview_context(&self, query: &str) -> (Vec<String>, Vec<String>) {
+        let rtxn = match self.storage.begin_read() {
+            Ok(t) => t,
+            Err(_) => return (Vec::new(), Vec::new()),
+        };
+        let worldviews = match self.storage.get_all_worldviews(&rtxn) {
+            Ok(w) => w,
+            Err(_) => return (Vec::new(), Vec::new()),
+        };
+        drop(rtxn);
+
+        let mut worldview_context = Vec::new();
+        let mut cognitive_conflicts = Vec::new();
+
+        for wv in &worldviews {
+            if wv.stability > 0.7 {
+                worldview_context.push(wv.pattern.clone());
+            }
+            if wv.stability > 0.5 {
+                let query_lower = query.to_lowercase();
+                if query_lower.contains("不应该")
+                    || query_lower.contains("不对")
+                    || query_lower.contains("相反")
+                {
+                    cognitive_conflicts.push(format!(
+                        "当前输入与模式 '{}' 可能冲突",
+                        wv.pattern
+                    ));
+                }
+            }
+        }
+
+        (worldview_context, cognitive_conflicts)
+    }
+
+    /// v0.12.1: 获取所有纠缠事件
+    pub fn get_all_entanglements(&self) -> Result<Vec<EntanglementEvent>> {
+        let rtxn = self.storage
+            .begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let events = self.storage
+            .get_all_entanglements(&rtxn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        Ok(events)
+    }
+
+    /// v0.12.1: 获取单个纠缠事件
+    pub fn get_entanglement(&self, event_id: &str) -> Result<Option<EntanglementEvent>> {
+        let rtxn = self.storage
+            .begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        self.storage
+            .get_entanglement(&rtxn, event_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
+    /// v0.12.1: 获取所有三观模式
+    pub fn get_all_worldviews(&self) -> Result<Vec<WorldviewPattern>> {
+        let rtxn = self.storage
+            .begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let worldviews = self.storage
+            .get_all_worldviews(&rtxn)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        Ok(worldviews)
+    }
+
+    /// v0.12.1: 获取单个三观模式
+    pub fn get_worldview(&self, wv_id: &str) -> Result<Option<WorldviewPattern>> {
+        let rtxn = self.storage
+            .begin_read()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        self.storage
+            .get_worldview(&rtxn, wv_id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
     // ── 私有辅助 ─────────────────────────────────────────
 
     fn rebuild_hopfield(storage: &LmdbStorage, knowledge_weight: f32) -> Result<ModernHopfield> {
@@ -2646,6 +3326,7 @@ impl Brain {
             source_textunit,
             turn_ids: Vec::new(),
             context_id: None,
+            tree_ref: None,
         };
 
         let stored_id = self.store_engram(engram)?;
@@ -2830,6 +3511,7 @@ impl Brain {
             source_textunit: None,
             turn_ids,
             context_id: None,
+            tree_ref: None,
         };
 
         // 7. Store Knowledge Engram (updates all indexes)
@@ -2876,6 +3558,32 @@ impl Brain {
             }
             if pi.active_plan_id.as_deref() == Some(plan_id) {
                 pi.active_plan_id = None;
+            }
+        }
+
+        // v0.12.1: 检测压缩涉及的 engram 是否来自不同树 → 创建纠缠事件
+        {
+            let mut tree_ids_set: HashSet<String> = HashSet::new();
+            let mut node_ids: Vec<String> = Vec::new();
+            let rtxn = self.storage.begin_read()
+                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            for engram_id in &engram_ids {
+                if let Ok(Some(engram)) = self.storage.get_hippocampus(&rtxn, engram_id)
+                    && let Some(ref tr) = engram.tree_ref
+                {
+                    tree_ids_set.insert(tr.tree_id.clone());
+                    if !node_ids.contains(&engram.id) {
+                        node_ids.push(engram.id.clone());
+                    }
+                }
+            }
+            drop(rtxn);
+            if tree_ids_set.len() >= 2 && node_ids.len() >= 2 {
+                let context = format!("Plan 压缩跨树关联: {}", plan.name);
+                let tree_ids: Vec<String> = tree_ids_set.into_iter().collect();
+                self.create_or_update_entanglement(
+                    node_ids, tree_ids, context, EntanglementTrigger::PlanCompression,
+                );
             }
         }
 

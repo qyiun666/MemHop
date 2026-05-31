@@ -18,12 +18,15 @@ use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
 use std::path::Path;
 
 use crate::engram::{Association, DialogueTurn, Engram, PlanNode, SchemaExtra};
+use crate::entanglement::EntanglementEvent;
 use crate::plan_gate::PlanIndex;
+use crate::tree::Tree;
+use crate::worldview::WorldviewPattern;
 
 // ── Schema version ──────────────────────────────────────────
 
-/// Current LMDB schema version for v0.12.0.
-pub const CURRENT_SCHEMA: &str = "0.12.0";
+/// Current LMDB schema version for v0.12.1.
+pub const CURRENT_SCHEMA: &str = "0.12.1";
 
 // ── StorageError ──────────────────────────────────────────────
 
@@ -689,6 +692,60 @@ impl LmdbStorage {
             .delete(txn, "hnsw")
             .map_err(|e| StorageError::Write(format!("delete hnsw: {}", e)))
     }
+
+    // ── Tree read/write (v0.12.1) ─────────────────────────────
+
+    /// v0.12.1: Store a Tree.
+    pub fn put_tree(
+        &self,
+        txn: &mut RwTxn<'_>,
+        tree: &Tree,
+    ) -> Result<(), StorageError> {
+        let key = format!("tree:{}", tree.id);
+        self.put_config(txn, &key, tree)
+    }
+
+    /// v0.12.1: Retrieve a single Tree by ID.
+    pub fn get_tree(
+        &self,
+        txn: &RoTxn<'_>,
+        tree_id: &str,
+    ) -> Result<Option<Tree>, StorageError> {
+        let key = format!("tree:{}", tree_id);
+        self.get_config(txn, &key)
+    }
+
+    /// v0.12.1: Delete a Tree from storage (does not modify engrams).
+    pub fn delete_tree(
+        &self,
+        txn: &mut RwTxn<'_>,
+        tree_id: &str,
+    ) -> Result<bool, StorageError> {
+        let key = format!("tree:{}", tree_id);
+        self.db
+            .config
+            .delete(txn, &key)
+            .map_err(|e| StorageError::Write(format!("delete tree: {}", e)))
+    }
+
+    /// v0.12.1: Retrieve all Trees from storage by scanning config keys with "tree:" prefix.
+    pub fn get_all_trees(&self, txn: &RoTxn<'_>) -> Result<Vec<Tree>, StorageError> {
+        let mut trees = Vec::new();
+        let iter = self
+            .db
+            .config
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter config: {}", e)))?;
+        for result in iter {
+            let (key, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            if key.starts_with("tree:") {
+                let tree: Tree = bincode::deserialize(val)
+                    .map_err(|e| StorageError::Read(format!("deserialize tree: {}", e)))?;
+                trees.push(tree);
+            }
+        }
+        Ok(trees)
+    }
 }
 
 impl LmdbStorage {
@@ -751,5 +808,168 @@ impl LmdbStorage {
             self.put_anchor_engrams(txn, anchor, &ids)?;
         }
         Ok(())
+    }
+}
+
+// ── EntanglementEvent read/write (v0.12.1) ──────────────────
+
+impl LmdbStorage {
+    /// v0.12.1: Store an EntanglementEvent. Key format: "ent:<id>"
+    pub fn put_entanglement(
+        &self,
+        txn: &mut RwTxn<'_>,
+        event: &EntanglementEvent,
+    ) -> Result<(), StorageError> {
+        let key = format!("ent:{}", event.id);
+        self.put_config(txn, &key, event)
+    }
+
+    /// v0.12.1: Retrieve a single EntanglementEvent by ID.
+    pub fn get_entanglement(
+        &self,
+        txn: &RoTxn<'_>,
+        event_id: &str,
+    ) -> Result<Option<EntanglementEvent>, StorageError> {
+        let key = format!("ent:{}", event_id);
+        self.get_config(txn, &key)
+    }
+
+    /// v0.12.1: Delete an EntanglementEvent by ID.
+    pub fn delete_entanglement(
+        &self,
+        txn: &mut RwTxn<'_>,
+        event_id: &str,
+    ) -> Result<bool, StorageError> {
+        let key = format!("ent:{}", event_id);
+        self.db
+            .config
+            .delete(txn, &key)
+            .map_err(|e| StorageError::Write(format!("delete entanglement: {}", e)))
+    }
+
+    /// v0.12.1: Retrieve all EntanglementEvents by scanning config keys with "ent:" prefix
+    /// (excluding "ent_node:" keys).
+    pub fn get_all_entanglements(
+        &self,
+        txn: &RoTxn<'_>,
+    ) -> Result<Vec<EntanglementEvent>, StorageError> {
+        let mut events = Vec::new();
+        let iter = self
+            .db
+            .config
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter config: {}", e)))?;
+        for result in iter {
+            let (key, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            if key.starts_with("ent:") && !key.starts_with("ent_node:") {
+                let event: EntanglementEvent = bincode::deserialize(val)
+                    .map_err(|e| StorageError::Read(format!("deserialize entanglement: {}", e)))?;
+                events.push(event);
+            }
+        }
+        Ok(events)
+    }
+
+    /// v0.12.1: Get all entanglement event IDs for a given engram node.
+    /// Key format: "ent_node:<engram_id>" stores Vec<String> of event IDs.
+    pub fn get_entanglement_ids_for_node(
+        &self,
+        txn: &RoTxn<'_>,
+        engram_id: &str,
+    ) -> Result<Vec<String>, StorageError> {
+        let key = format!("ent_node:{}", engram_id);
+        Ok(self.get_config::<Vec<String>>(txn, &key)?.unwrap_or_default())
+    }
+
+    /// v0.12.1: Add an event ID to the node index (creates if not exists).
+    pub fn add_entanglement_node(
+        &self,
+        txn: &mut RwTxn<'_>,
+        node_id: &str,
+        event_id: &str,
+    ) -> Result<(), StorageError> {
+        let key = format!("ent_node:{}", node_id);
+        let mut ids = self.get_config::<Vec<String>>(txn, &key)?.unwrap_or_default();
+        if !ids.contains(&event_id.to_string()) {
+            ids.push(event_id.to_string());
+            self.put_config(txn, &key, &ids)?;
+        }
+        Ok(())
+    }
+
+    /// v0.12.1: Remove an event ID from the node index.
+    pub fn remove_entanglement_node(
+        &self,
+        txn: &mut RwTxn<'_>,
+        node_id: &str,
+        event_id: &str,
+    ) -> Result<(), StorageError> {
+        let key = format!("ent_node:{}", node_id);
+        let mut ids = self.get_config::<Vec<String>>(txn, &key)?.unwrap_or_default();
+        ids.retain(|id| id != event_id);
+        if ids.is_empty() {
+            self.db.config.delete(txn, &key)
+                .map_err(|e| StorageError::Write(format!("delete ent_node: {}", e)))?;
+        } else {
+            self.put_config(txn, &key, &ids)?;
+        }
+        Ok(())
+    }
+
+    // ── WorldviewPattern read/write (v0.12.1) ──────────────
+
+    /// v0.12.1: Store a WorldviewPattern. Key format: "wv:<id>".
+    pub fn put_worldview(
+        &self,
+        txn: &mut RwTxn<'_>,
+        wv: &WorldviewPattern,
+    ) -> Result<(), StorageError> {
+        let key = format!("wv:{}", wv.id);
+        self.put_config(txn, &key, wv)
+    }
+
+    /// v0.12.1: Retrieve a single WorldviewPattern by ID.
+    pub fn get_worldview(
+        &self,
+        txn: &RoTxn<'_>,
+        wv_id: &str,
+    ) -> Result<Option<WorldviewPattern>, StorageError> {
+        let key = format!("wv:{}", wv_id);
+        self.get_config(txn, &key)
+    }
+
+    /// v0.12.1: Delete a WorldviewPattern by ID.
+    pub fn delete_worldview(
+        &self,
+        txn: &mut RwTxn<'_>,
+        wv_id: &str,
+    ) -> Result<bool, StorageError> {
+        let key = format!("wv:{}", wv_id);
+        self.db
+            .config
+            .delete(txn, &key)
+            .map_err(|e| StorageError::Write(format!("delete worldview: {}", e)))
+    }
+
+    /// v0.12.1: Retrieve all WorldviewPatterns by scanning config keys with "wv:" prefix.
+    pub fn get_all_worldviews(
+        &self,
+        txn: &RoTxn<'_>,
+    ) -> Result<Vec<WorldviewPattern>, StorageError> {
+        let mut wvs = Vec::new();
+        let iter = self
+            .db
+            .config
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter config: {}", e)))?;
+        for result in iter {
+            let (key, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            if key.starts_with("wv:") {
+                let wv: WorldviewPattern = bincode::deserialize(val)
+                    .map_err(|e| StorageError::Read(format!("deserialize worldview: {}", e)))?;
+                wvs.push(wv);
+            }
+        }
+        Ok(wvs)
     }
 }

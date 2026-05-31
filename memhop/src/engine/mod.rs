@@ -166,6 +166,8 @@ impl MemHop {
             knowledge_memories: vec![],
             tree_contexts: vec![],
             graph_associations: vec![],
+            worldview_context: vec![],
+            cognitive_conflicts: vec![],
             trace,
         })
     }

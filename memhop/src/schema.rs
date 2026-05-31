@@ -135,6 +135,7 @@ pub fn try_emerge_schema(
         source_textunit: None,
         turn_ids: Vec::new(),
         context_id: None,
+        tree_ref: None,
     };
 
     Some((schema_engram, schema_extra))
@@ -348,6 +349,7 @@ pub fn turn_cluster_emergence(
             source_textunit: None,
             turn_ids: Vec::new(),
             context_id: None,
+            tree_ref: None,
         };
 
         schemas.push((schema_engram, schema_extra));

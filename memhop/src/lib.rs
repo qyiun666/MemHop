@@ -10,6 +10,7 @@
 mod types;       // 公开 API 类型 + 向后兼容类型
 mod engram;      // 新版 Brain 核心数据结构（Engram, Association 等）
 mod context;     // v0.12.0: 活跃上下文跟踪
+pub mod entanglement; // v0.12.1: 纠缠事件
 
 // ── 基础设施 ────────────────────────────────────────────────
 mod error;
@@ -20,6 +21,7 @@ mod meta_index;  // 元数据索引
 mod filter;      // 搜索过滤条件解析
 pub mod hnsw;    // HNSW 近似近邻索引 (v0.9.0)
 pub mod shelf;   // Knowledge shelf mount/query/unmount (v0.9.0)
+pub mod tree;    // v0.12.1: 知识树实体
 
 // ── 编码器 ──────────────────────────────────────────────────
 pub mod encoder;     // NgramEncoder + Hybrid + ONNX
@@ -67,6 +69,16 @@ pub use engram::{
     ToneAggregate, TopicDistribution, DomainStats,
 };
 pub use context::{Phase, ContextSnapshot, ActiveContextSet};
+
+// ── v0.12.1: 知识树 ─────────────────────────────────────────
+pub use tree::{Tree, TreeRef};
+
+// ── v0.12.1: 纠缠事件 ──────────────────────────────────────
+pub use entanglement::{EntanglementEvent, EntanglementTrigger};
+
+// ── v0.12.1: 三观模式 ──────────────────────────────────────
+pub mod worldview;
+pub use worldview::{PatternCategory, WorldviewPattern};
 
 
 // ── 编码器 — 公开类型 ──────────────────────────────────────

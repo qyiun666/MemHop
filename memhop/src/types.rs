@@ -290,6 +290,8 @@ pub struct RecallRequest {
     pub use_reranker: bool,
     /// v0.11.0: Optional tree path filter. None = all, tree = tree + conversation.
     pub tree: Option<String>,
+    /// v0.12.1: Optional tree ID filter (via tree_ref). None = all.
+    pub tree_id: Option<String>,
     /// v0.11.0: Optional kind filter. Empty = all kinds.
     pub kind_filter: Vec<EngramKind>,
     /// v0.12.0: Earliest timestamp (Unix ms) for time-based filtering.
@@ -322,6 +324,7 @@ impl Default for RecallRequest {
             mode: RecallMode::Retrieval,
             use_reranker: false,
             tree: None,
+            tree_id: None,
             kind_filter: vec![],
             time_from: None,
             time_to: None,
@@ -353,6 +356,10 @@ pub struct RecallResponse {
     pub tree_contexts: Vec<TreeContext>,
     /// v0.11.0: Cross-engram associations discovered by EntangleGraph.
     pub graph_associations: Vec<GraphAssociation>,
+    /// v0.12.1: 三观模式上下文 — 稳定度 > 0.7 的模式描述。
+    pub worldview_context: Vec<String>,
+    /// v0.12.1: 认知冲突 — 与当前输入矛盾的稳定模式。
+    pub cognitive_conflicts: Vec<String>,
 }
 
 // ── ConflictItem ──────────────────────────────────────────
@@ -458,6 +465,12 @@ pub struct DreamReport {
     pub cross_kind_new_associations: usize,
     /// v0.11.0: Number of tombstoned nodes removed from HNSW by compact.
     pub hnsw_compacted: usize,
+    /// v0.12.1: Entanglement events decayed (strength < 0.1 → deleted).
+    pub entanglements_decayed: usize,
+    /// v0.12.1: New entanglement events created during REM phase.
+    pub entanglements_created: usize,
+    /// v0.12.1: New worldview patterns emerged during REM phase.
+    pub worldviews_emerged: usize,
 }
 
 // ── v0.11.0: New types ───────────────────────────────────────

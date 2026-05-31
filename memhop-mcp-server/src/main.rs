@@ -110,7 +110,17 @@ fn tools_list() -> Value {
         {"name":"memhop_tree_status","description":"List all mounted knowledge trees with metadata.","inputSchema":{"type":"object","properties":{"tree_path":{"type":"string","description":"Optional: get status for a specific tree. Returns all trees if omitted."}}}},
         {"name":"memhop_knowledge_search","description":"[DEPRECATED] Use memhop_recall with tree and kind_filter instead.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"shelf_id":{"type":"string"},"limit":{"type":"integer"}},"required":["query","shelf_id"]}},
         {"name":"memhop_forget","description":"Forget a dialogue turn and its associated engrams","inputSchema":{"type":"object","properties":{"turn_id":{"type":"string"}},"required":["turn_id"]}},
-        {"name":"memhop_list_schemas","description":"List all emerged schema engrams","inputSchema":{"type":"object","properties":{}}}
+        {"name":"memhop_list_schemas","description":"List all emerged schema engrams","inputSchema":{"type":"object","properties":{}}},
+        {"name":"memhop_create_tree","description":"Create a knowledge tree for organizing memories by domain.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"domain":{"type":"string","description":"'work', 'travel', 'parenting', 'generic', etc."}},"required":["name"]}},
+        {"name":"memhop_list_trees","description":"List all knowledge trees.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"memhop_get_tree","description":"Get details of a specific knowledge tree.","inputSchema":{"type":"object","properties":{"tree_id":{"type":"string"}},"required":["tree_id"]}},
+        {"name":"memhop_move_to_tree","description":"Move an engram to a specific knowledge tree.","inputSchema":{"type":"object","properties":{"engram_id":{"type":"string"},"tree_id":{"type":"string"}},"required":["engram_id","tree_id"]}},
+        {"name":"memhop_delete_tree","description":"Delete a knowledge tree (does not delete associated engrams).","inputSchema":{"type":"object","properties":{"tree_id":{"type":"string"}},"required":["tree_id"]}},
+        {"name":"memhop_list_entanglements","description":"List all cross-tree entanglement events, sorted by strength.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"memhop_entanglement_detail","description":"Get details of a specific entanglement event.","inputSchema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
+        {"name":"memhop_list_worldviews","description":"List all worldview patterns emerged from memory entanglements.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"memhop_worldview_detail","description":"Get details of a specific worldview pattern.","inputSchema":{"type":"object","properties":{"wv_id":{"type":"string"}},"required":["wv_id"]}},
+        {"name":"memhop_my_worldview","description":"Get a natural language summary of stable worldview patterns.","inputSchema":{"type":"object","properties":{}}}
     ]})
 }
 
@@ -147,6 +157,19 @@ fn tool_call(brain: &mut Brain, params: Option<&Value>) -> Result<Value, String>
         // ── Old tools ──
         "memhop_forget" => tool_forget(brain, args),
         "memhop_list_schemas" => tool_list_schemas(brain, args),
+        // ── v0.12.1: Tree tools ──
+        "memhop_create_tree" => tool_create_tree(brain, args),
+        "memhop_list_trees" => tool_list_trees(brain, args),
+        "memhop_get_tree" => tool_get_tree(brain, args),
+        "memhop_move_to_tree" => tool_move_to_tree(brain, args),
+        "memhop_delete_tree" => tool_delete_tree(brain, args),
+        // ── v0.12.1: Entanglement tools ──
+        "memhop_list_entanglements" => tool_list_entanglements(brain, args),
+        "memhop_entanglement_detail" => tool_entanglement_detail(brain, args),
+        // ── v0.12.1: Worldview tools ──
+        "memhop_list_worldviews" => tool_list_worldviews(brain, args),
+        "memhop_worldview_detail" => tool_worldview_detail(brain, args),
+        "memhop_my_worldview" => tool_my_worldview(brain, args),
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
@@ -363,6 +386,7 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         mode,
         use_reranker,
         tree,
+        tree_id: None,
         kind_filter,
         time_from: None,
         time_to: None,
@@ -679,6 +703,7 @@ fn tool_knowledge_search_deprecated(brain: &mut Brain, args: &Value) -> Result<V
         mode: memhop::RecallMode::Retrieval,
         use_reranker: true,
         tree: Some(shelf_id),
+        tree_id: None,
         kind_filter: vec![EngramKind::Knowledge],
         time_from: None,
         time_to: None,
@@ -745,3 +770,90 @@ fn tool_tree_status(_brain: &mut Brain, args: &Value) -> Result<Value, String> {
     }
 }
 
+// ── v0.12.1: Tree tools ────────────────────────────────────────────
+
+fn tool_create_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let name = s(args, "name")?;
+    let domain = args
+        .get("domain")
+        .and_then(|v| v.as_str())
+        .unwrap_or("generic");
+    let tree = brain.create_tree(&name, domain).map_err(|e| e.to_string())?;
+    Ok(json!({"tree_id": tree.id, "name": tree.name, "domain": tree.domain}))
+}
+
+fn tool_list_trees(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
+    let trees = brain.list_trees().map_err(|e| e.to_string())?;
+    Ok(json!(trees))
+}
+
+fn tool_get_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let tree_id = s(args, "tree_id")?;
+    let tree = brain.get_tree(&tree_id).map_err(|e| e.to_string())?;
+    Ok(json!(tree))
+}
+
+fn tool_move_to_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let engram_id = s(args, "engram_id")?;
+    let tree_id = s(args, "tree_id")?;
+    brain
+        .move_to_tree(&engram_id, &tree_id)
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"status": "ok"}))
+}
+
+fn tool_delete_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let tree_id = s(args, "tree_id")?;
+    brain.delete_tree(&tree_id).map_err(|e| e.to_string())?;
+    Ok(json!({"status": "ok"}))
+}
+
+// ── v0.12.1: Entanglement tools ────────────────────────────────────
+
+fn tool_list_entanglements(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
+    let mut events = brain.get_all_entanglements().map_err(|e| e.to_string())?;
+    events.sort_by(|a, b| {
+        b.strength
+            .partial_cmp(&a.strength)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    Ok(json!(events))
+}
+
+fn tool_entanglement_detail(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let event_id = s(args, "event_id")?;
+    let event = brain
+        .get_entanglement(&event_id)
+        .map_err(|e| e.to_string())?;
+    Ok(json!(event))
+}
+
+// ── v0.12.1: Worldview tools ───────────────────────────────────────
+
+fn tool_list_worldviews(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
+    let worldviews = brain.get_all_worldviews().map_err(|e| e.to_string())?;
+    Ok(json!(worldviews))
+}
+
+fn tool_worldview_detail(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let wv_id = s(args, "wv_id")?;
+    let wv = brain.get_worldview(&wv_id).map_err(|e| e.to_string())?;
+    Ok(json!(wv))
+}
+
+fn tool_my_worldview(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
+    let worldviews = brain.get_all_worldviews().map_err(|e| e.to_string())?;
+    let mut summary = String::new();
+    for wv in &worldviews {
+        if wv.stability > 0.5 {
+            summary.push_str(&format!(
+                "[{:?}] {} (稳定度: {:.1})\n",
+                wv.category, wv.pattern, wv.stability
+            ));
+        }
+    }
+    if summary.is_empty() {
+        summary = "暂未涌现出稳定的三观模式，继续积累对话。".to_string();
+    }
+    Ok(json!({"summary": summary, "patterns": worldviews}))
+}

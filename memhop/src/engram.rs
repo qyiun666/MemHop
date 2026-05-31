@@ -4,6 +4,8 @@ use half::f16;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::tree::TreeRef;
+
 // ── Vector dimension ──────────────────────────────────────────
 
 pub const VECTOR_DIM: usize = 1024;
@@ -45,6 +47,9 @@ pub struct Engram {
     /// v0.11.0: Knowledge engram source fields
     #[serde(default)]
     pub tree_path: Option<String>,
+    /// v0.12.1: Knowledge tree reference (replaces tree_path).
+    #[serde(default)]
+    pub tree_ref: Option<TreeRef>,
     #[serde(default)]
     pub source_path: Option<String>,
     #[serde(default)]
@@ -88,6 +93,7 @@ impl Engram {
             is_dormant: false,
             turn_id: None,
             tree_path: None,
+            tree_ref: None,
             source_path: None,
             source_textunit: None,
             turn_ids: Vec::new(),
@@ -131,6 +137,7 @@ impl Engram {
             is_dormant: false,
             turn_id: None,
             tree_path: Some(tree_path),
+            tree_ref: None,
             source_path: Some(source_path),
             source_textunit: Some(source_textunit),
             turn_ids: Vec::new(),
