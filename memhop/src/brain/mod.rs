@@ -12,18 +12,16 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::Instant;
 
 use half::f16;
 
-use crate::activation;
 use crate::cortex::Cortex;
 use crate::context::{ActiveContextSet, Phase};
 use crate::encoder::{Encoder, NgramEncoder};
 #[cfg(feature = "onnx")]
 use crate::encoder::reranker::Reranker;
 use crate::engram::{
-    AssociationKind, CompressResult, EmotionalContext, Engram, EngramKind,
+    CompressResult, EmotionalContext, Engram, EngramKind,
 };
 use crate::error::{MemHopError, Result};
 use crate::hippocampus::Hippocampus;
@@ -33,13 +31,12 @@ use crate::index::SparseIndex;
 use crate::llm_provider::LlmProvider;
 use crate::personality::{GrowthState, Personality};
 use crate::plan_gate::{PlanGate, PlanIndex};
-use crate::scene_gating::SceneGate;
 use crate::storage::LmdbStorage;
 use crate::tree::Tree;
-use crate::entanglement::{EntanglementEvent, EntanglementTrigger};
+use crate::entanglement::EntanglementEvent;
 use crate::types::{
-    BrainConfig, ConflictItem, DreamReport, ForgetFilter, GraphAssociation,
-    PerceptionInput, PerceptionOutput, RecallMode, RecallRequest, RecallResponse, RecallTrace,
+    BrainConfig, DreamReport, ForgetFilter,
+    PerceptionInput, PerceptionOutput, RecallRequest, RecallResponse,
     ReflectionInput, StoreResult, TreeContext,
 };
 use crate::unified_graph::UnifiedGraph;
@@ -50,7 +47,6 @@ pub(crate) mod init;
 // ── 常量 ─────────────────────────────────────────────────────
 
 pub(crate) const HOPFIELD_BETA: f32 = 8.0;
-pub(crate) const HOPFIELD_TOP_K: usize = 200;
 
 // v0.12.0: 知识自动附带常量
 pub(crate) const KNOWLEDGE_ATTACH_LIMIT: usize = 5;
@@ -172,12 +168,13 @@ impl Brain {
         crate::perceive::perceive(self, input)
     }
 
-    // ── PGT recall (v0.8.0) ────────────────────────────
+    // ── PGT recall (v0.8.0) — 委托到 recall/ 模块 ───
 
     /// Four-layer Plan-Gated Temporal recall.
     ///
     /// Returns (results sorted by score descending, layer name).
     /// Layers are tried in order L0→L3, accumulating until `need` is met.
+    #[allow(dead_code)]
     fn pgt_recall(
         &self,
         query_text: &str,
@@ -233,6 +230,7 @@ impl Brain {
     }
 
     /// Hopfield fallback: recall among candidates within the active plan.
+    #[allow(dead_code)]
     fn hopfield_candidates_in_plan(
         &self,
         query_emb: &[f32],
@@ -266,6 +264,7 @@ impl Brain {
     ///
     /// Returns items sorted by Reciprocal Rank Fusion score (k=60)
     /// combining HNSW cosine rank + SparseIndex ngram rank.
+    #[allow(dead_code)]
     fn recall_retrieval(
         &self,
         req: &RecallRequest,
@@ -323,6 +322,7 @@ impl Brain {
     /// Forget all engrams and the DialogueTurn for a given turn_id.
     #[deprecated(note = "use forget_batch with ForgetFilter::ByTurnId")]
     pub fn forget(&mut self, turn_id: &str) -> Result<()> {
+        #[allow(deprecated)]
         crate::store::forget(self, turn_id)
     }
 

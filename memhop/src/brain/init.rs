@@ -72,7 +72,7 @@ pub(crate) fn open(
         }
     }
 
-    let personality = config.personality.clone();
+    let personality = config.personality;
     let hippocampus = Hippocampus::rebuild(&storage, config.hippocampus_capacity)
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
