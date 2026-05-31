@@ -39,6 +39,26 @@ env/
 
 # Design docs (not for public repo)
 docs/
+deliverables/
+
+# Analysis docs (generated)
+ANALYSIS_SCOPE.md
+CONTEXT_FLOW_TRACE.md
+CONTEXT_SYSTEM_SUMMARY.md
+CROSS_PROJECT_UPGRADE_GUIDE.md
+
+# Benchmark data (large, user-downloaded)
+benchmarks/data/
+benchmarks/reports/
+benchmarks/deprecated/
+benchmarks/lme_*.log
+benchmarks/.tmp_bench/
+benchmarks/__init__.py
+benchmarks/run_v*.sh
+benchmarks/tools/
+
+# Test artifacts
+_test_mcp.db/
 
 # Python prototype (not for public repo)
 src/memhop/

@@ -109,7 +109,7 @@ fn main() {
 
 fn tools_list() -> Value {
     json!({"tools":[
-        {"name":"memhop_store","description":"Store a new memory/episode or knowledge chunk (ADD-only, auto-dedup).","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"kind":{"type":"string","description":"'episode' (default) or 'knowledge'"},"session_id":{"type":"string"},"tree_path":{"type":"string","description":"Knowledge tree path (required for kind=knowledge)"},"source_path":{"type":"string","description":"Original file path (for knowledge)"},"source_textunit":{"type":"string","description":"Text unit reference (e.g., '§3.2')"},"valence":{"type":"number"},"arousal":{"type":"number"}},"required":["text"]}},
+        {"name":"memhop_store","description":"Store a new memory/episode or knowledge chunk (ADD-only, auto-dedup).","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"agent_response":{"type":"string","description":"AI's response to this turn (optional, creates DialogueTurn)"},"kind":{"type":"string","description":"'episode' (default) or 'knowledge'"},"session_id":{"type":"string"},"tree_path":{"type":"string","description":"Knowledge tree path (required for kind=knowledge)"},"source_path":{"type":"string","description":"Original file path (for knowledge)"},"source_textunit":{"type":"string","description":"Text unit reference (e.g., '§3.2')"},"valence":{"type":"number"},"arousal":{"type":"number"}},"required":["text"]}},
         {"name":"memhop_recall","description":"Recall memories matching a query. Returns unified results across all types.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"session_id":{"type":"string"},"limit":{"type":"integer"},"mode":{"type":"string","description":"'retrieval' (HNSW+CrossEncoder, default) or 'associative' (Hopfield+spread)"},"use_reranker":{"type":"boolean","description":"Enable CrossEncoder reranking (Retrieval mode only, default: true)"},"kind_filter":{"type":"array","items":{"type":"string"},"description":"Filter by kind: 'episode', 'knowledge'. Empty = all."},"tree":{"type":"string","description":"Filter by knowledge tree path."},"query_vector":{"type":"array","items":{"type":"number"}}},"required":["query"]}},
         {"name":"memhop_reflect","description":"Create a reflection engram","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"kind":{"type":"string"},"session_id":{"type":"string"}},"required":["content","kind"]}},
         {"name":"memhop_dream","description":"Run Dream consolidation cycle (includes Knowledge engrams).","inputSchema":{"type":"object","properties":{}}},
@@ -316,7 +316,7 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
                 manual_links: vec![],
                 meta: std::collections::HashMap::new(),
                 plan_id: None,
-                agent_response: None,
+                agent_response: args.get("agent_response").and_then(|v| v.as_str()).map(|s| s.to_string()),
                 dialogue_timestamp: None,
                 source: None,
                 turn_id,
