@@ -194,6 +194,12 @@ pub(crate) fn recall_retrieval(
                     continue;
                 }
             }
+            // v0.13.0: Apply context_id filter
+            if let Some(ref ctx_id) = req.context_id
+                && engram.context_id.as_deref() != Some(ctx_id.as_str())
+            {
+                continue;
+            }
             match engram.kind {
                 EngramKind::Knowledge => knowledge_memories.push(engram),
                 EngramKind::Schema => schemas.push(engram),
@@ -210,6 +216,12 @@ pub(crate) fn recall_retrieval(
     // v0.12.0: 知识自动附带 — 从书架检索附加知识
     if req.attach_knowledge && brain.phase != Phase::Warmup {
         knowledge_memories = super::knowledge::recall_knowledge_attached(brain, query_vector);
+    }
+
+    // v0.13.0: Debug log context_id filtered count
+    if req.context_id.is_some() {
+        let filtered_count = associations.len() + schemas.len() + knowledge_memories.len();
+        eprintln!("memhop-recall: context_id={:?} filtered_results={}", req.context_id, filtered_count);
     }
 
     // v0.11.0: Build tree_contexts from knowledge_memories
@@ -272,18 +284,40 @@ pub(crate) fn recall_retrieval(
     if brain.phase == Phase::Full {
         let mut tree_ids_set: HashSet<String> = HashSet::new();
         let mut node_ids: Vec<String> = Vec::new();
+        let mut context_ids: Vec<String> = Vec::new();
         for eng in associations.iter().chain(knowledge_memories.iter()) {
             if let Some(ref tr) = eng.tree_ref {
                 tree_ids_set.insert(tr.tree_id.clone());
                 node_ids.push(eng.id.clone());
+            }
+            // v0.13.0: collect context IDs
+            if let Some(ref ctx_id) = eng.context_id
+                && !context_ids.contains(ctx_id)
+            {
+                context_ids.push(ctx_id.clone());
             }
         }
         if tree_ids_set.len() >= 2 && node_ids.len() >= 2 {
             let context = "记忆在查询中跨树关联".to_string();
             let tree_ids: Vec<String> = tree_ids_set.into_iter().collect();
             crate::entanglement::create_or_update_entanglement(
-                brain, node_ids, tree_ids, context, crate::entanglement::EntanglementTrigger::RecallCrossTree,
+                brain, node_ids, tree_ids, context, crate::entanglement::EntanglementTrigger::RecallCrossTree, context_ids,
             );
+        }
+
+        // v0.13.0: Push pending tree edges for context↔tree association
+        for eng in associations.iter().chain(knowledge_memories.iter()) {
+            if let Some(ref ctx_id) = eng.context_id
+                && let Some(ref tr) = eng.tree_ref
+            {
+                brain.pending_tree_edges.borrow_mut().push(
+                    crate::brain::PendingTreeEdge {
+                        context_id: ctx_id.clone(),
+                        tree_id: tr.tree_id.clone(),
+                        delta: 0.1,
+                    }
+                );
+            }
         }
     }
 
@@ -292,7 +326,7 @@ pub(crate) fn recall_retrieval(
 
     // v0.12.1: 三观模式介入
     let (worldview_context, cognitive_conflicts) =
-        crate::worldview::extract_worldview_context(brain, &req.query);
+        crate::worldview::extract_worldview_context(brain, &req.query, query_vector);
 
     // v0.9.1: Build turn-level hits from associated engrams
     let (hit_turns, aggregated_sessions) = brain.build_turn_hits(&associations, &score_map)

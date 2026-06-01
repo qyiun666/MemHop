@@ -20,7 +20,7 @@ use crate::storage::CURRENT_SCHEMA;
 use crate::unified_graph::UnifiedGraph;
 
 use crate::brain::{now_millis, Brain};
-use crate::context::{ActiveContextSet, Phase};
+use crate::context::{ActiveContextSet, DormantContextPool, Phase};
 use crate::cortex::Cortex;
 use crate::encoder::{Encoder, NgramEncoder};
 use crate::engram::EmotionalContext;
@@ -255,6 +255,19 @@ pub(crate) fn open(
         config.context_half_life_hours,
     );
 
+    // v0.13.0: Initialize dormant context pool and load from LMDB
+    let mut dormant_contexts = DormantContextPool::new(
+        config.max_dormant_contexts,
+        config.context_idle_dormant_hours,
+    );
+    {
+        if let Ok(rtxn) = storage.begin_read()
+            && let Ok(dcs) = storage.get_all_dormant_contexts(&rtxn)
+        {
+            dormant_contexts.load_from_storage(&dcs);
+        }
+    }
+
     let brain = Brain {
         cortex: Cortex::new(config.cortex_capacity),
         hippocampus,
@@ -287,6 +300,8 @@ pub(crate) fn open(
         last_perceive_at: 0,
         phase: Phase::Warmup,
         active_contexts,
+        dormant_contexts,
+        pending_tree_edges: RefCell::new(Vec::new()),
     };
 
     // Warm up the encoder

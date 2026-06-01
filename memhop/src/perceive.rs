@@ -123,23 +123,74 @@ pub(crate) fn perceive(brain: &mut Brain, input: PerceptionInput) -> Result<Perc
     };
     brain.phase = phase;
 
-    // ── v0.12.0: 活跃上下文匹配（Warmup 不做） ──
+    // ── v0.13.0: 活跃上下文匹配 + 休眠池回退 ──
     let mut matched_ctx_id: Option<String> = None;
     let mut matched_tree_id: Option<String> = input.tree_id.clone(); // v0.12.1: from input first, context overrides
     if brain.phase != crate::context::Phase::Warmup {
+        // 1. Try active context match
         if let Some(ctx) = brain.active_contexts.match_context(&query_f32, now) {
-            matched_ctx_id = Some(ctx.id.clone());
+            let ctx_id = ctx.id.clone();
+            matched_ctx_id = Some(ctx_id.clone());
             // v0.12.1: context's tree_id overrides input's tree_id
             if ctx.tree_id.is_some() {
                 matched_tree_id = ctx.tree_id.clone();
             }
+            let _ = ctx; // release mutable borrow before calling increment_turn_count
+            brain.active_contexts.increment_turn_count(&ctx_id);
         } else {
-            // 没有匹配到上下文 → 使用 PlanGate 的结果创建新上下文
-            // v0.12.1: pass input.tree_id to new context if available
-            brain.active_contexts.create(input.tree_id.clone(), plan_id.clone(), input.vector.clone(), now);
+            // 2. Try dormant pool reactivation
+            let reactivated = brain.dormant_contexts.search_and_reactivate(
+                &query_f32,
+                brain.config.dormant_reactivate_threshold,
+                &mut brain.active_contexts,
+                now,
+            );
+            if let Some(ref ctx_id) = reactivated {
+                matched_ctx_id = Some(ctx_id.clone());
+                // The dormant context is now in active_contexts
+                if let Some(ctx) = brain.active_contexts.get(ctx_id)
+                    && ctx.tree_id.is_some()
+                {
+                    matched_tree_id = ctx.tree_id.clone();
+                }
+                // Remove from LMDB since it's now reactivated
+                if let Ok(mut wtxn) = brain.storage.begin_write() {
+                    let _ = brain.storage.delete_dormant_context(&mut wtxn, ctx_id);
+                    let _ = wtxn.commit();
+                }
+            } else {
+                // 3. No match at all → create new context
+                brain.active_contexts.create(input.tree_id.clone(), plan_id.clone(), input.vector.clone(), now);
+            }
         }
-        // 淘汰过期的上下文
-        brain.active_contexts.evict_stale();
+        // 4. Evict stale contexts → save to dormant pool
+        while let Some(evicted) = brain.active_contexts.evict_stale() {
+            let dormant = crate::context::DormantContext::from_snapshot(&evicted);
+            brain.dormant_contexts.add_from_snapshot(&evicted);
+            // Persist to LMDB
+            if let Ok(mut wtxn) = brain.storage.begin_write() {
+                let _ = brain.storage.put_dormant_context(&mut wtxn, &dormant);
+                let _ = wtxn.commit();
+            }
+        }
+    }
+
+    // ── v0.13.0: 消费 recall pending tree edges ──
+    {
+        let edges = brain.pending_tree_edges.borrow_mut().drain(..).collect::<Vec<_>>();
+        for edge in &edges {
+            if let Some(ctx) = brain.active_contexts.get_mut(&edge.context_id) {
+                ctx.add_tree_relation(&edge.tree_id, edge.delta);
+            }
+        }
+    }
+
+    // v0.13.0: Update context↔tree association from input
+    if let Some(ref tid) = input.tree_id
+        && let Some(ref ctx_id) = matched_ctx_id
+        && let Some(ctx) = brain.active_contexts.get_mut(ctx_id)
+    {
+        ctx.add_tree_relation(tid, 0.2);
     }
 
     // v0.12.1: 从匹配上下文的 tree_id 查找 Tree，构建 tree_ref
@@ -306,6 +357,9 @@ pub(crate) fn perceive(brain: &mut Brain, input: PerceptionInput) -> Result<Perc
             .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
     }
 
+    // v0.13.0: Save ctx_id for auto-compression check before it's consumed by output
+    let ctx_id_for_compress = matched_ctx_id.clone();
+
     let output = PerceptionOutput {
         engram_id: id,
         current_plan_id: plan_id,
@@ -314,6 +368,17 @@ pub(crate) fn perceive(brain: &mut Brain, input: PerceptionInput) -> Result<Perc
         context_id: matched_ctx_id,
         phase: format!("{}", brain.phase),
     };
+
+    // ── v0.13.0: 上下文自动压缩/建树 ──
+    if brain.phase == crate::context::Phase::Full
+        && let Some(ref ctx_id) = ctx_id_for_compress
+        && let Some(ctx) = brain.active_contexts.get(ctx_id)
+        && ctx.turn_count >= 5
+        && ctx.auto_tree_id.is_none()
+        && (crate::brain::now_millis() - ctx.last_compressed_at) > 3_600_000
+    {
+        let _ = brain.compress_context(ctx_id);
+    }
 
     if let Err(e) = crate::organize::organize(brain, &input, &output) {
         eprintln!("[organize] {}", e);

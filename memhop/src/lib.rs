@@ -59,7 +59,7 @@ mod dream;       // Dream 整合引擎
 // ── 新版 Brain API ─────────────────────────────────────────
 pub use brain::Brain;
 pub use types::{
-    BrainConfig, ChunkMeta, ConflictItem, DreamReport, ForgetFilter, InnateSchema, MountResult, PerceptionInput,
+    BrainConfig, ChunkMeta, ConflictItem, DEFAULT_BRAINS_DIR, DreamOutput, DreamReport, ForgetFilter, InnateSchema, MountResult, PerceptionInput,
     PerceptionOutput, RecallMode, RecallRequest, RecallResponse, RecallTrace, ReflectionInput,
     ReflectionKind, ShelfDomain, ShelfResult, StoreResult, StoreStatus,
     TurnHit, SessionScore, UnmountResult,

@@ -176,6 +176,7 @@ pub(crate) fn compress_plan(brain: &mut Brain, plan_id: &str) -> Result<Compress
     {
         let mut tree_ids_set: HashSet<String> = HashSet::new();
         let mut node_ids: Vec<String> = Vec::new();
+        let mut context_ids: Vec<String> = Vec::new();
         let rtxn = brain
             .storage
             .begin_read()
@@ -187,6 +188,12 @@ pub(crate) fn compress_plan(brain: &mut Brain, plan_id: &str) -> Result<Compress
                 tree_ids_set.insert(tr.tree_id.clone());
                 if !node_ids.contains(&engram.id) {
                     node_ids.push(engram.id.clone());
+                }
+                // v0.13.0: collect context IDs
+                if let Some(ref ctx_id) = engram.context_id
+                    && !context_ids.contains(ctx_id)
+                {
+                    context_ids.push(ctx_id.clone());
                 }
             }
         }
@@ -200,6 +207,7 @@ pub(crate) fn compress_plan(brain: &mut Brain, plan_id: &str) -> Result<Compress
                 tree_ids,
                 context,
                 EntanglementTrigger::PlanCompression,
+                context_ids,
             );
         }
     }

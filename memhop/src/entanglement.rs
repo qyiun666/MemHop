@@ -42,6 +42,9 @@ pub struct EntanglementEvent {
     /// 命中次数
     #[serde(default)]
     pub hit_count: u32,
+    /// v0.13.0: Context IDs associated with this entanglement event.
+    #[serde(default)]
+    pub context_ids: Vec<String>,
 }
 
 /// 纠缠事件触发原因。
@@ -130,12 +133,14 @@ pub(crate) fn expand_entangled_results(brain: &Brain, associations: &mut Vec<Eng
 }
 
 /// v0.12.1: 跨树纠缠 — 创建或更新纠缠事件
+/// v0.13.0: Accepts context_ids for tracking associated context IDs.
 pub(crate) fn create_or_update_entanglement(
     brain: &Brain,
     nodes: Vec<String>,
     tree_ids: Vec<String>,
     context: String,
     trigger: EntanglementTrigger,
+    context_ids: Vec<String>,
 ) {
     let now = crate::brain::now_millis();
 
@@ -178,6 +183,12 @@ pub(crate) fn create_or_update_entanglement(
         existing.hit_count += 1;
         existing.strength = (existing.strength + 0.2).min(1.0);
         existing.last_hit_at = now;
+        // v0.13.0: Merge new context_ids
+        for cid in &context_ids {
+            if !existing.context_ids.contains(cid) {
+                existing.context_ids.push(cid.clone());
+            }
+        }
 
         let mut wtxn = match brain.storage.begin_write() {
             Ok(t) => t,
@@ -204,6 +215,7 @@ pub(crate) fn create_or_update_entanglement(
             created_at: now,
             last_hit_at: now,
             hit_count: 1,
+            context_ids,
         };
 
         let mut wtxn = match brain.storage.begin_write() {

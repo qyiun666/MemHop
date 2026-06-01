@@ -72,6 +72,11 @@ impl Default for DreamConfig {
 
 // ── BrainConfig (v0.7.3+ Brain API) ───────────────────────
 
+/// v0.13.0: Default directory for per-agent brain storage.
+/// Used by the MCP server when MEMHOP_BRAINS_DIR is not set.
+/// Resolved relative to the user's home directory.
+pub const DEFAULT_BRAINS_DIR: &str = ".memhop/brains";
+
 #[derive(Debug, Clone)]
 pub struct BrainConfig {
     pub personality: Personality,
@@ -110,6 +115,15 @@ pub struct BrainConfig {
     /// v0.12.2: Allow fallback to NgramEncoder when Candle is not configured.
     /// Default: false (Candle is required for production).
     pub allow_fallback_encoder: bool,
+    /// v0.13.0: Default directory for per-agent brain storage.
+    /// Used by the MCP server to resolve agent_id → db_path.
+    pub brains_dir: Option<String>,
+    /// v0.13.0: Maximum number of dormant (inactive but recallable) contexts.
+    pub max_dormant_contexts: usize,
+    /// v0.13.0: Context idle time (hours) before auto-dormant move.
+    pub context_idle_dormant_hours: f32,
+    /// v0.13.0: Threshold for reactivating a dormant context (cosine similarity).
+    pub dormant_reactivate_threshold: f32,
 }
 
 impl Default for BrainConfig {
@@ -124,7 +138,7 @@ impl Default for BrainConfig {
             dream_max_ms: 500,
             plan_boundary_threshold: None,
             api_base_url: None,
-            reranker_model_path: Some("models/bge-reranker-v2-m3".into()),
+            reranker_model_path: None,
             onnx_model_path: None,
             vitality: VitalityConfig::default(),
             hopfield: HopfieldConfig::default(),
@@ -134,6 +148,10 @@ impl Default for BrainConfig {
             max_active_contexts: 5,
             early_recall_limit: 3,
             allow_fallback_encoder: false,
+            brains_dir: None,
+            max_dormant_contexts: 1000,
+            context_idle_dormant_hours: 24.0,
+            dormant_reactivate_threshold: 0.65,
         }
     }
 }
@@ -478,6 +496,22 @@ pub struct DreamReport {
     pub entanglements_created: usize,
     /// v0.12.1: New worldview patterns emerged during REM phase.
     pub worldviews_emerged: usize,
+}
+
+/// v0.13.0: Enhanced dream output with newly emerged entities.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct DreamOutput {
+    /// Original DreamReport stats
+    pub consolidated_count: usize,
+    pub pruned_edges: usize,
+    pub duration_ms: u64,
+    pub knowledge_processed: usize,
+    pub hnsw_compacted: usize,
+    /// v0.13.0: Context compression stats
+    pub contexts_compressed: usize,
+    /// v0.13.0: Dormant pool stats
+    pub dormant_moved: usize,
+    pub archived: usize,
 }
 
 // ── v0.11.0: New types ───────────────────────────────────────

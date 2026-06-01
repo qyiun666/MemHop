@@ -1,4 +1,4 @@
-//! LMDB storage layer for the Brain — 9 sub-databases.
+//! LMDB storage layer for the Brain — 10 sub-databases.
 //!
 //! Sub-databases:
 //!   engrams         — id → bincode(Engram)
@@ -10,6 +10,7 @@
 //!   dialogue_turns  — turn_id → bincode(DialogueTurn)     (v0.8.0)
 //!   plan_tree       — plan_id → bincode(PlanNode)         (v0.8.0)
 //!   hnsw_index      — "hnsw" → bincode(HnswIndex bytes)   (v0.9.0)
+//!   dormant_contexts — id → bincode(DormantContext)        (v0.13.0)
 
 #![allow(dead_code)]
 
@@ -19,6 +20,7 @@ use std::path::Path;
 
 use crate::engram::{Association, DialogueTurn, Engram, PlanNode, SchemaExtra};
 use crate::entanglement::EntanglementEvent;
+use crate::context::DormantContext;
 use crate::plan_gate::PlanIndex;
 use crate::tree::Tree;
 use crate::worldview::WorldviewPattern;
@@ -72,6 +74,8 @@ pub(crate) struct BrainDb {
     pub plan_tree: Database<Str, Bytes>,
     /// v0.9.0: "hnsw" → bincode(HnswIndex serialized bytes)
     pub hnsw_index: Database<Str, Bytes>,
+    /// v0.13.0: id → bincode(DormantContext)
+    pub dormant_contexts: Database<Str, Bytes>,
 }
 
 // ── LmdbStorage ──────────────────────────────────────────────
@@ -97,7 +101,7 @@ impl LmdbStorage {
             EnvOpenOptions::new()
                 .map_size(2 * 1024 * 1024 * 1024)
                 .max_readers(128)
-                .max_dbs(10)
+                .max_dbs(11)
                 .open(db_path)
                 .map_err(|e| StorageError::Open(format!("env open: {}", e)))?
         };
@@ -133,6 +137,9 @@ impl LmdbStorage {
         let hnsw_index: Database<Str, Bytes> = env
             .create_database(&mut wtxn, Some("hnsw_index"))
             .map_err(|e| StorageError::Open(format!("hnsw_index db: {}", e)))?;
+        let dormant_contexts: Database<Str, Bytes> = env
+            .create_database(&mut wtxn, Some("dormant_contexts"))
+            .map_err(|e| StorageError::Open(format!("dormant_contexts db: {}", e)))?;
 
         wtxn
             .commit()
@@ -150,6 +157,7 @@ impl LmdbStorage {
                 dialogue_turns,
                 plan_tree,
                 hnsw_index,
+                dormant_contexts,
             },
             plan_index: PlanIndex::new(),
         })
@@ -971,5 +979,80 @@ impl LmdbStorage {
             }
         }
         Ok(wvs)
+    }
+}
+
+// ── DormantContext read/write (v0.13.0) ──────────────────────
+
+impl LmdbStorage {
+    /// v0.13.0: Store a DormantContext by ID.
+    pub fn put_dormant_context(
+        &self,
+        txn: &mut RwTxn<'_>,
+        dc: &DormantContext,
+    ) -> Result<(), StorageError> {
+        let bytes = bincode::serialize(dc)
+            .map_err(|e| StorageError::Write(format!("serialize dormant_context: {}", e)))?;
+        self.db
+            .dormant_contexts
+            .put(txn, &dc.id, &bytes)
+            .map_err(|e| StorageError::Write(format!("put dormant_context: {}", e)))
+    }
+
+    /// v0.13.0: Retrieve a DormantContext by ID.
+    pub fn get_dormant_context(
+        &self,
+        txn: &RoTxn<'_>,
+        id: &str,
+    ) -> Result<Option<DormantContext>, StorageError> {
+        match self.db.dormant_contexts.get(txn, id) {
+            Ok(Some(bytes)) => {
+                let dc: DormantContext = bincode::deserialize(bytes)
+                    .map_err(|e| StorageError::Read(format!("deserialize dormant_context: {}", e)))?;
+                Ok(Some(dc))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(StorageError::Read(format!("get dormant_context: {}", e))),
+        }
+    }
+
+    /// v0.13.0: Delete a DormantContext by ID.
+    pub fn delete_dormant_context(
+        &self,
+        txn: &mut RwTxn<'_>,
+        id: &str,
+    ) -> Result<bool, StorageError> {
+        self.db
+            .dormant_contexts
+            .delete(txn, id)
+            .map_err(|e| StorageError::Write(format!("delete dormant_context: {}", e)))
+    }
+
+    /// v0.13.0: Retrieve all DormantContexts (full scan).
+    pub fn get_all_dormant_contexts(
+        &self,
+        txn: &RoTxn<'_>,
+    ) -> Result<Vec<DormantContext>, StorageError> {
+        let mut dcs = Vec::new();
+        let iter = self
+            .db
+            .dormant_contexts
+            .iter(txn)
+            .map_err(|e| StorageError::Read(format!("iter dormant_contexts: {}", e)))?;
+        for result in iter {
+            let (_, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
+            let dc: DormantContext = bincode::deserialize(val)
+                .map_err(|e| StorageError::Read(format!("deserialize dormant_context: {}", e)))?;
+            dcs.push(dc);
+        }
+        Ok(dcs)
+    }
+
+    /// v0.13.0: Count of dormant contexts.
+    pub fn dormant_context_count(&self, txn: &RoTxn<'_>) -> Result<u64, StorageError> {
+        self.db
+            .dormant_contexts
+            .len(txn)
+            .map_err(|e| StorageError::Read(format!("dormant_contexts len: {}", e)))
     }
 }

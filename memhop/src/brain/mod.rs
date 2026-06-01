@@ -16,7 +16,7 @@ use std::sync::Arc;
 use half::f16;
 
 use crate::cortex::Cortex;
-use crate::context::{ActiveContextSet, Phase};
+use crate::context::{ActiveContextSet, DormantContextPool, Phase};
 use crate::encoder::{Encoder, NgramEncoder};
 #[cfg(feature = "onnx")]
 use crate::encoder::reranker::Reranker;
@@ -99,6 +99,14 @@ impl EngramCache {
     }
 }
 
+/// v0.13.0: A pending tree-to-context edge strengthen request from recall.
+#[derive(Debug, Clone)]
+pub struct PendingTreeEdge {
+    pub context_id: String,
+    pub tree_id: String,
+    pub delta: f32,
+}
+
 // ── Brain ────────────────────────────────────────────────────
 
 /// MemHop Brain — 三层记忆架构的顶层 API。
@@ -145,6 +153,10 @@ pub struct Brain {
     pub(crate) last_chunk_per_tree: HashMap<String, String>,
     /// v0.12.0: Active context tracking set.
     pub(crate) active_contexts: ActiveContextSet,
+    /// v0.13.0: Dormant context pool for three-stage context lifecycle.
+    pub(crate) dormant_contexts: DormantContextPool,
+    /// v0.13.0: Pending tree edge strengthens from recall (consumed by perceive).
+    pub pending_tree_edges: RefCell<Vec<PendingTreeEdge>>,
     /// v0.12.0: Current memory processing phase.
     pub(crate) phase: Phase,
 }
@@ -286,8 +298,52 @@ impl Brain {
     // ── v0.12.1: Tree API ──────────────────────────────────
 
     /// v0.12.1: 创建知识树
-    pub fn create_tree(&mut self, name: &str, domain: &str) -> Result<Tree> {
-        crate::tree::create_tree(self, name, domain)
+    pub fn create_tree(&mut self, name: &str, domain: &str, auto_created: bool) -> Result<Tree> {
+        crate::tree::create_tree(self, name, domain, auto_created)
+    }
+
+    /// v0.13.0: Compress a context into a knowledge tree.
+    /// Auto-creates a tree if the context doesn't have one yet.
+    pub fn compress_context(&mut self, ctx_id: &str) -> Result<Option<String>> {
+        let ctx = match self.active_contexts.get(ctx_id) {
+            Some(c) => c.clone(),
+            None => return Ok(None),
+        };
+
+        // Find or create tree
+        let tree_id = if let Some(ref tid) = ctx.auto_tree_id {
+            tid.clone()
+        } else {
+            let centroid_f16: Vec<half::f16> = ctx.centroid.clone();
+            // Try to find a similar existing tree
+            let existing = crate::tree::find_similar_tree(self, &centroid_f16, 0.85);
+            match existing {
+                Some(tid) => tid,
+                None => {
+                    let summary = if ctx.summary.is_empty() {
+                        "未命名话题".to_string()
+                    } else {
+                        ctx.summary.chars().take(20).collect()
+                    };
+                    let tree = crate::tree::create_tree(
+                        self,
+                        &format!("关于{}的对话知识", summary),
+                        "conversation",
+                        true,
+                    )?;
+                    tree.id
+                }
+            }
+        };
+
+        // Update context with tree_id
+        if let Some(ctx) = self.active_contexts.get_mut(ctx_id) {
+            ctx.auto_tree_id = Some(tree_id.clone());
+            ctx.last_compressed_at = crate::brain::now_millis();
+            ctx.add_tree_relation(&tree_id, 0.5);
+        }
+
+        Ok(Some(tree_id))
     }
 
     /// v0.12.1: 列出所有知识树

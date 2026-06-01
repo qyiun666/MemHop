@@ -121,6 +121,12 @@ pub(crate) fn recall_associative(brain: &Brain, req: &RecallRequest) -> Result<R
                 let before = req.time_to.is_none_or(|t| engram.created_at <= t);
                 if !(after && before) { continue; }
             }
+            // v0.13.0: Apply context_id filter
+            if let Some(ref ctx_id) = req.context_id
+                && engram.context_id.as_deref() != Some(ctx_id.as_str())
+            {
+                continue;
+            }
             match engram.kind {
                 EngramKind::Knowledge => knowledge_memories.push(engram),
                 EngramKind::Schema => schemas.push(engram),
@@ -187,10 +193,17 @@ pub(crate) fn recall_associative(brain: &Brain, req: &RecallRequest) -> Result<R
     if brain.phase == Phase::Full {
         let mut tree_ids_set: HashSet<String> = HashSet::new();
         let mut node_ids: Vec<String> = Vec::new();
+        let mut context_ids: Vec<String> = Vec::new();
         for eng in associations.iter().chain(knowledge_memories.iter()) {
             if let Some(ref tr) = eng.tree_ref {
                 tree_ids_set.insert(tr.tree_id.clone());
                 node_ids.push(eng.id.clone());
+            }
+            // v0.13.0: collect context IDs
+            if let Some(ref ctx_id) = eng.context_id
+                && !context_ids.contains(ctx_id)
+            {
+                context_ids.push(ctx_id.clone());
             }
         }
         if tree_ids_set.len() >= 2 && node_ids.len() >= 2 {
@@ -199,12 +212,28 @@ pub(crate) fn recall_associative(brain: &Brain, req: &RecallRequest) -> Result<R
                 brain, node_ids, tree_ids,
                 "记忆在查询中跨树关联".to_string(),
                 EntanglementTrigger::RecallCrossTree,
+                context_ids,
             );
+        }
+
+        // v0.13.0: Push pending tree edges for context↔tree association
+        for eng in associations.iter().chain(knowledge_memories.iter()) {
+            if let Some(ref ctx_id) = eng.context_id
+                && let Some(ref tr) = eng.tree_ref
+            {
+                brain.pending_tree_edges.borrow_mut().push(
+                    crate::brain::PendingTreeEdge {
+                        context_id: ctx_id.clone(),
+                        tree_id: tr.tree_id.clone(),
+                        delta: 0.1,
+                    }
+                );
+            }
         }
     }
 
     crate::entanglement::expand_entangled_results(brain, &mut associations);
-    let (worldview_context, cognitive_conflicts) = crate::worldview::extract_worldview_context(brain, &req.query);
+    let (worldview_context, cognitive_conflicts) = crate::worldview::extract_worldview_context(brain, &req.query, &query_vector);
     let (hit_turns, aggregated_sessions) = crate::query::build_turn_hits(brain, &associations, &score_map).unwrap_or_default();
     let latency_us = start.elapsed().as_micros() as u64;
 

@@ -2,6 +2,7 @@
 //!
 //! 从纠缠事件中涌现的高阶认知模式，反映 Agent 的思维风格、价值取向等。
 
+use half::f16;
 use serde::{Deserialize, Serialize};
 
 use crate::brain::Brain;
@@ -37,6 +38,12 @@ pub struct WorldviewPattern {
     /// 最后强化时间（Unix ms）
     #[serde(default)]
     pub last_reinforced_at: i64,
+    /// v0.13.0: Centroid vector for embedding-based conflict detection.
+    #[serde(default)]
+    pub centroid: Option<Vec<f16>>,
+    /// v0.13.0: Context IDs that contributed to this worldview.
+    #[serde(default)]
+    pub related_context_ids: Vec<String>,
 }
 
 /// v0.12.1: 模式分类
@@ -85,9 +92,11 @@ pub fn get_worldview(brain: &Brain, wv_id: &str) -> Result<Option<WorldviewPatte
 // ── 内部方法 ─────────────────────────────────────────────
 
 /// v0.12.1: 三观模式介入 — 提取稳定度 > 0.7 的模式上下文和认知冲突。
+/// v0.13.0: Uses embedding-based conflict detection when centroid is available.
 pub(crate) fn extract_worldview_context(
     brain: &Brain,
     query: &str,
+    query_vector: &[f16],
 ) -> (Vec<String>, Vec<String>) {
     let rtxn = match brain.storage.begin_read() {
         Ok(t) => t,
@@ -106,16 +115,29 @@ pub(crate) fn extract_worldview_context(
         if wv.stability > 0.7 {
             worldview_context.push(wv.pattern.clone());
         }
+        // v0.13.0: embedding-based conflict detection
         if wv.stability > 0.5 {
-            let query_lower = query.to_lowercase();
-            if query_lower.contains("不应该")
-                || query_lower.contains("不对")
-                || query_lower.contains("相反")
-            {
-                cognitive_conflicts.push(format!(
-                    "当前输入与模式 '{}' 可能冲突",
-                    wv.pattern
-                ));
+            if let Some(ref centroid) = wv.centroid {
+                // Cosine similarity between query vector and worldview centroid
+                let sim = crate::context::cosine_similarity_f16(query_vector, centroid);
+                if sim < -0.2 {
+                    cognitive_conflicts.push(format!(
+                        "当前输入与模式 '{}' 可能冲突 (cosine={:.2})",
+                        wv.pattern, sim
+                    ));
+                }
+            } else {
+                // Fallback: keyword matching (existing behavior)
+                let query_lower = query.to_lowercase();
+                if query_lower.contains("不应该")
+                    || query_lower.contains("不对")
+                    || query_lower.contains("相反")
+                {
+                    cognitive_conflicts.push(format!(
+                        "当前输入与模式 '{}' 可能冲突",
+                        wv.pattern
+                    ));
+                }
             }
         }
     }

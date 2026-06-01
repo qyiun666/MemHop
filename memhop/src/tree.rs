@@ -5,9 +5,11 @@
 //! lifecycle metadata.
 //!
 //! v0.12.2: Tree CRUD methods extracted from brain.rs.
+//! v0.13.0: auto_created, centroid, find_similar_tree.
 
 use crate::brain::{now_millis, Brain};
 use crate::error::{MemHopError, Result};
+use half::f16;
 use serde::{Deserialize, Serialize};
 
 /// 知识树 — 人脑中的一个领域（工作、旅游、孩子...）。
@@ -39,6 +41,12 @@ pub struct Tree {
     pub shelf_paths: Vec<String>,
     /// 创建时间 (Unix ms)
     pub created_at: i64,
+    /// v0.13.0: Whether this tree was auto-created from conversation context.
+    #[serde(default)]
+    pub auto_created: bool,
+    /// v0.13.0: Centroid vector (f16) of the tree's engrams for similarity matching.
+    #[serde(default)]
+    pub centroid: Option<Vec<f16>>,
 }
 
 /// 知识树引用（嵌入在 Engram 中，替代 `tree_path` 字段）。
@@ -57,7 +65,12 @@ pub struct TreeRef {
 // ── Tree CRUD (v0.12.2: extracted from brain.rs) ─────────────
 
 /// v0.12.1: 创建知识树
-pub(crate) fn create_tree(brain: &mut Brain, name: &str, domain: &str) -> Result<Tree> {
+pub(crate) fn create_tree(
+    brain: &mut Brain,
+    name: &str,
+    domain: &str,
+    auto_created: bool,
+) -> Result<Tree> {
     let now = now_millis();
     let id = format!("tree_{}", now);
     let tree = Tree {
@@ -69,6 +82,8 @@ pub(crate) fn create_tree(brain: &mut Brain, name: &str, domain: &str) -> Result
         last_active_at: now,
         shelf_paths: vec![],
         created_at: now,
+        auto_created,
+        centroid: None,
     };
     let mut wtxn = brain
         .storage
@@ -165,4 +180,46 @@ pub(crate) fn move_to_tree(brain: &mut Brain, engram_id: &str, tree_id: &str) ->
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
     Ok(())
+}
+
+/// v0.13.0: Find a tree whose centroid is similar to the given query vector.
+/// Returns the tree_id if cosine similarity > threshold.
+pub fn find_similar_tree(brain: &Brain, query: &[f16], threshold: f32) -> Option<String> {
+    let trees = list_trees(brain).ok()?;
+    let mut best_id: Option<String> = None;
+    let mut best_sim = threshold;
+    for tree in &trees {
+        if let Some(ref centroid) = tree.centroid {
+            let sim = cosine_similarity_f16(query, centroid);
+            if sim > best_sim {
+                best_sim = sim;
+                best_id = Some(tree.id.clone());
+            }
+        }
+    }
+    best_id
+}
+
+/// Compute cosine similarity between two f16 vectors.
+fn cosine_similarity_f16(a: &[f16], b: &[f16]) -> f32 {
+    let len = a.len().min(b.len());
+    if len == 0 {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    let mut norm_a = 0.0f32;
+    let mut norm_b = 0.0f32;
+    for i in 0..len {
+        let av = a[i].to_f32();
+        let bv = b[i].to_f32();
+        dot += av * bv;
+        norm_a += av * av;
+        norm_b += bv * bv;
+    }
+    let denom = norm_a.sqrt() * norm_b.sqrt();
+    if denom < 1e-10 {
+        0.0
+    } else {
+        dot / denom
+    }
 }

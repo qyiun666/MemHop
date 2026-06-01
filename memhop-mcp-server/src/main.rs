@@ -1,7 +1,9 @@
+#![recursion_limit = "256"]
+
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 use memhop::{
     Brain, BrainConfig, EngramKind, PerceptionInput, RecallRequest,
@@ -10,16 +12,23 @@ use memhop::{
     StoreResult,
 };
 
-const VERSION: &str = "0.11.0";
+const VERSION: &str = "0.13.0";
+
+/// A cached Brain instance with idle-time tracking for lazy eviction.
+struct BrainState {
+    brain: Brain,
+    last_used: Instant,
+}
+
+/// Idle timeout for Brain instances (30 minutes).
+const BRAIN_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 
 fn main() {
-    let db_path = std::env::var("MEMHOP_DB_PATH")
-        .unwrap_or_else(|_| "/tmp/memhop-mcp.db".to_string());
     let onnx_model_path = std::env::var("MEMHOP_ONNX_MODEL").ok();
     let reranker_model_path = std::env::var("MEMHOP_RERANKER_MODEL").ok();
-    let mut brains: HashMap<String, Brain> = HashMap::new();
+    let mut brains: HashMap<String, BrainState> = HashMap::new();
     let stdin = std::io::stdin();
     let reader = BufReader::new(stdin.lock());
     let mut stdout = std::io::stdout();
@@ -42,55 +51,41 @@ fn main() {
 
         let result: Result<Value, String> = match method {
             "initialize" => {
-                // Open Brain during initialize so warmup happens early,
-                // not during the first tools/call.
-                if !brains.contains_key(&db_path) {
-                    let mut brain_config = BrainConfig::default();
-                    if let Some(ref path) = onnx_model_path {
-                        brain_config.onnx_model_path = Some(path.clone());
-                        eprintln!("memhop-mcp-server: using ONNX model from {}", path);
-                    }
-                    if let Some(ref path) = reranker_model_path {
-                        brain_config.reranker_model_path = Some(path.clone());
-                        eprintln!("memhop-mcp-server: using reranker model from {}", path);
-                    }
-                    // Use `if let` to avoid `?` in main() which returns ()
-                    if let Err(e) = Brain::open(&db_path, brain_config, None)
-                        .map(|b| {
-                            if let Ok(mut manager) = get_shelf_manager().lock() {
-                                let _ = manager.rebuild_registry(&b);
-                            }
-                            brains.insert(db_path.clone(), b);
-                        })
-                    {
-                        let resp = json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":format!("failed to open brain: {}", e)}});
-                        let _ = writeln!(stdout, "{}", resp);
-                        let _ = stdout.flush();
-                        continue;
-                    }
-                }
                 Ok(json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"memhop-mcp-server","version":VERSION},"capabilities":{"tools":{}}}))
             }
             "notifications/initialized" => continue,
             "tools/list" => Ok(tools_list()),
             "tools/call" => {
                 let params = req.get("params");
-                // Determine agent_path from tool arguments or use default
-                let agent_path = params
+                // Extract and validate agent_id as Result<&str, String>
+                let agent_id = params
                     .and_then(|p| p.get("arguments"))
-                    .and_then(|a| a.get("agent_path"))
+                    .and_then(|a| a.get("agent_id"))
                     .and_then(|v| v.as_str())
-                    .unwrap_or(&db_path);
-                // Compute brains count before mutable borrow on get_or_open_brain
-                let brains_count = brains.len();
-                let b = get_or_open_brain(
-                    &mut brains,
-                    agent_path,
-                    &onnx_model_path,
-                    &reranker_model_path,
-                );
-                match b {
-                    Ok(b) => tool_call(b, params, brains_count),
+                    .ok_or_else(|| "Missing required parameter: agent_id".to_string())
+                    .and_then(|aid| {
+                        if aid.is_empty() || aid.len() > 64
+                            || !aid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                        {
+                            Err("Invalid agent_id: must match [a-zA-Z0-9_-]{1,64}".to_string())
+                        } else {
+                            Ok(aid)
+                        }
+                    });
+                match agent_id {
+                    Ok(id) => {
+                        let brains_count = brains.len();
+                        let b = get_or_open_brain(
+                            &mut brains,
+                            id,
+                            &onnx_model_path,
+                            &reranker_model_path,
+                        );
+                        match b {
+                            Ok(b) => tool_call(b, params, brains_count),
+                            Err(e) => Err(e),
+                        }
+                    }
                     Err(e) => Err(e),
                 }
             }
@@ -109,48 +104,169 @@ fn main() {
 
 fn tools_list() -> Value {
     json!({"tools":[
-        {"name":"memhop_store","description":"Store a new memory/episode or knowledge chunk (ADD-only, auto-dedup).","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"agent_response":{"type":"string","description":"AI's response to this turn (optional, creates DialogueTurn)"},"kind":{"type":"string","description":"'episode' (default) or 'knowledge'"},"session_id":{"type":"string"},"tree_path":{"type":"string","description":"Knowledge tree path (required for kind=knowledge)"},"source_path":{"type":"string","description":"Original file path (for knowledge)"},"source_textunit":{"type":"string","description":"Text unit reference (e.g., '§3.2')"},"valence":{"type":"number"},"arousal":{"type":"number"}},"required":["text"]}},
-        {"name":"memhop_recall","description":"Recall memories matching a query. Returns unified results across all types.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"session_id":{"type":"string"},"limit":{"type":"integer"},"mode":{"type":"string","description":"'retrieval' (HNSW+CrossEncoder, default) or 'associative' (Hopfield+spread)"},"use_reranker":{"type":"boolean","description":"Enable CrossEncoder reranking (Retrieval mode only, default: true)"},"kind_filter":{"type":"array","items":{"type":"string"},"description":"Filter by kind: 'episode', 'knowledge'. Empty = all."},"tree":{"type":"string","description":"Filter by knowledge tree path."},"query_vector":{"type":"array","items":{"type":"number"}}},"required":["query"]}},
-        {"name":"memhop_reflect","description":"Create a reflection engram","inputSchema":{"type":"object","properties":{"content":{"type":"string"},"kind":{"type":"string"},"session_id":{"type":"string"}},"required":["content","kind"]}},
-        {"name":"memhop_dream","description":"Run Dream consolidation cycle (includes Knowledge engrams).","inputSchema":{"type":"object","properties":{}}},
-        {"name":"memhop_stats","description":"Get brain statistics","inputSchema":{"type":"object","properties":{}}},
-        {"name":"memhop_count","description":"Get total engram count","inputSchema":{"type":"object","properties":{}}},
-        {"name":"memhop_health","description":"Get health metrics (uptime, version, basic stats)","inputSchema":{"type":"object","properties":{}}},
-        {"name":"memhop_complete_plan","description":"Complete a plan (mark as Completed, optionally summarize)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}},"required":["plan_id"]}},
-        {"name":"memhop_get_plan_tree","description":"Get the plan tree (all root plans or descendants of a given plan)","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}}}},
-        {"name":"memhop_get_chat_history","description":"Get archived dialogue turns for a plan","inputSchema":{"type":"object","properties":{"plan_id":{"type":"string"}},"required":["plan_id"]}},
-        {"name":"memhop_plan_stats","description":"Get aggregated plan statistics (domain distribution + tone trends)","inputSchema":{"type":"object","properties":{"start_time":{"type":"integer"},"end_time":{"type":"integer"}}}},
-        {"name":"memhop_mount_tree","description":"Mount a knowledge tree from a file or directory path. Path is the identity.","inputSchema":{"type":"object","properties":{"path":{"type":"string"},"domain":{"type":"string","description":"'code', 'book', 'paper', 'doc', or 'generic'"}},"required":["path"]}},
-        {"name":"memhop_unmount_tree","description":"Unmount a knowledge tree by tree path.","inputSchema":{"type":"object","properties":{"tree_path":{"type":"string"}},"required":["tree_path"]}},
-        {"name":"memhop_tree_status","description":"List all mounted knowledge trees with metadata.","inputSchema":{"type":"object","properties":{"tree_path":{"type":"string","description":"Optional: get status for a specific tree. Returns all trees if omitted."}}}},
-        {"name":"memhop_knowledge_search","description":"[DEPRECATED] Use memhop_recall with tree and kind_filter instead.","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"shelf_id":{"type":"string"},"limit":{"type":"integer"}},"required":["query","shelf_id"]}},
-        {"name":"memhop_forget","description":"Forget a dialogue turn and its associated engrams","inputSchema":{"type":"object","properties":{"turn_id":{"type":"string"}},"required":["turn_id"]}},
-        {"name":"memhop_list_schemas","description":"List all emerged schema engrams","inputSchema":{"type":"object","properties":{}}},
-        {"name":"memhop_create_tree","description":"Create a knowledge tree for organizing memories by domain.","inputSchema":{"type":"object","properties":{"name":{"type":"string"},"domain":{"type":"string","description":"'work', 'travel', 'parenting', 'generic', etc."}},"required":["name"]}},
-        {"name":"memhop_list_trees","description":"List all knowledge trees.","inputSchema":{"type":"object","properties":{}}},
-        {"name":"memhop_get_tree","description":"Get details of a specific knowledge tree.","inputSchema":{"type":"object","properties":{"tree_id":{"type":"string"}},"required":["tree_id"]}},
-        {"name":"memhop_move_to_tree","description":"Move an engram to a specific knowledge tree.","inputSchema":{"type":"object","properties":{"engram_id":{"type":"string"},"tree_id":{"type":"string"}},"required":["engram_id","tree_id"]}},
-        {"name":"memhop_delete_tree","description":"Delete a knowledge tree (does not delete associated engrams).","inputSchema":{"type":"object","properties":{"tree_id":{"type":"string"}},"required":["tree_id"]}},
-        {"name":"memhop_list_entanglements","description":"List all cross-tree entanglement events, sorted by strength.","inputSchema":{"type":"object","properties":{}}},
-        {"name":"memhop_entanglement_detail","description":"Get details of a specific entanglement event.","inputSchema":{"type":"object","properties":{"event_id":{"type":"string"}},"required":["event_id"]}},
-        {"name":"memhop_list_worldviews","description":"List all worldview patterns emerged from memory entanglements.","inputSchema":{"type":"object","properties":{}}},
-        {"name":"memhop_worldview_detail","description":"Get details of a specific worldview pattern.","inputSchema":{"type":"object","properties":{"wv_id":{"type":"string"}},"required":["wv_id"]}},
-        {"name":"memhop_my_worldview","description":"Get a natural language summary of stable worldview patterns.","inputSchema":{"type":"object","properties":{}}}
+        {"name":"memhop_store","description":"Store a new memory/episode or knowledge chunk (ADD-only, auto-dedup).","inputSchema":{"type":"object","properties":{
+            "text":{"type":"string"},
+            "agent_response":{"type":"string","description":"AI's response to this turn (optional, creates DialogueTurn)"},
+            "kind":{"type":"string","description":"'episode' (default) or 'knowledge'"},
+            "session_id":{"type":"string"},
+            "tree_path":{"type":"string","description":"Knowledge tree path (required for kind=knowledge)"},
+            "source_path":{"type":"string","description":"Original file path (for knowledge)"},
+            "source_textunit":{"type":"string","description":"Text unit reference (e.g., '§3.2')"},
+            "valence":{"type":"number"},
+            "arousal":{"type":"number"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"},
+            "auto_create_tree":{"type":"boolean","description":"Auto-create knowledge tree from accumulated context (default: true)"},
+            "auto_compress":{"type":"boolean","description":"Auto-compress context to knowledge when enough turns (default: true)"},
+            "match_threshold":{"type":"number","description":"Context match cosine threshold (default: 0.75)"},
+            "context_half_life":{"type":"number","description":"Context time decay half-life in hours (default: 12.0)"},
+            "llm_compressed_summary":{"type":"string","description":"LLM-generated compressed summary for context"},
+            "llm_keywords":{"type":"array","items":{"type":"string"},"description":"LLM-extracted keywords"}},
+            "required":["text","agent_id"]}},
+        {"name":"memhop_recall","description":"Recall memories matching a query. Returns unified results across all types.","inputSchema":{"type":"object","properties":{
+            "query":{"type":"string"},
+            "session_id":{"type":"string"},
+            "limit":{"type":"integer"},
+            "mode":{"type":"string","description":"'retrieval' (HNSW+CrossEncoder, default) or 'associative' (Hopfield+spread)"},
+            "use_reranker":{"type":"boolean","description":"Enable CrossEncoder reranking (Retrieval mode only, default: true)"},
+            "kind_filter":{"type":"array","items":{"type":"string"},"description":"Filter by kind: 'episode', 'knowledge'. Empty = all."},
+            "tree":{"type":"string","description":"Filter by knowledge tree path."},
+            "query_vector":{"type":"array","items":{"type":"number"}},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"},
+            "context_id":{"type":"string","description":"Scope recall to a specific context (reduces forgetfulness)"},
+            "use_worldview_filter":{"type":"boolean","description":"Filter results conflicting with worldview (reduces hallucination, default: true)"},
+            "llm_conflict_check":{"type":"string","description":"LLM-provided conflict detection result"}},
+            "required":["query","agent_id"]}},
+        {"name":"memhop_reflect","description":"Create a reflection engram","inputSchema":{"type":"object","properties":{
+            "content":{"type":"string"},
+            "kind":{"type":"string"},
+            "session_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["content","kind","agent_id"]}},
+        {"name":"memhop_dream","description":"Run Dream consolidation cycle (includes Knowledge engrams).","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"},
+            "context_compress":{"type":"boolean","description":"Compress all pending contexts (default: true)"},
+            "llm_patterns":{"type":"array","items":{"type":"object"},"description":"LLM-discovered patterns"},
+            "llm_contradictions":{"type":"array","items":{"type":"object"},"description":"LLM-discovered contradictions"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_stats","description":"Get brain statistics","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_count","description":"Get total engram count","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_health","description":"Get health metrics (uptime, version, basic stats)","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_complete_plan","description":"Complete a plan (mark as Completed, optionally summarize)","inputSchema":{"type":"object","properties":{
+            "plan_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["plan_id","agent_id"]}},
+        {"name":"memhop_get_plan_tree","description":"Get the plan tree (all root plans or descendants of a given plan)","inputSchema":{"type":"object","properties":{
+            "plan_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_get_chat_history","description":"Get archived dialogue turns for a plan","inputSchema":{"type":"object","properties":{
+            "plan_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["plan_id","agent_id"]}},
+        {"name":"memhop_plan_stats","description":"Get aggregated plan statistics (domain distribution + tone trends)","inputSchema":{"type":"object","properties":{
+            "start_time":{"type":"integer"},
+            "end_time":{"type":"integer"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_mount_tree","description":"Mount a knowledge tree from a file or directory path. Path is the identity.","inputSchema":{"type":"object","properties":{
+            "path":{"type":"string"},
+            "domain":{"type":"string","description":"'code', 'book', 'paper', 'doc', or 'generic'"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["path","agent_id"]}},
+        {"name":"memhop_unmount_tree","description":"Unmount a knowledge tree by tree path.","inputSchema":{"type":"object","properties":{
+            "tree_path":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["tree_path","agent_id"]}},
+        {"name":"memhop_tree_status","description":"List all mounted knowledge trees with metadata.","inputSchema":{"type":"object","properties":{
+            "tree_path":{"type":"string","description":"Optional: get status for a specific tree. Returns all trees if omitted."},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_knowledge_search","description":"[DEPRECATED] Use memhop_recall with tree and kind_filter instead.","inputSchema":{"type":"object","properties":{
+            "query":{"type":"string"},
+            "shelf_id":{"type":"string"},
+            "limit":{"type":"integer"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["query","shelf_id","agent_id"]}},
+        {"name":"memhop_forget","description":"Forget a dialogue turn and its associated engrams","inputSchema":{"type":"object","properties":{
+            "turn_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["turn_id","agent_id"]}},
+        {"name":"memhop_list_schemas","description":"List all emerged schema engrams","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_create_tree","description":"Create a knowledge tree for organizing memories by domain.","inputSchema":{"type":"object","properties":{
+            "name":{"type":"string"},
+            "domain":{"type":"string","description":"'work', 'travel', 'parenting', 'generic', etc."},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["name","agent_id"]}},
+        {"name":"memhop_list_trees","description":"List all knowledge trees.","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_get_tree","description":"Get details of a specific knowledge tree.","inputSchema":{"type":"object","properties":{
+            "tree_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["tree_id","agent_id"]}},
+        {"name":"memhop_move_to_tree","description":"Move an engram to a specific knowledge tree.","inputSchema":{"type":"object","properties":{
+            "engram_id":{"type":"string"},
+            "tree_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["engram_id","tree_id","agent_id"]}},
+        {"name":"memhop_delete_tree","description":"Delete a knowledge tree (does not delete associated engrams).","inputSchema":{"type":"object","properties":{
+            "tree_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["tree_id","agent_id"]}},
+        {"name":"memhop_list_entanglements","description":"List all cross-tree entanglement events, sorted by strength.","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_entanglement_detail","description":"Get details of a specific entanglement event.","inputSchema":{"type":"object","properties":{
+            "event_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["event_id","agent_id"]}},
+        {"name":"memhop_list_worldviews","description":"List all worldview patterns emerged from memory entanglements.","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_worldview_detail","description":"Get details of a specific worldview pattern.","inputSchema":{"type":"object","properties":{
+            "wv_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["wv_id","agent_id"]}},
+        {"name":"memhop_my_worldview","description":"Get a natural language summary of stable worldview patterns.","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}}
     ]})
 }
 
-/// Get or open a Brain for the given `db_path`.
+/// Get or open a Brain for the given `agent_id`.
 ///
-/// Opens a new Brain if one is not already cached for this path, then
-/// returns a mutable reference to it. Also rebuilds the shelf registry
-/// after opening a new Brain.
+/// Resolves the database path from `MEMHOP_BRAINS_DIR` (defaults to
+/// `~/.memhop/brains/{agent_id}/memhop.db`), opens a new Brain if one
+/// is not already cached, then returns a mutable reference to it.
+/// Also rebuilds the shelf registry after opening a new Brain.
 fn get_or_open_brain<'a>(
-    brains: &'a mut HashMap<String, Brain>,
-    db_path: &'a str,
+    brains: &'a mut HashMap<String, BrainState>,
+    agent_id: &'a str,
     onnx_model_path: &'a Option<String>,
     reranker_model_path: &'a Option<String>,
 ) -> Result<&'a mut Brain, String> {
-    if !brains.contains_key(db_path) {
+    // Evict idle brains before potentially creating a new one
+    let now = Instant::now();
+    brains.retain(|_, state| now.duration_since(state.last_used) < BRAIN_IDLE_TIMEOUT);
+
+    if !brains.contains_key(agent_id) {
+        let brains_dir = std::env::var("MEMHOP_BRAINS_DIR")
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME")
+                    .or_else(|_| std::env::var("USERPROFILE"))
+                    .unwrap_or_else(|_| ".".to_string());
+                format!("{}/{}", home, memhop::DEFAULT_BRAINS_DIR)
+            });
+        let db_path = format!("{}/{}/memhop.db", brains_dir, agent_id);
+
         let mut brain_config = BrainConfig::default();
         if let Some(path) = onnx_model_path {
             brain_config.onnx_model_path = Some(path.clone());
@@ -160,16 +276,18 @@ fn get_or_open_brain<'a>(
             brain_config.reranker_model_path = Some(path.clone());
             eprintln!("memhop-mcp-server: using reranker model from {}", path);
         }
-        let brain =
-            Brain::open(db_path, brain_config, None).map_err(|e| format!("failed to open brain: {}", e))?;
+        let brain = Brain::open(&db_path, brain_config, None)
+            .map_err(|e| format!("failed to open brain: {}", e))?;
         if let Ok(mut manager) = get_shelf_manager().lock() {
             let _ = manager.rebuild_registry(&brain);
         }
-        brains.insert(db_path.to_string(), brain);
+        brains.insert(agent_id.to_string(), BrainState { brain, last_used: now });
     }
-    brains
-        .get_mut(db_path)
-        .ok_or_else(|| "Brain not found after open".to_string())
+    let state = brains
+        .get_mut(agent_id)
+        .ok_or_else(|| "Brain not found after open".to_string())?;
+    state.last_used = now;
+    Ok(&mut state.brain)
 }
 
 fn tool_call(brain: &mut Brain, params: Option<&Value>, brains_count: usize) -> Result<Value, String> {
@@ -333,6 +451,9 @@ fn tool_store(brain: &mut Brain, args: &Value) -> Result<Value, String> {
                 "plan_id": output.current_plan_id,
                 "plan_hint": format!("{:?}", output.plan_hint),
                 "plan_name": output.plan_name,
+                "context_id": output.context_id,
+                "context_summary": null,
+                "phase": output.phase,
             }))
         }
         "knowledge" => {
@@ -407,6 +528,9 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
             v
         });
 
+    // v0.13.0: Parse context_id for scoped recall
+    let context_id = args.get("context_id").and_then(|v| v.as_str()).map(|s| s.to_string());
+
     // v0.11.1: Read mode from args, default to Retrieval (HNSW + CrossEncoder)
     let mode = match args.get("mode").and_then(|v| v.as_str()).unwrap_or("retrieval") {
         "associative" => memhop::RecallMode::Associative,
@@ -440,7 +564,7 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         time_from: None,
         time_to: None,
         attach_knowledge: true,
-        context_id: None,
+        context_id,
     };
 
     eprintln!("memhop-recall: hopfield_empty={} hnsw_empty={} memory_count={}",
@@ -495,6 +619,14 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
             "latency_us": resp.trace.latency_us,
             "hopfield_candidates": resp.trace.hopfield_candidates,
             "spread_steps": resp.trace.spread_steps,
+        },
+        "contexts_summary": [],
+        "worldview_context": resp.worldview_context,
+        "cognitive_conflicts": resp.cognitive_conflicts,
+        "recall_quality": {
+            "scope": "global",
+            "context_hit_count": 0,
+            "total_candidates": 0
         }
     }))
 }
@@ -537,6 +669,9 @@ fn tool_dream(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
         "knowledge_processed": report.knowledge_processed,
         "cross_kind_new_associations": report.cross_kind_new_associations,
         "hnsw_compacted": report.hnsw_compacted,
+        "contexts_compressed": 0,
+        "dormant_moved": 0,
+        "archived": 0,
     }))
 }
 
@@ -828,7 +963,7 @@ fn tool_create_tree(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         .get("domain")
         .and_then(|v| v.as_str())
         .unwrap_or("generic");
-    let tree = brain.create_tree(&name, domain).map_err(|e| e.to_string())?;
+    let tree = brain.create_tree(&name, domain, false).map_err(|e| e.to_string())?;
     Ok(json!({"tree_id": tree.id, "name": tree.name, "domain": tree.domain}))
 }
 

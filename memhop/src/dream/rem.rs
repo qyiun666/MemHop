@@ -248,6 +248,7 @@ pub(crate) fn rem_entanglement_creation(brain: &mut Brain, report: &mut DreamRep
             // Collect engrams with tree_refs from both anchors
             let mut tree_ids_set: HashSet<String> = HashSet::new();
             let mut node_ids: Vec<String> = Vec::new();
+            let mut context_ids: Vec<String> = Vec::new();
 
             for id in ids_a.iter().chain(ids_b.iter()) {
                 let txn = brain.storage.begin_read()
@@ -258,6 +259,12 @@ pub(crate) fn rem_entanglement_creation(brain: &mut Brain, report: &mut DreamRep
                     tree_ids_set.insert(tr.tree_id.clone());
                     if !node_ids.contains(&engram.id) {
                         node_ids.push(engram.id.clone());
+                    }
+                    // v0.13.0: collect context IDs
+                    if let Some(ref ctx_id) = engram.context_id
+                        && !context_ids.contains(ctx_id)
+                    {
+                        context_ids.push(ctx_id.clone());
                     }
                 }
                 drop(txn);
@@ -275,6 +282,7 @@ pub(crate) fn rem_entanglement_creation(brain: &mut Brain, report: &mut DreamRep
                     tree_ids,
                     context,
                     EntanglementTrigger::DreamEmergence,
+                    context_ids,
                 );
                 report.entanglements_created += 1;
             }
@@ -415,6 +423,8 @@ pub(crate) fn rem_worldview_emergence(brain: &mut Brain, report: &mut DreamRepor
                 stability,
                 emerged_at: now,
                 last_reinforced_at: now,
+                centroid: None,
+                related_context_ids: Vec::new(),
             };
             let mut wtxn = brain.storage.begin_write()
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
