@@ -29,27 +29,57 @@ pub(crate) fn check_duplicate(
         _ => 0.95,
     };
 
-    let cache = brain.engram_cache.borrow();
+    // Phase 1: Check EngramCache (fast path, O(N_cache))
     let vec_f32: Vec<f32> = vector.iter().map(|x| x.to_f32()).collect();
-
-    for (id, existing) in cache.entries() {
-        if existing.kind != *kind {
-            continue;
-        }
-
-        // For Knowledge, also check tree_path + source_path match
-        if *kind == EngramKind::Knowledge {
-            let etp = existing.tree_path.as_deref();
-            let esp = existing.source_path.as_deref();
-            if etp != tree_path || esp != source_path {
+    {
+        let cache = brain.engram_cache.borrow();
+        for (id, existing) in cache.entries() {
+            if existing.kind != *kind {
                 continue;
             }
+            // For Knowledge, also check tree_path + source_path match
+            if *kind == EngramKind::Knowledge {
+                let etp = existing.tree_path.as_deref();
+                let esp = existing.source_path.as_deref();
+                if etp != tree_path || esp != source_path {
+                    continue;
+                }
+            }
+            let existing_f32: Vec<f32> = existing.vector.iter().map(|x| x.to_f32()).collect();
+            let sim = cosine_similarity(&vec_f32, &existing_f32);
+            if sim > threshold {
+                return Some(id.clone());
+            }
         }
+    }
 
-        let existing_f32: Vec<f32> = existing.vector.iter().map(|x| x.to_f32()).collect();
-        let sim = cosine_similarity(&vec_f32, &existing_f32);
-        if sim > threshold {
-            return Some(id.clone());
+    // Phase 2: HNSW near-neighbor check (O(logN), covers evicted cache entries)
+    if brain.hnsw.is_empty() {
+        return None;
+    }
+    let candidates = brain.hnsw.search(vector, 5);
+    if candidates.is_empty() {
+        return None;
+    }
+    for (node_id, _score) in &candidates {
+        if let Some(engram_id) = brain.hnsw_id_map.get(node_id) {
+            if let Some(existing) = brain.engram_cache.borrow().get(engram_id) {
+                if existing.kind != *kind {
+                    continue;
+                }
+                if *kind == EngramKind::Knowledge {
+                    let etp = existing.tree_path.as_deref();
+                    let esp = existing.source_path.as_deref();
+                    if etp != tree_path || esp != source_path {
+                        continue;
+                    }
+                }
+                let existing_f32: Vec<f32> = existing.vector.iter().map(|x| x.to_f32()).collect();
+                let sim = cosine_similarity(&vec_f32, &existing_f32);
+                if sim > threshold {
+                    return Some(engram_id.clone());
+                }
+            }
         }
     }
     None
@@ -296,6 +326,11 @@ pub(crate) fn forget_batch(brain: &mut Brain, filter: &ForgetFilter) -> Result<u
     );
 
     // 3. Remove from each index/system
+    // E. LMDB delete — single write txn for all entries
+    let mut wtxn = brain
+        .storage
+        .begin_write()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
     for (id, engram) in &to_remove {
         // A. Hopfield remove
         brain.hopfield.remove_pattern(id);
@@ -317,19 +352,10 @@ pub(crate) fn forget_batch(brain: &mut Brain, filter: &ForgetFilter) -> Result<u
         // D. Graph remove node (removes all incident edges)
         let _ = brain.graph.remove_node(&brain.storage, id);
 
-        // E. LMDB delete
-        {
-            let mut wtxn = brain
-                .storage
-                .begin_write()
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
-            brain.storage
-                .delete_hippocampus(&mut wtxn, id)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
-            wtxn
-                .commit()
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        }
+        // E. LMDB delete (within single txn)
+        brain.storage
+            .delete_hippocampus(&mut wtxn, id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
         // F. Remove from EngramCache if present
         brain.engram_cache.borrow_mut().remove(id);
@@ -342,6 +368,9 @@ pub(crate) fn forget_batch(brain: &mut Brain, filter: &ForgetFilter) -> Result<u
             brain.last_chunk_per_tree.remove(tp);
         }
     }
+    wtxn
+        .commit()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
     // 4. Persist HNSW tombstones to LMDB config
     {

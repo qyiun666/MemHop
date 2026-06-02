@@ -29,20 +29,39 @@ pub(crate) fn recall_associative(brain: &Brain, req: &RecallRequest) -> Result<R
     };
     let query_f32: Vec<f32> = query_vector.iter().map(|&x| x.to_f32()).collect();
 
+    // v0.13.2: Semantic Gate — auto-select best matching context when none specified
+    // Uses read-only context matching; match_context() requires &mut which is not
+    // available in recall_associative(&self).
+    let context_id = req.context_id.clone().or_else(|| {
+        let now = crate::brain::now_millis();
+        let best = brain.active_contexts.contexts().iter()
+            .filter(|ctx| ctx.hit_count > 0)
+            .max_by(|a, b| {
+                let score_a = a.match_score(&query_f32, brain.config.context_half_life_hours, now);
+                let score_b = b.match_score(&query_f32, brain.config.context_half_life_hours, now);
+                score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
+            });
+        best.map(|ctx| ctx.id.clone())
+    });
+    let req_with_ctx = RecallRequest {
+        context_id: context_id.clone(),
+        ..req.clone()
+    };
+
     // v0.9.0: Mode dispatch
-    match req.mode {
+    match req_with_ctx.mode {
         RecallMode::Retrieval => {
-            return crate::recall::retrieval::recall_retrieval(brain, req, &query_vector, start);
+            return crate::recall::retrieval::recall_retrieval(brain, &req_with_ctx, &query_vector, start);
         }
         RecallMode::Associative => {}
     }
 
     // 2. L0 Cortex
-    let working_memory = brain.cortex.recent(&req.session_id, req.recent_limit);
+    let working_memory = brain.cortex.recent(&req_with_ctx.session_id, req_with_ctx.recent_limit);
 
     // 3. PGT recall
-    let (pgt_results, pgt_layer) = if req.active_plan_id.is_some() {
-        crate::recall::pgt::pgt_recall(brain, &req.query, &query_f32, req)
+    let (pgt_results, pgt_layer) = if req_with_ctx.active_plan_id.is_some() {
+        crate::recall::pgt::pgt_recall(brain, &req_with_ctx.query, &query_f32, &req_with_ctx)
     } else {
         (Vec::new(), None)
     };
@@ -97,19 +116,28 @@ pub(crate) fn recall_associative(brain: &Brain, req: &RecallRequest) -> Result<R
 
     if let Ok(rtxn) = brain.storage.begin_read() {
         let activated_ids: Vec<String> = spread_result.activated.iter().map(|(id, _)| id.clone()).collect();
+
+        // Batch load: first check cache, then batch-read missed IDs from LMDB
+        let mut all_engrams: Vec<(String, Engram)> = Vec::with_capacity(activated_ids.len());
+        let mut missed: Vec<String> = Vec::new();
         for id in &activated_ids {
-            let engram = brain.engram_cache.borrow().get(id).cloned();
-            let engram = match engram {
-                Some(e) => e,
-                None => {
-                    if let Ok(Some(e)) = brain.storage.get_hippocampus(&rtxn, id) {
-                        brain.engram_cache.borrow_mut().insert(id.clone(), e.clone());
-                        e
-                    } else {
-                        continue;
-                    }
+            if let Some(e) = brain.engram_cache.borrow().get(id).cloned() {
+                all_engrams.push((id.clone(), e));
+            } else {
+                missed.push(id.clone());
+            }
+        }
+        if !missed.is_empty() {
+            if let Ok(batch) = brain.storage.get_hippocampus_batch(&rtxn, &missed) {
+                let mut cache = brain.engram_cache.borrow_mut();
+                for (id, e) in &batch {
+                    cache.insert(id.clone(), e.clone());
+                    all_engrams.push((id.clone(), e.clone()));
                 }
-            };
+            }
+        }
+
+        for (_id, engram) in all_engrams {
             if !req.kind_filter.is_empty() && !req.kind_filter.contains(&engram.kind) { continue; }
             if let Some(ref tree_path) = req.tree
                 && engram.kind == EngramKind::Knowledge
@@ -251,6 +279,7 @@ pub(crate) fn recall_associative(brain: &Brain, req: &RecallRequest) -> Result<R
         graph_associations,
         worldview_context,
         cognitive_conflicts,
+        scores: score_map,
         trace: RecallTrace {
             latency_us,
             gated_anchors: req.attention_anchors.clone(),

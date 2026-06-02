@@ -1,7 +1,5 @@
 //! Schema extraction and stability management.
 
-#![allow(dead_code)]
-
 use std::collections::HashMap;
 
 use half::f16;
@@ -156,6 +154,7 @@ fn generate_schema_id(episode_ids: &[String]) -> String {
 
 /// Compute pairwise cosine similarity matrix for a set of vectors.
 /// Returns (similarity_matrix, max_similarity, mean_similarity).
+#[expect(dead_code, reason = "reserved for schema extraction")]
 pub fn pairwise_similarities(vectors: &[&[f16]]) -> (Vec<Vec<f32>>, f32, f32) {
     let n = vectors.len();
     let mut matrix = vec![vec![0.0; n]; n];
@@ -181,6 +180,7 @@ pub fn pairwise_similarities(vectors: &[&[f16]]) -> (Vec<Vec<f32>>, f32, f32) {
 
 /// Check whether a set of episodes forms a valid schema cluster.
 /// Cluster is valid if mean pairwise similarity exceeds threshold.
+#[expect(dead_code, reason = "reserved for schema extraction")]
 pub fn is_cluster_valid(vectors: &[&[f16]], threshold: f32) -> bool {
     if vectors.len() < 2 {
         return false;

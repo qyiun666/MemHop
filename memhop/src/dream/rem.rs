@@ -28,8 +28,7 @@ pub(crate) fn rem_consolidate(brain: &mut Brain, report: &mut DreamReport) -> Re
     let mut edge_count = 0;
 
     for (id, engram) in &entries {
-        let query_f32: Vec<f32> = engram.vector.iter().map(|x| x.to_f32()).collect();
-        let neighbors = brain.hopfield.recall_topk(&query_f32, 5);
+        let neighbors = brain.hopfield_prerank(&engram.vector, 5);
         let mut merged = false;
 
         for (neighbor_id, sim) in &neighbors {
@@ -103,8 +102,7 @@ pub(crate) fn rem_schema_emergence(brain: &mut Brain, report: &mut DreamReport) 
         }
 
         // 用 Hopfield 找当前 Episode 的近邻
-        let query: Vec<f32> = episodes[i].1.vector.iter().map(|x| x.to_f32()).collect();
-        let neighbors = brain.hopfield.recall_topk(&query, 10);
+        let neighbors = brain.hopfield_prerank(&episodes[i].1.vector, 10);
 
         // 筛选出相似度 > 0.7 且未分配的 episodes
         let mut cluster: Vec<usize> = vec![i];
@@ -183,9 +181,7 @@ pub(crate) fn rem_cross_anchor_discovery(brain: &mut Brain, report: &mut DreamRe
                 drop(txn);
 
                 if let Some(engram_a) = engram_a {
-                    let query_f32: Vec<f32> =
-                        engram_a.vector.iter().map(|x| x.to_f32()).collect();
-                    let neighbors = brain.hopfield.recall_topk(&query_f32, 10);
+                    let neighbors = brain.hopfield_prerank(&engram_a.vector, 10);
 
                     for (neighbor_id, sim) in &neighbors {
                         if *sim > 0.8 && ids_b.contains(neighbor_id) {
@@ -488,8 +484,7 @@ pub(crate) fn dream_llm_contradictions(brain: &mut Brain, llm: &dyn LlmProvider,
     let mut detected = 0usize;
 
     for i in 0..episodes.len() {
-        let query_f32: Vec<f32> = episodes[i].1.vector.iter().map(|x| x.to_f32()).collect();
-        let neighbors = brain.hopfield.recall_topk(&query_f32, 20);
+        let neighbors = brain.hopfield_prerank(&episodes[i].1.vector, 20);
 
         for (neighbor_id, sim) in &neighbors {
             if *sim <= 0.8 {

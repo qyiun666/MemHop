@@ -1,7 +1,6 @@
-//! LMDB storage layer for the Brain — 10 sub-databases.
+//! LMDB storage layer for the Brain — 9 sub-databases.
 //!
 //! Sub-databases:
-//!   engrams         — id → bincode(Engram)
 //!   hippocampus     — id → bincode(Engram)
 //!   graph_edges     — source_id → bincode(Vec<Association>)
 //!   schemas         — id → bincode(SchemaExtra)
@@ -11,8 +10,6 @@
 //!   plan_tree       — plan_id → bincode(PlanNode)         (v0.8.0)
 //!   hnsw_index      — "hnsw" → bincode(HnswIndex bytes)   (v0.9.0)
 //!   dormant_contexts — id → bincode(DormantContext)        (v0.13.0)
-
-#![allow(dead_code)]
 
 use heed::types::{Bytes, Str};
 use heed::{Database, Env, EnvOpenOptions, RoTxn, RwTxn};
@@ -62,7 +59,6 @@ impl From<heed::Error> for StorageError {
 // ── Sub-database handles ─────────────────────────────────────
 
 pub(crate) struct BrainDb {
-    pub engrams: Database<Str, Bytes>,
     pub hippocampus: Database<Str, Bytes>,
     pub graph_edges: Database<Str, Bytes>,
     pub schemas: Database<Str, Bytes>,
@@ -101,7 +97,7 @@ impl LmdbStorage {
             EnvOpenOptions::new()
                 .map_size(2 * 1024 * 1024 * 1024)
                 .max_readers(128)
-                .max_dbs(11)
+                                .max_dbs(10)
                 .open(db_path)
                 .map_err(|e| StorageError::Open(format!("env open: {}", e)))?
         };
@@ -110,10 +106,7 @@ impl LmdbStorage {
             .write_txn()
             .map_err(|e| StorageError::Open(format!("write txn: {}", e)))?;
 
-        let engrams = env
-            .create_database(&mut wtxn, Some("engrams"))
-            .map_err(|e| StorageError::Open(format!("engrams db: {}", e)))?;
-        let hippocampus = env
+                let hippocampus = env
             .create_database(&mut wtxn, Some("hippocampus"))
             .map_err(|e| StorageError::Open(format!("hippocampus db: {}", e)))?;
         let graph_edges = env
@@ -147,8 +140,7 @@ impl LmdbStorage {
 
         Ok(LmdbStorage {
             env,
-            db: BrainDb {
-                engrams,
+                        db: BrainDb {
                 hippocampus,
                 graph_edges,
                 schemas,
@@ -177,91 +169,6 @@ impl LmdbStorage {
 
     pub fn close(&self) -> Result<(), StorageError> {
         Ok(())
-    }
-
-    // ── Engram read/write ──────────────────────────────────────
-
-    pub fn put_engram(
-        &self,
-        txn: &mut RwTxn<'_>,
-        id: &str,
-        engram: &Engram,
-    ) -> Result<(), StorageError> {
-        let bytes = bincode::serialize(engram)
-            .map_err(|e| StorageError::Write(format!("serialize engram: {}", e)))?;
-        self.db
-            .engrams
-            .put(txn, id, &bytes)
-            .map_err(|e| StorageError::Write(format!("put engram: {}", e)))
-    }
-
-    pub fn get_engram(
-        &self,
-        txn: &RoTxn<'_>,
-        id: &str,
-    ) -> Result<Option<Engram>, StorageError> {
-        match self.db.engrams.get(txn, id) {
-            Ok(Some(bytes)) => {
-                let engram: Engram = bincode::deserialize(bytes)
-                    .map_err(|e| StorageError::Read(format!("deserialize engram: {}", e)))?;
-                Ok(Some(engram))
-            }
-            Ok(None) => Ok(None),
-            Err(e) => Err(StorageError::Read(format!("get engram: {}", e))),
-        }
-    }
-
-    pub fn delete_engram(
-        &self,
-        txn: &mut RwTxn<'_>,
-        id: &str,
-    ) -> Result<bool, StorageError> {
-        self.db
-            .engrams
-            .delete(txn, id)
-            .map_err(|e| StorageError::Write(format!("delete engram: {}", e)))
-    }
-
-    pub fn engram_exists(
-        &self,
-        txn: &RoTxn<'_>,
-        id: &str,
-    ) -> Result<bool, StorageError> {
-        self.db.engrams.get(txn, id).map(|v| v.is_some()).map_err(|e| {
-            StorageError::Read(format!("engram exists: {}", e))
-        })
-    }
-
-    /// Iterate all engram IDs in the engrams database.
-    pub fn all_engram_ids(&self, txn: &RoTxn<'_>) -> Result<Vec<String>, StorageError> {
-        let mut ids = Vec::new();
-        let iter = self
-            .db
-            .engrams
-            .iter(txn)
-            .map_err(|e| StorageError::Read(format!("iter engrams: {}", e)))?;
-        for result in iter {
-            let (key, _) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
-            ids.push(key.to_string());
-        }
-        Ok(ids)
-    }
-
-    /// Iterate all engrams (id + value).
-    pub fn all_engrams(&self, txn: &RoTxn<'_>) -> Result<Vec<(String, Engram)>, StorageError> {
-        let mut out = Vec::new();
-        let iter = self
-            .db
-            .engrams
-            .iter(txn)
-            .map_err(|e| StorageError::Read(format!("iter engrams: {}", e)))?;
-        for result in iter {
-            let (key, val) = result.map_err(|e| StorageError::Read(format!("iter: {}", e)))?;
-            let engram: Engram = bincode::deserialize(val)
-                .map_err(|e| StorageError::Read(format!("deserialize: {}", e)))?;
-            out.push((key.to_string(), engram));
-        }
-        Ok(out)
     }
 
     // ── Hippocampus read/write ────────────────────────────────
@@ -332,6 +239,21 @@ impl LmdbStorage {
             entries.push((key.to_string(), engram));
         }
         Ok(entries)
+    }
+
+    /// Batch get hippocampus entries by IDs.
+    pub fn get_hippocampus_batch(
+        &self,
+        txn: &RoTxn<'_>,
+        ids: &[String],
+    ) -> Result<Vec<(String, Engram)>, StorageError> {
+        let mut results = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(engram) = self.get_hippocampus(txn, id)? {
+                results.push((id.clone(), engram));
+            }
+        }
+        Ok(results)
     }
 
     // ── Graph edges read/write ─────────────────────────────────

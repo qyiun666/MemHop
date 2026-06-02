@@ -283,6 +283,47 @@ impl ModernHopfield {
             .collect()
     }
 
+    /// v0.13.2: Rerank among candidate IDs using Hopfield energy (softmax).
+    /// Uses HNSW-pruned candidates for O(candidates) instead of O(N).
+    pub fn rerank(&self, query: &[f32], candidate_ids: &[String], k: usize) -> Vec<(String, f32)> {
+        if candidate_ids.is_empty() || k == 0 {
+            return Vec::new();
+        }
+        assert_eq!(query.len(), self.dim, "query dimension mismatch");
+
+        let indices: Vec<usize> = candidate_ids
+            .iter()
+            .filter_map(|id| self.id_to_idx.get(id.as_str()).copied())
+            .collect();
+
+        if indices.is_empty() {
+            return Vec::new();
+        }
+
+        let similarities: Vec<f32> = indices
+            .par_iter()
+            .map(|&idx| {
+                let pattern = &self.patterns[idx * self.dim..(idx + 1) * self.dim];
+                let sim = self.beta * dot_f16_f32(pattern, query);
+                sim * self.pattern_weights.get(idx).copied().unwrap_or(1.0)
+            })
+            .collect();
+
+        let weights = softmax(&similarities);
+        let k = k.min(indices.len());
+        let mut indexed: Vec<(usize, f32)> = weights.into_iter().enumerate().collect();
+        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        indexed
+            .into_iter()
+            .take(k)
+            .map(|(local_idx, conf)| {
+                let global_idx = indices[local_idx];
+                (self.idx_to_id[global_idx].clone(), conf)
+            })
+            .collect()
+    }
+
     pub fn len(&self) -> usize {
         self.idx_to_id.len()
     }

@@ -115,7 +115,7 @@ Agent 进程内部:
 
 ## 四、MCP 工具清单（完整）
 
-> 共 **27 个工具**（含 1 个 deprecated + 2 个 deprecated alias）。
+> 共 **30 个工具**（含 1 个 deprecated + 2 个 deprecated alias）。
 
 ### 4.1 核心记忆操作
 
@@ -252,25 +252,25 @@ store 后自动触发：
 | `use_worldview_filter` | boolean | 否 | 过滤与世界观冲突的结果（默认 true） |
 | `llm_conflict_check` | string | 否 | LLM 提供的冲突检测结果 JSON 字符串 |
 
-响应：
+响应（v0.13.2 分层格式 + 可信度分数）：
 ```json
 {
-  "results": [
+  "working_memory": [
     {
       "id": "eng_001",
       "text": "CSV 处理脚本的讨论...",
       "kind": "episode",
-      "source": "episode",
-      "tree_path": null
-    },
+      "tree_path": null,
+      "score": 0.95
+    }
+  ],
+  "associations": [
     {
-      "id": "eng_002",
-      "text": "pandas read_csv 用法...",
-      "kind": "knowledge",
-      "source": "knowledge",
-      "tree_path": "/docs/python",
-      "source_path": "/docs/python/pandas.md",
-      "source_textunit": "§3.2"
+      "id": "eng_003",
+      "text": "CSV 解析性能问题...",
+      "kind": "episode",
+      "tree_path": null,
+      "score": 0.82
     }
   ],
   "knowledge_memories": [
@@ -279,12 +279,14 @@ store 后自动触发：
       "text": "pandas read_csv 用法...",
       "tree_path": "/docs/python",
       "source_path": "/docs/python/pandas.md",
-      "source_textunit": "§3.2"
+      "source_textunit": "§3.2",
+      "score": 0.67
     }
   ],
   "schemas": [
     {"id": "sch_001", "text": "用户偏好先抽象后具体"}
   ],
+  "emotional_echoes": [],
   "hit_turns": [
     {
       "engram_id": "eng_001",
@@ -317,21 +319,20 @@ store 后自动触发：
       "description": "CoShelf: same knowledge tree"
     }
   ],
+  "worldview_context": ["[工作方式] 倾向于先抽象再具体 (稳定度: 0.8)"],
+  "cognitive_conflicts": [],
   "trace": {
     "latency_us": 1234,
     "hopfield_candidates": 80,
     "spread_steps": 3
-  },
-  "contexts_summary": [],
-  "worldview_context": ["[工作方式] 倾向于先抽象再具体 (稳定度: 0.8)"],
-  "cognitive_conflicts": [],
-  "recall_quality": {
-    "scope": "global",
-    "context_hit_count": 0,
-    "total_candidates": 0
   }
 }
 ```
+
+**响应说明**：
+- 结果按记忆层级分层返回：`working_memory`(L0)、`associations`(L1)、`knowledge_memories`(L2)
+- 每条结果附带 `score` 可信度分数（0~1），可直接用于 Prompt 标注 `[高/中/低可信度]`
+- 不再有扁平 `results` 数组和硬编码的 `contexts_summary`/`recall_quality`
 
 **recall 质量机制**：
 - `context_id` 指定时 → 只返回该上下文内的记忆（降失憶率）
@@ -398,9 +399,9 @@ store 后自动触发：
   "knowledge_processed": 4,
   "cross_kind_new_associations": 2,
   "hnsw_compacted": 0,
-  "contexts_compressed": 0,
-  "dormant_moved": 0,
-  "archived": 0
+  "contexts_compressed": 2,
+  "dormant_moved": 1,
+  "archived": 3
 }
 ```
 
@@ -801,7 +802,107 @@ memhop 有两套不同的知识树概念：
 
 ---
 
-### 4.6 废弃工具（向后兼容）
+### 4.6 上下文管理（v0.13.2）
+
+| 工具 | 用途 | 版本 |
+|------|------|------|
+| `memhop_list_contexts` | 列出活跃上下文 | v0.13.2 |
+| `memhop_compress_context` | 将上下文压缩到知识树 | v0.13.2 |
+| `memhop_context_stats` | 获取上下文系统统计 | v0.13.2 |
+
+#### memhop_list_contexts
+
+请求：
+```json
+{
+  "name": "memhop_list_contexts",
+  "arguments": {
+    "agent_id": "zt_mac"
+  }
+}
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agent_id` | string | 是 | Agent 标识 |
+
+响应：
+```json
+{
+  "active_contexts": [
+    {
+      "id": "ctx_1717200000",
+      "summary": "Python CSV 处理讨论",
+      "plan_id": "plan_xxx",
+      "turn_count": 8,
+      "hit_count": 3,
+      "last_active": 1717203600000,
+      "created_at": 1717200000000,
+      "phase": "full",
+      "compressed_summary": "用户需要CSV处理脚本...",
+      "tree_id": "tree_xxx"
+    }
+  ],
+  "active_count": 1,
+  "dormant_count": 5
+}
+```
+
+#### memhop_compress_context
+
+请求：
+```json
+{
+  "name": "memhop_compress_context",
+  "arguments": {
+    "agent_id": "zt_mac",
+    "context_id": "ctx_1717200000"
+  }
+}
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agent_id` | string | 是 | Agent 标识 |
+| `context_id` | string | 是 | 要压缩的上下文 ID |
+
+响应：
+```json
+{
+  "status": "ok",
+  "context_id": "ctx_1717200000",
+  "tree_id": "tree_xxx"
+}
+```
+
+#### memhop_context_stats
+
+请求：
+```json
+{
+  "name": "memhop_context_stats",
+  "arguments": {
+    "agent_id": "zt_mac"
+  }
+}
+```
+
+响应：
+```json
+{
+  "phase": "full",
+  "active_count": 2,
+  "dormant_count": 5,
+  "max_active_contexts": 5,
+  "context_match_threshold": 0.75,
+  "context_half_life_hours": 12.0,
+  "total_engrams": 1234
+}
+```
+
+---
+
+### 4.7 废弃工具（向后兼容）
 
 | 工具 | 状态 | 替代方案 |
 |------|------|---------|
@@ -844,8 +945,8 @@ memhop 有两套不同的知识树概念：
     └── 通过 memhop_my_worldview 注入 LLM system prompt
 ```
 
-> 注意：没有 `memhop_list_contexts`、`memhop_context_detail`、`memhop_set_context_active` 等工具。
-> 上下文管理是 memhop 内部自动完成的，Agent 只能通过 `context_id` 参数在 recall 时指定范围。
+> v0.13.2 新增 `memhop_list_contexts`、`memhop_compress_context`、`memhop_context_stats` 三个上下文管理工具。
+> Agent 现在可以主动管理上下文：列出活跃/休眠上下文、压缩上下文到知识树、获取统计信息。
 
 ---
 
@@ -942,9 +1043,9 @@ Amygdala 的权重持久化 → Agent 自行管理本地状态
 ```
 
 区别：
-- 新 API 返回的 `results[]` 中每条结果包含 `id`、`text`、`kind`、`source` 等完整字段
-- 新 API 不支持 `score` 字段（旧 API 的 score 也是硬编码 0.0，无实际意义）
-- 如果确实需要分数，memhop 可以考虑未来在 results 中添加 `score`（当前无此需求）
+- 新 API 返回的分层结构中每条结果包含 `score` 可信度分数，可直接用于 Prompt 标注
+- 支持 `kind_filter` 按类型过滤
+- 支持 `mode` 切换检索策略
 
 ### 7.5 不存在的工具清单（防止幻觉）
 
@@ -953,8 +1054,7 @@ Amygdala 的权重持久化 → Agent 自行管理本地状态
 | 不存在的工具 | 建议替代 |
 |-------------|---------|
 | `memhop_update` | 不用。见 7.1 Amygdala 方案 |
-| `memhop_list_contexts` | 不存在。上下文管理是自动的 |
-| `memhop_context_detail` | 不存在 |
+| `memhop_context_detail` | 不存在，用 `memhop_list_contexts` |
 | `memhop_set_context_active` | 不存在 |
 | `memhop_get_plans` | 用 `memhop_get_plan_tree` |
 | `memhop_mount_shelf` / `memhop_unmount_shelf` | 存在但 deprecated，直接用 `mount_tree` / `unmount_tree` |
@@ -965,8 +1065,8 @@ Amygdala 的权重持久化 → Agent 自行管理本地状态
 
 | 组件 | 版本 |
 |------|------|
-| memhop core | 0.13.1 |
-| memhop-mcp-server | 0.13.1 |
-| 本指南最后更新 | v0.13.1 |
+| memhop core | 0.13.2 |
+| memhop-mcp-server | 0.13.2 |
+| 本指南最后更新 | v0.13.2 |
 
 API 变更协议参见 [G-06: 跨项目依赖链协议](.qoder/rules/G-06-跨项目依赖链协议.md)。

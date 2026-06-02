@@ -41,9 +41,6 @@ pub(crate) mod tone_extractor;  // Rule-based tone extraction
 mod organize;                    // v0.12.2: 每轮对话自动整理
 pub mod session;                 // v0.12.2: Session 上下文聚合
 
-// ── 旧版引擎（向后兼容） ────────────────────────────────────
-mod engine;      // MemHop 旧版引擎
-
 // ── 顶层 Brain API ──────────────────────────────────────────
 mod brain;       // 新版 Brain 三层架构 API
 pub(crate) mod recall; // v0.12.2: Recall subsystem

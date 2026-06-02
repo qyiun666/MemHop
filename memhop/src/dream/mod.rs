@@ -6,6 +6,7 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::brain::Brain;
+use crate::engram::Engram;
 use crate::error::Result;
 use crate::types::DreamReport;
 
@@ -96,6 +97,36 @@ pub fn dream(brain: &mut Brain) -> Result<DreamReport> {
     }
     brain.llm = saved_llm;
 
+    // v0.13.2: Reconsolidation — boost vitality of recently-recalled engrams
+    {
+        let recalled: Vec<String> = brain.recalled_buffer.borrow().clone();
+        if !recalled.is_empty() {
+            if let Ok(txn) = brain.storage.begin_read() {
+                let mut to_boost: Vec<(String, Engram)> = Vec::new();
+                for id in &recalled {
+                    if let Ok(Some(mut e)) = brain.storage.get_hippocampus(&txn, id) {
+                        // Boost vitality by 0.05, cap at 1.0
+                        let old = e.vitality;
+                        e.vitality = (e.vitality + 0.05).min(1.0);
+                        if (e.vitality - old).abs() > 0.001 {
+                            to_boost.push((id.clone(), e));
+                        }
+                    }
+                }
+                drop(txn);
+                if !to_boost.is_empty() {
+                    if let Ok(mut wtxn) = brain.storage.begin_write() {
+                        for (id, e) in &to_boost {
+                            let _ = brain.storage.put_hippocampus(&mut wtxn, id, e);
+                        }
+                        let _ = wtxn.commit();
+                    }
+                }
+            }
+            brain.recalled_buffer.borrow_mut().clear();
+        }
+    }
+
     // v0.11.0: HNSW compact — rebuild index without tombstoned nodes
     {
         let ratio = brain.hnsw.tombstone_ratio();
@@ -122,13 +153,6 @@ pub fn dream(brain: &mut Brain) -> Result<DreamReport> {
     brain.growth.dream_cycles += 1;
     report.duration_ms = start.elapsed().as_millis() as u64;
     Ok(report)
-}
-
-/// 内部 dream（无报告输出）。
-#[allow(dead_code)]
-pub(crate) fn dream_internal(brain: &mut Brain) -> Result<()> {
-    let _ = dream(brain)?;
-    Ok(())
 }
 
 // ── 辅助函数 ──────────────────────────────────────────

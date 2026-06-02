@@ -5,8 +5,6 @@
 //! v0.13.0: DormantContextPool for three-stage context lifecycle
 //! (active → dormant → archive).
 
-#![allow(dead_code)]
-
 use half::f16;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -206,6 +204,7 @@ impl ContextSnapshot {
     }
 
     /// Convert centroid to f32 vector.
+    #[expect(dead_code, reason = "reserved for context operations")]
     fn centroid_f32(&self) -> Vec<f32> {
         self.centroid.iter().map(|&v| v.to_f32()).collect()
     }

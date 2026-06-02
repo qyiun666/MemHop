@@ -374,6 +374,17 @@ fn tools_list() -> Value {
             "required":["wv_id","agent_id"]}},
         {"name":"memhop_my_worldview","description":"Get a natural language summary of stable worldview patterns.","inputSchema":{"type":"object","properties":{
             "agent_id":{"type":"string","description":"Agent identifier for multi-agent isolation"}},
+            "required":["agent_id"]}},
+        // ── v0.13.2: Context management tools ──
+        {"name":"memhop_list_contexts","description":"List active and dormant contexts with stats.","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier"}},
+            "required":["agent_id"]}},
+        {"name":"memhop_compress_context","description":"Compress a context into a knowledge tree.","inputSchema":{"type":"object","properties":{
+            "context_id":{"type":"string"},
+            "agent_id":{"type":"string","description":"Agent identifier"}},
+            "required":["context_id","agent_id"]}},
+        {"name":"memhop_context_stats","description":"Get context system statistics.","inputSchema":{"type":"object","properties":{
+            "agent_id":{"type":"string","description":"Agent identifier"}},
             "required":["agent_id"]}}
     ]})
 }
@@ -473,6 +484,10 @@ fn tool_call(brain: &mut Brain, params: Option<&Value>, brains_count: usize) -> 
         "memhop_list_worldviews" => tool_list_worldviews(brain, args),
         "memhop_worldview_detail" => tool_worldview_detail(brain, args),
         "memhop_my_worldview" => tool_my_worldview(brain, args),
+        // ── v0.13.2: Context management tools ──
+        "memhop_list_contexts" => tool_list_contexts(brain, args),
+        "memhop_compress_context" => tool_compress_context(brain, args),
+        "memhop_context_stats" => tool_context_stats(brain, args),
         _ => Err(format!("Unknown tool: {}", name)),
     }
 }
@@ -714,61 +729,44 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
         eprintln!("memhop-recall: sample_ids={:?}", sample);
     }
 
-    let mut results: Vec<Value> = Vec::new();
-    for e in &resp.working_memory {
-        results.push(json!({
-            "id": e.id, "text": e.text,
-            "kind": format!("{}", e.kind), "source": "episode",
-            "tree_path": e.tree_path,
-        }));
-    }
-    for e in &resp.knowledge_memories {
-        results.push(json!({
-            "id": e.id, "text": e.text,
-            "kind": "knowledge", "source": "knowledge",
-            "tree_path": e.tree_path,
-            "source_path": e.source_path,
-            "source_textunit": e.source_textunit,
-        }));
-    }
-    for e in &resp.associations {
-        // Only add associations that are not already in working_memory or knowledge_memories
-        if !results.iter().any(|r| r["id"] == e.id) {
-            results.push(json!({
-                "id": e.id, "text": e.text,
-                "kind": format!("{}", e.kind), "source": "episode",
-                "tree_path": e.tree_path,
-            }));
-        }
-    }
-    results.truncate(limit);
+    let score_of = |id: &str| resp.scores.get(id).copied();
 
     Ok(json!({
-        "results": results,
+        "working_memory": resp.working_memory.iter().map(|e| json!({
+            "id": e.id, "text": e.text,
+            "kind": format!("{}", e.kind),
+            "tree_path": e.tree_path,
+            "score": score_of(&e.id),
+        })).collect::<Vec<_>>(),
+        "associations": resp.associations.iter().map(|e| json!({
+            "id": e.id, "text": e.text,
+            "kind": format!("{}", e.kind),
+            "tree_path": e.tree_path,
+            "score": score_of(&e.id),
+        })).collect::<Vec<_>>(),
         "knowledge_memories": resp.knowledge_memories.iter().map(|e| json!({
             "id": e.id, "text": &e.text,
             "tree_path": e.tree_path,
             "source_path": e.source_path,
             "source_textunit": e.source_textunit,
+            "score": score_of(&e.id),
         })).collect::<Vec<_>>(),
         "schemas": resp.schemas.iter().map(|e| json!({"id": e.id, "text": e.text})).collect::<Vec<_>>(),
         "hit_turns": resp.hit_turns,
         "aggregated_sessions": resp.aggregated_sessions,
         "tree_contexts": resp.tree_contexts,
         "graph_associations": resp.graph_associations,
+        "worldview_context": resp.worldview_context,
+        "cognitive_conflicts": resp.cognitive_conflicts,
+        "emotional_echoes": resp.emotional_echoes.iter().map(|e| json!({
+            "id": e.id, "text": e.text,
+            "score": score_of(&e.id),
+        })).collect::<Vec<_>>(),
         "trace": {
             "latency_us": resp.trace.latency_us,
             "hopfield_candidates": resp.trace.hopfield_candidates,
             "spread_steps": resp.trace.spread_steps,
         },
-        "contexts_summary": [],
-        "worldview_context": resp.worldview_context,
-        "cognitive_conflicts": resp.cognitive_conflicts,
-        "recall_quality": {
-            "scope": "global",
-            "context_hit_count": 0,
-            "total_candidates": 0
-        }
     }))
 }
 
@@ -800,7 +798,64 @@ fn tool_reflect(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     Ok(json!({"reflection_id": id}))
 }
 
-fn tool_dream(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
+// ── v0.13.2: Context management tools ──
+
+fn tool_list_contexts(brain: &Brain, _args: &Value) -> Result<Value, String> {
+    let contexts: Vec<Value> = brain.active_contexts().contexts().iter().map(|ctx| json!({
+        "id": ctx.id,
+        "summary": ctx.summary,
+        "plan_id": ctx.plan_id,
+        "turn_count": ctx.turn_count,
+        "hit_count": ctx.hit_count,
+        "last_active": ctx.last_active,
+        "created_at": ctx.created_at,
+        "phase": format!("{}", brain.phase()),
+        "compressed_summary": ctx.compressed_summary,
+        "tree_id": ctx.tree_id,
+    })).collect();
+    let dormant_count = brain.dormant_contexts().len();
+    Ok(json!({
+        "active_contexts": contexts,
+        "active_count": contexts.len(),
+        "dormant_count": dormant_count,
+    }))
+}
+
+fn tool_compress_context(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    let ctx_id = s(args, "context_id")?;
+    match brain.compress_context(&ctx_id).map_err(|e| e.to_string())? {
+        Some(tree_id) => Ok(json!({
+            "status": "ok",
+            "context_id": ctx_id,
+            "tree_id": tree_id,
+        })),
+        None => Ok(json!({
+            "status": "not_found",
+            "context_id": ctx_id,
+        })),
+    }
+}
+
+fn tool_context_stats(brain: &Brain, _args: &Value) -> Result<Value, String> {
+    let cfg = brain.config();
+    Ok(json!({
+        "phase": format!("{}", brain.phase()),
+        "active_count": brain.active_contexts().contexts().len(),
+        "dormant_count": brain.dormant_contexts().len(),
+        "max_active_contexts": cfg.max_active_contexts,
+        "context_match_threshold": cfg.context_match_threshold,
+        "context_half_life_hours": cfg.context_half_life_hours,
+        "total_engrams": brain.hippocampus_len(),
+    }))
+}
+
+
+fn tool_dream(brain: &mut Brain, args: &Value) -> Result<Value, String> {
+    // v0.13.2: Parse Dream parameters from MCP args
+    let _context_compress = args.get("context_compress").and_then(|v| v.as_bool()).unwrap_or(true);
+    let _llm_patterns = args.get("llm_patterns").and_then(|v| v.as_array());
+    let _llm_contradictions = args.get("llm_contradictions").and_then(|v| v.as_array());
+
     let report = brain.dream().map_err(|e| e.to_string())?;
     Ok(json!({
         "status": "ok",
@@ -810,9 +865,9 @@ fn tool_dream(brain: &mut Brain, _args: &Value) -> Result<Value, String> {
         "knowledge_processed": report.knowledge_processed,
         "cross_kind_new_associations": report.cross_kind_new_associations,
         "hnsw_compacted": report.hnsw_compacted,
-        "contexts_compressed": 0,
-        "dormant_moved": 0,
-        "archived": 0,
+        "contexts_compressed": report.contexts_compressed,
+        "dormant_moved": report.dormant_moved,
+        "archived": report.archived,
     }))
 }
 

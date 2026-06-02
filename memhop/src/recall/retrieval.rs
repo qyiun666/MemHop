@@ -359,6 +359,7 @@ pub(crate) fn recall_retrieval(
         graph_associations,
         worldview_context,
         cognitive_conflicts,
+        scores: score_map,
         trace: RecallTrace {
             latency_us,
             gated_anchors: req.attention_anchors.clone(),

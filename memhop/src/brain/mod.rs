@@ -130,7 +130,6 @@ pub struct Brain {
     pub(crate) personality: Personality,
     pub(crate) config: BrainConfig,
 
-    #[allow(dead_code)]
     pub(crate) llm: Option<Box<dyn LlmProvider>>,
     pub(crate) ngram_encoder: NgramEncoder,
     /// v0.12.0: Optional Candle semantic encoder (pure Rust, no C deps).
@@ -180,79 +179,6 @@ impl Brain {
         crate::perceive::perceive(self, input)
     }
 
-    // ── PGT recall (v0.8.0) — 委托到 recall/ 模块 ───
-
-    /// Four-layer Plan-Gated Temporal recall.
-    ///
-    /// Returns (results sorted by score descending, layer name).
-    /// Layers are tried in order L0→L3, accumulating until `need` is met.
-    #[allow(dead_code)]
-    fn pgt_recall(
-        &self,
-        query_text: &str,
-        query_emb: &[f32],
-        req: &RecallRequest,
-    ) -> (Vec<(String, f32)>, Option<String>) {
-        crate::recall::pgt::pgt_recall(self, query_text, query_emb, req)
-    }
-
-    /// L0: Plan-scoped n-gram — trigram Jaccard overlap within the plan's engrams.
-    #[expect(dead_code)]
-    fn recall_layer0(
-        &self,
-        query_text: &str,
-        candidates: &[String],
-        need: usize,
-    ) -> Result<Vec<(String, f32)>> {
-        crate::recall::pgt::recall_layer0(self, query_text, candidates, need)
-    }
-
-    /// L1: Graph BFS — expand from seed IDs using graph edges.
-    #[expect(dead_code)]
-    fn recall_layer1(
-        &self,
-        _query_emb: &[f32],
-        seeds: &[(String, f32)],
-        need: usize,
-        exclude: &HashSet<String>,
-    ) -> Vec<(String, f32)> {
-        crate::recall::pgt::recall_layer1(self, _query_emb, seeds, need, exclude)
-    }
-
-    /// L2: Temporal recency — most recent engrams in the active plan.
-    #[expect(dead_code)]
-    fn recall_layer2(
-        &self,
-        active_plan_id: &str,
-        need: usize,
-        exclude: &HashSet<String>,
-    ) -> Result<Vec<(String, f32)>> {
-        crate::recall::pgt::recall_layer2(self, active_plan_id, need, exclude)
-    }
-
-    /// L3: Global n-gram fallback — scan all engrams (not just active plan).
-    #[expect(dead_code)]
-    fn recall_layer3(
-        &self,
-        query_text: &str,
-        need: usize,
-        exclude: &HashSet<String>,
-    ) -> Result<Vec<(String, f32)>> {
-        crate::recall::pgt::recall_layer3(self, query_text, need, exclude)
-    }
-
-    /// Hopfield fallback: recall among candidates within the active plan.
-    #[allow(dead_code)]
-    fn hopfield_candidates_in_plan(
-        &self,
-        query_emb: &[f32],
-        plan_id: &str,
-        top_k: usize,
-        exclude: &HashSet<String>,
-    ) -> Vec<(String, f32)> {
-        crate::recall::pgt::hopfield_candidates_in_plan(self, query_emb, plan_id, top_k, exclude)
-    }
-
     // ── recall ────────────────────────────────────────────
 
     /// v0.12.0: Encode text to f16 vector. Candle is the primary encoder;
@@ -272,30 +198,32 @@ impl Brain {
         crate::recall::associative::recall_associative(self, req)
     }
 
-    /// v0.9.0: Retrieval mode — HNSW + RRF fusion.
-    ///
-    /// Returns items sorted by Reciprocal Rank Fusion score (k=60)
-    /// combining HNSW cosine rank + SparseIndex ngram rank.
-    #[allow(dead_code)]
-    fn recall_retrieval(
-        &self,
-        req: &RecallRequest,
-        query_vector: &[f16],
-        start: std::time::Instant,
-    ) -> Result<RecallResponse> {
-        crate::recall::retrieval::recall_retrieval(self, req, query_vector, start)
+    /// v0.13.2: HNSW pre-filter + Hopfield rerank for Dream pipeline.
+    /// Replaces O(N) recall_topk with O(HNSW_logN + rerank_k).
+    pub(crate) fn hopfield_prerank(&self, query_f16: &[f16], k: usize) -> Vec<(String, f32)> {
+        if self.hnsw.is_empty() {
+            return Vec::new();
+        }
+        // HNSW search for 200 candidates (O(logN))
+        let candidates = self.hnsw.search(query_f16, 200);
+        if candidates.is_empty() {
+            return Vec::new();
+        }
+        // Map node_ids to engram IDs
+        let candidate_ids: Vec<String> = candidates
+            .iter()
+            .filter_map(|(node_id, _)| self.hnsw_id_map.get(node_id))
+            .cloned()
+            .collect();
+        if candidate_ids.is_empty() {
+            return Vec::new();
+        }
+        // Hopfield rerank among candidates (O(candidates))
+        let query_f32: Vec<f32> = query_f16.iter().map(|x| x.to_f32()).collect();
+        self.hopfield.rerank(&query_f32, &candidate_ids, k)
     }
 
-    /// v0.12.0: 从书架知识树中检索附带知识。
-    ///
-    /// 使用 HNSW 搜索 Knowledge engrams，应用余弦阈值过滤，
-    /// 返回最多 KNOWLEDGE_ATTACH_MAX 条结果。
-    #[expect(dead_code)]
-    fn recall_knowledge_attached(&self, query: &[f16]) -> Vec<Engram> {
-        crate::recall::knowledge::recall_knowledge_attached(self, query)
-    }
-
-    // ── v0.12.1: Tree API ──────────────────────────────────
+    // ── Tree API ──────────────────────────────────────────
 
     /// v0.12.1: 创建知识树
     pub fn create_tree(&mut self, name: &str, domain: &str, auto_created: bool) -> Result<Tree> {
@@ -408,6 +336,28 @@ impl Brain {
     /// 策略: 增量处理，每次处理一批新记忆，多轮逐步覆盖
     pub fn dream(&mut self) -> Result<DreamReport> {
         crate::dream::dream(self)
+    }
+
+    // ── v0.13.2: Context accessors ────────────────────────
+
+    /// Get reference to active contexts.
+    pub fn active_contexts(&self) -> &ActiveContextSet {
+        &self.active_contexts
+    }
+
+    /// Get reference to dormant context pool.
+    pub fn dormant_contexts(&self) -> &DormantContextPool {
+        &self.dormant_contexts
+    }
+
+    /// Get the current memory phase.
+    pub fn phase(&self) -> Phase {
+        self.phase
+    }
+
+    /// Get brain config.
+    pub fn config(&self) -> &BrainConfig {
+        &self.config
     }
 
     // ── v0.12.1: 纠缠事件查询（委托到 entanglement 模块） ─
@@ -667,7 +617,7 @@ pub(crate) fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 }
 
 /// v0.12.0: Compute cosine similarity between two f16 vectors.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "reserved for PGT pipeline")]
 fn cosine_similarity_f16(a: &[f16], b: &[f16]) -> f32 {
     let len = a.len().min(b.len());
     if len == 0 {
@@ -692,7 +642,6 @@ fn cosine_similarity_f16(a: &[f16], b: &[f16]) -> f32 {
 }
 
 /// v0.12.0: Build tree context information from knowledge memories.
-#[allow(dead_code)]
 fn build_tree_contexts(memories: &[Engram]) -> Vec<TreeContext> {
     let mut tree_map: HashMap<String, (String, usize)> = HashMap::new();
     for eng in memories {

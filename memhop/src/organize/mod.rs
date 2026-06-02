@@ -118,13 +118,30 @@ pub fn organize(
 }
 
 /// v0.12.0: Heuristic compression without LLM.
+/// v0.13.2: Uses LLM when available, falls back to heuristic.
 /// Takes the last agent response as base, prepends up to 3 non-empty user inputs as keywords.
 pub(crate) fn heuristic_compress(
     brain: &Brain,
     turns: &[DialogueTurn],
     plan_name: &str,
 ) -> String {
-    let _ = brain; // used for future integration
+    // v0.13.2: Try LLM summary first
+    if let Some(ref llm) = brain.llm {
+        let content: String = turns
+            .iter()
+            .flat_map(|t| vec![t.user_input.as_str(), t.agent_response.as_str()])
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prompt = crate::llm_provider::PromptTemplates::summarize(&content);
+        if let Ok(summary) = llm.generate(&prompt, 256) {
+            let trimmed = summary.trim();
+            if !trimmed.is_empty() {
+                return format!("{}: {}", plan_name, trimmed);
+            }
+        }
+        // LLM failed, fall through to heuristic
+    }
+
     let last_response = turns
         .last()
         .map(|t| t.agent_response.as_str())

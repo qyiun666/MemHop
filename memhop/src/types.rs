@@ -385,6 +385,8 @@ pub struct RecallResponse {
     pub worldview_context: Vec<String>,
     /// v0.12.1: 认知冲突 — 与当前输入矛盾的稳定模式。
     pub cognitive_conflicts: Vec<String>,
+    /// v0.13.2: Per-result relevance scores (engram_id → fused_score).
+    pub scores: HashMap<String, f32>,
 }
 
 // ── ConflictItem ──────────────────────────────────────────
@@ -496,6 +498,12 @@ pub struct DreamReport {
     pub entanglements_created: usize,
     /// v0.12.1: New worldview patterns emerged during REM phase.
     pub worldviews_emerged: usize,
+    /// v0.13.2: Contexts compressed during Dream.
+    pub contexts_compressed: usize,
+    /// v0.13.2: Contexts moved to dormant pool.
+    pub dormant_moved: usize,
+    /// v0.13.2: Engrams archived during Dream.
+    pub archived: usize,
 }
 
 /// v0.13.0: Enhanced dream output with newly emerged entities.

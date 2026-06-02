@@ -26,7 +26,8 @@ impl UnifiedGraph {
     /// Rebuild the in-memory adjacency from LMDB.
     pub fn rebuild(storage: &LmdbStorage) -> Result<Self> {
         let txn = storage.begin_read()?;
-        let all_ids = storage.all_engram_ids(&txn)?;
+        let all_entries = storage.all_hippocampus_entries(&txn)?;
+        let all_ids: Vec<String> = all_entries.into_iter().map(|(id, _)| id).collect();
         let mut adjacency = HashMap::new();
 
         for id in &all_ids {

@@ -81,8 +81,7 @@ pub(crate) fn nrem_vitality_decay(brain: &mut Brain, report: &mut DreamReport) -
         }
 
         // 计算干扰: 用 Hopfield 找近邻相似度
-        let query_f32: Vec<f32> = engram.vector.iter().map(|x| x.to_f32()).collect();
-        let neighbors = brain.hopfield.recall_topk(&query_f32, 10);
+        let neighbors = brain.hopfield_prerank(&engram.vector, 10);
         let recent_similar: Vec<f32> = neighbors
             .iter()
             .filter(|(nid, _)| nid.as_str() != id.as_str())
@@ -261,8 +260,7 @@ pub(crate) fn nrem_contradiction_detection(brain: &mut Brain, report: &mut Dream
     let mut detected = 0u32;
 
     for i in 0..episodes.len() {
-        let query_f32: Vec<f32> = episodes[i].1.vector.iter().map(|x| x.to_f32()).collect();
-        let neighbors = brain.hopfield.recall_topk(&query_f32, 20);
+        let neighbors = brain.hopfield_prerank(&episodes[i].1.vector, 20);
 
         for (neighbor_id, sim) in &neighbors {
             if *sim <= 0.8 {
