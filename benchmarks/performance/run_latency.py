@@ -11,6 +11,8 @@ import json
 import time
 import argparse
 import subprocess
+import tempfile
+import shutil
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -19,29 +21,33 @@ from mcp_client import MemHopMCPClient
 
 
 def run_latency_via_mcp(server_path: str, scales: list[int], queries: int = 50):
-    """Run latency benchmarks via MCP client — measures end-to-end including MCP overhead."""
+    """Run latency benchmarks via MCP client (v0.13) — measures end-to-end including MCP overhead.
 
-    import tempfile
-    import shutil
-
+    Uses MEMHOP_BRAINS_DIR env var for temp DB per scale with different agent_id for isolation.
+    """
     results = []
 
     for scale in scales:
         print(f"\n--- Scale: {scale} ---")
 
-        db_dir = tempfile.mkdtemp(prefix=f"memhop_lat_{scale}_")
-        db_path = os.path.join(db_dir, "bench.db")
+        # Use a temp brains dir so each scale gets a clean DB
+        brains_dir = tempfile.mkdtemp(prefix=f"memhop_lat_{scale}_")
+        env_extra = {"MEMHOP_BRAINS_DIR": brains_dir}
+        agent_id = f"bench_latency_{scale}"
 
-        client = MemHopMCPClient(server_path, db_path)
+        client = MemHopMCPClient(
+            server_path,
+            socket_path=os.path.join(brains_dir, "memhop.sock"),
+            env_extra=env_extra,
+        )
         client.start_reader()
-        time.sleep(0.5)
 
         # Store
         store_lats = []
         for i in range(scale):
             text = f"Memo #{i}: Alice refactored the auth handler. build-{i % 97}-r{i % 31}"
             t0 = time.time()
-            client.store(text, session_id="bench")
+            client.store(text, agent_id=agent_id, session_id="bench")
             store_lats.append((time.time() - t0) * 1_000_000)  # µs
 
         store_lats.sort()
@@ -57,7 +63,7 @@ def run_latency_via_mcp(server_path: str, scales: list[int], queries: int = 50):
         for i in range(queries):
             q = f"what did Alice change in the auth handler build-{(i*7)%97}"
             t0 = time.time()
-            client.recall(q, session_id="bench", limit=10)
+            client.recall(q, agent_id=agent_id, session_id="bench", limit=10)
             recall_lats.append((time.time() - t0) * 1_000_000)
 
         recall_lats.sort()
@@ -69,19 +75,19 @@ def run_latency_via_mcp(server_path: str, scales: list[int], queries: int = 50):
         print(f"  Recall: P50={recall_p50:.0f}µs  P95={recall_p95:.0f}µs  P99={recall_p99:.0f}µs  {recall_ops:.0f} ops/s")
 
         # Stats
-        stats = client.stats()
+        stats = client.stats(agent_id=agent_id)
         print(f"  Memories: {stats.get('total_memories', 0)}")
 
         # Disk size
         disk_size = 0
-        for root, dirs, files in os.walk(db_dir):
+        for root, dirs, files in os.walk(brains_dir):
             for f in files:
                 fp = os.path.join(root, f)
                 disk_size += os.path.getsize(fp)
         disk_mb = disk_size / (1024 * 1024)
 
         client.close()
-        shutil.rmtree(db_dir, ignore_errors=True)
+        shutil.rmtree(brains_dir, ignore_errors=True)
 
         results.append({
             "scale": scale,

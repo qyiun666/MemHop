@@ -965,8 +965,8 @@ Amygdala 的权重持久化 → Agent 自行管理本地状态
 
 | 组件 | 版本 |
 |------|------|
-| memhop core | 0.13.0 |
-| memhop-mcp-server | 0.13.0 |
-| 本指南最后更新 | v0.13.0 |
+| memhop core | 0.13.1 |
+| memhop-mcp-server | 0.13.1 |
+| 本指南最后更新 | v0.13.1 |
 
 API 变更协议参见 [G-06: 跨项目依赖链协议](.qoder/rules/G-06-跨项目依赖链协议.md)。

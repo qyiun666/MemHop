@@ -13,7 +13,7 @@ use memhop::{
     StoreResult,
 };
 
-const VERSION: &str = "0.13.0";
+const VERSION: &str = "0.13.1";
 
 /// A cached Brain instance with idle-time tracking for lazy eviction.
 struct BrainState {
