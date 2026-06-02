@@ -1,10 +1,11 @@
 #![recursion_limit = "256"]
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::{UnixListener, UnixStream};
 use memhop::{
     Brain, BrainConfig, EngramKind, PerceptionInput, RecallRequest,
     EmotionalState, Protection, ReflectionInput, ReflectionKind,
@@ -25,81 +26,217 @@ const BRAIN_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 static START_TIME: OnceLock<Instant> = OnceLock::new();
 
-fn main() {
+struct AppState {
+    brains: Mutex<HashMap<String, BrainState>>,
+    onnx_model_path: Option<String>,
+    reranker_model_path: Option<String>,
+}
+
+static STATE: OnceLock<AppState> = OnceLock::new();
+
+struct SocketGuard {
+    path: String,
+}
+
+impl Drop for SocketGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+        eprintln!("memhop-mcp-server: cleaned up socket {}", self.path);
+    }
+}
+
+#[tokio::main]
+async fn main() {
+    let socket_path = parse_socket_path();
+
+    let _ = std::fs::remove_file(&socket_path);
+
     let onnx_model_path = std::env::var("MEMHOP_ONNX_MODEL").ok();
     let reranker_model_path = std::env::var("MEMHOP_RERANKER_MODEL").ok();
-    let mut brains: HashMap<String, BrainState> = HashMap::new();
-    let stdin = std::io::stdin();
-    let reader = BufReader::new(stdin.lock());
-    let mut stdout = std::io::stdout();
 
-    for line in reader.lines() {
-        let line = match line { Ok(l) => l, Err(_) => break };
-        let line = line.trim().to_string();
-        if line.is_empty() { continue; }
+    STATE.set(AppState {
+        brains: Mutex::new(HashMap::new()),
+        onnx_model_path,
+        reranker_model_path,
+    }).ok();
 
-        let req: Value = match serde_json::from_str(&line) {
+    START_TIME.get_or_init(Instant::now);
+
+    let listener = UnixListener::bind(&socket_path).unwrap_or_else(|e| {
+        eprintln!("memhop-mcp-server: failed to bind to {}: {}", socket_path, e);
+        std::process::exit(1);
+    });
+
+    let _guard = SocketGuard { path: socket_path.clone() };
+
+    eprintln!("memhop-mcp-server v{} listening on {}", VERSION, socket_path);
+
+    loop {
+        tokio::select! {
+            result = listener.accept() => {
+                match result {
+                    Ok((stream, _)) => {
+                        tokio::spawn(handle_connection(stream));
+                    }
+                    Err(e) => {
+                        eprintln!("memhop-mcp-server: accept error: {}", e);
+                    }
+                }
+            }
+            _ = tokio::signal::ctrl_c() => {
+                eprintln!("memhop-mcp-server: received SIGINT, shutting down");
+                break;
+            }
+        }
+    }
+}
+
+fn parse_socket_path() -> String {
+    let args: Vec<String> = std::env::args().collect();
+    for arg in &args[1..] {
+        if let Some(val) = arg.strip_prefix("--socket-path=") && !val.is_empty() {
+            return val.to_string();
+        }
+        if arg == "--help" || arg == "-h" {
+            eprintln!("Usage: memhop-mcp-server --socket-path=<PATH>");
+            std::process::exit(0);
+        }
+    }
+    eprintln!("Error: --socket-path is required");
+    eprintln!("Usage: memhop-mcp-server --socket-path=<PATH>");
+    std::process::exit(1);
+}
+
+async fn handle_connection(stream: UnixStream) {
+    let (reader, mut writer) = tokio::io::split(stream);
+    let mut reader = BufReader::new(reader);
+    let mut line = String::new();
+
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("memhop-mcp-server: read error: {}", e);
+                break;
+            }
+        }
+
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let req: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(e) => {
-                let _ = writeln!(stdout, "{}", json!({"jsonrpc":"2.0","error":{"code":-32700,"message":format!("parse error: {}", e)},"id":null}));
+                let err_resp = json!({
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32700, "message": format!("parse error: {}", e)},
+                    "id": null
+                });
+                let json_str = serde_json::to_string(&err_resp).unwrap_or_default();
+                let _ = writer.write_all(format!("{}\n", json_str).as_bytes()).await;
                 continue;
             }
         };
 
-        let id = req.get("id").cloned().or(Some(Value::Null));
-        let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+        let result = tokio::task::spawn_blocking(move || {
+            process_request(&req)
+        }).await;
 
-        let result: Result<Value, String> = match method {
-            "initialize" => {
-                Ok(json!({"protocolVersion":"2024-11-05","serverInfo":{"name":"memhop-mcp-server","version":VERSION},"capabilities":{"tools":{}}}))
-            }
-            "notifications/initialized" => continue,
-            "tools/list" => Ok(tools_list()),
-            "tools/call" => {
-                let params = req.get("params");
-                // Extract and validate agent_id as Result<&str, String>
-                let agent_id = params
-                    .and_then(|p| p.get("arguments"))
-                    .and_then(|a| a.get("agent_id"))
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| "Missing required parameter: agent_id".to_string())
-                    .and_then(|aid| {
-                        if aid.is_empty() || aid.len() > 64
-                            || !aid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                        {
-                            Err("Invalid agent_id: must match [a-zA-Z0-9_-]{1,64}".to_string())
-                        } else {
-                            Ok(aid)
-                        }
-                    });
-                match agent_id {
-                    Ok(id) => {
-                        let brains_count = brains.len();
-                        let b = get_or_open_brain(
-                            &mut brains,
-                            id,
-                            &onnx_model_path,
-                            &reranker_model_path,
-                        );
-                        match b {
-                            Ok(b) => tool_call(b, params, brains_count),
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Err(e) => Err(e),
+        match result {
+            Ok(Some(resp)) => {
+                let json_str = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());
+                if let Err(e) = writer.write_all(format!("{}\n", json_str).as_bytes()).await {
+                    eprintln!("memhop-mcp-server: write error: {}", e);
+                    break;
+                }
+                if let Err(e) = writer.flush().await {
+                    eprintln!("memhop-mcp-server: flush error: {}", e);
+                    break;
                 }
             }
-            _ => Err(format!("Method not found: {}", method)),
-        };
-
-        let mut resp = json!({"jsonrpc":"2.0","id":id});
-        match result {
-            Ok(val) => { resp["result"] = val; }
-            Err(e) => { resp["error"] = json!({"code":-32000,"message":e}); }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("memhop-mcp-server: task error: {}", e);
+                break;
+            }
         }
-        let _ = writeln!(stdout, "{}", resp);
-        let _ = stdout.flush();
     }
+}
+
+fn process_request(req: &Value) -> Option<Value> {
+    let id = req.get("id").cloned();
+    let method = req.get("method").and_then(|m| m.as_str()).unwrap_or("");
+
+    match method {
+        "initialize" => {
+            Some(json!({
+                "jsonrpc": "2.0",
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "serverInfo": {"name": "memhop-mcp-server", "version": VERSION},
+                    "capabilities": {"tools": {}}
+                },
+                "id": id
+            }))
+        }
+        "notifications/initialized" => None,
+        "tools/list" => {
+            Some(json!({
+                "jsonrpc": "2.0",
+                "result": tools_list(),
+                "id": id
+            }))
+        }
+        "tools/call" => {
+            let result = dispatch_tool_call(req);
+            match result {
+                Ok(val) => Some(json!({"jsonrpc":"2.0","result":val,"id":id})),
+                Err(e) => Some(json!({"jsonrpc":"2.0","error":{"code":-32000,"message":e},"id":id})),
+            }
+        }
+        _ => {
+            Some(json!({
+                "jsonrpc": "2.0",
+                "error": {"code": -32601, "message": format!("Method not found: {}", method)},
+                "id": id
+            }))
+        }
+    }
+}
+
+fn dispatch_tool_call(req: &Value) -> Result<Value, String> {
+    let state = STATE.get().ok_or("Server not initialized")?;
+    let mut brains = state.brains.lock().map_err(|e| e.to_string())?;
+    let params = req.get("params");
+
+    let agent_id = params
+        .and_then(|p| p.get("arguments"))
+        .and_then(|a| a.get("agent_id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: agent_id".to_string())
+        .and_then(|aid| {
+            if aid.is_empty() || aid.len() > 64
+                || !aid.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                Err("Invalid agent_id: must match [a-zA-Z0-9_-]{1,64}".to_string())
+            } else {
+                Ok(aid)
+            }
+        })?;
+
+    let brains_count = brains.len();
+    let brain = get_or_open_brain(
+        &mut brains,
+        agent_id,
+        &state.onnx_model_path,
+        &state.reranker_model_path,
+    )?;
+
+    tool_call(brain, params, brains_count)
 }
 
 fn tools_list() -> Value {
@@ -570,8 +707,12 @@ fn tool_recall(brain: &mut Brain, args: &Value) -> Result<Value, String> {
     eprintln!("memhop-recall: hopfield_empty={} hnsw_empty={} memory_count={}",
         brain.hopfield_is_empty(), brain.hnsw_is_empty(), brain.memory_count());
     let resp = brain.recall(&req).map_err(|e| e.to_string())?;
-    eprintln!("memhop-recall: got {} wm + {} km",
-        resp.working_memory.len(), resp.knowledge_memories.len());
+    eprintln!("memhop-recall: got {} wm + {} km + {} assoc",
+        resp.working_memory.len(), resp.knowledge_memories.len(), resp.associations.len());
+    if !resp.associations.is_empty() {
+        let sample: Vec<&str> = resp.associations.iter().take(3).map(|e| e.id.as_str()).collect();
+        eprintln!("memhop-recall: sample_ids={:?}", sample);
+    }
 
     let mut results: Vec<Value> = Vec::new();
     for e in &resp.working_memory {

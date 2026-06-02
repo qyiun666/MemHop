@@ -10,22 +10,25 @@ MemHop 是一个嵌入式联想记忆引擎内核，通过 MCP JSON-RPC 2.0 over
 ## 一、架构与概念
 
 ```
-┌─ memhop-mcp-server 进程（每台电脑一个）─────────────────┐
-│  运行命令: memhop-mcp-server                             │
-│  协议: JSON-RPC 2.0 over stdio                           │
-│                                                          │
-│  MEMHOP_BRAINS_DIR/~/.memhop/brains/{agent_id}/          │
-│  ├── "zt_mac"   →  ~/.memhop/brains/zt_mac/memhop.db    │
-│  ├── "zt_phone" →  ~/.memhop/brains/zt_phone/memhop.db  │
-│  └── "desk"     →  ~/.memhop/brains/desk/memhop.db      │
-│  多 agent 隔离，每个 agent 有独立 HNSW/Engram/LMDB       │
+┌─ memhop-mcp-server 进程（整机唯一）────────────────────┐
+│  运行: memhop-mcp-server --socket-path=~/.memhop/memhop.sock
+│  协议: JSON-RPC 2.0 over Unix Domain Socket            │
+│  多客户端并发连接，共享 ONNX 模型 (~500MB)             │
+│                                                         │
+│  MEMHOP_BRAINS_DIR/~/.memhop/brains/{agent_id}/         │
+│  ├── "zt_mac"   →  ~/.memhop/brains/zt_mac/memhop.db   │
+│  ├── "zt_phone" →  ~/.memhop/brains/zt_phone/memhop.db │
+│  └── "desk"     →  ~/.memhop/brains/desk/memhop.db     │
+│  多 agent 隔离，每个 agent 有独立 HNSW/Engram/LMDB      │
 └─────────────────────────────────────────────────────────┘
-          ▲ MCP (JSON-RPC 2.0 over stdio)
+          ▲ Unix Domain Socket (JSON-RPC 2.0)
           │
 ┌──────────┴───────────┐
-│  Agent 进程（有状态）  │
+│  Agent 进程 × N      │
+│  通过 socket 连接     │
 │  传 agent_id 标识自己  │
-│  自主调 memhop 存/取   │
+│  共享同一 memhop      │
+│  ONNX 模型只加载一次   │
 └──────────────────────┘
 ```
 
@@ -51,9 +54,7 @@ MemHop 是一个嵌入式联想记忆引擎内核，通过 MCP JSON-RPC 2.0 over
 ## 二、启动
 
 ```bash
-MEMHOP_BRAINS_DIR=~/.memhop/brains \
-  MEMHOP_ONNX_MODEL=~/models/bge-m3 \
-  memhop-mcp-server
+memhop-mcp-server --socket-path=/tmp/memhop.sock
 ```
 
 ### 环境变量
@@ -69,8 +70,8 @@ MEMHOP_BRAINS_DIR=~/.memhop/brains \
 **所有 MCP 工具必须传 `agent_id` 参数**。校验规则：`[a-zA-Z0-9_-]{1,64}`。
 
 ```json
-{"name":"memhop_store", "arguments":{
-    "text":"帮我写一个脚本", "agent_id":"zt_mac"}}
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"memhop_store","arguments":{
+    "text":"帮我写一个脚本", "agent_id":"zt_mac"}}}
 ```
 
 ---
