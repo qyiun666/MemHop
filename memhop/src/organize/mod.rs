@@ -88,9 +88,8 @@ pub fn organize(
     // Step 1: 实体提取 — 从输入文本中提取关键词/实体
     let _ = extract_keywords(&input.content, 10);
 
-    // Step 2: 图链接 — 将新 engram 链接到语义相似的已有 Hopfield 节点
-    let query_f32: Vec<f32> = input.vector.iter().map(|x| x.to_f32()).collect();
-    let similar = brain.hopfield.recall_topk(&query_f32, 5);
+        // Step 2: 图链接 — 将新 engram 链接到语义相似的已有 Hopfield 节点
+    let similar = brain.hopfield_prerank(&input.vector, 5);
     for (similar_id, confidence) in &similar {
         if *confidence > 0.3 {
             brain.graph.add_edge(

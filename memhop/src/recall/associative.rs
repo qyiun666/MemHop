@@ -83,7 +83,7 @@ pub(crate) fn recall_associative(brain: &Brain, req: &RecallRequest) -> Result<R
         let hopfield_candidates: Vec<(String, f32)> = if brain.hopfield.is_empty() {
             Vec::new()
         } else {
-            brain.hopfield.recall_topk(&query_f32, HOPFIELD_TOP_K)
+            brain.hopfield_prerank(&query_vector, HOPFIELD_TOP_K)
         };
 
         let hopfield_candidates = if !req.attention_anchors.is_empty() {
