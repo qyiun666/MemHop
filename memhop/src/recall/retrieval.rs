@@ -25,6 +25,7 @@ pub(crate) fn recall_retrieval(
 
     // Step 1: HNSW search — get candidates
     let hnsw_results = brain.hnsw.search(query_vector, HNSW_SEARCH_K);
+    eprintln!("memhop-recall-trace: hnsw_search={}", hnsw_results.len());
 
     // Step 2: Map HNSW results to string IDs with rank
     let hnsw_strings: Vec<(String, f32)> = hnsw_results
@@ -36,6 +37,8 @@ pub(crate) fn recall_retrieval(
                 .map(|sid| (sid.clone(), *sim))
         })
         .collect();
+    eprintln!("memhop-recall-trace: hnsw_mapped={} (id_map_size={})",
+        hnsw_strings.len(), brain.hnsw_id_map.len());
 
     // Step 3: SparseIndex BM25 search (v0.10.0: replaces IDF-weighted search)
     let query_sparse = brain.ngram_encoder.encode(&req.query).sparse;
@@ -75,6 +78,8 @@ pub(crate) fn recall_retrieval(
             .unwrap_or(std::cmp::Ordering::Equal)
     });
     sorted.truncate(req.limit);
+    eprintln!("memhop-recall-trace: bm25={} hnsw_uniq={} fused_after_trunc={}",
+        bm25_map.len(), hnsw_map.len(), sorted.len());
 
     // v0.9.0: Optional Cross-Encoder reranking (feature-gated behind `onnx`)
     if req.use_reranker {
@@ -212,6 +217,9 @@ pub(crate) fn recall_retrieval(
             }
         }
     }
+    let load_tot = associations.len() + schemas.len() + knowledge_memories.len();
+    eprintln!("memhop-recall-trace: sorted={} loaded={} assoc={} schema={} km={}",
+        sorted.len(), load_tot, associations.len(), schemas.len(), knowledge_memories.len());
 
     // v0.12.0: 知识自动附带 — 从书架检索附加知识
     if req.attach_knowledge && brain.phase != Phase::Warmup {

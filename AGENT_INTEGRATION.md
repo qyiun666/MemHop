@@ -680,7 +680,7 @@ memhop 有两套不同的知识树概念：
   "dream_cycles": 15,
   "total_schemas_emerged": 8,
   "total_contradictions": 3,
-  "version": "0.13.0"
+  "version": "0.13.1"
 }
 ```
 
@@ -702,7 +702,7 @@ memhop 有两套不同的知识树概念：
 ```json
 {
   "status": "ok",
-  "version": "0.13.0",
+  "version": "0.13.1",
   "uptime_secs": 3600,
   "active_brains": 2,
   "total_memories": 1234,

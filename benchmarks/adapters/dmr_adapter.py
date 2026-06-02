@@ -29,7 +29,15 @@ def _get_conversations(subset: Optional[int] = None) -> list[dict]:
         ...
       ], "persona1": [...], "persona2": [...]}
     """
-    ds = load_dataset(MSC_DATASET, split="train")
+    # Ensure offline — data must be pre-cached via download_data.sh
+    os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+    try:
+        ds = load_dataset(MSC_DATASET, split="train")
+    except Exception as e:
+        raise FileNotFoundError(
+            f"DMR dataset (MSC) not cached. Please run: bash benchmarks/download_data.sh\n"
+            f"  Error: {e}"
+        )
 
     groups: dict[int, list] = {}
     for item in ds:
@@ -126,7 +134,7 @@ def load_dmr_dataset(
     if os.path.exists(cache_path) and not force_regenerate:
         with open(cache_path) as f:
             cached = json.load(f)
-        cached_map = {item["dialoug_id"]: item["questions"] for item in cached}
+        cached_map = {str(item["dialoug_id"]): item["questions"] for item in cached}
 
         for conv in conversations:
             did = str(conv["dialoug_id"])

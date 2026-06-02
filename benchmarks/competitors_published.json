@@ -1,0 +1,190 @@
+{
+  "schema_version": "1.0",
+  "generated_at": "2026-06-01",
+  "datasets": {
+    "LongMemEval": {
+      "description": "End-to-end QA accuracy on LongMemEval (ICLR 2025). Higher is better.",
+      "metric": "Accuracy",
+      "source": "LongMemEval ICLR 2025; Mastra Research; Mem0 docs; EverOS README; Zep arXiv:2501.13956",
+      "systems": {
+        "mastra-om-gpt5mini": {
+          "display_name": "Mastra OM (GPT-5-mini)",
+          "Accuracy": 0.9487,
+          "source": "mastra.ai/research/observational-memory"
+        },
+        "mem0-2026": {
+          "display_name": "Mem0 2026 (token-efficient)",
+          "Accuracy": 0.944,
+          "source": "docs.mem0.ai/core-concepts/memory-evaluation"
+        },
+        "hindsight-gemini3pro": {
+          "display_name": "Hindsight (Gemini 3 Pro)",
+          "Accuracy": 0.914,
+          "source": "arXiv 2512.12818"
+        },
+        "memanto": {
+          "display_name": "Memanto",
+          "Accuracy": 0.898,
+          "source": "arXiv 2604.22085"
+        },
+        "supermemory": {
+          "display_name": "Supermemory",
+          "Accuracy": 0.852,
+          "source": "mastra.ai"
+        },
+        "everos": {
+          "display_name": "EverOS",
+          "Accuracy": 0.830,
+          "source": "EverMind GitHub, arXiv:2601.02163"
+        },
+        "zep-gpt4o": {
+          "display_name": "Zep (GPT-4o)",
+          "Accuracy": 0.712,
+          "source": "arXiv:2501.13956"
+        },
+        "letta-gpt4": {
+          "display_name": "Letta (GPT-4)",
+          "Accuracy": 0.656,
+          "source": "LongMemEval paper ICLR 2025"
+        },
+        "memgpt-gpt4": {
+          "display_name": "MemGPT (GPT-4)",
+          "Accuracy": 0.624,
+          "source": "LongMemEval paper ICLR 2025"
+        }
+      }
+    },
+    "LongMemEval-S-Retrieval": {
+      "description": "RETRIEVAL metrics (R@5) on LongMemEval-S subset. NOT comparable to end-to-end QA accuracy above — these measure retrieval recall, not generative QA.",
+      "metric": "R@5",
+      "source": "AgentMemory GitHub COMPARISON.md; MemPalace",
+      "systems": {
+        "mempalace": {
+          "display_name": "MemPalace",
+          "R@5": 0.966,
+          "R@10": 0.986,
+          "source": "AgentMemory COMPARISON.md"
+        },
+        "agentmemory": {
+          "display_name": "AgentMemory (BM25+Vector)",
+          "R@5": 0.952,
+          "R@10": 0.986,
+          "MRR": 0.882,
+          "source": "github.com/rohitg00/agentmemory"
+        }
+      }
+    },
+    "LoCoMo": {
+      "description": "End-to-end QA accuracy on LoCoMo benchmark (Snap Research). Higher is better.",
+      "metric": "Accuracy",
+      "source": "Memanto arXiv 2604.22085; EverOS README; Mem0 docs; MemU",
+      "systems": {
+        "everos-evercore": {
+          "display_name": "EverOS (EverCore)",
+          "Accuracy": 0.9305,
+          "source": "EverMind GitHub README"
+        },
+        "mem0-2026": {
+          "display_name": "Mem0 2026 (token-efficient)",
+          "Accuracy": 0.925,
+          "source": "docs.mem0.ai"
+        },
+        "byterover": {
+          "display_name": "ByteRover 2.0",
+          "Accuracy": 0.922,
+          "source": "byterover.dev"
+        },
+        "memu": {
+          "display_name": "MemU",
+          "Accuracy": 0.9209,
+          "source": "memu.pro/benchmark"
+        },
+        "hindsight": {
+          "display_name": "Hindsight",
+          "Accuracy": 0.896,
+          "source": "arXiv 2604.22085"
+        },
+        "memanto": {
+          "display_name": "Memanto",
+          "Accuracy": 0.871,
+          "source": "arXiv 2604.22085"
+        },
+        "zep": {
+          "display_name": "Zep",
+          "Accuracy": 0.751,
+          "note": "Disputed — independent re-eval found ~58.44%",
+          "source": "arXiv:2501.13956"
+        },
+        "letta": {
+          "display_name": "Letta",
+          "Accuracy": 0.740,
+          "source": "arXiv 2604.22085"
+        },
+        "mem0-original": {
+          "display_name": "Mem0 (original algorithm)",
+          "Accuracy": 0.669,
+          "source": "arXiv 2604.22085"
+        },
+        "langmem": {
+          "display_name": "LangMem",
+          "Accuracy": 0.581,
+          "source": "arXiv 2604.22085"
+        }
+      }
+    },
+    "BEIR-nfcorpus": {
+      "description": "NDCG@10 on BEIR nfcorpus. Text retrieval benchmark — agent memory systems typically do NOT publish these scores.",
+      "metric": "NDCG@10",
+      "source": "BEIR @ NeurIPS 2021; BGE paper; SPLADE++ paper",
+      "systems": {
+        "bge-large-v15": {
+          "display_name": "BGE-large-v1.5",
+          "NDCG@10": 0.380,
+          "source": "BGE paper"
+        },
+        "bge-base": {
+          "display_name": "BGE-base",
+          "NDCG@10": 0.352,
+          "source": "BGE paper"
+        },
+        "splade-plusplus": {
+          "display_name": "SPLADE++",
+          "NDCG@10": 0.347,
+          "source": "SPLADE++ paper"
+        },
+        "bm25": {
+          "display_name": "BM25 (Lucene)",
+          "NDCG@10": 0.325,
+          "source": "BEIR paper (baseline)"
+        }
+      }
+    },
+    "DMR": {
+      "description": "Deep Memory Retrieval accuracy. Multi-session consistency across 4 conversation sessions.",
+      "metric": "Accuracy",
+      "source": "MemGPT arXiv:2310.08560; Zep arXiv:2501.13956",
+      "systems": {
+        "zep-gpt4omini": {
+          "display_name": "Zep (GPT-4o-mini)",
+          "Accuracy": 0.982,
+          "source": "arXiv:2501.13956"
+        },
+        "zep-gpt4turbo": {
+          "display_name": "Zep (GPT-4 Turbo)",
+          "Accuracy": 0.948,
+          "source": "arXiv:2501.13956"
+        },
+        "memgpt-gpt4turbo": {
+          "display_name": "MemGPT (GPT-4 Turbo)",
+          "Accuracy": 0.934,
+          "source": "arXiv:2310.08560"
+        },
+        "memgpt-gpt35turbo": {
+          "display_name": "MemGPT (GPT-3.5 Turbo)",
+          "Accuracy": 0.669,
+          "source": "arXiv:2310.08560"
+        }
+      }
+    }
+  }
+}

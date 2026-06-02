@@ -20,8 +20,8 @@ from typing import Optional
 
 def load_lme_dataset(
     path: str, subset: Optional[int] = None
-) -> tuple[list[dict], list[dict], dict[str, dict[str, int]]]:
-    """Load LME-S dataset and return (docs, queries, qrels).
+) -> tuple[list[dict], list[dict], dict[str, dict[str, int]], dict[str, dict[str, int]]]:
+    """Load LME-S dataset and return (docs, queries, turn_qrels, session_qrels).
 
     Args:
         path: Path to LME-S JSON file.
@@ -31,7 +31,8 @@ def load_lme_dataset(
         docs:  list of {"id", "text", "session_id", "turn_id", "turn_index"}
                Each turn is stored as a separate doc (per-turn).
         queries: list of {"id", "text"}
-        qrels:  {question_id: {session_id: 1}}
+        turn_qrels:  {question_id: {turn_doc_id: 1}} — turn-level ground truth
+        session_qrels: {question_id: {session_id: 1}} — session-level ground truth
     """
     with open(path) as f:
         problems = json.load(f)
@@ -40,7 +41,8 @@ def load_lme_dataset(
         problems = problems[:subset]
 
     docs: list[dict] = []
-    qrels: dict[str, dict[str, int]] = {}
+    turn_qrels: dict[str, dict[str, int]] = {}
+    session_qrels: dict[str, dict[str, int]] = {}
     queries: list[dict] = []
 
     for p in problems:
@@ -72,7 +74,12 @@ def load_lme_dataset(
                         "turn_index": ti,
                     }
                 )
-        queries.append({"id": qid, "text": question})
-        qrels[qid] = {sid: 1 for sid in ans_sids}
+                # Turn-level qrels: every turn in answer session is relevant
+                if sid in ans_sids:
+                    turn_qrels.setdefault(qid, {})[doc_id] = 1
 
-    return docs, queries, qrels
+        queries.append({"id": qid, "text": question})
+        # Session-level qrels (for associative mode evaluation)
+        session_qrels[qid] = {sid: 1 for sid in ans_sids}
+
+    return docs, queries, turn_qrels, session_qrels

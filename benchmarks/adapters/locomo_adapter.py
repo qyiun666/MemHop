@@ -1,43 +1,17 @@
 """LoCoMo benchmark data adapter.
 
-Loads LoCoMo data from Snap Research's GitHub release and converts to
-the per-turn doc format expected by MemHopMCPRunner.
+Loads LoCoMo data from local cache. Data must be pre-downloaded
+via benchmarks/download_data.sh.
 
 Data source: https://github.com/snap-research/locomo
-Download: https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json
-
-Data format (each item):
-  {
-    "conversation": {
-      "speaker_a": "Name",
-      "speaker_b": "Name",
-      "session_1": [{"speaker": "...", "text": "...", "dia_id": "..."}, ...],
-      "session_2": [...],
-      ...
-    },
-    "qa": [{"question": "...", "answer": "...", "evidence": [...], "category": N}, ...]
-  }
 """
 
 import json
 import os
 import re
-import urllib.request
 from typing import Optional
 
-LOCOMO_URL = "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json"
 LOCOMO_FILENAME = "locomo10.json"
-
-
-def _ensure_data(data_dir: str) -> str:
-    """Download LoCoMo data if not cached. Returns path to JSON file."""
-    os.makedirs(data_dir, exist_ok=True)
-    path = os.path.join(data_dir, LOCOMO_FILENAME)
-    if not os.path.exists(path):
-        print(f"  Downloading LoCoMo data from {LOCOMO_URL}...")
-        urllib.request.urlretrieve(LOCOMO_URL, path)
-        print(f"  Saved to {path}")
-    return path
 
 
 def _get_session_keys(conv: dict) -> list[str]:
@@ -69,7 +43,12 @@ def load_locomo_dataset(
         queries: list of {"id", "text"}
         answers: list of str
     """
-    path = _ensure_data(data_dir)
+    path = os.path.join(data_dir, LOCOMO_FILENAME)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"LoCoMo data not found at {path}.\n"
+            f"  Please run: bash benchmarks/download_data.sh"
+        )
 
     with open(path) as f:
         dialogues = json.load(f)
@@ -94,6 +73,8 @@ def load_locomo_dataset(
             if not isinstance(turns, list):
                 continue
             sid = f"{conv_id}_s{si}"
+            date_str = conv.get(f"{sk}_date_time", "")
+            date_prefix = f"[{date_str}] " if date_str else ""
             for turn in turns:
                 if not isinstance(turn, dict):
                     continue
@@ -101,11 +82,11 @@ def load_locomo_dataset(
                 if not text:
                     continue
                 speaker = turn.get("speaker", "")
-                prefix = f"[{speaker}] " if speaker else ""
+                speaker_prefix = f"[{speaker}] " if speaker else ""
                 doc_id = f"{sid}_t{linear_ti}"
                 docs.append({
                     "id": doc_id,
-                    "text": prefix + text,
+                    "text": date_prefix + speaker_prefix + text,
                     "session_id": sid,
                     "turn_id": doc_id,
                     "turn_index": linear_ti,

@@ -57,12 +57,12 @@ def load_beir_dataset(
 
     data_path = os.path.join(data_dir, dataset_name)
 
-    # Auto-download if not cached
+    # Check if data exists locally — no auto-download
     if not os.path.exists(data_path):
-        print(f"    Downloading {dataset_name} to {data_path}...")
-        from beir import util
-        url = f"https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/{dataset_name}.zip"
-        util.download_and_unzip(url, data_path)
+        raise FileNotFoundError(
+            f"BEIR dataset '{dataset_name}' not found at {data_path}.\n"
+            f"  Please run: bash benchmarks/download_data.sh"
+        )
 
     loader = GenericDataLoader(data_folder=data_path)
     corpus_raw, queries_raw, qrels_raw = loader.load(split="test")
