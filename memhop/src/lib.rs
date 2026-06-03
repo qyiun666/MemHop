@@ -1,101 +1,54 @@
-//! MemHop — 人脑启发的记忆系统（纯 Rust）。
+//! MemHop v0.14 — 超图驱动的关联记忆引擎。
 //!
-//! v0.10.0: HNSW + BM25 + Cross-Encoder 三层检索，知识树 (Shelf) 挂载，Dream Crystallizer。
+//! 4 层架构：L1 超图 + L2 话题图 + L3 领域超图 + L4 原文库。
+//! 纯 ngram + BM25 检索，零外部 AI 模型依赖。
 
 // ============================================================
-// 内部模块（按依赖顺序声明）
+// 内部模块
 // ============================================================
 
 // ── 数据模型 ────────────────────────────────────────────────
-mod types;       // 公开 API 类型 + 向后兼容类型
-mod engram;      // 新版 Brain 核心数据结构（Engram, Association 等）
-mod context;     // v0.12.0: 活跃上下文跟踪
-pub mod entanglement; // v0.12.1: 纠缠事件
+mod types;
+mod engram;
 
 // ── 基础设施 ────────────────────────────────────────────────
 mod error;
-mod storage;     // LMDB 存储层（6 数据库）
-mod hopfield;    // Modern Hopfield 网络
-mod index;       // 稀疏索引
-mod meta_index;  // 元数据索引
-mod filter;      // 搜索过滤条件解析
-pub mod hnsw;    // HNSW 近似近邻索引 (v0.9.0)
-pub mod shelf;   // Knowledge shelf mount/query/unmount (v0.9.0)
-pub mod tree;    // v0.12.1: 知识树实体
+mod index;       // SparseIndex + BM25
+pub mod session;
 
 // ── 编码器 ──────────────────────────────────────────────────
-pub mod encoder;     // NgramEncoder + Hybrid + ONNX
+pub mod encoder; // NgramEncoder (only)
 
-// ── 新版 Brain 组件 ─────────────────────────────────────────
-mod activation;      // 竞争扩散激活
-mod cortex;          // L0 工作记忆 ring buffer
-mod hippocampus;     // L1 海马体暂存
-mod unified_graph;   // 统一图（邻接表 + LMDB）
-mod personality;     // Personality + GrowthState
-mod vitality;        // 生命力衰减 + 再巩固
-mod schema;          // Schema 涌现 + 稳定度
-pub(crate) mod llm_provider;    // LLM Provider trait + PromptTemplates
-mod scene_gating;    // Anchor 倒排索引 + 场景门控
-pub mod plan_gate;   // Plan 边界检测 + PlanIndex (v0.8.0)
-pub(crate) mod tone_extractor;  // Rule-based tone extraction
-mod organize;                    // v0.12.2: 每轮对话自动整理
-pub mod session;                 // v0.12.2: Session 上下文聚合
+// ── 存储层 ──────────────────────────────────────────────────
+mod lmdb;        // 4 独立 LMDB 环境
 
-// ── 顶层 Brain API ──────────────────────────────────────────
-mod brain;       // 新版 Brain 三层架构 API
-pub(crate) mod recall; // v0.12.2: Recall subsystem
-pub(crate) mod store;  // v0.12.2: Store/forget (moved from brain.rs)
-pub(crate) mod query;  // v0.12.2: Query helpers (moved from brain.rs)
-pub(crate) mod perceive; // v0.12.2: Perceive (moved from brain.rs)
-mod dream;       // Dream 整合引擎
+// ── 4 层核心 ────────────────────────────────────────────────
+mod hypergraph;   // L1 超图 + 超边链
+mod topic_graph;  // L2 话题标准图
+mod domain_graph; // L3 领域超图
+mod raw_archive;  // L4 原文库
+
+// ── 业务逻辑 ────────────────────────────────────────────────
+mod batch_store;  // 批量存储（唯一写入接口）
+mod query_engine; // 按层检索引擎
+mod brain;        // Brain 顶层 API
 
 // ============================================================
 // 公开 API
 // ============================================================
 
-// ── 新版 Brain API ─────────────────────────────────────────
 pub use brain::Brain;
 pub use types::{
-    BrainConfig, ChunkMeta, ConflictItem, DEFAULT_BRAINS_DIR, DreamOutput, DreamReport, ForgetFilter, InnateSchema, MountResult, PerceptionInput,
-    PerceptionOutput, RecallMode, RecallRequest, RecallResponse, RecallTrace, ReflectionInput,
-    ReflectionKind, ShelfDomain, ShelfResult, StoreResult, StoreStatus,
-    TurnHit, SessionScore, UnmountResult,
+    Layer, HyperedgeKind, HyperedgeSnapshot,
+    NodeSource, TopicEdgeKind, TopicSnapshot,
+    DocumentSnapshot,
+    StoreBatch, StoreItem, BatchReport,
+    BrainConfig,
+    RecallRequest, RecallResponse, RecallResult,
+    ConsolidateReport,
 };
-pub use shelf::ShelfManager;
-pub use shelf::TreeMeta;
-
-// ── 新版数据类型 ────────────────────────────────────────────
 pub use engram::{
-    Association, AssociationKind, CompressResult, EmotionalContext, EmotionalState, Engram, EngramKind,
-    Protection, SchemaExtra, VECTOR_DIM,
-    PlanHint, PlanLevel, PlanState, PlanInfo, PlanNode,
-    DialogueTurn, ToneMeta, StyleCompact, TurnSource,
-    ToneAggregate, TopicDistribution, DomainStats,
+    Hyperedge, KnowledgeNode, Topic, TopicEdge, RawDocument,
 };
-pub use context::{Phase, ContextSnapshot, ActiveContextSet};
-
-// ── v0.12.1: 知识树 ─────────────────────────────────────────
-pub use tree::{Tree, TreeRef};
-
-// ── v0.12.1: 纠缠事件 ──────────────────────────────────────
-pub use entanglement::{EntanglementEvent, EntanglementTrigger};
-
-// ── v0.12.1: 三观模式 ──────────────────────────────────────
-pub mod worldview;
-pub use worldview::{PatternCategory, WorldviewPattern};
-
-
-// ── 编码器 — 公开类型 ──────────────────────────────────────
-pub use encoder::{Encoder, EncoderOutput, NgramEncoder, HybridEncoder};
-#[cfg(feature = "onnx")]
-pub use encoder::OnnxEncoder;
-#[cfg(feature = "api-encoder")]
-pub use encoder::ApiEncoder;
 pub use error::{MemHopError, Result};
-pub use types::{DreamConfig, Memory, StoreOptions};
-
-// ── 新版 Personality ───────────────────────────────────────
-pub use personality::{GrowthState, Personality};
-
-// ── LLM Provider ────────────────────────────────────────────
-pub use llm_provider::LlmProvider;
+pub use encoder::{Encoder, EncoderOutput, NgramEncoder};

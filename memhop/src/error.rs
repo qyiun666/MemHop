@@ -1,42 +1,46 @@
-//! MemHop unified error type.
-
-use crate::storage::StorageError;
+use std::fmt;
 
 #[derive(Debug)]
 pub enum MemHopError {
     Storage(String),
-    InvalidArgument(String),
+    Encode(String),
     NotFound(String),
+    InvalidArgument(String),
     Internal(String),
-    /// v0.11.0: LMDB schema version mismatch.
-    IncompatibleSchema {
-        found: String,
-        expected: &'static str,
-        hint: &'static str,
-    },
+    Batch(String),
 }
 
-impl std::fmt::Display for MemHopError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for MemHopError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            MemHopError::Storage(msg) => write!(f, "storage: {}", msg),
-            MemHopError::InvalidArgument(msg) => write!(f, "invalid argument: {}", msg),
+            MemHopError::Storage(msg) => write!(f, "storage error: {}", msg),
+            MemHopError::Encode(msg) => write!(f, "encode error: {}", msg),
             MemHopError::NotFound(msg) => write!(f, "not found: {}", msg),
-            MemHopError::Internal(msg) => write!(f, "internal: {}", msg),
-            MemHopError::IncompatibleSchema { found, expected, hint } => {
-                write!(f, "incompatible schema: found '{}', expected '{}'. {}", found, expected, hint)
-            }
+            MemHopError::InvalidArgument(msg) => write!(f, "invalid argument: {}", msg),
+            MemHopError::Internal(msg) => write!(f, "internal error: {}", msg),
+            MemHopError::Batch(msg) => write!(f, "batch error: {}", msg),
         }
     }
 }
 
 impl std::error::Error for MemHopError {}
 
-impl From<StorageError> for MemHopError {
-    fn from(err: StorageError) -> Self {
-        MemHopError::Storage(err.to_string())
+pub type Result<T> = std::result::Result<T, MemHopError>;
+
+impl From<heed::Error> for MemHopError {
+    fn from(e: heed::Error) -> Self {
+        MemHopError::Storage(e.to_string())
     }
 }
 
-/// Convenience alias used throughout the crate.
-pub type Result<T> = std::result::Result<T, MemHopError>;
+impl From<serde_json::Error> for MemHopError {
+    fn from(e: serde_json::Error) -> Self {
+        MemHopError::Internal(e.to_string())
+    }
+}
+
+impl From<bincode::Error> for MemHopError {
+    fn from(e: bincode::Error) -> Self {
+        MemHopError::Storage(e.to_string())
+    }
+}

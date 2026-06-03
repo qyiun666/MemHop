@@ -1,408 +1,120 @@
-//! Core data structures for the Brain memory system.
-
+use std::collections::HashMap;
 use half::f16;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use crate::types::*;
 
-use crate::tree::TreeRef;
+// ── Hyperedge (超边) — L1/L3 核心 ──────────────────────────
 
-// ── Vector dimension ──────────────────────────────────────────
-
-pub const VECTOR_DIM: usize = 1024;
-
-// ── Engram ────────────────────────────────────────────────────
-
-/// A memory engram — the fundamental unit of storage in the Brain.
-///
-/// Each engram carries:
-/// - A text payload and optional summary
-/// - A dense vector (f16) for similarity matching
-/// - Emotional metadata (valence, arousal)
-/// - Forgetting resistance (vitality, protection)
-/// - Lifecycle tracking (created_at, last_activated, activation_count)
-/// - Type classification (Episode / Schema / Anchor / Reflection)
-/// - Archival status
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Engram {
+pub struct Hyperedge {
+    pub id: String,
+    pub node_ids: Vec<String>,
+    pub kind: HyperedgeKind,
+    pub weight: f32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub version: u64,
+    pub history: Vec<HyperedgeSnapshot>,
+    pub meta: HashMap<String, String>,
+    pub chain_prev: Option<String>,
+    pub chain_next: Option<String>,
+    pub chain_label: Option<String>,
+}
+
+// ── KnowledgeNode (知识节点) — L1/L3 基础单元 ──────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeNode {
     pub id: String,
     pub text: String,
     pub summary: Option<String>,
     pub vector: Vec<f16>,
+    pub sparse: HashMap<String, f32>,
     pub keywords: Vec<String>,
-    pub content_type: Option<String>,
-    pub valence: f32,
-    pub arousal: f32,
-    pub vitality: f32,
-    pub protection: Protection,
+    pub source: NodeSource,
+    pub layer: Layer,
     pub created_at: i64,
-    pub last_activated: i64,
-    pub activation_count: u32,
-    pub kind: EngramKind,
-    pub meta: HashMap<String, serde_json::Value>,
-    pub is_archived: bool,
-    pub is_dormant: bool,
-    /// v0.9.1: Reference to the DialogueTurn this engram belongs to.
-    #[serde(default)]
-    pub turn_id: Option<String>,
-    /// v0.11.0: Knowledge engram source fields
-    #[serde(default)]
-    pub tree_path: Option<String>,
-    /// v0.12.1: Knowledge tree reference (replaces tree_path).
-    #[serde(default)]
-    pub tree_ref: Option<TreeRef>,
-    #[serde(default)]
-    pub source_path: Option<String>,
-    #[serde(default)]
-    pub source_textunit: Option<String>,
-    /// v0.12.0: Compressed Knowledge/Schema includes original dialogue turn IDs.
-    #[serde(default)]
-    pub turn_ids: Vec<String>,
-    /// v0.12.0: Context ID this engram belongs to (runtime-only, not persisted).
-    #[serde(default)]
-    pub context_id: Option<String>,
+    pub updated_at: i64,
+    pub version: u64,
+    pub history: Vec<HyperedgeSnapshot>,
 }
 
-impl Engram {
-    /// Create a new Episode engram with default values.
-    pub fn new_episode(
-        id: String,
-        text: String,
-        vector: Vec<f16>,
-        keywords: Vec<String>,
-        valence: f32,
-        arousal: f32,
-        now: i64,
-    ) -> Self {
-        Engram {
+#[allow(dead_code)]
+impl KnowledgeNode {
+    pub fn new(id: String, text: String, sparse: HashMap<String, f32>, vector: Vec<f16>, layer: Layer) -> Self {
+        let now = chrono::Utc::now().timestamp_millis();
+        KnowledgeNode {
             id,
             text,
             summary: None,
             vector,
-            keywords,
-            content_type: None,
-            valence,
-            arousal,
-            vitality: 1.0,
-            protection: Protection::Normal,
+            sparse,
+            keywords: Vec::new(),
+            source: NodeSource::Perception,
+            layer,
             created_at: now,
-            last_activated: now,
-            activation_count: 1,
-            kind: EngramKind::Episode,
-            meta: HashMap::new(),
-            is_archived: false,
-            is_dormant: false,
-            turn_id: None,
-            tree_path: None,
-            tree_ref: None,
-            source_path: None,
-            source_textunit: None,
-            turn_ids: Vec::new(),
-            context_id: None,
-        }
-    }
-
-    /// Mark this engram as accessed (bump last_activated and activation_count).
-    pub fn touch(&mut self, now: i64) {
-        self.last_activated = now;
-        self.activation_count = self.activation_count.saturating_add(1);
-    }
-
-    /// Create a new Knowledge engram for externally mounted knowledge.
-    pub fn new_knowledge(
-        id: String,
-        text: String,
-        vector: Vec<f16>,
-        tree_path: String,
-        source_path: String,
-        source_textunit: String,
-        now: i64,
-    ) -> Self {
-        Engram {
-            id,
-            text,
-            summary: None,
-            vector,
-            keywords: vec![],
-            content_type: None,
-            valence: 0.0,
-            arousal: 0.5,
-            vitality: 1.0,
-            protection: Protection::Normal,
-            created_at: now,
-            last_activated: now,
-            activation_count: 1,
-            kind: EngramKind::Knowledge,
-            meta: HashMap::new(),
-            is_archived: false,
-            is_dormant: false,
-            turn_id: None,
-            tree_path: Some(tree_path),
-            tree_ref: None,
-            source_path: Some(source_path),
-            source_textunit: Some(source_textunit),
-            turn_ids: Vec::new(),
-            context_id: None,
+            updated_at: now,
+            version: 1,
+            history: Vec::new(),
         }
     }
 }
 
-// ── EngramKind ────────────────────────────────────────────────
+// ── Topic (话题) — L2 核心 ──────────────────────────────────
 
-/// Classification of an engram's role in the memory system.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EngramKind {
-    /// A specific remembered event or observation.
-    Episode,
-    /// An extracted pattern or category learned from multiple episodes.
-    Schema,
-    /// A named anchor point for scene-gated retrieval.
-    Anchor,
-    /// A self-reflective analysis (pattern, evaluation, intention, confusion).
-    Reflection,
-    /// Externally mounted knowledge (code, doc, book, paper, etc.).
-    Knowledge,
-}
-
-impl std::fmt::Display for EngramKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            EngramKind::Episode => write!(f, "episode"),
-            EngramKind::Schema => write!(f, "schema"),
-            EngramKind::Anchor => write!(f, "anchor"),
-            EngramKind::Reflection => write!(f, "reflection"),
-            EngramKind::Knowledge => write!(f, "knowledge"),
-        }
-    }
-}
-
-// ── Protection ────────────────────────────────────────────────
-
-/// Protection level against forgetting/deletion.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Protection {
-    Normal,
-    Protected,
-    Permanent,
-}
-
-// ── Association ───────────────────────────────────────────────
-
-/// A typed, weighted edge between two engrams.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Association {
+pub struct Topic {
+    pub id: String,
+    pub label: String,
+    pub summary: Option<String>,
+    pub keywords: Vec<String>,
+    pub centroid: Vec<f16>,
+    pub node_ids: Vec<String>,
+    pub linked_domain_ids: Vec<String>,
+    pub dialogue_range: Option<(i64, i64)>,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub version: u64,
+    pub history: Vec<TopicSnapshot>,
+}
+
+// ── TopicEdge (话题图边) — L2 ──────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TopicEdge {
+    pub source_id: String,
     pub target_id: String,
+    pub kind: TopicEdgeKind,
     pub weight: f32,
-    pub kind: AssociationKind,
-    pub last_activated: i64,
+    pub created_at: i64,
 }
 
-// ── AssociationKind ───────────────────────────────────────────
-
-/// Semantic classification of an associative link.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum AssociationKind {
-    Semantic,
-    Temporal,
-    Causal,
-    Emotional,
-    Hierarchical,
-    Contradicts,
-    Manual,
-    /// v0.11.0: Co-located in the same knowledge tree (adjacent chunks).
-    CoShelf,
-}
-
-impl std::fmt::Display for AssociationKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AssociationKind::Semantic => write!(f, "semantic"),
-            AssociationKind::Temporal => write!(f, "temporal"),
-            AssociationKind::Causal => write!(f, "causal"),
-            AssociationKind::Emotional => write!(f, "emotional"),
-            AssociationKind::Hierarchical => write!(f, "hierarchical"),
-            AssociationKind::Contradicts => write!(f, "contradicts"),
-            AssociationKind::Manual => write!(f, "manual"),
-            AssociationKind::CoShelf => write!(f, "co_shelf"),
-        }
-    }
-}
-
-// ── SchemaExtra ───────────────────────────────────────────────
-
-/// Additional metadata stored for Schema-type engrams.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SchemaExtra {
-    pub source_episodes: Vec<String>,
-    pub centroid_vector: Vec<f16>,
-    pub match_count: u32,
-    pub stability: f32,
-    pub internal_consistency: f32,
-    pub contradiction_count: u32,
-}
-
-impl Default for SchemaExtra {
-    fn default() -> Self {
-        Self {
-            source_episodes: Vec::new(),
-            centroid_vector: Vec::new(),
-            match_count: 0,
-            stability: 0.0,
-            internal_consistency: 0.0,
-            contradiction_count: 0,
-        }
-    }
-}
-
-impl SchemaExtra {
-    /// Create a new SchemaExtra from source episodes and centroid.
-    pub fn new(source_episodes: Vec<String>, centroid_vector: Vec<f16>) -> Self {
-        let count = source_episodes.len() as u32;
-        SchemaExtra {
-            source_episodes,
-            centroid_vector,
-            match_count: count,
-            stability: 0.0,
-            internal_consistency: 1.0,
-            contradiction_count: 0,
-        }
-    }
-
-    /// Recalculate stability using the sigmoid formula:
-    /// stability = sigmoid(source_episodes) × consistency × (1 - contradiction_penalty)
-    pub fn update_stability(&mut self) {
-        let n = self.source_episodes.len() as f32;
-        let source = 1.0 / (1.0 + (3.0 - n).exp()); // sigmoid centered at 3
-        let penalty = 1.0 - (self.contradiction_count as f32 * 0.1).min(0.5);
-        self.stability = source * self.internal_consistency * penalty;
-        self.stability = self.stability.clamp(0.0, 1.0);
-    }
-
-    /// Whether this schema is stable enough to persist.
-    pub fn is_active(&self) -> bool {
-        self.stability > 0.3 && self.source_episodes.len() >= 3
-    }
-
-    /// Whether this schema should be dissolved (too few episodes or too unstable).
-    pub fn should_dissolve(&self) -> bool {
-        self.stability < 0.1
-    }
-}
-
-// ── EmotionalState ────────────────────────────────────────────
-
-/// A snapshot of emotional state at a point in time.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub struct EmotionalState {
-    /// Valence: negative to positive (-1.0..1.0). Default 0.0.
-    pub valence: f32,
-    /// Arousal: calm to excited (0.0..1.0). Default 0.5.
-    pub arousal: f32,
-}
-
-impl EmotionalState {
-    pub fn new(valence: f32, arousal: f32) -> Self {
-        EmotionalState {
-            valence: valence.clamp(-1.0, 1.0),
-            arousal: arousal.clamp(0.0, 1.0),
-        }
-    }
-}
-
-impl Default for EmotionalState {
-    fn default() -> Self {
-        EmotionalState {
-            valence: 0.0,
-            arousal: 0.5,
-        }
-    }
-}
-
-// ── EmotionalContext ──────────────────────────────────────────
-
-/// Emotional state maintained internally by MemHop.
-/// `state` is the current short-term emotional state (updated per perceive).
-/// `mood` is the slow-moving emotional baseline.
-#[derive(Debug, Clone)]
-pub struct EmotionalContext {
-    pub state: EmotionalState,
-    pub mood: EmotionalState,
-}
-
-impl EmotionalContext {
-    pub fn new() -> Self {
-        EmotionalContext {
-            state: EmotionalState::default(),
-            mood: EmotionalState::default(),
-        }
-    }
-
-    /// Update emotional context with new state. Mood drifts slowly toward state.
-    pub fn update(&mut self, valence: f32, arousal: f32) {
-        self.state = EmotionalState::new(valence, arousal);
-        // Mood drifts 10% toward new state each update
-        self.mood.valence += (self.state.valence - self.mood.valence) * 0.1;
-        self.mood.arousal += (self.state.arousal - self.mood.arousal) * 0.1;
-    }
-}
-
-impl Default for EmotionalContext {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-
-// ── Plan-level types (v0.8.0 Plan architecture) ────────────────
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-pub enum PlanHint { Continuing, NewTopicLikely, TimeoutNewPlan }
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum PlanLevel { SubTask = 0, Plan = 1, Version = 2, MajorVersion = 3, Domain = 4 }
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum PlanState { Active, Paused, Completed, Archived }
-
-#[derive(Debug, Clone)]
-pub struct PlanInfo { pub name: String, pub level: PlanLevel, pub state: PlanState, pub created_at: i64 }
+// ── RawDocument (原文) — L4 核心 ───────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StyleCompact { pub avg_sentence_len: f32, pub question_ratio: f32, pub exclamation_count: u32 }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToneMeta { pub valence: f32, pub arousal: f32, pub tone_tags: Vec<String>, pub filler_ratio: f32, pub sentence_style: StyleCompact }
-
-/// v0.9.1: Source of a dialogue turn.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum TurnSource {
-    #[default]
-    User,
-    Agent,
-    System,
-    External,
+pub struct RawDocument {
+    pub id: String,
+    pub text: String,
+    pub turn_id: Option<String>,
+    pub session_id: Option<String>,
+    pub source: String,
+    pub created_at: i64,
+    pub version: u64,
+    pub history: Vec<DocumentSnapshot>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanNode { pub id: String, pub parent_id: Option<String>, pub name: String, pub level: PlanLevel, pub centroid_vector: Vec<f16>, pub dialogue_count: u32, pub compressed_summary: Option<String>, pub state: PlanState, pub created_at: i64, pub completed_at: Option<i64>, pub meta: HashMap<String, serde_json::Value> }
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DialogueTurn { pub id: String, pub plan_id: String, pub user_input: String, pub agent_response: String, pub user_tone: ToneMeta, pub agent_tone: ToneMeta, pub timestamp: i64, pub vector: Vec<f16>, #[serde(default)] pub session_id: String, #[serde(default)] pub turn_index: u32, #[serde(default)] pub segment_count: u32, #[serde(default)] pub source: TurnSource, #[serde(default)] pub topic_label: Option<String> }
-
-#[derive(Debug, Clone)]
-pub struct DomainStats { pub plan_count: u32, pub dialogue_count: u32, pub avg_valence: f32, pub top_keywords: Vec<String> }
-
-#[derive(Debug, Clone)]
-pub struct TopicDistribution { pub domains: HashMap<String, DomainStats> }
-
-#[derive(Debug, Clone)]
-pub struct ToneAggregate { pub time_range_start: i64, pub time_range_end: i64, pub avg_valence: f32, pub avg_arousal: f32, pub valence_trend: f32, pub top_tone_tags: Vec<(String, u32)>, pub filler_ratio_trend: f32 }
-
-/// v0.12.0: Result of compressing a plan's dialogue turns into a Knowledge engram.
-#[derive(Debug, Clone)]
-pub struct CompressResult {
-    pub knowledge_id: String,
-    pub archived_count: usize,
-    pub summary: String,
-    pub skipped: bool,
+impl RawDocument {
+    pub fn new(id: String, text: String, source: String, turn_id: Option<String>) -> Self {
+        let now = chrono::Utc::now().timestamp_millis();
+        RawDocument {
+            id,
+            text,
+            turn_id,
+            session_id: None,
+            source,
+            created_at: now,
+            version: 1,
+            history: Vec::new(),
+        }
+    }
 }

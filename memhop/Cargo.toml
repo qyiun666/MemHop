@@ -1,52 +1,17 @@
 [package]
 name = "memhop"
-version = "0.13.1"
+version = "0.14.0"
 edition = "2024"
-description = "Embedded associative memory engine powered by Modern Hopfield Networks — SQLite for associative memory"
+description = "Hypergraph-based associative memory engine for AI Agents — pure ngram + BM25"
 
 [lib]
 crate-type = ["rlib"]
-
-[features]
-default = ["candle"]
-# Pure-Rust encoder backed by HuggingFace Candle (BERT/safetensors).
-# Zero C dependencies — works on Windows/macOS/Linux out of the box.
-candle = ["dep:candle-core", "dep:candle-transformers", "dep:candle-nn", "dep:hf-hub", "dep:safetensors", "dep:tokenizers"]
-# Legacy ONNX encoder (ort crate + system libonnxruntime). Unreliable
-# on some macOS versions. Prefer `candle`.
-onnx = ["dep:ort", "dep:tokenizers"]
-# Generic OpenAI-compatible HTTP embedding encoder. Pulls in `reqwest`
-# (blocking + JSON). Disabled by default so the base build performs
-# zero outbound network calls and adds no TLS / HTTP dependencies.
-api-encoder = ["dep:reqwest"]
 
 [dependencies]
 heed = "0.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
-zstd = "0.13"
 half = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
-rayon = "1"
-# Candle — pure-Rust ML inference (BERT embeddings, no C deps)
-candle-core = { version = "0.8", optional = true }
-candle-transformers = { version = "0.8", optional = true }
-candle-nn = { version = "0.8", optional = true }
-hf-hub = { version = "0.4", optional = true }
-safetensors = { version = "0.5", optional = true }
-# Legacy ONNX runtime (ort crate). Unreliable; prefer candle.
-# `load-dynamic` lets the host process resolve `libonnxruntime` at
-# runtime (via `ORT_DYLIB_PATH` or a system-installed dylib) instead
-# of relying on `ort`'s prebuilt binaries — which are unavailable for
-# some macOS / aarch64 host combinations. Agents that prefer the
-# bundled binaries can override this at the workspace level.
-ort = { version = "2.0.0-rc.12", optional = true, features = ["load-dynamic"] }
-tokenizers = { version = "0.20", optional = true, default-features = false, features = ["onig"] }
-# Used only when the `api-encoder` feature is enabled. Blocking client
-# because the `Encoder` trait is synchronous (`&self`).
-reqwest = { version = "0.12", optional = true, default-features = false, features = ["blocking", "json", "rustls-tls"] }
-
-[dev-dependencies]
-tempfile = "3"
