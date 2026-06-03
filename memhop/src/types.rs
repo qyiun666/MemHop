@@ -76,7 +76,6 @@ pub struct DocumentSnapshot {
 #[derive(Debug, Clone)]
 pub struct StoreBatch {
     pub items: Vec<StoreItem>,
-    pub agent_meta: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +92,25 @@ pub struct StoreItem {
     pub chain_parent_id: Option<String>,
     pub chain_label: Option<String>,
     pub domain_id: Option<String>,
+}
+
+impl Default for StoreItem {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            turn_id: None,
+            session_id: None,
+            source: "chat".to_string(),
+            topic_label: None,
+            llm_keywords: None,
+            llm_compressed_summary: None,
+            valence: None,
+            arousal: None,
+            chain_parent_id: None,
+            chain_label: None,
+            domain_id: None,
+        }
+    }
 }
 
 // ── BatchReport ────────────────────────────────────────────

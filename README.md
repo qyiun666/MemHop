@@ -4,12 +4,7 @@
 
 ## 🎯 第一梯队检索
 
-| Benchmark | 指标 | 结果 |
-|-----------|------|------|
-| 合成检索 (BGE-M3, 200 docs) | NDCG@10 | **0.979** = 99.9% 余弦上限 |
-| BEIR nfcorpus (300 docs) | NDCG@10 | **0.183** = 98.0% 余弦上限 |
-| HNSW 检索延迟 | P50 | **< 1ms** |
-| 检索延迟改善 (10K) | P99 | **541ms → 165ms (-70%)** |
+
 
 > 检索管线无损 — HNSW 近似搜索质量紧贴纯余弦理论上限。延迟从 O(N) 降到 O(log N)。
 
@@ -25,7 +20,7 @@
 | 部署 | Node.js + SQLite | **Rust 单二进制 + LMDB** |
 | 延迟 | 14ms | **< 1ms** |
 | 多猫内存 | 共享 | **单进程 1×BGE-M3 (2GB)** |
-| LongMemEval-S R@5 | 95.2% | 待跑 (`benchmarks/run_longmemeval.py`) |
+| LongMemEval-S R@5 | 95.2% | (已归档) |
 
 ## 安装
 
@@ -180,29 +175,7 @@ memhop-mcp-server (binary crate, v0.9.0)
 └── main.rs          MCP JSON-RPC (多数据库路径 + health + 隐私过滤)
 ```
 
-## Benchmark
 
-```bash
-# 构建
-cargo build --release --features onnx
-
-# 单元测试 (144+ tests)
-cargo test --workspace
-
-# 延迟 benchmark
-./target/release/latency_bench --scales 1000,5000,10000,50000
-
-# 质量 benchmark (需 Python 环境)
-pip install sentence-transformers numpy
-python3 -c "
-from sentence_transformers import SentenceTransformer
-# ... 生成 BGE-M3 编码的测试数据 ...
-"
-./target/release/quality_bench --input /tmp/input.json --output /tmp/output.json --mode retrieval
-
-# LongMemEval-S (对标 agentmemory)
-python3 benchmarks/run_longmemeval.py 500
-```
 
 ## 测试
 

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::error::Result;
+use crate::error::{Result, MemHopError};
 use crate::types::{BrainConfig, StoreBatch, BatchReport, RecallRequest, RecallResponse, ConsolidateReport};
 use crate::lmdb::{L1Env, L2Env, L3Env, L4Env};
 use crate::hypergraph::L1Hypergraph;
@@ -33,7 +33,8 @@ impl Brain {
         let l3_env = L3Env::open(&path.join("l3_domains.db"))?;
         let l4_env = L4Env::open(&path.join("l4_raw.db"))?;
 
-        let l1 = L1Hypergraph::new();
+        let mut l1 = L1Hypergraph::new();
+        l1.rebuild_bm25(&l1_env)?;
         let l2 = L2TopicGraph::new();
         let l3 = L3DomainGraph::new();
         let l4 = L4RawArchive::new();
@@ -51,7 +52,7 @@ impl Brain {
     }
 
     pub fn consolidate(&self) -> Result<ConsolidateReport> {
-        Ok(ConsolidateReport::default())
+        Err(MemHopError::Internal("consolidate not yet implemented".into()))
     }
 
     pub fn config(&self) -> &BrainConfig {

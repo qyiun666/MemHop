@@ -8,6 +8,9 @@ use crate::brain::Brain;
 use crate::encoder::Encoder;
 
 pub(crate) fn execute(brain: &Brain, req: &RecallRequest) -> Result<RecallResponse> {
+    if req.query.trim().is_empty() {
+        return Ok(RecallResponse { results: vec![], total_count: 0 });
+    }
     let encoded = brain.encoder.encode(&req.query);
     let sparse = &encoded.sparse;
 

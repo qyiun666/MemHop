@@ -23,10 +23,6 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         topic_label: Option<String>,
         llm_keywords: Option<Vec<String>>,
         llm_compressed_summary: Option<String>,
-        #[allow(dead_code)]
-        valence: Option<f64>,
-        #[allow(dead_code)]
-        arousal: Option<f64>,
         chain_parent_id: Option<String>,
         chain_label: Option<String>,
         domain_id: Option<String>,
@@ -45,8 +41,6 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
             topic_label: item.topic_label.clone(),
             llm_keywords: item.llm_keywords.clone(),
             llm_compressed_summary: item.llm_compressed_summary.clone(),
-            valence: item.valence,
-            arousal: item.arousal,
             chain_parent_id: item.chain_parent_id.clone(),
             chain_label: item.chain_label.clone(),
             domain_id: item.domain_id.clone(),

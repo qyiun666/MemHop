@@ -14,7 +14,6 @@ mod engram;
 // ── 基础设施 ────────────────────────────────────────────────
 mod error;
 mod index;       // SparseIndex + BM25
-pub mod session;
 
 // ── 编码器 ──────────────────────────────────────────────────
 pub mod encoder; // NgramEncoder (only)
