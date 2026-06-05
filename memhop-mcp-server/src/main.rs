@@ -4,11 +4,52 @@
 use memhop::{Brain, BrainConfig, Layer, RecallRequest, ShelfDomain, StoreBatch, StoreItem};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::fs::{self, File};
+use std::io::Write;
 use std::sync::{Arc, LazyLock, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
 const VERSION: &str = "0.18.1";
+const LOCK_FILE: &str = "/tmp/memhop-mcp-server.lock";
+
+/// 检查是否已有进程在运行，使用文件锁实现单实例
+fn check_single_instance() -> Result<(), String> {
+    // 检查锁文件是否存在
+    if fs::metadata(LOCK_FILE).is_ok() {
+        // 读取锁文件中的 PID
+        if let Ok(pid_str) = fs::read_to_string(LOCK_FILE) {
+            if let Ok(pid) = pid_str.trim().parse::<u32>() {
+                // 检查进程是否还在运行
+                if is_process_running(pid) {
+                    return Err(format!(
+                        "memhop-mcp-server is already running (PID: {}). \
+                         Remove {} to force start.",
+                        pid, LOCK_FILE
+                    ));
+                }
+            }
+        }
+        // 进程已不存在，删除旧的锁文件
+        let _ = fs::remove_file(LOCK_FILE);
+    }
+    
+    // 写入当前进程的 PID
+    let pid = std::process::id();
+    let mut file = File::create(LOCK_FILE)
+        .map_err(|e| format!("Failed to create lock file: {}", e))?;
+    file.write_all(pid.to_string().as_bytes())
+        .map_err(|e| format!("Failed to write lock file: {}", e))?;
+    
+    Ok(())
+}
+
+/// 检查进程是否在运行
+fn is_process_running(pid: u32) -> bool {
+    // 在 macOS/Linux 上，发送信号 0 检查进程是否存在
+    // 信号 0 不会实际发送信号，只是检查权限和进程存在性
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
 
 /// agent_id → Arc<Mutex<Brain>> 的全局缓存，避免每 RPC 重复 mmap 4 个 LMDB。
 static BRAIN_CACHE: LazyLock<Mutex<HashMap<String, Arc<Mutex<Brain>>>>> =
@@ -41,6 +82,18 @@ fn get_or_open_brain(
 
 #[tokio::main]
 async fn main() {
+    // 检查单实例
+    if let Err(e) = check_single_instance() {
+        eprintln!("ERROR: {}", e);
+        std::process::exit(1);
+    }
+    
+    // 注册退出时清理锁文件
+    ctrlc::set_handler(move || {
+        let _ = fs::remove_file(LOCK_FILE);
+        std::process::exit(0);
+    }).expect("Error setting Ctrl-C handler");
+    
     let socket_path =
         std::env::var("MEMHOP_SOCKET").unwrap_or_else(|_| "/tmp/memhop.sock".to_string());
     let _ = std::fs::remove_file(&socket_path);
