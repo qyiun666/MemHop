@@ -116,6 +116,7 @@ impl L0ProfileStore {
 
         let now = chrono::Utc::now().timestamp_millis();
         L0Profile {
+            catid: None,
             role_name: None,
             personality,
             values,

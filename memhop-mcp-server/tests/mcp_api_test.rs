@@ -126,6 +126,7 @@ fn test_handle_get_set_profile() {
 
     // 设置 profile
     let result = brain.set_l0_profile(
+        Some("test_cat_1".to_string()),
         Some("assistant".to_string()),
         Some("helpful AI".to_string()),
         Some("virtual assistant".to_string()),
@@ -250,6 +251,7 @@ fn test_handle_set_l0() {
 
     // 设置 L0 profile
     let result = brain.set_l0(
+        Some("test_cat_2".to_string()),
         Some("test_role".to_string()),
         vec!["trait1".to_string(), "trait2".to_string()],
         vec!["value1".to_string()],
