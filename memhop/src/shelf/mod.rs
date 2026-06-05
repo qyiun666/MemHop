@@ -3,20 +3,27 @@
 //! Each chunk becomes a StoreItem { source: "shelf", domain_id, ... }.
 
 use crate::brain::Brain;
-use crate::error::{Result, MemHopError};
+use crate::error::{MemHopError, Result};
 use crate::types::*;
 
-pub mod scanner;
 pub mod chunker;
+pub mod scanner;
 
 /// Mount a directory as a knowledge domain in L3.
 /// Returns metadata about the mounted knowledge base.
-pub fn mount(brain: &mut Brain, dir_path: &str, domain: ShelfDomain, domain_name: &str) -> Result<ShelfMeta> {
+pub fn mount(
+    brain: &mut Brain,
+    dir_path: &str,
+    domain: ShelfDomain,
+    domain_name: &str,
+) -> Result<ShelfMeta> {
     // 1. Scan files
-    let files = scanner::scan(dir_path, &domain)
-        .map_err(MemHopError::InvalidArgument)?;
+    let files = scanner::scan(dir_path, &domain).map_err(MemHopError::InvalidArgument)?;
     if files.is_empty() {
-        return Err(MemHopError::InvalidArgument(format!("no files found in '{}' for domain {:?}", dir_path, domain)));
+        return Err(MemHopError::InvalidArgument(format!(
+            "no files found in '{}' for domain {:?}",
+            dir_path, domain
+        )));
     }
 
     // 2. Chunk each file
@@ -34,12 +41,15 @@ pub fn mount(brain: &mut Brain, dir_path: &str, domain: ShelfDomain, domain_name
     let now = chrono::Utc::now().timestamp_millis();
     let domain_id = format!("shelf_{}", now);
     let mut stored = 0usize;
-    let mut all_engram_ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut all_l3_engram_ids: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut all_engram_ids: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    let mut all_l3_engram_ids: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for chunk_batch in chunks.chunks(100) {
-        let items: Vec<StoreItem> = chunk_batch.iter().map(|text| {
-            StoreItem {
+        let items: Vec<StoreItem> = chunk_batch
+            .iter()
+            .map(|text| StoreItem {
                 text: text.clone(),
                 source: "shelf".to_string(),
                 domain_id: Some(domain_id.clone()),
@@ -53,8 +63,8 @@ pub fn mount(brain: &mut Brain, dir_path: &str, domain: ShelfDomain, domain_name
                 chain_parent_id: None,
                 chain_label: None,
                 importance: None,
-            }
-        }).collect();
+            })
+            .collect();
 
         let batch = StoreBatch { items };
         let report = brain.batch_store(batch)?;
@@ -84,10 +94,16 @@ pub fn mount(brain: &mut Brain, dir_path: &str, domain: ShelfDomain, domain_name
     let meta_bytes = bincode::serialize(&meta).map_err(|e| MemHopError::Storage(e.to_string()))?;
     {
         let env = brain.l3_env.env.clone();
-        let mut wtxn = env.write_txn().map_err(|e| MemHopError::Storage(e.to_string()))?;
-        brain.l3_env.domain_meta.put(&mut wtxn, &meta_key, &meta_bytes)
+        let mut wtxn = env
+            .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        wtxn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+        brain
+            .l3_env
+            .domain_meta
+            .put(&mut wtxn, &meta_key, &meta_bytes)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
     }
 
     Ok(meta)
@@ -97,10 +113,15 @@ pub fn mount(brain: &mut Brain, dir_path: &str, domain: ShelfDomain, domain_name
 pub fn unmount(brain: &mut Brain, domain_id: &str) -> Result<()> {
     let meta_key = format!("shelf_meta:{}", domain_id);
     let env = brain.l3_env.env.clone();
-    let mut wtxn = env.write_txn().map_err(|e| MemHopError::Storage(e.to_string()))?;
+    let mut wtxn = env
+        .write_txn()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
     // Remove domain metadata
-    brain.l3_env.domain_meta.delete(&mut wtxn, &meta_key)
+    brain
+        .l3_env
+        .domain_meta
+        .delete(&mut wtxn, &meta_key)
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
     // Remove all domain nodes with this domain_id prefix
@@ -109,33 +130,41 @@ pub fn unmount(brain: &mut Brain, domain_id: &str) -> Result<()> {
     if let Ok(iter) = brain.l3_env.domain_nodes.iter(&wtxn) {
         for item in iter {
             if let Ok((key, _)) = item
-                && key.starts_with(&prefix) {
-                    to_delete.push(key.to_string());
-                }
+                && key.starts_with(&prefix)
+            {
+                to_delete.push(key.to_string());
+            }
         }
     }
     for key in &to_delete {
-        brain.l3_env.domain_nodes.delete(&mut wtxn, key)
+        brain
+            .l3_env
+            .domain_nodes
+            .delete(&mut wtxn, key)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
     }
 
-    wtxn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+    wtxn.commit()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
     Ok(())
 }
 
 /// List all mounted knowledge bases.
 pub fn list(brain: &Brain) -> Result<Vec<ShelfMeta>> {
     let env = brain.l3_env.env.clone();
-    let txn = env.read_txn().map_err(|e| MemHopError::Storage(e.to_string()))?;
+    let txn = env
+        .read_txn()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
     let mut results = Vec::new();
 
     if let Ok(iter) = brain.l3_env.domain_meta.iter(&txn) {
         for item in iter {
             if let Ok((key, bytes)) = item
                 && key.starts_with("shelf_meta:")
-                    && let Ok(meta) = bincode::deserialize::<ShelfMeta>(bytes) {
-                        results.push(meta);
-                    }
+                && let Ok(meta) = bincode::deserialize::<ShelfMeta>(bytes)
+            {
+                results.push(meta);
+            }
         }
     }
 

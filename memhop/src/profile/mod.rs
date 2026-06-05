@@ -1,11 +1,11 @@
 //! profile — L0 角色画像存储与生成。
 //! 从 L2 Topic 模式中提取三观、世界观、性格，形成角色画像。
 
-use std::collections::HashMap;
 use crate::brain::Brain;
 use crate::engram::Topic;
-use crate::error::{Result, MemHopError};
+use crate::error::{MemHopError, Result};
 use crate::types::{L0Profile, L0Snapshot};
+use std::collections::HashMap;
 
 const PROFILE_KEY: &str = "profile:main";
 
@@ -13,25 +13,50 @@ const PROFILE_KEY: &str = "profile:main";
 pub struct L0ProfileStore;
 
 impl L0ProfileStore {
-    pub fn new() -> Self { L0ProfileStore }
+    pub fn new() -> Self {
+        L0ProfileStore
+    }
 
     /// 从 LMDB 读取当前 L0Profile。
-    pub fn get_profile(&self, txn: &heed::RoTxn<'_>, env: &crate::lmdb::L0Env) -> Result<Option<L0Profile>> {
-        match env.profile.get(txn, PROFILE_KEY).map_err(|e| MemHopError::Storage(e.to_string()))? {
-            Some(bytes) => Ok(Some(bincode::deserialize(bytes).map_err(|e| MemHopError::Storage(e.to_string()))?)),
+    pub fn get_profile(
+        &self,
+        txn: &heed::RoTxn<'_>,
+        env: &crate::lmdb::L0Env,
+    ) -> Result<Option<L0Profile>> {
+        match env
+            .profile
+            .get(txn, PROFILE_KEY)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?
+        {
+            Some(bytes) => Ok(Some(
+                bincode::deserialize(bytes).map_err(|e| MemHopError::Storage(e.to_string()))?,
+            )),
             None => Ok(None),
         }
     }
 
     /// 将 L0Profile 写入 LMDB。
-    pub fn update_profile(&self, wtxn: &mut heed::RwTxn<'_>, env: &crate::lmdb::L0Env, profile: &L0Profile) -> Result<()> {
+    pub fn update_profile(
+        &self,
+        wtxn: &mut heed::RwTxn<'_>,
+        env: &crate::lmdb::L0Env,
+        profile: &L0Profile,
+    ) -> Result<()> {
         let bytes = bincode::serialize(profile).map_err(|e| MemHopError::Storage(e.to_string()))?;
-        env.profile.put(wtxn, PROFILE_KEY, &bytes).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        env.profile
+            .put(wtxn, PROFILE_KEY, &bytes)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
         Ok(())
     }
 
     /// 保存旧版本到 history DB。
-    pub fn snapshot(&self, wtxn: &mut heed::RwTxn<'_>, env: &crate::lmdb::L0Env, profile: &L0Profile, reason: &str) -> Result<()> {
+    pub fn snapshot(
+        &self,
+        wtxn: &mut heed::RwTxn<'_>,
+        env: &crate::lmdb::L0Env,
+        profile: &L0Profile,
+        reason: &str,
+    ) -> Result<()> {
         let snap = L0Snapshot {
             version: profile.version,
             personality: profile.personality.clone(),
@@ -42,7 +67,9 @@ impl L0ProfileStore {
         };
         let key = format!("hist:{}", snap.version);
         let bytes = bincode::serialize(&snap).map_err(|e| MemHopError::Storage(e.to_string()))?;
-        env.history.put(wtxn, &key, &bytes).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        env.history
+            .put(wtxn, &key, &bytes)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
         Ok(())
     }
 
@@ -74,8 +101,18 @@ impl L0ProfileStore {
         let third = (n / 3).max(1);
 
         let values: Vec<String> = ranked.iter().take(third).map(|(k, _)| k.clone()).collect();
-        let worldview: Vec<String> = ranked.iter().skip(third).take(third).map(|(k, _)| k.clone()).collect();
-        let personality: Vec<String> = ranked.iter().skip(third * 2).take(third).map(|(k, _)| k.clone()).collect();
+        let worldview: Vec<String> = ranked
+            .iter()
+            .skip(third)
+            .take(third)
+            .map(|(k, _)| k.clone())
+            .collect();
+        let personality: Vec<String> = ranked
+            .iter()
+            .skip(third * 2)
+            .take(third)
+            .map(|(k, _)| k.clone())
+            .collect();
 
         let now = chrono::Utc::now().timestamp_millis();
         L0Profile {
@@ -96,12 +133,17 @@ impl L0ProfileStore {
     pub fn dream_form(brain: &mut Brain) -> Result<bool> {
         // 1. 收集所有 Topic
         let topics = {
-            let txn = brain.l2_env.env.read_txn()
+            let txn = brain
+                .l2_env
+                .env
+                .read_txn()
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
             let mut list = Vec::new();
             if let Ok(iter) = brain.l2_env.topics.iter(&txn) {
                 for (key, bytes) in iter.flatten() {
-                    if !key.starts_with("topic:") || !key.ends_with(":meta") { continue; }
+                    if !key.starts_with("topic:") || !key.ends_with(":meta") {
+                        continue;
+                    }
                     if let Ok(t) = bincode::deserialize::<Topic>(bytes) {
                         list.push(t);
                     }
@@ -119,7 +161,10 @@ impl L0ProfileStore {
 
         // 3. 读取旧 Profile
         let old_profile = {
-            let txn = brain.l0_env.env.read_txn()
+            let txn = brain
+                .l0_env
+                .env
+                .read_txn()
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
             brain.l0.get_profile(&txn, &brain.l0_env)?
         };
@@ -140,27 +185,37 @@ impl L0ProfileStore {
 
         // 5. 快照旧版本 + 写入新版本
         let env = brain.l0_env.env.clone();
-        let mut wtxn = env.write_txn()
+        let mut wtxn = env
+            .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
         if let Some(ref old) = old_profile {
-            brain.l0.snapshot(&mut wtxn, &brain.l0_env, old, "dream L0 formation")?;
+            brain
+                .l0
+                .snapshot(&mut wtxn, &brain.l0_env, old, "dream L0 formation")?;
             // 新版本 = 旧版本 + 1
             let mut updated = new_profile;
             updated.version = old.version + 1;
             updated.history = old.history.clone(); // 保留历史引用
-            brain.l0.update_profile(&mut wtxn, &brain.l0_env, &updated)?;
+            brain
+                .l0
+                .update_profile(&mut wtxn, &brain.l0_env, &updated)?;
         } else {
-            brain.l0.update_profile(&mut wtxn, &brain.l0_env, &new_profile)?;
+            brain
+                .l0
+                .update_profile(&mut wtxn, &brain.l0_env, &new_profile)?;
         }
 
-        wtxn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
         Ok(true)
     }
 }
 
 impl Default for L0ProfileStore {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(test)]
@@ -200,12 +255,28 @@ mod tests {
     #[test]
     fn test_extract_from_topics() {
         let topics = vec![
-            make_topic("Rust编程", vec!["Rust", "安全", "性能", "并发"], Some("关于Rust编程的讨论")),
-            make_topic("代码质量", vec!["测试", "重构", "安全", "规范"], Some("代码质量改进")),
-            make_topic("系统设计", vec!["架构", "分布式", "性能", "扩展"], Some("系统设计话题")),
+            make_topic(
+                "Rust编程",
+                vec!["Rust", "安全", "性能", "并发"],
+                Some("关于Rust编程的讨论"),
+            ),
+            make_topic(
+                "代码质量",
+                vec!["测试", "重构", "安全", "规范"],
+                Some("代码质量改进"),
+            ),
+            make_topic(
+                "系统设计",
+                vec!["架构", "分布式", "性能", "扩展"],
+                Some("系统设计话题"),
+            ),
         ];
         let profile = L0ProfileStore::extract_from_topics(&topics);
         // "安全" 和 "性能" 出现 2 次，应排前
-        assert!(!profile.values.is_empty() || !profile.worldview.is_empty() || !profile.personality.is_empty());
+        assert!(
+            !profile.values.is_empty()
+                || !profile.worldview.is_empty()
+                || !profile.personality.is_empty()
+        );
     }
 }

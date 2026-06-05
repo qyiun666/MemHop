@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use crate::types::*;
 use half::f16;
 use serde::{Deserialize, Serialize};
-use crate::types::*;
+use std::collections::HashMap;
 
 // ── Hyperedge (超边) — L1/L3 核心 ──────────────────────────
 
@@ -43,7 +43,14 @@ pub struct KnowledgeNode {
 
 #[allow(dead_code)]
 impl KnowledgeNode {
-    pub fn new(id: String, text: String, sparse: HashMap<String, f32>, vector: Vec<f16>, layer: Layer, source: NodeSource) -> Self {
+    pub fn new(
+        id: String,
+        text: String,
+        sparse: HashMap<String, f32>,
+        vector: Vec<f16>,
+        layer: Layer,
+        source: NodeSource,
+    ) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         KnowledgeNode {
             id,

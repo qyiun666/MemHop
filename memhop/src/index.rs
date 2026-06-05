@@ -9,6 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::error::{MemHopError, Result};
 use serde::{Deserialize, Serialize};
 
 /// BM25 parameters (Okapi BM25).
@@ -81,25 +82,27 @@ impl SparseIndex {
     /// sorted by sparse score (dot product of shared ngram weights) descending.
     ///
     /// `max_candidates`: maximum number of candidates to return.
-    pub fn search(&self, query_sparse: &HashMap<String, f32>, max_candidates: usize) -> Vec<String> {
+    pub fn search(
+        &self,
+        query_sparse: &HashMap<String, f32>,
+        max_candidates: usize,
+    ) -> Vec<String> {
         let mut scores: HashMap<String, f32> = HashMap::new();
 
         for (ngram, q_weight) in query_sparse {
             if let Some(doc_ids) = self.inverted.get(ngram) {
                 for doc_id in doc_ids {
                     if let Some(doc_sparse) = self.forward.get(doc_id)
-                        && let Some(d_weight) = doc_sparse.get(ngram) {
-                            *scores.entry(doc_id.clone()).or_insert(0.0) += q_weight * d_weight;
-                        }
+                        && let Some(d_weight) = doc_sparse.get(ngram)
+                    {
+                        *scores.entry(doc_id.clone()).or_insert(0.0) += q_weight * d_weight;
+                    }
                 }
             }
         }
 
         let mut candidates: Vec<(String, f32)> = scores.into_iter().collect();
-        candidates.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(max_candidates);
         candidates.into_iter().map(|(id, _)| id).collect()
     }
@@ -147,10 +150,7 @@ impl SparseIndex {
         }
 
         let mut candidates: Vec<(String, f32)> = scores.into_iter().collect();
-        candidates.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(max_candidates);
         candidates.into_iter().map(|(id, _)| id).collect()
     }
@@ -208,10 +208,7 @@ impl SparseIndex {
         }
 
         let mut candidates: Vec<(String, f32)> = scores.into_iter().collect();
-        candidates.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         candidates.truncate(max_candidates);
         candidates
     }
@@ -316,11 +313,14 @@ impl HnswConfig {
 impl HnswIndex {
     /// 创建新的 HNSW 索引。dims 必须与编码器输出维度一致。
     pub fn new(dims: usize) -> Self {
-        Self::new_with_config(dims, HnswConfig::default())
+        Self::new_with_config(dims, HnswConfig::default()).unwrap_or_else(|e| {
+            eprintln!("HnswIndex::new failed: {}, using default", e);
+            HnswIndex::default()
+        })
     }
 
     /// v0.18.0: 使用指定配置创建 HNSW 索引。
-    pub fn new_with_config(dims: usize, config: HnswConfig) -> Self {
+    pub fn new_with_config(dims: usize, config: HnswConfig) -> Result<Self> {
         let options = IndexOptions {
             dimensions: dims,
             metric: MetricKind::Cos,
@@ -330,20 +330,26 @@ impl HnswIndex {
             expansion_search: config.expansion_search,
             multi: false,
         };
-        let index = Index::new(&options).expect("HnswIndex: failed to create index");
-        HnswIndex {
+        let index = Index::new(&options)
+            .map_err(|e| MemHopError::Internal(format!("HnswIndex create: {}", e)))?;
+        Ok(HnswIndex {
             index,
             id_to_key: HashMap::new(),
             key_to_id: HashMap::new(),
             next_key: 0,
             dims,
-        }
+        })
     }
 
     /// 添加向量。如果 id 已存在，先移除旧向量。
     pub fn add(&mut self, id: &str, vector: &[half::f16]) {
         if vector.is_empty() || vector.len() != self.dims {
-            eprintln!("HnswIndex::add: dim mismatch for '{}': expected {}, got {}", id, self.dims, vector.len());
+            eprintln!(
+                "HnswIndex::add: dim mismatch for '{}': expected {}, got {}",
+                id,
+                self.dims,
+                vector.len()
+            );
             return;
         }
         // Remove old entry if exists
@@ -445,13 +451,14 @@ impl HnswIndex {
         }
 
         // Serialize id mapping
-        let id_map_bytes = match bincode::serialize(&(&self.id_to_key, &self.key_to_id, &self.next_key)) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("HnswIndex::to_bytes id_map serialize error: {}", e);
-                return Vec::new();
-            }
-        };
+        let id_map_bytes =
+            match bincode::serialize(&(&self.id_to_key, &self.key_to_id, &self.next_key)) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("HnswIndex::to_bytes id_map serialize error: {}", e);
+                    return Vec::new();
+                }
+            };
 
         // Serialize usearch index
         let usearch_len = self.index.serialized_length();
@@ -493,17 +500,14 @@ impl HnswIndex {
         }
 
         // Deserialize id mapping
-        let (id_to_key, key_to_id, next_key): (
-            HashMap<String, u64>,
-            HashMap<u64, String>,
-            u64,
-        ) = match bincode::deserialize(&data[8..id_map_end]) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("HnswIndex::from_bytes id_map deserialize error: {}", e);
-                return None;
-            }
-        };
+        let (id_to_key, key_to_id, next_key): (HashMap<String, u64>, HashMap<u64, String>, u64) =
+            match bincode::deserialize(&data[8..id_map_end]) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("HnswIndex::from_bytes id_map deserialize error: {}", e);
+                    return None;
+                }
+            };
 
         // Restore usearch index from buffer
         let usearch_data = &data[id_map_end..];
@@ -539,10 +543,7 @@ mod tests {
     use super::*;
 
     fn make_sparse(pairs: &[(&str, f32)]) -> HashMap<String, f32> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), *v))
-            .collect()
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
     }
 
     #[test]
@@ -591,7 +592,10 @@ mod tests {
         let query = make_sparse(&[("机器", 1.0), ("学习", 1.0)]);
         let results = idx.search(&query, 10);
 
-        assert_eq!(results[0], "doc1", "doc1 should rank higher (more shared ngrams)");
+        assert_eq!(
+            results[0], "doc1",
+            "doc1 should rank higher (more shared ngrams)"
+        );
         assert_eq!(results[1], "doc2");
     }
 
@@ -668,8 +672,16 @@ mod tests {
 
         // Simulate 100 memories across 10 topics
         let topics = [
-            "Python编程", "机器学习", "数据库设计", "网络安全", "前端开发",
-            "算法竞赛", "云计算架构", "自然语言处理", "计算机视觉", "操作系统",
+            "Python编程",
+            "机器学习",
+            "数据库设计",
+            "网络安全",
+            "前端开发",
+            "算法竞赛",
+            "云计算架构",
+            "自然语言处理",
+            "计算机视觉",
+            "操作系统",
         ];
         for (i, topic) in topics.iter().enumerate() {
             let text = format!("{}的知识点：这是关于{}的详细内容描述", topic, topic);
@@ -680,11 +692,7 @@ mod tests {
                 let ngram: String = w.iter().collect::<String>();
                 *sparse.entry(ngram).or_insert(0.0) += 1.0;
             }
-            idx.add(
-                &format!("mem_{}", i),
-                &sparse,
-                text.chars().count(),
-            );
+            idx.add(&format!("mem_{}", i), &sparse, text.chars().count());
         }
 
         // Query for "Python编程"

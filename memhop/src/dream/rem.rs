@@ -1,9 +1,9 @@
 //! dream/rem — REM stages: topic merging + reflection + plan consolidation.
 
 use crate::brain::Brain;
-use crate::error::{Result, MemHopError};
-use crate::types::ConsolidateReport;
+use crate::error::{MemHopError, Result};
 use crate::organize;
+use crate::types::ConsolidateReport;
 
 /// Merge similar topics based on label ngram overlap.
 /// Creates TopicEdge::Related edges between similar topics.
@@ -19,12 +19,17 @@ pub fn rem_merge_topics(brain: &mut Brain, report: &mut ConsolidateReport) -> Re
 /// v0.17.0: 如果 topic 已有 LLM 提供的非空 summary，reflect_topic 内部跳过覆写。
 pub fn rem_reflect_topics(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<()> {
     let topic_ids: Vec<String> = {
-        let txn = brain.l2_env.env.read_txn()
+        let txn = brain
+            .l2_env
+            .env
+            .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         let mut ids = Vec::new();
         if let Ok(iter) = brain.l2_env.topics.iter(&txn) {
             for (key, _bytes) in iter.flatten() {
-                if !key.starts_with("topic:") || !key.ends_with(":meta") { continue; }
+                if !key.starts_with("topic:") || !key.ends_with(":meta") {
+                    continue;
+                }
                 // Extract topic_id from "topic:{id}:meta"
                 let id = key.trim_start_matches("topic:").trim_end_matches(":meta");
                 ids.push(id.to_string());

@@ -14,7 +14,9 @@ pub struct ScannedFile {
 /// Extension filter per domain.
 fn allowed_extensions(domain: &ShelfDomain) -> &'static [&'static str] {
     match domain {
-        ShelfDomain::Code => &["rs", "py", "js", "ts", "go", "java", "c", "cpp", "h", "hpp", "rb", "swift", "kt"],
+        ShelfDomain::Code => &[
+            "rs", "py", "js", "ts", "go", "java", "c", "cpp", "h", "hpp", "rb", "swift", "kt",
+        ],
         ShelfDomain::Doc => &["md", "txt", "rst", "adoc", "markdown"],
         ShelfDomain::Book => &["md", "txt"],
         ShelfDomain::Paper => &["md", "txt"],
@@ -38,7 +40,11 @@ pub fn scan(dir_path: &str, domain: &ShelfDomain) -> Result<Vec<ScannedFile>, St
     Ok(results)
 }
 
-fn scan_recursive(dir: &Path, extensions: &[&str], results: &mut Vec<ScannedFile>) -> Result<(), String> {
+fn scan_recursive(
+    dir: &Path,
+    extensions: &[&str],
+    results: &mut Vec<ScannedFile>,
+) -> Result<(), String> {
     let entries = fs::read_dir(dir).map_err(|e| format!("read_dir {}: {}", dir.display(), e))?;
 
     for entry in entries {
@@ -48,23 +54,25 @@ fn scan_recursive(dir: &Path, extensions: &[&str], results: &mut Vec<ScannedFile
         if path.is_dir() {
             // Skip hidden directories (starting with '.')
             if let Some(name) = path.file_name().and_then(|n| n.to_str())
-                && !name.starts_with('.') {
-                    scan_recursive(&path, extensions, results)?;
-                }
+                && !name.starts_with('.')
+            {
+                scan_recursive(&path, extensions, results)?;
+            }
         } else if path.is_file()
-            && let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                let ext_lower = ext.to_lowercase();
-                if extensions.contains(&ext_lower.as_str()) {
-                    let content = fs::read_to_string(&path)
-                        .map_err(|e| format!("read {}: {}", path.display(), e))?;
-                    if !content.trim().is_empty() {
-                        results.push(ScannedFile {
-                            path: path.to_string_lossy().to_string(),
-                            content,
-                        });
-                    }
+            && let Some(ext) = path.extension().and_then(|e| e.to_str())
+        {
+            let ext_lower = ext.to_lowercase();
+            if extensions.contains(&ext_lower.as_str()) {
+                let content = fs::read_to_string(&path)
+                    .map_err(|e| format!("read {}: {}", path.display(), e))?;
+                if !content.trim().is_empty() {
+                    results.push(ScannedFile {
+                        path: path.to_string_lossy().to_string(),
+                        content,
+                    });
                 }
             }
+        }
     }
 
     Ok(())

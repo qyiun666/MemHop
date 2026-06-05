@@ -1,7 +1,7 @@
 //! 集成测试 - 测试完整的存储→召回流程
 
+use memhop::{Brain, BrainConfig, Layer, RecallRequest, StoreBatch, StoreItem};
 use std::collections::HashMap;
-use memhop::{Brain, BrainConfig, StoreBatch, StoreItem, RecallRequest, Layer};
 
 /// 创建临时测试用 Brain 实例
 fn make_test_brain() -> Brain {
@@ -17,7 +17,7 @@ fn make_test_brain() -> Brain {
 #[test]
 fn test_store_and_recall_basic() {
     let mut brain = make_test_brain();
-    
+
     // 存储测试数据
     let items = vec![
         StoreItem {
@@ -56,7 +56,10 @@ fn test_store_and_recall_basic() {
             turn_id: Some("turn_3".to_string()),
             session_id: Some("session_1".to_string()),
             topic_label: Some("ml".to_string()),
-            llm_keywords: Some(vec!["machine learning".to_string(), "tensorflow".to_string()]),
+            llm_keywords: Some(vec![
+                "machine learning".to_string(),
+                "tensorflow".to_string(),
+            ]),
             llm_compressed_summary: Some("ML framework".to_string()),
             valence: Some(0.6),
             arousal: Some(0.6),
@@ -66,13 +69,13 @@ fn test_store_and_recall_basic() {
             importance: Some(0.7),
         },
     ];
-    
+
     let store_result = brain.batch_store(StoreBatch { items });
     assert!(store_result.is_ok());
     let report = store_result.unwrap();
     // l1_nodes_created 表示 L1 层创建的节点数
     assert!(report.l1_nodes_created > 0);
-    
+
     // 测试召回 - 相关查询
     let req = RecallRequest {
         query: "programming language".to_string(),
@@ -88,23 +91,25 @@ fn test_store_and_recall_basic() {
         session_id: None,
         time_decay_lambda: None,
     };
-    
+
     let recall_result = brain.recall(&req);
     assert!(recall_result.is_ok());
     let resp = recall_result.unwrap();
     assert!(resp.results.len() > 0);
-    
+
     // 验证召回的内容包含相关结果
-    let texts: Vec<&str> = resp.results.iter()
-        .map(|r| r.text.as_str())
-        .collect();
-    assert!(texts.iter().any(|t| t.contains("Rust") || t.contains("Python")));
+    let texts: Vec<&str> = resp.results.iter().map(|r| r.text.as_str()).collect();
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains("Rust") || t.contains("Python"))
+    );
 }
 
 #[test]
 fn test_store_and_recall_with_session_filter() {
     let mut brain = make_test_brain();
-    
+
     // 存储不同会话的数据
     let items = vec![
         StoreItem {
@@ -120,9 +125,9 @@ fn test_store_and_recall_with_session_filter() {
             ..Default::default()
         },
     ];
-    
+
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 测试按会话过滤 - 注意：session_id 是用于激活话题优先，不是过滤
     let req = RecallRequest {
         query: "conversation".to_string(),
@@ -131,11 +136,11 @@ fn test_store_and_recall_with_session_filter() {
         session_id: Some("session_1".to_string()),
         ..Default::default()
     };
-    
+
     let result = brain.recall(&req);
     assert!(result.is_ok());
     let resp = result.unwrap();
-    
+
     // 应该返回结果（session_id 用于激活话题优先，不是过滤）
     assert!(resp.results.len() > 0);
 }
@@ -143,7 +148,7 @@ fn test_store_and_recall_with_session_filter() {
 #[test]
 fn test_store_and_recall_with_topic_filter() {
     let mut brain = make_test_brain();
-    
+
     // 存储不同话题的数据
     let items = vec![
         StoreItem {
@@ -159,9 +164,9 @@ fn test_store_and_recall_with_topic_filter() {
             ..Default::default()
         },
     ];
-    
+
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 获取话题列表
     let topics = brain.list_topics().unwrap();
     if let Some(topic) = topics.first() {
@@ -173,7 +178,7 @@ fn test_store_and_recall_with_topic_filter() {
             topic_filter: Some(topic.id.clone()),
             ..Default::default()
         };
-        
+
         let result = brain.recall(&req);
         assert!(result.is_ok());
     }
@@ -182,7 +187,7 @@ fn test_store_and_recall_with_topic_filter() {
 #[test]
 fn test_batch_store_multiple_items() {
     let mut brain = make_test_brain();
-    
+
     // 批量存储多条数据
     let items: Vec<StoreItem> = (0..10)
         .map(|i| StoreItem {
@@ -193,12 +198,12 @@ fn test_batch_store_multiple_items() {
             ..Default::default()
         })
         .collect();
-    
+
     let result = brain.batch_store(StoreBatch { items });
     assert!(result.is_ok());
     let report = result.unwrap();
     assert!(report.l1_nodes_created > 0);
-    
+
     // 验证所有数据都能被召回
     let req = RecallRequest {
         query: "Test item".to_string(),
@@ -206,7 +211,7 @@ fn test_batch_store_multiple_items() {
         target_layers: vec![Layer::L1],
         ..Default::default()
     };
-    
+
     let recall_result = brain.recall(&req);
     assert!(recall_result.is_ok());
     let resp = recall_result.unwrap();
@@ -216,23 +221,21 @@ fn test_batch_store_multiple_items() {
 #[test]
 fn test_consolidate_after_store() {
     let mut brain = make_test_brain();
-    
+
     // 存储数据
-    let items = vec![
-        StoreItem {
-            text: "Data for consolidation test".to_string(),
-            source: "chat".to_string(),
-            topic_label: Some("consolidation_topic".to_string()),
-            ..Default::default()
-        },
-    ];
-    
+    let items = vec![StoreItem {
+        text: "Data for consolidation test".to_string(),
+        source: "chat".to_string(),
+        topic_label: Some("consolidation_topic".to_string()),
+        ..Default::default()
+    }];
+
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 执行整合
     let consolidate_result = brain.consolidate();
     assert!(consolidate_result.is_ok());
-    
+
     // 整合后应该仍然能召回数据
     let req = RecallRequest {
         query: "consolidation".to_string(),
@@ -240,7 +243,7 @@ fn test_consolidate_after_store() {
         target_layers: vec![Layer::L1, Layer::L2],
         ..Default::default()
     };
-    
+
     let recall_result = brain.recall(&req);
     assert!(recall_result.is_ok());
 }
@@ -248,23 +251,21 @@ fn test_consolidate_after_store() {
 #[test]
 fn test_recall_with_time_range() {
     let mut brain = make_test_brain();
-    
+
     // 存储数据
-    let items = vec![
-        StoreItem {
-            text: "Time range test".to_string(),
-            source: "chat".to_string(),
-            ..Default::default()
-        },
-    ];
-    
+    let items = vec![StoreItem {
+        text: "Time range test".to_string(),
+        source: "chat".to_string(),
+        ..Default::default()
+    }];
+
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 获取当前时间戳
     let now = chrono::Utc::now().timestamp_millis();
     let one_hour_ago = now - 3600000;
     let one_hour_later = now + 3600000;
-    
+
     // 测试时间范围过滤
     let req = RecallRequest {
         query: "time range".to_string(),
@@ -273,7 +274,7 @@ fn test_recall_with_time_range() {
         time_range: Some((one_hour_ago, one_hour_later)),
         ..Default::default()
     };
-    
+
     let result = brain.recall(&req);
     assert!(result.is_ok());
 }
@@ -281,7 +282,7 @@ fn test_recall_with_time_range() {
 #[test]
 fn test_recall_empty_index() {
     let mut brain = make_test_brain();
-    
+
     // 空索引查询应该返回空结果
     let req = RecallRequest {
         query: "empty test".to_string(),
@@ -289,7 +290,7 @@ fn test_recall_empty_index() {
         target_layers: vec![Layer::L1],
         ..Default::default()
     };
-    
+
     let result = brain.recall(&req);
     assert!(result.is_ok());
     let resp = result.unwrap();
@@ -299,20 +300,24 @@ fn test_recall_empty_index() {
 #[test]
 fn test_session_management() {
     let mut brain = make_test_brain();
-    
+
     // 激活话题
-    brain.session_mgr.activate("test_session", "topic_1", 3600000);
-    brain.session_mgr.activate("test_session", "topic_2", 3600000);
-    
+    brain
+        .session_mgr
+        .activate("test_session", "topic_1", 3600000);
+    brain
+        .session_mgr
+        .activate("test_session", "topic_2", 3600000);
+
     // 验证激活列表
     let active = brain.session_mgr.get_active_topic_ids("test_session");
     assert_eq!(active.len(), 2);
     assert!(active.contains(&"topic_1".to_string()));
     assert!(active.contains(&"topic_2".to_string()));
-    
+
     // 停用一个话题
     brain.session_mgr.deactivate("test_session", "topic_1");
-    
+
     let active_after = brain.session_mgr.get_active_topic_ids("test_session");
     assert_eq!(active_after.len(), 1);
     assert!(!active_after.contains(&"topic_1".to_string()));
@@ -321,7 +326,7 @@ fn test_session_management() {
 #[test]
 fn test_topic_extraction_and_update() {
     let mut brain = make_test_brain();
-    
+
     // 存储带话题的数据
     let items = vec![
         StoreItem {
@@ -337,18 +342,25 @@ fn test_topic_extraction_and_update() {
             ..Default::default()
         },
     ];
-    
+
     let report = brain.batch_store(StoreBatch { items }).unwrap();
-    println!("batch_store report: l2_topics_created={}", report.l2_topics_created);
-    
+    println!(
+        "batch_store report: l2_topics_created={}",
+        report.l2_topics_created
+    );
+
     // 获取话题列表
     let topics = brain.list_topics().unwrap();
     println!("topics count: {}", topics.len());
     for topic in &topics {
         println!("  topic: id={}, label={}", topic.id, topic.label);
     }
-    assert!(topics.len() > 0, "Expected at least one topic, got {}", topics.len());
-    
+    assert!(
+        topics.len() > 0,
+        "Expected at least one topic, got {}",
+        topics.len()
+    );
+
     // 更新话题
     if let Some(topic) = topics.first() {
         let result = brain.update_topic(
@@ -366,32 +378,30 @@ fn test_multiple_agents_isolation() {
     // 测试不同 agent 的数据隔离
     let tmp1 = tempfile::tempdir().unwrap();
     let tmp2 = tempfile::tempdir().unwrap();
-    
+
     let cfg1 = BrainConfig {
         brains_dir: tmp1.path().to_str().unwrap().to_string(),
         agent_id: "agent_1".to_string(),
         model_path: None,
     };
-    
+
     let cfg2 = BrainConfig {
         brains_dir: tmp2.path().to_str().unwrap().to_string(),
         agent_id: "agent_2".to_string(),
         model_path: None,
     };
-    
+
     let mut brain1 = Brain::open(cfg1).unwrap();
     let mut brain2 = Brain::open(cfg2).unwrap();
-    
+
     // agent_1 存储数据
-    let items = vec![
-        StoreItem {
-            text: "Agent 1 private data".to_string(),
-            source: "chat".to_string(),
-            ..Default::default()
-        },
-    ];
+    let items = vec![StoreItem {
+        text: "Agent 1 private data".to_string(),
+        source: "chat".to_string(),
+        ..Default::default()
+    }];
     brain1.batch_store(StoreBatch { items }).unwrap();
-    
+
     // agent_2 查询应该找不到 agent_1 的数据
     let req = RecallRequest {
         query: "Agent 1".to_string(),
@@ -399,7 +409,7 @@ fn test_multiple_agents_isolation() {
         target_layers: vec![Layer::L1],
         ..Default::default()
     };
-    
+
     let result = brain2.recall(&req);
     assert!(result.is_ok());
     let resp = result.unwrap();
@@ -409,7 +419,7 @@ fn test_multiple_agents_isolation() {
 #[test]
 fn test_large_batch_store() {
     let mut brain = make_test_brain();
-    
+
     // 大批量存储测试
     let items: Vec<StoreItem> = (0..100)
         .map(|i| StoreItem {
@@ -418,13 +428,13 @@ fn test_large_batch_store() {
             ..Default::default()
         })
         .collect();
-    
+
     let result = brain.batch_store(StoreBatch { items });
     assert!(result.is_ok());
     let report = result.unwrap();
     // l1_nodes_created 应该大于 0
     assert!(report.l1_nodes_created > 0);
-    
+
     // 验证能召回数据
     let req = RecallRequest {
         query: "Large batch item".to_string(),
@@ -432,7 +442,7 @@ fn test_large_batch_store() {
         target_layers: vec![Layer::L1],
         ..Default::default()
     };
-    
+
     let recall_result = brain.recall(&req);
     assert!(recall_result.is_ok());
     let resp = recall_result.unwrap();
@@ -442,7 +452,7 @@ fn test_large_batch_store() {
 #[test]
 fn test_recall_with_max_results() {
     let mut brain = make_test_brain();
-    
+
     // 存储多条数据
     let items: Vec<StoreItem> = (0..50)
         .map(|i| StoreItem {
@@ -451,9 +461,9 @@ fn test_recall_with_max_results() {
             ..Default::default()
         })
         .collect();
-    
+
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 测试限制返回数量
     let req = RecallRequest {
         query: "Result limit test".to_string(),
@@ -461,7 +471,7 @@ fn test_recall_with_max_results() {
         target_layers: vec![Layer::L1],
         ..Default::default()
     };
-    
+
     let result = brain.recall(&req);
     assert!(result.is_ok());
     let resp = result.unwrap();

@@ -1,10 +1,16 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // ── Layer 枚举 ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Layer { L0, L1, L2, L3, L4 }
+pub enum Layer {
+    L0,
+    L1,
+    L2,
+    L3,
+    L4,
+}
 
 // ── HyperedgeKind ──────────────────────────────────────────
 
@@ -183,7 +189,13 @@ pub struct SessionState {
 // ── Shelf ────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ShelfDomain { Code, Doc, Book, Paper, Generic }
+pub enum ShelfDomain {
+    Code,
+    Doc,
+    Book,
+    Paper,
+    Generic,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShelfMeta {
@@ -210,7 +222,10 @@ pub struct DreamConfig {
 
 impl Default for DreamConfig {
     fn default() -> Self {
-        Self { vitality_half_life_hours: 168.0, schema_min_topics: 5 }
+        Self {
+            vitality_half_life_hours: 168.0,
+            schema_min_topics: 5,
+        }
     }
 }
 
@@ -258,6 +273,9 @@ impl Default for RecallRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct L0Profile {
+    /// 不可修改的唯一标识符，首次创建时设置
+    pub catid: Option<String>,
+    /// 可修改的名称
     pub role_name: Option<String>,
     pub personality: Vec<String>,
     pub values: Vec<String>,
@@ -273,9 +291,17 @@ pub struct L0Profile {
 impl Default for L0Profile {
     fn default() -> Self {
         Self {
-            role_name: None, personality: Vec::new(), values: Vec::new(),
-            worldview: Vec::new(), role: None, position: None,
-            traits: HashMap::new(), updated_at: 0, version: 1, history: Vec::new(),
+            catid: None,
+            role_name: None,
+            personality: Vec::new(),
+            values: Vec::new(),
+            worldview: Vec::new(),
+            role: None,
+            position: None,
+            traits: HashMap::new(),
+            updated_at: 0,
+            version: 1,
+            history: Vec::new(),
         }
     }
 }

@@ -7,9 +7,9 @@
 //! Stage 6 (L0 Formation): Extract worldview/values from L2 topics.
 //! Stage 7: BM25 + VectorIndex rebuild.
 
+pub mod l0;
 pub mod nrem;
 pub mod rem;
-pub mod l0;
 
 use crate::brain::Brain;
 use crate::error::Result;

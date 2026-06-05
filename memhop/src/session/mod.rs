@@ -2,8 +2,8 @@
 //! MemHop process is stateless; session state is ephemeral per MCP connection.
 //! Agent side maintains session_id; this module provides lightweight tracking.
 
+use crate::types::{ActivatedTopicInfo, ActivationEntry, SessionState};
 use std::collections::HashMap;
-use crate::types::{SessionState, ActivatedTopicInfo, ActivationEntry};
 
 /// Lightweight in-memory session manager.
 /// Does NOT persist to LMDB — sessions are lost on process restart.
@@ -21,15 +21,15 @@ impl SessionManager {
     /// Get or create a session by ID.
     pub fn get_or_create(&mut self, session_id: &str) -> &mut SessionState {
         let now = chrono::Utc::now().timestamp_millis();
-        self.sessions.entry(session_id.to_string()).or_insert_with(|| {
-            SessionState {
+        self.sessions
+            .entry(session_id.to_string())
+            .or_insert_with(|| SessionState {
                 session_id: session_id.to_string(),
                 active_topics: HashMap::new(),
                 turn_count: 0,
                 started_at: now,
                 last_active_at: now,
-            }
-        })
+            })
     }
 
     /// Record a turn with optional topic association.
@@ -51,12 +51,15 @@ impl SessionManager {
 
     fn activate_in_state(state: &mut SessionState, topic_id: &str, ttl_ms: i64) {
         let now = chrono::Utc::now().timestamp_millis();
-        state.active_topics.insert(topic_id.to_string(), ActivationEntry {
-            topic_id: topic_id.to_string(),
-            activated_at: now,
-            ttl_ms,
-            last_hit_at: now,
-        });
+        state.active_topics.insert(
+            topic_id.to_string(),
+            ActivationEntry {
+                topic_id: topic_id.to_string(),
+                activated_at: now,
+                ttl_ms,
+                last_hit_at: now,
+            },
+        );
     }
 
     /// Deactivate a topic.
@@ -71,24 +74,24 @@ impl SessionManager {
         let now = chrono::Utc::now().timestamp_millis();
         // 清理过期 activations
         for state in self.sessions.values_mut() {
-            state.active_topics.retain(|_, entry| {
-                (now - entry.activated_at) < entry.ttl_ms
-            });
+            state
+                .active_topics
+                .retain(|_, entry| (now - entry.activated_at) < entry.ttl_ms);
         }
         // 移除无活跃 topic 且超过 24h 未活跃的空会话
         let cutoff = now - 86_400_000;
-        self.sessions.retain(|_, state| {
-            !state.active_topics.is_empty() || state.last_active_at > cutoff
-        });
+        self.sessions
+            .retain(|_, state| !state.active_topics.is_empty() || state.last_active_at > cutoff);
     }
 
     /// Check if a topic is currently active (not expired).
     pub fn is_active(&self, session_id: &str, topic_id: &str) -> bool {
         let now = chrono::Utc::now().timestamp_millis();
         if let Some(state) = self.sessions.get(session_id)
-            && let Some(entry) = state.active_topics.get(topic_id) {
-                return (now - entry.activated_at) < entry.ttl_ms;
-            }
+            && let Some(entry) = state.active_topics.get(topic_id)
+        {
+            return (now - entry.activated_at) < entry.ttl_ms;
+        }
         false
     }
 
@@ -115,7 +118,9 @@ impl SessionManager {
     pub fn get_active_topic_ids(&self, session_id: &str) -> Vec<String> {
         let now = chrono::Utc::now().timestamp_millis();
         if let Some(state) = self.sessions.get(session_id) {
-            state.active_topics.iter()
+            state
+                .active_topics
+                .iter()
                 .filter(|(_, entry)| (now - entry.activated_at) < entry.ttl_ms)
                 .map(|(tid, _)| tid.clone())
                 .collect()
@@ -133,12 +138,13 @@ impl SessionManager {
     /// Positive delta extends TTL, negative delta shortens it.
     pub fn adjust_activation(&mut self, session_id: &str, topic_id: &str, delta: f32) {
         if let Some(state) = self.sessions.get_mut(session_id)
-            && let Some(entry) = state.active_topics.get_mut(topic_id) {
-                // Adjust TTL by delta (in ms): +0.1 → +60s, -0.1 → -60s
-                let ttl_adjust = (delta * 600_000.0) as i64;
-                entry.ttl_ms = (entry.ttl_ms + ttl_adjust).max(60_000); // min 1 minute
-                entry.last_hit_at = chrono::Utc::now().timestamp_millis();
-            }
+            && let Some(entry) = state.active_topics.get_mut(topic_id)
+        {
+            // Adjust TTL by delta (in ms): +0.1 → +60s, -0.1 → -60s
+            let ttl_adjust = (delta * 600_000.0) as i64;
+            entry.ttl_ms = (entry.ttl_ms + ttl_adjust).max(60_000); // min 1 minute
+            entry.last_hit_at = chrono::Utc::now().timestamp_millis();
+        }
     }
 
     /// Get session count.

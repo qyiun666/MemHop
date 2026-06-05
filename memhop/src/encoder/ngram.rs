@@ -1,6 +1,6 @@
+use crate::encoder::{Encoder, EncoderOutput};
 use half::f16;
 use std::collections::HashMap;
-use crate::encoder::{Encoder, EncoderOutput};
 
 #[allow(dead_code)]
 const DEFAULT_DIM: usize = 1024;
@@ -50,7 +50,10 @@ impl NgramEncoder {
     /// v0.6.x: IDF-weighted alternative constructor.
     #[allow(dead_code)]
     pub fn new_with_idf(dim: usize, idf: HashMap<String, f32>) -> Self {
-        NgramEncoder { dim, idf: Some(idf) }
+        NgramEncoder {
+            dim,
+            idf: Some(idf),
+        }
     }
 
     /// v0.6.x: Default encoder factory.
@@ -185,7 +188,12 @@ mod tests {
     fn test_l2_normalized() {
         let enc = NgramEncoder::default_encoder();
         let out = enc.encode("测试文本");
-        let norm: f32 = out.dense.iter().map(|v| v.to_f32().powi(2)).sum::<f32>().sqrt();
+        let norm: f32 = out
+            .dense
+            .iter()
+            .map(|v| v.to_f32().powi(2))
+            .sum::<f32>()
+            .sqrt();
         assert!(
             (norm - 1.0).abs() < 1e-2,
             "L2 norm = {}, expected ~1.0 (f16 precision OK)",
@@ -207,7 +215,8 @@ mod tests {
         assert!(
             sim_shared > sim_unrelated,
             "shared-ngram sim ({}) should > unrelated sim ({})",
-            sim_shared, sim_unrelated
+            sim_shared,
+            sim_unrelated
         );
     }
 
@@ -228,15 +237,8 @@ mod tests {
     #[test]
     fn test_unrelated_low_similarity() {
         let enc = NgramEncoder::default_encoder();
-        let sim = cosine_sim(
-            &enc.encode("豆浆油条").dense,
-            &enc.encode("量子力学").dense,
-        );
-        assert!(
-            sim < 0.2,
-            "unrelated similarity = {}, expected < 0.2",
-            sim
-        );
+        let sim = cosine_sim(&enc.encode("豆浆油条").dense, &enc.encode("量子力学").dense);
+        assert!(sim < 0.2, "unrelated similarity = {}, expected < 0.2", sim);
     }
 
     #[test]
@@ -280,7 +282,12 @@ mod tests {
     fn test_english_text() {
         let enc = NgramEncoder::default_encoder();
         let out = enc.encode("hello world");
-        let norm: f32 = out.dense.iter().map(|v| v.to_f32().powi(2)).sum::<f32>().sqrt();
+        let norm: f32 = out
+            .dense
+            .iter()
+            .map(|v| v.to_f32().powi(2))
+            .sum::<f32>()
+            .sqrt();
         assert!(
             (norm - 1.0).abs() < 1e-2,
             "English text should be L2 normalized, norm = {}",
@@ -292,7 +299,12 @@ mod tests {
     fn test_mixed_language() {
         let enc = NgramEncoder::default_encoder();
         let out = enc.encode("Hello世界");
-        let norm: f32 = out.dense.iter().map(|v| v.to_f32().powi(2)).sum::<f32>().sqrt();
+        let norm: f32 = out
+            .dense
+            .iter()
+            .map(|v| v.to_f32().powi(2))
+            .sum::<f32>()
+            .sqrt();
         assert!((norm - 1.0).abs() < 1e-2, "norm = {}", norm);
         assert!(!out.sparse.is_empty());
     }
@@ -322,7 +334,8 @@ mod tests {
         assert!(
             *ab_weight_repeat > *ab_weight_single,
             "repeated ngram should have higher TF: 'ab' in 'abcab' = {}, in 'abcd' = {}",
-            ab_weight_repeat, ab_weight_single
+            ab_weight_repeat,
+            ab_weight_single
         );
     }
 

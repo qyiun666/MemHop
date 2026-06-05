@@ -3,9 +3,9 @@
 
 use crate::brain::Brain;
 use crate::error::Result;
-use crate::types::{RecallRequest, RecallResponse, RecallResult, Layer};
 use crate::query_engine;
 use crate::query_engine::cross_layer_validation;
+use crate::types::{Layer, RecallRequest, RecallResponse, RecallResult};
 
 pub mod associative;
 
@@ -23,7 +23,7 @@ pub fn enhanced_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallRespo
 
     // Standard recall
     let mut resp = query_engine::execute(brain, req)?;
-    
+
     // v0.18.0: 跨层结果验证
     cross_layer_validation(&mut resp.results, brain);
 
@@ -54,7 +54,10 @@ fn boost_activated_topics(
     max: usize,
 ) -> Result<RecallResponse> {
     // Collect all node_ids from activated topics
-    let txn = brain.l2_env.env.read_txn()
+    let txn = brain
+        .l2_env
+        .env
+        .read_txn()
         .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
     let mut activated_node_ids: Vec<String> = Vec::new();
     for tid in active_topic_ids {
@@ -81,7 +84,9 @@ fn boost_activated_topics(
 
     // Re-sort by boosted score
     resp.results.sort_by(|a, b| {
-        b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     resp.results.truncate(max);
 
@@ -89,17 +94,30 @@ fn boost_activated_topics(
 }
 
 /// Filter recall results to only include nodes belonging to a specific L2 topic.
-fn filter_by_topic(brain: &Brain, results: Vec<RecallResult>, topic_id: &str) -> Result<Vec<RecallResult>> {
-    let txn = brain.l2_env.env.read_txn()
+fn filter_by_topic(
+    brain: &Brain,
+    results: Vec<RecallResult>,
+    topic_id: &str,
+) -> Result<Vec<RecallResult>> {
+    let txn = brain
+        .l2_env
+        .env
+        .read_txn()
         .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
 
     let topic = match brain.l2.get_topic_by_id(&txn, &brain.l2_env, topic_id)? {
         Some(t) => t,
-        None => return Err(crate::error::MemHopError::NotFound(format!("topic {} not found", topic_id))),
+        None => {
+            return Err(crate::error::MemHopError::NotFound(format!(
+                "topic {} not found",
+                topic_id
+            )));
+        }
     };
 
     // Only keep results whose IDs are in the topic's node_ids list
-    let filtered = results.into_iter()
+    let filtered = results
+        .into_iter()
         .filter(|r| topic.node_ids.contains(&r.id))
         .collect();
 

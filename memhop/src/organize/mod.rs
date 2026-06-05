@@ -1,32 +1,154 @@
 //! organize — memory organization: keyword extraction, node organization, topic boundary detection.
 //! Operates on L1 + L2 layers. Stateless -- all state in LMDB.
 
-pub mod reflect;
 pub mod plan;
+pub mod reflect;
 
 use crate::brain::Brain;
-use crate::error::{Result, MemHopError};
+use crate::error::{MemHopError, Result};
 
 // ── Stop words ────────────────────────────────────────────
 
 const STOP_WORDS: &[&str] = &[
     // Chinese
-    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一",
-    "一个", "上", "也", "很", "到", "说", "要", "去", "你", "会", "着", "没有",
-    "看", "好", "自己", "这", "他", "她", "它", "们", "那", "这个", "那个",
-    "什么", "怎么", "为什么", "因为", "所以", "但是", "虽然", "如果",
+    "的",
+    "了",
+    "在",
+    "是",
+    "我",
+    "有",
+    "和",
+    "就",
+    "不",
+    "人",
+    "都",
+    "一",
+    "一个",
+    "上",
+    "也",
+    "很",
+    "到",
+    "说",
+    "要",
+    "去",
+    "你",
+    "会",
+    "着",
+    "没有",
+    "看",
+    "好",
+    "自己",
+    "这",
+    "他",
+    "她",
+    "它",
+    "们",
+    "那",
+    "这个",
+    "那个",
+    "什么",
+    "怎么",
+    "为什么",
+    "因为",
+    "所以",
+    "但是",
+    "虽然",
+    "如果",
     // English
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "could",
-    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
-    "on", "with", "at", "by", "from", "as", "into", "through", "during",
-    "before", "after", "above", "below", "between", "under", "again",
-    "further", "then", "once", "here", "there", "when", "where", "why",
-    "how", "all", "each", "every", "both", "few", "more", "most", "other",
-    "some", "such", "no", "nor", "not", "only", "own", "same", "so",
-    "than", "too", "very", "just", "because", "as", "until", "while",
-    "about", "over", "after", "before", "between", "under", "again",
-    "and", "but", "or", "if", "while", "that", "this", "these", "those",
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "can",
+    "shall",
+    "to",
+    "of",
+    "in",
+    "for",
+    "on",
+    "with",
+    "at",
+    "by",
+    "from",
+    "as",
+    "into",
+    "through",
+    "during",
+    "before",
+    "after",
+    "above",
+    "below",
+    "between",
+    "under",
+    "again",
+    "further",
+    "then",
+    "once",
+    "here",
+    "there",
+    "when",
+    "where",
+    "why",
+    "how",
+    "all",
+    "each",
+    "every",
+    "both",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "no",
+    "nor",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "just",
+    "because",
+    "as",
+    "until",
+    "while",
+    "about",
+    "over",
+    "after",
+    "before",
+    "between",
+    "under",
+    "again",
+    "and",
+    "but",
+    "or",
+    "if",
+    "while",
+    "that",
+    "this",
+    "these",
+    "those",
 ];
 
 /// Extract keywords from text: length-first sorting, stop word filtered.
@@ -54,7 +176,10 @@ pub fn extract_keywords(text: &str, max: usize) -> Vec<String> {
 
 /// Organize a stored L1 node: extract keywords and write back.
 pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
-    let txn = brain.l1_env.env.read_txn()
+    let txn = brain
+        .l1_env
+        .env
+        .read_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
     let node = match brain.l1.get_node(&txn, &brain.l1_env, node_id)? {
         Some(n) => n,
@@ -71,14 +196,18 @@ pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
     let mut updated = node.clone();
     updated.keywords = keywords;
     updated.updated_at = chrono::Utc::now().timestamp_millis();
-    let bytes = bincode::serialize(&updated)
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+    let bytes = bincode::serialize(&updated).map_err(|e| MemHopError::Storage(e.to_string()))?;
     let env = brain.l1_env.env.clone();
-    let mut wtxn = env.write_txn()
+    let mut wtxn = env
+        .write_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
-    brain.l1_env.nodes.put(&mut wtxn, node_id, &bytes)
+    brain
+        .l1_env
+        .nodes
+        .put(&mut wtxn, node_id, &bytes)
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
-    wtxn.commit().map_err(|e| MemHopError::Storage(e.to_string()))?;
+    wtxn.commit()
+        .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
     Ok(())
 }
@@ -86,7 +215,10 @@ pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
 /// Detect topic boundary: compare two consecutive L1 nodes' vector cosine similarity.
 /// Returns true if vectors differ significantly (sharp drop suggests topic shift).
 pub fn detect_topic_boundary(brain: &Brain, node_a: &str, node_b: &str) -> Result<bool> {
-    let txn = brain.l1_env.env.read_txn()
+    let txn = brain
+        .l1_env
+        .env
+        .read_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
     let a = match brain.l1.get_node(&txn, &brain.l1_env, node_a)? {
@@ -100,9 +232,17 @@ pub fn detect_topic_boundary(brain: &Brain, node_a: &str, node_b: &str) -> Resul
 
     if a.vector.is_empty() || b.vector.is_empty() || a.vector.len() != b.vector.len() {
         // Fallback: compare ngram overlap
-        let overlap: f32 = a.sparse.keys().filter(|k| b.sparse.contains_key(*k)).count() as f32;
+        let overlap: f32 = a
+            .sparse
+            .keys()
+            .filter(|k| b.sparse.contains_key(*k))
+            .count() as f32;
         let total = (a.sparse.len() + b.sparse.len()) as f32;
-        let jaccard = if total > 0.0 { overlap / (total - overlap) } else { 0.0 };
+        let jaccard = if total > 0.0 {
+            overlap / (total - overlap)
+        } else {
+            0.0
+        };
         return Ok(jaccard < 0.1);
     }
 

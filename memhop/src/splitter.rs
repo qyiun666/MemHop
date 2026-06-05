@@ -6,7 +6,11 @@ const DEFAULT_MAX_CHUNK: usize = 512;
 /// Split text into chunks by paragraph boundaries (`\n\n`), then by sentence if needed.
 /// Returns a list of non-empty chunks.
 pub fn split_text(text: &str, max_len: usize) -> Vec<String> {
-    let max = if max_len == 0 { DEFAULT_MAX_CHUNK } else { max_len };
+    let max = if max_len == 0 {
+        DEFAULT_MAX_CHUNK
+    } else {
+        max_len
+    };
 
     if text.is_empty() {
         return Vec::new();
@@ -24,7 +28,9 @@ pub fn split_text(text: &str, max_len: usize) -> Vec<String> {
 
     for para in paragraphs {
         let para = para.trim();
-        if para.is_empty() { continue; }
+        if para.is_empty() {
+            continue;
+        }
 
         if current_chunk.is_empty() {
             if para.chars().count() <= max {
@@ -67,14 +73,18 @@ pub fn split_text(text: &str, max_len: usize) -> Vec<String> {
 fn split_sentences(text: &str, max_len: usize) -> Vec<String> {
     let mut result = Vec::new();
     // Use split_inclusive to preserve delimiters
-    let sentences: Vec<&str> = text.split_inclusive(|c: char| {
-        c == '。' || c == '！' || c == '？' || c == '.' || c == '!' || c == '?'
-    }).collect();
+    let sentences: Vec<&str> = text
+        .split_inclusive(|c: char| {
+            c == '。' || c == '！' || c == '？' || c == '.' || c == '!' || c == '?'
+        })
+        .collect();
 
     let mut current = String::new();
     for sent in sentences {
         let sent = sent.trim();
-        if sent.is_empty() { continue; }
+        if sent.is_empty() {
+            continue;
+        }
 
         if current.is_empty() {
             if sent.chars().count() <= max_len {

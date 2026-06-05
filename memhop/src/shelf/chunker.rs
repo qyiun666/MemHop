@@ -94,7 +94,9 @@ fn chunk_book(content: &str, max_size: usize) -> Vec<String> {
 
     for paragraph in content.split("\n\n") {
         let para = paragraph.trim();
-        if para.is_empty() { continue; }
+        if para.is_empty() {
+            continue;
+        }
 
         if current.len() + para.len() + 2 > max_size && !current.is_empty() {
             chunks.push(current.trim().to_string());

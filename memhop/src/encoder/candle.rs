@@ -3,14 +3,14 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use candle_core::{DType, Device, Tensor, D};
+use candle_core::{D, DType, Device, Tensor};
 use candle_nn::VarBuilder;
 use candle_transformers::models::bert::{BertModel, Config as BertConfig};
 use half::f16;
 use tokenizers::Tokenizer;
 
-use crate::encoder::{Encoder, EncoderOutput};
 use crate::encoder::ngram::NgramEncoder;
+use crate::encoder::{Encoder, EncoderOutput};
 
 /// Candle BERT 编码器 — feature-gated，纯 Rust ML 推理。
 ///
@@ -42,10 +42,8 @@ impl CandleEncoder {
 
         // Load BERT config
         let config: BertConfig = {
-            let f = std::fs::File::open(&config_path)
-                .map_err(|e| format!("open config: {e}"))?;
-            serde_json::from_reader(f)
-                .map_err(|e| format!("parse config: {e}"))?
+            let f = std::fs::File::open(&config_path).map_err(|e| format!("open config: {e}"))?;
+            serde_json::from_reader(f).map_err(|e| format!("parse config: {e}"))?
         };
         let hidden_size = config.hidden_size;
         let max_position_embeddings = config.max_position_embeddings;
@@ -53,8 +51,7 @@ impl CandleEncoder {
         // Load tokenizer
         let tokenizer_path = dir.join("tokenizer.json");
         let tokenizer = if tokenizer_path.exists() {
-            Tokenizer::from_file(&tokenizer_path)
-                .map_err(|e| format!("tokenizer: {e}"))?
+            Tokenizer::from_file(&tokenizer_path).map_err(|e| format!("tokenizer: {e}"))?
         } else {
             return Err("tokenizer.json not found".into());
         };
@@ -69,8 +66,7 @@ impl CandleEncoder {
             )
         }
         .map_err(|e| format!("load safetensors: {e}"))?;
-        let model = BertModel::load(vb, &config)
-            .map_err(|e| format!("load BERT: {e}"))?;
+        let model = BertModel::load(vb, &config).map_err(|e| format!("load BERT: {e}"))?;
 
         eprintln!(
             "memhop-candle: loaded BERT from '{}', hidden_size={}, max_pos={}",
@@ -153,27 +149,57 @@ impl Encoder for CandleEncoder {
         let input_ids = match Tensor::new(&token_ids[..], &self.device) {
             Ok(t) => match t.unsqueeze(0) {
                 Ok(t) => t,
-                Err(_) => return EncoderOutput { dense: vec![f16::ZERO; self.hidden_size], sparse },
+                Err(_) => {
+                    return EncoderOutput {
+                        dense: vec![f16::ZERO; self.hidden_size],
+                        sparse,
+                    };
+                }
             },
-            Err(_) => return EncoderOutput { dense: vec![f16::ZERO; self.hidden_size], sparse },
+            Err(_) => {
+                return EncoderOutput {
+                    dense: vec![f16::ZERO; self.hidden_size],
+                    sparse,
+                };
+            }
         };
 
         let mask = match Tensor::new(&attention_mask[..], &self.device) {
             Ok(t) => match t.unsqueeze(0) {
                 Ok(t) => t,
-                Err(_) => return EncoderOutput { dense: vec![f16::ZERO; self.hidden_size], sparse },
+                Err(_) => {
+                    return EncoderOutput {
+                        dense: vec![f16::ZERO; self.hidden_size],
+                        sparse,
+                    };
+                }
             },
-            Err(_) => return EncoderOutput { dense: vec![f16::ZERO; self.hidden_size], sparse },
+            Err(_) => {
+                return EncoderOutput {
+                    dense: vec![f16::ZERO; self.hidden_size],
+                    sparse,
+                };
+            }
         };
 
         let token_type_ids = match Tensor::zeros((1, seq_len), DType::U32, &self.device) {
             Ok(t) => t,
-            Err(_) => return EncoderOutput { dense: vec![f16::ZERO; self.hidden_size], sparse },
+            Err(_) => {
+                return EncoderOutput {
+                    dense: vec![f16::ZERO; self.hidden_size],
+                    sparse,
+                };
+            }
         };
 
         let output = match self.model.forward(&input_ids, &token_type_ids, Some(&mask)) {
             Ok(o) => o,
-            Err(_) => return EncoderOutput { dense: vec![f16::ZERO; self.hidden_size], sparse },
+            Err(_) => {
+                return EncoderOutput {
+                    dense: vec![f16::ZERO; self.hidden_size],
+                    sparse,
+                };
+            }
         };
 
         // 4. Mean pooling
@@ -181,7 +207,8 @@ impl Encoder for CandleEncoder {
             Ok(v) => v,
             Err(_) => {
                 // CLS fallback: output[0, 0, :] — first batch, first token
-                output.get(0)
+                output
+                    .get(0)
                     .ok()
                     .and_then(|t| t.get(0).ok())
                     .and_then(|t| t.to_vec1::<f32>().ok())

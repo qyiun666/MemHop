@@ -1,8 +1,8 @@
 //! MemHop 性能基准测试
 //! 使用 criterion 进行精确的性能测量和回归检测
 
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
-use memhop::{Brain, BrainConfig, StoreBatch, StoreItem, RecallRequest, Layer};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use memhop::{Brain, BrainConfig, Layer, RecallRequest, StoreBatch, StoreItem};
 use std::cell::RefCell;
 
 thread_local! {
@@ -53,7 +53,7 @@ fn generate_test_items(count: usize) -> Vec<StoreItem> {
 
 fn bench_batch_store(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_store");
-    
+
     for size in [10, 50, 100, 500].iter() {
         group.bench_with_input(BenchmarkId::from_parameter(size), size, |b, &size| {
             b.iter(|| {
@@ -64,19 +64,19 @@ fn bench_batch_store(c: &mut Criterion) {
             });
         });
     }
-    
+
     group.finish();
 }
 
 fn bench_recall(c: &mut Criterion) {
     let mut group = c.benchmark_group("recall");
-    
+
     // 预先存储数据
     with_test_brain(|brain| {
         let items = generate_test_items(1000);
         brain.batch_store(StoreBatch { items }).unwrap();
     });
-    
+
     for max_results in [5, 10, 50, 100].iter() {
         group.bench_with_input(
             BenchmarkId::from_parameter(max_results),
@@ -104,13 +104,13 @@ fn bench_recall(c: &mut Criterion) {
             },
         );
     }
-    
+
     group.finish();
 }
 
 fn bench_consolidate(c: &mut Criterion) {
     let mut group = c.benchmark_group("consolidate");
-    
+
     group.bench_function("consolidate_100", |b| {
         b.iter(|| {
             with_test_brain(|brain| {
@@ -120,21 +120,17 @@ fn bench_consolidate(c: &mut Criterion) {
             })
         });
     });
-    
+
     group.finish();
 }
 
 fn bench_encoder(c: &mut Criterion) {
     let mut group = c.benchmark_group("encoder");
-    
+
     group.bench_function("encode_short_text", |b| {
-        b.iter(|| {
-            with_test_brain(|brain| {
-                brain.encoder.encode("This is a test sentence")
-            })
-        });
+        b.iter(|| with_test_brain(|brain| brain.encoder.encode("This is a test sentence")));
     });
-    
+
     group.bench_function("encode_long_text", |b| {
         b.iter(|| {
             with_test_brain(|brain| {
@@ -143,41 +139,33 @@ fn bench_encoder(c: &mut Criterion) {
             })
         });
     });
-    
+
     group.finish();
 }
 
 fn bench_bm25_search(c: &mut Criterion) {
     let mut group = c.benchmark_group("bm25_search");
-    
+
     // 预先存储数据
     with_test_brain(|brain| {
         let items = generate_test_items(500);
         brain.batch_store(StoreBatch { items }).unwrap();
     });
-    
+
     group.bench_function("search_single_term", |b| {
         let mut query = std::collections::HashMap::new();
         query.insert("benchmark".to_string(), 1.0);
-        b.iter(|| {
-            with_test_brain(|brain| {
-                brain.l1.bm25.search(&query, 10)
-            })
-        });
+        b.iter(|| with_test_brain(|brain| brain.l1.bm25.search(&query, 10)));
     });
-    
+
     group.bench_function("search_multiple_terms", |b| {
         let mut query = std::collections::HashMap::new();
         query.insert("benchmark".to_string(), 1.0);
         query.insert("test".to_string(), 1.0);
         query.insert("content".to_string(), 1.0);
-        b.iter(|| {
-            with_test_brain(|brain| {
-                brain.l1.bm25.search(&query, 10)
-            })
-        });
+        b.iter(|| with_test_brain(|brain| brain.l1.bm25.search(&query, 10)));
     });
-    
+
     group.finish();
 }
 

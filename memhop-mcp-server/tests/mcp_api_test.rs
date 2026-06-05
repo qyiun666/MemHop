@@ -1,8 +1,8 @@
 #! MCP 接口测试 - 覆盖所有 15 个 JSON-RPC 接口
 
+use memhop::{Brain, BrainConfig, Layer, RecallRequest, ShelfDomain, StoreBatch, StoreItem};
+use serde_json::{Value, json};
 use std::collections::HashMap;
-use serde_json::{json, Value};
-use memhop::{Brain, BrainConfig, StoreBatch, StoreItem, RecallRequest, Layer, ShelfDomain};
 
 /// 创建临时测试用 Brain 实例
 fn make_test_brain() -> Brain {
@@ -28,29 +28,27 @@ fn make_request(method: &str, params: Value) -> Value {
 #[test]
 fn test_handle_batch_store() {
     let mut brain = make_test_brain();
-    
+
     // 正常存储
-    let items = vec![
-        StoreItem {
-            text: "Rust is a systems programming language".to_string(),
-            source: "chat".to_string(),
-            turn_id: Some("turn_1".to_string()),
-            session_id: Some("session_1".to_string()),
-            topic_label: Some("rust".to_string()),
-            llm_keywords: None,
-            llm_compressed_summary: None,
-            valence: Some(0.8),
-            arousal: Some(0.5),
-            chain_parent_id: None,
-            chain_label: None,
-            domain_id: None,
-            importance: Some(0.7),
-        },
-    ];
-    
+    let items = vec![StoreItem {
+        text: "Rust is a systems programming language".to_string(),
+        source: "chat".to_string(),
+        turn_id: Some("turn_1".to_string()),
+        session_id: Some("session_1".to_string()),
+        topic_label: Some("rust".to_string()),
+        llm_keywords: None,
+        llm_compressed_summary: None,
+        valence: Some(0.8),
+        arousal: Some(0.5),
+        chain_parent_id: None,
+        chain_label: None,
+        domain_id: None,
+        importance: Some(0.7),
+    }];
+
     let result = brain.batch_store(StoreBatch { items });
     assert!(result.is_ok());
-    
+
     let report = result.unwrap();
     assert!(report.l1_nodes_created > 0);
 }
@@ -58,7 +56,7 @@ fn test_handle_batch_store() {
 #[test]
 fn test_handle_recall() {
     let mut brain = make_test_brain();
-    
+
     // 先存储一些数据
     let items = vec![
         StoreItem {
@@ -73,7 +71,7 @@ fn test_handle_recall() {
         },
     ];
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 测试召回
     let req = RecallRequest {
         query: "programming language".to_string(),
@@ -89,10 +87,10 @@ fn test_handle_recall() {
         session_id: None,
         time_decay_lambda: None,
     };
-    
+
     let result = brain.recall(&req);
     assert!(result.is_ok());
-    
+
     let resp = result.unwrap();
     assert!(resp.results.len() > 0);
 }
@@ -100,17 +98,15 @@ fn test_handle_recall() {
 #[test]
 fn test_handle_consolidate() {
     let mut brain = make_test_brain();
-    
+
     // 先存储一些数据
-    let items = vec![
-        StoreItem {
-            text: "Test data for consolidation".to_string(),
-            source: "chat".to_string(),
-            ..Default::default()
-        },
-    ];
+    let items = vec![StoreItem {
+        text: "Test data for consolidation".to_string(),
+        source: "chat".to_string(),
+        ..Default::default()
+    }];
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 测试整合
     let result = brain.consolidate();
     assert!(result.is_ok());
@@ -120,14 +116,14 @@ fn test_handle_consolidate() {
 fn test_handle_health() {
     // 健康检查不需要 Brain 实例
     // 直接验证版本号
-    let version = "0.17.0";
+    let version = "0.18.1";
     assert!(!version.is_empty());
 }
 
 #[test]
 fn test_handle_get_set_profile() {
     let mut brain = make_test_brain();
-    
+
     // 设置 profile
     let result = brain.set_l0_profile(
         Some("assistant".to_string()),
@@ -136,7 +132,7 @@ fn test_handle_get_set_profile() {
         HashMap::from([("style".to_string(), "friendly".to_string())]),
     );
     assert!(result.is_ok());
-    
+
     // 获取 profile
     let profile = brain.get_l0_profile();
     assert!(profile.is_ok());
@@ -145,17 +141,19 @@ fn test_handle_get_set_profile() {
 #[test]
 fn test_handle_activate_deactivate() {
     let mut brain = make_test_brain();
-    
+
     // 激活话题
-    brain.session_mgr.activate("test_session", "topic_1", 3600000);
-    
+    brain
+        .session_mgr
+        .activate("test_session", "topic_1", 3600000);
+
     // 获取激活列表
     let active = brain.get_activated_topics();
     assert!(active.len() > 0);
-    
+
     // 停用话题
     brain.session_mgr.deactivate("test_session", "topic_1");
-    
+
     let active_after = brain.get_activated_topics();
     assert_eq!(active_after.len(), 0);
 }
@@ -163,18 +161,16 @@ fn test_handle_activate_deactivate() {
 #[test]
 fn test_handle_list_topics() {
     let mut brain = make_test_brain();
-    
+
     // 先存储带话题的数据
-    let items = vec![
-        StoreItem {
-            text: "Topic test data".to_string(),
-            source: "chat".to_string(),
-            topic_label: Some("test_topic".to_string()),
-            ..Default::default()
-        },
-    ];
+    let items = vec![StoreItem {
+        text: "Topic test data".to_string(),
+        source: "chat".to_string(),
+        topic_label: Some("test_topic".to_string()),
+        ..Default::default()
+    }];
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 列出话题
     let topics = brain.list_topics();
     assert!(topics.is_ok());
@@ -183,17 +179,15 @@ fn test_handle_list_topics() {
 #[test]
 fn test_handle_re_search() {
     let mut brain = make_test_brain();
-    
+
     // 存储数据
-    let items = vec![
-        StoreItem {
-            text: "Search test data".to_string(),
-            source: "chat".to_string(),
-            ..Default::default()
-        },
-    ];
+    let items = vec![StoreItem {
+        text: "Search test data".to_string(),
+        source: "chat".to_string(),
+        ..Default::default()
+    }];
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 正则搜索
     let req = RecallRequest {
         query: "test".to_string(),
@@ -201,7 +195,7 @@ fn test_handle_re_search() {
         target_layers: vec![Layer::L1],
         ..Default::default()
     };
-    
+
     let result = brain.re_search(&req);
     assert!(result.is_ok());
 }
@@ -209,13 +203,13 @@ fn test_handle_re_search() {
 #[test]
 fn test_handle_stats() {
     let mut brain = make_test_brain();
-    
+
     // 获取统计信息
     let l1_nodes = brain.l1.bm25.len();
     let l2_topics = brain.l2.topic_vectors.len();
     let l3_nodes = brain.l3.vector_index.len();
     let l4_docs = brain.l4.vector_index.len();
-    
+
     // 验证统计信息结构
     assert!(l1_nodes >= 0);
     assert!(l2_topics >= 0);
@@ -226,18 +220,16 @@ fn test_handle_stats() {
 #[test]
 fn test_handle_update_topic() {
     let mut brain = make_test_brain();
-    
+
     // 先存储带话题的数据
-    let items = vec![
-        StoreItem {
-            text: "Update topic test".to_string(),
-            source: "chat".to_string(),
-            topic_label: Some("update_test".to_string()),
-            ..Default::default()
-        },
-    ];
+    let items = vec![StoreItem {
+        text: "Update topic test".to_string(),
+        source: "chat".to_string(),
+        topic_label: Some("update_test".to_string()),
+        ..Default::default()
+    }];
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 获取话题列表
     let topics = brain.list_topics().unwrap();
     if let Some(topic) = topics.first() {
@@ -255,7 +247,7 @@ fn test_handle_update_topic() {
 #[test]
 fn test_handle_set_l0() {
     let mut brain = make_test_brain();
-    
+
     // 设置 L0 profile
     let result = brain.set_l0(
         Some("test_role".to_string()),
@@ -270,20 +262,20 @@ fn test_handle_set_l0() {
 #[test]
 fn test_handle_feedback() {
     let mut brain = make_test_brain();
-    
+
     // 先存储数据
-    let items = vec![
-        StoreItem {
-            text: "Feedback test".to_string(),
-            source: "chat".to_string(),
-            ..Default::default()
-        },
-    ];
+    let items = vec![StoreItem {
+        text: "Feedback test".to_string(),
+        source: "chat".to_string(),
+        ..Default::default()
+    }];
     brain.batch_store(StoreBatch { items }).unwrap();
-    
+
     // 激活话题
-    brain.session_mgr.activate("test_session", "feedback_topic", 3600000);
-    
+    brain
+        .session_mgr
+        .activate("test_session", "feedback_topic", 3600000);
+
     // 反馈逻辑测试
     let active_topic_ids = brain.session_mgr.get_active_topic_ids("test_session");
     // 验证反馈逻辑
@@ -293,7 +285,7 @@ fn test_handle_feedback() {
 #[test]
 fn test_handle_get_l4_raw() {
     let mut brain = make_test_brain();
-    
+
     // 测试获取 L4 原始文档
     // 由于没有数据，应该返回错误或空
     let result = brain.get_l4_raw("non_existent_doc");
@@ -303,7 +295,7 @@ fn test_handle_get_l4_raw() {
 #[test]
 fn test_handle_list_l3_paths() {
     let brain = make_test_brain();
-    
+
     // 列出 L3 路径
     let result = brain.list_l3_paths();
     assert!(result.is_ok());
@@ -312,16 +304,16 @@ fn test_handle_list_l3_paths() {
 #[test]
 fn test_handle_mount_unmount_shelf() {
     let mut brain = make_test_brain();
-    
+
     // 创建临时目录并添加测试文件
     let tmp = tempfile::tempdir().unwrap();
     let test_dir = tmp.path().join("test_shelf");
     std::fs::create_dir(&test_dir).unwrap();
-    
+
     // 创建测试文件
     let test_file = test_dir.join("test.txt");
     std::fs::write(&test_file, "This is test content for shelf mounting").unwrap();
-    
+
     // 挂载 shelf
     let result = memhop::shelf::mount(
         &mut brain,
@@ -330,12 +322,12 @@ fn test_handle_mount_unmount_shelf() {
         "test_shelf",
     );
     assert!(result.is_ok());
-    
+
     // 列出 shelf
     let shelves = memhop::shelf::list(&brain);
     assert!(shelves.is_ok());
     assert!(shelves.unwrap().len() > 0);
-    
+
     // 卸载 shelf - 使用正确的字段名 id
     if let Ok(shelves) = memhop::shelf::list(&brain) {
         if let Some(shelf) = shelves.first() {
