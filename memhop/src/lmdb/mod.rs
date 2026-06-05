@@ -1,7 +1,8 @@
-//! LMDB 存储层 — 4 个独立 heed::Env 环境。
-//! L1/L2/L3/L4 各一个独立 LMDB 文件，独立事务。
+//! LMDB 存储层 — 5 层独立 heed::Env 环境。
+//! L0/L1/L2/L3/L4 各一个独立 LMDB 文件，独立事务。
 //!
 //! 环境布局:
+//!   <brain_dir>/l0_profile.db/     — 角色画像+版本历史
 //!   <brain_dir>/l1_hypergraph.db/  — 超图节点+超边+BM25快照
 //!   <brain_dir>/l2_topics.db/      — 话题+话题图边+每话题BM25
 //!   <brain_dir>/l3_domains.db/     — 领域节点+领域超图+每领域BM25
@@ -13,6 +14,82 @@ use heed::types::{Str, Bytes};
 pub type DB = heed::Database<Str, Bytes>;
 use crate::error::{Result, MemHopError};
 
+/// LMDB 默认最大键大小 (MDB_MAXKEYSIZE)
+const LMDB_MAX_KEY_SIZE: usize = 511;
+
+/// 截断键以适应 LMDB 限制。
+/// 如果键超过 511 字节，将其截断并添加哈希后缀以保持唯一性。
+pub fn truncate_key(key: &str) -> String {
+    let bytes = key.as_bytes();
+    if bytes.len() <= LMDB_MAX_KEY_SIZE {
+        return key.to_string();
+    }
+    
+    // 计算需要截断的字节数（保留空间给哈希后缀）
+    let hash_suffix_len = 8; // 8 字符的十六进制哈希
+    let max_content_len = LMDB_MAX_KEY_SIZE - hash_suffix_len - 1; // -1 for separator
+    
+    // 找到安全的截断点（不在 UTF-8 字符中间）
+    let mut truncate_at = max_content_len;
+    while truncate_at > 0 && !key.is_char_boundary(truncate_at) {
+        truncate_at -= 1;
+    }
+    
+    // 生成哈希后缀
+    let hash = calculate_hash(key);
+    let hash_hex = format!("{:08x}", hash);
+    
+    // 组合截断后的键和哈希
+    let truncated = &key[..truncate_at];
+    format!("{}{}{}", truncated, "~", hash_hex)
+}
+
+/// 简单的字符串哈希函数
+fn calculate_hash(s: &str) -> u32 {
+    let mut hash: u32 = 5381;
+    for byte in s.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(byte as u32);
+    }
+    hash
+}
+
+// ── L0: 角色画像环境 ──────────────────────────────────────
+
+pub struct L0Env {
+    pub env: Env,
+    pub profile: DB,
+    pub history: DB,
+    pub config: DB,
+}
+
+impl L0Env {
+    pub fn open(path: &Path) -> Result<Self> {
+        std::fs::create_dir_all(path).map_err(|e| MemHopError::Storage(format!("create dir: {}", e)))?;
+        let env = unsafe {
+            EnvOpenOptions::new()
+                .map_size(64 * 1024 * 1024) // 64MB
+                .max_readers(128)
+                .max_dbs(8)
+                .open(path)
+                .map_err(|e| MemHopError::Storage(format!("open l0 env: {}", e)))?
+        };
+        let mut wtxn = env.write_txn().map_err(|e| MemHopError::Storage(format!("txn: {}", e)))?;
+        let profile = env.create_database(&mut wtxn, Some("profile")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
+        let history = env.create_database(&mut wtxn, Some("history")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
+        let config = env.create_database(&mut wtxn, Some("config")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
+        wtxn.commit().map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
+        Ok(L0Env { env, profile, history, config })
+    }
+
+    pub fn begin_read(&self) -> Result<RoTxn<'_>> {
+        self.env.read_txn().map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
+    pub fn begin_write(&self) -> Result<RwTxn<'_>> {
+        self.env.write_txn().map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+}
+
 // ── L1: 超图环境 ──────────────────────────────────────────
 
 pub struct L1Env {
@@ -21,6 +98,8 @@ pub struct L1Env {
     pub hyperedges: DB,
     pub node_to_hyperedges: DB,
     pub config: DB,
+    /// v0.15.0: 序列化的 VectorIndex 快照
+    pub vector_index: DB,
 }
 
 impl L1Env {
@@ -39,8 +118,9 @@ impl L1Env {
         let hyperedges = env.create_database(&mut wtxn, Some("hyperedges")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
         let node_to_hyperedges = env.create_database(&mut wtxn, Some("node_to_hyperedges")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
         let config = env.create_database(&mut wtxn, Some("config")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
+        let vector_index = env.create_database(&mut wtxn, Some("vector_index")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
         wtxn.commit().map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
-        Ok(L1Env { env, nodes, hyperedges, node_to_hyperedges, config })
+        Ok(L1Env { env, nodes, hyperedges, node_to_hyperedges, config, vector_index })
     }
 }
 
@@ -51,6 +131,7 @@ pub struct L2Env {
     pub topics: DB,
     pub topic_edges: DB,
     pub topic_bm25: DB,
+    pub topic_vector_index: DB,
     pub config: DB,
 }
 
@@ -69,9 +150,10 @@ impl L2Env {
         let topics = env.create_database(&mut wtxn, Some("topics")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
         let topic_edges = env.create_database(&mut wtxn, Some("topic_edges")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
         let topic_bm25 = env.create_database(&mut wtxn, Some("topic_bm25")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
+        let topic_vector_index = env.create_database(&mut wtxn, Some("topic_vector_index")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
         let config = env.create_database(&mut wtxn, Some("config")).map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
         wtxn.commit().map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
-        Ok(L2Env { env, topics, topic_edges, topic_bm25, config })
+        Ok(L2Env { env, topics, topic_edges, topic_bm25, topic_vector_index, config })
     }
 
     pub fn begin_read(&self) -> Result<RoTxn<'_>> {
@@ -169,6 +251,7 @@ impl L4Env {
 
 #[allow(dead_code)]
 pub struct BrainDirs {
+    pub l0: L0Env,
     pub l1: L1Env,
     pub l2: L2Env,
     pub l3: L3Env,
@@ -178,10 +261,11 @@ pub struct BrainDirs {
 #[allow(dead_code)]
 impl BrainDirs {
     pub fn open(base_path: &Path) -> Result<Self> {
+        let l0 = L0Env::open(&base_path.join("l0_profile.db"))?;
         let l1 = L1Env::open(&base_path.join("l1_hypergraph.db"))?;
         let l2 = L2Env::open(&base_path.join("l2_topics.db"))?;
         let l3 = L3Env::open(&base_path.join("l3_domains.db"))?;
         let l4 = L4Env::open(&base_path.join("l4_raw.db"))?;
-        Ok(BrainDirs { l1, l2, l3, l4 })
+        Ok(BrainDirs { l0, l1, l2, l3, l4 })
     }
 }

@@ -242,6 +242,296 @@ impl Default for SparseIndex {
     }
 }
 
+// ── HnswIndex ──────────────────────────────────────────────
+
+/// HNSW 向量索引 (usearch)，O(log N) 近似搜索。
+/// 包装 usearch::Index，维护 String ↔ u64 key 双向映射。
+use usearch::{Index, IndexOptions, MetricKind, ScalarKind};
+
+const HNSW_MAGIC: &[u8; 4] = b"HNWI";
+
+pub struct HnswIndex {
+    index: Index,
+    id_to_key: HashMap<String, u64>,
+    key_to_id: HashMap<u64, String>,
+    next_key: u64,
+    dims: usize,
+}
+
+impl std::fmt::Debug for HnswIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HnswIndex")
+            .field("dims", &self.dims)
+            .field("size", &self.index.size())
+            .field("next_key", &self.next_key)
+            .finish()
+    }
+}
+
+/// v0.18.0: HNSW 配置参数
+pub struct HnswConfig {
+    pub connectivity: usize,
+    pub expansion_add: usize,
+    pub expansion_search: usize,
+}
+
+impl Default for HnswConfig {
+    fn default() -> Self {
+        HnswConfig {
+            connectivity: 16,
+            expansion_add: 128,
+            expansion_search: 64,
+        }
+    }
+}
+
+impl HnswConfig {
+    /// 根据数据规模动态调整配置
+    pub fn for_scale(vector_count: usize) -> Self {
+        match vector_count {
+            0..=1000 => HnswConfig {
+                connectivity: 16,
+                expansion_add: 128,
+                expansion_search: 64,
+            },
+            1001..=10000 => HnswConfig {
+                connectivity: 20,
+                expansion_add: 196,
+                expansion_search: 96,
+            },
+            10001..=100000 => HnswConfig {
+                connectivity: 24,
+                expansion_add: 256,
+                expansion_search: 128,
+            },
+            _ => HnswConfig {
+                connectivity: 32,
+                expansion_add: 512,
+                expansion_search: 256,
+            },
+        }
+    }
+}
+
+impl HnswIndex {
+    /// 创建新的 HNSW 索引。dims 必须与编码器输出维度一致。
+    pub fn new(dims: usize) -> Self {
+        Self::new_with_config(dims, HnswConfig::default())
+    }
+
+    /// v0.18.0: 使用指定配置创建 HNSW 索引。
+    pub fn new_with_config(dims: usize, config: HnswConfig) -> Self {
+        let options = IndexOptions {
+            dimensions: dims,
+            metric: MetricKind::Cos,
+            quantization: ScalarKind::F32,
+            connectivity: config.connectivity,
+            expansion_add: config.expansion_add,
+            expansion_search: config.expansion_search,
+            multi: false,
+        };
+        let index = Index::new(&options).expect("HnswIndex: failed to create index");
+        HnswIndex {
+            index,
+            id_to_key: HashMap::new(),
+            key_to_id: HashMap::new(),
+            next_key: 0,
+            dims,
+        }
+    }
+
+    /// 添加向量。如果 id 已存在，先移除旧向量。
+    pub fn add(&mut self, id: &str, vector: &[half::f16]) {
+        if vector.is_empty() || vector.len() != self.dims {
+            eprintln!("HnswIndex::add: dim mismatch for '{}': expected {}, got {}", id, self.dims, vector.len());
+            return;
+        }
+        // Remove old entry if exists
+        self.remove(id);
+
+        let key = self.next_key;
+        self.next_key += 1;
+
+        // f16 → f32 conversion
+        let f32_vec: Vec<f32> = vector.iter().map(|v| v.to_f32()).collect();
+
+        // Ensure capacity
+        if self.index.size() >= self.index.capacity() {
+            let _ = self.index.reserve(self.index.size() + 64);
+        }
+
+        match self.index.add::<f32>(key, &f32_vec) {
+            Ok(()) => {
+                self.id_to_key.insert(id.to_string(), key);
+                self.key_to_id.insert(key, id.to_string());
+            }
+            Err(e) => {
+                eprintln!("HnswIndex::add error for id '{}': {}", id, e);
+            }
+        }
+    }
+
+    /// 移除向量。返回是否成功移除。
+    pub fn remove(&mut self, id: &str) -> bool {
+        if let Some(key) = self.id_to_key.remove(id) {
+            self.key_to_id.remove(&key);
+            match self.index.remove(key) {
+                Ok(n) => n > 0,
+                Err(_) => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    /// 更新向量 (remove + add)。
+    pub fn update(&mut self, id: &str, vector: &[half::f16]) {
+        self.remove(id);
+        self.add(id, vector);
+    }
+
+    /// Cosine 近似搜索。返回 (id, similarity) 列表。
+    /// usearch 返回 distance (越小越相似)，转换为 similarity (1 - distance)。
+    pub fn cosine_search(&self, query: &[half::f16], top_k: usize) -> Vec<(String, f32)> {
+        if self.index.size() == 0 || query.is_empty() || query.len() != self.dims {
+            return Vec::new();
+        }
+
+        let f32_query: Vec<f32> = query.iter().map(|v| v.to_f32()).collect();
+        let count = top_k.min(self.index.size());
+
+        match self.index.search::<f32>(&f32_query, count) {
+            Ok(matches) => {
+                let mut results = Vec::with_capacity(matches.keys.len());
+                for (key, dist) in matches.keys.iter().zip(matches.distances.iter()) {
+                    if let Some(id) = self.key_to_id.get(key) {
+                        // usearch Cos distance: 0 = identical, 2 = opposite
+                        // similarity = 1 - distance
+                        let similarity = 1.0 - dist;
+                        results.push((id.clone(), similarity));
+                    }
+                }
+                results
+            }
+            Err(e) => {
+                eprintln!("HnswIndex::cosine_search error: {}", e);
+                Vec::new()
+            }
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.index.size()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.index.size() == 0
+    }
+
+    pub fn dims(&self) -> usize {
+        self.dims
+    }
+
+    /// 序列化为 bytes: [4B magic][4B id_map_len][id_map bincode][usearch buffer]
+    /// 序列化失败时返回空 Vec（调用方应检查并回退到 rebuild）。
+    pub fn to_bytes(&self) -> Vec<u8> {
+        if self.index.size() == 0 {
+            // Empty index: just magic + empty marker + dims
+            let mut buf = Vec::with_capacity(12);
+            buf.extend_from_slice(HNSW_MAGIC);
+            buf.extend_from_slice(&0u32.to_le_bytes()); // id_map_len = 0
+            buf.extend_from_slice(&(self.dims as u32).to_le_bytes()); // dims for recovery
+            return buf;
+        }
+
+        // Serialize id mapping
+        let id_map_bytes = match bincode::serialize(&(&self.id_to_key, &self.key_to_id, &self.next_key)) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("HnswIndex::to_bytes id_map serialize error: {}", e);
+                return Vec::new();
+            }
+        };
+
+        // Serialize usearch index
+        let usearch_len = self.index.serialized_length();
+        let mut usearch_buf = vec![0u8; usearch_len];
+        if let Err(e) = self.index.save_to_buffer(&mut usearch_buf) {
+            eprintln!("HnswIndex::to_bytes usearch save error: {}", e);
+            return Vec::new();
+        }
+
+        // Compose: [magic(4)][id_map_len(4)][id_map][usearch]
+        let mut result = Vec::with_capacity(8 + id_map_bytes.len() + usearch_buf.len());
+        result.extend_from_slice(HNSW_MAGIC);
+        result.extend_from_slice(&(id_map_bytes.len() as u32).to_le_bytes());
+        result.extend_from_slice(&id_map_bytes);
+        result.extend_from_slice(&usearch_buf);
+        result
+    }
+
+    /// 从 bytes 反序列化。
+    /// 空索引返回 None，调用方应走 rebuild 路径。
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < 8 {
+            return None;
+        }
+        // Check magic
+        if &data[0..4] != HNSW_MAGIC {
+            return None;
+        }
+        let id_map_len = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+
+        if id_map_len == 0 {
+            // Empty index — 返回 None，调用方应从 LMDB 重建
+            return None;
+        }
+
+        let id_map_end = 8 + id_map_len;
+        if data.len() < id_map_end {
+            return None;
+        }
+
+        // Deserialize id mapping
+        let (id_to_key, key_to_id, next_key): (
+            HashMap<String, u64>,
+            HashMap<u64, String>,
+            u64,
+        ) = match bincode::deserialize(&data[8..id_map_end]) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("HnswIndex::from_bytes id_map deserialize error: {}", e);
+                return None;
+            }
+        };
+
+        // Restore usearch index from buffer
+        let usearch_data = &data[id_map_end..];
+        let index = match Index::restore_from_buffer(usearch_data) {
+            Ok(idx) => idx,
+            Err(e) => {
+                eprintln!("HnswIndex::from_bytes usearch restore error: {}", e);
+                return None;
+            }
+        };
+
+        let dims = index.dimensions();
+        Some(HnswIndex {
+            index,
+            id_to_key,
+            key_to_id,
+            next_key,
+            dims,
+        })
+    }
+}
+
+impl Default for HnswIndex {
+    fn default() -> Self {
+        Self::new(384) // Default dim for multilingual-e5-small
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────
 
 #[cfg(test)]

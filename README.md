@@ -1,4 +1,4 @@
-# MemHop v0.9.0
+# MemHop v0.18.0
 
 **脑启发记忆引擎。** Hopfield 模式补全 + HNSW 语义检索 + Hebbian 图学习。单进程 MCP Server，全机统一记忆底座。
 
@@ -10,7 +10,7 @@
 
 ## vs agentmemory
 
-| 维度 | agentmemory | MemHop v0.9.0 |
+| 维度 | agentmemory | MemHop v0.18.0 |
 |------|------------|---------------|
 | 嵌入模型 | all-MiniLM-L6-v2 (384d) | **BGE-M3 (1024d)** |
 | 检索 | BM25 + 向量 + 图谱 RRF | **HNSW + SparseIndex RRF** |
@@ -152,7 +152,7 @@ api-encoder (OpenAI) > ONNX BGE-M3 (1024d) > NgramEncoder (fallback)
 ## 架构
 
 ```
-memhop (lib crate, v0.9.0)
+memhop (lib crate, v0.18.0)
 ├── brain.rs         顶层 API (Retrieval/Associative 双模式)
 ├── hnsw.rs          HNSW 图搜索索引 (719 行, O(log N))
 ├── hopfield.rs      Modern Hopfield Network (模式补全)
@@ -171,7 +171,7 @@ memhop (lib crate, v0.9.0)
 ├── plan_gate.rs     Plan-Gated Retrieval
 └── types.rs         配置 + 请求/响应类型
 
-memhop-mcp-server (binary crate, v0.9.0)
+memhop-mcp-server (binary crate, v0.18.0)
 └── main.rs          MCP JSON-RPC (多数据库路径 + health + 隐私过滤)
 ```
 

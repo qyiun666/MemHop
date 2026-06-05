@@ -37,11 +37,13 @@ pub struct KnowledgeNode {
     pub updated_at: i64,
     pub version: u64,
     pub history: Vec<HyperedgeSnapshot>,
+    /// v0.16.0: 重要度评分 (0.0-1.0)，默认 0.5
+    pub importance: f32,
 }
 
 #[allow(dead_code)]
 impl KnowledgeNode {
-    pub fn new(id: String, text: String, sparse: HashMap<String, f32>, vector: Vec<f16>, layer: Layer) -> Self {
+    pub fn new(id: String, text: String, sparse: HashMap<String, f32>, vector: Vec<f16>, layer: Layer, source: NodeSource) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         KnowledgeNode {
             id,
@@ -50,12 +52,13 @@ impl KnowledgeNode {
             vector,
             sparse,
             keywords: Vec::new(),
-            source: NodeSource::Perception,
+            source,
             layer,
             created_at: now,
             updated_at: now,
             version: 1,
             history: Vec::new(),
+            importance: 0.5,
         }
     }
 }
@@ -71,11 +74,20 @@ pub struct Topic {
     pub centroid: Vec<f16>,
     pub node_ids: Vec<String>,
     pub linked_domain_ids: Vec<String>,
+    pub doc_ids: Vec<String>,
     pub dialogue_range: Option<(i64, i64)>,
     pub created_at: i64,
     pub updated_at: i64,
     pub version: u64,
     pub history: Vec<TopicSnapshot>,
+    /// v0.17.0: LLM 扩展元数据，用于 plan_progress/next_steps 等
+    pub extended_meta: HashMap<String, String>,
+    /// v0.18.0: 领域关联强度 (domain_id → weight)
+    #[serde(default)]
+    pub domain_weights: HashMap<String, f32>,
+    /// v0.18.0: 节点关联强度 (node_id → weight)
+    #[serde(default)]
+    pub node_weights: HashMap<String, f32>,
 }
 
 // ── TopicEdge (话题图边) — L2 ──────────────────────────────
@@ -101,6 +113,8 @@ pub struct RawDocument {
     pub created_at: i64,
     pub version: u64,
     pub history: Vec<DocumentSnapshot>,
+    /// v0.16.0: 编码向量，用于 dense 检索通道
+    pub vector: Vec<f16>,
 }
 
 impl RawDocument {
@@ -115,6 +129,7 @@ impl RawDocument {
             created_at: now,
             version: 1,
             history: Vec::new(),
+            vector: Vec::new(),
         }
     }
 }

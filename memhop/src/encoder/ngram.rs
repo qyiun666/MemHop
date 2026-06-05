@@ -72,7 +72,7 @@ impl NgramEncoder {
     }
 
     /// Extract character-level n-grams with weighted accumulation.
-    fn extract_ngrams(text: &str) -> HashMap<String, f32> {
+    pub(crate) fn extract_ngrams(text: &str) -> HashMap<String, f32> {
         let chars: Vec<char> = text.chars().collect();
         let char_count = chars.len();
         let mut result: HashMap<String, f32> = HashMap::new();

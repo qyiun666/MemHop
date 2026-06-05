@@ -21,3 +21,10 @@ pub trait Encoder: Send + Sync {
 
 mod ngram;
 pub use ngram::NgramEncoder;
+
+// ── CandleEncoder (feature-gated, pure Rust BERT) ────────────
+// v0.18.0: 暂时禁用candle feature
+// #[cfg(feature = "candle")]
+// pub(crate) mod candle;
+// #[cfg(feature = "candle")]
+// pub use candle::CandleEncoder;
