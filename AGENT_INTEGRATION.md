@@ -8,16 +8,48 @@ MemHop 是嵌入式联想记忆引擎，通过 MCP (JSON-RPC 2.0 over Unix Socke
 
 ## 启动
 
-```bash
-# 环境变量
-MEMHOP_BRAINS_DIR=/path/to/brains   # 默认 ./memhop_brains
-MEMHOP_SOCKET=/tmp/memhop.sock      # 默认 /tmp/memhop.sock
-MEMHOP_MODEL_PATH=/path/to/model    # 可选，Candle 编码器模型路径
+### 单实例校验
 
-# 启动
+v0.18.1 起，memhop-mcp-server 启动时会自动检查是否已有进程在运行：
+
+```bash
+# 正常启动
 memhop-mcp-server
 # 输出: memhop-mcp-server v0.18.1 listening on /tmp/memhop.sock
+
+# 重复启动（会报错）
+memhop-mcp-server
+# ERROR: memhop-mcp-server is already running (PID: 12345). 
+#        Remove /tmp/memhop-mcp-server.lock to force start.
 ```
+
+**锁文件位置**: `/tmp/memhop-mcp-server.lock`  
+**自动清理**: 进程退出时（Ctrl-C 或 kill）会自动删除锁文件
+
+### 环境变量
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `MEMHOP_BRAINS_DIR` | `./memhop_brains` | 数据存储目录 |
+| `MEMHOP_SOCKET` | `/tmp/memhop.sock` | Unix Socket 路径 |
+| `MEMHOP_MODEL_PATH` | 无 | Candle 编码器模型目录 |
+
+### 启动示例
+
+```bash
+# 最小启动（使用 NgramEncoder，纯 BM25 文本检索）
+memhop-mcp-server
+
+# 启用语义向量检索（使用 CandleEncoder）
+MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
+```
+
+### 编码器说明
+
+| 模式 | 设置 | 特点 |
+|------|------|------|
+| **NgramEncoder** | 不设置 `MEMHOP_MODEL_PATH` | 无需模型，纯 BM25 文本匹配，启动快 |
+| **CandleEncoder** | 设置 `MEMHOP_MODEL_PATH` | 语义向量检索，需下载 BGE 模型（~92MB） |
 
 ---
 
