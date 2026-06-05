@@ -47,6 +47,12 @@ CONTEXT_FLOW_TRACE.md
 CONTEXT_SYSTEM_SUMMARY.md
 CROSS_PROJECT_UPGRADE_GUIDE.md
 
+# Local config & tools
+.history/
+.mcp.json
+skills/
+memhop_brains/
+
 # Test artifacts
 _test_mcp.db/
 

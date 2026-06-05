@@ -1,10 +1,10 @@
-# MemHop v0.13 Benchmark 开发规格书
+# MemHop v0.18.0 Benchmark 开发规格书
 
-> 本文档供 AI 开发人员根据 v0.13 spec 重新设计 benchmark 系统。
+> 本文档供 AI 开发人员根据 v0.18.0 spec 重新设计 benchmark 系统。
 
 ---
 
-## 一、v0.13 核心变化总览
+## 一、v0.18.0 核心变化总览
 
 ### Breaking 变更
 
@@ -96,7 +96,7 @@ llm_contradictions: list = []    # 应用层 LLM 发现的矛盾
 ```python
 class MemHopMCPClient:
     def __init__(self, binary_path: str, env_extra=None, recv_timeout=3600):
-        # 去掉 db_path 参数 — v0.13 由 agent_id 内部管理路径
+        # 去掉 db_path 参数 — v0.18.0 由 agent_id 内部管理路径
         ...
 
     def store(self, text, agent_id, session_id, ...,
@@ -154,7 +154,7 @@ class MemHopMCPRunner:
         """启动 MCP 子进程（全局只需一次）"""
         if self._mcp is not None:
             return
-        # v0.13: 不再需要 db_path，agent_id 内部管理
+        # v0.18.0: 不再需要 db_path，agent_id 内部管理
         ...
 
     def perceive(self, doc: dict, agent_id: str) -> dict:
@@ -205,7 +205,7 @@ runner = MemHopMCPRunner(encoder=args.encoder)
 runner.ensure_mcp()
 
 for ds_name in datasets:
-    agent_id = f"bench_{ds_name}"  # v0.13: agent_id 是逻辑标识
+    agent_id = f"bench_{ds_name}"  # v0.18.0: agent_id 是逻辑标识
     runner._id_map = {}
 
     for mode in modes:
@@ -214,7 +214,7 @@ for ds_name in datasets:
             results = run_nfcorpus(runner, args.subset or 500, agent_id, mode, args.dream_interval)
         elif ...
 
-# 清理：v0.13 不需要手动删 DB 路径，但需清理 agent 数据
+# 清理：v0.18.0 不需要手动删 DB 路径，但需清理 agent 数据
 # memhop 侧需要提供清理接口，或 benchmark 直接复用 agent_id（覆盖旧数据）
 runner.clear()
 ```
@@ -231,7 +231,7 @@ TEMP = "/tmp/memhop_bench"                # 不再需要
 
 ---
 
-## 三、测试集设计（完美匹配 v0.13）
+## 三、测试集设计（完美匹配 v0.18.0）
 
 ### 3.1 基础检索测试（与竞品对标）
 
@@ -243,9 +243,9 @@ TEMP = "/tmp/memhop_bench"                # 不再需要
 | **LoCoMo** | Snap Research | 长对话 | perceive + dream + recall | LLM-judge Accuracy |
 | **DMR** | MemGPT arXiv 2023 | 多会话一致性 | perceive + dream + 跨会话 recall | LLM-judge Accuracy |
 
-### 3.2 v0.13 差异化能力测试（新增）
+### 3.2 v0.18.0 差异化能力测试（新增）
 
-| 测试维度 | 测试方法 | 对应 v0.13 特性 | 量化指标 |
+| 测试维度 | 测试方法 | 对应 v0.18.0 特性 | 量化指标 |
 |---------|---------|----------------|---------|
 | **上下文激活** | store 1000 随机话题 → 检查活跃上下文 ≤5 | 三阶生命周期 | active_count ≤5, dormant_count ≤1000 |
 | **上下文过滤召回** | 存 ctx_A(5条) + ctx_B(5条) → recall(context_id=ctx_A) | context_id 过滤 | 失憶率 <5% |
@@ -273,7 +273,7 @@ TEMP = "/tmp/memhop_bench"                # 不再需要
 
 ## 四、质量门禁指标与 Benchmark 对应
 
-### v0.13 spec 的三个核心指标
+### v0.18.0 spec 的三个核心指标
 
 | 指标 | 目标 | Benchmark 怎么测 | 测试数据集 |
 |------|------|----------------|-----------|
@@ -297,7 +297,7 @@ TEMP = "/tmp/memhop_bench"                # 不再需要
 
 ### 5.1 竞品公开数据
 
-文件: `benchmarks/competitors_published.json`（已创建，需同步更新 v0.13 指标）
+文件: `benchmarks/competitors_published.json`（已创建，需同步更新 v0.18.0 指标）
 
 | 竞品 | 可对比的数据集 | 指标 |
 |------|--------------|------|
@@ -322,7 +322,7 @@ BGE-base (published) | 0.352    | —
 BM25 (published)     | 0.325    | —
 FAISS HNSW (pub.)   | 0.352    | —
 ---------------------|----------|--------
-→ MemHop v0.13      | XX.XX    | XX.XX
+→ MemHop v0.18.0      | XX.XX    | XX.XX
 
 === LongMemEval-S ===
 System               | R@5      | Source
@@ -330,7 +330,7 @@ System               | R@5      | Source
 MemPalace            | 96.60%   | GitHub
 AgentMemory          | 95.20%   | GitHub
 ---------------------|----------|----------------------
-→ MemHop v0.13      | XX.XX%   | this run
+→ MemHop v0.18.0      | XX.XX%   | this run
 ```
 
 ---
@@ -380,19 +380,19 @@ python benchmarks/run_benchmark.py \
 ## 七、开发顺序与依赖
 
 ```
-第1步：mcp_client.py 适配 v0.13
+第1步：mcp_client.py 适配 v0.18.0
   └── agent_id 替换 agent_path
   └── store/recall/dream 新参数
-  └── 依赖：v0.13 子任务1 完成
+  └── 依赖：v0.18.0 子任务1 完成
 
-第2步：run_benchmark.py 适配 v0.13
+第2步：run_benchmark.py 适配 v0.18.0
   └── MemHopMCPRunner 全部 agent_id
   └── 移除 _make_agent_path / reset_db
   └── 依赖：第1步完成
 
 第3步：验证基础检索仍可运行
   └── nfcorpus smoke test（--subset 10）
-  └── 对比 v0.12 结果是否退化
+  └── 对比 v0.18.0 结果是否退化
   └── 依赖：第2步完成
 
 第4步：差异化能力 benchmark 场景
@@ -400,13 +400,13 @@ python benchmarks/run_benchmark.py \
   └── context_id 过滤测试
   └── reranker/worldview 测试
   └── 自动建树测试
-  └── 依赖：v0.13 子任务3-6 完成
+  └── 依赖：v0.18.0 子任务3-6 完成
 
 第5步：Dream 质量 + 纠缠图 benchmark
   └── mount_tree 测试数据准备
   └── dream 前后 recall 对比
   └── 跨树召回测试
-  └── 依赖：v0.13 全部完成
+  └── 依赖：v0.18.0 全部完成
 
 第6步：竞品数据 + 报告生成
   └── competitors_published.json 更新
@@ -463,7 +463,7 @@ python3 benchmarks/run_benchmark.py --encoder bge-m3 --datasets nfcorpus --subse
 
 ### 第3步验证
 ```bash
-# 对比 v0.12 -> v0.13 无退化
+# 对比 v0.18.0 -> v0.18.0 无退化
 python3 benchmarks/run_benchmark.py --compare reports/*.json
 ```
 
