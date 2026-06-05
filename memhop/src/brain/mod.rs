@@ -190,10 +190,8 @@ impl Brain {
             .get_profile(&wtxn, &self.l0_env)?
             .unwrap_or_default();
         // catid 只在首次设置时保存，之后不可修改
-        if profile.catid.is_none() {
-            if let Some(id) = catid {
-                profile.catid = Some(id);
-            }
+        if profile.catid.is_none() && let Some(id) = catid {
+            profile.catid = Some(id);
         }
         if let Some(name) = role_name {
             profile.role_name = Some(name);
@@ -235,10 +233,8 @@ impl Brain {
             .get_profile(&wtxn, &self.l0_env)?
             .unwrap_or_default();
         // catid 只在首次设置时保存，之后不可修改
-        if profile.catid.is_none() {
-            if let Some(id) = catid {
-                profile.catid = Some(id);
-            }
+        if profile.catid.is_none() && let Some(id) = catid {
+            profile.catid = Some(id);
         }
         if let Some(name) = role_name {
             profile.role_name = Some(name);

@@ -18,17 +18,15 @@ fn check_single_instance() -> Result<(), String> {
     // 检查锁文件是否存在
     if fs::metadata(LOCK_FILE).is_ok() {
         // 读取锁文件中的 PID
-        if let Ok(pid_str) = fs::read_to_string(LOCK_FILE) {
-            if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                // 检查进程是否还在运行
-                if is_process_running(pid) {
-                    return Err(format!(
-                        "memhop-mcp-server is already running (PID: {}). \
-                         Remove {} to force start.",
-                        pid, LOCK_FILE
-                    ));
-                }
-            }
+        if let Ok(pid_str) = fs::read_to_string(LOCK_FILE)
+            && let Ok(pid) = pid_str.trim().parse::<u32>()
+            && is_process_running(pid)
+        {
+            return Err(format!(
+                "memhop-mcp-server is already running (PID: {}). \
+                 Remove {} to force start.",
+                pid, LOCK_FILE
+            ));
         }
         // 进程已不存在，删除旧的锁文件
         let _ = fs::remove_file(LOCK_FILE);

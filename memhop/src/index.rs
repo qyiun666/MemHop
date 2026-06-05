@@ -314,9 +314,20 @@ impl HnswIndex {
     /// 创建新的 HNSW 索引。dims 必须与编码器输出维度一致。
     pub fn new(dims: usize) -> Self {
         Self::new_with_config(dims, HnswConfig::default()).unwrap_or_else(|e| {
-            eprintln!("HnswIndex::new failed: {}, using default", e);
-            HnswIndex::default()
+            eprintln!("HnswIndex::new failed: {}, using empty index", e);
+            HnswIndex::empty()
         })
+    }
+
+    /// 创建空的 HNSW 索引（仅用于 fallback）
+    fn empty() -> Self {
+        Self {
+            index: Index::new(&IndexOptions::default()).expect("Failed to create empty index"),
+            id_to_key: HashMap::new(),
+            key_to_id: HashMap::new(),
+            next_key: 0,
+            dims: 384,
+        }
     }
 
     /// v0.18.0: 使用指定配置创建 HNSW 索引。
