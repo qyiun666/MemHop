@@ -240,39 +240,37 @@ pub(crate) fn search_l2(brain: &Brain, sparse: &HashMap<String, f32>, dense: &[h
     // ── 通道 1: ngram 重叠（始终可用）───────────────────
     let mut ngram_results: Vec<RecallResult> = Vec::new();
     if let Ok(iter) = brain.l2_env.topics.iter(&txn) {
-        for item in iter {
-            if let Ok((key, bytes)) = item {
-                if !key.starts_with("topic:") { continue; }
-                if let Ok(topic) = bincode::deserialize::<crate::engram::Topic>(bytes) {
-                    let mut overlap = 0.0f32;
-                    let label_lower = topic.label.to_lowercase();
-                    for ngram in sparse.keys() {
-                        if label_lower.contains(ngram) { overlap += 1.0; }
-                        for kw in &topic.keywords {
-                            if kw.to_lowercase().contains(ngram) { overlap += 0.5; }
-                        }
-                        // v0.17.0: topic.summary 也参与 ngram 匹配
-                        if let Some(ref summary) = topic.summary
-                            && summary.to_lowercase().contains(ngram) { overlap += 0.3; }
+        for (key, bytes) in iter.flatten() {
+            if !key.starts_with("topic:") { continue; }
+            if let Ok(topic) = bincode::deserialize::<crate::engram::Topic>(bytes) {
+                let mut overlap = 0.0f32;
+                let label_lower = topic.label.to_lowercase();
+                for ngram in sparse.keys() {
+                    if label_lower.contains(ngram) { overlap += 1.0; }
+                    for kw in &topic.keywords {
+                        if kw.to_lowercase().contains(ngram) { overlap += 0.5; }
                     }
-                    if overlap > 0.0 {
-                        let label = topic.label.clone();
-                        // v0.18.0: 计算关联强度权重
-                        let domain_weight_sum: f32 = topic.domain_weights.values().sum();
-                        let node_weight_sum: f32 = topic.node_weights.values().sum();
-                        let association_weight = 1.0 + (domain_weight_sum + node_weight_sum).ln().max(0.0);
-                        
-                        let score = (overlap * 0.1).min(1.0) * association_weight;
-                        ngram_results.push(RecallResult {
-                            layer: Layer::L2,
-                            id: topic.id,
-                            text: topic.summary.unwrap_or(label.clone()),
-                            score,
-                            topic_label: Some(label.clone()),
-                            created_at: topic.created_at,
-                            version: topic.version,
-                        });
-                    }
+                    // v0.17.0: topic.summary 也参与 ngram 匹配
+                    if let Some(ref summary) = topic.summary
+                        && summary.to_lowercase().contains(ngram) { overlap += 0.3; }
+                }
+                if overlap > 0.0 {
+                    let label = topic.label.clone();
+                    // v0.18.0: 计算关联强度权重
+                    let domain_weight_sum: f32 = topic.domain_weights.values().sum();
+                    let node_weight_sum: f32 = topic.node_weights.values().sum();
+                    let association_weight = 1.0 + (domain_weight_sum + node_weight_sum).ln().max(0.0);
+                    
+                    let score = (overlap * 0.1).min(1.0) * association_weight;
+                    ngram_results.push(RecallResult {
+                        layer: Layer::L2,
+                        id: topic.id,
+                        text: topic.summary.unwrap_or(label.clone()),
+                        score,
+                        topic_label: Some(label.clone()),
+                        created_at: topic.created_at,
+                        version: topic.version,
+                    });
                 }
             }
         }
@@ -549,7 +547,7 @@ fn get_topic_node_ids(brain: &Brain, topic_id: &str) -> Result<std::collections:
 /// 1. 结果在多少个不同的层中出现
 /// 2. 结果在各层中的排名一致性
 /// 3. 结果的跨层关联强度
-pub(crate) fn cross_layer_validation(results: &mut Vec<RecallResult>, _brain: &Brain) {
+pub(crate) fn cross_layer_validation(results: &mut [RecallResult], _brain: &Brain) {
     if results.is_empty() {
         return;
     }

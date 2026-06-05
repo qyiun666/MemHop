@@ -90,6 +90,7 @@ impl L3DomainGraph {
     }
 
     /// Add a node with a caller-provided unique ID.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_node_with_id(&mut self, wtxn: &mut RwTxn<'_>, env: &L3Env,
         id: &str, domain_id: &str, text: &str, sparse: &HashMap<String, f32>, _location: &str,
         vector: Vec<f16>) -> Result<String> {

@@ -61,6 +61,7 @@ impl L1Hypergraph {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_node(&mut self, wtxn: &mut RwTxn<'_>, env: &L1Env,
         text: &str, sparse: &HashMap<String, f32>, vector: Vec<half::f16>,
         _keywords: Vec<String>, source: NodeSource) -> Result<String> {
@@ -69,6 +70,7 @@ impl L1Hypergraph {
     }
 
     /// Add a node with a caller-provided unique ID.
+    #[allow(clippy::too_many_arguments)]
     pub fn add_node_with_id(&mut self, wtxn: &mut RwTxn<'_>, env: &L1Env,
         id: &str, text: &str, sparse: &HashMap<String, f32>, vector: Vec<half::f16>,
         _keywords: Vec<String>, source: NodeSource, importance: f32) -> Result<String> {
@@ -92,6 +94,7 @@ impl L1Hypergraph {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_hyperedge(&mut self, wtxn: &mut RwTxn<'_>, env: &L1Env,
         node_ids: Vec<String>, kind: HyperedgeKind, weight: f32,
         chain_prev: Option<String>, chain_label: Option<String>) -> Result<String> {

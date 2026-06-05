@@ -54,6 +54,7 @@ impl L4RawArchive {
     }
 
     /// Store with a caller-provided unique ID.
+    #[allow(clippy::too_many_arguments)]
     pub fn store_with_id(&mut self, wtxn: &mut heed::RwTxn<'_>, env: &L4Env,
         id: &str, text: &str, source: &str, turn_id: Option<&str>, session_id: Option<&str>,
         vector: Vec<f16>) -> Result<String> {

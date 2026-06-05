@@ -23,13 +23,11 @@ pub fn rem_reflect_topics(brain: &mut Brain, report: &mut ConsolidateReport) -> 
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         let mut ids = Vec::new();
         if let Ok(iter) = brain.l2_env.topics.iter(&txn) {
-            for item in iter {
-                if let Ok((key, _bytes)) = item {
-                    if !key.starts_with("topic:") || !key.ends_with(":meta") { continue; }
-                    // Extract topic_id from "topic:{id}:meta"
-                    let id = key.trim_start_matches("topic:").trim_end_matches(":meta");
-                    ids.push(id.to_string());
-                }
+            for (key, _bytes) in iter.flatten() {
+                if !key.starts_with("topic:") || !key.ends_with(":meta") { continue; }
+                // Extract topic_id from "topic:{id}:meta"
+                let id = key.trim_start_matches("topic:").trim_end_matches(":meta");
+                ids.push(id.to_string());
             }
         }
         ids
