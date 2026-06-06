@@ -1,21 +1,21 @@
-# MemHop v0.18.1 — meowAgent 集成指南
+# MemHop v0.18.3 — meowAgent 集成指南
 
 ## 概述
 
 MemHop 是嵌入式联想记忆引擎，通过 MCP (JSON-RPC 2.0 over Unix Socket) 对外提供记忆服务。
 
-5 层架构：L0 角色画像 + L1 纠缠超图 + L2 话题图 + L3 领域超图 + L4 原文库。
+6 层架构：L0 角色画像 + L1 纠缠超图 + L2 话题图 + L3 领域超图 + L4 原文库 + L5 程序性晶体。
 
 ## 启动
 
 ### 单实例校验
 
-v0.18.1 起，memhop-mcp-server 启动时会自动检查是否已有进程在运行：
+v0.18.3 起，memhop-mcp-server 启动时会自动检查是否已有进程在运行：
 
 ```bash
 # 正常启动
 memhop-mcp-server
-# 输出: memhop-mcp-server v0.18.1 listening on /tmp/memhop.sock
+# 输出: memhop-mcp-server v0.18.3 listening on /tmp/memhop.sock
 
 # 重复启动（会报错）
 memhop-mcp-server
@@ -254,7 +254,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 // 请求
 {"jsonrpc":"2.0","method":"memhop_health","params":{"agent_id":"cat_1"},"id":1}
 // 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.18.1"}}
+{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.18.3"}}
 ```
 
 ---
@@ -838,7 +838,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 {"jsonrpc":"2.0","method":"memhop_stats","params":{"agent_id":"cat_1"},"id":1}
 // 响应
 {"jsonrpc":"2.0","id":1,"result":{
-  "version":"0.18.1",
+  "version":"0.18.3",
   "encoder_mode":"candle",
   "encoder_dim":768,
   "brain_stats":{
@@ -1043,4 +1043,62 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 - 每次 session 结束自动调用 `memhop_consolidate`
 - 让 Stage 8 程序性结晶定期挖掘重复模式
 - 晶体积累后，`memhop_recall` 的 `recommended_crystals` 返回会越来越精准
+
+---
+
+## meowAgent 适配说明
+
+### 关键原则
+
+**meowAgent 需要适配 MemHop 的 API，而不是反过来。**
+
+如果 meowAgent 调用了 MemHop 中不存在的 API，这是 meowAgent 侧的集成问题，需要 meowAgent 代码进行修改。
+
+### meowAgent 需要适配的 API
+
+以下 API 在 meowAgent 中被调用，但在 MemHop v0.18.3 中不存在：
+
+| meowAgent 调用的 API | 状态 | 建议适配方案 |
+|---------------------|------|-------------|
+| `memhop_create_tree` | ❌ 不存在 | 使用 `memhop_mount_shelf` 挂载知识库 |
+| `memhop_remove_tree` | ❌ 不存在 | 使用 `memhop_unmount_shelf` 卸载知识库 |
+| `memhop_list_trees` | ❌ 不存在 | 使用 `memhop_list_shelf` 列出知识库 |
+| `memhop_list_entanglements` | ❌ 不存在 | 使用 `memhop_re_search` 或 `memhop_recall` 查询关联 |
+| `memhop_my_worldview` | ❌ 不存在 | 使用 `memhop_get_profile` 获取角色画像 |
+| `memhop_list_worldviews` | ❌ 不存在 | 使用 `memhop_get_profile` 获取世界观字段 |
+
+### MemHop 新增 API（meowAgent 未实现）
+
+以下 API 在 MemHop v0.18.3 中已实现，但 meowAgent 尚未集成：
+
+| MemHop API | 功能 | meowAgent 集成建议 |
+|-----------|------|-------------------|
+| `memhop_crystallize` | 触发程序性结晶 | 在 session 结束时调用，或定期调用 |
+| `memhop_list_crystals` | 列出所有晶体 | 在需要程序性知识时调用 |
+| `memhop_get_crystal` | 获取单个晶体详情 | 在需要特定晶体详情时调用 |
+
+### 集成最佳实践
+
+1. **程序性结晶集成**：
+   - 在每个 session 结束时调用 `memhop_consolidate`（会自动触发结晶）
+   - 在需要程序性知识时调用 `memhop_list_crystals`
+   - 在检索时关注 `recommended_crystals` 字段
+
+2. **错误处理**：
+   - 如果调用不存在的 API，MemHop 会返回标准 JSON-RPC 错误码 `-32601`（方法不存在）
+   - meowAgent 应该优雅处理这些错误，而不是崩溃
+
+3. **版本兼容性**：
+   - meowAgent 应该检查 `memhop_health` 返回的版本号
+   - 根据版本号决定使用哪些 API
+
+---
+
+## 版本历史
+
+| 版本 | 主要变更 |
+|------|----------|
+| v0.18.3 | 新增程序性结晶（L5层）、修复 CandleEncoder、统一版本号 |
+| v0.18.2 | 内部重构 |
+| v0.18.1 | 初始版本 |
 
