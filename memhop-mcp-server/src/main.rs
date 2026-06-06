@@ -1,4 +1,4 @@
-//! MemHop v0.18.1 MCP Server — 5层记忆架构的 JSON-RPC 2.0 接口。
+//! MemHop v0.18.3 MCP Server — 6层记忆架构的 JSON-RPC 2.0 接口。
 //! 双通道检索：BM25（始终可用）+ HNSW 语义向量 + 双编码器路由 (zh/en)。
 
 use memhop::{Brain, BrainConfig, Layer, RecallRequest, ShelfDomain, StoreBatch, StoreItem};

@@ -1,4 +1,4 @@
-# MemHop v0.18.1
+# MemHop v0.18.3
 
 **脑启发记忆引擎。** Hopfield 模式补全 + HNSW 语义检索 + Hebbian 图学习。单进程 MCP Server，全机统一记忆底座。
 
@@ -10,7 +10,7 @@
 
 ## vs agentmemory
 
-| 维度 | agentmemory | MemHop v0.18.1 |
+| 维度 | agentmemory | MemHop v0.18.3 |
 |------|------------|---------------|
 | 嵌入模型 | all-MiniLM-L6-v2 (384d) | **BGE-M3 (1024d)** |
 | 检索 | BM25 + 向量 + 图谱 RRF | **HNSW + SparseIndex RRF** |
