@@ -356,6 +356,70 @@ pub struct RecallResponse {
     pub l0_profile: Option<L0Profile>,
     pub confidence: Option<f32>,
     pub activated_topics: Vec<ActivatedTopicInfo>,
+    /// v0.18.3: 程序性晶体推荐（与查询的 trigger_keywords 子串匹配）
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recommended_crystals: Vec<ProceduralCrystal>,
+}
+
+// ── Procedural Crystallization (v0.18.3) ─────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum CrystalType {
+    Sequence,
+    Conditional,
+    Iterative,
+    Template,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrystalStep {
+    pub order: u32,
+    pub action: String,
+    pub expected_outcome: Option<String>,
+    pub source_node_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrystalSnapshot {
+    pub version: u64,
+    pub label: String,
+    pub steps: Vec<CrystalStep>,
+    pub snapshot_at: i64,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProceduralCrystal {
+    pub id: String,
+    pub label: String,
+    pub pattern_type: CrystalType,
+    pub steps: Vec<CrystalStep>,
+    pub trigger_keywords: Vec<String>,
+    pub context_conditions: Vec<String>,
+    pub source_chain_ids: Vec<String>,
+    pub usage_count: u32,
+    pub success_rate: f32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub version: u64,
+    pub history: Vec<CrystalSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ChainCluster {
+    pub label_pattern: String,
+    pub chain_ids: Vec<String>,
+    /// v0.18.3: 公共步骤（暂未使用，保留供未来扩展）
+    #[allow(dead_code)]
+    pub common_steps: Vec<String>,
+    pub frequency: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CrystallizeReport {
+    pub crystals_created: u32,
+    pub chains_analyzed: u32,
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -368,4 +432,8 @@ pub struct ConsolidateReport {
     pub schemas_emerged: u32,
     pub l0_updated: bool,
     pub plans_consolidated: u32,
+    /// v0.18.3: 程序性结晶生成的晶体数
+    #[serde(default)]
+    pub crystals_created: u32,
 }
+

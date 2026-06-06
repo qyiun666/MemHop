@@ -78,6 +78,9 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 | `memhop_re_search` | 正则搜索记忆 | P2 |
 | `memhop_update_topic` | 更新话题元数据 | P2 |
 | `memhop_stats` | 获取引擎统计信息 | P2 |
+| `memhop_crystallize` | 触发程序性结晶 | P1 |
+| `memhop_list_crystals` | 列出所有晶体 | P1 |
+| `memhop_get_crystal` | 获取单个晶体详情 | P1 |
 
 ---
 
@@ -851,3 +854,193 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
 | `agent_id` | string | 否 | Agent 标识 |
+
+---
+
+## v0.18.3 程序性结晶
+
+### 概念说明
+
+**程序性结晶（Procedural Crystallization）** 是 MemHop v0.18.3 引入的新机制，用于从 L1 层超边链中自动提取可复用的操作模式。
+
+**何时触发**：
+- 主动调用 `memhop_crystallize` 接口
+- 作为 consolidate 管线的 Stage 8 自动运行
+
+**工作原理**：
+1. 扫描所有带 `chain_label` 的超边链
+2. 对链的 label 序列做 bigram 文本聚类
+3. 同类链（≥2 条）提取公共步骤，组装为 `ProceduralCrystal`（程序性晶体）
+4. 晶体存储在 L5 层（程序性知识层），支持去重
+
+### 接口说明
+
+#### memhop_crystallize
+
+触发程序性结晶。
+
+```json
+// 请求
+{"jsonrpc":"2.0","method":"memhop_crystallize","params":{"agent_id":"cat_1"},"id":1}
+// 响应
+{"jsonrpc":"2.0","id":1,"result":{
+  "crystals_created": 1,
+  "chains_analyzed": 3,
+  "duration_ms": 42
+}}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `crystals_created` | u32 | 本次生成的晶体数 |
+| `chains_analyzed` | u32 | 分析的链总数 |
+| `duration_ms` | u64 | 执行耗时（毫秒） |
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agent_id` | string | 否 | Agent 标识 |
+
+#### memhop_list_crystals
+
+列出所有已存储的程序性晶体。
+
+```json
+// 请求
+{"jsonrpc":"2.0","method":"memhop_list_crystals","params":{"agent_id":"cat_1"},"id":1}
+// 响应
+{"jsonrpc":"2.0","id":1,"result":[
+  {
+    "id":"crys_1749123456000_3",
+    "label":"错误排查 → 定位原因 → 修复验证",
+    "pattern_type":"Sequence",
+    "steps":[
+      {"order":0,"action":"错误排查","expected_outcome":null,"source_node_ids":[]},
+      {"order":1,"action":"定位原因","expected_outcome":null,"source_node_ids":[]},
+      {"order":2,"action":"修复验证","expected_outcome":null,"source_node_ids":[]}
+    ],
+    "trigger_keywords":["错误排查","定位原因","修复验证"],
+    "context_conditions":[],
+    "source_chain_ids":["he_xxx","he_yyy","he_zzz"],
+    "usage_count":0,
+    "success_rate":0.0,
+    "created_at":1749123456000,
+    "updated_at":1749123456000,
+    "version":1,
+    "history":[]
+  }
+]}
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agent_id` | string | 否 | Agent 标识 |
+
+#### memhop_get_crystal
+
+获取单个程序性晶体详情。
+
+```json
+// 请求
+{
+  "jsonrpc":"2.0",
+  "method":"memhop_get_crystal",
+  "params":{"agent_id":"cat_1","crystal_id":"crys_1749123456000_3"},
+  "id":1
+}
+// 响应
+{"jsonrpc":"2.0","id":1,"result":{
+  "id":"crys_1749123456000_3",
+  "label":"错误排查 → 定位原因 → 修复验证",
+  "pattern_type":"Sequence",
+  "steps":[
+    {"order":0,"action":"错误排查","expected_outcome":null,"source_node_ids":[]}
+  ],
+  "trigger_keywords":["错误排查","定位原因","修复验证"],
+  "context_conditions":[],
+  "source_chain_ids":["he_xxx","he_yyy","he_zzz"],
+  "usage_count":0,
+  "success_rate":0.0,
+  "created_at":1749123456000,
+  "updated_at":1749123456000,
+  "version":1,
+  "history":[]
+}}
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agent_id` | string | 否 | Agent 标识 |
+| `crystal_id` | string | **是** | 晶体 ID |
+
+### 调用示例
+
+以下演示完整的 store → consolidate → list_crystals → recall 流程：
+
+```json
+// 1. 存储带 chain_label 的链式数据
+{
+  "jsonrpc":"2.0",
+  "method":"memhop_batch_store",
+  "params":{
+    "agent_id":"cat_1",
+    "items":[
+      {
+        "text":"发现页面报错：500 Internal Server Error",
+        "source":"chat",
+        "turn_id":"session_1_T1",
+        "session_id":"session_1",
+        "topic_label":"错误排查",
+        "chain_label":"错误排查",
+        "chain_parent_id":null
+      },
+      {
+        "text":"查看日志：/var/log/app/error.log",
+        "source":"chat",
+        "turn_id":"session_1_T2",
+        "session_id":"session_1",
+        "topic_label":"错误排查",
+        "chain_label":"定位原因",
+        "chain_parent_id":"<上一步的 hyperedge_id>"
+      },
+      {
+        "text":"修复完成，重启服务验证",
+        "source":"chat",
+        "turn_id":"session_1_T3",
+        "session_id":"session_1",
+        "topic_label":"错误排查",
+        "chain_label":"修复验证",
+        "chain_parent_id":"<上一步的 hyperedge_id>"
+      }
+    ]
+  },
+  "id":1
+}
+
+// 2. 触发巩固（含 Stage 8 程序性结晶）
+{"jsonrpc":"2.0","method":"memhop_consolidate","params":{"agent_id":"cat_1"},"id":2}
+
+// 3. 列出已生成的晶体
+{"jsonrpc":"2.0","method":"memhop_list_crystals","params":{"agent_id":"cat_1"},"id":3}
+
+// 4. 检索时获得晶体推荐
+{
+  "jsonrpc":"2.0",
+  "method":"memhop_recall",
+  "params":{"agent_id":"cat_1","query":"服务报错如何排查","max_results":10},
+  "id":4
+}
+// 响应中 recommended_crystals 字段包含匹配的晶体
+```
+
+### 最佳实践
+
+**chain_label 命名规范**：
+- 使用简洁的动词短语，如 `"排查错误"`、`"定位问题"`、`"修复验证"`
+- 同一流程的各步骤 label 应保持语义一致
+- 避免使用过于泛化的标签（如 `step1`、`step2`）
+
+**推荐在 session 结束时 consolidate**：
+- 每次 session 结束自动调用 `memhop_consolidate`
+- 让 Stage 8 程序性结晶定期挖掘重复模式
+- 晶体积累后，`memhop_recall` 的 `recommended_crystals` 返回会越来越精准
+

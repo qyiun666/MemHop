@@ -362,6 +362,57 @@ impl L4Env {
     }
 }
 
+// ── L5: 程序性晶体环境 ────────────────────────────────────
+
+pub struct L5Env {
+    pub env: Env,
+    pub crystals: DB,
+    pub chain_index: DB,
+}
+
+impl L5Env {
+    pub fn open(path: &Path) -> Result<Self> {
+        std::fs::create_dir_all(path)
+            .map_err(|e| MemHopError::Storage(format!("create dir: {}", e)))?;
+        let env = unsafe {
+            EnvOpenOptions::new()
+                .map_size(64 * 1024 * 1024) // 64MB
+                .max_readers(128)
+                .max_dbs(8)
+                .open(path)
+                .map_err(|e| MemHopError::Storage(format!("open l5 env: {}", e)))?
+        };
+        let mut wtxn = env
+            .write_txn()
+            .map_err(|e| MemHopError::Storage(format!("txn: {}", e)))?;
+        let crystals = env
+            .create_database(&mut wtxn, Some("crystals"))
+            .map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
+        let chain_index = env
+            .create_database(&mut wtxn, Some("chain_index"))
+            .map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
+        Ok(L5Env {
+            env,
+            crystals,
+            chain_index,
+        })
+    }
+
+    pub fn begin_read(&self) -> Result<RoTxn<'_>> {
+        self.env
+            .read_txn()
+            .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
+    pub fn begin_write(&self) -> Result<RwTxn<'_>> {
+        self.env
+            .write_txn()
+            .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+}
+
 // ── BrainDirs: 4 环境管理器 ───────────────────────────────
 
 #[allow(dead_code)]
@@ -371,6 +422,7 @@ pub struct BrainDirs {
     pub l2: L2Env,
     pub l3: L3Env,
     pub l4: L4Env,
+    pub l5: L5Env,
 }
 
 #[allow(dead_code)]
@@ -381,6 +433,9 @@ impl BrainDirs {
         let l2 = L2Env::open(&base_path.join("l2_topics.db"))?;
         let l3 = L3Env::open(&base_path.join("l3_domains.db"))?;
         let l4 = L4Env::open(&base_path.join("l4_raw.db"))?;
-        Ok(BrainDirs { l0, l1, l2, l3, l4 })
+        let l5 = L5Env::open(&base_path.join("l5_procedural.db"))?;
+        Ok(BrainDirs { l0, l1, l2, l3, l4, l5 })
     }
 }
+
+

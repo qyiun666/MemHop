@@ -1,6 +1,6 @@
 #! MCP 接口测试 - 覆盖所有 15 个 JSON-RPC 接口
 
-use memhop::{Brain, BrainConfig, Layer, RecallRequest, ShelfDomain, StoreBatch, StoreItem};
+use memhop::{Brain, BrainConfig, HyperedgeKind, Layer, RecallRequest, ShelfDomain, StoreBatch, StoreItem};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
@@ -336,5 +336,107 @@ fn test_handle_mount_unmount_shelf() {
             let result = memhop::shelf::unmount(&mut brain, &shelf.id);
             assert!(result.is_ok());
         }
+    }
+}
+
+#[test]
+fn test_crystallize_rpc() {
+    let mut brain = make_test_brain();
+
+    // 存储 chain 数据
+    let items = vec![
+        StoreItem {
+            text: "发现页面报错".to_string(),
+            source: "chat".to_string(),
+            topic_label: Some("错误排查".to_string()),
+            ..Default::default()
+        },
+        StoreItem {
+            text: "查看错误日志".to_string(),
+            source: "chat".to_string(),
+            topic_label: Some("错误排查".to_string()),
+            ..Default::default()
+        },
+        StoreItem {
+            text: "修复重启服务".to_string(),
+            source: "chat".to_string(),
+            topic_label: Some("错误排查".to_string()),
+            ..Default::default()
+        },
+    ];
+
+    let report = brain.batch_store(StoreBatch { items }).unwrap();
+
+    let node0 = report.engram_ids.get("0").cloned().unwrap_or_default();
+    let node1 = report.engram_ids.get("1").cloned().unwrap_or_default();
+    let node2 = report.engram_ids.get("2").cloned().unwrap_or_default();
+
+    // 创建 3 条超边链
+    {
+        use std::time::Duration;
+        let env = brain.l1_env.env.clone();
+        let mut wtxn = env.write_txn().unwrap();
+
+        std::thread::sleep(Duration::from_millis(2));
+        let h1 = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node0.clone()], HyperedgeKind::Evolution, 1.0,
+            None, Some("错误排查".to_string()),
+        ).unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+        let _ = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node0.clone()], HyperedgeKind::Evolution, 1.0,
+            Some(h1), Some("错误排查".to_string()),
+        ).unwrap();
+
+        std::thread::sleep(Duration::from_millis(2));
+        let h2 = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node1.clone()], HyperedgeKind::Evolution, 1.0,
+            None, Some("错误排查".to_string()),
+        ).unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+        let _ = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node1.clone()], HyperedgeKind::Evolution, 1.0,
+            Some(h2), Some("错误排查".to_string()),
+        ).unwrap();
+
+        std::thread::sleep(Duration::from_millis(2));
+        let h3 = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node2.clone()], HyperedgeKind::Evolution, 1.0,
+            None, Some("错误排查".to_string()),
+        ).unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+        let _ = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node2.clone()], HyperedgeKind::Evolution, 1.0,
+            Some(h3), Some("错误排查".to_string()),
+        ).unwrap();
+
+        wtxn.commit().unwrap();
+    }
+
+    // JSON-RPC 调用 memhop_crystallize
+    let result = brain.procedural_crystallize();
+    assert!(result.is_ok());
+
+    let report = result.unwrap();
+    // 验证返回 CrystallizeReport
+    assert!(report.crystals_created >= 1);
+    assert!(report.chains_analyzed >= 3);
+    assert!(report.duration_ms > 0);
+
+    // 验证 list_crystals 能获取到晶体
+    let crystals = brain.list_crystals().unwrap();
+    assert!(crystals.len() >= 1);
+
+    // 验证 get_crystal 能获取单个晶体
+    if let Some(crystal) = crystals.first() {
+        let fetched = brain.get_crystal(&crystal.id).unwrap();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.unwrap().id, crystal.id);
     }
 }

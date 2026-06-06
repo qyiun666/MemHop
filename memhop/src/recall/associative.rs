@@ -22,6 +22,7 @@ pub fn associative_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallRe
             l0_profile: None,
             confidence: None,
             activated_topics: Vec::new(),
+            recommended_crystals: Vec::new(),
         });
     }
 
@@ -46,6 +47,7 @@ pub fn associative_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallRe
             l0_profile: None,
             confidence: None,
             activated_topics: Vec::new(),
+            recommended_crystals: Vec::new(),
         });
     }
 
@@ -90,6 +92,7 @@ pub fn associative_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallRe
         l0_profile: None,
         confidence: None,
         activated_topics: Vec::new(),
+        recommended_crystals: Vec::new(),
     })
 }
 

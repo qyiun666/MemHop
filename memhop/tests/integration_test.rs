@@ -1,7 +1,6 @@
 //! 集成测试 - 测试完整的存储→召回流程
 
-use memhop::{Brain, BrainConfig, Layer, RecallRequest, StoreBatch, StoreItem};
-use std::collections::HashMap;
+use memhop::{Brain, BrainConfig, HyperedgeKind, Layer, RecallRequest, StoreBatch, StoreItem};
 
 /// 创建临时测试用 Brain 实例
 fn make_test_brain() -> Brain {
@@ -477,3 +476,121 @@ fn test_recall_with_max_results() {
     let resp = result.unwrap();
     assert!(resp.results.len() <= 5);
 }
+
+#[test]
+fn test_procedural_crystallization() {
+    let mut brain = make_test_brain();
+
+    // 存储 3 条带相同 chain_label 的 chain 数据
+    let items = vec![
+        StoreItem {
+            text: "第一步：确认错误信息".to_string(),
+            source: "chat".to_string(),
+            topic_label: Some("错误排查".to_string()),
+            ..Default::default()
+        },
+        StoreItem {
+            text: "第二步：定位错误原因".to_string(),
+            source: "chat".to_string(),
+            topic_label: Some("错误排查".to_string()),
+            ..Default::default()
+        },
+        StoreItem {
+            text: "第三步：修复并验证".to_string(),
+            source: "chat".to_string(),
+            topic_label: Some("错误排查".to_string()),
+            ..Default::default()
+        },
+    ];
+
+    let report = brain.batch_store(StoreBatch { items }).unwrap();
+    assert!(report.l1_nodes_created > 0);
+
+    // 获取节点 ID
+    let node0 = report.engram_ids.get("0").cloned().unwrap_or_default();
+    let node1 = report.engram_ids.get("1").cloned().unwrap_or_default();
+    let node2 = report.engram_ids.get("2").cloned().unwrap_or_default();
+    assert!(!node0.is_empty() && !node1.is_empty() && !node2.is_empty(),
+        "Expected all 3 node IDs to be present");
+
+    // 直接创建 3 条独立的超边链，每条都带 chain_label "错误排查"
+    // 注意：add_hyperedge 用 timestamp_millis() 生成 ID，需要增加延迟避免 ID 冲突
+    {
+        use std::time::Duration;
+        let env = brain.l1_env.env.clone();
+        let mut wtxn = env.write_txn().unwrap();
+
+        std::thread::sleep(Duration::from_millis(2));
+        let h1 = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node0.clone()],
+            HyperedgeKind::Evolution, 1.0,
+            None, Some("错误排查".to_string()),
+        ).unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+        let _ = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node0.clone()],
+            HyperedgeKind::Evolution, 1.0,
+            Some(h1), Some("错误排查".to_string()),
+        ).unwrap();
+
+        std::thread::sleep(Duration::from_millis(2));
+        let h2 = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node1.clone()],
+            HyperedgeKind::Evolution, 1.0,
+            None, Some("错误排查".to_string()),
+        ).unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+        let _ = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node1.clone()],
+            HyperedgeKind::Evolution, 1.0,
+            Some(h2), Some("错误排查".to_string()),
+        ).unwrap();
+
+        std::thread::sleep(Duration::from_millis(2));
+        let h3 = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node2.clone()],
+            HyperedgeKind::Evolution, 1.0,
+            None, Some("错误排查".to_string()),
+        ).unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+        let _ = brain.l1.add_hyperedge(
+            &mut wtxn, &brain.l1_env,
+            vec![node2.clone()],
+            HyperedgeKind::Evolution, 1.0,
+            Some(h3), Some("错误排查".to_string()),
+        ).unwrap();
+
+        wtxn.commit().unwrap();
+    }
+
+    // 调用 crystallize
+    let crystal_report = brain.procedural_crystallize().unwrap();
+    assert!(crystal_report.crystals_created >= 1,
+        "Expected at least 1 crystal, got {}", crystal_report.crystals_created);
+
+    // 验证 list_crystals 返回至少 1 个晶体
+    let crystals = brain.list_crystals().unwrap();
+    assert!(crystals.len() >= 1,
+        "Expected at least 1 crystal, got {}", crystals.len());
+
+    // 验证晶体具有正确的内容
+    if let Some(crystal) = crystals.first() {
+        assert!(crystal.label.contains("错误排查"));
+        assert!(!crystal.trigger_keywords.is_empty());
+    }
+
+    // 调用 recall，验证 recommended_crystals 非空
+    let req = RecallRequest {
+        query: "错误排查".to_string(),
+        ..Default::default()
+    };
+    let resp = brain.recall(&req).unwrap();
+    assert!(resp.recommended_crystals.len() >= 1,
+        "Expected non-empty recommended_crystals");
+}
+

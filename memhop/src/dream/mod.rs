@@ -1,4 +1,4 @@
-//! dream — memory consolidation pipeline (7-stage).
+//! dream — memory consolidation pipeline (8-stage).
 //! Stage 1 (NREM): Hyperedge weight time decay + pruning.
 //! Stage 2 (REM-Topic Merge): Similar topic merging.
 //! Stage 3 (REM-Reflect): Update each topic summary from L1 nodes.
@@ -6,6 +6,7 @@
 //! Stage 5 (Co-occurrence): L2→L1 cross-topic hyperedges.
 //! Stage 6 (L0 Formation): Extract worldview/values from L2 topics.
 //! Stage 7: BM25 + VectorIndex rebuild.
+//! Stage 8: Procedural Crystallization.
 
 pub mod l0;
 pub mod nrem;
@@ -13,9 +14,9 @@ pub mod rem;
 
 use crate::brain::Brain;
 use crate::error::Result;
-use crate::types::{ConsolidateReport, DreamConfig};
+use crate::types::{ConsolidateReport, CrystallizeReport, DreamConfig};
 
-/// Run the 7-stage consolidation pipeline.
+/// Run the 8-stage consolidation pipeline.
 pub fn run(brain: &mut Brain, _config: &DreamConfig) -> Result<ConsolidateReport> {
     let start = std::time::Instant::now();
     let mut report = ConsolidateReport::default();
@@ -63,6 +64,18 @@ pub fn run(brain: &mut Brain, _config: &DreamConfig) -> Result<ConsolidateReport
     if let Err(e) = brain.l2.rebuild_topic_vectors(&brain.l2_env) {
         eprintln!("[dream] L2 topic vectors rebuild error: {}", e);
     }
+
+    // Stage 8: Procedural Crystallization
+    let _crystal_report = match crate::procedural::crystallize(brain) {
+        Ok(cr) => {
+            report.crystals_created = cr.crystals_created;
+            cr
+        }
+        Err(e) => {
+            eprintln!("[dream] crystallization error: {}", e);
+            CrystallizeReport::default()
+        }
+    };
 
     report.duration_ms = start.elapsed().as_millis() as u64;
     Ok(report)

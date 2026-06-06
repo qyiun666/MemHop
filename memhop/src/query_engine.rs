@@ -26,6 +26,7 @@ pub(crate) fn execute(brain: &Brain, req: &RecallRequest) -> Result<RecallRespon
             l0_profile: None,
             confidence: None,
             activated_topics: Vec::new(),
+            recommended_crystals: Vec::new(),
         });
     }
     let encoded = brain.encoder.encode(&req.query);
@@ -165,6 +166,7 @@ pub(crate) fn execute(brain: &Brain, req: &RecallRequest) -> Result<RecallRespon
         l0_profile: None,
         confidence,
         activated_topics: Vec::new(),
+        recommended_crystals: Vec::new(),
     })
 }
 

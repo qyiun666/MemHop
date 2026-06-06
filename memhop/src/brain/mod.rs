@@ -8,15 +8,15 @@ use crate::engram::{RawDocument, Topic};
 use crate::error::{MemHopError, Result};
 use crate::hypergraph::L1Hypergraph;
 use crate::index::HnswConfig;
-use crate::lmdb::{L0Env, L1Env, L2Env, L3Env, L4Env};
+use crate::lmdb::{L0Env, L1Env, L2Env, L3Env, L4Env, L5Env};
 use crate::profile::L0ProfileStore;
 use crate::raw_archive::L4RawArchive;
 use crate::session::SessionManager;
 use crate::topic_graph::L2TopicGraph;
 use crate::types::DreamConfig;
 use crate::types::{
-    ActivatedTopicInfo, BatchReport, BrainConfig, ConsolidateReport, L0Profile, L3PathInfo,
-    RecallRequest, RecallResponse, StoreBatch,
+    ActivatedTopicInfo, BatchReport, BrainConfig, ConsolidateReport, CrystallizeReport, L0Profile,
+    L3PathInfo, ProceduralCrystal, RecallRequest, RecallResponse, StoreBatch,
 };
 
 /// MemHop v0.18.1 Brain — 5 层仿人脑记忆架构顶层 API。
@@ -34,6 +34,7 @@ pub struct Brain {
     pub l4: L4RawArchive,
     pub session_mgr: SessionManager,
     pub encoder: Box<dyn Encoder>,
+    pub l5_env: L5Env,
 }
 
 impl Brain {
@@ -47,11 +48,12 @@ impl Brain {
         let l2_env = L2Env::open(&path.join("l2_topics.db"))?;
         let l3_env = L3Env::open(&path.join("l3_domains.db"))?;
         let l4_env = L4Env::open(&path.join("l4_raw.db"))?;
+        let l5_env = L5Env::open(&path.join("l5_procedural.db"))?;
 
         let l0 = L0ProfileStore::new();
 
         // 先初始化编码器以获取维度
-        let encoder: Box<dyn Encoder> = if let Some(ref _mp) = config.model_path {
+        let encoder: Box<dyn Encoder> = if let Some(ref mp) = config.model_path {
             // v0.18.1: 尝试使用 CandleEncoder
             #[cfg(feature = "candle")]
             {
@@ -71,6 +73,7 @@ impl Brain {
             }
             #[cfg(not(feature = "candle"))]
             {
+                let _ = mp; // suppress unused warning when candle is disabled
                 eprintln!("memhop-brain: candle feature disabled, using NgramEncoder");
                 Box::new(NgramEncoder::new(1024)) as Box<dyn Encoder>
             }
@@ -124,6 +127,7 @@ impl Brain {
             l4,
             session_mgr,
             encoder,
+            l5_env,
         })
     }
 
@@ -135,6 +139,12 @@ impl Brain {
         // 清理过期激活
         self.session_mgr.purge_expired();
         let mut resp = crate::recall::enhanced_recall(self, req)?;
+
+        // v0.18.3: 根据查询词匹配程序性晶体推荐
+        if !req.query.is_empty() {
+            resp.recommended_crystals = self.get_crystals_by_keyword(&req.query)?;
+        }
+
         // 附带 L0 Profile
         let txn = self
             .l0_env
@@ -150,6 +160,11 @@ impl Brain {
     pub fn consolidate(&mut self) -> Result<ConsolidateReport> {
         let config = DreamConfig::default();
         crate::dream::run(self, &config)
+    }
+
+    /// v0.18.3: 运行程序性结晶管线。
+    pub fn procedural_crystallize(&mut self) -> Result<CrystallizeReport> {
+        crate::procedural::crystallize(self)
     }
 
     pub fn organize_node(&mut self, node_id: &str) -> Result<()> {
@@ -398,5 +413,95 @@ impl Brain {
         resp.l0_profile = self.l0.get_profile(&txn, &self.l0_env)?;
         resp.activated_topics = self.session_mgr.get_active_list();
         Ok(resp)
+    }
+
+    // ── L5 程序性结晶 CRUD ─────────────────────────────────
+
+    /// v0.18.3: 存储一个程序性晶体。
+    pub fn store_crystal(&mut self, crystal: &ProceduralCrystal) -> Result<()> {
+        let env = self.l5_env.env.clone();
+        let mut wtxn = env
+            .write_txn()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let bytes = bincode::serialize(crystal)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        self.l5_env
+            .crystals
+            .put(&mut wtxn, &crystal.id, &bytes)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        Ok(())
+    }
+
+    /// v0.18.3: 按 ID 获取程序性晶体。
+    pub fn get_crystal(&self, id: &str) -> Result<Option<ProceduralCrystal>> {
+        let txn = self
+            .l5_env
+            .env
+            .read_txn()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        match self
+            .l5_env
+            .crystals
+            .get(&txn, id)
+            .map_err(|e| MemHopError::Storage(e.to_string()))?
+        {
+            Some(bytes) => Ok(Some(
+                bincode::deserialize(bytes)
+                    .map_err(|e| MemHopError::Storage(e.to_string()))?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    /// v0.18.3: 列出所有程序性晶体。
+    pub fn list_crystals(&self) -> Result<Vec<ProceduralCrystal>> {
+        let txn = self
+            .l5_env
+            .env
+            .read_txn()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut crystals = Vec::new();
+        if let Ok(iter) = self.l5_env.crystals.iter(&txn) {
+            for (_key, bytes) in iter.flatten() {
+                match bincode::deserialize::<ProceduralCrystal>(bytes) {
+                    Ok(c) => crystals.push(c),
+                    Err(e) => eprintln!("[brain] list_crystals: deserialize error: {}", e),
+                }
+            }
+        }
+        Ok(crystals)
+    }
+
+    /// v0.18.3: 按关键词过滤程序性晶体（子串匹配 trigger_keywords）。
+    pub fn get_crystals_by_keyword(&self, keyword: &str) -> Result<Vec<ProceduralCrystal>> {
+        let txn = self
+            .l5_env
+            .env
+            .read_txn()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut matched = Vec::new();
+        if let Ok(iter) = self.l5_env.crystals.iter(&txn) {
+            for (_key, bytes) in iter.flatten() {
+                match bincode::deserialize::<ProceduralCrystal>(bytes) {
+                    Ok(c) => {
+                        if c.trigger_keywords
+                            .iter()
+                            .any(|kw| kw.contains(keyword) || keyword.contains(kw))
+                        {
+                            matched.push(c);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[brain] get_crystals_by_keyword: deserialize error: {}",
+                            e
+                        )
+                    }
+                }
+            }
+        }
+        Ok(matched)
     }
 }

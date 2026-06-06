@@ -36,7 +36,8 @@ mod query_engine; // 按层检索引擎 // Brain 顶层 API
 // ── v0.15.x 恢复模块 ─────────────────────────────────────────
 mod dream; // 记忆巩固管线（consolidate 实现）
 pub mod organize; // 记忆组织：话题反思、关键词精炼、边界检测
-mod recall; // 高级检索：关联扩散、话题过滤
+pub mod procedural; // v0.18.3: 程序性结晶 — 链分析引擎
+mod recall;
 pub mod session; // 会话上下文管理（纯内存）
 pub mod shelf; // 知识库挂载（L3 领域图扩展）
 mod splitter; // 长文本分段
@@ -51,9 +52,12 @@ pub use engram::{Hyperedge, KnowledgeNode, RawDocument, Topic, TopicEdge};
 pub use error::{MemHopError, Result};
 pub use index::{HnswIndex, SparseIndex};
 pub use session::SessionManager;
+pub use lmdb::L5Env;
 pub use types::{
     ActivatedTopicInfo, ActivationEntry, BatchReport, BrainConfig, ConsolidateReport,
-    DocumentSnapshot, DreamConfig, HyperedgeKind, HyperedgeSnapshot, L0Profile, L0Snapshot,
-    L3PathInfo, Layer, NodeSource, RecallRequest, RecallResponse, RecallResult, ShelfDomain,
-    ShelfMeta, StoreBatch, StoreItem, TopicEdgeKind, TopicSnapshot,
+    CrystalStep, CrystalType, CrystallizeReport, CrystalSnapshot, DocumentSnapshot,
+    DreamConfig, HyperedgeKind, HyperedgeSnapshot, L0Profile, L0Snapshot,
+    L3PathInfo, Layer, NodeSource, ProceduralCrystal, RecallRequest, RecallResponse,
+    RecallResult, ShelfDomain, ShelfMeta, StoreBatch, StoreItem, TopicEdgeKind,
+    TopicSnapshot,
 };

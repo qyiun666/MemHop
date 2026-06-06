@@ -10,7 +10,7 @@ use std::sync::{Arc, LazyLock, Mutex};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 
-const VERSION: &str = "0.18.1";
+const VERSION: &str = "0.18.3";
 const LOCK_FILE: &str = "/tmp/memhop-mcp-server.lock";
 
 /// 检查是否已有进程在运行，使用文件锁实现单实例
@@ -80,6 +80,13 @@ fn get_or_open_brain(
 
 #[tokio::main]
 async fn main() {
+    // 处理 --version 参数
+    let args: Vec<String> = std::env::args().collect();
+    if args.contains(&"--version".to_string()) {
+        eprintln!("memhop-mcp-server v{}", VERSION);
+        std::process::exit(0);
+    }
+    
     // 检查单实例
     if let Err(e) = check_single_instance() {
         eprintln!("ERROR: {}", e);
@@ -205,6 +212,15 @@ async fn handle(stream: UnixStream, brains_dir: String, model_path: Option<Strin
             "memhop_set_l0" => handle_set_l0(&id, agent_id, &brains_dir, &model_path, &params),
             "memhop_feedback" => handle_feedback(&id, agent_id, &brains_dir, &model_path, &params),
             "memhop_stats" => handle_stats(&id, agent_id, &brains_dir, &model_path),
+            "memhop_crystallize" => {
+                handle_crystallize(&id, agent_id, &brains_dir, &model_path)
+            }
+            "memhop_list_crystals" => {
+                handle_list_crystals(&id, agent_id, &brains_dir, &model_path)
+            }
+            "memhop_get_crystal" => {
+                handle_get_crystal(&id, agent_id, &brains_dir, &model_path, &params)
+            }
             _ => error_response(&id, -32601, &format!("unknown method: {}", method)),
         };
 
@@ -418,7 +434,15 @@ fn handle_recall(
         Err(e) => return error_response(id, -32000, &e.to_string()),
     };
     match guard.recall(&req) {
-        Ok(resp) => json!({"jsonrpc":"2.0","id":id,"result":resp}),
+        Ok(mut resp) => {
+            // v0.18.3: query 与 crystal.trigger_keywords 子串匹配，命中即推荐
+            if !req.query.is_empty()
+                && let Ok(crystals) = guard.get_crystals_by_keyword(&req.query)
+            {
+                resp.recommended_crystals = crystals;
+            }
+            json!({"jsonrpc":"2.0","id":id,"result":resp})
+        }
         Err(e) => error_response(id, -32000, &e.to_string()),
     }
 }
@@ -1095,6 +1119,78 @@ fn handle_set_l0(
     };
     match guard.set_l0(catid, role_name, personality, values, worldview, traits) {
         Ok(()) => json!({"jsonrpc":"2.0","id":id,"result":{"status":"ok"}}),
+        Err(e) => error_response(id, -32000, &e.to_string()),
+    }
+}
+
+// ── v0.18.3: memhop_crystallize ────────────────────────────────
+
+fn handle_crystallize(
+    id: &Value,
+    agent_id: &str,
+    brains_dir: &str,
+    model_path: &Option<String>,
+) -> Value {
+    let brain = match get_or_open_brain(agent_id, brains_dir, model_path.clone()) {
+        Ok(b) => b,
+        Err(e) => return error_response(id, -32000, &e),
+    };
+    let mut guard = match brain.lock() {
+        Ok(g) => g,
+        Err(e) => return error_response(id, -32000, &e.to_string()),
+    };
+    match guard.procedural_crystallize() {
+        Ok(report) => json!({"jsonrpc":"2.0","id":id,"result":report}),
+        Err(e) => error_response(id, -32000, &e.to_string()),
+    }
+}
+
+// ── v0.18.3: memhop_list_crystals ──────────────────────────────
+
+fn handle_list_crystals(
+    id: &Value,
+    agent_id: &str,
+    brains_dir: &str,
+    model_path: &Option<String>,
+) -> Value {
+    let brain = match get_or_open_brain(agent_id, brains_dir, model_path.clone()) {
+        Ok(b) => b,
+        Err(e) => return error_response(id, -32000, &e),
+    };
+    let guard = match brain.lock() {
+        Ok(g) => g,
+        Err(e) => return error_response(id, -32000, &e.to_string()),
+    };
+    match guard.list_crystals() {
+        Ok(crystals) => json!({"jsonrpc":"2.0","id":id,"result":crystals}),
+        Err(e) => error_response(id, -32000, &e.to_string()),
+    }
+}
+
+// ── v0.18.3: memhop_get_crystal ────────────────────────────────
+
+fn handle_get_crystal(
+    id: &Value,
+    agent_id: &str,
+    brains_dir: &str,
+    model_path: &Option<String>,
+    params: &serde_json::Map<String, Value>,
+) -> Value {
+    let brain = match get_or_open_brain(agent_id, brains_dir, model_path.clone()) {
+        Ok(b) => b,
+        Err(e) => return error_response(id, -32000, &e),
+    };
+    let crystal_id = match params.get("crystal_id").and_then(|v| v.as_str()) {
+        Some(s) => s.to_string(),
+        None => return error_response(id, -32602, "crystal_id is required"),
+    };
+    let guard = match brain.lock() {
+        Ok(g) => g,
+        Err(e) => return error_response(id, -32000, &e.to_string()),
+    };
+    match guard.get_crystal(&crystal_id) {
+        Ok(Some(crystal)) => json!({"jsonrpc":"2.0","id":id,"result":crystal}),
+        Ok(None) => error_response(id, -32001, &format!("crystal not found: {}", crystal_id)),
         Err(e) => error_response(id, -32000, &e.to_string()),
     }
 }
