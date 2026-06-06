@@ -19,7 +19,7 @@ use crate::types::{
     L3PathInfo, ProceduralCrystal, RecallRequest, RecallResponse, StoreBatch,
 };
 
-/// MemHop v0.18.1 Brain — 5 层仿人脑记忆架构顶层 API。
+/// MemHop v0.18.3 Brain — 6 层仿人脑记忆架构顶层 API。
 pub struct Brain {
     pub config: BrainConfig,
     pub l0_env: L0Env,
