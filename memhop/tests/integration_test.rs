@@ -1,6 +1,7 @@
 //! 集成测试 - 测试完整的存储→召回流程
 
 use memhop::{Brain, BrainConfig, HyperedgeKind, Layer, RecallRequest, StoreBatch, StoreItem};
+use std::sync::Arc;
 
 /// 创建临时测试用 Brain 实例
 fn make_test_brain() -> Brain {
@@ -8,9 +9,9 @@ fn make_test_brain() -> Brain {
     let cfg = BrainConfig {
         brains_dir: tmp.path().to_str().unwrap().to_string(),
         agent_id: "integration_test".to_string(),
-        model_path: None,
     };
-    Brain::open(cfg).unwrap()
+    let encoder: Arc<Box<dyn memhop::Encoder>> = Arc::new(Box::new(memhop::NgramEncoder::new(1024)));
+    Brain::open(cfg, encoder).unwrap()
 }
 
 #[test]
@@ -381,17 +382,16 @@ fn test_multiple_agents_isolation() {
     let cfg1 = BrainConfig {
         brains_dir: tmp1.path().to_str().unwrap().to_string(),
         agent_id: "agent_1".to_string(),
-        model_path: None,
     };
 
     let cfg2 = BrainConfig {
         brains_dir: tmp2.path().to_str().unwrap().to_string(),
         agent_id: "agent_2".to_string(),
-        model_path: None,
     };
 
-    let mut brain1 = Brain::open(cfg1).unwrap();
-    let mut brain2 = Brain::open(cfg2).unwrap();
+    let encoder: Arc<Box<dyn memhop::Encoder>> = Arc::new(Box::new(memhop::NgramEncoder::new(1024)));
+    let mut brain1 = Brain::open(cfg1, encoder.clone()).unwrap();
+    let mut brain2 = Brain::open(cfg2, encoder.clone()).unwrap();
 
     // agent_1 存储数据
     let items = vec![StoreItem {
@@ -517,49 +517,51 @@ fn test_procedural_crystallization() {
     // 注意：add_hyperedge 用 timestamp_millis() 生成 ID，需要增加延迟避免 ID 冲突
     {
         use std::time::Duration;
-        let env = brain.l1_env.env.clone();
+        let l1_env = brain.l1_env.as_ref().unwrap();
+        let l1 = brain.l1.as_mut().unwrap();
+        let env = l1_env.env.clone();
         let mut wtxn = env.write_txn().unwrap();
 
         std::thread::sleep(Duration::from_millis(2));
-        let h1 = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let h1 = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node0.clone()],
             HyperedgeKind::Evolution, 1.0,
             None, Some("错误排查".to_string()),
         ).unwrap();
         std::thread::sleep(Duration::from_millis(2));
-        let _ = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let _ = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node0.clone()],
             HyperedgeKind::Evolution, 1.0,
             Some(h1), Some("错误排查".to_string()),
         ).unwrap();
 
         std::thread::sleep(Duration::from_millis(2));
-        let h2 = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let h2 = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node1.clone()],
             HyperedgeKind::Evolution, 1.0,
             None, Some("错误排查".to_string()),
         ).unwrap();
         std::thread::sleep(Duration::from_millis(2));
-        let _ = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let _ = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node1.clone()],
             HyperedgeKind::Evolution, 1.0,
             Some(h2), Some("错误排查".to_string()),
         ).unwrap();
 
         std::thread::sleep(Duration::from_millis(2));
-        let h3 = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let h3 = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node2.clone()],
             HyperedgeKind::Evolution, 1.0,
             None, Some("错误排查".to_string()),
         ).unwrap();
         std::thread::sleep(Duration::from_millis(2));
-        let _ = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let _ = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node2.clone()],
             HyperedgeKind::Evolution, 1.0,
             Some(h3), Some("错误排查".to_string()),

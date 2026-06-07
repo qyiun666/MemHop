@@ -4,6 +4,7 @@
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use memhop::{Brain, BrainConfig, Layer, RecallRequest, StoreBatch, StoreItem};
 use std::cell::RefCell;
+use std::sync::Arc;
 
 thread_local! {
     static BRAIN: RefCell<Option<(Brain, tempfile::TempDir)>> = RefCell::new(None);
@@ -21,9 +22,9 @@ where
             let cfg = BrainConfig {
                 brains_dir: tmp.path().to_str().unwrap().to_string(),
                 agent_id: "bench".to_string(),
-                model_path: None,
             };
-            *brain_opt = Some((Brain::open(cfg).unwrap(), tmp));
+            let encoder: Arc<Box<dyn memhop::Encoder>> = Arc::new(Box::new(memhop::NgramEncoder::new(1024)));
+            *brain_opt = Some((Brain::open(cfg, encoder).unwrap(), tmp));
         }
         let brain = &mut brain_opt.as_mut().unwrap().0;
         f(brain)

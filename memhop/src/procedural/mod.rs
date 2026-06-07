@@ -13,16 +13,17 @@ use crate::types::{ChainCluster, CrystallizeReport};
 use heed::RoTxn;
 
 /// 遍历 L1 所有超边，筛选链头并收集完整链的 label 序列。
-pub(crate) fn analyze_chains(brain: &Brain) -> Result<Vec<ChainCluster>> {
-    let txn = brain
-        .l1_env
+pub(crate) fn analyze_chains(brain: &mut Brain) -> Result<Vec<ChainCluster>> {
+    brain.ensure_l1_env()?;
+    let l1_env = brain.l1_env.as_ref().unwrap();
+    let txn = l1_env
         .env
         .read_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
     // Step 1: 筛选 chain_label.is_some() && chain_prev.is_none() 的链头
     let mut heads: Vec<String> = Vec::new();
-    if let Ok(iter) = brain.l1_env.hyperedges.iter(&txn) {
+    if let Ok(iter) = l1_env.hyperedges.iter(&txn) {
         for item in iter {
             if let Ok((_key, bytes)) = item
                 && let Ok(he) = bincode::deserialize::<Hyperedge>(bytes)
@@ -37,7 +38,7 @@ pub(crate) fn analyze_chains(brain: &Brain) -> Result<Vec<ChainCluster>> {
     let chains: Vec<(String, Vec<String>)> = heads
         .iter()
         .map(|head_id| {
-            let labels = collect_chain_labels(&brain.l1_env, &txn, head_id);
+            let labels = collect_chain_labels(l1_env, &txn, head_id);
             (head_id.clone(), labels)
         })
         .filter(|(_, labels)| !labels.is_empty())

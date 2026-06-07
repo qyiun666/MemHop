@@ -17,6 +17,20 @@ use crate::error::{MemHopError, Result};
 /// LMDB 默认最大键大小 (MDB_MAXKEYSIZE)
 const LMDB_MAX_KEY_SIZE: usize = 511;
 
+/// LMDB 空间使用统计
+#[derive(Debug, Clone, Copy)]
+pub struct SpaceUsage {
+    /// 已使用的字节数（数据文件大小）
+    pub used_bytes: u64,
+    /// 配置的映射空间大小
+    pub map_size: u64,
+    /// 使用率百分比
+    pub usage_pct: f32,
+    /// 数据库数量（当前实现中恒为 0；stat.entries 返回的是键值对数量而非数据库数量）
+    /// 保留字段以保持 API 兼容
+    pub db_count: usize,
+}
+
 /// 截断键以适应 LMDB 限制。
 /// 如果键超过 511 字节，将其截断并添加哈希后缀以保持唯一性。
 pub fn truncate_key(key: &str) -> String {
@@ -107,6 +121,11 @@ impl L0Env {
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))
     }
+
+    /// 获取空间使用统计信息
+    pub fn space_usage(&self) -> Result<SpaceUsage> {
+        space_usage_impl(&self.env)
+    }
 }
 
 // ── L1: 超图环境 ──────────────────────────────────────────
@@ -161,6 +180,23 @@ impl L1Env {
             config,
             vector_index,
         })
+    }
+
+    pub fn begin_read(&self) -> Result<RoTxn<'_>> {
+        self.env
+            .read_txn()
+            .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
+    pub fn begin_write(&self) -> Result<RwTxn<'_>> {
+        self.env
+            .write_txn()
+            .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
+    /// 获取空间使用统计信息
+    pub fn space_usage(&self) -> Result<SpaceUsage> {
+        space_usage_impl(&self.env)
     }
 }
 
@@ -228,6 +264,11 @@ impl L2Env {
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))
     }
+
+    /// 获取空间使用统计信息
+    pub fn space_usage(&self) -> Result<SpaceUsage> {
+        space_usage_impl(&self.env)
+    }
 }
 
 // ── L3: 领域环境 ──────────────────────────────────────────
@@ -293,6 +334,11 @@ impl L3Env {
         self.env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))
+    }
+
+    /// 获取空间使用统计信息
+    pub fn space_usage(&self) -> Result<SpaceUsage> {
+        space_usage_impl(&self.env)
     }
 }
 
@@ -360,6 +406,11 @@ impl L4Env {
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))
     }
+
+    /// 获取空间使用统计信息
+    pub fn space_usage(&self) -> Result<SpaceUsage> {
+        space_usage_impl(&self.env)
+    }
 }
 
 // ── L5: 程序性晶体环境 ────────────────────────────────────
@@ -411,6 +462,38 @@ impl L5Env {
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))
     }
+
+    /// 获取空间使用统计信息
+    pub fn space_usage(&self) -> Result<SpaceUsage> {
+        space_usage_impl(&self.env)
+    }
+}
+
+// ── 通用辅助函数 ─────────────────────────────────────────
+
+/// 空间使用统计的内部实现
+pub(crate) fn space_usage_impl(env: &Env) -> Result<SpaceUsage> {
+    let info = env.info();
+    let map_size = info.map_size as u64;
+
+    let used_bytes = env
+        .real_disk_size()
+        .map_err(|e| MemHopError::Storage(format!("real_disk_size: {}", e)))?;
+
+    let usage_pct = if map_size > 0 {
+        (used_bytes as f64 / map_size as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // P0-5: `stat.entries` 返回的是主数据库中键值对数量，而非数据库数量。
+    // 因此 db_count 字段设为 0（保留字段以保持 API 兼容）。
+    Ok(SpaceUsage {
+        used_bytes,
+        map_size,
+        usage_pct: usage_pct as f32,
+        db_count: 0,
+    })
 }
 
 // ── BrainDirs: 4 环境管理器 ───────────────────────────────

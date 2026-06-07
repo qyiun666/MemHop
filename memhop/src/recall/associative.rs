@@ -9,7 +9,7 @@ use crate::query_engine;
 use crate::types::{Layer, RecallRequest, RecallResponse, RecallResult};
 
 /// Associative recall: standard L1 search → BFS spread from seed → RRF merge.
-pub fn associative_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallResponse> {
+pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<RecallResponse> {
     // 1. Get seed results from standard L1 search
     let encoded = brain.encoder.encode(&req.query);
     let l1_results =
@@ -31,12 +31,14 @@ pub fn associative_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallRe
 
     // 3. BFS spread
     let depth = req.spread_depth.unwrap_or(2);
-    let txn = brain
-        .l1_env
+    brain.ensure_l1()?;
+    let l1 = brain.l1.as_mut().unwrap();
+    let l1_env = brain.l1_env.as_ref().unwrap();
+    let txn = l1_env
         .env
         .read_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
-    let spread = brain.l1.bfs_spread(&txn, &brain.l1_env, &seed_ids, depth)?;
+    let spread = l1.bfs_spread(&txn, l1_env, &seed_ids, depth)?;
     drop(txn);
 
     if spread.is_empty() {
@@ -52,8 +54,7 @@ pub fn associative_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallRe
     }
 
     // 4. Load spread node details into RecallResult
-    let txn = brain
-        .l1_env
+    let txn = l1_env
         .env
         .read_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -63,7 +64,7 @@ pub fn associative_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallRe
         if seed_ids.contains(nid) {
             continue;
         }
-        if let Ok(Some(node)) = brain.l1.get_node(&txn, &brain.l1_env, nid) {
+        if let Ok(Some(node)) = l1.get_node(&txn, l1_env, nid) {
             spread_results.push(RecallResult {
                 layer: Layer::L1,
                 id: nid.clone(),

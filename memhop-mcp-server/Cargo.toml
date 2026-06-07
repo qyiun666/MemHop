@@ -1,12 +1,15 @@
 [package]
 name = "memhop-mcp-server"
-version = "0.18.3"
+version = "0.19.0"
 edition = "2024"
 description = "MCP (Model Context Protocol) server for MemHop — associative memory MCP tool"
 
 [[bin]]
 name = "memhop-mcp-server"
 path = "src/main.rs"
+
+[features]
+candle = ["memhop/candle"]
 
 [dependencies]
 memhop = { path = "../memhop" }
@@ -15,7 +18,7 @@ serde_json = "1"
 half = "2"
 libc = "0.2"
 ctrlc = "3"
-tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "rt-multi-thread", "signal"] }
+tokio = { version = "1", features = ["net", "io-util", "macros", "rt", "rt-multi-thread", "signal", "time"] }
 
 [dev-dependencies]
 tempfile = "3"

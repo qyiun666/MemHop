@@ -176,12 +176,14 @@ pub fn extract_keywords(text: &str, max: usize) -> Vec<String> {
 
 /// Organize a stored L1 node: extract keywords and write back.
 pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
-    let txn = brain
-        .l1_env
+    brain.ensure_l1()?;
+    let l1 = brain.l1.as_mut().unwrap();
+    let l1_env = brain.l1_env.as_ref().unwrap();
+    let txn = l1_env
         .env
         .read_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
-    let node = match brain.l1.get_node(&txn, &brain.l1_env, node_id)? {
+    let node = match l1.get_node(&txn, l1_env, node_id)? {
         Some(n) => n,
         None => return Err(MemHopError::NotFound(format!("node {} not found", node_id))),
     };
@@ -197,12 +199,11 @@ pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
     updated.keywords = keywords;
     updated.updated_at = chrono::Utc::now().timestamp_millis();
     let bytes = bincode::serialize(&updated).map_err(|e| MemHopError::Storage(e.to_string()))?;
-    let env = brain.l1_env.env.clone();
+    let env = l1_env.env.clone();
     let mut wtxn = env
         .write_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
-    brain
-        .l1_env
+    l1_env
         .nodes
         .put(&mut wtxn, node_id, &bytes)
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -214,18 +215,20 @@ pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
 
 /// Detect topic boundary: compare two consecutive L1 nodes' vector cosine similarity.
 /// Returns true if vectors differ significantly (sharp drop suggests topic shift).
-pub fn detect_topic_boundary(brain: &Brain, node_a: &str, node_b: &str) -> Result<bool> {
-    let txn = brain
-        .l1_env
+pub fn detect_topic_boundary(brain: &mut Brain, node_a: &str, node_b: &str) -> Result<bool> {
+    brain.ensure_l1()?;
+    let l1 = brain.l1.as_mut().unwrap();
+    let l1_env = brain.l1_env.as_ref().unwrap();
+    let txn = l1_env
         .env
         .read_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
-    let a = match brain.l1.get_node(&txn, &brain.l1_env, node_a)? {
+    let a = match l1.get_node(&txn, l1_env, node_a)? {
         Some(n) => n,
         None => return Err(MemHopError::NotFound(format!("node {} not found", node_a))),
     };
-    let b = match brain.l1.get_node(&txn, &brain.l1_env, node_b)? {
+    let b = match l1.get_node(&txn, l1_env, node_b)? {
         Some(n) => n,
         None => return Err(MemHopError::NotFound(format!("node {} not found", node_b))),
     };

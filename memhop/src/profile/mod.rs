@@ -134,13 +134,14 @@ impl L0ProfileStore {
     pub fn dream_form(brain: &mut Brain) -> Result<bool> {
         // 1. 收集所有 Topic
         let topics = {
-            let txn = brain
-                .l2_env
+            brain.ensure_l2_env()?;
+            let l2_env = brain.l2_env.as_ref().unwrap();
+            let txn = l2_env
                 .env
                 .read_txn()
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
             let mut list = Vec::new();
-            if let Ok(iter) = brain.l2_env.topics.iter(&txn) {
+            if let Ok(iter) = l2_env.topics.iter(&txn) {
                 for (key, bytes) in iter.flatten() {
                     if !key.starts_with("topic:") || !key.ends_with(":meta") {
                         continue;
@@ -162,12 +163,14 @@ impl L0ProfileStore {
 
         // 3. 读取旧 Profile
         let old_profile = {
-            let txn = brain
-                .l0_env
+            brain.ensure_l0_env()?;
+            let l0_env = brain.l0_env.as_ref().unwrap();
+            let txn = l0_env
                 .env
                 .read_txn()
                 .map_err(|e| MemHopError::Storage(e.to_string()))?;
-            brain.l0.get_profile(&txn, &brain.l0_env)?
+            let l0 = brain.l0.as_ref().unwrap();
+            l0.get_profile(&txn, l0_env)?
         };
 
         // 4. 对比差异
@@ -185,26 +188,27 @@ impl L0ProfileStore {
         }
 
         // 5. 快照旧版本 + 写入新版本
-        let env = brain.l0_env.env.clone();
+        brain.ensure_l0_env()?;
+        let l0_env_ref = brain.l0_env.as_ref().unwrap();
+        let env = l0_env_ref.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
         if let Some(ref old) = old_profile {
-            brain
-                .l0
-                .snapshot(&mut wtxn, &brain.l0_env, old, "dream L0 formation")?;
+            let l0 = brain.l0.as_ref().unwrap();
+            l0
+                .snapshot(&mut wtxn, l0_env_ref, old, "dream L0 formation")?;
             // 新版本 = 旧版本 + 1
             let mut updated = new_profile;
             updated.version = old.version + 1;
             updated.history = old.history.clone(); // 保留历史引用
-            brain
-                .l0
-                .update_profile(&mut wtxn, &brain.l0_env, &updated)?;
+            l0
+                .update_profile(&mut wtxn, l0_env_ref, &updated)?;
         } else {
-            brain
-                .l0
-                .update_profile(&mut wtxn, &brain.l0_env, &new_profile)?;
+            let l0 = brain.l0.as_ref().unwrap();
+            l0
+                .update_profile(&mut wtxn, l0_env_ref, &new_profile)?;
         }
 
         wtxn.commit()

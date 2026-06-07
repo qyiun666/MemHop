@@ -11,7 +11,9 @@ use crate::types::ConsolidateReport;
 /// Removes hyperedges with weight < 0.05.
 pub fn nrem_decay(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<()> {
     let now = chrono::Utc::now().timestamp_millis();
-    let env = brain.l1_env.env.clone();
+    brain.ensure_l1_env()?;
+    let l1_env = brain.l1_env.as_ref().unwrap();
+    let env = l1_env.env.clone();
 
     // Collect all hyperedges and their decayed states
     let txn = env
@@ -20,7 +22,7 @@ pub fn nrem_decay(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<(
     let mut to_update: Vec<(String, Hyperedge)> = Vec::new();
     let mut to_delete: Vec<String> = Vec::new();
 
-    if let Ok(iter) = brain.l1_env.hyperedges.iter(&txn) {
+    if let Ok(iter) = l1_env.hyperedges.iter(&txn) {
         for item in iter {
             if let Ok((_key, bytes)) = item
                 && let Ok(mut he) = bincode::deserialize::<Hyperedge>(bytes)
@@ -59,8 +61,7 @@ pub fn nrem_decay(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<(
 
     for (id, he) in &to_update {
         let bytes = bincode::serialize(he).map_err(|e| MemHopError::Storage(e.to_string()))?;
-        brain
-            .l1_env
+        l1_env
             .hyperedges
             .put(&mut wtxn, id, &bytes)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -68,8 +69,7 @@ pub fn nrem_decay(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<(
 
     for id in &to_delete {
         // Remove from hyperedges
-        brain
-            .l1_env
+        l1_env
             .hyperedges
             .delete(&mut wtxn, id)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;

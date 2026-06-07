@@ -39,6 +39,7 @@ impl L3DomainGraph {
 
     /// 从 LMDB 重建向量索引（保留现有维度）。
     pub fn rebuild_vector_index(&mut self, env: &L3Env) -> Result<()> {
+        let _timer = std::time::Instant::now();
         let dim = self.vector_index.dims();
         let txn = env
             .env
@@ -49,6 +50,7 @@ impl L3DomainGraph {
         } else {
             HnswIndex::default()
         };
+        let mut count = 0u64;
         if let Ok(iter) = env.domain_nodes.iter(&txn) {
             for item in iter {
                 if let Ok((_key, bytes)) = item
@@ -57,28 +59,34 @@ impl L3DomainGraph {
                     && node.vector.len() > 1
                 {
                     self.vector_index.add(&node.id, &node.vector);
+                    count += 1;
                 }
             }
         }
+        eprintln!("[memhop] L3 rebuild_vector_index: {} nodes in {}ms", count, _timer.elapsed().as_millis());
         Ok(())
     }
 
     /// v0.18.0: 从 LMDB 重建 BM25 索引。
     pub fn rebuild_bm25(&mut self, env: &L3Env) -> Result<()> {
+        let _timer = std::time::Instant::now();
         self.bm25 = SparseIndex::new();
         let txn = env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let mut count = 0u64;
         if let Ok(iter) = env.domain_nodes.iter(&txn) {
             for item in iter {
                 if let Ok((_key, bytes)) = item
                     && let Ok(node) = bincode::deserialize::<KnowledgeNode>(bytes)
                 {
                     self.bm25.add(&node.id, &node.sparse, node.text.len());
+                    count += 1;
                 }
             }
         }
+        eprintln!("[memhop] L3 rebuild_bm25: {} nodes in {}ms", count, _timer.elapsed().as_millis());
         Ok(())
     }
 

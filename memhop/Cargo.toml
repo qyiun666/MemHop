@@ -1,6 +1,6 @@
 [package]
 name = "memhop"
-version = "0.18.3"
+version = "0.19.0"
 edition = "2024"
 description = "Hypergraph-based associative memory engine for AI Agents — BM25 + HNSW dual-channel retrieval"
 

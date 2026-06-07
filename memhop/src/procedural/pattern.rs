@@ -113,9 +113,10 @@ pub(crate) fn cluster_chain_labels(chains: &[(String, Vec<String>)]) -> Vec<Chai
 /// `chain_ids` 是同一簇中所有链头的超边 ID。
 /// 遍历每条链，收集所有超边的 label 和 node_ids，
 /// 按 label 出现频率排序后生成步骤。
-pub fn extract_steps(brain: &Brain, chain_ids: &[String]) -> Result<Vec<CrystalStep>> {
-    let txn = brain
-        .l1_env
+pub fn extract_steps(brain: &mut Brain, chain_ids: &[String]) -> Result<Vec<CrystalStep>> {
+    brain.ensure_l1_env()?;
+    let l1_env = brain.l1_env.as_ref().unwrap();
+    let txn = l1_env
         .env
         .read_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -125,8 +126,7 @@ pub fn extract_steps(brain: &Brain, chain_ids: &[String]) -> Result<Vec<CrystalS
     for head_id in chain_ids {
         let mut current_id = Some(head_id.clone());
         while let Some(ref cid) = current_id {
-            match brain
-                .l1_env
+            match l1_env
                 .hyperedges
                 .get(&txn, cid)
                 .map_err(|e| MemHopError::Storage(e.to_string()))?

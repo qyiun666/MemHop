@@ -54,15 +54,25 @@ pub fn run(brain: &mut Brain, _config: &DreamConfig) -> Result<ConsolidateReport
     }
 
     // Stage 7: Rebuild BM25 + VectorIndex after weight changes
-    if let Err(e) = brain.l1.rebuild_bm25(&brain.l1_env) {
-        eprintln!("[dream] BM25 rebuild error: {}", e);
-    }
-    if let Err(e) = brain.l1.rebuild_vector_index(&brain.l1_env) {
-        eprintln!("[dream] VectorIndex rebuild error: {}", e);
+    {
+        brain.ensure_l1()?;
+        let l1 = brain.l1.as_mut().unwrap();
+        let l1_env = brain.l1_env.as_ref().unwrap();
+        if let Err(e) = l1.rebuild_bm25(l1_env) {
+            eprintln!("[dream] BM25 rebuild error: {}", e);
+        }
+        if let Err(e) = l1.rebuild_vector_index(l1_env) {
+            eprintln!("[dream] VectorIndex rebuild error: {}", e);
+        }
     }
     // Rebuild L2 topic vector index
-    if let Err(e) = brain.l2.rebuild_topic_vectors(&brain.l2_env) {
-        eprintln!("[dream] L2 topic vectors rebuild error: {}", e);
+    {
+        brain.ensure_l2()?;
+        let l2 = brain.l2.as_mut().unwrap();
+        let l2_env = brain.l2_env.as_ref().unwrap();
+        if let Err(e) = l2.rebuild_topic_vectors(l2_env) {
+            eprintln!("[dream] L2 topic vectors rebuild error: {}", e);
+        }
     }
 
     // Stage 8: Procedural Crystallization

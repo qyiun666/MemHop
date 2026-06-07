@@ -38,6 +38,7 @@ impl L2TopicGraph {
 
     /// 从 LMDB 重建 topic 向量索引。
     pub fn rebuild_topic_vectors(&mut self, env: &L2Env) -> Result<()> {
+        let _timer = std::time::Instant::now();
         let txn = env
             .env
             .read_txn()
@@ -47,6 +48,7 @@ impl L2TopicGraph {
             && let Some(idx) = HnswIndex::from_bytes(bytes)
         {
             self.topic_vectors = idx;
+            eprintln!("[memhop] L2 rebuild_topic_vectors: loaded from persistent index in {}ms", _timer.elapsed().as_millis());
             return Ok(());
         }
         // 回退：从 topic centroid 重建（保留现有维度）
@@ -56,6 +58,7 @@ impl L2TopicGraph {
         } else {
             HnswIndex::default()
         };
+        let mut count = 0u64;
         if let Ok(iter) = env.topics.iter(&txn) {
             for (key, bytes) in iter.flatten() {
                 if !key.starts_with("topic:") || !key.ends_with(":meta") {
@@ -65,9 +68,11 @@ impl L2TopicGraph {
                     && !t.centroid.is_empty()
                 {
                     self.topic_vectors.add(&t.id, &t.centroid);
+                    count += 1;
                 }
             }
         }
+        eprintln!("[memhop] L2 rebuild_topic_vectors: {} topics in {}ms", count, _timer.elapsed().as_millis());
         Ok(())
     }
 

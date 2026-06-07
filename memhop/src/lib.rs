@@ -46,8 +46,10 @@ mod splitter; // 长文本分段
 // 公开 API
 // ============================================================
 
-pub use brain::Brain;
+pub use brain::{Brain, PrewarmLayerResult};
 pub use encoder::{Encoder, EncoderOutput, NgramEncoder};
+#[cfg(feature = "candle")]
+pub use encoder::CandleEncoder;
 pub use engram::{Hyperedge, KnowledgeNode, RawDocument, Topic, TopicEdge};
 pub use error::{MemHopError, Result};
 pub use index::{HnswIndex, SparseIndex};
@@ -58,6 +60,6 @@ pub use types::{
     CrystalStep, CrystalType, CrystallizeReport, CrystalSnapshot, DocumentSnapshot,
     DreamConfig, HyperedgeKind, HyperedgeSnapshot, L0Profile, L0Snapshot,
     L3PathInfo, Layer, NodeSource, ProceduralCrystal, RecallRequest, RecallResponse,
-    RecallResult, ShelfDomain, ShelfMeta, StoreBatch, StoreItem, TopicEdgeKind,
+    RecallResult, ShelfDomain, ShelfMeta, StorageLayerInfo, StoreBatch, StoreItem, TopicEdgeKind,
     TopicSnapshot,
 };

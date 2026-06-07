@@ -3,6 +3,7 @@
 use memhop::{Brain, BrainConfig, HyperedgeKind, Layer, RecallRequest, ShelfDomain, StoreBatch, StoreItem};
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// 创建临时测试用 Brain 实例
 fn make_test_brain() -> Brain {
@@ -10,9 +11,9 @@ fn make_test_brain() -> Brain {
     let cfg = BrainConfig {
         brains_dir: tmp.path().to_str().unwrap().to_string(),
         agent_id: "test".to_string(),
-        model_path: None,
     };
-    Brain::open(cfg).unwrap()
+    let encoder: Arc<Box<dyn memhop::Encoder>> = Arc::new(Box::new(memhop::NgramEncoder::new(1024)));
+    Brain::open(cfg, encoder).unwrap()
 }
 
 /// 构造 JSON-RPC 请求
@@ -206,10 +207,10 @@ fn test_handle_stats() {
     let mut brain = make_test_brain();
 
     // 获取统计信息
-    let l1_nodes = brain.l1.bm25.len();
-    let l2_topics = brain.l2.topic_vectors.len();
-    let l3_nodes = brain.l3.vector_index.len();
-    let l4_docs = brain.l4.vector_index.len();
+    let l1_nodes = brain.l1.as_ref().map(|l| l.bm25.len()).unwrap_or(0);
+    let l2_topics = brain.l2.as_ref().map(|l| l.topic_vectors.len()).unwrap_or(0);
+    let l3_nodes = brain.l3.as_ref().map(|l| l.vector_index.len()).unwrap_or(0);
+    let l4_docs = brain.l4.as_ref().map(|l| l.vector_index.len()).unwrap_or(0);
 
     // 验证统计信息结构
     assert!(l1_nodes >= 0);
@@ -296,7 +297,7 @@ fn test_handle_get_l4_raw() {
 
 #[test]
 fn test_handle_list_l3_paths() {
-    let brain = make_test_brain();
+    let mut brain = make_test_brain();
 
     // 列出 L3 路径
     let result = brain.list_l3_paths();
@@ -326,12 +327,12 @@ fn test_handle_mount_unmount_shelf() {
     assert!(result.is_ok());
 
     // 列出 shelf
-    let shelves = memhop::shelf::list(&brain);
+    let shelves = memhop::shelf::list(&mut brain);
     assert!(shelves.is_ok());
     assert!(shelves.unwrap().len() > 0);
 
     // 卸载 shelf - 使用正确的字段名 id
-    if let Ok(shelves) = memhop::shelf::list(&brain) {
+    if let Ok(shelves) = memhop::shelf::list(&mut brain) {
         if let Some(shelf) = shelves.first() {
             let result = memhop::shelf::unmount(&mut brain, &shelf.id);
             assert!(result.is_ok());
@@ -374,44 +375,46 @@ fn test_crystallize_rpc() {
     // 创建 3 条超边链
     {
         use std::time::Duration;
-        let env = brain.l1_env.env.clone();
+        let l1_env = brain.l1_env.as_ref().unwrap();
+        let l1 = brain.l1.as_mut().unwrap();
+        let env = l1_env.env.clone();
         let mut wtxn = env.write_txn().unwrap();
 
         std::thread::sleep(Duration::from_millis(2));
-        let h1 = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let h1 = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node0.clone()], HyperedgeKind::Evolution, 1.0,
             None, Some("错误排查".to_string()),
         ).unwrap();
         std::thread::sleep(Duration::from_millis(2));
-        let _ = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let _ = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node0.clone()], HyperedgeKind::Evolution, 1.0,
             Some(h1), Some("错误排查".to_string()),
         ).unwrap();
 
         std::thread::sleep(Duration::from_millis(2));
-        let h2 = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let h2 = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node1.clone()], HyperedgeKind::Evolution, 1.0,
             None, Some("错误排查".to_string()),
         ).unwrap();
         std::thread::sleep(Duration::from_millis(2));
-        let _ = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let _ = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node1.clone()], HyperedgeKind::Evolution, 1.0,
             Some(h2), Some("错误排查".to_string()),
         ).unwrap();
 
         std::thread::sleep(Duration::from_millis(2));
-        let h3 = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let h3 = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node2.clone()], HyperedgeKind::Evolution, 1.0,
             None, Some("错误排查".to_string()),
         ).unwrap();
         std::thread::sleep(Duration::from_millis(2));
-        let _ = brain.l1.add_hyperedge(
-            &mut wtxn, &brain.l1_env,
+        let _ = l1.add_hyperedge(
+            &mut wtxn, l1_env,
             vec![node2.clone()], HyperedgeKind::Evolution, 1.0,
             Some(h3), Some("错误排查".to_string()),
         ).unwrap();

@@ -18,7 +18,7 @@ fn dynamic_rrf_k(result_count: usize) -> f64 {
     }
 }
 
-pub(crate) fn execute(brain: &Brain, req: &RecallRequest) -> Result<RecallResponse> {
+pub(crate) fn execute(brain: &mut Brain, req: &RecallRequest) -> Result<RecallResponse> {
     if req.query.trim().is_empty() {
         return Ok(RecallResponse {
             results: vec![],
@@ -62,14 +62,15 @@ pub(crate) fn execute(brain: &Brain, req: &RecallRequest) -> Result<RecallRespon
 
     // 级联路由：如果有 l3_domain_id，找到关联 L2 Topic，再限制 L1 范围
     if let Some(ref domain_id) = req.l3_domain_id {
-        let txn = brain
-            .l2_env
+        brain.ensure_l2()?;
+        let l2 = brain.l2.as_mut().unwrap();
+        let l2_env = brain.l2_env.as_ref().unwrap();
+        let txn = l2_env
             .env
             .read_txn()
             .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
-        let topics = brain
-            .l2
-            .get_topics_by_domain(&txn, &brain.l2_env, domain_id)?;
+        let topics = l2
+            .get_topics_by_domain(&txn, l2_env, domain_id)?;
         drop(txn);
         let mut allowed_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for t in &topics {
@@ -172,22 +173,24 @@ pub(crate) fn execute(brain: &Brain, req: &RecallRequest) -> Result<RecallRespon
 
 /// L1 超图检索 — BM25（稀疏）+ 余弦（稠密）双通道 RRF 融合
 pub(crate) fn search_l1(
-    brain: &Brain,
+    brain: &mut Brain,
     sparse: &HashMap<String, f32>,
     dense: &[f16],
     max: usize,
 ) -> Result<Vec<RecallResult>> {
-    let txn = brain
-        .l1_env
+    brain.ensure_l1()?;
+    let l1 = brain.l1.as_mut().unwrap();
+    let l1_env = brain.l1_env.as_ref().unwrap();
+    let txn = l1_env
         .env
         .read_txn()
         .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
 
     // ── BM25 通道（独立列表，不与 cosine 混用）───────────
-    let bm25_hits = brain.l1.search(sparse, max)?;
+    let bm25_hits = l1.search(sparse, max)?;
     let mut bm25_results: Vec<RecallResult> = Vec::with_capacity(bm25_hits.len());
     for (node_id, bm25_score) in &bm25_hits {
-        if let Ok(Some(node)) = brain.l1.get_node(&txn, &brain.l1_env, node_id) {
+        if let Ok(Some(node)) = l1.get_node(&txn, l1_env, node_id) {
             bm25_results.push(RecallResult {
                 layer: Layer::L1,
                 id: node_id.clone(),
@@ -206,15 +209,15 @@ pub(crate) fn search_l1(
     }
 
     // ── Cosine 通道（独立列表） ──────────────────────────
-    let has_cosine = !brain.l1.vector_index.is_empty()
+    let has_cosine = !l1.vector_index.is_empty()
         && !dense.is_empty()
         && dense.iter().any(|v| v.to_f32().abs() > 1e-8);
 
     let mut cos_results: Vec<RecallResult> = Vec::new();
     if has_cosine {
-        let cosine_hits = brain.l1.vector_index.cosine_search(dense, max);
+        let cosine_hits = l1.vector_index.cosine_search(dense, max);
         for (node_id, cos_sim) in &cosine_hits {
-            if let Ok(Some(node)) = brain.l1.get_node(&txn, &brain.l1_env, node_id) {
+            if let Ok(Some(node)) = l1.get_node(&txn, l1_env, node_id) {
                 cos_results.push(RecallResult {
                     layer: Layer::L1,
                     id: node_id.clone(),
@@ -290,20 +293,22 @@ pub(crate) fn search_l1(
 
 /// L2 话题检索（含向量通道）：Cosine 粗筛 + ngram 重叠双通道 RRF。
 pub(crate) fn search_l2(
-    brain: &Brain,
+    brain: &mut Brain,
     sparse: &HashMap<String, f32>,
     dense: &[half::f16],
     max: usize,
 ) -> Result<Vec<RecallResult>> {
-    let txn = brain
-        .l2_env
+    brain.ensure_l2()?;
+    let l2 = brain.l2.as_mut().unwrap();
+    let l2_env = brain.l2_env.as_ref().unwrap();
+    let txn = l2_env
         .env
         .read_txn()
         .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
 
     // ── 通道 1: ngram 重叠（始终可用）───────────────────
     let mut ngram_results: Vec<RecallResult> = Vec::new();
-    if let Ok(iter) = brain.l2_env.topics.iter(&txn) {
+    if let Ok(iter) = l2_env.topics.iter(&txn) {
         for (key, bytes) in iter.flatten() {
             if !key.starts_with("topic:") {
                 continue;
@@ -351,15 +356,15 @@ pub(crate) fn search_l2(
     }
 
     // ── 通道 2: 向量 Cosine 粗筛（当 centroid 索引可用时）────
-    let has_cosine = !brain.l2.topic_vectors.is_empty()
+    let has_cosine = !l2.topic_vectors.is_empty()
         && !dense.is_empty()
         && dense.iter().any(|v| v.to_f32().abs() > 1e-8);
 
     if has_cosine {
-        let cos_hits = brain.l2.search_by_vector(dense, max * 2);
+        let cos_hits = l2.search_by_vector(dense, max * 2);
         let mut cos_results: Vec<RecallResult> = Vec::new();
         for (topic_id, cos_sim) in &cos_hits {
-            if let Ok(Some(topic)) = brain.l2.get_topic_by_id(&txn, &brain.l2_env, topic_id) {
+            if let Ok(Some(topic)) = l2.get_topic_by_id(&txn, l2_env, topic_id) {
                 let label = topic.label.clone();
                 cos_results.push(RecallResult {
                     layer: Layer::L2,
@@ -428,13 +433,15 @@ pub(crate) fn search_l2(
 
 /// L3 领域检索 — ngram 重叠 + dense cosine 双通道 RRF 融合
 pub(crate) fn search_l3(
-    brain: &Brain,
+    brain: &mut Brain,
     sparse: &HashMap<String, f32>,
     dense: &[f16],
     max: usize,
 ) -> Result<Vec<RecallResult>> {
-    let txn = brain
-        .l3_env
+    brain.ensure_l3()?;
+    let l3 = brain.l3.as_mut().unwrap();
+    let l3_env = brain.l3_env.as_ref().unwrap();
+    let txn = l3_env
         .env
         .read_txn()
         .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
@@ -452,11 +459,11 @@ pub(crate) fn search_l3(
     // 长ngram权重更高，但限制在1.0-2.0范围内
     let ngram_len_weight = (avg_ngram_len / 10.0).clamp(1.0, 2.0);
 
-    let bm25_hits = brain.l3.search_by_bm25(sparse, max * 2);
+    let bm25_hits = l3.search_by_bm25(sparse, max * 2);
     for (node_id, bm25_score) in &bm25_hits {
         // 从 LMDB 获取节点详情
         let key_prefix = "node:".to_string();
-        if let Ok(iter) = brain.l3_env.domain_nodes.iter(&txn) {
+        if let Ok(iter) = l3_env.domain_nodes.iter(&txn) {
             for item in iter {
                 if let Ok((key, bytes)) = item
                     && key.starts_with(&key_prefix)
@@ -486,17 +493,17 @@ pub(crate) fn search_l3(
     }
 
     // ── 通道 2: dense cosine ──────────────────────────────
-    let has_cosine = !brain.l3.vector_index.is_empty()
+    let has_cosine = !l3.vector_index.is_empty()
         && !dense.is_empty()
         && dense.iter().any(|v| v.to_f32().abs() > 1e-8);
 
     if has_cosine {
-        let cos_hits = brain.l3.search_by_vector(dense, max * 2);
+        let cos_hits = l3.search_by_vector(dense, max * 2);
         // 构建 id → node 映射（L3 key 是 "node:{domain_id}:{node_id}"）
         let hit_ids: std::collections::HashSet<&str> =
             cos_hits.iter().map(|(id, _)| id.as_str()).collect();
         let mut node_map: HashMap<String, crate::engram::KnowledgeNode> = HashMap::new();
-        if let Ok(iter) = brain.l3_env.domain_nodes.iter(&txn) {
+        if let Ok(iter) = l3_env.domain_nodes.iter(&txn) {
             for item in iter {
                 if let Ok((_key, bytes)) = item
                     && let Ok(node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
@@ -580,20 +587,23 @@ pub(crate) fn search_l3(
 
 /// L4 原文检索 — ngram 重叠 + dense cosine 双通道 RRF 融合
 pub(crate) fn search_l4(
-    brain: &Brain,
+    brain: &mut Brain,
     sparse: &HashMap<String, f32>,
     dense: &[f16],
     max: usize,
 ) -> Result<Vec<RecallResult>> {
-    let txn = brain
-        .l4_env
+    // First ensure L4 (includes ensure_l4_env + vector index rebuild)
+    brain.ensure_l4()?;
+    let l4 = brain.l4.as_mut().unwrap();
+    let l4_env = brain.l4_env.as_ref().unwrap();
+    let txn = l4_env
         .env
         .read_txn()
         .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
 
     // ── 通道 1: ngram 重叠 ────────────────────────────
     let mut ngram_results: Vec<RecallResult> = Vec::new();
-    if let Ok(iter) = brain.l4_env.docs.iter(&txn) {
+    if let Ok(iter) = l4_env.docs.iter(&txn) {
         for item in iter {
             if let Ok((_key, bytes)) = item
                 && let Ok(doc) = bincode::deserialize::<crate::engram::RawDocument>(bytes)
@@ -616,15 +626,15 @@ pub(crate) fn search_l4(
     }
 
     // ── 通道 2: dense cosine ──────────────────────────────
-    let has_cosine = !brain.l4.vector_index.is_empty()
+    let has_cosine = !l4.vector_index.is_empty()
         && !dense.is_empty()
         && dense.iter().any(|v| v.to_f32().abs() > 1e-8);
 
     if has_cosine {
-        let cos_hits = brain.l4.search_by_vector(dense, max * 2);
+        let cos_hits = l4.search_by_vector(dense, max * 2);
         let mut cos_results: Vec<RecallResult> = Vec::new();
         for (doc_id, cos_sim) in &cos_hits {
-            if let Ok(Some(bytes)) = brain.l4_env.docs.get(&txn, doc_id)
+            if let Ok(Some(bytes)) = l4_env.docs.get(&txn, doc_id)
                 && let Ok(doc) = bincode::deserialize::<crate::engram::RawDocument>(bytes)
             {
                 cos_results.push(RecallResult {
@@ -691,13 +701,15 @@ pub(crate) fn search_l4(
 }
 
 /// 获取指定 Topic 的 node_ids 集合（用于级联路由过滤）
-fn get_topic_node_ids(brain: &Brain, topic_id: &str) -> Result<std::collections::HashSet<String>> {
-    let txn = brain
-        .l2_env
+fn get_topic_node_ids(brain: &mut Brain, topic_id: &str) -> Result<std::collections::HashSet<String>> {
+    brain.ensure_l2()?;
+    let l2 = brain.l2.as_mut().unwrap();
+    let l2_env = brain.l2_env.as_ref().unwrap();
+    let txn = l2_env
         .env
         .read_txn()
         .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
-    match brain.l2.get_topic_by_id(&txn, &brain.l2_env, topic_id)? {
+    match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
         Some(topic) => Ok(topic.node_ids.into_iter().collect()),
         None => Ok(std::collections::HashSet::new()),
     }
@@ -705,10 +717,6 @@ fn get_topic_node_ids(brain: &Brain, topic_id: &str) -> Result<std::collections:
 
 /// v0.18.0: 跨层结果验证
 /// 计算结果在各层的一致性分数，用于调整最终排序
-/// 一致性分数基于：
-/// 1. 结果在多少个不同的层中出现
-/// 2. 结果在各层中的排名一致性
-/// 3. 结果的跨层关联强度
 pub(crate) fn cross_layer_validation(results: &mut [RecallResult], _brain: &Brain) {
     if results.is_empty() {
         return;

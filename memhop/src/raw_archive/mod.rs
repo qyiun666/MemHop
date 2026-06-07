@@ -32,6 +32,7 @@ impl L4RawArchive {
 
     /// 从 LMDB 重建向量索引（保留现有维度）。
     pub fn rebuild_vector_index(&mut self, env: &L4Env) -> Result<()> {
+        let _timer = std::time::Instant::now();
         let dim = self.vector_index.dims();
         let txn = env
             .env
@@ -42,6 +43,7 @@ impl L4RawArchive {
         } else {
             HnswIndex::default()
         };
+        let mut count = 0u64;
         if let Ok(iter) = env.docs.iter(&txn) {
             for item in iter {
                 if let Ok((_key, bytes)) = item
@@ -49,9 +51,11 @@ impl L4RawArchive {
                     && !doc.vector.is_empty()
                 {
                     self.vector_index.add(&doc.id, &doc.vector);
+                    count += 1;
                 }
             }
         }
+        eprintln!("[memhop] L4 rebuild_vector_index: {} docs in {}ms", count, _timer.elapsed().as_millis());
         Ok(())
     }
 

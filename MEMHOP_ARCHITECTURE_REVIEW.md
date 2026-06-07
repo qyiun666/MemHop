@@ -144,7 +144,7 @@ class MemHopMCPClient:
 
 ```python
 class MemHopMCPRunner:
-    def __init__(self, mode="retrieval", encoder="bge-m3"):
+    def __init__(self, mode="retrieval", encoder="multilingual-e5-small"):
         self.mode = mode
         self.encoder_name = encoder
         self._mcp = None
@@ -340,7 +340,7 @@ AgentMemory          | 95.20%   | GitHub
 ### 模式 A: 竞品对标（快速，面向发布）
 ```bash
 python benchmarks/run_benchmark.py \
-  --encoder bge-m3 \
+  --encoder multilingual-e5-small \
   --datasets nfcorpus,lme-s,locomo,dmr \
   --modes retrieval \
   --dream-interval 50
@@ -365,7 +365,7 @@ python benchmarks/run_benchmark.py \
 ### 模式 C: 差异化能力展示（面向发布/营销）
 ```bash
 python benchmarks/run_benchmark.py \
-  --encoder bge-m3 \
+  --encoder multilingual-e5-small \
   --context-benchmark \
   --worldview-benchmark \
   --entangle-benchmark \
@@ -457,7 +457,7 @@ python3 -c "from benchmarks.mcp_client import MemHopMCPClient"
 ### 第2步验证
 ```bash
 # smoke test
-python3 benchmarks/run_benchmark.py --encoder bge-m3 --datasets nfcorpus --subset 10 --dream-interval 0
+python3 benchmarks/run_benchmark.py --encoder multilingual-e5-small --datasets nfcorpus --subset 10 --dream-interval 0
 # 检查 reports/ 下 JSON 指标非零
 ```
 

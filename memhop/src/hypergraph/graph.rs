@@ -41,6 +41,7 @@ impl L1Hypergraph {
     }
 
     pub fn rebuild_bm25(&mut self, env: &L1Env) -> Result<()> {
+        let _timer = std::time::Instant::now();
         let txn = env
             .env
             .read_txn()
@@ -57,11 +58,13 @@ impl L1Hypergraph {
                 }
             }
         }
+        eprintln!("[memhop] L1 rebuild_bm25: {} nodes in {}ms", self.node_count, _timer.elapsed().as_millis());
         Ok(())
     }
 
     /// v0.16.0: 从 LMDB 重建 HnswIndex（保留现有维度）。
     pub fn rebuild_vector_index(&mut self, env: &L1Env) -> Result<()> {
+        let _timer = std::time::Instant::now();
         let dim = self.vector_index.dims();
         let txn = env
             .env
@@ -72,6 +75,7 @@ impl L1Hypergraph {
         } else {
             HnswIndex::default()
         };
+        let mut count = 0u64;
         if let Ok(iter) = env.nodes.iter(&txn) {
             for item in iter {
                 if let Ok((_key, bytes)) = item
@@ -79,9 +83,11 @@ impl L1Hypergraph {
                     && !node.vector.is_empty()
                 {
                     self.vector_index.add(&node.id, &node.vector);
+                    count += 1;
                 }
             }
         }
+        eprintln!("[memhop] L1 rebuild_vector_index: {} nodes in {}ms", count, _timer.elapsed().as_millis());
         Ok(())
     }
 
@@ -244,6 +250,10 @@ impl L1Hypergraph {
     ) -> Result<Vec<(String, f32)>> {
         let idf = self.bm25.idf_map();
         Ok(self.bm25.bm25_search(sparse, &idf, top_k))
+    }
+
+    pub fn node_count(&self) -> u64 {
+        self.node_count
     }
 
     pub fn bfs_spread(

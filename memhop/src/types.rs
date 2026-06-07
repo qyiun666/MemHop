@@ -149,8 +149,6 @@ pub struct BatchReport {
 pub struct BrainConfig {
     pub brains_dir: String,
     pub agent_id: String,
-    /// 编码器模型目录路径。Some(path) → CandleEncoder, None → NgramEncoder
-    pub model_path: Option<String>,
 }
 
 impl Default for BrainConfig {
@@ -158,7 +156,6 @@ impl Default for BrainConfig {
         Self {
             brains_dir: "./memhop_brains".to_string(),
             agent_id: "default".to_string(),
-            model_path: None,
         }
     }
 }
@@ -435,5 +432,15 @@ pub struct ConsolidateReport {
     /// v0.18.3: 程序性结晶生成的晶体数
     #[serde(default)]
     pub crystals_created: u32,
+}
+
+// ── StorageLayerInfo ────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageLayerInfo {
+    pub layer: String,
+    pub used_bytes: u64,
+    pub map_size: u64,
+    pub usage_pct: f32,
 }
 

@@ -12,14 +12,14 @@
 
 | 维度 | agentmemory | MemHop v0.18.3 |
 |------|------------|---------------|
-| 嵌入模型 | all-MiniLM-L6-v2 (384d) | **BGE-M3 (1024d)** |
+| 嵌入模型 | all-MiniLM-L6-v2 (384d) | **multilingual-e5-small (384d)** |
 | 检索 | BM25 + 向量 + 图谱 RRF | **HNSW + SparseIndex RRF** |
 | 模式补全 | ❌ | **✅ Hopfield 收敛** |
 | 图学习 | 静态共现 | **✅ Hebbian 动态边权** |
 | 实时性 | SessionEnd 批量 | **✅ 逐轮实时** |
 | 部署 | Node.js + SQLite | **Rust 单二进制 + LMDB** |
 | 延迟 | 14ms | **< 1ms** |
-| 多猫内存 | 共享 | **单进程 1×BGE-M3 (2GB)** |
+| 多猫内存 | 共享 | **单进程 1×multilingual-e5-small (90MB)** |
 | LongMemEval-S R@5 | 95.2% | (已归档) |
 
 ## 安装
@@ -33,7 +33,7 @@ cargo build --release --features onnx,api-encoder
 cargo add memhop
 ```
 
-要求 Rust 1.85+。可选依赖：ONNX Runtime (BGE-M3 编码)、API encoder (OpenAI 兼容)。
+要求 Rust 1.85+。可选依赖：Candle (multilingual-e5-small 编码)、API encoder (OpenAI 兼容)。
 
 ## Quick Start
 
@@ -63,7 +63,7 @@ use memhop::{Brain, BrainConfig, PerceptionInput, RecallRequest, EmotionalState,
 
 // Candle encoder is required. Set onnx_model_path to the model directory.
 let config = BrainConfig {
-    onnx_model_path: Some("models/bge-m3".into()),
+    onnx_model_path: Some("models/multilingual-e5-small".into()),
     ..Default::default()
 };
 let mut brain = Brain::open("brain.db", config, None)?;
@@ -71,7 +71,7 @@ let mut brain = Brain::open("brain.db", config, None)?;
 // 存储记忆
 let out = brain.perceive(PerceptionInput {
     content: "今天学了 Rust ownership".into(),
-    vector: vec![], // BGE-M3 编码器自动填充
+    vector: vec![], // multilingual-e5-small 编码器自动填充
     session_id: "chat-001".into(),
     ..Default::default()
 })?;
@@ -114,7 +114,7 @@ L2 Hopfield + EntangleGraph         → 长期记忆，模式补全 + 图关联�
 
 ### 知识库挂载
 ```
-MeowAgent 传入路径 → MemHop 自动切片 → BGE-M3 编码 → HNSW 索引
+MeowAgent 传入路径 → MemHop 自动切片 → multilingual-e5-small 编码 → HNSW 索引
 支持: code (AST) / doc (heading) / book (chapter) / paper / custom
 ```
 
@@ -131,8 +131,8 @@ MeowAgent 传入路径 → MemHop 自动切片 → BGE-M3 编码 → HNSW 索引
 
 ### 编码器策略
 ```
-api-encoder (OpenAI) > ONNX BGE-M3 (1024d) > NgramEncoder (fallback)
-单进程加载一份 BGE-M3 (2GB)，所有猫共享
+api-encoder (OpenAI) > Candle multilingual-e5-small (384d) > NgramEncoder (fallback)
+单进程加载一份 multilingual-e5-small (90MB)，所有猫共享
 ```
 
 ### 隐私过滤
@@ -142,7 +142,7 @@ api-encoder (OpenAI) > ONNX BGE-M3 (1024d) > NgramEncoder (fallback)
 
 ```
 全机一个 memhop-mcp-server 进程
-├── BGE-M3 ONNX (1×2GB)
+├── multilingual-e5-small Candle (1×90MB)
 ├── Brain(cat_a) → LMDB: /data/cats/A/
 ├── Brain(cat_b) → LMDB: /data/cats/B/
 ├── Shelf(rust-book) → HNSW-only 知识索引
@@ -160,7 +160,7 @@ memhop (lib crate, v0.18.0)
 ├── shelf.rs         知识库挂载 (334 行)
 ├── encoder/
 │   ├── hybrid.rs    Ngram+ONNX 融合编码
-│   ├── onnx.rs      BGE-M3 ONNX 编码器
+│   ├── candle.rs    multilingual-e5-small Candle 编码器
 │   ├── api.rs       OpenAI 兼容 API 编码器
 │   ├── ngram.rs     N-gram 哈希编码 (fallback)
 │   └── reranker.rs  Cross-Encoder 精排 (147 行)

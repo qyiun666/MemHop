@@ -1,9 +1,9 @@
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::domain_graph::L3DomainGraph;
-#[cfg(feature = "candle")]
-use crate::encoder::CandleEncoder;
-use crate::encoder::{Encoder, NgramEncoder};
+use crate::encoder::Encoder;
 use crate::engram::{RawDocument, Topic};
 use crate::error::{MemHopError, Result};
 use crate::hypergraph::L1Hypergraph;
@@ -20,116 +20,209 @@ use crate::types::{
 };
 
 /// MemHop v0.18.3 Brain — 6 层仿人脑记忆架构顶层 API。
+/// 所有 LMDB 环境延迟打开（Lazy Open），首次访问时打开。
 pub struct Brain {
     pub config: BrainConfig,
-    pub l0_env: L0Env,
-    pub l1_env: L1Env,
-    pub l2_env: L2Env,
-    pub l3_env: L3Env,
-    pub l4_env: L4Env,
-    pub l0: L0ProfileStore,
-    pub l1: L1Hypergraph,
-    pub l2: L2TopicGraph,
-    pub l3: L3DomainGraph,
-    pub l4: L4RawArchive,
+    pub l0_env: Option<L0Env>,
+    pub l1_env: Option<L1Env>,
+    pub l2_env: Option<L2Env>,
+    pub l3_env: Option<L3Env>,
+    pub l4_env: Option<L4Env>,
+    pub l5_env: Option<L5Env>,
+    pub l0: Option<L0ProfileStore>,
+    pub l1: Option<L1Hypergraph>,
+    pub l2: Option<L2TopicGraph>,
+    pub l3: Option<L3DomainGraph>,
+    pub l4: Option<L4RawArchive>,
     pub session_mgr: SessionManager,
-    pub encoder: Box<dyn Encoder>,
-    pub l5_env: L5Env,
+    pub encoder: Arc<Box<dyn Encoder>>,
+}
+
+/// 预热单层结果。
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PrewarmLayerResult {
+    pub nodes: u64,
+    pub duration_ms: u64,
 }
 
 impl Brain {
-    pub fn open(config: BrainConfig) -> Result<Self> {
+    /// 打开 Brain，仅保存 config 和 encoder，不打开任何 LMDB 环境。
+    /// 所有 LMDB 环境在首次访问时延迟打开。
+    pub fn open(config: BrainConfig, encoder: Arc<Box<dyn Encoder>>) -> Result<Self> {
         let path = Path::new(&config.brains_dir);
         std::fs::create_dir_all(path)
             .map_err(|e| MemHopError::Storage(format!("create brains dir: {}", e)))?;
 
-        let l0_env = L0Env::open(&path.join("l0_profile.db"))?;
-        let l1_env = L1Env::open(&path.join("l1_hypergraph.db"))?;
-        let l2_env = L2Env::open(&path.join("l2_topics.db"))?;
-        let l3_env = L3Env::open(&path.join("l3_domains.db"))?;
-        let l4_env = L4Env::open(&path.join("l4_raw.db"))?;
-        let l5_env = L5Env::open(&path.join("l5_procedural.db"))?;
-
-        let l0 = L0ProfileStore::new();
-
-        // 先初始化编码器以获取维度
-        let encoder: Box<dyn Encoder> = if let Some(ref mp) = config.model_path {
-            // v0.18.1: 尝试使用 CandleEncoder
-            #[cfg(feature = "candle")]
-            {
-                match CandleEncoder::from_path(mp) {
-                    Ok(enc) => {
-                        eprintln!("memhop-brain: using CandleEncoder from '{}'", mp);
-                        Box::new(enc) as Box<dyn Encoder>
-                    }
-                    Err(e) => {
-                        eprintln!(
-                            "memhop-brain: failed to load CandleEncoder from '{}': {}, falling back to NgramEncoder",
-                            mp, e
-                        );
-                        Box::new(NgramEncoder::new(1024)) as Box<dyn Encoder>
-                    }
-                }
-            }
-            #[cfg(not(feature = "candle"))]
-            {
-                let _ = mp; // suppress unused warning when candle is disabled
-                eprintln!("memhop-brain: candle feature disabled, using NgramEncoder");
-                Box::new(NgramEncoder::new(1024)) as Box<dyn Encoder>
-            }
-        } else {
-            eprintln!("memhop-brain: no model_path specified, using NgramEncoder");
-            Box::new(NgramEncoder::new(1024)) as Box<dyn Encoder>
-        };
-
-        // v0.16.0: 使用编码器维度初始化各层向量索引
-        let encoder_dim = encoder.dim();
-
-        // v0.18.0: 根据各层数据规模动态调整 HNSW 配置
-        let l1_config = HnswConfig::default(); // L1 通常较小
-        let l2_config = HnswConfig::default(); // L2 通常较小
-        let l3_config = HnswConfig::default(); // L3 通常中等
-        let l4_config = HnswConfig::default(); // L4 通常较大
-
-        let mut l1 = L1Hypergraph::with_dim_and_config(encoder_dim, l1_config)?;
-        l1.rebuild_bm25(&l1_env)?;
-        if let Err(e) = l1.rebuild_vector_index(&l1_env) {
-            eprintln!("[brain] rebuild L1 vector index error: {}", e);
-        }
-        let mut l2 = L2TopicGraph::with_dim_and_config(encoder_dim, l2_config)?;
-        if let Err(e) = l2.rebuild_topic_vectors(&l2_env) {
-            eprintln!("[brain] rebuild L2 topic vectors error: {}", e);
-        }
-        let mut l3 = L3DomainGraph::with_dim_and_config(encoder_dim, l3_config)?;
-        if let Err(e) = l3.rebuild_vector_index(&l3_env) {
-            eprintln!("[brain] rebuild L3 vector index error: {}", e);
-        }
-        if let Err(e) = l3.rebuild_bm25(&l3_env) {
-            eprintln!("[brain] rebuild L3 BM25 index error: {}", e);
-        }
-        let mut l4 = L4RawArchive::with_dim_and_config(encoder_dim, l4_config)?;
-        if let Err(e) = l4.rebuild_vector_index(&l4_env) {
-            eprintln!("[brain] rebuild L4 vector index error: {}", e);
-        }
         let session_mgr = SessionManager::new();
 
         Ok(Brain {
             config,
-            l0_env,
-            l1_env,
-            l2_env,
-            l3_env,
-            l4_env,
-            l0,
-            l1,
-            l2,
-            l3,
-            l4,
+            l0_env: None,
+            l1_env: None,
+            l2_env: None,
+            l3_env: None,
+            l4_env: None,
+            l5_env: None,
+            l0: None,
+            l1: None,
+            l2: None,
+            l3: None,
+            l4: None,
             session_mgr,
             encoder,
-            l5_env,
         })
     }
+
+    // ── Path helper ──
+    fn brain_path(&self) -> &Path {
+        Path::new(&self.config.brains_dir)
+    }
+
+    // ── Lazy open: L0 (env + L0ProfileStore) ──
+    pub(crate) fn ensure_l0_env(&mut self) -> Result<()> {
+        if self.l0_env.is_some() {
+            return Ok(());
+        }
+        let path = self.brain_path().join("l0_profile.db");
+        self.l0_env = Some(L0Env::open(&path)?);
+        self.l0 = Some(L0ProfileStore::new());
+        Ok(())
+    }
+
+    // ── Lazy open: L1 ──
+    pub(crate) fn ensure_l1_env(&mut self) -> Result<()> {
+        if self.l1_env.is_some() {
+            return Ok(());
+        }
+        let path = self.brain_path().join("l1_hypergraph.db");
+        self.l1_env = Some(L1Env::open(&path)?);
+        Ok(())
+    }
+
+    pub(crate) fn ensure_l1(&mut self) -> Result<()> {
+        if self.l1.is_some() {
+            return Ok(());
+        }
+        let _timer = std::time::Instant::now();
+        self.ensure_l1_env()?;
+        let encoder_dim = self.encoder.dim();
+        let config = HnswConfig::default();
+        let mut l1 = L1Hypergraph::with_dim_and_config(encoder_dim, config)?;
+        let l1_env = self.l1_env.as_ref().unwrap();
+        l1.rebuild_bm25(l1_env)?;
+        l1.rebuild_vector_index(l1_env)
+            .map_err(|e| MemHopError::Internal(format!("rebuild L1 vector index: {}", e)))?;
+        let elapsed = _timer.elapsed();
+        if elapsed.as_millis() > 100 {
+            eprintln!("[memhop] WARNING: L1 first open took {}ms", elapsed.as_millis());
+        }
+        self.l1 = Some(l1);
+        Ok(())
+    }
+
+    // ── Lazy open: L2 ──
+    pub(crate) fn ensure_l2_env(&mut self) -> Result<()> {
+        if self.l2_env.is_some() {
+            return Ok(());
+        }
+        let path = self.brain_path().join("l2_topics.db");
+        self.l2_env = Some(L2Env::open(&path)?);
+        Ok(())
+    }
+
+    pub(crate) fn ensure_l2(&mut self) -> Result<()> {
+        if self.l2.is_some() {
+            return Ok(());
+        }
+        let _timer = std::time::Instant::now();
+        self.ensure_l2_env()?;
+        let encoder_dim = self.encoder.dim();
+        let config = HnswConfig::default();
+        let mut l2 = L2TopicGraph::with_dim_and_config(encoder_dim, config)?;
+        let l2_env = self.l2_env.as_ref().unwrap();
+        l2.rebuild_topic_vectors(l2_env)
+            .map_err(|e| MemHopError::Internal(format!("rebuild L2 topic vectors: {}", e)))?;
+        let elapsed = _timer.elapsed();
+        if elapsed.as_millis() > 100 {
+            eprintln!("[memhop] WARNING: L2 first open took {}ms", elapsed.as_millis());
+        }
+        self.l2 = Some(l2);
+        Ok(())
+    }
+
+    // ── Lazy open: L3 ──
+    pub(crate) fn ensure_l3_env(&mut self) -> Result<()> {
+        if self.l3_env.is_some() {
+            return Ok(());
+        }
+        let path = self.brain_path().join("l3_domains.db");
+        self.l3_env = Some(L3Env::open(&path)?);
+        Ok(())
+    }
+
+    pub(crate) fn ensure_l3(&mut self) -> Result<()> {
+        if self.l3.is_some() {
+            return Ok(());
+        }
+        let _timer = std::time::Instant::now();
+        self.ensure_l3_env()?;
+        let encoder_dim = self.encoder.dim();
+        let config = HnswConfig::default();
+        let mut l3 = L3DomainGraph::with_dim_and_config(encoder_dim, config)?;
+        let l3_env = self.l3_env.as_ref().unwrap();
+        l3.rebuild_vector_index(l3_env)
+            .map_err(|e| MemHopError::Internal(format!("rebuild L3 vector index: {}", e)))?;
+        l3.rebuild_bm25(l3_env)
+            .map_err(|e| MemHopError::Internal(format!("rebuild L3 BM25 index: {}", e)))?;
+        let elapsed = _timer.elapsed();
+        if elapsed.as_millis() > 100 {
+            eprintln!("[memhop] WARNING: L3 first open took {}ms", elapsed.as_millis());
+        }
+        self.l3 = Some(l3);
+        Ok(())
+    }
+
+    // ── Lazy open: L4 ──
+    pub(crate) fn ensure_l4_env(&mut self) -> Result<()> {
+        if self.l4_env.is_some() {
+            return Ok(());
+        }
+        let path = self.brain_path().join("l4_raw.db");
+        self.l4_env = Some(L4Env::open(&path)?);
+        Ok(())
+    }
+
+    pub(crate) fn ensure_l4(&mut self) -> Result<()> {
+        if self.l4.is_some() {
+            return Ok(());
+        }
+        let _timer = std::time::Instant::now();
+        self.ensure_l4_env()?;
+        let encoder_dim = self.encoder.dim();
+        let config = HnswConfig::default();
+        let mut l4 = L4RawArchive::with_dim_and_config(encoder_dim, config)?;
+        let l4_env = self.l4_env.as_ref().unwrap();
+        l4.rebuild_vector_index(l4_env)
+            .map_err(|e| MemHopError::Internal(format!("rebuild L4 vector index: {}", e)))?;
+        let elapsed = _timer.elapsed();
+        if elapsed.as_millis() > 100 {
+            eprintln!("[memhop] WARNING: L4 first open took {}ms", elapsed.as_millis());
+        }
+        self.l4 = Some(l4);
+        Ok(())
+    }
+
+    // ── Lazy open: L5 (env only, no data struct) ──
+    pub(crate) fn ensure_l5_env(&mut self) -> Result<()> {
+        if self.l5_env.is_some() {
+            return Ok(());
+        }
+        let path = self.brain_path().join("l5_procedural.db");
+        self.l5_env = Some(L5Env::open(&path)?);
+        Ok(())
+    }
+
+    // ── Public API ────────────────────────────────────────────
 
     pub fn batch_store(&mut self, batch: StoreBatch) -> Result<BatchReport> {
         crate::batch_store::execute(self, batch)
@@ -146,12 +239,14 @@ impl Brain {
         }
 
         // 附带 L0 Profile
-        let txn = self
-            .l0_env
+        self.ensure_l0_env()?;
+        let l0_env = self.l0_env.as_ref().unwrap();
+        let txn = l0_env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        resp.l0_profile = self.l0.get_profile(&txn, &self.l0_env)?;
+        let l0 = self.l0.as_ref().unwrap();
+        resp.l0_profile = l0.get_profile(&txn, l0_env)?;
         // 附带已激活 Topic 列表
         resp.activated_topics = self.session_mgr.get_active_list();
         Ok(resp)
@@ -176,13 +271,15 @@ impl Brain {
     }
 
     /// 获取 L0 角色画像
-    pub fn get_l0_profile(&self) -> Result<Option<L0Profile>> {
-        let txn = self
-            .l0_env
+    pub fn get_l0_profile(&mut self) -> Result<Option<L0Profile>> {
+        self.ensure_l0_env()?;
+        let l0_env = self.l0_env.as_ref().unwrap();
+        let txn = l0_env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        self.l0.get_profile(&txn, &self.l0_env)
+        let l0 = self.l0.as_ref().unwrap();
+        l0.get_profile(&txn, l0_env)
     }
 
     /// 设置 L0 角色画像（身份字段：catid, role_name, role, position, traits）
@@ -195,14 +292,16 @@ impl Brain {
         position: Option<String>,
         traits: std::collections::HashMap<String, String>,
     ) -> Result<()> {
-        let env = self.l0_env.env.clone();
+        self.ensure_l0_env()?;
+        let l0_env = self.l0_env.as_ref().unwrap();
+        let env = l0_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         // 读取现有 profile 或创建新的
-        let mut profile = self
-            .l0
-            .get_profile(&wtxn, &self.l0_env)?
+        let l0 = self.l0.as_ref().unwrap();
+        let mut profile = l0
+            .get_profile(&wtxn, l0_env)?
             .unwrap_or_default();
         // catid 只在首次设置时保存，之后不可修改
         if profile.catid.is_none() && let Some(id) = catid {
@@ -222,7 +321,7 @@ impl Brain {
         }
         profile.version += 1;
         profile.updated_at = chrono::Utc::now().timestamp_millis();
-        self.l0.update_profile(&mut wtxn, &self.l0_env, &profile)?;
+        l0.update_profile(&mut wtxn, l0_env, &profile)?;
         wtxn.commit()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         Ok(())
@@ -239,13 +338,15 @@ impl Brain {
         worldview: Vec<String>,
         traits: std::collections::HashMap<String, String>,
     ) -> Result<()> {
-        let env = self.l0_env.env.clone();
+        self.ensure_l0_env()?;
+        let l0_env = self.l0_env.as_ref().unwrap();
+        let env = l0_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        let mut profile = self
-            .l0
-            .get_profile(&wtxn, &self.l0_env)?
+        let l0 = self.l0.as_ref().unwrap();
+        let mut profile = l0
+            .get_profile(&wtxn, l0_env)?
             .unwrap_or_default();
         // catid 只在首次设置时保存，之后不可修改
         if profile.catid.is_none() && let Some(id) = catid {
@@ -268,7 +369,7 @@ impl Brain {
         }
         profile.updated_at = chrono::Utc::now().timestamp_millis();
         profile.version += 1;
-        self.l0.update_profile(&mut wtxn, &self.l0_env, &profile)?;
+        l0.update_profile(&mut wtxn, l0_env, &profile)?;
         wtxn.commit()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         Ok(())
@@ -282,13 +383,14 @@ impl Brain {
         keywords: Option<Vec<String>>,
         extended_meta: Option<std::collections::HashMap<String, String>>,
     ) -> Result<()> {
-        let env = self.l2_env.env.clone();
+        self.ensure_l2_env()?;
+        let l2_env = self.l2_env.as_ref().unwrap();
+        let env = l2_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         let key = format!("topic:{}:meta", topic_id);
-        match self
-            .l2_env
+        match l2_env
             .topics
             .get(&wtxn, &key)
             .map_err(|e| MemHopError::Storage(e.to_string()))?
@@ -307,7 +409,7 @@ impl Brain {
                     topic.updated_at = chrono::Utc::now().timestamp_millis();
                     let new_bytes = bincode::serialize(&topic)
                         .map_err(|e| MemHopError::Storage(e.to_string()))?;
-                    self.l2_env
+                    l2_env
                         .topics
                         .put(&mut wtxn, &key, &new_bytes)
                         .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -332,14 +434,14 @@ impl Brain {
     }
 
     /// 获取 L4 原文
-    pub fn get_l4_raw(&self, doc_id: &str) -> Result<Option<RawDocument>> {
-        let txn = self
-            .l4_env
+    pub fn get_l4_raw(&mut self, doc_id: &str) -> Result<Option<RawDocument>> {
+        self.ensure_l4_env()?;
+        let l4_env = self.l4_env.as_ref().unwrap();
+        let txn = l4_env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        match self
-            .l4_env
+        match l4_env
             .docs
             .get(&txn, doc_id)
             .map_err(|e| MemHopError::Storage(e.to_string()))?
@@ -352,14 +454,15 @@ impl Brain {
     }
 
     /// 列出 L3 领域路径
-    pub fn list_l3_paths(&self) -> Result<Vec<L3PathInfo>> {
-        let txn = self
-            .l3_env
+    pub fn list_l3_paths(&mut self) -> Result<Vec<L3PathInfo>> {
+        self.ensure_l3_env()?;
+        let l3_env = self.l3_env.as_ref().unwrap();
+        let txn = l3_env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         let mut paths = Vec::new();
-        if let Ok(iter) = self.l3_env.domain_meta.iter(&txn) {
+        if let Ok(iter) = l3_env.domain_meta.iter(&txn) {
             for item in iter {
                 if let Ok((_key, bytes)) = item
                     && let Ok(meta) = serde_json::from_slice::<serde_json::Value>(bytes)
@@ -377,14 +480,15 @@ impl Brain {
     }
 
     /// 列出所有 L2 Topic
-    pub fn list_topics(&self) -> Result<Vec<Topic>> {
-        let txn = self
-            .l2_env
+    pub fn list_topics(&mut self) -> Result<Vec<Topic>> {
+        self.ensure_l2_env()?;
+        let l2_env = self.l2_env.as_ref().unwrap();
+        let txn = l2_env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         let mut topics = Vec::new();
-        if let Ok(iter) = self.l2_env.topics.iter(&txn) {
+        if let Ok(iter) = l2_env.topics.iter(&txn) {
             for (key, bytes) in iter.flatten() {
                 if !key.starts_with("topic:") || !key.ends_with(":meta") {
                     continue;
@@ -405,12 +509,14 @@ impl Brain {
     pub fn re_search(&mut self, req: &RecallRequest) -> Result<RecallResponse> {
         self.session_mgr.purge_expired();
         let mut resp = crate::recall::enhanced_recall(self, req)?;
-        let txn = self
-            .l0_env
+        self.ensure_l0_env()?;
+        let l0_env = self.l0_env.as_ref().unwrap();
+        let txn = l0_env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        resp.l0_profile = self.l0.get_profile(&txn, &self.l0_env)?;
+        let l0 = self.l0.as_ref().unwrap();
+        resp.l0_profile = l0.get_profile(&txn, l0_env)?;
         resp.activated_topics = self.session_mgr.get_active_list();
         Ok(resp)
     }
@@ -419,13 +525,15 @@ impl Brain {
 
     /// v0.18.3: 存储一个程序性晶体。
     pub fn store_crystal(&mut self, crystal: &ProceduralCrystal) -> Result<()> {
-        let env = self.l5_env.env.clone();
+        self.ensure_l5_env()?;
+        let l5_env = self.l5_env.as_ref().unwrap();
+        let env = l5_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         let bytes = bincode::serialize(crystal)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        self.l5_env
+        l5_env
             .crystals
             .put(&mut wtxn, &crystal.id, &bytes)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -435,14 +543,14 @@ impl Brain {
     }
 
     /// v0.18.3: 按 ID 获取程序性晶体。
-    pub fn get_crystal(&self, id: &str) -> Result<Option<ProceduralCrystal>> {
-        let txn = self
-            .l5_env
+    pub fn get_crystal(&mut self, id: &str) -> Result<Option<ProceduralCrystal>> {
+        self.ensure_l5_env()?;
+        let l5_env = self.l5_env.as_ref().unwrap();
+        let txn = l5_env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        match self
-            .l5_env
+        match l5_env
             .crystals
             .get(&txn, id)
             .map_err(|e| MemHopError::Storage(e.to_string()))?
@@ -456,14 +564,15 @@ impl Brain {
     }
 
     /// v0.18.3: 列出所有程序性晶体。
-    pub fn list_crystals(&self) -> Result<Vec<ProceduralCrystal>> {
-        let txn = self
-            .l5_env
+    pub fn list_crystals(&mut self) -> Result<Vec<ProceduralCrystal>> {
+        self.ensure_l5_env()?;
+        let l5_env = self.l5_env.as_ref().unwrap();
+        let txn = l5_env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         let mut crystals = Vec::new();
-        if let Ok(iter) = self.l5_env.crystals.iter(&txn) {
+        if let Ok(iter) = l5_env.crystals.iter(&txn) {
             for (_key, bytes) in iter.flatten() {
                 match bincode::deserialize::<ProceduralCrystal>(bytes) {
                     Ok(c) => crystals.push(c),
@@ -475,14 +584,15 @@ impl Brain {
     }
 
     /// v0.18.3: 按关键词过滤程序性晶体（子串匹配 trigger_keywords）。
-    pub fn get_crystals_by_keyword(&self, keyword: &str) -> Result<Vec<ProceduralCrystal>> {
-        let txn = self
-            .l5_env
+    pub fn get_crystals_by_keyword(&mut self, keyword: &str) -> Result<Vec<ProceduralCrystal>> {
+        self.ensure_l5_env()?;
+        let l5_env = self.l5_env.as_ref().unwrap();
+        let txn = l5_env
             .env
             .read_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         let mut matched = Vec::new();
-        if let Ok(iter) = self.l5_env.crystals.iter(&txn) {
+        if let Ok(iter) = l5_env.crystals.iter(&txn) {
             for (_key, bytes) in iter.flatten() {
                 match bincode::deserialize::<ProceduralCrystal>(bytes) {
                     Ok(c) => {
@@ -503,5 +613,161 @@ impl Brain {
             }
         }
         Ok(matched)
+    }
+
+    /// v0.18.3: 延迟索引重建 + 预热 — 主动加载并重建指定层的索引。
+    /// 返回各层节点数和耗时。
+    pub fn prewarm(&mut self, layers: &[String]) -> Result<HashMap<String, PrewarmLayerResult>> {
+        let mut results = HashMap::new();
+
+        for layer in layers {
+            match layer.as_str() {
+                "L1" => {
+                    let start = std::time::Instant::now();
+                    self.ensure_l1()?;
+                    let nodes = self.l1.as_ref().map(|l1| l1.node_count()).unwrap_or(0);
+                    results.insert("L1".to_string(), PrewarmLayerResult {
+                        nodes,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+                "L2" => {
+                    let start = std::time::Instant::now();
+                    self.ensure_l2()?;
+                    let nodes = self.count_l2_topics();
+                    results.insert("L2".to_string(), PrewarmLayerResult {
+                        nodes,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+                "L3" => {
+                    let start = std::time::Instant::now();
+                    self.ensure_l3()?;
+                    let nodes = self.count_l3_nodes();
+                    results.insert("L3".to_string(), PrewarmLayerResult {
+                        nodes,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+                "L4" => {
+                    let start = std::time::Instant::now();
+                    self.ensure_l4()?;
+                    let nodes = self.count_l4_docs();
+                    results.insert("L4".to_string(), PrewarmLayerResult {
+                        nodes,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                    });
+                }
+                _ => {
+                    eprintln!("[brain] prewarm: unknown layer '{}', skipping", layer);
+                }
+            }
+        }
+
+        Ok(results)
+    }
+
+    fn count_l2_topics(&self) -> u64 {
+        if let Some(ref env) = self.l2_env
+            && let Ok(txn) = env.env.read_txn()
+            && let Ok(iter) = env.topics.iter(&txn)
+        {
+            let mut count = 0u64;
+            for (key, _) in iter.flatten() {
+                if key.starts_with("topic:") && key.ends_with(":meta") {
+                    count += 1;
+                }
+            }
+            return count;
+        }
+        0
+    }
+
+    fn count_l3_nodes(&self) -> u64 {
+        if let Some(ref env) = self.l3_env
+            && let Ok(txn) = env.env.read_txn()
+            && let Ok(iter) = env.domain_nodes.iter(&txn)
+        {
+            return iter.flatten().count() as u64;
+        }
+        0
+    }
+
+    fn count_l4_docs(&self) -> u64 {
+        if let Some(ref env) = self.l4_env
+            && let Ok(txn) = env.env.read_txn()
+            && let Ok(iter) = env.docs.iter(&txn)
+        {
+            return iter.flatten().count() as u64;
+        }
+        0
+    }
+
+    /// 返回各层存储使用率统计（仅遍历已打开的 LxEnv）
+    pub fn storage_stats(&self) -> Vec<crate::types::StorageLayerInfo> {
+        let mut stats = Vec::new();
+
+        if let Some(ref env) = self.l0_env
+            && let Ok(u) = env.space_usage()
+        {
+            stats.push(crate::types::StorageLayerInfo {
+                layer: "L0".into(),
+                used_bytes: u.used_bytes,
+                map_size: u.map_size,
+                usage_pct: u.usage_pct,
+            });
+        }
+        if let Some(ref env) = self.l1_env
+            && let Ok(u) = env.space_usage()
+        {
+            stats.push(crate::types::StorageLayerInfo {
+                layer: "L1".into(),
+                used_bytes: u.used_bytes,
+                map_size: u.map_size,
+                usage_pct: u.usage_pct,
+            });
+        }
+        if let Some(ref env) = self.l2_env
+            && let Ok(u) = env.space_usage()
+        {
+            stats.push(crate::types::StorageLayerInfo {
+                layer: "L2".into(),
+                used_bytes: u.used_bytes,
+                map_size: u.map_size,
+                usage_pct: u.usage_pct,
+            });
+        }
+        if let Some(ref env) = self.l3_env
+            && let Ok(u) = env.space_usage()
+        {
+            stats.push(crate::types::StorageLayerInfo {
+                layer: "L3".into(),
+                used_bytes: u.used_bytes,
+                map_size: u.map_size,
+                usage_pct: u.usage_pct,
+            });
+        }
+        if let Some(ref env) = self.l4_env
+            && let Ok(u) = env.space_usage()
+        {
+            stats.push(crate::types::StorageLayerInfo {
+                layer: "L4".into(),
+                used_bytes: u.used_bytes,
+                map_size: u.map_size,
+                usage_pct: u.usage_pct,
+            });
+        }
+        if let Some(ref env) = self.l5_env
+            && let Ok(u) = env.space_usage()
+        {
+            stats.push(crate::types::StorageLayerInfo {
+                layer: "L5".into(),
+                used_bytes: u.used_bytes,
+                map_size: u.map_size,
+                usage_pct: u.usage_pct,
+            });
+        }
+
+        stats
     }
 }

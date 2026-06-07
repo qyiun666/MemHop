@@ -3,12 +3,34 @@
 
 use crate::brain::Brain;
 use crate::error::{MemHopError, Result};
+use crate::lmdb::space_usage_impl;
 use crate::types::{BatchReport, HyperedgeKind, NodeSource, StoreBatch};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 全局单调递增计数器，确保同毫秒内 ID 不碰撞。
 static ID_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 检查 LMDB 环境空间使用率，超过阈值时返回 StorageFull 错误或打印警告。
+fn check_space(env: &heed::Env, layer: &str) -> Result<()> {
+    match space_usage_impl(env) {
+        Ok(usage) => {
+            let pct = usage.usage_pct;
+            if pct > 95.0 {
+                return Err(MemHopError::StorageFull(format!(
+                    "{} storage {:.0}% full",
+                    layer, pct
+                )));
+            } else if pct > 80.0 {
+                eprintln!("[memhop] WARNING: {} storage {:.0}% full", layer, pct);
+            }
+        }
+        Err(e) => {
+            eprintln!("[memhop] WARNING: {} space_usage check failed: {}", layer, e);
+        }
+    }
+    Ok(())
+}
 
 /// 生成唯一 ID：前缀 + 时间戳 + 序号后缀。
 fn unique_id(prefix: &str) -> String {
@@ -79,14 +101,19 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
     // Phase 2: L4 write — 原文纯文本存储
     let mut l4_doc_ids: Vec<String> = Vec::new();
     {
-        let env = brain.l4_env.env.clone();
+        brain.ensure_l4()?;
+        // P1-1: 写入前检查 L4 空间使用率
+        check_space(&brain.l4_env.as_ref().unwrap().env, "L4")?;
+        let l4 = brain.l4.as_mut().unwrap();
+        let l4_env = brain.l4_env.as_ref().unwrap();
+        let env = l4_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         for item in &encoded {
-            let doc_id = brain.l4.store_with_id(
+            let doc_id = l4.store_with_id(
                 &mut wtxn,
-                &brain.l4_env,
+                l4_env,
                 &unique_id("l4d"),
                 &item.text,
                 &item.source,
@@ -103,7 +130,12 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
 
     // Phase 3: L1 hypergraph write — 带版本历史 + dedup
     {
-        let env = brain.l1_env.env.clone();
+        brain.ensure_l1()?;
+        // P1-1: 写入前检查 L1 空间使用率
+        check_space(&brain.l1_env.as_ref().unwrap().env, "L1")?;
+        let l1 = brain.l1.as_mut().unwrap();
+        let l1_env = brain.l1_env.as_ref().unwrap();
+        let env = l1_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -111,13 +143,13 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         for item in &encoded {
             // v0.16.0: Dedup check — if a semantically similar node exists, skip
             let mut dedup_found = false;
-            if !item.vector.is_empty() && !brain.l1.vector_index.is_empty() {
-                let candidates = brain.l1.vector_index.cosine_search(&item.vector, 5);
+            if !item.vector.is_empty() && !l1.vector_index.is_empty() {
+                let candidates = l1.vector_index.cosine_search(&item.vector, 5);
                 for (cand_id, sim) in &candidates {
                     if *sim > 0.95 {
                         // Check ngram overlap
                         if let Ok(Some(cand_node)) =
-                            brain.l1.get_node(&wtxn, &brain.l1_env, cand_id)
+                            l1.get_node(&wtxn, l1_env, cand_id)
                         {
                             let intersection = item
                                 .sparse
@@ -142,12 +174,11 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                                 }
                                 let bytes = bincode::serialize(&updated)
                                     .map_err(|e| MemHopError::Storage(e.to_string()))?;
-                                brain
-                                    .l1_env
+                                l1_env
                                     .nodes
                                     .put(&mut wtxn, cand_id, &bytes)
                                     .map_err(|e| MemHopError::Storage(e.to_string()))?;
-                                brain.l1.vector_index.update(cand_id, &item.vector);
+                                l1.vector_index.update(cand_id, &item.vector);
                                 node_ids.push(cand_id.clone());
                                 report.l1_dedup_skipped += 1;
                                 dedup_found = true;
@@ -159,9 +190,9 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
             }
 
             if !dedup_found {
-                let node_id = brain.l1.add_node_with_id(
+                let node_id = l1.add_node_with_id(
                     &mut wtxn,
-                    &brain.l1_env,
+                    l1_env,
                     &unique_id("kn"),
                     &item.text,
                     &item.sparse,
@@ -184,9 +215,9 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
 
         // 建立节点间超边
         if node_ids.len() > 1 {
-            brain.l1.add_hyperedge(
+            l1.add_hyperedge(
                 &mut wtxn,
-                &brain.l1_env,
+                l1_env,
                 node_ids.clone(),
                 HyperedgeKind::Association,
                 1.0,
@@ -199,9 +230,9 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         // 超边链：更新事件
         for (i, item) in encoded.iter().enumerate() {
             if let Some(ref parent_id) = item.chain_parent_id {
-                brain.l1.add_hyperedge(
+                l1.add_hyperedge(
                     &mut wtxn,
-                    &brain.l1_env,
+                    l1_env,
                     vec![node_ids[i].clone()],
                     HyperedgeKind::Evolution,
                     1.0,
@@ -218,21 +249,21 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
 
     // Phase 3.5: 将 llm_compressed_summary 写入 L1 node.summary
     {
-        let env = brain.l1_env.env.clone();
+        let l1_env = brain.l1_env.as_ref().unwrap();
+        let env = l1_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         for (i, item) in encoded.iter().enumerate() {
             if let Some(ref summary) = item.llm_compressed_summary
                 && i < node_ids.len()
-                && let Ok(Some(bytes)) = brain.l1_env.nodes.get(&wtxn, &node_ids[i])
+                && let Ok(Some(bytes)) = l1_env.nodes.get(&wtxn, &node_ids[i])
                 && let Ok(mut node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
             {
                 node.summary = Some(summary.clone());
                 node.updated_at = chrono::Utc::now().timestamp_millis();
                 if let Ok(new_bytes) = bincode::serialize(&node) {
-                    brain
-                        .l1_env
+                    l1_env
                         .nodes
                         .put(&mut wtxn, &node_ids[i], &new_bytes)
                         .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -245,7 +276,12 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
 
     // Phase 4: L2 topic update — 带 llm_compressed_summary + 真实 node_id + doc_ids + linked_domain_ids + centroid
     {
-        let env = brain.l2_env.env.clone();
+        brain.ensure_l2()?;
+        // P1-1: 写入前检查 L2 空间使用率
+        check_space(&brain.l2_env.as_ref().unwrap().env, "L2")?;
+        let l2 = brain.l2.as_mut().unwrap();
+        let l2_env = brain.l2_env.as_ref().unwrap();
+        let env = l2_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -256,9 +292,8 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         for (i, item) in encoded.iter().enumerate() {
             if let Some(ref label) = item.topic_label {
                 let (topic_id, is_new) =
-                    brain
-                        .l2
-                        .find_or_create_topic(&mut wtxn, &brain.l2_env, label)?;
+                    l2
+                        .find_or_create_topic(&mut wtxn, l2_env, label)?;
                 if is_new {
                     report.l2_topics_created += 1;
                 }
@@ -267,7 +302,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                 let topic = if let Some(cached) = topic_cache.get(&topic_id) {
                     cached.clone()
                 } else if let Ok(Some(t)) =
-                    brain.l2.get_topic_by_id(&wtxn, &brain.l2_env, &topic_id)
+                    l2.get_topic_by_id(&wtxn, l2_env, &topic_id)
                 {
                     t
                 } else {
@@ -338,8 +373,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                     let key = format!("topic:{}:meta", &topic_id);
                     let bytes = bincode::serialize(&topic)
                         .map_err(|e| MemHopError::Storage(e.to_string()))?;
-                    brain
-                        .l2_env
+                    l2_env
                         .topics
                         .put(&mut wtxn, &key, &bytes)
                         .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -353,9 +387,9 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                         kw_sparse.insert(kw.clone(), 1.0f32);
                     }
                     let nid = if i < node_ids.len() { &node_ids[i] } else { "" };
-                    brain.l2.add_node_to_topic(
+                    l2.add_node_to_topic(
                         &mut wtxn,
-                        &brain.l2_env,
+                        l2_env,
                         &topic_id,
                         nid,
                         &kw_sparse,
@@ -374,16 +408,15 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
 
         // 更新各 topic 的 centroid 向量
         for (tid, nodes) in &topic_new_nodes {
-            if let Err(e) = brain
-                .l2
-                .update_topic_centroid(&mut wtxn, &brain.l2_env, tid, nodes)
+            if let Err(e) = l2
+                .update_topic_centroid(&mut wtxn, l2_env, tid, nodes)
             {
                 eprintln!("[batch_store] centroid update error for {}: {}", tid, e);
             }
         }
         // 持久化 topic 向量索引
         if !topic_new_nodes.is_empty()
-            && let Err(e) = brain.l2.persist_topic_vectors(&mut wtxn, &brain.l2_env)
+            && let Err(e) = l2.persist_topic_vectors(&mut wtxn, l2_env)
         {
             eprintln!("[batch_store] persist topic vectors error: {}", e);
         }
@@ -394,7 +427,12 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
 
     // Phase 5: L3 domain update — 自动生成 L3 领域
     {
-        let env = brain.l3_env.env.clone();
+        brain.ensure_l3()?;
+        // P1-1: 写入前检查 L3 空间使用率
+        check_space(&brain.l3_env.as_ref().unwrap().env, "L3")?;
+        let l3 = brain.l3.as_mut().unwrap();
+        let l3_env = brain.l3_env.as_ref().unwrap();
+        let env = l3_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -417,8 +455,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
             // 确保领域存在（如果不存在则创建）
             if !domain_cache.contains(&domain_id) {
                 let meta_key = format!("meta:{}", domain_id);
-                if brain
-                    .l3_env
+                if l3_env
                     .domain_meta
                     .get(&wtxn, &meta_key)
                     .map_err(|e| MemHopError::Storage(e.to_string()))?
@@ -433,16 +470,16 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                             .unwrap_or(&domain_id)
                             .to_string()
                     };
-                    brain.l3.mount_domain(&mut wtxn, &brain.l3_env, &name)?;
+                    l3.mount_domain(&mut wtxn, l3_env, &name)?;
                 }
                 domain_cache.insert(domain_id.clone());
             }
 
             // 添加节点到 L3
             let l3_id = unique_id("l3n");
-            brain.l3.add_node_with_id(
+            l3.add_node_with_id(
                 &mut wtxn,
-                &brain.l3_env,
+                l3_env,
                 &l3_id,
                 &domain_id,
                 &item.text,

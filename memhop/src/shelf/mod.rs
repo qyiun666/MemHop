@@ -93,12 +93,13 @@ pub fn mount(
     let meta_key = format!("shelf_meta:{}", domain_id);
     let meta_bytes = bincode::serialize(&meta).map_err(|e| MemHopError::Storage(e.to_string()))?;
     {
-        let env = brain.l3_env.env.clone();
+        brain.ensure_l3_env()?;
+        let l3_env = brain.l3_env.as_ref().unwrap();
+        let env = l3_env.env.clone();
         let mut wtxn = env
             .write_txn()
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
-        brain
-            .l3_env
+        l3_env
             .domain_meta
             .put(&mut wtxn, &meta_key, &meta_bytes)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -111,15 +112,16 @@ pub fn mount(
 
 /// Unmount a knowledge base: remove its L3 domain nodes and metadata.
 pub fn unmount(brain: &mut Brain, domain_id: &str) -> Result<()> {
+    brain.ensure_l3_env()?;
+    let l3_env = brain.l3_env.as_ref().unwrap();
     let meta_key = format!("shelf_meta:{}", domain_id);
-    let env = brain.l3_env.env.clone();
+    let env = l3_env.env.clone();
     let mut wtxn = env
         .write_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
 
     // Remove domain metadata
-    brain
-        .l3_env
+    l3_env
         .domain_meta
         .delete(&mut wtxn, &meta_key)
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -127,7 +129,7 @@ pub fn unmount(brain: &mut Brain, domain_id: &str) -> Result<()> {
     // Remove all domain nodes with this domain_id prefix
     let prefix = format!("node:{}:", domain_id);
     let mut to_delete: Vec<String> = Vec::new();
-    if let Ok(iter) = brain.l3_env.domain_nodes.iter(&wtxn) {
+    if let Ok(iter) = l3_env.domain_nodes.iter(&wtxn) {
         for item in iter {
             if let Ok((key, _)) = item
                 && key.starts_with(&prefix)
@@ -137,8 +139,7 @@ pub fn unmount(brain: &mut Brain, domain_id: &str) -> Result<()> {
         }
     }
     for key in &to_delete {
-        brain
-            .l3_env
+        l3_env
             .domain_nodes
             .delete(&mut wtxn, key)
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
@@ -150,14 +151,16 @@ pub fn unmount(brain: &mut Brain, domain_id: &str) -> Result<()> {
 }
 
 /// List all mounted knowledge bases.
-pub fn list(brain: &Brain) -> Result<Vec<ShelfMeta>> {
-    let env = brain.l3_env.env.clone();
-    let txn = env
+pub fn list(brain: &mut Brain) -> Result<Vec<ShelfMeta>> {
+    brain.ensure_l3_env()?;
+    let l3_env = brain.l3_env.as_ref().unwrap();
+    let txn = l3_env
+        .env
         .read_txn()
         .map_err(|e| MemHopError::Storage(e.to_string()))?;
     let mut results = Vec::new();
 
-    if let Ok(iter) = brain.l3_env.domain_meta.iter(&txn) {
+    if let Ok(iter) = l3_env.domain_meta.iter(&txn) {
         for item in iter {
             if let Ok((key, bytes)) = item
                 && key.starts_with("shelf_meta:")

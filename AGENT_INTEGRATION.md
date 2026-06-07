@@ -1,55 +1,29 @@
-# MemHop v0.18.3 — meowAgent 集成指南
+# MemHop v0.19.0 — meowAgent 接口文档
 
-## 概述
-
-MemHop 是嵌入式联想记忆引擎，通过 MCP (JSON-RPC 2.0 over Unix Socket) 对外提供记忆服务。
-
-6 层架构：L0 角色画像 + L1 纠缠超图 + L2 话题图 + L3 领域超图 + L4 原文库 + L5 程序性晶体。
-
-## 启动
-
-### 单实例校验
-
-v0.18.3 起，memhop-mcp-server 启动时会自动检查是否已有进程在运行：
-
-```bash
-# 正常启动
-memhop-mcp-server
-# 输出: memhop-mcp-server v0.18.3 listening on /tmp/memhop.sock
-
-# 重复启动（会报错）
-memhop-mcp-server
-# ERROR: memhop-mcp-server is already running (PID: 12345). 
-#        Remove /tmp/memhop-mcp-server.lock to force start.
-```
-
-**锁文件位置**: `/tmp/memhop-mcp-server.lock`  
-**自动清理**: 进程退出时（Ctrl-C 或 kill）会自动删除锁文件
-
-### 环境变量
+## 环境变量
 
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
 | `MEMHOP_BRAINS_DIR` | `./memhop_brains` | 数据存储目录 |
 | `MEMHOP_SOCKET` | `/tmp/memhop.sock` | Unix Socket 路径 |
-| `MEMHOP_MODEL_PATH` | 无 | Candle 编码器模型目录 |
+| `MEMHOP_MODEL_PATH` | 无 | Candle 编码器模型目录（multilingual-e5-small） |
+| `MEMHOP_MAX_CACHED_BRAINS` | `32` | LRU 缓存最大容量 |
+| `MEMHOP_BRAIN_TTL_MS` | `1800000` | Brain 空闲超时时间（30分钟） |
 
-### 启动示例
+## 启动
 
 ```bash
-# 最小启动（使用 NgramEncoder，纯 BM25 文本检索）
+# 启动（自动加载 models/multilingual-e5-small）
 memhop-mcp-server
 
-# 启用语义向量检索（使用 CandleEncoder）
-MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
+# 指定其他模型
+MEMHOP_MODEL_PATH=models/bge-small-zh-v1.5 memhop-mcp-server
+
+# 纯 BM25 文本检索（不加载模型）
+MEMHOP_MODEL_PATH=none memhop-mcp-server
 ```
 
-### 编码器说明
-
-| 模式 | 设置 | 特点 |
-|------|------|------|
-| **NgramEncoder** | 不设置 `MEMHOP_MODEL_PATH` | 无需模型，纯 BM25 文本匹配，启动快 |
-| **CandleEncoder** | 设置 `MEMHOP_MODEL_PATH` | 语义向量检索，需下载 BGE 模型（~92MB） |
+**默认行为**：自动检测 `models/multilingual-e5-small/model.safetensors`，存在则加载 CandleEncoder，否则使用 NgramEncoder。
 
 ---
 
@@ -60,6 +34,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 | `memhop_batch_store` | 批量写入记忆 | P0 |
 | `memhop_recall` | 语义检索记忆 | P0 |
 | `memhop_health` | 健康检查 | P0 |
+| `memhop_stats` | 统计信息（含存储使用率） | P0 |
 | `memhop_consolidate` / `memhop_dream` | 记忆巩固（梦境模拟） | P1 |
 | `memhop_organize` | 记忆组织（节点归类） | P1 |
 | `memhop_mount_shelf` | 挂载知识库到 L3 | P1 |
@@ -77,10 +52,10 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 | `memhop_list_topics` | 列出所有 L2 话题 | P2 |
 | `memhop_re_search` | 正则搜索记忆 | P2 |
 | `memhop_update_topic` | 更新话题元数据 | P2 |
-| `memhop_stats` | 获取引擎统计信息 | P2 |
 | `memhop_crystallize` | 触发程序性结晶 | P1 |
 | `memhop_list_crystals` | 列出所有晶体 | P1 |
 | `memhop_get_crystal` | 获取单个晶体详情 | P1 |
+| `memhop_prewarm` | 主动预热指定层 | P2 |
 
 ---
 
@@ -254,8 +229,51 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 // 请求
 {"jsonrpc":"2.0","method":"memhop_health","params":{"agent_id":"cat_1"},"id":1}
 // 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.18.3"}}
+{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.19.0","cached_brains":3}}
 ```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `status` | string | 服务状态，固定 `"ok"` |
+| `version` | string | 当前版本号 |
+| `cached_brains` | u32 | 当前缓存的 Brain 数量（v0.19.0 新增） |
+
+---
+
+### memhop_stats
+
+获取引擎统计信息。
+
+```json
+// 请求
+{"jsonrpc":"2.0","method":"memhop_stats","params":{"agent_id":"cat_1"},"id":1}
+// 响应
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "engram_count": 150,
+    "hyperedge_count": 89,
+    "topic_count": 12,
+    "storage": [
+      {"layer": "L0", "used_bytes": 1024, "map_size": 67108864, "usage_pct": 0.001},
+      {"layer": "L1", "used_bytes": 524288, "map_size": 1073741824, "usage_pct": 0.049},
+      {"layer": "L4", "used_bytes": 1048576, "map_size": 2147483648, "usage_pct": 0.049}
+    ]
+  }
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `engram_count` | u64 | L1 engram 总数 |
+| `hyperedge_count` | u64 | L1 超边总数 |
+| `topic_count` | u64 | L2 话题总数 |
+| `storage` | array | 各层存储使用率（v0.19.0 新增） |
+| `storage[].layer` | string | 层名称（L0-L5） |
+| `storage[].used_bytes` | u64 | 已使用字节数 |
+| `storage[].map_size` | u64 | 映射大小（字节） |
+| `storage[].usage_pct` | f32 | 使用率（0.0-1.0） |
 
 ---
 
@@ -304,12 +322,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 
 ```json
 // 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_organize",
-  "params": {"agent_id": "cat_1", "node_id": "kn_1749123456000"},
-  "id": 1
-}
+{"jsonrpc":"2.0","method":"memhop_organize","params":{"agent_id":"cat_1","node_id":"kn_1749123456000"},"id":1}
 // 响应
 {"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
 ```
@@ -346,6 +359,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
   "chunk_count": 42,
   "mounted_at": 1749123456000
 }}
+```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -354,9 +368,6 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 | `doc_type` | string | 文档类型 |
 | `chunk_count` | usize | 分块数量 |
 | `mounted_at` | i64 | 挂载时间戳（毫秒） |
-| `engram_ids` | object | 输入序号 → L1 节点 ID 映射（可选） |
-| `l3_engram_ids` | object | 输入序号 → L3 节点 ID 映射（可选） |
-```
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -373,12 +384,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 
 ```json
 // 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_unmount_shelf",
-  "params": {"agent_id": "cat_1", "domain_id": "domain_技术文档"},
-  "id": 1
-}
+{"jsonrpc":"2.0","method":"memhop_unmount_shelf","params":{"agent_id":"cat_1","domain_id":"domain_技术文档"},"id":1}
 // 响应
 {"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
 ```
@@ -410,8 +416,6 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 | `doc_type` | string | 文档类型 |
 | `chunk_count` | usize | 分块数量 |
 | `mounted_at` | i64 | 挂载时间戳（毫秒） |
-| `engram_ids` | object | 输入序号 → L1 节点 ID 映射（可选） |
-| `l3_engram_ids` | object | 输入序号 → L3 节点 ID 映射（可选） |
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
@@ -466,7 +470,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 
 ### memhop_set_profile
 
-设置 L0 角色画像（简版，兼容旧接口）。
+设置 L0 角色画像（简版）。
 
 ```json
 // 请求
@@ -534,6 +538,106 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 
 ---
 
+## P1 程序性结晶接口
+
+### memhop_crystallize
+
+触发程序性结晶。从 L1 超边链中自动提取可复用的操作模式。
+
+```json
+// 请求
+{"jsonrpc":"2.0","method":"memhop_crystallize","params":{"agent_id":"cat_1"},"id":1}
+// 响应
+{"jsonrpc":"2.0","id":1,"result":{
+  "crystals_created": 1,
+  "chains_analyzed": 3,
+  "duration_ms": 42
+}}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `crystals_created` | u32 | 本次生成的晶体数 |
+| `chains_analyzed` | u32 | 分析的链总数 |
+| `duration_ms` | u64 | 执行耗时（毫秒） |
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agent_id` | string | 否 | Agent 标识 |
+
+---
+
+### memhop_list_crystals
+
+列出所有已存储的程序性晶体。
+
+```json
+// 请求
+{"jsonrpc":"2.0","method":"memhop_list_crystals","params":{"agent_id":"cat_1"},"id":1}
+// 响应
+{"jsonrpc":"2.0","id":1,"result":[
+  {
+    "id":"crys_1749123456000_3",
+    "label":"错误排查 → 定位原因 → 修复验证",
+    "pattern_type":"Sequence",
+    "steps":[
+      {"order":0,"action":"错误排查","expected_outcome":null,"source_node_ids":[]},
+      {"order":1,"action":"定位原因","expected_outcome":null,"source_node_ids":[]},
+      {"order":2,"action":"修复验证","expected_outcome":null,"source_node_ids":[]}
+    ],
+    "trigger_keywords":["错误排查","定位原因","修复验证"],
+    "context_conditions":[],
+    "source_chain_ids":["he_xxx","he_yyy","he_zzz"],
+    "usage_count":0,
+    "success_rate":0.0,
+    "created_at":1749123456000,
+    "updated_at":1749123456000,
+    "version":1,
+    "history":[]
+  }
+]}
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agent_id` | string | 否 | Agent 标识 |
+
+---
+
+### memhop_get_crystal
+
+获取单个程序性晶体详情。
+
+```json
+// 请求
+{"jsonrpc":"2.0","method":"memhop_get_crystal","params":{"agent_id":"cat_1","crystal_id":"crys_1749123456000_3"},"id":1}
+// 响应
+{"jsonrpc":"2.0","id":1,"result":{
+  "id":"crys_1749123456000_3",
+  "label":"错误排查 → 定位原因 → 修复验证",
+  "pattern_type":"Sequence",
+  "steps":[
+    {"order":0,"action":"错误排查","expected_outcome":null,"source_node_ids":[]}
+  ],
+  "trigger_keywords":["错误排查","定位原因","修复验证"],
+  "context_conditions":[],
+  "source_chain_ids":["he_xxx","he_yyy","he_zzz"],
+  "usage_count":0,
+  "success_rate":0.0,
+  "created_at":1749123456000,
+  "updated_at":1749123456000,
+  "version":1,
+  "history":[]
+}}
+```
+
+| 参数 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `agent_id` | string | 否 | Agent 标识 |
+| `crystal_id` | string | **是** | 晶体 ID |
+
+---
+
 ## P2 会话管理接口
 
 ### memhop_activate
@@ -542,17 +646,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 
 ```json
 // 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_activate",
-  "params": {
-    "agent_id": "cat_1",
-    "session_id": "session_1",
-    "topic_id": "topic_xxx",
-    "ttl_ms": 3600000
-  },
-  "id": 1
-}
+{"jsonrpc":"2.0","method":"memhop_activate","params":{"agent_id":"cat_1","session_id":"session_1","topic_id":"topic_xxx","ttl_ms":3600000},"id":1}
 // 响应
 {"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
 ```
@@ -572,12 +666,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 
 ```json
 // 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_deactivate",
-  "params": {"agent_id": "cat_1", "session_id": "session_1", "topic_id": "topic_xxx"},
-  "id": 1
-}
+{"jsonrpc":"2.0","method":"memhop_deactivate","params":{"agent_id":"cat_1","session_id":"session_1","topic_id":"topic_xxx"},"id":1}
 // 响应
 {"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
 ```
@@ -622,17 +711,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 
 ```json
 // 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_feedback",
-  "params": {
-    "agent_id": "cat_1",
-    "result_ids": ["kn_xxx", "topic_yyy"],
-    "relevant": true,
-    "session_id": "session_1"
-  },
-  "id": 1
-}
+{"jsonrpc":"2.0","method":"memhop_feedback","params":{"agent_id":"cat_1","result_ids":["kn_xxx","topic_yyy"],"relevant":true,"session_id":"session_1"},"id":1}
 // 响应
 {"jsonrpc":"2.0","id":1,"result":{"adjusted":2,"relevant":true}}
 ```
@@ -654,12 +733,7 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 
 ```json
 // 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_get_l4_raw",
-  "params": {"agent_id": "cat_1", "doc_id": "l4d_1749123456000"},
-  "id": 1
-}
+{"jsonrpc":"2.0","method":"memhop_get_l4_raw","params":{"agent_id":"cat_1","doc_id":"l4d_1749123456000"},"id":1}
 // 响应
 {"jsonrpc":"2.0","id":1,"result":{
   "id":"l4d_1749123456000",
@@ -829,276 +903,26 @@ MEMHOP_MODEL_PATH=/path/to/bge-base-zh-v1.5 memhop-mcp-server
 
 ---
 
-### memhop_stats
+## P2 预热接口
 
-获取引擎统计信息。
+### memhop_prewarm
 
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_stats","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{
-  "version":"0.18.3",
-  "encoder_mode":"candle",
-  "encoder_dim":768,
-  "brain_stats":{
-    "l1_nodes":150,
-    "l2_topics":12,
-    "l3_nodes":42,
-    "l4_docs":200
-  },
-  "total_engrams":404
-}}
-```
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-
----
-
-## v0.18.3 程序性结晶
-
-### 概念说明
-
-**程序性结晶（Procedural Crystallization）** 是 MemHop v0.18.3 引入的新机制，用于从 L1 层超边链中自动提取可复用的操作模式。
-
-**何时触发**：
-- 主动调用 `memhop_crystallize` 接口
-- 作为 consolidate 管线的 Stage 8 自动运行
-
-**工作原理**：
-1. 扫描所有带 `chain_label` 的超边链
-2. 对链的 label 序列做 bigram 文本聚类
-3. 同类链（≥2 条）提取公共步骤，组装为 `ProceduralCrystal`（程序性晶体）
-4. 晶体存储在 L5 层（程序性知识层），支持去重
-
-### 接口说明
-
-#### memhop_crystallize
-
-触发程序性结晶。
+主动预热指定层的 LMDB 环境和索引。适用于需要快速响应的场景。
 
 ```json
 // 请求
-{"jsonrpc":"2.0","method":"memhop_crystallize","params":{"agent_id":"cat_1"},"id":1}
+{"jsonrpc":"2.0","method":"memhop_prewarm","params":{"agent_id":"cat_1","layers":["L1","L4"]},"id":1}
 // 响应
-{"jsonrpc":"2.0","id":1,"result":{
-  "crystals_created": 1,
-  "chains_analyzed": 3,
-  "duration_ms": 42
-}}
+{"jsonrpc":"2.0","id":1,"result":{"layers":{"L1":{"nodes":150,"duration_ms":42},"L4":{"nodes":500,"duration_ms":128}}}}
 ```
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `crystals_created` | u32 | 本次生成的晶体数 |
-| `chains_analyzed` | u32 | 分析的链总数 |
-| `duration_ms` | u64 | 执行耗时（毫秒） |
+| `layers` | object | 各层预热结果 |
+| `layers.{Lx}.nodes` | u32 | 该层节点/文档数量 |
+| `layers.{Lx}.duration_ms` | u64 | 预热耗时（毫秒） |
 
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-
-#### memhop_list_crystals
-
-列出所有已存储的程序性晶体。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_list_crystals","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":[
-  {
-    "id":"crys_1749123456000_3",
-    "label":"错误排查 → 定位原因 → 修复验证",
-    "pattern_type":"Sequence",
-    "steps":[
-      {"order":0,"action":"错误排查","expected_outcome":null,"source_node_ids":[]},
-      {"order":1,"action":"定位原因","expected_outcome":null,"source_node_ids":[]},
-      {"order":2,"action":"修复验证","expected_outcome":null,"source_node_ids":[]}
-    ],
-    "trigger_keywords":["错误排查","定位原因","修复验证"],
-    "context_conditions":[],
-    "source_chain_ids":["he_xxx","he_yyy","he_zzz"],
-    "usage_count":0,
-    "success_rate":0.0,
-    "created_at":1749123456000,
-    "updated_at":1749123456000,
-    "version":1,
-    "history":[]
-  }
-]}
-```
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-
-#### memhop_get_crystal
-
-获取单个程序性晶体详情。
-
-```json
-// 请求
-{
-  "jsonrpc":"2.0",
-  "method":"memhop_get_crystal",
-  "params":{"agent_id":"cat_1","crystal_id":"crys_1749123456000_3"},
-  "id":1
-}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{
-  "id":"crys_1749123456000_3",
-  "label":"错误排查 → 定位原因 → 修复验证",
-  "pattern_type":"Sequence",
-  "steps":[
-    {"order":0,"action":"错误排查","expected_outcome":null,"source_node_ids":[]}
-  ],
-  "trigger_keywords":["错误排查","定位原因","修复验证"],
-  "context_conditions":[],
-  "source_chain_ids":["he_xxx","he_yyy","he_zzz"],
-  "usage_count":0,
-  "success_rate":0.0,
-  "created_at":1749123456000,
-  "updated_at":1749123456000,
-  "version":1,
-  "history":[]
-}}
-```
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `crystal_id` | string | **是** | 晶体 ID |
-
-### 调用示例
-
-以下演示完整的 store → consolidate → list_crystals → recall 流程：
-
-```json
-// 1. 存储带 chain_label 的链式数据
-{
-  "jsonrpc":"2.0",
-  "method":"memhop_batch_store",
-  "params":{
-    "agent_id":"cat_1",
-    "items":[
-      {
-        "text":"发现页面报错：500 Internal Server Error",
-        "source":"chat",
-        "turn_id":"session_1_T1",
-        "session_id":"session_1",
-        "topic_label":"错误排查",
-        "chain_label":"错误排查",
-        "chain_parent_id":null
-      },
-      {
-        "text":"查看日志：/var/log/app/error.log",
-        "source":"chat",
-        "turn_id":"session_1_T2",
-        "session_id":"session_1",
-        "topic_label":"错误排查",
-        "chain_label":"定位原因",
-        "chain_parent_id":"<上一步的 hyperedge_id>"
-      },
-      {
-        "text":"修复完成，重启服务验证",
-        "source":"chat",
-        "turn_id":"session_1_T3",
-        "session_id":"session_1",
-        "topic_label":"错误排查",
-        "chain_label":"修复验证",
-        "chain_parent_id":"<上一步的 hyperedge_id>"
-      }
-    ]
-  },
-  "id":1
-}
-
-// 2. 触发巩固（含 Stage 8 程序性结晶）
-{"jsonrpc":"2.0","method":"memhop_consolidate","params":{"agent_id":"cat_1"},"id":2}
-
-// 3. 列出已生成的晶体
-{"jsonrpc":"2.0","method":"memhop_list_crystals","params":{"agent_id":"cat_1"},"id":3}
-
-// 4. 检索时获得晶体推荐
-{
-  "jsonrpc":"2.0",
-  "method":"memhop_recall",
-  "params":{"agent_id":"cat_1","query":"服务报错如何排查","max_results":10},
-  "id":4
-}
-// 响应中 recommended_crystals 字段包含匹配的晶体
-```
-
-### 最佳实践
-
-**chain_label 命名规范**：
-- 使用简洁的动词短语，如 `"排查错误"`、`"定位问题"`、`"修复验证"`
-- 同一流程的各步骤 label 应保持语义一致
-- 避免使用过于泛化的标签（如 `step1`、`step2`）
-
-**推荐在 session 结束时 consolidate**：
-- 每次 session 结束自动调用 `memhop_consolidate`
-- 让 Stage 8 程序性结晶定期挖掘重复模式
-- 晶体积累后，`memhop_recall` 的 `recommended_crystals` 返回会越来越精准
-
----
-
-## meowAgent 适配说明
-
-### 关键原则
-
-**meowAgent 需要适配 MemHop 的 API，而不是反过来。**
-
-如果 meowAgent 调用了 MemHop 中不存在的 API，这是 meowAgent 侧的集成问题，需要 meowAgent 代码进行修改。
-
-### meowAgent 需要适配的 API
-
-以下 API 在 meowAgent 中被调用，但在 MemHop v0.18.3 中不存在：
-
-| meowAgent 调用的 API | 状态 | 建议适配方案 |
-|---------------------|------|-------------|
-| `memhop_create_tree` | ❌ 不存在 | 使用 `memhop_mount_shelf` 挂载知识库 |
-| `memhop_remove_tree` | ❌ 不存在 | 使用 `memhop_unmount_shelf` 卸载知识库 |
-| `memhop_list_trees` | ❌ 不存在 | 使用 `memhop_list_shelf` 列出知识库 |
-| `memhop_list_entanglements` | ❌ 不存在 | 使用 `memhop_re_search` 或 `memhop_recall` 查询关联 |
-| `memhop_my_worldview` | ❌ 不存在 | 使用 `memhop_get_profile` 获取角色画像 |
-| `memhop_list_worldviews` | ❌ 不存在 | 使用 `memhop_get_profile` 获取世界观字段 |
-
-### MemHop 新增 API（meowAgent 未实现）
-
-以下 API 在 MemHop v0.18.3 中已实现，但 meowAgent 尚未集成：
-
-| MemHop API | 功能 | meowAgent 集成建议 |
-|-----------|------|-------------------|
-| `memhop_crystallize` | 触发程序性结晶 | 在 session 结束时调用，或定期调用 |
-| `memhop_list_crystals` | 列出所有晶体 | 在需要程序性知识时调用 |
-| `memhop_get_crystal` | 获取单个晶体详情 | 在需要特定晶体详情时调用 |
-
-### 集成最佳实践
-
-1. **程序性结晶集成**：
-   - 在每个 session 结束时调用 `memhop_consolidate`（会自动触发结晶）
-   - 在需要程序性知识时调用 `memhop_list_crystals`
-   - 在检索时关注 `recommended_crystals` 字段
-
-2. **错误处理**：
-   - 如果调用不存在的 API，MemHop 会返回标准 JSON-RPC 错误码 `-32601`（方法不存在）
-   - meowAgent 应该优雅处理这些错误，而不是崩溃
-
-3. **版本兼容性**：
-   - meowAgent 应该检查 `memhop_health` 返回的版本号
-   - 根据版本号决定使用哪些 API
-
----
-
-## 版本历史
-
-| 版本 | 主要变更 |
-|------|----------|
-| v0.18.3 | 新增程序性结晶（L5层）、修复 CandleEncoder、统一版本号 |
-| v0.18.2 | 内部重构 |
-| v0.18.1 | 初始版本 |
-
+| `agent_id` | string | **是** | Agent 标识 |
+| `layers` | string[] | **是** | 要预热的层，如 `["L1", "L2", "L4"]` |

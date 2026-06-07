@@ -15,7 +15,7 @@ pub mod associative;
 /// 2. Associative diffusion (if spread_depth > 0)
 /// 3. Standard layer-by-layer search
 /// 4. Topic filter post-processing
-pub fn enhanced_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallResponse> {
+pub fn enhanced_recall(brain: &mut Brain, req: &RecallRequest) -> Result<RecallResponse> {
     // If associative mode is requested, delegate to associative module
     if req.spread_depth.is_some() && req.spread_depth.unwrap_or(0) > 0 {
         return associative::associative_recall(brain, req);
@@ -48,20 +48,22 @@ pub fn enhanced_recall(brain: &Brain, req: &RecallRequest) -> Result<RecallRespo
 /// Strategy: search L1 nodes within activated topics, then RRF-merge with
 /// standard results giving activated results a rank boost.
 fn boost_activated_topics(
-    brain: &Brain,
+    brain: &mut Brain,
     mut resp: RecallResponse,
     active_topic_ids: &[String],
     max: usize,
 ) -> Result<RecallResponse> {
     // Collect all node_ids from activated topics
-    let txn = brain
-        .l2_env
+    brain.ensure_l2()?;
+    let l2 = brain.l2.as_mut().unwrap();
+    let l2_env = brain.l2_env.as_ref().unwrap();
+    let txn = l2_env
         .env
         .read_txn()
         .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
     let mut activated_node_ids: Vec<String> = Vec::new();
     for tid in active_topic_ids {
-        if let Ok(Some(topic)) = brain.l2.get_topic_by_id(&txn, &brain.l2_env, tid) {
+        if let Ok(Some(topic)) = l2.get_topic_by_id(&txn, l2_env, tid) {
             activated_node_ids.extend(topic.node_ids);
         }
     }
@@ -95,17 +97,19 @@ fn boost_activated_topics(
 
 /// Filter recall results to only include nodes belonging to a specific L2 topic.
 fn filter_by_topic(
-    brain: &Brain,
+    brain: &mut Brain,
     results: Vec<RecallResult>,
     topic_id: &str,
 ) -> Result<Vec<RecallResult>> {
-    let txn = brain
-        .l2_env
+    brain.ensure_l2()?;
+    let l2 = brain.l2.as_mut().unwrap();
+    let l2_env = brain.l2_env.as_ref().unwrap();
+    let txn = l2_env
         .env
         .read_txn()
         .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
 
-    let topic = match brain.l2.get_topic_by_id(&txn, &brain.l2_env, topic_id)? {
+    let topic = match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
         Some(t) => t,
         None => {
             return Err(crate::error::MemHopError::NotFound(format!(
