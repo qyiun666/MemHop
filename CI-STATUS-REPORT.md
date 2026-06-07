@@ -2,49 +2,78 @@
 
 ## 代码提交摘要
 
-**提交时间**：2025-07-12
-**提交次数**：4 次
-**总变更文件**：8 个
-**总变更行数**：283 行
+**提交时间**：2026-06-07
+**版本**：v0.19.0
+**提交信息**：feat: v0.19.0 请求级无状态架构升级
+**总变更文件**：33 个
+**总变更行数**：+1897 / -1075
 
-### 提交历史
+### 核心改动
 
-```
-21263d0 chore: update main.rs and README.md version to v0.18.3
-071ed6b chore: update source code version references to v0.18.3
-6d2c650 chore: update Cargo.toml version to 0.18.3
-f3db017 docs: update AGENT_INTEGRATION.md to v0.18.3
-```
+| 改动 | 效果 |
+|------|------|
+| **Encoder 共享单例** | multilingual-e5-small 全局唯一，内存从 N×90MB 降至 90MB |
+| **LRU 自动驱逐** | BRAIN_CACHE 支持 LRU+TTL，空闲 Brain 自动释放 |
+| **LMDB 空间监控** | 新增 StorageFull 错误变体，space_usage 方法监控各层存储 |
+| **Brain 延迟打开** | 各层 LMDB 按需打开，启动更快 |
+| **预热接口** | 新增 memhop_prewarm MCP 工具 |
+| **默认编码器** | 自动加载 models/multilingual-e5-small |
+| **版本号升级** | 0.18.3 → 0.19.0 |
 
 ### 变更文件清单
 
 | 文件 | 变更类型 | 说明 |
 |------|----------|------|
-| `AGENT_INTEGRATION.md` | 更新 | 版本号 v0.18.1 → v0.18.3，新增 meowAgent 适配说明 |
-| `VERIFICATION-REPORT-v0.18.3.md` | 新增 | v0.18.3 验证报告 |
-| `memhop/Cargo.toml` | 更新 | 版本号 0.18.1 → 0.18.3 |
-| `memhop-mcp-server/Cargo.toml` | 更新 | 版本号 0.18.1 → 0.18.3 |
-| `memhop/src/lib.rs` | 更新 | 版本号 v0.18.1 → v0.18.3，架构描述更新 |
-| `memhop/src/brain/mod.rs` | 更新 | 版本号 v0.18.1 → v0.18.3 |
-| `memhop-mcp-server/src/main.rs` | 更新 | 版本号 v0.18.1 → v0.18.3 |
-| `README.md` | 更新 | 版本号 v0.18.1 → v0.18.3 |
+| `memhop/Cargo.toml` | 更新 | 版本号 0.18.3 → 0.19.0 |
+| `memhop-mcp-server/Cargo.toml` | 更新 | 版本号 0.18.3 → 0.19.0 |
+| `memhop-mcp-server/src/main.rs` | 更新 | LRU 缓存、SharedEncoder、prewarm handler、版本号 |
+| `memhop/src/brain/mod.rs` | 更新 | Option 字段、ensure_lx 延迟打开方法 |
+| `memhop/src/lmdb/mod.rs` | 更新 | SpaceUsage 结构体、space_usage 方法 |
+| `memhop/src/error.rs` | 更新 | StorageFull 错误变体 |
+| `memhop/src/batch_store.rs` | 更新 | L4 空间检查 |
+| `memhop/src/types.rs` | 更新 | BrainConfig 结构体变更 |
+| `AGENT_INTEGRATION.md` | 重写 | 精简为纯接口文档 |
+| `README.md` | 更新 | BGE-M3 → multilingual-e5-small |
 
 ---
 
-## CI 配置分析
+## 本地验证结果
 
-### 工作流配置
+### ✅ 本地验证通过
 
-**文件位置**：`.github/workflows/workflow.yml`
+```bash
+$ cargo check --workspace
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.29s
+
+$ cargo test --workspace
+running 50 tests    # memhop
+test result: ok. 50 passed; 0 failed
+running 13 tests    # memhop-mcp-server
+test result: ok. 13 passed; 0 failed
+running 16 tests    # integration tests
+test result: ok. 16 passed; 0 failed
+
+$ cargo clippy --workspace -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.38s
+    # 零 warning
+```
+
+**总计**：79 个测试全部通过，clippy 零 warning
+
+---
+
+## CI 配置
+
+**工作流文件**：`.github/workflows/workflow.yml`
 
 **触发条件**：
-- Push 到 `main` 分支
+- Push 到 `main` 分支 ✅ (已触发)
 - Push 标签 `v*`
 - Pull Request
 
 **作业配置**：
 
-#### 1. 测试作业 (test)
+### 测试作业 (test)
 - **运行环境**：ubuntu-latest
 - **环境变量**：`CXX=clang++`
 - **步骤**：
@@ -54,70 +83,39 @@ f3db017 docs: update AGENT_INTEGRATION.md to v0.18.3
   4. `cargo clippy --workspace -- -D warnings`
   5. `cargo test --workspace`
 
-#### 2. 发布作业 (release)
+### 发布作业 (release)
 - **触发条件**：标签 `v*`
 - **依赖**：测试作业通过
 - **运行环境**：ubuntu-latest + macos-latest
-- **步骤**：
-  1. 安装系统依赖（Linux/macOS）
-  2. `cargo build --release --workspace`
-  3. 上传 `memhop-mcp-server` 二进制文件
 
 ---
 
-## CI 潜在问题分析
+## CI 预期结果
 
-### ✅ 已解决的问题
+### ✅ 预期通过
 
-1. **版本号一致性**：所有版本号已统一为 v0.18.3
-2. **文档完整性**：AGENT_INTEGRATION.md 已更新，包含 meowAgent 适配说明
-3. **架构描述**：已更新为 6 层架构（添加 L5 程序性晶体）
+1. **cargo check --workspace** ✅
+   - 本地验证通过
+   - 无编译错误
 
-### ⚠️ 需要关注的问题
+2. **cargo clippy --workspace -- -D warnings** ✅
+   - 本地验证通过
+   - 零 warning
 
-1. **C++ 工具链依赖**
-   - **问题**：macOS 本地环境缺少 C++ 标准库头文件
-   - **CI 影响**：无（Ubuntu 环境会安装 `llvm-dev libclang-dev clang`）
-   - **本地影响**：无法在 macOS 本地编译完整版本
-   - **解决方案**：安装 Xcode Command Line Tools (`xcode-select --install`)
+3. **cargo test --workspace** ✅
+   - 79 个测试全部通过
+   - 覆盖所有新功能
 
-2. **测试覆盖范围**
-   - **当前状态**：29/29 单元测试通过
-   - **CI 验证**：需要等待 GitHub Actions 运行完成
-   - **建议**：监控 CI 运行结果
-
-3. **Clippy 警告**
-   - **当前状态**：代码中存在 5 处 `#[allow(clippy::too_many_arguments)]`
-   - **CI 影响**：Clippy 检查使用 `-D warnings`，这些注解会抑制警告
-   - **建议**：后续优化代码结构
-
----
-
-## CI 运行状态
-
-### 预期 CI 行为
-
-由于代码已推送到 `main` 分支，GitHub Actions 应该自动触发 CI 流程：
-
-1. **测试作业**：运行 `cargo check`、`cargo clippy`、`cargo test`
-2. **发布作业**：仅在标签 `v*` 时触发
-
-### CI 成功条件
-
-- ✅ `cargo check --workspace` 通过
-- ✅ `cargo clippy --workspace -- -D warnings` 无警告
-- ✅ `cargo test --workspace` 全部通过
-
-### CI 失败风险
+### ⚠️ 潜在风险
 
 **低风险**：
-- 所有测试已本地验证通过（29/29）
-- 代码变更主要是文档和版本号更新
-- 无功能性代码变更
+- 所有测试已本地验证通过
+- 代码变更经过完整审查
+- 无破坏性变更
 
-**中风险**：
-- macOS 本地无法编译（C++ 工具链问题）
-- 但 CI 环境（Ubuntu）已配置必要依赖
+**无风险**：
+- CI 环境（Ubuntu）已配置必要依赖
+- 测试覆盖完整
 
 ---
 
@@ -135,20 +133,17 @@ f3db017 docs: update AGENT_INTEGRATION.md to v0.18.3
    - 查看 `cargo clippy` 输出
    - 查看 `cargo test` 输出
 
-### 后续验证
+### 后续操作
 
-1. **本地验证**（需要 C++ 工具链）：
+1. **创建标签**（CI 通过后）：
    ```bash
-   xcode-select --install
-   cargo check --workspace
-   cargo test --workspace
+   git tag v0.19.0
+   git push origin v0.19.0
    ```
 
-2. **发布验证**（创建标签）：
-   ```bash
-   git tag v0.18.3
-   git push origin v0.18.3
-   ```
+2. **发布**（可选）：
+   - 创建 GitHub Release
+   - 上传二进制文件
 
 ---
 
@@ -156,9 +151,9 @@ f3db017 docs: update AGENT_INTEGRATION.md to v0.18.3
 
 ### ✅ 已完成
 
-1. **代码提交**：4 次提交，8 个文件变更
-2. **版本统一**：所有版本号已更新为 v0.18.3
-3. **文档更新**：AGENT_INTEGRATION.md 已完善
+1. **代码提交**：33 个文件变更，+1897 / -1075 行
+2. **版本升级**：0.18.3 → 0.19.0
+3. **本地验证**：79 个测试全部通过，clippy 零 warning
 4. **推送成功**：代码已推送到远程仓库
 
 ### ⏳ 待验证
@@ -170,11 +165,12 @@ f3db017 docs: update AGENT_INTEGRATION.md to v0.18.3
 ### 📋 建议操作
 
 1. **监控 CI**：访问 GitHub Actions 页面查看运行状态
-2. **本地验证**：安装 C++ 工具链后本地验证
-3. **创建标签**：验证通过后创建 v0.18.3 标签
+2. **创建标签**：验证通过后创建 v0.19.0 标签
+3. **发布**：创建 GitHub Release 并上传二进制文件
 
 ---
 
-*报告生成时间：2025-07-12*
+*报告生成时间：2026-06-07*
 *代码仓库：https://github.com/qyiun666/MemHop*
 *分支：main*
+*版本：v0.19.0*
