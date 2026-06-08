@@ -416,6 +416,7 @@ pub struct ProceduralCrystal {
 pub(crate) struct ChainCluster {
     pub label_pattern: String,
     pub chain_ids: Vec<String>,
+    #[allow(dead_code)] // Used in tests
     pub common_steps: Vec<String>,
     pub frequency: u32,
 }

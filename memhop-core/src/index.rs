@@ -244,15 +244,12 @@ impl Default for SparseIndex {
 
 /// HNSW 向量索引 (fast-hnsw)，O(log N) 近似搜索。
 /// 使用纯 Rust 实现，无 C++ 依赖，跨平台兼容。
-use fast_hnsw::{Builder, SearchResult, distance::Cosine};
+use fast_hnsw::{Builder, distance::Cosine};
 use fast_hnsw::labeled::LabeledIndex;
-
-const HNSW_MAGIC: &[u8; 4] = b"HNWI";
 
 pub struct HnswIndex {
     index: LabeledIndex<Cosine, String>,
     dims: usize,
-    config: MemHopHnswConfig,
 }
 
 impl std::fmt::Debug for HnswIndex {
@@ -327,7 +324,6 @@ impl HnswIndex {
         HnswIndex {
             index,
             dims,
-            config,
         }
     }
 
@@ -361,7 +357,7 @@ impl HnswIndex {
 
     /// v0.22.0: Cosine 近似搜索（内部 F16 量化，API 用 f32）。
     pub fn cosine_search(&self, query: &[half::f16], top_k: usize) -> Vec<(String, f32)> {
-        if self.index.len() == 0 || query.is_empty() || query.len() != self.dims {
+        if self.index.is_empty() || query.is_empty() || query.len() != self.dims {
             return Vec::new();
         }
 
