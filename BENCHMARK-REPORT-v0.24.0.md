@@ -48,6 +48,15 @@
 | `llm/cache/cache_hit_vs_miss` | 运行中 | 缓存命中/未命中对比 |
 | `llm/fallback/synthesize_extraction` | 运行中 | 合成数据 fallback |
 
+### 2.4 LongMemEval Benchmark (longmemeval_bench)
+
+| Benchmark | 耗时 | 说明 |
+|-----------|------|------|
+| `longmemeval/e2e_store_and_eval` | **9.74 s** | 端到端存储 + 评估 |
+| `longmemeval/information_extraction/extract_50_questions` | **12.25 s** | 信息提取评估 |
+| `longmemeval/multi_hop_reasoning/reason_10_sessions` | **2.01 s** | 多跳推理评估 |
+| `longmemeval/temporal_reasoning/temporal_10_sessions` | **1.39 s** | 时序推理评估 |
+
 ## 3. 竞品对比分析
 
 ### 3.1 AI Agent Memory 系统全景 (2025-2026)
@@ -60,7 +69,7 @@
 | **Hindsight** | **91.4%** | 4 种检索策略 + 交叉编码器重排 | Python, TS, Go | MIT |
 | **ByteRover** | **92.8%** (LongMemEval-S) | 生产环境优化 | - | 商业 |
 | **LangMem** | 未发布 | LangChain 生态 | Python | MIT |
-| **MemHop** | 待测试 | **6 层架构 + BrainLoop** | **Rust, Python** | Apache 2.0 |
+| **MemHop** | **合成数据测试** | **6 层架构 + BrainLoop** | **Rust, Python** | Apache 2.0 |
 
 ### 3.2 MemHop 独特优势
 

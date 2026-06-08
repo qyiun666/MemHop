@@ -72,3 +72,8 @@ required-features = ["bench"]
 name = "llm_integration_bench"
 harness = false
 required-features = ["bench"]
+
+[[bench]]
+name = "longmemeval_bench"
+harness = false
+required-features = ["bench"]
