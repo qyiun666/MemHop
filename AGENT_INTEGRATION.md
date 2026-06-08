@@ -27,7 +27,7 @@ let batch = StoreBatch {
 let report = brain.batch_store(batch)?;
 
 // 3. 检索记忆
-let response = brain.recall(RecallRequest {
+let response = brain.recall(&RecallRequest {
     query: "用户喜欢什么饮料".to_string(),
     max_results: 10,
     target_layers: vec![Layer::L1, Layer::L2],
@@ -43,17 +43,29 @@ let response = brain.recall(RecallRequest {
 |------|------|------|
 | `Brain::open(config, encoder)` | 创建 Brain | 打开或创建记忆引擎实例 |
 | `brain.batch_store(batch)` | 批量存储 | 所有写入都通过此接口 |
-| `brain.recall(request)` | 语义检索 | 基于查询检索相关记忆 |
-| `brain.dream()` | 记忆巩固 | 触发记忆整理和模式提取 |
-| `brain.set_l0(profile)` | 设置画像 | 设置 Agent 角色画像 |
-| `brain.get_l0()` | 获取画像 | 获取当前角色画像 |
-| `brain.mount_shelf(path, name, doc_type)` | 挂载知识库 | 导入外部文档 |
+| `brain.recall(&request)` | 语义检索 | 基于查询检索相关记忆（引用传递） |
+| `brain.consolidate()` | 记忆巩固 | 触发记忆整理和模式提取 |
+| `brain.set_l0(catid, role_name, personality, values, worldview, traits)` | 设置画像 | 设置 Agent 角色画像（逐字段） |
+| `brain.set_l0_from_profile(profile)` | 设置画像(结构体) | 通过 L0Profile 结构体设置画像 |
+| `brain.set_l0_profile(catid, role_name, role, position, traits)` | 设置画像(局部更新) | 旧版 API，仅更新身份字段 |
+| `brain.get_l0_profile()` | 获取画像 | 获取当前角色画像 |
+| `brain.mount_shelf(dir_path, domain, domain_name)` | 挂载知识库 | 导入外部文档 |
 | `brain.unmount_shelf(domain_id)` | 卸载知识库 | 移除已挂载的知识库 |
 | `brain.list_shelf()` | 列出知识库 | 列出所有已挂载知识库 |
-| `brain.activate(session_id, topic_id, ttl_ms)` | 激活话题 | 提升话题在会话中的权重 |
-| `brain.deactivate(session_id, topic_id)` | 去激活 | 移除话题激活状态 |
-| `brain.get_activated(session_id)` | 获取激活列表 | 获取当前会话激活的话题 |
-| `brain.crystallize()` | 程序性结晶 | 从超边链中提取可复用模式 |
+| `brain.activate_topic(session_id, topic_id, ttl_ms)` | 激活话题 | 提升话题在会话中的权重 |
+| `brain.deactivate_topic(session_id, topic_id)` | 去激活话题 | 移除话题激活状态 |
+| `brain.get_activated(session_id)` | 获取激活列表 | 获取指定会话的激活话题 ID 列表（返回 `Vec<String>`） |
+| `brain.procedural_crystallize()` | 程序性结晶 | 从超边链中提取可复用模式 |
+| `brain.list_crystals()` | 列出晶体 | 列出所有程序性晶体 |
+| `brain.get_crystal(id)` | 获取晶体 | 获取单个晶体详情 |
+| `brain.re_search(&req)` | 再搜索 | 带排除过滤的再搜索 |
+| `brain.prewarm(&layers)` | 预热层 | 预热指定层，重建索引 |
+| `brain.update_topic(topic_id, summary, keywords, extended_meta)` | 更新话题 | 更新话题元数据 |
+| `brain.get_topic(id)` | 获取话题 | 获取话题详情 |
+| `brain.organize_node(id)` | 组织节点 | 组织记忆节点 |
+| `brain.storage_stats()` | 存储统计 | 获取各层存储使用率统计 |
+| `brain.list_l3_paths()` | 列出 L3 路径 | 列出 L3 领域路径 |
+| `brain.get_l4_raw(id)` | 获取 L4 原文 | 获取原始 L4 文档 |
 
 ---
 
@@ -78,8 +90,8 @@ pub fn batch_store(&mut self, batch: StoreBatch) -> Result<BatchReport>
 | `chain_label` | String | 否 | 链标签：`correction`/`supplement`/`merge` |
 | `domain_id` | String | 否 | 关联领域 ID |
 | `importance` | f32 | 否 | 重要性权重 (0.0-1.0) |
-| `valence` | f32 | 否 | 效价参数 |
-| `arousal` | f32 | 否 | 唤醒度参数 |
+| `valence` | Option<f64> | 否 | 效价参数 |
+| `arousal` | Option<f64> | 否 | 唤醒度参数 |
 
 ### 返回值 BatchReport
 
@@ -126,7 +138,7 @@ let report = brain.batch_store(batch)?;
 ## recall — 语义检索
 
 ```rust
-pub fn recall(&mut self, request: RecallRequest) -> Result<RecallResponse>
+pub fn recall(&mut self, req: &RecallRequest) -> Result<RecallResponse>
 ```
 
 ### RecallRequest 参数
@@ -155,6 +167,7 @@ RecallResponse {
     l0_profile: Option<L0Profile>, // L0 角色画像
     confidence: Option<f32>,     // 置信度
     activated_topics: Vec<ActivatedTopicInfo>, // 激活的话题
+    recommended_crystals: Vec<ProceduralCrystal>, // 程序性晶体推荐
 }
 
 RecallResult {
@@ -172,14 +185,14 @@ RecallResult {
 
 ```rust
 // 基本检索
-let response = brain.recall(RecallRequest {
+let response = brain.recall(&RecallRequest {
     query: "用户喜欢什么".to_string(),
     max_results: 5,
     ..Default::default()
 })?;
 
 // 带过滤条件
-let response = brain.recall(RecallRequest {
+let response = brain.recall(&RecallRequest {
     query: "Python".to_string(),
     target_layers: vec![Layer::L1, Layer::L4],
     topic_filter: Some("编程".to_string()),
@@ -194,10 +207,10 @@ for result in response.results {
 
 ---
 
-## dream — 记忆巩固
+## consolidate — 记忆巩固
 
 ```rust
-pub fn dream(&mut self) -> Result<ConsolidateReport>
+pub fn consolidate(&mut self) -> Result<ConsolidateReport>
 ```
 
 定期调用以整理记忆、合并相似话题、提取模式。
@@ -214,13 +227,14 @@ ConsolidateReport {
     schemas_emerged: u32,       // 模式涌现数
     l0_updated: bool,           // L0 是否更新
     plans_consolidated: u32,    // 计划合并数
+    crystals_created: u32,      // 程序性结晶生成数
 }
 ```
 
 ### 示例
 
 ```rust
-let report = brain.dream()?;
+let report = brain.consolidate()?;
 println!("合并了 {} 个话题", report.topics_merged);
 ```
 
@@ -229,8 +243,8 @@ println!("合并了 {} 个话题", report.topics_merged);
 ## L0 角色画像
 
 ```rust
-// 设置画像
-brain.set_l0(L0Profile {
+// 设置画像（通过结构体）
+brain.set_l0_from_profile(L0Profile {
     catid: Some("cat_001".to_string()),
     role_name: Some("小助手".to_string()),
     personality: vec!["友好".to_string(), "耐心".to_string()],
@@ -239,7 +253,7 @@ brain.set_l0(L0Profile {
 })?;
 
 // 获取画像
-if let Some(profile) = brain.get_l0() {
+if let Some(profile) = brain.get_l0_profile() {
     println!("角色: {:?}", profile.role_name);
 }
 ```
@@ -284,13 +298,13 @@ brain.unmount_shelf(&meta.id)?;
 
 ```rust
 // 激活话题（提升检索权重）
-brain.activate("session_1", "topic_123", 3600000)?; // 1小时
+brain.activate_topic("session_1", "topic_123", 3600000)?; // 1小时
 
 // 获取激活的话题
 let activated = brain.get_activated("session_1");
 
 // 去激活
-brain.deactivate("session_1", "topic_123")?;
+brain.deactivate_topic("session_1", "topic_123")?;
 ```
 
 ---
@@ -339,5 +353,5 @@ match brain.recall(request) {
 
 1. **批量写入**：始终使用 `batch_store`，不要逐条写入
 2. **话题标签**：为每条记忆提供 `topic_label`，提升检索质量
-3. **定期巩固**：定期调用 `dream()` 进行记忆整理
-4. **会话管理**：使用 `activate` 提升当前会话相关话题的权重
+3. **定期巩固**：定期调用 `consolidate()` 进行记忆整理
+4. **会话管理**：使用 `activate_topic` 提升当前会话相关话题的权重

@@ -17,7 +17,8 @@ use crate::topic_graph::L2TopicGraph;
 use crate::types::DreamConfig;
 use crate::types::{
     ActivatedTopicInfo, BatchReport, BrainConfig, ConsolidateReport, CrystallizeReport, L0Profile,
-    L3PathInfo, ProceduralCrystal, RecallRequest, RecallResponse, StoreBatch,
+    L3PathInfo, ProceduralCrystal, RecallRequest, RecallResponse, ShelfDomain, ShelfMeta,
+    StoreBatch,
 };
 
 /// MemHop v0.18.3 Brain — 6 层仿人脑记忆架构顶层 API。
@@ -766,6 +767,78 @@ impl Brain {
             return iter.flatten().count() as u64;
         }
         0
+    }
+
+    // ── Shelf 便捷方法（委托到 shelf:: 模块函数）
+
+    /// 挂载知识库
+    pub fn mount_shelf(
+        &mut self,
+        dir_path: &str,
+        domain: ShelfDomain,
+        domain_name: &str,
+    ) -> Result<ShelfMeta> {
+        crate::shelf::mount(self, dir_path, domain, domain_name)
+    }
+
+    /// 卸载知识库
+    pub fn unmount_shelf(&mut self, domain_id: &str) -> Result<()> {
+        crate::shelf::unmount(self, domain_id)
+    }
+
+    /// 列出所有已挂载知识库
+    pub fn list_shelf(&mut self) -> Result<Vec<ShelfMeta>> {
+        crate::shelf::list(self)
+    }
+
+    // ── 会话管理便捷方法
+
+    /// 激活话题
+    pub fn activate_topic(&mut self, session_id: &str, topic_id: &str, ttl_ms: i64) {
+        self.session_mgr.activate(session_id, topic_id, ttl_ms);
+    }
+
+    /// 去激活话题
+    pub fn deactivate_topic(&mut self, session_id: &str, topic_id: &str) {
+        self.session_mgr.deactivate(session_id, topic_id);
+    }
+
+    /// 获取指定会话的激活话题 ID 列表
+    pub fn get_activated(&self, session_id: &str) -> Vec<String> {
+        self.session_mgr.get_active_topic_ids(session_id)
+    }
+
+    // ── L0 Profile 便捷方法
+
+    /// 通过 L0Profile 结构体设置角色画像（完整写入所有字段）
+    pub fn set_l0_from_profile(&mut self, profile: &L0Profile) -> Result<()> {
+        self.ensure_l0_env()?;
+        let l0_env = self.l0_env.as_ref().unwrap();
+        let env = l0_env.env.clone();
+        let mut wtxn = env
+            .write_txn()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let l0 = self.l0.as_ref().unwrap();
+        let mut existing = l0
+            .get_profile(&wtxn, l0_env)?
+            .unwrap_or_default();
+        // catid 首次设置后不可修改
+        if existing.catid.is_none() && profile.catid.is_some() {
+            existing.catid = profile.catid.clone();
+        }
+        existing.role_name = profile.role_name.clone();
+        existing.role = profile.role.clone();
+        existing.position = profile.position.clone();
+        existing.personality = profile.personality.clone();
+        existing.values = profile.values.clone();
+        existing.worldview = profile.worldview.clone();
+        existing.traits = profile.traits.clone();
+        existing.version += 1;
+        existing.updated_at = chrono::Utc::now().timestamp_millis();
+        l0.update_profile(&mut wtxn, l0_env, &existing)?;
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        Ok(())
     }
 
     /// 返回各层存储使用率统计（仅遍历已打开的 LxEnv）
