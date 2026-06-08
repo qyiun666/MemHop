@@ -33,10 +33,30 @@ fn check_space(env: &heed::Env, layer: &str) -> Result<()> {
 }
 
 /// 生成唯一 ID：前缀 + 时间戳 + 序号后缀。
-fn unique_id(prefix: &str) -> String {
+pub(crate) fn unique_id(prefix: &str) -> String {
     let ts = chrono::Utc::now().timestamp_millis();
     let seq = ID_SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{}_{}_{}", prefix, ts, seq)
+}
+
+/// v0.24.0: 从 valence/arousal 推断 Ekman 情感分类。
+pub(crate) fn infer_emotion(valence: f64, arousal: f64) -> crate::types::Emotion {
+    use crate::types::Emotion;
+    if valence > 0.3 && arousal > 0.5 {
+        Emotion::Joy
+    } else if valence < -0.3 && arousal < 0.3 {
+        Emotion::Sadness
+    } else if valence < -0.3 && arousal > 0.5 {
+        Emotion::Anger
+    } else if valence < -0.2 && arousal > 0.7 {
+        Emotion::Fear
+    } else if arousal > 0.8 {
+        Emotion::Surprise
+    } else if valence < -0.4 {
+        Emotion::Disgust
+    } else {
+        Emotion::Neutral
+    }
 }
 
 pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchReport> {
@@ -62,6 +82,8 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         session_id: Option<String>,
         source: String,
         importance: f32,
+        valence: Option<f64>,
+        arousal: Option<f64>,
         /// 原始输入项的索引，用于建立 engram_id 映射
         input_index: usize,
     }
@@ -86,6 +108,8 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                 session_id: item.session_id.clone(),
                 source: item.source.clone(),
                 importance: item.importance.unwrap_or(0.5),
+                valence: item.valence,
+                arousal: item.arousal,
                 input_index: idx,
             });
         }
@@ -109,7 +133,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         let env = l4_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         for item in &encoded {
             let doc_id = l4.store_with_id(
                 &mut wtxn,
@@ -125,7 +149,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
             report.l4_docs_stored += 1;
         }
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
     // Phase 3: L1 hypergraph write — 带版本历史 + dedup
@@ -138,7 +162,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         let env = l1_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
 
         for item in &encoded {
             // v0.16.0: Dedup check — if a semantically similar node exists, skip
@@ -173,11 +197,11 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                                     updated.keywords = kw.clone();
                                 }
                                 let bytes = bincode::serialize(&updated)
-                                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                                    ?;
                                 l1_env
                                     .nodes
                                     .put(&mut wtxn, cand_id, &bytes)
-                                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                                    ?;
                                 l1.vector_index.update(cand_id, &item.vector);
                                 node_ids.push(cand_id.clone());
                                 report.l1_dedup_skipped += 1;
@@ -201,6 +225,24 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                     NodeSource::Perception,
                     item.importance,
                 )?;
+                // v0.24.0: 设置情感字段
+                if let Ok(Some(bytes)) = l1_env.nodes.get(&wtxn, &node_id)
+                    && let Ok(mut node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
+                {
+                    node.valence = item.valence.unwrap_or(0.0) as f32;
+                    node.arousal = item.arousal.unwrap_or(0.0) as f32;
+                    node.emotion = infer_emotion(node.valence as f64, node.arousal as f64);
+                    node.emotion_intensity = (node.valence.abs() + node.arousal) / 2.0;
+                    // v0.24.0: 同步更新 emotion_index
+                    brain
+                        .emotion_index
+                        .entry(node.emotion)
+                        .or_default()
+                        .push(node_id.clone());
+                    if let Ok(new_bytes) = bincode::serialize(&node) {
+                        let _ = l1_env.nodes.put(&mut wtxn, &node_id, &new_bytes);
+                    }
+                }
                 node_ids.push(node_id.clone());
                 report.l1_nodes_created += 1;
                 // 记录输入项到 L1 节点 ID 的映射（只记录每个输入项的第一个分段）
@@ -244,7 +286,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         }
 
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
     // Phase 3.5: 将 llm_compressed_summary 写入 L1 node.summary
@@ -253,7 +295,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         let env = l1_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         for (i, item) in encoded.iter().enumerate() {
             if let Some(ref summary) = item.llm_compressed_summary
                 && i < node_ids.len()
@@ -266,12 +308,12 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                     l1_env
                         .nodes
                         .put(&mut wtxn, &node_ids[i], &new_bytes)
-                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                        ?;
                 }
             }
         }
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
     // Phase 4: L2 topic update — 带 llm_compressed_summary + 真实 node_id + doc_ids + linked_domain_ids + centroid
@@ -284,7 +326,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         let env = l2_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let mut topic_cache: HashMap<String, crate::engram::Topic> = HashMap::new();
         // 收集每个 topic 的新 node 向量（用于 centroid 更新）
         let mut topic_new_nodes: HashMap<String, Vec<(String, Vec<half::f16>)>> = HashMap::new();
@@ -372,11 +414,11 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                     topic.updated_at = now_ms;
                     let key = format!("topic:{}:meta", &topic_id);
                     let bytes = bincode::serialize(&topic)
-                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                        ?;
                     l2_env
                         .topics
                         .put(&mut wtxn, &key, &bytes)
-                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                        ?;
                     topic_cache.insert(topic_id.clone(), topic);
                 }
 
@@ -422,84 +464,58 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         }
 
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
-    // Phase 5: L3 domain update — 自动生成 L3 领域
+    // Phase 5: L3 domain write — v0.24.0: 仅在显式指定 domain_id 且 domain 已存在时写入
+    // 不再从 topic_label 自动生成 L3，L3 由 mount_shelf 或 crystallize_l3 显式创建
     {
         brain.ensure_l3()?;
-        // P1-1: 写入前检查 L3 空间使用率
         check_space(&brain.l3_env.as_ref().unwrap().env, "L3")?;
         let l3 = brain.l3.as_mut().unwrap();
         let l3_env = brain.l3_env.as_ref().unwrap();
         let env = l3_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
-
-        // 缓存已创建的 domain_id，避免重复创建
-        let mut domain_cache: std::collections::HashSet<String> = std::collections::HashSet::new();
+            ?;
 
         for item in &encoded {
-            // 确定 domain_id：优先使用用户指定的，否则根据 topic_label 自动生成
-            let domain_id = if let Some(ref did) = item.domain_id {
-                did.clone()
-            } else if let Some(ref label) = item.topic_label {
-                // 根据 topic_label 生成 domain_id
-                format!("domain_{}", label.chars().take(32).collect::<String>())
-            } else {
-                // 无 topic_label 时归入默认领域
-                "domain_default".to_string()
+            // v0.24.0: 仅当显式指定 domain_id 且 domain 已存在时写入 L3
+            let Some(ref domain_id) = item.domain_id else {
+                continue;
             };
 
-            // 确保领域存在（如果不存在则创建）
-            if !domain_cache.contains(&domain_id) {
-                let meta_key = format!("meta:{}", domain_id);
-                if l3_env
-                    .domain_meta
-                    .get(&wtxn, &meta_key)
-                    .map_err(|e| MemHopError::Storage(e.to_string()))?
-                    .is_none()
-                {
-                    // 领域不存在，创建新领域
-                    let name = if domain_id == "domain_default" {
-                        "默认领域".to_string()
-                    } else {
-                        domain_id
-                            .strip_prefix("domain_")
-                            .unwrap_or(&domain_id)
-                            .to_string()
-                    };
-                    l3.mount_domain(&mut wtxn, l3_env, &name)?;
-                }
-                domain_cache.insert(domain_id.clone());
+            let meta_key = format!("meta:{}", domain_id);
+            if l3_env
+                .domain_meta
+                .get(&wtxn, &meta_key)
+                ?
+                .is_none()
+            {
+                // domain 不存在，跳过（L3 仅接受已 mount 或已 crystallize 的 domain）
+                #[cfg(debug_assertions)]
+                eprintln!("[batch_store] skip L3: domain '{}' not found", domain_id);
+                continue;
             }
 
-            // 添加节点到 L3
             let l3_id = unique_id("l3n");
             l3.add_node_with_id(
                 &mut wtxn,
                 l3_env,
                 &l3_id,
-                &domain_id,
+                domain_id,
                 &item.text,
                 &item.sparse,
                 "",
                 item.vector.clone(),
             )?;
             report.l3_nodes_created += 1;
-            // v0.17.3: 记录输入项到 L3 节点 ID 的映射
             input_first_l3_node
                 .entry(item.input_index)
                 .or_insert(l3_id.clone());
-            #[cfg(debug_assertions)]
-            eprintln!(
-                "[batch_store] L3 node created: l3_id={}, input_index={}",
-                l3_id, item.input_index
-            );
         }
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
     report.total_duration_us = start.elapsed().as_micros() as u64;

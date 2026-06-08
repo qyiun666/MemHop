@@ -62,12 +62,12 @@ pub fn run(brain: &mut Brain, _config: &DreamConfig) -> Result<ConsolidateReport
             let mut wtxn = l1_env
                 .env
                 .write_txn()
-                .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+                ?;
             if let Err(e) = l1.rebuild_bm25(l1_env, &mut wtxn) {
                 eprintln!("[dream] BM25 rebuild error: {}", e);
             } else {
                 wtxn.commit()
-                    .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+                    ?;
             }
         }
         if let Err(e) = l1.rebuild_vector_index(l1_env) {

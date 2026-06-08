@@ -276,6 +276,262 @@ impl LongMemEvalDataset {
     }
 }
 
+/// MS MARCO 数据集 (合成版本)
+pub struct MsMarcoDataset {
+    pub documents: Vec<DatasetDocument>,
+    pub queries: Vec<DatasetQuery>,
+    pub qrels: HashMap<String, Vec<String>>,
+}
+
+impl Dataset for MsMarcoDataset {
+    fn name(&self) -> &str {
+        "MS-MARCO"
+    }
+
+    fn document_count(&self) -> usize {
+        self.documents.len()
+    }
+
+    fn query_count(&self) -> usize {
+        self.queries.len()
+    }
+
+    fn documents(&self) -> &[DatasetDocument] {
+        &self.documents
+    }
+
+    fn queries(&self) -> &[DatasetQuery] {
+        &self.queries
+    }
+
+    fn relevance_judgments(&self) -> &HashMap<String, Vec<String>> {
+        &self.qrels
+    }
+}
+
+impl MsMarcoDataset {
+    /// 合成 MS MARCO 风格数据集 (passage retrieval)
+    pub fn synthesize() -> Self {
+        let topics = [
+            ("what is", "Definition and explanation queries"),
+            ("how to", "Instructional and procedural queries"),
+            ("why does", "Causal and reasoning queries"),
+            ("where is", "Location and place queries"),
+            ("when did", "Temporal and historical queries"),
+            ("who invented", "Person and attribution queries"),
+            ("which is better", "Comparison and evaluation queries"),
+            ("can you", "Capability and permission queries"),
+        ];
+
+        let mut documents = Vec::new();
+        let mut queries = Vec::new();
+        let mut qrels: HashMap<String, Vec<String>> = HashMap::new();
+
+        // 生成 1000 篇文档
+        for i in 0..1000 {
+            let topic_idx = i % topics.len();
+            let (prefix, _) = topics[topic_idx];
+            documents.push(DatasetDocument {
+                id: format!("doc_{}", i),
+                title: format!("Passage {} about {}", i, prefix),
+                text: format!("This passage provides information about {} topics. \
+                    It covers various aspects of the subject matter and provides \
+                    detailed explanations for common questions.", prefix),
+            });
+        }
+
+        // 生成 100 个查询
+        for i in 0..100 {
+            let topic_idx = i % topics.len();
+            let (prefix, description) = topics[topic_idx];
+            let query_id = format!("q_{}", i);
+            queries.push(DatasetQuery {
+                id: query_id.clone(),
+                text: format!("{} the main concept?", prefix),
+            });
+
+            // 关联相关文档
+            let doc_idx = i * 10;
+            let relevant_docs: Vec<String> = (0..5)
+                .map(|j| format!("doc_{}", (doc_idx + j) % 1000))
+                .collect();
+            qrels.insert(query_id, relevant_docs);
+        }
+
+        Self {
+            documents,
+            queries,
+            qrels,
+        }
+    }
+
+    /// 转换为 MemHop StoreItem。
+    pub fn to_store_items(&self) -> Vec<StoreItem> {
+        self.documents
+            .iter()
+            .enumerate()
+            .map(|(i, doc)| StoreItem {
+                text: format!("{} {}", doc.title, doc.text),
+                source: "ms_marco".to_string(),
+                turn_id: Some(format!("doc_{}", i)),
+                session_id: Some("dataset".to_string()),
+                topic_label: Some(Self::extract_topic(&doc.text)),
+                llm_keywords: Some(Self::extract_keywords(&doc.text)),
+                llm_compressed_summary: Some(doc.title.clone()),
+                valence: Some(0.5),
+                arousal: Some(0.3),
+                chain_parent_id: None,
+                chain_label: None,
+                domain_id: None,
+                importance: Some(0.7),
+            })
+            .collect()
+    }
+
+    fn extract_topic(text: &str) -> String {
+        let topics = ["what", "how", "why", "where", "when", "who", "which", "can"];
+        for topic in &topics {
+            if text.to_lowercase().contains(topic) {
+                return topic.to_string();
+            }
+        }
+        "general".to_string()
+    }
+
+    fn extract_keywords(text: &str) -> Vec<String> {
+        text.split_whitespace()
+            .take(5)
+            .map(|w| w.to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()).to_string())
+            .filter(|w| w.len() > 3)
+            .collect()
+    }
+}
+
+/// Natural Questions 数据集 (合成版本)
+pub struct NaturalQuestionsDataset {
+    pub documents: Vec<DatasetDocument>,
+    pub queries: Vec<DatasetQuery>,
+    pub qrels: HashMap<String, Vec<String>>,
+}
+
+impl Dataset for NaturalQuestionsDataset {
+    fn name(&self) -> &str {
+        "NaturalQuestions"
+    }
+
+    fn document_count(&self) -> usize {
+        self.documents.len()
+    }
+
+    fn query_count(&self) -> usize {
+        self.queries.len()
+    }
+
+    fn documents(&self) -> &[DatasetDocument] {
+        &self.documents
+    }
+
+    fn queries(&self) -> &[DatasetQuery] {
+        &self.queries
+    }
+
+    fn relevance_judgments(&self) -> &HashMap<String, Vec<String>> {
+        &self.qrels
+    }
+}
+
+impl NaturalQuestionsDataset {
+    /// 合成 Natural Questions 风格数据集
+    pub fn synthesize() -> Self {
+        let question_types = [
+            ("What is", "Entity definition"),
+            ("When was", "Temporal fact"),
+            ("Where is", "Location fact"),
+            ("Who is", "Person fact"),
+            ("How many", "Numeric fact"),
+            ("Why did", "Causal explanation"),
+        ];
+
+        let mut documents = Vec::new();
+        let mut queries = Vec::new();
+        let mut qrels: HashMap<String, Vec<String>> = HashMap::new();
+
+        // 生成 500 篇知识库文章
+        for i in 0..500 {
+            let type_idx = i % question_types.len();
+            let (prefix, topic) = question_types[type_idx];
+            documents.push(DatasetDocument {
+                id: format!("kb_{}", i),
+                title: format!("{} {} article", topic, i),
+                text: format!("This article answers questions starting with '{}'. \
+                    It provides factual information about {} topics.", prefix, topic.to_lowercase()),
+            });
+        }
+
+        // 生成 200 个问题
+        for i in 0..200 {
+            let type_idx = i % question_types.len();
+            let (prefix, topic) = question_types[type_idx];
+            let query_id = format!("nq_{}", i);
+            queries.push(DatasetQuery {
+                id: query_id.clone(),
+                text: format!("{} the capital of France?", prefix),
+            });
+
+            // 关联相关文档
+            let doc_idx = i * 2;
+            qrels.insert(query_id, vec![format!("kb_{}", doc_idx % 500)]);
+        }
+
+        Self {
+            documents,
+            queries,
+            qrels,
+        }
+    }
+
+    /// 转换为 MemHop StoreItem。
+    pub fn to_store_items(&self) -> Vec<StoreItem> {
+        self.documents
+            .iter()
+            .enumerate()
+            .map(|(i, doc)| StoreItem {
+                text: format!("{} {}", doc.title, doc.text),
+                source: "natural_questions".to_string(),
+                turn_id: Some(format!("kb_{}", i)),
+                session_id: Some("dataset".to_string()),
+                topic_label: Some(Self::extract_topic(&doc.text)),
+                llm_keywords: Some(Self::extract_keywords(&doc.text)),
+                llm_compressed_summary: Some(doc.title.clone()),
+                valence: Some(0.5),
+                arousal: Some(0.3),
+                chain_parent_id: None,
+                chain_label: None,
+                domain_id: None,
+                importance: Some(0.8),
+            })
+            .collect()
+    }
+
+    fn extract_topic(text: &str) -> String {
+        let topics = ["what", "when", "where", "who", "how", "why"];
+        for topic in &topics {
+            if text.to_lowercase().contains(topic) {
+                return topic.to_string();
+            }
+        }
+        "general".to_string()
+    }
+
+    fn extract_keywords(text: &str) -> Vec<String> {
+        text.split_whitespace()
+            .take(5)
+            .map(|w| w.to_lowercase().trim_matches(|c: char| !c.is_alphanumeric()).to_string())
+            .filter(|w| w.len() > 3)
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +558,21 @@ mod tests {
         let items = dataset.to_store_items();
         assert_eq!(items.len(), 3633);
         assert!(items[0].text.contains("Medical Document"));
+    }
+
+    #[test]
+    fn test_ms_marco_synthesize() {
+        let dataset = MsMarcoDataset::synthesize();
+        assert_eq!(dataset.document_count(), 1000);
+        assert_eq!(dataset.query_count(), 100);
+        assert_eq!(dataset.name(), "MS-MARCO");
+    }
+
+    #[test]
+    fn test_natural_questions_synthesize() {
+        let dataset = NaturalQuestionsDataset::synthesize();
+        assert_eq!(dataset.document_count(), 500);
+        assert_eq!(dataset.query_count(), 200);
+        assert_eq!(dataset.name(), "NaturalQuestions");
     }
 }

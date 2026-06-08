@@ -7,7 +7,7 @@ pub mod pattern;
 
 use crate::brain::Brain;
 use crate::engram::Hyperedge;
-use crate::error::{MemHopError, Result};
+use crate::error::Result;
 use crate::lmdb::L1Env;
 use crate::types::{ChainCluster, CrystallizeReport};
 use heed::RoTxn;
@@ -19,7 +19,7 @@ pub(crate) fn analyze_chains(brain: &mut Brain) -> Result<Vec<ChainCluster>> {
     let txn = l1_env
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     // Step 1: 筛选 chain_label.is_some() && chain_prev.is_none() 的链头
     let mut heads: Vec<String> = Vec::new();

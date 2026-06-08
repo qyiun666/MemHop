@@ -46,6 +46,19 @@ pub struct KnowledgeNode {
     pub activation_score: f32,
     /// 记忆状态：Active | Latent | Dormant
     pub memory_state: MemoryState,
+    // ── v0.24.0 新增：情感维度字段 ──
+    /// 情感类型
+    #[serde(default)]
+    pub emotion: Emotion,
+    /// 情感强度 [0.0, 1.0]
+    #[serde(default)]
+    pub emotion_intensity: f32,
+    /// 效价 [-1.0, 1.0]
+    #[serde(default)]
+    pub valence: f32,
+    /// 唤醒度 [0.0, 1.0]
+    #[serde(default)]
+    pub arousal: f32,
 }
 
 impl KnowledgeNode {
@@ -76,6 +89,11 @@ impl KnowledgeNode {
             last_accessed_at: now,
             activation_score: 0.5, // 初始等于 importance
             memory_state: MemoryState::Active,
+            // v0.24.0: 初始化情感字段
+            emotion: Emotion::Neutral,
+            emotion_intensity: 0.0,
+            valence: 0.0,
+            arousal: 0.0,
         }
     }
 }

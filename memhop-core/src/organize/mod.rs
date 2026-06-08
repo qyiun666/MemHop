@@ -182,7 +182,7 @@ pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
     let txn = l1_env
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     let node = match l1.get_node(&txn, l1_env, node_id)? {
         Some(n) => n,
         None => return Err(MemHopError::NotFound(format!("node {} not found", node_id))),
@@ -198,17 +198,17 @@ pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
     let mut updated = node.clone();
     updated.keywords = keywords;
     updated.updated_at = chrono::Utc::now().timestamp_millis();
-    let bytes = bincode::serialize(&updated).map_err(|e| MemHopError::Storage(e.to_string()))?;
+    let bytes = bincode::serialize(&updated)?;
     let env = l1_env.env.clone();
     let mut wtxn = env
         .write_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     l1_env
         .nodes
         .put(&mut wtxn, node_id, &bytes)
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     wtxn.commit()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     Ok(())
 }
@@ -222,7 +222,7 @@ pub fn detect_topic_boundary(brain: &mut Brain, node_a: &str, node_b: &str) -> R
     let txn = l1_env
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     let a = match l1.get_node(&txn, l1_env, node_a)? {
         Some(n) => n,

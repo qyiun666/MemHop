@@ -3,7 +3,7 @@
 
 use crate::brain::Brain;
 use crate::engram::Hyperedge;
-use crate::error::{MemHopError, Result};
+use crate::error::Result;
 use crate::types::ConsolidateReport;
 
 /// Decay hyperedge weights based on time since last update.
@@ -18,7 +18,7 @@ pub fn nrem_decay(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<(
     // Collect all hyperedges and their decayed states
     let txn = env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     let mut to_update: Vec<(String, Hyperedge)> = Vec::new();
     let mut to_delete: Vec<String> = Vec::new();
 
@@ -57,14 +57,14 @@ pub fn nrem_decay(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<(
     // Apply changes in a single write transaction
     let mut wtxn = env
         .write_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     for (id, he) in &to_update {
-        let bytes = bincode::serialize(he).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let bytes = bincode::serialize(he)?;
         l1_env
             .hyperedges
             .put(&mut wtxn, id, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
     for id in &to_delete {
@@ -72,7 +72,7 @@ pub fn nrem_decay(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<(
         l1_env
             .hyperedges
             .delete(&mut wtxn, id)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         // Also remove from node_to_hyperedges back-references
         // We need to find all nodes that reference this hyperedge
         // Since we don't have a hyperedge_to_nodes index, we skip cleanup
@@ -80,7 +80,7 @@ pub fn nrem_decay(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<(
     }
 
     wtxn.commit()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     Ok(())
 }

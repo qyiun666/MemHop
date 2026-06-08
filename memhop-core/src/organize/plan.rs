@@ -13,7 +13,7 @@ pub fn set_plan_name(brain: &mut Brain, topic_id: &str, name: &str) -> Result<()
     let txn = l2_env
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     let _topic = match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
         Some(t) => t,
         None => {
@@ -28,24 +28,24 @@ pub fn set_plan_name(brain: &mut Brain, topic_id: &str, name: &str) -> Result<()
     let env = l2_env.env.clone();
     let mut wtxn = env
         .write_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     let key = format!("topic:{}:meta", topic_id);
     if let Some(bytes) = l2_env
         .topics
         .get(&wtxn, &key)
-        .map_err(|e| MemHopError::Storage(e.to_string()))?
+        ?
         && let Ok(mut t) = bincode::deserialize::<crate::engram::Topic>(bytes)
     {
         t.label = name.to_string();
         t.updated_at = chrono::Utc::now().timestamp_millis();
-        let new_bytes = bincode::serialize(&t).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let new_bytes = bincode::serialize(&t)?;
         l2_env
             .topics
             .put(&mut wtxn, &key, &new_bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
     wtxn.commit()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     Ok(())
 }
 
@@ -57,12 +57,12 @@ pub fn get_plan_tree(brain: &mut Brain, session_id: &str) -> Result<Vec<crate::e
     let txn = l4_env_ref
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     let session_key = format!("session:{}", session_id);
     let node_ids: Vec<String> = match l4_env_ref
         .session_index
         .get(&txn, &session_key)
-        .map_err(|e| MemHopError::Storage(e.to_string()))?
+        ?
     {
         Some(bytes) => bincode::deserialize(bytes).unwrap_or_default(),
         None => Vec::new(),
@@ -77,7 +77,7 @@ pub fn get_plan_tree(brain: &mut Brain, session_id: &str) -> Result<Vec<crate::e
         let txn = l1_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let mut ids: Vec<String> = Vec::new();
         for nid in &node_ids {
             if let Ok(Some(_node)) = l1.get_node(&txn, l1_env, nid) {
@@ -110,7 +110,7 @@ pub fn get_plan_tree(brain: &mut Brain, session_id: &str) -> Result<Vec<crate::e
         let txn = l2_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let mut topics = Vec::new();
         for tid in &topic_ids {
             if let Ok(Some(t)) = l2.get_topic_by_id(&txn, l2_env, tid) {
@@ -131,7 +131,7 @@ pub fn complete_plan(brain: &mut Brain, topic_id: &str) -> Result<()> {
         let txn = l2_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let topic = match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
             Some(t) => t,
             None => {
@@ -153,7 +153,7 @@ pub fn complete_plan(brain: &mut Brain, topic_id: &str) -> Result<()> {
     let env = l1_env.env.clone();
     let mut wtxn = env
         .write_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     if !node_ids.is_empty() {
         l1.add_hyperedge(
@@ -168,7 +168,7 @@ pub fn complete_plan(brain: &mut Brain, topic_id: &str) -> Result<()> {
     }
 
     wtxn.commit()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     Ok(())
 }
 
@@ -183,7 +183,7 @@ pub fn consolidate_plan_summaries(brain: &mut Brain) -> Result<u32> {
         let env = l2_env_ref.env.clone();
         let txn = env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
 
         let mut list = Vec::new();
         if let Ok(iter) = l2_env_ref.topics.iter(&txn) {
@@ -216,7 +216,7 @@ pub fn consolidate_plan_summaries(brain: &mut Brain) -> Result<u32> {
         wtxn_env = l2_env.env.clone();
         wtxn = wtxn_env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         // l2_env dropped here — brain.l2_env borrow released
     }
 
@@ -239,7 +239,7 @@ pub fn consolidate_plan_summaries(brain: &mut Brain) -> Result<u32> {
         let l1_txn = l1_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
 
         for nid in &topic.node_ids {
             if let Ok(Some(node)) = l1.get_node(&l1_txn, l1_env, nid) {
@@ -293,24 +293,24 @@ pub fn consolidate_plan_summaries(brain: &mut Brain) -> Result<u32> {
         if let Some(bytes) = l2_env
             .topics
             .get(&wtxn, &key)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
             && let Ok(mut t) = bincode::deserialize::<crate::engram::Topic>(bytes)
         {
             t.summary = Some(consolidated_summary);
             t.keywords = kw_str;
             t.updated_at = chrono::Utc::now().timestamp_millis();
             let new_bytes =
-                bincode::serialize(&t).map_err(|e| MemHopError::Storage(e.to_string()))?;
+                bincode::serialize(&t)?;
             l2_env
                 .topics
                 .put(&mut wtxn, &key, &new_bytes)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
             consolidated += 1;
         }
     }
 
     wtxn.commit()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     Ok(consolidated)
 }
 

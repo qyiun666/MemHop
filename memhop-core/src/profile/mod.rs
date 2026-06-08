@@ -3,7 +3,7 @@
 
 use crate::brain::Brain;
 use crate::engram::Topic;
-use crate::error::{MemHopError, Result};
+use crate::error::Result;
 use crate::types::{L0Profile, L0Snapshot};
 use std::collections::HashMap;
 
@@ -26,10 +26,10 @@ impl L0ProfileStore {
         match env
             .profile
             .get(txn, PROFILE_KEY)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
         {
             Some(bytes) => Ok(Some(
-                bincode::deserialize(bytes).map_err(|e| MemHopError::Storage(e.to_string()))?,
+                bincode::deserialize(bytes)?,
             )),
             None => Ok(None),
         }
@@ -42,10 +42,10 @@ impl L0ProfileStore {
         env: &crate::lmdb::L0Env,
         profile: &L0Profile,
     ) -> Result<()> {
-        let bytes = bincode::serialize(profile).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let bytes = bincode::serialize(profile)?;
         env.profile
             .put(wtxn, PROFILE_KEY, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok(())
     }
 
@@ -66,10 +66,10 @@ impl L0ProfileStore {
             reason: reason.to_string(),
         };
         let key = format!("hist:{}", snap.version);
-        let bytes = bincode::serialize(&snap).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let bytes = bincode::serialize(&snap)?;
         env.history
             .put(wtxn, &key, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok(())
     }
 
@@ -139,7 +139,7 @@ impl L0ProfileStore {
             let txn = l2_env
                 .env
                 .read_txn()
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
             let mut list = Vec::new();
             if let Ok(iter) = l2_env.topics.iter(&txn) {
                 for (key, bytes) in iter.flatten() {
@@ -168,7 +168,7 @@ impl L0ProfileStore {
             let txn = l0_env
                 .env
                 .read_txn()
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
             let l0 = brain.l0.as_ref().unwrap();
             l0.get_profile(&txn, l0_env)?
         };
@@ -193,7 +193,7 @@ impl L0ProfileStore {
         let env = l0_env_ref.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
 
         if let Some(ref old) = old_profile {
             let l0 = brain.l0.as_ref().unwrap();
@@ -212,7 +212,7 @@ impl L0ProfileStore {
         }
 
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok(true)
     }
 }

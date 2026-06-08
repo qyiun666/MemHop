@@ -1,4 +1,4 @@
-//! MemHop v0.22.0 — 6 层仿人脑记忆引擎。
+//! MemHop v0.23.1 — 6 层仿人脑记忆引擎。
 //!
 //! 6 层架构：L0 角色画像 + L1 纠缠超图 + L2 话题图 + L3 领域超图 + L4 原文库 + L5 程序性晶体。
 //! 双通道检索：BM25（始终可用）+ HNSW 语义向量 + 双编码器路由 (zh/en)。
@@ -55,7 +55,9 @@ pub mod bench_support; // 基准测试工具：MCP 客户端、内存监控、IR
 
 pub use activation::{ActivationConfig, ActivationManager};
 pub use brain::{Brain, PrewarmLayerResult};
-pub use encoder::{Encoder, EncoderOutput, NgramEncoder};
+pub use encoder::{Encoder, EncoderOutput, EncoderRouter, NgramEncoder};
+#[cfg(feature = "candle")]
+pub use encoder::CandleEncoder;
 pub use engram::{Hyperedge, KnowledgeNode, RawDocument, Topic, TopicEdge};
 pub use error::{MemHopError, Result};
 pub use index::{HnswIndex, MemHopHnswConfig, SparseIndex, SparseIndexV2};
@@ -68,4 +70,8 @@ pub use types::{
     L3PathInfo, Layer, MemoryState, NodeSource, ProceduralCrystal, RecallRequest, RecallResponse,
     RecallResult, ShelfDomain, ShelfMeta, StorageLayerInfo, StoreBatch, StoreItem, TopicEdgeKind,
     TopicSnapshot,
+    // v0.24.0: Emotional system
+    Emotion, EmotionalDimension, EmotionalFeedback, EmotionRecallRequest,
+    // v0.24.0: L3 Crystallization
+    CrystallizeL3Request, CrystallizeL3Report,
 };

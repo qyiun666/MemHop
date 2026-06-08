@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use crate::brain::Brain;
-use crate::error::{MemHopError, Result};
+use crate::error::Result;
 use crate::query_engine;
 use crate::types::{Layer, RecallRequest, RecallResponse, RecallResult};
 
@@ -37,7 +37,7 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
     let txn = l1_env
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     let spread = l1.bfs_spread(&txn, l1_env, &seed_ids, depth)?;
     drop(txn);
 
@@ -57,7 +57,7 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
     let txn = l1_env
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     let mut spread_results: Vec<RecallResult> = Vec::new();
     for (nid, weight) in &spread {
         // Skip seeds (already in l1_results)
@@ -78,6 +78,7 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
                 topic_label: None,
                 created_at: node.created_at,
                 version: node.version,
+                emotion: None,
             });
         }
     }
@@ -149,6 +150,7 @@ mod tests {
             topic_label: None,
             created_at: 1000,
             version: 1,
+            emotion: None,
         }];
         let result = merge_rrf(primary, secondary, 10);
         assert_eq!(result.len(), 1);
@@ -165,6 +167,7 @@ mod tests {
             topic_label: None,
             created_at: 1000,
             version: 1,
+            emotion: None,
         }];
         let secondary = vec![RecallResult {
             layer: Layer::L1,
@@ -174,6 +177,7 @@ mod tests {
             topic_label: None,
             created_at: 1000,
             version: 1,
+            emotion: None,
         }];
         let result = merge_rrf(primary, secondary, 10);
         assert_eq!(result.len(), 1);
@@ -190,6 +194,7 @@ mod tests {
                 topic_label: None,
                 created_at: 1000 + i as i64,
                 version: 1,
+                emotion: None,
             })
             .collect();
         let secondary: Vec<RecallResult> = (5..10)
@@ -201,6 +206,7 @@ mod tests {
                 topic_label: None,
                 created_at: 1000 + i as i64,
                 version: 1,
+                emotion: None,
             })
             .collect();
 

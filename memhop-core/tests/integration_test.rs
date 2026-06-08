@@ -1,6 +1,6 @@
 //! 集成测试 - 测试完整的存储→召回流程
 
-use memhop_core::{Brain, BrainConfig, HyperedgeKind, Layer, RecallRequest, StoreBatch, StoreItem};
+use memhop_core::{Brain, BrainConfig, EmotionalFeedback, Emotion, HyperedgeKind, Layer, RecallRequest, StoreBatch, StoreItem};
 use std::sync::Arc;
 
 /// 创建临时测试用 Brain 实例
@@ -90,6 +90,7 @@ fn test_store_and_recall_basic() {
         l2_topic_id: None,
         session_id: None,
         time_decay_lambda: None,
+        l3_max_domains: None,
     };
 
     let recall_result = brain.recall(&req);
@@ -215,7 +216,8 @@ fn test_batch_store_multiple_items() {
     let recall_result = brain.recall(&req);
     assert!(recall_result.is_ok());
     let resp = recall_result.unwrap();
-    assert!(resp.results.len() == 10);
+    // v0.23.1: 级联检索可能返回少于 10 个结果
+    assert!(resp.results.len() > 0, "Expected at least 1 result, got {}", resp.results.len());
 }
 
 #[test]
@@ -594,5 +596,84 @@ fn test_procedural_crystallization() {
     let resp = brain.recall(&req).unwrap();
     assert!(resp.recommended_crystals.len() >= 1,
         "Expected non-empty recommended_crystals");
+}
+
+#[test]
+fn test_get_emotion_nonexistent() {
+    let mut brain = make_test_brain();
+
+    // 对不存在的 memory_id 调用 get_emotion 应返回 Err
+    let result = brain.get_emotion("nonexistent-memory-id");
+    assert!(result.is_err(), "Expected Err for nonexistent memory_id");
+    let err = result.unwrap_err();
+    let err_msg = format!("{}", err);
+    assert!(
+        err_msg.contains("emotion not found"),
+        "Error message should contain 'emotion not found', got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn test_get_emotion_after_feedback() {
+    let mut brain = make_test_brain();
+
+    // 存储一条记忆
+    let items = vec![StoreItem {
+        text: "Emotion test memory".to_string(),
+        source: "test".to_string(),
+        ..Default::default()
+    }];
+    let report = brain.batch_store(StoreBatch { items }).unwrap();
+    assert!(report.l1_nodes_created > 0);
+
+    // 从 report 中获取 engam ID
+    let memory_id = report.engram_ids.get("0").cloned().unwrap();
+    assert!(!memory_id.is_empty(), "Expected non-empty memory_id");
+
+    // 施加情感反馈
+    let feedback = EmotionalFeedback {
+        memory_id: memory_id.clone(),
+        emotion: Emotion::Joy,
+        intensity: 0.8,
+        reason: Some("positive".to_string()),
+    };
+    let fb_result = brain.emotional_feedback(&feedback);
+    assert!(fb_result.is_ok(), "emotional_feedback failed: {:?}", fb_result);
+
+    // 获取情感维度，验证与反馈一致
+    let emo = brain.get_emotion(&memory_id).unwrap();
+    assert_eq!(
+        emo.emotion, Emotion::Joy,
+        "Expected Joy, got {:?}",
+        emo.emotion
+    );
+    assert!(
+        (emo.intensity - 0.8).abs() < 1e-6,
+        "Expected intensity 0.8, got {}",
+        emo.intensity
+    );
+}
+
+#[test]
+fn test_set_l0_and_get_profile() {
+    let mut brain = make_test_brain();
+
+    brain
+        .set_l0(
+            Some("catid_test".to_string()),
+            Some("test_role".to_string()),
+            vec!["curious".to_string(), "helpful".to_string()],
+            vec!["truth".to_string()],
+            vec!["open_source".to_string()],
+            std::collections::HashMap::new(),
+        )
+        .unwrap();
+
+    let profile = brain.get_l0_profile().unwrap().unwrap();
+    assert_eq!(profile.catid, Some("catid_test".to_string()));
+    assert_eq!(profile.role_name, Some("test_role".to_string()));
+    assert!(profile.personality.contains(&"curious".to_string()));
+    assert!(profile.values.contains(&"truth".to_string()));
 }
 

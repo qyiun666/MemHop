@@ -1,7 +1,7 @@
 //! DeepSeek LLM 客户端 — 提供记忆提取、情感分析、摘要生成。
 //!
 //! 设计原则：
-//! - Feature gate: 通过 bench-llm feature 隔离
+//! - Feature gate: 通过 llm-api feature 隔离
 //! - 缓存机制: 相同输入不重复调用 API
 //! - Fallback: API 不可用时使用合成数据
 //! - 安全: API key 从环境变量读取
@@ -9,6 +9,22 @@
 use crate::types::Emotion;
 use std::collections::HashMap;
 use std::time::Duration;
+
+/// DeepSeek API 响应结构
+#[derive(Debug, serde::Deserialize)]
+struct DeepSeekResponse {
+    choices: Vec<DeepSeekChoice>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DeepSeekChoice {
+    message: DeepSeekMessage,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct DeepSeekMessage {
+    content: String,
+}
 
 /// LLM 记忆提取结果。
 #[derive(Debug, Clone)]
@@ -157,16 +173,55 @@ impl DeepSeekClient {
     }
 
     /// API 调用（记忆提取）。
+    #[cfg(feature = "llm-api")]
     fn call_api_extract(&self, text: &str) -> Result<String, String> {
-        // 简化实现：使用 curl 调用 API
-        let _prompt = format!(
-            "Extract topic, keywords, summary, emotion from: {}. Return JSON.",
+        let prompt = format!(
+            "Extract topic, keywords, summary, emotion from the following text. \
+             Return JSON: {{\"topic\": \"...\", \"keywords\": [...], \"summary\": \"...\", \
+             \"emotion\": \"neutral|joy|sadness|anger|surprise|fear\", \"intensity\": 0.0-1.0}}. \
+             Text: {}",
             text
         );
 
-        // 这里应该使用 reqwest 或 curl 调用 DeepSeek API
-        // 简化为返回错误，触发 fallback
-        Err("API call not implemented in benchmark mode".to_string())
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| format!("Create runtime: {}", e))?;
+        
+        rt.block_on(async {
+            let client = reqwest::Client::new();
+            let resp = client
+                .post(&format!("{}/chat/completions", self.base_url))
+                .header("Authorization", format!("Bearer {}", self.api_key))
+                .header("Content-Type", "application/json")
+                .timeout(self.timeout)
+                .json(&serde_json::json!({
+                    "model": self.model,
+                    "messages": [{
+                        "role": "user",
+                        "content": prompt
+                    }],
+                    "temperature": 0.3,
+                    "max_tokens": 200
+                }))
+                .send()
+                .await
+                .map_err(|e| format!("HTTP request: {}", e))?;
+            
+            let resp_text = resp.text().await
+                .map_err(|e| format!("Read response: {}", e))?;
+            
+            let api_resp: DeepSeekResponse = serde_json::from_str(&resp_text)
+                .map_err(|e| format!("Parse response: {}", e))?;
+            
+            api_resp.choices.first()
+                .map(|c| c.message.content.clone())
+                .ok_or_else(|| "No choices in response".to_string())
+        })
+    }
+
+    /// API 调用（llm-api feature 未启用时的 fallback）。
+    #[cfg(not(feature = "llm-api"))]
+    fn call_api_extract(&self, _text: &str) -> Result<String, String> {
+        Err("llm-api feature not enabled".to_string())
     }
 
     /// 解析 API 响应。

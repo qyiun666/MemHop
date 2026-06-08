@@ -113,13 +113,13 @@ impl L0Env {
     pub fn begin_read(&self) -> Result<RoTxn<'_>> {
         self.env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
 
     pub fn begin_write(&self) -> Result<RwTxn<'_>> {
         self.env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
     }
 
     /// 获取空间使用统计信息
@@ -191,13 +191,13 @@ impl L1Env {
     pub fn begin_read(&self) -> Result<RoTxn<'_>> {
         self.env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
 
     pub fn begin_write(&self) -> Result<RwTxn<'_>> {
         self.env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
     }
 
     /// 获取空间使用统计信息
@@ -262,13 +262,13 @@ impl L2Env {
     pub fn begin_read(&self) -> Result<RoTxn<'_>> {
         self.env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
 
     pub fn begin_write(&self) -> Result<RwTxn<'_>> {
         self.env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
     }
 
     /// 获取空间使用统计信息
@@ -333,13 +333,13 @@ impl L3Env {
     pub fn begin_read(&self) -> Result<RoTxn<'_>> {
         self.env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
 
     pub fn begin_write(&self) -> Result<RwTxn<'_>> {
         self.env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
     }
 
     /// 获取空间使用统计信息
@@ -404,13 +404,13 @@ impl L4Env {
     pub fn begin_read(&self) -> Result<RoTxn<'_>> {
         self.env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
 
     pub fn begin_write(&self) -> Result<RwTxn<'_>> {
         self.env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
     }
 
     /// 获取空间使用统计信息
@@ -460,13 +460,13 @@ impl L5Env {
     pub fn begin_read(&self) -> Result<RoTxn<'_>> {
         self.env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
 
     pub fn begin_write(&self) -> Result<RwTxn<'_>> {
         self.env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
     }
 
     /// 获取空间使用统计信息

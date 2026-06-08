@@ -1,7 +1,7 @@
 //! dream/rem — REM stages: topic merging + reflection + plan consolidation.
 
 use crate::brain::Brain;
-use crate::error::{MemHopError, Result};
+use crate::error::Result;
 use crate::organize;
 use crate::types::ConsolidateReport;
 
@@ -24,7 +24,7 @@ pub fn rem_reflect_topics(brain: &mut Brain, report: &mut ConsolidateReport) -> 
         let txn = l2_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let mut ids = Vec::new();
         if let Ok(iter) = l2_env.topics.iter(&txn) {
             for (key, _bytes) in iter.flatten() {

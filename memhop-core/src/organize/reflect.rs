@@ -14,7 +14,7 @@ pub fn reflect_topic(brain: &mut Brain, topic_id: &str) -> Result<String> {
         let txn = l2_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
 
         let t = match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
             Some(t) => t,
@@ -52,7 +52,7 @@ pub fn reflect_topic(brain: &mut Brain, topic_id: &str) -> Result<String> {
             let l1_txn = l1_env
                 .env
                 .read_txn()
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
             if let Ok(Some(node)) = l1.get_node(&l1_txn, l1_env, nid) {
                 all_text.push_str(&node.text);
                 all_text.push(' ');
@@ -82,25 +82,25 @@ pub fn reflect_topic(brain: &mut Brain, topic_id: &str) -> Result<String> {
         let env = l2_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let key = format!("topic:{}:meta", topic_id);
         if let Some(bytes) = l2_env
             .topics
             .get(&wtxn, &key)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
             && let Ok(mut t) = bincode::deserialize::<crate::engram::Topic>(bytes)
         {
             t.summary = Some(summary.clone());
             t.keywords = kw_names.clone();
             t.updated_at = chrono::Utc::now().timestamp_millis();
-            let new_bytes = bincode::serialize(&t).map_err(|e| MemHopError::Storage(e.to_string()))?;
+            let new_bytes = bincode::serialize(&t)?;
             l2_env
                 .topics
                 .put(&mut wtxn, &key, &new_bytes)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
         }
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
     Ok(summary)
@@ -119,7 +119,7 @@ pub fn merge_similar_topics(brain: &mut Brain, threshold: f32) -> Result<u32> {
     let txn = l2_env
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     // Collect all topics
     let mut topic_list = Vec::new();
@@ -145,7 +145,7 @@ pub fn merge_similar_topics(brain: &mut Brain, threshold: f32) -> Result<u32> {
     let env = l2_env.env.clone();
     let mut wtxn = env
         .write_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     for i in 0..topic_list.len() {
         if merged_away.contains(&topic_list[i].id) {
@@ -218,11 +218,11 @@ pub fn merge_similar_topics(brain: &mut Brain, threshold: f32) -> Result<u32> {
                 // Write merged topic back
                 let key = format!("topic:{}:meta", &keeper_topic.id);
                 let bytes = bincode::serialize(&*keeper_topic)
-                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    ?;
                 l2_env
                     .topics
                     .put(&mut wtxn, &key, &bytes)
-                    .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                    ?;
 
                 // Create Evolution edge from absorbed → keeper
                 l2.add_topic_edge(
@@ -241,7 +241,7 @@ pub fn merge_similar_topics(brain: &mut Brain, threshold: f32) -> Result<u32> {
     }
 
     wtxn.commit()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     Ok(merged)
 }
 
@@ -264,7 +264,7 @@ pub fn create_cooccurrence_hyperedges(brain: &mut Brain) -> Result<u32> {
         let l2_txn = l2_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
 
         let mut list = Vec::new();
         if let Ok(iter) = l2_env.topics.iter(&l2_txn) {
@@ -292,7 +292,7 @@ pub fn create_cooccurrence_hyperedges(brain: &mut Brain) -> Result<u32> {
         let l4_txn = l4_env_ref
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
 
         let mut map: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
@@ -347,7 +347,7 @@ pub fn create_cooccurrence_hyperedges(brain: &mut Brain) -> Result<u32> {
         let l1_env_clone = l1_env.env.clone();
         let mut wtxn = l1_env_clone
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
 
         for ((tid_a, tid_b), count) in &pair_count {
             if *count < 2 {
@@ -381,7 +381,7 @@ pub fn create_cooccurrence_hyperedges(brain: &mut Brain) -> Result<u32> {
         }
 
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
     Ok(created)

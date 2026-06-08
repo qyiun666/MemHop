@@ -18,6 +18,7 @@ fn dynamic_rrf_k(result_count: usize) -> f64 {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn execute(brain: &mut Brain, req: &RecallRequest) -> Result<RecallResponse> {
     if req.query.trim().is_empty() {
         return Ok(RecallResponse {
@@ -46,7 +47,11 @@ pub(crate) fn execute(brain: &mut Brain, req: &RecallRequest) -> Result<RecallRe
             Layer::L1 => search_l1(brain, sparse, dense, req.max_results)?,
             Layer::L2 => search_l2(brain, sparse, dense, req.max_results)?,
             Layer::L3 => search_l3(brain, sparse, dense, req.max_results)?,
-            Layer::L4 => search_l4(brain, sparse, dense, req.max_results)?,
+            Layer::L4 => {
+                // v0.23.1: L4 从检索管线移除，仅保留存储服务
+                // 使用 brain.get_l4_by_session/topic() 直接获取
+                Vec::new()
+            }
             Layer::L0 | Layer::L5 => Vec::new(),
         };
         layers_map.entry(*layer).or_default().extend(layer_results);
@@ -68,7 +73,7 @@ pub(crate) fn execute(brain: &mut Brain, req: &RecallRequest) -> Result<RecallRe
         let txn = l2_env
             .env
             .read_txn()
-            .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+            ?;
         let topics = l2
             .get_topics_by_domain(&txn, l2_env, domain_id)?;
         drop(txn);
@@ -184,7 +189,7 @@ pub(crate) fn search_l1(
     let txn = l1_env
         .env
         .read_txn()
-        .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+        ?;
 
     // ── BM25 通道（独立列表，不与 cosine 混用）───────────
     let bm25_hits = l1.search(sparse, max, &txn)?;
@@ -204,6 +209,7 @@ pub(crate) fn search_l1(
                 topic_label: None,
                 created_at: node.created_at,
                 version: node.version,
+                emotion: None,
             });
         }
     }
@@ -231,6 +237,7 @@ pub(crate) fn search_l1(
                     topic_label: None,
                     created_at: node.created_at,
                     version: node.version,
+                    emotion: None,
                 });
             }
         }
@@ -291,6 +298,91 @@ pub(crate) fn search_l1(
     Ok(bm25_results)
 }
 
+/// L1 作用域检索 — 仅搜索指定 node_ids 范围内的节点
+/// 用于级联检索的 Stage 1 和 Stage 2
+pub(crate) fn search_l1_scoped(
+    brain: &mut Brain,
+    sparse: &HashMap<String, f32>,
+    dense: &[f16],
+    allowed_ids: &std::collections::HashSet<String>,
+    max: usize,
+) -> Result<Vec<RecallResult>> {
+    brain.ensure_l1()?;
+    let l1 = brain.l1.as_mut().unwrap();
+    let l1_env = brain.l1_env.as_ref().unwrap();
+    let txn = l1_env
+        .env
+        .read_txn()
+        ?;
+
+    // BM25 搜索
+    let bm25_hits = l1.search(sparse, max * 2, &txn)?;
+    let mut results: Vec<RecallResult> = Vec::new();
+    for (node_id, bm25_score) in &bm25_hits {
+        // 仅保留 allowed_ids 中的节点
+        if !allowed_ids.contains(node_id) {
+            continue;
+        }
+        if let Ok(Some(node)) = l1.get_node(&txn, l1_env, node_id) {
+            results.push(RecallResult {
+                layer: Layer::L1,
+                id: node_id.clone(),
+                text: node
+                    .summary
+                    .unwrap_or(node.text)
+                    .chars()
+                    .take(200)
+                    .collect(),
+                score: *bm25_score * node.importance,
+                topic_label: None,
+                created_at: node.created_at,
+                version: node.version,
+                emotion: None,
+            });
+        }
+    }
+
+    // Cosine 搜索（如果有向量索引）
+    let has_cosine = !l1.vector_index.is_empty()
+        && !dense.is_empty()
+        && dense.iter().any(|v| v.to_f32().abs() > 1e-8);
+
+    if has_cosine {
+        let cosine_hits = l1.vector_index.cosine_search(dense, max * 2);
+        for (node_id, cos_sim) in &cosine_hits {
+            if !allowed_ids.contains(node_id) {
+                continue;
+            }
+            if let Ok(Some(node)) = l1.get_node(&txn, l1_env, node_id) {
+                results.push(RecallResult {
+                    layer: Layer::L1,
+                    id: node_id.clone(),
+                    text: node
+                        .summary
+                        .unwrap_or(node.text)
+                        .chars()
+                        .take(200)
+                        .collect(),
+                    score: *cos_sim * node.importance,
+                    topic_label: None,
+                    created_at: node.created_at,
+                    version: node.version,
+                    emotion: None,
+                });
+            }
+        }
+    }
+
+    // 去重并排序
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(max);
+    Ok(results)
+}
+
 /// L2 话题检索（含向量通道）：Cosine 粗筛 + ngram 重叠双通道 RRF。
 pub(crate) fn search_l2(
     brain: &mut Brain,
@@ -304,7 +396,7 @@ pub(crate) fn search_l2(
     let txn = l2_env
         .env
         .read_txn()
-        .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+        ?;
 
     // ── 通道 1: ngram 重叠（始终可用）───────────────────
     let mut ngram_results: Vec<RecallResult> = Vec::new();
@@ -349,6 +441,7 @@ pub(crate) fn search_l2(
                         topic_label: Some(label.clone()),
                         created_at: topic.created_at,
                         version: topic.version,
+                        emotion: None,
                     });
                 }
             }
@@ -374,6 +467,7 @@ pub(crate) fn search_l2(
                     topic_label: Some(label),
                     created_at: topic.created_at,
                     version: topic.version,
+                    emotion: None,
                 });
             }
         }
@@ -431,7 +525,9 @@ pub(crate) fn search_l2(
     Ok(ngram_results)
 }
 
-/// L3 领域检索 — ngram 重叠 + dense cosine 双通道 RRF 融合
+/// L3 领域检索 — v0.23.1: Domain Router 两步检索
+/// Step 1: route_domains() 找到最相关的 domain
+/// Step 2: search_in_domain() 在指定 domain 内搜索
 pub(crate) fn search_l3(
     brain: &mut Brain,
     sparse: &HashMap<String, f32>,
@@ -444,24 +540,55 @@ pub(crate) fn search_l3(
     let txn = l3_env
         .env
         .read_txn()
-        .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+        ?;
 
-    // ── 通道 1: BM25 搜索（替代全量扫描）────────────────────
-    let mut ngram_results: Vec<RecallResult> = Vec::new();
+    // ── Step 1: Domain Router — 找到最相关的 domain ──────────────
+    let max_domains = 3; // 默认最多 3 个 domain
+    let routed_domains = l3.route_domains(&txn, l3_env, sparse, max_domains)?;
 
-    // v0.18.0: 计算查询ngram平均长度权重
-    let avg_ngram_len = if sparse.is_empty() {
-        1.0
-    } else {
-        let total_len: usize = sparse.keys().map(|k| k.len()).sum();
-        (total_len as f32 / sparse.len() as f32).max(1.0)
-    };
-    // 长ngram权重更高，但限制在1.0-2.0范围内
-    let ngram_len_weight = (avg_ngram_len / 10.0).clamp(1.0, 2.0);
+    // ── Step 2: Domain-scoped Search ────────────────────────────
+    if !routed_domains.is_empty() {
+        let domain_ids: Vec<String> = routed_domains.iter().map(|(id, _)| id.clone()).collect();
+        let hits = l3.search_in_domain(&txn, l3_env, sparse, dense, &domain_ids, max);
 
-    let bm25_hits = l3.search_by_bm25(sparse, max * 2);
+        let mut results: Vec<RecallResult> = Vec::new();
+        for (node_id, score, _domain_id) in hits {
+            // 从 LMDB 获取节点详情
+            let key_prefix = format!("node:{}:", _domain_id);
+            if let Ok(iter) = l3_env.domain_nodes.iter(&txn) {
+                for item in iter {
+                    if let Ok((key, bytes)) = item
+                        && key.starts_with(&key_prefix)
+                        && key.ends_with(&format!(":{}", node_id))
+                        && let Ok(node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
+                    {
+                        results.push(RecallResult {
+                            layer: Layer::L3,
+                            id: node_id.clone(),
+                            text: node
+                                .summary
+                                .unwrap_or(node.text)
+                                .chars()
+                                .take(200)
+                                .collect(),
+                            score,
+                            topic_label: None,
+                            created_at: node.created_at,
+                            version: node.version,
+                            emotion: None,
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+        return Ok(results);
+    }
+
+    // ── Fallback: 全量搜索（当 domain_meta 为空时）─────────────
+    let bm25_hits = l3.search_by_bm25(sparse, max);
+    let mut results: Vec<RecallResult> = Vec::new();
     for (node_id, bm25_score) in &bm25_hits {
-        // 从 LMDB 获取节点详情
         let key_prefix = "node:".to_string();
         if let Ok(iter) = l3_env.domain_nodes.iter(&txn) {
             for item in iter {
@@ -470,9 +597,7 @@ pub(crate) fn search_l3(
                     && key.ends_with(&format!(":{}", node_id))
                     && let Ok(node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
                 {
-                    // v0.18.0: 优化score计算，考虑ngram长度权重
-                    let score = *bm25_score * node.importance * ngram_len_weight;
-                    ngram_results.push(RecallResult {
+                    results.push(RecallResult {
                         layer: Layer::L3,
                         id: node_id.clone(),
                         text: node
@@ -481,111 +606,23 @@ pub(crate) fn search_l3(
                             .chars()
                             .take(200)
                             .collect(),
-                        score,
+                        score: *bm25_score,
                         topic_label: None,
                         created_at: node.created_at,
                         version: node.version,
+                        emotion: None,
                     });
                     break;
                 }
             }
         }
     }
-
-    // ── 通道 2: dense cosine ──────────────────────────────
-    let has_cosine = !l3.vector_index.is_empty()
-        && !dense.is_empty()
-        && dense.iter().any(|v| v.to_f32().abs() > 1e-8);
-
-    if has_cosine {
-        let cos_hits = l3.search_by_vector(dense, max * 2);
-        // 构建 id → node 映射（L3 key 是 "node:{domain_id}:{node_id}"）
-        let hit_ids: std::collections::HashSet<&str> =
-            cos_hits.iter().map(|(id, _)| id.as_str()).collect();
-        let mut node_map: HashMap<String, crate::engram::KnowledgeNode> = HashMap::new();
-        if let Ok(iter) = l3_env.domain_nodes.iter(&txn) {
-            for item in iter {
-                if let Ok((_key, bytes)) = item
-                    && let Ok(node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
-                    && hit_ids.contains(node.id.as_str())
-                {
-                    node_map.insert(node.id.clone(), node);
-                }
-            }
-        }
-        let mut cos_results: Vec<RecallResult> = Vec::new();
-        for (node_id, cos_sim) in &cos_hits {
-            if let Some(node) = node_map.get(node_id) {
-                cos_results.push(RecallResult {
-                    layer: Layer::L3,
-                    id: node_id.clone(),
-                    text: node
-                        .summary
-                        .clone()
-                        .unwrap_or_else(|| node.text.clone())
-                        .chars()
-                        .take(200)
-                        .collect(),
-                    score: *cos_sim * node.importance,
-                    topic_label: None,
-                    created_at: node.created_at,
-                    version: node.version,
-                });
-            }
-        }
-
-        // 双通道 RRF 融合
-        if !cos_results.is_empty() {
-            let rrf_k = dynamic_rrf_k(ngram_results.len() + cos_results.len());
-            let mut rrf_scores: HashMap<String, f64> = HashMap::new();
-            let mut id_to_result: HashMap<String, RecallResult> = HashMap::new();
-
-            ngram_results.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for (rank, r) in ngram_results.iter().enumerate() {
-                *rrf_scores.entry(r.id.clone()).or_insert(0.0) += 1.0 / (rrf_k + rank as f64);
-                id_to_result.entry(r.id.clone()).or_insert(r.clone());
-            }
-            cos_results.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for (rank, r) in cos_results.iter().enumerate() {
-                *rrf_scores.entry(r.id.clone()).or_insert(0.0) += 1.0 / (rrf_k + rank as f64);
-                id_to_result.entry(r.id.clone()).or_insert(r.clone());
-            }
-
-            let mut ranked: Vec<(String, f64)> = rrf_scores.into_iter().collect();
-            ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            ranked.truncate(max);
-            let results: Vec<RecallResult> = ranked
-                .into_iter()
-                .filter_map(|(id, rrf_score)| {
-                    id_to_result.remove(&id).map(|mut r| {
-                        r.score = rrf_score as f32;
-                        r
-                    })
-                })
-                .collect();
-            return Ok(results);
-        }
-    }
-
-    // ── 单通道回退 ────────────────────────────────────
-    ngram_results.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    ngram_results.truncate(max);
-    Ok(ngram_results)
+    Ok(results)
 }
 
 /// v0.22.0: L4 原文检索 — 仅 ngram overlap（HNSW 已移除）。
+/// v0.23.1: 已从检索管线移除，保留代码供参考。
+#[allow(dead_code)]
 pub(crate) fn search_l4(
     brain: &mut Brain,
     sparse: &HashMap<String, f32>,
@@ -597,7 +634,7 @@ pub(crate) fn search_l4(
     let txn = l4_env
         .env
         .read_txn()
-        .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+        ?;
 
     let mut results: Vec<RecallResult> = Vec::new();
     if let Ok(iter) = l4_env.docs.iter(&txn) {
@@ -616,6 +653,7 @@ pub(crate) fn search_l4(
                         topic_label: None,
                         created_at: doc.created_at,
                         version: doc.version,
+                        emotion: None,
                     });
                 }
             }
@@ -632,6 +670,7 @@ pub(crate) fn search_l4(
 }
 
 /// 获取指定 Topic 的 node_ids 集合（用于级联路由过滤）
+#[allow(dead_code)]
 fn get_topic_node_ids(brain: &mut Brain, topic_id: &str) -> Result<std::collections::HashSet<String>> {
     brain.ensure_l2()?;
     let l2 = brain.l2.as_mut().unwrap();
@@ -639,7 +678,7 @@ fn get_topic_node_ids(brain: &mut Brain, topic_id: &str) -> Result<std::collecti
     let txn = l2_env
         .env
         .read_txn()
-        .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+        ?;
     match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
         Some(topic) => Ok(topic.node_ids.into_iter().collect()),
         None => Ok(std::collections::HashSet::new()),
@@ -648,6 +687,7 @@ fn get_topic_node_ids(brain: &mut Brain, topic_id: &str) -> Result<std::collecti
 
 /// v0.18.0: 跨层结果验证
 /// 计算结果在各层的一致性分数，用于调整最终排序
+#[allow(dead_code)]
 pub(crate) fn cross_layer_validation(results: &mut [RecallResult], _brain: &Brain) {
     if results.is_empty() {
         return;

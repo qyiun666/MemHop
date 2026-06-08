@@ -3,50 +3,30 @@
 
 use crate::brain::Brain;
 use crate::error::Result;
-use crate::query_engine;
-use crate::query_engine::cross_layer_validation;
 use crate::types::{Layer, RecallRequest, RecallResponse, RecallResult};
 
 pub mod associative;
+pub mod cascade;
 
 /// Enhanced recall dispatch.
+/// v0.23.1: 默认使用级联检索模式（仿人脑激活优先）
 /// Priority order:
-/// 1. Activated topic priority search (if session_id + activated topics exist)
-/// 2. Associative diffusion (if spread_depth > 0)
-/// 3. Standard layer-by-layer search
-/// 4. Topic filter post-processing
+/// 1. Associative diffusion (if spread_depth > 0)
+/// 2. CascadingRecall (默认模式：激活 L2 → 扩展 L2 → L3 → L1)
 pub fn enhanced_recall(brain: &mut Brain, req: &RecallRequest) -> Result<RecallResponse> {
     // If associative mode is requested, delegate to associative module
     if req.spread_depth.is_some() && req.spread_depth.unwrap_or(0) > 0 {
         return associative::associative_recall(brain, req);
     }
 
-    // Standard recall
-    let mut resp = query_engine::execute(brain, req)?;
-
-    // v0.18.0: 跨层结果验证
-    cross_layer_validation(&mut resp.results, brain);
-
-    // Activated topic priority: boost results from activated topics
-    if let Some(ref session_id) = req.session_id {
-        let active_topic_ids = brain.session_mgr.get_active_topic_ids(session_id);
-        if !active_topic_ids.is_empty() {
-            resp = boost_activated_topics(brain, resp, &active_topic_ids, req.max_results)?;
-        }
-    }
-
-    // Apply topic filter if specified
-    if let Some(ref filter) = req.topic_filter {
-        resp.results = filter_by_topic(brain, resp.results, filter)?;
-        resp.total_count = resp.results.len();
-    }
-
-    Ok(resp)
+    // 默认使用级联模式（仿人脑激活优先）
+    cascade::cascade_recall(brain, req)
 }
 
 /// Boost recall results that belong to currently activated topics.
 /// Strategy: search L1 nodes within activated topics, then RRF-merge with
 /// standard results giving activated results a rank boost.
+#[allow(dead_code)]
 fn boost_activated_topics(
     brain: &mut Brain,
     mut resp: RecallResponse,
@@ -60,7 +40,7 @@ fn boost_activated_topics(
     let txn = l2_env
         .env
         .read_txn()
-        .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+        ?;
     let mut activated_node_ids: Vec<String> = Vec::new();
     for tid in active_topic_ids {
         if let Ok(Some(topic)) = l2.get_topic_by_id(&txn, l2_env, tid) {
@@ -96,6 +76,7 @@ fn boost_activated_topics(
 }
 
 /// Filter recall results to only include nodes belonging to a specific L2 topic.
+#[allow(dead_code)]
 fn filter_by_topic(
     brain: &mut Brain,
     results: Vec<RecallResult>,
@@ -107,7 +88,7 @@ fn filter_by_topic(
     let txn = l2_env
         .env
         .read_txn()
-        .map_err(|e| crate::error::MemHopError::Storage(e.to_string()))?;
+        ?;
 
     let topic = match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
         Some(t) => t,

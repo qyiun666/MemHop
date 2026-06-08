@@ -8,10 +8,13 @@
 //! even when dense-vector similarity alone might miss them.
 
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
+use std::sync::Mutex;
 
 use crate::error::{MemHopError, Result};
 use heed::types::{Bytes, Str};
 use heed::{RoTxn, RwTxn};
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
 
 /// BM25 parameters (Okapi BM25).
@@ -373,6 +376,27 @@ impl HnswIndex {
         results
     }
 
+    /// v0.24.0: 计算两个向量的余弦相似度
+    pub fn cosine_similarity(&self, a: &[half::f16], b: &[half::f16]) -> f32 {
+        if a.len() != b.len() || a.is_empty() {
+            return 0.0;
+        }
+
+        let mut dot = 0.0f32;
+        let mut norm_a = 0.0f32;
+        let mut norm_b = 0.0f32;
+
+        for i in 0..a.len() {
+            let va = a[i].to_f32();
+            let vb = b[i].to_f32();
+            dot += va * vb;
+            norm_a += va * va;
+            norm_b += vb * vb;
+        }
+
+        dot / (norm_a.sqrt() * norm_b.sqrt() + 1e-8)
+    }
+
     pub fn len(&self) -> usize {
         self.index.len()
     }
@@ -635,13 +659,14 @@ mod tests {
     }
 }
 
-// ── SparseIndexV2 (LMDB-backed forward index) ──────────────
+// ── SparseIndexV2 (LMDB-backed forward index with LRU cache) ──────────────
 
-/// v0.23.0: Sparse inverted index with forward index stored in LMDB.
+/// v0.24.0: Sparse inverted index with forward index stored in LMDB + LRU cache.
 /// 
 /// Forward index (memory_id → sparse weights) is stored in LMDB to reduce RAM usage.
 /// Inverted index (ngram → memory_ids) remains in memory for fast lookup.
 /// Doc length map remains in memory for BM25 normalization.
+/// LRU cache reduces LMDB I/O for frequently accessed forward entries.
 pub struct SparseIndexV2 {
     /// ngram → set of memory_ids containing this ngram (in memory)
     inverted: HashMap<String, HashSet<String>>,
@@ -649,15 +674,30 @@ pub struct SparseIndexV2 {
     doc_len: HashMap<String, usize>,
     /// LMDB database for forward index (memory_id → serialized sparse weights)
     forward_db: Option<heed::Database<Str, Bytes>>,
+    /// LRU cache for forward index entries (reduces LMDB I/O)
+    /// Default: 10000 entries (uses ~1MB RAM for typical sparse vectors)
+    forward_cache: Mutex<LruCache<String, HashMap<String, f32>>>,
 }
 
 impl SparseIndexV2 {
     /// Create a new SparseIndexV2 with optional LMDB forward database.
+    /// Uses LRU cache with 10000 entries to reduce LMDB I/O.
     pub fn new(forward_db: Option<heed::Database<Str, Bytes>>) -> Self {
         SparseIndexV2 {
             inverted: HashMap::new(),
             doc_len: HashMap::new(),
             forward_db,
+            forward_cache: Mutex::new(LruCache::new(NonZeroUsize::new(10000).unwrap())),
+        }
+    }
+
+    /// Create with custom cache size (for testing or memory-constrained environments).
+    pub fn with_cache_size(forward_db: Option<heed::Database<Str, Bytes>>, cache_size: usize) -> Self {
+        SparseIndexV2 {
+            inverted: HashMap::new(),
+            doc_len: HashMap::new(),
+            forward_db,
+            forward_cache: Mutex::new(LruCache::new(NonZeroUsize::new(cache_size.max(1)).unwrap())),
         }
     }
 
@@ -700,6 +740,11 @@ impl SparseIndexV2 {
     pub fn remove(&mut self, id: &str, wtxn: &mut RwTxn<'_>) -> Result<()> {
         self.doc_len.remove(id);
 
+        // Remove from LRU cache
+        if let Ok(mut cache) = self.forward_cache.lock() {
+            cache.pop(id);
+        }
+
         // Remove from LMDB forward index
         if let Some(db) = self.forward_db {
             // Get old sparse weights to clean up inverted index
@@ -740,13 +785,27 @@ impl SparseIndexV2 {
         self.add(id, sparse, doc_length, wtxn)
     }
 
-    /// Load forward index from LMDB for a specific memory.
+    /// Load forward index from LRU cache or LMDB.
+    /// Uses LRU cache to reduce LMDB I/O for frequently accessed entries.
     fn load_forward(&self, id: &str, rtxn: &RoTxn<'_>) -> Result<Option<HashMap<String, f32>>> {
+        // Check LRU cache first
+        if let Ok(mut cache) = self.forward_cache.lock()
+            && let Some(sparse) = cache.get(id) {
+                return Ok(Some(sparse.clone()));
+        }
+
+        // Cache miss: load from LMDB
         if let Some(db) = self.forward_db {
             match db.get(rtxn, id) {
                 Ok(Some(bytes)) => {
                     let sparse: HashMap<String, f32> = bincode::deserialize(bytes)
                         .map_err(|e| MemHopError::Internal(format!("deserialize sparse: {}", e)))?;
+                    
+                    // Store in LRU cache
+                    if let Ok(mut cache) = self.forward_cache.lock() {
+                        cache.put(id.to_string(), sparse.clone());
+                    }
+                    
                     Ok(Some(sparse))
                 }
                 Ok(None) => Ok(None),
@@ -755,6 +814,31 @@ impl SparseIndexV2 {
         } else {
             Ok(None)
         }
+    }
+
+    /// Bulk preload forward index for multiple IDs (reduces LMDB I/O).
+    /// Used before batch search operations.
+    pub fn preload_forward(&self, ids: &[String], rtxn: &RoTxn<'_>) -> Result<()> {
+        if let Some(db) = self.forward_db {
+            let mut cache = self.forward_cache.lock()
+                .map_err(|e| MemHopError::Internal(format!("lock cache: {}", e)))?;
+            
+            for id in ids {
+                if cache.contains(id) {
+                    continue;
+                }
+                match db.get(rtxn, id.as_str()) {
+                    Ok(Some(bytes)) => {
+                        let sparse: HashMap<String, f32> = bincode::deserialize(bytes)
+                            .map_err(|e| MemHopError::Internal(format!("deserialize sparse: {}", e)))?;
+                        cache.put(id.clone(), sparse);
+                    }
+                    Ok(None) => {}
+                    Err(e) => return Err(MemHopError::Storage(format!("get forward: {}", e))),
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Coarse screening: given query's sparse weights, return candidate IDs
@@ -868,6 +952,11 @@ impl SparseIndexV2 {
     /// Rebuild inverted index and doc_len from LMDB forward database.
     /// Used during startup to restore in-memory state.
     pub fn rebuild_from_lmdb(&mut self, rtxn: &RoTxn<'_>) -> Result<()> {
+        // Clear cache on rebuild
+        if let Ok(mut cache) = self.forward_cache.lock() {
+            cache.clear();
+        }
+        
         if let Some(db) = self.forward_db {
             let iter = db.iter(rtxn)
                 .map_err(|e| MemHopError::Storage(format!("iter forward: {}", e)))?;
@@ -895,6 +984,15 @@ impl SparseIndexV2 {
             }
         }
         Ok(())
+    }
+
+    /// Get cache statistics (for monitoring).
+    pub fn cache_stats(&self) -> (usize, usize) {
+        if let Ok(cache) = self.forward_cache.lock() {
+            (cache.len(), cache.cap().get())
+        } else {
+            (0, 0)
+        }
     }
 }
 

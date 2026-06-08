@@ -47,7 +47,7 @@ impl L2TopicGraph {
         let txn = env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         // 尝试从持久化加载
         if let Ok(Some(bytes)) = env.topic_vector_index.get(&txn, VECTOR_INDEX_KEY)
             && let Some(idx) = HnswIndex::from_bytes(bytes)
@@ -87,7 +87,8 @@ impl L2TopicGraph {
         let bytes = self.topic_vectors.to_bytes();
         env.topic_vector_index
             .put(wtxn, VECTOR_INDEX_KEY, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))
+            .map_err(|e| MemHopError::Storage(format!("persist topic vectors: {}", e)))?;
+        Ok(())
     }
 
     /// 计算并更新 topic 的 centroid（所有成员 node 向量均值）。
@@ -124,15 +125,15 @@ impl L2TopicGraph {
         if let Some(bytes) = env
             .topics
             .get(wtxn, &key)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
             && let Ok(mut t) = bincode::deserialize::<Topic>(bytes)
         {
             t.centroid = centroid.clone();
             let new_bytes =
-                bincode::serialize(&t).map_err(|e| MemHopError::Storage(e.to_string()))?;
+                bincode::serialize(&t)?;
             env.topics
                 .put(wtxn, &key, &new_bytes)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
         }
 
         // 更新向量索引
@@ -158,7 +159,7 @@ impl L2TopicGraph {
         if let Some(bytes) = env
             .topics
             .get(wtxn, &lookup_key)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
             && let Ok(topic_id) = bincode::deserialize::<String>(bytes)
         {
             return Ok((topic_id, false)); // 已存在
@@ -185,15 +186,15 @@ impl L2TopicGraph {
             domain_weights: HashMap::new(),
             node_weights: HashMap::new(),
         };
-        let bytes = bincode::serialize(&topic).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let bytes = bincode::serialize(&topic)?;
         env.topics
             .put(wtxn, &meta_key, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         // 写 label→id 映射
-        let id_bytes = bincode::serialize(&id).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let id_bytes = bincode::serialize(&id)?;
         env.topics
             .put(wtxn, &lookup_key, &id_bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok((id, true)) // 新创建
     }
 
@@ -207,10 +208,10 @@ impl L2TopicGraph {
         match env
             .topics
             .get(txn, &key)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
         {
             Some(bytes) => Ok(Some(
-                bincode::deserialize(bytes).map_err(|e| MemHopError::Storage(e.to_string()))?,
+                bincode::deserialize(bytes)?,
             )),
             None => Ok(None),
         }
@@ -228,7 +229,7 @@ impl L2TopicGraph {
         if let Some(bytes) = env
             .topics
             .get(wtxn, &key)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
             && let Ok(mut topic) = bincode::deserialize::<Topic>(bytes)
         {
             // 实际追加 node_id（修复#6: 之前被忽略）
@@ -237,10 +238,10 @@ impl L2TopicGraph {
             }
             topic.updated_at = chrono::Utc::now().timestamp_millis();
             let bytes =
-                bincode::serialize(&topic).map_err(|e| MemHopError::Storage(e.to_string()))?;
+                bincode::serialize(&topic)?;
             env.topics
                 .put(wtxn, &key, &bytes)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
         }
         Ok(())
     }
@@ -285,10 +286,10 @@ impl L2TopicGraph {
             weight,
             created_at: chrono::Utc::now().timestamp_millis(),
         };
-        let bytes = bincode::serialize(&edge).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let bytes = bincode::serialize(&edge)?;
         env.topic_edges
             .put(wtxn, &key, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok(())
     }
 }

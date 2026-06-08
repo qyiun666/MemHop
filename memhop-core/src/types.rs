@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::error::{MemHopError, Result};
+
 // ── Layer 枚举 ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -32,6 +34,182 @@ pub enum HyperedgeKind {
     Contradiction,
     Merged,
     Partition,
+}
+
+// ── Emotion (v0.24.0) ──────────────────────────────────────
+
+/// Ekman 6 类基础情感 + Neutral
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+pub enum Emotion {
+    Joy,
+    Sadness,
+    Anger,
+    Fear,
+    Surprise,
+    Disgust,
+    #[default]
+    Neutral,
+}
+
+/// 情感维度（完整情感标签）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmotionalDimension {
+    pub emotion: Emotion,
+    pub intensity: f32,
+    pub valence: f32,
+    pub arousal: f32,
+}
+
+impl Default for EmotionalDimension {
+    fn default() -> Self {
+        EmotionalDimension {
+            emotion: Emotion::Neutral,
+            intensity: 0.0,
+            valence: 0.0,
+            arousal: 0.0,
+        }
+    }
+}
+
+impl EmotionalDimension {
+    /// 验证情感维度字段均在合法范围内且非 NaN/Inf。
+    pub fn validate(&self) -> Result<()> {
+        if !self.intensity.is_finite() || !(0.0..=1.0).contains(&self.intensity) {
+            return Err(MemHopError::InvalidArgument(
+                "EmotionalDimension.intensity must be finite and in [0.0, 1.0]".into(),
+            ));
+        }
+        if !self.valence.is_finite() || !(-1.0..=1.0).contains(&self.valence) {
+            return Err(MemHopError::InvalidArgument(
+                "EmotionalDimension.valence must be finite and in [-1.0, 1.0]".into(),
+            ));
+        }
+        if !self.arousal.is_finite() || !(0.0..=1.0).contains(&self.arousal) {
+            return Err(MemHopError::InvalidArgument(
+                "EmotionalDimension.arousal must be finite and in [0.0, 1.0]".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 情感反馈请求
+#[derive(Debug, Clone)]
+pub struct EmotionalFeedback {
+    pub memory_id: String,
+    pub emotion: Emotion,
+    pub intensity: f32,
+    pub reason: Option<String>,
+}
+
+impl EmotionalFeedback {
+    /// 验证 intensity 在 [0.0, 1.0] 且非 NaN/Inf，memory_id 非空。
+    pub fn validate(&self) -> Result<()> {
+        if !self.intensity.is_finite() || !(0.0..=1.0).contains(&self.intensity) {
+            return Err(MemHopError::InvalidArgument(
+                "EmotionalFeedback.intensity must be finite and in [0.0, 1.0]".into(),
+            ));
+        }
+        if self.memory_id.is_empty() {
+            return Err(MemHopError::InvalidArgument(
+                "EmotionalFeedback.memory_id must not be empty".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// 按情感检索请求
+#[derive(Debug, Clone)]
+pub struct EmotionRecallRequest {
+    pub emotion: Option<Emotion>,
+    pub min_intensity: f32,
+    pub time_decay_lambda: Option<f32>,
+    pub max_results: usize,
+}
+
+impl Default for EmotionRecallRequest {
+    fn default() -> Self {
+        EmotionRecallRequest {
+            emotion: None,
+            min_intensity: 0.0,
+            time_decay_lambda: None,
+            max_results: 10,
+        }
+    }
+}
+
+impl EmotionRecallRequest {
+    /// 验证 max_results ≤ 1000，min_intensity 在 [0.0, 1.0] 且非 NaN/Inf，
+    /// time_decay_lambda 若 Some 则 ≥ 0.0 且非 NaN/Inf。
+    pub fn validate(&self) -> Result<()> {
+        if self.max_results > 1000 {
+            return Err(MemHopError::InvalidArgument(
+                "EmotionRecallRequest.max_results must be ≤ 1000".into(),
+            ));
+        }
+        if !self.min_intensity.is_finite() || !(0.0..=1.0).contains(&self.min_intensity) {
+            return Err(MemHopError::InvalidArgument(
+                "EmotionRecallRequest.min_intensity must be finite and in [0.0, 1.0]".into(),
+            ));
+        }
+        if let Some(v) = self.time_decay_lambda
+            && (!v.is_finite() || v < 0.0)
+        {
+            return Err(MemHopError::InvalidArgument(
+                "EmotionRecallRequest.time_decay_lambda must be finite and ≥ 0.0"
+                    .into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+// ── L3 Crystallization (v0.24.0) ─────────────────────────────
+
+/// L3 结晶化请求：从 L2 话题提炼高层知识写入 L3
+#[derive(Debug, Clone)]
+pub struct CrystallizeL3Request {
+    pub topic_id: String,
+    pub summary: String,
+    pub keywords: Vec<String>,
+    pub domain_name: Option<String>,
+}
+
+impl CrystallizeL3Request {
+    /// 验证 topic_id 和 summary 非空，keywords 非空且 ≤ 100 个。
+    pub fn validate(&self) -> Result<()> {
+        if self.topic_id.is_empty() {
+            return Err(MemHopError::InvalidArgument(
+                "CrystallizeL3Request.topic_id must not be empty".into(),
+            ));
+        }
+        if self.summary.is_empty() {
+            return Err(MemHopError::InvalidArgument(
+                "CrystallizeL3Request.summary must not be empty".into(),
+            ));
+        }
+        if self.keywords.is_empty() {
+            return Err(MemHopError::InvalidArgument(
+                "CrystallizeL3Request.keywords must not be empty".into(),
+            ));
+        }
+        if self.keywords.len() > 100 {
+            return Err(MemHopError::InvalidArgument(
+                "CrystallizeL3Request.keywords length must be ≤ 100".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// L3 结晶化结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrystallizeL3Report {
+    pub domain_id: String,
+    pub domain_name: String,
+    pub l3_nodes_created: u32,
+    pub topic_linked: bool,
 }
 
 // ── HyperedgeSnapshot ──────────────────────────────────────
@@ -255,6 +433,8 @@ pub struct RecallRequest {
     /// v0.16.0: 时间衰减系数。score *= exp(-λ * hours_since_creation)。
     /// None = 不衰减。Some(0.001) ≈ 42 天半衰期。
     pub time_decay_lambda: Option<f32>,
+    /// v0.23.1: L3 Domain Router 最大域数量。None = 3。
+    pub l3_max_domains: Option<usize>,
 }
 
 impl Default for RecallRequest {
@@ -262,7 +442,7 @@ impl Default for RecallRequest {
         Self {
             query: String::new(),
             max_results: 10,
-            target_layers: vec![Layer::L1, Layer::L2, Layer::L4],
+            target_layers: vec![Layer::L1, Layer::L2],
             time_range: None,
             spread_depth: None,
             topic_filter: None,
@@ -272,6 +452,7 @@ impl Default for RecallRequest {
             l2_topic_id: None,
             session_id: None,
             time_decay_lambda: None,
+            l3_max_domains: None,
         }
     }
 }
@@ -354,6 +535,9 @@ pub struct RecallResult {
     pub topic_label: Option<String>,
     pub created_at: i64,
     pub version: u64,
+    /// v0.24.0: 情感维度
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emotion: Option<EmotionalDimension>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -451,5 +635,314 @@ pub struct StorageLayerInfo {
     pub used_bytes: u64,
     pub map_size: u64,
     pub usage_pct: f32,
+}
+
+// ── 类型转换函数（含 clamp 防御） ─────────────────────────────
+
+/// 情感反馈 → 内部结构（intensity 做 clamp 防御）。
+#[allow(dead_code)]
+pub fn emotional_feedback_to_memhop(feedback: &EmotionalFeedback) -> EmotionalFeedback {
+    EmotionalFeedback {
+        intensity: feedback.intensity.clamp(0.0, 1.0),
+        memory_id: feedback.memory_id.clone(),
+        emotion: feedback.emotion,
+        reason: feedback.reason.clone(),
+    }
+}
+
+/// 情感检索请求 → 内部结构（max_results 上限防御）。
+#[allow(dead_code)]
+pub fn emotion_recall_request_to_memhop(req: &EmotionRecallRequest) -> EmotionRecallRequest {
+    EmotionRecallRequest {
+        max_results: req.max_results.min(1000),
+        emotion: req.emotion,
+        min_intensity: req.min_intensity,
+        time_decay_lambda: req.time_decay_lambda,
+    }
+}
+
+// ── 单元测试 ──────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── EmotionalFeedback validate ──
+
+    #[test]
+    fn test_feedback_validate_ok() {
+        let fb = EmotionalFeedback {
+            memory_id: "mem_1".into(),
+            emotion: Emotion::Joy,
+            intensity: 0.5,
+            reason: None,
+        };
+        assert!(fb.validate().is_ok());
+    }
+
+    #[test]
+    fn test_feedback_nan_intensity_rejected() {
+        let fb = EmotionalFeedback {
+            memory_id: "mem_1".into(),
+            emotion: Emotion::Joy,
+            intensity: f32::NAN,
+            reason: None,
+        };
+        assert!(fb.validate().is_err());
+    }
+
+    #[test]
+    fn test_feedback_inf_intensity_rejected() {
+        let fb = EmotionalFeedback {
+            memory_id: "mem_1".into(),
+            emotion: Emotion::Joy,
+            intensity: f32::INFINITY,
+            reason: None,
+        };
+        assert!(fb.validate().is_err());
+    }
+
+    #[test]
+    fn test_feedback_neg_intensity_rejected() {
+        let fb = EmotionalFeedback {
+            memory_id: "mem_1".into(),
+            emotion: Emotion::Joy,
+            intensity: -0.1,
+            reason: None,
+        };
+        assert!(fb.validate().is_err());
+    }
+
+    #[test]
+    fn test_feedback_too_high_intensity_rejected() {
+        let fb = EmotionalFeedback {
+            memory_id: "mem_1".into(),
+            emotion: Emotion::Joy,
+            intensity: 1.5,
+            reason: None,
+        };
+        assert!(fb.validate().is_err());
+    }
+
+    #[test]
+    fn test_feedback_empty_memory_id_rejected() {
+        let fb = EmotionalFeedback {
+            memory_id: "".into(),
+            emotion: Emotion::Joy,
+            intensity: 0.5,
+            reason: None,
+        };
+        assert!(fb.validate().is_err());
+    }
+
+    // ── EmotionalDimension validate ──
+
+    #[test]
+    fn test_dimension_validate_ok() {
+        let d = EmotionalDimension {
+            emotion: Emotion::Joy,
+            intensity: 0.5,
+            valence: 0.3,
+            arousal: 0.7,
+        };
+        assert!(d.validate().is_ok());
+    }
+
+    #[test]
+    fn test_dimension_valence_too_high_rejected() {
+        let d = EmotionalDimension {
+            emotion: Emotion::Joy,
+            intensity: 0.5,
+            valence: 2.0,
+            arousal: 0.5,
+        };
+        assert!(d.validate().is_err());
+    }
+
+    #[test]
+    fn test_dimension_valence_too_low_rejected() {
+        let d = EmotionalDimension {
+            emotion: Emotion::Joy,
+            intensity: 0.5,
+            valence: -1.5,
+            arousal: 0.5,
+        };
+        assert!(d.validate().is_err());
+    }
+
+    #[test]
+    fn test_dimension_intensity_nan_rejected() {
+        let d = EmotionalDimension {
+            emotion: Emotion::Neutral,
+            intensity: f32::NAN,
+            valence: 0.0,
+            arousal: 0.0,
+        };
+        assert!(d.validate().is_err());
+    }
+
+    // ── EmotionRecallRequest validate ──
+
+    #[test]
+    fn test_recall_request_validate_ok() {
+        let req = EmotionRecallRequest {
+            emotion: Some(Emotion::Joy),
+            min_intensity: 0.3,
+            time_decay_lambda: Some(0.001),
+            max_results: 50,
+        };
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn test_recall_request_max_results_too_high_rejected() {
+        let req = EmotionRecallRequest {
+            emotion: None,
+            min_intensity: 0.0,
+            time_decay_lambda: None,
+            max_results: 99999,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_recall_request_min_intensity_nan_rejected() {
+        let req = EmotionRecallRequest {
+            emotion: None,
+            min_intensity: f32::NAN,
+            time_decay_lambda: None,
+            max_results: 10,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_recall_request_negative_lambda_rejected() {
+        let req = EmotionRecallRequest {
+            emotion: None,
+            min_intensity: 0.0,
+            time_decay_lambda: Some(-0.5),
+            max_results: 10,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_recall_request_lambda_nan_rejected() {
+        let req = EmotionRecallRequest {
+            emotion: None,
+            min_intensity: 0.0,
+            time_decay_lambda: Some(f32::NAN),
+            max_results: 10,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    // ── CrystallizeL3Request validate ──
+
+    #[test]
+    fn test_crystallize_validate_ok() {
+        let req = CrystallizeL3Request {
+            topic_id: "topic_1".into(),
+            summary: "test summary".into(),
+            keywords: vec!["kw1".into(), "kw2".into()],
+            domain_name: None,
+        };
+        assert!(req.validate().is_ok());
+    }
+
+    #[test]
+    fn test_crystallize_empty_topic_id_rejected() {
+        let req = CrystallizeL3Request {
+            topic_id: "".into(),
+            summary: "test".into(),
+            keywords: vec!["kw1".into()],
+            domain_name: None,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_crystallize_empty_summary_rejected() {
+        let req = CrystallizeL3Request {
+            topic_id: "topic_1".into(),
+            summary: "".into(),
+            keywords: vec!["kw1".into()],
+            domain_name: None,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_crystallize_empty_keywords_rejected() {
+        let req = CrystallizeL3Request {
+            topic_id: "topic_1".into(),
+            summary: "test".into(),
+            keywords: vec![],
+            domain_name: None,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    #[test]
+    fn test_crystallize_too_many_keywords_rejected() {
+        let req = CrystallizeL3Request {
+            topic_id: "topic_1".into(),
+            summary: "test".into(),
+            keywords: (0..101).map(|i| format!("kw{}", i)).collect(),
+            domain_name: None,
+        };
+        assert!(req.validate().is_err());
+    }
+
+    // ── 转换函数 ──
+
+    #[test]
+    fn test_emotional_feedback_to_memhop_clamps_intensity() {
+        let fb = EmotionalFeedback {
+            memory_id: "mem_1".into(),
+            emotion: Emotion::Joy,
+            intensity: 1.5,
+            reason: None,
+        };
+        let converted = emotional_feedback_to_memhop(&fb);
+        assert!((converted.intensity - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_emotional_feedback_to_memhop_negative_clamp() {
+        let fb = EmotionalFeedback {
+            memory_id: "mem_1".into(),
+            emotion: Emotion::Sadness,
+            intensity: -0.5,
+            reason: None,
+        };
+        let converted = emotional_feedback_to_memhop(&fb);
+        assert!((converted.intensity - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_emotion_recall_request_to_memhop_caps_max_results() {
+        let req = EmotionRecallRequest {
+            emotion: None,
+            min_intensity: 0.0,
+            time_decay_lambda: None,
+            max_results: 99999,
+        };
+        let converted = emotion_recall_request_to_memhop(&req);
+        assert_eq!(converted.max_results, 1000);
+    }
+
+    #[test]
+    fn test_emotion_recall_request_to_memhop_keeps_reasonable() {
+        let req = EmotionRecallRequest {
+            emotion: Some(Emotion::Joy),
+            min_intensity: 0.3,
+            time_decay_lambda: Some(0.001),
+            max_results: 50,
+        };
+        let converted = emotion_recall_request_to_memhop(&req);
+        assert_eq!(converted.max_results, 50);
+    }
 }
 

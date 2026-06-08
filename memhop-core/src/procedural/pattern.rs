@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::brain::Brain;
 use crate::engram::Hyperedge;
-use crate::error::{MemHopError, Result};
+use crate::error::Result;
 use crate::types::{ChainCluster, CrystalStep, CrystalType, ProceduralCrystal};
 
 // ── 辅助函数 ────────────────────────────────────────────────
@@ -119,7 +119,7 @@ pub fn extract_steps(brain: &mut Brain, chain_ids: &[String]) -> Result<Vec<Crys
     let txn = l1_env
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     // 收集所有超边的 (label, node_ids) 对
     let mut entries: Vec<(String, Vec<String>)> = Vec::new();
@@ -129,7 +129,7 @@ pub fn extract_steps(brain: &mut Brain, chain_ids: &[String]) -> Result<Vec<Crys
             match l1_env
                 .hyperedges
                 .get(&txn, cid)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?
+                ?
             {
                 Some(bytes) => {
                     if let Ok(he) = bincode::deserialize::<Hyperedge>(bytes) {

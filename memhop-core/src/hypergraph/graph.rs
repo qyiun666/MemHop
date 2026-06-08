@@ -1,5 +1,5 @@
 use crate::engram::{Hyperedge, KnowledgeNode};
-use crate::error::{MemHopError, Result};
+use crate::error::Result;
 use crate::index::{MemHopHnswConfig, HnswIndex, SparseIndexV2};
 use crate::lmdb::L1Env;
 use crate::types::{HyperedgeKind, Layer, NodeSource};
@@ -50,7 +50,7 @@ impl L1Hypergraph {
         let txn = env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         self.node_count = 0;
         self.bm25 = SparseIndexV2::new(Some(env.sparse_forward));
         if let Ok(iter) = env.nodes.iter(&txn) {
@@ -74,7 +74,7 @@ impl L1Hypergraph {
         let txn = env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         // v0.22.0: 复用初始配置（保留 for_scale 自适应参数），避免回退到 default。
         self.vector_index = if dim > 0 {
             HnswIndex::new_with_config(dim, self.config.clone())
@@ -136,10 +136,10 @@ impl L1Hypergraph {
             source,
         );
         node.importance = importance;
-        let bytes = bincode::serialize(&node).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let bytes = bincode::serialize(&node)?;
         env.nodes
             .put(wtxn, &id, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         self.bm25.add(&id, sparse, text.len(), wtxn)?;
         if !vector.is_empty() {
             self.vector_index.add(&id, &vector);
@@ -157,10 +157,10 @@ impl L1Hypergraph {
         match env
             .nodes
             .get(txn, id)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
         {
             Some(bytes) => Ok(Some(
-                bincode::deserialize(bytes).map_err(|e| MemHopError::Storage(e.to_string()))?,
+                bincode::deserialize(bytes)?,
             )),
             None => Ok(None),
         }
@@ -193,26 +193,26 @@ impl L1Hypergraph {
             chain_next: None,
             chain_label,
         };
-        let bytes = bincode::serialize(&he).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let bytes = bincode::serialize(&he)?;
         env.hyperedges
             .put(wtxn, &id, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
 
         for nid in &he.node_ids {
             let existing = env
                 .node_to_hyperedges
                 .get(wtxn, nid)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
             let mut ids: Vec<String> = match existing {
                 Some(b) => bincode::deserialize(b).unwrap_or_default(),
                 None => Vec::new(),
             };
             ids.push(id.clone());
             let bytes =
-                bincode::serialize(&ids).map_err(|e| MemHopError::Storage(e.to_string()))?;
+                bincode::serialize(&ids)?;
             env.node_to_hyperedges
                 .put(wtxn, nid, &bytes)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
         }
 
         // Update chain_prev's chain_next
@@ -223,10 +223,10 @@ impl L1Hypergraph {
             prev.chain_next = Some(id.clone());
             prev.updated_at = now;
             let bytes =
-                bincode::serialize(&prev).map_err(|e| MemHopError::Storage(e.to_string()))?;
+                bincode::serialize(&prev)?;
             env.hyperedges
                 .put(wtxn, prev_id, &bytes)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
         }
         Ok(id)
     }
@@ -240,10 +240,10 @@ impl L1Hypergraph {
         match env
             .hyperedges
             .get(txn, id)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
         {
             Some(bytes) => Ok(Some(
-                bincode::deserialize(bytes).map_err(|e| MemHopError::Storage(e.to_string()))?,
+                bincode::deserialize(bytes)?,
             )),
             None => Ok(None),
         }

@@ -26,4 +26,14 @@ pub trait Encoder: Send + Sync {
 mod ngram;
 pub use ngram::NgramEncoder;
 
+// ── CandleEncoder (语义向量, 384维) ──────────────────────────
+#[cfg(feature = "candle")]
+mod candle;
+#[cfg(feature = "candle")]
+pub use candle::CandleEncoder;
+
+// ── EncoderRouter (双编码器路由) ────────────────────────────
+mod router;
+pub use router::EncoderRouter;
+
 

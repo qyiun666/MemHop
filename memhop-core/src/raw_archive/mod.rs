@@ -1,5 +1,5 @@
 use crate::engram::RawDocument;
-use crate::error::{MemHopError, Result};
+use crate::error::Result;
 use crate::lmdb::L4Env;
 use half::f16;
 
@@ -60,32 +60,78 @@ impl L4RawArchive {
             history: Vec::new(),
             vector: vector.clone(),
         };
-        let bytes = bincode::serialize(&doc).map_err(|e| MemHopError::Storage(e.to_string()))?;
+        let bytes = bincode::serialize(&doc)?;
         env.docs
             .put(wtxn, &id, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         if let Some(tid) = turn_id {
             env.turn_index
                 .put(wtxn, tid, id.as_bytes())
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
         }
         if let Some(sid) = session_id {
             let skey = format!("session:{}", sid);
             let existing = env
                 .session_index
                 .get(wtxn, &skey)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
             let mut ids: Vec<String> = match existing {
                 Some(b) => bincode::deserialize(b).unwrap_or_default(),
                 None => Vec::new(),
             };
             ids.push(id.clone());
             let bytes =
-                bincode::serialize(&ids).map_err(|e| MemHopError::Storage(e.to_string()))?;
+                bincode::serialize(&ids)?;
             env.session_index
                 .put(wtxn, &skey, &bytes)
-                .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                ?;
         }
         Ok(id)
+    }
+
+    /// v0.23.1: 按 session_id 获取所有文档
+    pub fn get_by_session(
+        &self,
+        txn: &heed::RoTxn<'_>,
+        env: &L4Env,
+        session_id: &str,
+    ) -> Result<Vec<RawDocument>> {
+        let skey = format!("session:{}", session_id);
+        let ids: Vec<String> = match env
+            .session_index
+            .get(txn, &skey)
+            ?
+        {
+            Some(b) => bincode::deserialize(b).unwrap_or_default(),
+            None => return Ok(Vec::new()),
+        };
+
+        let mut docs = Vec::with_capacity(ids.len());
+        for id in &ids {
+            if let Ok(Some(bytes)) = env.docs.get(txn, id)
+                && let Ok(doc) = bincode::deserialize::<RawDocument>(bytes)
+            {
+                docs.push(doc);
+            }
+        }
+        Ok(docs)
+    }
+
+    /// v0.23.1: 按 topic 的 doc_ids 批量获取原文
+    pub fn get_by_ids(
+        &self,
+        txn: &heed::RoTxn<'_>,
+        env: &L4Env,
+        doc_ids: &[String],
+    ) -> Result<Vec<RawDocument>> {
+        let mut docs = Vec::with_capacity(doc_ids.len());
+        for id in doc_ids {
+            if let Ok(Some(bytes)) = env.docs.get(txn, id)
+                && let Ok(doc) = bincode::deserialize::<RawDocument>(bytes)
+            {
+                docs.push(doc);
+            }
+        }
+        Ok(docs)
     }
 }

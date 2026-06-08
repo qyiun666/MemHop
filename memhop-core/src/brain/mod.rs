@@ -16,9 +16,10 @@ use crate::session::SessionManager;
 use crate::topic_graph::L2TopicGraph;
 use crate::types::DreamConfig;
 use crate::types::{
-    ActivatedTopicInfo, BatchReport, BrainConfig, ConsolidateReport, CrystallizeReport, L0Profile,
-    L3PathInfo, ProceduralCrystal, RecallRequest, RecallResponse, ShelfDomain, ShelfMeta,
-    StoreBatch,
+    ActivatedTopicInfo, BatchReport, BrainConfig, ConsolidateReport, CrystallizeL3Report,
+    CrystallizeL3Request, CrystallizeReport, Emotion, EmotionalDimension, EmotionalFeedback,
+    EmotionRecallRequest, L0Profile, L3PathInfo, ProceduralCrystal, RecallRequest,
+    RecallResponse, ShelfDomain, ShelfMeta, StoreBatch,
 };
 
 /// MemHop v0.18.3 Brain — 6 层仿人脑记忆架构顶层 API。
@@ -40,6 +41,8 @@ pub struct Brain {
     pub encoder: Arc<Box<dyn Encoder>>,
     /// v0.23.0: 记忆激活管理器 (Active/Latent/Dormant)
     pub activation: Option<ActivationManager>,
+    /// v0.24.0: 情感内存索引 (Emotion → Node IDs)，启动时自动重建
+    pub emotion_index: HashMap<Emotion, Vec<String>>,
 }
 
 /// 预热单层结果。
@@ -75,6 +78,7 @@ impl Brain {
             session_mgr,
             encoder,
             activation: None,
+            emotion_index: HashMap::new(),
         })
     }
 
@@ -117,7 +121,7 @@ impl Brain {
         let txn = l1_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let node_count = l1_env.nodes.len(&txn).unwrap_or(0) as usize;
         drop(txn);
         let config = MemHopHnswConfig::for_scale(node_count);
@@ -126,10 +130,10 @@ impl Brain {
         let mut wtxn = l1_env
             .env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         l1.rebuild_bm25(l1_env, &mut wtxn)?;
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         l1.rebuild_vector_index(l1_env)
             .map_err(|e| MemHopError::Internal(format!("rebuild L1 vector index: {}", e)))?;
         let elapsed = _timer.elapsed();
@@ -142,6 +146,44 @@ impl Brain {
             self.activation = Some(ActivationManager::new(config));
         }
         self.l1 = Some(l1);
+
+        // v0.24.0: 首次加载时从 LMDB 重建情感索引
+        if self.emotion_index.is_empty() {
+            self.rebuild_emotion_index()?;
+        }
+
+        Ok(())
+    }
+
+    /// v0.24.0: 从 LMDB 全量重建情感索引（max_scan = 10,000）。
+    fn rebuild_emotion_index(&mut self) -> Result<()> {
+        const MAX_SCAN: usize = 10_000;
+        let l1_env = match self.l1_env.as_ref() {
+            Some(env) => env,
+            None => return Ok(()),
+        };
+        let txn = l1_env
+            .env
+            .read_txn()
+            ?;
+        let mut scanned = 0usize;
+        if let Ok(iter) = l1_env.nodes.iter(&txn) {
+            for item in iter {
+                if scanned >= MAX_SCAN {
+                    break;
+                }
+                if let Ok((_key, bytes)) = item
+                    && let Ok(node) =
+                        bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
+                {
+                    self.emotion_index
+                        .entry(node.emotion)
+                        .or_default()
+                        .push(node.id);
+                }
+                scanned += 1;
+            }
+        }
         Ok(())
     }
 
@@ -168,7 +210,7 @@ impl Brain {
         let txn = l2_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let topic_count = l2_env.topics.len(&txn).unwrap_or(0) as usize;
         drop(txn);
         let config = MemHopHnswConfig::for_scale(topic_count);
@@ -206,7 +248,7 @@ impl Brain {
         let txn = l3_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let node_count = l3_env.domain_nodes.len(&txn).unwrap_or(0) as usize;
         drop(txn);
         let config = MemHopHnswConfig::for_scale(node_count);
@@ -276,7 +318,7 @@ impl Brain {
         let txn = l0_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let l0 = self.l0.as_ref().unwrap();
         resp.l0_profile = l0.get_profile(&txn, l0_env)?;
         // 附带已激活 Topic 列表
@@ -302,6 +344,52 @@ impl Brain {
         &self.config
     }
 
+    /// v0.23.1: 按 session_id 获取 L4 原文文档
+    pub fn get_l4_by_session(&mut self, session_id: &str) -> Result<Vec<RawDocument>> {
+        self.ensure_l4()?;
+        let l4_env = self.l4_env.as_ref().unwrap();
+        let l4 = self.l4.as_ref().unwrap();
+        let txn = l4_env
+            .env
+            .read_txn()
+            ?;
+        l4.get_by_session(&txn, l4_env, session_id)
+    }
+
+    /// v0.23.1: 按 topic_id 获取关联的 L4 原文文档
+    /// 先从 L2 获取 topic 的 node_ids，再从 L4 获取对应的文档
+    pub fn get_l4_by_topic(&mut self, topic_id: &str) -> Result<Vec<RawDocument>> {
+        // 1. 从 L2 获取 topic 的 node_ids
+        self.ensure_l2()?;
+        let l2 = self.l2.as_ref().unwrap();
+        let l2_env = self.l2_env.as_ref().unwrap();
+        let txn = l2_env
+            .env
+            .read_txn()
+            ?;
+        let topic = l2.get_topic_by_id(&txn, l2_env, topic_id)?;
+        drop(txn);
+
+        let topic = match topic {
+            Some(t) => t,
+            None => return Ok(Vec::new()),
+        };
+
+        // 2. 如果 topic 有 doc_ids，从 L4 获取
+        if topic.doc_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        self.ensure_l4()?;
+        let l4_env = self.l4_env.as_ref().unwrap();
+        let l4 = self.l4.as_ref().unwrap();
+        let txn = l4_env
+            .env
+            .read_txn()
+            ?;
+        l4.get_by_ids(&txn, l4_env, &topic.doc_ids)
+    }
+
     /// 获取 L0 角色画像
     pub fn get_l0_profile(&mut self) -> Result<Option<L0Profile>> {
         self.ensure_l0_env()?;
@@ -309,7 +397,7 @@ impl Brain {
         let txn = l0_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let l0 = self.l0.as_ref().unwrap();
         l0.get_profile(&txn, l0_env)
     }
@@ -329,7 +417,7 @@ impl Brain {
         let env = l0_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         // 读取现有 profile 或创建新的
         let l0 = self.l0.as_ref().unwrap();
         let mut profile = l0
@@ -355,7 +443,7 @@ impl Brain {
         profile.updated_at = chrono::Utc::now().timestamp_millis();
         l0.update_profile(&mut wtxn, l0_env, &profile)?;
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok(())
     }
 
@@ -375,7 +463,7 @@ impl Brain {
         let env = l0_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let l0 = self.l0.as_ref().unwrap();
         let mut profile = l0
             .get_profile(&wtxn, l0_env)?
@@ -403,7 +491,7 @@ impl Brain {
         profile.version += 1;
         l0.update_profile(&mut wtxn, l0_env, &profile)?;
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok(())
     }
 
@@ -420,12 +508,12 @@ impl Brain {
         let env = l2_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let key = format!("topic:{}:meta", topic_id);
         match l2_env
             .topics
             .get(&wtxn, &key)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
         {
             Some(bytes) => {
                 if let Ok(mut topic) = bincode::deserialize::<crate::engram::Topic>(bytes) {
@@ -440,11 +528,11 @@ impl Brain {
                     }
                     topic.updated_at = chrono::Utc::now().timestamp_millis();
                     let new_bytes = bincode::serialize(&topic)
-                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                        ?;
                     l2_env
                         .topics
                         .put(&mut wtxn, &key, &new_bytes)
-                        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+                        ?;
                 }
             }
             None => {
@@ -455,7 +543,7 @@ impl Brain {
             }
         }
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok(())
     }
 
@@ -483,14 +571,14 @@ impl Brain {
         let txn = l4_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         match l4_env
             .docs
             .get(&txn, doc_id)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
         {
             Some(bytes) => Ok(Some(
-                bincode::deserialize(bytes).map_err(|e| MemHopError::Storage(e.to_string()))?,
+                bincode::deserialize(bytes)?,
             )),
             None => Ok(None),
         }
@@ -503,7 +591,7 @@ impl Brain {
         let txn = l3_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let mut paths = Vec::new();
         if let Ok(iter) = l3_env.domain_meta.iter(&txn) {
             for item in iter {
@@ -529,7 +617,7 @@ impl Brain {
         let txn = l2_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let mut topics = Vec::new();
         if let Ok(iter) = l2_env.topics.iter(&txn) {
             for (key, bytes) in iter.flatten() {
@@ -556,16 +644,16 @@ impl Brain {
         let txn = l2_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let key = format!("topic:{}:meta", topic_id);
         match l2_env
             .topics
             .get(&txn, &key)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
         {
             Some(bytes) => Ok(Some(
                 bincode::deserialize(bytes)
-                    .map_err(|e| MemHopError::Storage(e.to_string()))?,
+                    ?,
             )),
             None => Ok(None),
         }
@@ -580,7 +668,7 @@ impl Brain {
         let txn = l0_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let l0 = self.l0.as_ref().unwrap();
         resp.l0_profile = l0.get_profile(&txn, l0_env)?;
         resp.activated_topics = self.session_mgr.get_active_list();
@@ -596,15 +684,15 @@ impl Brain {
         let env = l5_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let bytes = bincode::serialize(crystal)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         l5_env
             .crystals
             .put(&mut wtxn, &crystal.id, &bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok(())
     }
 
@@ -615,15 +703,15 @@ impl Brain {
         let txn = l5_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         match l5_env
             .crystals
             .get(&txn, id)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?
+            ?
         {
             Some(bytes) => Ok(Some(
                 bincode::deserialize(bytes)
-                    .map_err(|e| MemHopError::Storage(e.to_string()))?,
+                    ?,
             )),
             None => Ok(None),
         }
@@ -636,7 +724,7 @@ impl Brain {
         let txn = l5_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let mut crystals = Vec::new();
         if let Ok(iter) = l5_env.crystals.iter(&txn) {
             for (_key, bytes) in iter.flatten() {
@@ -656,7 +744,7 @@ impl Brain {
         let txn = l5_env
             .env
             .read_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let mut matched = Vec::new();
         if let Ok(iter) = l5_env.crystals.iter(&txn) {
             for (_key, bytes) in iter.flatten() {
@@ -817,7 +905,7 @@ impl Brain {
         let env = l0_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         let l0 = self.l0.as_ref().unwrap();
         let mut existing = l0
             .get_profile(&wtxn, l0_env)?
@@ -837,7 +925,7 @@ impl Brain {
         existing.updated_at = chrono::Utc::now().timestamp_millis();
         l0.update_profile(&mut wtxn, l0_env, &existing)?;
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         Ok(())
     }
 
@@ -907,5 +995,585 @@ impl Brain {
         }
 
         stats
+    }
+
+    // ── v0.24.0: L3 结晶化 ──────────────────────────────────────
+
+    /// 将 L2 话题"结晶"为 L3 高层领域知识。
+    /// meowAgent 负责 LLM 总结生成 summary + keywords；
+    /// MemHop 负责创建/更新 L3 domain 节点、更新 L2 的 linked_domain_ids。
+    pub fn crystallize_l3(&mut self, req: &CrystallizeL3Request) -> Result<CrystallizeL3Report> {
+        req.validate()?;
+        // 1. 验证 topic 存在
+        self.ensure_l2()?;
+        let topic = {
+            let l2_env = self.l2_env.as_ref().unwrap();
+            let txn = l2_env
+                .env
+                .read_txn()
+                ?;
+            self.l2
+                .as_ref()
+                .unwrap()
+                .get_topic_by_id(&txn, l2_env, &req.topic_id)?
+                .ok_or_else(|| MemHopError::NotFound(format!("topic {}", req.topic_id)))?
+        };
+
+        let domain_name = req
+            .domain_name
+            .clone()
+            .unwrap_or_else(|| topic.label.clone());
+        let domain_id = format!("crystallized_{}", req.topic_id);
+
+        // 2. 创建/获取 L3 domain
+        self.ensure_l3()?;
+        let l3 = self.l3.as_mut().unwrap();
+        let l3_env = self.l3_env.as_ref().unwrap();
+        let env = l3_env.env.clone();
+        let mut wtxn = env
+            .write_txn()
+            ?;
+
+        let meta_key = format!("meta:{}", domain_id);
+        if l3_env
+            .domain_meta
+            .get(&wtxn, &meta_key)
+            ?
+            .is_none()
+        {
+            l3.mount_domain(&mut wtxn, l3_env, &domain_name)?;
+        }
+
+        // 3. 将 summary + keywords 编码后写入 L3 node
+        let encoded = self.encoder.encode(&req.summary);
+        let l3_node_id = crate::batch_store::unique_id("l3n");
+        l3.add_node_with_id(
+            &mut wtxn,
+            l3_env,
+            &l3_node_id,
+            &domain_id,
+            &req.summary,
+            &encoded.sparse,
+            "",
+            encoded.dense,
+        )?;
+        let mut l3_nodes_created = 1u32;
+
+        // 为每个 keyword 也写入 L3 node
+        for kw in &req.keywords {
+            let kw_encoded = self.encoder.encode(kw);
+            let kw_id = crate::batch_store::unique_id("l3n");
+            l3.add_node_with_id(
+                &mut wtxn,
+                l3_env,
+                &kw_id,
+                &domain_id,
+                kw,
+                &kw_encoded.sparse,
+                "",
+                kw_encoded.dense,
+            )?;
+            l3_nodes_created += 1;
+        }
+
+        wtxn.commit()
+            ?;
+
+        // 4. 更新 L2 topic 的 linked_domain_ids + domain_weights
+        let topic_linked = {
+            let _l2 = self.l2.as_mut().unwrap();
+            let l2_env = self.l2_env.as_ref().unwrap();
+            let env = l2_env.env.clone();
+            let mut wtxn = env
+                .write_txn()
+                ?;
+            let mut topic = topic;
+            if !topic.linked_domain_ids.contains(&domain_id) {
+                topic.linked_domain_ids.push(domain_id.clone());
+            }
+            let weight = topic
+                .domain_weights
+                .get(&domain_id)
+                .copied()
+                .unwrap_or(0.0);
+            topic
+                .domain_weights
+                .insert(domain_id.clone(), weight + 1.0);
+            topic.updated_at = chrono::Utc::now().timestamp_millis();
+            let key = format!("topic:{}:meta", &req.topic_id);
+            let bytes =
+                bincode::serialize(&topic)?;
+            l2_env
+                .topics
+                .put(&mut wtxn, &key, &bytes)
+                ?;
+            wtxn.commit()
+                ?;
+            true
+        };
+
+        Ok(CrystallizeL3Report {
+            domain_id,
+            domain_name,
+            l3_nodes_created,
+            topic_linked,
+        })
+    }
+
+    // ── v0.24.0: 情感系统 API ─────────────────────────────────────
+
+    /// 情感反馈 — 根据用户情感调节记忆 importance。
+    /// v0.24.0: 同步维护 emotion_index。
+    pub fn emotional_feedback(&mut self, feedback: &EmotionalFeedback) -> Result<()> {
+        feedback.validate()?;
+        self.ensure_l1()?;
+        let l1 = self.l1.as_mut().unwrap();
+        let l1_env = self.l1_env.as_ref().unwrap();
+        let env = l1_env.env.clone();
+        let mut wtxn = env
+            .write_txn()
+            ?;
+
+        if let Ok(Some(bytes)) = l1_env.nodes.get(&wtxn, &feedback.memory_id)
+            && let Ok(mut node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
+        {
+            let old_emotion = node.emotion;
+            // 根据情感类型计算 importance 调整
+            let delta = match feedback.emotion {
+                Emotion::Joy => feedback.intensity * 0.15,
+                Emotion::Sadness => feedback.intensity * 0.10,
+                Emotion::Anger => feedback.intensity * 0.05,
+                Emotion::Fear => feedback.intensity * 0.12,
+                Emotion::Surprise => feedback.intensity * 0.08,
+                Emotion::Disgust => -(feedback.intensity * 0.10),
+                Emotion::Neutral => 0.0,
+            };
+            node.importance = (node.importance + delta).clamp(0.0, 1.0);
+            node.emotion = feedback.emotion;
+            node.emotion_intensity = feedback.intensity;
+            node.updated_at = chrono::Utc::now().timestamp_millis();
+            let new_bytes =
+                bincode::serialize(&node)?;
+            l1_env
+                .nodes
+                .put(&mut wtxn, &feedback.memory_id, &new_bytes)
+                ?;
+            l1.vector_index.update(&feedback.memory_id, &node.vector);
+
+            // v0.24.0: 在 commit 前更新 emotion_index，确保崩溃重启后索引与 LMDB 一致
+            if old_emotion != feedback.emotion
+            {
+                // 从旧情感条目中移除
+                if let Some(ids) = self.emotion_index.get_mut(&old_emotion) {
+                    ids.retain(|id| id != &feedback.memory_id);
+                }
+                // 添加到新情感条目
+                self.emotion_index
+                    .entry(feedback.emotion)
+                    .or_default()
+                    .push(feedback.memory_id.clone());
+            }
+        } else {
+            // v0.24.0: 对不存在的 memory_id 返回 Err，与 get_emotion() 语义一致
+            return Err(MemHopError::NotFound(format!(
+                "emotion not found: {}",
+                feedback.memory_id
+            )));
+        }
+
+        wtxn.commit()
+            ?;
+
+        Ok(())
+    }
+
+    /// 获取记忆的情感维度。
+    ///
+    /// # 错误
+    /// - `MemHopError::NotFound` — memory_id 不存在
+    pub fn get_emotion(&mut self, memory_id: &str) -> Result<EmotionalDimension> {
+        self.ensure_l1()?;
+        let l1_env = self.l1_env.as_ref().unwrap();
+        let txn = l1_env
+            .env
+            .read_txn()
+            ?;
+        if let Ok(Some(bytes)) = l1_env.nodes.get(&txn, memory_id)
+            && let Ok(node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
+        {
+            return Ok(EmotionalDimension {
+                emotion: node.emotion,
+                intensity: node.emotion_intensity,
+                valence: node.valence,
+                arousal: node.arousal,
+            });
+        }
+        // v0.24.0: 对不存在的 memory_id 返回 Err 而非静默返回默认中性值
+        Err(MemHopError::NotFound(format!("emotion not found: {memory_id}")))
+    }
+
+    /// 按情感检索记忆。
+    /// v0.24.0: 使用 emotion_index 加速检索（O(N) → O(K)），硬编码 max_scan = 10000 防御 DoS。
+    pub fn recall_by_emotion(
+        &mut self,
+        req: &EmotionRecallRequest,
+    ) -> Result<RecallResponse> {
+        req.validate()?;
+        self.ensure_l1()?;
+        let l1_env = self.l1_env.as_ref().unwrap();
+        let txn = l1_env
+            .env
+            .read_txn()
+            ?;
+
+        const MAX_SCAN: usize = 10_000;
+        let mut results: Vec<crate::types::RecallResult> = Vec::new();
+
+        if let Some(target_emotion) = req.emotion {
+            // 快速路径：通过 emotion_index 直接定位候选节点
+            if let Some(candidate_ids) = self.emotion_index.get(&target_emotion) {
+                for memory_id in candidate_ids {
+                    if let Ok(Some(bytes)) = l1_env.nodes.get(&txn, memory_id.as_str())
+                        && let Ok(node) =
+                            bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
+                    {
+                        if node.emotion_intensity < req.min_intensity {
+                            continue;
+                        }
+                        // 时间衰减
+                        let hours_since =
+                            (chrono::Utc::now().timestamp_millis() - node.created_at) as f32
+                                / 3_600_000.0;
+                        let decay = req
+                            .time_decay_lambda
+                            .map(|lambda| (-lambda * hours_since).exp())
+                            .unwrap_or(1.0);
+                        let score = node.emotion_intensity * decay;
+                        results.push(crate::types::RecallResult {
+                            layer: crate::types::Layer::L1,
+                            id: node.id.clone(),
+                            text: node.text.clone(),
+                            score,
+                            topic_label: None,
+                            created_at: node.created_at,
+                            version: node.version,
+                            emotion: Some(EmotionalDimension {
+                                emotion: node.emotion,
+                                intensity: node.emotion_intensity,
+                                valence: node.valence,
+                                arousal: node.arousal,
+                            }),
+                        });
+                    }
+                }
+            }
+        } else {
+            // 慢速路径：全量扫描（无情感过滤时）
+            // ⚠️ 用单独的 scanned 计数器限制扫描总量，避免多数节点不满足
+            // min_intensity 时遍历整个数据库。
+            let mut scanned = 0usize;
+            if let Ok(iter) = l1_env.nodes.iter(&txn) {
+                for item in iter {
+                    if scanned >= MAX_SCAN {
+                        break;
+                    }
+                    scanned += 1;
+                    if let Ok((_key, bytes)) = item
+                        && let Ok(node) =
+                            bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
+                    {
+                        if node.emotion_intensity < req.min_intensity {
+                            continue;
+                        }
+                        // 时间衰减
+                        let hours_since =
+                            (chrono::Utc::now().timestamp_millis() - node.created_at) as f32
+                                / 3_600_000.0;
+                        let decay = req
+                            .time_decay_lambda
+                            .map(|lambda| (-lambda * hours_since).exp())
+                            .unwrap_or(1.0);
+                        let score = node.emotion_intensity * decay;
+                        results.push(crate::types::RecallResult {
+                            layer: crate::types::Layer::L1,
+                            id: node.id.clone(),
+                            text: node.text.clone(),
+                            score,
+                            topic_label: None,
+                            created_at: node.created_at,
+                            version: node.version,
+                            emotion: Some(EmotionalDimension {
+                                emotion: node.emotion,
+                                intensity: node.emotion_intensity,
+                                valence: node.valence,
+                                arousal: node.arousal,
+                            }),
+                        });
+                    }
+                }
+            }
+        }
+
+        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(req.max_results);
+
+        Ok(RecallResponse {
+            results,
+            total_count: 0,
+            l0_profile: None,
+            confidence: None,
+            activated_topics: Vec::new(),
+            recommended_crystals: Vec::new(),
+        })
+    }
+}
+
+// ── v0.24.0: 情感索引单元测试 ─────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::encoder::NgramEncoder;
+    use crate::types::{EmotionRecallRequest, StoreBatch, StoreItem};
+
+    /// 创建临时的测试用 Brain。
+    fn make_test_brain() -> Brain {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = BrainConfig {
+            brains_dir: tmp.path().to_str().unwrap().to_string(),
+            agent_id: "emotion_index_test".to_string(),
+        };
+        let encoder: Arc<Box<dyn Encoder>> =
+            Arc::new(Box::new(NgramEncoder::new(1024)));
+        Brain::open(cfg, encoder).unwrap()
+    }
+
+    /// 存储一个测试节点并返回其 ID。
+    fn store_test_node(brain: &mut Brain, text: &str) -> String {
+        let batch = StoreBatch {
+            items: vec![StoreItem {
+                text: text.to_string(),
+                source: "test".to_string(),
+                turn_id: None,
+                session_id: None,
+                topic_label: None,
+                llm_keywords: None,
+                llm_compressed_summary: None,
+                chain_parent_id: None,
+                chain_label: None,
+                domain_id: None,
+                importance: None,
+                valence: None,
+                arousal: None,
+            }],
+        };
+        let report = brain.batch_store(batch).unwrap();
+        report.engram_ids.get("0").cloned().unwrap()
+    }
+
+    #[test]
+    fn test_emotion_index_rebuild_on_ensure_l1() {
+        let mut brain = make_test_brain();
+        // L1 尚未初始化，emotion_index 为空
+        assert!(brain.emotion_index.is_empty());
+        // 触发 ensure_l1 → 内部重建空索引（LMDB 无数据）
+        brain.ensure_l1().unwrap();
+        assert!(brain.emotion_index.is_empty());
+    }
+
+    #[test]
+    fn test_emotional_feedback_updates_index() {
+        let mut brain = make_test_brain();
+        let node_id = store_test_node(&mut brain, "I love this world!");
+
+        // batch_store 已同步 emotion_index，节点默认情感为 Neutral
+        let neutral_ids = brain.emotion_index.get(&Emotion::Neutral).unwrap();
+        assert!(neutral_ids.contains(&node_id), "batch_store 后 Neutral 索引应包含节点");
+
+        // 情感反馈：Joy
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: node_id.clone(),
+                emotion: Emotion::Joy,
+                intensity: 0.9,
+                reason: None,
+            })
+            .unwrap();
+
+        // Joy 索引中应有该节点
+        let joy_ids = brain.emotion_index.get(&Emotion::Joy).unwrap();
+        assert!(joy_ids.contains(&node_id), "Joy 索引应包含节点");
+        // Neutral 索引中应已移除
+        let neutral_ids = brain.emotion_index.get(&Emotion::Neutral);
+        assert!(
+            neutral_ids.map_or(true, |ids| !ids.contains(&node_id)),
+            "Neutral 索引应已移除节点"
+        );
+
+        // 再次反馈改为 Sadness
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: node_id.clone(),
+                emotion: Emotion::Sadness,
+                intensity: 0.7,
+                reason: None,
+            })
+            .unwrap();
+
+        // Joy 索引中应已移除
+        let joy_ids = brain.emotion_index.get(&Emotion::Joy);
+        assert!(
+            joy_ids.map_or(true, |ids| !ids.contains(&node_id)),
+            "Joy 索引应已移除节点"
+        );
+        // Sadness 索引中应有该节点
+        let sad_ids = brain.emotion_index.get(&Emotion::Sadness).unwrap();
+        assert!(sad_ids.contains(&node_id), "Sadness 索引应包含节点");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_uses_index() {
+        let mut brain = make_test_brain();
+        let node_id = store_test_node(&mut brain, "What a wonderful day!");
+
+        // 设置情感为 Joy
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: node_id.clone(),
+                emotion: Emotion::Joy,
+                intensity: 0.8,
+                reason: None,
+            })
+            .unwrap();
+
+        // 按 Joy 检索
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Joy),
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+
+        assert_eq!(resp.results.len(), 1, "应找到 1 个 Joy 节点");
+        assert_eq!(resp.results[0].id, node_id);
+
+        // 按 Sadness 检索 → 应无结果
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Sadness),
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp.results.len(), 0, "不应找到 Sadness 节点");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_min_intensity() {
+        let mut brain = make_test_brain();
+        let node_id = store_test_node(&mut brain, "A mildly interesting fact.");
+
+        // 低强度情感：0.3
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: node_id.clone(),
+                emotion: Emotion::Surprise,
+                intensity: 0.3,
+                reason: None,
+            })
+            .unwrap();
+
+        // min_intensity = 0.5 → 不应匹配
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Surprise),
+                min_intensity: 0.5,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp.results.len(), 0, "min_intensity 过滤应生效");
+
+        // min_intensity = 0.2 → 应匹配
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Surprise),
+                min_intensity: 0.2,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp.results.len(), 1, "min_intensity=0.2 时应匹配");
+    }
+
+    #[test]
+    fn test_emotion_index_multi_node() {
+        let mut brain = make_test_brain();
+        let id1 = store_test_node(&mut brain, "I love this!");
+        let id2 = store_test_node(&mut brain, "So happy today!");
+        let id3 = store_test_node(&mut brain, "This makes me sad.");
+
+        // 设置情感
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id1,
+                emotion: Emotion::Joy,
+                intensity: 0.8,
+                reason: None,
+            })
+            .unwrap();
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id2,
+                emotion: Emotion::Joy,
+                intensity: 0.9,
+                reason: None,
+            })
+            .unwrap();
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id3,
+                emotion: Emotion::Sadness,
+                intensity: 0.7,
+                reason: None,
+            })
+            .unwrap();
+
+        // Joy 有 2 个节点
+        assert_eq!(
+            brain.emotion_index.get(&Emotion::Joy).unwrap().len(),
+            2,
+            "Joy 应有 2 个节点"
+        );
+        // Sadness 有 1 个节点
+        assert_eq!(
+            brain.emotion_index.get(&Emotion::Sadness).unwrap().len(),
+            1,
+            "Sadness 应有 1 个节点"
+        );
+    }
+
+    #[test]
+    fn test_recall_by_emotion_no_emotion_filter() {
+        let mut brain = make_test_brain();
+        store_test_node(&mut brain, "Node A");
+        store_test_node(&mut brain, "Node B");
+        store_test_node(&mut brain, "Node C");
+
+        // 无 emotion 过滤，走全量扫描路径
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: None,
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 100,
+            })
+            .unwrap();
+
+        // 应扫描到所有节点（Neutral 情感）
+        // 注意：新节点 emotion=Neutral, intensity=0.0，所以 score=0.0
+        assert!(resp.results.len() >= 3, "应返回至少 3 个节点");
     }
 }

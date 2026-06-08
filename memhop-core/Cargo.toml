@@ -12,6 +12,7 @@ default = []
 candle = ["candle-core", "candle-nn", "candle-transformers", "tokenizers"]
 bench = []
 bench-llm = ["bench"]  # LLM 集成测试 feature
+llm-api = ["reqwest"]  # LLM API 调用 feature
 
 [dependencies]
 heed = "0.20"
@@ -21,6 +22,8 @@ bincode = "1"
 half = { version = "2", features = ["serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 rand = "0.8"
+lru = "0.18.0"  # LRU cache for forward index optimization
+reqwest = { version = "0.12", features = ["json"], optional = true }  # HTTP client for LLM API
 
 # Candle dependencies (optional, for BERT encoding)
 candle-core = { version = "0.8", optional = true }

@@ -91,20 +91,20 @@ pub fn mount(
         l3_engram_ids: all_l3_engram_ids,
     };
     let meta_key = format!("shelf_meta:{}", domain_id);
-    let meta_bytes = bincode::serialize(&meta).map_err(|e| MemHopError::Storage(e.to_string()))?;
+    let meta_bytes = bincode::serialize(&meta)?;
     {
         brain.ensure_l3_env()?;
         let l3_env = brain.l3_env.as_ref().unwrap();
         let env = l3_env.env.clone();
         let mut wtxn = env
             .write_txn()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         l3_env
             .domain_meta
             .put(&mut wtxn, &meta_key, &meta_bytes)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
         wtxn.commit()
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
     Ok(meta)
@@ -118,13 +118,13 @@ pub fn unmount(brain: &mut Brain, domain_id: &str) -> Result<()> {
     let env = l3_env.env.clone();
     let mut wtxn = env
         .write_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     // Remove domain metadata
     l3_env
         .domain_meta
         .delete(&mut wtxn, &meta_key)
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
 
     // Remove all domain nodes with this domain_id prefix
     let prefix = format!("node:{}:", domain_id);
@@ -142,11 +142,11 @@ pub fn unmount(brain: &mut Brain, domain_id: &str) -> Result<()> {
         l3_env
             .domain_nodes
             .delete(&mut wtxn, key)
-            .map_err(|e| MemHopError::Storage(e.to_string()))?;
+            ?;
     }
 
     wtxn.commit()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     Ok(())
 }
 
@@ -157,7 +157,7 @@ pub fn list(brain: &mut Brain) -> Result<Vec<ShelfMeta>> {
     let txn = l3_env
         .env
         .read_txn()
-        .map_err(|e| MemHopError::Storage(e.to_string()))?;
+        ?;
     let mut results = Vec::new();
 
     if let Ok(iter) = l3_env.domain_meta.iter(&txn) {
