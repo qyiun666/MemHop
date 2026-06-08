@@ -11,6 +11,7 @@ crate-type = ["rlib"]
 default = []
 candle = ["candle-core", "candle-nn", "candle-transformers", "tokenizers"]
 bench = []
+bench-llm = ["bench"]  # LLM 集成测试 feature
 
 [dependencies]
 heed = "0.20"
@@ -54,5 +55,20 @@ required-features = ["bench"]
 
 [[bench]]
 name = "integration_bench"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "agent_e2e_bench"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "dataset_bench"
+harness = false
+required-features = ["bench"]
+
+[[bench]]
+name = "llm_integration_bench"
 harness = false
 required-features = ["bench"]
