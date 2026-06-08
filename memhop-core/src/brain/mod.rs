@@ -1576,4 +1576,442 @@ mod tests {
         // 注意：新节点 emotion=Neutral, intensity=0.0，所以 score=0.0
         assert!(resp.results.len() >= 3, "应返回至少 3 个节点");
     }
+
+    #[test]
+    fn test_recall_by_emotion_empty_db() {
+        // 空数据库：验证无记忆时返回空结果
+        let mut brain = make_test_brain();
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Joy),
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp.results.len(), 0, "空数据库应返回空结果");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_single_memory() {
+        // 单条记忆：验证只有一条记忆时的行为
+        let mut brain = make_test_brain();
+        let node_id = store_test_node(&mut brain, "A single memory.");
+
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: node_id.clone(),
+                emotion: Emotion::Joy,
+                intensity: 0.8,
+                reason: None,
+            })
+            .unwrap();
+
+        // 匹配情感检索
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Joy),
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp.results.len(), 1, "应找到单条记忆");
+        assert_eq!(resp.results[0].id, node_id);
+        assert!(
+            (resp.results[0].score - 0.8).abs() < 0.001,
+            "score 应约等于 intensity (0.8)，实际: {}",
+            resp.results[0].score
+        );
+
+        // 不匹配情感检索应无结果
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Sadness),
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp.results.len(), 0, "不匹配情感应返回空");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_max_results_zero() {
+        // max_results = 0：验证返回空结果
+        let mut brain = make_test_brain();
+        store_test_node(&mut brain, "Node A");
+        store_test_node(&mut brain, "Node B");
+
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: None,
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 0,
+            })
+            .unwrap();
+        assert_eq!(resp.results.len(), 0, "max_results=0 应返回空结果");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_max_results_1000() {
+        // max_results = 1000：验证上限不会拒绝合法输入
+        let mut brain = make_test_brain();
+        store_test_node(&mut brain, "Node A");
+
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: None,
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 1000,
+            })
+            .unwrap();
+        // 1000 是合法最大值，应通过验证并正常返回结果
+        assert!(
+            !resp.results.is_empty(),
+            "max_results=1000 应正常返回结果"
+        );
+    }
+
+    #[test]
+    fn test_recall_by_emotion_min_intensity_zero() {
+        // min_intensity = 0.0：验证所有情感都被返回
+        let mut brain = make_test_brain();
+        let id1 = store_test_node(&mut brain, "Low intensity joy");
+        let id2 = store_test_node(&mut brain, "High intensity joy");
+
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id1.clone(),
+                emotion: Emotion::Joy,
+                intensity: 0.1,
+                reason: None,
+            })
+            .unwrap();
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id2.clone(),
+                emotion: Emotion::Joy,
+                intensity: 0.9,
+                reason: None,
+            })
+            .unwrap();
+
+        // min_intensity = 0.0 应返回所有节点（0.1 >= 0.0, 0.9 >= 0.0）
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Joy),
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(
+            resp.results.len(),
+            2,
+            "min_intensity=0.0 应返回所有 Joy 节点"
+        );
+    }
+
+    #[test]
+    fn test_recall_by_emotion_min_intensity_one() {
+        // min_intensity = 1.0：验证只有最高强度的情感被返回
+        let mut brain = make_test_brain();
+        let id_medium = store_test_node(&mut brain, "Medium intensity");
+        let id_max = store_test_node(&mut brain, "Max intensity");
+
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id_medium.clone(),
+                emotion: Emotion::Joy,
+                intensity: 0.5,
+                reason: None,
+            })
+            .unwrap();
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id_max.clone(),
+                emotion: Emotion::Joy,
+                intensity: 1.0,
+                reason: None,
+            })
+            .unwrap();
+
+        // min_intensity = 1.0 应只返回 intensity >= 1.0 的节点
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Joy),
+                min_intensity: 1.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(
+            resp.results.len(),
+            1,
+            "min_intensity=1.0 应只返回最高强度节点"
+        );
+        assert!(
+            (resp.results[0].score - 1.0).abs() < 0.001,
+            "score 应为 1.0，实际: {}",
+            resp.results[0].score
+        );
+    }
+
+    #[test]
+    fn test_recall_by_emotion_time_decay_lambda_zero() {
+        // time_decay_lambda = 0.0：验证无时间衰减
+        let mut brain = make_test_brain();
+        let node_id = store_test_node(&mut brain, "Test decay zero");
+
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: node_id,
+                emotion: Emotion::Joy,
+                intensity: 0.7,
+                reason: None,
+            })
+            .unwrap();
+
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Joy),
+                min_intensity: 0.0,
+                time_decay_lambda: Some(0.0),
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp.results.len(), 1, "lambda=0.0 应返回结果");
+        // lambda=0.0 → decay=exp(0)=1.0 → score=intensity
+        let score_diff = (resp.results[0].score - 0.7).abs();
+        assert!(
+            score_diff < 0.001,
+            "lambda=0.0 时 score 应约等于 intensity (0.7)，实际: {}",
+            resp.results[0].score
+        );
+    }
+
+    #[test]
+    fn test_recall_by_emotion_time_decay_lambda_strong() {
+        // time_decay_lambda = 100.0：验证不会崩溃或产生非法值
+        let mut brain = make_test_brain();
+        let node_id = store_test_node(&mut brain, "Test strong decay");
+
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: node_id,
+                emotion: Emotion::Joy,
+                intensity: 0.9,
+                reason: None,
+            })
+            .unwrap();
+
+        let resp = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Joy),
+                min_intensity: 0.0,
+                time_decay_lambda: Some(100.0),
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp.results.len(), 1, "lambda=100.0 不应导致错误");
+        assert!(
+            resp.results[0].score.is_finite(),
+            "score 应为有限值，实际: {}",
+            resp.results[0].score
+        );
+        // score 应 <= intensity（时间衰减系数 <= 1.0）
+        assert!(
+            resp.results[0].score <= 0.9,
+            "强时间衰减下 score 应 <= intensity (0.9)，实际: {}",
+            resp.results[0].score
+        );
+    }
+
+    #[test]
+    fn test_recall_by_emotion_mixed_emotions() {
+        // 多种情感混合：验证不同情感的过滤和 min_intensity 筛选
+        let mut brain = make_test_brain();
+        let id_joy = store_test_node(&mut brain, "Happy memory");
+        let id_sad = store_test_node(&mut brain, "Sad memory");
+        let id_anger = store_test_node(&mut brain, "Angry memory");
+        let id_fear = store_test_node(&mut brain, "Fearful memory");
+
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id_joy.clone(),
+                emotion: Emotion::Joy,
+                intensity: 0.8,
+                reason: None,
+            })
+            .unwrap();
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id_sad.clone(),
+                emotion: Emotion::Sadness,
+                intensity: 0.7,
+                reason: None,
+            })
+            .unwrap();
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id_anger.clone(),
+                emotion: Emotion::Anger,
+                intensity: 0.9,
+                reason: None,
+            })
+            .unwrap();
+        brain
+            .emotional_feedback(&EmotionalFeedback {
+                memory_id: id_fear.clone(),
+                emotion: Emotion::Fear,
+                intensity: 0.5,
+                reason: None,
+            })
+            .unwrap();
+
+        // 仅检索 Joy
+        let resp_joy = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Joy),
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp_joy.results.len(), 1, "仅 Joy 情感应有 1 条结果");
+        assert_eq!(resp_joy.results[0].id, id_joy);
+
+        // 仅检索 Sadness
+        let resp_sad = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Sadness),
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp_sad.results.len(), 1, "仅 Sadness 情感应有 1 条结果");
+        assert_eq!(resp_sad.results[0].id, id_sad);
+
+        // 仅检索 Anger
+        let resp_anger = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: Some(Emotion::Anger),
+                min_intensity: 0.0,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(resp_anger.results.len(), 1, "仅 Anger 情感应有 1 条结果");
+        assert_eq!(resp_anger.results[0].id, id_anger);
+
+        // 用 min_intensity=0.7 做无情感过滤的全量扫描
+        // 应排除 Fear (intensity=0.5 < 0.7) 和 Neutral 节点 (intensity=0.0 < 0.7)
+        let resp_high = brain
+            .recall_by_emotion(&EmotionRecallRequest {
+                emotion: None,
+                min_intensity: 0.7,
+                time_decay_lambda: None,
+                max_results: 10,
+            })
+            .unwrap();
+        assert_eq!(
+            resp_high.results.len(),
+            3,
+            "min_intensity=0.7 应返回 3 条（Joy=0.8, Sadness=0.7, Anger=0.9）"
+        );
+
+        // 验证不包含 Fear
+        let fear_ids: Vec<&str> = resp_high
+            .results
+            .iter()
+            .map(|r| r.id.as_str())
+            .filter(|id| *id == id_fear)
+            .collect();
+        assert!(
+            fear_ids.is_empty(),
+            "Fear (intensity=0.5) 应被 min_intensity=0.7 过滤"
+        );
+    }
+
+    #[test]
+    fn test_recall_by_emotion_nan_min_intensity_rejected() {
+        // NaN/Inf 输入：验证验证层拒绝 min_intensity = NaN
+        let mut brain = make_test_brain();
+        let result = brain.recall_by_emotion(&EmotionRecallRequest {
+            emotion: Some(Emotion::Joy),
+            min_intensity: f32::NAN,
+            time_decay_lambda: None,
+            max_results: 10,
+        });
+        assert!(result.is_err(), "min_intensity=NaN 应被拒绝");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_inf_min_intensity_rejected() {
+        // NaN/Inf 输入：验证验证层拒绝 min_intensity = Inf
+        let mut brain = make_test_brain();
+        let result = brain.recall_by_emotion(&EmotionRecallRequest {
+            emotion: Some(Emotion::Joy),
+            min_intensity: f32::INFINITY,
+            time_decay_lambda: None,
+            max_results: 10,
+        });
+        assert!(result.is_err(), "min_intensity=Inf 应被拒绝");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_nan_lambda_rejected() {
+        // NaN/Inf 输入：验证验证层拒绝 time_decay_lambda = NaN
+        let mut brain = make_test_brain();
+        let result = brain.recall_by_emotion(&EmotionRecallRequest {
+            emotion: Some(Emotion::Joy),
+            min_intensity: 0.0,
+            time_decay_lambda: Some(f32::NAN),
+            max_results: 10,
+        });
+        assert!(result.is_err(), "lambda=NaN 应被拒绝");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_neg_lambda_rejected() {
+        // 验证验证层拒绝负的 time_decay_lambda
+        let mut brain = make_test_brain();
+        let result = brain.recall_by_emotion(&EmotionRecallRequest {
+            emotion: Some(Emotion::Joy),
+            min_intensity: 0.0,
+            time_decay_lambda: Some(-1.0),
+            max_results: 10,
+        });
+        assert!(result.is_err(), "lambda=负值 应被拒绝");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_neg_min_intensity_rejected() {
+        // 验证验证层拒绝负的 min_intensity
+        let mut brain = make_test_brain();
+        let result = brain.recall_by_emotion(&EmotionRecallRequest {
+            emotion: Some(Emotion::Joy),
+            min_intensity: -0.1,
+            time_decay_lambda: None,
+            max_results: 10,
+        });
+        assert!(result.is_err(), "min_intensity=负值 应被拒绝");
+    }
+
+    #[test]
+    fn test_recall_by_emotion_max_results_too_high_rejected() {
+        // 验证验证层拒绝 max_results > 1000
+        let mut brain = make_test_brain();
+        let result = brain.recall_by_emotion(&EmotionRecallRequest {
+            emotion: Some(Emotion::Joy),
+            min_intensity: 0.0,
+            time_decay_lambda: None,
+            max_results: 1001,
+        });
+        assert!(result.is_err(), "max_results > 1000 应被拒绝");
+    }
 }

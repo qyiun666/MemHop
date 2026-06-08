@@ -18,19 +18,14 @@
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
-use std::process::{Child, Command};
 use std::time::{Duration, Instant};
+
+mod common;
+use common::{DaemonFixture, FRAME_HEADER_SIZE, MAX_PAYLOAD};
 
 // ============================================================
 // IPC 协议定义
 // ============================================================
-
-/// 帧头大小（4 字节小端 u32，表示 payload 长度）
-const FRAME_HEADER_SIZE: usize = 4;
-
-/// 最大 IPC payload 大小（64 MB），防止恶意 daemon 导致内存耗尽
-const MAX_PAYLOAD: usize = 64 * 1024 * 1024;
 
 /// meowagent daemon IPC 消息 — 请求/响应统一枚举。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,191 +191,33 @@ struct CatMemoryStats {
     sessions: u32,
 }
 
-// ============================================================
-// DaemonFixture — 管理 daemon 进程生命周期
-// ============================================================
+/// 等待 daemon 通过 HealthCheck（最多等待指定时长）。
+fn wait_for_daemon_ready_via_fixture(fixture: &DaemonFixture, timeout: Duration) -> Result<(), String> {
+    let deadline = Instant::now() + timeout;
+    let mut last_err = String::from("no attempt");
 
-/// meowagent daemon 夹具。
-///
-/// 管理 daemon 进程的启动/停止，提供 IPC 通信能力。
-/// 使用 `#[ignore]` 标注的测试依赖此夹具。
-struct DaemonFixture {
-    /// daemon 子进程（None = 外部 daemon 或无 daemon）
-    daemon: Option<Child>,
-    /// Unix Domain Socket 路径
-    socket_path: PathBuf,
-    /// daemon 二进制文件路径
-    daemon_binary: PathBuf,
-}
-
-impl DaemonFixture {
-    /// 创建 DaemonFixture，使用默认 socket 路径。
-    fn new() -> Self {
-        let socket_path = PathBuf::from("/tmp/meowagent-test.sock");
-        let daemon_binary = Self::find_daemon_binary();
-        Self {
-            daemon: None,
-            socket_path,
-            daemon_binary,
-        }
-    }
-
-    /// 创建 DaemonFixture 并指定 socket 路径。
-    #[allow(dead_code)]
-    fn with_socket(socket_path: PathBuf) -> Self {
-        let daemon_binary = Self::find_daemon_binary();
-        Self {
-            daemon: None,
-            socket_path,
-            daemon_binary,
-        }
-    }
-
-    /// 查找 meowagent daemon 二进制文件。
-    fn find_daemon_binary() -> PathBuf {
-        let candidates = [
-            "./meowagent",
-            "./target/release/meowagent",
-            "./target/debug/meowagent",
-            "../meowagent/target/release/meowagent",
-            "../meowagent/target/debug/meowagent",
-        ];
-        for path in &candidates {
-            let p = PathBuf::from(path);
-            if p.exists() {
-                return p;
+    while Instant::now() < deadline {
+        let result: Result<IpcMessage, String> = fixture.send_recv(&IpcMessage::HealthCheck);
+        match result {
+            Ok(IpcMessage::HealthCheckResponse { status, .. }) => {
+                if status == "ok" {
+                    return Ok(());
+                }
+                last_err = format!("status != ok: {status}");
+            }
+            Ok(other) => {
+                last_err = format!("unexpected response: {other:?}");
+            }
+            Err(e) => {
+                last_err = e;
             }
         }
-        // 默认值，实际运行时会因找不到而报错
-        PathBuf::from("meowagent")
+        std::thread::sleep(Duration::from_millis(300));
     }
 
-    /// 启动 daemon 并等待就绪。
-    ///
-    /// 返回 Ok(()) 表示 daemon 已启动并通过 HealthCheck。
-    fn start(&mut self) -> Result<(), String> {
-        if !self.daemon_binary.exists() {
-            return Err(format!(
-                "meowagent binary not found at {:?}. Build it first or start daemon manually.",
-                self.daemon_binary
-            ));
-        }
-
-        // 清理旧的 socket 文件
-        let _ = std::fs::remove_file(&self.socket_path);
-
-        let child = Command::new(&self.daemon_binary)
-            .arg("daemon")
-            .arg("start")
-            .arg("--socket")
-            .arg(self.socket_path.to_str().unwrap())
-            .arg("--test")
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn meowagent daemon: {e}"))?;
-
-        self.daemon = Some(child);
-
-        // 等待 daemon 就绪
-        self.wait_for_ready(Duration::from_secs(15))
-    }
-
-    /// 等待 daemon 通过 HealthCheck。
-    fn wait_for_ready(&self, timeout: Duration) -> Result<(), String> {
-        let deadline = Instant::now() + timeout;
-        let mut last_err = String::from("no attempt");
-
-        while Instant::now() < deadline {
-            match self.send_recv(&IpcMessage::HealthCheck) {
-                Ok(IpcMessage::HealthCheckResponse { status, .. }) => {
-                    if status == "ok" {
-                        return Ok(());
-                    }
-                    last_err = format!("status != ok: {status}");
-                }
-                Ok(other) => {
-                    last_err = format!("unexpected response: {other:?}");
-                }
-                Err(e) => {
-                    last_err = e;
-                }
-            }
-            std::thread::sleep(Duration::from_millis(300));
-        }
-
-        Err(format!(
-            "Daemon not ready within {timeout:?}: {last_err}"
-        ))
-    }
-
-    /// 发送 IPC 消息并接收响应。
-    fn send_recv(&self, request: &IpcMessage) -> Result<IpcMessage, String> {
-        let mut stream = UnixStream::connect(&self.socket_path)
-            .map_err(|e| format!("connect to {:?}: {e}", self.socket_path))?;
-
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .map_err(|e| format!("set_read_timeout: {e}"))?;
-
-        // 序列化并发送请求
-        let payload = bincode::serialize(request)
-            .map_err(|e| format!("serialize request: {e}"))?;
-        let mut frame = Vec::with_capacity(FRAME_HEADER_SIZE + payload.len());
-        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        frame.extend_from_slice(&payload);
-        stream
-            .write_all(&frame)
-            .map_err(|e| format!("write request: {e}"))?;
-
-        // 读取响应帧头
-        let mut header = [0u8; FRAME_HEADER_SIZE];
-        stream
-            .read_exact(&mut header)
-            .map_err(|e| format!("read response header: {e}"))?;
-        let payload_len = u32::from_le_bytes(header) as usize;
-
-        if payload_len > MAX_PAYLOAD {
-            return Err(format!(
-                "response payload too large: {payload_len} bytes (max {MAX_PAYLOAD})"
-            ));
-        }
-
-        // 读取响应 payload
-        let mut resp_payload = vec![0u8; payload_len];
-        stream
-            .read_exact(&mut resp_payload)
-            .map_err(|e| format!("read response payload ({payload_len} bytes): {e}"))?;
-
-        bincode::deserialize(&resp_payload)
-            .map_err(|e| format!("deserialize response: {e}"))
-    }
-
-    /// 停止 daemon。
-    fn stop(&mut self) {
-        if let Some(mut child) = self.daemon.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
-        let _ = std::fs::remove_file(&self.socket_path);
-    }
-
-    /// 获取 socket 路径。
-    #[allow(dead_code)]
-    fn socket_path(&self) -> &PathBuf {
-        &self.socket_path
-    }
-
-    /// 检查 daemon 二进制是否存在。
-    fn binary_exists(&self) -> bool {
-        self.daemon_binary.exists()
-    }
-}
-
-impl Drop for DaemonFixture {
-    fn drop(&mut self) {
-        self.stop();
-    }
+    Err(format!(
+        "Daemon not ready within {timeout:?}: {last_err}"
+    ))
 }
 
 // ============================================================
@@ -492,7 +329,9 @@ fn test_daemon_startup() {
     // 启动 daemon
     fixture
         .start()
-        .expect("Daemon should start and become ready");
+        .expect("Daemon should start");
+    wait_for_daemon_ready_via_fixture(&fixture, Duration::from_secs(15))
+        .expect("Daemon should become ready");
 
     // 验证 HealthCheck 响应
     let response = fixture
@@ -561,6 +400,8 @@ fn test_cat_full_lifecycle() {
     }
 
     fixture.start().expect("Daemon should start");
+    wait_for_daemon_ready_via_fixture(&fixture, Duration::from_secs(15))
+        .expect("Daemon should become ready");
 
     // ── Step 1: RequestCreateCat ──
     let cat_name = "test_cat_e2e";
@@ -769,6 +610,8 @@ fn test_cat_chat() {
     }
 
     fixture.start().expect("Daemon should start");
+    wait_for_daemon_ready_via_fixture(&fixture, Duration::from_secs(15))
+        .expect("Daemon should become ready");
 
     // 创建猫
     let cat_name = "chat_test_cat";
@@ -1052,6 +895,8 @@ fn test_create_cat_and_bind() {
     }
 
     fixture.start().expect("Daemon should start");
+    wait_for_daemon_ready_via_fixture(&fixture, Duration::from_secs(15))
+        .expect("Daemon should become ready");
 
     // 创建猫
     let cat_name = "bind_test_cat";

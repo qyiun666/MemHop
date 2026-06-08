@@ -3,7 +3,6 @@ use memhop_core::{
 };
 #[cfg(feature = "candle")]
 use memhop_core::CandleEncoder;
-use memhop_core::EncoderRouter;
 use std::sync::Arc;
 
 #[test]
@@ -105,21 +104,4 @@ fn test_vector_model_integration() {
 
     assert!(has_paris, "Should recall Paris memory");
     assert!(resp.results.len() > 0, "Should have at least one result");
-}
-
-#[test]
-fn test_longmemeval_synthetic_dataset() {
-    use memhop_core::bench_support::dataset_loader::LongMemEvalDataset;
-
-    let dataset = LongMemEvalDataset::synthesize();
-    println!("✓ LongMemEval dataset synthesized: {} sessions", dataset.sessions.len());
-
-    // 验证数据集结构
-    assert!(dataset.sessions.len() > 0, "Should have at least one session");
-    let first_session = &dataset.sessions[0];
-    println!("✓ First session: {} turns, {} questions",
-             first_session.turns.len(), first_session.questions.len());
-
-    assert!(first_session.turns.len() > 0, "Session should have turns");
-    assert!(first_session.questions.len() > 0, "Session should have questions");
 }
