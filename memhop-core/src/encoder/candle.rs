@@ -105,7 +105,7 @@ impl CandleEncoder {
             .unsqueeze(0)?;  // [1, seq_len]
         
         // Forward pass
-        let outputs = self.model.forward(&input_ids_tensor, &attention_mask_tensor)?;
+        let outputs = self.model.forward(&input_ids_tensor, &attention_mask_tensor, None)?;
         // outputs shape: [batch_size, seq_len, hidden_size] = [1, seq_len, 384]
         
         // Mean pooling (考虑 attention mask)
