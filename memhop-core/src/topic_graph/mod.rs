@@ -34,11 +34,11 @@ impl L2TopicGraph {
     }
 
     /// v0.18.0: 使用指定维度和配置创建。
-    pub fn with_dim_and_config(dim: usize, config: crate::index::MemHopHnswConfig) -> Result<Self> {
-        Ok(L2TopicGraph {
-            topic_vectors: HnswIndex::new_with_config(dim, config.clone())?,
+    pub fn with_dim_and_config(dim: usize, config: crate::index::MemHopHnswConfig) -> Self {
+        L2TopicGraph {
+            topic_vectors: HnswIndex::new_with_config(dim, config.clone()),
             config,
-        })
+        }
     }
 
     /// 从 LMDB 重建 topic 向量索引。
@@ -60,7 +60,7 @@ impl L2TopicGraph {
         let dim = self.topic_vectors.dims();
         // v0.22.0: 复用初始配置（保留 for_scale 自适应参数），避免回退到 default。
         self.topic_vectors = if dim > 0 {
-            HnswIndex::new_with_config(dim, self.config.clone())?
+            HnswIndex::new_with_config(dim, self.config.clone())
         } else {
             HnswIndex::default()
         };

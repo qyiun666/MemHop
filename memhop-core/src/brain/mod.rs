@@ -121,7 +121,7 @@ impl Brain {
         drop(txn);
         let config = MemHopHnswConfig::for_scale(node_count);
         let connectivity = config.connectivity;
-        let mut l1 = L1Hypergraph::with_dim_and_config(encoder_dim, config)?;
+        let mut l1 = L1Hypergraph::with_dim_and_config(encoder_dim, config);
         let mut wtxn = l1_env
             .env
             .write_txn()
@@ -171,7 +171,7 @@ impl Brain {
         let topic_count = l2_env.topics.len(&txn).unwrap_or(0) as usize;
         drop(txn);
         let config = MemHopHnswConfig::for_scale(topic_count);
-        let mut l2 = L2TopicGraph::with_dim_and_config(encoder_dim, config)?;
+        let mut l2 = L2TopicGraph::with_dim_and_config(encoder_dim, config);
         l2.rebuild_topic_vectors(l2_env)
             .map_err(|e| MemHopError::Internal(format!("rebuild L2 topic vectors: {}", e)))?;
         let elapsed = _timer.elapsed();
@@ -210,7 +210,7 @@ impl Brain {
         drop(txn);
         let config = MemHopHnswConfig::for_scale(node_count);
         let connectivity = config.connectivity;
-        let mut l3 = L3DomainGraph::with_dim_and_config(encoder_dim, config)?;
+        let mut l3 = L3DomainGraph::with_dim_and_config(encoder_dim, config);
         l3.rebuild_vector_index(l3_env)
             .map_err(|e| MemHopError::Internal(format!("rebuild L3 vector index: {}", e)))?;
         l3.rebuild_bm25(l3_env)

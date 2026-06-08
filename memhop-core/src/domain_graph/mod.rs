@@ -34,12 +34,12 @@ impl L3DomainGraph {
     }
 
     /// v0.18.0: 使用指定维度和配置创建。
-    pub fn with_dim_and_config(dim: usize, config: crate::index::MemHopHnswConfig) -> Result<Self> {
-        Ok(L3DomainGraph {
-            vector_index: HnswIndex::new_with_config(dim, config.clone())?,
+    pub fn with_dim_and_config(dim: usize, config: crate::index::MemHopHnswConfig) -> Self {
+        L3DomainGraph {
+            vector_index: HnswIndex::new_with_config(dim, config.clone()),
             bm25: SparseIndex::new(),
             config,
-        })
+        }
     }
 
     /// 从 LMDB 重建向量索引（保留现有维度）。
@@ -52,7 +52,7 @@ impl L3DomainGraph {
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         // v0.22.0: 复用初始配置（保留 for_scale 自适应参数），避免回退到 default。
         self.vector_index = if dim > 0 {
-            HnswIndex::new_with_config(dim, self.config.clone())?
+            HnswIndex::new_with_config(dim, self.config.clone())
         } else {
             HnswIndex::default()
         };

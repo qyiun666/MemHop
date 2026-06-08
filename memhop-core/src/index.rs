@@ -242,27 +242,24 @@ impl Default for SparseIndex {
 
 // ── HnswIndex ──────────────────────────────────────────────
 
-/// HNSW 向量索引 (hnswlib-rs)，O(log N) 近似搜索。
+/// HNSW 向量索引 (fast-hnsw)，O(log N) 近似搜索。
 /// 使用纯 Rust 实现，无 C++ 依赖，跨平台兼容。
-use hnsw_stable::{Cosine, Hnsw, HnswConfig, InMemoryVectorStore};
+use fast_hnsw::{Builder, SearchResult, distance::Cosine};
+use fast_hnsw::labeled::LabeledIndex;
 
 const HNSW_MAGIC: &[u8; 4] = b"HNWI";
 
 pub struct HnswIndex {
-    hnsw: Hnsw<String, Cosine<f32>>,
-    vectors: InMemoryVectorStore<f32>,
-    next_node_id: usize,
+    index: LabeledIndex<Cosine, String>,
     dims: usize,
-    #[allow(dead_code)]
-    max_nodes: usize,
+    config: MemHopHnswConfig,
 }
 
 impl std::fmt::Debug for HnswIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HnswIndex")
             .field("dims", &self.dims)
-            .field("size", &self.hnsw.len())
-            .field("next_node_id", &self.next_node_id)
+            .field("size", &self.index.len())
             .finish()
     }
 }
@@ -316,44 +313,22 @@ impl MemHopHnswConfig {
 impl HnswIndex {
     /// 创建新的 HNSW 索引。dims 必须与编码器输出维度一致。
     pub fn new(dims: usize) -> Self {
-        Self::new_with_config(dims, MemHopHnswConfig::default()).unwrap_or_else(|e| {
-            eprintln!("HnswIndex::new failed: {}, using empty index", e);
-            HnswIndex::empty()
-        })
-    }
-
-    /// 创建空的 HNSW 索引（仅用于 fallback）
-    fn empty() -> Self {
-        let max_nodes = 1000;
-        let hnsw = Hnsw::new(Cosine::new(), HnswConfig::new(384, max_nodes));
-        let vectors = InMemoryVectorStore::new(384, max_nodes);
-        Self {
-            hnsw,
-            vectors,
-            next_node_id: 0,
-            dims: 384,
-            max_nodes,
-        }
+        Self::new_with_config(dims, MemHopHnswConfig::default())
     }
 
     /// v0.22.0: 使用指定配置创建 HNSW 索引。
-    pub fn new_with_config(dims: usize, config: MemHopHnswConfig) -> Result<Self> {
-        let max_nodes = 100_000; // 默认最大节点数
-        let hnsw_config = HnswConfig::new(dims, max_nodes)
+    pub fn new_with_config(dims: usize, config: MemHopHnswConfig) -> Self {
+        let index = Builder::new()
             .m(config.connectivity)
             .ef_construction(config.expansion_add)
-            .ef_search(config.expansion_search);
+            .seed(42)
+            .build_labeled(Cosine);
         
-        let hnsw = Hnsw::new(Cosine::new(), hnsw_config);
-        let vectors = InMemoryVectorStore::new(dims, max_nodes);
-        
-        Ok(HnswIndex {
-            hnsw,
-            vectors,
-            next_node_id: 0,
+        HnswIndex {
+            index,
             dims,
-            max_nodes,
-        })
+            config,
+        }
     }
 
     /// v0.22.0: 添加 f16 向量（内部 F16 量化存储，API 用 f32）。
@@ -367,164 +342,62 @@ impl HnswIndex {
             );
             return;
         }
-        // Remove old entry if exists
-        self.remove(id);
 
         let f32_vec: Vec<f32> = vector.iter().map(|v| v.to_f32()).collect();
-        match self.hnsw.insert(&self.vectors, id.to_string(), &f32_vec) {
-            Ok(_) => {
-                self.next_node_id += 1;
-            }
-            Err(e) => {
-                eprintln!("HnswIndex::add error for id '{}': {}", id, e);
-            }
-        }
+        self.index.insert(f32_vec, id.to_string());
     }
 
-    /// 移除向量。返回是否成功移除。
-    pub fn remove(&mut self, id: &str) -> bool {
-        match self.hnsw.delete(&id.to_string()) {
-            Ok(_) => true,
-            Err(_) => false,
-        }
+    /// 移除向量。fast-hnsw 不支持删除，返回 false。
+    pub fn remove(&mut self, _id: &str) -> bool {
+        // fast-hnsw doesn't support deletion
+        false
     }
 
     /// 更新向量 (remove + add)。
     pub fn update(&mut self, id: &str, vector: &[half::f16]) {
-        self.remove(id);
+        // fast-hnsw doesn't support removal, just add new version
         self.add(id, vector);
     }
 
     /// v0.22.0: Cosine 近似搜索（内部 F16 量化，API 用 f32）。
     pub fn cosine_search(&self, query: &[half::f16], top_k: usize) -> Vec<(String, f32)> {
-        if self.hnsw.len() == 0 || query.is_empty() || query.len() != self.dims {
+        if self.index.len() == 0 || query.is_empty() || query.len() != self.dims {
             return Vec::new();
         }
 
         let f32_query: Vec<f32> = query.iter().map(|v| v.to_f32()).collect();
-        let count = top_k.min(self.hnsw.len());
+        let count = top_k.min(self.index.len());
 
-        match self.hnsw.search(&self.vectors, &f32_query, count, None) {
-            Ok(hits) => {
-                let mut results = Vec::with_capacity(hits.len());
-                for hit in hits {
-                    let similarity = 1.0 - hit.distance;
-                    results.push((hit.key.clone(), similarity));
-                }
-                results
-            }
-            Err(e) => {
-                eprintln!("HnswIndex::cosine_search error: {}", e);
-                Vec::new()
-            }
+        let hits = self.index.search(&f32_query, count, 100); // ef=100
+        let mut results = Vec::with_capacity(hits.len());
+        for hit in hits {
+            let similarity = 1.0 - hit.distance;
+            results.push((hit.payload.clone(), similarity));
         }
+        results
     }
 
     pub fn len(&self) -> usize {
-        self.hnsw.len()
+        self.index.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.hnsw.len() == 0
+        self.index.len() == 0
     }
 
     pub fn dims(&self) -> usize {
         self.dims
     }
 
-    /// 序列化为 bytes: [4B magic][4B config_len][config bincode][hnsw bincode]
-    /// 序列化失败时返回空 Vec（调用方应检查并回退到 rebuild）。
+    /// 序列化为 bytes (fast-hnsw 不支持原生序列化，返回空)
     pub fn to_bytes(&self) -> Vec<u8> {
-        if self.hnsw.len() == 0 {
-            // Empty index: just magic + empty marker + dims
-            let mut buf = Vec::with_capacity(12);
-            buf.extend_from_slice(HNSW_MAGIC);
-            buf.extend_from_slice(&0u32.to_le_bytes()); // config_len = 0
-            buf.extend_from_slice(&(self.dims as u32).to_le_bytes()); // dims for recovery
-            return buf;
-        }
-
-        // Serialize hnsw graph
-        let mut hnsw_buf = Vec::new();
-        if let Err(e) = self.hnsw.save_to(&mut hnsw_buf) {
-            eprintln!("HnswIndex::to_bytes hnsw save error: {}", e);
-            return Vec::new();
-        }
-
-        // Serialize vectors
-        let mut vectors_buf = Vec::new();
-        if let Err(e) = self.vectors.save_to(&mut vectors_buf, self.hnsw.len()) {
-            eprintln!("HnswIndex::to_bytes vectors save error: {}", e);
-            return Vec::new();
-        }
-
-        // Compose: [magic(4)][hnsw_len(4)][hnsw][vectors_len(4)][vectors]
-        let mut result = Vec::with_capacity(12 + hnsw_buf.len() + vectors_buf.len());
-        result.extend_from_slice(HNSW_MAGIC);
-        result.extend_from_slice(&(hnsw_buf.len() as u32).to_le_bytes());
-        result.extend_from_slice(&hnsw_buf);
-        result.extend_from_slice(&(vectors_buf.len() as u32).to_le_bytes());
-        result.extend_from_slice(&vectors_buf);
-        result
+        // fast-hnsw doesn't support native serialization
+        Vec::new()
     }
 
-    /// 从 bytes 反序列化。
-    /// 空索引返回 None，调用方应走 rebuild 路径。
-    pub fn from_bytes(data: &[u8]) -> Option<Self> {
-        if data.len() < 8 {
-            return None;
-        }
-        // Check magic
-        if &data[0..4] != HNSW_MAGIC {
-            return None;
-        }
-        let hnsw_len = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
-
-        if hnsw_len == 0 {
-            // Empty index — 返回 None，调用方应从 LMDB 重建
-            return None;
-        }
-
-        let hnsw_end = 8 + hnsw_len;
-        if data.len() < hnsw_end + 4 {
-            return None;
-        }
-
-        // Deserialize hnsw graph
-        let hnsw_data = &data[8..hnsw_end];
-        let hnsw = match Hnsw::load_from(Cosine::new(), &mut std::io::Cursor::new(hnsw_data)) {
-            Ok(h) => h,
-            Err(e) => {
-                eprintln!("HnswIndex::from_bytes hnsw load error: {}", e);
-                return None;
-            }
-        };
-
-        let vectors_len = u32::from_le_bytes([data[hnsw_end], data[hnsw_end+1], data[hnsw_end+2], data[hnsw_end+3]]) as usize;
-        let vectors_end = hnsw_end + 4 + vectors_len;
-        if data.len() < vectors_end {
-            return None;
-        }
-
-        // Deserialize vectors
-        let vectors_data = &data[hnsw_end+4..vectors_end];
-        let (vectors, _) = match InMemoryVectorStore::load_from(&mut std::io::Cursor::new(vectors_data)) {
-            Ok(v) => v,
-            Err(e) => {
-                eprintln!("HnswIndex::from_bytes vectors load error: {}", e);
-                return None;
-            }
-        };
-
-        let dims = hnsw.dim();
-        let next_node_id = hnsw.len();
-        Some(HnswIndex {
-            hnsw,
-            vectors,
-            next_node_id,
-            dims,
-            max_nodes: 100_000,
-        })
+    /// 从 bytes 反序列化 (fast-hnsw 不支持原生序列化)
+    pub fn from_bytes(_data: &[u8]) -> Option<Self> {
+        None
     }
 }
 

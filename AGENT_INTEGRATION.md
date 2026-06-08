@@ -357,7 +357,7 @@ v0.23.0 引入了三级记忆激活状态：
 
 ## HNSW 向量索引 (v0.23.0)
 
-v0.23.0 将 HNSW 向量索引从 usearch (C++) 替换为 hnswlib-rs (纯 Rust)，实现：
+v0.23.0 将 HNSW 向量索引从 usearch (C++) 替换为 fast-hnsw (纯 Rust)，实现：
 
 - **零 C++ 依赖**：编译无需 C++ 工具链
 - **跨平台兼容**：Windows/mac/Linux 开箱即用
@@ -457,7 +457,7 @@ match brain.recall(request) {
   - 新增记忆激活系统（Active/Latent/Dormant）
   - SparseIndexV2：forward 索引从内存移到 LMDB
   - 编码器 IPC 化：Unix Domain Socket + bincode 协议
-  - **HNSW 索引优化**：usearch 替换为 hnsw-stable（纯 Rust，无 C++ 依赖，跨平台部署更简单，支持 stable Rust）
+  - **HNSW 索引优化**：usearch 替换为 fast-hnsw（纯 Rust，无 C++ 依赖，跨平台部署更简单，支持 stable Rust）
 
 - **v0.20.0** (2026-05-30)
   - 新增 `memhop_set_l0` 完整版接口

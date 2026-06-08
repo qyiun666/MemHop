@@ -36,13 +36,13 @@ impl L1Hypergraph {
     }
 
     /// v0.18.0: 使用指定维度和配置创建。
-    pub fn with_dim_and_config(dim: usize, config: crate::index::MemHopHnswConfig) -> Result<Self> {
-        Ok(L1Hypergraph {
+    pub fn with_dim_and_config(dim: usize, config: crate::index::MemHopHnswConfig) -> Self {
+        L1Hypergraph {
             bm25: SparseIndexV2::new(None),
-            vector_index: HnswIndex::new_with_config(dim, config.clone())?,
+            vector_index: HnswIndex::new_with_config(dim, config.clone()),
             node_count: 0,
             config,
-        })
+        }
     }
 
     pub fn rebuild_bm25(&mut self, env: &L1Env, wtxn: &mut RwTxn<'_>) -> Result<()> {
@@ -77,7 +77,7 @@ impl L1Hypergraph {
             .map_err(|e| MemHopError::Storage(e.to_string()))?;
         // v0.22.0: 复用初始配置（保留 for_scale 自适应参数），避免回退到 default。
         self.vector_index = if dim > 0 {
-            HnswIndex::new_with_config(dim, self.config.clone())?
+            HnswIndex::new_with_config(dim, self.config.clone())
         } else {
             HnswIndex::default()
         };
