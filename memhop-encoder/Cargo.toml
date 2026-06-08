@@ -1,0 +1,24 @@
+[package]
+name = "memhop-encoder"
+version = "0.23.0"
+edition = "2024"
+description = "Standalone encoder service for MemHop — loads models, listens on Unix Socket, handles encoding requests"
+
+[[bin]]
+name = "memhop-encoder"
+path = "src/main.rs"
+
+[features]
+default = ["candle"]
+candle = ["candle-core", "candle-nn", "candle-transformers", "tokenizers"]
+
+[dependencies]
+memhop-core = { path = "../memhop-core" }
+tokio = { version = "1", features = ["full"] }
+candle-core = { version = "0.8", optional = true }
+candle-nn = { version = "0.8", optional = true }
+candle-transformers = { version = "0.8", optional = true }
+tokenizers = { version = "0.21", optional = true }
+half = { version = "2", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+bincode = "1"

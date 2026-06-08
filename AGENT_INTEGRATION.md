@@ -1,131 +1,155 @@
-# MemHop v0.19.0 — meowAgent 接口文档
+# MemHop v0.23.0 — meowAgent 集成指南
 
-## 环境变量
+## 架构概览
 
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `MEMHOP_BRAINS_DIR` | `./memhop_brains` | 数据存储目录 |
-| `MEMHOP_SOCKET` | `/tmp/memhop.sock` | Unix Socket 路径 |
-| `MEMHOP_MODEL_PATH` | 无 | Candle 编码器模型目录（multilingual-e5-small） |
-| `MEMHOP_MAX_CACHED_BRAINS` | `32` | LRU 缓存最大容量 |
-| `MEMHOP_BRAIN_TTL_MS` | `1800000` | Brain 空闲超时时间（30分钟） |
-
-## 启动
-
-```bash
-# 启动（自动加载 models/multilingual-e5-small）
-memhop-mcp-server
-
-# 指定其他模型
-MEMHOP_MODEL_PATH=models/bge-small-zh-v1.5 memhop-mcp-server
-
-# 纯 BM25 文本检索（不加载模型）
-MEMHOP_MODEL_PATH=none memhop-mcp-server
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      meowAgent (Rust 进程)                   │
+│                                                             │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │              memhop-core (核心记忆引擎)                │   │
+│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐ │   │
+│  │  │  L0     │  │  L1     │  │  L2     │  │  L3     │ │   │
+│  │  │ 角色画像 │  │ 纠缠超图 │  │ 话题图  │  │ 领域图  │ │   │
+│  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘ │   │
+│  │  ┌─────────┐  ┌─────────┐  ┌─────────┐             │   │
+│  │  │  L4     │  │  L5     │  │ Sparse  │             │   │
+│  │  │ 原文库  │  │ 晶体库  │  │ Index   │             │   │
+│  │  └─────────┘  └─────────┘  └─────────┘             │   │
+│  └─────────────────────────────────────────────────────┘   │
+│                          │                                   │
+│                          ▼                                   │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │           memhop-encoder-client (IPC 客户端)          │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          │ Unix Domain Socket + bincode
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│              memhop-encoder (独立编码器服务)                   │
+│              设备级共享，所有 Agent 共用                        │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-**默认行为**：自动检测 `models/multilingual-e5-small/model.safetensors`，存在则加载 CandleEncoder，否则使用 NgramEncoder。
+---
+
+## 快速开始
+
+### 1. 添加依赖
+
+```toml
+[dependencies]
+memhop-core = "0.23"
+memhop-encoder-client = "0.23"
+```
+
+### 2. 基本使用
+
+```rust
+use memhop_core::{Brain, BrainConfig, Encoder, NgramEncoder, RecallRequest, StoreBatch, StoreItem};
+use memhop_encoder_client::EncoderClient;
+use std::sync::Arc;
+
+// 1. 创建编码器（本地 NgramEncoder 或远程 EncoderClient）
+let encoder: Arc<Box<dyn Encoder>> = Arc::new(Box::new(NgramEncoder::new(1024)));
+
+// 2. 创建 Brain 实例
+let config = BrainConfig {
+    brains_dir: "./memhop_brains".to_string(),
+    agent_id: "my_agent".to_string(),
+};
+let mut brain = Brain::open(config, encoder)?;
+
+// 3. 批量写入记忆
+let batch = StoreBatch {
+    items: vec![
+        StoreItem {
+            text: "用户喜欢喝可乐".to_string(),
+            source: "chat".to_string(),
+            turn_id: Some("turn_1".to_string()),
+            session_id: Some("session_1".to_string()),
+            topic_label: Some("饮品偏好".to_string()),
+            llm_keywords: Some(vec!["可乐".to_string(), "偏好".to_string()]),
+            llm_compressed_summary: Some("用户告知她喜欢可乐".to_string()),
+            ..Default::default()
+        },
+    ],
+};
+let report = brain.batch_store(batch)?;
+println!("存储完成: {:?}", report);
+
+// 4. 检索记忆
+let request = RecallRequest {
+    query: "用户喜欢什么饮料".to_string(),
+    max_results: 10,
+    target_layers: vec![Layer::L1, Layer::L2],
+    ..Default::default()
+};
+let response = brain.recall(request)?;
+println!("检索到 {} 条结果", response.results.len());
+```
+
+### 3. 使用远程编码器
+
+```rust
+use memhop_encoder_client::EncoderClient;
+
+// 连接到共享的编码器服务
+let encoder_client = EncoderClient::connect("/tmp/memhop-encoder.sock")?;
+
+// 创建使用远程编码器的 Brain
+let encoder: Arc<Box<dyn Encoder>> = Arc::new(Box::new(encoder_client));
+let brain = Brain::open(config, encoder)?;
+```
 
 ---
 
-## 接口总览
+## 核心 API
 
-| 接口 | 功能 | 优先级 |
-|------|------|--------|
-| `memhop_batch_store` | 批量写入记忆 | P0 |
-| `memhop_recall` | 语义检索记忆 | P0 |
-| `memhop_health` | 健康检查 | P0 |
-| `memhop_stats` | 统计信息（含存储使用率） | P0 |
-| `memhop_consolidate` / `memhop_dream` | 记忆巩固（梦境模拟） | P1 |
-| `memhop_organize` | 记忆组织（节点归类） | P1 |
-| `memhop_mount_shelf` | 挂载知识库到 L3 | P1 |
-| `memhop_unmount_shelf` | 卸载知识库 | P1 |
-| `memhop_list_shelf` | 列出已挂载知识库 | P1 |
-| `memhop_get_profile` | 获取 L0 角色画像 | P1 |
-| `memhop_set_profile` | 设置 L0 角色画像（简版） | P1 |
-| `memhop_set_l0` | 设置 L0 角色画像（完整版） | P1 |
-| `memhop_get_activated` | 获取当前激活的话题列表 | P2 |
-| `memhop_activate` | 激活话题 | P2 |
-| `memhop_deactivate` | 去激活话题 | P2 |
-| `memhop_feedback` | 检索结果反馈（调整激活权重） | P2 |
-| `memhop_get_l4_raw` | 获取 L4 原始文档 | P2 |
-| `memhop_list_l3_paths` | 列出 L3 领域路径 | P2 |
-| `memhop_list_topics` | 列出所有 L2 话题 | P2 |
-| `memhop_re_search` | 正则搜索记忆 | P2 |
-| `memhop_update_topic` | 更新话题元数据 | P2 |
-| `memhop_crystallize` | 触发程序性结晶 | P1 |
-| `memhop_list_crystals` | 列出所有晶体 | P1 |
-| `memhop_get_crystal` | 获取单个晶体详情 | P1 |
-| `memhop_prewarm` | 主动预热指定层 | P2 |
+### Brain::open
+
+创建或打开 Brain 实例。
+
+```rust
+pub fn open(config: BrainConfig, encoder: Arc<Box<dyn Encoder>>) -> Result<Self>
+```
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `config.brains_dir` | String | 数据存储目录 |
+| `config.agent_id` | String | Agent 标识 |
+| `encoder` | Arc<Box<dyn Encoder>> | 编码器实例 |
 
 ---
 
-## P0 核心接口
-
-### memhop_batch_store
+### Brain::batch_store
 
 批量写入记忆。**所有写入都通过此接口**。
 
-```json
-// 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_batch_store",
-  "params": {
-    "agent_id": "cat_1",
-    "items": [{
-      "text": "user: 她喜欢喝可乐 | assistant: 了解",
-      "source": "chat",
-      "turn_id": "session_1_T5",
-      "session_id": "session_1",
-      "topic_label": "饮品偏好",
-      "llm_keywords": ["可乐", "偏好"],
-      "llm_compressed_summary": "用户告知她喜欢可乐",
-      "chain_parent_id": null,
-      "chain_label": null,
-      "domain_id": null,
-      "importance": 0.8
-    }]
-  },
-  "id": 1
-}
+```rust
+pub fn batch_store(&mut self, batch: StoreBatch) -> Result<BatchReport>
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
+#### StoreItem 字段
+
+| 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识，默认 `"default"` |
-| `items[].text` | string | **是** | 原始文本 |
-| `items[].source` | string | 否 | 来源，默认 `"chat"` |
-| `items[].turn_id` | string | 否 | 对话轮次 ID |
-| `items[].session_id` | string | 否 | 会话 ID |
-| `items[].topic_label` | string | 推荐 | 话题标签 |
-| `items[].llm_keywords` | string[] | 推荐 | 关键词 |
-| `items[].llm_compressed_summary` | string | 推荐 | 摘要 |
-| `items[].chain_parent_id` | string | 否 | 超边链前驱 ID |
-| `items[].chain_label` | string | 否 | 链标签：`correction`/`supplement`/`merge` |
-| `items[].domain_id` | string | 否 | 关联领域 ID |
-| `items[].importance` | float | 否 | 重要性权重 |
-| `items[].valence` | float | 否 | 效价参数（情感维度） |
-| `items[].arousal` | float | 否 | 唤醒度参数（情感维度） |
+| `text` | String | **是** | 原始文本 |
+| `source` | String | 否 | 来源，默认 `"chat"` |
+| `turn_id` | Option<String> | 否 | 对话轮次 ID |
+| `session_id` | Option<String> | 否 | 会话 ID |
+| `topic_label` | Option<String> | 推荐 | 话题标签 |
+| `llm_keywords` | Option<Vec<String>> | 推荐 | 关键词 |
+| `llm_compressed_summary` | Option<String> | 推荐 | 摘要 |
+| `chain_parent_id` | Option<String> | 否 | 超边链前驱 ID |
+| `chain_label` | Option<String> | 否 | 链标签：`correction`/`supplement`/`merge` |
+| `domain_id` | Option<String> | 否 | 关联领域 ID |
+| `importance` | Option<f32> | 否 | 重要性权重 |
+| `valence` | Option<f32> | 否 | 效价参数（情感维度） |
+| `arousal` | Option<f32> | 否 | 唤醒度参数（情感维度） |
 
-```json
-// 响应
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "l1_nodes_created": 1,
-    "l1_hyperedges_created": 0,
-    "l2_topics_created": 1,
-    "l3_nodes_created": 0,
-    "l4_docs_stored": 1,
-    "chains_created": 0,
-    "total_duration_us": 1234,
-    "l1_dedup_skipped": 0,
-    "engram_ids": {},
-    "l3_engram_ids": {}
-  }
-}
-```
+#### BatchReport 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -137,167 +161,69 @@ MEMHOP_MODEL_PATH=none memhop-mcp-server
 | `chains_created` | u32 | 创建的超边链数 |
 | `total_duration_us` | u64 | 执行耗时（微秒） |
 | `l1_dedup_skipped` | u32 | 去重跳过的 L1 节点数 |
-| `engram_ids` | object | 输入序号 → L1 节点 ID 映射 |
-| `l3_engram_ids` | object | 输入序号 → L3 节点 ID 映射 |
+| `engram_ids` | HashMap<usize, String> | 输入序号 → L1 节点 ID 映射 |
+| `l3_engram_ids` | HashMap<usize, String> | 输入序号 → L3 节点 ID 映射 |
 
 ---
 
-### memhop_recall
+### Brain::recall
 
-语义检索记忆，支持指定检索层、时间范围、话题过滤。
+语义检索记忆。
 
-```json
-// 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_recall",
-  "params": {
-    "agent_id": "cat_1",
-    "query": "用户喜欢什么饮料",
-    "max_results": 10,
-    "target_layers": ["L1", "L2", "L4"],
-    "spread_depth": 1,
-    "topic_filter": null,
-    "exclude_ids": [],
-    "exclude_topic_ids": [],
-    "l3_domain_id": null,
-    "l2_topic_id": null,
-    "session_id": null,
-    "time_decay_lambda": 0.01,
-    "time_range": null
-  },
-  "id": 1
-}
+```rust
+pub fn recall(&mut self, request: RecallRequest) -> Result<RecallResponse>
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
+#### RecallRequest 字段
+
+| 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识，默认 `"default"` |
-| `query` | string | 否 | 搜索文本，为空返回空结果 |
-| `max_results` | int | 否 | 返回条数上限，默认 10 |
-| `target_layers` | string[] | 否 | 目标层：`L1`/`L2`/`L3`/`L4`，默认 `[L1, L2, L4]` |
-| `spread_depth` | int | 否 | 关联扩散深度，0=不扩散 |
-| `topic_filter` | string | 否 | 话题过滤关键词 |
-| `exclude_ids` | string[] | 否 | 排除的节点/文档 ID |
-| `exclude_topic_ids` | string[] | 否 | 排除的话题 ID |
-| `l3_domain_id` | string | 否 | 限定 L3 领域 |
-| `l2_topic_id` | string | 否 | 限定 L2 话题 |
-| `session_id` | string | 否 | 限定会话 |
-| `time_decay_lambda` | float | 否 | 时间衰减系数 |
-| `time_range` | [i64, i64] | 否 | 毫秒时间戳范围 `[start, end]` |
+| `query` | String | 否 | 搜索文本，为空返回空结果 |
+| `max_results` | usize | 否 | 返回条数上限，默认 10 |
+| `target_layers` | Vec<Layer> | 否 | 目标层，默认 `[L1, L2]` |
+| `spread_depth` | usize | 否 | 关联扩散深度，0=不扩散 |
+| `topic_filter` | Option<String> | 否 | 话题过滤关键词 |
+| `exclude_ids` | Vec<String> | 否 | 排除的节点/文档 ID |
+| `exclude_topic_ids` | Vec<String> | 否 | 排除的话题 ID |
+| `l3_domain_id` | Option<String> | 否 | 限定 L3 领域 |
+| `l2_topic_id` | Option<String> | 否 | 限定 L2 话题 |
+| `session_id` | Option<String> | 否 | 限定会话 |
+| `time_decay_lambda` | f32 | 否 | 时间衰减系数 |
+| `time_range` | Option<(i64, i64)> | 否 | 毫秒时间戳范围 `(start, end)` |
 
-```json
-// 响应
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "results": [
-      {
-        "layer": "L2",
-        "id": "topic_xxx",
-        "text": "用户告知她喜欢可乐",
-        "score": 0.61,
-        "topic_label": "饮品偏好",
-        "created_at": 1749123456000,
-        "version": 1
-      }
-    ],
-    "total_count": 1,
-    "l0_profile": null,
-    "confidence": 0.85,
-    "activated_topics": []
-  }
-}
-```
+#### RecallResponse 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `results` | RecallResult[] | 检索结果列表 |
+| `results` | Vec<RecallResult> | 检索结果列表 |
 | `total_count` | usize | 结果总数 |
-| `l0_profile` | L0Profile? | L0 角色画像（可选） |
-| `confidence` | f32? | 置信度（可选） |
-| `activated_topics` | ActivatedTopicInfo[] | 激活的话题列表 |
+| `l0_profile` | Option<L0Profile> | L0 角色画像（可选） |
+| `confidence` | Option<f32> | 置信度（可选） |
+| `activated_topics` | Vec<ActivatedTopicInfo> | 激活的话题列表 |
 
----
-
-### memhop_health
-
-健康检查。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_health","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok","version":"0.19.0","cached_brains":3}}
-```
+#### RecallResult 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `status` | string | 服务状态，固定 `"ok"` |
-| `version` | string | 当前版本号 |
-| `cached_brains` | u32 | 当前缓存的 Brain 数量（v0.19.0 新增） |
+| `layer` | Layer | 来源层 |
+| `id` | String | 节点/文档 ID |
+| `text` | String | 文本内容 |
+| `score` | f32 | 相关性分数 |
+| `topic_label` | Option<String> | 话题标签 |
+| `created_at` | i64 | 创建时间戳（毫秒） |
+| `version` | u64 | 版本号 |
 
 ---
 
-### memhop_stats
+### Brain::dream
 
-获取引擎统计信息。
+触发记忆巩固（梦境模拟）。
 
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_stats","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{
-  "jsonrpc": "2.0",
-  "id": 1,
-  "result": {
-    "engram_count": 150,
-    "hyperedge_count": 89,
-    "topic_count": 12,
-    "storage": [
-      {"layer": "L0", "used_bytes": 1024, "map_size": 67108864, "usage_pct": 0.001},
-      {"layer": "L1", "used_bytes": 524288, "map_size": 1073741824, "usage_pct": 0.049},
-      {"layer": "L4", "used_bytes": 1048576, "map_size": 2147483648, "usage_pct": 0.049}
-    ]
-  }
-}
+```rust
+pub fn dream(&mut self) -> Result<ConsolidateReport>
 ```
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `engram_count` | u64 | L1 engram 总数 |
-| `hyperedge_count` | u64 | L1 超边总数 |
-| `topic_count` | u64 | L2 话题总数 |
-| `storage` | array | 各层存储使用率（v0.19.0 新增） |
-| `storage[].layer` | string | 层名称（L0-L5） |
-| `storage[].used_bytes` | u64 | 已使用字节数 |
-| `storage[].map_size` | u64 | 映射大小（字节） |
-| `storage[].usage_pct` | f32 | 使用率（0.0-1.0） |
-
----
-
-## P1 记忆管理接口
-
-### memhop_consolidate / memhop_dream
-
-触发记忆巩固（梦境模拟）。两个方法等价，`consolidate` 是别名。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_dream","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{
-  "chains_consolidated": 5,
-  "topics_merged": 1,
-  "topics_reflected": 3,
-  "duration_ms": 12345,
-  "vitality_decayed": 2,
-  "schemas_emerged": 1,
-  "l0_updated": false,
-  "plans_consolidated": 0
-}}
-```
+#### ConsolidateReport 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -310,250 +236,100 @@ MEMHOP_MODEL_PATH=none memhop-mcp-server
 | `l0_updated` | bool | L0 是否更新 |
 | `plans_consolidated` | u32 | 计划合并数 |
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识，默认 `"default"` |
-
 ---
 
-### memhop_organize
+### Brain::mount_shelf / unmount_shelf / list_shelf
 
-对指定节点执行记忆组织（归类到话题、提取关键词等）。
+知识库管理接口。
 
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_organize","params":{"agent_id":"cat_1","node_id":"kn_1749123456000"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
+```rust
+// 挂载知识库
+pub fn mount_shelf(&mut self, path: &str, name: &str, doc_type: &str) -> Result<ShelfMeta>
+
+// 卸载知识库
+pub fn unmount_shelf(&mut self, domain_id: &str) -> Result<()>
+
+// 列出已挂载知识库
+pub fn list_shelf(&self) -> Vec<ShelfMeta>
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `node_id` | string | **是** | L1 节点 ID |
-
----
-
-### memhop_mount_shelf
-
-挂载本地文件/目录到 L3 领域图，支持自动分块。
-
-```json
-// 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_mount_shelf",
-  "params": {
-    "agent_id": "cat_1",
-    "path": "/path/to/docs",
-    "name": "技术文档",
-    "doc_type": "doc"
-  },
-  "id": 1
-}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{
-  "id": "domain_技术文档",
-  "path": "/path/to/docs",
-  "doc_type": "doc",
-  "chunk_count": 42,
-  "mounted_at": 1749123456000
-}}
-```
+#### ShelfMeta 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `id` | string | 领域 ID |
-| `path` | string | 挂载路径 |
-| `doc_type` | string | 文档类型 |
+| `id` | String | 领域 ID |
+| `path` | String | 挂载路径 |
+| `doc_type` | String | 文档类型 |
 | `chunk_count` | usize | 分块数量 |
 | `mounted_at` | i64 | 挂载时间戳（毫秒） |
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `path` | string | **是** | 文件或目录路径 |
-| `name` | string | **是** | 领域名称 |
-| `doc_type` | string | 否 | 文档类型：`code`/`doc`/`book`/`paper`/`generic`，默认 `generic` |
-
 ---
 
-### memhop_unmount_shelf
+### Brain::set_l0 / get_l0
 
-卸载已挂载的知识库。
+角色画像管理。
 
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_unmount_shelf","params":{"agent_id":"cat_1","domain_id":"domain_技术文档"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
+```rust
+// 设置 L0 角色画像
+pub fn set_l0(&mut self, profile: L0Profile) -> Result<()>
+
+// 获取 L0 角色画像
+pub fn get_l0(&self) -> Option<L0Profile>
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `domain_id` | string | **是** | 领域 ID |
-
----
-
-### memhop_list_shelf
-
-列出所有已挂载的知识库。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_list_shelf","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":[
-  {"id":"domain_技术文档","path":"/path/to/docs","doc_type":"doc","chunk_count":42,"mounted_at":1749123456000}
-]}
-```
+#### L0Profile 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `id` | string | 领域 ID |
-| `path` | string | 挂载路径 |
-| `doc_type` | string | 文档类型 |
-| `chunk_count` | usize | 分块数量 |
-| `mounted_at` | i64 | 挂载时间戳（毫秒） |
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
+| `catid` | Option<String> | 不可修改的唯一标识符 |
+| `role_name` | Option<String> | 可修改的名称 |
+| `personality` | Vec<String> | 性格特征列表 |
+| `values` | Vec<String> | 价值观列表 |
+| `worldview` | Vec<String> | 世界观列表 |
+| `role` | Option<String> | 角色类型 |
+| `position` | Option<String> | 定位 |
+| `traits` | HashMap<String, String> | 其他特征键值对 |
 
 ---
 
-## P1 角色画像接口
+### Brain::activate / deactivate / get_activated / feedback
 
-### memhop_get_profile
+会话管理接口。
 
-获取 L0 角色画像。
+```rust
+// 激活话题
+pub fn activate(&mut self, session_id: &str, topic_id: &str, ttl_ms: i64) -> Result<()>
 
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_get_profile","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{
-  "catid": "cat_1",
-  "role_name": "小猫",
-  "personality": ["温柔", "活泼"],
-  "values": ["真诚"],
-  "worldview": ["世界是美好的"],
-  "role": "AI助手",
-  "position": "陪伴型",
-  "traits": {"说话风格": "可爱"},
-  "updated_at": 1749123456000,
-  "version": 1,
-  "history": []
-}}
+// 去激活话题
+pub fn deactivate(&mut self, session_id: &str, topic_id: &str) -> Result<()>
+
+// 获取当前激活的话题列表
+pub fn get_activated(&self, session_id: &str) -> Vec<ActivationEntry>
+
+// 检索结果反馈
+pub fn feedback(&mut self, session_id: &str, result_ids: &[&str], relevant: bool) -> Result<()>
 ```
+
+#### ActivationEntry 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `catid` | string? | 不可修改的唯一标识符，首次创建时设置 |
-| `role_name` | string? | 可修改的名称 |
-| `personality` | string[] | 性格特征列表 |
-| `values` | string[] | 价值观列表 |
-| `worldview` | string[] | 世界观列表 |
-| `role` | string? | 角色类型 |
-| `position` | string? | 定位 |
-| `traits` | object | 特征键值对 |
-| `updated_at` | i64 | 更新时间戳（毫秒） |
-| `version` | u64 | 版本号 |
-| `history` | L0Snapshot[] | 历史记录 |
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
+| `topic_id` | String | 话题 ID |
+| `activated_at` | i64 | 激活时间戳（毫秒） |
+| `ttl_ms` | i64 | 激活有效期（毫秒） |
+| `last_hit_at` | i64 | 最后命中时间戳（毫秒） |
 
 ---
 
-### memhop_set_profile
+### Brain::crystallize
 
-设置 L0 角色画像（简版）。
+触发程序性结晶。
 
-```json
-// 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_set_profile",
-  "params": {
-    "agent_id": "cat_1",
-    "catid": "cat_1",
-    "role_name": "小猫",
-    "role": "AI助手",
-    "position": "陪伴型",
-    "traits": {"说话风格": "可爱", "语气": "温柔"}
-  },
-  "id": 1
-}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
+```rust
+pub fn crystallize(&mut self) -> Result<CrystallizeReport>
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `catid` | string | 否 | 不可修改的唯一标识符，首次设置后不可更改 |
-| `role_name` | string | 否 | 可修改的名称 |
-| `role` | string | 否 | 角色类型 |
-| `position` | string | 否 | 定位 |
-| `traits` | object | 否 | 特征键值对 |
-
----
-
-### memhop_set_l0
-
-设置 L0 角色画像（完整版）。
-
-```json
-// 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_set_l0",
-  "params": {
-    "agent_id": "cat_1",
-    "catid": "cat_1",
-    "role_name": "小猫",
-    "personality": ["温柔", "活泼", "好奇"],
-    "values": ["真诚", "善良"],
-    "worldview": ["世界是美好的", "知识改变命运"],
-    "traits": {"说话风格": "可爱", "语气": "温柔"}
-  },
-  "id": 1
-}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
-```
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `catid` | string | 否 | 不可修改的唯一标识符，首次设置后不可更改 |
-| `role_name` | string | 否 | 可修改的名称 |
-| `personality` | string[] | 否 | 性格特征列表 |
-| `values` | string[] | 否 | 价值观列表 |
-| `worldview` | string[] | 否 | 世界观列表 |
-| `traits` | object | 否 | 其他特征键值对 |
-
----
-
-## P1 程序性结晶接口
-
-### memhop_crystallize
-
-触发程序性结晶。从 L1 超边链中自动提取可复用的操作模式。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_crystallize","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{
-  "crystals_created": 1,
-  "chains_analyzed": 3,
-  "duration_ms": 42
-}}
-```
+#### CrystallizeReport 字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -561,368 +337,133 @@ MEMHOP_MODEL_PATH=none memhop-mcp-server
 | `chains_analyzed` | u32 | 分析的链总数 |
 | `duration_ms` | u64 | 执行耗时（毫秒） |
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
+---
+
+## 记忆激活系统 (v0.23.0)
+
+v0.23.0 引入了三级记忆激活状态：
+
+| 状态 | 说明 | 检索权重 |
+|------|------|--------|
+| **Active** | 当前活跃记忆 | 1.0 |
+| **Latent** | 潜伏记忆（近期使用） | 0.5-0.8 |
+| **Dormant** | 休眠记忆（长期未用） | 0.1-0.3 |
+
+激活分数计算：
+- 指数衰减：`score = base_score * exp(-lambda * age_hours)`
+- Recall 奖励：每次被检索命中，分数增加 0.1
 
 ---
 
-### memhop_list_crystals
+## HNSW 向量索引 (v0.23.0)
 
-列出所有已存储的程序性晶体。
+v0.23.0 将 HNSW 向量索引从 usearch (C++) 替换为 hnswlib-rs (纯 Rust)，实现：
 
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_list_crystals","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":[
-  {
-    "id":"crys_1749123456000_3",
-    "label":"错误排查 → 定位原因 → 修复验证",
-    "pattern_type":"Sequence",
-    "steps":[
-      {"order":0,"action":"错误排查","expected_outcome":null,"source_node_ids":[]},
-      {"order":1,"action":"定位原因","expected_outcome":null,"source_node_ids":[]},
-      {"order":2,"action":"修复验证","expected_outcome":null,"source_node_ids":[]}
-    ],
-    "trigger_keywords":["错误排查","定位原因","修复验证"],
-    "context_conditions":[],
-    "source_chain_ids":["he_xxx","he_yyy","he_zzz"],
-    "usage_count":0,
-    "success_rate":0.0,
-    "created_at":1749123456000,
-    "updated_at":1749123456000,
-    "version":1,
-    "history":[]
-  }
-]}
+- **零 C++ 依赖**：编译无需 C++ 工具链
+- **跨平台兼容**：Windows/mac/Linux 开箱即用
+- **性能保持**：O(log N) 近似搜索，支持 Cosine/L2/InnerProduct 度量
+- **F16 量化**：内存减半，精度损失可忽略
+
+### 技术细节
+
+| 特性 | 说明 |
+|------|------|
+| 最大节点数 | 100,000 (默认) |
+| 连接数 (M) | 16-32 (根据数据规模自适应) |
+| 构建扩展 | 128-512 |
+| 搜索扩展 | 64-256 |
+| 序列化 | bincode，支持增量保存 |
+
+### 配置
+
+```rust
+use memhop_core::MemHopHnswConfig;
+
+// 自动根据数据规模调整配置
+let config = MemHopHnswConfig::for_scale(node_count);
+
+// 或手动指定
+let config = MemHopHnswConfig {
+    connectivity: 16,
+    expansion_add: 128,
+    expansion_search: 64,
+};
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-
 ---
 
-### memhop_get_crystal
+## 编码器配置
 
-获取单个程序性晶体详情。
+### 本地 NgramEncoder
 
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_get_crystal","params":{"agent_id":"cat_1","crystal_id":"crys_1749123456000_3"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{
-  "id":"crys_1749123456000_3",
-  "label":"错误排查 → 定位原因 → 修复验证",
-  "pattern_type":"Sequence",
-  "steps":[
-    {"order":0,"action":"错误排查","expected_outcome":null,"source_node_ids":[]}
-  ],
-  "trigger_keywords":["错误排查","定位原因","修复验证"],
-  "context_conditions":[],
-  "source_chain_ids":["he_xxx","he_yyy","he_zzz"],
-  "usage_count":0,
-  "success_rate":0.0,
-  "created_at":1749123456000,
-  "updated_at":1749123456000,
-  "version":1,
-  "history":[]
-}}
+适用于：
+- 快速启动，无需外部服务
+- 纯文本 BM25 检索
+- 开发和测试环境
+
+```rust
+let encoder = NgramEncoder::new(1024);
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `crystal_id` | string | **是** | 晶体 ID |
+### 远程 EncoderClient
 
----
+适用于：
+- 生产环境，设备级共享编码器
+- 需要高质量语义向量（BERT 模型）
+- 多 Agent 共享同一编码器服务
 
-## P2 会话管理接口
-
-### memhop_activate
-
-激活指定话题（提升检索权重）。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_activate","params":{"agent_id":"cat_1","session_id":"session_1","topic_id":"topic_xxx","ttl_ms":3600000},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
+```bash
+# 启动编码器服务
+memhop-encoder --socket /tmp/memhop-encoder.sock
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `session_id` | string | 否 | 会话 ID，默认 `"default"` |
-| `topic_id` | string | **是** | 话题 ID |
-| `ttl_ms` | int | 否 | 激活有效期（毫秒），默认 3600000（1小时） |
-
----
-
-### memhop_deactivate
-
-去激活指定话题。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_deactivate","params":{"agent_id":"cat_1","session_id":"session_1","topic_id":"topic_xxx"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
+```rust
+let encoder_client = EncoderClient::connect("/tmp/memhop-encoder.sock")?;
+let encoder: Arc<Box<dyn Encoder>> = Arc::new(Box::new(encoder_client));
 ```
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `session_id` | string | 否 | 会话 ID，默认 `"default"` |
-| `topic_id` | string | **是** | 话题 ID |
-
 ---
 
-### memhop_get_activated
+## 错误处理
 
-获取当前激活的话题列表。
+```rust
+use memhop_core::{MemHopError, Result};
 
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_get_activated","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":[
-  {"topic_id":"topic_xxx","activated_at":1749123456000,"ttl_ms":3600000,"last_hit_at":1749123456000}
-]}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `topic_id` | string | 话题 ID |
-| `activated_at` | i64 | 激活时间戳（毫秒） |
-| `ttl_ms` | i64 | 激活有效期（毫秒） |
-| `last_hit_at` | i64 | 最后命中时间戳（毫秒） |
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-
----
-
-### memhop_feedback
-
-对检索结果反馈，调整激活话题权重。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_feedback","params":{"agent_id":"cat_1","result_ids":["kn_xxx","topic_yyy"],"relevant":true,"session_id":"session_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"adjusted":2,"relevant":true}}
-```
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `result_ids` | string[] | 否 | 反馈的结果 ID 列表 |
-| `relevant` | bool | 否 | `true`=正反馈(+0.1)，`false`=负反馈(-0.1)，默认 `true` |
-| `session_id` | string | 否 | 会话 ID，默认 `"default"` |
-
----
-
-## P2 查询浏览接口
-
-### memhop_get_l4_raw
-
-获取 L4 原始文档全文。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_get_l4_raw","params":{"agent_id":"cat_1","doc_id":"l4d_1749123456000"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{
-  "id":"l4d_1749123456000",
-  "text":"user: 她喜欢喝可乐 | assistant: 了解",
-  "source":"chat",
-  "turn_id":"session_1_T5",
-  "session_id":"session_1",
-  "created_at":1749123456000,
-  "version": 1,
-  "history": [],
-  "vector": []
-}}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | string | 文档 ID |
-| `text` | string | 原始文本 |
-| `source` | string | 来源 |
-| `turn_id` | string? | 对话轮次 ID |
-| `session_id` | string? | 会话 ID |
-| `created_at` | i64 | 创建时间戳（毫秒） |
-| `version` | u64 | 版本号 |
-| `history` | DocumentSnapshot[] | 历史记录 |
-| `vector` | f16[] | 编码向量 |
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `doc_id` | string | **是** | L4 文档 ID |
-
----
-
-### memhop_list_l3_paths
-
-列出所有 L3 领域路径。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_list_l3_paths","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":[
-  {"domain_id":"domain_技术文档","name":"技术文档","node_count":42,"mounted_at":1749123456000}
-]}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `domain_id` | string | 领域 ID |
-| `name` | string | 领域名称 |
-| `node_count` | u64 | 节点数量 |
-| `mounted_at` | i64 | 挂载时间戳（毫秒） |
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-
----
-
-### memhop_list_topics
-
-列出所有 L2 话题。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_list_topics","params":{"agent_id":"cat_1"},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":[
-  {
-    "id":"topic_xxx",
-    "label":"饮品偏好",
-    "summary":"用户告知她喜欢可乐",
-    "keywords":["可乐","偏好"],
-    "centroid":[],
-    "node_ids":["kn_123"],
-    "linked_domain_ids":[],
-    "doc_ids":[],
-    "dialogue_range":null,
-    "created_at":1749123456000,
-    "updated_at":1749123456000,
-    "version":1,
-    "history":[],
-    "extended_meta":{},
-    "domain_weights":{},
-    "node_weights":{}
-  }
-]}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `id` | string | 话题 ID |
-| `label` | string | 话题标签 |
-| `summary` | string? | 摘要 |
-| `keywords` | string[] | 关键词列表 |
-| `centroid` | f16[] | 话题质心向量 |
-| `node_ids` | string[] | 关联的节点 ID 列表 |
-| `linked_domain_ids` | string[] | 关联的领域 ID 列表 |
-| `doc_ids` | string[] | 关联的文档 ID 列表 |
-| `dialogue_range` | [i64, i64]? | 对话时间范围 |
-| `created_at` | i64 | 创建时间戳（毫秒） |
-| `updated_at` | i64 | 更新时间戳（毫秒） |
-| `version` | u64 | 版本号 |
-| `history` | TopicSnapshot[] | 历史记录 |
-| `extended_meta` | object | 扩展元数据 |
-| `domain_weights` | object | 领域关联强度 |
-| `node_weights` | object | 节点关联强度 |
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-
----
-
-### memhop_re_search
-
-正则搜索记忆（使用正则表达式匹配文本）。
-
-```json
-// 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_re_search",
-  "params": {
-    "agent_id": "cat_1",
-    "query": "喜欢.*可乐",
-    "max_results": 10,
-    "target_layers": ["L1", "L2", "L4"]
-  },
-  "id": 1
+match brain.recall(request) {
+    Ok(response) => { /* 处理响应 */ }
+    Err(MemHopError::Storage(e)) => { /* 存储错误 */ }
+    Err(MemHopError::Encoding(e)) => { /* 编码错误 */ }
+    Err(MemHopError::Validation(e)) => { /* 验证错误 */ }
+    Err(e) => { /* 其他错误 */ }
 }
 ```
 
-参数与 `memhop_recall` 相同（不含 `time_range`）。
+---
+
+## 最佳实践
+
+1. **批量写入**：始终使用 `batch_store`，不要逐条写入
+2. **话题标签**：为每条记忆提供 `topic_label`，提升检索质量
+3. **定期巩固**：定期调用 `dream()` 进行记忆巩固
+4. **会话管理**：使用 `activate` 提升当前会话相关话题的权重
+5. **错误重试**：存储失败时，建议重试 3 次，间隔 100ms
 
 ---
 
-### memhop_update_topic
+## 版本历史
 
-更新话题元数据（summary、keywords、扩展字段）。
+- **v0.23.0** (2026-06-08)
+  - 架构重构：memhop-mcp-server 移除，MemHop 完全嵌入 meowAgent
+  - 新增记忆激活系统（Active/Latent/Dormant）
+  - SparseIndexV2：forward 索引从内存移到 LMDB
+  - 编码器 IPC 化：Unix Domain Socket + bincode 协议
+  - **HNSW 索引优化**：usearch 替换为 hnsw-stable（纯 Rust，无 C++ 依赖，跨平台部署更简单，支持 stable Rust）
 
-```json
-// 请求
-{
-  "jsonrpc": "2.0",
-  "method": "memhop_update_topic",
-  "params": {
-    "agent_id": "cat_1",
-    "topic_id": "topic_xxx",
-    "summary": "用户喜欢可乐等碳酸饮料",
-    "keywords": ["可乐", "碳酸饮料", "偏好"],
-    "extended_meta": {"source": "llm_refined"}
-  },
-  "id": 1
-}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"status":"ok"}}
-```
+- **v0.20.0** (2026-05-30)
+  - 新增 `memhop_set_l0` 完整版接口
+  - 新增 `memhop_get_topic` 查询单个话题
+  - 新增存储使用率统计
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | 否 | Agent 标识 |
-| `topic_id` | string | **是** | 话题 ID |
-| `summary` | string | 否 | 更新摘要 |
-| `keywords` | string[] | 否 | 更新关键词 |
-| `extended_meta` | object | 否 | 扩展元数据键值对 |
-
----
-
-## P2 预热接口
-
-### memhop_prewarm
-
-主动预热指定层的 LMDB 环境和索引。适用于需要快速响应的场景。
-
-```json
-// 请求
-{"jsonrpc":"2.0","method":"memhop_prewarm","params":{"agent_id":"cat_1","layers":["L1","L4"]},"id":1}
-// 响应
-{"jsonrpc":"2.0","id":1,"result":{"layers":{"L1":{"nodes":150,"duration_ms":42},"L4":{"nodes":500,"duration_ms":128}}}}
-```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `layers` | object | 各层预热结果 |
-| `layers.{Lx}.nodes` | u32 | 该层节点/文档数量 |
-| `layers.{Lx}.duration_ms` | u64 | 预热耗时（毫秒） |
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `agent_id` | string | **是** | Agent 标识 |
-| `layers` | string[] | **是** | 要预热的层，如 `["L1", "L2", "L4"]` |
+- **v0.19.0** (2026-05-28)
+  - 新增 LRU 缓存管理
+  - 新增存储使用率监控
