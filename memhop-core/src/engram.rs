@@ -59,6 +59,8 @@ pub struct KnowledgeNode {
     /// 唤醒度 [0.0, 1.0]
     #[serde(default)]
     pub arousal: f32,
+    /// 文档长度（字符数），用于 BM25 长度归一化
+    pub doc_len: usize,
 }
 
 impl KnowledgeNode {
@@ -71,6 +73,7 @@ impl KnowledgeNode {
         source: NodeSource,
     ) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
+        let doc_len = text.len();
         KnowledgeNode {
             id,
             text,
@@ -94,6 +97,7 @@ impl KnowledgeNode {
             emotion_intensity: 0.0,
             valence: 0.0,
             arousal: 0.0,
+            doc_len,
         }
     }
 }

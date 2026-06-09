@@ -7,7 +7,7 @@
 //!
 //! # 使用示例
 //! ```rust,no_run
-//! use memhop_core::{MemHopSDK, MemHopConfig};
+//! use memhop_core::{MemHopConfig, MemHopSDK};
 //!
 //! // 1. 初始化 SDK（全局一次性）
 //! let config = MemHopConfig {
@@ -78,10 +78,9 @@ impl MemHopSDK {
         let state = SDK_STATE.get_or_init(|| RwLock::new(None));
 
         // 检查是否已初始化
-        if let Ok(guard) = state.read() {
-            if guard.is_some() {
+        if let Ok(guard) = state.read()
+            && guard.is_some() {
                 return Ok(()); // 已初始化，忽略重复调用
-            }
         }
 
         // 创建编码器
@@ -99,8 +98,8 @@ impl MemHopSDK {
         Ok(())
     }
 
-    /// 创建编码器（内部方法）
-    fn create_encoder(config: &MemHopConfig) -> Result<Arc<Box<dyn Encoder>>> {
+    /// 创建编码器（内部方法，供 MemHopInstance 复用）
+    pub(crate) fn create_encoder(config: &MemHopConfig) -> Result<Arc<Box<dyn Encoder>>> {
         match &config.model_path {
             Some(model_path) => {
                 #[cfg(feature = "candle")]
@@ -167,6 +166,46 @@ impl MemHopSDK {
     }
 }
 
+/// Non-global MemHop instance (for testing or multi-config scenarios).
+///
+/// Unlike `MemHopSDK` which uses process-wide singletons, `MemHopInstance`
+/// holds its own encoder and config. This enables:
+/// - Parallel tests with different configurations
+/// - Multiple Brain instances with different encoders
+/// - Testing initialization failure scenarios
+pub struct MemHopInstance {
+    encoder: Arc<Box<dyn Encoder>>,
+    config: MemHopConfig,
+}
+
+impl MemHopInstance {
+    /// Create a new MemHopInstance with the given config.
+    /// This does not affect the global SDK state.
+    pub fn new(config: MemHopConfig) -> Result<Self> {
+        let encoder = MemHopSDK::create_encoder(&config)?;
+        Ok(Self { encoder, config })
+    }
+
+    /// Create a Brain instance using this instance's encoder.
+    pub fn create_brain(&self, brains_dir: &str, agent_id: &str) -> Result<Brain> {
+        let brain_config = BrainConfig {
+            brains_dir: brains_dir.to_string(),
+            agent_id: agent_id.to_string(),
+        };
+        Brain::open(brain_config, self.encoder.clone())
+    }
+
+    /// Get a reference to this instance's encoder.
+    pub fn encoder(&self) -> Arc<Box<dyn Encoder>> {
+        self.encoder.clone()
+    }
+
+    /// Get the config used to create this instance.
+    pub fn config(&self) -> &MemHopConfig {
+        &self.config
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +238,41 @@ mod tests {
         let _ = MemHopSDK::init(config);
         // 检查是否已初始化
         assert!(MemHopSDK::is_initialized());
+    }
+
+    #[test]
+    fn test_instance_new_default() {
+        let config = MemHopConfig::default();
+        let instance = MemHopInstance::new(config).unwrap();
+        // Verify encoder is created and usable
+        let _encoder = instance.encoder();
+        // Verify config is accessible
+        let _cfg = instance.config();
+    }
+
+    #[test]
+    fn test_instance_create_brain() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = MemHopConfig::default();
+        let instance = MemHopInstance::new(config).unwrap();
+
+        let brain = instance.create_brain(
+            tmp.path().to_str().unwrap(),
+            "test-instance-agent"
+        );
+        assert!(brain.is_ok());
+    }
+
+    #[test]
+    fn test_instance_config() {
+        let config = MemHopConfig {
+            model_path: None,
+            vector_dim: 512,
+            #[cfg(feature = "candle")]
+            use_candle: false,
+        };
+        let instance = MemHopInstance::new(config.clone()).unwrap();
+        assert_eq!(instance.config().vector_dim, 512);
+        assert_eq!(instance.config().model_path, None);
     }
 }

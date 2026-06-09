@@ -1,9 +1,9 @@
 //! memhop-encoder-client — IPC 客户端库 (v0.23.0)
 //!
-//! 实现 memhop_core::Encoder trait，通过 Unix Socket 与 memhop-encoder 服务通信。
+//! 实现 memhop_core::Encoder trait，通过 Unix Socket 或 TCP 与 memhop-encoder 服务通信。
 //! 内部使用独立的 tokio runtime 桥接异步 IPC 调用为同步接口。
 
-pub mod protocol;
+pub use memhop_protocol as protocol;
 
 use memhop_core::encoder::{Encoder, EncoderOutput};
 use protocol::{
@@ -12,18 +12,18 @@ use protocol::{
 };
 use std::collections::HashMap;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixStream;
+use memhop_protocol::IoStream;
 use tokio::sync::Mutex;
 
 /// IPC 编码器客户端
 ///
-/// 通过 Unix Socket 与 memhop-encoder 服务通信。
+/// 通过 Unix Socket 或 TCP 与 memhop-encoder 服务通信。
 /// 内部持有独立的 tokio runtime，将异步 IPC 调用桥接为同步接口。
 pub struct EncoderClient {
     /// 独立的 tokio runtime（避免与外部 runtime 冲突）
     runtime: tokio::runtime::Runtime,
-    /// Unix Socket 连接
-    stream: Mutex<UnixStream>,
+    /// Unix Socket 或 TCP 连接
+    stream: Mutex<IoStream>,
     /// 编码器输出维度
     dim: usize,
 }
@@ -32,7 +32,7 @@ impl EncoderClient {
     /// 连接到 memhop-encoder 服务
     ///
     /// # Arguments
-    /// * `socket_path` - Unix Socket 路径
+    /// * `socket_path` - Unix Socket 路径（支持 unix://, tcp:// 或裸路径）
     ///
     /// # Returns
     /// * `Ok(EncoderClient)` - 连接成功
@@ -44,7 +44,7 @@ impl EncoderClient {
             .build()?;
 
         // 连接到 encoder 服务
-        let mut stream = runtime.block_on(UnixStream::connect(socket_path))?;
+        let mut stream = runtime.block_on(IoStream::connect(socket_path))?;
 
         // 握手：获取 dim
         let dim = runtime.block_on(Self::request_dim(&mut stream))?;
@@ -57,7 +57,7 @@ impl EncoderClient {
     }
 
     /// 请求编码器维度
-    async fn request_dim(stream: &mut UnixStream) -> Result<usize, Box<dyn std::error::Error>> {
+    async fn request_dim(stream: &mut IoStream) -> Result<usize, Box<dyn std::error::Error>> {
         // 发送 Dim 请求
         let request = EncodeRequest::Dim;
         let frame = serialize_request(&request)?;
@@ -76,7 +76,7 @@ impl EncoderClient {
 
     /// 读取完整响应帧
     async fn read_response(
-        stream: &mut UnixStream,
+        stream: &mut IoStream,
     ) -> Result<EncodeResponse, Box<dyn std::error::Error>> {
         // 读取帧头（4 字节长度）
         let mut header = [0u8; FRAME_HEADER_SIZE];

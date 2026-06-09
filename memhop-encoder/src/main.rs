@@ -1,70 +1,85 @@
-//! memhop-encoder — 独立编码器服务 (v0.23.0)
+//! memhop-encoder — 独立编码器服务 (v0.25.0)
 //!
-//! 加载编码器模型，监听 Unix Socket，处理编码请求。
-//! 支持 NgramEncoder（零模型依赖）。
+//! 加载编码器模型，监听 Unix Socket 或 TCP，处理编码请求。
+//! 支持 NgramEncoder（零模型依赖）和 CandleEncoder（语义向量模型）。
 
+use clap::Parser;
 use memhop_core::encoder::{Encoder, NgramEncoder};
+#[cfg(feature = "candle")]
+use memhop_core::encoder::{CandleEncoder, EncoderRouter};
+use memhop_protocol::{
+    deserialize_request, serialize_response, EncodeRequest, EncodeResponse,
+    EncoderOutputOwned, FRAME_HEADER_SIZE, IoListener, IoStream,
+};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::UnixListener;
 
-/// IPC 协议定义（与 memhop-encoder-client 共享）
-mod protocol {
-    use half::f16;
-    use serde::{Deserialize, Serialize};
-    use std::collections::HashMap;
+/// memhop-encoder CLI 参数
+#[derive(Parser)]
+#[command(version, about = "MemHop standalone encoder service")]
+struct Args {
+    /// Unix socket 路径
+    #[arg(long, default_value = "/tmp/memhop-encoder.sock")]
+    socket: String,
 
-    #[derive(Debug, Serialize, Deserialize)]
-    pub enum EncodeRequest {
-        Single { text: String },
-        Batch { texts: Vec<String> },
-        Dim,
-        Ping,
-    }
+    /// NgramEncoder 维度（无 --model-path 时使用）
+    #[arg(long, default_value_t = 1024)]
+    dim: usize,
 
-    #[derive(Debug, Serialize, Deserialize)]
-    pub enum EncodeResponse {
-        Single {
-            dense: Vec<f16>,
-            sparse: HashMap<String, f32>,
-        },
-        Batch {
-            outputs: Vec<EncoderOutputOwned>,
-        },
-        Dim {
-            dim: usize,
-        },
-        Pong,
-        Error {
-            message: String,
-        },
-    }
-
-    #[derive(Debug, Clone, Serialize, Deserialize)]
-    pub struct EncoderOutputOwned {
-        pub dense: Vec<f16>,
-        pub sparse: HashMap<String, f32>,
-    }
-
-    pub const FRAME_HEADER_SIZE: usize = 4;
-
-    pub fn deserialize_request(data: &[u8]) -> Result<EncodeRequest, bincode::Error> {
-        bincode::deserialize(data)
-    }
-
-    pub fn serialize_response(response: &EncodeResponse) -> Result<Vec<u8>, bincode::Error> {
-        let payload = bincode::serialize(response)?;
-        let mut frame = Vec::with_capacity(FRAME_HEADER_SIZE + payload.len());
-        frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
-        frame.extend_from_slice(&payload);
-        Ok(frame)
-    }
+    /// CandleEncoder 模型路径（可选，启用 CandleEncoder + EncoderRouter 双通道）
+    #[arg(long)]
+    model_path: Option<String>,
 }
 
-use protocol::{EncodeRequest, EncodeResponse, EncoderOutputOwned, FRAME_HEADER_SIZE};
+/// 创建编码器实例
+///
+/// - 无 `--model-path`：使用 `NgramEncoder::new(dim)`
+/// - 有 `--model-path`（candle feature 启用）：加载 `CandleEncoder` + `EncoderRouter`
+/// - 有 `--model-path`（candle feature 未启用）：警告，回退到 `NgramEncoder`
+fn create_encoder(args: &Args) -> Arc<Box<dyn Encoder>> {
+    if let Some(model_path) = &args.model_path {
+        #[cfg(feature = "candle")]
+        {
+            match CandleEncoder::new(model_path) {
+                Ok(dense_encoder) => {
+                    let dim = dense_encoder.dim();
+                    println!(
+                        "[memhop-encoder] Loaded CandleEncoder from: {} (dim={})",
+                        model_path, dim
+                    );
+                    let sparse_encoder = Box::new(NgramEncoder::new(dim));
+                    let router = EncoderRouter::new(sparse_encoder, Box::new(dense_encoder));
+                    return Arc::new(Box::new(router));
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[memhop-encoder] Warning: Failed to load CandleEncoder from '{}': {}",
+                        model_path, e
+                    );
+                }
+            }
+        }
+
+        #[cfg(not(feature = "candle"))]
+        {
+            eprintln!(
+                "[memhop-encoder] Warning: --model-path '{}' provided but candle feature not enabled",
+                model_path
+            );
+        }
+
+        eprintln!(
+            "[memhop-encoder] Falling back to NgramEncoder (dim={})",
+            args.dim
+        );
+    }
+
+    Arc::new(Box::new(NgramEncoder::new(args.dim)))
+}
 
 /// 处理单个客户端连接
-async fn handle_client(mut stream: tokio::net::UnixStream, encoder: Arc<Box<dyn Encoder>>) {
+async fn handle_client(mut stream: IoStream, encoder: Arc<Box<dyn Encoder>>) {
     loop {
         // 读取帧头
         let mut header = [0u8; FRAME_HEADER_SIZE];
@@ -90,14 +105,14 @@ async fn handle_client(mut stream: tokio::net::UnixStream, encoder: Arc<Box<dyn 
         }
 
         // 反序列化请求
-        let request = match protocol::deserialize_request(&payload) {
+        let request = match deserialize_request(&payload) {
             Ok(req) => req,
             Err(e) => {
                 eprintln!("[memhop-encoder] deserialize error: {}", e);
                 let response = EncodeResponse::Error {
                     message: format!("Deserialize error: {}", e),
                 };
-                if let Ok(frame) = protocol::serialize_response(&response) {
+                if let Ok(frame) = serialize_response(&response) {
                     let _ = stream.write_all(&frame).await;
                 }
                 continue;
@@ -131,7 +146,7 @@ async fn handle_client(mut stream: tokio::net::UnixStream, encoder: Arc<Box<dyn 
         };
 
         // 发送响应
-        match protocol::serialize_response(&response) {
+        match serialize_response(&response) {
             Ok(frame) => {
                 if let Err(e) = stream.write_all(&frame).await {
                     eprintln!("[memhop-encoder] write response error: {}", e);
@@ -143,7 +158,7 @@ async fn handle_client(mut stream: tokio::net::UnixStream, encoder: Arc<Box<dyn 
                 let error_response = EncodeResponse::Error {
                     message: format!("Serialize error: {}", e),
                 };
-                if let Ok(frame) = protocol::serialize_response(&error_response) {
+                if let Ok(frame) = serialize_response(&error_response) {
                     let _ = stream.write_all(&frame).await;
                 }
             }
@@ -153,37 +168,93 @@ async fn handle_client(mut stream: tokio::net::UnixStream, encoder: Arc<Box<dyn 
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 解析命令行参数
-    let args: Vec<String> = std::env::args().collect();
-    let socket_path = args.get(1).map(|s| s.as_str()).unwrap_or("/tmp/memhop-encoder.sock");
+    let args = Args::parse();
 
     println!("[memhop-encoder] Starting encoder service...");
-    println!("[memhop-encoder] Socket path: {}", socket_path);
+    println!("[memhop-encoder] Socket path: {}", args.socket);
 
-    // 创建编码器（默认使用 NgramEncoder）
-    let encoder: Arc<Box<dyn Encoder>> = Arc::new(Box::new(NgramEncoder::new(1024)));
-    println!("[memhop-encoder] Encoder: NgramEncoder, dim={}", encoder.dim());
+    // 创建编码器
+    let encoder = create_encoder(&args);
+    println!(
+        "[memhop-encoder] Encoder: {}, dim={}",
+        encoder.mode(),
+        encoder.dim()
+    );
 
-    // 删除旧的 socket 文件
-    let _ = std::fs::remove_file(socket_path);
+    // 监听 Unix Socket（IoListener 自动处理已存在的 socket 文件）
+    let listener = IoListener::bind(&args.socket).await?;
+    println!("[memhop-encoder] Listening on {}", args.socket);
 
-    // 监听 Unix Socket
-    let listener = UnixListener::bind(socket_path)?;
-    println!("[memhop-encoder] Listening on {}", socket_path);
+    // 初始化信号处理器（SIGTERM/SIGINT on Unix, Ctrl+C on Windows）
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    #[cfg(unix)]
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+    #[cfg(not(unix))]
+    let mut ctrl_c = tokio::signal::ctrl_c();
 
-    // 接受连接
-    loop {
-        match listener.accept().await {
-            Ok((stream, _addr)) => {
-                println!("[memhop-encoder] New client connected");
-                let enc = Arc::clone(&encoder);
-                tokio::spawn(async move {
-                    handle_client(stream, enc).await;
-                });
+    // 构建 shutdown future（平台无关）
+    let shutdown = async move {
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                _ = sigterm.recv() => {}
+                _ = sigint.recv() => {}
             }
-            Err(e) => {
-                eprintln!("[memhop-encoder] Accept error: {}", e);
+        }
+        #[cfg(not(unix))]
+        {
+            ctrl_c.await.ok();
+        }
+    };
+    tokio::pin!(shutdown);
+
+    // 跟踪活跃连接数，用于安全关闭
+    let active_connections = Arc::new(AtomicUsize::new(0));
+
+    println!("[memhop-encoder] Ready to accept connections");
+
+    // 接受连接循环（带优雅关闭）
+    loop {
+        tokio::select! {
+            accept_result = listener.accept() => {
+                match accept_result {
+                    Ok(stream) => {
+                        println!("[memhop-encoder] New client connected");
+                        active_connections.fetch_add(1, Ordering::SeqCst);
+                        let enc = Arc::clone(&encoder);
+                        let active = Arc::clone(&active_connections);
+                        tokio::spawn(async move {
+                            handle_client(stream, enc).await;
+                            active.fetch_sub(1, Ordering::SeqCst);
+                        });
+                    }
+                    Err(e) => {
+                        eprintln!("[memhop-encoder] Accept error: {}", e);
+                    }
+                }
+            }
+            _ = &mut shutdown => {
+                println!("[memhop-encoder] Received shutdown signal, shutting down gracefully...");
+                break;
             }
         }
     }
+
+    // 等待所有活跃连接完成
+    let mut remaining = active_connections.load(Ordering::SeqCst);
+    while remaining > 0 {
+        println!(
+            "[memhop-encoder] Waiting for {} active connection(s) to complete...",
+            remaining
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        remaining = active_connections.load(Ordering::SeqCst);
+    }
+
+    // IoListener 在 drop 时不做 socket 文件清理，但 Unix 系统上
+    // socket 文件可以保留（下一轮启动时 IoListener::bind 会自动删除）
+    println!("[memhop-encoder] Shutdown complete.");
+
+    Ok(())
 }

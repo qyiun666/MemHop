@@ -12,7 +12,8 @@ use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
 use crate::error::{MemHopError, Result};
-use heed::types::{Bytes, Str};
+use heed::byteorder::NativeEndian;
+use heed::types::{Bytes, Str, U32};
 use heed::{RoTxn, RwTxn};
 use lru::LruCache;
 use serde::{Deserialize, Serialize};
@@ -245,21 +246,23 @@ impl Default for SparseIndex {
 
 // ── HnswIndex ──────────────────────────────────────────────
 
-/// HNSW 向量索引 (fast-hnsw)，O(log N) 近似搜索。
-/// 使用纯 Rust 实现，无 C++ 依赖，跨平台兼容。
-use fast_hnsw::{Builder, distance::Cosine};
-use fast_hnsw::labeled::LabeledIndex;
+pub type HnswKey = u64;
 
+/// HNSW 向量索引 (usearch v2.25.3)，O(log N) 近似搜索。
+/// 使用 usearch C++ 库，支持删除、持久化。
 pub struct HnswIndex {
-    index: LabeledIndex<Cosine, String>,
+    index: usearch::Index,
     dims: usize,
+    expansion_search: usize,
+    key_map: HashMap<String, HnswKey>,
+    next_key: HnswKey,
 }
 
 impl std::fmt::Debug for HnswIndex {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HnswIndex")
             .field("dims", &self.dims)
-            .field("size", &self.index.len())
+            .field("size", &self.key_map.len())
             .finish()
     }
 }
@@ -318,15 +321,25 @@ impl HnswIndex {
 
     /// v0.22.0: 使用指定配置创建 HNSW 索引。
     pub fn new_with_config(dims: usize, config: MemHopHnswConfig) -> Self {
-        let index = Builder::new()
-            .m(config.connectivity)
-            .ef_construction(config.expansion_add)
-            .seed(42)
-            .build_labeled(Cosine);
-        
+        let opts = usearch::ffi::IndexOptions {
+            dimensions: dims,
+            metric: usearch::ffi::MetricKind::Cos,
+            quantization: usearch::ffi::ScalarKind::F32,
+            connectivity: config.connectivity,
+            expansion_add: config.expansion_add,
+            expansion_search: config.expansion_search,
+            multi: true,
+        };
+
+        let index = usearch::Index::new(&opts)
+            .expect("Failed to create usearch index");
+
         HnswIndex {
             index,
             dims,
+            expansion_search: config.expansion_search,
+            key_map: HashMap::new(),
+            next_key: 0,
         }
     }
 
@@ -343,35 +356,66 @@ impl HnswIndex {
         }
 
         let f32_vec: Vec<f32> = vector.iter().map(|v| v.to_f32()).collect();
-        self.index.insert(f32_vec, id.to_string());
+        let key = *self.key_map.entry(id.to_string()).or_insert_with(|| {
+            let k = self.next_key;
+            self.next_key += 1;
+            k
+        });
+
+        if let Err(e) = self.index.add::<f32>(key, &f32_vec) {
+            eprintln!("HnswIndex::add: failed to add '{}': {}", id, e);
+        }
     }
 
-    /// 移除向量。fast-hnsw 不支持删除，返回 false。
-    pub fn remove(&mut self, _id: &str) -> bool {
-        // fast-hnsw doesn't support deletion
-        false
+    /// 移除向量。usearch 支持删除，返回 true 表示成功移除。
+    pub fn remove(&mut self, id: &str) -> bool {
+        if let Some(key) = self.key_map.remove(id) {
+            match self.index.remove(key) {
+                Ok(_) => true,
+                Err(e) => {
+                    eprintln!("HnswIndex::remove: failed to remove '{}': {}", id, e);
+                    // Restore key_map entry to keep state consistent
+                    self.key_map.insert(id.to_string(), key);
+                    false
+                }
+            }
+        } else {
+            false
+        }
     }
 
     /// 更新向量 (remove + add)。
     pub fn update(&mut self, id: &str, vector: &[half::f16]) {
-        // fast-hnsw doesn't support removal, just add new version
+        self.remove(id);
         self.add(id, vector);
     }
 
     /// v0.22.0: Cosine 近似搜索（内部 F16 量化，API 用 f32）。
     pub fn cosine_search(&self, query: &[half::f16], top_k: usize) -> Vec<(String, f32)> {
-        if self.index.is_empty() || query.is_empty() || query.len() != self.dims {
+        if self.key_map.is_empty() || query.is_empty() || query.len() != self.dims {
             return Vec::new();
         }
 
         let f32_query: Vec<f32> = query.iter().map(|v| v.to_f32()).collect();
-        let count = top_k.min(self.index.len());
 
-        let hits = self.index.search(&f32_query, count, 100); // ef=100
-        let mut results = Vec::with_capacity(hits.len());
-        for hit in hits {
-            let similarity = 1.0 - hit.distance;
-            results.push((hit.payload.clone(), similarity));
+        // Use the stored expansion_search value (index internally uses it)
+        self.index.change_expansion_search(self.expansion_search);
+
+        let matches = match self.index.search::<f32>(&f32_query, top_k) {
+            Ok(m) => m,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut results = Vec::with_capacity(matches.keys.len());
+        for (key, distance) in matches.keys.iter().zip(matches.distances.iter()) {
+            let similarity = 1.0 - distance;
+            // Reverse lookup: find string id for this u64 key
+            if let Some(id) = self.key_map.iter()
+                .find(|&(_, k)| *k == *key)
+                .map(|(id, _)| id.clone())
+            {
+                results.push((id, similarity));
+            }
         }
         results
     }
@@ -398,26 +442,70 @@ impl HnswIndex {
     }
 
     pub fn len(&self) -> usize {
-        self.index.len()
+        self.key_map.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.index.len() == 0
+        self.key_map.is_empty()
     }
 
     pub fn dims(&self) -> usize {
         self.dims
     }
 
-    /// 序列化为 bytes (fast-hnsw 不支持原生序列化，返回空)
+    /// 序列化为 bytes：key_map (bincode) + usearch index bytes
+    /// Format: [4 bytes: key_map_len(u32 LE)][key_map_bytes(bincode)][usearch_index_bytes]
     pub fn to_bytes(&self) -> Vec<u8> {
-        // fast-hnsw doesn't support native serialization
-        Vec::new()
+        let key_map_bytes = match bincode::serialize(&self.key_map) {
+            Ok(b) => b,
+            Err(_) => return Vec::new(),
+        };
+        let key_map_len = (key_map_bytes.len() as u32).to_le_bytes();
+
+        // Save usearch index to buffer
+        let index_len = self.index.serialized_length();
+        let mut index_bytes = vec![0u8; index_len];
+        if self.index.save_to_buffer(&mut index_bytes).is_err() {
+            return Vec::new();
+        }
+
+        let mut result = Vec::with_capacity(4 + key_map_bytes.len() + index_bytes.len());
+        result.extend_from_slice(&key_map_len);
+        result.extend_from_slice(&key_map_bytes);
+        result.extend_from_slice(&index_bytes);
+        result
     }
 
-    /// 从 bytes 反序列化 (fast-hnsw 不支持原生序列化)
-    pub fn from_bytes(_data: &[u8]) -> Option<Self> {
-        None
+    /// 从 bytes 反序列化
+    pub fn from_bytes(data: &[u8]) -> Option<Self> {
+        if data.len() < 4 {
+            return None;
+        }
+
+        let key_map_len = u32::from_le_bytes(data[..4].try_into().ok()?) as usize;
+        if 4 + key_map_len > data.len() {
+            return None;
+        }
+
+        let key_map_data = &data[4..4 + key_map_len];
+        let index_data = &data[4 + key_map_len..];
+
+        let key_map: HashMap<String, HnswKey> = bincode::deserialize(key_map_data).ok()?;
+
+        // Restore usearch index from buffer
+        // restore_from_buffer creates new index from the buffer contents
+        let index = usearch::Index::restore_from_buffer(index_data).ok()?;
+        let dims = index.dimensions();
+        let expansion_search = index.expansion_search();
+        let next_key = key_map.values().max().copied().unwrap_or(0) + 1;
+
+        Some(HnswIndex {
+            index,
+            dims,
+            expansion_search,
+            key_map,
+            next_key,
+        })
     }
 }
 
@@ -677,27 +765,38 @@ pub struct SparseIndexV2 {
     /// LRU cache for forward index entries (reduces LMDB I/O)
     /// Default: 10000 entries (uses ~1MB RAM for typical sparse vectors)
     forward_cache: Mutex<LruCache<String, HashMap<String, f32>>>,
+    /// LMDB database for document lengths (memory_id → doc_len as u32)
+    doc_len_db: Option<heed::Database<Str, U32<NativeEndian>>>,
 }
 
 impl SparseIndexV2 {
-    /// Create a new SparseIndexV2 with optional LMDB forward database.
+    /// Create a new SparseIndexV2 with optional LMDB forward and doc_len databases.
     /// Uses LRU cache with 10000 entries to reduce LMDB I/O.
-    pub fn new(forward_db: Option<heed::Database<Str, Bytes>>) -> Self {
+    pub fn new(
+        forward_db: Option<heed::Database<Str, Bytes>>,
+        doc_len_db: Option<heed::Database<Str, U32<NativeEndian>>>,
+    ) -> Self {
         SparseIndexV2 {
             inverted: HashMap::new(),
             doc_len: HashMap::new(),
             forward_db,
             forward_cache: Mutex::new(LruCache::new(NonZeroUsize::new(10000).unwrap())),
+            doc_len_db,
         }
     }
 
     /// Create with custom cache size (for testing or memory-constrained environments).
-    pub fn with_cache_size(forward_db: Option<heed::Database<Str, Bytes>>, cache_size: usize) -> Self {
+    pub fn with_cache_size(
+        forward_db: Option<heed::Database<Str, Bytes>>,
+        doc_len_db: Option<heed::Database<Str, U32<NativeEndian>>>,
+        cache_size: usize,
+    ) -> Self {
         SparseIndexV2 {
             inverted: HashMap::new(),
             doc_len: HashMap::new(),
             forward_db,
             forward_cache: Mutex::new(LruCache::new(NonZeroUsize::new(cache_size.max(1)).unwrap())),
+            doc_len_db,
         }
     }
 
@@ -725,6 +824,12 @@ impl SparseIndexV2 {
         // Store doc length in memory
         self.doc_len.insert(id.to_string(), doc_length);
 
+        // Store doc length in LMDB doc_len_db
+        if let Some(db) = self.doc_len_db {
+            db.put(wtxn, id, &(doc_length as u32))
+                .map_err(|e| MemHopError::Storage(format!("put doc_len: {}", e)))?;
+        }
+
         // Build inverted index in memory
         for ngram in sparse.keys() {
             self.inverted
@@ -739,6 +844,12 @@ impl SparseIndexV2 {
     /// Remove a memory from the index.
     pub fn remove(&mut self, id: &str, wtxn: &mut RwTxn<'_>) -> Result<()> {
         self.doc_len.remove(id);
+
+        // Remove from doc_len_db
+        if let Some(db) = self.doc_len_db {
+            db.delete(wtxn, id)
+                .map_err(|e| MemHopError::Storage(format!("delete doc_len: {}", e)))?;
+        }
 
         // Remove from LRU cache
         if let Ok(mut cache) = self.forward_cache.lock() {
@@ -977,10 +1088,18 @@ impl SparseIndexV2 {
                         .insert(id.clone());
                 }
                 
-                // We don't have doc_len in forward DB, so we estimate from sparse weights
-                // This is a limitation - doc_len should be stored separately
-                let estimated_doc_len = sparse.values().map(|v| *v as usize).sum::<usize>().max(1);
-                self.doc_len.insert(id, estimated_doc_len);
+                // Try to read doc_len from doc_len_db first; fall back to estimation
+                let doc_len = if let Some(doc_len_db) = self.doc_len_db {
+                    match doc_len_db.get(rtxn, id.as_str()) {
+                        Ok(Some(len)) => len as usize,
+                        _ => {
+                            sparse.values().map(|v| *v as usize).sum::<usize>().max(1)
+                        }
+                    }
+                } else {
+                    sparse.values().map(|v| *v as usize).sum::<usize>().max(1)
+                };
+                self.doc_len.insert(id, doc_len);
             }
         }
         Ok(())

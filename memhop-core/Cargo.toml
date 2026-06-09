@@ -1,7 +1,7 @@
 [package]
 name = "memhop-core"
-version = "0.24.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "Hypergraph-based associative memory engine for AI Agents — BM25 + HNSW dual-channel retrieval"
 
 [lib]
@@ -31,7 +31,7 @@ candle-nn = { version = "0.8", optional = true }
 candle-transformers = { version = "0.8", optional = true }
 tokenizers = { version = "0.21", optional = true }
 dirs = { version = "5", optional = true }
-fast-hnsw = "1.0.1"
+usearch = "2.25.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

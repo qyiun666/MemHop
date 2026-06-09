@@ -61,7 +61,7 @@ pub use brain::{Brain, PrewarmLayerResult};
 pub use encoder::{Encoder, EncoderOutput, EncoderRouter, NgramEncoder};
 #[cfg(feature = "candle")]
 pub use encoder::CandleEncoder;
-pub use sdk::{MemHopConfig, MemHopSDK};
+pub use sdk::{MemHopConfig, MemHopInstance, MemHopSDK};
 pub use engram::{Hyperedge, KnowledgeNode, RawDocument, Topic, TopicEdge};
 pub use error::{MemHopError, Result};
 pub use index::{HnswIndex, MemHopHnswConfig, SparseIndex, SparseIndexV2};

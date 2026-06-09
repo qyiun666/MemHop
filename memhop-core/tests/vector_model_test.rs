@@ -1,5 +1,5 @@
 use memhop_core::{
-    Brain, BrainConfig, Encoder, NgramEncoder, RecallRequest, StoreBatch, StoreItem, Layer,
+    Brain, BrainConfig, Encoder, EncoderRouter, NgramEncoder, RecallRequest, StoreBatch, StoreItem, Layer,
 };
 #[cfg(feature = "candle")]
 use memhop_core::CandleEncoder;

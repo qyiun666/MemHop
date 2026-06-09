@@ -1,15 +1,13 @@
 [package]
 name = "memhop-encoder-client"
-version = "0.23.0"
-edition = "2024"
-description = "IPC client library for MemHop encoder service — implements Encoder trait via Unix Socket"
+version.workspace = true
+edition.workspace = true
+description = "IPC client library for MemHop encoder service — implements Encoder trait via Unix Socket or TCP"
 
 [lib]
 crate-type = ["rlib"]
 
 [dependencies]
 memhop-core = { path = "../memhop-core" }
+memhop-protocol = { path = "../memhop-protocol" }
 tokio = { version = "1", features = ["net", "io-util", "rt", "sync"] }
-half = { version = "2", features = ["serde"] }
-serde = { version = "1", features = ["derive"] }
-bincode = "1"

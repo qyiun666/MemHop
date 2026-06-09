@@ -1,3 +1,7 @@
 [workspace]
-members = ["memhop-core", "memhop-encoder", "memhop-encoder-client"]
+members = ["memhop-core", "memhop-encoder", "memhop-encoder-client", "memhop-protocol"]
 resolver = "2"
+
+[workspace.package]
+version = "0.25.0"
+edition = "2024"

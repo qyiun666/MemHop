@@ -343,7 +343,7 @@ impl MsMarcoDataset {
         // 生成 100 个查询
         for i in 0..100 {
             let topic_idx = i % topics.len();
-            let (prefix, description) = topics[topic_idx];
+            let (prefix, _description) = topics[topic_idx];
             let query_id = format!("q_{}", i);
             queries.push(DatasetQuery {
                 id: query_id.clone(),
@@ -471,7 +471,7 @@ impl NaturalQuestionsDataset {
         // 生成 200 个问题
         for i in 0..200 {
             let type_idx = i % question_types.len();
-            let (prefix, topic) = question_types[type_idx];
+            let (prefix, _topic) = question_types[type_idx];
             let query_id = format!("nq_{}", i);
             queries.push(DatasetQuery {
                 id: query_id.clone(),

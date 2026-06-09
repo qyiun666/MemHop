@@ -18,7 +18,7 @@ pub struct L1Hypergraph {
 impl L1Hypergraph {
     pub fn new() -> Self {
         L1Hypergraph {
-            bm25: SparseIndexV2::new(None),
+            bm25: SparseIndexV2::new(None, None),
             vector_index: HnswIndex::default(),
             node_count: 0,
             config: MemHopHnswConfig::default(),
@@ -28,7 +28,7 @@ impl L1Hypergraph {
     /// v0.16.0: 使用指定维度创建。
     pub fn with_dim(dim: usize) -> Self {
         L1Hypergraph {
-            bm25: SparseIndexV2::new(None),
+            bm25: SparseIndexV2::new(None, None),
             vector_index: HnswIndex::new(dim),
             node_count: 0,
             config: MemHopHnswConfig::default(),
@@ -38,7 +38,7 @@ impl L1Hypergraph {
     /// v0.18.0: 使用指定维度和配置创建。
     pub fn with_dim_and_config(dim: usize, config: crate::index::MemHopHnswConfig) -> Self {
         L1Hypergraph {
-            bm25: SparseIndexV2::new(None),
+            bm25: SparseIndexV2::new(None, None),
             vector_index: HnswIndex::new_with_config(dim, config.clone()),
             node_count: 0,
             config,
@@ -52,7 +52,7 @@ impl L1Hypergraph {
             .read_txn()
             ?;
         self.node_count = 0;
-        self.bm25 = SparseIndexV2::new(Some(env.sparse_forward));
+        self.bm25 = SparseIndexV2::new(Some(env.sparse_forward), Some(env.sparse_doc_len));
         if let Ok(iter) = env.nodes.iter(&txn) {
             for item in iter {
                 if let Ok((_key, bytes)) = item

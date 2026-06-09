@@ -11,16 +11,19 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 /// DeepSeek API 响应结构
+#[cfg(feature = "llm-api")]
 #[derive(Debug, serde::Deserialize)]
 struct DeepSeekResponse {
     choices: Vec<DeepSeekChoice>,
 }
 
+#[cfg(feature = "llm-api")]
 #[derive(Debug, serde::Deserialize)]
 struct DeepSeekChoice {
     message: DeepSeekMessage,
 }
 
+#[cfg(feature = "llm-api")]
 #[derive(Debug, serde::Deserialize)]
 struct DeepSeekMessage {
     content: String,

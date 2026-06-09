@@ -8,7 +8,8 @@
 //!   <brain_dir>/l3_domains.db/     — 领域节点+领域超图+每领域BM25
 //!   <brain_dir>/l4_raw.db/         — 原文+时间索引+会话索引
 
-use heed::types::{Bytes, Str};
+use heed::byteorder::NativeEndian;
+use heed::types::{Bytes, Str, U32};
 use heed::{Env, EnvOpenOptions, RoTxn, RwTxn};
 use std::path::Path;
 pub type DB = heed::Database<Str, Bytes>;
@@ -140,6 +141,8 @@ pub struct L1Env {
     pub vector_index: DB,
     /// v0.23.0: SparseIndexV2 forward 索引 (memory_id → sparse weights)
     pub sparse_forward: DB,
+    /// 文档长度 (memory_id → doc_len as u32)
+    pub sparse_doc_len: heed::Database<Str, U32<NativeEndian>>,
 }
 
 impl L1Env {
@@ -175,6 +178,9 @@ impl L1Env {
         let sparse_forward = env
             .create_database(&mut wtxn, Some("sparse_forward"))
             .map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
+        let sparse_doc_len = env
+            .create_database(&mut wtxn, Some("sparse_doc_len"))
+            .map_err(|e| MemHopError::Storage(format!("db: {}", e)))?;
         wtxn.commit()
             .map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
         Ok(L1Env {
@@ -185,6 +191,7 @@ impl L1Env {
             config,
             vector_index,
             sparse_forward,
+            sparse_doc_len,
         })
     }
 

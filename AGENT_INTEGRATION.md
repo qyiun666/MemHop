@@ -1,291 +1,264 @@
-# MemHop meowAgent 集成指南
+# MemHop SDK 集成指南
 
-## 快速开始（SDK 方式）
+> MemHop v0.24.0 — 6 层仿人脑记忆引擎 SDK
 
-### 方式一：使用 MemHopSDK（推荐）
+---
 
-```rust
-use meowagent_memory::{init_memhop_sdk, create_adapter, MemHopSDKConfig};
+## 目录
 
-// 1. 初始化 SDK（全局一次性，进程内共享编码器）
-let config = MemHopSDKConfig {
-    model_path: Some("/path/to/models/multilingual-e5-small".to_string()),  // 向量模型路径
-    data_dir: "./data/agent1".to_string(),
-    agent_id: "agent1".to_string(),
-};
-init_memhop_sdk(config)?;
+- [1. 快速开始](#1-快速开始)
+- [2. 依赖配置](#2-依赖配置)
+- [3. 向量模型配置](#3-向量模型配置)
+- [4. SDK 初始化](#4-sdk-初始化)
+- [5. API 参考](#5-api-参考)
+- [6. 完整示例](#6-完整示例)
+- [7. 最佳实践](#7-最佳实践)
+- [8. 故障排除](#8-故障排除)
 
-// 2. 创建适配器（自动使用共享编码器）
-let adapter = create_adapter("./data/agent1", "agent1")?;
+---
 
-// 3. 使用适配器（参见下方 API）
-adapter.store(StoreRequest { ... }).await?;
-adapter.recall(RecallRequest { ... }).await?;
-```
+## 1. 快速开始
 
-### 方式二：使用环境变量
+### 最简示例（3 行代码）
 
 ```rust
-use meowagent_memory::sdk_init::init_from_env;
+use memhop_core::{MemHopSDK, MemHopConfig, StoreBatch, StoreItem, RecallRequest};
 
-// 读取环境变量：MEMHOP_MODEL_PATH, MEMHOP_DATA_DIR, MEMHOP_AGENT_ID
-let config = init_from_env()?;
-```
+// 1. 初始化 SDK
+MemHopSDK::init(MemHopConfig::default())?;
 
-### 方式三：直接使用 Brain（传统方式）
+// 2. 创建 Brain
+let mut brain = MemHopSDK::create_brain("./data", "my_agent")?;
 
-```rust
-use memhop_core::{Brain, BrainConfig, Encoder, NgramEncoder, RecallRequest, StoreBatch, StoreItem, Layer};
-use std::sync::Arc;
-
-// 1. 创建 Brain
-let encoder: Arc<Box<dyn Encoder>> = Arc::new(Box::new(NgramEncoder::new(1024)));
-let config = BrainConfig {
-    brains_dir: "./memhop_brains".to_string(),
-    agent_id: "my_agent".to_string(),
-};
-let mut brain = Brain::open(config, encoder)?;
-
-// 2. 存储记忆
-let batch = StoreBatch {
-    items: vec![StoreItem {
-        text: "用户喜欢喝可乐".to_string(),
-        source: "chat".to_string(),
-        topic_label: Some("饮品偏好".to_string()),
-        llm_keywords: Some(vec!["可乐".to_string()]),
-        ..Default::default()
-    }],
-};
-let report = brain.batch_store(batch)?;
-
-// 3. 检索记忆
-let response = brain.recall(&RecallRequest {
-    query: "用户喜欢什么饮料".to_string(),
-    max_results: 10,
-    target_layers: vec![Layer::L1, Layer::L2],
-    ..Default::default()
+// 3. 存储 + 检索
+brain.batch_store(StoreBatch {
+    items: vec![StoreItem { text: "Hello World".into(), ..Default::default() }]
 })?;
+
+let results = brain.recall(&RecallRequest { query: "Hello".into(), ..Default::default() })?;
 ```
 
 ---
 
-## SDK 配置说明
+## 2. 依赖配置
 
-### MemHopSDKConfig 参数
+### 2.1 添加依赖
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `model_path` | `Option<String>` | `None` | 向量模型路径。`Some(path)` 使用 CandleEncoder + EncoderRouter 双通道；`None` 仅使用 NgramEncoder |
-| `vector_dim` | `usize` | `384` | 向量维度（multilingual-e5-small 为 384） |
-| `data_dir` | `String` | `./memhop_data` | Brain 数据存储目录 |
-| `agent_id` | `String` | `"default"` | Agent 唯一标识 |
+在你的 `Cargo.toml` 中添加：
 
-### 环境变量
+```toml
+[dependencies]
+# 方式一：本地路径（开发时）
+memhop-core = { path = "../memhop/memhop-core" }
+
+# 方式二：Git 依赖（推荐）
+memhop-core = { git = "https://github.com/your-org/memhop.git", branch = "main" }
+
+# 方式三：启用向量模型（可选）
+memhop-core = { git = "https://github.com/your-org/memhop.git", features = ["candle"] }
+```
+
+### 2.2 Feature Flags
+
+| Feature | 说明 | 默认 |
+|---------|------|------|
+| `candle` | 启用 CandleEncoder 向量模型 | ❌ |
+| `bench` | 基准测试支持 | ❌ |
+| `llm-api` | LLM API 调用支持 | ❌ |
+
+### 2.3 项目结构示例
+
+```
+your-project/
+├── Cargo.toml
+├── src/
+│   └── main.rs
+├── data/                    # Brain 数据目录（自动创建）
+│   └── agent1/
+│       ├── l0_profile.db/
+│       ├── l1_hypergraph.db/
+│       ├── l2_topics.db/
+│       ├── l3_domains.db/
+│       ├── l4_raw.db/
+│       └── l5_procedural.db/
+└── models/                  # 向量模型目录（可选）
+    └── multilingual-e5-small/
+        ├── config.json
+        ├── tokenizer.json
+        └── model.safetensors
+```
+
+---
+
+## 3. 向量模型配置
+
+### 3.1 模型说明
+
+向量模型 `multilingual-e5-small` 是 MemHop 的**必选组件**，随项目一起分发。
+
+| 模型 | 路径 | 说明 |
+|------|------|------|
+| multilingual-e5-small | `./models/multilingual-e5-small` | 384 维向量，支持中英文语义检索 |
+
+### 3.2 模型路径
+
+模型路径已在项目中预配置，位于 `./models/multilingual-e5-small`：
+
+```
+models/
+└── multilingual-e5-small/
+    ├── config.json
+    ├── tokenizer.json
+    └── model.safetensors
+```
+
+### 3.3 配置方式
+
+```rust
+// 方式一：代码中指定（推荐）
+let config = MemHopConfig {
+    model_path: Some("./models/multilingual-e5-small".to_string()),
+    vector_dim: 384,
+    ..Default::default()
+};
+
+// 方式二：环境变量
+// export MEMHOP_MODEL_PATH=./models/multilingual-e5-small
+let config = MemHopConfig::from_env();
+```
+
+**注意**: `model_path` 是必填项，必须指定向量模型路径才能使用完整的语义检索功能。
+
+### 3.4 环境变量
 
 | 变量 | 说明 | 示例 |
 |------|------|------|
-| `MEMHOP_MODEL_PATH` | 向量模型路径 | `/path/to/models/multilingual-e5-small` |
-| `MEMHOP_DATA_DIR` | 数据目录 | `./data/agent1` |
-| `MEMHOP_AGENT_ID` | Agent ID | `agent1` |
+| `MEMHOP_MODEL_PATH` | 向量模型路径 | `./models/multilingual-e5-small` |
 
-### 编码器模式
+---
 
-| 模式 | model_path | 说明 |
-|------|-----------|------|
-| **NgramEncoder** | `None` | 仅 BM25 稀疏检索，无需向量模型 |
-| **双通道** | `Some(path)` | CandleEncoder (dense) + NgramEncoder (sparse)，需要 multilingual-e5-small 模型 |
+## 4. SDK 初始化
 
-### 多进程共享
+### 4.1 基本初始化
 
-SDK 使用 `OnceLock` 实现进程级单例，同一进程内所有 Brain 实例共享同一个编码器。这对于 meowAgent 的分身猫（CloneCat）架构非常重要：
+```rust
+use memhop_core::{MemHopSDK, MemHopConfig};
+
+// 使用默认配置（仅 NgramEncoder）
+MemHopSDK::init(MemHopConfig::default())?;
+
+// 使用向量模型
+let config = MemHopConfig {
+    model_path: Some("./models/multilingual-e5-small".to_string()),
+    vector_dim: 384,
+    ..Default::default()
+};
+MemHopSDK::init(config)?;
+```
+
+### 4.2 MemHopConfig 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `model_path` | `Option<String>` | `None` | **必填** 向量模型路径 |
+| `vector_dim` | `usize` | `384` | 向量维度 |
+
+### 4.3 进程级单例
+
+SDK 使用 `OnceLock` 实现全局单例，同一进程内所有 Brain 实例共享同一个编码器：
 
 ```rust
 // 主进程初始化一次
-init_memhop_sdk(config)?;
+MemHopSDK::init(config)?;
 
-// 所有分身猫共享同一个编码器实例
-let adapter1 = create_adapter("./data/cat1", "cat1")?;
-let adapter2 = create_adapter("./data/cat2", "cat2")?;
-// adapter1 和 adapter2 的 Brain 共享同一个编码器
+// 所有 Brain 实例共享编码器
+let brain1 = MemHopSDK::create_brain("./data/cat1", "cat1")?;
+let brain2 = MemHopSDK::create_brain("./data/cat2", "cat2")?;
+// brain1 和 brain2 共享同一个编码器实例
+```
+
+### 4.4 检查初始化状态
+
+```rust
+if MemHopSDK::is_initialized() {
+    println!("SDK 已初始化");
+}
+
+// 获取当前配置
+if let Some(config) = MemHopSDK::get_config() {
+    println!("模型路径: {:?}", config.model_path);
+}
 ```
 
 ---
 
-## API 列表
+## 5. API 参考
 
-| 方法 | 功能 | 说明 |
+### 5.1 MemHopSDK
+
+| 方法 | 说明 |
+|------|------|
+| `MemHopSDK::init(config)` | 初始化 SDK（全局一次性） |
+| `MemHopSDK::create_brain(dir, agent_id)` | 创建 Brain 实例 |
+| `MemHopSDK::get_encoder()` | 获取全局编码器 |
+| `MemHopSDK::is_initialized()` | 检查是否已初始化 |
+| `MemHopSDK::get_config()` | 获取当前配置 |
+
+### 5.2 Brain 核心 API
+
+#### 创建实例
+
+```rust
+pub fn open(config: BrainConfig, encoder: Arc<Box<dyn Encoder>>) -> Result<Self>
+```
+
+| 参数 | 类型 | 说明 |
 |------|------|------|
-| `Brain::open(config, encoder)` | 创建 Brain | 打开或创建记忆引擎实例 |
-| `brain.batch_store(batch)` | 批量存储 | 所有写入都通过此接口 |
-| `brain.recall(&request)` | 语义检索 | 基于查询检索相关记忆（引用传递） |
-| `brain.consolidate()` | 记忆巩固 | 触发记忆整理和模式提取 |
-| `brain.set_l0(catid, role_name, personality, values, worldview, traits)` | 设置画像 | 设置 Agent 角色画像（逐字段） |
-| `brain.set_l0_from_profile(profile)` | 设置画像(结构体) | 通过 L0Profile 结构体设置画像 |
-| `brain.set_l0_profile(catid, role_name, role, position, traits)` | 设置画像(局部更新) | 旧版 API，仅更新身份字段 |
-| `brain.get_l0_profile()` | 获取画像 | 获取当前角色画像 |
-| `brain.mount_shelf(dir_path, domain, domain_name)` | 挂载知识库 | 导入外部文档 |
-| `brain.unmount_shelf(domain_id)` | 卸载知识库 | 移除已挂载的知识库 |
-| `brain.list_shelf()` | 列出知识库 | 列出所有已挂载知识库 |
-| `brain.activate_topic(session_id, topic_id, ttl_ms)` | 激活话题 | 提升话题在会话中的权重 |
-| `brain.deactivate_topic(session_id, topic_id)` | 去激活话题 | 移除话题激活状态 |
-| `brain.get_activated(session_id)` | 获取激活列表 | 获取指定会话的激活话题 ID 列表（返回 `Vec<String>`） |
-| `brain.procedural_crystallize()` | 程序性结晶 | 从超边链中提取可复用模式 |
-| `brain.list_crystals()` | 列出晶体 | 列出所有程序性晶体 |
-| `brain.get_crystal(id)` | 获取晶体 | 获取单个晶体详情 |
-| `brain.re_search(&req)` | 再搜索 | 带排除过滤的再搜索 |
-| `brain.prewarm(&layers)` | 预热层 | 预热指定层，重建索引 |
-| `brain.update_topic(topic_id, summary, keywords, extended_meta)` | 更新话题 | 更新话题元数据 |
-| `brain.get_topic(id)` | 获取话题 | 获取话题详情 |
-| `brain.organize_node(id)` | 组织节点 | 组织记忆节点 |
-| `brain.storage_stats()` | 存储统计 | 获取各层存储使用率统计 |
-| `brain.list_l3_paths()` | 列出 L3 路径 | 列出 L3 领域路径 |
-| `brain.get_l4_raw(id)` | 获取 L4 原文 | 获取原始 L4 文档 |
-| `brain.crystallize_l3(&req)` | L3 结晶化 | 从 L2 话题提炼知识写入 L3 知识超图 |
-| `brain.emotional_feedback(&feedback)` | 情感反馈 | 根据情感类型调节记忆重要性 |
-| `brain.get_emotion(memory_id)` | 获取情感 | 获取记忆的情感维度 |
-| `brain.recall_by_emotion(&req)` | 情感检索 | 按情感类型检索记忆 |
+| `config` | BrainConfig | 包含 brains_dir 和 agent_id |
+| `encoder` | Arc<Box<dyn Encoder>> | 编码器实例 |
 
----
-
-## batch_store — 批量存储
+#### 记忆存储
 
 ```rust
 pub fn batch_store(&mut self, batch: StoreBatch) -> Result<BatchReport>
 ```
 
-### StoreItem 参数
-
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `text` | String | **是** | 原始文本 |
-| `source` | String | 否 | 来源，默认 `"chat"` |
+| `text` | String | ✅ | 原始文本 |
+| `source` | String | ❌ | 来源，默认 `"chat"` |
 | `topic_label` | String | 推荐 | 话题标签 |
 | `llm_keywords` | Vec<String> | 推荐 | 关键词列表 |
-| `llm_compressed_summary` | String | 推荐 | LLM 生成的摘要 |
-| `turn_id` | String | 否 | 对话轮次 ID |
-| `session_id` | String | 否 | 会话 ID |
-| `chain_parent_id` | String | 否 | 超边链前驱 ID |
-| `chain_label` | String | 否 | 链标签：`correction`/`supplement`/`merge` |
-| `domain_id` | String | 否 | 关联领域 ID |
-| `importance` | f32 | 否 | 重要性权重 (0.0-1.0) |
-| `valence` | Option<f64> | 否 | 效价参数 |
-| `arousal` | Option<f64> | 否 | 唤醒度参数 |
+| `llm_compressed_summary` | String | 推荐 | LLM 摘要 |
+| `turn_id` | String | ❌ | 对话轮次 ID |
+| `session_id` | String | ❌ | 会话 ID |
+| `chain_parent_id` | String | ❌ | 超边链前驱 ID |
+| `chain_label` | String | ❌ | 链标签 |
+| `domain_id` | String | ❌ | 关联领域 ID |
+| `importance` | f32 | ❌ | 重要性权重 (0.0-1.0) |
+| `valence` | Option<f64> | ❌ | 效价参数 |
+| `arousal` | Option<f64> | ❌ | 唤醒度参数 |
 
-### 返回值 BatchReport
-
-```rust
-BatchReport {
-    l1_nodes_created: u32,      // 创建的 L1 节点数
-    l1_hyperedges_created: u32, // 创建的 L1 超边数
-    l2_topics_created: u32,     // 创建的 L2 话题数
-    l3_nodes_created: u32,      // 创建的 L3 节点数
-    l4_docs_stored: u32,        // 存储的 L4 文档数
-    chains_created: u32,        // 创建的超边链数
-    total_duration_us: u64,     // 执行耗时（微秒）
-    l1_dedup_skipped: u32,      // 去重跳过的 L1 节点数
-    engram_ids: HashMap<String, String>,  // 输入序号 → L1 ID
-    l3_engram_ids: HashMap<String, String>, // 输入序号 → L3 ID
-}
-```
-
-### 示例
-
-```rust
-let batch = StoreBatch {
-    items: vec![
-        StoreItem {
-            text: "今天天气很好".to_string(),
-            source: "chat".to_string(),
-            topic_label: Some("天气".to_string()),
-            ..Default::default()
-        },
-        StoreItem {
-            text: "下午去了公园".to_string(),
-            source: "chat".to_string(),
-            chain_parent_id: Some(prev_id),  // 链接到上一条
-            chain_label: Some("supplement".to_string()),
-            ..Default::default()
-        },
-    ],
-};
-let report = brain.batch_store(batch)?;
-```
-
----
-
-## recall — 语义检索
+#### 记忆检索
 
 ```rust
 pub fn recall(&mut self, req: &RecallRequest) -> Result<RecallResponse>
 ```
 
-### RecallRequest 参数
-
 | 参数 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `query` | String | 否 | 搜索文本 |
-| `max_results` | usize | 否 | 返回条数上限，默认 10 |
-| `target_layers` | Vec<Layer> | 否 | 目标层，默认 `[L1, L2]` |
-| `spread_depth` | usize | 否 | 关联扩散深度，0=不扩散 |
-| `topic_filter` | String | 否 | 话题过滤关键词 |
-| `exclude_ids` | Vec<String> | 否 | 排除的节点 ID |
-| `exclude_topic_ids` | Vec<String> | 否 | 排除的话题 ID |
-| `l3_domain_id` | String | 否 | 限定 L3 领域 |
-| `l2_topic_id` | String | 否 | 限定 L2 话题 |
-| `session_id` | String | 否 | 限定会话 |
-| `time_decay_lambda` | f32 | 否 | 时间衰减系数 |
-| `time_range` | (i64, i64) | 否 | 毫秒时间戳范围 |
+| `query` | String | ✅ | 搜索文本 |
+| `max_results` | usize | ❌ | 返回条数上限，默认 10 |
+| `target_layers` | Vec<Layer> | ❌ | 目标层，默认 `[L1, L2]` |
+| `spread_depth` | usize | ❌ | 关联扩散深度 |
+| `topic_filter` | String | ❌ | 话题过滤关键词 |
+| `exclude_ids` | Vec<String> | ❌ | 排除的节点 ID |
+| `l3_domain_id` | String | ❌ | 限定 L3 领域 |
+| `l2_topic_id` | String | ❌ | 限定 L2 话题 |
+| `session_id` | String | ❌ | 限定会话 |
+| `time_decay_lambda` | f32 | ❌ | 时间衰减系数 |
 
-### 返回值 RecallResponse
-
-```rust
-RecallResponse {
-    results: Vec<RecallResult>,  // 检索结果
-    total_count: usize,          // 结果总数
-    l0_profile: Option<L0Profile>, // L0 角色画像
-    confidence: Option<f32>,     // 置信度
-    activated_topics: Vec<ActivatedTopicInfo>, // 激活的话题
-    recommended_crystals: Vec<ProceduralCrystal>, // 程序性晶体推荐
-}
-
-RecallResult {
-    layer: Layer,                // 来源层：L1/L2/L3/L4
-    id: String,                  // 节点 ID
-    text: String,                // 文本内容
-    score: f32,                  // 相关性分数
-    topic_label: Option<String>, // 话题标签
-    created_at: i64,             // 创建时间戳（毫秒）
-    version: u64,                // 版本号
-}
-```
-
-### 示例
-
-```rust
-// 基本检索
-let response = brain.recall(&RecallRequest {
-    query: "用户喜欢什么".to_string(),
-    max_results: 5,
-    ..Default::default()
-})?;
-
-// 带过滤条件
-let response = brain.recall(&RecallRequest {
-    query: "Python".to_string(),
-    target_layers: vec![Layer::L1, Layer::L4],
-    topic_filter: Some("编程".to_string()),
-    session_id: Some("session_1".to_string()),
-    ..Default::default()
-})?;
-
-for result in response.results {
-    println!("[{}] {} (score: {:.2})", result.layer, result.text, result.score);
-}
-```
-
----
-
-## consolidate — 记忆巩固
+#### 记忆巩固
 
 ```rust
 pub fn consolidate(&mut self) -> Result<ConsolidateReport>
@@ -293,65 +266,238 @@ pub fn consolidate(&mut self) -> Result<ConsolidateReport>
 
 定期调用以整理记忆、合并相似话题、提取模式。
 
-### 返回值 ConsolidateReport
+#### L0 角色画像
 
 ```rust
-ConsolidateReport {
-    chains_consolidated: u32,   // 超边链合并数
-    topics_merged: u32,         // 话题合并数
-    topics_reflected: u32,      // 话题反思数
-    duration_ms: u64,           // 执行耗时（毫秒）
-    vitality_decayed: u32,      // 活力衰减数
-    schemas_emerged: u32,       // 模式涌现数
-    l0_updated: bool,           // L0 是否更新
-    plans_consolidated: u32,    // 计划合并数
-    crystals_created: u32,      // 程序性结晶生成数
-}
-```
-
-### 示例
-
-```rust
-let report = brain.consolidate()?;
-println!("合并了 {} 个话题", report.topics_merged);
-```
-
----
-
-## L0 角色画像
-
-```rust
-// 设置画像（通过结构体）
-brain.set_l0_from_profile(L0Profile {
-    catid: Some("cat_001".to_string()),
-    role_name: Some("小助手".to_string()),
-    personality: vec!["友好".to_string(), "耐心".to_string()],
-    values: vec!["用户至上".to_string()],
-    ..Default::default()
-})?;
+// 设置画像
+pub fn set_l0_from_profile(&mut self, profile: &L0Profile) -> Result<()>
+pub fn set_l0(&mut self, catid, role_name, personality, values, worldview, traits) -> Result<()>
 
 // 获取画像
-if let Some(profile) = brain.get_l0_profile() {
-    println!("角色: {:?}", profile.role_name);
-}
+pub fn get_l0_profile(&mut self) -> Result<Option<L0Profile>>
 ```
 
-### L0Profile 字段
+#### 知识库管理
 
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `catid` | String | 不可修改的唯一标识符 |
-| `role_name` | String | 可修改的名称 |
-| `personality` | Vec<String> | 性格特征 |
-| `values` | Vec<String> | 价值观 |
-| `worldview` | Vec<String> | 世界观 |
-| `role` | String | 角色类型 |
-| `position` | String | 定位 |
-| `traits` | HashMap<String, String> | 其他特征 |
+```rust
+pub fn mount_shelf(&mut self, dir_path, domain, domain_name) -> Result<ShelfMeta>
+pub fn unmount_shelf(&mut self, domain_id) -> Result<()>
+pub fn list_shelf(&mut self) -> Result<Vec<ShelfMeta>>
+```
+
+#### 会话管理
+
+```rust
+pub fn activate_topic(&mut self, session_id, topic_id, ttl_ms)
+pub fn deactivate_topic(&mut self, session_id, topic_id)
+pub fn get_activated(&self, session_id) -> Vec<String>
+```
+
+#### L3 结晶化
+
+```rust
+pub fn crystallize_l3(&mut self, req: &CrystallizeL3Request) -> Result<CrystallizeL3Report>
+```
+
+#### 情感系统
+
+```rust
+pub fn emotional_feedback(&mut self, feedback: &EmotionalFeedback) -> Result<()>
+pub fn get_emotion(&mut self, memory_id) -> Result<EmotionalDimension>
+pub fn recall_by_emotion(&mut self, req: &EmotionRecallRequest) -> Result<RecallResponse>
+```
+
+#### 程序性晶体
+
+```rust
+pub fn procedural_crystallize(&mut self) -> Result<CrystallizeReport>
+pub fn list_crystals(&mut self) -> Result<Vec<ProceduralCrystal>>
+pub fn get_crystal(&mut self, id) -> Result<Option<ProceduralCrystal>>
+```
+
+#### 话题管理
+
+```rust
+pub fn list_topics(&mut self) -> Result<Vec<Topic>>
+pub fn get_topic(&mut self, topic_id: &str) -> Result<Option<Topic>>
+pub fn update_topic(&mut self, topic_id, summary, keywords, extended_meta) -> Result<()>
+```
+
+#### L4 文档查询
+
+```rust
+pub fn get_l4_raw(&mut self, doc_id: &str) -> Result<Option<RawDocument>>
+pub fn get_l4_by_session(&mut self, session_id: &str) -> Result<Vec<RawDocument>>
+pub fn get_l4_by_topic(&mut self, topic_id: &str) -> Result<Vec<RawDocument>>
+pub fn l4_doc_count(&self) -> usize
+```
+
+#### L3 领域查询
+
+```rust
+pub fn list_l3_paths(&mut self) -> Result<Vec<L3PathInfo>>
+```
+
+#### 程序性晶体 CRUD
+
+```rust
+pub fn store_crystal(&mut self, crystal: &ProceduralCrystal) -> Result<()>
+pub fn get_crystal(&mut self, id: &str) -> Result<Option<ProceduralCrystal>>
+pub fn list_crystals(&mut self) -> Result<Vec<ProceduralCrystal>>
+pub fn get_crystals_by_keyword(&mut self, keyword: &str) -> Result<Vec<ProceduralCrystal>>
+```
+
+#### 再搜索
+
+```rust
+pub fn re_search(&mut self, req: &RecallRequest) -> Result<RecallResponse>
+```
+
+#### 配置与统计
+
+```rust
+pub fn config(&self) -> &BrainConfig
+pub fn storage_stats(&self) -> Vec<StorageLayerInfo>
+pub fn prewarm(&mut self, layers: &[String]) -> Result<HashMap<String, PrewarmLayerResult>>
+```
+
+#### 激活话题查询
+
+```rust
+pub fn get_activated_topics(&mut self) -> Vec<ActivatedTopicInfo>
+```
 
 ---
 
-## 知识库管理
+## 6. 完整示例
+
+### 6.1 基本使用
+
+```rust
+use memhop_core::{
+    MemHopSDK, MemHopConfig, Brain, StoreBatch, StoreItem,
+    RecallRequest, Layer, L0Profile,
+};
+
+fn main() -> memhop_core::Result<()> {
+    // 1. 初始化 SDK
+    let config = MemHopConfig {
+        model_path: Some("./models/multilingual-e5-small".to_string()),
+        vector_dim: 384,
+        ..Default::default()
+    };
+    MemHopSDK::init(config)?;
+
+    // 2. 创建 Brain
+    let mut brain = MemHopSDK::create_brain("./data/agent1", "agent1")?;
+
+    // 3. 设置角色画像
+    brain.set_l0_from_profile(&L0Profile {
+        catid: Some("cat_001".to_string()),
+        role_name: Some("小助手".to_string()),
+        personality: vec!["友好".to_string(), "耐心".to_string()],
+        ..Default::default()
+    })?;
+
+    // 4. 存储记忆
+    let batch = StoreBatch {
+        items: vec![
+            StoreItem {
+                text: "用户喜欢喝可乐".to_string(),
+                source: "chat".to_string(),
+                topic_label: Some("饮品偏好".to_string()),
+                llm_keywords: Some(vec!["可乐".to_string(), "饮品".to_string()]),
+                ..Default::default()
+            },
+            StoreItem {
+                text: "用户今天心情很好".to_string(),
+                source: "chat".to_string(),
+                topic_label: Some("心情".to_string()),
+                ..Default::default()
+            },
+        ],
+    };
+    let report = brain.batch_store(batch)?;
+    println!("存储完成: L1={}, L2={}", report.l1_nodes_created, report.l2_topics_created);
+
+    // 5. 检索记忆
+    let response = brain.recall(&RecallRequest {
+        query: "用户喜欢什么饮料".to_string(),
+        max_results: 5,
+        target_layers: vec![Layer::L1, Layer::L2],
+        ..Default::default()
+    })?;
+
+    for result in &response.results {
+        println!("[{}] {} (score: {:.2})", result.layer, result.text, result.score);
+    }
+
+    // 6. 记忆巩固
+    let consolidate_report = brain.consolidate()?;
+    println!("巩固完成: 合并 {} 个话题", consolidate_report.topics_merged);
+
+    Ok(())
+}
+```
+
+### 6.2 多 Agent 共享编码器
+
+```rust
+use memhop_core::{MemHopSDK, MemHopConfig};
+
+fn main() -> memhop_core::Result<()> {
+    // 初始化一次
+    MemHopSDK::init(MemHopConfig {
+        model_path: Some("./models/multilingual-e5-small".to_string()),
+        ..Default::default()
+    })?;
+
+    // 创建多个 Brain（共享编码器）
+    let mut cat1 = MemHopSDK::create_brain("./data/cat1", "cat1")?;
+    let mut cat2 = MemHopSDK::create_brain("./data/cat2", "cat2")?;
+
+    // 各自独立存储
+    cat1.batch_store(StoreBatch {
+        items: vec![StoreItem { text: "Cat1 的记忆".into(), ..Default::default() }]
+    })?;
+
+    cat2.batch_store(StoreBatch {
+        items: vec![StoreItem { text: "Cat2 的记忆".into(), ..Default::default() }]
+    })?;
+
+    Ok(())
+}
+```
+
+### 6.3 情感系统
+
+```rust
+use memhop_core::{EmotionalFeedback, Emotion, EmotionRecallRequest};
+
+// 存储记忆
+let report = brain.batch_store(StoreBatch {
+    items: vec![StoreItem { text: "今天很开心".into(), ..Default::default() }]
+})?;
+let memory_id = report.engram_ids["0"].clone();
+
+// 情感反馈
+brain.emotional_feedback(&EmotionalFeedback {
+    memory_id: memory_id.clone(),
+    emotion: Emotion::Joy,
+    intensity: 0.9,
+    reason: Some("用户表达了快乐".to_string()),
+})?;
+
+// 按情感检索
+let response = brain.recall_by_emotion(&EmotionRecallRequest {
+    emotion: Some(Emotion::Joy),
+    min_intensity: 0.5,
+    max_results: 10,
+    ..Default::default()
+})?;
+```
+
+### 6.4 知识库挂载
 
 ```rust
 // 挂载知识库
@@ -360,10 +506,11 @@ let meta = brain.mount_shelf(
     "技术文档",
     "markdown"
 )?;
+println!("挂载成功: {} ({} chunks)", meta.id, meta.chunk_count);
 
 // 列出已挂载
-for shelf in brain.list_shelf() {
-    println!("{}: {} ({} chunks)", shelf.id, shelf.path, shelf.chunk_count);
+for shelf in brain.list_shelf()? {
+    println!("{}: {}", shelf.id, shelf.path);
 }
 
 // 卸载
@@ -372,251 +519,123 @@ brain.unmount_shelf(&meta.id)?;
 
 ---
 
-## 会话管理
+## 7. 最佳实践
+
+### 7.1 初始化
+
+- ✅ 在程序启动时调用 `MemHopSDK::init()` 一次
+- ✅ 使用环境变量配置模型路径，便于部署
+- ❌ 不要在循环中重复初始化
+
+### 7.2 存储
+
+- ✅ 始终使用 `batch_store` 批量写入
+- ✅ 为每条记忆提供 `topic_label` 和 `llm_keywords`
+- ❌ 不要逐条调用 `batch_store`
+
+### 7.3 检索
+
+- ✅ 使用 `target_layers` 限定检索范围
+- ✅ 使用 `session_id` 隔离不同会话
+- ✅ 定期调用 `consolidate()` 整理记忆
+
+### 7.4 错误处理
 
 ```rust
-// 激活话题（提升检索权重）
-brain.activate_topic("session_1", "topic_123", 3600000)?; // 1小时
-
-// 获取激活的话题
-let activated = brain.get_activated("session_1");
-
-// 去激活
-brain.deactivate_topic("session_1", "topic_123")?;
-```
-
----
-
-## 编码器选择
-
-### NgramEncoder（本地，无需外部服务）
-
-```rust
-let encoder: Arc<Box<dyn Encoder>> = Arc::new(Box::new(NgramEncoder::new(1024)));
-```
-
-### EncoderClient（远程，需要启动编码器服务）
-
-```bash
-# 启动编码器服务
-memhop-encoder --socket /tmp/memhop-encoder.sock
-```
-
-```rust
-use memhop_encoder_client::EncoderClient;
-
-let encoder_client = EncoderClient::connect("/tmp/memhop-encoder.sock")?;
-let encoder: Arc<Box<dyn Encoder>> = Arc::new(Box::new(encoder_client));
-```
-
----
-
-## 错误处理
-
-```rust
-use memhop_core::{MemHopError, Result};
+use memhop_core::MemHopError;
 
 match brain.recall(request) {
     Ok(response) => { /* 处理响应 */ }
     Err(MemHopError::Storage(e)) => { /* 存储错误，可重试 */ }
     Err(MemHopError::Encoding(e)) => { /* 编码错误 */ }
-    Err(MemHopError::Validation(e)) => { /* 验证错误 */ }
+    Err(MemHopError::Validation(e)) => { /* 验证错误，检查参数 */ }
+    Err(MemHopError::NotFound(e)) => { /* 资源不存在 */ }
     Err(e) => { /* 其他错误 */ }
 }
 ```
 
 ---
 
-## 最佳实践
+## 8. 故障排除
 
-1. **批量写入**：始终使用 `batch_store`，不要逐条写入
-2. **话题标签**：为每条记忆提供 `topic_label`，提升检索质量
-3. **定期巩固**：定期调用 `consolidate()` 进行记忆整理
-4. **会话管理**：使用 `activate_topic` 提升当前会话相关话题的权重
+### 8.1 编译错误
+
+**问题**: `candle` feature 未启用
+```
+error[E0433]: unresolved import `memhop_core::CandleEncoder`
+```
+
+**解决**: 在 `Cargo.toml` 中启用 feature
+```toml
+memhop-core = { ..., features = ["candle"] }
+```
+
+### 8.2 运行时错误
+
+**问题**: 模型加载失败
+```
+[MemHopSDK] Failed to load CandleEncoder: No such file or directory
+```
+
+**解决**: 检查模型路径是否正确
+```bash
+ls -la ./models/multilingual-e5-small/
+# 应包含 config.json, tokenizer.json, model.safetensors
+```
+
+**问题**: SDK 未初始化
+```
+MemHopSDK not initialized. Call MemHopSDK::init() first.
+```
+
+**解决**: 在创建 Brain 前调用 `MemHopSDK::init()`
+
+### 8.3 性能问题
+
+**问题**: 首次检索慢
+```
+[memhop] WARNING: L1 first open took 500ms (10000 nodes)
+```
+
+**解决**: 使用 `prewarm()` 预热
+```rust
+brain.prewarm(&["L1".to_string(), "L2".to_string()])?;
+```
+
+### 8.4 内存问题
+
+**问题**: 内存占用过高
+
+**解决**: 
+1. 不使用向量模型时，设置 `model_path: None`
+2. 使用 `consolidate()` 定期整理记忆
+3. 监控 `storage_stats()` 检查数据量
 
 ---
 
-## crystallize_l3 — L3 结晶化
+## 附录
+
+### A. 完整配置示例
 
 ```rust
-pub fn crystallize_l3(&mut self, req: &CrystallizeL3Request) -> Result<CrystallizeL3Report>
+let config = MemHopConfig {
+    model_path: Some("./models/multilingual-e5-small".to_string()),
+    vector_dim: 384,
+};
 ```
 
-从 L2 话题提炼知识写入 L3 知识超图。meowAgent 使用 LLM 生成 summary 和 keywords，MemHop 负责创建 L3 domain 并更新 L2→L3 link。
+### B. 环境变量参考
 
-### CrystallizeL3Request 参数
+| 变量 | 说明 | 默认值 |
+|------|------|--------|
+| `MEMHOP_MODEL_PATH` | 向量模型路径 | 无 |
 
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `topic_id` | String | 是 | L2 话题 ID |
-| `summary` | String | 是 | LLM 生成的知识摘要 |
-| `keywords` | Vec<String> | 是 | LLM 生成的关键词列表 |
-| `domain_name` | Option<String> | 否 | L3 domain 名称，默认使用 topic label |
+### C. 错误码参考
 
-### 返回值 CrystallizeL3Report
-
-```rust
-CrystallizeL3Report {
-    domain_id: String,        // 创建的 L3 domain ID
-    domain_name: String,      // domain 名称
-    l3_nodes_created: u32,    // 创建的 L3 节点数
-    topic_linked: bool,       // 是否成功链接 L2→L3
-}
-```
-
-### 示例
-
-```rust
-use memhop_core::CrystallizeL3Request;
-
-let report = brain.crystallize_l3(&CrystallizeL3Request {
-    topic_id: "topic_123".to_string(),
-    summary: "用户喜欢喝可乐，特别是百事可乐".to_string(),
-    keywords: vec!["可乐".to_string(), "百事".to_string(), "饮品".to_string()],
-    domain_name: Some("饮品偏好".to_string()),
-})?;
-
-println!("创建了 {} 个 L3 节点", report.l3_nodes_created);
-```
-
-### 调用时机
-
-meowAgent 在以下场景调用 `crystallize_l3`：
-1. L2 话题积累了足够的记忆（>5 条）
-2. LLM 判断话题具有长期价值
-3. 用户主动请求知识结晶
-
----
-
-## 情感维度系统
-
-### Emotion 枚举
-
-```rust
-pub enum Emotion {
-    Joy,        // 快乐
-    Sadness,    // 悲伤
-    Anger,      // 愤怒
-    Fear,       // 恐惧
-    Surprise,   // 惊讶
-    Disgust,    // 厌恶
-    Neutral,    // 中性（无显著情感）
-}
-```
-
-### emotional_feedback — 情感反馈
-
-```rust
-pub fn emotional_feedback(&mut self, feedback: &EmotionalFeedback) -> Result<()>
-```
-
-根据用户情感调节记忆权重。正面情感增强记忆保留，负面情感根据类型有不同影响。
-
-#### EmotionalFeedback 参数
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `memory_id` | String | 是 | L1 节点 ID |
-| `emotion` | Emotion | 是 | 情感类型 |
-| `intensity` | f32 | 是 | 情感强度 (0.0-1.0) |
-| `reason` | Option<String> | 否 | 情感原因 |
-
-#### 重要性调整规则
-
-| 情感类型 | 调整公式 | 说明 |
-|---------|---------|------|
-| Joy | importance += intensity * 0.15 | 快乐增强记忆 |
-| Sadness | importance += intensity * 0.10 | 悲伤也增强记忆（负面情绪深刻） |
-| Anger | importance += intensity * 0.05 | 愤怒轻微增强 |
-| Fear | importance += intensity * 0.12 | 恐惧显著增强 |
-| Surprise | importance += intensity * 0.08 | 惊讶轻微增强 |
-| Disgust | importance -= intensity * 0.10 | 厌恶降低重要性 |
-
-#### 示例
-
-```rust
-use memhop_core::{EmotionalFeedback, Emotion};
-
-brain.emotional_feedback(&EmotionalFeedback {
-    memory_id: "kn_123".to_string(),
-    emotion: Emotion::Joy,
-    intensity: 0.8,
-    reason: Some("用户很开心".to_string()),
-})?;
-```
-
-### get_emotion — 获取情感维度
-
-```rust
-pub fn get_emotion(&mut self, memory_id: &str) -> Result<EmotionalDimension>
-```
-
-获取单条记忆的情感维度。
-
-#### 返回值 EmotionalDimension
-
-```rust
-EmotionalDimension {
-    emotion: Emotion,      // 情感类型
-    intensity: f32,        // 情感强度 (0.0-1.0)
-    valence: f32,          // 效价 (-1.0 ~ 1.0)
-    arousal: f32,          // 唤醒度 (0.0 ~ 1.0)
-}
-```
-
-#### 示例
-
-```rust
-let emotion = brain.get_emotion("kn_123")?;
-println!("情感: {:?}, 强度: {:.2}", emotion.emotion, emotion.intensity);
-```
-
-### recall_by_emotion — 按情感检索
-
-```rust
-pub fn recall_by_emotion(&mut self, req: &EmotionRecallRequest) -> Result<RecallResponse>
-```
-
-按情感类型检索记忆。
-
-#### EmotionRecallRequest 参数
-
-| 参数 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| `emotion` | Option<Emotion> | 否 | 按情感类型过滤，None 表示不过滤 |
-| `min_intensity` | f32 | 否 | 最低情感强度，默认 0.0 |
-| `time_decay_lambda` | Option<f32> | 否 | 时间衰减系数 |
-| `max_results` | usize | 否 | 返回条数上限，默认 10 |
-
-#### 示例
-
-```rust
-use memhop_core::{EmotionRecallRequest, Emotion};
-
-// 检索所有快乐记忆
-let response = brain.recall_by_emotion(&EmotionRecallRequest {
-    emotion: Some(Emotion::Joy),
-    min_intensity: 0.5,
-    max_results: 10,
-    ..Default::default()
-})?;
-
-for result in response.results {
-    println!("{} (score: {:.2})", result.text, result.score);
-}
-```
-
----
-
-## meowAgent 适配清单
-
-| Stage | 归属 | MemHop API | meowAgent 负责 |
-|-------|------|-----------|---------------|
-| RecallStage | 混合 | `brain.recall(req)` 结果含 emotion 字段 | LLM query expansion、amygdala 情绪标注 |
-| ExpressStage | MemHop | `brain.batch_store(batch)` 存储 valence/arousal | 格式化对话文本、LLM 生成 topic_label/llm_keywords/llm_compressed_summary |
-| ReflectStage | MemHop | `brain.organize_node()` `brain.update_topic()` `brain.set_l0()` `brain.emotional_feedback()` | LLM 生成 summary/keywords/meta、LLM 检测情感 → 调用 emotional_feedback |
-| CrystallizeStage | 混合 | `brain.crystallize_l3(req)` `brain.procedural_crystallize()` | LLM 生成 L3 摘要、决策何时结晶 |
-| ThalamusStage | meowAgent | 无 | LLM query rewrite、**LLM 情感检测**（输出 Emotion+intensity → 传给 Express/Reflect） |
-| PFC Stage | MemHop | `brain.activate_topic()` `brain.deactivate_topic()` | LLM 决策哪些 topic 该激活 |
-| Dream/Consolidate | MemHop | `brain.consolidate()` | 无（完全由 MemHop 处理） |
-| **情感检索** | MemHop | `brain.recall_by_emotion(req)` `brain.get_emotion(id)` | meowAgent 决策何时需要按情感检索 |
+| 错误类型 | 说明 | 处理建议 |
+|---------|------|---------|
+| `Storage` | 存储层错误 | 检查磁盘空间和权限 |
+| `Encoding` | 编码错误 | 检查模型文件完整性 |
+| `Validation` | 参数验证失败 | 检查输入参数范围 |
+| `NotFound` | 资源不存在 | 检查 ID 是否正确 |
+| `Internal` | 内部错误 | 联系开发者 |
