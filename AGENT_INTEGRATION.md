@@ -1,6 +1,38 @@
 # MemHop meowAgent 集成指南
 
-## 快速开始
+## 快速开始（SDK 方式）
+
+### 方式一：使用 MemHopSDK（推荐）
+
+```rust
+use meowagent_memory::{init_memhop_sdk, create_adapter, MemHopSDKConfig};
+
+// 1. 初始化 SDK（全局一次性，进程内共享编码器）
+let config = MemHopSDKConfig {
+    model_path: Some("/path/to/models/multilingual-e5-small".to_string()),  // 向量模型路径
+    data_dir: "./data/agent1".to_string(),
+    agent_id: "agent1".to_string(),
+};
+init_memhop_sdk(config)?;
+
+// 2. 创建适配器（自动使用共享编码器）
+let adapter = create_adapter("./data/agent1", "agent1")?;
+
+// 3. 使用适配器（参见下方 API）
+adapter.store(StoreRequest { ... }).await?;
+adapter.recall(RecallRequest { ... }).await?;
+```
+
+### 方式二：使用环境变量
+
+```rust
+use meowagent_memory::sdk_init::init_from_env;
+
+// 读取环境变量：MEMHOP_MODEL_PATH, MEMHOP_DATA_DIR, MEMHOP_AGENT_ID
+let config = init_from_env()?;
+```
+
+### 方式三：直接使用 Brain（传统方式）
 
 ```rust
 use memhop_core::{Brain, BrainConfig, Encoder, NgramEncoder, RecallRequest, StoreBatch, StoreItem, Layer};
@@ -33,6 +65,48 @@ let response = brain.recall(&RecallRequest {
     target_layers: vec![Layer::L1, Layer::L2],
     ..Default::default()
 })?;
+```
+
+---
+
+## SDK 配置说明
+
+### MemHopSDKConfig 参数
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `model_path` | `Option<String>` | `None` | 向量模型路径。`Some(path)` 使用 CandleEncoder + EncoderRouter 双通道；`None` 仅使用 NgramEncoder |
+| `vector_dim` | `usize` | `384` | 向量维度（multilingual-e5-small 为 384） |
+| `data_dir` | `String` | `./memhop_data` | Brain 数据存储目录 |
+| `agent_id` | `String` | `"default"` | Agent 唯一标识 |
+
+### 环境变量
+
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `MEMHOP_MODEL_PATH` | 向量模型路径 | `/path/to/models/multilingual-e5-small` |
+| `MEMHOP_DATA_DIR` | 数据目录 | `./data/agent1` |
+| `MEMHOP_AGENT_ID` | Agent ID | `agent1` |
+
+### 编码器模式
+
+| 模式 | model_path | 说明 |
+|------|-----------|------|
+| **NgramEncoder** | `None` | 仅 BM25 稀疏检索，无需向量模型 |
+| **双通道** | `Some(path)` | CandleEncoder (dense) + NgramEncoder (sparse)，需要 multilingual-e5-small 模型 |
+
+### 多进程共享
+
+SDK 使用 `OnceLock` 实现进程级单例，同一进程内所有 Brain 实例共享同一个编码器。这对于 meowAgent 的分身猫（CloneCat）架构非常重要：
+
+```rust
+// 主进程初始化一次
+init_memhop_sdk(config)?;
+
+// 所有分身猫共享同一个编码器实例
+let adapter1 = create_adapter("./data/cat1", "cat1")?;
+let adapter2 = create_adapter("./data/cat2", "cat2")?;
+// adapter1 和 adapter2 的 Brain 共享同一个编码器
 ```
 
 ---
