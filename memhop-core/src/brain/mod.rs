@@ -30,7 +30,7 @@ mod l5_crystal;
 mod emotion;
 mod lifecycle;
 
-/// MemHop v0.25.0 Brain — 6 层仿人脑记忆架构顶层 API。
+/// MemHop v0.25.1 Brain — 6 层仿人脑记忆架构顶层 API。
 /// 所有层使用 redb 单文件存储引擎。
 pub struct Brain {
     pub config: BrainConfig,

@@ -3,5 +3,5 @@ members = ["memhop-core", "memhop-encoder", "memhop-encoder-client", "memhop-pro
 resolver = "2"
 
 [workspace.package]
-version = "0.25.0"
+version = "0.25.1"
 edition = "2024"

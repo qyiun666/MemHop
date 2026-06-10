@@ -1,6 +1,6 @@
 # MemHop SDK 集成指南
 
-> MemHop v0.24.0 — 6 层仿人脑记忆引擎 SDK
+> MemHop v0.25.1 — 6 层仿人脑记忆引擎 SDK（三重检索 + L3 领域图 + Dream v2）
 
 ---
 
@@ -63,6 +63,7 @@ memhop-core = { git = "https://github.com/your-org/memhop.git", features = ["can
 | Feature | 说明 | 默认 |
 |---------|------|------|
 | `candle` | 启用 CandleEncoder 向量模型 | ❌ |
+| `e5-encoder` | 启用 E5 IPC 编码器（memhop-encoder 服务） | ❌ |
 | `bench` | 基准测试支持 | ❌ |
 | `llm-api` | LLM API 调用支持 | ❌ |
 
@@ -210,12 +211,15 @@ if let Some(config) = MemHopSDK::get_config() {
 
 ```rust
 pub fn open(config: BrainConfig, encoder: Arc<Box<dyn Encoder>>) -> Result<Self>
+pub fn set_e5_encoder(&mut self, encoder: Arc<Box<dyn Encoder>>)
 ```
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `config` | BrainConfig | 包含 brains_dir 和 agent_id |
-| `encoder` | Arc<Box<dyn Encoder>> | 编码器实例 |
+| `encoder` | Arc<Box<dyn Encoder>> | 编码器实例（Ngram/Candle） |
+
+- `set_e5_encoder()`: 设置 E5 编码器（IPC 连接 memhop-encoder 服务），启用三重检索第三通道
 
 #### 记忆存储
 
@@ -235,7 +239,7 @@ pub fn batch_store(&mut self, batch: StoreBatch) -> Result<BatchReport>
 | `chain_parent_id` | String | ❌ | 超边链前驱 ID |
 | `chain_label` | String | ❌ | 链标签 |
 | `domain_id` | String | ❌ | 关联领域 ID |
-| `importance` | f32 | ❌ | 重要性权重 (0.0-1.0) |
+| `importance` | f32 | ❌ | 重要度评分 (0.0-1.0)，默认 0.5 |
 | `valence` | Option<f64> | ❌ | 效价参数 |
 | `arousal` | Option<f64> | ❌ | 唤醒度参数 |
 
@@ -253,10 +257,38 @@ pub fn recall(&mut self, req: &RecallRequest) -> Result<RecallResponse>
 | `spread_depth` | usize | ❌ | 关联扩散深度 |
 | `topic_filter` | String | ❌ | 话题过滤关键词 |
 | `exclude_ids` | Vec<String> | ❌ | 排除的节点 ID |
+| `exclude_topic_ids` | Vec<String> | ❌ | 排除的话题标签 |
 | `l3_domain_id` | String | ❌ | 限定 L3 领域 |
 | `l2_topic_id` | String | ❌ | 限定 L2 话题 |
 | `session_id` | String | ❌ | 限定会话 |
 | `time_decay_lambda` | f32 | ❌ | 时间衰减系数 |
+| `active_l3_domains` | Option<Vec<String>> | ❌ | 激活的 L3 领域列表 |
+
+**RecallResponse** 新增字段:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `prefetch` | Vec<PrefetchHint> | 预测性记忆提示（超边扩散） |
+| `recommended_crystals` | Vec<ProceduralCrystal> | 匹配查询的程序性晶体推荐 |
+| `confidence` | Option<f32> | 检索置信度 |
+| `activated_topics` | Vec<ActivatedTopicInfo> | 当前激活话题列表 |
+
+**PrefetchHint** 字段:
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `node_id` | String | 预测的目标节点 ID |
+| `text` | String | 文本（懒加载，协议层填充） |
+| `prediction_score` | f32 | 预测评分 |
+| `reason` | PrefetchReason | 预测原因 |
+
+**PrefetchReason** 枚举:
+
+- `HyperedgeSpread` — L1 超边扩散
+- `SameTopicHighFreq` — 同话题高频节点
+- `EmotionalResonance` — 情感共鸣
+- `CrossDomainBridge` — 跨域桥接
+- `TemporalProximity` — 时间邻近
 
 #### 记忆巩固
 
@@ -311,9 +343,17 @@ pub fn recall_by_emotion(&mut self, req: &EmotionRecallRequest) -> Result<Recall
 
 ```rust
 pub fn procedural_crystallize(&mut self) -> Result<CrystallizeReport>
+pub fn store_crystal(&mut self, crystal: &ProceduralCrystal) -> Result<()>
+pub fn get_crystal(&mut self, id: &str) -> Result<Option<ProceduralCrystal>>
 pub fn list_crystals(&mut self) -> Result<Vec<ProceduralCrystal>>
-pub fn get_crystal(&mut self, id) -> Result<Option<ProceduralCrystal>>
+pub fn get_crystals_by_keyword(&mut self, keyword: &str) -> Result<Vec<ProceduralCrystal>>
+pub fn update_crystal_usage(&mut self, crystal_id: &str, success: bool) -> Result<()>
 ```
+
+- `procedural_crystallize()`: 运行程序性结晶管线，从记忆链中提取模式
+- `store_crystal()` / `get_crystal()` / `list_crystals()`: 程序性晶体 CRUD
+- `get_crystals_by_keyword()`: 按关键词匹配晶体（`trigger_keywords` 子串匹配）
+- `update_crystal_usage()`: 更新晶体使用反馈（EMA 更新 success_rate）
 
 #### 话题管理
 
@@ -338,14 +378,13 @@ pub fn l4_doc_count(&self) -> usize
 pub fn list_l3_paths(&mut self) -> Result<Vec<L3PathInfo>>
 ```
 
-#### 程序性晶体 CRUD
+#### 记忆组织
 
 ```rust
-pub fn store_crystal(&mut self, crystal: &ProceduralCrystal) -> Result<()>
-pub fn get_crystal(&mut self, id: &str) -> Result<Option<ProceduralCrystal>>
-pub fn list_crystals(&mut self) -> Result<Vec<ProceduralCrystal>>
-pub fn get_crystals_by_keyword(&mut self, keyword: &str) -> Result<Vec<ProceduralCrystal>>
+pub fn organize_node(&mut self, node_id: &str) -> Result<()>
 ```
+
+对指定节点执行话题反思和关键词精炼。
 
 #### 再搜索
 
@@ -366,6 +405,80 @@ pub fn prewarm(&mut self, layers: &[String]) -> Result<HashMap<String, PrewarmLa
 ```rust
 pub fn get_activated_topics(&mut self) -> Vec<ActivatedTopicInfo>
 ```
+
+---
+
+### 5.3 新架构特性 (v0.25.1)
+
+#### 三重检索 (Triple Retrieval)
+
+MemHop v0.25.1 支持三重检索通道，提升语义匹配精度：
+
+| 通道 | 索引 | 编码器 | 说明 |
+|------|------|--------|------|
+| 1. BM25 稀疏 | SparseIndexV2 | NgramEncoder | 关键词精确匹配 |
+| 2. HNSW 稠密 | HNSW (usearch) | NgramEncoder | 语义向量近似检索 |
+| 3. E5 稠密 | HNSW_E5 (usearch) | memhop-encoder (IPC) | 多语言语义检索 |
+
+启用三重检索需要启动独立的 `memhop-encoder` 服务并通过 `set_e5_encoder()` 将 IPC 客户端注入 Brain。
+
+```rust
+// 启动编码器服务（独立进程）
+// cargo run --bin memhop-encoder -- --socket /tmp/memhop-encoder.sock
+
+// 客户端注入
+use memhop_encoder_client::EncoderClient;
+let e5_encoder = EncoderClient::connect("/tmp/memhop-encoder.sock")?;
+brain.set_e5_encoder(Arc::new(Box::new(e5_encoder)));
+```
+
+#### 预测性预取 (Prefetch)
+
+`recall()` 返回的 `RecallResponse` 包含 `prefetch` 字段，通过 L1 超边 BFS 扩散生成预测性记忆提示。三条检索路径均支持：
+
+- `cascade_recall`（默认级联模式）
+- `associative_recall`（关联扩散模式，`spread_depth > 0`）
+- `recall_by_emotion`（情感检索）
+- `re_search` / `execute`（多目标层检索）
+
+#### L3 领域激活与策略
+
+`RecallRequest.active_l3_domains` 支持选择性激活 L3 领域：
+- `Some([id1, id2])` — 仅在这些 L3 中搜索
+- `Some([])` — 跳过 L3 搜索
+- `None` — 搜索所有已挂载 L3（默认）
+
+**L3HyperedgeStrategy** 枚举控制知识库挂载时的超边构建策略：
+
+| 策略 | 适用场景 | 行为 |
+|------|---------|------|
+| `Sequential` | 书籍/文档/通用 | Association + Evolution 超边 |
+| `Structural` | 代码仓库 | 基于目录结构 + 引用关系 |
+| `Citation` | 论文/文献 | 仅 Association 超边 |
+
+挂载时自动根据 `ShelfDomain` 类型选择策略：
+
+```rust
+// Code 类型自动使用 Structural 策略
+let meta = brain.mount_shelf("/path/to/src", ShelfDomain::Code, "my-code")?;
+
+// Book 类型使用 Sequential 策略
+let meta = brain.mount_shelf("/path/to/docs", ShelfDomain::Book, "my-docs")?;
+```
+
+#### Crystal 使用反馈
+
+程序性晶体支持使用反馈闭环：
+
+```rust
+// 晶体被 Agent 成功采用后回调
+brain.update_crystal_usage(&crystal.id, true)?;  // success=true
+
+// 晶体被拒绝
+brain.update_crystal_usage(&crystal.id, false)?;  // success=false
+```
+
+内部使用 EMA（指数移动平均，α=0.1）更新 `success_rate`，`cascade_recall` 自动在每次检索后调用 `update_crystal_usage`。
 
 ---
 

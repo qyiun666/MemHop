@@ -66,7 +66,7 @@
 
 ## vs agentmemory
 
-| 维度 | agentmemory | MemHop v0.25.0 |
+| 维度 | agentmemory | MemHop v0.25.1 |
 |------|------------|----------------|
 | 嵌入模型 | all-MiniLM-L6-v2 (384d) | **multilingual-e5-small (384d)** |
 | 检索 | BM25 + 向量 + 图谱 RRF | **HNSW + SparseIndex BM25 RRF** |

@@ -71,7 +71,7 @@
 
 ## vs agentmemory
 
-| Dimension | agentmemory | MemHop v0.25.0 |
+| Dimension | agentmemory | MemHop v0.25.1 |
 |-----------|------------|----------------|
 | Embedding Model | all-MiniLM-L6-v2 (384d) | **multilingual-e5-small (384d)** |
 | Retrieval | BM25 + Vector + Graph RRF | **HNSW + SparseIndex BM25 RRF** |
