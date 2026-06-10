@@ -46,17 +46,6 @@ pub fn sanitize_error(context: &str, msg: &str) -> MemHopError {
     }
 }
 
-impl From<heed::Error> for MemHopError {
-    fn from(e: heed::Error) -> Self {
-        match &e {
-            heed::Error::Mdb(heed::MdbError::MapFull) => {
-                MemHopError::StorageFull("storage map is full".to_string())
-            }
-            _ => sanitize_error("lmdb", &e.to_string()),
-        }
-    }
-}
-
 impl From<serde_json::Error> for MemHopError {
     fn from(e: serde_json::Error) -> Self {
         sanitize_error("json", &e.to_string())

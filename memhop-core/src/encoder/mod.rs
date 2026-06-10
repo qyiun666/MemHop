@@ -36,4 +36,8 @@ pub use candle::CandleEncoder;
 mod router;
 pub use router::EncoderRouter;
 
+// ── TripleEncoder (三重编码器) ──────────────────────────────
+pub mod triple;
+pub use triple::{TripleEncoder, TripleEncoderOutput};
+
 

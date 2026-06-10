@@ -37,7 +37,7 @@
 
 **检索引擎**
 
-- **O(1) 单条精准召回** — 非 Top-K 近似搜索，仿人脑瞬时回忆，基于 Hopfield 网络模式补全
+- **亚线性单条精准召回** — 非 Top-K 近似搜索，仿人脑瞬时回忆，基于 Hopfield 网络模式补全
 - **BM25 + HNSW 双通道** — 稀疏检索（ngram 倒排索引 + BM25）始终可用，稠密向量检索（usearch HNSW）可选增强
 - **可插拔双编码器** — 默认 NgramEncoder 零模型依赖；启用 `candle` feature 后加载 multilingual-e5-small 语义向量，EncoderRouter 自动路由稀疏/稠密双通道
 
@@ -226,7 +226,7 @@ fn main() -> memhop_core::Result<()> {
 
 | 方法 | 说明 |
 |------|------|
-| `batch_store(batch)` | 批量存储记忆（唯一写入接口） |
+| `batch_store(batch)` | 外部输入批量存储（Dream 为内部维护写入） |
 | `recall(req)` | 检索记忆（BM25 + HNSW RRF 融合） |
 | `consolidate()` | 记忆巩固（dream 管线：话题反思、关键词精炼） |
 | `mount_shelf(dir, domain, name)` | 挂载外部知识库到 L3 |
@@ -265,7 +265,7 @@ memhop-core/src/
 ├── lmdb/               LMDB 持久化层（各层独立环境）
 ├── dream/              记忆巩固管线（consolidate 实现）
 ├── recall/             检索管线
-├── batch_store.rs      批量存储（唯一写入接口）
+├── batch_store.rs      外部输入批量存储
 ├── query_engine.rs     按层检索引擎
 ├── organize/           记忆组织（话题反思、关键词精炼、边界检测）
 ├── shelf/              知识库挂载（L3 领域图扩展）

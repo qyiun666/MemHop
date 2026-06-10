@@ -33,6 +33,8 @@ tokenizers = { version = "0.21", optional = true }
 dirs = { version = "5", optional = true }
 usearch = "2.25.3"
 
+redb = "2"
+
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3"

@@ -6,8 +6,10 @@ use std::collections::{HashMap, HashSet};
 
 use crate::brain::Brain;
 use crate::engram::Hyperedge;
-use crate::error::Result;
+use crate::error::{MemHopError, Result};
+use crate::storage::L1_HYPEREDGES;
 use crate::types::{ChainCluster, CrystalStep, CrystalType, ProceduralCrystal};
+use redb::ReadableTable;
 
 // ── 辅助函数 ────────────────────────────────────────────────
 
@@ -83,25 +85,9 @@ pub(crate) fn cluster_chain_labels(chains: &[(String, Vec<String>)]) -> Vec<Chai
             // 取第一条链的 label 序列作为该簇的模式描述
             let label_pattern = profiles[indices[0]].1.join(" → ");
 
-            // 提取公共步骤：对每个位置取最频繁的 label
-            let max_steps = indices.iter().map(|&i| profiles[i].1.len()).max().unwrap_or(0);
-            let mut common_steps = Vec::new();
-            for pos in 0..max_steps {
-                let mut label_counts: HashMap<String, u32> = HashMap::new();
-                for &i in &indices {
-                    if pos < profiles[i].1.len() {
-                        *label_counts.entry(profiles[i].1[pos].clone()).or_insert(0) += 1;
-                    }
-                }
-                if let Some((best_label, _)) = label_counts.iter().max_by_key(|(_, c)| *c) {
-                    common_steps.push(best_label.clone());
-                }
-            }
-
             ChainCluster {
                 label_pattern,
                 chain_ids,
-                common_steps,
                 frequency,
             }
         })
@@ -114,34 +100,38 @@ pub(crate) fn cluster_chain_labels(chains: &[(String, Vec<String>)]) -> Vec<Chai
 /// 遍历每条链，收集所有超边的 label 和 node_ids，
 /// 按 label 出现频率排序后生成步骤。
 pub fn extract_steps(brain: &mut Brain, chain_ids: &[String]) -> Result<Vec<CrystalStep>> {
-    brain.ensure_l1_env()?;
-    let l1_env = brain.l1_env.as_ref().unwrap();
-    let txn = l1_env
-        .env
-        .read_txn()
-        ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
+    let rtxn = store.begin_read()?;
+    let table = rtxn.open_table(L1_HYPEREDGES)
+        .map_err(|e| MemHopError::Storage(format!("open L1_HYPEREDGES: {}", e)))?;
+
+    // 构建超边索引以便快速链遍历
+    let mut he_map: std::collections::HashMap<String, Hyperedge> = std::collections::HashMap::new();
+    for result in table.iter()
+        .map_err(|e| MemHopError::Storage(format!("iter L1_HYPEREDGES: {}", e)))?
+    {
+        let (_key, bytes) = result
+            .map_err(|e| MemHopError::Storage(format!("iter entry: {}", e)))?;
+        if let Ok(he) = bincode::deserialize::<Hyperedge>(bytes.value()) {
+            he_map.insert(he.id.clone(), he);
+        }
+    }
+    drop(table);
+    drop(rtxn);
 
     // 收集所有超边的 (label, node_ids) 对
     let mut entries: Vec<(String, Vec<String>)> = Vec::new();
     for head_id in chain_ids {
         let mut current_id = Some(head_id.clone());
         while let Some(ref cid) = current_id {
-            match l1_env
-                .hyperedges
-                .get(&txn, cid)
-                ?
-            {
-                Some(bytes) => {
-                    if let Ok(he) = bincode::deserialize::<Hyperedge>(bytes) {
-                        if let Some(ref label) = he.chain_label {
-                            entries.push((label.clone(), he.node_ids.clone()));
-                        }
-                        current_id = he.chain_next;
-                    } else {
-                        break;
-                    }
+            if let Some(he) = he_map.get(cid) {
+                if let Some(ref label) = he.chain_label {
+                    entries.push((label.clone(), he.node_ids.clone()));
                 }
-                None => break,
+                current_id = he.chain_next.clone();
+            } else {
+                break;
             }
         }
     }
@@ -273,7 +263,6 @@ mod tests {
         assert_eq!(clusters.len(), 1);
         assert_eq!(clusters[0].frequency, 2);
         assert_eq!(clusters[0].chain_ids.len(), 2);
-        assert_eq!(clusters[0].common_steps.len(), 3);
     }
 
     /// 两条无关 label 序列的链：不应产生聚类。
@@ -345,7 +334,6 @@ mod tests {
         let cluster = ChainCluster {
             label_pattern: "调试 → 修复".to_string(),
             chain_ids: vec!["he_1".to_string(), "he_2".to_string()],
-            common_steps: vec!["调试".to_string(), "修复".to_string()],
             frequency: 2,
         };
         let steps = vec![

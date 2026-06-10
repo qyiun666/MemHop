@@ -6,27 +6,17 @@ use crate::error::{MemHopError, Result};
 /// Reflect on a topic: aggregate L1 node content to update topic summary.
 /// Returns the new summary text.
 pub fn reflect_topic(brain: &mut Brain, topic_id: &str) -> Result<String> {
-    // Step 1: Read topic from L2 (clone to drop L2 borrows before accessing L1)
-    let topic = {
-        brain.ensure_l2()?;
-        let l2 = brain.l2.as_mut().unwrap();
-        let l2_env = brain.l2_env.as_ref().unwrap();
-        let txn = l2_env
-            .env
-            .read_txn()
-            ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
 
-        let t = match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
-            Some(t) => t,
-            None => {
-                return Err(MemHopError::NotFound(format!(
-                    "topic {} not found",
-                    topic_id
-                )));
-            }
-        };
-        drop(txn);
-        t
+    let topic = match store.l2_get_topic(topic_id)? {
+        Some(t) => t,
+        None => {
+            return Err(MemHopError::NotFound(format!(
+                "topic {} not found",
+                topic_id
+            )));
+        }
     };
 
     if topic.node_ids.is_empty() {
@@ -41,28 +31,19 @@ pub fn reflect_topic(brain: &mut Brain, topic_id: &str) -> Result<String> {
     }
 
     // Step 2: Aggregate all L1 node text and ngram weights
-    let (_all_text, mut keyword_freq) = {
-        brain.ensure_l1()?;
-        let l1 = brain.l1.as_mut().unwrap();
-        let l1_env = brain.l1_env.as_ref().unwrap();
-        let mut all_text = String::new();
-        let mut keyword_freq: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    let mut all_text = String::new();
+    let mut keyword_freq: std::collections::HashMap<String, f32> =
+        std::collections::HashMap::new();
 
-        for nid in &topic.node_ids {
-            let l1_txn = l1_env
-                .env
-                .read_txn()
-                ?;
-            if let Ok(Some(node)) = l1.get_node(&l1_txn, l1_env, nid) {
-                all_text.push_str(&node.text);
-                all_text.push(' ');
-                for (kw, w) in &node.sparse {
-                    *keyword_freq.entry(kw.clone()).or_insert(0.0) += *w;
-                }
+    for nid in &topic.node_ids {
+        if let Ok(Some(node)) = store.l1_get_node(nid) {
+            all_text.push_str(&node.text);
+            all_text.push(' ');
+            for (kw, w) in &node.sparse {
+                *keyword_freq.entry(kw.clone()).or_insert(0.0) += *w;
             }
         }
-        (all_text, keyword_freq)
-    };
+    }
 
     // Top 10 keywords by weight → summary
     let mut keywords: Vec<(String, f32)> = keyword_freq.drain().collect();
@@ -76,31 +57,11 @@ pub fn reflect_topic(brain: &mut Brain, topic_id: &str) -> Result<String> {
     }
 
     // Step 3: Write summary + keywords back to L2
-    {
-        brain.ensure_l2_env()?;
-        let l2_env = brain.l2_env.as_ref().unwrap();
-        let env = l2_env.env.clone();
-        let mut wtxn = env
-            .write_txn()
-            ?;
-        let key = format!("topic:{}:meta", topic_id);
-        if let Some(bytes) = l2_env
-            .topics
-            .get(&wtxn, &key)
-            ?
-            && let Ok(mut t) = bincode::deserialize::<crate::engram::Topic>(bytes)
-        {
-            t.summary = Some(summary.clone());
-            t.keywords = kw_names.clone();
-            t.updated_at = chrono::Utc::now().timestamp_millis();
-            let new_bytes = bincode::serialize(&t)?;
-            l2_env
-                .topics
-                .put(&mut wtxn, &key, &new_bytes)
-                ?;
-        }
-        wtxn.commit()
-            ?;
+    if let Ok(Some(mut t)) = store.l2_get_topic(topic_id) {
+        t.summary = Some(summary.clone());
+        t.keywords = kw_names.clone();
+        t.updated_at = chrono::Utc::now().timestamp_millis();
+        store.l2_store_topic(&t)?;
     }
 
     Ok(summary)
@@ -112,28 +73,11 @@ pub fn reflect_topic(brain: &mut Brain, topic_id: &str) -> Result<String> {
 /// - Create TopicEdge::Evolution link
 /// - Update summary from combined content
 pub fn merge_similar_topics(brain: &mut Brain, threshold: f32) -> Result<u32> {
-    brain.ensure_l2_env()?;
-    brain.ensure_l2()?;
-    let l2_env = brain.l2_env.as_ref().unwrap();
-    let l2 = brain.l2.as_mut().unwrap();
-    let txn = l2_env
-        .env
-        .read_txn()
-        ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
 
     // Collect all topics
-    let mut topic_list = Vec::new();
-    if let Ok(iter) = l2_env.topics.iter(&txn) {
-        for (key, bytes) in iter.flatten() {
-            if !key.starts_with("topic:") || !key.ends_with(":meta") {
-                continue;
-            }
-            if let Ok(t) = bincode::deserialize::<crate::engram::Topic>(bytes) {
-                topic_list.push(t);
-            }
-        }
-    }
-    drop(txn);
+    let topic_list = store.l2_list_topics()?;
 
     if topic_list.len() < 2 {
         return Ok(0);
@@ -142,10 +86,8 @@ pub fn merge_similar_topics(brain: &mut Brain, threshold: f32) -> Result<u32> {
     let mut merged = 0u32;
     let mut merged_away: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-    let env = l2_env.env.clone();
-    let mut wtxn = env
-        .write_txn()
-        ?;
+    // We need a mutable copy for in-memory merging, then write back
+    let mut topic_list = topic_list;
 
     for i in 0..topic_list.len() {
         if merged_away.contains(&topic_list[i].id) {
@@ -215,24 +157,18 @@ pub fn merge_similar_topics(brain: &mut Brain, threshold: f32) -> Result<u32> {
                 keeper_topic.updated_at = chrono::Utc::now().timestamp_millis();
                 keeper_topic.version += 1;
 
-                // Write merged topic back
-                let key = format!("topic:{}:meta", &keeper_topic.id);
-                let bytes = bincode::serialize(&*keeper_topic)
-                    ?;
-                l2_env
-                    .topics
-                    .put(&mut wtxn, &key, &bytes)
-                    ?;
+                // Write merged topic back via redb
+                store.l2_store_topic(keeper_topic)?;
 
                 // Create Evolution edge from absorbed → keeper
-                l2.add_topic_edge(
-                    &mut wtxn,
-                    l2_env,
-                    &absorbed_data.id,
-                    &keeper_topic.id,
-                    crate::types::TopicEdgeKind::Evolution,
-                    jaccard,
-                )?;
+                let edge = crate::engram::TopicEdge {
+                    source_id: absorbed_data.id.clone(),
+                    target_id: keeper_topic.id.clone(),
+                    kind: crate::types::TopicEdgeKind::Evolution,
+                    weight: jaccard,
+                    created_at: chrono::Utc::now().timestamp_millis(),
+                };
+                store.l2_store_topic_edge(&edge)?;
 
                 merged_away.insert(absorbed_data.id.clone());
                 merged += 1;
@@ -240,8 +176,6 @@ pub fn merge_similar_topics(brain: &mut Brain, threshold: f32) -> Result<u32> {
         }
     }
 
-    wtxn.commit()
-        ?;
     Ok(merged)
 }
 
@@ -257,29 +191,11 @@ fn merge_ranges(a: Option<(i64, i64)>, b: Option<(i64, i64)>) -> Option<(i64, i6
 }
 
 pub fn create_cooccurrence_hyperedges(brain: &mut Brain) -> Result<u32> {
-    // Step 1: Collect topics from L2
-    let topics = {
-        brain.ensure_l2_env()?;
-        let l2_env = brain.l2_env.as_ref().unwrap();
-        let l2_txn = l2_env
-            .env
-            .read_txn()
-            ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
 
-        let mut list = Vec::new();
-        if let Ok(iter) = l2_env.topics.iter(&l2_txn) {
-            for (key, bytes) in iter.flatten() {
-                if !key.starts_with("topic:") || !key.ends_with(":meta") {
-                    continue;
-                }
-                if let Ok(t) = bincode::deserialize::<crate::engram::Topic>(bytes) {
-                    list.push(t);
-                }
-            }
-        }
-        drop(l2_txn);
-        list
-    };
+    // Step 1: Collect topics from L2 via redb
+    let topics = store.l2_list_topics()?;
 
     if topics.len() < 2 {
         return Ok(0);
@@ -287,20 +203,12 @@ pub fn create_cooccurrence_hyperedges(brain: &mut Brain) -> Result<u32> {
 
     // Step 2: Build session→topic mapping from L4 session_index
     let session_topics = {
-        brain.ensure_l4_env()?;
-        let l4_env_ref = brain.l4_env.as_ref().unwrap();
-        let l4_txn = l4_env_ref
-            .env
-            .read_txn()
-            ?;
-
         let mut map: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         for topic in &topics {
             for doc_id in &topic.doc_ids {
                 // Look up which session this doc belongs to
-                if let Ok(Some(bytes)) = l4_env_ref.docs.get(&l4_txn, doc_id.as_str())
-                    && let Ok(doc) = bincode::deserialize::<crate::engram::RawDocument>(bytes)
+                if let Ok(Some(doc)) = store.l4_get_doc(doc_id)
                     && let Some(ref sid) = doc.session_id
                 {
                     map
@@ -310,7 +218,6 @@ pub fn create_cooccurrence_hyperedges(brain: &mut Brain) -> Result<u32> {
                 }
             }
         }
-        drop(l4_txn);
         map
     };
 
@@ -341,13 +248,12 @@ pub fn create_cooccurrence_hyperedges(brain: &mut Brain) -> Result<u32> {
     // Step 4: Create L1 hyperedges for pairs that co-occur >= 2 times
     let mut created = 0u32;
     if !pair_count.is_empty() {
-        brain.ensure_l1()?;
-        let l1 = brain.l1.as_mut().unwrap();
-        let l1_env = brain.l1_env.as_ref().unwrap();
-        let l1_env_clone = l1_env.env.clone();
-        let mut wtxn = l1_env_clone
-            .write_txn()
-            ?;
+        // Pre-build hyperedges with node→hyperedge updates in memory
+        struct PendingHe {
+            hyperedge: crate::engram::Hyperedge,
+            node_ids: Vec<String>,
+        }
+        let mut pending: Vec<PendingHe> = Vec::new();
 
         for ((tid_a, tid_b), count) in &pair_count {
             if *count < 2 {
@@ -366,22 +272,72 @@ pub fn create_cooccurrence_hyperedges(brain: &mut Brain) -> Result<u32> {
                 }
                 if cross_nodes.len() == 2 {
                     let weight = (*count as f32).min(5.0) / 5.0;
-                    l1.add_hyperedge(
-                        &mut wtxn,
-                        l1_env,
-                        cross_nodes,
-                        crate::types::HyperedgeKind::Association,
+                    let label = format!("cooccur:{}:{}", tid_a, tid_b);
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let he = crate::engram::Hyperedge {
+                        id: format!("he_cooccur_{}", now),
+                        node_ids: cross_nodes.clone(),
+                        kind: crate::types::HyperedgeKind::Association,
                         weight,
-                        None,
-                        Some(format!("cooccur:{}:{}", tid_a, tid_b)),
-                    )?;
-                    created += 1;
+                        created_at: now,
+                        updated_at: now,
+                        version: 1,
+                        history: Vec::new(),
+                        meta: {
+                            let mut m = std::collections::HashMap::new();
+                            m.insert("label".to_string(), label.clone());
+                            m
+                        },
+                        chain_prev: None,
+                        chain_next: None,
+                        chain_label: Some(label),
+                    };
+                    pending.push(PendingHe {
+                        node_ids: cross_nodes,
+                        hyperedge: he,
+                    });
                 }
             }
         }
 
-        wtxn.commit()
-            ?;
+        // Pre-read existing node→hyperedge indices
+        let mut node_updates: Vec<(String, Vec<String>)> = Vec::new();
+        for pe in &pending {
+            for nid in &pe.node_ids {
+                let existing = store
+                    .l1_get_node_hyperedge_index(nid)?
+                    .unwrap_or_default();
+                let mut new_ids = existing;
+                if !new_ids.contains(&pe.hyperedge.id) {
+                    new_ids.push(pe.hyperedge.id.clone());
+                }
+                node_updates.push((nid.clone(), new_ids));
+            }
+        }
+
+        // Write all hyperedges + indices in a single write transaction
+        if !pending.is_empty() {
+            let mut wtxn = store.begin_write()?;
+            for pe in &pending {
+                store.write_bincode(
+                    &mut wtxn,
+                    crate::storage::L1_HYPEREDGES,
+                    &pe.hyperedge.id,
+                    &pe.hyperedge,
+                )?;
+            }
+            for (nid, ids) in &node_updates {
+                store.write_bincode(
+                    &mut wtxn,
+                    crate::storage::L1_NODE_TO_HYPEREDGES,
+                    nid,
+                    ids,
+                )?;
+            }
+            wtxn.commit()
+                .map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
+            created = pending.len() as u32;
+        }
     }
 
     Ok(created)

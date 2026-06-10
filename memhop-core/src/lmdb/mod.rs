@@ -1,16 +1,9 @@
-//! LMDB 存储层 — 5 层独立 heed::Env 环境。
-//! L0/L1/L2/L3/L4 各一个独立 LMDB 文件，独立事务。
-//!
-//! 环境布局:
-//!   <brain_dir>/l0_profile.db/     — 角色画像+版本历史
-//!   <brain_dir>/l1_hypergraph.db/  — 超图节点+超边+BM25快照
-//!   <brain_dir>/l2_topics.db/      — 话题+话题图边+每话题BM25
-//!   <brain_dir>/l3_domains.db/     — 领域节点+领域超图+每领域BM25
-//!   <brain_dir>/l4_raw.db/         — 原文+时间索引+会话索引
+//! LMDB 存储类型定义 — 仅用于数据迁移工具 (storage/migrate.rs)
+#![allow(dead_code)]
 
 use heed::byteorder::NativeEndian;
 use heed::types::{Bytes, Str, U32};
-use heed::{Env, EnvOpenOptions, RoTxn, RwTxn};
+use heed::{Env, EnvOpenOptions, RoTxn};
 use std::path::Path;
 pub type DB = heed::Database<Str, Bytes>;
 use crate::error::{MemHopError, Result};
@@ -116,17 +109,6 @@ impl L0Env {
             .read_txn()
             .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
-
-    pub fn begin_write(&self) -> Result<RwTxn<'_>> {
-        self.env
-            .write_txn()
-            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
-    }
-
-    /// 获取空间使用统计信息
-    pub fn space_usage(&self) -> Result<SpaceUsage> {
-        space_usage_impl(&self.env)
-    }
 }
 
 // ── L1: 超图环境 ──────────────────────────────────────────
@@ -200,17 +182,6 @@ impl L1Env {
             .read_txn()
             .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
-
-    pub fn begin_write(&self) -> Result<RwTxn<'_>> {
-        self.env
-            .write_txn()
-            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
-    }
-
-    /// 获取空间使用统计信息
-    pub fn space_usage(&self) -> Result<SpaceUsage> {
-        space_usage_impl(&self.env)
-    }
 }
 
 // ── L2: 话题环境 ──────────────────────────────────────────
@@ -270,17 +241,6 @@ impl L2Env {
         self.env
             .read_txn()
             .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
-    }
-
-    pub fn begin_write(&self) -> Result<RwTxn<'_>> {
-        self.env
-            .write_txn()
-            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
-    }
-
-    /// 获取空间使用统计信息
-    pub fn space_usage(&self) -> Result<SpaceUsage> {
-        space_usage_impl(&self.env)
     }
 }
 
@@ -342,17 +302,6 @@ impl L3Env {
             .read_txn()
             .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
-
-    pub fn begin_write(&self) -> Result<RwTxn<'_>> {
-        self.env
-            .write_txn()
-            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
-    }
-
-    /// 获取空间使用统计信息
-    pub fn space_usage(&self) -> Result<SpaceUsage> {
-        space_usage_impl(&self.env)
-    }
 }
 
 // ── L4: 原文环境 ──────────────────────────────────────────
@@ -413,17 +362,6 @@ impl L4Env {
             .read_txn()
             .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
     }
-
-    pub fn begin_write(&self) -> Result<RwTxn<'_>> {
-        self.env
-            .write_txn()
-            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
-    }
-
-    /// 获取空间使用统计信息
-    pub fn space_usage(&self) -> Result<SpaceUsage> {
-        space_usage_impl(&self.env)
-    }
 }
 
 // ── L5: 程序性晶体环境 ────────────────────────────────────
@@ -468,17 +406,6 @@ impl L5Env {
         self.env
             .read_txn()
             .map_err(|e| MemHopError::Storage(format!("read txn: {}", e)))
-    }
-
-    pub fn begin_write(&self) -> Result<RwTxn<'_>> {
-        self.env
-            .write_txn()
-            .map_err(|e| MemHopError::Storage(format!("write txn: {}", e)))
-    }
-
-    /// 获取空间使用统计信息
-    pub fn space_usage(&self) -> Result<SpaceUsage> {
-        space_usage_impl(&self.env)
     }
 }
 

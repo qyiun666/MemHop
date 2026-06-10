@@ -5,6 +5,7 @@
 //! - 计算激活分数（基于重要性和访问时间衰减）
 //! - 判断状态转换（基于阈值和重要性保底）
 //! - recall 命中后更新激活分数
+//! - 个性化衰减系数计算
 
 use crate::types::MemoryState;
 use serde::{Deserialize, Serialize};
@@ -144,6 +145,16 @@ impl ActivationManager {
     }
 }
 
+/// 计算个性化衰减系数 λ
+/// λ = base_λ / (1 + emotional_boost + recall_boost + connectivity_boost)
+pub fn personal_decay_lambda(node: &crate::engram::KnowledgeNode, hyperedge_count: usize) -> f32 {
+    let base_lambda = 0.01;
+    let emotional_boost = node.memory.emotion_intensity * 2.0;
+    let recall_boost = node.memory.activation_score * 1.5;
+    let connectivity_boost = (hyperedge_count as f32).min(5.0) * 0.3;
+    base_lambda / (1.0 + emotional_boost + recall_boost + connectivity_boost)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -251,5 +262,39 @@ mod tests {
         let manager = ActivationManager::new(ActivationConfig::default());
         assert!(manager.should_promote_to_latent(0.1));
         assert!(!manager.should_promote_to_latent(0.01));
+    }
+
+    #[test]
+    fn test_personal_decay_lambda_high_emotion() {
+        let mut node = crate::engram::KnowledgeNode::new(
+            "test".into(),
+            "test".into(),
+            std::collections::HashMap::new(),
+            vec![],
+            crate::types::Layer::L1,
+            crate::types::NodeSource::Perception,
+        );
+        node.memory.emotion_intensity = 0.8;
+        node.memory.activation_score = 0.9;
+        let lambda = personal_decay_lambda(&node, 10);
+        // 高情感 + 高激活 → λ 应该更小（衰减更慢）
+        assert!(lambda < 0.01);
+        assert!(lambda > 0.0);
+    }
+
+    #[test]
+    fn test_personal_decay_lambda_low_emotion() {
+        let node = crate::engram::KnowledgeNode::new(
+            "test".into(),
+            "test".into(),
+            std::collections::HashMap::new(),
+            vec![],
+            crate::types::Layer::L1,
+            crate::types::NodeSource::Perception,
+        );
+        // 默认 emotion_intensity=0.0, activation_score=0.5
+        let lambda = personal_decay_lambda(&node, 0);
+        // 低情感 + 低连接 → λ 应该接近 base
+        assert!((lambda - 0.01).abs() < 0.005);
     }
 }

@@ -1,7 +1,7 @@
 //! dream/rem — REM stages: topic merging + reflection + plan consolidation.
 
 use crate::brain::Brain;
-use crate::error::Result;
+use crate::error::{MemHopError, Result};
 use crate::organize;
 use crate::types::ConsolidateReport;
 
@@ -18,30 +18,12 @@ pub fn rem_merge_topics(brain: &mut Brain, report: &mut ConsolidateReport) -> Re
 /// Reflect: update each topic summary from its L1 nodes.
 /// v0.17.0: 如果 topic 已有 LLM 提供的非空 summary，reflect_topic 内部跳过覆写。
 pub fn rem_reflect_topics(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<()> {
-    let topic_ids: Vec<String> = {
-        brain.ensure_l2_env()?;
-        let l2_env = brain.l2_env.as_ref().unwrap();
-        let txn = l2_env
-            .env
-            .read_txn()
-            ?;
-        let mut ids = Vec::new();
-        if let Ok(iter) = l2_env.topics.iter(&txn) {
-            for (key, _bytes) in iter.flatten() {
-                if !key.starts_with("topic:") || !key.ends_with(":meta") {
-                    continue;
-                }
-                // Extract topic_id from "topic:{id}:meta"
-                let id = key.trim_start_matches("topic:").trim_end_matches(":meta");
-                ids.push(id.to_string());
-            }
-        }
-        ids
-    };
-
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
+    let topics = store.l2_list_topics()?;
     let mut reflected = 0u32;
-    for tid in &topic_ids {
-        if organize::reflect::reflect_topic(brain, tid).is_ok() {
+    for topic in &topics {
+        if organize::reflect::reflect_topic(brain, &topic.id).is_ok() {
             reflected += 1;
         }
     }
@@ -49,9 +31,15 @@ pub fn rem_reflect_topics(brain: &mut Brain, report: &mut ConsolidateReport) -> 
     Ok(())
 }
 
-/// v0.17.0: Plan consolidation 已废弃——改由 LLM 通过 memhop_update_topic 完成。
-/// 保留函数签名避免编译错误，但不再被 consolidate 调用。
-pub fn rem_plan_consolidate(_brain: &mut Brain, _report: &mut ConsolidateReport) -> Result<()> {
-    // v0.17.0: plan compression 由 LLM 负责，此处不再执行
+/// v0.25.0: Plan consolidation — 调用 organize::plan::consolidate_plan_summaries 压缩并聚合话题摘要。
+pub fn rem_plan_consolidate(brain: &mut Brain, report: &mut ConsolidateReport) -> Result<()> {
+    match organize::plan::consolidate_plan_summaries(brain) {
+        Ok(n) => {
+            report.topics_consolidated = n;
+        }
+        Err(e) => {
+            eprintln!("[dream] plan consolidate error: {}", e);
+        }
+    }
     Ok(())
 }

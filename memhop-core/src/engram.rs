@@ -37,30 +37,13 @@ pub struct KnowledgeNode {
     pub updated_at: i64,
     pub version: u64,
     pub history: Vec<HyperedgeSnapshot>,
-    /// v0.16.0: 重要度评分 (0.0-1.0)，默认 0.5
-    pub importance: f32,
-    // ── v0.23.0 新增：记忆激活系统字段 ──
-    /// 上次 recall 命中时间（毫秒）
-    pub last_accessed_at: i64,
-    /// 当前激活分数 [0.0, 1.0]
-    pub activation_score: f32,
-    /// 记忆状态：Active | Latent | Dormant
-    pub memory_state: MemoryState,
-    // ── v0.24.0 新增：情感维度字段 ──
-    /// 情感类型
-    #[serde(default)]
-    pub emotion: Emotion,
-    /// 情感强度 [0.0, 1.0]
-    #[serde(default)]
-    pub emotion_intensity: f32,
-    /// 效价 [-1.0, 1.0]
-    #[serde(default)]
-    pub valence: f32,
-    /// 唤醒度 [0.0, 1.0]
-    #[serde(default)]
-    pub arousal: f32,
     /// 文档长度（字符数），用于 BM25 长度归一化
     pub doc_len: usize,
+    /// v0.26.0: 聚合记忆元数据
+    pub memory: MemoryMeta,
+    /// v1.0: E5 模型稠密向量（第三检索通道）
+    #[serde(default)]
+    pub vector_e5: Vec<f16>,
 }
 
 impl KnowledgeNode {
@@ -87,17 +70,21 @@ impl KnowledgeNode {
             updated_at: now,
             version: 1,
             history: Vec::new(),
-            importance: 0.5,
-            // v0.23.0: 初始化记忆激活字段
-            last_accessed_at: now,
-            activation_score: 0.5, // 初始等于 importance
-            memory_state: MemoryState::Active,
-            // v0.24.0: 初始化情感字段
-            emotion: Emotion::Neutral,
-            emotion_intensity: 0.0,
-            valence: 0.0,
-            arousal: 0.0,
             doc_len,
+            memory: MemoryMeta {
+                importance: 0.5,
+                last_accessed_at: now,
+                activation_score: 0.5,
+                memory_state: MemoryState::Active,
+                emotion: Emotion::Neutral,
+                emotion_intensity: 0.0,
+                valence: 0.0,
+                arousal: 0.0,
+                personal_decay_lambda: 0.01,
+                reconsolidation_count: 0,
+                labile_until: None,
+            },
+            vector_e5: Vec::new(),
         }
     }
 }

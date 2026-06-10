@@ -12,11 +12,13 @@ use std::num::NonZeroUsize;
 use std::sync::Mutex;
 
 use crate::error::{MemHopError, Result};
-use heed::byteorder::NativeEndian;
-use heed::types::{Bytes, Str, U32};
-use heed::{RoTxn, RwTxn};
+use crate::storage::store::RedbStore;
+use crate::storage::{L1_SPARSE_DOC_LEN, L1_SPARSE_FORWARD};
+use redb::TableDefinition;
 use lru::LruCache;
+use redb::{Database, ReadableTable};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 /// BM25 parameters (Okapi BM25).
 const K1: f32 = 1.2;
@@ -515,6 +517,38 @@ impl Default for HnswIndex {
     }
 }
 
+// ── RRF 三通道权重配置 ───────────────────────────────────
+
+/// v1.0: RRF 三通道权重配置
+#[derive(Debug, Clone)]
+pub struct RrfWeights {
+    pub bm25: f64,     // 默认 0.35
+    pub hnsw: f64,     // 默认 0.35
+    pub e5: f64,       // 默认 0.30
+}
+
+impl Default for RrfWeights {
+    fn default() -> Self {
+        RrfWeights { bm25: 0.35, hnsw: 0.35, e5: 0.30 }
+    }
+}
+
+impl RrfWeights {
+    /// 当某个通道不可用时，重新归一化剩余权重
+    pub fn normalize(&self, available: &[bool; 3]) -> Self {
+        let mut total = 0.0f64;
+        if available[0] { total += self.bm25; }
+        if available[1] { total += self.hnsw; }
+        if available[2] { total += self.e5; }
+        if total <= 0.0 { return self.clone(); }
+        RrfWeights {
+            bm25: if available[0] { self.bm25 / total } else { 0.0 },
+            hnsw: if available[1] { self.hnsw / total } else { 0.0 },
+            e5: if available[2] { self.e5 / total } else { 0.0 },
+        }
+    }
+}
+
 // ── Tests ──────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -747,88 +781,114 @@ mod tests {
     }
 }
 
-// ── SparseIndexV2 (LMDB-backed forward index with LRU cache) ──────────────
+// ── SparseIndexV2 (redb-backed forward index with LRU cache) ──────────────
 
-/// v0.24.0: Sparse inverted index with forward index stored in LMDB + LRU cache.
+/// v0.25.0: Sparse inverted index with forward index stored in redb + LRU cache.
 /// 
-/// Forward index (memory_id → sparse weights) is stored in LMDB to reduce RAM usage.
+/// Forward index (memory_id → sparse weights) is stored in redb to reduce RAM usage.
 /// Inverted index (ngram → memory_ids) remains in memory for fast lookup.
 /// Doc length map remains in memory for BM25 normalization.
-/// LRU cache reduces LMDB I/O for frequently accessed forward entries.
+/// LRU cache reduces redb I/O for frequently accessed forward entries.
 pub struct SparseIndexV2 {
     /// ngram → set of memory_ids containing this ngram (in memory)
     inverted: HashMap<String, HashSet<String>>,
     /// memory_id → document length (in memory)
     doc_len: HashMap<String, usize>,
-    /// LMDB database for forward index (memory_id → serialized sparse weights)
-    forward_db: Option<heed::Database<Str, Bytes>>,
-    /// LRU cache for forward index entries (reduces LMDB I/O)
+    /// redb 数据库引用（与 RedbStore 共享同一个 Database 实例）
+    db: Option<Arc<Database>>,
+    /// LRU cache for forward index entries (reduces redb I/O)
     /// Default: 10000 entries (uses ~1MB RAM for typical sparse vectors)
     forward_cache: Mutex<LruCache<String, HashMap<String, f32>>>,
-    /// LMDB database for document lengths (memory_id → doc_len as u32)
-    doc_len_db: Option<heed::Database<Str, U32<NativeEndian>>>,
+    /// 可配置的 redb 表名（默认使用 L1 的表，L3 使用时传入不同的表）
+    forward_table: TableDefinition<'static, &'static str, &'static [u8]>,
+    doc_len_table: TableDefinition<'static, &'static str, u32>,
 }
 
 impl SparseIndexV2 {
-    /// Create a new SparseIndexV2 with optional LMDB forward and doc_len databases.
-    /// Uses LRU cache with 10000 entries to reduce LMDB I/O.
-    pub fn new(
-        forward_db: Option<heed::Database<Str, Bytes>>,
-        doc_len_db: Option<heed::Database<Str, U32<NativeEndian>>>,
+    /// Create a new SparseIndexV2 with an optional redb Database reference.
+    /// Uses LRU cache with 10000 entries to reduce redb I/O.
+    /// Default tables: L1_SPARSE_FORWARD and L1_SPARSE_DOC_LEN.
+    pub fn new(db: Option<Arc<Database>>) -> Self {
+        SparseIndexV2 {
+            inverted: HashMap::new(),
+            doc_len: HashMap::new(),
+            db,
+            forward_cache: Mutex::new(LruCache::new(NonZeroUsize::new(10000).unwrap())),
+            forward_table: L1_SPARSE_FORWARD,
+            doc_len_table: L1_SPARSE_DOC_LEN,
+        }
+    }
+
+    /// Create a new SparseIndexV2 with custom redb table definitions.
+    /// Used when L3 (or other layers) needs separate sparse index tables.
+    pub fn with_tables(
+        db: Option<Arc<Database>>,
+        forward_table: TableDefinition<'static, &'static str, &'static [u8]>,
+        doc_len_table: TableDefinition<'static, &'static str, u32>,
     ) -> Self {
         SparseIndexV2 {
             inverted: HashMap::new(),
             doc_len: HashMap::new(),
-            forward_db,
+            db,
             forward_cache: Mutex::new(LruCache::new(NonZeroUsize::new(10000).unwrap())),
-            doc_len_db,
+            forward_table,
+            doc_len_table,
         }
     }
 
     /// Create with custom cache size (for testing or memory-constrained environments).
+    /// Default tables: L1_SPARSE_FORWARD and L1_SPARSE_DOC_LEN.
     pub fn with_cache_size(
-        forward_db: Option<heed::Database<Str, Bytes>>,
-        doc_len_db: Option<heed::Database<Str, U32<NativeEndian>>>,
+        db: Option<Arc<Database>>,
         cache_size: usize,
     ) -> Self {
         SparseIndexV2 {
             inverted: HashMap::new(),
             doc_len: HashMap::new(),
-            forward_db,
+            db,
             forward_cache: Mutex::new(LruCache::new(NonZeroUsize::new(cache_size.max(1)).unwrap())),
-            doc_len_db,
+            forward_table: L1_SPARSE_FORWARD,
+            doc_len_table: L1_SPARSE_DOC_LEN,
         }
     }
 
     /// Add a memory's sparse representation to the index.
+    /// Persists to redb if a database reference is available.
     pub fn add(
         &mut self,
         id: &str,
         sparse: &HashMap<String, f32>,
         doc_length: usize,
-        wtxn: &mut RwTxn<'_>,
     ) -> Result<()> {
         // If id already exists, remove old entries first
         if self.doc_len.contains_key(id) {
-            self.remove(id, wtxn)?;
+            self.remove(id)?;
         }
 
-        // Store forward index in LMDB
-        if let Some(db) = self.forward_db {
-            let sparse_bytes = bincode::serialize(sparse)
-                .map_err(|e| MemHopError::Internal(format!("serialize sparse: {}", e)))?;
-            db.put(wtxn, id, &sparse_bytes)
-                .map_err(|e| MemHopError::Storage(format!("put forward: {}", e)))?;
+        // Store forward index in redb
+        if let Some(ref db) = self.db {
+            let wtxn = db.begin_write()
+                .map_err(|e| MemHopError::Storage(format!("begin_write: {}", e)))?;
+            {
+                let mut table = wtxn.open_table(self.forward_table)
+                    .map_err(|e| MemHopError::Storage(format!("open forward table: {}", e)))?;
+                let sparse_bytes = bincode::serialize(sparse)
+                    .map_err(|e| MemHopError::Internal(format!("serialize sparse: {}", e)))?;
+                table.insert(id, sparse_bytes.as_slice())
+                    .map_err(|e| MemHopError::Storage(format!("insert forward: {}", e)))?;
+            }
+            {
+                let mut table = wtxn.open_table(self.doc_len_table)
+                    .map_err(|e| MemHopError::Storage(format!("open doc_len table: {}", e)))?;
+                table.insert(id, doc_length as u32)
+                    .map_err(|e| MemHopError::Storage(format!("insert doc_len: {}", e)))?;
+            }
+            wtxn.commit()
+                .map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
         }
 
         // Store doc length in memory
         self.doc_len.insert(id.to_string(), doc_length);
-
-        // Store doc length in LMDB doc_len_db
-        if let Some(db) = self.doc_len_db {
-            db.put(wtxn, id, &(doc_length as u32))
-                .map_err(|e| MemHopError::Storage(format!("put doc_len: {}", e)))?;
-        }
 
         // Build inverted index in memory
         for ngram in sparse.keys() {
@@ -841,44 +901,104 @@ impl SparseIndexV2 {
         Ok(())
     }
 
-    /// Remove a memory from the index.
-    pub fn remove(&mut self, id: &str, wtxn: &mut RwTxn<'_>) -> Result<()> {
-        self.doc_len.remove(id);
+    /// Batch add multiple entries in a single write transaction.
+    /// Much more efficient than calling add() N times (N write transactions → 1).
+    pub fn add_batch(
+        &mut self,
+        store: &RedbStore,
+        items: &[(&str, &HashMap<String, f32>, usize)],
+    ) -> Result<()> {
+        let wtxn = store.begin_write()?;
 
-        // Remove from doc_len_db
-        if let Some(db) = self.doc_len_db {
-            db.delete(wtxn, id)
-                .map_err(|e| MemHopError::Storage(format!("delete doc_len: {}", e)))?;
+        {
+            let mut fwd_table = wtxn.open_table(self.forward_table)
+                .map_err(|e| MemHopError::Storage(format!("open forward table: {}", e)))?;
+            let mut dlen_table = wtxn.open_table(self.doc_len_table)
+                .map_err(|e| MemHopError::Storage(format!("open doc_len table: {}", e)))?;
+
+            for (id, sparse, doc_length) in items {
+                // Store forward index
+                let sparse_bytes = bincode::serialize(sparse)
+                    .map_err(|e| MemHopError::Internal(format!("serialize sparse: {}", e)))?;
+                fwd_table.insert(*id, sparse_bytes.as_slice())
+                    .map_err(|e| MemHopError::Storage(format!("insert forward: {}", e)))?;
+
+                // Store doc length
+                dlen_table.insert(*id, *doc_length as u32)
+                    .map_err(|e| MemHopError::Storage(format!("insert doc_len: {}", e)))?;
+
+                // Update in-memory doc_len
+                self.doc_len.insert((*id).to_string(), *doc_length);
+
+                // Update inverted index
+                for ngram in sparse.keys() {
+                    self.inverted
+                        .entry(ngram.clone())
+                        .or_default()
+                        .insert((*id).to_string());
+                }
+            }
         }
+
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
+        Ok(())
+    }
+
+    /// Remove a memory from the index.
+    pub fn remove(&mut self, id: &str) -> Result<()> {
+        self.doc_len.remove(id);
 
         // Remove from LRU cache
         if let Ok(mut cache) = self.forward_cache.lock() {
             cache.pop(id);
         }
 
-        // Remove from LMDB forward index
-        if let Some(db) = self.forward_db {
+        // Remove from redb
+        if let Some(ref db) = self.db {
+            let wtxn = db.begin_write()
+                .map_err(|e| MemHopError::Storage(format!("begin_write: {}", e)))?;
+
             // Get old sparse weights to clean up inverted index
-            if let Some(old_sparse_bytes) = db.get(wtxn, id)
-                .map_err(|e| MemHopError::Storage(format!("get forward: {}", e)))? 
             {
-                let old_sparse: HashMap<String, f32> = bincode::deserialize(old_sparse_bytes)
-                    .map_err(|e| MemHopError::Internal(format!("deserialize sparse: {}", e)))?;
-                
-                // Remove from inverted index
-                for ngram in old_sparse.keys() {
-                    if let Some(doc_set) = self.inverted.get_mut(ngram) {
-                        doc_set.remove(id);
-                        if doc_set.is_empty() {
-                            self.inverted.remove(ngram);
+                let table = wtxn.open_table(self.forward_table)
+                    .map_err(|e| MemHopError::Storage(format!("open forward table: {}", e)))?;
+                if let Some(old_sparse_bytes) = table.get(id)
+                    .map_err(|e| MemHopError::Storage(format!("get forward: {}", e)))?
+                {
+                    let old_sparse: HashMap<String, f32> = bincode::deserialize(old_sparse_bytes.value())
+                        .map_err(|e| MemHopError::Internal(format!("deserialize sparse: {}", e)))?;
+                    
+                    // Remove from inverted index
+                    for ngram in old_sparse.keys() {
+                        if let Some(doc_set) = self.inverted.get_mut(ngram) {
+                            doc_set.remove(id);
+                            if doc_set.is_empty() {
+                                self.inverted.remove(ngram);
+                            }
                         }
                     }
                 }
             }
 
             // Remove from forward DB
-            db.delete(wtxn, id)
-                .map_err(|e| MemHopError::Storage(format!("delete forward: {}", e)))?;
+            {
+                let mut table = wtxn.open_table(self.forward_table)
+                    .map_err(|e| MemHopError::Storage(format!("open forward table: {}", e)))?;
+                table.remove(id)
+                    .map_err(|e| MemHopError::Storage(format!("delete forward: {}", e)))?;
+            }
+
+            // Remove from doc_len DB
+            {
+                let mut table = wtxn.open_table(self.doc_len_table)
+                    .map_err(|e| MemHopError::Storage(format!("open doc_len table: {}", e)))?;
+                table.remove(id)
+                    .map_err(|e| MemHopError::Storage(format!("delete doc_len: {}", e)))?;
+            }
+
+            wtxn.commit()
+                .map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
         }
 
         Ok(())
@@ -890,26 +1010,29 @@ impl SparseIndexV2 {
         id: &str,
         sparse: &HashMap<String, f32>,
         doc_length: usize,
-        wtxn: &mut RwTxn<'_>,
     ) -> Result<()> {
-        self.remove(id, wtxn)?;
-        self.add(id, sparse, doc_length, wtxn)
+        self.remove(id)?;
+        self.add(id, sparse, doc_length)
     }
 
-    /// Load forward index from LRU cache or LMDB.
-    /// Uses LRU cache to reduce LMDB I/O for frequently accessed entries.
-    fn load_forward(&self, id: &str, rtxn: &RoTxn<'_>) -> Result<Option<HashMap<String, f32>>> {
+    /// Load forward index from LRU cache or redb.
+    /// Uses LRU cache to reduce redb I/O for frequently accessed entries.
+    fn load_forward(&self, id: &str) -> Result<Option<HashMap<String, f32>>> {
         // Check LRU cache first
         if let Ok(mut cache) = self.forward_cache.lock()
             && let Some(sparse) = cache.get(id) {
                 return Ok(Some(sparse.clone()));
         }
 
-        // Cache miss: load from LMDB
-        if let Some(db) = self.forward_db {
-            match db.get(rtxn, id) {
+        // Cache miss: load from redb
+        if let Some(ref db) = self.db {
+            let rtxn = db.begin_read()
+                .map_err(|e| MemHopError::Storage(format!("begin_read: {}", e)))?;
+            let table = rtxn.open_table(self.forward_table)
+                .map_err(|e| MemHopError::Storage(format!("open forward table: {}", e)))?;
+            match table.get(id) {
                 Ok(Some(bytes)) => {
-                    let sparse: HashMap<String, f32> = bincode::deserialize(bytes)
+                    let sparse: HashMap<String, f32> = bincode::deserialize(bytes.value())
                         .map_err(|e| MemHopError::Internal(format!("deserialize sparse: {}", e)))?;
                     
                     // Store in LRU cache
@@ -927,10 +1050,14 @@ impl SparseIndexV2 {
         }
     }
 
-    /// Bulk preload forward index for multiple IDs (reduces LMDB I/O).
+    /// Bulk preload forward index for multiple IDs (reduces redb I/O).
     /// Used before batch search operations.
-    pub fn preload_forward(&self, ids: &[String], rtxn: &RoTxn<'_>) -> Result<()> {
-        if let Some(db) = self.forward_db {
+    pub fn preload_forward(&self, ids: &[String]) -> Result<()> {
+        if let Some(ref db) = self.db {
+            let rtxn = db.begin_read()
+                .map_err(|e| MemHopError::Storage(format!("begin_read: {}", e)))?;
+            let table = rtxn.open_table(self.forward_table)
+                .map_err(|e| MemHopError::Storage(format!("open forward table: {}", e)))?;
             let mut cache = self.forward_cache.lock()
                 .map_err(|e| MemHopError::Internal(format!("lock cache: {}", e)))?;
             
@@ -938,9 +1065,9 @@ impl SparseIndexV2 {
                 if cache.contains(id) {
                     continue;
                 }
-                match db.get(rtxn, id.as_str()) {
+                match table.get(id.as_str()) {
                     Ok(Some(bytes)) => {
-                        let sparse: HashMap<String, f32> = bincode::deserialize(bytes)
+                        let sparse: HashMap<String, f32> = bincode::deserialize(bytes.value())
                             .map_err(|e| MemHopError::Internal(format!("deserialize sparse: {}", e)))?;
                         cache.put(id.clone(), sparse);
                     }
@@ -958,15 +1085,14 @@ impl SparseIndexV2 {
         &self,
         query_sparse: &HashMap<String, f32>,
         max_candidates: usize,
-        rtxn: &RoTxn<'_>,
     ) -> Result<Vec<String>> {
         let mut scores: HashMap<String, f32> = HashMap::new();
 
         for (ngram, q_weight) in query_sparse {
             if let Some(doc_ids) = self.inverted.get(ngram) {
                 for doc_id in doc_ids {
-                    // Load forward index from LMDB
-                    if let Some(doc_sparse) = self.load_forward(doc_id, rtxn)?
+                    // Load forward index from redb
+                    if let Some(doc_sparse) = self.load_forward(doc_id)?
                         && let Some(d_weight) = doc_sparse.get(ngram) 
                     {
                         *scores.entry(doc_id.clone()).or_insert(0.0) += q_weight * d_weight;
@@ -981,13 +1107,12 @@ impl SparseIndexV2 {
         Ok(candidates.into_iter().map(|(id, _)| id).collect())
     }
 
-    /// BM25 search with LMDB-backed forward index.
+    /// BM25 search with redb-backed forward index.
     pub fn bm25_search(
         &self,
         query_sparse: &HashMap<String, f32>,
         idf: &HashMap<String, f32>,
         max_candidates: usize,
-        rtxn: &RoTxn<'_>,
     ) -> Result<Vec<(String, f32)>> {
         // Edge case: empty index
         if self.doc_len.is_empty() {
@@ -1004,8 +1129,8 @@ impl SparseIndexV2 {
             let idf_w = idf.get(ngram).copied().unwrap_or(1.0);
             if let Some(doc_ids) = self.inverted.get(ngram) {
                 for doc_id in doc_ids {
-                    // Load forward index from LMDB
-                    if let Some(doc_sparse) = self.load_forward(doc_id, rtxn)?
+                    // Load forward index from redb
+                    if let Some(doc_sparse) = self.load_forward(doc_id)?
                         && let Some(term_freq) = doc_sparse.get(ngram) 
                     {
                         let doc_len = *self.doc_len.get(doc_id).unwrap_or(&0) as f32;
@@ -1060,24 +1185,30 @@ impl SparseIndexV2 {
         self.doc_len.is_empty()
     }
 
-    /// Rebuild inverted index and doc_len from LMDB forward database.
+    /// Rebuild inverted index and doc_len from redb forward database.
     /// Used during startup to restore in-memory state.
-    pub fn rebuild_from_lmdb(&mut self, rtxn: &RoTxn<'_>) -> Result<()> {
+    pub fn rebuild_from_redb(&mut self) -> Result<()> {
         // Clear cache on rebuild
         if let Ok(mut cache) = self.forward_cache.lock() {
             cache.clear();
         }
         
-        if let Some(db) = self.forward_db {
-            let iter = db.iter(rtxn)
-                .map_err(|e| MemHopError::Storage(format!("iter forward: {}", e)))?;
+        if let Some(ref db) = self.db {
+            let rtxn = db.begin_read()
+                .map_err(|e| MemHopError::Storage(format!("begin_read: {}", e)))?;
+            let table = rtxn.open_table(self.forward_table)
+                .map_err(|e| MemHopError::Storage(format!("open forward table: {}", e)))?;
+            let dlen_table = rtxn.open_table(self.doc_len_table)
+                .map_err(|e| MemHopError::Storage(format!("open doc_len table: {}", e)))?;
             
-            for result in iter {
+            for result in table.iter()
+                .map_err(|e| MemHopError::Storage(format!("iter forward: {}", e)))?
+            {
                 let (id, sparse_bytes) = result
                     .map_err(|e| MemHopError::Storage(format!("iter forward: {}", e)))?;
                 
-                let id = id.to_string();
-                let sparse: HashMap<String, f32> = bincode::deserialize(sparse_bytes)
+                let id_str = id.value().to_string();
+                let sparse: HashMap<String, f32> = bincode::deserialize(sparse_bytes.value())
                     .map_err(|e| MemHopError::Internal(format!("deserialize sparse: {}", e)))?;
                 
                 // Rebuild inverted index
@@ -1085,21 +1216,17 @@ impl SparseIndexV2 {
                     self.inverted
                         .entry(ngram.clone())
                         .or_default()
-                        .insert(id.clone());
+                        .insert(id_str.clone());
                 }
                 
-                // Try to read doc_len from doc_len_db first; fall back to estimation
-                let doc_len = if let Some(doc_len_db) = self.doc_len_db {
-                    match doc_len_db.get(rtxn, id.as_str()) {
-                        Ok(Some(len)) => len as usize,
-                        _ => {
-                            sparse.values().map(|v| *v as usize).sum::<usize>().max(1)
-                        }
+                // Try to read doc_len from doc_len table; fall back to estimation
+                let doc_len = match dlen_table.get(id_str.as_str()) {
+                    Ok(Some(len)) => len.value() as usize,
+                    _ => {
+                        sparse.values().map(|v| *v as usize).sum::<usize>().max(1)
                     }
-                } else {
-                    sparse.values().map(|v| *v as usize).sum::<usize>().max(1)
                 };
-                self.doc_len.insert(id, doc_len);
+                self.doc_len.insert(id_str, doc_len);
             }
         }
         Ok(())
@@ -1120,7 +1247,7 @@ impl std::fmt::Debug for SparseIndexV2 {
         f.debug_struct("SparseIndexV2")
             .field("inverted_len", &self.inverted.len())
             .field("doc_len_len", &self.doc_len.len())
-            .field("has_forward_db", &self.forward_db.is_some())
+            .field("has_db", &self.db.is_some())
             .finish()
     }
 }

@@ -19,7 +19,8 @@ mod index; // SparseIndex + BM25
 pub mod encoder; // NgramEncoder (default)
 
 // ── 存储层 ──────────────────────────────────────────────────
-mod lmdb; // 4 独立 LMDB 环境
+mod lmdb; // LMDB 存储类型定义 — 仅用于数据迁移工具 (storage/migrate.rs)
+mod storage; // redb 单文件存储引擎 (迁移目标)
 
 // ── 4 层核心 ────────────────────────────────────────────────
 mod domain_graph; // L3 领域超图
@@ -29,12 +30,13 @@ mod raw_archive; // L4 原文库
 mod topic_graph; // L2 话题标准图 // L0 角色画像
 
 // ── 业务逻辑 ────────────────────────────────────────────────
-mod batch_store; // 批量存储（唯一写入接口）
+mod batch_store; // 外部输入写入接口（Dream 为内部维护写入）
 mod brain;
 mod query_engine; // 按层检索引擎 // Brain 顶层 API
 
 // ── v0.23.0 新增模块 ─────────────────────────────────────────
 pub mod activation; // 记忆激活管理器 (Active/Latent/Dormant)
+pub mod reconsolidation; // v1.0: 记忆再巩固管理器
 
 // ── v0.15.x 恢复模块 ─────────────────────────────────────────
 mod dream; // 记忆巩固管线（consolidate 实现）
@@ -57,22 +59,22 @@ pub mod sdk; // SDK 初始化 + 全局编码器共享
 // ============================================================
 
 pub use activation::{ActivationConfig, ActivationManager};
+pub use reconsolidation::ReconsolidationManager;
 pub use brain::{Brain, PrewarmLayerResult};
-pub use encoder::{Encoder, EncoderOutput, EncoderRouter, NgramEncoder};
+pub use encoder::{Encoder, EncoderOutput, EncoderRouter, NgramEncoder, TripleEncoder, TripleEncoderOutput};
 #[cfg(feature = "candle")]
 pub use encoder::CandleEncoder;
 pub use sdk::{MemHopConfig, MemHopInstance, MemHopSDK};
 pub use engram::{Hyperedge, KnowledgeNode, RawDocument, Topic, TopicEdge};
 pub use error::{MemHopError, Result};
-pub use index::{HnswIndex, MemHopHnswConfig, SparseIndex, SparseIndexV2};
+pub use index::{HnswIndex, MemHopHnswConfig, RrfWeights, SparseIndex, SparseIndexV2};
 pub use session::SessionManager;
-pub use lmdb::L5Env;
 pub use types::{
     ActivatedTopicInfo, ActivationEntry, BatchReport, BrainConfig, ConsolidateReport,
     CrystalStep, CrystalType, CrystallizeReport, CrystalSnapshot, DocumentSnapshot,
-    DreamConfig, HyperedgeKind, HyperedgeSnapshot, L0Profile, L0Snapshot,
-    L3PathInfo, Layer, MemoryState, NodeSource, ProceduralCrystal, RecallRequest, RecallResponse,
-    RecallResult, ShelfDomain, ShelfMeta, StorageLayerInfo, StoreBatch, StoreItem, TopicEdgeKind,
+    DomainMeta, DreamConfig, HyperedgeKind, HyperedgeSnapshot, L0Profile, L0Snapshot,
+    L3PathInfo, Layer, MemoryMeta, MemoryState, NodeSource, ProceduralCrystal, RecallRequest, RecallResponse,
+    RecallResult, ShelfDomain, L3HyperedgeStrategy, ShelfMeta, StorageLayerInfo, StoreBatch, StoreItem, TopicEdgeKind,
     TopicSnapshot,
     // v0.24.0: Emotional system
     Emotion, EmotionalDimension, EmotionalFeedback, EmotionRecallRequest,

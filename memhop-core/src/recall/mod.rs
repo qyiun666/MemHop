@@ -8,6 +8,8 @@ use crate::types::{Layer, RecallRequest, RecallResponse, RecallResult};
 pub mod associative;
 pub mod cascade;
 
+pub(crate) use cascade::build_prefetch_hints;
+
 /// Enhanced recall dispatch.
 /// v0.23.1: 默认使用级联检索模式（仿人脑激活优先）
 /// Priority order:
@@ -35,19 +37,14 @@ fn boost_activated_topics(
 ) -> Result<RecallResponse> {
     // Collect all node_ids from activated topics
     brain.ensure_l2()?;
-    let l2 = brain.l2.as_mut().unwrap();
-    let l2_env = brain.l2_env.as_ref().unwrap();
-    let txn = l2_env
-        .env
-        .read_txn()
-        ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| crate::error::MemHopError::Storage("redb not available".into()))?;
     let mut activated_node_ids: Vec<String> = Vec::new();
     for tid in active_topic_ids {
-        if let Ok(Some(topic)) = l2.get_topic_by_id(&txn, l2_env, tid) {
+        if let Ok(Some(topic)) = store.l2_get_topic(tid) {
             activated_node_ids.extend(topic.node_ids);
         }
     }
-    drop(txn);
 
     if activated_node_ids.is_empty() {
         return Ok(resp);
@@ -83,14 +80,10 @@ fn filter_by_topic(
     topic_id: &str,
 ) -> Result<Vec<RecallResult>> {
     brain.ensure_l2()?;
-    let l2 = brain.l2.as_mut().unwrap();
-    let l2_env = brain.l2_env.as_ref().unwrap();
-    let txn = l2_env
-        .env
-        .read_txn()
-        ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| crate::error::MemHopError::Storage("redb not available".into()))?;
 
-    let topic = match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
+    let topic = match store.l2_get_topic(topic_id)? {
         Some(t) => t,
         None => {
             return Err(crate::error::MemHopError::NotFound(format!(

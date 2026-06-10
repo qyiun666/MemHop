@@ -17,8 +17,9 @@ pub enum Layer {
 
 // ── MemoryState 枚举 (v0.23.0) ──────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum MemoryState {
+    #[default]
     Active,
     Latent,
     Dormant,
@@ -163,6 +164,68 @@ impl EmotionRecallRequest {
         }
         Ok(())
     }
+}
+
+// ── MemoryMeta ─────────────────────────────────────────────
+
+/// 记忆元数据 — 聚合重要性/激活/情感/衰减等维度
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MemoryMeta {
+    pub importance: f32,
+    pub last_accessed_at: i64,
+    pub activation_score: f32,
+    pub memory_state: MemoryState,
+    pub emotion: Emotion,
+    pub emotion_intensity: f32,
+    pub valence: f32,
+    pub arousal: f32,
+    // v1.0: 新增字段
+    pub personal_decay_lambda: f32,
+    pub reconsolidation_count: u32,
+    pub labile_until: Option<i64>,
+}
+
+/// 记忆再巩固条目
+#[derive(Debug, Clone)]
+pub struct ReconsolidationEntry {
+    pub node_id: String,
+    pub original_text_hash: u64,
+    pub labile_until: i64,
+    pub recall_count: u32,
+    pub reconsolidation_count: u32,
+}
+
+// ── PrefetchHint (v1.0) ────────────────────────────────────
+
+/// 预测性记忆提示
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrefetchHint {
+    pub node_id: String,
+    pub text: String,
+    pub prediction_score: f32,
+    pub reason: PrefetchReason,
+}
+
+/// 预测原因
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum PrefetchReason {
+    HyperedgeSpread,
+    SameTopicHighFreq,
+    EmotionalResonance,
+    CrossDomainBridge,
+    TemporalProximity,
+}
+
+// ── CrossDomainLink (v1.0) ──────────────────────────────────
+
+/// L3 域间关联 — 在 Dream 时从共现 topic 自动推断
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossDomainLink {
+    pub domain_a: String,
+    pub domain_b: String,
+    pub bridge_topic_ids: Vec<String>,
+    pub strength: f32,
+    pub created_at: i64,
 }
 
 // ── L3 Crystallization (v0.24.0) ─────────────────────────────
@@ -382,6 +445,28 @@ pub enum ShelfDomain {
     Generic,
 }
 
+/// L3 超边构建策略 — 按领域类型区分超图结构
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum L3HyperedgeStrategy {
+    /// Code: 同文件 Association + import 跨文件关联
+    Structural,
+    /// Book/Doc/Generic: 同章 + 邻章
+    Sequential,
+    /// Paper: 同 section + 引用
+    Citation,
+}
+
+impl ShelfDomain {
+    /// 返回该领域对应的超边构建策略
+    pub fn hyperedge_strategy(&self) -> L3HyperedgeStrategy {
+        match self {
+            Self::Code => L3HyperedgeStrategy::Structural,
+            Self::Doc | Self::Book | Self::Generic => L3HyperedgeStrategy::Sequential,
+            Self::Paper => L3HyperedgeStrategy::Citation,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ShelfMeta {
     pub id: String,
@@ -396,6 +481,23 @@ pub struct ShelfMeta {
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub l3_engram_ids: HashMap<String, String>,
 }
+
+/// L3 领域元信息（替代裸 serde_json::Value）
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DomainMeta {
+    pub id: String,
+    pub name: String,
+    pub created_at: i64,
+    pub node_count: u64,
+    pub updated_at: i64,
+    /// 反向索引 — 关联到该领域的 L2 topic ID 列表
+    #[serde(default)]
+    pub linked_topic_ids: Vec<String>,
+    /// 关联权重 (topic_id → weight)
+    #[serde(default)]
+    pub topic_weights: HashMap<String, f32>,
+}
+
 
 // ── Dream ────────────────────────────────────────────────
 
@@ -435,6 +537,11 @@ pub struct RecallRequest {
     pub time_decay_lambda: Option<f32>,
     /// v0.23.1: L3 Domain Router 最大域数量。None = 3。
     pub l3_max_domains: Option<usize>,
+    /// v1.0: 激活的 L3 domain ID 列表
+    /// Some([id1, id2]) → 仅在这些 L3 中搜索
+    /// Some([]) → 跳过 L3 搜索
+    /// None → 搜索所有已挂载 L3（默认行为）
+    pub active_l3_domains: Option<Vec<String>>,
 }
 
 impl Default for RecallRequest {
@@ -453,6 +560,7 @@ impl Default for RecallRequest {
             session_id: None,
             time_decay_lambda: None,
             l3_max_domains: None,
+            active_l3_domains: None,
         }
     }
 }
@@ -538,6 +646,9 @@ pub struct RecallResult {
     /// v0.24.0: 情感维度
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emotion: Option<EmotionalDimension>,
+    /// v1.0: L3 结果关联的 domain_id（用于双向链接更新）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub domain_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -550,6 +661,9 @@ pub struct RecallResponse {
     /// v0.18.3: 程序性晶体推荐（与查询的 trigger_keywords 子串匹配）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub recommended_crystals: Vec<ProceduralCrystal>,
+    /// v1.0: 预测性记忆提示
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prefetch: Vec<PrefetchHint>,
 }
 
 // ── Procedural Crystallization (v0.18.3) ─────────────────────
@@ -600,8 +714,6 @@ pub struct ProceduralCrystal {
 pub(crate) struct ChainCluster {
     pub label_pattern: String,
     pub chain_ids: Vec<String>,
-    #[allow(dead_code)] // Used in tests
-    pub common_steps: Vec<String>,
     pub frequency: u32,
 }
 
@@ -622,6 +734,9 @@ pub struct ConsolidateReport {
     pub schemas_emerged: u32,
     pub l0_updated: bool,
     pub plans_consolidated: u32,
+    /// v0.25.0: L2 plan consolidation 压缩的话题数
+    #[serde(default)]
+    pub topics_consolidated: u32,
     /// v0.18.3: 程序性结晶生成的晶体数
     #[serde(default)]
     pub crystals_created: u32,
@@ -637,29 +752,7 @@ pub struct StorageLayerInfo {
     pub usage_pct: f32,
 }
 
-// ── 类型转换函数（含 clamp 防御） ─────────────────────────────
 
-/// 情感反馈 → 内部结构（intensity 做 clamp 防御）。
-#[allow(dead_code)]
-pub fn emotional_feedback_to_memhop(feedback: &EmotionalFeedback) -> EmotionalFeedback {
-    EmotionalFeedback {
-        intensity: feedback.intensity.clamp(0.0, 1.0),
-        memory_id: feedback.memory_id.clone(),
-        emotion: feedback.emotion,
-        reason: feedback.reason.clone(),
-    }
-}
-
-/// 情感检索请求 → 内部结构（max_results 上限防御）。
-#[allow(dead_code)]
-pub fn emotion_recall_request_to_memhop(req: &EmotionRecallRequest) -> EmotionRecallRequest {
-    EmotionRecallRequest {
-        max_results: req.max_results.min(1000),
-        emotion: req.emotion,
-        min_intensity: req.min_intensity,
-        time_decay_lambda: req.time_decay_lambda,
-    }
-}
 
 // ── 单元测试 ──────────────────────────────────────────────────
 
@@ -895,54 +988,5 @@ mod tests {
         assert!(req.validate().is_err());
     }
 
-    // ── 转换函数 ──
 
-    #[test]
-    fn test_emotional_feedback_to_memhop_clamps_intensity() {
-        let fb = EmotionalFeedback {
-            memory_id: "mem_1".into(),
-            emotion: Emotion::Joy,
-            intensity: 1.5,
-            reason: None,
-        };
-        let converted = emotional_feedback_to_memhop(&fb);
-        assert!((converted.intensity - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_emotional_feedback_to_memhop_negative_clamp() {
-        let fb = EmotionalFeedback {
-            memory_id: "mem_1".into(),
-            emotion: Emotion::Sadness,
-            intensity: -0.5,
-            reason: None,
-        };
-        let converted = emotional_feedback_to_memhop(&fb);
-        assert!((converted.intensity - 0.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_emotion_recall_request_to_memhop_caps_max_results() {
-        let req = EmotionRecallRequest {
-            emotion: None,
-            min_intensity: 0.0,
-            time_decay_lambda: None,
-            max_results: 99999,
-        };
-        let converted = emotion_recall_request_to_memhop(&req);
-        assert_eq!(converted.max_results, 1000);
-    }
-
-    #[test]
-    fn test_emotion_recall_request_to_memhop_keeps_reasonable() {
-        let req = EmotionRecallRequest {
-            emotion: Some(Emotion::Joy),
-            min_intensity: 0.3,
-            time_decay_lambda: Some(0.001),
-            max_results: 50,
-        };
-        let converted = emotion_recall_request_to_memhop(&req);
-        assert_eq!(converted.max_results, 50);
-    }
 }
-

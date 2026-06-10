@@ -2,6 +2,7 @@
 //! Uses L1Hypergraph::bfs_spread() for Hopfield-like spreading activation.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use crate::brain::Brain;
 use crate::error::Result;
@@ -23,6 +24,7 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
             confidence: None,
             activated_topics: Vec::new(),
             recommended_crystals: Vec::new(),
+        prefetch: Vec::new(),
         });
     }
 
@@ -33,12 +35,11 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
     let depth = req.spread_depth.unwrap_or(2);
     brain.ensure_l1()?;
     let l1 = brain.l1.as_mut().unwrap();
-    let l1_env = brain.l1_env.as_ref().unwrap();
-    let txn = l1_env
-        .env
-        .read_txn()
-        ?;
-    let spread = l1.bfs_spread(&txn, l1_env, &seed_ids, depth)?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| crate::error::MemHopError::Storage("redb not available".into()))?;
+    let txn = store.begin_read()
+        .map_err(|e| crate::error::MemHopError::Storage(format!("begin_read: {}", e)))?;
+    let spread = l1.bfs_spread(&txn, &seed_ids, depth)?;
     drop(txn);
 
     if spread.is_empty() {
@@ -50,21 +51,22 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
             confidence: None,
             activated_topics: Vec::new(),
             recommended_crystals: Vec::new(),
+        prefetch: Vec::new(),
         });
     }
 
     // 4. Load spread node details into RecallResult
-    let txn = l1_env
-        .env
-        .read_txn()
-        ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| crate::error::MemHopError::Storage("redb not available".into()))?;
+    let txn = store.begin_read()
+        .map_err(|e| crate::error::MemHopError::Storage(format!("begin_read: {}", e)))?;
     let mut spread_results: Vec<RecallResult> = Vec::new();
     for (nid, weight) in &spread {
         // Skip seeds (already in l1_results)
         if seed_ids.contains(nid) {
             continue;
         }
-        if let Ok(Some(node)) = l1.get_node(&txn, l1_env, nid) {
+        if let Ok(Some(node)) = l1.get_node(&txn, nid) {
             spread_results.push(RecallResult {
                 layer: Layer::L1,
                 id: nid.clone(),
@@ -79,6 +81,7 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
                 created_at: node.created_at,
                 version: node.version,
                 emotion: None,
+                domain_id: None,
             });
         }
     }
@@ -88,6 +91,10 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
     let merged = merge_rrf(l1_results, spread_results, req.max_results);
     let total = merged.len();
 
+    // 构建 prefetch 提示
+    let seen: HashSet<String> = merged.iter().map(|r| r.id.clone()).collect();
+    let prefetch = super::build_prefetch_hints(brain, &merged, &seen, 5);
+
     Ok(RecallResponse {
         results: merged,
         total_count: total,
@@ -95,6 +102,7 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
         confidence: None,
         activated_topics: Vec::new(),
         recommended_crystals: Vec::new(),
+        prefetch,
     })
 }
 
@@ -151,6 +159,7 @@ mod tests {
             created_at: 1000,
             version: 1,
             emotion: None,
+            domain_id: None,
         }];
         let result = merge_rrf(primary, secondary, 10);
         assert_eq!(result.len(), 1);
@@ -168,6 +177,7 @@ mod tests {
             created_at: 1000,
             version: 1,
             emotion: None,
+            domain_id: None,
         }];
         let secondary = vec![RecallResult {
             layer: Layer::L1,
@@ -178,6 +188,7 @@ mod tests {
             created_at: 1000,
             version: 1,
             emotion: None,
+            domain_id: None,
         }];
         let result = merge_rrf(primary, secondary, 10);
         assert_eq!(result.len(), 1);
@@ -195,6 +206,7 @@ mod tests {
                 created_at: 1000 + i as i64,
                 version: 1,
                 emotion: None,
+                domain_id: None,
             })
             .collect();
         let secondary: Vec<RecallResult> = (5..10)
@@ -207,6 +219,7 @@ mod tests {
                 created_at: 1000 + i as i64,
                 version: 1,
                 emotion: None,
+                domain_id: None,
             })
             .collect();
 

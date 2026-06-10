@@ -1,11 +1,11 @@
 //! organize — memory organization: keyword extraction, node organization, topic boundary detection.
-//! Operates on L1 + L2 layers. Stateless -- all state in LMDB.
+//! Operates on L1 + L2 layers. Stateless -- all state in redb.
 
 pub mod plan;
 pub mod reflect;
 
 use crate::brain::Brain;
-use crate::error::{MemHopError, Result};
+use crate::error::Result;
 
 // ── Stop words ────────────────────────────────────────────
 
@@ -130,21 +130,14 @@ const STOP_WORDS: &[&str] = &[
     "very",
     "just",
     "because",
-    "as",
     "until",
     "while",
     "about",
     "over",
-    "after",
-    "before",
-    "between",
-    "under",
-    "again",
     "and",
     "but",
     "or",
     "if",
-    "while",
     "that",
     "this",
     "these",
@@ -177,17 +170,20 @@ pub fn extract_keywords(text: &str, max: usize) -> Vec<String> {
 /// Organize a stored L1 node: extract keywords and write back.
 pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
     brain.ensure_l1()?;
-    let l1 = brain.l1.as_mut().unwrap();
-    let l1_env = brain.l1_env.as_ref().unwrap();
-    let txn = l1_env
-        .env
-        .read_txn()
-        ?;
-    let node = match l1.get_node(&txn, l1_env, node_id)? {
-        Some(n) => n,
-        None => return Err(MemHopError::NotFound(format!("node {} not found", node_id))),
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| crate::error::MemHopError::Storage("redb not available".into()))?;
+    let rtxn = store.begin_read()?;
+    let table = rtxn.open_table(crate::storage::L1_NODES)
+        .map_err(|e| crate::error::MemHopError::Storage(format!("open L1_NODES: {}", e)))?;
+    let node: crate::engram::KnowledgeNode = match table.get(node_id)
+        .map_err(|e| crate::error::MemHopError::Storage(format!("get node: {}", e)))?
+    {
+        Some(bytes) => bincode::deserialize(bytes.value())
+            .map_err(|e| crate::error::MemHopError::Internal(format!("deserialize: {}", e)))?,
+        None => return Err(crate::error::MemHopError::NotFound(format!("node {} not found", node_id))),
     };
-    drop(txn);
+    drop(table);
+    drop(rtxn);
 
     let keywords = extract_keywords(&node.text, 10);
     if keywords.is_empty() {
@@ -199,16 +195,15 @@ pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
     updated.keywords = keywords;
     updated.updated_at = chrono::Utc::now().timestamp_millis();
     let bytes = bincode::serialize(&updated)?;
-    let env = l1_env.env.clone();
-    let mut wtxn = env
-        .write_txn()
-        ?;
-    l1_env
-        .nodes
-        .put(&mut wtxn, node_id, &bytes)
-        ?;
+    let wtxn = store.begin_write()?;
+    {
+        let mut table = wtxn.open_table(crate::storage::L1_NODES)
+            .map_err(|e| crate::error::MemHopError::Storage(format!("open L1_NODES: {}", e)))?;
+        table.insert(node_id, bytes.as_slice())
+            .map_err(|e| crate::error::MemHopError::Storage(format!("insert node: {}", e)))?;
+    }
     wtxn.commit()
-        ?;
+        .map_err(|e| crate::error::MemHopError::Storage(format!("commit: {}", e)))?;
 
     Ok(())
 }
@@ -217,21 +212,26 @@ pub fn organize_node(brain: &mut Brain, node_id: &str) -> Result<()> {
 /// Returns true if vectors differ significantly (sharp drop suggests topic shift).
 pub fn detect_topic_boundary(brain: &mut Brain, node_a: &str, node_b: &str) -> Result<bool> {
     brain.ensure_l1()?;
-    let l1 = brain.l1.as_mut().unwrap();
-    let l1_env = brain.l1_env.as_ref().unwrap();
-    let txn = l1_env
-        .env
-        .read_txn()
-        ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| crate::error::MemHopError::Storage("redb not available".into()))?;
+    let rtxn = store.begin_read()?;
+    let table = rtxn.open_table(crate::storage::L1_NODES)
+        .map_err(|e| crate::error::MemHopError::Storage(format!("open L1_NODES: {}", e)))?;
 
-    let a = match l1.get_node(&txn, l1_env, node_a)? {
-        Some(n) => n,
-        None => return Err(MemHopError::NotFound(format!("node {} not found", node_a))),
+    let read_node = |id: &str| -> Result<crate::engram::KnowledgeNode> {
+        match table.get(id)
+            .map_err(|e| crate::error::MemHopError::Storage(format!("get node: {}", e)))?
+        {
+            Some(bytes) => Ok(bincode::deserialize(bytes.value())
+                .map_err(|e| crate::error::MemHopError::Internal(format!("deserialize: {}", e)))?),
+            None => Err(crate::error::MemHopError::NotFound(format!("node {} not found", id))),
+        }
     };
-    let b = match l1.get_node(&txn, l1_env, node_b)? {
-        Some(n) => n,
-        None => return Err(MemHopError::NotFound(format!("node {} not found", node_b))),
-    };
+
+    let a = read_node(node_a)?;
+    let b = read_node(node_b)?;
+    drop(table);
+    drop(rtxn);
 
     if a.vector.is_empty() || b.vector.is_empty() || a.vector.len() != b.vector.len() {
         // Fallback: compare ngram overlap

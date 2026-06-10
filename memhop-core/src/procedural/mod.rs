@@ -7,38 +7,49 @@ pub mod pattern;
 
 use crate::brain::Brain;
 use crate::engram::Hyperedge;
-use crate::error::Result;
-use crate::lmdb::L1Env;
+use crate::error::{MemHopError, Result};
+use crate::storage::L1_HYPEREDGES;
 use crate::types::{ChainCluster, CrystallizeReport};
-use heed::RoTxn;
+use redb::ReadableTable;
 
 /// 遍历 L1 所有超边，筛选链头并收集完整链的 label 序列。
 pub(crate) fn analyze_chains(brain: &mut Brain) -> Result<Vec<ChainCluster>> {
-    brain.ensure_l1_env()?;
-    let l1_env = brain.l1_env.as_ref().unwrap();
-    let txn = l1_env
-        .env
-        .read_txn()
-        ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
+    let rtxn = store.begin_read()?;
+    let table = rtxn.open_table(L1_HYPEREDGES)
+        .map_err(|e| MemHopError::Storage(format!("open L1_HYPEREDGES: {}", e)))?;
 
     // Step 1: 筛选 chain_label.is_some() && chain_prev.is_none() 的链头
     let mut heads: Vec<String> = Vec::new();
-    if let Ok(iter) = l1_env.hyperedges.iter(&txn) {
-        for item in iter {
-            if let Ok((_key, bytes)) = item
-                && let Ok(he) = bincode::deserialize::<Hyperedge>(bytes)
-                && he.chain_label.is_some() && he.chain_prev.is_none()
-            {
+    let mut all_hyperedges: Vec<Hyperedge> = Vec::new();
+
+    for result in table.iter()
+        .map_err(|e| MemHopError::Storage(format!("iter L1_HYPEREDGES: {}", e)))?
+    {
+        let (_key, bytes) = result
+            .map_err(|e| MemHopError::Storage(format!("iter entry: {}", e)))?;
+        if let Ok(he) = bincode::deserialize::<Hyperedge>(bytes.value()) {
+            if he.chain_label.is_some() && he.chain_prev.is_none() {
                 heads.push(he.id.clone());
             }
+            all_hyperedges.push(he);
         }
     }
+    drop(table);
+    drop(rtxn);
+
+    // Build index: id -> Hyperedge
+    let he_map: std::collections::HashMap<String, Hyperedge> = all_hyperedges
+        .into_iter()
+        .map(|he| (he.id.clone(), he))
+        .collect();
 
     // Step 2: 沿 chain_next 遍历收集完整链的 label 序列
     let chains: Vec<(String, Vec<String>)> = heads
         .iter()
         .map(|head_id| {
-            let labels = collect_chain_labels(l1_env, &txn, head_id);
+            let labels = collect_chain_labels(&he_map, head_id);
             (head_id.clone(), labels)
         })
         .filter(|(_, labels)| !labels.is_empty())
@@ -49,22 +60,17 @@ pub(crate) fn analyze_chains(brain: &mut Brain) -> Result<Vec<ChainCluster>> {
 }
 
 /// 沿 chain_next 遍历收集完整链的 label 序列。
-fn collect_chain_labels(env: &L1Env, txn: &RoTxn<'_>, start_id: &str) -> Vec<String> {
+fn collect_chain_labels(he_map: &std::collections::HashMap<String, Hyperedge>, start_id: &str) -> Vec<String> {
     let mut labels = Vec::new();
     let mut current_id = Some(start_id.to_string());
     while let Some(ref cid) = current_id {
-        match env.hyperedges.get(txn, cid) {
-            Ok(Some(bytes)) => {
-                if let Ok(he) = bincode::deserialize::<Hyperedge>(bytes) {
-                    if let Some(ref label) = he.chain_label {
-                        labels.push(label.clone());
-                    }
-                    current_id = he.chain_next;
-                } else {
-                    break;
-                }
+        if let Some(he) = he_map.get(cid) {
+            if let Some(ref label) = he.chain_label {
+                labels.push(label.clone());
             }
-            _ => break,
+            current_id = he.chain_next.clone();
+        } else {
+            break;
         }
     }
     labels

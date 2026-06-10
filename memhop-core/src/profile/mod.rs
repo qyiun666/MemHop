@@ -4,12 +4,14 @@
 use crate::brain::Brain;
 use crate::engram::Topic;
 use crate::error::Result;
+use crate::storage::store::RedbStore;
+use crate::storage::{L0_HISTORY, L0_PROFILE};
 use crate::types::{L0Profile, L0Snapshot};
 use std::collections::HashMap;
 
 const PROFILE_KEY: &str = "profile:main";
 
-/// L0 角色画像存储（无状态，env 从外部传入）。
+/// L0 角色画像存储（无状态，store 从外部传入）。
 pub struct L0ProfileStore;
 
 impl L0ProfileStore {
@@ -17,43 +19,47 @@ impl L0ProfileStore {
         L0ProfileStore
     }
 
-    /// 从 LMDB 读取当前 L0Profile。
+    /// 从 redb 读取当前 L0Profile。
     pub fn get_profile(
         &self,
-        txn: &heed::RoTxn<'_>,
-        env: &crate::lmdb::L0Env,
+        store: &RedbStore,
     ) -> Result<Option<L0Profile>> {
-        match env
-            .profile
-            .get(txn, PROFILE_KEY)
-            ?
+        let rtxn = store.begin_read()?;
+        let table = rtxn.open_table(L0_PROFILE)
+            .map_err(|e| crate::error::MemHopError::Storage(format!("open L0_PROFILE: {}", e)))?;
+        match table.get(PROFILE_KEY)
+            .map_err(|e| crate::error::MemHopError::Storage(format!("get profile: {}", e)))?
         {
             Some(bytes) => Ok(Some(
-                bincode::deserialize(bytes)?,
+                bincode::deserialize(bytes.value())?,
             )),
             None => Ok(None),
         }
     }
 
-    /// 将 L0Profile 写入 LMDB。
+    /// 将 L0Profile 写入 redb。
     pub fn update_profile(
         &self,
-        wtxn: &mut heed::RwTxn<'_>,
-        env: &crate::lmdb::L0Env,
+        store: &RedbStore,
         profile: &L0Profile,
     ) -> Result<()> {
         let bytes = bincode::serialize(profile)?;
-        env.profile
-            .put(wtxn, PROFILE_KEY, &bytes)
-            ?;
+        let wtxn = store.begin_write()?;
+        {
+            let mut table = wtxn.open_table(L0_PROFILE)
+                .map_err(|e| crate::error::MemHopError::Storage(format!("open L0_PROFILE: {}", e)))?;
+            table.insert(PROFILE_KEY, bytes.as_slice())
+                .map_err(|e| crate::error::MemHopError::Storage(format!("insert profile: {}", e)))?;
+        }
+        wtxn.commit()
+            .map_err(|e| crate::error::MemHopError::Storage(format!("commit: {}", e)))?;
         Ok(())
     }
 
     /// 保存旧版本到 history DB。
     pub fn snapshot(
         &self,
-        wtxn: &mut heed::RwTxn<'_>,
-        env: &crate::lmdb::L0Env,
+        store: &RedbStore,
         profile: &L0Profile,
         reason: &str,
     ) -> Result<()> {
@@ -67,9 +73,15 @@ impl L0ProfileStore {
         };
         let key = format!("hist:{}", snap.version);
         let bytes = bincode::serialize(&snap)?;
-        env.history
-            .put(wtxn, &key, &bytes)
-            ?;
+        let wtxn = store.begin_write()?;
+        {
+            let mut table = wtxn.open_table(L0_HISTORY)
+                .map_err(|e| crate::error::MemHopError::Storage(format!("open L0_HISTORY: {}", e)))?;
+            table.insert(key.as_str(), bytes.as_slice())
+                .map_err(|e| crate::error::MemHopError::Storage(format!("insert history: {}", e)))?;
+        }
+        wtxn.commit()
+            .map_err(|e| crate::error::MemHopError::Storage(format!("commit: {}", e)))?;
         Ok(())
     }
 
@@ -132,27 +144,10 @@ impl L0ProfileStore {
 
     /// Dream 流程：从 L2 更新 L0，返回是否发生变化。
     pub fn dream_form(brain: &mut Brain) -> Result<bool> {
-        // 1. 收集所有 Topic
-        let topics = {
-            brain.ensure_l2_env()?;
-            let l2_env = brain.l2_env.as_ref().unwrap();
-            let txn = l2_env
-                .env
-                .read_txn()
-                ?;
-            let mut list = Vec::new();
-            if let Ok(iter) = l2_env.topics.iter(&txn) {
-                for (key, bytes) in iter.flatten() {
-                    if !key.starts_with("topic:") || !key.ends_with(":meta") {
-                        continue;
-                    }
-                    if let Ok(t) = bincode::deserialize::<Topic>(bytes) {
-                        list.push(t);
-                    }
-                }
-            }
-            list
-        };
+        // 1. 收集所有 Topic（从 redb）
+        let store = brain.redb_store.as_ref()
+            .ok_or_else(|| crate::error::MemHopError::Storage("redb not available".into()))?;
+        let topics = store.l2_list_topics()?;
 
         if topics.is_empty() {
             return Ok(false);
@@ -161,17 +156,8 @@ impl L0ProfileStore {
         // 2. 从 Topic 提取新 Profile
         let new_profile = Self::extract_from_topics(&topics);
 
-        // 3. 读取旧 Profile
-        let old_profile = {
-            brain.ensure_l0_env()?;
-            let l0_env = brain.l0_env.as_ref().unwrap();
-            let txn = l0_env
-                .env
-                .read_txn()
-                ?;
-            let l0 = brain.l0.as_ref().unwrap();
-            l0.get_profile(&txn, l0_env)?
-        };
+        // 3. 读取旧 Profile（从 redb）
+        let old_profile = store.l0_get_profile()?;
 
         // 4. 对比差异
         let changed = match &old_profile {
@@ -187,32 +173,24 @@ impl L0ProfileStore {
             return Ok(false);
         }
 
-        // 5. 快照旧版本 + 写入新版本
-        brain.ensure_l0_env()?;
-        let l0_env_ref = brain.l0_env.as_ref().unwrap();
-        let env = l0_env_ref.env.clone();
-        let mut wtxn = env
-            .write_txn()
-            ?;
-
+        // 5. 通过 redb 写入新版本（保留版本号递增）
+        let mut updated = new_profile;
         if let Some(ref old) = old_profile {
-            let l0 = brain.l0.as_ref().unwrap();
-            l0
-                .snapshot(&mut wtxn, l0_env_ref, old, "dream L0 formation")?;
-            // 新版本 = 旧版本 + 1
-            let mut updated = new_profile;
             updated.version = old.version + 1;
-            updated.history = old.history.clone(); // 保留历史引用
-            l0
-                .update_profile(&mut wtxn, l0_env_ref, &updated)?;
-        } else {
-            let l0 = brain.l0.as_ref().unwrap();
-            l0
-                .update_profile(&mut wtxn, l0_env_ref, &new_profile)?;
+            updated.history = old.history.clone();
+            // 将旧版本作为历史快照
+            let snap = crate::types::L0Snapshot {
+                version: old.version,
+                personality: old.personality.clone(),
+                values: old.values.clone(),
+                worldview: old.worldview.clone(),
+                snapshot_at: chrono::Utc::now().timestamp_millis(),
+                reason: "dream L0 formation".to_string(),
+            };
+            let _ = store.l0_snapshot(&snap); // 快照失败不阻塞流程
         }
+        store.l0_set_profile(&updated)?;
 
-        wtxn.commit()
-            ?;
         Ok(true)
     }
 }

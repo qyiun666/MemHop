@@ -7,14 +7,10 @@ use std::collections::HashMap;
 
 /// Set/update a plan name (maps to Topic label).
 pub fn set_plan_name(brain: &mut Brain, topic_id: &str, name: &str) -> Result<()> {
-    brain.ensure_l2()?;
-    let l2 = brain.l2.as_mut().unwrap();
-    let l2_env = brain.l2_env.as_ref().unwrap();
-    let txn = l2_env
-        .env
-        .read_txn()
-        ?;
-    let _topic = match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
+
+    let mut topic = match store.l2_get_topic(topic_id)? {
         Some(t) => t,
         None => {
             return Err(MemHopError::NotFound(format!(
@@ -23,152 +19,105 @@ pub fn set_plan_name(brain: &mut Brain, topic_id: &str, name: &str) -> Result<()
             )));
         }
     };
-    drop(txn);
 
-    let env = l2_env.env.clone();
-    let mut wtxn = env
-        .write_txn()
-        ?;
-    let key = format!("topic:{}:meta", topic_id);
-    if let Some(bytes) = l2_env
-        .topics
-        .get(&wtxn, &key)
-        ?
-        && let Ok(mut t) = bincode::deserialize::<crate::engram::Topic>(bytes)
-    {
-        t.label = name.to_string();
-        t.updated_at = chrono::Utc::now().timestamp_millis();
-        let new_bytes = bincode::serialize(&t)?;
-        l2_env
-            .topics
-            .put(&mut wtxn, &key, &new_bytes)
-            ?;
-    }
-    wtxn.commit()
-        ?;
+    topic.label = name.to_string();
+    topic.updated_at = chrono::Utc::now().timestamp_millis();
+    store.l2_store_topic(&topic)?;
     Ok(())
 }
 
 /// Get plan tree: return all topics for a given session.
 pub fn get_plan_tree(brain: &mut Brain, session_id: &str) -> Result<Vec<crate::engram::Topic>> {
-    // Find node_ids for this session from L4 session_index
-    brain.ensure_l4_env()?;
-    let l4_env_ref = brain.l4_env.as_ref().unwrap();
-    let txn = l4_env_ref
-        .env
-        .read_txn()
-        ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
+
+    // Get doc_ids for this session from L4 session_index
+    let txn = store.begin_read()?;
     let session_key = format!("session:{}", session_id);
-    let node_ids: Vec<String> = match l4_env_ref
-        .session_index
-        .get(&txn, &session_key)
-        ?
-    {
-        Some(bytes) => bincode::deserialize(bytes).unwrap_or_default(),
-        None => Vec::new(),
-    };
+    let session_doc_ids: Vec<String> = store
+        .read_bincode(&txn, crate::storage::L4_SESSION_INDEX, &session_key)?
+        .unwrap_or_default();
     drop(txn);
 
-    // For each node, find which topic it belongs to
-    let topic_ids: Vec<String> = {
-        brain.ensure_l1()?;
-        let l1 = brain.l1.as_mut().unwrap();
-        let l1_env = brain.l1_env.as_ref().unwrap();
-        let txn = l1_env
-            .env
-            .read_txn()
-            ?;
-        let mut ids: Vec<String> = Vec::new();
-        for nid in &node_ids {
-            if let Ok(Some(_node)) = l1.get_node(&txn, l1_env, nid) {
-                // Look up hyperedges to find topic association
-                if let Ok(Some(bytes)) = l1_env.node_to_hyperedges.get(&txn, nid)
-                    && let Ok(he_ids) = bincode::deserialize::<Vec<String>>(bytes)
-                {
-                    for he_id in &he_ids {
-                        if he_id.starts_with("he_") {
-                            // Check if this hyperedge connects to a topic
-                            if let Ok(Some(he)) = l1.get_hyperedge(&txn, l1_env, he_id)
-                                && !ids.contains(&he.id)
-                            {
-                                ids.push(he.id.clone());
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        drop(txn);
-        ids
-    };
-
-    // Collect all topics
-    {
-        brain.ensure_l2()?;
-        let l2 = brain.l2.as_mut().unwrap();
-        let l2_env = brain.l2_env.as_ref().unwrap();
-        let txn = l2_env
-            .env
-            .read_txn()
-            ?;
-        let mut topics = Vec::new();
-        for tid in &topic_ids {
-            if let Ok(Some(t)) = l2.get_topic_by_id(&txn, l2_env, tid) {
-                topics.push(t);
-            }
-        }
-        Ok(topics)
+    if session_doc_ids.is_empty() {
+        return Ok(Vec::new());
     }
+
+    let session_doc_set: std::collections::HashSet<String> =
+        session_doc_ids.into_iter().collect();
+
+    // List all topics and filter by doc_id overlap with session
+    let all_topics = store.l2_list_topics()?;
+    let mut plan_topics = Vec::new();
+    for topic in all_topics {
+        if topic.doc_ids.iter().any(|did| session_doc_set.contains(did)) {
+            plan_topics.push(topic);
+        }
+    }
+
+    Ok(plan_topics)
 }
 
 /// Complete a plan: mark it by creating an archival hyperedge.
 pub fn complete_plan(brain: &mut Brain, topic_id: &str) -> Result<()> {
-    // Step 1: Read topic from L2 (block-scoped to release L2 borrows)
-    let node_ids = {
-        brain.ensure_l2()?;
-        let l2 = brain.l2.as_mut().unwrap();
-        let l2_env = brain.l2_env.as_ref().unwrap();
-        let txn = l2_env
-            .env
-            .read_txn()
-            ?;
-        let topic = match l2.get_topic_by_id(&txn, l2_env, topic_id)? {
-            Some(t) => t,
-            None => {
-                return Err(MemHopError::NotFound(format!(
-                    "topic {} not found",
-                    topic_id
-                )));
-            }
-        };
-        let ids = topic.node_ids.clone();
-        drop(txn);
-        ids
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
+
+    let topic = match store.l2_get_topic(topic_id)? {
+        Some(t) => t,
+        None => {
+            return Err(MemHopError::NotFound(format!(
+                "topic {} not found",
+                topic_id
+            )));
+        }
     };
 
-    // Step 2: Write archiving hyperedge to L1
-    brain.ensure_l1()?;
-    let l1 = brain.l1.as_mut().unwrap();
-    let l1_env = brain.l1_env.as_ref().unwrap();
-    let env = l1_env.env.clone();
-    let mut wtxn = env
-        .write_txn()
-        ?;
+    if !topic.node_ids.is_empty() {
+        let now = chrono::Utc::now().timestamp_millis();
+        let he = crate::engram::Hyperedge {
+            id: format!("he_plan_complete_{}", now),
+            node_ids: topic.node_ids.clone(),
+            kind: crate::types::HyperedgeKind::Merged,
+            weight: 1.0,
+            created_at: now,
+            updated_at: now,
+            version: 1,
+            history: Vec::new(),
+            meta: HashMap::new(),
+            chain_prev: None,
+            chain_next: None,
+            chain_label: Some("plan_complete".to_string()),
+        };
 
-    if !node_ids.is_empty() {
-        l1.add_hyperedge(
-            &mut wtxn,
-            l1_env,
-            node_ids,
-            crate::types::HyperedgeKind::Merged,
-            1.0,
-            None,
-            Some("plan_complete".to_string()),
-        )?;
+        // Pre-read existing node→hyperedge indices (using separate read txns)
+        let mut node_existing: Vec<(String, Vec<String>)> = Vec::new();
+        for nid in &he.node_ids {
+            let existing = store
+                .l1_get_node_hyperedge_index(nid)?
+                .unwrap_or_default();
+            let mut new_ids = existing;
+            if !new_ids.contains(&he.id) {
+                new_ids.push(he.id.clone());
+            }
+            node_existing.push((nid.clone(), new_ids));
+        }
+
+        // Write hyperedge + node indices in a single write transaction
+        let mut wtxn = store.begin_write()?;
+        store.write_bincode(&mut wtxn, crate::storage::L1_HYPEREDGES, &he.id, &he)?;
+        for (nid, ids) in &node_existing {
+            store.write_bincode(
+                &mut wtxn,
+                crate::storage::L1_NODE_TO_HYPEREDGES,
+                nid,
+                ids,
+            )?;
+        }
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
     }
 
-    wtxn.commit()
-        ?;
     Ok(())
 }
 
@@ -176,57 +125,16 @@ pub fn complete_plan(brain: &mut Brain, topic_id: &str) -> Result<()> {
 /// summaries into a single compressed summary, and consolidate L4 doc_ids.
 /// Returns the number of topics consolidated.
 pub fn consolidate_plan_summaries(brain: &mut Brain) -> Result<u32> {
-    // Step 1: Read all topics from L2
-    let topics = {
-        brain.ensure_l2_env()?;
-        let l2_env_ref = brain.l2_env.as_ref().unwrap();
-        let env = l2_env_ref.env.clone();
-        let txn = env
-            .read_txn()
-            ?;
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
 
-        let mut list = Vec::new();
-        if let Ok(iter) = l2_env_ref.topics.iter(&txn) {
-            for (key, bytes) in iter.flatten() {
-                if !key.starts_with("topic:") || !key.ends_with(":meta") {
-                    continue;
-                }
-                if let Ok(t) = bincode::deserialize::<crate::engram::Topic>(bytes) {
-                    list.push(t);
-                }
-            }
-        }
-        drop(txn);
-        list
-    };
+    let topics = store.l2_list_topics()?;
 
     if topics.is_empty() {
         return Ok(0);
     }
 
-    // Step 2: Process each topic with L1 and L2
     let mut consolidated = 0u32;
-
-    // First: ensure L2 env and create write txn (block-scoped to release l2_env borrow)
-    let wtxn_env: heed::Env;
-    let mut wtxn: heed::RwTxn<'_>;
-    {
-        brain.ensure_l2_env()?;
-        let l2_env = brain.l2_env.as_ref().unwrap();
-        wtxn_env = l2_env.env.clone();
-        wtxn = wtxn_env
-            .write_txn()
-            ?;
-        // l2_env dropped here — brain.l2_env borrow released
-    }
-
-    // Then: ensure L1
-    brain.ensure_l1()?;
-    let l1 = brain.l1.as_mut().unwrap();
-    let l1_env = brain.l1_env.as_ref().unwrap();
-
-    // Re-borrow l2_env (compatible with l1 borrow — different fields)
-    let l2_env = brain.l2_env.as_ref().unwrap();
 
     for topic in &topics {
         if topic.node_ids.is_empty() {
@@ -236,13 +144,9 @@ pub fn consolidate_plan_summaries(brain: &mut Brain) -> Result<u32> {
         // Aggregate L1 node summaries
         let mut summary_parts: Vec<String> = Vec::new();
         let mut all_keywords: HashMap<String, f32> = HashMap::new();
-        let l1_txn = l1_env
-            .env
-            .read_txn()
-            ?;
 
         for nid in &topic.node_ids {
-            if let Ok(Some(node)) = l1.get_node(&l1_txn, l1_env, nid) {
+            if let Ok(Some(node)) = store.l1_get_node(nid) {
                 // Use node summary if available, else first 100 chars of text
                 let text = node
                     .summary
@@ -259,7 +163,6 @@ pub fn consolidate_plan_summaries(brain: &mut Brain) -> Result<u32> {
                 }
             }
         }
-        drop(l1_txn);
 
         if summary_parts.is_empty() {
             continue;
@@ -288,29 +191,16 @@ pub fn consolidate_plan_summaries(brain: &mut Brain) -> Result<u32> {
             topic.doc_ids.len(),
         );
 
-        // Write back to L2
-        let key = format!("topic:{}:meta", &topic.id);
-        if let Some(bytes) = l2_env
-            .topics
-            .get(&wtxn, &key)
-            ?
-            && let Ok(mut t) = bincode::deserialize::<crate::engram::Topic>(bytes)
-        {
+        // Read-modify-write the topic
+        if let Ok(Some(mut t)) = store.l2_get_topic(&topic.id) {
             t.summary = Some(consolidated_summary);
             t.keywords = kw_str;
             t.updated_at = chrono::Utc::now().timestamp_millis();
-            let new_bytes =
-                bincode::serialize(&t)?;
-            l2_env
-                .topics
-                .put(&mut wtxn, &key, &new_bytes)
-                ?;
+            store.l2_store_topic(&t)?;
             consolidated += 1;
         }
     }
 
-    wtxn.commit()
-        ?;
     Ok(consolidated)
 }
 

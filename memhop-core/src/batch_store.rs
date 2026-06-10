@@ -1,36 +1,24 @@
-//! batch_store — 批量存储（唯一写入接口）。
+//! batch_store — 外部输入写入接口。
 //! 一次 RPC 完成：L4 原文 → L1 超图 → L2 话题 → L3 领域。
+//! 职责：用户/Agent 主动写入的数据，含编码/去重/建边/建索引。
+//!
+//! 内部维护写入（Dream NREM/REM/Reconsolidation）直接操作 redb table，
+//! 不经过 batch_store。两者写入路径分离：batch_store = 外部摄入，
+//! Dream = 内部巩固。
+//!
+//! v0.25.0: 使用 redb 单文件存储引擎，单事务原子写入。
 
 use crate::brain::Brain;
+use crate::engram::{Hyperedge, KnowledgeNode, RawDocument, Topic};
 use crate::error::{MemHopError, Result};
-use crate::lmdb::space_usage_impl;
+use crate::storage::*;
 use crate::types::{BatchReport, HyperedgeKind, NodeSource, StoreBatch};
+use redb::ReadableTable;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// 全局单调递增计数器，确保同毫秒内 ID 不碰撞。
 static ID_SEQ: AtomicU64 = AtomicU64::new(0);
-
-/// 检查 LMDB 环境空间使用率，超过阈值时返回 StorageFull 错误或打印警告。
-fn check_space(env: &heed::Env, layer: &str) -> Result<()> {
-    match space_usage_impl(env) {
-        Ok(usage) => {
-            let pct = usage.usage_pct;
-            if pct > 95.0 {
-                return Err(MemHopError::StorageFull(format!(
-                    "{} storage {:.0}% full",
-                    layer, pct
-                )));
-            } else if pct > 80.0 {
-                eprintln!("[memhop] WARNING: {} storage {:.0}% full", layer, pct);
-            }
-        }
-        Err(e) => {
-            eprintln!("[memhop] WARNING: {} space_usage check failed: {}", layer, e);
-        }
-    }
-    Ok(())
-}
 
 /// 生成唯一 ID：前缀 + 时间戳 + 序号后缀。
 pub(crate) fn unique_id(prefix: &str) -> String {
@@ -72,6 +60,7 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         text: String,
         sparse: HashMap<String, f32>,
         vector: Vec<half::f16>,
+        e5_vector: Vec<half::f16>,
         topic_label: Option<String>,
         llm_keywords: Option<Vec<String>>,
         llm_compressed_summary: Option<String>,
@@ -94,10 +83,18 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         let chunks = crate::splitter::split_text(&item.text, 512);
         for chunk in chunks {
             let output = brain.encoder.encode(&chunk);
+            // 新增：如果有 E5 编码器，编码 E5 向量
+            let e5_vector = if let Some(ref e5_encoder) = brain.encoder_e5 {
+                let e5_output = e5_encoder.encode(&chunk);
+                e5_output.dense
+            } else {
+                Vec::new()
+            };
             encoded.push(Encoded {
                 text: chunk,
                 sparse: output.sparse,
                 vector: output.dense,
+                e5_vector,
                 topic_label: item.topic_label.clone(),
                 llm_keywords: item.llm_keywords.clone(),
                 llm_compressed_summary: item.llm_compressed_summary.clone(),
@@ -122,233 +119,351 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
     // 用于追踪每个输入项的第一个 L3 节点 ID
     let mut input_first_l3_node: HashMap<usize, String> = HashMap::new();
 
+    // 获取 redb store 并开始单写事务
+    let store = brain.redb_store.as_ref()
+        .ok_or_else(|| MemHopError::Storage("redb not available for batch_store".into()))?;
+
+    let wtxn = store.begin_write()
+        .map_err(|e| MemHopError::Storage(format!("begin write: {}", e)))?;
+
     // Phase 2: L4 write — 原文纯文本存储
     let mut l4_doc_ids: Vec<String> = Vec::new();
     {
-        brain.ensure_l4()?;
-        // P1-1: 写入前检查 L4 空间使用率
-        check_space(&brain.l4_env.as_ref().unwrap().env, "L4")?;
-        let l4 = brain.l4.as_mut().unwrap();
-        let l4_env = brain.l4_env.as_ref().unwrap();
-        let env = l4_env.env.clone();
-        let mut wtxn = env
-            .write_txn()
-            ?;
+        let mut docs_table = wtxn.open_table(L4_DOCS)
+            .map_err(|e| MemHopError::Storage(format!("open L4_DOCS: {}", e)))?;
+        let mut turn_table = wtxn.open_table(L4_TURN_INDEX)
+            .map_err(|e| MemHopError::Storage(format!("open L4_TURN_INDEX: {}", e)))?;
+        let mut session_table = wtxn.open_table(L4_SESSION_INDEX)
+            .map_err(|e| MemHopError::Storage(format!("open L4_SESSION_INDEX: {}", e)))?;
+
         for item in &encoded {
-            let doc_id = l4.store_with_id(
-                &mut wtxn,
-                l4_env,
-                &unique_id("l4d"),
-                &item.text,
-                &item.source,
-                item.turn_id.as_deref(),
-                item.session_id.as_deref(),
-                item.vector.clone(),
-            )?;
+            let doc_id = unique_id("l4d");
+            let doc = RawDocument {
+                id: doc_id.clone(),
+                text: item.text.clone(),
+                turn_id: item.turn_id.clone(),
+                session_id: item.session_id.clone(),
+                source: item.source.clone(),
+                created_at: chrono::Utc::now().timestamp_millis(),
+                version: 1,
+                history: Vec::new(),
+                vector: item.vector.clone(),
+            };
+            let doc_key = format!("doc:{}", doc_id);
+            let bytes = bincode::serialize(&doc)
+                .map_err(|e| MemHopError::Internal(format!("serialize doc: {}", e)))?;
+            docs_table.insert(doc_key.as_str(), bytes.as_slice())
+                .map_err(|e| MemHopError::Storage(format!("insert doc: {}", e)))?;
+
+            // Turn index
+            if let Some(ref turn_id) = item.turn_id {
+                let turn_key = format!("turn:{}", turn_id);
+                let existing: Vec<String> = match turn_table.get(turn_key.as_str())
+                    .map_err(|e| MemHopError::Storage(format!("get turn: {}", e)))?
+                {
+                    Some(bytes) => bincode::deserialize(bytes.value()).unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let mut updated = existing;
+                updated.push(doc_id.clone());
+                let bytes = bincode::serialize(&updated)
+                    .map_err(|e| MemHopError::Internal(format!("serialize turn index: {}", e)))?;
+                turn_table.insert(turn_key.as_str(), bytes.as_slice())
+                    .map_err(|e| MemHopError::Storage(format!("insert turn index: {}", e)))?;
+            }
+
+            // Session index
+            if let Some(ref session_id) = item.session_id {
+                let session_key = format!("session:{}", session_id);
+                let existing: Vec<String> = match session_table.get(session_key.as_str())
+                    .map_err(|e| MemHopError::Storage(format!("get session: {}", e)))?
+                {
+                    Some(bytes) => bincode::deserialize(bytes.value()).unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let mut updated = existing;
+                updated.push(doc_id.clone());
+                let bytes = bincode::serialize(&updated)
+                    .map_err(|e| MemHopError::Internal(format!("serialize session index: {}", e)))?;
+                session_table.insert(session_key.as_str(), bytes.as_slice())
+                    .map_err(|e| MemHopError::Storage(format!("insert session index: {}", e)))?;
+            }
+
             l4_doc_ids.push(doc_id);
             report.l4_docs_stored += 1;
         }
-        wtxn.commit()
-            ?;
     }
 
     // Phase 3: L1 hypergraph write — 带版本历史 + dedup
+    // Phase 3.5 (summary) merged into Phase 3
     {
-        brain.ensure_l1()?;
-        // P1-1: 写入前检查 L1 空间使用率
-        check_space(&brain.l1_env.as_ref().unwrap().env, "L1")?;
-        let l1 = brain.l1.as_mut().unwrap();
-        let l1_env = brain.l1_env.as_ref().unwrap();
-        let env = l1_env.env.clone();
-        let mut wtxn = env
-            .write_txn()
-            ?;
+        let mut nodes_table = wtxn.open_table(L1_NODES)
+            .map_err(|e| MemHopError::Storage(format!("open L1_NODES: {}", e)))?;
+        let mut hyperedges_table = wtxn.open_table(L1_HYPEREDGES)
+            .map_err(|e| MemHopError::Storage(format!("open L1_HYPEREDGES: {}", e)))?;
+        let mut node_to_he_table = wtxn.open_table(L1_NODE_TO_HYPEREDGES)
+            .map_err(|e| MemHopError::Storage(format!("open L1_NODE_TO_HYPEREDGES: {}", e)))?;
+        // BM25 稀疏前向索引表和 doc_len 表（通过主事务直接写入）
+        let mut sparse_forward_table = wtxn.open_table(L1_SPARSE_FORWARD)
+            .map_err(|e| MemHopError::Storage(format!("open L1_SPARSE_FORWARD: {}", e)))?;
+        let mut sparse_doc_len_table = wtxn.open_table(L1_SPARSE_DOC_LEN)
+            .map_err(|e| MemHopError::Storage(format!("open L1_SPARSE_DOC_LEN: {}", e)))?;
 
         for item in &encoded {
             // v0.16.0: Dedup check — if a semantically similar node exists, skip
             let mut dedup_found = false;
-            if !item.vector.is_empty() && !l1.vector_index.is_empty() {
-                let candidates = l1.vector_index.cosine_search(&item.vector, 5);
-                for (cand_id, sim) in &candidates {
-                    if *sim > 0.95 {
-                        // Check ngram overlap
-                        if let Ok(Some(cand_node)) =
-                            l1.get_node(&wtxn, l1_env, cand_id)
-                        {
-                            let intersection = item
-                                .sparse
-                                .keys()
-                                .filter(|k| cand_node.sparse.contains_key(*k))
-                                .count() as f32;
-                            let union =
-                                (item.sparse.len() + cand_node.sparse.len()) as f32 - intersection;
-                            let jaccard = if union > 0.0 {
-                                intersection / union
-                            } else {
-                                0.0
+            if let Some(ref l1) = brain.l1
+                && !item.vector.is_empty() && !l1.vector_index.is_empty() {
+                    let candidates = l1.vector_index.cosine_search(&item.vector, 5);
+                    for (cand_id, sim) in &candidates {
+                        if *sim > 0.95 {
+                            // Check ngram overlap — read node from redb
+                            let cand_node_opt: Option<KnowledgeNode> = match nodes_table.get(cand_id.as_str()) {
+                                Ok(Some(bytes)) => bincode::deserialize(bytes.value()).ok(),
+                                _ => None,
                             };
-                            if jaccard > 0.8 {
-                                // Duplicate found — update existing node instead
-                                let mut updated = cand_node;
-                                updated.vector = item.vector.clone();
-                                updated.updated_at = chrono::Utc::now().timestamp_millis();
-                                updated.version += 1;
-                                if let Some(ref kw) = item.llm_keywords {
-                                    updated.keywords = kw.clone();
+                            if let Some(cand_node) = cand_node_opt {
+                                let intersection = item.sparse.keys()
+                                    .filter(|k| cand_node.sparse.contains_key(*k))
+                                    .count() as f32;
+                                let union = (item.sparse.len() + cand_node.sparse.len()) as f32 - intersection;
+                                let jaccard = if union > 0.0 { intersection / union } else { 0.0 };
+                                if jaccard > 0.8 {
+                                    // Duplicate found — update existing node
+                                    let mut updated = cand_node;
+                                    updated.vector = item.vector.clone();
+                                    updated.vector_e5 = item.e5_vector.clone();
+                                    updated.updated_at = chrono::Utc::now().timestamp_millis();
+                                    updated.version += 1;
+                                    if let Some(ref kw) = item.llm_keywords {
+                                        updated.keywords = kw.clone();
+                                    }
+                                    let bytes = bincode::serialize(&updated)
+                                        .map_err(|e| MemHopError::Internal(format!("serialize updated node: {}", e)))?;
+                                    nodes_table.insert(cand_id.as_str(), bytes.as_slice())
+                                        .map_err(|e| MemHopError::Storage(format!("insert updated node: {}", e)))?;
+                                    if !item.vector.is_empty()
+                                        && let Some(ref mut l1) = brain.l1 {
+                                            l1.vector_index.update(cand_id, &item.vector);
+                                        }
+                                    // 更新 E5 向量
+                                    if !item.e5_vector.is_empty()
+                                        && item.e5_vector.len() > 1
+                                        && let Some(ref mut l1) = brain.l1 {
+                                            l1.vector_index_e5.update(cand_id, &item.e5_vector);
+                                        }
+                                    node_ids.push(cand_id.clone());
+                                    report.l1_dedup_skipped += 1;
+                                    dedup_found = true;
+                                    break;
                                 }
-                                let bytes = bincode::serialize(&updated)
-                                    ?;
-                                l1_env
-                                    .nodes
-                                    .put(&mut wtxn, cand_id, &bytes)
-                                    ?;
-                                l1.vector_index.update(cand_id, &item.vector);
-                                node_ids.push(cand_id.clone());
-                                report.l1_dedup_skipped += 1;
-                                dedup_found = true;
-                                break;
                             }
                         }
                     }
                 }
-            }
 
             if !dedup_found {
-                let node_id = l1.add_node_with_id(
-                    &mut wtxn,
-                    l1_env,
-                    &unique_id("kn"),
-                    &item.text,
-                    &item.sparse,
+                let node_id = unique_id("kn");
+                let mut node = KnowledgeNode::new(
+                    node_id.clone(),
+                    item.text.clone(),
+                    item.sparse.clone(),
                     item.vector.clone(),
-                    item.llm_keywords.clone().unwrap_or_default(),
+                    crate::types::Layer::L1,
                     NodeSource::Perception,
-                    item.importance,
-                )?;
-                // v0.24.0: 设置情感字段
-                if let Ok(Some(bytes)) = l1_env.nodes.get(&wtxn, &node_id)
-                    && let Ok(mut node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
-                {
-                    node.valence = item.valence.unwrap_or(0.0) as f32;
-                    node.arousal = item.arousal.unwrap_or(0.0) as f32;
-                    node.emotion = infer_emotion(node.valence as f64, node.arousal as f64);
-                    node.emotion_intensity = (node.valence.abs() + node.arousal) / 2.0;
-                    // v0.24.0: 同步更新 emotion_index
-                    brain
-                        .emotion_index
-                        .entry(node.emotion)
-                        .or_default()
-                        .push(node_id.clone());
-                    if let Ok(new_bytes) = bincode::serialize(&node) {
-                        let _ = l1_env.nodes.put(&mut wtxn, &node_id, &new_bytes);
-                    }
+                );
+                node.memory.importance = item.importance;
+                // v0.24.0: 情感字段
+                node.memory.valence = item.valence.unwrap_or(0.0) as f32;
+                node.memory.arousal = item.arousal.unwrap_or(0.0) as f32;
+                node.memory.emotion = infer_emotion(node.memory.valence as f64, node.memory.arousal as f64);
+                node.memory.emotion_intensity = (node.memory.valence.abs() + node.memory.arousal) / 2.0;
+                // Phase 3.5 merged: set summary at creation time
+                if let Some(ref summary) = item.llm_compressed_summary {
+                    node.summary = Some(summary.clone());
                 }
+
+                // v1.0: set E5 vector
+                node.vector_e5 = item.e5_vector.clone();
+
+                // 序列化并写入 L1_NODES 表
+                let bytes = bincode::serialize(&node)
+                    .map_err(|e| MemHopError::Internal(format!("serialize node: {}", e)))?;
+                nodes_table.insert(node_id.as_str(), bytes.as_slice())
+                    .map_err(|e| MemHopError::Storage(format!("insert node: {}", e)))?;
+
+                // 写入 BM25 稀疏前向索引（通过主事务直接写入，避免嵌套事务冲突）
+                let sparse_bytes = bincode::serialize(&item.sparse)
+                    .map_err(|e| MemHopError::Internal(format!("serialize sparse: {}", e)))?;
+                sparse_forward_table.insert(node_id.as_str(), sparse_bytes.as_slice())
+                    .map_err(|e| MemHopError::Storage(format!("insert sparse forward: {}", e)))?;
+                sparse_doc_len_table.insert(node_id.as_str(), item.text.len() as u32)
+                    .map_err(|e| MemHopError::Storage(format!("insert doc_len: {}", e)))?;
+
+                // 更新 in-memory 向量索引
+                if let Some(ref mut l1) = brain.l1
+                    && !item.vector.is_empty() {
+                        l1.vector_index.add(&node_id, &item.vector);
+                    }
+
+                // 更新 E5 向量索引
+                if let Some(ref mut l1) = brain.l1
+                    && !item.e5_vector.is_empty()
+                    && item.e5_vector.len() > 1 {
+                        l1.vector_index_e5.add(&node_id, &item.e5_vector);
+                    }
+
+                // 更新 emotion_index
+                brain.emotion_index
+                    .entry(node.memory.emotion)
+                    .or_default()
+                    .push(node_id.clone());
+
                 node_ids.push(node_id.clone());
                 report.l1_nodes_created += 1;
-                // 记录输入项到 L1 节点 ID 的映射（只记录每个输入项的第一个分段）
                 input_first_node.entry(item.input_index).or_insert(node_id);
             } else if let Some(last_id) = node_ids.last() {
-                // 去重情况下，也记录映射
-                input_first_node
-                    .entry(item.input_index)
-                    .or_insert(last_id.clone());
+                input_first_node.entry(item.input_index).or_insert(last_id.clone());
             }
         }
 
         // 建立节点间超边
         if node_ids.len() > 1 {
-            l1.add_hyperedge(
-                &mut wtxn,
-                l1_env,
-                node_ids.clone(),
-                HyperedgeKind::Association,
-                1.0,
-                None,
-                None,
-            )?;
+            let now = chrono::Utc::now().timestamp_millis();
+            let he_id = format!("he_{}", now);
+            let he = Hyperedge {
+                id: he_id.clone(),
+                node_ids: node_ids.clone(),
+                kind: HyperedgeKind::Association,
+                weight: 1.0,
+                created_at: now,
+                updated_at: now,
+                version: 1,
+                history: Vec::new(),
+                meta: HashMap::new(),
+                chain_prev: None,
+                chain_next: None,
+                chain_label: None,
+            };
+            let bytes = bincode::serialize(&he)
+                .map_err(|e| MemHopError::Internal(format!("serialize hyperedge: {}", e)))?;
+            hyperedges_table.insert(he_id.as_str(), bytes.as_slice())
+                .map_err(|e| MemHopError::Storage(format!("insert hyperedge: {}", e)))?;
+
+            for nid in &node_ids {
+                let existing: Vec<String> = match node_to_he_table.get(nid.as_str())
+                    .map_err(|e| MemHopError::Storage(format!("get node_to_he: {}", e)))?
+                {
+                    Some(b) => bincode::deserialize(b.value()).unwrap_or_default(),
+                    None => Vec::new(),
+                };
+                let mut ids = existing;
+                ids.push(he_id.clone());
+                let bytes = bincode::serialize(&ids)
+                    .map_err(|e| MemHopError::Internal(format!("serialize node_to_he: {}", e)))?;
+                node_to_he_table.insert(nid.as_str(), bytes.as_slice())
+                    .map_err(|e| MemHopError::Storage(format!("insert node_to_he: {}", e)))?;
+            }
             report.l1_hyperedges_created += 1;
         }
 
         // 超边链：更新事件
         for (i, item) in encoded.iter().enumerate() {
             if let Some(ref parent_id) = item.chain_parent_id {
-                l1.add_hyperedge(
-                    &mut wtxn,
-                    l1_env,
-                    vec![node_ids[i].clone()],
-                    HyperedgeKind::Evolution,
-                    1.0,
-                    Some(parent_id.clone()),
-                    item.chain_label.clone(),
-                )?;
+                let now = chrono::Utc::now().timestamp_millis();
+                let he_id = format!("he_{}_{}", now, i);
+                let he = Hyperedge {
+                    id: he_id.clone(),
+                    node_ids: vec![node_ids[i].clone()],
+                    kind: HyperedgeKind::Evolution,
+                    weight: 1.0,
+                    created_at: now,
+                    updated_at: now,
+                    version: 1,
+                    history: Vec::new(),
+                    meta: HashMap::new(),
+                    chain_prev: Some(parent_id.clone()),
+                    chain_next: None,
+                    chain_label: item.chain_label.clone(),
+                };
+                let bytes = bincode::serialize(&he)
+                    .map_err(|e| MemHopError::Internal(format!("serialize chain hyperedge: {}", e)))?;
+                hyperedges_table.insert(he_id.as_str(), bytes.as_slice())
+                    .map_err(|e| MemHopError::Storage(format!("insert chain hyperedge: {}", e)))?;
                 report.chains_created += 1;
             }
         }
-
-        wtxn.commit()
-            ?;
-    }
-
-    // Phase 3.5: 将 llm_compressed_summary 写入 L1 node.summary
-    {
-        let l1_env = brain.l1_env.as_ref().unwrap();
-        let env = l1_env.env.clone();
-        let mut wtxn = env
-            .write_txn()
-            ?;
-        for (i, item) in encoded.iter().enumerate() {
-            if let Some(ref summary) = item.llm_compressed_summary
-                && i < node_ids.len()
-                && let Ok(Some(bytes)) = l1_env.nodes.get(&wtxn, &node_ids[i])
-                && let Ok(mut node) = bincode::deserialize::<crate::engram::KnowledgeNode>(bytes)
-            {
-                node.summary = Some(summary.clone());
-                node.updated_at = chrono::Utc::now().timestamp_millis();
-                if let Ok(new_bytes) = bincode::serialize(&node) {
-                    l1_env
-                        .nodes
-                        .put(&mut wtxn, &node_ids[i], &new_bytes)
-                        ?;
-                }
-            }
-        }
-        wtxn.commit()
-            ?;
     }
 
     // Phase 4: L2 topic update — 带 llm_compressed_summary + 真实 node_id + doc_ids + linked_domain_ids + centroid
     {
-        brain.ensure_l2()?;
-        // P1-1: 写入前检查 L2 空间使用率
-        check_space(&brain.l2_env.as_ref().unwrap().env, "L2")?;
-        let l2 = brain.l2.as_mut().unwrap();
-        let l2_env = brain.l2_env.as_ref().unwrap();
-        let env = l2_env.env.clone();
-        let mut wtxn = env
-            .write_txn()
-            ?;
-        let mut topic_cache: HashMap<String, crate::engram::Topic> = HashMap::new();
+        let mut topics_table = wtxn.open_table(L2_TOPICS)
+            .map_err(|e| MemHopError::Storage(format!("open L2_TOPICS: {}", e)))?;
+
+        let mut topic_cache: HashMap<String, Topic> = HashMap::new();
         // 收集每个 topic 的新 node 向量（用于 centroid 更新）
         let mut topic_new_nodes: HashMap<String, Vec<(String, Vec<half::f16>)>> = HashMap::new();
 
         for (i, item) in encoded.iter().enumerate() {
             if let Some(ref label) = item.topic_label {
-                let (topic_id, is_new) =
-                    l2
-                        .find_or_create_topic(&mut wtxn, l2_env, label)?;
-                if is_new {
+                // 根据 label 查找或创建 topic
+                let lookup_key = format!("label:{}", label);
+                // 先查 label→id，提权到 Option<String> 以释放 AccessGuard 的借用
+                let lookup_result = topics_table.get(lookup_key.as_str())
+                    .map_err(|e| MemHopError::Storage(format!("get topic lookup: {}", e)))?;
+                let existing_id: Option<String> = lookup_result
+                    .and_then(|bytes| bincode::deserialize(bytes.value()).ok());
+
+                let (topic_id, _is_new) = if let Some(id) = existing_id {
+                    (id, false)
+                } else {
+                    // 创建新 topic（AccessGuard 已借用到 existing_id 后释放）
+                    let now = chrono::Utc::now().timestamp_millis();
+                    let id = format!("topic_{}", now);
+                    let meta_key = format!("topic:{}:meta", &id);
+                    let topic = Topic {
+                        id: id.clone(),
+                        label: label.clone(),
+                        summary: None,
+                        keywords: Vec::new(),
+                        centroid: Vec::new(),
+                        node_ids: Vec::new(),
+                        linked_domain_ids: Vec::new(),
+                        doc_ids: Vec::new(),
+                        dialogue_range: None,
+                        created_at: now,
+                        updated_at: now,
+                        version: 1,
+                        history: Vec::new(),
+                        extended_meta: HashMap::new(),
+                        domain_weights: HashMap::new(),
+                        node_weights: HashMap::new(),
+                    };
+                    let bytes = bincode::serialize(&topic)
+                        .map_err(|e| MemHopError::Internal(format!("serialize topic: {}", e)))?;
+                    topics_table.insert(meta_key.as_str(), bytes.as_slice())
+                        .map_err(|e| MemHopError::Storage(format!("insert topic: {}", e)))?;
+                    // 写 label→id 映射
+                    let id_bytes = bincode::serialize(&id)
+                        .map_err(|e| MemHopError::Internal(format!("serialize topic id: {}", e)))?;
+                    topics_table.insert(lookup_key.as_str(), id_bytes.as_slice())
+                        .map_err(|e| MemHopError::Storage(format!("insert topic lookup: {}", e)))?;
                     report.l2_topics_created += 1;
-                }
+                    (id, true)
+                };
 
                 // 获取 topic（优先从缓存）
                 let topic = if let Some(cached) = topic_cache.get(&topic_id) {
                     cached.clone()
-                } else if let Ok(Some(t)) =
-                    l2.get_topic_by_id(&wtxn, l2_env, &topic_id)
-                {
-                    t
                 } else {
-                    continue;
+                    let meta_key = format!("topic:{}:meta", &topic_id);
+                    let meta_result = topics_table.get(meta_key.as_str())
+                        .map_err(|e| MemHopError::Storage(format!("get topic meta: {}", e)))?;
+                    match meta_result {
+                        Some(bytes) => bincode::deserialize(bytes.value())
+                            .map_err(|e| MemHopError::Internal(format!("deserialize topic: {}", e)))?,
+                        None => continue,
+                    }
                 };
                 let mut topic = topic;
                 let mut topic_changed = false;
@@ -370,30 +485,25 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
 
                 // 填充 linked_domain_ids (L3 领域 ID)
                 if let Some(ref domain_id) = item.domain_id
-                    && !topic.linked_domain_ids.contains(domain_id)
-                {
-                    topic.linked_domain_ids.push(domain_id.clone());
-                    topic_changed = true;
-                }
+                    && !topic.linked_domain_ids.contains(domain_id) {
+                        topic.linked_domain_ids.push(domain_id.clone());
+                        topic_changed = true;
+                    }
 
                 if topic_changed {
                     // v0.18.0: 计算关联强度
-                    // 1. 领域关联强度：基于该话题下有多少节点属于该领域
+                    // 1. 领域关联强度
                     if let Some(ref domain_id) = item.domain_id {
                         let current_weight =
                             topic.domain_weights.get(domain_id).copied().unwrap_or(0.0);
-                        topic
-                            .domain_weights
-                            .insert(domain_id.clone(), current_weight + 1.0);
+                        topic.domain_weights.insert(domain_id.clone(), current_weight + 1.0);
                     }
-                    // 2. 节点关联强度：基于节点与话题的相关性（这里简化为1.0）
+                    // 2. 节点关联强度
                     if i < node_ids.len() {
                         let node_id = &node_ids[i];
                         let current_weight =
                             topic.node_weights.get(node_id).copied().unwrap_or(0.0);
-                        topic
-                            .node_weights
-                            .insert(node_id.clone(), current_weight + 1.0);
+                        topic.node_weights.insert(node_id.clone(), current_weight + 1.0);
                     }
 
                     // 自动维护 dialogue_range
@@ -412,30 +522,12 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                         }
                     }
                     topic.updated_at = now_ms;
-                    let key = format!("topic:{}:meta", &topic_id);
+                    let meta_key = format!("topic:{}:meta", &topic_id);
                     let bytes = bincode::serialize(&topic)
-                        ?;
-                    l2_env
-                        .topics
-                        .put(&mut wtxn, &key, &bytes)
-                        ?;
+                        .map_err(|e| MemHopError::Internal(format!("serialize updated topic: {}", e)))?;
+                    topics_table.insert(meta_key.as_str(), bytes.as_slice())
+                        .map_err(|e| MemHopError::Storage(format!("insert updated topic: {}", e)))?;
                     topic_cache.insert(topic_id.clone(), topic);
-                }
-
-                // 传入真实 node_id（来自 Phase 3）
-                if let Some(ref keywords) = item.llm_keywords {
-                    let mut kw_sparse = HashMap::new();
-                    for kw in keywords {
-                        kw_sparse.insert(kw.clone(), 1.0f32);
-                    }
-                    let nid = if i < node_ids.len() { &node_ids[i] } else { "" };
-                    l2.add_node_to_topic(
-                        &mut wtxn,
-                        l2_env,
-                        &topic_id,
-                        nid,
-                        &kw_sparse,
-                    )?;
                 }
 
                 // 收集 node 向量用于 centroid 计算
@@ -450,34 +542,46 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
 
         // 更新各 topic 的 centroid 向量
         for (tid, nodes) in &topic_new_nodes {
-            if let Err(e) = l2
-                .update_topic_centroid(&mut wtxn, l2_env, tid, nodes)
-            {
-                eprintln!("[batch_store] centroid update error for {}: {}", tid, e);
+            if nodes.is_empty() {
+                continue;
+            }
+            let dim = nodes[0].1.len();
+            if dim == 0 {
+                continue;
+            }
+            let mut sum = vec![0.0f64; dim];
+            for (_, v) in nodes {
+                for (i, val) in v.iter().enumerate() {
+                    sum[i] += val.to_f64();
+                }
+            }
+            let n = nodes.len() as f64;
+            let centroid: Vec<half::f16> = sum.iter()
+                .map(|s| half::f16::from_f64(*s / n))
+                .collect();
+
+            let meta_key = format!("topic:{}:meta", tid);
+            // 分离 get 和 insert 以避免 AccessGuard 活锁
+            let existing_topic: Option<Topic> = match topics_table.get(meta_key.as_str()) {
+                Ok(Some(bytes)) => bincode::deserialize(bytes.value()).ok(),
+                _ => None,
+            };
+            if let Some(mut t) = existing_topic {
+                t.centroid = centroid;
+                t.updated_at = chrono::Utc::now().timestamp_millis();
+                if let Ok(new_bytes) = bincode::serialize(&t) {
+                    let _ = topics_table.insert(meta_key.as_str(), new_bytes.as_slice());
+                }
             }
         }
-        // 持久化 topic 向量索引
-        if !topic_new_nodes.is_empty()
-            && let Err(e) = l2.persist_topic_vectors(&mut wtxn, l2_env)
-        {
-            eprintln!("[batch_store] persist topic vectors error: {}", e);
-        }
-
-        wtxn.commit()
-            ?;
     }
 
     // Phase 5: L3 domain write — v0.24.0: 仅在显式指定 domain_id 且 domain 已存在时写入
-    // 不再从 topic_label 自动生成 L3，L3 由 mount_shelf 或 crystallize_l3 显式创建
     {
-        brain.ensure_l3()?;
-        check_space(&brain.l3_env.as_ref().unwrap().env, "L3")?;
-        let l3 = brain.l3.as_mut().unwrap();
-        let l3_env = brain.l3_env.as_ref().unwrap();
-        let env = l3_env.env.clone();
-        let mut wtxn = env
-            .write_txn()
-            ?;
+        let domain_meta_table = wtxn.open_table(L3_DOMAIN_META)
+            .map_err(|e| MemHopError::Storage(format!("open L3_DOMAIN_META: {}", e)))?;
+        let mut domain_nodes_table = wtxn.open_table(L3_DOMAIN_NODES)
+            .map_err(|e| MemHopError::Storage(format!("open L3_DOMAIN_NODES: {}", e)))?;
 
         for item in &encoded {
             // v0.24.0: 仅当显式指定 domain_id 且 domain 已存在时写入 L3
@@ -486,10 +590,8 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
             };
 
             let meta_key = format!("meta:{}", domain_id);
-            if l3_env
-                .domain_meta
-                .get(&wtxn, &meta_key)
-                ?
+            if domain_meta_table.get(meta_key.as_str())
+                .map_err(|e| MemHopError::Storage(format!("get domain meta: {}", e)))?
                 .is_none()
             {
                 // domain 不存在，跳过（L3 仅接受已 mount 或已 crystallize 的 domain）
@@ -499,23 +601,31 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
             }
 
             let l3_id = unique_id("l3n");
-            l3.add_node_with_id(
-                &mut wtxn,
-                l3_env,
-                &l3_id,
-                domain_id,
-                &item.text,
-                &item.sparse,
-                "",
-                item.vector.clone(),
-            )?;
+            let domain_node_key = format!("node:{}:{}", domain_id, l3_id);
+            let now = chrono::Utc::now().timestamp_millis();
+            let domain_node_bytes = bincode::serialize(&serde_json::json!({
+                "id": l3_id,
+                "text": item.text,
+                "sparse": item.sparse,
+                "vector": item.vector,
+                "created_at": now,
+            }))
+                .map_err(|e| MemHopError::Internal(format!("serialize domain node: {}", e)))?;
+            domain_nodes_table.insert(domain_node_key.as_str(), domain_node_bytes.as_slice())
+                .map_err(|e| MemHopError::Storage(format!("insert domain node: {}", e)))?;
             report.l3_nodes_created += 1;
-            input_first_l3_node
-                .entry(item.input_index)
-                .or_insert(l3_id.clone());
+            input_first_l3_node.entry(item.input_index).or_insert(l3_id.clone());
         }
-        wtxn.commit()
-            ?;
+    }
+
+    // 提交单事务
+    wtxn.commit()
+        .map_err(|e| MemHopError::Storage(format!("redb commit: {}", e)))?;
+
+    // 事务提交后，重建 BM25 in-memory 索引（直接从 redb 读取最新数据）
+    if let Some(ref mut l1) = brain.l1 {
+        l1.bm25.rebuild_from_redb()
+            .map_err(|e| MemHopError::Storage(format!("rebuild BM25: {}", e)))?;
     }
 
     report.total_duration_us = start.elapsed().as_micros() as u64;
@@ -524,7 +634,6 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
     for (idx, node_id) in input_first_node {
         report.engram_ids.insert(idx.to_string(), node_id);
     }
-    // v0.17.3: 将输入索引映射转换为 L3 节点 ID
     for (idx, node_id) in input_first_l3_node {
         report.l3_engram_ids.insert(idx.to_string(), node_id);
     }

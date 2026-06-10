@@ -91,6 +91,7 @@ fn test_store_and_recall_basic() {
         session_id: None,
         time_decay_lambda: None,
         l3_max_domains: None,
+        active_l3_domains: None,
     };
 
     let recall_result = brain.recall(&req);
@@ -294,6 +295,7 @@ fn test_recall_empty_index() {
     };
 
     let result = brain.recall(&req);
+    eprintln!("DEBUG test_recall_empty_index: {:?}", result);
     assert!(result.is_ok());
     let resp = result.unwrap();
     assert_eq!(resp.results.len(), 0);
@@ -412,6 +414,7 @@ fn test_multiple_agents_isolation() {
     };
 
     let result = brain2.recall(&req);
+    eprintln!("DEBUG test_multiple_agents_isolation: {:?}", result);
     assert!(result.is_ok());
     let resp = result.unwrap();
     assert_eq!(resp.results.len(), 0);
@@ -519,21 +522,21 @@ fn test_procedural_crystallization() {
     // 注意：add_hyperedge 用 timestamp_millis() 生成 ID，需要增加延迟避免 ID 冲突
     {
         use std::time::Duration;
-        let l1_env = brain.l1_env.as_ref().unwrap();
+        brain.ensure_l1().unwrap();
+        let store = brain.redb_store.as_ref().unwrap();
+        let mut wtxn = store.begin_write().unwrap();
         let l1 = brain.l1.as_mut().unwrap();
-        let env = l1_env.env.clone();
-        let mut wtxn = env.write_txn().unwrap();
 
         std::thread::sleep(Duration::from_millis(2));
         let h1 = l1.add_hyperedge(
-            &mut wtxn, l1_env,
+            store, &mut wtxn,
             vec![node0.clone()],
             HyperedgeKind::Evolution, 1.0,
             None, Some("错误排查".to_string()),
         ).unwrap();
         std::thread::sleep(Duration::from_millis(2));
         let _ = l1.add_hyperedge(
-            &mut wtxn, l1_env,
+            store, &mut wtxn,
             vec![node0.clone()],
             HyperedgeKind::Evolution, 1.0,
             Some(h1), Some("错误排查".to_string()),
@@ -541,14 +544,14 @@ fn test_procedural_crystallization() {
 
         std::thread::sleep(Duration::from_millis(2));
         let h2 = l1.add_hyperedge(
-            &mut wtxn, l1_env,
+            store, &mut wtxn,
             vec![node1.clone()],
             HyperedgeKind::Evolution, 1.0,
             None, Some("错误排查".to_string()),
         ).unwrap();
         std::thread::sleep(Duration::from_millis(2));
         let _ = l1.add_hyperedge(
-            &mut wtxn, l1_env,
+            store, &mut wtxn,
             vec![node1.clone()],
             HyperedgeKind::Evolution, 1.0,
             Some(h2), Some("错误排查".to_string()),
@@ -556,14 +559,14 @@ fn test_procedural_crystallization() {
 
         std::thread::sleep(Duration::from_millis(2));
         let h3 = l1.add_hyperedge(
-            &mut wtxn, l1_env,
+            store, &mut wtxn,
             vec![node2.clone()],
             HyperedgeKind::Evolution, 1.0,
             None, Some("错误排查".to_string()),
         ).unwrap();
         std::thread::sleep(Duration::from_millis(2));
         let _ = l1.add_hyperedge(
-            &mut wtxn, l1_env,
+            store, &mut wtxn,
             vec![node2.clone()],
             HyperedgeKind::Evolution, 1.0,
             Some(h3), Some("错误排查".to_string()),
