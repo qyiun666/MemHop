@@ -1,7 +1,10 @@
-//! MemHop v0.23.1 — 6 层仿人脑记忆引擎。
+//! MemHop v0.25.1 — 6 层仿人脑记忆引擎。
 //!
 //! 6 层架构：L0 角色画像 + L1 纠缠超图 + L2 话题图 + L3 领域超图 + L4 原文库 + L5 程序性晶体。
-//! 双通道检索：BM25（始终可用）+ HNSW 语义向量 + 双编码器路由 (zh/en)。
+//! 三重检索：BM25 稀疏 + HNSW 稠密 + E5 多语言语义。
+
+// Clippy configuration for FFI safety
+#![allow(clippy::not_unsafe_ptr_arg_deref)] // FFI functions use raw pointers by design
 
 // ============================================================
 // 内部模块
@@ -54,6 +57,9 @@ pub mod bench_support; // 基准测试工具：MCP 客户端、内存监控、IR
 // ── SDK 入口 ──────────────────────────────────────────────────
 pub mod sdk; // SDK 初始化 + 全局编码器共享
 
+// ── FFI 接口 (C ABI) ──────────────────────────────────────────
+pub mod ffi; // C ABI 动态库接口
+
 // ============================================================
 // 公开 API
 // ============================================================
@@ -80,4 +86,8 @@ pub use types::{
     Emotion, EmotionalDimension, EmotionalFeedback, EmotionRecallRequest,
     // v0.24.0: L3 Crystallization
     CrystallizeL3Request, CrystallizeL3Report,
+    // L3 骨架化
+    SourceKind, SourceRef, NeighborResult, MountSourceInput, MountSourceItem,
 };
+
+pub use brain::l3_trait::{MemoryOrganHypergraph, NeighborInfo};

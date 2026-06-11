@@ -82,6 +82,9 @@ pub fn associative_recall(brain: &mut Brain, req: &RecallRequest) -> Result<Reca
                 version: node.version,
                 emotion: None,
                 domain_id: None,
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
             });
         }
     }
@@ -160,6 +163,9 @@ mod tests {
             version: 1,
             emotion: None,
             domain_id: None,
+            source_ref: None,
+            is_structural: false,
+            neighbors: Vec::new(),
         }];
         let result = merge_rrf(primary, secondary, 10);
         assert_eq!(result.len(), 1);
@@ -178,6 +184,9 @@ mod tests {
             version: 1,
             emotion: None,
             domain_id: None,
+            source_ref: None,
+            is_structural: false,
+            neighbors: Vec::new(),
         }];
         let secondary = vec![RecallResult {
             layer: Layer::L1,
@@ -189,6 +198,9 @@ mod tests {
             version: 1,
             emotion: None,
             domain_id: None,
+            source_ref: None,
+            is_structural: false,
+            neighbors: Vec::new(),
         }];
         let result = merge_rrf(primary, secondary, 10);
         assert_eq!(result.len(), 1);
@@ -207,6 +219,9 @@ mod tests {
                 version: 1,
                 emotion: None,
                 domain_id: None,
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
             })
             .collect();
         let secondary: Vec<RecallResult> = (5..10)
@@ -220,6 +235,9 @@ mod tests {
                 version: 1,
                 emotion: None,
                 domain_id: None,
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
             })
             .collect();
 

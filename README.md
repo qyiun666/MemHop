@@ -63,6 +63,7 @@
 - **HNSW 索引持久化** — usearch 原生序列化，启动时优先从缓存加载，避免全量重建
 - **独立编码器服务** — memhop-encoder 独立进程，多 Agent 共享一个向量模型实例，通过 IPC 通信
 - **全局编码器共享** — MemHopSDK 单例模式，同进程内多个 Brain 共享编码器，节省内存
+- **闭源分发支持** — Binary Crate + 私有registry，meowagent等内部项目可隐藏源码
 
 ## vs agentmemory
 

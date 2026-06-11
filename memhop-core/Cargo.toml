@@ -2,10 +2,18 @@
 name = "memhop-core"
 version.workspace = true
 edition.workspace = true
-description = "Hypergraph-based associative memory engine for AI Agents — BM25 + HNSW dual-channel retrieval"
+description = "Hypergraph-based associative memory engine for AI Agents — BM25 + HNSW triple-channel retrieval"
+license = "BSL-1.1"
+repository = "https://github.com/meow-ai/memhop"
+homepage = "https://github.com/meow-ai/memhop"
+documentation = "https://docs.rs/memhop-core"
+readme = "README.md"
+keywords = ["memory", "hypergraph", "ai-agent", "vector-search", "brain-inspired"]
+categories = ["memory-management", "artificial-intelligence", "database"]
+authors = ["MemHop Contributors"]
 
 [lib]
-crate-type = ["rlib"]
+crate-type = ["rlib", "cdylib"]
 
 [features]
 default = []

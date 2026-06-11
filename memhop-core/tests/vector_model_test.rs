@@ -65,6 +65,9 @@ fn test_vector_model_integration() {
             chain_label: Some("conversation".to_string()),
             domain_id: None,
             importance: Some(0.8),
+            is_structural: None,
+            source_ref: None,
+            skeletal_text: None,
         },
         StoreItem {
             text: "Python is a popular programming language".to_string(),
@@ -80,6 +83,9 @@ fn test_vector_model_integration() {
             chain_label: Some("conversation".to_string()),
             domain_id: None,
             importance: Some(0.7),
+            is_structural: None,
+            source_ref: None,
+            skeletal_text: None,
         },
     ];
 

@@ -110,6 +110,9 @@ impl AgentSimulator {
             chain_label: Some("conversation".to_string()),
             domain_id: None,
             importance: Some(0.5 + (valence as f32 * 0.3)),
+            is_structural: None,
+            source_ref: None,
+            skeletal_text: None,
         };
 
         TurnResult {

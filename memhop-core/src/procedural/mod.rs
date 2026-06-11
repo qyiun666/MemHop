@@ -17,8 +17,15 @@ pub(crate) fn analyze_chains(brain: &mut Brain) -> Result<Vec<ChainCluster>> {
     let store = brain.redb_store.as_ref()
         .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
     let rtxn = store.begin_read()?;
-    let table = rtxn.open_table(L1_HYPEREDGES)
-        .map_err(|e| MemHopError::Storage(format!("open L1_HYPEREDGES: {}", e)))?;
+    let table = match rtxn.open_table(L1_HYPEREDGES) {
+        Ok(t) => t,
+        Err(e) => {
+            if e.to_string().contains("does not exist") {
+                return Ok(Vec::new());
+            }
+            return Err(MemHopError::Storage(format!("open L1_HYPEREDGES: {}", e)));
+        }
+    };
 
     // Step 1: 筛选 chain_label.is_some() && chain_prev.is_none() 的链头
     let mut heads: Vec<String> = Vec::new();

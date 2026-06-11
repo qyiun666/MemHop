@@ -13,6 +13,7 @@ use crate::engram::{Hyperedge, KnowledgeNode, RawDocument, Topic};
 use crate::error::{MemHopError, Result};
 use crate::storage::*;
 use crate::types::{BatchReport, HyperedgeKind, NodeSource, StoreBatch};
+use crate::types::Layer;
 use redb::ReadableTable;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -75,6 +76,12 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
         arousal: Option<f64>,
         /// 原始输入项的索引，用于建立 engram_id 映射
         input_index: usize,
+        /// L3 骨架化: 是否为结构节点
+        is_structural: bool,
+        /// L3 骨架化: 来源引用
+        source_ref: Option<crate::types::SourceRef>,
+        /// L3 骨架化: 骨架文本
+        skeletal_text: Option<String>,
     }
 
     let mut encoded: Vec<Encoded> = Vec::with_capacity(batch.items.len());
@@ -108,6 +115,9 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
                 valence: item.valence,
                 arousal: item.arousal,
                 input_index: idx,
+                is_structural: item.is_structural.unwrap_or(false),
+                source_ref: item.source_ref.clone(),
+                skeletal_text: item.skeletal_text.clone(),
             });
         }
     }
@@ -602,14 +612,19 @@ pub(crate) fn execute(brain: &mut Brain, batch: StoreBatch) -> Result<BatchRepor
 
             let l3_id = unique_id("l3n");
             let domain_node_key = format!("node:{}:{}", domain_id, l3_id);
-            let now = chrono::Utc::now().timestamp_millis();
-            let domain_node_bytes = bincode::serialize(&serde_json::json!({
-                "id": l3_id,
-                "text": item.text,
-                "sparse": item.sparse,
-                "vector": item.vector,
-                "created_at": now,
-            }))
+            // 使用骨架文本（如有），否则用原始文本
+            let text = item.skeletal_text.as_deref().unwrap_or(&item.text);
+            let mut node = KnowledgeNode::new(
+                l3_id.clone(),
+                text.to_string(),
+                item.sparse.clone(),
+                item.vector.clone(),
+                Layer::L3,
+                NodeSource::KnowledgeMount,
+            );
+            node.is_structural = item.is_structural;
+            node.source_ref = item.source_ref.clone();
+            let domain_node_bytes = bincode::serialize(&node)
                 .map_err(|e| MemHopError::Internal(format!("serialize domain node: {}", e)))?;
             domain_nodes_table.insert(domain_node_key.as_str(), domain_node_bytes.as_slice())
                 .map_err(|e| MemHopError::Storage(format!("insert domain node: {}", e)))?;

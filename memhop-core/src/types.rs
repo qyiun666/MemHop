@@ -3,6 +3,55 @@ use std::collections::HashMap;
 
 use crate::error::{MemHopError, Result};
 
+// ── SourceRef / SourceKind ───────────────────────────────
+
+/// 知识来源类型
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SourceKind {
+    File,
+    Database,
+    Api,
+    Manual,
+    Custom(String),
+}
+
+/// 知识来源引用
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceRef {
+    pub kind: SourceKind,
+    pub location: String,
+    pub line_range: Option<(usize, usize)>,
+    pub selector: Option<String>,
+    pub content_hash: Option<u64>,
+}
+
+/// 超图邻居扩散结果
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeighborResult {
+    pub node_id: String,
+    pub text: String,
+    pub weight: f32,
+    pub source_ref: Option<SourceRef>,
+    pub is_structural: bool,
+}
+
+/// 非文件型知识源挂载输入
+#[derive(Debug, Clone)]
+pub struct MountSourceInput {
+    pub kind: SourceKind,
+    pub domain_name: String,
+    pub items: Vec<MountSourceItem>,
+    pub domain: ShelfDomain,
+}
+
+/// 挂载条目
+#[derive(Debug, Clone)]
+pub struct MountSourceItem {
+    pub text: String,
+    pub source_ref: SourceRef,
+    pub keywords: Option<Vec<String>>,
+}
+
 // ── Layer 枚举 ──────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -351,6 +400,12 @@ pub struct StoreItem {
     pub domain_id: Option<String>,
     /// v0.16.0: 重要度评分 (0.0-1.0)，默认 0.5。影响检索排序权重。
     pub importance: Option<f32>,
+    /// L3 骨架化: 是否为结构节点
+    pub is_structural: Option<bool>,
+    /// L3 骨架化: 来源引用
+    pub source_ref: Option<SourceRef>,
+    /// L3 骨架化: 骨架文本（与 text 分离）
+    pub skeletal_text: Option<String>,
 }
 
 impl Default for StoreItem {
@@ -369,6 +424,9 @@ impl Default for StoreItem {
             chain_label: None,
             domain_id: None,
             importance: None,
+            is_structural: None,
+            source_ref: None,
+            skeletal_text: None,
         }
     }
 }
@@ -649,6 +707,15 @@ pub struct RecallResult {
     /// v1.0: L3 结果关联的 domain_id（用于双向链接更新）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub domain_id: Option<String>,
+    /// L3 骨架化: 来源引用
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_ref: Option<SourceRef>,
+    /// L3 骨架化: 是否为结构节点
+    #[serde(default)]
+    pub is_structural: bool,
+    /// L3 骨架化: 超图邻居扩散结果
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub neighbors: Vec<NeighborResult>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

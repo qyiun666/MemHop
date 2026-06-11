@@ -285,7 +285,8 @@ pub(crate) fn search_l1(
     max: usize,
 ) -> Result<Vec<RecallResult>> {
     brain.ensure_l1()?;
-    let l1 = brain.l1.as_mut().unwrap();
+    let l1 = brain.l1.as_mut()
+        .ok_or_else(|| MemHopError::Internal("L1 layer not initialized".into()))?;
 
     // ── BM25 通道 ────────────────────────────
     let bm25_hits = l1.search(sparse, max)?;
@@ -309,6 +310,9 @@ pub(crate) fn search_l1(
                 version: node.version,
                 emotion: None,
                 domain_id: None,
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
             });
         }
     }
@@ -340,7 +344,10 @@ pub(crate) fn search_l1(
                     version: node.version,
                     emotion: None,
                     domain_id: None,
-                });
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
+            });
             }
         }
     }
@@ -375,6 +382,9 @@ pub(crate) fn search_l1(
                         version: node.version,
                         emotion: None,
                         domain_id: None,
+                    source_ref: None,
+                    is_structural: false,
+                    neighbors: Vec::new(),
                     });
                 }
             }
@@ -417,7 +427,8 @@ pub(crate) fn search_l1_v2(
     max: usize,
 ) -> Result<Vec<RecallResult>> {
     brain.ensure_l1()?;
-    let l1 = brain.l1.as_mut().unwrap();
+    let l1 = brain.l1.as_mut()
+        .ok_or_else(|| MemHopError::Internal("L1 layer not initialized".into()))?;
 
     // ── BM25 通道 ────────────────────────────
     let bm25_hits = l1.search(sparse, max)?;
@@ -441,6 +452,9 @@ pub(crate) fn search_l1_v2(
                 version: node.version,
                 emotion: None,
                 domain_id: None,
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
             });
         }
     }
@@ -472,7 +486,10 @@ pub(crate) fn search_l1_v2(
                     version: node.version,
                     emotion: None,
                     domain_id: None,
-                });
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
+            });
             }
         }
     }
@@ -510,6 +527,9 @@ pub(crate) fn search_l1_v2(
                         version: node.version,
                         emotion: None,
                         domain_id: None,
+                    source_ref: None,
+                    is_structural: false,
+                    neighbors: Vec::new(),
                     });
                 }
             }
@@ -556,7 +576,8 @@ pub(crate) fn search_l1_scoped(
     max: usize,
 ) -> Result<Vec<RecallResult>> {
     brain.ensure_l1()?;
-    let l1 = brain.l1.as_mut().unwrap();
+    let l1 = brain.l1.as_mut()
+        .ok_or_else(|| MemHopError::Internal("L1 layer not initialized".into()))?;
 
     // BM25 搜索
     let bm25_hits = l1.search(sparse, max * 2)?;
@@ -583,6 +604,9 @@ pub(crate) fn search_l1_scoped(
                 version: node.version,
                 emotion: None,
                 domain_id: None,
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
             });
         }
     }
@@ -616,7 +640,10 @@ pub(crate) fn search_l1_scoped(
                     version: node.version,
                     emotion: None,
                     domain_id: None,
-                });
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
+            });
             }
         }
     }
@@ -653,6 +680,9 @@ pub(crate) fn search_l1_scoped(
                         version: node.version,
                         emotion: None,
                         domain_id: None,
+                    source_ref: None,
+                    is_structural: false,
+                    neighbors: Vec::new(),
                     });
                 }
             }
@@ -689,7 +719,8 @@ pub(crate) fn search_l2(
     max: usize,
 ) -> Result<Vec<RecallResult>> {
     brain.ensure_l2()?;
-    let l2 = brain.l2.as_mut().unwrap();
+    let l2 = brain.l2.as_mut()
+        .ok_or_else(|| MemHopError::Internal("L2 layer not initialized".into()))?;
     let store = brain.redb_store.as_ref()
         .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
 
@@ -717,6 +748,9 @@ pub(crate) fn search_l2(
                 version: topic.version,
                 emotion: None,
                 domain_id: None,
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
             });
         }
     }
@@ -742,7 +776,10 @@ pub(crate) fn search_l2(
                     version: topic.version,
                     emotion: None,
                     domain_id: None,
-                });
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
+            });
             }
         }
 
@@ -785,7 +822,8 @@ pub(crate) fn search_l3(
     max: usize,
 ) -> Result<Vec<RecallResult>> {
     brain.ensure_l3()?;
-    let l3 = brain.l3.as_mut().unwrap();
+    let l3 = brain.l3.as_mut()
+        .ok_or_else(|| MemHopError::Internal("L3 layer not initialized".into()))?;
     let store = brain.redb_store.as_ref()
         .ok_or_else(|| MemHopError::Storage("redb not available".into()))?;
 
@@ -812,7 +850,10 @@ pub(crate) fn search_l3(
                     version: 1,
                     emotion: None,
                     domain_id: None,
-                });
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
+            });
             }
             return Ok(results);
         }
@@ -855,6 +896,9 @@ pub(crate) fn search_l3(
                 version: 1,
                 emotion: None,
                 domain_id: Some(domain_id),
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
             });
         }
         return Ok(results);
@@ -875,6 +919,9 @@ pub(crate) fn search_l3(
             version: 1,
             emotion: None,
             domain_id: None,
+            source_ref: None,
+            is_structural: false,
+            neighbors: Vec::new(),
         });
     }
     Ok(results)

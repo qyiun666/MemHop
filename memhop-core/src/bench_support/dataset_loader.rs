@@ -181,6 +181,9 @@ impl BeirNfcorpusDataset {
                 chain_label: None,
                 domain_id: None,
                 importance: Some(0.7),
+                is_structural: None,
+                source_ref: None,
+                skeletal_text: None,
             })
             .collect()
     }
@@ -384,6 +387,9 @@ impl MsMarcoDataset {
                 chain_label: None,
                 domain_id: None,
                 importance: Some(0.7),
+                is_structural: None,
+                source_ref: None,
+                skeletal_text: None,
             })
             .collect()
     }
@@ -509,6 +515,9 @@ impl NaturalQuestionsDataset {
                 chain_label: None,
                 domain_id: None,
                 importance: Some(0.8),
+                is_structural: None,
+                source_ref: None,
+                skeletal_text: None,
             })
             .collect()
     }

@@ -274,13 +274,35 @@ fn search_l3_in_domains(
     let l3 = brain.l3.as_mut().unwrap();
     let store = brain.redb_store.as_ref()
         .ok_or_else(|| crate::error::MemHopError::Storage("redb not available".into()))?;
-    // 使用外部传入的 txn，不再内部 begin_read
 
     let domain_id_vec: Vec<String> = domain_ids.iter().cloned().collect();
-    let hits = l3.search_in_domain(txn, store, sparse, dense, &domain_id_vec, max)?;
+    
+    // 使用 structural_search_in_domain 做两阶段检索
+    let structural_hits = l3.structural_search_in_domain(txn, store, sparse, dense, &domain_id_vec, max)?;
+    
+    // 收集种子节点 ID 和得分
+    let seed_ids: Vec<String> = structural_hits.iter().map(|(id, _, _, _, _)| id.clone()).collect();
+    let mut seed_scores: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+    for (id, score, _, _, _) in &structural_hits {
+        seed_scores.insert(id.clone(), *score);
+    }
 
+    // 对 top-3 结果做邻居扩散
+    let neighbors = if !seed_ids.is_empty() {
+        l3.expand_neighborhood(
+            &seed_ids[..seed_ids.len().min(3)],
+            store,
+            1,   // max_hops
+            5,   // max_neighbors
+            &seed_scores,
+        )?
+    } else {
+        Vec::new()
+    };
+
+    // 构建 RecallResult
     let mut results: Vec<RecallResult> = Vec::new();
-    for (node_id, score, domain_id) in hits {
+    for (node_id, score, domain_id, is_structural, source_ref) in structural_hits {
         results.push(RecallResult {
             layer: crate::types::Layer::L3,
             id: node_id,
@@ -291,6 +313,9 @@ fn search_l3_in_domains(
             version: 1,
             emotion: None,
             domain_id: Some(domain_id),
+            source_ref,
+            is_structural,
+            neighbors: neighbors.clone(),
         });
     }
     Ok(results)

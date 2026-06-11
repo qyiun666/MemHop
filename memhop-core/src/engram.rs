@@ -44,6 +44,12 @@ pub struct KnowledgeNode {
     /// v1.0: E5 模型稠密向量（第三检索通道）
     #[serde(default)]
     pub vector_e5: Vec<f16>,
+    /// L3 骨架化: 是否为结构节点（函数签名/标题/段落首句等）
+    #[serde(default)]
+    pub is_structural: bool,
+    /// L3 骨架化: 来源引用
+    #[serde(default)]
+    pub source_ref: Option<crate::types::SourceRef>,
 }
 
 impl KnowledgeNode {
@@ -85,6 +91,8 @@ impl KnowledgeNode {
                 labile_until: None,
             },
             vector_e5: Vec::new(),
+            is_structural: false,
+            source_ref: None,
         }
     }
 }

@@ -34,6 +34,9 @@ fn test_store_and_recall_basic() {
             chain_label: None,
             domain_id: None,
             importance: Some(0.9),
+            is_structural: None,
+            source_ref: None,
+            skeletal_text: None,
         },
         StoreItem {
             text: "Python is great for data science".to_string(),
@@ -49,6 +52,9 @@ fn test_store_and_recall_basic() {
             chain_label: None,
             domain_id: None,
             importance: Some(0.8),
+            is_structural: None,
+            source_ref: None,
+            skeletal_text: None,
         },
         StoreItem {
             text: "Machine learning with TensorFlow".to_string(),
@@ -67,6 +73,9 @@ fn test_store_and_recall_basic() {
             chain_label: None,
             domain_id: None,
             importance: Some(0.7),
+            is_structural: None,
+            source_ref: None,
+            skeletal_text: None,
         },
     ];
 

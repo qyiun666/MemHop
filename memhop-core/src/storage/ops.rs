@@ -10,7 +10,7 @@ use crate::storage::{
     L0_HISTORY, L0_PROFILE,
     L1_HYPEREDGES, L1_NODES, L1_NODE_TO_HYPEREDGES,
     L2_TOPICS, L2_TOPIC_EDGES,
-    L3_DOMAIN_META, L3_DOMAIN_NODES,
+    L3_DOMAIN_META, L3_DOMAIN_NODES, L3_NODE_TO_HYPEREDGES, L3_STRUCTURAL_INDEX,
     L4_DOCS, L4_SESSION_INDEX, L4_TURN_INDEX,
     L5_CHAIN_INDEX, L5_CRYSTALS,
 };
@@ -366,5 +366,53 @@ impl RedbStore {
     pub fn l3_node_count(&self) -> Result<u64> {
         let txn = self.begin_read()?;
         self.count(&txn, L3_DOMAIN_NODES)
+    }
+
+    // ── L3 骨架化: 新增存储方法 ───────────────────────────────
+
+    /// 存储 L3 节点→超边反向索引。
+    pub fn l3_store_node_hyperedge_index(&self, node_id: &str, he_ids: &Vec<String>) -> Result<()> {
+        let mut wtxn = self.begin_write()?;
+        self.write_bincode(&mut wtxn, L3_NODE_TO_HYPEREDGES, node_id, he_ids)?;
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(format!("commit L3_NODE_TO_HYPEREDGES: {}", e)))?;
+        Ok(())
+    }
+
+    /// 获取 L3 节点→超边反向索引。
+    pub fn l3_get_node_hyperedge_index(&self, node_id: &str) -> Result<Option<Vec<String>>> {
+        let txn = self.begin_read()?;
+        self.read_bincode(&txn, L3_NODE_TO_HYPEREDGES, node_id)
+    }
+
+    /// 存储 L3 结构节点索引（domain_id → structural node_ids）。
+    pub fn l3_store_structural_index(&self, domain_id: &str, node_ids: &Vec<String>) -> Result<()> {
+        let key = format!("domain:{}", domain_id);
+        let mut wtxn = self.begin_write()?;
+        self.write_bincode(&mut wtxn, L3_STRUCTURAL_INDEX, &key, node_ids)?;
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(format!("commit L3_STRUCTURAL_INDEX: {}", e)))?;
+        Ok(())
+    }
+
+    /// 获取 L3 结构节点索引。
+    pub fn l3_get_structural_index(&self, domain_id: &str) -> Result<Option<Vec<String>>> {
+        let key = format!("domain:{}", domain_id);
+        let txn = self.begin_read()?;
+        self.read_bincode(&txn, L3_STRUCTURAL_INDEX, &key)
+    }
+
+    /// 删除 L3 结构节点索引。
+    pub fn l3_delete_structural_index(&self, domain_id: &str) -> Result<()> {
+        let key = format!("domain:{}", domain_id);
+        let wtxn = self.begin_write()?;
+        let mut table = wtxn.open_table(L3_STRUCTURAL_INDEX)
+            .map_err(|e| MemHopError::Storage(format!("open L3_STRUCTURAL_INDEX: {}", e)))?;
+        table.remove(key.as_str())
+            .map_err(|e| MemHopError::Storage(format!("remove: {}", e)))?;
+        drop(table);
+        wtxn.commit()
+            .map_err(|e| MemHopError::Storage(format!("commit: {}", e)))?;
+        Ok(())
     }
 }

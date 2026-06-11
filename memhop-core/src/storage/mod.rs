@@ -48,7 +48,7 @@ pub const MAGIC: &[u8; 8] = b"MEMHOPDB";
 pub const VERSION_MAJOR: u8 = 1;
 
 /// 次版本号 — 非破坏性变更时递增
-pub const VERSION_MINOR: u8 = 0;
+pub const VERSION_MINOR: u8 = 1;
 
 // ── L0: 角色画像表定义 ──────────────────────────────────
 
@@ -87,6 +87,15 @@ pub const L3_SPARSE_FORWARD: TableDefinition<&str, &[u8]> =
     TableDefinition::new("l3_sparse_forward");
 pub const L3_SPARSE_DOC_LEN: TableDefinition<&str, u32> =
     TableDefinition::new("l3_sparse_doc_len");
+
+// ── L3 骨架化: 新增表定义 ─────────────────────────────────
+
+/// L3 节点→超边反向索引
+pub const L3_NODE_TO_HYPEREDGES: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("l3_node_to_hyperedges");
+/// L3 结构节点索引 (domain_id → structural node_ids)
+pub const L3_STRUCTURAL_INDEX: TableDefinition<&str, &[u8]> =
+    TableDefinition::new("l3_structural_index");
 
 // ── L4: 原文库表定义 ─────────────────────────────────────
 

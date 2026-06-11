@@ -27,6 +27,9 @@ mod l2_topics;
 mod l3_domains;
 mod l4_archive;
 mod l5_crystal;
+mod l3_external;
+mod mount_source;
+pub mod l3_trait;
 mod emotion;
 mod lifecycle;
 
@@ -212,6 +215,8 @@ impl Brain {
             .map_err(|e| MemHopError::Internal(format!("rebuild L3 vector index: {}", e)))?;
         l3.rebuild_bm25(store)
             .map_err(|e| MemHopError::Internal(format!("rebuild L3 BM25 index: {}", e)))?;
+        l3.rebuild_neighbor_index(store)
+            .map_err(|e| MemHopError::Internal(format!("rebuild L3 neighbor index: {}", e)))?;
         let elapsed = _timer.elapsed();
         if elapsed.as_millis() > 100 {
             eprintln!(

@@ -59,7 +59,8 @@ impl Brain {
         let domain_id = format!("crystallized_{}", req.topic_id);
 
         // 2. 创建/获取 L3 domain（使用 redb）
-        let l3 = self.l3.as_mut().unwrap();
+        let l3 = self.l3.as_mut()
+            .ok_or_else(|| MemHopError::Internal("L3 layer not initialized".into()))?;
 
         // 检查 domain_meta 是否已存在
         let rtxn = store

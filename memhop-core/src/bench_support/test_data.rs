@@ -67,6 +67,9 @@ pub fn generate_store_items(count: usize) -> Vec<StoreItem> {
                 },
                 domain_id: None,
                 importance: Some(0.5 + (i as f32 * 0.01).min(0.4)),
+                is_structural: None,
+                source_ref: None,
+                skeletal_text: None,
             }
         })
         .collect()
@@ -131,6 +134,9 @@ pub fn generate_mixed_topic_items(total_count: usize) -> Vec<StoreItem> {
                 chain_label: None,
                 domain_id: None,
                 importance: Some(0.5),
+                is_structural: None,
+                source_ref: None,
+                skeletal_text: None,
             });
         }
     }
@@ -179,6 +185,9 @@ pub fn generate_session_items(
                 },
                 domain_id: None,
                 importance: Some(0.5),
+                is_structural: None,
+                source_ref: None,
+                skeletal_text: None,
             });
         }
     }

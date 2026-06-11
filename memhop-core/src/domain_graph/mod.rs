@@ -1,8 +1,11 @@
+pub mod neighbor;
+pub mod structural;
+
 use crate::engram::KnowledgeNode;
 use crate::error::{MemHopError, Result};
 use crate::index::{HnswIndex, MemHopHnswConfig, SparseIndexV2};
 use crate::storage::store::RedbStore;
-use crate::storage::{L3_DOMAIN_NODES, L3_SPARSE_DOC_LEN, L3_SPARSE_FORWARD};
+use crate::storage::{L3_DOMAIN_HYPEREDGES, L3_DOMAIN_NODES, L3_SPARSE_DOC_LEN, L3_SPARSE_FORWARD};
 use crate::types::CrossDomainLink;
 use half::f16;
 use redb::ReadableTable;
@@ -14,6 +17,8 @@ pub struct L3DomainGraph {
     pub bm25: SparseIndexV2,
     /// domain_id → linked topic_ids 内存反向索引
     pub domain_to_topics: HashMap<String, Vec<String>>,
+    /// L3 骨架化: 节点→超边反向索引（用于邻居扩散）
+    pub node_to_hyperedges: HashMap<String, Vec<String>>,
     config: MemHopHnswConfig,
 }
 
@@ -23,6 +28,7 @@ impl L3DomainGraph {
             vector_index: HnswIndex::default(),
             bm25: SparseIndexV2::with_tables(None, L3_SPARSE_FORWARD, L3_SPARSE_DOC_LEN),
             domain_to_topics: HashMap::new(),
+            node_to_hyperedges: HashMap::new(),
             config: MemHopHnswConfig::default(),
         }
     }
@@ -32,6 +38,7 @@ impl L3DomainGraph {
             vector_index: HnswIndex::new(dim),
             bm25: SparseIndexV2::with_tables(None, L3_SPARSE_FORWARD, L3_SPARSE_DOC_LEN),
             domain_to_topics: HashMap::new(),
+            node_to_hyperedges: HashMap::new(),
             config: MemHopHnswConfig::default(),
         }
     }
@@ -41,6 +48,7 @@ impl L3DomainGraph {
             vector_index: HnswIndex::new_with_config(dim, config.clone()),
             bm25: SparseIndexV2::with_tables(None, L3_SPARSE_FORWARD, L3_SPARSE_DOC_LEN),
             domain_to_topics: HashMap::new(),
+            node_to_hyperedges: HashMap::new(),
             config,
         }
     }
@@ -313,6 +321,36 @@ impl L3DomainGraph {
         }
 
         Ok(links)
+    }
+
+    /// 从 redb 重建节点→超边反向索引
+    pub fn rebuild_neighbor_index(&mut self, store: &RedbStore) -> Result<()> {
+        let txn = match store.begin_read() {
+            Ok(t) => t,
+            Err(_) => return Ok(()),
+        };
+        let table = match txn.open_table(L3_DOMAIN_HYPEREDGES) {
+            Ok(t) => t,
+            Err(_) => return Ok(()),
+        };
+        self.node_to_hyperedges.clear();
+        for result in table.iter()
+            .map_err(|e| crate::error::MemHopError::Storage(format!("iter L3_DOMAIN_HYPEREDGES: {}", e)))?
+        {
+            if let Ok((_key, bytes)) = result
+                && let Ok(he) = bincode::deserialize::<crate::engram::Hyperedge>(bytes.value())
+            {
+                for node_id in &he.node_ids {
+                    self.node_to_hyperedges
+                        .entry(node_id.clone())
+                        .or_default()
+                        .push(he.id.clone());
+                }
+            }
+        }
+        eprintln!("[memhop] L3 rebuild_neighbor_index: {} maps",
+            self.node_to_hyperedges.len());
+        Ok(())
     }
 }
 

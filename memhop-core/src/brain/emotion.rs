@@ -101,6 +101,9 @@ impl Brain {
                     arousal: node.memory.arousal,
                 }),
                 domain_id: None,
+                source_ref: None,
+                is_structural: false,
+                neighbors: Vec::new(),
             });
         }
 

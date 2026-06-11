@@ -4,6 +4,24 @@
 
 ---
 
+## 📦 分发方式
+
+MemHop 提供两种分发形式:
+
+### 1. Rust SDK (本文档)
+- **适用**: Rust项目,需要完整功能
+- **获取**: `cargo add memhop-core` 或 Git依赖
+- **特点**: 50+ API,类型安全,IDE完美支持
+- **源码**: BSL-1.1 License,可查看但生产需授权
+
+### 2. Binary Crate (闭源分发)
+- **适用**: meowagent等内部项目,保护源码
+- **获取**: 私有Cargo registry
+- **特点**: meowagent开发者看不到MemHop源码(只有.rlib)
+- **配置**: 见 [docs/integration/QUICKSTART-CLOSED-SOURCE.md](docs/integration/QUICKSTART-CLOSED-SOURCE.md)
+
+---
+
 ## 目录
 
 - [1. 快速开始](#1-快速开始)
@@ -63,8 +81,8 @@ memhop-core = { git = "https://github.com/your-org/memhop.git", features = ["can
 | Feature | 说明 | 默认 |
 |---------|------|------|
 | `candle` | 启用 CandleEncoder 向量模型 | ❌ |
-| `e5-encoder` | 启用 E5 IPC 编码器（memhop-encoder 服务） | ❌ |
 | `bench` | 基准测试支持 | ❌ |
+| `bench-llm` | LLM 集成测试支持（依赖 bench） | ❌ |
 | `llm-api` | LLM API 调用支持 | ❌ |
 
 ### 2.3 项目结构示例
@@ -76,12 +94,7 @@ your-project/
 │   └── main.rs
 ├── data/                    # Brain 数据目录（自动创建）
 │   └── agent1/
-│       ├── l0_profile.db/
-│       ├── l1_hypergraph.db/
-│       ├── l2_topics.db/
-│       ├── l3_domains.db/
-│       ├── l4_raw.db/
-│       └── l5_procedural.db/
+│       └── agent_brain.db   # redb 单文件存储（包含所有层数据）
 └── models/                  # 向量模型目录（可选）
     └── multilingual-e5-small/
         ├── config.json
@@ -303,7 +316,15 @@ pub fn consolidate(&mut self) -> Result<ConsolidateReport>
 ```rust
 // 设置画像
 pub fn set_l0_from_profile(&mut self, profile: &L0Profile) -> Result<()>
-pub fn set_l0(&mut self, catid, role_name, personality, values, worldview, traits) -> Result<()>
+pub fn set_l0(
+    &mut self,
+    catid: Option<String>,
+    role_name: Option<String>,
+    personality: Vec<String>,
+    values: Vec<String>,
+    worldview: Vec<String>,
+    traits: HashMap<String, String>,
+) -> Result<()>
 
 // 获取画像
 pub fn get_l0_profile(&mut self) -> Result<Option<L0Profile>>
@@ -312,10 +333,23 @@ pub fn get_l0_profile(&mut self) -> Result<Option<L0Profile>>
 #### 知识库管理
 
 ```rust
+// 文件型知识库挂载
 pub fn mount_shelf(&mut self, dir_path, domain, domain_name) -> Result<ShelfMeta>
 pub fn unmount_shelf(&mut self, domain_id) -> Result<()>
 pub fn list_shelf(&mut self) -> Result<Vec<ShelfMeta>>
+
+// 非文件型知识源挂载（API JSON、数据库导出、手动录入等）
+pub fn mount_source(&mut self, input: MountSourceInput) -> Result<ShelfMeta>
 ```
+
+**MountSourceInput 参数**:
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `domain_name` | String | 知识域名称（必填） |
+| `domain` | String | 文档类型（如 "api", "database"） |
+| `kind` | SourceKind | 来源类型（ApiJson, DatabaseExport, ManualEntry 等） |
+| `items` | Vec<MountSourceItem> | 知识条目列表（必填，非空） |
 
 #### 会话管理
 
@@ -480,6 +514,48 @@ brain.update_crystal_usage(&crystal.id, false)?;  // success=false
 
 内部使用 EMA（指数移动平均，α=0.1）更新 `success_rate`，`cascade_recall` 自动在每次检索后调用 `update_crystal_usage`。
 
+#### 记忆激活管理 (v0.23.0)
+
+`ActivationManager` 实现三级记忆状态管理：Active / Latent / Dormant。
+
+**激活分数计算**：
+- 公式：`score = base_importance × exp(-λ × hours_since_last_access)`
+- recall 命中后自动加权（默认 +0.3）
+
+**状态转换阈值**：
+
+| 转换 | 阈值 | 说明 |
+|------|------|------|
+| Active → Latent | 0.2 | 激活分数低于阈值 |
+| Latent → Dormant | 0.05 | 激活分数低于阈值 |
+| 高重要性保底 | 0.8 / 0.95 | importance 高于此值不降级 |
+
+**配置示例**：
+
+```rust
+use memhop_core::ActivationConfig;
+
+let config = ActivationConfig {
+    active_capacity: 5000,    // 活跃态容量上限
+    active_threshold: 0.2,    // Active → Latent 阈值
+    dormant_threshold: 0.05,  // Latent → Dormant 阈值
+    decay_lambda: 0.001,      // 衰减系数（约 29 天半衰期）
+    recall_bonus: 0.3,        // recall 命中奖励
+    ..Default::default()
+};
+```
+
+#### 记忆再巩固 (v1.0)
+
+`ReconsolidationManager` 实现记忆再巩固机制，在 recall 后更新记忆的元数据。
+
+**触发时机**：每次 `recall()` 调用后自动触发。
+
+**更新内容**：
+- 更新 `last_accessed_at` 时间戳
+- 计算新的激活分数
+- 根据访问频率调整 importance
+
 ---
 
 ## 6. 完整示例
@@ -582,7 +658,31 @@ fn main() -> memhop_core::Result<()> {
 }
 ```
 
-### 6.3 情感系统
+### 6.3 MemHopInstance（非全局实例）
+
+用于测试或需要多配置的场景：
+
+```rust
+use memhop_core::{MemHopInstance, MemHopConfig};
+
+// 创建独立实例（不影响全局 SDK）
+let config = MemHopConfig {
+    model_path: Some("./models/multilingual-e5-small".to_string()),
+    vector_dim: 384,
+    ..Default::default()
+};
+let instance = MemHopInstance::new(config)?;
+
+// 使用实例创建 Brain
+let mut brain = instance.create_brain("./data/test", "test-agent")?;
+
+// 正常使用 Brain API
+brain.batch_store(StoreBatch {
+    items: vec![StoreItem { text: "测试记忆".into(), ..Default::default() }]
+})?;
+```
+
+### 6.4 情感系统
 
 ```rust
 use memhop_core::{EmotionalFeedback, Emotion, EmotionRecallRequest};
@@ -660,8 +760,8 @@ use memhop_core::MemHopError;
 match brain.recall(request) {
     Ok(response) => { /* 处理响应 */ }
     Err(MemHopError::Storage(e)) => { /* 存储错误，可重试 */ }
-    Err(MemHopError::Encoding(e)) => { /* 编码错误 */ }
-    Err(MemHopError::Validation(e)) => { /* 验证错误，检查参数 */ }
+    Err(MemHopError::Encode(e)) => { /* 编码错误 */ }
+    Err(MemHopError::InvalidArgument(e)) => { /* 验证错误，检查参数 */ }
     Err(MemHopError::NotFound(e)) => { /* 资源不存在 */ }
     Err(e) => { /* 其他错误 */ }
 }
@@ -748,7 +848,7 @@ let config = MemHopConfig {
 | 错误类型 | 说明 | 处理建议 |
 |---------|------|---------|
 | `Storage` | 存储层错误 | 检查磁盘空间和权限 |
-| `Encoding` | 编码错误 | 检查模型文件完整性 |
-| `Validation` | 参数验证失败 | 检查输入参数范围 |
+| `Encode` | 编码错误 | 检查模型文件完整性 |
+| `InvalidArgument` | 参数验证失败 | 检查输入参数范围 |
 | `NotFound` | 资源不存在 | 检查 ID 是否正确 |
 | `Internal` | 内部错误 | 联系开发者 |

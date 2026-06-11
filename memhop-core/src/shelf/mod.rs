@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 pub mod chunker;
 pub mod scanner;
+pub mod summarizer;
 
 /// Mount a directory as a knowledge domain in L3.
 /// Returns metadata about the mounted knowledge base.
@@ -32,36 +33,25 @@ pub fn mount(
         )));
     }
 
-    // 2. Chunk each file (keep file→chunks mapping for hyperedge building)
-    let mut file_chunks: Vec<(String, Vec<String>)> = Vec::new();
-    for file in &files {
-        let file_chunk_texts = chunker::chunk(&file.content, &domain, 1024);
-        if !file_chunk_texts.is_empty() {
-            file_chunks.push((file.path.clone(), file_chunk_texts));
-        }
-    }
-
-    let mut chunks: Vec<String> = Vec::new();
-    for (_, texts) in &file_chunks {
-        chunks.extend(texts.iter().cloned());
-    }
-
-    if chunks.is_empty() {
-        return Err(MemHopError::InvalidArgument("no chunks generated".into()));
-    }
-
-    // 3. Store each chunk via batch_store (100 per batch)
+    // 2. For each file: summarize → structural + chunk → detail
+    // Track structural + detail items in order for hyperedge building
     let now = chrono::Utc::now().timestamp_millis();
     let domain_id = format!("shelf_{}", now);
-    let mut stored = 0usize;
-    let mut all_engram_ids: HashMap<String, String> = HashMap::new();
-    let mut all_l3_engram_ids: HashMap<String, String> = HashMap::new();
+    let mut all_items: Vec<StoreItem> = Vec::new();
+    // file_path → (structural_node_count, detail_node_count) for hyperedge mapping
+    let mut file_node_counts: Vec<(String, usize, usize)> = Vec::new();
 
-    for chunk_batch in chunks.chunks(100) {
-        let items: Vec<StoreItem> = chunk_batch
-            .iter()
-            .map(|text| StoreItem {
-                text: text.clone(),
+    for file in &files {
+        // 2a. Summarize to extract structural nodes
+        let summary = summarizer::summarize(&file.content, &domain);
+        let structural_count = summary.structural_nodes.len();
+
+        // 2b. Create structural StoreItems (is_structural=true, skeletal_text)
+        for sc in &summary.structural_nodes {
+            let mut source_ref = sc.source_ref.clone();
+            source_ref.location = file.path.clone();
+            all_items.push(StoreItem {
+                text: String::new(),  // structural nodes don't need full text
                 source: "shelf".to_string(),
                 domain_id: Some(domain_id.clone()),
                 turn_id: None,
@@ -74,12 +64,70 @@ pub fn mount(
                 chain_parent_id: None,
                 chain_label: None,
                 importance: None,
-            })
-            .collect();
+                is_structural: Some(true),
+                source_ref: Some(source_ref),
+                skeletal_text: Some(sc.text.clone()),
+            });
+        }
 
-        let batch = StoreBatch { items };
+        // 2c. Chunk to extract detail nodes
+        let file_chunk_texts = chunker::chunk(&file.content, &domain, 1024);
+        let detail_count = file_chunk_texts.len();
+
+        // 2d. Create detail StoreItems (is_structural=false, source_ref with line_range)
+        let mut char_offset: usize = 0;
+        let total_lines = file.content.len();
+        for chunk_text in &file_chunk_texts {
+            // Estimate line range for this chunk
+            let chunk_start = file.content[char_offset..]
+                .find(chunk_text.as_str())
+                .unwrap_or(0);
+            let start_line = file.content[..(char_offset + chunk_start).min(total_lines)]
+                .matches('\n').count() + 1;
+            let end_line = start_line + chunk_text.matches('\n').count();
+            char_offset += chunk_start + chunk_text.len();
+
+            all_items.push(StoreItem {
+                text: chunk_text.clone(),
+                source: "shelf".to_string(),
+                domain_id: Some(domain_id.clone()),
+                turn_id: None,
+                session_id: None,
+                topic_label: Some(domain_name.to_string()),
+                llm_keywords: None,
+                llm_compressed_summary: None,
+                valence: None,
+                arousal: None,
+                chain_parent_id: None,
+                chain_label: None,
+                importance: None,
+                is_structural: Some(false),
+                source_ref: Some(SourceRef {
+                    kind: SourceKind::File,
+                    location: file.path.clone(),
+                    line_range: Some((start_line, end_line)),
+                    selector: None,
+                    content_hash: None,
+                }),
+                skeletal_text: None,
+            });
+        }
+
+        file_node_counts.push((file.path.clone(), structural_count, detail_count));
+    }
+
+    if all_items.is_empty() {
+        return Err(MemHopError::InvalidArgument("no items generated".into()));
+    }
+
+    // 3. Store all items via batch_store (100 per batch)
+    let mut stored = 0usize;
+    let mut all_engram_ids: HashMap<String, String> = HashMap::new();
+    let mut all_l3_engram_ids: HashMap<String, String> = HashMap::new();
+
+    for item_batch in all_items.chunks(100) {
+        let batch = StoreBatch { items: item_batch.to_vec() };
         let report = brain.batch_store(batch)?;
-        // v0.17.3: 收集 engram_ids 和 l3_engram_ids 映射
         for (idx, node_id) in report.engram_ids {
             let global_idx = format!("{}", stored + idx.parse::<usize>().unwrap_or(0));
             all_engram_ids.insert(global_idx, node_id);
@@ -88,15 +136,15 @@ pub fn mount(
             let global_idx = format!("{}", stored + idx.parse::<usize>().unwrap_or(0));
             all_l3_engram_ids.insert(global_idx, node_id);
         }
-        stored += chunk_batch.len();
+        stored += item_batch.len();
     }
 
     // 4. Build file_path → node_ids mapping for hyperedge construction
     let mut file_to_node_ids: HashMap<String, Vec<String>> = HashMap::new();
     let mut global_idx = 0usize;
-    for (file_path, texts) in &file_chunks {
+    for (file_path, str_count, det_count) in &file_node_counts {
         let mut node_ids = Vec::new();
-        for _ in texts {
+        for _ in 0..(*str_count + *det_count) {
             let idx_key = format!("{}", global_idx);
             if let Some(node_id) = all_l3_engram_ids.get(&idx_key) {
                 node_ids.push(node_id.clone());
