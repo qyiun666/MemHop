@@ -44,6 +44,8 @@ pub extern "C" fn memhop_init(
     let config = MemHopConfig {
         model_path: model_path_str,
         vector_dim: vector_dim as usize,
+        #[cfg(feature = "candle")]
+        use_candle: true,
     };
 
     match MemHopSDK::init(config) {
