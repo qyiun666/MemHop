@@ -1,6 +1,5 @@
 <!-- badges -->
 <p align="center">
-  <a href="https://github.com/qyiun666/memhop/actions"><img src="https://img.shields.io/github/actions/workflow/status/qyiun666/memhop/ci.yml?branch=main&style=flat-square" alt="CI"></a>
   <a href="https://crates.io/crates/memhop-core"><img src="https://img.shields.io/crates/v/memhop-core?style=flat-square" alt="crates.io"></a>
   <a href="https://docs.rs/memhop-core"><img src="https://img.shields.io/docsrs/memhop-core?style=flat-square" alt="docs.rs"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue?style=flat-square" alt="License"></a>
