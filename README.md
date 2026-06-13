@@ -1,391 +1,195 @@
-<!-- badges -->
-<p align="center">
-  <a href="https://crates.io/crates/memhop-core"><img src="https://img.shields.io/crates/v/memhop-core?style=flat-square" alt="crates.io"></a>
-  <a href="https://docs.rs/memhop-core"><img src="https://img.shields.io/docsrs/memhop-core?style=flat-square" alt="docs.rs"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-blue?style=flat-square" alt="License"></a>
-</p>
+# MemHop
 
-<!-- navigation -->
-<p align="center">
-  <a href="https://qyiun666.github.io/meowagent.github.io/">官网</a>
-  ·
-  <a href="#quick-start">Quick Start</a>
-  ·
-  <a href="https://docs.rs/memhop-core">API 文档</a>
-  ·
-  <a href="#benchmarks">Benchmarks</a>
-  ·
-  <a href="https://github.com/qyiun666/MeowAgent">MeowAgent</a>
-  ·
-  <a href="#contributing">Contributing</a>
-</p>
+> Agent-oriented memory database inspired by human brain cognitive architecture
 
----
+MemHop is a specialized memory database designed for AI Agents, implementing a six-layer cognitive architecture (L0-L5) with custom .meh binary file format.
 
-<h1 align="center">MemHop</h1>
+## Features
 
-<p align="center">
-  <strong>脑启发记忆引擎 SDK</strong><br>
-  Hopfield 模式补全 · HNSW 语义检索 · Hebbian 图学习<br>
-  为 AI Agent 打造的单进程嵌入式记忆底座
-</p>
-
----
-
-## 特性
-
-**检索引擎**
-
-- **亚线性单条精准召回** — 非 Top-K 近似搜索，仿人脑瞬时回忆，基于 Hopfield 网络模式补全
-- **BM25 + HNSW 双通道** — 稀疏检索（ngram 倒排索引 + BM25）始终可用，稠密向量检索（usearch HNSW）可选增强
-- **可插拔双编码器** — 默认 NgramEncoder 零模型依赖；启用 `candle` feature 后加载 multilingual-e5-small 语义向量，EncoderRouter 自动路由稀疏/稠密双通道
-
-**6 层记忆模型**
-
-- **L0 角色画像** — Agent 人格与偏好持久化
-- **L1 纠缠超图** — 核心记忆层，KnowledgeNode + Hyperedge + 超边链，Hebbian 动态边权学习
-- **L2 话题图** — 话题聚类与关联发现
-- **L3 领域超图** — 跨话题知识蒸馏，支持 L3 结晶化（`crystallize_l3`）
-- **L4 原文库** — 原始对话/文档存档
-- **L5 程序性晶体** — 链分析引擎，从历史记忆中提炼可复用操作流程
-
-**记忆生命周期**
-
-- **记忆激活系统** — Active / Latent / Dormant 三态管理，Active 子集驻留 HNSW（≤5000 节点），衰减公式 `score = importance × exp(-λt) + recall_bonus`
-- **记忆巩固（Dream）** — 后台 consolidation 管线，自动执行话题反思、关键词精炼、边界检测
-- **情感索引** — 多维度情感反馈（`emotional_feedback`），支持情感驱动召回（`recall_by_emotion`）
-- **知识库挂载（Shelf）** — 通过 `mount_shelf` 将外部知识图谱注入 L3 层
-
-**工程特性**
-
-- **LMDB 持久化，零配置** — 每层独立 LMDB 环境，事务安全，无需外部数据库
-- **HNSW 索引持久化** — usearch 原生序列化，启动时优先从缓存加载，避免全量重建
-- **独立编码器服务** — memhop-encoder 独立进程，多 Agent 共享一个向量模型实例，通过 IPC 通信
-- **全局编码器共享** — MemHopSDK 单例模式，同进程内多个 Brain 共享编码器，节省内存
-- **闭源分发支持** — Binary Crate + 私有registry，meowagent等内部项目可隐藏源码
-
-## vs agentmemory
-
-| 维度 | agentmemory | MemHop v0.25.1 |
-|------|------------|----------------|
-| 嵌入模型 | all-MiniLM-L6-v2 (384d) | **multilingual-e5-small (384d)** |
-| 检索 | BM25 + 向量 + 图谱 RRF | **HNSW + SparseIndex BM25 RRF** |
-| 模式补全 | ❌ | **✅ Hopfield 收敛** |
-| 图学习 | 静态共现 | **✅ Hebbian 动态边权** |
-| 记忆激活 | 全量加载 | **✅ Active/Latent/Dormant 三态** |
-| 情感索引 | ❌ | **✅ 多维度情感反馈 + 情感召回** |
-| 实时性 | SessionEnd 批量 | **✅ 逐轮实时写入** |
-| 部署 | Node.js + SQLite | **Rust SDK + LMDB** |
-| 延迟 | ~14ms | **< 1ms** |
-
-## 安装
-
-### Cargo 依赖
-
-```toml
-[dependencies]
-# 基础版（仅 BM25 稀疏检索，零模型依赖）
-memhop-core = "0.25"
-
-# 完整版（BM25 + HNSW 语义向量，需要模型文件）
-memhop-core = { version = "0.25", features = ["candle"] }
-```
-
-> 要求 Rust 1.85+（edition 2024）。使用 `candle` feature 需要系统有 C++ 编译器（macOS 自带 clang++，Linux 需 `g++`，Windows 需 MSVC）。
-
-### 独立编码器服务（可选）
-
-如果你的多个 Agent 需要共享向量模型，可以运行独立的 memhop-encoder 进程：
-
-```bash
-# 仅 NgramEncoder（无模型依赖）
-memhop-encoder --dim 1024
-
-# 加载语义向量模型（需要 candle feature）
-memhop-encoder --model-path ./models/multilingual-e5-small
-```
-
-客户端通过 `EncoderClient` 连接：
-
-```rust
-use memhop_encoder_client::EncoderClient;
-use memhop_core::encoder::Encoder;
-
-let client = EncoderClient::connect("/tmp/memhop-encoder.sock")?;
-let output = client.encode("你好世界");
-```
+- **Zero-copy mmap retrieval**: Memory-mapped file access for high-performance reads
+- **Hybrid search**: Combines BM25 text search with vector similarity (cosine)
+- **Hypergraph associative memory**: Multi-hop graph diffusion for related memory retrieval
+- **Cognitive layers**: L0-L5 architecture mirroring human memory systems
+- **Automatic consolidation**: Dream pipeline for memory pruning and archival
+- **Pure Rust**: Zero external dependencies beyond minimal crates
+- **Single-process design**: One agent = one process = one .meh file
 
 ## Quick Start
 
-### 最简示例
-
 ```rust
-use memhop_core::{MemHopSDK, MemHopConfig, StoreBatch, StoreItem, RecallRequest};
+use memhop::{MemHop, MemHopConfig};
+use std::path::PathBuf;
 
-fn main() -> memhop_core::Result<()> {
-    // 1. 初始化 SDK（全局一次性）
-    MemHopSDK::init(MemHopConfig::default())?;
+// Open or create database
+let config = MemHopConfig::new(PathBuf::from("agent_memory.meh"), 768);
+let mut db = MemHop::open(config)?;
 
-    // 2. 创建 Brain
-    let mut brain = MemHopSDK::create_brain("./data", "my_agent")?;
+// Search memory
+let query = SearchQuery {
+    dialogue: "我想学习Rust编程".to_string(),
+    ..Default::default()
+};
+let results = db.search_memory(query)?;
 
-    // 3. 存储记忆
-    brain.batch_store(StoreBatch {
-        items: vec![
-            StoreItem { text: "用户喜欢 Rust 和猫".into(), ..Default::default() },
-            StoreItem { text: "明天下午3点开会".into(), ..Default::default() },
-        ],
-    })?;
+// Update memory
+let request = UpdateRequest {
+    l2_id: Some("topic_001".to_string()),
+    dialogue_text: "用户学习Rust所有权系统".to_string(),
+    summary: Some("Rust所有权学习记录".to_string()),
+    action_chain: vec![],
+};
+let result = db.update_memory(request)?;
 
-    // 4. 检索记忆
-    let results = brain.recall(&RecallRequest {
-        query: "用户有什么爱好".into(),
-        ..Default::default()
-    })?;
+// Run Dream consolidation
+let llm = LlmConfig {
+    api_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
+    api_key: "sk-...".to_string(),
+    model: "deepseek-chat".to_string(),
+    api_format: 1,
+};
+let report = db.dream(llm, DreamConfig::default())?;
 
-    for r in &results.results {
-        println!("[{}] {}", r.score, r.text);
-    }
-    Ok(())
-}
+db.close()?;
 ```
 
-### 使用语义向量模型
+## Architecture
 
-```rust
-use memhop_core::{MemHopSDK, MemHopConfig};
+### Cognitive Layers (L0-L5)
 
-fn main() -> memhop_core::Result<()> {
-    let config = MemHopConfig {
-        model_path: Some("./models/multilingual-e5-small".to_string()),
-        vector_dim: 384,
-        ..Default::default()
-    };
-    MemHopSDK::init(config)?;
+- **L0 (Profile)**: Agent identity and preferences
+- **L1 (Episodic)**: Short-term episodic memories
+- **L2 (Semantic)**: Compressed topic structures
+- **L3 (Procedural)**: Skill and pattern memories
+- **L4 (Archive)**: Long-term archival storage
+- **L5 (Crystal)**: Crystallized programmatic knowledge
 
-    let mut brain = MemHopSDK::create_brain("./data/agent1", "agent1")?;
-    // Brain 现在同时支持 BM25 稀疏检索 + HNSW 语义向量检索
-    Ok(())
-}
-```
+### File Format (.meh)
 
-### 多 Agent 共享编码器
+- 4KB page-aligned binary format
+- A/B dual header for crash recovery
+- Journal transaction log for atomicity
+- B-tree indexing for O(log n) lookups
+- SIMD-accelerated vector operations (AVX2)
 
-```rust
-use memhop_core::{MemHopSDK, MemHopConfig};
+## Core API
 
-fn main() -> memhop_core::Result<()> {
-    // 初始化一次，所有 Brain 共享同一个编码器实例
-    MemHopSDK::init(MemHopConfig {
-        model_path: Some("./models/multilingual-e5-small".to_string()),
-        vector_dim: 384,
-        ..Default::default()
-    })?;
+### Database Operations
 
-    let mut agent_a = MemHopSDK::create_brain("./data/agent_a", "agent_a")?;
-    let mut agent_b = MemHopSDK::create_brain("./data/agent_b", "agent_b")?;
-    // 各自独立的 LMDB 存储，共享编码器内存
-    Ok(())
-}
-```
+| Method | Description |
+|--------|-------------|
+| `MemHop::open(config)` | Open or create database |
+| `search_memory(query)` | Search memory with L2-centric retrieval |
+| `update_memory(request)` | Create/update multi-layer memory |
+| `dream(llm, config)` | Run Dream consolidation pipeline |
+| `batch_store(batch)` | Batch store multiple documents |
+| `close()` | Close database and sync to disk |
 
-### 测试环境（非全局实例）
+### L0-L5 Query Interfaces
 
-```rust
-use memhop_core::{MemHopInstance, MemHopConfig};
+| Method | Description |
+|--------|-------------|
+| `get_l0_profile()` | Get Agent profile |
+| `get_l1_engram(id)` | Get single L1 engram by ID |
+| `list_l1_engrams(query)` | List L1 engrams with pagination |
+| `get_l2_topic(id)` | Get L2 topic detail |
+| `list_l2_topics(query)` | List L2 topics |
+| `get_l3_domain(id)` | Get L3 knowledge domain |
+| `list_l3_domains(query)` | List L3 domains |
+| `list_l4_by_topic(topic_id, query)` | List L4 archives by topic |
+| `list_l5_skills(query)` | List L5 skills |
 
-fn main() -> memhop_core::Result<()> {
-    // MemHopInstance 不污染全局状态，适合测试和多配置场景
-    let instance = MemHopInstance::new(MemHopConfig::default())?;
-    let mut brain = instance.create_brain("/tmp/test_brain", "test_agent")?;
-    Ok(())
-}
-```
+### Update Interfaces
 
-## 核心 API
+| Method | Description |
+|--------|-------------|
+| `update_l0_profile(request)` | Update Agent profile |
+| `update_l2_title(id, new_title)` | Update L2 topic title |
+| `update_l3_title(id, new_title)` | Update L3 domain title |
+| `update_l5_title(id, new_title)` | Update L5 skill title |
+| `merge_l2_topics(primary_id, secondary_ids)` | Merge multiple L2 topics |
+| `import_memory(request)` | Import memory to L0/L2/L3 |
 
-### MemHopSDK（全局单例）
+## Performance
 
-| 方法 | 说明 |
-|------|------|
-| `MemHopSDK::init(config)` | 初始化 SDK（进程级一次性） |
-| `MemHopSDK::create_brain(dir, agent_id)` | 创建 Brain 实例（使用全局编码器） |
-| `MemHopSDK::get_encoder()` | 获取全局编码器引用 |
-| `MemHopSDK::is_initialized()` | 检查是否已初始化 |
-| `MemHopSDK::init(MemHopConfig::from_env())` | 从 `MEMHOP_MODEL_PATH` 环境变量初始化 |
+- Store throughput: >1000 ops/sec (target)
+- Recall latency: p95 < 10ms (target)
+- Vector similarity: AVX2 4x faster than scalar
 
-### MemHopInstance（非全局，测试友好）
+## Version Roadmap
 
-| 方法 | 说明 |
-|------|------|
-| `MemHopInstance::new(config)` | 创建独立实例（不影响全局状态） |
-| `instance.create_brain(dir, agent_id)` | 使用该实例的编码器创建 Brain |
-| `instance.encoder()` | 获取该实例的编码器 |
+- **v0.30.0 (Foundation)**: .meh format + basic store/recall ✅
+- **v0.31.0 (Awakening)**: Activation + Cascade
+- **v0.32.0 (Self-Aware)**: L2 session activation + Organize
+- **v0.33.0 (Full Mind)**: Batch store + Emotion + Dream pipeline
+- **v0.34.0 (Launch Ready)**: Migration + integration tests + benchmarks
+- **v0.41.0 (Current)**: L2-centric search/update model + Dream pipeline
 
-### Brain
-
-| 方法 | 说明 |
-|------|------|
-| `batch_store(batch)` | 外部输入批量存储（Dream 为内部维护写入） |
-| `recall(req)` | 检索记忆（BM25 + HNSW RRF 融合） |
-| `consolidate()` | 记忆巩固（dream 管线：话题反思、关键词精炼） |
-| `mount_shelf(dir, domain, name)` | 挂载外部知识库到 L3 |
-| `crystallize_l3(req)` | L3 结晶化（从历史记忆中提炼操作流程） |
-| `emotional_feedback(feedback)` | 多维度情感反馈 |
-| `recall_by_emotion(req)` | 情感驱动召回 |
-| `storage_stats()` | 各层存储统计信息 |
-
-## 架构
-
-### Workspace 结构
-
-```
-memhop/
-├── memhop-core/           SDK 核心库（lib）
-├── memhop-encoder/        独立编码器服务（bin）
-├── memhop-encoder-client/ IPC 客户端库（lib）
-└── memhop-protocol/       共享 IPC 协议定义（lib）
-```
-
-### memhop-core 模块
-
-```
-memhop-core/src/
-├── sdk.rs              SDK 入口（MemHopSDK + MemHopInstance + MemHopConfig）
-├── brain/              顶层 API（6 层记忆模型统一入口）
-├── encoder/            编码器（NgramEncoder + CandleEncoder + EncoderRouter）
-├── index.rs            HNSW 向量索引（usearch）+ SparseIndex（BM25 倒排索引）
-├── activation/         记忆激活管理器（Active / Latent / Dormant 三态）
-├── hypergraph/         L1 纠缠超图 + Hebbian 边权学习
-├── topic_graph/        L2 话题标准图
-├── domain_graph/       L3 领域超图
-├── raw_archive/        L4 原文库
-├── procedural/         L5 程序性结晶 — 链分析引擎
-├── profile/            L0 角色画像
-├── lmdb/               LMDB 持久化层（各层独立环境）
-├── dream/              记忆巩固管线（consolidate 实现）
-├── recall/             检索管线
-├── batch_store.rs      外部输入批量存储
-├── query_engine.rs     按层检索引擎
-├── organize/           记忆组织（话题反思、关键词精炼、边界检测）
-├── shelf/              知识库挂载（L3 领域图扩展）
-├── session/            会话上下文管理（纯内存）
-├── splitter.rs         长文本分段
-├── engram.rs           数据模型（KnowledgeNode, Hyperedge, Topic, ...）
-└── types.rs            配置 + 请求/响应类型
-```
-
-### 数据流
-
-```
-用户输入
-  │
-  ├─→ Encoder（NgramEncoder / CandleEncoder / EncoderRouter）
-  │     ├── sparse: HashMap<String, f32>  → SparseIndex (BM25)
-  │     └── dense:  Vec<f16>              → HnswIndex (usearch HNSW)
-  │
-  ├─→ batch_store() → LMDB 持久化（各层独立事务）
-  │
-  └─→ recall()
-        ├── Stage 1: SparseIndex BM25 粗筛 → 候选集
-        ├── Stage 2: HnswIndex HNSW 精排 → Top-K
-        └── RRF 融合 → 最终排序
-```
-
-## 平台兼容
-
-| 平台 | 状态 | 说明 |
-|------|------|------|
-| macOS (Apple Silicon / Intel) | ✅ 完整支持 | 原生 clang++ |
-| Linux (x86_64 / aarch64) | ✅ 完整支持 | 需要 `g++`（usearch 编译依赖） |
-| Windows (x86_64) | ✅ 完整支持 | IPC 编码器通过 TCP localhost 通信 |
-
-> Windows 上 IPC 编码器使用 TCP 127.0.0.1 通信（非 Unix Socket），SDK 核心功能全平台一致。
-
-## Benchmarks
-
-MemHop 内置 9 个基准测试套件，覆盖检索延迟、吞吐量、端到端性能：
+## Development
 
 ```bash
-# 运行全部基准（需要 bench feature）
-cargo bench --workspace --features bench
+# Build
+cargo build --release
 
-# 运行特定基准
-cargo bench --bench retrieval_bench --features bench    # 检索延迟
-cargo bench --bench functional_bench --features bench   # 功能基准
-cargo bench --bench agent_e2e_bench --features bench    # Agent 端到端
-cargo bench --bench longmemeval_bench --features bench  # LongMemEval 评估
+# Test
+cargo test
 
-# 需要 LLM API 的基准
-cargo bench --bench llm_integration_bench --features "bench,bench-llm,llm-api"
+# Benchmark
+cargo bench --features bench
 ```
 
-关键指标（Apple M 系列，1000 节点规模）：
+## API Documentation
 
-| 操作 | 延迟 |
-|------|------|
-| 单条 recall（BM25 only） | < 1ms |
-| 单条 recall（BM25 + HNSW） | < 3ms |
-| batch_store（10 条） | < 5ms |
-| HNSW cosine_search（top-10） | < 0.5ms |
+- **[API_NEW.md](API_NEW.md)** - New API design document (recommended)
+- **[API_NEI.md](API_NEI.md)** - Internal implementation details
+- **[docs/](docs/)** - Additional documentation
 
-## 测试
+## Version History
 
-```bash
-# 全量测试
-cargo test --workspace
+| Version Range | Date | Key Highlights |
+|---------------|------|----------------|
+| **v0.30.x - v0.41.x** | 2026-05-19 ~ 2026-06-14 | 1. **专用记忆数据库** (.meh格式) 2. 六层认知架构 (L0-L5) 3. L2中心化检索/更新模型 4. Dream记忆整合管线 5. BM25+HNSW双通道检索 |
+| **v0.23.x - v0.25.x** | 2026-06-14 ~ 2026-06-15 | 1. SDK模式重构 2. 6层仿人脑记忆引擎 3. API优化与标准化 4. CandleEncoder向量模型集成 5. 性能优化与基准测试 |
+| **v0.1.x - v0.22.x** | 2026-05-19 ~ 2026-06-13 | 1. Brain架构设计与迭代 2. MCP Server集成 3. HNSW向量索引实现 4. 场景感知与记忆塑性 5. LMDB持久化层 |
 
-# 仅 memhop-core
-cargo test -p memhop-core
+For detailed release notes, see [docs/changelogs/](docs/changelogs/) and [docs/plans/](docs/plans/).
 
-# 包含 candle feature
-cargo test -p memhop-core --features candle
-```
+## Development Guidelines
 
-## 生态
+This project follows strict development guidelines to ensure code quality, performance, and security. All guidelines are documented in the `.qoder/rules/` directory:
 
-MemHop 是 Meow 生态的记忆底座：
+### Core Rules
+- **P01 - Code Quality**: Coding standards and best practices
+- **P02 - Code Modification**: Guidelines for modifying existing code
+- **P07 - Performance Optimization**: Performance optimization techniques
+- **P09 - Dependency Management**: Dependency selection and management
 
-| 项目 | 说明 | 链接 |
-|------|------|------|
-| **MeowAgent** | AI Agent 框架，内嵌 MemHop 作为记忆引擎 | [GitHub](https://github.com/qyiun666/MeowAgent) |
-| **MeowDesk** | 桌面陪伴应用（Tauri + Rust） | 敬请期待 |
-| **memhop-encoder** | 独立编码器服务，多 Agent 共享向量模型 | 本仓库 |
+### Quick Reference
+- See [.qoder/rules/README.md](.qoder/rules/README.md) for the complete index
+- All rules are prefixed with 'P' for easy identification
+- Rules are designed for MemHop's specific architecture and requirements
 
 ## Contributing
 
-欢迎贡献！在提交 PR 之前：
+We welcome contributions! Please follow these steps:
 
-1. Fork 本仓库并创建 feature 分支
-2. 确保 `cargo test --workspace` 通过
-3. 如果修改了公共 API，请更新文档注释
-4. 提交 PR 并描述你的改动
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
 
-Bug 报告和功能请求请直接提交 [Issue](https://github.com/qyiun666/memhop/issues)。
+For bug reports and feature requests, please open an issue on GitHub.
 
-## Sponsor
+## Contact
 
-If MemHop powers your agent's memory, consider sponsoring to support ongoing development. Your sponsorship covers compute costs, benchmark infrastructure, and open-source maintenance.
-
-| Tier | Monthly | What You Get |
-|------|---------|--------------|
-| Kitten 🐱 | $1 | Heartfelt thanks + name on Sponsor Wall |
-| Tabby 🐾 | $5 | Early feature access + priority issue triage |
-| Siamese 🐈 | $10 | Monthly dev updates + private Discord channel |
-| Maine Coon 🦁 | $25 | Priority roadmap input + beta testing access |
-| Sphinx 👑 | $100 | Direct line with maintainer + sponsor logo in README |
-
-**[Sponsor on GitHub](https://github.com/sponsors/qyiun666)**
-
-## 链接
-
-- **官网：** https://qyiun666.github.io/meowagent.github.io/
-- **MeowAgent：** https://github.com/qyiun666/MeowAgent
-- **MeowDesk：** 桌面陪伴应用（Tauri + Rust，敬请期待）
-- **邮箱：** qyiun666@163.com
+- **Author**: qyiun666
+- **Email**: qyiun666@163.com
+- **GitHub**: https://github.com/qyiun666/memhop
 
 ## License
 
-Licensed under either of [MIT license](LICENSE-MIT) or [Apache License, Version 2.0](LICENSE-APACHE) at your option.
+MIT OR Apache-2.0
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this crate by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+---
+
+**Note**: This is an active project under development. APIs may change between versions. Please refer to the version-specific documentation for the most accurate information.

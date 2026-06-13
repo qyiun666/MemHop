@@ -39,6 +39,7 @@ env/
 # Benchmarks
 .benchmarks/
 .pytest_cache/
+.ruff_cache/
 
 # Design docs (not for public repo)
 docs/
