@@ -14,12 +14,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
-      - name: Check memhop-core
-        run: cargo check -p memhop-core
-      - name: Clippy memhop-core
-        run: cargo clippy -p memhop-core -- -D warnings
-      - name: Test memhop-core
-        run: cargo test -p memhop-core
-
-  # Note: memhop-encoder requires C++ toolchain for tokenizers (esaxx-rs)
-  # Build manually if needed, or use a separate CI job with C++ setup
+      - name: Check
+        run: cargo check
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+      - name: Test
+        run: cargo test
