@@ -2,13 +2,10 @@
 //!
 //! Implements the merge_l2_topics() interface to merge multiple L2 topics into one.
 
-use crate::file::free_list::allocate_from_free_list;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
 use crate::query::types::*;
-use crate::slot::engram::EngramSlot;
-use crate::slot::hyperedge::HyperedgeSlot;
 use crate::slot::topic::TopicSlot;
 use crate::util::hash_id;
 use crate::MemHopError;
@@ -30,7 +27,7 @@ fn parse_id_to_hash(id: &str) -> u64 {
 /// Merge multiple L2 topics into a primary topic
 pub fn merge_l2_topics(
     mmap: &mut MmapMut,
-    header: &mut FileHeader,
+    _header: &mut FileHeader,
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     primary_id: &str,
@@ -134,7 +131,7 @@ pub fn merge_l2_topics(
     // Step 8: Delete secondary topics from B-tree and sparse index
     for &sec_hash in &secondary_hashes {
         let sec_page_ref = btree.search(sec_hash).unwrap();
-        let sec_page_id = (sec_page_ref >> 16) as u32;
+        let _sec_page_id = (sec_page_ref >> 16) as u32;
 
         // Remove from sparse index
         sparse_index.remove_document(sec_hash);

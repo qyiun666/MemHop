@@ -90,9 +90,9 @@ impl FileHeader {
 
         // Extract layer_roots (14 × u32 = 56 bytes, starting at offset 24)
         let mut layer_roots = [0u32; 14];
-        for i in 0..14 {
+        for (i, item) in layer_roots.iter_mut().enumerate() {
             let offset = 24 + i * 4;
-            layer_roots[i] = u32::from_le_bytes([
+            *item = u32::from_le_bytes([
                 bytes[offset],
                 bytes[offset + 1],
                 bytes[offset + 2],

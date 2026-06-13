@@ -2,7 +2,6 @@
 //
 // Provides common utilities to eliminate code duplication in slot read/write operations.
 
-use crate::index::btree::BTreeIndex;
 use crate::util::PAGE_SIZE;
 
 /// Decode page reference to page ID
@@ -20,7 +19,7 @@ pub fn slot_offset(page_id: u32) -> usize {
 /// Read slot data from mmap at given page reference
 /// Returns the byte slice containing the serialized slot data
 #[inline]
-pub fn get_slot_data<'a>(mmap: &'a [u8], page_ref: u64) -> Option<&'a [u8]> {
+pub fn get_slot_data(mmap: &[u8], page_ref: u64) -> Option<&[u8]> {
     let page_id = decode_page_id(page_ref);
     let offset = slot_offset(page_id);
     

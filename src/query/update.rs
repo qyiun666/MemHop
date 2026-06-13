@@ -36,7 +36,7 @@ pub fn update_memory(
     request: UpdateRequest,
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
-    vector_dim: usize,
+    _vector_dim: usize,
 ) -> Result<UpdateResult, MemHopError> {
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -47,7 +47,7 @@ pub fn update_memory(
     let page_count = header.page_count;
 
     // Step 1: Find or create L2 topic
-    let (l2_id_hash, l2_page_ref, is_new_l2) = if let Some(ref l2_id) = request.l2_id {
+    let (l2_id_hash, _l2_page_ref, is_new_l2) = if let Some(ref l2_id) = request.l2_id {
         // Existing L2 topic
         let l2_hash = hash_id(l2_id);
         if let Some(page_ref) = btree.search(l2_hash) {
@@ -74,7 +74,7 @@ pub fn update_memory(
 
     // Step 2: Create L1 Engram for current dialogue
     let l1_id_hash = hash_id(&format!("{}-{}", l2_id_hash, now_ms));
-    let l1_page_ref = allocate_and_write_l1_engram(
+    let _l1_page_ref = allocate_and_write_l1_engram(
         mmap,
         header,
         l1_id_hash,
@@ -85,7 +85,7 @@ pub fn update_memory(
 
     // Step 3: Create L4 Archive for current dialogue
     let l4_id_hash = hash_id(&format!("{}-{}", l2_id_hash, now_ms));
-    let l4_page_ref = allocate_and_write_l4_archive(
+    let _l4_page_ref = allocate_and_write_l4_archive(
         mmap,
         header,
         l4_id_hash,
@@ -193,7 +193,7 @@ fn allocate_and_write_l1_engram(
     }
 
     // Insert into B-tree
-    let page_ref = ((page_id as u64) << 16) | 0; // slot index 0
+    let page_ref = (page_id as u64) << 16; // slot index 0
     btree.insert(id_hash, page_ref);
 
     Ok(page_ref)
@@ -262,6 +262,7 @@ fn extract_l2_search_terms_with_nodes(
 }
 
 /// Extract search terms from L1 engram (primary key + secondary keys)
+#[allow(dead_code)]
 fn extract_l1_search_terms(engram: &EngramSlot) -> Vec<String> {
     let mut terms = Vec::new();
     
@@ -282,6 +283,7 @@ fn extract_l1_search_terms(engram: &EngramSlot) -> Vec<String> {
 }
 
 /// Extract search terms from L3 knowledge (primary key + secondary keys)
+#[allow(dead_code)]
 fn extract_l3_search_terms(knowledge: &KnowledgeSlot) -> Vec<String> {
     let mut terms = Vec::new();
     
@@ -305,6 +307,7 @@ fn extract_l3_search_terms(knowledge: &KnowledgeSlot) -> Vec<String> {
 }
 
 /// Allocate page and write L2 Topic
+#[allow(clippy::too_many_arguments)]
 fn allocate_and_write_l2_topic(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -412,6 +415,7 @@ fn allocate_and_write_l2_topic(
 }
 
 /// Allocate page and write L3 Knowledge
+#[allow(dead_code, clippy::too_many_arguments)]
 fn allocate_and_write_l3_knowledge(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -558,6 +562,7 @@ fn allocate_and_write_l5_crystal(
 
 
 /// Update L2 topic with new L1 and L4 references, and optional summary
+#[allow(clippy::too_many_arguments)]
 fn update_l2_with_new_data(
     mmap: &mut MmapMut,
     l2_id: u64,
@@ -720,6 +725,7 @@ fn extract_keywords(text: &str) -> Vec<String> {
 ///
 /// This function uses simple keyword-based domain classification.
 /// For better accuracy, consider using an LLM or ML classifier in production.
+#[allow(dead_code)]
 fn infer_domain_from_content(text: &str, title: &str) -> String {
     let combined = format!("{} {}", title.to_lowercase(), text.to_lowercase());
     

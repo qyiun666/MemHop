@@ -290,8 +290,8 @@ fn compute_centroid_vector(
         }
     }
 
-    for i in 0..dim {
-        centroid[i] /= vectors.len() as f32;
+    for val in centroid.iter_mut().take(dim) {
+        *val /= vectors.len() as f32;
     }
 
     // Convert to f16

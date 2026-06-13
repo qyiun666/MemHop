@@ -127,7 +127,7 @@ pub fn update_l0_profile(
             }
             
             // Insert into B-tree index
-            let page_ref = ((page_id as u64) << 16) | 0; // layer=0, offset=0
+            let page_ref = (page_id as u64) << 16; // layer=0, offset=0
             btree.insert(profile_id_hash, page_ref);
             
             // Return new profile
@@ -152,7 +152,7 @@ pub fn update_l0_profile(
 /// Update L2 topic title with sparse index synchronization
 pub fn update_l2_title(
     mmap: &mut MmapMut,
-    header: &mut FileHeader,
+    _header: &mut FileHeader,
     btree: &BTreeIndex,
     sparse_index: &mut SparseIndex,
     id: &str,
@@ -229,7 +229,7 @@ pub fn update_l2_title(
 /// Update L3 knowledge title with sparse index synchronization
 pub fn update_l3_title(
     mmap: &mut MmapMut,
-    header: &mut FileHeader,
+    _header: &mut FileHeader,
     btree: &BTreeIndex,
     sparse_index: &mut SparseIndex,
     id: &str,

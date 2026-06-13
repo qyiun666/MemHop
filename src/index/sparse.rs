@@ -18,6 +18,12 @@ impl PostingList {
     }
 }
 
+impl Default for PostingList {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// BM25 sparse index for text search
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SparseIndex {
@@ -86,7 +92,7 @@ impl SparseIndex {
 
         // Update posting lists
         for (term, tf) in term_freq_map {
-            let posting = self.postings.entry(term).or_insert_with(PostingList::new);
+            let posting = self.postings.entry(term).or_default();
             posting.term_freq.insert(id_hash, tf);
             posting.doc_freq += 1;
         }
@@ -211,6 +217,12 @@ impl SparseIndex {
     /// Deserialize SparseIndex from binary format using bincode
     pub fn deserialize(data: &[u8]) -> Result<Self, String> {
         bincode::deserialize(data).map_err(|e| format!("Deserialization failed: {}", e))
+    }
+}
+
+impl Default for SparseIndex {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

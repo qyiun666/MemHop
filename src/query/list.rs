@@ -9,13 +9,10 @@ use crate::slot::archive::ArchiveSlot;
 use crate::slot::crystal::CrystalSlot;
 use crate::slot::engram::EngramSlot;
 use crate::slot::knowledge::KnowledgeSlot;
-use crate::slot::profile::ProfileSlot;
 use crate::slot::topic::TopicSlot;
 use crate::util::hash_id;
 use crate::MemHopError;
 use memmap2::MmapMut;
-
-const PAGE_SIZE: usize = 4096;
 
 /// Parse ID string to u64 hash
 /// Supports both hex-encoded hashes (16 chars) and raw strings
@@ -518,7 +515,7 @@ where
     }
 
     // Sort by created_at (descending - newest first)
-    all_archives.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    all_archives.sort_by_key(|b| std::cmp::Reverse(b.created_at));
 
     // Pagination
     let total_count = all_archives.len();
@@ -608,7 +605,7 @@ pub fn list_l5_skills(
     }
 
     // Sort by trigger_count (descending)
-    all_crystals.sort_by(|a, b| b.trigger_count.cmp(&a.trigger_count));
+    all_crystals.sort_by_key(|b| std::cmp::Reverse(b.trigger_count));
 
     // Pagination
     let total_count = all_crystals.len();

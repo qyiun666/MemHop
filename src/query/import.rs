@@ -13,7 +13,6 @@ use crate::slot::topic::TopicSlot;
 use crate::util::hash_id;
 use crate::MemHopError;
 use memmap2::MmapMut;
-use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Helper function to calculate search terms and doc_len for L2 topic
@@ -189,7 +188,7 @@ fn import_l0_profile(
                     mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
                 }
 
-                btree.insert(profile_id_hash, ((page_id as u64) << 16));
+                btree.insert(profile_id_hash, (page_id as u64) << 16);
 
                 Ok(ImportResult {
                     status: ImportStatus::Success,
@@ -227,7 +226,7 @@ fn import_l2_topics(
         let mut created_ids = Vec::new();
         let mut updated_ids = Vec::new();
         let mut skipped_count = 0;
-        let mut errors = Vec::new();
+        let errors = Vec::new();
 
         // Find L3 domain if specified
         let l3_hash = if let Some(ref title) = l3_title {
@@ -241,7 +240,7 @@ fn import_l2_topics(
             None
         };
 
-        for (index, item) in items.iter().enumerate() {
+        for item in items.iter() {
             let id_hash = hash_id(&item.title);
 
             match btree.search(id_hash) {
@@ -330,7 +329,7 @@ fn import_l2_topics(
                     let (terms, doc_len) = calculate_l2_sparse_index_data(&topic, mmap, btree);
                     sparse_index.add_document(id_hash, terms, doc_len);
 
-                    btree.insert(id_hash, ((page_id as u64) << 16));
+                    btree.insert(id_hash, (page_id as u64) << 16);
 
                     created_ids.push(format!("{:016x}", id_hash));
                 }
@@ -338,11 +337,7 @@ fn import_l2_topics(
         }
 
         let status = if errors.is_empty() {
-            if created_ids.is_empty() && updated_ids.is_empty() {
-                ImportStatus::Success
-            } else {
-                ImportStatus::Success
-            }
+            ImportStatus::Success
         } else {
             ImportStatus::PartialSuccess
         };
@@ -380,9 +375,9 @@ fn import_l3_knowledge(
         let mut created_ids = Vec::new();
         let mut updated_ids = Vec::new();
         let mut skipped_count = 0;
-        let mut errors = Vec::new();
+        let errors = Vec::new();
 
-        for (index, item) in items.iter().enumerate() {
+        for item in items.iter() {
             let id_hash = hash_id(&item.title);
 
             match btree.search(id_hash) {
@@ -478,7 +473,7 @@ fn import_l3_knowledge(
                     let (terms, doc_len) = calculate_l3_sparse_index_data(&knowledge);
                     sparse_index.add_document(id_hash, terms, doc_len);
 
-                    btree.insert(id_hash, ((page_id as u64) << 16));
+                    btree.insert(id_hash, (page_id as u64) << 16);
 
                     created_ids.push(format!("{:016x}", id_hash));
                 }

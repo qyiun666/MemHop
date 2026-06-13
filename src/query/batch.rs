@@ -100,7 +100,7 @@ pub fn split_long_text(text: &str, max_len: usize) -> Vec<String> {
     let mut current_chunk = String::new();
 
     // Split by sentences or paragraphs
-    for sentence in text.split(|c| c == '。' || c == '.' || c == '\n') {
+    for sentence in text.split(['。', '.', '\n']) {
         if current_chunk.len() + sentence.len() > max_len && !current_chunk.is_empty() {
             chunks.push(current_chunk.clone());
             current_chunk.clear();
@@ -341,7 +341,7 @@ pub fn dedup_and_write_l1(
         }
 
         // Update B-tree index
-        let page_ref = ((page_id as u64) << 16) | 0u64;
+        let page_ref = (page_id as u64) << 16;
         btree.insert(id_hash, page_ref);
 
         // Update BM25 sparse index
@@ -375,7 +375,7 @@ pub fn update_topics(
         if let Some(ref label) = item.topic_label {
             topic_groups
                 .entry(label.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(idx);
         }
     }

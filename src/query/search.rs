@@ -9,7 +9,6 @@ use crate::query::types::*;
 use crate::slot::archive::ArchiveSlot;
 use crate::slot::engram::EngramSlot;
 use crate::slot::knowledge::KnowledgeSlot;
-use crate::slot::profile::ProfileSlot;
 use crate::slot::topic::TopicSlot;
 use crate::util::hash_id;
 use crate::MemHopError;
@@ -419,7 +418,7 @@ fn create_new_l2_topic(
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     dialogue: &str,
-    vector_dim: usize,
+    _vector_dim: usize,
 ) -> Result<TopicSlot, MemHopError> {
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -493,7 +492,7 @@ fn create_new_l2_topic(
     }
 
     // Update B-tree index
-    let page_ref = ((page_id as u64) << 16) | 0;
+    let page_ref = (page_id as u64) << 16;
     btree.insert(id_hash, page_ref);
 
     // Update sparse index (tokenize title and add to index)
@@ -520,7 +519,7 @@ fn enhance_query_with_llm(llm_config: &crate::query::types::LlmConfig, dialogue:
     use crate::dream::deepseek_llm::DeepSeekLlmProvider;
     
     // Create LLM provider
-    let provider = DeepSeekLlmProvider::new_with_config(
+    let _provider = DeepSeekLlmProvider::new_with_config(
         llm_config.api_key.clone(),
         llm_config.api_url.clone(),
         llm_config.model.clone(),
