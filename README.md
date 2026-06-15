@@ -7,7 +7,7 @@ MemHop is a specialized memory database designed for AI Agents, implementing a s
 ## Features
 
 - **Zero-copy mmap retrieval**: Memory-mapped file access for high-performance reads
-- **Hybrid search**: Combines BM25 text search with vector similarity (cosine)
+- **Hybrid search**: Triple retrieval (BM25 + vector cosine + n-gram Jaccard)
 - **Hypergraph associative memory**: Multi-hop graph diffusion for related memory retrieval
 - **Cognitive layers**: L0-L5 architecture mirroring human memory systems
 - **Automatic consolidation**: Dream pipeline for memory pruning and archival
@@ -17,7 +17,7 @@ MemHop is a specialized memory database designed for AI Agents, implementing a s
 ## Quick Start
 
 ```rust
-use memhop::{MemHop, MemHopConfig};
+use memhop::{MemHop, MemHopConfig, SearchQuery, UpdateRequest, LlmConfig};
 use std::path::PathBuf;
 
 // Open or create database
@@ -27,13 +27,19 @@ let mut db = MemHop::open(config)?;
 // Search memory
 let query = SearchQuery {
     dialogue: "我想学习Rust编程".to_string(),
-    ..Default::default()
+    context_id: None,
+    l3_id: None,
+    context_limit: 10,
+    llm_enhance: None,
+    auto_create: 0,
+    min_score: 0.0,
+    context_history: None,
 };
 let results = db.search_memory(query)?;
 
-// Update memory
+// Update memory (topic must be activated first)
 let request = UpdateRequest {
-    l2_id: Some("topic_001".to_string()),
+    topic_id: results.contexts[0].id.clone(),
     dialogue_text: "用户学习Rust所有权系统".to_string(),
     summary: Some("Rust所有权学习记录".to_string()),
     action_chain: vec![],
@@ -47,7 +53,7 @@ let llm = LlmConfig {
     model: "deepseek-chat".to_string(),
     api_format: 1,
 };
-let report = db.dream(llm, DreamConfig::default())?;
+let report = db.dream(llm)?;
 
 db.close()?;
 ```
@@ -58,7 +64,7 @@ db.close()?;
 
 - **L0 (Profile)**: Agent identity and preferences
 - **L1 (Episodic)**: Short-term episodic memories
-- **L2 (Semantic)**: Compressed topic structures
+- **L2 (Semantic)**: Compressed topic structures (3-level nesting)
 - **L3 (Procedural)**: Skill and pattern memories
 - **L4 (Archive)**: Long-term archival storage
 - **L5 (Crystal)**: Crystallized programmatic knowledge
@@ -68,6 +74,7 @@ db.close()?;
 - 4KB page-aligned binary format
 - A/B dual header for crash recovery
 - Journal transaction log for atomicity
+- **Hybrid search**: Triple retrieval (BM25 + Vector + n-gram)
 - B-tree indexing for O(log n) lookups
 - SIMD-accelerated vector operations (AVX2)
 
@@ -80,7 +87,7 @@ db.close()?;
 | `MemHop::open(config)` | Open or create database |
 | `search_memory(query)` | Search memory with L2-centric retrieval |
 | `update_memory(request)` | Create/update multi-layer memory |
-| `dream(llm, config)` | Run Dream consolidation pipeline |
+| `dream(llm)` | Run Dream consolidation pipeline |
 | `batch_store(batch)` | Batch store multiple documents |
 | `close()` | Close database and sync to disk |
 
@@ -88,26 +95,28 @@ db.close()?;
 
 | Method | Description |
 |--------|-------------|
-| `get_l0_profile()` | Get Agent profile |
-| `get_l1_engram(id)` | Get single L1 engram by ID |
-| `list_l1_engrams(query)` | List L1 engrams with pagination |
-| `get_l2_topic(id)` | Get L2 topic detail |
-| `list_l2_topics(query)` | List L2 topics |
-| `get_l3_domain(id)` | Get L3 knowledge domain |
-| `list_l3_domains(query)` | List L3 domains |
-| `list_l4_by_topic(topic_id, query)` | List L4 archives by topic |
-| `list_l5_skills(query)` | List L5 skills |
+| `get_profile()` | Get Agent profile |
+| `get_engram(id)` | Get single L1 engram by ID |
+| `list_engrams(query)` | List L1 engrams with pagination |
+| `get_topic(id)` | Get L2 topic detail |
+| `list_topics(query)` | List L2 topics |
+| `get_knowledge(id)` | Get L3 knowledge detail |
+| `list_knowledge(query)` | List L3 knowledge |
+| `list_archives_by_topic(topic_id, query)` | List L4 archives by topic |
+| `list_archives_by_nodes(node_ids, query)` | List L4 archives by node IDs |
+| `list_all_archives(query)` | List all L4 archives |
+| `list_crystals(query)` | List L5 crystallized skills |
 
 ### Update Interfaces
 
 | Method | Description |
 |--------|-------------|
-| `update_l0_profile(request)` | Update Agent profile |
-| `update_l2_title(id, new_title)` | Update L2 topic title |
-| `update_l3_title(id, new_title)` | Update L3 domain title |
-| `update_l5_title(id, new_title)` | Update L5 skill title |
-| `merge_l2_topics(primary_id, secondary_ids)` | Merge multiple L2 topics |
-| `import_memory(request)` | Import memory to L0/L2/L3 |
+| `update_profile(request)` | Update Agent profile |
+| `update_topic_title(id, new_title)` | Update L2 topic title |
+| `update_knowledge_title(id, new_title)` | Update L3 knowledge title |
+| `update_crystal_title(id, new_title)` | Update L5 crystal title |
+| `merge_topics(primary_id, secondary_ids)` | Merge multiple L2 topics |
+| `import_memory(request)` | Import memory to Profile/Topic/Knowledge |
 
 ## Performance
 
@@ -139,7 +148,7 @@ cargo bench --features bench
 
 ## API Documentation
 
-- **[API_NEW.md](API_NEW.md)** - New API design document (recommended)
+- **[API_NEW.md](API_NEW.md)** - 完整API文档（推荐）
 - **[API_NEI.md](API_NEI.md)** - Internal implementation details
 - **[docs/](docs/)** - Additional documentation
 
