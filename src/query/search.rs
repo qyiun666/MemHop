@@ -159,7 +159,7 @@ pub fn search_memory(
     } else {
         // Step 1: LLM enhancement (optional)
         let search_text = if let Some(llm_config) = &query.llm_enhance {
-            match enhance_query_with_llm(llm_config, &query.dialogue) {
+            match enhance_query_with_llm(llm_config, &query.dialogue, query.context_history.as_deref()) {
                 Ok(enhanced) => {
                     eprintln!(
                         "[LLM Enhancement] {} → {}",
@@ -748,36 +748,101 @@ fn create_new_l2_context(
 // LLM query enhancement
 // ============================================================================
 
-/// Enhance query using LLM for keyword extraction and query expansion
+/// Enhanced query using LLM with content-aware classification
+///
+/// Handles different input types intelligently:
+/// - Code snippets: extract language and functional description
+/// - Long text (>200 chars): compress before keyword extraction
+/// - Error messages: extract error codes and stack context
+/// - Knowledge statements: extract core concepts
+/// - Follow-up queries: leverage context_history for anaphora resolution
 fn enhance_query_with_llm(
     llm_config: &LlmConfig,
     dialogue: &str,
+    context_history: Option<&str>,
 ) -> Result<String, MemHopError> {
+    let char_count = dialogue.chars().count();
+
+    // Build context block if history is available
+    let history_block = if let Some(history) = context_history {
+        let truncated = safe_char_slice(history, 500);
+        format!("\n之前的对话历史（最近{}字）：\n{}\n", truncated.chars().count(), truncated)
+    } else {
+        String::new()
+    };
+
+    // Detect input characteristics to guide prompt
+    let has_code = dialogue.contains("```")
+        || dialogue.contains("fn ")
+        || dialogue.contains("impl ")
+        || dialogue.contains("pub ")
+        || dialogue.contains('{')
+        || dialogue.contains(';');
+    let has_path = dialogue.contains('/') && (dialogue.contains(".rs") || dialogue.contains(".py")
+        || dialogue.contains(".go") || dialogue.contains(".ts") || dialogue.contains(".js"));
+    let has_error = dialogue.contains("error[") || dialogue.contains("Error[")
+        || dialogue.contains("panic") || dialogue.contains("failed");
+    let is_verbose = char_count > 300;
+
+    let length_hint = if is_verbose { format!("（输入较长，约{}字）", char_count) } else { String::new() };
+    let code_hint = if has_code { "\n检测到代码片段，请识别代码语言和功能后用自然语言描述其作用，不要将代码符号直接作为关键词。" } else { "" };
+    let path_hint = if has_path { "\n检测到文件路径，请提取路径中的技术栈关键词和查询意图。" } else { "" };
+    let error_hint = if has_error { "\n检测到错误信息，请提取错误码、错误类型和相关技术栈。" } else { "" };
+    let history_hint = if context_history.is_some() {
+        "\n检测到历史对话，如当前问题是追问/指代（如'它'、'这个'），请结合历史还原完整语义。"
+    } else {
+        ""
+    };
+
     let prompt = format!(
-        "你是一个查询优化助手。请分析以下用户对话，提取核心关键词并扩展相关术语，\n\
-         以便更好地检索相关记忆。\n\n\
+        "你是一个AI记忆检索系统的查询优化器。{}请分析用户输入，生成最优检索字符串。\n\
          要求：\n\
-         1. 提取3-5个核心关键词\n\
-         2. 为每个关键词提供1-2个同义词或相关词\n\
-         3. 返回格式：关键词1 同义词1 同义词2 | 关键词2 同义词1 | ...\n\
-         4. 只返回优化后的查询字符串，不要其他解释\n\n\
-         用户对话：{}",
+         1. 提取2-5个最能代表查询意图的核心术语（中文/英文均可）\n\
+         2. 核心术语之间用空格分隔，不要用标点或分隔符\n\
+         3. {}{}{}{}{}\n\
+         4. 只返回检索字符串，不要解释、不要前缀、不要引号\n\
+         用户输入：{}",
+        length_hint,
+        if is_verbose {
+            "如果输入是长文本（>300字），先在心里做30字压缩摘要，再从摘要中提取关键词。"
+        } else {
+            "如果输入是知识性陈述，提取核心概念和领域术语。"
+        },
+        code_hint,
+        path_hint,
+        error_hint,
+        history_hint,
         dialogue
     );
 
+    let messages = if context_history.is_some() {
+        serde_json::json!([
+            {"role": "system", "content": "You are a memory retrieval query optimizer. \
+                 You classify input types (code/error/article/question/path/knowledge/followup) \
+                 and produce clean search terms for each type."},
+            {"role": "user", "content": format!("{}{}", history_block, prompt)}
+        ])
+    } else {
+        serde_json::json!([
+            {"role": "system", "content": "You are a memory retrieval query optimizer. \
+             You classify input types and produce clean search terms for each type."},
+            {"role": "user", "content": prompt}
+        ])
+    };
+
+    // Longer timeout for complex inputs
+    let timeout_secs = if is_verbose || has_code || has_error { 30u64 } else { 15u64 };
+
     let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
         .map_err(|e| MemHopError::Serialization(format!("HTTP client failed: {}", e)))?;
 
     let body = serde_json::json!({
         "model": llm_config.model,
-        "messages": [
-            {"role": "system", "content": "You are a query optimization assistant."},
-            {"role": "user", "content": prompt}
-        ],
-        "max_tokens": 128,
-        "temperature": 0.3,
+        "messages": messages,
+        "max_tokens": 256,
+        "temperature": 0.2,
     });
 
     let response = client
@@ -801,15 +866,38 @@ fn enhance_query_with_llm(
         .map(|s| s.trim().to_string())
         .ok_or_else(|| MemHopError::Serialization("No content in LLM response".to_string()))?;
 
-    let parsed = enhanced
-        .split('|')
-        .flat_map(|part| part.split_whitespace())
+    // Clean up: remove quotes, prefixes, unnecessary punctuation
+    let cleaned = enhanced
+        .trim_start_matches('"')
+        .trim_end_matches('"')
+        .trim_start_matches("QUERY:")
+        .trim_start_matches("query:")
+        .split_whitespace()
+        .filter(|s| s.len() >= 2 || s.chars().all(|c| c.is_alphanumeric()))
         .collect::<Vec<_>>()
         .join(" ");
 
-    Ok(if parsed.is_empty() {
-        dialogue.to_string()
+    Ok(if cleaned.is_empty() || cleaned.len() < 5 {
+        // Fallback: use simple keyword extraction from original text
+        extract_fallback_keywords(dialogue)
     } else {
-        parsed
+        cleaned
     })
+}
+
+/// Simple fallback keyword extraction when LLM enhancement fails
+fn extract_fallback_keywords(text: &str) -> String {
+    // Remove common stop words, code artifacts, and join meaningful terms
+    let stop_words = ["的", "了", "是", "在", "有", "和", "就", "不", "人", "都", "一",
+        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
+        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into"];
+
+    text.split_whitespace()
+        .filter(|w| w.len() >= 3 && !stop_words.contains(&w.to_lowercase().as_str()))
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-'))
+        .filter(|w| !w.is_empty())
+        .take(20)
+        .collect::<Vec<_>>()
+        .join(" ")
 }

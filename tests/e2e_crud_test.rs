@@ -120,6 +120,7 @@ fn test_search_auto_create_l2(ctx: &mut TestContext) {
         llm_enhance: None,
         auto_create: 1,
         min_score: 0.0,
+        context_history: None,
     };
 
     let result = ctx.db.search_memory(query).unwrap();
@@ -167,6 +168,7 @@ fn test_search_memory_with_vector(ctx: &mut TestContext) {
         llm_enhance: None,
         auto_create: 0,
         min_score: 0.0,
+        context_history: None,
     };
 
     let results = ctx.db.search_memory(query).unwrap();
@@ -250,6 +252,7 @@ fn test_search_all_param_combinations(ctx: &mut TestContext) {
             llm_enhance: None,
             auto_create: 0,
             min_score: 0.0,
+            context_history: None,
         };
         let _ = ctx.db.search_memory(query);
         println!("  ✓ Search with dialogue: {}", name);
@@ -265,6 +268,7 @@ fn test_search_all_param_combinations(ctx: &mut TestContext) {
             llm_enhance: None,
             auto_create: 0,
             min_score: 0.0,
+        context_history: None,
         };
         let _ = ctx.db.search_memory(query);
         println!("  ✓ Search with context_id filter");
@@ -279,6 +283,7 @@ fn test_search_all_param_combinations(ctx: &mut TestContext) {
         llm_enhance: None,
         auto_create: 0,
         min_score: 0.0,
+        context_history: None,
     };
     let _ = ctx.db.search_memory(query);
     println!("  ✓ Search with limit=0");
@@ -292,6 +297,7 @@ fn test_search_all_param_combinations(ctx: &mut TestContext) {
         llm_enhance: None,
         auto_create: 1,
         min_score: 0.0,
+        context_history: None,
     };
     let _ = ctx.db.search_memory(query);
     println!("  ✓ Search with auto_create=1");
@@ -311,6 +317,7 @@ fn test_update_all_param_combinations(ctx: &mut TestContext) {
             llm_enhance: None,
             auto_create: 1,
             min_score: 0.0,
+        context_history: None,
         };
         let result = ctx.db.search_memory(query).unwrap();
         result.contexts[0].id.clone()
@@ -420,6 +427,7 @@ fn test_edge_cases(ctx: &mut TestContext) {
         llm_enhance: None,
         auto_create: 1,
         min_score: 0.0,
+        context_history: None,
     };
     let _ = ctx.db.search_memory(query);
     println!("  ✓ Search with Unicode");

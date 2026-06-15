@@ -3,9 +3,10 @@
 //! Implements list and get query interfaces with pagination support.
 
 use crate::file::header::FileHeader;
-use crate::file::page::read_page_header;
 use crate::index::btree::BTreeIndex;
-use crate::query::common::{self, format_hash, matches_keyword, pagination_params, has_more, sort_by_score};
+use crate::query::common::{
+    self, format_hash, has_more, matches_keyword, pagination_params, sort_by_score,
+};
 use crate::query::types::*;
 use crate::slot::action_chain::{ActionChainSlot, ChainStatus};
 use crate::slot::archive::ArchiveSlot;
@@ -147,25 +148,32 @@ fn build_engram_result_from_node(
     node: &ContextNode,
 ) -> Result<EngramResult, MemHopError> {
     // Follow context_id to L2 ContextSlot for text/summary
-    let (text, summary) = if let Some(page_ref) = btree.search(node.context_id) {
+    let (text, summary, keywords) = if let Some(page_ref) = btree.search(node.context_id) {
         let data = &mmap[..];
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
             match ContextSlot::deserialize_slot(slot_data) {
-                Ok(ctx) => (ctx.title, ctx.summary),
-                Err(_) => (String::new(), None),
+                Ok(ctx) => {
+                    let kw: Vec<String> = ctx
+                        .title
+                        .split_whitespace()
+                        .map(|s| s.to_lowercase())
+                        .collect();
+                    (ctx.title, ctx.summary, kw)
+                }
+                Err(_) => (String::new(), None, vec![]),
             }
         } else {
-            (String::new(), None)
+            (String::new(), None, vec![])
         }
     } else {
-        (String::new(), None)
+        (String::new(), None, vec![])
     };
 
     Ok(EngramResult {
         id: format_hash(node.id_hash),
         text,
         summary,
-        keywords: vec![],
+        keywords,
         created_at: node.created_at,
         updated_at: node.updated_at,
         memory_state: "Active".to_string(),
@@ -317,7 +325,10 @@ pub fn list_archives_by_nodes(
     node_ids: &[String],
     query: ArchivePageQuery,
 ) -> Result<ArchiveListResult, MemHopError> {
-    let node_hashes: Vec<u64> = node_ids.iter().map(|id| common::parse_id_to_hash(id)).collect();
+    let node_hashes: Vec<u64> = node_ids
+        .iter()
+        .map(|id| common::parse_id_to_hash(id))
+        .collect();
     list_archives_with_filter(mmap, header, btree, query, |archive| {
         node_hashes.contains(&archive.context_id)
     })
@@ -485,7 +496,11 @@ pub fn list_crystals(
             },
             trigger_count: c.trigger_count,
             success_rate: c.success_rate,
-            last_triggered: if c.last_triggered > 0 { Some(c.last_triggered) } else { None },
+            last_triggered: if c.last_triggered > 0 {
+                Some(c.last_triggered)
+            } else {
+                None
+            },
             created_at: c.created_at,
         })
         .collect();
@@ -516,11 +531,17 @@ pub fn get_knowledge(
         Some(page_ref) => {
             let page_id = crate::query::slot_io::decode_page_id(page_ref);
 
-            // Verify page type is HypergraphSlot
-            let ro_mmap = unsafe { &*(mmap.as_ptr() as *const memmap2::Mmap) };
-            if let Ok(page_hdr) = read_page_header(ro_mmap, page_id) {
-                if page_hdr.page_type != PageType::HypergraphSlot as u16 {
-                    return Ok(None); // Not a knowledge page
+            // Verify page type is HypergraphSlot (safe read from &[u8])
+            let hdr_offset = (page_id as usize) * crate::util::PAGE_SIZE;
+            if hdr_offset + 32 <= data.len() {
+                let mut hdr_bytes = [0u8; 32];
+                hdr_bytes.copy_from_slice(&data[hdr_offset..hdr_offset + 32]);
+                if let Ok(page_hdr) = crate::file::page::PageHeader::from_bytes(&hdr_bytes) {
+                    if page_hdr.page_type != PageType::HypergraphSlot as u16 {
+                        return Ok(None);
+                    }
+                } else {
+                    return Err(MemHopError::PageNotFound(page_id));
                 }
             } else {
                 return Err(MemHopError::PageNotFound(page_id));
@@ -528,7 +549,7 @@ pub fn get_knowledge(
 
             if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
                 let slot = HypergraphSlot::deserialize_slot(slot_data)?;
-                Ok(Some(convert_hypergraph_to_detail(&slot)))
+                Ok(Some(convert_hypergraph_to_detail(data, btree, &slot)))
             } else {
                 Err(MemHopError::PageNotFound(page_id))
             }
@@ -555,10 +576,16 @@ pub fn list_knowledge(
             continue;
         }
 
-        // Check page type — only process HypergraphSlot pages
-        let ro_mmap = unsafe { &*(mmap.as_ptr() as *const memmap2::Mmap) };
-        if let Ok(page_hdr) = read_page_header(ro_mmap, page_id) {
-            if page_hdr.page_type != PageType::HypergraphSlot as u16 {
+        // Check page type — only process HypergraphSlot pages (safe read from &[u8])
+        let hdr_offset = (page_id as usize) * crate::util::PAGE_SIZE;
+        if hdr_offset + 32 <= data.len() {
+            let mut hdr_bytes = [0u8; 32];
+            hdr_bytes.copy_from_slice(&data[hdr_offset..hdr_offset + 32]);
+            if let Ok(page_hdr) = crate::file::page::PageHeader::from_bytes(&hdr_bytes) {
+                if page_hdr.page_type != PageType::HypergraphSlot as u16 {
+                    continue;
+                }
+            } else {
                 continue;
             }
         } else {
@@ -617,21 +644,51 @@ fn convert_hypergraph_to_summary(slot: &HypergraphSlot) -> KnowledgeSummary {
     }
 }
 
-fn convert_hypergraph_to_detail(slot: &HypergraphSlot) -> KnowledgeDetail {
+fn convert_hypergraph_to_detail(
+    data: &[u8],
+    btree: &BTreeIndex,
+    slot: &HypergraphSlot,
+) -> KnowledgeDetail {
     let source_ref = match &slot.source {
         crate::slot::hypergraph::HypergraphSource::Path(p) => Some(p.clone()),
         crate::slot::hypergraph::HypergraphSource::Url(u) => Some(u.clone()),
         _ => None,
     };
 
+    // Scan B-tree for HypergraphNode entries matching this graph
+    let mut text = String::new();
+    let mut summary: Option<String> = None;
+    let mut keywords: Vec<String> = Vec::new();
+
+    for (_, page_ref) in btree.iter() {
+        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
+            if let Ok(node) = crate::slot::hypergraph::HypergraphNode::deserialize(slot_data) {
+                if node.graph_id == slot.id_hash {
+                    if !node.content.is_empty() {
+                        text.push_str(&node.content);
+                        text.push('\n');
+                    }
+                    if summary.is_none() && !node.title.is_empty() {
+                        summary = Some(node.title.clone());
+                    }
+                    keywords.extend(node.keywords);
+                }
+            }
+        }
+    }
+
+    // Deduplicate keywords
+    keywords.sort();
+    keywords.dedup();
+
     KnowledgeDetail {
         id: format_hash(slot.id_hash),
         title: slot.name.clone(),
         domain: format!("{:?}", slot.source.kind()),
         knowledge_type: "Generic".to_string(),
-        text: String::new(),
-        summary: None,
-        keywords: vec![],
+        text: text.trim_end().to_string(),
+        summary,
+        keywords,
         edge_ptrs: vec![],
         archive_refs: vec![],
         source_ref,

@@ -54,6 +54,9 @@ pub struct SearchQuery {
     pub auto_create: u8,
     /// Minimum relevance score threshold for search pruning (0.0-1.0, default: 0.0)
     pub min_score: f32,
+    /// Previous conversation context (optional). Used by LLM enhancement
+    /// to resolve anaphora and fill in missing context for follow-up queries.
+    pub context_history: Option<String>,
 }
 
 /// Search result containing multi-layer memory content

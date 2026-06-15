@@ -77,23 +77,6 @@ pub fn matches_keyword(text: &str, keyword: &str) -> bool {
     text.to_lowercase().contains(&keyword_lower)
 }
 
-/// Filter and paginate items
-#[inline]
-pub fn filter_and_paginate<T, F>(
-    items: Vec<T>,
-    filter: F,
-    skip: usize,
-    take: usize,
-) -> (Vec<T>, usize)
-where
-    F: Fn(&T) -> bool,
-{
-    let filtered: Vec<T> = items.into_iter().filter(|item| filter(item)).collect();
-    let total = filtered.len();
-    let paged: Vec<T> = filtered.into_iter().skip(skip).take(take).collect();
-    (paged, total)
-}
-
 /// Sort items by score (descending)
 #[inline]
 pub fn sort_by_score<T, F>(items: &mut [T], score_fn: F)

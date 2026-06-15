@@ -12,9 +12,9 @@ use crate::slot::context::{ActivationState, ContextSlot};
 use crate::slot::profile::ProfileSlot;
 use crate::util::hash_id;
 use crate::MemHopError;
+use crate::query::common;
 use memmap2::MmapMut;
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Helper function to calculate search terms and doc_len for L2 context
 fn calculate_l2_sparse_index_data(
@@ -84,10 +84,7 @@ fn import_l0_profile(
     data: ImportData,
     mode: ImportMode,
 ) -> Result<ImportResult, MemHopError> {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
+    let now_ms = common::now_ms();
 
     if let ImportData::Profile { name, role, personality, worldview, preferences } = data {
         let profile_id_hash = hash_id("profile");
@@ -200,16 +197,13 @@ fn import_l2_topics(
     mode: ImportMode,
     knowledge_title: Option<String>,
 ) -> Result<ImportResult, MemHopError> {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
+    let now_ms = common::now_ms();
 
     if let ImportData::Topics(items) = data {
         let mut created_ids = Vec::new();
         let mut updated_ids = Vec::new();
         let mut skipped_count = 0;
-        let errors = Vec::new();
+        let mut errors: Vec<ImportError> = Vec::new();
 
         // Find L3 domain if specified
         let l3_hash = if let Some(ref title) = knowledge_title {
@@ -223,106 +217,114 @@ fn import_l2_topics(
             None
         };
 
-        for item in items.iter() {
-            let id_hash = hash_id(&item.title);
+        for (item_idx, item) in items.iter().enumerate() {
+            let result = (|| -> Result<(), MemHopError> {
+                let id_hash = hash_id(&item.title);
 
-            match btree.search(id_hash) {
-                Some(page_ref) => {
-                    // L2 context exists
-                    match mode {
-                        ImportMode::Merge | ImportMode::Overwrite => {
-                            let page_id = (page_ref >> 16) as u32;
-                            let offset = (page_id as usize) * PAGE_SIZE + 32;
+                match btree.search(id_hash) {
+                    Some(page_ref) => {
+                        // L2 context exists
+                        match mode {
+                            ImportMode::Merge | ImportMode::Overwrite => {
+                                let page_id = (page_ref >> 16) as u32;
+                                let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-                            let mut ctx = ContextSlot::deserialize(&mmap[offset..])
-                                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+                                let mut ctx = ContextSlot::deserialize(&mmap[offset..])
+                                    .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-                            // Update fields
-                            ctx.title = item.title.clone();
-                            ctx.summary = item.summary.clone();
+                                // Update fields
+                                ctx.title = item.title.clone();
+                                ctx.summary = item.summary.clone();
 
-                            // Update L3 reference if provided
-                            if let Some(l3_h) = l3_hash {
-                                if !ctx.l3_refs.contains(&l3_h) {
-                                    ctx.l3_refs.push(l3_h);
+                                // Update L3 reference if provided
+                                if let Some(l3_h) = l3_hash {
+                                    if !ctx.l3_refs.contains(&l3_h) {
+                                        ctx.l3_refs.push(l3_h);
+                                    }
                                 }
+
+                                ctx.updated_at = now_ms;
+                                ctx.version += 1;
+
+                                // Update sparse index
+                                sparse_index.remove_document(ctx.id_hash);
+                                let (terms, doc_len) = calculate_l2_sparse_index_data(&ctx, mmap, btree);
+                                sparse_index.add_document(ctx.id_hash, terms, doc_len);
+
+                                let data_bytes = ctx.serialize()
+                                    .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+
+                                if offset + data_bytes.len() > mmap.len() {
+                                    return Err(MemHopError::Serialization(format!(
+                                        "ContextSlot data too large for page: {} > {}",
+                                        data_bytes.len(), mmap.len() - offset
+                                    )));
+                                }
+                                mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
+
+                                updated_ids.push(format!("{:016x}", id_hash));
                             }
-
-                            ctx.updated_at = now_ms;
-                            ctx.version += 1;
-
-                            // Update sparse index
-                            sparse_index.remove_document(ctx.id_hash);
-                            let (terms, doc_len) = calculate_l2_sparse_index_data(&ctx, mmap, btree);
-                            sparse_index.add_document(ctx.id_hash, terms, doc_len);
-
-                            let data_bytes = ctx.serialize()
-                                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-                            if offset + data_bytes.len() > mmap.len() {
-                                return Err(MemHopError::Serialization(format!(
-                                    "ContextSlot data too large for page: {} > {}",
-                                    data_bytes.len(), mmap.len() - offset
-                                )));
+                            ImportMode::Skip => {
+                                skipped_count += 1;
                             }
-                            mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
+                        }
+                    }
+                    None => {
+                        // Create new L2 context
+                        let page_id = allocate_from_free_list(mmap, header)?;
+                        let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-                            updated_ids.push(format!("{:016x}", id_hash));
+                        let mut l3_refs = Vec::new();
+                        if let Some(l3_h) = l3_hash {
+                            l3_refs.push(l3_h);
                         }
-                        ImportMode::Skip => {
-                            skipped_count += 1;
+
+                        let ctx = ContextSlot {
+                            id_hash,
+                            title: item.title.clone(),
+                            summary: item.summary.clone(),
+                            depth: 1,
+                            archive_refs: vec![],
+                            l3_refs,
+                            turn_count: 0,
+                            parent_id: None,
+                            created_at: now_ms,
+                            updated_at: now_ms,
+                            version: 1,
+                            importance: 0.5,
+                            activation_score: 0.0,
+                            is_active: false,
+                            activation_state: ActivationState::Dormant,
+                            centroid_page_ref: 0,
+                            dialogue_range: (now_ms, now_ms),
+                        };
+
+                        let data_bytes = ctx.serialize()
+                            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+
+                        if offset + data_bytes.len() > mmap.len() {
+                            return Err(MemHopError::Serialization(format!(
+                                "ContextSlot data too large for page: {} > {}",
+                                data_bytes.len(), mmap.len() - offset
+                            )));
                         }
+                        mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
+
+                        // Add to sparse index
+                        let (terms, doc_len) = calculate_l2_sparse_index_data(&ctx, mmap, btree);
+                        sparse_index.add_document(id_hash, terms, doc_len);
+
+                        btree.insert(id_hash, (page_id as u64) << 16);
+
+                        created_ids.push(format!("{:016x}", id_hash));
                     }
                 }
-                None => {
-                    // Create new L2 context
-                    let page_id = allocate_from_free_list(mmap, header)?;
-                    let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-                    let mut l3_refs = Vec::new();
-                    if let Some(l3_h) = l3_hash {
-                        l3_refs.push(l3_h);
-                    }
+                Ok(())
+            })();
 
-                    let ctx = ContextSlot {
-                        id_hash,
-                        title: item.title.clone(),
-                        summary: item.summary.clone(),
-                        depth: 1,
-                        archive_refs: vec![],
-                        l3_refs,
-                        turn_count: 0,
-                        parent_id: None,
-                        created_at: now_ms,
-                        updated_at: now_ms,
-                        version: 1,
-                        importance: 0.5,
-                        activation_score: 0.0,
-                        is_active: false,
-                        activation_state: ActivationState::Dormant,
-                        centroid_page_ref: 0,
-                        dialogue_range: (now_ms, now_ms),
-                    };
-
-                    let data_bytes = ctx.serialize()
-                        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-                    if offset + data_bytes.len() > mmap.len() {
-                        return Err(MemHopError::Serialization(format!(
-                            "ContextSlot data too large for page: {} > {}",
-                            data_bytes.len(), mmap.len() - offset
-                        )));
-                    }
-                    mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
-
-                    // Add to sparse index
-                    let (terms, doc_len) = calculate_l2_sparse_index_data(&ctx, mmap, btree);
-                    sparse_index.add_document(id_hash, terms, doc_len);
-
-                    btree.insert(id_hash, (page_id as u64) << 16);
-
-                    created_ids.push(format!("{:016x}", id_hash));
-                }
+            if let Err(e) = result {
+                errors.push(ImportError { index: item_idx, message: e.to_string() });
             }
         }
 

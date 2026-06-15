@@ -25,6 +25,7 @@ fn search_query_no_create(dialogue: &str) -> SearchQuery {
         llm_enhance: None,
         auto_create: 0,
         min_score: 0.0,
+        context_history: None,
     }
 }
 
@@ -38,6 +39,7 @@ fn search_query_with_create(dialogue: &str) -> SearchQuery {
         llm_enhance: None,
         auto_create: 1,
         min_score: 0.0,
+        context_history: None,
     }
 }
 
@@ -51,6 +53,7 @@ fn search_query_with_context_id(dialogue: &str, context_id: &str) -> SearchQuery
         llm_enhance: None,
         auto_create: 0,
         min_score: 0.0,
+        context_history: None,
     }
 }
 

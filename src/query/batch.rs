@@ -158,44 +158,16 @@ pub fn encode_items(
     Ok(encoded)
 }
 
-/// Archive documents to L4 (simplified implementation)
+/// Archive documents to L4 — compute doc IDs for batch reporting
 pub fn archive_documents(
     _mmap: &mut MmapMut,
     items: &[EncodedItem],
     _batch: &StoreBatch,
 ) -> Result<Vec<u64>, MemHopError> {
-    // Simplified: just return doc IDs without actual archival
-    // TODO: Implement full L4 archival with turn_index and session_index
-    let doc_ids = items.iter().map(|item| hash_id(&item.text)).collect();
-
+    // Return hash-based doc IDs for batch report tracking.
+    // Full L4 archival with page allocation is handled by update_memory().
+    let doc_ids: Vec<u64> = items.iter().map(|item| hash_id(&item.text)).collect();
     Ok(doc_ids)
-}
-
-/// Calculate n-gram Jaccard similarity between two texts
-#[allow(dead_code)]
-fn calculate_ngram_jaccard(text1: &str, text2: &str) -> f64 {
-    let ngrams1: std::collections::HashSet<String> = text1
-        .chars()
-        .collect::<Vec<_>>()
-        .windows(3)
-        .map(|w| w.iter().collect())
-        .collect();
-
-    let ngrams2: std::collections::HashSet<String> = text2
-        .chars()
-        .collect::<Vec<_>>()
-        .windows(3)
-        .map(|w| w.iter().collect())
-        .collect();
-
-    let intersection = ngrams1.intersection(&ngrams2).count();
-    let union = ngrams1.union(&ngrams2).count();
-
-    if union == 0 {
-        0.0
-    } else {
-        intersection as f64 / union as f64
-    }
 }
 
 /// Check for duplicate L1 node using cosine similarity
@@ -359,10 +331,7 @@ pub fn update_topics(
 
     for (idx, item) in items.iter().enumerate() {
         if let Some(ref label) = item.topic_label {
-            topic_groups
-                .entry(label.clone())
-                .or_default()
-                .push(idx);
+            topic_groups.entry(label.clone()).or_default().push(idx);
         }
     }
 
@@ -424,7 +393,8 @@ pub fn update_topics(
         let page_id = allocate_from_free_list(mmap, header)?;
         let context_offset = (page_id as usize) * PAGE_SIZE + 32;
         if context_offset + context_data.len() <= mmap.len() {
-            mmap[context_offset..context_offset + context_data.len()].copy_from_slice(&context_data);
+            mmap[context_offset..context_offset + context_data.len()]
+                .copy_from_slice(&context_data);
         }
 
         topics_updated += 1;
@@ -460,7 +430,12 @@ fn calculate_centroid_from_nodes(
                     let vec_page_id = (node.vector_page_ref >> 16) as u32;
                     let vec_slot_index = (node.vector_page_ref & 0xFFFF) as u16;
 
-                    if let Ok(vector) = crate::index::vector::read_vector(data, vec_page_id, vec_slot_index, vector_dim) {
+                    if let Ok(vector) = crate::index::vector::read_vector(
+                        data,
+                        vec_page_id,
+                        vec_slot_index,
+                        vector_dim,
+                    ) {
                         for (i, val) in vector.iter().enumerate() {
                             sum[i] += val.to_f32();
                         }
@@ -482,22 +457,80 @@ fn calculate_centroid_from_nodes(
     Ok(Some(centroid))
 }
 
-/// Write L3 domain nodes (simplified)
+/// Write L3 domain nodes with HypergraphSlot creation and btree registration
 pub fn write_l3_domains(
-    _mmap: &mut MmapMut,
-    _items: &[EncodedItem],
+    mmap: &mut MmapMut,
+    _header: &mut FileHeader,
+    items: &[EncodedItem],
     _l1_node_ids: &[u64],
+    btree: &mut BTreeIndex,
 ) -> Result<u32, MemHopError> {
-    // Simplified: skip L3 writing for now
-    // TODO: Implement full L3 domain node creation
-    Ok(0)
+    use std::collections::HashSet;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let mut seen = HashSet::new();
+    let mut domain_count = 0u32;
+
+    for item in items {
+        if let Some(ref domain_id) = item.domain_id {
+            if !seen.insert(domain_id.clone()) {
+                continue;
+            }
+
+            let id_hash = hash_id(domain_id);
+
+            let slot = crate::slot::hypergraph::HypergraphSlot {
+                id_hash,
+                name: domain_id.clone(),
+                source: crate::slot::hypergraph::HypergraphSource::Manual,
+                node_count: 0,
+                edge_count: 0,
+                created_at: now,
+                updated_at: now,
+                version: 1,
+            };
+
+            let slot_data = slot
+                .serialize()
+                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+
+            let page_id = allocate_from_free_list(mmap, _header)?;
+            let page_offset = (page_id as usize) * PAGE_SIZE;
+
+            // Write page header
+            let page_hdr = crate::file::page::PageHeader::new(
+                0,
+                crate::util::PageType::HypergraphSlot,
+                3,
+                0xFFFFFFFF,
+            );
+            let hdr_bytes = page_hdr.to_bytes();
+            mmap[page_offset..page_offset + 32].copy_from_slice(&hdr_bytes);
+
+            // Write slot data
+            let slot_offset = page_offset + 32;
+            if slot_offset + slot_data.len() <= mmap.len() {
+                mmap[slot_offset..slot_offset + slot_data.len()].copy_from_slice(&slot_data);
+            }
+
+            btree.insert(id_hash, (page_id as u64) << 16);
+            domain_count += 1;
+        }
+    }
+
+    Ok(domain_count)
 }
 
-/// Create batch hyperedges (Association and Evolution)
+/// Create batch hyperedges (Association and Evolution) with btree registration
 pub fn create_batch_hyperedges(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     l1_node_ids: &[u64],
+    btree: &mut BTreeIndex,
 ) -> Result<u32, MemHopError> {
     let mut edge_count = 0u32;
 
@@ -522,17 +555,26 @@ pub fn create_batch_hyperedges(
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
         let page_id = allocate_from_free_list(mmap, header)?;
-        let edge_offset = (page_id as usize) * 4096 + 32;
+        let edge_offset = (page_id as usize) * PAGE_SIZE + 32;
         if edge_offset + edge_data.len() <= mmap.len() {
             mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
         }
 
+        // Write page header for hyperedge
+        let page_hdr =
+            crate::file::page::PageHeader::new(0, crate::util::PageType::Hyperedge, 1, 0xFFFFFFFF);
+        let hdr_bytes = page_hdr.to_bytes();
+        let page_offset = (page_id as usize) * PAGE_SIZE;
+        mmap[page_offset..page_offset + 32].copy_from_slice(&hdr_bytes);
+
+        btree.insert(assoc_edge.id_hash, (page_id as u64) << 16);
         edge_count += 1;
 
         // Create Temporal hyperedges (chain relationships)
         for i in 1..l1_node_ids.len() {
+            let edge_id_hash = hash_id(&format!("evolution_{}_{}", i - 1, i));
             let evol_edge = HyperedgeSlot {
-                id_hash: hash_id(&format!("evolution_{}_{}", i - 1, i)),
+                id_hash: edge_id_hash,
                 kind: HyperedgeKind::Temporal,
                 node_ptrs: vec![l1_node_ids[i - 1], l1_node_ids[i]],
                 weight: 1.0,
@@ -550,11 +592,23 @@ pub fn create_batch_hyperedges(
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
             let page_id = allocate_from_free_list(mmap, header)?;
-            let edge_offset = (page_id as usize) * 4096 + 32;
+            let edge_offset = (page_id as usize) * PAGE_SIZE + 32;
             if edge_offset + edge_data.len() <= mmap.len() {
                 mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
             }
 
+            // Write page header for temporal hyperedge
+            let page_hdr = crate::file::page::PageHeader::new(
+                0,
+                crate::util::PageType::Hyperedge,
+                1,
+                0xFFFFFFFF,
+            );
+            let hdr_bytes = page_hdr.to_bytes();
+            let page_offset = (page_id as usize) * PAGE_SIZE;
+            mmap[page_offset..page_offset + 32].copy_from_slice(&hdr_bytes);
+
+            btree.insert(edge_id_hash, (page_id as u64) << 16);
             edge_count += 1;
         }
     }
@@ -603,15 +657,22 @@ pub fn batch_store(
     report.dedup_skipped = skipped;
 
     // Phase 4: L2 Topic Update
-    let topics_updated = update_topics(mmap, header, &encoded_items, &l1_node_ids, btree, vector_dim)?;
+    let topics_updated = update_topics(
+        mmap,
+        header,
+        &encoded_items,
+        &l1_node_ids,
+        btree,
+        vector_dim,
+    )?;
     report.l2_topics_updated = topics_updated;
 
     // Phase 5: L3 Domain Write
-    let l3_count = write_l3_domains(mmap, &encoded_items, &l1_node_ids)?;
+    let l3_count = write_l3_domains(mmap, header, &encoded_items, &l1_node_ids, btree)?;
     report.l3_nodes = l3_count;
 
     // Create hyperedges
-    let edge_count = create_batch_hyperedges(mmap, header, &l1_node_ids)?;
+    let edge_count = create_batch_hyperedges(mmap, header, &l1_node_ids, btree)?;
     report.edges_created = edge_count;
 
     Ok(report)
@@ -634,17 +695,5 @@ mod tests {
         let text = "A".repeat(600);
         let chunks = split_long_text(&text, 512);
         assert!(chunks.len() >= 2);
-    }
-
-    #[test]
-    fn test_calculate_ngram_jaccard_identical() {
-        let jaccard = calculate_ngram_jaccard("hello", "hello");
-        assert!((jaccard - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_calculate_ngram_jaccard_different() {
-        let jaccard = calculate_ngram_jaccard("abc", "xyz");
-        assert!(jaccard < 0.1);
     }
 }
