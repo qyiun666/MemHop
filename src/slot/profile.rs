@@ -1,7 +1,11 @@
 // L0 ProfileSlot - agent self-portrait (JSON format)
 //
-// Stores agent identity: name, role, personality, values, worldview.
+// Stores agent identity: name, role, personality, worldview, preferences.
 // Uses JSON serialization for human readability and flexibility.
+//
+// NOTE: Behavioral instructions/skills are NOT stored here.
+// MemHop is a memory database; skill management is the responsibility
+// of the external skill system.
 
 use std::collections::HashMap;
 use std::io;
@@ -13,7 +17,6 @@ pub struct ProfileSlot {
     pub name: String,
     pub role: String,
     pub personality: String,
-    pub values: String,
     pub worldview: String,
     pub preferences: HashMap<String, String>,
     pub created_at: i64,
@@ -28,7 +31,6 @@ struct ProfileJson {
     name: String,
     role: String,
     personality: String,
-    values: String,
     worldview: String,
     preferences: HashMap<String, String>,
     created_at: i64,
@@ -44,7 +46,6 @@ impl ProfileSlot {
             name: self.name.clone(),
             role: self.role.clone(),
             personality: self.personality.clone(),
-            values: self.values.clone(),
             worldview: self.worldview.clone(),
             preferences: self.preferences.clone(),
             created_at: self.created_at,
@@ -60,7 +61,7 @@ impl ProfileSlot {
         // This handles cases where data contains trailing zeros or garbage
         let mut brace_count = 0i32;
         let mut json_end = data.len();
-        
+
         for (i, &byte) in data.iter().enumerate() {
             if byte == b'{' {
                 brace_count += 1;
@@ -75,7 +76,7 @@ impl ProfileSlot {
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid JSON data"));
             }
         }
-        
+
         let json_data = &data[..json_end];
         let json: ProfileJson = serde_json::from_slice(json_data)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -84,7 +85,6 @@ impl ProfileSlot {
             name: json.name,
             role: json.role,
             personality: json.personality,
-            values: json.values,
             worldview: json.worldview,
             preferences: json.preferences,
             created_at: json.created_at,
@@ -103,13 +103,12 @@ mod tests {
         let mut preferences = HashMap::new();
         preferences.insert("language".to_string(), "Rust".to_string());
         preferences.insert("style".to_string(), "concise".to_string());
-        
+
         let profile = ProfileSlot {
             id_hash: 1,
             name: "Meow".to_string(),
             role: "assistant".to_string(),
-            personality: "friendly, helpful".to_string(),
-            values: "honesty, curiosity".to_string(),
+            personality: "friendly, helpful, curious".to_string(),
             worldview: "knowledge should be accessible".to_string(),
             preferences,
             created_at: 1000,
@@ -128,7 +127,6 @@ mod tests {
             name: "Test".to_string(),
             role: "agent".to_string(),
             personality: "calm".to_string(),
-            values: "truth".to_string(),
             worldview: "neutral".to_string(),
             preferences: HashMap::new(),
             created_at: 0,
@@ -138,5 +136,7 @@ mod tests {
         let data = profile.serialize().unwrap();
         let json_str = String::from_utf8(data).unwrap();
         assert!(json_str.contains("\"name\":\"Test\""));
+        // Verify no "values" field exists
+        assert!(!json_str.contains("\"values\""));
     }
 }

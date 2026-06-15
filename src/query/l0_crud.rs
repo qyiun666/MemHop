@@ -4,7 +4,7 @@
 // All other modules should use these functions instead of duplicating the logic.
 
 use crate::index::btree::BTreeIndex;
-use crate::query::types::L0Profile;
+use crate::query::types::ProfileResult;
 use crate::slot::profile::ProfileSlot;
 use crate::util::hash::hash_id;
 use crate::util::PAGE_SIZE;
@@ -22,13 +22,13 @@ use std::result::Result;
 /// * `btree` - B-tree index for ID lookup
 ///
 /// # Returns
-/// * `Ok(Some(L0Profile))` - Profile found and deserialized
+/// * `Ok(Some(ProfileResult))` - Profile found and deserialized
 /// * `Ok(None)` - Profile not found
 /// * `Err(MemHopError)` - IO or serialization error
 pub fn read_profile(
     mmap: &MmapMut,
     btree: &BTreeIndex,
-) -> Result<Option<L0Profile>, MemHopError> {
+) -> Result<Option<ProfileResult>, MemHopError> {
     let data = &mmap[..];
     let profile_id_hash = hash_id("profile");
 
@@ -41,7 +41,7 @@ pub fn read_profile(
                 let profile = ProfileSlot::deserialize(&data[offset..])
                     .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-                Ok(Some(L0Profile {
+                Ok(Some(ProfileResult {
                     id: format!("{:016x}", profile.id_hash),
                     name: profile.name,
                     role: profile.role,
@@ -74,7 +74,7 @@ pub fn read_profile(
 pub fn update_profile(
     mmap: &mut MmapMut,
     btree: &BTreeIndex,
-    profile_data: &L0Profile,
+    profile_data: &ProfileResult,
 ) -> Result<(), MemHopError> {
     let profile_id_hash = hash_id("profile");
 
@@ -83,13 +83,12 @@ pub fn update_profile(
             let page_id = (page_ref >> 16) as u32;
             let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-            // Create ProfileSlot from L0Profile
+            // Create ProfileSlot from ProfileResult
             let profile_slot = ProfileSlot {
                 id_hash: profile_id_hash,
                 name: profile_data.name.clone(),
                 role: profile_data.role.clone(),
                 personality: profile_data.personality.clone(),
-                values: String::new(), // Not in API, keep default
                 worldview: profile_data.worldview.clone(),
                 preferences: profile_data.preferences.clone(),
                 created_at: profile_data.created_at,
@@ -118,6 +117,7 @@ pub fn update_profile(
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

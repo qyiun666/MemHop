@@ -73,34 +73,35 @@ impl PageHeader {
     }
 }
 
-/// Allocate a new page in the mmap, returns page_id
+/// Allocate a new page from the free list, write page header, return page_id
+///
+/// This is the primary page allocation API for dream stages and other modules
+/// that need to allocate pages with a specific PageType and layer_id.
 pub fn allocate_page(
     mmap: &mut MmapMut,
+    header: &mut crate::file::header::FileHeader,
     page_type: PageType,
     layer_id: u16,
     next_page_id: u32,
 ) -> Result<u32> {
-    // Calculate new page ID based on current file size
-    let file_size = mmap.len();
-    let new_page_id = (file_size / PAGE_SIZE) as u32;
-
-    // Extend mmap by one page
-    // Note: In real implementation, we'd need to remap after extending the file
-    // For now, we assume the file is pre-allocated
+    // Use free list allocation (reuses freed pages first)
+    let new_page_id = crate::file::free_list::allocate_from_free_list(mmap, header)?;
 
     let page_offset = (new_page_id as usize) * PAGE_SIZE;
 
-    // Check if we have space
+    // Safety check: ensure page is within mmap bounds
     if page_offset + PAGE_SIZE > mmap.len() {
         return Err(MemHopError::Io(std::io::Error::other(
-            "No space for new page",
+            format!("Allocated page {} out of mmap bounds (size: {})", new_page_id, mmap.len()),
         )));
     }
 
-    // Create and write page header
-    let header = PageHeader::new(new_page_id, page_type, layer_id, next_page_id);
-    let header_bytes = header.to_bytes();
+    // Zero the page to clear stale data
+    mmap[page_offset..page_offset + PAGE_SIZE].fill(0);
 
+    // Write page header
+    let page_header = PageHeader::new(new_page_id, page_type, layer_id, next_page_id);
+    let header_bytes = page_header.to_bytes();
     mmap[page_offset..page_offset + 32].copy_from_slice(&header_bytes);
 
     Ok(new_page_id)
@@ -164,6 +165,11 @@ pub fn write_page_data(mmap: &mut MmapMut, page_id: u32, data: &[u8]) -> Result<
 
     // Skip 32-byte header
     let start = offset + 32;
+    // Zero remaining bytes to prevent stale data residue from previous writes
+    let end = offset + PAGE_SIZE;
+    if start + data.len() < end {
+        mmap[start + data.len()..end].fill(0);
+    }
     mmap[start..start + data.len()].copy_from_slice(data);
 
     Ok(())
@@ -187,13 +193,13 @@ mod tests {
 
     #[test]
     fn test_page_header_serialization_roundtrip() {
-        let header = PageHeader::new(42, PageType::Engram, 1, 100);
+        let header = PageHeader::new(42, PageType::ContextNode, 1, 100);
 
         let bytes = header.to_bytes();
         let restored = PageHeader::from_bytes(&bytes).unwrap();
 
         assert_eq!(restored.page_id, 42);
-        assert_eq!(restored.page_type, PageType::Engram.to_u16());
+        assert_eq!(restored.page_type, PageType::ContextNode.to_u16());
         assert_eq!(restored.slot_count, 0);
         assert_eq!(restored.layer_id, 1);
         assert_eq!(restored.next_page, 100);
@@ -202,7 +208,7 @@ mod tests {
 
     #[test]
     fn test_page_type_conversion() {
-        assert_eq!(PageType::from_u16(0x01), Some(PageType::Engram));
+        assert_eq!(PageType::from_u16(0x01), Some(PageType::ContextNode));
         assert_eq!(PageType::from_u16(0x02), Some(PageType::Hyperedge));
         assert_eq!(PageType::from_u16(0xFF), Some(PageType::Overflow));
         assert_eq!(PageType::from_u16(0x99), None);
@@ -256,7 +262,7 @@ mod tests {
         file.set_len((PAGE_SIZE * 2) as u64).unwrap();
 
         // Initialize first page with header
-        let header = PageHeader::new(0, PageType::Engram, 1, 0xFFFFFFFF);
+        let header = PageHeader::new(0, PageType::ContextNode, 1, 0xFFFFFFFF);
         let header_bytes = header.to_bytes();
         file.write_all(&header_bytes).unwrap();
 

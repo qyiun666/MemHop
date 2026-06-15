@@ -27,44 +27,94 @@ pub struct LlmConfig {
 // ============================================================================
 
 /// Search query for memory retrieval
+///
+/// # Routing logic
+///
+/// | Parameter   | Behavior |
+/// |-------------|----------|
+/// | `auto_create=1` | Skip all retrieval, create new L2 context directly |
+/// | `context_id` present & L2 exists | Skip triple retrieval, only L1-associate from that L2 |
+/// | `l3_id` present | Restrict triple retrieval to L2 contexts containing this L3 |
+/// | default | Full triple retrieval (vector + BM25 + n-gram) |
 #[derive(Debug, Clone)]
 pub struct SearchQuery {
-    /// Current dialogue content (for BM25 + vector search)
+    /// Current dialogue content (for BM25 + ngram + vector search)
     pub dialogue: String,
-    /// L2 topic unique identifier (exact match)
-    pub l2_id: Option<String>,
-    /// L3 knowledge domain unique identifier (exact match)
+    /// Context ID (hex). If present and the L2 exists, skip retrieval
+    /// and only find L1-associated contexts from this L2.
+    pub context_id: Option<String>,
+    /// L3 hypergraph ID (hex). If present, restrict retrieval to L2
+    /// contexts that contain this L3 in their l3_refs.
     pub l3_id: Option<String>,
-    /// Maximum number of L2 topics to return (default: 10)
-    pub l2_limit: usize,
-    /// Maximum number of L3 knowledge items to return (default: 10)
-    pub l3_limit: usize,
+    /// Maximum number of contexts to return (default: 10)
+    pub context_limit: usize,
     /// Optional LLM enhancement configuration
     pub llm_enhance: Option<LlmConfig>,
-    /// Auto-create L2 topic when search result is empty (0: no, 1: yes, default: 0)
+    /// Auto-create context when search result is empty (0: no, 1: yes, default: 0)
     pub auto_create: u8,
+    /// Minimum relevance score threshold for search pruning (0.0-1.0, default: 0.0)
+    pub min_score: f32,
 }
 
 /// Search result containing multi-layer memory content
+///
+/// Retrieval flow:
+/// 1. Triple retrieval (vector + BM25 + n-gram) on L2 context titles (depth 1 & 2)
+/// 2. Via L1 hypergraph, find associated depth-1 contexts
+/// 3. Return L0 profile, L3 ID list, L4 archive references
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    /// Retrieved memory IDs (for subsequent updates)
-    pub memory_ids: Vec<String>,
     /// L0 - Agent profile
-    pub l0_profile: Option<L0Profile>,
-    /// L2 - Semantic topic list
-    pub l2_topics: Vec<L2TopicResult>,
-    /// L3 - Knowledge domain list
-    pub l3_knowledge: Vec<L3KnowledgeResult>,
-    /// L2 content associated via L1 (filtered by similarity threshold)
-    pub l1_associated_l2: Vec<L2TopicResult>,
-    /// L4 - Original archives (corresponding to L2)
-    pub l4_archives: Vec<L4ArchiveResult>,
+    pub profile: Option<ProfileResult>,
+    /// L2 - Matched contexts from retrieval
+    pub contexts: Vec<ContextResult>,
+    /// L2 - Associated depth-1 contexts (via L1 hypergraph edges)
+    pub associated_contexts: Vec<ContextResult>,
+    /// L3 - Hypergraph IDs referenced by matched contexts
+    pub l3_ids: Vec<String>,
+    /// L4 - Archive references from matched contexts
+    pub archive_refs: Vec<ArchiveRef>,
 }
 
-/// L0 Agent profile
+/// L2 context result from search
 #[derive(Debug, Clone)]
-pub struct L0Profile {
+pub struct ContextResult {
+    /// Context unique ID (hex)
+    pub id: String,
+    /// Parent context ID (hex), None for depth-1 scenes
+    pub parent_id: Option<String>,
+    /// Nesting depth: 1=scene, 2=sub-scene, 3=turn group
+    pub depth: u8,
+    /// Scene name / title
+    pub title: String,
+    /// Compressed summary (if available)
+    pub summary: Option<String>,
+    /// Activation score (retrieval relevance)
+    pub activation_score: f32,
+    /// Number of conversation turns
+    pub turn_count: u32,
+    /// L3 hypergraph IDs referenced by this context
+    pub l3_refs: Vec<String>,
+    /// L4 archive IDs referenced by this context
+    pub archive_refs: Vec<String>,
+}
+
+/// L4 archive reference (lightweight pointer)
+#[derive(Debug, Clone)]
+pub struct ArchiveRef {
+    /// Archive unique ID (hex)
+    pub id: String,
+    /// Associated L2 context ID (hex)
+    pub context_id: String,
+    /// Content type (text/image/document/etc.)
+    pub content_type: String,
+    /// Timestamp
+    pub created_at: i64,
+}
+
+/// Agent profile
+#[derive(Debug, Clone)]
+pub struct ProfileResult {
     pub id: String,
     pub name: String,
     pub role: String,
@@ -75,64 +125,32 @@ pub struct L0Profile {
     pub updated_at: i64,
 }
 
-/// L2 topic result
-#[derive(Debug, Clone)]
-pub struct L2TopicResult {
-    pub id: String,
-    pub title: String,
-    pub summary: Option<String>,
-    pub activation_score: f32,
-    pub l1_count: usize,
-    pub l3_refs: Vec<String>,
-    pub l4_refs: Vec<String>,
-}
-
-/// L3 knowledge result
-#[derive(Debug, Clone)]
-pub struct L3KnowledgeResult {
-    pub id: String,
-    pub title: String,
-    pub domain: String,
-    pub text: String,
-    pub knowledge_type: String,
-    pub confidence: f32,
-}
-
-/// L4 archive result
-#[derive(Debug, Clone)]
-pub struct L4ArchiveResult {
-    pub id: String,
-    pub topic_id: String,
-    pub content: String,
-    pub timestamp: i64,
-}
-
 // ============================================================================
 // Update Memory Interface (Interface 3)
 // ============================================================================
 
-/// Update request for creating or updating multi-layer memory
-/// 
-/// When l2_id is provided, updates the existing L2 topic:
-/// - Appends current dialogue to L4 archive
-/// - Updates L2 summary with compressed content
-/// - Links L4 archive to L2
-/// - Stores action chain to L5 crystals
-/// 
-/// When l2_id is None, creates a new L2 topic with the dialogue as title.
+/// Update request for activated L2 context memory updates
+///
+/// After search_memory activates an L2 context, this interface:
+/// 1. Writes dialogue_text to L4 ArchiveSlot on disk
+/// 2. Writes action_chain to L5 ActionChainSlot on disk
+/// 3. Appends L4 archive_id to L2 archive_refs index
+/// 4. Appends summary to L2 context summary
+///
+/// topic_id is required - the L2 must already be activated.
 #[derive(Debug, Clone)]
 pub struct UpdateRequest {
-    /// L2 topic unique identifier (None means create new L2 topic)
-    pub l2_id: Option<String>,
-    /// Current round dialogue text
+    /// Activated L2 topic ID (required, returned by search_memory)
+    pub topic_id: String,
+    /// Current round dialogue text (written to L4 on disk by this interface)
     pub dialogue_text: String,
-    /// Compressed summary for current round (optional, will be appended to L2)
+    /// Compressed summary for current round (optional, appended to L2 context summary)
     pub summary: Option<String>,
-    /// Action chain (stored to L5)
+    /// Action chain (written to L5 on disk by this interface)
     pub action_chain: Vec<ActionItem>,
 }
 
-/// Action item for L5 crystal storage
+/// Action item for L5 action chain storage
 #[derive(Debug, Clone)]
 pub struct ActionItem {
     /// Action title (e.g., "create file", "write code")
@@ -160,18 +178,10 @@ pub enum ActionType {
 /// Update result
 #[derive(Debug, Clone)]
 pub struct UpdateResult {
-    /// Memory ID (newly created or updated)
-    pub memory_id: String,
-    /// L1 engram ID
-    pub l1_engram_id: String,
     /// L2 topic ID
-    pub l2_topic_id: String,
-    /// L3 knowledge ID
-    pub l3_knowledge_id: String,
-    /// L4 archive ID
-    pub l4_archive_id: String,
-    /// L5 crystal IDs (one per action)
-    pub l5_crystal_ids: Vec<String>,
+    pub topic_id: String,
+    /// L4 archive ID created by this update
+    pub archive_id: String,
     /// Update status
     pub status: UpdateStatus,
 }
@@ -179,18 +189,16 @@ pub struct UpdateResult {
 /// Update status enumeration
 #[derive(Debug, Clone, PartialEq)]
 pub enum UpdateStatus {
-    Created,
     Updated,
-    Merged,
 }
 
 // ============================================================================
 // List Query Interfaces (Interfaces 6-12)
 // ============================================================================
 
-/// L1 list query
+/// Engram list query
 #[derive(Debug, Clone)]
-pub struct L1ListQuery {
+pub struct EngramListQuery {
     pub page: usize,
     pub page_size: usize,
     pub state_filter: Option<String>, // Active/Latent/Dormant
@@ -198,19 +206,19 @@ pub struct L1ListQuery {
     pub keyword: Option<String>,
 }
 
-/// L1 list result
+/// Engram list result
 #[derive(Debug, Clone)]
-pub struct L1ListResult {
-    pub items: Vec<L1Engram>,
+pub struct EngramListResult {
+    pub items: Vec<EngramResult>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
     pub has_more: bool,
 }
 
-/// L1 engram detail
+/// Engram detail
 #[derive(Debug, Clone)]
-pub struct L1Engram {
+pub struct EngramResult {
     pub id: String,
     pub text: String,
     pub summary: Option<String>,
@@ -224,55 +232,59 @@ pub struct L1Engram {
     pub associated_topics: Vec<String>,
 }
 
-/// L2 list query
+/// Topic list query
 #[derive(Debug, Clone)]
-pub struct L2ListQuery {
+pub struct TopicListQuery {
     pub page: usize,
     pub page_size: usize,
     pub active_only: bool,
     pub keyword: Option<String>,
 }
 
-/// L2 list result
+/// Topic list result
 #[derive(Debug, Clone)]
-pub struct L2ListResult {
-    pub items: Vec<L2TopicSummary>,
+pub struct TopicListResult {
+    pub items: Vec<TopicSummary>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
     pub has_more: bool,
 }
 
-/// L2 topic summary
+/// Topic summary (L2 context list item)
 #[derive(Debug, Clone)]
-pub struct L2TopicSummary {
+pub struct TopicSummary {
     pub id: String,
     pub title: String,
-    pub node_count: usize,
+    pub depth: u8,
+    pub archive_count: usize,
+    pub turn_count: u32,
     pub is_active: bool,
     pub updated_at: i64,
 }
 
-/// L2 topic detail
+/// Topic detail (L2 ContextSlot detail)
 #[derive(Debug, Clone)]
-pub struct L2TopicDetail {
+pub struct TopicDetail {
     pub id: String,
     pub title: String,
     pub summary: Option<String>,
-    pub node_ids: Vec<String>,
+    pub depth: u8,
+    pub archive_refs: Vec<String>,
     pub l3_refs: Vec<String>,
-    pub l4_refs: Vec<String>,
+    pub turn_count: u32,
     pub parent_id: Option<String>,
     pub is_active: bool,
     pub importance: f32,
     pub activation_score: f32,
+    pub activation_state: String,
     pub created_at: i64,
     pub updated_at: i64,
 }
 
-/// L3 list query
+/// Knowledge list query
 #[derive(Debug, Clone)]
-pub struct L3ListQuery {
+pub struct KnowledgeListQuery {
     pub page: usize,
     pub page_size: usize,
     pub domain_filter: Option<String>,
@@ -280,19 +292,19 @@ pub struct L3ListQuery {
     pub keyword: Option<String>,
 }
 
-/// L3 list result
+/// Knowledge list result
 #[derive(Debug, Clone)]
-pub struct L3ListResult {
-    pub items: Vec<L3DomainSummary>,
+pub struct KnowledgeListResult {
+    pub items: Vec<KnowledgeSummary>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
     pub has_more: bool,
 }
 
-/// L3 domain summary
+/// Knowledge summary
 #[derive(Debug, Clone)]
-pub struct L3DomainSummary {
+pub struct KnowledgeSummary {
     pub id: String,
     pub title: String,
     pub domain: String,
@@ -302,9 +314,9 @@ pub struct L3DomainSummary {
     pub updated_at: i64,
 }
 
-/// L3 domain detail
+/// Knowledge detail
 #[derive(Debug, Clone)]
-pub struct L3DomainDetail {
+pub struct KnowledgeDetail {
     pub id: String,
     pub title: String,
     pub domain: String,
@@ -321,9 +333,9 @@ pub struct L3DomainDetail {
     pub updated_at: i64,
 }
 
-/// L4 page query
+/// Archive page query
 #[derive(Debug, Clone)]
-pub struct L4PageQuery {
+pub struct ArchivePageQuery {
     pub page: usize,
     pub page_size: usize,
     pub start_time: Option<i64>,
@@ -331,31 +343,31 @@ pub struct L4PageQuery {
     pub content_type: Option<String>,
 }
 
-/// L4 list result
+/// Archive list result
 #[derive(Debug, Clone)]
-pub struct L4ListResult {
-    pub items: Vec<L4Archive>,
+pub struct ArchiveListResult {
+    pub items: Vec<Archive>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
     pub has_more: bool,
 }
 
-/// L4 archive
+/// Archive
 #[derive(Debug, Clone)]
-pub struct L4Archive {
+pub struct Archive {
     pub id: String,
     pub content: String,
     pub content_type: String,
     pub source_ref: Option<String>,
     pub topic_id: Option<String>,
-    pub node_ids: Vec<String>,
+    pub engram_ids: Vec<String>,
     pub created_at: i64,
 }
 
-/// L5 list query
+/// Crystal list query
 #[derive(Debug, Clone)]
-pub struct L5ListQuery {
+pub struct CrystalListQuery {
     pub page: usize,
     pub page_size: usize,
     pub status_filter: Option<String>, // active/inactive/deprecated
@@ -363,19 +375,19 @@ pub struct L5ListQuery {
     pub keyword: Option<String>,
 }
 
-/// L5 list result
+/// Crystal list result
 #[derive(Debug, Clone)]
-pub struct L5ListResult {
-    pub items: Vec<L5SkillSummary>,
+pub struct CrystalListResult {
+    pub items: Vec<CrystalSummary>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
     pub has_more: bool,
 }
 
-/// L5 skill summary
+/// Crystal summary
 #[derive(Debug, Clone)]
-pub struct L5SkillSummary {
+pub struct CrystalSummary {
     pub id: String,
     pub title: String,
     pub condition: String,
@@ -390,9 +402,9 @@ pub struct L5SkillSummary {
 // Update Title Interfaces (Interfaces 13-16)
 // ============================================================================
 
-/// Update L0 profile request
+/// Update profile request
 #[derive(Debug, Clone)]
-pub struct UpdateL0Request {
+pub struct UpdateProfileRequest {
     pub name: Option<String>,
     pub role: Option<String>,
     pub personality: Option<String>,
@@ -401,10 +413,10 @@ pub struct UpdateL0Request {
 }
 
 // ============================================================================
-// Merge L2 Topics Interface (Interface 18)
+// Merge Topics Interface (Interface 18)
 // ============================================================================
 
-// L2TopicDetail is already defined above
+// TopicDetail is already defined above
 
 // ============================================================================
 // Import Memory Interface (Interface 19)
@@ -416,15 +428,15 @@ pub struct ImportRequest {
     pub target_layer: TargetLayer,
     pub data: ImportData,
     pub mode: ImportMode,
-    pub l3_title: Option<String>, // When importing L2, specify associated L3 domain title
+    pub knowledge_title: Option<String>, // When importing topics, specify associated knowledge domain title
 }
 
 /// Target layer enumeration
 #[derive(Debug, Clone, PartialEq)]
 pub enum TargetLayer {
-    L0,
-    L2,
-    L3,
+    Profile,
+    Topic,
+    Knowledge,
 }
 
 /// Import mode enumeration
@@ -438,32 +450,32 @@ pub enum ImportMode {
 /// Import data enumeration
 #[derive(Debug, Clone)]
 pub enum ImportData {
-    /// L0 profile data
-    L0Profile {
+    /// Profile data
+    Profile {
         name: Option<String>,
         role: Option<String>,
         personality: Option<String>,
         worldview: Option<String>,
         preferences: Option<HashMap<String, String>>,
     },
-    /// L2 topic data (supports batch)
-    L2Topics(Vec<L2ImportItem>),
-    /// L3 knowledge data (supports batch)
-    L3Knowledge(Vec<L3ImportItem>),
+    /// Topic data (supports batch)
+    Topics(Vec<TopicImportItem>),
+    /// Knowledge data (supports batch)
+    Knowledge(Vec<KnowledgeImportItem>),
 }
 
-/// L2 import item
+/// Topic import item
 #[derive(Debug, Clone)]
-pub struct L2ImportItem {
+pub struct TopicImportItem {
     pub title: String,
     pub summary: Option<String>,
     pub keywords: Vec<String>,
-    pub l3_domain: Option<String>, // Associated L3 knowledge domain title
+    pub knowledge_domain: Option<String>, // Associated knowledge domain title
 }
 
-/// L3 import item
+/// Knowledge import item
 #[derive(Debug, Clone)]
-pub struct L3ImportItem {
+pub struct KnowledgeImportItem {
     pub title: String,
     pub domain: String,
     pub knowledge_type: String, // Factual/Procedural/Conceptual/Contextual

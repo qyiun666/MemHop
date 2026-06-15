@@ -55,10 +55,14 @@ pub fn apply_decay(
                     .serialize()
                     .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-                if engram_offset + updated_data.len() <= mmap.len() {
-                    mmap[engram_offset..engram_offset + updated_data.len()]
-                        .copy_from_slice(&updated_data);
+                if engram_offset + updated_data.len() > mmap.len() {
+                    return Err(MemHopError::Serialization(format!(
+                        "DecayStage: engram data too large: {} > {}",
+                        updated_data.len(), mmap.len() - engram_offset
+                    )));
                 }
+                mmap[engram_offset..engram_offset + updated_data.len()]
+                    .copy_from_slice(&updated_data);
 
                 dormant_ids.push(format!("{:016x}", engram.id_hash));
             }

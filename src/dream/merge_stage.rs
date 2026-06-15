@@ -63,17 +63,21 @@ pub fn merge_similar_topics(
     // Step 4: Write back updated topics to mmap
     // Note: After merging, the topics vector may have fewer elements than original.
     // We write back the merged topics to their original pages.
-    
+
     for (i, topic) in topics.iter().enumerate() {
         if i < topics_with_refs.len() {
             let (_orig_id, page_id, _orig_topic) = &topics_with_refs[i];
             let offset = (*page_id as usize) * PAGE_SIZE + 32;
             let topic_data = topic.serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-            
-            if offset + topic_data.len() <= mmap.len() {
-                mmap[offset..offset + topic_data.len()].copy_from_slice(&topic_data);
+
+            if offset + topic_data.len() > mmap.len() {
+                return Err(MemHopError::Serialization(format!(
+                    "MergeStage: topic data too large for page: {} > {}",
+                    topic_data.len(), mmap.len() - offset
+                )));
             }
+            mmap[offset..offset + topic_data.len()].copy_from_slice(&topic_data);
         }
     }
 
@@ -86,7 +90,7 @@ pub fn merge_similar_topics(
             // Remove from BTree index
             btree.remove(absorbed_id);
         }
-        
+
         // Record merge pair (simplified: we don't track keeper ID here)
         merged_pairs.push(("unknown".to_string(), format!("{:016x}", absorbed_id)));
     }

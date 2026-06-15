@@ -35,16 +35,34 @@ pub use config::MemHopConfig;
 pub use util::{Layer, SourceMeta, SourceRef, SourceType};
 
 // Re-export public types
-pub use dream::deepseek_llm::DeepSeekLlmProvider;
+pub use dream::openai_compatible::OpenAICompatibleLlmProvider;
 pub use dream::llm::{CrystalDef, LlmProvider, MemorySummary, Pattern};
-pub use dream::prune::{DreamConfig, DreamReport};
+pub use dream::prune::DreamReport;
 pub use migrate::{migrate, verify_migration, MigrateError, MigrateReport};
-pub use organize::{detect_topic_boundary, extract_keywords, merge_similar_topics, reflect_topic};
-pub use organize::{organize as organize_function, OrganizeReport};
+pub use organize::extract_keywords;
 pub use query::batch::{BatchReport, EncodedItem, StoreBatch, StoreItem};
 
 // Re-export new API types (API_NEW.md) - These are the recommended public interfaces
-pub use query::types::*;
+pub use query::types::{
+    // LLM Configuration
+    LlmConfig,
+    // Search Memory (Interface 2)
+    SearchQuery, SearchResult, ContextResult, ArchiveRef, ProfileResult,
+    // Update Memory (Interface 3)
+    UpdateRequest, ActionItem, ActionType, UpdateResult, UpdateStatus,
+    // List Queries (Interfaces 6-12)
+    EngramListQuery, EngramListResult, EngramResult,
+    TopicListQuery, TopicListResult, TopicSummary, TopicDetail,
+    KnowledgeListQuery, KnowledgeListResult, KnowledgeSummary, KnowledgeDetail,
+    ArchivePageQuery, ArchiveListResult, Archive,
+    CrystalListQuery, CrystalListResult, CrystalSummary,
+    // Update Titles (Interfaces 13-16)
+    UpdateProfileRequest,
+    // Import Memory (Interface 19)
+    ImportRequest, TargetLayer, ImportMode, ImportData,
+    TopicImportItem, KnowledgeImportItem,
+    ImportResult, ImportStatus, ImportError,
+};
 
 use memmap2::{Mmap, MmapMut};
 use std::fs::{File, OpenOptions};
@@ -106,6 +124,7 @@ pub struct MemHop {
     activation_manager: ActivationManager,
     session_manager: SessionManager,
     encoder: Option<Box<dyn crate::encoder::ipc::Encoder + Send + Sync>>, // Optional encoder for batch operations
+    closed: bool, // Prevent Drop from re-checkpointing after close()
 }
 
 impl MemHop {
@@ -152,7 +171,17 @@ impl MemHop {
             // Create a read-only view for reading headers
             let mmap_readonly = unsafe { Mmap::map(&file)? };
             let (header_a, header_b) = read_headers(&mmap_readonly)?;
-            select_valid_header(&header_a, &header_b)?
+            let header = select_valid_header(&header_a, &header_b)?;
+
+            // Validate vector dimension matches config
+            if header.vector_dim != config.vector_dim as u16 {
+                return Err(MemHopError::VectorDimensionMismatch {
+                    expected: config.vector_dim,
+                    actual: header.vector_dim as usize,
+                });
+            }
+
+            header
         } else {
             // Initialize new header
             let mut header = FileHeader::new(config.vector_dim as u16);
@@ -180,7 +209,7 @@ impl MemHop {
         // 4. Replay Journal
         let mmap_readonly = unsafe { Mmap::map(&file)? };
         let journal_entries = replay_journal(&mmap_readonly, &header)?;
-        
+
         if !journal_entries.is_empty() {
             // 按 commit_id 排序,顺序应用
             let mut sorted_entries = journal_entries;
@@ -242,8 +271,24 @@ impl MemHop {
         // 7. Initialize SessionManager
         let session_manager = SessionManager::new();
 
-        // 8. Initialize optional encoder (use MockEncoder for now)
-        let encoder: Option<Box<dyn crate::encoder::ipc::Encoder + Send + Sync>> = None; // Can be set later via set_encoder()
+        // 8. Initialize encoder automatically from config
+        let encoder: Option<Box<dyn crate::encoder::ipc::Encoder + Send + Sync>> = {
+            use crate::encoder::ipc::{IpcEncoder, MockEncoder};
+
+            let ipc = IpcEncoder::new(
+                config.encoder_socket.clone(),
+                config.vector_dim,
+                "dense".to_string(),
+            );
+
+            if ipc.is_available() {
+                Some(Box::new(ipc))
+            } else {
+                // Fallback to MockEncoder if socket is not available
+                eprintln!("Warning: Encoder socket {:?} not available, using MockEncoder fallback", config.encoder_socket);
+                Some(Box::new(MockEncoder::new(config.vector_dim)))
+            }
+        };
 
         // 9. Return MemHop instance
         Ok(MemHop {
@@ -256,21 +301,25 @@ impl MemHop {
             activation_manager,
             session_manager,
             encoder,
+            closed: false,
         })
     }
 
     // Note: Old interfaces (store, recall, recall_cascade, recall_more) have been removed.
     // Use the new API interfaces: search_memory(), update_memory(), etc.
 
-    /// Search memory using L2-centric retrieval model
+    /// Search memory using topic-centric retrieval model
     ///
     /// # Arguments
     /// * `query` - Search query with dialogue, filters, and optional LLM enhancement
     ///
     /// # Returns
-    /// SearchResult containing L0 profile, L2 topics, L3 knowledge, L4 archives, etc.
+    /// SearchResult containing profile, topics, knowledge, archives, etc.
     pub fn search_memory(&mut self, query: SearchQuery) -> Result<SearchResult> {
         use crate::query::search::search_memory as search_impl;
+
+        // Get encoder reference if available
+        let encoder_ref: Option<&(dyn crate::encoder::ipc::Encoder + Send + Sync)> = self.encoder.as_deref();
 
         search_impl(
             &mut self.mmap,
@@ -279,10 +328,11 @@ impl MemHop {
             &mut self.btree,
             &mut self.sparse_index,
             self.config.vector_dim,
+            encoder_ref,
         )
     }
 
-    /// Update memory with multi-level联动 updates (L1→L2→L3→L4→L5)
+    /// Update memory with multi-level updates
     ///
     /// # Arguments
     /// * `request` - Update request with dialogue, titles, and action chain
@@ -303,72 +353,72 @@ impl MemHop {
     }
 
     // ========================================================================
-    // L0-L5 Query Interfaces
+    // Query Interfaces
     // ========================================================================
 
-    /// Get L0 profile
-    pub fn get_l0_profile(&self) -> Result<Option<L0Profile>> {
-        use crate::query::list::get_l0_profile as impl_fn;
+    /// Get profile
+    pub fn get_profile(&self) -> Result<Option<ProfileResult>> {
+        use crate::query::list::get_profile as impl_fn;
         impl_fn(&self.mmap, &self.btree)
     }
 
-    /// Get single L1 engram by ID
-    pub fn get_l1_engram(&self, id: &str) -> Result<Option<L1Engram>> {
-        use crate::query::list::get_l1_engram as impl_fn;
+    /// Get single engram by ID
+    pub fn get_engram(&self, id: &str) -> Result<Option<EngramResult>> {
+        use crate::query::list::get_engram as impl_fn;
         impl_fn(&self.mmap, &self.btree, id)
     }
 
-    /// List L1 engrams with pagination and filtering
-    pub fn list_l1_engrams(&self, query: L1ListQuery) -> Result<L1ListResult> {
-        use crate::query::list::list_l1_engrams as impl_fn;
+    /// List engrams with pagination and filtering
+    pub fn list_engrams(&self, query: EngramListQuery) -> Result<EngramListResult> {
+        use crate::query::list::list_engrams as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, query)
     }
 
-    /// Get single L2 topic by ID
-    pub fn get_l2_topic(&self, id: &str) -> Result<Option<L2TopicDetail>> {
-        use crate::query::list::get_l2_topic as impl_fn;
+    /// Get single topic by ID
+    pub fn get_topic(&self, id: &str) -> Result<Option<TopicDetail>> {
+        use crate::query::list::get_topic as impl_fn;
         impl_fn(&self.mmap, &self.btree, id)
     }
 
-    /// List L2 topics with pagination and filtering
-    pub fn list_l2_topics(&self, query: L2ListQuery) -> Result<L2ListResult> {
-        use crate::query::list::list_l2_topics as impl_fn;
+    /// List topics with pagination and filtering
+    pub fn list_topics(&self, query: TopicListQuery) -> Result<TopicListResult> {
+        use crate::query::list::list_topics as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, query)
     }
 
-    /// Get single L3 knowledge domain by ID
-    pub fn get_l3_domain(&self, id: &str) -> Result<Option<L3DomainDetail>> {
-        use crate::query::list::get_l3_domain as impl_fn;
-        impl_fn(&self.mmap, &self.btree, id)
-    }
-
-    /// List L3 knowledge domains with pagination and filtering
-    pub fn list_l3_domains(&self, query: L3ListQuery) -> Result<L3ListResult> {
-        use crate::query::list::list_l3_domains as impl_fn;
-        impl_fn(&self.mmap, &self.header, &self.btree, query)
-    }
-
-    /// List L4 archives by topic ID
-    pub fn list_l4_by_topic(&self, topic_id: &str, query: L4PageQuery) -> Result<L4ListResult> {
-        use crate::query::list::list_l4_by_topic as impl_fn;
+    /// List archives by topic ID
+    pub fn list_archives_by_topic(&self, topic_id: &str, query: ArchivePageQuery) -> Result<ArchiveListResult> {
+        use crate::query::list::list_archives_by_topic as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, topic_id, query)
     }
 
-    /// List L4 archives by node IDs
-    pub fn list_l4_by_nodes(&self, node_ids: &[String], query: L4PageQuery) -> Result<L4ListResult> {
-        use crate::query::list::list_l4_by_nodes as impl_fn;
+    /// List archives by node IDs
+    pub fn list_archives_by_nodes(&self, node_ids: &[String], query: ArchivePageQuery) -> Result<ArchiveListResult> {
+        use crate::query::list::list_archives_by_nodes as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, node_ids, query)
     }
 
-    /// List all L4 archives
-    pub fn list_l4_all(&self, query: L4PageQuery) -> Result<L4ListResult> {
-        use crate::query::list::list_l4_all as impl_fn;
+    /// List all archives
+    pub fn list_all_archives(&self, query: ArchivePageQuery) -> Result<ArchiveListResult> {
+        use crate::query::list::list_all_archives as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, query)
     }
 
-    /// List L5 crystals/skills with pagination and filtering
-    pub fn list_l5_skills(&self, query: L5ListQuery) -> Result<L5ListResult> {
-        use crate::query::list::list_l5_skills as impl_fn;
+    /// List crystals with pagination and filtering
+    pub fn list_crystals(&self, query: CrystalListQuery) -> Result<CrystalListResult> {
+        use crate::query::list::list_crystals as impl_fn;
+        impl_fn(&self.mmap, &self.header, &self.btree, query)
+    }
+
+    /// Get single knowledge (L3 hypergraph) by ID
+    pub fn get_knowledge(&self, id: &str) -> Result<Option<KnowledgeDetail>> {
+        use crate::query::list::get_knowledge as impl_fn;
+        impl_fn(&self.mmap, &self.btree, id)
+    }
+
+    /// List knowledge (L3 hypergraphs) with pagination and filtering
+    pub fn list_knowledge(&self, query: KnowledgeListQuery) -> Result<KnowledgeListResult> {
+        use crate::query::list::list_knowledge as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, query)
     }
 
@@ -376,27 +426,27 @@ impl MemHop {
     // Update Title/Profile Interfaces
     // ========================================================================
 
-    /// Update L0 profile (merge strategy - only update Some fields)
-    pub fn update_l0_profile(&mut self, request: UpdateL0Request) -> Result<L0Profile> {
-        use crate::query::update_title::update_l0_profile as impl_fn;
+    /// Update profile (merge strategy - only update Some fields)
+    pub fn update_profile(&mut self, request: UpdateProfileRequest) -> Result<ProfileResult> {
+        use crate::query::update_title::update_profile as impl_fn;
         impl_fn(&mut self.mmap, &mut self.header, &mut self.btree, request)
     }
 
-    /// Update L2 topic title (with sparse index synchronization)
-    pub fn update_l2_title(&mut self, id: &str, new_title: String) -> Result<L2TopicSummary> {
-        use crate::query::update_title::update_l2_title as impl_fn;
+    /// Update topic title (with sparse index synchronization)
+    pub fn update_topic_title(&mut self, id: &str, new_title: String) -> Result<TopicSummary> {
+        use crate::query::update_title::update_topic_title as impl_fn;
         impl_fn(&mut self.mmap, &mut self.header, &self.btree, &mut self.sparse_index, id, new_title)
     }
 
-    /// Update L3 knowledge title (with sparse index synchronization)
-    pub fn update_l3_title(&mut self, id: &str, new_title: String) -> Result<L3DomainSummary> {
-        use crate::query::update_title::update_l3_title as impl_fn;
-        impl_fn(&mut self.mmap, &mut self.header, &self.btree, &mut self.sparse_index, id, new_title)
+    /// Update crystal title
+    pub fn update_crystal_title(&mut self, id: &str, new_title: String) -> Result<CrystalSummary> {
+        use crate::query::update_title::update_crystal_title as impl_fn;
+        impl_fn(&mut self.mmap, &self.btree, id, new_title)
     }
 
-    /// Update L5 crystal/skill title
-    pub fn update_l5_title(&mut self, id: &str, new_title: String) -> Result<L5SkillSummary> {
-        use crate::query::update_title::update_l5_title as impl_fn;
+    /// Update knowledge (L3 hypergraph) title
+    pub fn update_knowledge_title(&mut self, id: &str, new_title: String) -> Result<KnowledgeSummary> {
+        use crate::query::update_title::update_knowledge_title as impl_fn;
         impl_fn(&mut self.mmap, &self.btree, id, new_title)
     }
 
@@ -404,16 +454,32 @@ impl MemHop {
     // Advanced Function Interfaces
     // ========================================================================
 
-    /// Merge multiple L2 topics into a primary topic
-    pub fn merge_l2_topics(&mut self, primary_id: &str, secondary_ids: Vec<String>) -> Result<L2TopicDetail> {
-        use crate::query::merge::merge_l2_topics as impl_fn;
+    /// Merge multiple topics into a primary topic
+    pub fn merge_topics(&mut self, primary_id: &str, secondary_ids: Vec<String>) -> Result<TopicDetail> {
+        use crate::query::merge::merge_topics as impl_fn;
         impl_fn(&mut self.mmap, &mut self.header, &mut self.btree, &mut self.sparse_index, primary_id, secondary_ids)
     }
 
-    /// Import memory into specified layer (L0/L2/L3)
+    /// Import memory into specified layer
     pub fn import_memory(&mut self, request: ImportRequest) -> Result<ImportResult> {
         use crate::query::import::import_memory as impl_fn;
         impl_fn(&mut self.mmap, &mut self.header, &mut self.btree, &mut self.sparse_index, request)
+    }
+
+    /// Build hypergraph edges from file path
+    ///
+    /// Reads files from the given path, extracts keywords, finds related existing
+    /// knowledge nodes via BM25 search, and creates KnowledgeEdge connections between them.
+    ///
+    /// # Arguments
+    /// * `path` - Path to file or directory to analyze
+    ///
+    /// # Returns
+    /// * `Ok(ImportResult)` - Result with created edge IDs
+    /// * `Err(MemHopError)` - IO, configuration, or import error
+    pub fn build_l3_hypergraph_from_path(&mut self, path: &std::path::Path) -> Result<ImportResult> {
+        use crate::query::import::build_l3_hypergraph_from_path as impl_fn;
+        impl_fn(&mut self.mmap, &mut self.header, &mut self.btree, &mut self.sparse_index, path)
     }
 
     /// Activate a Topic for session management
@@ -461,12 +527,17 @@ impl MemHop {
     }
 
     /// Run dream consolidation pipeline
-    /// 
+    ///
+    /// Executes memory consolidation on all currently active contexts:
+    /// 1. L2 depth demotion (主→次→次次→remove)
+    /// 2. L1 rebuild based on updated L2
+    /// 3. L0 profile regeneration from L1
+    /// 4. L5 crystallization from all ActionChainSlots
+    ///
     /// # Arguments
     /// * `llm` - LLM configuration (api_key, api_url, model)
-    /// * `config` - Dream configuration (stages, thresholds, etc.)
-    pub fn dream(&mut self, llm: LlmConfig, config: DreamConfig) -> Result<DreamReport> {
-        use crate::dream::deepseek_llm::DeepSeekLlmProvider;
+    pub fn dream(&mut self, llm: LlmConfig) -> Result<DreamReport> {
+        use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
         use crate::dream::dream_pipeline;
         use std::collections::HashSet;
 
@@ -475,7 +546,7 @@ impl MemHop {
         let api_url = llm.api_url;
         let model = llm.model;
 
-        let llm_provider = DeepSeekLlmProvider::new_with_config(api_key, api_url, model);
+        let llm_provider = OpenAICompatibleLlmProvider::new(api_key, api_url, model);
 
         let session_topics: HashSet<u64> = self.session_manager
             .get_active_topic_ids()
@@ -484,58 +555,14 @@ impl MemHop {
 
         dream_pipeline(
             &mut self.mmap,
-            config,
             &mut self.header,
-            &mut self.btree,  // Changed to mutable
-            &self.sparse_index,
+            &mut self.btree,
+            &mut self.sparse_index,
             &llm_provider,
             session_topics,
         )
     }
 
-    /// 执行记忆整理操作
-    ///
-    /// # 参数
-    /// * `merge_threshold` - Topic 合并相似度阈值（0.0-1.0，默认 0.5）
-    ///
-    /// # 返回
-    /// OrganizeReport 报告
-    pub fn organize(
-        &mut self,
-        merge_threshold: Option<f32>,
-    ) -> Result<crate::organize::OrganizeReport> {
-        use std::collections::HashSet;
-
-        let threshold = merge_threshold.unwrap_or(0.5);
-
-        // 加载所有 Topics
-        let mut topics = Vec::new();
-
-        let active_ids = self.session_manager.get_active_topic_ids();
-        let session_topics: HashSet<u64> = active_ids.iter().cloned().collect();
-        
-        for topic_id in &active_ids {
-            if let Some(page_ref) = self.btree.search(*topic_id) {
-                let (page_id, _) = crate::file::page::decode_page_ref(page_ref);
-                let offset = (page_id as usize) * PAGE_SIZE + 32;
-                if offset < self.mmap.len() {
-                    if let Ok(topic) = crate::slot::topic::TopicSlot::deserialize(&self.mmap[offset..]) {
-                        topics.push(topic);
-                    }
-                }
-            }
-        }
-
-        crate::organize::organize(
-            &mut topics,
-            &mut self.mmap,
-            &mut self.header,
-            &self.btree,
-            &self.sparse_index,
-            &session_topics,
-            threshold,
-        )
-    }
 
     /// Sync all changes to disk
     pub fn sync(&self) -> Result<()> {
@@ -642,38 +669,48 @@ impl MemHop {
         // Update header commit_id
         self.header.commit_id += 1;
 
-        // Write updated headers (A/B dual header)
+        // Write updated headers with A/B alternation for crash safety:
+        // Write B first (backup), flush, then write A (primary), flush.
+        // If crash occurs between flushes, select_valid_header picks the one
+        // with higher commit_id (both will be valid, both have same content).
         let header_bytes = self.header.to_bytes();
-        self.mmap[..PAGE_SIZE].copy_from_slice(&header_bytes);
-        self.mmap[PAGE_SIZE..PAGE_SIZE * 2].copy_from_slice(&header_bytes);
-
-        // Flush to disk
-        self.mmap.flush()?;
+        self.mmap[PAGE_SIZE..PAGE_SIZE * 2].copy_from_slice(&header_bytes); // B first
+        self.mmap.flush_range(PAGE_SIZE, PAGE_SIZE)?;
+        self.mmap[..PAGE_SIZE].copy_from_slice(&header_bytes); // A second
+        self.mmap.flush_range(0, PAGE_SIZE)?;
 
         Ok(())
     }
 
     /// Close the database and release resources
     pub fn close(mut self) -> Result<()> {
-        // 1. Sync mmap to disk
-        self.sync()?;
+        // 1. Final checkpoint to persist all changes
+        self.checkpoint()?;
 
         // 2. Truncate Journal: 将 journal_start 和 journal_len 置零
         self.header.journal_start = 0;
         self.header.journal_len = 0;
         let header_bytes = self.header.to_bytes();
+        // Write B first (backup), then A (primary) — alternating for crash safety
+        self.mmap[PAGE_SIZE..PAGE_SIZE * 2].copy_from_slice(&header_bytes);
+        self.mmap.flush_range(PAGE_SIZE, PAGE_SIZE)?;
         self.mmap[..PAGE_SIZE].copy_from_slice(&header_bytes);
-        self.mmap.flush()?;
+        self.mmap.flush_range(0, PAGE_SIZE)?;
 
-        // 3. File will be closed when dropped
+        // 3. Mark as closed to prevent Drop from re-checkpointing
+        self.closed = true;
+
+        // 4. File will be closed when dropped
         Ok(())
     }
 }
 
 impl Drop for MemHop {
     fn drop(&mut self) {
-        if let Err(e) = self.checkpoint() {
-            eprintln!("Warning: Failed to checkpoint on drop: {}", e);
+        if !self.closed {
+            if let Err(e) = self.checkpoint() {
+                eprintln!("Warning: Failed to checkpoint on drop: {}", e);
+            }
         }
     }
 }

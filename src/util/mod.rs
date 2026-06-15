@@ -23,36 +23,39 @@ pub const VERSION: u16 = 0x0022;
 /// Cognitive architecture layers (L0-L5)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layer {
-    L0, // Profile
-    L1, // Engram - Episodic hypergraph
-    L2, // Topic - Semantic compression
-    L3, // Knowledge - Domain knowledge graph
-    L4, // Archive - Raw text + file paths
-    L5, // Crystal - Programmatic knowledge
+    Profile,     // L0: Agent identity
+    ContextNode, // L1: Hypergraph skeleton node
+    Hyperedge,   // L1: Hypergraph skeleton edge
+    Context,     // L2: Scene-based conversation context
+    Hypergraph,  // L3: Generic hypergraph engine
+    Archive,     // L4: Raw text + file paths
+    ActionChain, // L5: Ordered action sequences
 }
 
 impl Layer {
     /// Convert layer to u8 for storage
     pub fn to_u8(&self) -> u8 {
         match self {
-            Layer::L0 => 0,
-            Layer::L1 => 1,
-            Layer::L2 => 2,
-            Layer::L3 => 3,
-            Layer::L4 => 4,
-            Layer::L5 => 5,
+            Layer::Profile => 0,
+            Layer::ContextNode => 1,
+            Layer::Hyperedge => 2,
+            Layer::Context => 3,
+            Layer::Hypergraph => 4,
+            Layer::Archive => 5,
+            Layer::ActionChain => 6,
         }
     }
 
     /// Convert u8 to Layer
     pub fn from_u8(value: u8) -> Option<Layer> {
         match value {
-            0 => Some(Layer::L0),
-            1 => Some(Layer::L1),
-            2 => Some(Layer::L2),
-            3 => Some(Layer::L3),
-            4 => Some(Layer::L4),
-            5 => Some(Layer::L5),
+            0 => Some(Layer::Profile),
+            1 => Some(Layer::ContextNode),
+            2 => Some(Layer::Hyperedge),
+            3 => Some(Layer::Context),
+            4 => Some(Layer::Hypergraph),
+            5 => Some(Layer::Archive),
+            6 => Some(Layer::ActionChain),
             _ => None,
         }
     }
@@ -61,12 +64,13 @@ impl Layer {
 impl fmt::Display for Layer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Layer::L0 => write!(f, "L0"),
-            Layer::L1 => write!(f, "L1"),
-            Layer::L2 => write!(f, "L2"),
-            Layer::L3 => write!(f, "L3"),
-            Layer::L4 => write!(f, "L4"),
-            Layer::L5 => write!(f, "L5"),
+            Layer::Profile => write!(f, "Profile"),
+            Layer::ContextNode => write!(f, "ContextNode"),
+            Layer::Hyperedge => write!(f, "Hyperedge"),
+            Layer::Context => write!(f, "Context"),
+            Layer::Hypergraph => write!(f, "Hypergraph"),
+            Layer::Archive => write!(f, "Archive"),
+            Layer::ActionChain => write!(f, "ActionChain"),
         }
     }
 }
@@ -145,21 +149,22 @@ pub struct SourceRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum PageType {
-    Engram = 0x01,
-    Hyperedge = 0x02,
-    VectorMatrix = 0x03,
-    SparseIndex = 0x04,
-    Topic = 0x05,
-    TopicEdge = 0x06,
-    Archive = 0x07,
-    Crystal = 0x08,
-    Knowledge = 0x09,
-    KnowledgeEdge = 0x0B,
-    Profile = 0x0A,
-    BTreeNode = 0x10,
-    BTreeLeaf = 0x11,
-    Free = 0x20,
-    Overflow = 0xFF,
+    ContextNode = 0x01,   // L1 graph node
+    Hyperedge = 0x02,     // L1 hyperedge
+    VectorMatrix = 0x03,  // Vector storage page
+    SparseIndex = 0x04,   // BM25/ngram index
+    Context = 0x05,       // L2 scene context
+    HypergraphSlot = 0x06,// L3 hypergraph container
+    Archive = 0x07,       // L4 raw archive
+    ActionChain = 0x08,   // L5 action chain
+    ActionStep = 0x09,    // L5 action step
+    Profile = 0x0A,       // L0 agent profile
+    HypergraphNode = 0x0B,// L3 hypergraph node
+    HypergraphEdge = 0x0C,// L3 hypergraph edge
+    BTreeNode = 0x10,     // B-tree internal node
+    BTreeLeaf = 0x11,     // B-tree leaf node
+    Free = 0x20,          // Free page
+    Overflow = 0xFF,      // Overflow page
 }
 
 impl PageType {
@@ -171,17 +176,18 @@ impl PageType {
     /// Convert from u16
     pub fn from_u16(value: u16) -> Option<PageType> {
         match value {
-            0x01 => Some(PageType::Engram),
+            0x01 => Some(PageType::ContextNode),
             0x02 => Some(PageType::Hyperedge),
             0x03 => Some(PageType::VectorMatrix),
             0x04 => Some(PageType::SparseIndex),
-            0x05 => Some(PageType::Topic),
-            0x06 => Some(PageType::TopicEdge),
+            0x05 => Some(PageType::Context),
+            0x06 => Some(PageType::HypergraphSlot),
             0x07 => Some(PageType::Archive),
-            0x08 => Some(PageType::Crystal),
-            0x09 => Some(PageType::Knowledge),
+            0x08 => Some(PageType::ActionChain),
+            0x09 => Some(PageType::ActionStep),
             0x0A => Some(PageType::Profile),
-            0x0B => Some(PageType::KnowledgeEdge),
+            0x0B => Some(PageType::HypergraphNode),
+            0x0C => Some(PageType::HypergraphEdge),
             0x10 => Some(PageType::BTreeNode),
             0x11 => Some(PageType::BTreeLeaf),
             0x20 => Some(PageType::Free),

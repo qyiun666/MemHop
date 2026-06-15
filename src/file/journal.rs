@@ -32,12 +32,12 @@ impl JournalEntry {
 }
 
 /// Serialize a journal entry to bytes
-/// Format: entry_size(u32) + commit_id(u64) + page_count(u8) + [page_id(u32) + data(4096)] × N + crc32(u32)
+/// Format: entry_size(u32) + commit_id(u64) + page_count(u16) + [page_id(u32) + data(4096)] × N + crc32(u32)
 pub fn serialize_entry(entry: &JournalEntry) -> Vec<u8> {
     let page_count = entry.pages.len();
 
-    // Calculate total size: 4 (entry_size) + 8 (commit_id) + 1 (page_count) + N * (4 + 4096) + 4 (crc32)
-    let data_size = 4 + 8 + 1 + page_count * (4 + PAGE_SIZE) + 4;
+    // Calculate total size: 4 (entry_size) + 8 (commit_id) + 2 (page_count) + N * (4 + 4096) + 4 (crc32)
+    let data_size = 4 + 8 + 2 + page_count * (4 + PAGE_SIZE) + 4;
 
     let mut buffer = Vec::with_capacity(data_size);
 
@@ -47,8 +47,8 @@ pub fn serialize_entry(entry: &JournalEntry) -> Vec<u8> {
     // Commit ID (8 bytes)
     buffer.extend_from_slice(&entry.commit_id.to_le_bytes());
 
-    // Page count (1 byte)
-    buffer.push(page_count as u8);
+    // Page count (2 bytes, u16)
+    buffer.extend_from_slice(&(page_count as u16).to_le_bytes());
 
     // Pages
     for (page_id, data) in &entry.pages {
@@ -69,8 +69,8 @@ pub fn serialize_entry(entry: &JournalEntry) -> Vec<u8> {
 
 /// Deserialize a journal entry from bytes
 pub fn deserialize_entry(data: &[u8]) -> Result<JournalEntry> {
-    if data.len() < 17 {
-        // Minimum: 4 (size) + 8 (commit_id) + 1 (page_count) + 4 (crc)
+    if data.len() < 18 {
+        // Minimum: 4 (size) + 8 (commit_id) + 2 (page_count) + 4 (crc)
         return Err(MemHopError::Serialization(
             "Journal entry too small".to_string(),
         ));
@@ -105,12 +105,12 @@ pub fn deserialize_entry(data: &[u8]) -> Result<JournalEntry> {
         data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11],
     ]);
 
-    // Read page_count
-    let page_count = data[12] as usize;
+    // Read page_count (u16, 2 bytes)
+    let page_count = u16::from_le_bytes([data[12], data[13]]) as usize;
 
     // Read pages
     let mut pages = Vec::with_capacity(page_count);
-    let mut offset = 13;
+    let mut offset = 14;
 
     for _ in 0..page_count {
         if offset + 4 + PAGE_SIZE > 4 + entry_size - 4 {

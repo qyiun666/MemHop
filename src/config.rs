@@ -18,7 +18,7 @@ impl MemHopConfig {
     pub fn new(db_path: PathBuf, vector_dim: usize) -> Self {
         Self {
             db_path,
-            encoder_socket: PathBuf::from("/tmp/memhop_encoder.sock"),
+            encoder_socket: std::env::temp_dir().join("memhop_encoder.sock"),
             vector_dim,
             crystal_path: None,
         }

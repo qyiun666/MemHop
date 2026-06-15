@@ -78,11 +78,15 @@ pub fn create_temporal_edges(
         let page_id = allocate_from_free_list(mmap, header)?;
         let edge_offset = (page_id as usize) * PAGE_SIZE + 32;
 
-        if edge_offset + edge_data.len() <= mmap.len() {
-            mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
-
-            edge_ids.push(format!("{:016x}", edge.id_hash));
+        if edge_offset + edge_data.len() > mmap.len() {
+            return Err(MemHopError::Serialization(format!(
+                "TemporalStage: edge data too large: {} > {}",
+                edge_data.len(), mmap.len() - edge_offset
+            )));
         }
+        mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
+
+        edge_ids.push(format!("{:016x}", edge.id_hash));
     }
 
     Ok(edge_ids)

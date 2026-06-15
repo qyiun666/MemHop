@@ -170,7 +170,7 @@ pub fn distill_l1_to_l3(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dream::deepseek_llm::DeepSeekLlmProvider;
+    use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
     use crate::file::header::FileHeader;
     use std::io::Write;
 
@@ -194,8 +194,12 @@ mod tests {
         let mut header = FileHeader::new(768);
         let mut btree = BTreeIndex::new();
         let sparse_index = SparseIndex::new();
-        let llm = DeepSeekLlmProvider::new("test-key".to_string());
-        
+        let llm = OpenAICompatibleLlmProvider::new(
+            "test-key".to_string(),
+            "https://api.example.com/v1/chat/completions".to_string(),
+            "test-model".to_string(),
+        );
+
         let result = distill_l1_to_l3(
             &mut mmap, 
             &mut header, 

@@ -55,10 +55,14 @@ pub fn reflect_all_topics(
                         .serialize()
                         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-                    if offset + topic_data.len() <= mmap.len() {
-                        mmap[offset..offset + topic_data.len()].copy_from_slice(&topic_data);
-                        updated_topic_ids.push(topic_id_str);
+                    if offset + topic_data.len() > mmap.len() {
+                        return Err(MemHopError::Serialization(format!(
+                            "ReflectStage: topic data too large: {} > {}",
+                            topic_data.len(), mmap.len() - offset
+                        )));
                     }
+                    mmap[offset..offset + topic_data.len()].copy_from_slice(&topic_data);
+                    updated_topic_ids.push(topic_id_str);
                 }
                 Ok(None) => {
                     // Topic already has summary or no engrams found

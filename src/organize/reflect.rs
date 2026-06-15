@@ -41,7 +41,7 @@ pub fn reflect_topic(
             // 聚合所有 Engram 的 sparse 向量，提取 top-10 关键词
             let mut keyword_freq: HashMap<String, u32> = HashMap::new();
 
-            for &node_id in &topic.node_ids {
+            for &node_id in &topic.engram_ids {
                 if let Some(node_page_ref) = btree.search(node_id) {
                     let (node_page_id, _slot_index) = decode_page_ref(node_page_ref);
                     let node_offset = (node_page_id as usize) * PAGE_SIZE + 32;
@@ -98,8 +98,8 @@ mod tests {
             id_hash: 12345,
             title: "Test Topic".to_string(),
             summary: Some("Existing summary".to_string()),
-            node_ids: vec![1, 2],
-            l3_refs: vec![], l4_refs: vec![], parent_id: None,
+            engram_ids: vec![1, 2],
+            knowledge_refs: vec![], archive_refs: vec![], parent_id: None,
             created_at: 0,
             updated_at: 0,
             version: 0,

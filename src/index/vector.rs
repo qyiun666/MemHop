@@ -1,6 +1,6 @@
 // Vector matrix module (SIMD)
 use crate::index::btree::BTreeIndex;
-use crate::slot::engram::EngramSlot;
+use crate::slot::context_node::ContextNode;
 use crate::util::PAGE_SIZE;
 use crate::MemHopError;
 use half::f16;
@@ -158,25 +158,25 @@ pub fn brute_force_knn(
 
     // Iterate through all entries in btree
     for (&id_hash, &page_ref) in btree.iter() {
-        // Extract engram page reference
-        let engram_page_id = (page_ref >> 16) as u32;
-        let engram_offset = (engram_page_id as usize) * PAGE_SIZE + 32;
+        // Extract node page reference
+        let node_page_id = (page_ref >> 16) as u32;
+        let node_offset = (node_page_id as usize) * PAGE_SIZE + 32;
 
         // Check bounds
-        if engram_offset >= data.len() {
+        if node_offset >= data.len() {
             continue;
         }
 
-        // Deserialize EngramSlot to get vector_page_ref
-        if let Ok(engram) = EngramSlot::deserialize(&data[engram_offset..]) {
+        // Deserialize ContextNode to get vector_page_ref
+        if let Ok(node) = ContextNode::deserialize(&data[node_offset..]) {
             // Skip if no vector
-            if engram.vector_page_ref == 0 {
+            if node.vector_page_ref == 0 {
                 continue;
             }
 
             // Extract vector page reference
-            let vec_page_id = (engram.vector_page_ref >> 16) as u32;
-            let vec_slot_index = (engram.vector_page_ref & 0xFFFF) as u16;
+            let vec_page_id = (node.vector_page_ref >> 16) as u32;
+            let vec_slot_index = (node.vector_page_ref & 0xFFFF) as u16;
 
             // Read vector from mmap
             if let Ok(vector) = read_vector(data, vec_page_id, vec_slot_index, vector_dim) {

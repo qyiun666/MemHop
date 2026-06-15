@@ -4,9 +4,10 @@ use crate::file::free_list::allocate_from_free_list;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::slot::engram::EngramSlot;
+use crate::slot::context::ActivationState;
+use crate::slot::context::ContextSlot;
+use crate::slot::context_node::ContextNode;
 use crate::slot::hyperedge::{HyperedgeKind, HyperedgeSlot};
-use crate::slot::topic::TopicSlot;
 use crate::util::{hash_id, PAGE_SIZE};
 use crate::util::{SourceMeta, SourceRef};
 use crate::MemHopError;
@@ -197,7 +198,7 @@ fn calculate_ngram_jaccard(text1: &str, text2: &str) -> f64 {
     }
 }
 
-/// Check for duplicate engram using cosine similarity and Jaccard overlap
+/// Check for duplicate L1 node using cosine similarity
 fn check_duplicate(
     mmap: &MmapMut,
     item: &EncodedItem,
@@ -205,26 +206,23 @@ fn check_duplicate(
     vector_dim: usize,
 ) -> Result<Option<u64>, MemHopError> {
     use crate::index::vector::cosine_similarity;
-    use crate::slot::engram::EngramSlot;
 
     // Thresholds for deduplication
     const COSINE_THRESHOLD: f32 = 0.95;
-    const JACCARD_THRESHOLD: f32 = 0.8;
 
-    // Iterate through all entries in btree
+    // Iterate through all L1 ContextNode entries in btree
     for (&existing_hash, &page_ref) in btree.iter() {
         let page_id = (page_ref >> 16) as u32;
-        let engram_offset = (page_id as usize) * PAGE_SIZE + 32;
+        let node_offset = (page_id as usize) * PAGE_SIZE + 32;
 
-        if engram_offset >= mmap.len() {
+        if node_offset >= mmap.len() {
             continue;
         }
 
-        // Deserialize existing engram
-        if let Ok(existing_engram) = EngramSlot::deserialize(&mmap[engram_offset..]) {
-            // Check 1: Vector cosine similarity
-            if existing_engram.vector_page_ref != 0 {
-                let vec_page_id = (existing_engram.vector_page_ref >> 16) as u32;
+        // Deserialize existing L1 ContextNode
+        if let Ok(existing_node) = ContextNode::deserialize(&mmap[node_offset..]) {
+            if existing_node.vector_page_ref != 0 {
+                let vec_page_id = (existing_node.vector_page_ref >> 16) as u32;
                 let vec_offset = (vec_page_id as usize) * PAGE_SIZE + 32;
 
                 if vec_offset + vector_dim * 2 <= mmap.len() {
@@ -242,40 +240,13 @@ fn check_duplicate(
                     }
                 }
             }
-
-            // Check 2: Keyword Jaccard similarity
-            let existing_keywords: std::collections::HashSet<&str> = existing_engram
-                .keywords
-                .iter()
-                .map(|s| s.as_str())
-                .collect();
-            let new_keywords: std::collections::HashSet<&str> =
-                item.sparse.keys().map(|s| s.as_str()).collect();
-
-            if !existing_keywords.is_empty() && !new_keywords.is_empty() {
-                let intersection = existing_keywords.intersection(&new_keywords).count();
-                let union = existing_keywords.union(&new_keywords).count();
-
-                if union > 0 {
-                    let jaccard = intersection as f32 / union as f32;
-                    if jaccard > JACCARD_THRESHOLD {
-                        return Ok(Some(existing_hash));
-                    }
-                }
-            }
         }
     }
 
     Ok(None)
 }
 
-/// Infer emotion type from valence and arousal
-fn infer_emotion_type(valence: f64, arousal: f64) -> u8 {
-    use crate::dream::emotion::infer_emotion;
-    infer_emotion(valence, arousal) as u8
-}
-
-/// Write L1 engrams with deduplication
+/// Write L1 ContextNodes with deduplication
 pub fn dedup_and_write_l1(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -299,45 +270,58 @@ pub fn dedup_and_write_l1(
 
         // Check for duplicates
         if let Some(existing_id) = check_duplicate(mmap, item, btree, vector_dim)? {
-            // Update existing engram (simplified)
+            // Update existing L1 node (simplified)
             updated += 1;
             node_ids.push(existing_id);
             continue;
         }
 
-        // Create new Engram slot
-        let engram = EngramSlot {
+        // Calculate vector_page_ref before creating node
+        let vector_page_ref = if !item.dense.is_empty() {
+            // Allocate a new page for vector storage
+            let vec_page_id = allocate_from_free_list(mmap, header)?;
+            let vec_slot_index = 0u16; // First slot in new page
+
+            // Write vector to the allocated page
+            crate::index::vector::write_vector(
+                mmap,
+                vec_page_id,
+                vec_slot_index,
+                id_hash,
+                &item.dense,
+                vector_dim,
+            )?;
+
+            // Encode page_ref: high 32 bits = page_id, low 16 bits = slot_index
+            ((vec_page_id as u64) << 16) | (vec_slot_index as u64)
+        } else {
+            0
+        };
+
+        // Create L1 ContextNode (points to L2 context via context_id)
+        // context_id is set to 0 initially; will be linked when L2 context is created
+        let node = ContextNode {
             id_hash,
-            text: item.text.clone(),
-            summary: None,
-            keywords: vec![],
+            context_id: 0,
+            vector_page_ref,
+            importance: item.importance,
             created_at: now,
             updated_at: now,
             version: 1,
-            edge_count: 0,
-            doc_len: item.text.len() as u16,
-            vector_page_ref: 0,
-            is_structural: item.is_structural,
-            source_type: 0,
-            memory_state: 0,
-            emotion_type: infer_emotion_type(item.valence, item.arousal),
-            valence: item.valence as f32,
-            arousal: item.arousal as f32,
-            importance: item.importance,
-            edge_ptrs: [0; 8],
+            edge_ptrs: vec![],
         };
 
-        let engram_data = engram
+        let node_data = node
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-        // Allocate page from free list
+        // Allocate page from free list for L1 node
         let page_id = allocate_from_free_list(mmap, header)?;
 
-        // Write engram to page (skip 32-byte header)
-        let engram_offset = (page_id as usize) * 4096 + 32;
-        if engram_offset + engram_data.len() <= mmap.len() {
-            mmap[engram_offset..engram_offset + engram_data.len()].copy_from_slice(&engram_data);
+        // Write node to page (skip 32-byte header)
+        let node_offset = (page_id as usize) * PAGE_SIZE + 32;
+        if node_offset + node_data.len() <= mmap.len() {
+            mmap[node_offset..node_offset + node_data.len()].copy_from_slice(&node_data);
         }
 
         // Update B-tree index
@@ -359,12 +343,14 @@ pub fn dedup_and_write_l1(
     Ok((node_ids, created, updated, skipped))
 }
 
-/// Update L2 topics based on topic labels
+/// Update L2 contexts based on topic labels
 pub fn update_topics(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     items: &[EncodedItem],
     l1_node_ids: &[u64],
+    btree: &BTreeIndex,
+    vector_dim: usize,
 ) -> Result<u32, MemHopError> {
     let mut topics_updated = 0u32;
 
@@ -386,43 +372,114 @@ pub fn update_topics(
         .as_millis() as i64;
 
     for (label, indices) in topic_groups {
-        let topic_id = hash_id(&label);
+        let context_id = hash_id(&label);
+        let _node_ids: Vec<u64> = indices.iter().map(|&idx| l1_node_ids[idx]).collect();
 
-        // Create or find topic (simplified: always create new)
-        let topic = TopicSlot {
-            id_hash: topic_id,
+        // Calculate centroid vector from associated L1 nodes
+        let centroid_vector = calculate_centroid_from_nodes(mmap, &_node_ids, btree, vector_dim)?;
+
+        // Write centroid vector to page if available
+        let centroid_page_ref = if let Some(ref vec) = centroid_vector {
+            let vec_page_id = allocate_from_free_list(mmap, header)?;
+            let vec_slot_index = 0u16;
+            crate::index::vector::write_vector(
+                mmap,
+                vec_page_id,
+                vec_slot_index,
+                context_id,
+                vec,
+                vector_dim,
+            )?;
+            ((vec_page_id as u64) << 16) | (vec_slot_index as u64)
+        } else {
+            0
+        };
+
+        // Create or find L2 ContextSlot
+        let context = ContextSlot {
+            id_hash: context_id,
+            parent_id: None,
+            depth: 1,
             title: label.clone(),
             summary: None,
-            node_ids: indices.iter().map(|&idx| l1_node_ids[idx]).collect(),
-            l3_refs: vec![], l4_refs: vec![], parent_id: None,
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 0,
             created_at: now,
             updated_at: now,
             version: 1,
             importance: 0.5,
             activation_score: 0.5,
             is_active: false,
-            activation_state: crate::slot::topic::ActivationState::Dormant,
-            centroid_vector: None,
-            domain_weights: vec![],
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref,
             dialogue_range: (now, now),
-            reserved: [0; 16],
         };
 
-        let topic_data = topic
+        let context_data = context
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-        // Allocate page and write topic
+        // Allocate page and write context
         let page_id = allocate_from_free_list(mmap, header)?;
-        let topic_offset = (page_id as usize) * 4096 + 32;
-        if topic_offset + topic_data.len() <= mmap.len() {
-            mmap[topic_offset..topic_offset + topic_data.len()].copy_from_slice(&topic_data);
+        let context_offset = (page_id as usize) * PAGE_SIZE + 32;
+        if context_offset + context_data.len() <= mmap.len() {
+            mmap[context_offset..context_offset + context_data.len()].copy_from_slice(&context_data);
         }
 
         topics_updated += 1;
     }
 
     Ok(topics_updated)
+}
+
+/// Calculate centroid vector from a list of L1 ContextNode IDs
+fn calculate_centroid_from_nodes(
+    mmap: &MmapMut,
+    node_ids: &[u64],
+    btree: &BTreeIndex,
+    vector_dim: usize,
+) -> Result<Option<Vec<half::f16>>, MemHopError> {
+    use half::f16;
+
+    if node_ids.is_empty() {
+        return Ok(None);
+    }
+
+    let data = &mmap[..];
+    let mut sum = vec![0.0f32; vector_dim];
+    let mut count = 0usize;
+
+    for &id_hash in node_ids {
+        if let Some(page_ref) = btree.search(id_hash) {
+            let page_id = (page_ref >> 16) as u32;
+            let offset = (page_id as usize) * PAGE_SIZE + 32;
+
+            if let Ok(node) = ContextNode::deserialize(&data[offset..]) {
+                if node.vector_page_ref != 0 {
+                    let vec_page_id = (node.vector_page_ref >> 16) as u32;
+                    let vec_slot_index = (node.vector_page_ref & 0xFFFF) as u16;
+
+                    if let Ok(vector) = crate::index::vector::read_vector(data, vec_page_id, vec_slot_index, vector_dim) {
+                        for (i, val) in vector.iter().enumerate() {
+                            sum[i] += val.to_f32();
+                        }
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    if count == 0 {
+        return Ok(None);
+    }
+
+    // Calculate average
+    let count_f32 = count as f32;
+    let centroid: Vec<f16> = sum.iter().map(|&s| f16::from_f32(s / count_f32)).collect();
+
+    Ok(Some(centroid))
 }
 
 /// Write L3 domain nodes (simplified)
@@ -445,12 +502,11 @@ pub fn create_batch_hyperedges(
     let mut edge_count = 0u32;
 
     if l1_node_ids.len() > 1 {
-        // Create Association hyperedge (connects all nodes in batch)
+        // Create CoOccurrence hyperedge (connects all nodes in batch)
         let assoc_edge = HyperedgeSlot {
             id_hash: hash_id("batch_association"),
-            kind: HyperedgeKind::Association,
+            kind: HyperedgeKind::CoOccurrence,
             node_ptrs: l1_node_ids.to_vec(),
-            meta: vec![],
             weight: 1.0,
             created_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -473,13 +529,12 @@ pub fn create_batch_hyperedges(
 
         edge_count += 1;
 
-        // Create Evolution hyperedges (chain relationships)
+        // Create Temporal hyperedges (chain relationships)
         for i in 1..l1_node_ids.len() {
             let evol_edge = HyperedgeSlot {
                 id_hash: hash_id(&format!("evolution_{}_{}", i - 1, i)),
-                kind: HyperedgeKind::Evolution,
+                kind: HyperedgeKind::Temporal,
                 node_ptrs: vec![l1_node_ids[i - 1], l1_node_ids[i]],
-                meta: vec![],
                 weight: 1.0,
                 created_at: std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -548,7 +603,7 @@ pub fn batch_store(
     report.dedup_skipped = skipped;
 
     // Phase 4: L2 Topic Update
-    let topics_updated = update_topics(mmap, header, &encoded_items, &l1_node_ids)?;
+    let topics_updated = update_topics(mmap, header, &encoded_items, &l1_node_ids, btree, vector_dim)?;
     report.l2_topics_updated = topics_updated;
 
     // Phase 5: L3 Domain Write

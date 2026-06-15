@@ -68,6 +68,33 @@ impl SparseIndex {
         text.split_whitespace().map(|s| s.to_lowercase()).collect()
     }
 
+    /// Generate character-level n-grams from text
+    ///
+    /// # Arguments
+    /// * `text` - Input text
+    /// * `n` - N-gram size (e.g., 2 for bigrams, 3 for trigrams)
+    ///
+    /// # Returns
+    /// Vector of n-gram strings (lowercase, no whitespace)
+    pub fn tokenize_ngram(text: &str, n: usize) -> Vec<String> {
+        // Normalize text: lowercase and remove whitespace
+        let normalized: String = text.chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>()
+            .to_lowercase();
+
+        // Use character-level windowing to correctly handle multi-byte UTF-8 (e.g. Chinese, emoji)
+        let chars: Vec<char> = normalized.chars().collect();
+        if n == 0 || chars.len() < n {
+            return vec![normalized];
+        }
+
+        chars
+            .windows(n)
+            .map(|w| w.iter().collect::<String>())
+            .collect()
+    }
+
     /// Add a document to the index
     /// id_hash: unique identifier for the document
     /// terms: pre-tokenized terms

@@ -42,23 +42,23 @@ pub fn merge_similar_topics(
             if similarity >= threshold {
                 // 合并：保留节点多的，吸收另一个
                 let (keeper_idx, absorbed_idx) =
-                    if topics[i].node_ids.len() >= topics[j].node_ids.len() {
+                    if topics[i].engram_ids.len() >= topics[j].engram_ids.len() {
                         (i, j)
                     } else {
                         (j, i)
                     };
 
-                // 先收集需要添加的 node_ids（避免借用冲突）
+                // 先收集需要添加的 engram_ids（避免借用冲突）
                 let nodes_to_add: Vec<u64> = topics[absorbed_idx]
-                    .node_ids
+                    .engram_ids
                     .iter()
-                    .filter(|node_id| !topics[keeper_idx].node_ids.contains(node_id))
+                    .filter(|node_id| !topics[keeper_idx].engram_ids.contains(node_id))
                     .cloned()
                     .collect();
 
                 // 然后添加到 keeper
                 for node_id in nodes_to_add {
-                    topics[keeper_idx].node_ids.push(node_id);
+                    topics[keeper_idx].engram_ids.push(node_id);
                 }
 
                 // 标记为待删除
@@ -163,8 +163,8 @@ mod tests {
                 id_hash: 1,
                 title: "topic A".to_string(),
                 summary: None,
-                node_ids: vec![1, 2],
-                l3_refs: vec![], l4_refs: vec![], parent_id: None,
+                engram_ids: vec![1, 2],
+                knowledge_refs: vec![], archive_refs: vec![], parent_id: None,
                 created_at: 0,
                 updated_at: 0,
                 version: 0,
@@ -181,8 +181,8 @@ mod tests {
                 id_hash: 2,
                 title: "topic B".to_string(),
                 summary: None,
-                node_ids: vec![3, 4],
-                l3_refs: vec![], l4_refs: vec![], parent_id: None,
+                engram_ids: vec![3, 4],
+                knowledge_refs: vec![], archive_refs: vec![], parent_id: None,
                 created_at: 0,
                 updated_at: 0,
                 version: 0,
@@ -210,8 +210,8 @@ mod tests {
                 id_hash: 1,
                 title: "machine learning".to_string(),
                 summary: None,
-                node_ids: vec![1, 2],
-                l3_refs: vec![], l4_refs: vec![], parent_id: None,
+                engram_ids: vec![1, 2],
+                knowledge_refs: vec![], archive_refs: vec![], parent_id: None,
                 created_at: 0,
                 updated_at: 0,
                 version: 0,
@@ -228,8 +228,8 @@ mod tests {
                 id_hash: 2,
                 title: "machine learning AI".to_string(),
                 summary: None,
-                node_ids: vec![3, 4, 5],
-                l3_refs: vec![], l4_refs: vec![], parent_id: None,
+                engram_ids: vec![3, 4, 5],
+                knowledge_refs: vec![], archive_refs: vec![], parent_id: None,
                 created_at: 0,
                 updated_at: 0,
                 version: 0,

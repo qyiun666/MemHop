@@ -1,43 +1,36 @@
-// DeepSeek LLM Provider implementation
+// OpenAI-compatible LLM Provider implementation
+//
+// Supports any LLM API that follows the OpenAI chat completions format,
+// including OpenAI, DeepSeek, and other compatible services.
 use crate::dream::llm::{CrystalDef, LlmProvider, MemorySummary, Pattern};
 use crate::MemHopError;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
-/// DeepSeek LLM provider using the DeepSeek API
+/// OpenAI-compatible LLM provider
+///
+/// Works with any API that follows the OpenAI chat completions format.
+/// Configure with your preferred provider's API key, endpoint URL, and model name.
 #[allow(dead_code)]
-pub struct DeepSeekLlmProvider {
+pub struct OpenAICompatibleLlmProvider {
     /// API key for authentication
     api_key: String,
-    /// API endpoint URL (supports OpenAI-compatible APIs)
+    /// API endpoint URL (must be OpenAI-compatible)
     api_url: String,
-    /// Model name to use (e.g., "deepseek-chat")
+    /// Model name to use
     model: String,
     /// HTTP client for API calls
     client: reqwest::blocking::Client,
 }
 
-impl DeepSeekLlmProvider {
-    /// Create a new DeepSeek LLM provider
+impl OpenAICompatibleLlmProvider {
+    /// Create a new LLM provider with custom configuration
     ///
     /// # Arguments
     /// * `api_key` - API key for authentication
-    pub fn new(api_key: String) -> Self {
-        Self {
-            api_key,
-            api_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
-            model: "deepseek-chat".to_string(),
-            client: reqwest::blocking::Client::new(),
-        }
-    }
-
-    /// Create a new DeepSeek LLM provider with custom configuration
-    ///
-    /// # Arguments
-    /// * `api_key` - API key for authentication
-    /// * `api_url` - API endpoint URL (e.g., "https://api.deepseek.com/v1/chat/completions")
-    /// * `model` - Model name (e.g., "deepseek-chat")
-    pub fn new_with_config(api_key: String, api_url: String, model: String) -> Self {
+    /// * `api_url` - API endpoint URL (e.g., "https://api.openai.com/v1/chat/completions")
+    /// * `model` - Model name (e.g., "gpt-4", "deepseek-chat")
+    pub fn new(api_key: String, api_url: String, model: String) -> Self {
         Self {
             api_key,
             api_url,
@@ -46,7 +39,7 @@ impl DeepSeekLlmProvider {
         }
     }
 
-    /// Call the DeepSeek API with a prompt
+    /// Call the OpenAI-compatible API with a prompt
     ///
     /// # Arguments
     /// * `prompt` - The prompt to send to the API
@@ -89,7 +82,7 @@ impl DeepSeekLlmProvider {
     }
 }
 
-impl LlmProvider for DeepSeekLlmProvider {
+impl LlmProvider for OpenAICompatibleLlmProvider {
     fn summarize(&self, texts: &[String]) -> Result<String, MemHopError> {
         let memories_text = texts.iter().enumerate()
             .map(|(i, t)| format!("{}. {}", i + 1, t))

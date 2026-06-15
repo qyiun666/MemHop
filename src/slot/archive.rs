@@ -1,6 +1,7 @@
 // L4 ArchiveSlot - raw conversation storage
 //
-// Stores conversation text inline; media files store file paths.
+// Minimalist design: timestamp + role + original text (or file path).
+// Archives are immutable — no version field needed.
 
 use crate::util::io_helpers::*;
 use std::io::{self, Cursor, Write};
@@ -32,25 +33,29 @@ impl ContentType {
     }
 }
 
-/// L4 Archive slot - stores raw text or file path references
+/// L4 Archive slot — stores raw text or file path references
+///
+/// Archives are the ground truth of conversation history.
+/// Text content is stored inline; non-text media store file paths.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArchiveSlot {
     pub id_hash: u64,
     pub content_type: ContentType,
-    pub role: u8,           // 0=user, 1=agent, 2=system
-    pub session_id: u64,
-    pub topic_id: u64,
-    pub created_at: i64,
-    pub version: u32,
-    pub content: String,    // inline text or file path
+    pub role: u8,             // 0=user, 1=agent, 2=system
+    pub context_id: u64,      // Associated L2 context
+    pub created_at: i64,      // Timestamp
+    pub content: String,      // Inline text or file path
     pub metadata: Option<String>,
 }
 
 impl ArchiveSlot {
     /// Calculate total serialized size
+    ///
+    /// Fixed: 8 (id_hash) + 1 (content_type) + 1 (role) + 8 (context_id) +
+    ///        8 (created_at) = 26 bytes
+    /// Variable: content (2 + len) + metadata (2 + len or 2)
     pub fn slot_size(&self) -> usize {
-        // Fixed: 8 + 1 + 1 + 8 + 8 + 8 + 4 = 38 bytes
-        const FIXED: usize = 38;
+        const FIXED: usize = 26;
         let content_size = 2 + self.content.len();
         let metadata_size = match &self.metadata {
             Some(m) => 2 + m.len(),
@@ -66,10 +71,8 @@ impl ArchiveSlot {
         // Fixed part
         buf.write_all(&self.id_hash.to_le_bytes())?;
         buf.write_all(&[self.content_type as u8, self.role])?;
-        buf.write_all(&self.session_id.to_le_bytes())?;
-        buf.write_all(&self.topic_id.to_le_bytes())?;
+        buf.write_all(&self.context_id.to_le_bytes())?;
         buf.write_all(&self.created_at.to_le_bytes())?;
-        buf.write_all(&self.version.to_le_bytes())?;
 
         // Variable part
         write_string(&mut buf, &self.content)?;
@@ -85,16 +88,14 @@ impl ArchiveSlot {
         let id_hash = read_u64(&mut c)?;
         let content_type = ContentType::from_u8(read_u8(&mut c)?);
         let role = read_u8(&mut c)?;
-        let session_id = read_u64(&mut c)?;
-        let topic_id = read_u64(&mut c)?;
+        let context_id = read_u64(&mut c)?;
         let created_at = read_i64(&mut c)?;
-        let version = read_u32(&mut c)?;
         let content = read_string(&mut c)?;
         let metadata = read_optional_string(&mut c)?;
 
         Ok(ArchiveSlot {
-            id_hash, content_type, role, session_id, topic_id,
-            created_at, version, content, metadata,
+            id_hash, content_type, role, context_id,
+            created_at, content, metadata,
         })
     }
 
@@ -116,9 +117,30 @@ mod tests {
     #[test]
     fn test_archive_text() {
         let slot = ArchiveSlot {
-            id_hash: 1, content_type: ContentType::Text, role: 0,
-            session_id: 10, topic_id: 20, created_at: 1000, version: 1,
-            content: "hello".to_string(), metadata: None,
+            id_hash: 1,
+            content_type: ContentType::Text,
+            role: 0,
+            context_id: 20,
+            created_at: 1000,
+            content: "hello".to_string(),
+            metadata: None,
+        };
+        let data = slot.serialize().unwrap();
+        assert_eq!(data.len(), slot.slot_size());
+        assert_eq!(slot, ArchiveSlot::deserialize(&data).unwrap());
+        assert!(slot.is_text());
+    }
+
+    #[test]
+    fn test_archive_code() {
+        let slot = ArchiveSlot {
+            id_hash: 2,
+            content_type: ContentType::Code,
+            role: 1,
+            context_id: 30,
+            created_at: 2000,
+            content: "fn main() {}".to_string(),
+            metadata: Some(r#"{"lang":"rust"}"#.to_string()),
         };
         let data = slot.serialize().unwrap();
         assert_eq!(slot, ArchiveSlot::deserialize(&data).unwrap());
@@ -128,10 +150,13 @@ mod tests {
     #[test]
     fn test_archive_image_path() {
         let slot = ArchiveSlot {
-            id_hash: 2, content_type: ContentType::Image, role: 0,
-            session_id: 10, topic_id: 20, created_at: 1000, version: 1,
-            content: "/img.png".to_string(),
-            metadata: Some(r#"{"w":1920}"#.to_string()),
+            id_hash: 3,
+            content_type: ContentType::Image,
+            role: 0,
+            context_id: 20,
+            created_at: 1000,
+            content: "/img/screenshot.png".to_string(),
+            metadata: Some(r#"{"w":1920,"h":1080}"#.to_string()),
         };
         let data = slot.serialize().unwrap();
         assert_eq!(slot, ArchiveSlot::deserialize(&data).unwrap());
@@ -141,11 +166,31 @@ mod tests {
     #[test]
     fn test_archive_slot_size() {
         let slot = ArchiveSlot {
-            id_hash: 1, content_type: ContentType::Text, role: 0,
-            session_id: 0, topic_id: 0, created_at: 0, version: 0,
-            content: "test".to_string(), metadata: None,
+            id_hash: 1,
+            content_type: ContentType::Text,
+            role: 0,
+            context_id: 0,
+            created_at: 0,
+            content: "test".to_string(),  // 4 bytes
+            metadata: None,              // 2 bytes
         };
-        // 38 + (2+4) + 2 = 46
-        assert_eq!(slot.slot_size(), 46);
+        // 26 + (2+4) + 2 = 34
+        assert_eq!(slot.slot_size(), 34);
+    }
+
+    #[test]
+    fn test_archive_no_version_field() {
+        // Verify the struct has no `version` field
+        let slot = ArchiveSlot {
+            id_hash: 1,
+            content_type: ContentType::Text,
+            role: 0,
+            context_id: 0,
+            created_at: 0,
+            content: "".to_string(),
+            metadata: None,
+        };
+        // Compiles = no version field exists
+        let _ = slot;
     }
 }

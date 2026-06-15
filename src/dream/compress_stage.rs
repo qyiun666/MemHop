@@ -1,313 +1,230 @@
-//! Stage 6: L1→L2 Compression - Cluster recent engrams into L2 topics
+//! Stage: L2 Depth-based Compression
 //!
-//! This stage uses clustering algorithms and LLM summarization to compress
-//! episodic memories (L1) into semantic topics (L2).
+//! Compresses activated L2 contexts through depth demotion:
+//! - Depth 1 (主节点/Scene) → Depth 2 (次节点/Sub-scene), with compressed summary
+//! - Depth 2 (次节点/Sub-scene) → Depth 3 (次次节点/Turn group)
+//! - Depth 3 (次次节点/Turn group) → Removed (free page)
+//!
+//! Original depth-1 nodes are compressed into new contexts before demotion.
+//! All changes are written to disk and memory indexes are updated.
 
 use crate::dream::llm::LlmProvider;
+use crate::dream::prune::{CompressResult, DemotionResult};
+
+/// Result type for compress_active_contexts function
+pub type CompressStageResult = Result<(
+    Vec<DemotionResult>,
+    Vec<CompressResult>,
+    Vec<String>,  // removed context IDs (depth 3 → gone)
+    Vec<String>,  // demoted to tertiary IDs (depth 2 → 3)
+), MemHopError>;
+use crate::file::free_list::free_page;
 use crate::file::header::FileHeader;
 use crate::file::page::{allocate_page, read_page_header, write_page_data};
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::slot::engram::EngramSlot;
-use crate::slot::topic::TopicSlot;
+use crate::slot::context::{ActivationState, ContextSlot};
 use crate::util::hash::hash_id;
-use crate::util::{PageType, PAGE_SIZE};
+use crate::util::{get_current_timestamp, PageType, PAGE_SIZE};
 use crate::MemHopError;
-use half::f16;
 use memmap2::MmapMut;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::HashSet;
 
-/// Compress L1 engrams into L2 topics using LLM summarization
+/// Compress activated L2 contexts through depth-based demotion
+///
+/// # Depth Demotion Rules
+/// 1. Depth 3 (turn group) → removed, page freed
+/// 2. Depth 2 (sub-scene) → demoted to depth 3
+/// 3. Depth 1 (scene) → compressed summary generated, demoted to depth 2,
+///    new compressed context created at depth 1
 ///
 /// # Arguments
-/// * `mmap` - Mutable memory-mapped file for reading/writing memory slots
+/// * `mmap` - Mutable memory-mapped file for reading/writing context slots
 /// * `header` - File header for page allocation and free list management
-/// * `btree` - B-tree index for topic lookup
-/// * `sparse_index` - Sparse index for keyword lookup
-/// * `llm` - LLM provider for generating topic summaries
-/// * `time_window` - Time range for selecting recent engrams
+/// * `btree` - B-tree index for context lookup
+/// * `sparse_index` - Sparse index for keyword lookup updates
+/// * `llm` - LLM provider for generating compressed summaries
+/// * `active_topic_ids` - Set of currently active topic IDs from session
 ///
 /// # Returns
-/// Vector of new L2 topic IDs created during compression
-pub fn compress_l1_to_l2(
+/// Tuple of (demotion_results, compression_results, removed_context_ids, demoted_to_tertiary_ids)
+pub fn compress_active_contexts(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
-    _sparse_index: &SparseIndex,
+    sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
-    time_window: (i64, i64),
-) -> Result<Vec<String>, MemHopError> {
-    // Step 1: Scan all EngramSlots, filter edge_count >= 3 within time window
-    let mut high_connectivity_engrams: Vec<(u32, EngramSlot)> = Vec::new();
-    let page_count = header.page_count;
+    active_topic_ids: &HashSet<u64>,
+) -> CompressStageResult {
+    let now_ms = get_current_timestamp();
+    let _page_count = header.page_count;
 
-    for page_id in 18..page_count {  // Skip reserved pages
-        let offset = (page_id as usize) * PAGE_SIZE;
-        if offset + PAGE_SIZE > mmap.len() {
-            break;
-        }
+    // Step 1: Collect all activated ContextSlots
+    let mut active_contexts: Vec<(u32, ContextSlot)> = Vec::new();
 
-        // Read page header to check type
-        if let Ok(page_header) = read_page_header(unsafe { &*(mmap.as_ptr() as *const memmap2::Mmap) }, page_id) {
-            if page_header.page_type != PageType::Engram as u16 {
+    for &topic_id in active_topic_ids {
+        if let Some(page_ref) = btree.search(topic_id) {
+            let page_id = (page_ref >> 16) as u32;
+            let offset = (page_id as usize) * PAGE_SIZE;
+            if offset + PAGE_SIZE > mmap.len() {
                 continue;
             }
-
-            // Deserialize engram
-            if let Ok(engram) = EngramSlot::deserialize(&mmap[offset + 32..]) {
-                // Check time window and connectivity
-                if engram.created_at >= time_window.0 
-                    && engram.created_at <= time_window.1 
-                    && engram.edge_count >= 3 
-                {
-                    high_connectivity_engrams.push((page_id, engram));
+            if let Ok(page_header) = read_page_header(
+                unsafe { &*(mmap.as_ptr() as *const memmap2::Mmap) }, page_id
+            ) {
+                if page_header.page_type != PageType::Context as u16 {
+                    continue;
+                }
+                if let Ok(ctx) = ContextSlot::deserialize(&mmap[offset + 32..]) {
+                    active_contexts.push((page_id, ctx));
                 }
             }
         }
     }
 
-    if high_connectivity_engrams.is_empty() {
-        return Ok(vec![]);
+    if active_contexts.is_empty() {
+        return Ok((vec![], vec![], vec![], vec![]));
     }
 
-    // Step 2: Greedy clustering
-    let mut assigned = HashSet::new();
-    let mut clusters: Vec<Vec<(u32, EngramSlot)>> = Vec::new();
+    let mut demoted_to_secondary: Vec<DemotionResult> = Vec::new();
+    let mut new_compressed: Vec<CompressResult> = Vec::new();
+    let mut removed_contexts: Vec<String> = Vec::new();
+    let mut demoted_to_tertiary: Vec<String> = Vec::new();
 
-    while assigned.len() < high_connectivity_engrams.len() {
-        // Find first unassigned node as seed
-        let seed_idx = high_connectivity_engrams.iter()
-            .position(|(page_id, _)| !assigned.contains(page_id))
-            .unwrap();
-        
-        let (seed_page_id, seed_engram) = &high_connectivity_engrams[seed_idx];
-        assigned.insert(*seed_page_id);
+    // Step 2: Process by depth (deepest first to avoid conflicts)
 
-        let mut cluster = vec![(*seed_page_id, seed_engram.clone())];
+    // 2a: Remove depth-3 contexts (turn groups)
+    let depth3: Vec<_> = active_contexts.iter()
+        .filter(|(_, ctx)| ctx.depth == 3)
+        .collect();
 
-        // BFS depth=1 through edge_ptrs to collect neighbors
-        let mut queue = VecDeque::new();
-        for neighbor_page_ref in &seed_engram.edge_ptrs {
-            if *neighbor_page_ref == 0 {
-                continue;
-            }
-            let (neighbor_page_id, _) = crate::file::page::decode_page_ref(*neighbor_page_ref);
-            queue.push_back(neighbor_page_id);
-        }
+    for &(page_id, ref ctx) in &depth3 {
+        let ctx_id = format!("{:016x}", ctx.id_hash);
 
-        while let Some(neighbor_page_id) = queue.pop_front() {
-            if assigned.contains(&neighbor_page_id) {
-                continue;
-            }
+        // Free the page
+        let page_offset = (*page_id as usize) * PAGE_SIZE;
+        mmap[page_offset..page_offset + PAGE_SIZE].fill(0);
+        free_page(mmap, header, *page_id)?;
 
-            // Find engram in that page
-            if let Some(neighbor_engram) = high_connectivity_engrams.iter()
-                .find(|(pid, _)| *pid == neighbor_page_id)
-                .map(|(_, e)| e.clone())
-            {
-                // Calculate cosine similarity
-                let similarity = calculate_cosine_similarity(
-                    mmap, 
-                    seed_engram.vector_page_ref, 
-                    neighbor_engram.vector_page_ref
-                ).unwrap_or(0.0);
+        // Remove from btree and sparse index
+        btree.remove(ctx.id_hash);
+        sparse_index.remove_document(ctx.id_hash);
 
-                if similarity > 0.7 {
-                    assigned.insert(neighbor_page_id);
-                    cluster.push((neighbor_page_id, neighbor_engram));
-                }
-            }
-        }
-
-        // Only keep clusters with size >= 3, max 10 new topics
-        if cluster.len() >= 3 && clusters.len() < 10 {
-            clusters.push(cluster);
-        }
+        removed_contexts.push(ctx_id);
     }
 
-    // Step 3: Create TopicSlot for each cluster
-    let mut new_topic_ids = Vec::new();
+    // 2b: Demote depth-2 contexts to depth 3
+    for (page_id, ctx) in active_contexts.iter_mut()
+        .filter(|(_, ctx)| ctx.depth == 2)
+    {
+        let ctx_id = format!("{:016x}", ctx.id_hash);
 
-    for cluster in &clusters {
-        // 3a: Compute centroid_vector (average vector)
-        let centroid = compute_centroid_vector(mmap, cluster.iter().map(|(_, e)| e.vector_page_ref))?;
+        // Demote to depth 3
+        ctx.depth = 3;
+        ctx.updated_at = now_ms;
 
-        // 3b: Aggregate all engram keywords, take top-5 as title
-        let mut keyword_freq: HashMap<String, usize> = HashMap::new();
-        let mut all_texts = Vec::new();
-        let mut node_ids = Vec::new();
-        let mut total_importance = 0.0;
+        // Serialize and write back
+        let serialized = ctx.serialize()
+            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+        write_page_data(mmap, *page_id, &serialized)?;
 
-        for (_, engram) in cluster {
-            all_texts.push(engram.text.clone());
-            node_ids.push(engram.id_hash);
-            total_importance += engram.importance;
+        demoted_to_tertiary.push(ctx_id);
+    }
 
-            for kw in &engram.keywords {
-                *keyword_freq.entry(kw.clone()).or_insert(0) += 1;
-            }
-        }
+    // 2c: Compress and demote depth-1 contexts
+    let depth1: Vec<(u32, ContextSlot)> = active_contexts.iter()
+        .filter(|(_, ctx)| ctx.depth == 1)
+        .map(|(pid, ctx)| (*pid, ctx.clone()))
+        .collect();
 
-        let mut sorted_keywords: Vec<_> = keyword_freq.into_iter().collect();
-        sorted_keywords.sort_by_key(|b| std::cmp::Reverse(b.1));
-        let title = sorted_keywords.into_iter()
-            .take(5)
-            .map(|(k, _)| k)
-            .collect::<Vec<_>>()
-            .join(", ");
+    for (page_id, ctx) in &depth1 {
+        let ctx_id = format!("{:016x}", ctx.id_hash);
 
-        // 3c: Call LLM to generate summary (fallback on error)
-        let summary = match llm.summarize(&all_texts) {
-            Ok(s) => Some(s),
-            Err(e) => {
-                eprintln!("LLM summarize failed, using fallback: {:?}", e);
-                Some(llm.fallback_summarize(&all_texts))
-            }
+        // Generate compressed summary from context's summary + title + archive count
+        let texts_to_compress: Vec<String> = vec![
+            format!("Title: {}", ctx.title),
+            format!("Summary: {}", ctx.summary.as_deref().unwrap_or("(none)")),
+            format!("Turns: {}, Archives: {}", ctx.turn_count, ctx.archive_refs.len()),
+        ];
+
+        let compressed_summary = match llm.summarize(&texts_to_compress) {
+            Ok(s) => s,
+            Err(_) => llm.fallback_summarize(&texts_to_compress),
         };
 
-        // 3d: Create TopicSlot
-        let now = chrono::Utc::now().timestamp_millis();
-        let id_hash = hash_id(&format!("compressed_topic_{}_{}", title, now));
-        
-        let topic = TopicSlot {
-            id_hash,
-            title,
-            summary,
-            node_ids,
-            l3_refs: vec![], l4_refs: vec![], parent_id: None,
-            created_at: now,
-            updated_at: now,
+        // Create new compressed context at depth 1
+        let new_id_hash = hash_id(&format!("compressed_{}_{}", ctx_id, now_ms));
+        let new_ctx = ContextSlot {
+            id_hash: new_id_hash,
+            parent_id: None,
+            depth: 1,
+            title: format!("[Compressed] {}", ctx.title),
+            summary: Some(compressed_summary.clone()),
+            archive_refs: ctx.archive_refs.clone(),
+            l3_refs: ctx.l3_refs.clone(),
+            turn_count: ctx.turn_count,
+            created_at: now_ms,
+            updated_at: now_ms,
             version: 1,
-            importance: (total_importance / cluster.len() as f32) * 1.1,
-            activation_score: 0.5,
-            is_active: true,
-            activation_state: crate::slot::topic::ActivationState::Active,
-            centroid_vector: Some(centroid),
-            domain_weights: vec![],
-            dialogue_range: (
-                cluster.iter().map(|(_, e)| e.created_at).min().unwrap_or(0),
-                cluster.iter().map(|(_, e)| e.created_at).max().unwrap_or(0),
-            ),
-            reserved: [0; 16],
+            importance: ctx.importance * 0.9,
+            activation_score: 0.3,
+            is_active: false,  // Compressed contexts start inactive
+            activation_state: ActivationState::Crystallized,
+            centroid_page_ref: ctx.centroid_page_ref,
+            dialogue_range: ctx.dialogue_range,
         };
 
-        // 3e: Allocate page, serialize, write to mmap
-        let page_id = allocate_page(mmap, PageType::Topic, 2, 0)?;  // L2 layer
-        let serialized = topic.serialize()?;
-        write_page_data(mmap, page_id, &serialized)?;
+        // Allocate page for new compressed context
+        let new_page_id = allocate_page(mmap, header, PageType::Context, 2, 0)?;
+        let new_serialized = new_ctx.serialize()
+            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+        write_page_data(mmap, new_page_id, &new_serialized)?;
 
-        // 3f: Update btree + sparse_index
-        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-        btree.insert(id_hash, page_ref);
+        let new_page_ref = crate::file::page::encode_page_ref(new_page_id, 0);
+        btree.insert(new_id_hash, new_page_ref);
 
-        new_topic_ids.push(format!("{:016x}", id_hash));
-    }
-
-    Ok(new_topic_ids)
-}
-
-/// Calculate cosine similarity between two vector pages
-fn calculate_cosine_similarity(
-    mmap: &MmapMut,
-    vec_ref_a: u64,
-    vec_ref_b: u64,
-) -> Result<f32, MemHopError> {
-    let (page_a, slot_a) = crate::file::page::decode_page_ref(vec_ref_a);
-    let (page_b, slot_b) = crate::file::page::decode_page_ref(vec_ref_b);
-
-    // Read vector data from pages (assuming vectors stored in page data area)
-    let offset_a = (page_a as usize) * PAGE_SIZE + 32 + (slot_a as usize) * 768 * 2;  // f16 = 2 bytes
-    let offset_b = (page_b as usize) * PAGE_SIZE + 32 + (slot_b as usize) * 768 * 2;
-
-    if offset_a + 768 * 2 > mmap.len() || offset_b + 768 * 2 > mmap.len() {
-        return Ok(0.0);
-    }
-
-    let vec_a: Vec<f32> = (0..768)
-        .map(|i| f16::from_le_bytes([
-            mmap[offset_a + i * 2],
-            mmap[offset_a + i * 2 + 1],
-        ]).to_f32())
-        .collect();
-
-    let vec_b: Vec<f32> = (0..768)
-        .map(|i| f16::from_le_bytes([
-            mmap[offset_b + i * 2],
-            mmap[offset_b + i * 2 + 1],
-        ]).to_f32())
-        .collect();
-
-    // Calculate cosine similarity
-    let dot_product: f32 = vec_a.iter().zip(vec_b.iter()).map(|(a, b)| a * b).sum();
-    let norm_a: f32 = vec_a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = vec_b.iter().map(|x| x * x).sum::<f32>().sqrt();
-
-    if norm_a < f32::EPSILON || norm_b < f32::EPSILON {
-        Ok(0.0)
-    } else {
-        Ok(dot_product / (norm_a * norm_b))
-    }
-}
-
-/// Compute centroid vector from multiple vector references
-fn compute_centroid_vector(
-    mmap: &MmapMut,
-    vector_refs: impl Iterator<Item = u64>,
-) -> Result<Vec<f16>, MemHopError> {
-    let mut vectors: Vec<Vec<f32>> = Vec::new();
-
-    for vec_ref in vector_refs {
-        let (page_id, slot_index) = crate::file::page::decode_page_ref(vec_ref);
-        let offset = (page_id as usize) * PAGE_SIZE + 32 + (slot_index as usize) * 768 * 2;
-
-        if offset + 768 * 2 > mmap.len() {
-            continue;
-        }
-
-        let vec: Vec<f32> = (0..768)
-            .map(|i| {
-                f16::from_le_bytes([
-                    mmap[offset + i * 2],
-                    mmap[offset + i * 2 + 1],
-                ]).to_f32()
-            })
+        // Update sparse index for new context
+        let title_terms: Vec<String> = new_ctx.title.split_whitespace()
+            .map(|s| s.to_lowercase())
             .collect();
+        let doc_len = title_terms.len() as u32;
+        sparse_index.add_document(new_id_hash, title_terms, doc_len);
 
-        vectors.push(vec);
+        new_compressed.push(CompressResult {
+            new_context_id: format!("{:016x}", new_id_hash),
+            source_context_id: ctx_id.clone(),
+            new_summary: compressed_summary.clone(),
+        });
+
+        // Demote original depth-1 context to depth 2
+        let mut demoted_ctx = ctx.clone();
+        demoted_ctx.depth = 2;
+        demoted_ctx.summary = Some(compressed_summary.clone());
+        demoted_ctx.updated_at = now_ms;
+
+        let demoted_serialized = demoted_ctx.serialize()
+            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+        write_page_data(mmap, *page_id, &demoted_serialized)?;
+
+        demoted_to_secondary.push(DemotionResult {
+            context_id: ctx_id,
+            original_title: ctx.title.clone(),
+            compressed_summary,
+            new_depth: 2,
+        });
     }
 
-    if vectors.is_empty() {
-        return Ok(vec![f16::from_f32(0.0); 768]);
-    }
-
-    // Calculate average
-    let dim = vectors[0].len();
-    let mut centroid = vec![0.0f32; dim];
-
-    for vec in &vectors {
-        for i in 0..dim {
-            centroid[i] += vec[i];
-        }
-    }
-
-    for val in centroid.iter_mut().take(dim) {
-        *val /= vectors.len() as f32;
-    }
-
-    // Convert to f16
-    Ok(centroid.into_iter().map(f16::from_f32).collect())
+    Ok((demoted_to_secondary, new_compressed, removed_contexts, demoted_to_tertiary))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dream::deepseek_llm::DeepSeekLlmProvider;
-    use crate::file::header::FileHeader;
     use std::io::Write;
 
     #[test]
-    fn test_compress_l1_to_l2_empty() {
-        // Test returns empty list when no engrams exist
+    fn test_compress_empty_active_topics() {
+        // With no active topics, should return empty results
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let path = temp_file.path();
 
@@ -324,46 +241,55 @@ mod tests {
         let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         let mut header = FileHeader::new(768);
         let mut btree = BTreeIndex::new();
-        let sparse_index = SparseIndex::new();
-        let llm = DeepSeekLlmProvider::new("test-key".to_string());
-        
-        let result = compress_l1_to_l2(
-            &mut mmap, 
-            &mut header, 
-            &mut btree, 
-            &sparse_index, 
-            &llm, 
-            (0, i64::MAX)
+        let mut sparse_index = SparseIndex::new();
+
+        struct MockLlm;
+        impl crate::dream::llm::LlmProvider for MockLlm {
+            fn summarize(&self, texts: &[String]) -> Result<String, crate::MemHopError> {
+                Ok(texts.join(", "))
+            }
+            fn extract_patterns(&self, _: &[crate::dream::llm::MemorySummary]) -> Result<Vec<crate::dream::llm::Pattern>, crate::MemHopError> {
+                Ok(vec![])
+            }
+            fn generate_crystal(&self, _: &crate::dream::llm::Pattern) -> Result<crate::dream::llm::CrystalDef, crate::MemHopError> {
+                Ok(crate::dream::llm::CrystalDef {
+                    condition: "mock".to_string(),
+                    action: "mock".to_string(),
+                    confidence: 0.5,
+                })
+            }
+            fn fallback_summarize(&self, texts: &[String]) -> String {
+                texts.join(", ")
+            }
+            fn fallback_extract_patterns(&self, _: &[crate::dream::llm::MemorySummary]) -> Vec<crate::dream::llm::Pattern> {
+                vec![]
+            }
+            fn fallback_generate_crystal(&self, _: &crate::dream::llm::Pattern) -> crate::dream::llm::CrystalDef {
+                crate::dream::llm::CrystalDef {
+                    condition: "mock".to_string(),
+                    action: "mock".to_string(),
+                    confidence: 0.3,
+                }
+            }
+        }
+
+        let llm = MockLlm;
+        let empty_topics = HashSet::new();
+
+        let result = compress_active_contexts(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut sparse_index,
+            &llm,
+            &empty_topics,
         );
-        
+
         assert!(result.is_ok());
-        // Should return empty list since there are no engrams
-        assert_eq!(result.unwrap().len(), 0);
-    }
-
-    #[test]
-    fn test_compress_centroid_vector() {
-        // Test centroid vector computation with mock data
-        // This is a basic sanity check
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-
-        let mut file = std::fs::File::create(path).unwrap();
-        file.write_all(&vec![0u8; 4096 * 50]).unwrap();
-        drop(file);
-
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-
-        let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        
-        // With no valid vectors, should return zero vector
-        let result = compute_centroid_vector(&mmap, std::iter::empty());
-        assert!(result.is_ok());
-        let centroid = result.unwrap();
-        assert_eq!(centroid.len(), 768);
+        let (demoted, compressed, removed, tertiary) = result.unwrap();
+        assert!(demoted.is_empty());
+        assert!(compressed.is_empty());
+        assert!(removed.is_empty());
+        assert!(tertiary.is_empty());
     }
 }

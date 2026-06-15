@@ -1,20 +1,14 @@
 // Dream module
 pub mod compress_stage;
-pub mod cooccurrence_stage;
 pub mod crystallize_stage;
-pub mod decay_stage;
-pub mod deepseek_llm;
-pub mod distill_stage;
 pub mod emotion;
+pub mod openai_compatible;
 pub mod l0_form_stage;
 pub mod llm;
-pub mod merge_stage;
 pub mod prune;
-pub mod reflect_stage;
-pub mod temporal_stage;
 
 use crate::dream::llm::LlmProvider;
-use crate::dream::prune::{DreamConfig, DreamReport};
+use crate::dream::prune::DreamReport;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
@@ -22,110 +16,142 @@ use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
 
-/// Main dream pipeline - eight stages of memory consolidation
+/// Main dream pipeline - memory consolidation through depth demotion
 ///
-/// This function orchestrates the complete dream consolidation process,
-/// executing all eight stages in sequence to transform episodic memories
-/// into structured knowledge.
+/// This function orchestrates the complete dream consolidation process:
+/// 1. L2 Compression: depth demotion (主→次→次次→remove) on active contexts
+/// 2. L1 Update: rebuild L1 ContextNode associations based on updated L2
+/// 3. L0 Update: regenerate L0 profile from L1 knowledge distribution
+/// 4. L5 Crystallization: scan all ActionChainSlots and extract crystals
 ///
 /// # Arguments
 /// * `mmap` - Mutable memory-mapped file for reading/writing memory slots
-/// * `config` - Dream configuration with thresholds and flags
 /// * `header` - File header for page allocation and free list management
 /// * `btree` - B-tree index for topic lookup
 /// * `sparse_index` - Sparse index for keyword lookup
-/// * `llm` - LLM provider for summarization and knowledge generation
+/// * `llm` - LLM provider for summarization and crystal generation
 /// * `session_topic_ids` - Set of active topic IDs from current session
 ///
 /// # Returns
 /// DreamReport containing statistics about all operations performed
 pub fn dream_pipeline(
     mmap: &mut MmapMut,
-    config: DreamConfig,
     header: &mut FileHeader,
-    btree: &mut BTreeIndex,  // Changed to mutable
-    sparse_index: &SparseIndex,
+    btree: &mut BTreeIndex,
+    sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
     session_topic_ids: HashSet<u64>,
 ) -> Result<DreamReport, MemHopError> {
+    let start_time = std::time::Instant::now();
+
     let mut report = DreamReport {
-        new_topics: Vec::new(),
-        new_domain_nodes: Vec::new(),
+        demoted_to_secondary: Vec::new(),
+        demoted_to_tertiary: Vec::new(),
+        removed_contexts: Vec::new(),
+        new_compressed: Vec::new(),
+        l1_updated: Vec::new(),
+        l0_updated: None,
         new_crystals: Vec::new(),
-        merged_topics: Vec::new(),
-        pruned: Vec::new(),
-        demoted_to_dormant: Vec::new(),
-        new_temporal_edges: Vec::new(),
-        new_cooccurrence_edges: Vec::new(),
+        pruned_crystals: Vec::new(),
+        duration_ms: 0,
     };
 
-    // Stage 1: Decay - Demote low-activation memories to Dormant
-    use crate::activation::ActivationConfig;
-    let activation_config = ActivationConfig::default();
-    let page_count = header.page_count;
-
-    let dormant_ids = decay_stage::apply_decay(mmap, page_count, config.prune_threshold, &activation_config)?;
-    report.demoted_to_dormant = dormant_ids;
-
-    // Stage 2: Temporal Bind - Create Temporal hyperedges between time-adjacent engrams
-    let temporal_edges =
-        temporal_stage::create_temporal_edges(mmap, header, page_count, config.time_window)?;
-    report.new_temporal_edges = temporal_edges;
-
-    // Stage 3: Topic Merge - Merge similar topics based on Jaccard similarity
-    let merged = merge_stage::merge_similar_topics(mmap, header, btree, 0.5)?;
-    report.merged_topics = merged;
-
-    // Stage 4: Topic Reflect - Aggregate keywords and generate summaries
-    let reflected_topics = reflect_stage::reflect_all_topics(mmap, btree)?;
-    report.new_topics.extend(reflected_topics);
-
-    // Stage 5: Co-occurrence - Create co-occurrence hyperedges
-    let cooccur_edges = cooccurrence_stage::create_cooccurrence_edges(mmap, header, sparse_index, &session_topic_ids)?;
-    report.new_cooccurrence_edges = cooccur_edges;
-
-    // Stage 6: L1→L2 Compression - Cluster recent engrams into L2 topics (needs LLM)
-    if config.compress_l2 {
-        let new_topics = compress_stage::compress_l1_to_l2(
-            mmap, 
-            header, 
-            btree, 
-            sparse_index, 
-            llm, 
-            config.time_window
+    // Stage 1: L2 Compression - depth demotion on active contexts
+    let (demoted_sec, compressed, removed, demoted_ter) =
+        compress_stage::compress_active_contexts(
+            mmap, header, btree, sparse_index, llm, &session_topic_ids
         )?;
-        report.new_topics.extend(new_topics);
-    }
+    report.demoted_to_secondary = demoted_sec;
+    report.new_compressed = compressed;
+    report.removed_contexts = removed;
+    report.demoted_to_tertiary = demoted_ter;
 
-    // Stage 7: L1→L3 Distillation - Extract procedural knowledge into L3 (needs LLM)
-    if config.distill_l3 {
-        let new_domains = distill_stage::distill_l1_to_l3(
-            mmap, 
-            header, 
-            btree, 
-            sparse_index, 
-            llm
-        )?;
-        report.new_domain_nodes = new_domains;
-    }
+    // Stage 2: L1 Update - rebuild L1 ContextNode based on updated L2
+    // L1 nodes point to L2 contexts; after L2 depth changes, L1 associations need refresh
+    let l1_updated = rebuild_l1_from_l2(mmap, header, btree, &session_topic_ids)?;
+    report.l1_updated = l1_updated;
 
-    // Stage 8: L5 Crystallization - Generate procedural knowledge crystals (needs LLM)
-    if config.crystallize_l5 {
-        let crystals = crystallize_stage::crystallize_patterns(
-            mmap, 
-            header, 
-            btree, 
-            llm
-        )?;
-        report.new_crystals = crystals;
-    }
-
-    // Prune low-quality crystals after crystallization
-    let pruned = crystallize_stage::prune_low_quality_crystals(mmap, header, page_count)?;
-    report.pruned.extend(pruned);
-
-    // Final: L0 Profile Generation - Extract agent persona from topic keywords
+    // Stage 3: L0 Update - regenerate profile from knowledge distribution
     l0_form_stage::generate_profile(mmap, header, btree, sparse_index)?;
+    // Mark L0 as updated if we have any topics
+    if !session_topic_ids.is_empty() {
+        report.l0_updated = Some(("profile".to_string(), vec!["personality".to_string(), "preferences".to_string()]));
+    }
+
+    // Stage 4: L5 Crystallization - scan all ActionChainSlots, extract crystals
+    let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm)?;
+    report.new_crystals = crystals;
+
+    // Prune low-quality crystals
+    let page_count = header.page_count;
+    let pruned = crystallize_stage::prune_low_quality_crystals(mmap, header, btree, page_count)?;
+    report.pruned_crystals = pruned;
+
+    report.duration_ms = start_time.elapsed().as_millis() as u64;
 
     Ok(report)
+}
+
+/// Rebuild L1 ContextNode associations based on updated L2 contexts
+///
+/// After L2 depth demotion, L1 graph nodes need to be refreshed:
+/// - Remove L1 nodes pointing to removed contexts (pages freed)
+/// - Validate L1 node references still point to valid L2 contexts
+fn rebuild_l1_from_l2(
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    _session_topic_ids: &HashSet<u64>,
+) -> Result<Vec<String>, MemHopError> {
+    use crate::slot::context_node::ContextNode;
+    use crate::util::PageType;
+
+    let page_count = header.page_count;
+
+    // Phase 1: Collect stale L1 node IDs (read-only scan)
+    let mut stale_nodes: Vec<(u64, u32)> = Vec::new(); // (id_hash, page_id)
+    let entries: Vec<(u64, u64)> = btree.iter().map(|(k, v)| (*k, *v)).collect();
+
+    for (id_hash, page_ref) in &entries {
+        let page_id = (page_ref >> 16) as u32;
+        if page_id >= page_count {
+            continue;
+        }
+
+        let page_offset = (page_id as usize) * crate::util::PAGE_SIZE;
+        if page_offset + crate::util::PAGE_SIZE > mmap.len() {
+            continue;
+        }
+
+        // Check page type — only process ContextNode pages
+        let ro_mmap = unsafe { &*(mmap.as_ptr() as *const memmap2::Mmap) };
+        if let Ok(page_hdr) = crate::file::page::read_page_header(ro_mmap, page_id) {
+            if page_hdr.page_type != PageType::ContextNode as u16 {
+                continue;
+            }
+        } else {
+            continue;
+        }
+
+        // Deserialize ContextNode and check if its target L2 still exists
+        if let Some(slot_data) = crate::query::slot_io::get_slot_data(&mmap[..], *page_ref) {
+            if let Ok(node) = ContextNode::deserialize(slot_data) {
+                if btree.search(node.context_id).is_none() {
+                    stale_nodes.push((*id_hash, page_id));
+                }
+            }
+        }
+    }
+
+    // Phase 2: Remove stale L1 nodes (write phase)
+    let mut updated_ids: Vec<String> = Vec::new();
+    for (id_hash, page_id) in stale_nodes {
+        btree.remove(id_hash);
+        let offset = (page_id as usize) * crate::util::PAGE_SIZE;
+        mmap[offset..offset + crate::util::PAGE_SIZE].fill(0);
+        crate::file::free_list::free_page(mmap, header, page_id)?;
+        updated_ids.push(format!("{:016x}", id_hash));
+    }
+
+    Ok(updated_ids)
 }
