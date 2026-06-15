@@ -518,46 +518,6 @@ pub fn list_crystals(
 // L3 Hypergraph Queries (Knowledge API)
 // ============================================================================
 
-/// Get single L3 hypergraph (knowledge) by ID
-pub fn get_knowledge(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    id: &str,
-) -> Result<Option<KnowledgeDetail>, MemHopError> {
-    let data = &mmap[..];
-    let id_hash = common::parse_id_to_hash(id);
-
-    match btree.search(id_hash) {
-        Some(page_ref) => {
-            let page_id = crate::query::slot_io::decode_page_id(page_ref);
-
-            // Verify page type is HypergraphSlot (safe read from &[u8])
-            let hdr_offset = (page_id as usize) * crate::util::PAGE_SIZE;
-            if hdr_offset + 32 <= data.len() {
-                let mut hdr_bytes = [0u8; 32];
-                hdr_bytes.copy_from_slice(&data[hdr_offset..hdr_offset + 32]);
-                if let Ok(page_hdr) = crate::file::page::PageHeader::from_bytes(&hdr_bytes) {
-                    if page_hdr.page_type != PageType::HypergraphSlot as u16 {
-                        return Ok(None);
-                    }
-                } else {
-                    return Err(MemHopError::PageNotFound(page_id));
-                }
-            } else {
-                return Err(MemHopError::PageNotFound(page_id));
-            }
-
-            if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
-                let slot = HypergraphSlot::deserialize_slot(slot_data)?;
-                Ok(Some(convert_hypergraph_to_detail(data, btree, &slot)))
-            } else {
-                Err(MemHopError::PageNotFound(page_id))
-            }
-        }
-        None => Ok(None),
-    }
-}
-
 /// List L3 hypergraphs (knowledge) with pagination and filtering
 pub fn list_knowledge(
     mmap: &MmapMut,
@@ -640,61 +600,6 @@ fn convert_hypergraph_to_summary(slot: &HypergraphSlot) -> KnowledgeSummary {
         knowledge_type: "Generic".to_string(),
         importance: 0.5,
         confidence: 1.0,
-        updated_at: slot.updated_at,
-    }
-}
-
-fn convert_hypergraph_to_detail(
-    data: &[u8],
-    btree: &BTreeIndex,
-    slot: &HypergraphSlot,
-) -> KnowledgeDetail {
-    let source_ref = match &slot.source {
-        crate::slot::hypergraph::HypergraphSource::Path(p) => Some(p.clone()),
-        crate::slot::hypergraph::HypergraphSource::Url(u) => Some(u.clone()),
-        _ => None,
-    };
-
-    // Scan B-tree for HypergraphNode entries matching this graph
-    let mut text = String::new();
-    let mut summary: Option<String> = None;
-    let mut keywords: Vec<String> = Vec::new();
-
-    for (_, page_ref) in btree.iter() {
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
-            if let Ok(node) = crate::slot::hypergraph::HypergraphNode::deserialize(slot_data) {
-                if node.graph_id == slot.id_hash {
-                    if !node.content.is_empty() {
-                        text.push_str(&node.content);
-                        text.push('\n');
-                    }
-                    if summary.is_none() && !node.title.is_empty() {
-                        summary = Some(node.title.clone());
-                    }
-                    keywords.extend(node.keywords);
-                }
-            }
-        }
-    }
-
-    // Deduplicate keywords
-    keywords.sort();
-    keywords.dedup();
-
-    KnowledgeDetail {
-        id: format_hash(slot.id_hash),
-        title: slot.name.clone(),
-        domain: format!("{:?}", slot.source.kind()),
-        knowledge_type: "Generic".to_string(),
-        text: text.trim_end().to_string(),
-        summary,
-        keywords,
-        edge_ptrs: vec![],
-        archive_refs: vec![],
-        source_ref,
-        importance: 0.5,
-        confidence: 1.0,
-        created_at: slot.created_at,
         updated_at: slot.updated_at,
     }
 }

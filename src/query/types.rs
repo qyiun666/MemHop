@@ -517,3 +517,62 @@ pub struct ImportError {
     pub index: usize,
     pub message: String,
 }
+
+// ============================================================================
+// L3 Hypergraph Types (used by src/l3/ engine)
+// ============================================================================
+
+/// Result of subgraph extraction
+#[derive(Debug, Clone)]
+pub struct Subgraph {
+    pub nodes: Vec<crate::slot::hypergraph::HypergraphNode>,
+    pub edges: Vec<crate::slot::hypergraph::HypergraphEdge>,
+}
+
+/// A single hop in graph traversal (BFS / shortest path)
+#[derive(Debug, Clone)]
+pub struct TraversalHop {
+    pub depth: usize,
+    pub from_node: u64,
+    pub edge: crate::slot::hypergraph::HypergraphEdge,
+    pub to_node: u64,
+}
+
+/// Query parameters for listing L3 nodes by graph
+#[derive(Debug, Clone)]
+pub struct NodeListQuery {
+    pub page: usize,
+    pub page_size: usize,
+    pub node_type: Option<String>,
+    pub keyword: Option<String>,
+    pub min_importance: Option<f32>,
+}
+
+/// Paginated result for listing L3 nodes
+#[derive(Debug, Clone)]
+pub struct NodeListResult {
+    pub items: Vec<crate::slot::hypergraph::HypergraphNode>,
+    pub total: usize,
+    pub page: usize,
+    pub page_size: usize,
+    pub has_more: bool,
+}
+
+/// Query parameters for listing L3 edges by graph
+#[derive(Debug, Clone)]
+pub struct EdgeListQuery {
+    pub page: usize,
+    pub page_size: usize,
+    pub kind: Option<crate::slot::hypergraph::GraphEdgeKind>,
+    pub node_id: Option<String>,
+}
+
+/// Paginated result for listing L3 edges
+#[derive(Debug, Clone)]
+pub struct EdgeListResult {
+    pub items: Vec<crate::slot::hypergraph::HypergraphEdge>,
+    pub total: usize,
+    pub page: usize,
+    pub page_size: usize,
+    pub has_more: bool,
+}

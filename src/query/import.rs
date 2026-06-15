@@ -351,16 +351,86 @@ fn import_l2_topics(
 // ============================================================================
 
 fn import_l3_knowledge(
-    _mmap: &mut MmapMut,
-    _header: &mut FileHeader,
-    _btree: &mut BTreeIndex,
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
     _sparse_index: &mut SparseIndex,
-    _data: ImportData,
-    _mode: ImportMode,
+    data: ImportData,
+    mode: ImportMode,
 ) -> Result<ImportResult, MemHopError> {
-    // L3 Knowledge import is not supported in current architecture
-    // L3 uses HypergraphSlot, not KnowledgeSlot
-    Err(MemHopError::ConfigError("L3 Knowledge import not supported; use L3 Hypergraph API".to_string()))
+    let items = match data {
+        ImportData::Knowledge(items) => items,
+        _ => return Err(MemHopError::ConfigError("Expected Knowledge import data".to_string())),
+    };
+
+    let now_ms = crate::query::common::now_ms();
+    let mut created_ids: Vec<String> = Vec::new();
+    let mut updated_ids: Vec<String> = Vec::new();
+    let mut skipped_count = 0usize;
+    let mut errors: Vec<ImportError> = Vec::new();
+
+    for (idx, item) in items.iter().enumerate() {
+        let title_hash = crate::util::hash_id(&item.title);
+
+        match mode {
+            ImportMode::Skip => {
+                if btree.search(title_hash).is_some() {
+                    skipped_count += 1;
+                    continue;
+                }
+            }
+            ImportMode::Overwrite => {
+                // Delete existing node if present
+                if btree.search(title_hash).is_some() {
+                    let _ = crate::l3::store::delete_node(mmap, header, btree, &item.title);
+                }
+            }
+            ImportMode::Merge => {
+                if btree.search(title_hash).is_some() {
+                    updated_ids.push(item.title.clone());
+                    continue;
+                }
+            }
+        }
+
+        let node = crate::slot::hypergraph::HypergraphNode {
+            id_hash: title_hash,
+            graph_id: crate::util::hash_id(&item.domain),
+            title: item.title.clone(),
+            node_type: item.knowledge_type.clone(),
+            content: item.text.clone(),
+            keywords: item.keywords.clone(),
+            source_ref: item.source_ref.clone(),
+            importance: 0.7,
+            created_at: now_ms,
+            updated_at: now_ms,
+            version: 1,
+        };
+
+        match crate::l3::store::add_node(mmap, header, btree, node) {
+            Ok(id) => created_ids.push(id),
+            Err(e) => errors.push(ImportError {
+                index: idx,
+                message: e.to_string(),
+            }),
+        }
+    }
+
+    let status = if errors.is_empty() && !created_ids.is_empty() {
+        ImportStatus::Success
+    } else if !created_ids.is_empty() || !updated_ids.is_empty() {
+        ImportStatus::PartialSuccess
+    } else {
+        ImportStatus::Failed
+    };
+
+    Ok(ImportResult {
+        status,
+        created_ids,
+        updated_ids,
+        skipped_count,
+        errors,
+    })
 }
 
 // ============================================================================

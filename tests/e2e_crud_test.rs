@@ -85,7 +85,6 @@ fn test_import_l0_profile(ctx: &mut TestContext) {
 }
 
 fn test_import_l3_knowledge_stub(ctx: &mut TestContext) {
-    // L3 Knowledge layer not available in current architecture (uses HypergraphSlot)
     let request = ImportRequest {
         target_layer: TargetLayer::Knowledge,
         data: ImportData::Knowledge(vec![
@@ -103,11 +102,10 @@ fn test_import_l3_knowledge_stub(ctx: &mut TestContext) {
         knowledge_title: None,
     };
 
-    // Should return error since L3 Knowledge is not supported
-    let result = ctx.db.import_memory(request);
-    assert!(result.is_err(), "L3 Knowledge import should fail (not supported)");
+    let result = ctx.db.import_memory(request).unwrap();
+    assert!(!result.created_ids.is_empty(), "L3 Knowledge import should create nodes");
 
-    println!("✅ Import L3 Knowledge (stub) passed");
+    println!("✅ Import L3 Knowledge passed (created {} nodes)", result.created_ids.len());
 }
 
 fn test_search_auto_create_l2(ctx: &mut TestContext) {

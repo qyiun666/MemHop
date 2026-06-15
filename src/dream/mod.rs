@@ -4,6 +4,7 @@ pub mod crystallize_stage;
 pub mod emotion;
 pub mod openai_compatible;
 pub mod l0_form_stage;
+pub mod l3_distill_stage;
 pub mod llm;
 pub mod prune;
 

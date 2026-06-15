@@ -29,6 +29,7 @@ pub mod organize;
 pub mod query;
 pub mod session;
 pub mod slot;
+pub mod l3;
 pub mod util;
 
 pub use config::MemHopConfig;
@@ -62,6 +63,10 @@ pub use query::types::{
     ImportRequest, TargetLayer, ImportMode, ImportData,
     TopicImportItem, KnowledgeImportItem,
     ImportResult, ImportStatus, ImportError,
+    // L3 Hypergraph Engine
+    Subgraph, TraversalHop,
+    NodeListQuery, NodeListResult,
+    EdgeListQuery, EdgeListResult,
 };
 
 use memmap2::{Mmap, MmapMut};
@@ -411,9 +416,84 @@ impl MemHop {
     }
 
     /// Get single knowledge (L3 hypergraph) by ID
+    ///
+    /// Uses l3::store engine to read the hypergraph and aggregate node content
+    /// into the KnowledgeDetail structure.
     pub fn get_knowledge(&self, id: &str) -> Result<Option<KnowledgeDetail>> {
-        use crate::query::list::get_knowledge as impl_fn;
-        impl_fn(&self.mmap, &self.btree, id)
+        let data: &[u8] = &self.mmap[..];
+        let id_hash = crate::query::common::parse_id_to_hash(id);
+
+        // Read HypergraphSlot from BTree
+        let slot = match self.btree.search(id_hash) {
+            Some(page_ref) => {
+                if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+                    match crate::slot::hypergraph::HypergraphSlot::deserialize_slot(slot_data) {
+                        Ok(s) => s,
+                        Err(_) => return Ok(None),
+                    }
+                } else {
+                    return Err(MemHopError::PageNotFound(crate::query::slot_io::decode_page_id(page_ref)));
+                }
+            }
+            None => return Ok(None),
+        };
+
+        // Aggregate node content using l3::store
+        let source_ref = match &slot.source {
+            crate::slot::hypergraph::HypergraphSource::Path(p) => Some(p.clone()),
+            crate::slot::hypergraph::HypergraphSource::Url(u) => Some(u.clone()),
+            _ => None,
+        };
+
+        let mut text = String::new();
+        let mut summary: Option<String> = None;
+        let mut keywords: Vec<String> = Vec::new();
+        let edge_ptrs: Vec<String> = Vec::new();
+        let mut avg_importance = 0.5f32;
+
+        let node_query = crate::query::types::NodeListQuery {
+            page: 1, page_size: 1000,
+            node_type: None, keyword: None, min_importance: None,
+        };
+        if let Ok(nodes) = crate::l3::store::list_nodes_by_graph(
+            &self.mmap, &self.btree, id_hash, &node_query,
+        ) {
+            let count = nodes.total as f32;
+            if count > 0.0 {
+                let imp_sum: f32 = nodes.items.iter().map(|n| n.importance).sum();
+                avg_importance = imp_sum / count;
+            }
+            for node in &nodes.items {
+                if !node.content.is_empty() {
+                    text.push_str(&node.content);
+                    text.push('\n');
+                }
+                if summary.is_none() && !node.title.is_empty() {
+                    summary = Some(node.title.clone());
+                }
+                keywords.extend(node.keywords.iter().cloned());
+            }
+        }
+
+        keywords.sort();
+        keywords.dedup();
+
+        Ok(Some(crate::query::types::KnowledgeDetail {
+            id: crate::query::common::format_hash(slot.id_hash),
+            title: slot.name,
+            domain: format!("{:?}", slot.source.kind()),
+            knowledge_type: "Generic".to_string(),
+            text: text.trim_end().to_string(),
+            summary,
+            keywords,
+            edge_ptrs,
+            archive_refs: vec![],
+            source_ref,
+            importance: avg_importance,
+            confidence: 1.0,
+            created_at: slot.created_at,
+            updated_at: slot.updated_at,
+        }))
     }
 
     /// List knowledge (L3 hypergraphs) with pagination and filtering
@@ -444,7 +524,7 @@ impl MemHop {
         impl_fn(&mut self.mmap, &self.btree, id, new_title)
     }
 
-    /// Update knowledge (L3 hypergraph) title
+    /// Update L3 knowledge title (Interface 15)
     pub fn update_knowledge_title(&mut self, id: &str, new_title: String) -> Result<KnowledgeSummary> {
         use crate::query::update_title::update_knowledge_title as impl_fn;
         impl_fn(&mut self.mmap, &self.btree, id, new_title)

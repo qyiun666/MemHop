@@ -161,6 +161,7 @@ pub enum PageType {
     Profile = 0x0A,       // L0 agent profile
     HypergraphNode = 0x0B,// L3 hypergraph node
     HypergraphEdge = 0x0C,// L3 hypergraph edge
+    L3IndexPage = 0x0D,    // L3 engine index page
     BTreeNode = 0x10,     // B-tree internal node
     BTreeLeaf = 0x11,     // B-tree leaf node
     Free = 0x20,          // Free page
@@ -188,6 +189,7 @@ impl PageType {
             0x0A => Some(PageType::Profile),
             0x0B => Some(PageType::HypergraphNode),
             0x0C => Some(PageType::HypergraphEdge),
+            0x0D => Some(PageType::L3IndexPage),
             0x10 => Some(PageType::BTreeNode),
             0x11 => Some(PageType::BTreeLeaf),
             0x20 => Some(PageType::Free),

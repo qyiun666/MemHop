@@ -9,7 +9,6 @@ use crate::query::common::{self, format_hash, now_ms};
 use crate::query::types::*;
 use crate::slot::action_chain::{ActionChainSlot, ChainStatus};
 use crate::slot::context::ContextSlot;
-use crate::slot::hypergraph::HypergraphSlot;
 use crate::slot::profile::ProfileSlot;
 use crate::util::hash_id;
 use crate::MemHopError;
@@ -261,28 +260,27 @@ pub fn update_crystal_title(
 }
 
 // ============================================================================
-// L3 Hypergraph Title Update
+// L3 Knowledge Title Update (Interface 15)
 // ============================================================================
 
-/// Update L3 hypergraph title
+/// Update L3 knowledge hypergraph title
 pub fn update_knowledge_title(
     mmap: &mut MmapMut,
     btree: &BTreeIndex,
     id: &str,
     new_title: String,
 ) -> Result<KnowledgeSummary, MemHopError> {
+    use crate::slot::hypergraph::HypergraphSlot;
     let now_ms = now_ms();
-
     let id_hash = common::parse_id_to_hash(id);
 
     match btree.search(id_hash) {
         Some(page_ref) => {
             let page_id = (page_ref >> 16) as u32;
-            let offset = (page_id as usize) * PAGE_SIZE + 32;
+            let offset = (page_id as usize) * crate::util::PAGE_SIZE + 32;
 
             let mut slot = HypergraphSlot::deserialize_slot(&mmap[offset..])?;
-
-            slot.name = new_title;
+            slot.name = new_title.clone();
             slot.updated_at = now_ms;
             slot.version += 1;
 

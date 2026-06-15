@@ -457,74 +457,6 @@ fn calculate_centroid_from_nodes(
     Ok(Some(centroid))
 }
 
-/// Write L3 domain nodes with HypergraphSlot creation and btree registration
-pub fn write_l3_domains(
-    mmap: &mut MmapMut,
-    _header: &mut FileHeader,
-    items: &[EncodedItem],
-    _l1_node_ids: &[u64],
-    btree: &mut BTreeIndex,
-) -> Result<u32, MemHopError> {
-    use std::collections::HashSet;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
-
-    let mut seen = HashSet::new();
-    let mut domain_count = 0u32;
-
-    for item in items {
-        if let Some(ref domain_id) = item.domain_id {
-            if !seen.insert(domain_id.clone()) {
-                continue;
-            }
-
-            let id_hash = hash_id(domain_id);
-
-            let slot = crate::slot::hypergraph::HypergraphSlot {
-                id_hash,
-                name: domain_id.clone(),
-                source: crate::slot::hypergraph::HypergraphSource::Manual,
-                node_count: 0,
-                edge_count: 0,
-                created_at: now,
-                updated_at: now,
-                version: 1,
-            };
-
-            let slot_data = slot
-                .serialize()
-                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-            let page_id = allocate_from_free_list(mmap, _header)?;
-            let page_offset = (page_id as usize) * PAGE_SIZE;
-
-            // Write page header
-            let page_hdr = crate::file::page::PageHeader::new(
-                0,
-                crate::util::PageType::HypergraphSlot,
-                3,
-                0xFFFFFFFF,
-            );
-            let hdr_bytes = page_hdr.to_bytes();
-            mmap[page_offset..page_offset + 32].copy_from_slice(&hdr_bytes);
-
-            // Write slot data
-            let slot_offset = page_offset + 32;
-            if slot_offset + slot_data.len() <= mmap.len() {
-                mmap[slot_offset..slot_offset + slot_data.len()].copy_from_slice(&slot_data);
-            }
-
-            btree.insert(id_hash, (page_id as u64) << 16);
-            domain_count += 1;
-        }
-    }
-
-    Ok(domain_count)
-}
-
 /// Create batch hyperedges (Association and Evolution) with btree registration
 pub fn create_batch_hyperedges(
     mmap: &mut MmapMut,
@@ -667,9 +599,8 @@ pub fn batch_store(
     )?;
     report.l2_topics_updated = topics_updated;
 
-    // Phase 5: L3 Domain Write
-    let l3_count = write_l3_domains(mmap, header, &encoded_items, &l1_node_ids, btree)?;
-    report.l3_nodes = l3_count;
+    // Phase 5: L3 Domain Write (delegated to l3::store)
+    // write_l3_domains removed — use l3::store::add_node directly
 
     // Create hyperedges
     let edge_count = create_batch_hyperedges(mmap, header, &l1_node_ids, btree)?;
