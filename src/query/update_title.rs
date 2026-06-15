@@ -61,7 +61,8 @@ pub fn update_profile(
             profile.version += 1;
 
             // Serialize and write back
-            let data = profile.serialize()
+            let data = profile
+                .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
             if offset + data.len() <= mmap.len() {
@@ -104,7 +105,8 @@ pub fn update_profile(
             };
 
             // Serialize and write to page
-            let data = profile.serialize()
+            let data = profile
+                .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
             if offset + data.len() <= mmap.len() {
@@ -175,14 +177,14 @@ pub fn update_topic_title(
             if let Some(ref summary) = ctx.summary {
                 new_terms.extend(summary.split_whitespace().map(|s| s.to_lowercase()));
             }
-            let doc_len = ctx.title.len()
-                + ctx.summary.as_ref().map_or(0, |s| s.len());
+            let doc_len = ctx.title.len() + ctx.summary.as_ref().map_or(0, |s| s.len());
             sparse_index.add_document(ctx.id_hash, new_terms, doc_len as u32);
 
             ctx.updated_at = now_ms;
             ctx.version += 1;
 
-            let data = ctx.serialize()
+            let data = ctx
+                .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
             if offset + data.len() <= mmap.len() {
@@ -231,7 +233,8 @@ pub fn update_crystal_title(
             chain.updated_at = now_ms;
             chain.version += 1;
 
-            let data = chain.serialize()
+            let data = chain
+                .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
             if offset + data.len() <= mmap.len() {
@@ -251,7 +254,11 @@ pub fn update_crystal_title(
                 },
                 trigger_count: chain.trigger_count,
                 success_rate: chain.success_rate,
-                last_triggered: if chain.last_triggered > 0 { Some(chain.last_triggered) } else { None },
+                last_triggered: if chain.last_triggered > 0 {
+                    Some(chain.last_triggered)
+                } else {
+                    None
+                },
                 created_at: chain.created_at,
             })
         }
@@ -284,7 +291,8 @@ pub fn update_knowledge_title(
             slot.updated_at = now_ms;
             slot.version += 1;
 
-            let data = slot.serialize()
+            let data = slot
+                .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
             if offset + data.len() <= mmap.len() {
@@ -293,16 +301,60 @@ pub fn update_knowledge_title(
                 return Err(MemHopError::PageNotFound(page_id));
             }
 
+            // Aggregate node data via l3::store for meaningful KnowledgeSummary
+            let (importance, knowledge_type) = compute_knowledge_meta(mmap, btree, id_hash);
+
             Ok(KnowledgeSummary {
                 id: format!("{:016x}", slot.id_hash),
                 title: slot.name,
-                domain: format!("{:?}", slot.source.kind()),
-                knowledge_type: "Generic".to_string(),
-                importance: 0.5,
+                domain: slot.source.domain_name().to_string(),
+                knowledge_type,
+                importance,
                 confidence: 1.0,
                 updated_at: slot.updated_at,
             })
         }
         None => Err(MemHopError::PageNotFound(0)),
     }
+}
+
+/// Compute importance and knowledge_type from graph nodes via l3 store
+fn compute_knowledge_meta(
+    mmap: &mut MmapMut,
+    btree: &BTreeIndex,
+    graph_id: u64,
+) -> (f32, String) {
+    let query = NodeListQuery {
+        page: 1,
+        page_size: 1000,
+        node_type: None,
+        keyword: None,
+        min_importance: None,
+    };
+    let nodes = match crate::l3::store::list_nodes_by_graph(mmap, btree, graph_id, &query) {
+        Ok(result) => result.items,
+        Err(_) => return (0.5, "Generic".to_string()),
+    };
+
+    let count = nodes.len();
+    if count == 0 {
+        return (0.5, "Generic".to_string());
+    }
+
+    let imp_sum: f32 = nodes.iter().map(|n| n.importance).sum();
+    let importance = imp_sum / count as f32;
+
+    // Derive knowledge_type from most common node_type
+    use std::collections::HashMap;
+    let mut type_counts: HashMap<&str, usize> = HashMap::new();
+    for node in &nodes {
+        *type_counts.entry(&node.node_type).or_default() += 1;
+    }
+    let knowledge_type = type_counts
+        .into_iter()
+        .max_by_key(|&(_, count)| count)
+        .map(|(t, _)| t.to_string())
+        .unwrap_or_else(|| "Generic".to_string());
+
+    (importance, knowledge_type)
 }

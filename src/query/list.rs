@@ -596,7 +596,7 @@ fn convert_hypergraph_to_summary(slot: &HypergraphSlot) -> KnowledgeSummary {
     KnowledgeSummary {
         id: format_hash(slot.id_hash),
         title: slot.name.clone(),
-        domain: format!("{:?}", slot.source.kind()),
+        domain: slot.source.domain_name().to_string(),
         knowledge_type: "Generic".to_string(),
         importance: 0.5,
         confidence: 1.0,

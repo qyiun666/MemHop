@@ -369,6 +369,10 @@ fn import_l3_knowledge(
     let mut skipped_count = 0usize;
     let mut errors: Vec<ImportError> = Vec::new();
 
+    // Track domain → graph_id mapping to create HypergraphSlot per domain
+    use std::collections::HashMap;
+    let mut graph_cache: HashMap<String, u64> = HashMap::new();
+
     for (idx, item) in items.iter().enumerate() {
         let title_hash = crate::util::hash_id(&item.title);
 
@@ -380,7 +384,6 @@ fn import_l3_knowledge(
                 }
             }
             ImportMode::Overwrite => {
-                // Delete existing node if present
                 if btree.search(title_hash).is_some() {
                     let _ = crate::l3::store::delete_node(mmap, header, btree, &item.title);
                 }
@@ -393,9 +396,21 @@ fn import_l3_knowledge(
             }
         }
 
+        // Ensure HypergraphSlot exists for this domain before creating nodes
+        let graph_id = *graph_cache.entry(item.domain.clone()).or_insert_with(|| {
+            let gid = crate::util::hash_id(&item.domain);
+            if btree.search(gid).is_none() {
+                if let Err(e) = create_hypergraph_slot(mmap, header, btree, gid, &item.domain, now_ms) {
+                    errors.push(ImportError { index: idx, message: e.to_string() });
+                    return gid; // Still return gid so we don't block node creation
+                }
+            }
+            gid
+        });
+
         let node = crate::slot::hypergraph::HypergraphNode {
             id_hash: title_hash,
-            graph_id: crate::util::hash_id(&item.domain),
+            graph_id,
             title: item.title.clone(),
             node_type: item.knowledge_type.clone(),
             content: item.text.clone(),
@@ -431,6 +446,57 @@ fn import_l3_knowledge(
         skipped_count,
         errors,
     })
+}
+
+/// Create a HypergraphSlot (L3 graph container) for a new domain
+fn create_hypergraph_slot(
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    id_hash: u64,
+    name: &str,
+    now_ms: i64,
+) -> Result<(), MemHopError> {
+    use crate::file::free_list::allocate_from_free_list;
+    use crate::file::page::PageHeader;
+    use crate::slot::hypergraph::{HypergraphSlot, HypergraphSource};
+    use crate::util::{PageType, PAGE_SIZE};
+
+    let slot = HypergraphSlot {
+        id_hash,
+        name: name.to_string(),
+        source: HypergraphSource::Manual,
+        node_count: 0,
+        edge_count: 0,
+        created_at: now_ms,
+        updated_at: now_ms,
+        version: 1,
+    };
+
+    let data_bytes = slot
+        .serialize()
+        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+
+    let page_id = allocate_from_free_list(mmap, header)?;
+    let page_offset = (page_id as usize) * PAGE_SIZE;
+
+    // Write page header
+    let page_hdr = PageHeader::new(page_id, PageType::HypergraphSlot, 3, 0xFFFFFFFF);
+    mmap[page_offset..page_offset + 32].copy_from_slice(&page_hdr.to_bytes());
+
+    // Write slot data after header
+    let data_offset = page_offset + 32;
+    if data_offset + data_bytes.len() > mmap.len() {
+        // Rollback: free the allocated page
+        crate::file::free_list::free_page(mmap, header, page_id)?;
+        return Err(MemHopError::Serialization(
+            "HypergraphSlot too large for page".to_string(),
+        ));
+    }
+    mmap[data_offset..data_offset + data_bytes.len()].copy_from_slice(&data_bytes);
+
+    btree.insert(id_hash, (page_id as u64) << 16);
+    Ok(())
 }
 
 // ============================================================================

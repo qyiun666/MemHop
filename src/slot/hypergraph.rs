@@ -60,6 +60,16 @@ impl HypergraphSource {
         }
     }
 
+    /// Return user-friendly domain name (not Rust debug format)
+    pub fn domain_name(&self) -> &str {
+        match self {
+            Self::Path(_) => "file",
+            Self::Context(_) => "context",
+            Self::Url(_) => "url",
+            Self::Manual => "manual",
+        }
+    }
+
     /// Serialize source data to bytes
     fn data_bytes(&self) -> Vec<u8> {
         match self {

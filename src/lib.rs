@@ -24,20 +24,20 @@ pub mod dream;
 pub mod encoder;
 pub mod file;
 pub mod index;
+pub mod l3;
 pub mod migrate;
 pub mod organize;
 pub mod query;
 pub mod session;
 pub mod slot;
-pub mod l3;
 pub mod util;
 
 pub use config::MemHopConfig;
 pub use util::{Layer, SourceMeta, SourceRef, SourceType};
 
 // Re-export public types
-pub use dream::openai_compatible::OpenAICompatibleLlmProvider;
 pub use dream::llm::{CrystalDef, LlmProvider, MemorySummary, Pattern};
+pub use dream::openai_compatible::OpenAICompatibleLlmProvider;
 pub use dream::prune::DreamReport;
 pub use migrate::{migrate, verify_migration, MigrateError, MigrateReport};
 pub use organize::extract_keywords;
@@ -45,28 +45,57 @@ pub use query::batch::{BatchReport, EncodedItem, StoreBatch, StoreItem};
 
 // Re-export new API types (API_NEW.md) - These are the recommended public interfaces
 pub use query::types::{
+    ActionItem,
+    ActionType,
+    Archive,
+    ArchiveListResult,
+    ArchivePageQuery,
+    ArchiveRef,
+    ContextResult,
+    CrystalListQuery,
+    CrystalListResult,
+    CrystalSummary,
+    EdgeListQuery,
+    EdgeListResult,
+    // List Queries (Interfaces 6-12)
+    EngramListQuery,
+    EngramListResult,
+    EngramResult,
+    ImportData,
+    ImportError,
+    ImportMode,
+    // Import Memory (Interface 19)
+    ImportRequest,
+    ImportResult,
+    ImportStatus,
+    KnowledgeDetail,
+    KnowledgeImportItem,
+    KnowledgeListQuery,
+    KnowledgeListResult,
+    KnowledgeSummary,
     // LLM Configuration
     LlmConfig,
+    NodeListQuery,
+    NodeListResult,
+    ProfileResult,
     // Search Memory (Interface 2)
-    SearchQuery, SearchResult, ContextResult, ArchiveRef, ProfileResult,
-    // Update Memory (Interface 3)
-    UpdateRequest, ActionItem, ActionType, UpdateResult, UpdateStatus,
-    // List Queries (Interfaces 6-12)
-    EngramListQuery, EngramListResult, EngramResult,
-    TopicListQuery, TopicListResult, TopicSummary, TopicDetail,
-    KnowledgeListQuery, KnowledgeListResult, KnowledgeSummary, KnowledgeDetail,
-    ArchivePageQuery, ArchiveListResult, Archive,
-    CrystalListQuery, CrystalListResult, CrystalSummary,
+    SearchQuery,
+    SearchResult,
+    // L3 Hypergraph Engine
+    Subgraph,
+    TargetLayer,
+    TopicDetail,
+    TopicImportItem,
+    TopicListQuery,
+    TopicListResult,
+    TopicSummary,
+    TraversalHop,
     // Update Titles (Interfaces 13-16)
     UpdateProfileRequest,
-    // Import Memory (Interface 19)
-    ImportRequest, TargetLayer, ImportMode, ImportData,
-    TopicImportItem, KnowledgeImportItem,
-    ImportResult, ImportStatus, ImportError,
-    // L3 Hypergraph Engine
-    Subgraph, TraversalHop,
-    NodeListQuery, NodeListResult,
-    EdgeListQuery, EdgeListResult,
+    // Update Memory (Interface 3)
+    UpdateRequest,
+    UpdateResult,
+    UpdateStatus,
 };
 
 use memmap2::{Mmap, MmapMut};
@@ -290,7 +319,10 @@ impl MemHop {
                 Some(Box::new(ipc))
             } else {
                 // Fallback to MockEncoder if socket is not available
-                eprintln!("Warning: Encoder socket {:?} not available, using MockEncoder fallback", config.encoder_socket);
+                eprintln!(
+                    "Warning: Encoder socket {:?} not available, using MockEncoder fallback",
+                    config.encoder_socket
+                );
                 Some(Box::new(MockEncoder::new(config.vector_dim)))
             }
         };
@@ -324,7 +356,8 @@ impl MemHop {
         use crate::query::search::search_memory as search_impl;
 
         // Get encoder reference if available
-        let encoder_ref: Option<&(dyn crate::encoder::ipc::Encoder + Send + Sync)> = self.encoder.as_deref();
+        let encoder_ref: Option<&(dyn crate::encoder::ipc::Encoder + Send + Sync)> =
+            self.encoder.as_deref();
 
         search_impl(
             &mut self.mmap,
@@ -392,13 +425,21 @@ impl MemHop {
     }
 
     /// List archives by topic ID
-    pub fn list_archives_by_topic(&self, topic_id: &str, query: ArchivePageQuery) -> Result<ArchiveListResult> {
+    pub fn list_archives_by_topic(
+        &self,
+        topic_id: &str,
+        query: ArchivePageQuery,
+    ) -> Result<ArchiveListResult> {
         use crate::query::list::list_archives_by_topic as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, topic_id, query)
     }
 
     /// List archives by node IDs
-    pub fn list_archives_by_nodes(&self, node_ids: &[String], query: ArchivePageQuery) -> Result<ArchiveListResult> {
+    pub fn list_archives_by_nodes(
+        &self,
+        node_ids: &[String],
+        query: ArchivePageQuery,
+    ) -> Result<ArchiveListResult> {
         use crate::query::list::list_archives_by_nodes as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, node_ids, query)
     }
@@ -432,7 +473,9 @@ impl MemHop {
                         Err(_) => return Ok(None),
                     }
                 } else {
-                    return Err(MemHopError::PageNotFound(crate::query::slot_io::decode_page_id(page_ref)));
+                    return Err(MemHopError::PageNotFound(
+                        crate::query::slot_io::decode_page_id(page_ref),
+                    ));
                 }
             }
             None => return Ok(None),
@@ -452,12 +495,15 @@ impl MemHop {
         let mut avg_importance = 0.5f32;
 
         let node_query = crate::query::types::NodeListQuery {
-            page: 1, page_size: 1000,
-            node_type: None, keyword: None, min_importance: None,
+            page: 1,
+            page_size: 1000,
+            node_type: None,
+            keyword: None,
+            min_importance: None,
         };
-        if let Ok(nodes) = crate::l3::store::list_nodes_by_graph(
-            &self.mmap, &self.btree, id_hash, &node_query,
-        ) {
+        if let Ok(nodes) =
+            crate::l3::store::list_nodes_by_graph(&self.mmap, &self.btree, id_hash, &node_query)
+        {
             let count = nodes.total as f32;
             if count > 0.0 {
                 let imp_sum: f32 = nodes.items.iter().map(|n| n.importance).sum();
@@ -515,7 +561,14 @@ impl MemHop {
     /// Update topic title (with sparse index synchronization)
     pub fn update_topic_title(&mut self, id: &str, new_title: String) -> Result<TopicSummary> {
         use crate::query::update_title::update_topic_title as impl_fn;
-        impl_fn(&mut self.mmap, &mut self.header, &self.btree, &mut self.sparse_index, id, new_title)
+        impl_fn(
+            &mut self.mmap,
+            &mut self.header,
+            &self.btree,
+            &mut self.sparse_index,
+            id,
+            new_title,
+        )
     }
 
     /// Update crystal title
@@ -525,7 +578,11 @@ impl MemHop {
     }
 
     /// Update L3 knowledge title (Interface 15)
-    pub fn update_knowledge_title(&mut self, id: &str, new_title: String) -> Result<KnowledgeSummary> {
+    pub fn update_knowledge_title(
+        &mut self,
+        id: &str,
+        new_title: String,
+    ) -> Result<KnowledgeSummary> {
         use crate::query::update_title::update_knowledge_title as impl_fn;
         impl_fn(&mut self.mmap, &self.btree, id, new_title)
     }
@@ -535,15 +592,32 @@ impl MemHop {
     // ========================================================================
 
     /// Merge multiple topics into a primary topic
-    pub fn merge_topics(&mut self, primary_id: &str, secondary_ids: Vec<String>) -> Result<TopicDetail> {
+    pub fn merge_topics(
+        &mut self,
+        primary_id: &str,
+        secondary_ids: Vec<String>,
+    ) -> Result<TopicDetail> {
         use crate::query::merge::merge_topics as impl_fn;
-        impl_fn(&mut self.mmap, &mut self.header, &mut self.btree, &mut self.sparse_index, primary_id, secondary_ids)
+        impl_fn(
+            &mut self.mmap,
+            &mut self.header,
+            &mut self.btree,
+            &mut self.sparse_index,
+            primary_id,
+            secondary_ids,
+        )
     }
 
     /// Import memory into specified layer
     pub fn import_memory(&mut self, request: ImportRequest) -> Result<ImportResult> {
         use crate::query::import::import_memory as impl_fn;
-        impl_fn(&mut self.mmap, &mut self.header, &mut self.btree, &mut self.sparse_index, request)
+        impl_fn(
+            &mut self.mmap,
+            &mut self.header,
+            &mut self.btree,
+            &mut self.sparse_index,
+            request,
+        )
     }
 
     /// Build hypergraph edges from file path
@@ -557,9 +631,18 @@ impl MemHop {
     /// # Returns
     /// * `Ok(ImportResult)` - Result with created edge IDs
     /// * `Err(MemHopError)` - IO, configuration, or import error
-    pub fn build_l3_hypergraph_from_path(&mut self, path: &std::path::Path) -> Result<ImportResult> {
+    pub fn build_l3_hypergraph_from_path(
+        &mut self,
+        path: &std::path::Path,
+    ) -> Result<ImportResult> {
         use crate::query::import::build_l3_hypergraph_from_path as impl_fn;
-        impl_fn(&mut self.mmap, &mut self.header, &mut self.btree, &mut self.sparse_index, path)
+        impl_fn(
+            &mut self.mmap,
+            &mut self.header,
+            &mut self.btree,
+            &mut self.sparse_index,
+            path,
+        )
     }
 
     /// Activate a Topic for session management
@@ -617,8 +700,8 @@ impl MemHop {
     /// # Arguments
     /// * `llm` - LLM configuration (api_key, api_url, model)
     pub fn dream(&mut self, llm: LlmConfig) -> Result<DreamReport> {
-        use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
         use crate::dream::dream_pipeline;
+        use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
         use std::collections::HashSet;
 
         // Create LLM provider from passed configuration
@@ -628,7 +711,8 @@ impl MemHop {
 
         let llm_provider = OpenAICompatibleLlmProvider::new(api_key, api_url, model);
 
-        let session_topics: HashSet<u64> = self.session_manager
+        let session_topics: HashSet<u64> = self
+            .session_manager
             .get_active_topic_ids()
             .into_iter()
             .collect();
@@ -642,7 +726,6 @@ impl MemHop {
             session_topics,
         )
     }
-
 
     /// Sync all changes to disk
     pub fn sync(&self) -> Result<()> {
@@ -723,10 +806,7 @@ impl MemHop {
         }
 
         // Serialize and save B-tree
-        let btree_data = self
-            .btree
-            .serialize()
-            .map_err(MemHopError::Serialization)?;
+        let btree_data = self.btree.serialize().map_err(MemHopError::Serialization)?;
         if btree_data.len() > PAGE_SIZE - 32 {
             return Err(MemHopError::Serialization(
                 "B-tree too large for single page".to_string(),
