@@ -6,24 +6,13 @@
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
+use crate::query::common::{now_ms, parse_id_to_hash};
 use crate::query::types::*;
 use crate::slot::context::ContextSlot;
-use crate::util::hash_id;
+use crate::util::PAGE_SIZE;
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-const PAGE_SIZE: usize = 4096;
-
-/// Parse ID string to u64 hash (supports hex-encoded hashes)
-fn parse_id_to_hash(id: &str) -> u64 {
-    if id.len() == 16 {
-        u64::from_str_radix(id, 16).unwrap_or_else(|_| hash_id(id))
-    } else {
-        hash_id(id)
-    }
-}
 
 /// Merge multiple L2 contexts into a primary context
 ///
@@ -47,13 +36,13 @@ pub fn merge_topics(
     primary_id: &str,
     secondary_ids: Vec<String>,
 ) -> Result<TopicDetail, MemHopError> {
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64;
+    let now_ms = now_ms();
 
     let primary_hash = parse_id_to_hash(primary_id);
-    let secondary_hashes: Vec<u64> = secondary_ids.iter().map(|id| parse_id_to_hash(id)).collect();
+    let secondary_hashes: Vec<u64> = secondary_ids
+        .iter()
+        .map(|id| parse_id_to_hash(id))
+        .collect();
 
     // Step 1: Verify all contexts exist
     if btree.search(primary_hash).is_none() {
@@ -136,7 +125,8 @@ pub fn merge_topics(
     primary_ctx.version += 1;
 
     // Step 8: Serialize and write back primary ContextSlot
-    let primary_data = primary_ctx.serialize()
+    let primary_data = primary_ctx
+        .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
     if primary_offset + primary_data.len() <= mmap.len() {
@@ -146,7 +136,11 @@ pub fn merge_topics(
     }
 
     // Step 9: Update sparse index for primary
-    let mut terms: Vec<String> = primary_ctx.title.split_whitespace().map(|s| s.to_string()).collect();
+    let mut terms: Vec<String> = primary_ctx
+        .title
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
     if let Some(ref summary) = primary_ctx.summary {
         terms.extend(summary.split_whitespace().map(|s| s.to_string()));
     }
@@ -175,8 +169,16 @@ pub fn merge_topics(
         title: primary_ctx.title,
         summary: primary_ctx.summary,
         depth: primary_ctx.depth,
-        archive_refs: primary_ctx.archive_refs.iter().map(|id| format!("{:016x}", id)).collect(),
-        l3_refs: primary_ctx.l3_refs.iter().map(|id| format!("{:016x}", id)).collect(),
+        archive_refs: primary_ctx
+            .archive_refs
+            .iter()
+            .map(|id| format!("{:016x}", id))
+            .collect(),
+        l3_refs: primary_ctx
+            .l3_refs
+            .iter()
+            .map(|id| format!("{:016x}", id))
+            .collect(),
         turn_count: primary_ctx.turn_count,
         parent_id: primary_ctx.parent_id.map(|id| format!("{:016x}", id)),
         is_active: primary_ctx.is_active,

@@ -1,11 +1,11 @@
 // Utility module
-pub mod f16;
 pub mod hash;
 pub mod io_helpers;
 
 // Re-export hash function
 pub use hash::hash_id;
 
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
 /// Page size constant (4KB)
@@ -21,7 +21,7 @@ pub const TAIL_MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 pub const VERSION: u16 = 0x0022;
 
 /// Cognitive architecture layers (L0-L5)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layer {
     Profile,     // L0: Agent identity
     ContextNode, // L1: Hypergraph skeleton node
@@ -76,7 +76,7 @@ impl fmt::Display for Layer {
 }
 
 /// Memory state (reserved for v0.31+)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum MemoryState {
     Active = 0,
@@ -84,21 +84,8 @@ pub enum MemoryState {
     Dormant = 2,
 }
 
-/// Emotion type (reserved for v0.31+)
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum EmotionType {
-    Neutral = 0,
-    Joy = 1,
-    Sadness = 2,
-    Anger = 3,
-    Fear = 4,
-    Surprise = 5,
-    Disgust = 6,
-}
-
 /// Source type for memory origin
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SourceType {
     UserInput = 0,
@@ -108,7 +95,7 @@ pub enum SourceType {
 }
 
 /// Metadata about the source of a memory
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceMeta {
     pub source_type: SourceType,
     pub source_id: Option<String>,
@@ -118,7 +105,10 @@ pub struct SourceMeta {
 impl SourceMeta {
     /// Create a new SourceMeta with current timestamp
     pub fn new(source_type: SourceType, source_id: Option<String>) -> Self {
-        let timestamp = get_current_timestamp();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
 
         Self {
             source_type,
@@ -138,7 +128,7 @@ pub fn get_current_timestamp() -> i64 {
 }
 
 /// Reference to a source location (for external references)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceRef {
     pub uri: String,
     pub offset: Option<u64>,
@@ -149,23 +139,23 @@ pub struct SourceRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum PageType {
-    ContextNode = 0x01,   // L1 graph node
-    Hyperedge = 0x02,     // L1 hyperedge
-    VectorMatrix = 0x03,  // Vector storage page
-    SparseIndex = 0x04,   // BM25/ngram index
-    Context = 0x05,       // L2 scene context
-    HypergraphSlot = 0x06,// L3 hypergraph container
-    Archive = 0x07,       // L4 raw archive
-    ActionChain = 0x08,   // L5 action chain
-    ActionStep = 0x09,    // L5 action step
-    Profile = 0x0A,       // L0 agent profile
-    HypergraphNode = 0x0B,// L3 hypergraph node
-    HypergraphEdge = 0x0C,// L3 hypergraph edge
+    ContextNode = 0x01,    // L1 graph node
+    Hyperedge = 0x02,      // L1 hyperedge
+    VectorMatrix = 0x03,   // Vector storage page
+    SparseIndex = 0x04,    // BM25/ngram index
+    Context = 0x05,        // L2 scene context
+    HypergraphSlot = 0x06, // L3 hypergraph container
+    Archive = 0x07,        // L4 raw archive
+    ActionChain = 0x08,    // L5 action chain
+    ActionStep = 0x09,     // L5 action step
+    Profile = 0x0A,        // L0 agent profile
+    HypergraphNode = 0x0B, // L3 hypergraph node
+    HypergraphEdge = 0x0C, // L3 hypergraph edge
     L3IndexPage = 0x0D,    // L3 engine index page
-    BTreeNode = 0x10,     // B-tree internal node
-    BTreeLeaf = 0x11,     // B-tree leaf node
-    Free = 0x20,          // Free page
-    Overflow = 0xFF,      // Overflow page
+    BTreeNode = 0x10,      // B-tree internal node
+    BTreeLeaf = 0x11,      // B-tree leaf node
+    Free = 0x20,           // Free page
+    Overflow = 0xFF,       // Overflow page
 }
 
 impl PageType {

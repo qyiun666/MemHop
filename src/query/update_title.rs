@@ -10,11 +10,9 @@ use crate::query::types::*;
 use crate::slot::action_chain::{ActionChainSlot, ChainStatus};
 use crate::slot::context::ContextSlot;
 use crate::slot::profile::ProfileSlot;
-use crate::util::hash_id;
+use crate::util::{hash_id, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
-
-const PAGE_SIZE: usize = 4096;
 
 // ============================================================================
 // Profile Update
@@ -319,11 +317,7 @@ pub fn update_knowledge_title(
 }
 
 /// Compute importance and knowledge_type from graph nodes via l3 store
-fn compute_knowledge_meta(
-    mmap: &mut MmapMut,
-    btree: &BTreeIndex,
-    graph_id: u64,
-) -> (f32, String) {
+fn compute_knowledge_meta(mmap: &mut MmapMut, btree: &BTreeIndex, graph_id: u64) -> (f32, String) {
     let query = NodeListQuery {
         page: 1,
         page_size: 1000,

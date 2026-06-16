@@ -7,12 +7,12 @@ use crate::file::free_list::allocate_from_free_list;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
+use crate::query::common;
 use crate::query::types::*;
 use crate::slot::context::{ActivationState, ContextSlot};
 use crate::slot::profile::ProfileSlot;
-use crate::util::hash_id;
+use crate::util::{hash_id, PAGE_SIZE};
 use crate::MemHopError;
-use crate::query::common;
 use memmap2::MmapMut;
 use std::path::Path;
 
@@ -41,7 +41,9 @@ fn calculate_l2_sparse_index_data(
 
             if l3_offset < mmap.len() {
                 // Try to read L3 hypergraph node for additional search terms
-                if let Ok(node) = crate::slot::hypergraph::HypergraphSlot::deserialize(&mmap[l3_offset..]) {
+                if let Ok(node) =
+                    crate::slot::hypergraph::HypergraphSlot::deserialize(&mmap[l3_offset..])
+                {
                     terms.extend(node.name.split_whitespace().map(|s| s.to_lowercase()));
                     l3_doc_len += node.name.len();
                 }
@@ -49,14 +51,10 @@ fn calculate_l2_sparse_index_data(
         }
     }
 
-    let doc_len = ctx.title.len()
-        + ctx.summary.as_ref().map_or(0, |s| s.len())
-        + l3_doc_len;
+    let doc_len = ctx.title.len() + ctx.summary.as_ref().map_or(0, |s| s.len()) + l3_doc_len;
 
     (terms, doc_len as u32)
 }
-
-const PAGE_SIZE: usize = 4096;
 
 /// Import memory into specified layer
 pub fn import_memory(
@@ -68,8 +66,23 @@ pub fn import_memory(
 ) -> Result<ImportResult, MemHopError> {
     match request.target_layer {
         TargetLayer::Profile => import_l0_profile(mmap, header, btree, request.data, request.mode),
-        TargetLayer::Topic => import_l2_topics(mmap, header, btree, sparse_index, request.data, request.mode, request.knowledge_title),
-        TargetLayer::Knowledge => import_l3_knowledge(mmap, header, btree, sparse_index, request.data, request.mode),
+        TargetLayer::Topic => import_l2_topics(
+            mmap,
+            header,
+            btree,
+            sparse_index,
+            request.data,
+            request.mode,
+            request.knowledge_title,
+        ),
+        TargetLayer::Knowledge => import_l3_knowledge(
+            mmap,
+            header,
+            btree,
+            sparse_index,
+            request.data,
+            request.mode,
+        ),
     }
 }
 
@@ -86,7 +99,14 @@ fn import_l0_profile(
 ) -> Result<ImportResult, MemHopError> {
     let now_ms = common::now_ms();
 
-    if let ImportData::Profile { name, role, personality, worldview, preferences } = data {
+    if let ImportData::Profile {
+        name,
+        role,
+        personality,
+        worldview,
+        preferences,
+    } = data
+    {
         let profile_id_hash = hash_id("profile");
 
         match btree.search(profile_id_hash) {
@@ -101,22 +121,34 @@ fn import_l0_profile(
                             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
                         // Update fields
-                        if let Some(n) = name { profile.name = n; }
-                        if let Some(r) = role { profile.role = r; }
-                        if let Some(p) = personality { profile.personality = p; }
-                        if let Some(w) = worldview { profile.worldview = w; }
-                        if let Some(pref) = preferences { profile.preferences = pref; }
+                        if let Some(n) = name {
+                            profile.name = n;
+                        }
+                        if let Some(r) = role {
+                            profile.role = r;
+                        }
+                        if let Some(p) = personality {
+                            profile.personality = p;
+                        }
+                        if let Some(w) = worldview {
+                            profile.worldview = w;
+                        }
+                        if let Some(pref) = preferences {
+                            profile.preferences = pref;
+                        }
 
                         profile.updated_at = now_ms;
                         profile.version += 1;
 
-                        let data_bytes = profile.serialize()
+                        let data_bytes = profile
+                            .serialize()
                             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
                         if offset + data_bytes.len() > mmap.len() {
                             return Err(MemHopError::Serialization(format!(
                                 "ProfileSlot data too large for page: {} > {}",
-                                data_bytes.len(), mmap.len() - offset
+                                data_bytes.len(),
+                                mmap.len() - offset
                             )));
                         }
                         mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
@@ -129,15 +161,13 @@ fn import_l0_profile(
                             errors: vec![],
                         })
                     }
-                    ImportMode::Skip => {
-                        Ok(ImportResult {
-                            status: ImportStatus::Success,
-                            created_ids: vec![],
-                            updated_ids: vec![],
-                            skipped_count: 1,
-                            errors: vec![],
-                        })
-                    }
+                    ImportMode::Skip => Ok(ImportResult {
+                        status: ImportStatus::Success,
+                        created_ids: vec![],
+                        updated_ids: vec![],
+                        skipped_count: 1,
+                        errors: vec![],
+                    }),
                 }
             }
             None => {
@@ -157,13 +187,15 @@ fn import_l0_profile(
                     version: 1,
                 };
 
-                let data_bytes = profile.serialize()
+                let data_bytes = profile
+                    .serialize()
                     .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
                 if offset + data_bytes.len() > mmap.len() {
                     return Err(MemHopError::Serialization(format!(
                         "ProfileSlot data too large for page: {} > {}",
-                        data_bytes.len(), mmap.len() - offset
+                        data_bytes.len(),
+                        mmap.len() - offset
                     )));
                 }
                 mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
@@ -180,7 +212,9 @@ fn import_l0_profile(
             }
         }
     } else {
-        Err(MemHopError::ConfigError("Invalid import data for L0".to_string()))
+        Err(MemHopError::ConfigError(
+            "Invalid import data for L0".to_string(),
+        ))
     }
 }
 
@@ -248,19 +282,23 @@ fn import_l2_topics(
 
                                 // Update sparse index
                                 sparse_index.remove_document(ctx.id_hash);
-                                let (terms, doc_len) = calculate_l2_sparse_index_data(&ctx, mmap, btree);
+                                let (terms, doc_len) =
+                                    calculate_l2_sparse_index_data(&ctx, mmap, btree);
                                 sparse_index.add_document(ctx.id_hash, terms, doc_len);
 
-                                let data_bytes = ctx.serialize()
+                                let data_bytes = ctx
+                                    .serialize()
                                     .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
                                 if offset + data_bytes.len() > mmap.len() {
                                     return Err(MemHopError::Serialization(format!(
                                         "ContextSlot data too large for page: {} > {}",
-                                        data_bytes.len(), mmap.len() - offset
+                                        data_bytes.len(),
+                                        mmap.len() - offset
                                     )));
                                 }
-                                mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
+                                mmap[offset..offset + data_bytes.len()]
+                                    .copy_from_slice(&data_bytes);
 
                                 updated_ids.push(format!("{:016x}", id_hash));
                             }
@@ -299,13 +337,15 @@ fn import_l2_topics(
                             dialogue_range: (now_ms, now_ms),
                         };
 
-                        let data_bytes = ctx.serialize()
+                        let data_bytes = ctx
+                            .serialize()
                             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
                         if offset + data_bytes.len() > mmap.len() {
                             return Err(MemHopError::Serialization(format!(
                                 "ContextSlot data too large for page: {} > {}",
-                                data_bytes.len(), mmap.len() - offset
+                                data_bytes.len(),
+                                mmap.len() - offset
                             )));
                         }
                         mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
@@ -324,7 +364,10 @@ fn import_l2_topics(
             })();
 
             if let Err(e) = result {
-                errors.push(ImportError { index: item_idx, message: e.to_string() });
+                errors.push(ImportError {
+                    index: item_idx,
+                    message: e.to_string(),
+                });
             }
         }
 
@@ -342,7 +385,9 @@ fn import_l2_topics(
             errors,
         })
     } else {
-        Err(MemHopError::ConfigError("Invalid import data for L2".to_string()))
+        Err(MemHopError::ConfigError(
+            "Invalid import data for L2".to_string(),
+        ))
     }
 }
 
@@ -360,7 +405,11 @@ fn import_l3_knowledge(
 ) -> Result<ImportResult, MemHopError> {
     let items = match data {
         ImportData::Knowledge(items) => items,
-        _ => return Err(MemHopError::ConfigError("Expected Knowledge import data".to_string())),
+        _ => {
+            return Err(MemHopError::ConfigError(
+                "Expected Knowledge import data".to_string(),
+            ))
+        }
     };
 
     let now_ms = crate::query::common::now_ms();
@@ -400,8 +449,13 @@ fn import_l3_knowledge(
         let graph_id = *graph_cache.entry(item.domain.clone()).or_insert_with(|| {
             let gid = crate::util::hash_id(&item.domain);
             if btree.search(gid).is_none() {
-                if let Err(e) = create_hypergraph_slot(mmap, header, btree, gid, &item.domain, now_ms) {
-                    errors.push(ImportError { index: idx, message: e.to_string() });
+                if let Err(e) =
+                    create_hypergraph_slot(mmap, header, btree, gid, &item.domain, now_ms)
+                {
+                    errors.push(ImportError {
+                        index: idx,
+                        message: e.to_string(),
+                    });
                     return gid; // Still return gid so we don't block node creation
                 }
             }
@@ -515,6 +569,6 @@ pub fn build_l3_hypergraph_from_path(
     _path: &Path,
 ) -> Result<ImportResult, MemHopError> {
     Err(MemHopError::ConfigError(
-        "L3 Knowledge layer not available; use Hypergraph API".to_string()
+        "L3 Knowledge layer not available; use Hypergraph API".to_string(),
     ))
 }

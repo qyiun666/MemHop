@@ -13,6 +13,7 @@
 //   HypergraphEdge  — a true hyperedge connecting multiple nodes
 
 use crate::util::io_helpers::*;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Cursor, Write};
 
 // ============================================================================
@@ -20,7 +21,7 @@ use std::io::{self, Cursor, Write};
 // ============================================================================
 
 /// Hypergraph source type tag
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SourceKind {
     Path = 0,    // Generated from file path
@@ -42,12 +43,12 @@ impl SourceKind {
 }
 
 /// Hypergraph source descriptor
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum HypergraphSource {
-    Path(String),    // File path
-    Context(u64),    // L2 context id_hash
-    Url(String),     // External URL
-    Manual,          // No extra data
+    Path(String), // File path
+    Context(u64), // L2 context id_hash
+    Url(String),  // External URL
+    Manual,       // No extra data
 }
 
 impl HypergraphSource {
@@ -90,7 +91,10 @@ impl HypergraphSource {
             }
             SourceKind::Context => {
                 if data.len() < 8 {
-                    return Err(io::Error::new(io::ErrorKind::InvalidData, "Context source needs 8 bytes"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Context source needs 8 bytes",
+                    ));
                 }
                 let id = u64::from_le_bytes(data[..8].try_into().unwrap());
                 Ok(Self::Context(id))
@@ -166,8 +170,14 @@ impl HypergraphSlot {
         let version = read_u32(&mut c)?;
 
         Ok(HypergraphSlot {
-            id_hash, name, source, node_count, edge_count,
-            created_at, updated_at, version,
+            id_hash,
+            name,
+            source,
+            node_count,
+            edge_count,
+            created_at,
+            updated_at,
+            version,
         })
     }
 }
@@ -177,15 +187,15 @@ impl HypergraphSlot {
 // ============================================================================
 
 /// L3 hypergraph node
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HypergraphNode {
     pub id_hash: u64,
     pub graph_id: u64,
     pub title: String,
-    pub node_type: String,            // Generic type tag (e.g. "function", "concept", "file")
+    pub node_type: String, // Generic type tag (e.g. "function", "concept", "file")
     pub content: String,
     pub keywords: Vec<String>,
-    pub source_ref: Option<String>,   // Source path (e.g. "/path/file.rs:L10-L50")
+    pub source_ref: Option<String>, // Source path (e.g. "/path/file.rs:L10-L50")
     pub importance: f32,
     pub created_at: i64,
     pub updated_at: i64,
@@ -196,11 +206,14 @@ impl HypergraphNode {
     /// Fixed: 8 (id_hash) + 8 (graph_id) + 4 (importance) +
     ///        8 (created_at) + 8 (updated_at) + 4 (version) = 40 bytes
     pub fn slot_size(&self) -> usize {
-        40
-            + 2 + self.title.len()
-            + 2 + self.node_type.len()
-            + 2 + self.content.len()
-            + self.keywords.iter().map(|k| 2 + k.len()).sum::<usize>() + 2
+        40 + 2
+            + self.title.len()
+            + 2
+            + self.node_type.len()
+            + 2
+            + self.content.len()
+            + self.keywords.iter().map(|k| 2 + k.len()).sum::<usize>()
+            + 2
             + self.source_ref.as_ref().map_or(2, |s| 2 + s.len())
     }
 
@@ -240,8 +253,17 @@ impl HypergraphNode {
         let source_ref = read_optional_string(&mut c)?;
 
         Ok(HypergraphNode {
-            id_hash, graph_id, title, node_type, content, keywords,
-            source_ref, importance, created_at, updated_at, version,
+            id_hash,
+            graph_id,
+            title,
+            node_type,
+            content,
+            keywords,
+            source_ref,
+            importance,
+            created_at,
+            updated_at,
+            version,
         })
     }
 }
@@ -251,7 +273,7 @@ impl HypergraphNode {
 // ============================================================================
 
 /// Edge kind for L3 hypergraph
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum GraphEdgeKind {
     Related = 0,
@@ -281,14 +303,14 @@ impl GraphEdgeKind {
 // ============================================================================
 
 /// L3 hypergraph edge — connects multiple nodes (true hyperedge, not binary)
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HypergraphEdge {
     pub id_hash: u64,
     pub graph_id: u64,
     pub kind: GraphEdgeKind,
-    pub node_ids: Vec<u64>,          // Connected nodes (>=2, supports hyperedge)
+    pub node_ids: Vec<u64>, // Connected nodes (>=2, supports hyperedge)
     pub weight: f32,
-    pub label: Option<String>,        // Semantic label for the edge
+    pub label: Option<String>, // Semantic label for the edge
     pub created_at: i64,
 }
 
@@ -296,9 +318,7 @@ impl HypergraphEdge {
     /// Fixed: 8 (id_hash) + 8 (graph_id) + 1 (kind) + 2 (node_count) +
     ///        4 (weight) + 8 (created_at) = 31 bytes
     pub fn slot_size(&self) -> usize {
-        31
-            + self.node_ids.len() * 8
-            + self.label.as_ref().map_or(2, |l| 2 + l.len())
+        31 + self.node_ids.len() * 8 + self.label.as_ref().map_or(2, |l| 2 + l.len())
     }
 
     pub fn serialize(&self) -> io::Result<Vec<u8>> {
@@ -338,7 +358,13 @@ impl HypergraphEdge {
         let label = read_optional_string(&mut c)?;
 
         Ok(HypergraphEdge {
-            id_hash, graph_id, kind, node_ids, weight, label, created_at,
+            id_hash,
+            graph_id,
+            kind,
+            node_ids,
+            weight,
+            label,
+            created_at,
         })
     }
 }
@@ -533,8 +559,8 @@ mod tests {
     fn test_hypergraph_slot_size_calculation() {
         let slot = HypergraphSlot {
             id_hash: 1,
-            name: "test".to_string(),           // 4 bytes
-            source: HypergraphSource::Manual,    // 0 bytes data
+            name: "test".to_string(),         // 4 bytes
+            source: HypergraphSource::Manual, // 0 bytes data
             node_count: 0,
             edge_count: 0,
             created_at: 0,

@@ -2,10 +2,10 @@
 pub mod compress_stage;
 pub mod crystallize_stage;
 pub mod emotion;
-pub mod openai_compatible;
 pub mod l0_form_stage;
 pub mod l3_distill_stage;
 pub mod llm;
+pub mod openai_compatible;
 pub mod prune;
 
 use crate::dream::llm::LlmProvider;
@@ -23,7 +23,8 @@ use std::collections::HashSet;
 /// 1. L2 Compression: depth demotion (主→次→次次→remove) on active contexts
 /// 2. L1 Update: rebuild L1 ContextNode associations based on updated L2
 /// 3. L0 Update: regenerate L0 profile from L1 knowledge distribution
-/// 4. L5 Crystallization: scan all ActionChainSlots and extract crystals
+/// 4. L3 Distillation: extract structured knowledge into L3 hypergraph via LLM
+/// 5. L5 Crystallization: scan all ActionChainSlots and extract crystals
 ///
 /// # Arguments
 /// * `mmap` - Mutable memory-mapped file for reading/writing memory slots
@@ -52,16 +53,21 @@ pub fn dream_pipeline(
         new_compressed: Vec::new(),
         l1_updated: Vec::new(),
         l0_updated: None,
+        new_l3_nodes: Vec::new(),
         new_crystals: Vec::new(),
         pruned_crystals: Vec::new(),
         duration_ms: 0,
     };
 
     // Stage 1: L2 Compression - depth demotion on active contexts
-    let (demoted_sec, compressed, removed, demoted_ter) =
-        compress_stage::compress_active_contexts(
-            mmap, header, btree, sparse_index, llm, &session_topic_ids
-        )?;
+    let (demoted_sec, compressed, removed, demoted_ter) = compress_stage::compress_active_contexts(
+        mmap,
+        header,
+        btree,
+        sparse_index,
+        llm,
+        &session_topic_ids,
+    )?;
     report.demoted_to_secondary = demoted_sec;
     report.new_compressed = compressed;
     report.removed_contexts = removed;
@@ -76,10 +82,24 @@ pub fn dream_pipeline(
     l0_form_stage::generate_profile(mmap, header, btree, sparse_index)?;
     // Mark L0 as updated if we have any topics
     if !session_topic_ids.is_empty() {
-        report.l0_updated = Some(("profile".to_string(), vec!["personality".to_string(), "preferences".to_string()]));
+        report.l0_updated = Some((
+            "profile".to_string(),
+            vec!["personality".to_string(), "preferences".to_string()],
+        ));
     }
 
-    // Stage 4: L5 Crystallization - scan all ActionChainSlots, extract crystals
+    // Stage 4: L3 Knowledge Distillation - extract structured knowledge via LLM
+    let l3_nodes = l3_distill_stage::distill_l3_knowledge(
+        mmap,
+        header,
+        btree,
+        sparse_index,
+        llm,
+        &session_topic_ids,
+    )?;
+    report.new_l3_nodes = l3_nodes;
+
+    // Stage 5: L5 Crystallization - scan all ActionChainSlots, extract crystals
     let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm)?;
     report.new_crystals = crystals;
 

@@ -5,6 +5,7 @@ use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
 use crate::MemHopError;
 use memmap2::MmapMut;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 /// Report of dream operation
@@ -13,7 +14,9 @@ use std::collections::HashSet;
 /// - L2 depth demotion (主→次, 次→次次, 次次→移除)
 /// - L1 rebuild based on updated L2
 /// - L0 profile update based on L1
+/// - L3 knowledge distillation from active L2 contexts
 /// - L5 crystallization from all ActionChainSlots
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DreamReport {
     /// Contexts demoted from depth 1 → depth 2 (with compressed summary)
     pub demoted_to_secondary: Vec<DemotionResult>,
@@ -27,6 +30,8 @@ pub struct DreamReport {
     pub l1_updated: Vec<String>,
     /// L0 profile updated: (profile_id, updated_fields)
     pub l0_updated: Option<(String, Vec<String>)>,
+    /// New L3 nodes created via LLM-based knowledge distillation
+    pub new_l3_nodes: Vec<String>,
     /// New crystals created from L5 crystallization
     pub new_crystals: Vec<String>,
     /// Low-quality crystals pruned
@@ -36,7 +41,7 @@ pub struct DreamReport {
 }
 
 /// Result of demoting a depth-1 context to depth-2
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DemotionResult {
     /// Original context ID (hex)
     pub context_id: String,
@@ -49,7 +54,7 @@ pub struct DemotionResult {
 }
 
 /// Result of compressing a depth-1 context into a new context
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressResult {
     /// New compressed context ID (hex)
     pub new_context_id: String,
@@ -95,6 +100,7 @@ mod tests {
             }],
             l1_updated: vec!["node-1".to_string()],
             l0_updated: Some(("profile-1".to_string(), vec!["personality".to_string()])),
+            new_l3_nodes: vec!["l3-node-1".to_string()],
             new_crystals: vec!["crystal-1".to_string()],
             pruned_crystals: vec!["crystal-old".to_string()],
             duration_ms: 500,

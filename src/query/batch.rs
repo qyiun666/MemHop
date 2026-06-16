@@ -13,10 +13,11 @@ use crate::util::{SourceMeta, SourceRef};
 use crate::MemHopError;
 use half::f16;
 use memmap2::MmapMut;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Batch store request containing multiple items to be stored
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreBatch {
     /// List of items to store
     pub items: Vec<StoreItem>,
@@ -27,7 +28,7 @@ pub struct StoreBatch {
 }
 
 /// Individual item in a batch store operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreItem {
     /// The text content to store
     pub text: String,
@@ -50,7 +51,7 @@ pub struct StoreItem {
 }
 
 /// Encoded item ready for storage after encoding
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EncodedItem {
     /// Original text content
     pub text: String,
@@ -73,7 +74,7 @@ pub struct EncodedItem {
 }
 
 /// Report generated after batch store operation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BatchReport {
     /// Number of documents stored at L4 (archive layer)
     pub l4_docs: u32,

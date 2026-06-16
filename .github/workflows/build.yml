@@ -1,0 +1,107 @@
+# Cross-platform build for libmemhop (cdylib)
+# Builds: macOS (x86_64 + arm64 → universal) · Linux (.so) · Windows (.dll)
+name: build
+
+on:
+  push:
+    branches: [main, master, develop]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ─── Linux ───────────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmemhop-linux-x86_64
+          path: target/release/libmemhop.so
+          if-no-files-found: error
+
+  # ─── Windows ─────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: memhop-windows-x86_64
+          path: target/release/memhop.dll
+          if-no-files-found: error
+
+  # ─── macOS Intel ─────────────────────────────────────────
+  build-macos-x86:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmemhop-macos-x86_64
+          path: target/release/libmemhop.dylib
+          if-no-files-found: error
+
+  # ─── macOS Apple Silicon ─────────────────────────────────
+  build-macos-arm:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmemhop-macos-arm64
+          path: target/release/libmemhop.dylib
+          if-no-files-found: error
+
+  # ─── macOS Universal Binary (lipo) ───────────────────────
+  create-universal:
+    needs: [build-macos-x86, build-macos-arm]
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: libmemhop-macos-x86_64
+          path: macos-x86
+      - uses: actions/download-artifact@v4
+        with:
+          name: libmemhop-macos-arm64
+          path: macos-arm
+      - name: Create universal binary
+        run: |
+          lipo -create \
+            macos-x86/libmemhop.dylib \
+            macos-arm/libmemhop.dylib \
+            -output libmemhop-universal.dylib
+          lipo -info libmemhop-universal.dylib
+      - name: Upload universal binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmemhop-macos-universal
+          path: libmemhop-universal.dylib
+          if-no-files-found: error
+
+  # ─── Tests ────────────────────────────────────────────────
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test

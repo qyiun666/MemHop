@@ -1,1573 +1,625 @@
-# MemHop 新版 API 文档
+# MemHop FFI Protocol
 
-本文档基于实际代码实现，描述 MemHop 六层认知架构（L0-L5）的所有公开接口。
+> JSON-in JSON-out 跨语言接口协议。文件格式 .meh，六层认知架构（L0-L5）。
 
 ---
 
 ## 目录
 
-- [接口1：创建/打开数据库](#接口1创建打开数据库)
-- [接口2：检索记忆](#接口2检索记忆)
-- [接口3：更新记忆](#接口3更新记忆)
-- [接口4：Dream整合](#接口4dream整合)
-- [接口5：查询L0画像](#接口5查询l0画像)
-- [接口6：查询L1情节记忆](#接口6查询l1情节记忆)
-- [接口7：查询L2主题列表](#接口7查询l2主题列表)
-- [接口8：查询L2主题详情](#接口8查询l2主题详情)
-- [接口9：查询L3知识列表](#接口9查询l3知识列表)
-- [接口10：查询L3知识详情](#接口10查询l3知识详情)
-- [接口11：查询L4归档内容](#接口11查询l4归档内容)
-- [接口12：查询L5结晶技能列表](#接口12查询l5结晶技能列表)
-- [接口13：修改L0画像](#接口13修改l0画像)
-- [接口14：修改L2标题](#接口14修改l2标题)
-- [接口15：修改L3标题](#接口15修改l3标题)
-- [接口16：修改L5标题](#接口16修改l5标题)
-- [接口17：关闭与同步数据库](#接口17关闭与同步数据库)
-- [接口18：合并L2主题](#接口18合并l2主题)
-- [接口19：导入记忆](#接口19导入记忆)
-- [接口20：会话管理](#接口20会话管理)
-- [接口21：批量存储](#接口21批量存储)
+- [快速开始](#快速开始)
+- [4 个 C 函数](#4-个-c-函数)
+- [数据结构](#数据结构)
+- [命令参考](#命令参考)
+  - [search](#command-search)：检索记忆
+  - [update](#command-update)：更新记忆
+  - [query_layer](#command-query_layer)：统一查询（L0-L5）
+  - [update_title](#command-update_title)：统一修改标题
+  - [dream](#command-dream)：记忆整合
+  - [merge_topics](#command-merge_topics)：合并 L2 主题
+  - [import](#command-import)：导入记忆
+  - [session](#command-session)：会话管理
+  - [batch_store](#command-batch_store)：批量存储
+  - [sync](#command-sync)：同步到磁盘
+  - [close](#command-close)：关闭数据库
+- [错误处理](#错误处理)
+- [跨平台构建](#跨平台构建)
 
 ---
 
-## 通用类型
+## 快速开始
 
-### LLM配置
+```c
+#include "memhop.h"
+#include <stdio.h>
+#include <stdlib.h>
 
-```rust
-#[derive(Debug, Clone)]
-pub struct LlmConfig {
-    /// API端点URL
-    pub api_url: String,
-    /// API密钥
-    pub api_key: String,
-    /// 模型名称
-    pub model: String,
-    /// API格式（1=OpenAI格式，支持OpenAI、DeepSeek等）
-    pub api_format: u8,
+int main() {
+    // 1. 打开数据库
+    void* handle = memhop_open("{\"db_path\":\"/tmp/test.meh\",\"vector_dim\":768}");
+    if (!handle) { fprintf(stderr, "open failed\n"); return 1; }
+
+    // 2. 执行命令（检索记忆）
+    char* res = memhop_execute(handle,
+        "{\"command\":\"search\",\"dialogue\":\"hello\",\"context_limit\":10}");
+    printf("%s\n", res);
+    memhop_free_string(res);
+
+    // 3. 关闭
+    memhop_close(handle);
+    return 0;
+}
+```
+
+---
+
+## 4 个 C 函数
+
+所有交互通过 4 个 `extern "C"` 函数完成：
+
+| 函数                                                     | 作用                            |
+| -------------------------------------------------------- | ------------------------------- |
+| `memhop_open(config_json)` → `handle`                    | 打开/创建数据库，返回不透明句柄 |
+| `memhop_execute(handle, command_json)` → `response_json` | 执行 JSON 命令，返回 JSON 响应  |
+| `memhop_free_string(ptr)`                                | 释放 `execute` 返回的字符串     |
+| `memhop_close(handle)`                                   | 关闭数据库，释放资源            |
+
+### memhop_open
+
+```c
+void* memhop_open(const char* config_json);
+```
+
+**config_json** 格式：
+
+| 字段             | 类型    | 必需 | 描述                                                           |
+| ---------------- | ------- | ---- | -------------------------------------------------------------- |
+| `db_path`        | string  | 是   | `.meh` 数据库文件路径                                          |
+| `encoder_socket` | string  | 否   | 向量编码器 Unix Socket 路径（默认 `/tmp/memhop_encoder.sock`） |
+| `vector_dim`     | integer | 是   | 向量维度（创建时确定，不可更改）                               |
+| `crystal_path`   | string  | 否   | 结晶化知识存储路径                                             |
+
+示例：
+
+```json
+{ "db_path": "./data/agent.meh", "vector_dim": 768 }
+```
+
+返回：不透明 `handle` 指针，失败返回 `NULL`。
+
+### memhop_execute
+
+```c
+char* memhop_execute(void* handle, const char* command_json);
+```
+
+返回 JSON 字符串，必须通过 `memhop_free_string` 释放。响应格式见下方。
+
+### memhop_free_string
+
+```c
+void memhop_free_string(char* str);
+```
+
+释放 `memhop_execute` 返回的字符串。传入 `NULL` 安全无操作。
+
+### memhop_close
+
+```c
+void memhop_close(void* handle);
+```
+
+关闭数据库并释放句柄。调用后句柄失效。
+
+---
+
+## 数据结构
+
+### LLM 配置
+
+```json
+{
+  "api_url": "https://api.deepseek.com/v1/chat/completions",
+  "api_key": "sk-xxx",
+  "model": "deepseek-chat",
+  "api_format": 1
 }
 ```
 
 ### 配置项
 
-```rust
-#[derive(Debug, Clone)]
-pub struct MemHopConfig {
-    /// .meh 数据库文件路径
-    pub db_path: PathBuf,
-    /// 向量编码器Unix套接字路径
-    pub encoder_socket: PathBuf,
-    /// 向量维度（创建时确定，不可更改）
-    pub vector_dim: usize,
-    /// 结晶化知识存储路径（可选，默认与db_path同目录）
-    pub crystal_path: Option<PathBuf>,
+```json
+{
+  "db_path": "./data/agent.meh",
+  "encoder_socket": "/tmp/memhop_encoder.sock",
+  "vector_dim": 768,
+  "crystal_path": null
 }
 ```
 
-```rust
-impl MemHopConfig {
-    /// 创建配置，encoder_socket 默认为 /tmp/memhop_encoder.sock
-    pub fn new(db_path: PathBuf, vector_dim: usize) -> Self;
-}
-```
+### 通用分页
 
-### 通用分页结构
+所有列表查询返回：
 
-所有列表查询接口使用相同的分页模式：
-
-```rust
-pub struct ListResult<T> {
-    pub items: Vec<T>,
-    pub total: usize,
-    pub page: usize,
-    pub page_size: usize,
-    pub has_more: bool,
+```json
+{
+  "items": [...],
+  "total": 10,
+  "page": 1,
+  "page_size": 20,
+  "has_more": false
 }
 ```
 
 ---
 
-## 接口1：创建/打开数据库
+## 命令参考
 
-### 功能说明
+### 通用响应格式
 
-创建或打开一个 MemHop 数据库实例。自动初始化内存映射、B-tree 索引、稀疏索引、激活管理器、会话管理器和编码器。
+```json
+// 成功
+{"success": true, "data": { ... }}
 
-### 接口签名
-
-```rust
-pub fn open(config: MemHopConfig) -> Result<Self>
+// 失败
+{"success": false, "error": "错误描述"}
 ```
 
-### 参数说明
+---
 
-| 参数 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `db_path` | `PathBuf` | 是 | 数据库文件路径（如 `./data/agent.meh`） |
-| `encoder_socket` | `PathBuf` | 是 | 向量模型Unix套接字路径 |
-| `vector_dim` | `usize` | 是 | 向量维度（创建时确定，不可更改） |
-| `crystal_path` | `Option<PathBuf>` | 否 | 结晶化知识存储路径 |
+<h3 id="command-search">search — 检索记忆</h3>
 
-### 请求示例
+**接口 2**：根据对话检索相关记忆，采用 L2 中心化扇出检索（向量 + BM25 + n-gram）。
 
-```rust
-// 基本配置
-let config = MemHopConfig::new(PathBuf::from("./data/agent.meh"), 768);
-let mut db = MemHop::open(config)?;
+**请求**：
 
-// 自定义编码器套接字和结晶路径
-let config = MemHopConfig {
-    db_path: PathBuf::from("./data/agent.meh"),
-    encoder_socket: PathBuf::from("/tmp/custom_encoder.sock"),
-    vector_dim: 1024,
-    crystal_path: Some(PathBuf::from("./crystals")),
-};
-let mut db = MemHop::open(config)?;
+```json
+{
+  "command": "search",
+  "dialogue": "我想学习Rust编程",
+  "context_id": null,
+  "l3_id": null,
+  "context_limit": 10,
+  "llm_enhance": null,
+  "auto_create": 0,
+  "min_score": 0.0,
+  "context_history": null
+}
 ```
 
-### 错误类型
+| 字段              | 类型    | 必需 | 默认 | 描述                         |
+| ----------------- | ------- | ---- | ---- | ---------------------------- |
+| `dialogue`        | string  | 是   | -    | 当前对话内容                 |
+| `context_id`      | string  | 否   | null | L2主题ID，指定后跳过三重检索 |
+| `l3_id`           | string  | 否   | null | 限制只检索包含该 L3 的 L2    |
+| `context_limit`   | integer | 否   | 10   | 返回上限                     |
+| `llm_enhance`     | object  | 否   | null | LLM增强配置                  |
+| `auto_create`     | integer | 否   | 0    | 空结果时自动创建 L2          |
+| `min_score`       | number  | 否   | 0.0  | 最小相关性阈值               |
+| `context_history` | string  | 否   | null | 前文（LLM消歧用）            |
 
-```rust
-pub enum MemHopError {
-    Io(io::Error),
-    InvalidMagic,
-    CrcMismatch,
-    InvalidVersion { expected: u16, actual: u16 },
-    PageNotFound(u32),
-    InvalidPageType,
-    Serialization(String),
-    VectorDimensionMismatch { expected: usize, actual: usize },
-    ConfigError(String),
+**响应 `data`**：
+
+```json
+{
+  "profile": { "id": "...", "name": "助手", "role": "AI助手", ... },
+  "contexts": [
+    {
+      "id": "a1b2c3d4e5f67890",
+      "parent_id": null,
+      "depth": 1,
+      "title": "Rust编程学习",
+      "summary": "用户学习Rust的过程",
+      "activation_score": 0.85,
+      "turn_count": 5,
+      "l3_refs": ["knowledge_001"],
+      "archive_refs": ["archive_001"]
+    }
+  ],
+  "associated_contexts": [],
+  "l3_ids": ["knowledge_001"],
+  "archive_refs": [{"id": "archive_001", "context_id": "...", "content_type": "text", "created_at": 1718304000000}]
 }
 ```
 
 ---
 
-## 接口2：检索记忆
+<h3 id="command-update">update — 更新记忆</h3>
 
-### 功能说明
+**接口 3**：将当前对话写入已激活的 L2 上下文（写入 L4 + L5，更新 L2 索引）。
 
-根据对话内容检索相关记忆。采用 **L2 中心化扇出检索模型**，使用三重检索（向量相似度 + BM25 + n-gram Jaccard）对 L2 主题进行匹配，然后通过 L1 超边关联到其他 L2 上下文，返回 L0 画像、匹配的 L2 上下文列表、关联的 L3/L4 引用。
+**前置条件**：L2 必须已通过 `search` 激活。
 
-### 接口签名
+**请求**：
 
-```rust
-pub fn search_memory(&mut self, query: SearchQuery) -> Result<SearchResult>
-```
-
-### SearchQuery 参数
-
-| 字段 | 类型 | 必需 | 默认值 | 描述 |
-|------|------|------|--------|------|
-| `dialogue` | `String` | 是 | - | 当前对话内容 |
-| `context_id` | `Option<String>` | 否 | `None` | L2主题ID（hex），指定后跳过三重检索，只做 L1 关联 |
-| `l3_id` | `Option<String>` | 否 | `None` | L3知识ID（hex），限制只检索包含该 L3 的 L2 |
-| `context_limit` | `usize` | 否 | `10` | 返回 L2 上下文数量上限 |
-| `llm_enhance` | `Option<LlmConfig>` | 否 | `None` | LLM增强配置 |
-| `auto_create` | `u8` | 否 | `0` | 结果为空时自动创建（0=否，1=是） |
-| `min_score` | `f32` | 否 | `0.0` | 最小相关性阈值（0.0-1.0） |
-
-### 路由逻辑
-
-| 参数组合 | 行为 |
-|----------|------|
-| `auto_create=1` | 跳过检索，直接创建新的 L2 上下文 |
-| `context_id` 存在且 L2 存在 | 跳过三重检索，只从该 L2 做 L1 关联 |
-| `l3_id` 存在 | 限制三重检索到包含该 L3 的 L2 |
-| 默认 | 完整三重检索（向量 + BM25 + n-gram） |
-
-### SearchResult 结构
-
-```rust
-pub struct SearchResult {
-    /// L0 - Agent画像
-    pub profile: Option<ProfileResult>,
-    /// L2 - 检索匹配的上下文列表
-    pub contexts: Vec<ContextResult>,
-    /// L2 - 通过L1超边关联的深度1上下文
-    pub associated_contexts: Vec<ContextResult>,
-    /// L3 - 匹配上下文引用的超图ID列表
-    pub l3_ids: Vec<String>,
-    /// L4 - 匹配上下文引用的归档引用
-    pub archive_refs: Vec<ArchiveRef>,
+```json
+{
+  "command": "update",
+  "topic_id": "a1b2c3d4e5f67890",
+  "dialogue_text": "用户：Rust的借用规则是什么？\n助手：每个引用...",
+  "summary": "用户询问Rust借用规则",
+  "action_chain": [
+    {
+      "title": "解释借用规则",
+      "description": "向用户解释Rust的借用和引用规则",
+      "action_type": "Execute",
+      "parameters": null
+    }
+  ]
 }
 ```
 
-### ContextResult 结构
+| 字段            | 类型   | 必需 | 描述                |
+| --------------- | ------ | ---- | ------------------- |
+| `topic_id`      | string | 是   | 已激活的 L2 主题 ID |
+| `dialogue_text` | string | 是   | 当前轮对话原文      |
+| `summary`       | string | 否   | 当前轮压缩摘要      |
+| `action_chain`  | array  | 是   | 动作链              |
 
-```rust
-pub struct ContextResult {
-    pub id: String,                         // 上下文唯一ID（hex）
-    pub parent_id: Option<String>,          // 父上下文ID，depth-1时为None
-    pub depth: u8,                          // 嵌套深度：1=场景，2=子场景，3=轮次组
-    pub title: String,                      // 场景名称/标题
-    pub summary: Option<String>,            // 压缩摘要（如有）
-    pub activation_score: f32,              // 激活分数（检索相关性）
-    pub turn_count: u32,                    // 对话轮次数量
-    pub l3_refs: Vec<String>,              // 引用的L3超图ID列表
-    pub archive_refs: Vec<String>,          // 引用的L4归档ID列表
-}
-```
+**`action_type`** 枚举：`Create` `Read` `Update` `Delete` `Execute` `Query` `Custom`
 
-### ProfileResult 结构
+**响应**：
 
-```rust
-pub struct ProfileResult {
-    pub id: String,
-    pub name: String,
-    pub role: String,
-    pub personality: String,
-    pub worldview: String,
-    pub preferences: HashMap<String, String>,
-    pub created_at: i64,
-    pub updated_at: i64,
-}
-```
-
-### ArchiveRef 结构
-
-```rust
-pub struct ArchiveRef {
-    pub id: String,                 // 归档唯一ID（hex）
-    pub context_id: String,         // 关联的L2上下文ID
-    pub content_type: String,       // 内容类型
-    pub created_at: i64,            // 时间戳
-}
-```
-
-### 请求示例
-
-```rust
-let query = SearchQuery {
-    dialogue: "我想学习Rust编程语言".to_string(),
-    context_id: None,
-    l3_id: None,
-    context_limit: 10,
-    llm_enhance: None,
-    auto_create: 0,
-    min_score: 0.0,
-};
-let result = db.search_memory(query)?;
-
-// 使用LLM增强
-let query = SearchQuery {
-    dialogue: "如何解决内存泄漏".to_string(),
-    context_id: None,
-    l3_id: None,
-    context_limit: 5,
-    llm_enhance: Some(LlmConfig {
-        api_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
-        api_key: "sk-...".to_string(),
-        model: "deepseek-chat".to_string(),
-        api_format: 1,
-    }),
-    auto_create: 1,
-    min_score: 0.0,
-};
-let result = db.search_memory(query)?;
-
-println!("Profile: {:?}", result.profile);
-for ctx in &result.contexts {
-    println!("[{}] {} (depth={}, score={})", ctx.id, ctx.title, ctx.depth, ctx.activation_score);
-}
-```
-
-### 返回示例
-
-```rust
-SearchResult {
-    profile: Some(ProfileResult {
-        id: "profile_001".to_string(),
-        name: "小助手".to_string(),
-        role: "AI助手".to_string(),
-        personality: "友好、专业".to_string(),
-        worldview: "帮助用户解决问题".to_string(),
-        preferences: HashMap::new(),
-        created_at: 1718304000000,
-        updated_at: 1718390400000,
-    }),
-    contexts: vec![
-        ContextResult {
-            id: "a1b2c3d4e5f67890".to_string(),
-            parent_id: None,
-            depth: 1,
-            title: "Rust编程学习".to_string(),
-            summary: Some("用户学习Rust的过程".to_string()),
-            activation_score: 0.85,
-            turn_count: 5,
-            l3_refs: vec!["knowledge_001".to_string()],
-            archive_refs: vec!["archive_001".to_string()],
-        },
-    ],
-    associated_contexts: vec![],
-    l3_ids: vec!["knowledge_001".to_string()],
-    archive_refs: vec![
-        ArchiveRef {
-            id: "archive_001".to_string(),
-            context_id: "a1b2c3d4e5f67890".to_string(),
-            content_type: "text".to_string(),
-            created_at: 1718304000000,
-        },
-    ],
+```json
+{
+  "topic_id": "a1b2c3d4e5f67890",
+  "archive_id": "archive_002",
+  "status": "Updated"
 }
 ```
 
 ---
 
-## 接口3：更新记忆
+<h3 id="command-query_layer">query_layer — 统一查询（接口 5-12 合并）</h3>
 
-### 功能说明
+通过 `layer` + `action` 选择具体操作。
 
-将当前对话轮次的内容更新到已激活的 L2 上下文中。执行以下操作：
-1. 写入 `dialogue_text` 到 L4 ArchiveSlot
-2. 写入 `action_chain` 到 L5 ActionChainSlot
-3. 追加 L4 archive_id 到 L2 archive_refs 索引
-4. 追加 summary 到 L2 上下文摘要
+**请求**：
 
-**前置条件**：L2 主题必须已通过 `search_memory()` 激活。
-
-### 接口签名
-
-```rust
-pub fn update_memory(&mut self, request: UpdateRequest) -> Result<UpdateResult>
-```
-
-### UpdateRequest 参数
-
-| 字段 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `topic_id` | `String` | 是 | 已激活的 L2 主题 ID（由 `search_memory` 返回） |
-| `dialogue_text` | `String` | 是 | 当前轮对话原文 |
-| `summary` | `Option<String>` | 否 | 当前轮压缩摘要（追加到 L2 上下文摘要） |
-| `action_chain` | `Vec<ActionItem>` | 是 | 动作链（写入 L5） |
-
-### ActionItem 结构
-
-```rust
-pub struct ActionItem {
-    pub title: String,                          // 动作标题
-    pub description: String,                    // 动作描述
-    pub action_type: ActionType,                // 动作类型
-    pub parameters: Option<HashMap<String, String>>, // 动作参数（可选）
-}
-
-pub enum ActionType {
-    Create,   // 创建
-    Read,     // 读取
-    Update,   // 更新
-    Delete,   // 删除
-    Execute,  // 执行
-    Query,    // 查询
-    Custom,   // 自定义
+```json
+{
+  "command": "query_layer",
+  "layer": "l0|l1|l2|l3|l4|l5",
+  "action": "get|list",
+  "get": { "id": "..." },
+  "list": {
+    "page": 1,
+    "page_size": 20,
+    "keyword": null,
+    "state_filter": null,
+    "min_importance": null,
+    "active_only": false,
+    "domain_filter": null,
+    "knowledge_type": null,
+    "start_time": null,
+    "end_time": null,
+    "content_type": null,
+    "topic_id": null,
+    "node_ids": null,
+    "status_filter": null,
+    "min_trigger_count": null
+  }
 }
 ```
 
-### UpdateResult 结构
+| layer | action | 分支            | 功能            | 响应类型              |
+| ----- | ------ | --------------- | --------------- | --------------------- |
+| `l0`  | `get`  | —               | 获取 Agent 画像 | `ProfileResult`       |
+| `l1`  | `get`  | `get.id` 存在   | 获取单个 Engram | `EngramResult`        |
+| `l1`  | `list` | —               | 分页查询 Engram | `EngramListResult`    |
+| `l2`  | `get`  | `get.id` 存在   | 获取主题详情    | `TopicDetail`         |
+| `l2`  | `list` | —               | 分页查询主题    | `TopicListResult`     |
+| `l3`  | `get`  | `get.id` 存在   | 获取知识详情    | `KnowledgeDetail`     |
+| `l3`  | `list` | —               | 分页查询知识    | `KnowledgeListResult` |
+| `l4`  | `list` | `topic_id` 存在 | 按主题查归档    | `ArchiveListResult`   |
+| `l4`  | `list` | `node_ids` 存在 | 按节点查归档    | `ArchiveListResult`   |
+| `l4`  | `list` | 两者都无        | 查全部归档      | `ArchiveListResult`   |
+| `l5`  | `list` | —               | 查结晶技能      | `CrystalListResult`   |
 
-```rust
-pub struct UpdateResult {
-    pub topic_id: String,       // L2 主题 ID
-    pub archive_id: String,     // 创建的 L4 归档 ID
-    pub status: UpdateStatus,   // 更新状态
-}
+**各层 List 参数**：
 
-pub enum UpdateStatus {
-    Updated,
+| layer | 特有参数                                                                     |
+| ----- | ---------------------------------------------------------------------------- |
+| L1    | `state_filter` (Active/Latent/Dormant), `min_importance`                     |
+| L2    | `active_only` (bool)                                                         |
+| L3    | `domain_filter`, `knowledge_type` (Factual/Procedural/Conceptual/Contextual) |
+| L4    | `start_time`, `end_time`, `content_type`, `topic_id`, `node_ids`             |
+| L5    | `status_filter` (active/inactive/deprecated), `min_trigger_count`            |
+
+---
+
+<h3 id="command-update_title">update_title — 统一修改标题（接口 13-16 合并）</h3>
+
+**请求**：
+
+```json
+{
+  "command": "update_title",
+  "layer": "l0|l2|l3|l5",
+  "params": {
+    "id": "...",
+    "new_title": "...",
+    "name": null,
+    "role": null,
+    "personality": null,
+    "worldview": null,
+    "preferences": null
+  }
 }
 ```
 
-### 请求示例
+| layer | 必需字段                                                   | 功能                        | 响应类型           |
+| ----- | ---------------------------------------------------------- | --------------------------- | ------------------ |
+| `l0`  | 可选 `name`/`role`/`personality`/`worldview`/`preferences` | 更新 Agent 画像（合并策略） | `ProfileResult`    |
+| `l2`  | `id`, `new_title`                                          | 修改 L2 主题标题            | `TopicSummary`     |
+| `l3`  | `id`, `new_title`                                          | 修改 L3 知识标题            | `KnowledgeSummary` |
+| `l5`  | `id`, `new_title`                                          | 修改 L5 结晶标题            | `CrystalSummary`   |
 
-```rust
-let request = UpdateRequest {
-    topic_id: "a1b2c3d4e5f67890".to_string(),
-    dialogue_text: "用户：Rust的借用规则是什么？\n助手：Rust的借用规则...".to_string(),
-    summary: Some("用户询问Rust借用规则".to_string()),
-    action_chain: vec![
-        ActionItem {
-            title: "解释借用规则".to_string(),
-            description: "向用户解释Rust的借用和引用规则".to_string(),
-            action_type: ActionType::Execute,
-            parameters: None,
-        },
-    ],
-};
-let result = db.update_memory(request)?;
-println!("Archive ID: {}", result.archive_id);
+---
+
+<h3 id="command-dream">dream — 记忆整合（接口 4）</h3>
+
+**请求**：
+
+```json
+{
+  "command": "dream",
+  "api_url": "https://api.deepseek.com/v1/chat/completions",
+  "api_key": "sk-xxx",
+  "model": "deepseek-chat",
+  "api_format": 1
+}
 ```
 
-### 返回示例
+**响应**：
 
-```rust
-UpdateResult {
-    topic_id: "a1b2c3d4e5f67890".to_string(),
-    archive_id: "archive_002".to_string(),
-    status: UpdateStatus::Updated,
+```json
+{
+  "demoted_to_secondary": [
+    {
+      "context_id": "ctx-001",
+      "original_title": "主题",
+      "compressed_summary": "摘要",
+      "new_depth": 2
+    }
+  ],
+  "demoted_to_tertiary": ["ctx-002"],
+  "removed_contexts": ["ctx-003"],
+  "new_compressed": [],
+  "l1_updated": ["node-001"],
+  "l0_updated": ["profile_001", ["personality"]],
+  "new_l3_nodes": ["l3-node-001"],
+  "new_crystals": ["crystal-001"],
+  "pruned_crystals": [],
+  "duration_ms": 1250
 }
 ```
 
 ---
 
-## 接口4：Dream整合
+<h3 id="command-merge_topics">merge_topics — 合并 L2 主题（接口 18）</h3>
 
-### 功能说明
+**请求**：
 
-对当前所有激活的 L2 上下文执行记忆巩固管道：
-1. **L2 深度降级**：depth-1 → depth-2（主→次），depth-2 → depth-3（次→次次），depth-3 → 移除
-2. **L1 重建**：基于更新后的 L2 重建 L1 超边
-3. **L0 画像更新**：从 L1 重新生成 Agent 画像
-4. **L5 结晶化**：从所有 ActionChainSlot 提取模式生成技能结晶
-
-### 接口签名
-
-```rust
-pub fn dream(&mut self, llm: LlmConfig) -> Result<DreamReport>
-```
-
-### 参数说明
-
-| 参数 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `llm` | `LlmConfig` | 是 | LLM配置，用于摘要压缩、模式提取等 |
-
-### DreamReport 结构
-
-```rust
-pub struct DreamReport {
-    /// 从 depth-1 降级到 depth-2 的上下文（附压缩摘要）
-    pub demoted_to_secondary: Vec<DemotionResult>,
-    /// 从 depth-2 降级到 depth-3 的上下文ID列表
-    pub demoted_to_tertiary: Vec<String>,
-    /// 被移除的上下文ID列表（depth-3 → 移除）
-    pub removed_contexts: Vec<String>,
-    /// 从降级的 depth-1 节点创建的新压缩上下文
-    pub new_compressed: Vec<CompressResult>,
-    /// 基于L2变化更新的L1节点ID列表
-    pub l1_updated: Vec<String>,
-    /// L0画像更新信息 (profile_id, updated_fields)
-    pub l0_updated: Option<(String, Vec<String>)>,
-    /// 从L5结晶化创建的新技能ID列表
-    pub new_crystals: Vec<String>,
-    /// 被修剪的低质量技能ID列表
-    pub pruned_crystals: Vec<String>,
-    /// 总执行时间（毫秒）
-    pub duration_ms: u64,
-}
-
-pub struct DemotionResult {
-    pub context_id: String,         // 原始上下文ID
-    pub original_title: String,     // 原始标题
-    pub compressed_summary: String, // 生成的压缩摘要
-    pub new_depth: u8,              // 降级后的深度
-}
-
-pub struct CompressResult {
-    pub new_context_id: String,     // 新创建的压缩上下文ID
-    pub source_context_id: String,  // 来源上下文ID
-    pub new_summary: String,        // 压缩摘要
+```json
+{
+  "command": "merge_topics",
+  "primary_id": "topic_001",
+  "secondary_ids": ["topic_002", "topic_003"]
 }
 ```
 
-### 请求示例
+**响应**：`TopicDetail`
 
-```rust
-let llm = LlmConfig {
-    api_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
-    api_key: "sk-...".to_string(),
-    model: "deepseek-chat".to_string(),
-    api_format: 1,
-};
-let report = db.dream(llm)?;
-println!("执行时间: {}ms", report.duration_ms);
-println!("新技能: {:?}", report.new_crystals);
+---
+
+<h3 id="command-import">import — 导入记忆（接口 19）</h3>
+
+支持两个子动作：
+
+**action=`import`**（导入数据）：
+
+```json
+{
+  "command": "import",
+  "action": "import",
+  "target_layer": "profile|topic|knowledge",
+  "mode": "merge|overwrite|skip",
+  "data": { ... },
+  "knowledge_title": null
+}
 ```
 
-### 返回示例
+**action=`build_l3`**（从文件构建 L3 超图）：
 
-```rust
-DreamReport {
-    demoted_to_secondary: vec![
-        DemotionResult {
-            context_id: "ctx-001".to_string(),
-            original_title: "Rust编程学习".to_string(),
-            compressed_summary: "用户学习Rust语言的基础知识".to_string(),
-            new_depth: 2,
-        },
-    ],
-    demoted_to_tertiary: vec!["ctx-002".to_string()],
-    removed_contexts: vec!["ctx-003".to_string()],
-    new_compressed: vec![],
-    l1_updated: vec!["node-001".to_string()],
-    l0_updated: Some(("profile_001".to_string(), vec!["personality".to_string()])),
-    new_crystals: vec!["crystal-001".to_string()],
-    pruned_crystals: vec!["crystal-old".to_string()],
-    duration_ms: 1250,
+```json
+{
+  "command": "import",
+  "action": "build_l3",
+  "path": "/docs/rust-book"
+}
+```
+
+**`data` 格式**（取决于 `target_layer`）：
+
+Profile:
+
+```json
+{
+  "name": "助手",
+  "role": "编程助手",
+  "personality": null,
+  "worldview": null,
+  "preferences": null
+}
+```
+
+Topics:
+
+```json
+[
+  {
+    "title": "Rust所有权",
+    "summary": null,
+    "keywords": ["ownership"],
+    "knowledge_domain": null
+  }
+]
+```
+
+Knowledge:
+
+```json
+[
+  {
+    "title": "Rust所有权规则",
+    "domain": "编程",
+    "knowledge_type": "Factual",
+    "text": "...",
+    "summary": null,
+    "keywords": [],
+    "source_ref": null
+  }
+]
+```
+
+---
+
+<h3 id="command-session">session — 会话管理（接口 20）</h3>
+
+| action       | 必需参数                  | 功能                      |
+| ------------ | ------------------------- | ------------------------- |
+| `activate`   | `topic_id`                | 激活主题（可选 `ttl_ms`） |
+| `deactivate` | `topic_id`                | 停用主题                  |
+| `list`       | —                         | 列出所有激活主题          |
+| `adjust`     | `topic_id`, `delta` (f32) | 调整激活优先级            |
+
+```json
+{"command": "session", "action": "activate", "topic_id": "a1b2c3d4", "ttl_ms": 600000}
+{"command": "session", "action": "list"}
+```
+
+**响应**：
+
+```json
+// activate
+{"activated": "a1b2c3d4"}
+// list
+{"active_topics": ["a1b2c3d4", "e5f67890"]}
+```
+
+---
+
+<h3 id="command-batch_store">batch_store — 批量存储（接口 21）</h3>
+
+```json
+{
+  "command": "batch_store",
+  "items": [
+    {
+      "text": "Rust的所有权系统...",
+      "topic_label": "Rust编程",
+      "domain_id": "编程",
+      "importance": 0.8,
+      "valence": null,
+      "arousal": null,
+      "source": {
+        "source_type": "UserInput",
+        "source_id": null,
+        "timestamp": 1718304000000
+      },
+      "is_structural": true,
+      "source_ref": null
+    }
+  ],
+  "session_id": "session_001",
+  "turn_id": "turn_001"
+}
+```
+
+**`source_type`** 枚举：`UserInput` `SystemGenerated` `ExternalAPI` `FileImport`
+
+**响应**：
+
+```json
+{
+  "l4_docs": 1,
+  "l1_nodes_created": 1,
+  "l1_nodes_updated": 0,
+  "l2_topics_updated": 1,
+  "l3_nodes": 0,
+  "edges_created": 0,
+  "dedup_skipped": 0
 }
 ```
 
 ---
 
-## 接口5：查询L0画像
+<h3 id="command-sync">sync — 同步到磁盘</h3>
 
-### 功能说明
-
-获取 Agent 的 L0 画像信息。
-
-### 接口签名
-
-```rust
-pub fn get_profile(&self) -> Result<Option<ProfileResult>>
+```json
+{ "command": "sync" }
 ```
 
-### 请求示例
+响应：`{"synced": true}`
 
-```rust
-let profile = db.get_profile()?;
-if let Some(p) = profile {
-    println!("Agent: {}, Role: {}", p.name, p.role);
-}
+---
+
+<h3 id="command-close">close — 关闭数据库</h3>
+
+```json
+{ "command": "close" }
 ```
 
-### 返回示例
+执行 checkpoint + sync，然后标记为已关闭。之后应调用 `memhop_close(handle)` 释放句柄。
 
-```rust
-Some(ProfileResult {
-    id: "profile_001".to_string(),
-    name: "MemHop Agent".to_string(),
-    role: "AI助手".to_string(),
-    personality: "友好、专业、耐心".to_string(),
-    worldview: "以用户为中心".to_string(),
-    preferences: HashMap::from([
-        ("language".to_string(), "中文".to_string()),
-    ]),
-    created_at: 1718304000000,
-    updated_at: 1718390400000,
-})
+响应：`{"closed": true}`
+
+---
+
+## 错误处理
+
+所有错误通过 JSON 响应返回，**不会** crash 宿主进程：
+
+```json
+{ "success": false, "error": "描述信息" }
+```
+
+常见错误：
+
+- `invalid UTF-8 in config: ...` — config_json 不是有效 UTF-8
+- `invalid config JSON: ...` — JSON 格式错误
+- `invalid command JSON: ...` — 命令 JSON 格式错误
+- `missing 'id' for L1 get` — query_layer L1 get 缺少 id
+- `unsupported query_layer: layer=l4, action=get` — 不支持的 layer/action 组合
+- `unknown import action: 'xxx'` — import action 必须是 `import` 或 `build_l3`
+- `handle is null` — 传入了空句柄
+
+如果内部发生 Rust panic（极罕见），返回：
+
+```json
+{ "success": false, "error": "internal panic: ..." }
 ```
 
 ---
 
-## 接口6：查询L1情节记忆
+## 跨平台构建
 
-### 功能说明
+在目标平台上运行：
 
-获取 L1 情节记忆（Engram）的详细信息，支持按 ID 查询或批量分页查询。
-
-### 接口签名
-
-```rust
-// 按ID查询单个
-pub fn get_engram(&self, id: &str) -> Result<Option<EngramResult>>
-
-// 批量查询（支持分页和过滤）
-pub fn list_engrams(&self, query: EngramListQuery) -> Result<EngramListResult>
+```bash
+cargo build --release
 ```
 
-### EngramListQuery 参数
+产物：
 
-| 字段 | 类型 | 必需 | 默认值 | 描述 |
-|------|------|------|--------|------|
-| `page` | `usize` | 是 | - | 页码（从1开始） |
-| `page_size` | `usize` | 是 | - | 每页条数 |
-| `state_filter` | `Option<String>` | 否 | `None` | 状态过滤：Active/Latent/Dormant |
-| `min_importance` | `Option<f32>` | 否 | `None` | 最小重要性 |
-| `keyword` | `Option<String>` | 否 | `None` | 关键词过滤 |
+| 平台                          | 产物                                             |
+| ----------------------------- | ------------------------------------------------ |
+| macOS (Intel + Apple Silicon) | `target/release/libmemhop.dylib`                 |
+| Linux                         | `target/release/libmemhop.so`                    |
+| Windows                       | `target/release/memhop.dll` (+ `memhop.dll.lib`) |
 
-### EngramResult 结构
+macOS 通用二进制（Universal Binary）可通过 lipo 合并：
 
-```rust
-pub struct EngramResult {
-    pub id: String,                     // 记忆ID
-    pub text: String,                   // 原始文本
-    pub summary: Option<String>,        // 摘要
-    pub keywords: Vec<String>,          // 关键词
-    pub memory_state: String,           // 状态：Active/Latent/Dormant
-    pub importance: f32,               // 重要性 [0.0, 1.0]
-    pub source_type: String,            // 来源类型
-    pub created_at: i64,               // 创建时间
-    pub updated_at: i64,               // 更新时间
-    pub edge_count: usize,              // 关联边数量
-    pub associated_topics: Vec<String>, // 关联的L2主题ID
-}
+```bash
+lipo -create target/x86_64/release/libmemhop.dylib target/aarch64/release/libmemhop.dylib -output libmemhop-universal.dylib
 ```
-
-### 请求示例
-
-```rust
-// 查询单个
-let engram = db.get_engram("engram_001")?;
-
-// 分页查询
-let query = EngramListQuery {
-    page: 1,
-    page_size: 20,
-    state_filter: Some("Active".to_string()),
-    min_importance: Some(0.5),
-    keyword: None,
-};
-let result = db.list_engrams(query)?;
-println!("共{}条", result.total);
-```
-
----
-
-## 接口7：查询L2主题列表
-
-### 功能说明
-
-获取 L2 主题的列表，支持分页和关键词过滤。
-
-### 接口签名
-
-```rust
-pub fn list_topics(&self, query: TopicListQuery) -> Result<TopicListResult>
-```
-
-### TopicListQuery 参数
-
-| 字段 | 类型 | 必需 | 默认值 | 描述 |
-|------|------|------|--------|------|
-| `page` | `usize` | 是 | - | 页码 |
-| `page_size` | `usize` | 是 | - | 每页条数 |
-| `active_only` | `bool` | 否 | `false` | 仅显示激活主题 |
-| `keyword` | `Option<String>` | 否 | `None` | 标题关键词过滤 |
-
-### TopicSummary 结构
-
-```rust
-pub struct TopicSummary {
-    pub id: String,             // 主题ID
-    pub title: String,          // 主题标题
-    pub depth: u8,              // 嵌套深度（1=场景，2=子场景，3=轮次组）
-    pub archive_count: usize,   // 包含的归档数
-    pub turn_count: u32,        // 对话轮次数
-    pub is_active: bool,        // 是否激活
-    pub updated_at: i64,        // 最后更新时间
-}
-```
-
-### 请求示例
-
-```rust
-let query = TopicListQuery {
-    page: 1,
-    page_size: 50,
-    active_only: true,
-    keyword: Some("Rust".to_string()),
-};
-let result = db.list_topics(query)?;
-for topic in &result.items {
-    println!("[{}] {} (depth={})", topic.id, topic.title, topic.depth);
-}
-```
-
-### 返回示例
-
-```rust
-TopicListResult {
-    items: vec![
-        TopicSummary {
-            id: "a1b2c3d4e5f67890".to_string(),
-            title: "Rust编程学习".to_string(),
-            depth: 1,
-            archive_count: 15,
-            turn_count: 25,
-            is_active: true,
-            updated_at: 1718390400000,
-        },
-    ],
-    total: 1,
-    page: 1,
-    page_size: 50,
-    has_more: false,
-}
-```
-
----
-
-## 接口8：查询L2主题详情
-
-### 功能说明
-
-获取单个 L2 主题的详细信息。
-
-### 接口签名
-
-```rust
-pub fn get_topic(&self, id: &str) -> Result<Option<TopicDetail>>
-```
-
-### TopicDetail 结构
-
-```rust
-pub struct TopicDetail {
-    pub id: String,                         // 主题ID
-    pub title: String,                      // 主题标题
-    pub summary: Option<String>,            // 主题摘要
-    pub depth: u8,                          // 嵌套深度
-    pub archive_refs: Vec<String>,          // 关联的L4归档ID
-    pub l3_refs: Vec<String>,              // 关联的L3知识ID
-    pub turn_count: u32,                    // 对话轮次数
-    pub parent_id: Option<String>,          // 父主题ID
-    pub is_active: bool,                    // 是否激活
-    pub importance: f32,                    // 重要性
-    pub activation_score: f32,              // 激活分数
-    pub activation_state: String,           // 激活状态
-    pub created_at: i64,                    // 创建时间
-    pub updated_at: i64,                    // 更新时间
-}
-```
-
-### 请求示例
-
-```rust
-let topic = db.get_topic("a1b2c3d4e5f67890")?;
-if let Some(t) = topic {
-    println!("主题: {}", t.title);
-    println!("深度: {}, 轮次: {}", t.depth, t.turn_count);
-    println!("关联L3: {:?}", t.l3_refs);
-}
-```
-
-### 返回示例
-
-```rust
-Some(TopicDetail {
-    id: "a1b2c3d4e5f67890".to_string(),
-    title: "Rust编程学习".to_string(),
-    summary: Some("用户学习Rust语言的过程记录".to_string()),
-    depth: 1,
-    archive_refs: vec!["archive_001".to_string(), "archive_002".to_string()],
-    l3_refs: vec!["knowledge_001".to_string()],
-    turn_count: 25,
-    parent_id: None,
-    is_active: true,
-    importance: 0.8,
-    activation_score: 0.6,
-    activation_state: "Active".to_string(),
-    created_at: 1718304000000,
-    updated_at: 1718390400000,
-})
-```
-
----
-
-## 接口9：查询L3知识列表
-
-### 功能说明
-
-获取 L3 超图知识域的列表，支持分页和过滤。
-
-### 接口签名
-
-```rust
-pub fn list_knowledge(&self, query: KnowledgeListQuery) -> Result<KnowledgeListResult>
-```
-
-### KnowledgeListQuery 参数
-
-| 字段 | 类型 | 必需 | 默认值 | 描述 |
-|------|------|------|--------|------|
-| `page` | `usize` | 是 | - | 页码 |
-| `page_size` | `usize` | 是 | - | 每页条数 |
-| `domain_filter` | `Option<String>` | 否 | `None` | 域过滤 |
-| `knowledge_type` | `Option<String>` | 否 | `None` | 知识类型：Factual/Procedural/Conceptual/Contextual |
-| `keyword` | `Option<String>` | 否 | `None` | 关键词 |
-
-### KnowledgeSummary 结构
-
-```rust
-pub struct KnowledgeSummary {
-    pub id: String,                 // 知识ID
-    pub title: String,              // 知识标题
-    pub domain: String,             // 所属域
-    pub knowledge_type: String,     // 知识类型
-    pub importance: f32,            // 重要性
-    pub confidence: f32,            // 置信度
-    pub updated_at: i64,            // 更新时间
-}
-```
-
-### 请求示例
-
-```rust
-let query = KnowledgeListQuery {
-    page: 1,
-    page_size: 20,
-    domain_filter: Some("programming".to_string()),
-    knowledge_type: Some("Procedural".to_string()),
-    keyword: None,
-};
-let result = db.list_knowledge(query)?;
-for k in &result.items {
-    println!("[{}] {} ({})", k.id, k.title, k.domain);
-}
-```
-
----
-
-## 接口10：查询L3知识详情
-
-### 功能说明
-
-获取单个 L3 超图知识域的详细信息，包括内容、关键词、引用等。
-
-### 接口签名
-
-```rust
-pub fn get_knowledge(&self, id: &str) -> Result<Option<KnowledgeDetail>>
-```
-
-### KnowledgeDetail 结构
-
-```rust
-pub struct KnowledgeDetail {
-    pub id: String,                     // 知识ID
-    pub title: String,                  // 知识标题
-    pub domain: String,                 // 所属域
-    pub knowledge_type: String,         // 知识类型
-    pub text: String,                   // 知识内容
-    pub summary: Option<String>,        // 摘要
-    pub keywords: Vec<String>,          // 关键词
-    pub edge_ptrs: Vec<String>,         // 关联超边
-    pub archive_refs: Vec<String>,      // 关联的L4归档ID
-    pub source_ref: Option<String>,     // 来源引用
-    pub importance: f32,                // 重要性
-    pub confidence: f32,                // 置信度
-    pub created_at: i64,                // 创建时间
-    pub updated_at: i64,                // 更新时间
-}
-```
-
-### 请求示例
-
-```rust
-let knowledge = db.get_knowledge("knowledge_001")?;
-if let Some(k) = knowledge {
-    println!("知识: {}", k.title);
-    println!("类型: {}", k.knowledge_type);
-    println!("内容: {}", k.text);
-}
-```
-
-### 返回示例
-
-```rust
-Some(KnowledgeDetail {
-    id: "knowledge_001".to_string(),
-    title: "Rust所有权系统".to_string(),
-    domain: "programming".to_string(),
-    knowledge_type: "Conceptual".to_string(),
-    text: "Rust的所有权系统是其内存安全的核心...".to_string(),
-    summary: Some("Rust所有权规则和借用检查器".to_string()),
-    keywords: vec!["ownership".to_string(), "borrowing".to_string()],
-    edge_ptrs: vec![],
-    archive_refs: vec!["archive_003".to_string()],
-    source_ref: Some("/docs/rust-ownership.md".to_string()),
-    importance: 0.9,
-    confidence: 0.95,
-    created_at: 1718304000000,
-    updated_at: 1718390400000,
-})
-```
-
----
-
-## 接口11：查询L4归档内容
-
-### 功能说明
-
-获取 L4 归档的原始对话内容，支持多种查询方式和分页。
-
-### 接口签名
-
-```rust
-// 按L2主题ID查询
-pub fn list_archives_by_topic(&self, topic_id: &str, query: ArchivePageQuery) -> Result<ArchiveListResult>
-
-// 按节点ID列表查询
-pub fn list_archives_by_nodes(&self, node_ids: &[String], query: ArchivePageQuery) -> Result<ArchiveListResult>
-
-// 查询全部（分页）
-pub fn list_all_archives(&self, query: ArchivePageQuery) -> Result<ArchiveListResult>
-```
-
-### ArchivePageQuery 参数
-
-| 字段 | 类型 | 必需 | 默认值 | 描述 |
-|------|------|------|--------|------|
-| `page` | `usize` | 是 | - | 页码（从1开始） |
-| `page_size` | `usize` | 是 | - | 每页条数（默认20，最大100） |
-| `start_time` | `Option<i64>` | 否 | `None` | 开始时间戳 |
-| `end_time` | `Option<i64>` | 否 | `None` | 结束时间戳 |
-| `content_type` | `Option<String>` | 否 | `None` | 内容类型过滤 |
-
-### Archive 结构
-
-```rust
-pub struct Archive {
-    pub id: String,                     // 归档ID
-    pub content: String,                // 原始内容
-    pub content_type: String,           // 内容类型
-    pub source_ref: Option<String>,     // 来源引用
-    pub topic_id: Option<String>,       // 关联的L2主题ID
-    pub engram_ids: Vec<String>,        // 关联的Engram节点ID
-    pub created_at: i64,                // 创建时间
-}
-```
-
-### 请求示例
-
-```rust
-let query = ArchivePageQuery {
-    page: 1,
-    page_size: 20,
-    start_time: None,
-    end_time: None,
-    content_type: None,
-};
-
-// 按主题查询
-let result = db.list_archives_by_topic("a1b2c3d4e5f67890", query)?;
-
-// 按节点ID查询
-let node_ids = vec!["engram_001".to_string()];
-let result = db.list_archives_by_nodes(&node_ids, query)?;
-
-// 查询全部
-let result = db.list_all_archives(query)?;
-for archive in &result.items {
-    println!("[{}] {}", archive.id, &archive.content[..50.min(archive.content.len())]);
-}
-```
-
-### 返回示例
-
-```rust
-ArchiveListResult {
-    items: vec![
-        Archive {
-            id: "archive_001".to_string(),
-            content: "用户：什么是Rust的所有权？\n助手：Rust的所有权系统是...".to_string(),
-            content_type: "dialogue".to_string(),
-            source_ref: None,
-            topic_id: Some("a1b2c3d4e5f67890".to_string()),
-            engram_ids: vec!["engram_001".to_string()],
-            created_at: 1718304000000,
-        },
-    ],
-    total: 1,
-    page: 1,
-    page_size: 20,
-    has_more: false,
-}
-```
-
----
-
-## 接口12：查询L5结晶技能列表
-
-### 功能说明
-
-获取 L5 结晶化技能的列表。
-
-### 接口签名
-
-```rust
-pub fn list_crystals(&self, query: CrystalListQuery) -> Result<CrystalListResult>
-```
-
-### CrystalListQuery 参数
-
-| 字段 | 类型 | 必需 | 默认值 | 描述 |
-|------|------|------|--------|------|
-| `page` | `usize` | 是 | - | 页码 |
-| `page_size` | `usize` | 是 | - | 每页条数 |
-| `status_filter` | `Option<String>` | 否 | `None` | 状态过滤：active/inactive/deprecated |
-| `min_trigger_count` | `Option<u32>` | 否 | `None` | 最小触发次数 |
-| `keyword` | `Option<String>` | 否 | `None` | 标题关键词 |
-
-### CrystalSummary 结构
-
-```rust
-pub struct CrystalSummary {
-    pub id: String,                     // 技能ID
-    pub title: String,                  // 技能标题
-    pub condition: String,              // 触发条件
-    pub status: String,                 // 状态：active/inactive/deprecated
-    pub trigger_count: u32,             // 触发次数
-    pub success_rate: f32,              // 成功率 [0.0, 1.0]
-    pub last_triggered: Option<i64>,    // 最后触发时间
-    pub created_at: i64,                // 创建时间
-}
-```
-
-### 请求示例
-
-```rust
-let query = CrystalListQuery {
-    page: 1,
-    page_size: 20,
-    status_filter: Some("active".to_string()),
-    min_trigger_count: Some(3),
-    keyword: Some("开发".to_string()),
-};
-let result = db.list_crystals(query)?;
-for skill in &result.items {
-    println!("[{}] {} (触发{}次)", skill.id, skill.title, skill.trigger_count);
-}
-```
-
-### 返回示例
-
-```rust
-CrystalListResult {
-    items: vec![
-        CrystalSummary {
-            id: "crystal-001".to_string(),
-            title: "Rust代码开发流程".to_string(),
-            condition: "当用户请求编写Rust代码时".to_string(),
-            status: "active".to_string(),
-            trigger_count: 15,
-            success_rate: 0.93,
-            last_triggered: Some(1718390400000),
-            created_at: 1718304000000,
-        },
-    ],
-    total: 1,
-    page: 1,
-    page_size: 20,
-    has_more: false,
-}
-```
-
----
-
-## 接口13：修改L0画像
-
-### 功能说明
-
-修改 Agent 的 L0 画像信息。采用合并策略，只更新提供的字段。
-
-### 接口签名
-
-```rust
-pub fn update_profile(&mut self, request: UpdateProfileRequest) -> Result<ProfileResult>
-```
-
-### UpdateProfileRequest 参数
-
-| 字段 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `name` | `Option<String>` | 否 | Agent名称 |
-| `role` | `Option<String>` | 否 | 角色定义 |
-| `personality` | `Option<String>` | 否 | 性格描述 |
-| `worldview` | `Option<String>` | 否 | 世界观 |
-| `preferences` | `Option<HashMap<String, String>>` | 否 | 偏好设置（合并更新） |
-
-### 请求示例
-
-```rust
-let request = UpdateProfileRequest {
-    name: Some("小助手".to_string()),
-    role: None,
-    personality: Some("友好、专业、耐心".to_string()),
-    worldview: None,
-    preferences: Some(HashMap::from([
-        ("language".to_string(), "中文".to_string()),
-    ])),
-};
-let profile = db.update_profile(request)?;
-println!("更新后名称: {}", profile.name);
-```
-
----
-
-## 接口14：修改L2标题
-
-### 功能说明
-
-修改 L2 主题的标题，同步更新稀疏索引。
-
-### 接口签名
-
-```rust
-pub fn update_topic_title(&mut self, id: &str, new_title: String) -> Result<TopicSummary>
-```
-
-### 请求示例
-
-```rust
-let topic = db.update_topic_title("a1b2c3d4e5f67890", "Rust编程入门".to_string())?;
-println!("更新后标题: {}", topic.title);
-```
-
-### 返回示例
-
-```rust
-TopicSummary {
-    id: "a1b2c3d4e5f67890".to_string(),
-    title: "Rust编程入门".to_string(),
-    depth: 1,
-    archive_count: 15,
-    turn_count: 25,
-    is_active: true,
-    updated_at: 1718390400000,
-}
-```
-
----
-
-## 接口15：修改L3标题
-
-### 功能说明
-
-修改 L3 超图知识域的标题。
-
-### 接口签名
-
-```rust
-pub fn update_knowledge_title(&mut self, id: &str, new_title: String) -> Result<KnowledgeSummary>
-```
-
-### 请求示例
-
-```rust
-let k = db.update_knowledge_title("knowledge_001", "Rust高级编程".to_string())?;
-println!("更新后标题: {}", k.title);
-```
-
-### 返回示例
-
-```rust
-KnowledgeSummary {
-    id: "knowledge_001".to_string(),
-    title: "Rust高级编程".to_string(),
-    domain: "programming".to_string(),
-    knowledge_type: "Conceptual".to_string(),
-    importance: 0.9,
-    confidence: 0.95,
-    updated_at: 1718390400000,
-}
-```
-
----
-
-## 接口16：修改L5标题
-
-### 功能说明
-
-修改 L5 结晶技能的标题。
-
-### 接口签名
-
-```rust
-pub fn update_crystal_title(&mut self, id: &str, new_title: String) -> Result<CrystalSummary>
-```
-
-### 请求示例
-
-```rust
-let skill = db.update_crystal_title("crystal-001", "Rust开发最佳实践".to_string())?;
-println!("更新后标题: {}", skill.title);
-```
-
-### 返回示例
-
-```rust
-CrystalSummary {
-    id: "crystal-001".to_string(),
-    title: "Rust开发最佳实践".to_string(),
-    condition: "当用户请求编写Rust代码时".to_string(),
-    status: "active".to_string(),
-    trigger_count: 15,
-    success_rate: 0.93,
-    last_triggered: Some(1718390400000),
-    created_at: 1718304000000,
-}
-```
-
----
-
-## 接口17：关闭与同步数据库
-
-### 功能说明
-
-关闭数据库连接或手动同步数据到磁盘。
-
-- `close()`: 执行 final checkpoint，清空 journal，标记关闭，防止 Drop 重复 checkpoint
-- `sync()`: 仅将 mmap 刷新到磁盘
-- `checkpoint()`: 保存 B-tree 和稀疏索引到磁盘，更新 header commit_id
-
-### 接口签名
-
-```rust
-pub fn close(mut self) -> Result<()>
-pub fn sync(&self) -> Result<()>
-pub fn checkpoint(&mut self) -> Result<()>
-```
-
-### 请求示例
-
-```rust
-let config = MemHopConfig::new(PathBuf::from("./data/agent.meh"), 768);
-let mut db = MemHop::open(config)?;
-// ... 使用数据库 ...
-db.close()?;  // 关闭并同步数据
-
-// 或手动同步
-db.sync()?;
-```
-
----
-
-## 接口18：合并L2主题
-
-### 功能说明
-
-将多个 L2 主题合并为一个主主题。合并流程：
-1. 验证主L2和所有副L2是否存在
-2. 将副L2的 archive_refs 和 l3_refs 合并到主L2（去重）
-3. 更新 L1 节点关联指向主L2
-4. 删除副L2 主题
-
-### 接口签名
-
-```rust
-pub fn merge_topics(&mut self, primary_id: &str, secondary_ids: Vec<String>) -> Result<TopicDetail>
-```
-
-### 参数说明
-
-| 参数 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `primary_id` | `&str` | 是 | 主L2主题ID（合并后保留） |
-| `secondary_ids` | `Vec<String>` | 是 | 副L2主题ID列表（合并后删除） |
-
-### 请求示例
-
-```rust
-let merged = db.merge_topics("topic_001", vec!["topic_002".to_string(), "topic_003".to_string()])?;
-println!("合并后主题: {}", merged.title);
-println!("归档数: {}", merged.archive_refs.len());
-```
-
----
-
-## 接口19：导入记忆
-
-### 功能说明
-
-将外部记忆数据导入到指定的认知层级（Profile/Topic/Knowledge）。支持批量导入和三种导入模式。
-
-### 接口签名
-
-```rust
-pub fn import_memory(&mut self, request: ImportRequest) -> Result<ImportResult>
-```
-
-### ImportRequest 参数
-
-| 字段 | 类型 | 必需 | 描述 |
-|------|------|------|------|
-| `target_layer` | `TargetLayer` | 是 | 目标层级 |
-| `data` | `ImportData` | 是 | 导入的数据 |
-| `mode` | `ImportMode` | 否 | 导入模式（默认 Merge） |
-| `knowledge_title` | `Option<String>` | 否 | 导入Topic时，关联的L3知识域标题 |
-
-### TargetLayer 枚举
-
-```rust
-pub enum TargetLayer {
-    Profile,   // L0 画像
-    Topic,     // L2 主题
-    Knowledge, // L3 知识域
-}
-```
-
-### ImportMode 枚举
-
-```rust
-pub enum ImportMode {
-    Merge,     // 合并：存在则更新，不存在则创建
-    Overwrite, // 覆盖：强制覆盖已有数据
-    Skip,      // 跳过：存在则跳过
-}
-```
-
-### ImportData 枚举
-
-```rust
-pub enum ImportData {
-    Profile {
-        name: Option<String>,
-        role: Option<String>,
-        personality: Option<String>,
-        worldview: Option<String>,
-        preferences: Option<HashMap<String, String>>,
-    },
-    Topics(Vec<TopicImportItem>),
-    Knowledge(Vec<KnowledgeImportItem>),
-}
-```
-
-### TopicImportItem / KnowledgeImportItem
-
-```rust
-pub struct TopicImportItem {
-    pub title: String,
-    pub summary: Option<String>,
-    pub keywords: Vec<String>,
-    pub knowledge_domain: Option<String>, // 关联的L3知识域标题
-}
-
-pub struct KnowledgeImportItem {
-    pub title: String,
-    pub domain: String,
-    pub knowledge_type: String, // Factual/Procedural/Conceptual/Contextual
-    pub text: String,
-    pub summary: Option<String>,
-    pub keywords: Vec<String>,
-    pub source_ref: Option<String>,
-}
-```
-
-### ImportResult 结构
-
-```rust
-pub struct ImportResult {
-    pub status: ImportStatus,           // 导入状态
-    pub created_ids: Vec<String>,       // 创建的ID列表
-    pub updated_ids: Vec<String>,       // 更新的ID列表
-    pub skipped_count: usize,           // 跳过的数量
-    pub errors: Vec<ImportError>,       // 错误列表
-}
-
-pub enum ImportStatus { Success, PartialSuccess, Failed }
-
-pub struct ImportError {
-    pub index: usize,   // 出错的数据索引
-    pub message: String, // 错误信息
-}
-```
-
-### 请求示例
-
-```rust
-// 导入L0画像
-let result = db.import_memory(ImportRequest {
-    target_layer: TargetLayer::Profile,
-    data: ImportData::Profile {
-        name: Some("AI助手".to_string()),
-        role: Some("编程助手".to_string()),
-        personality: Some("专业、耐心".to_string()),
-        worldview: None,
-        preferences: None,
-    },
-    mode: ImportMode::Merge,
-    knowledge_title: None,
-})?;
-
-// 批量导入L2主题
-let result = db.import_memory(ImportRequest {
-    target_layer: TargetLayer::Topic,
-    data: ImportData::Topics(vec![
-        TopicImportItem {
-            title: "Rust所有权系统".to_string(),
-            summary: Some("Rust的所有权、借用和生命周期".to_string()),
-            keywords: vec!["ownership".to_string()],
-            knowledge_domain: Some("编程".to_string()),
-        },
-    ]),
-    mode: ImportMode::Merge,
-    knowledge_title: Some("编程".to_string()),
-})?;
-
-// 批量导入L3知识
-let result = db.import_memory(ImportRequest {
-    target_layer: TargetLayer::Knowledge,
-    data: ImportData::Knowledge(vec![
-        KnowledgeImportItem {
-            title: "Rust所有权规则".to_string(),
-            domain: "编程".to_string(),
-            knowledge_type: "Factual".to_string(),
-            text: "每个值都有一个所有者...".to_string(),
-            summary: None,
-            keywords: vec!["ownership".to_string()],
-            source_ref: None,
-        },
-    ]),
-    mode: ImportMode::Merge,
-    knowledge_title: None,
-})?;
-```
-
-### 从文件构建L3超图
-
-```rust
-/// 从文件路径读取文件，提取关键词，通过 BM25 搜索关联现有知识节点，
-/// 创建 KnowledgeEdge 连接。
-pub fn build_l3_hypergraph_from_path(&mut self, path: &std::path::Path) -> Result<ImportResult>
-```
-
-```rust
-let result = db.build_l3_hypergraph_from_path(Path::new("/docs/rust-book"))?;
-println!("创建了{}个超边", result.created_ids.len());
-```
-
----
-
-## 接口20：会话管理
-
-### 功能说明
-
-管理 L2 主题的激活/停用状态，用于控制哪些主题参与 Dream 整合管道。
-
-### 接口签名
-
-```rust
-// 激活主题（添加TTL）
-pub fn activate_topic(&mut self, topic_id: &str, ttl_ms: Option<i64>)
-
-// 停用主题
-pub fn deactivate_topic(&mut self, topic_id: &str)
-
-// 获取所有已激活主题ID
-pub fn get_active_topic_ids(&self) -> Vec<String>
-
-// 调整激活TTL（delta × 600,000ms）
-pub fn adjust_activation(&mut self, topic_id: &str, delta: f32)
-```
-
-### 请求示例
-
-```rust
-// 激活主题（使用默认TTL）
-db.activate_topic("a1b2c3d4e5f67890", None);
-
-// 激活主题（自定义TTL，10分钟）
-db.activate_topic("a1b2c3d4e5f67890", Some(600_000));
-
-// 获取激活的主题列表
-let active_ids = db.get_active_topic_ids();
-println!("当前激活: {:?}", active_ids);
-
-// 调整激活（增加优先级）
-db.adjust_activation("a1b2c3d4e5f67890", 0.5);
-
-// 停用主题
-db.deactivate_topic("a1b2c3d4e5f67890");
-```
-
----
-
-## 接口21：批量存储
-
-### 功能说明
-
-使用五阶段管道批量存储多个文档：编码 → 归档 → L1写入 → L2主题更新 → L3超图写入 → 超边创建。
-需要编码器支持向量化。如果没有设置编码器，会自动使用 MockEncoder 降级。
-
-### 接口签名
-
-```rust
-// 设置自定义编码器
-pub fn set_encoder<E: Encoder + Send + Sync + 'static>(&mut self, encoder: E)
-
-// 批量存储
-pub fn batch_store(&mut self, batch: StoreBatch) -> Result<BatchReport>
-```
-
-### StoreBatch / StoreItem 结构
-
-```rust
-pub struct StoreBatch {
-    pub items: Vec<StoreItem>,
-    pub session_id: Option<String>,
-    pub turn_id: Option<String>,
-}
-
-pub struct StoreItem {
-    pub text: String,
-    pub topic_label: Option<String>,
-    pub domain_id: Option<String>,
-    pub importance: Option<f32>,
-    pub valence: Option<f64>,
-    pub arousal: Option<f64>,
-    pub source: SourceMeta,
-    pub is_structural: bool,
-    pub source_ref: Option<SourceRef>,
-}
-```
-
-### BatchReport 结构
-
-```rust
-pub struct BatchReport {
-    pub l4_docs: u32,          // 归档的文档数
-    pub l1_nodes_created: u32, // 新创建的L1节点数
-    pub l1_nodes_updated: u32, // 更新的L1节点数
-    pub l2_topics_updated: u32,// 更新/创建的L2主题数
-    pub l3_nodes: u32,         // L3知识节点数
-    pub edges_created: u32,    // 创建的超边数
-    pub dedup_skipped: u32,    // 去重跳过的项数
-}
-```
-
-### 请求示例
-
-```rust
-use memhop::{MemHop, MemHopConfig};
-use memhop::query::batch::{StoreBatch, StoreItem};
-use memhop::util::{SourceMeta, SourceRef};
-
-let mut db = MemHop::open(config)?;
-
-let batch = StoreBatch {
-    items: vec![
-        StoreItem {
-            text: "Rust的所有权系统是其内存安全的核心".to_string(),
-            topic_label: Some("Rust编程".to_string()),
-            domain_id: Some("编程".to_string()),
-            importance: Some(0.8),
-            valence: None,
-            arousal: None,
-            source: SourceMeta::Dialogue,
-            is_structural: true,
-            source_ref: None,
-        },
-    ],
-    session_id: Some("session_001".to_string()),
-    turn_id: Some("turn_001".to_string()),
-};
-let report = db.batch_store(batch)?;
-println!("存储报告: {:?}", report);
-```
-
----
-
-## 接口清单
-
-| 接口 | 方法 | 功能 | 需要LLM |
-|------|------|------|----------|
-| 接口1 | `MemHop::open()` | 创建/打开数据库 | 否 |
-| 接口2 | `search_memory()` | 检索记忆（三重检索 + L1扇出） | 可选 |
-| 接口3 | `update_memory()` | 更新记忆（L4+L5写入，L2索引更新） | 否 |
-| 接口4 | `dream()` | 记忆巩固管道（L2降级+L1重建+L0更新+L5结晶） | **是** |
-| 接口5 | `get_profile()` | 查询L0画像 | 否 |
-| 接口6 | `get_engram()` / `list_engrams()` | 查询L1情节记忆 | 否 |
-| 接口7 | `list_topics()` | 查询L2主题列表 | 否 |
-| 接口8 | `get_topic()` | 查询L2主题详情 | 否 |
-| 接口9 | `list_knowledge()` | 查询L3知识列表 | 否 |
-| 接口10 | `get_knowledge()` | 查询L3知识详情 | 否 |
-| 接口11 | `list_archives_by_*()` / `list_all_archives()` | 查询L4归档内容 | 否 |
-| 接口12 | `list_crystals()` | 查询L5结晶技能列表 | 否 |
-| 接口13 | `update_profile()` | 修改L0画像 | 否 |
-| 接口14 | `update_topic_title()` | 修改L2标题 | 否 |
-| 接口15 | `update_knowledge_title()` | 修改L3标题 | 否 |
-| 接口16 | `update_crystal_title()` | 修改L5标题 | 否 |
-| 接口17 | `close()` / `sync()` / `checkpoint()` | 关闭/同步数据库 | 否 |
-| 接口18 | `merge_topics()` | 合并L2主题 | 否 |
-| 接口19 | `import_memory()` / `build_l3_hypergraph_from_path()` | 导入记忆 / 从文件构建L3超图 | 否 |
-| 接口20 | `activate_topic()` / `deactivate_topic()` / `get_active_topic_ids()` / `adjust_activation()` | 会话管理 | 否 |
-| 接口21 | `batch_store()` / `set_encoder()` | 批量存储 | 否 |

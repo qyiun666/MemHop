@@ -6,10 +6,13 @@ description = "Agent-oriented memory database inspired by human brain cognitive 
 license = "MIT OR Apache-2.0"
 rust-version = "1.75"
 
+[lib]
+crate-type = ["lib", "cdylib"]
+
 [dependencies]
 # Core dependencies
 twox-hash = { version = "1.6", default-features = false }
-half = { version = "2.4", default-features = false, features = ["std"] }
+half = { version = "2.4", default-features = false, features = ["std", "serde"] }
 memmap2 = "0.9"
 thiserror = "1.0"
 crc32fast = "1.4"
@@ -34,5 +37,4 @@ rand = "0.8"
 opt-level = 3
 lto = true
 codegen-units = 1
-panic = "abort"
 strip = true

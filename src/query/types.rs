@@ -3,6 +3,7 @@
 //! This module defines all the data structures used in the new external API
 //! as specified in API_NEW.md.
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ============================================================================
@@ -10,7 +11,7 @@ use std::collections::HashMap;
 // ============================================================================
 
 /// LLM configuration for dream stages and query enhancement
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
     /// API endpoint URL
     pub api_url: String,
@@ -36,7 +37,7 @@ pub struct LlmConfig {
 /// | `context_id` present & L2 exists | Skip triple retrieval, only L1-associate from that L2 |
 /// | `l3_id` present | Restrict triple retrieval to L2 contexts containing this L3 |
 /// | default | Full triple retrieval (vector + BM25 + n-gram) |
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
     /// Current dialogue content (for BM25 + ngram + vector search)
     pub dialogue: String,
@@ -65,7 +66,7 @@ pub struct SearchQuery {
 /// 1. Triple retrieval (vector + BM25 + n-gram) on L2 context titles (depth 1 & 2)
 /// 2. Via L1 hypergraph, find associated depth-1 contexts
 /// 3. Return L0 profile, L3 ID list, L4 archive references
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     /// L0 - Agent profile
     pub profile: Option<ProfileResult>,
@@ -80,7 +81,7 @@ pub struct SearchResult {
 }
 
 /// L2 context result from search
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextResult {
     /// Context unique ID (hex)
     pub id: String,
@@ -103,7 +104,7 @@ pub struct ContextResult {
 }
 
 /// L4 archive reference (lightweight pointer)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveRef {
     /// Archive unique ID (hex)
     pub id: String,
@@ -116,7 +117,7 @@ pub struct ArchiveRef {
 }
 
 /// Agent profile
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileResult {
     pub id: String,
     pub name: String,
@@ -141,7 +142,7 @@ pub struct ProfileResult {
 /// 4. Appends summary to L2 context summary
 ///
 /// topic_id is required - the L2 must already be activated.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateRequest {
     /// Activated L2 topic ID (required, returned by search_memory)
     pub topic_id: String,
@@ -154,7 +155,7 @@ pub struct UpdateRequest {
 }
 
 /// Action item for L5 action chain storage
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionItem {
     /// Action title (e.g., "create file", "write code")
     pub title: String,
@@ -167,7 +168,7 @@ pub struct ActionItem {
 }
 
 /// Action type enumeration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ActionType {
     Create,
     Read,
@@ -179,7 +180,7 @@ pub enum ActionType {
 }
 
 /// Update result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateResult {
     /// L2 topic ID
     pub topic_id: String,
@@ -190,7 +191,7 @@ pub struct UpdateResult {
 }
 
 /// Update status enumeration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UpdateStatus {
     Updated,
 }
@@ -200,7 +201,7 @@ pub enum UpdateStatus {
 // ============================================================================
 
 /// Engram list query
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngramListQuery {
     pub page: usize,
     pub page_size: usize,
@@ -210,7 +211,7 @@ pub struct EngramListQuery {
 }
 
 /// Engram list result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngramListResult {
     pub items: Vec<EngramResult>,
     pub total: usize,
@@ -220,7 +221,7 @@ pub struct EngramListResult {
 }
 
 /// Engram detail
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngramResult {
     pub id: String,
     pub text: String,
@@ -236,7 +237,7 @@ pub struct EngramResult {
 }
 
 /// Topic list query
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicListQuery {
     pub page: usize,
     pub page_size: usize,
@@ -245,7 +246,7 @@ pub struct TopicListQuery {
 }
 
 /// Topic list result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicListResult {
     pub items: Vec<TopicSummary>,
     pub total: usize,
@@ -255,7 +256,7 @@ pub struct TopicListResult {
 }
 
 /// Topic summary (L2 context list item)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicSummary {
     pub id: String,
     pub title: String,
@@ -267,7 +268,7 @@ pub struct TopicSummary {
 }
 
 /// Topic detail (L2 ContextSlot detail)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicDetail {
     pub id: String,
     pub title: String,
@@ -286,7 +287,7 @@ pub struct TopicDetail {
 }
 
 /// Knowledge list query
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeListQuery {
     pub page: usize,
     pub page_size: usize,
@@ -296,7 +297,7 @@ pub struct KnowledgeListQuery {
 }
 
 /// Knowledge list result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeListResult {
     pub items: Vec<KnowledgeSummary>,
     pub total: usize,
@@ -306,7 +307,7 @@ pub struct KnowledgeListResult {
 }
 
 /// Knowledge summary
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeSummary {
     pub id: String,
     pub title: String,
@@ -318,7 +319,7 @@ pub struct KnowledgeSummary {
 }
 
 /// Knowledge detail
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeDetail {
     pub id: String,
     pub title: String,
@@ -337,7 +338,7 @@ pub struct KnowledgeDetail {
 }
 
 /// Archive page query
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchivePageQuery {
     pub page: usize,
     pub page_size: usize,
@@ -347,7 +348,7 @@ pub struct ArchivePageQuery {
 }
 
 /// Archive list result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveListResult {
     pub items: Vec<Archive>,
     pub total: usize,
@@ -357,7 +358,7 @@ pub struct ArchiveListResult {
 }
 
 /// Archive
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Archive {
     pub id: String,
     pub content: String,
@@ -369,7 +370,7 @@ pub struct Archive {
 }
 
 /// Crystal list query
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrystalListQuery {
     pub page: usize,
     pub page_size: usize,
@@ -379,7 +380,7 @@ pub struct CrystalListQuery {
 }
 
 /// Crystal list result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrystalListResult {
     pub items: Vec<CrystalSummary>,
     pub total: usize,
@@ -389,7 +390,7 @@ pub struct CrystalListResult {
 }
 
 /// Crystal summary
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrystalSummary {
     pub id: String,
     pub title: String,
@@ -406,7 +407,7 @@ pub struct CrystalSummary {
 // ============================================================================
 
 /// Update profile request
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateProfileRequest {
     pub name: Option<String>,
     pub role: Option<String>,
@@ -426,7 +427,7 @@ pub struct UpdateProfileRequest {
 // ============================================================================
 
 /// Import request
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportRequest {
     pub target_layer: TargetLayer,
     pub data: ImportData,
@@ -435,7 +436,7 @@ pub struct ImportRequest {
 }
 
 /// Target layer enumeration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum TargetLayer {
     Profile,
     Topic,
@@ -443,7 +444,7 @@ pub enum TargetLayer {
 }
 
 /// Import mode enumeration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ImportMode {
     Merge,     // Update if exists, create if not
     Overwrite, // Force overwrite existing data
@@ -451,7 +452,7 @@ pub enum ImportMode {
 }
 
 /// Import data enumeration
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ImportData {
     /// Profile data
     Profile {
@@ -468,7 +469,7 @@ pub enum ImportData {
 }
 
 /// Topic import item
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TopicImportItem {
     pub title: String,
     pub summary: Option<String>,
@@ -477,7 +478,7 @@ pub struct TopicImportItem {
 }
 
 /// Knowledge import item
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeImportItem {
     pub title: String,
     pub domain: String,
@@ -489,7 +490,7 @@ pub struct KnowledgeImportItem {
 }
 
 /// Import result
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportResult {
     /// Import status
     pub status: ImportStatus,
@@ -504,7 +505,7 @@ pub struct ImportResult {
 }
 
 /// Import status enumeration
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ImportStatus {
     Success,
     PartialSuccess,
@@ -512,7 +513,7 @@ pub enum ImportStatus {
 }
 
 /// Import error
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportError {
     pub index: usize,
     pub message: String,
@@ -523,14 +524,14 @@ pub struct ImportError {
 // ============================================================================
 
 /// Result of subgraph extraction
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Subgraph {
     pub nodes: Vec<crate::slot::hypergraph::HypergraphNode>,
     pub edges: Vec<crate::slot::hypergraph::HypergraphEdge>,
 }
 
 /// A single hop in graph traversal (BFS / shortest path)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraversalHop {
     pub depth: usize,
     pub from_node: u64,
@@ -539,7 +540,7 @@ pub struct TraversalHop {
 }
 
 /// Query parameters for listing L3 nodes by graph
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeListQuery {
     pub page: usize,
     pub page_size: usize,
@@ -549,7 +550,7 @@ pub struct NodeListQuery {
 }
 
 /// Paginated result for listing L3 nodes
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeListResult {
     pub items: Vec<crate::slot::hypergraph::HypergraphNode>,
     pub total: usize,
@@ -559,7 +560,7 @@ pub struct NodeListResult {
 }
 
 /// Query parameters for listing L3 edges by graph
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeListQuery {
     pub page: usize,
     pub page_size: usize,
@@ -568,7 +569,7 @@ pub struct EdgeListQuery {
 }
 
 /// Paginated result for listing L3 edges
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeListResult {
     pub items: Vec<crate::slot::hypergraph::HypergraphEdge>,
     pub total: usize,

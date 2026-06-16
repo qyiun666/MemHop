@@ -19,12 +19,10 @@ use crate::slot::archive::ArchiveSlot;
 use crate::slot::context::ContextSlot;
 use crate::slot::context_node::ContextNode;
 use crate::slot::hyperedge::HyperedgeSlot;
-use crate::util::hash_id;
+use crate::util::{hash_id, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::{HashMap, HashSet};
-
-const PAGE_SIZE: usize = 4096;
 
 /// Safely slice a UTF-8 string by character count, not byte count.
 fn safe_char_slice(s: &str, max_chars: usize) -> String {
@@ -57,25 +55,40 @@ fn merge_and_rank(
 ) -> Vec<ContextSlot> {
     let ngram_max = ngram_results.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
     let bm25_max = bm25_results.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
-    let vector_max = vector_results.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
+    let vector_max = vector_results
+        .iter()
+        .map(|(_, s)| *s)
+        .fold(0.0f32, f32::max);
 
     let mut score_map: HashMap<u64, (f32, f32, f32)> = HashMap::new();
     let mut ctx_map: HashMap<u64, ContextSlot> = HashMap::new();
 
     for (ctx, score) in ngram_results {
-        let n = if ngram_max > 0.0 { score / ngram_max } else { 0.0 };
+        let n = if ngram_max > 0.0 {
+            score / ngram_max
+        } else {
+            0.0
+        };
         score_map.entry(ctx.id_hash).or_insert((0.0, 0.0, 0.0)).0 = n;
         ctx_map.entry(ctx.id_hash).or_insert(ctx);
     }
 
     for (ctx, score) in bm25_results {
-        let n = if bm25_max > 0.0 { score / bm25_max } else { 0.0 };
+        let n = if bm25_max > 0.0 {
+            score / bm25_max
+        } else {
+            0.0
+        };
         score_map.entry(ctx.id_hash).or_insert((0.0, 0.0, 0.0)).1 = n;
         ctx_map.entry(ctx.id_hash).or_insert(ctx);
     }
 
     for (ctx, score) in vector_results {
-        let n = if vector_max > 0.0 { score / vector_max } else { 0.0 };
+        let n = if vector_max > 0.0 {
+            score / vector_max
+        } else {
+            0.0
+        };
         score_map.entry(ctx.id_hash).or_insert((0.0, 0.0, 0.0)).2 = n;
         ctx_map.entry(ctx.id_hash).or_insert(ctx);
     }
@@ -83,7 +96,10 @@ fn merge_and_rank(
     let mut scored: Vec<(u64, f32)> = score_map
         .into_iter()
         .map(|(id, (ng, bm, vc))| {
-            (id, config.ngram_weight * ng + config.bm25_weight * bm + config.vector_weight * vc)
+            (
+                id,
+                config.ngram_weight * ng + config.bm25_weight * bm + config.vector_weight * vc,
+            )
         })
         .filter(|(_, s)| *s >= config.min_score)
         .collect();
@@ -124,8 +140,12 @@ pub fn search_memory(
     // ========================================================================
     let filtered_l2 = if query.auto_create == 1 {
         let new_ctx = create_new_l2_context(
-            mmap, header, btree, sparse_index,
-            &query.dialogue, vector_dim,
+            mmap,
+            header,
+            btree,
+            sparse_index,
+            &query.dialogue,
+            vector_dim,
         )?;
         vec![new_ctx]
 
@@ -137,14 +157,15 @@ pub fn search_memory(
         let data: &[u8] = &mmap[..];
 
         // Try to load the L2 context by id_hash
-        if let Some(slot_data) = btree.search(target_hash)
+        if let Some(slot_data) = btree
+            .search(target_hash)
             .and_then(|pr| get_slot_data(data, pr))
         {
             match ContextSlot::deserialize_slot(slot_data) {
                 Ok(ctx) => {
                     // Found: return just this one context, L1 association happens below
                     vec![ctx]
-                },
+                }
                 Err(_) => {
                     vec![] // deserialization failed, treat as not found
                 }
@@ -159,7 +180,11 @@ pub fn search_memory(
     } else {
         // Step 1: LLM enhancement (optional)
         let search_text = if let Some(llm_config) = &query.llm_enhance {
-            match enhance_query_with_llm(llm_config, &query.dialogue, query.context_history.as_deref()) {
+            match enhance_query_with_llm(
+                llm_config,
+                &query.dialogue,
+                query.context_history.as_deref(),
+            ) {
                 Ok(enhanced) => {
                     eprintln!(
                         "[LLM Enhancement] {} → {}",
@@ -195,12 +220,20 @@ pub fn search_memory(
         let fetch_limit = query.context_limit * 2;
 
         let ngram_results = retrieve_l2_ngram(
-            data, &search_text, sparse_index, btree, fetch_limit,
+            data,
+            &search_text,
+            sparse_index,
+            btree,
+            fetch_limit,
             l3_scope.as_ref(),
         )?;
 
         let bm25_results = retrieve_l2_bm25(
-            data, &search_text, sparse_index, btree, fetch_limit,
+            data,
+            &search_text,
+            sparse_index,
+            btree,
+            fetch_limit,
             l3_scope.as_ref(),
         )?;
 
@@ -208,8 +241,12 @@ pub fn search_memory(
             let output = enc.encode(&search_text);
             if !output.dense.is_empty() {
                 retrieve_l2_vector(
-                    data, &output.dense, btree, vector_dim,
-                    fetch_limit, query.min_score,
+                    data,
+                    &output.dense,
+                    btree,
+                    vector_dim,
+                    fetch_limit,
+                    query.min_score,
                     l3_scope.as_ref(),
                 )?
             } else {
@@ -227,17 +264,12 @@ pub fn search_memory(
             limit: query.context_limit,
             min_score: query.min_score,
         };
-        merge_and_rank(
-            ngram_results, bm25_results, vector_results,
-            config,
-        )
+        merge_and_rank(ngram_results, bm25_results, vector_results, config)
     };
 
     // Step 5: L1 association — find sibling depth-1 contexts
     let data: &[u8] = &mmap[..];
-    let l1_associated = get_l1_associated_depth1(
-        data, &filtered_l2, btree,
-    )?;
+    let l1_associated = get_l1_associated_depth1(data, &filtered_l2, btree)?;
 
     // Step 6: L0 profile
     let l0_profile = crate::query::l0_crud::read_profile(mmap, btree)?;
@@ -320,7 +352,10 @@ fn retrieve_l2_bm25(
     limit: usize,
     l3_scope: Option<&HashSet<u64>>,
 ) -> Result<Vec<(ContextSlot, f32)>, MemHopError> {
-    let terms: Vec<String> = query_text.split_whitespace().map(|s| s.to_string()).collect();
+    let terms: Vec<String> = query_text
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
     if terms.is_empty() {
         return Ok(vec![]);
     }
@@ -419,11 +454,7 @@ fn retrieve_l2_vector(
 /// whose `l3_refs` contain the target L3 hash.
 ///
 /// This is used to pre-filter the retrieval candidate pool when `l3_id` is set.
-fn collect_l2_ids_with_l3(
-    data: &[u8],
-    btree: &BTreeIndex,
-    l3_hash: u64,
-) -> HashSet<u64> {
+fn collect_l2_ids_with_l3(data: &[u8], btree: &BTreeIndex, l3_hash: u64) -> HashSet<u64> {
     let mut result = HashSet::new();
 
     for (&id_hash, &page_ref) in btree.iter() {
@@ -484,11 +515,15 @@ fn get_l1_associated_depth1(
     // Step 2: For each relevant node, traverse hyperedges
     for node in &relevant_nodes {
         for &edge_hash in &node.edge_ptrs {
-            if let Some(edge_data) = btree.search(edge_hash).and_then(|pr| get_slot_data(data, pr)) {
+            if let Some(edge_data) = btree
+                .search(edge_hash)
+                .and_then(|pr| get_slot_data(data, pr))
+            {
                 if let Ok(hyperedge) = HyperedgeSlot::deserialize(edge_data) {
                     // Step 3: For each sibling node in this hyperedge
                     for &sibling_hash in &hyperedge.node_ptrs {
-                        if let Some(sib_data) = btree.search(sibling_hash)
+                        if let Some(sib_data) = btree
+                            .search(sibling_hash)
                             .and_then(|pr| get_slot_data(data, pr))
                         {
                             if let Ok(sibling_node) = ContextNode::deserialize(sib_data) {
@@ -497,8 +532,8 @@ fn get_l1_associated_depth1(
                                     continue;
                                 }
                                 // Load the L2 ContextSlot
-                                if let Some(ctx_data) = btree.search(ctx_id)
-                                    .and_then(|pr| get_slot_data(data, pr))
+                                if let Some(ctx_data) =
+                                    btree.search(ctx_id).and_then(|pr| get_slot_data(data, pr))
                                 {
                                     if let Ok(ctx) = ContextSlot::deserialize(ctx_data) {
                                         if ctx.depth == 1 {
@@ -522,7 +557,8 @@ fn get_l1_associated_depth1(
                 if seen.contains(&parent_id) {
                     continue;
                 }
-                if let Some(parent_data) = btree.search(parent_id)
+                if let Some(parent_data) = btree
+                    .search(parent_id)
                     .and_then(|pr| get_slot_data(data, pr))
                 {
                     if let Ok(parent) = ContextSlot::deserialize(parent_data) {
@@ -551,9 +587,7 @@ fn collect_l3_ids(contexts: &[ContextSlot]) -> Vec<String> {
             ids.insert(l3_hash);
         }
     }
-    ids.into_iter()
-        .map(format_hash)
-        .collect()
+    ids.into_iter().map(format_hash).collect()
 }
 
 // ============================================================================
@@ -574,7 +608,10 @@ fn collect_archive_refs(
             if !seen.insert(arc_hash) {
                 continue;
             }
-            if let Some(slot_data) = btree.search(arc_hash).and_then(|pr| get_slot_data(data, pr)) {
+            if let Some(slot_data) = btree
+                .search(arc_hash)
+                .and_then(|pr| get_slot_data(data, pr))
+            {
                 if let Ok(arc) = ArchiveSlot::deserialize_slot(slot_data) {
                     refs.push(ArchiveRef {
                         id: format_hash(arc.id_hash),
@@ -612,12 +649,14 @@ fn update_activation_scores(
                     c.activation_score = (c.activation_score + 0.1).min(1.0);
                     c.updated_at = now_ms;
 
-                    let buf = c.serialize()
+                    let buf = c
+                        .serialize()
                         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
                     if offset + buf.len() > mmap.len() {
                         return Err(MemHopError::Serialization(format!(
                             "ContextSlot activation update too large: {} > {}",
-                            buf.len(), mmap.len() - offset
+                            buf.len(),
+                            mmap.len() - offset
                         )));
                     }
                     mmap[offset..offset + buf.len()].copy_from_slice(&buf);
@@ -700,7 +739,8 @@ fn create_new_l2_context(
     };
 
     // Serialize
-    let ctx_data = new_ctx.serialize()
+    let ctx_data = new_ctx
+        .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
     // Allocate page
@@ -725,7 +765,8 @@ fn create_new_l2_context(
     if data_offset + ctx_data.len() > mmap.len() {
         return Err(MemHopError::Serialization(format!(
             "ContextSlot data too large for page: {} > {}",
-            ctx_data.len(), mmap.len() - data_offset
+            ctx_data.len(),
+            mmap.len() - data_offset
         )));
     }
     mmap[data_offset..data_offset + ctx_data.len()].copy_from_slice(&ctx_data);
@@ -735,7 +776,11 @@ fn create_new_l2_context(
     btree.insert(id_hash, page_ref);
 
     // Update sparse index (word tokens + ngram tokens)
-    let mut terms: Vec<String> = new_ctx.title.split_whitespace().map(|s| s.to_string()).collect();
+    let mut terms: Vec<String> = new_ctx
+        .title
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
     let ngram_terms = SparseIndex::tokenize_ngram(&new_ctx.title, 2);
     terms.extend(ngram_terms);
     let doc_len = terms.len() as u32;
@@ -766,7 +811,11 @@ fn enhance_query_with_llm(
     // Build context block if history is available
     let history_block = if let Some(history) = context_history {
         let truncated = safe_char_slice(history, 500);
-        format!("\n之前的对话历史（最近{}字）：\n{}\n", truncated.chars().count(), truncated)
+        format!(
+            "\n之前的对话历史（最近{}字）：\n{}\n",
+            truncated.chars().count(),
+            truncated
+        )
     } else {
         String::new()
     };
@@ -778,16 +827,38 @@ fn enhance_query_with_llm(
         || dialogue.contains("pub ")
         || dialogue.contains('{')
         || dialogue.contains(';');
-    let has_path = dialogue.contains('/') && (dialogue.contains(".rs") || dialogue.contains(".py")
-        || dialogue.contains(".go") || dialogue.contains(".ts") || dialogue.contains(".js"));
-    let has_error = dialogue.contains("error[") || dialogue.contains("Error[")
-        || dialogue.contains("panic") || dialogue.contains("failed");
+    let has_path = dialogue.contains('/')
+        && (dialogue.contains(".rs")
+            || dialogue.contains(".py")
+            || dialogue.contains(".go")
+            || dialogue.contains(".ts")
+            || dialogue.contains(".js"));
+    let has_error = dialogue.contains("error[")
+        || dialogue.contains("Error[")
+        || dialogue.contains("panic")
+        || dialogue.contains("failed");
     let is_verbose = char_count > 300;
 
-    let length_hint = if is_verbose { format!("（输入较长，约{}字）", char_count) } else { String::new() };
-    let code_hint = if has_code { "\n检测到代码片段，请识别代码语言和功能后用自然语言描述其作用，不要将代码符号直接作为关键词。" } else { "" };
-    let path_hint = if has_path { "\n检测到文件路径，请提取路径中的技术栈关键词和查询意图。" } else { "" };
-    let error_hint = if has_error { "\n检测到错误信息，请提取错误码、错误类型和相关技术栈。" } else { "" };
+    let length_hint = if is_verbose {
+        format!("（输入较长，约{}字）", char_count)
+    } else {
+        String::new()
+    };
+    let code_hint = if has_code {
+        "\n检测到代码片段，请识别代码语言和功能后用自然语言描述其作用，不要将代码符号直接作为关键词。"
+    } else {
+        ""
+    };
+    let path_hint = if has_path {
+        "\n检测到文件路径，请提取路径中的技术栈关键词和查询意图。"
+    } else {
+        ""
+    };
+    let error_hint = if has_error {
+        "\n检测到错误信息，请提取错误码、错误类型和相关技术栈。"
+    } else {
+        ""
+    };
     let history_hint = if context_history.is_some() {
         "\n检测到历史对话，如当前问题是追问/指代（如'它'、'这个'），请结合历史还原完整语义。"
     } else {
@@ -831,7 +902,11 @@ fn enhance_query_with_llm(
     };
 
     // Longer timeout for complex inputs
-    let timeout_secs = if is_verbose || has_code || has_error { 30u64 } else { 15u64 };
+    let timeout_secs = if is_verbose || has_code || has_error {
+        30u64
+    } else {
+        15u64
+    };
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs))
@@ -853,12 +928,15 @@ fn enhance_query_with_llm(
         .map_err(|e| MemHopError::Serialization(format!("LLM API call failed: {}", e)))?;
 
     if !response.status().is_success() {
-        return Err(MemHopError::Serialization(
-            format!("LLM API error: {} - {}", response.status(), response.text().unwrap_or_default()),
-        ));
+        return Err(MemHopError::Serialization(format!(
+            "LLM API error: {} - {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        )));
     }
 
-    let json: serde_json::Value = response.json()
+    let json: serde_json::Value = response
+        .json()
         .map_err(|e| MemHopError::Serialization(format!("Parse LLM response failed: {}", e)))?;
 
     let enhanced = json["choices"][0]["message"]["content"]
@@ -888,10 +966,12 @@ fn enhance_query_with_llm(
 /// Simple fallback keyword extraction when LLM enhancement fails
 fn extract_fallback_keywords(text: &str) -> String {
     // Remove common stop words, code artifacts, and join meaningful terms
-    let stop_words = ["的", "了", "是", "在", "有", "和", "就", "不", "人", "都", "一",
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-        "have", "has", "had", "do", "does", "did", "will", "would", "could", "should",
-        "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into"];
+    let stop_words = [
+        "的", "了", "是", "在", "有", "和", "就", "不", "人", "都", "一", "a", "an", "the", "is",
+        "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
+        "will", "would", "could", "should", "to", "of", "in", "for", "on", "with", "at", "by",
+        "from", "as", "into",
+    ];
 
     text.split_whitespace()
         .filter(|w| w.len() >= 3 && !stop_words.contains(&w.to_lowercase().as_str()))

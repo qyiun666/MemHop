@@ -7,14 +7,12 @@ use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::query::common::{format_hash, now_ms};
+use crate::query::common::{format_hash, now_ms, parse_id_to_hash};
 use crate::query::types::*;
 use crate::slot::archive::ArchiveSlot;
-use crate::util::{hash_id, PageType};
+use crate::util::{hash_id, PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
-
-const PAGE_SIZE: usize = 4096;
 
 /// Write a proper PageHeader for a newly allocated data page
 fn write_slot_page_header(
@@ -58,8 +56,11 @@ pub fn update_memory(
     let now_ms = now_ms();
 
     // Step 1: Find the activated L2 topic (required, not optional)
-    let topic_hash = hash_id(&request.topic_id);
-    let page_ref = btree.search(topic_hash)
+    // NOTE: topic_id comes from format_hash(id_hash) — a hex string like "1a2b3c..."
+    // Use parse_id_to_hash to correctly reverse format_hash; hash_id would hash the hex string itself
+    let topic_hash = parse_id_to_hash(&request.topic_id);
+    let page_ref = btree
+        .search(topic_hash)
         .ok_or(MemHopError::PageNotFound(0))?;
 
     // Step 2: Write dialogue_text to L4 ArchiveSlot on disk
@@ -123,20 +124,23 @@ pub fn update_memory(
     }
 
     // Step 8: Serialize and write back
-    let serialized = ctx.serialize()
+    let serialized = ctx
+        .serialize()
         .map_err(|e| MemHopError::Serialization(format!("ContextSlot serialize: {}", e)))?;
     let write_offset = (page_id as usize) * PAGE_SIZE + 32;
     if write_offset + serialized.len() > mmap.len() {
         return Err(MemHopError::Serialization(format!(
             "ContextSlot too large for page: {} > {}",
-            serialized.len(), PAGE_SIZE - 32
+            serialized.len(),
+            PAGE_SIZE - 32
         )));
     }
     mmap[write_offset..write_offset + serialized.len()].copy_from_slice(&serialized);
 
     // Step 9: Update sparse index
     if let Some(ref summary) = request.summary {
-        let terms: Vec<String> = summary.split_whitespace()
+        let terms: Vec<String> = summary
+            .split_whitespace()
             .map(|s| s.to_lowercase())
             .filter(|s| !s.is_empty())
             .collect();
@@ -177,12 +181,15 @@ fn allocate_and_write_l4_archive(
     };
 
     // Serialize and write
-    let data = archive.serialize().map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    let data = archive
+        .serialize()
+        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
     write_slot_page_header(mmap, page_id, PageType::Archive, 4, data.len());
     if offset + data.len() > mmap.len() {
         return Err(MemHopError::Serialization(format!(
             "ArchiveSlot data too large for page: {} > {}",
-            data.len(), mmap.len() - offset
+            data.len(),
+            mmap.len() - offset
         )));
     }
     mmap[offset..offset + data.len()].copy_from_slice(&data);
@@ -225,12 +232,15 @@ fn allocate_and_write_l5_crystal(
     };
 
     // Serialize and write
-    let data = chain.serialize().map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    let data = chain
+        .serialize()
+        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
     write_slot_page_header(mmap, page_id, PageType::ActionChain, 5, data.len());
     if offset + data.len() > mmap.len() {
         return Err(MemHopError::Serialization(format!(
             "ActionChainSlot data too large for page: {} > {}",
-            data.len(), mmap.len() - offset
+            data.len(),
+            mmap.len() - offset
         )));
     }
     mmap[offset..offset + data.len()].copy_from_slice(&data);

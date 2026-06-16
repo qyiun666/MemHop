@@ -22,6 +22,7 @@ pub mod activation;
 pub mod config;
 pub mod dream;
 pub mod encoder;
+pub mod ffi;
 pub mod file;
 pub mod index;
 pub mod l3;
@@ -103,7 +104,6 @@ use std::fs::{File, OpenOptions};
 use std::io;
 use thiserror::Error;
 
-use crate::activation::{ActivationConfig, ActivationManager};
 use crate::file::free_list::init_free_list;
 use crate::file::header::{read_headers, select_valid_header, FileHeader};
 use crate::file::journal::replay_journal;
@@ -147,15 +147,14 @@ pub enum MemHopError {
 pub type Result<T> = std::result::Result<T, MemHopError>;
 
 /// Main MemHop database instance
-#[allow(dead_code)]
 pub struct MemHop {
     mmap: MmapMut,
-    file: File, // Kept for potential future use (file handle management)
+    #[allow(dead_code)]
+    file: File, // Kept for mmap lifecycle (file handle management)
     header: FileHeader,
     config: MemHopConfig,
     btree: BTree,
     sparse_index: SparseIndex,
-    activation_manager: ActivationManager,
     session_manager: SessionManager,
     encoder: Option<Box<dyn crate::encoder::ipc::Encoder + Send + Sync>>, // Optional encoder for batch operations
     closed: bool, // Prevent Drop from re-checkpointing after close()
@@ -299,10 +298,7 @@ impl MemHop {
             SparseIndex::new()
         };
 
-        // 6. Initialize ActivationManager
-        let activation_manager = ActivationManager::new(ActivationConfig::default());
-
-        // 7. Initialize SessionManager
+        // 6. Initialize SessionManager
         let session_manager = SessionManager::new();
 
         // 8. Initialize encoder automatically from config
@@ -335,7 +331,6 @@ impl MemHop {
             config,
             btree,
             sparse_index,
-            activation_manager,
             session_manager,
             encoder,
             closed: false,

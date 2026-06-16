@@ -65,11 +65,12 @@ MemHop::open(config)
 │   ├── BTree::deserialize(data)          // 加载B树索引 (index/btree.rs)
 │   └── SparseIndex::deserialize(data)    // 加载稀疏索引 (index/sparse.rs)
 │
-├── 7. 激活管理器 (activation/mod.rs)
-│   └── ActivationManager::new(ActivationConfig::default())
-│
-├── 8. 会话管理器 (session/mod.rs)
+├── 7. 会话管理器 (session/mod.rs)
 │   └── SessionManager::new()
+│
+├── 8. 编码器初始化 (encoder/ipc.rs)
+│   ├── IpcEncoder::new()  # 尝试连接Unix套接字
+│   └── MockEncoder::new() # 降级方案
 │
 └── 9. 返回 MemHop 实例
 ```
@@ -96,6 +97,7 @@ pub struct FileHeader {
 ```
 
 **关键函数**：
+
 - `FileHeader::new(vector_dim: u16) -> Self`
 - `FileHeader::to_bytes(&self) -> Vec<u8>`
 - `FileHeader::from_bytes(data: &[u8]) -> Result<Self>`
@@ -108,19 +110,20 @@ pub struct FileHeader {
 pub struct MemHopConfig {
     /// 数据库文件路径
     pub db_path: PathBuf,
-    
+
     /// 向量模型Unix套接字路径
     pub encoder_socket: PathBuf,
-    
+
     /// 向量维度（创建时确定，不可更改）
     pub vector_dim: usize,
-    
+
     /// 结晶化知识存储路径（可选，默认: 与db_path同目录）
     pub crystal_path: Option<PathBuf>,
 }
 ```
 
 **说明**：
+
 - `crystal_path` 用于存储L5结晶化知识（Crystal节点）
 - 如果未指定，默认使用 `db_path` 所在目录
 - 结晶路径在数据库创建时确定，后续不可更改
@@ -156,12 +159,14 @@ pub fn search_memory(&mut self, query: SearchQuery) -> SearchResult
 ### 检索逻辑说明
 
 **核心检索流程**：
+
 1. **主要检索L2主题**：通过BM25+向量检索找到相关L2主题
 2. **L1通过L2关联带出**：通过L2的`node_ids`获取关联的L1情节记忆
 3. **L3通过L2关联带出**：通过L2的`l3_refs`获取关联的L3知识域
 4. **L4通过L2关联带出**：通过L2的`l4_refs`获取关联的L4归档
 
 **检索层次关系**：
+
 ```
 L2 (主要检索目标)
 ├── L1 (通过node_ids关联)
@@ -366,32 +371,21 @@ pub struct KnowledgeSlot {
 }
 ```
 
-#### 2.7 结果融合 (query/fusion.rs)
+#### 2.6 结果融合 (query/fusion.rs) [已移除 — 融合逻辑内置在 search.rs]
+
+#### 2.7 会话管理 (session/mod.rs)
 
 ```rust
-pub fn fuse_scores(
-    bm25_scores: &HashMap<u64, f32>,
-    vector_scores: &HashMap<u64, f32>,
-    bm25_weight: f32,
-    vector_weight: f32,
-) -> Vec<(u64, f32)>
-
-pub fn apply_time_decay(score: f32, hours_since_update: f32) -> f32
-pub fn apply_emotion_boost(score: f32, emotion_type: u8, valence: f32) -> f32
-```
-
-#### 2.8 激活管理 (activation/mod.rs)
-
-```rust
-pub struct ActivationManager {
-    config: ActivationConfig,
+pub struct SessionManager {
+    // 内部状态
 }
 
-impl ActivationManager {
-    pub fn new(config: ActivationConfig) -> Self
-    pub fn calculate_score(&self, importance: f32, hours_since_last_access: f32) -> f32
-    pub fn apply_recall_bonus(&self, score: f32) -> f32
-    pub fn should_transition(&self, score: f32, importance: f32) -> MemoryState
+impl SessionManager {
+    pub fn new() -> Self
+    pub fn activate_topic(&mut self, topic_id: u64, ttl_ms: Option<i64>)
+    pub fn deactivate_topic(&mut self, topic_id: u64)
+    pub fn get_active_topic_ids(&self) -> HashSet<u64>
+    pub fn adjust_activation(&mut self, topic_id: u64, delta: f32)
 }
 ```
 
@@ -408,6 +402,7 @@ pub fn update_memory(&mut self, request: UpdateRequest) -> UpdateResult
 ### 更新逻辑说明
 
 **L2中心化更新模型**：
+
 1. **查找或创建L2主题**：通过`l2_id`查找已有L2主题，如果不存在则创建新的
 2. **创建L1情节记忆**：为当前轮对话创建L1 Engram
 3. **创建L4原文归档**：存储当前轮对话原文到L4 Archive
@@ -555,178 +550,182 @@ allocate_from_free_list(mmap, header)
 ### 外部接口签名
 
 ```rust
-pub fn dream(&mut self, llm: LlmConfig, config: DreamConfig) -> Result<DreamReport>
+pub fn dream(&mut self, llm: LlmConfig) -> Result<DreamReport>
 ```
 
 ### 内部调用链
 
 ```
-dream(config)
-├── 阶段1: L5结晶 (dream/crystallize_stage.rs)
-│   ├── 扫描所有L5 CrystalSlot
-│   ├── 按动作类型分组
-│   ├── 相同类型合并为Skill
-│   └── 更新CrystalSlot
+dream(llm)
+├── 阶段1: L2压缩/深度降级 (dream/compress_stage.rs)
+│   ├── 对激活的L2上下文进行深度降级
+│   │   ├── depth-1 → depth-2: 压缩摘要后降级为子场景
+│   │   ├── depth-2 → depth-3: 降级为轮次组
+│   │   └── depth-3 → 移除: 释放页面
+│   └── 返回 (demoted_sec, compressed, removed, demoted_ter)
 │
-├── 阶段2: L2压缩 (dream/compress_stage.rs)
-│   ├── 获取激活状态的TopicSlot列表
-│   ├── 判断是否需要压缩（相似度>阈值）
-│   ├── 合并相似主题
-│   └── 更新node_ids和summary
+├── 阶段2: L1重建 (dream/mod.rs; rebuild_l1_from_l2)
+│   ├── 扫描所有L1 ContextNode
+│   ├── 检查其 context_id 指向的 L2 ContextSlot 是否仍存在
+│   └── 删除指向已移除L2的L1节点
 │
-├── 阶段3: L1更新 (dream/merge_stage.rs)
-│   ├── 通过L2获取关联的L1 Engram
-│   ├── 计算重要性分数
-│   ├── 调整importance值
-│   └── 更新EngramSlot
+├── 阶段3: L0更新 (dream/l0_form_stage.rs)
+│   ├── 通过topic keywords分析知识分布
+│   └── 更新ProfileSlot (personality, preferences)
 │
-├── 阶段4: L0更新 (dream/l0_form_stage.rs)
-│   ├── 通过L1分析用户偏好
-│   ├── 提取关键特征
-│   └── 更新L0 Profile
+├── 阶段4: L3蒸馏 (dream/l3_distill_stage.rs)
+│   ├── 遍历激活的depth-1 L2上下文
+│   ├── 调用LLM提取概念和关系 (JSON)
+│   ├── 创建HypergraphSlot/Node/Edge
+│   └── 更新L2.l3_refs
 │
-├── 辅助阶段
-│   ├── decay_stage: 衰减低激活记忆
-│   ├── temporal_stage: 创建时间边
-│   ├── cooccurrence_stage: 创建共现边
-│   └── reflect_stage: 主题反思
+├── 阶段5: L5结晶 (dream/crystallize_stage.rs)
+│   ├── 扫描所有ActionChainSlot
+│   ├── 调用LLM提取模式生成Crystal
+│   └── 修剪低质量Crystal
 │
 └── 返回 DreamReport
 ```
 
 ### 内部接口详情
 
-#### 4.1 Dream配置 (dream/prune.rs)
+#### 4.1 DreamReport (dream/prune.rs)
 
 ```rust
-pub struct DreamConfig {
-    pub compress_l2: bool,         // 是否压缩L2
-    pub distill_l3: bool,          // 是否蒸馏L3
-    pub crystallize_l5: bool,      // 是否结晶L5
-    pub prune_threshold: f32,      // 修剪阈值
-    pub time_window: (i64, i64),   // 时间窗口
-    pub deactivate_ids: Vec<String>, // 指定要停用的主题ID（可选）
-}
-
 pub struct DreamReport {
-    /// L5结晶结果
-    pub l5_crystallized: Vec<CrystallizeResult>,
-    
-    /// L2压缩结果
-    pub l2_compressed: Vec<CompressResult>,
-    
-    /// L1更新结果
-    pub l1_updated: Vec<UpdateResult>,
-    
-    /// L0更新结果
-    pub l0_updated: Option<L0UpdateResult>,
-    
-    /// 修剪的文档
-    pub pruned: Vec<String>,
-    
-    /// 执行统计
-    pub stats: DreamStats,
+    /// 从 depth-1 降级到 depth-2 的上下文（附压缩摘要）
+    pub demoted_to_secondary: Vec<DemotionResult>,
+    /// 从 depth-2 降级到 depth-3 的上下文ID列表
+    pub demoted_to_tertiary: Vec<String>,
+    /// 被移除的上下文ID列表（depth-3 → 移除）
+    pub removed_contexts: Vec<String>,
+    /// 从降级的 depth-1 节点创建的新压缩上下文
+    pub new_compressed: Vec<CompressResult>,
+    /// 基于L2变化更新的L1节点ID列表
+    pub l1_updated: Vec<String>,
+    /// L0画像更新信息 (profile_id, updated_fields)
+    pub l0_updated: Option<(String, Vec<String>)>,
+    /// 从L3蒸馏创建的新知识节点ID列表
+    pub new_l3_nodes: Vec<String>,
+    /// 从L5结晶化创建的新技能ID列表
+    pub new_crystals: Vec<String>,
+    /// 被修剪的低质量技能ID列表
+    pub pruned_crystals: Vec<String>,
+    /// 总执行时间（毫秒）
+    pub duration_ms: u64,
 }
 
-pub struct CrystallizeResult {
-    pub skill_id: String,
-    pub skill_title: String,
-    pub merged_crystal_ids: Vec<String>,
-    pub action_count: usize,
+pub struct DemotionResult {
+    pub context_id: String,
+    pub original_title: String,
+    pub compressed_summary: String,
+    pub new_depth: u8,
 }
 
 pub struct CompressResult {
-    pub merged_topic_id: String,
-    pub absorbed_topic_ids: Vec<String>,
+    pub new_context_id: String,
+    pub source_context_id: String,
     pub new_summary: String,
-}
-
-pub struct UpdateResult {
-    pub engram_id: String,
-    pub old_state: String,
-    pub new_state: String,
-    pub reason: String,
-}
-
-pub struct L0UpdateResult {
-    pub profile_id: String,
-    pub updated_fields: Vec<String>,
-    pub new_personality: String,
-}
-
-pub struct DreamStats {
-    pub duration_ms: u64,
-    pub l5_processed: usize,
-    pub l2_processed: usize,
-    pub l1_processed: usize,
-    pub l0_updated: bool,
 }
 ```
 
 #### 4.2 LLM接口 (dream/llm.rs)
 
 ```rust
-pub trait LlmProvider {
-    fn summarize(&self, text: &str) -> Result<String>;
-    fn extract_patterns(&self, texts: &[String]) -> Result<Vec<Pattern>>;
-    fn generate_crystal(&self, steps: &[String]) -> Result<CrystalDef>;
+pub trait LlmProvider: Send + Sync {
+    fn summarize(&self, texts: &[String]) -> Result<String>;
+    fn extract_patterns(&self, memories: &[MemorySummary]) -> Result<Vec<Pattern>>;
+    fn generate_crystal(&self, pattern: &Pattern) -> Result<CrystalDef>;
+    fn fallback_summarize(&self, texts: &[String]) -> String;
+    fn fallback_extract_patterns(&self, memories: &[MemorySummary]) -> Vec<Pattern>;
+    fn fallback_generate_crystal(&self, pattern: &Pattern) -> CrystalDef;
+}
+
+pub struct MemorySummary {
+    pub text: String,
+    pub keywords: Vec<String>,
+    pub timestamp: i64,
 }
 
 pub struct Pattern {
-    pub name: String,
     pub description: String,
-    pub frequency: usize,
+    pub frequency: u32,
+    pub confidence: f32,
 }
 
 pub struct CrystalDef {
     pub condition: String,
     pub action: String,
-    pub raw_steps: String,
+    pub confidence: f32,
 }
 ```
 
 #### 4.3 各阶段详情
 
-**阶段1: L5结晶 (dream/crystallize_stage.rs)**
-```rust
-pub fn crystallize_memories(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &BTreeIndex,
-    llm: &dyn LlmProvider,
-) -> Result<Vec<String>>
-```
+**阶段1: L2压缩/深度降级 (dream/compress_stage.rs)**
 
-**阶段2: L2压缩 (dream/compress_stage.rs)**
 ```rust
-pub fn compress_l1_to_l2(
+pub fn compress_active_contexts(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
-    sparse_index: &SparseIndex,
+    sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
-    time_window: (i64, i64),
-) -> Result<Vec<String>>
+    session_topics: &HashSet<u64>,
+) -> Result<(Vec<DemotionResult>, Vec<CompressResult>, Vec<String>, Vec<String>)>
 ```
 
-**阶段3: L1更新 (dream/merge_stage.rs)**
+**阶段2: L1重建 (dream/mod.rs — 内联函数)**
+
 ```rust
-pub fn merge_similar_topics(
+fn rebuild_l1_from_l2(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
-    threshold: f32,
-) -> Result<Vec<(String, String)>>
+    session_topic_ids: &HashSet<u64>,
+) -> Result<Vec<String>>
 ```
 
-**阶段4: L0更新 (dream/l0_form_stage.rs)**
+**阶段3: L0更新 (dream/l0_form_stage.rs)**
+
 ```rust
-pub fn form_l0_profile(
+pub fn generate_profile(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
-    btree: &BTreeIndex,
+    btree: &mut BTreeIndex,
+    sparse_index: &mut SparseIndex,
+) -> Result<()>
+```
+
+**阶段4: L3蒸馏 (dream/l3_distill_stage.rs)**
+
+```rust
+pub fn distill_l3_knowledge(
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
-) -> Result<String>
+    active_topic_ids: &HashSet<u64>,
+) -> Result<Vec<String>>
+```
+
+**阶段5: L5结晶 (dream/crystallize_stage.rs)**
+
+```rust
+pub fn crystallize_patterns(
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    llm: &dyn LlmProvider,
+) -> Result<Vec<String>>
+
+pub fn prune_low_quality_crystals(
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    page_count: u32,
+) -> Result<Vec<String>>
 ```
 
 ---
@@ -1043,103 +1042,111 @@ list_l5_skills(query)
 ### 模块依赖关系
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                     外部接口 (lib.rs)                        │
-│  open / search_memory / update_memory / dream / close       │
-│  update_l0_profile / update_l2_title / update_l3_title      │
-│  update_l5_title                                            │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                     外部接口 (lib.rs)                             │
+│  open / search_memory / update_memory / dream / close / sync      │
+│  get_profile / list_engrams / list_topics / list_knowledge / ...  │
+│  update_profile / update_topic_title / update_knowledge_title     │
+│  merge_topics / import_memory / batch_store / activate_topic      │
+└──────────────────────────────────────────────────────────────────┘
                               │
-        ┌─────────────────────┼─────────────────────┐
-        ▼                     ▼                     ▼
-┌───────────────┐     ┌───────────────┐     ┌───────────────┐
-│  查询层       │     │  梦境层       │     │  激活层       │
-│  query/       │     │  dream/       │     │  activation/  │
-├───────────────┤     ├───────────────┤     ├───────────────┤
-│ store.rs      │     │ mod.rs        │     │ mod.rs        │
-│ recall.rs     │     │ compress.rs   │     │ decay.rs      │
-│ recall_more.rs│     │ crystallize.rs│     └───────────────┘
-│ cascade.rs    │     │ merge.rs      │
-│ fusion.rs     │     │ reflect.rs    │
-│ batch.rs      │     │ temporal.rs   │
-│ crystal_match │     │ l0_form.rs    │
-└───────────────┘     └───────────────┘
-        │                     │
-        └─────────────────────┘
-                │
-        ┌───────┴───────┐
-        ▼               ▼
-┌───────────────┐ ┌───────────────┐
-│  索引层       │ │  槽位层       │
-│  index/       │ │  slot/        │
-├───────────────┤ ├───────────────┤
-│ btree.rs      │ │ engram.rs     │
-│ sparse.rs     │ │ topic.rs      │
-│ vector.rs     │ │ knowledge.rs  │
-└───────────────┘ │ crystal.rs    │
-        │         │ archive.rs    │
-        │         │ hyperedge.rs  │
-        │         └───────────────┘
-        │               │
-        └───────────────┘
-                │
-        ┌───────┴───────┐
-        ▼               ▼
-┌───────────────┐ ┌───────────────┐
-│  文件层       │ │  工具层       │
-│  file/        │ │  util/        │
-├───────────────┤ ├───────────────┤
-│ free_list.rs  │ │ f16.rs        │
-│ header.rs     │ │ hash.rs       │
-│ journal.rs    │ │ io_helpers.rs │
-│ page.rs       │ │ mod.rs        │
-└───────────────┘ └───────────────┘
+        ┌─────────────────────┼─────────────────────┬──────────────────┐
+        ▼                     ▼                     ▼                  ▼
+┌───────────────┐     ┌───────────────┐     ┌───────────────┐  ┌──────────────┐
+│  查询层       │     │  梦境层       │     │  L3引擎       │  │  会话管理    │
+│  query/       │     │  dream/       │     │  l3/          │  │  session/    │
+├───────────────┤     ├───────────────┤     ├───────────────┤  ├──────────────┤
+│ search.rs     │     │ mod.rs        │     │ mod.rs        │  │ mod.rs       │
+│ update.rs     │     │ compress_stage│     │ store.rs      │  └──────────────┘
+│ import.rs     │     │ crystallize_..│     │ index.rs      │
+│ list.rs       │     │ l0_form_stage │     │ view.rs       │
+│ merge.rs      │     │ l3_distill_.. │     └───────────────┘
+│ update_title  │     │ llm.rs        │             │
+│ batch.rs      │     │ prune.rs      │             │
+│ l0_crud.rs    │     │ emotion.rs    │             ▼
+│ slot_io.rs    │     └───────────────┘     ┌───────────────┐
+│ common.rs     │             │             │  槽位层       │
+│ types.rs      │             │             │  slot/        │
+└───────────────┘             ▼             ├───────────────┤
+        │                     │             │ profile.rs    │(L0)
+        └─────────────────────┼─────────────│ context_node  │(L1)
+                              │             │ hyperedge.rs  │(L1)
+                              ▼             │ context.rs    │(L2)
+┌─────────────────────────────────────┐     │ hypergraph.rs │(L3)
+│             索引层                  │     │ archive.rs    │(L4)
+│  index/                             │     │ action_chain  │(L5)
+├─────────────────────────────────────┤     └───────────────┘
+│ btree.rs  (BTreeIndex: id_hash→page)│            │
+│ sparse.rs (BM25 + n-gram倒排索引)    │            │
+│ vector.rs (f16向量存储 + cosine相似度)│            │
+└─────────────────────────────────────┘            │
+        │                                          │
+        └──────────────────────────────────────────┘
+                        │
+                        ▼
+        ┌───────────────────────────────┐
+        │  文件层          │  工具层    │
+        │  file/           │  util/     │
+        ├──────────────────┼────────────┤
+        │ free_list.rs     │ hash.rs    │
+        │ header.rs        │ io_helper  │
+        │ journal.rs       │ mod.rs     │
+        │ page.rs          │            │
+        └──────────────────┴────────────┘
 ```
 
 ### 关键数据流
 
 #### 存储流程
+
 ```
-StoreDoc
+BatchStore / UpdateRequest
   ↓
-store_document()
+update_memory() / batch_store()
   ├── hash_id() → id_hash
   ├── allocate_from_free_list() → page_id
-  ├── EngramSlot::serialize() → 写入页面
-  ├── write_vector() → 写入向量页
+  ├── ContextSlot/ArchiveSlot/ActionChainSlot::serialize() → 写入页面
+  ├── write_vector() → 写入向量页 (ContextSlot.centroid_page_ref)
   ├── btree.insert(id_hash, page_ref)
   └── sparse_index.add_document()
   ↓
-StoreResult { id, page_ref }
+UpdateResult / BatchReport
 ```
 
 #### 检索流程
+
 ```
-RecallQuery
+SearchQuery
   ↓
-recall_documents()
-  ├── SparseIndex::search() → BM25结果
-  ├── cosine_similarity() → 向量结果
-  ├── fuse_scores() → 融合结果
-  ├── EngramSlot::deserialize() → 读取记忆
-  └── apply_time_decay() → 时间衰减
+search_memory()
+  ├── 路由:
+  │   ├── auto_create=1 → 创建新L2 ContextSlot
+  │   ├── context_id设置 → 加载指定L2
+  │   └── 默认 → 三重检索
+  ├── 三重检索:
+  │   ├── n-gram检索 (SparseIndex.tokenize_ngram → search)
+  │   ├── BM25检索 (split_whitespace → SparseIndex.search)
+  │   └── 向量检索 (encoder.encode → cosine_similarity)
+  ├── 融合排序 (MergeConfig: ngram 0.2 + BM25 0.5 + vector 0.3)
+  ├── L1扇出 (get_l1_associated_depth1)
+  ├── L0画像 (read_profile)
+  ├── L3/L4引用收集 (collect_l3_ids, collect_archive_refs)
+  └── 激活更新 (update_activation_scores)
   ↓
-Vec<RecallResult>
+SearchResult
 ```
 
 #### Dream流程
+
 ```
-DreamConfig
+LlmConfig
   ↓
 dream_pipeline()
-  ├── Stage 1: decay_stage → 降级低激活记忆
-  ├── Stage 2: temporal_stage → 创建时间边
-  ├── Stage 3: merge_stage → 合并相似主题
-  ├── Stage 4: reflect_stage → 主题反思
-  ├── Stage 5: cooccurrence_stage → 创建共现边
-  ├── Stage 6: compress_stage → L1→L2压缩
-  ├── Stage 7: distill_stage → L1→L3蒸馏
-  └── Stage 8: l0_form_stage → L0形成
+  ├── Stage 1: compress_stage → L2深度降级 (depth-1→2→3→移除)
+  ├── Stage 2: rebuild_l1_from_l2 → L1重建 (删除失效节点)
+  ├── Stage 3: l0_form_stage → L0画像更新
+  ├── Stage 4: l3_distill_stage → L3知识蒸馏 (LLM)
+  ├── Stage 5: crystallize_stage → L5结晶 + 修剪
   ↓
 DreamReport
 ```
@@ -1150,19 +1157,24 @@ DreamReport
 
 ### 页面类型
 
-| 页面类型 | 描述 | 结构 |
-|---------|------|------|
-| Header | 文件头 | 32字节头 + 数据 |
-| FreeList | 空闲列表 | 32字节头 + 空闲页面ID列表 |
-| Engram | L1情节记忆 | 32字节头 + EngramSlot |
-| Topic | L2语义主题 | 32字节头 + TopicSlot |
-| Knowledge | L3知识域 | 32字节头 + KnowledgeSlot |
-| Archive | L4归档 | 32字节头 + ArchiveSlot |
-| Crystal | L5结晶 | 32字节头 + CrystalSlot |
-| Hyperedge | 超边 | 32字节头 + HyperedgeSlot |
-| Vector | 向量页 | 32字节头 + 向量数据 |
-| BTree | B树节点 | 32字节头 + 树节点 |
-| SparseIndex | 稀疏索引 | 32字节头 + 倒排表 |
+| 页面类型       | 描述         | 结构                            |
+| -------------- | ------------ | ------------------------------- |
+| Header         | 文件头       | 32字节头 + 数据                 |
+| FreeList       | 空闲列表     | 32字节头 + 空闲页面ID列表       |
+| ContextNode    | L1图节点     | 32字节头 + ContextNode (指向L2) |
+| Hyperedge      | L1超边       | 32字节头 + HyperedgeSlot        |
+| Vector         | 向量页       | 32字节头 + 向量数据 (f16)       |
+| SparseIndex    | 稀疏索引     | 32字节头 + 倒排表               |
+| Context        | L2场景上下文 | 32字节头 + ContextSlot          |
+| HypergraphSlot | L3容器       | 32字节头 + HypergraphSlot       |
+| HypergraphNode | L3节点       | 32字节头 + HypergraphNode       |
+| HypergraphEdge | L3边         | 32字节头 + HypergraphEdge       |
+| Archive        | L4归档       | 32字节头 + ArchiveSlot          |
+| ActionChain    | L5动作链     | 32字节头 + ActionChainSlot      |
+| Profile        | L0画像       | 32字节头 + ProfileSlot          |
+| BTreeNode      | B树内部节点  | 32字节头 + 树节点               |
+| Free           | 空闲页面     | 32字节头                        |
+| Overflow       | 溢出页面     | 32字节头 + 溢出数据             |
 
 ### 页面偏移计算
 
@@ -1414,18 +1426,22 @@ merge_l2_topics(primary_id, secondary_ids)
 ### 合并策略说明
 
 **L1节点处理**：
+
 - 所有副L2关联的L1节点将转移到主L2
 - L1节点的`edge_ptrs`中指向副L2的边需要更新为主L2
 
 **摘要生成策略**：
+
 - 如果有LLM配置：调用`llm.summarize()`生成新的综合摘要
 - 如果没有LLM：简单合并所有L1的keywords作为新摘要
 
 **去重逻辑**：
+
 - `node_ids`、`l3_refs`、`l4_refs`在合并时需要去重
 - 使用HashSet进行去重处理
 
 **时间范围更新**：
+
 - `dialogue_range`扩展为包含所有合并主题的时间范围
 
 ---
@@ -1556,16 +1572,19 @@ import_memory(request)
 ### 导入模式说明
 
 **Merge模式**：
+
 - 如果目标已存在，更新非空字段
 - 如果目标不存在，创建新条目
 - 适用于增量导入场景
 
 **Overwrite模式**：
+
 - 强制覆盖已有数据
 - 如果不存在则创建
 - 适用于全量导入场景
 
 **Skip模式**：
+
 - 如果目标已存在，跳过不处理
 - 如果不存在，创建新条目
 - 适用于首次导入场景
@@ -1573,6 +1592,7 @@ import_memory(request)
 ### L2与L3关联处理
 
 导入L2主题时，如果指定了`l3_title`：
+
 1. 查找对应的L3 KnowledgeSlot
 2. 如果找到：添加`l3_refs`引用
 3. 如果未找到：
@@ -1593,42 +1613,40 @@ pub fn close(self) -> Result<()>
 
 ```
 close(self)
-├── 1. 同步索引到磁盘
-│   ├── btree.serialize() -> 写入页面
-│   └── sparse_index.serialize() -> 写入页面
+├── 1. checkpoint()
+│   ├── 保存BTree索引到磁盘
+│   ├── 保存SparseIndex到磁盘
+│   └── header.commit_id += 1
 │
-├── 2. 写入文件头
-│   ├── header.commit_id += 1
-│   ├── header.to_bytes() -> 写入A/B双头
-│   └── header.crc32 = crc32(header_bytes)
+├── 2. 清空Journal
+│   ├── header.journal_start = 0
+│   └── header.journal_len = 0
 │
-├── 3. 刷新内存映射
-│   └── mmap.flush()
+├── 3. 写入文件头 (A/B双头 crash safety)
+│   ├── 写入B（备份）→ flush
+│   └── 写入A（主）→ flush
 │
-├── 4. 关闭文件
-│   └── file.sync_all()
-│
-└── 5. 释放资源
-    ├── drop(encoder)
-    ├── drop(session_manager)
-    └── drop(activation_manager)
+└── 4. 标记closed=true (防止Drop重复checkpoint)
 ```
 
 ---
 
 ## 各层级存储内容
 
-| 层级 | 存储内容 | 数据结构 |
-|------|----------|----------|
-| L1 | 对话摘要、关键词、向量 | EngramSlot |
-| L2 | 主题标题、摘要、关联L1/L3/L4 | TopicSlot |
-| L3 | 知识域标题、文本、类型 | KnowledgeSlot |
-| L4 | 对话原文、时间戳 | ArchiveSlot |
-| L5 | 动作链、标题、类型 | CrystalSlot |
+| 层级 | 存储内容                     | 数据结构                    |
+| ---- | ---------------------------- | --------------------------- |
+| L0   | Agent标识、角色、人格        | ProfileSlot                 |
+| L1   | 图节点（指向L2 ContextSlot） | ContextNode + HyperedgeSlot |
+| L2   | 场景上下文、摘要、激活状态   | ContextSlot                 |
+| L3   | 通用超图（节点+边）          | HypergraphSlot/Node/Edge    |
+| L4   | 对话原文、文件引用           | ArchiveSlot                 |
+| L5   | 动作序列、触发条件           | ActionChainSlot             |
 
 ---
 
 ## 激活机制实现
+
+L2 上下文的激活通过 `session/mod.rs` 的 SessionManager 管理。
 
 ### 激活流程
 
@@ -1637,103 +1655,35 @@ close(self)
    - 设置 `is_active = true`
    - 将L2主题ID加入 `session_manager`
 
-2. **L1情节记忆**
-   - 更新 `memory_state` 为 `Active`
-   - 增加 `importance`
-
-3. **L3知识域**
-   - 更新 `confidence` 和 `importance`
+2. **L1图节点**
+   - `search_memory()` 中通过 `update_activation_scores()` 更新
 
 ### 相关模块
 
-- `activation/mod.rs` - ActivationManager
 - `session/mod.rs` - SessionManager
+- `query/search.rs` - update_activation_scores()
 
 ---
 
 ## Dream管道详细步骤
 
-### 第一步：更新L5（动作链结晶）
+详细步骤已在 [外部接口4：Dream整合](#外部接口4dream整合) 中描述。当前管道包含5个阶段：
 
-**目标**：将相同类型的动作链合并为可复用的Skill（技能）
+| 阶段 | 模块                         | 功能                                     | 需要LLM |
+| ---- | ---------------------------- | ---------------------------------------- | ------- |
+| 1    | `compress_stage`             | L2深度降级 (depth-1→2→3→移除)            | 是      |
+| 2    | `mod.rs::rebuild_l1_from_l2` | L1重建 (删除指向已移除L2的节点)          | 否      |
+| 3    | `l0_form_stage`              | L0画像更新 (从主题关键词生成personality) | 否      |
+| 4    | `l3_distill_stage`           | L3超图知识蒸馏 (LLM提取概念+关系)        | **是**  |
+| 5    | `crystallize_stage`          | L5结晶化 + 低质量修剪                    | 是      |
 
-**流程**：
-1. 扫描所有L5 Crystal节点
-2. 按动作类型（Create、Read、Update、Delete、Execute、Query）分组
-3. 合并相同类型的动作，生成Skill模板
-4. 创建新的Crystal节点存储Skill
-
-**示例**：
-```rust
-// 输入：多个L5动作链
-ActionChain: [
-    { title: "创建文件", type: Create },
-    { title: "编写代码", type: Create },
-    { title: "运行测试", type: Execute },
-]
-
-// 输出：合并后的Skill
-Skill: {
-    title: "代码开发流程",
-    steps: [
-        "1. 创建文件",
-        "2. 编写代码",
-        "3. 运行测试",
-    ],
-    action_type: Create,
-}
-```
-
-### 第二步：更新L2（主题压缩）
-
-**目标**：压缩激活状态的L2主题，合并相似主题
-
-**流程**：
-1. 获取所有激活状态的L2主题（`is_active = true`）
-2. 计算主题间的相似度（基于centroid_vector）
-3. 相似度超过阈值（如0.8）的主题合并
-4. 更新L2的关联关系（node_ids、l3_refs、l4_refs）
-
-**判断是否需要压缩的条件**：
-- 主题相似度 >= 0.8
-- 主题激活时间相近（如24小时内）
-- 主题属于同一L3域
-
-### 第三步：更新L1（情节记忆调整）
-
-**目标**：通过L2判断是否需要更新L1
-
-**流程**：
-1. 通过L2获取关联的L1列表（node_ids）
-2. 分析L1的重要性（importance）和激活状态
-3. 重要性低的L1降级为Dormant或删除
-4. 重要性高的L1保持或提升状态
-
-**判断条件**：
-- `importance < 0.3` → 降级为Dormant
-- `memory_state == Dormant` 且 `updated_at` 超过30天 → 删除
-- `importance >= 0.8` → 保持Active状态
-
-### 第四步：更新L0（画像更新）
-
-**目标**：通过L1分析行为模式，更新L0画像
-
-**流程**：
-1. 通过L1分析用户的行为模式
-2. 提取性格特征、偏好、世界观
-3. 更新L0 Profile节点
-
-**更新内容**：
-- 性格特征（personality）
-- 偏好设置（preferences）
-- 世界观（worldview）
-- 角色定位（role）
+各阶段详细信息请参考对应模块的源代码注释。
 
 ---
 
-## 六层架构数据结构
+## L0-L5 数据结构
 
-### L0 - Profile（画像）
+### L0 - Profile（Agent画像）
 
 ```rust
 pub struct ProfileSlot {
@@ -1745,87 +1695,139 @@ pub struct ProfileSlot {
     pub preferences: HashMap<String, String>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub version: u32,
 }
 ```
 
-### L1 - Engram（情节记忆）
+### L1 - ContextNode（图节点）
 
 ```rust
-pub struct EngramSlot {
+pub struct ContextNode {
     pub id_hash: u64,
-    pub text: String,
-    pub summary: Option<String>,
-    pub keywords: Vec<String>,
-    pub vector_page_ref: u64,
-    pub memory_state: u8,  // Active/Latent/Dormant
+    pub context_id: u64,        // 指向L2 ContextSlot
+    pub vector_page_ref: u64,   // 向量页面引用
     pub importance: f32,
-    pub edge_ptrs: [u64; 8],
-    // ... 其他字段
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub version: u32,
+    pub edge_ptrs: Vec<u64>,   // 关联超边
 }
 ```
 
-### L2 - Topic（语义主题）
+### L1 - Hyperedge（超边）
 
 ```rust
-pub struct TopicSlot {
+pub struct HyperedgeSlot {
     pub id_hash: u64,
+    pub kind: HyperedgeKind,    // Association/Temporal/Hierarchical/CoOccurrence
+    pub node_ptrs: Vec<u64>,    // 连接的节点列表
+    pub weight: f32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub version: u32,
+}
+```
+
+### L2 - ContextSlot（场景上下文）
+
+```rust
+pub struct ContextSlot {
+    pub id_hash: u64,
+    pub parent_id: Option<u64>,
+    pub depth: u8,              // 1=场景, 2=子场景, 3=轮次组
     pub title: String,
     pub summary: Option<String>,
-    pub node_ids: Vec<u64>,      // 关联L1列表
-    pub l3_refs: Vec<u64>,       // 关联L3列表
-    pub l4_refs: Vec<u64>,       // 关联L4列表
-    pub parent_id: Option<u64>,
+    pub archive_refs: Vec<u64>, // 关联的L4归档
+    pub l3_refs: Vec<u64>,      // 关联的L3超图
+    pub turn_count: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub version: u32,
+    pub importance: f32,
     pub activation_score: f32,
     pub is_active: bool,
-    pub centroid_vector: Option<Vec<f16>>,
-    // ... 其他字段
+    pub activation_state: ActivationState,
+    pub centroid_page_ref: u64, // 质心向量页面
+    pub dialogue_range: (i64, i64),
 }
 ```
 
-### L3 - Knowledge（知识域）
+### L3 - HypergraphSlot（超图容器）
 
 ```rust
-pub struct KnowledgeSlot {
+pub struct HypergraphSlot {
     pub id_hash: u64,
-    pub title: String,
-    pub domain: String,
-    pub knowledge_type: KnowledgeType,
-    pub text: String,
-    pub summary: Option<String>,
-    pub keywords: Vec<String>,
-    pub edge_ptrs: [u64; 8],
-    pub archive_refs: Vec<u64>,
-    pub importance: f32,
-    pub confidence: f32,
-    // ... 其他字段
+    pub name: String,
+    pub source: HypergraphSource,  // Manual/Path/Url
+    pub node_count: u32,
+    pub edge_count: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub version: u32,
 }
 ```
 
-### L4 - Archive（原文归档）
+### L3 - HypergraphNode（超图节点）
+
+```rust
+pub struct HypergraphNode {
+    pub id_hash: u64,
+    pub graph_id: u64,
+    pub title: String,
+    pub node_type: String,
+    pub content: String,
+    pub keywords: Vec<String>,
+    pub source_ref: Option<String>,
+    pub importance: f32,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub version: u32,
+}
+```
+
+### L3 - HypergraphEdge（超图边）
+
+```rust
+pub struct HypergraphEdge {
+    pub id_hash: u64,
+    pub graph_id: u64,
+    pub kind: GraphEdgeKind,
+    pub node_ids: Vec<u64>,
+    pub weight: f32,
+    pub label: Option<String>,
+    pub created_at: i64,
+}
+```
+
+### L4 - ArchiveSlot（原文归档）
 
 ```rust
 pub struct ArchiveSlot {
     pub id_hash: u64,
-    pub topic_id: u64,
+    pub content_type: ContentType,  // Text/Image/Document
+    pub role: u8,                   // 0=user, 1=assistant
+    pub context_id: u64,
+    pub created_at: i64,
     pub content: String,
-    pub timestamp: i64,
-    pub file_path: Option<String>,
-    pub file_type: Option<String>,
+    pub metadata: Option<String>,
 }
 ```
 
-### L5 - Crystal（结晶化知识）
+### L5 - ActionChainSlot（动作链）
 
 ```rust
-pub struct CrystalSlot {
+pub struct ActionChainSlot {
     pub id_hash: u64,
     pub title: String,
-    pub action_chain: Vec<ActionItem>,
-    pub skill_template: Option<String>,
-    pub trigger_count: u32,
+    pub trigger: String,
+    pub status: ChainStatus,        // Active/Deprecated/Draft
+    pub confidence: f32,
     pub success_rate: f32,
+    pub trigger_count: u32,
+    pub last_triggered: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    pub version: u32,
 }
 ```
 
@@ -1834,20 +1836,24 @@ pub struct CrystalSlot {
 ## 性能关键路径
 
 ### 1. 向量相似度计算
+
 - 使用SIMD指令（AVX2/NEON）
 - 批量处理多个向量
 - 缓存友好的内存布局
 
 ### 2. BM25检索
+
 - 倒排索引预计算
 - 文档长度归一化
 - 批量评分
 
 ### 3. 页面分配
+
 - 空闲列表缓存
 - 批量分配减少锁竞争
 
 ### 4. 内存映射
+
 - 零拷贝读取
 - 延迟写入（mmap flush）
 - 双头备份提高容错性
