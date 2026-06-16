@@ -35,12 +35,12 @@
 
 int main() {
     // 1. 打开数据库
-    void* handle = memhop_open("{\"db_path\":\"/tmp/test.meh\",\"vector_dim\":768}");
+    void* handle = memhop_open("{\"db_path\":\"/tmp/test.meh\",\"encoder_socket\":\"/tmp/memhop_encoder.sock\",\"vector_dim\":768}");
     if (!handle) { fprintf(stderr, "open failed\n"); return 1; }
 
     // 2. 执行命令（检索记忆）
     char* res = memhop_execute(handle,
-        "{\"command\":\"search\",\"dialogue\":\"hello\",\"context_limit\":10}");
+        "{\"command\":\"search\",\"dialogue\":\"hello\",\"context_limit\":10,\"min_score\":0.0}");
     printf("%s\n", res);
     memhop_free_string(res);
 
@@ -421,11 +421,13 @@ void memhop_close(void* handle);
 ```json
 {
   "command": "import",
-  "action": "import",
-  "target_layer": "profile|topic|knowledge",
-  "mode": "merge|overwrite|skip",
-  "data": { ... },
-  "knowledge_title": null
+  "params": {
+    "action": "import",
+    "target_layer": "profile|topic|knowledge",
+    "mode": "merge|overwrite|skip",
+    "data": { ... },
+    "knowledge_title": null
+  }
 }
 ```
 
@@ -434,52 +436,31 @@ void memhop_close(void* handle);
 ```json
 {
   "command": "import",
-  "action": "build_l3",
-  "path": "/docs/rust-book"
+  "params": {
+    "action": "build_l3",
+    "path": "/docs/rust-book"
+  }
 }
 ```
 
-**`data` 格式**（取决于 `target_layer`）：
+**`data` 格式**（取决于 `target_layer`，使用 serde 外部标签枚举）：
 
 Profile:
 
 ```json
-{
-  "name": "助手",
-  "role": "编程助手",
-  "personality": null,
-  "worldview": null,
-  "preferences": null
-}
+{"Profile": {"name": "助手", "role": "编程助手", "personality": null, "worldview": null, "preferences": null}}
 ```
 
 Topics:
 
 ```json
-[
-  {
-    "title": "Rust所有权",
-    "summary": null,
-    "keywords": ["ownership"],
-    "knowledge_domain": null
-  }
-]
+{"Topics": [{"title": "Rust所有权", "summary": null, "keywords": ["ownership"], "knowledge_domain": null}]}
 ```
 
 Knowledge:
 
 ```json
-[
-  {
-    "title": "Rust所有权规则",
-    "domain": "编程",
-    "knowledge_type": "Factual",
-    "text": "...",
-    "summary": null,
-    "keywords": [],
-    "source_ref": null
-  }
-]
+{"Knowledge": [{"title": "Rust所有权规则", "domain": "编程", "knowledge_type": "Factual", "text": "...", "summary": null, "keywords": [], "source_ref": null}]}
 ```
 
 ---
@@ -494,8 +475,8 @@ Knowledge:
 | `adjust`     | `topic_id`, `delta` (f32) | 调整激活优先级            |
 
 ```json
-{"command": "session", "action": "activate", "topic_id": "a1b2c3d4", "ttl_ms": 600000}
-{"command": "session", "action": "list"}
+{"command": "session", "params": {"action": "activate", "topic_id": "a1b2c3d4", "ttl_ms": 600000}}
+{"command": "session", "params": {"action": "list"}}
 ```
 
 **响应**：

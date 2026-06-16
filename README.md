@@ -16,6 +16,31 @@ MemHop is a specialized memory database designed for AI Agents, implementing a s
 
 ## Quick Start
 
+### FFI (C/Python/Go/...) — 推荐方式
+
+MemHop 通过 4 个 `extern "C"` 函数提供 JSON-in JSON-out 跨语言接口。从 [GitHub Actions](../../actions) 下载对应平台的预编译二进制即可使用：
+
+```c
+#include "memhop.h"
+
+// 1. 打开数据库
+void* handle = memhop_open(
+    "{\"db_path\":\"/tmp/agent.meh\",\"encoder_socket\":\"/tmp/memhop_encoder.sock\",\"vector_dim\":768}");
+
+// 2. 搜索记忆
+char* res = memhop_execute(handle,
+    "{\"command\":\"search\",\"dialogue\":\"hello\",\"context_limit\":10,\"min_score\":0.0}");
+printf("%s\n", res);
+memhop_free_string(res);
+
+// 3. 关闭
+memhop_close(handle);
+```
+
+完整协议参考 [API_NEW.md](API_NEW.md)（11 个命令 + 4 个 C 函数）。
+
+### Rust SDK
+
 ```rust
 use memhop::{MemHop, MemHopConfig, SearchQuery, UpdateRequest, LlmConfig};
 use std::path::PathBuf;
@@ -133,22 +158,43 @@ db.close()?;
 - **v0.34.0 (Launch Ready)**: Migration + integration tests + benchmarks
 - **v0.41.0 (Current)**: L2-centric search/update model + Dream pipeline
 
+## Download
+
+预编译二进制从 [GitHub Actions](../../actions) 的 `build` workflow 下载：
+
+| 平台 | 产物 | CI Job |
+|------|------|--------|
+| macOS (Intel + Apple Silicon Universal) | `libmemhop-universal.dylib` | `create-universal` |
+| macOS Apple Silicon | `libmemhop.dylib` | `build-macos-arm` |
+| macOS Intel | `libmemhop.dylib` | `build-macos-x86` |
+| Linux x86_64 | `libmemhop.so` | `build-linux` |
+| Windows x86_64 | `memhop.dll` | `build-windows` |
+
+验证下载的二进制：
+```bash
+cp libmemhop.dylib /tmp/memhop-download/
+cargo run --example ffi_test  # 动态加载并测试所有 FFI 接口
+```
+
 ## Development
 
 ```bash
 # Build
 cargo build --release
 
-# Test
+# Test (217 tests)
 cargo test
 
-# Benchmark
-cargo bench --features bench
+# FFI binary validation (loads .dylib via libloading)
+MEMHOP_DYLIB_PATH=/tmp/memhop-download/libmemhop.dylib cargo run --example ffi_test
+
+# Full test including DeepSeek Dream
+MEMHOP_DEEPSEEK_KEY=sk-xxx cargo test -- --include-ignored --nocapture
 ```
 
 ## API Documentation
 
-- **[API_NEW.md](API_NEW.md)** - 完整API文档（推荐）
+- **[API_NEW.md](API_NEW.md)** - FFI 协议文档（推荐，JSON-in JSON-out）
 - **[API_NEI.md](API_NEI.md)** - Internal implementation details
 - **[docs/](docs/)** - Additional documentation
 
