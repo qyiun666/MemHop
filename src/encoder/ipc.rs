@@ -2,13 +2,15 @@
 
 use half::f16;
 use std::collections::HashMap;
-use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::time::Duration;
 
 #[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
-
+#[cfg(unix)]
+use std::time::Duration;
+#[cfg(unix)]
 use crate::MemHopError;
 
 /// Encoder trait for external encoding service
@@ -56,12 +58,13 @@ impl IpcEncoder {
 
     /// Try to encode text via Unix socket communication
     fn try_encode(&self, text: &str) -> Result<EncoderOutput, MemHopError> {
-        let mut stream = UnixStream::connect(&self.socket_path)
-            .map_err(MemHopError::Io)?;
+        let mut stream = UnixStream::connect(&self.socket_path).map_err(MemHopError::Io)?;
 
-        stream.set_read_timeout(Some(Duration::from_secs(5)))
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(MemHopError::Io)?;
-        stream.set_write_timeout(Some(Duration::from_secs(2)))
+        stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
             .map_err(MemHopError::Io)?;
 
         let text_bytes = text.as_bytes();
@@ -262,7 +265,7 @@ mod tests {
         assert_eq!(output.dense.len(), 768);
         assert!(output.dense.iter().all(|&x| x == f16::from_f32(0.0)));
     }
-    
+
     #[test]
     fn test_ipc_encoder_fallback_on_connection_failure() {
         // Test that encode gracefully handles connection failures
@@ -271,7 +274,7 @@ mod tests {
             768,
             "dense".to_string(),
         );
-        
+
         // Should not panic, should return zero vector
         let output = encoder.encode("test text");
         assert_eq!(output.dense.len(), 768);
