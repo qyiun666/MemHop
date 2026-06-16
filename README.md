@@ -25,7 +25,7 @@ MemHop 通过 4 个 `extern "C"` 函数提供 JSON-in JSON-out 跨语言接口�
 
 // 1. 打开数据库
 void* handle = memhop_open(
-    "{\"db_path\":\"/tmp/agent.meh\",\"encoder_socket\":\"/tmp/memhop_encoder.sock\",\"vector_dim\":768}");
+    "{\"db_path\":\"/tmp/agent.meh\",\"encoder_grpc_addr\":\"unix:///tmp/.meowagent/meowvec.sock\",\"vector_dim\":768}");
 
 // 2. 搜索记忆
 char* res = memhop_execute(handle,
@@ -107,41 +107,41 @@ db.close()?;
 
 ### Database Operations
 
-| Method | Description |
-|--------|-------------|
-| `MemHop::open(config)` | Open or create database |
-| `search_memory(query)` | Search memory with L2-centric retrieval |
-| `update_memory(request)` | Create/update multi-layer memory |
-| `dream(llm)` | Run Dream consolidation pipeline |
-| `batch_store(batch)` | Batch store multiple documents |
-| `close()` | Close database and sync to disk |
+| Method                   | Description                             |
+| ------------------------ | --------------------------------------- |
+| `MemHop::open(config)`   | Open or create database                 |
+| `search_memory(query)`   | Search memory with L2-centric retrieval |
+| `update_memory(request)` | Create/update multi-layer memory        |
+| `dream(llm)`             | Run Dream consolidation pipeline        |
+| `batch_store(batch)`     | Batch store multiple documents          |
+| `close()`                | Close database and sync to disk         |
 
 ### L0-L5 Query Interfaces
 
-| Method | Description |
-|--------|-------------|
-| `get_profile()` | Get Agent profile |
-| `get_engram(id)` | Get single L1 engram by ID |
-| `list_engrams(query)` | List L1 engrams with pagination |
-| `get_topic(id)` | Get L2 topic detail |
-| `list_topics(query)` | List L2 topics |
-| `get_knowledge(id)` | Get L3 knowledge detail |
-| `list_knowledge(query)` | List L3 knowledge |
-| `list_archives_by_topic(topic_id, query)` | List L4 archives by topic |
-| `list_archives_by_nodes(node_ids, query)` | List L4 archives by node IDs |
-| `list_all_archives(query)` | List all L4 archives |
-| `list_crystals(query)` | List L5 crystallized skills |
+| Method                                    | Description                     |
+| ----------------------------------------- | ------------------------------- |
+| `get_profile()`                           | Get Agent profile               |
+| `get_engram(id)`                          | Get single L1 engram by ID      |
+| `list_engrams(query)`                     | List L1 engrams with pagination |
+| `get_topic(id)`                           | Get L2 topic detail             |
+| `list_topics(query)`                      | List L2 topics                  |
+| `get_knowledge(id)`                       | Get L3 knowledge detail         |
+| `list_knowledge(query)`                   | List L3 knowledge               |
+| `list_archives_by_topic(topic_id, query)` | List L4 archives by topic       |
+| `list_archives_by_nodes(node_ids, query)` | List L4 archives by node IDs    |
+| `list_all_archives(query)`                | List all L4 archives            |
+| `list_crystals(query)`                    | List L5 crystallized skills     |
 
 ### Update Interfaces
 
-| Method | Description |
-|--------|-------------|
-| `update_profile(request)` | Update Agent profile |
-| `update_topic_title(id, new_title)` | Update L2 topic title |
-| `update_knowledge_title(id, new_title)` | Update L3 knowledge title |
-| `update_crystal_title(id, new_title)` | Update L5 crystal title |
-| `merge_topics(primary_id, secondary_ids)` | Merge multiple L2 topics |
-| `import_memory(request)` | Import memory to Profile/Topic/Knowledge |
+| Method                                    | Description                              |
+| ----------------------------------------- | ---------------------------------------- |
+| `update_profile(request)`                 | Update Agent profile                     |
+| `update_topic_title(id, new_title)`       | Update L2 topic title                    |
+| `update_knowledge_title(id, new_title)`   | Update L3 knowledge title                |
+| `update_crystal_title(id, new_title)`     | Update L5 crystal title                  |
+| `merge_topics(primary_id, secondary_ids)` | Merge multiple L2 topics                 |
+| `import_memory(request)`                  | Import memory to Profile/Topic/Knowledge |
 
 ## Performance
 
@@ -162,15 +162,16 @@ db.close()?;
 
 预编译二进制从 [GitHub Actions](../../actions) 的 `build` workflow 下载：
 
-| 平台 | 产物 | CI Job |
-|------|------|--------|
+| 平台                                    | 产物                        | CI Job             |
+| --------------------------------------- | --------------------------- | ------------------ |
 | macOS (Intel + Apple Silicon Universal) | `libmemhop-universal.dylib` | `create-universal` |
-| macOS Apple Silicon | `libmemhop.dylib` | `build-macos-arm` |
-| macOS Intel | `libmemhop.dylib` | `build-macos-x86` |
-| Linux x86_64 | `libmemhop.so` | `build-linux` |
-| Windows x86_64 | `memhop.dll` | `build-windows` |
+| macOS Apple Silicon                     | `libmemhop.dylib`           | `build-macos-arm`  |
+| macOS Intel                             | `libmemhop.dylib`           | `build-macos-x86`  |
+| Linux x86_64                            | `libmemhop.so`              | `build-linux`      |
+| Windows x86_64                          | `memhop.dll`                | `build-windows`    |
 
 验证下载的二进制：
+
 ```bash
 cp libmemhop.dylib /tmp/memhop-download/
 cargo run --example ffi_test  # 动态加载并测试所有 FFI 接口
@@ -200,11 +201,11 @@ MEMHOP_DEEPSEEK_KEY=sk-xxx cargo test -- --include-ignored --nocapture
 
 ## Version History
 
-| Version Range | Date | Key Highlights |
-|---------------|------|----------------|
+| Version Range         | Date                    | Key Highlights                                                                                                                |
+| --------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | **v0.30.x - v0.41.x** | 2026-05-19 ~ 2026-06-14 | 1. **专用记忆数据库** (.meh格式) 2. 六层认知架构 (L0-L5) 3. L2中心化检索/更新模型 4. Dream记忆整合管线 5. BM25+HNSW双通道检索 |
-| **v0.23.x - v0.25.x** | 2026-06-14 ~ 2026-06-15 | 1. SDK模式重构 2. 6层仿人脑记忆引擎 3. API优化与标准化 4. CandleEncoder向量模型集成 5. 性能优化与基准测试 |
-| **v0.1.x - v0.22.x** | 2026-05-19 ~ 2026-06-13 | 1. Brain架构设计与迭代 2. MCP Server集成 3. HNSW向量索引实现 4. 场景感知与记忆塑性 5. LMDB持久化层 |
+| **v0.23.x - v0.25.x** | 2026-06-14 ~ 2026-06-15 | 1. SDK模式重构 2. 6层仿人脑记忆引擎 3. API优化与标准化 4. CandleEncoder向量模型集成 5. 性能优化与基准测试                     |
+| **v0.1.x - v0.22.x**  | 2026-05-19 ~ 2026-06-13 | 1. Brain架构设计与迭代 2. MCP Server集成 3. HNSW向量索引实现 4. 场景感知与记忆塑性 5. LMDB持久化层                            |
 
 For detailed release notes, see [docs/changelogs/](docs/changelogs/) and [docs/plans/](docs/plans/).
 
@@ -213,12 +214,14 @@ For detailed release notes, see [docs/changelogs/](docs/changelogs/) and [docs/p
 This project follows strict development guidelines to ensure code quality, performance, and security. All guidelines are documented in the `.qoder/rules/` directory:
 
 ### Core Rules
+
 - **P01 - Code Quality**: Coding standards and best practices
 - **P02 - Code Modification**: Guidelines for modifying existing code
 - **P07 - Performance Optimization**: Performance optimization techniques
 - **P09 - Dependency Management**: Dependency selection and management
 
 ### Quick Reference
+
 - See [.qoder/rules/README.md](.qoder/rules/README.md) for the complete index
 - All rules are prefixed with 'P' for easy identification
 - Rules are designed for MemHop's specific architecture and requirements

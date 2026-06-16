@@ -35,7 +35,7 @@
 
 int main() {
     // 1. 打开数据库
-    void* handle = memhop_open("{\"db_path\":\"/tmp/test.meh\",\"encoder_socket\":\"/tmp/memhop_encoder.sock\",\"vector_dim\":768}");
+    void* handle = memhop_open("{\"db_path\":\"/tmp/test.meh\",\"encoder_grpc_addr\":\"unix:///tmp/.meowagent/meowvec.sock\",\"vector_dim\":768}");
     if (!handle) { fprintf(stderr, "open failed\n"); return 1; }
 
     // 2. 执行命令（检索记忆）
@@ -71,12 +71,12 @@ void* memhop_open(const char* config_json);
 
 **config_json** 格式：
 
-| 字段             | 类型    | 必需 | 描述                                                           |
-| ---------------- | ------- | ---- | -------------------------------------------------------------- |
-| `db_path`        | string  | 是   | `.meh` 数据库文件路径                                          |
-| `encoder_socket` | string  | 否   | 向量编码器 Unix Socket 路径（默认 `/tmp/memhop_encoder.sock`） |
-| `vector_dim`     | integer | 是   | 向量维度（创建时确定，不可更改）                               |
-| `crystal_path`   | string  | 否   | 结晶化知识存储路径                                             |
+| 字段                | 类型    | 必需 | 描述                                                                     |
+| ------------------- | ------- | ---- | ------------------------------------------------------------------------ |
+| `db_path`           | string  | 是   | `.meh` 数据库文件路径                                                    |
+| `encoder_grpc_addr` | string  | 否   | gRPC 编码器地址（Unix Socket，如 `unix:///tmp/.meowagent/meowvec.sock`） |
+| `vector_dim`        | integer | 是   | 向量维度（创建时确定，不可更改）                                         |
+| `crystal_path`      | string  | 否   | 结晶化知识存储路径                                                       |
 
 示例：
 
@@ -130,11 +130,20 @@ void memhop_close(void* handle);
 ```json
 {
   "db_path": "./data/agent.meh",
-  "encoder_socket": "/tmp/memhop_encoder.sock",
+  "encoder_grpc_addr": "unix:///tmp/.meowagent/meowvec.sock",
   "vector_dim": 768,
   "crystal_path": null
 }
 ```
+
+| 字段                | 类型    | 必需 | 描述                                                                       |
+| ------------------- | ------- | ---- | -------------------------------------------------------------------------- |
+| `db_path`           | string  | 是   | `.meh` 数据库文件路径                                                      |
+| `encoder_grpc_addr` | string  | 否   | gRPC 编码器地址（Unix Socket，环境变量 `MEMHOP_ENCODER_GRPC_ADDR` 可覆盖） |
+| `vector_dim`        | integer | 是   | 向量维度（创建时确定，不可更改）                                           |
+| `crystal_path`      | string  | 否   | 结晶化知识存储路径                                                         |
+
+**编码器**：仅支持 gRPC over Unix Domain Socket。未配置时向量检索和 batch_store 将返回错误。
 
 ### 通用分页
 
@@ -448,19 +457,48 @@ void memhop_close(void* handle);
 Profile:
 
 ```json
-{"Profile": {"name": "助手", "role": "编程助手", "personality": null, "worldview": null, "preferences": null}}
+{
+  "Profile": {
+    "name": "助手",
+    "role": "编程助手",
+    "personality": null,
+    "worldview": null,
+    "preferences": null
+  }
+}
 ```
 
 Topics:
 
 ```json
-{"Topics": [{"title": "Rust所有权", "summary": null, "keywords": ["ownership"], "knowledge_domain": null}]}
+{
+  "Topics": [
+    {
+      "title": "Rust所有权",
+      "summary": null,
+      "keywords": ["ownership"],
+      "knowledge_domain": null
+    }
+  ]
+}
 ```
 
 Knowledge:
 
 ```json
-{"Knowledge": [{"title": "Rust所有权规则", "domain": "编程", "knowledge_type": "Factual", "text": "...", "summary": null, "keywords": [], "source_ref": null}]}
+{
+  "Knowledge": [
+    {
+      "title": "Rust所有权规则",
+      "domain": "编程",
+      "knowledge_type": "Factual",
+      "text": "...",
+      "summary": null,
+      "keywords": [],
+      "source_ref": null
+    }
+  ]
+}
 ```
 
 ---

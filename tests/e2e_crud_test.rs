@@ -1,6 +1,7 @@
 mod common;
 
 use common::test_context::TestContext;
+use common::test_encoder::TestEncoder;
 use memhop::*;
 use std::collections::HashMap;
 
@@ -49,9 +50,10 @@ fn test_l0_profile_crud(ctx: &mut TestContext) {
         role: Some("AI Assistant".to_string()),
         personality: Some("Friendly".to_string()),
         worldview: None,
-        preferences: Some(HashMap::from([
-            ("language".to_string(), "Chinese".to_string()),
-        ])),
+        preferences: Some(HashMap::from([(
+            "language".to_string(),
+            "Chinese".to_string(),
+        )])),
     };
 
     let updated = ctx.db.update_profile(request).unwrap();
@@ -87,25 +89,29 @@ fn test_import_l0_profile(ctx: &mut TestContext) {
 fn test_import_l3_knowledge_stub(ctx: &mut TestContext) {
     let request = ImportRequest {
         target_layer: TargetLayer::Knowledge,
-        data: ImportData::Knowledge(vec![
-            KnowledgeImportItem {
-                title: "Rust Ownership".to_string(),
-                domain: "programming".to_string(),
-                knowledge_type: "Conceptual".to_string(),
-                text: "Rust ownership system ensures memory safety...".to_string(),
-                summary: Some("Ownership rules".to_string()),
-                keywords: vec!["ownership".to_string(), "borrowing".to_string()],
-                source_ref: None,
-            },
-        ]),
+        data: ImportData::Knowledge(vec![KnowledgeImportItem {
+            title: "Rust Ownership".to_string(),
+            domain: "programming".to_string(),
+            knowledge_type: "Conceptual".to_string(),
+            text: "Rust ownership system ensures memory safety...".to_string(),
+            summary: Some("Ownership rules".to_string()),
+            keywords: vec!["ownership".to_string(), "borrowing".to_string()],
+            source_ref: None,
+        }]),
         mode: ImportMode::Merge,
         knowledge_title: None,
     };
 
     let result = ctx.db.import_memory(request).unwrap();
-    assert!(!result.created_ids.is_empty(), "L3 Knowledge import should create nodes");
+    assert!(
+        !result.created_ids.is_empty(),
+        "L3 Knowledge import should create nodes"
+    );
 
-    println!("✅ Import L3 Knowledge passed (created {} nodes)", result.created_ids.len());
+    println!(
+        "✅ Import L3 Knowledge passed (created {} nodes)",
+        result.created_ids.len()
+    );
 }
 
 fn test_search_auto_create_l2(ctx: &mut TestContext) {
@@ -122,7 +128,10 @@ fn test_search_auto_create_l2(ctx: &mut TestContext) {
     };
 
     let result = ctx.db.search_memory(query).unwrap();
-    assert!(!result.contexts.is_empty(), "auto_create should create L2 context");
+    assert!(
+        !result.contexts.is_empty(),
+        "auto_create should create L2 context"
+    );
 
     let created_id = result.contexts[0].id.clone();
     assert!(!created_id.is_empty());
@@ -134,14 +143,12 @@ fn test_search_auto_create_l2(ctx: &mut TestContext) {
 fn test_import_l2_topics(ctx: &mut TestContext) {
     let request = ImportRequest {
         target_layer: TargetLayer::Topic,
-        data: ImportData::Topics(vec![
-            TopicImportItem {
-                title: "Python Basics".to_string(),
-                summary: Some("Python programming basics".to_string()),
-                keywords: vec!["python".to_string()],
-                knowledge_domain: None,
-            },
-        ]),
+        data: ImportData::Topics(vec![TopicImportItem {
+            title: "Python Basics".to_string(),
+            summary: Some("Python programming basics".to_string()),
+            keywords: vec!["python".to_string()],
+            knowledge_domain: None,
+        }]),
         mode: ImportMode::Merge,
         knowledge_title: None,
     };
@@ -172,8 +179,7 @@ fn test_search_memory_with_vector(ctx: &mut TestContext) {
     let results = ctx.db.search_memory(query).unwrap();
 
     // 验证搜索结果
-    assert!(!results.contexts.is_empty(),
-        "向量搜索应找到语义相关的内容");
+    assert!(!results.contexts.is_empty(), "向量搜索应找到语义相关的内容");
 
     println!("✅ Search Memory with Vector passed");
 }
@@ -206,7 +212,10 @@ fn test_list_archives_by_topic(ctx: &TestContext) {
         content_type: None,
     };
 
-    let result = ctx.db.list_archives_by_topic(&ctx.created_l2_ids[0], query).unwrap();
+    let result = ctx
+        .db
+        .list_archives_by_topic(&ctx.created_l2_ids[0], query)
+        .unwrap();
     println!("  ✓ L4 archives found: {}", result.total);
 
     println!("✅ List L4 by Topic passed");
@@ -266,7 +275,7 @@ fn test_search_all_param_combinations(ctx: &mut TestContext) {
             llm_enhance: None,
             auto_create: 0,
             min_score: 0.0,
-        context_history: None,
+            context_history: None,
         };
         let _ = ctx.db.search_memory(query);
         println!("  ✓ Search with context_id filter");
@@ -315,7 +324,7 @@ fn test_update_all_param_combinations(ctx: &mut TestContext) {
             llm_enhance: None,
             auto_create: 1,
             min_score: 0.0,
-        context_history: None,
+            context_history: None,
         };
         let result = ctx.db.search_memory(query).unwrap();
         result.contexts[0].id.clone()
@@ -338,14 +347,12 @@ fn test_update_all_param_combinations(ctx: &mut TestContext) {
         topic_id: topic_id.clone(),
         dialogue_text: "Test with actions".to_string(),
         summary: Some("Updated summary".to_string()),
-        action_chain: vec![
-            ActionItem {
-                title: "Action 1".to_string(),
-                description: "Description 1".to_string(),
-                action_type: ActionType::Create,
-                parameters: None,
-            },
-        ],
+        action_chain: vec![ActionItem {
+            title: "Action 1".to_string(),
+            description: "Description 1".to_string(),
+            action_type: ActionType::Create,
+            parameters: None,
+        }],
     };
     let _ = ctx.db.update_memory(request);
     println!("  ✓ Update with action_chain");
@@ -413,7 +420,10 @@ fn test_import_all_param_combinations(ctx: &mut TestContext) {
 fn test_edge_cases(ctx: &mut TestContext) {
     // 1. 不存在的 ID
     let result = ctx.db.get_topic("nonexistent_id");
-    assert!(result.unwrap().is_none(), "Should return None for nonexistent ID");
+    assert!(
+        result.unwrap().is_none(),
+        "Should return None for nonexistent ID"
+    );
     println!("  ✓ Get nonexistent L2");
 
     // 2. Unicode 字符 (通过 auto_create)
@@ -443,7 +453,10 @@ fn test_update_topic_title(ctx: &mut TestContext) {
         return;
     }
 
-    let updated = ctx.db.update_topic_title(&ctx.created_l2_ids[0], "Updated Title".to_string()).unwrap();
+    let updated = ctx
+        .db
+        .update_topic_title(&ctx.created_l2_ids[0], "Updated Title".to_string())
+        .unwrap();
     assert_eq!(updated.title, "Updated Title");
 
     println!("Update Topic Title passed");
@@ -458,12 +471,18 @@ fn test_merge_topics(ctx: &mut TestContext) {
     let primary_id = ctx.created_l2_ids[0].clone();
     let secondary_id = ctx.created_l2_ids[1].clone();
 
-    let merged = ctx.db.merge_topics(&primary_id, vec![secondary_id.clone()]).unwrap();
+    let merged = ctx
+        .db
+        .merge_topics(&primary_id, vec![secondary_id.clone()])
+        .unwrap();
     assert_eq!(merged.id, primary_id);
 
     // 验证 secondary 被删除
     let secondary = ctx.db.get_topic(&secondary_id).unwrap();
-    assert!(secondary.is_none(), "Secondary should be deleted after merge");
+    assert!(
+        secondary.is_none(),
+        "Secondary should be deleted after merge"
+    );
 
     println!("Merge Topics passed");
 }
@@ -475,7 +494,7 @@ fn test_merge_topics(ctx: &mut TestContext) {
 fn test_database_close_and_reopen(ctx: &mut TestContext) {
     let config = MemHopConfig {
         db_path: ctx.db_path.clone(),
-        encoder_socket: ctx.socket_path.clone(),
+        encoder_grpc_addr: None,
         vector_dim: 384,
         crystal_path: None,
     };
@@ -487,14 +506,21 @@ fn test_database_close_and_reopen(ctx: &mut TestContext) {
     db.close().unwrap();
 
     // 验证文件存在
-    assert!(ctx.db_path.exists(), "Database file should exist after close");
+    assert!(
+        ctx.db_path.exists(),
+        "Database file should exist after close"
+    );
 
     // 重新打开数据库
-    let db = MemHop::open(config).expect("Failed to reopen database");
+    let mut db = MemHop::open(config).expect("Failed to reopen database");
+    db.set_encoder(TestEncoder::new(384));
 
     // 验证数据持久化
     let profile = db.get_profile().unwrap();
-    assert!(profile.is_some(), "L0 profile should persist after close/reopen");
+    assert!(
+        profile.is_some(),
+        "L0 profile should persist after close/reopen"
+    );
 
     let query = TopicListQuery {
         page: 1,
@@ -503,7 +529,10 @@ fn test_database_close_and_reopen(ctx: &mut TestContext) {
         keyword: None,
     };
     let l2_list = db.list_topics(query).unwrap();
-    assert!(l2_list.total > 0, "L2 topics should persist after close/reopen");
+    assert!(
+        l2_list.total > 0,
+        "L2 topics should persist after close/reopen"
+    );
 
     // 更新 ctx.db
     ctx.db = db;

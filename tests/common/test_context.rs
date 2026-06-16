@@ -1,11 +1,11 @@
+use super::test_encoder::TestEncoder;
 use memhop::{MemHop, MemHopConfig};
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 
 pub struct TestContext {
     pub db: MemHop,
     pub db_path: PathBuf,
-    pub socket_path: PathBuf,
 
     // 累积的测试数据 ID
     pub created_l2_ids: Vec<String>,
@@ -19,25 +19,26 @@ impl TestContext {
     pub fn setup() -> Self {
         // 1. 确定路径
         let db_path = PathBuf::from("/tmp/memhop_e2e_test.meh");
-        let socket_path = PathBuf::from("/tmp/memhop_encoder_e2e.sock");
 
         // 清理旧数据
         let _ = fs::remove_file(&db_path);
 
-        // 2. 创建 MemHop 实例（使用 MockEncoder，因为真实模型加载太慢）
+        // 2. 创建 MemHop 实例（无真实编码器，使用 TestEncoder）
         let config = MemHopConfig {
             db_path: db_path.clone(),
-            encoder_socket: socket_path.clone(),
-            vector_dim: 384,  // multilingual-e5-small 实际维度
+            encoder_grpc_addr: None,
+            vector_dim: 384,
             crystal_path: None,
         };
-        let db = MemHop::open(config).expect("Failed to open test database");
+        let mut db = MemHop::open(config).expect("Failed to open test database");
+
+        // 注入测试编码器
+        db.set_encoder(TestEncoder::new(384));
 
         // 3. 返回上下文
         TestContext {
             db,
             db_path,
-            socket_path,
             created_l2_ids: Vec::new(),
             created_l3_ids: Vec::new(),
             created_l5_ids: Vec::new(),

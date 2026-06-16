@@ -7,12 +7,21 @@ use memhop::query::types::*;
 use memhop::{MemHop, MemHopConfig};
 use tempfile::TempDir;
 
+mod common;
+use common::test_encoder::TestEncoder;
+
 /// Helper: Create a new MemHop database instance
 fn create_test_db(name: &str) -> (TempDir, MemHop) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join(format!("{}.meh", name));
-    let config = MemHopConfig::new(db_path, 384);
-    let db = MemHop::open(config).unwrap();
+    let config = MemHopConfig {
+        db_path: db_path.clone(),
+        encoder_grpc_addr: None,
+        vector_dim: 384,
+        crystal_path: None,
+    };
+    let mut db = MemHop::open(config).unwrap();
+    db.set_encoder(TestEncoder::new(384));
     (temp_dir, db)
 }
 
@@ -75,13 +84,26 @@ fn test_get_knowledge_by_id() {
     assert!(result.is_some(), "Should find knowledge by graph_id");
 
     let detail = result.unwrap();
-    assert!(detail.title.contains("programming"), "Title should contain domain name");
-    assert!(detail.text.contains("Rust ownership"), "Text should contain imported content");
+    assert!(
+        detail.title.contains("programming"),
+        "Title should contain domain name"
+    );
+    assert!(
+        detail.text.contains("Rust ownership"),
+        "Text should contain imported content"
+    );
     assert!(!detail.keywords.is_empty(), "Keywords should not be empty");
     assert!(detail.created_at > 0, "Created timestamp should be set");
-    assert!(detail.updated_at >= detail.created_at, "Updated should >= created");
+    assert!(
+        detail.updated_at >= detail.created_at,
+        "Updated should >= created"
+    );
 
-    println!("✅ test_get_knowledge_by_id: title='{}' text={}chars", detail.title, detail.text.len());
+    println!(
+        "✅ test_get_knowledge_by_id: title='{}' text={}chars",
+        detail.title,
+        detail.text.len()
+    );
 }
 
 // ============================================================================
@@ -127,16 +149,27 @@ fn test_update_knowledge_title() {
 
     // Update title
     let new_title = "Advanced Rust Programming Concepts".to_string();
-    let summary = db.update_knowledge_title(&graph_id, new_title.clone()).unwrap();
+    let summary = db
+        .update_knowledge_title(&graph_id, new_title.clone())
+        .unwrap();
     assert_eq!(summary.title, new_title, "Title should be updated");
-    assert!(summary.updated_at >= before.updated_at, "Updated_at should advance");
+    assert!(
+        summary.updated_at >= before.updated_at,
+        "Updated_at should advance"
+    );
 
     // Verify persistence by reading again
     let after = db.get_knowledge(&graph_id).unwrap().unwrap();
     assert_eq!(after.title, new_title, "Title change should persist");
-    assert_ne!(after.title, initial_title, "New title should differ from old");
+    assert_ne!(
+        after.title, initial_title,
+        "New title should differ from old"
+    );
 
-    println!("✅ test_update_knowledge_title: '{}' -> '{}'", initial_title, after.title);
+    println!(
+        "✅ test_update_knowledge_title: '{}' -> '{}'",
+        initial_title, after.title
+    );
 }
 
 // ============================================================================
@@ -189,7 +222,11 @@ fn test_list_knowledge_pagination() {
 
     // Verify items have domain names (not Rust Debug format)
     for item in &r2.items {
-        assert!(item.domain.len() >= 4, "Domain should be meaningful string, got '{}'", item.domain);
+        assert!(
+            item.domain.len() >= 4,
+            "Domain should be meaningful string, got '{}'",
+            item.domain
+        );
     }
 
     // Query all (page_size=10)
@@ -203,6 +240,10 @@ fn test_list_knowledge_pagination() {
     let r3 = db.list_knowledge(q3).unwrap();
     assert_eq!(r3.items.len(), 5, "Should return all 5 items");
 
-    println!("✅ test_list_knowledge_pagination: total={}, page1={}, page2={}",
-             r1.total, r1.items.len(), r2.items.len());
+    println!(
+        "✅ test_list_knowledge_pagination: total={}, page1={}, page2={}",
+        r1.total,
+        r1.items.len(),
+        r2.items.len()
+    );
 }

@@ -142,6 +142,9 @@ pub enum MemHopError {
 
     #[error("Configuration error: {0}")]
     ConfigError(String),
+
+    #[error("Encoder error: {0}")]
+    EncoderError(String),
 }
 
 pub type Result<T> = std::result::Result<T, MemHopError>;
@@ -156,7 +159,7 @@ pub struct MemHop {
     btree: BTree,
     sparse_index: SparseIndex,
     session_manager: SessionManager,
-    encoder: Option<Box<dyn crate::encoder::ipc::Encoder + Send + Sync>>, // Optional encoder for batch operations
+    encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>>,
     closed: bool, // Prevent Drop from re-checkpointing after close()
 }
 
@@ -301,25 +304,25 @@ impl MemHop {
         // 6. Initialize SessionManager
         let session_manager = SessionManager::new();
 
-        // 8. Initialize encoder automatically from config
-        let encoder: Option<Box<dyn crate::encoder::ipc::Encoder + Send + Sync>> = {
-            use crate::encoder::ipc::{IpcEncoder, MockEncoder};
+        // 8. Initialize encoder from config (gRPC over UDS)
+        let encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>> = {
+            use crate::encoder::GrpcEncoder;
 
-            let ipc = IpcEncoder::new(
-                config.encoder_socket.clone(),
-                config.vector_dim,
-                "dense".to_string(),
-            );
+            let grpc_addr = config
+                .encoder_grpc_addr
+                .clone()
+                .or_else(|| std::env::var("MEMHOP_ENCODER_GRPC_ADDR").ok());
 
-            if ipc.is_available() {
-                Some(Box::new(ipc))
+            if let Some(addr) = grpc_addr {
+                match GrpcEncoder::new(&addr, config.vector_dim) {
+                    Ok(enc) => Some(Box::new(enc)),
+                    Err(e) => {
+                        eprintln!("Warning: gRPC encoder at {} unavailable: {}", addr, e);
+                        None
+                    }
+                }
             } else {
-                // Fallback to MockEncoder if socket is not available
-                eprintln!(
-                    "Warning: Encoder socket {:?} not available, using MockEncoder fallback",
-                    config.encoder_socket
-                );
-                Some(Box::new(MockEncoder::new(config.vector_dim)))
+                None
             }
         };
 
@@ -350,10 +353,6 @@ impl MemHop {
     pub fn search_memory(&mut self, query: SearchQuery) -> Result<SearchResult> {
         use crate::query::search::search_memory as search_impl;
 
-        // Get encoder reference if available
-        let encoder_ref: Option<&(dyn crate::encoder::ipc::Encoder + Send + Sync)> =
-            self.encoder.as_deref();
-
         search_impl(
             &mut self.mmap,
             &mut self.header,
@@ -361,7 +360,7 @@ impl MemHop {
             &mut self.btree,
             &mut self.sparse_index,
             self.config.vector_dim,
-            encoder_ref,
+            self.encoder.as_deref(),
         )
     }
 
@@ -728,14 +727,11 @@ impl MemHop {
         Ok(())
     }
 
-    /// Set a custom encoder for batch operations
+    /// Set a custom encoder for vector operations
     ///
     /// # Arguments
-    /// * `encoder` - Encoder implementation (e.g., MockEncoder, IpcEncoder)
-    pub fn set_encoder<E: crate::encoder::ipc::Encoder + Send + Sync + 'static>(
-        &mut self,
-        encoder: E,
-    ) {
+    /// * `encoder` - Encoder implementation (e.g., GrpcEncoder)
+    pub fn set_encoder<E: crate::encoder::Encoder + Send + Sync + 'static>(&mut self, encoder: E) {
         self.encoder = Some(Box::new(encoder));
     }
 
@@ -756,36 +752,19 @@ impl MemHop {
         &mut self,
         batch: crate::query::batch::StoreBatch,
     ) -> Result<crate::query::batch::BatchReport> {
-        use crate::encoder::ipc::MockEncoder;
         use crate::query::batch::batch_store;
 
-        // Use provided encoder or create a mock one
-        let result = if let Some(ref enc) = self.encoder {
-            // Use the configured encoder
-            batch_store(
-                &mut self.mmap,
-                &mut self.header,
-                batch,
-                &mut self.btree,
-                &mut self.sparse_index,
-                self.config.vector_dim,
-                enc.as_ref(),
-            )
-        } else {
-            // Fallback to MockEncoder (created on-the-fly)
-            let mock = MockEncoder::new(self.config.vector_dim);
-            batch_store(
-                &mut self.mmap,
-                &mut self.header,
-                batch,
-                &mut self.btree,
-                &mut self.sparse_index,
-                self.config.vector_dim,
-                &mock,
-            )
-        };
-
-        result
+        batch_store(
+            &mut self.mmap,
+            &mut self.header,
+            batch,
+            &mut self.btree,
+            &mut self.sparse_index,
+            self.config.vector_dim,
+            self.encoder.as_deref().ok_or_else(|| {
+                MemHopError::EncoderError("No encoder configured for batch_store".to_string())
+            })?,
+        )
     }
 
     /// Checkpoint: save indices to disk and update header

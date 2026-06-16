@@ -117,11 +117,8 @@ fn run_tests(lib: &Library, run_dream: bool, api_key: &str) {
         // ====================================================================
         println!("\n━━━ Phase 1: 打开数据库 ━━━");
 
-        let config_json = CString::new(format!(
-            r#"{{"db_path":"{}","encoder_socket":"/tmp/memhop_test.sock","vector_dim":384}}"#,
-            db_path
-        ))
-        .unwrap();
+        let config_json =
+            CString::new(format!(r#"{{"db_path":"{}","vector_dim":384}}"#, db_path)).unwrap();
         let handle = timed!("memhop_open()", memhop_open(config_json.as_ptr()));
         assert!(!handle.is_null(), "open failed");
         println!("  ✅ Handle: {:p}", handle);
@@ -413,11 +410,8 @@ fn run_tests(lib: &Library, run_dream: bool, api_key: &str) {
 
             let db_path2 = "/tmp/memhop_ffi_dream_binary.meh";
             let _ = std::fs::remove_file(db_path2);
-            let cfg2 = CString::new(format!(
-                r#"{{"db_path":"{}","encoder_socket":"/tmp/memhop_test.sock","vector_dim":384}}"#,
-                db_path2
-            ))
-            .unwrap();
+            let cfg2 =
+                CString::new(format!(r#"{{"db_path":"{}","vector_dim":384}}"#, db_path2)).unwrap();
             let h = memhop_open(cfg2.as_ptr());
             assert!(!h.is_null());
 

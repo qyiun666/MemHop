@@ -6,12 +6,21 @@ use memhop::query::types::SearchQuery;
 use memhop::{MemHop, MemHopConfig};
 use tempfile::TempDir;
 
+mod common;
+use common::test_encoder::TestEncoder;
+
 /// Helper: Create a new MemHop database instance
 fn create_test_db(name: &str) -> (TempDir, MemHop) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join(format!("{}.meh", name));
-    let config = MemHopConfig::new(db_path.clone(), 768);
-    let db = MemHop::open(config).unwrap();
+    let config = MemHopConfig {
+        db_path: db_path.clone(),
+        encoder_grpc_addr: None,
+        vector_dim: 768,
+        crystal_path: None,
+    };
+    let mut db = MemHop::open(config).unwrap();
+    db.set_encoder(TestEncoder::new(768));
     (temp_dir, db)
 }
 
@@ -70,10 +79,19 @@ fn test_search_empty_db_auto_create_0() {
     let result = db.search_memory(query).unwrap();
 
     // Should return empty results
-    assert!(result.contexts.is_empty(), "L2 contexts should be empty on empty database");
+    assert!(
+        result.contexts.is_empty(),
+        "L2 contexts should be empty on empty database"
+    );
     assert!(result.l3_ids.is_empty(), "L3 IDs should be empty");
-    assert!(result.archive_refs.is_empty(), "Archive refs should be empty");
-    assert!(result.profile.is_none(), "L0 profile should be None on empty database");
+    assert!(
+        result.archive_refs.is_empty(),
+        "Archive refs should be empty"
+    );
+    assert!(
+        result.profile.is_none(),
+        "L0 profile should be None on empty database"
+    );
 }
 
 // ============================================================================
@@ -89,14 +107,24 @@ fn test_search_empty_db_auto_create_1() {
     let result = db.search_memory(query).unwrap();
 
     // Should automatically create a new L2 context
-    assert_eq!(result.contexts.len(), 1, "Should have exactly 1 auto-created L2 context");
+    assert_eq!(
+        result.contexts.len(),
+        1,
+        "Should have exactly 1 auto-created L2 context"
+    );
 
     let ctx = &result.contexts[0];
     assert!(!ctx.id.is_empty(), "Context ID should not be empty");
-    assert!(ctx.title.contains("Learn Rust"), "Context title should contain first part of dialogue");
+    assert!(
+        ctx.title.contains("Learn Rust"),
+        "Context title should contain first part of dialogue"
+    );
 
     // Verify archive_refs is empty for auto-created
-    assert!(ctx.archive_refs.is_empty(), "Auto-created context should have no archive refs");
+    assert!(
+        ctx.archive_refs.is_empty(),
+        "Auto-created context should have no archive refs"
+    );
 }
 
 // ============================================================================
@@ -144,7 +172,11 @@ fn test_search_with_data_auto_create_1_empty_result() {
     let result2 = db.search_memory(query2).unwrap();
 
     // Should create a new context because the query is unrelated
-    assert_eq!(result2.contexts.len(), 1, "Should create new context for unrelated query");
+    assert_eq!(
+        result2.contexts.len(),
+        1,
+        "Should create new context for unrelated query"
+    );
 
     // Verify it's a different context
     assert_ne!(
@@ -175,13 +207,19 @@ fn test_search_with_context_id_filter() {
     let result3 = db.search_memory(query3).unwrap();
 
     // Should find Context A via context_id
-    assert!(!result3.contexts.is_empty(), "Should find context via context_id");
+    assert!(
+        !result3.contexts.is_empty(),
+        "Should find context via context_id"
+    );
 
     // Search with non-existent context_id
     let query5 = search_query_with_context_id("anything", "nonexistentid123456");
     let result5 = db.search_memory(query5).unwrap();
     // Result depends on implementation - just verify no panic
-    println!("Non-existent context_id result: {} contexts", result5.contexts.len());
+    println!(
+        "Non-existent context_id result: {} contexts",
+        result5.contexts.len()
+    );
 }
 
 // ============================================================================
@@ -232,13 +270,21 @@ fn test_search_multiple_auto_creates() {
     for dialogue in &dialogues {
         let query = search_query_with_create(dialogue);
         let result = db.search_memory(query).unwrap();
-        assert_eq!(result.contexts.len(), 1, "Should create 1 context per dialogue");
+        assert_eq!(
+            result.contexts.len(),
+            1,
+            "Should create 1 context per dialogue"
+        );
         created_ids.push(result.contexts[0].id.clone());
     }
 
     // Verify all IDs are unique
     let unique_ids: std::collections::HashSet<_> = created_ids.iter().collect();
-    assert_eq!(unique_ids.len(), dialogues.len(), "All context IDs should be unique");
+    assert_eq!(
+        unique_ids.len(),
+        dialogues.len(),
+        "All context IDs should be unique"
+    );
 }
 
 // ============================================================================
@@ -287,7 +333,10 @@ fn test_search_auto_create_always_creates() {
 
     // auto_create=1 always creates a new L2 context (skip retrieval)
     assert_eq!(result2.contexts.len(), 1, "Should create a new context");
-    assert_ne!(result2.contexts[0].id, first_id, "New context ID should be different");
+    assert_ne!(
+        result2.contexts[0].id, first_id,
+        "New context ID should be different"
+    );
 }
 
 // ============================================================================
@@ -305,7 +354,10 @@ fn test_search_empty_dialogue() {
     // Should still create a context (even with empty title)
     // or return empty - depends on implementation
     // For now, just verify it doesn't panic
-    println!("Empty dialogue result: {} L2 contexts", result.contexts.len());
+    println!(
+        "Empty dialogue result: {} L2 contexts",
+        result.contexts.len()
+    );
 }
 
 // ============================================================================
@@ -321,11 +373,18 @@ fn test_search_long_dialogue() {
     let query = search_query_with_create(&long_dialogue);
     let result = db.search_memory(query).unwrap();
 
-    assert_eq!(result.contexts.len(), 1, "Should create context from long dialogue");
+    assert_eq!(
+        result.contexts.len(),
+        1,
+        "Should create context from long dialogue"
+    );
 
     // Title should be truncated to 50 characters
     let ctx = &result.contexts[0];
-    assert!(ctx.title.len() <= 50, "Title should be truncated to 50 chars");
+    assert!(
+        ctx.title.len() <= 50,
+        "Title should be truncated to 50 chars"
+    );
 }
 
 // ============================================================================
@@ -360,7 +419,10 @@ fn test_search_auto_create_chinese() {
 
     assert_eq!(result.contexts.len(), 1, "Should handle Chinese characters");
     let ctx = &result.contexts[0];
-    assert!(ctx.title.contains("学习Rust"), "Title should contain Chinese text");
+    assert!(
+        ctx.title.contains("学习Rust"),
+        "Title should contain Chinese text"
+    );
 }
 
 // ============================================================================
@@ -376,7 +438,10 @@ fn test_search_l0_profile_none() {
     let result = db.search_memory(query).unwrap();
 
     // L0 profile should be None since we haven't set it
-    assert!(result.profile.is_none(), "L0 profile should be None on fresh database");
+    assert!(
+        result.profile.is_none(),
+        "L0 profile should be None on fresh database"
+    );
 }
 
 // ============================================================================
@@ -392,5 +457,8 @@ fn test_search_auto_create_no_l3() {
     let result = db.search_memory(query).unwrap();
 
     assert_eq!(result.contexts.len(), 1);
-    assert!(result.l3_ids.is_empty(), "Auto-created context should have no L3 refs");
+    assert!(
+        result.l3_ids.is_empty(),
+        "Auto-created context should have no L3 refs"
+    );
 }

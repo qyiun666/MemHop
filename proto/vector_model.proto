@@ -1,0 +1,38 @@
+syntax = "proto3";
+package vector_model;
+
+service VectorModelService {
+  rpc Encode (EncodeRequest) returns (EncodeResponse);
+  rpc BatchEncode (BatchEncodeRequest) returns (BatchEncodeResponse);
+  rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+message EncodeRequest {
+  string text = 1;
+}
+
+message EncodeResponse {
+  repeated float embedding = 1;
+  int32 dimension = 2;
+}
+
+message BatchEncodeRequest {
+  repeated string texts = 1;
+}
+
+message BatchEncodeResponse {
+  repeated Embedding embeddings = 1;
+}
+
+message Embedding {
+  repeated float values = 1;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse {
+  bool healthy = 1;
+  string socket = 2;
+  string model_name = 3;
+  int32 dimension = 4;
+}

@@ -131,7 +131,7 @@ pub fn search_memory(
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     vector_dim: usize,
-    encoder: Option<&(dyn crate::encoder::ipc::Encoder + Send + Sync)>,
+    encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
 ) -> Result<SearchResult, MemHopError> {
     let _page_count = header.page_count;
 
@@ -238,7 +238,7 @@ pub fn search_memory(
         )?;
 
         let vector_results = if let Some(enc) = encoder {
-            let output = enc.encode(&search_text);
+            let output = enc.encode(&search_text)?;
             if !output.dense.is_empty() {
                 retrieve_l2_vector(
                     data,
@@ -253,7 +253,9 @@ pub fn search_memory(
                 vec![]
             }
         } else {
-            vec![]
+            return Err(MemHopError::EncoderError(
+                "No encoder configured for vector search".to_string(),
+            ));
         };
 
         // Step 4: Merge & rank (ngram 0.2, BM25 0.5, vector 0.3)

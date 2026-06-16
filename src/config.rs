@@ -6,8 +6,9 @@ use std::path::PathBuf;
 pub struct MemHopConfig {
     /// Path to the .meh database file
     pub db_path: PathBuf,
-    /// Path to encoder socket (reserved for v0.31+)
-    pub encoder_socket: PathBuf,
+    /// gRPC encoder address (Unix socket). Defaults to meowvec UDS path.
+    /// Environment variable MEMHOP_ENCODER_GRPC_ADDR overrides this.
+    pub encoder_grpc_addr: Option<String>,
     /// Vector dimension (specified at creation time)
     pub vector_dim: usize,
     /// Crystal knowledge storage path (optional, default: same directory as db_path)
@@ -15,11 +16,11 @@ pub struct MemHopConfig {
 }
 
 impl MemHopConfig {
-    /// Create a new configuration with default encoder socket path
+    /// Create a new configuration with default gRPC address
     pub fn new(db_path: PathBuf, vector_dim: usize) -> Self {
         Self {
             db_path,
-            encoder_socket: std::env::temp_dir().join("memhop_encoder.sock"),
+            encoder_grpc_addr: Some(crate::encoder::DEFAULT_ENCODER_ADDR.to_string()),
             vector_dim,
             crystal_path: None,
         }

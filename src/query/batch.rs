@@ -1,5 +1,5 @@
 // Batch Store API implementation
-use crate::encoder::ipc::Encoder;
+use crate::encoder::Encoder;
 use crate::file::free_list::allocate_from_free_list;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
@@ -141,7 +141,7 @@ pub fn encode_items(
         let chunks = split_long_text(&item.text, 512);
 
         for chunk in chunks {
-            let output = encoder.encode(&chunk);
+            let output = encoder.encode(&chunk)?;
             encoded.push(EncodedItem {
                 text: chunk,
                 dense: output.dense,
