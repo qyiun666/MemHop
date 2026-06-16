@@ -208,6 +208,18 @@ fn test_ffi_full_lifecycle() {
         );
         assert_success(&res);
 
+        // ---- 6a. Query L1 get (single engram by ID) ----
+        let engrams = res["data"]["items"].as_array().unwrap();
+        if !engrams.is_empty() {
+            let engram_id = engrams[0]["id"].as_str().unwrap();
+            let get_cmd = format!(
+                r#"{{"command":"query_layer","layer":"l1","action":"get","get":{{"id":"{}"}}, "list":{{}}}}"#,
+                engram_id
+            );
+            let res = exec(handle, &get_cmd);
+            assert_success(&res);
+        }
+
         // ---- 7. Query L3 knowledge ----
         let res = exec(
             handle,
@@ -215,11 +227,33 @@ fn test_ffi_full_lifecycle() {
         );
         assert_success(&res);
 
-        // ---- 8. Query L4 archives ----
+        // ---- 7a. Query L3 get (single knowledge by ID) ----
+        let knowledge_items = res["data"]["items"].as_array().unwrap();
+        let mut knowledge_id: Option<String> = None;
+        if !knowledge_items.is_empty() {
+            let kid = knowledge_items[0]["id"].as_str().unwrap();
+            knowledge_id = Some(kid.to_string());
+            let get_cmd = format!(
+                r#"{{"command":"query_layer","layer":"l3","action":"get","get":{{"id":"{}"}}, "list":{{}}}}"#,
+                kid
+            );
+            let res = exec(handle, &get_cmd);
+            assert_success(&res);
+        }
+
+        // ---- 8. Query L4 archives (generic) ----
         let res = exec(
             handle,
             r#"{"command":"query_layer","layer":"l4","action":"list","list":{"page":1,"page_size":10}}"#,
         );
+        assert_success(&res);
+
+        // ---- 8a. Query L4 archives by topic_id ----
+        let list_by_topic = format!(
+            r#"{{"command":"query_layer","layer":"l4","action":"list","list":{{"page":1,"page_size":10,"topic_id":"{}"}}}}"#,
+            l2_id
+        );
+        let res = exec(handle, &list_by_topic);
         assert_success(&res);
 
         // ---- 9. Query L5 crystals ----
@@ -246,12 +280,30 @@ fn test_ffi_full_lifecycle() {
 
         // ---- 12. Verify updated title ----
         let get_topic_cmd = format!(
-            r#"{{"command":"query_layer","layer":"l2","action":"get","get":{{"id":"{}"}},"list":{{}}}}"#,
+            r#"{{"command":"query_layer","layer":"l2","action":"get","get":{{"id":"{}"}}, "list":{{}}}}"#,
             l2_id
         );
         let res = exec(handle, &get_topic_cmd);
         assert_success(&res);
-
+        
+        // ---- 12a. Update L3 title ----
+        if let Some(kid) = &knowledge_id {
+            let update_l3_cmd = format!(
+                r#"{{"command":"update_title","layer":"l3","params":{{"id":"{}","new_title":"Updated Knowledge"}}}}"#,
+                kid
+            );
+            let res = exec(handle, &update_l3_cmd);
+            assert_success(&res);
+        }
+        
+        // ---- 12b. Update L5 title (test error path: no crystals yet) ----
+        let res = exec(
+            handle,
+            r#"{"command":"update_title","layer":"l5","params":{"id":"nonexistent","new_title":"test"}}"#,
+        );
+        // L5 update with nonexistent ID returns error - that's correct
+        assert_error(&res);
+        
         // ---- 13. Session management ----
         // activate
         let session_activate = format!(
@@ -306,6 +358,14 @@ fn test_ffi_full_lifecycle() {
             r#"{"command":"import","params":{"action":"import","target_layer":"knowledge","mode":"merge","data":{"Knowledge":[{"title":"Rust Ownership","domain":"programming","knowledge_type":"Conceptual","text":"Rust ownership system...","keywords":["rust","ownership"]}]}}}"#,
         );
         assert_success(&res);
+
+        // ---- 16a. Import build_l3 from path ----
+        let res = exec(
+            handle,
+            r#"{"command":"import","params":{"action":"build_l3","path":"/tmp"}}"#,
+        );
+        // build_l3 may succeed or fail depending on files - just check it runs
+        println!("  build_l3 result: success={}", res["success"].as_bool().unwrap_or(false));
 
         // ---- 17. Batch store ----
         let res = exec(

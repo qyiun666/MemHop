@@ -82,12 +82,13 @@ fn run_tests(lib: &Library, run_dream: bool, api_key: &str) {
     unsafe {
         // 加载 4 个函数符号
         let memhop_open: MemHopOpen = *lib.get(b"memhop_open").expect("memhop_open not found");
-        let memhop_execute: MemHopExecute =
-            *lib.get(b"memhop_execute").expect("memhop_execute not found");
-        let _memhop_free_string: MemHopFreeString =
-            *lib.get(b"memhop_free_string").expect("memhop_free_string not found");
-        let memhop_close: MemHopClose =
-            *lib.get(b"memhop_close").expect("memhop_close not found");
+        let memhop_execute: MemHopExecute = *lib
+            .get(b"memhop_execute")
+            .expect("memhop_execute not found");
+        let _memhop_free_string: MemHopFreeString = *lib
+            .get(b"memhop_free_string")
+            .expect("memhop_free_string not found");
+        let memhop_close: MemHopClose = *lib.get(b"memhop_close").expect("memhop_close not found");
 
         let db_path = "/tmp/memhop_ffi_binary_test.meh";
         let _ = std::fs::remove_file(db_path);
@@ -98,7 +99,10 @@ fn run_tests(lib: &Library, run_dream: bool, api_key: &str) {
         println!("\n━━━ Phase 0: FFI 边界 ━━━");
 
         timed!("memhop_open(null)", memhop_open(ptr::null()));
-        assert!(memhop_open(ptr::null()).is_null(), "null config should return null");
+        assert!(
+            memhop_open(ptr::null()).is_null(),
+            "null config should return null"
+        );
 
         timed!("memhop_open(invalid JSON)", {
             let cfg = CString::new("not json").unwrap();
@@ -306,7 +310,10 @@ fn run_tests(lib: &Library, run_dream: bool, api_key: &str) {
             handle,
             r#"{"command":"search","dialogue":"Second topic","auto_create":1,"context_limit":5,"min_score":0.0}"#,
         );
-        let id2 = res2["data"]["contexts"][0]["id"].as_str().unwrap().to_string();
+        let id2 = res2["data"]["contexts"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         let merge_cmd = format!(
             r#"{{"command":"merge_topics","primary_id":"{}","secondary_ids":["{}"]}}"#,
@@ -420,7 +427,10 @@ fn run_tests(lib: &Library, run_dream: bool, api_key: &str) {
                 h,
                 r#"{"command":"search","dialogue":"Learning Rust memory management","auto_create":1,"context_limit":5,"min_score":0.0}"#,
             );
-            let tid = res["data"]["contexts"][0]["id"].as_str().unwrap().to_string();
+            let tid = res["data"]["contexts"][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
 
             let up = format!(
                 r#"{{"command":"update","topic_id":"{}","dialogue_text":"User: Explain Rust.\nAssistant: Rust is safe.","summary":"rust intro","action_chain":[{{"title":"intro","description":"intro","action_type":"Execute"}}]}}"#,
@@ -439,9 +449,7 @@ fn run_tests(lib: &Library, run_dream: bool, api_key: &str) {
                 r#"{{"command":"dream","api_url":"https://api.deepseek.com/v1/chat/completions","api_key":"{}","model":"deepseek-chat","api_format":1}}"#,
                 api_key
             );
-            let res = timed!("dream (DeepSeek)", {
-                exec(memhop_execute, h, &dream_cmd)
-            });
+            let res = timed!("dream (DeepSeek)", { exec(memhop_execute, h, &dream_cmd) });
             assert_success(&res, "dream");
             println!("  ✅ Dream report: {:?}", res["data"]);
 
@@ -475,8 +483,7 @@ fn main() {
             } else {
                 // fallback 到本地构建产物
                 let local = PathBuf::from(
-                    std::env::var("CARGO_MANIFEST_DIR")
-                        .unwrap_or_else(|_| ".".to_string()),
+                    std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string()),
                 )
                 .join("target/release/libmemhop.dylib");
                 local
