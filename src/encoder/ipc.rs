@@ -3,9 +3,11 @@
 use half::f16;
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::time::Duration;
+
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
 
 use crate::MemHopError;
 
@@ -27,7 +29,8 @@ pub struct EncoderOutput {
     pub sparse: HashMap<String, f32>,
 }
 
-/// IPC-based encoder for connecting to external encoding service
+/// IPC-based encoder for connecting to external encoding service (Unix only)
+#[cfg(unix)]
 #[allow(dead_code)]
 pub struct IpcEncoder {
     socket_path: PathBuf,
@@ -35,6 +38,7 @@ pub struct IpcEncoder {
     mode: String,
 }
 
+#[cfg(unix)]
 impl IpcEncoder {
     /// Create new IPC encoder
     pub fn new(socket_path: PathBuf, dim: usize, mode: String) -> Self {
@@ -46,41 +50,24 @@ impl IpcEncoder {
     }
 
     /// Check if the encoder socket is available
-    ///
-    /// Attempts to connect to the Unix socket.
-    /// Returns true if connection succeeds, false otherwise.
     pub fn is_available(&self) -> bool {
         UnixStream::connect(&self.socket_path).is_ok()
     }
 
     /// Try to encode text via Unix socket communication
-    ///
-    /// # Protocol
-    /// Request: [text_len: u32 LE][text bytes]
-    /// Response: [dim: u16 LE][dense: f16 x dim][sparse_count: u32][key_len(u16) + key + weight(f32)] x N
-    ///
-    /// # Errors
-    /// Returns MemHopError if:
-    /// - Socket connection fails
-    /// - IO operations fail
-    /// - UTF-8 decoding fails
     fn try_encode(&self, text: &str) -> Result<EncoderOutput, MemHopError> {
-        // 1. Connect to Unix socket
         let mut stream = UnixStream::connect(&self.socket_path)
             .map_err(MemHopError::Io)?;
 
-        // Set timeouts
         stream.set_read_timeout(Some(Duration::from_secs(5)))
             .map_err(MemHopError::Io)?;
         stream.set_write_timeout(Some(Duration::from_secs(2)))
             .map_err(MemHopError::Io)?;
 
-        // 2. Send request: [text_len: u32 LE][text bytes]
         let text_bytes = text.as_bytes();
         stream.write_all(&(text_bytes.len() as u32).to_le_bytes())?;
         stream.write_all(text_bytes)?;
 
-        // 3. Receive response: [dim: u16 LE][dense: f16 × dim][sparse_count: u32]...
         let mut dim_buf = [0u8; 2];
         stream.read_exact(&mut dim_buf)?;
         let dim = u16::from_le_bytes(dim_buf) as usize;
@@ -118,6 +105,7 @@ impl IpcEncoder {
     }
 }
 
+#[cfg(unix)]
 impl Encoder for IpcEncoder {
     fn encode(&self, text: &str) -> EncoderOutput {
         match self.try_encode(text) {
@@ -129,6 +117,44 @@ impl Encoder for IpcEncoder {
                     sparse: HashMap::new(),
                 }
             }
+        }
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn mode(&self) -> &str {
+        &self.mode
+    }
+}
+
+/// Stub IpcEncoder for non-Unix platforms (Windows)
+/// Always returns unavailable, forcing MockEncoder fallback.
+#[cfg(not(unix))]
+#[allow(dead_code)]
+pub struct IpcEncoder {
+    dim: usize,
+    mode: String,
+}
+
+#[cfg(not(unix))]
+impl IpcEncoder {
+    pub fn new(_socket_path: PathBuf, dim: usize, mode: String) -> Self {
+        Self { dim, mode }
+    }
+
+    pub fn is_available(&self) -> bool {
+        false // Unix sockets not available on Windows
+    }
+}
+
+#[cfg(not(unix))]
+impl Encoder for IpcEncoder {
+    fn encode(&self, _text: &str) -> EncoderOutput {
+        EncoderOutput {
+            dense: vec![f16::from_f32(0.0); self.dim],
+            sparse: HashMap::new(),
         }
     }
 
