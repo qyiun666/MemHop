@@ -93,7 +93,7 @@ pub unsafe extern "C" fn memhop_execute(
         // 3. Lock handle and dispatch
         let handle_ref = &*handle;
         match handle_ref.0.lock() {
-            Ok(mut db) => match dispatch(&mut *db, command) {
+            Ok(mut db) => match dispatch(&mut db, command) {
                 Ok(data) => FfiResponse::ok(data),
                 Err(e) => FfiResponse::err(e),
             },
