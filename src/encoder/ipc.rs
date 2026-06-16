@@ -5,13 +5,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[cfg(unix)]
+use crate::MemHopError;
+#[cfg(unix)]
 use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 #[cfg(unix)]
 use std::time::Duration;
-#[cfg(unix)]
-use crate::MemHopError;
 
 /// Encoder trait for external encoding service
 pub trait Encoder: Send + Sync {

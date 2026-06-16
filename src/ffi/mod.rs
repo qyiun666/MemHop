@@ -31,6 +31,10 @@ pub struct MemHopHandle(Mutex<MemHop>);
 #[no_mangle]
 pub unsafe extern "C" fn memhop_open(config_json: *const c_char) -> *mut MemHopHandle {
     let result = std::panic::catch_unwind(|| -> Result<*mut MemHopHandle, String> {
+        // 0. Validate pointer
+        if config_json.is_null() {
+            return Err("config_json is null".to_string());
+        }
         // 1. Parse config JSON
         let config_str = CStr::from_ptr(config_json)
             .to_str()
@@ -79,7 +83,12 @@ pub unsafe extern "C" fn memhop_execute(
             return FfiResponse::err("handle is null");
         }
 
-        // 2. Parse command JSON
+        // 2. Validate command pointer
+        if command_json.is_null() {
+            return FfiResponse::err("command_json is null");
+        }
+
+        // 3. Parse command JSON
         let cmd_str = match CStr::from_ptr(command_json).to_str() {
             Ok(s) => s,
             Err(e) => return FfiResponse::err(format!("invalid UTF-8 in command: {}", e)),

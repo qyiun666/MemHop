@@ -1,0 +1,598 @@
+//! FFI Integration Tests — 通过 4 个 extern "C" 函数测试完整 API
+//!
+//! 测试策略：
+//! - 所有调用走 FFI 层（extern "C"），验证 JSON-in JSON-out 协议
+//! - 覆盖 11 个命令 + 4 个 C 函数 + 边界条件
+//! - 模拟 Agent 接入流程（open → search → update → query → close）
+//! - Dream 命令需设置 MEMHOP_DEEPSEEK_KEY 环境变量（可选）
+//! - 向量编码自动降级到 MockEncoder（无 IPC socket 时）
+
+use std::ffi::{CStr, CString};
+use std::ptr;
+
+use memhop::ffi::{memhop_close, memhop_execute, memhop_free_string, memhop_open, MemHopHandle};
+
+// ============================================================================
+// 辅助函数
+// ============================================================================
+
+/// 调用 memhop_execute 并返回解析后的 serde_json::Value
+unsafe fn exec(handle: *mut MemHopHandle, json: &str) -> serde_json::Value {
+    let cmd = CString::new(json).unwrap();
+    let res_ptr = memhop_execute(handle, cmd.as_ptr());
+    assert!(!res_ptr.is_null(), "memhop_execute returned null");
+    let res_str = CStr::from_ptr(res_ptr).to_str().unwrap().to_string();
+    memhop_free_string(res_ptr);
+    serde_json::from_str(&res_str).expect("response is not valid JSON")
+}
+
+/// 创建 CString 配置 JSON
+fn config_json(db_path: &str) -> CString {
+    CString::new(format!(
+        r#"{{"db_path":"{}","encoder_socket":"/tmp/memhop_test.sock","vector_dim":384}}"#,
+        db_path
+    ))
+    .unwrap()
+}
+
+/// 断言响应 success=true
+fn assert_success(res: &serde_json::Value) {
+    assert!(
+        res["success"].as_bool().unwrap_or(false),
+        "expected success, got: {}",
+        res
+    );
+}
+
+/// 断言响应 success=false，并返回 error 消息
+fn assert_error(res: &serde_json::Value) -> String {
+    assert!(
+        !res["success"].as_bool().unwrap_or(true),
+        "expected error, got: {}",
+        res
+    );
+    res["error"].as_str().unwrap_or("").to_string()
+}
+
+// ============================================================================
+// 测试：4 个 C 函数边界条件
+// ============================================================================
+
+#[test]
+fn test_ffi_open_null_config() {
+    unsafe {
+        let handle = memhop_open(ptr::null());
+        assert!(handle.is_null(), "null config should return null handle");
+    }
+}
+
+#[test]
+fn test_ffi_open_invalid_json() {
+    unsafe {
+        let cfg = CString::new("not json").unwrap();
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(handle.is_null(), "invalid JSON should return null handle");
+    }
+}
+
+#[test]
+fn test_ffi_open_invalid_config() {
+    unsafe {
+        let cfg = CString::new(r#"{"db_path":"","vector_dim":0}"#).unwrap();
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(handle.is_null(), "invalid config should return null handle");
+    }
+}
+
+#[test]
+fn test_ffi_execute_null_handle() {
+    unsafe {
+        let res = exec(ptr::null_mut(), r#"{"command":"sync"}"#);
+        assert_error(&res);
+    }
+}
+
+#[test]
+fn test_ffi_execute_null_command() {
+    unsafe {
+        let cfg = config_json("/tmp/memhop_ffi_null_cmd.meh");
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null(), "open failed");
+
+        let res_ptr = memhop_execute(handle, ptr::null());
+        assert!(!res_ptr.is_null(), "expected error response, not null");
+        let res_str = CStr::from_ptr(res_ptr).to_str().unwrap().to_string();
+        memhop_free_string(res_ptr);
+        let res: serde_json::Value =
+            serde_json::from_str(&res_str).expect("response is not valid JSON");
+        assert_error(&res);
+
+        memhop_close(handle);
+    }
+}
+
+#[test]
+fn test_ffi_execute_invalid_json() {
+    unsafe {
+        let cfg = config_json("/tmp/memhop_ffi_invalid_cmd.meh");
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null());
+        let res = exec(handle, "not json");
+        assert_error(&res);
+        memhop_close(handle);
+    }
+}
+
+#[test]
+fn test_ffi_execute_invalid_command() {
+    unsafe {
+        let cfg = config_json("/tmp/memhop_ffi_unknown_cmd.meh");
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null());
+        let res = exec(handle, r#"{"command":"nonexistent"}"#);
+        assert_error(&res);
+        memhop_close(handle);
+    }
+}
+
+#[test]
+fn test_ffi_free_string_null() {
+    unsafe {
+        // Calling memhop_free_string(null) should be a safe no-op
+        memhop_free_string(ptr::null_mut());
+    }
+}
+
+#[test]
+fn test_ffi_close_null() {
+    unsafe {
+        // Calling memhop_close(null) should be a safe no-op
+        memhop_close(ptr::null_mut());
+    }
+}
+
+// ============================================================================
+// 测试：完整生命周期（open → commands → close）
+// ============================================================================
+
+#[test]
+fn test_ffi_full_lifecycle() {
+    let db_path = "/tmp/memhop_ffi_lifecycle.meh";
+    let _ = std::fs::remove_file(db_path);
+
+    unsafe {
+        // ---- 1. Open ----
+        let cfg = config_json(db_path);
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null(), "memhop_open failed");
+
+        // ---- 2. Search with auto_create ----
+        let res = exec(
+            handle,
+            r#"{"command":"search","dialogue":"Rust programming","auto_create":1,"context_limit":5,"min_score":0.0}"#,
+        );
+        assert_success(&res);
+        let contexts = res["data"]["contexts"].as_array().unwrap();
+        assert!(!contexts.is_empty(), "auto_create should create L2");
+        let l2_id = contexts[0]["id"].as_str().unwrap().to_string();
+
+        // ---- 3. Update L2 with dialogue ----
+        let update_cmd = format!(
+            r#"{{"command":"update","topic_id":"{}","dialogue_text":"User: What is Rust?\nAssistant: Rust is a systems language.","action_chain":[{{"title":"answer","description":"explain rust","action_type":"Execute"}}]}}"#,
+            l2_id
+        );
+        let res = exec(handle, &update_cmd);
+        assert_success(&res);
+
+        // ---- 4. Query L0 profile ----
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l0","action":"get","get":{},"list":{}}"#,
+        );
+        assert_success(&res);
+        println!("  L0 profile: {:?}", res["data"]);
+
+        // ---- 5. Query L2 topics ----
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l2","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+        let total_l2 = res["data"]["total"].as_u64().unwrap_or(0);
+        assert!(total_l2 > 0, "should have L2 topics");
+
+        // ---- 6. Query L1 engrams ----
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l1","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+
+        // ---- 7. Query L3 knowledge ----
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l3","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+
+        // ---- 8. Query L4 archives ----
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l4","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+
+        // ---- 9. Query L5 crystals ----
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l5","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+
+        // ---- 10. Update L0 profile ----
+        let res = exec(
+            handle,
+            r#"{"command":"update_title","layer":"l0","params":{"name":"FFI Agent","role":"Test Assistant"}}"#,
+        );
+        assert_success(&res);
+
+        // ---- 11. Update L2 title ----
+        let update_title_cmd = format!(
+            r#"{{"command":"update_title","layer":"l2","params":{{"id":"{}","new_title":"Updated Rust Topic"}}}}"#,
+            l2_id
+        );
+        let res = exec(handle, &update_title_cmd);
+        assert_success(&res);
+
+        // ---- 12. Verify updated title ----
+        let get_topic_cmd = format!(
+            r#"{{"command":"query_layer","layer":"l2","action":"get","get":{{"id":"{}"}},"list":{{}}}}"#,
+            l2_id
+        );
+        let res = exec(handle, &get_topic_cmd);
+        assert_success(&res);
+
+        // ---- 13. Session management ----
+        // activate
+        let session_activate = format!(
+            r#"{{"command":"session","params":{{"action":"activate","topic_id":"{}","ttl_ms":300000}}}}"#,
+            l2_id
+        );
+        let res = exec(handle, &session_activate);
+        assert_success(&res);
+
+        // list active
+        let res = exec(handle, r#"{"command":"session","params":{"action":"list"}}"#);
+        assert_success(&res);
+        let active = res["data"]["active_topics"].as_array().unwrap();
+        assert!(!active.is_empty(), "should have active topics");
+
+        // adjust activation
+        let adjust_cmd = format!(
+            r#"{{"command":"session","params":{{"action":"adjust","topic_id":"{}","delta":0.5}}}}"#,
+            l2_id
+        );
+        let res = exec(handle, &adjust_cmd);
+        assert_success(&res);
+
+        // deactivate
+        let deactivate_cmd = format!(
+            r#"{{"command":"session","params":{{"action":"deactivate","topic_id":"{}"}}}}"#,
+            l2_id
+        );
+        let res = exec(handle, &deactivate_cmd);
+        assert_success(&res);
+
+        // ---- 14. Import L0 profile ----
+        let res = exec(
+            handle,
+            r#"{"command":"import","params":{"action":"import","target_layer":"profile","mode":"merge","data":{"Profile":{"name":"Imported Agent","role":"Tester"}}}}"#,
+        );
+        assert_success(&res);
+
+        // ---- 15. Import L2 topics ----
+        let res = exec(
+            handle,
+            r#"{"command":"import","params":{"action":"import","target_layer":"topic","mode":"merge","data":{"Topics":[{"title":"Python Basics","summary":"Learning Python","keywords":["python"]}]}}}"#,
+        );
+        assert_success(&res);
+
+        // ---- 16. Import L3 knowledge ----
+        let res = exec(
+            handle,
+            r#"{"command":"import","params":{"action":"import","target_layer":"knowledge","mode":"merge","data":{"Knowledge":[{"title":"Rust Ownership","domain":"programming","knowledge_type":"Conceptual","text":"Rust ownership system...","keywords":["rust","ownership"]}]}}}"#,
+        );
+        assert_success(&res);
+
+        // ---- 17. Batch store ----
+        let res = exec(
+            handle,
+            r#"{"command":"batch_store","items":[{"text":"test memory","topic_label":"test","domain_id":"test","importance":0.5,"source":{"source_type":"UserInput","source_id":null,"timestamp":0},"is_structural":false}],"session_id":"s1","turn_id":"t1"}"#,
+        );
+        assert_success(&res);
+
+        // ---- 18. Sync ----
+        let res = exec(handle, r#"{"command":"sync"}"#);
+        assert_success(&res);
+
+        // ---- 19. Close ----
+        let res = exec(handle, r#"{"command":"close"}"#);
+        assert_success(&res);
+
+        // ---- 20. Proper close (free handle) ----
+        memhop_close(handle);
+
+        // ---- 21. Verify data persists by reopening ----
+        let handle2 = memhop_open(cfg.as_ptr());
+        assert!(!handle2.is_null(), "reopen failed");
+
+        let res = exec(
+            handle2,
+            r#"{"command":"query_layer","layer":"l2","action":"list","list":{"page":1,"page_size":100}}"#,
+        );
+        assert_success(&res);
+        let total = res["data"]["total"].as_u64().unwrap_or(0);
+        assert!(total > 0, "L2 topics should persist after close/reopen");
+
+        let res = exec(
+            handle2,
+            r#"{"command":"query_layer","layer":"l0","action":"get","get":{},"list":{}}"#,
+        );
+        assert_success(&res);
+        assert!(
+            res["data"]["name"].as_str().is_some(),
+            "profile should persist"
+        );
+
+        memhop_close(handle2);
+        let _ = std::fs::remove_file(db_path);
+    }
+}
+
+// ============================================================================
+// 测试：Merge Topics
+// ============================================================================
+
+#[test]
+fn test_ffi_merge_topics() {
+    let db_path = "/tmp/memhop_ffi_merge.meh";
+    let _ = std::fs::remove_file(db_path);
+
+    unsafe {
+        let cfg = config_json(db_path);
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null());
+
+        // Create two L2s via auto_create
+        let res = exec(
+            handle,
+            r#"{"command":"search","dialogue":"Topic Alpha","auto_create":1,"context_limit":5,"min_score":0.0}"#,
+        );
+        assert_success(&res);
+        let id1 = res["data"]["contexts"][0]["id"].as_str().unwrap().to_string();
+
+        let res = exec(
+            handle,
+            r#"{"command":"search","dialogue":"Topic Beta","auto_create":1,"context_limit":5,"min_score":0.0}"#,
+        );
+        assert_success(&res);
+        let id2 = res["data"]["contexts"][0]["id"].as_str().unwrap().to_string();
+
+        // Merge them
+        let merge_cmd = format!(
+            r#"{{"command":"merge_topics","primary_id":"{}","secondary_ids":["{}"]}}"#,
+            id1, id2
+        );
+        let res = exec(handle, &merge_cmd);
+        assert_success(&res);
+
+        // Verify secondary is gone
+        let get_cmd = format!(
+            r#"{{"command":"query_layer","layer":"l2","action":"get","get":{{"id":"{}"}},"list":{{}}}}"#,
+            id2
+        );
+        let res = exec(handle, &get_cmd);
+        // After merge, secondary topic detail should return null/error
+        assert!(
+            res["data"].is_null() || !res["success"].as_bool().unwrap_or(false),
+            "secondary topic should be deleted after merge"
+        );
+
+        memhop_close(handle);
+        let _ = std::fs::remove_file(db_path);
+    }
+}
+
+// ============================================================================
+// 测试：错误处理全面覆盖
+// ============================================================================
+
+#[test]
+fn test_ffi_error_handling() {
+    let db_path = "/tmp/memhop_ffi_errors.meh";
+    let _ = std::fs::remove_file(db_path);
+
+    unsafe {
+        let cfg = config_json(db_path);
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null());
+
+        // missing field
+        let res = exec(handle, r#"{"command":"search"}"#);
+        assert_error(&res);
+
+        // unknown import action
+        let res = exec(
+            handle,
+            r#"{"command":"import","params":{"action":"unknown_action"}}"#,
+        );
+        let msg = assert_error(&res);
+        assert!(msg.contains("unknown import action"), "unexpected msg: {}", msg);
+
+        // query_layer with unsupported combination
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l4","action":"get","get":{},"list":{}}"#,
+        );
+        assert_error(&res);
+
+        // update_title with unknown layer
+        let res = exec(
+            handle,
+            r#"{"command":"update_title","layer":"l1","params":{}}"#,
+        );
+        assert_error(&res);
+
+        // session with unknown action
+        let res = exec(
+            handle,
+            r#"{"command":"session","params":{"action":"unknown"}}"#,
+        );
+        assert_error(&res);
+
+        // session activate without topic_id
+        let res = exec(
+            handle,
+            r#"{"command":"session","params":{"action":"activate"}}"#,
+        );
+        assert_error(&res);
+
+        memhop_close(handle);
+        let _ = std::fs::remove_file(db_path);
+    }
+}
+
+// ============================================================================
+// 测试：模拟 Agent 接入流程
+// ============================================================================
+
+#[test]
+fn test_ffi_agent_workflow() {
+    let db_path = "/tmp/memhop_ffi_agent.meh";
+    let _ = std::fs::remove_file(db_path);
+
+    unsafe {
+        // Agent 1: 打开数据库
+        let cfg = config_json(db_path);
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null(), "Agent: failed to open database");
+        println!("[Agent] Database opened");
+
+        // Agent 2: 设置自己的画像
+        let res = exec(
+            handle,
+            r#"{"command":"update_title","layer":"l0","params":{"name":"Coding Agent","role":"Rust Programming Assistant","personality":"Helpful and precise"}}"#,
+        );
+        assert_success(&res);
+        println!("[Agent] Profile set");
+
+        // Agent 3: 用户提问，检索记忆
+        let res = exec(
+            handle,
+            r#"{"command":"search","dialogue":"How do I fix a borrow checker error in Rust?","auto_create":1,"context_limit":5,"min_score":0.0}"#,
+        );
+        assert_success(&res);
+        let contexts = res["data"]["contexts"].as_array().unwrap();
+        assert!(!contexts.is_empty());
+        let topic_id = contexts[0]["id"].as_str().unwrap().to_string();
+        println!("[Agent] Search complete, active topic: {}", topic_id);
+
+        // Agent 4: 激活会话
+        let activate_cmd = format!(
+            r#"{{"command":"session","params":{{"action":"activate","topic_id":"{}","ttl_ms":600000}}}}"#,
+            topic_id
+        );
+        let res = exec(handle, &activate_cmd);
+        assert_success(&res);
+        println!("[Agent] Session activated");
+
+        // Agent 5: 写入对话
+        let update_cmd = format!(
+            r#"{{"command":"update","topic_id":"{}","dialogue_text":"User: How do I fix borrow checker error?\nAssistant: The borrow checker ensures memory safety. Use & instead of &mut when you don't need mutation.","summary":"borrow checker explanation","action_chain":[{{"title":"explain_borrow_checker","description":"explain how to fix borrow checker error","action_type":"Execute"}},{{"title":"provide_example","description":"show code example","action_type":"Create"}}]}}"#,
+            topic_id
+        );
+        let res = exec(handle, &update_cmd);
+        assert_success(&res);
+        println!("[Agent] Memory updated");
+
+        // Agent 6: 验证写入的对话
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l4","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+        println!("[Agent] Archives verified");
+
+        // Agent 7: 同步到磁盘
+        let res = exec(handle, r#"{"command":"sync"}"#);
+        assert_success(&res);
+        println!("[Agent] Synced to disk");
+
+        // Agent 8: 关闭
+        let res = exec(handle, r#"{"command":"close"}"#);
+        assert_success(&res);
+        memhop_close(handle);
+        println!("[Agent] Database closed");
+
+        let _ = std::fs::remove_file(db_path);
+    }
+}
+
+// ============================================================================
+// 测试：Dream（记忆整合）— 需要 DEEPSEEK_API_KEY 环境变量
+// ============================================================================
+
+#[test]
+#[ignore = "requires MEMHOP_DEEPSEEK_KEY env var and network access"]
+fn test_ffi_dream_with_deepseek() {
+    let api_key = std::env::var("MEMHOP_DEEPSEEK_KEY")
+        .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
+        .expect("Set MEMHOP_DEEPSEEK_KEY or DEEPSEEK_API_KEY to run this test");
+
+    let db_path = "/tmp/memhop_ffi_dream.meh";
+    let _ = std::fs::remove_file(db_path);
+
+    unsafe {
+        let cfg = config_json(db_path);
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null());
+
+        // 1. Create some memory first
+        let res = exec(
+            handle,
+            r#"{"command":"search","dialogue":"Learning about Rust memory management","auto_create":1,"context_limit":5,"min_score":0.0}"#,
+        );
+        assert_success(&res);
+        let contexts = res["data"]["contexts"].as_array().unwrap();
+        let topic_id = contexts[0]["id"].as_str().unwrap().to_string();
+
+        // 2. Add some content
+        let update_cmd = format!(
+            r#"{{"command":"update","topic_id":"{}","dialogue_text":"User: Explain Rust ownership.\nAssistant: Ownership is Rust's core memory management system.","summary":"ownership explanation","action_chain":[{{"title":"explain_ownership","description":"explain Rust ownership","action_type":"Execute"}}]}}"#,
+            topic_id
+        );
+        let res = exec(handle, &update_cmd);
+        assert_success(&res);
+
+        // 3. Activate the topic
+        let activate_cmd = format!(
+            r#"{{"command":"session","params":{{"action":"activate","topic_id":"{}","ttl_ms":600000}}}}"#,
+            topic_id
+        );
+        let res = exec(handle, &activate_cmd);
+        assert_success(&res);
+
+        // 4. Run dream with DeepSeek
+        let dream_cmd = format!(
+            r#"{{"command":"dream","api_url":"https://api.deepseek.com/v1/chat/completions","api_key":"{}","model":"deepseek-chat","api_format":1}}"#,
+            api_key
+        );
+        println!("[Dream] Calling DeepSeek API...");
+        let res = exec(handle, &dream_cmd);
+        assert_success(&res);
+        println!("[Dream] Complete: {:?}", res["data"]);
+
+        memhop_close(handle);
+        let _ = std::fs::remove_file(db_path);
+    }
+}
