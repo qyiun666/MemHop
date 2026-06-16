@@ -262,7 +262,10 @@ fn test_ffi_full_lifecycle() {
         assert_success(&res);
 
         // list active
-        let res = exec(handle, r#"{"command":"session","params":{"action":"list"}}"#);
+        let res = exec(
+            handle,
+            r#"{"command":"session","params":{"action":"list"}}"#,
+        );
         assert_success(&res);
         let active = res["data"]["active_topics"].as_array().unwrap();
         assert!(!active.is_empty(), "should have active topics");
@@ -369,14 +372,20 @@ fn test_ffi_merge_topics() {
             r#"{"command":"search","dialogue":"Topic Alpha","auto_create":1,"context_limit":5,"min_score":0.0}"#,
         );
         assert_success(&res);
-        let id1 = res["data"]["contexts"][0]["id"].as_str().unwrap().to_string();
+        let id1 = res["data"]["contexts"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         let res = exec(
             handle,
             r#"{"command":"search","dialogue":"Topic Beta","auto_create":1,"context_limit":5,"min_score":0.0}"#,
         );
         assert_success(&res);
-        let id2 = res["data"]["contexts"][0]["id"].as_str().unwrap().to_string();
+        let id2 = res["data"]["contexts"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
 
         // Merge them
         let merge_cmd = format!(
@@ -427,7 +436,11 @@ fn test_ffi_error_handling() {
             r#"{"command":"import","params":{"action":"unknown_action"}}"#,
         );
         let msg = assert_error(&res);
-        assert!(msg.contains("unknown import action"), "unexpected msg: {}", msg);
+        assert!(
+            msg.contains("unknown import action"),
+            "unexpected msg: {}",
+            msg
+        );
 
         // query_layer with unsupported combination
         let res = exec(

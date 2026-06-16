@@ -27,6 +27,7 @@ regex = "1.10"
 tempfile = "3.10"
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
+libloading = "0.8"
 
 # Temporarily disabled - needs update to new API
 # [[bench]]
