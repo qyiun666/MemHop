@@ -37,8 +37,9 @@ macro_rules! impl_deserialize_slot {
         impl $type {
             /// Deserialize with error handling
             pub fn deserialize_slot(data: &[u8]) -> Result<Self, MemHopError> {
-                <$type>::deserialize(data)
-                    .map_err(|e| MemHopError::Serialization(format!("{} deserialize: {}", $name, e)))
+                <$type>::deserialize(data).map_err(|e| {
+                    MemHopError::Serialization(format!("{} deserialize: {}", $name, e))
+                })
             }
         }
     };
@@ -50,7 +51,10 @@ impl_deserialize_slot!(crate::slot::context_node::ContextNode, "ContextNode");
 impl_deserialize_slot!(crate::slot::archive::ArchiveSlot, "ArchiveSlot");
 impl_deserialize_slot!(crate::slot::hypergraph::HypergraphSlot, "HypergraphSlot");
 impl_deserialize_slot!(crate::slot::profile::ProfileSlot, "ProfileSlot");
-impl_deserialize_slot!(crate::slot::action_chain::ActionChainSlot, "ActionChainSlot");
+impl_deserialize_slot!(
+    crate::slot::action_chain::ActionChainSlot,
+    "ActionChainSlot"
+);
 
 /// Calculate pagination parameters
 #[inline]
