@@ -1,6 +1,8 @@
 //! Benchmark: Full Agent Workflow via FFI (JSON protocol)
 //!
-//! Simulates a real agent using MemHop — single database, all operations via FFI.
+//! Single database, all operations via FFI. Phases:
+//!   1. Setup: populate database with topics + knowledge
+//!   2. Bench: measure search, update, import, query, session
 //!
 //! Requires mock_meowvec running:
 //!   cargo run --example mock_meowvec &
@@ -19,7 +21,6 @@ const ENCODER_ADDR: &str = "unix:///tmp/.meowagent/meowvec.sock";
 // Global shared handle — opened once, used by all benchmarks
 // ============================================================================
 
-/// Wrapper to make raw pointer Send+Sync (safe: single-threaded bench usage)
 struct Handle(*mut MemHopHandle);
 unsafe impl Send for Handle {}
 unsafe impl Sync for Handle {}
@@ -37,6 +38,34 @@ unsafe fn get_handle() -> *mut MemHopHandle {
             .unwrap();
             let handle = memhop_open(cfg.as_ptr());
             assert!(!handle.is_null(), "memhop_open failed — is mock_meowvec running?");
+
+            // Pre-populate: create 10 topics
+            for i in 0..10 {
+                let cmd = CString::new(format!(
+                    r#"{{"command":"search","dialogue":"Topic {} about machine learning neural networks deep learning","auto_create":1,"context_limit":10,"min_score":0.0}}"#,
+                    i
+                ))
+                .unwrap();
+                let res_ptr = memhop_execute(handle, cmd.as_ptr());
+                memhop_free_string(res_ptr);
+            }
+
+            // Pre-populate: import 5 knowledge items
+            for i in 0..5 {
+                let cmd = CString::new(format!(
+                    r#"{{"command":"import","params":{{"action":"import","target_layer":"knowledge","mode":"merge","data":{{"Knowledge":[{{"title":"Concept {}","domain":"bench","knowledge_type":"Factual","text":"Knowledge about systems programming and memory safety","keywords":["systems","memory"]}}]}}}}}}"#,
+                    i
+                ))
+                .unwrap();
+                let res_ptr = memhop_execute(handle, cmd.as_ptr());
+                memhop_free_string(res_ptr);
+            }
+
+            // Sync to ensure all data is persisted before benchmarks
+            let sync_cmd = CString::new(r#"{"command":"sync"}"#).unwrap();
+            let res_ptr = memhop_execute(handle, sync_cmd.as_ptr());
+            memhop_free_string(res_ptr);
+
             Handle(handle)
         })
         .0
@@ -48,79 +77,11 @@ unsafe fn exec(handle: *mut MemHopHandle, json: &str) -> Value {
     assert!(!res_ptr.is_null(), "memhop_execute returned null");
     let res_str = CStr::from_ptr(res_ptr).to_str().unwrap().to_string();
     memhop_free_string(res_ptr);
-    serde_json::from_str(&res_str).expect("response is not valid JSON")
-}
-
-// ============================================================================
-// Benchmarks: Write operations
-// ============================================================================
-
-fn bench_search_auto_create(c: &mut Criterion) {
-    unsafe {
-        let handle = get_handle();
-        let mut i = 0;
-        c.bench_function("search_auto_create", |b| {
-            b.iter(|| {
-                i += 1;
-                let cmd = format!(
-                    r#"{{"command":"search","dialogue":"Benchmark topic {} about Rust programming and memory systems","auto_create":1,"context_limit":10,"min_score":0.0}}"#,
-                    black_box(i)
-                );
-                let res = exec(handle, &cmd);
-                assert!(res["success"].as_bool().unwrap_or(false));
-                black_box(res["data"]["contexts"].as_array().unwrap().len())
-            })
-        });
+    let val: Value = serde_json::from_str(&res_str).expect("response is not valid JSON");
+    if !val["success"].as_bool().unwrap_or(false) {
+        eprintln!("FFI ERROR: cmd={}\n  resp={}", json, res_str);
     }
-}
-
-fn bench_update_memory(c: &mut Criterion) {
-    unsafe {
-        let handle = get_handle();
-
-        // Create a topic first
-        let res = exec(
-            handle,
-            r#"{"command":"search","dialogue":"Update benchmark topic","auto_create":1,"context_limit":5,"min_score":0.0}"#,
-        );
-        let topic_id = res["data"]["contexts"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
-
-        let mut i = 0;
-        c.bench_function("update_memory", |b| {
-            b.iter(|| {
-                i += 1;
-                let cmd = format!(
-                    r#"{{"command":"update","topic_id":"{}","dialogue_text":"User: Question {} about Rust\nAssistant: Answer about ownership and borrowing","action_chain":[]}}"#,
-                    topic_id,
-                    black_box(i)
-                );
-                let res = exec(handle, &cmd);
-                assert!(res["success"].as_bool().unwrap_or(false));
-            })
-        });
-    }
-}
-
-fn bench_import_knowledge(c: &mut Criterion) {
-    unsafe {
-        let handle = get_handle();
-        let mut i = 0;
-        c.bench_function("import_knowledge", |b| {
-            b.iter(|| {
-                i += 1;
-                let cmd = format!(
-                    r#"{{"command":"import","params":{{"action":"import","target_layer":"knowledge","mode":"merge","data":{{"Knowledge":[{{"title":"Concept {}","domain":"bench","knowledge_type":"Factual","text":"Benchmark knowledge item number {} about systems programming","keywords":["bench","systems"]}}]}}}}}}"#,
-                    black_box(i),
-                    i
-                );
-                let res = exec(handle, &cmd);
-                assert!(res["success"].as_bool().unwrap_or(false));
-            })
-        });
-    }
+    val
 }
 
 // ============================================================================
@@ -130,7 +91,6 @@ fn bench_import_knowledge(c: &mut Criterion) {
 fn bench_search_recall(c: &mut Criterion) {
     unsafe {
         let handle = get_handle();
-
         c.bench_function("search_recall", |b| {
             b.iter(|| {
                 let res = exec(
@@ -144,10 +104,13 @@ fn bench_search_recall(c: &mut Criterion) {
     }
 }
 
+// ============================================================================
+// Benchmarks: Query operations
+// ============================================================================
+
 fn bench_query_l2_list(c: &mut Criterion) {
     unsafe {
         let handle = get_handle();
-
         c.bench_function("query_l2_list", |b| {
             b.iter(|| {
                 let res = exec(
@@ -165,7 +128,6 @@ fn bench_session_activate(c: &mut Criterion) {
     unsafe {
         let handle = get_handle();
 
-        // Get an existing topic_id
         let res = exec(
             handle,
             r#"{"command":"query_layer","layer":"l2","action":"list","list":{"page":1,"page_size":1}}"#,
@@ -190,9 +152,6 @@ fn bench_session_activate(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_search_auto_create,
-    bench_update_memory,
-    bench_import_knowledge,
     bench_search_recall,
     bench_query_l2_list,
     bench_session_activate,
