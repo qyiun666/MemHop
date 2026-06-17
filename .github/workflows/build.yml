@@ -21,6 +21,125 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libssl-dev pkg-config
+      - name: Build release
+        run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmemhop-linux-x86_64
+          path: target/release/libmemhop.so
+          if-no-files-found: error
+
+  # ─── Windows ─────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build release
+        run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: memhop-windows-x86_64
+          path: target/release/memhop.dll
+          if-no-files-found: error
+
+  # ─── macOS Intel (cross-compile on macos-14) ─────────────
+  build-macos-x86:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build release (x86_64)
+        run: cargo build --release --target x86_64-apple-darwin
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmemhop-macos-x86_64
+          path: target/x86_64-apple-darwin/release/libmemhop.dylib
+          if-no-files-found: error
+
+  # ─── macOS Apple Silicon ─────────────────────────────────
+  build-macos-arm:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build release (arm64)
+        run: cargo build --release
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmemhop-macos-arm64
+          path: target/release/libmemhop.dylib
+          if-no-files-found: error
+
+  # ─── macOS Universal Binary (lipo) ───────────────────────
+  create-universal:
+    needs: [build-macos-x86, build-macos-arm]
+    runs-on: macos-14
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: libmemhop-macos-x86_64
+          path: macos-x86
+      - uses: actions/download-artifact@v4
+        with:
+          name: libmemhop-macos-arm64
+          path: macos-arm
+      - name: Create universal binary
+        run: |
+          lipo -create \
+            macos-x86/libmemhop.dylib \
+            macos-arm/libmemhop.dylib \
+            -output libmemhop-universal.dylib
+          lipo -info libmemhop-universal.dylib
+      - name: Upload universal binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: libmemhop-macos-universal
+          path: libmemhop-universal.dylib
+          if-no-files-found: error
+# Cross-platform build for libmemhop (cdylib)
+# Builds: macOS (x86_64 + arm64 → universal) · Linux (.so) · Windows (.dll)
+name: build
+
+on:
+  push:
+    branches: [main, master, develop]
+    tags: ["v*"]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  # ─── Linux ───────────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
