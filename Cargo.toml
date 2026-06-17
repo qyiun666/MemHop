@@ -43,7 +43,7 @@ tonic-build = "0.12"
 # harness = false
 
 [[bench]]
-name = "grpc_bench"
+name = "agent_workflow"
 harness = false
 
 [profile.release]
