@@ -105,6 +105,38 @@ fn bench_search_recall(c: &mut Criterion) {
 }
 
 // ============================================================================
+// Benchmarks: Write operations
+// ============================================================================
+
+fn bench_update_memory(_c: &mut Criterion) {
+    unsafe {
+        let handle = get_handle();
+
+        // Get first topic from the pre-populated database
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l2","action":"list","list":{"page":1,"page_size":1}}"#,
+        );
+        let topic_id = res["data"]["items"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Measure a single update call (each update allocates a page, so we
+        // can't iterate without exhausting the fixed-size .meh file)
+        let start = std::time::Instant::now();
+        let cmd = format!(
+            r#"{{"command":"update","topic_id":"{}","dialogue_text":"User: How does Rust work?\nAssistant: Ownership and borrowing","action_chain":[]}}"#,
+            topic_id,
+        );
+        let res = exec(handle, &cmd);
+        let elapsed = start.elapsed();
+        assert!(res["success"].as_bool().unwrap_or(false), "update failed: {}", res);
+        println!("update_memory (single): {:?}", elapsed);
+    }
+}
+
+// ============================================================================
 // Benchmarks: Query operations
 // ============================================================================
 
@@ -132,10 +164,7 @@ fn bench_session_activate(c: &mut Criterion) {
             handle,
             r#"{"command":"query_layer","layer":"l2","action":"list","list":{"page":1,"page_size":1}}"#,
         );
-        let topic_id = res["data"]["items"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let topic_id = res["data"]["items"][0]["id"].as_str().unwrap().to_string();
 
         c.bench_function("session_activate", |b| {
             b.iter(|| {
@@ -153,6 +182,7 @@ fn bench_session_activate(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_search_recall,
+    bench_update_memory,
     bench_query_l2_list,
     bench_session_activate,
 );

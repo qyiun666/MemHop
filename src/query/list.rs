@@ -13,7 +13,19 @@ use crate::slot::archive::ArchiveSlot;
 use crate::slot::context::ContextSlot;
 use crate::slot::context_node::ContextNode;
 use crate::slot::hypergraph::HypergraphSlot;
-use crate::util::PageType;
+use crate::util::{PageType, PAGE_SIZE};
+
+/// Check if a page has the expected page_type.
+/// Returns false if the page is out of bounds or has a different type.
+#[inline]
+fn is_page_type(data: &[u8], page_id: u32, expected: PageType) -> bool {
+    let offset = (page_id as usize) * PAGE_SIZE + 4; // page_type is at offset 4
+    if offset + 2 > data.len() {
+        return false;
+    }
+    let pt = u16::from_le_bytes([data[offset], data[offset + 1]]);
+    pt == expected.to_u16()
+}
 use crate::MemHopError;
 use memmap2::MmapMut;
 
@@ -74,6 +86,11 @@ pub fn list_engrams(
     for (_, page_ref) in btree.iter() {
         let page_id = crate::query::slot_io::decode_page_id(*page_ref);
         if page_id >= page_count {
+            continue;
+        }
+
+        // Only process ContextNode pages
+        if !is_page_type(data, page_id, PageType::ContextNode) {
             continue;
         }
 
@@ -229,6 +246,11 @@ pub fn list_topics(
             continue;
         }
 
+        // Only process Context pages
+        if !is_page_type(data, page_id, PageType::Context) {
+            continue;
+        }
+
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
             if let Ok(ctx) = ContextSlot::deserialize(slot_data) {
                 if query.active_only && !ctx.is_active {
@@ -365,6 +387,11 @@ where
             continue;
         }
 
+        // Only process Archive pages
+        if !is_page_type(data, page_id, PageType::Archive) {
+            continue;
+        }
+
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
             if let Ok(archive) = ArchiveSlot::deserialize(slot_data) {
                 // Apply time range filter
@@ -439,6 +466,11 @@ pub fn list_crystals(
     for (_, page_ref) in btree.iter() {
         let page_id = crate::query::slot_io::decode_page_id(*page_ref);
         if page_id >= page_count {
+            continue;
+        }
+
+        // Only process ActionChain pages
+        if !is_page_type(data, page_id, PageType::ActionChain) {
             continue;
         }
 

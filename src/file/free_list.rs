@@ -35,18 +35,23 @@ pub fn allocate_from_free_list(
         // Use first free page
         // Validate page_id is within bounds
         let next_free_offset = first_free as usize * PAGE_SIZE;
-        if next_free_offset + 4 > mmap.len() {
+        if next_free_offset + PAGE_SIZE > mmap.len() {
             return Err(MemHopError::Io(std::io::Error::other(
                 format!("Free list page ID {} out of bounds (file size: {} bytes)", first_free, mmap.len())
             )));
         }
         
-        // Read next free page ID from the allocated page
+        // Read next free page ID from the allocated page's first 4 bytes
         let next_free_data = &mmap[next_free_offset..next_free_offset + 4];
         let next_free = u32::from_le_bytes(next_free_data.try_into().unwrap());
 
         // Update free list head in FileHeader
         header.free_list_head = next_free;
+
+        // Zero out the entire page to prevent stale data from corrupting
+        // subsequent deserialization (e.g., ContextSlot reading garbage as UTF-8)
+        let page_start = first_free as usize * PAGE_SIZE;
+        mmap[page_start..page_start + PAGE_SIZE].fill(0);
 
         Ok(first_free)
     }
