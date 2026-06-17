@@ -3,15 +3,11 @@
 //! Provides shared utilities to eliminate code duplication across query implementations.
 
 use crate::MemHopError;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Get current timestamp in milliseconds
 #[inline]
 pub fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
+    crate::util::get_current_timestamp()
 }
 
 /// Parse ID string to u64 hash

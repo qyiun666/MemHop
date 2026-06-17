@@ -74,7 +74,9 @@ pub fn read_optional_string(cursor: &mut Cursor<&[u8]>) -> io::Result<Option<Str
     }
     let mut buf = vec![0u8; len];
     cursor.read_exact(&mut buf)?;
-    Ok(Some(String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?))
+    Ok(Some(String::from_utf8(buf).map_err(|e| {
+        io::Error::new(io::ErrorKind::InvalidData, e)
+    })?))
 }
 
 /// Read vector of length-prefixed strings from cursor

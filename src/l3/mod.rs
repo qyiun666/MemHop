@@ -15,7 +15,6 @@
 
 pub mod index;
 pub mod store;
-pub mod view;
 
 pub use index::{L3Index, L3IndexQuery};
 pub use store::{
@@ -23,4 +22,3 @@ pub use store::{
     delete_node, get_edge, get_node, list_edges_by_graph, list_nodes_by_graph, read_node_neighbors,
     remove_l3_ref_from_context,
 };
-pub use view::{bfs, export_dot, export_json, find_path, get_node_edges, subgraph};

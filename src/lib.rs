@@ -18,7 +18,6 @@
 //! let db = MemHop::open(config).unwrap();
 //! ```
 
-pub mod activation;
 pub mod config;
 pub mod dream;
 pub mod encoder;
@@ -83,14 +82,12 @@ pub use query::types::{
     SearchQuery,
     SearchResult,
     // L3 Hypergraph Engine
-    Subgraph,
     TargetLayer,
     TopicDetail,
     TopicImportItem,
     TopicListQuery,
     TopicListResult,
     TopicSummary,
-    TraversalHop,
     // Update Titles (Interfaces 13-16)
     UpdateProfileRequest,
     // Update Memory (Interface 3)

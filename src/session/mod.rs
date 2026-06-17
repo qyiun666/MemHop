@@ -5,7 +5,6 @@
 //! purely in-memory and tracks which topics are currently "hot" during a user session.
 
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Topic activation state (pure memory, not persisted)
 pub struct TopicActivation {
@@ -189,10 +188,7 @@ impl Default for SessionManager {
 /// # Returns
 /// Current time as i64 milliseconds
 fn current_timestamp_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
+    crate::util::get_current_timestamp()
 }
 
 #[cfg(test)]

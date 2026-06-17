@@ -75,15 +75,6 @@ impl fmt::Display for Layer {
     }
 }
 
-/// Memory state (reserved for v0.31+)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[repr(u8)]
-pub enum MemoryState {
-    Active = 0,
-    Latent = 1,
-    Dormant = 2,
-}
-
 /// Source type for memory origin
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
