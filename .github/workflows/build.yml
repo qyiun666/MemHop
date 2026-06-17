@@ -1,5 +1,6 @@
 # Cross-platform build for libmemhop (cdylib)
 # Builds: macOS (x86_64 + arm64 → universal) · Linux (.so) · Windows (.dll)
+# On tag push (v*), creates a GitHub Release with all binaries.
 name: build
 
 on:
@@ -117,3 +118,38 @@ jobs:
           name: libmemhop-macos-universal
           path: libmemhop-universal.dylib
           if-no-files-found: error
+
+  # ─── GitHub Release (only on tag push) ───────────────────
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-windows, create-universal]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir -p release
+          cp artifacts/libmemhop-linux-x86_64/libmemhop.so release/libmemhop-linux-x86_64.so
+          cp artifacts/memhop-windows-x86_64/memhop.dll release/memhop-windows-x86_64.dll
+          cp artifacts/libmemhop-macos-universal/libmemhop-universal.dylib release/libmemhop-macos-universal.dylib
+          cp memhop.h release/memhop.h
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/libmemhop-linux-x86_64.so
+            release/memhop-windows-x86_64.dll
+            release/libmemhop-macos-universal.dylib
+            release/memhop.h
+          generate_release_notes: true
+          draft: false
+          prerelease: false
