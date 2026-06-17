@@ -117,10 +117,7 @@ fn bench_update_memory(_c: &mut Criterion) {
             handle,
             r#"{"command":"query_layer","layer":"l2","action":"list","list":{"page":1,"page_size":1}}"#,
         );
-        let topic_id = res["data"]["items"][0]["id"]
-            .as_str()
-            .unwrap()
-            .to_string();
+        let topic_id = res["data"]["items"][0]["id"].as_str().unwrap().to_string();
 
         // Measure a single update call (each update allocates a page, so we
         // can't iterate without exhausting the fixed-size .meh file)
@@ -131,7 +128,11 @@ fn bench_update_memory(_c: &mut Criterion) {
         );
         let res = exec(handle, &cmd);
         let elapsed = start.elapsed();
-        assert!(res["success"].as_bool().unwrap_or(false), "update failed: {}", res);
+        assert!(
+            res["success"].as_bool().unwrap_or(false),
+            "update failed: {}",
+            res
+        );
         println!("update_memory (single): {:?}", elapsed);
     }
 }

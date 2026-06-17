@@ -210,7 +210,22 @@ void memhop_close(void* handle);
 
 ```json
 {
-  "profile": { "id": "...", "name": "助手", "role": "AI助手", ... },
+  "profile": {
+    "id": "...",
+    "name": "助手",
+    "role": "AI助手",
+    "personality": "Rust, AI, 编程, 技术, 游戏",
+    "worldview": "",
+    "preferences": {
+      "top_keywords": "Rust,AI,编程,...",
+      "total_engrams": "42"
+    },
+    "lexicon": { "6": "厉害/牛", "摸鱼": "偷懒休息" },
+    "style_traits": ["prefers_brevity", "uses_casual_tone"],
+    "emotion_patterns": { "呵呵": "不满或敷衍" },
+    "created_at": 1718304000000,
+    "updated_at": 1718304000000
+  },
   "contexts": [
     {
       "id": "a1b2c3d4e5f67890",
@@ -226,7 +241,14 @@ void memhop_close(void* handle);
   ],
   "associated_contexts": [],
   "l3_ids": ["knowledge_001"],
-  "archive_refs": [{"id": "archive_001", "context_id": "...", "content_type": "text", "created_at": 1718304000000}]
+  "archive_refs": [
+    {
+      "id": "archive_001",
+      "context_id": "...",
+      "content_type": "text",
+      "created_at": 1718304000000
+    }
+  ]
 }
 ```
 
@@ -351,17 +373,20 @@ void memhop_close(void* handle);
     "role": null,
     "personality": null,
     "worldview": null,
-    "preferences": null
+    "preferences": null,
+    "lexicon": null,
+    "style_traits": null,
+    "emotion_patterns": null
   }
 }
 ```
 
-| layer | 必需字段                                                   | 功能                        | 响应类型           |
-| ----- | ---------------------------------------------------------- | --------------------------- | ------------------ |
-| `l0`  | 可选 `name`/`role`/`personality`/`worldview`/`preferences` | 更新 Agent 画像（合并策略） | `ProfileResult`    |
-| `l2`  | `id`, `new_title`                                          | 修改 L2 主题标题            | `TopicSummary`     |
-| `l3`  | `id`, `new_title`                                          | 修改 L3 知识标题            | `KnowledgeSummary` |
-| `l5`  | `id`, `new_title`                                          | 修改 L5 结晶标题            | `CrystalSummary`   |
+| layer | 必需字段                                                                                               | 功能                        | 响应类型           |
+| ----- | ------------------------------------------------------------------------------------------------------ | --------------------------- | ------------------ |
+| `l0`  | 可选 `name`/`role`/`personality`/`worldview`/`preferences`/`lexicon`/`style_traits`/`emotion_patterns` | 更新 Agent 画像（合并策略） | `ProfileResult`    |
+| `l2`  | `id`, `new_title`                                                                                      | 修改 L2 主题标题            | `TopicSummary`     |
+| `l3`  | `id`, `new_title`                                                                                      | 修改 L3 知识标题            | `KnowledgeSummary` |
+| `l5`  | `id`, `new_title`                                                                                      | 修改 L5 结晶标题            | `CrystalSummary`   |
 
 ---
 
@@ -396,6 +421,12 @@ void memhop_close(void* handle);
   "new_compressed": [],
   "l1_updated": ["node-001"],
   "l0_updated": ["profile_001", ["personality"]],
+  "habits_updated": {
+    "new_lexicon": 3,
+    "new_style_traits": 1,
+    "new_emotion_patterns": 2,
+    "total_dialogues_analyzed": 25
+  },
   "new_l3_nodes": ["l3-node-001"],
   "new_crystals": ["crystal-001"],
   "pruned_crystals": [],
@@ -463,7 +494,10 @@ Profile:
     "role": "编程助手",
     "personality": null,
     "worldview": null,
-    "preferences": null
+    "preferences": null,
+    "lexicon": null,
+    "style_traits": null,
+    "emotion_patterns": null
   }
 }
 ```

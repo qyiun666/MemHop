@@ -125,6 +125,15 @@ pub struct ProfileResult {
     pub personality: String,
     pub worldview: String,
     pub preferences: HashMap<String, String>,
+    /// User vocabulary: unique word → meaning mapping
+    #[serde(default)]
+    pub lexicon: HashMap<String, String>,
+    /// Communication style trait tags
+    #[serde(default)]
+    pub style_traits: Vec<String>,
+    /// Emotional expression patterns: expression → true meaning
+    #[serde(default)]
+    pub emotion_patterns: HashMap<String, String>,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -414,6 +423,12 @@ pub struct UpdateProfileRequest {
     pub personality: Option<String>,
     pub worldview: Option<String>,
     pub preferences: Option<HashMap<String, String>>,
+    /// User vocabulary to merge (word → meaning)
+    pub lexicon: Option<HashMap<String, String>>,
+    /// Communication style traits to set
+    pub style_traits: Option<Vec<String>>,
+    /// Emotional expression patterns to merge
+    pub emotion_patterns: Option<HashMap<String, String>>,
 }
 
 // ============================================================================

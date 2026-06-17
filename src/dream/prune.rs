@@ -30,6 +30,8 @@ pub struct DreamReport {
     pub l1_updated: Vec<String>,
     /// L0 profile updated: (profile_id, updated_fields)
     pub l0_updated: Option<(String, Vec<String>)>,
+    /// User language habits updated from dialogue analysis
+    pub habits_updated: Option<crate::dream::habit_distill_stage::HabitUpdate>,
     /// New L3 nodes created via LLM-based knowledge distillation
     pub new_l3_nodes: Vec<String>,
     /// New crystals created from L5 crystallization
@@ -100,6 +102,7 @@ mod tests {
             }],
             l1_updated: vec!["node-1".to_string()],
             l0_updated: Some(("profile-1".to_string(), vec!["personality".to_string()])),
+            habits_updated: None,
             new_l3_nodes: vec!["l3-node-1".to_string()],
             new_crystals: vec!["crystal-1".to_string()],
             pruned_crystals: vec!["crystal-old".to_string()],

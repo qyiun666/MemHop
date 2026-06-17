@@ -36,11 +36,13 @@ pub fn allocate_from_free_list(
         // Validate page_id is within bounds
         let next_free_offset = first_free as usize * PAGE_SIZE;
         if next_free_offset + PAGE_SIZE > mmap.len() {
-            return Err(MemHopError::Io(std::io::Error::other(
-                format!("Free list page ID {} out of bounds (file size: {} bytes)", first_free, mmap.len())
-            )));
+            return Err(MemHopError::Io(std::io::Error::other(format!(
+                "Free list page ID {} out of bounds (file size: {} bytes)",
+                first_free,
+                mmap.len()
+            ))));
         }
-        
+
         // Read next free page ID from the allocated page's first 4 bytes
         let next_free_data = &mmap[next_free_offset..next_free_offset + 4];
         let next_free = u32::from_le_bytes(next_free_data.try_into().unwrap());
@@ -66,9 +68,11 @@ pub fn free_page(
     // Validate page_id is within file bounds
     let page_offset = page_id as usize * PAGE_SIZE;
     if page_offset + 4 > mmap.len() {
-        return Err(MemHopError::Io(std::io::Error::other(
-            format!("Page ID {} out of bounds (file size: {} bytes)", page_id, mmap.len())
-        )));
+        return Err(MemHopError::Io(std::io::Error::other(format!(
+            "Page ID {} out of bounds (file size: {} bytes)",
+            page_id,
+            mmap.len()
+        ))));
     }
 
     // Read current free list head from FileHeader

@@ -32,7 +32,10 @@ pub fn generate_profile(
 ) -> Result<(), MemHopError> {
     // 1. Get top keywords from sparse index
     let top_keywords_with_freq = sparse_index.top_terms(20);
-    let top_keywords: Vec<String> = top_keywords_with_freq.iter().map(|(term, _)| term.clone()).collect();
+    let top_keywords: Vec<String> = top_keywords_with_freq
+        .iter()
+        .map(|(term, _)| term.clone())
+        .collect();
 
     // 2. Count total engrams
     let total_engrams = btree.len();
@@ -61,12 +64,18 @@ pub fn generate_profile(
     };
 
     let (page_id, profile_slot) = if let Some(mut existing) = existing_profile {
-        // Profile exists — only update personality and preferences (preserve name/role/worldview)
+        // Profile exists — only update personality and preferences (preserve name/role/worldview and habit fields)
         let pid = (btree.search(profile_id_hash).unwrap() >> 16) as u32;
-        existing.personality = top_keywords.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+        existing.personality = top_keywords
+            .iter()
+            .take(5)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(", ");
         existing.preferences = preferences;
         existing.updated_at = now_ms;
         existing.version += 1;
+        // NOTE: lexicon, style_traits, emotion_patterns are preserved (updated by habit_distill_stage)
         (pid, existing)
     } else {
         // Profile doesn't exist — create new with defaults
@@ -75,9 +84,17 @@ pub fn generate_profile(
             id_hash: profile_id_hash,
             name: "Agent".to_string(),
             role: "assistant".to_string(),
-            personality: top_keywords.iter().take(5).cloned().collect::<Vec<_>>().join(", "),
+            personality: top_keywords
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
             worldview: String::new(),
             preferences,
+            lexicon: HashMap::new(),
+            style_traits: Vec::new(),
+            emotion_patterns: HashMap::new(),
             created_at: now_ms,
             updated_at: now_ms,
             version: 1,
@@ -110,7 +127,8 @@ pub fn generate_profile(
     if data_offset + data.len() > mmap.len() {
         return Err(MemHopError::Serialization(format!(
             "ProfileSlot data too large for page: {} > {}",
-            data.len(), mmap.len() - data_offset
+            data.len(),
+            mmap.len() - data_offset
         )));
     }
     mmap[data_offset..data_offset + data.len()].copy_from_slice(&data);

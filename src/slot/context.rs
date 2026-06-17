@@ -38,13 +38,13 @@ impl ActivationState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextSlot {
     pub id_hash: u64,
-    pub parent_id: Option<u64>,       // Parent context (supports 3-level nesting)
-    pub depth: u8,                    // Nesting depth: 1=scene, 2=sub-scene, 3=turn group
-    pub title: String,                // Scene name
-    pub summary: Option<String>,      // Compressed summary (multi-turn → compressed)
-    pub archive_refs: Vec<u64>,       // Associated L4 archives
-    pub l3_refs: Vec<u64>,            // Associated L3 hypergraph IDs
-    pub turn_count: u32,              // Number of conversation turns
+    pub parent_id: Option<u64>, // Parent context (supports 3-level nesting)
+    pub depth: u8,              // Nesting depth: 1=scene, 2=sub-scene, 3=turn group
+    pub title: String,          // Scene name
+    pub summary: Option<String>, // Compressed summary (multi-turn → compressed)
+    pub archive_refs: Vec<u64>, // Associated L4 archives
+    pub l3_refs: Vec<u64>,      // Associated L3 hypergraph IDs
+    pub turn_count: u32,        // Number of conversation turns
     pub created_at: i64,
     pub updated_at: i64,
     pub version: u32,
@@ -52,8 +52,8 @@ pub struct ContextSlot {
     pub activation_score: f32,
     pub is_active: bool,
     pub activation_state: ActivationState,
-    pub centroid_page_ref: u64,       // Vector page reference (not inline)
-    pub dialogue_range: (i64, i64),   // (earliest_ts, latest_ts)
+    pub centroid_page_ref: u64,     // Vector page reference (not inline)
+    pub dialogue_range: (i64, i64), // (earliest_ts, latest_ts)
 }
 
 impl ContextSlot {
@@ -72,7 +72,7 @@ impl ContextSlot {
             + self.title.len()  // title
             + self.summary.as_ref().map_or(0, |s| s.len())  // summary
             + self.archive_refs.len() * 8  // archive_refs
-            + self.l3_refs.len() * 8  // l3_refs
+            + self.l3_refs.len() * 8 // l3_refs
     }
 
     /// Serialize to bytes
@@ -131,7 +131,11 @@ impl ContextSlot {
         // Fixed part
         let id_hash = read_u64(&mut c)?;
         let parent_val = read_u64(&mut c)?;
-        let parent_id = if parent_val == 0 { None } else { Some(parent_val) };
+        let parent_id = if parent_val == 0 {
+            None
+        } else {
+            Some(parent_val)
+        };
         let depth = read_u8(&mut c)?;
 
         let title_len = read_u16(&mut c)?;
@@ -162,8 +166,10 @@ impl ContextSlot {
         let summary = if summary_len > 0 {
             let mut summary_buf = vec![0u8; summary_len as usize];
             c.read_exact(&mut summary_buf)?;
-            Some(String::from_utf8(summary_buf)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?)
+            Some(
+                String::from_utf8(summary_buf)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            )
         } else {
             None
         };
@@ -299,10 +305,10 @@ mod tests {
             id_hash: 1,
             parent_id: None,
             depth: 1,
-            title: "test".to_string(),         // 4 bytes
-            summary: Some("abc".to_string()),  // 3 bytes
-            archive_refs: vec![10],            // 8 bytes
-            l3_refs: vec![20, 30],             // 16 bytes
+            title: "test".to_string(),        // 4 bytes
+            summary: Some("abc".to_string()), // 3 bytes
+            archive_refs: vec![10],           // 8 bytes
+            l3_refs: vec![20, 30],            // 16 bytes
             turn_count: 0,
             created_at: 0,
             updated_at: 0,

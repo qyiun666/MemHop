@@ -2,6 +2,7 @@
 pub mod compress_stage;
 pub mod crystallize_stage;
 pub mod emotion;
+pub mod habit_distill_stage;
 pub mod l0_form_stage;
 pub mod l3_distill_stage;
 pub mod llm;
@@ -53,6 +54,7 @@ pub fn dream_pipeline(
         new_compressed: Vec::new(),
         l1_updated: Vec::new(),
         l0_updated: None,
+        habits_updated: None,
         new_l3_nodes: Vec::new(),
         new_crystals: Vec::new(),
         pruned_crystals: Vec::new(),
@@ -86,6 +88,21 @@ pub fn dream_pipeline(
             "profile".to_string(),
             vec!["personality".to_string(), "preferences".to_string()],
         ));
+    }
+
+    // Stage 3.5: User Language Habit Distillation
+    // Analyzes recent dialogues to learn user language patterns and merge into L0 profile
+    let habit_update = habit_distill_stage::distill_user_habits(mmap, header, btree, llm)?;
+    if habit_update.new_lexicon > 0
+        || habit_update.new_style_traits > 0
+        || habit_update.new_emotion_patterns > 0
+    {
+        report.habits_updated = Some(habit_distill_stage::HabitUpdate {
+            new_lexicon: habit_update.new_lexicon,
+            new_style_traits: habit_update.new_style_traits,
+            new_emotion_patterns: habit_update.new_emotion_patterns,
+            total_dialogues_analyzed: habit_update.total_dialogues_analyzed,
+        });
     }
 
     // Stage 4: L3 Knowledge Distillation - extract structured knowledge via LLM

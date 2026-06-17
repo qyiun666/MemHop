@@ -56,6 +56,21 @@ pub trait LlmProvider: Send + Sync {
     /// # Returns
     /// CrystalDef with reduced confidence
     fn fallback_generate_crystal(&self, pattern: &Pattern) -> CrystalDef;
+
+    /// Analyze user language habits from dialogue history
+    ///
+    /// Extracts: personal lexicon (unique word meanings), communication style traits,
+    /// and emotional expression patterns.
+    ///
+    /// # Arguments
+    /// * `dialogues` - Recent dialogue texts from L4 archives
+    ///
+    /// # Returns
+    /// HabitAnalysis with lexicon, style traits, and emotion patterns
+    fn analyze_user_habits(&self, dialogues: &[String]) -> Result<HabitAnalysis, MemHopError>;
+
+    /// Fallback habit analysis using word frequency when LLM is unavailable
+    fn fallback_analyze_user_habits(&self, dialogues: &[String]) -> HabitAnalysis;
 }
 
 /// Summary of a memory for pattern extraction
@@ -89,4 +104,17 @@ pub struct CrystalDef {
     pub action: String,
     /// Confidence score (0.0 - 1.0)
     pub confidence: f32,
+}
+
+/// User language habit analysis result
+///
+/// Produced by Dream Stage 3.5 from dialogue history analysis.
+#[derive(Debug, Clone, Default)]
+pub struct HabitAnalysis {
+    /// User-specific vocabulary: word/expression → meaning
+    pub lexicon: std::collections::HashMap<String, String>,
+    /// Communication style trait tags
+    pub style_traits: Vec<String>,
+    /// Emotional expression patterns: expression → true meaning
+    pub emotion_patterns: std::collections::HashMap<String, String>,
 }

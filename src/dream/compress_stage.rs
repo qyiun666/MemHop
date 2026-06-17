@@ -12,12 +12,15 @@ use crate::dream::llm::LlmProvider;
 use crate::dream::prune::{CompressResult, DemotionResult};
 
 /// Result type for compress_active_contexts function
-pub type CompressStageResult = Result<(
-    Vec<DemotionResult>,
-    Vec<CompressResult>,
-    Vec<String>,  // removed context IDs (depth 3 → gone)
-    Vec<String>,  // demoted to tertiary IDs (depth 2 → 3)
-), MemHopError>;
+pub type CompressStageResult = Result<
+    (
+        Vec<DemotionResult>,
+        Vec<CompressResult>,
+        Vec<String>, // removed context IDs (depth 3 → gone)
+        Vec<String>, // demoted to tertiary IDs (depth 2 → 3)
+    ),
+    MemHopError,
+>;
 use crate::file::free_list::free_page;
 use crate::file::header::FileHeader;
 use crate::file::page::{allocate_page, read_page_header, write_page_data};
@@ -70,7 +73,8 @@ pub fn compress_active_contexts(
                 continue;
             }
             if let Ok(page_header) = read_page_header(
-                unsafe { &*(mmap.as_ptr() as *const memmap2::Mmap) }, page_id
+                unsafe { &*(mmap.as_ptr() as *const memmap2::Mmap) },
+                page_id,
             ) {
                 if page_header.page_type != PageType::Context as u16 {
                     continue;
@@ -94,7 +98,8 @@ pub fn compress_active_contexts(
     // Step 2: Process by depth (deepest first to avoid conflicts)
 
     // 2a: Remove depth-3 contexts (turn groups)
-    let depth3: Vec<_> = active_contexts.iter()
+    let depth3: Vec<_> = active_contexts
+        .iter()
         .filter(|(_, ctx)| ctx.depth == 3)
         .collect();
 
@@ -114,9 +119,7 @@ pub fn compress_active_contexts(
     }
 
     // 2b: Demote depth-2 contexts to depth 3
-    for (page_id, ctx) in active_contexts.iter_mut()
-        .filter(|(_, ctx)| ctx.depth == 2)
-    {
+    for (page_id, ctx) in active_contexts.iter_mut().filter(|(_, ctx)| ctx.depth == 2) {
         let ctx_id = format!("{:016x}", ctx.id_hash);
 
         // Demote to depth 3
@@ -124,7 +127,8 @@ pub fn compress_active_contexts(
         ctx.updated_at = now_ms;
 
         // Serialize and write back
-        let serialized = ctx.serialize()
+        let serialized = ctx
+            .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
         write_page_data(mmap, *page_id, &serialized)?;
 
@@ -132,7 +136,8 @@ pub fn compress_active_contexts(
     }
 
     // 2c: Compress and demote depth-1 contexts
-    let depth1: Vec<(u32, ContextSlot)> = active_contexts.iter()
+    let depth1: Vec<(u32, ContextSlot)> = active_contexts
+        .iter()
         .filter(|(_, ctx)| ctx.depth == 1)
         .map(|(pid, ctx)| (*pid, ctx.clone()))
         .collect();
@@ -144,7 +149,11 @@ pub fn compress_active_contexts(
         let texts_to_compress: Vec<String> = vec![
             format!("Title: {}", ctx.title),
             format!("Summary: {}", ctx.summary.as_deref().unwrap_or("(none)")),
-            format!("Turns: {}, Archives: {}", ctx.turn_count, ctx.archive_refs.len()),
+            format!(
+                "Turns: {}, Archives: {}",
+                ctx.turn_count,
+                ctx.archive_refs.len()
+            ),
         ];
 
         let compressed_summary = match llm.summarize(&texts_to_compress) {
@@ -168,7 +177,7 @@ pub fn compress_active_contexts(
             version: 1,
             importance: ctx.importance * 0.9,
             activation_score: 0.3,
-            is_active: false,  // Compressed contexts start inactive
+            is_active: false, // Compressed contexts start inactive
             activation_state: ActivationState::Crystallized,
             centroid_page_ref: ctx.centroid_page_ref,
             dialogue_range: ctx.dialogue_range,
@@ -176,7 +185,8 @@ pub fn compress_active_contexts(
 
         // Allocate page for new compressed context
         let new_page_id = allocate_page(mmap, header, PageType::Context, 2, 0)?;
-        let new_serialized = new_ctx.serialize()
+        let new_serialized = new_ctx
+            .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
         write_page_data(mmap, new_page_id, &new_serialized)?;
 
@@ -184,7 +194,9 @@ pub fn compress_active_contexts(
         btree.insert(new_id_hash, new_page_ref);
 
         // Update sparse index for new context
-        let title_terms: Vec<String> = new_ctx.title.split_whitespace()
+        let title_terms: Vec<String> = new_ctx
+            .title
+            .split_whitespace()
             .map(|s| s.to_lowercase())
             .collect();
         let doc_len = title_terms.len() as u32;
@@ -202,7 +214,8 @@ pub fn compress_active_contexts(
         demoted_ctx.summary = Some(compressed_summary.clone());
         demoted_ctx.updated_at = now_ms;
 
-        let demoted_serialized = demoted_ctx.serialize()
+        let demoted_serialized = demoted_ctx
+            .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
         write_page_data(mmap, *page_id, &demoted_serialized)?;
 
@@ -214,7 +227,12 @@ pub fn compress_active_contexts(
         });
     }
 
-    Ok((demoted_to_secondary, new_compressed, removed_contexts, demoted_to_tertiary))
+    Ok((
+        demoted_to_secondary,
+        new_compressed,
+        removed_contexts,
+        demoted_to_tertiary,
+    ))
 }
 
 #[cfg(test)]
@@ -248,10 +266,16 @@ mod tests {
             fn summarize(&self, texts: &[String]) -> Result<String, crate::MemHopError> {
                 Ok(texts.join(", "))
             }
-            fn extract_patterns(&self, _: &[crate::dream::llm::MemorySummary]) -> Result<Vec<crate::dream::llm::Pattern>, crate::MemHopError> {
+            fn extract_patterns(
+                &self,
+                _: &[crate::dream::llm::MemorySummary],
+            ) -> Result<Vec<crate::dream::llm::Pattern>, crate::MemHopError> {
                 Ok(vec![])
             }
-            fn generate_crystal(&self, _: &crate::dream::llm::Pattern) -> Result<crate::dream::llm::CrystalDef, crate::MemHopError> {
+            fn generate_crystal(
+                &self,
+                _: &crate::dream::llm::Pattern,
+            ) -> Result<crate::dream::llm::CrystalDef, crate::MemHopError> {
                 Ok(crate::dream::llm::CrystalDef {
                     condition: "mock".to_string(),
                     action: "mock".to_string(),
@@ -261,15 +285,33 @@ mod tests {
             fn fallback_summarize(&self, texts: &[String]) -> String {
                 texts.join(", ")
             }
-            fn fallback_extract_patterns(&self, _: &[crate::dream::llm::MemorySummary]) -> Vec<crate::dream::llm::Pattern> {
+            fn fallback_extract_patterns(
+                &self,
+                _: &[crate::dream::llm::MemorySummary],
+            ) -> Vec<crate::dream::llm::Pattern> {
                 vec![]
             }
-            fn fallback_generate_crystal(&self, _: &crate::dream::llm::Pattern) -> crate::dream::llm::CrystalDef {
+            fn fallback_generate_crystal(
+                &self,
+                _: &crate::dream::llm::Pattern,
+            ) -> crate::dream::llm::CrystalDef {
                 crate::dream::llm::CrystalDef {
                     condition: "mock".to_string(),
                     action: "mock".to_string(),
                     confidence: 0.3,
                 }
+            }
+            fn analyze_user_habits(
+                &self,
+                _: &[String],
+            ) -> Result<crate::dream::llm::HabitAnalysis, crate::MemHopError> {
+                Ok(crate::dream::llm::HabitAnalysis::default())
+            }
+            fn fallback_analyze_user_habits(
+                &self,
+                _: &[String],
+            ) -> crate::dream::llm::HabitAnalysis {
+                crate::dream::llm::HabitAnalysis::default()
             }
         }
 

@@ -184,6 +184,9 @@ fn dispatch_update_title(
                 personality: params.personality.clone(),
                 worldview: params.worldview.clone(),
                 preferences: params.preferences.clone(),
+                lexicon: params.lexicon.clone(),
+                style_traits: params.style_traits.clone(),
+                emotion_patterns: params.emotion_patterns.clone(),
             };
             let r = db.update_profile(req).map_err(|e| e.to_string())?;
             serde_json::to_value(r).map_err(|e| e.to_string())

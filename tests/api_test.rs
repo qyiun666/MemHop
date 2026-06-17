@@ -413,6 +413,102 @@ fn test_ffi_full_lifecycle() {
 }
 
 // ============================================================================
+// 测试：查询 L3 详情
+// ============================================================================
+
+#[test]
+fn test_ffi_query_l3_detail() {
+    let db_path = "/tmp/memhop_ffi_l3_detail.meh";
+    let source_path = "/Volumes/zt_hd/projects/meow/meowagent/src";
+    let _ = std::fs::remove_file(db_path);
+
+    if !std::path::Path::new(source_path).exists() {
+        eprintln!("[SKIP] meowagent source not found");
+        return;
+    }
+
+    unsafe {
+        let cfg = config_json(db_path);
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null());
+
+        // 1. Build L3
+        let build_cmd = format!(
+            r#"{{"command":"import","params":{{"action":"build_l3","path":"{}"}}}}"#,
+            source_path
+        );
+        let res = exec(handle, &build_cmd);
+        assert_success(&res);
+
+        // 2. Query L3 list
+        println!("\n===== L3 LIST =====");
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l3","action":"list","list":{"page":1,"page_size":20}}"#,
+        );
+        assert_success(&res);
+        println!("{}", serde_json::to_string_pretty(&res["data"]).unwrap());
+
+        // 3. Get L3 detail (with all nodes)
+        let l3_items = res["data"]["items"].as_array().unwrap();
+        if !l3_items.is_empty() {
+            let l3_id = l3_items[0]["id"].as_str().unwrap();
+            println!("\n===== L3 DETAIL (id={}) =====", l3_id);
+            let get_cmd = format!(
+                r#"{{"command":"query_layer","layer":"l3","action":"get","get":{{"id":"{}"}},"list":{{}}}}"#,
+                l3_id
+            );
+            let res = exec(handle, &get_cmd);
+            assert_success(&res);
+
+            // Print detail fields (truncate long text)
+            let data = &res["data"];
+            println!("title: {}", data["title"].as_str().unwrap_or("?"));
+            println!("domain: {}", data["domain"].as_str().unwrap_or("?"));
+            println!(
+                "knowledge_type: {}",
+                data["knowledge_type"].as_str().unwrap_or("?")
+            );
+            println!("importance: {}", data["importance"].as_f64().unwrap_or(0.0));
+            println!("source_ref: {}", data["source_ref"].as_str().unwrap_or("?"));
+
+            let keywords = data["keywords"].as_array().unwrap();
+            println!("keywords ({}):", keywords.len());
+            for kw in keywords.iter().take(30) {
+                println!("  - {}", kw.as_str().unwrap_or("?"));
+            }
+
+            let text = data["text"].as_str().unwrap_or("");
+            let preview: String = text.chars().take(500).collect();
+            println!("\ntext preview ({} chars total):", text.len());
+            println!("{}", preview);
+        }
+
+        // 4. Query L2 detail to see l3_refs
+        println!("\n===== L2 DETAIL =====");
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l2","action":"list","list":{"page":1,"page_size":5}}"#,
+        );
+        assert_success(&res);
+        let l2_items = res["data"]["items"].as_array().unwrap();
+        if !l2_items.is_empty() {
+            let l2_id = l2_items[0]["id"].as_str().unwrap();
+            let get_cmd = format!(
+                r#"{{"command":"query_layer","layer":"l2","action":"get","get":{{"id":"{}"}},"list":{{}}}}"#,
+                l2_id
+            );
+            let res = exec(handle, &get_cmd);
+            assert_success(&res);
+            println!("{}", serde_json::to_string_pretty(&res["data"]).unwrap());
+        }
+
+        memhop_close(handle);
+        let _ = std::fs::remove_file(db_path);
+    }
+}
+
+// ============================================================================
 // 测试：Merge Topics
 // ============================================================================
 
@@ -666,6 +762,167 @@ fn test_ffi_dream_with_deepseek() {
         println!("[Dream] Complete: {:?}", res["data"]);
 
         memhop_close(handle);
+        let _ = std::fs::remove_file(db_path);
+    }
+}
+
+// ============================================================================
+// 测试：从文件路径导入 L3 超图并通过 L2 检索
+// ============================================================================
+
+#[test]
+fn test_ffi_build_l3_from_meowagent() {
+    let db_path = "/tmp/memhop_ffi_l3_meowagent.meh";
+    let source_path = "/Volumes/zt_hd/projects/meow/meowagent/src";
+    let _ = std::fs::remove_file(db_path);
+
+    // Skip if meowagent source not available
+    if !std::path::Path::new(source_path).exists() {
+        eprintln!("[SKIP] meowagent source not found at {}", source_path);
+        return;
+    }
+
+    unsafe {
+        // 1. Open database
+        let cfg = config_json(db_path);
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null(), "memhop_open failed");
+        println!("[L3 Import] Database opened");
+
+        // 2. Build L3 from meowagent/src
+        let build_cmd = format!(
+            r#"{{"command":"import","params":{{"action":"build_l3","path":"{}"}}}}"#,
+            source_path
+        );
+        let res = exec(handle, &build_cmd);
+        println!(
+            "[L3 Import] build_l3 result: {}",
+            serde_json::to_string_pretty(&res).unwrap()
+        );
+        assert_success(&res);
+
+        let created_ids = res["data"]["created_ids"].as_array().unwrap();
+        let updated_ids = res["data"]["updated_ids"].as_array().unwrap();
+        println!(
+            "[L3 Import] Created {} nodes, {} edges",
+            created_ids.len(),
+            updated_ids.len()
+        );
+        assert!(
+            !created_ids.is_empty(),
+            "build_l3 should create at least some nodes"
+        );
+
+        // 3. Query L3 list to verify nodes
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l3","action":"list","list":{"page":1,"page_size":20}}"#,
+        );
+        assert_success(&res);
+        let l3_total = res["data"]["total"].as_u64().unwrap_or(0);
+        println!("[L3 Query] Total L3 items: {}", l3_total);
+        assert!(l3_total > 0, "L3 should have nodes after build_l3");
+
+        // Print first few L3 node titles
+        let l3_items = res["data"]["items"].as_array().unwrap();
+        for item in l3_items.iter().take(5) {
+            println!(
+                "  L3: {} (type={}, importance={})",
+                item["title"].as_str().unwrap_or("?"),
+                item["node_type"].as_str().unwrap_or("?"),
+                item["importance"].as_f64().unwrap_or(0.0)
+            );
+        }
+
+        // 4. Query L2 list to find the auto-created topic
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l2","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+        let l2_total = res["data"]["total"].as_u64().unwrap_or(0);
+        println!("[L2 Query] Total L2 topics: {}", l2_total);
+        assert!(l2_total > 0, "build_l3 should create an L2 topic");
+
+        let l2_items = res["data"]["items"].as_array().unwrap();
+        let l2_id = l2_items[0]["id"].as_str().unwrap().to_string();
+        let l2_title = l2_items[0]["title"].as_str().unwrap_or("?").to_string();
+        println!("  L2: '{}' (id={})", l2_title, l2_id);
+
+        // 5. Get L2 topic detail to verify L3 linkage (TopicDetail has l3_refs)
+        let get_cmd = format!(
+            r#"{{"command":"query_layer","layer":"l2","action":"get","get":{{"id":"{}"}}, "list":{{}}}}"#,
+            l2_id
+        );
+        let res = exec(handle, &get_cmd);
+        assert_success(&res);
+        let detail_l3_refs = res["data"]["l3_refs"].as_array().unwrap();
+        println!(
+            "[L2 Detail] title='{}', l3_refs={:?}",
+            res["data"]["title"].as_str().unwrap_or("?"),
+            detail_l3_refs
+        );
+        assert!(
+            !detail_l3_refs.is_empty(),
+            "L2 detail should include l3_refs"
+        );
+
+        // 6. Search via context_id (doesn't need encoder) to verify L3 discovery
+        let search_cmd = format!(
+            r#"{{"command":"search","dialogue":"meowagent code","context_id":"{}","context_limit":5,"min_score":0.0,"auto_create":0}}"#,
+            l2_id
+        );
+        let res = exec(handle, &search_cmd);
+        println!(
+            "[Search context_id] result: {}",
+            serde_json::to_string_pretty(&res).unwrap()
+        );
+        assert_success(&res);
+
+        let contexts = res["data"]["contexts"].as_array().unwrap();
+        assert!(!contexts.is_empty(), "search should return the L2 context");
+
+        let l3_ids = res["data"]["l3_ids"].as_array().unwrap();
+        println!("[Search] Discovered L3 IDs: {:?}", l3_ids);
+        assert!(
+            !l3_ids.is_empty(),
+            "Search via L2 should discover L3 IDs from l3_refs"
+        );
+
+        // 7. Sync and close
+        let res = exec(handle, r#"{"command":"sync"}"#);
+        assert_success(&res);
+
+        let res = exec(handle, r#"{"command":"close"}"#);
+        assert_success(&res);
+        memhop_close(handle);
+
+        // 8. Reopen and verify persistence
+        let handle2 = memhop_open(cfg.as_ptr());
+        assert!(!handle2.is_null(), "reopen failed");
+
+        let res = exec(
+            handle2,
+            r#"{"command":"query_layer","layer":"l3","action":"list","list":{"page":1,"page_size":5}}"#,
+        );
+        assert_success(&res);
+        let persisted_l3 = res["data"]["total"].as_u64().unwrap_or(0);
+        println!("[Persistence] L3 nodes after reopen: {}", persisted_l3);
+        assert!(
+            persisted_l3 > 0,
+            "L3 nodes should persist after close/reopen"
+        );
+
+        let res = exec(
+            handle2,
+            r#"{"command":"query_layer","layer":"l2","action":"list","list":{"page":1,"page_size":5}}"#,
+        );
+        assert_success(&res);
+        let persisted_l2 = res["data"]["total"].as_u64().unwrap_or(0);
+        println!("[Persistence] L2 topics after reopen: {}", persisted_l2);
+        assert!(persisted_l2 > 0, "L2 topics should persist");
+
+        memhop_close(handle2);
         let _ = std::fs::remove_file(db_path);
     }
 }

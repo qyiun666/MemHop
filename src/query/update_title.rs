@@ -53,6 +53,36 @@ pub fn update_profile(
             if let Some(preferences) = request.preferences {
                 profile.preferences = preferences;
             }
+            if let Some(lexicon) = request.lexicon {
+                // Merge: new entries override old, old entries preserved
+                for (k, v) in lexicon {
+                    profile.lexicon.insert(k, v);
+                }
+                // Enforce max 30 entries
+                if profile.lexicon.len() > 30 {
+                    let excess: Vec<String> = profile.lexicon.keys().skip(30).cloned().collect();
+                    for k in excess {
+                        profile.lexicon.remove(&k);
+                    }
+                }
+            }
+            if let Some(style_traits) = request.style_traits {
+                profile.style_traits = style_traits;
+                profile.style_traits.dedup();
+                profile.style_traits.truncate(10);
+            }
+            if let Some(emotion_patterns) = request.emotion_patterns {
+                for (k, v) in emotion_patterns {
+                    profile.emotion_patterns.insert(k, v);
+                }
+                if profile.emotion_patterns.len() > 10 {
+                    let excess: Vec<String> =
+                        profile.emotion_patterns.keys().skip(10).cloned().collect();
+                    for k in excess {
+                        profile.emotion_patterns.remove(&k);
+                    }
+                }
+            }
 
             // Update timestamp and version
             profile.updated_at = now_ms;
@@ -77,6 +107,9 @@ pub fn update_profile(
                 personality: profile.personality,
                 worldview: profile.worldview,
                 preferences: profile.preferences.clone(),
+                lexicon: profile.lexicon.clone(),
+                style_traits: profile.style_traits.clone(),
+                emotion_patterns: profile.emotion_patterns.clone(),
                 created_at: profile.created_at,
                 updated_at: profile.updated_at,
             })
@@ -97,6 +130,9 @@ pub fn update_profile(
                 personality: request.personality.unwrap_or_default(),
                 worldview: request.worldview.unwrap_or_default(),
                 preferences: request.preferences.unwrap_or_default(),
+                lexicon: request.lexicon.unwrap_or_default(),
+                style_traits: request.style_traits.unwrap_or_default(),
+                emotion_patterns: request.emotion_patterns.unwrap_or_default(),
                 created_at: now_ms,
                 updated_at: now_ms,
                 version: 1,
@@ -132,6 +168,9 @@ pub fn update_profile(
                 personality: profile.personality,
                 worldview: profile.worldview,
                 preferences: profile.preferences.clone(),
+                lexicon: profile.lexicon.clone(),
+                style_traits: profile.style_traits.clone(),
+                emotion_patterns: profile.emotion_patterns.clone(),
                 created_at: profile.created_at,
                 updated_at: profile.updated_at,
             })

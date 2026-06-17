@@ -132,6 +132,11 @@ pub struct UpdateTitleParams {
     pub personality: Option<String>,
     pub worldview: Option<String>,
     pub preferences: Option<std::collections::HashMap<String, String>>,
+
+    // For L0 (user language habits)
+    pub lexicon: Option<std::collections::HashMap<String, String>>,
+    pub style_traits: Option<Vec<String>>,
+    pub emotion_patterns: Option<std::collections::HashMap<String, String>>,
 }
 
 /// Import sub-actions

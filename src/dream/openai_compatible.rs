@@ -2,7 +2,7 @@
 //
 // Supports any LLM API that follows the OpenAI chat completions format,
 // including OpenAI, DeepSeek, and other compatible services.
-use crate::dream::llm::{CrystalDef, LlmProvider, MemorySummary, Pattern};
+use crate::dream::llm::{CrystalDef, HabitAnalysis, LlmProvider, MemorySummary, Pattern};
 use crate::MemHopError;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -58,7 +58,8 @@ impl OpenAICompatibleLlmProvider {
             "temperature": 0.3,
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&self.api_url)
             .bearer_auth(&self.api_key)
             .json(&body)
@@ -67,12 +68,15 @@ impl OpenAICompatibleLlmProvider {
             .map_err(|e| MemHopError::Serialization(format!("API call failed: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(MemHopError::Serialization(
-                format!("API request failed: {} - {}", response.status(), response.text().unwrap_or_default())
-            ));
+            return Err(MemHopError::Serialization(format!(
+                "API request failed: {} - {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            )));
         }
 
-        let json: serde_json::Value = response.json()
+        let json: serde_json::Value = response
+            .json()
             .map_err(|e| MemHopError::Serialization(format!("Parse response failed: {}", e)))?;
 
         json["choices"][0]["message"]["content"]
@@ -84,7 +88,9 @@ impl OpenAICompatibleLlmProvider {
 
 impl LlmProvider for OpenAICompatibleLlmProvider {
     fn summarize(&self, texts: &[String]) -> Result<String, MemHopError> {
-        let memories_text = texts.iter().enumerate()
+        let memories_text = texts
+            .iter()
+            .enumerate()
             .map(|(i, t)| format!("{}. {}", i + 1, t))
             .collect::<Vec<_>>()
             .join("\n");
@@ -115,21 +121,27 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
         let json: serde_json::Value = serde_json::from_str(&response)
             .map_err(|e| MemHopError::Serialization(format!("Parse summary failed: {}", e)))?;
 
-        Ok(json["summary"].as_str()
-            .unwrap_or(&response)  // 如果解析失败,返回原始响应
+        Ok(json["summary"]
+            .as_str()
+            .unwrap_or(&response) // 如果解析失败,返回原始响应
             .to_string())
     }
 
     fn extract_patterns(&self, memories: &[MemorySummary]) -> Result<Vec<Pattern>, MemHopError> {
-        let memories_text = memories.iter().enumerate()
-            .map(|(i, m)| format!("{}. [{}] {}\n   Keywords: {}", 
-                i + 1, 
-                chrono::DateTime::from_timestamp_millis(m.timestamp)
-                    .map(|dt| dt.format("%Y-%m-%d").to_string())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                m.text,
-                m.keywords.join(", ")
-            ))
+        let memories_text = memories
+            .iter()
+            .enumerate()
+            .map(|(i, m)| {
+                format!(
+                    "{}. [{}] {}\n   Keywords: {}",
+                    i + 1,
+                    chrono::DateTime::from_timestamp_millis(m.timestamp)
+                        .map(|dt| dt.format("%Y-%m-%d").to_string())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    m.text,
+                    m.keywords.join(", ")
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n");
 
@@ -162,11 +174,14 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
         let patterns: Vec<serde_json::Value> = serde_json::from_str(&response)
             .map_err(|e| MemHopError::Serialization(format!("Parse patterns failed: {}", e)))?;
 
-        Ok(patterns.into_iter().map(|p| Pattern {
-            description: p["description"].as_str().unwrap_or("").to_string(),
-            frequency: p["frequency"].as_u64().unwrap_or(1) as u32,
-            confidence: p["confidence"].as_f64().unwrap_or(0.5) as f32,
-        }).collect())
+        Ok(patterns
+            .into_iter()
+            .map(|p| Pattern {
+                description: p["description"].as_str().unwrap_or("").to_string(),
+                frequency: p["frequency"].as_u64().unwrap_or(1) as u32,
+                confidence: p["confidence"].as_f64().unwrap_or(0.5) as f32,
+            })
+            .collect())
     }
 
     fn generate_crystal(&self, pattern: &Pattern) -> Result<CrystalDef, MemHopError> {
@@ -209,7 +224,9 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
         Ok(CrystalDef {
             condition: json["condition"].as_str().unwrap_or("").to_string(),
             action: json["action"].as_str().unwrap_or("").to_string(),
-            confidence: json["confidence"].as_f64().unwrap_or(pattern.confidence as f64) as f32,
+            confidence: json["confidence"]
+                .as_f64()
+                .unwrap_or(pattern.confidence as f64) as f32,
         })
     }
 
@@ -218,16 +235,18 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
         let mut keyword_freq: HashMap<String, usize> = HashMap::new();
         for text in texts {
             for word in text.split_whitespace() {
-                if word.len() > 2 {  // 过滤短词
+                if word.len() > 2 {
+                    // 过滤短词
                     *keyword_freq.entry(word.to_lowercase()).or_insert(0) += 1;
                 }
             }
         }
-        
+
         let mut sorted: Vec<_> = keyword_freq.into_iter().collect();
         sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
-        
-        sorted.into_iter()
+
+        sorted
+            .into_iter()
             .take(10)
             .map(|(k, _)| k)
             .collect::<Vec<_>>()
@@ -251,8 +270,9 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
         }
 
         let total = memories.len();
-        let common_keywords: Vec<_> = keyword_count.into_iter()
-            .filter(|(_, count)| *count >= 2)  // 至少出现在2个记忆中
+        let common_keywords: Vec<_> = keyword_count
+            .into_iter()
+            .filter(|(_, count)| *count >= 2) // 至少出现在2个记忆中
             .map(|(kw, count)| Pattern {
                 description: format!("Common theme: {}", kw),
                 frequency: count as u32,
@@ -266,20 +286,161 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
     fn fallback_generate_crystal(&self, pattern: &Pattern) -> CrystalDef {
         // 正则提取 "when/if → then" 模式
         let re = regex::Regex::new(r"(?i)(?:when|if)\s+(.+?)\s*(?:then|→|=>)\s*(.+)").unwrap();
-        
+
         if let Some(caps) = re.captures(&pattern.description) {
             CrystalDef {
                 condition: caps[1].trim().to_string(),
                 action: caps[2].trim().to_string(),
-                confidence: pattern.confidence * 0.8,  // 降低置信度
+                confidence: pattern.confidence * 0.8, // 降低置信度
             }
         } else {
             // 无法提取,返回通用模板
             CrystalDef {
-                condition: format!("trigger: {}", pattern.description.chars().take(50).collect::<String>()),
+                condition: format!(
+                    "trigger: {}",
+                    pattern.description.chars().take(50).collect::<String>()
+                ),
                 action: "log_and_notify".to_string(),
                 confidence: 0.3,
             }
+        }
+    }
+
+    fn analyze_user_habits(&self, dialogues: &[String]) -> Result<HabitAnalysis, MemHopError> {
+        let dialogues_text = dialogues
+            .iter()
+            .enumerate()
+            .map(|(i, d)| format!("{}. {}", i + 1, d))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = format!(
+            "# 角色\n\
+             你是用户语言习惯分析专家,擅长从对话记录中识别用户的独特语言模式和沟通风格。\n\n\
+             # 任务\n\
+             分析以下用户的对话记录,提取三个维度的信息:\n\n\
+             ## 1. 用户词典 (lexicon)\n\
+             识别用户独特的用词习惯,包括:\n\
+             - 网络用语/俚语及其含义 (如 \"6\"→\"厉害/牛\", \"摸鱼\"→\"偷懒休息\")\n\
+             - 用户自创的缩写或术语\n\
+             - 有个人特色的表达方式\n\
+             最多提取15条,每条包含用词和含义。\n\n\
+             ## 2. 沟通风格 (style_traits)\n\
+             识别用户的沟通风格特征,用英文标签表示,例如:\n\
+             - \"prefers_brevity\" (喜欢简短回答)\n\
+             - \"uses_casual_tone\" (语气随意)\n\
+             - \"likes_code_examples\" (喜欢代码示例)\n\
+             - \"asks_follow_up\" (经常追问)\n\
+             - \"uses_humor\" (幽默风格)\n\
+             最多5个标签。\n\n\
+             ## 3. 情绪表达模式 (emotion_patterns)\n\
+             识别用户独特的情绪表达方式,包括:\n\
+             - 特定词汇/表情代表的情绪 (如 \"呵呵\"→\"不满或敷衍\")\n\
+             - 语气词的含义\n\
+             最多5条。\n\n\
+             # 输出格式\n\
+             返回严格JSON格式:\n\
+             {{\n\
+               \"lexicon\": {{\"用词\": \"含义\", ...}},\n\
+               \"style_traits\": [\"trait1\", \"trait2\"],\n\
+               \"emotion_patterns\": {{\"表达\": \"含义\", ...}}\n\
+             }}\n\n\
+             # 输入数据\n\
+             {dialogues_text}\n\n\
+             # 开始分析\n"
+        );
+
+        let response = self.call_api(&prompt, 1024)?;
+
+        // Strip markdown code blocks if present
+        let cleaned = response.trim();
+        let cleaned = if cleaned.starts_with("```") {
+            cleaned
+                .lines()
+                .filter(|l| !l.starts_with("```"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            cleaned.to_string()
+        };
+
+        let json: serde_json::Value = serde_json::from_str(&cleaned).map_err(|e| {
+            MemHopError::Serialization(format!("Parse habit analysis failed: {}", e))
+        })?;
+
+        let mut lexicon = HashMap::new();
+        if let Some(obj) = json["lexicon"].as_object() {
+            for (k, v) in obj {
+                if let Some(meaning) = v.as_str() {
+                    lexicon.insert(k.clone(), meaning.to_string());
+                }
+            }
+        }
+
+        let mut style_traits = Vec::new();
+        if let Some(arr) = json["style_traits"].as_array() {
+            for v in arr {
+                if let Some(s) = v.as_str() {
+                    style_traits.push(s.to_string());
+                }
+            }
+        }
+
+        let mut emotion_patterns = HashMap::new();
+        if let Some(obj) = json["emotion_patterns"].as_object() {
+            for (k, v) in obj {
+                if let Some(meaning) = v.as_str() {
+                    emotion_patterns.insert(k.clone(), meaning.to_string());
+                }
+            }
+        }
+
+        Ok(HabitAnalysis {
+            lexicon,
+            style_traits,
+            emotion_patterns,
+        })
+    }
+
+    fn fallback_analyze_user_habits(&self, dialogues: &[String]) -> HabitAnalysis {
+        // Simple fallback: extract high-frequency non-stop words as lexicon candidates
+        let stop_words: HashSet<&str> = [
+            "the", "a", "an", "is", "are", "was", "were", "be", "been", "have", "has", "had", "do",
+            "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall",
+            "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through",
+            "during", "and", "but", "or", "not", "no", "nor", "so", "yet", "both", "either",
+            "neither", "each", "every", "all", "any", "few", "more", "most", "other", "some",
+            "such", "than", "too", "very", "just", "because", "if", "when", "while", "的", "了",
+            "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "一个", "上", "也", "很",
+            "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这",
+        ]
+        .iter()
+        .copied()
+        .collect();
+
+        let mut word_freq: HashMap<String, usize> = HashMap::new();
+        for text in dialogues {
+            for word in text.split_whitespace() {
+                let lower = word.to_lowercase();
+                if lower.len() > 1 && !stop_words.contains(lower.as_str()) {
+                    *word_freq.entry(lower).or_insert(0) += 1;
+                }
+            }
+        }
+
+        // Take top 10 most frequent words as lexicon entries
+        let mut sorted: Vec<_> = word_freq.into_iter().collect();
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
+
+        let mut lexicon = HashMap::new();
+        for (word, freq) in sorted.into_iter().take(10) {
+            lexicon.insert(word.clone(), format!("高频词(出现{}次)", freq));
+        }
+
+        HabitAnalysis {
+            lexicon,
+            style_traits: Vec::new(), // Cannot determine style without LLM
+            emotion_patterns: HashMap::new(), // Cannot determine emotions without LLM
         }
     }
 }
