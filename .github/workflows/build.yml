@@ -1,14 +1,12 @@
 # Cross-platform build for libmemhop (cdylib)
 # Builds: macOS (x86_64 + arm64 → universal) · Linux (.so) · Windows (.dll)
-# On tag push (v*), creates a GitHub Release with all binaries.
+# Triggered ONLY by tag push (v*) or manual dispatch.
+# Regular pushes use workflow.yml (CI) for fast check/clippy/test.
 name: build
 
 on:
   push:
-    branches: [main, master, develop]
     tags: ["v*"]
-  pull_request:
-    branches: [main, master]
   workflow_dispatch:
 
 env:
