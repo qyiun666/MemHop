@@ -289,7 +289,7 @@ mod tests {
         // Manually insert topics with different timestamps
         let current_time = current_timestamp_ms();
         let twenty_five_hours_ago = current_time - (25 * 3_600_000);
-        let one_hour_ago = current_time - (1 * 3_600_000);
+        let one_hour_ago = current_time - 3_600_000;
 
         // Insert expired topic
         let mut expired_activation = TopicActivation::new(5001, 3_600_000);

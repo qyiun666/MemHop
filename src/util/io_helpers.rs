@@ -168,6 +168,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_read_write_numeric() {
         let mut buffer = Vec::new();
         buffer.write_all(&42u8.to_le_bytes()).unwrap();

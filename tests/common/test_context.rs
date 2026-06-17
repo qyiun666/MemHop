@@ -3,6 +3,7 @@ use memhop::{MemHop, MemHopConfig};
 use std::fs;
 use std::path::PathBuf;
 
+#[allow(dead_code)]
 pub struct TestContext {
     pub db: MemHop,
     pub db_path: PathBuf,
@@ -15,6 +16,7 @@ pub struct TestContext {
     pub created_l5_ids: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl TestContext {
     pub fn setup() -> Self {
         // 1. 确定路径

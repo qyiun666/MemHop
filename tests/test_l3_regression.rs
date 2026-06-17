@@ -181,7 +181,7 @@ fn test_list_knowledge_pagination() {
     let (_temp_dir, mut db) = create_test_db("l3_list_pagination");
 
     // Import 5 knowledge items with different domains
-    let domains = vec!["programming", "math", "physics", "chemistry", "biology"];
+    let domains = ["programming", "math", "physics", "chemistry", "biology"];
     for (i, domain) in domains.iter().enumerate() {
         import_knowledge(
             &mut db,

@@ -28,7 +28,7 @@ type MemHopClose = unsafe extern "C" fn(*mut std::ffi::c_void);
 // ============================================================================
 
 fn load_lib(path: &PathBuf) -> Library {
-    unsafe { Library::new(path).expect(&format!("Failed to load library: {:?}", path)) }
+    unsafe { Library::new(path).unwrap_or_else(|_| panic!("Failed to load library: {:?}", path)) }
 }
 
 unsafe fn exec(
@@ -475,12 +475,11 @@ fn main() {
             if p.exists() {
                 p
             } else {
-                // fallback 到本地构建产物
-                let local = PathBuf::from(
+                // fallback to local build artifact
+                PathBuf::from(
                     std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string()),
                 )
-                .join("target/release/libmemhop.dylib");
-                local
+                .join("target/release/libmemhop.dylib")
             }
         });
 

@@ -314,7 +314,7 @@ mod tests {
         let b = vec![f16::from_f32(1.0), f16::from_f32(0.0), f16::from_f32(0.0)];
         let sim = cosine_similarity(&a, &b);
         // cos(45°) = 1/sqrt(2) ≈ 0.7071
-        assert!((sim - 0.7071).abs() < 0.01, "Expected ~0.7071, got {}", sim);
+        assert!((sim - std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "Expected ~0.7071, got {}", sim);
     }
 
     #[test]

@@ -267,7 +267,7 @@ mod tests {
         // Corrupt some data
         bytes[100] ^= 0xFF;
 
-        assert!(FileHeader::from_bytes(&bytes.try_into().unwrap()).is_err());
+        assert!(FileHeader::from_bytes(&bytes).is_err());
     }
 
     #[test]
@@ -278,7 +278,7 @@ mod tests {
         // Corrupt magic
         bytes[0] = 0x00;
 
-        assert!(FileHeader::from_bytes(&bytes.try_into().unwrap()).is_err());
+        assert!(FileHeader::from_bytes(&bytes).is_err());
     }
 
     #[test]
