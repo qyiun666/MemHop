@@ -4,6 +4,7 @@ pub mod crystallize_stage;
 pub mod emotion;
 pub mod habit_distill_stage;
 pub mod l0_form_stage;
+pub mod l1_decay;
 pub mod l3_distill_stage;
 pub mod llm;
 pub mod openai_compatible;
@@ -53,6 +54,10 @@ pub fn dream_pipeline(
         removed_contexts: Vec::new(),
         new_compressed: Vec::new(),
         l1_updated: Vec::new(),
+        l1_decayed_nodes: 0,
+        l1_pruned_edges: 0,
+        l1_removed_nodes: 0,
+        l1_removed_edges: 0,
         l0_updated: None,
         habits_updated: None,
         new_l3_nodes: Vec::new(),
@@ -79,6 +84,13 @@ pub fn dream_pipeline(
     // L1 nodes point to L2 contexts; after L2 depth changes, L1 associations need refresh
     let l1_updated = rebuild_l1_from_l2(mmap, header, btree, &session_topic_ids)?;
     report.l1_updated = l1_updated;
+
+    // Stage 2b: L1 Decay - time-decay node importance and prune weak edges
+    let l1_decay_report = l1_decay::decay_l1_network(mmap, header, btree)?;
+    report.l1_decayed_nodes = l1_decay_report.decayed_nodes;
+    report.l1_pruned_edges = l1_decay_report.pruned_edges;
+    report.l1_removed_nodes = l1_decay_report.removed_nodes;
+    report.l1_removed_edges = l1_decay_report.removed_edges;
 
     // Stage 3: L0 Update - regenerate profile from knowledge distribution
     l0_form_stage::generate_profile(mmap, header, btree, sparse_index)?;

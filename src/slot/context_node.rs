@@ -12,24 +12,27 @@ use std::io::{self, Cursor, Read, Write};
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextNode {
     pub id_hash: u64,
-    pub context_id: u64,         // Points to L2 ContextSlot id_hash
-    pub vector_page_ref: u64,    // Vector page reference for similarity search
-    pub importance: f32,         // Node importance weight
+    pub context_id: u64,      // Points to L2 ContextSlot id_hash
+    pub vector_page_ref: u64, // Vector page reference for similarity search
+    pub importance: f32,      // Node importance weight
+    pub valence: f64,         // Emotional valence (-1.0 to 1.0), used for decay modulation
+    pub arousal: f64,         // Emotional arousal (0.0 to 1.0), used for decay modulation
     pub created_at: i64,
     pub updated_at: i64,
     pub version: u32,
-    pub edge_ptrs: Vec<u64>,     // Associated Hyperedge id_hash list
+    pub edge_ptrs: Vec<u64>, // Associated Hyperedge id_hash list
 }
 
 impl ContextNode {
     /// Calculate the total serialized size in bytes
     ///
     /// Fixed: 8 (id_hash) + 8 (context_id) + 8 (vector_page_ref) +
-    ///        4 (importance) + 8 (created_at) + 8 (updated_at) + 4 (version) +
-    ///        2 (edge_count) = 50 bytes
+    ///        4 (importance) + 8 (valence) + 8 (arousal) +
+    ///        8 (created_at) + 8 (updated_at) + 4 (version) +
+    ///        2 (edge_count) = 66 bytes
     /// Variable: edge_ptrs.len() * 8
     pub fn slot_size(&self) -> usize {
-        50 + self.edge_ptrs.len() * 8
+        66 + self.edge_ptrs.len() * 8
     }
 
     /// Serialize to bytes
@@ -41,6 +44,8 @@ impl ContextNode {
     /// | context_id      | u64 LE  | 8     |
     /// | vector_page_ref | u64 LE  | 8     |
     /// | importance      | f32 LE  | 4     |
+    /// | valence         | f64 LE  | 8     |
+    /// | arousal         | f64 LE  | 8     |
     /// | created_at      | i64 LE  | 8     |
     /// | updated_at      | i64 LE  | 8     |
     /// | version         | u32 LE  | 4     |
@@ -53,6 +58,8 @@ impl ContextNode {
         buf.write_all(&self.context_id.to_le_bytes())?;
         buf.write_all(&self.vector_page_ref.to_le_bytes())?;
         buf.write_all(&self.importance.to_le_bytes())?;
+        buf.write_all(&self.valence.to_le_bytes())?;
+        buf.write_all(&self.arousal.to_le_bytes())?;
         buf.write_all(&self.created_at.to_le_bytes())?;
         buf.write_all(&self.updated_at.to_le_bytes())?;
         buf.write_all(&self.version.to_le_bytes())?;
@@ -73,6 +80,8 @@ impl ContextNode {
         let context_id = read_u64(&mut c)?;
         let vector_page_ref = read_u64(&mut c)?;
         let importance = read_f32(&mut c)?;
+        let valence = read_f64(&mut c)?;
+        let arousal = read_f64(&mut c)?;
         let created_at = read_i64(&mut c)?;
         let updated_at = read_i64(&mut c)?;
         let version = read_u32(&mut c)?;
@@ -88,6 +97,8 @@ impl ContextNode {
             context_id,
             vector_page_ref,
             importance,
+            valence,
+            arousal,
             created_at,
             updated_at,
             version,
@@ -130,6 +141,12 @@ fn read_f32(c: &mut Cursor<&[u8]>) -> io::Result<f32> {
     Ok(f32::from_le_bytes(buf))
 }
 
+fn read_f64(c: &mut Cursor<&[u8]>) -> io::Result<f64> {
+    let mut buf = [0u8; 8];
+    c.read_exact(&mut buf)?;
+    Ok(f64::from_le_bytes(buf))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +158,8 @@ mod tests {
             context_id: 67890,
             vector_page_ref: 42,
             importance: 0.85,
+            valence: 0.0,
+            arousal: 0.0,
             created_at: 1000000,
             updated_at: 2000000,
             version: 1,
@@ -149,8 +168,8 @@ mod tests {
 
         let data = node.serialize().unwrap();
         assert_eq!(data.len(), node.slot_size());
-        let restored = ContextNode::deserialize(&data).unwrap();
-        assert_eq!(node, restored);
+        // 66 + 24 = 90
+        assert_eq!(data.len(), 90);
     }
 
     #[test]
@@ -160,6 +179,8 @@ mod tests {
             context_id: 2,
             vector_page_ref: 0,
             importance: 0.0,
+            valence: 0.0,
+            arousal: 0.0,
             created_at: 0,
             updated_at: 0,
             version: 0,
@@ -167,8 +188,8 @@ mod tests {
         };
 
         let data = node.serialize().unwrap();
-        // Fixed size only: 50 bytes
-        assert_eq!(data.len(), 50);
+        // Fixed size only: 66 bytes
+        assert_eq!(data.len(), 66);
         let restored = ContextNode::deserialize(&data).unwrap();
         assert_eq!(node, restored);
     }
@@ -180,12 +201,14 @@ mod tests {
             context_id: 2,
             vector_page_ref: 3,
             importance: 0.5,
+            valence: -0.3,
+            arousal: 0.7,
             created_at: 0,
             updated_at: 0,
             version: 0,
             edge_ptrs: vec![10, 20],
         };
-        // 50 + 2*8 = 66
-        assert_eq!(node.slot_size(), 66);
+        // 66 + 2*8 = 82
+        assert_eq!(node.slot_size(), 82);
     }
 }

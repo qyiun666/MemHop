@@ -278,6 +278,8 @@ pub fn dedup_and_write_l1(
             context_id: 0,
             vector_page_ref,
             importance: item.importance,
+            valence: 0.0,
+            arousal: 0.0,
             created_at: now,
             updated_at: now,
             version: 1,

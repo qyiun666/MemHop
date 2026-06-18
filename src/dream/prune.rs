@@ -28,6 +28,14 @@ pub struct DreamReport {
     pub new_compressed: Vec<CompressResult>,
     /// L1 nodes updated based on L2 changes
     pub l1_updated: Vec<String>,
+    /// Number of L1 nodes whose importance was decayed/updated
+    pub l1_decayed_nodes: usize,
+    /// Number of edge pointers pruned from ContextNodes
+    pub l1_pruned_edges: usize,
+    /// Number of L1 ContextNodes removed due to low importance
+    pub l1_removed_nodes: usize,
+    /// Number of HyperedgeSlots removed due to low weight or underpopulation
+    pub l1_removed_edges: usize,
     /// L0 profile updated: (profile_id, updated_fields)
     pub l0_updated: Option<(String, Vec<String>)>,
     /// User language habits updated from dialogue analysis
@@ -101,6 +109,10 @@ mod tests {
                 new_summary: "compressed".to_string(),
             }],
             l1_updated: vec!["node-1".to_string()],
+            l1_decayed_nodes: 0,
+            l1_pruned_edges: 0,
+            l1_removed_nodes: 0,
+            l1_removed_edges: 0,
             l0_updated: Some(("profile-1".to_string(), vec!["personality".to_string()])),
             habits_updated: None,
             new_l3_nodes: vec!["l3-node-1".to_string()],
