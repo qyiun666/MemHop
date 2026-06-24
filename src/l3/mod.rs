@@ -13,12 +13,14 @@
 //! All nodes and edges are registered in the global BTreeIndex using their own id_hash.
 //! The `graph_id` field on each node/edge links them to their parent HypergraphSlot.
 
+pub mod cache;
 pub mod index;
 pub mod store;
 
+pub use cache::AdjacencyCache;
 pub use index::{L3Index, L3IndexQuery};
 pub use store::{
-    add_edge, add_node, bfs_traversal, collect_l2_refs, count_graph_elements, delete_edge,
+    add_edge, add_node, bfs_traversal, bfs_traversal_cached, collect_l2_refs, count_graph_elements, delete_edge,
     delete_graph, delete_node, extract_subgraph, get_edge, get_node, list_edges_by_graph,
     list_nodes_by_graph, read_node_neighbors, remove_l3_ref_from_context,
 };

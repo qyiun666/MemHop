@@ -243,6 +243,7 @@ pub struct MemHop {
     session_manager: SessionManager,
     encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>>,
     l1_reverse_index: L1ReverseIndex,
+    adjacency_cache: crate::l3::AdjacencyCache,
     closed: bool, // Prevent Drop from re-checkpointing after close()
 }
 
@@ -404,6 +405,7 @@ impl MemHop {
             session_manager,
             encoder,
             l1_reverse_index,
+            adjacency_cache: crate::l3::AdjacencyCache::new(),
             closed: false,
         })
     }
@@ -1342,7 +1344,7 @@ impl MemHop {
 
     /// Query a subgraph reachable from `start_node` within `max_depth` hops.
     pub fn graph_query(
-        &self,
+        &mut self,
         graph_id: &str,
         start_node: &str,
         max_depth: usize,
@@ -1354,7 +1356,7 @@ impl MemHop {
 
     /// Internal graph query that returns both the subgraph and the traversal hops.
     pub(crate) fn graph_query_internal(
-        &self,
+        &mut self,
         graph_id: &str,
         start_node: &str,
         max_depth: usize,
@@ -1373,13 +1375,14 @@ impl MemHop {
         });
 
         let data: &[u8] = &self.mmap[..];
-        let hops = crate::l3::store::bfs_traversal(
+        let hops = crate::l3::store::bfs_traversal_cached(
             data,
             &self.btree,
             graph_hash,
             start_hash,
             max_depth,
             kinds.as_deref(),
+            &mut self.adjacency_cache,
         )?;
 
         let mut node_hashes = HashSet::new();
