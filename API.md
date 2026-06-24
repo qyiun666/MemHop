@@ -495,13 +495,12 @@ Profile：
     "role": "编程助手",
     "personality": null,
     "worldview": null,
-    "preferences": null,
-    "lexicon": null,
-    "style_traits": null,
-    "emotion_patterns": null
+    "preferences": null
   }
 }
 ```
+
+> `Profile` 导入仅支持 `name`、`role`、`personality`、`worldview`、`preferences`。如需更新 `lexicon`、`style_traits`、`emotion_patterns` 等语言习惯，请使用 `update_title` 命令的 `l0` 层。
 
 Topics：
 
@@ -629,19 +628,85 @@ Knowledge：
 | `max_depth` | integer         | 是   | 最大遍历深度                                                 |
 | `edge_kinds`| string[] / null | 否   | 边类型过滤，可选值：`Related` `Causal` `PartOf` `Sequence` `Dependency` `Custom`；为空或省略时不过滤 |
 
-**响应**：
+**响应 `data`**：
 
 ```json
 {
-  "nodes": [...],
-  "edges": [...],
-  "hops": [...]
+  "nodes": [
+    {
+      "id_hash": 1234567890,
+      "graph_id": 9876543210,
+      "title": "所有权规则",
+      "node_type": "concept",
+      "content": "Rust 中每个值都有且只有一个所有者",
+      "keywords": ["ownership", "rust"],
+      "source_ref": "/docs/rust-book/ch04-01-ownership.md",
+      "importance": 0.9,
+      "created_at": 1718304000000,
+      "updated_at": 1718304000000,
+      "version": 1
+    }
+  ],
+  "edges": [
+    {
+      "id_hash": 1111111111,
+      "graph_id": 9876543210,
+      "kind": "Dependency",
+      "node_ids": [1234567890, 9876543210],
+      "weight": 0.85,
+      "label": "依赖",
+      "created_at": 1718304000000
+    }
+  ],
+  "hops": [
+    {
+      "depth": 1,
+      "from_node": 1234567890,
+      "edge": { ... },
+      "to_node": 9876543210
+    }
+  ]
 }
 ```
 
-- `nodes`: `HypergraphNode` 数组，包含遍历涉及的所有节点。
-- `edges`: `HypergraphEdge` 数组，去重后的边。
-- `hops`: 遍历路径步信息（`TraversalHop`），描述从起点出发的每一步。
+`nodes` 元素字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id_hash` | integer (u64) | 节点 ID，序列化为十进制整数 |
+| `graph_id` | integer (u64) | 所属超图 ID |
+| `title` | string | 节点标题 |
+| `node_type` | string | 类型标签，如 `concept`、`function`、`file` |
+| `content` | string | 节点内容 |
+| `keywords` | string[] | 关键词 |
+| `source_ref` | string / null | 来源引用，如 `/path/file.rs:L10-L50` |
+| `importance` | number | 重要度 0.0-1.0 |
+| `created_at` | integer | 创建时间戳（毫秒） |
+| `updated_at` | integer | 更新时间戳（毫秒） |
+| `version` | integer | 版本号 |
+
+`edges` 元素字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id_hash` | integer (u64) | 边 ID |
+| `graph_id` | integer (u64) | 所属超图 ID |
+| `kind` | string | 边类型：`Related` / `Causal` / `PartOf` / `Sequence` / `Dependency` / `Custom` |
+| `node_ids` | integer[] | 连接的节点 ID 数组（超边，长度 ≥ 2） |
+| `weight` | number | 权重 |
+| `label` | string / null | 语义标签 |
+| `created_at` | integer | 创建时间戳（毫秒） |
+
+`hops` 元素字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `depth` | integer | 从起点出发的步数 |
+| `from_node` | integer (u64) | 出发节点 ID |
+| `edge` | object | 本步经过的边（同 `edges` 元素结构） |
+| `to_node` | integer (u64) | 到达节点 ID |
+
+> 注意：请求中的 `graph_id` 与 `start_node` 使用 16 进制字符串，但响应中的 `id_hash`、`graph_id`、`node_ids` 被序列化为十进制整数。如需将其作为字符串 ID 用于其他命令，请自行转换为 16 进制字符串。
 
 ---
 
@@ -667,7 +732,11 @@ Knowledge：
 { "deleted": true }
 ```
 
-不支持的 layer 返回错误。
+**错误处理**：
+
+- `layer` 不是上表支持的值时返回：`unsupported delete layer: xxx`
+- 各层删除对不存在的 `id` 均为幂等：返回 `{ "deleted": true }`，不会报错
+- 删除 L3 超图时会级联清理引用该图的所有 L2 `l3_refs`
 
 ---
 
@@ -708,6 +777,7 @@ Knowledge：
 - `missing 'id' for L1 get` — query_layer L1 get 缺少 id
 - `unsupported query_layer: layer=l4, action=get` — 不支持的 layer/action 组合
 - `unknown import action: 'xxx'` — import action 必须是 `import` 或 `build_l3`
+- `unsupported delete layer: xxx` — delete 的 layer 必须是 `l2`/`topic`、`l3`/`knowledge`/`graph`、`l5`/`crystal`/`action_chain` 之一
 - `Encoder error: ...` — 编码器未配置或 gRPC 连接失败
 - `handle is null` — 传入了空句柄
 
