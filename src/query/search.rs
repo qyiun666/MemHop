@@ -20,7 +20,9 @@ use crate::slot::archive::ArchiveSlot;
 use crate::slot::context::ContextSlot;
 use crate::slot::context_node::ContextNode;
 use crate::slot::hyperedge::HyperedgeSlot;
-use crate::util::{hash_id, PAGE_SIZE};
+use crate::slot::hypergraph::{HypergraphNode, HypergraphSlot};
+use crate::l3::store::page_type_of;
+use crate::util::{hash_id, PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::{HashMap, HashSet};
@@ -289,8 +291,8 @@ pub fn search_memory(
     // Step 6: L0 profile
     let l0_profile = crate::query::l0_crud::read_profile(mmap, btree)?;
 
-    // Step 7: Collect L3 IDs & L4 archive refs from matched contexts
-    let l3_ids = collect_l3_ids(&filtered_l2);
+    // Step 7: Collect L3 previews & L4 archive refs from matched contexts
+    let (l3_ids, l3_previews) = collect_l3_previews(mmap, &filtered_l2, btree)?;
     let archive_refs = collect_archive_refs(data, &filtered_l2, btree)?;
 
     // Step 8: Update activation scores
@@ -302,6 +304,7 @@ pub fn search_memory(
         contexts: convert_contexts(&filtered_l2),
         associated_contexts: convert_contexts(&l1_associated),
         l3_ids,
+        l3_previews,
         archive_refs,
     };
 
@@ -380,7 +383,28 @@ fn retrieve_l2_bm25(
                 continue;
             }
         }
-        if let Some(slot_data) = btree.search(id_hash).and_then(|pr| get_slot_data(data, pr)) {
+        // Check if the hit is an L3 virtual document
+        let page_ref = match btree.search(id_hash) {
+            Some(pr) => pr,
+            None => continue,
+        };
+        if page_type_of(data, page_ref) == Some(PageType::HypergraphNode as u16) {
+            // L3 virtual document hit: resolve to associated L2 contexts via entity index
+            let l2_ids = sparse_index.entity_index().l2_ids_for_node(id_hash);
+            for l2_id in l2_ids {
+                if let Some(l2_data) = btree.search(l2_id).and_then(|pr| get_slot_data(data, pr)) {
+                    if let Ok(ctx) = ContextSlot::deserialize(l2_data) {
+                        if ctx.depth <= 3 {
+                            let weighted = if ctx.depth == 3 { score * 0.5 } else { score };
+                            scored.push((ctx, weighted));
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        // Original logic: direct ContextSlot deserialization
+        if let Some(slot_data) = get_slot_data(data, page_ref) {
             if let Ok(ctx) = ContextSlot::deserialize(slot_data) {
                 if ctx.depth <= 3 {
                     let weighted_score = if ctx.depth == 3 { score * 0.5 } else { score };
@@ -471,6 +495,10 @@ fn collect_l2_ids_with_l3(data: &[u8], btree: &BTreeIndex, l3_hash: u64) -> Hash
     let mut result = HashSet::new();
 
     for (&id_hash, &page_ref) in btree.iter() {
+        // Pre-filter: skip non-Context type pages (2-byte read, much lighter than deserialization)
+        if page_type_of(data, page_ref) != Some(PageType::Context as u16) {
+            continue;
+        }
         if let Some(slot_data) = get_slot_data(data, page_ref) {
             if let Ok(ctx) = ContextSlot::deserialize(slot_data) {
                 if ctx.l3_refs.contains(&l3_hash) {
@@ -691,6 +719,76 @@ fn collect_l3_ids(contexts: &[ContextSlot]) -> Vec<String> {
         }
     }
     ids.into_iter().map(format_hash).collect()
+}
+
+/// Collect L3 previews from matched contexts (single BTree traversal)
+fn collect_l3_previews(
+    mmap: &MmapMut,
+    contexts: &[ContextSlot],
+    btree: &BTreeIndex,
+) -> Result<(Vec<String>, Vec<L3Preview>), MemHopError> {
+    let data: &[u8] = &mmap[..];
+    
+    // 1. Collect all target graph_ids from matched contexts
+    let mut graph_ids: HashSet<u64> = HashSet::new();
+    for ctx in contexts {
+        for &l3_hash in &ctx.l3_refs {
+            graph_ids.insert(l3_hash);
+        }
+    }
+    let l3_ids: Vec<String> = graph_ids.iter().map(|h| format_hash(*h)).collect();
+    
+    if graph_ids.is_empty() {
+        return Ok((l3_ids, Vec::new()));
+    }
+    
+    // 2. Single BTree traversal: collect HypergraphSlot and HypergraphNode
+    let mut slots: HashMap<u64, HypergraphSlot> = HashMap::new();
+    let mut nodes_by_graph: HashMap<u64, Vec<HypergraphNode>> = HashMap::new();
+    
+    for (&_id, &page_ref) in btree.iter() {
+        let pt = page_type_of(data, page_ref);
+        if pt == Some(PageType::HypergraphSlot as u16) {
+            if let Some(slot_data) = get_slot_data(data, page_ref) {
+                if let Ok(slot) = HypergraphSlot::deserialize(slot_data) {
+                    if graph_ids.contains(&slot.id_hash) {
+                        slots.insert(slot.id_hash, slot);
+                    }
+                }
+            }
+        } else if pt == Some(PageType::HypergraphNode as u16) {
+            if let Some(slot_data) = get_slot_data(data, page_ref) {
+                if let Ok(node) = HypergraphNode::deserialize(slot_data) {
+                    if graph_ids.contains(&node.graph_id) {
+                        nodes_by_graph.entry(node.graph_id).or_default().push(node);
+                    }
+                }
+            }
+        }
+    }
+    
+    // 3. Build previews: sort by importance and take top 5
+    let mut previews = Vec::new();
+    for &gid in &graph_ids {
+        if let Some(slot) = slots.get(&gid) {
+            let mut nodes = nodes_by_graph.remove(&gid).unwrap_or_default();
+            nodes.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
+            let top_nodes: Vec<String> = nodes.iter().take(5).map(|n| n.title.clone()).collect();
+            let keywords: Vec<String> = nodes.iter()
+                .flat_map(|n| n.keywords.clone())
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect();
+            previews.push(L3Preview {
+                id: format_hash(gid),
+                title: slot.name.clone(),
+                top_nodes,
+                keywords,
+                node_count: slot.node_count,
+            });
+        }
+    }
+    Ok((l3_ids, previews))
 }
 
 // ============================================================================

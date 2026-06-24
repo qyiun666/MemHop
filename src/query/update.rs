@@ -11,6 +11,7 @@ use crate::query::common::{format_hash, now_ms, parse_id_to_hash};
 use crate::query::types::*;
 use crate::slot::archive::ArchiveSlot;
 use crate::util::{hash_id, PageType, PAGE_SIZE};
+use crate::organize::extract_keywords;
 use crate::MemHopError;
 use memmap2::MmapMut;
 
@@ -121,6 +122,30 @@ pub fn update_memory(
             }
         }
         ctx.updated_at = now_ms;
+    }
+
+    // Step 7.5: Instant L3 distillation (optional)
+    if request.instant_distill {
+        let keywords = extract_keywords(&request.dialogue_text, 10);
+        let mut graphs_to_link: Vec<u64> = Vec::new();
+        for kw in &keywords {
+            let hits = sparse_index.entity_search(kw);
+            for (l3_node_hash, _score) in &hits {
+                // Find graph_id from l3_node_hash
+                let data = &mmap[..];
+                if let Some(slot_data) = btree.search(*l3_node_hash).and_then(|pr| crate::query::slot_io::get_slot_data(data, pr)) {
+                    if let Ok(node) = crate::slot::hypergraph::HypergraphNode::deserialize(slot_data) {
+                        if !ctx.l3_refs.contains(&node.graph_id) {
+                            graphs_to_link.push(node.graph_id);
+                        }
+                    }
+                }
+            }
+        }
+        // Deduplicate and append to l3_refs
+        graphs_to_link.sort();
+        graphs_to_link.dedup();
+        ctx.l3_refs.extend(graphs_to_link);
     }
 
     // Step 8: Serialize and write back

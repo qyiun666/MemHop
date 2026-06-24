@@ -79,6 +79,7 @@ pub use query::types::{
     // Search Memory (Interface 2)
     SearchQuery,
     SearchResult,
+    L3Preview,
     // L3 Hypergraph Engine
     TargetLayer,
     TopicDetail,

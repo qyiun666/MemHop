@@ -360,6 +360,7 @@ fn test_agent_conversation_memory_flow() {
                     action_type: ActionType::Query,
                     parameters: None,
                 }],
+                instant_distill: false,
             })
             .expect("update_memory should succeed");
         assert_eq!(update.topic_id, rust_topic.id);
@@ -756,6 +757,7 @@ fn test_dream_pipeline_full() {
                             parameters: None,
                         },
                     ],
+                    instant_distill: false,
                 })
                 .expect("update_memory should succeed");
         }

@@ -444,7 +444,7 @@ impl EntityIndex {
     /// associations, then add L0 profile lexicon words.
     pub fn build_from_l3(&mut self, data: &[u8], btree: &BTreeIndex) -> Result<(), MemHopError> {
         // Collect L3 nodes grouped by graph.
-        let mut nodes_by_graph: HashMap<u64, Vec<(u64, String)>> = HashMap::new();
+        let mut nodes_by_graph: HashMap<u64, Vec<(u64, String, Vec<String>)>> = HashMap::new();
         for (&_id_hash, &page_ref) in btree.iter() {
             if page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
                 continue;
@@ -454,7 +454,7 @@ impl EntityIndex {
                     nodes_by_graph
                         .entry(node.graph_id)
                         .or_default()
-                        .push((node.id_hash, node.title));
+                        .push((node.id_hash, node.title, node.keywords));
                 }
             }
         }
@@ -477,8 +477,11 @@ impl EntityIndex {
         // Register entities.
         for (graph_id, nodes) in nodes_by_graph {
             let l2_ids = l2_by_graph.get(&graph_id).cloned().unwrap_or_default();
-            for (node_hash, title) in nodes {
+            for (node_hash, title, keywords) in nodes {
                 self.add_entity(&title, node_hash, l2_ids.clone());
+                for kw in &keywords {
+                    self.add_entity(kw, node_hash, l2_ids.clone());
+                }
             }
         }
 
@@ -494,6 +497,16 @@ impl EntityIndex {
         }
 
         Ok(())
+    }
+
+    /// Find L2 context ids associated with a given L3 node hash.
+    /// This is used to resolve BM25 hits on L3 virtual documents back to L2 contexts.
+    pub fn l2_ids_for_node(&self, node_hash: u64) -> Vec<u64> {
+        self.entities
+            .values()
+            .filter(|(nh, _)| *nh == node_hash)
+            .flat_map(|(_, l2_ids)| l2_ids.clone())
+            .collect()
     }
 }
 
@@ -698,7 +711,26 @@ impl SparseIndex {
         data: &[u8],
         btree: &BTreeIndex,
     ) -> Result<(), MemHopError> {
-        self.entity_index.build_from_l3(data, btree)
+        self.entity_index.build_from_l3(data, btree)?;
+
+        // Add L3 node virtual documents to BM25 index
+        for (&_id_hash, &page_ref) in btree.iter() {
+            if page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
+                continue;
+            }
+            if let Some(slot_data) = get_slot_data(data, page_ref) {
+                if let Ok(node) = HypergraphNode::deserialize(slot_data) {
+                    let doc_terms: Vec<String> = std::iter::once(node.title.clone())
+                        .chain(node.keywords.clone())
+                        .flat_map(|s| SparseIndex::tokenize(&s))
+                        .collect();
+                    let doc_len = doc_terms.len() as u32;
+                    self.add_document(node.id_hash, doc_terms, doc_len);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Search for L2 contexts using entity matching.
@@ -722,6 +754,11 @@ impl SparseIndex {
     /// Check whether the entity index has been populated.
     pub fn has_entity_index(&self) -> bool {
         !self.entity_index.is_empty()
+    }
+
+    /// Get a reference to the entity index.
+    pub fn entity_index(&self) -> &EntityIndex {
+        &self.entity_index
     }
 
     /// Get the number of documents in the index

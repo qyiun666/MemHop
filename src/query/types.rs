@@ -43,6 +43,16 @@ pub struct SearchQuery {
     pub context_history: Option<String>,
 }
 
+/// L3 knowledge graph preview — lightweight summary for agent decision-making
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L3Preview {
+    pub id: String,
+    pub title: String,
+    pub top_nodes: Vec<String>,
+    pub keywords: Vec<String>,
+    pub node_count: u32,
+}
+
 /// Search result containing multi-layer memory content
 ///
 /// Retrieval flow:
@@ -59,6 +69,9 @@ pub struct SearchResult {
     pub associated_contexts: Vec<ContextResult>,
     /// L3 - Hypergraph IDs referenced by matched contexts
     pub l3_ids: Vec<String>,
+    /// L3 - Previews of matched knowledge graphs
+    #[serde(default)]
+    pub l3_previews: Vec<L3Preview>,
     /// L4 - Archive references from matched contexts
     pub archive_refs: Vec<ArchiveRef>,
 }
@@ -144,6 +157,9 @@ pub struct UpdateRequest {
     pub summary: Option<String>,
     /// Action chain (written to L5 on disk by this interface)
     pub action_chain: Vec<ActionItem>,
+    /// Enable instant L3 knowledge distillation (optional, default: false)
+    #[serde(default)]
+    pub instant_distill: bool,
 }
 
 /// Action item for L5 action chain storage

@@ -1,11 +1,11 @@
-// memhop.h — C header for libmemhop v0.45.0
+// memhop.h — C header for libmemhop v0.47.0
 // 4 extern "C" functions for JSON-in JSON-out FFI
 
 #ifndef MEMHOP_H
 #define MEMHOP_H
 
 /// MemHop library version string.
-#define MEMHOP_VERSION "0.45.0"
+#define MEMHOP_VERSION "0.47.0"
 
 #ifdef __cplusplus
 extern "C" {
