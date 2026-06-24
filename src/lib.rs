@@ -1,11 +1,11 @@
-//! MemHop - Agent-oriented memory database inspired by human brain cognitive architecture
+//! MemHop v0.45.0 - Agent-oriented memory database inspired by human brain cognitive architecture
 //!
 //! MemHop is a specialized memory database designed for AI Agents, implementing
 //! a six-layer cognitive architecture (L0-L5) with custom .meh binary file format.
 //!
 //! # Features
 //! - Zero-copy mmap retrieval
-//! - Hybrid search (BM25 + Vector similarity)
+//! - Hybrid search (BM25 + Vector similarity + Entity matching)
 //! - Hypergraph-based associative memory
 //! - Automatic memory consolidation (dream pipeline)
 //!
@@ -32,11 +32,11 @@ pub mod session;
 pub mod slot;
 pub mod util;
 
-pub use config::MemHopConfig;
+pub use config::{LlmConfig, MemHopConfig};
 pub use util::{Layer, SourceMeta, SourceRef, SourceType};
 
 // Re-export public types
-pub use dream::llm::{CrystalDef, LlmProvider, MemorySummary, Pattern};
+pub use dream::llm::{CrystalDef, CrystalStep, LlmProvider, MemorySummary, Pattern};
 pub use dream::openai_compatible::OpenAICompatibleLlmProvider;
 pub use dream::prune::DreamReport;
 pub use migrate::{migrate, verify_migration, MigrateError, MigrateReport};
@@ -73,8 +73,6 @@ pub use query::types::{
     KnowledgeListQuery,
     KnowledgeListResult,
     KnowledgeSummary,
-    // LLM Configuration
-    LlmConfig,
     NodeListQuery,
     NodeListResult,
     ProfileResult,
@@ -107,6 +105,7 @@ use crate::file::journal::replay_journal;
 use crate::file::page::{read_page_data, write_page_data};
 use crate::index::btree::BTreeIndex as BTree;
 use crate::index::sparse::SparseIndex;
+use crate::query::search::L1ReverseIndex;
 use crate::session::SessionManager;
 use crate::util::PAGE_SIZE;
 
@@ -128,6 +127,9 @@ pub enum MemHopError {
     #[error("Page not found: {0}")]
     PageNotFound(u32),
 
+    #[error("File is full and extension failed or was disabled")]
+    FileFull,
+
     #[error("Invalid page type")]
     InvalidPageType,
 
@@ -146,6 +148,87 @@ pub enum MemHopError {
 
 pub type Result<T> = std::result::Result<T, MemHopError>;
 
+/// Parsed contents of a multi-page SparseIndex directory page.
+struct SparseDirectory {
+    term_bucket_count: u32,
+    doc_bucket_count: u32,
+    term_count: u32,
+    doc_count: u32,
+    total_term_count: u64,
+    avg_doc_length: f32,
+    k1: f32,
+    b: f32,
+    entity_start: u32,
+    term_primary_pages: Vec<u32>,
+    doc_primary_pages: Vec<u32>,
+}
+
+impl SparseDirectory {
+    fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() < 44 {
+            return None;
+        }
+        let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+        if magic != crate::index::sparse::SPARSE_MAGIC {
+            return None;
+        }
+        let term_bucket_count = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let doc_bucket_count = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
+        let term_count = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
+        let doc_count = u32::from_le_bytes([data[16], data[17], data[18], data[19]]);
+        let total_term_count = u64::from_le_bytes([
+            data[20], data[21], data[22], data[23], data[24], data[25], data[26], data[27],
+        ]);
+        let avg_doc_length = f32::from_le_bytes([data[28], data[29], data[30], data[31]]);
+        let k1 = f32::from_le_bytes([data[32], data[33], data[34], data[35]]);
+        let b = f32::from_le_bytes([data[36], data[37], data[38], data[39]]);
+        let entity_start = u32::from_le_bytes([data[40], data[41], data[42], data[43]]);
+
+        let mut offset = 44usize;
+        let term_pages_len = term_bucket_count as usize * 4;
+        let doc_pages_len = doc_bucket_count as usize * 4;
+        if data.len() < offset + term_pages_len + doc_pages_len {
+            return None;
+        }
+
+        let mut term_primary_pages = Vec::with_capacity(term_bucket_count as usize);
+        for _ in 0..term_bucket_count {
+            term_primary_pages.push(u32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]));
+            offset += 4;
+        }
+
+        let mut doc_primary_pages = Vec::with_capacity(doc_bucket_count as usize);
+        for _ in 0..doc_bucket_count {
+            doc_primary_pages.push(u32::from_le_bytes([
+                data[offset],
+                data[offset + 1],
+                data[offset + 2],
+                data[offset + 3],
+            ]));
+            offset += 4;
+        }
+
+        Some(Self {
+            term_bucket_count,
+            doc_bucket_count,
+            term_count,
+            doc_count,
+            total_term_count,
+            avg_doc_length,
+            k1,
+            b,
+            entity_start,
+            term_primary_pages,
+            doc_primary_pages,
+        })
+    }
+}
+
 /// Main MemHop database instance
 pub struct MemHop {
     mmap: MmapMut,
@@ -157,6 +240,7 @@ pub struct MemHop {
     sparse_index: SparseIndex,
     session_manager: SessionManager,
     encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>>,
+    l1_reverse_index: L1ReverseIndex,
     closed: bool, // Prevent Drop from re-checkpointing after close()
 }
 
@@ -260,48 +344,20 @@ impl MemHop {
         }
 
         // 5. Load B-tree and Sparse Index from disk
-        let btree_page = header.layer_roots[0];
-        let btree = if btree_page != 0 && btree_page < header.page_count {
-            match read_page_data(&mmap_readonly, btree_page) {
-                Ok(data) => match BTree::deserialize(data) {
-                    Ok(index) => index,
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: Failed to load B-tree from disk: {}. Using empty index.",
-                            e
-                        );
-                        BTree::new()
-                    }
-                },
-                Err(_) => BTree::new(),
-            }
-        } else {
-            BTree::new()
-        };
+        let btree = Self::load_btree(&mmap_readonly, &header);
+        let sparse_index = Self::load_sparse_index(&mmap_readonly, &header);
 
-        let sparse_index_page = header.layer_roots[1];
-        let sparse_index = if sparse_index_page != 0 && sparse_index_page < header.page_count {
-            match read_page_data(&mmap_readonly, sparse_index_page) {
-                Ok(data) => match SparseIndex::deserialize(data) {
-                    Ok(index) => index,
-                    Err(e) => {
-                        eprintln!(
-                            "Warning: Failed to load Sparse Index from disk: {}. Using empty index.",
-                            e
-                        );
-                        SparseIndex::new()
-                    }
-                },
-                Err(_) => SparseIndex::new(),
-            }
-        } else {
-            SparseIndex::new()
-        };
+        // 5a. Build L1 reverse index from the loaded B-tree.
+        // TODO(v0.46): Persist L1ReverseIndex to a dedicated page chain during
+        // `checkpoint()` and load it here instead of rebuilding from scratch.
+        // Currently this is an O(N) scan of the B-tree, which slows down startup
+        // for large databases.
+        let l1_reverse_index = L1ReverseIndex::build(&mmap_readonly, &btree)?;
 
         // 6. Initialize SessionManager
         let session_manager = SessionManager::new();
 
-        // 8. Initialize encoder from config (gRPC over UDS)
+        // 8. Initialize encoder from config (gRPC over TCP)
         let encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>> = {
             use crate::encoder::GrpcEncoder;
 
@@ -310,16 +366,9 @@ impl MemHop {
                 .clone()
                 .or_else(|| std::env::var("MEMHOP_ENCODER_GRPC_ADDR").ok());
 
-            if let Some(addr) = grpc_addr {
-                match GrpcEncoder::new(&addr, config.vector_dim) {
-                    Ok(enc) => Some(Box::new(enc)),
-                    Err(e) => {
-                        eprintln!("Warning: gRPC encoder at {} unavailable: {}", addr, e);
-                        None
-                    }
-                }
-            } else {
-                None
+            match grpc_addr {
+                Some(addr) => Some(Box::new(GrpcEncoder::new(&addr, config.vector_dim)?)),
+                None => None,
             }
         };
 
@@ -333,8 +382,560 @@ impl MemHop {
             sparse_index,
             session_manager,
             encoder,
+            l1_reverse_index,
             closed: false,
         })
+    }
+
+    /// Load the B-tree index from disk.
+    ///
+    /// Reads the Linear Hash bucket layout starting at the page recorded in
+    /// `header.reserved[8..12]`. Falls back to the legacy single-page format
+    /// stored at `header.layer_roots[0]` if the new metadata is missing or
+    /// invalid, and finally falls back to an empty index.
+    fn load_btree(mmap: &Mmap, header: &FileHeader) -> BTree {
+        use crate::index::btree::EMPTY_PAGE;
+
+        let bucket_count = u32::from_le_bytes([
+            header.reserved[0],
+            header.reserved[1],
+            header.reserved[2],
+            header.reserved[3],
+        ]);
+        let split_pointer = u32::from_le_bytes([
+            header.reserved[4],
+            header.reserved[5],
+            header.reserved[6],
+            header.reserved[7],
+        ]);
+        let directory_page = u32::from_le_bytes([
+            header.reserved[8],
+            header.reserved[9],
+            header.reserved[10],
+            header.reserved[11],
+        ]);
+
+        // Try new multi-page Linear Hash format using a directory page.
+        if directory_page != 0 && directory_page < header.page_count && bucket_count > 0 {
+            let dir_offset = (directory_page as usize) * PAGE_SIZE + 32;
+            let dir_data = &mmap[dir_offset..dir_offset + PAGE_SIZE - 32];
+            let primary_pages = Self::read_directory_page(dir_data, bucket_count);
+            if primary_pages.len() == bucket_count as usize {
+                let mut buckets: Vec<Vec<Vec<u8>>> = Vec::with_capacity(bucket_count as usize);
+                let mut valid = true;
+
+                for primary_page in primary_pages {
+                    if primary_page == 0 || primary_page >= header.page_count {
+                        valid = false;
+                        break;
+                    }
+
+                    let mut bucket_pages: Vec<Vec<u8>> = Vec::new();
+                    let mut current_page = primary_page;
+                    let mut chain_len = 0u32;
+                    while current_page != EMPTY_PAGE && current_page < header.page_count {
+                        match read_page_data(mmap, current_page) {
+                            Ok(data) => bucket_pages.push(data.to_vec()),
+                            Err(_) => break,
+                        }
+                        match crate::file::page::read_page_header(mmap, current_page) {
+                            Ok(page_header) => current_page = page_header.next_page,
+                            Err(_) => break,
+                        }
+                        chain_len += 1;
+                        // Safety guard against corrupt circular chains.
+                        if chain_len > header.page_count {
+                            valid = false;
+                            break;
+                        }
+                    }
+                    buckets.push(bucket_pages);
+                }
+
+                if valid {
+                    match BTree::deserialize_from_pages(&buckets, bucket_count, split_pointer) {
+                        Ok(index) => return index,
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to load Linear Hash B-tree from disk: {}. Trying legacy format.",
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fall back to legacy single-page format.
+        let btree_page = header.layer_roots[0];
+        if btree_page != 0 && btree_page < header.page_count {
+            match read_page_data(mmap, btree_page) {
+                Ok(data) => match BTree::deserialize(data) {
+                    Ok(index) => return index,
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to load legacy B-tree from disk: {}. Using empty index.",
+                            e
+                        );
+                    }
+                },
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to read legacy B-tree page: {}. Using empty index.",
+                        e
+                    );
+                }
+            }
+        }
+
+        BTree::new()
+    }
+
+    /// Parse the bucket directory page data and return the primary page id for each bucket.
+    fn read_directory_page(dir_data: &[u8], bucket_count: u32) -> Vec<u32> {
+        let mut primary_pages = Vec::new();
+        let needed = 8 + bucket_count as usize * 4;
+        if dir_data.len() < needed {
+            return primary_pages;
+        }
+        for i in 0..bucket_count as usize {
+            let off = 8 + i * 4;
+            primary_pages.push(u32::from_le_bytes([
+                dir_data[off],
+                dir_data[off + 1],
+                dir_data[off + 2],
+                dir_data[off + 3],
+            ]));
+        }
+        primary_pages
+    }
+
+    /// Free all pages belonging to the current on-disk B-tree index.
+    fn free_btree_pages(&mut self) -> Result<()> {
+        let directory_page = u32::from_le_bytes([
+            self.header.reserved[8],
+            self.header.reserved[9],
+            self.header.reserved[10],
+            self.header.reserved[11],
+        ]);
+        let bucket_count = u32::from_le_bytes([
+            self.header.reserved[0],
+            self.header.reserved[1],
+            self.header.reserved[2],
+            self.header.reserved[3],
+        ]);
+
+        if directory_page != 0 && directory_page < self.header.page_count && bucket_count > 0 {
+            // Free new-format bucket chains via directory page.
+            let dir_offset = (directory_page as usize) * PAGE_SIZE + 32;
+            let dir_data = &self.mmap[dir_offset..dir_offset + PAGE_SIZE - 32];
+            let primary_pages = Self::read_directory_page(dir_data, bucket_count);
+            for primary_page in primary_pages {
+                if primary_page != 0 && primary_page < self.header.page_count {
+                    Self::free_page_chain(&mut self.mmap, &mut self.header, primary_page)?;
+                }
+            }
+            // Free directory page itself.
+            crate::file::free_list::free_page(&mut self.mmap, &mut self.header, directory_page)?;
+        } else {
+            // Free legacy single-page btree if present.
+            let btree_page = self.header.layer_roots[0];
+            if btree_page != 0 && btree_page < self.header.page_count {
+                crate::file::free_list::free_page(&mut self.mmap, &mut self.header, btree_page)?;
+            }
+        }
+
+        // Clear btree metadata in header.
+        self.header.reserved[0..12].fill(0);
+        self.header.layer_roots[0] = 0;
+
+        Ok(())
+    }
+
+    /// Free a chain of pages starting at `start_page`.
+    fn free_page_chain(mmap: &mut MmapMut, header: &mut FileHeader, start_page: u32) -> Result<()> {
+        use crate::index::btree::EMPTY_PAGE;
+
+        let mut current = start_page;
+        let mut chain_len = 0u32;
+        while current != EMPTY_PAGE && current < header.page_count {
+            let next = {
+                let offset = (current as usize) * PAGE_SIZE;
+                let mut bytes = [0u8; 32];
+                bytes.copy_from_slice(&mmap[offset..offset + 32]);
+                match crate::file::page::PageHeader::from_bytes(&bytes) {
+                    Ok(h) => h.next_page,
+                    Err(_) => break,
+                }
+            };
+            crate::file::free_list::free_page(mmap, header, current)?;
+            current = next;
+            chain_len += 1;
+            if chain_len > header.page_count {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    // ===================================================================
+    // SparseIndex multi-page serialization helpers
+    // ===================================================================
+
+    /// Read all page payloads in a chain starting at `start_page`.
+    fn read_sparse_chain(mmap: &Mmap, header: &FileHeader, start_page: u32) -> Vec<Vec<u8>> {
+        use crate::index::btree::EMPTY_PAGE;
+
+        let mut pages = Vec::new();
+        let mut current = start_page;
+        let mut chain_len = 0u32;
+        while current != EMPTY_PAGE && current < header.page_count {
+            match read_page_data(mmap, current) {
+                Ok(data) => pages.push(data.to_vec()),
+                Err(_) => break,
+            }
+            match crate::file::page::read_page_header(mmap, current) {
+                Ok(page_header) => current = page_header.next_page,
+                Err(_) => break,
+            }
+            chain_len += 1;
+            if chain_len > header.page_count {
+                break;
+            }
+        }
+        pages
+    }
+
+    /// Allocate a chain of file pages and write payloads to them.
+    /// Returns the primary page id, or 0 if `payloads` is empty.
+    fn allocate_sparse_chain(&mut self, payloads: &[Vec<u8>]) -> Result<u32> {
+        use crate::index::btree::EMPTY_PAGE;
+
+        if payloads.is_empty() {
+            return Ok(0);
+        }
+
+        let mut next = EMPTY_PAGE;
+        let mut page_ids = vec![0u32; payloads.len()];
+        for (i, _payload) in payloads.iter().enumerate().rev() {
+            let page_type = if i == 0 {
+                crate::util::PageType::SparseIndex
+            } else {
+                crate::util::PageType::Overflow
+            };
+            let page_id = self.allocate_page(page_type, 0, next)?;
+            page_ids[i] = page_id;
+            next = page_id;
+        }
+
+        for (page_id, payload) in page_ids.iter().zip(payloads.iter()) {
+            write_page_data(&mut self.mmap, *page_id, payload)?;
+        }
+
+        Ok(page_ids[0])
+    }
+
+    /// Free all pages used by the current on-disk SparseIndex.
+    fn free_sparse_pages(&mut self) -> Result<()> {
+        let directory_page = self.header.layer_roots[1];
+        if directory_page == 0 || directory_page >= self.header.page_count {
+            return Ok(());
+        }
+
+        let dir_data = match read_page_data(&self.mmap, directory_page) {
+            Ok(d) => d,
+            Err(_) => return Ok(()),
+        };
+
+        // Multi-page format has a magic header.
+        if dir_data.len() >= 4 {
+            let magic = u32::from_le_bytes([dir_data[0], dir_data[1], dir_data[2], dir_data[3]]);
+            if magic == crate::index::sparse::SPARSE_MAGIC {
+                if let Some(dir) = SparseDirectory::parse(dir_data) {
+                    for &page_id in &dir.term_primary_pages {
+                        if page_id != 0 {
+                            Self::free_page_chain(&mut self.mmap, &mut self.header, page_id)?;
+                        }
+                    }
+                    for &page_id in &dir.doc_primary_pages {
+                        if page_id != 0 {
+                            Self::free_page_chain(&mut self.mmap, &mut self.header, page_id)?;
+                        }
+                    }
+                    if dir.entity_start != 0 {
+                        Self::free_page_chain(&mut self.mmap, &mut self.header, dir.entity_start)?;
+                    }
+                }
+            }
+        }
+
+        crate::file::free_list::free_page(&mut self.mmap, &mut self.header, directory_page)?;
+        self.header.layer_roots[1] = 0;
+        Ok(())
+    }
+
+    /// Write SparseIndex page chains and return the directory page id.
+    fn write_sparse_pages(
+        &mut self,
+        page_data: &crate::index::sparse::SparsePageData,
+    ) -> Result<u32> {
+        let mut term_starts = Vec::with_capacity(page_data.term_bucket_count as usize);
+        for bucket in &page_data.term_buckets {
+            term_starts.push(self.allocate_sparse_chain(bucket)?);
+        }
+
+        let mut doc_starts = Vec::with_capacity(page_data.doc_bucket_count as usize);
+        for bucket in &page_data.doc_buckets {
+            doc_starts.push(self.allocate_sparse_chain(bucket)?);
+        }
+
+        let entity_start = self.allocate_sparse_chain(&page_data.entity_chain)?;
+
+        let directory_payload = crate::index::sparse::build_sparse_directory(
+            page_data,
+            &term_starts,
+            &doc_starts,
+            entity_start,
+        );
+        let directory_page = self.allocate_page(
+            crate::util::PageType::SparseIndex,
+            0,
+            crate::index::btree::EMPTY_PAGE,
+        )?;
+        write_page_data(&mut self.mmap, directory_page, &directory_payload)?;
+        Ok(directory_page)
+    }
+
+    /// Load the SparseIndex from disk, supporting both the new multi-page
+    /// format and the legacy single-page bincode format.
+    fn load_sparse_index(mmap: &Mmap, header: &FileHeader) -> SparseIndex {
+        let directory_page = header.layer_roots[1];
+        if directory_page == 0 || directory_page >= header.page_count {
+            return SparseIndex::new();
+        }
+
+        let dir_data = match read_page_data(mmap, directory_page) {
+            Ok(d) => d,
+            Err(_) => return SparseIndex::new(),
+        };
+
+        if dir_data.len() >= 4 {
+            let magic = u32::from_le_bytes([dir_data[0], dir_data[1], dir_data[2], dir_data[3]]);
+            if magic == crate::index::sparse::SPARSE_MAGIC {
+                if let Some(dir) = SparseDirectory::parse(dir_data) {
+                    let mut term_buckets = Vec::with_capacity(dir.term_bucket_count as usize);
+                    for &page_id in &dir.term_primary_pages {
+                        if page_id == 0 {
+                            term_buckets.push(Vec::new());
+                        } else {
+                            term_buckets.push(Self::read_sparse_chain(mmap, header, page_id));
+                        }
+                    }
+
+                    let mut doc_buckets = Vec::with_capacity(dir.doc_bucket_count as usize);
+                    for &page_id in &dir.doc_primary_pages {
+                        if page_id == 0 {
+                            doc_buckets.push(Vec::new());
+                        } else {
+                            doc_buckets.push(Self::read_sparse_chain(mmap, header, page_id));
+                        }
+                    }
+
+                    let entity_chain = if dir.entity_start == 0 {
+                        Vec::new()
+                    } else {
+                        Self::read_sparse_chain(mmap, header, dir.entity_start)
+                    };
+
+                    let page_data = crate::index::sparse::SparsePageData {
+                        term_bucket_count: dir.term_bucket_count,
+                        doc_bucket_count: dir.doc_bucket_count,
+                        term_count: dir.term_count,
+                        doc_count: dir.doc_count,
+                        total_term_count: dir.total_term_count,
+                        avg_doc_length: dir.avg_doc_length,
+                        k1: dir.k1,
+                        b: dir.b,
+                        term_buckets,
+                        doc_buckets,
+                        entity_chain,
+                    };
+
+                    match SparseIndex::deserialize_from_pages(&page_data) {
+                        Ok(index) => return index,
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to load multi-page Sparse Index: {}. Trying legacy format.",
+                                e
+                            );
+                            // Fall through to legacy single-page format below.
+                        }
+                    }
+                }
+            }
+        }
+
+        // Legacy single-page bincode format.
+        match SparseIndex::deserialize(dir_data) {
+            Ok(index) => index,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to load Sparse Index from disk: {}. Using empty index.",
+                    e
+                );
+                SparseIndex::new()
+            }
+        }
+    }
+
+    /// Write bucket page chains for the btree and return the directory page id.
+    fn write_btree_pages(&mut self, page_data: &crate::index::btree::BTreePageData) -> Result<u32> {
+        use crate::index::btree::EMPTY_PAGE;
+
+        let bucket_count = page_data.bucket_count as usize;
+        if bucket_count == 0 {
+            return Ok(0);
+        }
+
+        // Allocate primary bucket pages (not required to be contiguous).
+        let mut primary_pages = Vec::with_capacity(bucket_count);
+        for _ in 0..bucket_count {
+            let page_id = self.allocate_page(crate::util::PageType::BTreeLeaf, 0, EMPTY_PAGE)?;
+            primary_pages.push(page_id);
+        }
+
+        // Write each bucket's chain.
+        for (bucket_idx, bucket) in page_data.buckets.iter().enumerate() {
+            let primary_page = primary_pages[bucket_idx];
+            let mut prev_page = primary_page;
+
+            for (page_idx, page_payload) in bucket.iter().enumerate() {
+                let page_id = if page_idx == 0 {
+                    primary_page
+                } else {
+                    self.allocate_page(crate::util::PageType::Overflow, 0, EMPTY_PAGE)?
+                };
+
+                // Write page payload.
+                write_page_data(&mut self.mmap, page_id, page_payload)?;
+
+                if page_idx > 0 {
+                    // Link previous page to this overflow page.
+                    let mut prev_header = {
+                        let offset = (prev_page as usize) * PAGE_SIZE;
+                        let mut bytes = [0u8; 32];
+                        bytes.copy_from_slice(&self.mmap[offset..offset + 32]);
+                        crate::file::page::PageHeader::from_bytes(&bytes)?
+                    };
+                    prev_header.next_page = page_id;
+                    crate::file::page::write_page_header(&mut self.mmap, prev_page, &prev_header)?;
+                    prev_page = page_id;
+                } else {
+                    // Ensure primary page header has no stale next_page.
+                    let mut header = {
+                        let offset = (page_id as usize) * PAGE_SIZE;
+                        let mut bytes = [0u8; 32];
+                        bytes.copy_from_slice(&self.mmap[offset..offset + 32]);
+                        crate::file::page::PageHeader::from_bytes(&bytes)?
+                    };
+                    header.next_page = EMPTY_PAGE;
+                    crate::file::page::write_page_header(&mut self.mmap, page_id, &header)?;
+                }
+            }
+        }
+
+        // Allocate and write directory page.
+        let directory_page = self.allocate_page(crate::util::PageType::BTreeLeaf, 0, EMPTY_PAGE)?;
+        let mut dir_data = Vec::with_capacity(8 + bucket_count * 4);
+        dir_data.extend_from_slice(&page_data.bucket_count.to_le_bytes());
+        dir_data.extend_from_slice(&page_data.split_pointer.to_le_bytes());
+        for &page_id in &primary_pages {
+            dir_data.extend_from_slice(&page_id.to_le_bytes());
+        }
+        write_page_data(&mut self.mmap, directory_page, &dir_data)?;
+
+        Ok(directory_page)
+    }
+
+    /// Extend the database file by `grow_pages` pages and remap mmap.
+    ///
+    /// New pages are initialized as free-list pages (`PageType::Free`) and linked
+    /// into the existing free list. After extending, A/B dual headers are rewritten
+    /// via the checkpoint mechanism for crash safety.
+    pub fn extend_file(&mut self, grow_pages: u32) -> Result<()> {
+        let old_page_count = self.header.page_count;
+        let new_page_count = old_page_count + grow_pages;
+        let new_size = (new_page_count as usize) * PAGE_SIZE;
+        let old_free_list_head = self.header.free_list_head;
+
+        // 1. Extend the underlying file.
+        self.file.set_len(new_size as u64)?;
+
+        // 2. Re-map the file into memory.
+        self.mmap = unsafe { MmapMut::map_mut(&self.file)? };
+
+        // 3. Link the new pages into the free list.
+        // The free list stores the next free page id in the first 4 bytes of
+        // each free page (matching `free_list::free_page`).
+        // We link the new chain *in front of* the old free list so previously
+        // free pages remain reachable. The last new page points to the old head.
+        let mut next_free = old_free_list_head;
+        let free_type = crate::util::PageType::Free.to_u16().to_le_bytes();
+        for page_id in (old_page_count..new_page_count).rev() {
+            let page_offset = (page_id as usize) * PAGE_SIZE;
+            self.mmap[page_offset..page_offset + 4].copy_from_slice(&next_free.to_le_bytes());
+            self.mmap[page_offset + 4..page_offset + 6].copy_from_slice(&free_type);
+            next_free = page_id;
+        }
+
+        // 4. Update in-memory header so the checkpoint can allocate from the
+        // newly created free pages. Save old values so we can roll back if the
+        // checkpoint fails before the headers are persisted.
+        self.header.free_list_head = next_free;
+        self.header.page_count = new_page_count;
+
+        // 5. Persist the updated headers (A/B dual header checkpoint).
+        if let Err(e) = self.checkpoint() {
+            self.header.free_list_head = old_free_list_head;
+            self.header.page_count = old_page_count;
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
+    /// Allocate a new page, automatically extending the file if the free list is exhausted.
+    ///
+    /// This is a safe wrapper around `crate::file::page::allocate_page` that catches
+    /// `MemHopError::FileFull` and grows the file by 500 pages before retrying.
+    pub fn allocate_page(
+        &mut self,
+        page_type: crate::util::PageType,
+        layer_id: u16,
+        next_page_id: u32,
+    ) -> Result<u32> {
+        use crate::file::page::allocate_page as alloc_page;
+
+        match alloc_page(
+            &mut self.mmap,
+            &mut self.header,
+            page_type,
+            layer_id,
+            next_page_id,
+        ) {
+            Ok(page_id) => Ok(page_id),
+            Err(MemHopError::FileFull) => {
+                self.extend_file(500)?;
+                alloc_page(
+                    &mut self.mmap,
+                    &mut self.header,
+                    page_type,
+                    layer_id,
+                    next_page_id,
+                )
+            }
+            Err(e) => Err(e),
+        }
     }
 
     // Note: Old interfaces (store, recall, recall_cascade, recall_more) have been removed.
@@ -358,6 +959,7 @@ impl MemHop {
             &mut self.sparse_index,
             self.config.vector_dim,
             self.encoder.as_deref(),
+            &self.l1_reverse_index,
         )
     }
 
@@ -689,18 +1291,14 @@ impl MemHop {
     /// 4. L5 crystallization from all ActionChainSlots
     ///
     /// # Arguments
-    /// * `llm` - LLM configuration (api_key, api_url, model)
+    /// * `llm` - LLM configuration (model, api_base, api_key, temperature, timeout)
     pub fn dream(&mut self, llm: LlmConfig) -> Result<DreamReport> {
         use crate::dream::dream_pipeline;
         use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
         use std::collections::HashSet;
 
         // Create LLM provider from passed configuration
-        let api_key = llm.api_key;
-        let api_url = llm.api_url;
-        let model = llm.model;
-
-        let llm_provider = OpenAICompatibleLlmProvider::new(api_key, api_url, model);
+        let llm_provider = OpenAICompatibleLlmProvider::new(llm);
 
         let session_topics: HashSet<u64> = self
             .session_manager
@@ -708,14 +1306,16 @@ impl MemHop {
             .into_iter()
             .collect();
 
-        dream_pipeline(
+        let report = dream_pipeline(
             &mut self.mmap,
             &mut self.header,
             &mut self.btree,
             &mut self.sparse_index,
             &llm_provider,
             session_topics,
-        )
+        )?;
+        self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
+        Ok(report)
     }
 
     /// Sync all changes to disk
@@ -751,7 +1351,7 @@ impl MemHop {
     ) -> Result<crate::query::batch::BatchReport> {
         use crate::query::batch::batch_store;
 
-        batch_store(
+        let report = batch_store(
             &mut self.mmap,
             &mut self.header,
             batch,
@@ -761,41 +1361,36 @@ impl MemHop {
             self.encoder.as_deref().ok_or_else(|| {
                 MemHopError::EncoderError("No encoder configured for batch_store".to_string())
             })?,
-        )
+        )?;
+        self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
+        Ok(report)
     }
 
     /// Checkpoint: save indices to disk and update header
+    // TODO(v0.46): Serialize `self.l1_reverse_index` to a dedicated page chain
+    // (similar to the B-tree / sparse index) so the next `open()` can load it
+    // instead of rebuilding it with an O(N) B-tree scan.
     pub fn checkpoint(&mut self) -> Result<()> {
-        // Allocate pages for indices if not already allocated
-        if self.header.layer_roots[0] == 0 {
-            // Allocate B-tree page (use page 3 as first available after reserved)
-            self.header.layer_roots[0] = 3;
-        }
-        if self.header.layer_roots[1] == 0 {
-            // Allocate Sparse Index page (use page 4)
-            self.header.layer_roots[1] = 4;
-        }
-
-        // Serialize and save B-tree
-        let btree_data = self.btree.serialize().map_err(MemHopError::Serialization)?;
-        if btree_data.len() > PAGE_SIZE - 32 {
-            return Err(MemHopError::Serialization(
-                "B-tree too large for single page".to_string(),
-            ));
-        }
-        write_page_data(&mut self.mmap, self.header.layer_roots[0], &btree_data)?;
-
-        // Serialize and save Sparse Index
-        let sparse_data = self
-            .sparse_index
-            .serialize()
+        // Serialize and save B-tree using multi-page Linear Hash layout.
+        let btree_pages = self
+            .btree
+            .serialize_to_pages()
             .map_err(MemHopError::Serialization)?;
-        if sparse_data.len() > PAGE_SIZE - 32 {
-            return Err(MemHopError::Serialization(
-                "Sparse Index too large for single page".to_string(),
-            ));
-        }
-        write_page_data(&mut self.mmap, self.header.layer_roots[1], &sparse_data)?;
+        self.free_btree_pages()?;
+        let directory_page = self.write_btree_pages(&btree_pages)?;
+        self.header.reserved[0..4].copy_from_slice(&btree_pages.bucket_count.to_le_bytes());
+        self.header.reserved[4..8].copy_from_slice(&btree_pages.split_pointer.to_le_bytes());
+        self.header.reserved[8..12].copy_from_slice(&directory_page.to_le_bytes());
+        self.header.layer_roots[0] = directory_page;
+
+        // Serialize and save Sparse Index using multi-page bucket chains.
+        let sparse_page_data = self
+            .sparse_index
+            .serialize_to_pages()
+            .map_err(MemHopError::Serialization)?;
+        self.free_sparse_pages()?;
+        let sparse_directory_page = self.write_sparse_pages(&sparse_page_data)?;
+        self.header.layer_roots[1] = sparse_directory_page;
 
         // Update header commit_id
         self.header.commit_id += 1;
@@ -842,6 +1437,93 @@ impl Drop for MemHop {
             if let Err(e) = self.checkpoint() {
                 eprintln!("Warning: Failed to checkpoint on drop: {}", e);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_file_auto_extension() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("extend.meh");
+        let mut config = MemHopConfig::new(path, 768);
+        config.encoder_grpc_addr = None; // unit test does not need real encoder
+        let mut db = MemHop::open(config).unwrap();
+
+        // Initial database has 500 pages; pages 18..499 are free (482 pages).
+        assert_eq!(db.header.page_count, 500);
+
+        // Consume all initially free pages.
+        for _ in 0..482 {
+            db.allocate_page(
+                crate::util::PageType::Context,
+                2,
+                crate::file::free_list::EMPTY_FREE_LIST,
+            )
+            .unwrap();
+        }
+
+        // The next allocation must trigger an automatic extension.
+        let page_id = db
+            .allocate_page(
+                crate::util::PageType::Context,
+                2,
+                crate::file::free_list::EMPTY_FREE_LIST,
+            )
+            .unwrap();
+        assert!(page_id >= 500);
+        assert_eq!(db.header.page_count, 1000);
+
+        // Additional allocations from the extended region should succeed.
+        for _ in 0..10 {
+            db.allocate_page(
+                crate::util::PageType::Context,
+                2,
+                crate::file::free_list::EMPTY_FREE_LIST,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn test_extend_file_preserves_old_free_list() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("extend_old_free.meh");
+        let mut config = MemHopConfig::new(path, 768);
+        config.encoder_grpc_addr = None; // unit test does not need real encoder
+        let mut db = MemHop::open(config).unwrap();
+
+        let old_page_count = db.header.page_count;
+        let old_free_list_head = db.header.free_list_head;
+        assert_ne!(old_free_list_head, crate::file::free_list::EMPTY_FREE_LIST);
+
+        // Extend the file by a small number of pages.
+        let grow_pages = 50;
+        db.extend_file(grow_pages).unwrap();
+
+        assert_eq!(db.header.page_count, old_page_count + grow_pages);
+
+        // The last new page is the tail of the new free chain and should
+        // still be marked as Free until the whole new chain is consumed.
+        let tail_page = old_page_count + grow_pages - 1;
+        let free_header = crate::file::page::read_page_header(&db.mmap, tail_page).unwrap();
+        assert_eq!(free_header.page_type, crate::util::PageType::Free as u16);
+
+        // All new pages plus at least one page from the old free list must be
+        // reachable without triggering another auto-extension.
+        for i in 0..grow_pages + 1 {
+            db.allocate_page(
+                crate::util::PageType::Context,
+                2,
+                crate::file::free_list::EMPTY_FREE_LIST,
+            )
+            .unwrap_or_else(|_| {
+                panic!("allocation {} should succeed (old free list lost?)", i)
+            });
         }
     }
 }

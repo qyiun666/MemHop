@@ -108,6 +108,10 @@ impl FileHeader {
         ]);
         let flags = u32::from_le_bytes([bytes[96], bytes[97], bytes[98], bytes[99]]);
 
+        // Extract reserved region (3988 bytes, offset 100..4088)
+        let mut reserved = [0u8; 3988];
+        reserved.copy_from_slice(&bytes[100..4088]);
+
         // Extract CRC32
         let crc32 = u32::from_le_bytes([bytes[4088], bytes[4089], bytes[4090], bytes[4091]]);
 
@@ -128,7 +132,7 @@ impl FileHeader {
             journal_start,
             journal_len,
             flags,
-            reserved: [0; 3988], // Reserved is not stored/restored
+            reserved,
             crc32,
             tail_magic: TAIL_MAGIC,
         })
@@ -169,7 +173,9 @@ impl FileHeader {
         // Flags (4 bytes)
         bytes[96..100].copy_from_slice(&self.flags.to_le_bytes());
 
-        // Reserved (3988 bytes) - already zeroed
+        // Reserved (3988 bytes)
+        bytes[100..4088].copy_from_slice(&self.reserved);
+
         // CRC32 placeholder (4 bytes) - will be filled by caller
         bytes[4088..4092].copy_from_slice(&0u32.to_le_bytes());
 

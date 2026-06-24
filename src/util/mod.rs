@@ -143,6 +143,8 @@ pub enum PageType {
     HypergraphNode = 0x0B, // L3 hypergraph node
     HypergraphEdge = 0x0C, // L3 hypergraph edge
     L3IndexPage = 0x0D,    // L3 engine index page
+    IVFCluster = 0x0E,     // IVF centroid storage page
+    IVFBucket = 0x0F,      // IVF bucket (vector id list) page
     BTreeNode = 0x10,      // B-tree internal node
     BTreeLeaf = 0x11,      // B-tree leaf node
     Free = 0x20,           // Free page
@@ -171,6 +173,8 @@ impl PageType {
             0x0B => Some(PageType::HypergraphNode),
             0x0C => Some(PageType::HypergraphEdge),
             0x0D => Some(PageType::L3IndexPage),
+            0x0E => Some(PageType::IVFCluster),
+            0x0F => Some(PageType::IVFBucket),
             0x10 => Some(PageType::BTreeNode),
             0x11 => Some(PageType::BTreeLeaf),
             0x20 => Some(PageType::Free),

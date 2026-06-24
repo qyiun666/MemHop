@@ -15,7 +15,7 @@ use std::ffi::{CStr, CString};
 use std::sync::OnceLock;
 
 const DB_PATH: &str = "/tmp/memhop_bench.meh";
-const ENCODER_ADDR: &str = "unix:///tmp/.meowagent/meowvec.sock";
+const ENCODER_ADDR: &str = "http://127.0.0.1:27110";
 
 // ============================================================================
 // Global shared handle — opened once, used by all benchmarks

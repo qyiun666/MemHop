@@ -1,11 +1,12 @@
-// Encoder module — gRPC client for meowvec VectorModelService (UDS only)
+// Encoder module — gRPC client for meowvec VectorModelService (TCP)
 
 use crate::MemHopError;
 use half::f16;
 use std::collections::HashMap;
+use std::time::Duration;
 
-/// Default meowvec gRPC Unix socket address
-pub const DEFAULT_ENCODER_ADDR: &str = "unix:///tmp/.meowagent/meowvec.sock";
+/// Default meowvec gRPC TCP address
+pub const DEFAULT_ENCODER_ADDR: &str = "http://127.0.0.1:27110";
 
 pub mod vector_model {
     tonic::include_proto!("vector_model");
@@ -37,10 +38,10 @@ pub struct EncoderOutput {
 }
 
 // ============================================================================
-// GrpcEncoder — UDS only
+// GrpcEncoder — TCP only
 // ============================================================================
 
-/// gRPC encoder client for meowvec VectorModelService (Unix Domain Socket)
+/// gRPC encoder client for meowvec VectorModelService (TCP)
 pub struct GrpcEncoder {
     rt: tokio::runtime::Runtime,
     client: std::sync::Mutex<VectorModelServiceClient<tonic::transport::Channel>>,
@@ -48,19 +49,17 @@ pub struct GrpcEncoder {
 }
 
 impl GrpcEncoder {
-    /// Create a new gRPC encoder connecting via Unix Domain Socket
+    /// Create a new gRPC encoder connecting via TCP.
+    ///
+    /// The `addr` argument must be a valid tonic HTTP endpoint, e.g.
+    /// `"http://127.0.0.1:27110"`. A health check is performed immediately so
+    /// that connection failures are surfaced to the caller instead of being
+    /// silently degraded.
     ///
     /// # Arguments
-    /// * `addr` - UDS address: `"unix:///tmp/.meowagent/meowvec.sock"`
+    /// * `addr` - TCP address: `"http://127.0.0.1:27110"`
     /// * `dim` - Expected vector dimension
     pub fn new(addr: &str, dim: usize) -> Result<Self, MemHopError> {
-        let socket_path = addr.strip_prefix("unix://").ok_or_else(|| {
-            MemHopError::ConfigError(format!(
-                "gRPC address must use unix:// scheme, got: {}",
-                addr
-            ))
-        })?;
-
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -68,8 +67,26 @@ impl GrpcEncoder {
                 MemHopError::ConfigError(format!("Failed to create tokio runtime: {}", e))
             })?;
 
-        let channel = Self::connect_uds(&rt, socket_path)?;
-        let client = VectorModelServiceClient::new(channel);
+        let channel = Self::connect_tcp(&rt, addr)?;
+        let mut client = VectorModelServiceClient::new(channel);
+
+        // Eager health check: fail fast if the service is unreachable/unhealthy.
+        let health = rt
+            .block_on(client.health_check(HealthCheckRequest {}))
+            .map_err(|e| {
+                MemHopError::EncoderError(format!(
+                    "gRPC encoder health check failed at {}: {}",
+                    addr, e
+                ))
+            })?
+            .into_inner();
+
+        if !health.healthy {
+            return Err(MemHopError::EncoderError(format!(
+                "gRPC encoder reports unhealthy at {}",
+                addr
+            )));
+        }
 
         Ok(GrpcEncoder {
             rt,
@@ -78,60 +95,35 @@ impl GrpcEncoder {
         })
     }
 
-    /// Create a tonic Channel over Unix Domain Socket
-    #[cfg(unix)]
-    fn connect_uds(
+    /// Create a tonic Channel over TCP.
+    fn connect_tcp(
         rt: &tokio::runtime::Runtime,
-        socket_path: &str,
+        addr: &str,
     ) -> Result<tonic::transport::Channel, MemHopError> {
-        use hyper_util::rt::TokioIo;
-        use std::path::PathBuf;
-        use tokio::net::UnixStream;
-        use tonic::transport::Uri;
-
-        let path = PathBuf::from(socket_path);
-
-        if !path.exists() {
+        if !addr.starts_with("http://") && !addr.starts_with("https://") {
             return Err(MemHopError::ConfigError(format!(
-                "gRPC Unix socket not found: {}",
-                socket_path
+                "gRPC encoder address must use http:// or https:// scheme, got: {}",
+                addr
             )));
         }
 
-        let path_for_connect = path.clone();
-        let channel = rt
-            .block_on(
-                tonic::transport::Channel::from_static("http://[::]:50051").connect_with_connector(
-                    tower::service_fn(move |_: Uri| {
-                        let path = path_for_connect.clone();
-                        async move {
-                            let stream = UnixStream::connect(path).await.map_err(|e| {
-                                std::io::Error::new(std::io::ErrorKind::ConnectionRefused, e)
-                            })?;
-                            Ok::<_, std::io::Error>(TokioIo::new(stream))
-                        }
-                    }),
-                ),
-            )
+        let endpoint = tonic::transport::Channel::from_shared(addr.to_string())
             .map_err(|e| {
                 MemHopError::ConfigError(format!(
-                    "Failed to connect gRPC via Unix socket {}: {}",
-                    socket_path, e
+                    "Invalid gRPC encoder address '{}': {}",
+                    addr, e
                 ))
-            })?;
+            })?
+            .connect_timeout(Duration::from_secs(5));
+
+        let channel = rt.block_on(endpoint.connect()).map_err(|e| {
+            MemHopError::EncoderError(format!(
+                "Failed to connect gRPC encoder at {}: {}",
+                addr, e
+            ))
+        })?;
 
         Ok(channel)
-    }
-
-    #[cfg(not(unix))]
-    fn connect_uds(
-        _rt: &tokio::runtime::Runtime,
-        socket_path: &str,
-    ) -> Result<tonic::transport::Channel, MemHopError> {
-        Err(MemHopError::ConfigError(format!(
-            "Unix socket not supported on this platform: {}",
-            socket_path
-        )))
     }
 
     /// Check if the gRPC encoder service is available via HealthCheck RPC
@@ -159,7 +151,7 @@ impl Encoder for GrpcEncoder {
             .block_on(client.encode(EncodeRequest {
                 text: text.to_string(),
             }))
-            .map_err(|e| MemHopError::ConfigError(format!("gRPC encode failed: {}", e)))?;
+            .map_err(|e| MemHopError::EncoderError(format!("gRPC encode failed: {}", e)))?;
 
         let resp = response.into_inner();
         let dense: Vec<f16> = resp.embedding.iter().map(|&v| f16::from_f32(v)).collect();
@@ -184,26 +176,49 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_grpc_encoder_requires_unix_scheme() {
-        let result = GrpcEncoder::new("http://127.0.0.1:50051", 384);
+    fn test_default_encoder_addr_is_tcp() {
+        assert_eq!(DEFAULT_ENCODER_ADDR, "http://127.0.0.1:27110");
+    }
+
+    #[test]
+    fn test_grpc_encoder_rejects_unix_scheme() {
+        let result = GrpcEncoder::new("unix:///tmp/.meowagent/meowvec.sock", 384);
         assert!(result.is_err());
         if let Err(e) = result {
             let err_msg = format!("{}", e);
-            assert!(err_msg.contains("unix://"));
+            assert!(
+                err_msg.contains("http://") || err_msg.contains("https://"),
+                "expected scheme error, got: {}",
+                err_msg
+            );
         }
     }
 
     #[test]
-    fn test_grpc_encoder_uds_not_found() {
-        let result = GrpcEncoder::new("unix:///tmp/nonexistent_meowvec_test.sock", 384);
+    fn test_grpc_encoder_rejects_bare_tcp_address() {
+        // Bare host:port is rejected; tonic requires an explicit scheme.
+        let result = GrpcEncoder::new("127.0.0.1:27110", 384);
         assert!(result.is_err());
+        if let Err(e) = result {
+            let err_msg = format!("{}", e);
+            assert!(
+                err_msg.contains("http://") || err_msg.contains("https://"),
+                "expected scheme error, got: {}",
+                err_msg
+            );
+        }
     }
 
     #[test]
-    fn test_grpc_encoder_dim_and_mode() {
-        // Can't create a real GrpcEncoder without a running server,
-        // but we verify the UDS path check works
-        let result = GrpcEncoder::new("unix:///tmp/nonexistent.sock", 384);
-        assert!(result.is_err()); // Expected: socket not found
+    fn test_grpc_encoder_tcp_unavailable() {
+        // Port 1 is reserved/special and should refuse the connection quickly.
+        let result = GrpcEncoder::new("http://127.0.0.1:1", 384);
+        assert!(result.is_err(), "expected connection failure");
+    }
+
+    #[test]
+    fn test_grpc_encoder_rejects_invalid_scheme() {
+        let result = GrpcEncoder::new("ftp://127.0.0.1:27110", 384);
+        assert!(result.is_err());
     }
 }

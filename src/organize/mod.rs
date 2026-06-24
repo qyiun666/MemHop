@@ -3,25 +3,8 @@
 //! This module provides text analysis utilities used across the MemHop codebase,
 //! primarily for keyword extraction from text content.
 
+use crate::index::sparse::tokenize;
 use std::collections::HashMap;
-
-/// 中英文停用词列表（80+ 常见停用词）
-const STOP_WORDS: &[&str] = &[
-    // 英文停用词
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had", "do",
-    "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall", "to", "of",
-    "in", "for", "on", "with", "at", "by", "from", "as", "into", "through", "during", "before",
-    "after", "above", "below", "between", "out", "off", "over", "under", "again", "further",
-    "then", "once", "here", "there", "when", "where", "why", "how", "all", "both", "each", "few",
-    "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own", "same", "so",
-    "than", "too", "very", "just", "and", "but", "if", "or", "because", "until", "while", "this",
-    "that", "these", "those", "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
-    "she", "her", "it", "its", "they", "them", "their", "what", "which", "who",
-    // 中文停用词
-    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "一个", "上", "也",
-    "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "他", "她",
-    "它", "们", "那", "些", "什么", "怎么", "吗", "呢", "吧", "啊", "哦", "嗯", "呀",
-];
 
 /// 从文本中提取关键词
 ///
@@ -32,18 +15,11 @@ const STOP_WORDS: &[&str] = &[
 /// # 返回
 /// 按重要性排序的关键词列表
 pub fn extract_keywords(text: &str, max_keywords: usize) -> Vec<String> {
-    // 1. 分词（简单按空格和标点分割）
+    // 1. 分词（CJK 使用 jieba，英文使用空格，已过滤停用词）
     let words = tokenize(text);
 
-    // 2. 过滤停用词和短词
-    let filtered: Vec<String> = words
-        .iter()
-        .filter(|word| {
-            let lower = word.to_lowercase();
-            !STOP_WORDS.contains(&lower.as_str()) && word.len() > 2
-        })
-        .cloned()
-        .collect();
+    // 2. 过滤短词
+    let filtered: Vec<String> = words.into_iter().filter(|word| word.len() > 2).collect();
 
     // 3. 统计词频
     let mut freq_map: HashMap<String, u32> = HashMap::new();
@@ -64,14 +40,6 @@ pub fn extract_keywords(text: &str, max_keywords: usize) -> Vec<String> {
         .into_iter()
         .take(max_keywords)
         .map(|(word, _)| word)
-        .collect()
-}
-
-/// 简单分词器
-fn tokenize(text: &str) -> Vec<String> {
-    text.split(|c: char| c.is_whitespace() || c.is_ascii_punctuation())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
         .collect()
 }
 

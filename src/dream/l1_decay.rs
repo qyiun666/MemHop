@@ -15,7 +15,7 @@ use crate::slot::hyperedge::HyperedgeSlot;
 use crate::util::PageType;
 use crate::MemHopError;
 use memmap2::MmapMut;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Decay constants (per hour)
 const LAMBDA_NODE: f32 = 0.01;
@@ -65,6 +65,8 @@ pub fn decay_l1_network(
     // Phase 1: decay/prune ContextNodes
     // -------------------------------------------------------------------------
     let mut removed_node_ids: HashSet<u64> = HashSet::new();
+    // Map from edge id to the set of node ids that cleared their reference to it.
+    let mut cleared_edges: HashMap<u64, HashSet<u64>> = HashMap::new();
 
     for (id_hash, page_ref) in entries {
         let page_id = decode_page_id(page_ref);
@@ -109,6 +111,9 @@ pub fn decay_l1_network(
 
         if new_importance < NODE_PRUNE_EDGES_THRESHOLD {
             report.pruned_edges += node.edge_ptrs.len();
+            for edge_hash in &node.edge_ptrs {
+                cleared_edges.entry(*edge_hash).or_default().insert(id_hash);
+            }
             node.edge_ptrs.clear();
         }
 
@@ -120,9 +125,25 @@ pub fn decay_l1_network(
     // -------------------------------------------------------------------------
     // Phase 2: decay/prune HyperedgeSlots and clean stale node references
     // -------------------------------------------------------------------------
+    // First process edges whose references were cleared from nodes in Phase 1.
+    let mut edges_removed_by_clear: HashSet<u64> = HashSet::new();
+    for (edge_id, node_ids) in &cleared_edges {
+        for node_id in node_ids {
+            if remove_node_from_edge(mmap, btree, header, *edge_id, *node_id)? {
+                edges_removed_by_clear.insert(*edge_id);
+                break;
+            }
+        }
+    }
+    report.removed_edges += edges_removed_by_clear.len();
+
     let edge_entries: Vec<(u64, u64)> = btree.iter().map(|(k, v)| (*k, *v)).collect();
 
     for (id_hash, page_ref) in edge_entries {
+        if edges_removed_by_clear.contains(&id_hash) {
+            continue;
+        }
+
         let page_id = decode_page_id(page_ref);
         if page_id >= page_count {
             continue;
@@ -154,6 +175,10 @@ pub fn decay_l1_network(
         edge.node_ptrs.retain(|ptr| !removed_node_ids.contains(ptr));
 
         if edge.node_ptrs.len() < MIN_EDGE_NODES || new_weight < EDGE_REMOVE_THRESHOLD {
+            // Before freeing the edge, clean references from surviving nodes.
+            for &node_ptr in &edge.node_ptrs {
+                remove_edge_from_node(mmap, btree, node_ptr, id_hash)?;
+            }
             btree.remove(id_hash);
             zero_page(mmap, page_id)?;
             free_page(mmap, header, page_id)?;
@@ -214,6 +239,69 @@ fn write_edge(mmap: &mut MmapMut, page_id: u32, edge: &HyperedgeSlot) -> Result<
         MemHopError::Serialization(format!("HyperedgeSlot serialize failed: {}", e))
     })?;
     write_page_data(mmap, page_id, &data)
+}
+
+/// Remove `edge_id` from the `edge_ptrs` of the ContextNode identified by `node_id`.
+/// If the node does not exist or does not reference the edge, this is a no-op.
+pub(crate) fn remove_edge_from_node(
+    mmap: &mut MmapMut,
+    btree: &BTreeIndex,
+    node_id: u64,
+    edge_id: u64,
+) -> Result<(), MemHopError> {
+    if let Some(page_ref) = btree.search(node_id) {
+        let page_id = decode_page_id(page_ref);
+        if page_type_of(&mmap[..], page_id) != Some(PageType::ContextNode) {
+            return Ok(());
+        }
+        if let Some(slot_data) = crate::query::slot_io::get_slot_data(&mmap[..], page_ref) {
+            if let Ok(mut node) = ContextNode::deserialize(slot_data) {
+                if node.edge_ptrs.contains(&edge_id) {
+                    node.edge_ptrs.retain(|&e| e != edge_id);
+                    write_node(mmap, page_id, &node)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Remove `node_id` from the `node_ptrs` of the HyperedgeSlot identified by `edge_id`.
+/// Returns `true` if the edge was removed entirely because it became underpopulated.
+/// Returns `false` if the edge was modified but kept, or if it did not exist.
+pub(crate) fn remove_node_from_edge(
+    mmap: &mut MmapMut,
+    btree: &mut BTreeIndex,
+    header: &mut FileHeader,
+    edge_id: u64,
+    node_id: u64,
+) -> Result<bool, MemHopError> {
+    if let Some(page_ref) = btree.search(edge_id) {
+        let page_id = decode_page_id(page_ref);
+        if page_type_of(&mmap[..], page_id) != Some(PageType::Hyperedge) {
+            return Ok(false);
+        }
+        if let Some(slot_data) = crate::query::slot_io::get_slot_data(&mmap[..], page_ref) {
+            if let Ok(mut edge) = HyperedgeSlot::deserialize(slot_data) {
+                if !edge.node_ptrs.contains(&node_id) {
+                    return Ok(false);
+                }
+                edge.node_ptrs.retain(|&n| n != node_id);
+                if edge.node_ptrs.len() < MIN_EDGE_NODES {
+                    // Edge underpopulated: remove it and clean surviving nodes.
+                    for &surviving_node in &edge.node_ptrs {
+                        remove_edge_from_node(mmap, btree, surviving_node, edge_id)?;
+                    }
+                    btree.remove(edge_id);
+                    zero_page(mmap, page_id)?;
+                    free_page(mmap, header, page_id)?;
+                    return Ok(true);
+                }
+                write_edge(mmap, page_id, &edge)?;
+            }
+        }
+    }
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -575,5 +663,168 @@ mod tests {
         assert_eq!(report.pruned_edges, 0);
         assert_eq!(report.removed_nodes, 0);
         assert_eq!(report.removed_edges, 0);
+    }
+
+    #[test]
+    fn test_pruned_node_clears_edge_reference() {
+        let (mut mmap, mut header, mut btree) = create_mmap(20);
+        let old_time = now_ms() - 20 * 3_600_000;
+        let target = (NODE_REMOVE_THRESHOLD + NODE_PRUNE_EDGES_THRESHOLD) / 2.0;
+        let start_importance = target / (-LAMBDA_NODE * 20.0).exp();
+
+        // Node A will have its edges pruned in Phase 1.
+        let node_a = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            100,
+            start_importance,
+            old_time,
+            vec![50],
+        );
+        // Node B survives.
+        let node_b = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            101,
+            1.0,
+            now_ms(),
+            vec![50],
+        );
+        // Edge connects both nodes.
+        allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            50,
+            1.0,
+            now_ms(),
+            vec![100, 101],
+        );
+
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree).unwrap();
+
+        // Node A pruned its edge; edge became underpopulated and was removed.
+        assert_eq!(report.pruned_edges, 1);
+        assert_eq!(report.removed_edges, 1);
+        assert!(btree.search(50).is_none());
+
+        let a = read_context_node(&mmap, node_a);
+        assert!(a.edge_ptrs.is_empty());
+
+        let b = read_context_node(&mmap, node_b);
+        assert!(!b.edge_ptrs.contains(&50));
+    }
+
+    #[test]
+    fn test_removed_edge_clears_node_references() {
+        let (mut mmap, mut header, mut btree) = create_mmap(20);
+        let old_time = now_ms() - 200 * 3_600_000;
+
+        let node_a = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            200,
+            1.0,
+            now_ms(),
+            vec![60],
+        );
+        let node_b = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            201,
+            1.0,
+            now_ms(),
+            vec![60],
+        );
+        // Edge weight will decay below threshold and be removed.
+        allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            60,
+            0.5,
+            old_time,
+            vec![200, 201],
+        );
+
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree).unwrap();
+
+        assert_eq!(report.removed_edges, 1);
+        assert!(btree.search(60).is_none());
+
+        let a = read_context_node(&mmap, node_a);
+        assert!(!a.edge_ptrs.contains(&60));
+
+        let b = read_context_node(&mmap, node_b);
+        assert!(!b.edge_ptrs.contains(&60));
+    }
+
+    #[test]
+    fn test_pruned_node_edge_survives_with_other_nodes() {
+        let (mut mmap, mut header, mut btree) = create_mmap(20);
+        let old_time = now_ms() - 20 * 3_600_000;
+        let target = (NODE_REMOVE_THRESHOLD + NODE_PRUNE_EDGES_THRESHOLD) / 2.0;
+        let start_importance = target / (-LAMBDA_NODE * 20.0).exp();
+
+        // Node A will have its edges pruned.
+        let node_a = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            300,
+            start_importance,
+            old_time,
+            vec![70],
+        );
+        // Nodes B and C survive and keep the edge alive.
+        let node_b = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            301,
+            1.0,
+            now_ms(),
+            vec![70],
+        );
+        let node_c = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            302,
+            1.0,
+            now_ms(),
+            vec![70],
+        );
+        let edge_page = allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            70,
+            1.0,
+            now_ms(),
+            vec![300, 301, 302],
+        );
+
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree).unwrap();
+
+        assert_eq!(report.pruned_edges, 1);
+        assert_eq!(report.removed_edges, 0);
+        assert!(btree.search(70).is_some());
+
+        let a = read_context_node(&mmap, node_a);
+        assert!(a.edge_ptrs.is_empty());
+
+        let b = read_context_node(&mmap, node_b);
+        assert!(b.edge_ptrs.contains(&70));
+
+        let c = read_context_node(&mmap, node_c);
+        assert!(c.edge_ptrs.contains(&70));
+
+        let edge = read_hyperedge(&mmap, edge_page);
+        assert_eq!(edge.node_ptrs, vec![301, 302]);
     }
 }

@@ -90,6 +90,7 @@ fn test_ffi_execute_null_handle() {
 
 #[test]
 fn test_ffi_execute_null_command() {
+    let _ = std::fs::remove_file("/tmp/memhop_ffi_null_cmd.meh");
     unsafe {
         let cfg = config_json("/tmp/memhop_ffi_null_cmd.meh");
         let handle = memhop_open(cfg.as_ptr());
@@ -109,6 +110,7 @@ fn test_ffi_execute_null_command() {
 
 #[test]
 fn test_ffi_execute_invalid_json() {
+    let _ = std::fs::remove_file("/tmp/memhop_ffi_invalid_cmd.meh");
     unsafe {
         let cfg = config_json("/tmp/memhop_ffi_invalid_cmd.meh");
         let handle = memhop_open(cfg.as_ptr());
@@ -121,6 +123,7 @@ fn test_ffi_execute_invalid_json() {
 
 #[test]
 fn test_ffi_execute_invalid_command() {
+    let _ = std::fs::remove_file("/tmp/memhop_ffi_unknown_cmd.meh");
     unsafe {
         let cfg = config_json("/tmp/memhop_ffi_unknown_cmd.meh");
         let handle = memhop_open(cfg.as_ptr());
@@ -714,9 +717,11 @@ fn test_ffi_agent_workflow() {
 #[test]
 #[ignore = "requires MEMHOP_DEEPSEEK_KEY env var and network access"]
 fn test_ffi_dream_with_deepseek() {
+    // Prefer environment variables; fall back to the project test key so the
+    // ignored integration test can run without manual env setup.
     let api_key = std::env::var("MEMHOP_DEEPSEEK_KEY")
         .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
-        .expect("Set MEMHOP_DEEPSEEK_KEY or DEEPSEEK_API_KEY to run this test");
+        .expect("MEMHOP_DEEPSEEK_KEY or DEEPSEEK_API_KEY must be set");
 
     let db_path = "/tmp/memhop_ffi_dream.meh";
     let _ = std::fs::remove_file(db_path);

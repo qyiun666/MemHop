@@ -41,10 +41,10 @@ impl ContentType {
 pub struct ArchiveSlot {
     pub id_hash: u64,
     pub content_type: ContentType,
-    pub role: u8,             // 0=user, 1=agent, 2=system
-    pub context_id: u64,      // Associated L2 context
-    pub created_at: i64,      // Timestamp
-    pub content: String,      // Inline text or file path
+    pub role: u8,        // 0=user, 1=agent, 2=system
+    pub context_id: u64, // Associated L2 context
+    pub created_at: i64, // Timestamp
+    pub content: String, // Inline text or file path
     pub metadata: Option<String>,
 }
 
@@ -94,8 +94,13 @@ impl ArchiveSlot {
         let metadata = read_optional_string(&mut c)?;
 
         Ok(ArchiveSlot {
-            id_hash, content_type, role, context_id,
-            created_at, content, metadata,
+            id_hash,
+            content_type,
+            role,
+            context_id,
+            created_at,
+            content,
+            metadata,
         })
     }
 
@@ -171,7 +176,7 @@ mod tests {
             role: 0,
             context_id: 0,
             created_at: 0,
-            content: "test".to_string(),  // 4 bytes
+            content: "test".to_string(), // 4 bytes
             metadata: None,              // 2 bytes
         };
         // 26 + (2+4) + 2 = 34

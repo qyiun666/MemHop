@@ -35,7 +35,7 @@
 
 int main() {
     // 1. 打开数据库
-    void* handle = memhop_open("{\"db_path\":\"/tmp/test.meh\",\"encoder_grpc_addr\":\"unix:///tmp/.meowagent/meowvec.sock\",\"vector_dim\":768}");
+    void* handle = memhop_open("{\"db_path\":\"/tmp/test.meh\",\"encoder_grpc_addr\":\"http://127.0.0.1:27110\",\"vector_dim\":768}");
     if (!handle) { fprintf(stderr, "open failed\n"); return 1; }
 
     // 2. 执行命令（检索记忆）
@@ -74,7 +74,7 @@ void* memhop_open(const char* config_json);
 | 字段                | 类型    | 必需 | 描述                                                                     |
 | ------------------- | ------- | ---- | ------------------------------------------------------------------------ |
 | `db_path`           | string  | 是   | `.meh` 数据库文件路径                                                    |
-| `encoder_grpc_addr` | string  | 否   | gRPC 编码器地址（Unix Socket，如 `unix:///tmp/.meowagent/meowvec.sock`） |
+| `encoder_grpc_addr` | string  | 否   | gRPC 编码器地址（TCP，如 `http://127.0.0.1:27110`） |
 | `vector_dim`        | integer | 是   | 向量维度（创建时确定，不可更改）                                         |
 | `crystal_path`      | string  | 否   | 结晶化知识存储路径                                                       |
 
@@ -130,7 +130,7 @@ void memhop_close(void* handle);
 ```json
 {
   "db_path": "./data/agent.meh",
-  "encoder_grpc_addr": "unix:///tmp/.meowagent/meowvec.sock",
+  "encoder_grpc_addr": "http://127.0.0.1:27110",
   "vector_dim": 768,
   "crystal_path": null
 }
@@ -139,11 +139,11 @@ void memhop_close(void* handle);
 | 字段                | 类型    | 必需 | 描述                                                                       |
 | ------------------- | ------- | ---- | -------------------------------------------------------------------------- |
 | `db_path`           | string  | 是   | `.meh` 数据库文件路径                                                      |
-| `encoder_grpc_addr` | string  | 否   | gRPC 编码器地址（Unix Socket，环境变量 `MEMHOP_ENCODER_GRPC_ADDR` 可覆盖） |
+| `encoder_grpc_addr` | string  | 否   | gRPC 编码器地址（TCP，环境变量 `MEMHOP_ENCODER_GRPC_ADDR` 可覆盖） |
 | `vector_dim`        | integer | 是   | 向量维度（创建时确定，不可更改）                                           |
 | `crystal_path`      | string  | 否   | 结晶化知识存储路径                                                         |
 
-**编码器**：仅支持 gRPC over Unix Domain Socket。未配置时向量检索和 batch_store 将返回错误。
+**编码器**：仅支持 gRPC over TCP。连接失败时 `memhop_open` 会返回 `NULL`。
 
 ### 通用分页
 

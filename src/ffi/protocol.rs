@@ -49,7 +49,7 @@ pub enum FfiCommand {
     #[serde(rename = "dream")]
     Dream {
         #[serde(flatten)]
-        llm: crate::query::types::LlmConfig,
+        llm: crate::config::LlmConfig,
     },
     /// Merge L2 topics (Interface 18)
     #[serde(rename = "merge_topics")]

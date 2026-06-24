@@ -3,7 +3,8 @@
 //! Compresses activated L2 contexts through depth demotion:
 //! - Depth 1 (主节点/Scene) → Depth 2 (次节点/Sub-scene), with compressed summary
 //! - Depth 2 (次节点/Sub-scene) → Depth 3 (次次节点/Turn group)
-//! - Depth 3 (次次节点/Turn group) → Removed (free page)
+//! - Depth 3 (次次节点/Turn group) → Depth 4 (语义要点/Semantic summary)
+//! - Depth 4 (语义要点/Semantic summary) → Removed (free page)
 //!
 //! Original depth-1 nodes are compressed into new contexts before demotion.
 //! All changes are written to disk and memory indexes are updated.
@@ -16,7 +17,7 @@ pub type CompressStageResult = Result<
     (
         Vec<DemotionResult>,
         Vec<CompressResult>,
-        Vec<String>, // removed context IDs (depth 3 → gone)
+        Vec<String>, // removed context IDs (depth 4 → gone)
         Vec<String>, // demoted to tertiary IDs (depth 2 → 3)
     ),
     MemHopError,
@@ -36,9 +37,10 @@ use std::collections::HashSet;
 /// Compress activated L2 contexts through depth-based demotion
 ///
 /// # Depth Demotion Rules
-/// 1. Depth 3 (turn group) → removed, page freed
-/// 2. Depth 2 (sub-scene) → demoted to depth 3
-/// 3. Depth 1 (scene) → compressed summary generated, demoted to depth 2,
+/// 1. Depth 4 (semantic summary) → removed, page freed
+/// 2. Depth 3 (turn group) → demoted to depth 4
+/// 3. Depth 2 (sub-scene) → demoted to depth 3
+/// 4. Depth 1 (scene) → compressed summary generated, demoted to depth 2,
 ///    new compressed context created at depth 1
 ///
 /// # Arguments
@@ -72,10 +74,7 @@ pub fn compress_active_contexts(
             if offset + PAGE_SIZE > mmap.len() {
                 continue;
             }
-            if let Ok(page_header) = read_page_header(
-                unsafe { &*(mmap.as_ptr() as *const memmap2::Mmap) },
-                page_id,
-            ) {
+            if let Ok(page_header) = read_page_header(&mmap[..], page_id) {
                 if page_header.page_type != PageType::Context as u16 {
                     continue;
                 }
@@ -97,13 +96,13 @@ pub fn compress_active_contexts(
 
     // Step 2: Process by depth (deepest first to avoid conflicts)
 
-    // 2a: Remove depth-3 contexts (turn groups)
-    let depth3: Vec<_> = active_contexts
+    // 2a: Remove depth-4 contexts (semantic summaries)
+    let depth4: Vec<_> = active_contexts
         .iter()
-        .filter(|(_, ctx)| ctx.depth == 3)
+        .filter(|(_, ctx)| ctx.depth == 4)
         .collect();
 
-    for &(page_id, ref ctx) in &depth3 {
+    for &(page_id, ref ctx) in &depth4 {
         let ctx_id = format!("{:016x}", ctx.id_hash);
 
         // Free the page
@@ -118,7 +117,22 @@ pub fn compress_active_contexts(
         removed_contexts.push(ctx_id);
     }
 
-    // 2b: Demote depth-2 contexts to depth 3
+    // 2b: Demote depth-3 contexts to depth 4
+    for (page_id, ctx) in active_contexts.iter_mut().filter(|(_, ctx)| ctx.depth == 3) {
+        // Demote to depth 4
+        ctx.depth = 4;
+        ctx.updated_at = now_ms;
+
+        // Serialize and write back
+        let serialized = ctx
+            .serialize()
+            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+        write_page_data(mmap, *page_id, &serialized)?;
+
+        // Depth-3 → depth-4 demotions are not tracked separately
+    }
+
+    // 2c: Demote depth-2 contexts to depth 3
     for (page_id, ctx) in active_contexts.iter_mut().filter(|(_, ctx)| ctx.depth == 2) {
         let ctx_id = format!("{:016x}", ctx.id_hash);
 
@@ -211,6 +225,7 @@ pub fn compress_active_contexts(
         // Demote original depth-1 context to depth 2
         let mut demoted_ctx = ctx.clone();
         demoted_ctx.depth = 2;
+        demoted_ctx.parent_id = Some(new_id_hash);
         demoted_ctx.summary = Some(compressed_summary.clone());
         demoted_ctx.updated_at = now_ms;
 
@@ -279,6 +294,10 @@ mod tests {
                 Ok(crate::dream::llm::CrystalDef {
                     condition: "mock".to_string(),
                     action: "mock".to_string(),
+                    steps: vec![crate::dream::llm::CrystalStep {
+                        action: "mock".to_string(),
+                        parameters: None,
+                    }],
                     confidence: 0.5,
                 })
             }
@@ -298,6 +317,10 @@ mod tests {
                 crate::dream::llm::CrystalDef {
                     condition: "mock".to_string(),
                     action: "mock".to_string(),
+                    steps: vec![crate::dream::llm::CrystalStep {
+                        action: "mock".to_string(),
+                        parameters: None,
+                    }],
                     confidence: 0.3,
                 }
             }
@@ -312,6 +335,36 @@ mod tests {
                 _: &[String],
             ) -> crate::dream::llm::HabitAnalysis {
                 crate::dream::llm::HabitAnalysis::default()
+            }
+
+            fn distill_concepts(
+                &self,
+                summary: &str,
+            ) -> Result<crate::dream::llm::LlmDistillResult, crate::MemHopError> {
+                Ok(crate::dream::llm::LlmDistillResult {
+                    concepts: vec![crate::dream::llm::LlmConcept {
+                        name: "summary".to_string(),
+                        node_type: "concept".to_string(),
+                        description: summary.to_string(),
+                        keywords: vec![],
+                    }],
+                    relations: vec![],
+                })
+            }
+
+            fn fallback_distill_concepts(
+                &self,
+                summary: &str,
+            ) -> crate::dream::llm::LlmDistillResult {
+                crate::dream::llm::LlmDistillResult {
+                    concepts: vec![crate::dream::llm::LlmConcept {
+                        name: "summary".to_string(),
+                        node_type: "concept".to_string(),
+                        description: summary.to_string(),
+                        keywords: vec![],
+                    }],
+                    relations: vec![],
+                }
             }
         }
 
@@ -333,5 +386,304 @@ mod tests {
         assert!(compressed.is_empty());
         assert!(removed.is_empty());
         assert!(tertiary.is_empty());
+    }
+
+    // Shared test LLM provider
+    struct TestLlm;
+
+    impl crate::dream::llm::LlmProvider for TestLlm {
+        fn summarize(&self, texts: &[String]) -> Result<String, crate::MemHopError> {
+            Ok(texts.join(", "))
+        }
+
+        fn fallback_summarize(&self, texts: &[String]) -> String {
+            texts.join(", ")
+        }
+
+        fn extract_patterns(
+            &self,
+            _: &[crate::dream::llm::MemorySummary],
+        ) -> Result<Vec<crate::dream::llm::Pattern>, crate::MemHopError> {
+            Ok(vec![])
+        }
+
+        fn fallback_extract_patterns(
+            &self,
+            _: &[crate::dream::llm::MemorySummary],
+        ) -> Vec<crate::dream::llm::Pattern> {
+            vec![]
+        }
+
+        fn generate_crystal(
+            &self,
+            _: &crate::dream::llm::Pattern,
+        ) -> Result<crate::dream::llm::CrystalDef, crate::MemHopError> {
+            Ok(crate::dream::llm::CrystalDef {
+                condition: "mock".to_string(),
+                action: "mock".to_string(),
+                steps: vec![crate::dream::llm::CrystalStep {
+                    action: "mock".to_string(),
+                    parameters: None,
+                }],
+                confidence: 0.5,
+            })
+        }
+
+        fn fallback_generate_crystal(
+            &self,
+            _: &crate::dream::llm::Pattern,
+        ) -> crate::dream::llm::CrystalDef {
+            crate::dream::llm::CrystalDef {
+                condition: "mock".to_string(),
+                action: "mock".to_string(),
+                steps: vec![crate::dream::llm::CrystalStep {
+                    action: "mock".to_string(),
+                    parameters: None,
+                }],
+                confidence: 0.3,
+            }
+        }
+
+        fn analyze_user_habits(
+            &self,
+            _: &[String],
+        ) -> Result<crate::dream::llm::HabitAnalysis, crate::MemHopError> {
+            Ok(crate::dream::llm::HabitAnalysis::default())
+        }
+
+        fn fallback_analyze_user_habits(&self, _: &[String]) -> crate::dream::llm::HabitAnalysis {
+            crate::dream::llm::HabitAnalysis::default()
+        }
+
+        fn distill_concepts(
+            &self,
+            summary: &str,
+        ) -> Result<crate::dream::llm::LlmDistillResult, crate::MemHopError> {
+            Ok(crate::dream::llm::LlmDistillResult {
+                concepts: vec![crate::dream::llm::LlmConcept {
+                    name: "summary".to_string(),
+                    node_type: "concept".to_string(),
+                    description: summary.to_string(),
+                    keywords: vec![],
+                }],
+                relations: vec![],
+            })
+        }
+
+        fn fallback_distill_concepts(&self, summary: &str) -> crate::dream::llm::LlmDistillResult {
+            crate::dream::llm::LlmDistillResult {
+                concepts: vec![crate::dream::llm::LlmConcept {
+                    name: "summary".to_string(),
+                    node_type: "concept".to_string(),
+                    description: summary.to_string(),
+                    keywords: vec![],
+                }],
+                relations: vec![],
+            }
+        }
+    }
+
+    fn create_test_mmap(page_count: usize) -> (tempfile::NamedTempFile, MmapMut, FileHeader) {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&vec![0u8; PAGE_SIZE * page_count]).unwrap();
+        drop(file);
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+        let mut header = FileHeader::new(768);
+        for page_id in 2..page_count as u32 {
+            let offset = page_id as usize * PAGE_SIZE;
+            let next_free = if page_id + 1 < page_count as u32 {
+                page_id + 1
+            } else {
+                0xFFFFFFFF
+            };
+            mmap[offset..offset + 4].copy_from_slice(&next_free.to_le_bytes());
+        }
+        header.page_count = page_count as u32;
+        header.free_list_head = 2;
+        (temp_file, mmap, header)
+    }
+
+    fn insert_test_context(
+        mmap: &mut MmapMut,
+        header: &mut FileHeader,
+        btree: &mut BTreeIndex,
+        sparse_index: &mut SparseIndex,
+        ctx: ContextSlot,
+    ) -> u32 {
+        let page_id =
+            crate::file::page::allocate_page(mmap, header, crate::util::PageType::Context, 2, 0)
+                .unwrap();
+        let serialized = ctx.serialize().unwrap();
+        crate::file::page::write_page_data(mmap, page_id, &serialized).unwrap();
+        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
+        btree.insert(ctx.id_hash, page_ref);
+        let terms: Vec<String> = ctx
+            .title
+            .split_whitespace()
+            .map(|s| s.to_lowercase())
+            .collect();
+        sparse_index.add_document(
+            ctx.id_hash,
+            terms,
+            ctx.title.split_whitespace().count() as u32,
+        );
+        page_id
+    }
+
+    fn read_test_context(mmap: &MmapMut, btree: &BTreeIndex, id_hash: u64) -> Option<ContextSlot> {
+        btree.search(id_hash).and_then(|page_ref| {
+            let page_id = (page_ref >> 16) as u32;
+            let offset = page_id as usize * PAGE_SIZE + 32;
+            ContextSlot::deserialize(&mmap[offset..]).ok()
+        })
+    }
+
+    #[test]
+    fn test_depth4_demotion_and_removal() {
+        let (_temp, mut mmap, mut header) = create_test_mmap(20);
+        let mut btree = BTreeIndex::new();
+        let mut sparse_index = SparseIndex::new();
+        let llm = TestLlm;
+
+        let base = ContextSlot {
+            id_hash: 0,
+            parent_id: None,
+            depth: 1,
+            title: "base".to_string(),
+            summary: None,
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 1,
+            created_at: 1000,
+            updated_at: 1000,
+            version: 1,
+            importance: 0.5,
+            activation_score: 0.5,
+            is_active: true,
+            activation_state: ActivationState::Active,
+            centroid_page_ref: 0,
+            dialogue_range: (1000, 1000),
+        };
+
+        let ctx1 = ContextSlot {
+            id_hash: 1,
+            depth: 1,
+            title: "Scene A".to_string(),
+            summary: Some("scene summary".to_string()),
+            ..base.clone()
+        };
+        let ctx2 = ContextSlot {
+            id_hash: 2,
+            depth: 2,
+            parent_id: Some(1),
+            title: "Subscene A1".to_string(),
+            ..base.clone()
+        };
+        let ctx3 = ContextSlot {
+            id_hash: 3,
+            depth: 3,
+            parent_id: Some(2),
+            title: "Turn group A1a".to_string(),
+            ..base.clone()
+        };
+        let ctx4 = ContextSlot {
+            id_hash: 4,
+            depth: 4,
+            parent_id: Some(3),
+            title: "Semantic summary A1a".to_string(),
+            ..base.clone()
+        };
+
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx1);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx2);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx3);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx4);
+
+        let active_ids: HashSet<u64> = [1, 2, 3, 4].iter().cloned().collect();
+        let result = compress_active_contexts(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut sparse_index,
+            &llm,
+            &active_ids,
+        )
+        .unwrap();
+
+        // depth-4 removed
+        assert!(result.2.iter().any(|id| id == "0000000000000004"));
+        assert!(btree.search(4).is_none());
+
+        // depth-3 demoted to depth-4
+        let ctx3_after = read_test_context(&mmap, &btree, 3).unwrap();
+        assert_eq!(ctx3_after.depth, 4);
+
+        // depth-2 demoted to depth-3 and tracked as tertiary
+        assert!(result.3.iter().any(|id| id == "0000000000000002"));
+        let ctx2_after = read_test_context(&mmap, &btree, 2).unwrap();
+        assert_eq!(ctx2_after.depth, 3);
+
+        // depth-1 compressed
+        assert_eq!(result.0.len(), 1);
+        assert_eq!(result.1.len(), 1);
+    }
+
+    #[test]
+    fn test_compression_parent_id_chain() {
+        let (_temp, mut mmap, mut header) = create_test_mmap(10);
+        let mut btree = BTreeIndex::new();
+        let mut sparse_index = SparseIndex::new();
+        let llm = TestLlm;
+
+        let ctx = ContextSlot {
+            id_hash: 10,
+            parent_id: None,
+            depth: 1,
+            title: "Root scene".to_string(),
+            summary: Some("original summary".to_string()),
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 3,
+            created_at: 1000,
+            updated_at: 1000,
+            version: 1,
+            importance: 0.8,
+            activation_score: 0.9,
+            is_active: true,
+            activation_state: ActivationState::Active,
+            centroid_page_ref: 0,
+            dialogue_range: (1000, 1000),
+        };
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx);
+
+        let active_ids: HashSet<u64> = [10].iter().cloned().collect();
+        let result = compress_active_contexts(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut sparse_index,
+            &llm,
+            &active_ids,
+        )
+        .unwrap();
+
+        assert_eq!(result.0.len(), 1);
+        assert_eq!(result.1.len(), 1);
+
+        let new_id = u64::from_str_radix(&result.1[0].new_context_id, 16).unwrap();
+        let original = read_test_context(&mmap, &btree, 10).unwrap();
+        let compressed = read_test_context(&mmap, &btree, new_id).unwrap();
+
+        assert_eq!(compressed.depth, 1);
+        assert_eq!(compressed.parent_id, None);
+        assert_eq!(original.depth, 2);
+        assert_eq!(original.parent_id, Some(new_id));
     }
 }

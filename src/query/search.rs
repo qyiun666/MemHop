@@ -3,8 +3,9 @@
 // search_memory() interface with L2-centric retrieval model.
 //
 // Retrieval flow:
-//   1. Triple retrieval (vector + BM25 + n-gram) on L2 ContextSlot titles (depth 1 & 2)
-//   2. Via L1 hypergraph, find associated depth-1 contexts
+//   1. Triple retrieval (vector + BM25 + entity) on L2 ContextSlot titles (depth 1, 2 & 3;
+//      depth-3 results are weighted by 0.5)
+//   2. Via L1 hypergraph, find associated L2 contexts
 //   3. Return L0 profile, L3 ID list, L4 archive references
 
 use crate::file::header::FileHeader;
@@ -13,7 +14,7 @@ use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
 use crate::index::vector::{cosine_similarity, read_vector};
 use crate::query::common::{self, format_hash};
-use crate::query::slot_io::get_slot_data;
+use crate::query::slot_io::{decode_page_id, get_slot_data};
 use crate::query::types::*;
 use crate::slot::archive::ArchiveSlot;
 use crate::slot::context::ContextSlot;
@@ -39,21 +40,24 @@ fn safe_char_slice(s: &str, max_chars: usize) -> String {
 
 /// Configuration for merge_and_rank function
 struct MergeConfig {
-    ngram_weight: f32,
+    entity_weight: f32,
     bm25_weight: f32,
     vector_weight: f32,
     limit: usize,
     min_score: f32,
 }
 
-/// Merge ngram, BM25 and vector retrieval results using weighted fusion
+/// Merge entity, BM25 and vector retrieval results using weighted fusion
 fn merge_and_rank(
-    ngram_results: Vec<(ContextSlot, f32)>,
+    entity_results: Vec<(ContextSlot, f32)>,
     bm25_results: Vec<(ContextSlot, f32)>,
     vector_results: Vec<(ContextSlot, f32)>,
     config: MergeConfig,
 ) -> Vec<ContextSlot> {
-    let ngram_max = ngram_results.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
+    let entity_max = entity_results
+        .iter()
+        .map(|(_, s)| *s)
+        .fold(0.0f32, f32::max);
     let bm25_max = bm25_results.iter().map(|(_, s)| *s).fold(0.0f32, f32::max);
     let vector_max = vector_results
         .iter()
@@ -63,9 +67,9 @@ fn merge_and_rank(
     let mut score_map: HashMap<u64, (f32, f32, f32)> = HashMap::new();
     let mut ctx_map: HashMap<u64, ContextSlot> = HashMap::new();
 
-    for (ctx, score) in ngram_results {
-        let n = if ngram_max > 0.0 {
-            score / ngram_max
+    for (ctx, score) in entity_results {
+        let n = if entity_max > 0.0 {
+            score / entity_max
         } else {
             0.0
         };
@@ -95,10 +99,10 @@ fn merge_and_rank(
 
     let mut scored: Vec<(u64, f32)> = score_map
         .into_iter()
-        .map(|(id, (ng, bm, vc))| {
+        .map(|(id, (en, bm, vc))| {
             (
                 id,
-                config.ngram_weight * ng + config.bm25_weight * bm + config.vector_weight * vc,
+                config.entity_weight * en + config.bm25_weight * bm + config.vector_weight * vc,
             )
         })
         .filter(|(_, s)| *s >= config.min_score)
@@ -123,7 +127,8 @@ fn merge_and_rank(
 ///   1. `auto_create == 1`  → skip retrieval, create new L2
 ///   2. `context_id` present → load that L2, skip triple retrieval, L1-associate only
 ///   3. `l3_id` present      → restrict candidate pool to L2s containing that L3, then triple retrieve
-///   4. default              → full triple retrieval on all depth-1/2 contexts
+///   4. default              → full triple retrieval on all depth-1/2/3 contexts
+#[allow(clippy::too_many_arguments)]
 pub fn search_memory(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -132,6 +137,7 @@ pub fn search_memory(
     sparse_index: &mut SparseIndex,
     vector_dim: usize,
     encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
+    l1_reverse: &L1ReverseIndex,
 ) -> Result<SearchResult, MemHopError> {
     let _page_count = header.page_count;
 
@@ -208,7 +214,9 @@ pub fn search_memory(
         // that contain this L3 in their l3_refs. The three retrieval channels
         // will then only accept candidates within this set.
         let l3_scope: Option<HashSet<u64>> = if let Some(ref l3_id_str) = query.l3_id {
-            let l3_hash = hash_id(l3_id_str);
+            // l3_id is a hex string like "1a2b3c..."; parse it back to the raw
+            // id_hash rather than hashing the string again.
+            let l3_hash = common::parse_id_to_hash(l3_id_str);
             let data: &[u8] = &mmap[..];
             Some(collect_l2_ids_with_l3(data, btree, l3_hash))
         } else {
@@ -219,7 +227,12 @@ pub fn search_memory(
         let data: &[u8] = &mmap[..];
         let fetch_limit = query.context_limit * 2;
 
-        let ngram_results = retrieve_l2_ngram(
+        // Ensure entity index is built from L3 before entity retrieval.
+        if !sparse_index.has_entity_index() {
+            sparse_index.build_entity_index(data, btree)?;
+        }
+
+        let entity_results = retrieve_l2_entity(
             data,
             &search_text,
             sparse_index,
@@ -258,20 +271,20 @@ pub fn search_memory(
             ));
         };
 
-        // Step 4: Merge & rank (ngram 0.2, BM25 0.5, vector 0.3)
+        // Step 4: Merge & rank (entity 0.15, BM25 0.5, vector 0.35)
         let config = MergeConfig {
-            ngram_weight: 0.2,
+            entity_weight: 0.15,
             bm25_weight: 0.5,
-            vector_weight: 0.3,
+            vector_weight: 0.35,
             limit: query.context_limit,
             min_score: query.min_score,
         };
-        merge_and_rank(ngram_results, bm25_results, vector_results, config)
+        merge_and_rank(entity_results, bm25_results, vector_results, config)
     };
 
     // Step 5: L1 association — find sibling depth-1 contexts
     let data: &[u8] = &mmap[..];
-    let l1_associated = get_l1_associated_depth1(data, &filtered_l2, btree)?;
+    let l1_associated = get_l1_associated_depth1(data, &filtered_l2, btree, l1_reverse)?;
 
     // Step 6: L0 profile
     let l0_profile = crate::query::l0_crud::read_profile(mmap, btree)?;
@@ -296,13 +309,13 @@ pub fn search_memory(
 }
 
 // ============================================================================
-// Retrieval: n-gram
+// Retrieval: entity matching
 // ============================================================================
 
-/// Retrieve L2 contexts using n-gram character-level matching
+/// Retrieve L2 contexts using entity matching against the L3 hypergraph.
 ///
 /// If `l3_scope` is Some, only accept candidates whose id_hash is in the set.
-fn retrieve_l2_ngram(
+fn retrieve_l2_entity(
     data: &[u8],
     query_text: &str,
     sparse_index: &SparseIndex,
@@ -310,12 +323,7 @@ fn retrieve_l2_ngram(
     limit: usize,
     l3_scope: Option<&HashSet<u64>>,
 ) -> Result<Vec<(ContextSlot, f32)>, MemHopError> {
-    let ngrams = SparseIndex::tokenize_ngram(query_text, 2);
-    if ngrams.is_empty() {
-        return Ok(vec![]);
-    }
-
-    let hits = sparse_index.search(&ngrams, limit * 2);
+    let hits = sparse_index.entity_search(query_text);
     let mut scored = Vec::new();
 
     for (id_hash, score) in hits {
@@ -327,8 +335,9 @@ fn retrieve_l2_ngram(
         }
         if let Some(slot_data) = btree.search(id_hash).and_then(|pr| get_slot_data(data, pr)) {
             if let Ok(ctx) = ContextSlot::deserialize(slot_data) {
-                if ctx.depth <= 2 {
-                    scored.push((ctx, score));
+                if ctx.depth <= 3 {
+                    let weighted_score = if ctx.depth == 3 { score * 0.5 } else { score };
+                    scored.push((ctx, weighted_score));
                 }
             }
         }
@@ -373,8 +382,9 @@ fn retrieve_l2_bm25(
         }
         if let Some(slot_data) = btree.search(id_hash).and_then(|pr| get_slot_data(data, pr)) {
             if let Ok(ctx) = ContextSlot::deserialize(slot_data) {
-                if ctx.depth <= 2 {
-                    scored.push((ctx, score));
+                if ctx.depth <= 3 {
+                    let weighted_score = if ctx.depth == 3 { score * 0.5 } else { score };
+                    scored.push((ctx, weighted_score));
                 }
             }
         }
@@ -420,8 +430,8 @@ fn retrieve_l2_vector(
 
         // Try to deserialize as ContextSlot
         if let Ok(ctx) = ContextSlot::deserialize(&data[offset..]) {
-            // Only depth 1 & 2
-            if ctx.depth > 2 {
+            // Accept depth 1, 2 & 3 (depth-3 results are weighted by 0.5)
+            if ctx.depth > 3 {
                 continue;
             }
 
@@ -437,7 +447,8 @@ fn retrieve_l2_vector(
                     if min_score > 0.0 && score < min_score {
                         continue;
                     }
-                    candidates.push((ctx, score));
+                    let weighted_score = if ctx.depth == 3 { score * 0.5 } else { score };
+                    candidates.push((ctx, weighted_score));
                 }
             }
         }
@@ -477,10 +488,92 @@ fn collect_l2_ids_with_l3(data: &[u8], btree: &BTreeIndex, l3_hash: u64) -> Hash
 // ============================================================================
 
 // ============================================================================
+// L1 reverse index
+// ============================================================================
+
+/// L1 reverse index: maps an L2 `context_id` to the L1 `ContextNode`(s) that
+/// point to it. Used to avoid the O(N) btree scan when looking up associated
+/// contexts.
+#[derive(Debug, Clone, Default)]
+pub struct L1ReverseIndex {
+    index: HashMap<u64, Vec<(u64, u64)>>,
+}
+
+impl L1ReverseIndex {
+    pub fn new() -> Self {
+        Self {
+            index: HashMap::new(),
+        }
+    }
+
+    /// Build the reverse index by scanning the btree once. Only pages whose
+    /// header type is `PageType::ContextNode` and whose `context_id` is non-zero
+    /// are indexed.
+    pub fn build(data: &[u8], btree: &BTreeIndex) -> Result<Self, MemHopError> {
+        let mut idx = Self::new();
+        for (&id_hash, &page_ref) in btree.iter() {
+            let page_id = decode_page_id(page_ref);
+            let page_header = match crate::file::page::read_page_header(data, page_id) {
+                Ok(h) => h,
+                Err(_) => continue,
+            };
+            if page_header.page_type != crate::util::PageType::ContextNode as u16 {
+                continue;
+            }
+            if let Some(slot_data) = get_slot_data(data, page_ref) {
+                if let Ok(node) = ContextNode::deserialize(slot_data) {
+                    if node.context_id != 0 {
+                        idx.add(node.context_id, id_hash, page_ref);
+                    }
+                }
+            }
+        }
+        Ok(idx)
+    }
+
+    /// Add (or refresh) a node entry for a given `context_id`.
+    pub fn add(&mut self, context_id: u64, node_id_hash: u64, node_page_ref: u64) {
+        let entry = self.index.entry(context_id).or_default();
+        entry.retain(|(nid, _)| *nid != node_id_hash);
+        entry.push((node_id_hash, node_page_ref));
+    }
+
+    /// Remove all entries for a given `context_id`.
+    pub fn remove_context(&mut self, context_id: u64) {
+        self.index.remove(&context_id);
+    }
+
+    /// Remove a single node entry across all `context_id` buckets.
+    pub fn remove_node(&mut self, node_id_hash: u64) {
+        for nodes in self.index.values_mut() {
+            nodes.retain(|(nid, _)| *nid != node_id_hash);
+        }
+    }
+
+    /// O(1) lookup: given a set of `context_id`s, return all associated L1
+    /// nodes as `(node_id_hash, node_page_ref)`. Results are deduplicated by
+    /// node id.
+    pub fn find_associated(&self, context_ids: &HashSet<u64>) -> Vec<(u64, u64)> {
+        let mut seen = HashSet::new();
+        let mut result = Vec::new();
+        for &ctx_id in context_ids {
+            if let Some(nodes) = self.index.get(&ctx_id) {
+                for &(node_id, page_ref) in nodes {
+                    if seen.insert(node_id) {
+                        result.push((node_id, page_ref));
+                    }
+                }
+            }
+        }
+        result
+    }
+}
+
+// ============================================================================
 // L1 association: find sibling depth-1 contexts via hypergraph
 // ============================================================================
 
-/// Via L1 hypergraph, find depth-1 contexts associated with matched contexts.
+/// Via L1 hypergraph, find associated L2 contexts for matched contexts.
 ///
 /// Algorithm:
 /// 1. Collect matched context id_hashes
@@ -488,11 +581,12 @@ fn collect_l2_ids_with_l3(data: &[u8], btree: &BTreeIndex, l3_hash: u64) -> Hash
 /// 3. For each such node, traverse its hyperedge_ptrs
 /// 4. For each hyperedge, collect sibling node_ptrs
 /// 5. Look up sibling ContextNodes → get their context_id
-/// 6. Load ContextSlot for that context_id, keep only depth=1
+/// 6. Load ContextSlot for that context_id (no depth filtering)
 fn get_l1_associated_depth1(
     data: &[u8],
     matched: &[ContextSlot],
     btree: &BTreeIndex,
+    l1_reverse: &L1ReverseIndex,
 ) -> Result<Vec<ContextSlot>, MemHopError> {
     if matched.is_empty() {
         return Ok(vec![]);
@@ -502,45 +596,38 @@ fn get_l1_associated_depth1(
     let mut seen: HashSet<u64> = matched_ids.clone(); // exclude already-matched
     let mut result: Vec<ContextSlot> = Vec::new();
 
-    // Step 1: Scan all btree entries for ContextNodes pointing to matched contexts
-    let mut relevant_nodes: Vec<ContextNode> = Vec::new();
-    for (&_id, &page_ref) in btree.iter() {
+    // Step 1: Use the L1 reverse index to find ContextNodes pointing to matched contexts
+    let associated_nodes = l1_reverse.find_associated(&matched_ids);
+    for (_node_hash, page_ref) in associated_nodes {
         if let Some(slot_data) = get_slot_data(data, page_ref) {
             if let Ok(node) = ContextNode::deserialize(slot_data) {
-                if matched_ids.contains(&node.context_id) {
-                    relevant_nodes.push(node);
-                }
-            }
-        }
-    }
-
-    // Step 2: For each relevant node, traverse hyperedges
-    for node in &relevant_nodes {
-        for &edge_hash in &node.edge_ptrs {
-            if let Some(edge_data) = btree
-                .search(edge_hash)
-                .and_then(|pr| get_slot_data(data, pr))
-            {
-                if let Ok(hyperedge) = HyperedgeSlot::deserialize(edge_data) {
-                    // Step 3: For each sibling node in this hyperedge
-                    for &sibling_hash in &hyperedge.node_ptrs {
-                        if let Some(sib_data) = btree
-                            .search(sibling_hash)
-                            .and_then(|pr| get_slot_data(data, pr))
-                        {
-                            if let Ok(sibling_node) = ContextNode::deserialize(sib_data) {
-                                let ctx_id = sibling_node.context_id;
-                                if seen.contains(&ctx_id) {
-                                    continue;
-                                }
-                                // Load the L2 ContextSlot
-                                if let Some(ctx_data) =
-                                    btree.search(ctx_id).and_then(|pr| get_slot_data(data, pr))
+                // Step 2: For each relevant node, traverse hyperedges
+                for &edge_hash in &node.edge_ptrs {
+                    if let Some(edge_data) = btree
+                        .search(edge_hash)
+                        .and_then(|pr| get_slot_data(data, pr))
+                    {
+                        if let Ok(hyperedge) = HyperedgeSlot::deserialize(edge_data) {
+                            // Step 3: For each sibling node in this hyperedge
+                            for &sibling_hash in &hyperedge.node_ptrs {
+                                if let Some(sib_data) = btree
+                                    .search(sibling_hash)
+                                    .and_then(|pr| get_slot_data(data, pr))
                                 {
-                                    if let Ok(ctx) = ContextSlot::deserialize(ctx_data) {
-                                        if ctx.depth == 1 {
-                                            seen.insert(ctx_id);
-                                            result.push(ctx);
+                                    if let Ok(sibling_node) = ContextNode::deserialize(sib_data) {
+                                        let ctx_id = sibling_node.context_id;
+                                        if seen.contains(&ctx_id) {
+                                            continue;
+                                        }
+                                        // Load the L2 ContextSlot
+                                        if let Some(ctx_data) = btree
+                                            .search(ctx_id)
+                                            .and_then(|pr| get_slot_data(data, pr))
+                                        {
+                                            if let Ok(ctx) = ContextSlot::deserialize(ctx_data) {
+                                                seen.insert(ctx_id);
+                                                result.push(ctx);
+                                            }
                                         }
                                     }
                                 }
@@ -552,23 +639,19 @@ fn get_l1_associated_depth1(
         }
     }
 
-    // Also include parent depth-1 contexts of matched depth-2 contexts
+    // Also include parent contexts of matched contexts
     for ctx in matched {
-        if ctx.depth == 2 {
-            if let Some(parent_id) = ctx.parent_id {
-                if seen.contains(&parent_id) {
-                    continue;
-                }
-                if let Some(parent_data) = btree
-                    .search(parent_id)
-                    .and_then(|pr| get_slot_data(data, pr))
-                {
-                    if let Ok(parent) = ContextSlot::deserialize(parent_data) {
-                        if parent.depth == 1 {
-                            seen.insert(parent_id);
-                            result.push(parent);
-                        }
-                    }
+        if let Some(parent_id) = ctx.parent_id {
+            if seen.contains(&parent_id) {
+                continue;
+            }
+            if let Some(parent_data) = btree
+                .search(parent_id)
+                .and_then(|pr| get_slot_data(data, pr))
+            {
+                if let Ok(parent) = ContextSlot::deserialize(parent_data) {
+                    seen.insert(parent_id);
+                    result.push(parent);
                 }
             }
         }
@@ -777,14 +860,12 @@ fn create_new_l2_context(
     let page_ref = (page_id as u64) << 16;
     btree.insert(id_hash, page_ref);
 
-    // Update sparse index (word tokens + ngram tokens)
-    let mut terms: Vec<String> = new_ctx
+    // Update sparse index (word tokens only)
+    let terms: Vec<String> = new_ctx
         .title
         .split_whitespace()
         .map(|s| s.to_string())
         .collect();
-    let ngram_terms = SparseIndex::tokenize_ngram(&new_ctx.title, 2);
-    terms.extend(ngram_terms);
     let doc_len = terms.len() as u32;
     sparse_index.add_document(id_hash, terms, doc_len);
 
@@ -804,7 +885,7 @@ fn create_new_l2_context(
 /// - Knowledge statements: extract core concepts
 /// - Follow-up queries: leverage context_history for anaphora resolution
 fn enhance_query_with_llm(
-    llm_config: &LlmConfig,
+    llm_config: &crate::config::LlmConfig,
     dialogue: &str,
     context_history: Option<&str>,
 ) -> Result<String, MemHopError> {
@@ -923,7 +1004,7 @@ fn enhance_query_with_llm(
     });
 
     let response = client
-        .post(&llm_config.api_url)
+        .post(llm_config.api_url())
         .bearer_auth(&llm_config.api_key)
         .json(&body)
         .send()
@@ -982,4 +1063,248 @@ fn extract_fallback_keywords(text: &str) -> String {
         .take(20)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file::header::FileHeader;
+    use crate::slot::context::{ActivationState, ContextSlot};
+    use std::io::Write;
+
+    fn create_test_mmap(page_count: usize) -> (tempfile::NamedTempFile, MmapMut, FileHeader) {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let mut file = std::fs::File::create(path).unwrap();
+        file.write_all(&vec![0u8; PAGE_SIZE * page_count]).unwrap();
+        drop(file);
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+        let mut header = FileHeader::new(768);
+        for page_id in 2..page_count as u32 {
+            let offset = page_id as usize * PAGE_SIZE;
+            let next_free = if page_id + 1 < page_count as u32 {
+                page_id + 1
+            } else {
+                0xFFFFFFFF
+            };
+            mmap[offset..offset + 4].copy_from_slice(&next_free.to_le_bytes());
+        }
+        header.page_count = page_count as u32;
+        header.free_list_head = 2;
+        (temp_file, mmap, header)
+    }
+
+    fn insert_test_context(
+        mmap: &mut MmapMut,
+        header: &mut FileHeader,
+        btree: &mut BTreeIndex,
+        sparse_index: &mut SparseIndex,
+        ctx: ContextSlot,
+    ) {
+        let page_id =
+            crate::file::page::allocate_page(mmap, header, crate::util::PageType::Context, 2, 0)
+                .unwrap();
+        let serialized = ctx.serialize().unwrap();
+        crate::file::page::write_page_data(mmap, page_id, &serialized).unwrap();
+        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
+        btree.insert(ctx.id_hash, page_ref);
+        let terms: Vec<String> = ctx
+            .title
+            .split_whitespace()
+            .map(|s| s.to_lowercase())
+            .collect();
+        sparse_index.add_document(
+            ctx.id_hash,
+            terms,
+            ctx.title.split_whitespace().count() as u32,
+        );
+    }
+
+    #[test]
+    fn test_depth3_retrieval_weighting() {
+        let (_temp, mut mmap, mut header) = create_test_mmap(10);
+        let mut btree = BTreeIndex::new();
+        let mut sparse_index = SparseIndex::new();
+
+        let base = ContextSlot {
+            id_hash: 0,
+            parent_id: None,
+            depth: 1,
+            title: "rust memory search".to_string(),
+            summary: None,
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 1,
+            created_at: 0,
+            updated_at: 0,
+            version: 1,
+            importance: 0.5,
+            activation_score: 0.5,
+            is_active: true,
+            activation_state: ActivationState::Active,
+            centroid_page_ref: 0,
+            dialogue_range: (0, 0),
+        };
+
+        let ctx_depth1 = ContextSlot {
+            id_hash: 101,
+            ..base.clone()
+        };
+        let ctx_depth3 = ContextSlot {
+            id_hash: 103,
+            depth: 3,
+            ..base.clone()
+        };
+
+        insert_test_context(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut sparse_index,
+            ctx_depth1,
+        );
+        insert_test_context(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut sparse_index,
+            ctx_depth3,
+        );
+
+        let data: &[u8] = &mmap[..];
+        let results =
+            retrieve_l2_bm25(data, "rust memory search", &sparse_index, &btree, 10, None).unwrap();
+
+        assert_eq!(
+            results.len(),
+            2,
+            "depth-3 contexts should be included in retrieval"
+        );
+
+        let score_depth1 = results
+            .iter()
+            .find(|(ctx, _)| ctx.id_hash == 101)
+            .map(|(_, s)| *s)
+            .unwrap();
+        let score_depth3 = results
+            .iter()
+            .find(|(ctx, _)| ctx.id_hash == 103)
+            .map(|(_, s)| *s)
+            .unwrap();
+
+        assert!(
+            score_depth1 > 0.0 && score_depth3 > 0.0,
+            "both contexts should have positive scores"
+        );
+        assert!(
+            (score_depth1 - score_depth3 * 2.0).abs() < 1e-6,
+            "depth-3 score should be 0.5x the raw score ({} vs {})",
+            score_depth1,
+            score_depth3
+        );
+    }
+
+    fn insert_test_context_node(
+        mmap: &mut MmapMut,
+        header: &mut FileHeader,
+        btree: &mut BTreeIndex,
+        node: ContextNode,
+    ) -> u64 {
+        let page_id = crate::file::page::allocate_page(
+            mmap,
+            header,
+            crate::util::PageType::ContextNode,
+            1,
+            0,
+        )
+        .unwrap();
+        let serialized = node.serialize().unwrap();
+        crate::file::page::write_page_data(mmap, page_id, &serialized).unwrap();
+        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
+        btree.insert(node.id_hash, page_ref);
+        page_ref
+    }
+
+    #[test]
+    fn test_l1_reverse_index_build() {
+        let (_temp, mut mmap, mut header) = create_test_mmap(20);
+        let mut btree = BTreeIndex::new();
+
+        let node1 = ContextNode {
+            id_hash: 1000,
+            context_id: 2000,
+            vector_page_ref: 0,
+            importance: 0.5,
+            valence: 0.0,
+            arousal: 0.0,
+            created_at: 0,
+            updated_at: 0,
+            version: 1,
+            edge_ptrs: vec![],
+        };
+        let node2 = ContextNode {
+            id_hash: 1001,
+            context_id: 2000,
+            ..node1.clone()
+        };
+        let node3 = ContextNode {
+            id_hash: 1002,
+            context_id: 2001,
+            ..node1.clone()
+        };
+
+        insert_test_context_node(&mut mmap, &mut header, &mut btree, node1);
+        insert_test_context_node(&mut mmap, &mut header, &mut btree, node2);
+        insert_test_context_node(&mut mmap, &mut header, &mut btree, node3);
+
+        let data: &[u8] = &mmap[..];
+        let idx = L1ReverseIndex::build(data, &btree).unwrap();
+
+        let ctx2000 = HashSet::from([2000u64]);
+        let ctx2001 = HashSet::from([2001u64]);
+        let both = HashSet::from([2000u64, 2001u64]);
+
+        assert_eq!(idx.find_associated(&ctx2000).len(), 2);
+        assert_eq!(idx.find_associated(&ctx2001).len(), 1);
+        assert_eq!(idx.find_associated(&both).len(), 3);
+    }
+
+    #[test]
+    fn test_l1_reverse_index_add_and_remove() {
+        let mut idx = L1ReverseIndex::new();
+        idx.add(2000, 1000, 1);
+        idx.add(2000, 1001, 2);
+        idx.add(2001, 1002, 3);
+
+        let ctx2000 = HashSet::from([2000u64]);
+        let ctx2001 = HashSet::from([2001u64]);
+        let both = HashSet::from([2000u64, 2001u64]);
+
+        assert_eq!(idx.find_associated(&ctx2000).len(), 2);
+        assert_eq!(idx.find_associated(&ctx2001).len(), 1);
+        assert_eq!(idx.find_associated(&both).len(), 3);
+
+        // Refreshing an existing node should update its page_ref, not duplicate.
+        idx.add(2000, 1000, 10);
+        let nodes = idx.find_associated(&ctx2000);
+        assert_eq!(nodes.len(), 2);
+        let page_refs: HashSet<u64> = nodes.iter().map(|(_, pr)| *pr).collect();
+        assert!(page_refs.contains(&10));
+        assert!(!page_refs.contains(&1));
+
+        // Remove a single node.
+        idx.remove_node(1001);
+        assert_eq!(idx.find_associated(&ctx2000).len(), 1);
+        assert_eq!(idx.find_associated(&both).len(), 2);
+
+        // Remove an entire context bucket.
+        idx.remove_context(2001);
+        assert_eq!(idx.find_associated(&ctx2001).len(), 0);
+        assert_eq!(idx.find_associated(&both).len(), 1);
+    }
 }

@@ -1,7 +1,9 @@
 // Page management module
 use crate::util::{PageType, PAGE_SIZE};
 use crate::{MemHopError, Result};
-use memmap2::{Mmap, MmapMut};
+#[cfg(test)]
+use memmap2::Mmap;
+use memmap2::MmapMut;
 
 /// Page header structure (32 bytes, #[repr(C)])
 #[derive(Debug, Clone)]
@@ -91,9 +93,11 @@ pub fn allocate_page(
 
     // Safety check: ensure page is within mmap bounds
     if page_offset + PAGE_SIZE > mmap.len() {
-        return Err(MemHopError::Io(std::io::Error::other(
-            format!("Allocated page {} out of mmap bounds (size: {})", new_page_id, mmap.len()),
-        )));
+        return Err(MemHopError::Io(std::io::Error::other(format!(
+            "Allocated page {} out of mmap bounds (size: {})",
+            new_page_id,
+            mmap.len()
+        ))));
     }
 
     // Zero the page to clear stale data
@@ -108,7 +112,10 @@ pub fn allocate_page(
 }
 
 /// Read page header from mmap
-pub fn read_page_header(mmap: &Mmap, page_id: u32) -> Result<PageHeader> {
+///
+/// Accepts any type that dereferences to a byte slice so both `&Mmap` and
+/// `&MmapMut` callers can use it without extra coercion.
+pub fn read_page_header(mmap: &[u8], page_id: u32) -> Result<PageHeader> {
     let offset = (page_id as usize) * PAGE_SIZE;
 
     if offset + 32 > mmap.len() {
@@ -136,7 +143,10 @@ pub fn write_page_header(mmap: &mut MmapMut, page_id: u32, header: &PageHeader) 
 }
 
 /// Read page data (skip 32-byte header)
-pub fn read_page_data(mmap: &Mmap, page_id: u32) -> Result<&[u8]> {
+///
+/// Accepts any type that dereferences to a byte slice so both `&Mmap` and
+/// `&MmapMut` callers can use it without extra coercion.
+pub fn read_page_data(mmap: &[u8], page_id: u32) -> Result<&[u8]> {
     let offset = (page_id as usize) * PAGE_SIZE;
 
     if offset + PAGE_SIZE > mmap.len() {

@@ -1,4 +1,4 @@
-# MemHop API 集成文档
+# MemHop API 集成文档 v0.45.0
 
 > JSON-in JSON-out 跨语言接口协议。文件格式 .meh，六层认知架构（L0-L5）。所有交互通过 4 个 C 函数完成，所有业务接口通过 `memhop_execute` 传入 JSON 命令。
 
@@ -9,6 +9,7 @@
 - [获取库文件](#获取库文件)
 - [4 个 C 函数](#4-个-c-函数)
 - [通用格式](#通用格式)
+- [架构与性能特性](#架构与性能特性)
 - [JSON 命令参考](#json-命令参考)
   - [search](#search--检索记忆)
   - [update](#update--更新记忆)
@@ -59,16 +60,19 @@ void memhop_close(void* handle);
 
 ### memhop_open 配置
 
-| 字段                | 类型    | 必需 | 描述                                                             |
-| ------------------- | ------- | ---- | ---------------------------------------------------------------- |
-| `db_path`           | string  | 是   | `.meh` 数据库文件路径                                            |
-| `vector_dim`        | integer | 是   | 向量维度（创建时确定，不可更改，通常 768）                       |
-| `encoder_grpc_addr` | string  | 否   | gRPC 编码器地址（UDS，如 `unix:///tmp/.meowagent/meowvec.sock`） |
-| `crystal_path`      | string  | 否   | 结晶化知识存储路径                                               |
+| 字段                | 类型           | 必需 | 描述                                                                                               |
+| ------------------- | -------------- | ---- | -------------------------------------------------------------------------------------------------- |
+| `db_path`           | string         | 是   | `.meh` 数据库文件路径                                                                              |
+| `vector_dim`        | integer        | 是   | 向量维度（创建时确定，不可更改，通常 768）                                                         |
+| `encoder_grpc_addr` | string / null  | 否   | gRPC 编码器地址（TCP）。默认 `"http://127.0.0.1:27110"`；环境变量 `MEMHOP_ENCODER_GRPC_ADDR` 可覆盖；设为 `null` 禁用编码器 |
+| `crystal_path`      | string         | 否   | 结晶化知识存储路径                                                                                 |
+| `llm`               | object         | 否   | 默认 LLM 配置（见 [LLM 配置](#llm-配置)）                                                          |
 
 ```json
 { "db_path": "./data/agent.meh", "vector_dim": 768 }
 ```
+
+> 编码器连接失败时返回 `MemHopError::EncoderError`，不会静默降级。将 `encoder_grpc_addr` 设为 `null` 可禁用编码器，但依赖向量编码的接口（如向量语义检索、`batch_store`）将不可用。
 
 ---
 
@@ -93,14 +97,55 @@ void memhop_close(void* handle);
 
 ### LLM 配置
 
+`dream` 命令与 `search` 命令的 `llm_enhance` 使用同一个 `config::LlmConfig` 类型（OpenAI 兼容格式），默认配置如下：
+
+| 字段           | 类型   | 默认值                          | 说明                                   |
+| -------------- | ------ | ------------------------------- | -------------------------------------- |
+| `model`        | string | `"deepseek-chat"`               | 默认模型                               |
+| `api_base`     | string | `"https://api.deepseek.com/v1"` | API 根地址（不含 `/chat/completions`） |
+| `api_key`      | string | 从 `MEMHOP_DEEPSEEK_KEY` 读取   | API 密钥                               |
+| `temperature`  | number | `0.2`                           | 记忆场景高确定性                       |
+| `timeout_secs` | number | `30`                            | 请求超时（秒）                         |
+| `language`     | string | `"zh"`                          | 默认输出语言                           |
+
 ```json
 {
-  "api_url": "https://api.deepseek.com/v1/chat/completions",
-  "api_key": "sk-xxx",
   "model": "deepseek-chat",
-  "api_format": 1
+  "api_base": "https://api.deepseek.com/v1",
+  "api_key": "sk-xxx",
+  "temperature": 0.2,
+  "timeout_secs": 30,
+  "language": "zh"
 }
 ```
+
+System prompt 按场景拆分：记忆压缩、知识蒸馏、技能结晶、习惯分析。
+
+---
+
+## 架构与性能特性
+
+### 六层认知架构（L0-L5）
+
+| 层级 | 内容                                                         |
+| ---- | ------------------------------------------------------------ |
+| L0   | Agent 画像 + 用户语言习惯（lexicon / style_traits / emotion_patterns） |
+| L1   | 超图结构，关联多个 L2 上下文                                 |
+| L2   | 多层级嵌套压缩上下文，共 4 层（Scene / Sub-scene / Turn group / Semantic summary） |
+| L3   | 多源超图（Path / Context / Url / Manual）                    |
+| L4   | 聊天记录原文 / 归档                                          |
+| L5   | 动作链集合 → Skill（含 ActionStep 持久化）                   |
+
+### 核心性能特性
+
+- 文件动态扩展（自动增长 2MB）
+- Linear Hash Table O(1) 查找（多页存储，无容量上限）
+- IVF 向量索引（近 O(1) 查询）
+- SparseIndex 多页序列化（无容量上限）
+- 倒排表驱动 BM25 搜索
+- L1 反向索引 O(1) 关联查询
+- CJK 分词（jieba-rs）
+- ARM NEON SIMD 支持
 
 ---
 
@@ -108,7 +153,20 @@ void memhop_close(void* handle);
 
 ### search — 检索记忆
 
-根据对话检索相关记忆，采用 L2 中心化扇出检索（向量 + BM25 + n-gram）。
+根据对话检索相关记忆，采用 L2 中心化扇出检索：三路召回 + 加权融合。
+
+- **BM25 关键词检索**（权重 0.50）：基于倒排索引对 L2 上下文标题进行词级打分。
+- **向量语义检索**（权重 0.35）：通过编码器计算查询文本与 L2 主题质心的余弦相似度。
+- **Entity 实体识别**（权重 0.15）：从 L3 知识图谱节点和 L0 用户词典构建实体词典，使用 BK-Tree 进行精确/模糊匹配。
+
+三路结果分别归一化后按权重融合：`score = 0.50 × BM25 + 0.35 × Vector + 0.15 × Entity`。
+
+L2 嵌套层级支持 4 层，检索范围为 Depth 1-3，Depth 3 结果额外乘以 0.5 降权：
+
+- Depth 1：Scene（场景）
+- Depth 2：Sub-scene（子场景）
+- Depth 3：Turn group（对话轮次组）
+- Depth 4：Semantic summary（语义要点，不参与检索）
 
 **请求**：
 
@@ -132,7 +190,7 @@ void memhop_close(void* handle);
 | `context_id`      | string  | 否   | null | L2 主题 ID，指定后跳过三重检索 |
 | `l3_id`           | string  | 否   | null | 限制只检索包含该 L3 的 L2      |
 | `context_limit`   | integer | 否   | 10   | 返回上限                       |
-| `llm_enhance`     | object  | 否   | null | LLM 增强配置                   |
+| `llm_enhance`     | object  | 否   | null | LLM 增强配置，字段与 [LLM 配置](#llm-配置) 一致 |
 | `auto_create`     | integer | 否   | 0    | 空结果时自动创建 L2            |
 | `min_score`       | number  | 否   | 0.0  | 最小相关性阈值                 |
 | `context_history` | string  | 否   | null | 前文（LLM 消歧用）             |
@@ -325,15 +383,19 @@ void memhop_close(void* handle);
 
 触发 5 阶段记忆整合管线（L2 压缩 → L1 重建 → L0 画像 → 用户习惯学习 → L3 蒸馏 → L5 结晶）。
 
+`dream` 命令的 LLM 参数直接展开在 JSON 顶层，字段与 [LLM 配置](#llm-配置) 完全一致。
+
 **请求**：
 
 ```json
 {
   "command": "dream",
-  "api_url": "https://api.deepseek.com/v1/chat/completions",
-  "api_key": "sk-xxx",
   "model": "deepseek-chat",
-  "api_format": 1
+  "api_base": "https://api.deepseek.com/v1",
+  "api_key": "sk-xxx",
+  "temperature": 0.2,
+  "timeout_secs": 30,
+  "language": "zh"
 }
 ```
 
@@ -581,6 +643,7 @@ Knowledge：
 - `missing 'id' for L1 get` — query_layer L1 get 缺少 id
 - `unsupported query_layer: layer=l4, action=get` — 不支持的 layer/action 组合
 - `unknown import action: 'xxx'` — import action 必须是 `import` 或 `build_l3`
+- `Encoder error: ...` — 编码器未配置或 gRPC 连接失败
 - `handle is null` — 传入了空句柄
 
 极罕见情况下 Rust panic 也会被捕获：

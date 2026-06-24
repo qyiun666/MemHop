@@ -69,7 +69,7 @@ impl L3Index {
 
         // Add to content index (BM25)
         let content_text = format!("{} {}", node.title, node.content);
-        let tokens = SparseIndex::tokenize_ngram(&content_text, 2);
+        let tokens = SparseIndex::tokenize(&content_text);
         let doc_len = tokens.len() as u32;
         self.content_index.add_document(id_hash, tokens, doc_len);
     }
@@ -113,7 +113,7 @@ impl L3Index {
             .and_then(|t| self.type_index.get(t).cloned());
 
         // Step 2: Tokenize query and search content_index with BM25
-        let query_terms = SparseIndex::tokenize_ngram(&query.query, 2);
+        let query_terms = SparseIndex::tokenize(&query.query);
         let content_results = self.content_index.search(&query_terms, query.limit * 2);
 
         // Step 3: Filter by type if specified

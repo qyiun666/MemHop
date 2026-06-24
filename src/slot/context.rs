@@ -4,10 +4,11 @@
 // similar to how the human brain categorizes "which scene does this
 // conversation belong to".
 //
-// Supports 3-level nesting via parent_id:
-//   Depth 1: Scene       (e.g. "Rust project development")
-//   Depth 2: Sub-scene   (e.g. "memhop refactoring discussion")
-//   Depth 3: Turn group  (e.g. "L0-L5 layer definition round")
+// Supports 4-level nesting via parent_id:
+//   Depth 1: Scene            (e.g. "Rust project development")
+//   Depth 2: Sub-scene        (e.g. "memhop refactoring discussion")
+//   Depth 3: Turn group       (e.g. "L0-L5 layer definition round")
+//   Depth 4: Semantic summary (e.g. compressed key points of a turn group)
 //
 // Each level supports independent compression (multi-turn → summary).
 
@@ -38,13 +39,13 @@ impl ActivationState {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextSlot {
     pub id_hash: u64,
-    pub parent_id: Option<u64>, // Parent context (supports 3-level nesting)
-    pub depth: u8,              // Nesting depth: 1=scene, 2=sub-scene, 3=turn group
-    pub title: String,          // Scene name
+    pub parent_id: Option<u64>, // Parent context (supports 4-level nesting)
+    pub depth: u8, // Nesting depth: 1=scene, 2=sub-scene, 3=turn group, 4=semantic summary
+    pub title: String, // Scene name
     pub summary: Option<String>, // Compressed summary (multi-turn → compressed)
     pub archive_refs: Vec<u64>, // Associated L4 archives
-    pub l3_refs: Vec<u64>,      // Associated L3 hypergraph IDs
-    pub turn_count: u32,        // Number of conversation turns
+    pub l3_refs: Vec<u64>, // Associated L3 hypergraph IDs
+    pub turn_count: u32, // Number of conversation turns
     pub created_at: i64,
     pub updated_at: i64,
     pub version: u32,

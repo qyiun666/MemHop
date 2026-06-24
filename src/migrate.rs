@@ -138,7 +138,8 @@ pub fn migrate(redb_path: &Path, meh_path: &Path) -> MigrateResult<MigrateReport
     use crate::MemHop;
     use crate::MemHopConfig;
 
-    let config = MemHopConfig::new(meh_path.to_path_buf(), 768); // Default vector dimension
+    let mut config = MemHopConfig::new(meh_path.to_path_buf(), 768); // Default vector dimension
+    config.encoder_grpc_addr = None; // migration does not require a live encoder
     let mut memhop = MemHop::open(config).map_err(MigrateError::MemHop)?;
 
     // Step 3: Migrate data from redb to MemHop

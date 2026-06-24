@@ -14,6 +14,7 @@ use crate::slot::hypergraph::{GraphEdgeKind, HypergraphEdge, HypergraphNode};
 use crate::util::{PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
+use std::collections::{hash_map::Entry, HashMap, HashSet, VecDeque};
 
 // ============================================================================
 // Inline helpers
@@ -633,4 +634,428 @@ pub fn read_node_neighbors(
     }
 
     Ok(neighbors)
+}
+
+/// BFS traversal of an L3 hypergraph starting from `start_node`.
+///
+/// Returns a flat list of `TraversalHop` records, one per traversed edge
+/// endpoint.  Hyperedges are supported: a single edge containing the current
+/// node may produce multiple hops to every other endpoint in the same edge.
+///
+/// # Arguments
+/// * `data`      - Read-only view of the mmap backing store.
+/// * `btree`     - Global BTreeIndex mapping id_hash → page_ref.
+/// * `graph_id`  - Restrict traversal to edges belonging to this graph.
+/// * `start_node`- id_hash of the node where traversal begins.
+/// * `max_depth` - Maximum number of edge traversals (0 means no hops).
+/// * `edge_kinds`- Optional whitelist of edge kinds.
+pub fn bfs_traversal(
+    data: &[u8],
+    btree: &BTreeIndex,
+    graph_id: u64,
+    start_node: u64,
+    max_depth: usize,
+    edge_kinds: Option<&[GraphEdgeKind]>,
+) -> Result<Vec<TraversalHop>, MemHopError> {
+    let mut hops = Vec::new();
+    if max_depth == 0 {
+        return Ok(hops);
+    }
+
+    // 1. Pre-build adjacency index: scan btree once.
+    // For each hyperedge in the target graph (and matching edge_kinds),
+    // register the edge under every node it connects.
+    let mut adjacency: HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>> = HashMap::new();
+    for (&_eid, &page_ref) in btree.iter() {
+        if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
+            continue;
+        }
+        if let Some(slot_data) = get_slot_data(data, page_ref) {
+            if let Ok(edge) = HypergraphEdge::deserialize(slot_data) {
+                if edge.graph_id != graph_id {
+                    continue;
+                }
+                if let Some(kinds) = edge_kinds {
+                    if !kinds.contains(&edge.kind) {
+                        continue;
+                    }
+                }
+                let other_ids: Vec<u64> = edge.node_ids.to_vec();
+                for &node_id in &edge.node_ids {
+                    adjacency
+                        .entry(node_id)
+                        .or_default()
+                        .push((edge.clone(), other_ids.clone()));
+                }
+            }
+        }
+    }
+
+    // Track the BFS discovery depth of each node (start_node is depth 0).
+    let mut node_depth: HashMap<u64, usize> = HashMap::new();
+    // Track which edges have already been traversed (by id_hash) so each
+    // edge is processed at most once across the entire traversal.
+    let mut visited_edges: HashSet<u64> = HashSet::new();
+    let mut queue: VecDeque<(u64, usize)> = VecDeque::new();
+
+    node_depth.insert(start_node, 0);
+    queue.push_back((start_node, 0));
+
+    // 2. BFS using the pre-built adjacency index.
+    while let Some((current_node, current_depth)) = queue.pop_front() {
+        if current_depth >= max_depth {
+            continue;
+        }
+
+        if let Some(edges) = adjacency.get(&current_node) {
+            for (edge, other_ids) in edges {
+                // Skip edges that have already been traversed from any endpoint
+                if !visited_edges.insert(edge.id_hash) {
+                    continue;
+                }
+
+                // Emit a hop to every other endpoint of the hyperedge,
+                // but only if the target was discovered at a depth >= the
+                // hop depth (current_depth + 1).  This prevents back-edges
+                // to ancestors (shallower nodes) from producing hops.
+                let hop_depth = current_depth + 1;
+                for &to_node in other_ids {
+                    if to_node == current_node {
+                        continue;
+                    }
+
+                    match node_depth.get(&to_node) {
+                        Some(&d) if d < hop_depth => {
+                            // Back-edge to an ancestor — skip
+                        }
+                        _ => {
+                            hops.push(TraversalHop {
+                                depth: hop_depth,
+                                from_node: current_node,
+                                edge: edge.clone(),
+                                to_node,
+                            });
+                        }
+                    }
+
+                    // Enqueue only newly-discovered nodes
+                    if let Entry::Vacant(e) = node_depth.entry(to_node) {
+                        e.insert(hop_depth);
+                        queue.push_back((to_node, hop_depth));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(hops)
+}
+
+/// Extract a `Subgraph` reachable from `start_node` within `max_depth` hops.
+///
+/// Performs an unfiltered BFS traversal, then loads all referenced nodes and
+/// deduplicates edges by `id_hash`.  The start node is always included in the
+/// result, even if the traversal produces no hops.
+pub fn extract_subgraph(
+    data: &[u8],
+    btree: &BTreeIndex,
+    graph_id: u64,
+    start_node: u64,
+    max_depth: usize,
+) -> Result<Subgraph, MemHopError> {
+    let hops = bfs_traversal(data, btree, graph_id, start_node, max_depth, None)?;
+
+    let mut node_hashes: HashSet<u64> = HashSet::new();
+    let mut edge_ids: HashSet<u64> = HashSet::new();
+    let mut edges: Vec<HypergraphEdge> = Vec::new();
+
+    node_hashes.insert(start_node);
+
+    for hop in &hops {
+        node_hashes.insert(hop.from_node);
+        node_hashes.insert(hop.to_node);
+
+        if edge_ids.insert(hop.edge.id_hash) {
+            edges.push(hop.edge.clone());
+        }
+    }
+
+    // Load unique nodes
+    let mut nodes: Vec<HypergraphNode> = Vec::new();
+    for &node_hash in &node_hashes {
+        if let Some(page_ref) = btree.search(node_hash) {
+            if let Some(slot_data) = get_slot_data(data, page_ref) {
+                if let Ok(node) = HypergraphNode::deserialize(slot_data) {
+                    if node.graph_id == graph_id {
+                        nodes.push(node);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(Subgraph { nodes, edges })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::file::header::FileHeader;
+    use crate::util::PAGE_SIZE;
+    use memmap2::MmapMut;
+    use std::fs::File;
+    use std::io::Write;
+
+    fn create_test_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex) {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+        let mut file = File::create(path).unwrap();
+        file.write_all(&vec![0u8; PAGE_SIZE * pages]).unwrap();
+        drop(file);
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+
+        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+        let mut header = FileHeader::new(768);
+        header.page_count = pages as u32;
+        crate::file::free_list::init_free_list(&mut header).unwrap();
+
+        for page_id in (2..pages as u32).rev() {
+            crate::file::free_list::free_page(&mut mmap, &mut header, page_id).unwrap();
+        }
+
+        let btree = BTreeIndex::new();
+        (mmap, header, btree)
+    }
+
+    fn create_test_node(id_hash: u64, graph_id: u64, title: &str) -> HypergraphNode {
+        HypergraphNode {
+            id_hash,
+            graph_id,
+            title: title.to_string(),
+            node_type: "concept".to_string(),
+            content: format!("content of {}", title),
+            keywords: vec![],
+            source_ref: None,
+            importance: 0.5,
+            created_at: 0,
+            updated_at: 0,
+            version: 1,
+        }
+    }
+
+    fn create_test_edge(
+        id_hash: u64,
+        graph_id: u64,
+        kind: GraphEdgeKind,
+        node_ids: Vec<u64>,
+    ) -> HypergraphEdge {
+        HypergraphEdge {
+            id_hash,
+            graph_id,
+            kind,
+            node_ids,
+            weight: 1.0,
+            label: None,
+            created_at: 0,
+        }
+    }
+
+    /// Build a small graph:
+    /// n1 --e1(Related)--> n2 --e2(Related)--> n3 --e3(Dependency)--> n4
+    /// n1 --e4(Causal)--> n3, n5   (hyperedge, 3 nodes)
+    fn build_test_graph(
+        mmap: &mut MmapMut,
+        header: &mut FileHeader,
+        btree: &mut BTreeIndex,
+    ) -> (Vec<u64>, Vec<u64>) {
+        let graph_id = 1u64;
+        let node_ids = vec![101u64, 102, 103, 104, 105];
+        let edge_ids = vec![201u64, 202, 203, 204];
+
+        for &nid in &node_ids {
+            add_node(
+                mmap,
+                header,
+                btree,
+                create_test_node(nid, graph_id, &format!("node{}", nid)),
+            )
+            .unwrap();
+        }
+
+        add_edge(
+            mmap,
+            header,
+            btree,
+            create_test_edge(201, graph_id, GraphEdgeKind::Related, vec![101, 102]),
+        )
+        .unwrap();
+        add_edge(
+            mmap,
+            header,
+            btree,
+            create_test_edge(202, graph_id, GraphEdgeKind::Related, vec![102, 103]),
+        )
+        .unwrap();
+        add_edge(
+            mmap,
+            header,
+            btree,
+            create_test_edge(203, graph_id, GraphEdgeKind::Dependency, vec![103, 104]),
+        )
+        .unwrap();
+        add_edge(
+            mmap,
+            header,
+            btree,
+            create_test_edge(204, graph_id, GraphEdgeKind::Causal, vec![101, 103, 105]),
+        )
+        .unwrap();
+
+        (node_ids, edge_ids)
+    }
+
+    #[test]
+    fn test_bfs_traversal_one_hop() {
+        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
+        let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree);
+
+        let data: &[u8] = &mmap[..];
+        let hops = bfs_traversal(data, &btree, 1, 101, 1, None).unwrap();
+
+        assert_eq!(hops.len(), 3, "expected 3 one-hop neighbors from n1");
+
+        let to_nodes: Vec<u64> = hops.iter().map(|h| h.to_node).collect();
+        assert!(to_nodes.contains(&102));
+        assert!(to_nodes.contains(&103));
+        assert!(to_nodes.contains(&105));
+
+        for hop in &hops {
+            assert_eq!(hop.depth, 1);
+            assert_eq!(hop.from_node, 101);
+        }
+    }
+
+    #[test]
+    fn test_bfs_traversal_two_hops() {
+        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
+        let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree);
+
+        let data: &[u8] = &mmap[..];
+        let hops = bfs_traversal(data, &btree, 1, 101, 2, None).unwrap();
+
+        // depth 1: 101->102 (e201), 101->103 (e204), 101->105 (e204)
+        // depth 2: 103->104 (e203)
+        // Note: edge 202 (102->103) is NOT traversed because hyperedge 204
+        // already discovers node 103 at depth 1, making 102->103 a back-edge.
+        assert_eq!(hops.len(), 4, "expected 4 hops total at depth <= 2");
+
+        let depth2_hops: Vec<&TraversalHop> = hops.iter().filter(|h| h.depth == 2).collect();
+        assert_eq!(depth2_hops.len(), 1);
+
+        let depth2_targets: Vec<u64> = depth2_hops.iter().map(|h| h.to_node).collect();
+        assert!(depth2_targets.contains(&104));
+    }
+
+    #[test]
+    fn test_bfs_traversal_edge_kind_filter() {
+        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
+        let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree);
+
+        let data: &[u8] = &mmap[..];
+        let hops = bfs_traversal(data, &btree, 1, 101, 2, Some(&[GraphEdgeKind::Related])).unwrap();
+
+        // Only Related edges: 101->102, 102->103
+        assert_eq!(hops.len(), 2);
+        assert!(hops.iter().all(|h| h.edge.kind == GraphEdgeKind::Related));
+    }
+
+    #[test]
+    fn test_bfs_avoids_cycles() {
+        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
+
+        // Create a triangle: 101 <-> 102 <-> 103 <-> 101
+        for &nid in &[101u64, 102, 103] {
+            add_node(
+                &mut mmap,
+                &mut header,
+                &mut btree,
+                create_test_node(nid, 1, &format!("node{}", nid)),
+            )
+            .unwrap();
+        }
+        add_edge(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            create_test_edge(201, 1, GraphEdgeKind::Related, vec![101, 102]),
+        )
+        .unwrap();
+        add_edge(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            create_test_edge(202, 1, GraphEdgeKind::Related, vec![102, 103]),
+        )
+        .unwrap();
+        add_edge(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            create_test_edge(203, 1, GraphEdgeKind::Related, vec![103, 101]),
+        )
+        .unwrap();
+
+        let data: &[u8] = &mmap[..];
+        let hops = bfs_traversal(data, &btree, 1, 101, 3, None).unwrap();
+
+        // With cycle prevention there should be no duplicate to_nodes at each depth.
+        // depth1: 101->102, 101->103
+        // depth2: 102->103 (already visited), 103->102 (already visited)
+        // depth3: nothing new
+        assert_eq!(hops.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_subgraph() {
+        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
+        let (node_ids, _edge_ids) = build_test_graph(&mut mmap, &mut header, &mut btree);
+
+        let data: &[u8] = &mmap[..];
+        let subgraph = extract_subgraph(data, &btree, 1, 101, 2).unwrap();
+
+        let returned_node_ids: HashSet<u64> = subgraph.nodes.iter().map(|n| n.id_hash).collect();
+        let returned_edge_ids: HashSet<u64> = subgraph.edges.iter().map(|e| e.id_hash).collect();
+
+        // BFS discovers 4 of 5 edges: edge 202 (102-103) is never traversed
+        // because hyperedge 204 discovers node 103 at depth 1, making the
+        // 102->103 connection a back-edge that is skipped.
+        let expected_edge_ids: HashSet<u64> = [201u64, 203, 204].iter().copied().collect();
+        assert_eq!(returned_node_ids, node_ids.iter().copied().collect());
+        assert_eq!(returned_edge_ids, expected_edge_ids);
+    }
+
+    #[test]
+    fn test_extract_subgraph_start_node_only() {
+        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
+
+        add_node(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            create_test_node(101, 1, "island"),
+        )
+        .unwrap();
+
+        let data: &[u8] = &mmap[..];
+        let subgraph = extract_subgraph(data, &btree, 1, 101, 2).unwrap();
+
+        assert_eq!(subgraph.nodes.len(), 1);
+        assert_eq!(subgraph.nodes[0].id_hash, 101);
+        assert!(subgraph.edges.is_empty());
+    }
 }

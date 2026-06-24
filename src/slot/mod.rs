@@ -7,10 +7,10 @@
 // L4: ArchiveSlot (raw text + file paths, minimalist)
 // L5: ActionChainSlot + ActionStep (ordered action sequences)
 
-pub mod profile;        // L0 agent profile (JSON)
-pub mod context_node;   // L1 graph node (points to L2)
-pub mod hyperedge;      // L1 hyperedge (connects L1 nodes)
-pub mod context;        // L2 scene context slot
-pub mod hypergraph;     // L3 generic hypergraph container + node + edge
-pub mod archive;        // L4 raw archive storage
-pub mod action_chain;   // L5 action chain + steps
+pub mod action_chain;
+pub mod archive; // L4 raw archive storage
+pub mod context; // L2 scene context slot
+pub mod context_node; // L1 graph node (points to L2)
+pub mod hyperedge; // L1 hyperedge (connects L1 nodes)
+pub mod hypergraph; // L3 generic hypergraph container + node + edge
+pub mod profile; // L0 agent profile (JSON) // L5 action chain + steps

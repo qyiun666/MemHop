@@ -40,7 +40,7 @@ impl HyperedgeKind {
 pub struct HyperedgeSlot {
     pub id_hash: u64,
     pub kind: HyperedgeKind,
-    pub node_ptrs: Vec<u64>,    // Connected ContextNode id_hash list
+    pub node_ptrs: Vec<u64>, // Connected ContextNode id_hash list
     pub weight: f32,
     pub created_at: i64,
     pub updated_at: i64,
@@ -65,7 +65,11 @@ impl HyperedgeSlot {
         buffer.write_all(&self.id_hash.to_le_bytes())?;
         buffer.write_all(&[self.kind as u8])?;
 
-        let node_count = if self.node_ptrs.len() > 8 { 8 } else { self.node_ptrs.len() } as u8;
+        let node_count = if self.node_ptrs.len() > 8 {
+            8
+        } else {
+            self.node_ptrs.len()
+        } as u8;
         buffer.write_all(&[node_count])?;
 
         buffer.write_all(&self.weight.to_le_bytes())?;

@@ -974,20 +974,26 @@ pub fn build_l3_hypergraph_from_path(
         mmap[data_offset..data_offset + slot_data.len()].copy_from_slice(&slot_data);
     }
 
-    // Create L2 topic linked to this L3 graph
+    // Create L2 topic linked to this L3 graph so the codebase is discoverable
+    // through normal search channels (BM25/entity) when scoped by l3_id.
     let l2_title = format!("Codebase: {}", graph_name);
     let l2_id_hash = hash_id(&l2_title);
+
+    // Collect module names from the imported files for indexing.
+    let module_names: Vec<String> = file_data.iter().map(|(m, _, _, _)| m.clone()).collect();
+
     let l2_summary = format!(
-        "Auto-imported code graph from {} ({} modules, {} dependencies)",
+        "Auto-imported code graph from {} ({} modules: {}, {} dependencies).",
         path.display(),
         node_count,
+        module_names.join(", "),
         edge_count
     );
 
     let ctx = ContextSlot {
         id_hash: l2_id_hash,
         title: l2_title.clone(),
-        summary: Some(l2_summary),
+        summary: Some(l2_summary.clone()),
         depth: 1,
         archive_refs: vec![],
         l3_refs: vec![graph_id],
@@ -1028,13 +1034,23 @@ pub fn build_l3_hypergraph_from_path(
     let l2_page_offset = (l2_page_id as usize) * PAGE_SIZE;
     mmap[l2_page_offset..l2_page_offset + 32].copy_from_slice(&l2_hdr.to_bytes());
 
-    // Add to sparse index for BM25/n-gram search
-    let terms: Vec<String> = l2_title
+    // Add to sparse index for BM25/entity search. Include title, module names,
+    // and imports so queries like "parser search main" can recall the codebase.
+    let mut terms: Vec<String> = l2_title
         .split_whitespace()
         .chain(l2_title.split("::"))
         .map(|s| s.to_lowercase())
         .collect();
-    sparse_index.add_document(l2_id_hash, terms, l2_title.len() as u32);
+    terms.extend(module_names.iter().map(|s| s.to_lowercase()));
+    terms.extend(
+        file_data
+            .iter()
+            .flat_map(|(_, _, imports, _)| imports.iter().cloned())
+            .map(|s| s.to_lowercase()),
+    );
+    terms.sort();
+    terms.dedup();
+    sparse_index.add_document(l2_id_hash, terms.clone(), terms.len() as u32);
 
     btree.insert(l2_id_hash, (l2_page_id as u64) << 16);
     created_ids.push(format!("{:016x}", l2_id_hash));

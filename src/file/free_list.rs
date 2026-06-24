@@ -4,7 +4,7 @@ use crate::util::PAGE_SIZE;
 use crate::MemHopError;
 use memmap2::MmapMut;
 
-const EMPTY_FREE_LIST: u32 = 0xFFFFFFFF;
+pub const EMPTY_FREE_LIST: u32 = 0xFFFFFFFF;
 
 /// Initialize free list in FileHeader
 pub fn init_free_list(header: &mut FileHeader) -> Result<(), MemHopError> {
@@ -22,15 +22,8 @@ pub fn allocate_from_free_list(
     let first_free = header.free_list_head;
 
     if first_free == EMPTY_FREE_LIST {
-        // Extend file: allocate new page at end
-        // Calculate new page ID based on current mmap size
-        let _new_page_id = (mmap.len() / PAGE_SIZE) as u32;
-
-        // In real implementation, we'd need to extend the file and remap
-        // For now, return error as file extension requires OS-level operations
-        Err(MemHopError::Io(std::io::Error::other(
-            "File extension not yet implemented - pre-allocate file space",
-        )))
+        // No free pages available; caller is responsible for extending the file.
+        Err(MemHopError::FileFull)
     } else {
         // Use first free page
         // Validate page_id is within bounds

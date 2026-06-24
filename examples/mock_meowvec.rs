@@ -1,8 +1,8 @@
 // Mock meowvec gRPC server for benchmarking and integration testing
 //
 // Usage:
-//   cargo run --example mock_meowvec                                  # default UDS: /tmp/.meowagent/meowvec.sock
-//   cargo run --example mock_meowvec -- --uds /tmp/custom.sock        # custom UDS path
+//   cargo run --example mock_meowvec                                  # default TCP: 127.0.0.1:27110
+//   cargo run --example mock_meowvec -- --addr 127.0.0.1:28080        # custom TCP address
 //
 // Returns deterministic 384-dim vectors based on text content hash.
 // Does NOT load the real BERT model (use real meowvec for production).
@@ -20,6 +20,7 @@ use vector_model::{
 };
 
 const DIM: usize = 384; // multilingual-e5-small dimension
+const DEFAULT_ADDR: &str = "127.0.0.1:27110";
 
 /// Deterministic pseudo-encoder: FNV hash -> 384-dim normalized vector
 fn fake_encode(text: &str) -> Vec<f32> {
@@ -94,25 +95,16 @@ impl VectorModelService for MockVectorModelService {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
 
-    let socket_path = args
+    let addr = args
         .iter()
-        .position(|a| a == "--uds")
+        .position(|a| a == "--addr")
         .and_then(|i| args.get(i + 1))
         .map(|s| s.as_str())
-        .unwrap_or("/tmp/.meowagent/meowvec.sock");
+        .unwrap_or(DEFAULT_ADDR);
 
-    // Remove stale socket file
-    let _ = std::fs::remove_file(socket_path);
+    let socket: std::net::SocketAddr = addr.parse()?;
 
-    // Ensure parent directory exists
-    if let Some(parent) = std::path::Path::new(socket_path).parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let listener = tokio::net::UnixListener::bind(socket_path)?;
-    let stream = tokio_stream::wrappers::UnixListenerStream::new(listener);
-
-    eprintln!("mock_meowvec listening on unix://{}", socket_path);
+    eprintln!("mock_meowvec listening on http://{}", addr);
     eprintln!(
         "  model: mock-multilingual-e5-small ({}d, deterministic hash)",
         DIM
@@ -121,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Server::builder()
         .add_service(VectorModelServiceServer::new(MockVectorModelService))
-        .serve_with_incoming(stream)
+        .serve(socket)
         .await?;
 
     Ok(())

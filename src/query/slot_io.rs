@@ -22,7 +22,7 @@ pub fn slot_offset(page_id: u32) -> usize {
 pub fn get_slot_data(mmap: &[u8], page_ref: u64) -> Option<&[u8]> {
     let page_id = decode_page_id(page_ref);
     let offset = slot_offset(page_id);
-    
+
     if offset < mmap.len() {
         Some(&mmap[offset..])
     } else {

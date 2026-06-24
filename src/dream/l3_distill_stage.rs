@@ -27,42 +27,7 @@ use crate::util::hash_id;
 use crate::util::PAGE_SIZE;
 use crate::MemHopError;
 use memmap2::MmapMut;
-use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-
-// ============================================================================
-// Data structures for LLM JSON response parsing
-// ============================================================================
-
-#[derive(Deserialize, Debug)]
-struct LlmConcept {
-    name: String,
-    #[serde(rename = "type")]
-    node_type: String,
-    description: String,
-    #[serde(default)]
-    keywords: Vec<String>,
-}
-
-#[derive(Deserialize, Debug)]
-struct LlmRelation {
-    from: String,
-    to: String,
-    #[serde(default = "default_relation_kind")]
-    kind: String,
-}
-
-fn default_relation_kind() -> String {
-    "Dependency".to_string()
-}
-
-#[derive(Deserialize, Debug)]
-struct LlmDistillResult {
-    #[serde(default)]
-    concepts: Vec<LlmConcept>,
-    #[serde(default)]
-    relations: Vec<LlmRelation>,
-}
 
 // ============================================================================
 // Core distillation logic
@@ -105,19 +70,8 @@ pub fn distill_l3_knowledge(
             _ => continue,
         };
 
-        // 2. Build LLM prompt
-        let prompt = format!(
-            "从以下知识摘要中提取核心概念和概念之间的关系。\
-            返回严格的 JSON 格式(不要包含markdown代码块标记):\n\
-            {{\"concepts\":[{{\"name\":\"概念名\",\"type\":\"concept\",\
-             \"description\":\"描述\",\"keywords\":[\"关键词\"]}}],\
-             \"relations\":[{{\"from\":\"概念名\",\"to\":\"概念名\",\"kind\":\"Dependency\"}}]}}\n\n\
-             摘要:\n{}",
-            summary
-        );
-
-        // 3. Call LLM
-        let llm_response = match llm.summarize(&[prompt]) {
+        // 2. Call LLM to distill concepts directly
+        let llm_response = match llm.distill_concepts(&summary) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!(
@@ -128,26 +82,17 @@ pub fn distill_l3_knowledge(
             }
         };
 
-        // 4. Parse JSON from LLM response
-        let (concepts, relations) = match parse_distill_json(&llm_response) {
-            Some(result) => (result.concepts, result.relations),
-            None => {
-                eprintln!(
-                    "Warning: Failed to parse LLM JSON for context '{}'",
-                    ctx.title
-                );
-                continue;
-            }
-        };
+        // 3. Use the structured distillation result directly
+        let (concepts, relations) = (llm_response.concepts, llm_response.relations);
 
         if concepts.is_empty() {
             continue;
         }
 
-        // 5. Determine target L3 graph ID
+        // 4. Determine target L3 graph ID
         let graph_id = resolve_or_create_graph(mmap, header, btree, &ctx, topic_id, now_ms)?;
 
-        // 6. Create nodes for each concept
+        // 5. Create nodes for each concept
         let mut concept_id_map: HashMap<String, u64> = HashMap::new();
         for concept in &concepts {
             let node_hash = hash_id(&format!("{:016x}_{}", graph_id, concept.name));
@@ -178,7 +123,7 @@ pub fn distill_l3_knowledge(
             }
         }
 
-        // 7. Create edges for relations
+        // 6. Create edges for relations
         for rel in &relations {
             let from_hash = match concept_id_map.get(&rel.from) {
                 Some(h) => *h,
@@ -192,7 +137,7 @@ pub fn distill_l3_knowledge(
             let edge = HypergraphEdge {
                 id_hash: hash_id(&format!("{:016x}->{:016x}", from_hash, to_hash)),
                 graph_id,
-                kind: GraphEdgeKind::Dependency,
+                kind: map_edge_kind(&rel.kind),
                 node_ids: vec![from_hash, to_hash],
                 weight: 1.0,
                 label: Some(if rel.kind.is_empty() {
@@ -260,9 +205,10 @@ fn resolve_or_create_graph(
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
     let page_id = allocate_from_free_list(mmap, header)?;
-    let offset = (page_id as usize) * PAGE_SIZE + 32;
+    let page_offset = (page_id as usize) * PAGE_SIZE;
+    let data_offset = page_offset + 32;
 
-    if offset + data_bytes.len() > mmap.len() {
+    if data_offset + data_bytes.len() > mmap.len() {
         // Rollback: free the allocated page
         free_page(mmap, header, page_id)?;
         return Err(MemHopError::Serialization(
@@ -270,7 +216,23 @@ fn resolve_or_create_graph(
         ));
     }
 
-    mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
+    // Write proper page header so list_knowledge can identify HypergraphSlot pages.
+    let page_header = crate::file::page::PageHeader {
+        page_id,
+        page_type: crate::util::PageType::HypergraphSlot.to_u16(),
+        slot_count: 1,
+        free_bytes: (PAGE_SIZE - 32).saturating_sub(data_bytes.len()) as u16,
+        layer_id: 3,
+        next_page: 0xFFFFFFFF,
+        prev_page: 0xFFFFFFFF,
+        reserved: [0u8; 12],
+    };
+    mmap[page_offset..page_offset + 32].copy_from_slice(&page_header.to_bytes());
+
+    mmap[data_offset..data_offset + data_bytes.len()].copy_from_slice(&data_bytes);
+    if data_offset + data_bytes.len() < page_offset + PAGE_SIZE {
+        mmap[data_offset + data_bytes.len()..page_offset + PAGE_SIZE].fill(0);
+    }
     btree.insert(new_graph_id, (page_id as u64) << 16);
 
     // Now update the context's l3_refs
@@ -337,30 +299,18 @@ fn add_l3_ref_to_context(
 }
 
 // ============================================================================
-// Helper: Parse LLM JSON response
+// Helper: Map LLM relation kind to GraphEdgeKind
 // ============================================================================
 
-/// Parse the LLM response into a structured distillation result.
-///
-/// Strips markdown code block markers (```json ... ```) if present,
-/// then attempts JSON deserialization.
-fn parse_distill_json(response: &str) -> Option<LlmDistillResult> {
-    let trimmed = response.trim();
-
-    // Strip markdown code block markers if present
-    let json_str = if trimmed.starts_with("```") {
-        let start = trimmed.find('\n').map(|i| i + 1).unwrap_or(0);
-        let end = trimmed.rfind("```").unwrap_or(trimmed.len());
-        if end > start {
-            trimmed[start..end].trim()
-        } else {
-            trimmed
-        }
-    } else {
-        trimmed
-    };
-
-    serde_json::from_str::<LlmDistillResult>(json_str).ok()
+fn map_edge_kind(kind: &str) -> GraphEdgeKind {
+    match kind.to_lowercase().as_str() {
+        "related" | "相关" => GraphEdgeKind::Related,
+        "causal" | "因果" => GraphEdgeKind::Causal,
+        "partof" | "part_of" | "部分" => GraphEdgeKind::PartOf,
+        "sequence" | "顺序" => GraphEdgeKind::Sequence,
+        "dependency" | "依赖" => GraphEdgeKind::Dependency,
+        _ => GraphEdgeKind::Custom,
+    }
 }
 
 // ============================================================================
@@ -370,36 +320,37 @@ fn parse_distill_json(response: &str) -> Option<LlmDistillResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dream::llm::LlmDistillResult;
 
     #[test]
-    fn test_parse_distill_json_plain() {
+    fn test_distill_result_deser_plain() {
         let input = r#"{"concepts":[{"name":"Rust","type":"language","description":"A systems programming language","keywords":["systems","safe"]}],"relations":[{"from":"Rust","to":"Cargo","kind":"BuildTool"}]}"#;
-        let result = parse_distill_json(input);
-        assert!(result.is_some());
-        let r = result.unwrap();
+        let r: LlmDistillResult = serde_json::from_str(input).unwrap();
         assert_eq!(r.concepts.len(), 1);
         assert_eq!(r.concepts[0].name, "Rust");
+        assert_eq!(r.concepts[0].node_type, "language");
         assert_eq!(r.relations.len(), 1);
         assert_eq!(r.relations[0].from, "Rust");
     }
 
     #[test]
-    fn test_parse_distill_json_with_markdown() {
-        let input = "```json\n{\"concepts\":[{\"name\":\"Test\",\"type\":\"concept\",\"description\":\"A test\",\"keywords\":[]}]}\n```";
-        let result = parse_distill_json(input);
-        assert!(result.is_some());
-        let r = result.unwrap();
-        assert_eq!(r.concepts.len(), 1);
-        assert_eq!(r.concepts[0].name, "Test");
+    fn test_distill_result_deser_empty() {
+        let input = r#"{"concepts":[],"relations":[]}"#;
+        let r: LlmDistillResult = serde_json::from_str(input).unwrap();
+        assert_eq!(r.concepts.len(), 0);
+        assert_eq!(r.relations.len(), 0);
     }
 
     #[test]
-    fn test_parse_distill_json_empty() {
-        let input = r#"{"concepts":[],"relations":[]}"#;
-        let result = parse_distill_json(input);
-        assert!(result.is_some());
-        let r = result.unwrap();
-        assert_eq!(r.concepts.len(), 0);
-        assert_eq!(r.relations.len(), 0);
+    fn test_map_edge_kind() {
+        assert!(matches!(map_edge_kind("Related"), GraphEdgeKind::Related));
+        assert!(matches!(map_edge_kind("causal"), GraphEdgeKind::Causal));
+        assert!(matches!(map_edge_kind("part_of"), GraphEdgeKind::PartOf));
+        assert!(matches!(map_edge_kind("Sequence"), GraphEdgeKind::Sequence));
+        assert!(matches!(
+            map_edge_kind("Dependency"),
+            GraphEdgeKind::Dependency
+        ));
+        assert!(matches!(map_edge_kind("unknown"), GraphEdgeKind::Custom));
     }
 }

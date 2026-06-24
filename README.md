@@ -25,7 +25,7 @@ MemHop 通过 4 个 `extern "C"` 函数提供 JSON-in JSON-out 跨语言接口�
 
 // 1. 打开数据库
 void* handle = memhop_open(
-    "{\"db_path\":\"/tmp/agent.meh\",\"encoder_grpc_addr\":\"unix:///tmp/.meowagent/meowvec.sock\",\"vector_dim\":768}");
+    "{\"db_path\":\"/tmp/agent.meh\",\"encoder_grpc_addr\":\"http://127.0.0.1:27110\",\"vector_dim\":768}");
 
 // 2. 搜索记忆
 char* res = memhop_execute(handle,
@@ -73,10 +73,10 @@ let result = db.update_memory(request)?;
 
 // Run Dream consolidation
 let llm = LlmConfig {
-    api_url: "https://api.deepseek.com/v1/chat/completions".to_string(),
-    api_key: "sk-...".to_string(),
     model: "deepseek-chat".to_string(),
-    api_format: 1,
+    api_base: "https://api.deepseek.com/v1".to_string(),
+    api_key: "sk-...".to_string(),
+    ..Default::default()
 };
 let report = db.dream(llm)?;
 

@@ -16,9 +16,9 @@ use std::io::{self, Cursor, Read, Write};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ChainStatus {
-    Draft = 0,       // Raw operation flow, not yet validated
-    Active = 1,      // Verified and available
-    Deprecated = 2,  // No longer recommended
+    Draft = 0,      // Raw operation flow, not yet validated
+    Active = 1,     // Verified and available
+    Deprecated = 2, // No longer recommended
 }
 
 impl ChainStatus {
@@ -41,7 +41,7 @@ impl ChainStatus {
 pub struct ActionChainSlot {
     pub id_hash: u64,
     pub title: String,
-    pub trigger: String,              // Trigger condition (DSL or natural language)
+    pub trigger: String, // Trigger condition (DSL or natural language)
     pub status: ChainStatus,
     pub confidence: f32,
     pub success_rate: f32,
@@ -109,8 +109,17 @@ impl ActionChainSlot {
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         Ok(ActionChainSlot {
-            id_hash, title, trigger, status, confidence, success_rate,
-            trigger_count, last_triggered, created_at, updated_at, version,
+            id_hash,
+            title,
+            trigger,
+            status,
+            confidence,
+            success_rate,
+            trigger_count,
+            last_triggered,
+            created_at,
+            updated_at,
+            version,
         })
     }
 }
@@ -126,7 +135,7 @@ pub struct ActionStep {
     pub chain_id: u64,
     pub step_order: u16,
     pub action: String,
-    pub parameters: Option<String>,   // JSON format parameters
+    pub parameters: Option<String>, // JSON format parameters
     pub created_at: i64,
 }
 
@@ -135,9 +144,7 @@ impl ActionStep {
     ///        2 (action_len) + 2 (params_len) + 8 (created_at) = 30 bytes
     /// Variable: action.len() + params.len() (or 0)
     pub fn slot_size(&self) -> usize {
-        30
-            + self.action.len()
-            + self.parameters.as_ref().map_or(0, |p| p.len())
+        30 + self.action.len() + self.parameters.as_ref().map_or(0, |p| p.len())
     }
 
     pub fn serialize(&self) -> io::Result<Vec<u8>> {
@@ -178,14 +185,21 @@ impl ActionStep {
         let parameters = if params_len > 0 {
             let mut params_buf = vec![0u8; params_len];
             c.read_exact(&mut params_buf)?;
-            Some(String::from_utf8(params_buf)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?)
+            Some(
+                String::from_utf8(params_buf)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            )
         } else {
             None
         };
 
         Ok(ActionStep {
-            id_hash, chain_id, step_order, action, parameters, created_at,
+            id_hash,
+            chain_id,
+            step_order,
+            action,
+            parameters,
+            created_at,
         })
     }
 }
@@ -284,7 +298,11 @@ mod tests {
 
     #[test]
     fn test_action_chain_all_statuses() {
-        for status in [ChainStatus::Draft, ChainStatus::Active, ChainStatus::Deprecated] {
+        for status in [
+            ChainStatus::Draft,
+            ChainStatus::Active,
+            ChainStatus::Deprecated,
+        ] {
             let chain = ActionChainSlot {
                 id_hash: 1,
                 title: "test".to_string(),
@@ -344,7 +362,7 @@ mod tests {
             id_hash: 1,
             chain_id: 1,
             step_order: 0,
-            action: "act".to_string(),       // 3 bytes
+            action: "act".to_string(),          // 3 bytes
             parameters: Some("{}".to_string()), // 2 bytes
             created_at: 0,
         };

@@ -7,23 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // ============================================================================
-// LLM Configuration
-// ============================================================================
-
-/// LLM configuration for dream stages and query enhancement
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmConfig {
-    /// API endpoint URL
-    pub api_url: String,
-    /// API key
-    pub api_key: String,
-    /// Model name
-    pub model: String,
-    /// API format (1 = OpenAI format)
-    pub api_format: u8,
-}
-
-// ============================================================================
 // Search Memory Interface (Interface 2)
 // ============================================================================
 
@@ -50,7 +33,7 @@ pub struct SearchQuery {
     /// Maximum number of contexts to return (default: 10)
     pub context_limit: usize,
     /// Optional LLM enhancement configuration
-    pub llm_enhance: Option<LlmConfig>,
+    pub llm_enhance: Option<crate::config::LlmConfig>,
     /// Auto-create context when search result is empty (0: no, 1: yes, default: 0)
     pub auto_create: u8,
     /// Minimum relevance score threshold for search pruning (0.0-1.0, default: 0.0)
