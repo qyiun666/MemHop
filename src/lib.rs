@@ -1691,7 +1691,7 @@ impl MemHop {
     /// 4. L5 crystallization from all ActionChainSlots
     ///
     /// # Arguments
-    /// * `llm` - LLM configuration (model, api_base, api_key, temperature, timeout)
+    /// * `llm` - LLM configuration (api_url, api_key, model, temperature, timeout)
     pub fn dream(&mut self, llm: LlmConfig) -> Result<DreamReport> {
         use crate::dream::dream_pipeline;
         use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;

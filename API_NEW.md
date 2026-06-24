@@ -120,10 +120,9 @@ void memhop_close(void* handle);
 
 ```json
 {
-  "api_url": "https://api.deepseek.com/v1/chat/completions",
+  "api_url": "https://api.example.com/v1/chat/completions",
   "api_key": "sk-xxx",
-  "model": "deepseek-chat",
-  "api_format": 1
+  "model": "your-model"
 }
 ```
 
@@ -399,10 +398,9 @@ void memhop_close(void* handle);
 ```json
 {
   "command": "dream",
-  "api_url": "https://api.deepseek.com/v1/chat/completions",
+  "api_url": "https://api.example.com/v1/chat/completions",
   "api_key": "sk-xxx",
-  "model": "deepseek-chat",
-  "api_format": 1
+  "model": "your-model"
 }
 ```
 

@@ -4,7 +4,7 @@
 //! - 所有调用走 FFI 层（extern "C"），验证 JSON-in JSON-out 协议
 //! - 覆盖 11 个命令 + 4 个 C 函数 + 边界条件
 //! - 模拟 Agent 接入流程（open → search → update → query → close）
-//! - Dream 命令需设置 MEMHOP_DEEPSEEK_KEY 环境变量（可选）
+//! - Dream 命令需设置 MEMHOP_LLM_API_KEY 环境变量（可选）
 //! - 向量编码需要配置 gRPC 或 IPC 编码器（测试中使用 auto_create 跳过向量检索）
 
 use std::ffi::{CStr, CString};
@@ -876,17 +876,14 @@ fn test_ffi_agent_workflow() {
 }
 
 // ============================================================================
-// 测试：Dream（记忆整合）— 需要 DEEPSEEK_API_KEY 环境变量
+// 测试：Dream（记忆整合）— 需要 LLM API 环境变量
 // ============================================================================
 
 #[test]
-#[ignore = "requires MEMHOP_DEEPSEEK_KEY env var and network access"]
-fn test_ffi_dream_with_deepseek() {
-    // Prefer environment variables; fall back to the project test key so the
-    // ignored integration test can run without manual env setup.
-    let api_key = std::env::var("MEMHOP_DEEPSEEK_KEY")
-        .or_else(|_| std::env::var("DEEPSEEK_API_KEY"))
-        .expect("MEMHOP_DEEPSEEK_KEY or DEEPSEEK_API_KEY must be set");
+#[ignore = "requires MEMHOP_LLM_API_KEY env var and network access"]
+fn test_ffi_dream_with_llm() {
+    let api_key = std::env::var("MEMHOP_LLM_API_KEY")
+        .expect("MEMHOP_LLM_API_KEY must be set");
 
     let db_path = "/tmp/memhop_ffi_dream.meh";
     let _ = std::fs::remove_file(db_path);
@@ -921,12 +918,16 @@ fn test_ffi_dream_with_deepseek() {
         let res = exec(handle, &activate_cmd);
         assert_success(&res);
 
-        // 4. Run dream with DeepSeek
+        // 4. Run dream with configured LLM
+        let api_url = std::env::var("MEMHOP_LLM_API_URL")
+            .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
+        let model = std::env::var("MEMHOP_LLM_MODEL")
+            .unwrap_or_else(|_| "gpt-4o-mini".to_string());
         let dream_cmd = format!(
-            r#"{{"command":"dream","api_url":"https://api.deepseek.com/v1/chat/completions","api_key":"{}","model":"deepseek-chat","api_format":1}}"#,
-            api_key
+            r#"{{"command":"dream","api_url":"{}","api_key":"{}","model":"{}"}}"#,
+            api_url, api_key, model
         );
-        println!("[Dream] Calling DeepSeek API...");
+        println!("[Dream] Calling LLM API...");
         let res = exec(handle, &dream_cmd);
         assert_success(&res);
         println!("[Dream] Complete: {:?}", res["data"]);

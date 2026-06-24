@@ -73,9 +73,9 @@ let result = db.update_memory(request)?;
 
 // Run Dream consolidation
 let llm = LlmConfig {
-    model: "deepseek-chat".to_string(),
-    api_base: "https://api.deepseek.com/v1".to_string(),
+    api_url: "https://api.example.com/v1/chat/completions".to_string(),
     api_key: "sk-...".to_string(),
+    model: "your-model".to_string(),
     ..Default::default()
 };
 let report = db.dream(llm)?;
@@ -189,8 +189,8 @@ cargo test
 # FFI binary validation (loads .dylib via libloading)
 MEMHOP_DYLIB_PATH=/tmp/memhop-download/libmemhop.dylib cargo run --example ffi_test
 
-# Full test including DeepSeek Dream
-MEMHOP_DEEPSEEK_KEY=sk-xxx cargo test -- --include-ignored --nocapture
+# Full test including LLM Dream
+MEMHOP_LLM_API_KEY=sk-xxx cargo test -- --include-ignored --nocapture
 ```
 
 ## API Documentation

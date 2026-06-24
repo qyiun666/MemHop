@@ -99,22 +99,22 @@ void memhop_close(void* handle);
 
 ### LLM 配置
 
-`dream` 命令与 `search` 命令的 `llm_enhance` 使用同一个 `config::LlmConfig` 类型（OpenAI 兼容格式），默认配置如下：
+`dream` 命令与 `search` 命令的 `llm_enhance` 使用同一个 `config::LlmConfig` 类型（OpenAI 兼容格式）。通用配置如下：
 
 | 字段           | 类型   | 默认值                          | 说明                                   |
 | -------------- | ------ | ------------------------------- | -------------------------------------- |
-| `model`        | string | `"deepseek-chat"`               | 默认模型                               |
-| `api_base`     | string | `"https://api.deepseek.com/v1"` | API 根地址（不含 `/chat/completions`） |
-| `api_key`      | string | 从 `MEMHOP_DEEPSEEK_KEY` 读取   | API 密钥                               |
+| `api_url`      | string | 无（调用方提供）                | 完整聊天补全地址（含 `/chat/completions`）；兼容旧字段 `api_base` |
+| `api_key`      | string | 无（调用方提供）                | API 密钥                               |
+| `model`        | string | 无（调用方提供）                | 模型名称                               |
 | `temperature`  | number | `0.2`                           | 记忆场景高确定性                       |
 | `timeout_secs` | number | `30`                            | 请求超时（秒）                         |
 | `language`     | string | `"zh"`                          | 默认输出语言                           |
 
 ```json
 {
-  "model": "deepseek-chat",
-  "api_base": "https://api.deepseek.com/v1",
+  "api_url": "https://api.example.com/v1/chat/completions",
   "api_key": "sk-xxx",
+  "model": "your-model",
   "temperature": 0.2,
   "timeout_secs": 30,
   "language": "zh"
@@ -392,9 +392,9 @@ L2 嵌套层级支持 4 层，检索范围为 Depth 1-3，Depth 3 结果额外�
 ```json
 {
   "command": "dream",
-  "model": "deepseek-chat",
-  "api_base": "https://api.deepseek.com/v1",
+  "api_url": "https://api.example.com/v1/chat/completions",
   "api_key": "sk-xxx",
+  "model": "your-model",
   "temperature": 0.2,
   "timeout_secs": 30,
   "language": "zh"

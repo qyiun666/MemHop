@@ -484,9 +484,9 @@ mod tests {
         // Test returns empty list when no L5 action chains exist
         let (_temp, mut mmap, mut header, mut btree) = setup_file(50);
         let llm = OpenAICompatibleLlmProvider::new(LlmConfig {
-            model: "test-model".to_string(),
-            api_base: "https://api.example.com/v1".to_string(),
+            api_url: "https://api.example.com/v1/chat/completions".to_string(),
             api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
             ..Default::default()
         });
 
@@ -563,9 +563,9 @@ mod tests {
         write_chain_slot(&mut mmap, &mut header, &mut btree, existing);
 
         let llm = OpenAICompatibleLlmProvider::new(LlmConfig {
-            model: "test-model".to_string(),
-            api_base: "https://api.example.com/v1".to_string(),
+            api_url: "https://api.example.com/v1/chat/completions".to_string(),
             api_key: "test-key".to_string(),
+            model: "test-model".to_string(),
             ..Default::default()
         });
         let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm).unwrap();

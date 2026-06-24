@@ -34,21 +34,21 @@ impl MemHopConfig {
 /// LLM configuration for dream stages and other LLM-powered features
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// Model name (default: "deepseek-chat")
-    #[serde(default = "default_model")]
-    pub model: String,
-    /// API base URL without the `/chat/completions` suffix (default: "https://api.deepseek.com/v1")
-    #[serde(default = "default_api_base")]
-    pub api_base: String,
-    /// API key. Defaults to the value of the `MEMHOP_DEEPSEEK_KEY` environment variable.
-    #[serde(default = "default_api_key")]
+    /// Full API URL (including `/chat/completions` suffix).
+    /// Backwards-compatible alias `api_base` is also accepted during deserialization.
+    #[serde(alias = "api_base")]
+    pub api_url: String,
+    /// API key. When using `Default`, falls back to the `MEMHOP_LLM_API_KEY`
+    /// environment variable if present.
     pub api_key: String,
+    /// Model name
+    pub model: String,
     /// Sampling temperature. Lower values produce more deterministic output
     /// (default: 0.2, suitable for memory consolidation).
     #[serde(default = "default_temperature")]
     pub temperature: f32,
     /// Request timeout in seconds (default: 30)
-    #[serde(default = "default_timeout_secs")]
+    #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
     /// Expected response language (default: "zh")
     #[serde(default = "default_language")]
@@ -58,44 +58,28 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            model: default_model(),
-            api_base: default_api_base(),
+            api_url: String::new(),
             api_key: default_api_key(),
+            model: String::new(),
             temperature: default_temperature(),
-            timeout_secs: default_timeout_secs(),
+            timeout_secs: default_timeout(),
             language: default_language(),
         }
     }
 }
 
-fn default_model() -> String {
-    "deepseek-chat".to_string()
-}
-
-fn default_api_base() -> String {
-    "https://api.deepseek.com/v1".to_string()
-}
-
 fn default_api_key() -> String {
-    std::env::var("MEMHOP_DEEPSEEK_KEY").unwrap_or_default()
+    std::env::var("MEMHOP_LLM_API_KEY").unwrap_or_default()
 }
 
 fn default_temperature() -> f32 {
     0.2
 }
 
-fn default_timeout_secs() -> u64 {
+fn default_timeout() -> u64 {
     30
 }
 
 fn default_language() -> String {
     "zh".to_string()
-}
-
-impl LlmConfig {
-    /// Return the full OpenAI-compatible chat completions URL.
-    pub fn api_url(&self) -> String {
-        let base = self.api_base.trim_end_matches('/');
-        format!("{}/chat/completions", base)
-    }
 }

@@ -2,7 +2,7 @@
 //!
 //! These tests exercise the full Agent integration workflow against:
 //! - Real vector encoder via gRPC (multilingual-e5-small through meowvec)
-//! - DeepSeek LLM API
+//! - Real LLM API (OpenAI-compatible)
 //!
 //! All tests are marked `#[ignore]` because they require network access and
 //! API credentials. Run with:
@@ -22,16 +22,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 const VECTOR_DIM: usize = 768;
-const API_BASE: &str = "https://api.deepseek.com/v1";
-const MODEL: &str = "deepseek-chat";
+const API_URL: &str = "https://api.openai.com/v1/chat/completions";
+const MODEL: &str = "gpt-4o-mini";
 const DEFAULT_ENCODER_ADDR: &str = "http://127.0.0.1:27110";
 
-/// Build the DeepSeek LLM configuration used by every E2E test.
+/// Build the LLM configuration used by every E2E test.
 fn make_llm_config() -> LlmConfig {
     LlmConfig {
+        api_url: API_URL.into(),
+        api_key: std::env::var("MEMHOP_LLM_API_KEY").unwrap_or_default(),
         model: MODEL.into(),
-        api_base: API_BASE.into(),
-        api_key: std::env::var("MEMHOP_DEEPSEEK_KEY").unwrap_or_default(),
         temperature: 0.2,
         timeout_secs: 30,
         language: "zh".into(),

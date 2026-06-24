@@ -1,7 +1,7 @@
 // OpenAI-compatible LLM Provider implementation
 //
 // Supports any LLM API that follows the OpenAI chat completions format,
-// including OpenAI, DeepSeek, and other compatible services.
+// including any OpenAI-compatible service.
 use crate::config::LlmConfig;
 use crate::dream::llm::{
     CrystalDef, CrystalStep, HabitAnalysis, LlmDistillResult, LlmProvider, MemorySummary, Pattern,
@@ -35,17 +35,12 @@ impl OpenAICompatibleLlmProvider {
     /// Create a new LLM provider from configuration
     ///
     /// # Arguments
-    /// * `config` - `LlmConfig` containing model, api_base, api_key, temperature, timeout
+    /// * `config` - `LlmConfig` containing api_url, api_key, model, temperature, timeout
     pub fn new(config: LlmConfig) -> Self {
         Self {
             config,
             client: reqwest::blocking::Client::new(),
         }
-    }
-
-    /// Return the full OpenAI-compatible chat completions URL
-    fn api_url(&self) -> String {
-        self.config.api_url()
     }
 
     /// Return an optional memory context snippet to inject into prompts.
@@ -71,7 +66,7 @@ impl OpenAICompatibleLlmProvider {
 
         let response = self
             .client
-            .post(self.api_url())
+            .post(&self.config.api_url)
             .bearer_auth(&self.config.api_key)
             .json(&body)
             .timeout(std::time::Duration::from_secs(self.config.timeout_secs))

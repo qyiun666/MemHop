@@ -1022,7 +1022,7 @@ fn enhance_query_with_llm(
     });
 
     let response = client
-        .post(llm_config.api_url())
+        .post(&llm_config.api_url)
         .bearer_auth(&llm_config.api_key)
         .json(&body)
         .send()
