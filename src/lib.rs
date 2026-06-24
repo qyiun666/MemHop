@@ -95,6 +95,7 @@ pub use query::types::{
 };
 
 use memmap2::{Mmap, MmapMut};
+use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io;
 use thiserror::Error;
@@ -347,12 +348,31 @@ impl MemHop {
         let btree = Self::load_btree(&mmap_readonly, &header);
         let sparse_index = Self::load_sparse_index(&mmap_readonly, &header);
 
-        // 5a. Build L1 reverse index from the loaded B-tree.
-        // TODO(v0.46): Persist L1ReverseIndex to a dedicated page chain during
-        // `checkpoint()` and load it here instead of rebuilding from scratch.
-        // Currently this is an O(N) scan of the B-tree, which slows down startup
-        // for large databases.
-        let l1_reverse_index = L1ReverseIndex::build(&mmap_readonly, &btree)?;
+        // 5a. Load L1 reverse index from persistence if available, otherwise
+        // rebuild it from the loaded B-tree.
+        let l1_reverse_index = if header.layer_roots[12] != 0 {
+            match Self::read_l1_reverse_pages(&mmap_readonly, &header, header.layer_roots[12]) {
+                Ok(data) => match L1ReverseIndex::deserialize(&data) {
+                    Ok(idx) => idx,
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Failed to load L1 reverse index from disk: {}. Rebuilding.",
+                            e
+                        );
+                        L1ReverseIndex::build(&mmap_readonly, &btree)?
+                    }
+                },
+                Err(e) => {
+                    eprintln!(
+                        "Warning: Failed to read L1 reverse index pages: {}. Rebuilding.",
+                        e
+                    );
+                    L1ReverseIndex::build(&mmap_readonly, &btree)?
+                }
+            }
+        } else {
+            L1ReverseIndex::build(&mmap_readonly, &btree)?
+        };
 
         // 6. Initialize SessionManager
         let session_manager = SessionManager::new();
@@ -788,6 +808,166 @@ impl MemHop {
         }
     }
 
+    // ===================================================================
+    // L1ReverseIndex multi-page serialization helpers
+    // ===================================================================
+
+    /// Magic number for the L1 reverse index page chain.
+    const L1REVERSE_MAGIC: u32 = 0x4C315256; // "L1RV"
+
+    /// Header size on the first page: [magic: u32][total_length: u32].
+    const L1REVERSE_HEADER_SIZE: usize = 8;
+
+    /// Maximum serialized data bytes stored in the first page (after header).
+    const L1REVERSE_FIRST_PAGE_DATA_CAPACITY: usize = PAGE_SIZE - 32 - Self::L1REVERSE_HEADER_SIZE;
+
+    /// Maximum serialized data bytes stored in each subsequent overflow page.
+    const L1REVERSE_OVERFLOW_DATA_CAPACITY: usize = PAGE_SIZE - 32;
+
+    /// Read the L1 reverse index page chain starting at `start_page` and
+    /// return the serialized bytes.
+    fn read_l1_reverse_pages(mmap: &Mmap, header: &FileHeader, start_page: u32) -> Result<Vec<u8>> {
+        use crate::index::btree::EMPTY_PAGE;
+
+        if start_page == 0 || start_page >= header.page_count {
+            return Err(MemHopError::InvalidPageType);
+        }
+
+        let first_payload = read_page_data(mmap, start_page)?;
+        if first_payload.len() < Self::L1REVERSE_HEADER_SIZE {
+            return Err(MemHopError::Serialization(
+                "L1 reverse index page too small".to_string(),
+            ));
+        }
+
+        let magic = u32::from_le_bytes([
+            first_payload[0],
+            first_payload[1],
+            first_payload[2],
+            first_payload[3],
+        ]);
+        if magic != Self::L1REVERSE_MAGIC {
+            return Err(MemHopError::Serialization(
+                "L1 reverse index magic mismatch".to_string(),
+            ));
+        }
+
+        let total_length = u32::from_le_bytes([
+            first_payload[4],
+            first_payload[5],
+            first_payload[6],
+            first_payload[7],
+        ]) as usize;
+
+        // Gather payloads from the chain.
+        let mut pages = Vec::new();
+        pages.push(first_payload.to_vec());
+        let mut current = start_page;
+        let mut chain_len = 0u32;
+        loop {
+            let page_header = crate::file::page::read_page_header(mmap, current)?;
+            current = page_header.next_page;
+            if current == EMPTY_PAGE || current >= header.page_count {
+                break;
+            }
+            pages.push(read_page_data(mmap, current)?.to_vec());
+            chain_len += 1;
+            if chain_len > header.page_count {
+                return Err(MemHopError::Serialization(
+                    "L1 reverse index chain too long".to_string(),
+                ));
+            }
+        }
+
+        // Concatenate data from all pages, skipping the header on the first page.
+        let mut result = Vec::with_capacity(total_length);
+        let first_data = &first_payload[Self::L1REVERSE_HEADER_SIZE..];
+        let first_take = first_data.len().min(total_length);
+        result.extend_from_slice(&first_data[..first_take]);
+
+        for payload in pages.iter().skip(1) {
+            if result.len() >= total_length {
+                break;
+            }
+            let remaining = total_length - result.len();
+            let take = payload.len().min(remaining);
+            result.extend_from_slice(&payload[..take]);
+        }
+
+        if result.len() != total_length {
+            return Err(MemHopError::Serialization(
+                "L1 reverse index length mismatch".to_string(),
+            ));
+        }
+
+        Ok(result)
+    }
+
+    /// Write serialized L1 reverse index bytes to a page chain.
+    /// Returns the primary page id, or 0 if `data` is empty.
+    fn write_l1_reverse_pages(&mut self, data: &[u8]) -> Result<u32> {
+        use crate::index::btree::EMPTY_PAGE;
+
+        if data.is_empty() {
+            return Ok(0);
+        }
+
+        let total_length = data.len();
+        let first_capacity = Self::L1REVERSE_FIRST_PAGE_DATA_CAPACITY;
+        let overflow_capacity = Self::L1REVERSE_OVERFLOW_DATA_CAPACITY;
+
+        let overflow_needed = if total_length > first_capacity {
+            (total_length - first_capacity).div_ceil(overflow_capacity)
+        } else {
+            0
+        };
+        let page_count = 1 + overflow_needed;
+
+        // Allocate pages in reverse order so we can link next_page easily.
+        let mut page_ids = vec![0u32; page_count];
+        let mut next = EMPTY_PAGE;
+        for i in (0..page_count).rev() {
+            let page_type = if i == 0 {
+                crate::util::PageType::L1ReverseIndex
+            } else {
+                crate::util::PageType::Overflow
+            };
+            let page_id = self.allocate_page(page_type, 0, next)?;
+            page_ids[i] = page_id;
+            next = page_id;
+        }
+
+        // Build the first page payload.
+        let first_data_len = total_length.min(first_capacity);
+        let mut first_payload = Vec::with_capacity(Self::L1REVERSE_HEADER_SIZE + first_data_len);
+        first_payload.extend_from_slice(&Self::L1REVERSE_MAGIC.to_le_bytes());
+        first_payload.extend_from_slice(&(total_length as u32).to_le_bytes());
+        first_payload.extend_from_slice(&data[..first_data_len]);
+        write_page_data(&mut self.mmap, page_ids[0], &first_payload)?;
+
+        // Write overflow pages.
+        let mut offset = first_data_len;
+        for &page_id in page_ids.iter().skip(1) {
+            let end = (offset + overflow_capacity).min(total_length);
+            write_page_data(&mut self.mmap, page_id, &data[offset..end])?;
+            offset = end;
+        }
+
+        Ok(page_ids[0])
+    }
+
+    /// Free all pages used by the current on-disk L1 reverse index.
+    fn free_l1_reverse_pages(&mut self) -> Result<()> {
+        let start_page = self.header.layer_roots[12];
+        if start_page == 0 || start_page >= self.header.page_count {
+            return Ok(());
+        }
+
+        Self::free_page_chain(&mut self.mmap, &mut self.header, start_page)?;
+        self.header.layer_roots[12] = 0;
+        Ok(())
+    }
+
     /// Write bucket page chains for the btree and return the directory page id.
     fn write_btree_pages(&mut self, page_data: &crate::index::btree::BTreePageData) -> Result<u32> {
         use crate::index::btree::EMPTY_PAGE;
@@ -1142,6 +1322,226 @@ impl MemHop {
     }
 
     // ========================================================================
+    // Graph query and deletion interfaces
+    // ========================================================================
+
+    /// Parse a string into a `GraphEdgeKind`.
+    fn parse_graph_edge_kind(s: &str) -> Option<crate::slot::hypergraph::GraphEdgeKind> {
+        use crate::slot::hypergraph::GraphEdgeKind;
+        match s {
+            "Related" | "related" => Some(GraphEdgeKind::Related),
+            "Causal" | "causal" => Some(GraphEdgeKind::Causal),
+            "PartOf" | "part_of" => Some(GraphEdgeKind::PartOf),
+            "Sequence" | "sequence" => Some(GraphEdgeKind::Sequence),
+            "Dependency" | "dependency" => Some(GraphEdgeKind::Dependency),
+            "Custom" | "custom" => Some(GraphEdgeKind::Custom),
+            _ => None,
+        }
+    }
+
+    /// Query a subgraph reachable from `start_node` within `max_depth` hops.
+    pub fn graph_query(
+        &self,
+        graph_id: &str,
+        start_node: &str,
+        max_depth: usize,
+        edge_kinds: Option<Vec<String>>,
+    ) -> Result<crate::query::types::Subgraph> {
+        let (subgraph, _hops) = self.graph_query_internal(graph_id, start_node, max_depth, edge_kinds)?;
+        Ok(subgraph)
+    }
+
+    /// Internal graph query that returns both the subgraph and the traversal hops.
+    pub(crate) fn graph_query_internal(
+        &self,
+        graph_id: &str,
+        start_node: &str,
+        max_depth: usize,
+        edge_kinds: Option<Vec<String>>,
+    ) -> Result<(crate::query::types::Subgraph, Vec<crate::query::types::TraversalHop>)> {
+        use crate::query::types::Subgraph;
+        use crate::slot::hypergraph::HypergraphNode;
+
+        let graph_hash = crate::query::common::parse_id_to_hash(graph_id);
+        let start_hash = crate::query::common::parse_id_to_hash(start_node);
+
+        let kinds = edge_kinds.map(|vec| {
+            vec.iter()
+                .filter_map(|s| Self::parse_graph_edge_kind(s))
+                .collect::<Vec<_>>()
+        });
+
+        let data: &[u8] = &self.mmap[..];
+        let hops = crate::l3::store::bfs_traversal(
+            data,
+            &self.btree,
+            graph_hash,
+            start_hash,
+            max_depth,
+            kinds.as_deref(),
+        )?;
+
+        let mut node_hashes = HashSet::new();
+        let mut edge_ids = HashSet::new();
+        let mut edges = Vec::new();
+
+        node_hashes.insert(start_hash);
+        for hop in &hops {
+            node_hashes.insert(hop.from_node);
+            node_hashes.insert(hop.to_node);
+            if edge_ids.insert(hop.edge.id_hash) {
+                edges.push(hop.edge.clone());
+            }
+        }
+
+        let mut nodes: Vec<HypergraphNode> = Vec::new();
+        for &node_hash in &node_hashes {
+            if let Some(page_ref) = self.btree.search(node_hash) {
+                if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+                    if let Ok(node) = HypergraphNode::deserialize(slot_data) {
+                        if node.graph_id == graph_hash {
+                            nodes.push(node);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((Subgraph { nodes, edges }, hops))
+    }
+
+    /// Delete an L2 topic and its associated L1 nodes and L4 archives.
+    pub fn delete_topic(&mut self, topic_id: u64) -> Result<()> {
+        let page_ref = match self.btree.search(topic_id) {
+            Some(pr) => pr,
+            None => return Ok(()),
+        };
+
+        let ctx = {
+            let data: &[u8] = &self.mmap[..];
+            let slot_data = crate::query::slot_io::get_slot_data(data, page_ref).ok_or(
+                MemHopError::PageNotFound(crate::query::slot_io::decode_page_id(page_ref)),
+            )?;
+            crate::slot::context::ContextSlot::deserialize_slot(slot_data)?
+        };
+
+        // Collect associated L1 ContextNode records.
+        let mut l1_nodes: Vec<(u64, u64)> = Vec::new();
+        {
+            let data: &[u8] = &self.mmap[..];
+            for (&id_hash, &page_ref) in self.btree.iter() {
+                if crate::l3::store::page_type_of(data, page_ref)
+                    != Some(crate::util::PageType::ContextNode as u16)
+                {
+                    continue;
+                }
+                if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+                    if let Ok(node) = crate::slot::context_node::ContextNode::deserialize_slot(slot_data) {
+                        if node.context_id == topic_id {
+                            l1_nodes.push((id_hash, page_ref));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Free L1 nodes and update the reverse index.
+        for (node_hash, page_ref) in l1_nodes {
+            self.btree.delete(node_hash);
+            let page_id = crate::query::slot_io::decode_page_id(page_ref);
+            crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
+            self.l1_reverse_index.remove_node(node_hash);
+        }
+
+        // Free associated L4 archives.
+        for &arc_hash in &ctx.archive_refs {
+            if let Some(page_ref) = self.btree.delete(arc_hash) {
+                let page_id = crate::query::slot_io::decode_page_id(page_ref);
+                crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
+            }
+        }
+
+        // Free centroid vector page if present.
+        if ctx.centroid_page_ref != 0 {
+            let page_id = crate::query::slot_io::decode_page_id(ctx.centroid_page_ref);
+            crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
+        }
+
+        // Remove the ContextSlot itself.
+        self.btree.delete(topic_id);
+        let page_id = crate::query::slot_io::decode_page_id(page_ref);
+        crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
+
+        self.sparse_index.remove_document(topic_id);
+        self.l1_reverse_index.remove_context(topic_id);
+
+        Ok(())
+    }
+
+    /// Delete an L3 hypergraph and clean up its references from L2 contexts.
+    pub fn delete_graph(&mut self, graph_id: u64) -> Result<()> {
+        let l3_id_str = crate::query::common::format_hash(graph_id);
+
+        // Collect L2 ContextSlots that reference this graph before deleting it.
+        let l2_refs = crate::l3::store::collect_l2_refs(&self.mmap, &self.btree, graph_id)?;
+
+        crate::l3::store::delete_graph(
+            &mut self.mmap,
+            &mut self.header,
+            &mut self.btree,
+            &l3_id_str,
+        )?;
+
+        // Remove the graph reference from each L2 context.
+        for (page_id, _id_hash) in l2_refs {
+            crate::l3::store::remove_l3_ref_from_context(&mut self.mmap, page_id, graph_id)?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete an L5 action chain and all associated action steps.
+    pub fn delete_action_chain(&mut self, chain_id: u64) -> Result<()> {
+        let chain_page_ref = match self.btree.search(chain_id) {
+            Some(pr) => pr,
+            None => return Ok(()),
+        };
+
+        let chain_page_id = crate::query::slot_io::decode_page_id(chain_page_ref);
+        crate::file::free_list::free_page(&mut self.mmap, &mut self.header, chain_page_id)?;
+        self.btree.delete(chain_id);
+
+        // Collect associated ActionStep records.
+        let mut steps: Vec<(u64, u64)> = Vec::new();
+        {
+            let data: &[u8] = &self.mmap[..];
+            for (&id_hash, &page_ref) in self.btree.iter() {
+                if crate::l3::store::page_type_of(data, page_ref)
+                    != Some(crate::util::PageType::ActionStep as u16)
+                {
+                    continue;
+                }
+                if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+                    if let Ok(step) = crate::slot::action_chain::ActionStep::deserialize(slot_data) {
+                        if step.chain_id == chain_id {
+                            steps.push((id_hash, page_ref));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Free each action step.
+        for (step_hash, page_ref) in steps {
+            self.btree.delete(step_hash);
+            let page_id = crate::query::slot_io::decode_page_id(page_ref);
+            crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
+        }
+
+        Ok(())
+    }
+
+    // ========================================================================
     // Update Title/Profile Interfaces
     // ========================================================================
 
@@ -1367,9 +1767,6 @@ impl MemHop {
     }
 
     /// Checkpoint: save indices to disk and update header
-    // TODO(v0.46): Serialize `self.l1_reverse_index` to a dedicated page chain
-    // (similar to the B-tree / sparse index) so the next `open()` can load it
-    // instead of rebuilding it with an O(N) B-tree scan.
     pub fn checkpoint(&mut self) -> Result<()> {
         // Serialize and save B-tree using multi-page Linear Hash layout.
         let btree_pages = self
@@ -1391,6 +1788,12 @@ impl MemHop {
         self.free_sparse_pages()?;
         let sparse_directory_page = self.write_sparse_pages(&sparse_page_data)?;
         self.header.layer_roots[1] = sparse_directory_page;
+
+        // Serialize and save L1 reverse index using a dedicated page chain.
+        let l1_data = self.l1_reverse_index.serialize()?;
+        self.free_l1_reverse_pages()?;
+        let l1_root_page = self.write_l1_reverse_pages(&l1_data)?;
+        self.header.layer_roots[12] = l1_root_page;
 
         // Update header commit_id
         self.header.commit_id += 1;
@@ -1525,5 +1928,123 @@ mod tests {
                 panic!("allocation {} should succeed (old free list lost?)", i)
             });
         }
+    }
+
+    /// Minimal mock encoder that returns a fixed dense vector.
+    struct MockEncoder {
+        dim: usize,
+    }
+
+    impl crate::encoder::Encoder for MockEncoder {
+        fn encode(&self, _text: &str) -> Result<crate::encoder::EncoderOutput> {
+            Ok(crate::encoder::EncoderOutput {
+                dense: vec![half::f16::from_f32(0.1); self.dim],
+                sparse: std::collections::HashMap::new(),
+            })
+        }
+
+        fn dim(&self) -> usize {
+            self.dim
+        }
+
+        fn mode(&self) -> &str {
+            "mock"
+        }
+    }
+
+    #[test]
+    fn test_l1_reverse_index_persistence() {
+        use crate::query::batch::{StoreBatch, StoreItem};
+        use crate::{MemHopConfig, SourceMeta, SourceType};
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("l1_reverse_persist.meh");
+        let mut config = MemHopConfig::new(path.clone(), 8);
+        config.encoder_grpc_addr = None;
+        let mut db = MemHop::open(config).unwrap();
+        db.set_encoder(MockEncoder { dim: 8 });
+
+        let batch = StoreBatch {
+            items: vec![
+                StoreItem {
+                    text: "hello world one".to_string(),
+                    topic_label: Some("greetings".to_string()),
+                    domain_id: None,
+                    importance: Some(0.5),
+                    valence: None,
+                    arousal: None,
+                    source: SourceMeta::new(SourceType::UserInput, None),
+                    is_structural: false,
+                    source_ref: None,
+                },
+                StoreItem {
+                    text: "hello world two".to_string(),
+                    topic_label: Some("greetings".to_string()),
+                    domain_id: None,
+                    importance: Some(0.6),
+                    valence: None,
+                    arousal: None,
+                    source: SourceMeta::new(SourceType::UserInput, None),
+                    is_structural: false,
+                    source_ref: None,
+                },
+            ],
+            session_id: None,
+            turn_id: None,
+        };
+        db.batch_store(batch).unwrap();
+
+        // The L1 reverse index should have been built from stored data.
+        assert!(!db.l1_reverse_index.is_empty());
+        let original_index = db.l1_reverse_index.clone();
+
+        // Checkpoint and close to persist everything.
+        db.checkpoint().unwrap();
+        assert_ne!(db.header.layer_roots[12], 0, "L1 root page should be persisted");
+        db.close().unwrap();
+
+        // Reopen and verify the L1 reverse index is loaded from disk.
+        let mut config2 = MemHopConfig::new(path, 8);
+        config2.encoder_grpc_addr = None;
+        let mut db2 = MemHop::open(config2).unwrap();
+        assert_ne!(db2.header.layer_roots[12], 0, "L1 root page should survive reopen");
+        assert_eq!(
+            db2.l1_reverse_index.serialize().unwrap(),
+            original_index.serialize().unwrap(),
+            "Loaded L1 reverse index should match original"
+        );
+
+        // Searching with the same text should still find associated contexts.
+        db2.set_encoder(MockEncoder { dim: 8 });
+        let result = db2
+            .search_memory(crate::query::types::SearchQuery {
+                dialogue: "hello world".to_string(),
+                context_id: None,
+                l3_id: None,
+                context_limit: 10,
+                llm_enhance: None,
+                auto_create: 0,
+                min_score: 0.0,
+                context_history: None,
+            })
+            .unwrap();
+        assert!(
+            !result.associated_contexts.is_empty() || !result.contexts.is_empty(),
+            "Search should still work after reopen"
+        );
+    }
+
+    #[test]
+    fn test_l1_reverse_index_fallback_rebuild() {
+        // A fresh database has no persisted L1 reverse index (layer_roots[12] == 0).
+        // The first open should succeed and build an empty reverse index.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("l1_reverse_fallback.meh");
+        let mut config = MemHopConfig::new(path, 8);
+        config.encoder_grpc_addr = None;
+        let db = MemHop::open(config).unwrap();
+
+        assert_eq!(db.header.layer_roots[12], 0);
+        assert!(db.l1_reverse_index.is_empty());
     }
 }

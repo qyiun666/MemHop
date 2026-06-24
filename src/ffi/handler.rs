@@ -47,6 +47,35 @@ pub fn dispatch(db: &mut MemHop, cmd: FfiCommand) -> Result<Value, String> {
             let r = db.batch_store(batch).map_err(|e| e.to_string())?;
             serde_json::to_value(r).map_err(|e| e.to_string())
         }
+        FfiCommand::GraphQuery {
+            graph_id,
+            start_node,
+            max_depth,
+            edge_kinds,
+        } => {
+            let (subgraph, hops) = db
+                .graph_query_internal(&graph_id, &start_node, max_depth, edge_kinds)
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({
+                "nodes": subgraph.nodes,
+                "edges": subgraph.edges,
+                "hops": hops,
+            }))
+        }
+        FfiCommand::Delete { layer, id } => {
+            let id_hash = crate::query::common::parse_id_to_hash(&id);
+            match layer.as_str() {
+                "l2" | "L2" | "topic" => db.delete_topic(id_hash).map_err(|e| e.to_string())?,
+                "l3" | "L3" | "knowledge" | "graph" => {
+                    db.delete_graph(id_hash).map_err(|e| e.to_string())?
+                }
+                "l5" | "L5" | "crystal" | "action_chain" => {
+                    db.delete_action_chain(id_hash).map_err(|e| e.to_string())?
+                }
+                _ => return Err(format!("unsupported delete layer: {}", layer)),
+            }
+            Ok(serde_json::json!({"deleted": true}))
+        }
         FfiCommand::Sync => {
             db.sync().map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"synced": true}))

@@ -1,4 +1,4 @@
-# MemHop API 集成文档 v0.45.0
+# MemHop API 集成文档 v0.46.0
 
 > JSON-in JSON-out 跨语言接口协议。文件格式 .meh，六层认知架构（L0-L5）。所有交互通过 4 个 C 函数完成，所有业务接口通过 `memhop_execute` 传入 JSON 命令。
 
@@ -20,6 +20,8 @@
   - [import](#import--导入记忆)
   - [session](#session--会话管理)
   - [batch_store](#batch_store--批量存储)
+  - [graph_query](#graph_query--l3-图遍历)
+  - [delete](#delete--删除记录)
   - [sync](#sync--同步到磁盘)
   - [close](#close--关闭数据库)
 - [错误处理](#错误处理)
@@ -603,6 +605,69 @@ Knowledge：
   "dedup_skipped": 0
 }
 ```
+
+---
+
+### graph_query — L3 图遍历
+
+从 `start_node` 出发，在指定 L3 超图中按 `edge_kinds` 过滤进行 BFS 遍历，返回可达子图与遍历步信息。
+
+```json
+{
+  "command": "graph_query",
+  "graph_id": "a1b2c3d4e5f67890",
+  "start_node": "b2c3d4e5f67890a1",
+  "max_depth": 2,
+  "edge_kinds": ["Dependency", "Related"]
+}
+```
+
+| 字段        | 类型            | 必需 | 描述                                                         |
+| ----------- | --------------- | ---- | ------------------------------------------------------------ |
+| `graph_id`  | string (16 进制 hash) | 是   | L3 超图 ID                                                   |
+| `start_node`| string (16 进制 hash) | 是   | 起始节点 ID                                                  |
+| `max_depth` | integer         | 是   | 最大遍历深度                                                 |
+| `edge_kinds`| string[] / null | 否   | 边类型过滤，可选值：`Related` `Causal` `PartOf` `Sequence` `Dependency` `Custom`；为空或省略时不过滤 |
+
+**响应**：
+
+```json
+{
+  "nodes": [...],
+  "edges": [...],
+  "hops": [...]
+}
+```
+
+- `nodes`: `HypergraphNode` 数组，包含遍历涉及的所有节点。
+- `edges`: `HypergraphEdge` 数组，去重后的边。
+- `hops`: 遍历路径步信息（`TraversalHop`），描述从起点出发的每一步。
+
+---
+
+### delete — 删除记录
+
+按 `layer` 删除指定 ID 的记录。
+
+```json
+{ "command": "delete", "layer": "l2", "id": "a1b2c3d4e5f67890" }
+{ "command": "delete", "layer": "l3", "id": "a1b2c3d4e5f67890" }
+{ "command": "delete", "layer": "l5", "id": "a1b2c3d4e5f67890" }
+```
+
+| layer 值              | 含义            | 删除内容                                                     |
+| --------------------- | --------------- | ------------------------------------------------------------ |
+| `l2` / `topic`        | L2 主题         | ContextSlot 页面、关联 L1 ContextNode、L4 归档、centroid 向量页；更新 SparseIndex 与 L1ReverseIndex |
+| `l3` / `knowledge` / `graph` | L3 超图         | 调用内部 `delete_graph`，并清理所有引用该图的 L2 `l3_refs`    |
+| `l5` / `crystal` / `action_chain` | L5 行动链       | ActionChainSlot 及其关联的 ActionStep 页面                   |
+
+**响应**：
+
+```json
+{ "deleted": true }
+```
+
+不支持的 layer 返回错误。
 
 ---
 

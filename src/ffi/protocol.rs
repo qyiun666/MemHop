@@ -75,6 +75,18 @@ pub enum FfiCommand {
         #[serde(flatten)]
         batch: crate::query::batch::StoreBatch,
     },
+    /// Graph traversal query (L3 hypergraph)
+    #[serde(rename = "graph_query")]
+    GraphQuery {
+        graph_id: String,
+        start_node: String,
+        max_depth: usize,
+        #[serde(default)]
+        edge_kinds: Option<Vec<String>>,
+    },
+    /// Delete a record by layer and id
+    #[serde(rename = "delete")]
+    Delete { layer: String, id: String },
     /// Sync to disk
     #[serde(rename = "sync")]
     Sync,

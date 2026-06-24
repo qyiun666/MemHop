@@ -115,9 +115,9 @@ impl std::fmt::Display for MigrateReport {
 pub fn migrate(redb_path: &Path, meh_path: &Path) -> MigrateResult<MigrateReport> {
     let start_time = Instant::now();
 
-    // TODO: Implement actual redb reading logic
-    // This requires the legacy meowagent-memhop crate or direct redb access
-    // For now, we provide a framework that can be completed when legacy code is available
+    // NOTE: Actual redb reading logic is not implemented yet.
+    // This requires the legacy meowagent-memhop crate or direct redb access.
+    // The current implementation provides a framework that can be completed when legacy code is available.
 
     // Step 1: Validate input paths
     if !redb_path.exists() {
@@ -143,7 +143,7 @@ pub fn migrate(redb_path: &Path, meh_path: &Path) -> MigrateResult<MigrateReport
     let mut memhop = MemHop::open(config).map_err(MigrateError::MemHop)?;
 
     // Step 3: Migrate data from redb to MemHop
-    // TODO: Replace with actual redb iteration when legacy code is available
+    // NOTE: Replace with actual redb iteration when legacy code is available
     let report = migrate_from_redb_stub(&mut memhop)?;
 
     // Step 4: Sync and close
@@ -163,7 +163,7 @@ pub fn migrate(redb_path: &Path, meh_path: &Path) -> MigrateResult<MigrateReport
 /// This function provides the migration framework. When the legacy meowagent-memhop
 /// code becomes available, replace this stub with actual redb table iteration.
 fn migrate_from_redb_stub(_memhop: &mut crate::MemHop) -> MigrateResult<MigrateReport> {
-    // TODO: Implement actual migration logic
+    // NOTE: Actual migration logic is a stub; implement with real redb iteration when legacy code is available
     // Pseudocode structure:
     //
     // let db = redb::Database::open(redb_path)?;
@@ -270,7 +270,7 @@ pub fn convert_id_to_hash(id: &str) -> u64 {
 /// # Note
 /// This function requires access to both databases simultaneously
 pub fn verify_migration(redb_path: &Path, meh_path: &Path) -> MigrateResult<()> {
-    // TODO: Implement verification logic
+    // NOTE: Verification logic is a stub; implement with real redb comparison when legacy code is available
     // Pseudocode:
     //
     // let legacy_db = redb::Database::open(redb_path)?;

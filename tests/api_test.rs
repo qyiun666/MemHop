@@ -416,6 +416,171 @@ fn test_ffi_full_lifecycle() {
 }
 
 // ============================================================================
+// 测试：Graph query 与 Delete 命令（L2/L3/L5）
+// ============================================================================
+
+#[test]
+fn test_ffi_graph_query_and_delete() {
+    let db_path = "/tmp/memhop_ffi_graph_delete.meh";
+    let source_path = "/tmp/memhop_test_graph";
+    let _ = std::fs::remove_file(db_path);
+    let _ = std::fs::remove_dir_all(source_path);
+
+    // Prepare a minimal Rust codebase so build_l3 creates nodes and edges.
+    std::fs::create_dir_all(format!("{}/src", source_path)).unwrap();
+    std::fs::write(
+        format!("{}/src/a.rs", source_path),
+        "use crate::b;\npub fn foo() {}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        format!("{}/src/b.rs", source_path),
+        "pub fn bar() {}\n",
+    )
+    .unwrap();
+
+    unsafe {
+        let cfg = config_json(db_path);
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null(), "memhop_open failed");
+
+        // ---- 1. Build L3 hypergraph ----
+        let build_cmd = format!(
+            r#"{{"command":"import","params":{{"action":"build_l3","path":"{}"}}}}"#,
+            source_path
+        );
+        let res = exec(handle, &build_cmd);
+        assert_success(&res);
+        let created_ids = res["data"]["created_ids"].as_array().unwrap();
+        assert!(
+            created_ids.len() >= 2,
+            "build_l3 should create at least two nodes"
+        );
+        let start_node = created_ids[0].as_str().unwrap().to_string();
+
+        // ---- 2. Query L3 list to obtain graph_id ----
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l3","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+        let l3_items = res["data"]["items"].as_array().unwrap();
+        assert!(!l3_items.is_empty(), "L3 should contain the built graph");
+        let graph_id = l3_items[0]["id"].as_str().unwrap().to_string();
+
+        // ---- 3. Graph query with Dependency edges ----
+        let graph_query_cmd = format!(
+            r#"{{"command":"graph_query","graph_id":"{}","start_node":"{}","max_depth":2,"edge_kinds":["Dependency"]}}"#,
+            graph_id, start_node
+        );
+        let res = exec(handle, &graph_query_cmd);
+        assert_success(&res);
+        let nodes = res["data"]["nodes"].as_array().unwrap();
+        let edges = res["data"]["edges"].as_array().unwrap();
+        let hops = res["data"]["hops"].as_array().unwrap();
+        assert!(
+            nodes.len() >= 2,
+            "graph_query should return at least 2 nodes, got {}",
+            nodes.len()
+        );
+        assert!(
+            !edges.is_empty() || hops.is_empty(),
+            "either edges exist or no hops were made"
+        );
+
+        // ---- 4. Delete L3 graph ----
+        let delete_l3_cmd = format!(
+            r#"{{"command":"delete","layer":"l3","id":"{}"}}"#,
+            graph_id
+        );
+        let res = exec(handle, &delete_l3_cmd);
+        assert_success(&res);
+        assert!(res["data"]["deleted"].as_bool().unwrap_or(false));
+
+        // Verify the graph is gone.
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l3","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+        let l3_total = res["data"]["total"].as_u64().unwrap_or(0);
+        assert_eq!(l3_total, 0, "L3 graph should be deleted");
+
+        // ---- 5. Create an L2 topic and L5 action chain ----
+        let res = exec(
+            handle,
+            r#"{"command":"search","dialogue":"Action chain test topic","auto_create":1,"context_limit":5,"min_score":0.0}"#,
+        );
+        assert_success(&res);
+        let l2_id = res["data"]["contexts"][0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let update_cmd = format!(
+            r#"{{"command":"update","topic_id":"{}","dialogue_text":"User: Do something.\nAssistant: Done.","action_chain":[{{"title":"do_something","description":"perform an action","action_type":"Execute"}}]}}"#,
+            l2_id
+        );
+        let res = exec(handle, &update_cmd);
+        assert_success(&res);
+
+        // ---- 6. List L5 crystals and delete the action chain ----
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l5","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+        let l5_items = res["data"]["items"].as_array().unwrap();
+        assert!(!l5_items.is_empty(), "L5 should contain the action chain");
+        let chain_id = l5_items[0]["id"].as_str().unwrap().to_string();
+
+        let delete_l5_cmd = format!(
+            r#"{{"command":"delete","layer":"l5","id":"{}"}}"#,
+            chain_id
+        );
+        let res = exec(handle, &delete_l5_cmd);
+        assert_success(&res);
+
+        let res = exec(
+            handle,
+            r#"{"command":"query_layer","layer":"l5","action":"list","list":{"page":1,"page_size":10}}"#,
+        );
+        assert_success(&res);
+        let l5_total = res["data"]["total"].as_u64().unwrap_or(0);
+        assert_eq!(l5_total, 0, "L5 action chain should be deleted");
+
+        // ---- 7. Delete L2 topic ----
+        let delete_l2_cmd = format!(
+            r#"{{"command":"delete","layer":"l2","id":"{}"}}"#,
+            l2_id
+        );
+        let res = exec(handle, &delete_l2_cmd);
+        assert_success(&res);
+
+        let get_l2_cmd = format!(
+            r#"{{"command":"query_layer","layer":"l2","action":"get","get":{{"id":"{}"}},"list":{{}}}}"#,
+            l2_id
+        );
+        let res = exec(handle, &get_l2_cmd);
+        assert!(
+            !res["success"].as_bool().unwrap_or(true) || res["data"].is_null(),
+            "deleted L2 topic should not be retrievable"
+        );
+
+        // ---- 8. Unsupported delete layer returns error ----
+        let res = exec(
+            handle,
+            r#"{"command":"delete","layer":"l1","id":"0000000000000001"}"#,
+        );
+        assert_error(&res);
+
+        memhop_close(handle);
+        let _ = std::fs::remove_file(db_path);
+    }
+    let _ = std::fs::remove_dir_all(source_path);
+}
+
+// ============================================================================
 // 测试：查询 L3 详情
 // ============================================================================
 

@@ -147,6 +147,7 @@ pub enum PageType {
     IVFBucket = 0x0F,      // IVF bucket (vector id list) page
     BTreeNode = 0x10,      // B-tree internal node
     BTreeLeaf = 0x11,      // B-tree leaf node
+    L1ReverseIndex = 0x12, // L1 reverse index page
     Free = 0x20,           // Free page
     Overflow = 0xFF,       // Overflow page
 }
@@ -177,6 +178,7 @@ impl PageType {
             0x0F => Some(PageType::IVFBucket),
             0x10 => Some(PageType::BTreeNode),
             0x11 => Some(PageType::BTreeLeaf),
+            0x12 => Some(PageType::L1ReverseIndex),
             0x20 => Some(PageType::Free),
             0xFF => Some(PageType::Overflow),
             _ => None,

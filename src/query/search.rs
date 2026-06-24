@@ -567,6 +567,24 @@ impl L1ReverseIndex {
         }
         result
     }
+
+    /// Serialize the reverse index to a byte vector using bincode.
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(&self.index)
+            .map_err(|e| MemHopError::Serialization(e.to_string()))
+    }
+
+    /// Deserialize the reverse index from a byte vector using bincode.
+    pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
+        let index: HashMap<u64, Vec<(u64, u64)>> = bincode::deserialize(data)
+            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+        Ok(Self { index })
+    }
+
+    /// Return true if the index contains no entries.
+    pub fn is_empty(&self) -> bool {
+        self.index.is_empty()
+    }
 }
 
 // ============================================================================
@@ -1228,6 +1246,33 @@ mod tests {
         let page_ref = crate::file::page::encode_page_ref(page_id, 0);
         btree.insert(node.id_hash, page_ref);
         page_ref
+    }
+
+    #[test]
+    fn test_l1_reverse_index_serialize_roundtrip() {
+        let mut idx = L1ReverseIndex::new();
+        idx.add(2000, 1000, 1);
+        idx.add(2000, 1001, 2);
+        idx.add(2001, 1002, 3);
+
+        let serialized = idx.serialize().unwrap();
+        let restored = L1ReverseIndex::deserialize(&serialized).unwrap();
+
+        let ctx2000 = HashSet::from([2000u64]);
+        let ctx2001 = HashSet::from([2001u64]);
+        let both = HashSet::from([2000u64, 2001u64]);
+
+        assert_eq!(restored.find_associated(&ctx2000).len(), 2);
+        assert_eq!(restored.find_associated(&ctx2001).len(), 1);
+        assert_eq!(restored.find_associated(&both).len(), 3);
+
+        // Refreshing an existing node should still behave correctly after roundtrip.
+        let mut restored_mut = restored;
+        restored_mut.add(2000, 1000, 10);
+        let nodes = restored_mut.find_associated(&ctx2000);
+        assert_eq!(nodes.len(), 2);
+        let page_refs: HashSet<u64> = nodes.iter().map(|(_, pr)| *pr).collect();
+        assert!(page_refs.contains(&10));
     }
 
     #[test]
