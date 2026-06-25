@@ -27,6 +27,9 @@ pub struct StoreBatch {
     pub session_id: Option<String>,
     /// Optional turn ID within the session
     pub turn_id: Option<String>,
+    /// API 请求来源（记录是谁发起的批量存储）
+    #[serde(default, skip_serializing_if = "crate::query::types::RequestSource::is_empty")]
+    pub source: crate::query::types::RequestSource,
 }
 
 /// Individual item in a batch store operation
@@ -762,6 +765,7 @@ mod tests {
             ],
             session_id: None,
             turn_id: None,
+            source: Default::default(),
         };
 
         let report = db.batch_store(batch).unwrap();

@@ -17,8 +17,8 @@ pub const MAGIC: [u8; 4] = [0x4D, 0x45, 0x48, 0x21]; // "MEH!"
 /// Tail magic bytes
 pub const TAIL_MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 
-/// Version constant (v0.34 = 0x0022)
-pub const VERSION: u16 = 0x0022;
+/// Version constant (v0.35 = 0x0023)
+pub const VERSION: u16 = 0x0023;
 
 /// Cognitive architecture layers (L0-L5)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

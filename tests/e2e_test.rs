@@ -291,6 +291,7 @@ fn test_agent_conversation_memory_flow() {
                 .collect(),
             session_id: Some("e2e_session_1".into()),
             turn_id: None,
+            source: Default::default(),
         };
 
         let report = db.batch_store(batch).expect("batch store should succeed");
@@ -315,6 +316,7 @@ fn test_agent_conversation_memory_flow() {
                 auto_create: 0,
                 min_score: 0.0,
                 context_history: None,
+                source: Default::default(),
             })
             .expect("search should succeed");
         eprintln!("[E2E] search contexts: {:?}", search.contexts);
@@ -361,6 +363,7 @@ fn test_agent_conversation_memory_flow() {
                     parameters: None,
                 }],
                 instant_distill: false,
+                source: Default::default(),
             })
             .expect("update_memory should succeed");
         assert_eq!(update.topic_id, rust_topic.id);
@@ -492,6 +495,7 @@ fn test_chinese_memory_specialization() {
                 .collect(),
             session_id: Some("e2e_chinese".into()),
             turn_id: None,
+            source: Default::default(),
         };
         let report = db.batch_store(batch).expect("batch store should succeed");
         assert!(report.l1_nodes_created > 0);
@@ -507,6 +511,7 @@ fn test_chinese_memory_specialization() {
                 auto_create: 0,
                 min_score: 0.0,
                 context_history: None,
+                source: Default::default(),
             })
             .expect("Chinese BM25 search should succeed");
         assert!(
@@ -533,6 +538,7 @@ fn test_chinese_memory_specialization() {
                 auto_create: 0,
                 min_score: 0.0,
                 context_history: None,
+                source: Default::default(),
             })
             .expect("LLM-enhanced Chinese search should succeed");
         assert!(
@@ -657,6 +663,7 @@ pub fn run(query: String) {
                 auto_create: 0,
                 min_score: 0.0,
                 context_history: None,
+                source: Default::default(),
             })
             .expect("L3-restricted search should succeed");
         assert!(
@@ -702,6 +709,7 @@ fn test_dream_pipeline_full() {
                 .collect(),
             session_id: Some("e2e_dream".into()),
             turn_id: None,
+            source: Default::default(),
         };
         let store_report = db.batch_store(batch).expect("batch store should succeed");
         assert!(store_report.l2_topics_updated >= 3);
@@ -758,6 +766,7 @@ fn test_dream_pipeline_full() {
                         },
                     ],
                     instant_distill: false,
+                    source: Default::default(),
                 })
                 .expect("update_memory should succeed");
         }

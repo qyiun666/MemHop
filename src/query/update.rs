@@ -74,6 +74,7 @@ pub fn update_memory(
         topic_hash,
         now_ms,
         btree,
+        request.source.to_metadata_json(),
     )?;
     let archive_id = format_hash(l4_id_hash);
 
@@ -181,6 +182,7 @@ pub fn update_memory(
 }
 
 /// Allocate page and write L4 Archive
+#[allow(clippy::too_many_arguments)]
 fn allocate_and_write_l4_archive(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -189,6 +191,7 @@ fn allocate_and_write_l4_archive(
     topic_id: u64,
     now_ms: i64,
     btree: &mut BTreeIndex,
+    metadata: Option<String>,
 ) -> Result<u64, MemHopError> {
     // Allocate new page
     let page_id = allocate_from_free_list(mmap, header)?;
@@ -203,7 +206,7 @@ fn allocate_and_write_l4_archive(
         context_id: topic_id,
         created_at: now_ms,
         content: content.to_string(),
-        metadata: None,
+        metadata,
     };
 
     // Serialize and write

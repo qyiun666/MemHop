@@ -804,11 +804,14 @@ fn collect_archive_refs(
                 .and_then(|pr| get_slot_data(data, pr))
             {
                 if let Ok(arc) = ArchiveSlot::deserialize_slot(slot_data) {
+                    let src = arc.request_source();
                     refs.push(ArchiveRef {
                         id: format_hash(arc.id_hash),
                         context_id: format_hash(arc.context_id),
                         content_type: format!("{:?}", arc.content_type),
                         created_at: arc.created_at,
+                        source_agent: src.source_agent,
+                        source_platform: src.source_platform,
                     });
                 }
             }

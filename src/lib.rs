@@ -77,6 +77,7 @@ pub use query::types::{
     NodeListResult,
     ProfileResult,
     // Search Memory (Interface 2)
+    RequestSource,
     SearchQuery,
     SearchResult,
     L3Preview,
@@ -2003,6 +2004,7 @@ mod tests {
             ],
             session_id: None,
             turn_id: None,
+            source: Default::default(),
         };
         db.batch_store(batch).unwrap();
 
@@ -2038,6 +2040,7 @@ mod tests {
                 auto_create: 0,
                 min_score: 0.0,
                 context_history: None,
+                source: Default::default(),
             })
             .unwrap();
         assert!(

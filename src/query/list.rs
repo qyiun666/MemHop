@@ -427,14 +427,19 @@ where
         .into_iter()
         .skip(skip)
         .take(take)
-        .map(|a| Archive {
-            id: format_hash(a.id_hash),
-            content: a.content,
-            content_type: format!("{:?}", a.content_type),
-            source_ref: None,
-            topic_id: Some(format_hash(a.context_id)),
-            engram_ids: vec![],
-            created_at: a.created_at,
+        .map(|a| {
+            let src = a.request_source();
+            Archive {
+                id: format_hash(a.id_hash),
+                content: a.content,
+                content_type: format!("{:?}", a.content_type),
+                source_ref: None,
+                topic_id: Some(format_hash(a.context_id)),
+                engram_ids: vec![],
+                created_at: a.created_at,
+                source_agent: src.source_agent,
+                source_platform: src.source_platform,
+            }
         })
         .collect();
 

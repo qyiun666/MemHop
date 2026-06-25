@@ -6,6 +6,40 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// API 请求来源信息 — 记录"是谁找的我"
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RequestSource {
+    /// 发起请求的 agent 标识（如 "claude", "cursor", "codex"）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_agent: Option<String>,
+    /// 发起请求的平台标识（如 "qoder", "vscode", "feishu"）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_platform: Option<String>,
+}
+
+impl RequestSource {
+    /// 检查是否为空（两个字段都是 None）
+    pub fn is_empty(&self) -> bool {
+        self.source_agent.is_none() && self.source_platform.is_none()
+    }
+
+    /// 序列化为 ArchiveSlot.metadata 可用的 JSON 字符串
+    pub fn to_metadata_json(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+        serde_json::to_string(self).ok()
+    }
+
+    /// 从 ArchiveSlot.metadata JSON 字符串反序列化
+    pub fn from_metadata_json(metadata: &str) -> Self {
+        serde_json::from_str(metadata).unwrap_or_else(|e| {
+            eprintln!("[RequestSource] Failed to parse metadata '{}': {}", metadata, e);
+            Default::default()
+        })
+    }
+}
+
 // ============================================================================
 // Search Memory Interface (Interface 2)
 // ============================================================================
@@ -41,6 +75,9 @@ pub struct SearchQuery {
     /// Previous conversation context (optional). Used by LLM enhancement
     /// to resolve anaphora and fill in missing context for follow-up queries.
     pub context_history: Option<String>,
+    /// API 请求来源（记录是谁发起的搜索）
+    #[serde(default, skip_serializing_if = "RequestSource::is_empty")]
+    pub source: RequestSource,
 }
 
 /// L3 knowledge graph preview — lightweight summary for agent decision-making
@@ -110,6 +147,11 @@ pub struct ArchiveRef {
     pub content_type: String,
     /// Timestamp
     pub created_at: i64,
+    /// 请求来源信息（从 ArchiveSlot.metadata 解析）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_platform: Option<String>,
 }
 
 /// Agent profile
@@ -160,6 +202,9 @@ pub struct UpdateRequest {
     /// Enable instant L3 knowledge distillation (optional, default: false)
     #[serde(default)]
     pub instant_distill: bool,
+    /// API 请求来源（记录是谁发起的更新，会写入 L4 ArchiveSlot.metadata）
+    #[serde(default, skip_serializing_if = "RequestSource::is_empty")]
+    pub source: RequestSource,
 }
 
 /// Action item for L5 action chain storage
@@ -375,6 +420,11 @@ pub struct Archive {
     pub topic_id: Option<String>,
     pub engram_ids: Vec<String>,
     pub created_at: i64,
+    /// 请求来源信息（从 ArchiveSlot.metadata 解析）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_platform: Option<String>,
 }
 
 /// Crystal list query
