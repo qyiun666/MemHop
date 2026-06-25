@@ -649,6 +649,7 @@ pub fn read_node_neighbors(
 /// * `start_node`- id_hash of the node where traversal begins.
 /// * `max_depth` - Maximum number of edge traversals (0 means no hops).
 /// * `edge_kinds`- Optional whitelist of edge kinds.
+///
 /// Build adjacency index from BTree for a specific graph and edge_kinds.
 fn build_adjacency_index(
     data: &[u8],

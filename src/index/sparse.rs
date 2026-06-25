@@ -520,7 +520,7 @@ impl EntityIndex {
     /// is marked with #[serde(skip)] and won't be restored automatically.
     pub fn rebuild_node_to_l2(&mut self) {
         self.node_to_l2.clear();
-        for (_word, (node_hash, l2_ids)) in &self.entities {
+        for (node_hash, l2_ids) in self.entities.values() {
             let entry = self.node_to_l2.entry(*node_hash).or_default();
             for l2_id in l2_ids {
                 if !entry.contains(l2_id) {
