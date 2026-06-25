@@ -37,7 +37,7 @@ memhop_free_string(res);
 memhop_close(handle);
 ```
 
-完整协议参考 [API_NEW.md](API_NEW.md)（11 个命令 + 4 个 C 函数）。
+完整协议参考 API.md（11 个命令 + 4 个 C 函数），随 Release 发布。
 
 ### Rust SDK
 
@@ -156,11 +156,11 @@ db.close()?;
 - **v0.32.0 (Self-Aware)**: L2 session activation + Organize
 - **v0.33.0 (Full Mind)**: Batch store + Emotion + Dream pipeline
 - **v0.34.0 (Launch Ready)**: Migration + integration tests + benchmarks
-- **v0.41.0 (Current)**: L2-centric search/update model + Dream pipeline
+- **v0.47.0 (Current)**: L3 retrieval optimization + adjacency cache + reverse index
 
 ## Download
 
-预编译二进制从 [GitHub Actions](../../actions) 的 `build` workflow 下载：
+预编译二进制从 [GitHub Releases](../../releases) 下载，或从 [GitHub Actions](../../actions) 的 `build` workflow 下载：
 
 | 平台                                    | 产物                        | CI Job             |
 | --------------------------------------- | --------------------------- | ------------------ |
@@ -174,7 +174,7 @@ db.close()?;
 
 ```bash
 cp libmemhop.dylib /tmp/memhop-download/
-cargo run --example ffi_test  # 动态加载并测试所有 FFI 接口
+cargo run --example ffi_test
 ```
 
 ## Development
@@ -183,10 +183,10 @@ cargo run --example ffi_test  # 动态加载并测试所有 FFI 接口
 # Build
 cargo build --release
 
-# Test (217 tests)
+# Test
 cargo test
 
-# FFI binary validation (loads .dylib via libloading)
+# FFI binary validation
 MEMHOP_DYLIB_PATH=/tmp/memhop-download/libmemhop.dylib cargo run --example ffi_test
 
 # Full test including LLM Dream
@@ -195,36 +195,31 @@ MEMHOP_LLM_API_KEY=sk-xxx cargo test -- --include-ignored --nocapture
 
 ## API Documentation
 
-- **[API_NEW.md](API_NEW.md)** - FFI 协议文档（推荐，JSON-in JSON-out）
-- **[API_NEI.md](API_NEI.md)** - Internal implementation details
-- **[docs/](docs/)** - Additional documentation
+- **API.md** - FFI 协议文档（JSON-in JSON-out），随 Release 发布
 
 ## Version History
 
-| Version Range         | Date                    | Key Highlights                                                                                                                |
-| --------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **v0.30.x - v0.41.x** | 2026-05-19 ~ 2026-06-14 | 1. **专用记忆数据库** (.meh格式) 2. 六层认知架构 (L0-L5) 3. L2中心化检索/更新模型 4. Dream记忆整合管线 5. BM25+HNSW双通道检索 |
-| **v0.23.x - v0.25.x** | 2026-06-14 ~ 2026-06-15 | 1. SDK模式重构 2. 6层仿人脑记忆引擎 3. API优化与标准化 4. CandleEncoder向量模型集成 5. 性能优化与基准测试                     |
-| **v0.1.x - v0.22.x**  | 2026-05-19 ~ 2026-06-13 | 1. Brain架构设计与迭代 2. MCP Server集成 3. HNSW向量索引实现 4. 场景感知与记忆塑性 5. LMDB持久化层                            |
+| Version Range          | Date                    | Key Highlights                                                                                                                |
+| ---------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **v0.42.0 - v0.47.0**  | 2026-06-14 ~ 2026-06-25 | 1. **SQLite级嵌入式记忆数据库重构** 2. graph_query / delete FFI 命令 3. OpenAI-compatible LLM 配置 4. L3 检索优化与邻接缓存 5. 反向索引加速 |
+| **v0.30.x - v0.41.x**  | 2026-06-14 ~ 2026-06-14 | 1. **专用记忆数据库** (.meh格式) 2. 六层认知架构 (L0-L5) 3. L2中心化检索/更新模型 4. Dream记忆整合管线 5. BM25+HNSW双通道检索         |
+| **v0.23.0 - v0.25.x**  | 2026-06-08 ~ 2026-06-10 | 1. 架构重设计 2. usearch 替换 fast-hnsw 3. 跨平台传输层 4. 6层拆解 + 三重检索 5. L3领域图 + Dream v2                            |
+| **v0.18.x - v0.19.0**  | 2026-06-05 ~ 2026-06-07 | 1. 架构优化 + catid 字段 2. 单实例校验 3. 请求级无状态架构 4. 22个MCP接口                                                         |
+| **v0.12.x - v0.14.x**  | 2026-05-31 ~ 2026-06-04 | 1. 人脑式记忆架构 2. 知识树 + 纠缠事件 3. 无状态重构 4. 多Agent隔离 5. 4层超图记忆引擎                                               |
+| **v0.6.0 - v0.11.0**   | 2026-05-25 ~ 2026-05-29 | 1. **纯 Rust 重构** (删除Python) 2. Brain三层记忆架构 3. Plan层级记忆 4. HNSW双模式召回 5. Unified Memory Architecture           |
+| **v0.1.x - v0.5.x**   | 2026-05-19 ~ 2026-05-24 | 1. Hopfield网络核心引擎 2. Rust + pyo3 嵌入式引擎 3. BrainLoop自循环Agent 4. 双模型校准架构                                        |
 
-For detailed release notes, see [docs/changelogs/](docs/changelogs/) and [docs/plans/](docs/plans/).
+For detailed release notes, see [GitHub Releases](../../releases).
 
 ## Development Guidelines
 
-This project follows strict development guidelines to ensure code quality, performance, and security. All guidelines are documented in the `.qoder/rules/` directory:
+This project follows strict development guidelines to ensure code quality, performance, and security.
 
 ### Core Rules
 
-- **P01 - Code Quality**: Coding standards and best practices
-- **P02 - Code Modification**: Guidelines for modifying existing code
-- **P07 - Performance Optimization**: Performance optimization techniques
-- **P09 - Dependency Management**: Dependency selection and management
-
-### Quick Reference
-
-- See [.qoder/rules/README.md](.qoder/rules/README.md) for the complete index
-- All rules are prefixed with 'P' for easy identification
-- Rules are designed for MemHop's specific architecture and requirements
+- Code quality standards and best practices
+- Performance optimization techniques
+- Dependency selection and management
 
 ## Contributing
 

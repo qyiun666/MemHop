@@ -41,9 +41,15 @@ env/
 .pytest_cache/
 .ruff_cache/
 
-# Design docs (not for public repo)
+# Design docs & API docs (not for public repo)
 docs/
 deliverables/
+API.md
+API_NEI.md
+API_NEW.md
+
+# Screenshots
+*.png
 
 # Analysis docs (generated)
 ANALYSIS_SCOPE.md
