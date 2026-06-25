@@ -1,4 +1,4 @@
-# MemHop API 集成文档 v0.46.0
+# MemHop API 集成文档 v0.47.0
 
 > JSON-in JSON-out 跨语言接口协议。文件格式 .meh，六层认知架构（L0-L5）。所有交互通过 4 个 C 函数完成，所有业务接口通过 `memhop_execute` 传入 JSON 命令。
 
@@ -232,6 +232,15 @@ L2 嵌套层级支持 4 层，检索范围为 Depth 1-3，Depth 3 结果额外�
   ],
   "associated_contexts": [],
   "l3_ids": ["knowledge_001"],
+  "l3_previews": [
+    {
+      "id": "knowledge_001",
+      "title": "Rust所有权",
+      "top_nodes": ["所有权规则", "借用", "生命周期"],
+      "keywords": ["ownership", "borrowing", "lifetime"],
+      "node_count": 15
+    }
+  ],
   "archive_refs": [
     {
       "id": "archive_001",
@@ -266,16 +275,18 @@ L2 嵌套层级支持 4 层，检索范围为 Depth 1-3，Depth 3 结果额外�
       "action_type": "Execute",
       "parameters": null
     }
-  ]
+  ],
+  "instant_distill": false
 }
 ```
 
-| 字段            | 类型   | 必需 | 描述                |
-| --------------- | ------ | ---- | ------------------- |
-| `topic_id`      | string | 是   | 已激活的 L2 主题 ID |
-| `dialogue_text` | string | 是   | 当前轮对话原文      |
-| `summary`       | string | 否   | 当前轮压缩摘要      |
-| `action_chain`  | array  | 是   | 动作链              |
+| 字段              | 类型    | 必需 | 默认  | 描述                                    |
+| ----------------- | ------- | ---- | ----- | --------------------------------------- |
+| `topic_id`        | string  | 是   | -     | 已激活的 L2 主题 ID                    |
+| `dialogue_text`   | string  | 是   | -     | 当前轮对话原文                         |
+| `summary`         | string  | 否   | null  | 当前轮压缩摘要                         |
+| `action_chain`    | array   | 是   | -     | 动作链                                 |
+| `instant_distill` | boolean | 否   | false | 即时蒸馏：从对话提取关键词关联已有 L3 知识图 |
 
 **`action_type`** 枚举：`Create` `Read` `Update` `Delete` `Execute` `Query` `Custom`
 
