@@ -1,248 +1,227 @@
-# MemHop
+<p align="center">
+  <h1 align="center">MemHop</h1>
+  <p align="center">
+    <strong>Your agent remembers like a human.</strong>
+  </p>
+  <p align="center">
+    A memory database purpose-built for AI agents, implementing a six-layer cognitive architecture in a single embedded file.
+  </p>
+  <p align="center">
+    <a href="https://qyiun666.github.io/meowagent.github.io/">Website</a>
+    &middot;
+    <a href="API.md">API Reference</a>
+    &middot;
+    <a href="https://github.com/meowagent/meowagent">MeowAgent</a>
+  </p>
+</p>
 
-> Agent-oriented memory database inspired by human brain cognitive architecture
+<p align="center">
+  <img src="https://img.shields.io/crates/v/memhop" alt="crates.io">
+  <img src="https://img.shields.io/crates/l/memhop" alt="license">
+  <img src="https://img.shields.io/github/actions/workflow/status/meowagent/memhop/ci.yml?label=build" alt="build">
+  <img src="https://img.shields.io/badge/rust-1.75%2B-orange" alt="rust">
+</p>
 
-MemHop is a specialized memory database designed for AI Agents, implementing a six-layer cognitive architecture (L0-L5) with custom .meh binary file format.
+---
 
-## Features
+MemHop is not a vector database. It is a memory system modeled after how the human brain organizes knowledge — with identity, episodic recall, semantic compression, skill acquisition, archival storage, and crystallized expertise. One agent, one `.meh` file, zero infrastructure.
 
-- **Zero-copy mmap retrieval**: Memory-mapped file access for high-performance reads
-- **Hybrid search**: Triple retrieval (BM25 + vector cosine + n-gram Jaccard)
-- **Hypergraph associative memory**: Multi-hop graph diffusion for related memory retrieval
-- **Cognitive layers**: L0-L5 architecture mirroring human memory systems
-- **Automatic consolidation**: Dream pipeline for memory pruning and archival
-- **Pure Rust**: Zero external dependencies beyond minimal crates
-- **Single-process design**: One agent = one process = one .meh file
+Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent), MemHop works as an embedded organ rather than a standalone service. No server to run, no configuration to manage — just open a file and your agent has memory.
+
+```c
+/* 4 functions. JSON in, JSON out. Works from C, Python, Go, and anything with a C ABI. */
+
+void* db   = memhop_open("{\"db_path\":\"agent.meh\",\"vector_dim\":768}");
+char* res  = memhop_execute(db, "{\"command\":\"search\",\"dialogue\":\"What did we talk about?\"}");
+              memhop_free_string(res);
+              memhop_close(db);
+```
 
 ## Quick Start
 
-### FFI (C/Python/Go/...) — 推荐方式
+### FFI — Any Language
 
-MemHop 通过 4 个 `extern "C"` 函数提供 JSON-in JSON-out 跨语言接口。从 [GitHub Actions](../../actions) 下载对应平台的预编译二进制即可使用：
+The FFI exposes 4 `extern "C"` functions that dispatch 13 JSON commands. Download pre-built binaries from [Releases](../../releases).
 
-```c
-#include "memhop.h"
+```python
+# Python
+import ctypes, json
 
-// 1. 打开数据库
-void* handle = memhop_open(
-    "{\"db_path\":\"/tmp/agent.meh\",\"encoder_grpc_addr\":\"http://127.0.0.1:27110\",\"vector_dim\":768}");
+lib = ctypes.CDLL("./libmemhop.dylib")
+lib.memhop_open.restype = ctypes.c_void_p
+lib.memhop_execute.restype = ctypes.c_char_p
 
-// 2. 搜索记忆
-char* res = memhop_execute(handle,
-    "{\"command\":\"search\",\"dialogue\":\"hello\",\"context_limit\":10,\"min_score\":0.0}");
-printf("%s\n", res);
-memhop_free_string(res);
+db = lib.memhop_open(json.dumps({"db_path": "agent.meh", "vector_dim": 768}).encode())
 
-// 3. 关闭
-memhop_close(handle);
+result = lib.memhop_execute(db, json.dumps({
+    "command": "search",
+    "dialogue": "What did we discuss yesterday?",
+    "context_limit": 10
+}).encode())
+
+print(json.loads(result))
+lib.memhop_close(db)
 ```
 
-完整协议参考 API.md（11 个命令 + 4 个 C 函数），随 Release 发布。
-
-### Rust SDK
+### Rust
 
 ```rust
-use memhop::{MemHop, MemHopConfig, SearchQuery, UpdateRequest, LlmConfig};
-use std::path::PathBuf;
+use memhop::{MemHop, MemHopConfig, SearchQuery, LlmConfig};
 
-// Open or create database
-let config = MemHopConfig::new(PathBuf::from("agent_memory.meh"), 768);
-let mut db = MemHop::open(config)?;
+let mut db = MemHop::open(MemHopConfig::new("agent.meh".into(), 768))?;
 
-// Search memory
-let query = SearchQuery {
-    dialogue: "我想学习Rust编程".to_string(),
-    context_id: None,
-    l3_id: None,
+let results = db.search_memory(SearchQuery {
+    dialogue: "What did we discuss yesterday?".into(),
     context_limit: 10,
-    llm_enhance: None,
-    auto_create: 0,
-    min_score: 0.0,
-    context_history: None,
-};
-let results = db.search_memory(query)?;
-
-// Update memory (topic must be activated first)
-let request = UpdateRequest {
-    topic_id: results.contexts[0].id.clone(),
-    dialogue_text: "用户学习Rust所有权系统".to_string(),
-    summary: Some("Rust所有权学习记录".to_string()),
-    action_chain: vec![],
-};
-let result = db.update_memory(request)?;
-
-// Run Dream consolidation
-let llm = LlmConfig {
-    api_url: "https://api.example.com/v1/chat/completions".to_string(),
-    api_key: "sk-...".to_string(),
-    model: "your-model".to_string(),
     ..Default::default()
-};
-let report = db.dream(llm)?;
+})?;
+
+for ctx in &results.contexts {
+    println!("[{:.2}] {}", ctx.score, ctx.title);
+}
+
+// Run Dream consolidation (requires LLM)
+let report = db.dream(LlmConfig {
+    api_url: "https://api.openai.com/v1/chat/completions".into(),
+    api_key: std::env::var("OPENAI_API_KEY")?,
+    model: "gpt-4o-mini".into(),
+    ..Default::default()
+})?;
 
 db.close()?;
 ```
 
 ## Architecture
 
-### Cognitive Layers (L0-L5)
+MemHop models memory as six cognitive layers, each corresponding to a distinct brain function. Memories flow between layers during the Dream consolidation cycle, just as the human brain consolidates experiences during sleep.
 
-- **L0 (Profile)**: Agent identity and preferences
-- **L1 (Episodic)**: Short-term episodic memories
-- **L2 (Semantic)**: Compressed topic structures (3-level nesting)
-- **L3 (Procedural)**: Skill and pattern memories
-- **L4 (Archive)**: Long-term archival storage
-- **L5 (Crystal)**: Crystallized programmatic knowledge
-
-### File Format (.meh)
-
-- 4KB page-aligned binary format
-- A/B dual header for crash recovery
-- Journal transaction log for atomicity
-- **Hybrid search**: Triple retrieval (BM25 + Vector + n-gram)
-- B-tree indexing for O(log n) lookups
-- SIMD-accelerated vector operations (AVX2)
-
-## Core API
-
-### Database Operations
-
-| Method                   | Description                             |
-| ------------------------ | --------------------------------------- |
-| `MemHop::open(config)`   | Open or create database                 |
-| `search_memory(query)`   | Search memory with L2-centric retrieval |
-| `update_memory(request)` | Create/update multi-layer memory        |
-| `dream(llm)`             | Run Dream consolidation pipeline        |
-| `batch_store(batch)`     | Batch store multiple documents          |
-| `close()`                | Close database and sync to disk         |
-
-### L0-L5 Query Interfaces
-
-| Method                                    | Description                     |
-| ----------------------------------------- | ------------------------------- |
-| `get_profile()`                           | Get Agent profile               |
-| `get_engram(id)`                          | Get single L1 engram by ID      |
-| `list_engrams(query)`                     | List L1 engrams with pagination |
-| `get_topic(id)`                           | Get L2 topic detail             |
-| `list_topics(query)`                      | List L2 topics                  |
-| `get_knowledge(id)`                       | Get L3 knowledge detail         |
-| `list_knowledge(query)`                   | List L3 knowledge               |
-| `list_archives_by_topic(topic_id, query)` | List L4 archives by topic       |
-| `list_archives_by_nodes(node_ids, query)` | List L4 archives by node IDs    |
-| `list_all_archives(query)`                | List all L4 archives            |
-| `list_crystals(query)`                    | List L5 crystallized skills     |
-
-### Update Interfaces
-
-| Method                                    | Description                              |
-| ----------------------------------------- | ---------------------------------------- |
-| `update_profile(request)`                 | Update Agent profile                     |
-| `update_topic_title(id, new_title)`       | Update L2 topic title                    |
-| `update_knowledge_title(id, new_title)`   | Update L3 knowledge title                |
-| `update_crystal_title(id, new_title)`     | Update L5 crystal title                  |
-| `merge_topics(primary_id, secondary_ids)` | Merge multiple L2 topics                 |
-| `import_memory(request)`                  | Import memory to Profile/Topic/Knowledge |
-
-## Performance
-
-- Store throughput: >1000 ops/sec (target)
-- Recall latency: p95 < 10ms (target)
-- Vector similarity: AVX2 4x faster than scalar
-
-## Version Roadmap
-
-- **v0.30.0 (Foundation)**: .meh format + basic store/recall ✅
-- **v0.31.0 (Awakening)**: Activation + Cascade
-- **v0.32.0 (Self-Aware)**: L2 session activation + Organize
-- **v0.33.0 (Full Mind)**: Batch store + Emotion + Dream pipeline
-- **v0.34.0 (Launch Ready)**: Migration + integration tests + benchmarks
-- **v0.47.0 (Current)**: L3 retrieval optimization + adjacency cache + reverse index
-
-## Download
-
-预编译二进制从 [GitHub Releases](../../releases) 下载，或从 [GitHub Actions](../../actions) 的 `build` workflow 下载：
-
-| 平台                                    | 产物                        | CI Job             |
-| --------------------------------------- | --------------------------- | ------------------ |
-| macOS (Intel + Apple Silicon Universal) | `libmemhop-universal.dylib` | `create-universal` |
-| macOS Apple Silicon                     | `libmemhop.dylib`           | `build-macos-arm`  |
-| macOS Intel                             | `libmemhop.dylib`           | `build-macos-x86`  |
-| Linux x86_64                            | `libmemhop.so`              | `build-linux`      |
-| Windows x86_64                          | `memhop.dll`                | `build-windows`    |
-
-验证下载的二进制：
-
-```bash
-cp libmemhop.dylib /tmp/memhop-download/
-cargo run --example ffi_test
 ```
+Layer   Name             Human Parallel        Mechanism
+─────   ──────────────   ───────────────────   ─────────────────────────────────────────────
+ L5     Crystal          Muscle memory         Crystallized procedures & reusable skills
+ L4     Archive          Long-term memory      Raw dialogue logs & historical records
+ L3     Knowledge        Semantic memory       Multi-source hypergraph knowledge base
+ L2     Context          Working memory        Compressed topic structures (4 depth levels)
+ L1     Engram           Short-term memory     Episodic nodes, associations & emotional traces
+ L0     Profile          Identity              Agent personality, preferences & language habits
+```
+
+Memories enter at L1/L2 as raw conversation, then flow downward during Dream cycles: L2 contexts compress and merge, L3 extracts structured knowledge, L4 archives the originals, and L5 distills reusable skills. The result is a memory system that grows more organized and insightful over time — without manual intervention.
+
+### Knowledge Graph (L3)
+
+L3 stores structured knowledge as **multiple independent hypergraphs** — not flat embeddings, but typed nodes connected by labeled, weighted edges. Knowledge can be distilled from conversations (Dream pipeline), imported from documents and file paths, or created programmatically.
+
+Each hypergraph is a self-contained knowledge domain. When you search, MemHop returns **L3 previews** — lightweight summaries of relevant knowledge graphs (title, key nodes, keywords) — so the agent can decide which graphs to explore in depth without loading full structures.
+
+```
+search("how does photosynthesis work?")
+  │
+  ├─ L2 Contexts ────── compressed conversation matches
+  ├─ L3 Previews ────── lightweight knowledge summaries
+  │    ├─ "Biology > Plant Science" (12 nodes, keywords: chlorophyll, Calvin cycle...)
+  │    └─ "Chemistry > Organic Reactions" (8 nodes, keywords: carbon fixation...)
+  └─ Archives ───────── raw dialogue references
+```
+
+## Dream Pipeline
+
+The Dream cycle is MemHop's most distinctive feature — an automatic memory consolidation process inspired by how the human brain processes experiences during sleep. Each cycle runs six stages in sequence:
+
+```
+Dream Cycle
+    │
+    ├─ 1. L3 Distillation        Extract structured knowledge from conversations via LLM
+    ├─ 2. L2 Compression         Demote old contexts through 4 depth levels, merge topics
+    ├─ 3. L1 Decay & Prune       Time-decay episodic importance, prune weak associations
+    ├─ 4. L0 Profile Rebuild     Regenerate agent profile from accumulated knowledge
+    ├─ 5. Language Habit Learn   Discover user's vocabulary, style traits, emotion patterns
+    └─ 6. L5 Crystallization     Extract reusable procedures from action chain patterns
+```
+
+Emotional salience modulates memory persistence: high-arousal, high-valence memories decay slower than neutral ones — the same mechanism that makes emotional experiences more memorable in humans.
+
+Dream requires an OpenAI-compatible LLM endpoint for the distillation stages. Without an LLM, MemHop falls back to heuristic consolidation and remains fully functional for search and update operations.
+
+## Search
+
+MemHop uses **triple-retrieval fusion** to find relevant memories from multiple angles:
+
+| Channel | Weight | Method |
+|---------|--------|--------|
+| BM25 | 0.50 | Keyword matching via inverted index with CJK tokenization |
+| Vector | 0.35 | Semantic similarity with f16 half-precision SIMD (AVX2 / NEON) |
+| Entity | 0.15 | Fuzzy entity matching via BK-Tree with n-gram Jaccard scoring |
+
+Search routes through four paths depending on the query parameters — `auto_create` for new conversation tracking, `context_id` for targeted recall within a topic, `l3_id` for knowledge graph exploration, and the default full triple-retrieval for general memory search. This design ensures searches are fast and precise without scanning the entire database in normal workflows.
+
+## .meh File Format
+
+MemHop uses a custom binary format purpose-built for memory storage:
+
+```
+┌─────────────────────────────────┐
+│  Header A  (4 KB)               │  ← Active header (CRC32 checksummed)
+│  Header B  (4 KB)               │  ← Backup header (crash recovery)
+├─────────────────────────────────┤
+│  Page 0    (4 KB)               │  ← B-tree root, index pages
+│  Page 1    (4 KB)               │
+│  ...                            │
+│  Page N    (4 KB)               │  ← Data pages (context, engram, archive...)
+├─────────────────────────────────┤
+│  Free List                      │  ← Available page tracking
+│  Journal (WAL)                  │  ← Write-ahead transaction log
+└─────────────────────────────────┘
+```
+
+A/B dual headers with CRC32 checksums and a WAL journal provide crash safety. The database is memory-mapped for zero-copy reads and grows automatically when pages are exhausted (500 pages / 2 MB per extension). All vector data uses f16 half-precision floats for 2x memory efficiency.
+
+## Platform Support
+
+| Platform | Binary | CI |
+|----------|--------|----|
+| macOS Universal (Intel + Apple Silicon) | `libmemhop-universal.dylib` | `create-universal` |
+| macOS Apple Silicon | `libmemhop.dylib` | `build-macos-arm` |
+| macOS Intel | `libmemhop.dylib` | `build-macos-x86` |
+| Linux x86_64 | `libmemhop.so` | `build-linux` |
+| Windows x86_64 | `memhop.dll` | `build-windows` |
 
 ## Development
 
 ```bash
-# Build
-cargo build --release
+cargo build --release     # Build library + cdylib
+cargo test                # Run test suite
 
-# Test
-cargo test
-
-# FFI binary validation
-MEMHOP_DYLIB_PATH=/tmp/memhop-download/libmemhop.dylib cargo run --example ffi_test
-
-# Full test including LLM Dream
+# Full test including LLM Dream pipeline
 MEMHOP_LLM_API_KEY=sk-xxx cargo test -- --include-ignored --nocapture
 ```
 
-## API Documentation
+## Changelog
 
-- **API.md** - FFI 协议文档（JSON-in JSON-out），随 Release 发布
-
-## Version History
-
-| Version Range          | Date                    | Key Highlights                                                                                                                |
-| ---------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **v0.42.0 - v0.47.0**  | 2026-06-14 ~ 2026-06-25 | 1. **SQLite级嵌入式记忆数据库重构** 2. graph_query / delete FFI 命令 3. OpenAI-compatible LLM 配置 4. L3 检索优化与邻接缓存 5. 反向索引加速 |
-| **v0.30.x - v0.41.x**  | 2026-06-14 ~ 2026-06-14 | 1. **专用记忆数据库** (.meh格式) 2. 六层认知架构 (L0-L5) 3. L2中心化检索/更新模型 4. Dream记忆整合管线 5. BM25+HNSW双通道检索         |
-| **v0.23.0 - v0.25.x**  | 2026-06-08 ~ 2026-06-10 | 1. 架构重设计 2. usearch 替换 fast-hnsw 3. 跨平台传输层 4. 6层拆解 + 三重检索 5. L3领域图 + Dream v2                            |
-| **v0.18.x - v0.19.0**  | 2026-06-05 ~ 2026-06-07 | 1. 架构优化 + catid 字段 2. 单实例校验 3. 请求级无状态架构 4. 22个MCP接口                                                         |
-| **v0.12.x - v0.14.x**  | 2026-05-31 ~ 2026-06-04 | 1. 人脑式记忆架构 2. 知识树 + 纠缠事件 3. 无状态重构 4. 多Agent隔离 5. 4层超图记忆引擎                                               |
-| **v0.6.0 - v0.11.0**   | 2026-05-25 ~ 2026-05-29 | 1. **纯 Rust 重构** (删除Python) 2. Brain三层记忆架构 3. Plan层级记忆 4. HNSW双模式召回 5. Unified Memory Architecture           |
-| **v0.1.x - v0.5.x**   | 2026-05-19 ~ 2026-05-24 | 1. Hopfield网络核心引擎 2. Rust + pyo3 嵌入式引擎 3. BrainLoop自循环Agent 4. 双模型校准架构                                        |
+| Version Range | Date | Highlights |
+|---|---|---|
+| **v0.42.0 – v0.47.0** | 2026-06-14 ~ 2026-06-25 | SQLite-grade embedded DB refactor; `graph_query` / `delete` FFI commands; OpenAI-compatible LLM config; L3 retrieval optimization + adjacency cache + reverse index |
+| **v0.30.0 – v0.41.0** | 2026-06-14 | Dedicated memory DB with `.meh` format; six-layer cognitive architecture (L0–L5); L2-centric search/update model; Dream consolidation pipeline; BM25 + HNSW dual-channel retrieval |
+| **v0.23.0 – v0.25.x** | 2026-06-08 ~ 2026-06-10 | Architecture redesign; usearch replacing fast-hnsw; cross-platform transport layer; 6-layer decomposition + triple retrieval; L3 domain graph + Dream v2 |
+| **v0.18.0 – v0.19.0** | 2026-06-05 ~ 2026-06-07 | Architecture optimization + `catid` field; single-instance validation; stateless request-level architecture; 22 MCP interfaces |
+| **v0.12.0 – v0.14.x** | 2026-05-31 ~ 2026-06-04 | Brain-inspired memory architecture; knowledge tree + entangled events; stateless refactor; multi-agent isolation; 4-layer hypergraph memory engine |
+| **v0.6.0 – v0.11.0** | 2026-05-25 ~ 2026-05-29 | Pure Rust rewrite (Python removed); Brain three-layer memory architecture; Plan-level memory; HNSW dual-mode recall; Unified Memory Architecture |
+| **v0.1.0 – v0.5.x** | 2026-05-19 ~ 2026-05-24 | Hopfield network core engine; Rust + pyo3 embedded engine; BrainLoop self-cycling agent; dual-model calibration architecture |
 
 For detailed release notes, see [GitHub Releases](../../releases).
 
-## Development Guidelines
-
-This project follows strict development guidelines to ensure code quality, performance, and security.
-
-### Core Rules
-
-- Code quality standards and best practices
-- Performance optimization techniques
-- Dependency selection and management
-
 ## Contributing
 
-We welcome contributions! Please follow these steps:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-For bug reports and feature requests, please open an issue on GitHub.
+Have a bug report or feature idea? [Open an issue](../../issues).
 
 ## Contact
 
-- **Author**: qyiun666
-- **Email**: qyiun666@163.com
-- **GitHub**: https://github.com/qyiun666/memhop
+| | |
+|---|---|
+| Email | qyiun666@163.com |
+| MeowAgent | [github.com/meowagent/meowagent](https://github.com/meowagent/meowagent) |
+| Website | [qyiun666.github.io/meowagent.github.io](https://qyiun666.github.io/meowagent.github.io/) |
 
 ## License
 
-MIT OR Apache-2.0
-
----
-
-**Note**: This is an active project under development. APIs may change between versions. Please refer to the version-specific documentation for the most accurate information.
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.
