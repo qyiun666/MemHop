@@ -1501,6 +1501,9 @@ impl MemHop {
             crate::l3::store::remove_l3_ref_from_context(&mut self.mmap, page_id, graph_id)?;
         }
 
+        // Invalidate adjacency cache for this graph
+        self.adjacency_cache.invalidate(graph_id);
+
         Ok(())
     }
 
@@ -1633,13 +1636,16 @@ impl MemHop {
         path: &std::path::Path,
     ) -> Result<ImportResult> {
         use crate::query::import::build_l3_hypergraph_from_path as impl_fn;
-        impl_fn(
+        let result = impl_fn(
             &mut self.mmap,
             &mut self.header,
             &mut self.btree,
             &mut self.sparse_index,
             path,
-        )
+        )?;
+        // Invalidate all adjacency cache since import may modify any graph
+        self.adjacency_cache.invalidate_all();
+        Ok(result)
     }
 
     /// Activate a Topic for session management
@@ -1719,6 +1725,8 @@ impl MemHop {
             session_topics,
         )?;
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
+        // Invalidate all adjacency cache since L3 distillation may modify any graph
+        self.adjacency_cache.invalidate_all();
         Ok(report)
     }
 

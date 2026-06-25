@@ -273,7 +273,7 @@ impl HypergraphNode {
 // ============================================================================
 
 /// Edge kind for L3 hypergraph
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum GraphEdgeKind {
     Related = 0,

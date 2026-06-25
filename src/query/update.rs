@@ -128,12 +128,13 @@ pub fn update_memory(
     if request.instant_distill {
         let keywords = extract_keywords(&request.dialogue_text, 10);
         let mut graphs_to_link: Vec<u64> = Vec::new();
+        let data: &[u8] = &mmap[..];
         for kw in &keywords {
-            let hits = sparse_index.entity_search(kw);
-            for (l3_node_hash, _score) in &hits {
-                // Find graph_id from l3_node_hash
-                let data = &mmap[..];
-                if let Some(slot_data) = btree.search(*l3_node_hash).and_then(|pr| crate::query::slot_io::get_slot_data(data, pr)) {
+            // Use entity_search_nodes to get actual L3 node hashes
+            let hits = sparse_index.entity_search_nodes(kw);
+            for (node_hash, _l2_ids) in &hits {
+                // Find graph_id from node_hash
+                if let Some(slot_data) = btree.search(*node_hash).and_then(|pr| crate::query::slot_io::get_slot_data(data, pr)) {
                     if let Ok(node) = crate::slot::hypergraph::HypergraphNode::deserialize(slot_data) {
                         if !ctx.l3_refs.contains(&node.graph_id) {
                             graphs_to_link.push(node.graph_id);

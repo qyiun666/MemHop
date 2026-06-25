@@ -649,22 +649,13 @@ pub fn read_node_neighbors(
 /// * `start_node`- id_hash of the node where traversal begins.
 /// * `max_depth` - Maximum number of edge traversals (0 means no hops).
 /// * `edge_kinds`- Optional whitelist of edge kinds.
-pub fn bfs_traversal(
+/// Build adjacency index from BTree for a specific graph and edge_kinds.
+fn build_adjacency_index(
     data: &[u8],
     btree: &BTreeIndex,
     graph_id: u64,
-    start_node: u64,
-    max_depth: usize,
     edge_kinds: Option<&[GraphEdgeKind]>,
-) -> Result<Vec<TraversalHop>, MemHopError> {
-    let mut hops = Vec::new();
-    if max_depth == 0 {
-        return Ok(hops);
-    }
-
-    // 1. Pre-build adjacency index: scan btree once.
-    // For each hyperedge in the target graph (and matching edge_kinds),
-    // register the edge under every node it connects.
+) -> HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>> {
     let mut adjacency: HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>> = HashMap::new();
     for (&_eid, &page_ref) in btree.iter() {
         if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
@@ -690,18 +681,23 @@ pub fn bfs_traversal(
             }
         }
     }
+    adjacency
+}
 
-    // Track the BFS discovery depth of each node (start_node is depth 0).
+/// Execute BFS traversal on a pre-built adjacency index.
+fn bfs_with_adjacency(
+    adjacency: &HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>>,
+    start_node: u64,
+    max_depth: usize,
+) -> Vec<TraversalHop> {
+    let mut hops = Vec::new();
     let mut node_depth: HashMap<u64, usize> = HashMap::new();
-    // Track which edges have already been traversed (by id_hash) so each
-    // edge is processed at most once across the entire traversal.
     let mut visited_edges: HashSet<u64> = HashSet::new();
     let mut queue: VecDeque<(u64, usize)> = VecDeque::new();
 
     node_depth.insert(start_node, 0);
     queue.push_back((start_node, 0));
 
-    // 2. BFS using the pre-built adjacency index.
     while let Some((current_node, current_depth)) = queue.pop_front() {
         if current_depth >= max_depth {
             continue;
@@ -709,15 +705,10 @@ pub fn bfs_traversal(
 
         if let Some(edges) = adjacency.get(&current_node) {
             for (edge, other_ids) in edges {
-                // Skip edges that have already been traversed from any endpoint
                 if !visited_edges.insert(edge.id_hash) {
                     continue;
                 }
 
-                // Emit a hop to every other endpoint of the hyperedge,
-                // but only if the target was discovered at a depth >= the
-                // hop depth (current_depth + 1).  This prevents back-edges
-                // to ancestors (shallower nodes) from producing hops.
                 let hop_depth = current_depth + 1;
                 for &to_node in other_ids {
                     if to_node == current_node {
@@ -725,9 +716,7 @@ pub fn bfs_traversal(
                     }
 
                     match node_depth.get(&to_node) {
-                        Some(&d) if d < hop_depth => {
-                            // Back-edge to an ancestor — skip
-                        }
+                        Some(&d) if d < hop_depth => {}
                         _ => {
                             hops.push(TraversalHop {
                                 depth: hop_depth,
@@ -738,7 +727,6 @@ pub fn bfs_traversal(
                         }
                     }
 
-                    // Enqueue only newly-discovered nodes
                     if let Entry::Vacant(e) = node_depth.entry(to_node) {
                         e.insert(hop_depth);
                         queue.push_back((to_node, hop_depth));
@@ -748,7 +736,22 @@ pub fn bfs_traversal(
         }
     }
 
-    Ok(hops)
+    hops
+}
+
+pub fn bfs_traversal(
+    data: &[u8],
+    btree: &BTreeIndex,
+    graph_id: u64,
+    start_node: u64,
+    max_depth: usize,
+    edge_kinds: Option<&[GraphEdgeKind]>,
+) -> Result<Vec<TraversalHop>, MemHopError> {
+    if max_depth == 0 {
+        return Ok(Vec::new());
+    }
+    let adjacency = build_adjacency_index(data, btree, graph_id, edge_kinds);
+    Ok(bfs_with_adjacency(&adjacency, start_node, max_depth))
 }
 
 /// BFS traversal with adjacency cache support.
@@ -764,101 +767,23 @@ pub fn bfs_traversal_cached(
     edge_kinds: Option<&[GraphEdgeKind]>,
     cache: &mut crate::l3::AdjacencyCache,
 ) -> Result<Vec<TraversalHop>, MemHopError> {
-    let mut hops = Vec::new();
     if max_depth == 0 {
-        return Ok(hops);
+        return Ok(Vec::new());
     }
 
     // Try to get adjacency from cache, or build it
-    let adjacency = if let Some(cached) = cache.get(graph_id) {
+    let adjacency = if let Some(cached) = cache.get(graph_id, edge_kinds) {
         cached.clone()
     } else {
-        // Build adjacency index: scan btree once
-        let mut adjacency: HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>> = HashMap::new();
-        for (&_eid, &page_ref) in btree.iter() {
-            if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
-                continue;
-            }
-            if let Some(slot_data) = get_slot_data(data, page_ref) {
-                if let Ok(edge) = HypergraphEdge::deserialize(slot_data) {
-                    if edge.graph_id != graph_id {
-                        continue;
-                    }
-                    if let Some(kinds) = edge_kinds {
-                        if !kinds.contains(&edge.kind) {
-                            continue;
-                        }
-                    }
-                    let other_ids: Vec<u64> = edge.node_ids.to_vec();
-                    for &node_id in &edge.node_ids {
-                        adjacency
-                            .entry(node_id)
-                            .or_default()
-                            .push((edge.clone(), other_ids.clone()));
-                    }
-                }
-            }
-        }
-        // Store in cache for future use
-        cache.insert(graph_id, adjacency.clone());
+        let adjacency = build_adjacency_index(data, btree, graph_id, edge_kinds);
+        cache.insert(graph_id, edge_kinds, adjacency.clone());
         adjacency
     };
 
-    // Track the BFS discovery depth of each node (start_node is depth 0).
-    let mut node_depth: HashMap<u64, usize> = HashMap::new();
-    // Track which edges have already been traversed (by id_hash) so each
-    // edge is processed at most once across the entire traversal.
-    let mut visited_edges: HashSet<u64> = HashSet::new();
-    let mut queue: VecDeque<(u64, usize)> = VecDeque::new();
-
-    node_depth.insert(start_node, 0);
-    queue.push_back((start_node, 0));
-
-    // BFS using the adjacency index (cached or freshly built).
-    while let Some((current_node, current_depth)) = queue.pop_front() {
-        if current_depth >= max_depth {
-            continue;
-        }
-
-        if let Some(edges) = adjacency.get(&current_node) {
-            for (edge, other_ids) in edges {
-                // Skip edges that have already been traversed from any endpoint
-                if !visited_edges.insert(edge.id_hash) {
-                    continue;
-                }
-
-                let hop_depth = current_depth + 1;
-                for &to_node in other_ids {
-                    if to_node == current_node {
-                        continue;
-                    }
-
-                    match node_depth.get(&to_node) {
-                        Some(&d) if d < hop_depth => {
-                            // Back-edge to an ancestor — skip
-                        }
-                        _ => {
-                            hops.push(TraversalHop {
-                                depth: hop_depth,
-                                from_node: current_node,
-                                edge: edge.clone(),
-                                to_node,
-                            });
-                        }
-                    }
-
-                    // Enqueue only newly-discovered nodes
-                    if let Entry::Vacant(e) = node_depth.entry(to_node) {
-                        e.insert(hop_depth);
-                        queue.push_back((to_node, hop_depth));
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(hops)
+    Ok(bfs_with_adjacency(&adjacency, start_node, max_depth))
 }
+
+
 
 /// Extract a `Subgraph` reachable from `start_node` within `max_depth` hops.
 ///

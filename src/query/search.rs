@@ -707,19 +707,8 @@ fn get_l1_associated_depth1(
 }
 
 // ============================================================================
-// Collect L3 IDs
+// Collect L3 previews
 // ============================================================================
-
-/// Collect unique L3 hypergraph IDs from matched contexts
-fn collect_l3_ids(contexts: &[ContextSlot]) -> Vec<String> {
-    let mut ids = HashSet::new();
-    for ctx in contexts {
-        for &l3_hash in &ctx.l3_refs {
-            ids.insert(l3_hash);
-        }
-    }
-    ids.into_iter().map(format_hash).collect()
-}
 
 /// Collect L3 previews from matched contexts (single BTree traversal)
 fn collect_l3_previews(

@@ -442,19 +442,24 @@ impl EntityIndex {
 
     /// Build the entity dictionary from L3 hypergraph nodes and L2 context
     /// associations, then add L0 profile lexicon words.
-    pub fn build_from_l3(&mut self, data: &[u8], btree: &BTreeIndex) -> Result<(), MemHopError> {
+    ///
+    /// Returns the collected L3 nodes for BM25 indexing (to avoid duplicate BTree scans).
+    pub fn build_from_l3(&mut self, data: &[u8], btree: &BTreeIndex) -> Result<Vec<(u64, String, Vec<String>)>, MemHopError> {
         // Collect L3 nodes grouped by graph.
         let mut nodes_by_graph: HashMap<u64, Vec<(u64, String, Vec<String>)>> = HashMap::new();
+        let mut all_nodes: Vec<(u64, String, Vec<String>)> = Vec::new();
         for (&_id_hash, &page_ref) in btree.iter() {
             if page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
                 continue;
             }
             if let Some(slot_data) = get_slot_data(data, page_ref) {
                 if let Ok(node) = HypergraphNode::deserialize(slot_data) {
+                    let node_info = (node.id_hash, node.title.clone(), node.keywords.clone());
                     nodes_by_graph
                         .entry(node.graph_id)
                         .or_default()
-                        .push((node.id_hash, node.title, node.keywords));
+                        .push(node_info.clone());
+                    all_nodes.push(node_info);
                 }
             }
         }
@@ -496,7 +501,7 @@ impl EntityIndex {
             }
         }
 
-        Ok(())
+        Ok(all_nodes)
     }
 
     /// Find L2 context ids associated with a given L3 node hash.
@@ -711,23 +716,17 @@ impl SparseIndex {
         data: &[u8],
         btree: &BTreeIndex,
     ) -> Result<(), MemHopError> {
-        self.entity_index.build_from_l3(data, btree)?;
+        // Build entity index and get collected L3 nodes
+        let l3_nodes = self.entity_index.build_from_l3(data, btree)?;
 
-        // Add L3 node virtual documents to BM25 index
-        for (&_id_hash, &page_ref) in btree.iter() {
-            if page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
-                continue;
-            }
-            if let Some(slot_data) = get_slot_data(data, page_ref) {
-                if let Ok(node) = HypergraphNode::deserialize(slot_data) {
-                    let doc_terms: Vec<String> = std::iter::once(node.title.clone())
-                        .chain(node.keywords.clone())
-                        .flat_map(|s| SparseIndex::tokenize(&s))
-                        .collect();
-                    let doc_len = doc_terms.len() as u32;
-                    self.add_document(node.id_hash, doc_terms, doc_len);
-                }
-            }
+        // Add L3 node virtual documents to BM25 index (using collected nodes, no second scan)
+        for (node_hash, title, keywords) in l3_nodes {
+            let doc_terms: Vec<String> = std::iter::once(title)
+                .chain(keywords)
+                .flat_map(|s| SparseIndex::tokenize(&s))
+                .collect();
+            let doc_len = doc_terms.len() as u32;
+            self.add_document(node_hash, doc_terms, doc_len);
         }
 
         Ok(())
@@ -749,6 +748,23 @@ impl SparseIndex {
         let mut results: Vec<(u64, f32)> = scores.into_iter().collect();
         results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         results
+    }
+
+    /// Search for L3 entity nodes using fuzzy matching.
+    ///
+    /// Returns `(node_hash, l2_ids)` pairs for each matched L3 entity node.
+    /// Unlike `entity_search`, this returns the actual L3 node hashes.
+    pub fn entity_search_nodes(&self, query: &str) -> Vec<(u64, Vec<u64>)> {
+        let words = crate::index::sparse::tokenize_words(query);
+        let mut seen: HashMap<u64, Vec<u64>> = HashMap::new();
+
+        for word in &words {
+            for (_matched_word, _dist, node_hash, l2_ids) in self.entity_index.fuzzy_match(word, 2) {
+                seen.entry(node_hash).or_insert(l2_ids);
+            }
+        }
+
+        seen.into_iter().collect()
     }
 
     /// Check whether the entity index has been populated.
