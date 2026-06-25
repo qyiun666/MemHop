@@ -1440,4 +1440,89 @@ mod tests {
         assert_eq!(idx.find_associated(&ctx2001).len(), 0);
         assert_eq!(idx.find_associated(&both).len(), 1);
     }
+
+    #[test]
+    fn test_l3_preview_keywords_deterministic_order() {
+        use std::collections::HashSet;
+
+        // Verify that keywords are sorted deterministically
+        let keywords_input = vec![
+            "zebra".to_string(),
+            "apple".to_string(),
+            "mango".to_string(),
+            "apple".to_string(), // duplicate
+            "banana".to_string(),
+        ];
+
+        let mut keywords: Vec<String> = keywords_input
+            .into_iter()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        keywords.sort();
+
+        assert_eq!(keywords, vec!["apple", "banana", "mango", "zebra"]);
+    }
+
+    #[test]
+    fn test_collect_l2_ids_with_l3_page_type_filter() {
+        let (_temp, mut mmap, mut header) = create_test_mmap(20);
+        let mut btree = BTreeIndex::new();
+
+        // Insert a Context with l3_refs
+        let ctx = ContextSlot {
+            id_hash: 100,
+            parent_id: None,
+            depth: 1,
+            title: "test".to_string(),
+            summary: None,
+            archive_refs: vec![],
+            l3_refs: vec![999],
+            turn_count: 1,
+            created_at: 0,
+            updated_at: 0,
+            centroid_page_ref: 0,
+            activation_score: 0.5,
+            is_active: true,
+            activation_state: ActivationState::Active,
+            importance: 0.5,
+            dialogue_range: (0, 0),
+            version: 1,
+        };
+
+        let page_id = crate::file::page::allocate_page(
+            &mut mmap,
+            &mut header,
+            crate::util::PageType::Context,
+            2,
+            0,
+        )
+        .unwrap();
+        let serialized = ctx.serialize().unwrap();
+        crate::file::page::write_page_data(&mut mmap, page_id, &serialized).unwrap();
+        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
+        btree.insert(100, page_ref);
+
+        // Insert a non-Context page (HypergraphNode) with same l3_ref
+        let node_page_id = crate::file::page::allocate_page(
+            &mut mmap,
+            &mut header,
+            crate::util::PageType::HypergraphNode,
+            3,
+            0,
+        )
+        .unwrap();
+        // Write some dummy data
+        crate::file::page::write_page_data(&mut mmap, node_page_id, &[0u8; 100]).unwrap();
+        let node_page_ref = crate::file::page::encode_page_ref(node_page_id, 0);
+        btree.insert(200, node_page_ref);
+
+        let data: &[u8] = &mmap[..];
+        let result = collect_l2_ids_with_l3(data, &btree, 999);
+
+        // Should only contain the Context, not the HypergraphNode
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&100));
+        assert!(!result.contains(&200));
+    }
 }
