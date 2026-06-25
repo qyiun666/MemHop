@@ -515,6 +515,21 @@ impl EntityIndex {
         Ok(all_nodes)
     }
 
+    /// Rebuild the node_to_l2 reverse index from the entities HashMap.
+    /// This should be called after deserializing from disk, since node_to_l2
+    /// is marked with #[serde(skip)] and won't be restored automatically.
+    pub fn rebuild_node_to_l2(&mut self) {
+        self.node_to_l2.clear();
+        for (_word, (node_hash, l2_ids)) in &self.entities {
+            let entry = self.node_to_l2.entry(*node_hash).or_default();
+            for l2_id in l2_ids {
+                if !entry.contains(l2_id) {
+                    entry.push(*l2_id);
+                }
+            }
+        }
+    }
+
     /// Find L2 context ids associated with a given L3 node hash.
     /// This is used to resolve BM25 hits on L3 virtual documents back to L2 contexts.
     /// Uses reverse index for O(1) lookup.
@@ -951,13 +966,15 @@ impl SparseIndex {
             }
         }
 
-        let entity_index = if page_data.entity_chain.is_empty() {
+        let mut entity_index = if page_data.entity_chain.is_empty() {
             EntityIndex::new()
         } else {
             let bytes = unwrap_bucket_bytes(&page_data.entity_chain)?;
             bincode::deserialize(&bytes)
                 .map_err(|e| format!("Entity index deserialization failed: {}", e))?
         };
+        // Rebuild the reverse index after deserialization (it's marked #[serde(skip)])
+        entity_index.rebuild_node_to_l2();
 
         Ok(Self {
             k1: page_data.k1,
