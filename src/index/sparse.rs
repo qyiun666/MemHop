@@ -354,6 +354,9 @@ pub struct EntityIndex {
     entities: HashMap<String, (u64, Vec<u64>)>,
     /// BK-Tree for fuzzy matching
     bk_tree: BkTree,
+    /// Reverse index: l3_node_hash → deduplicated l2_id_hashes (not serialized, rebuilt)
+    #[serde(skip)]
+    node_to_l2: HashMap<u64, Vec<u64>>,
 }
 
 impl EntityIndex {
@@ -361,6 +364,7 @@ impl EntityIndex {
         Self {
             entities: HashMap::new(),
             bk_tree: BkTree::new(),
+            node_to_l2: HashMap::new(),
         }
     }
 
@@ -371,6 +375,13 @@ impl EntityIndex {
     /// Add a single entity with its L3 node hash and associated L2 contexts.
     pub fn add_entity(&mut self, name: &str, node_hash: u64, l2_ids: Vec<u64>) {
         let key = name.to_lowercase();
+        // Update reverse index
+        let entry = self.node_to_l2.entry(node_hash).or_default();
+        for l2_id in &l2_ids {
+            if !entry.contains(l2_id) {
+                entry.push(*l2_id);
+            }
+        }
         self.entities.insert(key.clone(), (node_hash, l2_ids));
         self.bk_tree.insert(key);
     }
@@ -506,12 +517,9 @@ impl EntityIndex {
 
     /// Find L2 context ids associated with a given L3 node hash.
     /// This is used to resolve BM25 hits on L3 virtual documents back to L2 contexts.
+    /// Uses reverse index for O(1) lookup.
     pub fn l2_ids_for_node(&self, node_hash: u64) -> Vec<u64> {
-        self.entities
-            .values()
-            .filter(|(nh, _)| *nh == node_hash)
-            .flat_map(|(_, l2_ids)| l2_ids.clone())
-            .collect()
+        self.node_to_l2.get(&node_hash).cloned().unwrap_or_default()
     }
 }
 

@@ -763,11 +763,12 @@ fn collect_l3_previews(
             let mut nodes = nodes_by_graph.remove(&gid).unwrap_or_default();
             nodes.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
             let top_nodes: Vec<String> = nodes.iter().take(5).map(|n| n.title.clone()).collect();
-            let keywords: Vec<String> = nodes.iter()
+            let mut keywords: Vec<String> = nodes.iter()
                 .flat_map(|n| n.keywords.clone())
                 .collect::<HashSet<_>>()
                 .into_iter()
                 .collect();
+            keywords.sort(); // Ensure deterministic output order
             previews.push(L3Preview {
                 id: format_hash(gid),
                 title: slot.name.clone(),
