@@ -1684,4 +1684,41 @@ mod tests {
         ids.sort();
         assert_eq!(ids, vec![1, 2, 3]);
     }
+
+    #[test]
+    fn test_node_to_l2_survives_serialization_roundtrip() {
+        let mut index = SparseIndex::new();
+
+        // Add some documents
+        let terms1 = SparseIndex::tokenize("rust ownership");
+        index.add_document(100, terms1.clone(), terms1.len() as u32);
+
+        // Add entities with L3 node hashes mapping to L2 contexts
+        index.entity_index.add_entity("ownership", 1000, vec![10, 11, 12]);
+        index.entity_index.add_entity("borrowing", 1001, vec![11, 13]);
+
+        // Verify before serialization
+        let l2_ids = index.entity_index().l2_ids_for_node(1000);
+        assert_eq!(l2_ids.len(), 3);
+        assert!(l2_ids.contains(&10));
+        assert!(l2_ids.contains(&11));
+        assert!(l2_ids.contains(&12));
+
+        // Serialize and deserialize
+        let page_data = index.serialize_to_pages().unwrap();
+        let deserialized = SparseIndex::deserialize_from_pages(&page_data).unwrap();
+
+        // Verify after deserialization - node_to_l2 should be rebuilt
+        let l2_ids_after = deserialized.entity_index().l2_ids_for_node(1000);
+        assert_eq!(l2_ids_after.len(), 3, "node_to_l2 should survive serialization roundtrip");
+        assert!(l2_ids_after.contains(&10));
+        assert!(l2_ids_after.contains(&11));
+        assert!(l2_ids_after.contains(&12));
+
+        // Also verify the other node
+        let l2_ids_1001 = deserialized.entity_index().l2_ids_for_node(1001);
+        assert_eq!(l2_ids_1001.len(), 2);
+        assert!(l2_ids_1001.contains(&11));
+        assert!(l2_ids_1001.contains(&13));
+    }
 }
