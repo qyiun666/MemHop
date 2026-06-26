@@ -1,6 +1,6 @@
 //! FFI protocol types — JSON-in JSON-out command protocol for C ABI
 //!
-//! Defines 11 commands that map to all 21 API_NEW.md interfaces.
+//! Defines 13 commands that map to all API.md interfaces.
 //! Interfaces 5-12 are merged into `query_layer`.
 //! Interfaces 13-16 are merged into `update_title`.
 

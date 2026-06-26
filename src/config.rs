@@ -16,6 +16,10 @@ pub struct MemHopConfig {
     /// LLM configuration for dream stages and other LLM-powered features
     #[serde(default)]
     pub llm: LlmConfig,
+    /// Automatically run lightweight dream consolidation when a topic is evicted
+    /// from working memory due to capacity limits (default: true)
+    #[serde(default = "default_auto_dream_on_evict")]
+    pub auto_dream_on_evict: bool,
 }
 
 impl MemHopConfig {
@@ -27,12 +31,18 @@ impl MemHopConfig {
             vector_dim,
             crystal_path: None,
             llm: LlmConfig::default(),
+            auto_dream_on_evict: false,
         }
     }
 }
 
+fn default_auto_dream_on_evict() -> bool {
+    false
+}
+
 /// LLM configuration for dream stages and other LLM-powered features
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LlmConfig {
     /// Full API URL (including `/chat/completions` suffix).
     /// Backwards-compatible alias `api_base` is also accepted during deserialization.
@@ -47,6 +57,15 @@ pub struct LlmConfig {
     /// (default: 0.2, suitable for memory consolidation).
     #[serde(default = "default_temperature")]
     pub temperature: f32,
+    /// Nucleus sampling parameter (default: 0.9)
+    #[serde(default = "default_top_p")]
+    pub top_p: f32,
+    /// Presence penalty (default: 0.0)
+    #[serde(default = "default_presence_penalty")]
+    pub presence_penalty: f32,
+    /// Frequency penalty (default: 0.0)
+    #[serde(default = "default_frequency_penalty")]
+    pub frequency_penalty: f32,
     /// Request timeout in seconds (default: 30)
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
@@ -62,6 +81,9 @@ impl Default for LlmConfig {
             api_key: default_api_key(),
             model: String::new(),
             temperature: default_temperature(),
+            top_p: default_top_p(),
+            presence_penalty: default_presence_penalty(),
+            frequency_penalty: default_frequency_penalty(),
             timeout_secs: default_timeout(),
             language: default_language(),
         }
@@ -74,6 +96,18 @@ fn default_api_key() -> String {
 
 fn default_temperature() -> f32 {
     0.2
+}
+
+fn default_top_p() -> f32 {
+    0.9
+}
+
+fn default_presence_penalty() -> f32 {
+    0.0
+}
+
+fn default_frequency_penalty() -> f32 {
+    0.0
 }
 
 fn default_timeout() -> u64 {

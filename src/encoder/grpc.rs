@@ -109,18 +109,12 @@ impl GrpcEncoder {
 
         let endpoint = tonic::transport::Channel::from_shared(addr.to_string())
             .map_err(|e| {
-                MemHopError::ConfigError(format!(
-                    "Invalid gRPC encoder address '{}': {}",
-                    addr, e
-                ))
+                MemHopError::ConfigError(format!("Invalid gRPC encoder address '{}': {}", addr, e))
             })?
             .connect_timeout(Duration::from_secs(5));
 
         let channel = rt.block_on(endpoint.connect()).map_err(|e| {
-            MemHopError::EncoderError(format!(
-                "Failed to connect gRPC encoder at {}: {}",
-                addr, e
-            ))
+            MemHopError::EncoderError(format!("Failed to connect gRPC encoder at {}: {}", addr, e))
         })?;
 
         Ok(channel)

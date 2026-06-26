@@ -784,8 +784,6 @@ pub fn bfs_traversal_cached(
     Ok(bfs_with_adjacency(&adjacency, start_node, max_depth))
 }
 
-
-
 /// Extract a `Subgraph` reachable from `start_node` within `max_depth` hops.
 ///
 /// Performs an unfiltered BFS traversal, then loads all referenced nodes and

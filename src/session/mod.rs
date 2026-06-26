@@ -57,14 +57,21 @@ impl TopicActivation {
     }
 }
 
-/// Session manager: tracks active L2 Topics
+/// Session manager: tracks active L2 Topics with working-memory capacity limit.
+///
+/// Inspired by human working memory capacity (7±2 items, Miller 1956).
+/// When the active set exceeds the capacity, the least-recently-hit topic is
+/// automatically deactivated (moved to long-term storage, not deleted).
 pub struct SessionManager {
     active_topics: HashMap<u64, TopicActivation>,
     default_ttl_ms: i64,
+    /// Working memory capacity — maximum number of simultaneously active topics.
+    /// Default is 7 (Miller's law: 7±2 chunks).
+    capacity: usize,
 }
 
 impl SessionManager {
-    /// Create a new SessionManager with default TTL of 1 hour
+    /// Create a new SessionManager with default TTL of 1 hour and capacity of 7
     ///
     /// # Returns
     /// A new SessionManager instance
@@ -72,28 +79,80 @@ impl SessionManager {
         Self {
             active_topics: HashMap::new(),
             default_ttl_ms: 3_600_000, // 1 hour in milliseconds
+            capacity: 7,
         }
     }
 
-    /// Activate or refresh a topic
+    /// Create a new SessionManager with custom capacity
+    ///
+    /// # Arguments
+    /// * `capacity` - Working memory capacity (recommended: 5-9)
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            active_topics: HashMap::new(),
+            default_ttl_ms: 3_600_000,
+            capacity: capacity.max(1),
+        }
+    }
+
+    /// Activate or refresh a topic. If capacity is exceeded, evict the least-recently-hit topic.
     ///
     /// If the topic already exists, updates its last_hit_at and optionally refreshes TTL.
     /// If the topic doesn't exist, creates a new TopicActivation entry.
+    /// If adding would exceed capacity, the LRU topic is deactivated first.
     ///
     /// # Arguments
     /// * `topic_id` - The topic identifier to activate
     /// * `ttl_ms` - Optional custom TTL in milliseconds, uses default_ttl_ms if None
-    pub fn activate_topic(&mut self, topic_id: u64, ttl_ms: Option<i64>) {
+    ///
+    /// # Returns
+    /// The evicted topic_id if capacity was exceeded, None otherwise.
+    pub fn activate_topic(&mut self, topic_id: u64, ttl_ms: Option<i64>) -> Option<u64> {
         let effective_ttl = ttl_ms.unwrap_or(self.default_ttl_ms);
 
         if let Some(activation) = self.active_topics.get_mut(&topic_id) {
             // Topic exists, update last_hit_at and optionally refresh TTL
             activation.update(Some(effective_ttl));
-        } else {
-            // Topic doesn't exist, create new activation
-            let activation = TopicActivation::new(topic_id, effective_ttl);
-            self.active_topics.insert(topic_id, activation);
+            return None;
         }
+
+        // New topic: check capacity before inserting
+        let evicted = if self.active_topics.len() >= self.capacity {
+            self.evict_lru()
+        } else {
+            None
+        };
+
+        let activation = TopicActivation::new(topic_id, effective_ttl);
+        self.active_topics.insert(topic_id, activation);
+
+        evicted
+    }
+
+    /// Evict the least-recently-hit topic to make room for new activations.
+    ///
+    /// This is called automatically when `activate_topic` would exceed capacity.
+    /// The evicted topic is simply removed from the active set; it remains in
+    /// long-term storage (L2) and can be reactivated later.
+    ///
+    /// # Returns
+    /// The evicted topic_id, or None if the active set was empty.
+    fn evict_lru(&mut self) -> Option<u64> {
+        if self.active_topics.is_empty() {
+            return None;
+        }
+
+        let lru_id = self
+            .active_topics
+            .iter()
+            .min_by_key(|(_, activation)| activation.last_hit_at)
+            .map(|(id, _)| *id);
+
+        if let Some(id) = lru_id {
+            self.active_topics.remove(&id);
+        }
+
+        lru_id
     }
 
     /// Deactivate a topic by removing it from the active set

@@ -33,6 +33,9 @@ fn make_llm_config() -> LlmConfig {
         api_key: std::env::var("MEMHOP_LLM_API_KEY").unwrap_or_default(),
         model: MODEL.into(),
         temperature: 0.2,
+        top_p: 0.9,
+        presence_penalty: 0.0,
+        frequency_penalty: 0.0,
         timeout_secs: 30,
         language: "zh".into(),
     }
@@ -46,6 +49,7 @@ fn make_config(path: PathBuf) -> MemHopConfig {
         vector_dim: VECTOR_DIM,
         crystal_path: None,
         llm: make_llm_config(),
+        auto_dream_on_evict: true,
     }
 }
 

@@ -28,7 +28,10 @@ pub struct StoreBatch {
     /// Optional turn ID within the session
     pub turn_id: Option<String>,
     /// API 请求来源（记录是谁发起的批量存储）
-    #[serde(default, skip_serializing_if = "crate::query::types::RequestSource::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::query::types::RequestSource::is_empty"
+    )]
     pub source: crate::query::types::RequestSource,
 }
 
@@ -418,6 +421,7 @@ pub fn update_topics(
             activation_state: ActivationState::Dormant,
             centroid_page_ref,
             dialogue_range: (now, now),
+            llm_params: crate::slot::context::LlmParams::default(),
         };
 
         let context_data = context

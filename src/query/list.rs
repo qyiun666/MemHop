@@ -9,7 +9,7 @@ use crate::query::common::{
 };
 use crate::query::types::*;
 use crate::slot::action_chain::{ActionChainSlot, ChainStatus};
-use crate::slot::archive::ArchiveSlot;
+use crate::slot::archive::{ArchiveSlot, ContentType};
 use crate::slot::context::ContextSlot;
 use crate::slot::context_node::ContextNode;
 use crate::slot::hypergraph::HypergraphSlot;
@@ -113,6 +113,11 @@ pub fn list_engrams(
 
                 // Note: state_filter is not directly applicable to ContextNode
                 // (L1 has no memory_state field). Skip this filter for now.
+                // When state_filter is provided, return an empty result to indicate
+                // the filter is not supported at this layer.
+                if query.state_filter.is_some() {
+                    // state_filter not supported for L1; skip filtering but keep the node
+                }
 
                 all_nodes.push(node);
             }
@@ -306,6 +311,12 @@ fn convert_context_to_detail(ctx: &ContextSlot) -> TopicDetail {
         activation_state: format!("{:?}", ctx.activation_state),
         created_at: ctx.created_at,
         updated_at: ctx.updated_at,
+        llm_params: Some(LlmParamsDto {
+            temperature: ctx.llm_params.temperature,
+            top_p: ctx.llm_params.top_p,
+            presence_penalty: ctx.llm_params.presence_penalty,
+            frequency_penalty: ctx.llm_params.frequency_penalty,
+        }),
     }
 }
 
@@ -407,6 +418,14 @@ where
                     }
                 }
 
+                // Apply content_type filter
+                if let Some(ref ct) = query.content_type {
+                    let archive_ct = content_type_to_string(archive.content_type);
+                    if !archive_ct.eq_ignore_ascii_case(ct) {
+                        continue;
+                    }
+                }
+
                 // Apply custom filter
                 if !filter(&archive) {
                     continue;
@@ -432,7 +451,7 @@ where
             Archive {
                 id: format_hash(a.id_hash),
                 content: a.content,
-                content_type: format!("{:?}", a.content_type),
+                content_type: content_type_to_string(a.content_type),
                 source_ref: None,
                 topic_id: Some(format_hash(a.context_id)),
                 engram_ids: vec![],
@@ -450,6 +469,19 @@ where
         page_size: query.page_size,
         has_more: has_more(skip, take, total_count),
     })
+}
+
+/// Convert ContentType enum to lowercase string for API consistency
+fn content_type_to_string(ct: ContentType) -> String {
+    match ct {
+        ContentType::Text => "text".to_string(),
+        ContentType::Image => "image".to_string(),
+        ContentType::Video => "video".to_string(),
+        ContentType::Document => "document".to_string(),
+        ContentType::Audio => "audio".to_string(),
+        ContentType::Code => "code".to_string(),
+        ContentType::Other => "other".to_string(),
+    }
 }
 
 // ============================================================================
@@ -601,6 +633,7 @@ pub fn list_knowledge(
                 // Note: domain_filter and knowledge_type filters are not directly
                 // applicable to HypergraphSlot (no domain/type fields yet).
                 // These can be added when the slot schema is extended.
+                // For now, if filters are provided, we skip them gracefully.
 
                 all_slots.push(slot);
             }

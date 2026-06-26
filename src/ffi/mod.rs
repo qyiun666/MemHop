@@ -160,18 +160,21 @@ pub unsafe extern "C" fn memhop_close(handle: *mut MemHopHandle) {
             return;
         }
 
-        // Access inner data through raw pointer to avoid Box drop-check issues
-        let memhop_ref: &MemHopHandle = &*handle;
-        if let Ok(mut db) = memhop_ref.0.lock() {
-            // Must checkpoint before sync to persist B-tree + sparse index
-            if let Err(e) = db.checkpoint() {
-                eprintln!("[memhop_close] checkpoint error: {}", e);
-            } else if let Err(e) = db.sync() {
-                eprintln!("[memhop_close] sync error: {}", e);
+        // Scope the borrow to ensure it's released before Box::from_raw
+        {
+            let memhop_ref: &MemHopHandle = &*handle;
+            if let Ok(mut db) = memhop_ref.0.lock() {
+                // Must checkpoint before sync to persist B-tree + sparse index
+                if let Err(e) = db.checkpoint() {
+                    eprintln!("[memhop_close] checkpoint error: {}", e);
+                } else if let Err(e) = db.sync() {
+                    eprintln!("[memhop_close] sync error: {}", e);
+                }
+                db.closed = true;
             }
-            db.closed = true;
-        }
-        // memhop_ref borrow released; now safe to take ownership and drop
+        } // memhop_ref borrow released here
+
+        // Now safe to take ownership and drop
         let _ = Box::from_raw(handle);
     });
 

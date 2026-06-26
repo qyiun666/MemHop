@@ -28,6 +28,13 @@ use std::collections::HashSet;
 /// 4. L3 Distillation: extract structured knowledge into L3 hypergraph via LLM
 /// 5. L5 Crystallization: scan all ActionChainSlots and extract crystals
 ///
+/// # Transaction Safety
+/// The pipeline takes in-memory snapshots of btree and sparse_index before
+/// execution. If any stage fails, the snapshots are restored so that the
+/// in-memory indices remain consistent with the mmap state (which may have
+/// been partially modified). Callers should checkpoint after a successful
+/// dream to persist the changes.
+///
 /// # Arguments
 /// * `mmap` - Mutable memory-mapped file for reading/writing memory slots
 /// * `header` - File header for page allocation and free list management
@@ -66,6 +73,10 @@ pub fn dream_pipeline(
         duration_ms: 0,
     };
 
+    // Take in-memory snapshots for rollback on failure.
+    let btree_snapshot = btree.clone();
+    let sparse_snapshot = sparse_index.clone();
+
     // Stage 1: L3 Knowledge Distillation - extract structured knowledge via LLM
     // This must run BEFORE L2 compression because compression demotes active
     // depth-1 contexts to depth-2 and creates new (initially inactive) compressed
@@ -78,68 +89,130 @@ pub fn dream_pipeline(
         sparse_index,
         llm,
         &session_topic_ids,
-    )?;
-    report.new_l3_nodes = l3_nodes;
+    );
+    match l3_nodes {
+        Ok(nodes) => report.new_l3_nodes = nodes,
+        Err(e) => {
+            *btree = btree_snapshot;
+            *sparse_index = sparse_snapshot;
+            return Err(e);
+        }
+    }
 
     // Stage 2: L2 Compression - depth demotion on active contexts
-    let (demoted_sec, compressed, removed, demoted_ter) = compress_stage::compress_active_contexts(
+    let compress_result = compress_stage::compress_active_contexts(
         mmap,
         header,
         btree,
         sparse_index,
         llm,
         &session_topic_ids,
-    )?;
-    report.demoted_to_secondary = demoted_sec;
-    report.new_compressed = compressed;
-    report.removed_contexts = removed;
-    report.demoted_to_tertiary = demoted_ter;
+    );
+    match compress_result {
+        Ok((demoted_sec, compressed, removed, demoted_ter)) => {
+            report.demoted_to_secondary = demoted_sec;
+            report.new_compressed = compressed;
+            report.removed_contexts = removed;
+            report.demoted_to_tertiary = demoted_ter;
+        }
+        Err(e) => {
+            *btree = btree_snapshot;
+            *sparse_index = sparse_snapshot;
+            return Err(e);
+        }
+    }
 
     // Stage 3: L1 Update - rebuild L1 ContextNode based on updated L2
     // L1 nodes point to L2 contexts; after L2 depth changes, L1 associations need refresh
-    let l1_updated = rebuild_l1_from_l2(mmap, header, btree, sparse_index, &session_topic_ids)?;
-    report.l1_updated = l1_updated;
+    let l1_result = rebuild_l1_from_l2(mmap, header, btree, sparse_index, &session_topic_ids);
+    match l1_result {
+        Ok(l1_updated) => report.l1_updated = l1_updated,
+        Err(e) => {
+            *btree = btree_snapshot;
+            *sparse_index = sparse_snapshot;
+            return Err(e);
+        }
+    }
 
     // Stage 3b: L1 Decay - time-decay node importance and prune weak edges
-    let l1_decay_report = l1_decay::decay_l1_network(mmap, header, btree)?;
-    report.l1_decayed_nodes = l1_decay_report.decayed_nodes;
-    report.l1_pruned_edges = l1_decay_report.pruned_edges;
-    report.l1_removed_nodes = l1_decay_report.removed_nodes;
-    report.l1_removed_edges = l1_decay_report.removed_edges;
+    let l1_decay_report = l1_decay::decay_l1_network(mmap, header, btree);
+    match l1_decay_report {
+        Ok(decay_report) => {
+            report.l1_decayed_nodes = decay_report.decayed_nodes;
+            report.l1_pruned_edges = decay_report.pruned_edges;
+            report.l1_removed_nodes = decay_report.removed_nodes;
+            report.l1_removed_edges = decay_report.removed_edges;
+        }
+        Err(e) => {
+            *btree = btree_snapshot;
+            *sparse_index = sparse_snapshot;
+            return Err(e);
+        }
+    }
 
     // Stage 4: L0 Update - regenerate profile from knowledge distribution
-    l0_form_stage::generate_profile(mmap, header, btree, sparse_index)?;
+    let l0_result = l0_form_stage::generate_profile(mmap, header, btree, sparse_index);
+    if let Err(e) = l0_result {
+        *btree = btree_snapshot;
+        *sparse_index = sparse_snapshot;
+        return Err(e);
+    }
     // Mark L0 as updated if we have any topics
     if !session_topic_ids.is_empty() {
+        let profile_id_hash = crate::util::hash_id("profile");
+        let profile_id = crate::query::common::format_hash(profile_id_hash);
         report.l0_updated = Some((
-            "profile".to_string(),
+            profile_id,
             vec!["personality".to_string(), "preferences".to_string()],
         ));
     }
 
     // Stage 4.5: User Language Habit Distillation
     // Analyzes recent dialogues to learn user language patterns and merge into L0 profile
-    let habit_update = habit_distill_stage::distill_user_habits(mmap, header, btree, llm)?;
-    if habit_update.new_lexicon > 0
-        || habit_update.new_style_traits > 0
-        || habit_update.new_emotion_patterns > 0
-    {
-        report.habits_updated = Some(habit_distill_stage::HabitUpdate {
-            new_lexicon: habit_update.new_lexicon,
-            new_style_traits: habit_update.new_style_traits,
-            new_emotion_patterns: habit_update.new_emotion_patterns,
-            total_dialogues_analyzed: habit_update.total_dialogues_analyzed,
-        });
+    let habit_result = habit_distill_stage::distill_user_habits(mmap, header, btree, llm);
+    match habit_result {
+        Ok(habit_update) => {
+            if habit_update.new_lexicon > 0
+                || habit_update.new_style_traits > 0
+                || habit_update.new_emotion_patterns > 0
+            {
+                report.habits_updated = Some(habit_distill_stage::HabitUpdate {
+                    new_lexicon: habit_update.new_lexicon,
+                    new_style_traits: habit_update.new_style_traits,
+                    new_emotion_patterns: habit_update.new_emotion_patterns,
+                    total_dialogues_analyzed: habit_update.total_dialogues_analyzed,
+                });
+            }
+        }
+        Err(e) => {
+            *btree = btree_snapshot;
+            *sparse_index = sparse_snapshot;
+            return Err(e);
+        }
     }
 
     // Stage 5: L5 Crystallization - scan all ActionChainSlots, extract crystals
-    let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm)?;
-    report.new_crystals = crystals;
+    let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm);
+    match crystals {
+        Ok(crystals) => report.new_crystals = crystals,
+        Err(e) => {
+            *btree = btree_snapshot;
+            *sparse_index = sparse_snapshot;
+            return Err(e);
+        }
+    }
 
     // Prune low-quality crystals
     let page_count = header.page_count;
-    let pruned = crystallize_stage::prune_low_quality_crystals(mmap, header, btree, page_count)?;
-    report.pruned_crystals = pruned;
+    let pruned = crystallize_stage::prune_low_quality_crystals(mmap, header, btree, page_count);
+    match pruned {
+        Ok(pruned) => report.pruned_crystals = pruned,
+        Err(e) => {
+            *btree = btree_snapshot;
+            *sparse_index = sparse_snapshot;
+            return Err(e);
+        }
+    }
 
     report.duration_ms = start_time.elapsed().as_millis() as u64;
 

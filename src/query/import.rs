@@ -339,6 +339,7 @@ fn import_l2_topics(
                             activation_state: ActivationState::Dormant,
                             centroid_page_ref: 0,
                             dialogue_range: (now_ms, now_ms),
+                            llm_params: crate::slot::context::LlmParams::default(),
                         };
 
                         let data_bytes = ctx
@@ -1008,6 +1009,7 @@ pub fn build_l3_hypergraph_from_path(
         activation_state: ActivationState::Dormant,
         centroid_page_ref: 0,
         dialogue_range: (now_ms, now_ms),
+        llm_params: crate::slot::context::LlmParams::default(),
     };
 
     let ctx_data = ctx

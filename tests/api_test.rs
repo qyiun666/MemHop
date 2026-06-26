@@ -433,11 +433,7 @@ fn test_ffi_graph_query_and_delete() {
         "use crate::b;\npub fn foo() {}\n",
     )
     .unwrap();
-    std::fs::write(
-        format!("{}/src/b.rs", source_path),
-        "pub fn bar() {}\n",
-    )
-    .unwrap();
+    std::fs::write(format!("{}/src/b.rs", source_path), "pub fn bar() {}\n").unwrap();
 
     unsafe {
         let cfg = config_json(db_path);
@@ -489,10 +485,7 @@ fn test_ffi_graph_query_and_delete() {
         );
 
         // ---- 4. Delete L3 graph ----
-        let delete_l3_cmd = format!(
-            r#"{{"command":"delete","layer":"l3","id":"{}"}}"#,
-            graph_id
-        );
+        let delete_l3_cmd = format!(r#"{{"command":"delete","layer":"l3","id":"{}"}}"#, graph_id);
         let res = exec(handle, &delete_l3_cmd);
         assert_success(&res);
         assert!(res["data"]["deleted"].as_bool().unwrap_or(false));
@@ -534,10 +527,7 @@ fn test_ffi_graph_query_and_delete() {
         assert!(!l5_items.is_empty(), "L5 should contain the action chain");
         let chain_id = l5_items[0]["id"].as_str().unwrap().to_string();
 
-        let delete_l5_cmd = format!(
-            r#"{{"command":"delete","layer":"l5","id":"{}"}}"#,
-            chain_id
-        );
+        let delete_l5_cmd = format!(r#"{{"command":"delete","layer":"l5","id":"{}"}}"#, chain_id);
         let res = exec(handle, &delete_l5_cmd);
         assert_success(&res);
 
@@ -550,10 +540,7 @@ fn test_ffi_graph_query_and_delete() {
         assert_eq!(l5_total, 0, "L5 action chain should be deleted");
 
         // ---- 7. Delete L2 topic ----
-        let delete_l2_cmd = format!(
-            r#"{{"command":"delete","layer":"l2","id":"{}"}}"#,
-            l2_id
-        );
+        let delete_l2_cmd = format!(r#"{{"command":"delete","layer":"l2","id":"{}"}}"#, l2_id);
         let res = exec(handle, &delete_l2_cmd);
         assert_success(&res);
 
@@ -882,8 +869,7 @@ fn test_ffi_agent_workflow() {
 #[test]
 #[ignore = "requires MEMHOP_LLM_API_KEY env var and network access"]
 fn test_ffi_dream_with_llm() {
-    let api_key = std::env::var("MEMHOP_LLM_API_KEY")
-        .expect("MEMHOP_LLM_API_KEY must be set");
+    let api_key = std::env::var("MEMHOP_LLM_API_KEY").expect("MEMHOP_LLM_API_KEY must be set");
 
     let db_path = "/tmp/memhop_ffi_dream.meh";
     let _ = std::fs::remove_file(db_path);
@@ -921,8 +907,7 @@ fn test_ffi_dream_with_llm() {
         // 4. Run dream with configured LLM
         let api_url = std::env::var("MEMHOP_LLM_API_URL")
             .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
-        let model = std::env::var("MEMHOP_LLM_MODEL")
-            .unwrap_or_else(|_| "gpt-4o-mini".to_string());
+        let model = std::env::var("MEMHOP_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
         let dream_cmd = format!(
             r#"{{"command":"dream","api_url":"{}","api_key":"{}","model":"{}"}}"#,
             api_url, api_key, model

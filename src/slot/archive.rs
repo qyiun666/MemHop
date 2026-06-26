@@ -51,7 +51,8 @@ pub struct ArchiveSlot {
 impl ArchiveSlot {
     /// Extract RequestSource from metadata (if present and valid)
     pub fn request_source(&self) -> crate::query::types::RequestSource {
-        self.metadata.as_deref()
+        self.metadata
+            .as_deref()
             .map(crate::query::types::RequestSource::from_metadata_json)
             .unwrap_or_default()
     }

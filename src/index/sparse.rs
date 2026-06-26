@@ -48,21 +48,164 @@ pub const SPARSE_PAGE_PAYLOAD: usize = PAGE_SIZE - 32;
 /// 中英文停用词列表
 const STOP_WORDS: &[&str] = &[
     // 英文停用词
-    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
-    "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "shall", "to",
-    "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through", "during",
-    "before", "after", "above", "below", "between", "out", "off", "over", "under", "again",
-    "further", "then", "once", "here", "there", "when", "where", "why", "how", "all", "both",
-    "each", "few", "more", "most", "other", "some", "such", "no", "nor", "not", "only", "own",
-    "same", "so", "than", "too", "very", "just", "and", "but", "if", "or", "because", "until",
-    "while", "this", "that", "these", "those", "i", "me", "my", "we", "our", "you", "your",
-    "he", "him", "his", "she", "her", "it", "its", "they", "them", "their", "what", "which",
+    "the",
+    "a",
+    "an",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "have",
+    "has",
+    "had",
+    "do",
+    "does",
+    "did",
+    "will",
+    "would",
+    "could",
+    "should",
+    "may",
+    "might",
+    "can",
+    "shall",
+    "to",
+    "of",
+    "in",
+    "for",
+    "on",
+    "with",
+    "at",
+    "by",
+    "from",
+    "as",
+    "into",
+    "through",
+    "during",
+    "before",
+    "after",
+    "above",
+    "below",
+    "between",
+    "out",
+    "off",
+    "over",
+    "under",
+    "again",
+    "further",
+    "then",
+    "once",
+    "here",
+    "there",
+    "when",
+    "where",
+    "why",
+    "how",
+    "all",
+    "both",
+    "each",
+    "few",
+    "more",
+    "most",
+    "other",
+    "some",
+    "such",
+    "no",
+    "nor",
+    "not",
+    "only",
+    "own",
+    "same",
+    "so",
+    "than",
+    "too",
+    "very",
+    "just",
+    "and",
+    "but",
+    "if",
+    "or",
+    "because",
+    "until",
+    "while",
+    "this",
+    "that",
+    "these",
+    "those",
+    "i",
+    "me",
+    "my",
+    "we",
+    "our",
+    "you",
+    "your",
+    "he",
+    "him",
+    "his",
+    "she",
+    "her",
+    "it",
+    "its",
+    "they",
+    "them",
+    "their",
+    "what",
+    "which",
     "who",
     // 中文停用词
-    "的", "了", "在", "是", "我", "有", "和", "就", "不", "人", "都", "一", "一个", "上", "也",
-    "很", "到", "说", "要", "去", "你", "会", "着", "没有", "看", "好", "自己", "这", "他", "她",
-    "它", "们", "那", "些", "什么", "怎么", "为什么", "哪", "谁", "吗", "呢", "吧", "啊", "哦",
-    "嗯", "把", "被", "让", "给", "呀",
+    "的",
+    "了",
+    "在",
+    "是",
+    "我",
+    "有",
+    "和",
+    "就",
+    "不",
+    "人",
+    "都",
+    "一",
+    "一个",
+    "上",
+    "也",
+    "很",
+    "到",
+    "说",
+    "要",
+    "去",
+    "你",
+    "会",
+    "着",
+    "没有",
+    "看",
+    "好",
+    "自己",
+    "这",
+    "他",
+    "她",
+    "它",
+    "们",
+    "那",
+    "些",
+    "什么",
+    "怎么",
+    "为什么",
+    "哪",
+    "谁",
+    "吗",
+    "呢",
+    "吧",
+    "啊",
+    "哦",
+    "嗯",
+    "把",
+    "被",
+    "让",
+    "给",
+    "呀",
 ];
 
 fn jieba() -> &'static Jieba {
@@ -107,7 +250,10 @@ pub fn tokenize(text: &str) -> Vec<String> {
         tokenize_cjk(text, false, true)
     } else {
         text.split_whitespace()
-            .map(|s| s.trim_matches(|c: char| !c.is_alphanumeric()).to_lowercase())
+            .map(|s| {
+                s.trim_matches(|c: char| !c.is_alphanumeric())
+                    .to_lowercase()
+            })
             .filter(|s| !s.is_empty() && !is_stop_word(s))
             .collect()
     }
@@ -455,7 +601,11 @@ impl EntityIndex {
     /// associations, then add L0 profile lexicon words.
     ///
     /// Returns the collected L3 nodes for BM25 indexing (to avoid duplicate BTree scans).
-    pub fn build_from_l3(&mut self, data: &[u8], btree: &BTreeIndex) -> Result<Vec<(u64, String, Vec<String>)>, MemHopError> {
+    pub fn build_from_l3(
+        &mut self,
+        data: &[u8],
+        btree: &BTreeIndex,
+    ) -> Result<Vec<(u64, String, Vec<String>)>, MemHopError> {
         // Collect L3 nodes grouped by graph.
         let mut nodes_by_graph: HashMap<u64, Vec<(u64, String, Vec<String>)>> = HashMap::new();
         let mut all_nodes: Vec<(u64, String, Vec<String>)> = Vec::new();
@@ -782,7 +932,8 @@ impl SparseIndex {
         let mut seen: HashMap<u64, Vec<u64>> = HashMap::new();
 
         for word in &words {
-            for (_matched_word, _dist, node_hash, l2_ids) in self.entity_index.fuzzy_match(word, 2) {
+            for (_matched_word, _dist, node_hash, l2_ids) in self.entity_index.fuzzy_match(word, 2)
+            {
                 seen.entry(node_hash).or_insert(l2_ids);
             }
         }
@@ -1058,6 +1209,7 @@ mod tests {
             activation_state: ActivationState::Active,
             centroid_page_ref: 0,
             dialogue_range: (0, 0),
+            llm_params: crate::slot::context::LlmParams::default(),
         }
     }
 
@@ -1694,8 +1846,12 @@ mod tests {
         index.add_document(100, terms1.clone(), terms1.len() as u32);
 
         // Add entities with L3 node hashes mapping to L2 contexts
-        index.entity_index.add_entity("ownership", 1000, vec![10, 11, 12]);
-        index.entity_index.add_entity("borrowing", 1001, vec![11, 13]);
+        index
+            .entity_index
+            .add_entity("ownership", 1000, vec![10, 11, 12]);
+        index
+            .entity_index
+            .add_entity("borrowing", 1001, vec![11, 13]);
 
         // Verify before serialization
         let l2_ids = index.entity_index().l2_ids_for_node(1000);
@@ -1710,7 +1866,11 @@ mod tests {
 
         // Verify after deserialization - node_to_l2 should be rebuilt
         let l2_ids_after = deserialized.entity_index().l2_ids_for_node(1000);
-        assert_eq!(l2_ids_after.len(), 3, "node_to_l2 should survive serialization roundtrip");
+        assert_eq!(
+            l2_ids_after.len(),
+            3,
+            "node_to_l2 should survive serialization roundtrip"
+        );
         assert!(l2_ids_after.contains(&10));
         assert!(l2_ids_after.contains(&11));
         assert!(l2_ids_after.contains(&12));

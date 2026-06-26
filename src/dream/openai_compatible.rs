@@ -56,12 +56,27 @@ impl OpenAICompatibleLlmProvider {
         &self,
         messages: &[serde_json::Value],
         max_tokens: u32,
+        params: Option<&crate::slot::context::LlmParams>,
     ) -> Result<String, MemHopError> {
+        let temperature = params
+            .map(|p| p.temperature)
+            .unwrap_or(self.config.temperature);
+        let top_p = params.map(|p| p.top_p).unwrap_or(self.config.top_p);
+        let presence_penalty = params
+            .map(|p| p.presence_penalty)
+            .unwrap_or(self.config.presence_penalty);
+        let frequency_penalty = params
+            .map(|p| p.frequency_penalty)
+            .unwrap_or(self.config.frequency_penalty);
+
         let body = json!({
             "model": self.config.model,
             "messages": messages,
             "max_tokens": max_tokens,
-            "temperature": self.config.temperature,
+            "temperature": temperature,
+            "top_p": top_p,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
         });
 
         let response = self
@@ -97,6 +112,7 @@ impl OpenAICompatibleLlmProvider {
         system: &str,
         user_prompt: &str,
         max_tokens: u32,
+        params: Option<&crate::slot::context::LlmParams>,
         parse: F,
     ) -> Result<T, MemHopError>
     where
@@ -111,15 +127,67 @@ impl OpenAICompatibleLlmProvider {
             json!({"role": "user", "content": user_prompt}),
         ];
 
-        let response = self.call_api_messages(&messages, max_tokens)?;
+        let response = self.call_api_messages(&messages, max_tokens, params)?;
         if let Ok(value) = parse(&response) {
             return Ok(value);
         }
 
         // Retry once with a format reminder
         messages.push(json!({"role": "user", "content": JSON_RETRY_MESSAGE}));
-        let response = self.call_api_messages(&messages, max_tokens)?;
+        let response = self.call_api_messages(&messages, max_tokens, params)?;
         parse(&response)
+    }
+
+    /// Default parameters for each dream stage function.
+    /// These are tuned for memory-specific tasks (not general chat).
+    fn params_for_summarize() -> crate::slot::context::LlmParams {
+        // High determinism: we need consistent, factual compression
+        crate::slot::context::LlmParams {
+            temperature: 0.1,
+            top_p: 0.85,
+            presence_penalty: 0.0,
+            frequency_penalty: 0.0,
+        }
+    }
+
+    fn params_for_distill() -> crate::slot::context::LlmParams {
+        // Very high determinism: structured JSON must be parseable
+        crate::slot::context::LlmParams {
+            temperature: 0.0,
+            top_p: 0.8,
+            presence_penalty: 0.2,
+            frequency_penalty: 0.1,
+        }
+    }
+
+    fn params_for_crystal() -> crate::slot::context::LlmParams {
+        // Moderate creativity for DSL generation, but still structured
+        crate::slot::context::LlmParams {
+            temperature: 0.2,
+            top_p: 0.9,
+            presence_penalty: 0.1,
+            frequency_penalty: 0.0,
+        }
+    }
+
+    fn params_for_habits() -> crate::slot::context::LlmParams {
+        // Balanced: need to detect patterns but not hallucinate
+        crate::slot::context::LlmParams {
+            temperature: 0.15,
+            top_p: 0.88,
+            presence_penalty: 0.1,
+            frequency_penalty: 0.05,
+        }
+    }
+
+    fn params_for_patterns() -> crate::slot::context::LlmParams {
+        // Similar to habits: pattern detection needs consistency
+        crate::slot::context::LlmParams {
+            temperature: 0.15,
+            top_p: 0.88,
+            presence_penalty: 0.1,
+            frequency_penalty: 0.05,
+        }
     }
 
     /// Strip markdown code block markers from a JSON response if present.
@@ -169,6 +237,7 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
             SYSTEM_SUMMARIZE,
             &user_prompt,
             512, // summarize
+            Some(&Self::params_for_summarize()),
             |response| {
                 let cleaned = Self::strip_code_blocks(response);
                 let json: serde_json::Value = serde_json::from_str(&cleaned).map_err(|e| {
@@ -229,6 +298,7 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
             SYSTEM_PATTERNS,
             &user_prompt,
             1024, // pattern extraction
+            Some(&Self::params_for_patterns()),
             |response| {
                 let cleaned = Self::strip_code_blocks(response);
                 let patterns: Vec<serde_json::Value> =
@@ -287,6 +357,7 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
             SYSTEM_CRYSTAL,
             &user_prompt,
             1024, // crystal with steps
+            Some(&Self::params_for_crystal()),
             |response| {
                 let cleaned = Self::strip_code_blocks(response);
                 let json: serde_json::Value = serde_json::from_str(&cleaned).map_err(|e| {
@@ -464,6 +535,7 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
             SYSTEM_HABITS,
             &user_prompt,
             1024, // habits
+            Some(&Self::params_for_habits()),
             |response| {
                 let cleaned = Self::strip_code_blocks(response);
                 let json: serde_json::Value = serde_json::from_str(&cleaned).map_err(|e| {
@@ -565,6 +637,7 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
             SYSTEM_DISTILL,
             &user_prompt,
             4096, // distill
+            Some(&Self::params_for_distill()),
             |response| {
                 let cleaned = Self::strip_code_blocks(response);
                 let result: LlmDistillResult = serde_json::from_str(&cleaned).map_err(|e| {

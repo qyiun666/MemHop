@@ -1,4 +1,4 @@
-//! FFI command dispatcher — routes 11 commands to MemHop public API
+//! FFI command dispatcher — routes 13 commands to MemHop public API
 //!
 //! Key responsibilities:
 //! - `dispatch_query_layer()` — merged Interface 5-12 routing

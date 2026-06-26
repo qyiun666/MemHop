@@ -34,7 +34,10 @@ impl RequestSource {
     /// 从 ArchiveSlot.metadata JSON 字符串反序列化
     pub fn from_metadata_json(metadata: &str) -> Self {
         serde_json::from_str(metadata).unwrap_or_else(|e| {
-            eprintln!("[RequestSource] Failed to parse metadata '{}': {}", metadata, e);
+            eprintln!(
+                "[RequestSource] Failed to parse metadata '{}': {}",
+                metadata, e
+            );
             Default::default()
         })
     }
@@ -65,12 +68,15 @@ pub struct SearchQuery {
     /// contexts that contain this L3 in their l3_refs.
     pub l3_id: Option<String>,
     /// Maximum number of contexts to return (default: 10)
+    #[serde(default = "default_context_limit")]
     pub context_limit: usize,
     /// Optional LLM enhancement configuration
     pub llm_enhance: Option<crate::config::LlmConfig>,
     /// Auto-create context when search result is empty (0: no, 1: yes, default: 0)
+    #[serde(default)]
     pub auto_create: u8,
     /// Minimum relevance score threshold for search pruning (0.0-1.0, default: 0.0)
+    #[serde(default)]
     pub min_score: f32,
     /// Previous conversation context (optional). Used by LLM enhancement
     /// to resolve anaphora and fill in missing context for follow-up queries.
@@ -78,6 +84,11 @@ pub struct SearchQuery {
     /// API 请求来源（记录是谁发起的搜索）
     #[serde(default, skip_serializing_if = "RequestSource::is_empty")]
     pub source: RequestSource,
+}
+
+/// Default context limit for search
+fn default_context_limit() -> usize {
+    10
 }
 
 /// L3 knowledge graph preview — lightweight summary for agent decision-making
@@ -134,6 +145,9 @@ pub struct ContextResult {
     pub l3_refs: Vec<String>,
     /// L4 archive IDs referenced by this context
     pub archive_refs: Vec<String>,
+    /// Scene-level recommended LLM parameters (refreshed during dream)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_params: Option<LlmParamsDto>,
 }
 
 /// L4 archive reference (lightweight pointer)
@@ -337,6 +351,17 @@ pub struct TopicDetail {
     pub activation_state: String,
     pub created_at: i64,
     pub updated_at: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub llm_params: Option<LlmParamsDto>,
+}
+
+/// Serde-friendly DTO for LlmParams
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmParamsDto {
+    pub temperature: f32,
+    pub top_p: f32,
+    pub presence_penalty: f32,
+    pub frequency_penalty: f32,
 }
 
 /// Knowledge list query

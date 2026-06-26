@@ -13,15 +13,15 @@ use crate::file::page::decode_page_ref;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
 use crate::index::vector::{cosine_similarity, read_vector};
+use crate::l3::store::page_type_of;
 use crate::query::common::{self, format_hash};
 use crate::query::slot_io::{decode_page_id, get_slot_data};
 use crate::query::types::*;
-use crate::slot::archive::ArchiveSlot;
+use crate::slot::archive::{ArchiveSlot, ContentType};
 use crate::slot::context::ContextSlot;
 use crate::slot::context_node::ContextNode;
 use crate::slot::hyperedge::HyperedgeSlot;
 use crate::slot::hypergraph::{HypergraphNode, HypergraphSlot};
-use crate::l3::store::page_type_of;
 use crate::util::{hash_id, PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
@@ -295,8 +295,9 @@ pub fn search_memory(
     let (l3_ids, l3_previews) = collect_l3_previews(mmap, &filtered_l2, btree)?;
     let archive_refs = collect_archive_refs(data, &filtered_l2, btree)?;
 
-    // Step 8: Update activation scores
+    // Step 8: Update activation scores (L2) + spacing effect boost (L1)
     update_activation_scores(mmap, &filtered_l2, btree)?;
+    boost_l1_importance_on_retrieval(mmap, &filtered_l2, btree, l1_reverse)?;
 
     // Step 9: Convert to public types
     let result = SearchResult {
@@ -598,14 +599,13 @@ impl L1ReverseIndex {
 
     /// Serialize the reverse index to a byte vector using bincode.
     pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
-        bincode::serialize(&self.index)
-            .map_err(|e| MemHopError::Serialization(e.to_string()))
+        bincode::serialize(&self.index).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
     /// Deserialize the reverse index from a byte vector using bincode.
     pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
-        let index: HashMap<u64, Vec<(u64, u64)>> = bincode::deserialize(data)
-            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+        let index: HashMap<u64, Vec<(u64, u64)>> =
+            bincode::deserialize(data).map_err(|e| MemHopError::Serialization(e.to_string()))?;
         Ok(Self { index })
     }
 
@@ -717,7 +717,7 @@ fn collect_l3_previews(
     btree: &BTreeIndex,
 ) -> Result<(Vec<String>, Vec<L3Preview>), MemHopError> {
     let data: &[u8] = &mmap[..];
-    
+
     // 1. Collect all target graph_ids from matched contexts
     let mut graph_ids: HashSet<u64> = HashSet::new();
     for ctx in contexts {
@@ -726,15 +726,15 @@ fn collect_l3_previews(
         }
     }
     let l3_ids: Vec<String> = graph_ids.iter().map(|h| format_hash(*h)).collect();
-    
+
     if graph_ids.is_empty() {
         return Ok((l3_ids, Vec::new()));
     }
-    
+
     // 2. Single BTree traversal: collect HypergraphSlot and HypergraphNode
     let mut slots: HashMap<u64, HypergraphSlot> = HashMap::new();
     let mut nodes_by_graph: HashMap<u64, Vec<HypergraphNode>> = HashMap::new();
-    
+
     for (&_id, &page_ref) in btree.iter() {
         let pt = page_type_of(data, page_ref);
         if pt == Some(PageType::HypergraphSlot as u16) {
@@ -755,15 +755,20 @@ fn collect_l3_previews(
             }
         }
     }
-    
+
     // 3. Build previews: sort by importance and take top 5
     let mut previews = Vec::new();
     for &gid in &graph_ids {
         if let Some(slot) = slots.get(&gid) {
             let mut nodes = nodes_by_graph.remove(&gid).unwrap_or_default();
-            nodes.sort_by(|a, b| b.importance.partial_cmp(&a.importance).unwrap_or(std::cmp::Ordering::Equal));
+            nodes.sort_by(|a, b| {
+                b.importance
+                    .partial_cmp(&a.importance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             let top_nodes: Vec<String> = nodes.iter().take(5).map(|n| n.title.clone()).collect();
-            let mut keywords: Vec<String> = nodes.iter()
+            let mut keywords: Vec<String> = nodes
+                .iter()
                 .flat_map(|n| n.keywords.clone())
                 .collect::<HashSet<_>>()
                 .into_iter()
@@ -779,6 +784,19 @@ fn collect_l3_previews(
         }
     }
     Ok((l3_ids, previews))
+}
+
+/// Convert ContentType enum to lowercase string for API consistency
+fn content_type_to_string(ct: ContentType) -> String {
+    match ct {
+        ContentType::Text => "text".to_string(),
+        ContentType::Image => "image".to_string(),
+        ContentType::Video => "video".to_string(),
+        ContentType::Document => "document".to_string(),
+        ContentType::Audio => "audio".to_string(),
+        ContentType::Code => "code".to_string(),
+        ContentType::Other => "other".to_string(),
+    }
 }
 
 // ============================================================================
@@ -808,7 +826,7 @@ fn collect_archive_refs(
                     refs.push(ArchiveRef {
                         id: format_hash(arc.id_hash),
                         context_id: format_hash(arc.context_id),
-                        content_type: format!("{:?}", arc.content_type),
+                        content_type: content_type_to_string(arc.content_type),
                         created_at: arc.created_at,
                         source_agent: src.source_agent,
                         source_platform: src.source_platform,
@@ -863,6 +881,58 @@ fn update_activation_scores(
 }
 
 // ============================================================================
+// Spacing effect: boost L1 importance on retrieval
+// ============================================================================
+
+/// Boost L1 ContextNode importance when their associated L2 contexts are retrieved.
+///
+/// This implements the "spacing effect" from human memory: each successful retrieval
+/// strengthens the associative pathway, making the memory harder to forget.
+/// The boost is small (0.05) and capped at 1.0 to prevent runaway growth.
+///
+/// Only nodes whose importance is above the prune threshold (0.05) are boosted;
+/// nodes below threshold are left alone (they will be pruned by dream decay).
+fn boost_l1_importance_on_retrieval(
+    mmap: &mut MmapMut,
+    contexts: &[ContextSlot],
+    _btree: &BTreeIndex,
+    l1_reverse: &L1ReverseIndex,
+) -> Result<(), MemHopError> {
+    const BOOST_DELTA: f32 = 0.05;
+    const BOOST_CAP: f32 = 1.0;
+    const PRUNE_THRESHOLD: f32 = 0.05; // same as l1_decay::NODE_REMOVE_THRESHOLD
+
+    let matched_ids: HashSet<u64> = contexts.iter().map(|c| c.id_hash).collect();
+    let associated_nodes = l1_reverse.find_associated(&matched_ids);
+
+    let now_ms = common::now_ms();
+
+    for (_node_hash, page_ref) in associated_nodes {
+        let (page_id, _slot_idx) = decode_page_ref(page_ref);
+        if let Some(slot_data) = get_slot_data(&mmap[..], page_ref) {
+            if let Ok(mut node) = ContextNode::deserialize_slot(slot_data) {
+                // Only boost nodes that are still above prune threshold
+                if node.importance >= PRUNE_THRESHOLD {
+                    node.importance = (node.importance + BOOST_DELTA).min(BOOST_CAP);
+                    node.updated_at = now_ms;
+
+                    // Write back to mmap (same slot location, same size)
+                    let buf = node.serialize().map_err(|e| {
+                        MemHopError::Serialization(format!("ContextNode boost serialize: {}", e))
+                    })?;
+                    let offset = ((page_id as usize) * PAGE_SIZE) + 32;
+                    if offset + buf.len() <= mmap.len() {
+                        mmap[offset..offset + buf.len()].copy_from_slice(&buf);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
 // Type conversion helpers
 // ============================================================================
 
@@ -880,6 +950,12 @@ fn convert_contexts(contexts: &[ContextSlot]) -> Vec<ContextResult> {
             turn_count: c.turn_count,
             l3_refs: c.l3_refs.iter().map(|h| format_hash(*h)).collect(),
             archive_refs: c.archive_refs.iter().map(|h| format_hash(*h)).collect(),
+            llm_params: Some(LlmParamsDto {
+                temperature: c.llm_params.temperature,
+                top_p: c.llm_params.top_p,
+                presence_penalty: c.llm_params.presence_penalty,
+                frequency_penalty: c.llm_params.frequency_penalty,
+            }),
         })
         .collect()
 }
@@ -930,6 +1006,7 @@ fn create_new_l2_context(
         activation_state: crate::slot::context::ActivationState::Active,
         centroid_page_ref: 0,
         dialogue_range: (now_ms, now_ms),
+        llm_params: crate::slot::context::LlmParams::default(),
     };
 
     // Serialize
@@ -1258,6 +1335,7 @@ mod tests {
             activation_state: ActivationState::Active,
             centroid_page_ref: 0,
             dialogue_range: (0, 0),
+            llm_params: crate::slot::context::LlmParams::default(),
         };
 
         let ctx_depth1 = ContextSlot {
@@ -1491,6 +1569,7 @@ mod tests {
             importance: 0.5,
             dialogue_range: (0, 0),
             version: 1,
+            llm_params: crate::slot::context::LlmParams::default(),
         };
 
         let page_id = crate::file::page::allocate_page(

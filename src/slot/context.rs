@@ -35,6 +35,26 @@ impl ActivationState {
     }
 }
 
+/// L2 scene-level recommended LLM parameters (refreshed during dream compression)
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LlmParams {
+    pub temperature: f32,       // 0.0-2.0
+    pub top_p: f32,             // 0.0-1.0
+    pub presence_penalty: f32,  // -2.0-2.0
+    pub frequency_penalty: f32, // -2.0-2.0
+}
+
+impl Default for LlmParams {
+    fn default() -> Self {
+        Self {
+            temperature: 0.7,
+            top_p: 0.9,
+            presence_penalty: 0.0,
+            frequency_penalty: 0.0,
+        }
+    }
+}
+
 /// L2 scene context slot
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextSlot {
@@ -55,21 +75,18 @@ pub struct ContextSlot {
     pub activation_state: ActivationState,
     pub centroid_page_ref: u64,     // Vector page reference (not inline)
     pub dialogue_range: (i64, i64), // (earliest_ts, latest_ts)
+    pub llm_params: LlmParams,      // Scene-level LLM parameters
 }
 
 impl ContextSlot {
     /// Calculate the total serialized size in bytes
     ///
-    /// Fixed: 8 (id_hash) + 8 (parent_id) + 1 (depth) + 2 (title_len) +
-    ///        2 (summary_len) + 2 (archive_count) + 2 (l3_count) + 4 (turn_count) +
-    ///        8 (created_at) + 8 (updated_at) + 4 (version) + 4 (importance) +
-    ///        4 (activation_score) + 1 (is_active) + 1 (activation_state) +
-    ///        8 (centroid_page_ref) + 8 (dialogue_earliest) + 8 (dialogue_latest)
-    ///      = 83 bytes
+    /// Fixed v1: 83 bytes (no llm_params)
+    /// Fixed v2: 99 bytes (with llm_params: 4 × f32)
     /// Variable: title + summary + archive_refs * 8 + l3_refs * 8
     pub fn slot_size(&self) -> usize {
-        const FIXED: usize = 83;
-        FIXED
+        let fixed = if self.version >= 2 { 99 } else { 83 };
+        fixed
             + self.title.len()  // title
             + self.summary.as_ref().map_or(0, |s| s.len())  // summary
             + self.archive_refs.len() * 8  // archive_refs
@@ -103,6 +120,14 @@ impl ContextSlot {
         buf.write_all(&self.centroid_page_ref.to_le_bytes())?;
         buf.write_all(&self.dialogue_range.0.to_le_bytes())?;
         buf.write_all(&self.dialogue_range.1.to_le_bytes())?;
+
+        // LLM params (16 bytes, only for version >= 2)
+        if self.version >= 2 {
+            buf.write_all(&self.llm_params.temperature.to_le_bytes())?;
+            buf.write_all(&self.llm_params.top_p.to_le_bytes())?;
+            buf.write_all(&self.llm_params.presence_penalty.to_le_bytes())?;
+            buf.write_all(&self.llm_params.frequency_penalty.to_le_bytes())?;
+        }
 
         // Variable part: title
         buf.write_all(self.title.as_bytes())?;
@@ -157,6 +182,18 @@ impl ContextSlot {
         let dialogue_latest = read_i64(&mut c)?;
         let dialogue_range = (dialogue_earliest, dialogue_latest);
 
+        // LLM params (version >= 2)
+        let llm_params = if version >= 2 {
+            LlmParams {
+                temperature: read_f32(&mut c)?,
+                top_p: read_f32(&mut c)?,
+                presence_penalty: read_f32(&mut c)?,
+                frequency_penalty: read_f32(&mut c)?,
+            }
+        } else {
+            LlmParams::default()
+        };
+
         // Variable part: title
         let mut title_buf = vec![0u8; title_len as usize];
         c.read_exact(&mut title_buf)?;
@@ -205,6 +242,7 @@ impl ContextSlot {
             activation_state,
             centroid_page_ref,
             dialogue_range,
+            llm_params,
         })
     }
 }
@@ -233,6 +271,7 @@ mod tests {
             activation_state: ActivationState::Active,
             centroid_page_ref: 42,
             dialogue_range: (1000000, 2000000),
+            llm_params: LlmParams::default(),
         };
 
         let data = ctx.serialize().unwrap();
@@ -261,6 +300,7 @@ mod tests {
             activation_state: ActivationState::Dormant,
             centroid_page_ref: 0,
             dialogue_range: (0, 0),
+            llm_params: LlmParams::default(),
         };
 
         let data = ctx.serialize().unwrap();
@@ -291,6 +331,7 @@ mod tests {
             activation_state: ActivationState::Active,
             centroid_page_ref: 10,
             dialogue_range: (1000, 2000),
+            llm_params: LlmParams::default(),
         };
 
         let data = ctx.serialize().unwrap();
@@ -320,9 +361,10 @@ mod tests {
             activation_state: ActivationState::Dormant,
             centroid_page_ref: 0,
             dialogue_range: (0, 0),
+            llm_params: LlmParams::default(),
         };
 
-        // 83 + 4 + 3 + 8 + 16 = 114
+        // 83 + 4 + 3 + 8 + 16 = 114 (version 0, no llm_params in fixed)
         assert_eq!(ctx.slot_size(), 114);
     }
 
@@ -346,6 +388,7 @@ mod tests {
             activation_state: ActivationState::Dormant,
             centroid_page_ref: 0,
             dialogue_range: (0, 0),
+            llm_params: LlmParams::default(),
         };
 
         let data = ctx.serialize().unwrap();
@@ -373,6 +416,7 @@ mod tests {
             activation_state: ActivationState::Active,
             centroid_page_ref: 5,
             dialogue_range: (1000, 1000),
+            llm_params: LlmParams::default(),
         };
 
         let data = ctx.serialize().unwrap();

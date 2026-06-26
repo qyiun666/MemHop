@@ -50,13 +50,22 @@ impl AdjacencyCache {
     }
 
     /// Get the cached adjacency list for a graph and edge_kinds, if available.
-    pub fn get(&self, graph_id: u64, edge_kinds: Option<&[GraphEdgeKind]>) -> Option<&GraphAdjacency> {
+    pub fn get(
+        &self,
+        graph_id: u64,
+        edge_kinds: Option<&[GraphEdgeKind]>,
+    ) -> Option<&GraphAdjacency> {
         let key = CacheKey::new(graph_id, edge_kinds);
         self.cache.get(&key)
     }
 
     /// Insert or replace the adjacency list for a graph and edge_kinds.
-    pub fn insert(&mut self, graph_id: u64, edge_kinds: Option<&[GraphEdgeKind]>, adjacency: GraphAdjacency) {
+    pub fn insert(
+        &mut self,
+        graph_id: u64,
+        edge_kinds: Option<&[GraphEdgeKind]>,
+        adjacency: GraphAdjacency,
+    ) {
         let key = CacheKey::new(graph_id, edge_kinds);
         self.cache.insert(key, adjacency);
         self.graph_ids.insert(graph_id);

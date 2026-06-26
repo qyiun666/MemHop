@@ -7,11 +7,11 @@ use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
+use crate::organize::extract_keywords;
 use crate::query::common::{format_hash, now_ms, parse_id_to_hash};
 use crate::query::types::*;
 use crate::slot::archive::ArchiveSlot;
 use crate::util::{hash_id, PageType, PAGE_SIZE};
-use crate::organize::extract_keywords;
 use crate::MemHopError;
 use memmap2::MmapMut;
 
@@ -135,8 +135,13 @@ pub fn update_memory(
             let hits = sparse_index.entity_search_nodes(kw);
             for (node_hash, _l2_ids) in &hits {
                 // Find graph_id from node_hash
-                if let Some(slot_data) = btree.search(*node_hash).and_then(|pr| crate::query::slot_io::get_slot_data(data, pr)) {
-                    if let Ok(node) = crate::slot::hypergraph::HypergraphNode::deserialize(slot_data) {
+                if let Some(slot_data) = btree
+                    .search(*node_hash)
+                    .and_then(|pr| crate::query::slot_io::get_slot_data(data, pr))
+                {
+                    if let Ok(node) =
+                        crate::slot::hypergraph::HypergraphNode::deserialize(slot_data)
+                    {
                         if !ctx.l3_refs.contains(&node.graph_id) {
                             graphs_to_link.push(node.graph_id);
                         }

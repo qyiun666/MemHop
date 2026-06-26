@@ -27,12 +27,160 @@ use crate::file::header::FileHeader;
 use crate::file::page::{allocate_page, read_page_header, write_page_data};
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::slot::context::{ActivationState, ContextSlot};
+use crate::slot::context::{ActivationState, ContextSlot, LlmParams};
 use crate::util::hash::hash_id;
 use crate::util::{get_current_timestamp, PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
+
+/// Compute recommended LLM parameters based on context content features.
+///
+/// Heuristics:
+/// - Code keyword density > 0.05 → temperature 0.1-0.3 (technical precision)
+/// - Emotion word density > 0.03 → temperature 0.7-0.9, top_p relaxed (creative/emotional)
+/// - Knowledge density (turn_count + archive_refs + l3_refs) → presence_penalty boost
+fn compute_llm_params(ctx: &ContextSlot, compressed_summary: &str) -> LlmParams {
+    let text = format!("{} {}", ctx.title, compressed_summary);
+    let text_lower = text.to_lowercase();
+    let word_count = text.split_whitespace().count().max(1);
+
+    // Code keyword density
+    let code_keywords = [
+        "fn",
+        "let",
+        "struct",
+        "impl",
+        "async",
+        "pub",
+        "use",
+        "match",
+        "return",
+        "if",
+        "for",
+        "while",
+        "loop",
+        "mod",
+        "enum",
+        "trait",
+        "type",
+        "const",
+        "mut",
+        "ref",
+        "self",
+        "super",
+        "crate",
+        "extern",
+        "unsafe",
+        "move",
+        "where",
+        "dyn",
+        "static",
+        "yield",
+        "await",
+        "function",
+        "class",
+        "var",
+        "def",
+        "import",
+        "from",
+        "else",
+        "try",
+        "catch",
+        "new",
+        "this",
+        "null",
+        "undefined",
+        "true",
+        "false",
+        "=>",
+        "{}",
+        "();",
+        "::",
+        "->",
+        "==",
+        "!=",
+        "===",
+    ];
+    let code_count = code_keywords
+        .iter()
+        .filter(|kw| text_lower.contains(&kw.to_lowercase()))
+        .count();
+    let code_density = code_count as f32 / word_count as f32;
+
+    // Emotion word density
+    let emotion_words = [
+        "开心",
+        "难过",
+        "生气",
+        "害怕",
+        "惊喜",
+        "失望",
+        "兴奋",
+        "焦虑",
+        "愤怒",
+        "恐惧",
+        "love",
+        "hate",
+        "happy",
+        "sad",
+        "angry",
+        "afraid",
+        "excited",
+        "worried",
+        "frustrated",
+        "joy",
+        "sorrow",
+        "fear",
+        "hope",
+        "despair",
+        "delighted",
+        "annoyed",
+        "anxious",
+        "！",
+        "？",
+        "!!",
+        "???",
+        "哈哈",
+        "呵呵",
+        "呜呜",
+        "嘿嘿",
+        "哼",
+        "啊",
+        "哦",
+        "哇",
+    ];
+    let emotion_count = emotion_words
+        .iter()
+        .filter(|ew| text_lower.contains(&ew.to_lowercase()))
+        .count();
+    let emotion_density = emotion_count as f32 / word_count as f32;
+
+    // Knowledge density
+    let knowledge_density = (ctx.turn_count as f32 * 0.1
+        + ctx.archive_refs.len() as f32 * 0.2
+        + ctx.l3_refs.len() as f32 * 0.3)
+        .min(1.0);
+
+    let temperature = if code_density > 0.05 {
+        0.1 + code_density.min(0.2) // technical: 0.1-0.3
+    } else if emotion_density > 0.03 {
+        0.7 + emotion_density.min(0.2) // emotional: 0.7-0.9
+    } else {
+        0.5 // default
+    };
+
+    let top_p = (0.85 + emotion_density * 0.5).min(1.0);
+    let presence_penalty = (knowledge_density * 0.6).min(0.6);
+    let frequency_penalty = (ctx.turn_count as f32 * 0.02).min(0.5);
+
+    LlmParams {
+        temperature,
+        top_p,
+        presence_penalty,
+        frequency_penalty,
+    }
+}
 
 /// Compress activated L2 contexts through depth-based demotion
 ///
@@ -175,6 +323,9 @@ pub fn compress_active_contexts(
             Err(_) => llm.fallback_summarize(&texts_to_compress),
         };
 
+        // Compute LLM params based on content features
+        let llm_params = compute_llm_params(ctx, &compressed_summary);
+
         // Create new compressed context at depth 1
         let new_id_hash = hash_id(&format!("compressed_{}_{}", ctx_id, now_ms));
         let new_ctx = ContextSlot {
@@ -188,13 +339,14 @@ pub fn compress_active_contexts(
             turn_count: ctx.turn_count,
             created_at: now_ms,
             updated_at: now_ms,
-            version: 1,
+            version: 2,
             importance: ctx.importance * 0.9,
             activation_score: 0.3,
             is_active: false, // Compressed contexts start inactive
             activation_state: ActivationState::Crystallized,
             centroid_page_ref: ctx.centroid_page_ref,
             dialogue_range: ctx.dialogue_range,
+            llm_params,
         };
 
         // Allocate page for new compressed context
@@ -228,6 +380,7 @@ pub fn compress_active_contexts(
         demoted_ctx.parent_id = Some(new_id_hash);
         demoted_ctx.summary = Some(compressed_summary.clone());
         demoted_ctx.updated_at = now_ms;
+        demoted_ctx.llm_params = llm_params;
 
         let demoted_serialized = demoted_ctx
             .serialize()
@@ -570,6 +723,7 @@ mod tests {
             activation_state: ActivationState::Active,
             centroid_page_ref: 0,
             dialogue_range: (1000, 1000),
+            llm_params: crate::slot::context::LlmParams::default(),
         };
 
         let ctx1 = ContextSlot {
@@ -660,6 +814,7 @@ mod tests {
             activation_state: ActivationState::Active,
             centroid_page_ref: 0,
             dialogue_range: (1000, 1000),
+            llm_params: crate::slot::context::LlmParams::default(),
         };
         insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx);
 
@@ -685,5 +840,103 @@ mod tests {
         assert_eq!(compressed.parent_id, None);
         assert_eq!(original.depth, 2);
         assert_eq!(original.parent_id, Some(new_id));
+    }
+
+    #[test]
+    fn test_compute_llm_params_technical() {
+        let ctx = ContextSlot {
+            id_hash: 1,
+            parent_id: None,
+            depth: 1,
+            title: "Rust function implementation".to_string(),
+            summary: Some("fn main() { let x = 42; }".to_string()),
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 5,
+            created_at: 0,
+            updated_at: 0,
+            version: 2,
+            importance: 0.5,
+            activation_score: 0.0,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (0, 0),
+            llm_params: LlmParams::default(),
+        };
+
+        let params = compute_llm_params(&ctx, "fn main() { let x = 42; }");
+        assert!(
+            params.temperature >= 0.1 && params.temperature <= 0.3,
+            "technical context should have low temperature, got {}",
+            params.temperature
+        );
+    }
+
+    #[test]
+    fn test_compute_llm_params_emotional() {
+        let ctx = ContextSlot {
+            id_hash: 2,
+            parent_id: None,
+            depth: 1,
+            title: "I am so happy today!".to_string(),
+            summary: Some("Feeling joyful and excited about the project!".to_string()),
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 3,
+            created_at: 0,
+            updated_at: 0,
+            version: 2,
+            importance: 0.5,
+            activation_score: 0.0,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (0, 0),
+            llm_params: LlmParams::default(),
+        };
+
+        let params = compute_llm_params(&ctx, "Feeling joyful and excited about the project!");
+        assert!(
+            params.temperature >= 0.7 && params.temperature <= 0.9,
+            "emotional context should have high temperature, got {}",
+            params.temperature
+        );
+        assert!(
+            params.top_p > 0.9,
+            "emotional context should have relaxed top_p, got {}",
+            params.top_p
+        );
+    }
+
+    #[test]
+    fn test_compute_llm_params_knowledge_dense() {
+        let ctx = ContextSlot {
+            id_hash: 3,
+            parent_id: None,
+            depth: 1,
+            title: "Knowledge base".to_string(),
+            summary: Some("Comprehensive overview of multiple topics".to_string()),
+            archive_refs: vec![1, 2, 3, 4, 5],
+            l3_refs: vec![10, 20, 30],
+            turn_count: 20,
+            created_at: 0,
+            updated_at: 0,
+            version: 2,
+            importance: 0.5,
+            activation_score: 0.0,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (0, 0),
+            llm_params: LlmParams::default(),
+        };
+
+        let params = compute_llm_params(&ctx, "Comprehensive overview of multiple topics");
+        assert!(
+            params.presence_penalty > 0.3,
+            "knowledge-dense context should have elevated presence_penalty, got {}",
+            params.presence_penalty
+        );
     }
 }

@@ -1,4 +1,4 @@
-//! MemHop v0.45.0 - Agent-oriented memory database inspired by human brain cognitive architecture
+//! MemHop v0.48.0 - Agent-oriented memory database inspired by human brain cognitive architecture
 //!
 //! MemHop is a specialized memory database designed for AI Agents, implementing
 //! a six-layer cognitive architecture (L0-L5) with custom .meh binary file format.
@@ -535,6 +535,7 @@ impl MemHop {
     }
 
     /// Free all pages belonging to the current on-disk B-tree index.
+    #[allow(dead_code)]
     fn free_btree_pages(&mut self) -> Result<()> {
         let directory_page = u32::from_le_bytes([
             self.header.reserved[8],
@@ -660,6 +661,7 @@ impl MemHop {
     }
 
     /// Free all pages used by the current on-disk SparseIndex.
+    #[allow(dead_code)]
     fn free_sparse_pages(&mut self) -> Result<()> {
         let directory_page = self.header.layer_roots[1];
         if directory_page == 0 || directory_page >= self.header.page_count {
@@ -961,6 +963,7 @@ impl MemHop {
     }
 
     /// Free all pages used by the current on-disk L1 reverse index.
+    #[allow(dead_code)]
     fn free_l1_reverse_pages(&mut self) -> Result<()> {
         let start_page = self.header.layer_roots[12];
         if start_page == 0 || start_page >= self.header.page_count {
@@ -1369,10 +1372,17 @@ impl MemHop {
         let graph_hash = crate::query::common::parse_id_to_hash(graph_id);
         let start_hash = crate::query::common::parse_id_to_hash(start_node);
 
-        let kinds = edge_kinds.map(|vec| {
-            vec.iter()
+        let kinds = edge_kinds.and_then(|vec| {
+            let parsed: Vec<_> = vec
+                .iter()
                 .filter_map(|s| Self::parse_graph_edge_kind(s))
-                .collect::<Vec<_>>()
+                .collect();
+            // Treat empty array as None (no filtering)
+            if parsed.is_empty() {
+                None
+            } else {
+                Some(parsed)
+            }
         });
 
         let data: &[u8] = &self.mmap[..];
@@ -1430,25 +1440,26 @@ impl MemHop {
             crate::slot::context::ContextSlot::deserialize_slot(slot_data)?
         };
 
-        // Collect associated L1 ContextNode records.
-        let mut l1_nodes: Vec<(u64, u64)> = Vec::new();
-        {
+        // Collect associated L1 ContextNode records using L1ReverseIndex (O(1) lookup).
+        let l1_nodes: Vec<(u64, u64)> = {
             let data: &[u8] = &self.mmap[..];
-            for (&id_hash, &page_ref) in self.btree.iter() {
-                if crate::l3::store::page_type_of(data, page_ref)
-                    != Some(crate::util::PageType::ContextNode as u16)
-                {
-                    continue;
-                }
-                if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
-                    if let Ok(node) = crate::slot::context_node::ContextNode::deserialize_slot(slot_data) {
-                        if node.context_id == topic_id {
-                            l1_nodes.push((id_hash, page_ref));
-                        }
+            self.l1_reverse_index
+                .find_associated(&std::iter::once(topic_id).collect())
+                .into_iter()
+                .filter(|(_, page_ref)| {
+                    // Verify the page is still a ContextNode (defensive check)
+                    let page_id = crate::query::slot_io::decode_page_id(*page_ref);
+                    if page_id >= self.header.page_count {
+                        return false;
                     }
-                }
-            }
-        }
+                    if let Ok(page_hdr) = crate::file::page::read_page_header(data, page_id) {
+                        page_hdr.page_type == crate::util::PageType::ContextNode as u16
+                    } else {
+                        false
+                    }
+                })
+                .collect()
+        };
 
         // Free L1 nodes and update the reverse index.
         for (node_hash, page_ref) in l1_nodes {
@@ -1649,7 +1660,9 @@ impl MemHop {
         Ok(result)
     }
 
-    /// Activate a Topic for session management
+    /// Activate a Topic for session management. If capacity is exceeded,
+    /// the LRU topic is evicted and optionally processed through a lightweight
+    /// dream consolidation before removal from the active set.
     ///
     /// # Arguments
     /// * `topic_id` - Topic ID string (will be converted to hash)
@@ -1657,7 +1670,41 @@ impl MemHop {
     pub fn activate_topic(&mut self, topic_id: &str, ttl_ms: Option<i64>) {
         use crate::util::hash::hash_id;
         let id_hash = hash_id(topic_id);
-        self.session_manager.activate_topic(id_hash, ttl_ms);
+        let evicted = self.session_manager.activate_topic(id_hash, ttl_ms);
+
+        if let Some(evicted_id) = evicted {
+            if self.config.auto_dream_on_evict {
+                if let Err(e) = self.dream_single_topic(evicted_id) {
+                    eprintln!("[memhop] Warning: dream_single_topic failed for evicted topic: {}", e);
+                }
+            }
+        }
+    }
+
+    /// Lightweight dream: consolidate a single evicted topic.
+    ///
+    /// Runs L3 distillation + L2 compression + L1 rebuild for the given topic only.
+    /// Skips global stages (L1 decay, L0 profile, habit distillation, L5 crystallization)
+    /// to keep latency low. Uses `self.config.llm` for LLM configuration.
+    fn dream_single_topic(&mut self, topic_id: u64) -> Result<DreamReport> {
+        use crate::dream::dream_pipeline;
+        use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
+        use std::collections::HashSet;
+
+        let llm_provider = OpenAICompatibleLlmProvider::new(self.config.llm.clone());
+        let session_topics: HashSet<u64> = [topic_id].into_iter().collect();
+
+        let report = dream_pipeline(
+            &mut self.mmap,
+            &mut self.header,
+            &mut self.btree,
+            &mut self.sparse_index,
+            &llm_provider,
+            session_topics,
+        )?;
+        self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
+        self.adjacency_cache.invalidate_all();
+        Ok(report)
     }
 
     /// Deactivate the specified Topic
@@ -1781,12 +1828,28 @@ impl MemHop {
 
     /// Checkpoint: save indices to disk and update header
     pub fn checkpoint(&mut self) -> Result<()> {
+        // Save old page references so we can free them AFTER writing new pages.
+        let old_btree_directory = u32::from_le_bytes([
+            self.header.reserved[8],
+            self.header.reserved[9],
+            self.header.reserved[10],
+            self.header.reserved[11],
+        ]);
+        let old_btree_bucket_count = u32::from_le_bytes([
+            self.header.reserved[0],
+            self.header.reserved[1],
+            self.header.reserved[2],
+            self.header.reserved[3],
+        ]);
+        let old_sparse_directory = self.header.layer_roots[1];
+        let old_l1_root = self.header.layer_roots[12];
+        let old_btree_root = self.header.layer_roots[0];
+
         // Serialize and save B-tree using multi-page Linear Hash layout.
         let btree_pages = self
             .btree
             .serialize_to_pages()
             .map_err(MemHopError::Serialization)?;
-        self.free_btree_pages()?;
         let directory_page = self.write_btree_pages(&btree_pages)?;
         self.header.reserved[0..4].copy_from_slice(&btree_pages.bucket_count.to_le_bytes());
         self.header.reserved[4..8].copy_from_slice(&btree_pages.split_pointer.to_le_bytes());
@@ -1798,13 +1861,11 @@ impl MemHop {
             .sparse_index
             .serialize_to_pages()
             .map_err(MemHopError::Serialization)?;
-        self.free_sparse_pages()?;
         let sparse_directory_page = self.write_sparse_pages(&sparse_page_data)?;
         self.header.layer_roots[1] = sparse_directory_page;
 
         // Serialize and save L1 reverse index using a dedicated page chain.
         let l1_data = self.l1_reverse_index.serialize()?;
-        self.free_l1_reverse_pages()?;
         let l1_root_page = self.write_l1_reverse_pages(&l1_data)?;
         self.header.layer_roots[12] = l1_root_page;
 
@@ -1821,6 +1882,84 @@ impl MemHop {
         self.mmap[..PAGE_SIZE].copy_from_slice(&header_bytes); // A second
         self.mmap.flush_range(0, PAGE_SIZE)?;
 
+        // NOW free old pages (write-then-free strategy).
+        // If a crash happened before this point, the old pages are still valid
+        // and the old headers (A or B) still point to them.
+        self.free_old_btree_pages(old_btree_directory, old_btree_bucket_count, old_btree_root)?;
+        self.free_old_sparse_pages(old_sparse_directory)?;
+        self.free_old_l1_reverse_pages(old_l1_root)?;
+
+        Ok(())
+    }
+
+    /// Free old B-tree pages after a successful checkpoint.
+    fn free_old_btree_pages(
+        &mut self,
+        old_directory: u32,
+        old_bucket_count: u32,
+        old_root: u32,
+    ) -> Result<()> {
+        if old_directory != 0 && old_directory < self.header.page_count && old_bucket_count > 0 {
+            // Free new-format bucket chains via directory page.
+            let dir_offset = (old_directory as usize) * PAGE_SIZE + 32;
+            let dir_data = &self.mmap[dir_offset..dir_offset + PAGE_SIZE - 32];
+            let primary_pages = Self::read_directory_page(dir_data, old_bucket_count);
+            for primary_page in primary_pages {
+                if primary_page != 0 && primary_page < self.header.page_count {
+                    Self::free_page_chain(&mut self.mmap, &mut self.header, primary_page)?;
+                }
+            }
+            // Free directory page itself.
+            crate::file::free_list::free_page(&mut self.mmap, &mut self.header, old_directory)?;
+        } else if old_root != 0 && old_root < self.header.page_count {
+            // Free legacy single-page btree.
+            crate::file::free_list::free_page(&mut self.mmap, &mut self.header, old_root)?;
+        }
+        Ok(())
+    }
+
+    /// Free old Sparse Index pages after a successful checkpoint.
+    fn free_old_sparse_pages(&mut self, old_directory: u32) -> Result<()> {
+        if old_directory == 0 || old_directory >= self.header.page_count {
+            return Ok(());
+        }
+
+        let dir_data = match read_page_data(&self.mmap, old_directory) {
+            Ok(d) => d,
+            Err(_) => return Ok(()),
+        };
+
+        if dir_data.len() >= 4 {
+            let magic = u32::from_le_bytes([dir_data[0], dir_data[1], dir_data[2], dir_data[3]]);
+            if magic == crate::index::sparse::SPARSE_MAGIC {
+                if let Some(dir) = SparseDirectory::parse(dir_data) {
+                    for &page_id in &dir.term_primary_pages {
+                        if page_id != 0 {
+                            Self::free_page_chain(&mut self.mmap, &mut self.header, page_id)?;
+                        }
+                    }
+                    for &page_id in &dir.doc_primary_pages {
+                        if page_id != 0 {
+                            Self::free_page_chain(&mut self.mmap, &mut self.header, page_id)?;
+                        }
+                    }
+                    if dir.entity_start != 0 {
+                        Self::free_page_chain(&mut self.mmap, &mut self.header, dir.entity_start)?;
+                    }
+                }
+            }
+        }
+
+        crate::file::free_list::free_page(&mut self.mmap, &mut self.header, old_directory)?;
+        Ok(())
+    }
+
+    /// Free old L1 reverse index pages after a successful checkpoint.
+    fn free_old_l1_reverse_pages(&mut self, old_root: u32) -> Result<()> {
+        if old_root == 0 || old_root >= self.header.page_count {
+            return Ok(());
+        }
+        Self::free_page_chain(&mut self.mmap, &mut self.header, old_root)?;
         Ok(())
     }
 

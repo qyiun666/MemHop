@@ -187,5 +187,11 @@ pub fn merge_topics(
         activation_state: format!("{:?}", primary_ctx.activation_state),
         created_at: primary_ctx.created_at,
         updated_at: primary_ctx.updated_at,
+        llm_params: Some(LlmParamsDto {
+            temperature: primary_ctx.llm_params.temperature,
+            top_p: primary_ctx.llm_params.top_p,
+            presence_penalty: primary_ctx.llm_params.presence_penalty,
+            frequency_penalty: primary_ctx.llm_params.frequency_penalty,
+        }),
     })
 }
