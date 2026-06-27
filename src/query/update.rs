@@ -241,6 +241,7 @@ fn allocate_and_write_l4_archive(
 }
 
 /// Allocate page and write L5 ActionChainSlot
+#[allow(clippy::too_many_arguments)]
 fn allocate_and_write_l5_crystal(
     mmap: &mut MmapMut,
     header: &mut FileHeader,

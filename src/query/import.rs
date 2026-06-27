@@ -231,6 +231,7 @@ fn import_l0_profile(
 // L2 Topics Import
 // ============================================================================
 
+#[allow(clippy::too_many_arguments)]
 fn import_l2_topics(
     mmap: &mut MmapMut,
     header: &mut FileHeader,

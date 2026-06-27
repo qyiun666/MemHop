@@ -637,6 +637,7 @@ pub fn create_batch_hyperedges(
 }
 
 /// Main batch store function - five-phase pipeline
+#[allow(clippy::too_many_arguments)]
 pub fn batch_store(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
