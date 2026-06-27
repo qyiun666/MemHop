@@ -26,6 +26,7 @@ use crate::util::{hash_id, PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
 
 /// Safely slice a UTF-8 string by character count, not byte count.
 fn safe_char_slice(s: &str, max_chars: usize) -> String {
@@ -140,6 +141,7 @@ pub fn search_memory(
     vector_dim: usize,
     encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
     l1_reverse: &L1ReverseIndex,
+    file: &mut File,
 ) -> Result<SearchResult, MemHopError> {
     let _page_count = header.page_count;
 
@@ -154,6 +156,7 @@ pub fn search_memory(
             sparse_index,
             &query.dialogue,
             vector_dim,
+            file,
         )?;
         vec![new_ctx]
 
@@ -972,6 +975,7 @@ fn create_new_l2_context(
     sparse_index: &mut SparseIndex,
     dialogue: &str,
     _vector_dim: usize,
+    file: &mut File,
 ) -> Result<ContextSlot, MemHopError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -1015,7 +1019,7 @@ fn create_new_l2_context(
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
     // Allocate page
-    let page_id = crate::file::free_list::allocate_from_free_list(mmap, header)?;
+    let page_id = crate::file::free_list::allocate_or_extend(mmap, header, file, 500)?;
     let page_offset = (page_id as usize) * PAGE_SIZE;
 
     // Write page header
@@ -1258,7 +1262,7 @@ mod tests {
     use crate::slot::context::{ActivationState, ContextSlot};
     use std::io::Write;
 
-    fn create_test_mmap(page_count: usize) -> (tempfile::NamedTempFile, MmapMut, FileHeader) {
+    fn create_test_mmap(page_count: usize) -> (tempfile::NamedTempFile, MmapMut, FileHeader, std::fs::File) {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let path = temp_file.path();
         let mut file = std::fs::File::create(path).unwrap();
@@ -1282,7 +1286,7 @@ mod tests {
         }
         header.page_count = page_count as u32;
         header.free_list_head = 2;
-        (temp_file, mmap, header)
+        (temp_file, mmap, header, file)
     }
 
     fn insert_test_context(
@@ -1291,9 +1295,10 @@ mod tests {
         btree: &mut BTreeIndex,
         sparse_index: &mut SparseIndex,
         ctx: ContextSlot,
+        file: &mut std::fs::File,
     ) {
         let page_id =
-            crate::file::page::allocate_page(mmap, header, crate::util::PageType::Context, 2, 0)
+            crate::file::page::allocate_page(mmap, header, crate::util::PageType::Context, 2, 0, file)
                 .unwrap();
         let serialized = ctx.serialize().unwrap();
         crate::file::page::write_page_data(mmap, page_id, &serialized).unwrap();
@@ -1313,7 +1318,7 @@ mod tests {
 
     #[test]
     fn test_depth3_retrieval_weighting() {
-        let (_temp, mut mmap, mut header) = create_test_mmap(10);
+        let (_temp, mut mmap, mut header, mut file) = create_test_mmap(10);
         let mut btree = BTreeIndex::new();
         let mut sparse_index = SparseIndex::new();
 
@@ -1354,6 +1359,7 @@ mod tests {
             &mut btree,
             &mut sparse_index,
             ctx_depth1,
+            &mut file,
         );
         insert_test_context(
             &mut mmap,
@@ -1361,6 +1367,7 @@ mod tests {
             &mut btree,
             &mut sparse_index,
             ctx_depth3,
+            &mut file,
         );
 
         let data: &[u8] = &mmap[..];
@@ -1401,6 +1408,7 @@ mod tests {
         header: &mut FileHeader,
         btree: &mut BTreeIndex,
         node: ContextNode,
+        file: &mut std::fs::File,
     ) -> u64 {
         let page_id = crate::file::page::allocate_page(
             mmap,
@@ -1408,6 +1416,7 @@ mod tests {
             crate::util::PageType::ContextNode,
             1,
             0,
+            file,
         )
         .unwrap();
         let serialized = node.serialize().unwrap();
@@ -1446,7 +1455,7 @@ mod tests {
 
     #[test]
     fn test_l1_reverse_index_build() {
-        let (_temp, mut mmap, mut header) = create_test_mmap(20);
+        let (_temp, mut mmap, mut header, mut file) = create_test_mmap(20);
         let mut btree = BTreeIndex::new();
 
         let node1 = ContextNode {
@@ -1472,9 +1481,9 @@ mod tests {
             ..node1.clone()
         };
 
-        insert_test_context_node(&mut mmap, &mut header, &mut btree, node1);
-        insert_test_context_node(&mut mmap, &mut header, &mut btree, node2);
-        insert_test_context_node(&mut mmap, &mut header, &mut btree, node3);
+        insert_test_context_node(&mut mmap, &mut header, &mut btree, node1, &mut file);
+        insert_test_context_node(&mut mmap, &mut header, &mut btree, node2, &mut file);
+        insert_test_context_node(&mut mmap, &mut header, &mut btree, node3, &mut file);
 
         let data: &[u8] = &mmap[..];
         let idx = L1ReverseIndex::build(data, &btree).unwrap();
@@ -1547,7 +1556,7 @@ mod tests {
 
     #[test]
     fn test_collect_l2_ids_with_l3_page_type_filter() {
-        let (_temp, mut mmap, mut header) = create_test_mmap(20);
+        let (_temp, mut mmap, mut header, mut file) = create_test_mmap(20);
         let mut btree = BTreeIndex::new();
 
         // Insert a Context with l3_refs
@@ -1578,6 +1587,7 @@ mod tests {
             crate::util::PageType::Context,
             2,
             0,
+            &mut file,
         )
         .unwrap();
         let serialized = ctx.serialize().unwrap();
@@ -1592,6 +1602,7 @@ mod tests {
             crate::util::PageType::HypergraphNode,
             3,
             0,
+            &mut file,
         )
         .unwrap();
         // Write some dummy data

@@ -18,6 +18,7 @@ use crate::index::sparse::SparseIndex;
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
+use std::fs::File;
 
 /// Main dream pipeline - memory consolidation through depth demotion
 ///
@@ -52,6 +53,7 @@ pub fn dream_pipeline(
     sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
     session_topic_ids: HashSet<u64>,
+    file: &mut File,
 ) -> Result<DreamReport, MemHopError> {
     let start_time = std::time::Instant::now();
 
@@ -89,6 +91,7 @@ pub fn dream_pipeline(
         sparse_index,
         llm,
         &session_topic_ids,
+        file,
     );
     match l3_nodes {
         Ok(nodes) => report.new_l3_nodes = nodes,
@@ -107,6 +110,7 @@ pub fn dream_pipeline(
         sparse_index,
         llm,
         &session_topic_ids,
+        file,
     );
     match compress_result {
         Ok((demoted_sec, compressed, removed, demoted_ter)) => {
@@ -151,7 +155,7 @@ pub fn dream_pipeline(
     }
 
     // Stage 4: L0 Update - regenerate profile from knowledge distribution
-    let l0_result = l0_form_stage::generate_profile(mmap, header, btree, sparse_index);
+    let l0_result = l0_form_stage::generate_profile(mmap, header, btree, sparse_index, file);
     if let Err(e) = l0_result {
         *btree = btree_snapshot;
         *sparse_index = sparse_snapshot;
@@ -192,7 +196,7 @@ pub fn dream_pipeline(
     }
 
     // Stage 5: L5 Crystallization - scan all ActionChainSlots, extract crystals
-    let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm);
+    let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm, file);
     match crystals {
         Ok(crystals) => report.new_crystals = crystals,
         Err(e) => {
@@ -344,8 +348,9 @@ mod tests {
         importance: f32,
         context_id: u64,
         edge_ptrs: Vec<u64>,
+        file: &mut File,
     ) -> u32 {
-        let page_id = allocate_page(mmap, header, PageType::ContextNode, 1, 0xFFFFFFFF).unwrap();
+        let page_id = allocate_page(mmap, header, PageType::ContextNode, 1, 0xFFFFFFFF, file).unwrap();
         let node = ContextNode {
             id_hash,
             context_id,
@@ -370,8 +375,9 @@ mod tests {
         id_hash: u64,
         weight: f32,
         node_ptrs: Vec<u64>,
+        file: &mut File,
     ) -> u32 {
-        let page_id = allocate_page(mmap, header, PageType::Hyperedge, 2, 0xFFFFFFFF).unwrap();
+        let page_id = allocate_page(mmap, header, PageType::Hyperedge, 2, 0xFFFFFFFF, file).unwrap();
         let edge = HyperedgeSlot {
             id_hash,
             kind: HyperedgeKind::Semantic,
@@ -402,16 +408,24 @@ mod tests {
         let (mut mmap, mut header, mut btree) = create_mmap(20);
         let mut sparse_index = SparseIndex::new();
 
+        let temp_file2 = tempfile::NamedTempFile::new().unwrap();
+        let path2 = temp_file2.path();
+        let mut file2 = File::create(path2).unwrap();
+        use std::io::Write;
+        file2.write_all(&vec![0u8; PAGE_SIZE * 20]).unwrap();
+        drop(file2);
+        let mut file2 = std::fs::OpenOptions::new().read(true).write(true).open(path2).unwrap();
+
         // Stale L1 node points to an L2 context that no longer exists.
         let _stale_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 1, 1.0, 1000, vec![10]);
+            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 1, 1.0, 1000, vec![10], &mut file2);
         // Edge connects the stale node and two surviving nodes.
         let edge_page =
-            allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 10, 1.0, vec![1, 2, 3]);
+            allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 10, 1.0, vec![1, 2, 3], &mut file2);
         let node2_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 2, 1.0, 2000, vec![10]);
+            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 2, 1.0, 2000, vec![10], &mut file2);
         let node3_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 3, 1.0, 2001, vec![10]);
+            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 3, 1.0, 2001, vec![10], &mut file2);
 
         // Mark the surviving L2 contexts as present so only node 1 is stale.
         btree.insert(2000, 0);
@@ -454,12 +468,20 @@ mod tests {
         let (mut mmap, mut header, mut btree) = create_mmap(20);
         let mut sparse_index = SparseIndex::new();
 
+        let temp_file2 = tempfile::NamedTempFile::new().unwrap();
+        let path2 = temp_file2.path();
+        let mut file2 = File::create(path2).unwrap();
+        use std::io::Write;
+        file2.write_all(&vec![0u8; PAGE_SIZE * 20]).unwrap();
+        drop(file2);
+        let mut file2 = std::fs::OpenOptions::new().read(true).write(true).open(path2).unwrap();
+
         let _stale_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 1, 1.0, 1000, vec![10]);
+            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 1, 1.0, 1000, vec![10], &mut file2);
         let _edge_page =
-            allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 10, 1.0, vec![1, 2]);
+            allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 10, 1.0, vec![1, 2], &mut file2);
         let node2_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 2, 1.0, 2000, vec![10]);
+            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 2, 1.0, 2000, vec![10], &mut file2);
 
         // Mark the surviving L2 context as present so only node 1 is stale.
         btree.insert(2000, 0);

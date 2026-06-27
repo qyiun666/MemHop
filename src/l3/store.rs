@@ -3,7 +3,7 @@
 //! Provides CRUD operations for HypergraphNode and HypergraphEdge,
 //! and graph-level management (list, delete, count).
 
-use crate::file::free_list::{allocate_from_free_list, free_page};
+use crate::file::free_list::{allocate_or_extend, free_page};
 use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
@@ -15,6 +15,7 @@ use crate::util::{PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::{hash_map::Entry, HashMap, HashSet, VecDeque};
+use std::fs::File;
 
 // ============================================================================
 // Inline helpers
@@ -49,8 +50,15 @@ pub fn add_node(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
-    node: HypergraphNode,
+    mut node: HypergraphNode,
+    file: &mut File,
 ) -> Result<String, MemHopError> {
+    // L3 is a knowledge graph — content should be a short summary/index,
+    // not the original text. Enforce a 200-char cap to keep nodes small.
+    if node.content.len() > 200 {
+        node.content = node.content.chars().take(200).collect();
+    }
+
     let data_bytes = node
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -65,7 +73,7 @@ pub fn add_node(
     }
 
     // Allocate page BEFORE writing — if allocation fails, no cleanup needed
-    let page_id = allocate_from_free_list(mmap, header)?;
+    let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let offset = (page_id as usize) * PAGE_SIZE;
 
     // Write page header
@@ -183,6 +191,7 @@ pub fn add_edge(
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
     edge: HypergraphEdge,
+    file: &mut File,
 ) -> Result<String, MemHopError> {
     let data_bytes = edge
         .serialize()
@@ -198,7 +207,7 @@ pub fn add_edge(
     }
 
     // Allocate page BEFORE writing — if allocation fails, no cleanup needed
-    let page_id = allocate_from_free_list(mmap, header)?;
+    let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let offset = (page_id as usize) * PAGE_SIZE;
 
     // Write page header
@@ -839,7 +848,7 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
 
-    fn create_test_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex) {
+    fn create_test_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex, File) {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let path = temp_file.path();
         let mut file = File::create(path).unwrap();
@@ -862,7 +871,7 @@ mod tests {
         }
 
         let btree = BTreeIndex::new();
-        (mmap, header, btree)
+        (mmap, header, btree, file)
     }
 
     fn create_test_node(id_hash: u64, graph_id: u64, title: &str) -> HypergraphNode {
@@ -905,6 +914,7 @@ mod tests {
         mmap: &mut MmapMut,
         header: &mut FileHeader,
         btree: &mut BTreeIndex,
+        file: &mut File,
     ) -> (Vec<u64>, Vec<u64>) {
         let graph_id = 1u64;
         let node_ids = vec![101u64, 102, 103, 104, 105];
@@ -916,6 +926,7 @@ mod tests {
                 header,
                 btree,
                 create_test_node(nid, graph_id, &format!("node{}", nid)),
+                file,
             )
             .unwrap();
         }
@@ -925,6 +936,7 @@ mod tests {
             header,
             btree,
             create_test_edge(201, graph_id, GraphEdgeKind::Related, vec![101, 102]),
+            file,
         )
         .unwrap();
         add_edge(
@@ -932,6 +944,7 @@ mod tests {
             header,
             btree,
             create_test_edge(202, graph_id, GraphEdgeKind::Related, vec![102, 103]),
+            file,
         )
         .unwrap();
         add_edge(
@@ -939,6 +952,7 @@ mod tests {
             header,
             btree,
             create_test_edge(203, graph_id, GraphEdgeKind::Dependency, vec![103, 104]),
+            file,
         )
         .unwrap();
         add_edge(
@@ -946,6 +960,7 @@ mod tests {
             header,
             btree,
             create_test_edge(204, graph_id, GraphEdgeKind::Causal, vec![101, 103, 105]),
+            file,
         )
         .unwrap();
 
@@ -954,8 +969,8 @@ mod tests {
 
     #[test]
     fn test_bfs_traversal_one_hop() {
-        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
-        let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree);
+        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
 
         let data: &[u8] = &mmap[..];
         let hops = bfs_traversal(data, &btree, 1, 101, 1, None).unwrap();
@@ -975,8 +990,8 @@ mod tests {
 
     #[test]
     fn test_bfs_traversal_two_hops() {
-        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
-        let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree);
+        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
 
         let data: &[u8] = &mmap[..];
         let hops = bfs_traversal(data, &btree, 1, 101, 2, None).unwrap();
@@ -996,8 +1011,8 @@ mod tests {
 
     #[test]
     fn test_bfs_traversal_edge_kind_filter() {
-        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
-        let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree);
+        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
 
         let data: &[u8] = &mmap[..];
         let hops = bfs_traversal(data, &btree, 1, 101, 2, Some(&[GraphEdgeKind::Related])).unwrap();
@@ -1009,7 +1024,7 @@ mod tests {
 
     #[test]
     fn test_bfs_avoids_cycles() {
-        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
+        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
 
         // Create a triangle: 101 <-> 102 <-> 103 <-> 101
         for &nid in &[101u64, 102, 103] {
@@ -1018,6 +1033,7 @@ mod tests {
                 &mut header,
                 &mut btree,
                 create_test_node(nid, 1, &format!("node{}", nid)),
+                &mut file,
             )
             .unwrap();
         }
@@ -1026,6 +1042,7 @@ mod tests {
             &mut header,
             &mut btree,
             create_test_edge(201, 1, GraphEdgeKind::Related, vec![101, 102]),
+            &mut file,
         )
         .unwrap();
         add_edge(
@@ -1033,6 +1050,7 @@ mod tests {
             &mut header,
             &mut btree,
             create_test_edge(202, 1, GraphEdgeKind::Related, vec![102, 103]),
+            &mut file,
         )
         .unwrap();
         add_edge(
@@ -1040,6 +1058,7 @@ mod tests {
             &mut header,
             &mut btree,
             create_test_edge(203, 1, GraphEdgeKind::Related, vec![103, 101]),
+            &mut file,
         )
         .unwrap();
 
@@ -1055,8 +1074,8 @@ mod tests {
 
     #[test]
     fn test_extract_subgraph() {
-        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
-        let (node_ids, _edge_ids) = build_test_graph(&mut mmap, &mut header, &mut btree);
+        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let (node_ids, _edge_ids) = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
 
         let data: &[u8] = &mmap[..];
         let subgraph = extract_subgraph(data, &btree, 1, 101, 2).unwrap();
@@ -1074,13 +1093,14 @@ mod tests {
 
     #[test]
     fn test_extract_subgraph_start_node_only() {
-        let (mut mmap, mut header, mut btree) = create_test_mmap(64);
+        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
 
         add_node(
             &mut mmap,
             &mut header,
             &mut btree,
             create_test_node(101, 1, "island"),
+            &mut file,
         )
         .unwrap();
 

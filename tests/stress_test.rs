@@ -1,0 +1,215 @@
+//! Stress tests to verify MemHop handles heavy write loads without corruption
+//! or FileFull errors, and that auto-extension works correctly.
+
+use memhop::{MemHop, MemHopConfig, SourceMeta, SourceType};
+use tempfile::TempDir;
+
+fn create_test_db() -> (TempDir, MemHop) {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("stress_test.meh");
+    let mut config = MemHopConfig::new(path, 8);
+    config.encoder_grpc_addr = None;
+    let db = MemHop::open(config).unwrap();
+    (dir, db)
+}
+
+/// Test 1: Verify file auto-extends when pages run out
+/// Creates a small DB, fills it with many items, and verifies no FileFull error.
+#[test]
+fn test_file_auto_extend() {
+    let (_dir, mut db) = create_test_db();
+
+    // Use a mock encoder
+    struct MockEncoder;
+    impl memhop::encoder::Encoder for MockEncoder {
+        fn encode(&self, _text: &str) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
+            Ok(memhop::encoder::EncoderOutput {
+                dense: vec![half::f16::from_f32(0.1); 8],
+                sparse: std::collections::HashMap::new(),
+            })
+        }
+        fn dim(&self) -> usize { 8 }
+        fn mode(&self) -> &str { "mock" }
+    }
+    db.set_encoder(MockEncoder);
+
+    // Insert 500 items — should trigger auto-extension beyond initial 2000 pages
+    let mut total_created = 0u32;
+    for i in 0..500 {
+        let batch = memhop::StoreBatch {
+            items: vec![memhop::StoreItem {
+                text: format!("stress test document number {} with some content to fill pages", i),
+                topic_label: Some(format!("topic_{}", i % 20)),
+                domain_id: None,
+                importance: Some(0.5),
+                valence: None,
+                arousal: None,
+                source: SourceMeta::new(SourceType::UserInput, None),
+                is_structural: false,
+                source_ref: None,
+            }],
+            session_id: Some("stress_session".to_string()),
+            turn_id: Some(format!("{}", i)),
+            source: Default::default(),
+        };
+        let report = db.batch_store(batch).expect("batch_store should succeed with auto-extend");
+        total_created += report.l1_nodes_created;
+    }
+
+    assert_eq!(total_created, 500, "all 500 items should be created");
+}
+
+/// Test 2: Verify batch_store with many items doesn't cause partial writes
+#[test]
+fn test_batch_store_no_partial_write() {
+    let (_dir, mut db) = create_test_db();
+
+    struct MockEncoder;
+    impl memhop::encoder::Encoder for MockEncoder {
+        fn encode(&self, _text: &str) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
+            Ok(memhop::encoder::EncoderOutput {
+                dense: vec![half::f16::from_f32(0.1); 8],
+                sparse: std::collections::HashMap::new(),
+            })
+        }
+        fn dim(&self) -> usize { 8 }
+        fn mode(&self) -> &str { "mock" }
+    }
+    db.set_encoder(MockEncoder);
+
+    // Create a batch with 100 items
+    let items: Vec<memhop::StoreItem> = (0..100)
+        .map(|i| memhop::StoreItem {
+            text: format!("batch item {} with padding text to increase size", i),
+            topic_label: Some(format!("batch_topic_{}", i % 5)),
+            domain_id: None,
+            importance: Some(0.5),
+            valence: None,
+            arousal: None,
+            source: SourceMeta::new(SourceType::UserInput, None),
+            is_structural: false,
+            source_ref: None,
+        })
+        .collect();
+
+    let batch = memhop::StoreBatch {
+        items,
+        session_id: Some("batch_session".to_string()),
+        turn_id: Some("0".to_string()),
+        source: Default::default(),
+    };
+
+    let report = db.batch_store(batch).expect("large batch should succeed");
+    assert_eq!(report.l1_nodes_created, 100, "all 100 items should be stored");
+    assert!(report.l2_topics_updated > 0, "L2 topics should be created");
+    assert!(report.edges_created > 0, "hyperedges should be created");
+
+    // Verify DB is still readable after large batch
+    let engrams = db.list_engrams(memhop::EngramListQuery {
+        page: 1,
+        page_size: 200,
+        keyword: None,
+        min_importance: None,
+        state_filter: None,
+    }).expect("DB should be readable after batch");
+    assert!(engrams.total >= 100, "all engrams should be listable");
+}
+
+/// Test 3: Rapid alternating write + sync doesn't corrupt DB
+#[test]
+fn test_rapid_write_and_sync() {
+    let (dir, mut db) = create_test_db();
+
+    struct MockEncoder;
+    impl memhop::encoder::Encoder for MockEncoder {
+        fn encode(&self, _text: &str) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
+            Ok(memhop::encoder::EncoderOutput {
+                dense: vec![half::f16::from_f32(0.1); 8],
+                sparse: std::collections::HashMap::new(),
+            })
+        }
+        fn dim(&self) -> usize { 8 }
+        fn mode(&self) -> &str { "mock" }
+    }
+    db.set_encoder(MockEncoder);
+
+    // Perform 100 rounds of write + sync
+    for round in 0..100 {
+        let batch = memhop::StoreBatch {
+            items: vec![memhop::StoreItem {
+                text: format!("round {} document with content", round),
+                topic_label: Some(format!("round_topic_{}", round % 10)),
+                domain_id: None,
+                importance: Some(0.5),
+                valence: None,
+                arousal: None,
+                source: SourceMeta::new(SourceType::UserInput, None),
+                is_structural: false,
+                source_ref: None,
+            }],
+            session_id: Some(format!("session_{}", round)),
+            turn_id: Some("0".to_string()),
+            source: Default::default(),
+        };
+        db.batch_store(batch).expect("write should succeed");
+        db.sync().expect("sync should succeed");
+    }
+
+    // Close and reopen DB to verify persistence
+    drop(db);
+    let path = dir.path().join("stress_test.meh");
+    let mut config = MemHopConfig::new(path, 8);
+    config.encoder_grpc_addr = None;
+    let db2 = MemHop::open(config).expect("DB should reopen without corruption");
+
+    let engrams = db2.list_engrams(memhop::EngramListQuery {
+        page: 1,
+        page_size: 200,
+        keyword: None,
+        min_importance: None,
+        state_filter: None,
+    }).expect("reopened DB should be readable");
+    assert!(engrams.total >= 100, "all 100 rounds should be persisted");
+}
+
+/// Test 4: Import many L3 documents without corruption
+#[test]
+fn test_import_many_l3_documents() {
+    let (_dir, mut db) = create_test_db();
+
+    let mut total_created = 0usize;
+
+    // Import 200 L3 knowledge items across 5 domains
+    for i in 0..200 {
+        let request = memhop::ImportRequest {
+            target_layer: memhop::TargetLayer::Knowledge,
+            data: memhop::ImportData::Knowledge(vec![memhop::KnowledgeImportItem {
+                title: format!("knowledge_item_{}", i),
+                domain: format!("domain_{}", i % 5),
+                knowledge_type: "Factual".to_string(),
+                text: format!("This is a long text document {} that should be truncated in L3 since L3 only stores summaries not original text", i),
+                summary: Some(format!("Summary of document {}", i)),
+                keywords: vec![format!("kw_{}", i), "test".to_string()],
+                source_ref: Some(format!("source_{}", i)),
+            }]),
+            mode: memhop::ImportMode::Merge,
+            knowledge_title: None,
+        };
+        let result = db.import_memory(request).expect("import should succeed");
+        // Check no errors
+        assert!(result.errors.is_empty(), "import {} had errors: {:?}", i, result.errors);
+        total_created += result.created_ids.len();
+    }
+
+    assert_eq!(total_created, 200, "all 200 knowledge items should be created, got {}", total_created);
+
+    // Verify DB is still consistent by listing topics (no encoder needed)
+    let topics = db.list_topics(memhop::TopicListQuery {
+        page: 1,
+        page_size: 10,
+        active_only: false,
+        keyword: None,
+    }).expect("list_topics should work after imports");
+    // At least verify DB is readable
+    let _ = topics;
+}

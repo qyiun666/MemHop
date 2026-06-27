@@ -83,9 +83,10 @@ pub fn dream_consolidation(
     sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
     session_topic_ids: HashSet<u64>,
+    file: &mut std::fs::File,
 ) -> Result<DreamReport, MemHopError> {
     // Delegate to main orchestration function
-    crate::dream::dream_pipeline(mmap, header, btree, sparse_index, llm, session_topic_ids)
+    crate::dream::dream_pipeline(mmap, header, btree, sparse_index, llm, session_topic_ids, file)
 }
 
 #[cfg(test)]

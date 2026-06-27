@@ -2,7 +2,7 @@
 //!
 //! Implements the update_memory() interface with multi-level联动 updates.
 
-use crate::file::free_list::allocate_from_free_list;
+use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
@@ -14,6 +14,7 @@ use crate::slot::archive::ArchiveSlot;
 use crate::util::{hash_id, PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
+use std::fs::File;
 
 /// Write a proper PageHeader for a newly allocated data page
 fn write_slot_page_header(
@@ -53,6 +54,7 @@ pub fn update_memory(
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     _vector_dim: usize,
+    file: &mut File,
 ) -> Result<UpdateResult, MemHopError> {
     let now_ms = now_ms();
 
@@ -75,6 +77,7 @@ pub fn update_memory(
         now_ms,
         btree,
         request.source.to_metadata_json(),
+        file,
     )?;
     let archive_id = format_hash(l4_id_hash);
 
@@ -92,6 +95,7 @@ pub fn update_memory(
             &action.description,
             now_ms,
             btree,
+            file,
         )?;
     }
 
@@ -197,9 +201,10 @@ fn allocate_and_write_l4_archive(
     now_ms: i64,
     btree: &mut BTreeIndex,
     metadata: Option<String>,
+    file: &mut File,
 ) -> Result<u64, MemHopError> {
     // Allocate new page
-    let page_id = allocate_from_free_list(mmap, header)?;
+    let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let offset = (page_id as usize) * PAGE_SIZE + 32;
 
     // Create ArchiveSlot
@@ -244,9 +249,10 @@ fn allocate_and_write_l5_crystal(
     action_description: &str,
     now_ms: i64,
     btree: &mut BTreeIndex,
+    file: &mut File,
 ) -> Result<u64, MemHopError> {
     // Allocate new page
-    let page_id = allocate_from_free_list(mmap, header)?;
+    let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let offset = (page_id as usize) * PAGE_SIZE + 32;
 
     // Create ActionChainSlot

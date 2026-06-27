@@ -33,6 +33,7 @@ use crate::util::{get_current_timestamp, PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
+use std::fs::File;
 
 /// Compute recommended LLM parameters based on context content features.
 ///
@@ -208,6 +209,7 @@ pub fn compress_active_contexts(
     sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
     active_topic_ids: &HashSet<u64>,
+    file: &mut File,
 ) -> CompressStageResult {
     let now_ms = get_current_timestamp();
     let _page_count = header.page_count;
@@ -350,7 +352,7 @@ pub fn compress_active_contexts(
         };
 
         // Allocate page for new compressed context
-        let new_page_id = allocate_page(mmap, header, PageType::Context, 2, 0)?;
+        let new_page_id = allocate_page(mmap, header, PageType::Context, 2, 0, file)?;
         let new_serialized = new_ctx
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -524,6 +526,11 @@ mod tests {
         let llm = MockLlm;
         let empty_topics = HashSet::new();
 
+        let mut file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
         let result = compress_active_contexts(
             &mut mmap,
             &mut header,
@@ -531,6 +538,7 @@ mod tests {
             &mut sparse_index,
             &llm,
             &empty_topics,
+            &mut file,
         );
 
         assert!(result.is_ok());
@@ -636,7 +644,7 @@ mod tests {
         }
     }
 
-    fn create_test_mmap(page_count: usize) -> (tempfile::NamedTempFile, MmapMut, FileHeader) {
+    fn create_test_mmap(page_count: usize) -> (tempfile::NamedTempFile, MmapMut, FileHeader, std::fs::File) {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let path = temp_file.path();
         let mut file = std::fs::File::create(path).unwrap();
@@ -660,7 +668,7 @@ mod tests {
         }
         header.page_count = page_count as u32;
         header.free_list_head = 2;
-        (temp_file, mmap, header)
+        (temp_file, mmap, header, file)
     }
 
     fn insert_test_context(
@@ -669,9 +677,10 @@ mod tests {
         btree: &mut BTreeIndex,
         sparse_index: &mut SparseIndex,
         ctx: ContextSlot,
+        file: &mut File,
     ) -> u32 {
         let page_id =
-            crate::file::page::allocate_page(mmap, header, crate::util::PageType::Context, 2, 0)
+            crate::file::page::allocate_page(mmap, header, crate::util::PageType::Context, 2, 0, file)
                 .unwrap();
         let serialized = ctx.serialize().unwrap();
         crate::file::page::write_page_data(mmap, page_id, &serialized).unwrap();
@@ -700,7 +709,7 @@ mod tests {
 
     #[test]
     fn test_depth4_demotion_and_removal() {
-        let (_temp, mut mmap, mut header) = create_test_mmap(20);
+        let (_temp, mut mmap, mut header, mut file) = create_test_mmap(20);
         let mut btree = BTreeIndex::new();
         let mut sparse_index = SparseIndex::new();
         let llm = TestLlm;
@@ -754,11 +763,10 @@ mod tests {
             title: "Semantic summary A1a".to_string(),
             ..base.clone()
         };
-
-        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx1);
-        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx2);
-        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx3);
-        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx4);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx1, &mut file);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx2, &mut file);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx3, &mut file);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx4, &mut file);
 
         let active_ids: HashSet<u64> = [1, 2, 3, 4].iter().cloned().collect();
         let result = compress_active_contexts(
@@ -768,6 +776,7 @@ mod tests {
             &mut sparse_index,
             &llm,
             &active_ids,
+            &mut file,
         )
         .unwrap();
 
@@ -791,7 +800,7 @@ mod tests {
 
     #[test]
     fn test_compression_parent_id_chain() {
-        let (_temp, mut mmap, mut header) = create_test_mmap(10);
+        let (_temp, mut mmap, mut header, mut file) = create_test_mmap(10);
         let mut btree = BTreeIndex::new();
         let mut sparse_index = SparseIndex::new();
         let llm = TestLlm;
@@ -816,7 +825,7 @@ mod tests {
             dialogue_range: (1000, 1000),
             llm_params: crate::slot::context::LlmParams::default(),
         };
-        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx, &mut file);
 
         let active_ids: HashSet<u64> = [10].iter().cloned().collect();
         let result = compress_active_contexts(
@@ -826,6 +835,7 @@ mod tests {
             &mut sparse_index,
             &llm,
             &active_ids,
+            &mut file,
         )
         .unwrap();
 

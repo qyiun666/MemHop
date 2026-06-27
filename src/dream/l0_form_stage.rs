@@ -3,7 +3,7 @@
 //! This stage analyzes the distribution of topic keywords to generate
 //! an L0 Profile representing the agent's personality and expertise areas.
 
-use crate::file::free_list::allocate_from_free_list;
+use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
@@ -13,6 +13,7 @@ use crate::util::{get_current_timestamp, hash_id, PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashMap;
+use std::fs::File;
 
 /// Generate L0 profile from topic keyword distribution
 ///
@@ -29,6 +30,7 @@ pub fn generate_profile(
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
     sparse_index: &SparseIndex,
+    file: &mut File,
 ) -> Result<(), MemHopError> {
     // 1. Get top keywords from sparse index
     let top_keywords_with_freq = sparse_index.top_terms(20);
@@ -79,7 +81,7 @@ pub fn generate_profile(
         (pid, existing)
     } else {
         // Profile doesn't exist — create new with defaults
-        let pid = allocate_from_free_list(mmap, header)?;
+        let pid = allocate_or_extend(mmap, header, file, 500)?;
         let slot = ProfileSlot {
             id_hash: profile_id_hash,
             name: "Agent".to_string(),
@@ -157,7 +159,7 @@ mod tests {
         file.write_all(&vec![0u8; 4096 * 500]).unwrap();
         drop(file);
 
-        let file = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(path)
@@ -174,7 +176,7 @@ mod tests {
 
         let mut btree = BTreeIndex::new();
         let sparse_index = SparseIndex::new();
-        let result = generate_profile(&mut mmap, &mut header, &mut btree, &sparse_index);
+        let result = generate_profile(&mut mmap, &mut header, &mut btree, &sparse_index, &mut file);
         assert!(result.is_ok());
         // Verify profile was stored in B-tree
         assert!(btree.search(hash_id("profile")).is_some());

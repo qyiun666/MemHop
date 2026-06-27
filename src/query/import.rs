@@ -3,7 +3,7 @@
 //! Implements the import_memory() interface to batch import memories into L0/L2/L3 layers.
 //! Also provides import_l3_from_path() for file-based L3 import with auto L2 creation.
 
-use crate::file::free_list::allocate_from_free_list;
+use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
@@ -15,6 +15,7 @@ use crate::util::{hash_id, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashMap;
+use std::fs::File;
 use std::path::Path;
 
 /// Helper function to calculate search terms and doc_len for L2 context
@@ -64,9 +65,10 @@ pub fn import_memory(
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     request: ImportRequest,
+    file: &mut File,
 ) -> Result<ImportResult, MemHopError> {
     match request.target_layer {
-        TargetLayer::Profile => import_l0_profile(mmap, header, btree, request.data, request.mode),
+        TargetLayer::Profile => import_l0_profile(mmap, header, btree, request.data, request.mode, file),
         TargetLayer::Topic => import_l2_topics(
             mmap,
             header,
@@ -75,6 +77,7 @@ pub fn import_memory(
             request.data,
             request.mode,
             request.knowledge_title,
+            file,
         ),
         TargetLayer::Knowledge => import_l3_knowledge(
             mmap,
@@ -83,6 +86,7 @@ pub fn import_memory(
             sparse_index,
             request.data,
             request.mode,
+            file,
         ),
     }
 }
@@ -97,6 +101,7 @@ fn import_l0_profile(
     btree: &mut BTreeIndex,
     data: ImportData,
     mode: ImportMode,
+    file: &mut File,
 ) -> Result<ImportResult, MemHopError> {
     let now_ms = common::now_ms();
 
@@ -173,7 +178,7 @@ fn import_l0_profile(
             }
             None => {
                 // Profile doesn't exist, create new
-                let page_id = allocate_from_free_list(mmap, header)?;
+                let page_id = allocate_or_extend(mmap, header, file, 500)?;
                 let offset = (page_id as usize) * PAGE_SIZE + 32;
 
                 let profile = ProfileSlot {
@@ -234,6 +239,7 @@ fn import_l2_topics(
     data: ImportData,
     mode: ImportMode,
     knowledge_title: Option<String>,
+    file: &mut File,
 ) -> Result<ImportResult, MemHopError> {
     let now_ms = common::now_ms();
 
@@ -313,7 +319,7 @@ fn import_l2_topics(
                     }
                     None => {
                         // Create new L2 context
-                        let page_id = allocate_from_free_list(mmap, header)?;
+                        let page_id = allocate_or_extend(mmap, header, file, 500)?;
                         let offset = (page_id as usize) * PAGE_SIZE + 32;
 
                         let mut l3_refs = Vec::new();
@@ -407,6 +413,7 @@ fn import_l3_knowledge(
     _sparse_index: &mut SparseIndex,
     data: ImportData,
     mode: ImportMode,
+    file: &mut File,
 ) -> Result<ImportResult, MemHopError> {
     let items = match data {
         ImportData::Knowledge(items) => items,
@@ -455,7 +462,7 @@ fn import_l3_knowledge(
             let gid = crate::util::hash_id(&item.domain);
             if btree.search(gid).is_none() {
                 if let Err(e) =
-                    create_hypergraph_slot(mmap, header, btree, gid, &item.domain, now_ms)
+                    create_hypergraph_slot(mmap, header, btree, gid, &item.domain, now_ms, file)
                 {
                     errors.push(ImportError {
                         index: idx,
@@ -472,7 +479,9 @@ fn import_l3_knowledge(
             graph_id,
             title: item.title.clone(),
             node_type: item.knowledge_type.clone(),
-            content: item.text.clone(),
+            // L3 is a knowledge graph — store only a short summary/index,
+            // not the original text (which belongs in L4 Archive).
+            content: item.text.chars().take(200).collect(),
             keywords: item.keywords.clone(),
             source_ref: item.source_ref.clone(),
             importance: 0.7,
@@ -481,7 +490,7 @@ fn import_l3_knowledge(
             version: 1,
         };
 
-        match crate::l3::store::add_node(mmap, header, btree, node) {
+        match crate::l3::store::add_node(mmap, header, btree, node, file) {
             Ok(id) => created_ids.push(id),
             Err(e) => errors.push(ImportError {
                 index: idx,
@@ -515,8 +524,8 @@ fn create_hypergraph_slot(
     id_hash: u64,
     name: &str,
     now_ms: i64,
+    file: &mut File,
 ) -> Result<(), MemHopError> {
-    use crate::file::free_list::allocate_from_free_list;
     use crate::file::page::PageHeader;
     use crate::slot::hypergraph::{HypergraphSlot, HypergraphSource};
     use crate::util::{PageType, PAGE_SIZE};
@@ -536,7 +545,7 @@ fn create_hypergraph_slot(
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-    let page_id = allocate_from_free_list(mmap, header)?;
+    let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let page_offset = (page_id as usize) * PAGE_SIZE;
 
     // Write page header
@@ -749,6 +758,7 @@ pub fn build_l3_hypergraph_from_path(
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     path: &Path,
+    file: &mut File,
 ) -> Result<ImportResult, MemHopError> {
     use crate::slot::hypergraph::{
         GraphEdgeKind, HypergraphEdge, HypergraphSlot, HypergraphSource,
@@ -810,7 +820,7 @@ pub fn build_l3_hypergraph_from_path(
     };
 
     // Allocate page for HypergraphSlot
-    let page_id = allocate_from_free_list(mmap, header)?;
+    let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let page_offset = (page_id as usize) * PAGE_SIZE;
     let page_hdr = crate::file::page::PageHeader::new(
         page_id,
@@ -883,7 +893,7 @@ pub fn build_l3_hypergraph_from_path(
             version: 1,
         };
 
-        match crate::l3::store::add_node(mmap, header, btree, node) {
+        match crate::l3::store::add_node(mmap, header, btree, node, file) {
             Ok(id) => {
                 created_ids.push(id);
                 module_to_hash.insert(module_name.clone(), node_hash);
@@ -943,7 +953,7 @@ pub fn build_l3_hypergraph_from_path(
                 created_at: now_ms,
             };
 
-            match crate::l3::store::add_edge(mmap, header, btree, edge) {
+            match crate::l3::store::add_edge(mmap, header, btree, edge, file) {
                 Ok(id) => {
                     edge_ids.push(id);
                     edge_count += 1;
@@ -1015,7 +1025,7 @@ pub fn build_l3_hypergraph_from_path(
     let ctx_data = ctx
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    let l2_page_id = allocate_from_free_list(mmap, header)?;
+    let l2_page_id = allocate_or_extend(mmap, header, file, 500)?;
     let l2_offset = (l2_page_id as usize) * PAGE_SIZE + 32;
 
     if l2_offset + ctx_data.len() > mmap.len() {

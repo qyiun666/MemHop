@@ -259,9 +259,9 @@ impl MemHop {
         // 1. Open or create .meh file
         let file = if db_exists {
             let file = OpenOptions::new().read(true).write(true).open(db_path)?;
-            // Verify file has minimum size (at least 500 pages)
+            // Verify file has minimum size (at least 2000 pages)
             let metadata = file.metadata()?;
-            let min_size = 500 * PAGE_SIZE as u64;
+            let min_size = 2000 * PAGE_SIZE as u64;
             if metadata.len() < min_size {
                 eprintln!(
                     "Warning: Database file is too small ({} bytes), extending to {} bytes",
@@ -272,15 +272,15 @@ impl MemHop {
             }
             file
         } else {
-            // Create new file with initial size (500 pages: 2 headers + 1 free list + 14 layer roots + 483 data pages)
-            // This allows storing ~240 documents (each needs engram + vector page)
+            // Create new file with initial size (2000 pages: 2 headers + 1 free list + 14 layer roots + 1983 data pages)
+            // This allows storing ~990 documents (each needs engram + vector page)
             let file = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create(true)
                 .truncate(true)
                 .open(db_path)?;
-            file.set_len(500 * 4096)?; // Initial 500 pages (~2MB)
+            file.set_len(2000 * 4096)?; // Initial 2000 pages (~8MB)
             file
         };
 
@@ -310,13 +310,13 @@ impl MemHop {
 
             // Add all data pages (from page 18 onwards) to free list in reverse order (LIFO)
             // Pages 0-1: headers, Page 2: free list head, Pages 3-17: reserved for layer roots
-            // Pages 18-499: available data pages
-            for page_id in (18..500).rev() {
+            // Pages 18-1999: available data pages
+            for page_id in (18..2000).rev() {
                 use crate::file::free_list::free_page;
                 free_page(&mut mmap, &mut header, page_id)?;
             }
 
-            header.page_count = 500;
+            header.page_count = 2000;
 
             // Write headers directly to mmap
             let header_bytes = header.to_bytes();
@@ -1093,36 +1093,21 @@ impl MemHop {
 
     /// Allocate a new page, automatically extending the file if the free list is exhausted.
     ///
-    /// This is a safe wrapper around `crate::file::page::allocate_page` that catches
-    /// `MemHopError::FileFull` and grows the file by 500 pages before retrying.
+    /// `allocate_page` now has built-in auto-extension via `allocate_or_extend`.
     pub fn allocate_page(
         &mut self,
         page_type: crate::util::PageType,
         layer_id: u16,
         next_page_id: u32,
     ) -> Result<u32> {
-        use crate::file::page::allocate_page as alloc_page;
-
-        match alloc_page(
+        crate::file::page::allocate_page(
             &mut self.mmap,
             &mut self.header,
             page_type,
             layer_id,
             next_page_id,
-        ) {
-            Ok(page_id) => Ok(page_id),
-            Err(MemHopError::FileFull) => {
-                self.extend_file(500)?;
-                alloc_page(
-                    &mut self.mmap,
-                    &mut self.header,
-                    page_type,
-                    layer_id,
-                    next_page_id,
-                )
-            }
-            Err(e) => Err(e),
-        }
+            &mut self.file,
+        )
     }
 
     // Note: Old interfaces (store, recall, recall_cascade, recall_more) have been removed.
@@ -1147,6 +1132,7 @@ impl MemHop {
             self.config.vector_dim,
             self.encoder.as_deref(),
             &self.l1_reverse_index,
+            &mut self.file,
         )
     }
 
@@ -1167,6 +1153,7 @@ impl MemHop {
             &mut self.btree,
             &mut self.sparse_index,
             self.config.vector_dim,
+            &mut self.file,
         )
     }
 
@@ -1567,7 +1554,7 @@ impl MemHop {
     /// Update profile (merge strategy - only update Some fields)
     pub fn update_profile(&mut self, request: UpdateProfileRequest) -> Result<ProfileResult> {
         use crate::query::update_title::update_profile as impl_fn;
-        impl_fn(&mut self.mmap, &mut self.header, &mut self.btree, request)
+        impl_fn(&mut self.mmap, &mut self.header, &mut self.btree, request, &mut self.file)
     }
 
     /// Update topic title (with sparse index synchronization)
@@ -1629,6 +1616,7 @@ impl MemHop {
             &mut self.btree,
             &mut self.sparse_index,
             request,
+            &mut self.file,
         )
     }
 
@@ -1654,6 +1642,7 @@ impl MemHop {
             &mut self.btree,
             &mut self.sparse_index,
             path,
+            &mut self.file,
         )?;
         // Invalidate all adjacency cache since import may modify any graph
         self.adjacency_cache.invalidate_all();
@@ -1701,6 +1690,7 @@ impl MemHop {
             &mut self.sparse_index,
             &llm_provider,
             session_topics,
+            &mut self.file,
         )?;
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
         self.adjacency_cache.invalidate_all();
@@ -1771,6 +1761,7 @@ impl MemHop {
             &mut self.sparse_index,
             &llm_provider,
             session_topics,
+            &mut self.file,
         )?;
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
         // Invalidate all adjacency cache since L3 distillation may modify any graph
@@ -1821,6 +1812,7 @@ impl MemHop {
             self.encoder.as_deref().ok_or_else(|| {
                 MemHopError::EncoderError("No encoder configured for batch_store".to_string())
             })?,
+            &mut self.file,
         )?;
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
         Ok(report)
@@ -2009,11 +2001,11 @@ mod tests {
         config.encoder_grpc_addr = None; // unit test does not need real encoder
         let mut db = MemHop::open(config).unwrap();
 
-        // Initial database has 500 pages; pages 18..499 are free (482 pages).
-        assert_eq!(db.header.page_count, 500);
+        // Initial database has 2000 pages; pages 18..1999 are free (1982 pages).
+        assert_eq!(db.header.page_count, 2000);
 
         // Consume all initially free pages.
-        for _ in 0..482 {
+        for _ in 0..1982 {
             db.allocate_page(
                 crate::util::PageType::Context,
                 2,
@@ -2030,8 +2022,8 @@ mod tests {
                 crate::file::free_list::EMPTY_FREE_LIST,
             )
             .unwrap();
-        assert!(page_id >= 500);
-        assert_eq!(db.header.page_count, 1000);
+        assert!(page_id >= 2000);
+        assert_eq!(db.header.page_count, 2500);
 
         // Additional allocations from the extended region should succeed.
         for _ in 0..10 {

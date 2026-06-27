@@ -3,6 +3,59 @@ use crate::file::header::FileHeader;
 use crate::util::PAGE_SIZE;
 use crate::MemHopError;
 use memmap2::MmapMut;
+use std::fs::File;
+
+/// Allocate a page from the free list, automatically extending the file if full.
+///
+/// When the free list is exhausted (`FileFull`), this function:
+/// 1. Extends the underlying file by `grow_pages` pages
+/// 2. Re-maps the mmap
+/// 3. Links the new pages into the free list
+/// 4. Retries the allocation
+///
+/// This prevents partial writes that would corrupt the database.
+pub fn allocate_or_extend(
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    file: &mut File,
+    grow_pages: u32,
+) -> Result<u32, MemHopError> {
+    match allocate_from_free_list(mmap, header) {
+        Ok(page_id) => Ok(page_id),
+        Err(MemHopError::FileFull) => {
+            let old_count = header.page_count;
+            let new_count = old_count + grow_pages;
+            let new_size = (new_count as usize) * PAGE_SIZE;
+            let old_free_list_head = header.free_list_head;
+
+            // 1. Extend the underlying file
+            file.set_len(new_size as u64)?;
+
+            // 2. Re-map the file into memory
+            *mmap = unsafe { MmapMut::map_mut(&*file)? };
+
+            // 3. Link new pages into free list (LIFO order)
+            let mut next_free = old_free_list_head;
+            let free_type = crate::util::PageType::Free.to_u16().to_le_bytes();
+            for page_id in (old_count..new_count).rev() {
+                let page_offset = (page_id as usize) * PAGE_SIZE;
+                mmap[page_offset..page_offset + 4]
+                    .copy_from_slice(&next_free.to_le_bytes());
+                mmap[page_offset + 4..page_offset + 6]
+                    .copy_from_slice(&free_type);
+                next_free = page_id;
+            }
+
+            // 4. Update header
+            header.free_list_head = next_free;
+            header.page_count = new_count;
+
+            // 5. Retry allocation
+            allocate_from_free_list(mmap, header)
+        }
+        Err(e) => Err(e),
+    }
+}
 
 pub const EMPTY_FREE_LIST: u32 = 0xFFFFFFFF;
 

@@ -4,6 +4,7 @@ use crate::{MemHopError, Result};
 #[cfg(test)]
 use memmap2::Mmap;
 use memmap2::MmapMut;
+use std::fs::File;
 
 /// Page header structure (32 bytes, #[repr(C)])
 #[derive(Debug, Clone)]
@@ -79,15 +80,17 @@ impl PageHeader {
 ///
 /// This is the primary page allocation API for dream stages and other modules
 /// that need to allocate pages with a specific PageType and layer_id.
+/// FileFull 时自动扩展 500 页后重试。
 pub fn allocate_page(
     mmap: &mut MmapMut,
     header: &mut crate::file::header::FileHeader,
     page_type: PageType,
     layer_id: u16,
     next_page_id: u32,
+    file: &mut File,
 ) -> Result<u32> {
-    // Use free list allocation (reuses freed pages first)
-    let new_page_id = crate::file::free_list::allocate_from_free_list(mmap, header)?;
+    // Use free list allocation (reuses freed pages first), auto-extend on FileFull
+    let new_page_id = crate::file::free_list::allocate_or_extend(mmap, header, file, 500)?;
 
     let page_offset = (new_page_id as usize) * PAGE_SIZE;
 

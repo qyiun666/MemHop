@@ -14,6 +14,7 @@ use crate::util::hash::hash_id;
 use crate::util::{PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
+use std::fs::File;
 
 /// Crystallize repeated patterns into L5 action chains using LLM
 ///
@@ -33,6 +34,7 @@ pub fn crystallize_patterns(
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
     llm: &dyn LlmProvider,
+    file: &mut File,
 ) -> Result<Vec<String>, MemHopError> {
     // Step 1: Scan all existing L5 ActionChainSlots
     let mut existing_chains: Vec<ActionChainSlot> = Vec::new();
@@ -105,7 +107,7 @@ pub fn crystallize_patterns(
         };
 
         // Allocate page, write, update btree
-        let page_id = allocate_page(mmap, header, PageType::ActionChain, 5, 0)?; // L5 layer
+        let page_id = allocate_page(mmap, header, PageType::ActionChain, 5, 0, file)?; // L5 layer
         let serialized = chain.serialize()?;
         write_page_data(mmap, page_id, &serialized)?;
 
@@ -124,7 +126,7 @@ pub fn crystallize_patterns(
                 created_at: now,
             };
 
-            let step_page_id = allocate_page(mmap, header, PageType::ActionStep, 5, 0)?;
+            let step_page_id = allocate_page(mmap, header, PageType::ActionStep, 5, 0, file)?;
             let step_data = step
                 .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -391,7 +393,7 @@ mod tests {
         }
     }
 
-    fn setup_file(pages: u32) -> (tempfile::NamedTempFile, MmapMut, FileHeader, BTreeIndex) {
+    fn setup_file(pages: u32) -> (tempfile::NamedTempFile, MmapMut, FileHeader, BTreeIndex, std::fs::File) {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let path = temp_file.path();
 
@@ -415,7 +417,7 @@ mod tests {
         }
 
         let btree = BTreeIndex::new();
-        (temp_file, mmap, header, btree)
+        (temp_file, mmap, header, btree, file)
     }
 
     fn write_chain_slot(
@@ -423,8 +425,9 @@ mod tests {
         header: &mut FileHeader,
         btree: &mut BTreeIndex,
         chain: ActionChainSlot,
+        file: &mut std::fs::File,
     ) -> u32 {
-        let page_id = allocate_page(mmap, header, PageType::ActionChain, 5, 0).unwrap();
+        let page_id = allocate_page(mmap, header, PageType::ActionChain, 5, 0, file).unwrap();
         let data = chain.serialize().unwrap();
         write_page_data(mmap, page_id, &data).unwrap();
         let page_ref = crate::file::page::encode_page_ref(page_id, 0);
@@ -437,8 +440,9 @@ mod tests {
         header: &mut FileHeader,
         btree: &mut BTreeIndex,
         step: ActionStep,
+        file: &mut std::fs::File,
     ) -> u32 {
-        let page_id = allocate_page(mmap, header, PageType::ActionStep, 5, 0).unwrap();
+        let page_id = allocate_page(mmap, header, PageType::ActionStep, 5, 0, file).unwrap();
         let data = step.serialize().unwrap();
         write_page_data(mmap, page_id, &data).unwrap();
         let page_ref = crate::file::page::encode_page_ref(page_id, 0);
@@ -482,7 +486,7 @@ mod tests {
     #[test]
     fn test_crystallize_patterns_empty() {
         // Test returns empty list when no L5 action chains exist
-        let (_temp, mut mmap, mut header, mut btree) = setup_file(50);
+        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(50);
         let llm = OpenAICompatibleLlmProvider::new(LlmConfig {
             api_url: "https://api.example.com/v1/chat/completions".to_string(),
             api_key: "test-key".to_string(),
@@ -490,14 +494,14 @@ mod tests {
             ..Default::default()
         });
 
-        let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm);
+        let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm, &mut file);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().len(), 0);
     }
 
     #[test]
     fn test_crystallize_creates_action_steps() {
-        let (_temp, mut mmap, mut header, mut btree) = setup_file(100);
+        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
         let now = chrono::Utc::now().timestamp_millis();
 
         let existing = ActionChainSlot {
@@ -513,10 +517,10 @@ mod tests {
             updated_at: now - 1000,
             version: 1,
         };
-        write_chain_slot(&mut mmap, &mut header, &mut btree, existing);
+        write_chain_slot(&mut mmap, &mut header, &mut btree, existing, &mut file);
 
         let llm = MockLlm;
-        let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm).unwrap();
+        let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm, &mut file).unwrap();
         assert_eq!(result.len(), 1);
 
         let crystal_id = u64::from_str_radix(&result[0], 16).unwrap();
@@ -544,7 +548,7 @@ mod tests {
 
     #[test]
     fn test_crystallize_fallback_no_llm() {
-        let (_temp, mut mmap, mut header, mut btree) = setup_file(100);
+        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
         let now = chrono::Utc::now().timestamp_millis();
 
         let existing = ActionChainSlot {
@@ -560,7 +564,7 @@ mod tests {
             updated_at: now - 1000,
             version: 1,
         };
-        write_chain_slot(&mut mmap, &mut header, &mut btree, existing);
+        write_chain_slot(&mut mmap, &mut header, &mut btree, existing, &mut file);
 
         let llm = OpenAICompatibleLlmProvider::new(LlmConfig {
             api_url: "https://api.example.com/v1/chat/completions".to_string(),
@@ -568,7 +572,7 @@ mod tests {
             model: "test-model".to_string(),
             ..Default::default()
         });
-        let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm).unwrap();
+        let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm, &mut file).unwrap();
         assert_eq!(result.len(), 1);
 
         let crystal_id = u64::from_str_radix(&result[0], 16).unwrap();
@@ -579,7 +583,7 @@ mod tests {
 
     #[test]
     fn test_activate_crystal_success() {
-        let (_temp, mut mmap, mut header, mut btree) = setup_file(100);
+        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
         let now = chrono::Utc::now().timestamp_millis();
 
         let chain_id = hash_id("activate_chain");
@@ -596,7 +600,7 @@ mod tests {
             updated_at: now,
             version: 1,
         };
-        let chain_page = write_chain_slot(&mut mmap, &mut header, &mut btree, chain);
+        let chain_page = write_chain_slot(&mut mmap, &mut header, &mut btree, chain, &mut file);
 
         let step = ActionStep {
             id_hash: hash_id("activate_step"),
@@ -606,7 +610,7 @@ mod tests {
             parameters: None,
             created_at: now,
         };
-        write_action_step(&mut mmap, &mut header, &mut btree, step);
+        write_action_step(&mut mmap, &mut header, &mut btree, step, &mut file);
 
         activate_crystal(&mut mmap, &mut header, &mut btree, chain_id).unwrap();
 
@@ -616,7 +620,7 @@ mod tests {
 
     #[test]
     fn test_activate_crystal_low_confidence_fails() {
-        let (_temp, mut mmap, mut header, mut btree) = setup_file(100);
+        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
         let now = chrono::Utc::now().timestamp_millis();
 
         let chain_id = hash_id("low_conf_chain");
@@ -633,7 +637,7 @@ mod tests {
             updated_at: now,
             version: 1,
         };
-        let chain_page = write_chain_slot(&mut mmap, &mut header, &mut btree, chain);
+        let chain_page = write_chain_slot(&mut mmap, &mut header, &mut btree, chain, &mut file);
 
         let step = ActionStep {
             id_hash: hash_id("low_conf_step"),
@@ -643,7 +647,7 @@ mod tests {
             parameters: None,
             created_at: now,
         };
-        write_action_step(&mut mmap, &mut header, &mut btree, step);
+        write_action_step(&mut mmap, &mut header, &mut btree, step, &mut file);
 
         assert!(activate_crystal(&mut mmap, &mut header, &mut btree, chain_id).is_err());
 
@@ -653,7 +657,7 @@ mod tests {
 
     #[test]
     fn test_activate_crystal_no_steps_fails() {
-        let (_temp, mut mmap, mut header, mut btree) = setup_file(100);
+        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
         let now = chrono::Utc::now().timestamp_millis();
 
         let chain_id = hash_id("no_step_chain");
@@ -670,7 +674,7 @@ mod tests {
             updated_at: now,
             version: 1,
         };
-        write_chain_slot(&mut mmap, &mut header, &mut btree, chain);
+        write_chain_slot(&mut mmap, &mut header, &mut btree, chain, &mut file);
 
         assert!(activate_crystal(&mut mmap, &mut header, &mut btree, chain_id).is_err());
     }

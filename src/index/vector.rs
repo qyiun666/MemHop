@@ -14,6 +14,7 @@ use std::arch::aarch64::*;
 use std::arch::is_aarch64_feature_detected;
 use std::cmp::Ordering;
 use std::collections::HashSet;
+use std::fs::File;
 use std::io::Result as IoResult;
 
 /// Vector page structure for storing embeddings
@@ -715,6 +716,7 @@ fn allocate_and_write_chain(
     header: &mut FileHeader,
     page_type: PageType,
     data: &[u8],
+    file: &mut File,
 ) -> MemHopResult<u32> {
     let payload_capacity = PAGE_SIZE - 32;
     let num_pages = if data.is_empty() {
@@ -725,7 +727,7 @@ fn allocate_and_write_chain(
 
     let mut pages = Vec::with_capacity(num_pages);
     for _ in 0..num_pages {
-        let pid = allocate_page(mmap, header, page_type, 0, EMPTY_FREE_LIST)?;
+        let pid = allocate_page(mmap, header, page_type, 0, EMPTY_FREE_LIST, file)?;
         pages.push(pid);
     }
 
@@ -799,6 +801,7 @@ pub fn write_ivf_index(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     index: &IVFIndex,
+    file: &mut File,
 ) -> MemHopResult<()> {
     let old_cluster_root = read_u32_from_reserved(&header.reserved, IVF_CLUSTER_ROOT_OFFSET);
     let old_bucket_root = read_u32_from_reserved(&header.reserved, IVF_BUCKET_ROOT_OFFSET);
@@ -819,6 +822,7 @@ pub fn write_ivf_index(
             header,
             PageType::IVFCluster,
             &index.serialize_centroids(),
+            file,
         )?
     };
 
@@ -830,6 +834,7 @@ pub fn write_ivf_index(
             header,
             PageType::IVFBucket,
             &index.serialize_buckets(),
+            file,
         )?
     };
 
@@ -1256,7 +1261,7 @@ mod tests {
         f.write_all(&vec![0u8; PAGE_SIZE * 20]).unwrap();
         drop(f);
 
-        let file = std::fs::OpenOptions::new()
+        let mut file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .open(path)
@@ -1269,7 +1274,7 @@ mod tests {
             free_page(&mut mmap, &mut header, pid).unwrap();
         }
 
-        write_ivf_index(&mut mmap, &mut header, &ivf).unwrap();
+        write_ivf_index(&mut mmap, &mut header, &ivf, &mut file).unwrap();
         let restored = read_ivf_index(&mmap, &header)
             .unwrap()
             .expect("IVF should be present");
@@ -1288,7 +1293,7 @@ mod tests {
         // A second write should free the old chains and allocate new ones.
         let old_cluster_root = read_u32_from_reserved(&header.reserved, IVF_CLUSTER_ROOT_OFFSET);
         let old_bucket_root = read_u32_from_reserved(&header.reserved, IVF_BUCKET_ROOT_OFFSET);
-        write_ivf_index(&mut mmap, &mut header, &ivf).unwrap();
+        write_ivf_index(&mut mmap, &mut header, &ivf, &mut file).unwrap();
         let new_cluster_root = read_u32_from_reserved(&header.reserved, IVF_CLUSTER_ROOT_OFFSET);
         let new_bucket_root = read_u32_from_reserved(&header.reserved, IVF_BUCKET_ROOT_OFFSET);
         assert!(new_cluster_root != 0);

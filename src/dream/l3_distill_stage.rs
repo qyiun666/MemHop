@@ -14,7 +14,7 @@
 //! LLM call failure or JSON parse failure → skip (log warning, don't block pipeline)
 
 use crate::dream::llm::LlmProvider;
-use crate::file::free_list::{allocate_from_free_list, free_page};
+use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
@@ -28,6 +28,7 @@ use crate::util::PAGE_SIZE;
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::{HashMap, HashSet};
+use std::fs::File;
 
 // ============================================================================
 // Core distillation logic
@@ -49,6 +50,7 @@ pub fn distill_l3_knowledge(
     _sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
     active_topic_ids: &HashSet<u64>,
+    file: &mut File,
 ) -> Result<Vec<String>, MemHopError> {
     let now_ms = crate::query::common::now_ms();
 
@@ -90,7 +92,7 @@ pub fn distill_l3_knowledge(
         }
 
         // 4. Determine target L3 graph ID
-        let graph_id = resolve_or_create_graph(mmap, header, btree, &ctx, topic_id, now_ms)?;
+        let graph_id = resolve_or_create_graph(mmap, header, btree, &ctx, topic_id, now_ms, file)?;
 
         // 5. Create nodes for each concept
         let mut concept_id_map: HashMap<String, u64> = HashMap::new();
@@ -109,7 +111,7 @@ pub fn distill_l3_knowledge(
                 updated_at: now_ms,
                 version: 1,
             };
-            match crate::l3::add_node(mmap, header, btree, node) {
+            match crate::l3::add_node(mmap, header, btree, node, file) {
                 Ok(id) => {
                     all_new_ids.push(id);
                     concept_id_map.insert(concept.name.clone(), node_hash);
@@ -148,7 +150,7 @@ pub fn distill_l3_knowledge(
                 created_at: now_ms,
             };
 
-            if let Err(e) = crate::l3::add_edge(mmap, header, btree, edge) {
+            if let Err(e) = crate::l3::add_edge(mmap, header, btree, edge, file) {
                 eprintln!("Warning: Failed to create relation edge: {}", e);
             }
         }
@@ -179,6 +181,7 @@ fn resolve_or_create_graph(
     ctx: &ContextSlot,
     topic_id: u64,
     now_ms: i64,
+    file: &mut File,
 ) -> Result<u64, MemHopError> {
     // Reuse existing L3 graph if already linked
     if let Some(&existing_graph_id) = ctx.l3_refs.first() {
@@ -204,17 +207,15 @@ fn resolve_or_create_graph(
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-    let page_id = allocate_from_free_list(mmap, header)?;
-    let page_offset = (page_id as usize) * PAGE_SIZE;
-    let data_offset = page_offset + 32;
-
-    if data_offset + data_bytes.len() > mmap.len() {
-        // Rollback: free the allocated page
-        free_page(mmap, header, page_id)?;
+    if data_bytes.len() > PAGE_SIZE - 32 {
         return Err(MemHopError::Serialization(
             "HypergraphSlot too large for page".to_string(),
         ));
     }
+
+    let page_id = allocate_or_extend(mmap, header, file, 500)?;
+    let page_offset = (page_id as usize) * PAGE_SIZE;
+    let data_offset = page_offset + 32;
 
     // Write proper page header so list_knowledge can identify HypergraphSlot pages.
     let page_header = crate::file::page::PageHeader {

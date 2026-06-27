@@ -2,7 +2,7 @@
 use crate::encoder::Encoder;
 #[cfg(test)]
 use crate::encoder::EncoderOutput;
-use crate::file::free_list::allocate_from_free_list;
+use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
@@ -17,6 +17,7 @@ use half::f16;
 use memmap2::MmapMut;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::File;
 
 /// Batch store request containing multiple items to be stored
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +242,7 @@ pub fn dedup_and_write_l1(
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     vector_dim: usize,
+    file: &mut File,
 ) -> L1WriteResult {
     let mut node_ids = Vec::new();
     let mut node_pages = HashMap::<u64, u32>::new();
@@ -272,7 +274,7 @@ pub fn dedup_and_write_l1(
         // Calculate vector_page_ref before creating node
         let vector_page_ref = if !item.dense.is_empty() {
             // Allocate a new page for vector storage
-            let vec_page_id = allocate_from_free_list(mmap, header)?;
+            let vec_page_id = allocate_or_extend(mmap, header, file, 500)?;
             let vec_slot_index = 0u16; // First slot in new page
 
             // Write vector to the allocated page
@@ -311,7 +313,7 @@ pub fn dedup_and_write_l1(
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
         // Allocate page from free list for L1 node
-        let page_id = allocate_from_free_list(mmap, header)?;
+        let page_id = allocate_or_extend(mmap, header, file, 500)?;
 
         // Write node to page (skip 32-byte header)
         let node_offset = (page_id as usize) * PAGE_SIZE + 32;
@@ -361,6 +363,7 @@ pub fn update_topics(
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     vector_dim: usize,
+    file: &mut File,
 ) -> Result<u32, MemHopError> {
     let mut topics_updated = 0u32;
 
@@ -387,7 +390,7 @@ pub fn update_topics(
 
         // Write centroid vector to page if available
         let centroid_page_ref = if let Some(ref vec) = centroid_vector {
-            let vec_page_id = allocate_from_free_list(mmap, header)?;
+            let vec_page_id = allocate_or_extend(mmap, header, file, 500)?;
             let vec_slot_index = 0u16;
             crate::index::vector::write_vector(
                 mmap,
@@ -429,7 +432,7 @@ pub fn update_topics(
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
         // Allocate page and write context
-        let page_id = allocate_from_free_list(mmap, header)?;
+        let page_id = allocate_or_extend(mmap, header, file, 500)?;
         let context_offset = (page_id as usize) * PAGE_SIZE + 32;
         if context_offset + context_data.len() <= mmap.len() {
             mmap[context_offset..context_offset + context_data.len()]
@@ -539,6 +542,7 @@ pub fn create_batch_hyperedges(
     header: &mut FileHeader,
     l1_node_ids: &[u64],
     btree: &mut BTreeIndex,
+    file: &mut File,
 ) -> Result<u32, MemHopError> {
     let mut edge_count = 0u32;
 
@@ -562,11 +566,15 @@ pub fn create_batch_hyperedges(
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-        let page_id = allocate_from_free_list(mmap, header)?;
-        let edge_offset = (page_id as usize) * PAGE_SIZE + 32;
-        if edge_offset + edge_data.len() <= mmap.len() {
-            mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
+        if edge_data.len() > PAGE_SIZE - 32 {
+            return Err(MemHopError::Serialization(
+                "HyperedgeSlot too large for page".to_string(),
+            ));
         }
+
+        let page_id = allocate_or_extend(mmap, header, file, 500)?;
+        let edge_offset = (page_id as usize) * PAGE_SIZE + 32;
+        mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
 
         // Write page header for hyperedge
         let page_hdr =
@@ -599,11 +607,15 @@ pub fn create_batch_hyperedges(
                 .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-            let page_id = allocate_from_free_list(mmap, header)?;
-            let edge_offset = (page_id as usize) * PAGE_SIZE + 32;
-            if edge_offset + edge_data.len() <= mmap.len() {
-                mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
+            if edge_data.len() > PAGE_SIZE - 32 {
+                return Err(MemHopError::Serialization(
+                    "HyperedgeSlot too large for page".to_string(),
+                ));
             }
+
+            let page_id = allocate_or_extend(mmap, header, file, 500)?;
+            let edge_offset = (page_id as usize) * PAGE_SIZE + 32;
+            mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
 
             // Write page header for temporal hyperedge
             let page_hdr = crate::file::page::PageHeader::new(
@@ -633,6 +645,7 @@ pub fn batch_store(
     sparse_index: &mut SparseIndex,
     vector_dim: usize,
     encoder: &dyn Encoder,
+    file: &mut File,
 ) -> Result<BatchReport, MemHopError> {
     let mut report = BatchReport {
         l4_docs: 0,
@@ -659,6 +672,7 @@ pub fn batch_store(
         btree,
         sparse_index,
         vector_dim,
+        file,
     )?;
     report.l1_nodes_created = created;
     report.l1_nodes_updated = updated;
@@ -674,6 +688,7 @@ pub fn batch_store(
         btree,
         sparse_index,
         vector_dim,
+        file,
     )?;
     report.l2_topics_updated = topics_updated;
 
@@ -681,7 +696,7 @@ pub fn batch_store(
     // write_l3_domains removed — use l3::store::add_node directly
 
     // Create hyperedges
-    let edge_count = create_batch_hyperedges(mmap, header, &l1_node_ids, btree)?;
+    let edge_count = create_batch_hyperedges(mmap, header, &l1_node_ids, btree, file)?;
     report.edges_created = edge_count;
 
     Ok(report)

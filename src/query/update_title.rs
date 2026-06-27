@@ -13,6 +13,7 @@ use crate::slot::profile::ProfileSlot;
 use crate::util::{hash_id, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
+use std::fs::File;
 
 // ============================================================================
 // Profile Update
@@ -24,6 +25,7 @@ pub fn update_profile(
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
     request: UpdateProfileRequest,
+    file: &mut File,
 ) -> Result<ProfileResult, MemHopError> {
     let now_ms = now_ms();
 
@@ -116,10 +118,10 @@ pub fn update_profile(
         }
         None => {
             // Create new profile if not exists
-            use crate::file::free_list::allocate_from_free_list;
+            use crate::file::free_list::allocate_or_extend;
 
             // Allocate a new page for the profile
-            let page_id = allocate_from_free_list(mmap, header)?;
+            let page_id = allocate_or_extend(mmap, header, file, 500)?;
             let offset = (page_id as usize) * PAGE_SIZE + 32;
 
             // Create new profile with provided values
