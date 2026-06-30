@@ -1217,6 +1217,12 @@ impl MemHop {
         impl_fn(&self.mmap, &self.header, &self.btree, query)
     }
 
+    /// Get single archive by ID
+    pub fn get_archive(&self, id: &str) -> Result<Option<Archive>> {
+        use crate::query::list::get_archive as impl_fn;
+        impl_fn(&self.mmap, &self.btree, id)
+    }
+
     /// List crystals with pagination and filtering
     pub fn list_crystals(&self, query: CrystalListQuery) -> Result<CrystalListResult> {
         use crate::query::list::list_crystals as impl_fn;

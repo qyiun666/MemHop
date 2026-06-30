@@ -214,12 +214,15 @@ impl HypergraphSlot {
 /// L3 hypergraph node
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HypergraphNode {
+    #[serde(serialize_with = "serialize_hash_as_hex", deserialize_with = "deserialize_hash_from_hex")]
     pub id_hash: u64,
+    #[serde(serialize_with = "serialize_hash_as_hex", deserialize_with = "deserialize_hash_from_hex")]
     pub graph_id: u64,
     pub title: String,
     pub node_type: String, // Generic type tag (e.g. "function", "concept", "file")
     pub content: String,
     pub keywords: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ref: Option<String>, // Source path (e.g. "/path/file.rs:L10-L50")
     pub importance: f32,
     pub created_at: i64,
@@ -330,11 +333,15 @@ impl GraphEdgeKind {
 /// L3 hypergraph edge — connects multiple nodes (true hyperedge, not binary)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HypergraphEdge {
+    #[serde(serialize_with = "serialize_hash_as_hex", deserialize_with = "deserialize_hash_from_hex")]
     pub id_hash: u64,
+    #[serde(serialize_with = "serialize_hash_as_hex", deserialize_with = "deserialize_hash_from_hex")]
     pub graph_id: u64,
     pub kind: GraphEdgeKind,
+    #[serde(serialize_with = "serialize_hashes_as_hex", deserialize_with = "deserialize_hashes_from_hex")]
     pub node_ids: Vec<u64>, // Connected nodes (>=2, supports hyperedge)
     pub weight: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>, // Semantic label for the edge
     pub created_at: i64,
 }

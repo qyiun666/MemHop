@@ -125,6 +125,7 @@ pub struct L3Preview {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     /// L0 - Agent profile
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<ProfileResult>,
     /// L2 - Matched contexts from retrieval
     pub contexts: Vec<ContextResult>,
@@ -145,12 +146,14 @@ pub struct ContextResult {
     /// Context unique ID (hex)
     pub id: String,
     /// Parent context ID (hex), None for depth-1 scenes
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     /// Nesting depth: 1=scene, 2=sub-scene, 3=turn group
     pub depth: u8,
     /// Scene name / title
     pub title: String,
     /// Compressed summary (if available)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     /// Activation score (retrieval relevance)
     pub activation_score: f32,
@@ -247,6 +250,7 @@ pub struct ActionItem {
     /// Action type
     pub action_type: ActionType,
     /// Action parameters (optional)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<HashMap<String, String>>,
 }
 
@@ -312,6 +316,8 @@ pub struct EngramListResult {
 pub struct EngramResult {
     pub id: String,
     pub text: String,
+    /// Compressed summary (if available)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     pub keywords: Vec<String>,
     pub memory_state: String, // Active/Latent/Dormant
@@ -359,11 +365,13 @@ pub struct TopicSummary {
 pub struct TopicDetail {
     pub id: String,
     pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     pub depth: u8,
     pub archive_refs: Vec<String>,
     pub l3_refs: Vec<String>,
     pub turn_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     pub is_active: bool,
     pub importance: f32,
@@ -424,10 +432,12 @@ pub struct KnowledgeDetail {
     pub domain: String,
     pub knowledge_type: String,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     pub keywords: Vec<String>,
     pub edge_ptrs: Vec<String>,
     pub archive_refs: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ref: Option<String>,
     pub importance: f32,
     pub confidence: f32,
@@ -461,7 +471,9 @@ pub struct Archive {
     pub id: String,
     pub content: String,
     pub content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub source_ref: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub topic_id: Option<String>,
     pub engram_ids: Vec<String>,
     pub created_at: i64,
@@ -501,6 +513,7 @@ pub struct CrystalSummary {
     pub status: String, // active/inactive/deprecated
     pub trigger_count: u32,
     pub success_rate: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub last_triggered: Option<i64>,
     pub created_at: i64,
 }

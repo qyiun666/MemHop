@@ -10,17 +10,29 @@ use crate::query::types::*;
 use crate::MemHop;
 use serde_json::Value;
 
+/// Helper: convert a Result<T, E> into Result<Value, String> for FFI response
+fn to_json_value<T: serde::Serialize>(result: Result<T, impl std::fmt::Display>) -> Result<Value, String> {
+    let value = result.map_err(|e| e.to_string())?;
+    serde_json::to_value(value).map_err(|e| e.to_string())
+}
+
+/// Helper: convert Result<Option<T>> — returns "not found" error on None instead of null
+fn to_json_value_or_not_found<T: serde::Serialize>(
+    result: Result<Option<T>, impl std::fmt::Display>,
+    entity: &str,
+) -> Result<Value, String> {
+    let opt = result.map_err(|e| e.to_string())?;
+    match opt {
+        Some(v) => serde_json::to_value(v).map_err(|e| e.to_string()),
+        None => Err(format!("{} not found", entity)),
+    }
+}
+
 /// Dispatch a single FFI command against the MemHop instance
 pub fn dispatch(db: &mut MemHop, cmd: FfiCommand) -> Result<Value, String> {
     match cmd {
-        FfiCommand::Search { params } => {
-            let r = db.search_memory(params).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
-        }
-        FfiCommand::Update { params } => {
-            let r = db.update_memory(params).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
-        }
+        FfiCommand::Search { params } => to_json_value(db.search_memory(params)),
+        FfiCommand::Update { params } => to_json_value(db.update_memory(params)),
         FfiCommand::QueryLayer {
             layer,
             action,
@@ -28,25 +40,14 @@ pub fn dispatch(db: &mut MemHop, cmd: FfiCommand) -> Result<Value, String> {
             list,
         } => dispatch_query_layer(db, &layer, &action, &get, &list),
         FfiCommand::UpdateTitle { layer, params } => dispatch_update_title(db, &layer, &params),
-        FfiCommand::Dream { llm } => {
-            let r = db.dream(llm).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
-        }
+        FfiCommand::Dream { llm } => to_json_value(db.dream(llm)),
         FfiCommand::MergeTopics {
             primary_id,
             secondary_ids,
-        } => {
-            let r = db
-                .merge_topics(&primary_id, secondary_ids)
-                .map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
-        }
+        } => to_json_value(db.merge_topics(&primary_id, secondary_ids)),
         FfiCommand::Import { params } => dispatch_import(db, &params),
         FfiCommand::Session { params } => dispatch_session(db, &params),
-        FfiCommand::BatchStore { batch } => {
-            let r = db.batch_store(batch).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
-        }
+        FfiCommand::BatchStore { batch } => to_json_value(db.batch_store(batch)),
         FfiCommand::GraphQuery {
             graph_id,
             start_node,
@@ -63,26 +64,30 @@ pub fn dispatch(db: &mut MemHop, cmd: FfiCommand) -> Result<Value, String> {
             }))
         }
         FfiCommand::Delete { layer, id } => {
-            let id_hash = crate::query::common::parse_id_to_hash(&id);
             match layer.as_str() {
-                "l2" | "L2" | "topic" => db.delete_topic(id_hash).map_err(|e| e.to_string())?,
+                "l2" | "L2" | "topic" => {
+                    let id_hash = crate::query::common::parse_id_to_hash(&id);
+                    db.delete_topic(id_hash).map_err(|e| e.to_string())?;
+                    Ok(serde_json::json!({"deleted": true}))
+                }
                 "l3" | "L3" | "knowledge" | "graph" => {
-                    db.delete_graph(id_hash).map_err(|e| e.to_string())?
+                    let id_hash = crate::query::common::parse_id_to_hash(&id);
+                    db.delete_graph(id_hash).map_err(|e| e.to_string())?;
+                    Ok(serde_json::json!({"deleted": true}))
                 }
                 "l5" | "L5" | "crystal" | "action_chain" => {
-                    db.delete_action_chain(id_hash).map_err(|e| e.to_string())?
+                    let id_hash = crate::query::common::parse_id_to_hash(&id);
+                    db.delete_action_chain(id_hash).map_err(|e| e.to_string())?;
+                    Ok(serde_json::json!({"deleted": true}))
                 }
-                _ => return Err(format!("unsupported delete layer: {}", layer)),
+                _ => Err(format!("unsupported delete layer: {}", layer)),
             }
-            Ok(serde_json::json!({"deleted": true}))
         }
         FfiCommand::Sync => {
             db.sync().map_err(|e| e.to_string())?;
             Ok(serde_json::json!({"synced": true}))
         }
         FfiCommand::Close => {
-            db.checkpoint().map_err(|e| e.to_string())?;
-            db.sync().map_err(|e| e.to_string())?;
             // Prevent Drop from double-checkpointing
             db.closed = true;
             Ok(serde_json::json!({"closed": true}))
@@ -103,15 +108,11 @@ fn dispatch_query_layer(
 ) -> Result<Value, String> {
     match (layer, action) {
         // --- L0 Profile ---
-        ("l0", "get") => {
-            let r = db.get_profile().map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
-        }
+        ("l0", "get") => to_json_value_or_not_found(db.get_profile(), "profile"),
         // --- L1 Engram ---
         ("l1", "get") => {
             let id = get.id.as_deref().ok_or("missing 'id' for L1 get")?;
-            let r = db.get_engram(id).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value_or_not_found(db.get_engram(id), "engram")
         }
         ("l1", "list") => {
             let q = EngramListQuery {
@@ -121,14 +122,12 @@ fn dispatch_query_layer(
                 min_importance: list.min_importance,
                 keyword: list.keyword.clone(),
             };
-            let r = db.list_engrams(q).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.list_engrams(q))
         }
         // --- L2 Topic ---
         ("l2", "get") => {
             let id = get.id.as_deref().ok_or("missing 'id' for L2 get")?;
-            let r = db.get_topic(id).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value_or_not_found(db.get_topic(id), "topic")
         }
         ("l2", "list") => {
             let q = TopicListQuery {
@@ -137,14 +136,12 @@ fn dispatch_query_layer(
                 active_only: list.active_only.unwrap_or(false),
                 keyword: list.keyword.clone(),
             };
-            let r = db.list_topics(q).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.list_topics(q))
         }
         // --- L3 Knowledge ---
         ("l3", "get") => {
             let id = get.id.as_deref().ok_or("missing 'id' for L3 get")?;
-            let r = db.get_knowledge(id).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value_or_not_found(db.get_knowledge(id), "knowledge")
         }
         ("l3", "list") => {
             let q = KnowledgeListQuery {
@@ -154,10 +151,13 @@ fn dispatch_query_layer(
                 knowledge_type: list.knowledge_type.clone(),
                 keyword: list.keyword.clone(),
             };
-            let r = db.list_knowledge(q).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.list_knowledge(q))
         }
         // --- L4 Archive (3 variants) ---
+        ("l4", "get") => {
+            let id = get.id.as_deref().ok_or("missing 'id' for L4 get")?;
+            to_json_value_or_not_found(db.get_archive(id), "archive")
+        }
         ("l4", "list") => {
             let query = ArchivePageQuery {
                 page: list.page.unwrap_or(1),
@@ -168,14 +168,12 @@ fn dispatch_query_layer(
             };
             let r = if let Some(tid) = &list.topic_id {
                 db.list_archives_by_topic(tid, query)
-                    .map_err(|e| e.to_string())?
             } else if let Some(nids) = &list.node_ids {
                 db.list_archives_by_nodes(nids, query)
-                    .map_err(|e| e.to_string())?
             } else {
-                db.list_all_archives(query).map_err(|e| e.to_string())?
+                db.list_all_archives(query)
             };
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(r)
         }
         // --- L5 Crystal ---
         ("l5", "list") => {
@@ -186,8 +184,7 @@ fn dispatch_query_layer(
                 min_trigger_count: list.min_trigger_count,
                 keyword: list.keyword.clone(),
             };
-            let r = db.list_crystals(q).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.list_crystals(q))
         }
         _ => Err(format!(
             "unsupported query_layer: layer={}, action={}",
@@ -217,8 +214,7 @@ fn dispatch_update_title(
                 style_traits: params.style_traits.clone(),
                 emotion_patterns: params.emotion_patterns.clone(),
             };
-            let r = db.update_profile(req).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.update_profile(req))
         }
         "l2" => {
             let id = params.id.as_deref().ok_or("missing 'id' for L2")?;
@@ -226,10 +222,7 @@ fn dispatch_update_title(
                 .new_title
                 .as_deref()
                 .ok_or("missing 'new_title' for L2")?;
-            let r = db
-                .update_topic_title(id, title.to_string())
-                .map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.update_topic_title(id, title.to_string()))
         }
         "l3" => {
             let id = params.id.as_deref().ok_or("missing 'id' for L3")?;
@@ -237,10 +230,7 @@ fn dispatch_update_title(
                 .new_title
                 .as_deref()
                 .ok_or("missing 'new_title' for L3")?;
-            let r = db
-                .update_knowledge_title(id, title.to_string())
-                .map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.update_knowledge_title(id, title.to_string()))
         }
         "l5" => {
             let id = params.id.as_deref().ok_or("missing 'id' for L5")?;
@@ -248,10 +238,7 @@ fn dispatch_update_title(
                 .new_title
                 .as_deref()
                 .ok_or("missing 'new_title' for L5")?;
-            let r = db
-                .update_crystal_title(id, title.to_string())
-                .map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.update_crystal_title(id, title.to_string()))
         }
         _ => Err(format!("unsupported update_title layer: {}", layer)),
     }
@@ -269,10 +256,7 @@ fn dispatch_import(db: &mut MemHop, params: &ImportImportParams) -> Result<Value
                 .as_deref()
                 .ok_or("missing 'path' for build_l3")?;
             let path = std::path::Path::new(path_str);
-            let r = db
-                .build_l3_hypergraph_from_path(path)
-                .map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.build_l3_hypergraph_from_path(path))
         }
         "import" => {
             let target_layer = params
@@ -304,8 +288,7 @@ fn dispatch_import(db: &mut MemHop, params: &ImportImportParams) -> Result<Value
                 knowledge_title: params.knowledge_title.clone(),
             };
 
-            let r = db.import_memory(req).map_err(|e| e.to_string())?;
-            serde_json::to_value(r).map_err(|e| e.to_string())
+            to_json_value(db.import_memory(req))
         }
         _ => Err(format!(
             "unknown import action: '{}' (expected 'import' or 'build_l3')",

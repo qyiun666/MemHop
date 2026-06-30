@@ -38,8 +38,10 @@ pub struct DreamReport {
     /// Number of HyperedgeSlots removed due to low weight or underpopulation
     pub l1_removed_edges: usize,
     /// L0 profile updated: (profile_id, updated_fields)
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub l0_updated: Option<(String, Vec<String>)>,
     /// User language habits updated from dialogue analysis
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub habits_updated: Option<crate::dream::habit_distill_stage::HabitUpdate>,
     /// New L3 nodes created via LLM-based knowledge distillation
     pub new_l3_nodes: Vec<String>,
