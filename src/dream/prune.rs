@@ -1,4 +1,5 @@
 // Dream consolidation pipeline (prune module)
+use crate::config::DecayConfig;
 use crate::dream::llm::LlmProvider;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
@@ -84,9 +85,10 @@ pub fn dream_consolidation(
     llm: &dyn LlmProvider,
     session_topic_ids: HashSet<u64>,
     file: &mut std::fs::File,
+    decay_config: &DecayConfig,
 ) -> Result<DreamReport, MemHopError> {
     // Delegate to main orchestration function
-    crate::dream::dream_pipeline(mmap, header, btree, sparse_index, llm, session_topic_ids, file)
+    crate::dream::dream_pipeline(mmap, header, btree, sparse_index, llm, session_topic_ids, file, decay_config)
 }
 
 #[cfg(test)]

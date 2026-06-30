@@ -14,9 +14,9 @@
 
 use memhop::encoder::{Encoder, EncoderOutput, GrpcEncoder};
 use memhop::{
-    ActionItem, ActionType, ArchivePageQuery, CrystalListQuery, EngramListQuery,
-    KnowledgeListQuery, LlmConfig, MemHop, MemHopConfig, SearchQuery, SourceMeta, SourceType,
-    StoreBatch, StoreItem, TopicListQuery, UpdateProfileRequest, UpdateRequest,
+    ActionItem, ActionType, ArchivePageQuery, CrystalListQuery, DecayConfig, EngramListQuery,
+    KnowledgeListQuery, LlmConfig, MemHop, MemHopConfig, SearchQuery, SearchWeights, SessionConfig,
+    SourceMeta, SourceType, StoreBatch, StoreItem, TopicListQuery, UpdateProfileRequest, UpdateRequest,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -24,7 +24,6 @@ use std::path::PathBuf;
 const VECTOR_DIM: usize = 768;
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 const MODEL: &str = "gpt-4o-mini";
-const DEFAULT_ENCODER_ADDR: &str = "http://127.0.0.1:27110";
 
 /// Build the LLM configuration used by every E2E test.
 fn make_llm_config() -> LlmConfig {
@@ -45,11 +44,30 @@ fn make_llm_config() -> LlmConfig {
 fn make_config(path: PathBuf) -> MemHopConfig {
     MemHopConfig {
         db_path: path,
-        encoder_grpc_addr: None, // encoder is injected via set_encoder in tests
+        encoder_grpc_addr: "http://127.0.0.1:27110".to_string(), // encoder is injected via set_encoder in tests
         vector_dim: VECTOR_DIM,
-        crystal_path: None,
+        crystal_path: PathBuf::from("/tmp/memhop_e2e_crystals"),
         llm: make_llm_config(),
         auto_dream_on_evict: true,
+        auto_dream_archive_threshold: 20,
+        auto_dream_summary_bytes: 2048,
+        search_weights: SearchWeights {
+            entity_weight: 0.15,
+            bm25_weight: 0.5,
+            vector_weight: 0.35,
+        },
+        decay_config: DecayConfig {
+            lambda_node: 0.01,
+            lambda_edge: 0.02,
+            node_remove_threshold: 0.05,
+            node_prune_edges_threshold: 0.15,
+            edge_remove_threshold: 0.05,
+            min_edge_nodes: 2,
+        },
+        session_config: SessionConfig {
+            default_ttl_ms: 3_600_000,
+            capacity: 7,
+        },
     }
 }
 
@@ -129,11 +147,11 @@ impl Encoder for TestEncoder {
 /// Create an encoder for the test. Tries the real gRPC encoder first; falls
 /// back to the deterministic encoder and prints a warning if meowvec is down.
 fn create_encoder(dim: usize) -> TestEncoder {
-    match GrpcEncoder::new(DEFAULT_ENCODER_ADDR, dim) {
+    match GrpcEncoder::new("http://127.0.0.1:27110", dim) {
         Ok(enc) => {
             eprintln!(
                 "[E2E] Using real gRPC encoder at {} (dim={})",
-                DEFAULT_ENCODER_ADDR, dim
+                "http://127.0.0.1:27110", dim
             );
             TestEncoder::Grpc(Box::new(enc))
         }

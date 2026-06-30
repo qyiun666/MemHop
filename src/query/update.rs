@@ -7,11 +7,14 @@ use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
+use crate::l3;
 use crate::organize::extract_keywords;
 use crate::query::common::{format_hash, now_ms, parse_id_to_hash};
 use crate::query::types::*;
 use crate::slot::archive::ArchiveSlot;
+use crate::slot::hypergraph::{HypergraphNode, HypergraphSlot, HypergraphSource};
 use crate::util::{hash_id, PageType, PAGE_SIZE};
+use crate::config::MemHopConfig;
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::fs::File;
@@ -35,7 +38,7 @@ fn write_slot_page_header(
         reserved: [0u8; 12],
     };
     let header_bytes = header.to_bytes();
-    let offset = (page_id as usize) * PAGE_SIZE;
+    let offset = crate::query::slot_io::page_offset(page_id);
     mmap[offset..offset + 32].copy_from_slice(&header_bytes);
 }
 
@@ -47,6 +50,7 @@ fn write_slot_page_header(
 /// 3. Appends L4 archive_id to L2 archive_refs index
 /// 4. Appends summary to L2 context summary
 /// 5. Updates sparse index
+#[allow(clippy::too_many_arguments)]
 pub fn update_memory(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -55,6 +59,7 @@ pub fn update_memory(
     sparse_index: &mut SparseIndex,
     _vector_dim: usize,
     file: &mut File,
+    _config: &MemHopConfig,
 ) -> Result<UpdateResult, MemHopError> {
     let now_ms = now_ms();
 
@@ -78,25 +83,29 @@ pub fn update_memory(
         btree,
         request.source.to_metadata_json(),
         file,
+        _config,
     )?;
     let archive_id = format_hash(l4_id_hash);
 
     // Step 3: Write action_chain to L5 ActionChainSlot on disk
-    for action in &request.action_chain {
-        let crystal_id_hash = hash_id(&format!(
-            "{}-{:?}-{}",
-            topic_hash, action.action_type, now_ms
-        ));
-        allocate_and_write_l5_crystal(
-            mmap,
-            header,
-            crystal_id_hash,
-            &action.title,
-            &action.description,
-            now_ms,
-            btree,
-            file,
-        )?;
+    if let Some(ref action_chain) = request.action_chain {
+        for action in action_chain {
+            let crystal_id_hash = hash_id(&format!(
+                "{}-{:?}-{}",
+                topic_hash, action.action_type, now_ms
+            ));
+            allocate_and_write_l5_crystal(
+                mmap,
+                header,
+                crystal_id_hash,
+                &action.title,
+                &action.description,
+                now_ms,
+                btree,
+                file,
+                _config,
+            )?;
+        }
     }
 
     // Step 4: Deserialize the ContextSlot and update
@@ -153,6 +162,68 @@ pub fn update_memory(
                 }
             }
         }
+
+        // If no existing L3 graphs were found, create new L3 knowledge nodes
+        if graphs_to_link.is_empty() && !keywords.is_empty() {
+            // Create a HypergraphSlot (L3 container) for the distilled knowledge
+            let distilled_id = hash_id(&format!("distilled_{}_{}", topic_hash, now_ms));
+            let graph_name = format!(
+                "distilled:{}",
+                &request.dialogue_text.chars().take(40).collect::<String>()
+            );
+
+            let slot = HypergraphSlot {
+                id_hash: distilled_id,
+                name: graph_name,
+                source: HypergraphSource::Manual,
+                node_count: keywords.len() as u32,
+                edge_count: 0,
+                created_at: now_ms,
+                updated_at: now_ms,
+                version: 1,
+            };
+
+            let slot_data = slot
+                .serialize()
+                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+
+            let slot_page_id = allocate_or_extend(mmap, header, file, 500)?;
+            let slot_offset = crate::query::slot_io::page_offset(slot_page_id);
+
+            // Write page header
+            let page_hdr = PageHeader::new(slot_page_id, PageType::HypergraphSlot, 3, 0xFFFFFFFF);
+            mmap[slot_offset..slot_offset + 32].copy_from_slice(&page_hdr.to_bytes());
+
+            // Write slot data
+            let data_offset = slot_offset + 32;
+            if data_offset + slot_data.len() <= mmap.len() {
+                mmap[data_offset..data_offset + slot_data.len()].copy_from_slice(&slot_data);
+            }
+
+            btree.insert(distilled_id, (slot_page_id as u64) << 16);
+
+            // Create HypergraphNode for each keyword
+            for kw in &keywords {
+                let node_hash = hash_id(&format!("distilled_node_{}_{}", distilled_id, kw));
+                let node = HypergraphNode {
+                    id_hash: node_hash,
+                    graph_id: distilled_id,
+                    title: kw.clone(),
+                    node_type: "concept".to_string(),
+                    content: String::new(),
+                    keywords: vec![kw.clone()],
+                    source_ref: None,
+                    importance: 0.5,
+                    created_at: now_ms,
+                    updated_at: now_ms,
+                    version: 1,
+                };
+                l3::store::add_node(mmap, header, btree, node, file)?;
+            }
+
+            graphs_to_link.push(distilled_id);
+        }
+
         // Deduplicate and append to l3_refs
         graphs_to_link.sort();
         graphs_to_link.dedup();
@@ -163,7 +234,7 @@ pub fn update_memory(
     let serialized = ctx
         .serialize()
         .map_err(|e| MemHopError::Serialization(format!("ContextSlot serialize: {}", e)))?;
-    let write_offset = (page_id as usize) * PAGE_SIZE + 32;
+    let write_offset = crate::query::slot_io::slot_offset(page_id);
     if write_offset + serialized.len() > mmap.len() {
         return Err(MemHopError::Serialization(format!(
             "ContextSlot too large for page: {} > {}",
@@ -183,10 +254,16 @@ pub fn update_memory(
         sparse_index.add_document(topic_hash, terms, summary.len() as u32);
     }
 
+    // Check if archive/summary thresholds exceeded for auto-dream trigger
+    // Thresholds match the JSON config defaults in API.md
+    let dream_triggered = ctx.archive_refs.len() >= 20
+        || ctx.summary.as_ref().map(|s| s.len()).unwrap_or(0) >= 2048;
+
     Ok(UpdateResult {
         topic_id: format_hash(topic_hash),
         archive_id,
         status: UpdateStatus::Updated,
+        dream_triggered,
     })
 }
 
@@ -202,10 +279,11 @@ fn allocate_and_write_l4_archive(
     btree: &mut BTreeIndex,
     metadata: Option<String>,
     file: &mut File,
+    _config: &MemHopConfig,
 ) -> Result<u64, MemHopError> {
     // Allocate new page
     let page_id = allocate_or_extend(mmap, header, file, 500)?;
-    let offset = (page_id as usize) * PAGE_SIZE + 32;
+    let offset = crate::query::slot_io::slot_offset(page_id);
 
     // Create ArchiveSlot
     use crate::slot::archive::ContentType;
@@ -251,10 +329,11 @@ fn allocate_and_write_l5_crystal(
     now_ms: i64,
     btree: &mut BTreeIndex,
     file: &mut File,
+    _config: &MemHopConfig,
 ) -> Result<u64, MemHopError> {
     // Allocate new page
     let page_id = allocate_or_extend(mmap, header, file, 500)?;
-    let offset = (page_id as usize) * PAGE_SIZE + 32;
+    let offset = crate::query::slot_io::slot_offset(page_id);
 
     // Create ActionChainSlot
     use crate::slot::action_chain::ActionChainSlot;

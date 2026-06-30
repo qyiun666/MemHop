@@ -1,0 +1,130 @@
+{
+  "metadata": {
+    "version": "1.1",
+    "last_updated": "2026-06-30",
+    "description": "Competitor baseline performance data for agent memory systems",
+    "notes": "Scores are from published papers and official repositories. MemHop benchmarks use LOCOMO full dataset with real vector encoding. Different benchmarks may not be directly comparable (retrieval recall vs LLM-judge accuracy)."
+  },
+  "competitors": [
+    {
+      "name": "Mem0 Platform",
+      "repo": "https://github.com/mem0ai/mem0",
+      "stars": 55000,
+      "architecture": "Vector + Graph + KV extraction",
+      "deployment": "SaaS / Docker",
+      "benchmarks": {
+        "locomo": {"score": 92.5, "metric": "accuracy", "source": "Mem0 2026 paper"},
+        "longmemeval": {"score": 94.4, "metric": "accuracy", "source": "Mem0 2026 paper"}
+      },
+      "features": ["vector_search", "graph_memory", "entity_extraction", "temporal_awareness", "multi_user"]
+    },
+    {
+      "name": "Mem0 OSS",
+      "repo": "https://github.com/mem0ai/mem0",
+      "stars": 55000,
+      "architecture": "Self-hosted, Vector + Graph",
+      "deployment": "Docker (requires Qdrant)",
+      "benchmarks": {
+        "locomo": {"score": 67.13, "metric": "accuracy", "source": "Mem0 official"},
+        "longmemeval": {"score": 49.0, "metric": "accuracy", "source": "Mem0 official"}
+      },
+      "features": ["vector_search", "graph_memory", "entity_extraction"]
+    },
+    {
+      "name": "Letta (MemGPT)",
+      "repo": "https://github.com/letta-ai/letta",
+      "stars": 23000,
+      "architecture": "OS-style hierarchical, Agent self-editing memory",
+      "deployment": "Docker / REST API",
+      "benchmarks": {
+        "locomo": {"score": 83.2, "metric": "accuracy", "source": "published benchmarks"}
+      },
+      "features": ["hierarchical_memory", "agent_self_edit", "context_window_management", "long_term_memory"]
+    },
+    {
+      "name": "Zep / Graphiti",
+      "repo": "https://github.com/getzep/graphiti",
+      "stars": 5000,
+      "architecture": "Dual temporal graph, time-aware reasoning",
+      "deployment": "SaaS / Docker (requires Neo4j)",
+      "benchmarks": {
+        "longmemeval": {"score": 63.8, "metric": "accuracy", "source": "Zep benchmarks (GPT-4o)"}
+      },
+      "features": ["temporal_knowledge_graph", "episodic_memory", "semantic_triples", "time_awareness"]
+    },
+    {
+      "name": "Cognee",
+      "repo": "https://github.com/topoteretes/cognee",
+      "stars": 3000,
+      "architecture": "Knowledge graph + Vector pipeline",
+      "deployment": "Python library / Docker",
+      "benchmarks": {
+        "locomo": {"score": null, "metric": "accuracy", "source": "not publicly reported"}
+      },
+      "features": ["knowledge_graph", "vector_search", "pipeline_processing", "multi_modal"]
+    },
+    {
+      "name": "LangMem",
+      "repo": "https://github.com/langchain-ai/langmem",
+      "stars": 1000,
+      "architecture": "LangChain ecosystem memory layer",
+      "deployment": "Python library",
+      "benchmarks": {
+        "locomo": {"score": null, "metric": "accuracy", "source": "not publicly reported"}
+      },
+      "features": ["semantic_memory", "episodic_memory", "langchain_integration", "profile_management"]
+    },
+    {
+      "name": "agentmemory",
+      "repo": "https://github.com/nicholasaleks/agentmemory",
+      "stars": 800,
+      "architecture": "BM25 + Vector + Graph hybrid",
+      "deployment": "Python library",
+      "benchmarks": {
+        "longmemeval_s": {"score": 95.2, "metric": "recall@5", "source": "official benchmarks"}
+      },
+      "features": ["bm25_search", "vector_search", "graph_memory", "hybrid_retrieval"]
+    }
+  ],
+  "memhop": {
+    "name": "MemHop",
+    "repo": "https://github.com/meow/memhop",
+    "architecture": "L0-L5 cognitive layers, BM25(0.5) + Vector(0.35) + Entity(0.15) hybrid, Hypergraph L3, Dream consolidation",
+    "deployment": "Embedded Rust cdylib, zero external dependencies",
+    "benchmarks": {
+      "locomo": {
+        "test_dataset": "LOCOMO full dataset",
+        "queries": 1986,
+        "sessions": 272,
+        "vector_model": "multilingual-e5-small",
+        "retrieval_metrics": {
+          "recall_at_1": 0.006,
+          "recall_at_5": 0.282,
+          "recall_at_10": 0.563,
+          "mrr": 0.153,
+          "ndcg_at_10": 0.235
+        },
+        "latency": {
+          "p50_ms": 121,
+          "p95_ms": 230,
+          "p99_ms": 397
+        },
+        "throughput": {
+          "qps": 7.4,
+          "ingestion_items_per_sec": 9.4
+        },
+        "source": "e2e_benchmark, 2026-06-30",
+        "notes": "Metrics are retrieval recall rates, not LLM-judge accuracy. Latency includes Python gRPC vector encoding overhead."
+      },
+      "longmemeval": {"score": null, "metric": "accuracy", "source": "to be measured"}
+    },
+    "unique_advantages": [
+      "Zero-dependency embedded deployment (no Docker/Neo4j/Qdrant required)",
+      "Rust performance with SIMD-accelerated vector search (AVX2/NEON)",
+      "6-layer cognitive architecture (L0 Profile → L5 Crystal)",
+      "Dream consolidation with LLM-driven memory pruning",
+      "Time-decay mechanism for memory relevance",
+      "Sub-millisecond BM25 search via inverted index"
+    ]
+  }
+}

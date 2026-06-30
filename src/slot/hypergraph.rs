@@ -13,8 +13,33 @@
 //   HypergraphEdge  — a true hyperedge connecting multiple nodes
 
 use crate::util::io_helpers::*;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 use std::io::{self, Cursor, Write};
+
+/// Serialize a u64 hash as a 16-character lowercase hex string.
+pub fn serialize_hash_as_hex<S: Serializer>(hash: &u64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&format!("{:016x}", hash))
+}
+
+/// Serialize a slice of u64 hashes as a Vec of 16-character lowercase hex strings.
+pub fn serialize_hashes_as_hex<S: Serializer>(hashes: &[u64], serializer: S) -> Result<S::Ok, S::Error> {
+    let hex_vec: Vec<String> = hashes.iter().map(|h| format!("{:016x}", h)).collect();
+    hex_vec.serialize(serializer)
+}
+
+/// Deserialize a hex string back into a u64.
+pub fn deserialize_hash_from_hex<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let s = String::deserialize(deserializer)?;
+    u64::from_str_radix(&s, 16).map_err(serde::de::Error::custom)
+}
+
+/// Deserialize a Vec of hex strings back into Vec<u64>.
+pub fn deserialize_hashes_from_hex<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {
+    let vec: Vec<String> = Vec::deserialize(deserializer)?;
+    vec.into_iter()
+        .map(|s| u64::from_str_radix(&s, 16).map_err(serde::de::Error::custom))
+        .collect()
+}
 
 // ============================================================================
 // HypergraphSource — how the hypergraph was created

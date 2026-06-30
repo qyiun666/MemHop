@@ -25,7 +25,6 @@ pub mod ffi;
 pub mod file;
 pub mod index;
 pub mod l3;
-pub mod migrate;
 pub mod organize;
 pub mod query;
 pub mod session;
@@ -39,7 +38,6 @@ pub use util::{Layer, SourceMeta, SourceRef, SourceType};
 pub use dream::llm::{CrystalDef, CrystalStep, LlmProvider, MemorySummary, Pattern};
 pub use dream::openai_compatible::OpenAICompatibleLlmProvider;
 pub use dream::prune::DreamReport;
-pub use migrate::{migrate, verify_migration, MigrateError, MigrateReport};
 pub use organize::extract_keywords;
 pub use query::batch::{BatchReport, EncodedItem, StoreBatch, StoreItem};
 
@@ -378,7 +376,7 @@ impl MemHop {
         };
 
         // 6. Initialize SessionManager
-        let session_manager = SessionManager::new();
+        let session_manager = SessionManager::new(&config::SessionConfig::default());
 
         // 8. Initialize encoder from config (gRPC over TCP)
         let encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>> = {
@@ -1133,6 +1131,7 @@ impl MemHop {
             self.encoder.as_deref(),
             &self.l1_reverse_index,
             &mut self.file,
+            &config::SearchWeights::default(),
         )
     }
 
@@ -1154,6 +1153,7 @@ impl MemHop {
             &mut self.sparse_index,
             self.config.vector_dim,
             &mut self.file,
+            &self.config,
         )
     }
 
@@ -1657,8 +1657,7 @@ impl MemHop {
     /// * `topic_id` - Topic ID string (will be converted to hash)
     /// * `ttl_ms` - Optional custom TTL in milliseconds, uses default if None
     pub fn activate_topic(&mut self, topic_id: &str, ttl_ms: Option<i64>) {
-        use crate::util::hash::hash_id;
-        let id_hash = hash_id(topic_id);
+        let id_hash = crate::query::common::parse_id_to_hash(topic_id);
         let evicted = self.session_manager.activate_topic(id_hash, ttl_ms);
 
         if let Some(evicted_id) = evicted {
@@ -1691,6 +1690,7 @@ impl MemHop {
             &llm_provider,
             session_topics,
             &mut self.file,
+            &config::DecayConfig::default(),
         )?;
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
         self.adjacency_cache.invalidate_all();
@@ -1702,8 +1702,7 @@ impl MemHop {
     /// # Arguments
     /// * `topic_id` - Topic ID string to deactivate
     pub fn deactivate_topic(&mut self, topic_id: &str) {
-        use crate::util::hash::hash_id;
-        let id_hash = hash_id(topic_id);
+        let id_hash = crate::query::common::parse_id_to_hash(topic_id);
         self.session_manager.deactivate_topic(id_hash);
     }
 
@@ -1725,8 +1724,7 @@ impl MemHop {
     /// * `topic_id` - Topic ID string
     /// * `delta` - Adjustment factor, TTL change = delta × 600,000 ms
     pub fn adjust_activation(&mut self, topic_id: &str, delta: f32) {
-        use crate::util::hash::hash_id;
-        let id_hash = hash_id(topic_id);
+        let id_hash = crate::query::common::parse_id_to_hash(topic_id);
         self.session_manager.adjust_activation(id_hash, delta);
     }
 
@@ -1762,6 +1760,7 @@ impl MemHop {
             &llm_provider,
             session_topics,
             &mut self.file,
+            &config::DecayConfig::default(),
         )?;
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
         // Invalidate all adjacency cache since L3 distillation may modify any graph
@@ -2172,6 +2171,7 @@ mod tests {
                 min_score: 0.0,
                 context_history: None,
                 source: Default::default(),
+                search_mode: None,
             })
             .unwrap();
         assert!(

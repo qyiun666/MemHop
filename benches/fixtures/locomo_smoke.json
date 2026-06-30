@@ -1,0 +1,184 @@
+{
+  "metadata": {
+    "source": "synthetic_locomo_smoke",
+    "version": "1.0",
+    "description": "Small smoke test dataset for CI validation. Contains 2 synthetic conversations and 10 test questions covering different retrieval scenarios.",
+    "created_at": "2025-01-15T00:00:00Z",
+    "session_count": 2,
+    "question_count": 10
+  },
+  "sessions": [
+    {
+      "id": "smoke_session_1",
+      "turns": [
+        {
+          "text": "Hi! I just got back from my trip to Japan. It was absolutely amazing!",
+          "timestamp": 1700000000,
+          "speaker": "user"
+        },
+        {
+          "text": "Welcome back! Japan is wonderful. What cities did you visit?",
+          "timestamp": 1700000060,
+          "speaker": "assistant"
+        },
+        {
+          "text": "I spent 3 days in Tokyo, then took the bullet train to Kyoto for 4 days. The temples in Kyoto were breathtaking, especially Fushimi Inari with all those red torii gates.",
+          "timestamp": 1700000120,
+          "speaker": "user"
+        },
+        {
+          "text": "That sounds like a perfect itinerary! Did you try any memorable food while you were there?",
+          "timestamp": 1700000180,
+          "speaker": "assistant"
+        },
+        {
+          "text": "Oh yes! In Tokyo I had the best ramen of my life at a tiny shop in Shinjuku called Fuunji. Their tsukemen was incredible - rich pork and fish broth. In Kyoto I tried traditional kaiseki cuisine at a restaurant near Gion district.",
+          "timestamp": 1700000240,
+          "speaker": "user"
+        },
+        {
+          "text": "Fuunji is legendary! Kaiseki in Gion sounds like a wonderful cultural experience. What was the highlight of your Kyoto stay?",
+          "timestamp": 1700000300,
+          "speaker": "assistant"
+        },
+        {
+          "text": "Definitely the sunrise at Kiyomizu-dera temple. I woke up at 5am and walked up the hill. The view of the city with the morning mist was magical. Oh, and I also visited the bamboo grove in Arashiyama.",
+          "timestamp": 1700000360,
+          "speaker": "user"
+        },
+        {
+          "text": "Early morning temple visits are the best - fewer crowds and that special light. Did you bring back any souvenirs?",
+          "timestamp": 1700000420,
+          "speaker": "assistant"
+        }
+      ]
+    },
+    {
+      "id": "smoke_session_2",
+      "turns": [
+        {
+          "text": "I've been thinking about switching careers from marketing to software engineering. What do you think?",
+          "timestamp": 1700100000,
+          "speaker": "user"
+        },
+        {
+          "text": "That's a significant transition! What's drawing you to software engineering?",
+          "timestamp": 1700100060,
+          "speaker": "assistant"
+        },
+        {
+          "text": "I've been doing some Python scripting for data analysis at work and I really enjoy it. I like the problem-solving aspect and seeing immediate results. My manager actually encouraged me to explore this path.",
+          "timestamp": 1700100120,
+          "speaker": "user"
+        },
+        {
+          "text": "That's great that you have support from your manager! Python is an excellent starting point. Have you considered what area of software engineering interests you most?",
+          "timestamp": 1700100180,
+          "speaker": "assistant"
+        },
+        {
+          "text": "I'm really interested in backend development and APIs. I've been reading about REST APIs and even built a simple Flask application that connects to a PostgreSQL database. It manages a small inventory system for my friend's bookstore.",
+          "timestamp": 1700100240,
+          "speaker": "user"
+        },
+        {
+          "text": "Building a real application is the best way to learn! Flask with PostgreSQL is a solid stack. What features did you implement?",
+          "timestamp": 1700100300,
+          "speaker": "assistant"
+        },
+        {
+          "text": "It has user authentication with JWT tokens, CRUD operations for books, a search feature, and a simple dashboard showing sales analytics. I deployed it on Heroku using Docker. The whole project took about 3 weeks.",
+          "timestamp": 1700100360,
+          "speaker": "user"
+        },
+        {
+          "text": "Impressive! JWT auth, Docker deployment, and analytics - that covers a lot of backend fundamentals. Have you thought about your learning path forward?",
+          "timestamp": 1700100420,
+          "speaker": "assistant"
+        },
+        {
+          "text": "I'm planning to take the CS50 online course, then maybe a bootcamp. My friend Sarah who works at Google suggested I also learn about data structures and algorithms. She offered to do mock interviews with me next month.",
+          "timestamp": 1700100480,
+          "speaker": "user"
+        },
+        {
+          "text": "CS50 is excellent for building strong foundations. Having a connection at Google for mock interviews is invaluable! What's your timeline for this career switch?",
+          "timestamp": 1700100540,
+          "speaker": "assistant"
+        }
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "question": "How many days did the user spend in Tokyo?",
+      "answer": "3 days",
+      "category": "single_hop",
+      "session_refs": ["smoke_session_1"]
+    },
+    {
+      "id": "q2",
+      "question": "What was the name of the ramen shop in Tokyo?",
+      "answer": "Fuunji",
+      "category": "single_hop",
+      "session_refs": ["smoke_session_1"]
+    },
+    {
+      "id": "q3",
+      "question": "What time did the user wake up to see the sunrise at Kiyomizu-dera?",
+      "answer": "5am",
+      "category": "single_hop",
+      "session_refs": ["smoke_session_1"]
+    },
+    {
+      "id": "q4",
+      "question": "What cities did the user visit in Japan and how long did they stay in each?",
+      "answer": "Tokyo for 3 days and Kyoto for 4 days",
+      "category": "multi_hop",
+      "session_refs": ["smoke_session_1"]
+    },
+    {
+      "id": "q5",
+      "question": "What food experiences did the user have in both Tokyo and Kyoto?",
+      "answer": "In Tokyo they had tsukemen ramen at Fuunji in Shinjuku. In Kyoto they tried traditional kaiseki cuisine near the Gion district.",
+      "category": "multi_hop",
+      "session_refs": ["smoke_session_1"]
+    },
+    {
+      "id": "q6",
+      "question": "What programming language motivated the user to consider a career change?",
+      "answer": "Python",
+      "category": "single_hop",
+      "session_refs": ["smoke_session_2"]
+    },
+    {
+      "id": "q7",
+      "question": "What application did the user build and what technologies did they use?",
+      "answer": "A bookstore inventory management application using Flask, PostgreSQL, JWT authentication, and Docker, deployed on Heroku.",
+      "category": "single_hop",
+      "session_refs": ["smoke_session_2"]
+    },
+    {
+      "id": "q8",
+      "question": "What features does the bookstore application have?",
+      "answer": "User authentication with JWT tokens, CRUD operations for books, a search feature, and a dashboard showing sales analytics.",
+      "category": "single_hop",
+      "session_refs": ["smoke_session_2"]
+    },
+    {
+      "id": "q9",
+      "question": "What is the user's learning plan for transitioning to software engineering?",
+      "answer": "Take the CS50 online course, possibly attend a bootcamp, learn data structures and algorithms, and do mock interviews with their friend Sarah who works at Google.",
+      "category": "multi_hop",
+      "session_refs": ["smoke_session_2"]
+    },
+    {
+      "id": "q10",
+      "question": "Who encouraged the user to explore software engineering and who offered to help with interview preparation?",
+      "answer": "The user's manager encouraged them to explore software engineering. Their friend Sarah who works at Google offered to do mock interviews.",
+      "category": "multi_hop",
+      "session_refs": ["smoke_session_2"]
+    }
+  ]
+}

@@ -102,7 +102,7 @@ Layer   Name             Human Parallel        Mechanism
  L4     Archive          Long-term memory      Raw dialogue logs & historical records
  L3     Knowledge        Semantic memory       Multi-source hypergraph knowledge base
  L2     Context          Working memory        Compressed topic structures (4 depth levels)
- L1     Engram           Short-term memory     Episodic nodes, associations & emotional traces
+ L1     Engram           Associative hypergraph  Hypergraph skeleton linking L2 contexts via typed hyperedges (CoOccurrence/Causal/Semantic/Temporal/Hierarchical/Sequence); episodic decay with emotional modulation
  L0     Profile          Identity              Agent personality, preferences & language habits
 ```
 
@@ -133,7 +133,7 @@ Dream Cycle
     │
     ├─ 1. L3 Distillation        Extract structured knowledge from conversations via LLM
     ├─ 2. L2 Compression         Demote old contexts through 4 depth levels, merge topics
-    ├─ 3. L1 Decay & Prune       Time-decay episodic importance, prune weak associations
+    ├─ 3. L1 Rebuild & Decay     Rebuild hypergraph (remove dangling nodes/edges); decay episodic importance over time
     ├─ 4. L0 Profile Rebuild     Regenerate agent profile from accumulated knowledge
     ├─ 5. Language Habit Learn   Discover user's vocabulary, style traits, emotion patterns
     └─ 6. L5 Crystallization     Extract reusable procedures from action chain patterns

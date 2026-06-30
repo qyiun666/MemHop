@@ -1,4 +1,4 @@
-//! FFI entry points — 4 extern "C" functions for C ABI
+//! FFI entry points — 5 extern "C" functions for C ABI
 //!
 //! Functions:
 //! - `memhop_open`          : Create a MemHop instance from JSON config → `*mut MemHopHandle`
@@ -19,6 +19,16 @@ use std::sync::Mutex;
 use crate::ffi::handler::dispatch;
 use crate::ffi::protocol::{FfiCommand, FfiResponse};
 use crate::MemHop;
+
+thread_local! {
+    static LAST_ERROR: std::cell::RefCell<Option<CString>> = const { std::cell::RefCell::new(None) };
+}
+
+fn set_last_error(msg: &str) {
+    if let Ok(cstr) = CString::new(msg) {
+        LAST_ERROR.with(|e| *e.borrow_mut() = Some(cstr));
+    }
+}
 
 /// Opaque handle to a MemHop instance, safe to pass across FFI boundary
 pub struct MemHopHandle(Mutex<MemHop>);
@@ -54,11 +64,13 @@ pub unsafe extern "C" fn memhop_open(config_json: *const c_char) -> *mut MemHopH
         Ok(Ok(ptr)) => ptr,
         Ok(Err(e)) => {
             eprintln!("[memhop_open] error: {}", e);
+            set_last_error(&e);
             std::ptr::null_mut()
         }
         Err(panic) => {
             let msg = extract_panic_msg(&panic);
             eprintln!("[memhop_open] panic: {}", msg);
+            set_last_error(&msg);
             std::ptr::null_mut()
         }
     }
@@ -182,6 +194,24 @@ pub unsafe extern "C" fn memhop_close(handle: *mut MemHopHandle) {
         let msg = extract_panic_msg(&panic);
         eprintln!("[memhop_close] panic: {}", msg);
     }
+}
+
+/// Get the last error message from the most recent failed FFI operation.
+///
+/// Returns a pointer to a null-terminated C string containing the error
+/// message, or null if no error has occurred. The returned pointer is
+/// owned by the library and must not be freed by the caller.
+///
+/// # Safety
+/// This function returns a raw pointer to an internal C string. The caller
+/// must not free or modify the returned pointer. The pointer is only valid
+/// until the next FFI call that may set an error.
+#[no_mangle]
+pub unsafe extern "C" fn memhop_last_error() -> *const c_char {
+    LAST_ERROR.with(|e| match *e.borrow() {
+        Some(ref cstr) => cstr.as_ptr(),
+        None => std::ptr::null(),
+    })
 }
 
 // ============================================================================

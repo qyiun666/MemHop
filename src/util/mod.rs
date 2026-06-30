@@ -93,6 +93,16 @@ pub struct SourceMeta {
     pub timestamp: i64,
 }
 
+impl Default for SourceMeta {
+    fn default() -> Self {
+        Self {
+            source_type: SourceType::UserInput,
+            source_id: None,
+            timestamp: 0,
+        }
+    }
+}
+
 impl SourceMeta {
     /// Create a new SourceMeta with current timestamp
     pub fn new(source_type: SourceType, source_id: Option<String>) -> Self {

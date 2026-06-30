@@ -10,11 +10,13 @@ pub mod llm;
 pub mod openai_compatible;
 pub mod prune;
 
+use crate::config::DecayConfig;
 use crate::dream::llm::LlmProvider;
 use crate::dream::prune::DreamReport;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
+use crate::query::common::format_hash;
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
@@ -54,6 +56,7 @@ pub fn dream_pipeline(
     llm: &dyn LlmProvider,
     session_topic_ids: HashSet<u64>,
     file: &mut File,
+    decay_config: &DecayConfig,
 ) -> Result<DreamReport, MemHopError> {
     let start_time = std::time::Instant::now();
 
@@ -128,7 +131,7 @@ pub fn dream_pipeline(
 
     // Stage 3: L1 Update - rebuild L1 ContextNode based on updated L2
     // L1 nodes point to L2 contexts; after L2 depth changes, L1 associations need refresh
-    let l1_result = rebuild_l1_from_l2(mmap, header, btree, sparse_index, &session_topic_ids);
+    let l1_result = rebuild_l1_from_l2(mmap, header, btree, sparse_index, &session_topic_ids, decay_config);
     match l1_result {
         Ok(l1_updated) => report.l1_updated = l1_updated,
         Err(e) => {
@@ -139,7 +142,7 @@ pub fn dream_pipeline(
     }
 
     // Stage 3b: L1 Decay - time-decay node importance and prune weak edges
-    let l1_decay_report = l1_decay::decay_l1_network(mmap, header, btree);
+    let l1_decay_report = l1_decay::decay_l1_network(mmap, header, btree, decay_config);
     match l1_decay_report {
         Ok(decay_report) => {
             report.l1_decayed_nodes = decay_report.decayed_nodes;
@@ -234,6 +237,7 @@ fn rebuild_l1_from_l2(
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     _session_topic_ids: &HashSet<u64>,
+    decay_config: &DecayConfig,
 ) -> Result<Vec<String>, MemHopError> {
     use crate::slot::context_node::ContextNode;
     use crate::util::PageType;
@@ -283,18 +287,18 @@ fn rebuild_l1_from_l2(
             if let Ok(node) = ContextNode::deserialize(slot_data) {
                 for edge_id in &node.edge_ptrs {
                     crate::dream::l1_decay::remove_node_from_edge(
-                        mmap, btree, header, *edge_id, id_hash,
+                        mmap, btree, header, *edge_id, id_hash, decay_config,
                     )?;
                 }
             }
         }
 
         btree.remove(id_hash);
-        let offset = (page_id as usize) * crate::util::PAGE_SIZE;
+        let offset = crate::query::slot_io::page_offset(page_id);
         mmap[offset..offset + crate::util::PAGE_SIZE].fill(0);
         crate::file::free_list::free_page(mmap, header, page_id)?;
         sparse_index.remove_document(id_hash);
-        updated_ids.push(format!("{:016x}", id_hash));
+        updated_ids.push(format_hash(id_hash));
     }
 
     Ok(updated_ids)
@@ -313,6 +317,17 @@ mod tests {
     use memmap2::MmapMut;
     use std::fs::File;
     use std::io::Write;
+
+    fn default_decay_config() -> DecayConfig {
+        DecayConfig {
+            lambda_node: 0.01,
+            lambda_edge: 0.02,
+            node_remove_threshold: 0.05,
+            node_prune_edges_threshold: 0.15,
+            edge_remove_threshold: 0.05,
+            min_edge_nodes: 2,
+        }
+    }
 
     fn create_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex) {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
@@ -340,6 +355,7 @@ mod tests {
         (mmap, header, btree)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn allocate_context_node_page(
         mmap: &mut MmapMut,
         header: &mut FileHeader,
@@ -394,12 +410,12 @@ mod tests {
     }
 
     fn read_hyperedge(mmap: &MmapMut, page_id: u32) -> HyperedgeSlot {
-        let offset = (page_id as usize) * PAGE_SIZE + 32;
+        let offset = crate::query::slot_io::slot_offset(page_id);
         HyperedgeSlot::deserialize(&mmap[offset..offset + PAGE_SIZE - 32]).unwrap()
     }
 
     fn read_context_node(mmap: &MmapMut, page_id: u32) -> ContextNode {
-        let offset = (page_id as usize) * PAGE_SIZE + 32;
+        let offset = crate::query::slot_io::slot_offset(page_id);
         ContextNode::deserialize(&mmap[offset..offset + PAGE_SIZE - 32]).unwrap()
     }
 
@@ -434,12 +450,14 @@ mod tests {
         sparse_index.add_document(1, vec!["test".to_string()], 1);
         assert!(sparse_index.bm25_score(&["test".to_string()], 1) > 0.0);
 
+        let dc = default_decay_config();
         let updated = rebuild_l1_from_l2(
             &mut mmap,
             &mut header,
             &mut btree,
             &mut sparse_index,
             &HashSet::new(),
+            &dc,
         )
         .unwrap();
         assert_eq!(updated.len(), 1);
@@ -486,12 +504,14 @@ mod tests {
         // Mark the surviving L2 context as present so only node 1 is stale.
         btree.insert(2000, 0);
 
+        let dc = default_decay_config();
         let updated = rebuild_l1_from_l2(
             &mut mmap,
             &mut header,
             &mut btree,
             &mut sparse_index,
             &HashSet::new(),
+            &dc,
         )
         .unwrap();
         assert_eq!(updated.len(), 1);

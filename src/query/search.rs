@@ -8,6 +8,7 @@
 //   2. Via L1 hypergraph, find associated L2 contexts
 //   3. Return L0 profile, L3 ID list, L4 archive references
 
+use crate::config::SearchWeights;
 use crate::file::header::FileHeader;
 use crate::file::page::decode_page_ref;
 use crate::index::btree::BTreeIndex;
@@ -142,6 +143,7 @@ pub fn search_memory(
     encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
     l1_reverse: &L1ReverseIndex,
     file: &mut File,
+    search_weights: &SearchWeights,
 ) -> Result<SearchResult, MemHopError> {
     let _page_count = header.page_count;
 
@@ -276,11 +278,11 @@ pub fn search_memory(
             ));
         };
 
-        // Step 4: Merge & rank (entity 0.15, BM25 0.5, vector 0.35)
+        // Step 4: Merge & rank using configured search weights
         let config = MergeConfig {
-            entity_weight: 0.15,
-            bm25_weight: 0.5,
-            vector_weight: 0.35,
+            entity_weight: search_weights.entity_weight,
+            bm25_weight: search_weights.bm25_weight,
+            vector_weight: search_weights.vector_weight,
             limit: query.context_limit,
             min_score: query.min_score,
         };
@@ -290,6 +292,18 @@ pub fn search_memory(
     // Step 5: L1 association — find sibling depth-1 contexts
     let data: &[u8] = &mmap[..];
     let l1_associated = get_l1_associated_depth1(data, &filtered_l2, btree, l1_reverse)?;
+
+    // Step 5b: Deep mode — merge L1 associated contexts into main result set
+    // When search_mode == "deep", the L1 association results are merged into
+    // filtered_l2 so they appear in contexts (not just associated_contexts).
+    // This gives the caller maximum recall in a single field.
+    let filtered_l2 = if query.search_mode == Some(crate::query::types::SearchMode::Deep) {
+        let mut extended = filtered_l2;
+        extended.extend(l1_associated.clone());
+        extended
+    } else {
+        filtered_l2
+    };
 
     // Step 6: L0 profile
     let l0_profile = crate::query::l0_crud::read_profile(mmap, btree)?;
@@ -450,7 +464,7 @@ fn retrieve_l2_vector(
         }
 
         let (page_id, _slot_idx) = decode_page_ref(page_ref);
-        let offset = (page_id as usize) * PAGE_SIZE + 32;
+        let offset = crate::query::slot_io::slot_offset(page_id);
 
         if offset >= data.len() {
             continue;
@@ -643,7 +657,8 @@ fn get_l1_associated_depth1(
 
     let matched_ids: HashSet<u64> = matched.iter().map(|c| c.id_hash).collect();
     let mut seen: HashSet<u64> = matched_ids.clone(); // exclude already-matched
-    let mut result: Vec<ContextSlot> = Vec::new();
+    // Collect associated contexts with their edge weight for ranking
+    let mut weighted_results: Vec<(ContextSlot, f32)> = Vec::new();
 
     // Step 1: Use the L1 reverse index to find ContextNodes pointing to matched contexts
     let associated_nodes = l1_reverse.find_associated(&matched_ids);
@@ -675,7 +690,9 @@ fn get_l1_associated_depth1(
                                         {
                                             if let Ok(ctx) = ContextSlot::deserialize(ctx_data) {
                                                 seen.insert(ctx_id);
-                                                result.push(ctx);
+                                                // Weight = hyperedge.weight * sibling importance
+                                                let assoc_weight = hyperedge.weight * sibling_node.importance;
+                                                weighted_results.push((ctx, assoc_weight));
                                             }
                                         }
                                     }
@@ -688,7 +705,7 @@ fn get_l1_associated_depth1(
         }
     }
 
-    // Also include parent contexts of matched contexts
+    // Also include parent contexts of matched contexts (weight = parent importance)
     for ctx in matched {
         if let Some(parent_id) = ctx.parent_id {
             if seen.contains(&parent_id) {
@@ -700,12 +717,19 @@ fn get_l1_associated_depth1(
             {
                 if let Ok(parent) = ContextSlot::deserialize(parent_data) {
                     seen.insert(parent_id);
-                    result.push(parent);
+                    let parent_importance = parent.importance;
+                    weighted_results.push((parent, parent_importance));
                 }
             }
         }
     }
 
+    // Sort by association weight (strongest first) and return
+    weighted_results.sort_by(|a, b| {
+        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let result: Vec<ContextSlot> = weighted_results.into_iter().map(|(ctx, _)| ctx).collect();
     Ok(result)
 }
 
@@ -846,7 +870,14 @@ fn collect_archive_refs(
 // Activation score update
 // ============================================================================
 
-/// Update activation scores for retrieved contexts
+/// Update activation scores for retrieved contexts.
+///
+/// Implements both the "spacing effect" (retrieval strengthens memory)
+/// and "decay" (unretrieved memories fade) from human memory models.
+///
+/// - Matched contexts: activation_score +0.1 (capped at 1.0)
+/// - Active but unmatched contexts: activation_score * 0.95 (decay)
+/// - Dormant contexts: left unchanged
 fn update_activation_scores(
     mmap: &mut MmapMut,
     contexts: &[ContextSlot],
@@ -854,10 +885,13 @@ fn update_activation_scores(
 ) -> Result<(), MemHopError> {
     let now_ms = common::now_ms();
 
+    // Only update matched contexts (spacing effect).
+    // Global decay of unmatched active contexts is handled by the periodic
+    // lightweight L1 decay in maybe_run_lightweight_decay, not on every search.
     for ctx in contexts {
         if let Some(page_ref) = btree.search(ctx.id_hash) {
             let (page_id, _) = decode_page_ref(page_ref);
-            let offset = (page_id as usize) * PAGE_SIZE + 32;
+            let offset = crate::query::slot_io::slot_offset(page_id);
 
             if offset + 100 <= mmap.len() {
                 if let Ok(mut c) = ContextSlot::deserialize_slot(&mmap[offset..]) {
@@ -923,7 +957,7 @@ fn boost_l1_importance_on_retrieval(
                     let buf = node.serialize().map_err(|e| {
                         MemHopError::Serialization(format!("ContextNode boost serialize: {}", e))
                     })?;
-                    let offset = ((page_id as usize) * PAGE_SIZE) + 32;
+                    let offset = crate::query::slot_io::slot_offset(page_id);
                     if offset + buf.len() <= mmap.len() {
                         mmap[offset..offset + buf.len()].copy_from_slice(&buf);
                     }
@@ -1020,7 +1054,7 @@ fn create_new_l2_context(
 
     // Allocate page
     let page_id = crate::file::free_list::allocate_or_extend(mmap, header, file, 500)?;
-    let page_offset = (page_id as usize) * PAGE_SIZE;
+    let page_offset = crate::query::slot_io::page_offset(page_id);
 
     // Write page header
     let page_header = crate::file::page::PageHeader {

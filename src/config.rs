@@ -117,3 +117,72 @@ fn default_timeout() -> u64 {
 fn default_language() -> String {
     "zh".to_string()
 }
+
+/// Configuration for L1 decay parameters
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecayConfig {
+    /// Decay rate for L1 nodes
+    pub lambda_node: f32,
+    /// Decay rate for L1 edges
+    pub lambda_edge: f32,
+    /// Threshold below which a node is removed
+    pub node_remove_threshold: f32,
+    /// Threshold below which a node's edges are pruned
+    pub node_prune_edges_threshold: f32,
+    /// Threshold below which an edge is removed
+    pub edge_remove_threshold: f32,
+    /// Minimum number of nodes an edge must connect to be retained
+    pub min_edge_nodes: usize,
+}
+
+impl Default for DecayConfig {
+    fn default() -> Self {
+        Self {
+            lambda_node: 0.01,
+            lambda_edge: 0.02,
+            node_remove_threshold: 0.05,
+            node_prune_edges_threshold: 0.15,
+            edge_remove_threshold: 0.05,
+            min_edge_nodes: 2,
+        }
+    }
+}
+
+/// Configuration for session management
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionConfig {
+    /// Default time-to-live in milliseconds (default: 1 hour)
+    pub default_ttl_ms: i64,
+    /// Working memory capacity (default: 7, Miller's law)
+    pub capacity: usize,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            default_ttl_ms: 3_600_000,
+            capacity: 7,
+        }
+    }
+}
+
+/// Configuration for search weights
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchWeights {
+    /// Weight for BM25 text relevance
+    pub bm25_weight: f32,
+    /// Weight for vector similarity
+    pub vector_weight: f32,
+    /// Weight for entity matching
+    pub entity_weight: f32,
+}
+
+impl Default for SearchWeights {
+    fn default() -> Self {
+        Self {
+            bm25_weight: 0.4,
+            vector_weight: 0.4,
+            entity_weight: 0.2,
+        }
+    }
+}

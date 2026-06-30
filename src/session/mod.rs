@@ -4,6 +4,7 @@
 //! with TTL-based lifecycle control. Unlike the persistent Activation system, this is
 //! purely in-memory and tracks which topics are currently "hot" during a user session.
 
+use crate::config::SessionConfig;
 use std::collections::HashMap;
 
 /// Topic activation state (pure memory, not persisted)
@@ -71,27 +72,18 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    /// Create a new SessionManager with default TTL of 1 hour and capacity of 7
+    /// Create a new SessionManager from a SessionConfig
+    ///
+    /// # Arguments
+    /// * `config` - Session configuration with TTL and capacity
     ///
     /// # Returns
     /// A new SessionManager instance
-    pub fn new() -> Self {
+    pub fn new(config: &SessionConfig) -> Self {
         Self {
             active_topics: HashMap::new(),
-            default_ttl_ms: 3_600_000, // 1 hour in milliseconds
-            capacity: 7,
-        }
-    }
-
-    /// Create a new SessionManager with custom capacity
-    ///
-    /// # Arguments
-    /// * `capacity` - Working memory capacity (recommended: 5-9)
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            active_topics: HashMap::new(),
-            default_ttl_ms: 3_600_000,
-            capacity: capacity.max(1),
+            default_ttl_ms: config.default_ttl_ms,
+            capacity: config.capacity,
         }
     }
 
@@ -238,7 +230,10 @@ impl SessionManager {
 
 impl Default for SessionManager {
     fn default() -> Self {
-        Self::new()
+        Self::new(&SessionConfig {
+            default_ttl_ms: 3_600_000,
+            capacity: 7,
+        })
     }
 }
 
@@ -254,9 +249,16 @@ fn current_timestamp_ms() -> i64 {
 mod tests {
     use super::*;
 
+    fn default_config() -> SessionConfig {
+        SessionConfig {
+            default_ttl_ms: 3_600_000,
+            capacity: 7,
+        }
+    }
+
     #[test]
     fn test_activate_and_get_topics() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(&default_config());
 
         // Activate some topics
         manager.activate_topic(1001, None);
@@ -273,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_deactivate_topic() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(&default_config());
 
         manager.activate_topic(2001, None);
         manager.activate_topic(2002, None);
@@ -292,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_ttl_adjustment() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(&default_config());
 
         // Activate topic with default TTL (3,600,000 ms)
         manager.activate_topic(3001, None);
@@ -316,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_ttl_minimum_enforcement() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(&default_config());
 
         manager.activate_topic(4001, Some(100_000)); // Start with 100,000 ms
 
@@ -329,7 +331,7 @@ mod tests {
 
     #[test]
     fn test_adjust_nonexistent_topic() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(&default_config());
 
         // Adjusting a non-existent topic should not panic
         manager.adjust_activation(9999, 1.0);
@@ -339,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_purge_expired() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(&default_config());
 
         // Manually insert topics with different timestamps
         let current_time = current_timestamp_ms();
@@ -368,7 +370,7 @@ mod tests {
 
     #[test]
     fn test_24_hour_auto_expire() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(&default_config());
 
         // Simulate a topic activated 25 hours ago
         let current_time = current_timestamp_ms();
@@ -389,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_refresh_existing_topic() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(&default_config());
 
         manager.activate_topic(7001, Some(1_800_000)); // 30 minutes
 
@@ -408,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_default_manager_properties() {
-        let manager = SessionManager::new();
+        let manager = SessionManager::new(&default_config());
 
         assert_eq!(manager.default_ttl_ms(), 3_600_000);
         assert!(manager.is_empty());
@@ -417,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_custom_ttl_on_activation() {
-        let mut manager = SessionManager::new();
+        let mut manager = SessionManager::new(&default_config());
 
         // Activate with custom TTL
         manager.activate_topic(8001, Some(5_400_000)); // 1.5 hours

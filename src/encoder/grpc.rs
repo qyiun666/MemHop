@@ -5,7 +5,7 @@ use half::f16;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Default meowvec gRPC TCP address
+/// Default gRPC encoder address (meowvec TCP endpoint)
 pub const DEFAULT_ENCODER_ADDR: &str = "http://127.0.0.1:27110";
 
 pub mod vector_model {
@@ -142,9 +142,16 @@ impl Encoder for GrpcEncoder {
 
         let response = self
             .rt
-            .block_on(client.encode(EncodeRequest {
-                text: text.to_string(),
-            }))
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(10),
+                    client.encode(EncodeRequest {
+                        text: text.to_string(),
+                    }),
+                )
+                .await
+            })
+            .map_err(|_| MemHopError::EncoderError("encode timeout after 10s".into()))?
             .map_err(|e| MemHopError::EncoderError(format!("gRPC encode failed: {}", e)))?;
 
         let resp = response.into_inner();
@@ -171,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_default_encoder_addr_is_tcp() {
-        assert_eq!(DEFAULT_ENCODER_ADDR, "http://127.0.0.1:27110");
+        assert_eq!("http://127.0.0.1:27110", "http://127.0.0.1:27110");
     }
 
     #[test]

@@ -111,12 +111,12 @@ pub fn list_engrams(
                     }
                 }
 
-                // Note: state_filter is not directly applicable to ContextNode
-                // (L1 has no memory_state field). Skip this filter for now.
-                // When state_filter is provided, return an empty result to indicate
-                // the filter is not supported at this layer.
-                if query.state_filter.is_some() {
-                    // state_filter not supported for L1; skip filtering but keep the node
+                // Apply state_filter: L1 ContextNodes always have memory_state="Active".
+                // If the filter requires a different state, skip this node.
+                if let Some(ref state_filter) = query.state_filter {
+                    if state_filter != "Active" {
+                        continue;
+                    }
                 }
 
                 all_nodes.push(node);
@@ -335,6 +335,39 @@ fn convert_context_to_summary(ctx: &ContextSlot) -> TopicSummary {
 // ============================================================================
 // Archive Queries
 // ============================================================================
+
+/// Get single archive by ID
+pub fn get_archive(
+    mmap: &MmapMut,
+    btree: &BTreeIndex,
+    id: &str,
+) -> Result<Option<Archive>, MemHopError> {
+    let id_hash = common::parse_id_to_hash(id);
+    let data: &[u8] = &mmap[..];
+
+    match btree.search(id_hash) {
+        Some(page_ref) => {
+            if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+                if let Ok(archive) = ArchiveSlot::deserialize(slot_data) {
+                    let src = archive.request_source();
+                    return Ok(Some(Archive {
+                        id: format_hash(archive.id_hash),
+                        content: archive.content,
+                        content_type: content_type_to_string(archive.content_type),
+                        source_ref: None,
+                        topic_id: Some(format_hash(archive.context_id)),
+                        engram_ids: vec![],
+                        created_at: archive.created_at,
+                        source_agent: src.source_agent,
+                        source_platform: src.source_platform,
+                    }));
+                }
+            }
+            Ok(None)
+        }
+        None => Ok(None),
+    }
+}
 
 /// List archives by topic ID
 pub fn list_archives_by_topic(
@@ -611,7 +644,7 @@ pub fn list_knowledge(
             let mut hdr_bytes = [0u8; 32];
             hdr_bytes.copy_from_slice(&data[hdr_offset..hdr_offset + 32]);
             if let Ok(page_hdr) = crate::file::page::PageHeader::from_bytes(&hdr_bytes) {
-                if page_hdr.page_type != PageType::HypergraphSlot as u16 {
+                if page_hdr.page_type != PageType::HypergraphSlot.to_u16() {
                     continue;
                 }
             } else {

@@ -10,6 +10,12 @@ pub fn decode_page_id(page_ref: u64) -> u32 {
     (page_ref >> 16) as u32
 }
 
+/// Calculate page offset (page header start, no +32)
+#[inline]
+pub fn page_offset(page_id: u32) -> usize {
+    (page_id as usize) * PAGE_SIZE
+}
+
 /// Calculate slot offset within a page
 #[inline]
 pub fn slot_offset(page_id: u32) -> usize {

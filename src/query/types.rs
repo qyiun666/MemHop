@@ -47,6 +47,16 @@ impl RequestSource {
 // Search Memory Interface (Interface 2)
 // ============================================================================
 
+/// Search mode for controlling retrieval depth and performance
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchMode {
+    /// Deep: full triple retrieval + L1 association expansion, merging associated contexts
+    /// into the main result set for maximum recall.
+    #[default]
+    Deep,
+}
+
 /// Search query for memory retrieval
 ///
 /// # Routing logic
@@ -84,6 +94,11 @@ pub struct SearchQuery {
     /// API 请求来源（记录是谁发起的搜索）
     #[serde(default, skip_serializing_if = "RequestSource::is_empty")]
     pub source: RequestSource,
+    /// Search mode controlling retrieval depth and performance.
+    /// Only `"deep"` is supported: full triple retrieval + L1 association expansion.
+    /// When not provided, uses standard triple retrieval without L1 expansion merging.
+    #[serde(default)]
+    pub search_mode: Option<SearchMode>,
 }
 
 /// Default context limit for search
@@ -212,7 +227,8 @@ pub struct UpdateRequest {
     /// Compressed summary for current round (optional, appended to L2 context summary)
     pub summary: Option<String>,
     /// Action chain (written to L5 on disk by this interface)
-    pub action_chain: Vec<ActionItem>,
+    #[serde(default)]
+    pub action_chain: Option<Vec<ActionItem>>,
     /// Enable instant L3 knowledge distillation (optional, default: false)
     #[serde(default)]
     pub instant_distill: bool,
@@ -255,6 +271,10 @@ pub struct UpdateResult {
     pub archive_id: String,
     /// Update status
     pub status: UpdateStatus,
+    /// Whether this update triggered an automatic dream consolidation
+    /// because archive or summary thresholds were exceeded.
+    #[serde(default)]
+    pub dream_triggered: bool,
 }
 
 /// Update status enumeration
@@ -623,8 +643,10 @@ pub struct Subgraph {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraversalHop {
     pub depth: usize,
+    #[serde(serialize_with = "crate::slot::hypergraph::serialize_hash_as_hex", deserialize_with = "crate::slot::hypergraph::deserialize_hash_from_hex")]
     pub from_node: u64,
     pub edge: crate::slot::hypergraph::HypergraphEdge,
+    #[serde(serialize_with = "crate::slot::hypergraph::serialize_hash_as_hex", deserialize_with = "crate::slot::hypergraph::deserialize_hash_from_hex")]
     pub to_node: u64,
 }
 
