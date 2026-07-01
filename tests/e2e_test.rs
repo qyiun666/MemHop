@@ -14,9 +14,9 @@
 
 use memhop::encoder::{Encoder, EncoderOutput, GrpcEncoder};
 use memhop::{
-    ActionItem, ActionType, ArchivePageQuery, CrystalListQuery, DecayConfig, EngramListQuery,
-    KnowledgeListQuery, LlmConfig, MemHop, MemHopConfig, SearchQuery, SearchWeights, SessionConfig,
-    SourceMeta, SourceType, StoreBatch, StoreItem, TopicListQuery, UpdateProfileRequest, UpdateRequest,
+    ActionItem, ActionType, ArchivePageQuery, CrystalListQuery, EngramListQuery,
+    KnowledgeListQuery, LlmConfig, MemHop, MemHopConfig, SearchQuery, TopicListQuery,
+    UpdateProfileRequest, UpdateRequest, SourceMeta, SourceType, StoreBatch, StoreItem,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -42,33 +42,12 @@ fn make_llm_config() -> LlmConfig {
 
 /// Build a MemHopConfig pointing at the given temporary .meh path.
 fn make_config(path: PathBuf) -> MemHopConfig {
-    MemHopConfig {
-        db_path: path,
-        encoder_grpc_addr: "http://127.0.0.1:27110".to_string(), // encoder is injected via set_encoder in tests
-        vector_dim: VECTOR_DIM,
-        crystal_path: PathBuf::from("/tmp/memhop_e2e_crystals"),
-        llm: make_llm_config(),
-        auto_dream_on_evict: true,
-        auto_dream_archive_threshold: 20,
-        auto_dream_summary_bytes: 2048,
-        search_weights: SearchWeights {
-            entity_weight: 0.15,
-            bm25_weight: 0.5,
-            vector_weight: 0.35,
-        },
-        decay_config: DecayConfig {
-            lambda_node: 0.01,
-            lambda_edge: 0.02,
-            node_remove_threshold: 0.05,
-            node_prune_edges_threshold: 0.15,
-            edge_remove_threshold: 0.05,
-            min_edge_nodes: 2,
-        },
-        session_config: SessionConfig {
-            default_ttl_ms: 3_600_000,
-            capacity: 7,
-        },
-    }
+    let mut config = MemHopConfig::new(path, VECTOR_DIM);
+    config.encoder_grpc_addr = Some("http://127.0.0.1:27110".to_string());
+    config.crystal_path = Some(PathBuf::from("/tmp/memhop_e2e_crystals"));
+    config.llm = make_llm_config();
+    config.auto_dream_on_evict = true;
+    config
 }
 
 /// Deterministic fallback encoder used only when the real meowvec gRPC service
@@ -339,6 +318,7 @@ fn test_agent_conversation_memory_flow() {
                 min_score: 0.0,
                 context_history: None,
                 source: Default::default(),
+                search_mode: None,
             })
             .expect("search should succeed");
         eprintln!("[E2E] search contexts: {:?}", search.contexts);
@@ -378,12 +358,12 @@ fn test_agent_conversation_memory_flow() {
                      Future和Pin的关系，以及Tokio的spawn与block_on的使用场景。"
                         .into(),
                 ),
-                action_chain: vec![ActionItem {
+                action_chain: Some(vec![ActionItem {
                     title: "检索Rust异步记忆".into(),
                     description: "从记忆中检索Rust异步编程相关内容".into(),
                     action_type: ActionType::Query,
                     parameters: None,
-                }],
+                }]),
                 instant_distill: false,
                 source: Default::default(),
             })
@@ -534,6 +514,7 @@ fn test_chinese_memory_specialization() {
                 min_score: 0.0,
                 context_history: None,
                 source: Default::default(),
+                search_mode: None,
             })
             .expect("Chinese BM25 search should succeed");
         assert!(
@@ -561,6 +542,7 @@ fn test_chinese_memory_specialization() {
                 min_score: 0.0,
                 context_history: None,
                 source: Default::default(),
+                search_mode: None,
             })
             .expect("LLM-enhanced Chinese search should succeed");
         assert!(
@@ -686,6 +668,7 @@ pub fn run(query: String) {
                 min_score: 0.0,
                 context_history: None,
                 source: Default::default(),
+                search_mode: None,
             })
             .expect("L3-restricted search should succeed");
         assert!(
@@ -773,7 +756,7 @@ fn test_dream_pipeline_full() {
                     topic_id: topic.id.clone(),
                     dialogue_text: format!("请总结{}主题的关键结论", topic.title),
                     summary: Some(rich_summary),
-                    action_chain: vec![
+                    action_chain: Some(vec![
                         ActionItem {
                             title: "检索相关记忆".into(),
                             description: format!("检索与{}相关的记忆", topic.title),
@@ -786,7 +769,7 @@ fn test_dream_pipeline_full() {
                             action_type: ActionType::Execute,
                             parameters: None,
                         },
-                    ],
+                    ]),
                     instant_distill: false,
                     source: Default::default(),
                 })

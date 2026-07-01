@@ -19,13 +19,13 @@ use memmap2::MmapMut;
 use std::collections::{HashMap, HashSet};
 
 /// Decay constants (per hour) — default values documented for reference:
-/// - lambda_node: 0.01
-/// - lambda_edge: 0.02
-/// - node_remove_threshold: 0.05
-/// - node_prune_edges_threshold: 0.15
-/// - edge_remove_threshold: 0.05
-/// - min_edge_nodes: 2
-
+///   - lambda_node: 0.01
+///   - lambda_edge: 0.02
+///   - node_remove_threshold: 0.05
+///   - node_prune_edges_threshold: 0.15
+///   - edge_remove_threshold: 0.05
+///   - min_edge_nodes: 2
+///
 /// Report produced by the L1 decay stage
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct L1DecayReport {

@@ -8,7 +8,7 @@ fn create_test_db() -> (TempDir, MemHop) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("stress_test.meh");
     let mut config = MemHopConfig::new(path, 8);
-    config.encoder_grpc_addr = String::new();
+    config.encoder_grpc_addr = None;
     let db = MemHop::open(config).unwrap();
     (dir, db)
 }
@@ -159,7 +159,7 @@ fn test_rapid_write_and_sync() {
     drop(db);
     let path = dir.path().join("stress_test.meh");
     let mut config = MemHopConfig::new(path, 8);
-    config.encoder_grpc_addr = String::new();
+    config.encoder_grpc_addr = None;
     let db2 = MemHop::open(config).expect("DB should reopen without corruption");
 
     let engrams = db2.list_engrams(memhop::EngramListQuery {

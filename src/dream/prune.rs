@@ -79,6 +79,7 @@ pub struct CompressResult {
 
 /// Run dream consolidation pipeline
 /// Scans active L2 contexts and performs depth demotion + compression + crystallization
+#[allow(clippy::too_many_arguments)]
 pub fn dream_consolidation(
     mmap: &mut MmapMut,
     header: &mut FileHeader,

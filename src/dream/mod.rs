@@ -48,6 +48,7 @@ use std::fs::File;
 ///
 /// # Returns
 /// DreamReport containing statistics about all operations performed
+#[allow(clippy::too_many_arguments)]
 pub fn dream_pipeline(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
