@@ -1,6 +1,6 @@
 [package]
 name = "memhop"
-version = "0.50.0"
+version = "0.51.0"
 edition = "2021"
 description = "Agent-oriented memory database inspired by human brain cognitive architecture"
 license = "MIT OR Apache-2.0"
@@ -29,6 +29,9 @@ bincode = "1.3"
 chrono = "0.4"
 regex = "1.10"
 jieba-rs = "0.7"
+leiden-rs = "0.8"
+pest = "2.7"
+pest_derive = "2.7"
 
 [dev-dependencies]
 tempfile = "3.10"

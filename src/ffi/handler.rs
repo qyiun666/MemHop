@@ -1,4 +1,4 @@
-//! FFI command dispatcher — routes 13 commands to MemHop public API
+//! FFI command dispatcher — routes 16 commands to MemHop public API
 //!
 //! Key responsibilities:
 //! - `dispatch_query_layer()` — merged Interface 5-12 routing
@@ -92,6 +92,27 @@ pub fn dispatch(db: &mut MemHop, cmd: FfiCommand) -> Result<Value, String> {
             db.closed = true;
             Ok(serde_json::json!({"closed": true}))
         }
+        FfiCommand::L3Isolated {
+            graph_id,
+            threshold,
+        } => {
+            let thresh = threshold.unwrap_or(0);
+            to_json_value(db.l3_detect_isolated(&graph_id, thresh))
+        }
+        FfiCommand::L3Community {
+            graph_id,
+            max_hyperedge_size,
+        } => {
+            let config = max_hyperedge_size.map(|size| crate::l3::CommunityConfig {
+                max_hyperedge_size: size,
+            });
+            to_json_value(db.l3_detect_communities(&graph_id, config))
+        }
+        FfiCommand::L3Query {
+            graph_id,
+            query,
+            page,
+        } => to_json_value(db.l3_query(&graph_id, &query, page)),
     }
 }
 

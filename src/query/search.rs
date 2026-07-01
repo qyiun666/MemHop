@@ -13,7 +13,7 @@ use crate::file::header::FileHeader;
 use crate::file::page::decode_page_ref;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::index::vector::{cosine_similarity, read_vector};
+use crate::index::vector::{cosine_similarity, read_vector, IVFIndex, ivf_knn};
 use crate::l3::store::page_type_of;
 use crate::query::common::{self, format_hash};
 use crate::query::slot_io::{decode_page_id, get_slot_data};
@@ -144,6 +144,7 @@ pub fn search_memory(
     l1_reverse: &L1ReverseIndex,
     file: &mut File,
     search_weights: &SearchWeights,
+    ivf_index: Option<&IVFIndex>,
 ) -> Result<SearchResult, MemHopError> {
     let _page_count = header.page_count;
 
@@ -268,6 +269,8 @@ pub fn search_memory(
                     fetch_limit,
                     query.min_score,
                     l3_scope.as_ref(),
+                    ivf_index,
+                    search_weights.n_probes,
                 )?
             } else {
                 vec![]
@@ -444,6 +447,7 @@ fn retrieve_l2_bm25(
 /// Retrieve L2 contexts using vector cosine similarity on centroid vectors
 ///
 /// If `l3_scope` is Some, only accept candidates whose id_hash is in the set.
+#[allow(clippy::too_many_arguments)]
 fn retrieve_l2_vector(
     data: &[u8],
     query_vector: &[half::f16],
@@ -452,7 +456,38 @@ fn retrieve_l2_vector(
     limit: usize,
     min_score: f32,
     l3_scope: Option<&HashSet<u64>>,
+    ivf_index: Option<&IVFIndex>,
+    n_probes: usize,
 ) -> Result<Vec<(ContextSlot, f32)>, MemHopError> {
+    // Fast path: use IVF index if available and non-empty
+    if let Some(ivf) = ivf_index {
+        if !ivf.centroids.is_empty() && !ivf.buckets.is_empty() {
+            let effective_probes = if n_probes > 0 { n_probes } else { 8 };
+            let candidates = ivf_knn(ivf, data, query_vector, limit * 2, effective_probes)
+                .unwrap_or_default();
+
+            let mut results = Vec::new();
+            for (id_hash, score) in candidates {
+                if min_score > 0.0 && score < min_score {
+                    continue;
+                }
+                if let Some(page_ref) = btree.search(id_hash) {
+                    if let Some(slot_data) = get_slot_data(data, page_ref) {
+                        if let Ok(ctx) = ContextSlot::deserialize_slot(slot_data) {
+                            let weighted_score = if ctx.depth == 3 { score * 0.5 } else { score };
+                            results.push((ctx, weighted_score));
+                        }
+                    }
+                }
+            }
+
+            results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            results.truncate(limit);
+            return Ok(results);
+        }
+    }
+
+    // Fallback: brute-force linear scan (original logic)
     let mut candidates = Vec::new();
 
     for (&id_hash, &page_ref) in btree.iter() {

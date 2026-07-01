@@ -1,0 +1,76 @@
+// L3 Hypergraph Query DSL — PEG grammar (pest)
+// V1: read-only queries, no RETURN clause (return type is implicit)
+
+query = { SOI ~ query_clause ~ EOI }
+
+query_clause = { match_clause | hyperedge_clause | path_clause | subgraph_clause }
+
+// ── MATCH (n:concept) WHERE ... LIMIT 10 ───────────────────────────────────
+match_clause = {
+    "MATCH" ~ ws+ ~ "(" ~ variable? ~ (":" ~ type_label)? ~ ")"
+    ~ (ws+ ~ where_clause)?
+    ~ (ws+ ~ limit_clause)?
+}
+
+// ── MATCH HYPEREDGE e-[n1, n2, ...]- WHERE ... LIMIT 10 ────────────────────
+hyperedge_clause = {
+    "MATCH" ~ ws+ ~ "HYPEREDGE" ~ ws+ ~ variable ~ "-[" ~ variable_list ~ "]-"
+    ~ (ws+ ~ where_clause)?
+    ~ (ws+ ~ limit_clause)?
+}
+
+// ── PATH FROM "abc123" DEPTH 3 EDGE_KINDS ["Related", "Causal"] ─────────────
+path_clause = {
+    "PATH" ~ ws+ ~ "FROM" ~ ws+ ~ string_literal
+    ~ ws+ ~ "DEPTH" ~ ws+ ~ integer
+    ~ (ws+ ~ "EDGE_KINDS" ~ ws+ ~ string_list)?
+}
+
+// ── SUBGRAPH FROM "abc123" DEPTH 2 ──────────────────────────────────────────
+subgraph_clause = {
+    "SUBGRAPH" ~ ws+ ~ "FROM" ~ ws+ ~ string_literal
+    ~ ws+ ~ "DEPTH" ~ ws+ ~ integer
+}
+
+// ── WHERE ──────────────────────────────────────────────────────────────────
+where_clause = { "WHERE" ~ ws+ ~ condition }
+
+condition = { or_condition }
+
+or_condition = { and_condition ~ (ws+ ~ "OR" ~ ws+ ~ and_condition)* }
+
+and_condition = { primary ~ (ws+ ~ "AND" ~ ws+ ~ primary)* }
+
+primary = {
+    property_compare
+    | type_equals
+    | keyword_contains
+    | "(" ~ ws* ~ condition ~ ws* ~ ")"
+}
+
+property_compare = {
+    variable ~ "." ~ property_name ~ ws* ~ compare_op ~ ws* ~ number
+}
+
+type_equals = {
+    variable ~ "." ~ "type" ~ ws* ~ "=" ~ ws* ~ string_literal
+}
+
+keyword_contains = {
+    variable ~ "." ~ "keywords" ~ ws+ ~ "CONTAINS" ~ ws+ ~ string_literal
+}
+
+// ── LIMIT ──────────────────────────────────────────────────────────────────
+limit_clause = { "LIMIT" ~ ws+ ~ integer }
+
+// ── Primitives ─────────────────────────────────────────────────────────────
+variable = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+type_label = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+variable_list = { variable ~ (ws* ~ "," ~ ws* ~ variable)* }
+property_name = @{ ASCII_ALPHA ~ (ASCII_ALPHANUMERIC | "_")* }
+string_literal = { "\"" ~ (!"\"" ~ ANY)* ~ "\"" }
+string_list = { "[" ~ ws* ~ string_literal ~ (ws* ~ "," ~ ws* ~ string_literal)* ~ ws* ~ "]" }
+integer = @{ ASCII_DIGIT+ }
+number = @{ ASCII_DIGIT+ ~ ("." ~ ASCII_DIGIT+)? }
+compare_op = { ">=" | "<=" | "!=" | "=" | ">" | "<" }
+ws = _{ " " | "\t" | "\n" | "\r" }

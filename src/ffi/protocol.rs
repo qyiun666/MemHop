@@ -93,6 +93,28 @@ pub enum FfiCommand {
     /// Close database
     #[serde(rename = "close")]
     Close,
+    /// L3 isolated node detection
+    #[serde(rename = "l3_isolated")]
+    L3Isolated {
+        graph_id: String,
+        #[serde(default)]
+        threshold: Option<u32>,
+    },
+    /// L3 community detection
+    #[serde(rename = "l3_community")]
+    L3Community {
+        graph_id: String,
+        #[serde(default)]
+        max_hyperedge_size: Option<usize>,
+    },
+    /// L3 DSL graph query
+    #[serde(rename = "l3_query")]
+    L3Query {
+        graph_id: String,
+        query: String,
+        #[serde(default = "default_page")]
+        page: usize,
+    },
 }
 
 /// Get-by-ID parameters for query_layer
@@ -167,6 +189,10 @@ pub struct ImportImportParams {
 
 fn default_import_action() -> String {
     "import".to_string()
+}
+
+fn default_page() -> usize {
+    1
 }
 
 /// Session management sub-actions

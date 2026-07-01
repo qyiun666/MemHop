@@ -14,10 +14,15 @@
 //! The `graph_id` field on each node/edge links them to their parent HypergraphSlot.
 
 pub mod cache;
+pub mod community;
+pub mod degree;
+pub mod dsl;
 pub mod index;
 pub mod store;
 
 pub use cache::AdjacencyCache;
+pub use community::{Community, CommunityConfig, CommunityResult};
+pub use degree::{DegreeTracker, GraphDegrees, IsolatedNode, IsolatedResult};
 pub use index::{L3Index, L3IndexQuery};
 pub use store::{
     add_edge, add_node, bfs_traversal, bfs_traversal_cached, collect_l2_refs, count_graph_elements,

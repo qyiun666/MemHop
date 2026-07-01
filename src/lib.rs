@@ -1,4 +1,4 @@
-//! MemHop v0.48.0 - Agent-oriented memory database inspired by human brain cognitive architecture
+//! MemHop v0.51.0 - Agent-oriented memory database inspired by human brain cognitive architecture
 //!
 //! MemHop is a specialized memory database designed for AI Agents, implementing
 //! a six-layer cognitive architecture (L0-L5) with custom .meh binary file format.
@@ -145,6 +145,12 @@ pub enum MemHopError {
 
     #[error("Encoder error: {0}")]
     EncoderError(String),
+
+    #[error("DSL parse error: {0}")]
+    DslParseError(String),
+
+    #[error("Invalid query: {0}")]
+    InvalidQuery(String),
 }
 
 pub type Result<T> = std::result::Result<T, MemHopError>;
@@ -242,7 +248,9 @@ pub struct MemHop {
     session_manager: SessionManager,
     encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>>,
     l1_reverse_index: L1ReverseIndex,
+    ivf_index: Option<crate::index::vector::IVFIndex>,
     adjacency_cache: crate::l3::AdjacencyCache,
+    degree_tracker: crate::l3::DegreeTracker,
     closed: bool, // Prevent Drop from re-checkpointing after close()
 }
 
@@ -375,8 +383,38 @@ impl MemHop {
             L1ReverseIndex::build(&mmap_readonly, &btree)?
         };
 
+        // 5b. Load IVF index from disk if available
+        let ivf_index = match crate::index::vector::read_ivf_index(&mmap, &header) {
+            Ok(Some(idx)) => {
+                eprintln!("Info: Loaded IVF index with {} centroids", idx.k);
+                Some(idx)
+            }
+            Ok(None) => {
+                eprintln!("Info: No existing IVF index found, creating new one");
+                Some(crate::index::vector::IVFIndex::new(
+                    config.vector_dim,
+                    config.ivf_initial_k,
+                ))
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to load IVF index from disk: {}. Creating new one.",
+                    e
+                );
+                Some(crate::index::vector::IVFIndex::new(
+                    config.vector_dim,
+                    config.ivf_initial_k,
+                ))
+            }
+        };
+
         // 6. Initialize SessionManager
-        let session_manager = SessionManager::new(&config::SessionConfig::default());
+        let session_manager = SessionManager::new(
+            config
+                .session_config
+                .as_ref()
+                .unwrap_or(&config::SessionConfig::default()),
+        );
 
         // 8. Initialize encoder from config (gRPC over TCP)
         let encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>> = {
@@ -404,7 +442,9 @@ impl MemHop {
             session_manager,
             encoder,
             l1_reverse_index,
+            ivf_index,
             adjacency_cache: crate::l3::AdjacencyCache::new(),
+            degree_tracker: crate::l3::DegreeTracker::new(),
             closed: false,
         })
     }
@@ -1108,6 +1148,53 @@ impl MemHop {
         )
     }
 
+    /// Rebuild IVF index from all btree entries
+    fn rebuild_ivf_index(&mut self) {
+        let Some(ref mut ivf) = self.ivf_index else {
+            return;
+        };
+
+        // Create fresh IVF and scan btree
+        let mut new_ivf = crate::index::vector::IVFIndex::new(
+            self.config.vector_dim,
+            self.config.ivf_initial_k,
+        );
+
+        let page_data: &[u8] = &self.mmap[..];
+        let dim = self.config.vector_dim;
+        for (&id_hash, &page_ref) in self.btree.iter() {
+            // Only process Context-type pages (skip L4/L5/L1 etc.)
+            if crate::l3::store::page_type_of(page_data, page_ref)
+                != Some(crate::util::PageType::Context as u16)
+            {
+                continue;
+            }
+            if let Some(slot_data) = crate::query::slot_io::get_slot_data(page_data, page_ref) {
+                if let Ok(ctx) = crate::slot::context::ContextSlot::deserialize_slot(slot_data) {
+                    if ctx.centroid_page_ref != 0 {
+                        let (vec_page, vec_slot) =
+                            crate::file::page::decode_page_ref(ctx.centroid_page_ref);
+                        if let Ok(vector) =
+                            crate::index::vector::read_vector(page_data, vec_page, vec_slot, dim)
+                        {
+                            if vector.len() == dim {
+                                new_ivf.add_vector(
+                                    id_hash,
+                                    &vector,
+                                    vec_page,
+                                    vec_slot,
+                                );
+                                new_ivf.rebuild_if_needed(self.btree.len());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        *ivf = new_ivf;
+    }
+
     // Note: Old interfaces (store, recall, recall_cascade, recall_more) have been removed.
     // Use the new API interfaces: search_memory(), update_memory(), etc.
 
@@ -1121,7 +1208,7 @@ impl MemHop {
     pub fn search_memory(&mut self, query: SearchQuery) -> Result<SearchResult> {
         use crate::query::search::search_memory as search_impl;
 
-        search_impl(
+        let result = search_impl(
             &mut self.mmap,
             &mut self.header,
             query,
@@ -1131,8 +1218,14 @@ impl MemHop {
             self.encoder.as_deref(),
             &self.l1_reverse_index,
             &mut self.file,
-            &config::SearchWeights::default(),
-        )
+            self.config.search_weights.as_ref().unwrap_or(&config::SearchWeights::default()),
+            self.ivf_index.as_ref(),
+        );
+
+        // After search (which may have auto-created a new context), rebuild IVF
+        self.rebuild_ivf_index();
+
+        result
     }
 
     /// Update memory with multi-level updates
@@ -1145,7 +1238,7 @@ impl MemHop {
     pub fn update_memory(&mut self, request: UpdateRequest) -> Result<UpdateResult> {
         use crate::query::update::update_memory as update_impl;
 
-        update_impl(
+        let result = update_impl(
             &mut self.mmap,
             &mut self.header,
             request,
@@ -1154,7 +1247,12 @@ impl MemHop {
             self.config.vector_dim,
             &mut self.file,
             &self.config,
-        )
+        );
+
+        // Rebuild IVF index after mutation (single update may have added vectors)
+        self.rebuild_ivf_index();
+
+        result
     }
 
     // ========================================================================
@@ -1418,6 +1516,66 @@ impl MemHop {
         Ok((Subgraph { nodes, edges }, hops))
     }
 
+    /// Detect isolated (or low-degree) nodes in an L3 hypergraph.
+    ///
+    /// A node is "isolated" if it has degree 0 (no hyperedge references it).
+    /// Set `threshold > 0` to also include weakly-connected nodes.
+    pub fn l3_detect_isolated(
+        &mut self,
+        graph_id: &str,
+        threshold: u32,
+    ) -> Result<crate::l3::degree::IsolatedResult> {
+        let graph_hash = crate::query::common::parse_id_to_hash(graph_id);
+        crate::l3::degree::detect_isolated(
+            &self.mmap,
+            &self.btree,
+            graph_hash,
+            &mut self.degree_tracker,
+            threshold,
+        )
+    }
+
+    /// Run Leiden community detection on an L3 hypergraph.
+    ///
+    /// Hypergraph edges are reduced to binary edges via clique expansion
+    /// before running the Leiden algorithm.
+    pub fn l3_detect_communities(
+        &mut self,
+        graph_id: &str,
+        config: Option<crate::l3::CommunityConfig>,
+    ) -> Result<crate::l3::CommunityResult> {
+        let graph_hash = crate::query::common::parse_id_to_hash(graph_id);
+        let cfg = config.unwrap_or_default();
+        crate::l3::community::run_community_detection(
+            &self.mmap,
+            &self.btree,
+            graph_hash,
+            &cfg,
+        )
+    }
+
+    /// Execute an L3 DSL query against a hypergraph.
+    ///
+    /// Supports MATCH, HYPEREDGE, PATH, and SUBGRAPH query types.
+    pub fn l3_query(
+        &mut self,
+        graph_id: &str,
+        query: &str,
+        page: usize,
+    ) -> Result<crate::l3::dsl::QueryResult> {
+        let graph_hash = crate::query::common::parse_id_to_hash(graph_id);
+        let ast = crate::l3::dsl::parser::parse(query)?;
+        crate::l3::dsl::executor::execute(
+            &ast,
+            &self.mmap,
+            &self.btree,
+            graph_hash,
+            &mut self.adjacency_cache,
+            page,
+            20,
+        )
+    }
+
     /// Delete an L2 topic and its associated L1 nodes and L4 archives.
     pub fn delete_topic(&mut self, topic_id: u64) -> Result<()> {
         let page_ref = match self.btree.search(topic_id) {
@@ -1652,6 +1810,7 @@ impl MemHop {
         )?;
         // Invalidate all adjacency cache since import may modify any graph
         self.adjacency_cache.invalidate_all();
+        self.degree_tracker.invalidate_all();
         Ok(result)
     }
 
@@ -1700,6 +1859,7 @@ impl MemHop {
         )?;
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
         self.adjacency_cache.invalidate_all();
+        self.degree_tracker.invalidate_all();
         Ok(report)
     }
 
@@ -1771,6 +1931,7 @@ impl MemHop {
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
         // Invalidate all adjacency cache since L3 distillation may modify any graph
         self.adjacency_cache.invalidate_all();
+        self.degree_tracker.invalidate_all();
         Ok(report)
     }
 
@@ -1820,6 +1981,7 @@ impl MemHop {
             &mut self.file,
         )?;
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
+        self.rebuild_ivf_index();
         Ok(report)
     }
 
@@ -1865,6 +2027,18 @@ impl MemHop {
         let l1_data = self.l1_reverse_index.serialize()?;
         let l1_root_page = self.write_l1_reverse_pages(&l1_data)?;
         self.header.layer_roots[12] = l1_root_page;
+
+        // Persist IVF index (non-fatal: warn on failure)
+        if let Some(ref ivf) = self.ivf_index {
+            if let Err(e) = crate::index::vector::write_ivf_index(
+                &mut self.mmap,
+                &mut self.header,
+                ivf,
+                &mut self.file,
+            ) {
+                eprintln!("Warning: Failed to persist IVF index: {}", e);
+            }
+        }
 
         // Update header commit_id
         self.header.commit_id += 1;
@@ -2198,5 +2372,80 @@ mod tests {
 
         assert_eq!(db.header.layer_roots[12], 0);
         assert!(db.l1_reverse_index.is_empty());
+    }
+
+    #[test]
+    fn test_update_memory_ivf_sync() {
+        // Verify that after update_memory, the IVF index has the same number
+        // of vectors as the btree (excluding entries without centroid vectors).
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("ivf_sync.meh");
+        let mut config = MemHopConfig::new(path, 8);
+        config.encoder_grpc_addr = None;
+        let mut db = MemHop::open(config).unwrap();
+
+        // Create an initial topic via search with auto_create
+        db.set_encoder(MockEncoder { dim: 8 });
+        let search_result = db
+            .search_memory(crate::query::types::SearchQuery {
+                dialogue: "initial topic about Rust memory safety".to_string(),
+                context_id: None,
+                l3_id: None,
+                context_limit: 10,
+                llm_enhance: None,
+                auto_create: 1,
+                min_score: 0.0,
+                context_history: None,
+                source: Default::default(),
+                search_mode: None,
+            })
+            .unwrap();
+        assert!(!search_result.contexts.is_empty(), "Auto-create should produce at least one context");
+        let topic_id = search_result.contexts[0].id.clone();
+
+        // Count vectors in btree before update
+        let btree_vec_count_before: usize = db.btree.iter().filter(|(&_id_hash, &page_ref)| {
+            if let Some(slot_data) = crate::query::slot_io::get_slot_data(&db.mmap, page_ref) {
+                if let Ok(ctx) = crate::slot::context::ContextSlot::deserialize_slot(slot_data) {
+                    return ctx.centroid_page_ref != 0;
+                }
+            }
+            false
+        }).count();
+
+        // Run update_memory
+        let update_result = db
+            .update_memory(crate::query::types::UpdateRequest {
+                topic_id,
+                dialogue_text: "Rust uses ownership and borrowing to ensure memory safety".to_string(),
+                summary: Some("Discussed Rust memory safety mechanisms".to_string()),
+                action_chain: None,
+                source: Default::default(),
+                instant_distill: false,
+            })
+            .unwrap();
+        assert!(update_result.status == crate::query::types::UpdateStatus::Updated);
+
+        // After update_memory with rebuild_ivf_index, the IVF vector count
+        // should match the btree vector count
+        let ivf_vec_count = db.ivf_index.as_ref().map(|ivf| ivf.len()).unwrap_or(0);
+        let btree_vec_count_after: usize = db.btree.iter().filter(|(&_id_hash, &page_ref)| {
+            // Only count Context-type pages with valid centroid vectors
+            if crate::l3::store::page_type_of(&db.mmap, page_ref) != Some(crate::util::PageType::Context as u16) {
+                return false;
+            }
+            if let Some(slot_data) = crate::query::slot_io::get_slot_data(&db.mmap, page_ref) {
+                if let Ok(ctx) = crate::slot::context::ContextSlot::deserialize_slot(slot_data) {
+                    return ctx.centroid_page_ref != 0;
+                }
+            }
+            false
+        }).count();
+
+        assert_eq!(
+            ivf_vec_count, btree_vec_count_after,
+            "IVF vector count ({}) should match btree vector count ({}) after update_memory",
+            ivf_vec_count, btree_vec_count_after
+        );
     }
 }

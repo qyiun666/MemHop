@@ -20,6 +20,24 @@ pub struct MemHopConfig {
     /// from working memory due to capacity limits (default: true)
     #[serde(default = "default_auto_dream_on_evict")]
     pub auto_dream_on_evict: bool,
+    /// IVF index initial number of clusters (default: 16)
+    #[serde(default = "default_ivf_initial_k")]
+    pub ivf_initial_k: usize,
+    /// Custom search weights (optional, uses default if None)
+    #[serde(default)]
+    pub search_weights: Option<SearchWeights>,
+    /// Custom decay configuration (optional, uses default if None)
+    #[serde(default)]
+    pub decay_config: Option<DecayConfig>,
+    /// Custom session configuration (optional, uses default if None)
+    #[serde(default)]
+    pub session_config: Option<SessionConfig>,
+    /// Auto-dream archive threshold (optional)
+    #[serde(default)]
+    pub auto_dream_archive_threshold: Option<usize>,
+    /// Auto-dream summary bytes limit (optional)
+    #[serde(default)]
+    pub auto_dream_summary_bytes: Option<usize>,
 }
 
 impl MemHopConfig {
@@ -32,12 +50,26 @@ impl MemHopConfig {
             crystal_path: None,
             llm: LlmConfig::default(),
             auto_dream_on_evict: false,
+            ivf_initial_k: default_ivf_initial_k(),
+            search_weights: None,
+            decay_config: None,
+            session_config: None,
+            auto_dream_archive_threshold: None,
+            auto_dream_summary_bytes: None,
         }
     }
 }
 
 fn default_auto_dream_on_evict() -> bool {
     false
+}
+
+fn default_ivf_initial_k() -> usize {
+    16
+}
+
+fn default_n_probes() -> usize {
+    8
 }
 
 /// LLM configuration for dream stages and other LLM-powered features
@@ -175,6 +207,9 @@ pub struct SearchWeights {
     pub vector_weight: f32,
     /// Weight for entity matching
     pub entity_weight: f32,
+    /// IVF n_probes: number of centroids to probe during search (default: 8)
+    #[serde(default = "default_n_probes")]
+    pub n_probes: usize,
 }
 
 impl Default for SearchWeights {
@@ -183,6 +218,7 @@ impl Default for SearchWeights {
             bm25_weight: 0.4,
             vector_weight: 0.4,
             entity_weight: 0.2,
+            n_probes: default_n_probes(),
         }
     }
 }
