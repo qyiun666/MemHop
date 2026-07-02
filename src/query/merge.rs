@@ -1,7 +1,8 @@
-//! Merge topics implementation for MemHop
-//!
-//! Implements the merge_topics() interface to merge multiple L2 contexts into one.
-//! After successful merge, all secondary L2 contexts are deleted (page freed + index removed).
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! merge_topics(): merge multiple L2 contexts into one.
+//! Secondary contexts are deleted after merge.
 
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
@@ -14,20 +15,8 @@ use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
 
-/// Merge multiple L2 contexts into a primary context
-///
-/// Flow:
-/// 1. Verify all contexts exist (primary + secondaries)
-/// 2. Load primary ContextSlot
-/// 3. Merge archive_refs (L4) from secondaries → primary (deduplicate)
-/// 4. Merge l3_refs (L3) from secondaries → primary (deduplicate)
-/// 5. Merge summaries (concatenate secondary summaries into primary)
-/// 6. Merge turn_counts (sum)
-/// 7. Expand dialogue_range to cover all merged contexts
-/// 8. Serialize and write back primary ContextSlot
-/// 9. Update sparse index for primary
-/// 10. Delete all secondary L2s: free page + remove BTree + remove sparse index
-/// 11. Return merged TopicDetail
+/// Merge multiple L2 contexts into a primary context.
+/// Secondaries are deleted after merging archive_refs, l3_refs, summaries, and turn_counts.
 pub fn merge_topics(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -44,7 +33,6 @@ pub fn merge_topics(
         .map(|id| parse_id_to_hash(id))
         .collect();
 
-    // Step 1: Verify all contexts exist
     if btree.search(primary_hash).is_none() {
         return Err(MemHopError::PageNotFound(0));
     }
@@ -54,7 +42,6 @@ pub fn merge_topics(
         }
     }
 
-    // Step 2: Load primary context
     let primary_page_ref = btree.search(primary_hash).unwrap();
     let primary_page_id = (primary_page_ref >> 16) as u32;
     let primary_offset = (primary_page_id as usize) * PAGE_SIZE + 32;
@@ -64,7 +51,6 @@ pub fn merge_topics(
     let mut primary_ctx = ContextSlot::deserialize(&mmap[primary_offset..])
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-    // Steps 3-7: Merge data from secondary contexts
     let mut merged_archive_refs: HashSet<u64> = primary_ctx.archive_refs.iter().cloned().collect();
     let mut merged_l3_refs: HashSet<u64> = primary_ctx.l3_refs.iter().cloned().collect();
     let mut merged_turn_count = primary_ctx.turn_count;
@@ -82,32 +68,25 @@ pub fn merge_topics(
         let sec_ctx = ContextSlot::deserialize(&mmap[sec_offset..])
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-        // Merge archive_refs (L4)
         merged_archive_refs.extend(sec_ctx.archive_refs.iter());
 
-        // Merge l3_refs (L3)
         merged_l3_refs.extend(sec_ctx.l3_refs.iter());
 
-        // Merge turn_count
         merged_turn_count += sec_ctx.turn_count;
 
-        // Expand dialogue_range
         min_ts = min_ts.min(sec_ctx.dialogue_range.0);
         max_ts = max_ts.max(sec_ctx.dialogue_range.1);
 
-        // Collect summaries for merging
         if let Some(ref s) = sec_ctx.summary {
             secondary_summaries.push(s.clone());
         }
     }
 
-    // Apply merged data to primary
     primary_ctx.archive_refs = merged_archive_refs.into_iter().collect();
     primary_ctx.l3_refs = merged_l3_refs.into_iter().collect();
     primary_ctx.turn_count = merged_turn_count;
     primary_ctx.dialogue_range = (min_ts, max_ts);
 
-    // Merge summaries: append secondary summaries to primary
     if !secondary_summaries.is_empty() {
         let base = primary_ctx.summary.clone().unwrap_or_default();
         let mut combined = base;
@@ -120,11 +99,9 @@ pub fn merge_topics(
         primary_ctx.summary = Some(combined);
     }
 
-    // Update timestamp and version
     primary_ctx.updated_at = now_ms;
     primary_ctx.version += 1;
 
-    // Step 8: Serialize and write back primary ContextSlot
     let primary_data = primary_ctx
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -135,7 +112,6 @@ pub fn merge_topics(
         return Err(MemHopError::PageNotFound(primary_page_id));
     }
 
-    // Step 9: Update sparse index for primary
     let mut terms: Vec<String> = primary_ctx
         .title
         .split_whitespace()
@@ -148,22 +124,17 @@ pub fn merge_topics(
     let doc_len = terms.len() as u32;
     sparse_index.add_document(primary_ctx.id_hash, terms, doc_len);
 
-    // Step 10: Delete all secondary L2 contexts
     for &sec_hash in &secondary_hashes {
         let sec_page_ref = btree.search(sec_hash).unwrap();
         let sec_page_id = (sec_page_ref >> 16) as u32;
 
-        // Remove from sparse index
         sparse_index.remove_document(sec_hash);
 
-        // Free page for reuse
         crate::file::free_list::free_page(mmap, header, sec_page_id)?;
 
-        // Remove from B-tree
         btree.remove(sec_hash);
     }
 
-    // Step 11: Return merged TopicDetail
     Ok(TopicDetail {
         id: format!("{:016x}", primary_ctx.id_hash),
         title: primary_ctx.title,

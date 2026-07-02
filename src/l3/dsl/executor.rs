@@ -1,3 +1,6 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! DSL query executor — translates AST into store.rs function calls.
 
 use crate::index::btree::BTreeIndex;
@@ -49,12 +52,10 @@ fn execute_match(
     let result = store::list_nodes_by_graph(mmap, btree, graph_id, &list_query)?;
     let mut nodes = result.items;
 
-    // Apply WHERE filter
     if let Some(ref where_clause) = m.where_clause {
         nodes.retain(|n| eval_where_node(where_clause, n));
     }
 
-    // Apply LIMIT
     if let Some(limit) = m.limit {
         nodes.truncate(limit);
     }
@@ -83,7 +84,6 @@ fn execute_hyperedge(
     let result = store::list_edges_by_graph(mmap, btree, graph_id, &list_query)?;
     let mut edges = result.items;
 
-    // Apply WHERE filter
     if let Some(ref where_clause) = h.where_clause {
         edges.retain(|e| eval_where_edge(where_clause, e));
     }
@@ -146,7 +146,6 @@ fn execute_subgraph(
     let start_hash = crate::query::common::parse_id_to_hash(&s.start_node);
 
     let data: &[u8] = &mmap[..];
-    // Use cached BFS for subgraph extraction
     let hops = store::bfs_traversal_cached(
         data,
         btree,
@@ -157,7 +156,6 @@ fn execute_subgraph(
         cache,
     )?;
 
-    // Build subgraph from hops
     let mut node_hashes = std::collections::HashSet::new();
     let mut edge_ids = std::collections::HashSet::new();
     let mut edges = Vec::new();

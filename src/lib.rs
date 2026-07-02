@@ -1,22 +1,7 @@
-//! MemHop v0.51.0 - Agent-oriented memory database inspired by human brain cognitive architecture
-//!
-//! MemHop is a specialized memory database designed for AI Agents, implementing
-//! a six-layer cognitive architecture (L0-L5) with custom .meh binary file format.
-//!
-//! # Features
-//! - Zero-copy mmap retrieval
-//! - Hybrid search (BM25 + Vector similarity + Entity matching)
-//! - Hypergraph-based associative memory
-//! - Automatic memory consolidation (dream pipeline)
-//!
-//! # Example
-//! ```no_run
-//! use memhop::{MemHop, MemHopConfig};
-//! use std::path::PathBuf;
-//!
-//! let config = MemHopConfig::new(PathBuf::from("test.meh"), 768);
-//! let db = MemHop::open(config).unwrap();
-//! ```
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! MemHop — agent-oriented memory database with L0-L5 cognitive architecture.
 
 pub mod config;
 pub mod dream;
@@ -68,6 +53,8 @@ pub use query::types::{
     ImportStatus,
     KnowledgeDetail,
     KnowledgeImportItem,
+    KnowledgeNodeDetail,
+    KnowledgeNodesResult,
     KnowledgeListQuery,
     KnowledgeListResult,
     KnowledgeSummary,
@@ -259,10 +246,8 @@ impl MemHop {
     pub fn open(config: MemHopConfig) -> Result<Self> {
         let db_path = &config.db_path;
 
-        // Check if database exists before creating file
         let db_exists = db_path.exists();
 
-        // 1. Open or create .meh file
         let file = if db_exists {
             let file = OpenOptions::new().read(true).write(true).open(db_path)?;
             // Verify file has minimum size (at least 2000 pages)
@@ -290,10 +275,9 @@ impl MemHop {
             file
         };
 
-        // 2. Initialize mmap
         let mut mmap = unsafe { MmapMut::map_mut(&file)? };
 
-        // 3. Read/validate Header (A/B dual header recovery)
+        // A/B dual-header recovery: select valid header, validate dims
         let header = if db_exists {
             // Create a read-only view for reading headers
             let mmap_readonly = unsafe { Mmap::map(&file)? };
@@ -333,12 +317,11 @@ impl MemHop {
             header
         };
 
-        // 4. Replay Journal
+        // Replay WAL journal to restore uncommitted writes
         let mmap_readonly = unsafe { Mmap::map(&file)? };
         let journal_entries = replay_journal(&mmap_readonly, &header)?;
 
         if !journal_entries.is_empty() {
-            // 按 commit_id 排序,顺序应用
             let mut sorted_entries = journal_entries;
             sorted_entries.sort_by_key(|e| e.commit_id);
 
@@ -353,12 +336,9 @@ impl MemHop {
             mmap.flush()?;
         }
 
-        // 5. Load B-tree and Sparse Index from disk
         let btree = Self::load_btree(&mmap_readonly, &header);
         let sparse_index = Self::load_sparse_index(&mmap_readonly, &header);
 
-        // 5a. Load L1 reverse index from persistence if available, otherwise
-        // rebuild it from the loaded B-tree.
         let l1_reverse_index = if header.layer_roots[12] != 0 {
             match Self::read_l1_reverse_pages(&mmap_readonly, &header, header.layer_roots[12]) {
                 Ok(data) => match L1ReverseIndex::deserialize(&data) {
@@ -383,7 +363,6 @@ impl MemHop {
             L1ReverseIndex::build(&mmap_readonly, &btree)?
         };
 
-        // 5b. Load IVF index from disk if available
         let ivf_index = match crate::index::vector::read_ivf_index(&mmap, &header) {
             Ok(Some(idx)) => {
                 eprintln!("Info: Loaded IVF index with {} centroids", idx.k);
@@ -408,7 +387,6 @@ impl MemHop {
             }
         };
 
-        // 6. Initialize SessionManager
         let session_manager = SessionManager::new(
             config
                 .session_config
@@ -416,7 +394,6 @@ impl MemHop {
                 .unwrap_or(&config::SessionConfig::default()),
         );
 
-        // 8. Initialize encoder from config (gRPC over TCP)
         let encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>> = {
             use crate::encoder::GrpcEncoder;
 
@@ -431,7 +408,6 @@ impl MemHop {
             }
         };
 
-        // 9. Return MemHop instance
         Ok(MemHop {
             mmap,
             file,
@@ -1093,17 +1069,12 @@ impl MemHop {
         let new_size = (new_page_count as usize) * PAGE_SIZE;
         let old_free_list_head = self.header.free_list_head;
 
-        // 1. Extend the underlying file.
         self.file.set_len(new_size as u64)?;
 
-        // 2. Re-map the file into memory.
         self.mmap = unsafe { MmapMut::map_mut(&self.file)? };
 
-        // 3. Link the new pages into the free list.
-        // The free list stores the next free page id in the first 4 bytes of
-        // each free page (matching `free_list::free_page`).
-        // We link the new chain *in front of* the old free list so previously
-        // free pages remain reachable. The last new page points to the old head.
+        // Link new pages in reverse order (LIFO) in front of existing free list.
+        // Each free page stores the next free page id in its first 4 bytes.
         let mut next_free = old_free_list_head;
         let free_type = crate::util::PageType::Free.to_u16().to_le_bytes();
         for page_id in (old_page_count..new_page_count).rev() {
@@ -1113,13 +1084,10 @@ impl MemHop {
             next_free = page_id;
         }
 
-        // 4. Update in-memory header so the checkpoint can allocate from the
-        // newly created free pages. Save old values so we can roll back if the
-        // checkpoint fails before the headers are persisted.
+        // Update header; rollback on checkpoint failure
         self.header.free_list_head = next_free;
         self.header.page_count = new_page_count;
 
-        // 5. Persist the updated headers (A/B dual header checkpoint).
         if let Err(e) = self.checkpoint() {
             self.header.free_list_head = old_free_list_head;
             self.header.page_count = old_page_count;
@@ -1411,6 +1379,72 @@ impl MemHop {
             created_at: slot.created_at,
             updated_at: slot.updated_at,
         }))
+    }
+
+    /// Get L3 knowledge nodes by batch IDs (max 50)
+    ///
+    /// Returns node details with domain resolved from the parent HypergraphSlot.
+    /// Missing IDs are silently skipped. `include_text` controls whether the
+    /// full `text` field is returned.
+    pub fn get_knowledge_nodes_by_ids(
+        &self,
+        ids: &[String],
+        include_text: bool,
+    ) -> Result<KnowledgeNodesResult> {
+        const MAX_IDS: usize = 50;
+        let requested = ids.len();
+        let ids = if ids.len() > MAX_IDS { &ids[..MAX_IDS] } else { ids };
+
+        let data: &[u8] = &self.mmap[..];
+        let mut nodes: Vec<KnowledgeNodeDetail> = Vec::with_capacity(ids.len());
+
+        for id_str in ids {
+            let id_hash = crate::query::common::parse_id_to_hash(id_str);
+
+            // Try to get the HypergraphNode
+            if let Some(page_ref) = self.btree.search(id_hash) {
+                if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+                    if let Ok(node) = crate::slot::hypergraph::HypergraphNode::deserialize(slot_data)
+                    {
+                        // Resolve domain from the parent HypergraphSlot
+                        let domain = self.resolve_node_domain(data, node.graph_id);
+
+                        nodes.push(KnowledgeNodeDetail {
+                            id: crate::query::common::format_hash(node.id_hash),
+                            title: node.title,
+                            text: if include_text {
+                                Some(node.content)
+                            } else {
+                                None
+                            },
+                            keywords: node.keywords,
+                            domain,
+                            knowledge_type: node.node_type,
+                            created_at: node.created_at,
+                            importance: node.importance,
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(KnowledgeNodesResult {
+            total: nodes.len(),
+            nodes,
+            requested,
+        })
+    }
+
+    /// Resolve domain name from a HypergraphSlot by graph_id
+    fn resolve_node_domain(&self, data: &[u8], graph_id: u64) -> String {
+        if let Some(page_ref) = self.btree.search(graph_id) {
+            if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+                if let Ok(slot) = crate::slot::hypergraph::HypergraphSlot::deserialize(slot_data) {
+                    return slot.name;
+                }
+            }
+        }
+        "unknown".to_string()
     }
 
     /// List knowledge (L3 hypergraphs) with pagination and filtering
@@ -1734,6 +1768,25 @@ impl MemHop {
         )
     }
 
+    /// Update topic title with optional l3_refs (L3 knowledge node references)
+    pub fn update_topic_title_with_refs(
+        &mut self,
+        id: &str,
+        new_title: String,
+        l3_refs: Option<Vec<String>>,
+    ) -> Result<TopicSummary> {
+        use crate::query::update_title::update_topic_title_with_refs as impl_fn;
+        impl_fn(
+            &mut self.mmap,
+            &mut self.header,
+            &self.btree,
+            &mut self.sparse_index,
+            id,
+            new_title,
+            l3_refs,
+        )
+    }
+
     /// Update crystal title
     pub fn update_crystal_title(&mut self, id: &str, new_title: String) -> Result<CrystalSummary> {
         use crate::query::update_title::update_crystal_title as impl_fn;
@@ -1842,8 +1895,6 @@ impl MemHop {
     fn dream_single_topic(&mut self, topic_id: u64) -> Result<DreamReport> {
         use crate::dream::dream_pipeline;
         use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
-        use std::collections::HashSet;
-
         let llm_provider = OpenAICompatibleLlmProvider::new(self.config.llm.clone());
         let session_topics: HashSet<u64> = [topic_id].into_iter().collect();
 
@@ -1880,7 +1931,7 @@ impl MemHop {
         self.session_manager
             .get_active_topic_ids()
             .iter()
-            .map(|id| format!("{:016x}", id))
+            .map(|id| query::common::format_hash(*id))
             .collect()
     }
 
@@ -1907,9 +1958,6 @@ impl MemHop {
     pub fn dream(&mut self, llm: LlmConfig) -> Result<DreamReport> {
         use crate::dream::dream_pipeline;
         use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
-        use std::collections::HashSet;
-
-        // Create LLM provider from passed configuration
         let llm_provider = OpenAICompatibleLlmProvider::new(llm);
 
         let session_topics: HashSet<u64> = self
@@ -2404,7 +2452,7 @@ mod tests {
         let topic_id = search_result.contexts[0].id.clone();
 
         // Count vectors in btree before update
-        let btree_vec_count_before: usize = db.btree.iter().filter(|(&_id_hash, &page_ref)| {
+        let _btree_vec_count_before: usize = db.btree.iter().filter(|(&_id_hash, &page_ref)| {
             if let Some(slot_data) = crate::query::slot_io::get_slot_data(&db.mmap, page_ref) {
                 if let Ok(ctx) = crate::slot::context::ContextSlot::deserialize_slot(slot_data) {
                     return ctx.centroid_page_ref != 0;

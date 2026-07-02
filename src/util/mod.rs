@@ -1,26 +1,20 @@
-// Utility module
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 pub mod hash;
 pub mod io_helpers;
 
-// Re-export hash function
 pub use hash::hash_id;
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// Page size constant (4KB)
 pub const PAGE_SIZE: usize = 4096;
 
-/// Magic bytes for .meh file header
 pub const MAGIC: [u8; 4] = [0x4D, 0x45, 0x48, 0x21]; // "MEH!"
-
-/// Tail magic bytes
 pub const TAIL_MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
-
-/// Version constant (v0.35 = 0x0023)
 pub const VERSION: u16 = 0x0023;
 
-/// Cognitive architecture layers (L0-L5)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layer {
     Profile,     // L0: Agent identity
@@ -33,7 +27,6 @@ pub enum Layer {
 }
 
 impl Layer {
-    /// Convert layer to u8 for storage
     pub fn to_u8(&self) -> u8 {
         match self {
             Layer::Profile => 0,
@@ -46,7 +39,6 @@ impl Layer {
         }
     }
 
-    /// Convert u8 to Layer
     pub fn from_u8(value: u8) -> Option<Layer> {
         match value {
             0 => Some(Layer::Profile),
@@ -75,7 +67,6 @@ impl fmt::Display for Layer {
     }
 }
 
-/// Source type for memory origin
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum SourceType {
@@ -85,7 +76,6 @@ pub enum SourceType {
     FileImport = 3,
 }
 
-/// Metadata about the source of a memory
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceMeta {
     pub source_type: SourceType,
@@ -95,31 +85,20 @@ pub struct SourceMeta {
 
 impl Default for SourceMeta {
     fn default() -> Self {
-        Self {
-            source_type: SourceType::UserInput,
-            source_id: None,
-            timestamp: 0,
-        }
+        Self { source_type: SourceType::UserInput, source_id: None, timestamp: 0 }
     }
 }
 
 impl SourceMeta {
-    /// Create a new SourceMeta with current timestamp
     pub fn new(source_type: SourceType, source_id: Option<String>) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
-
-        Self {
-            source_type,
-            source_id,
-            timestamp,
-        }
+        Self { source_type, source_id, timestamp }
     }
 }
 
-/// Get current timestamp in milliseconds since UNIX epoch
 #[inline]
 pub fn get_current_timestamp() -> i64 {
     std::time::SystemTime::now()
@@ -128,7 +107,6 @@ pub fn get_current_timestamp() -> i64 {
         .as_millis() as i64
 }
 
-/// Reference to a source location (for external references)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceRef {
     pub uri: String,
@@ -136,7 +114,6 @@ pub struct SourceRef {
     pub length: Option<u64>,
 }
 
-/// Page type encoding
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 pub enum PageType {
@@ -163,12 +140,8 @@ pub enum PageType {
 }
 
 impl PageType {
-    /// Convert to u16 for storage
-    pub fn to_u16(&self) -> u16 {
-        *self as u16
-    }
+    pub fn to_u16(&self) -> u16 { *self as u16 }
 
-    /// Convert from u16
     pub fn from_u16(value: u16) -> Option<PageType> {
         match value {
             0x01 => Some(PageType::ContextNode),

@@ -1,7 +1,8 @@
-// OpenAI-compatible LLM Provider implementation
-//
-// Supports any LLM API that follows the OpenAI chat completions format,
-// including any OpenAI-compatible service.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! OpenAI-compatible LLM Provider for any chat completions API.
+
 use crate::config::LlmConfig;
 use crate::dream::llm::{
     CrystalDef, CrystalStep, HabitAnalysis, LlmDistillResult, LlmProvider, MemorySummary, Pattern,
@@ -32,10 +33,7 @@ pub struct OpenAICompatibleLlmProvider {
 }
 
 impl OpenAICompatibleLlmProvider {
-    /// Create a new LLM provider from configuration
-    ///
-    /// # Arguments
-    /// * `config` - `LlmConfig` containing api_url, api_key, model, temperature, timeout
+    /// Create a new LLM provider from configuration.
     pub fn new(config: LlmConfig) -> Self {
         Self {
             config,
@@ -132,7 +130,6 @@ impl OpenAICompatibleLlmProvider {
             return Ok(value);
         }
 
-        // Retry once with a format reminder
         messages.push(json!({"role": "user", "content": JSON_RETRY_MESSAGE}));
         let response = self.call_api_messages(&messages, max_tokens, params)?;
         parse(&response)
@@ -405,7 +402,6 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
     }
 
     fn fallback_summarize(&self, texts: &[String]) -> String {
-        // 提取所有文本的关键词并拼接
         let mut keyword_freq: HashMap<String, usize> = HashMap::new();
         for text in texts {
             for word in text.split_whitespace() {
@@ -428,7 +424,6 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
     }
 
     fn fallback_extract_patterns(&self, memories: &[MemorySummary]) -> Vec<Pattern> {
-        // 计算 keywords 交集
         if memories.is_empty() {
             return vec![];
         }
@@ -458,7 +453,6 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
     }
 
     fn fallback_generate_crystal(&self, pattern: &Pattern) -> CrystalDef {
-        // 正则提取 "when/if → then" 模式
         let re = regex::Regex::new(r"(?i)(?:when|if)\s+(.+?)\s*(?:then|→|=>)\s*(.+)").unwrap();
 
         if let Some(caps) = re.captures(&pattern.description) {
@@ -470,10 +464,9 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
                     action,
                     parameters: None,
                 }],
-                confidence: pattern.confidence * 0.8, // 降低置信度
+                confidence: 0.5,
             }
         } else {
-            // 无法提取，返回通用模板
             CrystalDef {
                 condition: format!(
                     "trigger: {}",
@@ -605,7 +598,6 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
             }
         }
 
-        // Take top 10 most frequent words as lexicon entries
         let mut sorted: Vec<_> = word_freq.into_iter().collect();
         sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
 
@@ -616,8 +608,8 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
 
         HabitAnalysis {
             lexicon,
-            style_traits: Vec::new(), // Cannot determine style without LLM
-            emotion_patterns: HashMap::new(), // Cannot determine emotions without LLM
+            style_traits: Vec::new(),
+            emotion_patterns: HashMap::new()
         }
     }
 

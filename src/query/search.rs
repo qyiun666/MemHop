@@ -1,12 +1,8 @@
-// Search implementation for MemHop
-//
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 // search_memory() interface with L2-centric retrieval model.
-//
-// Retrieval flow:
-//   1. Triple retrieval (vector + BM25 + entity) on L2 ContextSlot titles (depth 1, 2 & 3;
-//      depth-3 results are weighted by 0.5)
-//   2. Via L1 hypergraph, find associated L2 contexts
-//   3. Return L0 profile, L3 ID list, L4 archive references
+// Triple retrieval (vector + BM25 + entity) on L2 ContextSlot titles.
 
 use crate::config::SearchWeights;
 use crate::file::header::FileHeader;
@@ -149,7 +145,7 @@ pub fn search_memory(
     let _page_count = header.page_count;
 
     // ========================================================================
-    // Route 1: auto_create — skip retrieval, create new L2
+    // Route 1: auto_create
     // ========================================================================
     let filtered_l2 = if query.auto_create == 1 {
         let new_ctx = create_new_l2_context(
@@ -164,20 +160,18 @@ pub fn search_memory(
         vec![new_ctx]
 
     // ========================================================================
-    // Route 2: context_id present — load specific L2, skip triple retrieval
+    // Route 2: context_id
     // ========================================================================
     } else if let Some(ref cid) = query.context_id {
         let target_hash = common::parse_id_to_hash(cid);
         let data: &[u8] = &mmap[..];
 
-        // Try to load the L2 context by id_hash
         if let Some(slot_data) = btree
             .search(target_hash)
             .and_then(|pr| get_slot_data(data, pr))
         {
             match ContextSlot::deserialize_slot(slot_data) {
                 Ok(ctx) => {
-                    // Found: return just this one context, L1 association happens below
                     vec![ctx]
                 }
                 Err(_) => {
@@ -192,7 +186,6 @@ pub fn search_memory(
     // Route 3 & 4: triple retrieval (optionally scoped by l3_id)
     // ========================================================================
     } else {
-        // Step 1: LLM enhancement (optional)
         let search_text = if let Some(llm_config) = &query.llm_enhance {
             match enhance_query_with_llm(
                 llm_config,
@@ -216,14 +209,9 @@ pub fn search_memory(
             query.dialogue.clone()
         };
 
-        // Step 2: Pre-filter by l3_id (if provided)
-        //
-        // If l3_id is set, we first collect the id_hash set of L2 contexts
-        // that contain this L3 in their l3_refs. The three retrieval channels
-        // will then only accept candidates within this set.
+        // If l3_id is set, restrict retrieval to L2 candidates containing this L3.
         let l3_scope: Option<HashSet<u64>> = if let Some(ref l3_id_str) = query.l3_id {
-            // l3_id is a hex string like "1a2b3c..."; parse it back to the raw
-            // id_hash rather than hashing the string again.
+            // l3_id is a hex string; parse to raw id_hash, not re-hash.
             let l3_hash = common::parse_id_to_hash(l3_id_str);
             let data: &[u8] = &mmap[..];
             Some(collect_l2_ids_with_l3(data, btree, l3_hash))
@@ -231,11 +219,9 @@ pub fn search_memory(
             None
         };
 
-        // Step 3: Triple retrieval on L2 ContextSlot (depth 1 & 2)
         let data: &[u8] = &mmap[..];
         let fetch_limit = query.context_limit * 2;
 
-        // Ensure entity index is built from L3 before entity retrieval.
         if !sparse_index.has_entity_index() {
             sparse_index.build_entity_index(data, btree)?;
         }
@@ -281,7 +267,6 @@ pub fn search_memory(
             ));
         };
 
-        // Step 4: Merge & rank using configured search weights
         let config = MergeConfig {
             entity_weight: search_weights.entity_weight,
             bm25_weight: search_weights.bm25_weight,
@@ -292,14 +277,10 @@ pub fn search_memory(
         merge_and_rank(entity_results, bm25_results, vector_results, config)
     };
 
-    // Step 5: L1 association — find sibling depth-1 contexts
     let data: &[u8] = &mmap[..];
     let l1_associated = get_l1_associated_depth1(data, &filtered_l2, btree, l1_reverse)?;
 
-    // Step 5b: Deep mode — merge L1 associated contexts into main result set
-    // When search_mode == "deep", the L1 association results are merged into
-    // filtered_l2 so they appear in contexts (not just associated_contexts).
-    // This gives the caller maximum recall in a single field.
+    // Deep mode: merge L1 associated into filtered_l2 for maximum recall.
     let filtered_l2 = if query.search_mode == Some(crate::query::types::SearchMode::Deep) {
         let mut extended = filtered_l2;
         extended.extend(l1_associated.clone());
@@ -308,18 +289,14 @@ pub fn search_memory(
         filtered_l2
     };
 
-    // Step 6: L0 profile
     let l0_profile = crate::query::l0_crud::read_profile(mmap, btree)?;
 
-    // Step 7: Collect L3 previews & L4 archive refs from matched contexts
     let (l3_ids, l3_previews) = collect_l3_previews(mmap, &filtered_l2, btree)?;
     let archive_refs = collect_archive_refs(data, &filtered_l2, btree)?;
 
-    // Step 8: Update activation scores (L2) + spacing effect boost (L1)
     update_activation_scores(mmap, &filtered_l2, btree)?;
     boost_l1_importance_on_retrieval(mmap, &filtered_l2, btree, l1_reverse)?;
 
-    // Step 9: Convert to public types
     let result = SearchResult {
         profile: l0_profile,
         contexts: convert_contexts(&filtered_l2),
@@ -351,7 +328,6 @@ fn retrieve_l2_entity(
     let mut scored = Vec::new();
 
     for (id_hash, score) in hits {
-        // l3_id pre-filter: skip if not in scope
         if let Some(scope) = l3_scope {
             if !scope.contains(&id_hash) {
                 continue;
@@ -404,13 +380,12 @@ fn retrieve_l2_bm25(
                 continue;
             }
         }
-        // Check if the hit is an L3 virtual document
         let page_ref = match btree.search(id_hash) {
             Some(pr) => pr,
             None => continue,
         };
         if page_type_of(data, page_ref) == Some(PageType::HypergraphNode as u16) {
-            // L3 virtual document hit: resolve to associated L2 contexts via entity index
+            // L3 virtual document hit: resolve to associated L2 contexts
             let l2_ids = sparse_index.entity_index().l2_ids_for_node(id_hash);
             for l2_id in l2_ids {
                 if let Some(l2_data) = btree.search(l2_id).and_then(|pr| get_slot_data(data, pr)) {
@@ -424,7 +399,6 @@ fn retrieve_l2_bm25(
             }
             continue;
         }
-        // Original logic: direct ContextSlot deserialization
         if let Some(slot_data) = get_slot_data(data, page_ref) {
             if let Ok(ctx) = ContextSlot::deserialize(slot_data) {
                 if ctx.depth <= 3 {
@@ -491,7 +465,6 @@ fn retrieve_l2_vector(
     let mut candidates = Vec::new();
 
     for (&id_hash, &page_ref) in btree.iter() {
-        // l3_id pre-filter: skip if not in scope
         if let Some(scope) = l3_scope {
             if !scope.contains(&id_hash) {
                 continue;
@@ -505,14 +478,11 @@ fn retrieve_l2_vector(
             continue;
         }
 
-        // Try to deserialize as ContextSlot
         if let Ok(ctx) = ContextSlot::deserialize(&data[offset..]) {
-            // Accept depth 1, 2 & 3 (depth-3 results are weighted by 0.5)
             if ctx.depth > 3 {
                 continue;
             }
 
-            // Read centroid vector from centroid_page_ref
             if ctx.centroid_page_ref == 0 {
                 continue;
             }
@@ -537,7 +507,7 @@ fn retrieve_l2_vector(
 }
 
 // ============================================================================
-// l3_id pre-filter: collect L2 id_hash set containing a specific L3
+// l3_id pre-filter
 // ============================================================================
 
 /// Scan all BTree entries, deserialize as ContextSlot, collect id_hashes
@@ -548,7 +518,7 @@ fn collect_l2_ids_with_l3(data: &[u8], btree: &BTreeIndex, l3_hash: u64) -> Hash
     let mut result = HashSet::new();
 
     for (&id_hash, &page_ref) in btree.iter() {
-        // Pre-filter: skip non-Context type pages (2-byte read, much lighter than deserialization)
+        // 2-byte page_type read is much lighter than full deserialization
         if page_type_of(data, page_ref) != Some(PageType::Context as u16) {
             continue;
         }
@@ -565,16 +535,11 @@ fn collect_l2_ids_with_l3(data: &[u8], btree: &BTreeIndex, l3_hash: u64) -> Hash
 }
 
 // ============================================================================
-// Filter by context_id (removed — handled in Route 2)
-// ============================================================================
-
-// ============================================================================
 // L1 reverse index
 // ============================================================================
 
 /// L1 reverse index: maps an L2 `context_id` to the L1 `ContextNode`(s) that
-/// point to it. Used to avoid the O(N) btree scan when looking up associated
-/// contexts.
+/// point to it. Avoids O(N) btree scan for associated context lookups.
 #[derive(Debug, Clone, Default)]
 pub struct L1ReverseIndex {
     index: HashMap<u64, Vec<(u64, u64)>>,
@@ -587,9 +552,7 @@ impl L1ReverseIndex {
         }
     }
 
-    /// Build the reverse index by scanning the btree once. Only pages whose
-    /// header type is `PageType::ContextNode` and whose `context_id` is non-zero
-    /// are indexed.
+    /// Build the reverse index by scanning the btree once.
     pub fn build(data: &[u8], btree: &BTreeIndex) -> Result<Self, MemHopError> {
         let mut idx = Self::new();
         for (&id_hash, &page_ref) in btree.iter() {
@@ -619,21 +582,17 @@ impl L1ReverseIndex {
         entry.push((node_id_hash, node_page_ref));
     }
 
-    /// Remove all entries for a given `context_id`.
     pub fn remove_context(&mut self, context_id: u64) {
         self.index.remove(&context_id);
     }
 
-    /// Remove a single node entry across all `context_id` buckets.
     pub fn remove_node(&mut self, node_id_hash: u64) {
         for nodes in self.index.values_mut() {
             nodes.retain(|(nid, _)| *nid != node_id_hash);
         }
     }
 
-    /// O(1) lookup: given a set of `context_id`s, return all associated L1
-    /// nodes as `(node_id_hash, node_page_ref)`. Results are deduplicated by
-    /// node id.
+    /// O(1) lookup: given `context_id`s, return associated L1 nodes (deduplicated).
     pub fn find_associated(&self, context_ids: &HashSet<u64>) -> Vec<(u64, u64)> {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
@@ -649,37 +608,29 @@ impl L1ReverseIndex {
         result
     }
 
-    /// Serialize the reverse index to a byte vector using bincode.
     pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
         bincode::serialize(&self.index).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
-    /// Deserialize the reverse index from a byte vector using bincode.
     pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
         let index: HashMap<u64, Vec<(u64, u64)>> =
             bincode::deserialize(data).map_err(|e| MemHopError::Serialization(e.to_string()))?;
         Ok(Self { index })
     }
 
-    /// Return true if the index contains no entries.
     pub fn is_empty(&self) -> bool {
         self.index.is_empty()
     }
 }
 
 // ============================================================================
-// L1 association: find sibling depth-1 contexts via hypergraph
+// L1 association
 // ============================================================================
 
 /// Via L1 hypergraph, find associated L2 contexts for matched contexts.
 ///
-/// Algorithm:
-/// 1. Collect matched context id_hashes
-/// 2. Scan btree for ContextNodes whose context_id ∈ matched set
-/// 3. For each such node, traverse its hyperedge_ptrs
-/// 4. For each hyperedge, collect sibling node_ptrs
-/// 5. Look up sibling ContextNodes → get their context_id
-/// 6. Load ContextSlot for that context_id (no depth filtering)
+/// Uses L1 reverse index to find ContextNodes, traverses hyperedges to
+/// discover sibling nodes, then loads their associated L2 ContextSlots.
 fn get_l1_associated_depth1(
     data: &[u8],
     matched: &[ContextSlot],
@@ -692,22 +643,18 @@ fn get_l1_associated_depth1(
 
     let matched_ids: HashSet<u64> = matched.iter().map(|c| c.id_hash).collect();
     let mut seen: HashSet<u64> = matched_ids.clone(); // exclude already-matched
-    // Collect associated contexts with their edge weight for ranking
     let mut weighted_results: Vec<(ContextSlot, f32)> = Vec::new();
 
-    // Step 1: Use the L1 reverse index to find ContextNodes pointing to matched contexts
     let associated_nodes = l1_reverse.find_associated(&matched_ids);
     for (_node_hash, page_ref) in associated_nodes {
         if let Some(slot_data) = get_slot_data(data, page_ref) {
             if let Ok(node) = ContextNode::deserialize(slot_data) {
-                // Step 2: For each relevant node, traverse hyperedges
                 for &edge_hash in &node.edge_ptrs {
                     if let Some(edge_data) = btree
                         .search(edge_hash)
                         .and_then(|pr| get_slot_data(data, pr))
                     {
                         if let Ok(hyperedge) = HyperedgeSlot::deserialize(edge_data) {
-                            // Step 3: For each sibling node in this hyperedge
                             for &sibling_hash in &hyperedge.node_ptrs {
                                 if let Some(sib_data) = btree
                                     .search(sibling_hash)
@@ -718,14 +665,12 @@ fn get_l1_associated_depth1(
                                         if seen.contains(&ctx_id) {
                                             continue;
                                         }
-                                        // Load the L2 ContextSlot
                                         if let Some(ctx_data) = btree
                                             .search(ctx_id)
                                             .and_then(|pr| get_slot_data(data, pr))
                                         {
                                             if let Ok(ctx) = ContextSlot::deserialize(ctx_data) {
                                                 seen.insert(ctx_id);
-                                                // Weight = hyperedge.weight * sibling importance
                                                 let assoc_weight = hyperedge.weight * sibling_node.importance;
                                                 weighted_results.push((ctx, assoc_weight));
                                             }
@@ -759,7 +704,6 @@ fn get_l1_associated_depth1(
         }
     }
 
-    // Sort by association weight (strongest first) and return
     weighted_results.sort_by(|a, b| {
         b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
     });
@@ -769,7 +713,7 @@ fn get_l1_associated_depth1(
 }
 
 // ============================================================================
-// Collect L3 previews
+// L3 previews
 // ============================================================================
 
 /// Collect L3 previews from matched contexts (single BTree traversal)
@@ -780,7 +724,6 @@ fn collect_l3_previews(
 ) -> Result<(Vec<String>, Vec<L3Preview>), MemHopError> {
     let data: &[u8] = &mmap[..];
 
-    // 1. Collect all target graph_ids from matched contexts
     let mut graph_ids: HashSet<u64> = HashSet::new();
     for ctx in contexts {
         for &l3_hash in &ctx.l3_refs {
@@ -793,7 +736,7 @@ fn collect_l3_previews(
         return Ok((l3_ids, Vec::new()));
     }
 
-    // 2. Single BTree traversal: collect HypergraphSlot and HypergraphNode
+    // Single BTree traversal: collect HypergraphSlot and HypergraphNode
     let mut slots: HashMap<u64, HypergraphSlot> = HashMap::new();
     let mut nodes_by_graph: HashMap<u64, Vec<HypergraphNode>> = HashMap::new();
 
@@ -818,7 +761,6 @@ fn collect_l3_previews(
         }
     }
 
-    // 3. Build previews: sort by importance and take top 5
     let mut previews = Vec::new();
     for &gid in &graph_ids {
         if let Some(slot) = slots.get(&gid) {
@@ -862,7 +804,7 @@ fn content_type_to_string(ct: ContentType) -> String {
 }
 
 // ============================================================================
-// Collect L4 archive references
+// L4 archive references
 // ============================================================================
 
 /// Collect L4 archive references from matched contexts, loading metadata
@@ -905,14 +847,11 @@ fn collect_archive_refs(
 // Activation score update
 // ============================================================================
 
-/// Update activation scores for retrieved contexts.
+/// Implements "spacing effect" (retrieval strengthens memory) and "decay"
+/// (unretrieved memories fade) from human memory models.
 ///
-/// Implements both the "spacing effect" (retrieval strengthens memory)
-/// and "decay" (unretrieved memories fade) from human memory models.
-///
-/// - Matched contexts: activation_score +0.1 (capped at 1.0)
-/// - Active but unmatched contexts: activation_score * 0.95 (decay)
-/// - Dormant contexts: left unchanged
+/// - Matched: activation_score +0.1 (capped at 1.0)
+/// - Unmatched active: decay handled by periodic lightweight L1 decay
 fn update_activation_scores(
     mmap: &mut MmapMut,
     contexts: &[ContextSlot],
@@ -920,7 +859,6 @@ fn update_activation_scores(
 ) -> Result<(), MemHopError> {
     let now_ms = common::now_ms();
 
-    // Only update matched contexts (spacing effect).
     // Global decay of unmatched active contexts is handled by the periodic
     // lightweight L1 decay in maybe_run_lightweight_decay, not on every search.
     for ctx in contexts {
@@ -958,12 +896,8 @@ fn update_activation_scores(
 
 /// Boost L1 ContextNode importance when their associated L2 contexts are retrieved.
 ///
-/// This implements the "spacing effect" from human memory: each successful retrieval
-/// strengthens the associative pathway, making the memory harder to forget.
-/// The boost is small (0.05) and capped at 1.0 to prevent runaway growth.
-///
-/// Only nodes whose importance is above the prune threshold (0.05) are boosted;
-/// nodes below threshold are left alone (they will be pruned by dream decay).
+/// Spacing effect: each retrieval strengthens the associative pathway.
+/// Only nodes above prune threshold (0.05) are boosted.
 fn boost_l1_importance_on_retrieval(
     mmap: &mut MmapMut,
     contexts: &[ContextSlot],
@@ -983,12 +917,10 @@ fn boost_l1_importance_on_retrieval(
         let (page_id, _slot_idx) = decode_page_ref(page_ref);
         if let Some(slot_data) = get_slot_data(&mmap[..], page_ref) {
             if let Ok(mut node) = ContextNode::deserialize_slot(slot_data) {
-                // Only boost nodes that are still above prune threshold
                 if node.importance >= PRUNE_THRESHOLD {
                     node.importance = (node.importance + BOOST_DELTA).min(BOOST_CAP);
                     node.updated_at = now_ms;
 
-                    // Write back to mmap (same slot location, same size)
                     let buf = node.serialize().map_err(|e| {
                         MemHopError::Serialization(format!("ContextNode boost serialize: {}", e))
                     })?;
@@ -1008,7 +940,6 @@ fn boost_l1_importance_on_retrieval(
 // Type conversion helpers
 // ============================================================================
 
-/// Convert internal ContextSlot to public ContextResult
 fn convert_contexts(contexts: &[ContextSlot]) -> Vec<ContextResult> {
     contexts
         .iter()
@@ -1082,16 +1013,13 @@ fn create_new_l2_context(
         llm_params: crate::slot::context::LlmParams::default(),
     };
 
-    // Serialize
     let ctx_data = new_ctx
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-    // Allocate page
     let page_id = crate::file::free_list::allocate_or_extend(mmap, header, file, 500)?;
     let page_offset = crate::query::slot_io::page_offset(page_id);
 
-    // Write page header
     let page_header = crate::file::page::PageHeader {
         page_id,
         page_type: crate::util::PageType::Context.to_u16(),
@@ -1104,7 +1032,6 @@ fn create_new_l2_context(
     };
     crate::file::page::write_page_header(mmap, page_id, &page_header)?;
 
-    // Write slot data
     let data_offset = page_offset + 32;
     if data_offset + ctx_data.len() > mmap.len() {
         return Err(MemHopError::Serialization(format!(
@@ -1115,11 +1042,9 @@ fn create_new_l2_context(
     }
     mmap[data_offset..data_offset + ctx_data.len()].copy_from_slice(&ctx_data);
 
-    // Update B-tree
     let page_ref = (page_id as u64) << 16;
     btree.insert(id_hash, page_ref);
 
-    // Update sparse index (word tokens only)
     let terms: Vec<String> = new_ctx
         .title
         .split_whitespace()
@@ -1135,14 +1060,10 @@ fn create_new_l2_context(
 // LLM query enhancement
 // ============================================================================
 
-/// Enhanced query using LLM with content-aware classification
+/// Enhanced query using LLM with content-aware classification.
 ///
-/// Handles different input types intelligently:
-/// - Code snippets: extract language and functional description
-/// - Long text (>200 chars): compress before keyword extraction
-/// - Error messages: extract error codes and stack context
-/// - Knowledge statements: extract core concepts
-/// - Follow-up queries: leverage context_history for anaphora resolution
+/// Handles code snippets, long text, error messages, and follow-up queries
+/// with context_history for anaphora resolution.
 fn enhance_query_with_llm(
     llm_config: &crate::config::LlmConfig,
     dialogue: &str,
@@ -1150,7 +1071,6 @@ fn enhance_query_with_llm(
 ) -> Result<String, MemHopError> {
     let char_count = dialogue.chars().count();
 
-    // Build context block if history is available
     let history_block = if let Some(history) = context_history {
         let truncated = safe_char_slice(history, 500);
         format!(
@@ -1162,7 +1082,6 @@ fn enhance_query_with_llm(
         String::new()
     };
 
-    // Detect input characteristics to guide prompt
     let has_code = dialogue.contains("```")
         || dialogue.contains("fn ")
         || dialogue.contains("impl ")
@@ -1243,7 +1162,6 @@ fn enhance_query_with_llm(
         ])
     };
 
-    // Longer timeout for complex inputs
     let timeout_secs = if is_verbose || has_code || has_error {
         30u64
     } else {
@@ -1286,7 +1204,6 @@ fn enhance_query_with_llm(
         .map(|s| s.trim().to_string())
         .ok_or_else(|| MemHopError::Serialization("No content in LLM response".to_string()))?;
 
-    // Clean up: remove quotes, prefixes, unnecessary punctuation
     let cleaned = enhanced
         .trim_start_matches('"')
         .trim_end_matches('"')
@@ -1298,14 +1215,12 @@ fn enhance_query_with_llm(
         .join(" ");
 
     Ok(if cleaned.is_empty() || cleaned.len() < 5 {
-        // Fallback: use simple keyword extraction from original text
         extract_fallback_keywords(dialogue)
     } else {
         cleaned
     })
 }
 
-/// Simple fallback keyword extraction when LLM enhancement fails
 fn extract_fallback_keywords(text: &str) -> String {
     // Remove common stop words, code artifacts, and join meaningful terms
     let stop_words = [

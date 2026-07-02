@@ -1,7 +1,7 @@
-// L0 Profile CRUD operations
-//
-// This module provides unified read/write operations for L0 (Profile) layer.
-// All other modules should use these functions instead of duplicating the logic.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+// L0 Profile CRUD: unified read/write for the Profile layer.
 
 use crate::index::btree::BTreeIndex;
 use crate::query::types::ProfileResult;
@@ -12,19 +12,7 @@ use crate::MemHopError;
 use memmap2::MmapMut;
 use std::result::Result;
 
-/// Read L0 profile from memory-mapped file
-///
-/// This is the canonical implementation for reading the agent's profile.
-/// Used by: list.rs, search.rs, import.rs, update_title.rs
-///
-/// # Arguments
-/// * `mmap` - Memory-mapped file reference
-/// * `btree` - B-tree index for ID lookup
-///
-/// # Returns
-/// * `Ok(Some(ProfileResult))` - Profile found and deserialized
-/// * `Ok(None)` - Profile not found
-/// * `Err(MemHopError)` - IO or serialization error
+/// Read L0 profile from memory-mapped file.
 pub fn read_profile(
     mmap: &MmapMut,
     btree: &BTreeIndex,
@@ -62,18 +50,7 @@ pub fn read_profile(
     }
 }
 
-/// Update L0 profile in memory-mapped file
-///
-/// Writes the updated profile back to the same page location.
-///
-/// # Arguments
-/// * `mmap` - Mutable memory-mapped file reference
-/// * `btree` - B-tree index for ID lookup
-/// * `profile_data` - Updated profile data to write
-///
-/// # Returns
-/// * `Ok(())` - Profile updated successfully
-/// * `Err(MemHopError)` - IO, serialization, or page not found error
+/// Write updated L0 profile back to the same page location.
 pub fn update_profile(
     mmap: &mut MmapMut,
     btree: &BTreeIndex,
@@ -86,7 +63,6 @@ pub fn update_profile(
             let page_id = (page_ref >> 16) as u32;
             let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-            // Create ProfileSlot from ProfileResult
             let profile_slot = ProfileSlot {
                 id_hash: profile_id_hash,
                 name: profile_data.name.clone(),
@@ -102,7 +78,6 @@ pub fn update_profile(
                 version: 1,
             };
 
-            // Serialize and write to mmap
             let buffer = profile_slot
                 .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;

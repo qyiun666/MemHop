@@ -1,11 +1,7 @@
-//! Dream Stage 3.5: User Language Habit Distillation
-//!
-//! Analyzes recent dialogue history (L4 Archives) to extract user language habits:
-//! - Personal lexicon (unique word meanings)
-//! - Communication style traits
-//! - Emotional expression patterns
-//!
-//! Results are merged into the existing L0 Profile, preserving previously learned habits.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Stage: User Language Habit Distillation — extract habits from L4 archives, merge into L0 Profile.
 
 use crate::dream::llm::{HabitAnalysis, LlmProvider};
 use crate::file::header::FileHeader;
@@ -29,23 +25,13 @@ const MAX_STYLE_TRAITS: usize = 10;
 /// Maximum emotion patterns
 const MAX_EMOTION_PATTERNS: usize = 10;
 
-/// Distill user language habits from recent dialogue history
-///
-/// # Arguments
-/// * `mmap` - Mutable memory-mapped file for reading archives and writing profile
-/// * `header` - File header for page bounds
-/// * `btree` - B-tree index for scanning L4 archives
-/// * `llm` - LLM provider for habit analysis
-///
-/// # Returns
-/// HabitUpdate with counts of new entries added
+/// Distill user language habits from recent dialogue history.
 pub fn distill_user_habits(
     mmap: &mut MmapMut,
     header: &FileHeader,
     btree: &BTreeIndex,
     llm: &dyn LlmProvider,
 ) -> Result<HabitUpdate, MemHopError> {
-    // Step 1: Extract recent dialogue texts from L4 Archives
     let dialogues = extract_recent_dialogues(mmap, header, btree);
 
     if dialogues.is_empty() {
@@ -59,13 +45,11 @@ pub fn distill_user_habits(
 
     let total_analyzed = dialogues.len();
 
-    // Step 2: Analyze habits via LLM (with fallback)
     let analysis = match llm.analyze_user_habits(&dialogues) {
         Ok(result) => result,
         Err(_) => llm.fallback_analyze_user_habits(&dialogues),
     };
 
-    // Step 3: Merge into existing L0 Profile
     let merge_result = merge_habits_into_profile(mmap, btree, &analysis)?;
 
     Ok(HabitUpdate {
@@ -84,7 +68,7 @@ fn extract_recent_dialogues(
 ) -> Vec<String> {
     let data = &mmap[..];
     let page_count = header.page_count;
-    let mut archives: Vec<(i64, String)> = Vec::new(); // (timestamp, content)
+    let mut archives: Vec<(i64, String)> = Vec::new();
 
     for (_, page_ref) in btree.iter() {
         let page_id = (*page_ref >> 16) as u32;
@@ -97,7 +81,6 @@ fn extract_recent_dialogues(
             continue;
         }
 
-        // Check page type
         if page_offset + 32 > data.len() {
             continue;
         }
@@ -111,7 +94,6 @@ fn extract_recent_dialogues(
             continue;
         }
 
-        // Deserialize archive slot
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
             if let Ok(archive) = ArchiveSlot::deserialize(slot_data) {
                 // Only include user messages (role=0) with non-empty content
@@ -122,10 +104,8 @@ fn extract_recent_dialogues(
         }
     }
 
-    // Sort by timestamp descending (most recent first)
     archives.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
 
-    // Take most recent N dialogues
     archives
         .into_iter()
         .take(MAX_DIALOGUES)
@@ -133,9 +113,8 @@ fn extract_recent_dialogues(
         .collect()
 }
 
-/// Merge habit analysis results into the existing L0 Profile
-///
-/// Returns (new_lexicon_count, new_style_count, new_emotion_count)
+/// Merge habit analysis results into the existing L0 Profile.
+/// Returns (new_lexicon_count, new_style_count, new_emotion_count).
 fn merge_habits_into_profile(
     mmap: &mut MmapMut,
     btree: &BTreeIndex,
@@ -154,7 +133,6 @@ fn merge_habits_into_profile(
         return Err(MemHopError::PageNotFound(page_id));
     }
 
-    // Read existing profile
     let mut profile = ProfileSlot::deserialize(&mmap[offset..])
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
@@ -162,14 +140,13 @@ fn merge_habits_into_profile(
     let mut new_style = 0;
     let mut new_emotion = 0;
 
-    // Merge lexicon: new entries override old, old entries preserved if not in new
+    // New entries override old; old entries preserved if not in new
     for (word, meaning) in &analysis.lexicon {
         if !profile.lexicon.contains_key(word) {
             new_lexicon += 1;
         }
         profile.lexicon.insert(word.clone(), meaning.clone());
     }
-    // Enforce max
     if profile.lexicon.len() > MAX_LEXICON {
         let excess: Vec<String> = profile.lexicon.keys().skip(MAX_LEXICON).cloned().collect();
         for k in excess {
@@ -177,7 +154,6 @@ fn merge_habits_into_profile(
         }
     }
 
-    // Merge style traits: add new, deduplicate
     for trait_tag in &analysis.style_traits {
         if !profile.style_traits.contains(trait_tag) {
             profile.style_traits.push(trait_tag.clone());
@@ -186,7 +162,6 @@ fn merge_habits_into_profile(
     }
     profile.style_traits.truncate(MAX_STYLE_TRAITS);
 
-    // Merge emotion patterns: new entries override old
     for (expr, meaning) in &analysis.emotion_patterns {
         if !profile.emotion_patterns.contains_key(expr) {
             new_emotion += 1;
@@ -207,11 +182,9 @@ fn merge_habits_into_profile(
         }
     }
 
-    // Update timestamp
     profile.updated_at = crate::query::common::now_ms();
     profile.version += 1;
 
-    // Serialize and write back
     let data = profile
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -247,7 +220,6 @@ mod tests {
 
     #[test]
     fn test_extract_recent_dialogues_empty() {
-        // With empty btree, should return empty vec
         let btree = BTreeIndex::new();
         let header = crate::file::header::FileHeader::new(768);
 

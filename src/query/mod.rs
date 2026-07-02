@@ -1,17 +1,17 @@
-// Query module
-//
-// Module organization (after P0 cleanup):
-// - NEW API (recommended): search, update, import, list, merge, update_title, types
-// - INTERNAL USE: batch, l0_crud, slot_io, common
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
-pub mod batch; // Internal: Batch storage operations
-pub mod common; // Internal: Common utility functions (eliminates duplication)
-pub mod import; // NEW API: import_memory implementation
-pub mod l0_crud; // Internal: L0 Profile CRUD operations (unified implementation)
-pub mod list; // NEW API: list queries
-pub mod merge; // NEW API: merge_topics implementation
-pub mod search; // NEW API: search_memory implementation (topic-centric retrieval)
-pub mod slot_io; // Internal: Unified Slot I/O utilities (eliminates duplication)
-pub mod types; // NEW API: Public type definitions
-pub mod update; // NEW API: update_memory implementation
-pub mod update_title; // NEW API: Title/profile update interfaces
+// Query module: search, update, import, list, merge, update_title, types (API)
+// + batch, l0_crud, slot_io, common (internal)
+
+pub mod batch;
+pub mod common;
+pub mod import;
+pub mod l0_crud;
+pub mod list;
+pub mod merge;
+pub mod search;
+pub mod slot_io;
+pub mod types;
+pub mod update;
+pub mod update_title;

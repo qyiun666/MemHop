@@ -1,7 +1,7 @@
-//! L3 Hypergraph Storage Layer
-//!
-//! Provides CRUD operations for HypergraphNode and HypergraphEdge,
-//! and graph-level management (list, delete, count).
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! L3 Hypergraph Storage Layer — CRUD for HypergraphNode/Edge and graph-level management.
 
 use crate::file::free_list::{allocate_or_extend, free_page};
 use crate::file::header::FileHeader;
@@ -37,15 +37,7 @@ pub(crate) fn page_type_of(mmap: &[u8], page_ref: u64) -> Option<u16> {
 // ============================================================================
 
 /// Add a HypergraphNode to the graph, write to mmap, and register in BTreeIndex.
-///
-/// # Behavior
-/// - Allocates a page from the free list
-/// - Writes PageHeader (type=HypergraphNode, layer=3)
-/// - Serializes and writes node data after the header
-/// - Registers node.id_hash → page_ref in the BTreeIndex
-///
-/// # Returns
-/// The hex-formatted node ID string.
+/// Returns the hex-formatted node ID string.
 pub fn add_node(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -76,7 +68,6 @@ pub fn add_node(
     let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let offset = (page_id as usize) * PAGE_SIZE;
 
-    // Write page header
     let page_hdr = PageHeader::new(page_id, PageType::HypergraphNode, 3, 0xFFFFFFFF);
     let hdr_bytes = page_hdr.to_bytes();
     mmap[offset..offset + 32].copy_from_slice(&hdr_bytes);
@@ -95,7 +86,6 @@ pub fn add_node(
     }
     mmap[data_offset..data_offset + data_size].copy_from_slice(&data_bytes);
 
-    // Register in BTreeIndex
     btree.insert(node.id_hash, (page_id as u64) << 16);
 
     Ok(format_hash(node.id_hash))
@@ -126,11 +116,6 @@ pub fn get_node(
 }
 
 /// Delete a HypergraphNode and cascade-delete all edges that reference it.
-///
-/// # Behavior
-/// 1. Find all edges in the same graph that reference this node
-/// 2. Delete those edges (free pages + remove from BTree)
-/// 3. Delete the node itself (free page + remove from BTree)
 pub fn delete_node(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -139,7 +124,6 @@ pub fn delete_node(
 ) -> Result<(), MemHopError> {
     let id_hash = crate::query::common::parse_id_to_hash(node_id);
 
-    // Find the node to get its graph_id
     let node = match get_node(mmap, btree, node_id)? {
         Some(n) => n,
         None => return Ok(()), // Already gone
@@ -147,12 +131,10 @@ pub fn delete_node(
 
     let graph_id = node.graph_id;
 
-    // Collect edges in the same graph that reference this node
     // Also collect page_ref to avoid second BTree lookup when deleting
     let mut edges_to_delete: Vec<(u64, u64)> = Vec::new(); // (edge_hash, page_ref)
     for (&eid, &page_ref) in btree.iter() {
         let data: &[u8] = &mmap[..];
-        // Skip non-edge pages
         if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
             continue;
         }
@@ -165,14 +147,12 @@ pub fn delete_node(
         }
     }
 
-    // Delete the edges (use stored page_ref to avoid second BTree lookup)
     for (edge_hash, page_ref) in &edges_to_delete {
         btree.remove(*edge_hash);
         let page_id = (page_ref >> 16) as u32;
         crate::file::free_list::free_page(mmap, header, page_id)?;
     }
 
-    // Delete the node
     if let Some(page_ref) = btree.delete(id_hash) {
         let page_id = (page_ref >> 16) as u32;
         crate::file::free_list::free_page(mmap, header, page_id)?;
@@ -210,7 +190,6 @@ pub fn add_edge(
     let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let offset = (page_id as usize) * PAGE_SIZE;
 
-    // Write page header
     let page_hdr = PageHeader::new(page_id, PageType::HypergraphEdge, 3, 0xFFFFFFFF);
     let hdr_bytes = page_hdr.to_bytes();
     mmap[offset..offset + 32].copy_from_slice(&hdr_bytes);
@@ -229,7 +208,6 @@ pub fn add_edge(
     }
     mmap[data_offset..data_offset + data_size].copy_from_slice(&data_bytes);
 
-    // Register in BTreeIndex
     btree.insert(edge.id_hash, (page_id as u64) << 16);
 
     Ok(format_hash(edge.id_hash))
@@ -289,25 +267,21 @@ pub fn list_nodes_by_graph(
     let mut all_nodes: Vec<HypergraphNode> = Vec::new();
 
     for (&_id, &page_ref) in btree.iter() {
-        // Skip non-node pages
         if page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
             continue;
         }
         if let Some(slot_data) = get_slot_data(data, page_ref) {
-            // Try to deserialize as HypergraphNode (skip non-node types)
             if let Ok(node) = HypergraphNode::deserialize(slot_data) {
                 if node.graph_id != graph_id {
                     continue;
                 }
 
-                // Apply node_type filter
                 if let Some(ref nt) = query.node_type {
                     if &node.node_type != nt {
                         continue;
                     }
                 }
 
-                // Apply keyword filter (match against title + content)
                 if let Some(ref keyword) = query.keyword {
                     let combined = format!("{} {}", node.title, node.content);
                     if !matches_keyword(&combined, keyword) {
@@ -315,7 +289,6 @@ pub fn list_nodes_by_graph(
                     }
                 }
 
-                // Apply importance filter
                 if let Some(min_imp) = query.min_importance {
                     if node.importance < min_imp {
                         continue;
@@ -327,7 +300,6 @@ pub fn list_nodes_by_graph(
         }
     }
 
-    // Sort by importance descending
     all_nodes.sort_by(|a, b| {
         b.importance
             .partial_cmp(&a.importance)
@@ -358,7 +330,6 @@ pub fn list_edges_by_graph(
     let mut all_edges: Vec<HypergraphEdge> = Vec::new();
 
     for (&_id, &page_ref) in btree.iter() {
-        // Skip non-edge pages
         if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
             continue;
         }
@@ -368,14 +339,12 @@ pub fn list_edges_by_graph(
                     continue;
                 }
 
-                // Apply kind filter
                 if let Some(kind) = query.kind {
                     if edge.kind != kind {
                         continue;
                     }
                 }
 
-                // Apply node_id filter (edges containing a specific node)
                 if let Some(ref nid) = query.node_id {
                     let node_hash = crate::query::common::parse_id_to_hash(nid);
                     if !edge.node_ids.contains(&node_hash) {
@@ -388,7 +357,6 @@ pub fn list_edges_by_graph(
         }
     }
 
-    // Sort by created_at descending
     all_edges.sort_by_key(|e| std::cmp::Reverse(e.created_at));
 
     let (skip, take) = pagination_params(query.page, query.page_size);
@@ -412,7 +380,6 @@ pub fn count_graph_elements(mmap: &MmapMut, btree: &BTreeIndex, graph_id: u64) -
 
     for (&_id, &page_ref) in btree.iter() {
         let pt = page_type_of(data, page_ref).unwrap_or(0);
-        // Only process node and edge pages
         if pt != PageType::HypergraphNode as u16 && pt != PageType::HypergraphEdge as u16 {
             continue;
         }
@@ -446,12 +413,10 @@ pub fn delete_graph(
 ) -> Result<(), MemHopError> {
     let graph_hash = crate::query::common::parse_id_to_hash(l3_id);
 
-    // Verify graph exists
     if btree.search(graph_hash).is_none() {
         return Ok(()); // Already gone
     }
 
-    // Step 1: Collect all node and edge IDs for this graph
     let mut node_hashes: Vec<u64> = Vec::new();
     let mut edge_hashes: Vec<u64> = Vec::new();
 
@@ -477,7 +442,6 @@ pub fn delete_graph(
         }
     }
 
-    // Step 2: Delete all edges
     for edge_hash in &edge_hashes {
         if let Some(page_ref) = btree.delete(*edge_hash) {
             let page_id = (page_ref >> 16) as u32;
@@ -485,7 +449,6 @@ pub fn delete_graph(
         }
     }
 
-    // Step 3: Delete all nodes
     for node_hash in &node_hashes {
         if let Some(page_ref) = btree.delete(*node_hash) {
             let page_id = (page_ref >> 16) as u32;
@@ -493,7 +456,6 @@ pub fn delete_graph(
         }
     }
 
-    // Step 4: Delete the HypergraphSlot itself
     if let Some(page_ref) = btree.delete(graph_hash) {
         let page_id = (page_ref >> 16) as u32;
         free_page(mmap, header, page_id)?;
@@ -513,7 +475,6 @@ pub fn collect_l2_refs(
     let mut refs = Vec::new();
 
     for (&id_hash, &page_ref) in btree.iter() {
-        // Skip non-ContextSlot pages
         if page_type_of(data, page_ref) != Some(PageType::Context as u16) {
             continue;
         }
@@ -546,13 +507,10 @@ pub fn remove_l3_ref_from_context(
         return Err(MemHopError::PageNotFound(page_id));
     }
 
-    // Read the full page
     let mut page_buf = vec![0u8; PAGE_SIZE];
     page_buf.copy_from_slice(&mmap[offset..offset + PAGE_SIZE]);
 
-    // Deserialize ContextSlot from the data region (offset 32)
     let slot_data = &page_buf[32..];
-    // Find the actual end of slot data (slot is bincode-serialized, end is padded)
     if let Ok(mut ctx) = crate::slot::context::ContextSlot::deserialize_slot(slot_data) {
         if ctx.l3_refs.contains(&graph_hash) {
             ctx.l3_refs.retain(|&h| h != graph_hash);
@@ -567,14 +525,11 @@ pub fn remove_l3_ref_from_context(
                 ));
             }
 
-            // Write the modified slot data back into the page buffer
             page_buf[32..32 + ctx_bytes.len()].copy_from_slice(&ctx_bytes);
-            // Clear the rest of the data region
             if 32 + ctx_bytes.len() < PAGE_SIZE {
                 page_buf[32 + ctx_bytes.len()..].fill(0);
             }
 
-            // Write the full page back atomically
             mmap[offset..offset + PAGE_SIZE].copy_from_slice(&page_buf);
             return Ok(true);
         }
@@ -597,11 +552,9 @@ pub fn read_node_neighbors(
     let id_hash = crate::query::common::parse_id_to_hash(node_id);
     let data: &[u8] = &mmap[..];
 
-    // Collect all edges in the graph that reference this node
     let mut neighbor_hashes: Vec<u64> = Vec::new();
 
     for (&_eid, &page_ref) in btree.iter() {
-        // Skip non-edge pages
         if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
             continue;
         }
@@ -611,14 +564,12 @@ pub fn read_node_neighbors(
                     continue;
                 }
 
-                // Apply kind filter
                 if let Some(kinds) = edge_kinds {
                     if !kinds.contains(&edge.kind) {
                         continue;
                     }
                 }
 
-                // Collect other node IDs in this edge
                 for &nid in &edge.node_ids {
                     if nid != id_hash && !neighbor_hashes.contains(&nid) {
                         neighbor_hashes.push(nid);
@@ -628,7 +579,6 @@ pub fn read_node_neighbors(
         }
     }
 
-    // Load neighbor nodes
     let mut neighbors = Vec::new();
     for &nh in &neighbor_hashes {
         if let Some(page_ref) = btree.search(nh) {
@@ -781,7 +731,6 @@ pub fn bfs_traversal_cached(
         return Ok(Vec::new());
     }
 
-    // Try to get adjacency from cache, or build it
     let adjacency = if let Some(cached) = cache.get(graph_id, edge_kinds) {
         cached.clone()
     } else {
@@ -822,7 +771,6 @@ pub fn extract_subgraph(
         }
     }
 
-    // Load unique nodes
     let mut nodes: Vec<HypergraphNode> = Vec::new();
     for &node_hash in &node_hashes {
         if let Some(page_ref) = btree.search(node_hash) {

@@ -1,10 +1,10 @@
-//! Common utility functions for query module
-//!
-//! Provides shared utilities to eliminate code duplication across query implementations.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Shared utilities for query module.
 
 use crate::MemHopError;
 
-/// Get current timestamp in milliseconds
 #[inline]
 pub fn now_ms() -> i64 {
     crate::util::get_current_timestamp()
@@ -22,20 +22,39 @@ pub fn parse_id_to_hash(id: &str) -> u64 {
     }
 }
 
-/// Format hash as hex string
 #[inline]
 pub fn format_hash(hash: u64) -> String {
     format!("{:016x}", hash)
 }
 
-/// Helper macro for deserializing slot types that implement their own `deserialize` method
-///
-/// This macro generates a wrapper function that calls the type's `deserialize` method
-/// and converts the error to MemHopError::Serialization.
+/// Extract L2 topic sparse index terms and document length from title and summary.
+/// Returns (terms, doc_len) where terms are lowercased whitespace-split tokens.
+pub fn build_l2_sparse_terms(title: &str, summary: &Option<String>) -> (Vec<String>, u32) {
+    let mut terms: Vec<String> = title
+        .split_whitespace()
+        .map(|s| s.to_lowercase())
+        .collect();
+    if let Some(ref s) = summary {
+        terms.extend(s.split_whitespace().map(|s| s.to_lowercase()));
+    }
+    let doc_len = (title.len() + summary.as_ref().map_or(0, |s| s.len())) as u32;
+    (terms, doc_len)
+}
+
+/// Normalize layer alias strings to canonical form.
+/// Currently maps "topic"/"Topic"/"TOPIC" → "l2".
+#[inline]
+pub fn normalize_layer(s: &str) -> &str {
+    match s {
+        "topic" | "Topic" | "TOPIC" => "l2",
+        other => other,
+    }
+}
+
+/// Generates a `deserialize_slot` wrapper that converts errors to MemHopError::Serialization.
 macro_rules! impl_deserialize_slot {
     ($type:ty, $name:expr) => {
         impl $type {
-            /// Deserialize with error handling
             pub fn deserialize_slot(data: &[u8]) -> Result<Self, MemHopError> {
                 <$type>::deserialize(data).map_err(|e| {
                     MemHopError::Serialization(format!("{} deserialize: {}", $name, e))
@@ -45,7 +64,6 @@ macro_rules! impl_deserialize_slot {
     };
 }
 
-// Implement for all slot types
 impl_deserialize_slot!(crate::slot::context::ContextSlot, "ContextSlot");
 impl_deserialize_slot!(crate::slot::context_node::ContextNode, "ContextNode");
 impl_deserialize_slot!(crate::slot::archive::ArchiveSlot, "ArchiveSlot");
@@ -56,7 +74,6 @@ impl_deserialize_slot!(
     "ActionChainSlot"
 );
 
-/// Calculate pagination parameters
 #[inline]
 pub fn pagination_params(page: usize, page_size: usize) -> (usize, usize) {
     let skip = page.saturating_sub(1) * page_size;
@@ -64,20 +81,17 @@ pub fn pagination_params(page: usize, page_size: usize) -> (usize, usize) {
     (skip, take)
 }
 
-/// Calculate has_more flag
 #[inline]
 pub fn has_more(skip: usize, take: usize, total: usize) -> bool {
     skip + take < total
 }
 
-/// Apply keyword filter (case-insensitive)
 #[inline]
 pub fn matches_keyword(text: &str, keyword: &str) -> bool {
     let keyword_lower = keyword.to_lowercase();
     text.to_lowercase().contains(&keyword_lower)
 }
 
-/// Sort items by score (descending)
 #[inline]
 pub fn sort_by_score<T, F>(items: &mut [T], score_fn: F)
 where

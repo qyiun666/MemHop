@@ -1,6 +1,7 @@
-//! List query implementations for MemHop
-//!
-//! Implements list and get query interfaces with pagination support.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! List and get query interfaces with pagination support.
 
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
@@ -16,7 +17,6 @@ use crate::slot::hypergraph::HypergraphSlot;
 use crate::util::{PageType, PAGE_SIZE};
 
 /// Check if a page has the expected page_type.
-/// Returns false if the page is out of bounds or has a different type.
 #[inline]
 fn is_page_type(data: &[u8], page_id: u32, expected: PageType) -> bool {
     let offset = (page_id as usize) * PAGE_SIZE + 4; // page_type is at offset 4
@@ -33,12 +33,10 @@ use memmap2::MmapMut;
 // Profile Query
 // ============================================================================
 
-/// Get profile
 pub fn get_profile(
     mmap: &MmapMut,
     btree: &BTreeIndex,
 ) -> Result<Option<ProfileResult>, MemHopError> {
-    // Delegate to unified profile CRUD implementation
     crate::query::l0_crud::read_profile(mmap, btree)
 }
 
@@ -46,9 +44,7 @@ pub fn get_profile(
 // L1 ContextNode Queries (Engram API)
 // ============================================================================
 
-/// Get single L1 node by ID
-///
-/// L1 ContextNode points to L2 ContextSlot. Text/summary are read from L2.
+/// Get single L1 node by ID (text/summary read from linked L2)
 pub fn get_engram(
     mmap: &MmapMut,
     btree: &BTreeIndex,
@@ -89,21 +85,18 @@ pub fn list_engrams(
             continue;
         }
 
-        // Only process ContextNode pages
         if !is_page_type(data, page_id, PageType::ContextNode) {
             continue;
         }
 
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
             if let Ok(node) = ContextNode::deserialize(slot_data) {
-                // Apply importance filter
                 if let Some(min_importance) = query.min_importance {
                     if node.importance < min_importance {
                         continue;
                     }
                 }
 
-                // Apply keyword filter (match against L2 context title)
                 if let Some(ref keyword) = query.keyword {
                     let title = load_context_title(mmap, btree, node.context_id)?;
                     if !matches_keyword(&title, keyword) {
@@ -111,8 +104,7 @@ pub fn list_engrams(
                     }
                 }
 
-                // Apply state_filter: L1 ContextNodes always have memory_state="Active".
-                // If the filter requires a different state, skip this node.
+                // L1 ContextNodes always have memory_state="Active".
                 if let Some(ref state_filter) = query.state_filter {
                     if state_filter != "Active" {
                         continue;
@@ -124,10 +116,8 @@ pub fn list_engrams(
         }
     }
 
-    // Sort by importance (descending)
     sort_by_score(&mut all_nodes, |node| node.importance);
 
-    // Pagination
     let (skip, take) = pagination_params(query.page, query.page_size);
     let total_count = all_nodes.len();
     let paged_engrams: Vec<EngramResult> = all_nodes
@@ -146,7 +136,6 @@ pub fn list_engrams(
     })
 }
 
-/// Load L2 context title from context_id
 fn load_context_title(
     mmap: &MmapMut,
     btree: &BTreeIndex,
@@ -163,13 +152,11 @@ fn load_context_title(
     Ok(String::new())
 }
 
-/// Build EngramResult from L1 ContextNode by following context_id to L2
 fn build_engram_result_from_node(
     mmap: &MmapMut,
     btree: &BTreeIndex,
     node: &ContextNode,
 ) -> Result<EngramResult, MemHopError> {
-    // Follow context_id to L2 ContextSlot for text/summary
     let (text, summary, keywords) = if let Some(page_ref) = btree.search(node.context_id) {
         let data = &mmap[..];
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
@@ -210,7 +197,6 @@ fn build_engram_result_from_node(
 // L2 Context Queries (Topic API)
 // ============================================================================
 
-/// Get single topic (L2 context) by ID
 pub fn get_topic(
     mmap: &MmapMut,
     btree: &BTreeIndex,
@@ -233,7 +219,6 @@ pub fn get_topic(
     }
 }
 
-/// List topics (L2 contexts) with pagination and filtering
 pub fn list_topics(
     mmap: &MmapMut,
     header: &FileHeader,
@@ -251,7 +236,6 @@ pub fn list_topics(
             continue;
         }
 
-        // Only process Context pages
         if !is_page_type(data, page_id, PageType::Context) {
             continue;
         }
@@ -273,10 +257,8 @@ pub fn list_topics(
         }
     }
 
-    // Sort by activation_score (descending)
     sort_by_score(&mut all_contexts, |ctx| ctx.activation_score);
 
-    // Pagination
     let (skip, take) = pagination_params(query.page, query.page_size);
     let total_count = all_contexts.len();
     let paged_topics: Vec<TopicSummary> = all_contexts
@@ -336,7 +318,6 @@ fn convert_context_to_summary(ctx: &ContextSlot) -> TopicSummary {
 // Archive Queries
 // ============================================================================
 
-/// Get single archive by ID
 pub fn get_archive(
     mmap: &MmapMut,
     btree: &BTreeIndex,
@@ -369,7 +350,6 @@ pub fn get_archive(
     }
 }
 
-/// List archives by topic ID
 pub fn list_archives_by_topic(
     mmap: &MmapMut,
     header: &FileHeader,
@@ -383,7 +363,6 @@ pub fn list_archives_by_topic(
     })
 }
 
-/// List archives by node IDs
 pub fn list_archives_by_nodes(
     mmap: &MmapMut,
     header: &FileHeader,
@@ -400,7 +379,6 @@ pub fn list_archives_by_nodes(
     })
 }
 
-/// List all archives
 pub fn list_all_archives(
     mmap: &MmapMut,
     header: &FileHeader,
@@ -431,14 +409,12 @@ where
             continue;
         }
 
-        // Only process Archive pages
         if !is_page_type(data, page_id, PageType::Archive) {
             continue;
         }
 
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
             if let Ok(archive) = ArchiveSlot::deserialize(slot_data) {
-                // Apply time range filter
                 if let Some(start_time) = query.start_time {
                     if archive.created_at < start_time {
                         continue;
@@ -451,7 +427,6 @@ where
                     }
                 }
 
-                // Apply content_type filter
                 if let Some(ref ct) = query.content_type {
                     let archive_ct = content_type_to_string(archive.content_type);
                     if !archive_ct.eq_ignore_ascii_case(ct) {
@@ -459,7 +434,6 @@ where
                     }
                 }
 
-                // Apply custom filter
                 if !filter(&archive) {
                     continue;
                 }
@@ -469,10 +443,8 @@ where
         }
     }
 
-    // Sort by created_at (descending - newest first)
     all_archives.sort_by_key(|b| std::cmp::Reverse(b.created_at));
 
-    // Pagination
     let (skip, take) = pagination_params(query.page, query.page_size);
     let total_count = all_archives.len();
     let paged_archives: Vec<Archive> = all_archives
@@ -504,7 +476,6 @@ where
     })
 }
 
-/// Convert ContentType enum to lowercase string for API consistency
 fn content_type_to_string(ct: ContentType) -> String {
     match ct {
         ContentType::Text => "text".to_string(),
@@ -521,7 +492,6 @@ fn content_type_to_string(ct: ContentType) -> String {
 // L5 ActionChain Queries (Crystal API)
 // ============================================================================
 
-/// List L5 action chains with pagination and filtering
 pub fn list_crystals(
     mmap: &MmapMut,
     header: &FileHeader,
@@ -539,14 +509,12 @@ pub fn list_crystals(
             continue;
         }
 
-        // Only process ActionChain pages
         if !is_page_type(data, page_id, PageType::ActionChain) {
             continue;
         }
 
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
             if let Ok(chain) = ActionChainSlot::deserialize(slot_data) {
-                // Apply status filter
                 if let Some(ref status_filter) = query.status_filter {
                     let status_str = match chain.status {
                         ChainStatus::Active => "active",
@@ -558,14 +526,12 @@ pub fn list_crystals(
                     }
                 }
 
-                // Apply trigger count filter
                 if let Some(min_trigger_count) = query.min_trigger_count {
                     if chain.trigger_count < min_trigger_count {
                         continue;
                     }
                 }
 
-                // Apply keyword filter
                 if let Some(ref keyword) = query.keyword {
                     if !matches_keyword(&chain.title, keyword) {
                         continue;
@@ -577,10 +543,8 @@ pub fn list_crystals(
         }
     }
 
-    // Sort by trigger_count (descending)
     all_chains.sort_by_key(|b| std::cmp::Reverse(b.trigger_count));
 
-    // Pagination
     let (skip, take) = pagination_params(query.page, query.page_size);
     let total_count = all_chains.len();
     let paged_crystals: Vec<CrystalSummary> = all_chains
@@ -620,7 +584,6 @@ pub fn list_crystals(
 // L3 Hypergraph Queries (Knowledge API)
 // ============================================================================
 
-/// List L3 hypergraphs (knowledge) with pagination and filtering
 pub fn list_knowledge(
     mmap: &MmapMut,
     header: &FileHeader,
@@ -638,7 +601,6 @@ pub fn list_knowledge(
             continue;
         }
 
-        // Check page type — only process HypergraphSlot pages (safe read from &[u8])
         let hdr_offset = (page_id as usize) * crate::util::PAGE_SIZE;
         if hdr_offset + 32 <= data.len() {
             let mut hdr_bytes = [0u8; 32];
@@ -656,7 +618,6 @@ pub fn list_knowledge(
 
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
             if let Ok(slot) = HypergraphSlot::deserialize(slot_data) {
-                // Apply keyword filter
                 if let Some(ref keyword) = query.keyword {
                     if !matches_keyword(&slot.name, keyword) {
                         continue;
@@ -673,10 +634,8 @@ pub fn list_knowledge(
         }
     }
 
-    // Sort by updated_at (descending)
     all_slots.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
 
-    // Pagination
     let (skip, take) = pagination_params(query.page, query.page_size);
     let total_count = all_slots.len();
     let paged_items: Vec<KnowledgeSummary> = all_slots

@@ -1,18 +1,13 @@
-// Free list module
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::file::header::FileHeader;
 use crate::util::PAGE_SIZE;
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::fs::File;
 
-/// Allocate a page from the free list, automatically extending the file if full.
-///
-/// When the free list is exhausted (`FileFull`), this function:
-/// 1. Extends the underlying file by `grow_pages` pages
-/// 2. Re-maps the mmap
-/// 3. Links the new pages into the free list
-/// 4. Retries the allocation
-///
+/// When free list is exhausted, extends file by `grow_pages` pages and retries.
 /// This prevents partial writes that would corrupt the database.
 pub fn allocate_or_extend(
     mmap: &mut MmapMut,
@@ -28,13 +23,11 @@ pub fn allocate_or_extend(
             let new_size = (new_count as usize) * PAGE_SIZE;
             let old_free_list_head = header.free_list_head;
 
-            // 1. Extend the underlying file
             file.set_len(new_size as u64)?;
 
-            // 2. Re-map the file into memory
             *mmap = unsafe { MmapMut::map_mut(&*file)? };
 
-            // 3. Link new pages into free list (LIFO order)
+            // Link new pages into free list (LIFO order)
             let mut next_free = old_free_list_head;
             let free_type = crate::util::PageType::Free.to_u16().to_le_bytes();
             for page_id in (old_count..new_count).rev() {
@@ -46,11 +39,9 @@ pub fn allocate_or_extend(
                 next_free = page_id;
             }
 
-            // 4. Update header
             header.free_list_head = next_free;
             header.page_count = new_count;
 
-            // 5. Retry allocation
             allocate_from_free_list(mmap, header)
         }
         Err(e) => Err(e),
@@ -59,27 +50,20 @@ pub fn allocate_or_extend(
 
 pub const EMPTY_FREE_LIST: u32 = 0xFFFFFFFF;
 
-/// Initialize free list in FileHeader
 pub fn init_free_list(header: &mut FileHeader) -> Result<(), MemHopError> {
-    // Set free_list_head to EMPTY_FREE_LIST (no free pages initially)
     header.free_list_head = EMPTY_FREE_LIST;
     Ok(())
 }
 
-/// Allocate a page from free list or extend file
 pub fn allocate_from_free_list(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
 ) -> Result<u32, MemHopError> {
-    // Read free list head from FileHeader
     let first_free = header.free_list_head;
 
     if first_free == EMPTY_FREE_LIST {
-        // No free pages available; caller is responsible for extending the file.
         Err(MemHopError::FileFull)
     } else {
-        // Use first free page
-        // Validate page_id is within bounds
         let next_free_offset = first_free as usize * PAGE_SIZE;
         if next_free_offset + PAGE_SIZE > mmap.len() {
             return Err(MemHopError::Io(std::io::Error::other(format!(
@@ -89,14 +73,12 @@ pub fn allocate_from_free_list(
             ))));
         }
 
-        // Read next free page ID from the allocated page's first 4 bytes
         let next_free_data = &mmap[next_free_offset..next_free_offset + 4];
         let next_free = u32::from_le_bytes(next_free_data.try_into().unwrap());
 
-        // Update free list head in FileHeader
         header.free_list_head = next_free;
 
-        // Zero out the entire page to prevent stale data from corrupting
+        // Zero out entire page to prevent stale data from corrupting
         // subsequent deserialization (e.g., ContextSlot reading garbage as UTF-8)
         let page_start = first_free as usize * PAGE_SIZE;
         mmap[page_start..page_start + PAGE_SIZE].fill(0);
@@ -105,13 +87,11 @@ pub fn allocate_from_free_list(
     }
 }
 
-/// Free a page by adding it to free list
 pub fn free_page(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     page_id: u32,
 ) -> Result<(), MemHopError> {
-    // Validate page_id is within file bounds
     let page_offset = page_id as usize * PAGE_SIZE;
     if page_offset + 4 > mmap.len() {
         return Err(MemHopError::Io(std::io::Error::other(format!(
@@ -121,13 +101,10 @@ pub fn free_page(
         ))));
     }
 
-    // Read current free list head from FileHeader
     let current_head = header.free_list_head;
 
-    // Write current head to the freed page's first 4 bytes
     mmap[page_offset..page_offset + 4].copy_from_slice(&current_head.to_le_bytes());
 
-    // Update free list head in FileHeader to point to this page
     header.free_list_head = page_id;
 
     Ok(())
@@ -144,10 +121,8 @@ mod tests {
     fn test_init_free_list() {
         let mut header = FileHeader::new(768);
 
-        // Initialize free list
         init_free_list(&mut header).unwrap();
 
-        // Verify free list is initialized to EMPTY_FREE_LIST
         assert_eq!(header.free_list_head, EMPTY_FREE_LIST);
     }
 
@@ -156,7 +131,6 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
 
-        // Create file with 4 pages
         let mut file = File::create(path).unwrap();
         file.write_all(&vec![0u8; PAGE_SIZE * 4]).unwrap();
         drop(file);
@@ -170,17 +144,13 @@ mod tests {
         let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         let mut header = FileHeader::new(768);
 
-        // Initialize free list
         init_free_list(&mut header).unwrap();
 
-        // Free page 3
         free_page(&mut mmap, &mut header, 3).unwrap();
 
-        // Allocate should return page 3
         let allocated = allocate_from_free_list(&mut mmap, &mut header).unwrap();
         assert_eq!(allocated, 3);
 
-        // Next allocation should fail (no more free pages)
         assert!(allocate_from_free_list(&mut mmap, &mut header).is_err());
     }
 
@@ -189,7 +159,6 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
 
-        // Create file with 5 pages
         let mut file = File::create(path).unwrap();
         file.write_all(&vec![0u8; PAGE_SIZE * 5]).unwrap();
         drop(file);
@@ -203,14 +172,12 @@ mod tests {
         let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         let mut header = FileHeader::new(768);
 
-        // Initialize free list
         init_free_list(&mut header).unwrap();
 
-        // Free pages in order: 3, then 4
         free_page(&mut mmap, &mut header, 3).unwrap();
         free_page(&mut mmap, &mut header, 4).unwrap();
 
-        // Allocate should return pages in LIFO order (4, then 3)
+        // LIFO order: 4 then 3
         let alloc1 = allocate_from_free_list(&mut mmap, &mut header).unwrap();
         assert_eq!(alloc1, 4);
 

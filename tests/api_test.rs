@@ -573,6 +573,262 @@ fn test_ffi_graph_query_and_delete() {
 }
 
 // ============================================================================
+// 测试：v0.51.1 记忆链路修复 — L2→L3 完整关联链路
+// ============================================================================
+
+#[test]
+fn test_ffi_l2_l3_memory_chain() {
+    let db_path = "/tmp/memhop_ffi_l2l3_chain.meh";
+    let _ = std::fs::remove_file(db_path);
+
+    unsafe {
+        let cfg = config_json(db_path);
+        let handle = memhop_open(cfg.as_ptr());
+        assert!(!handle.is_null(), "memhop_open failed");
+
+        // ---- MH-1: import("knowledge") 返回节点 ID ----
+        let import_cmd = serde_json::json!({
+            "command": "import",
+            "params": {
+                "action": "import",
+                "target_layer": "knowledge",
+                "mode": "merge",
+                "knowledge_title": "benchmark_0",
+                "data": {
+                    "Knowledge": [
+                        {
+                            "title": "Rome Day 1 - Colosseum Visit",
+                            "domain": "travel",
+                            "knowledge_type": "episodic",
+                            "text": "Visited the Colosseum on the first day. The guided tour lasted 2 hours.",
+                            "keywords": ["Rome", "Colosseum", "tour"],
+                            "source_ref": null
+                        },
+                        {
+                            "title": "Favorite Italian Dish",
+                            "domain": "food",
+                            "knowledge_type": "semantic",
+                            "text": "The favorite dish was Cacio e Pepe at Ristorante Da Enzo.",
+                            "keywords": ["food", "Italian", "Cacio e Pepe"],
+                            "source_ref": null
+                        }
+                    ]
+                }
+            }
+        });
+        let res = exec(handle, &import_cmd.to_string());
+        assert_success(&res);
+
+        let data = &res["data"];
+        // MH-1: Verify response has "id" (single) and "ids" (batch) and "node_count"
+        let first_id = data["id"].as_str().expect("MH-1: import should return 'id' field");
+        assert!(!first_id.is_empty(), "id should be non-empty hex string");
+        assert_eq!(first_id.len(), 16, "id should be 16-char hex string");
+
+        let ids = data["ids"].as_array().expect("MH-1: import should return 'ids' field");
+        assert_eq!(ids.len(), 2, "should have 2 node IDs");
+
+        let node_count = data["node_count"].as_u64().unwrap_or(0);
+        assert_eq!(node_count, 2, "node_count should be 2");
+
+        let knowledge_title = data["knowledge_title"]
+            .as_str()
+            .expect("MH-1: import should echo 'knowledge_title'");
+        assert_eq!(knowledge_title, "benchmark_0");
+
+        let l3_id_1 = ids[0].as_str().unwrap().to_string();
+        let l3_id_2 = ids[1].as_str().unwrap().to_string();
+        println!("MH-1 PASS: import returned id={}, ids={:?}, node_count={}", first_id, ids, node_count);
+
+        // ---- MH-3: query_layer("l3", "get") 批量获取节点原文 ----
+        let get_nodes_cmd = serde_json::json!({
+            "command": "query_layer",
+            "layer": "l3",
+            "action": "get",
+            "get": {
+                "ids": [l3_id_1, l3_id_2, "nonexistent_id"],
+                "include_text": true
+            },
+            "list": {}
+        });
+        let res = exec(handle, &get_nodes_cmd.to_string());
+        assert_success(&res);
+
+        let nodes = res["data"]["nodes"].as_array().expect("MH-3: should return 'nodes' array");
+        let total = res["data"]["total"].as_u64().unwrap_or(0);
+        let requested = res["data"]["requested"].as_u64().unwrap_or(0);
+        assert_eq!(total, 2, "MH-3: should return 2 nodes (missing ID skipped)");
+        assert_eq!(requested, 3, "MH-3: requested count should be 3");
+
+        for node in nodes {
+            let nid = node["id"].as_str().unwrap();
+            let title = node["title"].as_str().unwrap();
+            let text = node["text"].as_str().expect("MH-3: text field should exist when include_text=true");
+            let keywords = node["keywords"].as_array().unwrap();
+            let domain = node["domain"].as_str().unwrap();
+            let ktype = node["knowledge_type"].as_str().unwrap();
+            let importance = node["importance"].as_f64().unwrap();
+            println!("MH-3 node: id={} title='{}' domain={} type={} text='{}' keywords={:?}", nid, title, domain, ktype, &text[..text.len().min(50)], keywords);
+            assert!(!text.is_empty(), "text should not be empty");
+            assert!(importance > 0.0, "importance should be positive");
+        }
+
+        // MH-3: include_text=false should omit text field
+        let get_no_text_cmd = serde_json::json!({
+            "command": "query_layer",
+            "layer": "l3",
+            "action": "get",
+            "get": {
+                "ids": [l3_id_1],
+                "include_text": false
+            },
+            "list": {}
+        });
+        let res = exec(handle, &get_no_text_cmd.to_string());
+        assert_success(&res);
+        let nodes = res["data"]["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert!(nodes[0].get("text").is_none(), "MH-3: text should be omitted when include_text=false");
+        println!("MH-3 PASS: batch get with include_text=false omits text field");
+
+        // ---- MH-3: max 50 IDs enforcement ----
+        let many_ids: Vec<String> = (0..60).map(|i| format!("deadbeef{:012x}", i)).collect();
+        let max_cmd = serde_json::json!({
+            "command": "query_layer",
+            "layer": "l3",
+            "action": "get",
+            "get": {
+                "ids": many_ids,
+                "include_text": false
+            },
+            "list": {}
+        });
+        let res = exec(handle, &max_cmd.to_string());
+        assert_success(&res);
+        let requested = res["data"]["requested"].as_u64().unwrap_or(0);
+        assert_eq!(requested, 60, "requested should reflect original count");
+        println!("MH-3 PASS: max 50 IDs enforcement, requested={}", requested);
+
+        // ---- Create L2 topic via import ----
+        let l2_import_cmd = serde_json::json!({
+            "command": "import",
+            "params": {
+                "action": "import",
+                "target_layer": "topic",
+                "mode": "merge",
+                "data": {
+                    "Topics": [
+                        {
+                            "title": "Rome Trip 2024",
+                            "summary": "Trip to Rome",
+                            "keywords": ["rome", "trip"]
+                        }
+                    ]
+                }
+            }
+        });
+        let res = exec(handle, &l2_import_cmd.to_string());
+        assert_success(&res);
+        let l2_ids = res["data"]["ids"].as_array().expect("L2 import should return ids");
+        let l2_topic_id = l2_ids[0].as_str().unwrap().to_string();
+        println!("Created L2 topic: {}", l2_topic_id);
+
+        // ---- MH-2: update_title("topic") 支持 l3_refs 写入 ----
+        let update_title_cmd = serde_json::json!({
+            "command": "update_title",
+            "layer": "topic",
+            "params": {
+                "id": l2_topic_id,
+                "new_title": "Rome Trip 2024",
+                "l3_refs": [l3_id_1, l3_id_2]
+            }
+        });
+        let res = exec(handle, &update_title_cmd.to_string());
+        assert_success(&res);
+        let updated_fields = res["data"]["updated_fields"]
+            .as_array()
+            .expect("MH-2: should return updated_fields");
+        assert!(
+            updated_fields.iter().any(|v| v.as_str() == Some("l3_refs")),
+            "MH-2: updated_fields should include 'l3_refs'"
+        );
+        let l3_ref_count = res["data"]["l3_ref_count"].as_u64().unwrap_or(0);
+        assert_eq!(l3_ref_count, 2, "MH-2: l3_ref_count should be 2");
+        println!("MH-2 PASS: update_title(topic) with l3_refs succeeded");
+
+        // ---- MH-2: persist and verify ----
+        let res = exec(handle, r#"{"command":"sync"}"#);
+        assert_success(&res);
+
+        let res = exec(handle, r#"{"command":"close"}"#);
+        assert_success(&res);
+        memhop_close(handle);
+
+        let handle2 = memhop_open(cfg.as_ptr());
+        assert!(!handle2.is_null(), "reopen failed");
+
+        // Verify L2 topic has l3_refs after reopen
+        let get_topic_cmd = serde_json::json!({
+            "command": "query_layer",
+            "layer": "l2",
+            "action": "get",
+            "get": { "id": l2_topic_id },
+            "list": {}
+        });
+        let res = exec(handle2, &get_topic_cmd.to_string());
+        assert_success(&res);
+        let persisted_l3_refs = res["data"]["l3_refs"]
+            .as_array()
+            .expect("MH-2: l3_refs should persist after reopen");
+        assert_eq!(persisted_l3_refs.len(), 2, "MH-2: should have 2 l3_refs after reopen");
+        println!("MH-2 PASS: l3_refs persisted after close/reopen");
+
+        // ---- Full chain verification: search should discover L3 nodes ----
+        let res = exec(
+            handle2,
+            r#"{"command":"search","dialogue":"Rome trip memories","auto_create":1,"context_limit":5,"min_score":0.0}"#,
+        );
+        assert_success(&res);
+        let search_l2_id = res["data"]["contexts"][0]["id"].as_str().unwrap().to_string();
+
+        // Link the auto-created L2 to L3 nodes
+        let link_cmd = serde_json::json!({
+            "command": "update_title",
+            "layer": "topic",
+            "params": {
+                "id": search_l2_id,
+                "new_title": "Rome Trip Memories",
+                "l3_refs": [l3_id_1, l3_id_2]
+            }
+        });
+        let res = exec(handle2, &link_cmd.to_string());
+        assert_success(&res);
+
+        // Search with context_id to verify l3_refs appear in search results
+        let search_cmd = serde_json::json!({
+            "command": "search",
+            "dialogue": "Colosseum",
+            "context_id": search_l2_id,
+            "context_limit": 5,
+            "min_score": 0.0,
+            "auto_create": 0
+        });
+        let res = exec(handle2, &search_cmd.to_string());
+        assert_success(&res);
+
+        let contexts = res["data"]["contexts"].as_array().unwrap();
+        assert!(!contexts.is_empty());
+        let ctx_l3_refs = contexts[0]["l3_refs"].as_array().expect("MH-2: search result should include l3_refs");
+        assert!(!ctx_l3_refs.is_empty(), "MH-2: l3_refs in search result should not be empty");
+        println!("MH-2 PASS: search result contains l3_refs: {:?}", ctx_l3_refs);
+
+        // Cleanup
+        memhop_close(handle2);
+        let _ = std::fs::remove_file(db_path);
+    }
+}
+
+// ============================================================================
 // 测试：查询 L3 详情
 // ============================================================================
 

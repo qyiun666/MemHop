@@ -1,6 +1,7 @@
-//! Update implementation for MemHop
-//!
-//! Implements the update_memory() interface with multi-level联动 updates.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! update_memory() interface with multi-level联动 updates.
 
 use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
@@ -42,14 +43,7 @@ fn write_slot_page_header(
     mmap[offset..offset + 32].copy_from_slice(&header_bytes);
 }
 
-/// Core update implementation
-///
-/// After search_memory activates an L2 context, this interface:
-/// 1. Writes dialogue_text to L4 ArchiveSlot on disk
-/// 2. Writes action_chain to L5 ActionChainSlot on disk
-/// 3. Appends L4 archive_id to L2 archive_refs index
-/// 4. Appends summary to L2 context summary
-/// 5. Updates sparse index
+/// Core update implementation: writes L4 archive + L5 crystal, updates L2 context.
 #[allow(clippy::too_many_arguments)]
 pub fn update_memory(
     mmap: &mut MmapMut,
@@ -63,15 +57,13 @@ pub fn update_memory(
 ) -> Result<UpdateResult, MemHopError> {
     let now_ms = now_ms();
 
-    // Step 1: Find the activated L2 topic (required, not optional)
-    // NOTE: topic_id comes from format_hash(id_hash) — a hex string like "1a2b3c..."
-    // Use parse_id_to_hash to correctly reverse format_hash; hash_id would hash the hex string itself
+    // NOTE: topic_id comes from format_hash(id_hash) — a hex string.
+    // parse_id_to_hash reverses format_hash; hash_id would hash the hex string itself.
     let topic_hash = parse_id_to_hash(&request.topic_id);
     let page_ref = btree
         .search(topic_hash)
         .ok_or(MemHopError::PageNotFound(0))?;
 
-    // Step 2: Write dialogue_text to L4 ArchiveSlot on disk
     let l4_id_hash = hash_id(&format!("L4-{}-{}", topic_hash, now_ms));
     allocate_and_write_l4_archive(
         mmap,
@@ -87,7 +79,6 @@ pub fn update_memory(
     )?;
     let archive_id = format_hash(l4_id_hash);
 
-    // Step 3: Write action_chain to L5 ActionChainSlot on disk
     if let Some(ref action_chain) = request.action_chain {
         for action in action_chain {
             let crystal_id_hash = hash_id(&format!(
@@ -108,7 +99,6 @@ pub fn update_memory(
         }
     }
 
-    // Step 4: Deserialize the ContextSlot and update
     let data = &mmap[..];
     let page_id = crate::query::slot_io::decode_page_id(page_ref);
     let slot_data = crate::query::slot_io::get_slot_data(data, page_ref)
@@ -116,16 +106,13 @@ pub fn update_memory(
 
     let mut ctx = crate::slot::context::ContextSlot::deserialize_slot(slot_data)?;
 
-    // Step 5: Append L4 archive_id to L2 archive_refs index
     if !ctx.archive_refs.contains(&l4_id_hash) {
         ctx.archive_refs.push(l4_id_hash);
         ctx.archive_refs.sort();
     }
 
-    // Step 6: Update turn count
     ctx.turn_count += 1;
 
-    // Step 7: Append summary to L2 context summary
     if let Some(ref summary) = request.summary {
         match ctx.summary {
             Some(ref existing) => {
@@ -138,16 +125,13 @@ pub fn update_memory(
         ctx.updated_at = now_ms;
     }
 
-    // Step 7.5: Instant L3 distillation (optional)
     if request.instant_distill {
         let keywords = extract_keywords(&request.dialogue_text, 10);
         let mut graphs_to_link: Vec<u64> = Vec::new();
         let data: &[u8] = &mmap[..];
         for kw in &keywords {
-            // Use entity_search_nodes to get actual L3 node hashes
             let hits = sparse_index.entity_search_nodes(kw);
             for (node_hash, _l2_ids) in &hits {
-                // Find graph_id from node_hash
                 if let Some(slot_data) = btree
                     .search(*node_hash)
                     .and_then(|pr| crate::query::slot_io::get_slot_data(data, pr))
@@ -163,9 +147,7 @@ pub fn update_memory(
             }
         }
 
-        // If no existing L3 graphs were found, create new L3 knowledge nodes
         if graphs_to_link.is_empty() && !keywords.is_empty() {
-            // Create a HypergraphSlot (L3 container) for the distilled knowledge
             let distilled_id = hash_id(&format!("distilled_{}_{}", topic_hash, now_ms));
             let graph_name = format!(
                 "distilled:{}",
@@ -190,11 +172,9 @@ pub fn update_memory(
             let slot_page_id = allocate_or_extend(mmap, header, file, 500)?;
             let slot_offset = crate::query::slot_io::page_offset(slot_page_id);
 
-            // Write page header
             let page_hdr = PageHeader::new(slot_page_id, PageType::HypergraphSlot, 3, 0xFFFFFFFF);
             mmap[slot_offset..slot_offset + 32].copy_from_slice(&page_hdr.to_bytes());
 
-            // Write slot data
             let data_offset = slot_offset + 32;
             if data_offset + slot_data.len() <= mmap.len() {
                 mmap[data_offset..data_offset + slot_data.len()].copy_from_slice(&slot_data);
@@ -202,7 +182,6 @@ pub fn update_memory(
 
             btree.insert(distilled_id, (slot_page_id as u64) << 16);
 
-            // Create HypergraphNode for each keyword
             for kw in &keywords {
                 let node_hash = hash_id(&format!("distilled_node_{}_{}", distilled_id, kw));
                 let node = HypergraphNode {
@@ -230,7 +209,6 @@ pub fn update_memory(
         ctx.l3_refs.extend(graphs_to_link);
     }
 
-    // Step 8: Serialize and write back
     let serialized = ctx
         .serialize()
         .map_err(|e| MemHopError::Serialization(format!("ContextSlot serialize: {}", e)))?;
@@ -244,7 +222,6 @@ pub fn update_memory(
     }
     mmap[write_offset..write_offset + serialized.len()].copy_from_slice(&serialized);
 
-    // Step 9: Update sparse index
     if let Some(ref summary) = request.summary {
         let terms: Vec<String> = summary
             .split_whitespace()
@@ -267,7 +244,6 @@ pub fn update_memory(
     })
 }
 
-/// Allocate page and write L4 Archive
 #[allow(clippy::too_many_arguments)]
 fn allocate_and_write_l4_archive(
     mmap: &mut MmapMut,
@@ -281,11 +257,10 @@ fn allocate_and_write_l4_archive(
     file: &mut File,
     _config: &MemHopConfig,
 ) -> Result<u64, MemHopError> {
-    // Allocate new page
     let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let offset = crate::query::slot_io::slot_offset(page_id);
 
-    // Create ArchiveSlot
+
     use crate::slot::archive::ContentType;
     let archive = ArchiveSlot {
         id_hash,
@@ -297,7 +272,6 @@ fn allocate_and_write_l4_archive(
         metadata,
     };
 
-    // Serialize and write
     let data = archive
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -311,7 +285,6 @@ fn allocate_and_write_l4_archive(
     }
     mmap[offset..offset + data.len()].copy_from_slice(&data);
 
-    // Insert into B-tree
     let page_ref = (page_id as u64) << 16;
     btree.insert(id_hash, page_ref);
 
@@ -331,11 +304,10 @@ fn allocate_and_write_l5_crystal(
     file: &mut File,
     _config: &MemHopConfig,
 ) -> Result<u64, MemHopError> {
-    // Allocate new page
     let page_id = allocate_or_extend(mmap, header, file, 500)?;
     let offset = crate::query::slot_io::slot_offset(page_id);
 
-    // Create ActionChainSlot
+
     use crate::slot::action_chain::ActionChainSlot;
     let chain = ActionChainSlot {
         id_hash,
@@ -351,7 +323,6 @@ fn allocate_and_write_l5_crystal(
         version: 1,
     };
 
-    // Serialize and write
     let data = chain
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -365,7 +336,6 @@ fn allocate_and_write_l5_crystal(
     }
     mmap[offset..offset + data.len()].copy_from_slice(&data);
 
-    // Insert into B-tree
     let page_ref = (page_id as u64) << 16;
     btree.insert(id_hash, page_ref);
 

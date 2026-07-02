@@ -1,7 +1,7 @@
-//! L0 Profile Generation - Extract agent persona from topic keywords
-//!
-//! This stage analyzes the distribution of topic keywords to generate
-//! an L0 Profile representing the agent's personality and expertise areas.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Stage: L0 Profile Generation — extract agent persona from topic keyword distribution.
 
 use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
@@ -15,16 +15,7 @@ use memmap2::MmapMut;
 use std::collections::HashMap;
 use std::fs::File;
 
-/// Generate L0 profile from topic keyword distribution
-///
-/// # Arguments
-/// * `mmap` - Mutable memory-mapped file
-/// * `header` - File header for page allocation
-/// * `btree` - B-tree index for profile storage and topic lookup
-/// * `sparse_index` - Sparse index for keyword frequency analysis
-///
-/// # Returns
-/// Ok(()) on success
+/// Generate L0 profile from topic keyword distribution.
 pub fn generate_profile(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -32,27 +23,22 @@ pub fn generate_profile(
     sparse_index: &SparseIndex,
     file: &mut File,
 ) -> Result<(), MemHopError> {
-    // 1. Get top keywords from sparse index
     let top_keywords_with_freq = sparse_index.top_terms(20);
     let top_keywords: Vec<String> = top_keywords_with_freq
         .iter()
         .map(|(term, _)| term.clone())
         .collect();
 
-    // 2. Count total engrams
     let total_engrams = btree.len();
 
-    // 3. Generate profile from keyword distribution
     let now_ms = get_current_timestamp();
 
-    // Build preferences from top keywords
     let mut preferences = HashMap::new();
     preferences.insert("top_keywords".to_string(), top_keywords.join(","));
     preferences.insert("total_engrams".to_string(), total_engrams.to_string());
 
     let profile_id_hash = hash_id("profile");
 
-    // 4. Check if profile already exists in B-tree
     let existing_profile = if let Some(page_ref) = btree.search(profile_id_hash) {
         let page_id = (page_ref >> 16) as u32;
         let offset = (page_id as usize) * PAGE_SIZE + 32;
@@ -66,7 +52,7 @@ pub fn generate_profile(
     };
 
     let (page_id, profile_slot) = if let Some(mut existing) = existing_profile {
-        // Profile exists — only update personality and preferences (preserve name/role/worldview and habit fields)
+        // Only update personality and preferences; preserve name/role/worldview and habit fields
         let pid = (btree.search(profile_id_hash).unwrap() >> 16) as u32;
         existing.personality = top_keywords
             .iter()
@@ -80,7 +66,6 @@ pub fn generate_profile(
         // NOTE: lexicon, style_traits, emotion_patterns are preserved (updated by habit_distill_stage)
         (pid, existing)
     } else {
-        // Profile doesn't exist — create new with defaults
         let pid = allocate_or_extend(mmap, header, file, 500)?;
         let slot = ProfileSlot {
             id_hash: profile_id_hash,
@@ -104,14 +89,13 @@ pub fn generate_profile(
         (pid, slot)
     };
 
-    // 5. Serialize and write ProfileSlot to page
     let data = profile_slot
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
     let offset = (page_id as usize) * PAGE_SIZE;
 
-    // Write page header (always write for new pages, update for existing)
+    // Always write page header for new pages, update for existing
     let page_header = PageHeader {
         page_id,
         page_type: PageType::Profile.to_u16(),
@@ -135,7 +119,7 @@ pub fn generate_profile(
     }
     mmap[data_offset..data_offset + data.len()].copy_from_slice(&data);
 
-    // 6. Insert into B-tree so l0_crud.rs can find it
+    // Insert into B-tree so l0_crud.rs can find it
     let page_ref = (page_id as u64) << 16;
     btree.insert(profile_id_hash, page_ref);
 
@@ -149,12 +133,9 @@ mod tests {
 
     #[test]
     fn test_generate_profile_empty() {
-        // Test returns Ok when btree is empty (no keywords to extract)
-        // With empty free_list, allocate_from_free_list will fail, which is expected
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let path = temp_file.path();
 
-        // Create a file large enough for 500 pages (like MemHop::open creates)
         let mut file = std::fs::File::create(path).unwrap();
         file.write_all(&vec![0u8; 4096 * 500]).unwrap();
         drop(file);
@@ -167,7 +148,6 @@ mod tests {
 
         let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
         let mut header = crate::file::header::FileHeader::new(768);
-        // Initialize free list with some pages
         crate::file::free_list::init_free_list(&mut header).unwrap();
         for page_id in (18..500).rev() {
             crate::file::free_list::free_page(&mut mmap, &mut header, page_id).unwrap();
@@ -178,7 +158,6 @@ mod tests {
         let sparse_index = SparseIndex::new();
         let result = generate_profile(&mut mmap, &mut header, &mut btree, &sparse_index, &mut file);
         assert!(result.is_ok());
-        // Verify profile was stored in B-tree
         assert!(btree.search(hash_id("profile")).is_some());
     }
 }

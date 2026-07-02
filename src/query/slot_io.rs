@@ -1,10 +1,10 @@
-// Slot I/O Helper Functions
-//
-// Provides common utilities to eliminate code duplication in slot read/write operations.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+// Slot I/O helpers for page/slot offset calculation and data access.
 
 use crate::util::PAGE_SIZE;
 
-/// Decode page reference to page ID
 #[inline]
 pub fn decode_page_id(page_ref: u64) -> u32 {
     (page_ref >> 16) as u32
@@ -22,8 +22,6 @@ pub fn slot_offset(page_id: u32) -> usize {
     (page_id as usize) * PAGE_SIZE + 32
 }
 
-/// Read slot data from mmap at given page reference
-/// Returns the byte slice containing the serialized slot data
 #[inline]
 pub fn get_slot_data(mmap: &[u8], page_ref: u64) -> Option<&[u8]> {
     let page_id = decode_page_id(page_ref);

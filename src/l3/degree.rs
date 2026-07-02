@@ -1,23 +1,8 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! L3 Degree Tracker — incremental node degree tracking for isolated node detection.
-//!
-//! # Architecture
-//!
-//! `DegreeTracker` is an in-memory structure maintained on `MemHop`. It
-//! incrementally tracks how many hyperedges reference each node, enabling
-//! O(V) queries for isolated (degree = 0) or weakly-connected nodes.
-//!
-//! ## Write path
-//! Every `add_node` / `add_edge` / `delete_node` / `delete_edge` call updates
-//! the tracker via lightweight O(1) per-node hook methods.
-//!
-//! ## Read path
-//! `detect_isolated()` checks the dirty flag first. If dirty (e.g. after a
-//! `dream` pipeline run that bypassed the hooks), it performs a full BTree scan
-//! to rebuild the degree index before answering the query.
-//!
-//! ## Cold start
-//! When the tracker is newly created, all graphs are implicitly dirty. The
-//! first call to `detect_isolated()` on a graph triggers a full scan rebuild.
+//! Write-path hooks are O(1); dirty-flag triggers full BTree scan rebuild on next query.
 
 use crate::index::btree::BTreeIndex;
 use crate::query::slot_io::get_slot_data;
@@ -204,7 +189,6 @@ pub fn full_scan_degrees(
     let data: &[u8] = &mmap[..];
     let mut degrees: HashMap<u64, u32> = HashMap::new();
 
-    // Pass 1: count edge references
     for (&_id, &page_ref) in btree.iter() {
         if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
             continue;
@@ -221,7 +205,6 @@ pub fn full_scan_degrees(
         }
     }
 
-    // Pass 2: register all nodes (including those with 0 edges)
     for (&_id, &page_ref) in btree.iter() {
         if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
             continue;
@@ -244,10 +227,7 @@ pub fn full_scan_degrees(
 
 /// Detect isolated (or low-degree) nodes in an L3 graph.
 ///
-/// # Flow
-/// 1. If the tracker is dirty for `graph_id`, trigger a full-scan rebuild.
-/// 2. Query the tracker for nodes whose degree ≤ `threshold`.
-/// 3. Load node details (title, type) from the store.
+/// Dirty-graph triggers full-scan rebuild, then reports nodes with degree ≤ threshold.
 ///
 /// # Arguments
 /// * `threshold` — maximum degree to report. 0 = strictly isolated.
@@ -260,7 +240,6 @@ pub fn detect_isolated(
 ) -> Result<IsolatedResult, MemHopError> {
     let data: &[u8] = &mmap[..];
 
-    // Cold-start or stale: rebuild from scratch
     if tracker.is_dirty(graph_id) || !tracker.per_graph.contains_key(&graph_id) {
         let degrees = full_scan_degrees(mmap, btree, graph_id);
         tracker.per_graph.insert(graph_id, degrees);

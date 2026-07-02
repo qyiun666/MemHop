@@ -1,7 +1,7 @@
-//! L3 Adjacency Cache
-//!
-//! Provides caching for graph adjacency lists to avoid repeated BTree scans
-//! during graph_query operations.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! L3 Adjacency Cache — cache graph adjacency lists to avoid repeated BTree scans.
 
 use crate::slot::hypergraph::{GraphEdgeKind, HypergraphEdge};
 use std::collections::{HashMap, HashSet};

@@ -1,8 +1,7 @@
-//! FFI protocol types — JSON-in JSON-out command protocol for C ABI
-//!
-//! Defines 13 commands that map to all API.md interfaces.
-//! Interfaces 5-12 are merged into `query_layer`.
-//! Interfaces 13-16 are merged into `update_title`.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! FFI protocol types — 13 serde-tagged commands mapping to API.md interfaces.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -121,6 +120,16 @@ pub enum FfiCommand {
 #[derive(Debug, Default, Deserialize)]
 pub struct QueryGetParams {
     pub id: Option<String>,
+    /// Batch IDs for L3 node retrieval
+    #[serde(default)]
+    pub ids: Option<Vec<String>>,
+    /// Whether to include full text content (default: true)
+    #[serde(default = "default_include_text")]
+    pub include_text: bool,
+}
+
+fn default_include_text() -> bool {
+    true
 }
 
 /// List parameters for query_layer — all fields optional
@@ -159,6 +168,14 @@ pub struct UpdateTitleParams {
     // For L2/L3/L5
     pub id: Option<String>,
     pub new_title: Option<String>,
+
+    // For L2: L3 knowledge node references to associate with this topic
+    #[serde(default)]
+    pub l3_refs: Option<Vec<String>>,
+
+    // Override layer for dispatch (e.g. "topic" → "l2")
+    #[serde(default)]
+    pub layer: Option<String>,
 
     // For L0 (profile update)
     pub name: Option<String>,

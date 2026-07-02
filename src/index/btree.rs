@@ -1,10 +1,8 @@
-// B-tree index module (v0.45.0+: backed by an in-memory HashMap with Linear
-// Hash durable layout).
-//
-// The public name `BTreeIndex` and its API are preserved to avoid churn in
-// callers.  Internally the index uses a `HashMap<u64, u64>` for O(1) lookups
-// and a classic Linear Hash split policy to produce a multi-page bucket layout
-// on disk, removing the previous ~254-entry single-page limit.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+// `BTreeIndex` uses HashMap + Linear Hash internally but keeps the old API name.
+// Multi-page bucket layout on disk removes the previous ~254-entry limit.
 use std::collections::HashMap;
 
 use crate::util::PAGE_SIZE;
@@ -30,12 +28,8 @@ const LOAD_FACTOR: f32 = 0.75;
 /// Sentinel value indicating no next page in an overflow chain.
 pub const EMPTY_PAGE: u32 = 0xFFFFFFFF;
 
-/// Page-oriented serialization output for the Linear Hash index.
-///
 /// `buckets[bucket_index]` is the chain of page data blobs for that bucket.
-/// The first page in each chain is the primary bucket page; subsequent pages
-/// are overflow pages.  The caller is responsible for writing the 32-byte file
-/// page headers and linking overflow pages via `PageHeader.next_page`.
+/// Caller writes 32-byte file page headers and links overflow via `PageHeader.next_page`.
 #[derive(Debug, Clone)]
 pub struct BTreePageData {
     pub bucket_count: u32,
@@ -43,23 +37,17 @@ pub struct BTreePageData {
     pub buckets: Vec<Vec<Vec<u8>>>,
 }
 
-/// Linear Hash backed index.
-///
-/// Keeps the `BTreeIndex` name and public API from earlier versions for
-/// minimal caller churn.  Internally it uses a `HashMap` for O(1) lookups
+/// Keeps the `BTreeIndex` API; internally uses `HashMap` for O(1) lookups
 /// and a Linear Hash layout for durable multi-page storage.
 #[derive(Debug, Clone)]
 pub struct BTreeIndex {
-    /// In-memory index mapping id_hash to page reference.
     map: HashMap<u64, u64>,
-    /// Current number of hash buckets (total = base + split_pointer).
     bucket_count: u32,
     /// Next bucket to split when the load factor rises.
     split_pointer: u32,
 }
 
 impl BTreeIndex {
-    /// Create a new empty BTreeIndex.
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
@@ -68,107 +56,79 @@ impl BTreeIndex {
         }
     }
 
-    /// Insert a key-value pair into the index.
-    ///
-    /// key: id_hash of the document/vector
-    /// value: page_ref (page_id or other reference)
     pub fn insert(&mut self, key: u64, value: u64) {
         self.map.insert(key, value);
     }
 
-    /// Search for a value by key.
-    /// Returns Some(page_ref) if found, None otherwise.
     pub fn search(&self, key: u64) -> Option<u64> {
         self.map.get(&key).copied()
     }
 
-    /// Delete a key-value pair from the index.
-    /// Returns the old value if the key existed.
     pub fn delete(&mut self, key: u64) -> Option<u64> {
         self.map.remove(&key)
     }
 
-    /// Remove a key-value pair from the index (alias for delete).
-    /// Returns the old value if the key existed.
     pub fn remove(&mut self, key: u64) -> Option<u64> {
         self.delete(key)
     }
 
-    /// Check if the index contains a key.
     pub fn contains_key(&self, key: u64) -> bool {
         self.map.contains_key(&key)
     }
 
-    /// Get the number of entries in the index.
     pub fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Check if the index is empty.
     pub fn is_empty(&self) -> bool {
         self.map.is_empty()
     }
 
-    /// Clear all entries from the index.
     pub fn clear(&mut self) {
         self.map.clear();
     }
 
-    /// Iterate over all entries in sorted key order (BTreeMap-compatible).
+    /// Iterates in sorted key order for BTreeMap compatibility.
     pub fn iter(&self) -> std::vec::IntoIter<(&u64, &u64)> {
         let mut items: Vec<(&u64, &u64)> = self.map.iter().collect();
         items.sort_by_key(|(k, _)| *k);
         items.into_iter()
     }
 
-    /// Get the first entry (minimum key).
     pub fn first(&self) -> Option<(&u64, &u64)> {
         self.iter().next()
     }
 
-    /// Get the last entry (maximum key).
     pub fn last(&self) -> Option<(&u64, &u64)> {
         self.iter().next_back()
     }
 
-    /// Range query: get all entries with keys in [start, end).
+    /// Range query: keys in [start, end).
     pub fn range(&self, start: u64, end: u64) -> impl Iterator<Item = (&u64, &u64)> {
         self.iter().filter(move |(k, _)| **k >= start && **k < end)
     }
 
-    /// Find the smallest key greater than or equal to the given key.
+    /// Smallest key >= given key.
     pub fn lower_bound(&self, key: u64) -> Option<(&u64, &u64)> {
         self.iter().find(|(k, _)| **k >= key)
     }
 
-    /// Find the largest key less than the given key.
+    /// Largest key < given key.
     pub fn upper_bound(&self, key: u64) -> Option<(&u64, &u64)> {
         self.iter().rev().find(|(k, _)| **k < key)
     }
 
-    /// Current number of hash buckets.
     pub fn bucket_count(&self) -> u32 {
         self.bucket_count
     }
 
-    /// Current Linear Hash split pointer.
     pub fn split_pointer(&self) -> u32 {
         self.split_pointer
     }
 
-    /// Serialize the index to a flat byte stream.
-    ///
-    /// The format is self-describing and includes all bucket/overflow pages so
-    /// that `deserialize` can fully reconstruct the index:
-    ///
-    /// [magic: u32]
-    /// [bucket_count: u32]
-    /// [split_pointer: u32]
-    /// for each bucket:
-    ///     [page_count: u16]
-    ///     for each page in the bucket chain:
-    ///         [page_len: u16]
-    ///         [page_data: u8 * page_len]
+    /// Self-describing format:
+    /// [magic: u32][bucket_count: u32][split_pointer: u32]
+    /// per bucket: [page_count: u16] per page: [page_len: u16][page_data]
     pub fn serialize(&self) -> Result<Vec<u8>, String> {
         let page_data = self.serialize_to_pages()?;
         let mut bytes = Vec::new();
@@ -188,10 +148,7 @@ impl BTreeIndex {
         Ok(bytes)
     }
 
-    /// Deserialize the index from a flat byte stream.
-    ///
-    /// Supports both the new Linear Hash format and the legacy bincode format
-    /// used by versions prior to v0.45.0.
+    /// Supports both the new Linear Hash format and legacy bincode (< v0.45.0).
     pub fn deserialize(data: &[u8]) -> Result<Self, String> {
         if data.len() >= 12 {
             let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
@@ -202,12 +159,8 @@ impl BTreeIndex {
         Self::deserialize_legacy(data)
     }
 
-    /// Serialize the index into bucket-oriented page data.
-    ///
-    /// Each bucket is stored as a chain of one or more pages.  The returned
-    /// `BTreePageData` contains only the page payloads (the 4064-byte data
-    /// regions); callers are responsible for writing file page headers and
-    /// linking overflow pages via `PageHeader.next_page`.
+    /// Each bucket is a chain of pages (4064-byte data regions).
+    /// Caller writes file page headers and links overflow via `PageHeader.next_page`.
     pub fn serialize_to_pages(&self) -> Result<BTreePageData, String> {
         let (buckets, bucket_count, split_pointer) = self.build_buckets();
         Ok(BTreePageData {
@@ -217,7 +170,6 @@ impl BTreeIndex {
         })
     }
 
-    /// Deserialize from bucket-oriented page data.
     pub fn deserialize_from_pages(
         buckets: &[Vec<Vec<u8>>],
         bucket_count: u32,
@@ -265,12 +217,7 @@ impl BTreeIndex {
         })
     }
 
-    /// Determine the bucket index for a key under the current Linear Hash
-    /// parameters.
-    ///
-    /// `base` is the number of buckets at the previous level and
-    /// `split_pointer` is the next bucket to split.  The total number of
-    /// buckets is `base + split_pointer`.
+    /// `base` = buckets at previous level, `split_pointer` = next bucket to split.
     fn bucket_for_key(key: u64, base: u32, split_pointer: u32) -> u32 {
         let mut bucket = key % base as u64;
         if (bucket as u32) < split_pointer {
@@ -279,11 +226,7 @@ impl BTreeIndex {
         bucket as u32
     }
 
-    /// Build bucket page chains using Linear Hashing.
-    ///
-    /// The number of buckets is sized so that the overall load factor is
-    /// around `LOAD_FACTOR`.  Buckets that still exceed a single page due to
-    /// skewed key distributions are stored as a chain of overflow pages.
+    /// Buckets sized for ~LOAD_FACTOR; overflow pages handle skewed distributions.
     fn build_buckets(&self) -> (Vec<Vec<Vec<u8>>>, u32, u32) {
         let entries: Vec<(u64, u64)> = self.map.iter().map(|(k, v)| (*k, *v)).collect();
 
@@ -300,7 +243,6 @@ impl BTreeIndex {
         let mut base = 2u32;
         let mut split_pointer = 0u32;
 
-        // Grow the Linear Hash table until we have at least target_buckets.
         while base + split_pointer < target_buckets {
             split_pointer += 1;
             if split_pointer == base {
@@ -330,7 +272,6 @@ impl BTreeIndex {
         (page_buckets, total_buckets, split_pointer)
     }
 
-    /// Encode a chunk of bucket entries into a page payload.
     fn encode_bucket_page(entries: &[(u64, u64)]) -> Vec<u8> {
         let mut page = Vec::with_capacity(PAGE_DATA_SIZE);
         page.extend_from_slice(&(entries.len() as u16).to_le_bytes());
@@ -342,7 +283,6 @@ impl BTreeIndex {
         page
     }
 
-    /// Deserialize the new Linear Hash flat byte format.
     fn deserialize_new(data: &[u8]) -> Result<Self, String> {
         if data.len() < 12 {
             return Err("New-format data too short".to_string());
@@ -378,8 +318,7 @@ impl BTreeIndex {
         Self::deserialize_from_pages(&buckets, bucket_count, split_pointer)
     }
 
-    /// Deserialize the legacy single-page bincode format produced by
-    /// `BTreeIndex { map: BTreeMap<u64, u64> }` in earlier versions.
+    /// Legacy single-page bincode format from `BTreeMap<u64, u64>` (< v0.45.0).
     fn deserialize_legacy(data: &[u8]) -> Result<Self, String> {
         if data.len() < 8 {
             return Err("Legacy data too short".to_string());
@@ -495,12 +434,10 @@ mod tests {
     fn test_sorted_order() {
         let mut index = BTreeIndex::new();
 
-        // Insert in random order
         index.insert(300, 3);
         index.insert(100, 1);
         index.insert(200, 2);
 
-        // Iteration should be in sorted order
         let keys: Vec<&u64> = index.iter().map(|(k, _)| k).collect();
         assert_eq!(keys, vec![&100, &200, &300]);
     }
@@ -525,7 +462,6 @@ mod tests {
             index.insert(i * 10, i);
         }
 
-        // Range [20, 60) should include 20, 30, 40, 50
         let results: Vec<(&u64, &u64)> = index.range(20, 60).collect();
         assert_eq!(results.len(), 4);
         assert_eq!(results[0], (&20, &2));
@@ -542,13 +478,8 @@ mod tests {
         index.insert(20, 2);
         index.insert(30, 3);
 
-        // Exact match
         assert_eq!(index.lower_bound(20), Some((&20, &2)));
-
-        // Between keys
         assert_eq!(index.lower_bound(25), Some((&30, &3)));
-
-        // Beyond max
         assert_eq!(index.lower_bound(100), None);
     }
 
@@ -560,11 +491,8 @@ mod tests {
         index.insert(20, 2);
         index.insert(30, 3);
 
-        // Should return largest key < given key
         assert_eq!(index.upper_bound(25), Some((&20, &2)));
         assert_eq!(index.upper_bound(20), Some((&10, &1)));
-
-        // Below min
         assert_eq!(index.upper_bound(5), None);
     }
 
@@ -572,19 +500,15 @@ mod tests {
     fn test_large_dataset() {
         let mut index = BTreeIndex::new();
 
-        // Insert 1000 entries
         for i in 0..1000 {
             index.insert(i, i * 10);
         }
 
         assert_eq!(index.len(), 1000);
-
-        // Verify some entries
         assert_eq!(index.search(0), Some(0));
         assert_eq!(index.search(500), Some(5000));
         assert_eq!(index.search(999), Some(9990));
 
-        // Verify sorted order
         let mut prev_key = 0u64;
         for (i, (key, _)) in index.iter().enumerate() {
             if i > 0 {
@@ -598,18 +522,15 @@ mod tests {
     fn test_edge_cases() {
         let mut index = BTreeIndex::new();
 
-        // Empty index operations
         assert_eq!(index.search(0), None);
         assert_eq!(index.delete(0), None);
         assert_eq!(index.first(), None);
         assert_eq!(index.last(), None);
 
-        // Single element
         index.insert(42, 100);
         assert_eq!(index.first(), Some((&42, &100)));
         assert_eq!(index.last(), Some((&42, &100)));
 
-        // u64::MAX edge case
         index.insert(u64::MAX, 999);
         assert_eq!(index.search(u64::MAX), Some(999));
         assert_eq!(index.last(), Some((&u64::MAX, &999)));
@@ -646,7 +567,6 @@ mod tests {
     fn test_serialize_deserialize_large_dataset() {
         let mut index = BTreeIndex::new();
 
-        // Insert 1000 entries
         for i in 0..1000 {
             index.insert(i, i * 10);
         }
@@ -670,13 +590,11 @@ mod tests {
 
         assert_eq!(index.len(), 3);
 
-        // Remove existing key
         let removed = index.remove(200);
         assert_eq!(removed, Some(2));
         assert_eq!(index.len(), 2);
         assert_eq!(index.search(200), None);
 
-        // Remove non-existing key
         let removed = index.remove(999);
         assert_eq!(removed, None);
         assert_eq!(index.len(), 2);
@@ -686,7 +604,6 @@ mod tests {
     fn test_serialize_to_pages_multi_bucket() {
         let mut index = BTreeIndex::new();
 
-        // Insert enough entries to force multiple buckets.
         for i in 0..1000 {
             index.insert(i, i * 10);
         }
@@ -698,7 +615,6 @@ mod tests {
         let total_pages: usize = page_data.buckets.iter().map(|b| b.len()).sum();
         assert!(total_pages >= 1);
 
-        // Verify roundtrip through deserialize_from_pages.
         let deserialized = BTreeIndex::deserialize_from_pages(
             &page_data.buckets,
             page_data.bucket_count,
@@ -715,9 +631,7 @@ mod tests {
     fn test_serialize_to_pages_overflow_chain() {
         let mut index = BTreeIndex::new();
 
-        // Insert entries whose keys are all multiples of 2^60.  Because the
-        // Linear Hash base is always a power of two, every key hashes to
-        // bucket 0, forcing a chain of overflow pages.
+        // All keys hash to bucket 0 (multiples of 2^60), forcing overflow chain.
         let step = 8u64;
         for i in 0..1000 {
             index.insert(i * step, i);
@@ -744,7 +658,7 @@ mod tests {
 
     #[test]
     fn test_legacy_deserialization() {
-        // Legacy format: u64 length followed by key/value pairs.
+        // Legacy: u64 length + key/value pairs.
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&3u64.to_le_bytes());
         bytes.extend_from_slice(&100u64.to_le_bytes());

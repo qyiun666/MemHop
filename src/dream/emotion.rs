@@ -1,20 +1,20 @@
-// Emotion system for v0.33 - valence × arousal → emotion_type inference
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 /// Emotion type enumeration based on valence and arousal
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum EmotionType {
-    Joy = 0,      // valence > 0.3, arousal > 0.5
-    Sadness = 1,  // valence < -0.3, arousal < 0.3
-    Anger = 2,    // valence < -0.3, arousal > 0.5
-    Fear = 3,     // valence < -0.2, arousal > 0.7
-    Surprise = 4, // arousal > 0.8
-    Disgust = 5,  // valence < -0.4
-    Neutral = 6,  // 其他
+    Joy = 0,
+    Sadness = 1,
+    Anger = 2,
+    Fear = 3,
+    Surprise = 4,
+    Disgust = 5,
+    Neutral = 6,
 }
 
 impl EmotionType {
-    /// Convert from u8 to EmotionType
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => EmotionType::Joy,
@@ -37,17 +37,15 @@ impl EmotionType {
 /// # Returns
 /// EmotionType based on the combination of valence and arousal
 pub fn infer_emotion(valence: f64, arousal: f64) -> EmotionType {
-    // Priority-based evaluation (Surprise has highest priority)
+    // Surprise has highest priority — extreme arousal overrides valence
     if arousal > 0.8 {
         return EmotionType::Surprise;
     }
 
-    // Check positive emotions first
     if valence > 0.3 && arousal > 0.5 {
         return EmotionType::Joy;
     }
 
-    // Check negative emotions based on valence and arousal
     if valence < -0.3 {
         if arousal < 0.3 {
             return EmotionType::Sadness;
@@ -56,12 +54,10 @@ pub fn infer_emotion(valence: f64, arousal: f64) -> EmotionType {
         }
     }
 
-    // Fear: moderate negative valence with high arousal
     if valence < -0.2 && arousal > 0.7 {
         return EmotionType::Fear;
     }
 
-    // Disgust: strong negative valence
     if valence < -0.4 {
         return EmotionType::Disgust;
     }
@@ -80,18 +76,9 @@ pub fn calculate_emotion_intensity(valence: f64, arousal: f64) -> f64 {
 ///
 /// Emotional memories decay slower. The boost reduces the decay lambda,
 /// making high-intensity emotions persist longer.
-///
-/// # Arguments
-/// * `base_lambda` - Base decay rate
-/// * `valence` - Valence value
-/// * `arousal` - Arousal value
-///
-/// # Returns
-/// Adjusted decay lambda (lower = slower decay)
 pub fn apply_emotional_boost(base_lambda: f32, valence: f64, arousal: f64) -> f32 {
     let intensity = calculate_emotion_intensity(valence, arousal);
     let boost = (intensity * 2.0) as f32;
-    // Emotional memories decay slower (lambda decreases)
     base_lambda - boost
 }
 

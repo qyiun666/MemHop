@@ -1,17 +1,8 @@
-//! L3 Hypergraph Engine
-//!
-//! Provides storage, indexing, and query capabilities for L3 hypergraph nodes and edges.
-//!
-//! # Architecture
-//!
-//! ```text
-//! HypergraphSlot (container metadata, stored in BTreeIndex)
-//!   ├─ HypergraphNode (entity/concept/event, stored per-page in BTreeIndex)
-//!   └─ HypergraphEdge (hyperedge connecting ≥2 nodes, stored per-page in BTreeIndex)
-//! ```
-//!
-//! All nodes and edges are registered in the global BTreeIndex using their own id_hash.
-//! The `graph_id` field on each node/edge links them to their parent HypergraphSlot.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! L3 Hypergraph Engine — storage, indexing, and query for L3 hypergraph nodes/edges.
+//! Nodes/edges link to parent HypergraphSlot via graph_id; all registered in global BTreeIndex.
 
 pub mod cache;
 pub mod community;

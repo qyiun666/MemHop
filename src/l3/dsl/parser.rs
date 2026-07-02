@@ -1,3 +1,6 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! pest-based parser for the L3 hypergraph query DSL.
 //!
 //! Translates a query string into a typed `Query` AST via a PEG grammar.

@@ -1,4 +1,6 @@
-// Page management module
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::util::{PageType, PAGE_SIZE};
 use crate::{MemHopError, Result};
 #[cfg(test)]
@@ -6,7 +8,6 @@ use memmap2::Mmap;
 use memmap2::MmapMut;
 use std::fs::File;
 
-/// Page header structure (32 bytes, #[repr(C)])
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub struct PageHeader {
@@ -21,13 +22,12 @@ pub struct PageHeader {
 }
 
 impl PageHeader {
-    /// Create a new PageHeader
     pub fn new(page_id: u32, page_type: PageType, layer_id: u16, next_page_id: u32) -> Self {
         Self {
             page_id,
             page_type: page_type.to_u16(),
             slot_count: 0,
-            free_bytes: (PAGE_SIZE - 32) as u16, // Total data space
+            free_bytes: (PAGE_SIZE - 32) as u16,
             layer_id,
             next_page: next_page_id,
             prev_page: 0xFFFFFFFF, // No previous page
@@ -35,7 +35,6 @@ impl PageHeader {
         }
     }
 
-    /// Serialize to bytes (Little-Endian)
     pub fn to_bytes(&self) -> [u8; 32] {
         let mut bytes = [0u8; 32];
 
@@ -51,7 +50,6 @@ impl PageHeader {
         bytes
     }
 
-    /// Deserialize from bytes (Little-Endian)
     pub fn from_bytes(bytes: &[u8; 32]) -> Result<Self> {
         let page_id = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         let page_type = u16::from_le_bytes([bytes[4], bytes[5]]);
@@ -76,11 +74,7 @@ impl PageHeader {
     }
 }
 
-/// Allocate a new page from the free list, write page header, return page_id
-///
-/// This is the primary page allocation API for dream stages and other modules
-/// that need to allocate pages with a specific PageType and layer_id.
-/// FileFull 时自动扩展 500 页后重试。
+/// Allocate a page from free list; auto-extend by 500 pages on FileFull.
 pub fn allocate_page(
     mmap: &mut MmapMut,
     header: &mut crate::file::header::FileHeader,
@@ -89,12 +83,10 @@ pub fn allocate_page(
     next_page_id: u32,
     file: &mut File,
 ) -> Result<u32> {
-    // Use free list allocation (reuses freed pages first), auto-extend on FileFull
     let new_page_id = crate::file::free_list::allocate_or_extend(mmap, header, file, 500)?;
 
     let page_offset = (new_page_id as usize) * PAGE_SIZE;
 
-    // Safety check: ensure page is within mmap bounds
     if page_offset + PAGE_SIZE > mmap.len() {
         return Err(MemHopError::Io(std::io::Error::other(format!(
             "Allocated page {} out of mmap bounds (size: {})",
@@ -103,10 +95,8 @@ pub fn allocate_page(
         ))));
     }
 
-    // Zero the page to clear stale data
     mmap[page_offset..page_offset + PAGE_SIZE].fill(0);
 
-    // Write page header
     let page_header = PageHeader::new(new_page_id, page_type, layer_id, next_page_id);
     let header_bytes = page_header.to_bytes();
     mmap[page_offset..page_offset + 32].copy_from_slice(&header_bytes);
@@ -114,8 +104,6 @@ pub fn allocate_page(
     Ok(new_page_id)
 }
 
-/// Read page header from mmap
-///
 /// Accepts any type that dereferences to a byte slice so both `&Mmap` and
 /// `&MmapMut` callers can use it without extra coercion.
 pub fn read_page_header(mmap: &[u8], page_id: u32) -> Result<PageHeader> {
@@ -131,7 +119,6 @@ pub fn read_page_header(mmap: &[u8], page_id: u32) -> Result<PageHeader> {
     PageHeader::from_bytes(&header_bytes)
 }
 
-/// Write page header to mmap
 pub fn write_page_header(mmap: &mut MmapMut, page_id: u32, header: &PageHeader) -> Result<()> {
     let offset = (page_id as usize) * PAGE_SIZE;
 
@@ -145,8 +132,6 @@ pub fn write_page_header(mmap: &mut MmapMut, page_id: u32, header: &PageHeader) 
     Ok(())
 }
 
-/// Read page data (skip 32-byte header)
-///
 /// Accepts any type that dereferences to a byte slice so both `&Mmap` and
 /// `&MmapMut` callers can use it without extra coercion.
 pub fn read_page_data(mmap: &[u8], page_id: u32) -> Result<&[u8]> {
@@ -156,11 +141,9 @@ pub fn read_page_data(mmap: &[u8], page_id: u32) -> Result<&[u8]> {
         return Err(MemHopError::PageNotFound(page_id));
     }
 
-    // Skip 32-byte header
     Ok(&mmap[offset + 32..offset + PAGE_SIZE])
 }
 
-/// Write page data (skip 32-byte header)
 pub fn write_page_data(mmap: &mut MmapMut, page_id: u32, data: &[u8]) -> Result<()> {
     let offset = (page_id as usize) * PAGE_SIZE;
 
@@ -176,7 +159,6 @@ pub fn write_page_data(mmap: &mut MmapMut, page_id: u32, data: &[u8]) -> Result<
         )));
     }
 
-    // Skip 32-byte header
     let start = offset + 32;
     // Zero remaining bytes to prevent stale data residue from previous writes
     let end = offset + PAGE_SIZE;
@@ -188,12 +170,10 @@ pub fn write_page_data(mmap: &mut MmapMut, page_id: u32, data: &[u8]) -> Result<
     Ok(())
 }
 
-/// Encode page reference (page_id + slot_index) into u64
 pub fn encode_page_ref(page_id: u32, slot_index: u16) -> u64 {
     ((page_id as u64) << 16) | (slot_index as u64)
 }
 
-/// Decode page reference from u64
 pub fn decode_page_ref(page_ref: u64) -> (u32, u16) {
     let page_id = (page_ref >> 16) as u32;
     let slot_index = (page_ref & 0xFFFF) as u16;
@@ -241,13 +221,11 @@ mod tests {
 
     #[test]
     fn test_page_ref_edge_cases() {
-        // Max values
         let encoded = encode_page_ref(0xFFFFFFFF, 0xFFFF);
         let (page_id, slot_index) = decode_page_ref(encoded);
         assert_eq!(page_id, 0xFFFFFFFF);
         assert_eq!(slot_index, 0xFFFF);
 
-        // Zero values
         let encoded = encode_page_ref(0, 0);
         let (page_id, slot_index) = decode_page_ref(encoded);
         assert_eq!(page_id, 0);
@@ -263,7 +241,6 @@ mod tests {
         let temp_file = NamedTempFile::new().unwrap();
         let path = temp_file.path();
 
-        // Create file with 2 pages
         let mut file = File::options()
             .read(true)
             .write(true)
@@ -274,18 +251,15 @@ mod tests {
 
         file.set_len((PAGE_SIZE * 2) as u64).unwrap();
 
-        // Initialize first page with header
         let header = PageHeader::new(0, PageType::ContextNode, 1, 0xFFFFFFFF);
         let header_bytes = header.to_bytes();
         file.write_all(&header_bytes).unwrap();
 
-        // Write some data to page 0
         let data = b"Hello, MemHop!";
         file.seek(SeekFrom::Start(32)).unwrap();
         file.write_all(data).unwrap();
         file.flush().unwrap();
 
-        // Map and read back
         unsafe {
             let mmap = Mmap::map(&file).unwrap();
             let read_data = read_page_data(&mmap, 0).unwrap();

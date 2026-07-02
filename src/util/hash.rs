@@ -1,8 +1,9 @@
-// Hash utility module (xxHash64)
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use std::hash::Hasher;
 use twox_hash::XxHash64;
 
-/// Compute xxHash64 hash of a string ID
 pub fn hash_id(id: &str) -> u64 {
     let mut hasher = XxHash64::with_seed(0);
     hasher.write(id.as_bytes());
@@ -15,7 +16,6 @@ mod tests {
 
     #[test]
     fn test_hash_consistency() {
-        // Same input should always produce same hash
         let hash1 = hash_id("test-id-123");
         let hash2 = hash_id("test-id-123");
         assert_eq!(hash1, hash2);
@@ -23,7 +23,6 @@ mod tests {
 
     #[test]
     fn test_hash_different_inputs() {
-        // Different inputs should produce different hashes
         let hash1 = hash_id("test-id-1");
         let hash2 = hash_id("test-id-2");
         assert_ne!(hash1, hash2);
@@ -31,14 +30,12 @@ mod tests {
 
     #[test]
     fn test_hash_empty_string() {
-        // Empty string should produce a valid hash
         let hash = hash_id("");
         assert_ne!(hash, 0); // xxHash64 of empty string is not zero
     }
 
     #[test]
     fn test_hash_unicode() {
-        // Unicode strings should be hashed correctly
         let hash1 = hash_id("你好世界");
         let hash2 = hash_id("你好世界");
         assert_eq!(hash1, hash2);
@@ -47,13 +44,11 @@ mod tests {
         let hash4 = hash_id("🦀 Rust");
         assert_eq!(hash3, hash4);
 
-        // Different unicode should produce different hashes
         assert_ne!(hash1, hash3);
     }
 
     #[test]
     fn test_hash_deterministic() {
-        // Hash should be deterministic across multiple calls
         let expected_hash = 0x8e656eb0ab2d506c;
         for _ in 0..100 {
             let hash = hash_id("deterministic-test");

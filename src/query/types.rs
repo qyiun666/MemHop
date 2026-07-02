@@ -1,7 +1,7 @@
-//! Public types for MemHop external API
-//!
-//! This module defines all the data structures used in the new external API
-//! as specified in API_NEW.md.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Public types for MemHop external API.
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -117,11 +117,6 @@ pub struct L3Preview {
 }
 
 /// Search result containing multi-layer memory content
-///
-/// Retrieval flow:
-/// 1. Triple retrieval (vector + BM25 + n-gram) on L2 context titles (depth 1 & 2)
-/// 2. Via L1 hypergraph, find associated depth-1 contexts
-/// 3. Return L0 profile, L3 ID list, L4 archive references
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
     /// L0 - Agent profile
@@ -445,6 +440,28 @@ pub struct KnowledgeDetail {
     pub updated_at: i64,
 }
 
+/// Single L3 knowledge node detail (for batch get by IDs)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeNodeDetail {
+    pub id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    pub keywords: Vec<String>,
+    pub domain: String,
+    pub knowledge_type: String,
+    pub created_at: i64,
+    pub importance: f32,
+}
+
+/// Batch result for L3 knowledge node retrieval by IDs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeNodesResult {
+    pub nodes: Vec<KnowledgeNodeDetail>,
+    pub total: usize,
+    pub requested: usize,
+}
+
 /// Archive page query
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchivePageQuery {
@@ -542,8 +559,6 @@ pub struct UpdateProfileRequest {
 // Merge Topics Interface (Interface 18)
 // ============================================================================
 
-// TopicDetail is already defined above
-
 // ============================================================================
 // Import Memory Interface (Interface 19)
 // ============================================================================
@@ -616,7 +631,13 @@ pub struct KnowledgeImportItem {
 pub struct ImportResult {
     /// Import status
     pub status: ImportStatus,
-    /// Created IDs
+    /// Single node ID (non-batch, first created ID)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// All created node IDs (batch mode)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ids: Option<Vec<String>>,
+    /// Created IDs (legacy, kept for backward compatibility)
     pub created_ids: Vec<String>,
     /// Updated IDs
     pub updated_ids: Vec<String>,
@@ -624,6 +645,11 @@ pub struct ImportResult {
     pub skipped_count: usize,
     /// Error messages (if any)
     pub errors: Vec<ImportError>,
+    /// Echoed knowledge_title from import request
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub knowledge_title: Option<String>,
+    /// Number of created nodes
+    pub node_count: usize,
 }
 
 /// Import status enumeration

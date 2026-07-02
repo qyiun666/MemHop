@@ -1,4 +1,6 @@
-// Dream consolidation pipeline (prune module)
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::config::DecayConfig;
 use crate::dream::llm::LlmProvider;
 use crate::file::header::FileHeader;
@@ -77,8 +79,6 @@ pub struct CompressResult {
     pub new_summary: String,
 }
 
-/// Run dream consolidation pipeline
-/// Scans active L2 contexts and performs depth demotion + compression + crystallization
 #[allow(clippy::too_many_arguments)]
 pub fn dream_consolidation(
     mmap: &mut MmapMut,
@@ -90,7 +90,6 @@ pub fn dream_consolidation(
     file: &mut std::fs::File,
     decay_config: &DecayConfig,
 ) -> Result<DreamReport, MemHopError> {
-    // Delegate to main orchestration function
     crate::dream::dream_pipeline(mmap, header, btree, sparse_index, llm, session_topic_ids, file, decay_config)
 }
 

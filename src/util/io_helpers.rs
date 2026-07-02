@@ -1,12 +1,10 @@
-// Common I/O helpers for slot serialization/deserialization
-//
-// These functions eliminate redundant closure definitions across slot files.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
 
 use std::io::{self, Cursor, Read, Write};
 
 // --- Read helpers ---
 
-/// Read u8 from cursor
 #[inline]
 pub fn read_u8(cursor: &mut Cursor<&[u8]>) -> io::Result<u8> {
     let mut buf = [0u8; 1];
@@ -14,7 +12,6 @@ pub fn read_u8(cursor: &mut Cursor<&[u8]>) -> io::Result<u8> {
     Ok(buf[0])
 }
 
-/// Read u16 (LE) from cursor
 #[inline]
 pub fn read_u16(cursor: &mut Cursor<&[u8]>) -> io::Result<u16> {
     let mut buf = [0u8; 2];
@@ -22,7 +19,6 @@ pub fn read_u16(cursor: &mut Cursor<&[u8]>) -> io::Result<u16> {
     Ok(u16::from_le_bytes(buf))
 }
 
-/// Read u32 (LE) from cursor
 #[inline]
 pub fn read_u32(cursor: &mut Cursor<&[u8]>) -> io::Result<u32> {
     let mut buf = [0u8; 4];
@@ -30,7 +26,6 @@ pub fn read_u32(cursor: &mut Cursor<&[u8]>) -> io::Result<u32> {
     Ok(u32::from_le_bytes(buf))
 }
 
-/// Read u64 (LE) from cursor
 #[inline]
 pub fn read_u64(cursor: &mut Cursor<&[u8]>) -> io::Result<u64> {
     let mut buf = [0u8; 8];
@@ -38,7 +33,6 @@ pub fn read_u64(cursor: &mut Cursor<&[u8]>) -> io::Result<u64> {
     Ok(u64::from_le_bytes(buf))
 }
 
-/// Read i64 (LE) from cursor
 #[inline]
 pub fn read_i64(cursor: &mut Cursor<&[u8]>) -> io::Result<i64> {
     let mut buf = [0u8; 8];
@@ -46,7 +40,6 @@ pub fn read_i64(cursor: &mut Cursor<&[u8]>) -> io::Result<i64> {
     Ok(i64::from_le_bytes(buf))
 }
 
-/// Read f32 (LE) from cursor
 #[inline]
 pub fn read_f32(cursor: &mut Cursor<&[u8]>) -> io::Result<f32> {
     let mut buf = [0u8; 4];
@@ -54,9 +47,7 @@ pub fn read_f32(cursor: &mut Cursor<&[u8]>) -> io::Result<f32> {
     Ok(f32::from_le_bytes(buf))
 }
 
-/// Read length-prefixed UTF-8 string from cursor
-///
-/// Format: [u16 length][bytes]
+/// Format: `[u16 length][bytes]`
 pub fn read_string(cursor: &mut Cursor<&[u8]>) -> io::Result<String> {
     let len = read_u16(cursor)? as usize;
     let mut buf = vec![0u8; len];
@@ -64,9 +55,7 @@ pub fn read_string(cursor: &mut Cursor<&[u8]>) -> io::Result<String> {
     String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
-/// Read optional length-prefixed UTF-8 string from cursor
-///
-/// Returns None if length is 0.
+/// Returns `None` if length prefix is 0.
 pub fn read_optional_string(cursor: &mut Cursor<&[u8]>) -> io::Result<Option<String>> {
     let len = read_u16(cursor)? as usize;
     if len == 0 {
@@ -79,7 +68,6 @@ pub fn read_optional_string(cursor: &mut Cursor<&[u8]>) -> io::Result<Option<Str
     })?))
 }
 
-/// Read vector of length-prefixed strings from cursor
 pub fn read_string_vec(cursor: &mut Cursor<&[u8]>) -> io::Result<Vec<String>> {
     let count = read_u16(cursor)? as usize;
     let mut vec = Vec::with_capacity(count);
@@ -91,9 +79,7 @@ pub fn read_string_vec(cursor: &mut Cursor<&[u8]>) -> io::Result<Vec<String>> {
 
 // --- Write helpers ---
 
-/// Write length-prefixed UTF-8 string to buffer
-///
-/// Format: [u16 length][bytes]
+/// Format: `[u16 length][bytes]`
 pub fn write_string(buffer: &mut Vec<u8>, s: &str) -> io::Result<()> {
     let len = s.len() as u16;
     buffer.write_all(&len.to_le_bytes())?;
@@ -101,9 +87,7 @@ pub fn write_string(buffer: &mut Vec<u8>, s: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Write optional length-prefixed UTF-8 string to buffer
-///
-/// Writes 0 length prefix if None.
+/// Writes 0-length prefix for `None`.
 pub fn write_optional_string(buffer: &mut Vec<u8>, s: &Option<String>) -> io::Result<()> {
     match s {
         Some(s) => write_string(buffer, s),
@@ -114,7 +98,6 @@ pub fn write_optional_string(buffer: &mut Vec<u8>, s: &Option<String>) -> io::Re
     }
 }
 
-/// Write vector of length-prefixed strings to buffer
 pub fn write_string_vec(buffer: &mut Vec<u8>, vec: &[String]) -> io::Result<()> {
     let count = vec.len() as u16;
     buffer.write_all(&count.to_le_bytes())?;

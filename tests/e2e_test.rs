@@ -129,8 +129,8 @@ fn create_encoder(dim: usize) -> TestEncoder {
     match GrpcEncoder::new("http://127.0.0.1:27110", dim) {
         Ok(enc) => {
             eprintln!(
-                "[E2E] Using real gRPC encoder at {} (dim={})",
-                "http://127.0.0.1:27110", dim
+                "[E2E] Using real gRPC encoder at http://127.0.0.1:27110 (dim={})",
+                dim
             );
             TestEncoder::Grpc(Box::new(enc))
         }

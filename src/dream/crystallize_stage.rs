@@ -1,8 +1,7 @@
-//! Stage 4: L5 Crystallization - Generate procedural knowledge crystals
-//!
-//! This stage identifies repeated behavioral patterns from existing L5
-//! ActionChainSlots and crystallizes them into higher-quality action chains
-//! using LLM generation.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Stage: L5 Crystallization — generate procedural knowledge crystals from repeated patterns.
 
 use crate::dream::llm::{LlmProvider, Pattern};
 use crate::file::free_list::free_page;
@@ -16,19 +15,7 @@ use crate::MemHopError;
 use memmap2::MmapMut;
 use std::fs::File;
 
-/// Crystallize repeated patterns into L5 action chains using LLM
-///
-/// Scans existing L5 ActionChainSlots, identifies high-frequency patterns,
-/// and creates new consolidated action chains via LLM generation.
-///
-/// # Arguments
-/// * `mmap` - Mutable memory-mapped file for reading/writing memory slots
-/// * `header` - File header for page allocation and free list management
-/// * `btree` - B-tree index for crystal lookup
-/// * `llm` - LLM provider for crystal generation
-///
-/// # Returns
-/// Vector of new L5 action chain IDs created during crystallization
+/// Crystallize repeated patterns into L5 action chains using LLM.
 pub fn crystallize_patterns(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -36,7 +23,6 @@ pub fn crystallize_patterns(
     llm: &dyn LlmProvider,
     file: &mut File,
 ) -> Result<Vec<String>, MemHopError> {
-    // Step 1: Scan all existing L5 ActionChainSlots
     let mut existing_chains: Vec<ActionChainSlot> = Vec::new();
     let page_count = header.page_count;
 
@@ -61,12 +47,10 @@ pub fn crystallize_patterns(
         return Ok(vec![]);
     }
 
-    // Step 2: Sort by created_at, take most recent N (N = min(20, total))
     existing_chains.sort_by_key(|c| c.created_at);
     let n = std::cmp::min(20, existing_chains.len());
     let recent_chains = &existing_chains[existing_chains.len() - n..];
 
-    // Step 3: Collect their patterns (trigger + title as description)
     let patterns: Vec<Pattern> = recent_chains
         .iter()
         .map(|c| Pattern {
@@ -76,7 +60,6 @@ pub fn crystallize_patterns(
         })
         .collect();
 
-    // Step 4: Call LLM to generate crystals (fallback on error)
     let mut new_crystal_ids = Vec::new();
 
     for pattern in &patterns {
@@ -88,7 +71,6 @@ pub fn crystallize_patterns(
             }
         };
 
-        // Step 5: Create ActionChainSlot
         let now = chrono::Utc::now().timestamp_millis();
         let crystal_chain_id = hash_id(&format!("crystal_{}_{}", crystal_def.condition, now));
 
@@ -106,15 +88,13 @@ pub fn crystallize_patterns(
             version: 1,
         };
 
-        // Allocate page, write, update btree
-        let page_id = allocate_page(mmap, header, PageType::ActionChain, 5, 0, file)?; // L5 layer
+        let page_id = allocate_page(mmap, header, PageType::ActionChain, 5, 0, file)?;
         let serialized = chain.serialize()?;
         write_page_data(mmap, page_id, &serialized)?;
 
         let page_ref = crate::file::page::encode_page_ref(page_id, 0);
         btree.insert(crystal_chain_id, page_ref);
 
-        // Step 6: Persist each crystal step as an ActionStep
         for (i, step_def) in crystal_def.steps.iter().enumerate() {
             let step_id_hash = hash_id(&format!("step_{}_{}_{}", crystal_chain_id, i, now));
             let step = ActionStep {
@@ -142,27 +122,14 @@ pub fn crystallize_patterns(
     Ok(new_crystal_ids)
 }
 
-/// Activate a crystal by validating its quality and flipping status to Active
-///
-/// A crystal can only be activated when:
-/// - Its confidence is >= 0.5
-/// - At least one ActionStep is linked to it
-///
-/// # Arguments
-/// * `mmap` - Mutable memory-mapped file
-/// * `header` - File header
-/// * `btree` - B-tree index
-/// * `chain_id` - ID of the ActionChainSlot to activate
-///
-/// # Returns
-/// `Ok(())` if activated, `Err(MemHopError)` otherwise
+/// Activate a crystal by validating quality and flipping status to Active.
+/// Requires confidence >= 0.5 and at least one linked ActionStep.
 pub fn activate_crystal(
     mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    header: &FileHeader,
+    btree: &BTreeIndex,
     chain_id: u64,
 ) -> Result<(), MemHopError> {
-    // Locate the chain page via the index
     let page_ref = btree.search(chain_id).ok_or_else(|| {
         MemHopError::Serialization(format!("ActionChain {} not found in index", chain_id))
     })?;
@@ -193,7 +160,6 @@ pub fn activate_crystal(
         )));
     }
 
-    // Verify that at least one ActionStep belongs to this chain
     let mut step_count = 0;
     for step_page_id in 18..header.page_count {
         let step_offset = (step_page_id as usize) * PAGE_SIZE;
@@ -232,21 +198,8 @@ pub fn activate_crystal(
     Ok(())
 }
 
-/// Prune low-quality action chains during dream pipeline
-///
-/// Scans action chain pages and removes chains with low confidence and low trigger counts.
-/// This helps maintain crystal quality and prevents accumulation of ineffective rules.
-///
-/// # Arguments
-/// * `mmap` - Mutable memory-mapped file containing action chain slots
-/// * `header` - File header for free list management
-/// * `page_count` - Total number of pages in the database
-///
-/// # Returns
-/// Vector of pruned action chain IDs (hex strings)
-///
-/// # Errors
-/// Returns `MemHopError` if memory access fails
+/// Prune low-quality action chains during dream pipeline.
+/// Removes chains with low confidence (< 0.3) and low trigger counts (< 5).
 pub fn prune_low_quality_crystals(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -255,7 +208,7 @@ pub fn prune_low_quality_crystals(
 ) -> Result<Vec<String>, MemHopError> {
     let mut pruned = Vec::new();
 
-    // Scan all data pages for action chains (skip header pages 0-1 and reserved pages 2-17)
+    // Skip header pages 0-1 and reserved pages 2-17
     let start_page = 18;
     let end_page = page_count;
 
@@ -266,7 +219,6 @@ pub fn prune_low_quality_crystals(
             break;
         }
 
-        // Check page type before deserializing — only process ActionChain pages
         if let Ok(page_hdr) = read_page_header(&mmap[..], page_id) {
             if page_hdr.page_type != PageType::ActionChain as u16 {
                 continue;
@@ -279,15 +231,9 @@ pub fn prune_low_quality_crystals(
         if let Ok(chain) = ActionChainSlot::deserialize(&mmap[chain_offset..]) {
             // Low confidence + low trigger count → prune
             if chain.confidence < 0.3 && chain.trigger_count < 5 {
-                // 1. Clear page data
                 mmap[page_offset..page_offset + PAGE_SIZE].fill(0);
-
-                // 2. Remove from B-tree index
                 btree.remove(chain.id_hash);
-
-                // 3. Return to free list
                 free_page(mmap, header, page_id)?;
-
                 pruned.push(format!("{:016x}", chain.id_hash));
             }
         }
@@ -485,7 +431,6 @@ mod tests {
 
     #[test]
     fn test_crystallize_patterns_empty() {
-        // Test returns empty list when no L5 action chains exist
         let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(50);
         let llm = OpenAICompatibleLlmProvider::new(LlmConfig {
             api_url: "https://api.example.com/v1/chat/completions".to_string(),
@@ -612,7 +557,7 @@ mod tests {
         };
         write_action_step(&mut mmap, &mut header, &mut btree, step, &mut file);
 
-        activate_crystal(&mut mmap, &mut header, &mut btree, chain_id).unwrap();
+        activate_crystal(&mut mmap, &header, &btree, chain_id).unwrap();
 
         let activated = read_chain(&mmap, chain_page);
         assert_eq!(activated.status, ChainStatus::Active);
@@ -649,7 +594,7 @@ mod tests {
         };
         write_action_step(&mut mmap, &mut header, &mut btree, step, &mut file);
 
-        assert!(activate_crystal(&mut mmap, &mut header, &mut btree, chain_id).is_err());
+        assert!(activate_crystal(&mut mmap, &header, &btree, chain_id).is_err());
 
         let chain = read_chain(&mmap, chain_page);
         assert_eq!(chain.status, ChainStatus::Draft);
@@ -676,6 +621,6 @@ mod tests {
         };
         write_chain_slot(&mut mmap, &mut header, &mut btree, chain, &mut file);
 
-        assert!(activate_crystal(&mut mmap, &mut header, &mut btree, chain_id).is_err());
+        assert!(activate_crystal(&mut mmap, &header, &btree, chain_id).is_err());
     }
 }

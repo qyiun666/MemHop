@@ -1,9 +1,7 @@
-//! FFI command dispatcher — routes 16 commands to MemHop public API
-//!
-//! Key responsibilities:
-//! - `dispatch_query_layer()` — merged Interface 5-12 routing
-//! - `dispatch_update_title()` — merged Interface 13-16 routing
-//! - All other commands directly expose MemHop methods
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! FFI command dispatcher — routes JSON commands to MemHop public API.
 
 use crate::ffi::protocol::*;
 use crate::query::types::*;
@@ -64,8 +62,9 @@ pub fn dispatch(db: &mut MemHop, cmd: FfiCommand) -> Result<Value, String> {
             }))
         }
         FfiCommand::Delete { layer, id } => {
-            match layer.as_str() {
-                "l2" | "L2" | "topic" => {
+            let layer = crate::query::common::normalize_layer(&layer);
+            match layer {
+                "l2" | "L2" => {
                     let id_hash = crate::query::common::parse_id_to_hash(&id);
                     db.delete_topic(id_hash).map_err(|e| e.to_string())?;
                     Ok(serde_json::json!({"deleted": true}))
@@ -161,6 +160,13 @@ fn dispatch_query_layer(
         }
         // --- L3 Knowledge ---
         ("l3", "get") => {
+            if let Some(ref ids) = get.ids {
+                if ids.is_empty() {
+                    return Err("missing 'ids' for L3 batch get".to_string());
+                }
+                let include_text = get.include_text;
+                return to_json_value(db.get_knowledge_nodes_by_ids(ids, include_text));
+            }
             let id = get.id.as_deref().ok_or("missing 'id' for L3 get")?;
             to_json_value_or_not_found(db.get_knowledge(id), "knowledge")
         }
@@ -223,7 +229,14 @@ fn dispatch_update_title(
     layer: &str,
     params: &UpdateTitleParams,
 ) -> Result<Value, String> {
-    match layer {
+    // "topic" alias resolved to "l2" via normalize_layer
+    let effective_layer = crate::query::common::normalize_layer(layer);
+    let effective_layer = match params.layer.as_deref() {
+        Some(pl) => crate::query::common::normalize_layer(pl),
+        None => effective_layer,
+    };
+
+    match effective_layer {
         "l0" => {
             let req = UpdateProfileRequest {
                 name: params.name.clone(),
@@ -243,7 +256,22 @@ fn dispatch_update_title(
                 .new_title
                 .as_deref()
                 .ok_or("missing 'new_title' for L2")?;
-            to_json_value(db.update_topic_title(id, title.to_string()))
+            let l3_refs: Option<Vec<String>> = params.l3_refs.clone();
+            let l3_ref_count = l3_refs.as_ref().map(|v| v.len()).unwrap_or(0);
+            let result = db.update_topic_title_with_refs(id, title.to_string(), l3_refs)
+                .map_err(|e| e.to_string())?;
+            Ok(serde_json::json!({
+                "status": "ok",
+                "updated_fields": if params.l3_refs.is_some() { vec!["title", "l3_refs"] } else { vec!["title"] },
+                "l3_ref_count": l3_ref_count,
+                "id": result.id,
+                "title": result.title,
+                "depth": result.depth,
+                "archive_count": result.archive_count,
+                "turn_count": result.turn_count,
+                "is_active": result.is_active,
+                "updated_at": result.updated_at,
+            }))
         }
         "l3" => {
             let id = params.id.as_deref().ok_or("missing 'id' for L3")?;

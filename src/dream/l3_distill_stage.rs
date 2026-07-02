@@ -1,17 +1,7 @@
-//! Stage: L3 Knowledge Distillation
-//!
-//! Distills knowledge from active L2 contexts into L3 hypergraph nodes and edges
-//! using LLM-based concept extraction.
-//!
-//! # Flow
-//! 1. Collect active depth-1 L2 contexts with summaries
-//! 2. For each context, call LLM to extract concepts and relations via JSON
-//! 3. Create HypergraphSlot (if not already linked) + nodes + edges
-//! 4. Update L2 ContextSlot's l3_refs to point to the new graph
-//! 5. Return IDs of newly created nodes
-//!
-//! # Degradation
-//! LLM call failure or JSON parse failure → skip (log warning, don't block pipeline)
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Stage: L3 Knowledge Distillation — LLM-based concept extraction from active L2 contexts into L3 hypergraph.
 
 use crate::dream::llm::LlmProvider;
 use crate::file::free_list::allocate_or_extend;
@@ -35,14 +25,7 @@ use std::fs::File;
 // ============================================================================
 
 /// Distill L3 hypergraph knowledge from active L2 contexts via LLM.
-///
-/// For each active depth-1 L2 context that has a non-empty summary:
-/// 1. Call LLM to extract concepts and relations as JSON
-/// 2. Create an L3 hypergraph (or reuse existing one linked via l3_refs)
-/// 3. Add nodes and edges to the L3 graph
-///
-/// # Returns
-/// List of hex-formatted IDs for newly created nodes.
+/// Returns hex-formatted IDs of newly created nodes.
 pub fn distill_l3_knowledge(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -57,7 +40,6 @@ pub fn distill_l3_knowledge(
     let mut all_new_ids: Vec<String> = Vec::new();
 
     for &topic_id in active_topic_ids {
-        // 1. Read the context from disk
         let ctx = match read_context(mmap, btree, topic_id) {
             Some(c) => c,
             None => continue,
@@ -72,7 +54,6 @@ pub fn distill_l3_knowledge(
             _ => continue,
         };
 
-        // 2. Call LLM to distill concepts directly
         let llm_response = match llm.distill_concepts(&summary) {
             Ok(r) => r,
             Err(e) => {
@@ -84,17 +65,14 @@ pub fn distill_l3_knowledge(
             }
         };
 
-        // 3. Use the structured distillation result directly
         let (concepts, relations) = (llm_response.concepts, llm_response.relations);
 
         if concepts.is_empty() {
             continue;
         }
 
-        // 4. Determine target L3 graph ID
         let graph_id = resolve_or_create_graph(mmap, header, btree, &ctx, topic_id, now_ms, file)?;
 
-        // 5. Create nodes for each concept
         let mut concept_id_map: HashMap<String, u64> = HashMap::new();
         for concept in &concepts {
             let node_hash = hash_id(&format!("{:016x}_{}", graph_id, concept.name));
@@ -125,7 +103,6 @@ pub fn distill_l3_knowledge(
             }
         }
 
-        // 6. Create edges for relations
         for rel in &relations {
             let from_hash = match concept_id_map.get(&rel.from) {
                 Some(h) => *h,
@@ -190,7 +167,6 @@ fn resolve_or_create_graph(
         }
     }
 
-    // Create a new HypergraphSlot
     let new_graph_id = hash_id(&format!("l3_distill_{:016x}", topic_id));
     let slot = HypergraphSlot {
         id_hash: new_graph_id,
@@ -217,7 +193,7 @@ fn resolve_or_create_graph(
     let page_offset = (page_id as usize) * PAGE_SIZE;
     let data_offset = page_offset + 32;
 
-    // Write proper page header so list_knowledge can identify HypergraphSlot pages.
+    // Write proper page header so list_knowledge can identify HypergraphSlot pages
     let page_header = crate::file::page::PageHeader {
         page_id,
         page_type: crate::util::PageType::HypergraphSlot.to_u16(),
@@ -236,7 +212,6 @@ fn resolve_or_create_graph(
     }
     btree.insert(new_graph_id, (page_id as u64) << 16);
 
-    // Now update the context's l3_refs
     add_l3_ref_to_context(mmap, btree, topic_id, new_graph_id, now_ms)?;
 
     Ok(new_graph_id)
@@ -266,11 +241,9 @@ fn add_l3_ref_to_context(
         return Err(MemHopError::PageNotFound(page_id));
     }
 
-    // Read full page
     let mut page_buf = vec![0u8; PAGE_SIZE];
     page_buf.copy_from_slice(&mmap[offset..offset + PAGE_SIZE]);
 
-    // Deserialize ContextSlot from the data region
     if let Ok(mut ctx) = ContextSlot::deserialize_slot(&page_buf[32..]) {
         if !ctx.l3_refs.contains(&graph_hash) {
             ctx.l3_refs.push(graph_hash);
@@ -285,13 +258,11 @@ fn add_l3_ref_to_context(
                 ));
             }
 
-            // Write modified slot data back
             page_buf[32..32 + ctx_bytes.len()].copy_from_slice(&ctx_bytes);
             if 32 + ctx_bytes.len() < PAGE_SIZE {
                 page_buf[32 + ctx_bytes.len()..].fill(0);
             }
 
-            // Write full page back
             mmap[offset..offset + PAGE_SIZE].copy_from_slice(&page_buf);
         }
     }

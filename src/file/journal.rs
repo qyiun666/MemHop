@@ -1,4 +1,6 @@
-// Journal transaction log module
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::file::header::FileHeader;
 use crate::util::PAGE_SIZE;
 use crate::{MemHopError, Result};
@@ -6,7 +8,6 @@ use memmap2::Mmap;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
 
-/// Journal entry representing a transaction
 #[derive(Debug, Clone)]
 pub struct JournalEntry {
     pub commit_id: u64,
@@ -14,7 +15,6 @@ pub struct JournalEntry {
 }
 
 impl JournalEntry {
-    /// Create a new journal entry
     pub fn new(commit_id: u64) -> Self {
         Self {
             commit_id,
@@ -22,7 +22,6 @@ impl JournalEntry {
         }
     }
 
-    /// Add a page to the journal entry
     pub fn add_page(&mut self, page_id: u32, data: Vec<u8>) {
         if data.len() != PAGE_SIZE {
             panic!("Page data must be exactly {} bytes", PAGE_SIZE);
@@ -31,62 +30,52 @@ impl JournalEntry {
     }
 }
 
-/// Serialize a journal entry to bytes
 /// Format: entry_size(u32) + commit_id(u64) + page_count(u16) + [page_id(u32) + data(4096)] × N + crc32(u32)
 pub fn serialize_entry(entry: &JournalEntry) -> Vec<u8> {
     let page_count = entry.pages.len();
 
-    // Calculate total size: 4 (entry_size) + 8 (commit_id) + 2 (page_count) + N * (4 + 4096) + 4 (crc32)
     let data_size = 4 + 8 + 2 + page_count * (4 + PAGE_SIZE) + 4;
 
     let mut buffer = Vec::with_capacity(data_size);
 
-    // Placeholder for entry_size (will be filled at the end)
+    // Placeholder for entry_size, filled at the end
     buffer.extend_from_slice(&0u32.to_le_bytes());
 
-    // Commit ID (8 bytes)
     buffer.extend_from_slice(&entry.commit_id.to_le_bytes());
 
-    // Page count (2 bytes, u16)
     buffer.extend_from_slice(&(page_count as u16).to_le_bytes());
 
-    // Pages
     for (page_id, data) in &entry.pages {
         buffer.extend_from_slice(&page_id.to_le_bytes());
         buffer.extend_from_slice(data);
     }
 
-    // Calculate CRC32 over everything except the entry_size field and crc32 itself
+    // CRC32 over everything except entry_size and crc32 itself
     let crc = crc32fast::hash(&buffer[4..]);
     buffer.extend_from_slice(&crc.to_le_bytes());
 
-    // Now fill in the actual entry_size (excluding the 4-byte size field itself)
     let actual_size = (buffer.len() - 4) as u32;
     buffer[0..4].copy_from_slice(&actual_size.to_le_bytes());
 
     buffer
 }
 
-/// Deserialize a journal entry from bytes
 pub fn deserialize_entry(data: &[u8]) -> Result<JournalEntry> {
     if data.len() < 18 {
-        // Minimum: 4 (size) + 8 (commit_id) + 2 (page_count) + 4 (crc)
         return Err(MemHopError::Serialization(
             "Journal entry too small".to_string(),
         ));
     }
 
-    // Read entry_size
     let entry_size = u32::from_le_bytes([data[0], data[1], data[2], data[3]]) as usize;
 
-    // Validate we have enough data
     if data.len() < 4 + entry_size {
         return Err(MemHopError::Serialization(
             "Incomplete journal entry".to_string(),
         ));
     }
 
-    // Verify CRC32 (over data excluding entry_size and crc32)
+    // CRC32 over data excluding entry_size and crc32
     let crc_offset = 4 + entry_size - 4;
     let stored_crc = u32::from_le_bytes([
         data[crc_offset],
@@ -100,15 +89,12 @@ pub fn deserialize_entry(data: &[u8]) -> Result<JournalEntry> {
         return Err(MemHopError::CrcMismatch);
     }
 
-    // Read commit_id
     let commit_id = u64::from_le_bytes([
         data[4], data[5], data[6], data[7], data[8], data[9], data[10], data[11],
     ]);
 
-    // Read page_count (u16, 2 bytes)
     let page_count = u16::from_le_bytes([data[12], data[13]]) as usize;
 
-    // Read pages
     let mut pages = Vec::with_capacity(page_count);
     let mut offset = 14;
 
@@ -137,21 +123,17 @@ pub fn deserialize_entry(data: &[u8]) -> Result<JournalEntry> {
     Ok(JournalEntry { commit_id, pages })
 }
 
-/// Append a journal entry to the file
 pub fn append_journal(file: &mut File, entry: &JournalEntry) -> Result<()> {
     let serialized = serialize_entry(entry);
 
-    // Seek to end of file
     file.seek(SeekFrom::End(0))?;
 
-    // Write the serialized entry
     file.write_all(&serialized)?;
     file.flush()?;
 
     Ok(())
 }
 
-/// Replay journal entries from file starting at journal_start position
 pub fn replay_journal(mmap: &Mmap, header: &FileHeader) -> Result<Vec<JournalEntry>> {
     let mut entries = Vec::new();
 
@@ -171,12 +153,10 @@ pub fn replay_journal(mmap: &Mmap, header: &FileHeader) -> Result<Vec<JournalEnt
     let mut offset = start_pos;
 
     while offset < end_pos {
-        // Need at least 4 bytes to read entry_size
         if offset + 4 > mmap.len() {
             break;
         }
 
-        // Read entry_size
         let entry_size = u32::from_le_bytes([
             mmap[offset],
             mmap[offset + 1],
@@ -184,12 +164,10 @@ pub fn replay_journal(mmap: &Mmap, header: &FileHeader) -> Result<Vec<JournalEnt
             mmap[offset + 3],
         ]) as usize;
 
-        // Check if we have the complete entry
         if offset + 4 + entry_size > end_pos {
             break;
         }
 
-        // Try to deserialize the entry
         let entry_data = &mmap[offset..offset + 4 + entry_size];
         match deserialize_entry(entry_data) {
             Ok(entry) => {
@@ -206,7 +184,6 @@ pub fn replay_journal(mmap: &Mmap, header: &FileHeader) -> Result<Vec<JournalEnt
     Ok(entries)
 }
 
-/// Truncate file to specified length
 pub fn truncate_journal(file: &mut File, new_len: u64) -> Result<()> {
     file.set_len(new_len)?;
     file.sync_all()?;
@@ -222,17 +199,14 @@ mod tests {
     fn test_journal_entry_serialization_roundtrip() {
         let mut entry = JournalEntry::new(12345);
 
-        // Add some pages
         let page1_data = vec![1u8; PAGE_SIZE];
         let page2_data = vec![2u8; PAGE_SIZE];
 
         entry.add_page(1, page1_data.clone());
         entry.add_page(2, page2_data.clone());
 
-        // Serialize
         let serialized = serialize_entry(&entry);
 
-        // Deserialize
         let restored = deserialize_entry(&serialized).unwrap();
 
         assert_eq!(restored.commit_id, 12345);
@@ -262,7 +236,6 @@ mod tests {
 
         let mut serialized = serialize_entry(&entry);
 
-        // Corrupt some data
         serialized[10] ^= 0xFF;
 
         assert!(deserialize_entry(&serialized).is_err());
@@ -281,7 +254,6 @@ mod tests {
             .open(path)
             .unwrap();
 
-        // Create and append journal entries
         let mut entry1 = JournalEntry::new(1);
         entry1.add_page(10, vec![10u8; PAGE_SIZE]);
 
@@ -292,7 +264,6 @@ mod tests {
         append_journal(&mut file, &entry1).unwrap();
         append_journal(&mut file, &entry2).unwrap();
 
-        // Create a mock header with journal info
         let header = FileHeader {
             magic: [0x4D, 0x45, 0x48, 0x21],
             version: 0x001E,
@@ -301,7 +272,7 @@ mod tests {
             page_count: 20,
             free_list_head: 0xFFFFFFFF,
             layer_roots: [0; 14],
-            journal_start: 0, // Journal starts at beginning for this test
+            journal_start: 0,
             journal_len: file.metadata().unwrap().len(),
             flags: 0,
             reserved: [0; 3988],
@@ -309,7 +280,6 @@ mod tests {
             tail_magic: [0xDE, 0xAD, 0xBE, 0xEF],
         };
 
-        // Map and replay
         unsafe {
             let mmap = Mmap::map(&file).unwrap();
             let entries = replay_journal(&mmap, &header).unwrap();
@@ -335,11 +305,9 @@ mod tests {
             .open(path)
             .unwrap();
 
-        // Write some data
         file.write_all(&vec![0u8; 1000]).unwrap();
         file.flush().unwrap();
 
-        // Truncate to 500 bytes
         truncate_journal(&mut file, 500).unwrap();
 
         assert_eq!(file.metadata().unwrap().len(), 500);

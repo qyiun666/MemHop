@@ -1,11 +1,13 @@
-// Encoder module — gRPC client for meowvec VectorModelService (TCP)
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+// gRPC client for meowvec VectorModelService (TCP).
 
 use crate::MemHopError;
 use half::f16;
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// Default gRPC encoder address (meowvec TCP endpoint)
 pub const DEFAULT_ENCODER_ADDR: &str = "http://127.0.0.1:27110";
 
 pub mod vector_model {
@@ -19,19 +21,12 @@ use vector_model::{EncodeRequest, HealthCheckRequest};
 // Encoder trait & output
 // ============================================================================
 
-/// Encoder trait for external encoding service
 pub trait Encoder: Send + Sync {
-    /// Encode text to dense and sparse vectors
     fn encode(&self, text: &str) -> Result<EncoderOutput, MemHopError>;
-
-    /// Get vector dimension
     fn dim(&self) -> usize;
-
-    /// Get encoder mode (e.g., "dense", "sparse", "hybrid")
     fn mode(&self) -> &str;
 }
 
-/// Output from encoder
 pub struct EncoderOutput {
     pub dense: Vec<f16>,
     pub sparse: HashMap<String, f32>,
@@ -41,7 +36,7 @@ pub struct EncoderOutput {
 // GrpcEncoder — TCP only
 // ============================================================================
 
-/// gRPC encoder client for meowvec VectorModelService (TCP)
+/// TCP-only gRPC client; performs eager health check on construction.
 pub struct GrpcEncoder {
     rt: tokio::runtime::Runtime,
     client: std::sync::Mutex<VectorModelServiceClient<tonic::transport::Channel>>,
@@ -49,16 +44,8 @@ pub struct GrpcEncoder {
 }
 
 impl GrpcEncoder {
-    /// Create a new gRPC encoder connecting via TCP.
-    ///
-    /// The `addr` argument must be a valid tonic HTTP endpoint, e.g.
-    /// `"http://127.0.0.1:27110"`. A health check is performed immediately so
-    /// that connection failures are surfaced to the caller instead of being
-    /// silently degraded.
-    ///
-    /// # Arguments
-    /// * `addr` - TCP address: `"http://127.0.0.1:27110"`
-    /// * `dim` - Expected vector dimension
+    /// Connects via TCP and performs an eager health check so connection
+    /// failures surface immediately instead of being silently degraded.
     pub fn new(addr: &str, dim: usize) -> Result<Self, MemHopError> {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -70,7 +57,7 @@ impl GrpcEncoder {
         let channel = Self::connect_tcp(&rt, addr)?;
         let mut client = VectorModelServiceClient::new(channel);
 
-        // Eager health check: fail fast if the service is unreachable/unhealthy.
+        // Eager health check: fail fast if unreachable/unhealthy.
         let health = rt
             .block_on(client.health_check(HealthCheckRequest {}))
             .map_err(|e| {
@@ -95,7 +82,6 @@ impl GrpcEncoder {
         })
     }
 
-    /// Create a tonic Channel over TCP.
     fn connect_tcp(
         rt: &tokio::runtime::Runtime,
         addr: &str,
@@ -120,7 +106,6 @@ impl GrpcEncoder {
         Ok(channel)
     }
 
-    /// Check if the gRPC encoder service is available via HealthCheck RPC
     pub fn is_available(&self) -> bool {
         let mut client = match self.client.lock() {
             Ok(c) => c,
@@ -197,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_grpc_encoder_rejects_bare_tcp_address() {
-        // Bare host:port is rejected; tonic requires an explicit scheme.
+        // Bare host:port rejected; tonic requires explicit scheme.
         let result = GrpcEncoder::new("127.0.0.1:27110", 384);
         assert!(result.is_err());
         if let Err(e) = result {
@@ -212,7 +197,6 @@ mod tests {
 
     #[test]
     fn test_grpc_encoder_tcp_unavailable() {
-        // Port 1 is reserved/special and should refuse the connection quickly.
         let result = GrpcEncoder::new("http://127.0.0.1:1", 384);
         assert!(result.is_err(), "expected connection failure");
     }

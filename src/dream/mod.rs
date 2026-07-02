@@ -1,4 +1,6 @@
-// Dream module
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 pub mod compress_stage;
 pub mod crystallize_stage;
 pub mod emotion;
@@ -79,15 +81,11 @@ pub fn dream_pipeline(
         duration_ms: 0,
     };
 
-    // Take in-memory snapshots for rollback on failure.
     let btree_snapshot = btree.clone();
     let sparse_snapshot = sparse_index.clone();
 
-    // Stage 1: L3 Knowledge Distillation - extract structured knowledge via LLM
-    // This must run BEFORE L2 compression because compression demotes active
-    // depth-1 contexts to depth-2 and creates new (initially inactive) compressed
-    // contexts. Running L3 distillation first lets it process the original active
-    // depth-1 topics while their full summaries are still intact.
+    // L3 distillation runs BEFORE L2 compression because compression demotes
+    // active depth-1 contexts to depth-2, and L3 needs their original summaries.
     let l3_nodes = l3_distill_stage::distill_l3_knowledge(
         mmap,
         header,
@@ -106,7 +104,6 @@ pub fn dream_pipeline(
         }
     }
 
-    // Stage 2: L2 Compression - depth demotion on active contexts
     let compress_result = compress_stage::compress_active_contexts(
         mmap,
         header,
@@ -130,7 +127,6 @@ pub fn dream_pipeline(
         }
     }
 
-    // Stage 3: L1 Update - rebuild L1 ContextNode based on updated L2
     // L1 nodes point to L2 contexts; after L2 depth changes, L1 associations need refresh
     let l1_result = rebuild_l1_from_l2(mmap, header, btree, sparse_index, &session_topic_ids, decay_config);
     match l1_result {
@@ -142,7 +138,6 @@ pub fn dream_pipeline(
         }
     }
 
-    // Stage 3b: L1 Decay - time-decay node importance and prune weak edges
     let l1_decay_report = l1_decay::decay_l1_network(mmap, header, btree, decay_config);
     match l1_decay_report {
         Ok(decay_report) => {
@@ -158,14 +153,12 @@ pub fn dream_pipeline(
         }
     }
 
-    // Stage 4: L0 Update - regenerate profile from knowledge distribution
     let l0_result = l0_form_stage::generate_profile(mmap, header, btree, sparse_index, file);
     if let Err(e) = l0_result {
         *btree = btree_snapshot;
         *sparse_index = sparse_snapshot;
         return Err(e);
     }
-    // Mark L0 as updated if we have any topics
     if !session_topic_ids.is_empty() {
         let profile_id_hash = crate::util::hash_id("profile");
         let profile_id = crate::query::common::format_hash(profile_id_hash);
@@ -175,8 +168,6 @@ pub fn dream_pipeline(
         ));
     }
 
-    // Stage 4.5: User Language Habit Distillation
-    // Analyzes recent dialogues to learn user language patterns and merge into L0 profile
     let habit_result = habit_distill_stage::distill_user_habits(mmap, header, btree, llm);
     match habit_result {
         Ok(habit_update) => {
@@ -199,7 +190,6 @@ pub fn dream_pipeline(
         }
     }
 
-    // Stage 5: L5 Crystallization - scan all ActionChainSlots, extract crystals
     let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm, file);
     match crystals {
         Ok(crystals) => report.new_crystals = crystals,
@@ -210,7 +200,6 @@ pub fn dream_pipeline(
         }
     }
 
-    // Prune low-quality crystals
     let page_count = header.page_count;
     let pruned = crystallize_stage::prune_low_quality_crystals(mmap, header, btree, page_count);
     match pruned {
@@ -228,10 +217,6 @@ pub fn dream_pipeline(
 }
 
 /// Rebuild L1 ContextNode associations based on updated L2 contexts
-///
-/// After L2 depth demotion, L1 graph nodes need to be refreshed:
-/// - Remove L1 nodes pointing to removed contexts (pages freed)
-/// - Validate L1 node references still point to valid L2 contexts
 fn rebuild_l1_from_l2(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -245,7 +230,6 @@ fn rebuild_l1_from_l2(
 
     let page_count = header.page_count;
 
-    // Phase 1: Collect stale L1 node IDs (read-only scan)
     let mut stale_nodes: Vec<(u64, u32)> = Vec::new(); // (id_hash, page_id)
     let entries: Vec<(u64, u64)> = btree.iter().map(|(k, v)| (*k, *v)).collect();
 
@@ -260,7 +244,6 @@ fn rebuild_l1_from_l2(
             continue;
         }
 
-        // Check page type — only process ContextNode pages
         if let Ok(page_hdr) = crate::file::page::read_page_header(&mmap[..], page_id) {
             if page_hdr.page_type != PageType::ContextNode as u16 {
                 continue;
@@ -269,7 +252,6 @@ fn rebuild_l1_from_l2(
             continue;
         }
 
-        // Deserialize ContextNode and check if its target L2 still exists
         if let Some(slot_data) = crate::query::slot_io::get_slot_data(&mmap[..], *page_ref) {
             if let Ok(node) = ContextNode::deserialize(slot_data) {
                 if btree.search(node.context_id).is_none() {
@@ -279,7 +261,6 @@ fn rebuild_l1_from_l2(
         }
     }
 
-    // Phase 2: Remove stale L1 nodes (write phase)
     let mut updated_ids: Vec<String> = Vec::new();
     for (id_hash, page_id) in stale_nodes {
         // Clean up references from this stale node to edges before freeing it.

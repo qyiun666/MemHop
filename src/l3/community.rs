@@ -1,18 +1,8 @@
-//! L3 Community Detection — Leiden algorithm applied to hypergraphs.
-//!
-//! # Approach
-//!
-//! V1 uses hyperedge → binary edge clique expansion (2-section graph reduction)
-//! followed by the Leiden algorithm from the `leiden-rs` crate.
-//!
-//! For a hyperedge connecting k nodes, we expand to all C(k,2) pairwise edges,
-//! assigning each pair a weight of `edge.weight / (k-1)`. High-degree hyperedges
-//! (k > max_hyperedge_size) are skipped to avoid combinatorial explosion.
-//!
-//! # V2 plan
-//!
-//! Future: implement h-Louvain with dynamic hybrid modularity (arXiv:2406.17556)
-//! for better results on hypergraphs without losing higher-order structural info.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! L3 Community Detection — Leiden algorithm on hypergraphs via clique expansion.
+//! V1: hyperedge→binary edge reduction (weight/(k-1)), then Leiden. V2: h-Louvain (arXiv:2406.17556).
 
 use crate::index::btree::BTreeIndex;
 use crate::query::slot_io::get_slot_data;
@@ -131,12 +121,7 @@ fn reduce_hyperedges(
 
 /// Run Leiden community detection on an L3 graph.
 ///
-/// # Flow
-/// 1. Extract all edges in the graph from BTree
-/// 2. Reduce hyperedges → weighted binary edges
-/// 3. Build integer-indexed graph for leiden-rs
-/// 4. Run Leiden algorithm
-/// 5. Map community assignment back to node hashes
+/// Runs clique expansion → Leiden → community mapping.
 pub fn run_community_detection(
     mmap: &MmapMut,
     btree: &BTreeIndex,
@@ -145,7 +130,6 @@ pub fn run_community_detection(
 ) -> Result<CommunityResult, MemHopError> {
     let data: &[u8] = &mmap[..];
 
-    // Step 1: Extract edges
     let mut edges: Vec<HypergraphEdge> = Vec::new();
     for (&_id, &page_ref) in btree.iter() {
         if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
@@ -160,10 +144,8 @@ pub fn run_community_detection(
         }
     }
 
-    // Step 2: Reduce hyperedges
     let binary_edges = reduce_hyperedges(&edges, config.max_hyperedge_size);
 
-    // Step 3: Collect all unique node hashes (including isolated nodes)
     let mut node_set: HashSet<u64> = HashSet::new();
     for &(a, b, _) in &binary_edges {
         node_set.insert(a);
@@ -196,14 +178,12 @@ pub fn run_community_detection(
         });
     }
 
-    // Build hash → index mapping
     let hash_to_idx: HashMap<u64, usize> = node_hashes
         .iter()
         .enumerate()
         .map(|(i, &h)| (h, i))
         .collect();
 
-    // Step 4: Build Leiden graph
     let mut builder = leiden_rs::GraphDataBuilder::new(node_count);
     for (a, b, weight) in &binary_edges {
         let idx_a = hash_to_idx[a];
@@ -216,13 +196,11 @@ pub fn run_community_detection(
         .build()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-    // Step 5: Run Leiden
     let leiden = leiden_rs::Leiden::new(leiden_rs::LeidenConfig::default());
     let result = leiden
         .run(&graph)
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-    // Step 6: Map partition → communities
     let mut communities: Vec<Community> = result
         .partition
         .communities()
@@ -241,7 +219,7 @@ pub fn run_community_detection(
         })
         .collect();
 
-    // Sort by community size descending for consistent output
+    // Sort for deterministic output
     communities.sort_by_key(|c| std::cmp::Reverse(c.size));
 
     let total_communities = communities.len();
@@ -266,6 +244,7 @@ mod tests {
     use std::fs::File;
     use std::io::Write;
 
+    #[allow(dead_code)]
     fn create_test_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex, File) {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let path = temp_file.path();

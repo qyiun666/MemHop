@@ -1,12 +1,12 @@
-// L4 ArchiveSlot - raw conversation storage
-//
-// Minimalist design: timestamp + role + original text (or file path).
-// Archives are immutable — no version field needed.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+// L4 ArchiveSlot — raw conversation storage.
+// Immutable ground truth; no version field needed.
 
 use crate::util::io_helpers::*;
 use std::io::{self, Cursor, Write};
 
-/// Content type for archive entries
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ContentType {
@@ -33,23 +33,19 @@ impl ContentType {
     }
 }
 
-/// L4 Archive slot — stores raw text or file path references
-///
-/// Archives are the ground truth of conversation history.
-/// Text content is stored inline; non-text media store file paths.
+/// Text content stored inline; non-text media store file paths.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArchiveSlot {
     pub id_hash: u64,
     pub content_type: ContentType,
     pub role: u8,        // 0=user, 1=agent, 2=system
-    pub context_id: u64, // Associated L2 context
-    pub created_at: i64, // Timestamp
+    pub context_id: u64,
+    pub created_at: i64,
     pub content: String, // Inline text or file path
     pub metadata: Option<String>,
 }
 
 impl ArchiveSlot {
-    /// Extract RequestSource from metadata (if present and valid)
     pub fn request_source(&self) -> crate::query::types::RequestSource {
         self.metadata
             .as_deref()
@@ -57,11 +53,7 @@ impl ArchiveSlot {
             .unwrap_or_default()
     }
 
-    /// Calculate total serialized size
-    ///
-    /// Fixed: 8 (id_hash) + 1 (content_type) + 1 (role) + 8 (context_id) +
-    ///        8 (created_at) = 26 bytes
-    /// Variable: content (2 + len) + metadata (2 + len or 2)
+    /// Fixed 26 bytes + `content.len()` + metadata variable.
     pub fn slot_size(&self) -> usize {
         const FIXED: usize = 26;
         let content_size = 2 + self.content.len();
@@ -72,27 +64,19 @@ impl ArchiveSlot {
         FIXED + content_size + metadata_size
     }
 
-    /// Serialize to bytes
     pub fn serialize(&self) -> io::Result<Vec<u8>> {
         let mut buf = Vec::with_capacity(self.slot_size());
-
-        // Fixed part
         buf.write_all(&self.id_hash.to_le_bytes())?;
         buf.write_all(&[self.content_type as u8, self.role])?;
         buf.write_all(&self.context_id.to_le_bytes())?;
         buf.write_all(&self.created_at.to_le_bytes())?;
-
-        // Variable part
         write_string(&mut buf, &self.content)?;
         write_optional_string(&mut buf, &self.metadata)?;
-
         Ok(buf)
     }
 
-    /// Deserialize from bytes
     pub fn deserialize(data: &[u8]) -> io::Result<Self> {
         let mut c = Cursor::new(data);
-
         let id_hash = read_u64(&mut c)?;
         let content_type = ContentType::from_u8(read_u8(&mut c)?);
         let role = read_u8(&mut c)?;
@@ -100,24 +84,15 @@ impl ArchiveSlot {
         let created_at = read_i64(&mut c)?;
         let content = read_string(&mut c)?;
         let metadata = read_optional_string(&mut c)?;
-
         Ok(ArchiveSlot {
-            id_hash,
-            content_type,
-            role,
-            context_id,
-            created_at,
-            content,
-            metadata,
+            id_hash, content_type, role, context_id, created_at, content, metadata,
         })
     }
 
-    /// Is this inline text (not a file path)?
     pub fn is_text(&self) -> bool {
         matches!(self.content_type, ContentType::Text | ContentType::Code)
     }
 
-    /// Is this a file path reference?
     pub fn is_file_ref(&self) -> bool {
         !self.is_text()
     }
@@ -184,8 +159,8 @@ mod tests {
             role: 0,
             context_id: 0,
             created_at: 0,
-            content: "test".to_string(), // 4 bytes
-            metadata: None,              // 2 bytes
+            content: "test".to_string(),
+            metadata: None,
         };
         // 26 + (2+4) + 2 = 34
         assert_eq!(slot.slot_size(), 34);
@@ -203,7 +178,6 @@ mod tests {
             content: "".to_string(),
             metadata: None,
         };
-        // Compiles = no version field exists
         let _ = slot;
     }
 }

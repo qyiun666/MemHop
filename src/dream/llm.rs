@@ -1,94 +1,41 @@
-// LLM Provider trait for dream consolidation
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! LLM Provider trait for dream consolidation.
+
 use crate::MemHopError;
 use serde::{Deserialize, Serialize};
 
 /// Trait for LLM providers used in dream consolidation
 pub trait LlmProvider: Send + Sync {
     /// Summarize a collection of texts into a concise summary
-    ///
-    /// # Arguments
-    /// * `texts` - Collection of text strings to summarize
-    ///
-    /// # Returns
-    /// A summarized text string
     fn summarize(&self, texts: &[String]) -> Result<String, MemHopError>;
 
     /// Extract patterns from memory summaries
-    ///
-    /// # Arguments
-    /// * `memories` - Collection of memory summaries with keywords and timestamps
-    ///
-    /// # Returns
-    /// Vector of extracted patterns with frequency and confidence scores
     fn extract_patterns(&self, memories: &[MemorySummary]) -> Result<Vec<Pattern>, MemHopError>;
 
     /// Generate a Crystal definition from a pattern
-    ///
-    /// # Arguments
-    /// * `pattern` - The pattern to crystallize into programmatic knowledge
-    ///
-    /// # Returns
-    /// CrystalDef with condition (DSL format), action, and confidence
     fn generate_crystal(&self, pattern: &Pattern) -> Result<CrystalDef, MemHopError>;
 
     /// Fallback summarization using keyword frequency when LLM is unavailable
-    ///
-    /// # Arguments
-    /// * `texts` - Collection of text strings
-    ///
-    /// # Returns
-    /// Comma-separated top keywords
     fn fallback_summarize(&self, texts: &[String]) -> String;
 
     /// Fallback pattern extraction using keyword intersection when LLM is unavailable
-    ///
-    /// # Arguments
-    /// * `memories` - Collection of memory summaries
-    ///
-    /// # Returns
-    /// Vector of patterns based on common keywords
     fn fallback_extract_patterns(&self, memories: &[MemorySummary]) -> Vec<Pattern>;
 
     /// Fallback crystal generation using regex pattern matching when LLM is unavailable
-    ///
-    /// # Arguments
-    /// * `pattern` - The pattern to convert to crystal
-    ///
-    /// # Returns
-    /// CrystalDef with reduced confidence
     fn fallback_generate_crystal(&self, pattern: &Pattern) -> CrystalDef;
 
     /// Analyze user language habits from dialogue history
-    ///
-    /// Extracts: personal lexicon (unique word meanings), communication style traits,
-    /// and emotional expression patterns.
-    ///
-    /// # Arguments
-    /// * `dialogues` - Recent dialogue texts from L4 archives
-    ///
-    /// # Returns
-    /// HabitAnalysis with lexicon, style traits, and emotion patterns
     fn analyze_user_habits(&self, dialogues: &[String]) -> Result<HabitAnalysis, MemHopError>;
 
     /// Fallback habit analysis using word frequency when LLM is unavailable
     fn fallback_analyze_user_habits(&self, dialogues: &[String]) -> HabitAnalysis;
 
     /// Distill structured concepts and relations from a summary.
-    ///
-    /// # Arguments
-    /// * `summary` - A compressed memory summary to analyze
-    ///
-    /// # Returns
-    /// `LlmDistillResult` containing extracted concepts and relations
     fn distill_concepts(&self, summary: &str) -> Result<LlmDistillResult, MemHopError>;
 
     /// Fallback concept distillation returning an empty result.
-    ///
-    /// # Arguments
-    /// * `summary` - A compressed memory summary to analyze
-    ///
-    /// # Returns
-    /// Empty `LlmDistillResult`
     fn fallback_distill_concepts(&self, summary: &str) -> LlmDistillResult;
 }
 
@@ -179,8 +126,6 @@ pub struct LlmDistillResult {
 }
 
 /// User language habit analysis result
-///
-/// Produced by Dream Stage 3.5 from dialogue history analysis.
 #[derive(Debug, Clone, Default)]
 pub struct HabitAnalysis {
     /// User-specific vocabulary: word/expression → meaning

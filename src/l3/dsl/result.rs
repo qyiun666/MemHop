@@ -1,3 +1,6 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 //! Query result types for the L3 hypergraph query DSL.
 
 use crate::query::types::{Subgraph, TraversalHop};

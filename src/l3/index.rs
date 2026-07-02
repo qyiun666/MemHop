@@ -1,7 +1,7 @@
-//! L3 Hypergraph Index
-//!
-//! Provides in-graph search capabilities for HypergraphNode within a single L3 hypergraph.
-//! Includes keyword index, type index, and content BM25 search (via SparseIndex).
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! L3 Hypergraph Index — keyword, type, and BM25 content search within a single L3 hypergraph.
 
 use crate::file::page::PageHeader;
 use crate::index::sparse::SparseIndex;
@@ -53,7 +53,6 @@ impl L3Index {
     pub fn add_node(&mut self, node: &HypergraphNode) {
         let id_hash = node.id_hash;
 
-        // Add to keyword index
         for keyword in &node.keywords {
             self.keyword_index
                 .entry(keyword.clone())
@@ -61,13 +60,11 @@ impl L3Index {
                 .push(id_hash);
         }
 
-        // Add to type index
         self.type_index
             .entry(node.node_type.clone())
             .or_default()
             .push(id_hash);
 
-        // Add to content index (BM25)
         let content_text = format!("{} {}", node.title, node.content);
         let tokens = SparseIndex::tokenize(&content_text);
         let doc_len = tokens.len() as u32;
@@ -76,7 +73,6 @@ impl L3Index {
 
     /// Remove a node from the index
     pub fn remove_node(&mut self, node_id: u64, node: &HypergraphNode) {
-        // Remove from keyword_index
         for keyword in &node.keywords {
             if let Some(ids) = self.keyword_index.get_mut(keyword) {
                 ids.retain(|&id| id != node_id);
@@ -86,7 +82,6 @@ impl L3Index {
             }
         }
 
-        // Remove from type_index
         if let Some(ids) = self.type_index.get_mut(&node.node_type) {
             ids.retain(|&id| id != node_id);
             if ids.is_empty() {
@@ -94,29 +89,20 @@ impl L3Index {
             }
         }
 
-        // Remove from content_index
         self.content_index.remove_document(node_id);
     }
 
-    /// Search for nodes matching the query
-    ///
-    /// # Arguments
-    /// * `query` - Search query parameters
-    ///
-    /// # Returns
-    /// Vector of (node_id_hash, relevance_score) tuples, sorted by score descending
+    /// Search for nodes matching the query.
+    /// Returns (node_id_hash, relevance_score) tuples sorted by score descending.
     pub fn search(&self, query: &L3IndexQuery) -> Vec<(u64, f32)> {
-        // Step 1: Get candidates from type_index if type filter specified
         let candidates: Option<Vec<u64>> = query
             .node_type
             .as_ref()
             .and_then(|t| self.type_index.get(t).cloned());
 
-        // Step 2: Tokenize query and search content_index with BM25
         let query_terms = SparseIndex::tokenize(&query.query);
         let content_results = self.content_index.search(&query_terms, query.limit * 2);
 
-        // Step 3: Filter by type if specified
         let filtered: Vec<(u64, f32)> = content_results
             .into_iter()
             .filter(|(id, _score)| {
@@ -128,7 +114,6 @@ impl L3Index {
             })
             .collect();
 
-        // Step 4: Apply importance filter if specified
         let final_results: Vec<(u64, f32)> = if let Some(min_imp) = query.min_importance {
             filtered
                 .into_iter()
@@ -138,7 +123,6 @@ impl L3Index {
             filtered
         };
 
-        // Step 5: Limit results
         final_results.into_iter().take(query.limit).collect()
     }
 
@@ -197,14 +181,11 @@ impl L3Index {
             };
             let offset = (page_id as usize) * crate::util::PAGE_SIZE;
 
-            // Write page header
             let hdr = PageHeader::new(page_id, PageType::L3IndexPage, 0, next);
             mmap[offset..offset + 32].copy_from_slice(&hdr.to_bytes());
 
-            // Write data chunk
             let data_start = offset + 32;
             mmap[data_start..data_start + chunk.len()].copy_from_slice(chunk);
-            // Zero remainder
             if chunk.len() < PAGE_DATA_BYTES {
                 mmap[data_start + chunk.len()..data_start + PAGE_DATA_BYTES].fill(0);
             }
@@ -229,14 +210,12 @@ impl L3Index {
                 return Err(format!("Page {} out of bounds", current));
             }
 
-            // Read page header to get next_page
             let hdr_bytes: [u8; 32] = mmap[offset..offset + 32]
                 .try_into()
                 .map_err(|e: std::array::TryFromSliceError| e.to_string())?;
             let hdr = PageHeader::from_bytes(&hdr_bytes)
                 .map_err(|e| format!("Header read error: {:?}", e))?;
 
-            // Read data
             let available = std::cmp::min(PAGE_DATA_BYTES, mmap.len() - offset - 32);
             data.extend_from_slice(&mmap[offset + 32..offset + 32 + available]);
 

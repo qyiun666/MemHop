@@ -1,13 +1,7 @@
-//! Stage: L2 Depth-based Compression
-//!
-//! Compresses activated L2 contexts through depth demotion:
-//! - Depth 1 (主节点/Scene) → Depth 2 (次节点/Sub-scene), with compressed summary
-//! - Depth 2 (次节点/Sub-scene) → Depth 3 (次次节点/Turn group)
-//! - Depth 3 (次次节点/Turn group) → Depth 4 (语义要点/Semantic summary)
-//! - Depth 4 (语义要点/Semantic summary) → Removed (free page)
-//!
-//! Original depth-1 nodes are compressed into new contexts before demotion.
-//! All changes are written to disk and memory indexes are updated.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Stage: L2 Depth-based Compression — depth demotion on active contexts.
 
 use crate::dream::llm::LlmProvider;
 use crate::dream::prune::{CompressResult, DemotionResult};
@@ -46,7 +40,6 @@ fn compute_llm_params(ctx: &ContextSlot, compressed_summary: &str) -> LlmParams 
     let text_lower = text.to_lowercase();
     let word_count = text.split_whitespace().count().max(1);
 
-    // Code keyword density
     let code_keywords = [
         "fn",
         "let",
@@ -109,7 +102,6 @@ fn compute_llm_params(ctx: &ContextSlot, compressed_summary: &str) -> LlmParams 
         .count();
     let code_density = code_count as f32 / word_count as f32;
 
-    // Emotion word density
     let emotion_words = [
         "开心",
         "难过",
@@ -157,7 +149,6 @@ fn compute_llm_params(ctx: &ContextSlot, compressed_summary: &str) -> LlmParams 
         .count();
     let emotion_density = emotion_count as f32 / word_count as f32;
 
-    // Knowledge density
     let knowledge_density = (ctx.turn_count as f32 * 0.1
         + ctx.archive_refs.len() as f32 * 0.2
         + ctx.l3_refs.len() as f32 * 0.3)
@@ -185,23 +176,7 @@ fn compute_llm_params(ctx: &ContextSlot, compressed_summary: &str) -> LlmParams 
 
 /// Compress activated L2 contexts through depth-based demotion
 ///
-/// # Depth Demotion Rules
-/// 1. Depth 4 (semantic summary) → removed, page freed
-/// 2. Depth 3 (turn group) → demoted to depth 4
-/// 3. Depth 2 (sub-scene) → demoted to depth 3
-/// 4. Depth 1 (scene) → compressed summary generated, demoted to depth 2,
-///    new compressed context created at depth 1
-///
-/// # Arguments
-/// * `mmap` - Mutable memory-mapped file for reading/writing context slots
-/// * `header` - File header for page allocation and free list management
-/// * `btree` - B-tree index for context lookup
-/// * `sparse_index` - Sparse index for keyword lookup updates
-/// * `llm` - LLM provider for generating compressed summaries
-/// * `active_topic_ids` - Set of currently active topic IDs from session
-///
-/// # Returns
-/// Tuple of (demotion_results, compression_results, removed_context_ids, demoted_to_tertiary_ids)
+/// Depth 4→removed, 3→4, 2→3, 1→compressed+demoted to 2.
 pub fn compress_active_contexts(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -214,7 +189,6 @@ pub fn compress_active_contexts(
     let now_ms = get_current_timestamp();
     let _page_count = header.page_count;
 
-    // Step 1: Collect all activated ContextSlots
     let mut active_contexts: Vec<(u32, ContextSlot)> = Vec::new();
 
     for &topic_id in active_topic_ids {
@@ -244,7 +218,7 @@ pub fn compress_active_contexts(
     let mut removed_contexts: Vec<String> = Vec::new();
     let mut demoted_to_tertiary: Vec<String> = Vec::new();
 
-    // Step 2: Process by depth (deepest first to avoid conflicts)
+    // Process deepest first to avoid conflicts
 
     // 2a: Remove depth-4 contexts (semantic summaries)
     let depth4: Vec<_> = active_contexts
@@ -255,12 +229,10 @@ pub fn compress_active_contexts(
     for &(page_id, ref ctx) in &depth4 {
         let ctx_id = format!("{:016x}", ctx.id_hash);
 
-        // Free the page
         let page_offset = (*page_id as usize) * PAGE_SIZE;
         mmap[page_offset..page_offset + PAGE_SIZE].fill(0);
         free_page(mmap, header, *page_id)?;
 
-        // Remove from btree and sparse index
         btree.remove(ctx.id_hash);
         sparse_index.remove_document(ctx.id_hash);
 
@@ -269,11 +241,9 @@ pub fn compress_active_contexts(
 
     // 2b: Demote depth-3 contexts to depth 4
     for (page_id, ctx) in active_contexts.iter_mut().filter(|(_, ctx)| ctx.depth == 3) {
-        // Demote to depth 4
         ctx.depth = 4;
         ctx.updated_at = now_ms;
 
-        // Serialize and write back
         let serialized = ctx
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -286,11 +256,9 @@ pub fn compress_active_contexts(
     for (page_id, ctx) in active_contexts.iter_mut().filter(|(_, ctx)| ctx.depth == 2) {
         let ctx_id = format!("{:016x}", ctx.id_hash);
 
-        // Demote to depth 3
         ctx.depth = 3;
         ctx.updated_at = now_ms;
 
-        // Serialize and write back
         let serialized = ctx
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -299,7 +267,7 @@ pub fn compress_active_contexts(
         demoted_to_tertiary.push(ctx_id);
     }
 
-    // 2c: Compress and demote depth-1 contexts
+    // 2d: Compress and demote depth-1 contexts
     let depth1: Vec<(u32, ContextSlot)> = active_contexts
         .iter()
         .filter(|(_, ctx)| ctx.depth == 1)
@@ -309,7 +277,6 @@ pub fn compress_active_contexts(
     for (page_id, ctx) in &depth1 {
         let ctx_id = format!("{:016x}", ctx.id_hash);
 
-        // Generate compressed summary from context's summary + title + archive count
         let texts_to_compress: Vec<String> = vec![
             format!("Title: {}", ctx.title),
             format!("Summary: {}", ctx.summary.as_deref().unwrap_or("(none)")),
@@ -325,10 +292,8 @@ pub fn compress_active_contexts(
             Err(_) => llm.fallback_summarize(&texts_to_compress),
         };
 
-        // Compute LLM params based on content features
         let llm_params = compute_llm_params(ctx, &compressed_summary);
 
-        // Create new compressed context at depth 1
         let new_id_hash = hash_id(&format!("compressed_{}_{}", ctx_id, now_ms));
         let new_ctx = ContextSlot {
             id_hash: new_id_hash,
@@ -351,7 +316,6 @@ pub fn compress_active_contexts(
             llm_params,
         };
 
-        // Allocate page for new compressed context
         let new_page_id = allocate_page(mmap, header, PageType::Context, 2, 0, file)?;
         let new_serialized = new_ctx
             .serialize()
@@ -361,7 +325,6 @@ pub fn compress_active_contexts(
         let new_page_ref = crate::file::page::encode_page_ref(new_page_id, 0);
         btree.insert(new_id_hash, new_page_ref);
 
-        // Update sparse index for new context
         let title_terms: Vec<String> = new_ctx
             .title
             .split_whitespace()
@@ -376,7 +339,6 @@ pub fn compress_active_contexts(
             new_summary: compressed_summary.clone(),
         });
 
-        // Demote original depth-1 context to depth 2
         let mut demoted_ctx = ctx.clone();
         demoted_ctx.depth = 2;
         demoted_ctx.parent_id = Some(new_id_hash);
@@ -412,7 +374,6 @@ mod tests {
 
     #[test]
     fn test_compress_empty_active_topics() {
-        // With no active topics, should return empty results
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let path = temp_file.path();
 

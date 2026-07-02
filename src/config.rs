@@ -1,47 +1,35 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Configuration for MemHop database
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemHopConfig {
-    /// Path to the .meh database file
     pub db_path: PathBuf,
-    /// gRPC encoder address (TCP). Defaults to meowvec TCP endpoint.
-    /// Environment variable MEMHOP_ENCODER_GRPC_ADDR overrides this.
+    /// gRPC encoder address (TCP). Env `MEMHOP_ENCODER_GRPC_ADDR` overrides.
     pub encoder_grpc_addr: Option<String>,
-    /// Vector dimension (specified at creation time)
     pub vector_dim: usize,
-    /// Crystal knowledge storage path (optional, default: same directory as db_path)
     pub crystal_path: Option<PathBuf>,
-    /// LLM configuration for dream stages and other LLM-powered features
     #[serde(default)]
     pub llm: LlmConfig,
-    /// Automatically run lightweight dream consolidation when a topic is evicted
-    /// from working memory due to capacity limits (default: true)
     #[serde(default = "default_auto_dream_on_evict")]
     pub auto_dream_on_evict: bool,
-    /// IVF index initial number of clusters (default: 16)
     #[serde(default = "default_ivf_initial_k")]
     pub ivf_initial_k: usize,
-    /// Custom search weights (optional, uses default if None)
     #[serde(default)]
     pub search_weights: Option<SearchWeights>,
-    /// Custom decay configuration (optional, uses default if None)
     #[serde(default)]
     pub decay_config: Option<DecayConfig>,
-    /// Custom session configuration (optional, uses default if None)
     #[serde(default)]
     pub session_config: Option<SessionConfig>,
-    /// Auto-dream archive threshold (optional)
     #[serde(default)]
     pub auto_dream_archive_threshold: Option<usize>,
-    /// Auto-dream summary bytes limit (optional)
     #[serde(default)]
     pub auto_dream_summary_bytes: Option<usize>,
 }
 
 impl MemHopConfig {
-    /// Create a new configuration with default gRPC address
     pub fn new(db_path: PathBuf, vector_dim: usize) -> Self {
         Self {
             db_path,
@@ -72,36 +60,25 @@ fn default_n_probes() -> usize {
     8
 }
 
-/// LLM configuration for dream stages and other LLM-powered features
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LlmConfig {
-    /// Full API URL (including `/chat/completions` suffix).
-    /// Backwards-compatible alias `api_base` is also accepted during deserialization.
+    /// Full API URL. Backwards-compatible alias `api_base` also accepted.
     #[serde(alias = "api_base")]
     pub api_url: String,
-    /// API key. When using `Default`, falls back to the `MEMHOP_LLM_API_KEY`
-    /// environment variable if present.
+    /// Falls back to `MEMHOP_LLM_API_KEY` env var when using Default.
     pub api_key: String,
-    /// Model name
     pub model: String,
-    /// Sampling temperature. Lower values produce more deterministic output
-    /// (default: 0.2, suitable for memory consolidation).
     #[serde(default = "default_temperature")]
     pub temperature: f32,
-    /// Nucleus sampling parameter (default: 0.9)
     #[serde(default = "default_top_p")]
     pub top_p: f32,
-    /// Presence penalty (default: 0.0)
     #[serde(default = "default_presence_penalty")]
     pub presence_penalty: f32,
-    /// Frequency penalty (default: 0.0)
     #[serde(default = "default_frequency_penalty")]
     pub frequency_penalty: f32,
-    /// Request timeout in seconds (default: 30)
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
-    /// Expected response language (default: "zh")
     #[serde(default = "default_language")]
     pub language: String,
 }
@@ -150,20 +127,13 @@ fn default_language() -> String {
     "zh".to_string()
 }
 
-/// Configuration for L1 decay parameters
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecayConfig {
-    /// Decay rate for L1 nodes
     pub lambda_node: f32,
-    /// Decay rate for L1 edges
     pub lambda_edge: f32,
-    /// Threshold below which a node is removed
     pub node_remove_threshold: f32,
-    /// Threshold below which a node's edges are pruned
     pub node_prune_edges_threshold: f32,
-    /// Threshold below which an edge is removed
     pub edge_remove_threshold: f32,
-    /// Minimum number of nodes an edge must connect to be retained
     pub min_edge_nodes: usize,
 }
 
@@ -180,12 +150,10 @@ impl Default for DecayConfig {
     }
 }
 
-/// Configuration for session management
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
-    /// Default time-to-live in milliseconds (default: 1 hour)
     pub default_ttl_ms: i64,
-    /// Working memory capacity (default: 7, Miller's law)
+    /// Working memory capacity (Miller's law: 7±2).
     pub capacity: usize,
 }
 
@@ -198,16 +166,11 @@ impl Default for SessionConfig {
     }
 }
 
-/// Configuration for search weights
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchWeights {
-    /// Weight for BM25 text relevance
     pub bm25_weight: f32,
-    /// Weight for vector similarity
     pub vector_weight: f32,
-    /// Weight for entity matching
     pub entity_weight: f32,
-    /// IVF n_probes: number of centroids to probe during search (default: 8)
     #[serde(default = "default_n_probes")]
     pub n_probes: usize,
 }

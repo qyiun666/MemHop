@@ -1,4 +1,6 @@
-// Batch Store API implementation
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 use crate::encoder::Encoder;
 #[cfg(test)]
 use crate::encoder::EncoderOutput;
@@ -112,7 +114,6 @@ pub fn split_long_text(text: &str, max_len: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current_chunk = String::new();
 
-    // Split by sentences or paragraphs
     for sentence in text.split(['。', '.', '\n']) {
         if current_chunk.len() + sentence.len() > max_len && !current_chunk.is_empty() {
             chunks.push(current_chunk.clone());
@@ -124,7 +125,6 @@ pub fn split_long_text(text: &str, max_len: usize) -> Vec<String> {
     }
 
     if !current_chunk.is_empty() {
-        // If current chunk is still too long, split it further
         if current_chunk.len() > max_len {
             let chars: Vec<char> = current_chunk.chars().collect();
             let mut start = 0;
@@ -176,8 +176,6 @@ pub fn archive_documents(
     items: &[EncodedItem],
     _batch: &StoreBatch,
 ) -> Result<Vec<u64>, MemHopError> {
-    // Return hash-based doc IDs for batch report tracking.
-    // Full L4 archival with page allocation is handled by update_memory().
     let doc_ids: Vec<u64> = items.iter().map(|item| hash_id(&item.text)).collect();
     Ok(doc_ids)
 }
@@ -191,10 +189,8 @@ fn check_duplicate(
 ) -> Result<Option<u64>, MemHopError> {
     use crate::index::vector::cosine_similarity;
 
-    // Thresholds for deduplication
     const COSINE_THRESHOLD: f32 = 0.95;
 
-    // Iterate through all L1 ContextNode entries in btree
     for (&existing_hash, &page_ref) in btree.iter() {
         let page_id = (page_ref >> 16) as u32;
         let node_offset = crate::query::slot_io::slot_offset(page_id);
@@ -203,7 +199,6 @@ fn check_duplicate(
             continue;
         }
 
-        // Check page type — only process ContextNode pages
         let page_type_offset = (page_id as usize) * crate::util::PAGE_SIZE + 4;
         if page_type_offset + 2 <= mmap.len() {
             let pt = u16::from_le_bytes([mmap[page_type_offset], mmap[page_type_offset + 1]]);
@@ -214,21 +209,18 @@ fn check_duplicate(
             continue;
         }
 
-        // Deserialize existing L1 ContextNode
         if let Ok(existing_node) = ContextNode::deserialize(&mmap[node_offset..]) {
             if existing_node.vector_page_ref != 0 {
                 let vec_page_id = (existing_node.vector_page_ref >> 16) as u32;
                 let vec_offset = crate::query::slot_io::slot_offset(vec_page_id);
 
                 if vec_offset + vector_dim * 2 <= mmap.len() {
-                    // Read existing vector (f16)
                     let mut existing_vec = Vec::with_capacity(vector_dim);
                     for i in 0..vector_dim {
                         let bytes = [mmap[vec_offset + i * 2], mmap[vec_offset + i * 2 + 1]];
                         existing_vec.push(f16::from_le_bytes(bytes));
                     }
 
-                    // Calculate cosine similarity
                     let cosine_sim = cosine_similarity(&item.dense, &existing_vec);
                     if cosine_sim > COSINE_THRESHOLD {
                         return Ok(Some(existing_hash));
@@ -271,10 +263,8 @@ pub fn dedup_and_write_l1(
     for item in items {
         let id_hash = hash_id(&item.text);
 
-        // Phase 1: Exact hash match — check if same content already exists
         let existing_page_ref = btree.search(id_hash);
         if let Some(page_ref) = existing_page_ref {
-            // Verify it's actually a ContextNode (not a collision with other types)
             let existing_page_id = (page_ref >> 16) as u32;
             let pt_offset = (existing_page_id as usize) * crate::util::PAGE_SIZE + 4;
             if pt_offset + 2 <= mmap.len() {
@@ -290,25 +280,19 @@ pub fn dedup_and_write_l1(
             }
         }
 
-        // Phase 2: Cosine similarity check (for near-duplicate detection)
         if let Some(existing_id) = check_duplicate(mmap, item, btree, vector_dim)? {
             skipped += 1;
             node_ids.push(existing_id);
-            // Remember the page id of the existing node so update_topics can
-            // backfill its context_id later.
             if let Some(page_ref) = btree.search(existing_id) {
                 node_pages.insert(existing_id, (page_ref >> 16) as u32);
             }
             continue;
         }
 
-        // Calculate vector_page_ref before creating node
         let vector_page_ref = if !item.dense.is_empty() {
-            // Allocate a new page for vector storage
             let vec_page_id = allocate_or_extend(mmap, header, file, 500)?;
-            let vec_slot_index = 0u16; // First slot in new page
+            let vec_slot_index = 0u16;
 
-            // Write vector to the allocated page
             crate::index::vector::write_vector(
                 mmap,
                 vec_page_id,
@@ -324,8 +308,7 @@ pub fn dedup_and_write_l1(
             0
         };
 
-        // Create L1 ContextNode (points to L2 context via context_id)
-        // context_id is set to 0 initially; will be linked when L2 context is created
+        // context_id = 0 initially; linked when L2 context is created
         let node = ContextNode {
             id_hash,
             context_id: 0,
@@ -343,27 +326,22 @@ pub fn dedup_and_write_l1(
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-        // Allocate page from free list for L1 node
         let page_id = allocate_or_extend(mmap, header, file, 500)?;
 
-        // Write node to page (skip 32-byte header)
         let node_offset = crate::query::slot_io::slot_offset(page_id);
         if node_offset + node_data.len() <= mmap.len() {
             mmap[node_offset..node_offset + node_data.len()].copy_from_slice(&node_data);
         }
 
-        // Write the L1 ContextNode page header
         let node_page_hdr =
             crate::file::page::PageHeader::new(page_id, PageType::ContextNode, 1, 0xFFFFFFFF);
         let node_hdr_bytes = node_page_hdr.to_bytes();
         let node_page_offset = crate::query::slot_io::page_offset(page_id);
         mmap[node_page_offset..node_page_offset + 32].copy_from_slice(&node_hdr_bytes);
 
-        // Update B-tree index
         let page_ref = (page_id as u64) << 16;
         btree.insert(id_hash, page_ref);
 
-        // Update BM25 sparse index
         let terms: Vec<String> = item
             .text
             .split_whitespace()
@@ -398,7 +376,6 @@ pub fn update_topics(
 ) -> Result<u32, MemHopError> {
     let mut topics_updated = 0u32;
 
-    // Group items by topic_label
     let mut topic_groups: HashMap<String, Vec<usize>> = HashMap::new();
 
     for (idx, item) in items.iter().enumerate() {
@@ -416,10 +393,8 @@ pub fn update_topics(
         let context_id = hash_id(&label);
         let node_ids: Vec<u64> = indices.iter().map(|&idx| l1_node_ids[idx]).collect();
 
-        // Calculate centroid vector from associated L1 nodes
         let centroid_vector = calculate_centroid_from_nodes(mmap, &node_ids, &*btree, vector_dim)?;
 
-        // Write centroid vector to page if available
         let centroid_page_ref = if let Some(ref vec) = centroid_vector {
             let vec_page_id = allocate_or_extend(mmap, header, file, 500)?;
             let vec_slot_index = 0u16;
@@ -436,7 +411,6 @@ pub fn update_topics(
             0
         };
 
-        // Create or find L2 ContextSlot
         let context = ContextSlot {
             id_hash: context_id,
             parent_id: None,
@@ -462,7 +436,6 @@ pub fn update_topics(
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-        // Allocate page and write context
         let page_id = allocate_or_extend(mmap, header, file, 500)?;
         let context_offset = crate::query::slot_io::slot_offset(page_id);
         if context_offset + context_data.len() <= mmap.len() {
@@ -470,22 +443,18 @@ pub fn update_topics(
                 .copy_from_slice(&context_data);
         }
 
-        // Write the L2 Context page header
         let page_hdr =
             crate::file::page::PageHeader::new(page_id, PageType::Context, 2, 0xFFFFFFFF);
         let hdr_bytes = page_hdr.to_bytes();
         let page_offset = crate::query::slot_io::page_offset(page_id);
         mmap[page_offset..page_offset + 32].copy_from_slice(&hdr_bytes);
 
-        // Register L2 ContextSlot in the B-tree
         btree.insert(context_id, (page_id as u64) << 16);
 
-        // Register the topic title in the sparse index for keyword search
         let context_terms = SparseIndex::tokenize(&label);
         let context_doc_len = context_terms.len() as u32;
         sparse_index.add_document(context_id, context_terms, context_doc_len);
 
-        // Backfill each associated L1 ContextNode with the L2 context_id
         for node_id_hash in &node_ids {
             if let Some(&node_page_id) = l1_node_pages.get(node_id_hash) {
                 let node_offset = (node_page_id as usize) * PAGE_SIZE + 32;
@@ -560,7 +529,6 @@ fn calculate_centroid_from_nodes(
         return Ok(None);
     }
 
-    // Calculate average
     let count_f32 = count as f32;
     let centroid: Vec<f16> = sum.iter().map(|&s| f16::from_f32(s / count_f32)).collect();
 
@@ -578,7 +546,6 @@ pub fn create_batch_hyperedges(
     let mut edge_count = 0u32;
 
     if l1_node_ids.len() > 1 {
-        // Create CoOccurrence hyperedge (connects all nodes in batch)
         let assoc_edge = HyperedgeSlot {
             id_hash: hash_id("batch_association"),
             kind: HyperedgeKind::CoOccurrence,
@@ -607,7 +574,6 @@ pub fn create_batch_hyperedges(
         let edge_offset = crate::query::slot_io::slot_offset(page_id);
         mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
 
-        // Write page header for hyperedge
         let page_hdr =
             crate::file::page::PageHeader::new(0, crate::util::PageType::Hyperedge, 1, 0xFFFFFFFF);
         let hdr_bytes = page_hdr.to_bytes();
@@ -617,7 +583,6 @@ pub fn create_batch_hyperedges(
         btree.insert(assoc_edge.id_hash, (page_id as u64) << 16);
         edge_count += 1;
 
-        // Create Temporal hyperedges (chain relationships)
         for i in 1..l1_node_ids.len() {
             let edge_id_hash = hash_id(&format!("evolution_{}_{}", i - 1, i));
             let evol_edge = HyperedgeSlot {
@@ -648,7 +613,6 @@ pub fn create_batch_hyperedges(
             let edge_offset = crate::query::slot_io::slot_offset(page_id);
             mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
 
-            // Write page header for temporal hyperedge
             let page_hdr = crate::file::page::PageHeader::new(
                 0,
                 crate::util::PageType::Hyperedge,
@@ -727,7 +691,6 @@ pub fn batch_store(
     // Phase 5: L3 Domain Write (delegated to l3::store)
     // write_l3_domains removed — use l3::store::add_node directly
 
-    // Create hyperedges
     let edge_count = create_batch_hyperedges(mmap, header, &l1_node_ids, btree, file)?;
     report.edges_created = edge_count;
 

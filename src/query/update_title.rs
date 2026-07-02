@@ -1,6 +1,7 @@
-//! Update title implementations for MemHop
-//!
-//! Implements title/profile update interfaces with sparse index synchronization.
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+//! Title/profile update interfaces with sparse index synchronization.
 
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
@@ -36,10 +37,8 @@ pub fn update_profile(
             let page_id = (page_ref >> 16) as u32;
             let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-            // Deserialize existing profile
             let mut profile = ProfileSlot::deserialize_slot(&mmap[offset..])?;
 
-            // Merge update fields (only update Some values)
             if let Some(name) = request.name {
                 profile.name = name;
             }
@@ -86,11 +85,9 @@ pub fn update_profile(
                 }
             }
 
-            // Update timestamp and version
             profile.updated_at = now_ms;
             profile.version += 1;
 
-            // Serialize and write back
             let data = profile
                 .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -101,7 +98,6 @@ pub fn update_profile(
                 return Err(MemHopError::PageNotFound(page_id));
             }
 
-            // Return updated profile
             Ok(ProfileResult {
                 id: format_hash(profile.id_hash),
                 name: profile.name,
@@ -117,14 +113,11 @@ pub fn update_profile(
             })
         }
         None => {
-            // Create new profile if not exists
             use crate::file::free_list::allocate_or_extend;
 
-            // Allocate a new page for the profile
             let page_id = allocate_or_extend(mmap, header, file, 500)?;
             let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-            // Create new profile with provided values
             let profile = ProfileSlot {
                 id_hash: profile_id_hash,
                 name: request.name.unwrap_or_default(),
@@ -140,7 +133,6 @@ pub fn update_profile(
                 version: 1,
             };
 
-            // Serialize and write to page
             let data = profile
                 .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
@@ -158,13 +150,11 @@ pub fn update_profile(
                 return Err(MemHopError::PageNotFound(page_id));
             }
 
-            // Insert into B-tree index
             let page_ref = (page_id as u64) << 16; // layer=0, offset=0
             btree.insert(profile_id_hash, page_ref);
 
-            // Return new profile
             Ok(ProfileResult {
-                id: format!("{:016x}", profile.id_hash),
+                id: format_hash(profile.id_hash),
                 name: profile.name,
                 role: profile.role,
                 personality: profile.personality,
@@ -184,7 +174,6 @@ pub fn update_profile(
 // L2 Context Title Update
 // ============================================================================
 
-/// Update L2 context title with sparse index synchronization
 pub fn update_topic_title(
     mmap: &mut MmapMut,
     _header: &mut FileHeader,
@@ -192,6 +181,29 @@ pub fn update_topic_title(
     sparse_index: &mut SparseIndex,
     id: &str,
     new_title: String,
+) -> Result<TopicSummary, MemHopError> {
+    update_topic_title_inner(mmap, btree, sparse_index, id, new_title, None)
+}
+
+pub fn update_topic_title_with_refs(
+    mmap: &mut MmapMut,
+    _header: &mut FileHeader,
+    btree: &BTreeIndex,
+    sparse_index: &mut SparseIndex,
+    id: &str,
+    new_title: String,
+    l3_refs: Option<Vec<String>>,
+) -> Result<TopicSummary, MemHopError> {
+    update_topic_title_inner(mmap, btree, sparse_index, id, new_title, l3_refs)
+}
+
+fn update_topic_title_inner(
+    mmap: &mut MmapMut,
+    btree: &BTreeIndex,
+    sparse_index: &mut SparseIndex,
+    id: &str,
+    new_title: String,
+    l3_refs: Option<Vec<String>>,
 ) -> Result<TopicSummary, MemHopError> {
     let now_ms = now_ms();
 
@@ -204,20 +216,18 @@ pub fn update_topic_title(
 
             let mut ctx = ContextSlot::deserialize_slot(&mmap[offset..])?;
 
-            // Update sparse index: remove old terms
             sparse_index.remove_document(ctx.id_hash);
 
-            // Update title
             ctx.title = new_title.clone();
 
-            // Add new terms to sparse index
-            let mut new_terms = Vec::new();
-            new_terms.extend(ctx.title.split_whitespace().map(|s| s.to_lowercase()));
-            if let Some(ref summary) = ctx.summary {
-                new_terms.extend(summary.split_whitespace().map(|s| s.to_lowercase()));
+            if let Some(ref refs) = l3_refs {
+                let l3_hashes: Vec<u64> = refs.iter().map(|s| common::parse_id_to_hash(s)).collect();
+                ctx.l3_refs = l3_hashes;
             }
-            let doc_len = ctx.title.len() + ctx.summary.as_ref().map_or(0, |s| s.len());
-            sparse_index.add_document(ctx.id_hash, new_terms, doc_len as u32);
+
+            let (new_terms, doc_len) =
+                common::build_l2_sparse_terms(&ctx.title, &ctx.summary);
+            sparse_index.add_document(ctx.id_hash, new_terms, doc_len);
 
             ctx.updated_at = now_ms;
             ctx.version += 1;
@@ -233,7 +243,7 @@ pub fn update_topic_title(
             }
 
             Ok(TopicSummary {
-                id: format!("{:016x}", ctx.id_hash),
+                id: format_hash(ctx.id_hash),
                 title: ctx.title,
                 depth: ctx.depth,
                 archive_count: ctx.archive_refs.len(),
@@ -250,7 +260,6 @@ pub fn update_topic_title(
 // L5 ActionChain Title Update
 // ============================================================================
 
-/// Update L5 action chain title
 pub fn update_crystal_title(
     mmap: &mut MmapMut,
     btree: &BTreeIndex,
@@ -283,7 +292,7 @@ pub fn update_crystal_title(
             }
 
             Ok(CrystalSummary {
-                id: format!("{:016x}", chain.id_hash),
+                id: format_hash(chain.id_hash),
                 title: chain.title,
                 condition: chain.trigger,
                 status: match chain.status {
@@ -309,7 +318,6 @@ pub fn update_crystal_title(
 // L3 Knowledge Title Update (Interface 15)
 // ============================================================================
 
-/// Update L3 knowledge hypergraph title
 pub fn update_knowledge_title(
     mmap: &mut MmapMut,
     btree: &BTreeIndex,
@@ -340,11 +348,10 @@ pub fn update_knowledge_title(
                 return Err(MemHopError::PageNotFound(page_id));
             }
 
-            // Aggregate node data via l3::store for meaningful KnowledgeSummary
             let (importance, knowledge_type) = compute_knowledge_meta(mmap, btree, id_hash);
 
             Ok(KnowledgeSummary {
-                id: format!("{:016x}", slot.id_hash),
+                id: format_hash(slot.id_hash),
                 title: slot.name,
                 domain: slot.source.domain_name().to_string(),
                 knowledge_type,
@@ -357,7 +364,6 @@ pub fn update_knowledge_title(
     }
 }
 
-/// Compute importance and knowledge_type from graph nodes via l3 store
 fn compute_knowledge_meta(mmap: &mut MmapMut, btree: &BTreeIndex, graph_id: u64) -> (f32, String) {
     let query = NodeListQuery {
         page: 1,
@@ -379,7 +385,6 @@ fn compute_knowledge_meta(mmap: &mut MmapMut, btree: &BTreeIndex, graph_id: u64)
     let imp_sum: f32 = nodes.iter().map(|n| n.importance).sum();
     let importance = imp_sum / count as f32;
 
-    // Derive knowledge_type from most common node_type
     use std::collections::HashMap;
     let mut type_counts: HashMap<&str, usize> = HashMap::new();
     for node in &nodes {
