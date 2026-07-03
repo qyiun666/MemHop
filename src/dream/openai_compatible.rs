@@ -1,6 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+#![cfg(feature = "llm")]
+
 //! OpenAI-compatible LLM Provider for any chat completions API.
 
 use crate::config::LlmConfig;
@@ -24,7 +26,6 @@ const JSON_RETRY_MESSAGE: &str = "请返回纯JSON格式，不要包含markdown�
 ///
 /// Works with any API that follows the OpenAI chat completions format.
 /// Configure with your preferred provider's API key, endpoint URL, and model name.
-#[allow(dead_code)]
 pub struct OpenAICompatibleLlmProvider {
     /// LLM configuration (model, endpoint, temperature, timeout, ...)
     config: LlmConfig,
@@ -54,7 +55,7 @@ impl OpenAICompatibleLlmProvider {
         &self,
         messages: &[serde_json::Value],
         max_tokens: u32,
-        params: Option<&crate::slot::context::LlmParams>,
+        params: Option<&crate::layers::context::LlmParams>,
     ) -> Result<String, MemHopError> {
         let temperature = params
             .map(|p| p.temperature)
@@ -110,7 +111,7 @@ impl OpenAICompatibleLlmProvider {
         system: &str,
         user_prompt: &str,
         max_tokens: u32,
-        params: Option<&crate::slot::context::LlmParams>,
+        params: Option<&crate::layers::context::LlmParams>,
         parse: F,
     ) -> Result<T, MemHopError>
     where
@@ -137,9 +138,9 @@ impl OpenAICompatibleLlmProvider {
 
     /// Default parameters for each dream stage function.
     /// These are tuned for memory-specific tasks (not general chat).
-    fn params_for_summarize() -> crate::slot::context::LlmParams {
+    fn params_for_summarize() -> crate::layers::context::LlmParams {
         // High determinism: we need consistent, factual compression
-        crate::slot::context::LlmParams {
+        crate::layers::context::LlmParams {
             temperature: 0.1,
             top_p: 0.85,
             presence_penalty: 0.0,
@@ -147,9 +148,9 @@ impl OpenAICompatibleLlmProvider {
         }
     }
 
-    fn params_for_distill() -> crate::slot::context::LlmParams {
+    fn params_for_distill() -> crate::layers::context::LlmParams {
         // Very high determinism: structured JSON must be parseable
-        crate::slot::context::LlmParams {
+        crate::layers::context::LlmParams {
             temperature: 0.0,
             top_p: 0.8,
             presence_penalty: 0.2,
@@ -157,9 +158,9 @@ impl OpenAICompatibleLlmProvider {
         }
     }
 
-    fn params_for_crystal() -> crate::slot::context::LlmParams {
+    fn params_for_crystal() -> crate::layers::context::LlmParams {
         // Moderate creativity for DSL generation, but still structured
-        crate::slot::context::LlmParams {
+        crate::layers::context::LlmParams {
             temperature: 0.2,
             top_p: 0.9,
             presence_penalty: 0.1,
@@ -167,9 +168,9 @@ impl OpenAICompatibleLlmProvider {
         }
     }
 
-    fn params_for_habits() -> crate::slot::context::LlmParams {
+    fn params_for_habits() -> crate::layers::context::LlmParams {
         // Balanced: need to detect patterns but not hallucinate
-        crate::slot::context::LlmParams {
+        crate::layers::context::LlmParams {
             temperature: 0.15,
             top_p: 0.88,
             presence_penalty: 0.1,
@@ -177,9 +178,9 @@ impl OpenAICompatibleLlmProvider {
         }
     }
 
-    fn params_for_patterns() -> crate::slot::context::LlmParams {
+    fn params_for_patterns() -> crate::layers::context::LlmParams {
         // Similar to habits: pattern detection needs consistency
-        crate::slot::context::LlmParams {
+        crate::layers::context::LlmParams {
             temperature: 0.15,
             top_p: 0.88,
             presence_penalty: 0.1,
@@ -609,7 +610,7 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
         HabitAnalysis {
             lexicon,
             style_traits: Vec::new(),
-            emotion_patterns: HashMap::new()
+            emotion_patterns: HashMap::new(),
         }
     }
 

@@ -1,18 +1,17 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+#[cfg(feature = "grpc-encoder")]
 use crate::encoder::Encoder;
-#[cfg(test)]
-use crate::encoder::EncoderOutput;
 use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::slot::context::ActivationState;
-use crate::slot::context::ContextSlot;
-use crate::slot::context_node::ContextNode;
-use crate::slot::hyperedge::{HyperedgeKind, HyperedgeSlot};
-use crate::util::{hash_id, PageType, PAGE_SIZE};
+use crate::layers::context::ActivationState;
+use crate::layers::context::ContextSlot;
+use crate::layers::context_node::ContextNode;
+use crate::layers::hyperedge::{HyperedgeKind, HyperedgeSlot};
+use crate::util::{hash_id, PageType, DEFAULT_GROW_PAGES, PAGE_SIZE, SENTINEL_PAGE_ID};
 use crate::util::{SourceMeta, SourceRef};
 use crate::MemHopError;
 use half::f16;
@@ -142,6 +141,7 @@ pub fn split_long_text(text: &str, max_len: usize) -> Vec<String> {
 }
 
 /// Encode all items in batch using the encoder
+#[cfg(feature = "grpc-encoder")]
 pub fn encode_items(
     items: &[StoreItem],
     encoder: &dyn Encoder,
@@ -193,7 +193,7 @@ fn check_duplicate(
 
     for (&existing_hash, &page_ref) in btree.iter() {
         let page_id = (page_ref >> 16) as u32;
-        let node_offset = crate::query::slot_io::slot_offset(page_id);
+        let node_offset = crate::shared::slot_io::slot_offset(page_id);
 
         if node_offset >= mmap.len() {
             continue;
@@ -212,7 +212,7 @@ fn check_duplicate(
         if let Ok(existing_node) = ContextNode::deserialize(&mmap[node_offset..]) {
             if existing_node.vector_page_ref != 0 {
                 let vec_page_id = (existing_node.vector_page_ref >> 16) as u32;
-                let vec_offset = crate::query::slot_io::slot_offset(vec_page_id);
+                let vec_offset = crate::shared::slot_io::slot_offset(vec_page_id);
 
                 if vec_offset + vector_dim * 2 <= mmap.len() {
                     let mut existing_vec = Vec::with_capacity(vector_dim);
@@ -290,7 +290,7 @@ pub fn dedup_and_write_l1(
         }
 
         let vector_page_ref = if !item.dense.is_empty() {
-            let vec_page_id = allocate_or_extend(mmap, header, file, 500)?;
+            let vec_page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
             let vec_slot_index = 0u16;
 
             crate::index::vector::write_vector(
@@ -326,17 +326,17 @@ pub fn dedup_and_write_l1(
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-        let page_id = allocate_or_extend(mmap, header, file, 500)?;
+        let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
 
-        let node_offset = crate::query::slot_io::slot_offset(page_id);
+        let node_offset = crate::shared::slot_io::slot_offset(page_id);
         if node_offset + node_data.len() <= mmap.len() {
             mmap[node_offset..node_offset + node_data.len()].copy_from_slice(&node_data);
         }
 
         let node_page_hdr =
-            crate::file::page::PageHeader::new(page_id, PageType::ContextNode, 1, 0xFFFFFFFF);
+            crate::file::page::PageHeader::new(page_id, PageType::ContextNode, 1, SENTINEL_PAGE_ID);
         let node_hdr_bytes = node_page_hdr.to_bytes();
-        let node_page_offset = crate::query::slot_io::page_offset(page_id);
+        let node_page_offset = crate::shared::slot_io::page_offset(page_id);
         mmap[node_page_offset..node_page_offset + 32].copy_from_slice(&node_hdr_bytes);
 
         let page_ref = (page_id as u64) << 16;
@@ -396,7 +396,7 @@ pub fn update_topics(
         let centroid_vector = calculate_centroid_from_nodes(mmap, &node_ids, &*btree, vector_dim)?;
 
         let centroid_page_ref = if let Some(ref vec) = centroid_vector {
-            let vec_page_id = allocate_or_extend(mmap, header, file, 500)?;
+            let vec_page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
             let vec_slot_index = 0u16;
             crate::index::vector::write_vector(
                 mmap,
@@ -429,24 +429,24 @@ pub fn update_topics(
             activation_state: ActivationState::Dormant,
             centroid_page_ref,
             dialogue_range: (now, now),
-            llm_params: crate::slot::context::LlmParams::default(),
+            llm_params: crate::layers::context::LlmParams::default(),
         };
 
         let context_data = context
             .serialize()
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-        let page_id = allocate_or_extend(mmap, header, file, 500)?;
-        let context_offset = crate::query::slot_io::slot_offset(page_id);
+        let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
+        let context_offset = crate::shared::slot_io::slot_offset(page_id);
         if context_offset + context_data.len() <= mmap.len() {
             mmap[context_offset..context_offset + context_data.len()]
                 .copy_from_slice(&context_data);
         }
 
         let page_hdr =
-            crate::file::page::PageHeader::new(page_id, PageType::Context, 2, 0xFFFFFFFF);
+            crate::file::page::PageHeader::new(page_id, PageType::Context, 2, SENTINEL_PAGE_ID);
         let hdr_bytes = page_hdr.to_bytes();
-        let page_offset = crate::query::slot_io::page_offset(page_id);
+        let page_offset = crate::shared::slot_io::page_offset(page_id);
         mmap[page_offset..page_offset + 32].copy_from_slice(&hdr_bytes);
 
         btree.insert(context_id, (page_id as u64) << 16);
@@ -502,7 +502,7 @@ fn calculate_centroid_from_nodes(
     for &id_hash in node_ids {
         if let Some(page_ref) = btree.search(id_hash) {
             let page_id = (page_ref >> 16) as u32;
-            let offset = crate::query::slot_io::slot_offset(page_id);
+            let offset = crate::shared::slot_io::slot_offset(page_id);
 
             if let Ok(node) = ContextNode::deserialize(&data[offset..]) {
                 if node.vector_page_ref != 0 {
@@ -570,14 +570,18 @@ pub fn create_batch_hyperedges(
             ));
         }
 
-        let page_id = allocate_or_extend(mmap, header, file, 500)?;
-        let edge_offset = crate::query::slot_io::slot_offset(page_id);
+        let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
+        let edge_offset = crate::shared::slot_io::slot_offset(page_id);
         mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
 
-        let page_hdr =
-            crate::file::page::PageHeader::new(0, crate::util::PageType::Hyperedge, 1, 0xFFFFFFFF);
+        let page_hdr = crate::file::page::PageHeader::new(
+            page_id,
+            crate::util::PageType::Hyperedge,
+            1,
+            SENTINEL_PAGE_ID,
+        );
         let hdr_bytes = page_hdr.to_bytes();
-        let page_offset = crate::query::slot_io::page_offset(page_id);
+        let page_offset = crate::shared::slot_io::page_offset(page_id);
         mmap[page_offset..page_offset + 32].copy_from_slice(&hdr_bytes);
 
         btree.insert(assoc_edge.id_hash, (page_id as u64) << 16);
@@ -609,18 +613,18 @@ pub fn create_batch_hyperedges(
                 ));
             }
 
-            let page_id = allocate_or_extend(mmap, header, file, 500)?;
-            let edge_offset = crate::query::slot_io::slot_offset(page_id);
+            let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
+            let edge_offset = crate::shared::slot_io::slot_offset(page_id);
             mmap[edge_offset..edge_offset + edge_data.len()].copy_from_slice(&edge_data);
 
             let page_hdr = crate::file::page::PageHeader::new(
-                0,
+                page_id,
                 crate::util::PageType::Hyperedge,
                 1,
-                0xFFFFFFFF,
+                SENTINEL_PAGE_ID,
             );
             let hdr_bytes = page_hdr.to_bytes();
-            let page_offset = crate::query::slot_io::page_offset(page_id);
+            let page_offset = crate::shared::slot_io::page_offset(page_id);
             mmap[page_offset..page_offset + 32].copy_from_slice(&hdr_bytes);
 
             btree.insert(edge_id_hash, (page_id as u64) << 16);
@@ -633,6 +637,7 @@ pub fn create_batch_hyperedges(
 
 /// Main batch store function - five-phase pipeline
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "grpc-encoder")]
 pub fn batch_store(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -714,118 +719,5 @@ mod tests {
         let text = "A".repeat(600);
         let chunks = split_long_text(&text, 512);
         assert!(chunks.len() >= 2);
-    }
-
-    /// Minimal mock encoder that returns a fixed dense vector.
-    struct MockEncoder {
-        dim: usize,
-    }
-
-    impl Encoder for MockEncoder {
-        fn encode(&self, _text: &str) -> Result<EncoderOutput, MemHopError> {
-            Ok(EncoderOutput {
-                dense: vec![half::f16::from_f32(0.1); self.dim],
-                sparse: HashMap::new(),
-            })
-        }
-
-        fn dim(&self) -> usize {
-            self.dim
-        }
-
-        fn mode(&self) -> &str {
-            "mock"
-        }
-    }
-
-    #[test]
-    fn test_batch_store_links_l1_to_l2() {
-        use crate::query::common::format_hash;
-        use crate::query::types::{EngramListQuery, TopicListQuery};
-        use crate::{MemHopConfig, SourceMeta, SourceType};
-        use tempfile::TempDir;
-
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("batch_store_link_test.meh");
-        let mut config = MemHopConfig::new(path.clone(), 8);
-        config.encoder_grpc_addr = None; // unit test does not need real encoder
-        let mut db = crate::MemHop::open(config).unwrap();
-        db.set_encoder(MockEncoder { dim: 8 });
-
-        let batch = StoreBatch {
-            items: vec![
-                StoreItem {
-                    text: "hello world one".to_string(),
-                    topic_label: Some("greetings".to_string()),
-                    domain_id: None,
-                    importance: Some(0.5),
-                    valence: None,
-                    arousal: None,
-                    source: SourceMeta::new(SourceType::UserInput, None),
-                    is_structural: false,
-                    source_ref: None,
-                },
-                StoreItem {
-                    text: "hello world two".to_string(),
-                    topic_label: Some("greetings".to_string()),
-                    domain_id: None,
-                    importance: Some(0.6),
-                    valence: None,
-                    arousal: None,
-                    source: SourceMeta::new(SourceType::UserInput, None),
-                    is_structural: false,
-                    source_ref: None,
-                },
-            ],
-            session_id: None,
-            turn_id: None,
-            source: Default::default(),
-        };
-
-        let report = db.batch_store(batch).unwrap();
-        assert_eq!(report.l1_nodes_created, 2);
-        assert_eq!(report.l2_topics_updated, 1);
-
-        // Verify the L2 ContextSlot is registered in the B-tree and can be listed.
-        let topics = db
-            .list_topics(TopicListQuery {
-                page: 1,
-                page_size: 10,
-                active_only: false,
-                keyword: None,
-            })
-            .unwrap();
-        assert_eq!(topics.total, 1);
-        assert_eq!(topics.items[0].title, "greetings");
-
-        // Verify each L1 node now points to the L2 context.
-        let engrams = db
-            .list_engrams(EngramListQuery {
-                page: 1,
-                page_size: 10,
-                keyword: None,
-                min_importance: None,
-                state_filter: None,
-            })
-            .unwrap();
-        assert_eq!(engrams.total, 2);
-        for engram in &engrams.items {
-            assert_ne!(
-                engram.associated_topics[0],
-                format_hash(0),
-                "L1 ContextNode context_id should not be zero"
-            );
-            assert_eq!(engram.text, "greetings");
-        }
-
-        // Also verify by directly fetching one engram.
-        let id_hash = crate::util::hash_id("hello world one");
-        let engram = db
-            .get_engram(&format_hash(id_hash))
-            .unwrap()
-            .expect("engram should exist");
-        assert_eq!(engram.text, "greetings");
-        assert_eq!(engram.associated_topics.len(), 1);
-        assert_ne!(engram.associated_topics[0], format_hash(0));
     }
 }

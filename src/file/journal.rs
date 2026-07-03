@@ -1,6 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+// Journal WAL helpers are exercised by tests and reserved for future crash-recovery integration.
+#![allow(dead_code)]
+
 use crate::file::header::FileHeader;
 use crate::util::PAGE_SIZE;
 use crate::{MemHopError, Result};
@@ -193,6 +196,7 @@ pub fn truncate_journal(file: &mut File, new_len: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::SENTINEL_PAGE_ID;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -270,7 +274,7 @@ mod tests {
             vector_dim: 768,
             commit_id: 2,
             page_count: 20,
-            free_list_head: 0xFFFFFFFF,
+            free_list_head: SENTINEL_PAGE_ID,
             layer_roots: [0; 14],
             journal_start: 0,
             journal_len: file.metadata().unwrap().len(),

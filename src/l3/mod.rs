@@ -16,7 +16,7 @@ pub use community::{Community, CommunityConfig, CommunityResult};
 pub use degree::{DegreeTracker, GraphDegrees, IsolatedNode, IsolatedResult};
 pub use index::{L3Index, L3IndexQuery};
 pub use store::{
-    add_edge, add_node, bfs_traversal, bfs_traversal_cached, collect_l2_refs, count_graph_elements,
-    delete_edge, delete_graph, delete_node, extract_subgraph, get_edge, get_node,
-    list_edges_by_graph, list_nodes_by_graph, read_node_neighbors, remove_l3_ref_from_context,
+    add_edge, add_node, bfs_traversal, bfs_traversal_cached, collect_l2_refs, delete_edge,
+    delete_graph, delete_node, get_edge, get_node, list_edges_by_graph, list_nodes_by_graph,
+    remove_l3_ref_from_context,
 };

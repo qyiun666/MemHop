@@ -8,8 +8,8 @@ use crate::l3::cache::AdjacencyCache;
 use crate::l3::dsl::ast::*;
 use crate::l3::dsl::result::QueryResult;
 use crate::l3::store;
+use crate::layers::hypergraph::{GraphEdgeKind, HypergraphEdge, HypergraphNode};
 use crate::query::types::{EdgeListQuery, NodeListQuery};
-use crate::slot::hypergraph::{GraphEdgeKind, HypergraphEdge, HypergraphNode};
 use crate::MemHopError;
 use memmap2::MmapMut;
 
@@ -61,7 +61,10 @@ fn execute_match(
     }
 
     let total = nodes.len();
-    Ok(QueryResult::Nodes { items: nodes, total })
+    Ok(QueryResult::Nodes {
+        items: nodes,
+        total,
+    })
 }
 
 // ── HYPEREDGE executor ─────────────────────────────────────────────────────
@@ -93,7 +96,10 @@ fn execute_hyperedge(
     }
 
     let total = edges.len();
-    Ok(QueryResult::Edges { items: edges, total })
+    Ok(QueryResult::Edges {
+        items: edges,
+        total,
+    })
 }
 
 // ── PATH executor ──────────────────────────────────────────────────────────
@@ -105,13 +111,10 @@ fn execute_path(
     graph_id: u64,
     cache: &mut AdjacencyCache,
 ) -> Result<QueryResult, MemHopError> {
-    let start_hash = crate::query::common::parse_id_to_hash(&p.start_node);
+    let start_hash = crate::shared::common::parse_id_to_hash(&p.start_node);
 
     let edge_kinds = p.edge_kinds.as_ref().and_then(|kinds| {
-        let parsed: Vec<GraphEdgeKind> = kinds
-            .iter()
-            .filter_map(|s| parse_edge_kind(s))
-            .collect();
+        let parsed: Vec<GraphEdgeKind> = kinds.iter().filter_map(|s| parse_edge_kind(s)).collect();
         if parsed.is_empty() {
             None
         } else {
@@ -143,18 +146,11 @@ fn execute_subgraph(
     graph_id: u64,
     cache: &mut AdjacencyCache,
 ) -> Result<QueryResult, MemHopError> {
-    let start_hash = crate::query::common::parse_id_to_hash(&s.start_node);
+    let start_hash = crate::shared::common::parse_id_to_hash(&s.start_node);
 
     let data: &[u8] = &mmap[..];
-    let hops = store::bfs_traversal_cached(
-        data,
-        btree,
-        graph_id,
-        start_hash,
-        s.max_depth,
-        None,
-        cache,
-    )?;
+    let hops =
+        store::bfs_traversal_cached(data, btree, graph_id, start_hash, s.max_depth, None, cache)?;
 
     let mut node_hashes = std::collections::HashSet::new();
     let mut edge_ids = std::collections::HashSet::new();
@@ -172,9 +168,7 @@ fn execute_subgraph(
     let mut nodes: Vec<HypergraphNode> = Vec::new();
     for &node_hash in &node_hashes {
         if let Some(page_ref) = btree.search(node_hash) {
-            if let Some(slot_data) =
-                crate::query::slot_io::get_slot_data(data, page_ref)
-            {
+            if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
                 if let Ok(node) = HypergraphNode::deserialize(slot_data) {
                     if node.graph_id == graph_id {
                         nodes.push(node);
@@ -184,14 +178,21 @@ fn execute_subgraph(
         }
     }
 
-    Ok(QueryResult::Subgraph(crate::query::types::Subgraph { nodes, edges }))
+    Ok(QueryResult::Subgraph(crate::query::types::Subgraph {
+        nodes,
+        edges,
+    }))
 }
 
 // ── WHERE evaluation ───────────────────────────────────────────────────────
 
 fn eval_where_node(cond: &WhereCondition, node: &HypergraphNode) -> bool {
     match cond {
-        WhereCondition::PropertyCompare { property, operator, value } => {
+        WhereCondition::PropertyCompare {
+            property,
+            operator,
+            value,
+        } => {
             let node_val = match property.as_str() {
                 "importance" => node.importance,
                 "version" => node.version as f32,
@@ -203,18 +204,18 @@ fn eval_where_node(cond: &WhereCondition, node: &HypergraphNode) -> bool {
         WhereCondition::KeywordContains(keyword) => {
             node.keywords.iter().any(|k| k.contains(keyword))
         }
-        WhereCondition::And(a, b) => {
-            eval_where_node(a, node) && eval_where_node(b, node)
-        }
-        WhereCondition::Or(a, b) => {
-            eval_where_node(a, node) || eval_where_node(b, node)
-        }
+        WhereCondition::And(a, b) => eval_where_node(a, node) && eval_where_node(b, node),
+        WhereCondition::Or(a, b) => eval_where_node(a, node) || eval_where_node(b, node),
     }
 }
 
 fn eval_where_edge(cond: &WhereCondition, edge: &HypergraphEdge) -> bool {
     match cond {
-        WhereCondition::PropertyCompare { property, operator, value } => {
+        WhereCondition::PropertyCompare {
+            property,
+            operator,
+            value,
+        } => {
             let edge_val = match property.as_str() {
                 "weight" => edge.weight,
                 _ => return false,
@@ -258,84 +259,19 @@ fn parse_edge_kind(s: &str) -> Option<GraphEdgeKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file::header::FileHeader;
-    use crate::slot::hypergraph::{GraphEdgeKind, HypergraphEdge, HypergraphNode};
-    use crate::util::PAGE_SIZE;
-    use std::fs::File;
-    use std::io::Write;
-
-    fn create_test_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex, File) {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-        let mut file = File::create(path).unwrap();
-        file.write_all(&vec![0u8; PAGE_SIZE * pages]).unwrap();
-        drop(file);
-
-        let file = std::fs::OpenOptions::new()
-            .read(true).write(true).open(path).unwrap();
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut header = FileHeader::new(768);
-        header.page_count = pages as u32;
-        crate::file::free_list::init_free_list(&mut header).unwrap();
-        for page_id in (2..pages as u32).rev() {
-            crate::file::free_list::free_page(&mut mmap, &mut header, page_id).unwrap();
-        }
-        let btree = BTreeIndex::new();
-        (mmap, header, btree, file)
-    }
-
-    fn make_node(id: u64, graph_id: u64, title: &str) -> HypergraphNode {
-        HypergraphNode {
-            id_hash: id, graph_id, title: title.to_string(),
-            node_type: "concept".to_string(), content: "test".to_string(),
-            keywords: vec![], source_ref: None, importance: 0.5,
-            created_at: 0, updated_at: 0, version: 1,
-        }
-    }
-
-    fn make_edge(id: u64, graph_id: u64, nodes: Vec<u64>) -> HypergraphEdge {
-        HypergraphEdge {
-            id_hash: id, graph_id, kind: GraphEdgeKind::Related,
-            node_ids: nodes, weight: 1.0, label: None, created_at: 0,
-        }
-    }
-
-    fn build_test_graph(
-        mmap: &mut MmapMut, header: &mut FileHeader,
-        btree: &mut BTreeIndex, file: &mut File,
-    ) -> u64 {
-        let gid = 1u64;
-        let nodes = [
-            make_node(101, gid, "Rust"),
-            make_node(102, gid, "Cargo"),
-            make_node(103, gid, "Borrow Checker"),
-            make_node(104, gid, "Lifetime"),
-            make_node(105, gid, "Trait"),
-        ];
-        for n in &nodes {
-            store::add_node(mmap, header, btree, n.clone(), file).unwrap();
-        }
-        let edges = [
-            make_edge(201, gid, vec![101, 102]),
-            make_edge(202, gid, vec![101, 103]),
-            make_edge(203, gid, vec![103, 104]),
-            make_edge(204, gid, vec![101, 105, 102]), // hyperedge
-        ];
-        for e in &edges {
-            store::add_edge(mmap, header, btree, e.clone(), file).unwrap();
-        }
-        gid
-    }
+    use crate::test_helpers::*;
 
     #[test]
     fn test_execute_match_all() {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(128);
-        let gid = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
+        let gid = build_dsl_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
         let mut cache = AdjacencyCache::new();
 
         let q = Query::Match(NodeMatch {
-            variable: None, node_type: None,
-            where_clause: None, limit: None,
+            variable: None,
+            node_type: None,
+            where_clause: None,
+            limit: None,
         });
         let result = execute(&q, &mmap, &btree, gid, &mut cache, 1, 20).unwrap();
         match result {
@@ -350,13 +286,16 @@ mod tests {
     #[test]
     fn test_execute_match_with_where() {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(128);
-        let gid = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
+        let gid = build_dsl_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
         let mut cache = AdjacencyCache::new();
 
         let q = Query::Match(NodeMatch {
-            variable: None, node_type: None,
+            variable: None,
+            node_type: None,
             where_clause: Some(WhereCondition::PropertyCompare {
-                property: "importance".into(), operator: CompareOp::Gt, value: 0.4,
+                property: "importance".into(),
+                operator: CompareOp::Gt,
+                value: 0.4,
             }),
             limit: None,
         });
@@ -372,13 +311,15 @@ mod tests {
     #[test]
     fn test_execute_path() {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(128);
-        let gid = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
+        let gid = build_dsl_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
         let mut cache = AdjacencyCache::new();
 
         // node 101 (Rust) connects to 102, 103, 105
         let start_id = format!("{:016x}", 101u64);
         let q = Query::Path(PathQuery {
-            start_node: start_id, max_depth: 2, edge_kinds: None,
+            start_node: start_id,
+            max_depth: 2,
+            edge_kinds: None,
         });
         let result = execute(&q, &mmap, &btree, gid, &mut cache, 1, 20).unwrap();
         match result {
@@ -392,12 +333,13 @@ mod tests {
     #[test]
     fn test_execute_subgraph() {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(128);
-        let gid = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
+        let gid = build_dsl_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
         let mut cache = AdjacencyCache::new();
 
         let start_id = format!("{:016x}", 101u64);
         let q = Query::Subgraph(SubgraphQuery {
-            start_node: start_id, max_depth: 1,
+            start_node: start_id,
+            max_depth: 1,
         });
         let result = execute(&q, &mmap, &btree, gid, &mut cache, 1, 20).unwrap();
         match result {
@@ -411,12 +353,14 @@ mod tests {
     #[test]
     fn test_execute_hyperedge() {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(128);
-        let gid = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
+        let gid = build_dsl_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
         let mut cache = AdjacencyCache::new();
 
         let q = Query::Hyperedge(HyperedgeMatch {
-            edge_var: None, node_vars: vec![],
-            where_clause: None, limit: None,
+            edge_var: None,
+            node_vars: vec![],
+            where_clause: None,
+            limit: None,
         });
         let result = execute(&q, &mmap, &btree, gid, &mut cache, 1, 20).unwrap();
         match result {

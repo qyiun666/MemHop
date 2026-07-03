@@ -3,7 +3,7 @@
 
 //! L3 Adjacency Cache — cache graph adjacency lists to avoid repeated BTree scans.
 
-use crate::slot::hypergraph::{GraphEdgeKind, HypergraphEdge};
+use crate::layers::hypergraph::{GraphEdgeKind, HypergraphEdge};
 use std::collections::{HashMap, HashSet};
 
 /// Adjacency list for a single graph: node_id -> list of (edge, connected_node_ids)

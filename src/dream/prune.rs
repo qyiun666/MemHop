@@ -1,15 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::config::DecayConfig;
-use crate::dream::llm::LlmProvider;
-use crate::file::header::FileHeader;
-use crate::index::btree::BTreeIndex;
-use crate::index::sparse::SparseIndex;
-use crate::MemHopError;
-use memmap2::MmapMut;
+use crate::query::diagnostics::StageReport;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 /// Report of dream operation
 ///
@@ -51,8 +44,14 @@ pub struct DreamReport {
     pub new_crystals: Vec<String>,
     /// Low-quality crystals pruned
     pub pruned_crystals: Vec<String>,
+    /// Per-stage execution reports
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stages: Vec<StageReport>,
     /// Total execution time in milliseconds
     pub duration_ms: u64,
+    /// True if a fatal stage failed and the in-memory indices were rolled back
+    #[serde(default)]
+    pub rollback_incomplete: bool,
 }
 
 /// Result of demoting a depth-1 context to depth-2
@@ -77,20 +76,6 @@ pub struct CompressResult {
     pub source_context_id: String,
     /// Compressed summary
     pub new_summary: String,
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn dream_consolidation(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
-    sparse_index: &mut SparseIndex,
-    llm: &dyn LlmProvider,
-    session_topic_ids: HashSet<u64>,
-    file: &mut std::fs::File,
-    decay_config: &DecayConfig,
-) -> Result<DreamReport, MemHopError> {
-    crate::dream::dream_pipeline(mmap, header, btree, sparse_index, llm, session_topic_ids, file, decay_config)
 }
 
 #[cfg(test)]
@@ -123,12 +108,15 @@ mod tests {
             new_l3_nodes: vec!["l3-node-1".to_string()],
             new_crystals: vec!["crystal-1".to_string()],
             pruned_crystals: vec!["crystal-old".to_string()],
+            stages: vec![],
             duration_ms: 500,
+            rollback_incomplete: false,
         };
 
         assert_eq!(report.demoted_to_secondary.len(), 1);
         assert_eq!(report.removed_contexts.len(), 1);
         assert_eq!(report.new_crystals.len(), 1);
         assert_eq!(report.duration_ms, 500);
+        assert!(!report.rollback_incomplete);
     }
 }

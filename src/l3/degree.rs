@@ -5,8 +5,8 @@
 //! Write-path hooks are O(1); dirty-flag triggers full BTree scan rebuild on next query.
 
 use crate::index::btree::BTreeIndex;
-use crate::query::slot_io::get_slot_data;
-use crate::slot::hypergraph::{HypergraphEdge, HypergraphNode};
+use crate::layers::hypergraph::{HypergraphEdge, HypergraphNode};
+use crate::shared::slot_io::get_slot_data;
 use crate::util::PageType;
 use crate::MemHopError;
 use memmap2::MmapMut;
@@ -181,11 +181,7 @@ impl DegreeTracker {
 /// This is the cold-start / dirty-graph fallback. It finds every edge page
 /// belonging to `graph_id` and counts references per node, then registers
 /// nodes with zero edges as degree=0.
-pub fn full_scan_degrees(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    graph_id: u64,
-) -> GraphDegrees {
+pub fn full_scan_degrees(mmap: &MmapMut, btree: &BTreeIndex, graph_id: u64) -> GraphDegrees {
     let data: &[u8] = &mmap[..];
     let mut degrees: HashMap<u64, u32> = HashMap::new();
 
@@ -246,10 +242,10 @@ pub fn detect_isolated(
         tracker.dirty_graphs.remove(&graph_id);
     }
 
-    let low_degree_hashes: HashSet<u64> =
-        tracker.get_low_degree_nodes(graph_id, threshold)
-            .into_iter()
-            .collect();
+    let low_degree_hashes: HashSet<u64> = tracker
+        .get_low_degree_nodes(graph_id, threshold)
+        .into_iter()
+        .collect();
 
     let mut isolated_nodes = Vec::new();
     let mut total_nodes = 0usize;
@@ -289,66 +285,7 @@ pub fn detect_isolated(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file::header::FileHeader;
-    use crate::slot::hypergraph::{GraphEdgeKind, HypergraphEdge, HypergraphNode};
-    use crate::util::PAGE_SIZE;
-    use std::fs::File;
-    use std::io::Write;
-
-    // ── Test helpers ────────────────────────────────────────────────────
-
-    fn create_test_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex, File) {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-        let mut file = File::create(path).unwrap();
-        file.write_all(&vec![0u8; PAGE_SIZE * pages]).unwrap();
-        drop(file);
-
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut header = FileHeader::new(768);
-        header.page_count = pages as u32;
-        crate::file::free_list::init_free_list(&mut header).unwrap();
-
-        for page_id in (2..pages as u32).rev() {
-            crate::file::free_list::free_page(&mut mmap, &mut header, page_id).unwrap();
-        }
-
-        let btree = BTreeIndex::new();
-        (mmap, header, btree, file)
-    }
-
-    fn make_node(id: u64, graph_id: u64, title: &str) -> HypergraphNode {
-        HypergraphNode {
-            id_hash: id,
-            graph_id,
-            title: title.to_string(),
-            node_type: "concept".to_string(),
-            content: "test content".to_string(),
-            keywords: vec![],
-            source_ref: None,
-            importance: 0.5,
-            created_at: 0,
-            updated_at: 0,
-            version: 1,
-        }
-    }
-
-    fn make_edge(id: u64, graph_id: u64, nodes: Vec<u64>) -> HypergraphEdge {
-        HypergraphEdge {
-            id_hash: id,
-            graph_id,
-            kind: GraphEdgeKind::Related,
-            node_ids: nodes,
-            weight: 1.0,
-            label: None,
-            created_at: 0,
-        }
-    }
+    use crate::test_helpers::*;
 
     // ── Unit tests ──────────────────────────────────────────────────────
 
@@ -434,21 +371,44 @@ mod tests {
         let graph_id = 1u64;
 
         crate::l3::store::add_node(
-            &mut mmap, &mut header, &mut btree,
-            make_node(101, graph_id, "a"), &mut file,
-        ).unwrap();
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_node(101, graph_id, "a"),
+            &mut file,
+            None,
+            None,
+        )
+        .unwrap();
         crate::l3::store::add_node(
-            &mut mmap, &mut header, &mut btree,
-            make_node(102, graph_id, "b"), &mut file,
-        ).unwrap();
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_node(102, graph_id, "b"),
+            &mut file,
+            None,
+            None,
+        )
+        .unwrap();
         crate::l3::store::add_node(
-            &mut mmap, &mut header, &mut btree,
-            make_node(103, graph_id, "isolated"), &mut file,
-        ).unwrap();
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_node(103, graph_id, "isolated"),
+            &mut file,
+            None,
+            None,
+        )
+        .unwrap();
         crate::l3::store::add_edge(
-            &mut mmap, &mut header, &mut btree,
-            make_edge(201, graph_id, vec![101, 102]), &mut file,
-        ).unwrap();
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_edge(201, graph_id, vec![101, 102]),
+            &mut file,
+            None,
+        )
+        .unwrap();
 
         let degrees = full_scan_degrees(&mmap, &btree, graph_id);
         assert_eq!(degrees.node_degrees.get(&101), Some(&1));
@@ -462,21 +422,44 @@ mod tests {
         let graph_id = 1u64;
 
         crate::l3::store::add_node(
-            &mut mmap, &mut header, &mut btree,
-            make_node(101, graph_id, "a"), &mut file,
-        ).unwrap();
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_node(101, graph_id, "a"),
+            &mut file,
+            None,
+            None,
+        )
+        .unwrap();
         crate::l3::store::add_node(
-            &mut mmap, &mut header, &mut btree,
-            make_node(102, graph_id, "b"), &mut file,
-        ).unwrap();
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_node(102, graph_id, "b"),
+            &mut file,
+            None,
+            None,
+        )
+        .unwrap();
         crate::l3::store::add_node(
-            &mut mmap, &mut header, &mut btree,
-            make_node(103, graph_id, "isolated"), &mut file,
-        ).unwrap();
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_node(103, graph_id, "isolated"),
+            &mut file,
+            None,
+            None,
+        )
+        .unwrap();
         crate::l3::store::add_edge(
-            &mut mmap, &mut header, &mut btree,
-            make_edge(201, graph_id, vec![101, 102]), &mut file,
-        ).unwrap();
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_edge(201, graph_id, vec![101, 102]),
+            &mut file,
+            None,
+        )
+        .unwrap();
 
         let mut tracker = DegreeTracker::new();
         tracker.mark_dirty(graph_id); // simulate cold start
@@ -496,12 +479,47 @@ mod tests {
         let g2 = 2u64;
 
         // Graph 1: two connected nodes
-        crate::l3::store::add_node(&mut mmap, &mut header, &mut btree, make_node(101, g1, "a"), &mut file).unwrap();
-        crate::l3::store::add_node(&mut mmap, &mut header, &mut btree, make_node(102, g1, "b"), &mut file).unwrap();
-        crate::l3::store::add_edge(&mut mmap, &mut header, &mut btree, make_edge(201, g1, vec![101, 102]), &mut file).unwrap();
+        crate::l3::store::add_node(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_node(101, g1, "a"),
+            &mut file,
+            None,
+            None,
+        )
+        .unwrap();
+        crate::l3::store::add_node(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_node(102, g1, "b"),
+            &mut file,
+            None,
+            None,
+        )
+        .unwrap();
+        crate::l3::store::add_edge(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_edge(201, g1, vec![101, 102]),
+            &mut file,
+            None,
+        )
+        .unwrap();
 
         // Graph 2: one isolated node
-        crate::l3::store::add_node(&mut mmap, &mut header, &mut btree, make_node(301, g2, "x"), &mut file).unwrap();
+        crate::l3::store::add_node(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            make_node(301, g2, "x"),
+            &mut file,
+            None,
+            None,
+        )
+        .unwrap();
 
         let mut tracker = DegreeTracker::new();
 

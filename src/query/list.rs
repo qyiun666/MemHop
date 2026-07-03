@@ -5,15 +5,15 @@
 
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
-use crate::query::common::{
+use crate::layers::action_chain::{ActionChainSlot, ChainStatus};
+use crate::layers::archive::ArchiveSlot;
+use crate::layers::context::ContextSlot;
+use crate::layers::context_node::ContextNode;
+use crate::layers::hypergraph::HypergraphSlot;
+use crate::query::types::*;
+use crate::shared::common::{
     self, format_hash, has_more, matches_keyword, pagination_params, sort_by_score,
 };
-use crate::query::types::*;
-use crate::slot::action_chain::{ActionChainSlot, ChainStatus};
-use crate::slot::archive::{ArchiveSlot, ContentType};
-use crate::slot::context::ContextSlot;
-use crate::slot::context_node::ContextNode;
-use crate::slot::hypergraph::HypergraphSlot;
 use crate::util::{PageType, PAGE_SIZE};
 
 /// Check if a page has the expected page_type.
@@ -28,6 +28,63 @@ fn is_page_type(data: &[u8], page_id: u32, expected: PageType) -> bool {
 }
 use crate::MemHopError;
 use memmap2::MmapMut;
+
+/// Generic btree-backed slot listing with page-type filtering, sorting and pagination.
+#[allow(clippy::too_many_arguments)]
+fn list_slots<T, F, S, M, R>(
+    mmap: &MmapMut,
+    header: &FileHeader,
+    btree: &BTreeIndex,
+    page_type: PageType,
+    page: usize,
+    page_size: usize,
+    deserialize: impl Fn(&[u8]) -> Option<T>,
+    mut filter: F,
+    mut sort_fn: S,
+    map_fn: M,
+) -> (Vec<R>, usize, bool)
+where
+    F: FnMut(&T) -> bool,
+    S: FnMut(&mut Vec<T>),
+    M: FnMut(T) -> Option<R>,
+{
+    let data = &mmap[..];
+    let page_count = header.page_count;
+
+    let mut all_items: Vec<T> = Vec::new();
+
+    for (_, page_ref) in btree.iter() {
+        let page_id = crate::shared::slot_io::decode_page_id(*page_ref);
+        if page_id >= page_count {
+            continue;
+        }
+
+        if !is_page_type(data, page_id, page_type) {
+            continue;
+        }
+
+        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, *page_ref) {
+            if let Some(item) = deserialize(slot_data) {
+                if filter(&item) {
+                    all_items.push(item);
+                }
+            }
+        }
+    }
+
+    sort_fn(&mut all_items);
+
+    let (skip, take) = pagination_params(page, page_size);
+    let total_count = all_items.len();
+    let paged_items: Vec<R> = all_items
+        .into_iter()
+        .skip(skip)
+        .take(take)
+        .filter_map(map_fn)
+        .collect();
+
+    (paged_items, total_count, has_more(skip, take, total_count))
+}
 
 // ============================================================================
 // Profile Query
@@ -55,11 +112,11 @@ pub fn get_engram(
 
     match btree.search(id_hash) {
         Some(page_ref) => {
-            if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+            if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
                 let node = ContextNode::deserialize_slot(slot_data)?;
                 Ok(Some(build_engram_result_from_node(mmap, btree, &node)?))
             } else {
-                let page_id = crate::query::slot_io::decode_page_id(page_ref);
+                let page_id = crate::shared::slot_io::decode_page_id(page_ref);
                 Err(MemHopError::PageNotFound(page_id))
             }
         }
@@ -74,65 +131,48 @@ pub fn list_engrams(
     btree: &BTreeIndex,
     query: EngramListQuery,
 ) -> Result<EngramListResult, MemHopError> {
-    let data = &mmap[..];
-    let page_count = header.page_count;
-
-    let mut all_nodes: Vec<ContextNode> = Vec::new();
-
-    for (_, page_ref) in btree.iter() {
-        let page_id = crate::query::slot_io::decode_page_id(*page_ref);
-        if page_id >= page_count {
-            continue;
-        }
-
-        if !is_page_type(data, page_id, PageType::ContextNode) {
-            continue;
-        }
-
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
-            if let Ok(node) = ContextNode::deserialize(slot_data) {
-                if let Some(min_importance) = query.min_importance {
-                    if node.importance < min_importance {
-                        continue;
-                    }
+    let (items, total, has_more) = list_slots(
+        mmap,
+        header,
+        btree,
+        PageType::ContextNode,
+        query.page,
+        query.page_size,
+        |slot_data| ContextNode::deserialize(slot_data).ok(),
+        |node| {
+            if let Some(min_importance) = query.min_importance {
+                if node.importance < min_importance {
+                    return false;
                 }
-
-                if let Some(ref keyword) = query.keyword {
-                    let title = load_context_title(mmap, btree, node.context_id)?;
-                    if !matches_keyword(&title, keyword) {
-                        continue;
-                    }
-                }
-
-                // L1 ContextNodes always have memory_state="Active".
-                if let Some(ref state_filter) = query.state_filter {
-                    if state_filter != "Active" {
-                        continue;
-                    }
-                }
-
-                all_nodes.push(node);
             }
-        }
-    }
 
-    sort_by_score(&mut all_nodes, |node| node.importance);
+            if let Some(ref keyword) = query.keyword {
+                if let Ok(title) = load_context_title(mmap, btree, node.context_id) {
+                    if !matches_keyword(&title, keyword) {
+                        return false;
+                    }
+                }
+            }
 
-    let (skip, take) = pagination_params(query.page, query.page_size);
-    let total_count = all_nodes.len();
-    let paged_engrams: Vec<EngramResult> = all_nodes
-        .into_iter()
-        .skip(skip)
-        .take(take)
-        .filter_map(|node| build_engram_result_from_node(mmap, btree, &node).ok())
-        .collect();
+            // L1 ContextNodes always have memory_state="Active".
+            if let Some(ref state_filter) = query.state_filter {
+                if state_filter != "Active" {
+                    return false;
+                }
+            }
+
+            true
+        },
+        |nodes| sort_by_score(nodes, |node| node.importance),
+        |node| build_engram_result_from_node(mmap, btree, &node).ok(),
+    );
 
     Ok(EngramListResult {
-        items: paged_engrams,
-        total: total_count,
+        items,
+        total,
         page: query.page,
         page_size: query.page_size,
-        has_more: has_more(skip, take, total_count),
+        has_more,
     })
 }
 
@@ -143,7 +183,7 @@ fn load_context_title(
 ) -> Result<String, MemHopError> {
     if let Some(page_ref) = btree.search(context_id) {
         let data = &mmap[..];
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
             if let Ok(ctx) = ContextSlot::deserialize_slot(slot_data) {
                 return Ok(ctx.title);
             }
@@ -159,7 +199,7 @@ fn build_engram_result_from_node(
 ) -> Result<EngramResult, MemHopError> {
     let (text, summary, keywords) = if let Some(page_ref) = btree.search(node.context_id) {
         let data = &mmap[..];
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
             match ContextSlot::deserialize_slot(slot_data) {
                 Ok(ctx) => {
                     let kw: Vec<String> = ctx
@@ -207,11 +247,11 @@ pub fn get_topic(
 
     match btree.search(id_hash) {
         Some(page_ref) => {
-            if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+            if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
                 let ctx = ContextSlot::deserialize_slot(slot_data)?;
                 Ok(Some(convert_context_to_detail(&ctx)))
             } else {
-                let page_id = crate::query::slot_io::decode_page_id(page_ref);
+                let page_id = crate::shared::slot_io::decode_page_id(page_ref);
                 Err(MemHopError::PageNotFound(page_id))
             }
         }
@@ -225,55 +265,37 @@ pub fn list_topics(
     btree: &BTreeIndex,
     query: TopicListQuery,
 ) -> Result<TopicListResult, MemHopError> {
-    let data = &mmap[..];
-    let page_count = header.page_count;
-
-    let mut all_contexts: Vec<ContextSlot> = Vec::new();
-
-    for (_, page_ref) in btree.iter() {
-        let page_id = crate::query::slot_io::decode_page_id(*page_ref);
-        if page_id >= page_count {
-            continue;
-        }
-
-        if !is_page_type(data, page_id, PageType::Context) {
-            continue;
-        }
-
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
-            if let Ok(ctx) = ContextSlot::deserialize(slot_data) {
-                if query.active_only && !ctx.is_active {
-                    continue;
-                }
-
-                if let Some(ref keyword) = query.keyword {
-                    if !matches_keyword(&ctx.title, keyword) {
-                        continue;
-                    }
-                }
-
-                all_contexts.push(ctx);
+    let (items, total, has_more) = list_slots(
+        mmap,
+        header,
+        btree,
+        PageType::Context,
+        query.page,
+        query.page_size,
+        |slot_data| ContextSlot::deserialize_slot(slot_data).ok(),
+        |ctx| {
+            if query.active_only && !ctx.is_active {
+                return false;
             }
-        }
-    }
 
-    sort_by_score(&mut all_contexts, |ctx| ctx.activation_score);
+            if let Some(ref keyword) = query.keyword {
+                if !matches_keyword(&ctx.title, keyword) {
+                    return false;
+                }
+            }
 
-    let (skip, take) = pagination_params(query.page, query.page_size);
-    let total_count = all_contexts.len();
-    let paged_topics: Vec<TopicSummary> = all_contexts
-        .into_iter()
-        .skip(skip)
-        .take(take)
-        .map(|ctx| convert_context_to_summary(&ctx))
-        .collect();
+            true
+        },
+        |contexts| sort_by_score(contexts, |ctx| ctx.activation_score),
+        |ctx| Some(convert_context_to_summary(&ctx)),
+    );
 
     Ok(TopicListResult {
-        items: paged_topics,
-        total: total_count,
+        items,
+        total,
         page: query.page,
         page_size: query.page_size,
-        has_more: has_more(skip, take, total_count),
+        has_more,
     })
 }
 
@@ -293,7 +315,7 @@ fn convert_context_to_detail(ctx: &ContextSlot) -> TopicDetail {
         activation_state: format!("{:?}", ctx.activation_state),
         created_at: ctx.created_at,
         updated_at: ctx.updated_at,
-        llm_params: Some(LlmParamsDto {
+        llm_params: Some(LlmParams {
             temperature: ctx.llm_params.temperature,
             top_p: ctx.llm_params.top_p,
             presence_penalty: ctx.llm_params.presence_penalty,
@@ -328,13 +350,13 @@ pub fn get_archive(
 
     match btree.search(id_hash) {
         Some(page_ref) => {
-            if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, page_ref) {
+            if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
                 if let Ok(archive) = ArchiveSlot::deserialize(slot_data) {
                     let src = archive.request_source();
                     return Ok(Some(Archive {
                         id: format_hash(archive.id_hash),
                         content: archive.content,
-                        content_type: content_type_to_string(archive.content_type),
+                        content_type: archive.content_type.as_str().to_string(),
                         source_ref: None,
                         topic_id: Some(format_hash(archive.context_id)),
                         engram_ids: vec![],
@@ -398,94 +420,60 @@ fn list_archives_with_filter<F>(
 where
     F: Fn(&ArchiveSlot) -> bool,
 {
-    let data = &mmap[..];
-    let page_count = header.page_count;
-
-    let mut all_archives: Vec<ArchiveSlot> = Vec::new();
-
-    for (_, page_ref) in btree.iter() {
-        let page_id = crate::query::slot_io::decode_page_id(*page_ref);
-        if page_id >= page_count {
-            continue;
-        }
-
-        if !is_page_type(data, page_id, PageType::Archive) {
-            continue;
-        }
-
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
-            if let Ok(archive) = ArchiveSlot::deserialize(slot_data) {
-                if let Some(start_time) = query.start_time {
-                    if archive.created_at < start_time {
-                        continue;
-                    }
+    let (items, total, has_more) = list_slots(
+        mmap,
+        header,
+        btree,
+        PageType::Archive,
+        query.page,
+        query.page_size,
+        |slot_data| ArchiveSlot::deserialize(slot_data).ok(),
+        |archive| {
+            if let Some(start_time) = query.start_time {
+                if archive.created_at < start_time {
+                    return false;
                 }
-
-                if let Some(end_time) = query.end_time {
-                    if archive.created_at > end_time {
-                        continue;
-                    }
-                }
-
-                if let Some(ref ct) = query.content_type {
-                    let archive_ct = content_type_to_string(archive.content_type);
-                    if !archive_ct.eq_ignore_ascii_case(ct) {
-                        continue;
-                    }
-                }
-
-                if !filter(&archive) {
-                    continue;
-                }
-
-                all_archives.push(archive);
             }
-        }
-    }
 
-    all_archives.sort_by_key(|b| std::cmp::Reverse(b.created_at));
+            if let Some(end_time) = query.end_time {
+                if archive.created_at > end_time {
+                    return false;
+                }
+            }
 
-    let (skip, take) = pagination_params(query.page, query.page_size);
-    let total_count = all_archives.len();
-    let paged_archives: Vec<Archive> = all_archives
-        .into_iter()
-        .skip(skip)
-        .take(take)
-        .map(|a| {
+            if let Some(ref ct) = query.content_type {
+                let archive_ct = archive.content_type.as_str();
+                if !archive_ct.eq_ignore_ascii_case(ct) {
+                    return false;
+                }
+            }
+
+            filter(archive)
+        },
+        |archives| archives.sort_by_key(|a| std::cmp::Reverse(a.created_at)),
+        |a| {
             let src = a.request_source();
-            Archive {
+            Some(Archive {
                 id: format_hash(a.id_hash),
                 content: a.content,
-                content_type: content_type_to_string(a.content_type),
+                content_type: a.content_type.as_str().to_string(),
                 source_ref: None,
                 topic_id: Some(format_hash(a.context_id)),
                 engram_ids: vec![],
                 created_at: a.created_at,
                 source_agent: src.source_agent,
                 source_platform: src.source_platform,
-            }
-        })
-        .collect();
+            })
+        },
+    );
 
     Ok(ArchiveListResult {
-        items: paged_archives,
-        total: total_count,
+        items,
+        total,
         page: query.page,
         page_size: query.page_size,
-        has_more: has_more(skip, take, total_count),
+        has_more,
     })
-}
-
-fn content_type_to_string(ct: ContentType) -> String {
-    match ct {
-        ContentType::Text => "text".to_string(),
-        ContentType::Image => "image".to_string(),
-        ContentType::Video => "video".to_string(),
-        ContentType::Document => "document".to_string(),
-        ContentType::Audio => "audio".to_string(),
-        ContentType::Code => "code".to_string(),
-        ContentType::Other => "other".to_string(),
-    }
 }
 
 // ============================================================================
@@ -498,85 +486,69 @@ pub fn list_crystals(
     btree: &BTreeIndex,
     query: CrystalListQuery,
 ) -> Result<CrystalListResult, MemHopError> {
-    let data = &mmap[..];
-    let page_count = header.page_count;
-
-    let mut all_chains: Vec<ActionChainSlot> = Vec::new();
-
-    for (_, page_ref) in btree.iter() {
-        let page_id = crate::query::slot_io::decode_page_id(*page_ref);
-        if page_id >= page_count {
-            continue;
-        }
-
-        if !is_page_type(data, page_id, PageType::ActionChain) {
-            continue;
-        }
-
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
-            if let Ok(chain) = ActionChainSlot::deserialize(slot_data) {
-                if let Some(ref status_filter) = query.status_filter {
-                    let status_str = match chain.status {
-                        ChainStatus::Active => "active",
-                        ChainStatus::Deprecated => "deprecated",
-                        ChainStatus::Draft => "draft",
-                    };
-                    if status_str != status_filter {
-                        continue;
-                    }
+    let (items, total, has_more) = list_slots(
+        mmap,
+        header,
+        btree,
+        PageType::ActionChain,
+        query.page,
+        query.page_size,
+        |slot_data| ActionChainSlot::deserialize(slot_data).ok(),
+        |chain| {
+            if let Some(ref status_filter) = query.status_filter {
+                let status_str = match chain.status {
+                    ChainStatus::Active => "active",
+                    ChainStatus::Deprecated => "deprecated",
+                    ChainStatus::Draft => "draft",
+                };
+                if status_str != status_filter {
+                    return false;
                 }
-
-                if let Some(min_trigger_count) = query.min_trigger_count {
-                    if chain.trigger_count < min_trigger_count {
-                        continue;
-                    }
-                }
-
-                if let Some(ref keyword) = query.keyword {
-                    if !matches_keyword(&chain.title, keyword) {
-                        continue;
-                    }
-                }
-
-                all_chains.push(chain);
             }
-        }
-    }
 
-    all_chains.sort_by_key(|b| std::cmp::Reverse(b.trigger_count));
+            if let Some(min_trigger_count) = query.min_trigger_count {
+                if chain.trigger_count < min_trigger_count {
+                    return false;
+                }
+            }
 
-    let (skip, take) = pagination_params(query.page, query.page_size);
-    let total_count = all_chains.len();
-    let paged_crystals: Vec<CrystalSummary> = all_chains
-        .into_iter()
-        .skip(skip)
-        .take(take)
-        .map(|c| CrystalSummary {
-            id: format_hash(c.id_hash),
-            title: c.title,
-            condition: c.trigger,
-            status: match c.status {
-                ChainStatus::Active => "active".to_string(),
-                ChainStatus::Deprecated => "deprecated".to_string(),
-                ChainStatus::Draft => "draft".to_string(),
-            },
-            trigger_count: c.trigger_count,
-            success_rate: c.success_rate,
-            last_triggered: if c.last_triggered > 0 {
-                Some(c.last_triggered)
-            } else {
-                None
-            },
-            created_at: c.created_at,
-        })
-        .collect();
+            if let Some(ref keyword) = query.keyword {
+                if !matches_keyword(&chain.title, keyword) {
+                    return false;
+                }
+            }
+
+            true
+        },
+        |chains| chains.sort_by_key(|c| std::cmp::Reverse(c.trigger_count)),
+        |c| {
+            Some(CrystalSummary {
+                id: format_hash(c.id_hash),
+                title: c.title,
+                condition: c.trigger,
+                status: match c.status {
+                    ChainStatus::Active => "active".to_string(),
+                    ChainStatus::Deprecated => "deprecated".to_string(),
+                    ChainStatus::Draft => "draft".to_string(),
+                },
+                trigger_count: c.trigger_count,
+                success_rate: c.success_rate,
+                last_triggered: if c.last_triggered > 0 {
+                    Some(c.last_triggered)
+                } else {
+                    None
+                },
+                created_at: c.created_at,
+            })
+        },
+    );
 
     Ok(CrystalListResult {
-        items: paged_crystals,
-        total: total_count,
+        items,
+        total,
         page: query.page,
         page_size: query.page_size,
-        has_more: has_more(skip, take, total_count),
+        has_more,
     })
 }
 
@@ -590,67 +562,33 @@ pub fn list_knowledge(
     btree: &BTreeIndex,
     query: KnowledgeListQuery,
 ) -> Result<KnowledgeListResult, MemHopError> {
-    let data = &mmap[..];
-    let page_count = header.page_count;
-
-    let mut all_slots: Vec<HypergraphSlot> = Vec::new();
-
-    for (_, page_ref) in btree.iter() {
-        let page_id = crate::query::slot_io::decode_page_id(*page_ref);
-        if page_id >= page_count {
-            continue;
-        }
-
-        let hdr_offset = (page_id as usize) * crate::util::PAGE_SIZE;
-        if hdr_offset + 32 <= data.len() {
-            let mut hdr_bytes = [0u8; 32];
-            hdr_bytes.copy_from_slice(&data[hdr_offset..hdr_offset + 32]);
-            if let Ok(page_hdr) = crate::file::page::PageHeader::from_bytes(&hdr_bytes) {
-                if page_hdr.page_type != PageType::HypergraphSlot.to_u16() {
-                    continue;
+    let (items, total, has_more) = list_slots(
+        mmap,
+        header,
+        btree,
+        PageType::HypergraphSlot,
+        query.page,
+        query.page_size,
+        |slot_data| HypergraphSlot::deserialize(slot_data).ok(),
+        |slot| {
+            if let Some(ref keyword) = query.keyword {
+                if !matches_keyword(&slot.name, keyword) {
+                    return false;
                 }
-            } else {
-                continue;
             }
-        } else {
-            continue;
-        }
 
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
-            if let Ok(slot) = HypergraphSlot::deserialize(slot_data) {
-                if let Some(ref keyword) = query.keyword {
-                    if !matches_keyword(&slot.name, keyword) {
-                        continue;
-                    }
-                }
-
-                // Note: domain_filter and knowledge_type filters are not directly
-                // applicable to HypergraphSlot (no domain/type fields yet).
-                // These can be added when the slot schema is extended.
-                // For now, if filters are provided, we skip them gracefully.
-
-                all_slots.push(slot);
-            }
-        }
-    }
-
-    all_slots.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
-
-    let (skip, take) = pagination_params(query.page, query.page_size);
-    let total_count = all_slots.len();
-    let paged_items: Vec<KnowledgeSummary> = all_slots
-        .into_iter()
-        .skip(skip)
-        .take(take)
-        .map(|s| convert_hypergraph_to_summary(&s))
-        .collect();
+            true
+        },
+        |slots| slots.sort_by_key(|s| std::cmp::Reverse(s.updated_at)),
+        |s| Some(convert_hypergraph_to_summary(&s)),
+    );
 
     Ok(KnowledgeListResult {
-        items: paged_items,
-        total: total_count,
+        items,
+        total,
         page: query.page,
         page_size: query.page_size,
-        has_more: has_more(skip, take, total_count),
+        has_more,
     })
 }
 

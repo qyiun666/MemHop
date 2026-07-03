@@ -2,6 +2,8 @@
 //!
 //! 提供 JSON 和 Markdown 格式的基准测试报告生成功能。
 
+#![allow(dead_code, unused_imports)]
+
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -107,7 +109,10 @@ pub struct CompetitorBaseline {
 ///
 /// # 返回
 /// 操作结果
-pub fn generate_json_report(result: &BenchResult, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+pub fn generate_json_report(
+    result: &BenchResult,
+    path: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     let json = serde_json::to_string_pretty(result)?;
     std::fs::write(path, json)?;
     Ok(())
@@ -130,7 +135,7 @@ pub fn generate_markdown_report(
     let mut md = String::new();
 
     // 标题
-    md.push_str(&format!("# MemHop 基准测试报告\n\n"));
+    md.push_str("# MemHop 基准测试报告\n\n");
     md.push_str(&format!("**测试名称**: {}\n", result.name));
     md.push_str(&format!("**测试时间**: {}\n\n", result.timestamp));
 
@@ -145,29 +150,65 @@ pub fn generate_markdown_report(
     md.push_str("| 指标 | 值 |\n");
     md.push_str("|------|-----|\n");
     md.push_str(&format!("| 总耗时 | {}ms |\n", result.ingest.duration_ms));
-    md.push_str(&format!("| 吞吐量 | {:.1} items/s |\n", result.ingest.throughput));
-    md.push_str(&format!("| L1节点创建 | {} |\n", result.ingest.l1_nodes_created));
-    md.push_str(&format!("| L2主题更新 | {} |\n\n", result.ingest.l2_topics_updated));
+    md.push_str(&format!(
+        "| 吞吐量 | {:.1} items/s |\n",
+        result.ingest.throughput
+    ));
+    md.push_str(&format!(
+        "| L1节点创建 | {} |\n",
+        result.ingest.l1_nodes_created
+    ));
+    md.push_str(&format!(
+        "| L2主题更新 | {} |\n\n",
+        result.ingest.l2_topics_updated
+    ));
 
     // 检索性能
     md.push_str("## 检索性能\n\n");
     md.push_str("| 指标 | 值 |\n");
     md.push_str("|------|-----|\n");
-    md.push_str(&format!("| Recall@1 | {:.3} |\n", result.retrieval.recall_at_1));
-    md.push_str(&format!("| Recall@5 | {:.3} |\n", result.retrieval.recall_at_5));
-    md.push_str(&format!("| Recall@10 | {:.3} |\n", result.retrieval.recall_at_10));
+    md.push_str(&format!(
+        "| Recall@1 | {:.3} |\n",
+        result.retrieval.recall_at_1
+    ));
+    md.push_str(&format!(
+        "| Recall@5 | {:.3} |\n",
+        result.retrieval.recall_at_5
+    ));
+    md.push_str(&format!(
+        "| Recall@10 | {:.3} |\n",
+        result.retrieval.recall_at_10
+    ));
     md.push_str(&format!("| MRR | {:.3} |\n", result.retrieval.mrr));
-    md.push_str(&format!("| NDCG@10 | {:.3} |\n", result.retrieval.ndcg_at_10));
-    md.push_str(&format!("| 平均延迟 | {:.1}ms |\n", result.retrieval.avg_latency_ms));
-    md.push_str(&format!("| P95延迟 | {:.1}ms |\n", result.retrieval.p95_latency_ms));
-    md.push_str(&format!("| P99延迟 | {:.1}ms |\n\n", result.retrieval.p99_latency_ms));
+    md.push_str(&format!(
+        "| NDCG@10 | {:.3} |\n",
+        result.retrieval.ndcg_at_10
+    ));
+    md.push_str(&format!(
+        "| 平均延迟 | {:.1}ms |\n",
+        result.retrieval.avg_latency_ms
+    ));
+    md.push_str(&format!(
+        "| P95延迟 | {:.1}ms |\n",
+        result.retrieval.p95_latency_ms
+    ));
+    md.push_str(&format!(
+        "| P99延迟 | {:.1}ms |\n\n",
+        result.retrieval.p99_latency_ms
+    ));
 
     // QA 性能
     md.push_str("## QA 性能\n\n");
     md.push_str("| 指标 | 值 |\n");
     md.push_str("|------|-----|\n");
-    md.push_str(&format!("| 平均LLM评分 | {:.3} |\n", result.qa.avg_llm_score));
-    md.push_str(&format!("| 平均延迟 | {:.1}ms |\n\n", result.qa.avg_e2e_latency_ms));
+    md.push_str(&format!(
+        "| 平均LLM评分 | {:.3} |\n",
+        result.qa.avg_llm_score
+    ));
+    md.push_str(&format!(
+        "| 平均延迟 | {:.1}ms |\n\n",
+        result.qa.avg_e2e_latency_ms
+    ));
 
     // 按类别分组准确率
     if !result.qa.accuracy_by_category.is_empty() {
@@ -177,7 +218,7 @@ pub fn generate_markdown_report(
         for (category, accuracy) in &result.qa.accuracy_by_category {
             md.push_str(&format!("| {} | {:.3} |\n", category, accuracy));
         }
-        md.push_str("\n");
+        md.push('\n');
     }
 
     // 规模扩展性
@@ -191,7 +232,7 @@ pub fn generate_markdown_report(
                 s.size, s.ingest_ms, s.retrieval_avg_ms, s.memory_mb
             ));
         }
-        md.push_str("\n");
+        md.push('\n');
     }
 
     // 竞品对比
@@ -205,7 +246,7 @@ pub fn generate_markdown_report(
                 c.name, c.metric, c.test_set, c.score
             ));
         }
-        md.push_str("\n");
+        md.push('\n');
     }
 
     // 写入文件
@@ -285,14 +326,12 @@ mod tests {
     #[test]
     fn test_generate_markdown_report() {
         let result = create_test_result();
-        let competitors = vec![
-            CompetitorBaseline {
-                name: "竞品A".to_string(),
-                score: 0.75,
-                test_set: "标准测试集".to_string(),
-                metric: "Recall@10".to_string(),
-            },
-        ];
+        let competitors = vec![CompetitorBaseline {
+            name: "竞品A".to_string(),
+            score: 0.75,
+            test_set: "标准测试集".to_string(),
+            metric: "Recall@10".to_string(),
+        }];
         let path = std::env::temp_dir().join("test_report.md");
 
         let res = generate_markdown_report(&result, &competitors, &path);

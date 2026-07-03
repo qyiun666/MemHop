@@ -21,9 +21,10 @@ pub fn parse(input: &str) -> Result<Query, MemHopError> {
     let pairs = DslParser::parse(Rule::query, input)
         .map_err(|e| MemHopError::DslParseError(e.to_string()))?;
 
-    let pair = pairs.into_iter().next().ok_or_else(|| {
-        MemHopError::DslParseError("empty query".to_string())
-    })?;
+    let pair = pairs
+        .into_iter()
+        .next()
+        .ok_or_else(|| MemHopError::DslParseError("empty query".to_string()))?;
 
     build_query(pair)
 }
@@ -38,9 +39,10 @@ fn build_query(pair: pest::iterators::Pair<Rule>) -> Result<Query, MemHopError> 
         .ok_or_else(|| MemHopError::DslParseError("empty query body".to_string()))?;
 
     // query_clause contains the matched alternative (match_clause, etc)
-    let inner = query_clause.into_inner().next().ok_or_else(|| {
-        MemHopError::DslParseError("empty query body".to_string())
-    })?;
+    let inner = query_clause
+        .into_inner()
+        .next()
+        .ok_or_else(|| MemHopError::DslParseError("empty query body".to_string()))?;
 
     match inner.as_rule() {
         Rule::match_clause => build_match(inner).map(Query::Match),
@@ -67,7 +69,8 @@ fn build_match(pair: pest::iterators::Pair<Rule>) -> Result<NodeMatch, MemHopErr
         .map(|p| build_where(p.clone()))
         .transpose()?;
     let limit = find_integer(
-        &children.iter()
+        &children
+            .iter()
             .find(|p| p.as_rule() == Rule::limit_clause)
             .map(|p| p.clone().into_inner().collect()),
     );
@@ -90,7 +93,8 @@ fn build_hyperedge(pair: pest::iterators::Pair<Rule>) -> Result<HyperedgeMatch, 
         .iter()
         .find(|p| p.as_rule() == Rule::variable_list)
         .map(|p| {
-            p.clone().into_inner()
+            p.clone()
+                .into_inner()
                 .filter(|c| c.as_rule() == Rule::variable)
                 .map(|c| c.as_str().to_string())
                 .collect()
@@ -102,7 +106,8 @@ fn build_hyperedge(pair: pest::iterators::Pair<Rule>) -> Result<HyperedgeMatch, 
         .map(|p| build_where(p.clone()))
         .transpose()?;
     let limit = find_integer(
-        &children.iter()
+        &children
+            .iter()
             .find(|p| p.as_rule() == Rule::limit_clause)
             .map(|p| p.clone().into_inner().collect()),
     );
@@ -128,7 +133,8 @@ fn build_path(pair: pest::iterators::Pair<Rule>) -> Result<PathQuery, MemHopErro
         .iter()
         .find(|p| p.as_rule() == Rule::string_list)
         .map(|p| {
-            p.clone().into_inner()
+            p.clone()
+                .into_inner()
                 .filter(|c| c.as_rule() == Rule::string_literal)
                 .map(|c| c.as_str().trim_matches('"').to_string())
                 .collect()
@@ -172,15 +178,18 @@ fn build_condition(pair: pest::iterators::Pair<Rule>) -> Result<WhereCondition, 
     match pair.as_rule() {
         Rule::condition => {
             // condition → or_condition
-            let inner = pair.into_inner().next().ok_or_else(|| {
-                MemHopError::DslParseError("empty condition".into())
-            })?;
+            let inner = pair
+                .into_inner()
+                .next()
+                .ok_or_else(|| MemHopError::DslParseError("empty condition".into()))?;
             build_condition(inner)
         }
         Rule::or_condition => {
             let mut parts = pair.into_inner();
             let first = build_condition(
-                parts.next().ok_or_else(|| MemHopError::DslParseError("empty OR".into()))?
+                parts
+                    .next()
+                    .ok_or_else(|| MemHopError::DslParseError("empty OR".into()))?,
             )?;
             let mut result = first;
             for right_pair in parts {
@@ -192,7 +201,9 @@ fn build_condition(pair: pest::iterators::Pair<Rule>) -> Result<WhereCondition, 
         Rule::and_condition => {
             let mut parts = pair.into_inner();
             let first = build_condition(
-                parts.next().ok_or_else(|| MemHopError::DslParseError("empty AND".into()))?
+                parts
+                    .next()
+                    .ok_or_else(|| MemHopError::DslParseError("empty AND".into()))?,
             )?;
             let mut result = first;
             for right_pair in parts {
@@ -223,35 +234,46 @@ fn build_condition(pair: pest::iterators::Pair<Rule>) -> Result<WhereCondition, 
                 "<=" => CompareOp::Le,
                 "=" => CompareOp::Eq,
                 "!=" => CompareOp::Ne,
-                _ => return Err(MemHopError::DslParseError(
-                    format!("unknown operator: {}", op_str)
-                )),
+                _ => {
+                    return Err(MemHopError::DslParseError(format!(
+                        "unknown operator: {}",
+                        op_str
+                    )))
+                }
             };
 
-            Ok(WhereCondition::PropertyCompare { property, operator, value })
+            Ok(WhereCondition::PropertyCompare {
+                property,
+                operator,
+                value,
+            })
         }
         Rule::type_equals => {
-            let val = pair.into_inner()
+            let val = pair
+                .into_inner()
                 .find(|p| p.as_rule() == Rule::string_literal)
                 .map(|p| p.as_str().trim_matches('"').to_string())
                 .ok_or_else(|| MemHopError::DslParseError("missing type value".into()))?;
             Ok(WhereCondition::TypeEquals(val))
         }
         Rule::keyword_contains => {
-            let val = pair.into_inner()
+            let val = pair
+                .into_inner()
                 .find(|p| p.as_rule() == Rule::string_literal)
                 .map(|p| p.as_str().trim_matches('"').to_string())
                 .ok_or_else(|| MemHopError::DslParseError("missing keyword".into()))?;
             Ok(WhereCondition::KeywordContains(val))
         }
         Rule::primary => {
-            let inner = pair.into_inner().next().ok_or_else(|| {
-                MemHopError::DslParseError("empty primary condition".into())
-            })?;
+            let inner = pair
+                .into_inner()
+                .next()
+                .ok_or_else(|| MemHopError::DslParseError("empty primary condition".into()))?;
             build_condition(inner)
         }
         _ => Err(MemHopError::DslParseError(format!(
-            "unexpected condition rule: {:?}", pair.as_rule()
+            "unexpected condition rule: {:?}",
+            pair.as_rule()
         ))),
     }
 }

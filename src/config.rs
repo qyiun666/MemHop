@@ -33,7 +33,10 @@ impl MemHopConfig {
     pub fn new(db_path: PathBuf, vector_dim: usize) -> Self {
         Self {
             db_path,
+            #[cfg(feature = "grpc-encoder")]
             encoder_grpc_addr: Some(crate::encoder::DEFAULT_ENCODER_ADDR.to_string()),
+            #[cfg(not(feature = "grpc-encoder"))]
+            encoder_grpc_addr: None,
             vector_dim,
             crystal_path: None,
             llm: LlmConfig::default(),

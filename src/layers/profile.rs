@@ -51,11 +51,17 @@ impl ProfileSlot {
     pub fn serialize(&self) -> io::Result<Vec<u8>> {
         let json = ProfileJson {
             id_hash: self.id_hash,
-            name: self.name.clone(), role: self.role.clone(),
-            personality: self.personality.clone(), worldview: self.worldview.clone(),
-            preferences: self.preferences.clone(), lexicon: self.lexicon.clone(),
-            style_traits: self.style_traits.clone(), emotion_patterns: self.emotion_patterns.clone(),
-            created_at: self.created_at, updated_at: self.updated_at, version: self.version,
+            name: self.name.clone(),
+            role: self.role.clone(),
+            personality: self.personality.clone(),
+            worldview: self.worldview.clone(),
+            preferences: self.preferences.clone(),
+            lexicon: self.lexicon.clone(),
+            style_traits: self.style_traits.clone(),
+            emotion_patterns: self.emotion_patterns.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            version: self.version,
         };
         serde_json::to_vec(&json).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
@@ -69,19 +75,32 @@ impl ProfileSlot {
                 brace_count += 1;
             } else if byte == b'}' {
                 brace_count -= 1;
-                if brace_count == 0 { json_end = i + 1; break; }
+                if brace_count == 0 {
+                    json_end = i + 1;
+                    break;
+                }
             } else if byte == 0 && brace_count == 0 {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid JSON data"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Invalid JSON data",
+                ));
             }
         }
         let json: ProfileJson = serde_json::from_slice(&data[..json_end])
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         Ok(ProfileSlot {
-            id_hash: json.id_hash, name: json.name, role: json.role,
-            personality: json.personality, worldview: json.worldview,
-            preferences: json.preferences, lexicon: json.lexicon,
-            style_traits: json.style_traits, emotion_patterns: json.emotion_patterns,
-            created_at: json.created_at, updated_at: json.updated_at, version: json.version,
+            id_hash: json.id_hash,
+            name: json.name,
+            role: json.role,
+            personality: json.personality,
+            worldview: json.worldview,
+            preferences: json.preferences,
+            lexicon: json.lexicon,
+            style_traits: json.style_traits,
+            emotion_patterns: json.emotion_patterns,
+            created_at: json.created_at,
+            updated_at: json.updated_at,
+            version: json.version,
         })
     }
 }
@@ -100,11 +119,18 @@ mod tests {
         let mut emotion_patterns = HashMap::new();
         emotion_patterns.insert("呵呵".into(), "不满或敷衍".into());
         let profile = ProfileSlot {
-            id_hash: 1, name: "Meow".into(), role: "assistant".into(),
+            id_hash: 1,
+            name: "Meow".into(),
+            role: "assistant".into(),
             personality: "friendly, helpful, curious".into(),
             worldview: "knowledge should be accessible".into(),
-            preferences, lexicon, style_traits: vec!["prefers_brevity".into()],
-            emotion_patterns, created_at: 1000, updated_at: 2000, version: 1,
+            preferences,
+            lexicon,
+            style_traits: vec!["prefers_brevity".into()],
+            emotion_patterns,
+            created_at: 1000,
+            updated_at: 2000,
+            version: 1,
         };
         let data = profile.serialize().unwrap();
         assert_eq!(profile, ProfileSlot::deserialize(&data).unwrap());
@@ -113,11 +139,18 @@ mod tests {
     #[test]
     fn test_profile_json_readable() {
         let profile = ProfileSlot {
-            id_hash: 1, name: "Test".into(), role: "agent".into(),
-            personality: "calm".into(), worldview: "neutral".into(),
-            preferences: HashMap::new(), lexicon: HashMap::new(),
-            style_traits: Vec::new(), emotion_patterns: HashMap::new(),
-            created_at: 0, updated_at: 0, version: 0,
+            id_hash: 1,
+            name: "Test".into(),
+            role: "agent".into(),
+            personality: "calm".into(),
+            worldview: "neutral".into(),
+            preferences: HashMap::new(),
+            lexicon: HashMap::new(),
+            style_traits: Vec::new(),
+            emotion_patterns: HashMap::new(),
+            created_at: 0,
+            updated_at: 0,
+            version: 0,
         };
         let json_str = String::from_utf8(profile.serialize().unwrap()).unwrap();
         assert!(json_str.contains("\"name\":\"Test\""));

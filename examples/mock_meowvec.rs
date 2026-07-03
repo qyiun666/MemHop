@@ -20,7 +20,7 @@ use vector_model::{
 };
 
 const DIM: usize = 384; // multilingual-e5-small dimension
-// Default TCP port for the mock meowvec gRPC server (matches meowvec convention)
+                        // Default TCP port for the mock meowvec gRPC server (matches meowvec convention)
 const DEFAULT_ADDR: &str = "127.0.0.1:27110";
 
 /// Deterministic pseudo-encoder: FNV hash -> 384-dim normalized vector
@@ -62,6 +62,7 @@ impl VectorModelService for MockVectorModelService {
         Ok(Response::new(EncodeResponse {
             embedding,
             dimension: DIM as i32,
+            sparse: std::collections::HashMap::new(),
         }))
     }
 

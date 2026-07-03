@@ -6,12 +6,12 @@
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::query::common::{self, format_hash, now_ms};
+use crate::layers::action_chain::{ActionChainSlot, ChainStatus};
+use crate::layers::context::ContextSlot;
+use crate::layers::profile::ProfileSlot;
 use crate::query::types::*;
-use crate::slot::action_chain::{ActionChainSlot, ChainStatus};
-use crate::slot::context::ContextSlot;
-use crate::slot::profile::ProfileSlot;
-use crate::util::{hash_id, PAGE_SIZE};
+use crate::shared::common::{self, format_hash, now_ms};
+use crate::util::{hash_id, DEFAULT_GROW_PAGES, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::fs::File;
@@ -115,7 +115,7 @@ pub fn update_profile(
         None => {
             use crate::file::free_list::allocate_or_extend;
 
-            let page_id = allocate_or_extend(mmap, header, file, 500)?;
+            let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
             let offset = (page_id as usize) * PAGE_SIZE + 32;
 
             let profile = ProfileSlot {
@@ -221,12 +221,12 @@ fn update_topic_title_inner(
             ctx.title = new_title.clone();
 
             if let Some(ref refs) = l3_refs {
-                let l3_hashes: Vec<u64> = refs.iter().map(|s| common::parse_id_to_hash(s)).collect();
+                let l3_hashes: Vec<u64> =
+                    refs.iter().map(|s| common::parse_id_to_hash(s)).collect();
                 ctx.l3_refs = l3_hashes;
             }
 
-            let (new_terms, doc_len) =
-                common::build_l2_sparse_terms(&ctx.title, &ctx.summary);
+            let (new_terms, doc_len) = common::build_l2_sparse_terms(&ctx.title, &ctx.summary);
             sparse_index.add_document(ctx.id_hash, new_terms, doc_len);
 
             ctx.updated_at = now_ms;
@@ -324,7 +324,7 @@ pub fn update_knowledge_title(
     id: &str,
     new_title: String,
 ) -> Result<KnowledgeSummary, MemHopError> {
-    use crate::slot::hypergraph::HypergraphSlot;
+    use crate::layers::hypergraph::HypergraphSlot;
     let now_ms = now_ms();
     let id_hash = common::parse_id_to_hash(id);
 

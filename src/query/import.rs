@@ -8,12 +8,12 @@ use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::query::common;
-use crate::query::common::format_hash;
+use crate::layers::context::{ActivationState, ContextSlot};
+use crate::layers::profile::ProfileSlot;
 use crate::query::types::*;
-use crate::slot::context::{ActivationState, ContextSlot};
-use crate::slot::profile::ProfileSlot;
-use crate::util::{hash_id, PAGE_SIZE};
+use crate::shared::common;
+use crate::shared::common::format_hash;
+use crate::util::{hash_id, PageType, DEFAULT_GROW_PAGES, PAGE_SIZE, SENTINEL_PAGE_ID};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashMap;
@@ -35,7 +35,7 @@ fn calculate_l2_sparse_index_data(
 
             if l3_offset < mmap.len() {
                 if let Ok(node) =
-                    crate::slot::hypergraph::HypergraphSlot::deserialize(&mmap[l3_offset..])
+                    crate::layers::hypergraph::HypergraphSlot::deserialize(&mmap[l3_offset..])
                 {
                     terms.extend(node.name.split_whitespace().map(|s| s.to_lowercase()));
                     l3_doc_len += node.name.len();
@@ -49,6 +49,7 @@ fn calculate_l2_sparse_index_data(
     (terms, doc_len as u32)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn import_memory(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -56,9 +57,13 @@ pub fn import_memory(
     sparse_index: &mut SparseIndex,
     request: ImportRequest,
     file: &mut File,
+    tracker: Option<&mut crate::l3::DegreeTracker>,
+    index_map: Option<&mut std::collections::HashMap<u64, crate::l3::L3Index>>,
 ) -> Result<ImportResult, MemHopError> {
     match request.target_layer {
-        TargetLayer::Profile => import_l0_profile(mmap, header, btree, request.data, request.mode, file),
+        TargetLayer::Profile => {
+            import_l0_profile(mmap, header, btree, request.data, request.mode, file)
+        }
         TargetLayer::Topic => import_l2_topics(
             mmap,
             header,
@@ -78,6 +83,8 @@ pub fn import_memory(
             request.mode,
             request.knowledge_title,
             file,
+            tracker,
+            index_map,
         ),
     }
 }
@@ -107,74 +114,72 @@ fn import_l0_profile(
         let profile_id_hash = hash_id("profile");
 
         match btree.search(profile_id_hash) {
-            Some(page_ref) => {
-                match mode {
-                    ImportMode::Merge | ImportMode::Overwrite => {
-                        let page_id = (page_ref >> 16) as u32;
-                        let offset = (page_id as usize) * PAGE_SIZE + 32;
+            Some(page_ref) => match mode {
+                ImportMode::Merge | ImportMode::Overwrite => {
+                    let page_id = (page_ref >> 16) as u32;
+                    let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-                        let mut profile = ProfileSlot::deserialize(&mmap[offset..])
-                            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+                    let mut profile = ProfileSlot::deserialize(&mmap[offset..])
+                        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-                        if let Some(n) = name {
-                            profile.name = n;
-                        }
-                        if let Some(r) = role {
-                            profile.role = r;
-                        }
-                        if let Some(p) = personality {
-                            profile.personality = p;
-                        }
-                        if let Some(w) = worldview {
-                            profile.worldview = w;
-                        }
-                        if let Some(pref) = preferences {
-                            profile.preferences = pref;
-                        }
-
-                        profile.updated_at = now_ms;
-                        profile.version += 1;
-
-                        let data_bytes = profile
-                            .serialize()
-                            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-                        if offset + data_bytes.len() > mmap.len() {
-                            return Err(MemHopError::Serialization(format!(
-                                "ProfileSlot data too large for page: {} > {}",
-                                data_bytes.len(),
-                                mmap.len() - offset
-                            )));
-                        }
-                        mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
-
-                        Ok(ImportResult {
-                            status: ImportStatus::Success,
-                            id: None,
-                            ids: None,
-                            created_ids: vec![],
-                            updated_ids: vec![format_hash(profile_id_hash)],
-                            skipped_count: 0,
-                            errors: vec![],
-                            knowledge_title: None,
-                            node_count: 0,
-                        })
+                    if let Some(n) = name {
+                        profile.name = n;
                     }
-                    ImportMode::Skip => Ok(ImportResult {
+                    if let Some(r) = role {
+                        profile.role = r;
+                    }
+                    if let Some(p) = personality {
+                        profile.personality = p;
+                    }
+                    if let Some(w) = worldview {
+                        profile.worldview = w;
+                    }
+                    if let Some(pref) = preferences {
+                        profile.preferences = pref;
+                    }
+
+                    profile.updated_at = now_ms;
+                    profile.version += 1;
+
+                    let data_bytes = profile
+                        .serialize()
+                        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+
+                    if offset + data_bytes.len() > mmap.len() {
+                        return Err(MemHopError::Serialization(format!(
+                            "ProfileSlot data too large for page: {} > {}",
+                            data_bytes.len(),
+                            mmap.len() - offset
+                        )));
+                    }
+                    mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
+
+                    Ok(ImportResult {
                         status: ImportStatus::Success,
                         id: None,
                         ids: None,
                         created_ids: vec![],
-                        updated_ids: vec![],
-                        skipped_count: 1,
+                        updated_ids: vec![format_hash(profile_id_hash)],
+                        skipped_count: 0,
                         errors: vec![],
                         knowledge_title: None,
                         node_count: 0,
-                    }),
+                    })
                 }
-            }
+                ImportMode::Skip => Ok(ImportResult {
+                    status: ImportStatus::Success,
+                    id: None,
+                    ids: None,
+                    created_ids: vec![],
+                    updated_ids: vec![],
+                    skipped_count: 1,
+                    errors: vec![],
+                    knowledge_title: None,
+                    node_count: 0,
+                }),
+            },
             None => {
-                let page_id = allocate_or_extend(mmap, header, file, 500)?;
+                let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
                 let offset = (page_id as usize) * PAGE_SIZE + 32;
 
                 let profile = ProfileSlot {
@@ -266,55 +271,52 @@ fn import_l2_topics(
                 let id_hash = hash_id(&item.title);
 
                 match btree.search(id_hash) {
-                    Some(page_ref) => {
-                        match mode {
-                            ImportMode::Merge | ImportMode::Overwrite => {
-                                let page_id = (page_ref >> 16) as u32;
-                                let offset = (page_id as usize) * PAGE_SIZE + 32;
+                    Some(page_ref) => match mode {
+                        ImportMode::Merge | ImportMode::Overwrite => {
+                            let page_id = (page_ref >> 16) as u32;
+                            let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-                                let mut ctx = ContextSlot::deserialize(&mmap[offset..])
-                                    .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+                            let mut ctx = ContextSlot::deserialize(&mmap[offset..])
+                                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-                                ctx.title = item.title.clone();
-                                ctx.summary = item.summary.clone();
+                            ctx.title = item.title.clone();
+                            ctx.summary = item.summary.clone();
 
-                                if let Some(l3_h) = l3_hash {
-                                    if !ctx.l3_refs.contains(&l3_h) {
-                                        ctx.l3_refs.push(l3_h);
-                                    }
+                            if let Some(l3_h) = l3_hash {
+                                if !ctx.l3_refs.contains(&l3_h) {
+                                    ctx.l3_refs.push(l3_h);
                                 }
-
-                                ctx.updated_at = now_ms;
-                                ctx.version += 1;
-
-                                sparse_index.remove_document(ctx.id_hash);
-                                let (terms, doc_len) =
-                                    calculate_l2_sparse_index_data(&ctx, mmap, btree);
-                                sparse_index.add_document(ctx.id_hash, terms, doc_len);
-
-                                let data_bytes = ctx
-                                    .serialize()
-                                    .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-                                if offset + data_bytes.len() > mmap.len() {
-                                    return Err(MemHopError::Serialization(format!(
-                                        "ContextSlot data too large for page: {} > {}",
-                                        data_bytes.len(),
-                                        mmap.len() - offset
-                                    )));
-                                }
-                                mmap[offset..offset + data_bytes.len()]
-                                    .copy_from_slice(&data_bytes);
-
-                                updated_ids.push(format_hash(id_hash));
                             }
-                            ImportMode::Skip => {
-                                skipped_count += 1;
+
+                            ctx.updated_at = now_ms;
+                            ctx.version += 1;
+
+                            sparse_index.remove_document(ctx.id_hash);
+                            let (terms, doc_len) =
+                                calculate_l2_sparse_index_data(&ctx, mmap, btree);
+                            sparse_index.add_document(ctx.id_hash, terms, doc_len);
+
+                            let data_bytes = ctx
+                                .serialize()
+                                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+
+                            if offset + data_bytes.len() > mmap.len() {
+                                return Err(MemHopError::Serialization(format!(
+                                    "ContextSlot data too large for page: {} > {}",
+                                    data_bytes.len(),
+                                    mmap.len() - offset
+                                )));
                             }
+                            mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
+
+                            updated_ids.push(format_hash(id_hash));
                         }
-                    }
+                        ImportMode::Skip => {
+                            skipped_count += 1;
+                        }
+                    },
                     None => {
-                        let page_id = allocate_or_extend(mmap, header, file, 500)?;
+                        let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
                         let offset = (page_id as usize) * PAGE_SIZE + 32;
 
                         let mut l3_refs = Vec::new();
@@ -340,7 +342,7 @@ fn import_l2_topics(
                             activation_state: ActivationState::Dormant,
                             centroid_page_ref: 0,
                             dialogue_range: (now_ms, now_ms),
-                            llm_params: crate::slot::context::LlmParams::default(),
+                            llm_params: crate::layers::context::LlmParams::default(),
                         };
 
                         let data_bytes = ctx
@@ -383,7 +385,11 @@ fn import_l2_topics(
         };
 
         let node_count = created_ids.len();
-        let ids = if created_ids.is_empty() { None } else { Some(created_ids.clone()) };
+        let ids = if created_ids.is_empty() {
+            None
+        } else {
+            Some(created_ids.clone())
+        };
         let id = created_ids.first().cloned();
         Ok(ImportResult {
             status,
@@ -417,6 +423,8 @@ fn import_l3_knowledge(
     mode: ImportMode,
     knowledge_title: Option<String>,
     file: &mut File,
+    mut tracker: Option<&mut crate::l3::DegreeTracker>,
+    mut index_map: Option<&mut std::collections::HashMap<u64, crate::l3::L3Index>>,
 ) -> Result<ImportResult, MemHopError> {
     let items = match data {
         ImportData::Knowledge(items) => items,
@@ -427,7 +435,7 @@ fn import_l3_knowledge(
         }
     };
 
-    let now_ms = crate::query::common::now_ms();
+    let now_ms = crate::shared::common::now_ms();
     let mut created_ids: Vec<String> = Vec::new();
     let mut updated_ids: Vec<String> = Vec::new();
     let mut skipped_count = 0usize;
@@ -449,7 +457,14 @@ fn import_l3_knowledge(
             }
             ImportMode::Overwrite => {
                 if btree.search(title_hash).is_some() {
-                    let _ = crate::l3::store::delete_node(mmap, header, btree, &item.title);
+                    let _ = crate::l3::store::delete_node(
+                        mmap,
+                        header,
+                        btree,
+                        &item.title,
+                        tracker.as_deref_mut(),
+                        index_map.as_deref_mut(),
+                    );
                 }
             }
             ImportMode::Merge => {
@@ -476,7 +491,7 @@ fn import_l3_knowledge(
             gid
         });
 
-        let node = crate::slot::hypergraph::HypergraphNode {
+        let node = crate::layers::hypergraph::HypergraphNode {
             id_hash: title_hash,
             graph_id,
             title: item.title.clone(),
@@ -492,7 +507,15 @@ fn import_l3_knowledge(
             version: 1,
         };
 
-        match crate::l3::store::add_node(mmap, header, btree, node, file) {
+        match crate::l3::store::add_node(
+            mmap,
+            header,
+            btree,
+            node,
+            file,
+            tracker.as_deref_mut(),
+            index_map.as_deref_mut(),
+        ) {
             Ok(id) => created_ids.push(id),
             Err(e) => errors.push(ImportError {
                 index: idx,
@@ -510,7 +533,11 @@ fn import_l3_knowledge(
     };
 
     let node_count = created_ids.len();
-    let ids = if created_ids.is_empty() { None } else { Some(created_ids.clone()) };
+    let ids = if created_ids.is_empty() {
+        None
+    } else {
+        Some(created_ids.clone())
+    };
     let id = created_ids.first().cloned();
     Ok(ImportResult {
         status,
@@ -536,8 +563,7 @@ fn create_hypergraph_slot(
     file: &mut File,
 ) -> Result<(), MemHopError> {
     use crate::file::page::PageHeader;
-    use crate::slot::hypergraph::{HypergraphSlot, HypergraphSource};
-    use crate::util::{PageType, PAGE_SIZE};
+    use crate::layers::hypergraph::{HypergraphSlot, HypergraphSource};
 
     let slot = HypergraphSlot {
         id_hash,
@@ -554,10 +580,10 @@ fn create_hypergraph_slot(
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-    let page_id = allocate_or_extend(mmap, header, file, 500)?;
+    let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
     let page_offset = (page_id as usize) * PAGE_SIZE;
 
-    let page_hdr = PageHeader::new(page_id, PageType::HypergraphSlot, 3, 0xFFFFFFFF);
+    let page_hdr = PageHeader::new(page_id, PageType::HypergraphSlot, 3, SENTINEL_PAGE_ID);
     mmap[page_offset..page_offset + 32].copy_from_slice(&page_hdr.to_bytes());
 
     let data_offset = page_offset + 32;
@@ -711,8 +737,8 @@ fn derive_module_name(file_path: &Path, base_path: &Path) -> String {
     }
 }
 
-/// Extract keywords from module name and file content
-fn extract_keywords(module_name: &str, content: &str) -> Vec<String> {
+/// Extract Rust module/symbol keywords from module name and file content
+fn extract_rust_symbols(module_name: &str, content: &str) -> Vec<String> {
     let mut keywords: Vec<String> = module_name
         .split("::")
         .map(|s| s.to_lowercase())
@@ -756,6 +782,7 @@ fn extract_keywords(module_name: &str, content: &str) -> Vec<String> {
 /// Scans source files recursively, creates HypergraphNodes for each module,
 /// and creates Dependency edges based on import statements.
 /// Also creates an L2 topic linked to the L3 graph for search discoverability.
+#[allow(clippy::too_many_arguments)]
 pub fn build_l3_hypergraph_from_path(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -763,8 +790,10 @@ pub fn build_l3_hypergraph_from_path(
     sparse_index: &mut SparseIndex,
     path: &Path,
     file: &mut File,
+    mut tracker: Option<&mut crate::l3::DegreeTracker>,
+    mut index_map: Option<&mut std::collections::HashMap<u64, crate::l3::L3Index>>,
 ) -> Result<ImportResult, MemHopError> {
-    use crate::slot::hypergraph::{
+    use crate::layers::hypergraph::{
         GraphEdgeKind, HypergraphEdge, HypergraphSlot, HypergraphSource,
     };
 
@@ -818,13 +847,13 @@ pub fn build_l3_hypergraph_from_path(
         version: 1,
     };
 
-    let page_id = allocate_or_extend(mmap, header, file, 500)?;
+    let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
     let page_offset = (page_id as usize) * PAGE_SIZE;
     let page_hdr = crate::file::page::PageHeader::new(
         page_id,
         crate::util::PageType::HypergraphSlot,
         3,
-        0xFFFFFFFF,
+        SENTINEL_PAGE_ID,
     );
     mmap[page_offset..page_offset + 32].copy_from_slice(&page_hdr.to_bytes());
 
@@ -856,7 +885,7 @@ pub fn build_l3_hypergraph_from_path(
 
         let imports = extract_imports(&content, ext);
 
-        let keywords = extract_keywords(&module_name, &content);
+        let keywords = extract_rust_symbols(&module_name, &content);
 
         let node_type = match ext.as_str() {
             "rs" => "rust_module",
@@ -872,7 +901,7 @@ pub fn build_l3_hypergraph_from_path(
             .display()
             .to_string();
 
-        let node = crate::slot::hypergraph::HypergraphNode {
+        let node = crate::layers::hypergraph::HypergraphNode {
             id_hash: node_hash,
             graph_id,
             title: module_name.clone(),
@@ -886,18 +915,22 @@ pub fn build_l3_hypergraph_from_path(
             version: 1,
         };
 
-        match crate::l3::store::add_node(mmap, header, btree, node, file) {
+        match crate::l3::store::add_node(
+            mmap,
+            header,
+            btree,
+            node,
+            file,
+            tracker.as_deref_mut(),
+            index_map.as_deref_mut(),
+        ) {
             Ok(id) => {
                 created_ids.push(id);
                 module_to_hash.insert(module_name.clone(), node_hash);
                 file_data.push((module_name, ext.clone(), imports, node_hash));
             }
             Err(e) => {
-                eprintln!(
-                    "Warning: Failed to add node for {}: {}",
-                    file_path.display(),
-                    e
-                );
+                tracing::warn!("Failed to add node for {}: {}", file_path.display(), e);
             }
         }
     }
@@ -942,13 +975,20 @@ pub fn build_l3_hypergraph_from_path(
                 created_at: now_ms,
             };
 
-            match crate::l3::store::add_edge(mmap, header, btree, edge, file) {
+            match crate::l3::store::add_edge(
+                mmap,
+                header,
+                btree,
+                edge,
+                file,
+                tracker.as_deref_mut(),
+            ) {
                 Ok(id) => {
                     edge_ids.push(id);
                     edge_count += 1;
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to add edge from {}: {}", module, e);
+                    tracing::warn!("Failed to add edge from {}: {}", module, e);
                 }
             }
         }
@@ -1005,13 +1045,13 @@ pub fn build_l3_hypergraph_from_path(
         activation_state: ActivationState::Dormant,
         centroid_page_ref: 0,
         dialogue_range: (now_ms, now_ms),
-        llm_params: crate::slot::context::LlmParams::default(),
+        llm_params: crate::layers::context::LlmParams::default(),
     };
 
     let ctx_data = ctx
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    let l2_page_id = allocate_or_extend(mmap, header, file, 500)?;
+    let l2_page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
     let l2_offset = (l2_page_id as usize) * PAGE_SIZE + 32;
 
     if l2_offset + ctx_data.len() > mmap.len() {
@@ -1026,7 +1066,7 @@ pub fn build_l3_hypergraph_from_path(
         l2_page_id,
         crate::util::PageType::Context,
         2,
-        0xFFFFFFFF,
+        SENTINEL_PAGE_ID,
     );
     let l2_page_offset = (l2_page_id as usize) * PAGE_SIZE;
     mmap[l2_page_offset..l2_page_offset + 32].copy_from_slice(&l2_hdr.to_bytes());
@@ -1055,7 +1095,11 @@ pub fn build_l3_hypergraph_from_path(
     let all_errors: Vec<ImportError> = Vec::new();
 
     let node_count = created_ids.len();
-    let ids = if created_ids.is_empty() { None } else { Some(created_ids.clone()) };
+    let ids = if created_ids.is_empty() {
+        None
+    } else {
+        Some(created_ids.clone())
+    };
     let id = created_ids.first().cloned();
     Ok(ImportResult {
         status: ImportStatus::Success,

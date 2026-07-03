@@ -6,15 +6,15 @@
 use crate::dream::llm::LlmProvider;
 use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
+use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::query::slot_io::get_slot_data;
-use crate::slot::context::ContextSlot;
-use crate::slot::hypergraph::{
+use crate::layers::context::ContextSlot;
+use crate::layers::hypergraph::{
     GraphEdgeKind, HypergraphEdge, HypergraphNode, HypergraphSlot, HypergraphSource,
 };
-use crate::util::hash_id;
-use crate::util::PAGE_SIZE;
+use crate::shared::slot_io::get_slot_data;
+use crate::util::{hash_id, PageType, DEFAULT_GROW_PAGES, PAGE_SIZE, SENTINEL_PAGE_ID};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::{HashMap, HashSet};
@@ -35,7 +35,7 @@ pub fn distill_l3_knowledge(
     active_topic_ids: &HashSet<u64>,
     file: &mut File,
 ) -> Result<Vec<String>, MemHopError> {
-    let now_ms = crate::query::common::now_ms();
+    let now_ms = crate::shared::common::now_ms();
 
     let mut all_new_ids: Vec<String> = Vec::new();
 
@@ -57,10 +57,7 @@ pub fn distill_l3_knowledge(
         let llm_response = match llm.distill_concepts(&summary) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!(
-                    "Warning: L3 distillation LLM call failed for '{}': {}",
-                    ctx.title, e
-                );
+                tracing::warn!("L3 distillation LLM call failed for '{}': {}", ctx.title, e);
                 continue;
             }
         };
@@ -89,16 +86,13 @@ pub fn distill_l3_knowledge(
                 updated_at: now_ms,
                 version: 1,
             };
-            match crate::l3::add_node(mmap, header, btree, node, file) {
+            match crate::l3::add_node(mmap, header, btree, node, file, None, None) {
                 Ok(id) => {
                     all_new_ids.push(id);
                     concept_id_map.insert(concept.name.clone(), node_hash);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "Warning: Failed to create concept node '{}': {}",
-                        concept.name, e
-                    );
+                    tracing::warn!("Failed to create concept node '{}': {}", concept.name, e);
                 }
             }
         }
@@ -127,8 +121,8 @@ pub fn distill_l3_knowledge(
                 created_at: now_ms,
             };
 
-            if let Err(e) = crate::l3::add_edge(mmap, header, btree, edge, file) {
-                eprintln!("Warning: Failed to create relation edge: {}", e);
+            if let Err(e) = crate::l3::add_edge(mmap, header, btree, edge, file, None) {
+                tracing::warn!("Failed to create relation edge: {}", e);
             }
         }
     }
@@ -189,21 +183,14 @@ fn resolve_or_create_graph(
         ));
     }
 
-    let page_id = allocate_or_extend(mmap, header, file, 500)?;
+    let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
     let page_offset = (page_id as usize) * PAGE_SIZE;
     let data_offset = page_offset + 32;
 
     // Write proper page header so list_knowledge can identify HypergraphSlot pages
-    let page_header = crate::file::page::PageHeader {
-        page_id,
-        page_type: crate::util::PageType::HypergraphSlot.to_u16(),
-        slot_count: 1,
-        free_bytes: (PAGE_SIZE - 32).saturating_sub(data_bytes.len()) as u16,
-        layer_id: 3,
-        next_page: 0xFFFFFFFF,
-        prev_page: 0xFFFFFFFF,
-        reserved: [0u8; 12],
-    };
+    let mut page_header = PageHeader::new(page_id, PageType::HypergraphSlot, 3, SENTINEL_PAGE_ID);
+    page_header.slot_count = 1;
+    page_header.free_bytes = (PAGE_SIZE - 32).saturating_sub(data_bytes.len()) as u16;
     mmap[page_offset..page_offset + 32].copy_from_slice(&page_header.to_bytes());
 
     mmap[data_offset..data_offset + data_bytes.len()].copy_from_slice(&data_bytes);

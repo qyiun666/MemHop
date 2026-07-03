@@ -4,22 +4,25 @@
 // search_memory() interface with L2-centric retrieval model.
 // Triple retrieval (vector + BM25 + entity) on L2 ContextSlot titles.
 
+#![cfg_attr(not(feature = "grpc-encoder"), allow(dead_code, unused_imports))]
+
 use crate::config::SearchWeights;
 use crate::file::header::FileHeader;
 use crate::file::page::decode_page_ref;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::index::vector::{cosine_similarity, read_vector, IVFIndex, ivf_knn};
+use crate::index::vector::{cosine_similarity, ivf_knn, read_vector, IVFIndex};
 use crate::l3::store::page_type_of;
-use crate::query::common::{self, format_hash};
-use crate::query::slot_io::{decode_page_id, get_slot_data};
+use crate::layers::archive::ArchiveSlot;
+use crate::layers::context::ContextSlot;
+use crate::layers::context_node::ContextNode;
+use crate::layers::hyperedge::HyperedgeSlot;
+use crate::layers::hypergraph::{HypergraphNode, HypergraphSlot};
 use crate::query::types::*;
-use crate::slot::archive::{ArchiveSlot, ContentType};
-use crate::slot::context::ContextSlot;
-use crate::slot::context_node::ContextNode;
-use crate::slot::hyperedge::HyperedgeSlot;
-use crate::slot::hypergraph::{HypergraphNode, HypergraphSlot};
+use crate::shared::common::{self, format_hash};
+use crate::shared::slot_io::{decode_page_id, get_slot_data};
 use crate::util::{hash_id, PageType, PAGE_SIZE};
+use crate::util::{DEFAULT_GROW_PAGES, SENTINEL_PAGE_ID};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::{HashMap, HashSet};
@@ -53,7 +56,7 @@ fn merge_and_rank(
     bm25_results: Vec<(ContextSlot, f32)>,
     vector_results: Vec<(ContextSlot, f32)>,
     config: MergeConfig,
-) -> Vec<ContextSlot> {
+) -> Vec<(ContextSlot, f32)> {
     let entity_max = entity_results
         .iter()
         .map(|(_, s)| *s)
@@ -113,7 +116,7 @@ fn merge_and_rank(
 
     scored
         .into_iter()
-        .filter_map(|(id, _)| ctx_map.remove(&id))
+        .filter_map(|(id, score)| ctx_map.remove(&id).map(|ctx| (ctx, score)))
         .collect()
 }
 
@@ -129,6 +132,7 @@ fn merge_and_rank(
 ///   3. `l3_id` present      → restrict candidate pool to L2s containing that L3, then triple retrieve
 ///   4. default              → full triple retrieval on all depth-1/2/3 contexts
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "grpc-encoder")]
 pub fn search_memory(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -156,8 +160,9 @@ pub fn search_memory(
             &query.dialogue,
             vector_dim,
             file,
+            encoder,
         )?;
-        vec![new_ctx]
+        vec![(new_ctx, 1.0)]
 
     // ========================================================================
     // Route 2: context_id
@@ -172,7 +177,7 @@ pub fn search_memory(
         {
             match ContextSlot::deserialize_slot(slot_data) {
                 Ok(ctx) => {
-                    vec![ctx]
+                    vec![(ctx, 1.0)]
                 }
                 Err(_) => {
                     vec![] // deserialization failed, treat as not found
@@ -186,28 +191,7 @@ pub fn search_memory(
     // Route 3 & 4: triple retrieval (optionally scoped by l3_id)
     // ========================================================================
     } else {
-        let search_text = if let Some(llm_config) = &query.llm_enhance {
-            match enhance_query_with_llm(
-                llm_config,
-                &query.dialogue,
-                query.context_history.as_deref(),
-            ) {
-                Ok(enhanced) => {
-                    eprintln!(
-                        "[LLM Enhancement] {} → {}",
-                        safe_char_slice(&query.dialogue, 50),
-                        safe_char_slice(&enhanced, 50)
-                    );
-                    enhanced
-                }
-                Err(e) => {
-                    eprintln!("[LLM Enhancement] Failed: {}, using original", e);
-                    query.dialogue.clone()
-                }
-            }
-        } else {
-            query.dialogue.clone()
-        };
+        let search_text = query.dialogue.clone();
 
         // If l3_id is set, restrict retrieval to L2 candidates containing this L3.
         let l3_scope: Option<HashSet<u64>> = if let Some(ref l3_id_str) = query.l3_id {
@@ -280,22 +264,19 @@ pub fn search_memory(
     let data: &[u8] = &mmap[..];
     let l1_associated = get_l1_associated_depth1(data, &filtered_l2, btree, l1_reverse)?;
 
-    // Deep mode: merge L1 associated into filtered_l2 for maximum recall.
-    let filtered_l2 = if query.search_mode == Some(crate::query::types::SearchMode::Deep) {
-        let mut extended = filtered_l2;
-        extended.extend(l1_associated.clone());
-        extended
-    } else {
-        filtered_l2
-    };
+    // Merge L1 associated into filtered_l2 for maximum recall (Deep mode is always active).
+    let mut filtered_l2 = filtered_l2;
+    filtered_l2.extend(l1_associated.clone());
 
     let l0_profile = crate::query::l0_crud::read_profile(mmap, btree)?;
 
     let (l3_ids, l3_previews) = collect_l3_previews(mmap, &filtered_l2, btree)?;
     let archive_refs = collect_archive_refs(data, &filtered_l2, btree)?;
 
-    update_activation_scores(mmap, &filtered_l2, btree)?;
-    boost_l1_importance_on_retrieval(mmap, &filtered_l2, btree, l1_reverse)?;
+    let filtered_l2_slots: Vec<ContextSlot> =
+        filtered_l2.iter().map(|(ctx, _)| ctx.clone()).collect();
+    update_activation_scores(mmap, &filtered_l2_slots, btree)?;
+    boost_l1_importance_on_retrieval(mmap, &filtered_l2_slots, btree, l1_reverse)?;
 
     let result = SearchResult {
         profile: l0_profile,
@@ -437,8 +418,8 @@ fn retrieve_l2_vector(
     if let Some(ivf) = ivf_index {
         if !ivf.centroids.is_empty() && !ivf.buckets.is_empty() {
             let effective_probes = if n_probes > 0 { n_probes } else { 8 };
-            let candidates = ivf_knn(ivf, data, query_vector, limit * 2, effective_probes)
-                .unwrap_or_default();
+            let candidates =
+                ivf_knn(ivf, data, query_vector, limit * 2, effective_probes).unwrap_or_default();
 
             let mut results = Vec::new();
             for (id_hash, score) in candidates {
@@ -472,7 +453,7 @@ fn retrieve_l2_vector(
         }
 
         let (page_id, _slot_idx) = decode_page_ref(page_ref);
-        let offset = crate::query::slot_io::slot_offset(page_id);
+        let offset = crate::shared::slot_io::slot_offset(page_id);
 
         if offset >= data.len() {
             continue;
@@ -617,10 +598,6 @@ impl L1ReverseIndex {
             bincode::deserialize(data).map_err(|e| MemHopError::Serialization(e.to_string()))?;
         Ok(Self { index })
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.index.is_empty()
-    }
 }
 
 // ============================================================================
@@ -633,15 +610,15 @@ impl L1ReverseIndex {
 /// discover sibling nodes, then loads their associated L2 ContextSlots.
 fn get_l1_associated_depth1(
     data: &[u8],
-    matched: &[ContextSlot],
+    matched: &[(ContextSlot, f32)],
     btree: &BTreeIndex,
     l1_reverse: &L1ReverseIndex,
-) -> Result<Vec<ContextSlot>, MemHopError> {
+) -> Result<Vec<(ContextSlot, f32)>, MemHopError> {
     if matched.is_empty() {
         return Ok(vec![]);
     }
 
-    let matched_ids: HashSet<u64> = matched.iter().map(|c| c.id_hash).collect();
+    let matched_ids: HashSet<u64> = matched.iter().map(|(c, _)| c.id_hash).collect();
     let mut seen: HashSet<u64> = matched_ids.clone(); // exclude already-matched
     let mut weighted_results: Vec<(ContextSlot, f32)> = Vec::new();
 
@@ -671,7 +648,8 @@ fn get_l1_associated_depth1(
                                         {
                                             if let Ok(ctx) = ContextSlot::deserialize(ctx_data) {
                                                 seen.insert(ctx_id);
-                                                let assoc_weight = hyperedge.weight * sibling_node.importance;
+                                                let assoc_weight =
+                                                    hyperedge.weight * sibling_node.importance;
                                                 weighted_results.push((ctx, assoc_weight));
                                             }
                                         }
@@ -686,7 +664,7 @@ fn get_l1_associated_depth1(
     }
 
     // Also include parent contexts of matched contexts (weight = parent importance)
-    for ctx in matched {
+    for (ctx, _) in matched {
         if let Some(parent_id) = ctx.parent_id {
             if seen.contains(&parent_id) {
                 continue;
@@ -704,12 +682,9 @@ fn get_l1_associated_depth1(
         }
     }
 
-    weighted_results.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    weighted_results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    let result: Vec<ContextSlot> = weighted_results.into_iter().map(|(ctx, _)| ctx).collect();
-    Ok(result)
+    Ok(weighted_results)
 }
 
 // ============================================================================
@@ -719,13 +694,13 @@ fn get_l1_associated_depth1(
 /// Collect L3 previews from matched contexts (single BTree traversal)
 fn collect_l3_previews(
     mmap: &MmapMut,
-    contexts: &[ContextSlot],
+    contexts: &[(ContextSlot, f32)],
     btree: &BTreeIndex,
 ) -> Result<(Vec<String>, Vec<L3Preview>), MemHopError> {
     let data: &[u8] = &mmap[..];
 
     let mut graph_ids: HashSet<u64> = HashSet::new();
-    for ctx in contexts {
+    for (ctx, _) in contexts {
         for &l3_hash in &ctx.l3_refs {
             graph_ids.insert(l3_hash);
         }
@@ -790,19 +765,6 @@ fn collect_l3_previews(
     Ok((l3_ids, previews))
 }
 
-/// Convert ContentType enum to lowercase string for API consistency
-fn content_type_to_string(ct: ContentType) -> String {
-    match ct {
-        ContentType::Text => "text".to_string(),
-        ContentType::Image => "image".to_string(),
-        ContentType::Video => "video".to_string(),
-        ContentType::Document => "document".to_string(),
-        ContentType::Audio => "audio".to_string(),
-        ContentType::Code => "code".to_string(),
-        ContentType::Other => "other".to_string(),
-    }
-}
-
 // ============================================================================
 // L4 archive references
 // ============================================================================
@@ -810,13 +772,13 @@ fn content_type_to_string(ct: ContentType) -> String {
 /// Collect L4 archive references from matched contexts, loading metadata
 fn collect_archive_refs(
     data: &[u8],
-    contexts: &[ContextSlot],
+    contexts: &[(ContextSlot, f32)],
     btree: &BTreeIndex,
 ) -> Result<Vec<ArchiveRef>, MemHopError> {
     let mut refs = Vec::new();
     let mut seen = HashSet::new();
 
-    for ctx in contexts {
+    for (ctx, _) in contexts {
         for &arc_hash in &ctx.archive_refs {
             if !seen.insert(arc_hash) {
                 continue;
@@ -830,7 +792,7 @@ fn collect_archive_refs(
                     refs.push(ArchiveRef {
                         id: format_hash(arc.id_hash),
                         context_id: format_hash(arc.context_id),
-                        content_type: content_type_to_string(arc.content_type),
+                        content_type: arc.content_type.as_str().to_string(),
                         created_at: arc.created_at,
                         source_agent: src.source_agent,
                         source_platform: src.source_platform,
@@ -864,7 +826,7 @@ fn update_activation_scores(
     for ctx in contexts {
         if let Some(page_ref) = btree.search(ctx.id_hash) {
             let (page_id, _) = decode_page_ref(page_ref);
-            let offset = crate::query::slot_io::slot_offset(page_id);
+            let offset = crate::shared::slot_io::slot_offset(page_id);
 
             if offset + 100 <= mmap.len() {
                 if let Ok(mut c) = ContextSlot::deserialize_slot(&mmap[offset..]) {
@@ -924,7 +886,7 @@ fn boost_l1_importance_on_retrieval(
                     let buf = node.serialize().map_err(|e| {
                         MemHopError::Serialization(format!("ContextNode boost serialize: {}", e))
                     })?;
-                    let offset = crate::query::slot_io::slot_offset(page_id);
+                    let offset = crate::shared::slot_io::slot_offset(page_id);
                     if offset + buf.len() <= mmap.len() {
                         mmap[offset..offset + buf.len()].copy_from_slice(&buf);
                     }
@@ -940,10 +902,10 @@ fn boost_l1_importance_on_retrieval(
 // Type conversion helpers
 // ============================================================================
 
-fn convert_contexts(contexts: &[ContextSlot]) -> Vec<ContextResult> {
+fn convert_contexts(contexts: &[(ContextSlot, f32)]) -> Vec<ContextResult> {
     contexts
         .iter()
-        .map(|c| ContextResult {
+        .map(|(c, score)| ContextResult {
             id: format_hash(c.id_hash),
             parent_id: c.parent_id.map(format_hash),
             depth: c.depth,
@@ -953,12 +915,13 @@ fn convert_contexts(contexts: &[ContextSlot]) -> Vec<ContextResult> {
             turn_count: c.turn_count,
             l3_refs: c.l3_refs.iter().map(|h| format_hash(*h)).collect(),
             archive_refs: c.archive_refs.iter().map(|h| format_hash(*h)).collect(),
-            llm_params: Some(LlmParamsDto {
+            llm_params: Some(LlmParams {
                 temperature: c.llm_params.temperature,
                 top_p: c.llm_params.top_p,
                 presence_penalty: c.llm_params.presence_penalty,
                 frequency_penalty: c.llm_params.frequency_penalty,
             }),
+            retrieval_score: *score,
         })
         .collect()
 }
@@ -968,14 +931,17 @@ fn convert_contexts(contexts: &[ContextSlot]) -> Vec<ContextResult> {
 // ============================================================================
 
 /// Create a new L2 ContextSlot from dialogue content (auto_create fast path)
+#[allow(clippy::too_many_arguments)]
+#[cfg(feature = "grpc-encoder")]
 fn create_new_l2_context(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     dialogue: &str,
-    _vector_dim: usize,
+    vector_dim: usize,
     file: &mut File,
+    encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
 ) -> Result<ContextSlot, MemHopError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -992,6 +958,40 @@ fn create_new_l2_context(
     let id_hash = hash_id(&id_str);
     let title = safe_char_slice(dialogue, 50);
 
+    // Encode dialogue to vector if encoder is available
+    // Encoding failure is non-fatal: falls back to BM25 + Entity retrieval
+    let centroid_page_ref = if let Some(enc) = encoder {
+        match enc.encode(dialogue) {
+            Ok(output) if !output.dense.is_empty() => {
+                match crate::file::free_list::allocate_or_extend(
+                    mmap,
+                    header,
+                    file,
+                    DEFAULT_GROW_PAGES,
+                ) {
+                    Ok(vec_page_id) => {
+                        let vec_slot_index = 0u16;
+                        match crate::index::vector::write_vector(
+                            mmap,
+                            vec_page_id,
+                            vec_slot_index,
+                            id_hash,
+                            &output.dense,
+                            vector_dim,
+                        ) {
+                            Ok(()) => ((vec_page_id as u64) << 16) | (vec_slot_index as u64),
+                            Err(_) => 0,
+                        }
+                    }
+                    Err(_) => 0,
+                }
+            }
+            _ => 0,
+        }
+    } else {
+        0
+    };
+
     let new_ctx = ContextSlot {
         id_hash,
         parent_id: None,
@@ -1007,29 +1007,28 @@ fn create_new_l2_context(
         importance: 0.5,
         activation_score: 0.8,
         is_active: true,
-        activation_state: crate::slot::context::ActivationState::Active,
-        centroid_page_ref: 0,
+        activation_state: crate::layers::context::ActivationState::Active,
+        centroid_page_ref,
         dialogue_range: (now_ms, now_ms),
-        llm_params: crate::slot::context::LlmParams::default(),
+        llm_params: crate::layers::context::LlmParams::default(),
     };
 
     let ctx_data = new_ctx
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-    let page_id = crate::file::free_list::allocate_or_extend(mmap, header, file, 500)?;
-    let page_offset = crate::query::slot_io::page_offset(page_id);
+    let page_id =
+        crate::file::free_list::allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
+    let page_offset = crate::shared::slot_io::page_offset(page_id);
 
-    let page_header = crate::file::page::PageHeader {
+    let mut page_header = crate::file::page::PageHeader::new(
         page_id,
-        page_type: crate::util::PageType::Context.to_u16(),
-        slot_count: 1,
-        free_bytes: (PAGE_SIZE - 32 - ctx_data.len()) as u16,
-        layer_id: 2,
-        next_page: 0xFFFFFFFF,
-        prev_page: 0xFFFFFFFF,
-        reserved: [0u8; 12],
-    };
+        crate::util::PageType::Context,
+        2,
+        SENTINEL_PAGE_ID,
+    );
+    page_header.slot_count = 1;
+    page_header.free_bytes = (PAGE_SIZE - 32 - ctx_data.len()) as u16;
     crate::file::page::write_page_header(mmap, page_id, &page_header)?;
 
     let data_offset = page_offset + 32;
@@ -1057,252 +1056,18 @@ fn create_new_l2_context(
 }
 
 // ============================================================================
-// LLM query enhancement
+// Tests
 // ============================================================================
-
-/// Enhanced query using LLM with content-aware classification.
-///
-/// Handles code snippets, long text, error messages, and follow-up queries
-/// with context_history for anaphora resolution.
-fn enhance_query_with_llm(
-    llm_config: &crate::config::LlmConfig,
-    dialogue: &str,
-    context_history: Option<&str>,
-) -> Result<String, MemHopError> {
-    let char_count = dialogue.chars().count();
-
-    let history_block = if let Some(history) = context_history {
-        let truncated = safe_char_slice(history, 500);
-        format!(
-            "\n之前的对话历史（最近{}字）：\n{}\n",
-            truncated.chars().count(),
-            truncated
-        )
-    } else {
-        String::new()
-    };
-
-    let has_code = dialogue.contains("```")
-        || dialogue.contains("fn ")
-        || dialogue.contains("impl ")
-        || dialogue.contains("pub ")
-        || dialogue.contains('{')
-        || dialogue.contains(';');
-    let has_path = dialogue.contains('/')
-        && (dialogue.contains(".rs")
-            || dialogue.contains(".py")
-            || dialogue.contains(".go")
-            || dialogue.contains(".ts")
-            || dialogue.contains(".js"));
-    let has_error = dialogue.contains("error[")
-        || dialogue.contains("Error[")
-        || dialogue.contains("panic")
-        || dialogue.contains("failed");
-    let is_verbose = char_count > 300;
-
-    let length_hint = if is_verbose {
-        format!("（输入较长，约{}字）", char_count)
-    } else {
-        String::new()
-    };
-    let code_hint = if has_code {
-        "\n检测到代码片段，请识别代码语言和功能后用自然语言描述其作用，不要将代码符号直接作为关键词。"
-    } else {
-        ""
-    };
-    let path_hint = if has_path {
-        "\n检测到文件路径，请提取路径中的技术栈关键词和查询意图。"
-    } else {
-        ""
-    };
-    let error_hint = if has_error {
-        "\n检测到错误信息，请提取错误码、错误类型和相关技术栈。"
-    } else {
-        ""
-    };
-    let history_hint = if context_history.is_some() {
-        "\n检测到历史对话，如当前问题是追问/指代（如'它'、'这个'），请结合历史还原完整语义。"
-    } else {
-        ""
-    };
-
-    let prompt = format!(
-        "你是一个AI记忆检索系统的查询优化器。{}请分析用户输入，生成最优检索字符串。\n\
-         要求：\n\
-         1. 提取2-5个最能代表查询意图的核心术语（中文/英文均可）\n\
-         2. 核心术语之间用空格分隔，不要用标点或分隔符\n\
-         3. {}{}{}{}{}\n\
-         4. 只返回检索字符串，不要解释、不要前缀、不要引号\n\
-         用户输入：{}",
-        length_hint,
-        if is_verbose {
-            "如果输入是长文本（>300字），先在心里做30字压缩摘要，再从摘要中提取关键词。"
-        } else {
-            "如果输入是知识性陈述，提取核心概念和领域术语。"
-        },
-        code_hint,
-        path_hint,
-        error_hint,
-        history_hint,
-        dialogue
-    );
-
-    let messages = if context_history.is_some() {
-        serde_json::json!([
-            {"role": "system", "content": "You are a memory retrieval query optimizer. \
-                 You classify input types (code/error/article/question/path/knowledge/followup) \
-                 and produce clean search terms for each type."},
-            {"role": "user", "content": format!("{}{}", history_block, prompt)}
-        ])
-    } else {
-        serde_json::json!([
-            {"role": "system", "content": "You are a memory retrieval query optimizer. \
-             You classify input types and produce clean search terms for each type."},
-            {"role": "user", "content": prompt}
-        ])
-    };
-
-    let timeout_secs = if is_verbose || has_code || has_error {
-        30u64
-    } else {
-        15u64
-    };
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .build()
-        .map_err(|e| MemHopError::Serialization(format!("HTTP client failed: {}", e)))?;
-
-    let body = serde_json::json!({
-        "model": llm_config.model,
-        "messages": messages,
-        "max_tokens": 256,
-        "temperature": 0.2,
-    });
-
-    let response = client
-        .post(&llm_config.api_url)
-        .bearer_auth(&llm_config.api_key)
-        .json(&body)
-        .send()
-        .map_err(|e| MemHopError::Serialization(format!("LLM API call failed: {}", e)))?;
-
-    if !response.status().is_success() {
-        return Err(MemHopError::Serialization(format!(
-            "LLM API error: {} - {}",
-            response.status(),
-            response.text().unwrap_or_default()
-        )));
-    }
-
-    let json: serde_json::Value = response
-        .json()
-        .map_err(|e| MemHopError::Serialization(format!("Parse LLM response failed: {}", e)))?;
-
-    let enhanced = json["choices"][0]["message"]["content"]
-        .as_str()
-        .map(|s| s.trim().to_string())
-        .ok_or_else(|| MemHopError::Serialization("No content in LLM response".to_string()))?;
-
-    let cleaned = enhanced
-        .trim_start_matches('"')
-        .trim_end_matches('"')
-        .trim_start_matches("QUERY:")
-        .trim_start_matches("query:")
-        .split_whitespace()
-        .filter(|s| s.len() >= 2 || s.chars().all(|c| c.is_alphanumeric()))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    Ok(if cleaned.is_empty() || cleaned.len() < 5 {
-        extract_fallback_keywords(dialogue)
-    } else {
-        cleaned
-    })
-}
-
-fn extract_fallback_keywords(text: &str) -> String {
-    // Remove common stop words, code artifacts, and join meaningful terms
-    let stop_words = [
-        "的", "了", "是", "在", "有", "和", "就", "不", "人", "都", "一", "a", "an", "the", "is",
-        "are", "was", "were", "be", "been", "being", "have", "has", "had", "do", "does", "did",
-        "will", "would", "could", "should", "to", "of", "in", "for", "on", "with", "at", "by",
-        "from", "as", "into",
-    ];
-
-    text.split_whitespace()
-        .filter(|w| w.len() >= 3 && !stop_words.contains(&w.to_lowercase().as_str()))
-        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != '-'))
-        .filter(|w| !w.is_empty())
-        .take(20)
-        .collect::<Vec<_>>()
-        .join(" ")
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file::header::FileHeader;
-    use crate::slot::context::{ActivationState, ContextSlot};
-    use std::io::Write;
-
-    fn create_test_mmap(page_count: usize) -> (tempfile::NamedTempFile, MmapMut, FileHeader, std::fs::File) {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-        let mut file = std::fs::File::create(path).unwrap();
-        file.write_all(&vec![0u8; PAGE_SIZE * page_count]).unwrap();
-        drop(file);
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut header = FileHeader::new(768);
-        for page_id in 2..page_count as u32 {
-            let offset = page_id as usize * PAGE_SIZE;
-            let next_free = if page_id + 1 < page_count as u32 {
-                page_id + 1
-            } else {
-                0xFFFFFFFF
-            };
-            mmap[offset..offset + 4].copy_from_slice(&next_free.to_le_bytes());
-        }
-        header.page_count = page_count as u32;
-        header.free_list_head = 2;
-        (temp_file, mmap, header, file)
-    }
-
-    fn insert_test_context(
-        mmap: &mut MmapMut,
-        header: &mut FileHeader,
-        btree: &mut BTreeIndex,
-        sparse_index: &mut SparseIndex,
-        ctx: ContextSlot,
-        file: &mut std::fs::File,
-    ) {
-        let page_id =
-            crate::file::page::allocate_page(mmap, header, crate::util::PageType::Context, 2, 0, file)
-                .unwrap();
-        let serialized = ctx.serialize().unwrap();
-        crate::file::page::write_page_data(mmap, page_id, &serialized).unwrap();
-        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-        btree.insert(ctx.id_hash, page_ref);
-        let terms: Vec<String> = ctx
-            .title
-            .split_whitespace()
-            .map(|s| s.to_lowercase())
-            .collect();
-        sparse_index.add_document(
-            ctx.id_hash,
-            terms,
-            ctx.title.split_whitespace().count() as u32,
-        );
-    }
+    use crate::layers::context::{ActivationState, ContextSlot};
+    use crate::test_helpers::*;
 
     #[test]
     fn test_depth3_retrieval_weighting() {
-        let (_temp, mut mmap, mut header, mut file) = create_test_mmap(10);
+        let (_temp, mut mmap, mut header, mut file) = create_test_mmap_with_tempfile(10);
         let mut btree = BTreeIndex::new();
         let mut sparse_index = SparseIndex::new();
 
@@ -1324,7 +1089,7 @@ mod tests {
             activation_state: ActivationState::Active,
             centroid_page_ref: 0,
             dialogue_range: (0, 0),
-            llm_params: crate::slot::context::LlmParams::default(),
+            llm_params: crate::layers::context::LlmParams::default(),
         };
 
         let ctx_depth1 = ContextSlot {
@@ -1387,29 +1152,6 @@ mod tests {
         );
     }
 
-    fn insert_test_context_node(
-        mmap: &mut MmapMut,
-        header: &mut FileHeader,
-        btree: &mut BTreeIndex,
-        node: ContextNode,
-        file: &mut std::fs::File,
-    ) -> u64 {
-        let page_id = crate::file::page::allocate_page(
-            mmap,
-            header,
-            crate::util::PageType::ContextNode,
-            1,
-            0,
-            file,
-        )
-        .unwrap();
-        let serialized = node.serialize().unwrap();
-        crate::file::page::write_page_data(mmap, page_id, &serialized).unwrap();
-        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-        btree.insert(node.id_hash, page_ref);
-        page_ref
-    }
-
     #[test]
     fn test_l1_reverse_index_serialize_roundtrip() {
         let mut idx = L1ReverseIndex::new();
@@ -1439,7 +1181,7 @@ mod tests {
 
     #[test]
     fn test_l1_reverse_index_build() {
-        let (_temp, mut mmap, mut header, mut file) = create_test_mmap(20);
+        let (_temp, mut mmap, mut header, mut file) = create_test_mmap_with_tempfile(20);
         let mut btree = BTreeIndex::new();
 
         let node1 = ContextNode {
@@ -1540,7 +1282,7 @@ mod tests {
 
     #[test]
     fn test_collect_l2_ids_with_l3_page_type_filter() {
-        let (_temp, mut mmap, mut header, mut file) = create_test_mmap(20);
+        let (_temp, mut mmap, mut header, mut file) = create_test_mmap_with_tempfile(20);
         let mut btree = BTreeIndex::new();
 
         // Insert a Context with l3_refs
@@ -1562,7 +1304,7 @@ mod tests {
             importance: 0.5,
             dialogue_range: (0, 0),
             version: 1,
-            llm_params: crate::slot::context::LlmParams::default(),
+            llm_params: crate::layers::context::LlmParams::default(),
         };
 
         let page_id = crate::file::page::allocate_page(

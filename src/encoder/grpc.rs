@@ -17,6 +17,9 @@ pub mod vector_model {
 use vector_model::vector_model_service_client::VectorModelServiceClient;
 use vector_model::{EncodeRequest, HealthCheckRequest};
 
+/// Health-check timeout shared between eager check and availability probe.
+const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
 // ============================================================================
 // Encoder trait & output
 // ============================================================================
@@ -59,7 +62,19 @@ impl GrpcEncoder {
 
         // Eager health check: fail fast if unreachable/unhealthy.
         let health = rt
-            .block_on(client.health_check(HealthCheckRequest {}))
+            .block_on(async {
+                tokio::time::timeout(
+                    HEALTH_CHECK_TIMEOUT,
+                    client.health_check(HealthCheckRequest {}),
+                )
+                .await
+            })
+            .map_err(|_| {
+                MemHopError::EncoderError(format!(
+                    "gRPC encoder health check timed out after {:?} at {}",
+                    HEALTH_CHECK_TIMEOUT, addr
+                ))
+            })?
             .map_err(|e| {
                 MemHopError::EncoderError(format!(
                     "gRPC encoder health check failed at {}: {}",
@@ -111,9 +126,15 @@ impl GrpcEncoder {
             Ok(c) => c,
             Err(_) => return false,
         };
-        match self.rt.block_on(client.health_check(HealthCheckRequest {})) {
-            Ok(response) => response.into_inner().healthy,
-            Err(_) => false,
+        match self.rt.block_on(async {
+            tokio::time::timeout(
+                HEALTH_CHECK_TIMEOUT,
+                client.health_check(HealthCheckRequest {}),
+            )
+            .await
+        }) {
+            Ok(Ok(response)) => response.into_inner().healthy,
+            _ => false,
         }
     }
 }
@@ -141,11 +162,9 @@ impl Encoder for GrpcEncoder {
 
         let resp = response.into_inner();
         let dense: Vec<f16> = resp.embedding.iter().map(|&v| f16::from_f32(v)).collect();
+        let sparse: HashMap<String, f32> = resp.sparse.into_iter().collect();
 
-        Ok(EncoderOutput {
-            dense,
-            sparse: HashMap::new(),
-        })
+        Ok(EncoderOutput { dense, sparse })
     }
 
     fn dim(&self) -> usize {
@@ -163,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_default_encoder_addr_is_tcp() {
-        assert_eq!("http://127.0.0.1:27110", "http://127.0.0.1:27110");
+        assert_eq!(DEFAULT_ENCODER_ADDR, "http://127.0.0.1:27110");
     }
 
     #[test]

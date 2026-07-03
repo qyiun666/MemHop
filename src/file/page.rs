@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::util::{PageType, PAGE_SIZE};
+use crate::util::{PageType, DEFAULT_GROW_PAGES, PAGE_SIZE, SENTINEL_PAGE_ID};
 use crate::{MemHopError, Result};
 #[cfg(test)]
 use memmap2::Mmap;
@@ -30,7 +30,7 @@ impl PageHeader {
             free_bytes: (PAGE_SIZE - 32) as u16,
             layer_id,
             next_page: next_page_id,
-            prev_page: 0xFFFFFFFF, // No previous page
+            prev_page: SENTINEL_PAGE_ID, // No previous page
             reserved: [0; 12],
         }
     }
@@ -83,7 +83,8 @@ pub fn allocate_page(
     next_page_id: u32,
     file: &mut File,
 ) -> Result<u32> {
-    let new_page_id = crate::file::free_list::allocate_or_extend(mmap, header, file, 500)?;
+    let new_page_id =
+        crate::file::free_list::allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
 
     let page_offset = (new_page_id as usize) * PAGE_SIZE;
 
@@ -196,7 +197,7 @@ mod tests {
         assert_eq!(restored.slot_count, 0);
         assert_eq!(restored.layer_id, 1);
         assert_eq!(restored.next_page, 100);
-        assert_eq!(restored.prev_page, 0xFFFFFFFF);
+        assert_eq!(restored.prev_page, SENTINEL_PAGE_ID);
     }
 
     #[test]
@@ -221,9 +222,9 @@ mod tests {
 
     #[test]
     fn test_page_ref_edge_cases() {
-        let encoded = encode_page_ref(0xFFFFFFFF, 0xFFFF);
+        let encoded = encode_page_ref(SENTINEL_PAGE_ID, 0xFFFF);
         let (page_id, slot_index) = decode_page_ref(encoded);
-        assert_eq!(page_id, 0xFFFFFFFF);
+        assert_eq!(page_id, SENTINEL_PAGE_ID);
         assert_eq!(slot_index, 0xFFFF);
 
         let encoded = encode_page_ref(0, 0);
@@ -251,7 +252,7 @@ mod tests {
 
         file.set_len((PAGE_SIZE * 2) as u64).unwrap();
 
-        let header = PageHeader::new(0, PageType::ContextNode, 1, 0xFFFFFFFF);
+        let header = PageHeader::new(0, PageType::ContextNode, 1, SENTINEL_PAGE_ID);
         let header_bytes = header.to_bytes();
         file.write_all(&header_bytes).unwrap();
 

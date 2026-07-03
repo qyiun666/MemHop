@@ -3,8 +3,8 @@
 
 //! Query result types for the L3 hypergraph query DSL.
 
+use crate::layers::hypergraph::{HypergraphEdge, HypergraphNode};
 use crate::query::types::{Subgraph, TraversalHop};
-use crate::slot::hypergraph::{HypergraphEdge, HypergraphNode};
 use serde::{Deserialize, Serialize};
 
 /// The result of executing a DSL query.

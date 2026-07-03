@@ -8,8 +8,10 @@ use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::slot::profile::ProfileSlot;
-use crate::util::{get_current_timestamp, hash_id, PageType, PAGE_SIZE};
+use crate::layers::profile::ProfileSlot;
+use crate::util::{
+    get_current_timestamp, hash_id, PageType, DEFAULT_GROW_PAGES, PAGE_SIZE, SENTINEL_PAGE_ID,
+};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashMap;
@@ -66,7 +68,7 @@ pub fn generate_profile(
         // NOTE: lexicon, style_traits, emotion_patterns are preserved (updated by habit_distill_stage)
         (pid, existing)
     } else {
-        let pid = allocate_or_extend(mmap, header, file, 500)?;
+        let pid = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
         let slot = ProfileSlot {
             id_hash: profile_id_hash,
             name: "Agent".to_string(),
@@ -96,16 +98,9 @@ pub fn generate_profile(
     let offset = (page_id as usize) * PAGE_SIZE;
 
     // Always write page header for new pages, update for existing
-    let page_header = PageHeader {
-        page_id,
-        page_type: PageType::Profile.to_u16(),
-        slot_count: 1,
-        free_bytes: (PAGE_SIZE - 32).saturating_sub(data.len()) as u16,
-        layer_id: 0,
-        next_page: 0xFFFFFFFF,
-        prev_page: 0xFFFFFFFF,
-        reserved: [0u8; 12],
-    };
+    let mut page_header = PageHeader::new(page_id, PageType::Profile, 0, SENTINEL_PAGE_ID);
+    page_header.slot_count = 1;
+    page_header.free_bytes = (PAGE_SIZE - 32).saturating_sub(data.len()) as u16;
     let header_bytes = page_header.to_bytes();
     mmap[offset..offset + 32].copy_from_slice(&header_bytes);
 

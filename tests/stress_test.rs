@@ -22,14 +22,21 @@ fn test_file_auto_extend() {
     // Use a mock encoder
     struct MockEncoder;
     impl memhop::encoder::Encoder for MockEncoder {
-        fn encode(&self, _text: &str) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
+        fn encode(
+            &self,
+            _text: &str,
+        ) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
             Ok(memhop::encoder::EncoderOutput {
                 dense: vec![half::f16::from_f32(0.1); 8],
                 sparse: std::collections::HashMap::new(),
             })
         }
-        fn dim(&self) -> usize { 8 }
-        fn mode(&self) -> &str { "mock" }
+        fn dim(&self) -> usize {
+            8
+        }
+        fn mode(&self) -> &str {
+            "mock"
+        }
     }
     db.set_encoder(MockEncoder);
 
@@ -38,7 +45,10 @@ fn test_file_auto_extend() {
     for i in 0..500 {
         let batch = memhop::StoreBatch {
             items: vec![memhop::StoreItem {
-                text: format!("stress test document number {} with some content to fill pages", i),
+                text: format!(
+                    "stress test document number {} with some content to fill pages",
+                    i
+                ),
                 topic_label: Some(format!("topic_{}", i % 20)),
                 domain_id: None,
                 importance: Some(0.5),
@@ -52,7 +62,9 @@ fn test_file_auto_extend() {
             turn_id: Some(format!("{}", i)),
             source: Default::default(),
         };
-        let report = db.batch_store(batch).expect("batch_store should succeed with auto-extend");
+        let report = db
+            .batch_store(batch)
+            .expect("batch_store should succeed with auto-extend");
         total_created += report.l1_nodes_created;
     }
 
@@ -66,14 +78,21 @@ fn test_batch_store_no_partial_write() {
 
     struct MockEncoder;
     impl memhop::encoder::Encoder for MockEncoder {
-        fn encode(&self, _text: &str) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
+        fn encode(
+            &self,
+            _text: &str,
+        ) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
             Ok(memhop::encoder::EncoderOutput {
                 dense: vec![half::f16::from_f32(0.1); 8],
                 sparse: std::collections::HashMap::new(),
             })
         }
-        fn dim(&self) -> usize { 8 }
-        fn mode(&self) -> &str { "mock" }
+        fn dim(&self) -> usize {
+            8
+        }
+        fn mode(&self) -> &str {
+            "mock"
+        }
     }
     db.set_encoder(MockEncoder);
 
@@ -100,18 +119,23 @@ fn test_batch_store_no_partial_write() {
     };
 
     let report = db.batch_store(batch).expect("large batch should succeed");
-    assert_eq!(report.l1_nodes_created, 100, "all 100 items should be stored");
+    assert_eq!(
+        report.l1_nodes_created, 100,
+        "all 100 items should be stored"
+    );
     assert!(report.l2_topics_updated > 0, "L2 topics should be created");
     assert!(report.edges_created > 0, "hyperedges should be created");
 
     // Verify DB is still readable after large batch
-    let engrams = db.list_engrams(memhop::EngramListQuery {
-        page: 1,
-        page_size: 200,
-        keyword: None,
-        min_importance: None,
-        state_filter: None,
-    }).expect("DB should be readable after batch");
+    let engrams = db
+        .list_engrams(memhop::EngramListQuery {
+            page: 1,
+            page_size: 200,
+            keyword: None,
+            min_importance: None,
+            state_filter: None,
+        })
+        .expect("DB should be readable after batch");
     assert!(engrams.total >= 100, "all engrams should be listable");
 }
 
@@ -122,14 +146,21 @@ fn test_rapid_write_and_sync() {
 
     struct MockEncoder;
     impl memhop::encoder::Encoder for MockEncoder {
-        fn encode(&self, _text: &str) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
+        fn encode(
+            &self,
+            _text: &str,
+        ) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
             Ok(memhop::encoder::EncoderOutput {
                 dense: vec![half::f16::from_f32(0.1); 8],
                 sparse: std::collections::HashMap::new(),
             })
         }
-        fn dim(&self) -> usize { 8 }
-        fn mode(&self) -> &str { "mock" }
+        fn dim(&self) -> usize {
+            8
+        }
+        fn mode(&self) -> &str {
+            "mock"
+        }
     }
     db.set_encoder(MockEncoder);
 
@@ -162,13 +193,15 @@ fn test_rapid_write_and_sync() {
     config.encoder_grpc_addr = None;
     let db2 = MemHop::open(config).expect("DB should reopen without corruption");
 
-    let engrams = db2.list_engrams(memhop::EngramListQuery {
-        page: 1,
-        page_size: 200,
-        keyword: None,
-        min_importance: None,
-        state_filter: None,
-    }).expect("reopened DB should be readable");
+    let engrams = db2
+        .list_engrams(memhop::EngramListQuery {
+            page: 1,
+            page_size: 200,
+            keyword: None,
+            min_importance: None,
+            state_filter: None,
+        })
+        .expect("reopened DB should be readable");
     assert!(engrams.total >= 100, "all 100 rounds should be persisted");
 }
 
@@ -197,19 +230,30 @@ fn test_import_many_l3_documents() {
         };
         let result = db.import_memory(request).expect("import should succeed");
         // Check no errors
-        assert!(result.errors.is_empty(), "import {} had errors: {:?}", i, result.errors);
+        assert!(
+            result.errors.is_empty(),
+            "import {} had errors: {:?}",
+            i,
+            result.errors
+        );
         total_created += result.created_ids.len();
     }
 
-    assert_eq!(total_created, 200, "all 200 knowledge items should be created, got {}", total_created);
+    assert_eq!(
+        total_created, 200,
+        "all 200 knowledge items should be created, got {}",
+        total_created
+    );
 
     // Verify DB is still consistent by listing topics (no encoder needed)
-    let topics = db.list_topics(memhop::TopicListQuery {
-        page: 1,
-        page_size: 10,
-        active_only: false,
-        keyword: None,
-    }).expect("list_topics should work after imports");
+    let topics = db
+        .list_topics(memhop::TopicListQuery {
+            page: 1,
+            page_size: 10,
+            active_only: false,
+            keyword: None,
+        })
+        .expect("list_topics should work after imports");
     // At least verify DB is readable
     let _ = topics;
 }

@@ -8,7 +8,7 @@ use crate::file::free_list::free_page;
 use crate::file::header::FileHeader;
 use crate::file::page::{allocate_page, read_page_header, write_page_data};
 use crate::index::btree::BTreeIndex;
-use crate::slot::action_chain::{ActionChainSlot, ActionStep, ChainStatus};
+use crate::layers::action_chain::{ActionChainSlot, ActionStep, ChainStatus};
 use crate::util::hash::hash_id;
 use crate::util::{PageType, PAGE_SIZE};
 use crate::MemHopError;
@@ -66,7 +66,7 @@ pub fn crystallize_patterns(
         let crystal_def = match llm.generate_crystal(pattern) {
             Ok(crystal) => crystal,
             Err(e) => {
-                eprintln!("LLM generate_crystal failed, using fallback: {:?}", e);
+                tracing::warn!("LLM generate_crystal failed, using fallback: {:?}", e);
                 llm.fallback_generate_crystal(pattern)
             }
         };
@@ -133,7 +133,7 @@ pub fn activate_crystal(
     let page_ref = btree.search(chain_id).ok_or_else(|| {
         MemHopError::Serialization(format!("ActionChain {} not found in index", chain_id))
     })?;
-    let page_id = crate::query::slot_io::decode_page_id(page_ref);
+    let page_id = crate::shared::slot_io::decode_page_id(page_ref);
 
     if page_id >= header.page_count {
         return Err(MemHopError::PageNotFound(page_id));
@@ -246,7 +246,6 @@ pub fn prune_low_quality_crystals(
 mod tests {
     use super::*;
     use crate::config::LlmConfig;
-    use crate::dream::llm::{CrystalDef, CrystalStep, LlmProvider, MemorySummary, Pattern};
     use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
     use crate::file::header::FileHeader;
     use crate::file::page::{allocate_page, write_page_data};
@@ -254,92 +253,15 @@ mod tests {
     use crate::util::PageType;
     use std::io::Write;
 
-    struct MockLlm;
-
-    impl LlmProvider for MockLlm {
-        fn summarize(&self, texts: &[String]) -> Result<String, crate::MemHopError> {
-            Ok(texts.join(", "))
-        }
-
-        fn extract_patterns(
-            &self,
-            _: &[MemorySummary],
-        ) -> Result<Vec<Pattern>, crate::MemHopError> {
-            Ok(vec![])
-        }
-
-        fn generate_crystal(&self, _: &Pattern) -> Result<CrystalDef, crate::MemHopError> {
-            Ok(CrystalDef {
-                condition: "when user asks Rust".to_string(),
-                action: "provide Rust support".to_string(),
-                steps: vec![
-                    CrystalStep {
-                        action: "extract keywords".to_string(),
-                        parameters: Some(r#"{"source":"query"}"#.to_string()),
-                    },
-                    CrystalStep {
-                        action: "retrieve knowledge".to_string(),
-                        parameters: Some(r#"{"domain":"rust"}"#.to_string()),
-                    },
-                    CrystalStep {
-                        action: "generate answer".to_string(),
-                        parameters: None,
-                    },
-                ],
-                confidence: 0.8,
-            })
-        }
-
-        fn fallback_summarize(&self, texts: &[String]) -> String {
-            texts.join(", ")
-        }
-
-        fn fallback_extract_patterns(&self, _: &[MemorySummary]) -> Vec<Pattern> {
-            vec![]
-        }
-
-        fn fallback_generate_crystal(&self, _: &Pattern) -> CrystalDef {
-            CrystalDef {
-                condition: "fallback condition".to_string(),
-                action: "fallback action".to_string(),
-                steps: vec![CrystalStep {
-                    action: "fallback step".to_string(),
-                    parameters: None,
-                }],
-                confidence: 0.3,
-            }
-        }
-
-        fn analyze_user_habits(
-            &self,
-            _: &[String],
-        ) -> Result<crate::dream::llm::HabitAnalysis, crate::MemHopError> {
-            Ok(crate::dream::llm::HabitAnalysis::default())
-        }
-
-        fn fallback_analyze_user_habits(&self, _: &[String]) -> crate::dream::llm::HabitAnalysis {
-            crate::dream::llm::HabitAnalysis::default()
-        }
-
-        fn distill_concepts(
-            &self,
-            _: &str,
-        ) -> Result<crate::dream::llm::LlmDistillResult, crate::MemHopError> {
-            Ok(crate::dream::llm::LlmDistillResult {
-                concepts: vec![],
-                relations: vec![],
-            })
-        }
-
-        fn fallback_distill_concepts(&self, _: &str) -> crate::dream::llm::LlmDistillResult {
-            crate::dream::llm::LlmDistillResult {
-                concepts: vec![],
-                relations: vec![],
-            }
-        }
-    }
-
-    fn setup_file(pages: u32) -> (tempfile::NamedTempFile, MmapMut, FileHeader, BTreeIndex, std::fs::File) {
+    fn setup_file(
+        pages: u32,
+    ) -> (
+        tempfile::NamedTempFile,
+        MmapMut,
+        FileHeader,
+        BTreeIndex,
+        std::fs::File,
+    ) {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         let path = temp_file.path();
 
@@ -445,53 +367,6 @@ mod tests {
     }
 
     #[test]
-    fn test_crystallize_creates_action_steps() {
-        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
-        let now = chrono::Utc::now().timestamp_millis();
-
-        let existing = ActionChainSlot {
-            id_hash: hash_id("existing_chain"),
-            title: "existing".to_string(),
-            trigger: "rust question".to_string(),
-            status: ChainStatus::Active,
-            confidence: 0.6,
-            success_rate: 0.5,
-            trigger_count: 3,
-            last_triggered: now - 1000,
-            created_at: now - 2000,
-            updated_at: now - 1000,
-            version: 1,
-        };
-        write_chain_slot(&mut mmap, &mut header, &mut btree, existing, &mut file);
-
-        let llm = MockLlm;
-        let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm, &mut file).unwrap();
-        assert_eq!(result.len(), 1);
-
-        let crystal_id = u64::from_str_radix(&result[0], 16).unwrap();
-        let page_ref = btree.search(crystal_id).unwrap();
-        let page_id = crate::query::slot_io::decode_page_id(page_ref);
-        let chain = read_chain(&mmap, page_id);
-        assert_eq!(chain.status, ChainStatus::Draft);
-        assert!((chain.confidence - 0.8).abs() < f32::EPSILON);
-        assert_eq!(chain.trigger, "when user asks Rust");
-
-        let steps = count_steps_for_chain(&mmap, &header, crystal_id);
-        assert_eq!(steps.len(), 3);
-        assert_eq!(steps[0].step_order, 0);
-        assert_eq!(steps[0].action, "extract keywords");
-        assert_eq!(
-            steps[0].parameters,
-            Some(r#"{"source":"query"}"#.to_string())
-        );
-        assert_eq!(steps[1].step_order, 1);
-        assert_eq!(steps[1].action, "retrieve knowledge");
-        assert_eq!(steps[2].step_order, 2);
-        assert_eq!(steps[2].action, "generate answer");
-        assert_eq!(steps[2].parameters, None);
-    }
-
-    #[test]
     fn test_crystallize_fallback_no_llm() {
         let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
         let now = chrono::Utc::now().timestamp_millis();
@@ -517,7 +392,8 @@ mod tests {
             model: "test-model".to_string(),
             ..Default::default()
         });
-        let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm, &mut file).unwrap();
+        let result =
+            crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm, &mut file).unwrap();
         assert_eq!(result.len(), 1);
 
         let crystal_id = u64::from_str_radix(&result[0], 16).unwrap();

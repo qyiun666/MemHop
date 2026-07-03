@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 use crate::file::header::FileHeader;
-use crate::util::PAGE_SIZE;
+use crate::util::{PAGE_SIZE, SENTINEL_PAGE_ID};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::fs::File;
@@ -32,10 +32,8 @@ pub fn allocate_or_extend(
             let free_type = crate::util::PageType::Free.to_u16().to_le_bytes();
             for page_id in (old_count..new_count).rev() {
                 let page_offset = (page_id as usize) * PAGE_SIZE;
-                mmap[page_offset..page_offset + 4]
-                    .copy_from_slice(&next_free.to_le_bytes());
-                mmap[page_offset + 4..page_offset + 6]
-                    .copy_from_slice(&free_type);
+                mmap[page_offset..page_offset + 4].copy_from_slice(&next_free.to_le_bytes());
+                mmap[page_offset + 4..page_offset + 6].copy_from_slice(&free_type);
                 next_free = page_id;
             }
 
@@ -48,7 +46,7 @@ pub fn allocate_or_extend(
     }
 }
 
-pub const EMPTY_FREE_LIST: u32 = 0xFFFFFFFF;
+pub const EMPTY_FREE_LIST: u32 = SENTINEL_PAGE_ID;
 
 pub fn init_free_list(header: &mut FileHeader) -> Result<(), MemHopError> {
     header.free_list_head = EMPTY_FREE_LIST;
@@ -74,7 +72,11 @@ pub fn allocate_from_free_list(
         }
 
         let next_free_data = &mmap[next_free_offset..next_free_offset + 4];
-        let next_free = u32::from_le_bytes(next_free_data.try_into().unwrap());
+        let next_free = u32::from_le_bytes(
+            next_free_data
+                .try_into()
+                .map_err(|_| MemHopError::Deserialization("truncated free list entry".into()))?,
+        );
 
         header.free_list_head = next_free;
 

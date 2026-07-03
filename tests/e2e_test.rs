@@ -1,27 +1,28 @@
-//! MemHop v0.45.0 End-to-End Integration Tests (real model / real LLM)
+//! MemHop v0.45.0 End-to-End Integration Tests (mock encoder / real LLM)
 //!
 //! These tests exercise the full Agent integration workflow against:
-//! - Real vector encoder via gRPC (multilingual-e5-small through meowvec)
+//! - Mock vector encoder via gRPC (multilingual-e5-small through meowvec)
 //! - Real LLM API (OpenAI-compatible)
 //!
 //! All tests are marked `#[ignore]` because they require network access and
-//! API credentials. Run with:
+//! API credentials for the LLM calls. Run with:
 //!     cargo test -- --ignored
 //!
-//! If the gRPC encoder service is not running, a deterministic fallback encoder
-//! is used so that non-vector channels (BM25, entity, L3, dream, L5) can still
-//! be validated.
+//! The mock meowvec server is spawned automatically by `tests/common/mod.rs`;
+//! no manual setup is required.
 
-use memhop::encoder::{Encoder, EncoderOutput, GrpcEncoder};
+mod common;
+
+use memhop::encoder::GrpcEncoder;
 use memhop::{
     ActionItem, ActionType, ArchivePageQuery, CrystalListQuery, EngramListQuery,
-    KnowledgeListQuery, LlmConfig, MemHop, MemHopConfig, SearchQuery, TopicListQuery,
-    UpdateProfileRequest, UpdateRequest, SourceMeta, SourceType, StoreBatch, StoreItem,
+    KnowledgeListQuery, LlmConfig, MemHop, MemHopConfig, SearchQuery, SourceMeta, SourceType,
+    StoreBatch, StoreItem, TopicListQuery, UpdateProfileRequest, UpdateRequest,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-const VECTOR_DIM: usize = 768;
+const VECTOR_DIM: usize = 384;
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 const MODEL: &str = "gpt-4o-mini";
 
@@ -50,98 +51,19 @@ fn make_config(path: PathBuf) -> MemHopConfig {
     config
 }
 
-/// Deterministic fallback encoder used only when the real meowvec gRPC service
-/// is not available. It produces normalized pseudo-vectors derived from the text
-/// hash so that vector pages can still be allocated and non-vector channels can
-/// be exercised end-to-end.
-struct DeterministicEncoder {
-    dim: usize,
+/// Start the shared mock meowvec server for this test binary.
+///
+/// The first call spawns the process on port 27110 and waits for the gRPC
+/// health check to pass. The process is killed automatically when the test
+/// binary exits.
+fn setup_mock_meowvec() {
+    let _guard = common::ensure_mock_meowvec(27110);
 }
 
-impl Encoder for DeterministicEncoder {
-    fn encode(&self, text: &str) -> Result<EncoderOutput, memhop::MemHopError> {
-        use std::collections::HashMap;
-        let mut vec = vec![0.0f32; self.dim];
-        let hash = memhop::util::hash_id(text);
-        // Fill vector using multiple 32-bit chunks of the hash.
-        for (i, slot) in vec.iter_mut().enumerate().take(self.dim) {
-            let chunk = (hash >> ((i % 8) * 8)) as u32;
-            let v = ((chunk as f32) / (u32::MAX as f32)) - 0.5;
-            *slot = v;
-        }
-        // L2-normalize.
-        let norm_sq: f32 = vec.iter().map(|v| v * v).sum();
-        if norm_sq > 0.0 {
-            let norm = norm_sq.sqrt();
-            for v in &mut vec {
-                *v /= norm;
-            }
-        }
-        let dense: Vec<half::f16> = vec.into_iter().map(half::f16::from_f32).collect();
-        Ok(EncoderOutput {
-            dense,
-            sparse: HashMap::new(),
-        })
-    }
-
-    fn dim(&self) -> usize {
-        self.dim
-    }
-
-    fn mode(&self) -> &str {
-        "deterministic"
-    }
-}
-
-/// Concrete enum wrapping either the real gRPC encoder or the deterministic
-/// fallback. This lets `MemHop::set_encoder` accept a sized value.
-enum TestEncoder {
-    Grpc(Box<GrpcEncoder>),
-    Deterministic(DeterministicEncoder),
-}
-
-impl Encoder for TestEncoder {
-    fn encode(&self, text: &str) -> Result<EncoderOutput, memhop::MemHopError> {
-        match self {
-            TestEncoder::Grpc(enc) => enc.encode(text),
-            TestEncoder::Deterministic(enc) => enc.encode(text),
-        }
-    }
-
-    fn dim(&self) -> usize {
-        match self {
-            TestEncoder::Grpc(enc) => enc.dim(),
-            TestEncoder::Deterministic(enc) => enc.dim(),
-        }
-    }
-
-    fn mode(&self) -> &str {
-        match self {
-            TestEncoder::Grpc(enc) => enc.mode(),
-            TestEncoder::Deterministic(enc) => enc.mode(),
-        }
-    }
-}
-
-/// Create an encoder for the test. Tries the real gRPC encoder first; falls
-/// back to the deterministic encoder and prints a warning if meowvec is down.
-fn create_encoder(dim: usize) -> TestEncoder {
-    match GrpcEncoder::new("http://127.0.0.1:27110", dim) {
-        Ok(enc) => {
-            eprintln!(
-                "[E2E] Using real gRPC encoder at http://127.0.0.1:27110 (dim={})",
-                dim
-            );
-            TestEncoder::Grpc(Box::new(enc))
-        }
-        Err(e) => {
-            eprintln!(
-                "[E2E] Real gRPC encoder unavailable ({}). Falling back to deterministic encoder.",
-                e
-            );
-            TestEncoder::Deterministic(DeterministicEncoder { dim })
-        }
-    }
+/// Create a real gRPC encoder connected to the mock meowvec server.
+fn create_encoder(dim: usize) -> GrpcEncoder {
+    GrpcEncoder::new("http://127.0.0.1:27110", dim)
+        .expect("failed to connect to mock meowvec at http://127.0.0.1:27110")
 }
 
 /// Remove the temporary database file if it exists.
@@ -282,6 +204,7 @@ fn store_item(topic: &str, text: &str) -> StoreItem {
 #[test]
 #[ignore]
 fn test_agent_conversation_memory_flow() {
+    setup_mock_meowvec();
     with_e2e_db("agent_conversation_memory_flow", |db| {
         // 1. Batch store multi-turn Chinese dialogues.
         let docs = conversation_documents();
@@ -313,12 +236,11 @@ fn test_agent_conversation_memory_flow() {
                 context_id: None,
                 l3_id: None,
                 context_limit: 5,
-                llm_enhance: Some(search_llm_config()),
+
                 auto_create: 0,
                 min_score: 0.0,
-                context_history: None,
+
                 source: Default::default(),
-                search_mode: None,
             })
             .expect("search should succeed");
         eprintln!("[E2E] search contexts: {:?}", search.contexts);
@@ -465,6 +387,7 @@ fn test_agent_conversation_memory_flow() {
 #[test]
 #[ignore]
 fn test_chinese_memory_specialization() {
+    setup_mock_meowvec();
     with_e2e_db("chinese_memory_specialization", |db| {
         // Seed Chinese memories covering people, projects, and technical terms.
         let docs = [
@@ -509,12 +432,11 @@ fn test_chinese_memory_specialization() {
                 context_id: None,
                 l3_id: None,
                 context_limit: 5,
-                llm_enhance: None,
+
                 auto_create: 0,
                 min_score: 0.0,
-                context_history: None,
+
                 source: Default::default(),
-                search_mode: None,
             })
             .expect("Chinese BM25 search should succeed");
         assert!(
@@ -537,12 +459,11 @@ fn test_chinese_memory_specialization() {
                 context_id: None,
                 l3_id: None,
                 context_limit: 5,
-                llm_enhance: Some(search_llm_config()),
+
                 auto_create: 0,
                 min_score: 0.0,
-                context_history: None,
+
                 source: Default::default(),
-                search_mode: None,
             })
             .expect("LLM-enhanced Chinese search should succeed");
         assert!(
@@ -584,6 +505,7 @@ fn test_chinese_memory_specialization() {
 #[test]
 #[ignore]
 fn test_l3_graph_traversal() {
+    setup_mock_meowvec();
     with_e2e_db("l3_graph_traversal", |db| {
         // Create a temporary source tree representing a tiny codebase.
         let tmp_dir = std::env::temp_dir().join("memhop_e2e_src");
@@ -663,12 +585,11 @@ pub fn run(query: String) {
                 context_id: None,
                 l3_id: Some(first_graph_id.clone()),
                 context_limit: 5,
-                llm_enhance: None,
+
                 auto_create: 0,
                 min_score: 0.0,
-                context_history: None,
+
                 source: Default::default(),
-                search_mode: None,
             })
             .expect("L3-restricted search should succeed");
         assert!(
@@ -688,6 +609,7 @@ pub fn run(query: String) {
 #[test]
 #[ignore]
 fn test_dream_pipeline_full() {
+    setup_mock_meowvec();
     with_e2e_db("dream_pipeline_full", |db| {
         // Seed several topics with multiple turns and action chains.
         let docs = [
@@ -875,9 +797,4 @@ fn test_dream_pipeline_full() {
             "Each topic should have at least one archive after update_memory"
         );
     });
-}
-
-/// Return the LLM configuration used for search enhancement.
-fn search_llm_config() -> LlmConfig {
-    make_llm_config()
 }

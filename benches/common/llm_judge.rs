@@ -5,6 +5,8 @@
 //! - LLM-as-Judge 语义评分（0.0-1.0）
 //! - 指数退避重试机制
 
+#![allow(dead_code, unused_imports)]
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -66,7 +68,10 @@ impl LlmJudge {
     }
 
     /// 发送 API 请求（带重试）
-    fn send_request(&self, request: &ChatRequest) -> Result<ChatResponse, Box<dyn std::error::Error>> {
+    fn send_request(
+        &self,
+        request: &ChatRequest,
+    ) -> Result<ChatResponse, Box<dyn std::error::Error>> {
         let mut last_error = None;
 
         for attempt in 0..MAX_RETRIES {
@@ -75,7 +80,8 @@ impl LlmJudge {
                 std::thread::sleep(delay);
             }
 
-            match self.client
+            match self
+                .client
                 .post(API_URL)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .header("Content-Type", "application/json")
@@ -109,7 +115,11 @@ impl LlmJudge {
     ///
     /// # 返回
     /// 生成的答案文本
-    pub fn generate_answer(&self, context: &str, question: &str) -> Result<String, Box<dyn std::error::Error>> {
+    pub fn generate_answer(
+        &self,
+        context: &str,
+        question: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
         let prompt = format!(
             "基于以下上下文回答问题。如果上下文中没有相关信息，请说明。\n\n\
              上下文：\n{}\n\n\
@@ -135,7 +145,9 @@ impl LlmJudge {
         };
 
         let response = self.send_request(&request)?;
-        let answer = response.choices.first()
+        let answer = response
+            .choices
+            .first()
             .map(|c| c.message.content.clone())
             .unwrap_or_default();
 
@@ -189,12 +201,15 @@ impl LlmJudge {
         };
 
         let response = self.send_request(&request)?;
-        let score_text = response.choices.first()
+        let score_text = response
+            .choices
+            .first()
             .map(|c| c.message.content.trim().to_string())
             .unwrap_or_else(|| "0.0".to_string());
 
         // 解析评分
-        let score: f64 = score_text.parse()
+        let score: f64 = score_text
+            .parse()
             .map_err(|_| format!("Failed to parse score: '{}'", score_text))?;
 
         // 确保评分在有效范围内

@@ -5,8 +5,8 @@
 //! V1: hyperedge→binary edge reduction (weight/(k-1)), then Leiden. V2: h-Louvain (arXiv:2406.17556).
 
 use crate::index::btree::BTreeIndex;
-use crate::query::slot_io::get_slot_data;
-use crate::slot::hypergraph::{HypergraphEdge, HypergraphNode};
+use crate::layers::hypergraph::{HypergraphEdge, HypergraphNode};
+use crate::shared::slot_io::get_slot_data;
 use crate::util::PageType;
 use crate::MemHopError;
 use memmap2::MmapMut;
@@ -24,7 +24,9 @@ pub struct CommunityConfig {
     pub max_hyperedge_size: usize,
 }
 
-fn default_max_hyperedge_size() -> usize { 10 }
+fn default_max_hyperedge_size() -> usize {
+    10
+}
 
 impl Default for CommunityConfig {
     fn default() -> Self {
@@ -74,10 +76,7 @@ pub struct Community {
 ///   nodes in large hyperedges).
 ///
 /// Duplicate pairs from different hyperedges have their weights summed.
-fn reduce_hyperedges(
-    edges: &[HypergraphEdge],
-    max_size: usize,
-) -> Vec<(u64, u64, f64)> {
+fn reduce_hyperedges(edges: &[HypergraphEdge], max_size: usize) -> Vec<(u64, u64, f64)> {
     let mut edge_weights: HashMap<(u64, u64), f64> = HashMap::new();
 
     for edge in edges {
@@ -88,9 +87,11 @@ fn reduce_hyperedges(
             continue;
         }
         if k > max_size {
-            eprintln!(
-                "Warning: hyperedge {} has {} nodes (max={}), skipping in community detection",
-                edge.id_hash, k, max_size
+            tracing::warn!(
+                "hyperedge {} has {} nodes (max={}), skipping in community detection",
+                edge.id_hash,
+                k,
+                max_size
             );
             continue;
         }
@@ -238,66 +239,7 @@ pub fn run_community_detection(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file::header::FileHeader;
-    use crate::slot::hypergraph::{GraphEdgeKind, HypergraphEdge, HypergraphNode};
-    use crate::util::PAGE_SIZE;
-    use std::fs::File;
-    use std::io::Write;
-
-    #[allow(dead_code)]
-    fn create_test_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex, File) {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-        let mut file = File::create(path).unwrap();
-        file.write_all(&vec![0u8; PAGE_SIZE * pages]).unwrap();
-        drop(file);
-
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut header = FileHeader::new(768);
-        header.page_count = pages as u32;
-        crate::file::free_list::init_free_list(&mut header).unwrap();
-
-        for page_id in (2..pages as u32).rev() {
-            crate::file::free_list::free_page(&mut mmap, &mut header, page_id).unwrap();
-        }
-
-        let btree = BTreeIndex::new();
-        (mmap, header, btree, file)
-    }
-
-    fn make_edge(id: u64, graph_id: u64, nodes: Vec<u64>) -> HypergraphEdge {
-        HypergraphEdge {
-            id_hash: id,
-            graph_id,
-            kind: GraphEdgeKind::Related,
-            node_ids: nodes,
-            weight: 1.0,
-            label: None,
-            created_at: 0,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn make_node(id: u64, graph_id: u64, title: &str) -> HypergraphNode {
-        HypergraphNode {
-            id_hash: id,
-            graph_id,
-            title: title.to_string(),
-            node_type: "concept".to_string(),
-            content: "test".to_string(),
-            keywords: vec![],
-            source_ref: None,
-            importance: 0.5,
-            created_at: 0,
-            updated_at: 0,
-            version: 1,
-        }
-    }
+    use crate::test_helpers::*;
 
     #[test]
     fn test_reduce_binary_edge() {

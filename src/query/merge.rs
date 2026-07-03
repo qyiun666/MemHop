@@ -7,9 +7,9 @@
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::query::common::{now_ms, parse_id_to_hash};
+use crate::layers::context::ContextSlot;
 use crate::query::types::*;
-use crate::slot::context::ContextSlot;
+use crate::shared::common::{now_ms, parse_id_to_hash};
 use crate::util::PAGE_SIZE;
 use crate::MemHopError;
 use memmap2::MmapMut;
@@ -158,7 +158,7 @@ pub fn merge_topics(
         activation_state: format!("{:?}", primary_ctx.activation_state),
         created_at: primary_ctx.created_at,
         updated_at: primary_ctx.updated_at,
-        llm_params: Some(LlmParamsDto {
+        llm_params: Some(LlmParams {
             temperature: primary_ctx.llm_params.temperature,
             top_p: primary_ctx.llm_params.top_p,
             presence_penalty: primary_ctx.llm_params.presence_penalty,

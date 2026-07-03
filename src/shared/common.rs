@@ -30,25 +30,12 @@ pub fn format_hash(hash: u64) -> String {
 /// Extract L2 topic sparse index terms and document length from title and summary.
 /// Returns (terms, doc_len) where terms are lowercased whitespace-split tokens.
 pub fn build_l2_sparse_terms(title: &str, summary: &Option<String>) -> (Vec<String>, u32) {
-    let mut terms: Vec<String> = title
-        .split_whitespace()
-        .map(|s| s.to_lowercase())
-        .collect();
+    let mut terms: Vec<String> = title.split_whitespace().map(|s| s.to_lowercase()).collect();
     if let Some(ref s) = summary {
         terms.extend(s.split_whitespace().map(|s| s.to_lowercase()));
     }
     let doc_len = (title.len() + summary.as_ref().map_or(0, |s| s.len())) as u32;
     (terms, doc_len)
-}
-
-/// Normalize layer alias strings to canonical form.
-/// Currently maps "topic"/"Topic"/"TOPIC" → "l2".
-#[inline]
-pub fn normalize_layer(s: &str) -> &str {
-    match s {
-        "topic" | "Topic" | "TOPIC" => "l2",
-        other => other,
-    }
 }
 
 /// Generates a `deserialize_slot` wrapper that converts errors to MemHopError::Serialization.
@@ -64,13 +51,13 @@ macro_rules! impl_deserialize_slot {
     };
 }
 
-impl_deserialize_slot!(crate::slot::context::ContextSlot, "ContextSlot");
-impl_deserialize_slot!(crate::slot::context_node::ContextNode, "ContextNode");
-impl_deserialize_slot!(crate::slot::archive::ArchiveSlot, "ArchiveSlot");
-impl_deserialize_slot!(crate::slot::hypergraph::HypergraphSlot, "HypergraphSlot");
-impl_deserialize_slot!(crate::slot::profile::ProfileSlot, "ProfileSlot");
+impl_deserialize_slot!(crate::layers::context::ContextSlot, "ContextSlot");
+impl_deserialize_slot!(crate::layers::context_node::ContextNode, "ContextNode");
+impl_deserialize_slot!(crate::layers::archive::ArchiveSlot, "ArchiveSlot");
+impl_deserialize_slot!(crate::layers::hypergraph::HypergraphSlot, "HypergraphSlot");
+impl_deserialize_slot!(crate::layers::profile::ProfileSlot, "ProfileSlot");
 impl_deserialize_slot!(
-    crate::slot::action_chain::ActionChainSlot,
+    crate::layers::action_chain::ActionChainSlot,
     "ActionChainSlot"
 );
 

@@ -18,9 +18,7 @@ pub fn extract_keywords(text: &str, max_keywords: usize) -> Vec<String> {
     }
 
     let mut keywords: Vec<(String, u32)> = freq_map.into_iter().collect();
-    keywords.sort_by(|a, b| {
-        b.1.cmp(&a.1).then_with(|| b.0.len().cmp(&a.0.len()))
-    });
+    keywords.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.len().cmp(&a.0.len())));
 
     keywords
         .into_iter()

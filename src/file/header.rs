@@ -1,11 +1,24 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::util::{MAGIC, PAGE_SIZE, TAIL_MAGIC, VERSION};
+use crate::util::{MAGIC, PAGE_SIZE, SENTINEL_PAGE_ID, TAIL_MAGIC, VERSION};
 use crate::{MemHopError, Result};
 use memmap2::Mmap;
 use std::fs::File;
 use std::io::{Seek, SeekFrom, Write};
+
+/// Index into `FileHeader.layer_roots` for the B-tree root page.
+pub const LAYER_ROOT_BTREE: usize = 0;
+/// Index into `FileHeader.layer_roots` for the sparse index directory page.
+pub const LAYER_ROOT_SPARSE: usize = 1;
+/// Index into `FileHeader.layer_roots` for the L6 pathway weight chain.
+pub const LAYER_ROOT_L6: usize = 2;
+/// Index into `FileHeader.layer_roots` for the L1 inverted/reverse index chain.
+pub const LAYER_ROOT_L1_INVERTED: usize = 12;
+/// Index into `FileHeader.layer_roots` for the L3 hypergraph chain.
+// Referenced by tests and reserved for future L3 persistence hooks.
+#[allow(dead_code)]
+pub const LAYER_ROOT_L3: usize = 13;
 
 #[derive(Debug, Clone)]
 #[repr(C)]
@@ -33,7 +46,7 @@ impl FileHeader {
             vector_dim,
             commit_id: 0,
             page_count: 2, // Page 0 and Page 1 are headers
-            free_list_head: 0xFFFFFFFF,
+            free_list_head: SENTINEL_PAGE_ID,
             layer_roots: [0; 14],
             journal_start: 0,
             journal_len: 0,
@@ -190,6 +203,8 @@ pub fn select_valid_header(a: &FileHeader, b: &FileHeader) -> Result<FileHeader>
     }
 }
 
+// Used by header tests; reserved for future dual-header persistence path.
+#[allow(dead_code)]
 pub fn write_active_header(file: &mut File, header: &FileHeader, is_a: bool) -> Result<()> {
     let offset = if is_a { 0 } else { PAGE_SIZE as u64 };
     file.seek(SeekFrom::Start(offset))?;
@@ -211,8 +226,8 @@ mod tests {
         let mut header = FileHeader::new(768);
         header.commit_id = 42;
         header.page_count = 100;
-        header.layer_roots[0] = 5;
-        header.layer_roots[13] = 99;
+        header.layer_roots[LAYER_ROOT_BTREE] = 5;
+        header.layer_roots[LAYER_ROOT_L3] = 99;
 
         let bytes = header.to_bytes();
         let restored = FileHeader::from_bytes(&bytes).unwrap();
@@ -222,8 +237,8 @@ mod tests {
         assert_eq!(restored.vector_dim, 768);
         assert_eq!(restored.commit_id, 42);
         assert_eq!(restored.page_count, 100);
-        assert_eq!(restored.layer_roots[0], 5);
-        assert_eq!(restored.layer_roots[13], 99);
+        assert_eq!(restored.layer_roots[LAYER_ROOT_BTREE], 5);
+        assert_eq!(restored.layer_roots[LAYER_ROOT_L3], 99);
         assert_eq!(restored.tail_magic, TAIL_MAGIC);
     }
 

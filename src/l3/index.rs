@@ -5,15 +5,15 @@
 
 use crate::file::page::PageHeader;
 use crate::index::sparse::SparseIndex;
-use crate::slot::hypergraph::HypergraphNode;
-use crate::util::PageType;
+use crate::layers::hypergraph::HypergraphNode;
+use crate::util::{PageType, SENTINEL_PAGE_ID};
 use crate::MemHopError;
 use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 const PAGE_DATA_BYTES: usize = 4064; // PAGE_SIZE(4096) - header(32)
-const SENTINEL: u32 = 0xFFFFFFFF;
+const SENTINEL: u32 = SENTINEL_PAGE_ID;
 
 /// L3Index provides search capabilities within a single L3 hypergraph.
 ///
@@ -152,6 +152,28 @@ impl L3Index {
         bincode::deserialize(data).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
+    /// Merge another L3Index into this one.
+    /// Node id_hashes are assumed to be disjoint across indices.
+    pub fn merge(&mut self, other: &L3Index) {
+        for (keyword, ids) in &other.keyword_index {
+            let entry = self.keyword_index.entry(keyword.clone()).or_default();
+            for id in ids {
+                if !entry.contains(id) {
+                    entry.push(*id);
+                }
+            }
+        }
+        for (node_type, ids) in &other.type_index {
+            let entry = self.type_index.entry(node_type.clone()).or_default();
+            for id in ids {
+                if !entry.contains(id) {
+                    entry.push(*id);
+                }
+            }
+        }
+        self.content_index.merge(&other.content_index);
+    }
+
     /// Write L3Index across a chain of pages in mmap
     ///
     /// Serializes the index with bincode, then writes it across multiple
@@ -241,7 +263,7 @@ impl Default for L3Index {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slot::hypergraph::HypergraphNode;
+    use crate::layers::hypergraph::HypergraphNode;
 
     fn create_test_node(id: u64, title: &str, content: &str, node_type: &str) -> HypergraphNode {
         HypergraphNode {
@@ -298,5 +320,41 @@ mod tests {
         let results = index.search(&query);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, 1);
+    }
+
+    #[test]
+    fn test_merge_l3_index() {
+        let mut index1 = L3Index::new();
+        let node1 = create_test_node(1, "Rust Node", "Rust content", "concept");
+        index1.add_node(&node1);
+
+        let mut index2 = L3Index::new();
+        let node2 = create_test_node(2, "Python Node", "Python content", "function");
+        index2.add_node(&node2);
+
+        index1.merge(&index2);
+
+        let query = L3IndexQuery {
+            query: "Rust".to_string(),
+            node_type: None,
+            limit: 10,
+            min_importance: None,
+        };
+        let rust_results = index1.search(&query);
+        assert_eq!(rust_results.len(), 1);
+        assert_eq!(rust_results[0].0, 1);
+
+        let query = L3IndexQuery {
+            query: "Python".to_string(),
+            node_type: None,
+            limit: 10,
+            min_importance: None,
+        };
+        let python_results = index1.search(&query);
+        assert_eq!(python_results.len(), 1);
+        assert_eq!(python_results[0].0, 2);
+
+        assert!(index1.type_index.contains_key("function"));
+        assert!(index1.type_index.contains_key("concept"));
     }
 }

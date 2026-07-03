@@ -1,14 +1,15 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-pub mod compress_stage;
-pub mod crystallize_stage;
-pub mod emotion;
-pub mod habit_distill_stage;
-pub mod l0_form_stage;
-pub mod l1_decay;
-pub mod l3_distill_stage;
+pub(crate) mod compress_stage;
+pub(crate) mod crystallize_stage;
+pub(crate) mod emotion;
+pub(crate) mod habit_distill_stage;
+pub(crate) mod l0_form_stage;
+pub(crate) mod l1_decay;
+pub(crate) mod l3_distill_stage;
 pub mod llm;
+#[cfg(feature = "llm")]
 pub mod openai_compatible;
 pub mod prune;
 
@@ -18,11 +19,70 @@ use crate::dream::prune::DreamReport;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::query::common::format_hash;
+use crate::query::diagnostics::{StageReport, StageStatus};
+use crate::shared::common::format_hash;
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
 use std::fs::File;
+
+/// Run a single dream stage, recording its result and rolling back on fatal errors.
+#[allow(clippy::too_many_arguments)]
+fn run_stage<F, R>(
+    name: &str,
+    failure_description: &str,
+    f: F,
+    report: &mut DreamReport,
+    btree: &mut BTreeIndex,
+    sparse_index: &mut SparseIndex,
+    stages: &mut Vec<StageReport>,
+    fatal: bool,
+    rollback: R,
+    start_time: std::time::Instant,
+) -> Result<(), MemHopError>
+where
+    F: FnOnce(
+        &mut DreamReport,
+        &mut BTreeIndex,
+        &mut SparseIndex,
+    ) -> Result<(String, usize), MemHopError>,
+    R: FnOnce(&mut DreamReport, &mut BTreeIndex, &mut SparseIndex),
+{
+    let stage_start = std::time::Instant::now();
+    match f(report, btree, sparse_index) {
+        Ok((description, processed_count)) => {
+            stages.push(StageReport {
+                name: name.to_string(),
+                status: StageStatus::Success,
+                description,
+                processed_count,
+                duration_ms: stage_start.elapsed().as_millis() as u64,
+                error: None,
+            });
+            Ok(())
+        }
+        Err(e) => {
+            stages.push(StageReport {
+                name: name.to_string(),
+                status: StageStatus::Failed,
+                description: failure_description.to_string(),
+                processed_count: 0,
+                duration_ms: stage_start.elapsed().as_millis() as u64,
+                error: Some(e.to_string()),
+            });
+            if fatal {
+                rollback(report, btree, sparse_index);
+                report.stages = std::mem::take(stages);
+                report.duration_ms = start_time.elapsed().as_millis() as u64;
+                if report.rollback_incomplete {
+                    tracing::error!("Dream rollback incomplete");
+                }
+                return Err(e);
+            }
+            Ok(())
+        }
+    }
+}
 
 /// Main dream pipeline - memory consolidation through depth demotion
 ///
@@ -78,103 +138,194 @@ pub fn dream_pipeline(
         new_l3_nodes: Vec::new(),
         new_crystals: Vec::new(),
         pruned_crystals: Vec::new(),
+        stages: Vec::new(),
         duration_ms: 0,
+        rollback_incomplete: false,
     };
 
     let btree_snapshot = btree.clone();
     let sparse_snapshot = sparse_index.clone();
 
+    // Helper to record stage results (failure doesn't block subsequent stages)
+    let mut stages = Vec::new();
+
     // L3 distillation runs BEFORE L2 compression because compression demotes
     // active depth-1 contexts to depth-2, and L3 needs their original summaries.
-    let l3_nodes = l3_distill_stage::distill_l3_knowledge(
-        mmap,
-        header,
+    run_stage(
+        "l3_distill",
+        "L3 knowledge distillation failed",
+        |report, btree, sparse_index| {
+            let nodes = l3_distill_stage::distill_l3_knowledge(
+                mmap,
+                header,
+                btree,
+                sparse_index,
+                llm,
+                &session_topic_ids,
+                file,
+            )?;
+            let count = nodes.len();
+            report.new_l3_nodes = nodes;
+            Ok((format!("Distilled {} L3 knowledge nodes", count), count))
+        },
+        &mut report,
         btree,
         sparse_index,
-        llm,
-        &session_topic_ids,
-        file,
-    );
-    match l3_nodes {
-        Ok(nodes) => report.new_l3_nodes = nodes,
-        Err(e) => {
-            *btree = btree_snapshot;
-            *sparse_index = sparse_snapshot;
-            return Err(e);
-        }
-    }
+        &mut stages,
+        false,
+        |_, _, _| {},
+        start_time,
+    )?;
 
-    let compress_result = compress_stage::compress_active_contexts(
-        mmap,
-        header,
-        btree,
-        sparse_index,
-        llm,
-        &session_topic_ids,
-        file,
-    );
-    match compress_result {
-        Ok((demoted_sec, compressed, removed, demoted_ter)) => {
+    run_stage(
+        "l2_compress",
+        "L2 compression failed",
+        |report, btree, sparse_index| {
+            let (demoted_sec, compressed, removed, demoted_ter) =
+                compress_stage::compress_active_contexts(
+                    mmap,
+                    header,
+                    btree,
+                    sparse_index,
+                    llm,
+                    &session_topic_ids,
+                    file,
+                )?;
+            let count = demoted_sec.len() + compressed.len() + removed.len() + demoted_ter.len();
             report.demoted_to_secondary = demoted_sec;
             report.new_compressed = compressed;
             report.removed_contexts = removed;
             report.demoted_to_tertiary = demoted_ter;
-        }
-        Err(e) => {
-            *btree = btree_snapshot;
-            *sparse_index = sparse_snapshot;
-            return Err(e);
-        }
-    }
+            Ok((
+                format!(
+                    "Compressed L2 contexts: {} demoted, {} new compressed, {} removed",
+                    report.demoted_to_secondary.len(),
+                    report.new_compressed.len(),
+                    report.removed_contexts.len()
+                ),
+                count,
+            ))
+        },
+        &mut report,
+        btree,
+        sparse_index,
+        &mut stages,
+        true,
+        |report, btree, sparse_index| {
+            *btree = btree_snapshot.clone();
+            *sparse_index = sparse_snapshot.clone();
+            report.rollback_incomplete = true;
+        },
+        start_time,
+    )?;
 
     // L1 nodes point to L2 contexts; after L2 depth changes, L1 associations need refresh
-    let l1_result = rebuild_l1_from_l2(mmap, header, btree, sparse_index, &session_topic_ids, decay_config);
-    match l1_result {
-        Ok(l1_updated) => report.l1_updated = l1_updated,
-        Err(e) => {
-            *btree = btree_snapshot;
-            *sparse_index = sparse_snapshot;
-            return Err(e);
-        }
-    }
+    run_stage(
+        "l1_rebuild",
+        "L1 rebuild failed",
+        |report, btree, sparse_index| {
+            let l1_updated = rebuild_l1_from_l2(
+                mmap,
+                header,
+                btree,
+                sparse_index,
+                &session_topic_ids,
+                decay_config,
+            )?;
+            let count = l1_updated.len();
+            report.l1_updated = l1_updated;
+            Ok((format!("Rebuilt {} L1 associations", count), count))
+        },
+        &mut report,
+        btree,
+        sparse_index,
+        &mut stages,
+        true,
+        |report, btree, sparse_index| {
+            *btree = btree_snapshot.clone();
+            *sparse_index = sparse_snapshot.clone();
+            report.rollback_incomplete = true;
+        },
+        start_time,
+    )?;
 
-    let l1_decay_report = l1_decay::decay_l1_network(mmap, header, btree, decay_config);
-    match l1_decay_report {
-        Ok(decay_report) => {
+    run_stage(
+        "l1_decay",
+        "L1 decay failed",
+        |report, btree, _sparse_index| {
+            let decay_report = l1_decay::decay_l1_network(mmap, header, btree, decay_config)?;
             report.l1_decayed_nodes = decay_report.decayed_nodes;
             report.l1_pruned_edges = decay_report.pruned_edges;
             report.l1_removed_nodes = decay_report.removed_nodes;
             report.l1_removed_edges = decay_report.removed_edges;
-        }
-        Err(e) => {
-            *btree = btree_snapshot;
-            *sparse_index = sparse_snapshot;
-            return Err(e);
-        }
-    }
+            let count = report.l1_decayed_nodes
+                + report.l1_pruned_edges
+                + report.l1_removed_nodes
+                + report.l1_removed_edges;
+            Ok((
+                format!(
+                    "L1 decay: {} nodes decayed, {} edges pruned, {} nodes removed, {} edges removed",
+                    report.l1_decayed_nodes,
+                    report.l1_pruned_edges,
+                    report.l1_removed_nodes,
+                    report.l1_removed_edges
+                ),
+                count,
+            ))
+        },
+        &mut report,
+        btree,
+        sparse_index,
+        &mut stages,
+        true,
+        |report, btree, sparse_index| {
+            *btree = btree_snapshot.clone();
+            *sparse_index = sparse_snapshot.clone();
+            report.rollback_incomplete = true;
+        },
+        start_time,
+    )?;
 
-    let l0_result = l0_form_stage::generate_profile(mmap, header, btree, sparse_index, file);
-    if let Err(e) = l0_result {
-        *btree = btree_snapshot;
-        *sparse_index = sparse_snapshot;
-        return Err(e);
-    }
-    if !session_topic_ids.is_empty() {
-        let profile_id_hash = crate::util::hash_id("profile");
-        let profile_id = crate::query::common::format_hash(profile_id_hash);
-        report.l0_updated = Some((
-            profile_id,
-            vec!["personality".to_string(), "preferences".to_string()],
-        ));
-    }
+    run_stage(
+        "l0_profile",
+        "L0 profile generation failed",
+        |report, btree, sparse_index| {
+            l0_form_stage::generate_profile(mmap, header, btree, sparse_index, file)?;
+            if !session_topic_ids.is_empty() {
+                let profile_id_hash = crate::util::hash_id("profile");
+                let profile_id = format_hash(profile_id_hash);
+                report.l0_updated = Some((
+                    profile_id,
+                    vec!["personality".to_string(), "preferences".to_string()],
+                ));
+            }
+            Ok((
+                "L0 profile regenerated".to_string(),
+                if report.l0_updated.is_some() { 1 } else { 0 },
+            ))
+        },
+        &mut report,
+        btree,
+        sparse_index,
+        &mut stages,
+        true,
+        |report, btree, sparse_index| {
+            *btree = btree_snapshot.clone();
+            *sparse_index = sparse_snapshot.clone();
+            report.rollback_incomplete = true;
+        },
+        start_time,
+    )?;
 
-    let habit_result = habit_distill_stage::distill_user_habits(mmap, header, btree, llm);
-    match habit_result {
-        Ok(habit_update) => {
-            if habit_update.new_lexicon > 0
-                || habit_update.new_style_traits > 0
-                || habit_update.new_emotion_patterns > 0
-            {
+    run_stage(
+        "habit_distill",
+        "Habit distillation failed",
+        |report, btree, _sparse_index| {
+            let habit_update = habit_distill_stage::distill_user_habits(mmap, header, btree, llm)?;
+            let count = habit_update.new_lexicon
+                + habit_update.new_style_traits
+                + habit_update.new_emotion_patterns;
+            if count > 0 {
                 report.habits_updated = Some(habit_distill_stage::HabitUpdate {
                     new_lexicon: habit_update.new_lexicon,
                     new_style_traits: habit_update.new_style_traits,
@@ -182,37 +333,69 @@ pub fn dream_pipeline(
                     total_dialogues_analyzed: habit_update.total_dialogues_analyzed,
                 });
             }
-        }
-        Err(e) => {
-            *btree = btree_snapshot;
-            *sparse_index = sparse_snapshot;
-            return Err(e);
-        }
-    }
+            Ok((
+                format!(
+                    "Habit distillation: {} lexicon, {} style traits, {} emotion patterns",
+                    habit_update.new_lexicon,
+                    habit_update.new_style_traits,
+                    habit_update.new_emotion_patterns
+                ),
+                count,
+            ))
+        },
+        &mut report,
+        btree,
+        sparse_index,
+        &mut stages,
+        false,
+        |_, _, _| {},
+        start_time,
+    )?;
 
-    let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm, file);
-    match crystals {
-        Ok(crystals) => report.new_crystals = crystals,
-        Err(e) => {
-            *btree = btree_snapshot;
-            *sparse_index = sparse_snapshot;
-            return Err(e);
-        }
-    }
+    run_stage(
+        "l5_crystallize",
+        "L5 crystallization failed",
+        |report, btree, _sparse_index| {
+            let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm, file)?;
+            let count = crystals.len();
+            report.new_crystals = crystals;
+            Ok((format!("Crystallized {} new patterns", count), count))
+        },
+        &mut report,
+        btree,
+        sparse_index,
+        &mut stages,
+        false,
+        |_, _, _| {},
+        start_time,
+    )?;
 
-    let page_count = header.page_count;
-    let pruned = crystallize_stage::prune_low_quality_crystals(mmap, header, btree, page_count);
-    match pruned {
-        Ok(pruned) => report.pruned_crystals = pruned,
-        Err(e) => {
-            *btree = btree_snapshot;
-            *sparse_index = sparse_snapshot;
-            return Err(e);
-        }
-    }
+    run_stage(
+        "crystal_prune",
+        "Crystal pruning failed",
+        |report, btree, _sparse_index| {
+            let page_count = header.page_count;
+            let pruned =
+                crystallize_stage::prune_low_quality_crystals(mmap, header, btree, page_count)?;
+            let count = pruned.len();
+            report.pruned_crystals = pruned;
+            Ok((format!("Pruned {} low-quality crystals", count), count))
+        },
+        &mut report,
+        btree,
+        sparse_index,
+        &mut stages,
+        false,
+        |_, _, _| {},
+        start_time,
+    )?;
 
+    report.stages = stages;
     report.duration_ms = start_time.elapsed().as_millis() as u64;
 
+    if report.rollback_incomplete {
+        tracing::error!("Dream rollback incomplete");
+    }
     Ok(report)
 }
 
@@ -225,7 +408,7 @@ fn rebuild_l1_from_l2(
     _session_topic_ids: &HashSet<u64>,
     decay_config: &DecayConfig,
 ) -> Result<Vec<String>, MemHopError> {
-    use crate::slot::context_node::ContextNode;
+    use crate::layers::context_node::ContextNode;
     use crate::util::PageType;
 
     let page_count = header.page_count;
@@ -252,7 +435,7 @@ fn rebuild_l1_from_l2(
             continue;
         }
 
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(&mmap[..], *page_ref) {
+        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(&mmap[..], *page_ref) {
             if let Ok(node) = ContextNode::deserialize(slot_data) {
                 if btree.search(node.context_id).is_none() {
                     stale_nodes.push((*id_hash, page_id));
@@ -265,18 +448,23 @@ fn rebuild_l1_from_l2(
     for (id_hash, page_id) in stale_nodes {
         // Clean up references from this stale node to edges before freeing it.
         let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(&mmap[..], page_ref) {
+        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) {
             if let Ok(node) = ContextNode::deserialize(slot_data) {
                 for edge_id in &node.edge_ptrs {
                     crate::dream::l1_decay::remove_node_from_edge(
-                        mmap, btree, header, *edge_id, id_hash, decay_config,
+                        mmap,
+                        btree,
+                        header,
+                        *edge_id,
+                        id_hash,
+                        decay_config,
                     )?;
                 }
             }
         }
 
         btree.remove(id_hash);
-        let offset = crate::query::slot_io::page_offset(page_id);
+        let offset = crate::shared::slot_io::page_offset(page_id);
         mmap[offset..offset + crate::util::PAGE_SIZE].fill(0);
         crate::file::free_list::free_page(mmap, header, page_id)?;
         sparse_index.remove_document(id_hash);
@@ -293,9 +481,9 @@ mod tests {
     use crate::file::page::{allocate_page, encode_page_ref, write_page_data};
     use crate::index::btree::BTreeIndex;
     use crate::index::sparse::SparseIndex;
-    use crate::slot::context_node::ContextNode;
-    use crate::slot::hyperedge::{HyperedgeKind, HyperedgeSlot};
-    use crate::util::{PageType, PAGE_SIZE};
+    use crate::layers::context_node::ContextNode;
+    use crate::layers::hyperedge::{HyperedgeKind, HyperedgeSlot};
+    use crate::util::{PageType, PAGE_SIZE, SENTINEL_PAGE_ID};
     use memmap2::MmapMut;
     use std::fs::File;
     use std::io::Write;
@@ -348,7 +536,15 @@ mod tests {
         edge_ptrs: Vec<u64>,
         file: &mut File,
     ) -> u32 {
-        let page_id = allocate_page(mmap, header, PageType::ContextNode, 1, 0xFFFFFFFF, file).unwrap();
+        let page_id = allocate_page(
+            mmap,
+            header,
+            PageType::ContextNode,
+            1,
+            SENTINEL_PAGE_ID,
+            file,
+        )
+        .unwrap();
         let node = ContextNode {
             id_hash,
             context_id,
@@ -375,7 +571,8 @@ mod tests {
         node_ptrs: Vec<u64>,
         file: &mut File,
     ) -> u32 {
-        let page_id = allocate_page(mmap, header, PageType::Hyperedge, 2, 0xFFFFFFFF, file).unwrap();
+        let page_id =
+            allocate_page(mmap, header, PageType::Hyperedge, 2, SENTINEL_PAGE_ID, file).unwrap();
         let edge = HyperedgeSlot {
             id_hash,
             kind: HyperedgeKind::Semantic,
@@ -392,12 +589,12 @@ mod tests {
     }
 
     fn read_hyperedge(mmap: &MmapMut, page_id: u32) -> HyperedgeSlot {
-        let offset = crate::query::slot_io::slot_offset(page_id);
+        let offset = crate::shared::slot_io::slot_offset(page_id);
         HyperedgeSlot::deserialize(&mmap[offset..offset + PAGE_SIZE - 32]).unwrap()
     }
 
     fn read_context_node(mmap: &MmapMut, page_id: u32) -> ContextNode {
-        let offset = crate::query::slot_io::slot_offset(page_id);
+        let offset = crate::shared::slot_io::slot_offset(page_id);
         ContextNode::deserialize(&mmap[offset..offset + PAGE_SIZE - 32]).unwrap()
     }
 
@@ -412,18 +609,53 @@ mod tests {
         use std::io::Write;
         file2.write_all(&vec![0u8; PAGE_SIZE * 20]).unwrap();
         drop(file2);
-        let mut file2 = std::fs::OpenOptions::new().read(true).write(true).open(path2).unwrap();
+        let mut file2 = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path2)
+            .unwrap();
 
         // Stale L1 node points to an L2 context that no longer exists.
-        let _stale_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 1, 1.0, 1000, vec![10], &mut file2);
+        let _stale_page = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            1,
+            1.0,
+            1000,
+            vec![10],
+            &mut file2,
+        );
         // Edge connects the stale node and two surviving nodes.
-        let edge_page =
-            allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 10, 1.0, vec![1, 2, 3], &mut file2);
-        let node2_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 2, 1.0, 2000, vec![10], &mut file2);
-        let node3_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 3, 1.0, 2001, vec![10], &mut file2);
+        let edge_page = allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            10,
+            1.0,
+            vec![1, 2, 3],
+            &mut file2,
+        );
+        let node2_page = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            2,
+            1.0,
+            2000,
+            vec![10],
+            &mut file2,
+        );
+        let node3_page = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            3,
+            1.0,
+            2001,
+            vec![10],
+            &mut file2,
+        );
 
         // Mark the surviving L2 contexts as present so only node 1 is stale.
         btree.insert(2000, 0);
@@ -474,14 +706,41 @@ mod tests {
         use std::io::Write;
         file2.write_all(&vec![0u8; PAGE_SIZE * 20]).unwrap();
         drop(file2);
-        let mut file2 = std::fs::OpenOptions::new().read(true).write(true).open(path2).unwrap();
+        let mut file2 = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path2)
+            .unwrap();
 
-        let _stale_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 1, 1.0, 1000, vec![10], &mut file2);
-        let _edge_page =
-            allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 10, 1.0, vec![1, 2], &mut file2);
-        let node2_page =
-            allocate_context_node_page(&mut mmap, &mut header, &mut btree, 2, 1.0, 2000, vec![10], &mut file2);
+        let _stale_page = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            1,
+            1.0,
+            1000,
+            vec![10],
+            &mut file2,
+        );
+        let _edge_page = allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            10,
+            1.0,
+            vec![1, 2],
+            &mut file2,
+        );
+        let node2_page = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            2,
+            1.0,
+            2000,
+            vec![10],
+            &mut file2,
+        );
 
         // Mark the surviving L2 context as present so only node 1 is stale.
         btree.insert(2000, 0);

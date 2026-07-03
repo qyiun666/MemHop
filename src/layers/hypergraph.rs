@@ -14,17 +14,24 @@ pub fn serialize_hash_as_hex<S: Serializer>(hash: &u64, serializer: S) -> Result
 }
 
 /// Serialize a slice of u64 hashes as hex strings.
-pub fn serialize_hashes_as_hex<S: Serializer>(hashes: &[u64], serializer: S) -> Result<S::Ok, S::Error> {
+pub fn serialize_hashes_as_hex<S: Serializer>(
+    hashes: &[u64],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     let hex_vec: Vec<String> = hashes.iter().map(|h| format!("{:016x}", h)).collect();
     hex_vec.serialize(serializer)
 }
 
-pub fn deserialize_hash_from_hex<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+pub fn deserialize_hash_from_hex<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<u64, D::Error> {
     let s = String::deserialize(deserializer)?;
     u64::from_str_radix(&s, 16).map_err(serde::de::Error::custom)
 }
 
-pub fn deserialize_hashes_from_hex<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<u64>, D::Error> {
+pub fn deserialize_hashes_from_hex<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<u64>, D::Error> {
     let vec: Vec<String> = Vec::deserialize(deserializer)?;
     vec.into_iter()
         .map(|s| u64::from_str_radix(&s, 16).map_err(serde::de::Error::custom))
@@ -58,9 +65,9 @@ impl SourceKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum HypergraphSource {
-    Path(String),    // File path
-    Context(u64),    // L2 context id_hash
-    Url(String),     // External URL
+    Path(String), // File path
+    Context(u64), // L2 context id_hash
+    Url(String),  // External URL
     Manual,
 }
 
@@ -107,7 +114,9 @@ impl HypergraphSource {
                         "Context source needs 8 bytes",
                     ));
                 }
-                let id = u64::from_le_bytes(data[..8].try_into().unwrap());
+                let id = u64::from_le_bytes(data[..8].try_into().map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidData, "truncated context source")
+                })?);
                 Ok(Self::Context(id))
             }
             SourceKind::Url => {
@@ -174,7 +183,14 @@ impl HypergraphSlot {
         let updated_at = read_i64(&mut c)?;
         let version = read_u32(&mut c)?;
         Ok(HypergraphSlot {
-            id_hash, name, source, node_count, edge_count, created_at, updated_at, version,
+            id_hash,
+            name,
+            source,
+            node_count,
+            edge_count,
+            created_at,
+            updated_at,
+            version,
         })
     }
 }
@@ -185,9 +201,15 @@ impl HypergraphSlot {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HypergraphNode {
-    #[serde(serialize_with = "serialize_hash_as_hex", deserialize_with = "deserialize_hash_from_hex")]
+    #[serde(
+        serialize_with = "serialize_hash_as_hex",
+        deserialize_with = "deserialize_hash_from_hex"
+    )]
     pub id_hash: u64,
-    #[serde(serialize_with = "serialize_hash_as_hex", deserialize_with = "deserialize_hash_from_hex")]
+    #[serde(
+        serialize_with = "serialize_hash_as_hex",
+        deserialize_with = "deserialize_hash_from_hex"
+    )]
     pub graph_id: u64,
     pub title: String,
     pub node_type: String, // Generic type tag (e.g. "function", "concept", "file")
@@ -245,8 +267,17 @@ impl HypergraphNode {
         let keywords = read_string_vec(&mut c)?;
         let source_ref = read_optional_string(&mut c)?;
         Ok(HypergraphNode {
-            id_hash, graph_id, title, node_type, content, keywords,
-            source_ref, importance, created_at, updated_at, version,
+            id_hash,
+            graph_id,
+            title,
+            node_type,
+            content,
+            keywords,
+            source_ref,
+            importance,
+            created_at,
+            updated_at,
+            version,
         })
     }
 }
@@ -286,12 +317,21 @@ impl GraphEdgeKind {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HypergraphEdge {
-    #[serde(serialize_with = "serialize_hash_as_hex", deserialize_with = "deserialize_hash_from_hex")]
+    #[serde(
+        serialize_with = "serialize_hash_as_hex",
+        deserialize_with = "deserialize_hash_from_hex"
+    )]
     pub id_hash: u64,
-    #[serde(serialize_with = "serialize_hash_as_hex", deserialize_with = "deserialize_hash_from_hex")]
+    #[serde(
+        serialize_with = "serialize_hash_as_hex",
+        deserialize_with = "deserialize_hash_from_hex"
+    )]
     pub graph_id: u64,
     pub kind: GraphEdgeKind,
-    #[serde(serialize_with = "serialize_hashes_as_hex", deserialize_with = "deserialize_hashes_from_hex")]
+    #[serde(
+        serialize_with = "serialize_hashes_as_hex",
+        deserialize_with = "deserialize_hashes_from_hex"
+    )]
     pub node_ids: Vec<u64>, // >=2 nodes, supports hyperedge
     pub weight: f32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -334,7 +374,13 @@ impl HypergraphEdge {
         }
         let label = read_optional_string(&mut c)?;
         Ok(HypergraphEdge {
-            id_hash, graph_id, kind, node_ids, weight, label, created_at,
+            id_hash,
+            graph_id,
+            kind,
+            node_ids,
+            weight,
+            label,
+            created_at,
         })
     }
 }
@@ -350,9 +396,14 @@ mod tests {
     #[test]
     fn test_hypergraph_slot_roundtrip_path() {
         let slot = HypergraphSlot {
-            id_hash: 1, name: "memhop code graph".to_string(),
+            id_hash: 1,
+            name: "memhop code graph".to_string(),
             source: HypergraphSource::Path("/src/lib.rs".to_string()),
-            node_count: 42, edge_count: 100, created_at: 1000, updated_at: 2000, version: 1,
+            node_count: 42,
+            edge_count: 100,
+            created_at: 1000,
+            updated_at: 2000,
+            version: 1,
         };
         let data = slot.serialize().unwrap();
         assert_eq!(data.len(), slot.slot_size());
@@ -362,9 +413,14 @@ mod tests {
     #[test]
     fn test_hypergraph_slot_roundtrip_context() {
         let slot = HypergraphSlot {
-            id_hash: 2, name: "context graph".to_string(),
+            id_hash: 2,
+            name: "context graph".to_string(),
             source: HypergraphSource::Context(12345),
-            node_count: 5, edge_count: 3, created_at: 0, updated_at: 0, version: 0,
+            node_count: 5,
+            edge_count: 3,
+            created_at: 0,
+            updated_at: 0,
+            version: 0,
         };
         let data = slot.serialize().unwrap();
         assert_eq!(slot, HypergraphSlot::deserialize(&data).unwrap());
@@ -373,9 +429,14 @@ mod tests {
     #[test]
     fn test_hypergraph_slot_roundtrip_url() {
         let slot = HypergraphSlot {
-            id_hash: 3, name: "external".to_string(),
+            id_hash: 3,
+            name: "external".to_string(),
             source: HypergraphSource::Url("https://example.com/graph".to_string()),
-            node_count: 0, edge_count: 0, created_at: 0, updated_at: 0, version: 0,
+            node_count: 0,
+            edge_count: 0,
+            created_at: 0,
+            updated_at: 0,
+            version: 0,
         };
         let data = slot.serialize().unwrap();
         assert_eq!(slot, HypergraphSlot::deserialize(&data).unwrap());
@@ -384,8 +445,14 @@ mod tests {
     #[test]
     fn test_hypergraph_slot_roundtrip_manual() {
         let slot = HypergraphSlot {
-            id_hash: 4, name: "manual".to_string(), source: HypergraphSource::Manual,
-            node_count: 1, edge_count: 0, created_at: 100, updated_at: 200, version: 1,
+            id_hash: 4,
+            name: "manual".to_string(),
+            source: HypergraphSource::Manual,
+            node_count: 1,
+            edge_count: 0,
+            created_at: 100,
+            updated_at: 200,
+            version: 1,
         };
         let data = slot.serialize().unwrap();
         assert_eq!(slot, HypergraphSlot::deserialize(&data).unwrap());
@@ -394,12 +461,17 @@ mod tests {
     #[test]
     fn test_hypergraph_node_roundtrip() {
         let node = HypergraphNode {
-            id_hash: 1, graph_id: 100, title: "MemHop::open".to_string(),
+            id_hash: 1,
+            graph_id: 100,
+            title: "MemHop::open".to_string(),
             node_type: "function".to_string(),
             content: "Opens or creates a MemHop database".to_string(),
             keywords: vec!["open".to_string(), "database".to_string()],
             source_ref: Some("/src/lib.rs:L114-L288".to_string()),
-            importance: 0.9, created_at: 1000, updated_at: 2000, version: 1,
+            importance: 0.9,
+            created_at: 1000,
+            updated_at: 2000,
+            version: 1,
         };
         let data = node.serialize().unwrap();
         assert_eq!(data.len(), node.slot_size());
@@ -409,10 +481,17 @@ mod tests {
     #[test]
     fn test_hypergraph_node_minimal() {
         let node = HypergraphNode {
-            id_hash: 2, graph_id: 1, title: "concept".to_string(),
-            node_type: "concept".to_string(), content: "six-layer architecture".to_string(),
-            keywords: vec![], source_ref: None, importance: 0.5,
-            created_at: 0, updated_at: 0, version: 0,
+            id_hash: 2,
+            graph_id: 1,
+            title: "concept".to_string(),
+            node_type: "concept".to_string(),
+            content: "six-layer architecture".to_string(),
+            keywords: vec![],
+            source_ref: None,
+            importance: 0.5,
+            created_at: 0,
+            updated_at: 0,
+            version: 0,
         };
         let data = node.serialize().unwrap();
         assert_eq!(node, HypergraphNode::deserialize(&data).unwrap());
@@ -421,9 +500,13 @@ mod tests {
     #[test]
     fn test_hypergraph_edge_roundtrip() {
         let edge = HypergraphEdge {
-            id_hash: 1, graph_id: 100, kind: GraphEdgeKind::Dependency,
-            node_ids: vec![10, 20, 30], weight: 0.8,
-            label: Some("depends_on".to_string()), created_at: 1000,
+            id_hash: 1,
+            graph_id: 100,
+            kind: GraphEdgeKind::Dependency,
+            node_ids: vec![10, 20, 30],
+            weight: 0.8,
+            label: Some("depends_on".to_string()),
+            created_at: 1000,
         };
         let data = edge.serialize().unwrap();
         assert_eq!(data.len(), edge.slot_size());
@@ -433,8 +516,13 @@ mod tests {
     #[test]
     fn test_hypergraph_edge_binary() {
         let edge = HypergraphEdge {
-            id_hash: 2, graph_id: 1, kind: GraphEdgeKind::Sequence,
-            node_ids: vec![10, 20], weight: 1.0, label: None, created_at: 0,
+            id_hash: 2,
+            graph_id: 1,
+            kind: GraphEdgeKind::Sequence,
+            node_ids: vec![10, 20],
+            weight: 1.0,
+            label: None,
+            created_at: 0,
         };
         let data = edge.serialize().unwrap();
         assert_eq!(edge, HypergraphEdge::deserialize(&data).unwrap());
@@ -442,11 +530,22 @@ mod tests {
 
     #[test]
     fn test_hypergraph_edge_all_kinds() {
-        for kind in [GraphEdgeKind::Related, GraphEdgeKind::Causal, GraphEdgeKind::PartOf,
-                     GraphEdgeKind::Sequence, GraphEdgeKind::Dependency, GraphEdgeKind::Custom] {
+        for kind in [
+            GraphEdgeKind::Related,
+            GraphEdgeKind::Causal,
+            GraphEdgeKind::PartOf,
+            GraphEdgeKind::Sequence,
+            GraphEdgeKind::Dependency,
+            GraphEdgeKind::Custom,
+        ] {
             let edge = HypergraphEdge {
-                id_hash: 99, graph_id: 1, kind, node_ids: vec![1, 2],
-                weight: 0.5, label: None, created_at: 0,
+                id_hash: 99,
+                graph_id: 1,
+                kind,
+                node_ids: vec![1, 2],
+                weight: 0.5,
+                label: None,
+                created_at: 0,
             };
             let data = edge.serialize().unwrap();
             assert_eq!(edge, HypergraphEdge::deserialize(&data).unwrap());
@@ -456,8 +555,14 @@ mod tests {
     #[test]
     fn test_hypergraph_slot_size_calculation() {
         let slot = HypergraphSlot {
-            id_hash: 1, name: "test".to_string(), source: HypergraphSource::Manual,
-            node_count: 0, edge_count: 0, created_at: 0, updated_at: 0, version: 0,
+            id_hash: 1,
+            name: "test".to_string(),
+            source: HypergraphSource::Manual,
+            node_count: 0,
+            edge_count: 0,
+            created_at: 0,
+            updated_at: 0,
+            version: 0,
         };
         // 41 + 4 + 0 = 45
         assert_eq!(slot.slot_size(), 45);

@@ -31,6 +31,19 @@ impl ContentType {
             _ => ContentType::Other,
         }
     }
+
+    /// Returns the lowercase string representation used by the API.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ContentType::Text => "text",
+            ContentType::Image => "image",
+            ContentType::Video => "video",
+            ContentType::Document => "document",
+            ContentType::Audio => "audio",
+            ContentType::Code => "code",
+            ContentType::Other => "other",
+        }
+    }
 }
 
 /// Text content stored inline; non-text media store file paths.
@@ -38,7 +51,7 @@ impl ContentType {
 pub struct ArchiveSlot {
     pub id_hash: u64,
     pub content_type: ContentType,
-    pub role: u8,        // 0=user, 1=agent, 2=system
+    pub role: u8, // 0=user, 1=agent, 2=system
     pub context_id: u64,
     pub created_at: i64,
     pub content: String, // Inline text or file path
@@ -85,16 +98,14 @@ impl ArchiveSlot {
         let content = read_string(&mut c)?;
         let metadata = read_optional_string(&mut c)?;
         Ok(ArchiveSlot {
-            id_hash, content_type, role, context_id, created_at, content, metadata,
+            id_hash,
+            content_type,
+            role,
+            context_id,
+            created_at,
+            content,
+            metadata,
         })
-    }
-
-    pub fn is_text(&self) -> bool {
-        matches!(self.content_type, ContentType::Text | ContentType::Code)
-    }
-
-    pub fn is_file_ref(&self) -> bool {
-        !self.is_text()
     }
 }
 
@@ -116,7 +127,10 @@ mod tests {
         let data = slot.serialize().unwrap();
         assert_eq!(data.len(), slot.slot_size());
         assert_eq!(slot, ArchiveSlot::deserialize(&data).unwrap());
-        assert!(slot.is_text());
+        assert!(matches!(
+            slot.content_type,
+            ContentType::Text | ContentType::Code
+        ));
     }
 
     #[test]
@@ -132,7 +146,10 @@ mod tests {
         };
         let data = slot.serialize().unwrap();
         assert_eq!(slot, ArchiveSlot::deserialize(&data).unwrap());
-        assert!(slot.is_text());
+        assert!(matches!(
+            slot.content_type,
+            ContentType::Text | ContentType::Code
+        ));
     }
 
     #[test]
@@ -148,7 +165,10 @@ mod tests {
         };
         let data = slot.serialize().unwrap();
         assert_eq!(slot, ArchiveSlot::deserialize(&data).unwrap());
-        assert!(slot.is_file_ref());
+        assert!(matches!(
+            slot.content_type,
+            ContentType::Image | ContentType::Document | ContentType::Audio
+        ));
     }
 
     #[test]

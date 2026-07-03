@@ -9,9 +9,9 @@ use crate::file::free_list::free_page;
 use crate::file::header::FileHeader;
 use crate::file::page::write_page_data;
 use crate::index::btree::BTreeIndex;
-use crate::query::common::now_ms;
-use crate::slot::context_node::ContextNode;
-use crate::slot::hyperedge::HyperedgeSlot;
+use crate::layers::context_node::ContextNode;
+use crate::layers::hyperedge::HyperedgeSlot;
+use crate::shared::common::now_ms;
 use crate::util::PageType;
 use crate::MemHopError;
 use memmap2::MmapMut;
@@ -55,7 +55,7 @@ pub fn decay_l1_network(
     let mut cleared_edges: HashMap<u64, HashSet<u64>> = HashMap::new();
 
     for (id_hash, page_ref) in entries {
-        let page_id = crate::query::slot_io::decode_page_id(page_ref);
+        let page_id = crate::shared::slot_io::decode_page_id(page_ref);
         if page_id >= page_count {
             continue;
         }
@@ -64,7 +64,7 @@ pub fn decay_l1_network(
             continue;
         }
 
-        let slot_data = match crate::query::slot_io::get_slot_data(&mmap[..], page_ref) {
+        let slot_data = match crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) {
             Some(d) => d,
             None => continue,
         };
@@ -127,7 +127,7 @@ pub fn decay_l1_network(
             continue;
         }
 
-        let page_id = crate::query::slot_io::decode_page_id(page_ref);
+        let page_id = crate::shared::slot_io::decode_page_id(page_ref);
         if page_id >= page_count {
             continue;
         }
@@ -136,7 +136,7 @@ pub fn decay_l1_network(
             continue;
         }
 
-        let slot_data = match crate::query::slot_io::get_slot_data(&mmap[..], page_ref) {
+        let slot_data = match crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) {
             Some(d) => d,
             None => continue,
         };
@@ -157,7 +157,9 @@ pub fn decay_l1_network(
         // Clean references to nodes removed above
         edge.node_ptrs.retain(|ptr| !removed_node_ids.contains(ptr));
 
-        if edge.node_ptrs.len() < decay_config.min_edge_nodes || new_weight < decay_config.edge_remove_threshold {
+        if edge.node_ptrs.len() < decay_config.min_edge_nodes
+            || new_weight < decay_config.edge_remove_threshold
+        {
             // Before freeing the edge, clean references from surviving nodes
             for &node_ptr in &edge.node_ptrs {
                 remove_edge_from_node(mmap, btree, node_ptr, id_hash)?;
@@ -228,11 +230,11 @@ pub(crate) fn remove_edge_from_node(
     edge_id: u64,
 ) -> Result<(), MemHopError> {
     if let Some(page_ref) = btree.search(node_id) {
-        let page_id = crate::query::slot_io::decode_page_id(page_ref);
+        let page_id = crate::shared::slot_io::decode_page_id(page_ref);
         if page_type_of(&mmap[..], page_id) != Some(PageType::ContextNode) {
             return Ok(());
         }
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(&mmap[..], page_ref) {
+        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) {
             if let Ok(mut node) = ContextNode::deserialize(slot_data) {
                 if node.edge_ptrs.contains(&edge_id) {
                     node.edge_ptrs.retain(|&e| e != edge_id);
@@ -255,11 +257,11 @@ pub(crate) fn remove_node_from_edge(
     decay_config: &DecayConfig,
 ) -> Result<bool, MemHopError> {
     if let Some(page_ref) = btree.search(edge_id) {
-        let page_id = crate::query::slot_io::decode_page_id(page_ref);
+        let page_id = crate::shared::slot_io::decode_page_id(page_ref);
         if page_type_of(&mmap[..], page_id) != Some(PageType::Hyperedge) {
             return Ok(false);
         }
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(&mmap[..], page_ref) {
+        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) {
             if let Ok(mut edge) = HyperedgeSlot::deserialize(slot_data) {
                 if !edge.node_ptrs.contains(&node_id) {
                     return Ok(false);
@@ -282,12 +284,11 @@ pub(crate) fn remove_node_from_edge(
     Ok(false)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::slot::hyperedge::HyperedgeKind;
-    use crate::util::PAGE_SIZE;
+    use crate::layers::hyperedge::HyperedgeKind;
+    use crate::util::{PAGE_SIZE, SENTINEL_PAGE_ID};
     use memmap2::MmapMut;
     use std::fs::File;
     use std::io::Write;
@@ -331,13 +332,35 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn allocate_context_node_page(
-        mmap: &mut MmapMut, header: &mut FileHeader, btree: &mut BTreeIndex,
-        id_hash: u64, importance: f32, updated_at: i64, edge_ptrs: Vec<u64>, file: &mut File,
+        mmap: &mut MmapMut,
+        header: &mut FileHeader,
+        btree: &mut BTreeIndex,
+        id_hash: u64,
+        importance: f32,
+        updated_at: i64,
+        edge_ptrs: Vec<u64>,
+        file: &mut File,
     ) -> u32 {
-        let page_id = crate::file::page::allocate_page(mmap, header, PageType::ContextNode, 1, 0xFFFFFFFF, file).unwrap();
+        let page_id = crate::file::page::allocate_page(
+            mmap,
+            header,
+            PageType::ContextNode,
+            1,
+            SENTINEL_PAGE_ID,
+            file,
+        )
+        .unwrap();
         let node = ContextNode {
-            id_hash, context_id: 1000, vector_page_ref: 0, importance,
-            valence: 0.0, arousal: 0.0, created_at: updated_at, updated_at, version: 1, edge_ptrs,
+            id_hash,
+            context_id: 1000,
+            vector_page_ref: 0,
+            importance,
+            valence: 0.0,
+            arousal: 0.0,
+            created_at: updated_at,
+            updated_at,
+            version: 1,
+            edge_ptrs,
         };
         write_page_data(mmap, page_id, &node.serialize().unwrap()).unwrap();
         btree.insert(id_hash, crate::file::page::encode_page_ref(page_id, 0));
@@ -346,13 +369,33 @@ mod tests {
 
     #[allow(clippy::too_many_arguments)]
     fn allocate_hyperedge_page(
-        mmap: &mut MmapMut, header: &mut FileHeader, btree: &mut BTreeIndex,
-        id_hash: u64, weight: f32, updated_at: i64, node_ptrs: Vec<u64>, file: &mut File,
+        mmap: &mut MmapMut,
+        header: &mut FileHeader,
+        btree: &mut BTreeIndex,
+        id_hash: u64,
+        weight: f32,
+        updated_at: i64,
+        node_ptrs: Vec<u64>,
+        file: &mut File,
     ) -> u32 {
-        let page_id = crate::file::page::allocate_page(mmap, header, PageType::Hyperedge, 2, 0xFFFFFFFF, file).unwrap();
+        let page_id = crate::file::page::allocate_page(
+            mmap,
+            header,
+            PageType::Hyperedge,
+            2,
+            SENTINEL_PAGE_ID,
+            file,
+        )
+        .unwrap();
         let edge = HyperedgeSlot {
-            id_hash, kind: HyperedgeKind::Semantic, node_ptrs, weight,
-            created_at: updated_at, updated_at, version: 1, overflow_page: 0,
+            id_hash,
+            kind: HyperedgeKind::Semantic,
+            node_ptrs,
+            weight,
+            created_at: updated_at,
+            updated_at,
+            version: 1,
+            overflow_page: 0,
         };
         write_page_data(mmap, page_id, &edge.serialize().unwrap()).unwrap();
         btree.insert(id_hash, crate::file::page::encode_page_ref(page_id, 0));
@@ -360,12 +403,12 @@ mod tests {
     }
 
     fn read_context_node(mmap: &MmapMut, page_id: u32) -> ContextNode {
-        let offset = crate::query::slot_io::slot_offset(page_id);
+        let offset = crate::shared::slot_io::slot_offset(page_id);
         ContextNode::deserialize(&mmap[offset..offset + PAGE_SIZE - 32]).unwrap()
     }
 
     fn read_hyperedge(mmap: &MmapMut, page_id: u32) -> HyperedgeSlot {
-        let offset = crate::query::slot_io::slot_offset(page_id);
+        let offset = crate::shared::slot_io::slot_offset(page_id);
         HyperedgeSlot::deserialize(&mmap[offset..offset + PAGE_SIZE - 32]).unwrap()
     }
 
@@ -373,7 +416,16 @@ mod tests {
     fn test_node_decay_and_update() {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 10 * 3_600_000;
-        let page_id = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 1, 0.5, old_time, vec![10, 11], &mut file);
+        let page_id = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            1,
+            0.5,
+            old_time,
+            vec![10, 11],
+            &mut file,
+        );
         let dc = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
         assert_eq!(report.decayed_nodes, 1);
@@ -394,7 +446,16 @@ mod tests {
         let dc = default_decay_config();
         let target = (dc.node_remove_threshold + dc.node_prune_edges_threshold) / 2.0;
         let start_importance = target / (-dc.lambda_node * 20.0).exp();
-        let page_id = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 2, start_importance, old_time, vec![10, 11, 12], &mut file);
+        let page_id = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            2,
+            start_importance,
+            old_time,
+            vec![10, 11, 12],
+            &mut file,
+        );
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
         assert_eq!(report.decayed_nodes, 1);
         assert_eq!(report.pruned_edges, 3);
@@ -409,7 +470,16 @@ mod tests {
     fn test_node_removal() {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 400 * 3_600_000;
-        let page_id = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 3, 0.5, old_time, vec![10], &mut file);
+        let page_id = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            3,
+            0.5,
+            old_time,
+            vec![10],
+            &mut file,
+        );
         let dc = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
         assert_eq!(report.removed_nodes, 1);
@@ -422,7 +492,16 @@ mod tests {
     fn test_edge_decay_and_update() {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 10 * 3_600_000;
-        let page_id = allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 10, 0.5, old_time, vec![1, 2], &mut file);
+        let page_id = allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            10,
+            0.5,
+            old_time,
+            vec![1, 2],
+            &mut file,
+        );
         let dc = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
         assert_eq!(report.removed_edges, 0);
@@ -437,7 +516,16 @@ mod tests {
     fn test_edge_removal_by_weight() {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 200 * 3_600_000;
-        allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 11, 0.5, old_time, vec![1, 2], &mut file);
+        allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            11,
+            0.5,
+            old_time,
+            vec![1, 2],
+            &mut file,
+        );
         let dc = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
         assert_eq!(report.removed_edges, 1);
@@ -448,7 +536,16 @@ mod tests {
     fn test_edge_removal_by_underpopulation() {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms();
-        allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 12, 1.0, old_time, vec![1], &mut file);
+        allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            12,
+            1.0,
+            old_time,
+            vec![1],
+            &mut file,
+        );
         let dc = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
         assert_eq!(report.removed_edges, 1);
@@ -459,9 +556,36 @@ mod tests {
     fn test_edge_cleans_stale_node_references() {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 400 * 3_600_000;
-        allocate_context_node_page(&mut mmap, &mut header, &mut btree, 4, 0.5, old_time, vec![20], &mut file);
-        let edge_page = allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 20, 1.0, now_ms(), vec![4, 5], &mut file);
-        allocate_context_node_page(&mut mmap, &mut header, &mut btree, 5, 1.0, now_ms(), vec![20], &mut file);
+        allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            4,
+            0.5,
+            old_time,
+            vec![20],
+            &mut file,
+        );
+        let edge_page = allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            20,
+            1.0,
+            now_ms(),
+            vec![4, 5],
+            &mut file,
+        );
+        allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            5,
+            1.0,
+            now_ms(),
+            vec![20],
+            &mut file,
+        );
         let dc = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
         assert_eq!(report.removed_nodes, 1);
@@ -476,10 +600,46 @@ mod tests {
     fn test_edge_survives_after_cleaning_stale_refs() {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 400 * 3_600_000;
-        allocate_context_node_page(&mut mmap, &mut header, &mut btree, 6, 0.5, old_time, vec![21], &mut file);
-        let edge_page = allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 21, 1.0, now_ms(), vec![6, 7, 8], &mut file);
-        allocate_context_node_page(&mut mmap, &mut header, &mut btree, 7, 1.0, now_ms(), vec![21], &mut file);
-        allocate_context_node_page(&mut mmap, &mut header, &mut btree, 8, 1.0, now_ms(), vec![21], &mut file);
+        allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            6,
+            0.5,
+            old_time,
+            vec![21],
+            &mut file,
+        );
+        let edge_page = allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            21,
+            1.0,
+            now_ms(),
+            vec![6, 7, 8],
+            &mut file,
+        );
+        allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            7,
+            1.0,
+            now_ms(),
+            vec![21],
+            &mut file,
+        );
+        allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            8,
+            1.0,
+            now_ms(),
+            vec![21],
+            &mut file,
+        );
         let dc = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
         assert_eq!(report.removed_nodes, 1);
@@ -507,9 +667,36 @@ mod tests {
         let dc = default_decay_config();
         let target = (dc.node_remove_threshold + dc.node_prune_edges_threshold) / 2.0;
         let start_importance = target / (-dc.lambda_node * 20.0).exp();
-        let node_a = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 100, start_importance, old_time, vec![50], &mut file);
-        let _node_b = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 101, 1.0, now_ms(), vec![50], &mut file);
-        allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 50, 1.0, now_ms(), vec![100, 101], &mut file);
+        let node_a = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            100,
+            start_importance,
+            old_time,
+            vec![50],
+            &mut file,
+        );
+        let _node_b = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            101,
+            1.0,
+            now_ms(),
+            vec![50],
+            &mut file,
+        );
+        allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            50,
+            1.0,
+            now_ms(),
+            vec![100, 101],
+            &mut file,
+        );
         let dc2 = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc2).unwrap();
         assert_eq!(report.pruned_edges, 1);
@@ -525,9 +712,36 @@ mod tests {
     fn test_removed_edge_clears_node_references() {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 200 * 3_600_000;
-        let node_a = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 200, 1.0, now_ms(), vec![60], &mut file);
-        let node_b = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 201, 1.0, now_ms(), vec![60], &mut file);
-        allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 60, 0.5, old_time, vec![200, 201], &mut file);
+        let node_a = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            200,
+            1.0,
+            now_ms(),
+            vec![60],
+            &mut file,
+        );
+        let node_b = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            201,
+            1.0,
+            now_ms(),
+            vec![60],
+            &mut file,
+        );
+        allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            60,
+            0.5,
+            old_time,
+            vec![200, 201],
+            &mut file,
+        );
         let dc = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
         assert_eq!(report.removed_edges, 1);
@@ -545,10 +759,46 @@ mod tests {
         let dc = default_decay_config();
         let target = (dc.node_remove_threshold + dc.node_prune_edges_threshold) / 2.0;
         let start_importance = target / (-dc.lambda_node * 20.0).exp();
-        let node_a = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 300, start_importance, old_time, vec![70], &mut file);
-        let node_b = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 301, 1.0, now_ms(), vec![70], &mut file);
-        let node_c = allocate_context_node_page(&mut mmap, &mut header, &mut btree, 302, 1.0, now_ms(), vec![70], &mut file);
-        let edge_page = allocate_hyperedge_page(&mut mmap, &mut header, &mut btree, 70, 1.0, now_ms(), vec![300, 301, 302], &mut file);
+        let node_a = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            300,
+            start_importance,
+            old_time,
+            vec![70],
+            &mut file,
+        );
+        let node_b = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            301,
+            1.0,
+            now_ms(),
+            vec![70],
+            &mut file,
+        );
+        let node_c = allocate_context_node_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            302,
+            1.0,
+            now_ms(),
+            vec![70],
+            &mut file,
+        );
+        let edge_page = allocate_hyperedge_page(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            70,
+            1.0,
+            now_ms(),
+            vec![300, 301, 302],
+            &mut file,
+        );
         let dc2 = default_decay_config();
         let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc2).unwrap();
         assert_eq!(report.pruned_edges, 1);

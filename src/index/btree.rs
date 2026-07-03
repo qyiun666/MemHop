@@ -5,7 +5,7 @@
 // Multi-page bucket layout on disk removes the previous ~254-entry limit.
 use std::collections::HashMap;
 
-use crate::util::PAGE_SIZE;
+use crate::util::{PAGE_SIZE, SENTINEL_PAGE_ID};
 
 /// Magic number for the new Linear Hash serialization format.
 const HASH_MAGIC: u32 = 0x4D485348; // "MHSH"
@@ -26,7 +26,7 @@ const ENTRIES_PER_PAGE: usize = (PAGE_DATA_SIZE - BUCKET_PAGE_HEADER_SIZE) / ENT
 const LOAD_FACTOR: f32 = 0.75;
 
 /// Sentinel value indicating no next page in an overflow chain.
-pub const EMPTY_PAGE: u32 = 0xFFFFFFFF;
+pub const EMPTY_PAGE: u32 = SENTINEL_PAGE_ID;
 
 /// `buckets[bucket_index]` is the chain of page data blobs for that bucket.
 /// Caller writes 32-byte file page headers and links overflow via `PageHeader.next_page`.
@@ -72,6 +72,7 @@ impl BTreeIndex {
         self.delete(key)
     }
 
+    // Reserved API
     pub fn contains_key(&self, key: u64) -> bool {
         self.map.contains_key(&key)
     }
@@ -84,6 +85,7 @@ impl BTreeIndex {
         self.map.is_empty()
     }
 
+    // Reserved API
     pub fn clear(&mut self) {
         self.map.clear();
     }
@@ -95,25 +97,30 @@ impl BTreeIndex {
         items.into_iter()
     }
 
+    // Reserved API
     pub fn first(&self) -> Option<(&u64, &u64)> {
         self.iter().next()
     }
 
+    // Reserved API
     pub fn last(&self) -> Option<(&u64, &u64)> {
         self.iter().next_back()
     }
 
     /// Range query: keys in [start, end).
+    // Reserved API
     pub fn range(&self, start: u64, end: u64) -> impl Iterator<Item = (&u64, &u64)> {
         self.iter().filter(move |(k, _)| **k >= start && **k < end)
     }
 
     /// Smallest key >= given key.
+    // Reserved API
     pub fn lower_bound(&self, key: u64) -> Option<(&u64, &u64)> {
         self.iter().find(|(k, _)| **k >= key)
     }
 
     /// Largest key < given key.
+    // Reserved API
     pub fn upper_bound(&self, key: u64) -> Option<(&u64, &u64)> {
         self.iter().rev().find(|(k, _)| **k < key)
     }
@@ -203,8 +210,16 @@ impl BTreeIndex {
                 }
                 for i in 0..count {
                     let off = BUCKET_PAGE_HEADER_SIZE + i * ENTRY_SIZE;
-                    let key = u64::from_le_bytes(page[off..off + 8].try_into().unwrap());
-                    let val = u64::from_le_bytes(page[off + 8..off + 16].try_into().unwrap());
+                    let key = u64::from_le_bytes(
+                        page[off..off + 8]
+                            .try_into()
+                            .map_err(|_| "truncated bucket entry".to_string())?,
+                    );
+                    let val = u64::from_le_bytes(
+                        page[off + 8..off + 16]
+                            .try_into()
+                            .map_err(|_| "truncated bucket entry".to_string())?,
+                    );
                     map.insert(key, val);
                 }
             }
@@ -323,15 +338,27 @@ impl BTreeIndex {
         if data.len() < 8 {
             return Err("Legacy data too short".to_string());
         }
-        let len = u64::from_le_bytes(data[0..8].try_into().unwrap()) as usize;
+        let len = u64::from_le_bytes(
+            data[0..8]
+                .try_into()
+                .map_err(|_| "truncated legacy data".to_string())?,
+        ) as usize;
         let mut map = HashMap::with_capacity(len);
         let mut offset = 8;
         for _ in 0..len {
             if offset + 16 > data.len() {
                 return Err("Legacy data truncated".to_string());
             }
-            let key = u64::from_le_bytes(data[offset..offset + 8].try_into().unwrap());
-            let val = u64::from_le_bytes(data[offset + 8..offset + 16].try_into().unwrap());
+            let key = u64::from_le_bytes(
+                data[offset..offset + 8]
+                    .try_into()
+                    .map_err(|_| "truncated legacy data".to_string())?,
+            );
+            let val = u64::from_le_bytes(
+                data[offset + 8..offset + 16]
+                    .try_into()
+                    .map_err(|_| "truncated legacy data".to_string())?,
+            );
             map.insert(key, val);
             offset += 16;
         }

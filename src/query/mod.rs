@@ -5,13 +5,12 @@
 // + batch, l0_crud, slot_io, common (internal)
 
 pub mod batch;
-pub mod common;
-pub mod import;
-pub mod l0_crud;
-pub mod list;
-pub mod merge;
-pub mod search;
-pub mod slot_io;
+pub(crate) mod diagnostics;
+pub(crate) mod import;
+pub(crate) mod l0_crud;
+pub(crate) mod list;
+pub(crate) mod merge;
+pub(crate) mod search;
 pub mod types;
-pub mod update;
-pub mod update_title;
+pub(crate) mod update;
+pub(crate) mod update_title;

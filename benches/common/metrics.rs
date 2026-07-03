@@ -7,6 +7,8 @@
 //! - Precision@K: 精确率
 //! - LatencyStats: 延迟统计
 
+#![allow(dead_code, unused_imports)]
+
 use std::time::Duration;
 
 /// 延迟统计结果
@@ -278,9 +280,7 @@ mod tests {
 
     #[test]
     fn test_latency_stats() {
-        let durations: Vec<Duration> = (1..=100)
-            .map(|i| Duration::from_millis(i))
-            .collect();
+        let durations: Vec<Duration> = (1..=100).map(|i| Duration::from_millis(i)).collect();
 
         let stats = latency_stats(&durations);
         assert_eq!(stats.p50, Duration::from_millis(50));

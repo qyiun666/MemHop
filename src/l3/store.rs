@@ -7,11 +7,11 @@ use crate::file::free_list::{allocate_or_extend, free_page};
 use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
-use crate::query::common::{format_hash, has_more, matches_keyword, pagination_params};
-use crate::query::slot_io::get_slot_data;
+use crate::layers::hypergraph::{GraphEdgeKind, HypergraphEdge, HypergraphNode};
 use crate::query::types::*;
-use crate::slot::hypergraph::{GraphEdgeKind, HypergraphEdge, HypergraphNode};
-use crate::util::{PageType, PAGE_SIZE};
+use crate::shared::common::{format_hash, has_more, matches_keyword, pagination_params};
+use crate::shared::slot_io::get_slot_data;
+use crate::util::{PageType, DEFAULT_GROW_PAGES, PAGE_SIZE, SENTINEL_PAGE_ID};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::{hash_map::Entry, HashMap, HashSet, VecDeque};
@@ -44,6 +44,8 @@ pub fn add_node(
     btree: &mut BTreeIndex,
     mut node: HypergraphNode,
     file: &mut File,
+    tracker: Option<&mut crate::l3::DegreeTracker>,
+    index_map: Option<&mut HashMap<u64, crate::l3::L3Index>>,
 ) -> Result<String, MemHopError> {
     // L3 is a knowledge graph — content should be a short summary/index,
     // not the original text. Enforce a 200-char cap to keep nodes small.
@@ -65,10 +67,10 @@ pub fn add_node(
     }
 
     // Allocate page BEFORE writing — if allocation fails, no cleanup needed
-    let page_id = allocate_or_extend(mmap, header, file, 500)?;
+    let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
     let offset = (page_id as usize) * PAGE_SIZE;
 
-    let page_hdr = PageHeader::new(page_id, PageType::HypergraphNode, 3, 0xFFFFFFFF);
+    let page_hdr = PageHeader::new(page_id, PageType::HypergraphNode, 3, SENTINEL_PAGE_ID);
     let hdr_bytes = page_hdr.to_bytes();
     mmap[offset..offset + 32].copy_from_slice(&hdr_bytes);
 
@@ -88,6 +90,13 @@ pub fn add_node(
 
     btree.insert(node.id_hash, (page_id as u64) << 16);
 
+    if let Some(tracker) = tracker {
+        tracker.on_node_added(node.graph_id, node.id_hash);
+    }
+    if let Some(index_map) = index_map {
+        index_map.entry(node.graph_id).or_default().add_node(&node);
+    }
+
     Ok(format_hash(node.id_hash))
 }
 
@@ -99,7 +108,7 @@ pub fn get_node(
     btree: &BTreeIndex,
     node_id: &str,
 ) -> Result<Option<HypergraphNode>, MemHopError> {
-    let id_hash = crate::query::common::parse_id_to_hash(node_id);
+    let id_hash = crate::shared::common::parse_id_to_hash(node_id);
 
     match btree.search(id_hash) {
         Some(page_ref) => {
@@ -121,8 +130,10 @@ pub fn delete_node(
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
     node_id: &str,
+    tracker: Option<&mut crate::l3::DegreeTracker>,
+    index_map: Option<&mut HashMap<u64, crate::l3::L3Index>>,
 ) -> Result<(), MemHopError> {
-    let id_hash = crate::query::common::parse_id_to_hash(node_id);
+    let id_hash = crate::shared::common::parse_id_to_hash(node_id);
 
     let node = match get_node(mmap, btree, node_id)? {
         Some(n) => n,
@@ -153,6 +164,15 @@ pub fn delete_node(
         crate::file::free_list::free_page(mmap, header, page_id)?;
     }
 
+    if let Some(tracker) = tracker {
+        tracker.on_node_deleted(graph_id, id_hash);
+    }
+    if let Some(index_map) = index_map {
+        if let Some(index) = index_map.get_mut(&graph_id) {
+            index.remove_node(id_hash, &node);
+        }
+    }
+
     if let Some(page_ref) = btree.delete(id_hash) {
         let page_id = (page_ref >> 16) as u32;
         crate::file::free_list::free_page(mmap, header, page_id)?;
@@ -172,6 +192,7 @@ pub fn add_edge(
     btree: &mut BTreeIndex,
     edge: HypergraphEdge,
     file: &mut File,
+    tracker: Option<&mut crate::l3::DegreeTracker>,
 ) -> Result<String, MemHopError> {
     let data_bytes = edge
         .serialize()
@@ -187,10 +208,10 @@ pub fn add_edge(
     }
 
     // Allocate page BEFORE writing — if allocation fails, no cleanup needed
-    let page_id = allocate_or_extend(mmap, header, file, 500)?;
+    let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
     let offset = (page_id as usize) * PAGE_SIZE;
 
-    let page_hdr = PageHeader::new(page_id, PageType::HypergraphEdge, 3, 0xFFFFFFFF);
+    let page_hdr = PageHeader::new(page_id, PageType::HypergraphEdge, 3, SENTINEL_PAGE_ID);
     let hdr_bytes = page_hdr.to_bytes();
     mmap[offset..offset + 32].copy_from_slice(&hdr_bytes);
 
@@ -210,6 +231,10 @@ pub fn add_edge(
 
     btree.insert(edge.id_hash, (page_id as u64) << 16);
 
+    if let Some(tracker) = tracker {
+        tracker.on_edge_added(edge.graph_id, &edge.node_ids);
+    }
+
     Ok(format_hash(edge.id_hash))
 }
 
@@ -219,7 +244,7 @@ pub fn get_edge(
     btree: &BTreeIndex,
     edge_id: &str,
 ) -> Result<Option<HypergraphEdge>, MemHopError> {
-    let id_hash = crate::query::common::parse_id_to_hash(edge_id);
+    let id_hash = crate::shared::common::parse_id_to_hash(edge_id);
 
     match btree.search(id_hash) {
         Some(page_ref) => {
@@ -241,12 +266,20 @@ pub fn delete_edge(
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
     edge_id: &str,
+    tracker: Option<&mut crate::l3::DegreeTracker>,
 ) -> Result<(), MemHopError> {
-    let id_hash = crate::query::common::parse_id_to_hash(edge_id);
+    let id_hash = crate::shared::common::parse_id_to_hash(edge_id);
+
+    // Read edge before deleting for tracker notification
+    let edge_opt = get_edge(mmap, btree, edge_id).ok().flatten();
 
     if let Some(page_ref) = btree.delete(id_hash) {
         let page_id = (page_ref >> 16) as u32;
         crate::file::free_list::free_page(mmap, header, page_id)?;
+    }
+
+    if let (Some(tracker), Some(edge)) = (tracker, edge_opt) {
+        tracker.on_edge_deleted(edge.graph_id, &edge.node_ids);
     }
 
     Ok(())
@@ -346,7 +379,7 @@ pub fn list_edges_by_graph(
                 }
 
                 if let Some(ref nid) = query.node_id {
-                    let node_hash = crate::query::common::parse_id_to_hash(nid);
+                    let node_hash = crate::shared::common::parse_id_to_hash(nid);
                     if !edge.node_ids.contains(&node_hash) {
                         continue;
                     }
@@ -372,35 +405,6 @@ pub fn list_edges_by_graph(
     })
 }
 
-/// Count the number of nodes and edges belonging to a graph.
-pub fn count_graph_elements(mmap: &MmapMut, btree: &BTreeIndex, graph_id: u64) -> (u32, u32) {
-    let data: &[u8] = &mmap[..];
-    let mut node_count: u32 = 0;
-    let mut edge_count: u32 = 0;
-
-    for (&_id, &page_ref) in btree.iter() {
-        let pt = page_type_of(data, page_ref).unwrap_or(0);
-        if pt != PageType::HypergraphNode as u16 && pt != PageType::HypergraphEdge as u16 {
-            continue;
-        }
-        if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if pt == PageType::HypergraphNode as u16 {
-                if let Ok(node) = HypergraphNode::deserialize(slot_data) {
-                    if node.graph_id == graph_id {
-                        node_count += 1;
-                    }
-                }
-            } else if let Ok(edge) = HypergraphEdge::deserialize(slot_data) {
-                if edge.graph_id == graph_id {
-                    edge_count += 1;
-                }
-            }
-        }
-    }
-
-    (node_count, edge_count)
-}
-
 /// Delete an entire L3 graph: cascade-deletes all nodes, edges, and the HypergraphSlot.
 ///
 /// NOTE: This does NOT clean up L2 ContextSlot l3_refs. Callers should handle
@@ -411,7 +415,7 @@ pub fn delete_graph(
     btree: &mut BTreeIndex,
     l3_id: &str,
 ) -> Result<(), MemHopError> {
-    let graph_hash = crate::query::common::parse_id_to_hash(l3_id);
+    let graph_hash = crate::shared::common::parse_id_to_hash(l3_id);
 
     if btree.search(graph_hash).is_none() {
         return Ok(()); // Already gone
@@ -479,7 +483,7 @@ pub fn collect_l2_refs(
             continue;
         }
         if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if let Ok(ctx) = crate::slot::context::ContextSlot::deserialize_slot(slot_data) {
+            if let Ok(ctx) = crate::layers::context::ContextSlot::deserialize_slot(slot_data) {
                 if ctx.l3_refs.contains(&graph_hash) {
                     let page_id = (page_ref >> 16) as u32;
                     refs.push((page_id, id_hash));
@@ -511,10 +515,10 @@ pub fn remove_l3_ref_from_context(
     page_buf.copy_from_slice(&mmap[offset..offset + PAGE_SIZE]);
 
     let slot_data = &page_buf[32..];
-    if let Ok(mut ctx) = crate::slot::context::ContextSlot::deserialize_slot(slot_data) {
+    if let Ok(mut ctx) = crate::layers::context::ContextSlot::deserialize_slot(slot_data) {
         if ctx.l3_refs.contains(&graph_hash) {
             ctx.l3_refs.retain(|&h| h != graph_hash);
-            ctx.updated_at = crate::query::common::now_ms();
+            ctx.updated_at = crate::shared::common::now_ms();
 
             let ctx_bytes = ctx
                 .serialize()
@@ -536,63 +540,6 @@ pub fn remove_l3_ref_from_context(
     }
 
     Ok(false)
-}
-
-/// Read neighbors of a node: find all edges referencing the node, collect other endpoints.
-///
-/// # Arguments
-/// * `edge_kinds` - Optional filter for edge kinds. If None, all edge kinds are included.
-pub fn read_node_neighbors(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    node_id: &str,
-    graph_id: u64,
-    edge_kinds: Option<&[GraphEdgeKind]>,
-) -> Result<Vec<HypergraphNode>, MemHopError> {
-    let id_hash = crate::query::common::parse_id_to_hash(node_id);
-    let data: &[u8] = &mmap[..];
-
-    let mut neighbor_hashes: Vec<u64> = Vec::new();
-
-    for (&_eid, &page_ref) in btree.iter() {
-        if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
-            continue;
-        }
-        if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if let Ok(edge) = HypergraphEdge::deserialize(slot_data) {
-                if edge.graph_id != graph_id || !edge.node_ids.contains(&id_hash) {
-                    continue;
-                }
-
-                if let Some(kinds) = edge_kinds {
-                    if !kinds.contains(&edge.kind) {
-                        continue;
-                    }
-                }
-
-                for &nid in &edge.node_ids {
-                    if nid != id_hash && !neighbor_hashes.contains(&nid) {
-                        neighbor_hashes.push(nid);
-                    }
-                }
-            }
-        }
-    }
-
-    let mut neighbors = Vec::new();
-    for &nh in &neighbor_hashes {
-        if let Some(page_ref) = btree.search(nh) {
-            if let Some(slot_data) = get_slot_data(data, page_ref) {
-                if let Ok(node) = HypergraphNode::deserialize(slot_data) {
-                    if node.graph_id == graph_id {
-                        neighbors.push(node);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(neighbors)
 }
 
 /// BFS traversal of an L3 hypergraph starting from `start_node`.
@@ -742,178 +689,10 @@ pub fn bfs_traversal_cached(
     Ok(bfs_with_adjacency(&adjacency, start_node, max_depth))
 }
 
-/// Extract a `Subgraph` reachable from `start_node` within `max_depth` hops.
-///
-/// Performs an unfiltered BFS traversal, then loads all referenced nodes and
-/// deduplicates edges by `id_hash`.  The start node is always included in the
-/// result, even if the traversal produces no hops.
-pub fn extract_subgraph(
-    data: &[u8],
-    btree: &BTreeIndex,
-    graph_id: u64,
-    start_node: u64,
-    max_depth: usize,
-) -> Result<Subgraph, MemHopError> {
-    let hops = bfs_traversal(data, btree, graph_id, start_node, max_depth, None)?;
-
-    let mut node_hashes: HashSet<u64> = HashSet::new();
-    let mut edge_ids: HashSet<u64> = HashSet::new();
-    let mut edges: Vec<HypergraphEdge> = Vec::new();
-
-    node_hashes.insert(start_node);
-
-    for hop in &hops {
-        node_hashes.insert(hop.from_node);
-        node_hashes.insert(hop.to_node);
-
-        if edge_ids.insert(hop.edge.id_hash) {
-            edges.push(hop.edge.clone());
-        }
-    }
-
-    let mut nodes: Vec<HypergraphNode> = Vec::new();
-    for &node_hash in &node_hashes {
-        if let Some(page_ref) = btree.search(node_hash) {
-            if let Some(slot_data) = get_slot_data(data, page_ref) {
-                if let Ok(node) = HypergraphNode::deserialize(slot_data) {
-                    if node.graph_id == graph_id {
-                        nodes.push(node);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(Subgraph { nodes, edges })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file::header::FileHeader;
-    use crate::util::PAGE_SIZE;
-    use memmap2::MmapMut;
-    use std::fs::File;
-    use std::io::Write;
-
-    fn create_test_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex, File) {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-        let mut file = File::create(path).unwrap();
-        file.write_all(&vec![0u8; PAGE_SIZE * pages]).unwrap();
-        drop(file);
-
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut header = FileHeader::new(768);
-        header.page_count = pages as u32;
-        crate::file::free_list::init_free_list(&mut header).unwrap();
-
-        for page_id in (2..pages as u32).rev() {
-            crate::file::free_list::free_page(&mut mmap, &mut header, page_id).unwrap();
-        }
-
-        let btree = BTreeIndex::new();
-        (mmap, header, btree, file)
-    }
-
-    fn create_test_node(id_hash: u64, graph_id: u64, title: &str) -> HypergraphNode {
-        HypergraphNode {
-            id_hash,
-            graph_id,
-            title: title.to_string(),
-            node_type: "concept".to_string(),
-            content: format!("content of {}", title),
-            keywords: vec![],
-            source_ref: None,
-            importance: 0.5,
-            created_at: 0,
-            updated_at: 0,
-            version: 1,
-        }
-    }
-
-    fn create_test_edge(
-        id_hash: u64,
-        graph_id: u64,
-        kind: GraphEdgeKind,
-        node_ids: Vec<u64>,
-    ) -> HypergraphEdge {
-        HypergraphEdge {
-            id_hash,
-            graph_id,
-            kind,
-            node_ids,
-            weight: 1.0,
-            label: None,
-            created_at: 0,
-        }
-    }
-
-    /// Build a small graph:
-    /// n1 --e1(Related)--> n2 --e2(Related)--> n3 --e3(Dependency)--> n4
-    /// n1 --e4(Causal)--> n3, n5   (hyperedge, 3 nodes)
-    fn build_test_graph(
-        mmap: &mut MmapMut,
-        header: &mut FileHeader,
-        btree: &mut BTreeIndex,
-        file: &mut File,
-    ) -> (Vec<u64>, Vec<u64>) {
-        let graph_id = 1u64;
-        let node_ids = vec![101u64, 102, 103, 104, 105];
-        let edge_ids = vec![201u64, 202, 203, 204];
-
-        for &nid in &node_ids {
-            add_node(
-                mmap,
-                header,
-                btree,
-                create_test_node(nid, graph_id, &format!("node{}", nid)),
-                file,
-            )
-            .unwrap();
-        }
-
-        add_edge(
-            mmap,
-            header,
-            btree,
-            create_test_edge(201, graph_id, GraphEdgeKind::Related, vec![101, 102]),
-            file,
-        )
-        .unwrap();
-        add_edge(
-            mmap,
-            header,
-            btree,
-            create_test_edge(202, graph_id, GraphEdgeKind::Related, vec![102, 103]),
-            file,
-        )
-        .unwrap();
-        add_edge(
-            mmap,
-            header,
-            btree,
-            create_test_edge(203, graph_id, GraphEdgeKind::Dependency, vec![103, 104]),
-            file,
-        )
-        .unwrap();
-        add_edge(
-            mmap,
-            header,
-            btree,
-            create_test_edge(204, graph_id, GraphEdgeKind::Causal, vec![101, 103, 105]),
-            file,
-        )
-        .unwrap();
-
-        (node_ids, edge_ids)
-    }
+    use crate::test_helpers::*;
 
     #[test]
     fn test_bfs_traversal_one_hop() {
@@ -982,6 +761,8 @@ mod tests {
                 &mut btree,
                 create_test_node(nid, 1, &format!("node{}", nid)),
                 &mut file,
+                None,
+                None,
             )
             .unwrap();
         }
@@ -991,6 +772,7 @@ mod tests {
             &mut btree,
             create_test_edge(201, 1, GraphEdgeKind::Related, vec![101, 102]),
             &mut file,
+            None,
         )
         .unwrap();
         add_edge(
@@ -999,6 +781,7 @@ mod tests {
             &mut btree,
             create_test_edge(202, 1, GraphEdgeKind::Related, vec![102, 103]),
             &mut file,
+            None,
         )
         .unwrap();
         add_edge(
@@ -1007,6 +790,7 @@ mod tests {
             &mut btree,
             create_test_edge(203, 1, GraphEdgeKind::Related, vec![103, 101]),
             &mut file,
+            None,
         )
         .unwrap();
 
@@ -1021,15 +805,21 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_subgraph() {
+    fn test_bfs_traversal_subgraph() {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
         let (node_ids, _edge_ids) = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
 
         let data: &[u8] = &mmap[..];
-        let subgraph = extract_subgraph(data, &btree, 1, 101, 2).unwrap();
+        let hops = bfs_traversal(data, &btree, 1, 101, 2, None).unwrap();
 
-        let returned_node_ids: HashSet<u64> = subgraph.nodes.iter().map(|n| n.id_hash).collect();
-        let returned_edge_ids: HashSet<u64> = subgraph.edges.iter().map(|e| e.id_hash).collect();
+        let mut returned_node_ids: HashSet<u64> = HashSet::new();
+        let mut returned_edge_ids: HashSet<u64> = HashSet::new();
+        returned_node_ids.insert(101); // start node
+        for hop in &hops {
+            returned_node_ids.insert(hop.from_node);
+            returned_node_ids.insert(hop.to_node);
+            returned_edge_ids.insert(hop.edge.id_hash);
+        }
 
         // BFS discovers 4 of 5 edges: edge 202 (102-103) is never traversed
         // because hyperedge 204 discovers node 103 at depth 1, making the
@@ -1040,7 +830,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_subgraph_start_node_only() {
+    fn test_bfs_traversal_start_node_only() {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
 
         add_node(
@@ -1049,14 +839,14 @@ mod tests {
             &mut btree,
             create_test_node(101, 1, "island"),
             &mut file,
+            None,
+            None,
         )
         .unwrap();
 
         let data: &[u8] = &mmap[..];
-        let subgraph = extract_subgraph(data, &btree, 1, 101, 2).unwrap();
+        let hops = bfs_traversal(data, &btree, 1, 101, 2, None).unwrap();
 
-        assert_eq!(subgraph.nodes.len(), 1);
-        assert_eq!(subgraph.nodes[0].id_hash, 101);
-        assert!(subgraph.edges.is_empty());
+        assert_eq!(hops.len(), 0); // No edges from isolated node
     }
 }

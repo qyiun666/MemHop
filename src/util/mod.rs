@@ -1,8 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-pub mod hash;
-pub mod io_helpers;
+pub(crate) mod hash;
+pub(crate) mod io_helpers;
 
 pub use hash::hash_id;
 
@@ -15,6 +15,11 @@ pub const MAGIC: [u8; 4] = [0x4D, 0x45, 0x48, 0x21]; // "MEH!"
 pub const TAIL_MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
 pub const VERSION: u16 = 0x0023;
 
+/// Default number of pages to grow the file by when the free list is exhausted.
+pub const DEFAULT_GROW_PAGES: u32 = 500;
+/// Sentinel page id meaning "no page" / end of chain / empty free list.
+pub const SENTINEL_PAGE_ID: u32 = 0xFFFFFFFF;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layer {
     Profile,     // L0: Agent identity
@@ -24,6 +29,7 @@ pub enum Layer {
     Hypergraph,  // L3: Generic hypergraph engine
     Archive,     // L4: Raw text + file paths
     ActionChain, // L5: Ordered action sequences
+    Procedural,  // L6: Pathway weight (procedural memory)
 }
 
 impl Layer {
@@ -36,6 +42,7 @@ impl Layer {
             Layer::Hypergraph => 4,
             Layer::Archive => 5,
             Layer::ActionChain => 6,
+            Layer::Procedural => 7,
         }
     }
 
@@ -48,6 +55,7 @@ impl Layer {
             4 => Some(Layer::Hypergraph),
             5 => Some(Layer::Archive),
             6 => Some(Layer::ActionChain),
+            7 => Some(Layer::Procedural),
             _ => None,
         }
     }
@@ -63,6 +71,7 @@ impl fmt::Display for Layer {
             Layer::Hypergraph => write!(f, "Hypergraph"),
             Layer::Archive => write!(f, "Archive"),
             Layer::ActionChain => write!(f, "ActionChain"),
+            Layer::Procedural => write!(f, "Procedural"),
         }
     }
 }
@@ -85,7 +94,11 @@ pub struct SourceMeta {
 
 impl Default for SourceMeta {
     fn default() -> Self {
-        Self { source_type: SourceType::UserInput, source_id: None, timestamp: 0 }
+        Self {
+            source_type: SourceType::UserInput,
+            source_id: None,
+            timestamp: 0,
+        }
     }
 }
 
@@ -95,7 +108,11 @@ impl SourceMeta {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as i64;
-        Self { source_type, source_id, timestamp }
+        Self {
+            source_type,
+            source_id,
+            timestamp,
+        }
     }
 }
 
@@ -135,12 +152,15 @@ pub enum PageType {
     BTreeNode = 0x10,      // B-tree internal node
     BTreeLeaf = 0x11,      // B-tree leaf node
     L1ReverseIndex = 0x12, // L1 reverse index page
+    PathwayWeight = 0x13,  // L6 procedural memory pathway weight page
     Free = 0x20,           // Free page
     Overflow = 0xFF,       // Overflow page
 }
 
 impl PageType {
-    pub fn to_u16(&self) -> u16 { *self as u16 }
+    pub fn to_u16(self) -> u16 {
+        self as u16
+    }
 
     pub fn from_u16(value: u16) -> Option<PageType> {
         match value {
@@ -162,6 +182,7 @@ impl PageType {
             0x10 => Some(PageType::BTreeNode),
             0x11 => Some(PageType::BTreeLeaf),
             0x12 => Some(PageType::L1ReverseIndex),
+            0x13 => Some(PageType::PathwayWeight),
             0x20 => Some(PageType::Free),
             0xFF => Some(PageType::Overflow),
             _ => None,

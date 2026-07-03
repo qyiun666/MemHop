@@ -3,19 +3,19 @@
 
 //! update_memory() interface with multi-level联动 updates.
 
+use crate::config::MemHopConfig;
 use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
 use crate::l3;
+use crate::layers::archive::ArchiveSlot;
+use crate::layers::hypergraph::{HypergraphNode, HypergraphSlot, HypergraphSource};
 use crate::organize::extract_keywords;
-use crate::query::common::{format_hash, now_ms, parse_id_to_hash};
 use crate::query::types::*;
-use crate::slot::archive::ArchiveSlot;
-use crate::slot::hypergraph::{HypergraphNode, HypergraphSlot, HypergraphSource};
-use crate::util::{hash_id, PageType, PAGE_SIZE};
-use crate::config::MemHopConfig;
+use crate::shared::common::{format_hash, now_ms, parse_id_to_hash};
+use crate::util::{hash_id, PageType, DEFAULT_GROW_PAGES, PAGE_SIZE, SENTINEL_PAGE_ID};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::fs::File;
@@ -28,18 +28,11 @@ fn write_slot_page_header(
     layer_id: u16,
     data_len: usize,
 ) {
-    let header = PageHeader {
-        page_id,
-        page_type: page_type.to_u16(),
-        slot_count: 1,
-        free_bytes: (PAGE_SIZE - 32).saturating_sub(data_len) as u16,
-        layer_id,
-        next_page: 0xFFFFFFFF,
-        prev_page: 0xFFFFFFFF,
-        reserved: [0u8; 12],
-    };
+    let mut header = PageHeader::new(page_id, page_type, layer_id, SENTINEL_PAGE_ID);
+    header.slot_count = 1;
+    header.free_bytes = (PAGE_SIZE - 32).saturating_sub(data_len) as u16;
     let header_bytes = header.to_bytes();
-    let offset = crate::query::slot_io::page_offset(page_id);
+    let offset = crate::shared::slot_io::page_offset(page_id);
     mmap[offset..offset + 32].copy_from_slice(&header_bytes);
 }
 
@@ -51,9 +44,10 @@ pub fn update_memory(
     request: UpdateRequest,
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
-    _vector_dim: usize,
     file: &mut File,
-    _config: &MemHopConfig,
+    config: &MemHopConfig,
+    mut tracker: Option<&mut crate::l3::DegreeTracker>,
+    mut index_map: Option<&mut std::collections::HashMap<u64, crate::l3::L3Index>>,
 ) -> Result<UpdateResult, MemHopError> {
     let now_ms = now_ms();
 
@@ -75,7 +69,6 @@ pub fn update_memory(
         btree,
         request.source.to_metadata_json(),
         file,
-        _config,
     )?;
     let archive_id = format_hash(l4_id_hash);
 
@@ -94,17 +87,19 @@ pub fn update_memory(
                 now_ms,
                 btree,
                 file,
-                _config,
             )?;
         }
     }
 
     let data = &mmap[..];
-    let page_id = crate::query::slot_io::decode_page_id(page_ref);
-    let slot_data = crate::query::slot_io::get_slot_data(data, page_ref)
+    let page_id = crate::shared::slot_io::decode_page_id(page_ref);
+    let slot_data = crate::shared::slot_io::get_slot_data(data, page_ref)
         .ok_or(MemHopError::PageNotFound(page_id))?;
 
-    let mut ctx = crate::slot::context::ContextSlot::deserialize_slot(slot_data)?;
+    let mut ctx = crate::layers::context::ContextSlot::deserialize_slot(slot_data)?;
+
+    // A brand-new context (e.g. from auto_create) has no archives and no turns yet.
+    let is_fresh_context = ctx.turn_count == 0 && ctx.archive_refs.is_empty();
 
     if !ctx.archive_refs.contains(&l4_id_hash) {
         ctx.archive_refs.push(l4_id_hash);
@@ -134,10 +129,10 @@ pub fn update_memory(
             for (node_hash, _l2_ids) in &hits {
                 if let Some(slot_data) = btree
                     .search(*node_hash)
-                    .and_then(|pr| crate::query::slot_io::get_slot_data(data, pr))
+                    .and_then(|pr| crate::shared::slot_io::get_slot_data(data, pr))
                 {
                     if let Ok(node) =
-                        crate::slot::hypergraph::HypergraphNode::deserialize(slot_data)
+                        crate::layers::hypergraph::HypergraphNode::deserialize(slot_data)
                     {
                         if !ctx.l3_refs.contains(&node.graph_id) {
                             graphs_to_link.push(node.graph_id);
@@ -169,10 +164,11 @@ pub fn update_memory(
                 .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-            let slot_page_id = allocate_or_extend(mmap, header, file, 500)?;
-            let slot_offset = crate::query::slot_io::page_offset(slot_page_id);
+            let slot_page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
+            let slot_offset = crate::shared::slot_io::page_offset(slot_page_id);
 
-            let page_hdr = PageHeader::new(slot_page_id, PageType::HypergraphSlot, 3, 0xFFFFFFFF);
+            let page_hdr =
+                PageHeader::new(slot_page_id, PageType::HypergraphSlot, 3, SENTINEL_PAGE_ID);
             mmap[slot_offset..slot_offset + 32].copy_from_slice(&page_hdr.to_bytes());
 
             let data_offset = slot_offset + 32;
@@ -197,7 +193,15 @@ pub fn update_memory(
                     updated_at: now_ms,
                     version: 1,
                 };
-                l3::store::add_node(mmap, header, btree, node, file)?;
+                l3::store::add_node(
+                    mmap,
+                    header,
+                    btree,
+                    node,
+                    file,
+                    tracker.as_deref_mut(),
+                    index_map.as_deref_mut(),
+                )?;
             }
 
             graphs_to_link.push(distilled_id);
@@ -212,7 +216,7 @@ pub fn update_memory(
     let serialized = ctx
         .serialize()
         .map_err(|e| MemHopError::Serialization(format!("ContextSlot serialize: {}", e)))?;
-    let write_offset = crate::query::slot_io::slot_offset(page_id);
+    let write_offset = crate::shared::slot_io::slot_offset(page_id);
     if write_offset + serialized.len() > mmap.len() {
         return Err(MemHopError::Serialization(format!(
             "ContextSlot too large for page: {} > {}",
@@ -231,15 +235,27 @@ pub fn update_memory(
         sparse_index.add_document(topic_hash, terms, summary.len() as u32);
     }
 
+    // Determine update status based on what actually changed.
+    let status = if is_fresh_context {
+        UpdateStatus::Created
+    } else if request.summary.is_some() || request.action_chain.is_some() || request.instant_distill
+    {
+        UpdateStatus::Updated
+    } else {
+        UpdateStatus::Archived
+    };
+
     // Check if archive/summary thresholds exceeded for auto-dream trigger
-    // Thresholds match the JSON config defaults in API.md
-    let dream_triggered = ctx.archive_refs.len() >= 20
-        || ctx.summary.as_ref().map(|s| s.len()).unwrap_or(0) >= 2048;
+    // Thresholds are read from config; default to 20 archives / 2048 summary bytes.
+    let archive_threshold = config.auto_dream_archive_threshold.unwrap_or(20);
+    let summary_threshold = config.auto_dream_summary_bytes.unwrap_or(2048);
+    let dream_triggered = ctx.archive_refs.len() >= archive_threshold
+        || ctx.summary.as_ref().map(|s| s.len()).unwrap_or(0) >= summary_threshold;
 
     Ok(UpdateResult {
         topic_id: format_hash(topic_hash),
         archive_id,
-        status: UpdateStatus::Updated,
+        status,
         dream_triggered,
     })
 }
@@ -255,13 +271,11 @@ fn allocate_and_write_l4_archive(
     btree: &mut BTreeIndex,
     metadata: Option<String>,
     file: &mut File,
-    _config: &MemHopConfig,
 ) -> Result<u64, MemHopError> {
-    let page_id = allocate_or_extend(mmap, header, file, 500)?;
-    let offset = crate::query::slot_io::slot_offset(page_id);
+    let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
+    let offset = crate::shared::slot_io::slot_offset(page_id);
 
-
-    use crate::slot::archive::ContentType;
+    use crate::layers::archive::ContentType;
     let archive = ArchiveSlot {
         id_hash,
         content_type: ContentType::Text,
@@ -302,18 +316,16 @@ fn allocate_and_write_l5_crystal(
     now_ms: i64,
     btree: &mut BTreeIndex,
     file: &mut File,
-    _config: &MemHopConfig,
 ) -> Result<u64, MemHopError> {
-    let page_id = allocate_or_extend(mmap, header, file, 500)?;
-    let offset = crate::query::slot_io::slot_offset(page_id);
+    let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
+    let offset = crate::shared::slot_io::slot_offset(page_id);
 
-
-    use crate::slot::action_chain::ActionChainSlot;
+    use crate::layers::action_chain::ActionChainSlot;
     let chain = ActionChainSlot {
         id_hash,
         title: action_title.to_string(),
         trigger: action_description.to_string(),
-        status: crate::slot::action_chain::ChainStatus::Active,
+        status: crate::layers::action_chain::ChainStatus::Active,
         confidence: 0.8,
         success_rate: 1.0,
         trigger_count: 0,

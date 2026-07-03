@@ -7,8 +7,8 @@ use crate::dream::llm::{HabitAnalysis, LlmProvider};
 use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
-use crate::slot::archive::ArchiveSlot;
-use crate::slot::profile::ProfileSlot;
+use crate::layers::archive::ArchiveSlot;
+use crate::layers::profile::ProfileSlot;
 use crate::util::{hash_id, PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
@@ -94,7 +94,7 @@ fn extract_recent_dialogues(
             continue;
         }
 
-        if let Some(slot_data) = crate::query::slot_io::get_slot_data(data, *page_ref) {
+        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, *page_ref) {
             if let Ok(archive) = ArchiveSlot::deserialize(slot_data) {
                 // Only include user messages (role=0) with non-empty content
                 if archive.role == 0 && !archive.content.is_empty() {
@@ -182,7 +182,7 @@ fn merge_habits_into_profile(
         }
     }
 
-    profile.updated_at = crate::query::common::now_ms();
+    profile.updated_at = crate::shared::common::now_ms();
     profile.version += 1;
 
     let data = profile

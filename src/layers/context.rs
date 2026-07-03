@@ -5,6 +5,7 @@
 // Each level supports independent compression (multi-turn → summary).
 
 use crate::util::io_helpers::*;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Cursor, Read, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,12 +18,17 @@ pub enum ActivationState {
 
 impl ActivationState {
     pub fn from_u8(v: u8) -> Self {
-        match v { 0 => Self::Dormant, 1 => Self::Active, 2 => Self::Crystallized, _ => Self::Dormant }
+        match v {
+            0 => Self::Dormant,
+            1 => Self::Active,
+            2 => Self::Crystallized,
+            _ => Self::Dormant,
+        }
     }
 }
 
 /// Scene-level LLM parameters, refreshed during dream compression.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LlmParams {
     pub temperature: f32,       // 0.0-2.0
     pub top_p: f32,             // 0.0-1.0
@@ -45,7 +51,7 @@ impl Default for LlmParams {
 pub struct ContextSlot {
     pub id_hash: u64,
     pub parent_id: Option<u64>, // Parent context (supports 4-level nesting)
-    pub depth: u8, // 1=scene, 2=sub-scene, 3=turn group, 4=semantic summary
+    pub depth: u8,              // 1=scene, 2=sub-scene, 3=turn group, 4=semantic summary
     pub title: String,
     pub summary: Option<String>,
     pub archive_refs: Vec<u64>, // Associated L4 archives
@@ -120,7 +126,11 @@ impl ContextSlot {
         let mut c = Cursor::new(data);
         let id_hash = read_u64(&mut c)?;
         let parent_val = read_u64(&mut c)?;
-        let parent_id = if parent_val == 0 { None } else { Some(parent_val) };
+        let parent_id = if parent_val == 0 {
+            None
+        } else {
+            Some(parent_val)
+        };
         let depth = read_u8(&mut c)?;
         let title_len = read_u16(&mut c)?;
         let summary_len = read_u16(&mut c)?;
@@ -156,18 +166,40 @@ impl ContextSlot {
         let summary = if summary_len > 0 {
             let mut summary_buf = vec![0u8; summary_len as usize];
             c.read_exact(&mut summary_buf)?;
-            Some(String::from_utf8(summary_buf)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?)
-        } else { None };
+            Some(
+                String::from_utf8(summary_buf)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            )
+        } else {
+            None
+        };
         let mut archive_refs = Vec::with_capacity(archive_count);
-        for _ in 0..archive_count { archive_refs.push(read_u64(&mut c)?); }
+        for _ in 0..archive_count {
+            archive_refs.push(read_u64(&mut c)?);
+        }
         let mut l3_refs = Vec::with_capacity(l3_count);
-        for _ in 0..l3_count { l3_refs.push(read_u64(&mut c)?); }
+        for _ in 0..l3_count {
+            l3_refs.push(read_u64(&mut c)?);
+        }
         Ok(ContextSlot {
-            id_hash, parent_id, depth, title, summary, archive_refs, l3_refs,
-            turn_count, created_at, updated_at, version, importance,
-            activation_score, is_active, activation_state, centroid_page_ref,
-            dialogue_range, llm_params,
+            id_hash,
+            parent_id,
+            depth,
+            title,
+            summary,
+            archive_refs,
+            l3_refs,
+            turn_count,
+            created_at,
+            updated_at,
+            version,
+            importance,
+            activation_score,
+            is_active,
+            activation_state,
+            centroid_page_ref,
+            dialogue_range,
+            llm_params,
         })
     }
 }
@@ -179,14 +211,24 @@ mod tests {
     #[test]
     fn test_context_slot_roundtrip() {
         let ctx = ContextSlot {
-            id_hash: 123456789, parent_id: Some(999), depth: 2,
+            id_hash: 123456789,
+            parent_id: Some(999),
+            depth: 2,
             title: "memhop refactoring".to_string(),
             summary: Some("Refactoring L0-L5 layers".to_string()),
-            archive_refs: vec![300, 400], l3_refs: vec![100, 200],
-            turn_count: 5, created_at: 1000000, updated_at: 2000000, version: 1,
-            importance: 0.85, activation_score: 0.72, is_active: true,
-            activation_state: ActivationState::Active, centroid_page_ref: 42,
-            dialogue_range: (1000000, 2000000), llm_params: LlmParams::default(),
+            archive_refs: vec![300, 400],
+            l3_refs: vec![100, 200],
+            turn_count: 5,
+            created_at: 1000000,
+            updated_at: 2000000,
+            version: 1,
+            importance: 0.85,
+            activation_score: 0.72,
+            is_active: true,
+            activation_state: ActivationState::Active,
+            centroid_page_ref: 42,
+            dialogue_range: (1000000, 2000000),
+            llm_params: LlmParams::default(),
         };
         let data = ctx.serialize().unwrap();
         assert_eq!(data.len(), ctx.slot_size());
@@ -196,13 +238,24 @@ mod tests {
     #[test]
     fn test_context_slot_root_scene() {
         let ctx = ContextSlot {
-            id_hash: 1, parent_id: None, depth: 1,
-            title: "Rust project".to_string(), summary: None,
-            archive_refs: vec![], l3_refs: vec![],
-            turn_count: 0, created_at: 0, updated_at: 0, version: 0,
-            importance: 0.5, activation_score: 0.0, is_active: false,
-            activation_state: ActivationState::Dormant, centroid_page_ref: 0,
-            dialogue_range: (0, 0), llm_params: LlmParams::default(),
+            id_hash: 1,
+            parent_id: None,
+            depth: 1,
+            title: "Rust project".to_string(),
+            summary: None,
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 0,
+            created_at: 0,
+            updated_at: 0,
+            version: 0,
+            importance: 0.5,
+            activation_score: 0.0,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (0, 0),
+            llm_params: LlmParams::default(),
         };
         let data = ctx.serialize().unwrap();
         let restored = ContextSlot::deserialize(&data).unwrap();
@@ -214,14 +267,24 @@ mod tests {
     #[test]
     fn test_context_slot_three_level_nesting() {
         let ctx = ContextSlot {
-            id_hash: 333, parent_id: Some(222), depth: 3,
+            id_hash: 333,
+            parent_id: Some(222),
+            depth: 3,
             title: "L0-L5 discussion round 1".to_string(),
             summary: Some("Defined L0-L5 field structure".to_string()),
-            archive_refs: vec![1001, 1002, 1003], l3_refs: vec![501],
-            turn_count: 6, created_at: 1000, updated_at: 2000, version: 1,
-            importance: 0.9, activation_score: 0.8, is_active: true,
-            activation_state: ActivationState::Active, centroid_page_ref: 10,
-            dialogue_range: (1000, 2000), llm_params: LlmParams::default(),
+            archive_refs: vec![1001, 1002, 1003],
+            l3_refs: vec![501],
+            turn_count: 6,
+            created_at: 1000,
+            updated_at: 2000,
+            version: 1,
+            importance: 0.9,
+            activation_score: 0.8,
+            is_active: true,
+            activation_state: ActivationState::Active,
+            centroid_page_ref: 10,
+            dialogue_range: (1000, 2000),
+            llm_params: LlmParams::default(),
         };
         let data = ctx.serialize().unwrap();
         let restored = ContextSlot::deserialize(&data).unwrap();
@@ -233,15 +296,24 @@ mod tests {
     #[test]
     fn test_context_slot_size() {
         let ctx = ContextSlot {
-            id_hash: 1, parent_id: None, depth: 1,
+            id_hash: 1,
+            parent_id: None,
+            depth: 1,
             title: "test".to_string(),
             summary: Some("abc".to_string()),
             archive_refs: vec![10],
             l3_refs: vec![20, 30],
-            turn_count: 0, created_at: 0, updated_at: 0, version: 0,
-            importance: 0.0, activation_score: 0.0, is_active: false,
-            activation_state: ActivationState::Dormant, centroid_page_ref: 0,
-            dialogue_range: (0, 0), llm_params: LlmParams::default(),
+            turn_count: 0,
+            created_at: 0,
+            updated_at: 0,
+            version: 0,
+            importance: 0.0,
+            activation_score: 0.0,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (0, 0),
+            llm_params: LlmParams::default(),
         };
         // 83 + 4 + 3 + 8 + 16 = 114 (version 0, no llm_params in fixed)
         assert_eq!(ctx.slot_size(), 114);
@@ -250,13 +322,24 @@ mod tests {
     #[test]
     fn test_context_slot_empty() {
         let ctx = ContextSlot {
-            id_hash: 777, parent_id: None, depth: 1,
-            title: "".to_string(), summary: None,
-            archive_refs: vec![], l3_refs: vec![],
-            turn_count: 0, created_at: 0, updated_at: 0, version: 0,
-            importance: 0.0, activation_score: 0.0, is_active: false,
-            activation_state: ActivationState::Dormant, centroid_page_ref: 0,
-            dialogue_range: (0, 0), llm_params: LlmParams::default(),
+            id_hash: 777,
+            parent_id: None,
+            depth: 1,
+            title: "".to_string(),
+            summary: None,
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 0,
+            created_at: 0,
+            updated_at: 0,
+            version: 0,
+            importance: 0.0,
+            activation_score: 0.0,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (0, 0),
+            llm_params: LlmParams::default(),
         };
         let data = ctx.serialize().unwrap();
         assert_eq!(ContextSlot::deserialize(&data).unwrap(), ctx);
@@ -265,14 +348,24 @@ mod tests {
     #[test]
     fn test_context_slot_unicode() {
         let ctx = ContextSlot {
-            id_hash: 555, parent_id: Some(100), depth: 2,
+            id_hash: 555,
+            parent_id: Some(100),
+            depth: 2,
             title: "场景测试 🚀".to_string(),
             summary: Some("摘要内容".to_string()),
-            archive_refs: vec![1], l3_refs: vec![],
-            turn_count: 3, created_at: 1000, updated_at: 1000, version: 1,
-            importance: 0.7, activation_score: 0.6, is_active: true,
-            activation_state: ActivationState::Active, centroid_page_ref: 5,
-            dialogue_range: (1000, 1000), llm_params: LlmParams::default(),
+            archive_refs: vec![1],
+            l3_refs: vec![],
+            turn_count: 3,
+            created_at: 1000,
+            updated_at: 1000,
+            version: 1,
+            importance: 0.7,
+            activation_score: 0.6,
+            is_active: true,
+            activation_state: ActivationState::Active,
+            centroid_page_ref: 5,
+            dialogue_range: (1000, 1000),
+            llm_params: LlmParams::default(),
         };
         let data = ctx.serialize().unwrap();
         let restored = ContextSlot::deserialize(&data).unwrap();

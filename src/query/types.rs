@@ -6,6 +6,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// Re-export the canonical LlmParams from slot::context so public API types can use it directly.
+pub use crate::layers::context::LlmParams;
+
 /// API 请求来源信息 — 记录"是谁找的我"
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RequestSource {
@@ -34,9 +37,10 @@ impl RequestSource {
     /// 从 ArchiveSlot.metadata JSON 字符串反序列化
     pub fn from_metadata_json(metadata: &str) -> Self {
         serde_json::from_str(metadata).unwrap_or_else(|e| {
-            eprintln!(
+            tracing::warn!(
                 "[RequestSource] Failed to parse metadata '{}': {}",
-                metadata, e
+                metadata,
+                e
             );
             Default::default()
         })
@@ -46,16 +50,6 @@ impl RequestSource {
 // ============================================================================
 // Search Memory Interface (Interface 2)
 // ============================================================================
-
-/// Search mode for controlling retrieval depth and performance
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum SearchMode {
-    /// Deep: full triple retrieval + L1 association expansion, merging associated contexts
-    /// into the main result set for maximum recall.
-    #[default]
-    Deep,
-}
 
 /// Search query for memory retrieval
 ///
@@ -80,25 +74,15 @@ pub struct SearchQuery {
     /// Maximum number of contexts to return (default: 10)
     #[serde(default = "default_context_limit")]
     pub context_limit: usize,
-    /// Optional LLM enhancement configuration
-    pub llm_enhance: Option<crate::config::LlmConfig>,
     /// Auto-create context when search result is empty (0: no, 1: yes, default: 0)
     #[serde(default)]
     pub auto_create: u8,
     /// Minimum relevance score threshold for search pruning (0.0-1.0, default: 0.0)
     #[serde(default)]
     pub min_score: f32,
-    /// Previous conversation context (optional). Used by LLM enhancement
-    /// to resolve anaphora and fill in missing context for follow-up queries.
-    pub context_history: Option<String>,
     /// API 请求来源（记录是谁发起的搜索）
     #[serde(default, skip_serializing_if = "RequestSource::is_empty")]
     pub source: RequestSource,
-    /// Search mode controlling retrieval depth and performance.
-    /// Only `"deep"` is supported: full triple retrieval + L1 association expansion.
-    /// When not provided, uses standard triple retrieval without L1 expansion merging.
-    #[serde(default)]
-    pub search_mode: Option<SearchMode>,
 }
 
 /// Default context limit for search
@@ -160,7 +144,9 @@ pub struct ContextResult {
     pub archive_refs: Vec<String>,
     /// Scene-level recommended LLM parameters (refreshed during dream)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub llm_params: Option<LlmParamsDto>,
+    pub llm_params: Option<LlmParams>,
+    /// Normalized retrieval fusion score [0.0, 1.0]
+    pub retrieval_score: f32,
 }
 
 /// L4 archive reference (lightweight pointer)
@@ -279,7 +265,12 @@ pub struct UpdateResult {
 /// Update status enumeration
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum UpdateStatus {
+    /// A new L2 context was created (e.g., via `auto_create`).
+    Created,
+    /// An existing L2 context was updated.
     Updated,
+    /// Only an L4 archive was appended; no summary/L3/action-chain changes.
+    Archived,
 }
 
 // ============================================================================
@@ -375,17 +366,11 @@ pub struct TopicDetail {
     pub created_at: i64,
     pub updated_at: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub llm_params: Option<LlmParamsDto>,
+    pub llm_params: Option<LlmParams>,
 }
 
-/// Serde-friendly DTO for LlmParams
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LlmParamsDto {
-    pub temperature: f32,
-    pub top_p: f32,
-    pub presence_penalty: f32,
-    pub frequency_penalty: f32,
-}
+/// Backward-compatibility alias for the unified LlmParams.
+pub type LlmParamsDto = LlmParams;
 
 /// Knowledge list query
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -674,18 +659,24 @@ pub struct ImportError {
 /// Result of subgraph extraction
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Subgraph {
-    pub nodes: Vec<crate::slot::hypergraph::HypergraphNode>,
-    pub edges: Vec<crate::slot::hypergraph::HypergraphEdge>,
+    pub nodes: Vec<crate::layers::hypergraph::HypergraphNode>,
+    pub edges: Vec<crate::layers::hypergraph::HypergraphEdge>,
 }
 
 /// A single hop in graph traversal (BFS / shortest path)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraversalHop {
     pub depth: usize,
-    #[serde(serialize_with = "crate::slot::hypergraph::serialize_hash_as_hex", deserialize_with = "crate::slot::hypergraph::deserialize_hash_from_hex")]
+    #[serde(
+        serialize_with = "crate::layers::hypergraph::serialize_hash_as_hex",
+        deserialize_with = "crate::layers::hypergraph::deserialize_hash_from_hex"
+    )]
     pub from_node: u64,
-    pub edge: crate::slot::hypergraph::HypergraphEdge,
-    #[serde(serialize_with = "crate::slot::hypergraph::serialize_hash_as_hex", deserialize_with = "crate::slot::hypergraph::deserialize_hash_from_hex")]
+    pub edge: crate::layers::hypergraph::HypergraphEdge,
+    #[serde(
+        serialize_with = "crate::layers::hypergraph::serialize_hash_as_hex",
+        deserialize_with = "crate::layers::hypergraph::deserialize_hash_from_hex"
+    )]
     pub to_node: u64,
 }
 
@@ -702,7 +693,7 @@ pub struct NodeListQuery {
 /// Paginated result for listing L3 nodes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeListResult {
-    pub items: Vec<crate::slot::hypergraph::HypergraphNode>,
+    pub items: Vec<crate::layers::hypergraph::HypergraphNode>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
@@ -714,14 +705,14 @@ pub struct NodeListResult {
 pub struct EdgeListQuery {
     pub page: usize,
     pub page_size: usize,
-    pub kind: Option<crate::slot::hypergraph::GraphEdgeKind>,
+    pub kind: Option<crate::layers::hypergraph::GraphEdgeKind>,
     pub node_id: Option<String>,
 }
 
 /// Paginated result for listing L3 edges
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeListResult {
-    pub items: Vec<crate::slot::hypergraph::HypergraphEdge>,
+    pub items: Vec<crate::layers::hypergraph::HypergraphEdge>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,

@@ -15,6 +15,8 @@ pub enum EmotionType {
 }
 
 impl EmotionType {
+    // Kept for future serialization / round-trip of persisted emotion tags.
+    #[allow(dead_code)]
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => EmotionType::Joy,
@@ -36,6 +38,8 @@ impl EmotionType {
 ///
 /// # Returns
 /// EmotionType based on the combination of valence and arousal
+// Reserved emotion inference utility; not currently wired into the memory pipeline.
+#[allow(dead_code)]
 pub fn infer_emotion(valence: f64, arousal: f64) -> EmotionType {
     // Surprise has highest priority — extreme arousal overrides valence
     if arousal > 0.8 {

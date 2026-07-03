@@ -10,7 +10,6 @@ use std::collections::HashMap;
 /// Topic activation state (pure memory, not persisted).
 pub struct TopicActivation {
     pub topic_id: u64,
-    pub activated_at: i64,
     pub last_hit_at: i64,
     pub ttl_ms: i64,
 }
@@ -20,7 +19,6 @@ impl TopicActivation {
         let now = current_timestamp_ms();
         Self {
             topic_id,
-            activated_at: now,
             last_hit_at: now,
             ttl_ms,
         }
@@ -133,6 +131,7 @@ impl SessionManager {
         self.active_topics.is_empty()
     }
 
+    #[cfg(test)]
     pub fn default_ttl_ms(&self) -> i64 {
         self.default_ttl_ms
     }
