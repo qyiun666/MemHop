@@ -159,6 +159,17 @@ impl ContextSlot {
         } else {
             LlmParams::default()
         };
+        let fixed_prefix_len = if version >= 2 { 99usize } else { 83usize };
+        let variable_len = title_len as usize
+            + summary_len as usize
+            + archive_count as usize * 8
+            + l3_count as usize * 8;
+        if fixed_prefix_len + variable_len > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "ContextSlot variable fields exceed data",
+            ));
+        }
         let mut title_buf = vec![0u8; title_len as usize];
         c.read_exact(&mut title_buf)?;
         let title = String::from_utf8(title_buf)

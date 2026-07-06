@@ -191,7 +191,7 @@ fn check_duplicate(
 
     const COSINE_THRESHOLD: f32 = 0.95;
 
-    for (&existing_hash, &page_ref) in btree.iter() {
+    for (&existing_hash, &page_ref) in btree.iter_unsorted() {
         let page_id = (page_ref >> 16) as u32;
         let node_offset = crate::shared::slot_io::slot_offset(page_id);
 
@@ -342,11 +342,7 @@ pub fn dedup_and_write_l1(
         let page_ref = (page_id as u64) << 16;
         btree.insert(id_hash, page_ref);
 
-        let terms: Vec<String> = item
-            .text
-            .split_whitespace()
-            .map(|s| s.to_lowercase())
-            .collect();
+        let terms = crate::index::sparse::tokenize(&item.text);
         sparse_index.add_document(id_hash, terms, item.text.len() as u32);
 
         created += 1;

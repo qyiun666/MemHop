@@ -90,6 +90,11 @@ impl BTreeIndex {
         self.map.clear();
     }
 
+    /// Iterates in insertion/HashMap order without sorting.
+    pub fn iter_unsorted(&self) -> std::collections::hash_map::Iter<'_, u64, u64> {
+        self.map.iter()
+    }
+
     /// Iterates in sorted key order for BTreeMap compatibility.
     pub fn iter(&self) -> std::vec::IntoIter<(&u64, &u64)> {
         let mut items: Vec<(&u64, &u64)> = self.map.iter().collect();

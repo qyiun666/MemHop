@@ -7,6 +7,7 @@
 //! condition node to a target action node, along with usage statistics and
 //! optional metadata.
 
+use crate::util::io_helpers::*;
 use std::io::{self, Cursor, Read, Write};
 
 // ============================================================================
@@ -67,6 +68,15 @@ impl PathwayWeightSlot {
         let updated_at = read_i64(&mut c)?;
         let version = read_u32(&mut c)?;
 
+        const FIXED_PREFIX_LEN: usize = 60;
+        let variable_len = source_len + target_len + metadata_len;
+        if FIXED_PREFIX_LEN + variable_len > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "PathwayWeightSlot variable fields exceed data",
+            ));
+        }
+
         let mut source_buf = vec![0u8; source_len];
         c.read_exact(&mut source_buf)?;
         let source_node = String::from_utf8(source_buf)
@@ -114,43 +124,27 @@ impl PathwayWeightSlot {
     pub fn deserialize_pathways(data: &[u8]) -> io::Result<Vec<PathwayWeightSlot>> {
         let mut c = Cursor::new(data);
         let count = read_u32(&mut c)? as usize;
+        if 4 + count * 4 > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "PathwayWeightSlot list header exceeds data",
+            ));
+        }
         let mut pathways = Vec::with_capacity(count);
         for _ in 0..count {
             let len = read_u32(&mut c)? as usize;
+            if c.position() as usize + len > data.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "PathwayWeightSlot entry length exceeds data",
+                ));
+            }
             let mut slot_buf = vec![0u8; len];
             c.read_exact(&mut slot_buf)?;
             pathways.push(PathwayWeightSlot::deserialize(&slot_buf)?);
         }
         Ok(pathways)
     }
-}
-
-// ---------------------------------------------------------------------------
-// Inline read helpers
-// ---------------------------------------------------------------------------
-
-fn read_u64(c: &mut Cursor<&[u8]>) -> io::Result<u64> {
-    let mut b = [0u8; 8];
-    c.read_exact(&mut b)?;
-    Ok(u64::from_le_bytes(b))
-}
-
-fn read_i64(c: &mut Cursor<&[u8]>) -> io::Result<i64> {
-    let mut b = [0u8; 8];
-    c.read_exact(&mut b)?;
-    Ok(i64::from_le_bytes(b))
-}
-
-fn read_u32(c: &mut Cursor<&[u8]>) -> io::Result<u32> {
-    let mut b = [0u8; 4];
-    c.read_exact(&mut b)?;
-    Ok(u32::from_le_bytes(b))
-}
-
-fn read_f32(c: &mut Cursor<&[u8]>) -> io::Result<f32> {
-    let mut b = [0u8; 4];
-    c.read_exact(&mut b)?;
-    Ok(f32::from_le_bytes(b))
 }
 
 // ============================================================================

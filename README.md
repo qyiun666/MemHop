@@ -4,7 +4,7 @@
     <strong>Your agent remembers like a human.</strong>
   </p>
   <p align="center">
-    A memory database purpose-built for AI agents, implementing a six-layer cognitive architecture in a single embedded file.
+    A memory database purpose-built for AI agents, implementing a seven-layer cognitive architecture (L0–L6) in a single embedded file.
   </p>
   <p align="center">
     <a href="https://qyiun666.github.io/meowagent.github.io/">Website</a>
@@ -66,38 +66,54 @@ lib.memhop_close(db)
 ### Rust
 
 ```rust
-use memhop::{MemHop, MemHopConfig, SearchQuery, LlmConfig};
+use memhop::{MemHop, MemHopConfig, SearchQuery, UpdateRequest};
 
 let mut db = MemHop::open(MemHopConfig::new("agent.meh".into(), 768))?;
 
-let results = db.search_memory(SearchQuery {
+// 1. Retrieve relevant contexts (vector retrieval requires the grpc-encoder feature)
+let results = db.search_context(SearchQuery {
     dialogue: "What did we discuss yesterday?".into(),
+    l2_id: None,
+    context_id: None,
+    l3_id: None,
     context_limit: 10,
-    ..Default::default()
+    auto_create: 0,
+    min_score: 0.0,
+    source: Default::default(),
 })?;
 
 for ctx in &results.contexts {
-    println!("[{:.2}] {}", ctx.score, ctx.title);
+    println!("[{:.2}] {}", ctx.retrieval_score, ctx.title);
 }
 
-// Run Dream consolidation (requires LLM)
-let report = db.dream(LlmConfig {
-    api_url: "https://api.openai.com/v1/chat/completions".into(),
-    api_key: std::env::var("OPENAI_API_KEY")?,
-    model: "gpt-4o-mini".into(),
-    ..Default::default()
-})?;
+// 2. Append a new turn to the top context
+if let Some(ctx) = results.contexts.first() {
+    db.update_memory(UpdateRequest {
+        topic_id: ctx.id.clone(),
+        dialogue_text: "We discussed Rust lifetimes.".into(),
+        summary: None,
+        action_chain: None,
+        instant_distill: false,
+        source: Default::default(),
+    })?;
+}
 
+// 3. Run Dream consolidation (uses the LLM configured in MemHopConfig)
+let report = db.dream(None)?;
+println!("dream stages: {:?}", report.stages);
+
+// 4. Graceful shutdown
 db.close()?;
 ```
 
 ## Architecture
 
-MemHop models memory as six cognitive layers, each corresponding to a distinct brain function. Memories flow between layers during the Dream consolidation cycle, just as the human brain consolidates experiences during sleep.
+MemHop models memory as seven cognitive layers, each corresponding to a distinct brain function. Memories flow between layers during the Dream consolidation cycle, just as the human brain consolidates experiences during sleep.
 
 ```
 Layer   Name             Human Parallel        Mechanism
 ─────   ──────────────   ───────────────────   ─────────────────────────────────────────────
+ L6     PathwayWeight    Procedural memory     Weighted action pathways & habit reinforcement
  L5     Crystal          Muscle memory         Crystallized procedures & reusable skills
  L4     Archive          Long-term memory      Raw dialogue logs & historical records
  L3     Knowledge        Semantic memory       Multi-source hypergraph knowledge base
@@ -126,7 +142,7 @@ search("how does photosynthesis work?")
 
 ## Dream Pipeline
 
-The Dream cycle is MemHop's most distinctive feature — an automatic memory consolidation process inspired by how the human brain processes experiences during sleep. Each cycle runs six stages in sequence:
+The Dream cycle is MemHop's most distinctive feature — an automatic memory consolidation process inspired by how the human brain processes experiences during sleep. Each cycle runs seven stages in sequence:
 
 ```
 Dream Cycle
@@ -136,7 +152,8 @@ Dream Cycle
     ├─ 3. L1 Rebuild & Decay     Rebuild hypergraph (remove dangling nodes/edges); decay episodic importance over time
     ├─ 4. L0 Profile Rebuild     Regenerate agent profile from accumulated knowledge
     ├─ 5. Language Habit Learn   Discover user's vocabulary, style traits, emotion patterns
-    └─ 6. L5 Crystallization     Extract reusable procedures from action chain patterns
+    ├─ 6. L5 Crystallization     Extract reusable procedures from action chain patterns
+    └─ 7. L6 Pathway Decay       Apply time-decay to procedural pathway weights and prune stale habits
 ```
 
 Emotional salience modulates memory persistence: high-arousal, high-valence memories decay slower than neutral ones — the same mechanism that makes emotional experiences more memorable in humans.
@@ -145,15 +162,15 @@ Dream requires an OpenAI-compatible LLM endpoint for the distillation stages. Wi
 
 ## Search
 
-MemHop uses **triple-retrieval fusion** to find relevant memories from multiple angles:
+MemHop uses **two-channel retrieval fusion** (BM25 + vector) and then optionally applies a cross-encoder reranker to surface the most relevant memories:
 
 | Channel | Weight | Method |
 |---------|--------|--------|
-| BM25 | 0.50 | Keyword matching via inverted index with CJK tokenization |
-| Vector | 0.35 | Semantic similarity with f16 half-precision SIMD (AVX2 / NEON) |
-| Entity | 0.15 | Fuzzy entity matching via BK-Tree with n-gram Jaccard scoring |
+| BM25 | 0.45 | Keyword matching via inverted index with CJK tokenization |
+| Vector | 0.55 | Semantic similarity with f16 half-precision SIMD (AVX2 / NEON) |
+| Reranker | — | Optional cross-encoder rerank over the fused candidate set (`enable_reranker: true` by default) |
 
-Search routes through four paths depending on the query parameters — `auto_create` for new conversation tracking, `context_id` for targeted recall within a topic, `l3_id` for knowledge graph exploration, and the default full triple-retrieval for general memory search. This design ensures searches are fast and precise without scanning the entire database in normal workflows.
+Search routes through four paths depending on the query parameters — `auto_create` for new conversation tracking, `context_id` for targeted recall within a topic, `l3_id` for knowledge graph exploration, and the default full two-channel retrieval for general memory search. This design ensures searches are fast and precise without scanning the entire database in normal workflows.
 
 ## .meh File Format
 

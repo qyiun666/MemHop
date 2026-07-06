@@ -75,7 +75,7 @@ pub fn wait_for_meowvec_ready(port: u16) -> Result<(), Box<dyn std::error::Error
     let deadline = Instant::now() + Duration::from_secs(30);
 
     while Instant::now() < deadline {
-        match memhop::encoder::GrpcEncoder::new(&addr, 384) {
+        match memhop::encoder::GrpcEncoder::new(&addr, 768) {
             Ok(_) => return Ok(()),
             Err(_) => thread::sleep(Duration::from_millis(100)),
         }

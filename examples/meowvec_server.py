@@ -17,6 +17,7 @@ import time
 from concurrent import futures
 
 import grpc
+import numpy as np
 from sentence_transformers import SentenceTransformer
 
 # Import generated protobuf stubs
@@ -34,8 +35,8 @@ logger = logging.getLogger('meowvec_server')
 
 # Default configuration
 DEFAULT_PORT = 27110
-DEFAULT_MODEL_PATH = 'models/multilingual-e5-small/'
-DEFAULT_DIMENSION = 384
+DEFAULT_MODEL_PATH = 'models/gte-multilingual-base/'
+DEFAULT_DIMENSION = 768
 
 
 class VectorModelServicer(vector_model_pb2_grpc.VectorModelServiceServicer):
@@ -53,8 +54,8 @@ class VectorModelServicer(vector_model_pb2_grpc.VectorModelServiceServicer):
         start_time = time.time()
         
         try:
-            self.model = SentenceTransformer(self.model_path)
-            
+            self.model = SentenceTransformer(self.model_path, trust_remote_code=True)
+
             # Verify dimension matches
             test_embedding = self.model.encode(["test"], normalize_embeddings=True)
             actual_dim = test_embedding.shape[1]
@@ -139,6 +140,44 @@ class VectorModelServicer(vector_model_pb2_grpc.VectorModelServiceServicer):
             context.set_code(grpc.StatusCode.INTERNAL)
             context.set_details(f"Batch encoding failed: {str(e)}")
             return vector_model_pb2.BatchEncodeResponse()
+
+    def Rerank(self, request, context):
+        """Score query-document pairs using the same embedding model.
+
+        This is a local-test fallback: it encodes the query and each document
+        with the loaded sentence-transformers model and returns cosine
+        similarities. It exercises the real gRPC rerank path without requiring
+        a separate cross-encoder model.
+        """
+        try:
+            query = request.query
+            documents = list(request.documents)
+            if not documents:
+                return vector_model_pb2.RerankResponse(scores=[])
+
+            texts = [query] + documents
+            embeddings = self.model.encode(
+                texts,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                batch_size=min(len(texts), 32),
+            )
+            query_vec = embeddings[0]
+            doc_vecs = embeddings[1:]
+
+            scores = [
+                float(np.dot(query_vec, doc_vec))
+                for doc_vec in doc_vecs
+            ]
+
+            logger.debug(f"Reranked {len(documents)} documents against query")
+            return vector_model_pb2.RerankResponse(scores=scores)
+
+        except Exception as e:
+            logger.error(f"Rerank failed: {e}")
+            context.set_code(grpc.StatusCode.INTERNAL)
+            context.set_details(f"Rerank failed: {str(e)}")
+            return vector_model_pb2.RerankResponse()
 
     def HealthCheck(self, request, context):
         """Perform health check and return service status."""

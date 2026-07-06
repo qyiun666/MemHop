@@ -25,11 +25,14 @@ impl JournalEntry {
         }
     }
 
-    pub fn add_page(&mut self, page_id: u32, data: Vec<u8>) {
+    pub fn add_page(&mut self, page_id: u32, data: Vec<u8>) -> Result<()> {
         if data.len() != PAGE_SIZE {
-            panic!("Page data must be exactly {} bytes", PAGE_SIZE);
+            return Err(MemHopError::Serialization(
+                "Journal page data must be exactly 4096 bytes".to_string(),
+            ));
         }
         self.pages.push((page_id, data));
+        Ok(())
     }
 }
 
@@ -137,6 +140,18 @@ pub fn append_journal(file: &mut File, entry: &JournalEntry) -> Result<()> {
     Ok(())
 }
 
+/// Serialize and append multiple journal entries to the file tail.
+/// Returns the byte offset where the journal starts (file length before writing).
+pub fn write_journal_to_file(file: &mut File, entries: &[JournalEntry]) -> Result<u64> {
+    let start_offset = file.seek(SeekFrom::End(0))?;
+    for entry in entries {
+        let serialized = serialize_entry(entry);
+        file.write_all(&serialized)?;
+    }
+    file.flush()?;
+    Ok(start_offset)
+}
+
 pub fn replay_journal(mmap: &Mmap, header: &FileHeader) -> Result<Vec<JournalEntry>> {
     let mut entries = Vec::new();
 
@@ -193,6 +208,27 @@ pub fn truncate_journal(file: &mut File, new_len: u64) -> Result<()> {
     Ok(())
 }
 
+/// Replay journal entries directly onto an mmap.
+///
+/// This is the low-level counterpart to `replay_journal` (which reads from the
+/// file tail based on the header). It restores each recorded page to its
+/// pre-transaction state and is used for transaction rollback.
+pub fn replay_journal_to_mmap(mmap: &mut memmap2::MmapMut, entries: &[JournalEntry]) -> Result<()> {
+    for entry in entries {
+        for &(page_id, ref data) in &entry.pages {
+            let offset = (page_id as usize) * PAGE_SIZE;
+            if offset + PAGE_SIZE > mmap.len() {
+                return Err(MemHopError::Serialization(format!(
+                    "Journal replay page {} out of bounds",
+                    page_id
+                )));
+            }
+            mmap[offset..offset + PAGE_SIZE].copy_from_slice(data);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,8 +242,8 @@ mod tests {
         let page1_data = vec![1u8; PAGE_SIZE];
         let page2_data = vec![2u8; PAGE_SIZE];
 
-        entry.add_page(1, page1_data.clone());
-        entry.add_page(2, page2_data.clone());
+        entry.add_page(1, page1_data.clone()).unwrap();
+        entry.add_page(2, page2_data.clone()).unwrap();
 
         let serialized = serialize_entry(&entry);
 
@@ -236,7 +272,7 @@ mod tests {
     fn test_journal_entry_crc_validation() {
         let mut entry = JournalEntry::new(42);
         let page_data = vec![0xAB; PAGE_SIZE];
-        entry.add_page(5, page_data);
+        entry.add_page(5, page_data).unwrap();
 
         let mut serialized = serialize_entry(&entry);
 
@@ -259,11 +295,11 @@ mod tests {
             .unwrap();
 
         let mut entry1 = JournalEntry::new(1);
-        entry1.add_page(10, vec![10u8; PAGE_SIZE]);
+        entry1.add_page(10, vec![10u8; PAGE_SIZE]).unwrap();
 
         let mut entry2 = JournalEntry::new(2);
-        entry2.add_page(11, vec![11u8; PAGE_SIZE]);
-        entry2.add_page(12, vec![12u8; PAGE_SIZE]);
+        entry2.add_page(11, vec![11u8; PAGE_SIZE]).unwrap();
+        entry2.add_page(12, vec![12u8; PAGE_SIZE]).unwrap();
 
         append_journal(&mut file, &entry1).unwrap();
         append_journal(&mut file, &entry2).unwrap();

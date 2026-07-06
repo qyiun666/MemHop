@@ -8,6 +8,7 @@ pub(crate) mod habit_distill_stage;
 pub(crate) mod l0_form_stage;
 pub(crate) mod l1_decay;
 pub(crate) mod l3_distill_stage;
+pub(crate) mod l6_decay;
 pub mod llm;
 #[cfg(feature = "llm")]
 pub mod openai_compatible;
@@ -18,9 +19,12 @@ use crate::dream::llm::LlmProvider;
 use crate::dream::prune::DreamReport;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
+use crate::index::l2_meta::{ActivationStatus, L2MetaIndex};
 use crate::index::sparse::SparseIndex;
+use crate::layers::context::{ActivationState, ContextSlot};
 use crate::query::diagnostics::{StageReport, StageStatus};
-use crate::shared::common::format_hash;
+use crate::shared::common::{format_hash, now_ms};
+use crate::util::{PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
@@ -92,6 +96,7 @@ where
 /// 3. L0 Update: regenerate L0 profile from L1 knowledge distribution
 /// 4. L3 Distillation: extract structured knowledge into L3 hypergraph via LLM
 /// 5. L5 Crystallization: scan all ActionChainSlots and extract crystals
+/// 6. L6 Decay: time-decay procedural pathway weights
 ///
 /// # Transaction Safety
 /// The pipeline takes in-memory snapshots of btree and sparse_index before
@@ -106,7 +111,10 @@ where
 /// * `btree` - B-tree index for topic lookup
 /// * `sparse_index` - Sparse index for keyword lookup
 /// * `llm` - LLM provider for summarization and crystal generation
-/// * `session_topic_ids` - Set of active topic IDs from current session
+/// * `l2_ids` - Optional list of L2 context id_hashes to process; `None` processes all L2s
+/// * `file` - Backing file handle for mmap lifecycle and extension
+/// * `decay_config` - Time-decay parameters for L1/L6 stages
+/// * `l2_meta` - In-memory L2 metadata index; pending activation_score deltas are flushed to mmap
 ///
 /// # Returns
 /// DreamReport containing statistics about all operations performed
@@ -117,9 +125,10 @@ pub fn dream_pipeline(
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
-    session_topic_ids: HashSet<u64>,
+    l2_ids: Option<Vec<u64>>,
     file: &mut File,
     decay_config: &DecayConfig,
+    l2_meta: &L2MetaIndex,
 ) -> Result<DreamReport, MemHopError> {
     let start_time = std::time::Instant::now();
 
@@ -138,13 +147,27 @@ pub fn dream_pipeline(
         new_l3_nodes: Vec::new(),
         new_crystals: Vec::new(),
         pruned_crystals: Vec::new(),
+        l6_decayed: 0,
+        l6_pruned: 0,
         stages: Vec::new(),
         duration_ms: 0,
         rollback_incomplete: false,
     };
 
+    // Flush any in-memory L2 metadata deltas back to mmap before the pipeline
+    // modifies L2 slots directly.
+    flush_l2_meta_to_mmap(mmap, btree, l2_meta)?;
+
+    // Resolve target L2 ids: None or empty means process every existing L2 context.
+    let target_l2_ids = match l2_ids {
+        Some(ids) if !ids.is_empty() => ids.into_iter().collect::<HashSet<u64>>(),
+        _ => collect_all_l2_ids(&mmap[..], btree, header.page_count),
+    };
+
     let btree_snapshot = btree.clone();
     let sparse_snapshot = sparse_index.clone();
+
+    // TODO: evaluate COW snapshot to reduce btree/sparse_index clone cost.
 
     // Helper to record stage results (failure doesn't block subsequent stages)
     let mut stages = Vec::new();
@@ -161,7 +184,7 @@ pub fn dream_pipeline(
                 btree,
                 sparse_index,
                 llm,
-                &session_topic_ids,
+                &target_l2_ids,
                 file,
             )?;
             let count = nodes.len();
@@ -188,7 +211,7 @@ pub fn dream_pipeline(
                     btree,
                     sparse_index,
                     llm,
-                    &session_topic_ids,
+                    &target_l2_ids,
                     file,
                 )?;
             let count = demoted_sec.len() + compressed.len() + removed.len() + demoted_ter.len();
@@ -229,7 +252,7 @@ pub fn dream_pipeline(
                 header,
                 btree,
                 sparse_index,
-                &session_topic_ids,
+                &target_l2_ids,
                 decay_config,
             )?;
             let count = l1_updated.len();
@@ -291,7 +314,7 @@ pub fn dream_pipeline(
         "L0 profile generation failed",
         |report, btree, sparse_index| {
             l0_form_stage::generate_profile(mmap, header, btree, sparse_index, file)?;
-            if !session_topic_ids.is_empty() {
+            if !target_l2_ids.is_empty() {
                 let profile_id_hash = crate::util::hash_id("profile");
                 let profile_id = format_hash(profile_id_hash);
                 report.l0_updated = Some((
@@ -371,6 +394,31 @@ pub fn dream_pipeline(
     )?;
 
     run_stage(
+        "l6_decay",
+        "L6 pathway decay failed",
+        |report, btree, _sparse_index| {
+            let l6_report = l6_decay::decay_l6_pathways(mmap, header, btree, decay_config, file)?;
+            report.l6_decayed = l6_report.decayed;
+            report.l6_pruned = l6_report.pruned;
+            let count = l6_report.decayed + l6_report.pruned;
+            Ok((
+                format!(
+                    "L6 pathway decay: {} decayed, {} pruned",
+                    l6_report.decayed, l6_report.pruned
+                ),
+                count,
+            ))
+        },
+        &mut report,
+        btree,
+        sparse_index,
+        &mut stages,
+        false,
+        |_, _, _| {},
+        start_time,
+    )?;
+
+    run_stage(
         "crystal_prune",
         "Crystal pruning failed",
         |report, btree, _sparse_index| {
@@ -414,7 +462,7 @@ fn rebuild_l1_from_l2(
     let page_count = header.page_count;
 
     let mut stale_nodes: Vec<(u64, u32)> = Vec::new(); // (id_hash, page_id)
-    let entries: Vec<(u64, u64)> = btree.iter().map(|(k, v)| (*k, *v)).collect();
+    let entries: Vec<(u64, u64)> = btree.iter_unsorted().map(|(k, v)| (*k, *v)).collect();
 
     for (id_hash, page_ref) in &entries {
         let page_id = (page_ref >> 16) as u32;
@@ -474,6 +522,77 @@ fn rebuild_l1_from_l2(
     Ok(updated_ids)
 }
 
+/// Flush pending in-memory L2 metadata deltas back to the mmap-backed ContextSlots.
+///
+/// Since `L2MetaIndex` does not track per-field deltas, this iterates all indexed
+/// entries and synchronizes `activation_score` (and derived `activation_state`)
+/// whenever it differs from the on-disk value.
+fn flush_l2_meta_to_mmap(
+    mmap: &mut MmapMut,
+    _btree: &BTreeIndex,
+    l2_meta: &L2MetaIndex,
+) -> Result<(), MemHopError> {
+    for (_id_hash, meta) in l2_meta.iter() {
+        let page_ref = meta.page_ref;
+        let page_id = crate::shared::slot_io::decode_page_id(page_ref);
+        let offset = crate::shared::slot_io::page_offset(page_id);
+        if offset + PAGE_SIZE > mmap.len() {
+            continue;
+        }
+        let Some(slot_data) = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) else {
+            continue;
+        };
+        let Ok(mut ctx) = ContextSlot::deserialize_slot(slot_data) else {
+            continue;
+        };
+
+        let mut changed = false;
+        if (ctx.activation_score - meta.activation_score).abs() > f32::EPSILON {
+            ctx.activation_score = meta.activation_score;
+            changed = true;
+        }
+        let expected_state = match meta.status {
+            ActivationStatus::Dormant => ActivationState::Dormant,
+            ActivationStatus::Active => ActivationState::Active,
+            ActivationStatus::Crystallized => ActivationState::Crystallized,
+        };
+        if ctx.activation_state != expected_state {
+            ctx.activation_state = expected_state;
+            changed = true;
+        }
+
+        if changed {
+            ctx.updated_at = now_ms();
+            ctx.version += 1;
+            let data = ctx
+                .serialize()
+                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+            crate::file::page::write_page_data(mmap, page_id, &data)?;
+        }
+    }
+    Ok(())
+}
+
+/// Collect all L2 context id_hashes currently present in the B-tree.
+fn collect_all_l2_ids(mmap: &[u8], btree: &BTreeIndex, page_count: u32) -> HashSet<u64> {
+    let mut ids = HashSet::new();
+    for (&id_hash, &page_ref) in btree.iter_unsorted() {
+        let page_id = crate::shared::slot_io::decode_page_id(page_ref);
+        if page_id == 0 || page_id >= page_count {
+            continue;
+        }
+        let pt_offset = (page_id as usize) * PAGE_SIZE + 4;
+        if pt_offset + 2 > mmap.len() {
+            continue;
+        }
+        let pt = u16::from_le_bytes([mmap[pt_offset], mmap[pt_offset + 1]]);
+        if pt == PageType::Context as u16 {
+            ids.insert(id_hash);
+        }
+    }
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,6 +602,7 @@ mod tests {
     use crate::index::sparse::SparseIndex;
     use crate::layers::context_node::ContextNode;
     use crate::layers::hyperedge::{HyperedgeKind, HyperedgeSlot};
+    use crate::test_helpers::create_test_mmap;
     use crate::util::{PageType, PAGE_SIZE, SENTINEL_PAGE_ID};
     use memmap2::MmapMut;
     use std::fs::File;
@@ -496,6 +616,8 @@ mod tests {
             node_prune_edges_threshold: 0.15,
             edge_remove_threshold: 0.05,
             min_edge_nodes: 2,
+            lambda_pathway: 0.01,
+            pathway_remove_threshold: 0.05,
         }
     }
 
@@ -764,5 +886,206 @@ mod tests {
         // Surviving node no longer references the removed edge.
         let node2 = read_context_node(&mmap, node2_page);
         assert!(node2.edge_ptrs.is_empty());
+    }
+
+    #[test]
+    fn test_flush_l2_meta_to_mmap_syncs_activation_score() {
+        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(32);
+        let ctx = ContextSlot {
+            id_hash: 101,
+            parent_id: None,
+            depth: 1,
+            title: "test context".to_string(),
+            summary: None,
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 0,
+            created_at: 0,
+            updated_at: 0,
+            version: 2,
+            importance: 0.5,
+            activation_score: 0.5,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (0, 0),
+            llm_params: crate::layers::context::LlmParams::default(),
+        };
+        crate::test_helpers::insert_test_context(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut SparseIndex::new(),
+            ctx,
+            &mut file,
+        );
+
+        let mut l2_meta = L2MetaIndex::build(&mmap, &btree);
+        l2_meta.get_mut(101).unwrap().activation_score = 0.95;
+
+        flush_l2_meta_to_mmap(&mut mmap, &btree, &l2_meta).unwrap();
+
+        // Verify mmap was updated.
+        let page_ref = btree.search(101).unwrap();
+        let slot_data = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref).unwrap();
+        let updated = ContextSlot::deserialize_slot(slot_data).unwrap();
+        assert!((updated.activation_score - 0.95).abs() < f32::EPSILON);
+        assert_eq!(updated.activation_state, ActivationState::Dormant);
+        assert_eq!(updated.version, 3);
+
+        // Verify rebuilt index reflects the flushed value.
+        let rebuilt = L2MetaIndex::build(&mmap, &btree);
+        assert!((rebuilt.get(101).unwrap().activation_score - 0.95).abs() < f32::EPSILON);
+
+        let _ = file;
+    }
+
+    #[cfg(feature = "llm")]
+    mod pipeline_tests {
+        use super::*;
+        use crate::config::LlmConfig;
+        use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
+        use crate::layers::context::{ActivationState, ContextSlot, LlmParams};
+        use crate::layers::pathway::PathwayWeightSlot;
+        use crate::test_helpers::{create_test_mmap, insert_test_context};
+
+        fn make_llm() -> OpenAICompatibleLlmProvider {
+            OpenAICompatibleLlmProvider::new(LlmConfig {
+                api_url: "https://api.example.com/v1/chat/completions".to_string(),
+                api_key: "test-key".to_string(),
+                model: "test-model".to_string(),
+                ..Default::default()
+            })
+        }
+
+        fn make_active_context(id_hash: u64, title: &str) -> ContextSlot {
+            ContextSlot {
+                id_hash,
+                parent_id: None,
+                depth: 1,
+                title: title.to_string(),
+                summary: Some(format!("summary of {}", title)),
+                archive_refs: vec![],
+                l3_refs: vec![],
+                turn_count: 3,
+                created_at: 0,
+                updated_at: 0,
+                version: 2,
+                importance: 0.8,
+                activation_score: 0.9,
+                is_active: true,
+                activation_state: ActivationState::Active,
+                centroid_page_ref: 0,
+                dialogue_range: (0, 0),
+                llm_params: LlmParams::default(),
+            }
+        }
+
+        #[test]
+        fn test_dream_with_l2_ids() {
+            let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+            let mut sparse = SparseIndex::new();
+            let l2_meta = L2MetaIndex::new();
+
+            insert_test_context(
+                &mut mmap,
+                &mut header,
+                &mut btree,
+                &mut sparse,
+                make_active_context(101, "topic one"),
+                &mut file,
+            );
+            insert_test_context(
+                &mut mmap,
+                &mut header,
+                &mut btree,
+                &mut sparse,
+                make_active_context(102, "topic two"),
+                &mut file,
+            );
+
+            let llm = make_llm();
+            let report = dream_pipeline(
+                &mut mmap,
+                &mut header,
+                &mut btree,
+                &mut sparse,
+                &llm,
+                Some(vec![101]),
+                &mut file,
+                &default_decay_config(),
+                &l2_meta,
+            )
+            .unwrap();
+
+            let demoted_ids: Vec<u64> = report
+                .demoted_to_secondary
+                .iter()
+                .map(|d| u64::from_str_radix(&d.context_id, 16).unwrap())
+                .collect();
+            assert!(demoted_ids.contains(&101));
+            assert!(!demoted_ids.contains(&102));
+
+            let ctx_101 = read_context_slot(&mmap, &btree, 101);
+            let ctx_102 = read_context_slot(&mmap, &btree, 102);
+            assert_eq!(ctx_101.depth, 2);
+            assert_eq!(ctx_102.depth, 1);
+
+            let _ = file;
+        }
+
+        #[test]
+        fn test_dream_l6_decay() {
+            let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+            let mut sparse = SparseIndex::new();
+            let l2_meta = L2MetaIndex::new();
+
+            let old = (now_ms() - 100_000) as u64; // ~1.7 minutes ago
+            let pathway = PathwayWeightSlot {
+                id_hash: 6001,
+                source_node: "condition:deploy".into(),
+                target_node: "action:restart".into(),
+                weight: 1.0,
+                trigger_count: 1,
+                success_rate: 0.9,
+                last_accessed: old,
+                metadata: "{}".into(),
+                created_at: old as i64,
+                updated_at: old as i64,
+                version: 1,
+            };
+            crate::query::l6_ops::add_l6(&mut mmap, &mut header, &btree, &mut file, pathway)
+                .unwrap();
+
+            let llm = make_llm();
+            let report = dream_pipeline(
+                &mut mmap,
+                &mut header,
+                &mut btree,
+                &mut sparse,
+                &llm,
+                None,
+                &mut file,
+                &default_decay_config(),
+                &l2_meta,
+            )
+            .unwrap();
+
+            assert!(report.l6_decayed >= 1, "expected at least one L6 decay");
+            assert_eq!(report.l6_pruned, 0);
+
+            let list = crate::query::l6_ops::list_l6(&mmap, &header, &btree, None).unwrap();
+            assert_eq!(list.len(), 1);
+            assert!(list[0].weight < 1.0);
+            assert!(list[0].weight > 0.05);
+
+            let _ = file;
+        }
+
+        fn read_context_slot(mmap: &MmapMut, btree: &BTreeIndex, id_hash: u64) -> ContextSlot {
+            let page_ref = btree.search(id_hash).unwrap();
+            let slot_data = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref).unwrap();
+            ContextSlot::deserialize_slot(slot_data).unwrap()
+        }
     }
 }

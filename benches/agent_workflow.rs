@@ -44,16 +44,19 @@ fn db() -> &'static Mutex<MemHop> {
             session_config: None,
             auto_dream_archive_threshold: None,
             auto_dream_summary_bytes: None,
+            auto_checkpoint_interval: None,
+            adjacency_cache_max_entries: 128,
         };
         let mut db = MemHop::open(config).expect("MemHop::open failed");
 
         // Pre-populate: create 10 topics
         for i in 0..10 {
-            let _ = db.search_memory(SearchQuery {
+            let _ = db.search_context(SearchQuery {
                 dialogue: format!(
                     "Topic {} about machine learning neural networks deep learning",
                     i
                 ),
+                l2_id: None,
                 context_id: None,
                 l3_id: None,
                 context_limit: 10,
@@ -97,8 +100,9 @@ fn bench_search_recall(c: &mut Criterion) {
         b.iter(|| {
             let mut db = db().lock().unwrap();
             let res = db
-                .search_memory(SearchQuery {
+                .search_context(SearchQuery {
                     dialogue: "neural network deep learning architecture".to_string(),
+                    l2_id: None,
                     context_id: None,
                     l3_id: None,
                     context_limit: 5,
@@ -121,13 +125,13 @@ fn bench_update_memory(_c: &mut Criterion) {
 
     // Get first topic from the pre-populated database
     let res = db
-        .list_topics(TopicListQuery {
+        .list_l2(TopicListQuery {
             page: 1,
             page_size: 1,
             active_only: false,
             keyword: None,
         })
-        .expect("list topics failed");
+        .expect("list_l2 failed");
     let topic_id = res.items[0].id.clone();
 
     // Measure a single update call (each update allocates a page, so we
@@ -155,13 +159,13 @@ fn bench_query_l2_list(c: &mut Criterion) {
         b.iter(|| {
             let db = db().lock().unwrap();
             let res = db
-                .list_topics(TopicListQuery {
+                .list_l2(TopicListQuery {
                     page: 1,
                     page_size: 10,
                     active_only: false,
                     keyword: None,
                 })
-                .expect("list topics failed");
+                .expect("list_l2 failed");
             black_box(res.total)
         })
     });
@@ -171,13 +175,13 @@ fn bench_session_activate(c: &mut Criterion) {
     let mut db = db().lock().unwrap();
 
     let res = db
-        .list_topics(TopicListQuery {
+        .list_l2(TopicListQuery {
             page: 1,
             page_size: 1,
             active_only: false,
             keyword: None,
         })
-        .expect("list topics failed");
+        .expect("list_l2 failed");
     let topic_id = res.items[0].id.clone();
 
     c.bench_function("session_activate", |b| {

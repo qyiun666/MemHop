@@ -133,7 +133,7 @@ impl HypergraphSource {
 // HypergraphSlot — container metadata
 // ============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HypergraphSlot {
     pub id_hash: u64,
     pub name: String,
@@ -174,6 +174,13 @@ impl HypergraphSlot {
         let name = read_string(&mut c)?;
         let source_kind = SourceKind::from_u8(read_u8(&mut c)?);
         let source_data_len = read_u16(&mut c)? as usize;
+        let remaining = data.len() - c.position() as usize;
+        if source_data_len > remaining {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "HypergraphSlot source data length exceeds data",
+            ));
+        }
         let mut source_data = vec![0u8; source_data_len];
         std::io::Read::read_exact(&mut c, &mut source_data)?;
         let source = HypergraphSource::from_data(source_kind, &source_data)?;
@@ -368,6 +375,14 @@ impl HypergraphEdge {
         let node_count = read_u16(&mut c)? as usize;
         let weight = read_f32(&mut c)?;
         let created_at = read_i64(&mut c)?;
+        const EDGE_FIXED: usize = 31;
+        let variable_len = node_count * 8;
+        if EDGE_FIXED + variable_len > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "HypergraphEdge node_ids length exceeds data",
+            ));
+        }
         let mut node_ids = Vec::with_capacity(node_count);
         for _ in 0..node_count {
             node_ids.push(read_u64(&mut c)?);

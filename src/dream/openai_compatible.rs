@@ -13,13 +13,14 @@ use crate::MemHopError;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
-const SYSTEM_SUMMARIZE: &str = "你是 MemHop 记忆压缩专家，擅长从对话场景中提取核心信息。请将输入的记忆片段压缩为结构化摘要。{memory_context}";
-const SYSTEM_DISTILL: &str = "你是 MemHop 知识蒸馏引擎，擅长从摘要中提取结构化知识图谱。请分析输入文本，提取核心概念和概念之间的关系。{memory_context}";
-const SYSTEM_CRYSTAL: &str = "你是 MemHop 技能结晶系统，擅长从动作模式中提取可复用技能。请分析输入的行为模式，生成结构化的技能定义。{memory_context}";
+const SYSTEM_SUMMARIZE: &str =
+    "你是 MemHop 记忆压缩专家，擅长从对话场景中提取核心信息。请将输入的记忆片段压缩为结构化摘要。";
+const SYSTEM_DISTILL: &str = "你是 MemHop 知识蒸馏引擎，擅长从摘要中提取结构化知识图谱。请分析输入文本，提取核心概念和概念之间的关系。";
+const SYSTEM_CRYSTAL: &str = "你是 MemHop 技能结晶系统，擅长从动作模式中提取可复用技能。请分析输入的行为模式，生成结构化的技能定义。";
 const SYSTEM_HABITS: &str =
-    "你是用户语言习惯分析专家，擅长从对话记录中识别用户的独特语言模式和沟通风格。{memory_context}";
+    "你是用户语言习惯分析专家，擅长从对话记录中识别用户的独特语言模式和沟通风格。";
 const SYSTEM_PATTERNS: &str =
-    "你是 MemHop 行为模式分析专家，擅长从历史记忆中识别重复出现的行为规律。{memory_context}";
+    "你是 MemHop 行为模式分析专家，擅长从历史记忆中识别重复出现的行为规律。";
 const JSON_RETRY_MESSAGE: &str = "请返回纯JSON格式，不要包含markdown代码块标记或任何额外文字。";
 
 /// OpenAI-compatible LLM provider
@@ -40,14 +41,6 @@ impl OpenAICompatibleLlmProvider {
             config,
             client: reqwest::blocking::Client::new(),
         }
-    }
-
-    /// Return an optional memory context snippet to inject into prompts.
-    ///
-    /// Currently returns an empty string; this placeholder can later be wired
-    /// to L0 profile fragments.
-    fn memory_context(&self) -> String {
-        String::new()
     }
 
     /// Call the OpenAI-compatible API with a complete message list
@@ -85,10 +78,10 @@ impl OpenAICompatibleLlmProvider {
             .json(&body)
             .timeout(std::time::Duration::from_secs(self.config.timeout_secs))
             .send()
-            .map_err(|e| MemHopError::Serialization(format!("API call failed: {}", e)))?;
+            .map_err(|e| MemHopError::EncoderError(format!("API call failed: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(MemHopError::Serialization(format!(
+            return Err(MemHopError::EncoderError(format!(
                 "API request failed: {} - {}",
                 response.status(),
                 response.text().unwrap_or_default()
@@ -117,10 +110,6 @@ impl OpenAICompatibleLlmProvider {
     where
         F: Fn(&str) -> Result<T, MemHopError>,
     {
-        let memory_context = self.memory_context();
-        let system = system.replace("{memory_context}", &memory_context);
-        let user_prompt = user_prompt.replace("{memory_context}", &memory_context);
-
         let mut messages = vec![
             json!({"role": "system", "content": system}),
             json!({"role": "user", "content": user_prompt}),
@@ -250,7 +239,10 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
                 Ok(summary)
             },
         )
-        .or_else(|_| Ok(self.fallback_summarize(texts)))
+        .or_else(|e| {
+            tracing::warn!("LLM summarize failed, using fallback: {}", e);
+            Ok(self.fallback_summarize(texts))
+        })
     }
 
     fn extract_patterns(&self, memories: &[MemorySummary]) -> Result<Vec<Pattern>, MemHopError> {
@@ -313,7 +305,10 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
                     .collect())
             },
         )
-        .or_else(|_| Ok(self.fallback_extract_patterns(memories)))
+        .or_else(|e| {
+            tracing::warn!("LLM extract_patterns failed, using fallback: {}", e);
+            Ok(self.fallback_extract_patterns(memories))
+        })
     }
 
     fn generate_crystal(&self, pattern: &Pattern) -> Result<CrystalDef, MemHopError> {
@@ -399,7 +394,10 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
                 })
             },
         )
-        .or_else(|_| Ok(self.fallback_generate_crystal(pattern)))
+        .or_else(|e| {
+            tracing::warn!("LLM generate_crystal failed, using fallback: {}", e);
+            Ok(self.fallback_generate_crystal(pattern))
+        })
     }
 
     fn fallback_summarize(&self, texts: &[String]) -> String {
@@ -570,7 +568,10 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
                 })
             },
         )
-        .or_else(|_| Ok(self.fallback_analyze_user_habits(dialogues)))
+        .or_else(|e| {
+            tracing::warn!("LLM analyze_user_habits failed, using fallback: {}", e);
+            Ok(self.fallback_analyze_user_habits(dialogues))
+        })
     }
 
     fn fallback_analyze_user_habits(&self, dialogues: &[String]) -> HabitAnalysis {
@@ -639,7 +640,10 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
                 Ok(result)
             },
         )
-        .or_else(|_| Ok(self.fallback_distill_concepts(summary)))
+        .or_else(|e| {
+            tracing::warn!("LLM distill_concepts failed, using fallback: {}", e);
+            Ok(self.fallback_distill_concepts(summary))
+        })
     }
 
     fn fallback_distill_concepts(&self, _summary: &str) -> LlmDistillResult {

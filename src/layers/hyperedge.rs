@@ -4,7 +4,8 @@
 // L1 HyperedgeSlot — edges in the hypergraph skeleton.
 // No metadata payload; the `kind` enum carries semantic meaning.
 
-use std::io::{self, Cursor, Read, Write};
+use crate::util::io_helpers::*;
+use std::io::{self, Cursor, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -75,6 +76,13 @@ impl HyperedgeSlot {
     }
 
     pub fn deserialize(data: &[u8]) -> io::Result<Self> {
+        const FIXED_SIZE: usize = 102;
+        if data.len() < FIXED_SIZE {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "HyperedgeSlot data too short",
+            ));
+        }
         let mut cursor = Cursor::new(data);
         let id_hash = read_u64(&mut cursor)?;
         let kind = HyperedgeKind::from_u8(read_u8(&mut cursor)?);
@@ -100,36 +108,6 @@ impl HyperedgeSlot {
             overflow_page,
         })
     }
-}
-
-// ---------------------------------------------------------------------------
-// Inline read helpers
-// ---------------------------------------------------------------------------
-
-fn read_u64(c: &mut Cursor<&[u8]>) -> io::Result<u64> {
-    let mut b = [0u8; 8];
-    c.read_exact(&mut b)?;
-    Ok(u64::from_le_bytes(b))
-}
-fn read_i64(c: &mut Cursor<&[u8]>) -> io::Result<i64> {
-    let mut b = [0u8; 8];
-    c.read_exact(&mut b)?;
-    Ok(i64::from_le_bytes(b))
-}
-fn read_u32(c: &mut Cursor<&[u8]>) -> io::Result<u32> {
-    let mut b = [0u8; 4];
-    c.read_exact(&mut b)?;
-    Ok(u32::from_le_bytes(b))
-}
-fn read_u8(c: &mut Cursor<&[u8]>) -> io::Result<u8> {
-    let mut b = [0u8; 1];
-    c.read_exact(&mut b)?;
-    Ok(b[0])
-}
-fn read_f32(c: &mut Cursor<&[u8]>) -> io::Result<f32> {
-    let mut b = [0u8; 4];
-    c.read_exact(&mut b)?;
-    Ok(f32::from_le_bytes(b))
 }
 
 #[cfg(test)]

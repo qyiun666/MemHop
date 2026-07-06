@@ -3,29 +3,60 @@
 
 //! Dream consolidation API operations.
 
-use crate::config::LlmConfig;
+#[cfg(feature = "llm")]
+use crate::config::DecayConfig;
 use crate::dream::prune::DreamReport;
 #[cfg(feature = "llm")]
+use crate::index::l2_meta::L2MetaIndex;
+#[cfg(any(feature = "llm", feature = "grpc-encoder"))]
 use crate::query::search::L1ReverseIndex;
 use crate::MemHop;
 use crate::MemHopError;
 use crate::Result;
-#[cfg(feature = "llm")]
-use std::collections::HashSet;
 
 impl MemHop {
-    /// Lightweight dream: consolidate a single evicted topic.
+    /// API-11: Run dream consolidation pipeline.
     ///
-    /// Runs L3 distillation + L2 compression + L1 rebuild for the given topic only.
-    /// Skips global stages (L1 decay, L0 profile, habit distillation, L5 crystallization)
-    /// to keep latency low. Uses `self.config.llm` for LLM configuration.
-    pub(crate) fn dream_single_topic(&mut self, topic_id: u64) -> Result<DreamReport> {
+    /// Executes the full memory consolidation pipeline on the requested L2 contexts:
+    /// L3 distillation, L2 compression, L1 rebuild/decay, L0 profile regeneration,
+    /// habit distillation, L5 crystallization, L6 pathway decay, and crystal pruning.
+    ///
+    /// # Arguments
+    /// * `l2_ids` - Optional list of L2 context IDs (16-character hex strings). `None` or
+    ///   an empty vector runs the pipeline on all existing L2 contexts.
+    ///
+    /// # Errors
+    /// Returns `MemHopError::InvalidQuery` if any provided ID is not a valid hex u64.
+    pub fn dream(&mut self, l2_ids: Option<Vec<String>>) -> Result<DreamReport> {
         #[cfg(feature = "llm")]
         {
             use crate::dream::dream_pipeline;
             use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
+
+            // Empty vec is treated as full run.
+            let l2_ids = match l2_ids {
+                Some(ids) if ids.is_empty() => None,
+                other => other,
+            };
+
+            // Validate and parse hex IDs.
+            let parsed_ids: Option<Vec<u64>> = match l2_ids {
+                None => None,
+                Some(ids) => {
+                    let mut parsed = Vec::with_capacity(ids.len());
+                    for id in ids {
+                        let hash = u64::from_str_radix(&id, 16).map_err(|_| {
+                            MemHopError::InvalidQuery(format!("Invalid L2 id: {}", id))
+                        })?;
+                        parsed.push(hash);
+                    }
+                    Some(parsed)
+                }
+            };
+
             let llm_provider = OpenAICompatibleLlmProvider::new(self.config.llm.clone());
-            let session_topics: HashSet<u64> = [topic_id].into_iter().collect();
+            let default_decay = DecayConfig::default();
+            let decay_config = self.config.decay_config.as_ref().unwrap_or(&default_decay);
 
             let report = dream_pipeline(
                 &mut self.mmap,
@@ -33,70 +64,34 @@ impl MemHop {
                 &mut self.btree,
                 &mut self.sparse_index,
                 &llm_provider,
-                session_topics,
+                parsed_ids,
                 &mut self.file,
-                &crate::config::DecayConfig::default(),
+                decay_config,
+                &self.l2_meta,
             )?;
+
+            // Rebuild in-memory L2 metadata from the updated mmap state.
+            self.l2_meta = L2MetaIndex::build(&self.mmap, &self.btree);
             self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
+            // Invalidate caches since graph topology and L2 mappings may have changed.
             self.adjacency_cache.invalidate_all();
             self.degree_tracker.invalidate_all();
             Ok(report)
         }
         #[cfg(not(feature = "llm"))]
         {
-            let _ = topic_id;
+            let _ = l2_ids;
             Err(MemHopError::ConfigError(
                 "LLM feature not enabled".to_string(),
             ))
         }
     }
 
-    /// Run dream consolidation pipeline
+    /// Lightweight dream: consolidate a single evicted topic.
     ///
-    /// Executes memory consolidation on all currently active contexts:
-    /// 1. L2 depth demotion (主→次→次次→remove)
-    /// 2. L1 rebuild based on updated L2
-    /// 3. L0 profile regeneration from L1
-    /// 4. L5 crystallization from all ActionChainSlots
-    ///
-    /// # Arguments
-    /// * `llm` - LLM configuration (api_url, api_key, model, temperature, timeout)
-    pub fn dream(&mut self, llm: LlmConfig) -> Result<DreamReport> {
-        #[cfg(feature = "llm")]
-        {
-            use crate::dream::dream_pipeline;
-            use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
-            let llm_provider = OpenAICompatibleLlmProvider::new(llm);
-
-            let session_topics: HashSet<u64> = self
-                .session_manager
-                .get_active_topic_ids()
-                .into_iter()
-                .collect();
-
-            let report = dream_pipeline(
-                &mut self.mmap,
-                &mut self.header,
-                &mut self.btree,
-                &mut self.sparse_index,
-                &llm_provider,
-                session_topics,
-                &mut self.file,
-                &crate::config::DecayConfig::default(),
-            )?;
-            self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
-            // Invalidate all adjacency cache since L3 distillation may modify any graph
-            self.adjacency_cache.invalidate_all();
-            self.degree_tracker.invalidate_all();
-            Ok(report)
-        }
-        #[cfg(not(feature = "llm"))]
-        {
-            let _ = llm;
-            Err(MemHopError::ConfigError(
-                "LLM feature not enabled".to_string(),
-            ))
-        }
+    /// Convenience wrapper around `dream(Some(vec![topic_id]))`.
+    pub(crate) fn dream_single_topic(&mut self, topic_id: u64) -> Result<DreamReport> {
+        self.dream(Some(vec![format!("{:016x}", topic_id)]))
     }
 
     /// Batch store multiple documents using the five-phase pipeline

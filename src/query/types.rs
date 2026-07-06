@@ -58,15 +58,17 @@ impl RequestSource {
 /// | Parameter   | Behavior |
 /// |-------------|----------|
 /// | `auto_create=1` | Skip all retrieval, create new L2 context directly |
-/// | `context_id` present & L2 exists | Skip triple retrieval, only L1-associate from that L2 |
+/// | `l2_id`/`context_id` present & L2 exists | Skip triple retrieval, only L1-associate from that L2 |
 /// | `l3_id` present | Restrict triple retrieval to L2 contexts containing this L3 |
 /// | default | Full triple retrieval (vector + BM25 + n-gram) |
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
     /// Current dialogue content (for BM25 + ngram + vector search)
     pub dialogue: String,
-    /// Context ID (hex). If present and the L2 exists, skip retrieval
+    /// L2 context ID (hex). If present and the L2 exists, skip retrieval
     /// and only find L1-associated contexts from this L2.
+    pub l2_id: Option<String>,
+    /// Backwards-compatible alias for `l2_id`.
     pub context_id: Option<String>,
     /// L3 hypergraph ID (hex). If present, restrict retrieval to L2
     /// contexts that contain this L3 in their l3_refs.
@@ -717,4 +719,91 @@ pub struct EdgeListResult {
     pub page: usize,
     pub page_size: usize,
     pub has_more: bool,
+}
+
+// ============================================================================
+// CRUD update fields (Agent D v0.54)
+// ============================================================================
+
+/// Partial update fields for an L2 context.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateL2Fields {
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub is_active: Option<bool>,
+    pub importance: Option<f32>,
+    pub activation_score: Option<f32>,
+    pub activation_state: Option<String>,
+    pub l3_refs: Option<Vec<String>>,
+    pub llm_params: Option<LlmParams>,
+}
+
+/// Partial update fields for an L3 hypergraph container.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateL3Fields {
+    pub name: Option<String>,
+}
+
+/// Partial update fields for an L5 action chain.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateL5Fields {
+    pub title: Option<String>,
+    pub trigger: Option<String>,
+    pub status: Option<String>,
+    pub confidence: Option<f32>,
+    pub success_rate: Option<f32>,
+    pub trigger_count: Option<u32>,
+    pub last_triggered: Option<i64>,
+}
+
+/// Partial update fields for an L6 pathway weight.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UpdateL6Fields {
+    pub source_node: Option<String>,
+    pub target_node: Option<String>,
+    pub weight: Option<f32>,
+    pub success_rate: Option<f32>,
+    pub trigger_count: Option<u32>,
+    pub last_accessed: Option<u64>,
+    pub metadata: Option<String>,
+}
+
+/// Query for L4 archive searches.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct L4SearchQuery {
+    /// Return the N most recent archives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recent: Option<usize>,
+    /// Filter by inclusive time range (start_ms, end_ms).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_range: Option<(i64, i64)>,
+    /// Filter by keywords matched against archive content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
+}
+
+/// Filter for listing L6 pathway weights.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct L6Filter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_weight: Option<f32>,
+}
+
+/// Detailed view of an L3 hypergraph: container + nodes + edges.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L3Detail {
+    pub slot: crate::layers::hypergraph::HypergraphSlot,
+    pub nodes: Vec<crate::layers::hypergraph::HypergraphNode>,
+    pub edges: Vec<crate::layers::hypergraph::HypergraphEdge>,
+}
+
+/// Result of merging multiple L2 contexts into a primary context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeResult {
+    pub primary: TopicDetail,
+    pub merged_ids: Vec<String>,
 }

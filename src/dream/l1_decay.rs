@@ -47,7 +47,7 @@ pub fn decay_l1_network(
     };
 
     let page_count = header.page_count;
-    let entries: Vec<(u64, u64)> = btree.iter().map(|(k, v)| (*k, *v)).collect();
+    let entries: Vec<(u64, u64)> = btree.iter_unsorted().map(|(k, v)| (*k, *v)).collect();
 
     // -------------------------------------------------------------------------
     let mut removed_node_ids: HashSet<u64> = HashSet::new();
@@ -120,7 +120,7 @@ pub fn decay_l1_network(
     }
     report.removed_edges += edges_removed_by_clear.len();
 
-    let edge_entries: Vec<(u64, u64)> = btree.iter().map(|(k, v)| (*k, *v)).collect();
+    let edge_entries: Vec<(u64, u64)> = btree.iter_unsorted().map(|(k, v)| (*k, *v)).collect();
 
     for (id_hash, page_ref) in edge_entries {
         if edges_removed_by_clear.contains(&id_hash) {
@@ -301,6 +301,8 @@ mod tests {
             node_prune_edges_threshold: 0.15,
             edge_remove_threshold: 0.05,
             min_edge_nodes: 2,
+            lambda_pathway: 0.01,
+            pathway_remove_threshold: 0.05,
         }
     }
 

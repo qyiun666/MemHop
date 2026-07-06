@@ -37,7 +37,7 @@ fn calculate_l2_sparse_index_data(
                 if let Ok(node) =
                     crate::layers::hypergraph::HypergraphSlot::deserialize(&mmap[l3_offset..])
                 {
-                    terms.extend(node.name.split_whitespace().map(|s| s.to_lowercase()));
+                    terms.extend(crate::index::sparse::tokenize(&node.name));
                     l3_doc_len += node.name.len();
                 }
             }

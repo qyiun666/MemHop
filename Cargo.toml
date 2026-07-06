@@ -1,6 +1,6 @@
 [package]
 name = "memhop"
-version = "0.53.0"
+version = "0.55.0"
 edition = "2021"
 description = "Agent-oriented memory database inspired by human brain cognitive architecture"
 license = "MIT OR Apache-2.0"

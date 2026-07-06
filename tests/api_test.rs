@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use memhop::{
     ActionItem, ActionType, ArchivePageQuery, CrystalListQuery, EngramListQuery, ImportData,
     ImportMode, ImportRequest, KnowledgeImportItem, KnowledgeListQuery, LlmConfig, MemHop,
-    MemHopConfig, SearchQuery, TopicImportItem, TopicListQuery, UpdateProfileRequest,
-    UpdateRequest,
+    MemHopConfig, SearchQuery, TopicImportItem, TopicListQuery, UpdateL2Fields, UpdateL3Fields,
+    UpdateL5Fields, UpdateProfileRequest, UpdateRequest,
 };
 
 // ============================================================================
@@ -28,7 +28,7 @@ fn test_config(db_path: &str) -> MemHopConfig {
     MemHopConfig {
         db_path: PathBuf::from(db_path),
         encoder_grpc_addr: None,
-        vector_dim: 384,
+        vector_dim: 768,
         crystal_path: None,
         llm: LlmConfig {
             api_url: String::new(),
@@ -48,6 +48,8 @@ fn test_config(db_path: &str) -> MemHopConfig {
         session_config: None,
         auto_dream_archive_threshold: None,
         auto_dream_summary_bytes: None,
+        auto_checkpoint_interval: None,
+        adjacency_cache_max_entries: 128,
     }
 }
 
@@ -60,7 +62,7 @@ fn test_open_empty_path() {
     let config = MemHopConfig {
         db_path: PathBuf::from(""),
         encoder_grpc_addr: None,
-        vector_dim: 384,
+        vector_dim: 768,
         crystal_path: None,
         llm: LlmConfig::default(),
         auto_dream_on_evict: false,
@@ -70,6 +72,8 @@ fn test_open_empty_path() {
         session_config: None,
         auto_dream_archive_threshold: None,
         auto_dream_summary_bytes: None,
+        auto_checkpoint_interval: None,
+        adjacency_cache_max_entries: 128,
     };
     let result = MemHop::open(config);
     assert!(result.is_err(), "empty db_path should fail");
@@ -97,6 +101,8 @@ fn test_open_invalid_config_zero_dim() {
         session_config: None,
         auto_dream_archive_threshold: None,
         auto_dream_summary_bytes: None,
+        auto_checkpoint_interval: None,
+        adjacency_cache_max_entries: 128,
     };
     let _ = std::fs::remove_file("/tmp/memhop_test_zero_dim.meh");
     let result = MemHop::open(config);
@@ -120,18 +126,17 @@ fn test_full_lifecycle() {
 
     // ---- 2. Search with auto_create ----
     let res = db
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "Rust programming".to_string(),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: 5,
-
             auto_create: 1,
             min_score: 0.0,
-
             source: Default::default(),
         })
-        .expect("search_memory failed");
+        .expect("search_context failed");
     assert!(!res.contexts.is_empty(), "auto_create should create L2");
     let l2_id = res.contexts[0].id.clone();
 
@@ -163,13 +168,13 @@ fn test_full_lifecycle() {
 
     // ---- 5. Query L2 topics ----
     let l2_res = db
-        .list_topics(TopicListQuery {
+        .list_l2(TopicListQuery {
             page: 1,
             page_size: 10,
             active_only: false,
             keyword: None,
         })
-        .expect("list_topics failed");
+        .expect("list_l2 failed");
     assert!(l2_res.total > 0, "should have L2 topics");
 
     // ---- 6. Query L1 engrams ----
@@ -257,24 +262,40 @@ fn test_full_lifecycle() {
         })
         .expect("update_profile failed");
 
-    // ---- 11. Update L2 title ----
+    // ---- 11. Update L2 title via update_l2 ----
     let _topic = db
-        .update_topic_title(&l2_id, "Updated Rust Topic".to_string())
-        .expect("update_topic_title failed");
+        .update_l2(
+            &l2_id,
+            UpdateL2Fields {
+                title: Some("Updated Rust Topic".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("update_l2 failed");
 
     // ---- 12. Verify updated title ----
-    let topic_detail = db.get_topic(&l2_id).expect("get_topic failed");
+    let topic_detail = db.get_l2(&l2_id).expect("get_l2 failed");
     assert!(topic_detail.is_some(), "topic should exist");
 
-    // ---- 12a. Update L3 title ----
+    // ---- 12a. Update L3 title via update_l3 ----
     if let Some(ref kid) = knowledge_id {
-        let _knowledge = db
-            .update_knowledge_title(kid, "Updated Knowledge".to_string())
-            .expect("update_knowledge_title failed");
+        db.update_l3(
+            kid,
+            UpdateL3Fields {
+                name: Some("Updated Knowledge".to_string()),
+            },
+        )
+        .expect("update_l3 failed");
     }
 
     // ---- 12b. Update L5 title (test error path: no crystals yet) ----
-    let l5_update = db.update_crystal_title("nonexistent", "test".to_string());
+    let l5_update = db.update_l5(
+        "nonexistent",
+        UpdateL5Fields {
+            title: Some("test".to_string()),
+            ..Default::default()
+        },
+    );
     assert!(
         l5_update.is_err(),
         "L5 update with nonexistent ID should error"
@@ -366,13 +387,13 @@ fn test_full_lifecycle() {
     let db2 = MemHop::open(config).expect("reopen failed");
 
     let l2_persisted = db2
-        .list_topics(TopicListQuery {
+        .list_l2(TopicListQuery {
             page: 1,
             page_size: 100,
             active_only: false,
             keyword: None,
         })
-        .expect("list_topics after reopen failed");
+        .expect("list_l2 after reopen failed");
     assert!(
         l2_persisted.total > 0,
         "L2 topics should persist after close/reopen"
@@ -450,8 +471,7 @@ fn test_graph_query_and_delete() {
     );
 
     // ---- 4. Delete L3 graph ----
-    let graph_id_hash = memhop::parse_id_to_hash(&graph_id);
-    db.delete_graph(graph_id_hash).expect("delete_graph failed");
+    db.delete_l3(&graph_id).expect("delete_l3 failed");
 
     // Verify the graph is gone.
     let l3_after = db
@@ -467,8 +487,9 @@ fn test_graph_query_and_delete() {
 
     // ---- 5. Create an L2 topic and L5 action chain ----
     let search_res = db
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "Action chain test topic".to_string(),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: 5,
@@ -478,7 +499,7 @@ fn test_graph_query_and_delete() {
 
             source: Default::default(),
         })
-        .expect("search_memory failed");
+        .expect("search_context failed");
     let l2_id = search_res.contexts[0].id.clone();
 
     let _update_res = db
@@ -513,9 +534,7 @@ fn test_graph_query_and_delete() {
     );
     let chain_id = l5_res.items[0].id.clone();
 
-    let chain_id_hash = memhop::parse_id_to_hash(&chain_id);
-    db.delete_action_chain(chain_id_hash)
-        .expect("delete_action_chain failed");
+    db.delete_l5(&chain_id).expect("delete_l5 failed");
 
     let l5_after = db
         .list_crystals(CrystalListQuery {
@@ -529,10 +548,9 @@ fn test_graph_query_and_delete() {
     assert_eq!(l5_after.total, 0, "L5 action chain should be deleted");
 
     // ---- 7. Delete L2 topic ----
-    let l2_id_hash = memhop::parse_id_to_hash(&l2_id);
-    db.delete_topic(l2_id_hash).expect("delete_topic failed");
+    db.delete_l2(&l2_id).expect("delete_l2 failed");
 
-    let l2_after = db.get_topic(&l2_id).expect("get_topic after delete failed");
+    let l2_after = db.get_l2(&l2_id).expect("get_l2 after delete failed");
     assert!(
         l2_after.is_none(),
         "deleted L2 topic should not be retrievable"
@@ -700,15 +718,18 @@ fn test_l2_l3_memory_chain() {
     let l2_topic_id = l2_ids[0].clone();
     println!("Created L2 topic: {}", l2_topic_id);
 
-    // ---- MH-2: update_topic_title_with_refs 支持 l3_refs 写入 ----
+    // ---- MH-2: update_l2 支持 l3_refs 写入 ----
     let _topic_update = db
-        .update_topic_title_with_refs(
+        .update_l2(
             &l2_topic_id,
-            "Rome Trip 2024".to_string(),
-            Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
+            UpdateL2Fields {
+                title: Some("Rome Trip 2024".to_string()),
+                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
+                ..Default::default()
+            },
         )
-        .expect("update_topic_title_with_refs failed");
-    println!("MH-2 PASS: update_topic_title_with_refs succeeded");
+        .expect("update_l2 failed");
+    println!("MH-2 PASS: update_l2 with l3_refs succeeded");
 
     // ---- MH-2: persist and verify ----
     db.sync().expect("sync failed");
@@ -718,8 +739,8 @@ fn test_l2_l3_memory_chain() {
 
     // Verify L2 topic has l3_refs after reopen
     let topic_detail = db2
-        .get_topic(&l2_topic_id)
-        .expect("get_topic after reopen failed")
+        .get_l2(&l2_topic_id)
+        .expect("get_l2 after reopen failed")
         .expect("topic should exist after reopen");
     assert_eq!(
         topic_detail.l3_refs.len(),
@@ -730,8 +751,9 @@ fn test_l2_l3_memory_chain() {
 
     // ---- Full chain verification: search should discover L3 nodes ----
     let search_res = db2
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "Rome trip memories".to_string(),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: 5,
@@ -741,22 +763,26 @@ fn test_l2_l3_memory_chain() {
 
             source: Default::default(),
         })
-        .expect("search_memory failed");
+        .expect("search_context failed");
     let search_l2_id = search_res.contexts[0].id.clone();
 
     // Link the auto-created L2 to L3 nodes
     let _link = db2
-        .update_topic_title_with_refs(
+        .update_l2(
             &search_l2_id,
-            "Rome Trip Memories".to_string(),
-            Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
+            UpdateL2Fields {
+                title: Some("Rome Trip Memories".to_string()),
+                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
+                ..Default::default()
+            },
         )
-        .expect("update_topic_title_with_refs failed");
+        .expect("update_l2 failed");
 
     // Search with context_id to verify l3_refs appear in search results
     let search_res2 = db2
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "Colosseum".to_string(),
+            l2_id: None,
             context_id: Some(search_l2_id.clone()),
             l3_id: None,
             context_limit: 5,
@@ -766,7 +792,7 @@ fn test_l2_l3_memory_chain() {
 
             source: Default::default(),
         })
-        .expect("search_memory with context_id failed");
+        .expect("search_context with context_id failed");
 
     assert!(!search_res2.contexts.is_empty());
     assert!(
@@ -843,16 +869,16 @@ fn test_query_l3_detail() {
     // 4. Query L2 detail to see l3_refs
     println!("\n===== L2 DETAIL =====");
     let l2_res = db
-        .list_topics(TopicListQuery {
+        .list_l2(TopicListQuery {
             page: 1,
             page_size: 5,
             active_only: false,
             keyword: None,
         })
-        .expect("list_topics failed");
+        .expect("list_l2 failed");
     if let Some(first) = l2_res.items.first() {
         let l2_id = &first.id;
-        let l2_detail = db.get_topic(l2_id).expect("get_topic failed");
+        let l2_detail = db.get_l2(l2_id).expect("get_l2 failed");
         if let Some(d) = l2_detail {
             println!("{}", serde_json::to_string_pretty(&d).unwrap());
         }
@@ -876,8 +902,9 @@ fn test_merge_topics() {
 
     // Create two L2s via auto_create
     let res1 = db
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "Topic Alpha".to_string(),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: 5,
@@ -887,12 +914,13 @@ fn test_merge_topics() {
 
             source: Default::default(),
         })
-        .expect("search_memory 1 failed");
+        .expect("search_context 1 failed");
     let id1 = res1.contexts[0].id.clone();
 
     let res2 = db
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "Topic Beta".to_string(),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: 5,
@@ -902,16 +930,16 @@ fn test_merge_topics() {
 
             source: Default::default(),
         })
-        .expect("search_memory 2 failed");
+        .expect("search_context 2 failed");
     let id2 = res2.contexts[0].id.clone();
 
     // Merge them
     let _merged = db
-        .merge_topics(&id1, vec![id2.clone()])
-        .expect("merge_topics failed");
+        .merge_l2(&id1, vec![id2.clone()])
+        .expect("merge_l2 failed");
 
     // Verify secondary is gone
-    let secondary = db.get_topic(&id2).expect("get_topic after merge failed");
+    let secondary = db.get_l2(&id2).expect("get_l2 after merge failed");
     assert!(
         secondary.is_none(),
         "secondary topic should be deleted after merge"
@@ -934,8 +962,9 @@ fn test_error_handling() {
     let mut db = MemHop::open(config).expect("MemHop::open failed");
 
     // missing field: search without dialogue (empty dialogue is allowed but may return empty)
-    let res = db.search_memory(SearchQuery {
+    let res = db.search_context(SearchQuery {
         dialogue: "".to_string(),
+        l2_id: None,
         context_id: None,
         l3_id: None,
         context_limit: 5,
@@ -1032,8 +1061,9 @@ fn test_agent_workflow() {
 
     // Agent 3: 用户提问，检索记忆
     let search_res = db
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "How do I fix a borrow checker error in Rust?".to_string(),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: 5,
@@ -1043,7 +1073,7 @@ fn test_agent_workflow() {
 
             source: Default::default(),
         })
-        .expect("search_memory failed");
+        .expect("search_context failed");
     assert!(!search_res.contexts.is_empty());
     let topic_id = search_res.contexts[0].id.clone();
     println!("[Agent] Search complete, active topic: {}", topic_id);
@@ -1120,14 +1150,13 @@ fn test_dream_with_llm() {
         .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
     config.llm.model =
         std::env::var("MEMHOP_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
-    let llm_config = config.llm.clone();
-
     let mut db = MemHop::open(config).expect("MemHop::open failed");
 
     // 1. Create some memory first
     let search_res = db
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "Learning about Rust memory management".to_string(),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: 5,
@@ -1137,7 +1166,7 @@ fn test_dream_with_llm() {
 
             source: Default::default(),
         })
-        .expect("search_memory failed");
+        .expect("search_context failed");
     let topic_id = search_res.contexts[0].id.clone();
 
     // 2. Add some content
@@ -1162,7 +1191,7 @@ fn test_dream_with_llm() {
 
     // 4. Run dream with configured LLM
     println!("[Dream] Calling LLM API...");
-    let report = db.dream(llm_config).expect("dream failed");
+    let report = db.dream(None).expect("dream failed");
     println!("[Dream] Complete: {:?}", report);
 
     drop(db);
@@ -1226,13 +1255,13 @@ fn test_build_l3_from_meowagent() {
 
     // 4. Query L2 list to find the auto-created topic
     let l2_res = db
-        .list_topics(TopicListQuery {
+        .list_l2(TopicListQuery {
             page: 1,
             page_size: 10,
             active_only: false,
             keyword: None,
         })
-        .expect("list_topics failed");
+        .expect("list_l2 failed");
     println!("[L2 Query] Total L2 topics: {}", l2_res.total);
     assert!(l2_res.total > 0, "build_l3 should create an L2 topic");
 
@@ -1242,8 +1271,8 @@ fn test_build_l3_from_meowagent() {
 
     // 5. Get L2 topic detail to verify L3 linkage (TopicDetail has l3_refs)
     let l2_detail = db
-        .get_topic(&l2_id)
-        .expect("get_topic failed")
+        .get_l2(&l2_id)
+        .expect("get_l2 failed")
         .expect("topic should exist");
     println!(
         "[L2 Detail] title='{}', l3_refs={:?}",
@@ -1256,8 +1285,9 @@ fn test_build_l3_from_meowagent() {
 
     // 6. Search via context_id (doesn't need encoder) to verify L3 discovery
     let search_res = db
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "meowagent code".to_string(),
+            l2_id: None,
             context_id: Some(l2_id.clone()),
             l3_id: None,
             context_limit: 5,
@@ -1267,7 +1297,7 @@ fn test_build_l3_from_meowagent() {
 
             source: Default::default(),
         })
-        .expect("search_memory with context_id failed");
+        .expect("search_context with context_id failed");
     println!(
         "[Search context_id] contexts: {}",
         search_res.contexts.len()
@@ -1308,13 +1338,13 @@ fn test_build_l3_from_meowagent() {
     );
 
     let l2_persisted = db2
-        .list_topics(TopicListQuery {
+        .list_l2(TopicListQuery {
             page: 1,
             page_size: 5,
             active_only: false,
             keyword: None,
         })
-        .expect("list_topics after reopen failed");
+        .expect("list_l2 after reopen failed");
     println!(
         "[Persistence] L2 topics after reopen: {}",
         l2_persisted.total

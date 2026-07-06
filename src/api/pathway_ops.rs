@@ -1,44 +1,78 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! L6 procedural-memory pathway API operations.
+//! API-10: L6 procedural-memory pathway operations.
 
 use crate::layers::pathway::PathwayWeightSlot;
-use crate::MemHop;
-use crate::Result;
+use crate::query::types::{L6Filter, UpdateL6Fields};
+use crate::{MemHop, Result};
 
 impl MemHop {
-    /// Save (replace) the full set of L6 procedural memory pathway weights.
-    pub fn save_pathways(&mut self, pathways: Vec<PathwayWeightSlot>) -> Result<()> {
-        self.pathways = pathways;
+    // ========================================================================
+    // New v0.54 mmap-backed API
+    // ========================================================================
+
+    /// Get an L6 pathway weight by ID.
+    pub fn get_l6(&self, id: &str) -> Result<Option<PathwayWeightSlot>> {
+        crate::query::l6_ops::get_l6(&self.mmap, &self.header, &self.btree, id)
+    }
+
+    /// Partially update an L6 pathway weight.
+    pub fn update_l6(&mut self, id: &str, fields: UpdateL6Fields) -> Result<PathwayWeightSlot> {
+        let updated = crate::query::l6_ops::update_l6(
+            &mut self.mmap,
+            &mut self.header,
+            &self.btree,
+            &mut self.file,
+            id,
+            fields,
+        )?;
+        self.pathways = crate::query::l6_ops::list_l6(&self.mmap, &self.header, &self.btree, None)?;
+        Ok(updated)
+    }
+
+    /// Delete an L6 pathway weight by ID.
+    pub fn delete_l6(&mut self, id: &str) -> Result<()> {
+        crate::query::l6_ops::delete_l6(
+            &mut self.mmap,
+            &mut self.header,
+            &self.btree,
+            &mut self.file,
+            id,
+        )?;
+        self.pathways = crate::query::l6_ops::list_l6(&self.mmap, &self.header, &self.btree, None)?;
         Ok(())
     }
 
-    /// Load all L6 pathway weights from memory.
-    pub fn load_pathways(&self) -> Result<Vec<PathwayWeightSlot>> {
-        Ok(self.pathways.clone())
+    /// List L6 pathway weights with optional filters.
+    pub fn list_l6(&self, filter: Option<L6Filter>) -> Result<Vec<PathwayWeightSlot>> {
+        crate::query::l6_ops::list_l6(&self.mmap, &self.header, &self.btree, filter)
     }
 
-    /// List L6 pathway weights with optional filters.
-    pub fn list_pathways(
-        &self,
-        source_prefix: Option<&str>,
-        min_weight: Option<f32>,
-    ) -> Result<Vec<PathwayWeightSlot>> {
-        let mut result = Vec::new();
-        for pw in &self.pathways {
-            if let Some(prefix) = source_prefix {
-                if !pw.source_node.starts_with(prefix) {
-                    continue;
-                }
-            }
-            if let Some(min) = min_weight {
-                if pw.weight < min {
-                    continue;
-                }
-            }
-            result.push(pw.clone());
-        }
-        Ok(result)
+    /// Add a new L6 pathway weight.
+    pub fn add_l6(&mut self, slot: PathwayWeightSlot) -> Result<()> {
+        crate::query::l6_ops::add_l6(
+            &mut self.mmap,
+            &mut self.header,
+            &self.btree,
+            &mut self.file,
+            slot,
+        )?;
+        self.pathways = crate::query::l6_ops::list_l6(&self.mmap, &self.header, &self.btree, None)?;
+        Ok(())
+    }
+
+    /// Increment/decrement an L6 pathway weight by delta.
+    pub fn update_l6_weight(&mut self, id: &str, delta: f32) -> Result<PathwayWeightSlot> {
+        let updated = crate::query::l6_ops::update_l6_weight(
+            &mut self.mmap,
+            &mut self.header,
+            &self.btree,
+            &mut self.file,
+            id,
+            delta,
+        )?;
+        self.pathways = crate::query::l6_ops::list_l6(&self.mmap, &self.header, &self.btree, None)?;
+        Ok(updated)
     }
 }

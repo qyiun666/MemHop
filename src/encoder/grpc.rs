@@ -3,6 +3,7 @@
 
 // gRPC client for meowvec VectorModelService (TCP).
 
+use crate::encoder::{Encoder, EncoderOutput};
 use crate::MemHopError;
 use half::f16;
 use std::collections::HashMap;
@@ -15,25 +16,10 @@ pub mod vector_model {
 }
 
 use vector_model::vector_model_service_client::VectorModelServiceClient;
-use vector_model::{EncodeRequest, HealthCheckRequest};
+use vector_model::{EncodeRequest, HealthCheckRequest, RerankRequest};
 
 /// Health-check timeout shared between eager check and availability probe.
 const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
-
-// ============================================================================
-// Encoder trait & output
-// ============================================================================
-
-pub trait Encoder: Send + Sync {
-    fn encode(&self, text: &str) -> Result<EncoderOutput, MemHopError>;
-    fn dim(&self) -> usize;
-    fn mode(&self) -> &str;
-}
-
-pub struct EncoderOutput {
-    pub dense: Vec<f16>,
-    pub sparse: HashMap<String, f32>,
-}
 
 // ============================================================================
 // GrpcEncoder — TCP only
@@ -161,6 +147,13 @@ impl Encoder for GrpcEncoder {
             .map_err(|e| MemHopError::EncoderError(format!("gRPC encode failed: {}", e)))?;
 
         let resp = response.into_inner();
+        if resp.embedding.len() != self.dim {
+            return Err(MemHopError::EncoderError(format!(
+                "dimension mismatch: expected {}, got {}",
+                self.dim,
+                resp.embedding.len()
+            )));
+        }
         let dense: Vec<f16> = resp.embedding.iter().map(|&v| f16::from_f32(v)).collect();
         let sparse: HashMap<String, f32> = resp.sparse.into_iter().collect();
 
@@ -173,6 +166,30 @@ impl Encoder for GrpcEncoder {
 
     fn mode(&self) -> &str {
         "grpc"
+    }
+
+    fn rerank(&self, query: &str, documents: &[String]) -> Result<Vec<f32>, MemHopError> {
+        let mut client = self
+            .client
+            .lock()
+            .map_err(|_| MemHopError::ConfigError("gRPC client mutex poisoned".to_string()))?;
+
+        let response = self
+            .rt
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(5),
+                    client.rerank(RerankRequest {
+                        query: query.to_string(),
+                        documents: documents.to_vec(),
+                    }),
+                )
+                .await
+            })
+            .map_err(|_| MemHopError::EncoderError("rerank timeout after 5s".into()))?
+            .map_err(|e| MemHopError::EncoderError(format!("gRPC rerank failed: {}", e)))?;
+
+        Ok(response.into_inner().scores)
     }
 }
 
@@ -187,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_grpc_encoder_rejects_unix_scheme() {
-        let result = GrpcEncoder::new("unix:///tmp/.meowagent/meowvec.sock", 384);
+        let result = GrpcEncoder::new("unix:///tmp/.meowagent/meowvec.sock", 768);
         assert!(result.is_err());
         if let Err(e) = result {
             let err_msg = format!("{}", e);
@@ -202,7 +219,7 @@ mod tests {
     #[test]
     fn test_grpc_encoder_rejects_bare_tcp_address() {
         // Bare host:port rejected; tonic requires explicit scheme.
-        let result = GrpcEncoder::new("127.0.0.1:27110", 384);
+        let result = GrpcEncoder::new("127.0.0.1:27110", 768);
         assert!(result.is_err());
         if let Err(e) = result {
             let err_msg = format!("{}", e);
@@ -216,13 +233,13 @@ mod tests {
 
     #[test]
     fn test_grpc_encoder_tcp_unavailable() {
-        let result = GrpcEncoder::new("http://127.0.0.1:1", 384);
+        let result = GrpcEncoder::new("http://127.0.0.1:1", 768);
         assert!(result.is_err(), "expected connection failure");
     }
 
     #[test]
     fn test_grpc_encoder_rejects_invalid_scheme() {
-        let result = GrpcEncoder::new("ftp://127.0.0.1:27110", 384);
+        let result = GrpcEncoder::new("ftp://127.0.0.1:27110", 768);
         assert!(result.is_err());
     }
 }

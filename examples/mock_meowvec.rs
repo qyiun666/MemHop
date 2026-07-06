@@ -4,7 +4,7 @@
 //   cargo run --example mock_meowvec                                  # default TCP: 127.0.0.1:27110
 //   cargo run --example mock_meowvec -- --addr 127.0.0.1:28080        # custom TCP address
 //
-// Returns deterministic 384-dim vectors based on text content hash.
+// Returns deterministic 768-dim vectors based on text content hash.
 // Does NOT load the real BERT model (use real meowvec for production).
 
 use tonic::{transport::Server, Request, Response, Status};
@@ -16,14 +16,14 @@ pub mod vector_model {
 use vector_model::vector_model_service_server::{VectorModelService, VectorModelServiceServer};
 use vector_model::{
     BatchEncodeRequest, BatchEncodeResponse, Embedding, EncodeRequest, EncodeResponse,
-    HealthCheckRequest, HealthCheckResponse,
+    HealthCheckRequest, HealthCheckResponse, RerankRequest, RerankResponse,
 };
 
-const DIM: usize = 384; // multilingual-e5-small dimension
+const DIM: usize = 768; // gte-multilingual-base dimension
                         // Default TCP port for the mock meowvec gRPC server (matches meowvec convention)
 const DEFAULT_ADDR: &str = "127.0.0.1:27110";
 
-/// Deterministic pseudo-encoder: FNV hash -> 384-dim normalized vector
+/// Deterministic pseudo-encoder: FNV hash -> 768-dim normalized vector
 fn fake_encode(text: &str) -> Vec<f32> {
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in text.bytes() {
@@ -47,6 +47,11 @@ fn fake_encode(text: &str) -> Vec<f32> {
         }
     }
     vec
+}
+
+/// Cosine similarity between two L2-normalized vectors.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 struct MockVectorModelService;
@@ -90,6 +95,20 @@ impl VectorModelService for MockVectorModelService {
             model_name: "mock-multilingual-e5-small".to_string(),
             dimension: DIM as i32,
         }))
+    }
+
+    async fn rerank(
+        &self,
+        request: Request<RerankRequest>,
+    ) -> Result<Response<RerankResponse>, Status> {
+        let inner = request.into_inner();
+        let query_vec = fake_encode(&inner.query);
+        let scores = inner
+            .documents
+            .iter()
+            .map(|d| cosine_similarity(&query_vec, &fake_encode(d)))
+            .collect();
+        Ok(Response::new(RerankResponse { scores }))
     }
 }
 

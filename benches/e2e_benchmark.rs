@@ -6,8 +6,8 @@
 use criterion::{black_box, criterion_group, BenchmarkId, Criterion};
 use memhop::{
     ImportData, ImportMode, ImportRequest, KnowledgeImportItem, KnowledgeListQuery, MemHop,
-    MemHopConfig, RequestSource, SearchQuery, TargetLayer, TopicListQuery, UpdateProfileRequest,
-    UpdateRequest,
+    MemHopConfig, RequestSource, SearchQuery, TargetLayer, TopicListQuery, UpdateL2Fields,
+    UpdateProfileRequest, UpdateRequest, L4SearchQuery,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -33,6 +33,8 @@ fn make_config(path: PathBuf) -> MemHopConfig {
         session_config: None,
         auto_dream_archive_threshold: None,
         auto_dream_summary_bytes: None,
+        auto_checkpoint_interval: None,
+        adjacency_cache_max_entries: 128,
     }
 }
 
@@ -60,8 +62,9 @@ fn run_e2e_workflow(n_topics: usize) {
 
     // 2. Seed topics via search_memory with auto_create
     for i in 0..n_topics {
-        let _ = db.search_memory(SearchQuery {
+        let _ = db.search_context(SearchQuery {
             dialogue: format!("end-to-end benchmark topic number {}", i),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: 5,
@@ -73,8 +76,9 @@ fn run_e2e_workflow(n_topics: usize) {
 
     // 3. Search with auto_create and update the resulting topic
     let search_res = db
-        .search_memory(SearchQuery {
+        .search_context(SearchQuery {
             dialogue: "agent workflow orchestration benchmark".to_string(),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: 5,
@@ -82,7 +86,7 @@ fn run_e2e_workflow(n_topics: usize) {
             min_score: 0.0,
             source: RequestSource::default(),
         })
-        .expect("search_memory failed");
+        .expect("search_context failed");
     let topic_id = search_res
         .contexts
         .first()
@@ -119,15 +123,15 @@ fn run_e2e_workflow(n_topics: usize) {
         })
         .expect("import_memory failed");
 
-    // 5. List topics and knowledge
+    // 5. List topics and knowledge (needed for subsequent steps)
     let topics = db
-        .list_topics(TopicListQuery {
+        .list_l2(TopicListQuery {
             page: 1,
             page_size: 20,
             active_only: false,
             keyword: None,
         })
-        .expect("list_topics failed");
+        .expect("list_l2 failed");
     black_box(topics.total);
 
     let knowledge = db
@@ -141,7 +145,34 @@ fn run_e2e_workflow(n_topics: usize) {
         .expect("list_knowledge failed");
     black_box(knowledge.total);
 
-    // 6. Query L3 knowledge graph via DSL
+    // 6. Get & update L2 detail, search archives, get profile
+    let topic_id_for_detail = topics.items.first().map(|t| t.id.clone()).unwrap_or_default();
+    let _detail = db.get_l2(&topic_id_for_detail).expect("get_l2 failed");
+    let _updated = db
+        .update_l2(
+            &topic_id_for_detail,
+            UpdateL2Fields {
+                title: Some("Updated benchmark topic".to_string()),
+                ..Default::default()
+            },
+        )
+        .expect("update_l2 failed");
+    black_box(_updated.title);
+
+    // Search L4 archives
+    let _archives = db
+        .search_l4(L4SearchQuery {
+            recent: Some(10),
+            ..Default::default()
+        })
+        .expect("search_l4 failed");
+    black_box(_archives.len());
+
+    // Read L0 profile
+    let _profile = db.get_profile().expect("get_profile failed");
+    black_box(_profile.is_some());
+
+    // 7. Query L3 knowledge: list, get detail, search keywords
     let graph_id = import_res
         .id
         .clone()
@@ -149,8 +180,15 @@ fn run_e2e_workflow(n_topics: usize) {
         .unwrap_or_default();
     let _l3 = db.l3_query(&graph_id, "MATCH (n) LIMIT 10", 1);
 
-    // 7. Checkpoint and close
-    db.checkpoint().expect("checkpoint failed");
+    // 8. Session operations
+    db.activate_topic(&topic_id_for_detail, Some(300_000));
+    let _count = db.session_count();
+    black_box(_count);
+    let _empty = db.sessions_empty();
+    black_box(_empty);
+
+    // 9. Sync to disk, then close
+    db.sync().expect("sync failed");
     db.close().expect("close failed");
 }
 

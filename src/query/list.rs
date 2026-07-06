@@ -53,7 +53,7 @@ where
 
     let mut all_items: Vec<T> = Vec::new();
 
-    for (_, page_ref) in btree.iter() {
+    for (_, page_ref) in btree.iter_unsorted() {
         let page_id = crate::shared::slot_io::decode_page_id(*page_ref);
         if page_id >= page_count {
             continue;
@@ -84,17 +84,6 @@ where
         .collect();
 
     (paged_items, total_count, has_more(skip, take, total_count))
-}
-
-// ============================================================================
-// Profile Query
-// ============================================================================
-
-pub fn get_profile(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-) -> Result<Option<ProfileResult>, MemHopError> {
-    crate::query::l0_crud::read_profile(mmap, btree)
 }
 
 // ============================================================================
@@ -202,11 +191,7 @@ fn build_engram_result_from_node(
         if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
             match ContextSlot::deserialize_slot(slot_data) {
                 Ok(ctx) => {
-                    let kw: Vec<String> = ctx
-                        .title
-                        .split_whitespace()
-                        .map(|s| s.to_lowercase())
-                        .collect();
+                    let kw = crate::index::sparse::tokenize(&ctx.title);
                     (ctx.title, ctx.summary, kw)
                 }
                 Err(_) => (String::new(), None, vec![]),
@@ -231,109 +216,6 @@ fn build_engram_result_from_node(
         edge_count: node.edge_ptrs.len(),
         associated_topics: vec![format_hash(node.context_id)],
     })
-}
-
-// ============================================================================
-// L2 Context Queries (Topic API)
-// ============================================================================
-
-pub fn get_topic(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    id: &str,
-) -> Result<Option<TopicDetail>, MemHopError> {
-    let data = &mmap[..];
-    let id_hash = common::parse_id_to_hash(id);
-
-    match btree.search(id_hash) {
-        Some(page_ref) => {
-            if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
-                let ctx = ContextSlot::deserialize_slot(slot_data)?;
-                Ok(Some(convert_context_to_detail(&ctx)))
-            } else {
-                let page_id = crate::shared::slot_io::decode_page_id(page_ref);
-                Err(MemHopError::PageNotFound(page_id))
-            }
-        }
-        None => Ok(None),
-    }
-}
-
-pub fn list_topics(
-    mmap: &MmapMut,
-    header: &FileHeader,
-    btree: &BTreeIndex,
-    query: TopicListQuery,
-) -> Result<TopicListResult, MemHopError> {
-    let (items, total, has_more) = list_slots(
-        mmap,
-        header,
-        btree,
-        PageType::Context,
-        query.page,
-        query.page_size,
-        |slot_data| ContextSlot::deserialize_slot(slot_data).ok(),
-        |ctx| {
-            if query.active_only && !ctx.is_active {
-                return false;
-            }
-
-            if let Some(ref keyword) = query.keyword {
-                if !matches_keyword(&ctx.title, keyword) {
-                    return false;
-                }
-            }
-
-            true
-        },
-        |contexts| sort_by_score(contexts, |ctx| ctx.activation_score),
-        |ctx| Some(convert_context_to_summary(&ctx)),
-    );
-
-    Ok(TopicListResult {
-        items,
-        total,
-        page: query.page,
-        page_size: query.page_size,
-        has_more,
-    })
-}
-
-fn convert_context_to_detail(ctx: &ContextSlot) -> TopicDetail {
-    TopicDetail {
-        id: format_hash(ctx.id_hash),
-        title: ctx.title.clone(),
-        summary: ctx.summary.clone(),
-        depth: ctx.depth,
-        archive_refs: ctx.archive_refs.iter().map(|id| format_hash(*id)).collect(),
-        l3_refs: ctx.l3_refs.iter().map(|id| format_hash(*id)).collect(),
-        turn_count: ctx.turn_count,
-        parent_id: ctx.parent_id.map(format_hash),
-        is_active: ctx.is_active,
-        importance: ctx.importance,
-        activation_score: ctx.activation_score,
-        activation_state: format!("{:?}", ctx.activation_state),
-        created_at: ctx.created_at,
-        updated_at: ctx.updated_at,
-        llm_params: Some(LlmParams {
-            temperature: ctx.llm_params.temperature,
-            top_p: ctx.llm_params.top_p,
-            presence_penalty: ctx.llm_params.presence_penalty,
-            frequency_penalty: ctx.llm_params.frequency_penalty,
-        }),
-    }
-}
-
-fn convert_context_to_summary(ctx: &ContextSlot) -> TopicSummary {
-    TopicSummary {
-        id: format_hash(ctx.id_hash),
-        title: ctx.title.clone(),
-        depth: ctx.depth,
-        archive_count: ctx.archive_refs.len(),
-        turn_count: ctx.turn_count,
-        is_active: ctx.is_active,
-        updated_at: ctx.updated_at,
-    }
 }
 
 // ============================================================================

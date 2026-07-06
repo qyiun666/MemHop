@@ -186,7 +186,7 @@ pub fn brute_force_knn(
     k: usize,
 ) -> MemHopResult<Vec<(u64, f32)>> {
     let mut candidates: Vec<(u64, f32)> = Vec::new();
-    for (&id_hash, &page_ref) in btree.iter() {
+    for (&id_hash, &page_ref) in btree.iter_unsorted() {
         let node_page_id = (page_ref >> 16) as u32;
         let node_offset = (node_page_id as usize) * PAGE_SIZE + 32;
         if node_offset >= data.len() {
@@ -493,6 +493,7 @@ fn deserialize_buckets(bytes: &[u8]) -> MemHopResult<(usize, IvfBuckets)> {
 }
 
 /// IVF approximate KNN: score centroids → probe `n_probes` buckets → exact cosine.
+#[cfg_attr(not(feature = "grpc-encoder"), allow(dead_code))]
 pub fn ivf_knn(
     ivf: &IVFIndex,
     data: &[u8],
@@ -802,6 +803,72 @@ mod tests {
         let read_back = read_vector(&mmap, 0, 0, dim).unwrap();
         for (o, r) in original.iter().zip(read_back.iter()) {
             assert!((o.to_f32() - r.to_f32()).abs() < 1e-5);
+        }
+    }
+
+    /// 768-dim vectors occupy 1552 bytes per slot, so a 4 KB page holds 2 slots.
+    /// Write 5 distinct vectors across pages 0/1/2 and verify round-trip.
+    #[test]
+    fn test_vector_read_write_768_multi_page() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+        let dim = 768usize;
+        let page = VectorPage::new(dim);
+        assert_eq!(page.slot_size(), 1552);
+        assert_eq!(page.vectors_per_page(), 2);
+
+        let file = NamedTempFile::new().unwrap();
+        let mut f = std::fs::File::create(file.path()).unwrap();
+        f.write_all(&vec![0u8; PAGE_SIZE * 10]).unwrap();
+        drop(f);
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(file.path())
+            .unwrap();
+        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
+
+        let placements = [(0u32, 0u16), (0, 1), (1, 0), (1, 1), (2, 0)];
+        let mut originals: Vec<(u64, Vec<f16>)> = Vec::with_capacity(placements.len());
+        for (i, (page_id, slot)) in placements.iter().enumerate() {
+            let id_hash = 1000u64 + i as u64;
+            let mut vec = Vec::with_capacity(dim);
+            for j in 0..dim {
+                let value = ((i * dim + j) as f32 * 0.001).sin() * 0.5
+                    + ((id_hash.wrapping_mul(j as u64 + 1)) % 1000) as f32 * 0.0001;
+                vec.push(f16::from_f32(value));
+            }
+            write_vector(&mut mmap, *page_id, *slot, id_hash, &vec, dim).unwrap();
+            originals.push((id_hash, vec));
+        }
+
+        let mmap = unsafe { Mmap::map(&file).unwrap() };
+        for (page_id, slot) in placements.iter() {
+            let (expected_id, expected_vec) = originals
+                .iter()
+                .find(|(id, _)| {
+                    let idx = (*id - 1000) as usize;
+                    placements[idx] == (*page_id, *slot)
+                })
+                .unwrap();
+            let read_back = read_vector(&mmap, *page_id, *slot, dim).unwrap();
+            assert_eq!(read_back.len(), dim);
+            for (o, r) in expected_vec.iter().zip(read_back.iter()) {
+                assert!((o.to_f32() - r.to_f32()).abs() < 1e-4);
+            }
+            // id_hash is stored in the first 8 bytes of the slot.
+            let offset = *page_id as usize * PAGE_SIZE + page.slot_offset(*slot);
+            let stored_id = u64::from_le_bytes([
+                mmap[offset],
+                mmap[offset + 1],
+                mmap[offset + 2],
+                mmap[offset + 3],
+                mmap[offset + 4],
+                mmap[offset + 5],
+                mmap[offset + 6],
+                mmap[offset + 7],
+            ]);
+            assert_eq!(stored_id, *expected_id);
         }
     }
 

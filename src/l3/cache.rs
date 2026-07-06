@@ -5,9 +5,12 @@
 
 use crate::layers::hypergraph::{GraphEdgeKind, HypergraphEdge};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+use std::time::Instant;
 
-/// Adjacency list for a single graph: node_id -> list of (edge, connected_node_ids)
-pub type GraphAdjacency = HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>>;
+/// Adjacency list for a single graph: node_id -> list of (edge, connected_node_ids).
+/// Wrapped in `Arc` so cached copies are cheap to clone.
+pub type GraphAdjacency = Arc<HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>>>;
 
 /// Cache key for adjacency lists, combining graph_id and edge_kinds filter.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -29,34 +32,59 @@ impl CacheKey {
     }
 }
 
+#[derive(Debug, Clone)]
+struct CacheEntry {
+    adjacency: GraphAdjacency,
+    last_accessed: Instant,
+}
+
 /// Cache for graph adjacency lists, keyed by (graph_id, edge_kinds).
 ///
 /// This cache is invalidated when edges are added or removed from a graph.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AdjacencyCache {
-    /// (graph_id, edge_kinds) -> adjacency list
-    cache: HashMap<CacheKey, GraphAdjacency>,
+    /// (graph_id, edge_kinds) -> adjacency list + access metadata
+    cache: HashMap<CacheKey, CacheEntry>,
     /// Track which graph_ids have cached entries for efficient invalidation
     graph_ids: HashSet<u64>,
+    /// Maximum number of entries before LRU eviction.
+    max_entries: usize,
+}
+
+impl Default for AdjacencyCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AdjacencyCache {
-    /// Create a new empty adjacency cache.
+    /// Create a new empty adjacency cache with the default capacity (128).
     pub fn new() -> Self {
+        Self::with_capacity(128)
+    }
+
+    /// Create a new adjacency cache with the specified capacity.
+    pub fn with_capacity(max_entries: usize) -> Self {
         Self {
             cache: HashMap::new(),
             graph_ids: HashSet::new(),
+            max_entries,
         }
     }
 
     /// Get the cached adjacency list for a graph and edge_kinds, if available.
     pub fn get(
-        &self,
+        &mut self,
         graph_id: u64,
         edge_kinds: Option<&[GraphEdgeKind]>,
     ) -> Option<&GraphAdjacency> {
         let key = CacheKey::new(graph_id, edge_kinds);
-        self.cache.get(&key)
+        if let Some(entry) = self.cache.get_mut(&key) {
+            entry.last_accessed = Instant::now();
+            Some(&entry.adjacency)
+        } else {
+            None
+        }
     }
 
     /// Insert or replace the adjacency list for a graph and edge_kinds.
@@ -67,8 +95,32 @@ impl AdjacencyCache {
         adjacency: GraphAdjacency,
     ) {
         let key = CacheKey::new(graph_id, edge_kinds);
-        self.cache.insert(key, adjacency);
+        if !self.cache.contains_key(&key) && self.cache.len() >= self.max_entries {
+            self.evict_lru();
+        }
+        self.cache.insert(
+            key,
+            CacheEntry {
+                adjacency,
+                last_accessed: Instant::now(),
+            },
+        );
         self.graph_ids.insert(graph_id);
+    }
+
+    fn evict_lru(&mut self) {
+        if let Some(oldest_key) = self
+            .cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.last_accessed)
+            .map(|(key, _)| key.clone())
+        {
+            let graph_id = oldest_key.graph_id;
+            self.cache.remove(&oldest_key);
+            if !self.cache.iter().any(|(key, _)| key.graph_id == graph_id) {
+                self.graph_ids.remove(&graph_id);
+            }
+        }
     }
 
     /// Invalidate all cached entries for a specific graph (e.g., after edge add/remove).

@@ -4,7 +4,8 @@
 // L1 ContextNode — lightweight graph node in the hypergraph skeleton.
 // Points to one L2 Context; carries only vector ref + importance, no text.
 
-use std::io::{self, Cursor, Read, Write};
+use crate::util::io_helpers::*;
+use std::io::{self, Cursor, Write};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextNode {
@@ -58,6 +59,14 @@ impl ContextNode {
         let updated_at = read_i64(&mut c)?;
         let version = read_u32(&mut c)?;
         let edge_count = read_u16(&mut c)? as usize;
+        let fixed_prefix_len = 66usize;
+        let variable_len = edge_count * 8;
+        if fixed_prefix_len + variable_len > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "ContextNode edge_ptrs length exceeds data",
+            ));
+        }
         let mut edge_ptrs = Vec::with_capacity(edge_count);
         for _ in 0..edge_count {
             edge_ptrs.push(read_u64(&mut c)?);
@@ -75,41 +84,6 @@ impl ContextNode {
             edge_ptrs,
         })
     }
-}
-
-// ---------------------------------------------------------------------------
-// Inline read helpers (same pattern as other slot modules)
-// ---------------------------------------------------------------------------
-
-fn read_u64(c: &mut Cursor<&[u8]>) -> io::Result<u64> {
-    let mut b = [0u8; 8];
-    c.read_exact(&mut b)?;
-    Ok(u64::from_le_bytes(b))
-}
-fn read_i64(c: &mut Cursor<&[u8]>) -> io::Result<i64> {
-    let mut b = [0u8; 8];
-    c.read_exact(&mut b)?;
-    Ok(i64::from_le_bytes(b))
-}
-fn read_u32(c: &mut Cursor<&[u8]>) -> io::Result<u32> {
-    let mut b = [0u8; 4];
-    c.read_exact(&mut b)?;
-    Ok(u32::from_le_bytes(b))
-}
-fn read_u16(c: &mut Cursor<&[u8]>) -> io::Result<u16> {
-    let mut b = [0u8; 2];
-    c.read_exact(&mut b)?;
-    Ok(u16::from_le_bytes(b))
-}
-fn read_f32(c: &mut Cursor<&[u8]>) -> io::Result<f32> {
-    let mut b = [0u8; 4];
-    c.read_exact(&mut b)?;
-    Ok(f32::from_le_bytes(b))
-}
-fn read_f64(c: &mut Cursor<&[u8]>) -> io::Result<f64> {
-    let mut b = [0u8; 8];
-    c.read_exact(&mut b)?;
-    Ok(f64::from_le_bytes(b))
 }
 
 #[cfg(test)]

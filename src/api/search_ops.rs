@@ -11,32 +11,33 @@ use crate::MemHopError;
 use crate::Result;
 
 impl MemHop {
-    /// Search memory using topic-centric retrieval model
+    /// Search memory using topic-centric retrieval model.
     ///
     /// # Arguments
-    /// * `query` - Search query with dialogue, filters, and optional LLM enhancement
+    /// * `query` - Search query with dialogue, filters, and optional encoder-backed vector retrieval
     ///
     /// # Returns
-    /// SearchResult containing profile, topics, knowledge, archives, etc.
+    /// `SearchResult` containing profile, contexts, associated contexts, L3 IDs, etc.
     #[cfg(feature = "grpc-encoder")]
-    pub fn search_memory(&mut self, query: SearchQuery) -> Result<SearchResult> {
-        use crate::query::search::search_memory as search_impl;
+    pub fn search_context(&mut self, query: SearchQuery) -> Result<SearchResult> {
+        use crate::query::search::search_context;
 
-        let result = search_impl(
+        let result = search_context(
             &mut self.mmap,
             &mut self.header,
             query,
             &mut self.btree,
             &mut self.sparse_index,
+            &self.l2_meta,
             self.config.vector_dim,
             self.encoder.as_deref(),
-            &self.l1_reverse_index,
-            &mut self.file,
             self.config
                 .search_weights
                 .as_ref()
                 .unwrap_or(&crate::config::SearchWeights::default()),
             self.ivf_index.as_ref(),
+            &self.l1_reverse_index,
+            &mut self.file,
         );
 
         // After search (which may have auto-created a new context), rebuild IVF

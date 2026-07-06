@@ -22,7 +22,7 @@ use memhop::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-const VECTOR_DIM: usize = 384;
+const VECTOR_DIM: usize = 768;
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 const MODEL: &str = "gpt-4o-mini";
 
@@ -231,8 +231,9 @@ fn test_agent_conversation_memory_flow() {
 
         // 2. Search — validate recall quality for a Rust-related query.
         let search = db
-            .search_memory(SearchQuery {
+            .search_context(SearchQuery {
                 dialogue: "Rust async await 运行时".into(),
+                l2_id: None,
                 context_id: None,
                 l3_id: None,
                 context_limit: 5,
@@ -256,13 +257,13 @@ fn test_agent_conversation_memory_flow() {
 
         // 3. Locate the Rust topic by title to avoid depending on vector ranking.
         let topics = db
-            .list_topics(TopicListQuery {
+            .list_l2(TopicListQuery {
                 page: 1,
                 page_size: 100,
                 active_only: false,
                 keyword: None,
             })
-            .expect("list_topics should succeed");
+            .expect("list_l2 should succeed");
         let rust_topic = topics
             .items
             .into_iter()
@@ -297,7 +298,7 @@ fn test_agent_conversation_memory_flow() {
         // activate_topic hashes the input string, so use the original topic label
         // (the same string used to create the L2 context id_hash).
         db.activate_topic("Rust异步编程", None);
-        let dream_report = db.dream(make_llm_config()).expect("dream should succeed");
+        let dream_report = db.dream(None).expect("dream should succeed");
         eprintln!("[E2E] dream report: {:?}", dream_report);
 
         // 6. Verify L0 profile update.
@@ -332,13 +333,13 @@ fn test_agent_conversation_memory_flow() {
 
         // 7. Verify L2 multi-level compression.
         let topics = db
-            .list_topics(TopicListQuery {
+            .list_l2(TopicListQuery {
                 page: 1,
                 page_size: 100,
                 active_only: false,
                 keyword: None,
             })
-            .expect("list_topics should succeed");
+            .expect("list_l2 should succeed");
         assert!(
             topics.total >= report.l2_topics_updated as usize,
             "L2 topics should persist"
@@ -427,8 +428,9 @@ fn test_chinese_memory_specialization() {
 
         // BM25 search with Chinese keywords.
         let search = db
-            .search_memory(SearchQuery {
+            .search_context(SearchQuery {
                 dialogue: "王小明 MemHop 项目".into(),
+                l2_id: None,
                 context_id: None,
                 l3_id: None,
                 context_limit: 5,
@@ -454,8 +456,9 @@ fn test_chinese_memory_specialization() {
 
         // LLM enhancement should respond consistently in Chinese.
         let enhanced_search = db
-            .search_memory(SearchQuery {
+            .search_context(SearchQuery {
                 dialogue: "中文分词对检索有什么帮助".into(),
+                l2_id: None,
                 context_id: None,
                 l3_id: None,
                 context_limit: 5,
@@ -580,8 +583,9 @@ pub fn run(query: String) {
 
         // Search restricted by L3 graph ID should still return the linked L2 topic.
         let restricted = db
-            .search_memory(SearchQuery {
+            .search_context(SearchQuery {
                 dialogue: "parser search main".into(),
+                l2_id: None,
                 context_id: None,
                 l3_id: Some(first_graph_id.clone()),
                 context_limit: 5,
@@ -643,13 +647,13 @@ fn test_dream_pipeline_full() {
 
         // Activate all topics and append an Agent turn with an action chain to each.
         let topics = db
-            .list_topics(TopicListQuery {
+            .list_l2(TopicListQuery {
                 page: 1,
                 page_size: 100,
                 active_only: false,
                 keyword: None,
             })
-            .expect("list_topics should succeed");
+            .expect("list_l2 should succeed");
         assert!(
             !topics.items.is_empty(),
             "There should be topics to activate"
@@ -700,7 +704,7 @@ fn test_dream_pipeline_full() {
 
         // Run dream consolidation. L3 distillation now runs before L2 compression
         // so active depth-1 topics with summaries are distilled in a single pass.
-        let dream_report = db.dream(make_llm_config()).expect("dream should succeed");
+        let dream_report = db.dream(None).expect("dream should succeed");
         eprintln!("[E2E] dream_pipeline_full report: {:?}", dream_report);
 
         // L1 topological consistency: no dangling references.
@@ -731,13 +735,13 @@ fn test_dream_pipeline_full() {
 
         // L2 compression hierarchy intact.
         let all_topics = db
-            .list_topics(TopicListQuery {
+            .list_l2(TopicListQuery {
                 page: 1,
                 page_size: 1000,
                 active_only: false,
                 keyword: None,
             })
-            .expect("list_topics should succeed");
+            .expect("list_l2 should succeed");
         let max_depth = all_topics.items.iter().map(|t| t.depth).max().unwrap_or(0);
         assert!(
             max_depth >= 1,

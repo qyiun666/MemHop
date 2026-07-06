@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Default gRPC encoder address (meowvec VectorModelService TCP endpoint).
+pub const DEFAULT_ENCODER_ADDR: &str = "http://127.0.0.1:27110";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemHopConfig {
     pub db_path: PathBuf,
@@ -27,6 +30,13 @@ pub struct MemHopConfig {
     pub auto_dream_archive_threshold: Option<usize>,
     #[serde(default)]
     pub auto_dream_summary_bytes: Option<usize>,
+    /// Number of uncommitted updates to buffer before auto-checkpoint.
+    /// `None` means checkpoint after every update.
+    #[serde(default)]
+    pub auto_checkpoint_interval: Option<u64>,
+    /// Maximum number of entries kept in the L3 adjacency cache.
+    #[serde(default = "default_adjacency_cache_max_entries")]
+    pub adjacency_cache_max_entries: usize,
 }
 
 impl MemHopConfig {
@@ -34,7 +44,7 @@ impl MemHopConfig {
         Self {
             db_path,
             #[cfg(feature = "grpc-encoder")]
-            encoder_grpc_addr: Some(crate::encoder::DEFAULT_ENCODER_ADDR.to_string()),
+            encoder_grpc_addr: Some(DEFAULT_ENCODER_ADDR.to_string()),
             #[cfg(not(feature = "grpc-encoder"))]
             encoder_grpc_addr: None,
             vector_dim,
@@ -47,6 +57,8 @@ impl MemHopConfig {
             session_config: None,
             auto_dream_archive_threshold: None,
             auto_dream_summary_bytes: None,
+            auto_checkpoint_interval: None,
+            adjacency_cache_max_entries: default_adjacency_cache_max_entries(),
         }
     }
 }
@@ -57,6 +69,10 @@ fn default_auto_dream_on_evict() -> bool {
 
 fn default_ivf_initial_k() -> usize {
     16
+}
+
+fn default_adjacency_cache_max_entries() -> usize {
+    128
 }
 
 fn default_n_probes() -> usize {
@@ -138,6 +154,20 @@ pub struct DecayConfig {
     pub node_prune_edges_threshold: f32,
     pub edge_remove_threshold: f32,
     pub min_edge_nodes: usize,
+    /// L6 pathway weight exponential decay lambda (per second).
+    #[serde(default = "default_lambda_pathway")]
+    pub lambda_pathway: f32,
+    /// L6 pathway weight removal threshold after decay.
+    #[serde(default = "default_pathway_remove_threshold")]
+    pub pathway_remove_threshold: f32,
+}
+
+fn default_lambda_pathway() -> f32 {
+    0.01
+}
+
+fn default_pathway_remove_threshold() -> f32 {
+    0.05
 }
 
 impl Default for DecayConfig {
@@ -149,6 +179,8 @@ impl Default for DecayConfig {
             node_prune_edges_threshold: 0.15,
             edge_remove_threshold: 0.05,
             min_edge_nodes: 2,
+            lambda_pathway: default_lambda_pathway(),
+            pathway_remove_threshold: default_pathway_remove_threshold(),
         }
     }
 }
@@ -173,18 +205,26 @@ impl Default for SessionConfig {
 pub struct SearchWeights {
     pub bm25_weight: f32,
     pub vector_weight: f32,
-    pub entity_weight: f32,
     #[serde(default = "default_n_probes")]
     pub n_probes: usize,
+    #[serde(default)]
+    pub enable_reranker: bool,
+    #[serde(default = "default_rerank_max_candidates")]
+    pub rerank_max_candidates: usize,
 }
 
 impl Default for SearchWeights {
     fn default() -> Self {
         Self {
-            bm25_weight: 0.4,
-            vector_weight: 0.4,
-            entity_weight: 0.2,
+            bm25_weight: 0.45,
+            vector_weight: 0.55,
             n_probes: default_n_probes(),
+            enable_reranker: true,
+            rerank_max_candidates: default_rerank_max_candidates(),
         }
     }
+}
+
+fn default_rerank_max_candidates() -> usize {
+    20
 }

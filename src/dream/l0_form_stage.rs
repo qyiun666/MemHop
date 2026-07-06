@@ -114,7 +114,7 @@ pub fn generate_profile(
     }
     mmap[data_offset..data_offset + data.len()].copy_from_slice(&data);
 
-    // Insert into B-tree so l0_crud.rs can find it
+    // Insert into B-tree so query/profile.rs can find it
     let page_ref = (page_id as u64) << 16;
     btree.insert(profile_id_hash, page_ref);
 

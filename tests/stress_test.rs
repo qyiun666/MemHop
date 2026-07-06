@@ -247,13 +247,13 @@ fn test_import_many_l3_documents() {
 
     // Verify DB is still consistent by listing topics (no encoder needed)
     let topics = db
-        .list_topics(memhop::TopicListQuery {
+        .list_l2(memhop::TopicListQuery {
             page: 1,
             page_size: 10,
             active_only: false,
             keyword: None,
         })
-        .expect("list_topics should work after imports");
+        .expect("list_l2 should work after imports");
     // At least verify DB is readable
     let _ = topics;
 }

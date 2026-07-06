@@ -47,9 +47,26 @@ pub fn read_f32(cursor: &mut Cursor<&[u8]>) -> io::Result<f32> {
     Ok(f32::from_le_bytes(buf))
 }
 
+#[inline]
+pub fn read_f64(cursor: &mut Cursor<&[u8]>) -> io::Result<f64> {
+    let mut buf = [0u8; 8];
+    cursor.read_exact(&mut buf)?;
+    Ok(f64::from_le_bytes(buf))
+}
+
 /// Format: `[u16 length][bytes]`
 pub fn read_string(cursor: &mut Cursor<&[u8]>) -> io::Result<String> {
     let len = read_u16(cursor)? as usize;
+    let remaining = cursor
+        .get_ref()
+        .len()
+        .saturating_sub(cursor.position() as usize);
+    if len > remaining {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "string length exceeds remaining data",
+        ));
+    }
     let mut buf = vec![0u8; len];
     cursor.read_exact(&mut buf)?;
     String::from_utf8(buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
@@ -60,6 +77,16 @@ pub fn read_optional_string(cursor: &mut Cursor<&[u8]>) -> io::Result<Option<Str
     let len = read_u16(cursor)? as usize;
     if len == 0 {
         return Ok(None);
+    }
+    let remaining = cursor
+        .get_ref()
+        .len()
+        .saturating_sub(cursor.position() as usize);
+    if len > remaining {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "optional string length exceeds remaining data",
+        ));
     }
     let mut buf = vec![0u8; len];
     cursor.read_exact(&mut buf)?;

@@ -5,6 +5,7 @@ service VectorModelService {
   rpc Encode (EncodeRequest) returns (EncodeResponse);
   rpc BatchEncode (BatchEncodeRequest) returns (BatchEncodeResponse);
   rpc HealthCheck (HealthCheckRequest) returns (HealthCheckResponse);
+  rpc Rerank (RerankRequest) returns (RerankResponse);
 }
 
 message EncodeRequest {
@@ -36,4 +37,13 @@ message HealthCheckResponse {
   string socket = 2;
   string model_name = 3;
   int32 dimension = 4;
+}
+
+message RerankRequest {
+  string query = 1;
+  repeated string documents = 2;
+}
+
+message RerankResponse {
+  repeated float scores = 1;
 }

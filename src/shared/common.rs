@@ -28,11 +28,11 @@ pub fn format_hash(hash: u64) -> String {
 }
 
 /// Extract L2 topic sparse index terms and document length from title and summary.
-/// Returns (terms, doc_len) where terms are lowercased whitespace-split tokens.
+/// Returns (terms, doc_len) where terms are tokenized (CJK-aware) lowercase tokens.
 pub fn build_l2_sparse_terms(title: &str, summary: &Option<String>) -> (Vec<String>, u32) {
-    let mut terms: Vec<String> = title.split_whitespace().map(|s| s.to_lowercase()).collect();
+    let mut terms: Vec<String> = crate::index::sparse::tokenize(title);
     if let Some(ref s) = summary {
-        terms.extend(s.split_whitespace().map(|s| s.to_lowercase()));
+        terms.extend(crate::index::sparse::tokenize(s));
     }
     let doc_len = (title.len() + summary.as_ref().map_or(0, |s| s.len())) as u32;
     (terms, doc_len)

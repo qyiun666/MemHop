@@ -70,7 +70,7 @@ fn extract_recent_dialogues(
     let page_count = header.page_count;
     let mut archives: Vec<(i64, String)> = Vec::new();
 
-    for (_, page_ref) in btree.iter() {
+    for (_, page_ref) in btree.iter_unsorted() {
         let page_id = (*page_ref >> 16) as u32;
         if page_id >= page_count {
             continue;

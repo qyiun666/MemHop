@@ -4,16 +4,20 @@
 //! throughput and recall@5 of `search_memory` over the provided questions.
 
 use criterion::{black_box, criterion_group, Criterion};
-use memhop::{MemHop, MemHopConfig, RequestSource, SearchQuery};
+use memhop::{MemHop, MemHopConfig, RequestSource, SearchQuery, SearchWeights};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 mod common;
 use common::{kill_mock_meowvec, spawn_mock_meowvec};
 
-const ENCODER_ADDR: &str = "http://127.0.0.1:27110";
+fn encoder_addr() -> String {
+    std::env::var("MEMHOP_BENCH_ENCODER_ADDR")
+        .unwrap_or_else(|_| "http://127.0.0.1:27110".to_string())
+}
+
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/benches/fixtures/locomo_smoke.json"
@@ -45,20 +49,35 @@ struct Question {
     relevant_sessions: Vec<String>,
 }
 
+fn bench_vector_dim() -> usize {
+    std::env::var("BENCH_VECTOR_DIM")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(768)
+}
+
 fn make_config(path: PathBuf) -> MemHopConfig {
     MemHopConfig {
         db_path: path,
-        encoder_grpc_addr: Some(ENCODER_ADDR.to_string()),
-        vector_dim: 384,
+        encoder_grpc_addr: Some(encoder_addr()),
+        vector_dim: bench_vector_dim(),
         crystal_path: None,
         llm: Default::default(),
         auto_dream_on_evict: false,
         ivf_initial_k: 16,
-        search_weights: None,
+        search_weights: Some(SearchWeights {
+            bm25_weight: 0.45,
+            vector_weight: 0.55,
+            n_probes: 8,
+            enable_reranker: true,
+            rerank_max_candidates: 20,
+        }),
         decay_config: None,
         session_config: None,
         auto_dream_archive_threshold: None,
         auto_dream_summary_bytes: None,
+        auto_checkpoint_interval: None,
+        adjacency_cache_max_entries: 128,
     }
 }
 
@@ -78,8 +97,9 @@ fn setup() -> (MemHop, Vec<Question>, HashMap<String, String>) {
         for turn in &session.turns {
             let dialogue = format!("{}: {}", turn.speaker, turn.text);
             let res = db
-                .search_memory(SearchQuery {
+                .search_context(SearchQuery {
                     dialogue,
+                    l2_id: None,
                     context_id: None,
                     l3_id: None,
                     context_limit: 1,
@@ -100,21 +120,29 @@ fn setup() -> (MemHop, Vec<Question>, HashMap<String, String>) {
 fn bench_retrieval(c: &mut Criterion) {
     let (mut db, questions, context_to_session) = setup();
 
-    // Compute recall@K once for reporting (not part of the timed loop).
+    // Compute recall@K and nDCG@K once for reporting (not part of the timed loop).
     let mut total_recall = 0.0;
+    let mut total_ndcg = 0.0;
+    let mut latencies: Vec<Duration> = Vec::with_capacity(questions.len());
     for q in &questions {
         let relevant: Vec<&str> = q.relevant_sessions.iter().map(|s| s.as_str()).collect();
         let mut retrieved: Vec<&str> = Vec::new();
         let mut seen = HashSet::new();
-        if let Ok(r) = db.search_memory(SearchQuery {
+
+        let start = Instant::now();
+        let search_result = db.search_context(SearchQuery {
             dialogue: q.question.clone(),
+            l2_id: None,
             context_id: None,
             l3_id: None,
             context_limit: K,
             auto_create: 0,
             min_score: 0.0,
             source: RequestSource::default(),
-        }) {
+        });
+        latencies.push(start.elapsed());
+
+        if let Ok(r) = search_result {
             for ctx in &r.contexts {
                 if let Some(sid) = context_to_session.get(&ctx.id) {
                     if seen.insert(sid.as_str()) {
@@ -124,12 +152,24 @@ fn bench_retrieval(c: &mut Criterion) {
             }
         }
         total_recall += common::recall_at_k(&retrieved, &relevant, K);
+        total_ndcg += common::ndcg_at_k(&retrieved, &relevant, K);
     }
+    let stats = common::latency_stats(&latencies);
     println!(
         "retrieval recall@{} over {} questions: {:.2}",
         K,
         questions.len(),
         total_recall / questions.len() as f64
+    );
+    println!(
+        "retrieval nDCG@{} over {} questions: {:.2}",
+        K,
+        questions.len(),
+        total_ndcg / questions.len() as f64
+    );
+    println!(
+        "retrieval per-query latency P99: {:?}, max: {:?}",
+        stats.p99, stats.max
     );
 
     let mut group = c.benchmark_group("retrieval");
@@ -142,8 +182,9 @@ fn bench_retrieval(c: &mut Criterion) {
         b.iter(|| {
             for q in &questions {
                 let res = db
-                    .search_memory(SearchQuery {
+                    .search_context(SearchQuery {
                         dialogue: q.question.clone(),
+                        l2_id: None,
                         context_id: None,
                         l3_id: None,
                         context_limit: K,
@@ -163,7 +204,18 @@ fn bench_retrieval(c: &mut Criterion) {
 criterion_group!(benches, bench_retrieval);
 
 fn main() {
-    let mut child = spawn_mock_meowvec(27110);
+    let external_addr = std::env::var("MEMHOP_BENCH_ENCODER_ADDR").ok();
+    let mut child = if external_addr.is_none() {
+        Some(spawn_mock_meowvec(27110))
+    } else {
+        // Wait for the externally-provided encoder to become ready.
+        let addr = encoder_addr();
+        memhop::encoder::GrpcEncoder::new(&addr, bench_vector_dim())
+            .expect("external meowvec encoder is not ready");
+        None
+    };
     benches();
-    kill_mock_meowvec(&mut child);
+    if let Some(ref mut c) = child {
+        kill_mock_meowvec(c);
+    }
 }

@@ -6,19 +6,12 @@
 use crate::query::types::{
     Archive, ArchiveListResult, ArchivePageQuery, CrystalListQuery, CrystalListResult,
     EngramListQuery, EngramListResult, EngramResult, KnowledgeDetail, KnowledgeListQuery,
-    KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodesResult, ProfileResult, TopicDetail,
-    TopicListQuery, TopicListResult,
+    KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodesResult,
 };
 use crate::MemHop;
 use crate::MemHopError;
 use crate::Result;
 impl MemHop {
-    /// Get profile
-    pub fn get_profile(&self) -> Result<Option<ProfileResult>> {
-        use crate::query::list::get_profile as impl_fn;
-        impl_fn(&self.mmap, &self.btree)
-    }
-
     /// Get single engram by ID
     pub fn get_engram(&self, id: &str) -> Result<Option<EngramResult>> {
         use crate::query::list::get_engram as impl_fn;
@@ -28,18 +21,6 @@ impl MemHop {
     /// List engrams with pagination and filtering
     pub fn list_engrams(&self, query: EngramListQuery) -> Result<EngramListResult> {
         use crate::query::list::list_engrams as impl_fn;
-        impl_fn(&self.mmap, &self.header, &self.btree, query)
-    }
-
-    /// Get single topic by ID
-    pub fn get_topic(&self, id: &str) -> Result<Option<TopicDetail>> {
-        use crate::query::list::get_topic as impl_fn;
-        impl_fn(&self.mmap, &self.btree, id)
-    }
-
-    /// List topics with pagination and filtering
-    pub fn list_topics(&self, query: TopicListQuery) -> Result<TopicListResult> {
-        use crate::query::list::list_topics as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, query)
     }
 
@@ -261,117 +242,5 @@ impl MemHop {
     pub fn list_knowledge(&self, query: KnowledgeListQuery) -> Result<KnowledgeListResult> {
         use crate::query::list::list_knowledge as impl_fn;
         impl_fn(&self.mmap, &self.header, &self.btree, query)
-    }
-
-    /// Delete an L2 topic and its associated L1 nodes and L4 archives.
-    pub fn delete_topic(&mut self, topic_id: u64) -> Result<()> {
-        let page_ref = match self.btree.search(topic_id) {
-            Some(pr) => pr,
-            None => return Ok(()),
-        };
-
-        let ctx = {
-            let data: &[u8] = &self.mmap[..];
-            let slot_data = crate::shared::slot_io::get_slot_data(data, page_ref).ok_or(
-                MemHopError::PageNotFound(crate::shared::slot_io::decode_page_id(page_ref)),
-            )?;
-            crate::layers::context::ContextSlot::deserialize_slot(slot_data)?
-        };
-
-        // Collect associated L1 ContextNode records using L1ReverseIndex (O(1) lookup).
-        let l1_nodes: Vec<(u64, u64)> = {
-            let data: &[u8] = &self.mmap[..];
-            self.l1_reverse_index
-                .find_associated(&std::iter::once(topic_id).collect())
-                .into_iter()
-                .filter(|(_, page_ref)| {
-                    // Verify the page is still a ContextNode (defensive check)
-                    let page_id = crate::shared::slot_io::decode_page_id(*page_ref);
-                    if page_id >= self.header.page_count {
-                        return false;
-                    }
-                    if let Ok(page_hdr) = crate::file::page::read_page_header(data, page_id) {
-                        page_hdr.page_type == crate::util::PageType::ContextNode as u16
-                    } else {
-                        false
-                    }
-                })
-                .collect()
-        };
-
-        // Free L1 nodes and update the reverse index.
-        for (node_hash, page_ref) in l1_nodes {
-            self.btree.delete(node_hash);
-            let page_id = crate::shared::slot_io::decode_page_id(page_ref);
-            crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
-            self.l1_reverse_index.remove_node(node_hash);
-        }
-
-        // Free associated L4 archives.
-        for &arc_hash in &ctx.archive_refs {
-            if let Some(page_ref) = self.btree.delete(arc_hash) {
-                let page_id = crate::shared::slot_io::decode_page_id(page_ref);
-                crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
-            }
-        }
-
-        // Free centroid vector page if present.
-        if ctx.centroid_page_ref != 0 {
-            let page_id = crate::shared::slot_io::decode_page_id(ctx.centroid_page_ref);
-            crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
-        }
-
-        // Remove the ContextSlot itself.
-        self.btree.delete(topic_id);
-        let page_id = crate::shared::slot_io::decode_page_id(page_ref);
-        crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
-
-        self.sparse_index.remove_document(topic_id);
-        self.l1_reverse_index.remove_context(topic_id);
-
-        Ok(())
-    }
-
-    /// Delete an L5 action chain and all associated action steps.
-    pub fn delete_action_chain(&mut self, chain_id: u64) -> Result<()> {
-        let chain_page_ref = match self.btree.search(chain_id) {
-            Some(pr) => pr,
-            None => return Ok(()),
-        };
-
-        let chain_page_id = crate::shared::slot_io::decode_page_id(chain_page_ref);
-        crate::file::free_list::free_page(&mut self.mmap, &mut self.header, chain_page_id)?;
-        self.btree.delete(chain_id);
-
-        // Collect associated ActionStep records.
-        let mut steps: Vec<(u64, u64)> = Vec::new();
-        {
-            let data: &[u8] = &self.mmap[..];
-            for (&id_hash, &page_ref) in self.btree.iter() {
-                if crate::l3::store::page_type_of(data, page_ref)
-                    != Some(crate::util::PageType::ActionStep as u16)
-                {
-                    continue;
-                }
-                if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
-                    if let Ok(step) =
-                        crate::layers::action_chain::ActionStep::deserialize(slot_data)
-                    {
-                        if step.chain_id == chain_id {
-                            steps.push((id_hash, page_ref));
-                        }
-                    }
-                }
-            }
-        }
-
-        // Free each action step.
-        for (step_hash, page_ref) in steps {
-            self.btree.delete(step_hash);
-            let page_id = crate::shared::slot_io::decode_page_id(page_ref);
-            crate::file::free_list::free_page(&mut self.mmap, &mut self.header, page_id)?;
-        }
-
-        Ok(())
     }
 }

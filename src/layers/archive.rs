@@ -5,7 +5,7 @@
 // Immutable ground truth; no version field needed.
 
 use crate::util::io_helpers::*;
-use std::io::{self, Cursor, Write};
+use std::io::{self, Cursor, Read, Write};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -89,14 +89,53 @@ impl ArchiveSlot {
     }
 
     pub fn deserialize(data: &[u8]) -> io::Result<Self> {
+        const FIXED_PREFIX_LEN: usize = 26;
+        if data.len() < FIXED_PREFIX_LEN {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "archive slot truncated",
+            ));
+        }
         let mut c = Cursor::new(data);
         let id_hash = read_u64(&mut c)?;
         let content_type = ContentType::from_u8(read_u8(&mut c)?);
         let role = read_u8(&mut c)?;
         let context_id = read_u64(&mut c)?;
         let created_at = read_i64(&mut c)?;
-        let content = read_string(&mut c)?;
-        let metadata = read_optional_string(&mut c)?;
+        let content_len = read_u16(&mut c)? as usize;
+        // Peek the metadata length prefix, which sits immediately after the content bytes.
+        let metadata_len_offset = FIXED_PREFIX_LEN + 2 + content_len;
+        if data.len() < metadata_len_offset + 2 {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "archive slot metadata length prefix exceeds data",
+            ));
+        }
+        let metadata_len =
+            u16::from_le_bytes([data[metadata_len_offset], data[metadata_len_offset + 1]]) as usize;
+        let total_needed = metadata_len_offset + 2 + metadata_len;
+        if data.len() < total_needed {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "archive slot variable fields exceed data",
+            ));
+        }
+        let mut content_buf = vec![0u8; content_len];
+        c.read_exact(&mut content_buf)?;
+        let content = String::from_utf8(content_buf)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        // Skip the metadata length prefix we already peeked, then read metadata if present.
+        let _ = read_u16(&mut c)?;
+        let metadata = if metadata_len > 0 {
+            let mut metadata_buf = vec![0u8; metadata_len];
+            c.read_exact(&mut metadata_buf)?;
+            Some(
+                String::from_utf8(metadata_buf)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            )
+        } else {
+            None
+        };
         Ok(ArchiveSlot {
             id_hash,
             content_type,
@@ -199,5 +238,48 @@ mod tests {
             metadata: None,
         };
         let _ = slot;
+    }
+
+    #[test]
+    fn test_archive_deserialize_truncated_returns_unexpected_eof() {
+        let truncated = vec![0u8; 10];
+        let err = ArchiveSlot::deserialize(&truncated).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn test_archive_deserialize_content_truncated() {
+        let slot = ArchiveSlot {
+            id_hash: 1,
+            content_type: ContentType::Text,
+            role: 0,
+            context_id: 20,
+            created_at: 1000,
+            content: "hello".to_string(),
+            metadata: None,
+        };
+        let mut data = slot.serialize().unwrap();
+        // Truncate inside the content body (after both length prefixes).
+        data.truncate(26 + 4 + 2);
+        let err = ArchiveSlot::deserialize(&data).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn test_archive_deserialize_metadata_truncated() {
+        let slot = ArchiveSlot {
+            id_hash: 1,
+            content_type: ContentType::Text,
+            role: 0,
+            context_id: 20,
+            created_at: 1000,
+            content: "hi".to_string(),
+            metadata: Some("meta".to_string()),
+        };
+        let mut data = slot.serialize().unwrap();
+        // Truncate inside the metadata body (after content and metadata prefix).
+        data.truncate(data.len() - 2);
+        let err = ArchiveSlot::deserialize(&data).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
     }
 }

@@ -265,15 +265,12 @@ pub struct SparsePageData {
     pub term_buckets: Vec<Vec<Vec<u8>>>,
     /// Bincode `Vec<(u64, u32)>` per bucket, with length prefix.
     pub doc_buckets: Vec<Vec<Vec<u8>>>,
-    /// Bincode `EntityIndex`, with length prefix.
-    pub entity_chain: Vec<Vec<u8>>,
 }
 
 pub fn build_sparse_directory(
     page_data: &SparsePageData,
     term_starts: &[u32],
     doc_starts: &[u32],
-    entity_start: u32,
 ) -> Vec<u8> {
     let mut dir = Vec::with_capacity(PAGE_SIZE);
     dir.extend_from_slice(&SPARSE_MAGIC.to_le_bytes());
@@ -285,7 +282,8 @@ pub fn build_sparse_directory(
     dir.extend_from_slice(&page_data.avg_doc_length.to_le_bytes());
     dir.extend_from_slice(&page_data.k1.to_le_bytes());
     dir.extend_from_slice(&page_data.b.to_le_bytes());
-    dir.extend_from_slice(&entity_start.to_le_bytes());
+    // Reserved slot is kept at 0 for on-disk header compatibility.
+    dir.extend_from_slice(&0u32.to_le_bytes());
     for &p in term_starts {
         dir.extend_from_slice(&p.to_le_bytes());
     }
@@ -563,7 +561,7 @@ impl EntityIndex {
     ) -> Result<Vec<(u64, String, Vec<String>)>, MemHopError> {
         let mut nodes_by_graph: HashMap<u64, Vec<(u64, String, Vec<String>)>> = HashMap::new();
         let mut all_nodes: Vec<(u64, String, Vec<String>)> = Vec::new();
-        for (&_id_hash, &page_ref) in btree.iter() {
+        for (&_id_hash, &page_ref) in btree.iter_unsorted() {
             if page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
                 continue;
             }
@@ -579,7 +577,7 @@ impl EntityIndex {
             }
         }
         let mut l2_by_graph: HashMap<u64, Vec<u64>> = HashMap::new();
-        for (&_id_hash, &page_ref) in btree.iter() {
+        for (&_id_hash, &page_ref) in btree.iter_unsorted() {
             if page_type_of(data, page_ref) != Some(PageType::Context as u16) {
                 continue;
             }
@@ -928,14 +926,6 @@ impl SparseIndex {
                 doc_buckets.push(wrap_and_chunk(&bytes));
             }
         }
-        let entity_chain = if self.entity_index.is_empty() {
-            Vec::new()
-        } else {
-            wrap_and_chunk(
-                &bincode::serialize(&self.entity_index)
-                    .map_err(|e| format!("Entity index serialization failed: {}", e))?,
-            )
-        };
         Ok(SparsePageData {
             term_bucket_count: term_bc,
             doc_bucket_count: doc_bc,
@@ -947,7 +937,6 @@ impl SparseIndex {
             b: self.b,
             term_buckets,
             doc_buckets,
-            entity_chain,
         })
     }
 
@@ -992,12 +981,7 @@ impl SparseIndex {
                 doc_lengths.insert(doc_id, len);
             }
         }
-        let mut entity_index = if page_data.entity_chain.is_empty() {
-            EntityIndex::new()
-        } else {
-            bincode::deserialize(&unwrap_bucket_bytes(&page_data.entity_chain)?)
-                .map_err(|e| format!("Entity index deserialization failed: {}", e))?
-        };
+        let mut entity_index = EntityIndex::new();
         // Rebuild reverse index (marked #[serde(skip)])
         entity_index.rebuild_node_to_l2();
         Ok(Self {
@@ -1053,6 +1037,29 @@ mod tests {
         let tokens = tokenize("The quick brown fox jumps over the lazy dog");
         assert!(!tokens.contains(&"the".to_string()));
         assert!(tokens.contains(&"quick".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_chinese_regression() {
+        // CJK text must produce multiple tokens, not the whole string as one token
+        let tokens = tokenize("人工智能记忆系统");
+        assert!(
+            tokens.len() > 1,
+            "CJK tokenization should split '人工智能记忆系统' into multiple tokens, got {:?}",
+            tokens
+        );
+        // English text must still work correctly
+        let en_tokens = tokenize("hello world");
+        assert!(
+            en_tokens.contains(&"hello".to_string()),
+            "English tokenization should produce 'hello', got {:?}",
+            en_tokens
+        );
+        assert!(
+            en_tokens.contains(&"world".to_string()),
+            "English tokenization should produce 'world', got {:?}",
+            en_tokens
+        );
     }
 
     #[test]
@@ -1217,11 +1224,9 @@ mod tests {
     fn test_serialize_to_pages_roundtrip() {
         let mut idx = SparseIndex::new();
         idx.add_document(1, SparseIndex::tokenize("machine learning"), 2);
-        idx.entity_index.add_entity("Rust", 1, vec![10, 11]);
         let pd = idx.serialize_to_pages().unwrap();
         let d = SparseIndex::deserialize_from_pages(&pd).unwrap();
         assert_eq!(d.len(), idx.len());
-        assert!(d.has_entity_index());
     }
 
     #[test]
@@ -1233,19 +1238,6 @@ mod tests {
         let r = idx.search(&SparseIndex::tokenize("date"), 10);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].0, 2);
-    }
-
-    #[test]
-    fn test_node_to_l2_survives_serialization_roundtrip() {
-        let mut idx = SparseIndex::new();
-        idx.add_document(100, SparseIndex::tokenize("rust ownership"), 2);
-        idx.entity_index
-            .add_entity("ownership", 1000, vec![10, 11, 12]);
-        let pd = idx.serialize_to_pages().unwrap();
-        let d = SparseIndex::deserialize_from_pages(&pd).unwrap();
-        let l2 = d.entity_index().l2_ids_for_node(1000);
-        assert_eq!(l2.len(), 3);
-        assert!(l2.contains(&10));
     }
 
     #[test]

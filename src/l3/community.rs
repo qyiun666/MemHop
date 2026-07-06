@@ -132,7 +132,7 @@ pub fn run_community_detection(
     let data: &[u8] = &mmap[..];
 
     let mut edges: Vec<HypergraphEdge> = Vec::new();
-    for (&_id, &page_ref) in btree.iter() {
+    for (&_id, &page_ref) in btree.iter_unsorted() {
         if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
             continue;
         }
@@ -153,7 +153,7 @@ pub fn run_community_detection(
         node_set.insert(b);
     }
     // Also include nodes with no edges (they form singleton communities)
-    for (&_id, &page_ref) in btree.iter() {
+    for (&_id, &page_ref) in btree.iter_unsorted() {
         if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
             continue;
         }

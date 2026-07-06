@@ -3,6 +3,7 @@
 
 //! Checkpoint, persistence, and page-allocation helpers.
 
+use crate::api::index_chain::{SparseDirectory, L3_INDEX_DIRECTORY_MAGIC};
 use crate::file::header::{
     LAYER_ROOT_BTREE, LAYER_ROOT_L1_INVERTED, LAYER_ROOT_L3, LAYER_ROOT_L6, LAYER_ROOT_SPARSE,
 };
@@ -13,16 +14,14 @@ use crate::MemHopError;
 use crate::Result;
 use memmap2::MmapMut;
 
-/// Magic number for the L3 index directory page.
-const L3_INDEX_DIRECTORY_MAGIC: u32 = 0x4C334444; // "L3DD"
-
 impl MemHop {
     /// Extend the database file by `grow_pages` pages and remap mmap.
     ///
     /// New pages are initialized as free-list pages (`PageType::Free`) and linked
     /// into the existing free list. After extending, A/B dual headers are rewritten
     /// via the checkpoint mechanism for crash safety.
-    pub fn extend_file(&mut self, grow_pages: u32) -> Result<()> {
+    #[allow(dead_code)]
+    pub(crate) fn extend_file(&mut self, grow_pages: u32) -> Result<()> {
         let old_page_count = self.header.page_count;
         let new_page_count = old_page_count + grow_pages;
         let new_size = (new_page_count as usize) * PAGE_SIZE;
@@ -59,7 +58,7 @@ impl MemHop {
     /// Allocate a new page, automatically extending the file if the free list is exhausted.
     ///
     /// `allocate_page` now has built-in auto-extension via `allocate_or_extend`.
-    pub fn allocate_page(
+    pub(crate) fn allocate_page(
         &mut self,
         page_type: crate::util::PageType,
         layer_id: u16,
@@ -145,6 +144,19 @@ impl MemHop {
         // Persist L3 hypergraph index map.
         self.persist_index(LAYER_ROOT_L3, |db| db.write_l3_index_pages())?;
 
+        // Flush buffered WAL entries to the file tail and reset the buffer.
+        let journal_start =
+            crate::file::journal::write_journal_to_file(&mut self.file, &self.journal_buffer)?;
+        self.header.journal_start = journal_start;
+        self.header.journal_len = self
+            .journal_buffer
+            .iter()
+            .map(|e| {
+                // entry_size(u32) + commit_id(u64) + page_count(u16) + pages + crc32(u32)
+                4 + 8 + 2 + e.pages.len() as u64 * (4 + PAGE_SIZE as u64) + 4
+            })
+            .sum();
+
         // Persist IVF index (non-fatal: warn on failure)
         if let Some(ref ivf) = self.ivf_index {
             if let Err(e) = crate::index::vector::write_ivf_index(
@@ -170,6 +182,16 @@ impl MemHop {
         self.mmap[..PAGE_SIZE].copy_from_slice(&header_bytes); // A second
         self.mmap.flush_range(0, PAGE_SIZE)?;
 
+        // Checkpoint succeeded: the WAL entries are now part of the main file pages,
+        // so zero the journal metadata and flush the headers again.
+        self.header.journal_start = 0;
+        self.header.journal_len = 0;
+        let header_bytes = self.header.to_bytes();
+        self.mmap[PAGE_SIZE..PAGE_SIZE * 2].copy_from_slice(&header_bytes); // B first
+        self.mmap.flush_range(PAGE_SIZE, PAGE_SIZE)?;
+        self.mmap[..PAGE_SIZE].copy_from_slice(&header_bytes); // A second
+        self.mmap.flush_range(0, PAGE_SIZE)?;
+
         // NOW free old pages (write-then-free strategy).
         // If a crash happened before this point, the old pages are still valid
         // and the old headers (A or B) still point to them.
@@ -178,6 +200,9 @@ impl MemHop {
         self.free_old_l1_reverse_pages(old_l1_root)?;
         self.free_old_pathway_pages(old_pathway_root)?;
         self.free_l3_index_pages(old_l3_root)?;
+
+        // Checkpoint succeeded: clear the in-memory WAL buffer.
+        self.journal_buffer.clear();
 
         Ok(())
     }
@@ -222,7 +247,7 @@ impl MemHop {
         if dir_data.len() >= 4 {
             let magic = u32::from_le_bytes([dir_data[0], dir_data[1], dir_data[2], dir_data[3]]);
             if magic == crate::index::sparse::SPARSE_MAGIC {
-                if let Some(dir) = super::SparseDirectory::parse(dir_data) {
+                if let Some(dir) = SparseDirectory::parse(dir_data) {
                     for &page_id in &dir.term_primary_pages {
                         if page_id != 0 {
                             Self::free_page_chain(&mut self.mmap, &mut self.header, page_id)?;
@@ -232,9 +257,6 @@ impl MemHop {
                         if page_id != 0 {
                             Self::free_page_chain(&mut self.mmap, &mut self.header, page_id)?;
                         }
-                    }
-                    if dir.entity_start != 0 {
-                        Self::free_page_chain(&mut self.mmap, &mut self.header, dir.entity_start)?;
                     }
                 }
             }

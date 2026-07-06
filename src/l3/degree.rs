@@ -185,7 +185,7 @@ pub fn full_scan_degrees(mmap: &MmapMut, btree: &BTreeIndex, graph_id: u64) -> G
     let data: &[u8] = &mmap[..];
     let mut degrees: HashMap<u64, u32> = HashMap::new();
 
-    for (&_id, &page_ref) in btree.iter() {
+    for (&_id, &page_ref) in btree.iter_unsorted() {
         if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
             continue;
         }
@@ -201,7 +201,7 @@ pub fn full_scan_degrees(mmap: &MmapMut, btree: &BTreeIndex, graph_id: u64) -> G
         }
     }
 
-    for (&_id, &page_ref) in btree.iter() {
+    for (&_id, &page_ref) in btree.iter_unsorted() {
         if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
             continue;
         }
@@ -250,7 +250,7 @@ pub fn detect_isolated(
     let mut isolated_nodes = Vec::new();
     let mut total_nodes = 0usize;
 
-    for (&_id, &page_ref) in btree.iter() {
+    for (&_id, &page_ref) in btree.iter_unsorted() {
         if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
             continue;
         }

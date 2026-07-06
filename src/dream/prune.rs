@@ -44,6 +44,10 @@ pub struct DreamReport {
     pub new_crystals: Vec<String>,
     /// Low-quality crystals pruned
     pub pruned_crystals: Vec<String>,
+    /// Number of L6 pathway weights decayed
+    pub l6_decayed: usize,
+    /// Number of L6 pathway weights pruned (below threshold)
+    pub l6_pruned: usize,
     /// Per-stage execution reports
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<StageReport>,
@@ -108,6 +112,8 @@ mod tests {
             new_l3_nodes: vec!["l3-node-1".to_string()],
             new_crystals: vec!["crystal-1".to_string()],
             pruned_crystals: vec!["crystal-old".to_string()],
+            l6_decayed: 0,
+            l6_pruned: 0,
             stages: vec![],
             duration_ms: 500,
             rollback_incomplete: false,

@@ -20,14 +20,13 @@ pub(crate) mod util;
 #[cfg(test)]
 pub(crate) mod test_helpers;
 
-mod prelude;
+pub mod prelude;
 
 pub use api::MemHop;
 pub use api::{MemHopError, Result};
-pub use prelude::*;
 
 // Backwards-compatible re-exports
-pub use config::{LlmConfig, MemHopConfig};
+pub use config::{LlmConfig, MemHopConfig, SearchWeights};
 pub use layers::pathway::PathwayWeightSlot;
 pub use shared::common::{format_hash, parse_id_to_hash};
 pub use util::{hash_id, Layer, SourceMeta, SourceRef, SourceType};
@@ -45,7 +44,9 @@ pub use query::types::{
     EdgeListResult, EngramListQuery, EngramListResult, EngramResult, ImportData, ImportError,
     ImportMode, ImportRequest, ImportResult, ImportStatus, KnowledgeDetail, KnowledgeImportItem,
     KnowledgeListQuery, KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodesResult,
-    KnowledgeSummary, L3Preview, NodeListQuery, NodeListResult, ProfileResult, RequestSource,
-    SearchQuery, SearchResult, TargetLayer, TopicDetail, TopicImportItem, TopicListQuery,
-    TopicListResult, TopicSummary, UpdateProfileRequest, UpdateRequest, UpdateResult, UpdateStatus,
+    KnowledgeSummary, L3Detail, L3Preview, L4SearchQuery, L6Filter, MergeResult, NodeListQuery,
+    NodeListResult, ProfileResult, RequestSource, SearchQuery, SearchResult, TargetLayer,
+    TopicDetail, TopicImportItem, TopicListQuery, TopicListResult, TopicSummary, UpdateL2Fields,
+    UpdateL3Fields, UpdateL5Fields, UpdateL6Fields, UpdateProfileRequest, UpdateRequest,
+    UpdateResult, UpdateStatus,
 };

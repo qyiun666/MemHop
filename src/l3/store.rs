@@ -100,30 +100,6 @@ pub fn add_node(
     Ok(format_hash(node.id_hash))
 }
 
-/// Read a HypergraphNode by its ID string.
-///
-/// Returns `Ok(None)` if not found in the BTreeIndex.
-pub fn get_node(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    node_id: &str,
-) -> Result<Option<HypergraphNode>, MemHopError> {
-    let id_hash = crate::shared::common::parse_id_to_hash(node_id);
-
-    match btree.search(id_hash) {
-        Some(page_ref) => {
-            let data: &[u8] = &mmap[..];
-            if let Some(slot_data) = get_slot_data(data, page_ref) {
-                let node = HypergraphNode::deserialize(slot_data)?;
-                Ok(Some(node))
-            } else {
-                Err(MemHopError::PageNotFound((page_ref >> 16) as u32))
-            }
-        }
-        None => Ok(None),
-    }
-}
-
 /// Delete a HypergraphNode and cascade-delete all edges that reference it.
 pub fn delete_node(
     mmap: &mut MmapMut,
@@ -135,8 +111,16 @@ pub fn delete_node(
 ) -> Result<(), MemHopError> {
     let id_hash = crate::shared::common::parse_id_to_hash(node_id);
 
-    let node = match get_node(mmap, btree, node_id)? {
-        Some(n) => n,
+    // Read node directly
+    let node = match btree.search(id_hash) {
+        Some(page_ref) => {
+            let data: &[u8] = &mmap[..];
+            if let Some(slot_data) = get_slot_data(data, page_ref) {
+                HypergraphNode::deserialize(slot_data)?
+            } else {
+                return Err(MemHopError::PageNotFound((page_ref >> 16) as u32));
+            }
+        }
         None => return Ok(()), // Already gone
     };
 
@@ -144,7 +128,7 @@ pub fn delete_node(
 
     // Also collect page_ref to avoid second BTree lookup when deleting
     let mut edges_to_delete: Vec<(u64, u64)> = Vec::new(); // (edge_hash, page_ref)
-    for (&eid, &page_ref) in btree.iter() {
+    for (&eid, &page_ref) in btree.iter_unsorted() {
         let data: &[u8] = &mmap[..];
         if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
             continue;
@@ -238,53 +222,6 @@ pub fn add_edge(
     Ok(format_hash(edge.id_hash))
 }
 
-/// Read a HypergraphEdge by its ID string.
-pub fn get_edge(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    edge_id: &str,
-) -> Result<Option<HypergraphEdge>, MemHopError> {
-    let id_hash = crate::shared::common::parse_id_to_hash(edge_id);
-
-    match btree.search(id_hash) {
-        Some(page_ref) => {
-            let data: &[u8] = &mmap[..];
-            if let Some(slot_data) = get_slot_data(data, page_ref) {
-                let edge = HypergraphEdge::deserialize(slot_data)?;
-                Ok(Some(edge))
-            } else {
-                Err(MemHopError::PageNotFound((page_ref >> 16) as u32))
-            }
-        }
-        None => Ok(None),
-    }
-}
-
-/// Delete a HypergraphEdge by its ID string.
-pub fn delete_edge(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
-    edge_id: &str,
-    tracker: Option<&mut crate::l3::DegreeTracker>,
-) -> Result<(), MemHopError> {
-    let id_hash = crate::shared::common::parse_id_to_hash(edge_id);
-
-    // Read edge before deleting for tracker notification
-    let edge_opt = get_edge(mmap, btree, edge_id).ok().flatten();
-
-    if let Some(page_ref) = btree.delete(id_hash) {
-        let page_id = (page_ref >> 16) as u32;
-        crate::file::free_list::free_page(mmap, header, page_id)?;
-    }
-
-    if let (Some(tracker), Some(edge)) = (tracker, edge_opt) {
-        tracker.on_edge_deleted(edge.graph_id, &edge.node_ids);
-    }
-
-    Ok(())
-}
-
 // ============================================================================
 // Graph-level operations
 // ============================================================================
@@ -299,7 +236,7 @@ pub fn list_nodes_by_graph(
     let data: &[u8] = &mmap[..];
     let mut all_nodes: Vec<HypergraphNode> = Vec::new();
 
-    for (&_id, &page_ref) in btree.iter() {
+    for (&_id, &page_ref) in btree.iter_unsorted() {
         if page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
             continue;
         }
@@ -362,7 +299,7 @@ pub fn list_edges_by_graph(
     let data: &[u8] = &mmap[..];
     let mut all_edges: Vec<HypergraphEdge> = Vec::new();
 
-    for (&_id, &page_ref) in btree.iter() {
+    for (&_id, &page_ref) in btree.iter_unsorted() {
         if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
             continue;
         }
@@ -424,7 +361,7 @@ pub fn delete_graph(
     let mut node_hashes: Vec<u64> = Vec::new();
     let mut edge_hashes: Vec<u64> = Vec::new();
 
-    for (&id_hash, &page_ref) in btree.iter() {
+    for (&id_hash, &page_ref) in btree.iter_unsorted() {
         let data: &[u8] = &mmap[..];
         let pt = page_type_of(data, page_ref).unwrap_or(0);
         if pt == PageType::HypergraphNode as u16 {
@@ -478,7 +415,7 @@ pub fn collect_l2_refs(
     let data: &[u8] = &mmap[..];
     let mut refs = Vec::new();
 
-    for (&id_hash, &page_ref) in btree.iter() {
+    for (&id_hash, &page_ref) in btree.iter_unsorted() {
         if page_type_of(data, page_ref) != Some(PageType::Context as u16) {
             continue;
         }
@@ -562,9 +499,10 @@ fn build_adjacency_index(
     btree: &BTreeIndex,
     graph_id: u64,
     edge_kinds: Option<&[GraphEdgeKind]>,
-) -> HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>> {
-    let mut adjacency: HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>> = HashMap::new();
-    for (&_eid, &page_ref) in btree.iter() {
+) -> crate::l3::GraphAdjacency {
+    let mut adjacency: std::collections::HashMap<u64, Vec<(HypergraphEdge, Vec<u64>)>> =
+        std::collections::HashMap::new();
+    for (&_eid, &page_ref) in btree.iter_unsorted() {
         if page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
             continue;
         }
@@ -588,7 +526,7 @@ fn build_adjacency_index(
             }
         }
     }
-    adjacency
+    std::sync::Arc::new(adjacency)
 }
 
 /// Execute BFS traversal on a pre-built adjacency index.
@@ -646,21 +584,6 @@ fn bfs_with_adjacency(
     hops
 }
 
-pub fn bfs_traversal(
-    data: &[u8],
-    btree: &BTreeIndex,
-    graph_id: u64,
-    start_node: u64,
-    max_depth: usize,
-    edge_kinds: Option<&[GraphEdgeKind]>,
-) -> Result<Vec<TraversalHop>, MemHopError> {
-    if max_depth == 0 {
-        return Ok(Vec::new());
-    }
-    let adjacency = build_adjacency_index(data, btree, graph_id, edge_kinds);
-    Ok(bfs_with_adjacency(&adjacency, start_node, max_depth))
-}
-
 /// BFS traversal with adjacency cache support.
 ///
 /// If the cache contains a valid adjacency list for the graph, it is reused.
@@ -686,7 +609,11 @@ pub fn bfs_traversal_cached(
         adjacency
     };
 
-    Ok(bfs_with_adjacency(&adjacency, start_node, max_depth))
+    Ok(bfs_with_adjacency(
+        adjacency.as_ref(),
+        start_node,
+        max_depth,
+    ))
 }
 
 #[cfg(test)]
@@ -699,8 +626,9 @@ mod tests {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
         let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
 
+        let mut cache = crate::l3::AdjacencyCache::new();
         let data: &[u8] = &mmap[..];
-        let hops = bfs_traversal(data, &btree, 1, 101, 1, None).unwrap();
+        let hops = bfs_traversal_cached(data, &btree, 1, 101, 1, None, &mut cache).unwrap();
 
         assert_eq!(hops.len(), 3, "expected 3 one-hop neighbors from n1");
 
@@ -720,8 +648,9 @@ mod tests {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
         let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
 
+        let mut cache = crate::l3::AdjacencyCache::new();
         let data: &[u8] = &mmap[..];
-        let hops = bfs_traversal(data, &btree, 1, 101, 2, None).unwrap();
+        let hops = bfs_traversal_cached(data, &btree, 1, 101, 2, None, &mut cache).unwrap();
 
         // depth 1: 101->102 (e201), 101->103 (e204), 101->105 (e204)
         // depth 2: 103->104 (e203)
@@ -741,8 +670,18 @@ mod tests {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
         let (_nodes, _edges) = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
 
+        let mut cache = crate::l3::AdjacencyCache::new();
         let data: &[u8] = &mmap[..];
-        let hops = bfs_traversal(data, &btree, 1, 101, 2, Some(&[GraphEdgeKind::Related])).unwrap();
+        let hops = bfs_traversal_cached(
+            data,
+            &btree,
+            1,
+            101,
+            2,
+            Some(&[GraphEdgeKind::Related]),
+            &mut cache,
+        )
+        .unwrap();
 
         // Only Related edges: 101->102, 102->103
         assert_eq!(hops.len(), 2);
@@ -752,6 +691,7 @@ mod tests {
     #[test]
     fn test_bfs_avoids_cycles() {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let mut cache = crate::l3::AdjacencyCache::new();
 
         // Create a triangle: 101 <-> 102 <-> 103 <-> 101
         for &nid in &[101u64, 102, 103] {
@@ -795,7 +735,7 @@ mod tests {
         .unwrap();
 
         let data: &[u8] = &mmap[..];
-        let hops = bfs_traversal(data, &btree, 1, 101, 3, None).unwrap();
+        let hops = bfs_traversal_cached(data, &btree, 1, 101, 3, None, &mut cache).unwrap();
 
         // With cycle prevention there should be no duplicate to_nodes at each depth.
         // depth1: 101->102, 101->103
@@ -807,10 +747,11 @@ mod tests {
     #[test]
     fn test_bfs_traversal_subgraph() {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let mut cache = crate::l3::AdjacencyCache::new();
         let (node_ids, _edge_ids) = build_test_graph(&mut mmap, &mut header, &mut btree, &mut file);
 
         let data: &[u8] = &mmap[..];
-        let hops = bfs_traversal(data, &btree, 1, 101, 2, None).unwrap();
+        let hops = bfs_traversal_cached(data, &btree, 1, 101, 2, None, &mut cache).unwrap();
 
         let mut returned_node_ids: HashSet<u64> = HashSet::new();
         let mut returned_edge_ids: HashSet<u64> = HashSet::new();
@@ -844,8 +785,9 @@ mod tests {
         )
         .unwrap();
 
+        let mut cache = crate::l3::AdjacencyCache::new();
         let data: &[u8] = &mmap[..];
-        let hops = bfs_traversal(data, &btree, 1, 101, 2, None).unwrap();
+        let hops = bfs_traversal_cached(data, &btree, 1, 101, 2, None, &mut cache).unwrap();
 
         assert_eq!(hops.len(), 0); // No edges from isolated node
     }

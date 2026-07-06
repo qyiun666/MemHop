@@ -325,11 +325,7 @@ pub fn compress_active_contexts(
         let new_page_ref = crate::file::page::encode_page_ref(new_page_id, 0);
         btree.insert(new_id_hash, new_page_ref);
 
-        let title_terms: Vec<String> = new_ctx
-            .title
-            .split_whitespace()
-            .map(|s| s.to_lowercase())
-            .collect();
+        let title_terms = crate::index::sparse::tokenize(&new_ctx.title);
         let doc_len = title_terms.len() as u32;
         sparse_index.add_document(new_id_hash, title_terms, doc_len);
 

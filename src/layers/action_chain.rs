@@ -4,6 +4,7 @@
 //! L5 ActionChain — procedural knowledge as ordered action sequences.
 //! Replaces the old CrystalSlot which crammed everything into a `raw_steps` blob.
 
+use crate::util::io_helpers::*;
 use std::io::{self, Cursor, Read, Write};
 
 // ============================================================================
@@ -85,6 +86,14 @@ impl ActionChainSlot {
         let created_at = read_i64(&mut c)?;
         let updated_at = read_i64(&mut c)?;
         let version = read_u32(&mut c)?;
+        const FIXED_PREFIX_LEN: usize = 53;
+        let variable_len = title_len + trigger_len;
+        if FIXED_PREFIX_LEN + variable_len > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "ActionChainSlot variable fields exceed data",
+            ));
+        }
         let mut title_buf = vec![0u8; title_len];
         c.read_exact(&mut title_buf)?;
         let title = String::from_utf8(title_buf)
@@ -153,6 +162,14 @@ impl ActionStep {
         let action_len = read_u16(&mut c)? as usize;
         let params_len = read_u16(&mut c)? as usize;
         let created_at = read_i64(&mut c)?;
+        const FIXED_PREFIX_LEN: usize = 30;
+        let variable_len = action_len + params_len;
+        if FIXED_PREFIX_LEN + variable_len > data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "ActionStep variable fields exceed data",
+            ));
+        }
         let mut action_buf = vec![0u8; action_len];
         c.read_exact(&mut action_buf)?;
         let action = String::from_utf8(action_buf)
@@ -176,41 +193,6 @@ impl ActionStep {
             created_at,
         })
     }
-}
-
-// ---------------------------------------------------------------------------
-// Inline read helpers
-// ---------------------------------------------------------------------------
-
-fn read_u64(c: &mut Cursor<&[u8]>) -> io::Result<u64> {
-    let mut b = [0u8; 8];
-    c.read_exact(&mut b)?;
-    Ok(u64::from_le_bytes(b))
-}
-fn read_i64(c: &mut Cursor<&[u8]>) -> io::Result<i64> {
-    let mut b = [0u8; 8];
-    c.read_exact(&mut b)?;
-    Ok(i64::from_le_bytes(b))
-}
-fn read_u32(c: &mut Cursor<&[u8]>) -> io::Result<u32> {
-    let mut b = [0u8; 4];
-    c.read_exact(&mut b)?;
-    Ok(u32::from_le_bytes(b))
-}
-fn read_u16(c: &mut Cursor<&[u8]>) -> io::Result<u16> {
-    let mut b = [0u8; 2];
-    c.read_exact(&mut b)?;
-    Ok(u16::from_le_bytes(b))
-}
-fn read_u8(c: &mut Cursor<&[u8]>) -> io::Result<u8> {
-    let mut b = [0u8; 1];
-    c.read_exact(&mut b)?;
-    Ok(b[0])
-}
-fn read_f32(c: &mut Cursor<&[u8]>) -> io::Result<f32> {
-    let mut b = [0u8; 4];
-    c.read_exact(&mut b)?;
-    Ok(f32::from_le_bytes(b))
 }
 
 // ============================================================================
