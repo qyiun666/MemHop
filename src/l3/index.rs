@@ -4,7 +4,7 @@
 //! L3 Hypergraph Index — keyword, type, and BM25 content search within a single L3 hypergraph.
 
 use crate::file::page::PageHeader;
-use crate::index::sparse::SparseIndex;
+use crate::index::sparse::{self, SparseIndex};
 use crate::layers::hypergraph::HypergraphNode;
 use crate::util::{PageType, SENTINEL_PAGE_ID};
 use crate::MemHopError;
@@ -66,7 +66,7 @@ impl L3Index {
             .push(id_hash);
 
         let content_text = format!("{} {}", node.title, node.content);
-        let tokens = SparseIndex::tokenize(&content_text);
+        let tokens = sparse::tokenize(&content_text);
         let doc_len = tokens.len() as u32;
         self.content_index.add_document(id_hash, tokens, doc_len);
     }
@@ -100,7 +100,7 @@ impl L3Index {
             .as_ref()
             .and_then(|t| self.type_index.get(t).cloned());
 
-        let query_terms = SparseIndex::tokenize(&query.query);
+        let query_terms = sparse::tokenize(&query.query);
         let content_results = self.content_index.search(&query_terms, query.limit * 2);
 
         let filtered: Vec<(u64, f32)> = content_results

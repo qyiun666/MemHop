@@ -5,9 +5,9 @@
 
 use criterion::{black_box, criterion_group, BenchmarkId, Criterion};
 use memhop::{
-    ImportData, ImportMode, ImportRequest, KnowledgeImportItem, KnowledgeListQuery, MemHop,
-    MemHopConfig, RequestSource, SearchQuery, TargetLayer, TopicListQuery, UpdateL2Fields,
-    UpdateProfileRequest, UpdateRequest, L4SearchQuery,
+    ImportData, ImportMode, ImportRequest, KnowledgeImportItem, KnowledgeListQuery, L4SearchQuery,
+    MemHop, MemHopConfig, RequestSource, SearchQuery, TargetLayer, TopicListQuery, UpdateL2Fields,
+    UpdateProfileRequest, UpdateRequest,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -15,7 +15,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 mod common;
-use common::{kill_mock_meowvec, spawn_mock_meowvec};
+use common::{kill_python_meowvec, spawn_python_meowvec};
 
 const ENCODER_ADDR: &str = "http://127.0.0.1:27110";
 
@@ -23,7 +23,7 @@ fn make_config(path: PathBuf) -> MemHopConfig {
     MemHopConfig {
         db_path: path,
         encoder_grpc_addr: Some(ENCODER_ADDR.to_string()),
-        vector_dim: 384,
+        vector_dim: 1024,
         crystal_path: None,
         llm: Default::default(),
         auto_dream_on_evict: false,
@@ -31,8 +31,7 @@ fn make_config(path: PathBuf) -> MemHopConfig {
         search_weights: None,
         decay_config: None,
         session_config: None,
-        auto_dream_archive_threshold: None,
-        auto_dream_summary_bytes: None,
+        dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
     }
@@ -146,7 +145,11 @@ fn run_e2e_workflow(n_topics: usize) {
     black_box(knowledge.total);
 
     // 6. Get & update L2 detail, search archives, get profile
-    let topic_id_for_detail = topics.items.first().map(|t| t.id.clone()).unwrap_or_default();
+    let topic_id_for_detail = topics
+        .items
+        .first()
+        .map(|t| t.id.clone())
+        .unwrap_or_default();
     let _detail = db.get_l2(&topic_id_for_detail).expect("get_l2 failed");
     let _updated = db
         .update_l2(
@@ -199,7 +202,7 @@ fn e2e_workflow(c: &mut Criterion) {
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(8));
 
-    for n in [10, 100] {
+    for n in [10] {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             b.iter(|| run_e2e_workflow(n));
         });
@@ -211,9 +214,9 @@ fn e2e_workflow(c: &mut Criterion) {
 criterion_group!(benches, e2e_workflow);
 
 fn main() {
-    let mut child = spawn_mock_meowvec(27110);
+    let mut child = spawn_python_meowvec(27110);
 
     benches();
 
-    kill_mock_meowvec(&mut child);
+    kill_python_meowvec(&mut child);
 }

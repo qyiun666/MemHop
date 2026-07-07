@@ -37,6 +37,7 @@ impl MemHop {
             &mut self.file,
             &self.config,
             &mut self.journal_buffer,
+            self.encoder.as_deref(),
             Some(&mut self.degree_tracker),
             Some(&mut self.l3_index_map),
         );

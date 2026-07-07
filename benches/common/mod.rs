@@ -24,4 +24,4 @@ pub use llm_judge::LlmJudge;
 
 pub use report::{generate_json_report, generate_markdown_report, BenchResult, CompetitorBaseline};
 
-pub use mock_meowvec::{kill_mock_meowvec, spawn_mock_meowvec};
+pub use mock_meowvec::{kill_python_meowvec, spawn_python_meowvec};

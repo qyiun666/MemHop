@@ -221,6 +221,14 @@ pub struct UpdateRequest {
     /// API 请求来源（记录是谁发起的更新，会写入 L4 ArchiveSlot.metadata）
     #[serde(default, skip_serializing_if = "RequestSource::is_empty")]
     pub source: RequestSource,
+    /// Scene identifier for grouping related contexts.
+    ///
+    /// **强烈建议传入**：相同 `scene_id` 的上下文会被 Dream 阶段的
+    /// 合并压缩（`l2_merge_compress`）检测并归入同一场景树，从而
+    /// 实现跨话题的摘要合并与深度降级。不传入时每个 topic 独立成场景，
+    /// 失去跨话题合并压缩的价值。
+    #[serde(default)]
+    pub scene_id: Option<String>,
 }
 
 /// Action item for L5 action chain storage
@@ -262,6 +270,9 @@ pub struct UpdateResult {
     /// because archive or summary thresholds were exceeded.
     #[serde(default)]
     pub dream_triggered: bool,
+    /// Node ID for the newly created turn (if created)
+    #[serde(default)]
+    pub turn_node_id: String,
 }
 
 /// Update status enumeration
@@ -342,6 +353,8 @@ pub struct TopicSummary {
     pub id: String,
     pub title: String,
     pub depth: u8,
+    pub scene_id: u64,
+    pub children_ids: Vec<u64>,
     pub archive_count: usize,
     pub turn_count: u32,
     pub is_active: bool,
@@ -356,6 +369,8 @@ pub struct TopicDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
     pub depth: u8,
+    pub scene_id: u64,
+    pub children_ids: Vec<u64>,
     pub archive_refs: Vec<String>,
     pub l3_refs: Vec<String>,
     pub turn_count: u32,
@@ -806,4 +821,39 @@ pub struct L3Detail {
 pub struct MergeResult {
     pub primary: TopicDetail,
     pub merged_ids: Vec<String>,
+}
+
+/// Result of querying a scene tree — all nodes in a scene with edge topology.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SceneTreeResult {
+    pub scene_id: String,
+    pub total_turns: u32,
+    pub depth_distribution: [u32; 4],
+    pub nodes: Vec<TopicDetail>,
+    pub edges: Vec<(String, String)>,
+}
+
+/// Request to merge multiple L2 context nodes under a single scene parent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeNodesRequest {
+    pub node_ids: Vec<String>,
+    pub scene_id: String,
+}
+
+/// Result of a merge-nodes operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeNodesResult {
+    pub new_parent_node_id: String,
+    pub sunk_node_ids: Vec<String>,
+    pub removed_node_ids: Vec<String>,
+}
+
+/// Result of a merge-compress dream cycle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MergeCompressResult {
+    pub groups_detected: u32,
+    pub nodes_merged: u32,
+    pub parent_nodes_created: u32,
+    pub nodes_sunk: u32,
+    pub nodes_removed: u32,
 }

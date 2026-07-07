@@ -28,7 +28,7 @@ fn test_config(db_path: &str) -> MemHopConfig {
     MemHopConfig {
         db_path: PathBuf::from(db_path),
         encoder_grpc_addr: None,
-        vector_dim: 768,
+        vector_dim: 1024,
         crystal_path: None,
         llm: LlmConfig {
             api_url: String::new(),
@@ -46,8 +46,7 @@ fn test_config(db_path: &str) -> MemHopConfig {
         search_weights: None,
         decay_config: None,
         session_config: None,
-        auto_dream_archive_threshold: None,
-        auto_dream_summary_bytes: None,
+        dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
     }
@@ -62,7 +61,7 @@ fn test_open_empty_path() {
     let config = MemHopConfig {
         db_path: PathBuf::from(""),
         encoder_grpc_addr: None,
-        vector_dim: 768,
+        vector_dim: 1024,
         crystal_path: None,
         llm: LlmConfig::default(),
         auto_dream_on_evict: false,
@@ -70,8 +69,7 @@ fn test_open_empty_path() {
         search_weights: None,
         decay_config: None,
         session_config: None,
-        auto_dream_archive_threshold: None,
-        auto_dream_summary_bytes: None,
+        dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
     };
@@ -99,8 +97,7 @@ fn test_open_invalid_config_zero_dim() {
         search_weights: None,
         decay_config: None,
         session_config: None,
-        auto_dream_archive_threshold: None,
-        auto_dream_summary_bytes: None,
+        dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
     };
@@ -154,6 +151,7 @@ fn test_full_lifecycle() {
                 parameters: None,
             }]),
             instant_distill: false,
+            scene_id: None,
             source: Default::default(),
         })
         .expect("update_memory failed");
@@ -514,6 +512,7 @@ fn test_graph_query_and_delete() {
                 parameters: None,
             }]),
             instant_distill: false,
+            scene_id: None,
             source: Default::default(),
         })
         .expect("update_memory failed");
@@ -1103,6 +1102,7 @@ fn test_agent_workflow() {
                 },
             ]),
             instant_distill: false,
+            scene_id: None,
             source: Default::default(),
         })
         .expect("update_memory failed");
@@ -1182,6 +1182,7 @@ fn test_dream_with_llm() {
                 parameters: None,
             }]),
             instant_distill: false,
+            scene_id: None,
             source: Default::default(),
         })
         .expect("update_memory failed");

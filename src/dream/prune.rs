@@ -22,6 +22,16 @@ pub struct DreamReport {
     pub removed_contexts: Vec<String>,
     /// New compressed contexts created from demoted depth-1 nodes
     pub new_compressed: Vec<CompressResult>,
+    /// Number of same-topic groups detected during L2 merge-compress
+    pub groups_detected: u32,
+    /// Total depth-1 nodes consumed by merging
+    pub nodes_merged: u32,
+    /// New parent nodes created during merge-compress
+    pub parent_nodes_created: u32,
+    /// Number of descendant nodes whose depth was sunk by 1
+    pub nodes_sunk: u32,
+    /// Number of nodes (depth>=4) removed during subtree sinking
+    pub nodes_removed: u32,
     /// L1 nodes updated based on L2 changes
     pub l1_updated: Vec<String>,
     /// Number of L1 nodes whose importance was decayed/updated
@@ -102,6 +112,11 @@ mod tests {
                 source_context_id: "ctx-1".to_string(),
                 new_summary: "compressed".to_string(),
             }],
+            groups_detected: 0,
+            nodes_merged: 0,
+            parent_nodes_created: 0,
+            nodes_sunk: 0,
+            nodes_removed: 0,
             l1_updated: vec!["node-1".to_string()],
             l1_decayed_nodes: 0,
             l1_pruned_edges: 0,

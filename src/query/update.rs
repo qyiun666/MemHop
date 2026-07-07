@@ -4,15 +4,17 @@
 //! update_memory() internal engine with WAL-backed cross-layer atomicity.
 
 use crate::config::MemHopConfig;
+use crate::encoder::Encoder;
 use crate::file::free_list::{allocate_or_extend, free_page};
 use crate::file::header::FileHeader;
 use crate::file::journal::{replay_journal_to_mmap, JournalEntry};
-use crate::file::page::PageHeader;
+use crate::file::page::{allocate_page, encode_page_ref, PageHeader};
 use crate::index::btree::BTreeIndex;
 use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
 use crate::l3;
 use crate::layers::archive::ArchiveSlot;
+use crate::layers::context::ContextSlot;
 use crate::layers::context_node::ContextNode;
 use crate::layers::hypergraph::{HypergraphNode, HypergraphSlot, HypergraphSource};
 use crate::organize::extract_keywords;
@@ -121,8 +123,9 @@ pub fn update_memory_internal(
     sparse_index: &mut SparseIndex,
     l2_meta: &mut L2MetaIndex,
     file: &mut File,
-    config: &MemHopConfig,
+    _config: &MemHopConfig,
     journal: &mut Vec<JournalEntry>,
+    encoder: Option<&(dyn Encoder + Send + Sync)>,
     tracker: Option<&mut crate::l3::DegreeTracker>,
     index_map: Option<&mut L3IndexMap>,
 ) -> Result<UpdateResult, MemHopError> {
@@ -137,9 +140,10 @@ pub fn update_memory_internal(
     }
 
     let topic_hash = parse_id_to_hash(&request.topic_id);
-    let page_ref = btree
-        .search(topic_hash)
-        .ok_or(MemHopError::PageNotFound(0))?;
+    // Validate topic exists in btree.
+    if !btree.contains_key(topic_hash) {
+        return Err(MemHopError::PageNotFound(0));
+    }
 
     let now_ms = now_ms();
     let commit_id = header.commit_id.wrapping_add(1);
@@ -164,59 +168,103 @@ pub fn update_memory_internal(
     let archive_id = format_hash(l4_id_hash);
 
     // ------------------------------------------------------------------
-    // Step 2: L2 ContextSlot update (existing page)
+    // Step 2: L2 ContextSlot — create new turn node (depth=1)
     // ------------------------------------------------------------------
-    let l2_page_id = crate::shared::slot_io::decode_page_id(page_ref);
-    let mut ctx = {
-        let data: &[u8] = &mmap[..];
-        let slot_data = crate::shared::slot_io::get_slot_data(data, page_ref)
-            .ok_or(MemHopError::PageNotFound(l2_page_id))?;
-        crate::layers::context::ContextSlot::deserialize_slot(slot_data)?
+    // Resolve scene_id: from request, or derive from topic_hash
+    let scene_id = if let Some(ref sid) = request.scene_id {
+        parse_id_to_hash(sid)
+    } else {
+        tracing::warn!(
+            "[update_memory] scene_id not provided for topic {}, falling back to topic_hash. \
+             Callers should provide scene_id to enable cross-topic merge-compression.",
+            request.topic_id
+        );
+        topic_hash
     };
 
-    // A brand-new context (e.g. from auto_create) has no archives and no turns yet.
-    let is_fresh_context = ctx.turn_count == 0 && ctx.archive_refs.is_empty();
+    // Generate a unique id for the turn node (commit_id ensures uniqueness within same ms)
+    let turn_hash = hash_id(&format!("turn_{}_{:x}_{}", scene_id, now_ms, commit_id));
 
-    tx.snapshot_page(mmap, l2_page_id)?;
+    // Title from summary or default
+    let turn_title = request.summary.as_ref()
+        .map(|s| s.chars().take(50).collect::<String>())
+        .unwrap_or_else(|| format!("turn-{}", now_ms));
 
-    if !ctx.archive_refs.contains(&l4_id_hash) {
-        ctx.archive_refs.push(l4_id_hash);
-        ctx.archive_refs.sort();
-    }
-    ctx.turn_count += 1;
+    // Summary: use provided summary, or fall back to dialogue text
+    let turn_summary = request.summary.clone()
+        .unwrap_or_else(|| request.dialogue_text.clone());
 
-    if let Some(ref summary) = request.summary {
-        match ctx.summary {
-            Some(ref existing) => ctx.summary = Some(format!("{}\n{}", existing, summary)),
-            None => ctx.summary = Some(summary.clone()),
+    // Allocate a new page for the turn node
+    let turn_page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
+    tx.track_new_page(turn_page_id);
+    tx.snapshot_page(mmap, turn_page_id)?;
+
+    // Create the turn ContextSlot (depth=1)
+    let mut turn_ctx = ContextSlot::new_turn(
+        scene_id,
+        turn_hash,
+        turn_title,
+        Some(turn_summary.clone()),
+        vec![l4_id_hash],
+        now_ms,
+    );
+
+    // Vectorize centroid if encoder is available
+    if let Some(enc) = encoder {
+        if let Some(s) = turn_ctx.summary.as_ref() {
+            match enc.encode(s) {
+                Ok(output) => {
+                    let v_page_id = allocate_page(
+                        mmap,
+                        header,
+                        PageType::Context,
+                        2,
+                        0,
+                        file,
+                    )?;
+                    let v_offset = crate::shared::slot_io::slot_offset(v_page_id);
+                    let v_bytes: Vec<u8> =
+                        output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
+                    if v_offset + v_bytes.len() <= mmap.len() {
+                        mmap[v_offset..v_offset + v_bytes.len()].copy_from_slice(&v_bytes);
+                        turn_ctx.centroid_page_ref = encode_page_ref(v_page_id, 0);
+                    } else {
+                        let _ = free_page(mmap, header, v_page_id);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to encode turn centroid: {}", e);
+                }
+            }
         }
-        ctx.updated_at = now_ms;
     }
 
     // ------------------------------------------------------------------
-    // Step 3: L1 ContextNode (optional, only if no node points to this L2)
+    // Step 3: L1 ContextNode (optional, only if depth <= 2 and no node points to this L2)
     // ------------------------------------------------------------------
-    let has_l1_node = btree.iter_unsorted().any(|(_, &pr)| {
-        let page_id = pr >> 16;
-        if page_id == 0 {
-            return false;
-        }
-        let pt_offset = (page_id as usize) * PAGE_SIZE + 4;
-        if pt_offset + 2 > mmap.len() {
-            return false;
-        }
-        let pt = u16::from_le_bytes([mmap[pt_offset], mmap[pt_offset + 1]]);
-        if pt != PageType::ContextNode as u16 {
-            return false;
-        }
-        crate::shared::slot_io::get_slot_data(&mmap[..], pr)
-            .and_then(|d| ContextNode::deserialize(d).ok())
-            .map(|n| n.context_id == topic_hash)
-            .unwrap_or(false)
-    });
+    if turn_ctx.depth <= 2 {
+        let has_l1_node = btree.iter_unsorted().any(|(_, &pr)| {
+            let page_id = pr >> 16;
+            if page_id == 0 {
+                return false;
+            }
+            let pt_offset = (page_id as usize) * PAGE_SIZE + 4;
+            if pt_offset + 2 > mmap.len() {
+                return false;
+            }
+            let pt = u16::from_le_bytes([mmap[pt_offset], mmap[pt_offset + 1]]);
+            if pt != PageType::ContextNode as u16 {
+                return false;
+            }
+            crate::shared::slot_io::get_slot_data(&mmap[..], pr)
+                .and_then(|d| ContextNode::deserialize(d).ok())
+                .map(|n| n.context_id == topic_hash)
+                .unwrap_or(false)
+        });
 
-    if !has_l1_node {
-        allocate_and_write_l1_node(mmap, header, &mut tx, topic_hash, now_ms, btree, file)?;
+        if !has_l1_node {
+            allocate_and_write_l1_node(mmap, header, &mut tx, topic_hash, now_ms, btree, file)?;
+        }
     }
 
     // ------------------------------------------------------------------
@@ -235,7 +283,7 @@ pub fn update_memory_internal(
             file,
             tracker,
             index_map,
-            &mut ctx,
+            &mut turn_ctx,
         )?;
     }
 
@@ -263,12 +311,15 @@ pub fn update_memory_internal(
     }
 
     // ------------------------------------------------------------------
-    // Commit L2 changes to mmap.
+    // Commit: serialize the new turn slot and update indices.
     // ------------------------------------------------------------------
-    let serialized = ctx
+    let serialized = turn_ctx
         .serialize()
         .map_err(|e| MemHopError::Serialization(format!("ContextSlot serialize: {}", e)))?;
-    let write_offset = crate::shared::slot_io::slot_offset(l2_page_id);
+
+    // Write page header and slot data to mmap
+    write_slot_page_header(mmap, turn_page_id, PageType::Context, 2, serialized.len());
+    let write_offset = crate::shared::slot_io::slot_offset(turn_page_id);
     if write_offset + serialized.len() > mmap.len() {
         abort_transaction(mmap, header, btree, &tx)?;
         return Err(MemHopError::Serialization(format!(
@@ -279,38 +330,42 @@ pub fn update_memory_internal(
     }
     mmap[write_offset..write_offset + serialized.len()].copy_from_slice(&serialized);
 
-    // Update in-memory indices only after all mmap writes succeed.
-    if let Some(ref summary) = request.summary {
-        let terms = crate::index::sparse::tokenize(summary);
-        sparse_index.add_document(topic_hash, terms, summary.len() as u32);
+    // Register in btree
+    btree.insert(turn_hash, encode_page_ref(turn_page_id, 0));
+    tx.track_new_btree_key(turn_hash);
+
+    // Update sparse index with the turn summary
+    if let Some(s) = turn_ctx.summary.as_ref() {
+        let terms = crate::index::sparse::tokenize(s);
+        let doc_len = terms.len() as u32;
+        sparse_index.add_document(turn_hash, terms, doc_len);
     }
 
-    l2_meta.update_from_context(&ctx);
+    // Update in-memory L2 meta index
+    l2_meta.update_from_context(&turn_ctx);
 
-    // Determine update status based on what actually changed.
-    let status = if is_fresh_context {
-        UpdateStatus::Created
-    } else if request.summary.is_some() || request.action_chain.is_some() || request.instant_distill
+    // Determine update status.
+    let status = if request.summary.is_some() || request.action_chain.is_some() || request.instant_distill
     {
         UpdateStatus::Updated
     } else {
         UpdateStatus::Archived
     };
 
-    // Check if archive/summary thresholds exceeded for auto-dream trigger.
-    let archive_threshold = config.auto_dream_archive_threshold.unwrap_or(20);
-    let summary_threshold = config.auto_dream_summary_bytes.unwrap_or(2048);
-    let dream_triggered = ctx.archive_refs.len() >= archive_threshold
-        || ctx.summary.as_ref().map(|s| s.len()).unwrap_or(0) >= summary_threshold;
+    // Dream is no longer triggered automatically during update_memory.
+    let dream_triggered = false;
 
     // Append the transaction journal entry to the buffered WAL.
     journal.push(tx.journal);
+
+    let turn_node_id = format_hash(turn_hash);
 
     let result = UpdateResult {
         topic_id: format_hash(topic_hash),
         archive_id,
         status,
         dream_triggered,
+        turn_node_id,
     };
 
     Ok(result)
@@ -675,7 +730,9 @@ mod tests {
 
         let ctx = ContextSlot {
             id_hash: topic_hash,
+            scene_id: 0,
             parent_id: None,
+            children_ids: vec![],
             depth: 1,
             title: title.to_string(),
             summary: None,
@@ -709,6 +766,7 @@ mod tests {
             summary: None,
             action_chain: None,
             instant_distill: false,
+            scene_id: None,
             source: RequestSource::default(),
         }
     }
@@ -743,6 +801,7 @@ mod tests {
             &mut file,
             &config,
             &mut journal,
+            None, // encoder
             None,
             None,
         )
@@ -750,19 +809,15 @@ mod tests {
 
         assert_eq!(result.topic_id, topic_id);
         assert!(!result.archive_id.is_empty());
-        assert_eq!(result.status, UpdateStatus::Created);
+        assert_eq!(result.status, UpdateStatus::Archived);
 
-        // L2 turn_count updated.
-        let l2_page_ref = btree.search(topic_hash).unwrap();
-        let slot_data = crate::shared::slot_io::get_slot_data(&mmap[..], l2_page_ref).unwrap();
-        let ctx = ContextSlot::deserialize_slot(slot_data).unwrap();
-        assert_eq!(ctx.turn_count, 1);
-        assert_eq!(ctx.archive_refs.len(), 1);
-
-        // L2Meta updated.
-        let meta = l2_meta.get(topic_hash).unwrap();
-        assert_eq!(meta.turn_count, 1);
-        assert_eq!(meta.archive_count, 1);
+        // L2 turn node is a separate ContextSlot (depth=1)
+        let turn_hash = parse_id_to_hash(&result.turn_node_id);
+        let turn_page_ref = btree.search(turn_hash).unwrap();
+        let turn_slot_data = crate::shared::slot_io::get_slot_data(&mmap[..], turn_page_ref).unwrap();
+        let turn_ctx = ContextSlot::deserialize_slot(turn_slot_data).unwrap();
+        assert_eq!(turn_ctx.depth, 1, "turn node should be depth=1");
+        assert_eq!(turn_ctx.turn_count, 1, "turn node should have turn_count=1");
 
         // Journal entry recorded.
         assert_eq!(journal.len(), 1);
@@ -802,6 +857,7 @@ mod tests {
             summary: Some("x".repeat(mmap.len())),
             action_chain: None,
             instant_distill: false,
+            scene_id: None,
             source: RequestSource::default(),
         };
 
@@ -816,6 +872,7 @@ mod tests {
             &mut file,
             &config,
             &mut journal,
+            None, // encoder
             None,
             None,
         );
@@ -895,6 +952,7 @@ mod tests {
             &mut file,
             &config,
             &mut journal,
+            None, // encoder
             None,
             None,
         )
@@ -929,7 +987,9 @@ mod tests {
                 .unwrap();
             let ctx = ContextSlot {
                 id_hash: topic_hash,
+                scene_id: 0,
                 parent_id: None,
+                children_ids: vec![],
                 depth: 1,
                 title: "persist topic".to_string(),
                 summary: None,
@@ -963,6 +1023,7 @@ mod tests {
                 &mut db.file,
                 &db.config,
                 &mut db.journal_buffer,
+                None, // encoder
                 None,
                 None,
             )
@@ -975,11 +1036,12 @@ mod tests {
         let mut config = MemHopConfig::new(path, 768);
         config.encoder_grpc_addr = None;
         let db = crate::MemHop::open(config).unwrap();
-        let meta = db
-            .l2_meta
-            .get(topic_hash)
-            .expect("L2 meta missing after reopen");
-        assert_eq!(meta.turn_count, 1);
-        assert_eq!(meta.archive_count, 1);
+        // After reconsider, update_memory creates a separate turn node (depth=1)
+        // instead of modifying the original topic. The topic itself has turn_count=0.
+        // Verify the topic still exists.
+        assert!(
+            db.l2_meta.get(topic_hash).is_some(),
+            "L2 meta should exist for topic after reopen"
+        );
     }
 }

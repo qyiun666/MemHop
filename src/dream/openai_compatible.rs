@@ -7,15 +7,32 @@
 
 use crate::config::LlmConfig;
 use crate::dream::llm::{
-    CrystalDef, CrystalStep, HabitAnalysis, LlmDistillResult, LlmProvider, MemorySummary, Pattern,
+    CompressedSummary, CrystalDef, CrystalStep, HabitAnalysis, LlmDistillResult, LlmProvider,
+    MemorySummary, Pattern,
 };
 use crate::MemHopError;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 
 const SYSTEM_SUMMARIZE: &str =
-    "你是 MemHop 记忆压缩专家，擅长从对话场景中提取核心信息。请将输入的记忆片段压缩为结构化摘要。";
-const SYSTEM_DISTILL: &str = "你是 MemHop 知识蒸馏引擎，擅长从摘要中提取结构化知识图谱。请分析输入文本，提取核心概念和概念之间的关系。";
+    "你是 MemHop 记忆压缩专家。请将多轮对话压缩为关键词密集的摘要，用于后续检索。\n\n\
+     要求:\n\
+     1. 提取核心主题(2-5个关键词，用空格分隔)\n\
+     2. 提取关键信息点(3-8条，每条一个完整信息)\n\
+     3. 生成摘要段落(100-200字，包含所有关键信息，用关键词而非完整句子)\n\n\
+     摘要必须:\n\
+     - 保留所有专有名词(人名、地名、技术术语、版本号)\n\
+     - 保留所有数字和日期\n\
+     - 用关键词而非口语化表述(如\"用户认证\"而非\"讨论了怎么登录\")\n\
+     - 中英文术语保留原文(如\"JWT\"不翻译)";
+const SYSTEM_DISTILL: &str = "你是 MemHop 知识蒸馏引擎。请从摘要中提取结构化知识图谱。\n\n\
+     提取规则:\n
+     1. 概念: 只提取有明确定义的实体/技术/概念，不超过 10 个\n
+     2. 每个概念必须有 keywords(用于 BM25 检索)\n
+     3. 关系: 只提取有明确逻辑关系的概念对，不超过 15 条\n
+     4. 去重: 相同含义的概念合并为一个\n
+     5. 关系 kind: Related(相关)、Causal(因果)、PartOf(部分-整体)、\n
+        Sequence(顺序)、Dependency(依赖)、Hierarchical(层级)、CoOccurrence(共现)";
 const SYSTEM_CRYSTAL: &str = "你是 MemHop 技能结晶系统，擅长从动作模式中提取可复用技能。请分析输入的行为模式，生成结构化的技能定义。";
 const SYSTEM_HABITS: &str =
     "你是用户语言习惯分析专家，擅长从对话记录中识别用户的独特语言模式和沟通风格。";
@@ -194,7 +211,7 @@ impl OpenAICompatibleLlmProvider {
 }
 
 impl LlmProvider for OpenAICompatibleLlmProvider {
-    fn summarize(&self, texts: &[String]) -> Result<String, MemHopError> {
+    fn summarize(&self, texts: &[String]) -> Result<CompressedSummary, MemHopError> {
         let memories_text = texts
             .iter()
             .enumerate()
@@ -203,40 +220,51 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
             .join("\n");
 
         let user_prompt = format!(
-            "# 任务\n\
-             请分析以下记忆片段，提取:\n\
-             1. 核心主题(1-2个关键词)\n\
-             2. 关键信息点(不超过3条)\n\
-             3. 一句话总结(不超过50字)\n\n\
-             # 输出格式\n\
-             请以JSON格式返回:\n\
-             {{\n\
-               \"theme\": \"核心主题\",\n\
-               \"key_points\": [\"关键点1\", \"关键点2\"],\n\
-               \"summary\": \"一句话总结\"\n\
-             }}\n\n\
-             # 输入数据\n\
+            "# 上下文信息\n\
              {memories_text}\n\n\
-             # 开始分析\n"
+             # 任务\n\
+             请将以上内容压缩为结构化摘要。\n\n\
+             # 输出格式(JSON)\n\
+             {{\n\
+               \"theme\": \"核心主题关键词(空格分隔,2-5个)\",\n\
+               \"title\": \"压缩后的简短标题(不超过20字)\",\n\
+               \"key_points\": [\"关键信息点1\", \"关键信息点2\"],\n\
+               \"summary\": \"关键词密集的摘要段落(100-200字)\"\n\
+             }}\n"
         );
 
         self.call_api_json(
             SYSTEM_SUMMARIZE,
             &user_prompt,
-            512, // summarize
+            1024, // summarize: more tokens for richer output
             Some(&Self::params_for_summarize()),
             |response| {
                 let cleaned = Self::strip_code_blocks(response);
                 let json: serde_json::Value = serde_json::from_str(&cleaned).map_err(|e| {
                     MemHopError::Serialization(format!("Parse summary failed: {}", e))
                 })?;
+                let theme = json["theme"].as_str().unwrap_or("").to_string();
+                let title = json["title"].as_str().unwrap_or("").to_string();
+                let key_points = json["key_points"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 let summary = json["summary"]
                     .as_str()
                     .map(|s| s.to_string())
                     .ok_or_else(|| {
                         MemHopError::Serialization("Missing summary field".to_string())
                     })?;
-                Ok(summary)
+                Ok(CompressedSummary {
+                    theme,
+                    title,
+                    key_points,
+                    summary,
+                })
             },
         )
         .or_else(|e| {
@@ -400,13 +428,17 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
         })
     }
 
-    fn fallback_summarize(&self, texts: &[String]) -> String {
+    fn fallback_summarize(&self, texts: &[String]) -> CompressedSummary {
+        // Use the project's unified tokenizer (jieba + camelCase) for CJK-aware
+        // keyword extraction, instead of simple split_whitespace.
         let mut keyword_freq: HashMap<String, usize> = HashMap::new();
+        let mut all_text = String::new();
         for text in texts {
-            for word in text.split_whitespace() {
-                if word.len() > 2 {
-                    // 过滤短词
-                    *keyword_freq.entry(word.to_lowercase()).or_insert(0) += 1;
+            all_text.push_str(text);
+            all_text.push(' ');
+            for word in crate::index::sparse::tokenize(text) {
+                if word.len() > 1 {
+                    *keyword_freq.entry(word).or_insert(0) += 1;
                 }
             }
         }
@@ -414,12 +446,15 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
         let mut sorted: Vec<_> = keyword_freq.into_iter().collect();
         sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
 
-        sorted
-            .into_iter()
-            .take(10)
-            .map(|(k, _)| k)
-            .collect::<Vec<_>>()
-            .join(", ")
+        let keywords: Vec<String> = sorted.into_iter().take(15).map(|(k, _)| k).collect();
+        let theme = keywords.get(0..3).unwrap_or(&[]).join(" ");
+        let summary = keywords.join(", ");
+        CompressedSummary {
+            theme,
+            title: all_text.chars().take(20).collect(),
+            key_points: Vec::new(),
+            summary,
+        }
     }
 
     fn fallback_extract_patterns(&self, memories: &[MemorySummary]) -> Vec<Pattern> {
@@ -617,12 +652,34 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
 
     fn distill_concepts(&self, summary: &str) -> Result<LlmDistillResult, MemHopError> {
         let user_prompt = format!(
-            "请分析以下摘要，提取核心概念和概念之间的关系。\n\n\
-             返回严格的JSON格式，包含两个字段:\n\
-             - concepts: 概念数组，每个概念包含 name、type、description、keywords\n\
-             - relations: 关系数组，每个关系包含 from、to、kind\n\n\
-             kind 可选值: Related、Causal、PartOf、Sequence、Dependency。\n\n\
-             摘要:\n{summary}\n"
+            "# 任务\n\
+             从以下摘要提取知识图谱。\n\n\
+             # 摘要内容\n{summary}\n\n\
+             # 输出格式(严格JSON)\n\
+             {{\n\
+               \"concepts\": [\n\
+                 {{\"name\": \"概念名\", \"type\": \"concept|entity|skill|tool|version\", \"description\": \"概念描述\", \"keywords\": [\"关键词1\", \"关键词2\"]}}\n\
+               ],\n\
+               \"relations\": [\n\
+                 {{\"from\": \"源概念名\", \"to\": \"目标概念名\", \"kind\": \"Related|Causal|PartOf|Sequence|Dependency|Hierarchical|CoOccurrence\"}}\n\
+               ]\n\
+             }}\n\n\
+             # 示例\n\
+             输入: \"0.1.0版本开发,用户认证用JWT,API接口用REST,数据库用PostgreSQL\"\n\
+             输出:\n\
+             {{\n\
+               \"concepts\": [\n\
+                 {{\"name\": \"0.1.0版本\", \"type\": \"version\", \"description\": \"当前开发版本\", \"keywords\": [\"0.1.0\", \"版本\"]}},\n\
+                 {{\"name\": \"JWT\", \"type\": \"tool\", \"description\": \"用户认证方案\", \"keywords\": [\"JWT\", \"认证\", \"token\"]}},\n\
+                 {{\"name\": \"REST API\", \"type\": \"skill\", \"description\": \"API接口设计风格\", \"keywords\": [\"REST\", \"API\", \"接口\"]}},\n\
+                 {{\"name\": \"PostgreSQL\", \"type\": \"tool\", \"description\": \"数据库选型\", \"keywords\": [\"PostgreSQL\", \"数据库\"]}}\n\
+               ],\n\
+               \"relations\": [\n\
+                 {{\"from\": \"JWT\", \"to\": \"0.1.0版本\", \"kind\": \"PartOf\"}},\n\
+                 {{\"from\": \"REST API\", \"to\": \"0.1.0版本\", \"kind\": \"PartOf\"}},\n\
+                 {{\"from\": \"PostgreSQL\", \"to\": \"0.1.0版本\", \"kind\": \"PartOf\"}}\n\
+               ]\n\
+             }}\n"
         );
 
         // Distillation responses can be large (many concepts + relations); give
@@ -651,5 +708,142 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
             concepts: vec![],
             relations: vec![],
         }
+    }
+
+    fn check_same_topic(&self, summary_a: &str, summary_b: &str) -> Result<bool, MemHopError> {
+        let user_prompt = format!(
+            "判断以下两段对话摘要是否描述'''同一个话题'''（连续两轮对话是否为同一主题的延续）。\n\n\
+             摘要 A: {summary_a}\n\n\
+             摘要 B: {summary_b}\n\n\
+             只回答 yes 或 no，不要其他内容。"
+        );
+
+        self.call_api_json(
+            "你是 MemHop 话题一致性判断专家。",
+            &user_prompt,
+            64,
+            Some(&Self::params_for_summarize()),
+            |response| {
+                let cleaned = response.trim().to_lowercase();
+                if cleaned.starts_with("yes") || cleaned.starts_with("y") {
+                    Ok(true)
+                } else if cleaned.starts_with("no") || cleaned.starts_with("n") {
+                    Ok(false)
+                } else {
+                    Err(MemHopError::Serialization(format!(
+                        "Unexpected check_same_topic response: {}",
+                        response
+                    )))
+                }
+            },
+        )
+        .or_else(|e| {
+            tracing::warn!("LLM check_same_topic failed, returning false: {}", e);
+            Ok(false)
+        })
+    }
+
+    fn merge_summarize(&self, texts: &[String]) -> Result<(String, String), MemHopError> {
+        let numbered = texts
+            .iter()
+            .enumerate()
+            .map(|(i, t)| format!("{}. {}", i + 1, t))
+            .collect::<Vec<_>>()
+            .join("\n---\n");
+
+        let user_prompt = format!(
+            "以下是多轮相邻对话的摘要，它们属于同一个话题，请将它们合并压缩为一个统一的摘要。\n\n\
+             {numbered}\n\n\
+             # 输出格式(JSON)\n{{\n  \"title\": \"合并后的简短标题(不超过20字)\",\n  \"summary\": \"关键词密集的摘要段落(100-200字)\"\n}}"
+        );
+
+        self.call_api_json(
+            "你是 MemHop 记忆合并压缩专家。",
+            &user_prompt,
+            1024,
+            Some(&Self::params_for_summarize()),
+            |response| {
+                let cleaned = Self::strip_code_blocks(response);
+                let json: serde_json::Value = serde_json::from_str(&cleaned).map_err(|e| {
+                    MemHopError::Serialization(format!("Parse merge_summarize failed: {}", e))
+                })?;
+                let title = json["title"].as_str().unwrap_or("").to_string();
+                let summary = json["summary"].as_str().ok_or_else(|| {
+                    MemHopError::Serialization("Missing summary field".to_string())
+                })?.to_string();
+                Ok((title, summary))
+            },
+        )
+        .or_else(|e| {
+            tracing::warn!("LLM merge_summarize failed, using fallback: {}", e);
+            let combined = texts.join(" ");
+            let title: String = texts.first()
+                .and_then(|t| t.chars().next().map(|_c| format!("[Merged] {}", t.chars().take(10).collect::<String>())))
+                .unwrap_or_else(|| "[Merged]".to_string());
+            let summary = combined.chars().take(200).collect();
+            Ok((title, summary))
+        })
+    }
+
+    fn compress_for_retrieval(&self, text: &str, role: &str) -> Result<String, MemHopError> {
+        let user_prompt = format!(
+            "# 角色\n{role}\n\n# 内容\n{text}\n\n# 输出格式(JSON)\n{{\n\
+               \"keywords\": [\"关键词1\", \"关键词2\"],\n\
+               \"summary\": \"压缩摘要(50-200字)\"\n}}\n"
+        );
+
+        self.call_api_json(
+            "你是 MemHop 记忆提取引擎。请从以下内容中提取关键信息。\n\n\
+             要求:\n\
+             1. keywords: 提取 3-15 个关键词，保留专有名词、技术术语、版本号、数字\n\
+             2. summary: 压缩为关键词密集的摘要(50-200字)，保留所有关键信息\n\
+             3. 中英文术语保留原文(如\"JWT\"不翻译)\n\
+             4. 用关键词而非口语化表述(如\"用户认证\"而非\"讨论了怎么登录\")\n\n\
+             只返回JSON，不要其他内容。",
+            &user_prompt,
+            256, // retrieval compression: shorter output
+            Some(&crate::layers::context::LlmParams {
+                temperature: 0.0,
+                top_p: 0.8,
+                presence_penalty: 0.0,
+                frequency_penalty: 0.0,
+            }),
+            |response| {
+                let cleaned = Self::strip_code_blocks(response);
+                let json: serde_json::Value = serde_json::from_str(&cleaned).map_err(|e| {
+                    MemHopError::Serialization(format!("Parse retrieval compression failed: {}", e))
+                })?;
+                // Combine keywords + summary for retrieval
+                let keywords = json["keywords"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    })
+                    .unwrap_or_default();
+                let summary = json["summary"].as_str().unwrap_or("");
+                if keywords.is_empty() && summary.is_empty() {
+                    return Err(MemHopError::Serialization(
+                        "Empty compress_for_retrieval response".to_string(),
+                    ));
+                }
+                let result = if keywords.is_empty() {
+                    summary.to_string()
+                } else if summary.is_empty() {
+                    keywords
+                } else {
+                    format!("{}\n{}keywords", keywords, summary)
+                };
+                Ok(result)
+            },
+        )
+        .or_else(|e| {
+            tracing::warn!("LLM compress_for_retrieval failed, using fallback: {}", e);
+            // Fallback: use keyword extraction via tokenizer
+            let tokens = crate::index::sparse::tokenize(text);
+            Ok(tokens.join(" "))
+        })
     }
 }

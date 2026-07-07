@@ -9,6 +9,7 @@ use crate::file::free_list::free_page;
 use crate::file::header::FileHeader;
 use crate::file::page::write_page_data;
 use crate::index::btree::BTreeIndex;
+use crate::index::l2_meta::L2MetaIndex;
 use crate::layers::context_node::ContextNode;
 use crate::layers::hyperedge::HyperedgeSlot;
 use crate::shared::common::now_ms;
@@ -37,6 +38,7 @@ pub fn decay_l1_network(
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
     decay_config: &DecayConfig,
+    l2_meta: &L2MetaIndex,
 ) -> Result<L1DecayReport, MemHopError> {
     let now = now_ms();
     let mut report = L1DecayReport {
@@ -78,6 +80,13 @@ pub fn decay_l1_network(
                 )));
             }
         };
+
+        // Skip nodes whose L2 context has depth > 2 (L1 only maintains depth <= 2)
+        if let Some(meta) = l2_meta.get(node.context_id) {
+            if meta.depth > 2 {
+                continue;
+            }
+        }
 
         let dt_hours = dt_hours_from(now, node.updated_at);
         let lambda = apply_emotional_boost(decay_config.lambda_node, node.valence, node.arousal);
@@ -429,7 +438,8 @@ mod tests {
             &mut file,
         );
         let dc = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.decayed_nodes, 1);
         assert_eq!(report.removed_nodes, 0);
         assert_eq!(report.pruned_edges, 0);
@@ -446,6 +456,7 @@ mod tests {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 20 * 3_600_000;
         let dc = default_decay_config();
+        let l2_meta = L2MetaIndex::new();
         let target = (dc.node_remove_threshold + dc.node_prune_edges_threshold) / 2.0;
         let start_importance = target / (-dc.lambda_node * 20.0).exp();
         let page_id = allocate_context_node_page(
@@ -458,7 +469,7 @@ mod tests {
             vec![10, 11, 12],
             &mut file,
         );
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.decayed_nodes, 1);
         assert_eq!(report.pruned_edges, 3);
         assert_eq!(report.removed_nodes, 0);
@@ -483,7 +494,8 @@ mod tests {
             &mut file,
         );
         let dc = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.removed_nodes, 1);
         assert_eq!(report.decayed_nodes, 0);
         assert!(btree.search(3).is_none());
@@ -505,7 +517,8 @@ mod tests {
             &mut file,
         );
         let dc = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.removed_edges, 0);
         assert!(btree.search(10).is_some());
         let edge = read_hyperedge(&mmap, page_id);
@@ -529,7 +542,8 @@ mod tests {
             &mut file,
         );
         let dc = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.removed_edges, 1);
         assert!(btree.search(11).is_none());
     }
@@ -549,7 +563,8 @@ mod tests {
             &mut file,
         );
         let dc = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.removed_edges, 1);
         assert!(btree.search(12).is_none());
     }
@@ -589,7 +604,8 @@ mod tests {
             &mut file,
         );
         let dc = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.removed_nodes, 1);
         assert_eq!(report.removed_edges, 1);
         assert!(btree.search(20).is_none());
@@ -643,7 +659,8 @@ mod tests {
             &mut file,
         );
         let dc = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.removed_nodes, 1);
         assert_eq!(report.removed_edges, 0);
         assert!(btree.search(21).is_some());
@@ -655,7 +672,8 @@ mod tests {
     fn test_empty_btree_does_nothing() {
         let (mut mmap, mut header, mut btree, _file) = create_mmap(10);
         let dc = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.decayed_nodes, 0);
         assert_eq!(report.pruned_edges, 0);
         assert_eq!(report.removed_nodes, 0);
@@ -667,6 +685,7 @@ mod tests {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 20 * 3_600_000;
         let dc = default_decay_config();
+        let l2_meta = L2MetaIndex::new();
         let target = (dc.node_remove_threshold + dc.node_prune_edges_threshold) / 2.0;
         let start_importance = target / (-dc.lambda_node * 20.0).exp();
         let node_a = allocate_context_node_page(
@@ -700,7 +719,8 @@ mod tests {
             &mut file,
         );
         let dc2 = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc2).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc2, &l2_meta).unwrap();
         assert_eq!(report.pruned_edges, 1);
         assert_eq!(report.removed_edges, 1);
         assert!(btree.search(50).is_none());
@@ -745,7 +765,8 @@ mod tests {
             &mut file,
         );
         let dc = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc, &l2_meta).unwrap();
         assert_eq!(report.removed_edges, 1);
         assert!(btree.search(60).is_none());
         let a = read_context_node(&mmap, node_a);
@@ -759,6 +780,7 @@ mod tests {
         let (mut mmap, mut header, mut btree, mut file) = create_mmap(20);
         let old_time = now_ms() - 20 * 3_600_000;
         let dc = default_decay_config();
+        let l2_meta = L2MetaIndex::new();
         let target = (dc.node_remove_threshold + dc.node_prune_edges_threshold) / 2.0;
         let start_importance = target / (-dc.lambda_node * 20.0).exp();
         let node_a = allocate_context_node_page(
@@ -802,7 +824,8 @@ mod tests {
             &mut file,
         );
         let dc2 = default_decay_config();
-        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc2).unwrap();
+        let l2_meta = L2MetaIndex::new();
+        let report = decay_l1_network(&mut mmap, &mut header, &mut btree, &dc2, &l2_meta).unwrap();
         assert_eq!(report.pruned_edges, 1);
         assert_eq!(report.removed_edges, 0);
         assert!(btree.search(70).is_some());

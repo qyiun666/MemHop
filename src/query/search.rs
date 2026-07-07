@@ -308,6 +308,8 @@ fn create_new_l2_context(
     let new_ctx = ContextSlot {
         id_hash,
         parent_id: None,
+        children_ids: vec![],
+        scene_id: 0,
         depth: 1,
         title,
         summary: None,
@@ -379,7 +381,9 @@ mod tests {
     fn make_context(id_hash: u64, title: &str, l3_refs: Vec<u64>) -> ContextSlot {
         ContextSlot {
             id_hash,
+            scene_id: 0,
             parent_id: None,
+            children_ids: vec![],
             depth: 1,
             title: title.to_string(),
             summary: None,
@@ -707,7 +711,9 @@ mod tests {
 
         let base = ContextSlot {
             id_hash: 0,
+            scene_id: 0,
             parent_id: None,
+            children_ids: vec![],
             depth: 1,
             title: "rust memory search".to_string(),
             summary: None,

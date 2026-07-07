@@ -6,10 +6,23 @@
 use crate::MemHopError;
 use serde::{Deserialize, Serialize};
 
+/// Structured compression result with all LLM-extracted fields.
+#[derive(Debug, Clone)]
+pub struct CompressedSummary {
+    /// Core topic keywords (space-separated, 2-5 keywords)
+    pub theme: String,
+    /// Compressed short title (≤20 chars)
+    pub title: String,
+    /// Key information points (3-8 items)
+    pub key_points: Vec<String>,
+    /// Keyword-dense summary paragraph (100-200 chars)
+    pub summary: String,
+}
+
 /// Trait for LLM providers used in dream consolidation
 pub trait LlmProvider: Send + Sync {
-    /// Summarize a collection of texts into a concise summary
-    fn summarize(&self, texts: &[String]) -> Result<String, MemHopError>;
+    /// Summarize a collection of texts into a structured compressed summary.
+    fn summarize(&self, texts: &[String]) -> Result<CompressedSummary, MemHopError>;
 
     /// Extract patterns from memory summaries
     fn extract_patterns(&self, memories: &[MemorySummary]) -> Result<Vec<Pattern>, MemHopError>;
@@ -18,7 +31,7 @@ pub trait LlmProvider: Send + Sync {
     fn generate_crystal(&self, pattern: &Pattern) -> Result<CrystalDef, MemHopError>;
 
     /// Fallback summarization using keyword frequency when LLM is unavailable
-    fn fallback_summarize(&self, texts: &[String]) -> String;
+    fn fallback_summarize(&self, texts: &[String]) -> CompressedSummary;
 
     /// Fallback pattern extraction using keyword intersection when LLM is unavailable
     fn fallback_extract_patterns(&self, memories: &[MemorySummary]) -> Vec<Pattern>;
@@ -37,6 +50,21 @@ pub trait LlmProvider: Send + Sync {
 
     /// Fallback concept distillation returning an empty result.
     fn fallback_distill_concepts(&self, summary: &str) -> LlmDistillResult;
+
+    /// Check whether two adjacent conversation summaries describe the same topic.
+    /// Returns `true` if they should be merged into one parent node.
+    fn check_same_topic(&self, summary_a: &str, summary_b: &str) -> Result<bool, MemHopError>;
+
+    /// Merge multiple adjacent-conversation texts into a single (title, summary) pair.
+    fn merge_summarize(&self, texts: &[String]) -> Result<(String, String), MemHopError>;
+
+    /// Compress dialogue text for retrieval: extract keywords + short summary.
+    /// `role` distinguishes "用户提问" vs "助手回复" for prompt tuning.
+    fn compress_for_retrieval(&self, text: &str, role: &str) -> Result<String, MemHopError> {
+        // Default: return original text unchanged
+        let _ = role;
+        Ok(text.to_string())
+    }
 }
 
 /// Summary of a memory for pattern extraction

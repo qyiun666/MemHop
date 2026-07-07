@@ -67,7 +67,8 @@ impl MemHop {
                 parsed_ids,
                 &mut self.file,
                 decay_config,
-                &self.l2_meta,
+                &mut self.l2_meta,
+                self.encoder.as_deref(),
             )?;
 
             // Rebuild in-memory L2 metadata from the updated mmap state.

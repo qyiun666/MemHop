@@ -11,7 +11,7 @@ use memhop::{
 };
 
 fn make_config(path: std::path::PathBuf) -> MemHopConfig {
-    let mut config = MemHopConfig::new(path, 768);
+    let mut config = MemHopConfig::new(path, 1024);
     config.encoder_grpc_addr = None;
     config
 }
@@ -68,6 +68,7 @@ fn api_surface_is_reachable() {
             summary: None,
             action_chain: None,
             instant_distill: false,
+            scene_id: None,
             source: Default::default(),
         })
         .unwrap();

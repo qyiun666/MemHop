@@ -7,7 +7,6 @@
 //! every L2 `ContextSlot`. It is rebuilt from disk on `open()` and updated
 //! whenever a context is written.
 
-
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
 use crate::layers::context::{ActivationState, ContextSlot};
@@ -41,6 +40,8 @@ pub struct L2Meta {
     pub title: String,
     pub summary: Option<String>,
     pub depth: u8,
+    pub scene_id: u64,
+    pub children_ids: Vec<u64>,
     pub status: ActivationStatus,
     pub activation_score: f32,
     /// Page reference to the centroid vector stored in mmap.
@@ -59,6 +60,8 @@ impl L2Meta {
             title: ctx.title.clone(),
             summary: ctx.summary.clone(),
             depth: ctx.depth,
+            scene_id: ctx.scene_id,
+            children_ids: ctx.children_ids.clone(),
             status: ctx.activation_state.into(),
             activation_score: ctx.activation_score,
             vector_offset: ctx.centroid_page_ref,
@@ -74,6 +77,8 @@ impl L2Meta {
 #[derive(Debug, Clone, Default)]
 pub struct L2MetaIndex {
     entries: HashMap<u64, L2Meta>,
+    by_scene: HashMap<u64, Vec<u64>>,
+    by_scene_depth: HashMap<(u64, u8), Vec<u64>>,
 }
 
 impl L2MetaIndex {
@@ -81,6 +86,8 @@ impl L2MetaIndex {
     pub fn new() -> Self {
         Self {
             entries: HashMap::new(),
+            by_scene: HashMap::new(),
+            by_scene_depth: HashMap::new(),
         }
     }
 
@@ -88,6 +95,8 @@ impl L2MetaIndex {
     pub fn build(mmap: &[u8], btree: &BTreeIndex) -> Self {
         let data = mmap;
         let mut entries = HashMap::new();
+        let mut by_scene: HashMap<u64, Vec<u64>> = HashMap::new();
+        let mut by_scene_depth: HashMap<(u64, u8), Vec<u64>> = HashMap::new();
 
         for (&id_hash, &page_ref) in btree.iter_unsorted() {
             let page_id = (page_ref >> 16) as u32;
@@ -107,28 +116,74 @@ impl L2MetaIndex {
 
             if let Some(slot_data) = get_slot_data(data, page_ref) {
                 if let Ok(ctx) = ContextSlot::deserialize_slot(slot_data) {
-                    entries.insert(id_hash, L2Meta::from_context(page_ref, &ctx));
+                    let meta = L2Meta::from_context(page_ref, &ctx);
+                    let scene_id = meta.scene_id;
+                    let depth = meta.depth;
+                    entries.insert(id_hash, meta);
+                    by_scene.entry(scene_id).or_default().push(id_hash);
+                    by_scene_depth.entry((scene_id, depth)).or_default().push(id_hash);
                 }
             }
         }
 
-        Self { entries }
+        Self {
+            entries,
+            by_scene,
+            by_scene_depth,
+        }
     }
 
     /// Update or insert metadata from a full `ContextSlot`.
     pub fn update_from_context(&mut self, ctx: &ContextSlot) {
+        // Remove old scene index entries if updating existing entry
+        if let Some(old) = self.entries.get(&ctx.id_hash) {
+            Self::remove_from_scene_index_inner(
+                &mut self.by_scene,
+                &mut self.by_scene_depth,
+                old.scene_id,
+                old.depth,
+                ctx.id_hash,
+            );
+        }
+
         let page_ref = self
             .entries
             .get(&ctx.id_hash)
             .map(|m| m.page_ref)
             .unwrap_or_else(|| (ctx.id_hash) << 16); // placeholder; caller should set via build
-        self.entries
-            .insert(ctx.id_hash, L2Meta::from_context(page_ref, ctx));
+        let meta = L2Meta::from_context(page_ref, ctx);
+        let scene_id = meta.scene_id;
+        let depth = meta.depth;
+        let id_hash = meta.id_hash;
+        self.entries.insert(meta.id_hash, meta);
+        self.by_scene.entry(scene_id).or_default().push(id_hash);
+        self.by_scene_depth
+            .entry((scene_id, depth))
+            .or_default()
+            .push(id_hash);
     }
 
     /// Update or insert metadata directly.
     pub fn update(&mut self, meta: L2Meta) {
+        // Remove old scene index entries if updating
+        if let Some(old) = self.entries.get(&meta.id_hash) {
+            Self::remove_from_scene_index_inner(
+                &mut self.by_scene,
+                &mut self.by_scene_depth,
+                old.scene_id,
+                old.depth,
+                meta.id_hash,
+            );
+        }
+        let scene_id = meta.scene_id;
+        let depth = meta.depth;
+        let id_hash = meta.id_hash;
         self.entries.insert(meta.id_hash, meta);
+        self.by_scene.entry(scene_id).or_default().push(id_hash);
+        self.by_scene_depth
+            .entry((scene_id, depth))
+            .or_default()
+            .push(id_hash);
     }
 
     /// Get metadata for a context by id_hash.
@@ -143,7 +198,50 @@ impl L2MetaIndex {
 
     /// Remove an entry and return it.
     pub fn remove(&mut self, id_hash: u64) -> Option<L2Meta> {
-        self.entries.remove(&id_hash)
+        if let Some(meta) = self.entries.remove(&id_hash) {
+            Self::remove_from_scene_index_inner(
+                &mut self.by_scene,
+                &mut self.by_scene_depth,
+                meta.scene_id,
+                meta.depth,
+                id_hash,
+            );
+            Some(meta)
+        } else {
+            None
+        }
+    }
+
+    /// Internal helper: remove a node from by_scene and by_scene_depth indices.
+    fn remove_from_scene_index_inner(
+        by_scene: &mut HashMap<u64, Vec<u64>>,
+        by_scene_depth: &mut HashMap<(u64, u8), Vec<u64>>,
+        scene_id: u64,
+        depth: u8,
+        id_hash: u64,
+    ) {
+        if let Some(ids) = by_scene.get_mut(&scene_id) {
+            ids.retain(|&id| id != id_hash);
+            if ids.is_empty() {
+                by_scene.remove(&scene_id);
+            }
+        }
+        if let Some(ids) = by_scene_depth.get_mut(&(scene_id, depth)) {
+            ids.retain(|&id| id != id_hash);
+            if ids.is_empty() {
+                by_scene_depth.remove(&(scene_id, depth));
+            }
+        }
+    }
+
+    /// Get all context IDs belonging to a scene.
+    pub fn get_by_scene(&self, scene_id: u64) -> Option<&Vec<u64>> {
+        self.by_scene.get(&scene_id)
+    }
+
+    /// Get all context IDs belonging to a scene at a specific depth.
+    pub fn get_by_scene_depth(&self, scene_id: u64, depth: u8) -> Option<&Vec<u64>> {
+        self.by_scene_depth.get(&(scene_id, depth))
     }
 
     /// Iterate over all indexed entries.
@@ -199,7 +297,9 @@ mod tests {
     fn make_context(id_hash: u64, title: &str, l3_refs: Vec<u64>) -> ContextSlot {
         ContextSlot {
             id_hash,
+            scene_id: 0,
             parent_id: None,
+            children_ids: vec![],
             depth: 1,
             title: title.to_string(),
             summary: None,
@@ -339,6 +439,8 @@ mod tests {
             title: "updated".to_string(),
             summary: None,
             depth: 1,
+            scene_id: 0,
+            children_ids: vec![],
             status: ActivationStatus::Active,
             activation_score: 0.9,
             vector_offset: 0,

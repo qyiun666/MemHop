@@ -17,7 +17,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 mod common;
-use common::{kill_mock_meowvec, spawn_mock_meowvec};
+use common::{kill_python_meowvec, spawn_python_meowvec};
 
 const DB_PATH: &str = "/tmp/memhop_bench_agent.meh";
 const ENCODER_ADDR: &str = "http://127.0.0.1:27110";
@@ -34,7 +34,7 @@ fn db() -> &'static Mutex<MemHop> {
         let config = MemHopConfig {
             db_path: PathBuf::from(DB_PATH),
             encoder_grpc_addr: Some(ENCODER_ADDR.to_string()),
-            vector_dim: 384,
+            vector_dim: 1024,
             crystal_path: None,
             llm: Default::default(),
             auto_dream_on_evict: false,
@@ -42,8 +42,7 @@ fn db() -> &'static Mutex<MemHop> {
             search_weights: None,
             decay_config: None,
             session_config: None,
-            auto_dream_archive_threshold: None,
-            auto_dream_summary_bytes: None,
+            dream_idle_threshold_secs: None,
             auto_checkpoint_interval: None,
             adjacency_cache_max_entries: 128,
         };
@@ -200,9 +199,9 @@ criterion_group!(
 );
 
 fn main() {
-    let mut child = spawn_mock_meowvec(27110);
+    let mut child = spawn_python_meowvec(27110);
 
     benches();
 
-    kill_mock_meowvec(&mut child);
+    kill_python_meowvec(&mut child);
 }

@@ -22,9 +22,9 @@ use memhop::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-const VECTOR_DIM: usize = 768;
-const API_URL: &str = "https://api.openai.com/v1/chat/completions";
-const MODEL: &str = "gpt-4o-mini";
+const VECTOR_DIM: usize = 1024;
+const API_URL: &str = "https://api.deepseek.com/v1/chat/completions";
+const MODEL: &str = "deepseek-chat";
 
 /// Build the LLM configuration used by every E2E test.
 fn make_llm_config() -> LlmConfig {
@@ -51,16 +51,16 @@ fn make_config(path: PathBuf) -> MemHopConfig {
     config
 }
 
-/// Start the shared mock meowvec server for this test binary.
+/// Start the shared ORT (BGE-M3 ONNX) meowvec server for this test binary.
 ///
 /// The first call spawns the process on port 27110 and waits for the gRPC
 /// health check to pass. The process is killed automatically when the test
 /// binary exits.
-fn setup_mock_meowvec() {
-    let _guard = common::ensure_mock_meowvec(27110);
+fn setup_ort_meowvec() {
+    let _guard = common::ensure_python_meowvec(27110);
 }
 
-/// Create a real gRPC encoder connected to the mock meowvec server.
+/// Create a gRPC encoder connected to the ORT meowvec server.
 fn create_encoder(dim: usize) -> GrpcEncoder {
     GrpcEncoder::new("http://127.0.0.1:27110", dim)
         .expect("failed to connect to mock meowvec at http://127.0.0.1:27110")
@@ -202,9 +202,8 @@ fn store_item(topic: &str, text: &str) -> StoreItem {
 // =============================================================================
 
 #[test]
-#[ignore]
 fn test_agent_conversation_memory_flow() {
-    setup_mock_meowvec();
+    setup_ort_meowvec();
     with_e2e_db("agent_conversation_memory_flow", |db| {
         // 1. Batch store multi-turn Chinese dialogues.
         let docs = conversation_documents();
@@ -288,6 +287,7 @@ fn test_agent_conversation_memory_flow() {
                     parameters: None,
                 }]),
                 instant_distill: false,
+                scene_id: None,
                 source: Default::default(),
             })
             .expect("update_memory should succeed");
@@ -386,9 +386,8 @@ fn test_agent_conversation_memory_flow() {
 // =============================================================================
 
 #[test]
-#[ignore]
 fn test_chinese_memory_specialization() {
-    setup_mock_meowvec();
+    setup_ort_meowvec();
     with_e2e_db("chinese_memory_specialization", |db| {
         // Seed Chinese memories covering people, projects, and technical terms.
         let docs = [
@@ -506,9 +505,8 @@ fn test_chinese_memory_specialization() {
 // =============================================================================
 
 #[test]
-#[ignore]
 fn test_l3_graph_traversal() {
-    setup_mock_meowvec();
+    setup_ort_meowvec();
     with_e2e_db("l3_graph_traversal", |db| {
         // Create a temporary source tree representing a tiny codebase.
         let tmp_dir = std::env::temp_dir().join("memhop_e2e_src");
@@ -611,9 +609,8 @@ pub fn run(query: String) {
 // =============================================================================
 
 #[test]
-#[ignore]
 fn test_dream_pipeline_full() {
-    setup_mock_meowvec();
+    setup_ort_meowvec();
     with_e2e_db("dream_pipeline_full", |db| {
         // Seed several topics with multiple turns and action chains.
         let docs = [
@@ -697,6 +694,7 @@ fn test_dream_pipeline_full() {
                         },
                     ]),
                     instant_distill: false,
+                    scene_id: None,
                     source: Default::default(),
                 })
                 .expect("update_memory should succeed");

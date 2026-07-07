@@ -22,7 +22,7 @@ const FIRST_PAGE_DATA_CAPACITY: usize = PAGE_SIZE - 32 - HEADER_SIZE;
 const OVERFLOW_DATA_CAPACITY: usize = PAGE_SIZE - 32;
 
 /// Read all payload bytes in a magic-header page chain starting at `start_page`.
-pub fn read_magic_chain(
+pub(crate) fn read_magic_chain(
     mmap: &[u8],
     header: &FileHeader,
     start_page: u32,
@@ -101,7 +101,7 @@ pub fn read_magic_chain(
 }
 
 /// Allocate a chain of pages, write `data` with a magic header, and return the root page id.
-pub fn write_magic_chain(
+pub(crate) fn write_magic_chain(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     file: &mut File,
@@ -158,7 +158,7 @@ pub fn write_magic_chain(
 }
 
 /// Free all pages in a magic-header chain starting at `start_page`.
-pub fn free_magic_chain(
+pub(crate) fn free_magic_chain(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     start_page: u32,

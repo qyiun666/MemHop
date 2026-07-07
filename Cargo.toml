@@ -41,8 +41,11 @@ llm = ["dep:reqwest"]
 
 [dev-dependencies]
 tempfile = "3.10"
+ndarray = "0.17"
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
+tract-onnx = "0.23"
+tokenizers = "0.21"
 
 [build-dependencies]
 tonic-build = "0.12"

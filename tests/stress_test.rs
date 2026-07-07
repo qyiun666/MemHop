@@ -1,14 +1,27 @@
 //! Stress tests to verify MemHop handles heavy write loads without corruption
 //! or FileFull errors, and that auto-extension works correctly.
+//!
+//! These tests use the real BGE-M3 ONNX gRPC encoder (via meowvec_server.py/Python onnxruntime) for
+//! authentic vector encoding. The server is started once per test binary.
 
-use memhop::{MemHop, MemHopConfig, SourceMeta, SourceType};
+mod common;
+
+use memhop::{
+    EngramListQuery, ImportData, ImportMode, ImportRequest, KnowledgeImportItem, MemHop,
+    MemHopConfig, SourceMeta, SourceType, StoreBatch, StoreItem, TargetLayer, TopicListQuery,
+};
 use tempfile::TempDir;
+
+/// Start the ORT encoder server once for all stress tests.
+fn setup_encoder() {
+    let _guard = common::ensure_python_meowvec(27110);
+}
 
 fn create_test_db() -> (TempDir, MemHop) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("stress_test.meh");
-    let mut config = MemHopConfig::new(path, 8);
-    config.encoder_grpc_addr = None;
+    let mut config = MemHopConfig::new(path, 1024);
+    config.encoder_grpc_addr = Some("http://127.0.0.1:27110".to_string());
     let db = MemHop::open(config).unwrap();
     (dir, db)
 }
@@ -17,34 +30,14 @@ fn create_test_db() -> (TempDir, MemHop) {
 /// Creates a small DB, fills it with many items, and verifies no FileFull error.
 #[test]
 fn test_file_auto_extend() {
+    setup_encoder();
     let (_dir, mut db) = create_test_db();
 
-    // Use a mock encoder
-    struct MockEncoder;
-    impl memhop::encoder::Encoder for MockEncoder {
-        fn encode(
-            &self,
-            _text: &str,
-        ) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
-            Ok(memhop::encoder::EncoderOutput {
-                dense: vec![half::f16::from_f32(0.1); 8],
-                sparse: std::collections::HashMap::new(),
-            })
-        }
-        fn dim(&self) -> usize {
-            8
-        }
-        fn mode(&self) -> &str {
-            "mock"
-        }
-    }
-    db.set_encoder(MockEncoder);
-
-    // Insert 500 items — should trigger auto-extension beyond initial 2000 pages
+    // Insert 500 items with real BGE-M3 vectors
     let mut total_created = 0u32;
     for i in 0..500 {
-        let batch = memhop::StoreBatch {
-            items: vec![memhop::StoreItem {
+        let batch = StoreBatch {
+            items: vec![StoreItem {
                 text: format!(
                     "stress test document number {} with some content to fill pages",
                     i
@@ -74,31 +67,12 @@ fn test_file_auto_extend() {
 /// Test 2: Verify batch_store with many items doesn't cause partial writes
 #[test]
 fn test_batch_store_no_partial_write() {
+    setup_encoder();
     let (_dir, mut db) = create_test_db();
 
-    struct MockEncoder;
-    impl memhop::encoder::Encoder for MockEncoder {
-        fn encode(
-            &self,
-            _text: &str,
-        ) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
-            Ok(memhop::encoder::EncoderOutput {
-                dense: vec![half::f16::from_f32(0.1); 8],
-                sparse: std::collections::HashMap::new(),
-            })
-        }
-        fn dim(&self) -> usize {
-            8
-        }
-        fn mode(&self) -> &str {
-            "mock"
-        }
-    }
-    db.set_encoder(MockEncoder);
-
-    // Create a batch with 100 items
-    let items: Vec<memhop::StoreItem> = (0..100)
-        .map(|i| memhop::StoreItem {
+    // Create a batch with 100 items and real BGE-M3 vectors
+    let items: Vec<StoreItem> = (0..100)
+        .map(|i| StoreItem {
             text: format!("batch item {} with padding text to increase size", i),
             topic_label: Some(format!("batch_topic_{}", i % 5)),
             domain_id: None,
@@ -111,7 +85,7 @@ fn test_batch_store_no_partial_write() {
         })
         .collect();
 
-    let batch = memhop::StoreBatch {
+    let batch = StoreBatch {
         items,
         session_id: Some("batch_session".to_string()),
         turn_id: Some("0".to_string()),
@@ -128,7 +102,7 @@ fn test_batch_store_no_partial_write() {
 
     // Verify DB is still readable after large batch
     let engrams = db
-        .list_engrams(memhop::EngramListQuery {
+        .list_engrams(EngramListQuery {
             page: 1,
             page_size: 200,
             keyword: None,
@@ -142,32 +116,13 @@ fn test_batch_store_no_partial_write() {
 /// Test 3: Rapid alternating write + sync doesn't corrupt DB
 #[test]
 fn test_rapid_write_and_sync() {
+    setup_encoder();
     let (dir, mut db) = create_test_db();
 
-    struct MockEncoder;
-    impl memhop::encoder::Encoder for MockEncoder {
-        fn encode(
-            &self,
-            _text: &str,
-        ) -> Result<memhop::encoder::EncoderOutput, memhop::MemHopError> {
-            Ok(memhop::encoder::EncoderOutput {
-                dense: vec![half::f16::from_f32(0.1); 8],
-                sparse: std::collections::HashMap::new(),
-            })
-        }
-        fn dim(&self) -> usize {
-            8
-        }
-        fn mode(&self) -> &str {
-            "mock"
-        }
-    }
-    db.set_encoder(MockEncoder);
-
-    // Perform 100 rounds of write + sync
+    // Perform 100 rounds of write + sync with real BGE-M3 vectors
     for round in 0..100 {
-        let batch = memhop::StoreBatch {
-            items: vec![memhop::StoreItem {
+        let batch = StoreBatch {
+            items: vec![StoreItem {
                 text: format!("round {} document with content", round),
                 topic_label: Some(format!("round_topic_{}", round % 10)),
                 domain_id: None,
@@ -189,12 +144,12 @@ fn test_rapid_write_and_sync() {
     // Close and reopen DB to verify persistence
     drop(db);
     let path = dir.path().join("stress_test.meh");
-    let mut config = MemHopConfig::new(path, 8);
+    let mut config = MemHopConfig::new(path, 1024);
     config.encoder_grpc_addr = None;
     let db2 = MemHop::open(config).expect("DB should reopen without corruption");
 
     let engrams = db2
-        .list_engrams(memhop::EngramListQuery {
+        .list_engrams(EngramListQuery {
             page: 1,
             page_size: 200,
             keyword: None,
@@ -212,11 +167,11 @@ fn test_import_many_l3_documents() {
 
     let mut total_created = 0usize;
 
-    // Import 200 L3 knowledge items across 5 domains
+    // Import 200 L3 knowledge items across 5 domains (no encoder needed)
     for i in 0..200 {
-        let request = memhop::ImportRequest {
-            target_layer: memhop::TargetLayer::Knowledge,
-            data: memhop::ImportData::Knowledge(vec![memhop::KnowledgeImportItem {
+        let request = ImportRequest {
+            target_layer: TargetLayer::Knowledge,
+            data: ImportData::Knowledge(vec![KnowledgeImportItem {
                 title: format!("knowledge_item_{}", i),
                 domain: format!("domain_{}", i % 5),
                 knowledge_type: "Factual".to_string(),
@@ -225,11 +180,10 @@ fn test_import_many_l3_documents() {
                 keywords: vec![format!("kw_{}", i), "test".to_string()],
                 source_ref: Some(format!("source_{}", i)),
             }]),
-            mode: memhop::ImportMode::Merge,
+            mode: ImportMode::Merge,
             knowledge_title: None,
         };
         let result = db.import_memory(request).expect("import should succeed");
-        // Check no errors
         assert!(
             result.errors.is_empty(),
             "import {} had errors: {:?}",
@@ -247,13 +201,12 @@ fn test_import_many_l3_documents() {
 
     // Verify DB is still consistent by listing topics (no encoder needed)
     let topics = db
-        .list_l2(memhop::TopicListQuery {
+        .list_l2(TopicListQuery {
             page: 1,
             page_size: 10,
             active_only: false,
             keyword: None,
         })
         .expect("list_l2 should work after imports");
-    // At least verify DB is readable
     let _ = topics;
 }

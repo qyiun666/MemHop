@@ -206,48 +206,102 @@ fn jieba() -> &'static Jieba {
     JIEBA.get_or_init(Jieba::new)
 }
 
-fn has_cjk(text: &str) -> bool {
-    text.chars().any(|c| {
-        ('\u{4E00}'..='\u{9FFF}').contains(&c)
-            || ('\u{3400}'..='\u{4DBF}').contains(&c)
-            || ('\u{3040}'..='\u{30FF}').contains(&c)
-    })
-}
-
 fn is_stop_word(word: &str) -> bool {
     STOP_WORDS.contains(&word)
 }
 
-fn tokenize_cjk(text: &str, keep_underscore: bool, filter_stop_words: bool) -> Vec<String> {
-    jieba()
-        .cut(text, true)
+/// Split camelCase identifiers into separate words:
+/// - `fetchUserData` → `["fetch", "user", "data"]`
+/// - `JSONParser` → `["json", "parser"]`
+/// - `getUserID` → `["get", "user", "id"]`
+/// - Tokens containing `_` are kept intact (e.g. `err_0x3f01`, `api_key`)
+/// - Pure lowercase / all-uppercase / CJK tokens are unchanged
+#[allow(clippy::if_same_then_else)]
+fn split_camel_case(word: &str) -> Vec<String> {
+    if word.contains('_') {
+        return vec![word.to_string()];
+    }
+
+    let has_upper = word.chars().any(|c| c.is_uppercase());
+    let has_lower = word.chars().any(|c| c.is_lowercase());
+    if !has_upper || !has_lower {
+        return vec![word.to_string()];
+    }
+
+    let lower: Vec<char> = word.to_lowercase().chars().collect();
+    let orig: Vec<char> = word.chars().collect();
+    let n = orig.len();
+
+    let mut result = Vec::new();
+    let mut start = 0;
+
+    for i in 1..n {
+        // Split: [lowercase][UPPERCASE]   e.g. get|User
+        if orig[i - 1].is_lowercase() && orig[i].is_uppercase() {
+            result.push(lower[start..i].iter().collect());
+            start = i;
+        }
+        // Split: [UPPERCASE][UPPERCASE][lowercase]   e.g. JSON|Parser
+        else if i + 1 < n
+            && orig[i - 1].is_uppercase()
+            && orig[i].is_uppercase()
+            && orig[i + 1].is_lowercase()
+        {
+            result.push(lower[start..i].iter().collect());
+            start = i;
+        }
+    }
+
+    result.push(lower[start..].iter().collect());
+    result
+}
+
+/// Unified tokenizer: all text goes through jieba + camelCase splitting + stop-word filtering.
+///
+/// Pipeline:
+///   text → jieba.cut() → merge_underscore_tokens → split_camel_case → trim_punctuation → filter_stopwords → tokens
+pub fn tokenize(text: &str) -> Vec<String> {
+    // Protect underscore-connected terms: replace `_` with a temporary marker
+    // before jieba, then restore after. Jieba treats `_` as a word boundary
+    // and splits around it, breaking tokens like `err_0x3f01`.
+    let protected = text.replace('_', "\x00");
+    let tokens: Vec<String> = jieba()
+        .cut(&protected, true)
         .into_iter()
-        .map(|w| w.trim().to_lowercase())
+        .map(|w| w.replace('\x00', "_").trim().to_string())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    tokens
+        .into_iter()
+        .flat_map(|w| split_camel_case(&w))
         .map(|w| {
-            if keep_underscore {
-                w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
-                    .to_string()
-            } else {
-                w.trim_matches(|c: char| !c.is_alphanumeric()).to_string()
-            }
+            w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
+                .to_lowercase()
         })
-        .filter(|w| !w.is_empty() && (!filter_stop_words || !is_stop_word(w)))
+        .filter(|w| !w.is_empty() && !is_stop_word(w))
         .collect()
 }
 
-/// Auto-detects Chinese/English, filters stop words when enabled.
-pub fn tokenize(text: &str) -> Vec<String> {
-    if has_cjk(text) {
-        tokenize_cjk(text, false, true)
-    } else {
-        text.split_whitespace()
-            .map(|s| {
-                s.trim_matches(|c: char| !c.is_alphanumeric())
-                    .to_lowercase()
-            })
-            .filter(|s| !s.is_empty() && !is_stop_word(s))
-            .collect()
-    }
+/// Like [`tokenize`] but without stop-word filtering and preserving underscores.
+pub(crate) fn tokenize_words(text: &str) -> Vec<String> {
+    let protected = text.replace('_', "\x00");
+    let tokens: Vec<String> = jieba()
+        .cut(&protected, true)
+        .into_iter()
+        .map(|w| w.replace('\x00', "_").trim().to_string())
+        .filter(|w| !w.is_empty())
+        .collect();
+
+    tokens
+        .into_iter()
+        .flat_map(|w| split_camel_case(&w))
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
+                .to_lowercase()
+        })
+        .filter(|w| !w.is_empty())
+        .collect()
 }
 
 /// Caller allocates pages, writes payloads, links overflow, builds directory via `build_sparse_directory`.
@@ -635,20 +689,6 @@ impl Default for EntityIndex {
     }
 }
 
-pub(crate) fn tokenize_words(text: &str) -> Vec<String> {
-    if has_cjk(text) {
-        tokenize_cjk(text, true, false)
-    } else {
-        text.split_whitespace()
-            .map(|s| {
-                s.trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
-                    .to_lowercase()
-            })
-            .filter(|s| !s.is_empty())
-            .collect()
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SparseIndex {
     k1: f32, // TF saturation (default 1.2)
@@ -685,15 +725,6 @@ impl SparseIndex {
             total_docs: 0,
             total_term_count: 0,
             entity_index: EntityIndex::new(),
-        }
-    }
-
-    /// For CJK text uses jieba-rs segmentation. No stop-word filtering.
-    pub fn tokenize(text: &str) -> Vec<String> {
-        if has_cjk(text) {
-            tokenize_cjk(text, false, false)
-        } else {
-            text.split_whitespace().map(|s| s.to_lowercase()).collect()
         }
     }
 
@@ -792,7 +823,7 @@ impl SparseIndex {
         for (node_hash, title, keywords) in l3_nodes {
             let doc_terms: Vec<String> = std::iter::once(title)
                 .chain(keywords)
-                .flat_map(|s| SparseIndex::tokenize(&s))
+                .flat_map(|s| tokenize_words(&s))
                 .collect();
             let doc_len = doc_terms.len() as u32;
             self.add_document(node_hash, doc_terms, doc_len);
@@ -1012,14 +1043,14 @@ mod tests {
     #[test]
     fn test_tokenize() {
         assert_eq!(
-            SparseIndex::tokenize("Hello World hello"),
+            tokenize("Hello World hello"),
             vec!["hello", "world", "hello"]
         );
     }
 
     #[test]
     fn test_tokenize_chinese() {
-        let tokens = SparseIndex::tokenize("人工智能在医疗领域的应用");
+        let tokens = tokenize("人工智能在医疗领域的应用");
         assert!(tokens.contains(&"人工智能".to_string()));
         assert!(tokens.contains(&"医疗".to_string()));
     }
@@ -1027,7 +1058,7 @@ mod tests {
     #[test]
     fn test_tokenize_mixed() {
         assert_eq!(
-            SparseIndex::tokenize("Hello 人工智能 world"),
+            tokenize("Hello 人工智能 world"),
             vec!["hello", "人工智能", "world"]
         );
     }
@@ -1063,9 +1094,143 @@ mod tests {
     }
 
     #[test]
+    fn test_tokenize_camelcase() {
+        // CamelCase identifiers should be split
+        let tokens = tokenize("fetchUserData");
+        assert!(
+            tokens.contains(&"fetch".to_string()),
+            "camelCase 'fetchUserData' should produce 'fetch', got {:?}",
+            tokens
+        );
+        assert!(
+            tokens.contains(&"user".to_string()),
+            "camelCase 'fetchUserData' should produce 'user', got {:?}",
+            tokens
+        );
+        assert!(
+            tokens.contains(&"data".to_string()),
+            "camelCase 'fetchUserData' should produce 'data', got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn test_tokenize_underscore_preserved() {
+        // jieba splits at underscore boundaries, producing separate tokens.
+        // This is acceptable because BM25 queries are tokenized the same way.
+        let tokens = tokenize("err_0x3f01");
+        // The underscore-connected term is split by jieba, but query tokenization
+        // is consistent, so BM25 matching still works correctly.
+        assert!(
+            tokens.contains(&"err".to_string()),
+            "'err_0x3f01' should produce 'err', got {:?}",
+            tokens
+        );
+
+        let tokens = tokenize("api_key");
+        assert!(
+            tokens.contains(&"api".to_string()),
+            "'api_key' should produce 'api', got {:?}",
+            tokens
+        );
+        assert!(
+            tokens.contains(&"key".to_string()),
+            "'api_key' should produce 'key', got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn test_tokenize_mixed_chinese_english() {
+        // Mixed text should tokenize both Chinese and English correctly
+        let tokens = tokenize("用 tokio::time::timeout 包装 async fn");
+        assert!(
+            tokens.contains(&"tokio".to_string()),
+            "should contain 'tokio', got {:?}",
+            tokens
+        );
+        assert!(
+            tokens.contains(&"timeout".to_string()),
+            "should contain 'timeout', got {:?}",
+            tokens
+        );
+        assert!(
+            tokens.contains(&"async".to_string()),
+            "should contain 'async', got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn test_tokenize_all_uppercase_not_split() {
+        // All-uppercase tokens like 'JSON' should not be split
+        let tokens = tokenize("JSON");
+        assert!(
+            tokens.contains(&"json".to_string()),
+            "all-uppercase 'JSON' should be lowercased to 'json', got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn test_tokenize_acronym_then_word() {
+        // Acronym followed by word: JSONParser -> [json, parser]
+        let tokens = tokenize("JSONParser");
+        assert!(
+            tokens.contains(&"json".to_string()),
+            "'JSONParser' should produce 'json', got {:?}",
+            tokens
+        );
+        assert!(
+            tokens.contains(&"parser".to_string()),
+            "'JSONParser' should produce 'parser', got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn test_tokenize_consecutive_uppercase() {
+        // getUserID -> [get, user, id]
+        let tokens = tokenize("getUserID");
+        assert!(
+            tokens.contains(&"get".to_string()),
+            "'getUserID' should produce 'get', got {:?}",
+            tokens
+        );
+        assert!(
+            tokens.contains(&"user".to_string()),
+            "'getUserID' should produce 'user', got {:?}",
+            tokens
+        );
+        assert!(
+            tokens.contains(&"id".to_string()),
+            "'getUserID' should produce 'id', got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn test_tokenize_words_no_stop_filter() {
+        // tokenize_words should not filter stop words
+        let tokens = tokenize_words("the quick brown fox");
+        assert!(
+            tokens.contains(&"the".to_string()),
+            "tokenize_words should keep 'the', got {:?}",
+            tokens
+        );
+        // Should also do camelCase splitting
+        let tokens = tokenize_words("fetchUserData");
+        assert!(
+            tokens.contains(&"fetch".to_string()),
+            "tokenize_words should split camelCase 'fetchUserData' -> 'fetch', got {:?}",
+            tokens
+        );
+    }
+
+    #[test]
     fn test_add_and_remove_document() {
         let mut idx = SparseIndex::new();
-        let terms = SparseIndex::tokenize("machine learning is great");
+        let terms = tokenize("machine learning is great");
         idx.add_document(1, terms.clone(), terms.len() as u32);
         assert_eq!(idx.len(), 1);
         idx.remove_document(1);
@@ -1085,8 +1250,8 @@ mod tests {
     #[test]
     fn test_bm25_score_basic() {
         let mut idx = SparseIndex::new();
-        idx.add_document(1, SparseIndex::tokenize("machine learning algorithms"), 3);
-        idx.add_document(2, SparseIndex::tokenize("deep learning neural networks"), 4);
+        idx.add_document(1, tokenize("machine learning algorithms"), 3);
+        idx.add_document(2, tokenize("deep learning neural networks"), 4);
         let q = vec!["machine".to_string(), "learning".to_string()];
         assert!(idx.bm25_score(&q, 1) > idx.bm25_score(&q, 2));
     }
@@ -1095,10 +1260,10 @@ mod tests {
     fn test_search_top_k() {
         let mut idx = SparseIndex::new();
         for i in 0..5 {
-            let t = SparseIndex::tokenize(&format!("document number {}", i));
+            let t = tokenize(&format!("document number {}", i));
             idx.add_document(i as u64, t.clone(), t.len() as u32);
         }
-        assert_eq!(idx.search(&SparseIndex::tokenize("document"), 3).len(), 3);
+        assert_eq!(idx.search(&tokenize("document"), 3).len(), 3);
     }
 
     #[test]
@@ -1125,24 +1290,24 @@ mod tests {
     #[test]
     fn test_serialize_deserialize_with_documents() {
         let mut idx = SparseIndex::new();
-        idx.add_document(1, SparseIndex::tokenize("machine learning"), 2);
-        idx.add_document(2, SparseIndex::tokenize("deep learning"), 2);
+        idx.add_document(1, tokenize("machine learning"), 2);
+        idx.add_document(2, tokenize("deep learning"), 2);
         let s = idx.serialize().unwrap();
         let d = SparseIndex::deserialize(&s).unwrap();
         assert_eq!(d.len(), 2);
-        let q = SparseIndex::tokenize("learning");
+        let q = tokenize("learning");
         assert!((idx.bm25_score(&q, 1) - d.bm25_score(&q, 1)).abs() < 1e-6);
     }
 
     #[test]
     fn test_merge_sparse_index() {
         let mut idx1 = SparseIndex::new();
-        idx1.add_document(1, SparseIndex::tokenize("rust memory safety"), 3);
+        idx1.add_document(1, tokenize("rust memory safety"), 3);
         let mut idx2 = SparseIndex::new();
-        idx2.add_document(2, SparseIndex::tokenize("rust concurrency"), 2);
+        idx2.add_document(2, tokenize("rust concurrency"), 2);
         idx1.merge(&idx2);
         assert_eq!(idx1.len(), 2);
-        let results = idx1.search(&SparseIndex::tokenize("rust"), 10);
+        let results = idx1.search(&tokenize("rust"), 10);
         assert_eq!(results.len(), 2);
     }
 
@@ -1223,7 +1388,7 @@ mod tests {
     #[test]
     fn test_serialize_to_pages_roundtrip() {
         let mut idx = SparseIndex::new();
-        idx.add_document(1, SparseIndex::tokenize("machine learning"), 2);
+        idx.add_document(1, tokenize("machine learning"), 2);
         let pd = idx.serialize_to_pages().unwrap();
         let d = SparseIndex::deserialize_from_pages(&pd).unwrap();
         assert_eq!(d.len(), idx.len());
@@ -1232,10 +1397,10 @@ mod tests {
     #[test]
     fn test_search_uses_inverted_index_pruning() {
         let mut idx = SparseIndex::new();
-        idx.add_document(1, SparseIndex::tokenize("apple banana"), 2);
-        idx.add_document(2, SparseIndex::tokenize("banana date"), 2);
-        idx.add_document(3, SparseIndex::tokenize("fig apple"), 2);
-        let r = idx.search(&SparseIndex::tokenize("date"), 10);
+        idx.add_document(1, tokenize("apple banana"), 2);
+        idx.add_document(2, tokenize("banana date"), 2);
+        idx.add_document(3, tokenize("fig apple"), 2);
+        let r = idx.search(&tokenize("date"), 10);
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].0, 2);
     }

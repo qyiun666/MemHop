@@ -50,7 +50,9 @@ impl Default for LlmParams {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextSlot {
     pub id_hash: u64,
+    pub scene_id: u64,          // Scene identifier, shared across nodes in the same scene
     pub parent_id: Option<u64>, // Parent context (supports 4-level nesting)
+    pub children_ids: Vec<u64>, // Child node IDs (forward pointers for tree structure)
     pub depth: u8,              // 1=scene, 2=sub-scene, 3=turn group, 4=semantic summary
     pub title: String,
     pub summary: Option<String>,
@@ -70,15 +72,54 @@ pub struct ContextSlot {
 }
 
 impl ContextSlot {
+    /// Create a new turn-level ContextSlot with default values.
+    /// depth=1, turn_count=1, children_ids=[], parent_id=None.
+    pub fn new_turn(
+        scene_id: u64,
+        id_hash: u64,
+        title: String,
+        summary: Option<String>,
+        archive_refs: Vec<u64>,
+        created_at: i64,
+    ) -> Self {
+        Self {
+            id_hash,
+            scene_id,
+            parent_id: None,
+            children_ids: vec![],
+            depth: 1,
+            title,
+            summary,
+            archive_refs,
+            l3_refs: vec![],
+            turn_count: 1,
+            created_at,
+            updated_at: created_at,
+            version: 3,
+            importance: 0.5,
+            activation_score: 0.0,
+            is_active: true,
+            activation_state: ActivationState::Active,
+            centroid_page_ref: 0,
+            dialogue_range: (created_at, created_at),
+            llm_params: LlmParams::default(),
+        }
+    }
+
     /// v1 fixed: 83 bytes; v2 fixed: 99 bytes (with llm_params: 4×f32).
+    /// v3 fixed: 109 bytes (+ scene_id 8 + children_count 2) + children_ids.len() * 8.
     /// Plus title + summary + archive_refs*8 + l3_refs*8.
     pub fn slot_size(&self) -> usize {
-        let fixed = if self.version >= 2 { 99 } else { 83 };
+        let mut fixed = if self.version >= 2 { 99 } else { 83 };
+        if self.version >= 3 {
+            fixed += 10; // scene_id (8) + children_count (2)
+        }
         fixed
             + self.title.len()
             + self.summary.as_ref().map_or(0, |s| s.len())
             + self.archive_refs.len() * 8
             + self.l3_refs.len() * 8
+            + self.children_ids.len() * 8
     }
 
     pub fn serialize(&self) -> io::Result<Vec<u8>> {
@@ -108,6 +149,14 @@ impl ContextSlot {
             buf.write_all(&self.llm_params.top_p.to_le_bytes())?;
             buf.write_all(&self.llm_params.presence_penalty.to_le_bytes())?;
             buf.write_all(&self.llm_params.frequency_penalty.to_le_bytes())?;
+        }
+        // Scene & children (version >= 3)
+        if self.version >= 3 {
+            buf.write_all(&self.scene_id.to_le_bytes())?;
+            buf.write_all(&(self.children_ids.len() as u16).to_le_bytes())?;
+            for &child in &self.children_ids {
+                buf.write_all(&child.to_le_bytes())?;
+            }
         }
         buf.write_all(self.title.as_bytes())?;
         if let Some(ref summary) = self.summary {
@@ -159,16 +208,38 @@ impl ContextSlot {
         } else {
             LlmParams::default()
         };
-        let fixed_prefix_len = if version >= 2 { 99usize } else { 83usize };
+        // Scene & children (version >= 3)
+        let scene_id = if version >= 3 {
+            read_u64(&mut c)?
+        } else {
+            0
+        };
+        let children_count = if version >= 3 {
+            read_u16(&mut c)? as usize
+        } else {
+            0
+        };
+        let fixed_prefix_len = if version >= 3 {
+            109usize
+        } else if version >= 2 {
+            99usize
+        } else {
+            83usize
+        };
         let variable_len = title_len as usize
             + summary_len as usize
             + archive_count as usize * 8
-            + l3_count as usize * 8;
+            + l3_count as usize * 8
+            + children_count * 8;
         if fixed_prefix_len + variable_len > data.len() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "ContextSlot variable fields exceed data",
             ));
+        }
+        let mut children_ids = Vec::with_capacity(children_count);
+        for _ in 0..children_count {
+            children_ids.push(read_u64(&mut c)?);
         }
         let mut title_buf = vec![0u8; title_len as usize];
         c.read_exact(&mut title_buf)?;
@@ -194,7 +265,9 @@ impl ContextSlot {
         }
         Ok(ContextSlot {
             id_hash,
+            scene_id,
             parent_id,
+            children_ids,
             depth,
             title,
             summary,
@@ -223,7 +296,9 @@ mod tests {
     fn test_context_slot_roundtrip() {
         let ctx = ContextSlot {
             id_hash: 123456789,
+            scene_id: 0,
             parent_id: Some(999),
+            children_ids: vec![],
             depth: 2,
             title: "memhop refactoring".to_string(),
             summary: Some("Refactoring L0-L5 layers".to_string()),
@@ -250,7 +325,9 @@ mod tests {
     fn test_context_slot_root_scene() {
         let ctx = ContextSlot {
             id_hash: 1,
+            scene_id: 0,
             parent_id: None,
+            children_ids: vec![],
             depth: 1,
             title: "Rust project".to_string(),
             summary: None,
@@ -279,7 +356,9 @@ mod tests {
     fn test_context_slot_three_level_nesting() {
         let ctx = ContextSlot {
             id_hash: 333,
+            scene_id: 0,
             parent_id: Some(222),
+            children_ids: vec![],
             depth: 3,
             title: "L0-L5 discussion round 1".to_string(),
             summary: Some("Defined L0-L5 field structure".to_string()),
@@ -308,7 +387,9 @@ mod tests {
     fn test_context_slot_size() {
         let ctx = ContextSlot {
             id_hash: 1,
+            scene_id: 0,
             parent_id: None,
+            children_ids: vec![],
             depth: 1,
             title: "test".to_string(),
             summary: Some("abc".to_string()),
@@ -334,7 +415,9 @@ mod tests {
     fn test_context_slot_empty() {
         let ctx = ContextSlot {
             id_hash: 777,
+            scene_id: 0,
             parent_id: None,
+            children_ids: vec![],
             depth: 1,
             title: "".to_string(),
             summary: None,
@@ -360,7 +443,9 @@ mod tests {
     fn test_context_slot_unicode() {
         let ctx = ContextSlot {
             id_hash: 555,
+            scene_id: 0,
             parent_id: Some(100),
+            children_ids: vec![],
             depth: 2,
             title: "场景测试 🚀".to_string(),
             summary: Some("摘要内容".to_string()),

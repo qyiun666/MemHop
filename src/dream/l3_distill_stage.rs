@@ -3,11 +3,12 @@
 
 //! Stage: L3 Knowledge Distillation — LLM-based concept extraction from active L2 contexts into L3 hypergraph.
 
-use crate::dream::llm::LlmProvider;
+use crate::dream::llm::{LlmDistillResult, LlmProvider};
 use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
+use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
 use crate::layers::context::ContextSlot;
 use crate::layers::hypergraph::{
@@ -26,6 +27,7 @@ use std::fs::File;
 
 /// Distill L3 hypergraph knowledge from active L2 contexts via LLM.
 /// Returns hex-formatted IDs of newly created nodes.
+#[allow(clippy::too_many_arguments)]
 pub fn distill_l3_knowledge(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
@@ -34,100 +36,215 @@ pub fn distill_l3_knowledge(
     llm: &dyn LlmProvider,
     active_topic_ids: &HashSet<u64>,
     file: &mut File,
+    l2_meta: &L2MetaIndex,
 ) -> Result<Vec<String>, MemHopError> {
     let now_ms = crate::shared::common::now_ms();
-
     let mut all_new_ids: Vec<String> = Vec::new();
 
-    for &topic_id in active_topic_ids {
-        let ctx = match read_context(mmap, btree, topic_id) {
-            Some(c) => c,
-            None => continue,
-        };
+    // Find parent nodes (nodes with children) among active topics
+    let parent_nodes: Vec<u64> = active_topic_ids
+        .iter()
+        .filter(|&&id| {
+            l2_meta
+                .get(id)
+                .map(|meta| !meta.children_ids.is_empty())
+                .unwrap_or(false)
+        })
+        .copied()
+        .collect();
 
-        // Only process depth=1 active topics with a non-empty summary
-        if ctx.depth != 1 {
-            continue;
-        }
-        let summary = match ctx.summary {
-            Some(ref s) if !s.is_empty() => s.clone(),
-            _ => continue,
-        };
-
-        let llm_response = match llm.distill_concepts(&summary) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!("L3 distillation LLM call failed for '{}': {}", ctx.title, e);
+    if parent_nodes.is_empty() {
+        // Fallback: distill from individual nodes (preserving existing behavior)
+        for &topic_id in active_topic_ids {
+            let ctx = match read_context(mmap, btree, topic_id) {
+                Some(c) => c,
+                None => continue,
+            };
+            if ctx.depth > 3 {
                 continue;
             }
-        };
-
-        let (concepts, relations) = (llm_response.concepts, llm_response.relations);
-
-        if concepts.is_empty() {
-            continue;
-        }
-
-        let graph_id = resolve_or_create_graph(mmap, header, btree, &ctx, topic_id, now_ms, file)?;
-
-        let mut concept_id_map: HashMap<String, u64> = HashMap::new();
-        for concept in &concepts {
-            let node_hash = hash_id(&format!("{:016x}_{}", graph_id, concept.name));
-            let node = HypergraphNode {
-                id_hash: node_hash,
-                graph_id,
-                title: concept.name.clone(),
-                node_type: concept.node_type.clone(),
-                content: concept.description.clone(),
-                keywords: concept.keywords.clone(),
-                source_ref: None,
-                importance: 0.7,
-                created_at: now_ms,
-                updated_at: now_ms,
-                version: 1,
+            let summary = match ctx.summary {
+                Some(ref s) if !s.is_empty() => s.clone(),
+                _ => continue,
             };
-            match crate::l3::add_node(mmap, header, btree, node, file, None, None) {
-                Ok(id) => {
-                    all_new_ids.push(id);
-                    concept_id_map.insert(concept.name.clone(), node_hash);
-                }
+            let llm_response = match llm.distill_concepts(&summary) {
+                Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!("Failed to create concept node '{}': {}", concept.name, e);
+                    tracing::warn!(
+                        "L3 distillation LLM call failed for '{}': {}",
+                        ctx.title,
+                        e
+                    );
+                    continue;
+                }
+            };
+            create_l3_nodes_and_edges(
+                mmap,
+                header,
+                btree,
+                &ctx,
+                topic_id,
+                now_ms,
+                &mut all_new_ids,
+                file,
+                llm_response,
+            )?;
+        }
+    } else {
+        // Parent-based distillation: aggregate children summaries
+        for &parent_id in &parent_nodes {
+            let ctx = match read_context(mmap, btree, parent_id) {
+                Some(c) => c,
+                None => continue,
+            };
+
+            let children_ids = l2_meta
+                .get(parent_id)
+                .map(|meta| meta.children_ids.clone())
+                .unwrap_or_default();
+
+            // Build aggregated content from parent + children summaries
+            let mut aggregated = String::new();
+            aggregated.push_str(&format!("Parent topic: {}\n\n", ctx.title));
+            if let Some(ref s) = ctx.summary {
+                aggregated.push_str(&format!("Parent summary: {}\n\n", s));
+            }
+            aggregated.push_str("Children summaries:\n");
+
+            let mut child_count = 0;
+            for &child_id in &children_ids {
+                if child_count >= 10 {
+                    break;
+                }
+                if let Some(child_ctx) = read_context(mmap, btree, child_id) {
+                    if let Some(ref s) = child_ctx.summary {
+                        if !s.is_empty() {
+                            let remaining = 4000usize.saturating_sub(aggregated.len());
+                            if remaining == 0 {
+                                break;
+                            }
+                            let truncated: String = s.chars().take(remaining).collect();
+                            aggregated
+                                .push_str(&format!("- {}: {}\n", child_ctx.title, truncated));
+                            child_count += 1;
+                        }
+                    }
                 }
             }
-        }
 
-        for rel in &relations {
-            let from_hash = match concept_id_map.get(&rel.from) {
-                Some(h) => *h,
-                None => continue,
-            };
-            let to_hash = match concept_id_map.get(&rel.to) {
-                Some(h) => *h,
-                None => continue,
-            };
-
-            let edge = HypergraphEdge {
-                id_hash: hash_id(&format!("{:016x}->{:016x}", from_hash, to_hash)),
-                graph_id,
-                kind: map_edge_kind(&rel.kind),
-                node_ids: vec![from_hash, to_hash],
-                weight: 1.0,
-                label: Some(if rel.kind.is_empty() {
-                    "related".to_string()
-                } else {
-                    rel.kind.clone()
-                }),
-                created_at: now_ms,
-            };
-
-            if let Err(e) = crate::l3::add_edge(mmap, header, btree, edge, file, None) {
-                tracing::warn!("Failed to create relation edge: {}", e);
+            // Absolute truncation guard: max 4000 characters
+            if aggregated.len() > 4000 {
+                let truncated: String = aggregated.chars().take(4000).collect();
+                aggregated = truncated;
             }
+
+            let llm_response = match llm.distill_concepts(&aggregated) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(
+                        "L3 distillation LLM call failed for parent '{}': {}",
+                        ctx.title,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            create_l3_nodes_and_edges(
+                mmap,
+                header,
+                btree,
+                &ctx,
+                parent_id,
+                now_ms,
+                &mut all_new_ids,
+                file,
+                llm_response,
+            )?;
         }
     }
 
     Ok(all_new_ids)
+}
+
+/// Create L3 hypergraph nodes and edges from LLM distillation results.
+#[allow(clippy::too_many_arguments)]
+fn create_l3_nodes_and_edges(
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    ctx: &ContextSlot,
+    topic_id: u64,
+    now_ms: i64,
+    all_new_ids: &mut Vec<String>,
+    file: &mut File,
+    llm_response: LlmDistillResult,
+) -> Result<(), MemHopError> {
+    let (concepts, relations) = (llm_response.concepts, llm_response.relations);
+
+    if concepts.is_empty() {
+        return Ok(());
+    }
+
+    let graph_id = resolve_or_create_graph(mmap, header, btree, ctx, topic_id, now_ms, file)?;
+
+    let mut concept_id_map: HashMap<String, u64> = HashMap::new();
+    for concept in &concepts {
+        let node_hash = hash_id(&format!("{:016x}_{}", graph_id, concept.name));
+        let node = HypergraphNode {
+            id_hash: node_hash,
+            graph_id,
+            title: concept.name.clone(),
+            node_type: concept.node_type.clone(),
+            content: concept.description.clone(),
+            keywords: concept.keywords.clone(),
+            source_ref: None,
+            importance: 0.7,
+            created_at: now_ms,
+            updated_at: now_ms,
+            version: 1,
+        };
+        match crate::l3::add_node(mmap, header, btree, node, file, None, None) {
+            Ok(id) => {
+                all_new_ids.push(id);
+                concept_id_map.insert(concept.name.clone(), node_hash);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to create concept node '{}': {}", concept.name, e);
+            }
+        }
+    }
+
+    for rel in &relations {
+        let from_hash = match concept_id_map.get(&rel.from) {
+            Some(h) => *h,
+            None => continue,
+        };
+        let to_hash = match concept_id_map.get(&rel.to) {
+            Some(h) => *h,
+            None => continue,
+        };
+
+        let edge = HypergraphEdge {
+            id_hash: hash_id(&format!("{:016x}->{:016x}", from_hash, to_hash)),
+            graph_id,
+            kind: map_edge_kind(&rel.kind),
+            node_ids: vec![from_hash, to_hash],
+            weight: 1.0,
+            label: Some(if rel.kind.is_empty() {
+                "related".to_string()
+            } else {
+                rel.kind.clone()
+            }),
+            created_at: now_ms,
+        };
+
+        if let Err(e) = crate::l3::add_edge(mmap, header, btree, edge, file, None) {
+            tracing::warn!("Failed to create relation edge: {}", e);
+        }
+    }
+
+    Ok(())
 }
 
 // ============================================================================

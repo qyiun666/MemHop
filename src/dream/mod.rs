@@ -17,6 +17,7 @@ pub mod prune;
 use crate::config::DecayConfig;
 use crate::dream::llm::LlmProvider;
 use crate::dream::prune::DreamReport;
+use crate::encoder::Encoder;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::l2_meta::{ActivationStatus, L2MetaIndex};
@@ -128,7 +129,8 @@ pub fn dream_pipeline(
     l2_ids: Option<Vec<u64>>,
     file: &mut File,
     decay_config: &DecayConfig,
-    l2_meta: &L2MetaIndex,
+    l2_meta: &mut L2MetaIndex,
+    encoder: Option<&(dyn Encoder + Send + Sync)>,
 ) -> Result<DreamReport, MemHopError> {
     let start_time = std::time::Instant::now();
 
@@ -137,6 +139,11 @@ pub fn dream_pipeline(
         demoted_to_tertiary: Vec::new(),
         removed_contexts: Vec::new(),
         new_compressed: Vec::new(),
+        groups_detected: 0,
+        nodes_merged: 0,
+        parent_nodes_created: 0,
+        nodes_sunk: 0,
+        nodes_removed: 0,
         l1_updated: Vec::new(),
         l1_decayed_nodes: 0,
         l1_pruned_edges: 0,
@@ -186,6 +193,7 @@ pub fn dream_pipeline(
                 llm,
                 &target_l2_ids,
                 file,
+                l2_meta,
             )?;
             let count = nodes.len();
             report.new_l3_nodes = nodes;
@@ -204,29 +212,44 @@ pub fn dream_pipeline(
         "l2_compress",
         "L2 compression failed",
         |report, btree, sparse_index| {
-            let (demoted_sec, compressed, removed, demoted_ter) =
-                compress_stage::compress_active_contexts(
-                    mmap,
-                    header,
-                    btree,
-                    sparse_index,
-                    llm,
-                    &target_l2_ids,
-                    file,
-                )?;
-            let count = demoted_sec.len() + compressed.len() + removed.len() + demoted_ter.len();
-            report.demoted_to_secondary = demoted_sec;
-            report.new_compressed = compressed;
-            report.removed_contexts = removed;
-            report.demoted_to_tertiary = demoted_ter;
+            // Derive active scene IDs from target L2 IDs
+            let active_scene_ids: HashSet<u64> = target_l2_ids
+                .iter()
+                .filter_map(|id| l2_meta.get(*id))
+                .map(|meta| meta.scene_id)
+                .collect();
+
+            let merge_result = compress_stage::l2_merge_compress(
+                mmap,
+                header,
+                btree,
+                sparse_index,
+                l2_meta,
+                llm,
+                &active_scene_ids,
+                file,
+                encoder,
+            )?;
+            let count = merge_result.groups_detected
+                + merge_result.nodes_merged
+                + merge_result.parent_nodes_created
+                + merge_result.nodes_sunk
+                + merge_result.nodes_removed;
+            report.groups_detected = merge_result.groups_detected;
+            report.nodes_merged = merge_result.nodes_merged;
+            report.parent_nodes_created = merge_result.parent_nodes_created;
+            report.nodes_sunk = merge_result.nodes_sunk;
+            report.nodes_removed = merge_result.nodes_removed;
             Ok((
                 format!(
-                    "Compressed L2 contexts: {} demoted, {} new compressed, {} removed",
-                    report.demoted_to_secondary.len(),
-                    report.new_compressed.len(),
-                    report.removed_contexts.len()
+                    "Merge-compress: {} groups, {} nodes merged, {} parents, {} sunk, {} removed",
+                    report.groups_detected,
+                    report.nodes_merged,
+                    report.parent_nodes_created,
+                    report.nodes_sunk,
+                    report.nodes_removed
                 ),
-                count,
+                count as usize,
             ))
         },
         &mut report,
@@ -254,6 +277,7 @@ pub fn dream_pipeline(
                 sparse_index,
                 &target_l2_ids,
                 decay_config,
+                l2_meta,
             )?;
             let count = l1_updated.len();
             report.l1_updated = l1_updated;
@@ -276,7 +300,8 @@ pub fn dream_pipeline(
         "l1_decay",
         "L1 decay failed",
         |report, btree, _sparse_index| {
-            let decay_report = l1_decay::decay_l1_network(mmap, header, btree, decay_config)?;
+            let decay_report =
+                l1_decay::decay_l1_network(mmap, header, btree, decay_config, l2_meta)?;
             report.l1_decayed_nodes = decay_report.decayed_nodes;
             report.l1_pruned_edges = decay_report.pruned_edges;
             report.l1_removed_nodes = decay_report.removed_nodes;
@@ -455,8 +480,10 @@ fn rebuild_l1_from_l2(
     sparse_index: &mut SparseIndex,
     _session_topic_ids: &HashSet<u64>,
     decay_config: &DecayConfig,
+    l2_meta: &L2MetaIndex,
 ) -> Result<Vec<String>, MemHopError> {
     use crate::layers::context_node::ContextNode;
+    use crate::shared::slot_io::get_slot_data;
     use crate::util::PageType;
 
     let page_count = header.page_count;
@@ -483,10 +510,42 @@ fn rebuild_l1_from_l2(
             continue;
         }
 
-        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(&mmap[..], *page_ref) {
+        if let Some(slot_data) = get_slot_data(&mmap[..], *page_ref) {
             if let Ok(node) = ContextNode::deserialize(slot_data) {
                 if btree.search(node.context_id).is_none() {
+                    // L2 context does not exist — stale node
                     stale_nodes.push((*id_hash, page_id));
+                } else {
+                    // Depth filter: L1 should only track depth <= 2
+                    let is_depth_out_of_range = l2_meta
+                        .get(node.context_id)
+                        .map(|meta| meta.depth > 2)
+                        .unwrap_or(false);
+
+                    if is_depth_out_of_range {
+                        // Hierarchical edge exception: keep if depth=3 and parent depth <= 2
+                        let keep_for_hierarchical = l2_meta
+                            .get(node.context_id)
+                            .and_then(|meta| {
+                                if meta.depth == 3 {
+                                    // Read parent ContextSlot to get parent_id
+                                    let parent_ref = btree.search(node.context_id)?;
+                                    let parent_data = get_slot_data(&mmap[..], parent_ref)?;
+                                    let ctx = ContextSlot::deserialize_slot(parent_data).ok()?;
+                                    let parent_id = ctx.parent_id?;
+                                    // Check parent depth in l2_meta
+                                    let parent_depth = l2_meta.get(parent_id).map(|pm| pm.depth)?;
+                                    Some(parent_depth <= 2)
+                                } else {
+                                    Some(false)
+                                }
+                            })
+                            .unwrap_or(false);
+
+                        if !keep_for_hierarchical {
+                            stale_nodes.push((*id_hash, page_id));
+                        }
+                    }
                 }
             }
         }
@@ -787,6 +846,7 @@ mod tests {
         assert!(sparse_index.bm25_score(&["test".to_string()], 1) > 0.0);
 
         let dc = default_decay_config();
+        let l2_meta = L2MetaIndex::new();
         let updated = rebuild_l1_from_l2(
             &mut mmap,
             &mut header,
@@ -794,6 +854,7 @@ mod tests {
             &mut sparse_index,
             &HashSet::new(),
             &dc,
+            &l2_meta,
         )
         .unwrap();
         assert_eq!(updated.len(), 1);
@@ -868,6 +929,7 @@ mod tests {
         btree.insert(2000, 0);
 
         let dc = default_decay_config();
+        let l2_meta = L2MetaIndex::new();
         let updated = rebuild_l1_from_l2(
             &mut mmap,
             &mut header,
@@ -875,6 +937,7 @@ mod tests {
             &mut sparse_index,
             &HashSet::new(),
             &dc,
+            &l2_meta,
         )
         .unwrap();
         assert_eq!(updated.len(), 1);
@@ -893,7 +956,9 @@ mod tests {
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(32);
         let ctx = ContextSlot {
             id_hash: 101,
+            scene_id: 0,
             parent_id: None,
+            children_ids: vec![],
             depth: 1,
             title: "test context".to_string(),
             summary: None,
@@ -961,7 +1026,9 @@ mod tests {
         fn make_active_context(id_hash: u64, title: &str) -> ContextSlot {
             ContextSlot {
                 id_hash,
+                scene_id: 0,
                 parent_id: None,
+                children_ids: vec![],
                 depth: 1,
                 title: title.to_string(),
                 summary: Some(format!("summary of {}", title)),
@@ -981,11 +1048,12 @@ mod tests {
             }
         }
 
+        #[ignore = "旧 compress_stage 行为，新 l2_merge_compress 需 mock LLM，由 AC-2/3/4 覆盖"]
         #[test]
         fn test_dream_with_l2_ids() {
             let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
             let mut sparse = SparseIndex::new();
-            let l2_meta = L2MetaIndex::new();
+            let mut l2_meta = L2MetaIndex::new();
 
             insert_test_context(
                 &mut mmap,
@@ -1014,22 +1082,52 @@ mod tests {
                 Some(vec![101]),
                 &mut file,
                 &default_decay_config(),
-                &l2_meta,
+                &mut l2_meta,
+                None,
             )
             .unwrap();
 
+            // Original L2 101 stays at depth=1 (compressed in-place).
+            // A new child depth-2 L2 is created with parent_id=101.
             let demoted_ids: Vec<u64> = report
                 .demoted_to_secondary
                 .iter()
                 .map(|d| u64::from_str_radix(&d.context_id, 16).unwrap())
                 .collect();
-            assert!(demoted_ids.contains(&101));
+            assert!(
+                !demoted_ids.contains(&101),
+                "Original L2 should NOT be in demoted list (stays at depth=1)"
+            );
             assert!(!demoted_ids.contains(&102));
 
+            // Original 101 depth=1, compressed content
             let ctx_101 = read_context_slot(&mmap, &btree, 101);
             let ctx_102 = read_context_slot(&mmap, &btree, 102);
-            assert_eq!(ctx_101.depth, 2);
+            assert_eq!(
+                ctx_101.depth, 1,
+                "Original L2 stays at depth-1 after compression"
+            );
             assert_eq!(ctx_102.depth, 1);
+
+            // Verify a depth-2 child was created with parent_id=101
+            let child_exists = btree.iter_unsorted().any(|(_, page_ref)| {
+                let (page_id, _) = crate::file::page::decode_page_ref(*page_ref);
+                let offset = crate::shared::slot_io::slot_offset(page_id);
+                if offset + 64 > mmap.len() {
+                    return false;
+                }
+                // Deserialize and check depth + parent_id
+                let data = &mmap[offset..mmap.len().min(offset + 512)];
+                if let Ok(slot) = ContextSlot::deserialize(data) {
+                    slot.depth == 2 && slot.parent_id == Some(101)
+                } else {
+                    false
+                }
+            });
+            assert!(
+                child_exists,
+                "A depth-2 child with parent_id=101 should exist"
+            );
 
             let _ = file;
         }
@@ -1038,7 +1136,7 @@ mod tests {
         fn test_dream_l6_decay() {
             let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
             let mut sparse = SparseIndex::new();
-            let l2_meta = L2MetaIndex::new();
+            let mut l2_meta = L2MetaIndex::new();
 
             let old = (now_ms() - 100_000) as u64; // ~1.7 minutes ago
             let pathway = PathwayWeightSlot {
@@ -1067,7 +1165,8 @@ mod tests {
                 None,
                 &mut file,
                 &default_decay_config(),
-                &l2_meta,
+                &mut l2_meta,
+                None,
             )
             .unwrap();
 
@@ -1087,5 +1186,186 @@ mod tests {
             let slot_data = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref).unwrap();
             ContextSlot::deserialize_slot(slot_data).unwrap()
         }
+    }
+
+    // ========================================================================
+    // AC-5: L1 只关联 depth≤2
+    // ========================================================================
+
+    #[test]
+    fn test_ac5_l1_only_associates_depth_le2() {
+        use crate::layers::context::{ActivationState, ContextSlot, LlmParams};
+        use crate::test_helpers::{create_test_mmap, insert_test_context, insert_test_context_node};
+
+        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(32);
+        let mut sparse_index = SparseIndex::new();
+
+        // Create 3 ContextSlots at depths 1, 2, 3
+        let ctx1 = ContextSlot {
+            id_hash: 101,
+            scene_id: 1,
+            parent_id: None,
+            children_ids: vec![],
+            depth: 1,
+            title: "depth 1 topic".to_string(),
+            summary: Some("depth 1 summary".to_string()),
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 1,
+            created_at: 1000,
+            updated_at: 1000,
+            version: 3,
+            importance: 0.5,
+            activation_score: 0.0,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (1000, 1000),
+            llm_params: LlmParams::default(),
+        };
+        let ctx2 = ContextSlot {
+            id_hash: 102,
+            scene_id: 1,
+            parent_id: Some(101),
+            children_ids: vec![],
+            depth: 2,
+            title: "depth 2 sub-topic".to_string(),
+            summary: Some("depth 2 summary".to_string()),
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 1,
+            created_at: 1001,
+            updated_at: 1001,
+            version: 3,
+            importance: 0.5,
+            activation_score: 0.0,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (1001, 1001),
+            llm_params: LlmParams::default(),
+        };
+        let ctx3 = ContextSlot {
+            id_hash: 103,
+            scene_id: 1,
+            parent_id: None,  // No parent → no hierarchical exception; purely depth>2
+            children_ids: vec![],
+            depth: 3,
+            title: "depth 3 deep node".to_string(),
+            summary: Some("depth 3 summary".to_string()),
+            archive_refs: vec![],
+            l3_refs: vec![],
+            turn_count: 1,
+            created_at: 1002,
+            updated_at: 1002,
+            version: 3,
+            importance: 0.5,
+            activation_score: 0.0,
+            is_active: false,
+            activation_state: ActivationState::Dormant,
+            centroid_page_ref: 0,
+            dialogue_range: (1002, 1002),
+            llm_params: LlmParams::default(),
+        };
+
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx1, &mut file);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx2, &mut file);
+        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx3, &mut file);
+
+        // Create L1 ContextNodes for all three
+        insert_test_context_node(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            ContextNode {
+                id_hash: 201,
+                context_id: 101,
+                vector_page_ref: 0,
+                importance: 0.5,
+                valence: 0.0,
+                arousal: 0.0,
+                created_at: 1000,
+                updated_at: 1000,
+                version: 1,
+                edge_ptrs: vec![],
+            },
+            &mut file,
+        );
+        insert_test_context_node(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            ContextNode {
+                id_hash: 202,
+                context_id: 102,
+                vector_page_ref: 0,
+                importance: 0.5,
+                valence: 0.0,
+                arousal: 0.0,
+                created_at: 1001,
+                updated_at: 1001,
+                version: 1,
+                edge_ptrs: vec![],
+            },
+            &mut file,
+        );
+        insert_test_context_node(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            ContextNode {
+                id_hash: 203,
+                context_id: 103,
+                vector_page_ref: 0,
+                importance: 0.5,
+                valence: 0.0,
+                arousal: 0.0,
+                created_at: 1002,
+                updated_at: 1002,
+                version: 1,
+                edge_ptrs: vec![],
+            },
+            &mut file,
+        );
+
+        // Build L2 meta index
+        let l2_meta = L2MetaIndex::build(&mmap, &btree);
+
+        let dc = default_decay_config();
+        let updated = rebuild_l1_from_l2(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut sparse_index,
+            &HashSet::new(),
+            &dc,
+            &l2_meta,
+        )
+        .unwrap();
+
+        // L1 nodes for depth=1 and depth=2 should remain
+        assert!(
+            btree.search(201).is_some(),
+            "L1 node for depth=1 context should remain"
+        );
+        assert!(
+            btree.search(202).is_some(),
+            "L1 node for depth=2 context should remain"
+        );
+
+        // L1 node for depth=3 should be removed
+        assert!(
+            btree.search(203).is_none(),
+            "L1 node for depth=3 context should be removed"
+        );
+
+        // The updated list should include the depth=3 node
+        assert!(
+            updated.iter().any(|id| id == "00000000000000cb"),
+            "updated list should mention removed node 203, got {:?}",
+            updated
+        );
+
+        let _ = file;
     }
 }

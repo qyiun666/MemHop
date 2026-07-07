@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod common;
-use common::{kill_mock_meowvec, spawn_mock_meowvec};
+use common::{kill_python_meowvec, spawn_python_meowvec};
 
 fn encoder_addr() -> String {
     std::env::var("MEMHOP_BENCH_ENCODER_ADDR")
@@ -53,7 +53,7 @@ fn bench_vector_dim() -> usize {
     std::env::var("BENCH_VECTOR_DIM")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(768)
+        .unwrap_or(1024)
 }
 
 fn make_config(path: PathBuf) -> MemHopConfig {
@@ -70,12 +70,11 @@ fn make_config(path: PathBuf) -> MemHopConfig {
             vector_weight: 0.55,
             n_probes: 8,
             enable_reranker: true,
-            rerank_max_candidates: 20,
+            rerank_max_candidates: 1, // 减少 rerank 编码次数以控制基准耗时
         }),
         decay_config: None,
         session_config: None,
-        auto_dream_archive_threshold: None,
-        auto_dream_summary_bytes: None,
+        dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
     }
@@ -206,7 +205,7 @@ criterion_group!(benches, bench_retrieval);
 fn main() {
     let external_addr = std::env::var("MEMHOP_BENCH_ENCODER_ADDR").ok();
     let mut child = if external_addr.is_none() {
-        Some(spawn_mock_meowvec(27110))
+        Some(spawn_python_meowvec(27110))
     } else {
         // Wait for the externally-provided encoder to become ready.
         let addr = encoder_addr();
@@ -216,6 +215,6 @@ fn main() {
     };
     benches();
     if let Some(ref mut c) = child {
-        kill_mock_meowvec(c);
+        kill_python_meowvec(c);
     }
 }

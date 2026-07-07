@@ -136,14 +136,14 @@ impl Encoder for GrpcEncoder {
             .rt
             .block_on(async {
                 tokio::time::timeout(
-                    Duration::from_secs(10),
+                    Duration::from_secs(20),
                     client.encode(EncodeRequest {
                         text: text.to_string(),
                     }),
                 )
                 .await
             })
-            .map_err(|_| MemHopError::EncoderError("encode timeout after 10s".into()))?
+            .map_err(|_| MemHopError::EncoderError("encode timeout after 20s".into()))?
             .map_err(|e| MemHopError::EncoderError(format!("gRPC encode failed: {}", e)))?;
 
         let resp = response.into_inner();

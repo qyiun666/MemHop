@@ -6,7 +6,7 @@ use crate::encoder::Encoder;
 use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
-use crate::index::sparse::SparseIndex;
+use crate::index::sparse::{self, SparseIndex};
 use crate::layers::context::ActivationState;
 use crate::layers::context::ContextSlot;
 use crate::layers::context_node::ContextNode;
@@ -410,6 +410,8 @@ pub fn update_topics(
         let context = ContextSlot {
             id_hash: context_id,
             parent_id: None,
+            children_ids: vec![],
+            scene_id: 0,
             depth: 1,
             title: label.clone(),
             summary: None,
@@ -447,7 +449,7 @@ pub fn update_topics(
 
         btree.insert(context_id, (page_id as u64) << 16);
 
-        let context_terms = SparseIndex::tokenize(&label);
+        let context_terms = sparse::tokenize(&label);
         let context_doc_len = context_terms.len() as u32;
         sparse_index.add_document(context_id, context_terms, context_doc_len);
 

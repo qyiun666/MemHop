@@ -225,6 +225,7 @@ pub fn write_active_header(file: &mut File, header: &FileHeader, is_a: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::util::VERSION;
     use tempfile::NamedTempFile;
 
     #[test]
@@ -323,5 +324,75 @@ mod tests {
 
         let selected = select_valid_header(&read_a, &read_b).unwrap();
         assert_eq!(selected.commit_id, 100); // A has higher commit_id
+    }
+
+    // ========================================================================
+    // AC-7: 旧版本号报错
+    // ========================================================================
+
+    #[test]
+    fn test_ac7_old_version_errors() {
+        // Create a header with an old version number
+        let mut header = FileHeader::new(768);
+        header.version = 0x0010; // Version 0x0010 instead of current 0x0025
+
+        let bytes = header.to_bytes();
+        match FileHeader::from_bytes(&bytes) {
+            Err(MemHopError::InvalidVersion { expected, actual }) => {
+                assert_eq!(expected, VERSION, "expected version should be current VERSION");
+                assert_eq!(actual, 0x0010, "actual version should be 0x0010");
+            }
+            other => panic!("Expected InvalidVersion error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_ac7_old_version_via_mmap() {
+        use std::io::Write;
+
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path();
+
+        // Create a file with old version header
+        let mut f = std::fs::File::create(path).unwrap();
+        let mut header = FileHeader::new(768);
+        header.version = 0x0010;
+        let bytes = header.to_bytes();
+        f.write_all(&bytes).unwrap();
+        f.write_all(&bytes).unwrap(); // Write both A and B headers
+        f.set_len((PAGE_SIZE * 2000) as u64).unwrap();
+        f.flush().unwrap();
+        drop(f);
+
+        // Try to open with current code — should fail with InvalidVersion
+        use crate::config::MemHopConfig;
+        use crate::MemHop;
+        use std::path::PathBuf;
+
+        let config = MemHopConfig {
+            db_path: PathBuf::from(path),
+            encoder_grpc_addr: None,
+            vector_dim: 768,
+            crystal_path: None,
+            llm: crate::LlmConfig::default(),
+            auto_dream_on_evict: false,
+            ivf_initial_k: 16,
+            search_weights: None,
+            decay_config: None,
+            session_config: None,
+            dream_idle_threshold_secs: None,
+            auto_checkpoint_interval: None,
+            adjacency_cache_max_entries: 128,
+        };
+
+        let result = MemHop::open(config);
+        match result {
+            Err(MemHopError::InvalidVersion { expected, actual }) => {
+                assert_eq!(expected, VERSION);
+                assert_eq!(actual, 0x0010);
+            }
+            Err(e) => panic!("Expected InvalidVersion error, got {:?}", e),
+            Ok(_) => panic!("Expected InvalidVersion error, got Ok"),
+        }
     }
 }

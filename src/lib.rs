@@ -44,9 +44,10 @@ pub use query::types::{
     EdgeListResult, EngramListQuery, EngramListResult, EngramResult, ImportData, ImportError,
     ImportMode, ImportRequest, ImportResult, ImportStatus, KnowledgeDetail, KnowledgeImportItem,
     KnowledgeListQuery, KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodesResult,
-    KnowledgeSummary, L3Detail, L3Preview, L4SearchQuery, L6Filter, MergeResult, NodeListQuery,
-    NodeListResult, ProfileResult, RequestSource, SearchQuery, SearchResult, TargetLayer,
-    TopicDetail, TopicImportItem, TopicListQuery, TopicListResult, TopicSummary, UpdateL2Fields,
+    KnowledgeSummary, L3Detail, L3Preview, L4SearchQuery, L6Filter, MergeNodesRequest,
+    MergeNodesResult, MergeResult, NodeListQuery, NodeListResult, ProfileResult,
+    RequestSource, SceneTreeResult, SearchQuery, SearchResult, TargetLayer, TopicDetail,
+    TopicImportItem, TopicListQuery, TopicListResult, TopicSummary, UpdateL2Fields,
     UpdateL3Fields, UpdateL5Fields, UpdateL6Fields, UpdateProfileRequest, UpdateRequest,
     UpdateResult, UpdateStatus,
 };

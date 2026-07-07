@@ -26,10 +26,12 @@ pub struct MemHopConfig {
     pub decay_config: Option<DecayConfig>,
     #[serde(default)]
     pub session_config: Option<SessionConfig>,
-    #[serde(default)]
-    pub auto_dream_archive_threshold: Option<usize>,
-    #[serde(default)]
-    pub auto_dream_summary_bytes: Option<usize>,
+    /// L2 context idle time (seconds) before automatic dream consolidation.
+    /// When a depth-1 context has not been updated for this duration,
+    /// the next sync/checkpoint cycle will trigger dream on it.
+    /// `None` disables idle-triggered dreaming.
+    #[serde(default = "default_dream_idle_threshold_secs")]
+    pub dream_idle_threshold_secs: Option<u64>,
     /// Number of uncommitted updates to buffer before auto-checkpoint.
     /// `None` means checkpoint after every update.
     #[serde(default)]
@@ -55,8 +57,7 @@ impl MemHopConfig {
             search_weights: None,
             decay_config: None,
             session_config: None,
-            auto_dream_archive_threshold: None,
-            auto_dream_summary_bytes: None,
+            dream_idle_threshold_secs: default_dream_idle_threshold_secs(),
             auto_checkpoint_interval: None,
             adjacency_cache_max_entries: default_adjacency_cache_max_entries(),
         }
@@ -65,6 +66,10 @@ impl MemHopConfig {
 
 fn default_auto_dream_on_evict() -> bool {
     false
+}
+
+fn default_dream_idle_threshold_secs() -> Option<u64> {
+    Some(3600) // 1 hour
 }
 
 fn default_ivf_initial_k() -> usize {

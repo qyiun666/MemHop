@@ -13,7 +13,7 @@ pub const PAGE_SIZE: usize = 4096;
 
 pub const MAGIC: [u8; 4] = [0x4D, 0x45, 0x48, 0x21]; // "MEH!"
 pub const TAIL_MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
-pub const VERSION: u16 = 0x0024;
+pub const VERSION: u16 = 0x0025;
 
 /// Default number of pages to grow the file by when the free list is exhausted.
 pub const DEFAULT_GROW_PAGES: u32 = 500;

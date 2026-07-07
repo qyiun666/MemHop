@@ -311,7 +311,9 @@ pub fn write_context_page(mmap: &mut MmapMut, page_id: u32, ctx: ContextSlot) {
 pub fn create_test_context(id_hash: u64, title: &str, l3_refs: Vec<u64>) -> ContextSlot {
     ContextSlot {
         id_hash,
+        scene_id: 0,
         parent_id: None,
+        children_ids: vec![],
         depth: 1,
         title: title.to_string(),
         summary: None,
