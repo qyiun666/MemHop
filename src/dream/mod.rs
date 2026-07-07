@@ -1195,7 +1195,9 @@ mod tests {
     #[test]
     fn test_ac5_l1_only_associates_depth_le2() {
         use crate::layers::context::{ActivationState, ContextSlot, LlmParams};
-        use crate::test_helpers::{create_test_mmap, insert_test_context, insert_test_context_node};
+        use crate::test_helpers::{
+            create_test_mmap, insert_test_context, insert_test_context_node,
+        };
 
         let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(32);
         let mut sparse_index = SparseIndex::new();
@@ -1248,7 +1250,7 @@ mod tests {
         let ctx3 = ContextSlot {
             id_hash: 103,
             scene_id: 1,
-            parent_id: None,  // No parent → no hierarchical exception; purely depth>2
+            parent_id: None, // No parent → no hierarchical exception; purely depth>2
             children_ids: vec![],
             depth: 3,
             title: "depth 3 deep node".to_string(),
@@ -1268,9 +1270,30 @@ mod tests {
             llm_params: LlmParams::default(),
         };
 
-        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx1, &mut file);
-        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx2, &mut file);
-        insert_test_context(&mut mmap, &mut header, &mut btree, &mut sparse_index, ctx3, &mut file);
+        insert_test_context(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut sparse_index,
+            ctx1,
+            &mut file,
+        );
+        insert_test_context(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut sparse_index,
+            ctx2,
+            &mut file,
+        );
+        insert_test_context(
+            &mut mmap,
+            &mut header,
+            &mut btree,
+            &mut sparse_index,
+            ctx3,
+            &mut file,
+        );
 
         // Create L1 ContextNodes for all three
         insert_test_context_node(

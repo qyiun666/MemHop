@@ -339,7 +339,10 @@ mod tests {
         let bytes = header.to_bytes();
         match FileHeader::from_bytes(&bytes) {
             Err(MemHopError::InvalidVersion { expected, actual }) => {
-                assert_eq!(expected, VERSION, "expected version should be current VERSION");
+                assert_eq!(
+                    expected, VERSION,
+                    "expected version should be current VERSION"
+                );
                 assert_eq!(actual, 0x0010, "actual version should be 0x0010");
             }
             other => panic!("Expected InvalidVersion error, got {:?}", other),

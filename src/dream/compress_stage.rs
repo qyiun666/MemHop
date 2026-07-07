@@ -318,7 +318,8 @@ fn detect_adjacent_same_topic(
         let same = if prev_summary.is_empty() || curr_summary.is_empty() {
             false
         } else {
-            llm.check_same_topic(prev_summary, curr_summary).unwrap_or(false)
+            llm.check_same_topic(prev_summary, curr_summary)
+                .unwrap_or(false)
         };
         adjacency.push(same);
     }
@@ -396,8 +397,7 @@ fn merge_and_compress(
             Ok(output) => {
                 let v_page_id = allocate_page(mmap, header, PageType::VectorMatrix, 2, 0, file)?;
                 let v_offset = crate::shared::slot_io::slot_offset(v_page_id);
-                let v_bytes: Vec<u8> =
-                    output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
+                let v_bytes: Vec<u8> = output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
                 if v_offset + v_bytes.len() > mmap.len() {
                     tracing::warn!("Centroid page allocation failed, centroid omitted");
                     let _ = free_page(mmap, header, v_page_id);
@@ -476,10 +476,7 @@ fn merge_and_compress(
     };
 
     // Compute LLM parameters based on merged context content features
-    let merged_summary = parent_node
-        .summary
-        .as_deref()
-        .unwrap_or("");
+    let merged_summary = parent_node.summary.as_deref().unwrap_or("");
     parent_node.llm_params = compute_llm_params(&parent_node, merged_summary);
 
     Ok(parent_node)
@@ -669,7 +666,7 @@ mod tests {
     use std::io::Write;
 
     // ========================================================================
-    // MockLLM — deterministic 
+    // MockLLM — deterministic
     // ========================================================================
 
     struct MockLLM {
@@ -733,10 +730,7 @@ mod tests {
             }
         }
 
-        fn analyze_user_habits(
-            &self,
-            _: &[String],
-        ) -> Result<HabitAnalysis, MemHopError> {
+        fn analyze_user_habits(&self, _: &[String]) -> Result<HabitAnalysis, MemHopError> {
             Ok(HabitAnalysis::default())
         }
 
@@ -758,11 +752,7 @@ mod tests {
             }
         }
 
-        fn check_same_topic(
-            &self,
-            summary_a: &str,
-            summary_b: &str,
-        ) -> Result<bool, MemHopError> {
+        fn check_same_topic(&self, summary_a: &str, summary_b: &str) -> Result<bool, MemHopError> {
             if self.use_topic_keyword {
                 Ok(summary_a.contains(&self.topic_keyword)
                     && summary_b.contains(&self.topic_keyword))
@@ -771,21 +761,14 @@ mod tests {
             }
         }
 
-        fn merge_summarize(
-            &self,
-            _texts: &[String],
-        ) -> Result<(String, String), MemHopError> {
+        fn merge_summarize(&self, _texts: &[String]) -> Result<(String, String), MemHopError> {
             Ok((
                 "Merged Conversation Topic".to_string(),
                 "This is a merged summary of multiple related conversations.".to_string(),
             ))
         }
 
-        fn compress_for_retrieval(
-            &self,
-            text: &str,
-            _role: &str,
-        ) -> Result<String, MemHopError> {
+        fn compress_for_retrieval(&self, text: &str, _role: &str) -> Result<String, MemHopError> {
             Ok(text.to_string())
         }
     }
@@ -1035,17 +1018,11 @@ mod tests {
         // turn9 should be depth=2, parent_id=999
         {
             let slot_data =
-                crate::shared::slot_io::get_slot_data(&mmap[..], btree.search(109).unwrap()).unwrap();
+                crate::shared::slot_io::get_slot_data(&mmap[..], btree.search(109).unwrap())
+                    .unwrap();
             let ctx = ContextSlot::deserialize_slot(slot_data).unwrap();
-            assert_eq!(
-                ctx.depth, 2,
-                "turn9 should be depth=2 after sinking"
-            );
-            assert_eq!(
-                ctx.parent_id,
-                Some(999),
-                "turn9 parent_id should be 999"
-            );
+            assert_eq!(ctx.depth, 2, "turn9 should be depth=2 after sinking");
+            assert_eq!(ctx.parent_id, Some(999), "turn9 parent_id should be 999");
         }
 
         // turn4/5/6 should be depth=3, parent_id=109
@@ -1129,12 +1106,10 @@ mod tests {
                 "turn9 should still exist in btree"
             );
             let slot_data =
-                crate::shared::slot_io::get_slot_data(&mmap[..], btree.search(109).unwrap()).unwrap();
+                crate::shared::slot_io::get_slot_data(&mmap[..], btree.search(109).unwrap())
+                    .unwrap();
             let ctx = ContextSlot::deserialize_slot(slot_data).unwrap();
-            assert_eq!(
-                ctx.depth, 3,
-                "turn9 should be depth=3 after sinking"
-            );
+            assert_eq!(ctx.depth, 3, "turn9 should be depth=3 after sinking");
         }
 
         // turn4/5/6 should be removed (depth=3 → 4 triggers deletion)

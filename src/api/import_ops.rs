@@ -3,6 +3,7 @@
 
 //! Import API operations.
 
+use crate::index::l2_meta::L2MetaIndex;
 use crate::query::types::{ImportRequest, ImportResult};
 use crate::MemHop;
 use crate::Result;
@@ -52,6 +53,9 @@ impl MemHop {
         // Invalidate all adjacency cache since import may modify any graph
         self.adjacency_cache.invalidate_all();
         self.degree_tracker.invalidate_all();
+        // Rebuild in-memory L2 metadata from the updated mmap state so the
+        // newly created L2 context (with its l3_refs) can be found by search.
+        self.l2_meta = L2MetaIndex::build(&self.mmap, &self.btree);
         Ok(result)
     }
 }

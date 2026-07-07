@@ -50,10 +50,10 @@ impl Default for LlmParams {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextSlot {
     pub id_hash: u64,
-    pub scene_id: u64,          // Scene identifier, shared across nodes in the same scene
+    pub scene_id: u64, // Scene identifier, shared across nodes in the same scene
     pub parent_id: Option<u64>, // Parent context (supports 4-level nesting)
     pub children_ids: Vec<u64>, // Child node IDs (forward pointers for tree structure)
-    pub depth: u8,              // 1=scene, 2=sub-scene, 3=turn group, 4=semantic summary
+    pub depth: u8,     // 1=scene, 2=sub-scene, 3=turn group, 4=semantic summary
     pub title: String,
     pub summary: Option<String>,
     pub archive_refs: Vec<u64>, // Associated L4 archives
@@ -209,11 +209,7 @@ impl ContextSlot {
             LlmParams::default()
         };
         // Scene & children (version >= 3)
-        let scene_id = if version >= 3 {
-            read_u64(&mut c)?
-        } else {
-            0
-        };
+        let scene_id = if version >= 3 { read_u64(&mut c)? } else { 0 };
         let children_count = if version >= 3 {
             read_u16(&mut c)? as usize
         } else {

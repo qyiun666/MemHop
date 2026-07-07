@@ -45,9 +45,8 @@ pub use query::types::{
     ImportMode, ImportRequest, ImportResult, ImportStatus, KnowledgeDetail, KnowledgeImportItem,
     KnowledgeListQuery, KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodesResult,
     KnowledgeSummary, L3Detail, L3Preview, L4SearchQuery, L6Filter, MergeNodesRequest,
-    MergeNodesResult, MergeResult, NodeListQuery, NodeListResult, ProfileResult,
-    RequestSource, SceneTreeResult, SearchQuery, SearchResult, TargetLayer, TopicDetail,
-    TopicImportItem, TopicListQuery, TopicListResult, TopicSummary, UpdateL2Fields,
-    UpdateL3Fields, UpdateL5Fields, UpdateL6Fields, UpdateProfileRequest, UpdateRequest,
-    UpdateResult, UpdateStatus,
+    MergeNodesResult, MergeResult, NodeListQuery, NodeListResult, ProfileResult, RequestSource,
+    SceneTreeResult, SearchQuery, SearchResult, TargetLayer, TopicDetail, TopicImportItem,
+    TopicListQuery, TopicListResult, TopicSummary, UpdateL2Fields, UpdateL3Fields, UpdateL5Fields,
+    UpdateL6Fields, UpdateProfileRequest, UpdateRequest, UpdateResult, UpdateStatus,
 };

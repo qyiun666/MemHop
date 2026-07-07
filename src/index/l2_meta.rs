@@ -121,7 +121,10 @@ impl L2MetaIndex {
                     let depth = meta.depth;
                     entries.insert(id_hash, meta);
                     by_scene.entry(scene_id).or_default().push(id_hash);
-                    by_scene_depth.entry((scene_id, depth)).or_default().push(id_hash);
+                    by_scene_depth
+                        .entry((scene_id, depth))
+                        .or_default()
+                        .push(id_hash);
                 }
             }
         }

@@ -28,6 +28,8 @@ fn create_test_db() -> (TempDir, MemHop) {
 
 /// Test 1: Verify file auto-extends when pages run out
 /// Creates a small DB, fills it with many items, and verifies no FileFull error.
+// Requires external gRPC encoder (meowvec) — not available in CI.
+#[ignore]
 #[test]
 fn test_file_auto_extend() {
     setup_encoder();
@@ -65,6 +67,8 @@ fn test_file_auto_extend() {
 }
 
 /// Test 2: Verify batch_store with many items doesn't cause partial writes
+// Requires external gRPC encoder (meowvec) — not available in CI.
+#[ignore]
 #[test]
 fn test_batch_store_no_partial_write() {
     setup_encoder();
@@ -114,6 +118,8 @@ fn test_batch_store_no_partial_write() {
 }
 
 /// Test 3: Rapid alternating write + sync doesn't corrupt DB
+// Requires external gRPC encoder (meowvec) — not available in CI.
+#[ignore]
 #[test]
 fn test_rapid_write_and_sync() {
     setup_encoder();
@@ -163,7 +169,12 @@ fn test_rapid_write_and_sync() {
 /// Test 4: Import many L3 documents without corruption
 #[test]
 fn test_import_many_l3_documents() {
-    let (_dir, mut db) = create_test_db();
+    // No encoder needed for L3 import — use minimal config
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("stress_import.meh");
+    let mut config = MemHopConfig::new(path, 1024);
+    config.encoder_grpc_addr = None;
+    let mut db = MemHop::open(config).unwrap();
 
     let mut total_created = 0usize;
 

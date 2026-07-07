@@ -4,8 +4,8 @@
 //! API-5 + API-6: L2 Context CRUD and merge operations.
 
 use crate::query::types::{
-    MergeNodesRequest, MergeNodesResult, MergeResult, SceneTreeResult, TopicDetail,
-    TopicListQuery, TopicListResult, UpdateL2Fields,
+    MergeNodesRequest, MergeNodesResult, MergeResult, SceneTreeResult, TopicDetail, TopicListQuery,
+    TopicListResult, UpdateL2Fields,
 };
 use crate::shared::common::parse_id_to_hash;
 use crate::{MemHop, Result};
@@ -124,10 +124,7 @@ impl MemHop {
     /// # Errors
     /// Returns `ConfigError` if the `llm` feature is not enabled.
     #[cfg(feature = "llm")]
-    pub fn merge_nodes(
-        &mut self,
-        request: MergeNodesRequest,
-    ) -> Result<MergeNodesResult> {
+    pub fn merge_nodes(&mut self, request: MergeNodesRequest) -> Result<MergeNodesResult> {
         use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
 
         let scene_hash = parse_id_to_hash(&request.scene_id);
@@ -162,10 +159,7 @@ impl MemHop {
     ///
     /// This fallback is used when the `llm` feature is disabled.
     #[cfg(not(feature = "llm"))]
-    pub fn merge_nodes(
-        &mut self,
-        _request: MergeNodesRequest,
-    ) -> Result<MergeNodesResult> {
+    pub fn merge_nodes(&mut self, _request: MergeNodesRequest) -> Result<MergeNodesResult> {
         Err(MemHopError::ConfigError(
             "LLM feature not enabled, cannot merge nodes".to_string(),
         ))

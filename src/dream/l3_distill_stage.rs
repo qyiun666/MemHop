@@ -70,11 +70,7 @@ pub fn distill_l3_knowledge(
             let llm_response = match llm.distill_concepts(&summary) {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::warn!(
-                        "L3 distillation LLM call failed for '{}': {}",
-                        ctx.title,
-                        e
-                    );
+                    tracing::warn!("L3 distillation LLM call failed for '{}': {}", ctx.title, e);
                     continue;
                 }
             };
@@ -124,8 +120,7 @@ pub fn distill_l3_knowledge(
                                 break;
                             }
                             let truncated: String = s.chars().take(remaining).collect();
-                            aggregated
-                                .push_str(&format!("- {}: {}\n", child_ctx.title, truncated));
+                            aggregated.push_str(&format!("- {}: {}\n", child_ctx.title, truncated));
                             child_count += 1;
                         }
                     }

@@ -768,17 +768,23 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
                     MemHopError::Serialization(format!("Parse merge_summarize failed: {}", e))
                 })?;
                 let title = json["title"].as_str().unwrap_or("").to_string();
-                let summary = json["summary"].as_str().ok_or_else(|| {
-                    MemHopError::Serialization("Missing summary field".to_string())
-                })?.to_string();
+                let summary = json["summary"]
+                    .as_str()
+                    .ok_or_else(|| MemHopError::Serialization("Missing summary field".to_string()))?
+                    .to_string();
                 Ok((title, summary))
             },
         )
         .or_else(|e| {
             tracing::warn!("LLM merge_summarize failed, using fallback: {}", e);
             let combined = texts.join(" ");
-            let title: String = texts.first()
-                .and_then(|t| t.chars().next().map(|_c| format!("[Merged] {}", t.chars().take(10).collect::<String>())))
+            let title: String = texts
+                .first()
+                .and_then(|t| {
+                    t.chars()
+                        .next()
+                        .map(|_c| format!("[Merged] {}", t.chars().take(10).collect::<String>()))
+                })
                 .unwrap_or_else(|| "[Merged]".to_string());
             let summary = combined.chars().take(200).collect();
             Ok((title, summary))

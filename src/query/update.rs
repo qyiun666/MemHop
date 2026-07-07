@@ -186,12 +186,16 @@ pub fn update_memory_internal(
     let turn_hash = hash_id(&format!("turn_{}_{:x}_{}", scene_id, now_ms, commit_id));
 
     // Title from summary or default
-    let turn_title = request.summary.as_ref()
+    let turn_title = request
+        .summary
+        .as_ref()
         .map(|s| s.chars().take(50).collect::<String>())
         .unwrap_or_else(|| format!("turn-{}", now_ms));
 
     // Summary: use provided summary, or fall back to dialogue text
-    let turn_summary = request.summary.clone()
+    let turn_summary = request
+        .summary
+        .clone()
         .unwrap_or_else(|| request.dialogue_text.clone());
 
     // Allocate a new page for the turn node
@@ -214,14 +218,7 @@ pub fn update_memory_internal(
         if let Some(s) = turn_ctx.summary.as_ref() {
             match enc.encode(s) {
                 Ok(output) => {
-                    let v_page_id = allocate_page(
-                        mmap,
-                        header,
-                        PageType::Context,
-                        2,
-                        0,
-                        file,
-                    )?;
+                    let v_page_id = allocate_page(mmap, header, PageType::Context, 2, 0, file)?;
                     let v_offset = crate::shared::slot_io::slot_offset(v_page_id);
                     let v_bytes: Vec<u8> =
                         output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
@@ -345,12 +342,12 @@ pub fn update_memory_internal(
     l2_meta.update_from_context(&turn_ctx);
 
     // Determine update status.
-    let status = if request.summary.is_some() || request.action_chain.is_some() || request.instant_distill
-    {
-        UpdateStatus::Updated
-    } else {
-        UpdateStatus::Archived
-    };
+    let status =
+        if request.summary.is_some() || request.action_chain.is_some() || request.instant_distill {
+            UpdateStatus::Updated
+        } else {
+            UpdateStatus::Archived
+        };
 
     // Dream is no longer triggered automatically during update_memory.
     let dream_triggered = false;
@@ -814,7 +811,8 @@ mod tests {
         // L2 turn node is a separate ContextSlot (depth=1)
         let turn_hash = parse_id_to_hash(&result.turn_node_id);
         let turn_page_ref = btree.search(turn_hash).unwrap();
-        let turn_slot_data = crate::shared::slot_io::get_slot_data(&mmap[..], turn_page_ref).unwrap();
+        let turn_slot_data =
+            crate::shared::slot_io::get_slot_data(&mmap[..], turn_page_ref).unwrap();
         let turn_ctx = ContextSlot::deserialize_slot(turn_slot_data).unwrap();
         assert_eq!(turn_ctx.depth, 1, "turn node should be depth=1");
         assert_eq!(turn_ctx.turn_count, 1, "turn node should have turn_count=1");

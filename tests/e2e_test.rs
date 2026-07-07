@@ -4,8 +4,9 @@
 //! - Mock vector encoder via gRPC (multilingual-e5-small through meowvec)
 //! - Real LLM API (OpenAI-compatible)
 //!
-//! All tests are marked `#[ignore]` because they require network access and
-//! API credentials for the LLM calls. Run with:
+//! Some tests are marked `#[ignore]` because they require a running gRPC
+//! encoder (meowvec) or network access + API credentials.
+//! Run with:
 //!     cargo test -- --ignored
 //!
 //! The mock meowvec server is spawned automatically by `tests/common/mod.rs`;
@@ -201,6 +202,8 @@ fn store_item(topic: &str, text: &str) -> StoreItem {
 // Test 1: Agent conversation memory flow
 // =============================================================================
 
+// Requires external gRPC encoder (meowvec) — not available in CI.
+#[ignore]
 #[test]
 fn test_agent_conversation_memory_flow() {
     setup_ort_meowvec();
@@ -385,6 +388,8 @@ fn test_agent_conversation_memory_flow() {
 // Test 2: Chinese memory specialization
 // =============================================================================
 
+// Requires external gRPC encoder (meowvec) — not available in CI.
+#[ignore]
 #[test]
 fn test_chinese_memory_specialization() {
     setup_ort_meowvec();
@@ -608,6 +613,8 @@ pub fn run(query: String) {
 // Test 4: Dream pipeline full validation
 // =============================================================================
 
+// Requires external gRPC encoder (meowvec) — not available in CI.
+#[ignore]
 #[test]
 fn test_dream_pipeline_full() {
     setup_ort_meowvec();

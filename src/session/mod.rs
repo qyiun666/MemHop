@@ -54,13 +54,6 @@ impl SessionManager {
         }
     }
 
-    /// Activates or refreshes a scene; evicts LRU if capacity exceeded.
-    /// Scenes use the same internal tracking as topics.
-    /// Returns evicted scene_id, or None.
-    pub fn activate_scene(&mut self, scene_id: u64, ttl_ms: Option<i64>) -> Option<u64> {
-        self.activate_topic(scene_id, ttl_ms)
-    }
-
     /// Activates or refreshes a topic; evicts LRU if capacity exceeded.
     /// Returns evicted topic_id, or None.
     pub fn activate_topic(&mut self, topic_id: u64, ttl_ms: Option<i64>) -> Option<u64> {

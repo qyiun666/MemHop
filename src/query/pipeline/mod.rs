@@ -12,7 +12,6 @@
 #[cfg(feature = "grpc-encoder")]
 pub(crate) mod assemble;
 #[cfg(feature = "grpc-encoder")]
-pub(crate) mod compress;
 #[cfg(feature = "grpc-encoder")]
 pub(crate) mod l1_assoc;
 #[cfg(feature = "grpc-encoder")]

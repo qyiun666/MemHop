@@ -12,8 +12,8 @@ use crate::index::sparse::SparseIndex;
 use crate::layers::context::{ActivationState, ContextSlot};
 use crate::query::search::L1ReverseIndex;
 use crate::query::types::{
-    MergeNodesResult, MergeResult, SceneTreeResult, TopicDetail, TopicListQuery,
-    TopicListResult, TopicSummary, UpdateL2Fields,
+    MergeNodesResult, MergeResult, SceneTreeResult, TopicDetail, TopicListQuery, TopicListResult,
+    TopicSummary, UpdateL2Fields,
 };
 use crate::shared::common::{format_hash, now_ms, parse_id_to_hash};
 use crate::shared::slot_io::{decode_page_id, get_slot_data};
@@ -701,22 +701,17 @@ pub fn merge_nodes(
     encoder: Option<&(dyn Encoder + Send + Sync)>,
 ) -> Result<MergeNodesResult, MemHopError> {
     if node_ids.is_empty() {
-        return Err(MemHopError::InvalidQuery(
-            "No nodes to merge".to_string(),
-        ));
+        return Err(MemHopError::InvalidQuery("No nodes to merge".to_string()));
     }
 
     // Load and validate all nodes: must exist, depth=1, same scene_id
     let mut nodes: Vec<ContextSlot> = Vec::with_capacity(node_ids.len());
     for &id_hash in node_ids {
         let page_ref = btree.search(id_hash).ok_or_else(|| {
-            MemHopError::PageNotFound(crate::shared::slot_io::decode_page_id(
-                id_hash << 16,
-            ))
+            MemHopError::PageNotFound(crate::shared::slot_io::decode_page_id(id_hash << 16))
         })?;
-        let slot_data = get_slot_data(&mmap[..], page_ref).ok_or_else(|| {
-            MemHopError::PageNotFound(decode_page_id(page_ref))
-        })?;
+        let slot_data = get_slot_data(&mmap[..], page_ref)
+            .ok_or_else(|| MemHopError::PageNotFound(decode_page_id(page_ref)))?;
         let ctx = ContextSlot::deserialize_slot(slot_data)?;
 
         if ctx.depth != 1 {
@@ -771,8 +766,7 @@ pub fn merge_nodes(
                     file,
                 )?;
                 let v_offset = crate::shared::slot_io::slot_offset(v_page_id);
-                let v_bytes: Vec<u8> =
-                    output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
+                let v_bytes: Vec<u8> = output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
                 if v_offset + v_bytes.len() > mmap.len() {
                     tracing::warn!("Centroid page allocation failed, centroid omitted");
                     let _ = crate::file::free_list::free_page(mmap, header, v_page_id);
@@ -814,11 +808,7 @@ pub fn merge_nodes(
     let now = get_current_timestamp();
     let children_ids: Vec<u64> = nodes.iter().map(|n| n.id_hash).collect();
     let total_turn_count: u32 = nodes.iter().map(|n| n.turn_count).sum();
-    let first_created = nodes
-        .iter()
-        .map(|n| n.created_at)
-        .min()
-        .unwrap_or(now);
+    let first_created = nodes.iter().map(|n| n.created_at).min().unwrap_or(now);
 
     // Generate a deterministic-but-unique id for the parent (first node id ensures uniqueness)
     let parent_id_hash = crate::util::hash_id(&format!(
@@ -850,14 +840,8 @@ pub fn merge_nodes(
     };
 
     // Write parent node to disk
-    let parent_page_id = crate::file::page::allocate_page(
-        mmap,
-        header,
-        PageType::Context,
-        2,
-        0,
-        file,
-    )?;
+    let parent_page_id =
+        crate::file::page::allocate_page(mmap, header, PageType::Context, 2, 0, file)?;
     let parent_data = parent_node
         .serialize()
         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
