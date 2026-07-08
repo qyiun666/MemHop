@@ -272,8 +272,7 @@ fn test_full_lifecycle() {
         .update_l2(
             &l2_id,
             UpdateL2Fields {
-                title: Some("Updated Rust Topic".to_string()),
-                ..Default::default()
+                                ..Default::default()
             },
         )
         .expect("update_l2 failed");
@@ -297,8 +296,7 @@ fn test_full_lifecycle() {
     let l5_update = db.update_l5(
         "nonexistent",
         UpdateL5Fields {
-            title: Some("test".to_string()),
-            ..Default::default()
+                        ..Default::default()
         },
     );
     assert!(
@@ -617,8 +615,7 @@ fn test_l2_l3_memory_chain() {
                 },
             ]),
             mode: ImportMode::Merge,
-            knowledge_title: Some("benchmark_0".to_string()),
-        })
+            knowledge_        })
         .expect("import knowledge failed");
 
     // MH-1: Verify response has "id" (single) and "ids" (batch) and "node_count"
@@ -733,8 +730,7 @@ fn test_l2_l3_memory_chain() {
         .update_l2(
             &l2_topic_id,
             UpdateL2Fields {
-                title: Some("Rome Trip 2024".to_string()),
-                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
+                                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
                 ..Default::default()
             },
         )
@@ -753,7 +749,7 @@ fn test_l2_l3_memory_chain() {
         .expect("get_l2 after reopen failed")
         .expect("topic should exist after reopen");
     assert_eq!(
-        topic_detail.l3_refs.len(),
+        topic_detail.user_l3_refs.len(),
         2,
         "MH-2: should have 2 l3_refs after reopen"
     );
@@ -783,8 +779,7 @@ fn test_l2_l3_memory_chain() {
         .update_l2(
             &search_l2_id,
             UpdateL2Fields {
-                title: Some("Rome Trip Memories".to_string()),
-                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
+                                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
                 ..Default::default()
             },
         )
@@ -1306,10 +1301,10 @@ fn test_build_l3_from_meowagent() {
         .expect("topic should exist");
     println!(
         "[L2 Detail] title='{}', l3_refs={:?}",
-        l2_detail.title, l2_detail.l3_refs
+        l2_detail.user_keywords.join(" "), l2_detail.user_l3_refs
     );
     assert!(
-        !l2_detail.l3_refs.is_empty(),
+        !l2_detail.user_l3_refs.is_empty(),
         "L2 detail should include l3_refs"
     );
 

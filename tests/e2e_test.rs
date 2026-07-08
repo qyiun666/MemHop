@@ -258,7 +258,7 @@ fn test_agent_conversation_memory_flow() {
         let has_rust = search
             .contexts
             .iter()
-            .any(|c| c.title.contains("Rust") || c.title.contains("异步"));
+            .any(|c| c.user_keywords.join(" ").contains("Rust") || c.user_keywords.join(" ").contains("异步"));
         assert!(has_rust, "Search should recall Rust-related topic");
 
         // 3. Locate the Rust topic by title to avoid depending on vector ranking.
@@ -273,7 +273,7 @@ fn test_agent_conversation_memory_flow() {
         let rust_topic = topics
             .items
             .into_iter()
-            .find(|t| t.title.contains("Rust") || t.title.contains("异步"))
+            .find(|t| t.user_keywords.join(" ").contains("Rust") || t.user_keywords.join(" ").contains("异步"))
             .expect("Rust topic should exist after batch store");
 
         // 4. Update the Rust topic to simulate an Agent turn.
@@ -460,7 +460,7 @@ fn test_chinese_memory_specialization() {
         let has_person = search
             .contexts
             .iter()
-            .any(|c| c.title.contains("人物") || c.title.contains("项目"));
+            .any(|c| c.user_keywords.join(" ").contains("人物") || c.user_keywords.join(" ").contains("项目"));
         assert!(
             has_person,
             "Entity matching should recall person/project topic"
@@ -677,31 +677,31 @@ fn test_dream_pipeline_full() {
 
         for topic in &topics.items {
             // activate_topic hashes the input string, so use the original label.
-            db.activate_topic(&topic.title, None);
-            let rich_summary = if topic.title.contains("Rust") {
+            db.activate_topic(&topic.id, None);
+            let rich_summary = if topic.user_keywords.join(" ").contains("Rust") {
                 "Rust异步编程涵盖Future trait、Pin类型、async/await语法糖、Tokio运行时、 \
                  任务调度器、非阻塞IO、并发原语、错误传播以及生命周期约束。"
                     .into()
-            } else if topic.title.contains("微服务") {
+            } else if topic.user_keywords.join(" ").contains("微服务") {
                 "微服务架构设计需要考虑API网关、服务注册与发现、负载均衡、熔断降级、 \
                  配置中心、可观测性、链路追踪、服务网格以及协议兼容性。"
                     .into()
-            } else if topic.title.contains("模型") || topic.title.contains("微调") {
+            } else if topic.user_keywords.join(" ").contains("模型") || topic.user_keywords.join(" ").contains("微调") {
                 "大语言模型微调包括SFT监督微调、RLHF人类反馈强化学习、数据清洗、 \
                  prompt工程、奖励模型训练、PPO算法以及评估指标设计。"
                     .into()
             } else {
-                format!("总结{}对话内容", topic.title)
+                format!("总结{}对话内容", topic.id)
             };
             let _ = db
                 .update_memory(UpdateRequest {
                     topic_id: topic.id.clone(),
-                    dialogue_text: format!("请总结{}主题的关键结论", topic.title),
+                    dialogue_text: format!("请总结{}主题的关键结论", topic.id),
                     summary: Some(rich_summary),
                     action_chain: Some(vec![
                         ActionItem {
                             title: "检索相关记忆".into(),
-                            description: format!("检索与{}相关的记忆", topic.title),
+                            description: format!("检索与{}相关的记忆", topic.id),
                             action_type: ActionType::Query,
                             parameters: None,
                         },
