@@ -174,7 +174,7 @@ fn load_context_title(
         let data = &mmap[..];
         if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
             if let Ok(ctx) = ContextSlot::deserialize_slot(slot_data) {
-                return Ok(ctx.title);
+                return Ok(ctx.user_keywords.join(", "));
             }
         }
     }
@@ -191,8 +191,8 @@ fn build_engram_result_from_node(
         if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
             match ContextSlot::deserialize_slot(slot_data) {
                 Ok(ctx) => {
-                    let kw = crate::index::sparse::tokenize(&ctx.title);
-                    (ctx.title, ctx.summary, kw)
+                    let kw = crate::index::sparse::tokenize(&ctx.user_keywords.join(", "));
+                    (ctx.user_keywords.join(", "), ctx.fused_summary, kw)
                 }
                 Err(_) => (String::new(), None, vec![]),
             }

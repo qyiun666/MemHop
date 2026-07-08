@@ -3,7 +3,7 @@
 
 //! Stage: User Language Habit Distillation — extract habits from L4 archives, merge into L0 Profile.
 
-use crate::dream::llm::{HabitAnalysis, LlmProvider};
+use crate::dream::llm::HabitAnalysis;
 use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
@@ -25,42 +25,19 @@ const MAX_STYLE_TRAITS: usize = 10;
 /// Maximum emotion patterns
 const MAX_EMOTION_PATTERNS: usize = 10;
 
-/// Distill user language habits from recent dialogue history.
-pub fn distill_user_habits(
-    mmap: &mut MmapMut,
+/// Extract recent dialogue texts from L4 Archive slots
+pub fn extract_recent_dialogues_inner(
+    mmap: &MmapMut,
     header: &FileHeader,
     btree: &BTreeIndex,
-    llm: &dyn LlmProvider,
-) -> Result<HabitUpdate, MemHopError> {
-    let dialogues = extract_recent_dialogues(mmap, header, btree);
-
-    if dialogues.is_empty() {
-        return Ok(HabitUpdate {
-            new_lexicon: 0,
-            new_style_traits: 0,
-            new_emotion_patterns: 0,
-            total_dialogues_analyzed: 0,
-        });
-    }
-
-    let total_analyzed = dialogues.len();
-
-    let analysis = match llm.analyze_user_habits(&dialogues) {
-        Ok(result) => result,
-        Err(_) => llm.fallback_analyze_user_habits(&dialogues),
-    };
-
-    let merge_result = merge_habits_into_profile(mmap, btree, &analysis)?;
-
-    Ok(HabitUpdate {
-        new_lexicon: merge_result.0,
-        new_style_traits: merge_result.1,
-        new_emotion_patterns: merge_result.2,
-        total_dialogues_analyzed: total_analyzed,
-    })
+    max_count: usize,
+) -> Vec<String> {
+    let mut dialogues = extract_recent_dialogues(mmap, header, btree);
+    dialogues.truncate(max_count);
+    dialogues
 }
 
-/// Extract recent dialogue texts from L4 Archive slots
+/// Extract recent dialogue texts from L4 Archive slots (internal).
 fn extract_recent_dialogues(
     mmap: &MmapMut,
     header: &FileHeader,
@@ -115,7 +92,7 @@ fn extract_recent_dialogues(
 
 /// Merge habit analysis results into the existing L0 Profile.
 /// Returns (new_lexicon_count, new_style_count, new_emotion_count).
-fn merge_habits_into_profile(
+pub fn merge_habits_into_profile(
     mmap: &mut MmapMut,
     btree: &BTreeIndex,
     analysis: &HabitAnalysis,

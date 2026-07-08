@@ -52,6 +52,7 @@ fn test_file_auto_extend() {
                 source: SourceMeta::new(SourceType::UserInput, None),
                 is_structural: false,
                 source_ref: None,
+            keywords: None,
             }],
             session_id: Some("stress_session".to_string()),
             turn_id: Some(format!("{}", i)),
@@ -86,6 +87,7 @@ fn test_batch_store_no_partial_write() {
             source: SourceMeta::new(SourceType::UserInput, None),
             is_structural: false,
             source_ref: None,
+            keywords: None,
         })
         .collect();
 
@@ -138,6 +140,7 @@ fn test_rapid_write_and_sync() {
                 source: SourceMeta::new(SourceType::UserInput, None),
                 is_structural: false,
                 source_ref: None,
+            keywords: None,
             }],
             session_id: Some(format!("session_{}", round)),
             turn_id: Some("0".to_string()),

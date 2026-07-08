@@ -637,8 +637,8 @@ impl EntityIndex {
             }
             if let Some(slot_data) = get_slot_data(data, page_ref) {
                 if let Ok(ctx) = ContextSlot::deserialize(slot_data) {
-                    for &gh in &ctx.l3_refs {
-                        l2_by_graph.entry(gh).or_default().push(ctx.id_hash);
+                    for &gh in ctx.user_l3_refs.iter().chain(ctx.agent_l3_refs.iter()) {
+                        l2_by_graph.entry(gh).or_default().push(ctx.id);
                     }
                 }
             }

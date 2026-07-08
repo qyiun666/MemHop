@@ -421,7 +421,8 @@ pub fn collect_l2_refs(
         }
         if let Some(slot_data) = get_slot_data(data, page_ref) {
             if let Ok(ctx) = crate::layers::context::ContextSlot::deserialize_slot(slot_data) {
-                if ctx.l3_refs.contains(&graph_hash) {
+                if ctx.user_l3_refs.contains(&graph_hash) || ctx.agent_l3_refs.contains(&graph_hash)
+                {
                     let page_id = (page_ref >> 16) as u32;
                     refs.push((page_id, id_hash));
                 }
@@ -453,8 +454,9 @@ pub fn remove_l3_ref_from_context(
 
     let slot_data = &page_buf[32..];
     if let Ok(mut ctx) = crate::layers::context::ContextSlot::deserialize_slot(slot_data) {
-        if ctx.l3_refs.contains(&graph_hash) {
-            ctx.l3_refs.retain(|&h| h != graph_hash);
+        if ctx.user_l3_refs.contains(&graph_hash) || ctx.agent_l3_refs.contains(&graph_hash) {
+            ctx.user_l3_refs.retain(|&h| h != graph_hash);
+            ctx.agent_l3_refs.retain(|&h| h != graph_hash);
             ctx.updated_at = crate::shared::common::now_ms();
 
             let ctx_bytes = ctx

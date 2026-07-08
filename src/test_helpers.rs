@@ -7,7 +7,7 @@ use crate::file::header::FileHeader;
 use crate::file::page::{allocate_page, encode_page_ref, write_page_data, PageHeader};
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::layers::context::{ActivationState, ContextSlot, LlmParams};
+use crate::layers::context::ContextSlot;
 use crate::layers::context_node::ContextNode;
 use crate::layers::hypergraph::{GraphEdgeKind, HypergraphEdge, HypergraphNode};
 use crate::util::{PageType, PAGE_SIZE, SENTINEL_PAGE_ID};
@@ -260,16 +260,16 @@ pub fn insert_test_context(
     let serialized = ctx.serialize().unwrap();
     write_page_data(mmap, page_id, &serialized).unwrap();
     let page_ref = encode_page_ref(page_id, 0);
-    btree.insert(ctx.id_hash, page_ref);
-    let terms: Vec<String> = ctx
-        .title
+    btree.insert(ctx.id, page_ref);
+    let text_for_index: String = ctx.user_keywords.join(" ");
+    let terms: Vec<String> = text_for_index
         .split_whitespace()
         .map(|s| s.to_lowercase())
         .collect();
     sparse_index.add_document(
-        ctx.id_hash,
+        ctx.id,
         terms,
-        ctx.title.split_whitespace().count() as u32,
+        text_for_index.split_whitespace().count() as u32,
     );
 }
 
@@ -308,27 +308,26 @@ pub fn write_context_page(mmap: &mut MmapMut, page_id: u32, ctx: ContextSlot) {
 }
 
 /// Build a `ContextSlot` with sparse-index-test defaults.
-pub fn create_test_context(id_hash: u64, title: &str, l3_refs: Vec<u64>) -> ContextSlot {
+pub fn create_test_context(_id_hash: u64, title: &str, l3_refs: Vec<u64>) -> ContextSlot {
     ContextSlot {
-        id_hash,
+        id: _id_hash,
         scene_id: 0,
         parent_id: None,
         children_ids: vec![],
         depth: 1,
-        title: title.to_string(),
-        summary: None,
-        archive_refs: Vec::new(),
-        l3_refs,
-        turn_count: 0,
+        user_keywords: vec![title.to_string()],
+        user_timestamp: 0,
+        user_l4_refs: Vec::new(),
+        user_l3_refs: l3_refs,
+        agent_keywords: vec![],
+        agent_timestamp: 0,
+        agent_l4_refs: Vec::new(),
+        agent_l3_refs: Vec::new(),
+        fused_keywords: vec![],
+        fused_summary: None,
+        centroid_page_ref: 0,
         created_at: 0,
         updated_at: 0,
-        version: 1,
-        importance: 0.5,
-        activation_score: 0.0,
-        is_active: true,
-        activation_state: ActivationState::Active,
-        centroid_page_ref: 0,
-        dialogue_range: (0, 0),
-        llm_params: LlmParams::default(),
+        version: 4,
     }
 }

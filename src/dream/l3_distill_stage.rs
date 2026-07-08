@@ -3,12 +3,11 @@
 
 //! Stage: L3 Knowledge Distillation — LLM-based concept extraction from active L2 contexts into L3 hypergraph.
 
-use crate::dream::llm::{LlmDistillResult, LlmProvider};
+use crate::dream::llm::{L3Extraction, LlmDistillResult};
 use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::file::page::PageHeader;
 use crate::index::btree::BTreeIndex;
-use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
 use crate::layers::context::ContextSlot;
 use crate::layers::hypergraph::{
@@ -18,145 +17,43 @@ use crate::shared::slot_io::get_slot_data;
 use crate::util::{hash_id, PageType, DEFAULT_GROW_PAGES, PAGE_SIZE, SENTINEL_PAGE_ID};
 use crate::MemHopError;
 use memmap2::MmapMut;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 
 // ============================================================================
-// Core distillation logic
+// Apply pre-computed L3 extractions
 // ============================================================================
-
-/// Distill L3 hypergraph knowledge from active L2 contexts via LLM.
-/// Returns hex-formatted IDs of newly created nodes.
-#[allow(clippy::too_many_arguments)]
-pub fn distill_l3_knowledge(
+pub fn apply_distill_extractions(
+    extractions: &[L3Extraction],
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     btree: &mut BTreeIndex,
     _sparse_index: &mut SparseIndex,
-    llm: &dyn LlmProvider,
-    active_topic_ids: &HashSet<u64>,
     file: &mut File,
-    l2_meta: &L2MetaIndex,
 ) -> Result<Vec<String>, MemHopError> {
     let now_ms = crate::shared::common::now_ms();
     let mut all_new_ids: Vec<String> = Vec::new();
 
-    // Find parent nodes (nodes with children) among active topics
-    let parent_nodes: Vec<u64> = active_topic_ids
-        .iter()
-        .filter(|&&id| {
-            l2_meta
-                .get(id)
-                .map(|meta| !meta.children_ids.is_empty())
-                .unwrap_or(false)
-        })
-        .copied()
-        .collect();
-
-    if parent_nodes.is_empty() {
-        // Fallback: distill from individual nodes (preserving existing behavior)
-        for &topic_id in active_topic_ids {
-            let ctx = match read_context(mmap, btree, topic_id) {
-                Some(c) => c,
-                None => continue,
-            };
-            if ctx.depth > 3 {
-                continue;
-            }
-            let summary = match ctx.summary {
-                Some(ref s) if !s.is_empty() => s.clone(),
-                _ => continue,
-            };
-            let llm_response = match llm.distill_concepts(&summary) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!("L3 distillation LLM call failed for '{}': {}", ctx.title, e);
-                    continue;
-                }
-            };
-            create_l3_nodes_and_edges(
-                mmap,
-                header,
-                btree,
-                &ctx,
-                topic_id,
-                now_ms,
-                &mut all_new_ids,
-                file,
-                llm_response,
-            )?;
-        }
-    } else {
-        // Parent-based distillation: aggregate children summaries
-        for &parent_id in &parent_nodes {
-            let ctx = match read_context(mmap, btree, parent_id) {
-                Some(c) => c,
-                None => continue,
-            };
-
-            let children_ids = l2_meta
-                .get(parent_id)
-                .map(|meta| meta.children_ids.clone())
-                .unwrap_or_default();
-
-            // Build aggregated content from parent + children summaries
-            let mut aggregated = String::new();
-            aggregated.push_str(&format!("Parent topic: {}\n\n", ctx.title));
-            if let Some(ref s) = ctx.summary {
-                aggregated.push_str(&format!("Parent summary: {}\n\n", s));
-            }
-            aggregated.push_str("Children summaries:\n");
-
-            let mut child_count = 0;
-            for &child_id in &children_ids {
-                if child_count >= 10 {
-                    break;
-                }
-                if let Some(child_ctx) = read_context(mmap, btree, child_id) {
-                    if let Some(ref s) = child_ctx.summary {
-                        if !s.is_empty() {
-                            let remaining = 4000usize.saturating_sub(aggregated.len());
-                            if remaining == 0 {
-                                break;
-                            }
-                            let truncated: String = s.chars().take(remaining).collect();
-                            aggregated.push_str(&format!("- {}: {}\n", child_ctx.title, truncated));
-                            child_count += 1;
-                        }
-                    }
-                }
-            }
-
-            // Absolute truncation guard: max 4000 characters
-            if aggregated.len() > 4000 {
-                let truncated: String = aggregated.chars().take(4000).collect();
-                aggregated = truncated;
-            }
-
-            let llm_response = match llm.distill_concepts(&aggregated) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(
-                        "L3 distillation LLM call failed for parent '{}': {}",
-                        ctx.title,
-                        e
-                    );
-                    continue;
-                }
-            };
-
-            create_l3_nodes_and_edges(
-                mmap,
-                header,
-                btree,
-                &ctx,
-                parent_id,
-                now_ms,
-                &mut all_new_ids,
-                file,
-                llm_response,
-            )?;
-        }
+    for extraction in extractions {
+        let ctx = match read_context(mmap, btree, extraction.context_id) {
+            Some(c) => c,
+            None => continue,
+        };
+        let result = LlmDistillResult {
+            concepts: extraction.concepts.clone(),
+            relations: extraction.relations.clone(),
+        };
+        create_l3_nodes_and_edges(
+            mmap,
+            header,
+            btree,
+            &ctx,
+            extraction.context_id,
+            now_ms,
+            &mut all_new_ids,
+            file,
+            result,
+        )?;
     }
 
     Ok(all_new_ids)
@@ -250,7 +147,7 @@ fn read_context(mmap: &MmapMut, btree: &BTreeIndex, id_hash: u64) -> Option<Cont
     let page_ref = btree.search(id_hash)?;
     let data: &[u8] = &mmap[..];
     let slot_data = get_slot_data(data, page_ref)?;
-    ContextSlot::deserialize_slot(slot_data).ok()
+    ContextSlot::deserialize(slot_data).ok()
 }
 
 // ============================================================================
@@ -266,17 +163,30 @@ fn resolve_or_create_graph(
     now_ms: i64,
     file: &mut File,
 ) -> Result<u64, MemHopError> {
+    // Collect all L3 refs from both user and agent tracks
+    let all_l3_refs: Vec<u64> = ctx
+        .user_l3_refs
+        .iter()
+        .chain(ctx.agent_l3_refs.iter())
+        .copied()
+        .collect();
+
     // Reuse existing L3 graph if already linked
-    if let Some(&existing_graph_id) = ctx.l3_refs.first() {
+    if let Some(&existing_graph_id) = all_l3_refs.first() {
         if btree.search(existing_graph_id).is_some() {
             return Ok(existing_graph_id);
         }
     }
 
     let new_graph_id = hash_id(&format!("l3_distill_{:016x}", topic_id));
+    let display_name = if ctx.fused_keywords.is_empty() {
+        ctx.user_keywords.join(", ")
+    } else {
+        ctx.fused_keywords.join(", ")
+    };
     let slot = HypergraphSlot {
         id_hash: new_graph_id,
-        name: format!("Distilled: {}", ctx.title),
+        name: format!("Distilled: {}", display_name),
         source: HypergraphSource::Manual,
         node_count: 0,
         edge_count: 0,
@@ -343,9 +253,11 @@ fn add_l3_ref_to_context(
     let mut page_buf = vec![0u8; PAGE_SIZE];
     page_buf.copy_from_slice(&mmap[offset..offset + PAGE_SIZE]);
 
-    if let Ok(mut ctx) = ContextSlot::deserialize_slot(&page_buf[32..]) {
-        if !ctx.l3_refs.contains(&graph_hash) {
-            ctx.l3_refs.push(graph_hash);
+    if let Ok(mut ctx) = ContextSlot::deserialize(&page_buf[32..]) {
+        let already_has =
+            ctx.user_l3_refs.contains(&graph_hash) || ctx.agent_l3_refs.contains(&graph_hash);
+        if !already_has {
+            ctx.agent_l3_refs.push(graph_hash);
             ctx.updated_at = now_ms;
 
             let ctx_bytes = ctx

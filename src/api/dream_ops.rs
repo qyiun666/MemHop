@@ -128,6 +128,7 @@ impl MemHop {
             &mut self.file,
         )?;
         self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
+        self.l2_meta = L2MetaIndex::build(&self.mmap, &self.btree);
         self.rebuild_ivf_index();
         Ok(report)
     }

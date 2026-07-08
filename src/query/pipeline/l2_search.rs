@@ -53,8 +53,8 @@ fn merge_and_rank(
         } else {
             0.0
         };
-        score_map.entry(ctx.id_hash).or_insert((0.0, 0.0)).0 = n;
-        ctx_map.entry(ctx.id_hash).or_insert(ctx);
+        score_map.entry(ctx.id).or_insert((0.0, 0.0)).0 = n;
+        ctx_map.entry(ctx.id).or_insert(ctx);
     }
 
     for (ctx, score) in vector_results {
@@ -63,8 +63,8 @@ fn merge_and_rank(
         } else {
             0.0
         };
-        score_map.entry(ctx.id_hash).or_insert((0.0, 0.0)).1 = n;
-        ctx_map.entry(ctx.id_hash).or_insert(ctx);
+        score_map.entry(ctx.id).or_insert((0.0, 0.0)).1 = n;
+        ctx_map.entry(ctx.id).or_insert(ctx);
     }
 
     let mut scored: Vec<(u64, f32)> = score_map
@@ -97,8 +97,12 @@ pub(crate) fn rerank_candidates(
     let docs: Vec<String> = candidates
         .iter()
         .map(|(ctx, _)| {
-            let mut text = ctx.title.clone();
-            if let Some(ref s) = ctx.summary {
+            let mut text = if ctx.fused_keywords.is_empty() {
+                ctx.user_keywords.join(", ")
+            } else {
+                ctx.fused_keywords.join(", ")
+            };
+            if let Some(ref s) = ctx.fused_summary {
                 text.push(' ');
                 text.push_str(s);
             }

@@ -27,10 +27,30 @@ impl MemHop {
             ));
         }
 
+        // Auto-preprocess with LLM if enabled and no keywords provided by caller.
+        let mut req = request;
+        if self.config.llm_preprocess.enable_write_preprocess
+            && req.user_keywords.is_none()
+            && req.agent_keywords.is_none()
+        {
+            #[cfg(feature = "llm")]
+            {
+                use crate::dream::llm_preprocess;
+                use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
+
+                let provider = OpenAICompatibleLlmProvider::new(self.config.llm.clone());
+                let result =
+                    llm_preprocess::preprocess_write_content(Some(&provider), &req.dialogue_text);
+                if !result.keywords.is_empty() {
+                    req.user_keywords = Some(result.keywords);
+                }
+            }
+        }
+
         let result = update_memory_internal(
             &mut self.mmap,
             &mut self.header,
-            request,
+            req,
             &mut self.btree,
             &mut self.sparse_index,
             &mut self.l2_meta,

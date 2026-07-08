@@ -50,6 +50,7 @@ fn make_config(path: PathBuf) -> MemHopConfig {
     config.llm = make_llm_config();
     config.auto_dream_on_evict = true;
     config
+            llm_preprocess: memhop::LlmPreprocessConfig::default(),
 }
 
 /// Start the shared ORT (BGE-M3 ONNX) meowvec server for this test binary.
@@ -196,6 +197,7 @@ fn store_item(topic: &str, text: &str) -> StoreItem {
         is_structural: false,
         source_ref: None,
     }
+            keywords: None,
 }
 
 // =============================================================================
@@ -244,6 +246,8 @@ fn test_agent_conversation_memory_flow() {
                 min_score: 0.0,
 
                 source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
             })
             .expect("search should succeed");
         eprintln!("[E2E] search contexts: {:?}", search.contexts);
@@ -292,6 +296,8 @@ fn test_agent_conversation_memory_flow() {
                 instant_distill: false,
                 scene_id: None,
                 source: Default::default(),
+                user_keywords: None,
+                agent_keywords: None,
             })
             .expect("update_memory should succeed");
         assert_eq!(update.topic_id, rust_topic.id);
@@ -443,6 +449,8 @@ fn test_chinese_memory_specialization() {
                 min_score: 0.0,
 
                 source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
             })
             .expect("Chinese BM25 search should succeed");
         assert!(
@@ -471,6 +479,8 @@ fn test_chinese_memory_specialization() {
                 min_score: 0.0,
 
                 source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
             })
             .expect("LLM-enhanced Chinese search should succeed");
         assert!(
@@ -597,6 +607,8 @@ pub fn run(query: String) {
                 min_score: 0.0,
 
                 source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
             })
             .expect("L3-restricted search should succeed");
         assert!(
@@ -703,6 +715,8 @@ fn test_dream_pipeline_full() {
                     instant_distill: false,
                     scene_id: None,
                     source: Default::default(),
+                user_keywords: None,
+                agent_keywords: None,
                 })
                 .expect("update_memory should succeed");
         }

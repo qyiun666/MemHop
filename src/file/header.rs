@@ -379,6 +379,8 @@ mod tests {
             crystal_path: None,
             llm: crate::LlmConfig::default(),
             auto_dream_on_evict: false,
+            auto_dream_archive_threshold: 20,
+            auto_dream_summary_bytes: 2048,
             ivf_initial_k: 16,
             search_weights: None,
             decay_config: None,
@@ -386,6 +388,7 @@ mod tests {
             dream_idle_threshold_secs: None,
             auto_checkpoint_interval: None,
             adjacency_cache_max_entries: 128,
+            llm_preprocess: crate::LlmPreprocessConfig::default(),
         };
 
         let result = MemHop::open(config);

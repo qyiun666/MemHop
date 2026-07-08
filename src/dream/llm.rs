@@ -1,165 +1,223 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! LLM Provider trait for dream consolidation.
+//! LLM Provider trait for consolidated dream consolidation.
+//!
+//! Two-phase design:
+//!   1. `consolidate` — one monolithic call processing all dream stages.
+//!   2. `retry_sections` — second call for any sections that failed parsing.
 
 use crate::MemHopError;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-/// Structured compression result with all LLM-extracted fields.
+// ============================================================================
+// Input structures — all data needed for a dream cycle
+// ============================================================================
+
 #[derive(Debug, Clone)]
-pub struct CompressedSummary {
-    /// Core topic keywords (space-separated, 2-5 keywords)
-    pub theme: String,
-    /// Compressed short title (≤20 chars)
-    pub title: String,
-    /// Key information points (3-8 items)
-    pub key_points: Vec<String>,
-    /// Keyword-dense summary paragraph (100-200 chars)
-    pub summary: String,
+pub struct ConsolidationInput {
+    /// L2 contexts grouped by scene, depth-1 nodes sorted by created_at
+    pub scenes: Vec<SceneData>,
+    /// Recent L4 archive dialogue texts for habit analysis (up to 30)
+    pub recent_dialogues: Vec<String>,
+    /// Existing L5 action chains for crystal generation (up to 20)
+    pub existing_chains: Vec<ChainData>,
 }
 
-/// Trait for LLM providers used in dream consolidation
-pub trait LlmProvider: Send + Sync {
-    /// Summarize a collection of texts into a structured compressed summary.
-    fn summarize(&self, texts: &[String]) -> Result<CompressedSummary, MemHopError>;
+#[derive(Debug, Clone)]
+pub struct SceneData {
+    pub scene_id: u64,
+    pub nodes: Vec<L2NodeData>,
+}
 
-    /// Extract patterns from memory summaries
-    fn extract_patterns(&self, memories: &[MemorySummary]) -> Result<Vec<Pattern>, MemHopError>;
+/// Per-node data sent to the LLM for consolidation (depth-1 only).
+#[derive(Debug, Clone)]
+pub struct L2NodeData {
+    pub id_hash: u64,
+    pub created_at: i64,
+    pub depth: u8,
+    /// User-turn keywords
+    pub user_keywords: Vec<String>,
+    /// Agent-turn keywords
+    pub agent_keywords: Vec<String>,
+    /// Fused keywords (from prior compression, if depth > 1)
+    pub fused_keywords: Vec<String>,
+    /// Compressed summary (if available)
+    pub fused_summary: Option<String>,
+    /// Existing children ids (for understanding topic hierarchy)
+    pub children_ids: Vec<u64>,
+}
 
-    /// Generate a Crystal definition from a pattern
-    fn generate_crystal(&self, pattern: &Pattern) -> Result<CrystalDef, MemHopError>;
+#[derive(Debug, Clone)]
+pub struct ChainData {
+    pub title: String,
+    pub trigger: String,
+    pub trigger_count: u32,
+    pub confidence: f32,
+}
 
-    /// Fallback summarization using keyword frequency when LLM is unavailable
-    fn fallback_summarize(&self, texts: &[String]) -> CompressedSummary;
+// ============================================================================
+// Output structures — returned by the LLM
+// ============================================================================
 
-    /// Fallback pattern extraction using keyword intersection when LLM is unavailable
-    fn fallback_extract_patterns(&self, memories: &[MemorySummary]) -> Vec<Pattern>;
+/// Consolidated output; each field is independently valid or failed.
+#[derive(Debug, Clone)]
+pub struct ConsolidationOutput {
+    pub l2_groups: Section<Vec<L2Group>>,
+    pub l3_extractions: Section<Vec<L3Extraction>>,
+    pub habits: Section<HabitAnalysis>,
+    pub crystals: Section<Vec<CrystalDef>>,
+}
 
-    /// Fallback crystal generation using regex pattern matching when LLM is unavailable
-    fn fallback_generate_crystal(&self, pattern: &Pattern) -> CrystalDef;
+/// Tagged section result.
+#[derive(Debug, Clone)]
+pub enum Section<T> {
+    Valid(T),
+    Empty,               // no data to process
+    ParseFailed(String), // LLM returned unparseable content
+}
 
-    /// Analyze user language habits from dialogue history
-    fn analyze_user_habits(&self, dialogues: &[String]) -> Result<HabitAnalysis, MemHopError>;
+impl<T> Section<T> {
+    /// Returns true for Valid or Empty — only ParseFailed is considered a failure.
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Section::Valid(_) | Section::Empty)
+    }
 
-    /// Fallback habit analysis using word frequency when LLM is unavailable
-    fn fallback_analyze_user_habits(&self, dialogues: &[String]) -> HabitAnalysis;
-
-    /// Distill structured concepts and relations from a summary.
-    fn distill_concepts(&self, summary: &str) -> Result<LlmDistillResult, MemHopError>;
-
-    /// Fallback concept distillation returning an empty result.
-    fn fallback_distill_concepts(&self, summary: &str) -> LlmDistillResult;
-
-    /// Check whether two adjacent conversation summaries describe the same topic.
-    /// Returns `true` if they should be merged into one parent node.
-    fn check_same_topic(&self, summary_a: &str, summary_b: &str) -> Result<bool, MemHopError>;
-
-    /// Merge multiple adjacent-conversation texts into a single (title, summary) pair.
-    fn merge_summarize(&self, texts: &[String]) -> Result<(String, String), MemHopError>;
-
-    /// Compress dialogue text for retrieval: extract keywords + short summary.
-    /// `role` distinguishes "用户提问" vs "助手回复" for prompt tuning.
-    fn compress_for_retrieval(&self, text: &str, role: &str) -> Result<String, MemHopError> {
-        // Default: return original text unchanged
-        let _ = role;
-        Ok(text.to_string())
+    /// Returns true only if this section needs a retry (LLM returned unparseable content).
+    pub fn needs_retry(&self) -> bool {
+        matches!(self, Section::ParseFailed(_))
     }
 }
 
-/// Summary of a memory for pattern extraction
-#[derive(Debug, Clone)]
-pub struct MemorySummary {
-    /// Original text content
-    pub text: String,
-    /// Extracted keywords
-    pub keywords: Vec<String>,
-    /// Timestamp when the memory was created (milliseconds since epoch)
-    pub timestamp: i64,
+/// Which sections to reprocess in the second call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DreamSection {
+    L2Groups,
+    L3Distill,
+    Habits,
+    Crystals,
 }
 
-/// Pattern extracted from multiple memories
+// ----- L2 merge output -----
+
 #[derive(Debug, Clone)]
-pub struct Pattern {
-    /// Human-readable description of the pattern
-    pub description: String,
-    /// Number of times this pattern appeared
-    pub frequency: u32,
-    /// Confidence score (0.0 - 1.0)
-    pub confidence: f32,
+pub struct L2Group {
+    pub scene_id: u64,
+    /// id_hashes of nodes to merge (must be depth-1, same scene, consecutive)
+    pub node_hashes: Vec<u64>,
+    /// LLM-generated title for the new merged parent
+    pub merged_title: String,
+    /// LLM-generated merged summary
+    pub merged_summary: String,
 }
 
-/// A single executable step inside a crystal (L5)
+// ----- L3 knowledge extraction output -----
+
 #[derive(Debug, Clone)]
-pub struct CrystalStep {
-    /// Action description for this step
-    pub action: String,
-    /// Optional JSON parameters for this step
-    pub parameters: Option<String>,
+pub struct L3Extraction {
+    /// Which L2 context this extraction came from
+    pub context_id: u64,
+    pub concepts: Vec<LlmConcept>,
+    pub relations: Vec<LlmRelation>,
 }
 
-/// Crystal definition for programmatic knowledge (L5)
-#[derive(Debug, Clone)]
-pub struct CrystalDef {
-    /// Condition in DSL format that triggers the crystal
-    pub condition: String,
-    /// Overall action to execute when condition is met
-    pub action: String,
-    /// Ordered list of concrete steps to execute
-    pub steps: Vec<CrystalStep>,
-    /// Confidence score (0.0 - 1.0)
-    pub confidence: f32,
-}
-
-/// Concept extracted from a summary during L3 knowledge distillation
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LlmConcept {
-    /// Concept name
     pub name: String,
-    /// Concept node type (e.g. "concept", "entity", "skill")
     #[serde(rename = "type")]
     pub node_type: String,
-    /// Human-readable description
     pub description: String,
-    /// Associated keywords
     #[serde(default)]
     pub keywords: Vec<String>,
 }
 
-/// Relation between two concepts extracted during L3 knowledge distillation
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LlmRelation {
-    /// Source concept name
     pub from: String,
-    /// Target concept name
     pub to: String,
-    /// Relation kind (e.g. "Related", "Causal", "PartOf", "Sequence", "Dependency")
     #[serde(default = "default_relation_kind")]
     pub kind: String,
 }
 
 fn default_relation_kind() -> String {
-    "Dependency".to_string()
+    "Related".to_string()
 }
 
-/// Result of LLM-based L3 knowledge distillation
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct LlmDistillResult {
-    /// Extracted concepts
-    #[serde(default)]
-    pub concepts: Vec<LlmConcept>,
-    /// Extracted relations between concepts
-    #[serde(default)]
-    pub relations: Vec<LlmRelation>,
-}
+// ----- Habit analysis -----
 
-/// User language habit analysis result
 #[derive(Debug, Clone, Default)]
 pub struct HabitAnalysis {
-    /// User-specific vocabulary: word/expression → meaning
-    pub lexicon: std::collections::HashMap<String, String>,
-    /// Communication style trait tags
+    pub lexicon: HashMap<String, String>,
     pub style_traits: Vec<String>,
-    /// Emotional expression patterns: expression → true meaning
-    pub emotion_patterns: std::collections::HashMap<String, String>,
+    pub emotion_patterns: HashMap<String, String>,
+}
+
+// ----- Crystal definitions -----
+
+#[derive(Debug, Clone)]
+pub struct CrystalDef {
+    pub condition: String,
+    pub action: String,
+    pub steps: Vec<CrystalStep>,
+    pub confidence: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct CrystalStep {
+    pub action: String,
+    pub parameters: Option<String>,
+}
+
+// ============================================================================
+// Trait
+// ============================================================================
+
+pub trait LlmProvider: Send + Sync {
+    /// Phase 1: monolithic consolidation of all dream stages.
+    fn consolidate(&self, input: &ConsolidationInput) -> Result<ConsolidationOutput, MemHopError>;
+
+    /// Phase 2: retry only the specified sections, filling in the rest as Empty.
+    fn retry_sections(
+        &self,
+        input: &ConsolidationInput,
+        sections: &[DreamSection],
+    ) -> Result<ConsolidationOutput, MemHopError>;
+
+    /// Generic chat completion for lightweight LLM tasks (preprocess, keyword extraction, etc.).
+    /// Default implementation returns an error — providers must override to enable this feature.
+    #[allow(clippy::too_many_arguments)]
+    fn chat(
+        &self,
+        _system: &str,
+        _user: &str,
+        _max_tokens: u32,
+        _temperature: f32,
+        _top_p: f32,
+        _presence_penalty: f32,
+        _frequency_penalty: f32,
+    ) -> Result<String, MemHopError> {
+        Err(MemHopError::ConfigError(
+            "chat() not implemented for this LlmProvider".into(),
+        ))
+    }
+
+    /// Non-LLM fallback: keyword-based summary compression.
+    fn fallback_summarize(&self, texts: &[String]) -> (String, String);
+
+    /// Non-LLM fallback: jieba-based habit extraction.
+    fn fallback_habits(&self, dialogues: &[String]) -> HabitAnalysis;
+}
+
+// ============================================================================
+// Legacy type — kept for internal stage helpers
+// ============================================================================
+
+/// Result of LLM-based L3 knowledge distillation (used internally by stage helpers).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LlmDistillResult {
+    #[serde(default)]
+    pub concepts: Vec<LlmConcept>,
+    #[serde(default)]
+    pub relations: Vec<LlmRelation>,
 }

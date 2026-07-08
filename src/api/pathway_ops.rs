@@ -49,17 +49,21 @@ impl MemHop {
         crate::query::l6_ops::list_l6(&self.mmap, &self.header, &self.btree, filter)
     }
 
-    /// Add a new L6 pathway weight.
-    pub fn add_l6(&mut self, slot: PathwayWeightSlot) -> Result<()> {
-        crate::query::l6_ops::add_l6(
+    /// Batch upsert L6 pathway weights.
+    ///
+    /// All slots are processed in a single read-modify-write cycle.
+    /// Existing entries are matched by `id_hash` and replaced;
+    /// new entries are appended. Returns the total number of stored pathways.
+    pub fn add_l6(&mut self, slots: Vec<PathwayWeightSlot>) -> Result<usize> {
+        let total = crate::query::l6_ops::add_l6(
             &mut self.mmap,
             &mut self.header,
             &self.btree,
             &mut self.file,
-            slot,
+            slots,
         )?;
         self.pathways = crate::query::l6_ops::list_l6(&self.mmap, &self.header, &self.btree, None)?;
-        Ok(())
+        Ok(total)
     }
 
     /// Increment/decrement an L6 pathway weight by delta.

@@ -11,17 +11,23 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 mod common;
-use common::{kill_python_meowvec, spawn_python_meowvec};
+use common::{cleanup_global_meowvec, ensure_meowvec_running};
 
 fn encoder_addr() -> String {
     std::env::var("MEMHOP_BENCH_ENCODER_ADDR")
         .unwrap_or_else(|_| "http://127.0.0.1:27110".to_string())
 }
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/benches/fixtures/locomo_smoke.json"
-);
+fn fixture_path() -> String {
+    let manifest = env!("CARGO_MANIFEST_DIR");
+    let is_full = std::env::var("BENCH_FULL").ok().is_some();
+    if is_full {
+        format!("{}/benches/fixtures/locomo_full.json", manifest)
+    } else {
+        format!("{}/benches/fixtures/locomo_smoke.json", manifest)
+    }
+}
+
 const K: usize = 5;
 
 #[derive(Debug, Deserialize)]
@@ -47,6 +53,8 @@ struct Question {
     question: String,
     #[serde(rename = "session_refs")]
     relevant_sessions: Vec<String>,
+    #[serde(default)]
+    category: String,
 }
 
 fn bench_vector_dim() -> usize {
@@ -64,6 +72,8 @@ fn make_config(path: PathBuf) -> MemHopConfig {
         crystal_path: None,
         llm: Default::default(),
         auto_dream_on_evict: false,
+        auto_dream_archive_threshold: 20,
+        auto_dream_summary_bytes: 2048,
         ivf_initial_k: 16,
         search_weights: Some(SearchWeights {
             bm25_weight: 0.45,
@@ -83,8 +93,36 @@ fn make_config(path: PathBuf) -> MemHopConfig {
 /// Load fixture, build a fresh database, and return the DB plus ground truth.
 fn setup() -> (MemHop, Vec<Question>, HashMap<String, String>) {
     let fixture: Fixture =
-        serde_json::from_reader(std::fs::File::open(FIXTURE).expect("open fixture"))
+        serde_json::from_reader(std::fs::File::open(fixture_path()).expect("open fixture"))
             .expect("parse fixture");
+
+    // Filter questions: skip open_domain in full mode, apply max count
+    let max_q = std::env::var("BENCH_MAX_QUESTIONS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok());
+    let skip_open = std::env::var("BENCH_FULL").ok().is_some();
+    let mut questions: Vec<Question> = fixture
+        .questions
+        .into_iter()
+        .filter(|q| {
+            if skip_open {
+                q.category != "open_domain"
+            } else {
+                true
+            }
+        })
+        .collect();
+    if let Some(max) = max_q {
+        questions.truncate(max);
+    }
+    eprintln!(
+        "[setup] {} sessions, {} questions (full={}, max={:?}, skip_open={})",
+        fixture.sessions.len(),
+        questions.len(),
+        std::env::var("BENCH_FULL").ok().is_some(),
+        max_q,
+        skip_open
+    );
 
     let db_path = PathBuf::from("/tmp/memhop_retrieval_bench.meh");
     let _ = std::fs::remove_file(&db_path);
@@ -113,7 +151,7 @@ fn setup() -> (MemHop, Vec<Question>, HashMap<String, String>) {
         }
     }
 
-    (db, fixture.questions, context_to_session)
+    (db, questions, context_to_session)
 }
 
 fn bench_retrieval(c: &mut Criterion) {
@@ -204,17 +242,15 @@ criterion_group!(benches, bench_retrieval);
 
 fn main() {
     let external_addr = std::env::var("MEMHOP_BENCH_ENCODER_ADDR").ok();
-    let mut child = if external_addr.is_none() {
-        Some(spawn_python_meowvec(27110))
+    if external_addr.is_none() {
+        // Let ensure_meowvec_running handle health-check + spawn.
+        ensure_meowvec_running(27110);
     } else {
-        // Wait for the externally-provided encoder to become ready.
+        // Verify the externally-provided encoder is reachable.
         let addr = encoder_addr();
         memhop::encoder::GrpcEncoder::new(&addr, bench_vector_dim())
             .expect("external meowvec encoder is not ready");
-        None
-    };
-    benches();
-    if let Some(ref mut c) = child {
-        kill_python_meowvec(c);
     }
+    benches();
+    cleanup_global_meowvec();
 }

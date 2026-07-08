@@ -7,7 +7,7 @@ use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::{self, SparseIndex};
-use crate::layers::context::ActivationState;
+use crate::layers::archive::ArchiveSlot;
 use crate::layers::context::ContextSlot;
 use crate::layers::context_node::ContextNode;
 use crate::layers::hyperedge::{HyperedgeKind, HyperedgeSlot};
@@ -46,6 +46,10 @@ pub struct StoreItem {
     pub topic_label: Option<String>,
     /// Optional domain identifier (for L3 procedural memory)
     pub domain_id: Option<String>,
+    /// LLM-preprocessed keywords for L2 storage (5-10 items). When provided,
+    /// these override tokenizer-based keyword extraction during batch store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
     /// Importance score (0.0 - 1.0), affects memory retention
     pub importance: Option<f32>,
     /// Valence: emotional pleasantness (-1.0 ~ 1.0)
@@ -75,6 +79,9 @@ pub struct EncodedItem {
     pub topic_label: Option<String>,
     /// Domain identifier for L3 memory
     pub domain_id: Option<String>,
+    /// LLM-preprocessed keywords (propagated from StoreItem)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
     /// Normalized importance score
     pub importance: f32,
     /// Emotional valence
@@ -159,6 +166,7 @@ pub fn encode_items(
                 sparse: output.sparse,
                 topic_label: item.topic_label.clone(),
                 domain_id: item.domain_id.clone(),
+                keywords: item.keywords.clone(),
                 importance: item.importance.unwrap_or(0.5),
                 valence: item.valence.unwrap_or(0.0),
                 arousal: item.arousal.unwrap_or(0.0),
@@ -170,13 +178,66 @@ pub fn encode_items(
     Ok(encoded)
 }
 
-/// Archive documents to L4 — compute doc IDs for batch reporting
+/// Archive documents to L4 — write ArchiveSlots to mmap and register in btree
 pub fn archive_documents(
-    _mmap: &mut MmapMut,
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
     items: &[EncodedItem],
-    _batch: &StoreBatch,
+    batch: &StoreBatch,
+    btree: &mut BTreeIndex,
+    file: &mut File,
 ) -> Result<Vec<u64>, MemHopError> {
-    let doc_ids: Vec<u64> = items.iter().map(|item| hash_id(&item.text)).collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let mut doc_ids = Vec::with_capacity(items.len());
+
+    for item in items {
+        let id_hash = hash_id(&item.text);
+
+        let archive = ArchiveSlot {
+            id_hash,
+            content_type: crate::layers::archive::ContentType::Text,
+            role: 0, // user
+            context_id: item.topic_label.as_ref().map_or(0, |label| hash_id(label)),
+            created_at: now,
+            content: item.text.clone(),
+            metadata: batch.source.to_metadata_json(),
+        };
+
+        let data = archive
+            .serialize()
+            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+
+        if data.len() > PAGE_SIZE - 32 {
+            return Err(MemHopError::Serialization(
+                "ArchiveSlot content exceeds single-page capacity".to_string(),
+            ));
+        }
+
+        let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
+        let offset = crate::shared::slot_io::slot_offset(page_id);
+
+        let page_hdr = crate::file::page::PageHeader::new(
+            page_id,
+            crate::util::PageType::Archive,
+            4,
+            SENTINEL_PAGE_ID,
+        );
+        let hdr_bytes = page_hdr.to_bytes();
+        let page_offset = crate::shared::slot_io::page_offset(page_id);
+        mmap[page_offset..page_offset + 32].copy_from_slice(&hdr_bytes);
+
+        if offset + data.len() <= mmap.len() {
+            mmap[offset..offset + data.len()].copy_from_slice(&data);
+        }
+
+        btree.insert(id_hash, (page_id as u64) << 16);
+        doc_ids.push(id_hash);
+    }
+
     Ok(doc_ids)
 }
 
@@ -365,6 +426,7 @@ pub fn update_topics(
     items: &[EncodedItem],
     l1_node_ids: &[u64],
     l1_node_pages: &HashMap<u64, u32>,
+    archive_ids: &[u64],
     btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     vector_dim: usize,
@@ -389,6 +451,27 @@ pub fn update_topics(
         let context_id = hash_id(&label);
         let node_ids: Vec<u64> = indices.iter().map(|&idx| l1_node_ids[idx]).collect();
 
+        // Build summary text from all items in this topic group
+        let summary_text: String = {
+            let texts: Vec<&str> = indices
+                .iter()
+                .filter_map(|&idx| items.get(idx))
+                .map(|item| item.text.as_str())
+                .collect();
+            let joined = texts.join("\n");
+            if joined.len() > u16::MAX as usize {
+                joined[..u16::MAX as usize].to_string()
+            } else {
+                joined
+            }
+        };
+
+        // Collect archive IDs for this topic group
+        let topic_archive_ids: Vec<u64> = indices
+            .iter()
+            .filter_map(|&idx| archive_ids.get(idx).copied())
+            .collect();
+
         let centroid_vector = calculate_centroid_from_nodes(mmap, &node_ids, &*btree, vector_dim)?;
 
         let centroid_page_ref = if let Some(ref vec) = centroid_vector {
@@ -407,27 +490,48 @@ pub fn update_topics(
             0
         };
 
+        // Collect LLM-preprocessed keywords from items in this topic group.
+        // Falls back to the topic label if no keywords are provided.
+        let mut keyword_set: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for &idx in &indices {
+            if let Some(item) = items.get(idx) {
+                if let Some(ref kws) = item.keywords {
+                    for kw in kws {
+                        if !kw.trim().is_empty() {
+                            keyword_set.insert(kw.trim().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        let user_keywords: Vec<String> = if keyword_set.is_empty() {
+            vec![label.clone()]
+        } else {
+            let mut kws: Vec<String> = keyword_set.into_iter().collect();
+            kws.truncate(10);
+            kws
+        };
+
         let context = ContextSlot {
-            id_hash: context_id,
+            id: context_id,
             parent_id: None,
             children_ids: vec![],
             scene_id: 0,
             depth: 1,
-            title: label.clone(),
-            summary: None,
-            archive_refs: vec![],
-            l3_refs: vec![],
-            turn_count: 0,
+            user_keywords,
+            user_timestamp: now,
+            user_l4_refs: topic_archive_ids,
+            user_l3_refs: vec![],
+            agent_keywords: vec![],
+            agent_timestamp: now,
+            agent_l4_refs: vec![],
+            agent_l3_refs: vec![],
+            fused_keywords: vec![],
+            fused_summary: Some(summary_text.clone()),
+            centroid_page_ref,
             created_at: now,
             updated_at: now,
-            version: 1,
-            importance: 0.5,
-            activation_score: 0.5,
-            is_active: false,
-            activation_state: ActivationState::Dormant,
-            centroid_page_ref,
-            dialogue_range: (now, now),
-            llm_params: crate::layers::context::LlmParams::default(),
+            version: 4,
         };
 
         let context_data = context
@@ -449,7 +553,8 @@ pub fn update_topics(
 
         btree.insert(context_id, (page_id as u64) << 16);
 
-        let context_terms = sparse::tokenize(&label);
+        let mut context_terms = sparse::tokenize(&label);
+        context_terms.extend(sparse::tokenize(&summary_text));
         let context_doc_len = context_terms.len() as u32;
         sparse_index.add_document(context_id, context_terms, context_doc_len);
 
@@ -660,7 +765,7 @@ pub fn batch_store(
     let encoded_items = encode_items(&batch.items, encoder)?;
 
     // Phase 2: L4 Archive
-    let doc_ids = archive_documents(mmap, &encoded_items, &batch)?;
+    let doc_ids = archive_documents(mmap, header, &encoded_items, &batch, btree, file)?;
     report.l4_docs = doc_ids.len() as u32;
 
     // Phase 3: L1 Write with deduplication
@@ -684,6 +789,7 @@ pub fn batch_store(
         &encoded_items,
         &l1_node_ids,
         &l1_node_pages,
+        &doc_ids,
         btree,
         sparse_index,
         vector_dim,

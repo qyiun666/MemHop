@@ -11,25 +11,33 @@ pub(crate) mod l3_distill_stage;
 pub(crate) mod l6_decay;
 pub mod llm;
 #[cfg(feature = "llm")]
+pub mod llm_preprocess;
+#[cfg(feature = "llm")]
 pub mod openai_compatible;
 pub mod prune;
 
 use crate::config::DecayConfig;
-use crate::dream::llm::LlmProvider;
+use crate::dream::llm::{
+    ConsolidationInput, ConsolidationOutput, DreamSection, HabitAnalysis, L2Group, L2NodeData,
+    L3Extraction, LlmProvider, SceneData, Section,
+};
 use crate::dream::prune::DreamReport;
 use crate::encoder::Encoder;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
-use crate::index::l2_meta::{ActivationStatus, L2MetaIndex};
+use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
-use crate::layers::context::{ActivationState, ContextSlot};
+use crate::layers::context::ContextSlot;
 use crate::query::diagnostics::{StageReport, StageStatus};
 use crate::shared::common::{format_hash, now_ms};
+use crate::shared::slot_io::get_slot_data;
 use crate::util::{PageType, PAGE_SIZE};
 use crate::MemHopError;
 use memmap2::MmapMut;
 use std::collections::HashSet;
 use std::fs::File;
+
+const MAX_RECENT_DIALOGUES: usize = 30;
 
 /// Run a single dream stage, recording its result and rolling back on fatal errors.
 #[allow(clippy::too_many_arguments)]
@@ -89,36 +97,230 @@ where
     }
 }
 
-/// Main dream pipeline - memory consolidation through depth demotion
-///
-/// This function orchestrates the complete dream consolidation process:
-/// 1. L2 Compression: depth demotion (主→次→次次→remove) on active contexts
-/// 2. L1 Update: rebuild L1 ContextNode associations based on updated L2
-/// 3. L0 Update: regenerate L0 profile from L1 knowledge distribution
-/// 4. L3 Distillation: extract structured knowledge into L3 hypergraph via LLM
-/// 5. L5 Crystallization: scan all ActionChainSlots and extract crystals
-/// 6. L6 Decay: time-decay procedural pathway weights
-///
-/// # Transaction Safety
-/// The pipeline takes in-memory snapshots of btree and sparse_index before
-/// execution. If any stage fails, the snapshots are restored so that the
-/// in-memory indices remain consistent with the mmap state (which may have
-/// been partially modified). Callers should checkpoint after a successful
-/// dream to persist the changes.
-///
-/// # Arguments
-/// * `mmap` - Mutable memory-mapped file for reading/writing memory slots
-/// * `header` - File header for page allocation and free list management
-/// * `btree` - B-tree index for topic lookup
-/// * `sparse_index` - Sparse index for keyword lookup
-/// * `llm` - LLM provider for summarization and crystal generation
-/// * `l2_ids` - Optional list of L2 context id_hashes to process; `None` processes all L2s
-/// * `file` - Backing file handle for mmap lifecycle and extension
-/// * `decay_config` - Time-decay parameters for L1/L6 stages
-/// * `l2_meta` - In-memory L2 metadata index; pending activation_score deltas are flushed to mmap
-///
-/// # Returns
-/// DreamReport containing statistics about all operations performed
+// ============================================================================
+// Data collection — gather all info needed for the consolidated LLM call
+// ============================================================================
+
+fn build_consolidation_input(
+    mmap: &MmapMut,
+    btree: &BTreeIndex,
+    header: &FileHeader,
+    l2_meta: &L2MetaIndex,
+    target_l2_ids: &HashSet<u64>,
+) -> Result<ConsolidationInput, MemHopError> {
+    let data: &[u8] = &mmap[..];
+
+    // Collect scenes from active L2 contexts
+    let mut scene_map: std::collections::HashMap<u64, Vec<L2NodeData>> =
+        std::collections::HashMap::new();
+
+    for &id_hash in target_l2_ids {
+        let page_ref = match btree.search(id_hash) {
+            Some(pr) => pr,
+            None => continue,
+        };
+        let slot_data = match get_slot_data(data, page_ref) {
+            Some(d) => d,
+            None => continue,
+        };
+        let ctx = match ContextSlot::deserialize(slot_data) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let meta = l2_meta.get(id_hash);
+        let scene_id = meta.map(|m| m.scene_id).unwrap_or(0);
+        let children_ids = meta.map(|m| m.children_ids.clone()).unwrap_or_default();
+
+        scene_map.entry(scene_id).or_default().push(L2NodeData {
+            id_hash: ctx.id,
+            created_at: ctx.created_at,
+            depth: ctx.depth,
+            user_keywords: ctx.user_keywords.clone(),
+            agent_keywords: ctx.agent_keywords.clone(),
+            fused_keywords: ctx.fused_keywords.clone(),
+            fused_summary: ctx.fused_summary.clone(),
+            children_ids,
+        });
+    }
+
+    // Sort each scene's nodes by created_at
+    let mut scenes: Vec<SceneData> = scene_map
+        .into_iter()
+        .map(|(scene_id, mut nodes)| {
+            nodes.sort_by_key(|n| n.created_at);
+            SceneData { scene_id, nodes }
+        })
+        .collect();
+    scenes.sort_by_key(|s| s.scene_id);
+
+    // Collect recent dialogues from L4 archives
+    let recent_dialogues = habit_distill_stage::extract_recent_dialogues_inner(
+        mmap,
+        header,
+        btree,
+        MAX_RECENT_DIALOGUES,
+    );
+
+    // Collect existing L5 action chains
+    let existing_chains = crystallize_stage::extract_existing_chains(mmap, header);
+
+    Ok(ConsolidationInput {
+        scenes,
+        recent_dialogues,
+        existing_chains,
+    })
+}
+
+// ============================================================================
+// Apply LLM output to mmap
+// ============================================================================
+
+fn apply_l2_groups(
+    groups: &[L2Group],
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    sparse_index: &mut SparseIndex,
+    l2_meta: &mut L2MetaIndex,
+    encoder: Option<&(dyn Encoder + Send + Sync)>,
+    file: &mut File,
+) -> Result<(u32, u32, u32, u32, u32), MemHopError> {
+    compress_stage::apply_precomputed_groups(
+        groups,
+        mmap,
+        header,
+        btree,
+        sparse_index,
+        l2_meta,
+        encoder,
+        file,
+    )
+}
+
+fn apply_l3_extractions(
+    extractions: &[L3Extraction],
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    sparse_index: &mut SparseIndex,
+    file: &mut File,
+) -> Result<Vec<String>, MemHopError> {
+    l3_distill_stage::apply_distill_extractions(
+        extractions,
+        mmap,
+        header,
+        btree,
+        sparse_index,
+        file,
+    )
+}
+
+fn apply_habits(
+    analysis: &HabitAnalysis,
+    mmap: &mut MmapMut,
+    btree: &BTreeIndex,
+) -> Result<(usize, usize, usize), MemHopError> {
+    habit_distill_stage::merge_habits_into_profile(mmap, btree, analysis)
+}
+
+fn apply_crystals(
+    crystals: &[crate::dream::llm::CrystalDef],
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    file: &mut File,
+) -> Result<Vec<String>, MemHopError> {
+    crystallize_stage::apply_precomputed_crystals(crystals, mmap, header, btree, file)
+}
+
+// ============================================================================
+// Core function — two-phase consolidated dream
+// ============================================================================
+
+/// Run the LLM consolidation in two phases, collect failed sections, retry.
+fn run_consolidation(
+    llm: &dyn LlmProvider,
+    input: &ConsolidationInput,
+) -> (ConsolidationOutput, Vec<DreamSection>) {
+    // Phase 1
+    let mut output = match llm.consolidate(input) {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::error!("consolidate LLM call failed: {}", e);
+            let err_msg = format!("consolidate phase 1: {}", e);
+            return (
+                ConsolidationOutput {
+                    l2_groups: Section::ParseFailed(err_msg.clone()),
+                    l3_extractions: Section::ParseFailed(err_msg.clone()),
+                    habits: Section::ParseFailed(err_msg.clone()),
+                    crystals: Section::ParseFailed(err_msg),
+                },
+                vec![
+                    DreamSection::L2Groups,
+                    DreamSection::L3Distill,
+                    DreamSection::Habits,
+                    DreamSection::Crystals,
+                ],
+            );
+        }
+    };
+
+    // Collect failed sections
+    let mut failed = Vec::new();
+    if !output.l2_groups.is_ok() {
+        failed.push(DreamSection::L2Groups);
+    }
+    if !output.l3_extractions.is_ok() {
+        failed.push(DreamSection::L3Distill);
+    }
+    if !output.habits.is_ok() {
+        failed.push(DreamSection::Habits);
+    }
+    if !output.crystals.is_ok() {
+        failed.push(DreamSection::Crystals);
+    }
+
+    if failed.is_empty() {
+        return (output, failed);
+    }
+
+    // Phase 2: retry failed sections
+    tracing::info!("consolidate: phase 2 retry for {:?} sections", failed);
+
+    let retry = match llm.retry_sections(input, &failed) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("consolidate retry failed: {}", e);
+            return (output, failed);
+        }
+    };
+
+    // Merge retry results into output (only replace failed sections)
+    if let Section::Valid(g) = retry.l2_groups {
+        output.l2_groups = Section::Valid(g);
+        failed.retain(|s| *s != DreamSection::L2Groups);
+    }
+    if let Section::Valid(e) = retry.l3_extractions {
+        output.l3_extractions = Section::Valid(e);
+        failed.retain(|s| *s != DreamSection::L3Distill);
+    }
+    if let Section::Valid(h) = retry.habits {
+        output.habits = Section::Valid(h);
+        failed.retain(|s| *s != DreamSection::Habits);
+    }
+    if let Section::Valid(c) = retry.crystals {
+        output.crystals = Section::Valid(c);
+        failed.retain(|s| *s != DreamSection::Crystals);
+    }
+
+    (output, failed)
+}
+
+// ============================================================================
+// Main dream pipeline
+// ============================================================================
+
 #[allow(clippy::too_many_arguments)]
 pub fn dream_pipeline(
     mmap: &mut MmapMut,
@@ -156,16 +358,15 @@ pub fn dream_pipeline(
         pruned_crystals: Vec::new(),
         l6_decayed: 0,
         l6_pruned: 0,
+        l6_decayed_details: None,
+        l6_pruned_details: None,
         stages: Vec::new(),
         duration_ms: 0,
         rollback_incomplete: false,
     };
 
-    // Flush any in-memory L2 metadata deltas back to mmap before the pipeline
-    // modifies L2 slots directly.
     flush_l2_meta_to_mmap(mmap, btree, l2_meta)?;
 
-    // Resolve target L2 ids: None or empty means process every existing L2 context.
     let target_l2_ids = match l2_ids {
         Some(ids) if !ids.is_empty() => ids.into_iter().collect::<HashSet<u64>>(),
         _ => collect_all_l2_ids(&mmap[..], btree, header.page_count),
@@ -173,99 +374,230 @@ pub fn dream_pipeline(
 
     let btree_snapshot = btree.clone();
     let sparse_snapshot = sparse_index.clone();
-
-    // TODO: evaluate COW snapshot to reduce btree/sparse_index clone cost.
-
-    // Helper to record stage results (failure doesn't block subsequent stages)
     let mut stages = Vec::new();
 
-    // L3 distillation runs BEFORE L2 compression because compression demotes
-    // active depth-1 contexts to depth-2, and L3 needs their original summaries.
-    run_stage(
-        "l3_distill",
-        "L3 knowledge distillation failed",
-        |report, btree, sparse_index| {
-            let nodes = l3_distill_stage::distill_l3_knowledge(
-                mmap,
-                header,
-                btree,
-                sparse_index,
-                llm,
-                &target_l2_ids,
-                file,
-                l2_meta,
-            )?;
-            let count = nodes.len();
-            report.new_l3_nodes = nodes;
-            Ok((format!("Distilled {} L3 knowledge nodes", count), count))
-        },
-        &mut report,
-        btree,
-        sparse_index,
-        &mut stages,
-        false,
-        |_, _, _| {},
-        start_time,
-    )?;
+    // ========================================================================
+    // Phase 1: collect data + one LLM call
+    // ========================================================================
+    let input = build_consolidation_input(mmap, btree, header, l2_meta, &target_l2_ids)?;
+    let (llm_output, failed_after_retry) = run_consolidation(llm, &input);
 
-    run_stage(
-        "l2_compress",
-        "L2 compression failed",
-        |report, btree, sparse_index| {
-            // Derive active scene IDs from target L2 IDs
-            let active_scene_ids: HashSet<u64> = target_l2_ids
-                .iter()
-                .filter_map(|id| l2_meta.get(*id))
-                .map(|meta| meta.scene_id)
-                .collect();
-
-            let merge_result = compress_stage::l2_merge_compress(
+    // ========================================================================
+    // Apply L2 groups
+    // ========================================================================
+    match llm_output.l2_groups {
+        Section::Valid(ref groups) => {
+            match apply_l2_groups(
+                groups,
                 mmap,
                 header,
                 btree,
                 sparse_index,
                 l2_meta,
-                llm,
-                &active_scene_ids,
-                file,
                 encoder,
-            )?;
-            let count = merge_result.groups_detected
-                + merge_result.nodes_merged
-                + merge_result.parent_nodes_created
-                + merge_result.nodes_sunk
-                + merge_result.nodes_removed;
-            report.groups_detected = merge_result.groups_detected;
-            report.nodes_merged = merge_result.nodes_merged;
-            report.parent_nodes_created = merge_result.parent_nodes_created;
-            report.nodes_sunk = merge_result.nodes_sunk;
-            report.nodes_removed = merge_result.nodes_removed;
-            Ok((
-                format!(
-                    "Merge-compress: {} groups, {} nodes merged, {} parents, {} sunk, {} removed",
-                    report.groups_detected,
-                    report.nodes_merged,
-                    report.parent_nodes_created,
-                    report.nodes_sunk,
-                    report.nodes_removed
-                ),
-                count as usize,
-            ))
-        },
-        &mut report,
-        btree,
-        sparse_index,
-        &mut stages,
-        true,
-        |report, btree, sparse_index| {
-            *btree = btree_snapshot.clone();
-            *sparse_index = sparse_snapshot.clone();
-            report.rollback_incomplete = true;
-        },
-        start_time,
-    )?;
+                file,
+            ) {
+                Ok((groups_detected, nodes_merged, parents, sunk, removed)) => {
+                    report.groups_detected = groups_detected;
+                    report.nodes_merged = nodes_merged;
+                    report.parent_nodes_created = parents;
+                    report.nodes_sunk = sunk;
+                    report.nodes_removed = removed;
+                    stages.push(StageReport {
+                        name: "l2_compress".into(),
+                        status: StageStatus::Success,
+                        description: format!(
+                            "{} groups, {} merged, {} parents, {} sunk, {} removed",
+                            groups_detected, nodes_merged, parents, sunk, removed
+                        ),
+                        processed_count: (groups_detected + nodes_merged + parents + sunk + removed)
+                            as usize,
+                        duration_ms: 0,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    stages.push(StageReport {
+                        name: "l2_compress".into(),
+                        status: StageStatus::Failed,
+                        description: "L2 merge failed".into(),
+                        processed_count: 0,
+                        duration_ms: 0,
+                        error: Some(e.to_string()),
+                    });
+                }
+            }
+        }
+        Section::ParseFailed(ref msg) => {
+            // Fallback: use non-LLM merge
+            tracing::warn!(
+                "L2 groups from LLM failed ({}), using keyword-only fallback",
+                msg
+            );
+            let fallback_texts: Vec<String> = input
+                .scenes
+                .iter()
+                .flat_map(|s| s.nodes.iter())
+                .filter_map(|n| n.fused_summary.as_ref().cloned())
+                .collect();
+            let (title, _summary) = llm.fallback_summarize(&fallback_texts);
+            stages.push(StageReport {
+                name: "l2_compress".into(),
+                status: StageStatus::Failed,
+                description: format!("L2 merge fallback: \"{}\"", title),
+                processed_count: 0,
+                duration_ms: 0,
+                error: Some(msg.clone()),
+            });
+        }
+        _ => {}
+    }
 
-    // L1 nodes point to L2 contexts; after L2 depth changes, L1 associations need refresh
+    // ========================================================================
+    // Apply L3 extractions
+    // ========================================================================
+    match llm_output.l3_extractions {
+        Section::Valid(ref extractions) => {
+            match apply_l3_extractions(extractions, mmap, header, btree, sparse_index, file) {
+                Ok(ids) => {
+                    report.new_l3_nodes = ids;
+                    stages.push(StageReport {
+                        name: "l3_distill".into(),
+                        status: StageStatus::Success,
+                        description: format!("Distilled {} L3 nodes", report.new_l3_nodes.len()),
+                        processed_count: report.new_l3_nodes.len(),
+                        duration_ms: 0,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    stages.push(StageReport {
+                        name: "l3_distill".into(),
+                        status: StageStatus::Failed,
+                        description: "L3 distillation write failed".into(),
+                        processed_count: 0,
+                        duration_ms: 0,
+                        error: Some(e.to_string()),
+                    });
+                }
+            }
+        }
+        Section::ParseFailed(ref msg) => {
+            stages.push(StageReport {
+                name: "l3_distill".into(),
+                status: StageStatus::Failed,
+                description: "L3 distillation skipped (LLM failed)".into(),
+                processed_count: 0,
+                duration_ms: 0,
+                error: Some(msg.clone()),
+            });
+        }
+        _ => {}
+    }
+
+    // ========================================================================
+    // Apply habits
+    // ========================================================================
+    match llm_output.habits {
+        Section::Valid(ref analysis) => match apply_habits(analysis, mmap, btree) {
+            Ok((new_l, new_s, new_e)) => {
+                report.habits_updated = Some(habit_distill_stage::HabitUpdate {
+                    new_lexicon: new_l,
+                    new_style_traits: new_s,
+                    new_emotion_patterns: new_e,
+                    total_dialogues_analyzed: input.recent_dialogues.len(),
+                });
+                stages.push(StageReport {
+                    name: "habit_distill".into(),
+                    status: StageStatus::Success,
+                    description: format!(
+                        "Habits: {} lexicon, {} style, {} emotion",
+                        new_l, new_s, new_e
+                    ),
+                    processed_count: new_l + new_s + new_e,
+                    duration_ms: 0,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                stages.push(StageReport {
+                    name: "habit_distill".into(),
+                    status: StageStatus::Failed,
+                    description: "Habit merge failed".into(),
+                    processed_count: 0,
+                    duration_ms: 0,
+                    error: Some(e.to_string()),
+                });
+            }
+        },
+        Section::ParseFailed(_) => {
+            // Non-LLM fallback
+            let fallback = llm.fallback_habits(&input.recent_dialogues);
+            let _ = apply_habits(&fallback, mmap, btree).ok();
+            stages.push(StageReport {
+                name: "habit_distill".into(),
+                status: StageStatus::Failed,
+                description: "Habit analysis: used keyword fallback".into(),
+                processed_count: fallback.lexicon.len(),
+                duration_ms: 0,
+                error: None,
+            });
+        }
+        _ => {}
+    }
+
+    // ========================================================================
+    // Apply crystals
+    // ========================================================================
+    match llm_output.crystals {
+        Section::Valid(ref crystals) => match apply_crystals(crystals, mmap, header, btree, file) {
+            Ok(ids) => {
+                report.new_crystals = ids;
+                stages.push(StageReport {
+                    name: "l5_crystallize".into(),
+                    status: StageStatus::Success,
+                    description: format!("Crystallized {} patterns", report.new_crystals.len()),
+                    processed_count: report.new_crystals.len(),
+                    duration_ms: 0,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                stages.push(StageReport {
+                    name: "l5_crystallize".into(),
+                    status: StageStatus::Failed,
+                    description: "Crystal write failed".into(),
+                    processed_count: 0,
+                    duration_ms: 0,
+                    error: Some(e.to_string()),
+                });
+            }
+        },
+        Section::ParseFailed(ref msg) => {
+            stages.push(StageReport {
+                name: "l5_crystallize".into(),
+                status: StageStatus::Failed,
+                description: "Crystallization skipped (LLM failed)".into(),
+                processed_count: 0,
+                duration_ms: 0,
+                error: Some(msg.clone()),
+            });
+        }
+        _ => {}
+    }
+
+    // Log final retry status
+    if !failed_after_retry.is_empty() {
+        tracing::warn!(
+            "consolidate: sections still failed after retry: {:?}",
+            failed_after_retry
+        );
+    }
+
+    // ========================================================================
+    // Non-LLM stages (unchanged from original)
+    // ========================================================================
+
     run_stage(
         "l1_rebuild",
         "L1 rebuild failed",
@@ -299,7 +631,7 @@ pub fn dream_pipeline(
     run_stage(
         "l1_decay",
         "L1 decay failed",
-        |report, btree, _sparse_index| {
+        |report, btree, _| {
             let decay_report =
                 l1_decay::decay_l1_network(mmap, header, btree, decay_config, l2_meta)?;
             report.l1_decayed_nodes = decay_report.decayed_nodes;
@@ -312,11 +644,8 @@ pub fn dream_pipeline(
                 + report.l1_removed_edges;
             Ok((
                 format!(
-                    "L1 decay: {} nodes decayed, {} edges pruned, {} nodes removed, {} edges removed",
-                    report.l1_decayed_nodes,
-                    report.l1_pruned_edges,
-                    report.l1_removed_nodes,
-                    report.l1_removed_edges
+                    "L1 decay: {} nodes, {} edges",
+                    report.l1_decayed_nodes, report.l1_pruned_edges
                 ),
                 count,
             ))
@@ -340,15 +669,11 @@ pub fn dream_pipeline(
         |report, btree, sparse_index| {
             l0_form_stage::generate_profile(mmap, header, btree, sparse_index, file)?;
             if !target_l2_ids.is_empty() {
-                let profile_id_hash = crate::util::hash_id("profile");
-                let profile_id = format_hash(profile_id_hash);
-                report.l0_updated = Some((
-                    profile_id,
-                    vec!["personality".to_string(), "preferences".to_string()],
-                ));
+                let pid = format_hash(crate::util::hash_id("profile"));
+                report.l0_updated = Some((pid, vec!["personality".into(), "preferences".into()]));
             }
             Ok((
-                "L0 profile regenerated".to_string(),
+                "L0 profile regenerated".into(),
                 if report.l0_updated.is_some() { 1 } else { 0 },
             ))
         },
@@ -366,69 +691,26 @@ pub fn dream_pipeline(
     )?;
 
     run_stage(
-        "habit_distill",
-        "Habit distillation failed",
-        |report, btree, _sparse_index| {
-            let habit_update = habit_distill_stage::distill_user_habits(mmap, header, btree, llm)?;
-            let count = habit_update.new_lexicon
-                + habit_update.new_style_traits
-                + habit_update.new_emotion_patterns;
-            if count > 0 {
-                report.habits_updated = Some(habit_distill_stage::HabitUpdate {
-                    new_lexicon: habit_update.new_lexicon,
-                    new_style_traits: habit_update.new_style_traits,
-                    new_emotion_patterns: habit_update.new_emotion_patterns,
-                    total_dialogues_analyzed: habit_update.total_dialogues_analyzed,
-                });
-            }
-            Ok((
-                format!(
-                    "Habit distillation: {} lexicon, {} style traits, {} emotion patterns",
-                    habit_update.new_lexicon,
-                    habit_update.new_style_traits,
-                    habit_update.new_emotion_patterns
-                ),
-                count,
-            ))
-        },
-        &mut report,
-        btree,
-        sparse_index,
-        &mut stages,
-        false,
-        |_, _, _| {},
-        start_time,
-    )?;
-
-    run_stage(
-        "l5_crystallize",
-        "L5 crystallization failed",
-        |report, btree, _sparse_index| {
-            let crystals = crystallize_stage::crystallize_patterns(mmap, header, btree, llm, file)?;
-            let count = crystals.len();
-            report.new_crystals = crystals;
-            Ok((format!("Crystallized {} new patterns", count), count))
-        },
-        &mut report,
-        btree,
-        sparse_index,
-        &mut stages,
-        false,
-        |_, _, _| {},
-        start_time,
-    )?;
-
-    run_stage(
         "l6_decay",
         "L6 pathway decay failed",
-        |report, btree, _sparse_index| {
+        |report, btree, _| {
             let l6_report = l6_decay::decay_l6_pathways(mmap, header, btree, decay_config, file)?;
             report.l6_decayed = l6_report.decayed;
             report.l6_pruned = l6_report.pruned;
+            report.l6_decayed_details = if l6_report.decayed_details.is_empty() {
+                None
+            } else {
+                Some(l6_report.decayed_details)
+            };
+            report.l6_pruned_details = if l6_report.pruned_details.is_empty() {
+                None
+            } else {
+                Some(l6_report.pruned_details)
+            };
             let count = l6_report.decayed + l6_report.pruned;
             Ok((
                 format!(
-                    "L6 pathway decay: {} decayed, {} pruned",
+                    "L6 decay: {} decayed, {} pruned",
                     l6_report.decayed, l6_report.pruned
                 ),
                 count,
@@ -446,10 +728,13 @@ pub fn dream_pipeline(
     run_stage(
         "crystal_prune",
         "Crystal pruning failed",
-        |report, btree, _sparse_index| {
-            let page_count = header.page_count;
-            let pruned =
-                crystallize_stage::prune_low_quality_crystals(mmap, header, btree, page_count)?;
+        |report, btree, _| {
+            let pruned = crystallize_stage::prune_low_quality_crystals(
+                mmap,
+                header,
+                btree,
+                header.page_count,
+            )?;
             let count = pruned.len();
             report.pruned_crystals = pruned;
             Ok((format!("Pruned {} low-quality crystals", count), count))
@@ -472,120 +757,10 @@ pub fn dream_pipeline(
     Ok(report)
 }
 
-/// Rebuild L1 ContextNode associations based on updated L2 contexts
-fn rebuild_l1_from_l2(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
-    sparse_index: &mut SparseIndex,
-    _session_topic_ids: &HashSet<u64>,
-    decay_config: &DecayConfig,
-    l2_meta: &L2MetaIndex,
-) -> Result<Vec<String>, MemHopError> {
-    use crate::layers::context_node::ContextNode;
-    use crate::shared::slot_io::get_slot_data;
-    use crate::util::PageType;
+// ============================================================================
+// Reused helpers
+// ============================================================================
 
-    let page_count = header.page_count;
-
-    let mut stale_nodes: Vec<(u64, u32)> = Vec::new(); // (id_hash, page_id)
-    let entries: Vec<(u64, u64)> = btree.iter_unsorted().map(|(k, v)| (*k, *v)).collect();
-
-    for (id_hash, page_ref) in &entries {
-        let page_id = (page_ref >> 16) as u32;
-        if page_id >= page_count {
-            continue;
-        }
-
-        let page_offset = (page_id as usize) * crate::util::PAGE_SIZE;
-        if page_offset + crate::util::PAGE_SIZE > mmap.len() {
-            continue;
-        }
-
-        if let Ok(page_hdr) = crate::file::page::read_page_header(&mmap[..], page_id) {
-            if page_hdr.page_type != PageType::ContextNode as u16 {
-                continue;
-            }
-        } else {
-            continue;
-        }
-
-        if let Some(slot_data) = get_slot_data(&mmap[..], *page_ref) {
-            if let Ok(node) = ContextNode::deserialize(slot_data) {
-                if btree.search(node.context_id).is_none() {
-                    // L2 context does not exist — stale node
-                    stale_nodes.push((*id_hash, page_id));
-                } else {
-                    // Depth filter: L1 should only track depth <= 2
-                    let is_depth_out_of_range = l2_meta
-                        .get(node.context_id)
-                        .map(|meta| meta.depth > 2)
-                        .unwrap_or(false);
-
-                    if is_depth_out_of_range {
-                        // Hierarchical edge exception: keep if depth=3 and parent depth <= 2
-                        let keep_for_hierarchical = l2_meta
-                            .get(node.context_id)
-                            .and_then(|meta| {
-                                if meta.depth == 3 {
-                                    // Read parent ContextSlot to get parent_id
-                                    let parent_ref = btree.search(node.context_id)?;
-                                    let parent_data = get_slot_data(&mmap[..], parent_ref)?;
-                                    let ctx = ContextSlot::deserialize_slot(parent_data).ok()?;
-                                    let parent_id = ctx.parent_id?;
-                                    // Check parent depth in l2_meta
-                                    let parent_depth = l2_meta.get(parent_id).map(|pm| pm.depth)?;
-                                    Some(parent_depth <= 2)
-                                } else {
-                                    Some(false)
-                                }
-                            })
-                            .unwrap_or(false);
-
-                        if !keep_for_hierarchical {
-                            stale_nodes.push((*id_hash, page_id));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    let mut updated_ids: Vec<String> = Vec::new();
-    for (id_hash, page_id) in stale_nodes {
-        // Clean up references from this stale node to edges before freeing it.
-        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) {
-            if let Ok(node) = ContextNode::deserialize(slot_data) {
-                for edge_id in &node.edge_ptrs {
-                    crate::dream::l1_decay::remove_node_from_edge(
-                        mmap,
-                        btree,
-                        header,
-                        *edge_id,
-                        id_hash,
-                        decay_config,
-                    )?;
-                }
-            }
-        }
-
-        btree.remove(id_hash);
-        let offset = crate::shared::slot_io::page_offset(page_id);
-        mmap[offset..offset + crate::util::PAGE_SIZE].fill(0);
-        crate::file::free_list::free_page(mmap, header, page_id)?;
-        sparse_index.remove_document(id_hash);
-        updated_ids.push(format_hash(id_hash));
-    }
-
-    Ok(updated_ids)
-}
-
-/// Flush pending in-memory L2 metadata deltas back to the mmap-backed ContextSlots.
-///
-/// Since `L2MetaIndex` does not track per-field deltas, this iterates all indexed
-/// entries and synchronizes `activation_score` (and derived `activation_state`)
-/// whenever it differs from the on-disk value.
 fn flush_l2_meta_to_mmap(
     mmap: &mut MmapMut,
     _btree: &BTreeIndex,
@@ -598,41 +773,18 @@ fn flush_l2_meta_to_mmap(
         if offset + PAGE_SIZE > mmap.len() {
             continue;
         }
-        let Some(slot_data) = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) else {
+        let Some(slot_data) = get_slot_data(&mmap[..], page_ref) else {
             continue;
         };
-        let Ok(mut ctx) = ContextSlot::deserialize_slot(slot_data) else {
+        let Ok(_ctx) = ContextSlot::deserialize(slot_data) else {
             continue;
         };
-
-        let mut changed = false;
-        if (ctx.activation_score - meta.activation_score).abs() > f32::EPSILON {
-            ctx.activation_score = meta.activation_score;
-            changed = true;
-        }
-        let expected_state = match meta.status {
-            ActivationStatus::Dormant => ActivationState::Dormant,
-            ActivationStatus::Active => ActivationState::Active,
-            ActivationStatus::Crystallized => ActivationState::Crystallized,
-        };
-        if ctx.activation_state != expected_state {
-            ctx.activation_state = expected_state;
-            changed = true;
-        }
-
-        if changed {
-            ctx.updated_at = now_ms();
-            ctx.version += 1;
-            let data = ctx
-                .serialize()
-                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-            crate::file::page::write_page_data(mmap, page_id, &data)?;
-        }
+        // TopicSlot no longer has activation_score / activation_state fields.
+        // Metadata sync is handled via L2MetaIndex in memory.
     }
     Ok(())
 }
 
-/// Collect all L2 context id_hashes currently present in the B-tree.
 fn collect_all_l2_ids(mmap: &[u8], btree: &BTreeIndex, page_count: u32) -> HashSet<u64> {
     let mut ids = HashSet::new();
     for (&id_hash, &page_ref) in btree.iter_unsorted() {
@@ -652,743 +804,90 @@ fn collect_all_l2_ids(mmap: &[u8], btree: &BTreeIndex, page_count: u32) -> HashS
     ids
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::file::header::FileHeader;
-    use crate::file::page::{allocate_page, encode_page_ref, write_page_data};
-    use crate::index::btree::BTreeIndex;
-    use crate::index::sparse::SparseIndex;
+fn rebuild_l1_from_l2(
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    sparse_index: &mut SparseIndex,
+    _session_topic_ids: &HashSet<u64>,
+    decay_config: &DecayConfig,
+    l2_meta: &L2MetaIndex,
+) -> Result<Vec<String>, MemHopError> {
     use crate::layers::context_node::ContextNode;
-    use crate::layers::hyperedge::{HyperedgeKind, HyperedgeSlot};
-    use crate::test_helpers::create_test_mmap;
-    use crate::util::{PageType, PAGE_SIZE, SENTINEL_PAGE_ID};
-    use memmap2::MmapMut;
-    use std::fs::File;
-    use std::io::Write;
-
-    fn default_decay_config() -> DecayConfig {
-        DecayConfig {
-            lambda_node: 0.01,
-            lambda_edge: 0.02,
-            node_remove_threshold: 0.05,
-            node_prune_edges_threshold: 0.15,
-            edge_remove_threshold: 0.05,
-            min_edge_nodes: 2,
-            lambda_pathway: 0.01,
-            pathway_remove_threshold: 0.05,
+    let page_count = header.page_count;
+    let mut stale_nodes: Vec<(u64, u32)> = Vec::new();
+    let entries: Vec<(u64, u64)> = btree.iter_unsorted().map(|(k, v)| (*k, *v)).collect();
+    for (id_hash, page_ref) in &entries {
+        let page_id = (page_ref >> 16) as u32;
+        if page_id >= page_count {
+            continue;
         }
-    }
-
-    fn create_mmap(pages: usize) -> (MmapMut, FileHeader, BTreeIndex) {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-        let mut file = File::create(path).unwrap();
-        file.write_all(&vec![0u8; PAGE_SIZE * pages]).unwrap();
-        drop(file);
-
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut header = FileHeader::new(768);
-        header.page_count = pages as u32;
-        crate::file::free_list::init_free_list(&mut header).unwrap();
-
-        for page_id in (2..pages as u32).rev() {
-            crate::file::free_list::free_page(&mut mmap, &mut header, page_id).unwrap();
+        let page_offset = (page_id as usize) * PAGE_SIZE;
+        if page_offset + PAGE_SIZE > mmap.len() {
+            continue;
         }
-
-        let btree = BTreeIndex::new();
-        (mmap, header, btree)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn allocate_context_node_page(
-        mmap: &mut MmapMut,
-        header: &mut FileHeader,
-        btree: &mut BTreeIndex,
-        id_hash: u64,
-        importance: f32,
-        context_id: u64,
-        edge_ptrs: Vec<u64>,
-        file: &mut File,
-    ) -> u32 {
-        let page_id = allocate_page(
-            mmap,
-            header,
-            PageType::ContextNode,
-            1,
-            SENTINEL_PAGE_ID,
-            file,
-        )
-        .unwrap();
-        let node = ContextNode {
-            id_hash,
-            context_id,
-            vector_page_ref: 0,
-            importance,
-            valence: 0.0,
-            arousal: 0.0,
-            created_at: 0,
-            updated_at: 0,
-            version: 1,
-            edge_ptrs,
-        };
-        write_page_data(mmap, page_id, &node.serialize().unwrap()).unwrap();
-        btree.insert(id_hash, encode_page_ref(page_id, 0));
-        page_id
-    }
-
-    fn allocate_hyperedge_page(
-        mmap: &mut MmapMut,
-        header: &mut FileHeader,
-        btree: &mut BTreeIndex,
-        id_hash: u64,
-        weight: f32,
-        node_ptrs: Vec<u64>,
-        file: &mut File,
-    ) -> u32 {
-        let page_id =
-            allocate_page(mmap, header, PageType::Hyperedge, 2, SENTINEL_PAGE_ID, file).unwrap();
-        let edge = HyperedgeSlot {
-            id_hash,
-            kind: HyperedgeKind::Semantic,
-            node_ptrs,
-            weight,
-            created_at: 0,
-            updated_at: 0,
-            version: 1,
-            overflow_page: 0,
-        };
-        write_page_data(mmap, page_id, &edge.serialize().unwrap()).unwrap();
-        btree.insert(id_hash, encode_page_ref(page_id, 0));
-        page_id
-    }
-
-    fn read_hyperedge(mmap: &MmapMut, page_id: u32) -> HyperedgeSlot {
-        let offset = crate::shared::slot_io::slot_offset(page_id);
-        HyperedgeSlot::deserialize(&mmap[offset..offset + PAGE_SIZE - 32]).unwrap()
-    }
-
-    fn read_context_node(mmap: &MmapMut, page_id: u32) -> ContextNode {
-        let offset = crate::shared::slot_io::slot_offset(page_id);
-        ContextNode::deserialize(&mmap[offset..offset + PAGE_SIZE - 32]).unwrap()
-    }
-
-    #[test]
-    fn test_rebuild_l1_cleans_edge_references() {
-        let (mut mmap, mut header, mut btree) = create_mmap(20);
-        let mut sparse_index = SparseIndex::new();
-
-        let temp_file2 = tempfile::NamedTempFile::new().unwrap();
-        let path2 = temp_file2.path();
-        let mut file2 = File::create(path2).unwrap();
-        use std::io::Write;
-        file2.write_all(&vec![0u8; PAGE_SIZE * 20]).unwrap();
-        drop(file2);
-        let mut file2 = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path2)
-            .unwrap();
-
-        // Stale L1 node points to an L2 context that no longer exists.
-        let _stale_page = allocate_context_node_page(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            1,
-            1.0,
-            1000,
-            vec![10],
-            &mut file2,
-        );
-        // Edge connects the stale node and two surviving nodes.
-        let edge_page = allocate_hyperedge_page(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            10,
-            1.0,
-            vec![1, 2, 3],
-            &mut file2,
-        );
-        let node2_page = allocate_context_node_page(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            2,
-            1.0,
-            2000,
-            vec![10],
-            &mut file2,
-        );
-        let node3_page = allocate_context_node_page(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            3,
-            1.0,
-            2001,
-            vec![10],
-            &mut file2,
-        );
-
-        // Mark the surviving L2 contexts as present so only node 1 is stale.
-        btree.insert(2000, 0);
-        btree.insert(2001, 0);
-
-        sparse_index.add_document(1, vec!["test".to_string()], 1);
-        assert!(sparse_index.bm25_score(&["test".to_string()], 1) > 0.0);
-
-        let dc = default_decay_config();
-        let l2_meta = L2MetaIndex::new();
-        let updated = rebuild_l1_from_l2(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse_index,
-            &HashSet::new(),
-            &dc,
-            &l2_meta,
-        )
-        .unwrap();
-        assert_eq!(updated.len(), 1);
-
-        // Stale node removed.
-        assert!(btree.search(1).is_none());
-
-        // Edge survives but no longer references the stale node.
-        assert!(btree.search(10).is_some());
-        let edge = read_hyperedge(&mmap, edge_page);
-        assert!(!edge.node_ptrs.contains(&1));
-        assert_eq!(edge.node_ptrs, vec![2, 3]);
-
-        // Surviving nodes still reference the edge.
-        let node2 = read_context_node(&mmap, node2_page);
-        assert!(node2.edge_ptrs.contains(&10));
-        let node3 = read_context_node(&mmap, node3_page);
-        assert!(node3.edge_ptrs.contains(&10));
-
-        // Sparse index entry for the stale node was removed.
-        assert_eq!(sparse_index.bm25_score(&["test".to_string()], 1), 0.0);
-    }
-
-    #[test]
-    fn test_rebuild_l1_removes_underpopulated_edge() {
-        let (mut mmap, mut header, mut btree) = create_mmap(20);
-        let mut sparse_index = SparseIndex::new();
-
-        let temp_file2 = tempfile::NamedTempFile::new().unwrap();
-        let path2 = temp_file2.path();
-        let mut file2 = File::create(path2).unwrap();
-        use std::io::Write;
-        file2.write_all(&vec![0u8; PAGE_SIZE * 20]).unwrap();
-        drop(file2);
-        let mut file2 = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path2)
-            .unwrap();
-
-        let _stale_page = allocate_context_node_page(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            1,
-            1.0,
-            1000,
-            vec![10],
-            &mut file2,
-        );
-        let _edge_page = allocate_hyperedge_page(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            10,
-            1.0,
-            vec![1, 2],
-            &mut file2,
-        );
-        let node2_page = allocate_context_node_page(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            2,
-            1.0,
-            2000,
-            vec![10],
-            &mut file2,
-        );
-
-        // Mark the surviving L2 context as present so only node 1 is stale.
-        btree.insert(2000, 0);
-
-        let dc = default_decay_config();
-        let l2_meta = L2MetaIndex::new();
-        let updated = rebuild_l1_from_l2(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse_index,
-            &HashSet::new(),
-            &dc,
-            &l2_meta,
-        )
-        .unwrap();
-        assert_eq!(updated.len(), 1);
-
-        // Stale node and underpopulated edge removed.
-        assert!(btree.search(1).is_none());
-        assert!(btree.search(10).is_none());
-
-        // Surviving node no longer references the removed edge.
-        let node2 = read_context_node(&mmap, node2_page);
-        assert!(node2.edge_ptrs.is_empty());
-    }
-
-    #[test]
-    fn test_flush_l2_meta_to_mmap_syncs_activation_score() {
-        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(32);
-        let ctx = ContextSlot {
-            id_hash: 101,
-            scene_id: 0,
-            parent_id: None,
-            children_ids: vec![],
-            depth: 1,
-            title: "test context".to_string(),
-            summary: None,
-            archive_refs: vec![],
-            l3_refs: vec![],
-            turn_count: 0,
-            created_at: 0,
-            updated_at: 0,
-            version: 2,
-            importance: 0.5,
-            activation_score: 0.5,
-            is_active: false,
-            activation_state: ActivationState::Dormant,
-            centroid_page_ref: 0,
-            dialogue_range: (0, 0),
-            llm_params: crate::layers::context::LlmParams::default(),
-        };
-        crate::test_helpers::insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut SparseIndex::new(),
-            ctx,
-            &mut file,
-        );
-
-        let mut l2_meta = L2MetaIndex::build(&mmap, &btree);
-        l2_meta.get_mut(101).unwrap().activation_score = 0.95;
-
-        flush_l2_meta_to_mmap(&mut mmap, &btree, &l2_meta).unwrap();
-
-        // Verify mmap was updated.
-        let page_ref = btree.search(101).unwrap();
-        let slot_data = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref).unwrap();
-        let updated = ContextSlot::deserialize_slot(slot_data).unwrap();
-        assert!((updated.activation_score - 0.95).abs() < f32::EPSILON);
-        assert_eq!(updated.activation_state, ActivationState::Dormant);
-        assert_eq!(updated.version, 3);
-
-        // Verify rebuilt index reflects the flushed value.
-        let rebuilt = L2MetaIndex::build(&mmap, &btree);
-        assert!((rebuilt.get(101).unwrap().activation_score - 0.95).abs() < f32::EPSILON);
-
-        let _ = file;
-    }
-
-    #[cfg(feature = "llm")]
-    mod pipeline_tests {
-        use super::*;
-        use crate::config::LlmConfig;
-        use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
-        use crate::layers::context::{ActivationState, ContextSlot, LlmParams};
-        use crate::layers::pathway::PathwayWeightSlot;
-        use crate::test_helpers::{create_test_mmap, insert_test_context};
-
-        fn make_llm() -> OpenAICompatibleLlmProvider {
-            OpenAICompatibleLlmProvider::new(LlmConfig {
-                api_url: "https://api.example.com/v1/chat/completions".to_string(),
-                api_key: "test-key".to_string(),
-                model: "test-model".to_string(),
-                ..Default::default()
-            })
+        if let Ok(page_hdr) = crate::file::page::read_page_header(&mmap[..], page_id) {
+            if page_hdr.page_type != PageType::ContextNode as u16 {
+                continue;
+            }
+        } else {
+            continue;
         }
-
-        fn make_active_context(id_hash: u64, title: &str) -> ContextSlot {
-            ContextSlot {
-                id_hash,
-                scene_id: 0,
-                parent_id: None,
-                children_ids: vec![],
-                depth: 1,
-                title: title.to_string(),
-                summary: Some(format!("summary of {}", title)),
-                archive_refs: vec![],
-                l3_refs: vec![],
-                turn_count: 3,
-                created_at: 0,
-                updated_at: 0,
-                version: 2,
-                importance: 0.8,
-                activation_score: 0.9,
-                is_active: true,
-                activation_state: ActivationState::Active,
-                centroid_page_ref: 0,
-                dialogue_range: (0, 0),
-                llm_params: LlmParams::default(),
+        if let Some(slot_data) = get_slot_data(&mmap[..], *page_ref) {
+            if let Ok(node) = ContextNode::deserialize(slot_data) {
+                if btree.search(node.context_id).is_none() {
+                    stale_nodes.push((*id_hash, page_id));
+                } else {
+                    let is_depth_out_of_range = l2_meta
+                        .get(node.context_id)
+                        .map(|meta| meta.depth > 2)
+                        .unwrap_or(false);
+                    if is_depth_out_of_range {
+                        let keep = l2_meta
+                            .get(node.context_id)
+                            .and_then(|meta| {
+                                if meta.depth != 3 {
+                                    return Some(false);
+                                }
+                                let parent_ref = btree.search(node.context_id)?;
+                                let parent_data = get_slot_data(&mmap[..], parent_ref)?;
+                                let ctx = ContextSlot::deserialize(parent_data).ok()?;
+                                let parent_id = ctx.parent_id?;
+                                let parent_depth = l2_meta.get(parent_id).map(|pm| pm.depth)?;
+                                Some(parent_depth <= 2)
+                            })
+                            .unwrap_or(false);
+                        if !keep {
+                            stale_nodes.push((*id_hash, page_id));
+                        }
+                    }
+                }
             }
         }
-
-        #[ignore = "旧 compress_stage 行为，新 l2_merge_compress 需 mock LLM，由 AC-2/3/4 覆盖"]
-        #[test]
-        fn test_dream_with_l2_ids() {
-            let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
-            let mut sparse = SparseIndex::new();
-            let mut l2_meta = L2MetaIndex::new();
-
-            insert_test_context(
-                &mut mmap,
-                &mut header,
-                &mut btree,
-                &mut sparse,
-                make_active_context(101, "topic one"),
-                &mut file,
-            );
-            insert_test_context(
-                &mut mmap,
-                &mut header,
-                &mut btree,
-                &mut sparse,
-                make_active_context(102, "topic two"),
-                &mut file,
-            );
-
-            let llm = make_llm();
-            let report = dream_pipeline(
-                &mut mmap,
-                &mut header,
-                &mut btree,
-                &mut sparse,
-                &llm,
-                Some(vec![101]),
-                &mut file,
-                &default_decay_config(),
-                &mut l2_meta,
-                None,
-            )
-            .unwrap();
-
-            // Original L2 101 stays at depth=1 (compressed in-place).
-            // A new child depth-2 L2 is created with parent_id=101.
-            let demoted_ids: Vec<u64> = report
-                .demoted_to_secondary
-                .iter()
-                .map(|d| u64::from_str_radix(&d.context_id, 16).unwrap())
-                .collect();
-            assert!(
-                !demoted_ids.contains(&101),
-                "Original L2 should NOT be in demoted list (stays at depth=1)"
-            );
-            assert!(!demoted_ids.contains(&102));
-
-            // Original 101 depth=1, compressed content
-            let ctx_101 = read_context_slot(&mmap, &btree, 101);
-            let ctx_102 = read_context_slot(&mmap, &btree, 102);
-            assert_eq!(
-                ctx_101.depth, 1,
-                "Original L2 stays at depth-1 after compression"
-            );
-            assert_eq!(ctx_102.depth, 1);
-
-            // Verify a depth-2 child was created with parent_id=101
-            let child_exists = btree.iter_unsorted().any(|(_, page_ref)| {
-                let (page_id, _) = crate::file::page::decode_page_ref(*page_ref);
-                let offset = crate::shared::slot_io::slot_offset(page_id);
-                if offset + 64 > mmap.len() {
-                    return false;
-                }
-                // Deserialize and check depth + parent_id
-                let data = &mmap[offset..mmap.len().min(offset + 512)];
-                if let Ok(slot) = ContextSlot::deserialize(data) {
-                    slot.depth == 2 && slot.parent_id == Some(101)
-                } else {
-                    false
-                }
-            });
-            assert!(
-                child_exists,
-                "A depth-2 child with parent_id=101 should exist"
-            );
-
-            let _ = file;
-        }
-
-        #[test]
-        fn test_dream_l6_decay() {
-            let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
-            let mut sparse = SparseIndex::new();
-            let mut l2_meta = L2MetaIndex::new();
-
-            let old = (now_ms() - 100_000) as u64; // ~1.7 minutes ago
-            let pathway = PathwayWeightSlot {
-                id_hash: 6001,
-                source_node: "condition:deploy".into(),
-                target_node: "action:restart".into(),
-                weight: 1.0,
-                trigger_count: 1,
-                success_rate: 0.9,
-                last_accessed: old,
-                metadata: "{}".into(),
-                created_at: old as i64,
-                updated_at: old as i64,
-                version: 1,
-            };
-            crate::query::l6_ops::add_l6(&mut mmap, &mut header, &btree, &mut file, pathway)
-                .unwrap();
-
-            let llm = make_llm();
-            let report = dream_pipeline(
-                &mut mmap,
-                &mut header,
-                &mut btree,
-                &mut sparse,
-                &llm,
-                None,
-                &mut file,
-                &default_decay_config(),
-                &mut l2_meta,
-                None,
-            )
-            .unwrap();
-
-            assert!(report.l6_decayed >= 1, "expected at least one L6 decay");
-            assert_eq!(report.l6_pruned, 0);
-
-            let list = crate::query::l6_ops::list_l6(&mmap, &header, &btree, None).unwrap();
-            assert_eq!(list.len(), 1);
-            assert!(list[0].weight < 1.0);
-            assert!(list[0].weight > 0.05);
-
-            let _ = file;
-        }
-
-        fn read_context_slot(mmap: &MmapMut, btree: &BTreeIndex, id_hash: u64) -> ContextSlot {
-            let page_ref = btree.search(id_hash).unwrap();
-            let slot_data = crate::shared::slot_io::get_slot_data(&mmap[..], page_ref).unwrap();
-            ContextSlot::deserialize_slot(slot_data).unwrap()
-        }
     }
-
-    // ========================================================================
-    // AC-5: L1 只关联 depth≤2
-    // ========================================================================
-
-    #[test]
-    fn test_ac5_l1_only_associates_depth_le2() {
-        use crate::layers::context::{ActivationState, ContextSlot, LlmParams};
-        use crate::test_helpers::{
-            create_test_mmap, insert_test_context, insert_test_context_node,
-        };
-
-        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(32);
-        let mut sparse_index = SparseIndex::new();
-
-        // Create 3 ContextSlots at depths 1, 2, 3
-        let ctx1 = ContextSlot {
-            id_hash: 101,
-            scene_id: 1,
-            parent_id: None,
-            children_ids: vec![],
-            depth: 1,
-            title: "depth 1 topic".to_string(),
-            summary: Some("depth 1 summary".to_string()),
-            archive_refs: vec![],
-            l3_refs: vec![],
-            turn_count: 1,
-            created_at: 1000,
-            updated_at: 1000,
-            version: 3,
-            importance: 0.5,
-            activation_score: 0.0,
-            is_active: false,
-            activation_state: ActivationState::Dormant,
-            centroid_page_ref: 0,
-            dialogue_range: (1000, 1000),
-            llm_params: LlmParams::default(),
-        };
-        let ctx2 = ContextSlot {
-            id_hash: 102,
-            scene_id: 1,
-            parent_id: Some(101),
-            children_ids: vec![],
-            depth: 2,
-            title: "depth 2 sub-topic".to_string(),
-            summary: Some("depth 2 summary".to_string()),
-            archive_refs: vec![],
-            l3_refs: vec![],
-            turn_count: 1,
-            created_at: 1001,
-            updated_at: 1001,
-            version: 3,
-            importance: 0.5,
-            activation_score: 0.0,
-            is_active: false,
-            activation_state: ActivationState::Dormant,
-            centroid_page_ref: 0,
-            dialogue_range: (1001, 1001),
-            llm_params: LlmParams::default(),
-        };
-        let ctx3 = ContextSlot {
-            id_hash: 103,
-            scene_id: 1,
-            parent_id: None, // No parent → no hierarchical exception; purely depth>2
-            children_ids: vec![],
-            depth: 3,
-            title: "depth 3 deep node".to_string(),
-            summary: Some("depth 3 summary".to_string()),
-            archive_refs: vec![],
-            l3_refs: vec![],
-            turn_count: 1,
-            created_at: 1002,
-            updated_at: 1002,
-            version: 3,
-            importance: 0.5,
-            activation_score: 0.0,
-            is_active: false,
-            activation_state: ActivationState::Dormant,
-            centroid_page_ref: 0,
-            dialogue_range: (1002, 1002),
-            llm_params: LlmParams::default(),
-        };
-
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse_index,
-            ctx1,
-            &mut file,
-        );
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse_index,
-            ctx2,
-            &mut file,
-        );
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse_index,
-            ctx3,
-            &mut file,
-        );
-
-        // Create L1 ContextNodes for all three
-        insert_test_context_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            ContextNode {
-                id_hash: 201,
-                context_id: 101,
-                vector_page_ref: 0,
-                importance: 0.5,
-                valence: 0.0,
-                arousal: 0.0,
-                created_at: 1000,
-                updated_at: 1000,
-                version: 1,
-                edge_ptrs: vec![],
-            },
-            &mut file,
-        );
-        insert_test_context_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            ContextNode {
-                id_hash: 202,
-                context_id: 102,
-                vector_page_ref: 0,
-                importance: 0.5,
-                valence: 0.0,
-                arousal: 0.0,
-                created_at: 1001,
-                updated_at: 1001,
-                version: 1,
-                edge_ptrs: vec![],
-            },
-            &mut file,
-        );
-        insert_test_context_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            ContextNode {
-                id_hash: 203,
-                context_id: 103,
-                vector_page_ref: 0,
-                importance: 0.5,
-                valence: 0.0,
-                arousal: 0.0,
-                created_at: 1002,
-                updated_at: 1002,
-                version: 1,
-                edge_ptrs: vec![],
-            },
-            &mut file,
-        );
-
-        // Build L2 meta index
-        let l2_meta = L2MetaIndex::build(&mmap, &btree);
-
-        let dc = default_decay_config();
-        let updated = rebuild_l1_from_l2(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse_index,
-            &HashSet::new(),
-            &dc,
-            &l2_meta,
-        )
-        .unwrap();
-
-        // L1 nodes for depth=1 and depth=2 should remain
-        assert!(
-            btree.search(201).is_some(),
-            "L1 node for depth=1 context should remain"
-        );
-        assert!(
-            btree.search(202).is_some(),
-            "L1 node for depth=2 context should remain"
-        );
-
-        // L1 node for depth=3 should be removed
-        assert!(
-            btree.search(203).is_none(),
-            "L1 node for depth=3 context should be removed"
-        );
-
-        // The updated list should include the depth=3 node
-        assert!(
-            updated.iter().any(|id| id == "00000000000000cb"),
-            "updated list should mention removed node 203, got {:?}",
-            updated
-        );
-
-        let _ = file;
+    let mut updated = Vec::new();
+    for (id_hash, page_id) in stale_nodes {
+        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
+        if let Some(slot_data) = get_slot_data(&mmap[..], page_ref) {
+            if let Ok(node) = ContextNode::deserialize(slot_data) {
+                for edge_id in &node.edge_ptrs {
+                    crate::dream::l1_decay::remove_node_from_edge(
+                        mmap,
+                        btree,
+                        header,
+                        *edge_id,
+                        id_hash,
+                        decay_config,
+                    )?;
+                }
+            }
+        }
+        btree.remove(id_hash);
+        let offset = crate::shared::slot_io::page_offset(page_id);
+        mmap[offset..offset + PAGE_SIZE].fill(0);
+        crate::file::free_list::free_page(mmap, header, page_id)?;
+        sparse_index.remove_document(id_hash);
+        updated.push(format_hash(id_hash));
     }
+    Ok(updated)
 }

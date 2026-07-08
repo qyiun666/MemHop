@@ -20,6 +20,14 @@ pub struct MemHopConfig {
     pub auto_dream_on_evict: bool,
     #[serde(default = "default_ivf_initial_k")]
     pub ivf_initial_k: usize,
+    /// Auto-trigger dream when L2 context archive count exceeds this (default 20).
+    /// 0 means no auto-dream by archive count.
+    #[serde(default = "default_auto_dream_archive_threshold")]
+    pub auto_dream_archive_threshold: usize,
+    /// Auto-trigger dream when L2 context summary bytes exceed this (default 2048).
+    /// 0 means no auto-dream by summary bytes.
+    #[serde(default = "default_auto_dream_summary_bytes")]
+    pub auto_dream_summary_bytes: usize,
     #[serde(default)]
     pub search_weights: Option<SearchWeights>,
     #[serde(default)]
@@ -39,6 +47,9 @@ pub struct MemHopConfig {
     /// Maximum number of entries kept in the L3 adjacency cache.
     #[serde(default = "default_adjacency_cache_max_entries")]
     pub adjacency_cache_max_entries: usize,
+    /// LLM preprocessing configuration (search keyword extraction + write encoding).
+    #[serde(default)]
+    pub llm_preprocess: LlmPreprocessConfig,
 }
 
 impl MemHopConfig {
@@ -53,6 +64,8 @@ impl MemHopConfig {
             crystal_path: None,
             llm: LlmConfig::default(),
             auto_dream_on_evict: false,
+            auto_dream_archive_threshold: default_auto_dream_archive_threshold(),
+            auto_dream_summary_bytes: default_auto_dream_summary_bytes(),
             ivf_initial_k: default_ivf_initial_k(),
             search_weights: None,
             decay_config: None,
@@ -60,6 +73,7 @@ impl MemHopConfig {
             dream_idle_threshold_secs: default_dream_idle_threshold_secs(),
             auto_checkpoint_interval: None,
             adjacency_cache_max_entries: default_adjacency_cache_max_entries(),
+            llm_preprocess: LlmPreprocessConfig::default(),
         }
     }
 }
@@ -70,6 +84,14 @@ fn default_auto_dream_on_evict() -> bool {
 
 fn default_dream_idle_threshold_secs() -> Option<u64> {
     Some(3600) // 1 hour
+}
+
+fn default_auto_dream_archive_threshold() -> usize {
+    20
+}
+
+fn default_auto_dream_summary_bytes() -> usize {
+    2048
 }
 
 fn default_ivf_initial_k() -> usize {
@@ -151,6 +173,57 @@ fn default_language() -> String {
     "zh".to_string()
 }
 
+// ============================================================================
+// LLM Preprocessing configuration (v0.61)
+// ============================================================================
+
+/// Configuration for LLM-based content preprocessing in search and write paths.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LlmPreprocessConfig {
+    /// Enable LLM preprocessing for search queries (keyword extraction + L3 import judgment).
+    /// When disabled, falls back to tokenizer-based keyword extraction.
+    #[serde(default = "default_true")]
+    pub enable_search_preprocess: bool,
+    /// Enable LLM preprocessing for write content (keyword extraction + importance scoring).
+    /// When disabled, falls back to tokenizer-based keyword extraction.
+    #[serde(default = "default_true")]
+    pub enable_write_preprocess: bool,
+    /// Temperature for preprocess LLM calls (default 0.1 for deterministic extraction).
+    #[serde(default = "default_preprocess_temperature")]
+    pub preprocess_temperature: f32,
+    /// Max tokens for preprocess LLM responses (default 512).
+    #[serde(default = "default_preprocess_max_tokens")]
+    pub preprocess_max_tokens: u32,
+    /// Fall back to tokenizer when LLM is unavailable or fails.
+    #[serde(default = "default_true")]
+    pub fallback_to_tokenizer: bool,
+}
+
+impl Default for LlmPreprocessConfig {
+    fn default() -> Self {
+        Self {
+            enable_search_preprocess: true,
+            enable_write_preprocess: true,
+            preprocess_temperature: default_preprocess_temperature(),
+            preprocess_max_tokens: default_preprocess_max_tokens(),
+            fallback_to_tokenizer: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_preprocess_temperature() -> f32 {
+    0.1
+}
+
+fn default_preprocess_max_tokens() -> u32 {
+    512
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DecayConfig {
     pub lambda_node: f32,
@@ -192,8 +265,10 @@ impl Default for DecayConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
+    #[serde(default = "default_ttl_ms")]
     pub default_ttl_ms: i64,
     /// Working memory capacity (Miller's law: 7±2).
+    #[serde(default = "default_capacity")]
     pub capacity: usize,
 }
 
@@ -208,7 +283,9 @@ impl Default for SessionConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchWeights {
+    #[serde(default = "default_bm25_weight")]
     pub bm25_weight: f32,
+    #[serde(default = "default_vector_weight")]
     pub vector_weight: f32,
     #[serde(default = "default_n_probes")]
     pub n_probes: usize,
@@ -216,6 +293,14 @@ pub struct SearchWeights {
     pub enable_reranker: bool,
     #[serde(default = "default_rerank_max_candidates")]
     pub rerank_max_candidates: usize,
+    /// Recency boost weight (multiplier applied to time-decay score, default 0.5).
+    /// score += recency_weight * exp(-age_days / 7)
+    #[serde(default = "default_recency_weight")]
+    pub recency_weight: f32,
+    /// Activation boost multiplier for active-session topics (default 1.3).
+    /// score *= activation_boost when topic is in working memory
+    #[serde(default = "default_activation_boost")]
+    pub activation_boost: f32,
 }
 
 impl Default for SearchWeights {
@@ -226,10 +311,36 @@ impl Default for SearchWeights {
             n_probes: default_n_probes(),
             enable_reranker: true,
             rerank_max_candidates: default_rerank_max_candidates(),
+            recency_weight: default_recency_weight(),
+            activation_boost: default_activation_boost(),
         }
     }
 }
 
 fn default_rerank_max_candidates() -> usize {
     20
+}
+
+fn default_recency_weight() -> f32 {
+    0.5
+}
+
+fn default_activation_boost() -> f32 {
+    1.3
+}
+
+fn default_bm25_weight() -> f32 {
+    0.45
+}
+
+fn default_vector_weight() -> f32 {
+    0.55
+}
+
+fn default_ttl_ms() -> i64 {
+    3_600_000
+}
+
+fn default_capacity() -> usize {
+    7
 }

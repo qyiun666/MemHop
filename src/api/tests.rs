@@ -111,6 +111,8 @@ fn test_ac1_each_turn_independent_node() {
             auto_create: 1,
             min_score: 0.0,
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .unwrap();
     let topic_id = search_res.contexts[0].id.clone();
@@ -129,6 +131,8 @@ fn test_ac1_each_turn_independent_node() {
                 instant_distill: false,
                 source: Default::default(),
                 scene_id: Some(scene_id.clone()),
+                user_keywords: None,
+                agent_keywords: None,
             })
             .unwrap();
         turn_ids.push(result.turn_node_id);
@@ -140,7 +144,7 @@ fn test_ac1_each_turn_independent_node() {
         "update_memory should return 3 turn_node_ids"
     );
 
-    // Verify each turn node: depth=1, turn_count=1, children_ids empty, same scene_id
+    // Verify each turn node: depth=1, user_keywords non-empty, children_ids empty, same scene_id
     let expected_scene_hash = parse_id_to_hash(&scene_id);
     for (i, tid) in turn_ids.iter().enumerate() {
         let detail = db
@@ -149,7 +153,11 @@ fn test_ac1_each_turn_independent_node() {
             .unwrap_or_else(|| panic!("turn {} should exist", i));
 
         assert_eq!(detail.depth, 1, "turn {} should be depth=1", i);
-        assert_eq!(detail.turn_count, 1, "turn {} should have turn_count=1", i);
+        assert!(
+            !detail.user_keywords.is_empty(),
+            "turn {} should have user_keywords",
+            i
+        );
         assert!(
             detail.children_ids.is_empty(),
             "turn {} should have empty children_ids, got {:?}",
@@ -208,6 +216,8 @@ fn test_ac6_scene_tree_query() {
             auto_create: 1,
             min_score: 0.0,
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .unwrap();
     let topic_id = search_res.contexts[0].id.clone();
@@ -223,6 +233,8 @@ fn test_ac6_scene_tree_query() {
             instant_distill: false,
             source: Default::default(),
             scene_id: Some(scene_id.clone()),
+            user_keywords: None,
+            agent_keywords: None,
         })
         .unwrap();
     }

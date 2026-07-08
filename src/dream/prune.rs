@@ -1,6 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+use crate::layers::pathway::PathwayWeightSlot;
 use crate::query::diagnostics::StageReport;
 use serde::{Deserialize, Serialize};
 
@@ -58,6 +59,12 @@ pub struct DreamReport {
     pub l6_decayed: usize,
     /// Number of L6 pathway weights pruned (below threshold)
     pub l6_pruned: usize,
+    /// Decayed L6 pathway weights with their updated values (None if no decay occurred)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub l6_decayed_details: Option<Vec<PathwayWeightSlot>>,
+    /// Pruned L6 pathway weights with their final values before removal (None if no pruning occurred)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub l6_pruned_details: Option<Vec<PathwayWeightSlot>>,
     /// Per-stage execution reports
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<StageReport>,
@@ -129,6 +136,8 @@ mod tests {
             pruned_crystals: vec!["crystal-old".to_string()],
             l6_decayed: 0,
             l6_pruned: 0,
+            l6_decayed_details: None,
+            l6_pruned_details: None,
             stages: vec![],
             duration_ms: 500,
             rollback_incomplete: false,

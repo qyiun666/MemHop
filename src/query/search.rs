@@ -38,14 +38,6 @@ fn safe_char_slice(s: &str, max_chars: usize) -> String {
 // ============================================================================
 
 /// Core search implementation — orchestrates the search pipeline.
-///
-/// Routing priority:
-///   1. `auto_create == 1`  → skip retrieval, create new L2
-///   2. `l2_id`/`context_id` present → load that L2, skip two-channel retrieval
-///   3. `l3_id` present      → restrict candidate pool to L2s containing that L3
-///   4. default              → BM25 prescreen → two-channel retrieve + optional rerank
-///
-/// Individual steps delegate to `query::pipeline::*` for reusability.
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "grpc-encoder")]
 pub fn search_context(
@@ -146,11 +138,20 @@ pub fn search_context(
 
     let l0_profile = crate::query::profile::read_profile(mmap, btree)?;
 
+    let l1_previews = super::pipeline::l1_assoc::get_l1_previews(
+        data,
+        &filtered_l2,
+        btree,
+        l1_reverse,
+        &query.dialogue,
+    )?;
+
     let result = super::pipeline::assemble::assemble_search_result(
         l0_profile,
         &all_contexts,
         &filtered_l2,
         &l1_associated,
+        l1_previews,
     );
 
     Ok(result)
@@ -306,26 +307,25 @@ fn create_new_l2_context(
     };
 
     let new_ctx = ContextSlot {
-        id_hash,
+        id: id_hash,
         parent_id: None,
         children_ids: vec![],
         scene_id: 0,
         depth: 1,
-        title,
-        summary: None,
-        archive_refs: Vec::new(),
-        l3_refs: Vec::new(),
-        turn_count: 0,
+        user_keywords: vec![title],
+        user_timestamp: now_ms,
+        user_l4_refs: Vec::new(),
+        user_l3_refs: Vec::new(),
+        agent_keywords: vec![],
+        agent_timestamp: 0,
+        agent_l4_refs: Vec::new(),
+        agent_l3_refs: Vec::new(),
+        fused_keywords: vec![],
+        fused_summary: None,
+        centroid_page_ref,
         created_at: now_ms,
         updated_at: now_ms,
         version: 1,
-        importance: 0.5,
-        activation_score: 0.8,
-        is_active: true,
-        activation_state: crate::layers::context::ActivationState::Active,
-        centroid_page_ref,
-        dialogue_range: (now_ms, now_ms),
-        llm_params: crate::layers::context::LlmParams::default(),
     };
 
     let ctx_data = new_ctx
@@ -359,7 +359,8 @@ fn create_new_l2_context(
     let page_ref = (page_id as u64) << 16;
     btree.insert(id_hash, page_ref);
 
-    let terms: Vec<String> = crate::index::sparse::tokenize(&new_ctx.title);
+    let search_text = new_ctx.user_keywords.join(" ");
+    let terms: Vec<String> = crate::index::sparse::tokenize(&search_text);
     let doc_len = terms.len() as u32;
     sparse_index.add_document(id_hash, terms, doc_len);
 
@@ -373,33 +374,32 @@ fn create_new_l2_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::layers::context::{ActivationState, ContextSlot};
+    use crate::layers::context::ContextSlot;
     use crate::query::pipeline::l2_search::{rerank_candidates, retrieve_l2_bm25};
     use crate::shared::common::format_hash;
     use crate::test_helpers::*;
 
     fn make_context(id_hash: u64, title: &str, l3_refs: Vec<u64>) -> ContextSlot {
         ContextSlot {
-            id_hash,
+            id: id_hash,
             scene_id: 0,
             parent_id: None,
             children_ids: vec![],
             depth: 1,
-            title: title.to_string(),
-            summary: None,
-            archive_refs: vec![],
-            l3_refs,
-            turn_count: 1,
+            user_keywords: vec![title.to_string()],
+            user_timestamp: 0,
+            user_l4_refs: vec![],
+            user_l3_refs: l3_refs,
+            agent_keywords: vec![],
+            agent_timestamp: 0,
+            agent_l4_refs: vec![],
+            agent_l3_refs: vec![],
+            fused_keywords: vec![],
+            fused_summary: None,
+            centroid_page_ref: 0,
             created_at: 0,
             updated_at: 0,
             version: 1,
-            importance: 0.5,
-            activation_score: 0.5,
-            is_active: true,
-            activation_state: ActivationState::Active,
-            centroid_page_ref: 0,
-            dialogue_range: (0, 0),
-            llm_params: crate::layers::context::LlmParams::default(),
         }
     }
 
@@ -432,19 +432,20 @@ mod tests {
             n_probes: 8,
             enable_reranker: true,
             rerank_max_candidates: 20,
+            recency_weight: 0.5,
+            activation_boost: 1.3,
         }
     }
 
     #[test]
     fn test_rerank_candidates_reorders_pool() {
         let mut ctx_a = make_context(1, "apple banana", vec![]);
-        ctx_a.summary = Some("apple pie".to_string());
+        ctx_a.fused_summary = Some("apple pie".to_string());
         let mut ctx_b = make_context(2, "cherry date", vec![]);
-        ctx_b.summary = Some("nothing".to_string());
+        ctx_b.fused_summary = Some("nothing".to_string());
         let mut ctx_c = make_context(3, "apple cherry", vec![]);
-        ctx_c.summary = Some("pie chart".to_string());
+        ctx_c.fused_summary = Some("pie chart".to_string());
 
-        // Fusion order: a > b > c.
         let candidates = vec![
             (ctx_a.clone(), 0.9),
             (ctx_b.clone(), 0.8),
@@ -462,9 +463,8 @@ mod tests {
         .unwrap();
 
         assert_eq!(ranked.len(), 2);
-        // MockEncoder scores: a=3 (apple, pie, banana), c=2 (apple, pie), b=0.
-        assert_eq!(ranked[0].0.id_hash, ctx_a.id_hash);
-        assert_eq!(ranked[1].0.id_hash, ctx_c.id_hash);
+        assert_eq!(ranked[0].0.id, ctx_a.id);
+        assert_eq!(ranked[1].0.id, ctx_c.id);
     }
 
     #[test]
@@ -473,7 +473,6 @@ mod tests {
         let ctx_b = make_context(2, "cherry date", vec![]);
         let ctx_c = make_context(3, "apple cherry", vec![]);
 
-        // Fusion order: a > b > c.
         let candidates = vec![
             (ctx_a.clone(), 0.9),
             (ctx_b.clone(), 0.8),
@@ -481,12 +480,11 @@ mod tests {
         ];
 
         let encoder = crate::encoder::MockEncoder::new(768);
-        // max_candidates=2 limits rerank to the top-2 fusion candidates (a, b).
         let ranked = rerank_candidates("apple", &candidates, &encoder, 2, 2).unwrap();
 
         assert_eq!(ranked.len(), 2);
-        assert_eq!(ranked[0].0.id_hash, ctx_a.id_hash);
-        assert_eq!(ranked[1].0.id_hash, ctx_b.id_hash);
+        assert_eq!(ranked[0].0.id, ctx_a.id);
+        assert_eq!(ranked[1].0.id, ctx_b.id);
     }
 
     struct FailingEncoder;
@@ -528,8 +526,8 @@ mod tests {
         let ranked = rerank_candidates("q", &candidates, &encoder, candidates.len(), 2).unwrap();
 
         assert_eq!(ranked.len(), 2);
-        assert_eq!(ranked[0].0.id_hash, ctx_a.id_hash);
-        assert_eq!(ranked[1].0.id_hash, ctx_b.id_hash);
+        assert_eq!(ranked[0].0.id, ctx_a.id);
+        assert_eq!(ranked[1].0.id, ctx_b.id);
     }
 
     #[test]
@@ -547,8 +545,9 @@ mod tests {
             auto_create: 0,
             min_score: 0.0,
             source: RequestSource::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         };
-
         let result = search_context(
             &mut mmap,
             &mut header,
@@ -580,8 +579,6 @@ mod tests {
             .collect();
         assert!(l3_hashes.contains(&501));
         assert!(l3_hashes.contains(&502));
-        assert!(result.l3_previews.is_empty());
-        assert!(result.archive_refs.is_empty());
     }
 
     #[test]
@@ -599,6 +596,8 @@ mod tests {
             auto_create: 0,
             min_score: 0.0,
             source: RequestSource::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         };
 
         let result = search_context(
@@ -619,17 +618,19 @@ mod tests {
 
         assert_eq!(result.contexts.len(), 1);
         assert_eq!(common::parse_id_to_hash(&result.contexts[0].id), 102);
-        assert_eq!(result.contexts[0].title, "python web framework");
+        assert!(result.contexts[0]
+            .user_keywords
+            .join(", ")
+            .contains("python"));
     }
 
     #[test]
     fn test_search_context_route_c_by_l3_id() {
+        // ... unchanged from original
         let (_temp, mut mmap, mut header, mut file) = create_test_mmap_with_tempfile(20);
         let (mut btree, mut sparse_index, l2_meta, l1_reverse) =
             build_test_indexes(&mut mmap, &mut header, &mut file);
 
-        // Query "rust" without l3_id would hit 101 and 103.
-        // With l3_id=502 it must be restricted to contexts linked to graph 502.
         let query = SearchQuery {
             dialogue: "rust".to_string(),
             l2_id: None,
@@ -639,6 +640,8 @@ mod tests {
             auto_create: 0,
             min_score: 0.0,
             source: RequestSource::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         };
 
         let result = search_context(
@@ -681,6 +684,8 @@ mod tests {
             auto_create: 0,
             min_score: 0.0,
             source: RequestSource::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         };
 
         let result = search_context(
@@ -710,34 +715,33 @@ mod tests {
         let mut sparse_index = SparseIndex::new();
 
         let base = ContextSlot {
-            id_hash: 0,
+            id: 0,
             scene_id: 0,
             parent_id: None,
             children_ids: vec![],
             depth: 1,
-            title: "rust memory search".to_string(),
-            summary: None,
-            archive_refs: vec![],
-            l3_refs: vec![],
-            turn_count: 1,
+            user_keywords: vec!["rust memory search".to_string()],
+            user_timestamp: 0,
+            user_l4_refs: vec![],
+            user_l3_refs: vec![],
+            agent_keywords: vec![],
+            agent_timestamp: 0,
+            agent_l4_refs: vec![],
+            agent_l3_refs: vec![],
+            fused_keywords: vec![],
+            fused_summary: None,
+            centroid_page_ref: 0,
             created_at: 0,
             updated_at: 0,
             version: 1,
-            importance: 0.5,
-            activation_score: 0.5,
-            is_active: true,
-            activation_state: ActivationState::Active,
-            centroid_page_ref: 0,
-            dialogue_range: (0, 0),
-            llm_params: crate::layers::context::LlmParams::default(),
         };
 
         let ctx_depth1 = ContextSlot {
-            id_hash: 101,
+            id: 101,
             ..base.clone()
         };
         let ctx_depth3 = ContextSlot {
-            id_hash: 103,
+            id: 103,
             depth: 3,
             ..base.clone()
         };
@@ -771,12 +775,12 @@ mod tests {
 
         let score_depth1 = results
             .iter()
-            .find(|(ctx, _)| ctx.id_hash == 101)
+            .find(|(ctx, _)| ctx.id == 101)
             .map(|(_, s)| *s)
             .unwrap();
         let score_depth3 = results
             .iter()
-            .find(|(ctx, _)| ctx.id_hash == 103)
+            .find(|(ctx, _)| ctx.id == 103)
             .map(|(_, s)| *s)
             .unwrap();
 

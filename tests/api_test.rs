@@ -50,6 +50,7 @@ fn test_config(db_path: &str) -> MemHopConfig {
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
     }
+            llm_preprocess: memhop::LlmPreprocessConfig::default(),
 }
 
 // ============================================================================
@@ -72,6 +73,7 @@ fn test_open_empty_path() {
         dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
+            llm_preprocess: memhop::LlmPreprocessConfig::default(),
     };
     let result = MemHop::open(config);
     assert!(result.is_err(), "empty db_path should fail");
@@ -100,6 +102,7 @@ fn test_open_invalid_config_zero_dim() {
         dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
+            llm_preprocess: memhop::LlmPreprocessConfig::default(),
     };
     let _ = std::fs::remove_file("/tmp/memhop_test_zero_dim.meh");
     let result = MemHop::open(config);
@@ -132,6 +135,8 @@ fn test_full_lifecycle() {
             auto_create: 1,
             min_score: 0.0,
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context failed");
     assert!(!res.contexts.is_empty(), "auto_create should create L2");
@@ -153,6 +158,8 @@ fn test_full_lifecycle() {
             instant_distill: false,
             scene_id: None,
             source: Default::default(),
+                user_keywords: None,
+                agent_keywords: None,
         })
         .expect("update_memory failed");
     assert_eq!(update_res.topic_id, l2_id);
@@ -496,6 +503,8 @@ fn test_graph_query_and_delete() {
             min_score: 0.0,
 
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context failed");
     let l2_id = search_res.contexts[0].id.clone();
@@ -514,6 +523,8 @@ fn test_graph_query_and_delete() {
             instant_distill: false,
             scene_id: None,
             source: Default::default(),
+                user_keywords: None,
+                agent_keywords: None,
         })
         .expect("update_memory failed");
 
@@ -761,6 +772,8 @@ fn test_l2_l3_memory_chain() {
             min_score: 0.0,
 
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context failed");
     let search_l2_id = search_res.contexts[0].id.clone();
@@ -790,6 +803,8 @@ fn test_l2_l3_memory_chain() {
             min_score: 0.0,
 
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context with context_id failed");
 
@@ -912,6 +927,8 @@ fn test_merge_topics() {
             min_score: 0.0,
 
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context 1 failed");
     let id1 = res1.contexts[0].id.clone();
@@ -928,6 +945,8 @@ fn test_merge_topics() {
             min_score: 0.0,
 
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context 2 failed");
     let id2 = res2.contexts[0].id.clone();
@@ -972,6 +991,8 @@ fn test_error_handling() {
         min_score: 0.0,
 
         source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
     });
     // Empty dialogue search may succeed with empty results; that's acceptable
     println!("empty dialogue search: {:?}", res.is_ok());
@@ -1071,6 +1092,8 @@ fn test_agent_workflow() {
             min_score: 0.0,
 
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context failed");
     assert!(!search_res.contexts.is_empty());
@@ -1104,6 +1127,8 @@ fn test_agent_workflow() {
             instant_distill: false,
             scene_id: None,
             source: Default::default(),
+                user_keywords: None,
+                agent_keywords: None,
         })
         .expect("update_memory failed");
     println!("[Agent] Memory updated");
@@ -1165,6 +1190,8 @@ fn test_dream_with_llm() {
             min_score: 0.0,
 
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context failed");
     let topic_id = search_res.contexts[0].id.clone();
@@ -1184,6 +1211,8 @@ fn test_dream_with_llm() {
             instant_distill: false,
             scene_id: None,
             source: Default::default(),
+                user_keywords: None,
+                agent_keywords: None,
         })
         .expect("update_memory failed");
 
@@ -1297,6 +1326,8 @@ fn test_build_l3_from_meowagent() {
             min_score: 0.0,
 
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context with context_id failed");
     println!(

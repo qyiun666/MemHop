@@ -178,25 +178,34 @@ pub fn list_l6(
     Ok(result)
 }
 
-/// Add a new L6 pathway weight.
+/// Batch upsert L6 pathway weights.
+///
+/// All slots are processed in a single read-modify-write cycle.
+/// Existing entries are matched by `id_hash` and replaced;
+/// new entries are appended. Returns the number of slots processed.
 pub fn add_l6(
     mmap: &mut MmapMut,
     header: &mut FileHeader,
     btree: &BTreeIndex,
     file: &mut std::fs::File,
-    mut slot: PathwayWeightSlot,
-) -> Result<(), MemHopError> {
+    slots: Vec<PathwayWeightSlot>,
+) -> Result<usize, MemHopError> {
+    if slots.is_empty() {
+        return Ok(0);
+    }
     let mut pathways = read_pathways(mmap, header)?;
     let now = now_ms();
-    if slot.created_at == 0 {
-        slot.created_at = now;
+    for mut slot in slots {
+        if slot.created_at == 0 {
+            slot.created_at = now;
+        }
+        slot.updated_at = now;
+        pathways.retain(|p| p.id_hash != slot.id_hash);
+        pathways.push(slot);
     }
-    slot.updated_at = now;
-    pathways.retain(|p| p.id_hash != slot.id_hash);
-    pathways.push(slot);
     write_pathways(mmap, header, file, &pathways)?;
     let _ = btree;
-    Ok(())
+    Ok(pathways.len())
 }
 
 /// Increment/decrement an L6 pathway weight by delta.
@@ -245,7 +254,7 @@ mod tests {
             updated_at: 0,
             version: 1,
         };
-        add_l6(&mut mmap, &mut header, &btree, &mut file, slot).unwrap();
+        add_l6(&mut mmap, &mut header, &btree, &mut file, vec![slot]).unwrap();
 
         let got = get_l6(&mmap, &header, &btree, "0000000000001771")
             .unwrap()

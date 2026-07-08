@@ -8,13 +8,14 @@
 //! optional metadata.
 
 use crate::util::io_helpers::*;
+use serde::{Deserialize, Serialize};
 use std::io::{self, Cursor, Read, Write};
 
 // ============================================================================
 // PathwayWeightSlot
 // ============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PathwayWeightSlot {
     pub id_hash: u64,
     pub source_node: String,

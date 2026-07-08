@@ -18,37 +18,8 @@ impl MemHop {
 
     /// Get a single L2 context by ID.
     pub fn get_l2(&self, id: &str) -> Result<Option<TopicDetail>> {
-        Ok(
-            crate::query::l2_ops::get_l2(&self.mmap, &self.btree, id)?.map(|ctx| {
-                crate::query::types::TopicDetail {
-                    id: crate::shared::common::format_hash(ctx.id_hash),
-                    title: ctx.title,
-                    summary: ctx.summary,
-                    depth: ctx.depth,
-                    scene_id: ctx.scene_id,
-                    children_ids: ctx.children_ids.clone(),
-                    archive_refs: ctx
-                        .archive_refs
-                        .iter()
-                        .map(|h| crate::shared::common::format_hash(*h))
-                        .collect(),
-                    l3_refs: ctx
-                        .l3_refs
-                        .iter()
-                        .map(|h| crate::shared::common::format_hash(*h))
-                        .collect(),
-                    turn_count: ctx.turn_count,
-                    parent_id: ctx.parent_id.map(crate::shared::common::format_hash),
-                    is_active: ctx.is_active,
-                    importance: ctx.importance,
-                    activation_score: ctx.activation_score,
-                    activation_state: format!("{:?}", ctx.activation_state),
-                    created_at: ctx.created_at,
-                    updated_at: ctx.updated_at,
-                    llm_params: Some(ctx.llm_params),
-                }
-            }),
-        )
+        Ok(crate::query::l2_ops::get_l2(&self.mmap, &self.btree, id)?
+            .map(|ctx| crate::query::l2_ops::to_topic_detail(&ctx)))
     }
 
     /// Partially update an L2 context.
@@ -100,9 +71,6 @@ impl MemHop {
     }
 
     /// List the full scene tree for a given scene ID.
-    ///
-    /// Returns all nodes belonging to the scene sorted by creation time,
-    /// along with depth distribution and edge topology.
     pub fn list_scene_tree(&self, scene_id: &str) -> Result<SceneTreeResult> {
         let scene_hash = parse_id_to_hash(scene_id);
         crate::query::l2_ops::list_scene_tree(
@@ -113,33 +81,18 @@ impl MemHop {
         )
     }
 
-    /// Manually merge multiple depth-1 nodes under a scene into a new parent node.
+    /// Merge secondary scenes into a main scene.
     ///
-    /// Uses the configured LLM provider for merge summarization.
-    /// If an encoder is available, a centroid vector is computed for the merged content.
-    ///
-    /// # Arguments
-    /// * `request` - Merge request containing `node_ids` (depth-1 nodes) and `scene_id`.
-    ///
-    /// # Errors
-    /// Returns `ConfigError` if the `llm` feature is not enabled.
-    #[cfg(feature = "llm")]
+    /// All nodes from `secondary_scene_ids` have their `scene_id` changed to
+    /// `main_scene_id`.  No other metadata is modified — pure scene reassignment.
+    /// Dream pipeline handles compression later.
     pub fn merge_nodes(&mut self, request: MergeNodesRequest) -> Result<MergeNodesResult> {
-        use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
-
-        let scene_hash = parse_id_to_hash(&request.scene_id);
-        let node_hashes: Vec<u64> = request
-            .node_ids
+        let main_hash = parse_id_to_hash(&request.main_scene_id);
+        let secondary_hashes: Vec<u64> = request
+            .secondary_scene_ids
             .iter()
             .map(|id| parse_id_to_hash(id))
             .collect();
-
-        let llm = OpenAICompatibleLlmProvider::new(self.config.llm.clone());
-
-        #[cfg(feature = "grpc-encoder")]
-        let encoder = self.encoder.as_deref();
-        #[cfg(not(feature = "grpc-encoder"))]
-        let encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)> = None;
 
         crate::query::l2_ops::merge_nodes(
             &mut self.mmap,
@@ -147,21 +100,32 @@ impl MemHop {
             &mut self.btree,
             &mut self.sparse_index,
             &mut self.l2_meta,
-            &llm,
-            &node_hashes,
-            scene_hash,
+            main_hash,
+            &secondary_hashes,
             &mut self.file,
-            encoder,
         )
     }
 
-    /// Manually merge multiple depth-1 nodes under a scene into a new parent node.
-    ///
-    /// This fallback is used when the `llm` feature is disabled.
-    #[cfg(not(feature = "llm"))]
-    pub fn merge_nodes(&mut self, _request: MergeNodesRequest) -> Result<MergeNodesResult> {
-        Err(MemHopError::ConfigError(
-            "LLM feature not enabled, cannot merge nodes".to_string(),
-        ))
+    /// Create a scene.  Idempotent — returns scene_id of existing scene if name matches.
+    pub fn create_scene(&mut self, name: &str) -> Result<u64> {
+        crate::query::l2_ops::create_scene(
+            &mut self.mmap,
+            &mut self.header,
+            &mut self.btree,
+            &mut self.file,
+            name,
+        )
+    }
+
+    /// Read a scene by its hex-formatted id.
+    pub fn get_scene(&self, id: &str) -> Result<Option<(u64, String)>> {
+        let scene_id = parse_id_to_hash(id);
+        crate::query::l2_ops::get_scene(&self.mmap, &self.btree, scene_id)
+            .map(|opt| opt.map(|s| (s.scene_id, s.scene_name)))
+    }
+
+    /// List all scenes as (scene_id, scene_name) pairs.
+    pub fn list_scenes(&self) -> Result<Vec<(u64, String)>> {
+        crate::query::l2_ops::list_scenes(&self.mmap, &self.header)
     }
 }

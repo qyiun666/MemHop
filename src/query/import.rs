@@ -8,7 +8,7 @@ use crate::file::free_list::allocate_or_extend;
 use crate::file::header::FileHeader;
 use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
-use crate::layers::context::{ActivationState, ContextSlot};
+use crate::layers::context::ContextSlot;
 use crate::layers::profile::ProfileSlot;
 use crate::query::types::*;
 use crate::shared::common;
@@ -25,10 +25,21 @@ fn calculate_l2_sparse_index_data(
     mmap: &MmapMut,
     btree: &BTreeIndex,
 ) -> (Vec<String>, u32) {
-    let (mut terms, base_doc_len) = common::build_l2_sparse_terms(&ctx.title, &ctx.summary);
+    let title = if ctx.fused_keywords.is_empty() {
+        ctx.user_keywords.join(", ")
+    } else {
+        ctx.fused_keywords.join(", ")
+    };
+    let (mut terms, base_doc_len) = common::build_l2_sparse_terms(&title, &ctx.fused_summary);
 
+    let l3_refs: Vec<u64> = ctx
+        .user_l3_refs
+        .iter()
+        .chain(ctx.agent_l3_refs.iter())
+        .copied()
+        .collect();
     let mut l3_doc_len: usize = 0;
-    for &l3_id_hash in &ctx.l3_refs {
+    for &l3_id_hash in &l3_refs {
         if let Some(page_ref) = btree.search(l3_id_hash) {
             let l3_page_id = (page_ref >> 16) as u32;
             let l3_offset = (l3_page_id as usize) * PAGE_SIZE + 32;
@@ -279,22 +290,24 @@ fn import_l2_topics(
                             let mut ctx = ContextSlot::deserialize(&mmap[offset..])
                                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-                            ctx.title = item.title.clone();
-                            ctx.summary = item.summary.clone();
+                            ctx.fused_keywords = vec![item.title.clone()];
+                            ctx.fused_summary = item.summary.clone();
 
                             if let Some(l3_h) = l3_hash {
-                                if !ctx.l3_refs.contains(&l3_h) {
-                                    ctx.l3_refs.push(l3_h);
+                                if !ctx.user_l3_refs.contains(&l3_h)
+                                    && !ctx.agent_l3_refs.contains(&l3_h)
+                                {
+                                    ctx.agent_l3_refs.push(l3_h);
                                 }
                             }
 
                             ctx.updated_at = now_ms;
                             ctx.version += 1;
 
-                            sparse_index.remove_document(ctx.id_hash);
+                            sparse_index.remove_document(ctx.id);
                             let (terms, doc_len) =
                                 calculate_l2_sparse_index_data(&ctx, mmap, btree);
-                            sparse_index.add_document(ctx.id_hash, terms, doc_len);
+                            sparse_index.add_document(ctx.id, terms, doc_len);
 
                             let data_bytes = ctx
                                 .serialize()
@@ -319,32 +332,32 @@ fn import_l2_topics(
                         let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
                         let offset = (page_id as usize) * PAGE_SIZE + 32;
 
-                        let mut l3_refs = Vec::new();
+                        let mut user_l3_refs = Vec::new();
+                        let mut agent_l3_refs = Vec::new();
                         if let Some(l3_h) = l3_hash {
-                            l3_refs.push(l3_h);
+                            agent_l3_refs.push(l3_h);
                         }
 
                         let ctx = ContextSlot {
-                            id_hash,
-                            title: item.title.clone(),
-                            summary: item.summary.clone(),
+                            id: id_hash,
+                            fused_keywords: vec![item.title.clone()],
+                            fused_summary: item.summary.clone(),
                             children_ids: vec![],
                             scene_id: 0,
                             depth: 1,
-                            archive_refs: vec![],
-                            l3_refs,
-                            turn_count: 0,
+                            user_keywords: vec![],
+                            user_timestamp: now_ms,
+                            user_l4_refs: vec![],
+                            user_l3_refs,
+                            agent_keywords: vec![],
+                            agent_timestamp: now_ms,
+                            agent_l4_refs: vec![],
+                            agent_l3_refs,
                             parent_id: None,
+                            centroid_page_ref: 0,
                             created_at: now_ms,
                             updated_at: now_ms,
-                            version: 1,
-                            importance: 0.5,
-                            activation_score: 0.0,
-                            is_active: false,
-                            activation_state: ActivationState::Dormant,
-                            centroid_page_ref: 0,
-                            dialogue_range: (now_ms, now_ms),
-                            llm_params: crate::layers::context::LlmParams::default(),
+                            version: 4,
                         };
 
                         let data_bytes = ctx
@@ -1030,26 +1043,25 @@ pub fn build_l3_hypergraph_from_path(
     );
 
     let ctx = ContextSlot {
-        id_hash: l2_id_hash,
-        title: l2_title.clone(),
-        summary: Some(l2_summary.clone()),
+        id: l2_id_hash,
+        fused_keywords: vec![l2_title.clone()],
+        fused_summary: Some(l2_summary.clone()),
         children_ids: vec![],
         scene_id: 0,
         depth: 1,
-        archive_refs: vec![],
-        l3_refs: vec![graph_id],
-        turn_count: 0,
+        user_keywords: vec![],
+        user_timestamp: now_ms,
+        user_l4_refs: vec![],
+        user_l3_refs: vec![],
+        agent_keywords: vec![],
+        agent_timestamp: now_ms,
+        agent_l4_refs: vec![],
+        agent_l3_refs: vec![graph_id],
         parent_id: None,
+        centroid_page_ref: 0,
         created_at: now_ms,
         updated_at: now_ms,
-        version: 1,
-        importance: 0.7,
-        activation_score: 0.0,
-        is_active: false,
-        activation_state: ActivationState::Dormant,
-        centroid_page_ref: 0,
-        dialogue_range: (now_ms, now_ms),
-        llm_params: crate::layers::context::LlmParams::default(),
+        version: 4,
     };
 
     let ctx_data = ctx

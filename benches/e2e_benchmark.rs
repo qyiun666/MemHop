@@ -15,7 +15,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 mod common;
-use common::{kill_python_meowvec, spawn_python_meowvec};
+use common::{cleanup_global_meowvec, ensure_meowvec_running};
 
 const ENCODER_ADDR: &str = "http://127.0.0.1:27110";
 
@@ -27,6 +27,8 @@ fn make_config(path: PathBuf) -> MemHopConfig {
         crystal_path: None,
         llm: Default::default(),
         auto_dream_on_evict: false,
+        auto_dream_archive_threshold: 20,
+        auto_dream_summary_bytes: 2048,
         ivf_initial_k: 16,
         search_weights: None,
         decay_config: None,
@@ -99,6 +101,7 @@ fn run_e2e_workflow(n_topics: usize) {
             summary: Some("MemHop introduction".to_string()),
             action_chain: None,
             instant_distill: false,
+            scene_id: None,
             source: RequestSource::default(),
         })
         .expect("update_memory failed");
@@ -202,7 +205,7 @@ fn e2e_workflow(c: &mut Criterion) {
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(8));
 
-    for n in [10] {
+    for n in [10, 100] {
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, &n| {
             b.iter(|| run_e2e_workflow(n));
         });
@@ -214,9 +217,7 @@ fn e2e_workflow(c: &mut Criterion) {
 criterion_group!(benches, e2e_workflow);
 
 fn main() {
-    let mut child = spawn_python_meowvec(27110);
-
+    ensure_meowvec_running(27110);
     benches();
-
-    kill_python_meowvec(&mut child);
+    cleanup_global_meowvec();
 }

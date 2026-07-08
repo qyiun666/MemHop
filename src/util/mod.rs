@@ -153,6 +153,7 @@ pub enum PageType {
     BTreeLeaf = 0x11,      // B-tree leaf node
     L1ReverseIndex = 0x12, // L1 reverse index page
     PathwayWeight = 0x13,  // L6 procedural memory pathway weight page
+    Scene = 0x14,          // L2 scene metadata
     Free = 0x20,           // Free page
     Overflow = 0xFF,       // Overflow page
 }
@@ -183,6 +184,7 @@ impl PageType {
             0x11 => Some(PageType::BTreeLeaf),
             0x12 => Some(PageType::L1ReverseIndex),
             0x13 => Some(PageType::PathwayWeight),
+            0x14 => Some(PageType::Scene),
             0x20 => Some(PageType::Free),
             0xFF => Some(PageType::Overflow),
             _ => None,

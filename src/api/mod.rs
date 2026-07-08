@@ -7,6 +7,7 @@ mod action_ops;
 mod archive_ops;
 mod checkpoint;
 mod crud_ops;
+mod diagnostic_ops;
 mod dream_ops;
 mod graph_ops;
 mod import_ops;

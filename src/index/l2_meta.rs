@@ -54,20 +54,32 @@ pub struct L2Meta {
 
 impl L2Meta {
     fn from_context(page_ref: u64, ctx: &ContextSlot) -> Self {
+        let title = if ctx.fused_keywords.is_empty() {
+            ctx.user_keywords.join(", ")
+        } else {
+            ctx.fused_keywords.join(", ")
+        };
+        let l3_refs: Vec<u64> = ctx
+            .user_l3_refs
+            .iter()
+            .chain(ctx.agent_l3_refs.iter())
+            .copied()
+            .collect();
+        let archive_count = ctx.user_l4_refs.len() + ctx.agent_l4_refs.len();
         Self {
-            id_hash: ctx.id_hash,
+            id_hash: ctx.id,
             page_ref,
-            title: ctx.title.clone(),
-            summary: ctx.summary.clone(),
+            title,
+            summary: ctx.fused_summary.clone(),
             depth: ctx.depth,
             scene_id: ctx.scene_id,
             children_ids: ctx.children_ids.clone(),
-            status: ctx.activation_state.into(),
-            activation_score: ctx.activation_score,
+            status: ActivationStatus::Dormant,
+            activation_score: 0.0,
             vector_offset: ctx.centroid_page_ref,
-            turn_count: ctx.turn_count,
-            archive_count: ctx.archive_refs.len(),
-            l3_refs: ctx.l3_refs.clone(),
+            turn_count: ctx.children_ids.len() as u32,
+            archive_count,
+            l3_refs,
             timestamp: ctx.updated_at.max(ctx.created_at).max(0) as u64,
         }
     }
@@ -139,21 +151,21 @@ impl L2MetaIndex {
     /// Update or insert metadata from a full `ContextSlot`.
     pub fn update_from_context(&mut self, ctx: &ContextSlot) {
         // Remove old scene index entries if updating existing entry
-        if let Some(old) = self.entries.get(&ctx.id_hash) {
+        if let Some(old) = self.entries.get(&ctx.id) {
             Self::remove_from_scene_index_inner(
                 &mut self.by_scene,
                 &mut self.by_scene_depth,
                 old.scene_id,
                 old.depth,
-                ctx.id_hash,
+                ctx.id,
             );
         }
 
         let page_ref = self
             .entries
-            .get(&ctx.id_hash)
+            .get(&ctx.id)
             .map(|m| m.page_ref)
-            .unwrap_or_else(|| (ctx.id_hash) << 16); // placeholder; caller should set via build
+            .unwrap_or_else(|| (ctx.id) << 16); // placeholder; caller should set via build
         let meta = L2Meta::from_context(page_ref, ctx);
         let scene_id = meta.scene_id;
         let depth = meta.depth;
@@ -299,26 +311,25 @@ mod tests {
 
     fn make_context(id_hash: u64, title: &str, l3_refs: Vec<u64>) -> ContextSlot {
         ContextSlot {
-            id_hash,
+            id: id_hash,
             scene_id: 0,
             parent_id: None,
             children_ids: vec![],
             depth: 1,
-            title: title.to_string(),
-            summary: None,
-            archive_refs: Vec::new(),
-            l3_refs,
-            turn_count: 0,
+            user_keywords: vec![title.to_string()],
+            user_timestamp: 1000,
+            user_l4_refs: Vec::new(),
+            user_l3_refs: l3_refs,
+            agent_keywords: vec![],
+            agent_timestamp: 0,
+            agent_l4_refs: Vec::new(),
+            agent_l3_refs: Vec::new(),
+            fused_keywords: vec![],
+            fused_summary: None,
+            centroid_page_ref: (id_hash + 1000) << 16,
             created_at: 1000,
             updated_at: 2000,
-            version: 1,
-            importance: 0.5,
-            activation_score: 0.7,
-            is_active: true,
-            activation_state: ActivationState::Active,
-            centroid_page_ref: (id_hash + 1000) << 16,
-            dialogue_range: (0, 0),
-            llm_params: crate::layers::context::LlmParams::default(),
+            version: 4,
         }
     }
 
@@ -344,8 +355,8 @@ mod tests {
         let meta = l2_meta.get(101).unwrap();
         assert_eq!(meta.title, "rust memory search");
         assert_eq!(meta.l3_refs, vec![501]);
-        assert_eq!(meta.status, ActivationStatus::Active);
-        assert_eq!(meta.activation_score, 0.7);
+        assert_eq!(meta.status, ActivationStatus::Dormant);
+        assert_eq!(meta.activation_score, 0.0);
         assert_eq!(meta.vector_offset, (101 + 1000) << 16);
         assert_eq!(meta.timestamp, 2000);
     }
@@ -436,6 +447,8 @@ mod tests {
         idx.update_from_context(&ctx);
         assert_eq!(idx.get(42).unwrap().title, "test");
 
+        let (user_l3, agent_l3): (Vec<u64>, Vec<u64>) = (vec![], vec![]);
+        let l3_refs: Vec<u64> = user_l3.into_iter().chain(agent_l3.into_iter()).collect();
         let meta = L2Meta {
             id_hash: 42,
             page_ref: 1 << 16,
@@ -449,7 +462,7 @@ mod tests {
             vector_offset: 0,
             turn_count: 0,
             archive_count: 0,
-            l3_refs: vec![],
+            l3_refs,
             timestamp: 0,
         };
         idx.update(meta);

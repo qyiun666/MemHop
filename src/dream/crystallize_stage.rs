@@ -3,7 +3,7 @@
 
 //! Stage: L5 Crystallization — generate procedural knowledge crystals from repeated patterns.
 
-use crate::dream::llm::{LlmProvider, Pattern};
+use crate::dream::llm::{ChainData, CrystalDef};
 use crate::file::free_list::free_page;
 use crate::file::header::FileHeader;
 use crate::file::page::{allocate_page, read_page_header, write_page_data};
@@ -15,15 +15,9 @@ use crate::MemHopError;
 use memmap2::MmapMut;
 use std::fs::File;
 
-/// Crystallize repeated patterns into L5 action chains using LLM.
-pub fn crystallize_patterns(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
-    llm: &dyn LlmProvider,
-    file: &mut File,
-) -> Result<Vec<String>, MemHopError> {
-    let mut existing_chains: Vec<ActionChainSlot> = Vec::new();
+/// Extract existing ActionChain slots for the consolidation input.
+pub fn extract_existing_chains(mmap: &MmapMut, header: &FileHeader) -> Vec<ChainData> {
+    let mut chains: Vec<ChainData> = Vec::new();
     let page_count = header.page_count;
 
     for page_id in 18..page_count {
@@ -31,55 +25,49 @@ pub fn crystallize_patterns(
         if offset + PAGE_SIZE > mmap.len() {
             break;
         }
-
         if let Ok(page_header) = read_page_header(&mmap[..], page_id) {
             if page_header.page_type != PageType::ActionChain as u16 {
                 continue;
             }
-
             if let Ok(chain) = ActionChainSlot::deserialize(&mmap[offset + 32..]) {
-                existing_chains.push(chain);
+                chains.push(ChainData {
+                    title: chain.title.clone(),
+                    trigger: chain.trigger.clone(),
+                    trigger_count: chain.trigger_count,
+                    confidence: chain.confidence,
+                });
             }
         }
     }
 
-    if existing_chains.is_empty() {
-        return Ok(vec![]);
-    }
+    chains.sort_by_key(|c| std::cmp::Reverse(c.trigger_count));
+    chains.truncate(20);
+    chains
+}
 
-    existing_chains.sort_by_key(|c| c.created_at);
-    let n = std::cmp::min(20, existing_chains.len());
-    let recent_chains = &existing_chains[existing_chains.len() - n..];
+/// Write pre-computed crystals from the consolidated LLM call into L5 action chains.
+pub fn apply_precomputed_crystals(
+    crystals: &[CrystalDef],
+    mmap: &mut MmapMut,
+    header: &mut FileHeader,
+    btree: &mut BTreeIndex,
+    file: &mut File,
+) -> Result<Vec<String>, MemHopError> {
+    let mut new_ids = Vec::new();
 
-    let patterns: Vec<Pattern> = recent_chains
-        .iter()
-        .map(|c| Pattern {
-            description: format!("{}: {}", c.title, c.trigger),
-            frequency: c.trigger_count.max(1),
-            confidence: c.confidence,
-        })
-        .collect();
-
-    let mut new_crystal_ids = Vec::new();
-
-    for pattern in &patterns {
-        let crystal_def = match llm.generate_crystal(pattern) {
-            Ok(crystal) => crystal,
-            Err(e) => {
-                tracing::warn!("LLM generate_crystal failed, using fallback: {:?}", e);
-                llm.fallback_generate_crystal(pattern)
-            }
-        };
-
+    for crystal in crystals {
         let now = chrono::Utc::now().timestamp_millis();
-        let crystal_chain_id = hash_id(&format!("crystal_{}_{}", crystal_def.condition, now));
+        let crystal_chain_id = hash_id(&format!("crystal_{}_{}", crystal.condition, now));
 
         let chain = ActionChainSlot {
             id_hash: crystal_chain_id,
-            title: format!("crystal_{}", crystal_def.condition),
-            trigger: crystal_def.condition.clone(),
+            title: format!(
+                "crystal_{}",
+                crystal.condition.chars().take(30).collect::<String>()
+            ),
+            trigger: crystal.condition.clone(),
             status: ChainStatus::Draft,
-            confidence: crystal_def.confidence,
+            confidence: crystal.confidence,
             success_rate: 0.0,
             trigger_count: 0,
             last_triggered: 0,
@@ -89,13 +77,14 @@ pub fn crystallize_patterns(
         };
 
         let page_id = allocate_page(mmap, header, PageType::ActionChain, 5, 0, file)?;
-        let serialized = chain.serialize()?;
+        let serialized = chain
+            .serialize()
+            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
         write_page_data(mmap, page_id, &serialized)?;
 
-        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-        btree.insert(crystal_chain_id, page_ref);
+        btree.insert(crystal_chain_id, (page_id as u64) << 16);
 
-        for (i, step_def) in crystal_def.steps.iter().enumerate() {
+        for (i, step_def) in crystal.steps.iter().enumerate() {
             let step_id_hash = hash_id(&format!("step_{}_{}_{}", crystal_chain_id, i, now));
             let step = ActionStep {
                 id_hash: step_id_hash,
@@ -105,21 +94,18 @@ pub fn crystallize_patterns(
                 parameters: step_def.parameters.clone(),
                 created_at: now,
             };
-
             let step_page_id = allocate_page(mmap, header, PageType::ActionStep, 5, 0, file)?;
             let step_data = step
                 .serialize()
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
             write_page_data(mmap, step_page_id, &step_data)?;
-
-            let step_page_ref = crate::file::page::encode_page_ref(step_page_id, 0);
-            btree.insert(step_id_hash, step_page_ref);
+            btree.insert(step_id_hash, (step_page_id as u64) << 16);
         }
 
-        new_crystal_ids.push(format!("{:016x}", crystal_chain_id));
+        new_ids.push(crate::shared::common::format_hash(crystal_chain_id));
     }
 
-    Ok(new_crystal_ids)
+    Ok(new_ids)
 }
 
 /// Activate a crystal by validating quality and flipping status to Active.
@@ -349,57 +335,6 @@ mod tests {
     fn read_chain(mmap: &MmapMut, page_id: u32) -> ActionChainSlot {
         let offset = (page_id as usize) * PAGE_SIZE;
         ActionChainSlot::deserialize(&mmap[offset + 32..]).unwrap()
-    }
-
-    #[test]
-    fn test_crystallize_patterns_empty() {
-        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(50);
-        let llm = OpenAICompatibleLlmProvider::new(LlmConfig {
-            api_url: "https://api.example.com/v1/chat/completions".to_string(),
-            api_key: "test-key".to_string(),
-            model: "test-model".to_string(),
-            ..Default::default()
-        });
-
-        let result = crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm, &mut file);
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap().len(), 0);
-    }
-
-    #[test]
-    fn test_crystallize_fallback_no_llm() {
-        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
-        let now = chrono::Utc::now().timestamp_millis();
-
-        let existing = ActionChainSlot {
-            id_hash: hash_id("fallback_chain"),
-            title: "fallback".to_string(),
-            trigger: "when user asks Rust then provide support".to_string(),
-            status: ChainStatus::Active,
-            confidence: 0.6,
-            success_rate: 0.5,
-            trigger_count: 3,
-            last_triggered: now - 1000,
-            created_at: now - 2000,
-            updated_at: now - 1000,
-            version: 1,
-        };
-        write_chain_slot(&mut mmap, &mut header, &mut btree, existing, &mut file);
-
-        let llm = OpenAICompatibleLlmProvider::new(LlmConfig {
-            api_url: "https://api.example.com/v1/chat/completions".to_string(),
-            api_key: "test-key".to_string(),
-            model: "test-model".to_string(),
-            ..Default::default()
-        });
-        let result =
-            crystallize_patterns(&mut mmap, &mut header, &mut btree, &llm, &mut file).unwrap();
-        assert_eq!(result.len(), 1);
-
-        let crystal_id = u64::from_str_radix(&result[0], 16).unwrap();
-        let steps = count_steps_for_chain(&mmap, &header, crystal_id);
-        assert_eq!(steps.len(), 1);
-        assert_eq!(steps[0].action, "provide support");
     }
 
     #[test]

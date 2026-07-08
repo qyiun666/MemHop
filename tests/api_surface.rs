@@ -14,6 +14,7 @@ fn make_config(path: std::path::PathBuf) -> MemHopConfig {
     let mut config = MemHopConfig::new(path, 1024);
     config.encoder_grpc_addr = None;
     config
+            llm_preprocess: memhop::LlmPreprocessConfig::default(),
 }
 
 fn create_topic(db: &mut MemHop, dialogue: &str) -> String {
@@ -26,6 +27,8 @@ fn create_topic(db: &mut MemHop, dialogue: &str) -> String {
         auto_create: 1,
         min_score: 0.0,
         source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
     })
     .unwrap()
     .contexts
@@ -57,6 +60,8 @@ fn api_surface_is_reachable() {
             auto_create: 0,
             min_score: 0.0,
             source: Default::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .unwrap();
 
@@ -70,6 +75,8 @@ fn api_surface_is_reachable() {
             instant_distill: false,
             scene_id: None,
             source: Default::default(),
+                user_keywords: None,
+                agent_keywords: None,
         })
         .unwrap();
 
@@ -122,6 +129,8 @@ fn api_surface_is_reachable() {
     let _ = db.search_l4(L4SearchQuery {
         recent: Some(5),
         ..Default::default()
+            llm_keywords: None,
+            enable_llm_preprocess: false,
     });
 
     // API-9 L5 CRUD
