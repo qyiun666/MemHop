@@ -5,11 +5,10 @@
 
 use criterion::{black_box, criterion_group, BenchmarkId, Criterion};
 use memhop::{
-    ImportData, ImportMode, ImportRequest, KnowledgeImportItem, KnowledgeListQuery, L4SearchQuery,
+    ArchiveQuery, ImportData, ImportMode, ImportRequest, KnowledgeImportItem, KnowledgeListQuery,
     MemHop, MemHopConfig, RequestSource, SearchQuery, TargetLayer, TopicListQuery, UpdateL2Fields,
-    UpdateProfileRequest, UpdateRequest,
+    UpdateRequest,
 };
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -46,35 +45,13 @@ fn run_e2e_workflow(n_topics: usize) {
     let path = dir.path().join("e2e.meh");
     let mut db = MemHop::open(make_config(path)).expect("open failed");
 
-    // 1. Update L0 profile
-    let mut prefs = HashMap::new();
-    prefs.insert("theme".to_string(), "dark".to_string());
-    let _profile = db
-        .update_profile(UpdateProfileRequest {
-            name: Some("BenchAgent".to_string()),
-            role: Some("benchmark runner".to_string()),
-            personality: None,
-            worldview: None,
-            preferences: Some(prefs),
-            lexicon: None,
-            style_traits: None,
-            emotion_patterns: None,
-        })
-        .expect("update_profile failed");
-
-    // 2. Seed topics via search_memory with auto_create
+    // 1. Seed topics via search_memory with auto_create (profile update removed in v0.57+)
     for i in 0..n_topics {
         let _ = db.search_context(SearchQuery {
             dialogue: format!("end-to-end benchmark topic number {}", i),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-            auto_create: 1,
-            min_score: 0.0,
-            source: RequestSource::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         });
     }
 
@@ -83,14 +60,8 @@ fn run_e2e_workflow(n_topics: usize) {
         .search_context(SearchQuery {
             dialogue: "agent workflow orchestration benchmark".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-            auto_create: 1,
-            min_score: 0.0,
-            source: RequestSource::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .expect("search_context failed");
     let topic_id = search_res
@@ -174,11 +145,14 @@ fn run_e2e_workflow(n_topics: usize) {
 
     // Search L4 archives
     let _archives = db
-        .search_l4(L4SearchQuery {
-            recent: Some(10),
-            ..Default::default()
+        .query_archives(ArchiveQuery {
+            page: 1,
+            page_size: 10,
+            topic_id: None,
+            keyword: None,
+            time_range: None,
         })
-        .expect("search_l4 failed");
+        .expect("query_archives failed");
     black_box(_archives.len());
 
     // Read L0 profile
@@ -193,15 +167,12 @@ fn run_e2e_workflow(n_topics: usize) {
         .unwrap_or_default();
     let _l3 = db.l3_query(&graph_id, "MATCH (n) LIMIT 10", 1);
 
-    // 8. Session operations
-    db.activate_topic(&topic_id_for_detail, Some(300_000));
-    let _count = db.session_count();
-    black_box(_count);
-    let _empty = db.sessions_empty();
-    black_box(_empty);
+    // 8. Session operations (activate_topic is now internal; use session_status)
+    let status = db.session_status();
+    black_box(status.count);
+    black_box(status.is_empty);
 
-    // 9. Sync to disk, then close
-    db.sync().expect("sync failed");
+    // 9. Close
     db.close().expect("close failed");
 }
 

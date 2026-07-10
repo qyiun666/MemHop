@@ -6,6 +6,7 @@
 
 # Rust
 /target/
+/tools/
 *.so
 *.dylib
 *.pyd
@@ -44,9 +45,6 @@ env/
 # Design docs & API docs (not for public repo)
 docs/
 deliverables/
-API.md
-API_NEI.md
-API_NEW.md
 
 # Screenshots
 *.png

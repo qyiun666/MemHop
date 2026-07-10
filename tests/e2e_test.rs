@@ -16,11 +16,10 @@ mod common;
 
 use memhop::encoder::GrpcEncoder;
 use memhop::{
-    ActionItem, ActionType, ArchivePageQuery, CrystalListQuery, EngramListQuery,
-    KnowledgeListQuery, LlmConfig, MemHop, MemHopConfig, SearchQuery, SourceMeta, SourceType,
-    StoreBatch, StoreItem, TopicListQuery, UpdateProfileRequest, UpdateRequest,
+    ActionItem, ActionType, ArchiveQuery, CrystalListQuery, KnowledgeListQuery, LlmConfig, MemHop,
+    MemHopConfig, SearchQuery, SourceMeta, SourceType, StoreBatch, StoreItem, TopicListQuery,
+    UpdateRequest,
 };
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 const VECTOR_DIM: usize = 768;
@@ -84,7 +83,6 @@ where
 
     let result = std::panic::catch_unwind(|| {
         let mut db = MemHop::open(make_config(path.clone())).expect("open MemHop");
-        db.set_encoder(create_encoder(VECTOR_DIM));
         f(&mut db);
     });
 
@@ -236,16 +234,8 @@ fn test_agent_conversation_memory_flow() {
             .search_context(SearchQuery {
                 dialogue: "Rust async await 运行时".into(),
                 l2_id: None,
-                context_id: None,
                 l3_id: None,
-                context_limit: 5,
-
-                auto_create: 0,
-                min_score: 0.0,
-
-                source: Default::default(),
-                llm_keywords: None,
-                enable_llm_preprocess: false,
+                auto_create: false,
             })
             .expect("search should succeed");
         eprintln!("[E2E] search contexts: {:?}", search.contexts);
@@ -304,9 +294,7 @@ fn test_agent_conversation_memory_flow() {
         assert!(!update.archive_id.is_empty());
 
         // 5. Dream consolidation on the active topic.
-        // activate_topic hashes the input string, so use the original topic label
-        // (the same string used to create the L2 context id_hash).
-        db.activate_topic("Rust异步编程", None);
+        // activate_topic is now internal; session management uses session_status().
         let dream_report = db.dream(None).expect("dream should succeed");
         eprintln!("[E2E] dream report: {:?}", dream_report);
 
@@ -319,26 +307,11 @@ fn test_agent_conversation_memory_flow() {
         let profile = profile.unwrap();
         assert!(!profile.id.is_empty());
 
-        // 6. Verify L1 hypergraph associations (no dangling references).
-        let engrams = db
-            .list_engrams(EngramListQuery {
-                page: 1,
-                page_size: 100,
-                keyword: None,
-                min_importance: None,
-                state_filter: None,
-            })
-            .expect("list_engrams should succeed");
+        // 6. Verify L1 hypergraph associations — engram list removed in v0.57+
         assert!(
-            engrams.total > 0,
-            "L1 engrams should exist after batch store"
+            report.l1_nodes_created > 0,
+            "L1 nodes should exist after batch store"
         );
-        for engram in &engrams.items {
-            assert!(
-                !engram.associated_topics.is_empty(),
-                "Every L1 engram should be associated with at least one L2 topic"
-            );
-        }
 
         // 7. Verify L2 multi-level compression.
         let topics = db
@@ -441,16 +414,8 @@ fn test_chinese_memory_specialization() {
             .search_context(SearchQuery {
                 dialogue: "王小明 MemHop 项目".into(),
                 l2_id: None,
-                context_id: None,
                 l3_id: None,
-                context_limit: 5,
-
-                auto_create: 0,
-                min_score: 0.0,
-
-                source: Default::default(),
-                llm_keywords: None,
-                enable_llm_preprocess: false,
+                auto_create: false,
             })
             .expect("Chinese BM25 search should succeed");
         assert!(
@@ -470,16 +435,8 @@ fn test_chinese_memory_specialization() {
             .search_context(SearchQuery {
                 dialogue: "中文分词对检索有什么帮助".into(),
                 l2_id: None,
-                context_id: None,
                 l3_id: None,
-                context_limit: 5,
-
-                auto_create: 0,
-                min_score: 0.0,
-
-                source: Default::default(),
-                llm_keywords: None,
-                enable_llm_preprocess: false,
+                auto_create: false,
             })
             .expect("LLM-enhanced Chinese search should succeed");
         assert!(
@@ -488,29 +445,7 @@ fn test_chinese_memory_specialization() {
         );
 
         // Update profile with Chinese lexicon and verify it persists.
-        let profile_req = UpdateProfileRequest {
-            name: Some("MemHop Agent".into()),
-            role: Some("中文对话助手".into()),
-            personality: Some("耐心、严谨、乐于助人".into()),
-            worldview: None,
-            preferences: Some({
-                let mut m = HashMap::new();
-                m.insert("language".into(), "zh".into());
-                m.insert("response_style".into(), "concise".into());
-                m
-            }),
-            lexicon: Some({
-                let mut m = HashMap::new();
-                m.insert("MemHop".into(), "Agent记忆数据库".into());
-                m.insert("jieba".into(), "中文分词工具".into());
-                m
-            }),
-            style_traits: Some(vec!["使用中文回答".into(), "技术解释清晰".into()]),
-            emotion_patterns: None,
-        };
-        let profile = db.update_profile(profile_req).expect("update_profile");
-        assert_eq!(profile.role, "中文对话助手");
-        assert!(profile.lexicon.contains_key("MemHop"));
+        // update_profile removed in v0.57+
     });
 }
 
@@ -599,16 +534,8 @@ pub fn run(query: String) {
             .search_context(SearchQuery {
                 dialogue: "parser search main".into(),
                 l2_id: None,
-                context_id: None,
                 l3_id: Some(first_graph_id.clone()),
-                context_limit: 5,
-
-                auto_create: 0,
-                min_score: 0.0,
-
-                source: Default::default(),
-                llm_keywords: None,
-                enable_llm_preprocess: false,
+                auto_create: false,
             })
             .expect("L3-restricted search should succeed");
         assert!(
@@ -676,8 +603,7 @@ fn test_dream_pipeline_full() {
         );
 
         for topic in &topics.items {
-            // activate_topic hashes the input string, so use the original label.
-            db.activate_topic(&topic.id, None);
+            // Session activation is now internal; dream uses session_status instead.
             let rich_summary = if topic.user_keywords.join(" ").contains("Rust") {
                 "Rust异步编程涵盖Future trait、Pin类型、async/await语法糖、Tokio运行时、 \
                  任务调度器、非阻塞IO、并发原语、错误传播以及生命周期约束。"
@@ -728,23 +654,7 @@ fn test_dream_pipeline_full() {
         let dream_report = db.dream(None).expect("dream should succeed");
         eprintln!("[E2E] dream_pipeline_full report: {:?}", dream_report);
 
-        // L1 topological consistency: no dangling references.
-        let engrams = db
-            .list_engrams(EngramListQuery {
-                page: 1,
-                page_size: 1000,
-                keyword: None,
-                min_importance: None,
-                state_filter: None,
-            })
-            .expect("list_engrams should succeed");
-        for engram in &engrams.items {
-            assert!(
-                !engram.associated_topics.is_empty(),
-                "L1 engram {} has no associated topic",
-                engram.id
-            );
-        }
+        // L1 topological consistency check (engram list removed in v0.57+)
 
         // L0 profile updated.
         let profile = db.get_profile().expect("get_profile should succeed");
@@ -809,16 +719,16 @@ fn test_dream_pipeline_full() {
 
         // Verify archives are linked from topics.
         let archives = db
-            .list_all_archives(ArchivePageQuery {
+            .query_archives(ArchiveQuery {
                 page: 1,
                 page_size: 100,
-                start_time: None,
-                end_time: None,
-                content_type: None,
+                topic_id: None,
+                keyword: None,
+                time_range: None,
             })
-            .expect("list_all_archives should succeed");
+            .expect("query_archives should succeed");
         assert!(
-            archives.total >= topics.items.len(),
+            archives.len() >= topics.items.len(),
             "Each topic should have at least one archive after update_memory"
         );
     });

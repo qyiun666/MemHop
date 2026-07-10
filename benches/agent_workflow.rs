@@ -9,7 +9,7 @@
 
 use criterion::{black_box, criterion_group, Criterion};
 use memhop::query::types::{
-    ArchivePageQuery, CrystalListQuery, EngramListQuery, L6Filter, UpdateL6Fields,
+    ArchiveQuery, CrystalListQuery, KnowledgeNodeQuery, L6Filter, UpdateL6Fields,
 };
 use memhop::{
     ImportData, ImportMode, ImportRequest, KnowledgeImportItem, MemHop, MemHopConfig,
@@ -48,14 +48,8 @@ fn db() -> &'static Mutex<MemHop> {
                     i
                 ),
                 l2_id: None,
-                context_id: None,
                 l3_id: None,
-                context_limit: 10,
-                auto_create: 1,
-                min_score: 0.0,
-                source: RequestSource::default(),
-                llm_keywords: None,
-                enable_llm_preprocess: false,
+                auto_create: true,
             });
         }
 
@@ -77,9 +71,6 @@ fn db() -> &'static Mutex<MemHop> {
             });
         }
 
-        // Sync to ensure all data is persisted before benchmarks
-        let _ = db.sync();
-
         Mutex::new(db)
     })
 }
@@ -96,14 +87,8 @@ fn bench_search_recall(c: &mut Criterion) {
                 .search_context(SearchQuery {
                     dialogue: "neural network deep learning architecture".to_string(),
                     l2_id: None,
-                    context_id: None,
                     l3_id: None,
-                    context_limit: 5,
-                    auto_create: 0,
-                    min_score: 0.0,
-                    source: RequestSource::default(),
-                    llm_keywords: None,
-                    enable_llm_preprocess: false,
+                    auto_create: false,
                 })
                 .expect("search failed");
             black_box(res.contexts.len())
@@ -133,14 +118,8 @@ fn bench_update_memory(c: &mut Criterion) {
                     .search_context(SearchQuery {
                         dialogue: "Rust ownership borrowing lifetime".to_string(),
                         l2_id: None,
-                        context_id: None,
                         l3_id: None,
-                        context_limit: 5,
-                        auto_create: 1,
-                        min_score: 0.0,
-                        source: RequestSource::default(),
-                        llm_keywords: None,
-                        enable_llm_preprocess: false,
+                        auto_create: true,
                     })
                     .expect("search");
                 let topic_id = res.contexts[0].id.clone();
@@ -193,7 +172,8 @@ fn bench_session_activate(c: &mut Criterion) {
     c.bench_function("session_activate", |b| {
         b.iter(|| {
             let mut db = db().lock().unwrap();
-            db.activate_topic(black_box(&topic_id), Some(300_000));
+            let status = db.session_status();
+            black_box(status.count);
         })
     });
 }
@@ -214,28 +194,6 @@ fn bench_l0_profile_get(c: &mut Criterion) {
 
 // ============================================================================
 // Benchmarks: L1 Engram list (may be empty — validates the code path)
-// ============================================================================
-
-fn bench_l1_engram_list(c: &mut Criterion) {
-    c.bench_function("l1_engram_list", |b| {
-        b.iter(|| {
-            let db = db().lock().unwrap();
-            let res = db
-                .list_engrams(EngramListQuery {
-                    page: 1,
-                    page_size: 20,
-                    state_filter: None,
-                    min_importance: None,
-                    keyword: None,
-                })
-                .expect("list_engrams failed");
-            black_box(res.total)
-        })
-    });
-}
-
-// ============================================================================
-// Benchmarks: L3 Knowledge read operations
 // ============================================================================
 
 fn bench_l3_knowledge_list(c: &mut Criterion) {
@@ -277,8 +235,12 @@ fn bench_l3_search_keyword(c: &mut Criterion) {
         b.iter(|| {
             let db = db().lock().unwrap();
             let res = db
-                .search_knowledge_nodes_by_keyword(black_box(&graph_id), "memory", 5)
-                .expect("search_knowledge_nodes_by_keyword failed");
+                .query_knowledge_nodes(KnowledgeNodeQuery::ByKeyword {
+                    graph_id: black_box(&graph_id).clone(),
+                    keyword: "memory".to_string(),
+                    limit: 5,
+                })
+                .expect("query_knowledge_nodes failed");
             black_box(res.total)
         })
     });
@@ -291,8 +253,12 @@ fn bench_l3_get_by_type(c: &mut Criterion) {
         b.iter(|| {
             let db = db().lock().unwrap();
             let res = db
-                .get_knowledge_nodes_by_type(black_box(&graph_id), "Factual", 5)
-                .expect("get_knowledge_nodes_by_type failed");
+                .query_knowledge_nodes(KnowledgeNodeQuery::ByType {
+                    graph_id: black_box(&graph_id).clone(),
+                    node_type: "Factual".to_string(),
+                    limit: 5,
+                })
+                .expect("query_knowledge_nodes failed");
             black_box(res.total)
         })
     });
@@ -307,11 +273,14 @@ fn bench_l4_archive_search(c: &mut Criterion) {
         b.iter(|| {
             let db = db().lock().unwrap();
             let res = db
-                .search_l4(memhop::query::types::L4SearchQuery {
-                    recent: Some(10),
-                    ..Default::default()
+                .query_archives(ArchiveQuery {
+                    page: 1,
+                    page_size: 10,
+                    topic_id: None,
+                    keyword: None,
+                    time_range: None,
                 })
-                .expect("search_l4 failed");
+                .expect("query_archives failed");
             black_box(res.len())
         })
     });
@@ -324,18 +293,15 @@ fn bench_l4_list_by_topic(c: &mut Criterion) {
         b.iter(|| {
             let db = db().lock().unwrap();
             let res = db
-                .list_archives_by_topic(
-                    black_box(&topic_id),
-                    ArchivePageQuery {
-                        page: 1,
-                        page_size: 10,
-                        start_time: None,
-                        end_time: None,
-                        content_type: None,
-                    },
-                )
-                .expect("list_archives_by_topic failed");
-            black_box(res.total)
+                .query_archives(ArchiveQuery {
+                    topic_id: Some(black_box(&topic_id).clone()),
+                    page: 1,
+                    page_size: 10,
+                    keyword: None,
+                    time_range: None,
+                })
+                .expect("query_archives failed");
+            black_box(res.len())
         })
     });
 }
@@ -421,10 +387,16 @@ fn bench_l6_pathway_crud(c: &mut Criterion) {
                     .expect("update_l6 failed");
                 black_box(updated.weight);
 
-                // Update weight
+                // Update weight (via weight_delta)
                 let adjusted = db
-                    .update_l6_weight("000000000000002a", 0.05)
-                    .expect("update_l6_weight failed");
+                    .update_l6(
+                        "000000000000002a",
+                        UpdateL6Fields {
+                            weight_delta: Some(0.05),
+                            ..Default::default()
+                        },
+                    )
+                    .expect("update_l6 with delta failed");
                 black_box(adjusted.weight);
 
                 // List with filter
@@ -476,25 +448,13 @@ fn bench_session_mgmt(c: &mut Criterion) {
         b.iter(|| {
             let mut db = db().lock().unwrap();
 
-            // Activate
-            db.activate_topic(black_box(&topic_id), Some(300_000));
-
-            // Check count / empty
-            black_box(db.session_count());
-            black_box(db.sessions_empty());
+            // Check status
+            let status = db.session_status();
+            black_box(status.count);
+            black_box(status.is_empty);
 
             // Get active IDs
-            let ids = db.get_active_topic_ids();
-            black_box(ids.len());
-
-            // Adjust activation
-            db.adjust_activation(black_box(&topic_id), 1.0);
-
-            // Deactivate
-            db.deactivate_topic(black_box(&topic_id));
-
-            // Purge expired
-            db.purge_expired_sessions();
+            // (now internal to session_status)
         })
     });
 }
@@ -541,8 +501,6 @@ criterion_group!(
     bench_session_mgmt,
     // L0
     bench_l0_profile_get,
-    // L1
-    bench_l1_engram_list,
     // L3
     bench_l3_knowledge_list,
     bench_l3_get_knowledge,

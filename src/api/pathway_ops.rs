@@ -18,10 +18,21 @@ impl MemHop {
     }
 
     /// Partially update an L6 pathway weight.
+    ///
+    /// If `weight_delta` is set in fields, the weight is incremented/decremented
+    /// by the delta (clamped to [0.0, 1.0]). Otherwise, the absolute `weight`
+    /// value is used.
     pub fn update_l6(&mut self, id: &str, fields: UpdateL6Fields) -> Result<PathwayWeightSlot> {
-        let updated = crate::query::l6_ops::update_l6(&mut self.engine, id, fields)?;
-        self.pathways = crate::query::l6_ops::list_l6(&self.engine, None)?;
-        Ok(updated)
+        if fields.weight_delta.is_some() {
+            let delta = fields.weight_delta.unwrap();
+            let updated = crate::query::l6_ops::update_l6_weight(&mut self.engine, id, delta)?;
+            self.pathways = crate::query::l6_ops::list_l6(&self.engine, None)?;
+            Ok(updated)
+        } else {
+            let updated = crate::query::l6_ops::update_l6(&mut self.engine, id, fields)?;
+            self.pathways = crate::query::l6_ops::list_l6(&self.engine, None)?;
+            Ok(updated)
+        }
     }
 
     /// Delete an L6 pathway weight by ID.
@@ -41,12 +52,5 @@ impl MemHop {
         let total = crate::query::l6_ops::add_l6(&mut self.engine, slots)?;
         self.pathways = crate::query::l6_ops::list_l6(&self.engine, None)?;
         Ok(total)
-    }
-
-    /// Increment/decrement an L6 pathway weight by delta.
-    pub fn update_l6_weight(&mut self, id: &str, delta: f32) -> Result<PathwayWeightSlot> {
-        let updated = crate::query::l6_ops::update_l6_weight(&mut self.engine, id, delta)?;
-        self.pathways = crate::query::l6_ops::list_l6(&self.engine, None)?;
-        Ok(updated)
     }
 }

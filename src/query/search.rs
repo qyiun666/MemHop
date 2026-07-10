@@ -11,7 +11,7 @@ use crate::config::SearchWeights;
 use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
 use crate::index::vector::IVFIndex;
-use crate::layers::context::{ContextSlot, TopicSlot};
+use crate::layers::context::ContextSlot;
 use crate::layers::context_node::ContextNode;
 use crate::query::types::*;
 use crate::shared::common;
@@ -48,12 +48,12 @@ pub fn search_context(
     ivf_index: Option<&IVFIndex>,
     l1_reverse: &L1ReverseIndex,
 ) -> Result<SearchResult, MemHopError> {
-    let target_l2_id = query.l2_id.as_ref().or(query.context_id.as_ref());
+    let target_l2_id = query.l2_id.as_ref();
 
     // ========================================================================
     // Route 1: auto_create
     // ========================================================================
-    let filtered_l2 = if query.auto_create == 1 {
+    let filtered_l2 = if query.auto_create {
         let new_ctx =
             create_new_l2_context(engine, sparse_index, &query.dialogue, vector_dim, encoder)?;
         vec![(new_ctx, 1.0)]
@@ -80,7 +80,7 @@ pub fn search_context(
             l2_meta,
             &query.dialogue,
             sparse_index,
-            query.context_limit * 2,
+            20,
             query.l3_id.as_deref(),
         );
 
@@ -97,8 +97,8 @@ pub fn search_context(
                 encoder,
                 search_weights,
                 ivf_index,
-                query.context_limit,
-                query.min_score,
+                10,
+                0.0,
                 candidates.as_ref(),
             )?
         }
@@ -479,14 +479,8 @@ mod tests {
         let query = SearchQuery {
             dialogue: "rust memory".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 10,
-            auto_create: 0,
-            min_score: 0.0,
-            source: RequestSource::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: false,
         };
 
         // Verify the data was written to the engine

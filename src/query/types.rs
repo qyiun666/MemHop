@@ -92,47 +92,27 @@ pub struct WritePreprocessResult {
 ///
 /// # Routing logic
 ///
-/// | Parameter   | Behavior |
-/// |-------------|----------|
-/// | `auto_create=1` | Skip all retrieval, create new L2 context directly |
-/// | `l2_id`/`context_id` present & L2 exists | Skip triple retrieval, only L1-associate from that L2 |
+/// | Parameter | Behavior |
+/// |-----------|----------|
+/// | `auto_create=true` | Skip all retrieval, create new L2 context directly |
+/// | `l2_id` present & L2 exists | Skip triple retrieval, only L1-associate from that L2 |
 /// | `l3_id` present | Restrict triple retrieval to L2 contexts containing this L3 |
 /// | default | Full triple retrieval (vector + BM25 + n-gram) |
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
-    /// Current dialogue content (for BM25 + ngram + vector search)
+    /// Current user dialogue content (required)
     pub dialogue: String,
-    /// L2 context ID (hex). If present and the L2 exists, skip retrieval
-    /// and only find L1-associated contexts from this L2.
-    pub l2_id: Option<String>,
-    /// Backwards-compatible alias for `l2_id`.
-    pub context_id: Option<String>,
-    /// L3 hypergraph ID (hex). If present, restrict retrieval to L2
-    /// contexts that contain this L3 in their l3_refs.
-    pub l3_id: Option<String>,
-    /// Maximum number of contexts to return (default: 10)
-    #[serde(default = "default_context_limit")]
-    pub context_limit: usize,
-    /// Auto-create context when search result is empty (0: no, 1: yes, default: 0)
-    #[serde(default)]
-    pub auto_create: u8,
-    /// Minimum relevance score threshold for search pruning (0.0-1.0, default: 0.0)
-    #[serde(default)]
-    pub min_score: f32,
-    /// API 请求来源（记录是谁发起的搜索）
-    #[serde(default, skip_serializing_if = "RequestSource::is_empty")]
-    pub source: RequestSource,
-    /// LLM 预处理后的关键词（传入则跳过 LLM 调用，直接用于检索）
+    /// Directed L2 context ID (optional). If present and the L2 exists,
+    /// skip retrieval and directly associate from this L2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm_keywords: Option<Vec<String>>,
-    /// 是否启用 LLM 预处理（默认 false，保持向后兼容）
+    pub l2_id: Option<String>,
+    /// Directed L3 hypergraph ID (optional). Restrict retrieval to L2
+    /// contexts that contain this L3 in their l3_refs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub l3_id: Option<String>,
+    /// Auto-create new context when no match found (optional, replaces manual create_scene)
     #[serde(default)]
-    pub enable_llm_preprocess: bool,
-}
-
-/// Default context limit for search
-fn default_context_limit() -> usize {
-    10
+    pub auto_create: bool,
 }
 
 /// L1 ContextNode preview — lightweight summary for agent decision-making
@@ -374,6 +354,40 @@ pub enum UpdateStatus {
 }
 
 // ============================================================================
+// L1 Graph — public DTOs for L1 layer visualization
+// ============================================================================
+
+/// L1 层完整图结构，供 Agent 侧构建可视化图
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L1Graph {
+    pub nodes: Vec<L1Node>,
+    pub edges: Vec<L1Edge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L1Node {
+    pub id: String,       // hex(id_hash)
+    pub scene_id: String, // hex(scene_id)
+    pub topic_ids: Vec<String>,
+    pub depth: u32,
+    pub importance: f32,
+    pub valence: f64,
+    pub arousal: f64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub edge_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct L1Edge {
+    pub id: String,   // hex(id_hash)
+    pub kind: String, // HyperedgeKind 的字符串表示
+    pub node_ids: Vec<String>,
+    pub weight: f32,
+    pub created_at: i64,
+}
+
+// ============================================================================
 // List Query Interfaces (Interfaces 6-12)
 // ============================================================================
 
@@ -540,6 +554,32 @@ pub struct KnowledgeNodeDetail {
     pub knowledge_type: String,
     pub created_at: i64,
     pub importance: f32,
+}
+
+/// Unified query for L3 knowledge node retrieval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum KnowledgeNodeQuery {
+    ByIds {
+        ids: Vec<String>,
+        #[serde(default)]
+        include_text: bool,
+    },
+    ByKeyword {
+        graph_id: String,
+        keyword: String,
+        #[serde(default = "default_limit")]
+        limit: usize,
+    },
+    ByType {
+        graph_id: String,
+        node_type: String,
+        #[serde(default = "default_limit")]
+        limit: usize,
+    },
+}
+
+fn default_limit() -> usize {
+    20
 }
 
 /// Batch result for L3 knowledge node retrieval by IDs
@@ -761,6 +801,14 @@ pub struct ImportError {
 
 use crate::shared::common::format_hash;
 
+/// Session status — aggregate view of active sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionStatus {
+    pub active_topic_ids: Vec<String>,
+    pub count: usize,
+    pub is_empty: bool,
+}
+
 /// Public DTO for an L3 hypergraph node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphNode {
@@ -945,6 +993,7 @@ pub struct UpdateL6Fields {
     pub source_node: Option<String>,
     pub target_node: Option<String>,
     pub weight: Option<f32>,
+    pub weight_delta: Option<f32>,
     pub success_rate: Option<f32>,
     pub trigger_count: Option<u32>,
     pub last_accessed: Option<u64>,
@@ -963,6 +1012,25 @@ pub struct L4SearchQuery {
     /// Filter by keywords matched against archive content.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keywords: Option<Vec<String>>,
+}
+
+/// Unified query for L4 archive retrieval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchiveQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub topic_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyword: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_range: Option<(i64, i64)>,
+    #[serde(default)]
+    pub page: usize,
+    #[serde(default = "default_page_size")]
+    pub page_size: usize,
+}
+
+fn default_page_size() -> usize {
+    20
 }
 
 /// Filter for listing L6 pathway weights.

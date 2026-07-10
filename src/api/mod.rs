@@ -227,18 +227,16 @@ impl MemHop {
                 .or_else(|| std::env::var("MEMHOP_ENCODER_GRPC_ADDR").ok());
 
             match grpc_addr {
-                Some(addr) => {
-                    match GrpcEncoder::new(&addr, config.vector_dim) {
-                        Ok(enc) => Some(Box::new(enc)),
-                        Err(e) => {
-                            tracing::warn!(
+                Some(addr) => match GrpcEncoder::new(&addr, config.vector_dim) {
+                    Ok(enc) => Some(Box::new(enc)),
+                    Err(e) => {
+                        tracing::warn!(
                                 "Failed to initialize gRPC encoder at {}: {} — vector search will be unavailable.",
                                 addr, e
                             );
-                            None
-                        }
+                        None
                     }
-                }
+                },
                 None => {
                     tracing::warn!(
                         "No gRPC encoder address configured — vector search will be unavailable. \
@@ -302,20 +300,6 @@ impl MemHop {
 
         new_ivf.rebuild_if_needed(self.engine.record_count() as usize);
         *ivf = new_ivf;
-    }
-
-    /// Sync all changes to disk
-    pub fn sync(&self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Set a custom encoder for vector operations
-    ///
-    /// # Arguments
-    /// * `encoder` - Encoder implementation (e.g., GrpcEncoder)
-    #[cfg(feature = "grpc-encoder")]
-    pub fn set_encoder<E: crate::encoder::Encoder + Send + Sync + 'static>(&mut self, encoder: E) {
-        self.encoder = Some(Box::new(encoder));
     }
 
     /// Close the database and release resources

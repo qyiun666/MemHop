@@ -3,45 +3,28 @@
 
 //! CRUD/list API operations.
 
+use crate::layers::context_node::SceneNode;
+use crate::layers::hyperedge::SceneEdge;
 use crate::query::types::{
     Archive, ArchiveListResult, ArchivePageQuery, CrystalListQuery, CrystalListResult,
-    EngramListQuery, EngramListResult, EngramResult, KnowledgeDetail, KnowledgeListQuery,
-    KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodesResult,
+    KnowledgeDetail, KnowledgeListQuery, KnowledgeListResult, KnowledgeNodeDetail,
 };
-use crate::storage::record::{REC_L3_GRAPH_NODE, REC_L3_GRAPH_SLOT};
-use crate::MemHop;
-use crate::Result;
+use crate::query::types::{L1Edge, L1Graph, L1Node};
+use crate::shared::common::format_hash;
+use crate::storage::record::{
+    REC_L1_HYPEREDGE, REC_L1_SCENE_NODE, REC_L3_GRAPH_NODE, REC_L3_GRAPH_SLOT,
+};
+use crate::{MemHop, Result};
+
 impl MemHop {
-    /// Get single engram by ID
-    pub fn get_engram(&self, id: &str) -> Result<Option<EngramResult>> {
-        use crate::query::list::get_engram as impl_fn;
-        impl_fn(&self.engine, id)
-    }
-
-    /// List engrams with pagination and filtering
-    pub fn list_engrams(&self, query: EngramListQuery) -> Result<EngramListResult> {
-        use crate::query::list::list_engrams as impl_fn;
-        impl_fn(&self.engine, query)
-    }
-
     /// Get single archive by ID
-    pub fn get_archive(&self, id: &str) -> Result<Option<Archive>> {
+    pub(crate) fn get_archive(&self, id: &str) -> Result<Option<Archive>> {
         use crate::query::list::get_archive as impl_fn;
         impl_fn(&self.engine, id)
     }
 
-    /// List archives by topic ID
-    pub fn list_archives_by_topic(
-        &self,
-        topic_id: &str,
-        query: ArchivePageQuery,
-    ) -> Result<ArchiveListResult> {
-        use crate::query::list::list_archives_by_topic as impl_fn;
-        impl_fn(&self.engine, topic_id, query)
-    }
-
     /// List archives by node IDs
-    pub fn list_archives_by_nodes(
+    pub(crate) fn list_archives_by_nodes(
         &self,
         node_ids: &[String],
         query: ArchivePageQuery,
@@ -51,7 +34,7 @@ impl MemHop {
     }
 
     /// List all archives
-    pub fn list_all_archives(&self, query: ArchivePageQuery) -> Result<ArchiveListResult> {
+    pub(crate) fn list_all_archives(&self, query: ArchivePageQuery) -> Result<ArchiveListResult> {
         use crate::query::list::list_all_archives as impl_fn;
         impl_fn(&self.engine, query)
     }
@@ -66,7 +49,7 @@ impl MemHop {
     ///
     /// Validates confidence >= 0.5 and at least one linked ActionStep, then
     /// flips the chain status to Active.
-    pub fn activate_crystal(&mut self, id: &str) -> Result<()> {
+    pub(crate) fn activate_crystal(&mut self, id: &str) -> Result<()> {
         use crate::dream::crystallize_stage::activate_crystal as impl_fn;
         let chain_id = crate::shared::common::parse_id_to_hash(id);
         impl_fn(&mut self.engine, chain_id)
@@ -150,40 +133,6 @@ impl MemHop {
         }))
     }
 
-    /// Get L3 knowledge nodes by batch IDs (max 50)
-    ///
-    /// Returns node details with domain resolved from the parent HypergraphSlot.
-    /// Missing IDs are silently skipped. `include_text` controls whether the
-    /// full `text` field is returned.
-    pub fn get_knowledge_nodes_by_ids(
-        &self,
-        ids: &[String],
-        include_text: bool,
-    ) -> Result<KnowledgeNodesResult> {
-        const MAX_IDS: usize = 50;
-        let requested = ids.len();
-        let ids = if ids.len() > MAX_IDS {
-            &ids[..MAX_IDS]
-        } else {
-            ids
-        };
-
-        let mut nodes: Vec<KnowledgeNodeDetail> = Vec::with_capacity(ids.len());
-
-        for id_str in ids {
-            let id_hash = crate::shared::common::parse_id_to_hash(id_str);
-            if let Some(detail) = self.resolve_knowledge_node_detail(id_hash, include_text) {
-                nodes.push(detail);
-            }
-        }
-
-        Ok(KnowledgeNodesResult {
-            total: nodes.len(),
-            nodes,
-            requested,
-        })
-    }
-
     /// Resolve a single HypergraphNode into a KnowledgeNodeDetail.
     pub(crate) fn resolve_knowledge_node_detail(
         &self,
@@ -232,5 +181,90 @@ impl MemHop {
     pub fn list_knowledge(&self, query: KnowledgeListQuery) -> Result<KnowledgeListResult> {
         use crate::query::list::list_knowledge as impl_fn;
         impl_fn(&self.engine, query)
+    }
+
+    /// 获取 L1 层完整图结构（节点 + 边），供 Agent 侧构建可视化图
+    pub fn get_l1_graph(&self, scene_id: Option<&str>) -> Result<L1Graph> {
+        let mut nodes = Vec::new();
+        let mut edges = Vec::new();
+
+        let scene_filter = scene_id.and_then(|s| {
+            if s.len() == 16 {
+                u64::from_str_radix(s, 16).ok()
+            } else {
+                None
+            }
+        });
+
+        for (&id_hash, _offset) in self.engine.iter_index() {
+            let Ok(Some((record_type, data))) = self.engine.read_record(id_hash) else {
+                continue;
+            };
+
+            match record_type {
+                REC_L1_SCENE_NODE => {
+                    if let Ok(scene_node) = bincode::deserialize::<SceneNode>(data) {
+                        if let Some(filter) = scene_filter {
+                            if scene_node.scene_id != filter {
+                                continue;
+                            }
+                        }
+                        nodes.push(L1Node {
+                            id: format_hash(scene_node.id_hash),
+                            scene_id: format_hash(scene_node.scene_id),
+                            topic_ids: scene_node
+                                .topic_ids
+                                .iter()
+                                .map(|&h| format_hash(h))
+                                .collect(),
+                            depth: scene_node.depth,
+                            importance: scene_node.importance,
+                            valence: scene_node.valence,
+                            arousal: scene_node.arousal,
+                            created_at: scene_node.created_at,
+                            updated_at: scene_node.updated_at,
+                            edge_ids: scene_node
+                                .edge_ids
+                                .iter()
+                                .map(|&h| format_hash(h))
+                                .collect(),
+                        });
+                    }
+                }
+                REC_L1_HYPEREDGE => {
+                    if let Ok(scene_edge) = bincode::deserialize::<SceneEdge>(data) {
+                        edges.push(L1Edge {
+                            id: format_hash(scene_edge.id_hash),
+                            kind: format!("{:?}", scene_edge.kind),
+                            node_ids: scene_edge
+                                .node_ids
+                                .iter()
+                                .map(|&h| format_hash(h))
+                                .collect(),
+                            weight: scene_edge.weight,
+                            created_at: scene_edge.created_at,
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // 如果传入了 scene_id，过滤边使其只包含可见节点的连接
+        if scene_filter.is_some() {
+            let node_set: std::collections::HashSet<u64> = nodes
+                .iter()
+                .filter_map(|n| u64::from_str_radix(&n.id, 16).ok())
+                .collect();
+            edges.retain(|e| {
+                e.node_ids.iter().any(|nid| {
+                    u64::from_str_radix(nid, 16)
+                        .ok()
+                        .map_or(false, |h| node_set.contains(&h))
+                })
+            });
+        }
+
+        Ok(L1Graph { nodes, edges })
     }
 }

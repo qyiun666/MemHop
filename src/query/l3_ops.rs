@@ -54,12 +54,12 @@ pub fn get_l3(engine: &StorageEngine, id: &str) -> Result<Option<L3Detail>, MemH
     }))
 }
 
-/// Partially update an L3 hypergraph container.
+/// Partially update an L3 hypergraph container and return the updated detail.
 pub fn update_l3(
     engine: &mut StorageEngine,
     id: &str,
     fields: UpdateL3Fields,
-) -> Result<(), MemHopError> {
+) -> Result<L3Detail, MemHopError> {
     let graph_hash = parse_id_to_hash(id);
     let (_, data) = engine
         .read_record(graph_hash)?
@@ -77,7 +77,8 @@ pub fn update_l3(
     let data = bincode::serialize(&slot).map_err(|e| MemHopError::Serialization(e.to_string()))?;
     engine.write_record(REC_L3_GRAPH_SLOT, graph_hash, &data)?;
 
-    Ok(())
+    // Return the updated full L3 detail
+    get_l3(engine, id)?.ok_or(MemHopError::PageNotFound(0))
 }
 
 /// Delete an L3 hypergraph and clean up L2 references.
@@ -233,7 +234,7 @@ mod tests {
         assert_eq!(detail.nodes.len(), 1);
         assert_eq!(detail.edges.len(), 1);
 
-        update_l3(
+        let updated = update_l3(
             &mut engine,
             "0000000000000001",
             UpdateL3Fields {
@@ -241,8 +242,6 @@ mod tests {
             },
         )
         .unwrap();
-
-        let updated = get_l3(&engine, "0000000000000001").unwrap().unwrap();
         assert_eq!(updated.slot.name, "renamed graph");
 
         delete_l3(&mut engine, &mut adjacency_cache, "0000000000000001").unwrap();

@@ -101,7 +101,7 @@ impl MemHop {
     }
 
     /// Detect isolated (or low-degree) nodes in an L3 hypergraph.
-    pub fn l3_detect_isolated(
+    pub(crate) fn l3_detect_isolated(
         &mut self,
         graph_id: &str,
         threshold: u32,
@@ -116,7 +116,7 @@ impl MemHop {
     }
 
     /// Run Leiden community detection on an L3 hypergraph.
-    pub fn l3_detect_communities(
+    pub(crate) fn l3_detect_communities(
         &mut self,
         graph_id: &str,
         config: Option<crate::l3::CommunityConfig>,
@@ -150,8 +150,8 @@ impl MemHop {
         crate::query::l3_ops::get_l3(&self.engine, id)
     }
 
-    /// Partially update an L3 hypergraph container.
-    pub fn update_l3(&mut self, id: &str, fields: UpdateL3Fields) -> Result<()> {
+    /// Partially update an L3 hypergraph container and return the updated detail.
+    pub fn update_l3(&mut self, id: &str, fields: UpdateL3Fields) -> Result<L3Detail> {
         crate::query::l3_ops::update_l3(&mut self.engine, id, fields)
     }
 

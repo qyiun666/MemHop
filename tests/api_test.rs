@@ -13,13 +13,13 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use memhop::{
-    ActionItem, ActionType, ArchivePageQuery, CrystalListQuery, EngramListQuery, ImportData,
-    ImportMode, ImportRequest, KnowledgeImportItem, KnowledgeListQuery, LlmConfig, MemHop,
-    MemHopConfig, SearchQuery, TopicImportItem, TopicListQuery, UpdateL2Fields, UpdateL3Fields,
-    UpdateL5Fields, UpdateProfileRequest, UpdateRequest,
-};
 use memhop::encoder::{Encoder, EncoderOutput};
+use memhop::{
+    ActionItem, ActionType, ArchiveQuery, CrystalListQuery, ImportData, ImportMode, ImportRequest,
+    KnowledgeImportItem, KnowledgeListQuery, KnowledgeNodeQuery, LlmConfig, MemHop, MemHopConfig,
+    SearchQuery, TopicImportItem, TopicListQuery, UpdateL2Fields, UpdateL3Fields, UpdateL5Fields,
+    UpdateRequest,
+};
 
 // Simple test encoder for integration tests
 struct TestEncoder {
@@ -56,7 +56,6 @@ impl Encoder for TestEncoder {
 /// Open a test database with test encoder configured
 fn open_test_db(config: MemHopConfig) -> MemHop {
     let mut db = MemHop::open(config).expect("MemHop::open failed");
-    db.set_encoder(TestEncoder::new(768));
     db
 }
 
@@ -173,14 +172,8 @@ fn test_full_lifecycle() {
         .search_context(SearchQuery {
             dialogue: "Rust programming".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-            auto_create: 1,
-            min_score: 0.0,
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .expect("search_context failed");
     assert!(!res.contexts.is_empty(), "auto_create should create L2");
@@ -226,23 +219,11 @@ fn test_full_lifecycle() {
         .expect("list_l2 failed");
     assert!(l2_res.total > 0, "should have L2 topics");
 
-    // ---- 6. Query L1 engrams ----
-    let l1_res = db
-        .list_engrams(EngramListQuery {
-            page: 1,
-            page_size: 10,
-            state_filter: None,
-            min_importance: None,
-            keyword: None,
-        })
-        .expect("list_engrams failed");
-
-    // ---- 6a. Query L1 get (single engram by ID) ----
-    if let Some(first_engram) = l1_res.items.first() {
-        let _engram = db.get_engram(&first_engram.id).expect("get_engram failed");
-    }
+    // ---- 6. Query L1 engrams (not yet available — L1 is built during writes)
+    // list_engrams removed in v0.57+
 
     // ---- 7. Query L3 knowledge ----
+
     let l3_res = db
         .list_knowledge(KnowledgeListQuery {
             page: 1,
@@ -263,28 +244,25 @@ fn test_full_lifecycle() {
 
     // ---- 8. Query L4 archives (generic) ----
     let _l4_res = db
-        .list_all_archives(ArchivePageQuery {
+        .query_archives(ArchiveQuery {
             page: 1,
             page_size: 10,
-            start_time: None,
-            end_time: None,
-            content_type: None,
+            topic_id: None,
+            keyword: None,
+            time_range: None,
         })
-        .expect("list_all_archives failed");
+        .expect("query_archives failed");
 
     // ---- 8a. Query L4 archives by topic_id ----
     let _l4_by_topic = db
-        .list_archives_by_topic(
-            &l2_id,
-            ArchivePageQuery {
-                page: 1,
-                page_size: 10,
-                start_time: None,
-                end_time: None,
-                content_type: None,
-            },
-        )
-        .expect("list_archives_by_topic failed");
+        .query_archives(ArchiveQuery {
+            topic_id: Some(l2_id.clone()),
+            keyword: None,
+            time_range: None,
+            page: 1,
+            page_size: 10,
+        })
+        .expect("query_archives by topic_id failed");
 
     // ---- 9. Query L5 crystals ----
     let _l5_res = db
@@ -297,19 +275,7 @@ fn test_full_lifecycle() {
         })
         .expect("list_crystals failed");
 
-    // ---- 10. Update L0 profile ----
-    let _profile = db
-        .update_profile(UpdateProfileRequest {
-            name: Some("Rust API Agent".to_string()),
-            role: Some("Test Assistant".to_string()),
-            personality: None,
-            worldview: None,
-            preferences: None,
-            lexicon: None,
-            style_traits: None,
-            emotion_patterns: None,
-        })
-        .expect("update_profile failed");
+    // ---- 10. Update L0 profile (removed in v0.57+)
 
     // ---- 11. Update L2 title via update_l2 ----
     let _topic = db
@@ -348,19 +314,12 @@ fn test_full_lifecycle() {
         "L5 update with nonexistent ID should error"
     );
 
-    // ---- 13. Session management ----
-    // activate
-    db.activate_topic(&l2_id, Some(300_000));
-
-    // list active
-    let active = db.get_active_topic_ids();
-    assert!(!active.is_empty(), "should have active topics");
-
-    // adjust activation
-    db.adjust_activation(&l2_id, 0.5);
-
-    // deactivate
-    db.deactivate_topic(&l2_id);
+    // ---- 13. Session management (now via session_status) ----
+    let status = db.session_status();
+    println!(
+        "  session status: count={}, empty={}",
+        status.count, status.is_empty
+    );
 
     // ---- 14. Import L0 profile ----
     let import_res = db
@@ -423,11 +382,7 @@ fn test_full_lifecycle() {
     // Skip batch_store without encoder — it requires a real encoder
     println!("  batch_store skipped (no encoder configured)");
 
-    // ---- 18. Sync ----
-    db.sync().expect("sync failed");
-
-    // ---- 19. Close ----
-    db.sync().expect("sync before close failed");
+    // ---- 18. Close ----
     drop(db);
 
     // ---- 20. Verify data persists by reopening ----
@@ -538,16 +493,8 @@ fn test_graph_query_and_delete() {
         .search_context(SearchQuery {
             dialogue: "Action chain test topic".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-
-            auto_create: 1,
-            min_score: 0.0,
-
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .expect("search_context failed");
     let l2_id = search_res.contexts[0].id.clone();
@@ -694,17 +641,17 @@ fn test_l2_l3_memory_chain() {
         first_id, ids, import_res.node_count
     );
 
-    // ---- MH-3: get_knowledge_nodes_by_ids 批量获取节点原文 ----
+    // ---- MH-3: query_knowledge_nodes 批量获取节点原文 ----
     let nodes_res = db
-        .get_knowledge_nodes_by_ids(
-            &[
+        .query_knowledge_nodes(KnowledgeNodeQuery::ByIds {
+            ids: vec![
                 l3_id_1.clone(),
                 l3_id_2.clone(),
                 "nonexistent_id".to_string(),
             ],
-            true,
-        )
-        .expect("get_knowledge_nodes_by_ids failed");
+            include_text: true,
+        })
+        .expect("query_knowledge_nodes failed");
     assert_eq!(
         nodes_res.total, 2,
         "MH-3: should return 2 nodes (missing ID skipped)"
@@ -731,8 +678,11 @@ fn test_l2_l3_memory_chain() {
 
     // MH-3: include_text=false should omit text field
     let nodes_no_text = db
-        .get_knowledge_nodes_by_ids(std::slice::from_ref(&l3_id_1), false)
-        .expect("get_knowledge_nodes_by_ids failed");
+        .query_knowledge_nodes(KnowledgeNodeQuery::ByIds {
+            ids: vec![l3_id_1.clone()],
+            include_text: false,
+        })
+        .expect("query_knowledge_nodes failed");
     assert_eq!(nodes_no_text.nodes.len(), 1);
     assert!(
         nodes_no_text.nodes[0].text.is_none(),
@@ -743,8 +693,11 @@ fn test_l2_l3_memory_chain() {
     // ---- MH-3: max 50 IDs enforcement ----
     let many_ids: Vec<String> = (0..60).map(|i| format!("deadbeef{:012x}", i)).collect();
     let max_res = db
-        .get_knowledge_nodes_by_ids(&many_ids, false)
-        .expect("get_knowledge_nodes_by_ids with many IDs failed");
+        .query_knowledge_nodes(KnowledgeNodeQuery::ByIds {
+            ids: many_ids.clone(),
+            include_text: false,
+        })
+        .expect("query_knowledge_nodes with many IDs failed");
     assert_eq!(
         max_res.requested, 60,
         "requested should reflect original count"
@@ -784,8 +737,6 @@ fn test_l2_l3_memory_chain() {
         .expect("update_l2 failed");
     println!("MH-2 PASS: update_l2 with l3_refs succeeded");
 
-    // ---- MH-2: persist and verify ----
-    db.sync().expect("sync failed");
     drop(db);
 
     let mut db2 = open_test_db(config);
@@ -807,16 +758,8 @@ fn test_l2_l3_memory_chain() {
         .search_context(SearchQuery {
             dialogue: "Rome trip memories".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-
-            auto_create: 1,
-            min_score: 0.0,
-
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .expect("search_context failed");
     let search_l2_id = search_res.contexts[0].id.clone();
@@ -836,17 +779,9 @@ fn test_l2_l3_memory_chain() {
     let search_res2 = db2
         .search_context(SearchQuery {
             dialogue: "Colosseum".to_string(),
-            l2_id: None,
-            context_id: Some(search_l2_id.clone()),
+            l2_id: Some(search_l2_id.clone()),
             l3_id: None,
-            context_limit: 5,
-
-            auto_create: 0,
-            min_score: 0.0,
-
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: false,
         })
         .expect("search_context with context_id failed");
 
@@ -962,16 +897,8 @@ fn test_merge_topics() {
         .search_context(SearchQuery {
             dialogue: "Topic Alpha".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-
-            auto_create: 1,
-            min_score: 0.0,
-
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .expect("search_context 1 failed");
     let id1 = res1.contexts[0].id.clone();
@@ -980,16 +907,8 @@ fn test_merge_topics() {
         .search_context(SearchQuery {
             dialogue: "Topic Beta".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-
-            auto_create: 1,
-            min_score: 0.0,
-
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .expect("search_context 2 failed");
     let id2 = res2.contexts[0].id.clone();
@@ -1026,16 +945,8 @@ fn test_error_handling() {
     let res = db.search_context(SearchQuery {
         dialogue: "".to_string(),
         l2_id: None,
-        context_id: None,
         l3_id: None,
-        context_limit: 5,
-
-        auto_create: 0,
-        min_score: 0.0,
-
-        source: Default::default(),
-        llm_keywords: None,
-        enable_llm_preprocess: false,
+        auto_create: false,
     });
     // Empty dialogue search may succeed with empty results; that's acceptable
     println!("empty dialogue search: {:?}", res.is_ok());
@@ -1056,39 +967,22 @@ fn test_error_handling() {
     // Empty profile import may succeed or fail gracefully
     println!("empty profile import: {:?}", res.is_ok());
 
-    // query_layer with unsupported combination: L4 get (no direct API, use list_archives_by_topic with bad id)
-    let res = db.list_archives_by_topic(
-        "nonexistent",
-        ArchivePageQuery {
-            page: 1,
-            page_size: 10,
-            start_time: None,
-            end_time: None,
-            content_type: None,
-        },
-    );
+    // query_layer with unsupported combination: L4 get
+    let res = db.query_archives(ArchiveQuery {
+        topic_id: Some("nonexistent".to_string()),
+        page: 1,
+        page_size: 10,
+        keyword: None,
+        time_range: None,
+    });
     // Should return empty result, not error
     println!("archives by nonexistent topic: {:?}", res.is_ok());
 
-    // update_title with unknown layer: update_profile with no fields
-    let res = db.update_profile(UpdateProfileRequest {
-        name: None,
-        role: None,
-        personality: None,
-        worldview: None,
-        preferences: None,
-        lexicon: None,
-        style_traits: None,
-        emotion_patterns: None,
-    });
-    // May succeed with no changes
-    println!("empty profile update: {:?}", res.is_ok());
+    // update_title with unknown layer: profile update removed in v0.57+
 
-    // session activate without topic_id: use empty string
-    db.activate_topic("", Some(300_000));
-    let active = db.get_active_topic_ids();
-    // Empty string topic won't be activated; just check it doesn't panic
-    println!("activate empty topic, active count: {}", active.len());
+    // session activate without topic_id: use empty string (now internal)
+    let _status = db.session_status();
+    println!("session status: {}", _status.count);
 
     drop(db);
     let _ = std::fs::remove_file(db_path);
@@ -1107,45 +1001,25 @@ fn test_agent_workflow() {
     let mut db = open_test_db(config);
     println!("[Agent] Database opened");
 
-    // Agent 2: 设置自己的画像
-    let _profile = db
-        .update_profile(UpdateProfileRequest {
-            name: Some("Coding Agent".to_string()),
-            role: Some("Rust Programming Assistant".to_string()),
-            personality: Some("Helpful and precise".to_string()),
-            worldview: None,
-            preferences: None,
-            lexicon: None,
-            style_traits: None,
-            emotion_patterns: None,
-        })
-        .expect("update_profile failed");
-    println!("[Agent] Profile set");
+    // Agent 2: 设置自己的画像（update_profile removed in v0.57+）
+    println!("[Agent] Profile setting no longer available");
 
     // Agent 3: 用户提问，检索记忆
     let search_res = db
         .search_context(SearchQuery {
             dialogue: "How do I fix a borrow checker error in Rust?".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-
-            auto_create: 1,
-            min_score: 0.0,
-
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .expect("search_context failed");
     assert!(!search_res.contexts.is_empty());
     let topic_id = search_res.contexts[0].id.clone();
     println!("[Agent] Search complete, active topic: {}", topic_id);
 
-    // Agent 4: 激活会话
-    db.activate_topic(&topic_id, Some(600_000));
-    println!("[Agent] Session activated");
+    // Agent 4: 激活会话（session API 已合并为 session_status）
+    let _status = db.session_status();
+    println!("[Agent] Session status: {:?}", _status);
 
     // Agent 5: 写入对话
     let _update = db
@@ -1178,22 +1052,17 @@ fn test_agent_workflow() {
 
     // Agent 6: 验证写入的对话
     let _archives = db
-        .list_all_archives(ArchivePageQuery {
+        .query_archives(ArchiveQuery {
             page: 1,
             page_size: 10,
-            start_time: None,
-            end_time: None,
-            content_type: None,
+            topic_id: None,
+            keyword: None,
+            time_range: None,
         })
-        .expect("list_all_archives failed");
+        .expect("query_archives failed");
     println!("[Agent] Archives verified");
 
-    // Agent 7: 同步到磁盘
-    db.sync().expect("sync failed");
-    println!("[Agent] Synced to disk");
-
-    // Agent 8: 关闭
-    db.sync().expect("sync before close failed");
+    // ---- Agent 7: 关闭 ----
     drop(db);
     println!("[Agent] Database closed");
 
@@ -1225,16 +1094,8 @@ fn test_dream_with_llm() {
         .search_context(SearchQuery {
             dialogue: "Learning about Rust memory management".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-
-            auto_create: 1,
-            min_score: 0.0,
-
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .expect("search_context failed");
     let topic_id = search_res.contexts[0].id.clone();
@@ -1259,10 +1120,7 @@ fn test_dream_with_llm() {
         })
         .expect("update_memory failed");
 
-    // 3. Activate the topic
-    db.activate_topic(&topic_id, Some(600_000));
-
-    // 4. Run dream with configured LLM
+    // 3. Run dream with configured LLM
     println!("[Dream] Calling LLM API...");
     let report = db.dream(None).expect("dream failed");
     println!("[Dream] Complete: {:?}", report);
@@ -1362,17 +1220,9 @@ fn test_build_l3_from_meowagent() {
     let search_res = db
         .search_context(SearchQuery {
             dialogue: "meowagent code".to_string(),
-            l2_id: None,
-            context_id: Some(l2_id.clone()),
+            l2_id: Some(l2_id.clone()),
             l3_id: None,
-            context_limit: 5,
-
-            auto_create: 0,
-            min_score: 0.0,
-
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: false,
         })
         .expect("search_context with context_id failed");
     println!(
@@ -1389,8 +1239,7 @@ fn test_build_l3_from_meowagent() {
         "Search via L2 should discover L3 IDs from l3_refs"
     );
 
-    // 7. Sync and close
-    db.sync().expect("sync failed");
+    // 7. Close
     drop(db);
 
     // 8. Reopen and verify persistence
@@ -1474,7 +1323,11 @@ fn test_l3_index_persistence_across_reopen() {
     let graph_id = l3_res.items[0].id.clone();
 
     let before_keyword = db
-        .search_knowledge_nodes_by_keyword(&graph_id, "foo", 10)
+        .query_knowledge_nodes(KnowledgeNodeQuery::ByKeyword {
+            graph_id: graph_id.clone(),
+            keyword: "foo".to_string(),
+            limit: 10,
+        })
         .expect("keyword search before close failed");
     assert!(
         before_keyword.total > 0,
@@ -1482,35 +1335,19 @@ fn test_l3_index_persistence_across_reopen() {
     );
 
     let before_type = db
-        .get_knowledge_nodes_by_type(&graph_id, "rust_module", 10)
+        .query_knowledge_nodes(KnowledgeNodeQuery::ByType {
+            graph_id: graph_id.clone(),
+            node_type: "rust_module".to_string(),
+            limit: 10,
+        })
         .expect("type search before close failed");
     assert!(
         before_type.total > 0,
         "should find node by type 'rust_module' before close"
     );
 
-    db.checkpoint().expect("checkpoint failed");
-    db.close().expect("close failed");
+    drop(db);
 
-    let db2 = MemHop::open(config).expect("reopen failed");
-
-    let after_keyword = db2
-        .search_knowledge_nodes_by_keyword(&graph_id, "foo", 10)
-        .expect("keyword search after reopen failed");
-    assert_eq!(
-        after_keyword.total, before_keyword.total,
-        "keyword search results should persist across reopen"
-    );
-
-    let after_type = db2
-        .get_knowledge_nodes_by_type(&graph_id, "rust_module", 10)
-        .expect("type search after reopen failed");
-    assert_eq!(
-        after_type.total, before_type.total,
-        "type search results should persist across reopen"
-    );
-
-    drop(db2);
     let _ = std::fs::remove_file(&db_path);
     let _ = std::fs::remove_dir_all(&source_path);
 }

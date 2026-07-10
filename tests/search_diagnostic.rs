@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use memhop::{
-    ActionItem, ActionType, ArchivePageQuery, ImportData, ImportMode, ImportRequest,
+    ActionItem, ActionType, ArchiveQuery, ImportData, ImportMode, ImportRequest,
     KnowledgeImportItem, L3EntityHint, MemHop, MemHopConfig, SearchQuery, TopicImportItem,
     TopicListQuery, UpdateL2Fields, UpdateRequest,
 };
@@ -352,15 +352,15 @@ fn test_search_result_format_compliance() {
     }
 
     let l4_list = db
-        .list_all_archives(ArchivePageQuery {
+        .query_archives(ArchiveQuery {
             page: 1,
             page_size: 20,
-            start_time: None,
-            end_time: None,
-            content_type: None,
+            topic_id: None,
+            keyword: None,
+            time_range: None,
         })
-        .expect("list_all_archives failed");
-    println!("  L4 archives total: {}", l4_list.total);
+        .expect("query_archives failed");
+    println!("  L4 archives total: {}", l4_list.len());
 
     // ========================================================================
     // 4. 执行检索测试
@@ -373,14 +373,8 @@ fn test_search_result_format_compliance() {
     let search_result = db.search_context(SearchQuery {
         dialogue: "Rust borrow checker 借用检查".to_string(),
         l2_id: None,
-        context_id: None,
         l3_id: None,
-        context_limit: 5,
-        auto_create: 0,
-        min_score: 0.0,
-        source: Default::default(),
-        llm_keywords: None,
-        enable_llm_preprocess: false,
+        auto_create: false,
     });
 
     match &search_result {
@@ -409,15 +403,9 @@ fn test_search_result_format_compliance() {
     println!("     context_id: {}", rust_topic_id);
     let search_by_context = db.search_context(SearchQuery {
         dialogue: "Rust borrow checker reference validity".to_string(),
-        l2_id: None,
-        context_id: Some(rust_topic_id.clone()),
+        l2_id: Some(rust_topic_id.clone()),
         l3_id: None,
-        context_limit: 5,
-        auto_create: 0,
-        min_score: 0.0,
-        source: Default::default(),
-        llm_keywords: None,
-        enable_llm_preprocess: false,
+        auto_create: false,
     });
 
     match &search_by_context {
@@ -1020,14 +1008,8 @@ fn test_search_comprehensive_dialogues() {
         let search_result = db.search_context(SearchQuery {
             dialogue: case.search_query.to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 10,
-            auto_create: 0,
-            min_score: 0.0,
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: false,
         });
 
         match search_result {

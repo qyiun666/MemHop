@@ -4,8 +4,7 @@
 //! API-5 + API-6: L2 Context CRUD and merge operations.
 
 use crate::query::types::{
-    MergeNodesRequest, MergeNodesResult, MergeResult, SceneTreeResult, TopicDetail, TopicListQuery,
-    TopicListResult, UpdateL2Fields,
+    MergeResult, SceneTreeResult, TopicDetail, TopicListQuery, TopicListResult, UpdateL2Fields,
 };
 use crate::shared::common::parse_id_to_hash;
 use crate::{MemHop, Result};
@@ -56,44 +55,5 @@ impl MemHop {
     pub fn list_scene_tree(&self, scene_id: &str) -> Result<SceneTreeResult> {
         let scene_hash = parse_id_to_hash(scene_id);
         crate::query::l2_ops::list_scene_tree(&self.engine, &self.l2_meta, scene_hash)
-    }
-
-    /// Merge secondary scenes into a main scene.
-    ///
-    /// All nodes from `secondary_scene_ids` have their `scene_id` changed to
-    /// `main_scene_id`.  No other metadata is modified — pure scene reassignment.
-    /// Dream pipeline handles compression later.
-    pub fn merge_nodes(&mut self, request: MergeNodesRequest) -> Result<MergeNodesResult> {
-        let main_hash = parse_id_to_hash(&request.main_scene_id);
-        let secondary_hashes: Vec<u64> = request
-            .secondary_scene_ids
-            .iter()
-            .map(|id| parse_id_to_hash(id))
-            .collect();
-
-        crate::query::l2_ops::merge_nodes(
-            &mut self.engine,
-            &mut self.sparse_index,
-            &mut self.l2_meta,
-            main_hash,
-            &secondary_hashes,
-        )
-    }
-
-    /// Create a scene.  Idempotent — returns scene_id of existing scene if name matches.
-    pub fn create_scene(&mut self, name: &str) -> Result<u64> {
-        crate::query::l2_ops::create_scene(&mut self.engine, name)
-    }
-
-    /// Read a scene by its hex-formatted id.
-    pub fn get_scene(&self, id: &str) -> Result<Option<(u64, String)>> {
-        let scene_id = parse_id_to_hash(id);
-        crate::query::l2_ops::get_scene(&self.engine, scene_id)
-            .map(|opt| opt.map(|s| (s.scene_id, s.scene_name)))
-    }
-
-    /// List all scenes as (scene_id, scene_name) pairs.
-    pub fn list_scenes(&self) -> Result<Vec<(u64, String)>> {
-        crate::query::l2_ops::list_scenes(&self.engine)
     }
 }

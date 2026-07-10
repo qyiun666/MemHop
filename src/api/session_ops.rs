@@ -3,9 +3,22 @@
 
 //! Session management API operations.
 
+use crate::query::types::SessionStatus;
 use crate::MemHop;
 
 impl MemHop {
+    /// Get the current session status (active topic IDs, count, empty flag).
+    pub fn session_status(&self) -> SessionStatus {
+        let active_topic_ids = self.get_active_topic_ids();
+        let count = self.session_count();
+        let is_empty = self.sessions_empty();
+        SessionStatus {
+            active_topic_ids,
+            count,
+            is_empty,
+        }
+    }
+
     /// Activate a Topic for session management. If capacity is exceeded,
     /// the LRU topic is evicted and optionally processed through a lightweight
     /// dream consolidation before removal from the active set.
@@ -13,7 +26,7 @@ impl MemHop {
     /// # Arguments
     /// * `topic_id` - Topic ID string (will be converted to hash)
     /// * `ttl_ms` - Optional custom TTL in milliseconds, uses default if None
-    pub fn activate_topic(&mut self, topic_id: &str, ttl_ms: Option<i64>) {
+    pub(crate) fn activate_topic(&mut self, topic_id: &str, ttl_ms: Option<i64>) {
         let id_hash = crate::shared::common::parse_id_to_hash(topic_id);
         let evicted = self.session_manager.activate_topic(id_hash, ttl_ms);
 
@@ -33,7 +46,7 @@ impl MemHop {
     ///
     /// # Arguments
     /// * `topic_id` - Topic ID string to deactivate
-    pub fn deactivate_topic(&mut self, topic_id: &str) {
+    pub(crate) fn deactivate_topic(&mut self, topic_id: &str) {
         let id_hash = crate::shared::common::parse_id_to_hash(topic_id);
         self.session_manager.deactivate_topic(id_hash);
     }
@@ -42,7 +55,7 @@ impl MemHop {
     ///
     /// # Returns
     /// Vector of active topic IDs as hex strings
-    pub fn get_active_topic_ids(&self) -> Vec<String> {
+    pub(crate) fn get_active_topic_ids(&self) -> Vec<String> {
         self.session_manager
             .get_active_topic_ids()
             .iter()
@@ -55,24 +68,24 @@ impl MemHop {
     /// # Arguments
     /// * `topic_id` - Topic ID string
     /// * `delta` - Adjustment factor, TTL change = delta × 600,000 ms
-    pub fn adjust_activation(&mut self, topic_id: &str, delta: f32) {
+    pub(crate) fn adjust_activation(&mut self, topic_id: &str, delta: f32) {
         let id_hash = crate::shared::common::parse_id_to_hash(topic_id);
         self.session_manager.adjust_activation(id_hash, delta);
     }
 
     /// Purge expired topics from the session manager.
-    pub fn purge_expired_sessions(&mut self) {
+    pub(crate) fn purge_expired_sessions(&mut self) {
         let now = crate::util::get_current_timestamp();
         self.session_manager.purge_expired(now);
     }
 
     /// Return the number of active topics in the session manager.
-    pub fn session_count(&self) -> usize {
+    pub(crate) fn session_count(&self) -> usize {
         self.session_manager.len()
     }
 
     /// Return true if the session manager has no active topics.
-    pub fn sessions_empty(&self) -> bool {
+    pub(crate) fn sessions_empty(&self) -> bool {
         self.session_manager.is_empty()
     }
 }

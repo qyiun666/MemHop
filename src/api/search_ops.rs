@@ -3,7 +3,7 @@
 
 //! Search API operations.
 
-use crate::query::types::KnowledgeNodesResult;
+use crate::query::types::{KnowledgeNodeQuery, KnowledgeNodesResult};
 #[cfg(feature = "grpc-encoder")]
 use crate::query::types::{L3EntityHint, SearchQuery, SearchResult};
 use crate::MemHop;
@@ -33,14 +33,11 @@ impl MemHop {
             );
         }
 
-        // Determine effective keywords and L3 import hints
+        // Determine effective keywords and L3 import hints via config-controlled LLM preprocessing
         let (effective_keywords, l3_import_hints): (
             Option<Vec<String>>,
             Option<Vec<L3EntityHint>>,
-        ) = if query.llm_keywords.is_some() {
-            // Caller already provided preprocessed keywords
-            (query.llm_keywords.clone(), None)
-        } else if query.enable_llm_preprocess {
+        ) = if self.config.llm_preprocess.enable_search_preprocess {
             // Run LLM preprocessing inline
             self.preprocess_search_query(&query.dialogue)
         } else {
@@ -111,11 +108,55 @@ impl MemHop {
         Ok(result)
     }
 
+    /// Unified L3 knowledge node retrieval.
+    ///
+    /// Matches on `KnowledgeNodeQuery` variant:
+    /// - `ByIds`: batch get nodes by their IDs
+    /// - `ByKeyword`: search within a graph by keyword
+    /// - `ByType`: get nodes within a graph by node type
+    pub fn query_knowledge_nodes(&self, query: KnowledgeNodeQuery) -> Result<KnowledgeNodesResult> {
+        match query {
+            KnowledgeNodeQuery::ByIds { ids, include_text } => {
+                const MAX_IDS: usize = 50;
+                let requested = ids.len();
+                let ids = if ids.len() > MAX_IDS {
+                    &ids[..MAX_IDS]
+                } else {
+                    &ids
+                };
+                let mut nodes: Vec<crate::query::types::KnowledgeNodeDetail> =
+                    Vec::with_capacity(ids.len());
+                for id_str in ids {
+                    let id_hash = crate::shared::common::parse_id_to_hash(id_str);
+                    if let Some(detail) = self.resolve_knowledge_node_detail(id_hash, include_text)
+                    {
+                        nodes.push(detail);
+                    }
+                }
+                Ok(KnowledgeNodesResult {
+                    total: nodes.len(),
+                    nodes,
+                    requested,
+                })
+            }
+            KnowledgeNodeQuery::ByKeyword {
+                graph_id,
+                keyword,
+                limit,
+            } => self.search_knowledge_nodes_by_keyword(&graph_id, &keyword, limit),
+            KnowledgeNodeQuery::ByType {
+                graph_id,
+                node_type,
+                limit,
+            } => self.get_knowledge_nodes_by_type(&graph_id, &node_type, limit),
+        }
+    }
+
     /// Search L3 knowledge nodes within a graph by exact keyword.
     ///
     /// Uses the in-memory L3 index for the graph and returns node details
     /// (without full text). If the graph has no loaded L3 index, returns an error.
-    pub fn search_knowledge_nodes_by_keyword(
+    fn search_knowledge_nodes_by_keyword(
         &self,
         graph_id: &str,
         keyword: &str,
@@ -141,7 +182,7 @@ impl MemHop {
     ///
     /// Uses the in-memory L3 index for the graph and returns node details
     /// (without full text). If the graph has no loaded L3 index, returns an error.
-    pub fn get_knowledge_nodes_by_type(
+    fn get_knowledge_nodes_by_type(
         &self,
         graph_id: &str,
         node_type: &str,

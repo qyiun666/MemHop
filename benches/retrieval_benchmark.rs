@@ -4,7 +4,7 @@
 //! throughput and recall@5 of `search_memory` over the provided questions.
 
 use criterion::{black_box, criterion_group, Criterion};
-use memhop::{MemHop, MemHopConfig, RequestSource, SearchQuery, SearchWeights};
+use memhop::{MemHop, MemHopConfig, SearchQuery, SearchWeights};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -140,14 +140,8 @@ fn setup() -> (MemHop, Vec<Question>, HashMap<String, String>) {
                 .search_context(SearchQuery {
                     dialogue,
                     l2_id: None,
-                    context_id: None,
                     l3_id: None,
-                    context_limit: 1,
-                    auto_create: 1,
-                    min_score: 0.0,
-                    source: RequestSource::default(),
-                    llm_keywords: None,
-                    enable_llm_preprocess: false,
+                    auto_create: true,
                 })
                 .expect("ingest search failed");
             if let Some(ctx) = res.contexts.first() {
@@ -175,14 +169,8 @@ fn bench_retrieval(c: &mut Criterion) {
         let search_result = db.search_context(SearchQuery {
             dialogue: q.question.clone(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: K,
-            auto_create: 0,
-            min_score: 0.0,
-            source: RequestSource::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: false,
         });
         latencies.push(start.elapsed());
 
@@ -229,14 +217,8 @@ fn bench_retrieval(c: &mut Criterion) {
                     .search_context(SearchQuery {
                         dialogue: q.question.clone(),
                         l2_id: None,
-                        context_id: None,
                         l3_id: None,
-                        context_limit: K,
-                        auto_create: 0,
-                        min_score: 0.0,
-                        source: RequestSource::default(),
-                        llm_keywords: None,
-                        enable_llm_preprocess: false,
+                        auto_create: false,
                     })
                     .expect("search failed");
                 black_box(res.contexts.len());

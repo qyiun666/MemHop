@@ -20,21 +20,14 @@ fn test_ac1_each_turn_independent_node() {
     let mut config = MemHopConfig::new(path, 768);
     config.encoder_grpc_addr = None;
     let mut db = MemHop::open(config).unwrap();
-    db.set_encoder(crate::encoder::MockEncoder::new(768));
 
     // Create a topic via auto_create to get a topic_id
     let search_res = db
         .search_context(SearchQuery {
             dialogue: "test conversation topic".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-            auto_create: 1,
-            min_score: 0.0,
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .unwrap();
     let topic_id = search_res.contexts[0].id.clone();
@@ -126,21 +119,14 @@ fn test_ac6_scene_tree_query() {
     let mut config = MemHopConfig::new(path, 768);
     config.encoder_grpc_addr = None;
     let mut db = MemHop::open(config).unwrap();
-    db.set_encoder(crate::encoder::MockEncoder::new(768));
 
     // Create a topic and add 3 turn nodes
     let search_res = db
         .search_context(SearchQuery {
             dialogue: "scene tree test".to_string(),
             l2_id: None,
-            context_id: None,
             l3_id: None,
-            context_limit: 5,
-            auto_create: 1,
-            min_score: 0.0,
-            source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+            auto_create: true,
         })
         .unwrap();
     let topic_id = search_res.contexts[0].id.clone();

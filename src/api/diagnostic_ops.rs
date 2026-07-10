@@ -75,7 +75,7 @@ impl MemHop {
     ///
     /// Returns a detailed breakdown of all L0-L6 layer entry counts,
     /// database file size, IVF index status, and cache metrics.
-    pub fn stats(&self) -> Result<MemHopStats> {
+    pub(crate) fn stats(&self) -> Result<MemHopStats> {
         let db_size_bytes = self.engine.file_size();
 
         let mut l0_profile_exists = false;
