@@ -3,12 +3,12 @@
 
 //! Shared test helpers for MemHop unit tests.
 
+use crate::l3::store::{add_edge as l3_add_edge, add_node as l3_add_node};
 use crate::layers::context::ContextSlot;
 use crate::layers::hypergraph::{
     GraphEdge, GraphEdgeKind, GraphNode, HypergraphEdge, HypergraphNode,
 };
 use crate::storage::StorageEngine;
-use crate::store::l3_store::{add_edge as l3_add_edge, add_node as l3_add_node};
 
 /// Build a `HypergraphNode` with DSL-test defaults.
 pub fn make_node(id: u64, graph_id: u64, title: &str) -> GraphNode {

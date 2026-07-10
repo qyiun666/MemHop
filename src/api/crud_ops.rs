@@ -6,8 +6,8 @@
 use crate::layers::context_node::SceneNode;
 use crate::layers::hyperedge::SceneEdge;
 use crate::query::types::{
-    Archive, ArchiveListResult, ArchivePageQuery, CrystalListQuery, CrystalListResult,
-    KnowledgeDetail, KnowledgeListQuery, KnowledgeListResult, KnowledgeNodeDetail,
+    CrystalListQuery, CrystalListResult, KnowledgeDetail, KnowledgeListQuery, KnowledgeListResult,
+    KnowledgeNodeDetail,
 };
 use crate::query::types::{L1Edge, L1Graph, L1Node};
 use crate::shared::common::format_hash;
@@ -17,42 +17,10 @@ use crate::storage::record::{
 use crate::{MemHop, Result};
 
 impl MemHop {
-    /// Get single archive by ID
-    pub(crate) fn get_archive(&self, id: &str) -> Result<Option<Archive>> {
-        use crate::query::list::get_archive as impl_fn;
-        impl_fn(&self.engine, id)
-    }
-
-    /// List archives by node IDs
-    pub(crate) fn list_archives_by_nodes(
-        &self,
-        node_ids: &[String],
-        query: ArchivePageQuery,
-    ) -> Result<ArchiveListResult> {
-        use crate::query::list::list_archives_by_nodes as impl_fn;
-        impl_fn(&self.engine, node_ids, query)
-    }
-
-    /// List all archives
-    pub(crate) fn list_all_archives(&self, query: ArchivePageQuery) -> Result<ArchiveListResult> {
-        use crate::query::list::list_all_archives as impl_fn;
-        impl_fn(&self.engine, query)
-    }
-
     /// List crystals with pagination and filtering
     pub fn list_crystals(&self, query: CrystalListQuery) -> Result<CrystalListResult> {
         use crate::query::list::list_crystals as impl_fn;
         impl_fn(&self.engine, query)
-    }
-
-    /// Activate a crystal (L5 action chain) by ID.
-    ///
-    /// Validates confidence >= 0.5 and at least one linked ActionStep, then
-    /// flips the chain status to Active.
-    pub(crate) fn activate_crystal(&mut self, id: &str) -> Result<()> {
-        use crate::dream::crystallize_stage::activate_crystal as impl_fn;
-        let chain_id = crate::shared::common::parse_id_to_hash(id);
-        impl_fn(&mut self.engine, chain_id)
     }
 
     /// Get single knowledge (L3 hypergraph) by ID
@@ -260,7 +228,7 @@ impl MemHop {
                 e.node_ids.iter().any(|nid| {
                     u64::from_str_radix(nid, 16)
                         .ok()
-                        .map_or(false, |h| node_set.contains(&h))
+                        .is_some_and(|h| node_set.contains(&h))
                 })
             });
         }

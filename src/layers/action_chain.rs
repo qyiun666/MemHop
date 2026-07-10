@@ -20,6 +20,7 @@ pub enum ChainStatus {
 }
 
 impl ChainStatus {
+    #[cfg(test)]
     pub fn from_u8(v: u8) -> Self {
         match v {
             0 => Self::Draft,
@@ -50,12 +51,13 @@ pub struct ActionChainSlot {
 }
 
 impl ActionChainSlot {
-    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
-        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
-    }
-
     pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
         bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
+    }
+
+    #[cfg(test)]
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 }
 
@@ -74,12 +76,14 @@ pub struct ActionStep {
 }
 
 impl ActionStep {
-    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
-        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
-    }
-
+    #[cfg(test)]
     pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
         bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
+    }
+
+    #[cfg(test)]
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 }
 

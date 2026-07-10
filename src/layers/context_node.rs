@@ -22,6 +22,7 @@ pub struct ContextNode {
 }
 
 impl ContextNode {
+    #[cfg(test)]
     pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
         bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }

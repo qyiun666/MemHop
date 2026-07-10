@@ -87,8 +87,7 @@ pub fn apply_precomputed_crystals(
     Ok(new_ids)
 }
 
-/// Activate a crystal by validating quality and flipping status to Active.
-/// Requires confidence >= 0.5 and at least one linked ActionStep.
+#[cfg(test)]
 pub fn activate_crystal(engine: &mut StorageEngine, chain_id: u64) -> Result<(), MemHopError> {
     let (record_type, data) = engine.read_record(chain_id)?.ok_or_else(|| {
         MemHopError::Serialization(format!("ActionChain {} not found in index", chain_id))

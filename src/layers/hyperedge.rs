@@ -19,6 +19,7 @@ pub enum HyperedgeKind {
 }
 
 impl HyperedgeKind {
+    #[cfg(test)]
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => Self::CoOccurrence,
@@ -47,6 +48,7 @@ pub struct HyperedgeSlot {
 }
 
 impl HyperedgeSlot {
+    #[cfg(test)]
     pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
         bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }

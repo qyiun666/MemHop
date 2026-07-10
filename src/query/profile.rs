@@ -5,10 +5,10 @@
 
 use crate::layers::profile::ProfileSlot;
 use crate::query::types::ProfileResult;
-use crate::shared::common::{format_hash, now_ms};
-use crate::storage::record::*;
+use crate::shared::common::format_hash;
+#[cfg(test)]
+use crate::storage::record::REC_L0_PROFILE;
 use crate::storage::StorageEngine;
-use crate::store::write_slot;
 use crate::util::hash_id;
 use crate::MemHopError;
 
@@ -26,26 +26,6 @@ pub fn read_profile(engine: &StorageEngine) -> Result<Option<ProfileResult>, Mem
         }
         None => Ok(None),
     }
-}
-
-/// Write (create or update) a `ProfileSlot` to engine.
-pub fn write_profile(engine: &mut StorageEngine, mut slot: ProfileSlot) -> Result<(), MemHopError> {
-    let profile_id_hash = hash_id(PROFILE_ID);
-
-    slot.updated_at = now_ms();
-    if slot.created_at == 0 {
-        slot.created_at = slot.updated_at;
-    }
-    if slot.version == 0 {
-        slot.version = 1;
-    } else {
-        slot.version += 1;
-    }
-
-    let data = bincode::serialize(&slot).map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-    engine.write_record(REC_L0_PROFILE, profile_id_hash, &data)?;
-    Ok(())
 }
 
 fn to_profile_result(profile: &ProfileSlot) -> ProfileResult {
@@ -67,7 +47,29 @@ fn to_profile_result(profile: &ProfileSlot) -> ProfileResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::common::now_ms;
+    use crate::store::write_slot;
     use tempfile::NamedTempFile;
+
+    fn write_profile(engine: &mut StorageEngine, mut slot: ProfileSlot) -> Result<(), MemHopError> {
+        let profile_id_hash = hash_id(PROFILE_ID);
+
+        slot.updated_at = now_ms();
+        if slot.created_at == 0 {
+            slot.created_at = slot.updated_at;
+        }
+        if slot.version == 0 {
+            slot.version = 1;
+        } else {
+            slot.version += 1;
+        }
+
+        let data =
+            bincode::serialize(&slot).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+
+        engine.write_record(REC_L0_PROFILE, profile_id_hash, &data)?;
+        Ok(())
+    }
 
     #[test]
     fn test_profile_write_and_read() {

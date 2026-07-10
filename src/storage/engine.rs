@@ -411,7 +411,7 @@ impl StorageEngine {
 
     fn scan_records(&mut self) -> Result<()> {
         let mut offset = DATA_START;
-        while let Some((rt, flags, data, id_hash)) = record_data(&self.mmap, offset)? {
+        while let Some((_rt, flags, data, id_hash)) = record_data(&self.mmap, offset)? {
             if flags & crate::storage::record::FLAG_DELETED == 0 {
                 self.index.insert(id_hash, offset);
             }
@@ -557,12 +557,14 @@ fn select_valid_header(a: &FileHeader, b: &FileHeader) -> Result<FileHeader> {
     }
 }
 
+#[cfg(test)]
 /// Buffered write/delete batch for dream operations.
 pub struct DreamBuffer {
     pub pending_writes: Vec<(u8, u64, Vec<u8>)>, // (record_type, id_hash, data)
     pub pending_deletes: Vec<u64>,               // id_hash
 }
 
+#[cfg(test)]
 impl DreamBuffer {
     pub fn new() -> Self {
         Self {

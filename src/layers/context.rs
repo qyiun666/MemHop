@@ -18,12 +18,14 @@ use serde::{Deserialize, Serialize};
 // SceneSlot — per-scene metadata
 // ============================================================================
 
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneSlot {
     pub scene_id: u64,
     pub scene_name: String,
 }
 
+#[cfg(test)]
 impl SceneSlot {
     pub fn new(scene_name: &str) -> Self {
         Self {
@@ -115,6 +117,7 @@ impl TopicSlot {
     pub const FIXED_SIZE: usize = 87;
 
     /// Create a new depth-1 turn node with idempotent ID.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_turn(
         scene_id: u64,
         user_keywords: Vec<String>,

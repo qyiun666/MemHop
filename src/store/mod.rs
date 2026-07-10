@@ -8,12 +8,11 @@
 pub mod l0_store;
 pub mod l1_store;
 pub mod l2_store;
-pub mod l3_store;
 pub mod l4_store;
 pub mod l5_store;
 pub mod l6_store;
 
-use crate::storage::{record::*, StorageEngine};
+use crate::storage::StorageEngine;
 use crate::{MemHopError, Result};
 use serde::{de::DeserializeOwned, Serialize};
 

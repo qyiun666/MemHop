@@ -222,7 +222,7 @@ fn create_new_l2_context(
     engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     dialogue: &str,
-    vector_dim: usize,
+    _vector_dim: usize,
     encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
 ) -> Result<ContextSlot, MemHopError> {
     use std::sync::atomic::{AtomicU64, Ordering};

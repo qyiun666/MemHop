@@ -72,6 +72,7 @@ impl OpenAICompatibleLlmProvider {
     // Low-level API call
     // ========================================================================
 
+    #[allow(clippy::too_many_arguments)]
     fn call_api(
         &self,
         system: &str,
@@ -124,6 +125,7 @@ impl OpenAICompatibleLlmProvider {
     }
 
     /// Call with one retry on parse failure.
+    #[allow(clippy::too_many_arguments)]
     fn call_with_retry<T>(
         &self,
         system: &str,

@@ -4,6 +4,7 @@
 // L0 ProfileSlot — agent identity (JSON format).
 // Behavioral skills are NOT stored here; MemHop is a memory database.
 
+#[cfg(test)]
 use crate::api::MemHopError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -30,10 +31,12 @@ pub struct ProfileSlot {
 }
 
 impl ProfileSlot {
+    #[cfg(test)]
     pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
         bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
+    #[cfg(test)]
     pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
         bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
     }

@@ -4,6 +4,7 @@
 // L4 ArchiveSlot — raw conversation storage.
 // Immutable ground truth; no version field needed.
 
+#[cfg(test)]
 use crate::api::MemHopError;
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +21,7 @@ pub enum ContentType {
 }
 
 impl ContentType {
+    #[cfg(test)]
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => ContentType::Text,
@@ -66,10 +68,12 @@ impl ArchiveSlot {
             .unwrap_or_default()
     }
 
+    #[cfg(test)]
     pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
         bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
+    #[cfg(test)]
     pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
         bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
     }

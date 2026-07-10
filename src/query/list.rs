@@ -5,13 +5,9 @@
 
 use crate::layers::action_chain::{ActionChainSlot, ChainStatus};
 use crate::layers::archive::ArchiveSlot;
-use crate::layers::context::ContextSlot;
-use crate::layers::context_node::ContextNode;
 use crate::layers::hypergraph::HypergraphSlot;
 use crate::query::types::*;
-use crate::shared::common::{
-    self, format_hash, has_more, matches_keyword, pagination_params, sort_by_score,
-};
+use crate::shared::common::{self, format_hash, has_more, matches_keyword, pagination_params};
 use crate::storage::record::*;
 use crate::storage::StorageEngine;
 
@@ -65,140 +61,8 @@ where
 }
 
 // ============================================================================
-// L1 ContextNode Queries (Engram API)
-// ============================================================================
-
-/// Get single L1 node by ID (text/summary read from linked L2)
-pub fn get_engram(engine: &StorageEngine, id: &str) -> Result<Option<EngramResult>, MemHopError> {
-    let id_hash = common::parse_id_to_hash(id);
-
-    match engine.read_record(id_hash)? {
-        Some((_rt, data)) => {
-            let node = ContextNode::deserialize(data)
-                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-            Ok(Some(build_engram_result_from_node(engine, &node)?))
-        }
-        None => Ok(None),
-    }
-}
-
-/// List L1 nodes with pagination and filtering
-pub fn list_engrams(
-    engine: &StorageEngine,
-    query: EngramListQuery,
-) -> Result<EngramListResult, MemHopError> {
-    let (items, total, has_more) = list_slots(
-        engine,
-        REC_L1_SCENE_NODE,
-        query.page,
-        query.page_size,
-        |slot_data| ContextNode::deserialize(slot_data).ok(),
-        |node: &ContextNode| {
-            if let Some(min_importance) = query.min_importance {
-                if node.importance < min_importance {
-                    return false;
-                }
-            }
-
-            if let Some(ref keyword) = query.keyword {
-                if let Ok(title) = load_context_title(engine, node.context_id) {
-                    if !matches_keyword(&title, keyword) {
-                        return false;
-                    }
-                }
-            }
-
-            // L1 ContextNodes always have memory_state="Active".
-            if let Some(ref state_filter) = query.state_filter {
-                if state_filter != "Active" {
-                    return false;
-                }
-            }
-
-            true
-        },
-        |nodes| sort_by_score(nodes, |node| node.importance),
-        |node| build_engram_result_from_node(engine, &node).ok(),
-    );
-
-    Ok(EngramListResult {
-        items,
-        total,
-        page: query.page,
-        page_size: query.page_size,
-        has_more,
-    })
-}
-
-fn load_context_title(engine: &StorageEngine, context_id: u64) -> Result<String, MemHopError> {
-    if let Some((_rt, data)) = engine.read_record(context_id)? {
-        if let Ok(ctx) = bincode::deserialize::<ContextSlot>(data) {
-            return Ok(ctx.user_keywords.join(", "));
-        }
-    }
-    Ok(String::new())
-}
-
-fn build_engram_result_from_node(
-    engine: &StorageEngine,
-    node: &ContextNode,
-) -> Result<EngramResult, MemHopError> {
-    let (text, summary, keywords) =
-        if let Some((_rt, data)) = engine.read_record(node.context_id)? {
-            match bincode::deserialize::<ContextSlot>(data) {
-                Ok(ctx) => {
-                    let kw = crate::index::sparse::tokenize(&ctx.user_keywords.join(", "));
-                    (ctx.user_keywords.join(", "), ctx.fused_summary, kw)
-                }
-                Err(_) => (String::new(), None, vec![]),
-            }
-        } else {
-            (String::new(), None, vec![])
-        };
-
-    Ok(EngramResult {
-        id: format_hash(node.id_hash),
-        text,
-        summary,
-        keywords,
-        created_at: node.created_at,
-        updated_at: node.updated_at,
-        memory_state: "Active".to_string(),
-        importance: node.importance,
-        source_type: "Agent".to_string(),
-        edge_count: node.edge_ptrs.len(),
-        associated_topics: vec![format_hash(node.context_id)],
-    })
-}
-
-// ============================================================================
 // Archive Queries
 // ============================================================================
-
-pub fn get_archive(engine: &StorageEngine, id: &str) -> Result<Option<Archive>, MemHopError> {
-    let id_hash = common::parse_id_to_hash(id);
-
-    match engine.read_record(id_hash)? {
-        Some((_rt, data)) => {
-            if let Ok(archive) = bincode::deserialize::<ArchiveSlot>(data) {
-                let src = archive.request_source();
-                return Ok(Some(Archive {
-                    id: format_hash(archive.id_hash),
-                    content: archive.content,
-                    content_type: archive.content_type.as_str().to_string(),
-                    source_ref: None,
-                    topic_id: Some(format_hash(archive.context_id)),
-                    engram_ids: vec![],
-                    created_at: archive.created_at,
-                    source_agent: src.source_agent,
-                    source_platform: src.source_platform,
-                }));
-            }
-            Ok(None)
-        }
-        None => Ok(None),
-    }
-}
 
 pub fn list_archives_by_topic(
     engine: &StorageEngine,
@@ -207,27 +71,6 @@ pub fn list_archives_by_topic(
 ) -> Result<ArchiveListResult, MemHopError> {
     let topic_hash = common::parse_id_to_hash(topic_id);
     list_archives_with_filter(engine, query, |archive| archive.context_id == topic_hash)
-}
-
-pub fn list_archives_by_nodes(
-    engine: &StorageEngine,
-    node_ids: &[String],
-    query: ArchivePageQuery,
-) -> Result<ArchiveListResult, MemHopError> {
-    let node_hashes: Vec<u64> = node_ids
-        .iter()
-        .map(|id| common::parse_id_to_hash(id))
-        .collect();
-    list_archives_with_filter(engine, query, |archive| {
-        node_hashes.contains(&archive.context_id)
-    })
-}
-
-pub fn list_all_archives(
-    engine: &StorageEngine,
-    query: ArchivePageQuery,
-) -> Result<ArchiveListResult, MemHopError> {
-    list_archives_with_filter(engine, query, |_| true)
 }
 
 fn list_archives_with_filter<F>(

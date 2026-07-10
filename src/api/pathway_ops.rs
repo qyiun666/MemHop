@@ -23,8 +23,7 @@ impl MemHop {
     /// by the delta (clamped to [0.0, 1.0]). Otherwise, the absolute `weight`
     /// value is used.
     pub fn update_l6(&mut self, id: &str, fields: UpdateL6Fields) -> Result<PathwayWeightSlot> {
-        if fields.weight_delta.is_some() {
-            let delta = fields.weight_delta.unwrap();
+        if let Some(delta) = fields.weight_delta {
             let updated = crate::query::l6_ops::update_l6_weight(&mut self.engine, id, delta)?;
             self.pathways = crate::query::l6_ops::list_l6(&self.engine, None)?;
             Ok(updated)

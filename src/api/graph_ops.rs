@@ -100,32 +100,6 @@ impl MemHop {
         Ok((Subgraph { nodes, edges }, hops))
     }
 
-    /// Detect isolated (or low-degree) nodes in an L3 hypergraph.
-    pub(crate) fn l3_detect_isolated(
-        &mut self,
-        graph_id: &str,
-        threshold: u32,
-    ) -> Result<crate::l3::degree::IsolatedResult> {
-        let graph_hash = crate::shared::common::parse_id_to_hash(graph_id);
-        crate::l3::degree::detect_isolated(
-            &self.engine,
-            graph_hash,
-            &mut self.degree_tracker,
-            threshold,
-        )
-    }
-
-    /// Run Leiden community detection on an L3 hypergraph.
-    pub(crate) fn l3_detect_communities(
-        &mut self,
-        graph_id: &str,
-        config: Option<crate::l3::CommunityConfig>,
-    ) -> Result<crate::l3::CommunityResult> {
-        let graph_hash = crate::shared::common::parse_id_to_hash(graph_id);
-        let cfg = config.unwrap_or_default();
-        crate::l3::community::run_community_detection(&self.engine, graph_hash, &cfg)
-    }
-
     /// Execute an L3 DSL query against a hypergraph.
     pub fn l3_query(
         &mut self,

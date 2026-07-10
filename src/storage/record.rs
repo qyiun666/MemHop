@@ -13,8 +13,10 @@ pub const REC_L0_PROFILE: u8 = 0x01;
 pub const REC_L1_SCENE_NODE: u8 = 0x02;
 pub const REC_L1_HYPEREDGE: u8 = 0x03;
 pub const REC_L2_TOPIC: u8 = 0x04;
-pub const REC_L2_SCENE: u8 = 0x05;
 pub const REC_L3_GRAPH_NODE: u8 = 0x06;
+
+#[cfg(test)]
+pub const REC_L2_SCENE: u8 = 0x05;
 pub const REC_L3_GRAPH_EDGE: u8 = 0x07;
 pub const REC_L4_ARCHIVE: u8 = 0x08;
 pub const REC_L5_ACTION_CHAIN: u8 = 0x09;
@@ -40,6 +42,7 @@ pub fn encode_record(record_type: u8, flags: u8, id_hash: u64, data: &[u8]) -> V
 
 /// Parse a record header from a byte slice.
 /// Returns `(record_type, flags, data_length, id_hash)` if the slice is large enough.
+#[cfg(test)]
 pub fn parse_record_header(buf: &[u8]) -> Option<(u8, u8, u32, u64)> {
     if buf.len() < RECORD_HEADER_SIZE {
         return None;
@@ -55,6 +58,7 @@ pub fn parse_record_header(buf: &[u8]) -> Option<(u8, u8, u32, u64)> {
 
 /// Read a full record from an mmap slice at the given offset.
 /// Returns `(record_type, flags, data_slice, id_hash)` with zero-copy data reference.
+#[allow(clippy::type_complexity)]
 pub fn record_data(mmap: &[u8], offset: u64) -> Result<Option<(u8, u8, &[u8], u64)>> {
     let off = offset as usize;
     if off + RECORD_HEADER_SIZE > mmap.len() {

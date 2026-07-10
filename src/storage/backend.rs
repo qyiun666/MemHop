@@ -2,52 +2,52 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 //! Storage backend abstraction: mmap for native, buffered for WASM.
+//!
+//! `StorageBackend` trait, `MmapBackend`, and `BufferedBackend` are only
+//! reachable via tests or WASM builds after the v2 engine rewrite.
+//! They are gated behind `#[cfg(any(test, target_arch = "wasm32"))]`.
 
+#[cfg(any(test, target_arch = "wasm32"))]
 use crate::{MemHopError, Result};
+#[cfg(any(test, target_arch = "wasm32"))]
 use std::fs::File;
+#[cfg(any(test, target_arch = "wasm32"))]
 use std::io::{Seek, SeekFrom, Write};
 
 /// Trait for low-level storage backends.
+#[cfg(any(test, target_arch = "wasm32"))]
 pub trait StorageBackend: Send + Sync {
-    /// Read `len` bytes starting at `offset` as a zero-copy slice.
     fn read(&self, offset: u64, len: usize) -> Result<&[u8]>;
-
-    /// Append data to the end of the storage, returning the offset written.
     fn append(&mut self, data: &[u8]) -> Result<u64>;
-
-    /// Sync all data to persistent storage.
     fn sync(&self) -> Result<()>;
-
-    /// Total length of the backend in bytes.
     fn len(&self) -> u64;
-
-    /// Whether the backend is empty.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
 #[cfg(not(target_arch = "wasm32"))]
 pub struct MmapBackend {
     file: File,
     mmap: memmap2::MmapMut,
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
 #[cfg(not(target_arch = "wasm32"))]
 impl MmapBackend {
-    /// Create a new backend from an existing file.
     pub fn new(file: File) -> Result<Self> {
         let mmap = unsafe { memmap2::MmapMut::map_mut(&file)? };
         Ok(Self { file, mmap })
     }
 
-    /// Ensure the mmap covers the current file size.
     fn refresh_mmap(&mut self) -> Result<()> {
         self.mmap = unsafe { memmap2::MmapMut::map_mut(&self.file)? };
         Ok(())
     }
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
 #[cfg(not(target_arch = "wasm32"))]
 impl StorageBackend for MmapBackend {
     fn read(&self, offset: u64, len: usize) -> Result<&[u8]> {
@@ -81,11 +81,13 @@ impl StorageBackend for MmapBackend {
     }
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
 #[cfg(target_arch = "wasm32")]
 pub struct BufferedBackend {
     data: Vec<u8>,
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
 #[cfg(target_arch = "wasm32")]
 impl BufferedBackend {
     pub fn new() -> Self {
@@ -93,6 +95,7 @@ impl BufferedBackend {
     }
 }
 
+#[cfg(any(test, target_arch = "wasm32"))]
 #[cfg(target_arch = "wasm32")]
 impl StorageBackend for BufferedBackend {
     fn read(&self, offset: u64, len: usize) -> Result<&[u8]> {

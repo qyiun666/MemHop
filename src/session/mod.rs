@@ -15,6 +15,7 @@ pub struct TopicActivation {
 }
 
 impl TopicActivation {
+    #[cfg(test)]
     fn new(topic_id: u64, ttl_ms: i64) -> Self {
         let now = current_timestamp_ms();
         Self {
@@ -24,6 +25,7 @@ impl TopicActivation {
         }
     }
 
+    #[cfg(test)]
     fn update(&mut self, new_ttl_ms: Option<i64>) {
         self.last_hit_at = current_timestamp_ms();
         if let Some(ttl) = new_ttl_ms {
@@ -40,20 +42,25 @@ impl TopicActivation {
 /// When capacity exceeded, LRU topic auto-deactivates (not deleted).
 pub struct SessionManager {
     active_topics: HashMap<u64, TopicActivation>,
+    #[cfg(test)]
     default_ttl_ms: i64,
     /// Max simultaneously active topics (default 7, Miller's law).
+    #[cfg(test)]
     capacity: usize,
 }
 
 impl SessionManager {
-    pub fn new(config: &SessionConfig) -> Self {
+    pub fn new(_config: &SessionConfig) -> Self {
         Self {
             active_topics: HashMap::new(),
-            default_ttl_ms: config.default_ttl_ms,
-            capacity: config.capacity,
+            #[cfg(test)]
+            default_ttl_ms: _config.default_ttl_ms,
+            #[cfg(test)]
+            capacity: _config.capacity,
         }
     }
 
+    #[cfg(test)]
     /// Activates or refreshes a topic; evicts LRU if capacity exceeded.
     /// Returns evicted topic_id, or None.
     pub fn activate_topic(&mut self, topic_id: u64, ttl_ms: Option<i64>) -> Option<u64> {
@@ -77,6 +84,7 @@ impl SessionManager {
         evicted
     }
 
+    #[cfg(test)]
     fn evict_lru(&mut self) -> Option<u64> {
         if self.active_topics.is_empty() {
             return None;
@@ -95,6 +103,7 @@ impl SessionManager {
         lru_id
     }
 
+    #[cfg(test)]
     pub fn deactivate_topic(&mut self, topic_id: u64) {
         self.active_topics.remove(&topic_id);
     }
@@ -109,6 +118,7 @@ impl SessionManager {
             .collect()
     }
 
+    #[cfg(test)]
     /// TTL adjustment: `ttl += delta × 600_000 ms`, minimum 60_000 ms.
     pub fn adjust_activation(&mut self, topic_id: u64, delta: f32) {
         if let Some(activation) = self.active_topics.get_mut(&topic_id) {
@@ -118,6 +128,7 @@ impl SessionManager {
         }
     }
 
+    #[cfg(test)]
     pub fn purge_expired(&mut self, current_time: i64) {
         self.active_topics
             .retain(|_, activation| !activation.is_expired(current_time));

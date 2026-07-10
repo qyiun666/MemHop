@@ -85,13 +85,6 @@ impl MemHop {
         }
     }
 
-    /// Lightweight dream: consolidate a single evicted topic.
-    ///
-    /// Convenience wrapper around `dream(Some(vec![topic_id]))`.
-    pub(crate) fn dream_single_topic(&mut self, topic_id: u64) -> Result<DreamReport> {
-        self.dream(Some(vec![format!("{:016x}", topic_id)]))
-    }
-
     /// Batch store multiple documents using the five-phase pipeline
     ///
     /// This method requires an encoder to be set via `set_encoder()` before calling.

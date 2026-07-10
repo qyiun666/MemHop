@@ -3,8 +3,6 @@
 
 //! Shared utilities for query module.
 
-use crate::MemHopError;
-
 #[inline]
 pub fn now_ms() -> i64 {
     crate::util::get_current_timestamp()
@@ -38,29 +36,6 @@ pub fn build_l2_sparse_terms(title: &str, summary: &Option<String>) -> (Vec<Stri
     (terms, doc_len)
 }
 
-/// Generates a `deserialize_slot` wrapper that converts errors to MemHopError::Serialization.
-macro_rules! impl_deserialize_slot {
-    ($type:ty, $name:expr) => {
-        impl $type {
-            pub fn deserialize_slot(data: &[u8]) -> Result<Self, MemHopError> {
-                <$type>::deserialize(data).map_err(|e| {
-                    MemHopError::Serialization(format!("{} deserialize: {}", $name, e))
-                })
-            }
-        }
-    };
-}
-
-impl_deserialize_slot!(crate::layers::context::ContextSlot, "ContextSlot");
-impl_deserialize_slot!(crate::layers::context_node::ContextNode, "ContextNode");
-impl_deserialize_slot!(crate::layers::archive::ArchiveSlot, "ArchiveSlot");
-impl_deserialize_slot!(crate::layers::hypergraph::HypergraphSlot, "HypergraphSlot");
-impl_deserialize_slot!(crate::layers::profile::ProfileSlot, "ProfileSlot");
-impl_deserialize_slot!(
-    crate::layers::action_chain::ActionChainSlot,
-    "ActionChainSlot"
-);
-
 #[inline]
 pub fn pagination_params(page: usize, page_size: usize) -> (usize, usize) {
     let skip = page.saturating_sub(1) * page_size;
@@ -77,16 +52,4 @@ pub fn has_more(skip: usize, take: usize, total: usize) -> bool {
 pub fn matches_keyword(text: &str, keyword: &str) -> bool {
     let keyword_lower = keyword.to_lowercase();
     text.to_lowercase().contains(&keyword_lower)
-}
-
-#[inline]
-pub fn sort_by_score<T, F>(items: &mut [T], score_fn: F)
-where
-    F: Fn(&T) -> f32,
-{
-    items.sort_by(|a, b| {
-        score_fn(b)
-            .partial_cmp(&score_fn(a))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })
 }

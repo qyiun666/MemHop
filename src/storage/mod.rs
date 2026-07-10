@@ -7,6 +7,4 @@ pub mod backend;
 pub mod engine;
 pub mod record;
 
-pub use backend::{MmapBackend, StorageBackend};
 pub use engine::StorageEngine;
-pub use record::*;

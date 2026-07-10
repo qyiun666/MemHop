@@ -20,6 +20,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Quick-read record type from a record (v2 engine equivalent of old `page_type_of`).
 #[inline]
+#[cfg(test)]
 pub(crate) fn page_type_of(engine: &StorageEngine, id_hash: u64) -> Option<u16> {
     match engine.read_record(id_hash) {
         Ok(Some((record_type, _data))) => Some(record_type as u16),

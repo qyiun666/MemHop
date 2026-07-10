@@ -10,10 +10,6 @@ use std::fmt;
 
 pub const PAGE_SIZE: usize = 4096;
 
-pub const MAGIC: [u8; 4] = [0x4D, 0x45, 0x48, 0x21]; // "MEH!"
-pub const TAIL_MAGIC: [u8; 4] = [0xDE, 0xAD, 0xBE, 0xEF];
-pub const VERSION: u16 = 0x0025;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Layer {
     Profile,     // L0: Agent identity

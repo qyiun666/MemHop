@@ -5,6 +5,7 @@ use crate::storage::StorageEngine;
 use crate::util::{hash_id, PAGE_SIZE};
 use crate::{MemHopError, Result as MemHopResult};
 use half::f16;
+#[cfg(test)]
 use memmap2::MmapMut;
 #[cfg(target_arch = "aarch64")]
 use std::arch::aarch64::*;
@@ -203,10 +204,7 @@ pub fn read_vector_from_engine(
             std::io::ErrorKind::NotFound,
             "Vector record not found",
         )),
-        Err(e) => Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            e.to_string(),
-        )),
+        Err(e) => Err(std::io::Error::other(e.to_string())),
     }
 }
 
@@ -215,6 +213,7 @@ pub fn vec_record_hash(topic_id_hash: u64) -> u64 {
     hash_id(&format!("v:{}", topic_id_hash))
 }
 
+#[cfg(test)]
 /// Slot layout: `[id_hash: u64][last_access: i64][vector: f16[dim]]`.
 pub fn write_vector(
     mmap: &mut MmapMut,

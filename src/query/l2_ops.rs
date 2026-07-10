@@ -3,15 +3,13 @@
 
 //! L2 ContextSlot CRUD internal implementation.
 
-use crate::dream::llm::LlmProvider;
-use crate::encoder::Encoder;
 use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
-use crate::layers::context::{ContextSlot, SceneSlot};
+use crate::layers::context::ContextSlot;
 use crate::query::search::L1ReverseIndex;
 use crate::query::types::{
-    MergeNodesResult, MergeResult, SceneTreeResult, TopicDetail, TopicListQuery, TopicListResult,
-    TopicSummary, UpdateL2Fields,
+    MergeResult, SceneTreeResult, TopicDetail, TopicListQuery, TopicListResult, TopicSummary,
+    UpdateL2Fields,
 };
 use crate::shared::common::{format_hash, now_ms, parse_id_to_hash};
 use crate::storage::record::*;
@@ -25,17 +23,6 @@ use std::collections::HashSet;
 
 fn load_context(engine: &StorageEngine, id_hash: u64) -> Result<Option<ContextSlot>, MemHopError> {
     match engine.read_record(id_hash)? {
-        Some((_rt, data)) => {
-            Ok(Some(bincode::deserialize(data).map_err(|e| {
-                MemHopError::Deserialization(e.to_string())
-            })?))
-        }
-        None => Ok(None),
-    }
-}
-
-fn load_scene(engine: &StorageEngine, scene_id: u64) -> Result<Option<SceneSlot>, MemHopError> {
-    match engine.read_record(scene_id)? {
         Some((_rt, data)) => {
             Ok(Some(bincode::deserialize(data).map_err(|e| {
                 MemHopError::Deserialization(e.to_string())
@@ -116,7 +103,7 @@ pub fn list_l2(
     }
 
     // Sort by updated_at descending (most recently updated first)
-    all.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    all.sort_by_key(|b| std::cmp::Reverse(b.updated_at));
 
     let (skip, take) = crate::shared::common::pagination_params(query.page, query.page_size);
     let total = all.len();
@@ -381,50 +368,6 @@ pub fn merge_l2(
 }
 
 // ============================================================================
-// Scene CRUD
-// ============================================================================
-
-/// Create a scene. Idempotent — returns scene_id of existing scene if name matches.
-pub fn create_scene(engine: &mut StorageEngine, name: &str) -> Result<u64, MemHopError> {
-    let scene = SceneSlot::new(name);
-    let scene_id = scene.scene_id;
-
-    // Idempotent: return existing scene_id if already created
-    if let Some(_) = load_scene(engine, scene_id)? {
-        return Ok(scene_id);
-    }
-
-    let data = bincode::serialize(&scene).map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    engine.write_record(REC_L2_SCENE, scene_id, &data)?;
-
-    Ok(scene_id)
-}
-
-/// Read a scene by its numeric id.
-pub fn get_scene(engine: &StorageEngine, scene_id: u64) -> Result<Option<SceneSlot>, MemHopError> {
-    load_scene(engine, scene_id)
-}
-
-/// List all scenes as (scene_id, scene_name) pairs.
-pub fn list_scenes(engine: &StorageEngine) -> Result<Vec<(u64, String)>, MemHopError> {
-    let mut results: Vec<(u64, String)> = Vec::new();
-
-    for (&id_hash, _) in engine.iter_index() {
-        let Some((rt, data)) = engine.read_record(id_hash)? else {
-            continue;
-        };
-        if rt != REC_L2_SCENE {
-            continue;
-        }
-        if let Ok(scene) = bincode::deserialize::<SceneSlot>(data) {
-            results.push((scene.scene_id, scene.scene_name));
-        }
-    }
-
-    Ok(results)
-}
-
-// ============================================================================
 // Scene Tree Query
 // ============================================================================
 
@@ -487,72 +430,6 @@ pub fn list_scene_tree(
         depth_distribution,
         nodes: topic_details,
         edges,
-    })
-}
-
-// ============================================================================
-// Merge Nodes (scene reassignment)
-// ============================================================================
-
-/// Merge secondary scenes into a main scene.
-///
-/// All nodes from `secondary_scene_ids` have their `scene_id` changed to
-/// `main_scene_id`.  No other metadata is modified — pure scene reassignment.
-pub fn merge_nodes(
-    engine: &mut StorageEngine,
-    _sparse_index: &mut SparseIndex,
-    l2_meta: &mut L2MetaIndex,
-    main_scene_id: u64,
-    secondary_scene_ids: &[u64],
-) -> Result<MergeNodesResult, MemHopError> {
-    let mut merged_count: u32 = 0;
-
-    for &sec_id in secondary_scene_ids {
-        // Clone the list — update_from_context mutates by_scene during iteration
-        let node_ids = l2_meta.get_by_scene(sec_id).cloned().unwrap_or_default();
-
-        for &id_hash in &node_ids {
-            let (_, data) = match engine.read_record(id_hash)? {
-                Some(v) => v,
-                None => continue,
-            };
-            let mut ctx: ContextSlot = match bincode::deserialize(data) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            // Only reassign if not already in the main scene
-            if ctx.scene_id == main_scene_id {
-                continue;
-            }
-
-            ctx.scene_id = main_scene_id;
-            ctx.updated_at = now_ms();
-
-            let data =
-                bincode::serialize(&ctx).map_err(|e| MemHopError::Serialization(e.to_string()))?;
-            engine.write_record(REC_L2_TOPIC, id_hash, &data)?;
-
-            // update_from_context handles removing from old scene index
-            // and adding to new scene index
-            l2_meta.update_from_context(&ctx);
-
-            merged_count += 1;
-        }
-
-        // After reassigning all nodes from this secondary scene,
-        // delete its SceneSlot record (no nodes remain under sec_id).
-        if l2_meta
-            .get_by_scene(sec_id)
-            .map_or(true, |ids| ids.is_empty())
-        {
-            let _ = engine.delete_record(sec_id);
-        }
-    }
-
-    Ok(MergeNodesResult {
-        main_scene_id: format_hash(main_scene_id),
-        merged_node_count: merged_count,
     })
 }
 

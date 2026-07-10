@@ -36,6 +36,7 @@ use std::collections::HashSet;
 const MAX_RECENT_DIALOGUES: usize = 30;
 
 /// Run a single dream stage, recording its result and rolling back on fatal errors.
+#[allow(clippy::too_many_arguments)]
 fn run_stage<F, R>(
     name: &str,
     failure_description: &str,

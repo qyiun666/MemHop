@@ -3,7 +3,7 @@
 
 //! API-20/21: Diagnostic and inspection operations — health check and statistics.
 
-use crate::query::types::{HealthStatus, MemHopStats};
+use crate::query::types::HealthStatus;
 use crate::storage::record::*;
 use crate::{MemHop, Result};
 
@@ -68,57 +68,6 @@ impl MemHop {
             encoder_configured,
             ivf_index_built,
             issues,
-        })
-    }
-
-    /// Get memory layer statistics.
-    ///
-    /// Returns a detailed breakdown of all L0-L6 layer entry counts,
-    /// database file size, IVF index status, and cache metrics.
-    pub(crate) fn stats(&self) -> Result<MemHopStats> {
-        let db_size_bytes = self.engine.file_size();
-
-        let mut l0_profile_exists = false;
-        let mut l1_engram_count = 0usize;
-        let mut l2_topic_count = 0usize;
-        let mut l3_graph_count = 0usize;
-        let mut l4_archive_count = 0usize;
-        let mut l5_crystal_count = 0usize;
-
-        let profile_hash = crate::util::hash_id("profile");
-
-        for (&id_hash, &_offset) in self.engine.iter_index() {
-            let Ok(Some((record_type, _))) = self.engine.read_record(id_hash) else {
-                continue;
-            };
-
-            if id_hash == profile_hash && record_type == REC_L0_PROFILE {
-                l0_profile_exists = true;
-            }
-
-            match record_type {
-                t if t == REC_L1_SCENE_NODE => l1_engram_count += 1,
-                t if t == REC_L2_TOPIC => l2_topic_count += 1,
-                t if t == REC_L3_GRAPH_SLOT => l3_graph_count += 1,
-                t if t == REC_L4_ARCHIVE => l4_archive_count += 1,
-                t if t == REC_L5_ACTION_CHAIN => l5_crystal_count += 1,
-                _ => {}
-            }
-        }
-
-        let ivf_cluster_count = self.ivf_index.as_ref().map_or(0, |ivf| ivf.k);
-
-        Ok(MemHopStats {
-            l0_profile_exists,
-            l1_engram_count,
-            l2_topic_count,
-            l3_graph_count,
-            l4_archive_count,
-            l5_crystal_count,
-            l6_weight_count: self.pathways.len(),
-            db_size_bytes,
-            ivf_cluster_count,
-            cache_hit_rate: 0.0,
         })
     }
 }
