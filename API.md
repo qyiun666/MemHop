@@ -30,7 +30,7 @@ db.close()?;
 
 ## Core API
 
-### search_context — 多层记忆检索
+### search_context — 多层记忆检索  // requires grpc-encoder
 `fn search_context(&mut self, query: SearchQuery) -> Result<SearchResult>`
 - SearchQuery: `dialogue` (必填), `l2_id`/`l3_id` (定向范围), `auto_create` (自动建场景)
 - SearchResult: `profile`, `contexts`, `associated_contexts`, `l3_ids`, `l1_previews`, `l3_previews`
@@ -42,6 +42,8 @@ db.close()?;
 ### import_memory — 数据导入
 `fn import_memory(&mut self, request: ImportRequest) -> Result<ImportResult>`
 - ImportRequest: `mode` (Append/Merge/Replace), `data` (Profile/Topics/Knowledge)
+### build_l3_hypergraph_from_path — L3 超图构建
+`fn build_l3_hypergraph_from_path(&mut self, path: &Path) -> Result<ImportResult>`
 ### dream — 记忆巩固
 `fn dream(&mut self, l2_ids: Option<Vec<String>>) -> Result<DreamReport>`  // requires llm
 
