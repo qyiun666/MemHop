@@ -4,32 +4,21 @@
 //! Stage: L5 Crystallization — generate procedural knowledge crystals from repeated patterns.
 
 use crate::dream::llm::{ChainData, CrystalDef};
-use crate::file::free_list::free_page;
-use crate::file::header::FileHeader;
-use crate::file::page::{allocate_page, read_page_header, write_page_data};
-use crate::index::btree::BTreeIndex;
 use crate::layers::action_chain::{ActionChainSlot, ActionStep, ChainStatus};
+use crate::storage::record::{REC_L5_ACTION_CHAIN, REC_L5_ACTION_STEP};
+use crate::storage::StorageEngine;
 use crate::util::hash::hash_id;
-use crate::util::{PageType, PAGE_SIZE};
 use crate::MemHopError;
-use memmap2::MmapMut;
-use std::fs::File;
 
 /// Extract existing ActionChain slots for the consolidation input.
-pub fn extract_existing_chains(mmap: &MmapMut, header: &FileHeader) -> Vec<ChainData> {
+pub fn extract_existing_chains(engine: &StorageEngine) -> Vec<ChainData> {
     let mut chains: Vec<ChainData> = Vec::new();
-    let page_count = header.page_count;
-
-    for page_id in 18..page_count {
-        let offset = (page_id as usize) * PAGE_SIZE;
-        if offset + PAGE_SIZE > mmap.len() {
-            break;
-        }
-        if let Ok(page_header) = read_page_header(&mmap[..], page_id) {
-            if page_header.page_type != PageType::ActionChain as u16 {
+    for (&id_hash, _) in engine.iter_index() {
+        if let Ok(Some((record_type, data))) = engine.read_record(id_hash) {
+            if record_type != REC_L5_ACTION_CHAIN {
                 continue;
             }
-            if let Ok(chain) = ActionChainSlot::deserialize(&mmap[offset + 32..]) {
+            if let Ok(chain) = bincode::deserialize::<ActionChainSlot>(data) {
                 chains.push(ChainData {
                     title: chain.title.clone(),
                     trigger: chain.trigger.clone(),
@@ -48,10 +37,7 @@ pub fn extract_existing_chains(mmap: &MmapMut, header: &FileHeader) -> Vec<Chain
 /// Write pre-computed crystals from the consolidated LLM call into L5 action chains.
 pub fn apply_precomputed_crystals(
     crystals: &[CrystalDef],
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
-    file: &mut File,
+    engine: &mut StorageEngine,
 ) -> Result<Vec<String>, MemHopError> {
     let mut new_ids = Vec::new();
 
@@ -76,13 +62,9 @@ pub fn apply_precomputed_crystals(
             version: 1,
         };
 
-        let page_id = allocate_page(mmap, header, PageType::ActionChain, 5, 0, file)?;
-        let serialized = chain
-            .serialize()
-            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-        write_page_data(mmap, page_id, &serialized)?;
-
-        btree.insert(crystal_chain_id, (page_id as u64) << 16);
+        let chain_data =
+            bincode::serialize(&chain).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+        engine.write_record(REC_L5_ACTION_CHAIN, crystal_chain_id, &chain_data)?;
 
         for (i, step_def) in crystal.steps.iter().enumerate() {
             let step_id_hash = hash_id(&format!("step_{}_{}_{}", crystal_chain_id, i, now));
@@ -94,12 +76,9 @@ pub fn apply_precomputed_crystals(
                 parameters: step_def.parameters.clone(),
                 created_at: now,
             };
-            let step_page_id = allocate_page(mmap, header, PageType::ActionStep, 5, 0, file)?;
-            let step_data = step
-                .serialize()
-                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-            write_page_data(mmap, step_page_id, &step_data)?;
-            btree.insert(step_id_hash, (step_page_id as u64) << 16);
+            let step_data =
+                bincode::serialize(&step).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+            engine.write_record(REC_L5_ACTION_STEP, step_id_hash, &step_data)?;
         }
 
         new_ids.push(crate::shared::common::format_hash(crystal_chain_id));
@@ -110,34 +89,17 @@ pub fn apply_precomputed_crystals(
 
 /// Activate a crystal by validating quality and flipping status to Active.
 /// Requires confidence >= 0.5 and at least one linked ActionStep.
-pub fn activate_crystal(
-    mmap: &mut MmapMut,
-    header: &FileHeader,
-    btree: &BTreeIndex,
-    chain_id: u64,
-) -> Result<(), MemHopError> {
-    let page_ref = btree.search(chain_id).ok_or_else(|| {
+pub fn activate_crystal(engine: &mut StorageEngine, chain_id: u64) -> Result<(), MemHopError> {
+    let (record_type, data) = engine.read_record(chain_id)?.ok_or_else(|| {
         MemHopError::Serialization(format!("ActionChain {} not found in index", chain_id))
     })?;
-    let page_id = crate::shared::slot_io::decode_page_id(page_ref);
 
-    if page_id >= header.page_count {
-        return Err(MemHopError::PageNotFound(page_id));
-    }
-    let page_offset = (page_id as usize) * PAGE_SIZE;
-    if page_offset + PAGE_SIZE > mmap.len() {
-        return Err(MemHopError::PageNotFound(page_id));
-    }
-
-    let mut header_bytes = [0u8; 32];
-    header_bytes.copy_from_slice(&mmap[page_offset..page_offset + 32]);
-    let page_header = crate::file::page::PageHeader::from_bytes(&header_bytes)?;
-    if page_header.page_type != PageType::ActionChain as u16 {
+    if record_type != REC_L5_ACTION_CHAIN {
         return Err(MemHopError::InvalidPageType);
     }
 
-    let mut chain = ActionChainSlot::deserialize(&mmap[page_offset + 32..])
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    let mut chain: ActionChainSlot =
+        bincode::deserialize(data).map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
     if chain.confidence < 0.5 {
         return Err(MemHopError::Serialization(format!(
@@ -147,18 +109,12 @@ pub fn activate_crystal(
     }
 
     let mut step_count = 0;
-    for step_page_id in 18..header.page_count {
-        let step_offset = (step_page_id as usize) * PAGE_SIZE;
-        if step_offset + PAGE_SIZE > mmap.len() {
-            break;
-        }
-        let mut step_header_bytes = [0u8; 32];
-        step_header_bytes.copy_from_slice(&mmap[step_offset..step_offset + 32]);
-        if let Ok(step_header) = crate::file::page::PageHeader::from_bytes(&step_header_bytes) {
-            if step_header.page_type != PageType::ActionStep as u16 {
+    for (&step_hash, _) in engine.iter_index() {
+        if let Ok(Some((rt, step_data))) = engine.read_record(step_hash) {
+            if rt != REC_L5_ACTION_STEP {
                 continue;
             }
-            if let Ok(step) = ActionStep::deserialize(&mmap[step_offset + 32..]) {
+            if let Ok(step) = bincode::deserialize::<ActionStep>(step_data) {
                 if step.chain_id == chain_id {
                     step_count += 1;
                 }
@@ -176,51 +132,30 @@ pub fn activate_crystal(
     chain.status = ChainStatus::Active;
     chain.updated_at = chrono::Utc::now().timestamp_millis();
 
-    let serialized = chain
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    write_page_data(mmap, page_id, &serialized)?;
+    let chain_data =
+        bincode::serialize(&chain).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    engine.write_record(REC_L5_ACTION_CHAIN, chain_id, &chain_data)?;
 
     Ok(())
 }
 
 /// Prune low-quality action chains during dream pipeline.
 /// Removes chains with low confidence (< 0.3) and low trigger counts (< 5).
-pub fn prune_low_quality_crystals(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
-    page_count: u32,
-) -> Result<Vec<String>, MemHopError> {
+pub fn prune_low_quality_crystals(engine: &mut StorageEngine) -> Result<Vec<String>, MemHopError> {
     let mut pruned = Vec::new();
+    let entries: Vec<(u64, u64)> = engine.iter_index().map(|(k, v)| (*k, *v)).collect();
 
-    // Skip header pages 0-1 and reserved pages 2-17
-    let start_page = 18;
-    let end_page = page_count;
-
-    for page_id in start_page..end_page {
-        let page_offset = (page_id as usize) * PAGE_SIZE;
-
-        if page_offset + PAGE_SIZE > mmap.len() {
-            break;
-        }
-
-        if let Ok(page_hdr) = read_page_header(&mmap[..], page_id) {
-            if page_hdr.page_type != PageType::ActionChain as u16 {
+    for (id_hash, _) in &entries {
+        if let Ok(Some((record_type, data))) = engine.read_record(*id_hash) {
+            if record_type != REC_L5_ACTION_CHAIN {
                 continue;
             }
-        } else {
-            continue;
-        }
-
-        let chain_offset = page_offset + 32;
-        if let Ok(chain) = ActionChainSlot::deserialize(&mmap[chain_offset..]) {
-            // Low confidence + low trigger count → prune
-            if chain.confidence < 0.3 && chain.trigger_count < 5 {
-                mmap[page_offset..page_offset + PAGE_SIZE].fill(0);
-                btree.remove(chain.id_hash);
-                free_page(mmap, header, page_id)?;
-                pruned.push(format!("{:016x}", chain.id_hash));
+            if let Ok(chain) = bincode::deserialize::<ActionChainSlot>(data) {
+                // Low confidence + low trigger count → prune
+                if chain.confidence < 0.3 && chain.trigger_count < 5 {
+                    engine.delete_record(*id_hash)?;
+                    pruned.push(format!("{:016x}", id_hash));
+                }
             }
         }
     }
@@ -231,97 +166,37 @@ pub fn prune_low_quality_crystals(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LlmConfig;
-    use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
-    use crate::file::header::FileHeader;
-    use crate::file::page::{allocate_page, write_page_data};
-    use crate::util::hash::hash_id;
-    use crate::util::PageType;
-    use std::io::Write;
+    use tempfile::NamedTempFile;
 
-    fn setup_file(
-        pages: u32,
-    ) -> (
-        tempfile::NamedTempFile,
-        MmapMut,
-        FileHeader,
-        BTreeIndex,
-        std::fs::File,
-    ) {
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let path = temp_file.path();
+    fn create_engine() -> StorageEngine {
+        let temp = NamedTempFile::new().unwrap();
+        StorageEngine::create(temp.path(), 768).unwrap()
+    }
 
-        let mut file = std::fs::File::create(path).unwrap();
-        file.write_all(&vec![0u8; PAGE_SIZE * pages as usize])
+    fn write_chain_slot(engine: &mut StorageEngine, chain: ActionChainSlot) -> u64 {
+        let data = bincode::serialize(&chain).unwrap();
+        engine
+            .write_record(REC_L5_ACTION_CHAIN, chain.id_hash, &data)
             .unwrap();
-        drop(file);
+        chain.id_hash
+    }
 
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
+    fn write_action_step(engine: &mut StorageEngine, step: ActionStep) -> u64 {
+        let data = bincode::serialize(&step).unwrap();
+        engine
+            .write_record(REC_L5_ACTION_STEP, step.id_hash, &data)
             .unwrap();
-
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut header = FileHeader::new(768);
-        header.page_count = pages;
-        crate::file::free_list::init_free_list(&mut header).unwrap();
-        for page_id in (18..pages).rev() {
-            crate::file::free_list::free_page(&mut mmap, &mut header, page_id).unwrap();
-        }
-
-        let btree = BTreeIndex::new();
-        (temp_file, mmap, header, btree, file)
+        step.id_hash
     }
 
-    fn write_chain_slot(
-        mmap: &mut MmapMut,
-        header: &mut FileHeader,
-        btree: &mut BTreeIndex,
-        chain: ActionChainSlot,
-        file: &mut std::fs::File,
-    ) -> u32 {
-        let page_id = allocate_page(mmap, header, PageType::ActionChain, 5, 0, file).unwrap();
-        let data = chain.serialize().unwrap();
-        write_page_data(mmap, page_id, &data).unwrap();
-        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-        btree.insert(chain.id_hash, page_ref);
-        page_id
-    }
-
-    fn write_action_step(
-        mmap: &mut MmapMut,
-        header: &mut FileHeader,
-        btree: &mut BTreeIndex,
-        step: ActionStep,
-        file: &mut std::fs::File,
-    ) -> u32 {
-        let page_id = allocate_page(mmap, header, PageType::ActionStep, 5, 0, file).unwrap();
-        let data = step.serialize().unwrap();
-        write_page_data(mmap, page_id, &data).unwrap();
-        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-        btree.insert(step.id_hash, page_ref);
-        page_id
-    }
-
-    fn count_steps_for_chain(
-        mmap: &MmapMut,
-        header: &FileHeader,
-        chain_id: u64,
-    ) -> Vec<ActionStep> {
+    fn count_steps_for_chain(engine: &StorageEngine, chain_id: u64) -> Vec<ActionStep> {
         let mut steps = Vec::new();
-        for page_id in 18..header.page_count {
-            let offset = (page_id as usize) * PAGE_SIZE;
-            if offset + PAGE_SIZE > mmap.len() {
-                break;
-            }
-            let mut header_bytes = [0u8; 32];
-            header_bytes.copy_from_slice(&mmap[offset..offset + 32]);
-            if let Ok(hdr) = crate::file::page::PageHeader::from_bytes(&header_bytes) {
-                if hdr.page_type != PageType::ActionStep as u16 {
+        for (&step_hash, _) in engine.iter_index() {
+            if let Ok(Some((rt, data))) = engine.read_record(step_hash) {
+                if rt != REC_L5_ACTION_STEP {
                     continue;
                 }
-                if let Ok(step) = ActionStep::deserialize(&mmap[offset + 32..]) {
+                if let Ok(step) = bincode::deserialize::<ActionStep>(data) {
                     if step.chain_id == chain_id {
                         steps.push(step);
                     }
@@ -332,14 +207,14 @@ mod tests {
         steps
     }
 
-    fn read_chain(mmap: &MmapMut, page_id: u32) -> ActionChainSlot {
-        let offset = (page_id as usize) * PAGE_SIZE;
-        ActionChainSlot::deserialize(&mmap[offset + 32..]).unwrap()
+    fn read_chain(engine: &StorageEngine, chain_id: u64) -> ActionChainSlot {
+        let (_, data) = engine.read_record(chain_id).unwrap().unwrap();
+        bincode::deserialize(data).unwrap()
     }
 
     #[test]
     fn test_activate_crystal_success() {
-        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
+        let mut engine = create_engine();
         let now = chrono::Utc::now().timestamp_millis();
 
         let chain_id = hash_id("activate_chain");
@@ -356,7 +231,7 @@ mod tests {
             updated_at: now,
             version: 1,
         };
-        let chain_page = write_chain_slot(&mut mmap, &mut header, &mut btree, chain, &mut file);
+        write_chain_slot(&mut engine, chain);
 
         let step = ActionStep {
             id_hash: hash_id("activate_step"),
@@ -366,17 +241,17 @@ mod tests {
             parameters: None,
             created_at: now,
         };
-        write_action_step(&mut mmap, &mut header, &mut btree, step, &mut file);
+        write_action_step(&mut engine, step);
 
-        activate_crystal(&mut mmap, &header, &btree, chain_id).unwrap();
+        activate_crystal(&mut engine, chain_id).unwrap();
 
-        let activated = read_chain(&mmap, chain_page);
+        let activated = read_chain(&engine, chain_id);
         assert_eq!(activated.status, ChainStatus::Active);
     }
 
     #[test]
     fn test_activate_crystal_low_confidence_fails() {
-        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
+        let mut engine = create_engine();
         let now = chrono::Utc::now().timestamp_millis();
 
         let chain_id = hash_id("low_conf_chain");
@@ -393,7 +268,7 @@ mod tests {
             updated_at: now,
             version: 1,
         };
-        let chain_page = write_chain_slot(&mut mmap, &mut header, &mut btree, chain, &mut file);
+        write_chain_slot(&mut engine, chain);
 
         let step = ActionStep {
             id_hash: hash_id("low_conf_step"),
@@ -403,17 +278,17 @@ mod tests {
             parameters: None,
             created_at: now,
         };
-        write_action_step(&mut mmap, &mut header, &mut btree, step, &mut file);
+        write_action_step(&mut engine, step);
 
-        assert!(activate_crystal(&mut mmap, &header, &btree, chain_id).is_err());
+        assert!(activate_crystal(&mut engine, chain_id).is_err());
 
-        let chain = read_chain(&mmap, chain_page);
+        let chain = read_chain(&engine, chain_id);
         assert_eq!(chain.status, ChainStatus::Draft);
     }
 
     #[test]
     fn test_activate_crystal_no_steps_fails() {
-        let (_temp, mut mmap, mut header, mut btree, mut file) = setup_file(100);
+        let mut engine = create_engine();
         let now = chrono::Utc::now().timestamp_millis();
 
         let chain_id = hash_id("no_step_chain");
@@ -430,8 +305,8 @@ mod tests {
             updated_at: now,
             version: 1,
         };
-        write_chain_slot(&mut mmap, &mut header, &mut btree, chain, &mut file);
+        write_chain_slot(&mut engine, chain);
 
-        assert!(activate_crystal(&mut mmap, &header, &btree, chain_id).is_err());
+        assert!(activate_crystal(&mut engine, chain_id).is_err());
     }
 }

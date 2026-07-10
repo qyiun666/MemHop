@@ -4,12 +4,10 @@
 //! L3 Community Detection — Leiden algorithm on hypergraphs via clique expansion.
 //! V1: hyperedge→binary edge reduction (weight/(k-1)), then Leiden. V2: h-Louvain (arXiv:2406.17556).
 
-use crate::index::btree::BTreeIndex;
 use crate::layers::hypergraph::{HypergraphEdge, HypergraphNode};
-use crate::shared::slot_io::get_slot_data;
-use crate::util::PageType;
+use crate::storage::record::{REC_L3_GRAPH_EDGE, REC_L3_GRAPH_NODE};
+use crate::storage::StorageEngine;
 use crate::MemHopError;
-use memmap2::MmapMut;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -122,22 +120,19 @@ fn reduce_hyperedges(edges: &[HypergraphEdge], max_size: usize) -> Vec<(u64, u64
 
 /// Run Leiden community detection on an L3 graph.
 ///
-/// Runs clique expansion → Leiden → community mapping.
+/// Uses the v2 engine to read graph nodes and edges.
 pub fn run_community_detection(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
+    engine: &StorageEngine,
     graph_id: u64,
     config: &CommunityConfig,
 ) -> Result<CommunityResult, MemHopError> {
-    let data: &[u8] = &mmap[..];
-
     let mut edges: Vec<HypergraphEdge> = Vec::new();
-    for (&_id, &page_ref) in btree.iter_unsorted() {
-        if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
+    for (&id_hash, &_offset) in engine.iter_index() {
+        let Ok(Some((record_type, data))) = engine.read_record(id_hash) else {
             continue;
-        }
-        if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if let Ok(edge) = HypergraphEdge::deserialize(slot_data) {
+        };
+        if record_type == REC_L3_GRAPH_EDGE {
+            if let Ok(edge) = bincode::deserialize::<HypergraphEdge>(data) {
                 if edge.graph_id == graph_id {
                     edges.push(edge);
                 }
@@ -153,12 +148,12 @@ pub fn run_community_detection(
         node_set.insert(b);
     }
     // Also include nodes with no edges (they form singleton communities)
-    for (&_id, &page_ref) in btree.iter_unsorted() {
-        if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
+    for (&id_hash, &_offset) in engine.iter_index() {
+        let Ok(Some((record_type, data))) = engine.read_record(id_hash) else {
             continue;
-        }
-        if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if let Ok(node) = HypergraphNode::deserialize(slot_data) {
+        };
+        if record_type == REC_L3_GRAPH_NODE {
+            if let Ok(node) = bincode::deserialize::<HypergraphNode>(data) {
                 if node.graph_id == graph_id {
                     node_set.insert(node.id_hash);
                 }

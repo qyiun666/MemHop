@@ -7,7 +7,6 @@ mod api;
 pub mod config;
 pub mod dream;
 pub mod encoder;
-pub(crate) mod file;
 pub(crate) mod index;
 pub mod l3;
 pub(crate) mod layers;
@@ -15,6 +14,8 @@ pub mod organize;
 pub mod query;
 pub(crate) mod session;
 pub(crate) mod shared;
+pub(crate) mod storage;
+pub(crate) mod store;
 pub(crate) mod util;
 
 #[cfg(test)]
@@ -46,13 +47,14 @@ pub use query::batch::{BatchReport, EncodedItem, StoreBatch, StoreItem};
 pub use query::types::{
     ActionItem, ActionType, Archive, ArchiveListResult, ArchivePageQuery, ArchiveRef,
     ContextResult, CrystalListQuery, CrystalListResult, CrystalSummary, EdgeListQuery,
-    EdgeListResult, EngramListQuery, EngramListResult, EngramResult, HealthStatus, ImportData,
-    ImportError, ImportMode, ImportRequest, ImportResult, ImportStatus, KnowledgeDetail,
-    KnowledgeImportItem, KnowledgeListQuery, KnowledgeListResult, KnowledgeNodeDetail,
-    KnowledgeNodesResult, KnowledgeSummary, L3Detail, L3EntityHint, L3Preview, L4SearchQuery,
-    L6Filter, MemHopStats, MergeNodesRequest, MergeNodesResult, MergeResult, NodeListQuery,
-    NodeListResult, ProfileResult, RequestSource, SceneTreeResult, SearchPreprocessResult,
-    SearchQuery, SearchResult, TargetLayer, TopicDetail, TopicImportItem, TopicListQuery,
-    TopicListResult, TopicSummary, UpdateL2Fields, UpdateL3Fields, UpdateL5Fields, UpdateL6Fields,
-    UpdateProfileRequest, UpdateRequest, UpdateResult, UpdateStatus, WritePreprocessResult,
+    EdgeListResult, EngramListQuery, EngramListResult, EngramResult, GraphEdge, GraphEdgeKind,
+    GraphNode, GraphSlot, HealthStatus, ImportData, ImportError, ImportMode, ImportRequest,
+    ImportResult, ImportStatus, KnowledgeDetail, KnowledgeImportItem, KnowledgeListQuery,
+    KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodesResult, KnowledgeSummary, L3Detail,
+    L3EntityHint, L3Preview, L4SearchQuery, L6Filter, MemHopStats, MergeNodesRequest,
+    MergeNodesResult, MergeResult, NodeListQuery, NodeListResult, ProfileResult, RequestSource,
+    SceneTreeResult, SearchPreprocessResult, SearchQuery, SearchResult, Subgraph, TargetLayer,
+    TopicDetail, TopicImportItem, TopicListQuery, TopicListResult, TopicSummary, TraversalHop,
+    UpdateL2Fields, UpdateL3Fields, UpdateL5Fields, UpdateL6Fields, UpdateProfileRequest,
+    UpdateRequest, UpdateResult, UpdateStatus, WritePreprocessResult,
 };

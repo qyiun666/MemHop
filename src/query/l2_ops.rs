@@ -5,8 +5,6 @@
 
 use crate::dream::llm::LlmProvider;
 use crate::encoder::Encoder;
-use crate::file::header::FileHeader;
-use crate::index::btree::BTreeIndex;
 use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
 use crate::layers::context::{ContextSlot, SceneSlot};
@@ -16,47 +14,32 @@ use crate::query::types::{
     TopicSummary, UpdateL2Fields,
 };
 use crate::shared::common::{format_hash, now_ms, parse_id_to_hash};
-use crate::shared::slot_io::{decode_page_id, get_slot_data};
-use crate::util::{get_current_timestamp, PageType, PAGE_SIZE};
+use crate::storage::record::*;
+use crate::storage::StorageEngine;
 use crate::MemHopError;
-use memmap2::MmapMut;
 use std::collections::HashSet;
-use std::fs::File;
 
 // ============================================================================
 // Read helpers
 // ============================================================================
 
-fn load_context(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    id_hash: u64,
-) -> Result<Option<ContextSlot>, MemHopError> {
-    match btree.search(id_hash) {
-        Some(page_ref) => {
-            let data: &[u8] = &mmap[..];
-            let slot_data = get_slot_data(data, page_ref)
-                .ok_or_else(|| MemHopError::PageNotFound(decode_page_id(page_ref)))?;
-            Ok(Some(ContextSlot::deserialize_slot(slot_data)?))
+fn load_context(engine: &StorageEngine, id_hash: u64) -> Result<Option<ContextSlot>, MemHopError> {
+    match engine.read_record(id_hash)? {
+        Some((_rt, data)) => {
+            Ok(Some(bincode::deserialize(data).map_err(|e| {
+                MemHopError::Deserialization(e.to_string())
+            })?))
         }
         None => Ok(None),
     }
 }
 
-fn load_scene(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    scene_id: u64,
-) -> Result<Option<SceneSlot>, MemHopError> {
-    match btree.search(scene_id) {
-        Some(page_ref) => {
-            let data: &[u8] = &mmap[..];
-            let slot_data = get_slot_data(data, page_ref)
-                .ok_or_else(|| MemHopError::PageNotFound(decode_page_id(page_ref)))?;
-            Ok(Some(
-                SceneSlot::deserialize(slot_data)
-                    .map_err(|e| MemHopError::Serialization(e.to_string()))?,
-            ))
+fn load_scene(engine: &StorageEngine, scene_id: u64) -> Result<Option<SceneSlot>, MemHopError> {
+    match engine.read_record(scene_id)? {
+        Some((_rt, data)) => {
+            Ok(Some(bincode::deserialize(data).map_err(|e| {
+                MemHopError::Deserialization(e.to_string())
+            })?))
         }
         None => Ok(None),
     }
@@ -103,42 +86,32 @@ fn to_topic_summary(ctx: &ContextSlot) -> TopicSummary {
 // ============================================================================
 
 /// Get a single L2 context by ID.
-pub fn get_l2(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    id: &str,
-) -> Result<Option<ContextSlot>, MemHopError> {
-    load_context(mmap, btree, parse_id_to_hash(id))
+pub fn get_l2(engine: &StorageEngine, id: &str) -> Result<Option<ContextSlot>, MemHopError> {
+    load_context(engine, parse_id_to_hash(id))
 }
 
 /// List L2 contexts with pagination and filtering.
 pub fn list_l2(
-    mmap: &MmapMut,
-    header: &FileHeader,
-    btree: &BTreeIndex,
+    engine: &StorageEngine,
     query: TopicListQuery,
 ) -> Result<TopicListResult, MemHopError> {
-    let data: &[u8] = &mmap[..];
     let mut all: Vec<ContextSlot> = Vec::new();
 
-    for (_, page_ref) in btree.iter_unsorted() {
-        let page_id = decode_page_id(*page_ref);
-        if page_id >= header.page_count {
+    for (&id_hash, _) in engine.iter_index() {
+        let Some((rt, data)) = engine.read_record(id_hash)? else {
+            continue;
+        };
+        if rt != REC_L2_TOPIC {
             continue;
         }
-        if page_type(data, page_id) != Some(PageType::Context as u16) {
-            continue;
-        }
-        if let Some(slot_data) = get_slot_data(data, *page_ref) {
-            if let Ok(ctx) = ContextSlot::deserialize_slot(slot_data) {
-                if let Some(ref keyword) = query.keyword {
-                    let kw_text: String = ctx.user_keywords.join(" ");
-                    if !crate::shared::common::matches_keyword(&kw_text, keyword) {
-                        continue;
-                    }
+        if let Ok(ctx) = bincode::deserialize::<ContextSlot>(data) {
+            if let Some(ref keyword) = query.keyword {
+                let kw_text: String = ctx.user_keywords.join(" ");
+                if !crate::shared::common::matches_keyword(&kw_text, keyword) {
+                    continue;
                 }
-                all.push(ctx);
             }
+            all.push(ctx);
         }
     }
 
@@ -165,19 +138,17 @@ pub fn list_l2(
 
 /// Partially update an L2 context.
 pub fn update_l2(
-    mmap: &mut MmapMut,
-    _header: &mut FileHeader,
-    btree: &BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     id: &str,
     fields: UpdateL2Fields,
 ) -> Result<TopicDetail, MemHopError> {
     let id_hash = parse_id_to_hash(id);
-    let page_ref = btree.search(id_hash).ok_or(MemHopError::PageNotFound(0))?;
-    let page_id = decode_page_id(page_ref);
-    let offset = crate::shared::slot_io::slot_offset(page_id);
-
-    let mut ctx = ContextSlot::deserialize_slot(&mmap[offset..])?;
+    let (_, data) = engine
+        .read_record(id_hash)?
+        .ok_or(MemHopError::PageNotFound(0))?;
+    let mut ctx: ContextSlot =
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))?;
 
     let mut index_changed = false;
     if let Some(kws) = fields.user_keywords {
@@ -214,98 +185,74 @@ pub fn update_l2(
     ctx.updated_at = now_ms();
     ctx.version += 1;
 
-    let data = ctx
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    if offset + data.len() > mmap.len() {
-        return Err(MemHopError::PageNotFound(page_id));
-    }
-    mmap[offset..offset + data.len()].copy_from_slice(&data);
+    let data = bincode::serialize(&ctx).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    engine.write_record(REC_L2_TOPIC, id_hash, &data)?;
 
     Ok(to_topic_detail(&ctx))
 }
 
 /// Delete an L2 context and all associated data.
 pub fn delete_l2(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     l1_reverse_index: &mut L1ReverseIndex,
     sparse_index: &mut SparseIndex,
     id: &str,
 ) -> Result<(), MemHopError> {
     let id_hash = parse_id_to_hash(id);
-    let page_ref = match btree.search(id_hash) {
-        Some(pr) => pr,
+    let ctx: ContextSlot = match engine.read_record(id_hash)? {
+        Some((_rt, data)) => {
+            bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))?
+        }
         None => return Ok(()),
     };
 
-    let ctx = {
-        let data: &[u8] = &mmap[..];
-        let slot_data = get_slot_data(data, page_ref)
-            .ok_or_else(|| MemHopError::PageNotFound(decode_page_id(page_ref)))?;
-        ContextSlot::deserialize_slot(slot_data)?
-    };
-
-    let data: &[u8] = &mmap[..];
-    let l1_nodes: Vec<(u64, u64)> = l1_reverse_index
+    // Look up L1 nodes via reverse index, verify they still exist in engine
+    let l1_nodes: Vec<u64> = l1_reverse_index
         .find_associated(&std::iter::once(id_hash).collect())
         .into_iter()
-        .filter(|(_, page_ref)| {
-            let page_id = decode_page_id(*page_ref);
-            if page_id >= header.page_count {
-                return false;
-            }
-            if let Ok(page_hdr) = crate::file::page::read_page_header(data, page_id) {
-                page_hdr.page_type == PageType::ContextNode as u16
+        .filter(|(node_hash, _)| {
+            if let Ok(Some((rt, _))) = engine.read_record(*node_hash) {
+                rt == REC_L1_SCENE_NODE
             } else {
                 false
             }
         })
+        .map(|(node_hash, _)| node_hash)
         .collect();
 
-    for (node_hash, node_page_ref) in l1_nodes {
-        btree.delete(node_hash);
-        crate::file::free_list::free_page(mmap, header, decode_page_id(node_page_ref))?;
+    for &node_hash in &l1_nodes {
+        engine.delete_record(node_hash)?;
         l1_reverse_index.remove_node(node_hash);
     }
 
-    // Free all L4 archive pages referenced by both user and agent tracks
+    // Delete all L4 archive records referenced by both user and agent tracks
     for &arc_hash in ctx.user_l4_refs.iter().chain(ctx.agent_l4_refs.iter()) {
-        if let Some(arc_page_ref) = btree.delete(arc_hash) {
-            crate::file::free_list::free_page(mmap, header, decode_page_id(arc_page_ref))?;
-        }
+        engine.delete_record(arc_hash)?;
     }
 
-    if ctx.centroid_page_ref != 0 {
-        let centroid_page_id = decode_page_id(ctx.centroid_page_ref);
-        crate::file::free_list::free_page(mmap, header, centroid_page_id)?;
-    }
-
-    btree.delete(id_hash);
-    crate::file::free_list::free_page(mmap, header, decode_page_id(page_ref))?;
+    // Centroid data is now serialized as part of the ContextSlot, no separate deletion needed
 
     sparse_index.remove_document(id_hash);
     l1_reverse_index.remove_context(id_hash);
+
+    engine.delete_record(id_hash)?;
 
     Ok(())
 }
 
 /// Delete a range of L4 archives associated with an L2 context.
 pub fn delete_turn(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     l2_id: &str,
     range: std::ops::Range<usize>,
 ) -> Result<(), MemHopError> {
     let id_hash = parse_id_to_hash(l2_id);
-    let page_ref = btree.search(id_hash).ok_or(MemHopError::PageNotFound(0))?;
-    let page_id = decode_page_id(page_ref);
-    let offset = crate::shared::slot_io::slot_offset(page_id);
-
-    let mut ctx = ContextSlot::deserialize_slot(&mmap[offset..])?;
+    let (_, data) = engine
+        .read_record(id_hash)?
+        .ok_or(MemHopError::PageNotFound(0))?;
+    let mut ctx: ContextSlot =
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))?;
 
     // Combine both user and agent L4 refs for turn deletion
     let mut all_l4_refs: Vec<u64> = ctx.user_l4_refs.clone();
@@ -318,7 +265,7 @@ pub fn delete_turn(
         ));
     }
 
-    // Delete archive pages for removed refs
+    // Delete archive records for removed refs
     let removed: Vec<u64> = all_l4_refs.drain(range).collect();
     for &arc_hash in &removed {
         // Remove from whichever track it belongs to
@@ -328,21 +275,14 @@ pub fn delete_turn(
         if let Some(pos) = ctx.agent_l4_refs.iter().position(|&h| h == arc_hash) {
             ctx.agent_l4_refs.remove(pos);
         }
-        if let Some(arc_page_ref) = btree.delete(arc_hash) {
-            crate::file::free_list::free_page(mmap, header, decode_page_id(arc_page_ref))?;
-        }
+        engine.delete_record(arc_hash)?;
     }
 
     ctx.updated_at = now_ms();
     ctx.version += 1;
 
-    let data = ctx
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    if offset + data.len() > mmap.len() {
-        return Err(MemHopError::PageNotFound(page_id));
-    }
-    mmap[offset..offset + data.len()].copy_from_slice(&data);
+    let data = bincode::serialize(&ctx).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    engine.write_record(REC_L2_TOPIC, id_hash, &data)?;
 
     let _ = sparse_index;
 
@@ -351,9 +291,7 @@ pub fn delete_turn(
 
 /// Merge multiple L2 contexts into a primary context.
 pub fn merge_l2(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     primary_id: &str,
     merge_ids: Vec<String>,
@@ -361,19 +299,20 @@ pub fn merge_l2(
     let primary_hash = parse_id_to_hash(primary_id);
     let merge_hashes: Vec<u64> = merge_ids.iter().map(|id| parse_id_to_hash(id)).collect();
 
-    if btree.search(primary_hash).is_none() {
+    if !engine.contains(primary_hash) {
         return Err(MemHopError::PageNotFound(0));
     }
     for &hash in &merge_hashes {
-        if btree.search(hash).is_none() {
+        if !engine.contains(hash) {
             return Err(MemHopError::PageNotFound(0));
         }
     }
 
-    let primary_page_ref = btree.search(primary_hash).unwrap();
-    let primary_page_id = decode_page_id(primary_page_ref);
-    let primary_offset = crate::shared::slot_io::slot_offset(primary_page_id);
-    let mut primary_ctx = ContextSlot::deserialize_slot(&mmap[primary_offset..])?;
+    let (_, data) = engine
+        .read_record(primary_hash)?
+        .ok_or(MemHopError::PageNotFound(0))?;
+    let mut primary_ctx: ContextSlot =
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))?;
 
     let mut merged_user_l4: HashSet<u64> = primary_ctx.user_l4_refs.iter().copied().collect();
     let mut merged_agent_l4: HashSet<u64> = primary_ctx.agent_l4_refs.iter().copied().collect();
@@ -382,10 +321,11 @@ pub fn merge_l2(
     let mut secondary_summaries: Vec<String> = Vec::new();
 
     for &sec_hash in &merge_hashes {
-        let sec_page_ref = btree.search(sec_hash).unwrap();
-        let sec_page_id = decode_page_id(sec_page_ref);
-        let sec_offset = crate::shared::slot_io::slot_offset(sec_page_id);
-        let sec_ctx = ContextSlot::deserialize_slot(&mmap[sec_offset..])?;
+        let (_, sec_data) = engine
+            .read_record(sec_hash)?
+            .ok_or(MemHopError::PageNotFound(0))?;
+        let sec_ctx: ContextSlot = bincode::deserialize(sec_data)
+            .map_err(|e| MemHopError::Deserialization(e.to_string()))?;
 
         merged_user_l4.extend(sec_ctx.user_l4_refs.iter());
         merged_agent_l4.extend(sec_ctx.agent_l4_refs.iter());
@@ -396,8 +336,7 @@ pub fn merge_l2(
         }
 
         sparse_index.remove_document(sec_hash);
-        crate::file::free_list::free_page(mmap, header, sec_page_id)?;
-        btree.remove(sec_hash);
+        engine.delete_record(sec_hash)?;
     }
 
     primary_ctx.user_l4_refs = merged_user_l4.into_iter().collect();
@@ -425,13 +364,9 @@ pub fn merge_l2(
     primary_ctx.updated_at = now_ms();
     primary_ctx.version += 1;
 
-    let data = primary_ctx
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    if primary_offset + data.len() > mmap.len() {
-        return Err(MemHopError::PageNotFound(primary_page_id));
-    }
-    mmap[primary_offset..primary_offset + data.len()].copy_from_slice(&data);
+    let serialized =
+        bincode::serialize(&primary_ctx).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    engine.write_record(REC_L2_TOPIC, primary_hash, &serialized)?;
 
     sparse_index.remove_document(primary_hash);
     let kw_text: String = primary_ctx.user_keywords.join(" ");
@@ -445,72 +380,43 @@ pub fn merge_l2(
     })
 }
 
-#[inline]
-fn page_type(data: &[u8], page_id: u32) -> Option<u16> {
-    let offset = (page_id as usize) * PAGE_SIZE + 4;
-    if offset + 2 > data.len() {
-        return None;
-    }
-    Some(u16::from_le_bytes([data[offset], data[offset + 1]]))
-}
-
 // ============================================================================
 // Scene CRUD
 // ============================================================================
 
 /// Create a scene. Idempotent — returns scene_id of existing scene if name matches.
-pub fn create_scene(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
-    file: &mut File,
-    name: &str,
-) -> Result<u64, MemHopError> {
+pub fn create_scene(engine: &mut StorageEngine, name: &str) -> Result<u64, MemHopError> {
     let scene = SceneSlot::new(name);
     let scene_id = scene.scene_id;
 
     // Idempotent: return existing scene_id if already created
-    if let Some(_) = load_scene(mmap, btree, scene_id)? {
+    if let Some(_) = load_scene(engine, scene_id)? {
         return Ok(scene_id);
     }
 
-    let data = scene
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-    let page_id = crate::file::page::allocate_page(mmap, header, PageType::Scene, 2, 0, file)?;
-    crate::file::page::write_page_data(mmap, page_id, &data)?;
-    let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-    btree.insert(scene_id, page_ref);
+    let data = bincode::serialize(&scene).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    engine.write_record(REC_L2_SCENE, scene_id, &data)?;
 
     Ok(scene_id)
 }
 
 /// Read a scene by its numeric id.
-pub fn get_scene(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    scene_id: u64,
-) -> Result<Option<SceneSlot>, MemHopError> {
-    load_scene(mmap, btree, scene_id)
+pub fn get_scene(engine: &StorageEngine, scene_id: u64) -> Result<Option<SceneSlot>, MemHopError> {
+    load_scene(engine, scene_id)
 }
 
 /// List all scenes as (scene_id, scene_name) pairs.
-pub fn list_scenes(mmap: &MmapMut, header: &FileHeader) -> Result<Vec<(u64, String)>, MemHopError> {
-    let data: &[u8] = &mmap[..];
+pub fn list_scenes(engine: &StorageEngine) -> Result<Vec<(u64, String)>, MemHopError> {
     let mut results: Vec<(u64, String)> = Vec::new();
 
-    for page_id in 2..header.page_count {
-        if page_type(data, page_id) != Some(PageType::Scene as u16) {
+    for (&id_hash, _) in engine.iter_index() {
+        let Some((rt, data)) = engine.read_record(id_hash)? else {
+            continue;
+        };
+        if rt != REC_L2_SCENE {
             continue;
         }
-        let offset = crate::shared::slot_io::slot_offset(page_id);
-        if offset >= data.len() {
-            continue;
-        }
-        if let Ok(scene) = SceneSlot::deserialize(&data[offset..])
-            .map_err(|e| MemHopError::Serialization(e.to_string()))
-        {
+        if let Ok(scene) = bincode::deserialize::<SceneSlot>(data) {
             results.push((scene.scene_id, scene.scene_name));
         }
     }
@@ -524,8 +430,7 @@ pub fn list_scenes(mmap: &MmapMut, header: &FileHeader) -> Result<Vec<(u64, Stri
 
 /// List the full tree of nodes within a scene.
 pub fn list_scene_tree(
-    mmap: &[u8],
-    btree: &BTreeIndex,
+    engine: &StorageEngine,
     l2_meta: &L2MetaIndex,
     scene_id: u64,
 ) -> Result<SceneTreeResult, MemHopError> {
@@ -544,15 +449,11 @@ pub fn list_scene_tree(
 
     let mut nodes: Vec<ContextSlot> = Vec::with_capacity(node_ids.len());
     for &id_hash in &node_ids {
-        let page_ref = match btree.search(id_hash) {
-            Some(pr) => pr,
+        let (_, data) = match engine.read_record(id_hash)? {
+            Some(v) => v,
             None => continue,
         };
-        let slot_data = match get_slot_data(mmap, page_ref) {
-            Some(d) => d,
-            None => continue,
-        };
-        if let Ok(ctx) = ContextSlot::deserialize_slot(slot_data) {
+        if let Ok(ctx) = bincode::deserialize::<ContextSlot>(data) {
             nodes.push(ctx);
         }
     }
@@ -598,14 +499,11 @@ pub fn list_scene_tree(
 /// All nodes from `secondary_scene_ids` have their `scene_id` changed to
 /// `main_scene_id`.  No other metadata is modified — pure scene reassignment.
 pub fn merge_nodes(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     _sparse_index: &mut SparseIndex,
     l2_meta: &mut L2MetaIndex,
     main_scene_id: u64,
     secondary_scene_ids: &[u64],
-    _file: &mut File,
 ) -> Result<MergeNodesResult, MemHopError> {
     let mut merged_count: u32 = 0;
 
@@ -614,16 +512,11 @@ pub fn merge_nodes(
         let node_ids = l2_meta.get_by_scene(sec_id).cloned().unwrap_or_default();
 
         for &id_hash in &node_ids {
-            let page_ref = match btree.search(id_hash) {
-                Some(pr) => pr,
+            let (_, data) = match engine.read_record(id_hash)? {
+                Some(v) => v,
                 None => continue,
             };
-            let page_id = decode_page_id(page_ref);
-            let slot_data = match get_slot_data(&mmap[..], page_ref) {
-                Some(d) => d,
-                None => continue,
-            };
-            let mut ctx = match ContextSlot::deserialize_slot(slot_data) {
+            let mut ctx: ContextSlot = match bincode::deserialize(data) {
                 Ok(c) => c,
                 Err(_) => continue,
             };
@@ -636,10 +529,9 @@ pub fn merge_nodes(
             ctx.scene_id = main_scene_id;
             ctx.updated_at = now_ms();
 
-            let data = ctx
-                .serialize()
-                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-            crate::file::page::write_page_data(mmap, page_id, &data)?;
+            let data =
+                bincode::serialize(&ctx).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+            engine.write_record(REC_L2_TOPIC, id_hash, &data)?;
 
             // update_from_context handles removing from old scene index
             // and adding to new scene index
@@ -649,15 +541,12 @@ pub fn merge_nodes(
         }
 
         // After reassigning all nodes from this secondary scene,
-        // free its SceneSlot page (no nodes remain under sec_id).
+        // delete its SceneSlot record (no nodes remain under sec_id).
         if l2_meta
             .get_by_scene(sec_id)
             .map_or(true, |ids| ids.is_empty())
         {
-            if let Some(scene_page_ref) = btree.delete(sec_id) {
-                let _ =
-                    crate::file::free_list::free_page(mmap, header, decode_page_id(scene_page_ref));
-            }
+            let _ = engine.delete_record(sec_id);
         }
     }
 
@@ -671,41 +560,68 @@ pub fn merge_nodes(
 mod tests {
     use super::*;
     use crate::index::sparse::SparseIndex;
-    use crate::layers::archive::{ArchiveSlot, ContentType};
+    use crate::layers::archive::ArchiveSlot;
     use crate::layers::context::ContextSlot;
     use crate::query::search::L1ReverseIndex;
-    use crate::test_helpers::{create_test_context, create_test_mmap, insert_test_context};
+    use crate::storage::StorageEngine;
+    use crate::store::write_slot;
+    use crate::util::hash_id;
+    use tempfile::NamedTempFile;
 
     fn make_ctx(id_hash: u64, title: &str) -> ContextSlot {
         create_test_context(id_hash, title, vec![])
     }
 
+    fn create_test_context(id_hash: u64, title: &str, l3_refs: Vec<u64>) -> ContextSlot {
+        ContextSlot {
+            id: id_hash,
+            scene_id: 0,
+            parent_id: None,
+            children_ids: vec![],
+            depth: 1,
+            user_keywords: vec![title.to_string()],
+            user_timestamp: 0,
+            user_l4_refs: Vec::new(),
+            user_l3_refs: l3_refs,
+            agent_keywords: vec![],
+            agent_timestamp: 0,
+            agent_l4_refs: Vec::new(),
+            agent_l3_refs: vec![],
+            fused_keywords: vec![],
+            fused_summary: None,
+            centroid_page_ref: 0,
+            created_at: 0,
+            updated_at: 0,
+            version: 4,
+        }
+    }
+
     #[test]
     fn test_l2_crud_roundtrip() {
-        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let temp = NamedTempFile::new().unwrap();
+        let mut engine = StorageEngine::create(temp.path(), 768).unwrap();
         let mut sparse = SparseIndex::new();
         let mut l1_reverse = L1ReverseIndex::new();
 
         let ctx = make_ctx(1001, "Rust refactoring");
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse,
-            ctx,
-            &mut file,
-        );
+        write_slot(&mut engine, REC_L2_TOPIC, ctx.id, &ctx).unwrap();
 
-        let got = get_l2(&mmap, &btree, "00000000000003e9")
+        // Index the sparse data
+        let kw_text: String = ctx.user_keywords.join(" ");
+        let terms: Vec<String> = kw_text
+            .split_whitespace()
+            .map(|s| s.to_lowercase())
+            .collect();
+        sparse.add_document(ctx.id, terms, kw_text.split_whitespace().count() as u32);
+
+        let got = get_l2(&engine, "00000000000003e9")
             .unwrap()
             .expect("L2 should exist");
         assert!(!got.user_keywords.is_empty());
         assert_eq!(got.user_keywords[0], "Rust refactoring");
 
         let detail = update_l2(
-            &mut mmap,
-            &mut header,
-            &btree,
+            &mut engine,
             &mut sparse,
             "00000000000003e9",
             UpdateL2Fields {
@@ -717,9 +633,7 @@ mod tests {
         assert_eq!(detail.user_keywords, vec!["Updated title"]);
 
         let list = list_l2(
-            &mmap,
-            &header,
-            &btree,
+            &engine,
             TopicListQuery {
                 page: 1,
                 page_size: 10,
@@ -731,86 +645,67 @@ mod tests {
         assert_eq!(list.total, 1);
 
         delete_l2(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+            &mut engine,
             &mut l1_reverse,
             &mut sparse,
             "00000000000003e9",
         )
         .unwrap();
-        assert!(get_l2(&mmap, &btree, "00000000000003e9").unwrap().is_none());
+        assert!(get_l2(&engine, "00000000000003e9").unwrap().is_none());
     }
 
     #[test]
     fn test_delete_turn_and_merge() {
-        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let temp = NamedTempFile::new().unwrap();
+        let mut engine = StorageEngine::create(temp.path(), 768).unwrap();
         let mut sparse = SparseIndex::new();
 
         let mut primary = make_ctx(2001, "primary");
         let archive_id = 3001u64;
         primary.user_l4_refs.push(archive_id);
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse,
-            primary,
-            &mut file,
-        );
+        write_slot(&mut engine, REC_L2_TOPIC, primary.id, &primary).unwrap();
+        let kw_text: String = primary.user_keywords.join(" ");
+        let terms: Vec<String> = kw_text
+            .split_whitespace()
+            .map(|s| s.to_lowercase())
+            .collect();
+        sparse.add_document(primary.id, terms, kw_text.split_whitespace().count() as u32);
 
+        // Write an archive record for the turn
         let archive = ArchiveSlot {
             id_hash: archive_id,
-            content_type: ContentType::Text,
+            content_type: crate::layers::archive::ContentType::Text,
             role: 0,
             context_id: 2001,
             created_at: 1000,
             content: "hello".into(),
             metadata: None,
         };
-        let arc_page = crate::file::page::allocate_page(
-            &mut mmap,
-            &mut header,
-            PageType::Archive,
-            4,
-            crate::index::btree::EMPTY_PAGE,
-            &mut file,
-        )
-        .unwrap();
-        crate::file::page::write_page_data(&mut mmap, arc_page, &archive.serialize().unwrap())
-            .unwrap();
-        btree.insert(archive_id, (arc_page as u64) << 16);
+        write_slot(&mut engine, REC_L4_ARCHIVE, archive_id, &archive).unwrap();
 
         let mut secondary = make_ctx(2002, "secondary");
         secondary.fused_summary = Some("secondary summary".into());
         secondary.user_l4_refs.push(4001);
         secondary.user_l3_refs.push(5001);
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse,
-            secondary,
-            &mut file,
+        write_slot(&mut engine, REC_L2_TOPIC, secondary.id, &secondary).unwrap();
+        let kw_text2: String = secondary.user_keywords.join(" ");
+        let terms2: Vec<String> = kw_text2
+            .split_whitespace()
+            .map(|s| s.to_lowercase())
+            .collect();
+        sparse.add_document(
+            secondary.id,
+            terms2,
+            kw_text2.split_whitespace().count() as u32,
         );
 
-        delete_turn(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse,
-            "00000000000007d1",
-            0..1,
-        )
-        .unwrap();
-        let primary_after = get_l2(&mmap, &btree, "00000000000007d1").unwrap().unwrap();
+        delete_turn(&mut engine, &mut sparse, "00000000000007d1", 0..1).unwrap();
+        let primary_after = get_l2(&engine, "00000000000007d1").unwrap().unwrap();
         assert!(primary_after.user_l4_refs.is_empty());
         assert!(primary_after.agent_l4_refs.is_empty());
 
         let merged = merge_l2(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+            &mut engine,
             &mut sparse,
             "00000000000007d1",
             vec!["00000000000007d2".into()],
@@ -818,6 +713,6 @@ mod tests {
         .unwrap();
         assert_eq!(merged.primary.user_l3_refs.len(), 1);
         assert!(merged.primary.fused_summary.is_some());
-        assert!(get_l2(&mmap, &btree, "00000000000007d2").unwrap().is_none());
+        assert!(get_l2(&engine, "00000000000007d2").unwrap().is_none());
     }
 }

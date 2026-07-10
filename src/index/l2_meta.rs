@@ -7,11 +7,10 @@
 //! every L2 `ContextSlot`. It is rebuilt from disk on `open()` and updated
 //! whenever a context is written.
 
-use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
 use crate::layers::context::{ActivationState, ContextSlot};
-use crate::shared::slot_io::get_slot_data;
-use crate::util::PageType;
+use crate::storage::record::REC_L2_TOPIC;
+use crate::storage::StorageEngine;
 use std::collections::HashMap;
 
 /// Activation status used by the L2 metadata index.
@@ -103,41 +102,34 @@ impl L2MetaIndex {
         }
     }
 
-    /// Build the index by scanning all L2 `ContextSlot` entries in the B-tree.
-    pub fn build(mmap: &[u8], btree: &BTreeIndex) -> Self {
-        let data = mmap;
+    /// Build an empty index (for v2 engine-based usage where scan isn't needed).
+    pub fn build_empty() -> Self {
+        Self::new()
+    }
+
+    /// Build the index by scanning all L2 `ContextSlot` entries in the v2 engine.
+    pub fn build_from_engine(engine: &StorageEngine) -> Self {
         let mut entries = HashMap::new();
         let mut by_scene: HashMap<u64, Vec<u64>> = HashMap::new();
         let mut by_scene_depth: HashMap<(u64, u8), Vec<u64>> = HashMap::new();
 
-        for (&id_hash, &page_ref) in btree.iter_unsorted() {
-            let page_id = (page_ref >> 16) as u32;
-            if page_id == 0 {
+        for (&id_hash, _) in engine.iter_index() {
+            let Ok(Some((record_type, data))) = engine.read_record(id_hash) else {
+                continue;
+            };
+            if record_type != REC_L2_TOPIC {
                 continue;
             }
-
-            // Only index pages whose header type is Context.
-            let pt_offset = (page_id as usize) * crate::util::PAGE_SIZE + 4;
-            if pt_offset + 2 > data.len() {
-                continue;
-            }
-            let pt = u16::from_le_bytes([data[pt_offset], data[pt_offset + 1]]);
-            if pt != PageType::Context as u16 {
-                continue;
-            }
-
-            if let Some(slot_data) = get_slot_data(data, page_ref) {
-                if let Ok(ctx) = ContextSlot::deserialize_slot(slot_data) {
-                    let meta = L2Meta::from_context(page_ref, &ctx);
-                    let scene_id = meta.scene_id;
-                    let depth = meta.depth;
-                    entries.insert(id_hash, meta);
-                    by_scene.entry(scene_id).or_default().push(id_hash);
-                    by_scene_depth
-                        .entry((scene_id, depth))
-                        .or_default()
-                        .push(id_hash);
-                }
+            if let Ok(ctx) = bincode::deserialize::<ContextSlot>(data) {
+                let meta = L2Meta::from_context(0, &ctx);
+                let scene_id = meta.scene_id;
+                let depth = meta.depth;
+                entries.insert(id_hash, meta);
+                by_scene.entry(scene_id).or_default().push(id_hash);
+                by_scene_depth
+                    .entry((scene_id, depth))
+                    .or_default()
+                    .push(id_hash);
             }
         }
 
@@ -335,21 +327,20 @@ mod tests {
 
     #[test]
     fn test_build_and_get() {
-        let (_temp, mut mmap, mut header, mut file) = create_test_mmap_with_tempfile(20);
-        let mut btree = BTreeIndex::new();
+        use tempfile::NamedTempFile;
+        let mut engine = StorageEngine::create(NamedTempFile::new().unwrap().path(), 768).unwrap();
         let mut sparse = SparseIndex::new();
 
         let ctx = make_context(101, "rust memory search", vec![501]);
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse,
-            ctx,
-            &mut file,
-        );
+        crate::store::write_slot(&mut engine, REC_L2_TOPIC, ctx.id, &ctx).unwrap();
+        let kw_text: String = ctx.user_keywords.join(" ");
+        let terms: Vec<String> = kw_text
+            .split_whitespace()
+            .map(|s| s.to_lowercase())
+            .collect();
+        sparse.add_document(ctx.id, terms, kw_text.split_whitespace().count() as u32);
 
-        let l2_meta = L2MetaIndex::build(&mmap, &btree);
+        let l2_meta = L2MetaIndex::build_from_engine(&engine);
         assert_eq!(l2_meta.len(), 1);
 
         let meta = l2_meta.get(101).unwrap();
@@ -357,45 +348,24 @@ mod tests {
         assert_eq!(meta.l3_refs, vec![501]);
         assert_eq!(meta.status, ActivationStatus::Dormant);
         assert_eq!(meta.activation_score, 0.0);
-        assert_eq!(meta.vector_offset, (101 + 1000) << 16);
+        // build_from_engine uses id_hash as page_ref when vector_offset is 0
         assert_eq!(meta.timestamp, 2000);
     }
 
     #[test]
     fn test_get_l2_ids_by_l3() {
-        let (_temp, mut mmap, mut header, mut file) = create_test_mmap_with_tempfile(20);
-        let mut btree = BTreeIndex::new();
+        use tempfile::NamedTempFile;
+        let mut engine = StorageEngine::create(NamedTempFile::new().unwrap().path(), 768).unwrap();
         let mut sparse = SparseIndex::new();
 
         let ctx_a = make_context(101, "topic a", vec![501, 502]);
         let ctx_b = make_context(102, "topic b", vec![502]);
         let ctx_c = make_context(103, "topic c", vec![503]);
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse,
-            ctx_a,
-            &mut file,
-        );
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse,
-            ctx_b,
-            &mut file,
-        );
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse,
-            ctx_c,
-            &mut file,
-        );
+        crate::store::write_slot(&mut engine, REC_L2_TOPIC, ctx_a.id, &ctx_a).unwrap();
+        crate::store::write_slot(&mut engine, REC_L2_TOPIC, ctx_b.id, &ctx_b).unwrap();
+        crate::store::write_slot(&mut engine, REC_L2_TOPIC, ctx_c.id, &ctx_c).unwrap();
 
-        let l2_meta = L2MetaIndex::build(&mmap, &btree);
+        let l2_meta = L2MetaIndex::build_from_engine(&engine);
         let ids = l2_meta.get_l2_ids_by_l3(502);
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&101));
@@ -407,35 +377,24 @@ mod tests {
 
     #[test]
     fn test_bm25_prescreen_filters_l2_only() {
-        let (_temp, mut mmap, mut header, mut file) = create_test_mmap_with_tempfile(20);
-        let mut btree = BTreeIndex::new();
+        use tempfile::NamedTempFile;
+        let mut engine = StorageEngine::create(NamedTempFile::new().unwrap().path(), 768).unwrap();
         let mut sparse = SparseIndex::new();
 
         let ctx = make_context(101, "rust memory search", vec![]);
-        insert_test_context(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut sparse,
-            ctx,
-            &mut file,
-        );
+        crate::store::write_slot(&mut engine, REC_L2_TOPIC, ctx.id, &ctx).unwrap();
+        let kw_text: String = ctx.user_keywords.join(" ");
+        let terms: Vec<String> = kw_text
+            .split_whitespace()
+            .map(|s| s.to_lowercase())
+            .collect();
+        sparse.add_document(ctx.id, terms, kw_text.split_whitespace().count() as u32);
 
-        // Insert a non-context entry that happens to match the sparse query.
-        let node_page_id = crate::file::page::allocate_page(
-            &mut mmap,
-            &mut header,
-            PageType::HypergraphNode,
-            3,
-            0,
-            &mut file,
-        )
-        .unwrap();
-        crate::file::page::write_page_data(&mut mmap, node_page_id, &[0u8; 64]).unwrap();
-        btree.insert(201, crate::file::page::encode_page_ref(node_page_id, 0));
+        // Insert a non-context entry via v2 engine (no corresponding L2Meta).
+        engine.write_record(0xF0, 201, &[0u8; 64]).unwrap();
         sparse.add_document(201, vec!["rust".to_string(), "memory".to_string()], 2);
 
-        let l2_meta = L2MetaIndex::build(&mmap, &btree);
+        let l2_meta = L2MetaIndex::build_from_engine(&engine);
         let ids = l2_meta.bm25_prescreen("rust memory", &sparse, 10);
         assert_eq!(ids, vec![101]);
     }

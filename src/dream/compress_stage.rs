@@ -5,18 +5,14 @@
 
 use crate::dream::llm::L2Group;
 use crate::encoder::Encoder;
-use crate::file::free_list::free_page;
-use crate::file::header::FileHeader;
-use crate::file::page::{allocate_page, encode_page_ref, write_page_data};
-use crate::index::btree::BTreeIndex;
 use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
-use crate::layers::context::ContextSlot;
+use crate::layers::context::TopicSlot;
 use crate::query::types::MergeCompressResult;
-use crate::util::{get_current_timestamp, PageType, PAGE_SIZE};
+use crate::storage::record::REC_L2_TOPIC;
+use crate::storage::StorageEngine;
+use crate::util::get_current_timestamp;
 use crate::MemHopError;
-use memmap2::MmapMut;
-use std::fs::File;
 
 /// Apply pre-computed L2 groups from the consolidated LLM call.
 ///
@@ -25,16 +21,12 @@ use std::fs::File;
 /// and updating indices — no additional LLM calls.
 ///
 /// Returns (groups_detected, nodes_merged, parent_nodes_created, nodes_sunk, nodes_removed).
-#[allow(clippy::too_many_arguments)]
 pub fn apply_precomputed_groups(
     groups: &[L2Group],
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     l2_meta: &mut L2MetaIndex,
     encoder: Option<&(dyn Encoder + Send + Sync)>,
-    file: &mut File,
 ) -> Result<(u32, u32, u32, u32, u32), MemHopError> {
     let mut groups_detected = 0u32;
     let mut nodes_merged = 0u32;
@@ -54,33 +46,24 @@ pub fn apply_precomputed_groups(
         let parent_id_hash =
             crate::util::hash_id(&format!("merged_parent_{}_{}", scene_id, now_ms));
 
-        // Compute centroid from merged summary
-        let centroid_page_ref = if let Some(enc) = encoder {
+        // Centroid vector encoding (v2: centroid_page_ref is not used, set to 0)
+        let _centroid_bytes: Option<Vec<u8>> = if let Some(enc) = encoder {
             match enc.encode(&group.merged_summary) {
                 Ok(output) => {
-                    let v_page_id =
-                        allocate_page(mmap, header, PageType::VectorMatrix, 2, 0, file)?;
-                    let v_offset = crate::shared::slot_io::slot_offset(v_page_id);
                     let v_bytes: Vec<u8> =
                         output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
-                    if v_offset + v_bytes.len() <= mmap.len() {
-                        mmap[v_offset..v_offset + v_bytes.len()].copy_from_slice(&v_bytes);
-                        encode_page_ref(v_page_id, 0)
-                    } else {
-                        let _ = free_page(mmap, header, v_page_id);
-                        0
-                    }
+                    Some(v_bytes)
                 }
                 Err(e) => {
                     tracing::warn!("Centroid encode failed: {}", e);
-                    0
+                    None
                 }
             }
         } else {
-            0
+            None
         };
 
-        let parent_node = ContextSlot {
+        let parent_node = TopicSlot {
             id: parent_id_hash,
             scene_id,
             parent_id: None,
@@ -96,19 +79,17 @@ pub fn apply_precomputed_groups(
             agent_l3_refs: vec![],
             fused_keywords: vec![group.merged_title.clone()],
             fused_summary: Some(group.merged_summary.clone()),
-            centroid_page_ref,
+            centroid_page_ref: 0,
             created_at: now_ms,
             updated_at: now_ms,
             version: 3,
         };
 
-        // Persist parent
-        let parent_page_id = allocate_page(mmap, header, PageType::Context, 2, 0, file)?;
-        let parent_data = parent_node
-            .serialize()
+        // Persist parent via engine
+        let parent_data = bincode::serialize(&parent_node)
             .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-        write_page_data(mmap, parent_page_id, &parent_data)?;
-        btree.insert(parent_id_hash, encode_page_ref(parent_page_id, 0));
+        engine.write_record(REC_L2_TOPIC, parent_id_hash, &parent_data)?;
+
         let index_terms =
             crate::index::sparse::tokenize(parent_node.fused_summary.as_deref().unwrap_or(""));
         sparse_index.add_document(
@@ -130,12 +111,9 @@ pub fn apply_precomputed_groups(
             sink_subtree(
                 child_id,
                 parent_id_hash,
-                mmap,
-                header,
-                btree,
+                engine,
                 sparse_index,
                 l2_meta,
-                file,
                 &mut result,
             )?;
             nodes_sunk += result.nodes_sunk;
@@ -158,28 +136,19 @@ pub fn apply_precomputed_groups(
 ///
 /// If the new depth ≥ 4 the node and its entire subtree are deleted.
 /// Otherwise the node is saved and its own children are sunk recursively.
-#[allow(clippy::too_many_arguments)]
 fn sink_subtree(
     id_hash: u64,
     new_parent_id: u64,
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     l2_meta: &mut L2MetaIndex,
-    file: &mut File,
     result: &mut MergeCompressResult,
 ) -> Result<(), MemHopError> {
-    let page_ref = match btree.search(id_hash) {
-        Some(pr) => pr,
+    let (_, data) = match engine.read_record(id_hash)? {
+        Some(v) => v,
         None => return Ok(()),
     };
-    let page_id = crate::shared::slot_io::decode_page_id(page_ref);
-    let slot_data = match crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) {
-        Some(d) => d,
-        None => return Ok(()),
-    };
-    let mut ctx = match ContextSlot::deserialize(slot_data) {
+    let mut ctx: TopicSlot = match bincode::deserialize(data) {
         Ok(c) => c,
         Err(_) => return Ok(()),
     };
@@ -191,23 +160,13 @@ fn sink_subtree(
 
     if new_depth >= 4 {
         // Delete this node and all descendants
-        return free_node_and_descendants(
-            id_hash,
-            mmap,
-            header,
-            btree,
-            sparse_index,
-            l2_meta,
-            file,
-            result,
-        );
+        return free_node_and_descendants(id_hash, engine, sparse_index, l2_meta, result);
     }
 
     // Save updated node
-    let data = ctx
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    write_page_data(mmap, page_id, &data)?;
+    let ctx_data =
+        bincode::serialize(&ctx).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    engine.write_record(REC_L2_TOPIC, id_hash, &ctx_data)?;
 
     // Update in-memory L2 metadata index
     l2_meta.update_from_context(&ctx);
@@ -217,29 +176,18 @@ fn sink_subtree(
     // Recursively sink children
     let child_ids = ctx.children_ids.clone();
     for &child_id in &child_ids {
-        sink_subtree(
-            child_id,
-            id_hash,
-            mmap,
-            header,
-            btree,
-            sparse_index,
-            l2_meta,
-            file,
-            result,
-        )?;
+        sink_subtree(child_id, id_hash, engine, sparse_index, l2_meta, result)?;
     }
 
     // After sinking children, some may have been deleted (depth >= 4).
     // Clean up children_ids to remove references to deleted children.
     let original_len = ctx.children_ids.len();
-    ctx.children_ids.retain(|&cid| btree.search(cid).is_some());
+    ctx.children_ids.retain(|&cid| engine.contains(cid));
     if ctx.children_ids.len() < original_len {
         // Re-serialize and write updated node with cleaned children_ids
-        let data = ctx
-            .serialize()
-            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-        write_page_data(mmap, page_id, &data)?;
+        let ctx_data =
+            bincode::serialize(&ctx).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+        engine.write_record(REC_L2_TOPIC, id_hash, &ctx_data)?;
         l2_meta.update_from_context(&ctx);
     }
 
@@ -248,33 +196,21 @@ fn sink_subtree(
 
 /// Recursively delete a node and all its descendants.
 ///
-/// Removes the node from the B-tree, sparse index, L2 meta index, frees the
-/// page (and any associated centroid vector page), and updates the result
-/// counter.
-#[allow(clippy::too_many_arguments)]
+/// Removes the node from the sparse index, L2 meta index, and deletes the record.
 fn free_node_and_descendants(
     id_hash: u64,
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     l2_meta: &mut L2MetaIndex,
-    file: &mut File,
     result: &mut MergeCompressResult,
 ) -> Result<(), MemHopError> {
-    let page_ref = match btree.search(id_hash) {
-        Some(pr) => pr,
-        None => return Ok(()),
-    };
-    let page_id = crate::shared::slot_io::decode_page_id(page_ref);
-
-    // Load node to traverse children and free the centroid vector page
+    // Load node to traverse children
     let ctx = {
-        let slot_data = match crate::shared::slot_io::get_slot_data(&mmap[..], page_ref) {
-            Some(d) => d,
+        let (_, data) = match engine.read_record(id_hash)? {
+            Some(v) => v,
             None => return Ok(()),
         };
-        match ContextSlot::deserialize(slot_data) {
+        match bincode::deserialize::<TopicSlot>(data) {
             Ok(c) => c,
             Err(_) => return Ok(()),
         }
@@ -283,45 +219,17 @@ fn free_node_and_descendants(
     // Recursively free children first (post-order traversal)
     let child_ids = ctx.children_ids.clone();
     for &child_id in &child_ids {
-        free_node_and_descendants(
-            child_id,
-            mmap,
-            header,
-            btree,
-            sparse_index,
-            l2_meta,
-            file,
-            result,
-        )?;
-    }
-
-    // Free centroid vector page if present
-    if ctx.centroid_page_ref != 0 {
-        let v_page_id = crate::shared::slot_io::decode_page_id(ctx.centroid_page_ref);
-        if v_page_id > 0 {
-            let v_offset = (v_page_id as usize) * PAGE_SIZE;
-            if v_offset + PAGE_SIZE <= mmap.len() {
-                mmap[v_offset..v_offset + PAGE_SIZE].fill(0);
-                let _ = free_page(mmap, header, v_page_id);
-            }
-        }
+        free_node_and_descendants(child_id, engine, sparse_index, l2_meta, result)?;
     }
 
     // Remove from indices
-    btree.remove(id_hash);
     sparse_index.remove_document(id_hash);
     l2_meta.remove(id_hash);
 
-    // Zero and free the page
-    let page_offset = crate::shared::slot_io::page_offset(page_id);
-    let page_end = page_offset + PAGE_SIZE;
-    if page_end <= mmap.len() {
-        mmap[page_offset..page_end].fill(0);
-    }
-    free_page(mmap, header, page_id)?;
+    // Delete the record
+    engine.delete_record(id_hash)?;
 
     result.nodes_removed += 1;
 
-    let _ = file; // keep signature symmetric with other helpers
     Ok(())
 }

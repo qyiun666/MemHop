@@ -23,7 +23,7 @@ fn make_config(path: PathBuf) -> MemHopConfig {
     MemHopConfig {
         db_path: path,
         encoder_grpc_addr: Some(ENCODER_ADDR.to_string()),
-        vector_dim: 1024,
+        vector_dim: 768,
         crystal_path: None,
         llm: Default::default(),
         auto_dream_on_evict: false,
@@ -36,6 +36,7 @@ fn make_config(path: PathBuf) -> MemHopConfig {
         dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
+        llm_preprocess: Default::default(),
     }
 }
 
@@ -72,6 +73,8 @@ fn run_e2e_workflow(n_topics: usize) {
             auto_create: 1,
             min_score: 0.0,
             source: RequestSource::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         });
     }
 
@@ -86,6 +89,8 @@ fn run_e2e_workflow(n_topics: usize) {
             auto_create: 1,
             min_score: 0.0,
             source: RequestSource::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         })
         .expect("search_context failed");
     let topic_id = search_res
@@ -103,6 +108,8 @@ fn run_e2e_workflow(n_topics: usize) {
             instant_distill: false,
             scene_id: None,
             source: RequestSource::default(),
+            user_keywords: None,
+            agent_keywords: None,
         })
         .expect("update_memory failed");
 
@@ -158,12 +165,12 @@ fn run_e2e_workflow(n_topics: usize) {
         .update_l2(
             &topic_id_for_detail,
             UpdateL2Fields {
-                title: Some("Updated benchmark topic".to_string()),
+                fused_summary: Some("Updated benchmark topic".to_string()),
                 ..Default::default()
             },
         )
         .expect("update_l2 failed");
-    black_box(_updated.title);
+    black_box(_updated.fused_summary);
 
     // Search L4 archives
     let _archives = db

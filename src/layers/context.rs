@@ -11,15 +11,14 @@
 // TopicSlot: dual-track conversation node with user/agent keywords,
 //   timestamps, L4/L3 references, and optional fused compression fields.
 
-use crate::util::io_helpers::*;
+use crate::api::MemHopError;
 use serde::{Deserialize, Serialize};
-use std::io::{self, Cursor, Read, Write};
 
 // ============================================================================
 // SceneSlot — per-scene metadata
 // ============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SceneSlot {
     pub scene_id: u64,
     pub scene_name: String,
@@ -33,36 +32,12 @@ impl SceneSlot {
         }
     }
 
-    pub fn slot_size(&self) -> usize {
-        10 + self.scene_name.len() // scene_id(8) + name_len(2) + name
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
-    pub fn serialize(&self) -> io::Result<Vec<u8>> {
-        let mut buf = Vec::with_capacity(self.slot_size());
-        buf.write_all(&self.scene_id.to_le_bytes())?;
-        buf.write_all(&(self.scene_name.len() as u16).to_le_bytes())?;
-        buf.write_all(self.scene_name.as_bytes())?;
-        Ok(buf)
-    }
-
-    pub fn deserialize(data: &[u8]) -> io::Result<Self> {
-        let mut c = Cursor::new(data);
-        let scene_id = read_u64(&mut c)?;
-        let name_len = read_u16(&mut c)? as usize;
-        if 10 + name_len > data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "SceneSlot name exceeds data",
-            ));
-        }
-        let mut name_buf = vec![0u8; name_len];
-        c.read_exact(&mut name_buf)?;
-        let scene_name = String::from_utf8(name_buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok(Self {
-            scene_id,
-            scene_name,
-        })
+    pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
     }
 }
 
@@ -102,7 +77,7 @@ impl SceneSlot {
 ///   fused_keywords (each: u16 len + utf8),
 ///   fused_summary (raw utf8).
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TopicSlot {
     pub id: u64,
     pub scene_id: u64,
@@ -182,194 +157,14 @@ impl TopicSlot {
         crate::util::hash_id(&combined)
     }
 
-    // ----- helpers for variable-length keyword arrays -----
-
-    fn write_keyword_array(buf: &mut Vec<u8>, kws: &[String]) -> io::Result<()> {
-        for kw in kws {
-            buf.write_all(&(kw.len() as u16).to_le_bytes())?;
-            buf.write_all(kw.as_bytes())?;
-        }
-        Ok(())
-    }
-
-    fn read_keyword_array(c: &mut Cursor<&[u8]>, count: usize) -> io::Result<Vec<String>> {
-        let mut out = Vec::with_capacity(count);
-        for _ in 0..count {
-            let len = read_u16(c)? as usize;
-            let mut buf = vec![0u8; len];
-            c.read_exact(&mut buf)?;
-            out.push(
-                String::from_utf8(buf)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-            );
-        }
-        Ok(out)
-    }
-
-    fn keyword_array_byte_size(kws: &[String]) -> usize {
-        kws.iter().map(|k| 2 + k.len()).sum::<usize>()
-    }
-
     // ----- serialize / deserialize -----
 
-    pub fn slot_size(&self) -> usize {
-        Self::FIXED_SIZE
-            + self.children_ids.len() * 8
-            + Self::keyword_array_byte_size(&self.user_keywords)
-            + self.user_l4_refs.len() * 8
-            + self.user_l3_refs.len() * 8
-            + Self::keyword_array_byte_size(&self.agent_keywords)
-            + self.agent_l4_refs.len() * 8
-            + self.agent_l3_refs.len() * 8
-            + Self::keyword_array_byte_size(&self.fused_keywords)
-            + self.fused_summary.as_ref().map_or(0, |s| s.len())
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
-    pub fn serialize(&self) -> io::Result<Vec<u8>> {
-        let mut buf = Vec::with_capacity(self.slot_size());
-
-        // Fixed header
-        buf.write_all(&self.id.to_le_bytes())?;
-        buf.write_all(&self.scene_id.to_le_bytes())?;
-        buf.write_all(&self.parent_id.unwrap_or(0).to_le_bytes())?;
-        buf.write_all(&[self.depth])?;
-        buf.write_all(&(self.children_ids.len() as u16).to_le_bytes())?;
-        buf.write_all(&(self.user_keywords.len() as u16).to_le_bytes())?;
-        buf.write_all(&(self.user_l4_refs.len() as u16).to_le_bytes())?;
-        buf.write_all(&(self.user_l3_refs.len() as u16).to_le_bytes())?;
-        buf.write_all(&(self.agent_keywords.len() as u16).to_le_bytes())?;
-        buf.write_all(&(self.agent_l4_refs.len() as u16).to_le_bytes())?;
-        buf.write_all(&(self.agent_l3_refs.len() as u16).to_le_bytes())?;
-        buf.write_all(&(self.fused_keywords.len() as u16).to_le_bytes())?;
-        buf.write_all(
-            &(self.fused_summary.as_ref().map_or(0u16, |s| s.len() as u16)).to_le_bytes(),
-        )?;
-        buf.write_all(&self.user_timestamp.to_le_bytes())?;
-        buf.write_all(&self.agent_timestamp.to_le_bytes())?;
-        buf.write_all(&self.centroid_page_ref.to_le_bytes())?;
-        buf.write_all(&self.created_at.to_le_bytes())?;
-        buf.write_all(&self.updated_at.to_le_bytes())?;
-        buf.write_all(&self.version.to_le_bytes())?;
-
-        // Variable section (order must match deserialize)
-        for &child in &self.children_ids {
-            buf.write_all(&child.to_le_bytes())?;
-        }
-        Self::write_keyword_array(&mut buf, &self.user_keywords)?;
-        for &r in &self.user_l4_refs {
-            buf.write_all(&r.to_le_bytes())?;
-        }
-        for &r in &self.user_l3_refs {
-            buf.write_all(&r.to_le_bytes())?;
-        }
-        Self::write_keyword_array(&mut buf, &self.agent_keywords)?;
-        for &r in &self.agent_l4_refs {
-            buf.write_all(&r.to_le_bytes())?;
-        }
-        for &r in &self.agent_l3_refs {
-            buf.write_all(&r.to_le_bytes())?;
-        }
-        Self::write_keyword_array(&mut buf, &self.fused_keywords)?;
-        if let Some(ref s) = self.fused_summary {
-            buf.write_all(s.as_bytes())?;
-        }
-
-        Ok(buf)
-    }
-
-    pub fn deserialize(data: &[u8]) -> io::Result<Self> {
-        let mut c = Cursor::new(data);
-
-        let id = read_u64(&mut c)?;
-        let scene_id = read_u64(&mut c)?;
-        let parent_val = read_u64(&mut c)?;
-        let parent_id = if parent_val == 0 {
-            None
-        } else {
-            Some(parent_val)
-        };
-        let depth = read_u8(&mut c)?;
-        let children_count = read_u16(&mut c)? as usize;
-        let user_kw_count = read_u16(&mut c)? as usize;
-        let user_l4_count = read_u16(&mut c)? as usize;
-        let user_l3_count = read_u16(&mut c)? as usize;
-        let agent_kw_count = read_u16(&mut c)? as usize;
-        let agent_l4_count = read_u16(&mut c)? as usize;
-        let agent_l3_count = read_u16(&mut c)? as usize;
-        let fused_kw_count = read_u16(&mut c)? as usize;
-        let fused_summary_len = read_u16(&mut c)? as usize;
-        let user_timestamp = read_i64(&mut c)?;
-        let agent_timestamp = read_i64(&mut c)?;
-        let centroid_page_ref = read_u64(&mut c)?;
-        let created_at = read_i64(&mut c)?;
-        let updated_at = read_i64(&mut c)?;
-        let version = read_u32(&mut c)?;
-
-        // Basic sanity check on variable section
-        // (exact validation happens per-field below)
-        if data.len() < Self::FIXED_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "TopicSlot too short for v4 header",
-            ));
-        }
-
-        // Variable section in order
-        let mut children_ids = Vec::with_capacity(children_count);
-        for _ in 0..children_count {
-            children_ids.push(read_u64(&mut c)?);
-        }
-        let user_keywords = Self::read_keyword_array(&mut c, user_kw_count)?;
-        let mut user_l4_refs = Vec::with_capacity(user_l4_count);
-        for _ in 0..user_l4_count {
-            user_l4_refs.push(read_u64(&mut c)?);
-        }
-        let mut user_l3_refs = Vec::with_capacity(user_l3_count);
-        for _ in 0..user_l3_count {
-            user_l3_refs.push(read_u64(&mut c)?);
-        }
-        let agent_keywords = Self::read_keyword_array(&mut c, agent_kw_count)?;
-        let mut agent_l4_refs = Vec::with_capacity(agent_l4_count);
-        for _ in 0..agent_l4_count {
-            agent_l4_refs.push(read_u64(&mut c)?);
-        }
-        let mut agent_l3_refs = Vec::with_capacity(agent_l3_count);
-        for _ in 0..agent_l3_count {
-            agent_l3_refs.push(read_u64(&mut c)?);
-        }
-        let fused_keywords = Self::read_keyword_array(&mut c, fused_kw_count)?;
-        let fused_summary = if fused_summary_len > 0 {
-            let mut buf = vec![0u8; fused_summary_len];
-            c.read_exact(&mut buf)?;
-            Some(
-                String::from_utf8(buf)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-            )
-        } else {
-            None
-        };
-
-        Ok(Self {
-            id,
-            scene_id,
-            parent_id,
-            children_ids,
-            depth,
-            user_keywords,
-            user_timestamp,
-            user_l4_refs,
-            user_l3_refs,
-            agent_keywords,
-            agent_timestamp,
-            agent_l4_refs,
-            agent_l3_refs,
-            fused_keywords,
-            fused_summary,
-            centroid_page_ref,
-            created_at,
-            updated_at,
-            version,
-        })
+    pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
     }
 }
 
@@ -463,7 +258,6 @@ mod tests {
     fn test_topic_slot_roundtrip_depth1() {
         let t = make_topic(111, 1);
         let data = t.serialize().unwrap();
-        assert_eq!(data.len(), t.slot_size());
         let restored = TopicSlot::deserialize(&data).unwrap();
         assert_eq!(t, restored);
     }
@@ -472,7 +266,6 @@ mod tests {
     fn test_topic_slot_roundtrip_depth2() {
         let t = make_topic(222, 2);
         let data = t.serialize().unwrap();
-        assert_eq!(data.len(), t.slot_size());
         let restored = TopicSlot::deserialize(&data).unwrap();
         assert_eq!(t, restored);
     }
@@ -538,7 +331,6 @@ mod tests {
     fn test_scene_slot_roundtrip() {
         let s = SceneSlot::new("测试场景");
         let data = s.serialize().unwrap();
-        assert_eq!(data.len(), s.slot_size());
         let restored = SceneSlot::deserialize(&data).unwrap();
         assert_eq!(s, restored);
         assert_eq!(restored.scene_name, "测试场景");

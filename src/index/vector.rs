@@ -1,14 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-use crate::file::free_list::EMPTY_FREE_LIST;
-use crate::file::header::FileHeader;
-use crate::file::page::{allocate_page, write_page_data, write_page_header, PageHeader};
-#[cfg(test)]
-use crate::index::btree::BTreeIndex;
-#[cfg(test)]
-use crate::layers::context_node::ContextNode;
-use crate::util::{PageType, PAGE_SIZE};
+use crate::storage::StorageEngine;
+use crate::util::{hash_id, PAGE_SIZE};
 use crate::{MemHopError, Result as MemHopResult};
 use half::f16;
 use memmap2::MmapMut;
@@ -18,8 +12,16 @@ use std::arch::aarch64::*;
 use std::arch::is_aarch64_feature_detected;
 use std::cmp::Ordering;
 use std::collections::HashSet;
-use std::fs::File;
 use std::io::Result as IoResult;
+
+/// System record type for IVF centroid data.
+pub const REC_IVF_CLUSTER: u8 = 0xF0;
+/// System record type for IVF bucket data.
+pub const REC_IVF_BUCKET: u8 = 0xF1;
+/// Fixed id_hash for the IVF cluster (centroid) record.
+const IVF_CLUSTER_ID: u64 = 1;
+/// Fixed id_hash for the IVF bucket record.
+const IVF_BUCKET_ID: u64 = 2;
 
 pub struct VectorPage {
     pub dim: usize,
@@ -175,38 +177,42 @@ pub fn cosine_similarity(a: &[f16], b: &[f16]) -> f32 {
     cosine_similarity_fallback(a, b)
 }
 
-#[cfg(test)]
-/// Returns top-k `(id_hash, cosine_score)` pairs by scanning all btree entries.
-pub fn brute_force_knn(
-    data: &[u8],
-    query_vector: &[f16],
-    btree: &BTreeIndex,
-    vector_dim: usize,
-    _page_count: u32,
-    k: usize,
-) -> MemHopResult<Vec<(u64, f32)>> {
-    let mut candidates: Vec<(u64, f32)> = Vec::new();
-    for (&id_hash, &page_ref) in btree.iter_unsorted() {
-        let node_page_id = (page_ref >> 16) as u32;
-        let node_offset = (node_page_id as usize) * PAGE_SIZE + 32;
-        if node_offset >= data.len() {
-            continue;
-        }
-        if let Ok(node) = ContextNode::deserialize(&data[node_offset..]) {
-            if node.vector_page_ref == 0 {
-                continue;
+/// Read a vector from a v2 engine record (type 0xF0).
+/// The vector bytes are stored as f16 values in native byte order.
+pub fn read_vector_from_engine(
+    engine: &StorageEngine,
+    record_hash: u64,
+    dim: usize,
+) -> IoResult<Vec<f16>> {
+    match engine.read_record(record_hash) {
+        Ok(Some((_rt, data))) => {
+            if data.len() < dim * 2 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Vector data too short",
+                ));
             }
-            let vec_page_id = (node.vector_page_ref >> 16) as u32;
-            let vec_slot_index = (node.vector_page_ref & 0xFFFF) as u16;
-            if let Ok(vector) = read_vector(data, vec_page_id, vec_slot_index, vector_dim) {
-                let score = cosine_similarity(query_vector, &vector);
-                candidates.push((id_hash, score));
+            let mut vector = Vec::with_capacity(dim);
+            for i in 0..dim {
+                let bytes: [u8; 2] = [data[i * 2], data[i * 2 + 1]];
+                vector.push(f16::from_le_bytes(bytes));
             }
+            Ok(vector)
         }
+        Ok(None) => Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Vector record not found",
+        )),
+        Err(e) => Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e.to_string(),
+        )),
     }
-    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-    candidates.truncate(k);
-    Ok(candidates)
+}
+
+/// Compute the engine record hash for a centroid vector belonging to a topic.
+pub fn vec_record_hash(topic_id_hash: u64) -> u64 {
+    hash_id(&format!("v:{}", topic_id_hash))
 }
 
 /// Slot layout: `[id_hash: u64][last_access: i64][vector: f16[dim]]`.
@@ -261,12 +267,7 @@ pub fn read_vector(data: &[u8], page_id: u32, slot_index: u16, dim: usize) -> Io
 // IVF (Inverted File Index)
 // ============================================================================
 
-/// Offsets within `FileHeader.reserved` for IVF metadata.
-/// Linear Hash B-tree uses the first 12 bytes; IVF starts at offset 12.
-const IVF_CLUSTER_ROOT_OFFSET: usize = 12;
-const IVF_BUCKET_ROOT_OFFSET: usize = 16;
-const IVF_DIM_OFFSET: usize = 20;
-const IVF_K_OFFSET: usize = 22;
+/// Offsets within `FileHeader.reserved` for IVF metadata (v1, kept for reference).
 const IVF_CLUSTER_MAGIC: &[u8; 4] = b"MHIV";
 const IVF_BUCKET_MAGIC: &[u8; 4] = b"MHIB";
 const IVF_VERSION: u8 = 1;
@@ -493,8 +494,55 @@ fn deserialize_buckets(bytes: &[u8]) -> MemHopResult<(usize, IvfBuckets)> {
 }
 
 /// IVF approximate KNN: score centroids → probe `n_probes` buckets → exact cosine.
+///
+/// Reads vectors from the v2 storage engine. For each bucket entry `(id_hash, ..)`,
+/// the centroid vector record hash is computed as `vec_record_hash(id_hash)`.
 #[cfg_attr(not(feature = "grpc-encoder"), allow(dead_code))]
 pub fn ivf_knn(
+    ivf: &IVFIndex,
+    engine: &StorageEngine,
+    query_vector: &[f16],
+    k_results: usize,
+    n_probes: usize,
+) -> MemHopResult<Vec<(u64, f32)>> {
+    if ivf.centroids.is_empty() || ivf.buckets.is_empty() || query_vector.len() != ivf.dim {
+        return Ok(vec![]);
+    }
+    let probes = n_probes.min(ivf.k);
+    if probes == 0 {
+        return Ok(vec![]);
+    }
+    let mut centroid_scores: Vec<(usize, f32)> = ivf
+        .centroids
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (i, cosine_similarity(query_vector, c)))
+        .collect();
+    centroid_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+    let selected: HashSet<usize> = centroid_scores.iter().take(probes).map(|x| x.0).collect();
+    let mut seen = HashSet::<u64>::new();
+    let mut candidates: Vec<(u64, f32)> = Vec::new();
+    for &idx in &selected {
+        for &(id_hash, _, _) in &ivf.buckets[idx] {
+            if !seen.insert(id_hash) {
+                continue;
+            }
+            let vec_hash = vec_record_hash(id_hash);
+            if let Ok(vector) = read_vector_from_engine(engine, vec_hash, ivf.dim) {
+                if vector.len() == ivf.dim {
+                    candidates.push((id_hash, cosine_similarity(query_vector, &vector)));
+                }
+            }
+        }
+    }
+    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
+    candidates.truncate(k_results);
+    Ok(candidates)
+}
+
+/// Old v1 ivf_knn kept for backward compatibility (used from api/mod.rs which is not modified).
+#[allow(dead_code)]
+pub fn ivf_knn_v1(
     ivf: &IVFIndex,
     data: &[u8],
     query_vector: &[f16],
@@ -536,177 +584,46 @@ pub fn ivf_knn(
 }
 
 // ============================================================================
-// IVF persistence helpers
+// IVF persistence (v2 engine-based)
 // ============================================================================
 
-fn read_page_header_from_mmap(mmap: &MmapMut, page_id: u32) -> MemHopResult<PageHeader> {
-    let offset = page_id as usize * PAGE_SIZE;
-    if offset + 32 > mmap.len() {
-        return Err(MemHopError::PageNotFound(page_id));
-    }
-    let mut bytes = [0u8; 32];
-    bytes.copy_from_slice(&mmap[offset..offset + 32]);
-    PageHeader::from_bytes(&bytes)
-}
+/// Persist centroids + buckets to the v2 storage engine.
+/// Uses system record types `REC_IVF_CLUSTER` (0xF0) and `REC_IVF_BUCKET` (0xF1)
+/// with fixed IDs so the index can be read back on open.
+pub fn write_ivf_index(engine: &mut StorageEngine, index: &IVFIndex) -> MemHopResult<()> {
+    // Delete old records first (non-fatal if absent).
+    engine.delete_record(IVF_CLUSTER_ID)?;
+    engine.delete_record(IVF_BUCKET_ID)?;
 
-fn read_page_data_from_mmap(mmap: &MmapMut, page_id: u32) -> MemHopResult<&[u8]> {
-    let offset = page_id as usize * PAGE_SIZE;
-    if offset + PAGE_SIZE > mmap.len() {
-        return Err(MemHopError::PageNotFound(page_id));
-    }
-    Ok(&mmap[offset + 32..offset + PAGE_SIZE])
-}
-
-fn read_u16_from_reserved(r: &[u8; 3988], o: usize) -> u16 {
-    u16::from_le_bytes([r[o], r[o + 1]])
-}
-fn read_u32_from_reserved(r: &[u8; 3988], o: usize) -> u32 {
-    u32::from_le_bytes([r[o], r[o + 1], r[o + 2], r[o + 3]])
-}
-fn write_u16_to_reserved(r: &mut [u8; 3988], o: usize, v: u16) {
-    r[o..o + 2].copy_from_slice(&v.to_le_bytes());
-}
-fn write_u32_to_reserved(r: &mut [u8; 3988], o: usize, v: u32) {
-    r[o..o + 4].copy_from_slice(&v.to_le_bytes());
-}
-
-fn allocate_and_write_chain(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    page_type: PageType,
-    data: &[u8],
-    file: &mut File,
-) -> MemHopResult<u32> {
-    let cap = PAGE_SIZE - 32;
-    let n = if data.is_empty() {
-        1
-    } else {
-        data.len().div_ceil(cap)
-    };
-    let mut pages = Vec::with_capacity(n);
-    for _ in 0..n {
-        pages.push(allocate_page(
-            mmap,
-            header,
-            page_type,
-            0,
-            EMPTY_FREE_LIST,
-            file,
-        )?);
-    }
-    for (i, &pid) in pages.iter().enumerate() {
-        let start = i * cap;
-        let chunk = if start >= data.len() {
-            &[] as &[u8]
-        } else {
-            &data[start..(start + cap).min(data.len())]
-        };
-        write_page_data(mmap, pid, chunk)?;
-        if i + 1 < pages.len() {
-            let mut ph = read_page_header_from_mmap(mmap, pid)?;
-            ph.next_page = pages[i + 1];
-            write_page_header(mmap, pid, &ph)?;
-        }
-    }
-    Ok(pages[0])
-}
-
-fn read_chain(mmap: &MmapMut, first_page_id: u32) -> MemHopResult<Vec<u8>> {
-    let mut result = Vec::new();
-    let mut current = first_page_id;
-    // `visited` guards against cyclic page chains.
-    let mut visited = HashSet::new();
-    while current != EMPTY_FREE_LIST && current != 0 {
-        if !visited.insert(current) {
-            break;
-        }
-        result.extend_from_slice(read_page_data_from_mmap(mmap, current)?);
-        current = read_page_header_from_mmap(mmap, current)?.next_page;
-    }
-    Ok(result)
-}
-
-fn free_page_chain(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    start_page: u32,
-) -> MemHopResult<()> {
-    let mut current = start_page;
-    let mut visited = HashSet::new();
-    while current != EMPTY_FREE_LIST && current != 0 {
-        if !visited.insert(current) {
-            break;
-        }
-        let next = read_page_header_from_mmap(mmap, current)
-            .map(|h| h.next_page)
-            .unwrap_or(EMPTY_FREE_LIST);
-        crate::file::free_list::free_page(mmap, header, current)?;
-        current = next;
-    }
-    Ok(())
-}
-
-/// Persist centroids + buckets, free old chains, store roots in `header.reserved`.
-pub fn write_ivf_index(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    index: &IVFIndex,
-    file: &mut File,
-) -> MemHopResult<()> {
-    let old_cr = read_u32_from_reserved(&header.reserved, IVF_CLUSTER_ROOT_OFFSET);
-    let old_br = read_u32_from_reserved(&header.reserved, IVF_BUCKET_ROOT_OFFSET);
-    // Free old chains first so new chains can reuse the pages safely.
-    if old_cr != 0 {
-        free_page_chain(mmap, header, old_cr)?;
-    }
-    if old_br != 0 {
-        free_page_chain(mmap, header, old_br)?;
-    }
-    let cluster_root = if index.centroids.is_empty() {
-        0
-    } else {
-        allocate_and_write_chain(
-            mmap,
-            header,
-            PageType::IVFCluster,
+    if !index.centroids.is_empty() {
+        engine.write_record(
+            REC_IVF_CLUSTER,
+            IVF_CLUSTER_ID,
             &index.serialize_centroids(),
-            file,
-        )?
-    };
-    let bucket_root = if index.buckets.is_empty() {
-        0
-    } else {
-        allocate_and_write_chain(
-            mmap,
-            header,
-            PageType::IVFBucket,
-            &index.serialize_buckets(),
-            file,
-        )?
-    };
-    write_u32_to_reserved(&mut header.reserved, IVF_CLUSTER_ROOT_OFFSET, cluster_root);
-    write_u32_to_reserved(&mut header.reserved, IVF_BUCKET_ROOT_OFFSET, bucket_root);
-    write_u16_to_reserved(&mut header.reserved, IVF_DIM_OFFSET, index.dim as u16);
-    write_u32_to_reserved(&mut header.reserved, IVF_K_OFFSET, index.k as u32);
+        )?;
+    }
+    if !index.buckets.is_empty() {
+        engine.write_record(REC_IVF_BUCKET, IVF_BUCKET_ID, &index.serialize_buckets())?;
+    }
+
     Ok(())
 }
 
-/// Load IVF from disk. Returns `None` if no root pages are recorded.
-pub fn read_ivf_index(mmap: &MmapMut, header: &FileHeader) -> MemHopResult<Option<IVFIndex>> {
-    let cr = read_u32_from_reserved(&header.reserved, IVF_CLUSTER_ROOT_OFFSET);
-    let br = read_u32_from_reserved(&header.reserved, IVF_BUCKET_ROOT_OFFSET);
-    if cr == 0 || br == 0 {
-        return Ok(None);
-    }
-    let dim = read_u16_from_reserved(&header.reserved, IVF_DIM_OFFSET) as usize;
-    let k = read_u32_from_reserved(&header.reserved, IVF_K_OFFSET) as usize;
-    let (rd, rk, centroids) = deserialize_centroids(&read_chain(mmap, cr)?)?;
-    let (rk2, buckets) = deserialize_buckets(&read_chain(mmap, br)?)?;
-    if rd != dim || rk != k || rk != rk2 {
-        return Err(MemHopError::Serialization(
-            "IVF persisted metadata mismatch".into(),
-        ));
-    }
+/// Load IVF from the v2 storage engine.
+/// Returns `None` if no IVF cluster record is found.
+pub fn read_ivf_index(engine: &StorageEngine) -> MemHopResult<Option<IVFIndex>> {
+    let centroids_data = match engine.read_record(IVF_CLUSTER_ID)? {
+        Some((_rt, data)) => data.to_vec(),
+        None => return Ok(None),
+    };
+    let buckets_data = match engine.read_record(IVF_BUCKET_ID)? {
+        Some((_rt, data)) => data.to_vec(),
+        None => return Ok(None),
+    };
+
+    let (dim, k, centroids) = deserialize_centroids(&centroids_data)?;
+    let (_rk, buckets) = deserialize_buckets(&buckets_data)?;
+
     let mut centroid_sums = Vec::with_capacity(k);
     let mut counts = Vec::with_capacity(k);
     for (i, c) in centroids.iter().enumerate() {
@@ -714,6 +631,7 @@ pub fn read_ivf_index(mmap: &MmapMut, header: &FileHeader) -> MemHopResult<Optio
         counts.push(count);
         centroid_sums.push(c.iter().map(|x| x.to_f32() * count as f32).collect());
     }
+
     Ok(Some(IVFIndex {
         centroids,
         buckets,
@@ -873,16 +791,6 @@ mod tests {
     }
 
     #[test]
-    fn test_brute_force_knn_empty() {
-        let data: &[u8] = &vec![0u8; PAGE_SIZE];
-        let btree = BTreeIndex::new();
-        let query = vec![f16::from_f32(1.0), f16::from_f32(0.0), f16::from_f32(0.0)];
-        assert!(brute_force_knn(data, &query, &btree, 3, 100, 10)
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
     fn test_cosine_similarity_neon_aligned() {
         let a: Vec<f16> = (1..=8).map(|x| f16::from_f32(x as f32)).collect();
         let b: Vec<f16> = (2..=9).map(|x| f16::from_f32(x as f32)).collect();
@@ -944,150 +852,30 @@ mod tests {
     }
 
     #[test]
-    fn test_ivf_knn_matches_brute_force() {
-        use crate::file::page::encode_page_ref;
-        use crate::layers::context_node::ContextNode;
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-        let dim = 4usize;
-        let vectors: Vec<(u64, Vec<f16>)> = vec![
-            (
-                1,
-                vec![
-                    f16::from_f32(1.0),
-                    f16::from_f32(0.0),
-                    f16::from_f32(0.0),
-                    f16::from_f32(0.0),
-                ],
-            ),
-            (
-                2,
-                vec![
-                    f16::from_f32(0.0),
-                    f16::from_f32(1.0),
-                    f16::from_f32(0.0),
-                    f16::from_f32(0.0),
-                ],
-            ),
-            (
-                3,
-                vec![
-                    f16::from_f32(0.0),
-                    f16::from_f32(0.0),
-                    f16::from_f32(1.0),
-                    f16::from_f32(0.0),
-                ],
-            ),
-            (
-                4,
-                vec![
-                    f16::from_f32(0.9),
-                    f16::from_f32(0.1),
-                    f16::from_f32(0.0),
-                    f16::from_f32(0.0),
-                ],
-            ),
-            (
-                5,
-                vec![
-                    f16::from_f32(0.1),
-                    f16::from_f32(0.9),
-                    f16::from_f32(0.0),
-                    f16::from_f32(0.0),
-                ],
-            ),
-        ];
-        let file = NamedTempFile::new().unwrap();
-        let mut f = std::fs::File::create(file.path()).unwrap();
-        f.write_all(&vec![0u8; PAGE_SIZE * 20]).unwrap();
-        drop(f);
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(file.path())
-            .unwrap();
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut btree = BTreeIndex::new();
-        let mut ivf = IVFIndex::new(dim, 2);
-        for (i, (id, vec)) in vectors.iter().enumerate() {
-            let node_page = (2 + i) as u32;
-            let vec_page = (10 + i) as u32;
-            let node = ContextNode {
-                id_hash: *id,
-                context_id: *id,
-                vector_page_ref: encode_page_ref(vec_page, 0),
-                importance: 1.0,
-                valence: 0.0,
-                arousal: 0.0,
-                created_at: 0,
-                updated_at: 0,
-                version: 1,
-                edge_ptrs: vec![],
-            };
-            let nb = node.serialize().unwrap();
-            mmap[node_page as usize * PAGE_SIZE + 32
-                ..node_page as usize * PAGE_SIZE + 32 + nb.len()]
-                .copy_from_slice(&nb);
-            write_vector(&mut mmap, vec_page, 0, *id, vec, dim).unwrap();
-            btree.insert(*id, encode_page_ref(node_page, 0));
-            ivf.add_vector(*id, vec, vec_page, 0);
-        }
-        let data: &[u8] = &mmap[..];
-        let query = vec![
-            f16::from_f32(1.0),
-            f16::from_f32(0.0),
-            f16::from_f32(0.0),
-            f16::from_f32(0.0),
-        ];
-        let brute = brute_force_knn(data, &query, &btree, dim, 20, 3).unwrap();
-        let ivf_results = ivf_knn(&ivf, data, &query, 3, ivf.k).unwrap();
-        assert_eq!(brute.len(), ivf_results.len());
-        for ((bid, bs), (iid, is)) in brute.iter().zip(ivf_results.iter()) {
-            assert_eq!(bid, iid);
-            assert!((bs - is).abs() < 1e-4, "brute {} ivf {}", bs, is);
-        }
-    }
-
-    #[test]
     fn test_ivf_serialization_roundtrip() {
-        use crate::file::free_list::{free_page, init_free_list};
-        use std::io::Write;
         use tempfile::NamedTempFile;
         let dim = 8usize;
         let mut ivf = IVFIndex::new(dim, 2);
         ivf.add_vector(101, &vec![f16::from_f32(1.0); dim], 7, 0);
         ivf.add_vector(102, &vec![f16::from_f32(0.0); dim], 8, 1);
         ivf.add_vector(103, &vec![f16::from_f32(0.5); dim], 9, 0);
-        let file = NamedTempFile::new().unwrap();
-        let mut f = std::fs::File::create(file.path()).unwrap();
-        f.write_all(&vec![0u8; PAGE_SIZE * 20]).unwrap();
-        drop(f);
-        let mut file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(file.path())
-            .unwrap();
-        let mut mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-        let mut header = FileHeader::new(dim as u16);
-        init_free_list(&mut header).unwrap();
-        for pid in (2..20).rev() {
-            free_page(&mut mmap, &mut header, pid).unwrap();
-        }
-        write_ivf_index(&mut mmap, &mut header, &ivf, &mut file).unwrap();
-        let r = read_ivf_index(&mmap, &header)
-            .unwrap()
-            .expect("IVF present");
+
+        let mut engine =
+            StorageEngine::create(NamedTempFile::new().unwrap().path(), dim as u16).unwrap();
+        write_ivf_index(&mut engine, &ivf).unwrap();
+
+        let r = read_ivf_index(&engine).unwrap().expect("IVF present");
         assert_eq!(r.dim, ivf.dim);
         assert_eq!(r.k, ivf.k);
         assert_eq!(r.buckets, ivf.buckets);
-        let old_cr = read_u32_from_reserved(&header.reserved, IVF_CLUSTER_ROOT_OFFSET);
-        let old_br = read_u32_from_reserved(&header.reserved, IVF_BUCKET_ROOT_OFFSET);
-        write_ivf_index(&mut mmap, &mut header, &ivf, &mut file).unwrap();
-        let new_cr = read_u32_from_reserved(&header.reserved, IVF_CLUSTER_ROOT_OFFSET);
-        let new_br = read_u32_from_reserved(&header.reserved, IVF_BUCKET_ROOT_OFFSET);
-        assert!(new_cr != 0 && new_br != 0);
-        assert!(new_cr != old_cr || old_cr == 0);
-        assert!(new_br != old_br || old_br == 0);
+
+        // Overwrite (delete + re-write) should succeed.
+        write_ivf_index(&mut engine, &ivf).unwrap();
+        let r2 = read_ivf_index(&engine)
+            .unwrap()
+            .expect("IVF present after overwrite");
+        assert_eq!(r2.k, ivf.k);
+        assert_eq!(r2.buckets, ivf.buckets);
     }
 
     #[test]

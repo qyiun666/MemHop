@@ -207,7 +207,9 @@ pub fn build_search_preprocess_prompt(query: &str) -> String {
 }
 
 /// Parse LLM response for search preprocessing.
-pub fn parse_search_preprocess_response(response: &str) -> Result<SearchPreprocessResult, MemHopError> {
+pub fn parse_search_preprocess_response(
+    response: &str,
+) -> Result<SearchPreprocessResult, MemHopError> {
     let cleaned = strip_code_blocks(response);
     let json: SearchPreprocessJson = serde_json::from_str(&cleaned)
         .map_err(|e| MemHopError::Serialization(format!("Parse search preprocess JSON: {}", e)))?;
@@ -389,7 +391,8 @@ mod tests {
 
     #[test]
     fn test_parse_search_response_no_l3() {
-        let response = r#"{"keywords":["hello","world","test"],"needs_l3_import":false,"l3_entities":[]}"#;
+        let response =
+            r#"{"keywords":["hello","world","test"],"needs_l3_import":false,"l3_entities":[]}"#;
         let result = parse_search_preprocess_response(response).unwrap();
         assert!(!result.needs_l3_import);
         assert!(result.l3_entities.is_empty());

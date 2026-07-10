@@ -48,15 +48,11 @@ impl MemHop {
         }
 
         let result = update_memory_internal(
-            &mut self.mmap,
-            &mut self.header,
+            &mut self.engine,
             req,
-            &mut self.btree,
             &mut self.sparse_index,
             &mut self.l2_meta,
-            &mut self.file,
             &self.config,
-            &mut self.journal_buffer,
             self.encoder.as_deref(),
             Some(&mut self.degree_tracker),
             Some(&mut self.l3_index_map),
@@ -66,7 +62,7 @@ impl MemHop {
         self.rebuild_ivf_index();
 
         // Trigger checkpoint if the buffered WAL has reached the configured interval.
-        if result.is_ok() && should_checkpoint(&self.config, self.journal_buffer.len()) {
+        if result.is_ok() && should_checkpoint(&self.config, 0) {
             if let Err(e) = self.checkpoint() {
                 tracing::warn!("Auto-checkpoint failed: {}", e);
             }

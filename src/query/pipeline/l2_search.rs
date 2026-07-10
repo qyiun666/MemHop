@@ -5,14 +5,13 @@
 //! cross-encoder reranker. The main entry point is [`search_l2_candidates`].
 
 use crate::config::SearchWeights;
-use crate::file::page::decode_page_ref;
-use crate::index::btree::BTreeIndex;
 use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
-use crate::index::vector::{cosine_similarity, ivf_knn, read_vector, IVFIndex};
-use crate::layers::context::ContextSlot;
+use crate::index::vector::{cosine_similarity, ivf_knn, read_vector_from_engine, IVFIndex};
+use crate::layers::context::{ContextSlot, TopicSlot};
 use crate::shared::common;
-use crate::shared::slot_io::get_slot_data;
+use crate::storage::record::REC_L2_TOPIC;
+use crate::storage::StorageEngine;
 use crate::MemHopError;
 use std::collections::{HashMap, HashSet};
 
@@ -136,10 +135,9 @@ pub(crate) fn rerank_candidates(
 ///
 /// If `candidates` is Some, only accept candidates whose id_hash is in the set.
 pub(crate) fn retrieve_l2_bm25(
-    data: &[u8],
+    engine: &StorageEngine,
     query_text: &str,
     sparse_index: &SparseIndex,
-    btree: &BTreeIndex,
     limit: usize,
     candidates: Option<&HashSet<u64>>,
 ) -> Result<Vec<(ContextSlot, f32)>, MemHopError> {
@@ -157,17 +155,16 @@ pub(crate) fn retrieve_l2_bm25(
                 continue;
             }
         }
-        let page_ref = match btree.search(id_hash) {
-            Some(pr) => pr,
-            None => continue,
+        let ctx = match engine.read_record(id_hash) {
+            Ok(Some((_rt, data))) => match bincode::deserialize::<TopicSlot>(data) {
+                Ok(ctx) => ctx,
+                Err(_) => continue,
+            },
+            _ => continue,
         };
-        if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if let Ok(ctx) = ContextSlot::deserialize(slot_data) {
-                if ctx.depth <= 3 {
-                    let weighted_score = if ctx.depth == 3 { score * 0.5 } else { score };
-                    scored.push((ctx, weighted_score));
-                }
-            }
+        if ctx.depth <= 3 {
+            let weighted_score = if ctx.depth == 3 { score * 0.5 } else { score };
+            scored.push((ctx, weighted_score));
         }
     }
 
@@ -185,9 +182,8 @@ pub(crate) fn retrieve_l2_bm25(
 /// If `candidates` is Some, only accept candidates whose id_hash is in the set.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn retrieve_l2_vector(
-    data: &[u8],
+    engine: &StorageEngine,
     query_vector: &[half::f16],
-    btree: &BTreeIndex,
     vector_dim: usize,
     limit: usize,
     min_score: f32,
@@ -200,7 +196,7 @@ pub(crate) fn retrieve_l2_vector(
         if !ivf.centroids.is_empty() && !ivf.buckets.is_empty() {
             let effective_probes = if n_probes > 0 { n_probes } else { 8 };
             let ivf_candidates =
-                ivf_knn(ivf, data, query_vector, limit * 2, effective_probes).unwrap_or_default();
+                ivf_knn(ivf, engine, query_vector, limit * 2, effective_probes).unwrap_or_default();
 
             let mut results = Vec::new();
             for (id_hash, score) in ivf_candidates {
@@ -212,14 +208,15 @@ pub(crate) fn retrieve_l2_vector(
                         continue;
                     }
                 }
-                if let Some(page_ref) = btree.search(id_hash) {
-                    if let Some(slot_data) = get_slot_data(data, page_ref) {
-                        if let Ok(ctx) = ContextSlot::deserialize_slot(slot_data) {
-                            let weighted_score = if ctx.depth == 3 { score * 0.5 } else { score };
-                            results.push((ctx, weighted_score));
-                        }
-                    }
-                }
+                let ctx = match engine.read_record(id_hash) {
+                    Ok(Some((_rt, data))) => match bincode::deserialize::<TopicSlot>(data) {
+                        Ok(ctx) => ctx,
+                        Err(_) => continue,
+                    },
+                    _ => continue,
+                };
+                let weighted_score = if ctx.depth == 3 { score * 0.5 } else { score };
+                results.push((ctx, weighted_score));
             }
 
             results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -228,24 +225,23 @@ pub(crate) fn retrieve_l2_vector(
         }
     }
 
-    // Fallback: brute-force linear scan over btree entries.
+    // Fallback: brute-force linear scan over engine index.
     let mut results = Vec::new();
 
-    for (&id_hash, &page_ref) in btree.iter_unsorted() {
+    for (&id_hash, _) in engine.iter_index() {
         if let Some(scope) = candidates {
             if !scope.contains(&id_hash) {
                 continue;
             }
         }
 
-        let (page_id, _slot_idx) = decode_page_ref(page_ref);
-        let offset = crate::shared::slot_io::slot_offset(page_id);
-
-        if offset >= data.len() {
+        let Some((rt, data)) = engine.read_record(id_hash)? else {
+            continue;
+        };
+        if rt != REC_L2_TOPIC {
             continue;
         }
-
-        if let Ok(ctx) = ContextSlot::deserialize(&data[offset..]) {
+        if let Ok(ctx) = bincode::deserialize::<TopicSlot>(data) {
             if ctx.depth > 3 {
                 continue;
             }
@@ -254,8 +250,8 @@ pub(crate) fn retrieve_l2_vector(
                 continue;
             }
 
-            let (vec_page, vec_slot) = decode_page_ref(ctx.centroid_page_ref);
-            if let Ok(centroid) = read_vector(data, vec_page, vec_slot, vector_dim) {
+            let vec_hash = ctx.centroid_page_ref;
+            if let Ok(centroid) = read_vector_from_engine(engine, vec_hash, vector_dim) {
                 if centroid.len() == vector_dim {
                     let score = cosine_similarity(query_vector, &centroid);
                     if min_score > 0.0 && score < min_score {
@@ -284,10 +280,9 @@ pub(crate) fn retrieve_l2_vector(
 /// Returns up to `context_limit` ranked `(ContextSlot, score)` pairs.
 #[allow(clippy::too_many_arguments)]
 pub fn search_l2_candidates(
-    data: &[u8],
+    engine: &StorageEngine,
     query_text: &str,
     sparse_index: &SparseIndex,
-    btree: &BTreeIndex,
     _l2_meta: &L2MetaIndex,
     vector_dim: usize,
     encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
@@ -299,22 +294,14 @@ pub fn search_l2_candidates(
 ) -> Result<Vec<(ContextSlot, f32)>, MemHopError> {
     let fetch_limit = context_limit * 2;
 
-    let bm25_results = retrieve_l2_bm25(
-        data,
-        query_text,
-        sparse_index,
-        btree,
-        fetch_limit,
-        candidates,
-    )?;
+    let bm25_results = retrieve_l2_bm25(engine, query_text, sparse_index, fetch_limit, candidates)?;
 
     let vector_results = if let Some(enc) = encoder {
         // Gracefully degrade if encoder fails (e.g. dimension mismatch)
         match enc.encode(query_text) {
             Ok(output) if !output.dense.is_empty() => retrieve_l2_vector(
-                data,
+                engine,
                 &output.dense,
-                btree,
                 vector_dim,
                 fetch_limit,
                 min_score,

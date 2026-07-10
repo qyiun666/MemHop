@@ -34,7 +34,7 @@ static DB: OnceLock<Mutex<MemHop>> = OnceLock::new();
 fn db() -> &'static Mutex<MemHop> {
     DB.get_or_init(|| {
         let _ = std::fs::remove_file(DB_PATH);
-        let mut config = MemHopConfig::new(PathBuf::from(DB_PATH), 1024);
+        let mut config = MemHopConfig::new(PathBuf::from(DB_PATH), 768);
         config.encoder_grpc_addr = Some(ENCODER_ADDR.to_string());
         config.auto_dream_archive_threshold = 20;
         config.auto_dream_summary_bytes = 2048;
@@ -54,6 +54,8 @@ fn db() -> &'static Mutex<MemHop> {
                 auto_create: 1,
                 min_score: 0.0,
                 source: RequestSource::default(),
+                llm_keywords: None,
+                enable_llm_preprocess: false,
             });
         }
 
@@ -100,6 +102,8 @@ fn bench_search_recall(c: &mut Criterion) {
                     auto_create: 0,
                     min_score: 0.0,
                     source: RequestSource::default(),
+                    llm_keywords: None,
+                    enable_llm_preprocess: false,
                 })
                 .expect("search failed");
             black_box(res.contexts.len())
@@ -119,7 +123,7 @@ fn bench_update_memory(c: &mut Criterion) {
             || {
                 let dir = TempDir::new().expect("TempDir");
                 let path = dir.path().join("update.meh");
-                let mut config = MemHopConfig::new(path, 1024);
+                let mut config = MemHopConfig::new(path, 768);
                 config.encoder_grpc_addr = Some(ENCODER_ADDR.to_string());
                 config.auto_dream_archive_threshold = 20;
                 config.auto_dream_summary_bytes = 2048;
@@ -135,6 +139,8 @@ fn bench_update_memory(c: &mut Criterion) {
                         auto_create: 1,
                         min_score: 0.0,
                         source: RequestSource::default(),
+                        llm_keywords: None,
+                        enable_llm_preprocess: false,
                     })
                     .expect("search");
                 let topic_id = res.contexts[0].id.clone();
@@ -150,6 +156,8 @@ fn bench_update_memory(c: &mut Criterion) {
                     instant_distill: false,
                     scene_id: None,
                     source: RequestSource::default(),
+                    user_keywords: None,
+                    agent_keywords: None,
                 });
                 black_box(res.is_ok());
             },
@@ -375,7 +383,7 @@ fn bench_l6_pathway_crud(c: &mut Criterion) {
             || {
                 let dir = TempDir::new().expect("TempDir");
                 let path = dir.path().join("l6.meh");
-                let mut config = MemHopConfig::new(path, 1024);
+                let mut config = MemHopConfig::new(path, 768);
                 config.encoder_grpc_addr = None;
                 let db = MemHop::open(config).expect("open");
                 (db, dir)
@@ -448,7 +456,7 @@ fn bench_l5_crystal_get(c: &mut Criterion) {
         b.iter(|| {
             let dir = TempDir::new().expect("TempDir");
             let path = dir.path().join("l5.meh");
-            let mut config = MemHopConfig::new(path, 1024);
+            let mut config = MemHopConfig::new(path, 768);
             config.encoder_grpc_addr = None;
             let db = MemHop::open(config).expect("open");
             let res = db.get_l5("0000000000000060").expect("get_l5 failed");

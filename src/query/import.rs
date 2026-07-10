@@ -4,27 +4,21 @@
 //! Import memory: import_memory() for L0/L2/L3 layers.
 //! Also provides import_l3_from_path() for file-based L3 import.
 
-use crate::file::free_list::allocate_or_extend;
-use crate::file::header::FileHeader;
-use crate::index::btree::BTreeIndex;
 use crate::index::sparse::SparseIndex;
 use crate::layers::context::ContextSlot;
 use crate::layers::profile::ProfileSlot;
 use crate::query::types::*;
 use crate::shared::common;
 use crate::shared::common::format_hash;
-use crate::util::{hash_id, PageType, DEFAULT_GROW_PAGES, PAGE_SIZE, SENTINEL_PAGE_ID};
+use crate::storage::record::*;
+use crate::storage::StorageEngine;
+use crate::store::write_slot;
+use crate::util::hash_id;
 use crate::MemHopError;
-use memmap2::MmapMut;
 use std::collections::HashMap;
-use std::fs::File;
 use std::path::Path;
 
-fn calculate_l2_sparse_index_data(
-    ctx: &ContextSlot,
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-) -> (Vec<String>, u32) {
+fn calculate_l2_sparse_index_data(ctx: &ContextSlot, engine: &StorageEngine) -> (Vec<String>, u32) {
     let title = if ctx.fused_keywords.is_empty() {
         ctx.user_keywords.join(", ")
     } else {
@@ -40,17 +34,12 @@ fn calculate_l2_sparse_index_data(
         .collect();
     let mut l3_doc_len: usize = 0;
     for &l3_id_hash in &l3_refs {
-        if let Some(page_ref) = btree.search(l3_id_hash) {
-            let l3_page_id = (page_ref >> 16) as u32;
-            let l3_offset = (l3_page_id as usize) * PAGE_SIZE + 32;
-
-            if l3_offset < mmap.len() {
-                if let Ok(node) =
-                    crate::layers::hypergraph::HypergraphSlot::deserialize(&mmap[l3_offset..])
-                {
-                    terms.extend(crate::index::sparse::tokenize(&node.name));
-                    l3_doc_len += node.name.len();
-                }
+        if let Some((_, data)) = engine.read_record(l3_id_hash).ok().flatten() {
+            if let Ok(slot) =
+                bincode::deserialize::<crate::layers::hypergraph::HypergraphSlot>(data)
+            {
+                terms.extend(crate::index::sparse::tokenize(&slot.name));
+                l3_doc_len += slot.name.len();
             }
         }
     }
@@ -62,38 +51,27 @@ fn calculate_l2_sparse_index_data(
 
 #[allow(clippy::too_many_arguments)]
 pub fn import_memory(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     request: ImportRequest,
-    file: &mut File,
     tracker: Option<&mut crate::l3::DegreeTracker>,
     index_map: Option<&mut std::collections::HashMap<u64, crate::l3::L3Index>>,
 ) -> Result<ImportResult, MemHopError> {
     match request.target_layer {
-        TargetLayer::Profile => {
-            import_l0_profile(mmap, header, btree, request.data, request.mode, file)
-        }
+        TargetLayer::Profile => import_l0_profile(engine, request.data, request.mode),
         TargetLayer::Topic => import_l2_topics(
-            mmap,
-            header,
-            btree,
+            engine,
             sparse_index,
             request.data,
             request.mode,
             request.knowledge_title,
-            file,
         ),
         TargetLayer::Knowledge => import_l3_knowledge(
-            mmap,
-            header,
-            btree,
+            engine,
             sparse_index,
             request.data,
             request.mode,
             request.knowledge_title,
-            file,
             tracker,
             index_map,
         ),
@@ -105,12 +83,9 @@ pub fn import_memory(
 // ============================================================================
 
 fn import_l0_profile(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     data: ImportData,
     mode: ImportMode,
-    file: &mut File,
 ) -> Result<ImportResult, MemHopError> {
     let now_ms = common::now_ms();
 
@@ -124,13 +99,14 @@ fn import_l0_profile(
     {
         let profile_id_hash = hash_id("profile");
 
-        match btree.search(profile_id_hash) {
-            Some(page_ref) => match mode {
+        if engine.contains(profile_id_hash) {
+            match mode {
                 ImportMode::Merge | ImportMode::Overwrite => {
-                    let page_id = (page_ref >> 16) as u32;
-                    let offset = (page_id as usize) * PAGE_SIZE + 32;
+                    let (_, data_bytes) = engine
+                        .read_record(profile_id_hash)?
+                        .ok_or(MemHopError::PageNotFound(0))?;
 
-                    let mut profile = ProfileSlot::deserialize(&mmap[offset..])
+                    let mut profile = bincode::deserialize::<ProfileSlot>(data_bytes)
                         .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
                     if let Some(n) = name {
@@ -152,18 +128,7 @@ fn import_l0_profile(
                     profile.updated_at = now_ms;
                     profile.version += 1;
 
-                    let data_bytes = profile
-                        .serialize()
-                        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-                    if offset + data_bytes.len() > mmap.len() {
-                        return Err(MemHopError::Serialization(format!(
-                            "ProfileSlot data too large for page: {} > {}",
-                            data_bytes.len(),
-                            mmap.len() - offset
-                        )));
-                    }
-                    mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
+                    write_slot(engine, REC_L0_PROFILE, profile_id_hash, &profile)?;
 
                     Ok(ImportResult {
                         status: ImportStatus::Success,
@@ -188,53 +153,36 @@ fn import_l0_profile(
                     knowledge_title: None,
                     node_count: 0,
                 }),
-            },
-            None => {
-                let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
-                let offset = (page_id as usize) * PAGE_SIZE + 32;
-
-                let profile = ProfileSlot {
-                    id_hash: profile_id_hash,
-                    name: name.unwrap_or_else(|| "Agent".to_string()),
-                    role: role.unwrap_or_else(|| "Assistant".to_string()),
-                    personality: personality.unwrap_or_default(),
-                    worldview: worldview.unwrap_or_default(),
-                    preferences: preferences.unwrap_or_default(),
-                    lexicon: HashMap::new(),
-                    style_traits: Vec::new(),
-                    emotion_patterns: HashMap::new(),
-                    created_at: now_ms,
-                    updated_at: now_ms,
-                    version: 1,
-                };
-
-                let data_bytes = profile
-                    .serialize()
-                    .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-                if offset + data_bytes.len() > mmap.len() {
-                    return Err(MemHopError::Serialization(format!(
-                        "ProfileSlot data too large for page: {} > {}",
-                        data_bytes.len(),
-                        mmap.len() - offset
-                    )));
-                }
-                mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
-
-                btree.insert(profile_id_hash, (page_id as u64) << 16);
-
-                Ok(ImportResult {
-                    status: ImportStatus::Success,
-                    id: Some(format_hash(profile_id_hash)),
-                    ids: Some(vec![format_hash(profile_id_hash)]),
-                    created_ids: vec![format_hash(profile_id_hash)],
-                    updated_ids: vec![],
-                    skipped_count: 0,
-                    errors: vec![],
-                    knowledge_title: None,
-                    node_count: 1,
-                })
             }
+        } else {
+            let profile = ProfileSlot {
+                id_hash: profile_id_hash,
+                name: name.unwrap_or_else(|| "Agent".to_string()),
+                role: role.unwrap_or_else(|| "Assistant".to_string()),
+                personality: personality.unwrap_or_default(),
+                worldview: worldview.unwrap_or_default(),
+                preferences: preferences.unwrap_or_default(),
+                lexicon: HashMap::new(),
+                style_traits: Vec::new(),
+                emotion_patterns: HashMap::new(),
+                created_at: now_ms,
+                updated_at: now_ms,
+                version: 1,
+            };
+
+            write_slot(engine, REC_L0_PROFILE, profile_id_hash, &profile)?;
+
+            Ok(ImportResult {
+                status: ImportStatus::Success,
+                id: Some(format_hash(profile_id_hash)),
+                ids: Some(vec![format_hash(profile_id_hash)]),
+                created_ids: vec![format_hash(profile_id_hash)],
+                updated_ids: vec![],
+                skipped_count: 0,
+                errors: vec![],
+                knowledge_title: None,
+                node_count: 1,
+            })
         }
     } else {
         Err(MemHopError::ConfigError(
@@ -249,14 +197,11 @@ fn import_l0_profile(
 
 #[allow(clippy::too_many_arguments)]
 fn import_l2_topics(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     data: ImportData,
     mode: ImportMode,
     knowledge_title: Option<String>,
-    file: &mut File,
 ) -> Result<ImportResult, MemHopError> {
     let now_ms = common::now_ms();
 
@@ -268,7 +213,7 @@ fn import_l2_topics(
 
         let l3_hash = if let Some(ref title) = knowledge_title {
             let hash = hash_id(title);
-            if btree.search(hash).is_some() {
+            if engine.contains(hash) {
                 Some(hash)
             } else {
                 None
@@ -281,13 +226,14 @@ fn import_l2_topics(
             let result = (|| -> Result<(), MemHopError> {
                 let id_hash = hash_id(&item.title);
 
-                match btree.search(id_hash) {
-                    Some(page_ref) => match mode {
+                if engine.contains(id_hash) {
+                    match mode {
                         ImportMode::Merge | ImportMode::Overwrite => {
-                            let page_id = (page_ref >> 16) as u32;
-                            let offset = (page_id as usize) * PAGE_SIZE + 32;
+                            let (_, data_bytes) = engine
+                                .read_record(id_hash)?
+                                .ok_or(MemHopError::PageNotFound(0))?;
 
-                            let mut ctx = ContextSlot::deserialize(&mmap[offset..])
+                            let mut ctx = bincode::deserialize::<ContextSlot>(data_bytes)
                                 .map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
                             ctx.fused_keywords = vec![item.title.clone()];
@@ -305,81 +251,52 @@ fn import_l2_topics(
                             ctx.version += 1;
 
                             sparse_index.remove_document(ctx.id);
-                            let (terms, doc_len) =
-                                calculate_l2_sparse_index_data(&ctx, mmap, btree);
+                            let (terms, doc_len) = calculate_l2_sparse_index_data(&ctx, engine);
                             sparse_index.add_document(ctx.id, terms, doc_len);
 
-                            let data_bytes = ctx
-                                .serialize()
-                                .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-                            if offset + data_bytes.len() > mmap.len() {
-                                return Err(MemHopError::Serialization(format!(
-                                    "ContextSlot data too large for page: {} > {}",
-                                    data_bytes.len(),
-                                    mmap.len() - offset
-                                )));
-                            }
-                            mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
+                            write_slot(engine, REC_L2_TOPIC, id_hash, &ctx)?;
 
                             updated_ids.push(format_hash(id_hash));
                         }
                         ImportMode::Skip => {
                             skipped_count += 1;
                         }
-                    },
-                    None => {
-                        let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
-                        let offset = (page_id as usize) * PAGE_SIZE + 32;
-
-                        let mut user_l3_refs = Vec::new();
-                        let mut agent_l3_refs = Vec::new();
-                        if let Some(l3_h) = l3_hash {
-                            agent_l3_refs.push(l3_h);
-                        }
-
-                        let ctx = ContextSlot {
-                            id: id_hash,
-                            fused_keywords: vec![item.title.clone()],
-                            fused_summary: item.summary.clone(),
-                            children_ids: vec![],
-                            scene_id: 0,
-                            depth: 1,
-                            user_keywords: vec![],
-                            user_timestamp: now_ms,
-                            user_l4_refs: vec![],
-                            user_l3_refs,
-                            agent_keywords: vec![],
-                            agent_timestamp: now_ms,
-                            agent_l4_refs: vec![],
-                            agent_l3_refs,
-                            parent_id: None,
-                            centroid_page_ref: 0,
-                            created_at: now_ms,
-                            updated_at: now_ms,
-                            version: 4,
-                        };
-
-                        let data_bytes = ctx
-                            .serialize()
-                            .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-                        if offset + data_bytes.len() > mmap.len() {
-                            return Err(MemHopError::Serialization(format!(
-                                "ContextSlot data too large for page: {} > {}",
-                                data_bytes.len(),
-                                mmap.len() - offset
-                            )));
-                        }
-                        mmap[offset..offset + data_bytes.len()].copy_from_slice(&data_bytes);
-
-                        let (terms, doc_len) = calculate_l2_sparse_index_data(&ctx, mmap, btree);
-                        sparse_index.add_document(id_hash, terms, doc_len);
-
-                        btree.insert(id_hash, (page_id as u64) << 16);
-
-                        created_ids.push(format_hash(id_hash));
                     }
+                } else {
+                    let user_l3_refs = Vec::new();
+                    let mut agent_l3_refs = Vec::new();
+                    if let Some(l3_h) = l3_hash {
+                        agent_l3_refs.push(l3_h);
+                    }
+
+                    let ctx = ContextSlot {
+                        id: id_hash,
+                        fused_keywords: vec![item.title.clone()],
+                        fused_summary: item.summary.clone(),
+                        children_ids: vec![],
+                        scene_id: 0,
+                        depth: 1,
+                        user_keywords: vec![],
+                        user_timestamp: now_ms,
+                        user_l4_refs: vec![],
+                        user_l3_refs,
+                        agent_keywords: vec![],
+                        agent_timestamp: now_ms,
+                        agent_l4_refs: vec![],
+                        agent_l3_refs,
+                        parent_id: None,
+                        centroid_page_ref: 0,
+                        created_at: now_ms,
+                        updated_at: now_ms,
+                        version: 4,
+                    };
+
+                    write_slot(engine, REC_L2_TOPIC, id_hash, &ctx)?;
+
+                    let (terms, doc_len) = calculate_l2_sparse_index_data(&ctx, engine);
+                    sparse_index.add_document(id_hash, terms, doc_len);
+
+                    created_ids.push(format_hash(id_hash));
                 }
 
                 Ok(())
@@ -430,14 +347,11 @@ fn import_l2_topics(
 
 #[allow(clippy::too_many_arguments)]
 fn import_l3_knowledge(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     _sparse_index: &mut SparseIndex,
     data: ImportData,
     mode: ImportMode,
     knowledge_title: Option<String>,
-    file: &mut File,
     mut tracker: Option<&mut crate::l3::DegreeTracker>,
     mut index_map: Option<&mut std::collections::HashMap<u64, crate::l3::L3Index>>,
 ) -> Result<ImportResult, MemHopError> {
@@ -465,17 +379,15 @@ fn import_l3_knowledge(
 
         match mode {
             ImportMode::Skip => {
-                if btree.search(title_hash).is_some() {
+                if engine.contains(title_hash) {
                     skipped_count += 1;
                     continue;
                 }
             }
             ImportMode::Overwrite => {
-                if btree.search(title_hash).is_some() {
-                    let _ = crate::l3::store::delete_node(
-                        mmap,
-                        header,
-                        btree,
+                if engine.contains(title_hash) {
+                    let _ = crate::l3::store::delete_node_with_engine(
+                        engine,
                         &item.title,
                         tracker.as_deref_mut(),
                         index_map.as_deref_mut(),
@@ -483,7 +395,7 @@ fn import_l3_knowledge(
                 }
             }
             ImportMode::Merge => {
-                if btree.search(title_hash).is_some() {
+                if engine.contains(title_hash) {
                     updated_ids.push(format_hash(title_hash));
                     continue;
                 }
@@ -492,10 +404,8 @@ fn import_l3_knowledge(
 
         let graph_id = *graph_cache.entry(item.domain.clone()).or_insert_with(|| {
             let gid = crate::util::hash_id(&item.domain);
-            if btree.search(gid).is_none() {
-                if let Err(e) =
-                    create_hypergraph_slot(mmap, header, btree, gid, &item.domain, now_ms, file)
-                {
+            if !engine.contains(gid) {
+                if let Err(e) = create_hypergraph_slot(engine, gid, &item.domain, now_ms) {
                     errors.push(ImportError {
                         index: idx,
                         message: e.to_string(),
@@ -517,17 +427,17 @@ fn import_l3_knowledge(
             keywords: item.keywords.clone(),
             source_ref: item.source_ref.clone(),
             importance: 0.7,
+            summary: None,
+            valid_from: now_ms,
+            valid_until: 0,
             created_at: now_ms,
             updated_at: now_ms,
             version: 1,
         };
 
-        match crate::l3::store::add_node(
-            mmap,
-            header,
-            btree,
+        match crate::l3::store::add_node_with_engine(
+            engine,
             node,
-            file,
             tracker.as_deref_mut(),
             index_map.as_deref_mut(),
         ) {
@@ -569,15 +479,11 @@ fn import_l3_knowledge(
 
 /// Create a HypergraphSlot (L3 graph container) for a new domain
 fn create_hypergraph_slot(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     id_hash: u64,
     name: &str,
     now_ms: i64,
-    file: &mut File,
 ) -> Result<(), MemHopError> {
-    use crate::file::page::PageHeader;
     use crate::layers::hypergraph::{HypergraphSlot, HypergraphSource};
 
     let slot = HypergraphSlot {
@@ -591,26 +497,7 @@ fn create_hypergraph_slot(
         version: 1,
     };
 
-    let data_bytes = slot
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-
-    let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
-    let page_offset = (page_id as usize) * PAGE_SIZE;
-
-    let page_hdr = PageHeader::new(page_id, PageType::HypergraphSlot, 3, SENTINEL_PAGE_ID);
-    mmap[page_offset..page_offset + 32].copy_from_slice(&page_hdr.to_bytes());
-
-    let data_offset = page_offset + 32;
-    if data_offset + data_bytes.len() > mmap.len() {
-        crate::file::free_list::free_page(mmap, header, page_id)?;
-        return Err(MemHopError::Serialization(
-            "HypergraphSlot too large for page".to_string(),
-        ));
-    }
-    mmap[data_offset..data_offset + data_bytes.len()].copy_from_slice(&data_bytes);
-
-    btree.insert(id_hash, (page_id as u64) << 16);
+    write_slot(engine, REC_L3_GRAPH_SLOT, id_hash, &slot)?;
     Ok(())
 }
 
@@ -799,12 +686,9 @@ fn extract_rust_symbols(module_name: &str, content: &str) -> Vec<String> {
 /// Also creates an L2 topic linked to the L3 graph for search discoverability.
 #[allow(clippy::too_many_arguments)]
 pub fn build_l3_hypergraph_from_path(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     path: &Path,
-    file: &mut File,
     mut tracker: Option<&mut crate::l3::DegreeTracker>,
     mut index_map: Option<&mut std::collections::HashMap<u64, crate::l3::L3Index>>,
 ) -> Result<ImportResult, MemHopError> {
@@ -844,7 +728,7 @@ pub fn build_l3_hypergraph_from_path(
     );
     let graph_id = hash_id(&graph_name);
 
-    if btree.search(graph_id).is_some() {
+    if engine.contains(graph_id) {
         return Err(MemHopError::ConfigError(format!(
             "L3 graph '{}' already exists, delete it first",
             graph_name
@@ -862,28 +746,8 @@ pub fn build_l3_hypergraph_from_path(
         version: 1,
     };
 
-    let page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
-    let page_offset = (page_id as usize) * PAGE_SIZE;
-    let page_hdr = crate::file::page::PageHeader::new(
-        page_id,
-        crate::util::PageType::HypergraphSlot,
-        3,
-        SENTINEL_PAGE_ID,
-    );
-    mmap[page_offset..page_offset + 32].copy_from_slice(&page_hdr.to_bytes());
-
-    let slot_data = slot
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    let data_offset = page_offset + 32;
-    if data_offset + slot_data.len() > mmap.len() {
-        crate::file::free_list::free_page(mmap, header, page_id)?;
-        return Err(MemHopError::Serialization(
-            "HypergraphSlot too large for page".to_string(),
-        ));
-    }
-    mmap[data_offset..data_offset + slot_data.len()].copy_from_slice(&slot_data);
-    btree.insert(graph_id, (page_id as u64) << 16);
+    // Write to v2 engine
+    crate::store::write_slot(engine, REC_L3_GRAPH_SLOT, graph_id, &slot)?;
 
     let mut created_ids = Vec::new();
     let mut module_to_hash: std::collections::HashMap<String, u64> =
@@ -925,17 +789,17 @@ pub fn build_l3_hypergraph_from_path(
             keywords,
             source_ref: Some(source_ref),
             importance: 0.6,
+            summary: None,
+            valid_from: now_ms,
+            valid_until: 0,
             created_at: now_ms,
             updated_at: now_ms,
             version: 1,
         };
 
-        match crate::l3::store::add_node(
-            mmap,
-            header,
-            btree,
+        match crate::l3::store::add_node_with_engine(
+            engine,
             node,
-            file,
             tracker.as_deref_mut(),
             index_map.as_deref_mut(),
         ) {
@@ -987,17 +851,14 @@ pub fn build_l3_hypergraph_from_path(
                 node_ids: vec![*from_hash, *to_hash],
                 weight: 0.8,
                 label: Some("depends_on".to_string()),
+                description: None,
+                confidence: 0.8,
+                valid_from: now_ms,
+                valid_until: 0,
                 created_at: now_ms,
             };
 
-            match crate::l3::store::add_edge(
-                mmap,
-                header,
-                btree,
-                edge,
-                file,
-                tracker.as_deref_mut(),
-            ) {
+            match crate::l3::store::add_edge_with_engine(engine, edge, tracker.as_deref_mut()) {
                 Ok(id) => {
                     edge_ids.push(id);
                     edge_count += 1;
@@ -1020,13 +881,8 @@ pub fn build_l3_hypergraph_from_path(
         updated_at: now_ms,
         version: 1,
     };
-    let slot_data = updated_slot
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    let data_offset = (page_id as usize) * PAGE_SIZE + 32;
-    if data_offset + slot_data.len() <= mmap.len() {
-        mmap[data_offset..data_offset + slot_data.len()].copy_from_slice(&slot_data);
-    }
+    // Write updated slot to v2 engine
+    crate::store::write_slot(engine, REC_L3_GRAPH_SLOT, graph_id, &updated_slot)?;
 
     // L2 topic for codebase discoverability via l3_id scoped search.
     let l2_title = format!("Codebase: {}", graph_name);
@@ -1064,28 +920,8 @@ pub fn build_l3_hypergraph_from_path(
         version: 4,
     };
 
-    let ctx_data = ctx
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    let l2_page_id = allocate_or_extend(mmap, header, file, DEFAULT_GROW_PAGES)?;
-    let l2_offset = (l2_page_id as usize) * PAGE_SIZE + 32;
-
-    if l2_offset + ctx_data.len() > mmap.len() {
-        crate::file::free_list::free_page(mmap, header, l2_page_id)?;
-        return Err(MemHopError::Serialization(
-            "ContextSlot too large for page".to_string(),
-        ));
-    }
-    mmap[l2_offset..l2_offset + ctx_data.len()].copy_from_slice(&ctx_data);
-
-    let l2_hdr = crate::file::page::PageHeader::new(
-        l2_page_id,
-        crate::util::PageType::Context,
-        2,
-        SENTINEL_PAGE_ID,
-    );
-    let l2_page_offset = (l2_page_id as usize) * PAGE_SIZE;
-    mmap[l2_page_offset..l2_page_offset + 32].copy_from_slice(&l2_hdr.to_bytes());
+    // Write to v2 engine
+    crate::store::write_slot(engine, REC_L2_TOPIC, l2_id_hash, &ctx)?;
 
     // Add to sparse index for BM25/entity search. Include title, module names,
     // and imports so queries like "parser search main" can recall the codebase.
@@ -1105,7 +941,6 @@ pub fn build_l3_hypergraph_from_path(
     terms.dedup();
     sparse_index.add_document(l2_id_hash, terms.clone(), terms.len() as u32);
 
-    btree.insert(l2_id_hash, (l2_page_id as u64) << 16);
     created_ids.push(format_hash(l2_id_hash));
 
     let all_errors: Vec<ImportError> = Vec::new();

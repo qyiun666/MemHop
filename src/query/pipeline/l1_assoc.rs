@@ -4,15 +4,15 @@
 //! L1 associated-context lookup: finds L2 contexts related to matched contexts
 //! via the L1 hypergraph (ContextNode + Hyperedge traversal).
 
-use crate::index::btree::BTreeIndex;
 use crate::index::sparse::tokenize;
-use crate::layers::context::ContextSlot;
+use crate::layers::context::{ContextSlot, TopicSlot};
 use crate::layers::context_node::ContextNode;
 use crate::layers::hyperedge::HyperedgeSlot;
 use crate::query::search::L1ReverseIndex;
 use crate::query::types::L1Preview;
 use crate::shared::common::format_hash;
-use crate::shared::slot_io::get_slot_data;
+use crate::storage::record::*;
+use crate::storage::StorageEngine;
 use crate::MemHopError;
 use std::collections::{HashMap, HashSet};
 
@@ -22,9 +22,8 @@ use std::collections::{HashMap, HashSet};
 /// discover sibling nodes, then loads their associated L2 ContextSlots.
 /// Also includes parent contexts of matched contexts.
 pub fn get_l1_associated_contexts(
-    data: &[u8],
+    engine: &StorageEngine,
     matched: &[(ContextSlot, f32)],
-    btree: &BTreeIndex,
     l1_reverse: &L1ReverseIndex,
 ) -> Result<Vec<(ContextSlot, f32)>, MemHopError> {
     if matched.is_empty() {
@@ -36,42 +35,52 @@ pub fn get_l1_associated_contexts(
     let mut weighted_results: Vec<(ContextSlot, f32)> = Vec::new();
 
     let associated_nodes = l1_reverse.find_associated(&matched_ids);
-    for (_node_hash, page_ref) in associated_nodes {
-        if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if let Ok(node) = ContextNode::deserialize(slot_data) {
-                for &edge_hash in &node.edge_ptrs {
-                    if let Some(edge_data) = btree
-                        .search(edge_hash)
-                        .and_then(|pr| get_slot_data(data, pr))
-                    {
-                        if let Ok(hyperedge) = HyperedgeSlot::deserialize(edge_data) {
-                            for &sibling_hash in &hyperedge.node_ptrs {
-                                if let Some(sib_data) = btree
-                                    .search(sibling_hash)
-                                    .and_then(|pr| get_slot_data(data, pr))
-                                {
-                                    if let Ok(sibling_node) = ContextNode::deserialize(sib_data) {
-                                        let ctx_id = sibling_node.context_id;
-                                        if seen.contains(&ctx_id) {
-                                            continue;
-                                        }
-                                        if let Some(ctx_data) = btree
-                                            .search(ctx_id)
-                                            .and_then(|pr| get_slot_data(data, pr))
-                                        {
-                                            if let Ok(ctx) = ContextSlot::deserialize(ctx_data) {
-                                                seen.insert(ctx_id);
-                                                let assoc_weight =
-                                                    hyperedge.weight * sibling_node.importance;
-                                                weighted_results.push((ctx, assoc_weight));
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
+    for (_node_hash, _page_ref) in associated_nodes {
+        let node = match engine.read_record(_node_hash) {
+            Ok(Some((rt, data))) if rt == REC_L1_SCENE_NODE => {
+                match ContextNode::deserialize(data) {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                }
+            }
+            _ => continue,
+        };
+        for &edge_hash in &node.edge_ptrs {
+            let hyperedge = match engine.read_record(edge_hash) {
+                Ok(Some((rt, data))) if rt == REC_L1_HYPEREDGE => {
+                    match HyperedgeSlot::deserialize(data) {
+                        Ok(e) => e,
+                        Err(_) => continue,
                     }
                 }
+                _ => continue,
+            };
+            for &sibling_hash in &hyperedge.node_ptrs {
+                let sibling_node = match engine.read_record(sibling_hash) {
+                    Ok(Some((rt, data))) if rt == REC_L1_SCENE_NODE => {
+                        match ContextNode::deserialize(data) {
+                            Ok(n) => n,
+                            Err(_) => continue,
+                        }
+                    }
+                    _ => continue,
+                };
+                let ctx_id = sibling_node.context_id;
+                if seen.contains(&ctx_id) {
+                    continue;
+                }
+                let ctx = match engine.read_record(ctx_id) {
+                    Ok(Some((rt, data))) if rt == REC_L2_TOPIC => {
+                        match bincode::deserialize::<TopicSlot>(data) {
+                            Ok(c) => c,
+                            Err(_) => continue,
+                        }
+                    }
+                    _ => continue,
+                };
+                seen.insert(ctx_id);
+                let assoc_weight = hyperedge.weight * sibling_node.importance;
+                weighted_results.push((ctx, assoc_weight));
             }
         }
     }
@@ -82,16 +91,18 @@ pub fn get_l1_associated_contexts(
             if seen.contains(&parent_id) {
                 continue;
             }
-            if let Some(parent_data) = btree
-                .search(parent_id)
-                .and_then(|pr| get_slot_data(data, pr))
-            {
-                if let Ok(parent) = ContextSlot::deserialize(parent_data) {
-                    seen.insert(parent_id);
-                    let parent_importance = 0.5;
-                    weighted_results.push((parent, parent_importance));
+            let parent = match engine.read_record(parent_id) {
+                Ok(Some((rt, data))) if rt == REC_L2_TOPIC => {
+                    match bincode::deserialize::<TopicSlot>(data) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    }
                 }
-            }
+                _ => continue,
+            };
+            seen.insert(parent_id);
+            let parent_importance = 0.5;
+            weighted_results.push((parent, parent_importance));
         }
     }
 
@@ -105,9 +116,8 @@ pub fn get_l1_associated_contexts(
 /// For each matched L2 context, looks up its associated L1 ContextNodes via
 /// the `L1ReverseIndex` and returns lightweight preview structs.
 pub fn get_l1_previews(
-    data: &[u8],
+    engine: &StorageEngine,
     matched: &[(ContextSlot, f32)],
-    btree: &BTreeIndex,
     l1_reverse: &L1ReverseIndex,
     dialogue: &str,
 ) -> Result<Vec<L1Preview>, MemHopError> {
@@ -126,24 +136,28 @@ pub fn get_l1_previews(
     let mut seen_nodes = HashSet::new();
     let mut previews = Vec::new();
 
-    for (node_hash, page_ref) in associated_nodes {
+    for (node_hash, _page_ref) in associated_nodes {
         if !seen_nodes.insert(node_hash) {
             continue;
         }
-        let Some(slot_data) = get_slot_data(data, page_ref) else {
-            continue;
-        };
-        let Ok(node) = ContextNode::deserialize(slot_data) else {
-            continue;
+        let node = match engine.read_record(node_hash) {
+            Ok(Some((rt, data))) if rt == REC_L1_SCENE_NODE => {
+                match ContextNode::deserialize(data) {
+                    Ok(n) => n,
+                    Err(_) => continue,
+                }
+            }
+            _ => continue,
         };
 
         // Look up the associated L2 context to get summary.
-        let summary = if let Some(ctx_data) = btree
-            .search(node.context_id)
-            .and_then(|pr| get_slot_data(data, pr))
-        {
-            if let Ok(ctx) = ContextSlot::deserialize(ctx_data) {
-                ctx.fused_summary
+        let summary = if let Ok(Some((rt, data))) = engine.read_record(node.context_id) {
+            if rt == REC_L2_TOPIC {
+                if let Ok(ctx) = bincode::deserialize::<TopicSlot>(data) {
+                    ctx.fused_summary
+                } else {
+                    None
+                }
             } else {
                 None
             }

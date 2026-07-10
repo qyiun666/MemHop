@@ -4,12 +4,10 @@
 //! L3 Degree Tracker — incremental node degree tracking for isolated node detection.
 //! Write-path hooks are O(1); dirty-flag triggers full BTree scan rebuild on next query.
 
-use crate::index::btree::BTreeIndex;
 use crate::layers::hypergraph::{HypergraphEdge, HypergraphNode};
-use crate::shared::slot_io::get_slot_data;
-use crate::util::PageType;
+use crate::storage::record::*;
+use crate::storage::StorageEngine;
 use crate::MemHopError;
-use memmap2::MmapMut;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -176,21 +174,20 @@ impl DegreeTracker {
 
 // ── Full-scan fallback ─────────────────────────────────────────────────────
 
-/// Rebuild the degree index for one graph by scanning the entire BTree.
+/// Rebuild the degree index for one graph by scanning the entire engine index.
 ///
-/// This is the cold-start / dirty-graph fallback. It finds every edge page
+/// This is the cold-start / dirty-graph fallback. It finds every edge record
 /// belonging to `graph_id` and counts references per node, then registers
 /// nodes with zero edges as degree=0.
-pub fn full_scan_degrees(mmap: &MmapMut, btree: &BTreeIndex, graph_id: u64) -> GraphDegrees {
-    let data: &[u8] = &mmap[..];
+pub fn full_scan_degrees(engine: &StorageEngine, graph_id: u64) -> GraphDegrees {
     let mut degrees: HashMap<u64, u32> = HashMap::new();
 
-    for (&_id, &page_ref) in btree.iter_unsorted() {
-        if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphEdge as u16) {
+    for (&id_hash, &_offset) in engine.iter_index() {
+        let Ok(Some((record_type, data))) = engine.read_record(id_hash) else {
             continue;
-        }
-        if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if let Ok(edge) = HypergraphEdge::deserialize(slot_data) {
+        };
+        if record_type == REC_L3_GRAPH_EDGE {
+            if let Ok(edge) = bincode::deserialize::<HypergraphEdge>(data) {
                 if edge.graph_id != graph_id {
                     continue;
                 }
@@ -198,15 +195,8 @@ pub fn full_scan_degrees(mmap: &MmapMut, btree: &BTreeIndex, graph_id: u64) -> G
                     *degrees.entry(node_hash).or_insert(0) += 1;
                 }
             }
-        }
-    }
-
-    for (&_id, &page_ref) in btree.iter_unsorted() {
-        if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
-            continue;
-        }
-        if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if let Ok(node) = HypergraphNode::deserialize(slot_data) {
+        } else if record_type == REC_L3_GRAPH_NODE {
+            if let Ok(node) = bincode::deserialize::<HypergraphNode>(data) {
                 if node.graph_id == graph_id {
                     degrees.entry(node.id_hash).or_insert(0);
                 }
@@ -228,16 +218,13 @@ pub fn full_scan_degrees(mmap: &MmapMut, btree: &BTreeIndex, graph_id: u64) -> G
 /// # Arguments
 /// * `threshold` — maximum degree to report. 0 = strictly isolated.
 pub fn detect_isolated(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
+    engine: &StorageEngine,
     graph_id: u64,
     tracker: &mut DegreeTracker,
     threshold: u32,
 ) -> Result<IsolatedResult, MemHopError> {
-    let data: &[u8] = &mmap[..];
-
     if tracker.is_dirty(graph_id) || !tracker.per_graph.contains_key(&graph_id) {
-        let degrees = full_scan_degrees(mmap, btree, graph_id);
+        let degrees = full_scan_degrees(engine, graph_id);
         tracker.per_graph.insert(graph_id, degrees);
         tracker.dirty_graphs.remove(&graph_id);
     }
@@ -250,24 +237,25 @@ pub fn detect_isolated(
     let mut isolated_nodes = Vec::new();
     let mut total_nodes = 0usize;
 
-    for (&_id, &page_ref) in btree.iter_unsorted() {
-        if super::store::page_type_of(data, page_ref) != Some(PageType::HypergraphNode as u16) {
+    for (&id_hash, &_offset) in engine.iter_index() {
+        let Ok(Some((record_type, data))) = engine.read_record(id_hash) else {
+            continue;
+        };
+        if record_type != REC_L3_GRAPH_NODE {
             continue;
         }
-        if let Some(slot_data) = get_slot_data(data, page_ref) {
-            if let Ok(node) = HypergraphNode::deserialize(slot_data) {
-                if node.graph_id != graph_id {
-                    continue;
-                }
-                total_nodes += 1;
-                if low_degree_hashes.contains(&node.id_hash) {
-                    isolated_nodes.push(IsolatedNode {
-                        id: format!("{:016x}", node.id_hash),
-                        title: node.title,
-                        node_type: node.node_type,
-                        degree: tracker.get_degree(graph_id, node.id_hash),
-                    });
-                }
+        if let Ok(node) = bincode::deserialize::<HypergraphNode>(data) {
+            if node.graph_id != graph_id {
+                continue;
+            }
+            total_nodes += 1;
+            if low_degree_hashes.contains(&node.id_hash) {
+                isolated_nodes.push(IsolatedNode {
+                    id: format!("{:016x}", node.id_hash),
+                    title: node.title,
+                    node_type: node.node_type,
+                    degree: tracker.get_degree(graph_id, node.id_hash),
+                });
             }
         }
     }
@@ -367,50 +355,39 @@ mod tests {
 
     #[test]
     fn test_full_scan_degrees() {
-        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut engine = crate::storage::StorageEngine::create(temp.path(), 768).unwrap();
         let graph_id = 1u64;
 
-        crate::l3::store::add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+        crate::l3::store::add_node_with_engine(
+            &mut engine,
             make_node(101, graph_id, "a"),
-            &mut file,
             None,
             None,
         )
         .unwrap();
-        crate::l3::store::add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+        crate::l3::store::add_node_with_engine(
+            &mut engine,
             make_node(102, graph_id, "b"),
-            &mut file,
             None,
             None,
         )
         .unwrap();
-        crate::l3::store::add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+        crate::l3::store::add_node_with_engine(
+            &mut engine,
             make_node(103, graph_id, "isolated"),
-            &mut file,
             None,
             None,
         )
         .unwrap();
-        crate::l3::store::add_edge(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+        crate::l3::store::add_edge_with_engine(
+            &mut engine,
             make_edge(201, graph_id, vec![101, 102]),
-            &mut file,
             None,
         )
         .unwrap();
 
-        let degrees = full_scan_degrees(&mmap, &btree, graph_id);
+        let degrees = full_scan_degrees(&engine, graph_id);
         assert_eq!(degrees.node_degrees.get(&101), Some(&1));
         assert_eq!(degrees.node_degrees.get(&102), Some(&1));
         assert_eq!(degrees.node_degrees.get(&103), Some(&0));
@@ -418,45 +395,34 @@ mod tests {
 
     #[test]
     fn test_detect_isolated_cold_start() {
-        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut engine = crate::storage::StorageEngine::create(temp.path(), 768).unwrap();
         let graph_id = 1u64;
 
-        crate::l3::store::add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+        crate::l3::store::add_node_with_engine(
+            &mut engine,
             make_node(101, graph_id, "a"),
-            &mut file,
             None,
             None,
         )
         .unwrap();
-        crate::l3::store::add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+        crate::l3::store::add_node_with_engine(
+            &mut engine,
             make_node(102, graph_id, "b"),
-            &mut file,
             None,
             None,
         )
         .unwrap();
-        crate::l3::store::add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+        crate::l3::store::add_node_with_engine(
+            &mut engine,
             make_node(103, graph_id, "isolated"),
-            &mut file,
             None,
             None,
         )
         .unwrap();
-        crate::l3::store::add_edge(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+        crate::l3::store::add_edge_with_engine(
+            &mut engine,
             make_edge(201, graph_id, vec![101, 102]),
-            &mut file,
             None,
         )
         .unwrap();
@@ -464,7 +430,7 @@ mod tests {
         let mut tracker = DegreeTracker::new();
         tracker.mark_dirty(graph_id); // simulate cold start
 
-        let result = detect_isolated(&mmap, &btree, graph_id, &mut tracker, 0).unwrap();
+        let result = detect_isolated(&engine, graph_id, &mut tracker, 0).unwrap();
         assert_eq!(result.isolated_nodes.len(), 1);
         assert_eq!(result.isolated_nodes[0].id, format!("{:016x}", 103));
         assert_eq!(result.total_nodes, 3);
@@ -474,61 +440,35 @@ mod tests {
     #[test]
     fn test_detect_isolated_multiple_graphs() {
         // Two independent graphs — isolation should not leak across graphs
-        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(128);
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut engine = crate::storage::StorageEngine::create(temp.path(), 768).unwrap();
         let g1 = 1u64;
         let g2 = 2u64;
 
         // Graph 1: two connected nodes
-        crate::l3::store::add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            make_node(101, g1, "a"),
-            &mut file,
-            None,
-            None,
-        )
-        .unwrap();
-        crate::l3::store::add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            make_node(102, g1, "b"),
-            &mut file,
-            None,
-            None,
-        )
-        .unwrap();
-        crate::l3::store::add_edge(
-            &mut mmap,
-            &mut header,
-            &mut btree,
+        crate::l3::store::add_node_with_engine(&mut engine, make_node(101, g1, "a"), None, None)
+            .unwrap();
+        crate::l3::store::add_node_with_engine(&mut engine, make_node(102, g1, "b"), None, None)
+            .unwrap();
+        crate::l3::store::add_edge_with_engine(
+            &mut engine,
             make_edge(201, g1, vec![101, 102]),
-            &mut file,
             None,
         )
         .unwrap();
 
         // Graph 2: one isolated node
-        crate::l3::store::add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            make_node(301, g2, "x"),
-            &mut file,
-            None,
-            None,
-        )
-        .unwrap();
+        crate::l3::store::add_node_with_engine(&mut engine, make_node(301, g2, "x"), None, None)
+            .unwrap();
 
         let mut tracker = DegreeTracker::new();
 
         // Graph 1 should have 0 isolated
-        let r1 = detect_isolated(&mmap, &btree, g1, &mut tracker, 0).unwrap();
+        let r1 = detect_isolated(&engine, g1, &mut tracker, 0).unwrap();
         assert_eq!(r1.isolated_nodes.len(), 0);
 
         // Graph 2 should have 1 isolated
-        let r2 = detect_isolated(&mmap, &btree, g2, &mut tracker, 0).unwrap();
+        let r2 = detect_isolated(&engine, g2, &mut tracker, 0).unwrap();
         assert_eq!(r2.isolated_nodes.len(), 1);
     }
 }

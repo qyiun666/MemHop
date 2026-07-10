@@ -8,20 +8,26 @@ use crate::query::types::{
     EngramListQuery, EngramListResult, EngramResult, KnowledgeDetail, KnowledgeListQuery,
     KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodesResult,
 };
+use crate::storage::record::{REC_L3_GRAPH_NODE, REC_L3_GRAPH_SLOT};
 use crate::MemHop;
-use crate::MemHopError;
 use crate::Result;
 impl MemHop {
     /// Get single engram by ID
     pub fn get_engram(&self, id: &str) -> Result<Option<EngramResult>> {
         use crate::query::list::get_engram as impl_fn;
-        impl_fn(&self.mmap, &self.btree, id)
+        impl_fn(&self.engine, id)
     }
 
     /// List engrams with pagination and filtering
     pub fn list_engrams(&self, query: EngramListQuery) -> Result<EngramListResult> {
         use crate::query::list::list_engrams as impl_fn;
-        impl_fn(&self.mmap, &self.header, &self.btree, query)
+        impl_fn(&self.engine, query)
+    }
+
+    /// Get single archive by ID
+    pub fn get_archive(&self, id: &str) -> Result<Option<Archive>> {
+        use crate::query::list::get_archive as impl_fn;
+        impl_fn(&self.engine, id)
     }
 
     /// List archives by topic ID
@@ -31,7 +37,7 @@ impl MemHop {
         query: ArchivePageQuery,
     ) -> Result<ArchiveListResult> {
         use crate::query::list::list_archives_by_topic as impl_fn;
-        impl_fn(&self.mmap, &self.header, &self.btree, topic_id, query)
+        impl_fn(&self.engine, topic_id, query)
     }
 
     /// List archives by node IDs
@@ -41,25 +47,19 @@ impl MemHop {
         query: ArchivePageQuery,
     ) -> Result<ArchiveListResult> {
         use crate::query::list::list_archives_by_nodes as impl_fn;
-        impl_fn(&self.mmap, &self.header, &self.btree, node_ids, query)
+        impl_fn(&self.engine, node_ids, query)
     }
 
     /// List all archives
     pub fn list_all_archives(&self, query: ArchivePageQuery) -> Result<ArchiveListResult> {
         use crate::query::list::list_all_archives as impl_fn;
-        impl_fn(&self.mmap, &self.header, &self.btree, query)
-    }
-
-    /// Get single archive by ID
-    pub fn get_archive(&self, id: &str) -> Result<Option<Archive>> {
-        use crate::query::list::get_archive as impl_fn;
-        impl_fn(&self.mmap, &self.btree, id)
+        impl_fn(&self.engine, query)
     }
 
     /// List crystals with pagination and filtering
     pub fn list_crystals(&self, query: CrystalListQuery) -> Result<CrystalListResult> {
         use crate::query::list::list_crystals as impl_fn;
-        impl_fn(&self.mmap, &self.header, &self.btree, query)
+        impl_fn(&self.engine, query)
     }
 
     /// Activate a crystal (L5 action chain) by ID.
@@ -69,7 +69,7 @@ impl MemHop {
     pub fn activate_crystal(&mut self, id: &str) -> Result<()> {
         use crate::dream::crystallize_stage::activate_crystal as impl_fn;
         let chain_id = crate::shared::common::parse_id_to_hash(id);
-        impl_fn(&mut self.mmap, &self.header, &self.btree, chain_id)
+        impl_fn(&mut self.engine, chain_id)
     }
 
     /// Get single knowledge (L3 hypergraph) by ID
@@ -77,24 +77,17 @@ impl MemHop {
     /// Uses l3::store engine to read the hypergraph and aggregate node content
     /// into the KnowledgeDetail structure.
     pub fn get_knowledge(&self, id: &str) -> Result<Option<KnowledgeDetail>> {
-        let data: &[u8] = &self.mmap[..];
         let id_hash = crate::shared::common::parse_id_to_hash(id);
 
-        // Read HypergraphSlot from BTree
-        let slot = match self.btree.search(id_hash) {
-            Some(page_ref) => {
-                if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
-                    match crate::layers::hypergraph::HypergraphSlot::deserialize_slot(slot_data) {
-                        Ok(s) => s,
-                        Err(_) => return Ok(None),
-                    }
-                } else {
-                    return Err(MemHopError::PageNotFound(
-                        crate::shared::slot_io::decode_page_id(page_ref),
-                    ));
+        // Read HypergraphSlot from engine
+        let slot = match self.engine.read_record(id_hash) {
+            Ok(Some((rt, data))) if rt == REC_L3_GRAPH_SLOT => {
+                match crate::layers::hypergraph::HypergraphSlot::deserialize(data) {
+                    Ok(s) => s,
+                    Err(_) => return Ok(None),
                 }
             }
-            None => return Ok(None),
+            _ => return Ok(None),
         };
 
         // Aggregate node content using l3::store
@@ -117,8 +110,7 @@ impl MemHop {
             keyword: None,
             min_importance: None,
         };
-        if let Ok(nodes) =
-            crate::l3::store::list_nodes_by_graph(&self.mmap, &self.btree, id_hash, &node_query)
+        if let Ok(nodes) = crate::l3::store::list_nodes_by_graph(&self.engine, id_hash, &node_query)
         {
             let count = nodes.total as f32;
             if count > 0.0 {
@@ -176,12 +168,11 @@ impl MemHop {
             ids
         };
 
-        let data: &[u8] = &self.mmap[..];
         let mut nodes: Vec<KnowledgeNodeDetail> = Vec::with_capacity(ids.len());
 
         for id_str in ids {
             let id_hash = crate::shared::common::parse_id_to_hash(id_str);
-            if let Some(detail) = self.resolve_knowledge_node_detail(data, id_hash, include_text) {
+            if let Some(detail) = self.resolve_knowledge_node_detail(id_hash, include_text) {
                 nodes.push(detail);
             }
         }
@@ -196,15 +187,13 @@ impl MemHop {
     /// Resolve a single HypergraphNode into a KnowledgeNodeDetail.
     pub(crate) fn resolve_knowledge_node_detail(
         &self,
-        data: &[u8],
         node_hash: u64,
         include_text: bool,
     ) -> Option<KnowledgeNodeDetail> {
-        if let Some(page_ref) = self.btree.search(node_hash) {
-            if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
-                if let Ok(node) = crate::layers::hypergraph::HypergraphNode::deserialize(slot_data)
-                {
-                    let domain = self.resolve_node_domain(data, node.graph_id);
+        match self.engine.read_record(node_hash) {
+            Ok(Some((rt, data))) if rt == REC_L3_GRAPH_NODE => {
+                if let Ok(node) = crate::layers::hypergraph::HypergraphNode::deserialize(data) {
+                    let domain = self.resolve_node_domain(node.graph_id);
                     return Some(KnowledgeNodeDetail {
                         id: crate::shared::common::format_hash(node.id_hash),
                         title: node.title,
@@ -221,19 +210,20 @@ impl MemHop {
                     });
                 }
             }
+            _ => {}
         }
         None
     }
 
     /// Resolve domain name from a HypergraphSlot by graph_id
-    pub(crate) fn resolve_node_domain(&self, data: &[u8], graph_id: u64) -> String {
-        if let Some(page_ref) = self.btree.search(graph_id) {
-            if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, page_ref) {
-                if let Ok(slot) = crate::layers::hypergraph::HypergraphSlot::deserialize(slot_data)
-                {
+    pub(crate) fn resolve_node_domain(&self, graph_id: u64) -> String {
+        match self.engine.read_record(graph_id) {
+            Ok(Some((rt, data))) if rt == REC_L3_GRAPH_SLOT => {
+                if let Ok(slot) = crate::layers::hypergraph::HypergraphSlot::deserialize(data) {
                     return slot.name;
                 }
             }
+            _ => {}
         }
         "unknown".to_string()
     }
@@ -241,6 +231,6 @@ impl MemHop {
     /// List knowledge (L3 hypergraphs) with pagination and filtering
     pub fn list_knowledge(&self, query: KnowledgeListQuery) -> Result<KnowledgeListResult> {
         use crate::query::list::list_knowledge as impl_fn;
-        impl_fn(&self.mmap, &self.header, &self.btree, query)
+        impl_fn(&self.engine, query)
     }
 }

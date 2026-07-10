@@ -9,12 +9,41 @@ use memhop::{
     SearchResult, TopicListQuery, UpdateL2Fields, UpdateL3Fields, UpdateL5Fields, UpdateL6Fields,
     UpdateProfileRequest, UpdateRequest, UpdateResult,
 };
+use memhop::encoder::{Encoder, EncoderOutput};
+use std::collections::HashMap;
+
+struct TestEncoder {
+    dim: usize,
+}
+
+impl TestEncoder {
+    fn new(dim: usize) -> Self {
+        Self { dim }
+    }
+}
+
+impl Encoder for TestEncoder {
+    fn encode(&self, _text: &str) -> Result<EncoderOutput, memhop::MemHopError> {
+        Ok(EncoderOutput {
+            dense: vec![half::f16::from_f32(0.1); self.dim],
+            sparse: HashMap::new(),
+        })
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn mode(&self) -> &str {
+        "test"
+    }
+}
 
 fn make_config(path: std::path::PathBuf) -> MemHopConfig {
-    let mut config = MemHopConfig::new(path, 1024);
+    let mut config = MemHopConfig::new(path, 768);
     config.encoder_grpc_addr = None;
+    config.llm_preprocess = memhop::LlmPreprocessConfig::default();
     config
-            llm_preprocess: memhop::LlmPreprocessConfig::default(),
 }
 
 fn create_topic(db: &mut MemHop, dialogue: &str) -> String {
@@ -27,8 +56,8 @@ fn create_topic(db: &mut MemHop, dialogue: &str) -> String {
         auto_create: 1,
         min_score: 0.0,
         source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+        llm_keywords: None,
+        enable_llm_preprocess: false,
     })
     .unwrap()
     .contexts
@@ -45,6 +74,7 @@ fn api_surface_is_reachable() {
 
     // API-1 open
     let mut db = MemHop::open(make_config(path)).unwrap();
+    db.set_encoder(TestEncoder::new(768));
 
     // API-2 search_context
     let topic_a = create_topic(&mut db, "first topic");
@@ -75,8 +105,8 @@ fn api_surface_is_reachable() {
             instant_distill: false,
             scene_id: None,
             source: Default::default(),
-                user_keywords: None,
-                agent_keywords: None,
+            user_keywords: None,
+            agent_keywords: None,
         })
         .unwrap();
 
@@ -106,7 +136,6 @@ fn api_surface_is_reachable() {
     let _ = db.update_l2(
         &topic_a,
         UpdateL2Fields {
-            title: Some("t".into()),
             ..Default::default()
         },
     );
@@ -129,8 +158,6 @@ fn api_surface_is_reachable() {
     let _ = db.search_l4(L4SearchQuery {
         recent: Some(5),
         ..Default::default()
-            llm_keywords: None,
-            enable_llm_preprocess: false,
     });
 
     // API-9 L5 CRUD
@@ -158,7 +185,7 @@ fn api_surface_is_reachable() {
         min_weight: Some(0.1),
         ..Default::default()
     }));
-    let _ = db.add_l6(PathwayWeightSlot {
+    let _ = db.add_l6(vec![PathwayWeightSlot {
         id_hash: 1,
         source_node: "s".into(),
         target_node: "t".into(),
@@ -170,7 +197,7 @@ fn api_surface_is_reachable() {
         created_at: 0,
         updated_at: 0,
         version: 1,
-    });
+    }]);
     let _ = db.update_l6_weight("0000000000000001", 0.1);
 
     // API-11 dream

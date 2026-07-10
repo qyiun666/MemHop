@@ -3,38 +3,27 @@
 
 //! L4 Archive search internal implementation.
 
-use crate::file::header::FileHeader;
-use crate::index::btree::BTreeIndex;
 use crate::layers::archive::ArchiveSlot;
 use crate::query::types::L4SearchQuery;
-use crate::shared::slot_io::{decode_page_id, get_slot_data};
-use crate::util::{PageType, PAGE_SIZE};
+use crate::storage::record::REC_L4_ARCHIVE;
+use crate::storage::StorageEngine;
 use crate::MemHopError;
-use memmap2::MmapMut;
 
 /// Search L4 archives with recent/time-range/keyword filters.
 pub fn search_l4(
-    mmap: &MmapMut,
-    header: &FileHeader,
-    btree: &BTreeIndex,
+    engine: &StorageEngine,
     query: L4SearchQuery,
 ) -> Result<Vec<ArchiveSlot>, MemHopError> {
-    let data: &[u8] = &mmap[..];
     let mut results: Vec<ArchiveSlot> = Vec::new();
 
-    for (_, page_ref) in btree.iter_unsorted() {
-        let page_id = decode_page_id(*page_ref);
-        if page_id >= header.page_count {
+    for (id_hash, _) in engine.iter_index() {
+        let Some((rt, data)) = engine.read_record(*id_hash)? else {
             continue;
-        }
-        if page_type(data, page_id) != Some(PageType::Archive as u16) {
-            continue;
-        }
-        let slot_data = match get_slot_data(data, *page_ref) {
-            Some(d) => d,
-            None => continue,
         };
-        let archive = match ArchiveSlot::deserialize_slot(slot_data) {
+        if rt != REC_L4_ARCHIVE {
+            continue;
+        }
+        let archive = match bincode::deserialize::<ArchiveSlot>(data) {
             Ok(a) => a,
             Err(_) => continue,
         };
@@ -67,31 +56,13 @@ pub fn search_l4(
     Ok(results)
 }
 
-#[inline]
-fn page_type(data: &[u8], page_id: u32) -> Option<u16> {
-    let offset = (page_id as usize) * PAGE_SIZE + 4;
-    if offset + 2 > data.len() {
-        return None;
-    }
-    Some(u16::from_le_bytes([data[offset], data[offset + 1]]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file::page::{allocate_page, write_page_data};
     use crate::layers::archive::{ArchiveSlot, ContentType};
-    use crate::test_helpers::create_test_mmap;
+    use tempfile::NamedTempFile;
 
-    fn insert_archive(
-        mmap: &mut MmapMut,
-        header: &mut FileHeader,
-        btree: &mut BTreeIndex,
-        id: u64,
-        content: &str,
-        created_at: i64,
-        file: &mut std::fs::File,
-    ) {
+    fn insert_archive(engine: &mut StorageEngine, id: u64, content: &str, created_at: i64) {
         let archive = ArchiveSlot {
             id_hash: id,
             content_type: ContentType::Text,
@@ -101,55 +72,21 @@ mod tests {
             content: content.into(),
             metadata: None,
         };
-        let page_id = allocate_page(
-            mmap,
-            header,
-            PageType::Archive,
-            4,
-            crate::index::btree::EMPTY_PAGE,
-            file,
-        )
-        .unwrap();
-        write_page_data(mmap, page_id, &archive.serialize().unwrap()).unwrap();
-        btree.insert(id, (page_id as u64) << 16);
+        let data = bincode::serialize(&archive).unwrap();
+        engine.write_record(REC_L4_ARCHIVE, id, &data).unwrap();
     }
 
     #[test]
     fn test_search_l4_filters() {
-        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
+        let temp = NamedTempFile::new().unwrap();
+        let mut engine = StorageEngine::create(temp.path(), 768).unwrap();
 
-        insert_archive(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            100,
-            "hello world",
-            1000,
-            &mut file,
-        );
-        insert_archive(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            101,
-            "rust code",
-            2000,
-            &mut file,
-        );
-        insert_archive(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            102,
-            "world news",
-            3000,
-            &mut file,
-        );
+        insert_archive(&mut engine, 100, "hello world", 1000);
+        insert_archive(&mut engine, 101, "rust code", 2000);
+        insert_archive(&mut engine, 102, "world news", 3000);
 
         let recent = search_l4(
-            &mmap,
-            &header,
-            &btree,
+            &engine,
             L4SearchQuery {
                 recent: Some(2),
                 ..Default::default()
@@ -160,9 +97,7 @@ mod tests {
         assert_eq!(recent[0].created_at, 3000);
 
         let range = search_l4(
-            &mmap,
-            &header,
-            &btree,
+            &engine,
             L4SearchQuery {
                 time_range: Some((1500, 2500)),
                 ..Default::default()
@@ -173,9 +108,7 @@ mod tests {
         assert_eq!(range[0].id_hash, 101);
 
         let keyword = search_l4(
-            &mmap,
-            &header,
-            &btree,
+            &engine,
             L4SearchQuery {
                 keywords: Some(vec!["world".into()]),
                 ..Default::default()
@@ -183,5 +116,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(keyword.len(), 2);
+
+        // temp file kept alive for engine lifetime
+        let _ = temp;
     }
 }

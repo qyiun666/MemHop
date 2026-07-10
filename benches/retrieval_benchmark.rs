@@ -61,7 +61,7 @@ fn bench_vector_dim() -> usize {
     std::env::var("BENCH_VECTOR_DIM")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1024)
+        .unwrap_or(768)
 }
 
 fn make_config(path: PathBuf) -> MemHopConfig {
@@ -80,13 +80,16 @@ fn make_config(path: PathBuf) -> MemHopConfig {
             vector_weight: 0.55,
             n_probes: 8,
             enable_reranker: true,
-            rerank_max_candidates: 1, // 减少 rerank 编码次数以控制基准耗时
+            rerank_max_candidates: 1,
+            recency_weight: 0.5,
+            activation_boost: 1.3,
         }),
         decay_config: None,
         session_config: None,
         dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
+        llm_preprocess: Default::default(),
     }
 }
 
@@ -143,6 +146,8 @@ fn setup() -> (MemHop, Vec<Question>, HashMap<String, String>) {
                     auto_create: 1,
                     min_score: 0.0,
                     source: RequestSource::default(),
+                    llm_keywords: None,
+                    enable_llm_preprocess: false,
                 })
                 .expect("ingest search failed");
             if let Some(ctx) = res.contexts.first() {
@@ -176,6 +181,8 @@ fn bench_retrieval(c: &mut Criterion) {
             auto_create: 0,
             min_score: 0.0,
             source: RequestSource::default(),
+            llm_keywords: None,
+            enable_llm_preprocess: false,
         });
         latencies.push(start.elapsed());
 
@@ -228,6 +235,8 @@ fn bench_retrieval(c: &mut Criterion) {
                         auto_create: 0,
                         min_score: 0.0,
                         source: RequestSource::default(),
+                        llm_keywords: None,
+                        enable_llm_preprocess: false,
                     })
                     .expect("search failed");
                 black_box(res.contexts.len());

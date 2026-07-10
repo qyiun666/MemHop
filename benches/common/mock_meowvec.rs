@@ -33,7 +33,7 @@ pub fn ensure_meowvec_running(port: u16) {
     let deadline = Instant::now() + Duration::from_secs(60);
 
     while Instant::now() < deadline {
-        match memhop::encoder::GrpcEncoder::new(&addr, 1024) {
+        match memhop::encoder::GrpcEncoder::new(&addr, 768) {
             Ok(_) => {
                 eprintln!("[benches] gRPC encoder ready on {addr}");
                 *ready = true;

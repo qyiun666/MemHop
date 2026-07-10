@@ -4,10 +4,10 @@ This file provides guidance to Kimi Code CLI when working on the MemHop reposito
 
 ## 项目概述
 
-MemHop 是一个面向 AI Agent 的嵌入式记忆数据库，用单个 `.meh` 文件实现六层认知架构（L0–L5）。它通过 Rust crate API 暴露给 MeowAgent 等宿主，同时也支持 Rust 原生 API。
+MemHop 是一个面向 AI Agent 的嵌入式记忆数据库，用单个 `.meh` 文件实现六层认知架构（L0–L6）。它通过 Rust crate API 暴露给 MeowAgent 等宿主。
 
 - **语言**: Rust (Edition 2021, MSRV 1.75)
-- **版本**: v0.53.0
+- **版本**: v0.57.0
 - **许可证**: MIT OR Apache-2.0
 - **核心形态**: `lib`，零外部运行时依赖理念
 
@@ -33,11 +33,12 @@ cargo bench
 
 ## 架构要点
 
-- **六层记忆**: L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal
-- **存储格式**: 自定义二进制 `.meh`，A/B 双 Header + CRC32 + WAL，4 KB 页，mmap 零拷贝读取
-- **检索**: BM25（CJK 分词）+ f16 向量相似度（SIMD AVX2/NEON）+ BK-Tree 实体模糊匹配
-- **Dream 周期**: L3 蒸馏 → L2 压缩 → L1 重建/衰减 → L0 重建 → 语言习惯学习 → L5 结晶
+- **七层记忆**: L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal → L6 Pathway
+- **存储格式**: V2 append-only `.meh`（魔数 `MEH2`），A/B 双 Header + CRC32 + 快照 + mmap 零拷贝读取
+- **检索**: BM25（jieba-rs CJK 分词）+ f16 IVF 向量近似搜索 + 实体模糊匹配 + L2 Meta 元索引
+- **Dream 周期**: L3 蒸馏 → L2 压缩 → L1 重建 → L1 衰减 → L0 重建 → 语言习惯蒸馏 → L5 结晶 → L6 衰减
 - **gRPC**: `proto/vector_model.proto` 定义 MeowVec 向量编码服务
+- **日志**: `tracing` 框架结构化日志
 
 ## 开发规则优先级（冲突时按序号）
 

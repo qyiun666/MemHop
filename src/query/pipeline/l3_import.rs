@@ -6,11 +6,7 @@
 //! Analyzes the query text, identifies conceptual knowledge, creates L3
 //! hypergraph nodes, and links them to L2 contexts. No-op stub for now.
 
-use crate::file::header::FileHeader;
-use crate::index::btree::BTreeIndex;
 use crate::MemHopError;
-use memmap2::MmapMut;
-use std::fs::File;
 
 /// Extract structured knowledge from the dialogue text and import into L3.
 ///
@@ -21,12 +17,6 @@ use std::fs::File;
 /// - Link nodes with appropriate edges (Related, Causal, etc.)
 /// - Return the list of created graph IDs for linking to L2 contexts
 #[allow(dead_code)]
-pub fn extract_l3_from_dialogue(
-    _mmap: &mut MmapMut,
-    _header: &mut FileHeader,
-    _btree: &mut BTreeIndex,
-    _dialogue: &str,
-    _file: &mut File,
-) -> Result<Vec<String>, MemHopError> {
+pub fn extract_l3_from_dialogue(_dialogue: &str) -> Result<Vec<String>, MemHopError> {
     Ok(Vec::new())
 }

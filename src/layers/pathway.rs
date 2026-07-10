@@ -7,7 +7,7 @@
 //! condition node to a target action node, along with usage statistics and
 //! optional metadata.
 
-use crate::util::io_helpers::*;
+use crate::api::MemHopError;
 use serde::{Deserialize, Serialize};
 use std::io::{self, Cursor, Read, Write};
 
@@ -31,81 +31,12 @@ pub struct PathwayWeightSlot {
 }
 
 impl PathwayWeightSlot {
-    /// Fixed 60 bytes + variable string lengths.
-    pub fn slot_size(&self) -> usize {
-        60 + self.source_node.len() + self.target_node.len() + self.metadata.len()
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
-    pub fn serialize(&self) -> io::Result<Vec<u8>> {
-        let mut buf = Vec::with_capacity(self.slot_size());
-        buf.write_all(&self.id_hash.to_le_bytes())?;
-        buf.write_all(&(self.source_node.len() as u32).to_le_bytes())?;
-        buf.write_all(&(self.target_node.len() as u32).to_le_bytes())?;
-        buf.write_all(&(self.metadata.len() as u32).to_le_bytes())?;
-        buf.write_all(&self.weight.to_le_bytes())?;
-        buf.write_all(&self.success_rate.to_le_bytes())?;
-        buf.write_all(&self.trigger_count.to_le_bytes())?;
-        buf.write_all(&self.last_accessed.to_le_bytes())?;
-        buf.write_all(&self.created_at.to_le_bytes())?;
-        buf.write_all(&self.updated_at.to_le_bytes())?;
-        buf.write_all(&self.version.to_le_bytes())?;
-        buf.write_all(self.source_node.as_bytes())?;
-        buf.write_all(self.target_node.as_bytes())?;
-        buf.write_all(self.metadata.as_bytes())?;
-        Ok(buf)
-    }
-
-    pub fn deserialize(data: &[u8]) -> io::Result<Self> {
-        let mut c = Cursor::new(data);
-        let id_hash = read_u64(&mut c)?;
-        let source_len = read_u32(&mut c)? as usize;
-        let target_len = read_u32(&mut c)? as usize;
-        let metadata_len = read_u32(&mut c)? as usize;
-        let weight = read_f32(&mut c)?;
-        let success_rate = read_f32(&mut c)?;
-        let trigger_count = read_u32(&mut c)?;
-        let last_accessed = read_u64(&mut c)?;
-        let created_at = read_i64(&mut c)?;
-        let updated_at = read_i64(&mut c)?;
-        let version = read_u32(&mut c)?;
-
-        const FIXED_PREFIX_LEN: usize = 60;
-        let variable_len = source_len + target_len + metadata_len;
-        if FIXED_PREFIX_LEN + variable_len > data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "PathwayWeightSlot variable fields exceed data",
-            ));
-        }
-
-        let mut source_buf = vec![0u8; source_len];
-        c.read_exact(&mut source_buf)?;
-        let source_node = String::from_utf8(source_buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-        let mut target_buf = vec![0u8; target_len];
-        c.read_exact(&mut target_buf)?;
-        let target_node = String::from_utf8(target_buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-        let mut metadata_buf = vec![0u8; metadata_len];
-        c.read_exact(&mut metadata_buf)?;
-        let metadata = String::from_utf8(metadata_buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-
-        Ok(PathwayWeightSlot {
-            id_hash,
-            source_node,
-            target_node,
-            weight,
-            trigger_count,
-            success_rate,
-            last_accessed,
-            metadata,
-            created_at,
-            updated_at,
-            version,
-        })
+    pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
     }
 
     /// Serialize a vector of pathway slots into a single byte stream.
@@ -114,7 +45,8 @@ impl PathwayWeightSlot {
         let mut buf = Vec::new();
         buf.write_all(&(pathways.len() as u32).to_le_bytes())?;
         for p in pathways {
-            let slot_bytes = p.serialize()?;
+            let slot_bytes =
+                bincode::serialize(p).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
             buf.write_all(&(slot_bytes.len() as u32).to_le_bytes())?;
             buf.write_all(&slot_bytes)?;
         }
@@ -124,7 +56,7 @@ impl PathwayWeightSlot {
     /// Deserialize a vector of pathway slots from a byte stream.
     pub fn deserialize_pathways(data: &[u8]) -> io::Result<Vec<PathwayWeightSlot>> {
         let mut c = Cursor::new(data);
-        let count = read_u32(&mut c)? as usize;
+        let count = read_u32_le(&mut c)? as usize;
         if 4 + count * 4 > data.len() {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -133,7 +65,7 @@ impl PathwayWeightSlot {
         }
         let mut pathways = Vec::with_capacity(count);
         for _ in 0..count {
-            let len = read_u32(&mut c)? as usize;
+            let len = read_u32_le(&mut c)? as usize;
             if c.position() as usize + len > data.len() {
                 return Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
@@ -142,10 +74,20 @@ impl PathwayWeightSlot {
             }
             let mut slot_buf = vec![0u8; len];
             c.read_exact(&mut slot_buf)?;
-            pathways.push(PathwayWeightSlot::deserialize(&slot_buf)?);
+            pathways.push(
+                bincode::deserialize(&slot_buf)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+            );
         }
         Ok(pathways)
     }
+}
+
+#[inline]
+fn read_u32_le(cursor: &mut Cursor<&[u8]>) -> io::Result<u32> {
+    let mut buf = [0u8; 4];
+    cursor.read_exact(&mut buf)?;
+    Ok(u32::from_le_bytes(buf))
 }
 
 // ============================================================================
@@ -172,7 +114,6 @@ mod tests {
             version: 1,
         };
         let data = pw.serialize().unwrap();
-        assert_eq!(data.len(), pw.slot_size());
         assert_eq!(pw, PathwayWeightSlot::deserialize(&data).unwrap());
     }
 
@@ -191,7 +132,6 @@ mod tests {
             updated_at: 0,
             version: 0,
         };
-        assert_eq!(pw.serialize().unwrap().len(), 60);
         assert_eq!(
             pw,
             PathwayWeightSlot::deserialize(&pw.serialize().unwrap()).unwrap()

@@ -23,30 +23,24 @@ use crate::dream::llm::{
 };
 use crate::dream::prune::DreamReport;
 use crate::encoder::Encoder;
-use crate::file::header::FileHeader;
-use crate::index::btree::BTreeIndex;
 use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
-use crate::layers::context::ContextSlot;
+use crate::layers::context::TopicSlot;
 use crate::query::diagnostics::{StageReport, StageStatus};
-use crate::shared::common::{format_hash, now_ms};
-use crate::shared::slot_io::get_slot_data;
-use crate::util::{PageType, PAGE_SIZE};
+use crate::shared::common::format_hash;
+use crate::storage::record::REC_L2_TOPIC;
+use crate::storage::StorageEngine;
 use crate::MemHopError;
-use memmap2::MmapMut;
 use std::collections::HashSet;
-use std::fs::File;
 
 const MAX_RECENT_DIALOGUES: usize = 30;
 
 /// Run a single dream stage, recording its result and rolling back on fatal errors.
-#[allow(clippy::too_many_arguments)]
 fn run_stage<F, R>(
     name: &str,
     failure_description: &str,
     f: F,
     report: &mut DreamReport,
-    btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
     stages: &mut Vec<StageReport>,
     fatal: bool,
@@ -54,15 +48,11 @@ fn run_stage<F, R>(
     start_time: std::time::Instant,
 ) -> Result<(), MemHopError>
 where
-    F: FnOnce(
-        &mut DreamReport,
-        &mut BTreeIndex,
-        &mut SparseIndex,
-    ) -> Result<(String, usize), MemHopError>,
-    R: FnOnce(&mut DreamReport, &mut BTreeIndex, &mut SparseIndex),
+    F: FnOnce(&mut DreamReport, &mut SparseIndex) -> Result<(String, usize), MemHopError>,
+    R: FnOnce(&mut DreamReport, &mut SparseIndex),
 {
     let stage_start = std::time::Instant::now();
-    match f(report, btree, sparse_index) {
+    match f(report, sparse_index) {
         Ok((description, processed_count)) => {
             stages.push(StageReport {
                 name: name.to_string(),
@@ -84,7 +74,7 @@ where
                 error: Some(e.to_string()),
             });
             if fatal {
-                rollback(report, btree, sparse_index);
+                rollback(report, sparse_index);
                 report.stages = std::mem::take(stages);
                 report.duration_ms = start_time.elapsed().as_millis() as u64;
                 if report.rollback_incomplete {
@@ -102,28 +92,20 @@ where
 // ============================================================================
 
 fn build_consolidation_input(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    header: &FileHeader,
+    engine: &StorageEngine,
     l2_meta: &L2MetaIndex,
     target_l2_ids: &HashSet<u64>,
 ) -> Result<ConsolidationInput, MemHopError> {
-    let data: &[u8] = &mmap[..];
-
     // Collect scenes from active L2 contexts
     let mut scene_map: std::collections::HashMap<u64, Vec<L2NodeData>> =
         std::collections::HashMap::new();
 
     for &id_hash in target_l2_ids {
-        let page_ref = match btree.search(id_hash) {
-            Some(pr) => pr,
+        let (_, data) = match engine.read_record(id_hash)? {
+            Some(v) => v,
             None => continue,
         };
-        let slot_data = match get_slot_data(data, page_ref) {
-            Some(d) => d,
-            None => continue,
-        };
-        let ctx = match ContextSlot::deserialize(slot_data) {
+        let ctx: TopicSlot = match bincode::deserialize(data) {
             Ok(c) => c,
             Err(_) => continue,
         };
@@ -155,15 +137,11 @@ fn build_consolidation_input(
     scenes.sort_by_key(|s| s.scene_id);
 
     // Collect recent dialogues from L4 archives
-    let recent_dialogues = habit_distill_stage::extract_recent_dialogues_inner(
-        mmap,
-        header,
-        btree,
-        MAX_RECENT_DIALOGUES,
-    );
+    let recent_dialogues =
+        habit_distill_stage::extract_recent_dialogues_inner(engine, MAX_RECENT_DIALOGUES);
 
     // Collect existing L5 action chains
-    let existing_chains = crystallize_stage::extract_existing_chains(mmap, header);
+    let existing_chains = crystallize_stage::extract_existing_chains(engine);
 
     Ok(ConsolidationInput {
         scenes,
@@ -173,146 +151,173 @@ fn build_consolidation_input(
 }
 
 // ============================================================================
-// Apply LLM output to mmap
+// Apply LLM output to storage
 // ============================================================================
 
 fn apply_l2_groups(
     groups: &[L2Group],
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     l2_meta: &mut L2MetaIndex,
     encoder: Option<&(dyn Encoder + Send + Sync)>,
-    file: &mut File,
 ) -> Result<(u32, u32, u32, u32, u32), MemHopError> {
-    compress_stage::apply_precomputed_groups(
-        groups,
-        mmap,
-        header,
-        btree,
-        sparse_index,
-        l2_meta,
-        encoder,
-        file,
-    )
+    compress_stage::apply_precomputed_groups(groups, engine, sparse_index, l2_meta, encoder)
 }
 
 fn apply_l3_extractions(
+    engine: &mut StorageEngine,
     extractions: &[L3Extraction],
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
     sparse_index: &mut SparseIndex,
-    file: &mut File,
 ) -> Result<Vec<String>, MemHopError> {
-    l3_distill_stage::apply_distill_extractions(
-        extractions,
-        mmap,
-        header,
-        btree,
-        sparse_index,
-        file,
-    )
+    l3_distill_stage::apply_distill_extractions(extractions, engine, sparse_index)
 }
 
 fn apply_habits(
     analysis: &HabitAnalysis,
-    mmap: &mut MmapMut,
-    btree: &BTreeIndex,
+    engine: &mut StorageEngine,
 ) -> Result<(usize, usize, usize), MemHopError> {
-    habit_distill_stage::merge_habits_into_profile(mmap, btree, analysis)
+    habit_distill_stage::merge_habits_into_profile(engine, analysis)
 }
 
 fn apply_crystals(
     crystals: &[crate::dream::llm::CrystalDef],
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
-    file: &mut File,
+    engine: &mut StorageEngine,
 ) -> Result<Vec<String>, MemHopError> {
-    crystallize_stage::apply_precomputed_crystals(crystals, mmap, header, btree, file)
+    crystallize_stage::apply_precomputed_crystals(crystals, engine)
 }
 
 // ============================================================================
 // Core function — two-phase consolidated dream
 // ============================================================================
 
-/// Run the LLM consolidation in two phases, collect failed sections, retry.
+/// Run the LLM consolidation in two phases (Dream-A then Dream-B), collect
+/// failed sections, retry each group independently.
 fn run_consolidation(
     llm: &dyn LlmProvider,
     input: &ConsolidationInput,
 ) -> (ConsolidationOutput, Vec<DreamSection>) {
-    // Phase 1
-    let mut output = match llm.consolidate(input) {
+    let mut failed = Vec::new();
+
+    let mut output = ConsolidationOutput {
+        l2_groups: Section::Empty,
+        l3_extractions: Section::Empty,
+        habits: Section::Empty,
+        crystals: Section::Empty,
+    };
+
+    // ========================================================================
+    // Phase A: L2 grouping + L3 distillation
+    // ========================================================================
+    let mut output_a = match llm.consolidate(input) {
         Ok(o) => o,
         Err(e) => {
             tracing::error!("consolidate LLM call failed: {}", e);
-            let err_msg = format!("consolidate phase 1: {}", e);
-            return (
-                ConsolidationOutput {
-                    l2_groups: Section::ParseFailed(err_msg.clone()),
-                    l3_extractions: Section::ParseFailed(err_msg.clone()),
-                    habits: Section::ParseFailed(err_msg.clone()),
-                    crystals: Section::ParseFailed(err_msg),
-                },
-                vec![
-                    DreamSection::L2Groups,
-                    DreamSection::L3Distill,
-                    DreamSection::Habits,
-                    DreamSection::Crystals,
-                ],
-            );
+            let err_msg = format!("consolidate: {}", e);
+            output.l2_groups = Section::ParseFailed(err_msg.clone());
+            output.l3_extractions = Section::ParseFailed(err_msg);
+            failed.extend_from_slice(&[DreamSection::L2Groups, DreamSection::L3Distill]);
+            // Continue to Phase B — A and B are independent
+            ConsolidationOutput {
+                l2_groups: Section::Empty,
+                l3_extractions: Section::Empty,
+                habits: Section::Empty,
+                crystals: Section::Empty,
+            }
         }
     };
 
-    // Collect failed sections
-    let mut failed = Vec::new();
-    if !output.l2_groups.is_ok() {
+    // Retry failed A sections
+    {
+        let mut retry_a = Vec::new();
+        if output_a.l2_groups.needs_retry() {
+            retry_a.push(DreamSection::L2Groups);
+        }
+        if output_a.l3_extractions.needs_retry() {
+            retry_a.push(DreamSection::L3Distill);
+        }
+
+        if !retry_a.is_empty() {
+            tracing::info!("consolidate_a: phase 2 retry for {:?}", retry_a);
+            match llm.retry_sections(input, &retry_a) {
+                Ok(retry) => {
+                    if let Section::Valid(g) = retry.l2_groups {
+                        output_a.l2_groups = Section::Valid(g);
+                    }
+                    if let Section::Valid(e) = retry.l3_extractions {
+                        output_a.l3_extractions = Section::Valid(e);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("consolidate_a retry failed: {}", e);
+                }
+            }
+        }
+    }
+
+    // Collect A failures that remain
+    if output_a.l2_groups.needs_retry() {
         failed.push(DreamSection::L2Groups);
     }
-    if !output.l3_extractions.is_ok() {
+    if output_a.l3_extractions.needs_retry() {
         failed.push(DreamSection::L3Distill);
     }
-    if !output.habits.is_ok() {
-        failed.push(DreamSection::Habits);
-    }
-    if !output.crystals.is_ok() {
-        failed.push(DreamSection::Crystals);
-    }
 
-    if failed.is_empty() {
-        return (output, failed);
-    }
+    output.l2_groups = output_a.l2_groups;
+    output.l3_extractions = output_a.l3_extractions;
 
-    // Phase 2: retry failed sections
-    tracing::info!("consolidate: phase 2 retry for {:?} sections", failed);
-
-    let retry = match llm.retry_sections(input, &failed) {
-        Ok(r) => r,
+    // ========================================================================
+    // Phase B: habit analysis + crystal generation
+    // ========================================================================
+    let mut output_b = match llm.consolidate(input) {
+        Ok(o) => o,
         Err(e) => {
-            tracing::warn!("consolidate retry failed: {}", e);
+            tracing::error!("consolidate LLM call failed: {}", e);
+            let err_msg = format!("consolidate: {}", e);
+            output.habits = Section::ParseFailed(err_msg.clone());
+            output.crystals = Section::ParseFailed(err_msg);
+            failed.extend_from_slice(&[DreamSection::Habits, DreamSection::Crystals]);
             return (output, failed);
         }
     };
 
-    // Merge retry results into output (only replace failed sections)
-    if let Section::Valid(g) = retry.l2_groups {
-        output.l2_groups = Section::Valid(g);
-        failed.retain(|s| *s != DreamSection::L2Groups);
+    // Retry failed B sections
+    {
+        let mut retry_b = Vec::new();
+        if output_b.habits.needs_retry() {
+            retry_b.push(DreamSection::Habits);
+        }
+        if output_b.crystals.needs_retry() {
+            retry_b.push(DreamSection::Crystals);
+        }
+
+        if !retry_b.is_empty() {
+            tracing::info!("consolidate_b: phase 2 retry for {:?}", retry_b);
+            match llm.retry_sections(input, &retry_b) {
+                Ok(retry) => {
+                    if let Section::Valid(h) = retry.habits {
+                        output_b.habits = Section::Valid(h);
+                    }
+                    if let Section::Valid(c) = retry.crystals {
+                        output_b.crystals = Section::Valid(c);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("consolidate_b retry failed: {}", e);
+                }
+            }
+        }
     }
-    if let Section::Valid(e) = retry.l3_extractions {
-        output.l3_extractions = Section::Valid(e);
-        failed.retain(|s| *s != DreamSection::L3Distill);
+
+    // Collect B failures that remain
+    if output_b.habits.needs_retry() {
+        failed.push(DreamSection::Habits);
     }
-    if let Section::Valid(h) = retry.habits {
-        output.habits = Section::Valid(h);
-        failed.retain(|s| *s != DreamSection::Habits);
+    if output_b.crystals.needs_retry() {
+        failed.push(DreamSection::Crystals);
     }
-    if let Section::Valid(c) = retry.crystals {
-        output.crystals = Section::Valid(c);
-        failed.retain(|s| *s != DreamSection::Crystals);
-    }
+
+    output.habits = output_b.habits;
+    output.crystals = output_b.crystals;
 
     (output, failed)
 }
@@ -323,13 +328,10 @@ fn run_consolidation(
 
 #[allow(clippy::too_many_arguments)]
 pub fn dream_pipeline(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     llm: &dyn LlmProvider,
     l2_ids: Option<Vec<u64>>,
-    file: &mut File,
     decay_config: &DecayConfig,
     l2_meta: &mut L2MetaIndex,
     encoder: Option<&(dyn Encoder + Send + Sync)>,
@@ -365,21 +367,18 @@ pub fn dream_pipeline(
         rollback_incomplete: false,
     };
 
-    flush_l2_meta_to_mmap(mmap, btree, l2_meta)?;
-
     let target_l2_ids = match l2_ids {
         Some(ids) if !ids.is_empty() => ids.into_iter().collect::<HashSet<u64>>(),
-        _ => collect_all_l2_ids(&mmap[..], btree, header.page_count),
+        _ => collect_all_l2_ids(engine),
     };
 
-    let btree_snapshot = btree.clone();
     let sparse_snapshot = sparse_index.clone();
     let mut stages = Vec::new();
 
     // ========================================================================
     // Phase 1: collect data + one LLM call
     // ========================================================================
-    let input = build_consolidation_input(mmap, btree, header, l2_meta, &target_l2_ids)?;
+    let input = build_consolidation_input(engine, l2_meta, &target_l2_ids)?;
     let (llm_output, failed_after_retry) = run_consolidation(llm, &input);
 
     // ========================================================================
@@ -387,16 +386,7 @@ pub fn dream_pipeline(
     // ========================================================================
     match llm_output.l2_groups {
         Section::Valid(ref groups) => {
-            match apply_l2_groups(
-                groups,
-                mmap,
-                header,
-                btree,
-                sparse_index,
-                l2_meta,
-                encoder,
-                file,
-            ) {
+            match apply_l2_groups(groups, engine, sparse_index, l2_meta, encoder) {
                 Ok((groups_detected, nodes_merged, parents, sunk, removed)) => {
                     report.groups_detected = groups_detected;
                     report.nodes_merged = nodes_merged;
@@ -458,7 +448,7 @@ pub fn dream_pipeline(
     // ========================================================================
     match llm_output.l3_extractions {
         Section::Valid(ref extractions) => {
-            match apply_l3_extractions(extractions, mmap, header, btree, sparse_index, file) {
+            match apply_l3_extractions(engine, extractions, sparse_index) {
                 Ok(ids) => {
                     report.new_l3_nodes = ids;
                     stages.push(StageReport {
@@ -499,7 +489,7 @@ pub fn dream_pipeline(
     // Apply habits
     // ========================================================================
     match llm_output.habits {
-        Section::Valid(ref analysis) => match apply_habits(analysis, mmap, btree) {
+        Section::Valid(ref analysis) => match apply_habits(analysis, engine) {
             Ok((new_l, new_s, new_e)) => {
                 report.habits_updated = Some(habit_distill_stage::HabitUpdate {
                     new_lexicon: new_l,
@@ -533,7 +523,7 @@ pub fn dream_pipeline(
         Section::ParseFailed(_) => {
             // Non-LLM fallback
             let fallback = llm.fallback_habits(&input.recent_dialogues);
-            let _ = apply_habits(&fallback, mmap, btree).ok();
+            let _ = apply_habits(&fallback, engine).ok();
             stages.push(StageReport {
                 name: "habit_distill".into(),
                 status: StageStatus::Failed,
@@ -550,7 +540,7 @@ pub fn dream_pipeline(
     // Apply crystals
     // ========================================================================
     match llm_output.crystals {
-        Section::Valid(ref crystals) => match apply_crystals(crystals, mmap, header, btree, file) {
+        Section::Valid(ref crystals) => match apply_crystals(crystals, engine) {
             Ok(ids) => {
                 report.new_crystals = ids;
                 stages.push(StageReport {
@@ -595,33 +585,24 @@ pub fn dream_pipeline(
     }
 
     // ========================================================================
-    // Non-LLM stages (unchanged from original)
+    // Non-LLM stages
     // ========================================================================
 
     run_stage(
         "l1_rebuild",
         "L1 rebuild failed",
-        |report, btree, sparse_index| {
-            let l1_updated = rebuild_l1_from_l2(
-                mmap,
-                header,
-                btree,
-                sparse_index,
-                &target_l2_ids,
-                decay_config,
-                l2_meta,
-            )?;
+        |report, sparse_index| {
+            let l1_updated =
+                rebuild_l1_from_l2(engine, sparse_index, &target_l2_ids, decay_config, l2_meta)?;
             let count = l1_updated.len();
             report.l1_updated = l1_updated;
             Ok((format!("Rebuilt {} L1 associations", count), count))
         },
         &mut report,
-        btree,
         sparse_index,
         &mut stages,
         true,
-        |report, btree, sparse_index| {
-            *btree = btree_snapshot.clone();
+        |report, sparse_index| {
             *sparse_index = sparse_snapshot.clone();
             report.rollback_incomplete = true;
         },
@@ -631,9 +612,8 @@ pub fn dream_pipeline(
     run_stage(
         "l1_decay",
         "L1 decay failed",
-        |report, btree, _| {
-            let decay_report =
-                l1_decay::decay_l1_network(mmap, header, btree, decay_config, l2_meta)?;
+        |report, _| {
+            let decay_report = l1_decay::decay_l1_network(engine, decay_config, l2_meta)?;
             report.l1_decayed_nodes = decay_report.decayed_nodes;
             report.l1_pruned_edges = decay_report.pruned_edges;
             report.l1_removed_nodes = decay_report.removed_nodes;
@@ -651,12 +631,10 @@ pub fn dream_pipeline(
             ))
         },
         &mut report,
-        btree,
         sparse_index,
         &mut stages,
         true,
-        |report, btree, sparse_index| {
-            *btree = btree_snapshot.clone();
+        |report, sparse_index| {
             *sparse_index = sparse_snapshot.clone();
             report.rollback_incomplete = true;
         },
@@ -666,8 +644,8 @@ pub fn dream_pipeline(
     run_stage(
         "l0_profile",
         "L0 profile generation failed",
-        |report, btree, sparse_index| {
-            l0_form_stage::generate_profile(mmap, header, btree, sparse_index, file)?;
+        |report, sparse_index| {
+            l0_form_stage::generate_profile(engine, sparse_index)?;
             if !target_l2_ids.is_empty() {
                 let pid = format_hash(crate::util::hash_id("profile"));
                 report.l0_updated = Some((pid, vec!["personality".into(), "preferences".into()]));
@@ -678,12 +656,10 @@ pub fn dream_pipeline(
             ))
         },
         &mut report,
-        btree,
         sparse_index,
         &mut stages,
         true,
-        |report, btree, sparse_index| {
-            *btree = btree_snapshot.clone();
+        |report, sparse_index| {
             *sparse_index = sparse_snapshot.clone();
             report.rollback_incomplete = true;
         },
@@ -693,8 +669,8 @@ pub fn dream_pipeline(
     run_stage(
         "l6_decay",
         "L6 pathway decay failed",
-        |report, btree, _| {
-            let l6_report = l6_decay::decay_l6_pathways(mmap, header, btree, decay_config, file)?;
+        |report, _| {
+            let l6_report = l6_decay::decay_l6_pathways(engine, decay_config)?;
             report.l6_decayed = l6_report.decayed;
             report.l6_pruned = l6_report.pruned;
             report.l6_decayed_details = if l6_report.decayed_details.is_empty() {
@@ -717,34 +693,27 @@ pub fn dream_pipeline(
             ))
         },
         &mut report,
-        btree,
         sparse_index,
         &mut stages,
         false,
-        |_, _, _| {},
+        |_, _| {},
         start_time,
     )?;
 
     run_stage(
         "crystal_prune",
         "Crystal pruning failed",
-        |report, btree, _| {
-            let pruned = crystallize_stage::prune_low_quality_crystals(
-                mmap,
-                header,
-                btree,
-                header.page_count,
-            )?;
+        |report, _| {
+            let pruned = crystallize_stage::prune_low_quality_crystals(engine)?;
             let count = pruned.len();
             report.pruned_crystals = pruned;
             Ok((format!("Pruned {} low-quality crystals", count), count))
         },
         &mut report,
-        btree,
         sparse_index,
         &mut stages,
         false,
-        |_, _, _| {},
+        |_, _| {},
         start_time,
     )?;
 
@@ -761,133 +730,87 @@ pub fn dream_pipeline(
 // Reused helpers
 // ============================================================================
 
-fn flush_l2_meta_to_mmap(
-    mmap: &mut MmapMut,
-    _btree: &BTreeIndex,
-    l2_meta: &L2MetaIndex,
-) -> Result<(), MemHopError> {
-    for (_id_hash, meta) in l2_meta.iter() {
-        let page_ref = meta.page_ref;
-        let page_id = crate::shared::slot_io::decode_page_id(page_ref);
-        let offset = crate::shared::slot_io::page_offset(page_id);
-        if offset + PAGE_SIZE > mmap.len() {
-            continue;
-        }
-        let Some(slot_data) = get_slot_data(&mmap[..], page_ref) else {
-            continue;
-        };
-        let Ok(_ctx) = ContextSlot::deserialize(slot_data) else {
-            continue;
-        };
-        // TopicSlot no longer has activation_score / activation_state fields.
-        // Metadata sync is handled via L2MetaIndex in memory.
-    }
-    Ok(())
-}
-
-fn collect_all_l2_ids(mmap: &[u8], btree: &BTreeIndex, page_count: u32) -> HashSet<u64> {
+fn collect_all_l2_ids(engine: &StorageEngine) -> HashSet<u64> {
     let mut ids = HashSet::new();
-    for (&id_hash, &page_ref) in btree.iter_unsorted() {
-        let page_id = crate::shared::slot_io::decode_page_id(page_ref);
-        if page_id == 0 || page_id >= page_count {
-            continue;
-        }
-        let pt_offset = (page_id as usize) * PAGE_SIZE + 4;
-        if pt_offset + 2 > mmap.len() {
-            continue;
-        }
-        let pt = u16::from_le_bytes([mmap[pt_offset], mmap[pt_offset + 1]]);
-        if pt == PageType::Context as u16 {
-            ids.insert(id_hash);
+    for (&id_hash, _) in engine.iter_index() {
+        if let Ok(Some((record_type, _data))) = engine.read_record(id_hash) {
+            if record_type == REC_L2_TOPIC {
+                ids.insert(id_hash);
+            }
         }
     }
     ids
 }
 
 fn rebuild_l1_from_l2(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     _session_topic_ids: &HashSet<u64>,
     decay_config: &DecayConfig,
     l2_meta: &L2MetaIndex,
 ) -> Result<Vec<String>, MemHopError> {
-    use crate::layers::context_node::ContextNode;
-    let page_count = header.page_count;
-    let mut stale_nodes: Vec<(u64, u32)> = Vec::new();
-    let entries: Vec<(u64, u64)> = btree.iter_unsorted().map(|(k, v)| (*k, *v)).collect();
-    for (id_hash, page_ref) in &entries {
-        let page_id = (page_ref >> 16) as u32;
-        if page_id >= page_count {
+    use crate::layers::context_node::SceneNode;
+    use crate::storage::record::REC_L1_SCENE_NODE;
+
+    let mut stale_nodes: Vec<u64> = Vec::new();
+    let entries: Vec<(u64, u64)> = engine.iter_index().map(|(k, v)| (*k, *v)).collect();
+    for (id_hash, _offset) in &entries {
+        let Some((record_type, data)) = engine.read_record(*id_hash)? else {
+            continue;
+        };
+        if record_type != REC_L1_SCENE_NODE {
             continue;
         }
-        let page_offset = (page_id as usize) * PAGE_SIZE;
-        if page_offset + PAGE_SIZE > mmap.len() {
+        let Ok(node) = bincode::deserialize::<SceneNode>(data) else {
             continue;
-        }
-        if let Ok(page_hdr) = crate::file::page::read_page_header(&mmap[..], page_id) {
-            if page_hdr.page_type != PageType::ContextNode as u16 {
-                continue;
-            }
+        };
+        let first_topic_id = node.topic_ids.first().copied().unwrap_or(0);
+        if first_topic_id == 0 || !engine.contains(first_topic_id) {
+            stale_nodes.push(*id_hash);
         } else {
-            continue;
-        }
-        if let Some(slot_data) = get_slot_data(&mmap[..], *page_ref) {
-            if let Ok(node) = ContextNode::deserialize(slot_data) {
-                if btree.search(node.context_id).is_none() {
-                    stale_nodes.push((*id_hash, page_id));
-                } else {
-                    let is_depth_out_of_range = l2_meta
-                        .get(node.context_id)
-                        .map(|meta| meta.depth > 2)
-                        .unwrap_or(false);
-                    if is_depth_out_of_range {
-                        let keep = l2_meta
-                            .get(node.context_id)
-                            .and_then(|meta| {
-                                if meta.depth != 3 {
-                                    return Some(false);
-                                }
-                                let parent_ref = btree.search(node.context_id)?;
-                                let parent_data = get_slot_data(&mmap[..], parent_ref)?;
-                                let ctx = ContextSlot::deserialize(parent_data).ok()?;
-                                let parent_id = ctx.parent_id?;
-                                let parent_depth = l2_meta.get(parent_id).map(|pm| pm.depth)?;
-                                Some(parent_depth <= 2)
-                            })
-                            .unwrap_or(false);
-                        if !keep {
-                            stale_nodes.push((*id_hash, page_id));
+            let is_depth_out_of_range = l2_meta
+                .get(first_topic_id)
+                .map(|meta| meta.depth > 2)
+                .unwrap_or(false);
+            if is_depth_out_of_range {
+                let keep = l2_meta
+                    .get(first_topic_id)
+                    .and_then(|meta| {
+                        if meta.depth != 3 {
+                            return Some(false);
                         }
-                    }
+                        let parent_data = engine.read_record(first_topic_id).ok()??;
+                        let ctx: TopicSlot = bincode::deserialize(parent_data.1).ok()?;
+                        let parent_id = ctx.parent_id?;
+                        let parent_depth = l2_meta.get(parent_id).map(|pm| pm.depth)?;
+                        Some(parent_depth <= 2)
+                    })
+                    .unwrap_or(false);
+                if !keep {
+                    stale_nodes.push(*id_hash);
                 }
             }
         }
     }
+
     let mut updated = Vec::new();
-    for (id_hash, page_id) in stale_nodes {
-        let page_ref = crate::file::page::encode_page_ref(page_id, 0);
-        if let Some(slot_data) = get_slot_data(&mmap[..], page_ref) {
-            if let Ok(node) = ContextNode::deserialize(slot_data) {
-                for edge_id in &node.edge_ptrs {
-                    crate::dream::l1_decay::remove_node_from_edge(
-                        mmap,
-                        btree,
-                        header,
-                        *edge_id,
-                        id_hash,
-                        decay_config,
-                    )?;
-                }
+    for id_hash in &stale_nodes {
+        let Some((_rt, data)) = engine.read_record(*id_hash)? else {
+            continue;
+        };
+        if let Ok(node) = bincode::deserialize::<SceneNode>(data) {
+            for edge_id in &node.edge_ids {
+                crate::dream::l1_decay::remove_node_from_edge(
+                    engine,
+                    *edge_id,
+                    *id_hash,
+                    decay_config,
+                )?;
             }
         }
-        btree.remove(id_hash);
-        let offset = crate::shared::slot_io::page_offset(page_id);
-        mmap[offset..offset + PAGE_SIZE].fill(0);
-        crate::file::free_list::free_page(mmap, header, page_id)?;
-        sparse_index.remove_document(id_hash);
-        updated.push(format_hash(id_hash));
+        engine.delete_record(*id_hash)?;
+        sparse_index.remove_document(*id_hash);
+        updated.push(format_hash(*id_hash));
     }
     Ok(updated)
 }

@@ -1,16 +1,16 @@
 //! MemHop v0.45.0 End-to-End Integration Tests (mock encoder / real LLM)
 //!
 //! These tests exercise the full Agent integration workflow against:
-//! - Mock vector encoder via gRPC (multilingual-e5-small through meowvec)
+//! - Mock vector encoder via gRPC (through candle-encoder)
 //! - Real LLM API (OpenAI-compatible)
 //!
 //! Some tests are marked `#[ignore]` because they require a running gRPC
-//! encoder (meowvec) or network access + API credentials.
+//! encoder (candle-encoder) or network access + API credentials.
 //! Run with:
 //!     cargo test -- --ignored
 //!
-//! The mock meowvec server is spawned automatically by `tests/common/mod.rs`;
-//! no manual setup is required.
+//! Prerequisites: start the candle-encoder server manually:
+//!     cargo run --release --manifest-path tools/candle-encoder/Cargo.toml
 
 mod common;
 
@@ -23,7 +23,7 @@ use memhop::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-const VECTOR_DIM: usize = 1024;
+const VECTOR_DIM: usize = 768;
 const API_URL: &str = "https://api.deepseek.com/v1/chat/completions";
 const MODEL: &str = "deepseek-chat";
 
@@ -49,23 +49,21 @@ fn make_config(path: PathBuf) -> MemHopConfig {
     config.crystal_path = Some(PathBuf::from("/tmp/memhop_e2e_crystals"));
     config.llm = make_llm_config();
     config.auto_dream_on_evict = true;
+    config.llm_preprocess = memhop::LlmPreprocessConfig::default();
     config
-            llm_preprocess: memhop::LlmPreprocessConfig::default(),
 }
 
-/// Start the shared ORT (BGE-M3 ONNX) meowvec server for this test binary.
+/// Wait for the candle-encoder gRPC server to be ready on port 27110.
 ///
-/// The first call spawns the process on port 27110 and waits for the gRPC
-/// health check to pass. The process is killed automatically when the test
-/// binary exits.
-fn setup_ort_meowvec() {
-    let _guard = common::ensure_python_meowvec(27110);
+/// The server must be started **manually** before running tests.
+fn setup_candle_encoder() {
+    common::ensure_candle_encoder(27110);
 }
 
-/// Create a gRPC encoder connected to the ORT meowvec server.
+/// Create a gRPC encoder connected to the candle-encoder server.
 fn create_encoder(dim: usize) -> GrpcEncoder {
     GrpcEncoder::new("http://127.0.0.1:27110", dim)
-        .expect("failed to connect to mock meowvec at http://127.0.0.1:27110")
+        .expect("failed to connect to candle-encoder at http://127.0.0.1:27110")
 }
 
 /// Remove the temporary database file if it exists.
@@ -196,8 +194,8 @@ fn store_item(topic: &str, text: &str) -> StoreItem {
         source: SourceMeta::new(SourceType::UserInput, None),
         is_structural: false,
         source_ref: None,
+        keywords: None,
     }
-            keywords: None,
 }
 
 // =============================================================================
@@ -208,7 +206,7 @@ fn store_item(topic: &str, text: &str) -> StoreItem {
 #[ignore]
 #[test]
 fn test_agent_conversation_memory_flow() {
-    setup_ort_meowvec();
+    setup_candle_encoder();
     with_e2e_db("agent_conversation_memory_flow", |db| {
         // 1. Batch store multi-turn Chinese dialogues.
         let docs = conversation_documents();
@@ -246,8 +244,8 @@ fn test_agent_conversation_memory_flow() {
                 min_score: 0.0,
 
                 source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+                llm_keywords: None,
+                enable_llm_preprocess: false,
             })
             .expect("search should succeed");
         eprintln!("[E2E] search contexts: {:?}", search.contexts);
@@ -255,10 +253,9 @@ fn test_agent_conversation_memory_flow() {
             !search.contexts.is_empty(),
             "Search should return at least one context"
         );
-        let has_rust = search
-            .contexts
-            .iter()
-            .any(|c| c.user_keywords.join(" ").contains("Rust") || c.user_keywords.join(" ").contains("异步"));
+        let has_rust = search.contexts.iter().any(|c| {
+            c.user_keywords.join(" ").contains("Rust") || c.user_keywords.join(" ").contains("异步")
+        });
         assert!(has_rust, "Search should recall Rust-related topic");
 
         // 3. Locate the Rust topic by title to avoid depending on vector ranking.
@@ -273,7 +270,10 @@ fn test_agent_conversation_memory_flow() {
         let rust_topic = topics
             .items
             .into_iter()
-            .find(|t| t.user_keywords.join(" ").contains("Rust") || t.user_keywords.join(" ").contains("异步"))
+            .find(|t| {
+                t.user_keywords.join(" ").contains("Rust")
+                    || t.user_keywords.join(" ").contains("异步")
+            })
             .expect("Rust topic should exist after batch store");
 
         // 4. Update the Rust topic to simulate an Agent turn.
@@ -398,7 +398,7 @@ fn test_agent_conversation_memory_flow() {
 #[ignore]
 #[test]
 fn test_chinese_memory_specialization() {
-    setup_ort_meowvec();
+    setup_candle_encoder();
     with_e2e_db("chinese_memory_specialization", |db| {
         // Seed Chinese memories covering people, projects, and technical terms.
         let docs = [
@@ -449,18 +449,17 @@ fn test_chinese_memory_specialization() {
                 min_score: 0.0,
 
                 source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+                llm_keywords: None,
+                enable_llm_preprocess: false,
             })
             .expect("Chinese BM25 search should succeed");
         assert!(
             !search.contexts.is_empty(),
             "Chinese BM25 should return contexts"
         );
-        let has_person = search
-            .contexts
-            .iter()
-            .any(|c| c.user_keywords.join(" ").contains("人物") || c.user_keywords.join(" ").contains("项目"));
+        let has_person = search.contexts.iter().any(|c| {
+            c.user_keywords.join(" ").contains("人物") || c.user_keywords.join(" ").contains("项目")
+        });
         assert!(
             has_person,
             "Entity matching should recall person/project topic"
@@ -479,8 +478,8 @@ fn test_chinese_memory_specialization() {
                 min_score: 0.0,
 
                 source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+                llm_keywords: None,
+                enable_llm_preprocess: false,
             })
             .expect("LLM-enhanced Chinese search should succeed");
         assert!(
@@ -520,8 +519,9 @@ fn test_chinese_memory_specialization() {
 // =============================================================================
 
 #[test]
+#[ignore = "需要运行中的 Python meowvec gRPC 服务器"]
 fn test_l3_graph_traversal() {
-    setup_ort_meowvec();
+    setup_candle_encoder();
     with_e2e_db("l3_graph_traversal", |db| {
         // Create a temporary source tree representing a tiny codebase.
         let tmp_dir = std::env::temp_dir().join("memhop_e2e_src");
@@ -607,8 +607,8 @@ pub fn run(query: String) {
                 min_score: 0.0,
 
                 source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+                llm_keywords: None,
+                enable_llm_preprocess: false,
             })
             .expect("L3-restricted search should succeed");
         assert!(
@@ -629,7 +629,7 @@ pub fn run(query: String) {
 #[ignore]
 #[test]
 fn test_dream_pipeline_full() {
-    setup_ort_meowvec();
+    setup_candle_encoder();
     with_e2e_db("dream_pipeline_full", |db| {
         // Seed several topics with multiple turns and action chains.
         let docs = [
@@ -686,7 +686,9 @@ fn test_dream_pipeline_full() {
                 "微服务架构设计需要考虑API网关、服务注册与发现、负载均衡、熔断降级、 \
                  配置中心、可观测性、链路追踪、服务网格以及协议兼容性。"
                     .into()
-            } else if topic.user_keywords.join(" ").contains("模型") || topic.user_keywords.join(" ").contains("微调") {
+            } else if topic.user_keywords.join(" ").contains("模型")
+                || topic.user_keywords.join(" ").contains("微调")
+            {
                 "大语言模型微调包括SFT监督微调、RLHF人类反馈强化学习、数据清洗、 \
                  prompt工程、奖励模型训练、PPO算法以及评估指标设计。"
                     .into()
@@ -715,8 +717,8 @@ fn test_dream_pipeline_full() {
                     instant_distill: false,
                     scene_id: None,
                     source: Default::default(),
-                user_keywords: None,
-                agent_keywords: None,
+                    user_keywords: None,
+                    agent_keywords: None,
                 })
                 .expect("update_memory should succeed");
         }

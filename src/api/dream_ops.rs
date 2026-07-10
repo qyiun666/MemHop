@@ -59,21 +59,18 @@ impl MemHop {
             let decay_config = self.config.decay_config.as_ref().unwrap_or(&default_decay);
 
             let report = dream_pipeline(
-                &mut self.mmap,
-                &mut self.header,
-                &mut self.btree,
+                &mut self.engine,
                 &mut self.sparse_index,
                 &llm_provider,
                 parsed_ids,
-                &mut self.file,
                 decay_config,
                 &mut self.l2_meta,
                 self.encoder.as_deref(),
             )?;
 
-            // Rebuild in-memory L2 metadata from the updated mmap state.
-            self.l2_meta = L2MetaIndex::build(&self.mmap, &self.btree);
-            self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
+            // Rebuild in-memory L2 metadata from the updated engine state.
+            self.l2_meta = L2MetaIndex::build_from_engine(&self.engine);
+            self.l1_reverse_index = L1ReverseIndex::build(&self.engine)?;
             // Invalidate caches since graph topology and L2 mappings may have changed.
             self.adjacency_cache.invalidate_all();
             self.degree_tracker.invalidate_all();
@@ -116,19 +113,16 @@ impl MemHop {
         use crate::query::batch::batch_store;
 
         let report = batch_store(
-            &mut self.mmap,
-            &mut self.header,
+            &mut self.engine,
             batch,
-            &mut self.btree,
             &mut self.sparse_index,
             self.config.vector_dim,
             self.encoder.as_deref().ok_or_else(|| {
                 MemHopError::EncoderError("No encoder configured for batch_store".to_string())
             })?,
-            &mut self.file,
         )?;
-        self.l1_reverse_index = L1ReverseIndex::build(&self.mmap, &self.btree)?;
-        self.l2_meta = L2MetaIndex::build(&self.mmap, &self.btree);
+        self.l1_reverse_index = L1ReverseIndex::build(&self.engine)?;
+        self.l2_meta = L2MetaIndex::build_from_engine(&self.engine);
         self.rebuild_ivf_index();
         Ok(report)
     }

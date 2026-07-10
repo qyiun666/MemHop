@@ -15,7 +15,7 @@ fn test_config(db_path: &str) -> MemHopConfig {
     MemHopConfig {
         db_path: PathBuf::from(db_path),
         encoder_grpc_addr: None,
-        vector_dim: 1024,
+        vector_dim: 768,
         crystal_path: None,
         llm: LlmConfig::default(),
         auto_dream_on_evict: false,
@@ -28,9 +28,8 @@ fn test_config(db_path: &str) -> MemHopConfig {
         dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
+        llm_preprocess: memhop::LlmPreprocessConfig::default(),
     }
-,
-llm_preprocess: memhop::LlmPreprocessConfig::default(),
 }
 
 // ============================================================================
@@ -106,10 +105,10 @@ fn test_scene_with_topic_nodes() {
             context_limit: 5,
             auto_create: 1,
             min_score: 0.0,
-            source: Default::default(),        ,
-            llm_keywords: None,,
+            source: Default::default(),
+            llm_keywords: None,
             enable_llm_preprocess: false,
-})
+        })
         .expect("search_context failed");
     let topic_id = search_res.contexts[0].id.clone();
 
@@ -123,13 +122,11 @@ fn test_scene_with_topic_nodes() {
             action_chain: None,
             instant_distill: false,
             scene_id: Some(scene_id_hex.clone()),
-            source: Default::default(),        ,
-            user_keywords: None,,
+            source: Default::default(),
+            user_keywords: None,
             agent_keywords: None,
-})
+        })
         .expect("update_memory failed");
-            llm_keywords: None,
-            enable_llm_preprocess: false,
     }
 
     // Query scene tree — should find the turn nodes
@@ -172,9 +169,10 @@ fn test_merge_nodes_scene_reassignment() {
             context_limit: 5,
             auto_create: 1,
             min_score: 0.0,
+            source: Default::default(),
             llm_keywords: None,
             enable_llm_preprocess: false,
-            source: Default::default(),        })
+        })
         .expect("search_context failed");
     let topic_id = search_res.contexts[0].id.clone();
 
@@ -187,12 +185,11 @@ fn test_merge_nodes_scene_reassignment() {
             action_chain: None,
             instant_distill: false,
             scene_id: Some(sec_hex.clone()),
-                user_keywords: None,
-                agent_keywords: None,
-            source: Default::default(),        })
+            user_keywords: None,
+            agent_keywords: None,
+            source: Default::default(),
+        })
         .expect("update_memory failed");
-            llm_keywords: None,
-            enable_llm_preprocess: false,
     }
 
     // Verify secondary scene has nodes
@@ -255,9 +252,10 @@ fn test_topic_slot_v4_fields_persist() {
             context_limit: 5,
             auto_create: 1,
             min_score: 0.0,
+            source: Default::default(),
             llm_keywords: None,
             enable_llm_preprocess: false,
-            source: Default::default(),        })
+        })
         .expect("search_context failed");
     let topic_id = search_res.contexts[0].id.clone();
 
@@ -268,9 +266,10 @@ fn test_topic_slot_v4_fields_persist() {
         action_chain: None,
         instant_distill: false,
         scene_id: None,
-                user_keywords: None,
-                agent_keywords: None,
-        source: Default::default(),    })
+        user_keywords: None,
+        agent_keywords: None,
+        source: Default::default(),
+    })
     .expect("update_memory failed");
 
     // Sync and reopen to verify persistence

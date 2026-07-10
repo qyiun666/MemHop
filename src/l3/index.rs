@@ -3,17 +3,15 @@
 
 //! L3 Hypergraph Index — keyword, type, and BM25 content search within a single L3 hypergraph.
 
-use crate::file::page::PageHeader;
 use crate::index::sparse::{self, SparseIndex};
 use crate::layers::hypergraph::HypergraphNode;
-use crate::util::{PageType, SENTINEL_PAGE_ID};
+use crate::storage::StorageEngine;
 use crate::MemHopError;
-use memmap2::Mmap;
+
+/// System record type for L3Index per-graph data.
+pub const REC_L3_INDEX: u8 = 0xF2;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-
-const PAGE_DATA_BYTES: usize = 4064; // PAGE_SIZE(4096) - header(32)
-const SENTINEL: u32 = SENTINEL_PAGE_ID;
 
 /// L3Index provides search capabilities within a single L3 hypergraph.
 ///
@@ -174,83 +172,24 @@ impl L3Index {
         self.content_index.merge(&other.content_index);
     }
 
-    /// Write L3Index across a chain of pages in mmap
-    ///
-    /// Serializes the index with bincode, then writes it across multiple
-    /// pages linked via PageHeader.next_page. Returns the first page_id.
-    /// Caller must allocate pages and pass page_ids (at least ceil(data.len() / 4064)).
-    pub fn write_to_pages(
+    /// Write L3Index to the v2 storage engine as a single record.
+    /// Uses system type `REC_L3_INDEX` (0xF2) with `graph_id` as the id_hash.
+    pub fn write_to_engine(
         &self,
-        mmap: &mut memmap2::MmapMut,
-        page_ids: &[u32],
-    ) -> Result<(), String> {
-        let data = self.serialize().map_err(|e| e.to_string())?;
-        let chunks: Vec<&[u8]> = data.chunks(PAGE_DATA_BYTES).collect();
-        if page_ids.len() < chunks.len() {
-            return Err(format!(
-                "Not enough pages: need {}, got {}",
-                chunks.len(),
-                page_ids.len()
-            ));
-        }
-
-        for (i, chunk) in chunks.iter().enumerate() {
-            let page_id = page_ids[i];
-            let next = if i + 1 < chunks.len() {
-                page_ids[i + 1]
-            } else {
-                SENTINEL
-            };
-            let offset = (page_id as usize) * crate::util::PAGE_SIZE;
-
-            let hdr = PageHeader::new(page_id, PageType::L3IndexPage, 0, next);
-            mmap[offset..offset + 32].copy_from_slice(&hdr.to_bytes());
-
-            let data_start = offset + 32;
-            mmap[data_start..data_start + chunk.len()].copy_from_slice(chunk);
-            if chunk.len() < PAGE_DATA_BYTES {
-                mmap[data_start + chunk.len()..data_start + PAGE_DATA_BYTES].fill(0);
-            }
-        }
+        engine: &mut StorageEngine,
+        graph_id: u64,
+    ) -> Result<(), MemHopError> {
+        let data = self.serialize()?;
+        engine.write_record(REC_L3_INDEX, graph_id, &data)?;
         Ok(())
     }
 
-    /// Read L3Index from a chain of pages in mmap
-    ///
-    /// Follows the next_page chain starting from `first_page_id`.
-    pub fn read_from_pages(mmap: &Mmap, first_page_id: u32) -> Result<Self, String> {
-        let mut data = Vec::new();
-        let mut current = first_page_id;
-        let mut visited = std::collections::HashSet::new();
-
-        while current != SENTINEL {
-            if !visited.insert(current) {
-                return Err("Cycle detected in page chain".to_string());
-            }
-            let offset = (current as usize) * crate::util::PAGE_SIZE;
-            if offset + 32 > mmap.len() {
-                return Err(format!("Page {} out of bounds", current));
-            }
-
-            let hdr_bytes: [u8; 32] = mmap[offset..offset + 32]
-                .try_into()
-                .map_err(|e: std::array::TryFromSliceError| e.to_string())?;
-            let hdr = PageHeader::from_bytes(&hdr_bytes)
-                .map_err(|e| format!("Header read error: {:?}", e))?;
-
-            let available = std::cmp::min(PAGE_DATA_BYTES, mmap.len() - offset - 32);
-            data.extend_from_slice(&mmap[offset + 32..offset + 32 + available]);
-
-            current = hdr.next_page;
+    /// Read L3Index from the v2 storage engine.
+    pub fn read_from_engine(engine: &StorageEngine, graph_id: u64) -> Result<Self, MemHopError> {
+        match engine.read_record(graph_id)? {
+            Some((_rt, data)) => Self::deserialize(data),
+            None => Err(MemHopError::PageNotFound(graph_id as u32)),
         }
-
-        Self::deserialize(&data).map_err(|e| e.to_string())
-    }
-
-    /// Calculate number of pages needed to store this index
-    pub fn pages_needed(&self) -> Result<usize, String> {
-        let data = self.serialize().map_err(|e| e.to_string())?;
-        Ok(data.len().div_ceil(PAGE_DATA_BYTES))
     }
 }
 
@@ -275,6 +214,9 @@ mod tests {
             keywords: vec!["test".to_string(), "keyword".to_string()],
             source_ref: None,
             importance: 0.8,
+            summary: None,
+            valid_from: 0,
+            valid_until: 0,
             created_at: 0,
             updated_at: 0,
             version: 1,

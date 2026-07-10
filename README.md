@@ -28,40 +28,7 @@ MemHop is not a vector database. It is a memory system modeled after how the hum
 
 Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent), MemHop works as an embedded organ rather than a standalone service. No server to run, no configuration to manage — just open a file and your agent has memory.
 
-```c
-/* 4 functions. JSON in, JSON out. Works from C, Python, Go, and anything with a C ABI. */
-
-void* db   = memhop_open("{\"db_path\":\"agent.meh\",\"vector_dim\":768}");
-char* res  = memhop_execute(db, "{\"command\":\"search\",\"dialogue\":\"What did we talk about?\"}");
-              memhop_free_string(res);
-              memhop_close(db);
-```
-
 ## Quick Start
-
-### FFI — Any Language
-
-The FFI exposes 4 `extern "C"` functions that dispatch 13 JSON commands. Download pre-built binaries from [Releases](../../releases).
-
-```python
-# Python
-import ctypes, json
-
-lib = ctypes.CDLL("./libmemhop.dylib")
-lib.memhop_open.restype = ctypes.c_void_p
-lib.memhop_execute.restype = ctypes.c_char_p
-
-db = lib.memhop_open(json.dumps({"db_path": "agent.meh", "vector_dim": 768}).encode())
-
-result = lib.memhop_execute(db, json.dumps({
-    "command": "search",
-    "dialogue": "What did we discuss yesterday?",
-    "context_limit": 10
-}).encode())
-
-print(json.loads(result))
-lib.memhop_close(db)
-```
 
 ### Rust
 
@@ -83,7 +50,7 @@ let results = db.search_context(SearchQuery {
 })?;
 
 for ctx in &results.contexts {
-    println!("[{:.2}] {}", ctx.retrieval_score, ctx.title);
+    println!("[{:.2}] {}", ctx.retrieval_score, ctx.fused_summary.as_deref().unwrap_or(""));
 }
 
 // 2. Append a new turn to the top context
@@ -193,20 +160,10 @@ MemHop uses a custom binary format purpose-built for memory storage:
 
 A/B dual headers with CRC32 checksums and a WAL journal provide crash safety. The database is memory-mapped for zero-copy reads and grows automatically when pages are exhausted (500 pages / 2 MB per extension). All vector data uses f16 half-precision floats for 2x memory efficiency.
 
-## Platform Support
-
-| Platform | Binary | CI |
-|----------|--------|----|
-| macOS Universal (Intel + Apple Silicon) | `libmemhop-universal.dylib` | `create-universal` |
-| macOS Apple Silicon | `libmemhop.dylib` | `build-macos-arm` |
-| macOS Intel | `libmemhop.dylib` | `build-macos-x86` |
-| Linux x86_64 | `libmemhop.so` | `build-linux` |
-| Windows x86_64 | `memhop.dll` | `build-windows` |
-
 ## Development
 
 ```bash
-cargo build --release     # Build library + cdylib
+cargo build --release
 cargo test                # Run test suite
 
 # Full test including LLM Dream pipeline
@@ -215,15 +172,9 @@ MEMHOP_LLM_API_KEY=sk-xxx cargo test -- --include-ignored --nocapture
 
 ## Changelog
 
-| Version Range | Date | Highlights |
+| Version | Date | Highlights |
 |---|---|---|
-| **v0.42.0 – v0.47.0** | 2026-06-14 ~ 2026-06-25 | SQLite-grade embedded DB refactor; `graph_query` / `delete` FFI commands; OpenAI-compatible LLM config; L3 retrieval optimization + adjacency cache + reverse index |
-| **v0.30.0 – v0.41.0** | 2026-06-14 | Dedicated memory DB with `.meh` format; six-layer cognitive architecture (L0–L5); L2-centric search/update model; Dream consolidation pipeline; BM25 + HNSW dual-channel retrieval |
-| **v0.23.0 – v0.25.x** | 2026-06-08 ~ 2026-06-10 | Architecture redesign; usearch replacing fast-hnsw; cross-platform transport layer; 6-layer decomposition + triple retrieval; L3 domain graph + Dream v2 |
-| **v0.18.0 – v0.19.0** | 2026-06-05 ~ 2026-06-07 | Architecture optimization + `catid` field; single-instance validation; stateless request-level architecture; 22 MCP interfaces |
-| **v0.12.0 – v0.14.x** | 2026-05-31 ~ 2026-06-04 | Brain-inspired memory architecture; knowledge tree + entangled events; stateless refactor; multi-agent isolation; 4-layer hypergraph memory engine |
-| **v0.6.0 – v0.11.0** | 2026-05-25 ~ 2026-05-29 | Pure Rust rewrite (Python removed); Brain three-layer memory architecture; Plan-level memory; HNSW dual-mode recall; Unified Memory Architecture |
-| **v0.1.0 – v0.5.x** | 2026-05-19 ~ 2026-05-24 | Hopfield network core engine; Rust + pyo3 embedded engine; BrainLoop self-cycling agent; dual-model calibration architecture |
+| **v0.57.0** | 2026-07-10 | V2 架构重构：纯 Rust crate（无 FFI），完整七层认知架构（L0–L6），Dual-channel 检索（BM25 + 向量），L3 超图 DSL 查询与社区发现，Dream 巩固管线，内存驻留优化 |
 
 For detailed release notes, see [GitHub Releases](../../releases).
 

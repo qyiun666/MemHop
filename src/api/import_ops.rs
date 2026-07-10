@@ -13,12 +13,9 @@ impl MemHop {
     pub fn import_memory(&mut self, request: ImportRequest) -> Result<ImportResult> {
         use crate::query::import::import_memory as impl_fn;
         impl_fn(
-            &mut self.mmap,
-            &mut self.header,
-            &mut self.btree,
+            &mut self.engine,
             &mut self.sparse_index,
             request,
-            &mut self.file,
             Some(&mut self.degree_tracker),
             Some(&mut self.l3_index_map),
         )
@@ -41,12 +38,9 @@ impl MemHop {
     ) -> Result<ImportResult> {
         use crate::query::import::build_l3_hypergraph_from_path as impl_fn;
         let result = impl_fn(
-            &mut self.mmap,
-            &mut self.header,
-            &mut self.btree,
+            &mut self.engine,
             &mut self.sparse_index,
             path,
-            &mut self.file,
             Some(&mut self.degree_tracker),
             Some(&mut self.l3_index_map),
         )?;
@@ -55,7 +49,7 @@ impl MemHop {
         self.degree_tracker.invalidate_all();
         // Rebuild in-memory L2 metadata from the updated mmap state so the
         // newly created L2 context (with its l3_refs) can be found by search.
-        self.l2_meta = L2MetaIndex::build(&self.mmap, &self.btree);
+        self.l2_meta = L2MetaIndex::build_from_engine(&self.engine);
         Ok(result)
     }
 }

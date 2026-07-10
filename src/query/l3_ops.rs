@@ -1,61 +1,45 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-//! L3 Hypergraph CRUD internal implementation.
+//! L3 Hypergraph CRUD internal implementation (v2 engine).
 
-use crate::file::header::FileHeader;
-use crate::index::btree::BTreeIndex;
 use crate::l3::AdjacencyCache;
 use crate::layers::hypergraph::{HypergraphEdge, HypergraphNode, HypergraphSlot};
-use crate::query::types::{L3Detail, UpdateL3Fields};
-use crate::shared::common::{format_hash, now_ms, parse_id_to_hash};
-use crate::shared::slot_io::{decode_page_id, get_slot_data};
-use crate::util::{PageType, PAGE_SIZE};
+use crate::query::types::{GraphEdge, GraphNode, L3Detail, UpdateL3Fields};
+use crate::shared::common::{now_ms, parse_id_to_hash};
+use crate::storage::record::*;
+use crate::storage::StorageEngine;
 use crate::MemHopError;
-use memmap2::MmapMut;
 
 /// Get an L3 hypergraph by ID, including all nodes and edges.
-pub fn get_l3(
-    mmap: &MmapMut,
-    btree: &BTreeIndex,
-    id: &str,
-) -> Result<Option<L3Detail>, MemHopError> {
+pub fn get_l3(engine: &StorageEngine, id: &str) -> Result<Option<L3Detail>, MemHopError> {
     let graph_hash = parse_id_to_hash(id);
-    let data: &[u8] = &mmap[..];
 
-    let slot = match btree.search(graph_hash) {
-        Some(page_ref) => {
-            let slot_data = get_slot_data(data, page_ref)
-                .ok_or_else(|| MemHopError::PageNotFound(decode_page_id(page_ref)))?;
-            HypergraphSlot::deserialize_slot(slot_data)?
-        }
-        None => return Ok(None),
+    let slot = match engine.read_record(graph_hash)? {
+        Some((rt, data)) if rt == REC_L3_GRAPH_SLOT => bincode::deserialize::<HypergraphSlot>(data)
+            .map_err(|e| MemHopError::Deserialization(e.to_string()))?,
+        _ => return Ok(None),
     };
 
-    let mut nodes: Vec<HypergraphNode> = Vec::new();
-    let mut edges: Vec<HypergraphEdge> = Vec::new();
+    let mut nodes: Vec<GraphNode> = Vec::new();
+    let mut edges: Vec<GraphEdge> = Vec::new();
 
-    for (_, page_ref) in btree.iter_unsorted() {
-        let page_id = decode_page_id(*page_ref);
-        if page_id >= mmap.len() as u32 / PAGE_SIZE as u32 {
+    for (&id_hash, _) in engine.iter_index() {
+        let Some((rt, data)) = engine.read_record(id_hash)? else {
             continue;
-        }
-        match page_type(data, page_id) {
-            Some(t) if t == PageType::HypergraphNode as u16 => {
-                if let Some(slot_data) = get_slot_data(data, *page_ref) {
-                    if let Ok(node) = HypergraphNode::deserialize(slot_data) {
-                        if node.graph_id == graph_hash {
-                            nodes.push(node);
-                        }
+        };
+        match rt {
+            REC_L3_GRAPH_NODE => {
+                if let Ok(node) = bincode::deserialize::<HypergraphNode>(data) {
+                    if node.graph_id == graph_hash {
+                        nodes.push(node.into());
                     }
                 }
             }
-            Some(t) if t == PageType::HypergraphEdge as u16 => {
-                if let Some(slot_data) = get_slot_data(data, *page_ref) {
-                    if let Ok(edge) = HypergraphEdge::deserialize(slot_data) {
-                        if edge.graph_id == graph_hash {
-                            edges.push(edge);
-                        }
+            REC_L3_GRAPH_EDGE => {
+                if let Ok(edge) = bincode::deserialize::<HypergraphEdge>(data) {
+                    if edge.graph_id == graph_hash {
+                        edges.push(edge.into());
                     }
                 }
             }
@@ -63,25 +47,25 @@ pub fn get_l3(
         }
     }
 
-    Ok(Some(L3Detail { slot, nodes, edges }))
+    Ok(Some(L3Detail {
+        slot: slot.into(),
+        nodes,
+        edges,
+    }))
 }
 
 /// Partially update an L3 hypergraph container.
 pub fn update_l3(
-    mmap: &mut MmapMut,
-    _header: &mut FileHeader,
-    btree: &BTreeIndex,
+    engine: &mut StorageEngine,
     id: &str,
     fields: UpdateL3Fields,
 ) -> Result<(), MemHopError> {
     let graph_hash = parse_id_to_hash(id);
-    let page_ref = btree
-        .search(graph_hash)
+    let (_, data) = engine
+        .read_record(graph_hash)?
         .ok_or(MemHopError::PageNotFound(0))?;
-    let page_id = decode_page_id(page_ref);
-    let offset = crate::shared::slot_io::slot_offset(page_id);
-
-    let mut slot = HypergraphSlot::deserialize_slot(&mmap[offset..])?;
+    let mut slot = bincode::deserialize::<HypergraphSlot>(data)
+        .map_err(|e| MemHopError::Deserialization(e.to_string()))?;
 
     if let Some(name) = fields.name {
         slot.name = name;
@@ -90,34 +74,80 @@ pub fn update_l3(
     slot.updated_at = now_ms();
     slot.version += 1;
 
-    let data = slot
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
-    if offset + data.len() > mmap.len() {
-        return Err(MemHopError::PageNotFound(page_id));
-    }
-    mmap[offset..offset + data.len()].copy_from_slice(&data);
+    let data = bincode::serialize(&slot).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    engine.write_record(REC_L3_GRAPH_SLOT, graph_hash, &data)?;
 
     Ok(())
 }
 
 /// Delete an L3 hypergraph and clean up L2 references.
 pub fn delete_l3(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    btree: &mut BTreeIndex,
+    engine: &mut StorageEngine,
     adjacency_cache: &mut AdjacencyCache,
     l3_id: &str,
 ) -> Result<(), MemHopError> {
     let graph_hash = parse_id_to_hash(l3_id);
-    let l3_id_str = format_hash(graph_hash);
 
-    let l2_refs = crate::l3::store::collect_l2_refs(&*mmap, btree, graph_hash)?;
+    // Collect all L2 topics that reference this graph
+    let mut l2_refs: Vec<u64> = Vec::new();
+    for (&id_hash, _) in engine.iter_index() {
+        let Some((rt, data)) = engine.read_record(id_hash)? else {
+            continue;
+        };
+        if rt != REC_L2_TOPIC {
+            continue;
+        }
+        if let Ok(ctx) = bincode::deserialize::<crate::layers::context::ContextSlot>(data) {
+            if ctx.user_l3_refs.contains(&graph_hash) || ctx.agent_l3_refs.contains(&graph_hash) {
+                l2_refs.push(id_hash);
+            }
+        }
+    }
 
-    crate::l3::store::delete_graph(mmap, header, btree, &l3_id_str)?;
+    // Delete all nodes and edges belonging to this graph
+    let mut to_delete: Vec<u64> = Vec::new();
+    for (&id_hash, _) in engine.iter_index() {
+        let Some((rt, data)) = engine.read_record(id_hash)? else {
+            continue;
+        };
+        match rt {
+            REC_L3_GRAPH_NODE => {
+                if let Ok(node) = bincode::deserialize::<HypergraphNode>(data) {
+                    if node.graph_id == graph_hash {
+                        to_delete.push(id_hash);
+                    }
+                }
+            }
+            REC_L3_GRAPH_EDGE => {
+                if let Ok(edge) = bincode::deserialize::<HypergraphEdge>(data) {
+                    if edge.graph_id == graph_hash {
+                        to_delete.push(id_hash);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for id_hash in to_delete {
+        engine.delete_record(id_hash)?;
+    }
 
-    for (page_id, _id_hash) in l2_refs {
-        crate::l3::store::remove_l3_ref_from_context(mmap, page_id, graph_hash)?;
+    // Delete the graph slot itself
+    engine.delete_record(graph_hash)?;
+
+    // Remove reference from each L2 topic
+    for id_hash in &l2_refs {
+        let (_, data) = engine
+            .read_record(*id_hash)?
+            .ok_or(MemHopError::PageNotFound(0))?;
+        let mut ctx: crate::layers::context::ContextSlot =
+            bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))?;
+        ctx.user_l3_refs.retain(|&h| h != graph_hash);
+        ctx.agent_l3_refs.retain(|&h| h != graph_hash);
+        ctx.updated_at = now_ms();
+        let data =
+            bincode::serialize(&ctx).map_err(|e| MemHopError::Serialization(e.to_string()))?;
+        engine.write_record(REC_L2_TOPIC, *id_hash, &data)?;
     }
 
     adjacency_cache.invalidate(graph_hash);
@@ -125,72 +155,78 @@ pub fn delete_l3(
     Ok(())
 }
 
-#[inline]
-fn page_type(data: &[u8], page_id: u32) -> Option<u16> {
-    let offset = (page_id as usize) * PAGE_SIZE + 4;
-    if offset + 2 > data.len() {
-        return None;
-    }
-    Some(u16::from_le_bytes([data[offset], data[offset + 1]]))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::l3::store::{add_edge, add_node};
     use crate::layers::hypergraph::{GraphEdgeKind, HypergraphSource};
-    use crate::test_helpers::{create_test_edge, create_test_mmap, create_test_node};
+    use crate::store::write_slot;
+    use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_l3_get_update_delete() {
-        let (mut mmap, mut header, mut btree, mut file) = create_test_mmap(64);
-        let mut adjacency_cache = AdjacencyCache::new();
-
-        let graph_id = 1u64;
-        let slot = HypergraphSlot {
-            id_hash: graph_id,
-            name: "test graph".into(),
+    fn make_graph_slot(id_hash: u64, name: &str) -> HypergraphSlot {
+        HypergraphSlot {
+            id_hash,
+            name: name.to_string(),
             source: HypergraphSource::Manual,
             node_count: 0,
             edge_count: 0,
             created_at: 0,
             updated_at: 0,
             version: 1,
-        };
-        let slot_page = crate::file::page::allocate_page(
-            &mut mmap,
-            &mut header,
-            PageType::HypergraphSlot,
-            3,
-            crate::index::btree::EMPTY_PAGE,
-            &mut file,
-        )
-        .unwrap();
-        crate::file::page::write_page_data(&mut mmap, slot_page, &slot.serialize().unwrap())
-            .unwrap();
-        btree.insert(graph_id, (slot_page as u64) << 16);
+        }
+    }
 
-        add_node(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            create_test_node(101, graph_id, "node101"),
-            &mut file,
-            None,
-            None,
-        )
-        .unwrap();
-        add_edge(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            create_test_edge(201, graph_id, GraphEdgeKind::Related, vec![101]),
-            &mut file,
-            None,
-        )
-        .unwrap();
+    fn make_node(id_hash: u64, graph_id: u64, title: &str) -> HypergraphNode {
+        HypergraphNode {
+            id_hash,
+            graph_id,
+            title: title.to_string(),
+            node_type: "test".to_string(),
+            content: String::new(),
+            keywords: vec![],
+            source_ref: None,
+            importance: 0.5,
+            summary: None,
+            valid_from: 0,
+            valid_until: 0,
+            created_at: 0,
+            updated_at: 0,
+            version: 1,
+        }
+    }
 
-        let detail = get_l3(&mmap, &btree, "0000000000000001")
+    fn make_edge(id_hash: u64, graph_id: u64, node_ids: Vec<u64>) -> HypergraphEdge {
+        HypergraphEdge {
+            id_hash,
+            graph_id,
+            kind: GraphEdgeKind::Related,
+            node_ids,
+            weight: 1.0,
+            label: None,
+            description: None,
+            confidence: 0.8,
+            valid_from: 0,
+            valid_until: 0,
+            created_at: 0,
+        }
+    }
+
+    #[test]
+    fn test_l3_get_update_delete() {
+        let temp = NamedTempFile::new().unwrap();
+        let mut engine = StorageEngine::create(temp.path(), 768).unwrap();
+        let mut adjacency_cache = AdjacencyCache::new();
+
+        let graph_id = 1u64;
+        let slot = make_graph_slot(graph_id, "test graph");
+        write_slot(&mut engine, REC_L3_GRAPH_SLOT, graph_id, &slot).unwrap();
+
+        let node = make_node(101, graph_id, "node101");
+        write_slot(&mut engine, REC_L3_GRAPH_NODE, 101, &node).unwrap();
+
+        let edge = make_edge(201, graph_id, vec![101]);
+        write_slot(&mut engine, REC_L3_GRAPH_EDGE, 201, &edge).unwrap();
+
+        let detail = get_l3(&engine, "0000000000000001")
             .unwrap()
             .expect("graph should exist");
         assert_eq!(detail.slot.name, "test graph");
@@ -198,9 +234,7 @@ mod tests {
         assert_eq!(detail.edges.len(), 1);
 
         update_l3(
-            &mut mmap,
-            &mut header,
-            &btree,
+            &mut engine,
             "0000000000000001",
             UpdateL3Fields {
                 name: Some("renamed graph".into()),
@@ -208,17 +242,10 @@ mod tests {
         )
         .unwrap();
 
-        let updated = get_l3(&mmap, &btree, "0000000000000001").unwrap().unwrap();
+        let updated = get_l3(&engine, "0000000000000001").unwrap().unwrap();
         assert_eq!(updated.slot.name, "renamed graph");
 
-        delete_l3(
-            &mut mmap,
-            &mut header,
-            &mut btree,
-            &mut adjacency_cache,
-            "0000000000000001",
-        )
-        .unwrap();
-        assert!(get_l3(&mmap, &btree, "0000000000000001").unwrap().is_none());
+        delete_l3(&mut engine, &mut adjacency_cache, "0000000000000001").unwrap();
+        assert!(get_l3(&engine, "0000000000000001").unwrap().is_none());
     }
 }

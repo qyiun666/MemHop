@@ -26,17 +26,26 @@ impl MemHop {
     pub fn search_context(&mut self, query: SearchQuery) -> Result<SearchResult> {
         use crate::query::search::search_context;
 
+        // Log a warning if encoder is not configured (vector search degraded to BM25-only)
+        if self.encoder.is_none() {
+            tracing::warn!(
+                "Encoder not configured — search falling back to BM25-only (vector search unavailable)."
+            );
+        }
+
         // Determine effective keywords and L3 import hints
-        let (effective_keywords, l3_import_hints): (Option<Vec<String>>, Option<Vec<L3EntityHint>>) =
-            if query.llm_keywords.is_some() {
-                // Caller already provided preprocessed keywords
-                (query.llm_keywords.clone(), None)
-            } else if query.enable_llm_preprocess {
-                // Run LLM preprocessing inline
-                self.preprocess_search_query(&query.dialogue)
-            } else {
-                (None, None)
-            };
+        let (effective_keywords, l3_import_hints): (
+            Option<Vec<String>>,
+            Option<Vec<L3EntityHint>>,
+        ) = if query.llm_keywords.is_some() {
+            // Caller already provided preprocessed keywords
+            (query.llm_keywords.clone(), None)
+        } else if query.enable_llm_preprocess {
+            // Run LLM preprocessing inline
+            self.preprocess_search_query(&query.dialogue)
+        } else {
+            (None, None)
+        };
 
         // Build the search text: use LLM keywords if available, else raw dialogue.
         // Keywords optimize BM25 retrieval; original dialogue preserved for vector encoding.
@@ -59,13 +68,11 @@ impl MemHop {
         };
 
         let mut result = search_context(
-            &mut self.mmap,
-            &mut self.header,
             search_query,
-            &mut self.btree,
             &mut self.sparse_index,
             &self.l2_meta,
             self.config.vector_dim,
+            &mut self.engine,
             self.encoder.as_deref(),
             self.config
                 .search_weights
@@ -73,27 +80,26 @@ impl MemHop {
                 .unwrap_or(&crate::config::SearchWeights::default()),
             self.ivf_index.as_ref(),
             &self.l1_reverse_index,
-            &mut self.file,
         )?;
 
         // Apply recency + activation boosts to contexts
         let active_ids = self.session_manager.get_active_topic_ids();
         let default_sw = crate::config::SearchWeights::default();
-        let sw = self
-            .config
-            .search_weights
-            .as_ref()
-            .unwrap_or(&default_sw);
+        let sw = self.config.search_weights.as_ref().unwrap_or(&default_sw);
         apply_temporal_boosts(&mut result.contexts, &active_ids, sw);
         apply_temporal_boosts(&mut result.associated_contexts, &active_ids, sw);
 
         // Re-sort after boost application
-        result
-            .contexts
-            .sort_by(|a, b| b.retrieval_score.partial_cmp(&a.retrieval_score).unwrap_or(std::cmp::Ordering::Equal));
-        result
-            .associated_contexts
-            .sort_by(|a, b| b.retrieval_score.partial_cmp(&a.retrieval_score).unwrap_or(std::cmp::Ordering::Equal));
+        result.contexts.sort_by(|a, b| {
+            b.retrieval_score
+                .partial_cmp(&a.retrieval_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        result.associated_contexts.sort_by(|a, b| {
+            b.retrieval_score
+                .partial_cmp(&a.retrieval_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         // Attach LLM metadata to result
         result.llm_keywords_used = effective_keywords;
@@ -120,10 +126,9 @@ impl MemHop {
             MemHopError::Serialization(format!("L3 index not found for graph {}", graph_id))
         })?;
         let node_hashes = index.search_by_keyword(keyword, limit);
-        let data: &[u8] = &self.mmap[..];
         let nodes: Vec<crate::query::types::KnowledgeNodeDetail> = node_hashes
             .into_iter()
-            .filter_map(|h| self.resolve_knowledge_node_detail(data, h, false))
+            .filter_map(|h| self.resolve_knowledge_node_detail(h, false))
             .collect();
         Ok(KnowledgeNodesResult {
             total: nodes.len(),
@@ -147,10 +152,9 @@ impl MemHop {
             MemHopError::Serialization(format!("L3 index not found for graph {}", graph_id))
         })?;
         let node_hashes = index.get_nodes_by_type(node_type, limit);
-        let data: &[u8] = &self.mmap[..];
         let nodes: Vec<crate::query::types::KnowledgeNodeDetail> = node_hashes
             .into_iter()
-            .filter_map(|h| self.resolve_knowledge_node_detail(data, h, false))
+            .filter_map(|h| self.resolve_knowledge_node_detail(h, false))
             .collect();
         Ok(KnowledgeNodesResult {
             total: nodes.len(),

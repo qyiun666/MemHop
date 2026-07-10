@@ -11,22 +11,15 @@ use crate::{MemHop, Result};
 impl MemHop {
     /// Get the L0 agent profile.
     pub fn get_profile(&self) -> Result<Option<ProfileResult>> {
-        crate::query::profile::read_profile(&self.mmap, &self.btree)
+        crate::query::profile::read_profile(&self.engine)
     }
 
     /// Update the L0 agent profile (merge strategy).
     pub fn update_profile(&mut self, update: UpdateProfileRequest) -> Result<ProfileResult> {
         let profile_id_hash = hash_id("profile");
-        let mut profile = match self.btree.search(profile_id_hash) {
-            Some(page_ref) => {
-                let data: &[u8] = &self.mmap[..];
-                let slot_data = crate::shared::slot_io::get_slot_data(data, page_ref).ok_or(
-                    crate::MemHopError::PageNotFound(crate::shared::slot_io::decode_page_id(
-                        page_ref,
-                    )),
-                )?;
-                crate::layers::profile::ProfileSlot::deserialize_slot(slot_data)?
-            }
+        let mut profile = match self.engine.read_record(profile_id_hash)? {
+            Some((_, data)) => bincode::deserialize::<ProfileSlot>(data)
+                .map_err(|e| crate::MemHopError::Serialization(e.to_string()))?,
             None => ProfileSlot {
                 id_hash: profile_id_hash,
                 name: String::new(),
@@ -87,15 +80,9 @@ impl MemHop {
             }
         }
 
-        crate::query::profile::write_profile(
-            &mut self.mmap,
-            &mut self.header,
-            &mut self.btree,
-            profile,
-            &mut self.file,
-        )?;
+        crate::query::profile::write_profile(&mut self.engine, profile)?;
 
-        self.get_profile()
-            .map(|opt| opt.expect("profile just written"))
+        self.get_profile()?
+            .ok_or_else(|| crate::MemHopError::Corruption("profile not found after write".into()))
     }
 }

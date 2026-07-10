@@ -4,10 +4,10 @@
 // L1 HyperedgeSlot — edges in the hypergraph skeleton.
 // No metadata payload; the `kind` enum carries semantic meaning.
 
-use crate::util::io_helpers::*;
-use std::io::{self, Cursor, Write};
+use crate::api::MemHopError;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum HyperedgeKind {
     CoOccurrence = 0, // Frequently co-occurring contexts
@@ -34,7 +34,7 @@ impl HyperedgeKind {
 
 /// L1 hyperedge — connects multiple ContextNodes (true hyperedges).
 /// Inline: up to 8 node_ptrs; `overflow_page` for larger sets.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HyperedgeSlot {
     pub id_hash: u64,
     pub kind: HyperedgeKind,
@@ -47,67 +47,26 @@ pub struct HyperedgeSlot {
 }
 
 impl HyperedgeSlot {
-    /// Fixed 102 bytes: id(8)+kind(1)+count(1)+weight(4)+timestamps(16)+version(4)+overflow(4)+inline(64).
-    pub fn slot_size(&self) -> usize {
-        102
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
-    pub fn serialize(&self) -> io::Result<Vec<u8>> {
-        let mut buffer = Vec::with_capacity(self.slot_size());
-        buffer.write_all(&self.id_hash.to_le_bytes())?;
-        buffer.write_all(&[self.kind as u8])?;
-        let node_count = self.node_ptrs.len().min(8) as u8;
-        buffer.write_all(&[node_count])?;
-        buffer.write_all(&self.weight.to_le_bytes())?;
-        buffer.write_all(&self.created_at.to_le_bytes())?;
-        buffer.write_all(&self.updated_at.to_le_bytes())?;
-        buffer.write_all(&self.version.to_le_bytes())?;
-        buffer.write_all(&self.overflow_page.to_le_bytes())?;
-        // Always 8 inline slots, padded with zeros
-        for i in 0..8 {
-            let ptr = if i < self.node_ptrs.len() {
-                self.node_ptrs[i]
-            } else {
-                0
-            };
-            buffer.write_all(&ptr.to_le_bytes())?;
-        }
-        Ok(buffer)
+    pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
     }
+}
 
-    pub fn deserialize(data: &[u8]) -> io::Result<Self> {
-        const FIXED_SIZE: usize = 102;
-        if data.len() < FIXED_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "HyperedgeSlot data too short",
-            ));
-        }
-        let mut cursor = Cursor::new(data);
-        let id_hash = read_u64(&mut cursor)?;
-        let kind = HyperedgeKind::from_u8(read_u8(&mut cursor)?);
-        let node_count = read_u8(&mut cursor)?;
-        let weight = read_f32(&mut cursor)?;
-        let created_at = read_i64(&mut cursor)?;
-        let updated_at = read_i64(&mut cursor)?;
-        let version = read_u32(&mut cursor)?;
-        let overflow_page = read_u32(&mut cursor)?;
-        let mut node_ptrs = Vec::with_capacity(node_count as usize);
-        for _ in 0..8 {
-            node_ptrs.push(read_u64(&mut cursor)?);
-        }
-        node_ptrs.truncate(node_count as usize);
-        Ok(HyperedgeSlot {
-            id_hash,
-            kind,
-            node_ptrs,
-            weight,
-            created_at,
-            updated_at,
-            version,
-            overflow_page,
-        })
-    }
+// ============================================================================
+// SceneEdge — renamed v2 type (replaces HyperedgeSlot for L1 hyperedges)
+// ============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneEdge {
+    pub id_hash: u64,
+    pub kind: HyperedgeKind,
+    pub node_ids: Vec<u64>,
+    pub weight: f32,
+    pub created_at: i64,
 }
 
 #[cfg(test)]
@@ -126,9 +85,8 @@ mod tests {
             version: 1,
             overflow_page: 0,
         };
-        let serialized = slot.serialize().unwrap();
-        assert_eq!(serialized.len(), 102);
-        assert_eq!(slot, HyperedgeSlot::deserialize(&serialized).unwrap());
+        let data = slot.serialize().unwrap();
+        assert_eq!(slot, HyperedgeSlot::deserialize(&data).unwrap());
     }
 
     #[test]
@@ -161,9 +119,9 @@ mod tests {
             version: 1,
             overflow_page: 123,
         };
+        // Bincode preserves all nodes (no inline limit).
         let d = HyperedgeSlot::deserialize(&slot.serialize().unwrap()).unwrap();
-        // Only first 8 nodes stored inline
-        assert_eq!(d.node_ptrs.len(), 8);
+        assert_eq!(d.node_ptrs.len(), 10);
         assert_eq!(d.overflow_page, 123);
     }
 
@@ -197,8 +155,8 @@ mod tests {
             version: 0,
             overflow_page: 0,
         };
-        assert_eq!(slot.slot_size(), 102);
-        assert_eq!(slot.serialize().unwrap().len(), 102);
+        let data = slot.serialize().unwrap();
+        assert_eq!(slot, HyperedgeSlot::deserialize(&data).unwrap());
     }
 
     #[test]

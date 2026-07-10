@@ -4,14 +4,10 @@
 //! Stage: L6 Pathway Weight Decay — time-based exponential decay of procedural memory weights.
 
 use crate::config::DecayConfig;
-use crate::file::header::FileHeader;
-use crate::index::btree::BTreeIndex;
-use crate::shared::common::now_ms;
-use crate::MemHopError;
-use memmap2::MmapMut;
-use std::fs::File;
-
 use crate::layers::pathway::PathwayWeightSlot;
+use crate::shared::common::now_ms;
+use crate::storage::StorageEngine;
+use crate::MemHopError;
 
 /// Report produced by the L6 pathway decay stage.
 #[derive(Debug, Clone, PartialEq)]
@@ -35,13 +31,10 @@ pub struct L6DecayReport {
 ///
 /// Returns the number of decayed and pruned slots, plus lists of affected slots.
 pub fn decay_l6_pathways(
-    mmap: &mut MmapMut,
-    header: &mut FileHeader,
-    _btree: &BTreeIndex,
+    engine: &mut StorageEngine,
     decay_config: &DecayConfig,
-    file: &mut File,
 ) -> Result<L6DecayReport, MemHopError> {
-    let pathways = crate::query::l6_ops::read_pathways(mmap, header)?;
+    let pathways = crate::query::l6_ops::read_pathways(engine)?;
     if pathways.is_empty() {
         return Ok(L6DecayReport {
             decayed: 0,
@@ -81,7 +74,7 @@ pub fn decay_l6_pathways(
         retained.push(pathway);
     }
 
-    crate::query::l6_ops::write_pathways(mmap, header, file, &retained)?;
+    crate::query::l6_ops::write_pathways(engine, &retained)?;
 
     Ok(L6DecayReport {
         decayed,
@@ -95,7 +88,7 @@ pub fn decay_l6_pathways(
 mod tests {
     use super::*;
     use crate::layers::pathway::PathwayWeightSlot;
-    use crate::test_helpers::create_test_mmap;
+    use tempfile::NamedTempFile;
 
     fn default_decay_config() -> DecayConfig {
         DecayConfig {
@@ -112,7 +105,8 @@ mod tests {
 
     #[test]
     fn test_decay_l6_pathways_basic() {
-        let (mut mmap, mut header, btree, mut file) = create_test_mmap(64);
+        let temp = NamedTempFile::new().unwrap();
+        let mut engine = StorageEngine::create(temp.path(), 768).unwrap();
         let old = (now_ms() - 100_000) as u64; // ~1.7 minutes ago
         let slot = PathwayWeightSlot {
             id_hash: 6001,
@@ -127,33 +121,25 @@ mod tests {
             updated_at: old as i64,
             version: 1,
         };
-        crate::query::l6_ops::add_l6(&mut mmap, &mut header, &btree, &mut file, vec![slot])
-            .unwrap();
+        crate::query::l6_ops::add_l6(&mut engine, vec![slot]).unwrap();
 
-        let report = decay_l6_pathways(
-            &mut mmap,
-            &mut header,
-            &btree,
-            &default_decay_config(),
-            &mut file,
-        )
-        .unwrap();
+        let report = decay_l6_pathways(&mut engine, &default_decay_config()).unwrap();
 
         assert_eq!(report.decayed, 1);
         assert_eq!(report.pruned, 0);
 
-        let list = crate::query::l6_ops::list_l6(&mmap, &header, &btree, None).unwrap();
+        let list = crate::query::l6_ops::list_l6(&engine, None).unwrap();
         assert_eq!(list.len(), 1);
         assert!(list[0].weight < 1.0);
         assert!(list[0].weight >= 0.05);
 
-        // file is kept alive for mmap lifetime
-        let _ = file;
+        let _ = temp;
     }
 
     #[test]
     fn test_decay_l6_pathways_prunes_weak_pathway() {
-        let (mut mmap, mut header, btree, mut file) = create_test_mmap(64);
+        let temp = NamedTempFile::new().unwrap();
+        let mut engine = StorageEngine::create(temp.path(), 768).unwrap();
         let old = (now_ms() - 10_000_000) as u64; // ~2.8 hours ago
         let slot = PathwayWeightSlot {
             id_hash: 6002,
@@ -168,40 +154,26 @@ mod tests {
             updated_at: old as i64,
             version: 1,
         };
-        crate::query::l6_ops::add_l6(&mut mmap, &mut header, &btree, &mut file, vec![slot])
-            .unwrap();
+        crate::query::l6_ops::add_l6(&mut engine, vec![slot]).unwrap();
 
-        let report = decay_l6_pathways(
-            &mut mmap,
-            &mut header,
-            &btree,
-            &default_decay_config(),
-            &mut file,
-        )
-        .unwrap();
+        let report = decay_l6_pathways(&mut engine, &default_decay_config()).unwrap();
 
         assert_eq!(report.pruned, 1);
         assert_eq!(report.decayed, 0);
 
-        let list = crate::query::l6_ops::list_l6(&mmap, &header, &btree, None).unwrap();
+        let list = crate::query::l6_ops::list_l6(&engine, None).unwrap();
         assert!(list.is_empty());
 
-        let _ = file;
+        let _ = temp;
     }
 
     #[test]
     fn test_decay_l6_pathways_empty() {
-        let (mut mmap, mut header, btree, mut file) = create_test_mmap(64);
-        let report = decay_l6_pathways(
-            &mut mmap,
-            &mut header,
-            &btree,
-            &default_decay_config(),
-            &mut file,
-        )
-        .unwrap();
+        let temp = NamedTempFile::new().unwrap();
+        let mut engine = StorageEngine::create(temp.path(), 768).unwrap();
+        let report = decay_l6_pathways(&mut engine, &default_decay_config()).unwrap();
         assert_eq!(report.decayed, 0);
         assert_eq!(report.pruned, 0);
-        let _ = file;
+        let _ = temp;
     }
 }

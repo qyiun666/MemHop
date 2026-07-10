@@ -4,14 +4,14 @@
 //! L5 ActionChain — procedural knowledge as ordered action sequences.
 //! Replaces the old CrystalSlot which crammed everything into a `raw_steps` blob.
 
-use crate::util::io_helpers::*;
-use std::io::{self, Cursor, Read, Write};
+use crate::api::MemHopError;
+use serde::{Deserialize, Serialize};
 
 // ============================================================================
 // ChainStatus
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum ChainStatus {
     Draft = 0,      // Not yet validated
@@ -34,7 +34,7 @@ impl ChainStatus {
 // ActionChainSlot — chain metadata
 // ============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionChainSlot {
     pub id_hash: u64,
     pub title: String,
@@ -50,71 +50,12 @@ pub struct ActionChainSlot {
 }
 
 impl ActionChainSlot {
-    /// Fixed 53 bytes + variable `title.len() + trigger.len()`.
-    pub fn slot_size(&self) -> usize {
-        53 + self.title.len() + self.trigger.len()
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
-    pub fn serialize(&self) -> io::Result<Vec<u8>> {
-        let mut buf = Vec::with_capacity(self.slot_size());
-        buf.write_all(&self.id_hash.to_le_bytes())?;
-        buf.write_all(&(self.title.len() as u16).to_le_bytes())?;
-        buf.write_all(&(self.trigger.len() as u16).to_le_bytes())?;
-        buf.write_all(&[self.status as u8])?;
-        buf.write_all(&self.confidence.to_le_bytes())?;
-        buf.write_all(&self.success_rate.to_le_bytes())?;
-        buf.write_all(&self.trigger_count.to_le_bytes())?;
-        buf.write_all(&self.last_triggered.to_le_bytes())?;
-        buf.write_all(&self.created_at.to_le_bytes())?;
-        buf.write_all(&self.updated_at.to_le_bytes())?;
-        buf.write_all(&self.version.to_le_bytes())?;
-        buf.write_all(self.title.as_bytes())?;
-        buf.write_all(self.trigger.as_bytes())?;
-        Ok(buf)
-    }
-
-    pub fn deserialize(data: &[u8]) -> io::Result<Self> {
-        let mut c = Cursor::new(data);
-        let id_hash = read_u64(&mut c)?;
-        let title_len = read_u16(&mut c)? as usize;
-        let trigger_len = read_u16(&mut c)? as usize;
-        let status = ChainStatus::from_u8(read_u8(&mut c)?);
-        let confidence = read_f32(&mut c)?;
-        let success_rate = read_f32(&mut c)?;
-        let trigger_count = read_u32(&mut c)?;
-        let last_triggered = read_i64(&mut c)?;
-        let created_at = read_i64(&mut c)?;
-        let updated_at = read_i64(&mut c)?;
-        let version = read_u32(&mut c)?;
-        const FIXED_PREFIX_LEN: usize = 53;
-        let variable_len = title_len + trigger_len;
-        if FIXED_PREFIX_LEN + variable_len > data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "ActionChainSlot variable fields exceed data",
-            ));
-        }
-        let mut title_buf = vec![0u8; title_len];
-        c.read_exact(&mut title_buf)?;
-        let title = String::from_utf8(title_buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let mut trigger_buf = vec![0u8; trigger_len];
-        c.read_exact(&mut trigger_buf)?;
-        let trigger = String::from_utf8(trigger_buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        Ok(ActionChainSlot {
-            id_hash,
-            title,
-            trigger,
-            status,
-            confidence,
-            success_rate,
-            trigger_count,
-            last_triggered,
-            created_at,
-            updated_at,
-            version,
-        })
+    pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
     }
 }
 
@@ -122,7 +63,7 @@ impl ActionChainSlot {
 // ActionStep — individual step within a chain
 // ============================================================================
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionStep {
     pub id_hash: u64,
     pub chain_id: u64,
@@ -133,65 +74,12 @@ pub struct ActionStep {
 }
 
 impl ActionStep {
-    /// Fixed 30 bytes + variable `action.len() + params.len()` (or 0).
-    pub fn slot_size(&self) -> usize {
-        30 + self.action.len() + self.parameters.as_ref().map_or(0, |p| p.len())
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
-    pub fn serialize(&self) -> io::Result<Vec<u8>> {
-        let mut buf = Vec::with_capacity(self.slot_size());
-        buf.write_all(&self.id_hash.to_le_bytes())?;
-        buf.write_all(&self.chain_id.to_le_bytes())?;
-        buf.write_all(&self.step_order.to_le_bytes())?;
-        buf.write_all(&(self.action.len() as u16).to_le_bytes())?;
-        let params_len = self.parameters.as_ref().map_or(0u16, |p| p.len() as u16);
-        buf.write_all(&params_len.to_le_bytes())?;
-        buf.write_all(&self.created_at.to_le_bytes())?;
-        buf.write_all(self.action.as_bytes())?;
-        if let Some(ref params) = self.parameters {
-            buf.write_all(params.as_bytes())?;
-        }
-        Ok(buf)
-    }
-
-    pub fn deserialize(data: &[u8]) -> io::Result<Self> {
-        let mut c = Cursor::new(data);
-        let id_hash = read_u64(&mut c)?;
-        let chain_id = read_u64(&mut c)?;
-        let step_order = read_u16(&mut c)?;
-        let action_len = read_u16(&mut c)? as usize;
-        let params_len = read_u16(&mut c)? as usize;
-        let created_at = read_i64(&mut c)?;
-        const FIXED_PREFIX_LEN: usize = 30;
-        let variable_len = action_len + params_len;
-        if FIXED_PREFIX_LEN + variable_len > data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "ActionStep variable fields exceed data",
-            ));
-        }
-        let mut action_buf = vec![0u8; action_len];
-        c.read_exact(&mut action_buf)?;
-        let action = String::from_utf8(action_buf)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let parameters = if params_len > 0 {
-            let mut params_buf = vec![0u8; params_len];
-            c.read_exact(&mut params_buf)?;
-            Some(
-                String::from_utf8(params_buf)
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-            )
-        } else {
-            None
-        };
-        Ok(ActionStep {
-            id_hash,
-            chain_id,
-            step_order,
-            action,
-            parameters,
-            created_at,
-        })
+    pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
     }
 }
 
@@ -219,7 +107,6 @@ mod tests {
             version: 1,
         };
         let data = chain.serialize().unwrap();
-        assert_eq!(data.len(), chain.slot_size());
         assert_eq!(chain, ActionChainSlot::deserialize(&data).unwrap());
     }
 
@@ -238,7 +125,6 @@ mod tests {
             updated_at: 0,
             version: 0,
         };
-        assert_eq!(chain.serialize().unwrap().len(), 53);
         assert_eq!(
             chain,
             ActionChainSlot::deserialize(&chain.serialize().unwrap()).unwrap()
@@ -315,7 +201,9 @@ mod tests {
             parameters: Some("{}".into()),
             created_at: 0,
         };
-        assert_eq!(step.slot_size(), 35); // 30 + 3 + 2
+        let data = step.serialize().unwrap();
+        let restored = ActionStep::deserialize(&data).unwrap();
+        assert_eq!(step, restored);
     }
 
     #[test]

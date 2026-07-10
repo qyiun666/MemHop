@@ -4,4 +4,3 @@
 //! Shared utilities used across the crate.
 
 pub mod common;
-pub mod slot_io;

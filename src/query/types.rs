@@ -9,6 +9,9 @@ use std::collections::HashMap;
 // Re-export the canonical LlmParams from slot::context so public API types can use it directly.
 pub use crate::layers::context::LlmParams;
 
+/// Re-export GraphEdgeKind for public use in EdgeListQuery and GraphEdge.
+pub use crate::layers::hypergraph::GraphEdgeKind;
+
 /// API 请求来源信息 — 记录"是谁找的我"
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RequestSource {
@@ -753,30 +756,112 @@ pub struct ImportError {
 }
 
 // ============================================================================
-// L3 Hypergraph Types (used by src/l3/ engine)
+// L3 Hypergraph Types — public DTOs for hypergraph nodes, edges, and queries
 // ============================================================================
 
-/// Result of subgraph extraction
+use crate::shared::common::format_hash;
+
+/// Public DTO for an L3 hypergraph node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Subgraph {
-    pub nodes: Vec<crate::layers::hypergraph::HypergraphNode>,
-    pub edges: Vec<crate::layers::hypergraph::HypergraphEdge>,
+pub struct GraphNode {
+    pub id: String,
+    pub graph_id: String,
+    pub title: String,
+    pub node_type: String,
+    pub content: String,
+    pub keywords: Vec<String>,
+    pub source_ref: Option<String>,
+    pub importance: f32,
+    pub summary: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
-/// A single hop in graph traversal (BFS / shortest path)
+impl From<crate::layers::hypergraph::HypergraphNode> for GraphNode {
+    fn from(n: crate::layers::hypergraph::HypergraphNode) -> Self {
+        Self {
+            id: format_hash(n.id_hash),
+            graph_id: format_hash(n.graph_id),
+            title: n.title,
+            node_type: n.node_type,
+            content: n.content,
+            keywords: n.keywords,
+            source_ref: n.source_ref,
+            importance: n.importance,
+            summary: n.summary,
+            created_at: n.created_at,
+            updated_at: n.updated_at,
+        }
+    }
+}
+
+/// Public DTO for an L3 hypergraph edge.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphEdge {
+    pub id: String,
+    pub graph_id: String,
+    pub kind: GraphEdgeKind,
+    pub node_ids: Vec<String>,
+    pub weight: f32,
+    pub label: Option<String>,
+    pub description: Option<String>,
+    pub confidence: f32,
+    pub created_at: i64,
+}
+
+impl From<crate::layers::hypergraph::HypergraphEdge> for GraphEdge {
+    fn from(e: crate::layers::hypergraph::HypergraphEdge) -> Self {
+        Self {
+            id: format_hash(e.id_hash),
+            graph_id: format_hash(e.graph_id),
+            kind: e.kind,
+            node_ids: e.node_ids.iter().map(|&h| format_hash(h)).collect(),
+            weight: e.weight,
+            label: e.label,
+            description: e.description,
+            confidence: e.confidence,
+            created_at: e.created_at,
+        }
+    }
+}
+
+/// Public DTO for an L3 hypergraph slot (container metadata).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphSlot {
+    pub id: String,
+    pub name: String,
+    pub node_count: u32,
+    pub edge_count: u32,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+impl From<crate::layers::hypergraph::HypergraphSlot> for GraphSlot {
+    fn from(s: crate::layers::hypergraph::HypergraphSlot) -> Self {
+        Self {
+            id: format_hash(s.id_hash),
+            name: s.name,
+            node_count: s.node_count,
+            edge_count: s.edge_count,
+            created_at: s.created_at,
+            updated_at: s.updated_at,
+        }
+    }
+}
+
+/// Result of subgraph extraction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Subgraph {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// A single hop in graph traversal (BFS / shortest path).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraversalHop {
     pub depth: usize,
-    #[serde(
-        serialize_with = "crate::layers::hypergraph::serialize_hash_as_hex",
-        deserialize_with = "crate::layers::hypergraph::deserialize_hash_from_hex"
-    )]
     pub from_node: u64,
-    pub edge: crate::layers::hypergraph::HypergraphEdge,
-    #[serde(
-        serialize_with = "crate::layers::hypergraph::serialize_hash_as_hex",
-        deserialize_with = "crate::layers::hypergraph::deserialize_hash_from_hex"
-    )]
+    pub edge: GraphEdge,
     pub to_node: u64,
 }
 
@@ -793,7 +878,7 @@ pub struct NodeListQuery {
 /// Paginated result for listing L3 nodes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeListResult {
-    pub items: Vec<crate::layers::hypergraph::HypergraphNode>,
+    pub items: Vec<GraphNode>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
@@ -805,14 +890,14 @@ pub struct NodeListResult {
 pub struct EdgeListQuery {
     pub page: usize,
     pub page_size: usize,
-    pub kind: Option<crate::layers::hypergraph::GraphEdgeKind>,
+    pub kind: Option<GraphEdgeKind>,
     pub node_id: Option<String>,
 }
 
 /// Paginated result for listing L3 edges
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeListResult {
-    pub items: Vec<crate::layers::hypergraph::HypergraphEdge>,
+    pub items: Vec<GraphEdge>,
     pub total: usize,
     pub page: usize,
     pub page_size: usize,
@@ -894,9 +979,9 @@ pub struct L6Filter {
 /// Detailed view of an L3 hypergraph: container + nodes + edges.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct L3Detail {
-    pub slot: crate::layers::hypergraph::HypergraphSlot,
-    pub nodes: Vec<crate::layers::hypergraph::HypergraphNode>,
-    pub edges: Vec<crate::layers::hypergraph::HypergraphEdge>,
+    pub slot: GraphSlot,
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
 }
 
 /// Result of merging multiple L2 contexts into a primary context.

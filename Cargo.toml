@@ -1,6 +1,6 @@
 [package]
 name = "memhop"
-version = "0.55.0"
+version = "0.57.0"
 edition = "2021"
 description = "Agent-oriented memory database inspired by human brain cognitive architecture"
 license = "MIT OR Apache-2.0"
@@ -22,9 +22,6 @@ reqwest = { version = "0.12", features = ["json", "blocking", "native-tls"], opt
 tonic = { version = "0.12", optional = true }
 prost = { version = "0.13", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "net"], optional = true }
-# tower = "0.4"    # unused — removed in v0.50.0
-# hyper-util = "0.1" # unused — removed in v0.50.0
-# tokio-stream = "0.1" # unused — removed in v0.50.0
 bincode = "1.3"
 chrono = "0.4"
 tracing = "0.1"
@@ -44,16 +41,9 @@ tempfile = "3.10"
 ndarray = "0.17"
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
-tract-onnx = "0.23"
-tokenizers = "0.21"
 
 [build-dependencies]
 tonic-build = "0.12"
-
-# Temporarily disabled - needs update to new API
-# [[bench]]
-# name = "performance_bench"
-# harness = false
 
 [[bench]]
 name = "agent_workflow"

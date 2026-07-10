@@ -4,10 +4,10 @@
 // L1 ContextNode — lightweight graph node in the hypergraph skeleton.
 // Points to one L2 Context; carries only vector ref + importance, no text.
 
-use crate::util::io_helpers::*;
-use std::io::{self, Cursor, Write};
+use crate::api::MemHopError;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ContextNode {
     pub id_hash: u64,
     pub context_id: u64,      // Points to L2 ContextSlot id_hash
@@ -22,68 +22,32 @@ pub struct ContextNode {
 }
 
 impl ContextNode {
-    /// Fixed 66 bytes + `edge_ptrs.len() * 8`.
-    pub fn slot_size(&self) -> usize {
-        66 + self.edge_ptrs.len() * 8
+    pub fn serialize(&self) -> Result<Vec<u8>, MemHopError> {
+        bincode::serialize(self).map_err(|e| MemHopError::Serialization(e.to_string()))
     }
 
-    /// Binary format: `[id_hash:u64][context_id:u64][vector_page_ref:u64]`
-    /// `[importance:f32][valence:f64][arousal:f64][timestamps:i64*2][version:u32][edge_count:u16][edge_ptrs:[u64]]`
-    pub fn serialize(&self) -> io::Result<Vec<u8>> {
-        let mut buf = Vec::with_capacity(self.slot_size());
-        buf.write_all(&self.id_hash.to_le_bytes())?;
-        buf.write_all(&self.context_id.to_le_bytes())?;
-        buf.write_all(&self.vector_page_ref.to_le_bytes())?;
-        buf.write_all(&self.importance.to_le_bytes())?;
-        buf.write_all(&self.valence.to_le_bytes())?;
-        buf.write_all(&self.arousal.to_le_bytes())?;
-        buf.write_all(&self.created_at.to_le_bytes())?;
-        buf.write_all(&self.updated_at.to_le_bytes())?;
-        buf.write_all(&self.version.to_le_bytes())?;
-        buf.write_all(&(self.edge_ptrs.len() as u16).to_le_bytes())?;
-        for &ptr in &self.edge_ptrs {
-            buf.write_all(&ptr.to_le_bytes())?;
-        }
-        Ok(buf)
+    pub fn deserialize(data: &[u8]) -> Result<Self, MemHopError> {
+        bincode::deserialize(data).map_err(|e| MemHopError::Deserialization(e.to_string()))
     }
+}
 
-    pub fn deserialize(data: &[u8]) -> io::Result<Self> {
-        let mut c = Cursor::new(data);
-        let id_hash = read_u64(&mut c)?;
-        let context_id = read_u64(&mut c)?;
-        let vector_page_ref = read_u64(&mut c)?;
-        let importance = read_f32(&mut c)?;
-        let valence = read_f64(&mut c)?;
-        let arousal = read_f64(&mut c)?;
-        let created_at = read_i64(&mut c)?;
-        let updated_at = read_i64(&mut c)?;
-        let version = read_u32(&mut c)?;
-        let edge_count = read_u16(&mut c)? as usize;
-        let fixed_prefix_len = 66usize;
-        let variable_len = edge_count * 8;
-        if fixed_prefix_len + variable_len > data.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "ContextNode edge_ptrs length exceeds data",
-            ));
-        }
-        let mut edge_ptrs = Vec::with_capacity(edge_count);
-        for _ in 0..edge_count {
-            edge_ptrs.push(read_u64(&mut c)?);
-        }
-        Ok(ContextNode {
-            id_hash,
-            context_id,
-            vector_page_ref,
-            importance,
-            valence,
-            arousal,
-            created_at,
-            updated_at,
-            version,
-            edge_ptrs,
-        })
-    }
+// ============================================================================
+// SceneNode — renamed v2 type (replaces ContextNode)
+// ============================================================================
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SceneNode {
+    pub id_hash: u64,
+    pub scene_id: u64,
+    pub topic_ids: Vec<u64>,
+    pub depth: u32,
+    pub vector_page_ref: u64,
+    pub importance: f32,
+    pub valence: f64,
+    pub arousal: f64,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub edge_ids: Vec<u64>,
 }
 
 #[cfg(test)]
@@ -105,7 +69,6 @@ mod tests {
             edge_ptrs: vec![100, 200, 300],
         };
         let data = node.serialize().unwrap();
-        assert_eq!(data.len(), 90); // 66 + 3*8
         assert_eq!(node, ContextNode::deserialize(&data).unwrap());
     }
 
@@ -123,7 +86,6 @@ mod tests {
             version: 0,
             edge_ptrs: vec![],
         };
-        assert_eq!(node.serialize().unwrap().len(), 66);
         assert_eq!(
             node,
             ContextNode::deserialize(&node.serialize().unwrap()).unwrap()
@@ -144,6 +106,8 @@ mod tests {
             version: 0,
             edge_ptrs: vec![10, 20],
         };
-        assert_eq!(node.slot_size(), 82); // 66 + 2*8
+        let data = node.serialize().unwrap();
+        let restored = ContextNode::deserialize(&data).unwrap();
+        assert_eq!(node, restored);
     }
 }

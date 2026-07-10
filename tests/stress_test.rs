@@ -1,8 +1,8 @@
 //! Stress tests to verify MemHop handles heavy write loads without corruption
 //! or FileFull errors, and that auto-extension works correctly.
 //!
-//! These tests use the real BGE-M3 ONNX gRPC encoder (via meowvec_server.py/Python onnxruntime) for
-//! authentic vector encoding. The server is started once per test binary.
+//! These tests use the candle-encoder gRPC server for vector encoding.
+//! The server must be started manually before running tests.
 
 mod common;
 
@@ -12,15 +12,15 @@ use memhop::{
 };
 use tempfile::TempDir;
 
-/// Start the ORT encoder server once for all stress tests.
+/// Wait for the candle-encoder gRPC server to be ready on port 27110.
 fn setup_encoder() {
-    let _guard = common::ensure_python_meowvec(27110);
+    common::ensure_candle_encoder(27110);
 }
 
 fn create_test_db() -> (TempDir, MemHop) {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("stress_test.meh");
-    let mut config = MemHopConfig::new(path, 1024);
+    let mut config = MemHopConfig::new(path, 768);
     config.encoder_grpc_addr = Some("http://127.0.0.1:27110".to_string());
     let db = MemHop::open(config).unwrap();
     (dir, db)
@@ -52,7 +52,7 @@ fn test_file_auto_extend() {
                 source: SourceMeta::new(SourceType::UserInput, None),
                 is_structural: false,
                 source_ref: None,
-            keywords: None,
+                keywords: None,
             }],
             session_id: Some("stress_session".to_string()),
             turn_id: Some(format!("{}", i)),
@@ -140,7 +140,7 @@ fn test_rapid_write_and_sync() {
                 source: SourceMeta::new(SourceType::UserInput, None),
                 is_structural: false,
                 source_ref: None,
-            keywords: None,
+                keywords: None,
             }],
             session_id: Some(format!("session_{}", round)),
             turn_id: Some("0".to_string()),
@@ -153,7 +153,7 @@ fn test_rapid_write_and_sync() {
     // Close and reopen DB to verify persistence
     drop(db);
     let path = dir.path().join("stress_test.meh");
-    let mut config = MemHopConfig::new(path, 1024);
+    let mut config = MemHopConfig::new(path, 768);
     config.encoder_grpc_addr = None;
     let db2 = MemHop::open(config).expect("DB should reopen without corruption");
 
@@ -175,7 +175,7 @@ fn test_import_many_l3_documents() {
     // No encoder needed for L3 import — use minimal config
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("stress_import.meh");
-    let mut config = MemHopConfig::new(path, 1024);
+    let mut config = MemHopConfig::new(path, 768);
     config.encoder_grpc_addr = None;
     let mut db = MemHop::open(config).unwrap();
 

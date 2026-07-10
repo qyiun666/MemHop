@@ -10,6 +10,7 @@
 // - Dream 命令需设置 MEMHOP_LLM_API_KEY 环境变量（可选）
 // - 向量编码需要配置 gRPC 或 IPC 编码器（测试中使用 auto_create 跳过向量检索）
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use memhop::{
@@ -18,17 +19,53 @@ use memhop::{
     MemHopConfig, SearchQuery, TopicImportItem, TopicListQuery, UpdateL2Fields, UpdateL3Fields,
     UpdateL5Fields, UpdateProfileRequest, UpdateRequest,
 };
+use memhop::encoder::{Encoder, EncoderOutput};
+
+// Simple test encoder for integration tests
+struct TestEncoder {
+    dim: usize,
+}
+
+impl TestEncoder {
+    fn new(dim: usize) -> Self {
+        Self { dim }
+    }
+}
+
+impl Encoder for TestEncoder {
+    fn encode(&self, _text: &str) -> Result<EncoderOutput, memhop::MemHopError> {
+        Ok(EncoderOutput {
+            dense: vec![half::f16::from_f32(0.1); self.dim],
+            sparse: HashMap::new(),
+        })
+    }
+
+    fn dim(&self) -> usize {
+        self.dim
+    }
+
+    fn mode(&self) -> &str {
+        "test"
+    }
+}
 
 // ============================================================================
 // 辅助函数
 // ============================================================================
 
-/// 创建测试配置
+/// Open a test database with test encoder configured
+fn open_test_db(config: MemHopConfig) -> MemHop {
+    let mut db = MemHop::open(config).expect("MemHop::open failed");
+    db.set_encoder(TestEncoder::new(768));
+    db
+}
+
+/// Create test config (no encoder address — test encoder is set by open_test_db)
 fn test_config(db_path: &str) -> MemHopConfig {
     MemHopConfig {
         db_path: PathBuf::from(db_path),
         encoder_grpc_addr: None,
-        vector_dim: 1024,
+        vector_dim: 768,
         crystal_path: None,
         llm: LlmConfig {
             api_url: String::new(),
@@ -42,6 +79,8 @@ fn test_config(db_path: &str) -> MemHopConfig {
             language: "zh".to_string(),
         },
         auto_dream_on_evict: true,
+        auto_dream_archive_threshold: 20,
+        auto_dream_summary_bytes: 2048,
         ivf_initial_k: 16,
         search_weights: None,
         decay_config: None,
@@ -49,8 +88,8 @@ fn test_config(db_path: &str) -> MemHopConfig {
         dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
+        llm_preprocess: memhop::LlmPreprocessConfig::default(),
     }
-            llm_preprocess: memhop::LlmPreprocessConfig::default(),
 }
 
 // ============================================================================
@@ -62,10 +101,12 @@ fn test_open_empty_path() {
     let config = MemHopConfig {
         db_path: PathBuf::from(""),
         encoder_grpc_addr: None,
-        vector_dim: 1024,
+        vector_dim: 768,
         crystal_path: None,
         llm: LlmConfig::default(),
         auto_dream_on_evict: false,
+        auto_dream_archive_threshold: 20,
+        auto_dream_summary_bytes: 2048,
         ivf_initial_k: 16,
         search_weights: None,
         decay_config: None,
@@ -73,7 +114,7 @@ fn test_open_empty_path() {
         dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
-            llm_preprocess: memhop::LlmPreprocessConfig::default(),
+        llm_preprocess: memhop::LlmPreprocessConfig::default(),
     };
     let result = MemHop::open(config);
     assert!(result.is_err(), "empty db_path should fail");
@@ -95,6 +136,8 @@ fn test_open_invalid_config_zero_dim() {
         crystal_path: None,
         llm: LlmConfig::default(),
         auto_dream_on_evict: false,
+        auto_dream_archive_threshold: 20,
+        auto_dream_summary_bytes: 2048,
         ivf_initial_k: 16,
         search_weights: None,
         decay_config: None,
@@ -102,7 +145,7 @@ fn test_open_invalid_config_zero_dim() {
         dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
-            llm_preprocess: memhop::LlmPreprocessConfig::default(),
+        llm_preprocess: memhop::LlmPreprocessConfig::default(),
     };
     let _ = std::fs::remove_file("/tmp/memhop_test_zero_dim.meh");
     let result = MemHop::open(config);
@@ -119,10 +162,11 @@ fn test_open_invalid_config_zero_dim() {
 fn test_full_lifecycle() {
     let db_path = "/tmp/memhop_lifecycle.meh";
     let _ = std::fs::remove_file(db_path);
+    let _ = std::fs::remove_file("/tmp/memhop_lifecycle.meh");
 
     // ---- 1. Open ----
     let config = test_config(db_path);
-    let mut db = MemHop::open(config.clone()).expect("MemHop::open failed");
+    let mut db = open_test_db(config.clone());
 
     // ---- 2. Search with auto_create ----
     let res = db
@@ -158,8 +202,8 @@ fn test_full_lifecycle() {
             instant_distill: false,
             scene_id: None,
             source: Default::default(),
-                user_keywords: None,
-                agent_keywords: None,
+            user_keywords: None,
+            agent_keywords: None,
         })
         .expect("update_memory failed");
     assert_eq!(update_res.topic_id, l2_id);
@@ -272,7 +316,7 @@ fn test_full_lifecycle() {
         .update_l2(
             &l2_id,
             UpdateL2Fields {
-                                ..Default::default()
+                ..Default::default()
             },
         )
         .expect("update_l2 failed");
@@ -296,7 +340,7 @@ fn test_full_lifecycle() {
     let l5_update = db.update_l5(
         "nonexistent",
         UpdateL5Fields {
-                        ..Default::default()
+            ..Default::default()
         },
     );
     assert!(
@@ -418,6 +462,7 @@ fn test_graph_query_and_delete() {
     let db_path = "/tmp/memhop_graph_delete.meh";
     let source_path = "/tmp/memhop_test_graph";
     let _ = std::fs::remove_file(db_path);
+    let _ = std::fs::remove_file("/tmp/memhop_graph_delete.meh");
     let _ = std::fs::remove_dir_all(source_path);
 
     // Prepare a minimal Rust codebase so build_l3 creates nodes and edges.
@@ -430,7 +475,7 @@ fn test_graph_query_and_delete() {
     std::fs::write(format!("{}/src/b.rs", source_path), "pub fn bar() {}\n").unwrap();
 
     let config = test_config(db_path);
-    let mut db = MemHop::open(config).expect("MemHop::open failed");
+    let mut db = open_test_db(config);
 
     // ---- 1. Build L3 hypergraph ----
     let build_res = db
@@ -521,8 +566,8 @@ fn test_graph_query_and_delete() {
             instant_distill: false,
             scene_id: None,
             source: Default::default(),
-                user_keywords: None,
-                agent_keywords: None,
+            user_keywords: None,
+            agent_keywords: None,
         })
         .expect("update_memory failed");
 
@@ -577,9 +622,10 @@ fn test_graph_query_and_delete() {
 fn test_l2_l3_memory_chain() {
     let db_path = "/tmp/memhop_l2l3_chain.meh";
     let _ = std::fs::remove_file(db_path);
+    let _ = std::fs::remove_file("/tmp/memhop_l2l3_chain.meh");
 
     let config = test_config(db_path);
-    let mut db = MemHop::open(config.clone()).expect("MemHop::open failed");
+    let mut db = open_test_db(config.clone());
 
     // ---- MH-1: import("knowledge") 返回节点 ID ----
     let import_res = db
@@ -615,7 +661,8 @@ fn test_l2_l3_memory_chain() {
                 },
             ]),
             mode: ImportMode::Merge,
-            knowledge_        })
+            knowledge_title: Some("benchmark_0".to_string()),
+        })
         .expect("import knowledge failed");
 
     // MH-1: Verify response has "id" (single) and "ids" (batch) and "node_count"
@@ -730,7 +777,7 @@ fn test_l2_l3_memory_chain() {
         .update_l2(
             &l2_topic_id,
             UpdateL2Fields {
-                                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
+                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
                 ..Default::default()
             },
         )
@@ -741,7 +788,7 @@ fn test_l2_l3_memory_chain() {
     db.sync().expect("sync failed");
     drop(db);
 
-    let mut db2 = MemHop::open(config).expect("reopen failed");
+    let mut db2 = open_test_db(config);
 
     // Verify L2 topic has l3_refs after reopen
     let topic_detail = db2
@@ -779,7 +826,7 @@ fn test_l2_l3_memory_chain() {
         .update_l2(
             &search_l2_id,
             UpdateL2Fields {
-                                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
+                l3_refs: Some(vec![l3_id_1.clone(), l3_id_2.clone()]),
                 ..Default::default()
             },
         )
@@ -827,6 +874,7 @@ fn test_query_l3_detail() {
     let db_path = "/tmp/memhop_l3_detail.meh";
     let source_path = "/Volumes/zt_hd/projects/meow/meowagent/src";
     let _ = std::fs::remove_file(db_path);
+    let _ = std::fs::remove_file("/tmp/memhop_l3_detail.meh");
 
     if !std::path::Path::new(source_path).exists() {
         eprintln!("[SKIP] meowagent source not found");
@@ -834,7 +882,7 @@ fn test_query_l3_detail() {
     }
 
     let config = test_config(db_path);
-    let mut db = MemHop::open(config).expect("MemHop::open failed");
+    let mut db = open_test_db(config);
 
     // 1. Build L3
     let _build_res = db
@@ -907,7 +955,7 @@ fn test_merge_topics() {
     let _ = std::fs::remove_file(db_path);
 
     let config = test_config(db_path);
-    let mut db = MemHop::open(config).expect("MemHop::open failed");
+    let mut db = open_test_db(config);
 
     // Create two L2s via auto_create
     let res1 = db
@@ -972,7 +1020,7 @@ fn test_error_handling() {
     let _ = std::fs::remove_file(db_path);
 
     let config = test_config(db_path);
-    let mut db = MemHop::open(config).expect("MemHop::open failed");
+    let mut db = open_test_db(config);
 
     // missing field: search without dialogue (empty dialogue is allowed but may return empty)
     let res = db.search_context(SearchQuery {
@@ -986,8 +1034,8 @@ fn test_error_handling() {
         min_score: 0.0,
 
         source: Default::default(),
-            llm_keywords: None,
-            enable_llm_preprocess: false,
+        llm_keywords: None,
+        enable_llm_preprocess: false,
     });
     // Empty dialogue search may succeed with empty results; that's acceptable
     println!("empty dialogue search: {:?}", res.is_ok());
@@ -1056,7 +1104,7 @@ fn test_agent_workflow() {
     let _ = std::fs::remove_file(db_path);
 
     let config = test_config(db_path);
-    let mut db = MemHop::open(config).expect("Agent: failed to open database");
+    let mut db = open_test_db(config);
     println!("[Agent] Database opened");
 
     // Agent 2: 设置自己的画像
@@ -1170,7 +1218,7 @@ fn test_dream_with_llm() {
         .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_string());
     config.llm.model =
         std::env::var("MEMHOP_LLM_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
-    let mut db = MemHop::open(config).expect("MemHop::open failed");
+    let mut db = open_test_db(config);
 
     // 1. Create some memory first
     let search_res = db
@@ -1232,6 +1280,7 @@ fn test_build_l3_from_meowagent() {
     let db_path = "/tmp/memhop_l3_meowagent.meh";
     let source_path = "/Volumes/zt_hd/projects/meow/meowagent/src";
     let _ = std::fs::remove_file(db_path);
+    let _ = std::fs::remove_file("/tmp/memhop_l3_meowagent.meh");
 
     // Skip if meowagent source not available
     if !std::path::Path::new(source_path).exists() {
@@ -1240,7 +1289,7 @@ fn test_build_l3_from_meowagent() {
     }
 
     let config = test_config(db_path);
-    let mut db = MemHop::open(config.clone()).expect("MemHop::open failed");
+    let mut db = open_test_db(config.clone());
     println!("[L3 Import] Database opened");
 
     // 2. Build L3 from meowagent/src
@@ -1291,7 +1340,7 @@ fn test_build_l3_from_meowagent() {
     assert!(l2_res.total > 0, "build_l3 should create an L2 topic");
 
     let l2_id = l2_res.items[0].id.clone();
-    let l2_title = l2_res.items[0].title.clone();
+    let l2_title = l2_res.items[0].user_keywords.join(", ");
     println!("  L2: '{}' (id={})", l2_title, l2_id);
 
     // 5. Get L2 topic detail to verify L3 linkage (TopicDetail has l3_refs)
@@ -1301,11 +1350,12 @@ fn test_build_l3_from_meowagent() {
         .expect("topic should exist");
     println!(
         "[L2 Detail] title='{}', l3_refs={:?}",
-        l2_detail.user_keywords.join(" "), l2_detail.user_l3_refs
+        l2_detail.user_keywords.join(" "),
+        l2_detail.user_l3_refs
     );
     assert!(
-        !l2_detail.user_l3_refs.is_empty(),
-        "L2 detail should include l3_refs"
+        !l2_detail.agent_l3_refs.is_empty(),
+        "L2 detail should include agent_l3_refs"
     );
 
     // 6. Search via context_id (doesn't need encoder) to verify L3 discovery
@@ -1391,13 +1441,14 @@ fn test_l3_index_persistence_across_reopen() {
     let db_path = std::env::temp_dir().join("memhop_l3_index_persist.meh");
     let source_path = std::env::temp_dir().join("memhop_l3_index_persist_src");
     let _ = std::fs::remove_file(&db_path);
+    let _ = std::fs::remove_file(db_path.with_extension("meh"));
     let _ = std::fs::remove_dir_all(&source_path);
 
     std::fs::create_dir_all(source_path.join("src")).unwrap();
     std::fs::write(source_path.join("src/a.rs"), "pub fn foo() {}\n").unwrap();
 
     let config = test_config(db_path.to_str().unwrap());
-    let mut db = MemHop::open(config.clone()).expect("MemHop::open failed");
+    let mut db = open_test_db(config.clone());
 
     let build_res = db
         .build_l3_hypergraph_from_path(&source_path)

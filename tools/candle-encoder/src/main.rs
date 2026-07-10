@@ -14,7 +14,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use candle_core::Device;
 use candle_nn::VarBuilder;
-use candle_transformers::models::bert::{BertModel, Config as BertConfig};
+use candle_transformers::models::xlm_roberta::{XLMRobertaModel, Config as XLMRobertaConfig};
 use clap::Parser;
 use tokio::sync::Mutex;
 use tonic::{transport::Server, Request, Response, Status};
@@ -55,7 +55,7 @@ struct Args {
 // ============================================================================
 
 struct EncoderModel {
-    model: BertModel,
+    model: XLMRobertaModel,
     tokenizer: tokenizers::Tokenizer,
     device: Device,
     hidden_size: usize,
@@ -79,15 +79,14 @@ impl EncoderModel {
         tracing::info!("Loading config from {:?}", config_path);
         let config_file = std::fs::File::open(&config_path)
             .with_context(|| format!("Failed to open {:?}", config_path))?;
-        let config: BertConfig = serde_json::from_reader(config_file)
-            .with_context(|| format!("Failed to parse BERT config from {:?}", config_path))?;
+        let config: XLMRobertaConfig = serde_json::from_reader(config_file)
+            .with_context(|| format!("Failed to parse XLM-RoBERTa config from {:?}", config_path))?;
         let hidden_size = config.hidden_size;
         tracing::info!(
-            "Model config: hidden_size={}, layers={}, heads={}, model_type={:?}",
+            "Model config: hidden_size={}, layers={}, heads={}",
             hidden_size,
             config.num_hidden_layers,
             config.num_attention_heads,
-            config.model_type
         );
 
         // Load safetensors weights
@@ -98,8 +97,8 @@ impl EncoderModel {
         let tensors = candle_core::safetensors::load(&weights_path, &device)
             .with_context(|| format!("Failed to load safetensors from {:?}", weights_path))?;
         let vb = VarBuilder::from_tensors(tensors, candle_core::DType::F32, &device);
-        let model = BertModel::load(vb, &config)
-            .context("Failed to load BertModel from weights")?;
+        let model = XLMRobertaModel::new(&config, vb)
+            .context("Failed to load XLMRobertaModel from weights")?;
 
         // Load tokenizer
         tracing::info!("Loading tokenizer from {:?}", tokenizer_path);
@@ -144,18 +143,21 @@ impl EncoderModel {
         // XLM-RoBERTa: create an all-zero token_type_ids tensor (type_vocab_size=1)
         let token_type_ids = input_ids_tensor.zeros_like()?;
 
-        // Forward pass through BertModel
+        // Forward pass through XLMRobertaModel
         let hidden = self.model.forward(
             &input_ids_tensor,
+            &attention_mask_tensor,
             &token_type_ids,
-            Some(&attention_mask_tensor),
+            None,  // past_key_value
+            None,  // encoder_hidden_states
+            None,  // encoder_attention_mask
         )?;
         // hidden: (1, seq_len, hidden_size)
 
         // Mean pooling: average over non-padding tokens
         let mask_f32 = attention_mask_tensor.to_dtype(candle_core::DType::F32)?;
-        let mask_expanded = mask_f32.unsqueeze(1)?; // (1, 1, seq_len)
-        let masked_sum = (hidden * mask_expanded)?.sum(1)?; // (1, hidden_size)
+        let mask_expanded = mask_f32.unsqueeze(2)?; // (1, seq_len, 1)
+        let masked_sum = (hidden.broadcast_mul(&mask_expanded))?.sum(1)?; // (1, hidden_size)
 
         let valid_tokens: f32 = attention_mask.iter().map(|&m| m as f32).sum();
         if valid_tokens <= 0.0 {

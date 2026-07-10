@@ -4,14 +4,12 @@
 //! Stage: User Language Habit Distillation — extract habits from L4 archives, merge into L0 Profile.
 
 use crate::dream::llm::HabitAnalysis;
-use crate::file::header::FileHeader;
-use crate::file::page::PageHeader;
-use crate::index::btree::BTreeIndex;
 use crate::layers::archive::ArchiveSlot;
 use crate::layers::profile::ProfileSlot;
-use crate::util::{hash_id, PageType, PAGE_SIZE};
+use crate::storage::record::{REC_L0_PROFILE, REC_L4_ARCHIVE};
+use crate::storage::StorageEngine;
+use crate::util::hash_id;
 use crate::MemHopError;
-use memmap2::MmapMut;
 
 /// Maximum number of recent archives to analyze
 const MAX_DIALOGUES: usize = 30;
@@ -26,53 +24,22 @@ const MAX_STYLE_TRAITS: usize = 10;
 const MAX_EMOTION_PATTERNS: usize = 10;
 
 /// Extract recent dialogue texts from L4 Archive slots
-pub fn extract_recent_dialogues_inner(
-    mmap: &MmapMut,
-    header: &FileHeader,
-    btree: &BTreeIndex,
-    max_count: usize,
-) -> Vec<String> {
-    let mut dialogues = extract_recent_dialogues(mmap, header, btree);
+pub fn extract_recent_dialogues_inner(engine: &StorageEngine, max_count: usize) -> Vec<String> {
+    let mut dialogues = extract_recent_dialogues(engine);
     dialogues.truncate(max_count);
     dialogues
 }
 
 /// Extract recent dialogue texts from L4 Archive slots (internal).
-fn extract_recent_dialogues(
-    mmap: &MmapMut,
-    header: &FileHeader,
-    btree: &BTreeIndex,
-) -> Vec<String> {
-    let data = &mmap[..];
-    let page_count = header.page_count;
+fn extract_recent_dialogues(engine: &StorageEngine) -> Vec<String> {
     let mut archives: Vec<(i64, String)> = Vec::new();
 
-    for (_, page_ref) in btree.iter_unsorted() {
-        let page_id = (*page_ref >> 16) as u32;
-        if page_id >= page_count {
-            continue;
-        }
-
-        let page_offset = (page_id as usize) * PAGE_SIZE;
-        if page_offset + PAGE_SIZE > data.len() {
-            continue;
-        }
-
-        if page_offset + 32 > data.len() {
-            continue;
-        }
-        let mut hdr_bytes = [0u8; 32];
-        hdr_bytes.copy_from_slice(&data[page_offset..page_offset + 32]);
-        if let Ok(page_hdr) = PageHeader::from_bytes(&hdr_bytes) {
-            if page_hdr.page_type != PageType::Archive as u16 {
+    for (&id_hash, _) in engine.iter_index() {
+        if let Ok(Some((record_type, data))) = engine.read_record(id_hash) {
+            if record_type != REC_L4_ARCHIVE {
                 continue;
             }
-        } else {
-            continue;
-        }
-
-        if let Some(slot_data) = crate::shared::slot_io::get_slot_data(data, *page_ref) {
-            if let Ok(archive) = ArchiveSlot::deserialize(slot_data) {
+            if let Ok(archive) = bincode::deserialize::<ArchiveSlot>(data) {
                 // Only include user messages (role=0) with non-empty content
                 if archive.role == 0 && !archive.content.is_empty() {
                     archives.push((archive.created_at, archive.content));
@@ -93,25 +60,17 @@ fn extract_recent_dialogues(
 /// Merge habit analysis results into the existing L0 Profile.
 /// Returns (new_lexicon_count, new_style_count, new_emotion_count).
 pub fn merge_habits_into_profile(
-    mmap: &mut MmapMut,
-    btree: &BTreeIndex,
+    engine: &mut StorageEngine,
     analysis: &HabitAnalysis,
 ) -> Result<(usize, usize, usize), MemHopError> {
     let profile_id_hash = hash_id("profile");
 
-    let page_ref = btree
-        .search(profile_id_hash)
+    let (_, data) = engine
+        .read_record(profile_id_hash)?
         .ok_or(MemHopError::PageNotFound(0))?;
 
-    let page_id = (page_ref >> 16) as u32;
-    let offset = (page_id as usize) * PAGE_SIZE + 32;
-
-    if offset >= mmap.len() {
-        return Err(MemHopError::PageNotFound(page_id));
-    }
-
-    let mut profile = ProfileSlot::deserialize(&mmap[offset..])
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    let mut profile: ProfileSlot =
+        bincode::deserialize(data).map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
     let mut new_lexicon = 0;
     let mut new_style = 0;
@@ -162,18 +121,10 @@ pub fn merge_habits_into_profile(
     profile.updated_at = crate::shared::common::now_ms();
     profile.version += 1;
 
-    let data = profile
-        .serialize()
-        .map_err(|e| MemHopError::Serialization(e.to_string()))?;
+    let data =
+        bincode::serialize(&profile).map_err(|e| MemHopError::Serialization(e.to_string()))?;
 
-    if offset + data.len() > mmap.len() {
-        return Err(MemHopError::Serialization(format!(
-            "ProfileSlot with habits too large for page: {} > {}",
-            data.len(),
-            mmap.len() - offset
-        )));
-    }
-    mmap[offset..offset + data.len()].copy_from_slice(&data);
+    engine.write_record(REC_L0_PROFILE, profile_id_hash, &data)?;
 
     Ok((new_lexicon, new_style, new_emotion))
 }
@@ -194,23 +145,17 @@ pub struct HabitUpdate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::NamedTempFile;
+
+    fn create_engine() -> StorageEngine {
+        let temp = NamedTempFile::new().unwrap();
+        StorageEngine::create(temp.path(), 768).unwrap()
+    }
 
     #[test]
     fn test_extract_recent_dialogues_empty() {
-        let btree = BTreeIndex::new();
-        let header = crate::file::header::FileHeader::new(768);
-
-        let temp_file = tempfile::NamedTempFile::new().unwrap();
-        let path = temp_file.path();
-        std::fs::write(path, vec![0u8; 4096 * 10]).unwrap();
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .unwrap();
-        let mmap = unsafe { MmapMut::map_mut(&file).unwrap() };
-
-        let dialogues = extract_recent_dialogues(&mmap, &header, &btree);
+        let engine = create_engine();
+        let dialogues = extract_recent_dialogues(&engine);
         assert!(dialogues.is_empty());
     }
 }
