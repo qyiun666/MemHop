@@ -131,6 +131,7 @@ pub fn merge_habits_into_profile(
 
 /// Result of habit distillation
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[allow(dead_code)]
 pub struct HabitUpdate {
     /// Number of new lexicon entries added
     pub new_lexicon: usize,

@@ -111,7 +111,6 @@ where
         },
         |archives| archives.sort_by_key(|a| std::cmp::Reverse(a.created_at)),
         |a| {
-            let src = a.request_source();
             Some(Archive {
                 id: format_hash(a.id_hash),
                 content: a.content,
@@ -120,8 +119,6 @@ where
                 topic_id: Some(format_hash(a.context_id)),
                 engram_ids: vec![],
                 created_at: a.created_at,
-                source_agent: src.source_agent,
-                source_platform: src.source_platform,
             })
         },
     );
@@ -143,11 +140,11 @@ pub fn list_crystals(
     engine: &StorageEngine,
     query: CrystalListQuery,
 ) -> Result<CrystalListResult, MemHopError> {
-    let (items, total, has_more) = list_slots(
+    let (items, total_count, _has_more) = list_slots(
         engine,
         REC_L5_ACTION_CHAIN,
-        query.page,
-        query.page_size,
+        query.page as usize,
+        query.page_size as usize,
         |slot_data| ActionChainSlot::deserialize(slot_data).ok(),
         |chain: &ActionChainSlot| {
             if let Some(ref status_filter) = query.status_filter {
@@ -199,11 +196,9 @@ pub fn list_crystals(
     );
 
     Ok(CrystalListResult {
-        items,
-        total,
+        crystals: items,
+        total: total_count as u32,
         page: query.page,
-        page_size: query.page_size,
-        has_more,
     })
 }
 

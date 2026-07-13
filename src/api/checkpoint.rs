@@ -23,9 +23,9 @@ impl MemHop {
 
         // Persist IVF index via engine records (non-fatal: warn on failure)
         if let Some(ref ivf) = self.ivf_index {
-            if let Err(e) = crate::index::vector::write_ivf_index(&mut self.engine, ivf) {
-                tracing::warn!("Failed to persist IVF index: {}", e);
-            }
+            crate::index::vector::write_ivf_index(&mut self.engine, ivf).map_err(|e| {
+                MemHopError::Serialization(format!("Failed to persist IVF index: {}", e))
+            })?;
         }
 
         self.engine.checkpoint(&snapshot)?;

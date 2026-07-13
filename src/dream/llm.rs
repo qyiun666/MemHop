@@ -3,9 +3,7 @@
 
 //! LLM Provider trait for consolidated dream consolidation.
 //!
-//! Two-phase design:
-//!   1. `consolidate` — one monolithic call processing all dream stages.
-//!   2. `retry_sections` — second call for any sections that failed parsing.
+//! Single-phase design: one consolidate call processes all dream stages.
 
 use crate::MemHopError;
 use serde::{Deserialize, Serialize};
@@ -174,15 +172,8 @@ pub struct CrystalStep {
 // ============================================================================
 
 pub trait LlmProvider: Send + Sync {
-    /// Phase 1: monolithic consolidation of all dream stages.
+    /// Monolithic consolidation of all dream stages into a single LLM call.
     fn consolidate(&self, input: &ConsolidationInput) -> Result<ConsolidationOutput, MemHopError>;
-
-    /// Phase 2: retry only the specified sections, filling in the rest as Empty.
-    fn retry_sections(
-        &self,
-        input: &ConsolidationInput,
-        sections: &[DreamSection],
-    ) -> Result<ConsolidationOutput, MemHopError>;
 
     /// Generic chat completion for lightweight LLM tasks (preprocess, keyword extraction, etc.).
     /// Default implementation returns an error — providers must override to enable this feature.
@@ -201,12 +192,6 @@ pub trait LlmProvider: Send + Sync {
             "chat() not implemented for this LlmProvider".into(),
         ))
     }
-
-    /// Non-LLM fallback: keyword-based summary compression.
-    fn fallback_summarize(&self, texts: &[String]) -> (String, String);
-
-    /// Non-LLM fallback: jieba-based habit extraction.
-    fn fallback_habits(&self, dialogues: &[String]) -> HabitAnalysis;
 }
 
 // ============================================================================

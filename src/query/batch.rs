@@ -18,11 +18,11 @@ use half::f16;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Batch store request containing multiple items to be stored
+/// Internal batch store request — converted from public `StoreBatch`
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoreBatch {
+pub(crate) struct InternalStoreBatch {
     /// List of items to store
-    pub items: Vec<StoreItem>,
+    pub items: Vec<InternalStoreItem>,
     /// Optional session ID for tracking
     pub session_id: Option<String>,
     /// Optional turn ID within the session
@@ -35,9 +35,9 @@ pub struct StoreBatch {
     pub source: crate::query::types::RequestSource,
 }
 
-/// Individual item in a batch store operation
+/// Internal store item — converted from public `StoreItem`
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StoreItem {
+pub(crate) struct InternalStoreItem {
     /// The text content to store
     pub text: String,
     /// Optional topic label for semantic organization
@@ -66,7 +66,7 @@ pub struct StoreItem {
 
 /// Encoded item ready for storage after encoding
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EncodedItem {
+pub(crate) struct EncodedItem {
     /// Original text content
     pub text: String,
     /// Dense vector embedding (f16 for memory efficiency)
@@ -90,9 +90,9 @@ pub struct EncodedItem {
     pub is_structural: bool,
 }
 
-/// Report generated after batch store operation
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BatchReport {
+/// Internal report generated after batch store operation
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub(crate) struct InternalBatchReport {
     /// Number of documents stored at L4 (archive layer)
     pub l4_docs: u32,
     /// Number of new L1 nodes created (episodic memories)
@@ -147,8 +147,8 @@ pub fn split_long_text(text: &str, max_len: usize) -> Vec<String> {
 
 /// Encode all items in batch using the encoder
 #[cfg(feature = "grpc-encoder")]
-pub fn encode_items(
-    items: &[StoreItem],
+pub(crate) fn encode_items(
+    items: &[InternalStoreItem],
     encoder: &dyn Encoder,
 ) -> Result<Vec<EncodedItem>, MemHopError> {
     let mut encoded = Vec::new();
@@ -156,20 +156,40 @@ pub fn encode_items(
     for item in items {
         let chunks = split_long_text(&item.text, 512);
 
-        for chunk in chunks {
-            let output = encoder.encode(&chunk)?;
-            encoded.push(EncodedItem {
-                text: chunk,
-                dense: output.dense,
-                sparse: output.sparse,
-                topic_label: item.topic_label.clone(),
-                domain_id: item.domain_id.clone(),
-                keywords: item.keywords.clone(),
-                importance: item.importance.unwrap_or(0.5),
-                valence: item.valence.unwrap_or(0.0),
-                arousal: item.arousal.unwrap_or(0.0),
-                is_structural: item.is_structural,
-            });
+        if let Some(ref kws) = item.keywords {
+            // Encode keywords once and reuse across chunks
+            let encode_text = kws.join(" ");
+            let output = encoder.encode(&encode_text)?;
+            for chunk in chunks {
+                encoded.push(EncodedItem {
+                    text: chunk,
+                    dense: output.dense.clone(),
+                    sparse: output.sparse.clone(),
+                    topic_label: item.topic_label.clone(),
+                    domain_id: item.domain_id.clone(),
+                    keywords: item.keywords.clone(),
+                    importance: item.importance.unwrap_or(0.5),
+                    valence: item.valence.unwrap_or(0.0),
+                    arousal: item.arousal.unwrap_or(0.0),
+                    is_structural: item.is_structural,
+                });
+            }
+        } else {
+            for chunk in chunks {
+                let output = encoder.encode(&chunk)?;
+                encoded.push(EncodedItem {
+                    text: chunk,
+                    dense: output.dense,
+                    sparse: output.sparse,
+                    topic_label: item.topic_label.clone(),
+                    domain_id: item.domain_id.clone(),
+                    keywords: item.keywords.clone(),
+                    importance: item.importance.unwrap_or(0.5),
+                    valence: item.valence.unwrap_or(0.0),
+                    arousal: item.arousal.unwrap_or(0.0),
+                    is_structural: item.is_structural,
+                });
+            }
         }
     }
 
@@ -177,10 +197,10 @@ pub fn encode_items(
 }
 
 /// Archive documents to L4 — write ArchiveSlots to engine
-pub fn archive_documents(
+pub(crate) fn archive_documents(
     engine: &mut StorageEngine,
     items: &[EncodedItem],
-    batch: &StoreBatch,
+    batch: &InternalStoreBatch,
 ) -> Result<Vec<u64>, MemHopError> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -264,7 +284,7 @@ fn check_duplicate(
 type L1WriteResult = Result<(Vec<u64>, u32, u32, u32), MemHopError>;
 
 #[allow(clippy::type_complexity)]
-pub fn dedup_and_write_l1(
+pub(crate) fn dedup_and_write_l1(
     engine: &mut StorageEngine,
     items: &[EncodedItem],
     sparse_index: &mut SparseIndex,
@@ -324,8 +344,13 @@ pub fn dedup_and_write_l1(
             bincode::serialize(&node).map_err(|e| MemHopError::Serialization(e.to_string()))?;
         engine.write_record(REC_L1_SCENE_NODE, id_hash, &node_data)?;
 
-        let terms = crate::index::sparse::tokenize(&item.text);
-        sparse_index.add_document(id_hash, terms, item.text.len() as u32);
+        let keywords_text = item
+            .keywords
+            .as_ref()
+            .map(|kws| kws.join(" "))
+            .unwrap_or_default();
+        let terms = crate::index::sparse::tokenize(&keywords_text);
+        sparse_index.add_document(id_hash, terms, keywords_text.len() as u32);
 
         created += 1;
         node_ids.push(id_hash);
@@ -340,13 +365,14 @@ pub fn dedup_and_write_l1(
 /// B-tree and sparse index, writes the page header, and finally backfills each
 /// associated L1 ContextNode with the L2 context_id.
 #[allow(clippy::too_many_arguments)]
-pub fn update_topics(
+pub(crate) fn update_topics(
     engine: &mut StorageEngine,
     items: &[EncodedItem],
     l1_node_ids: &[u64],
     archive_ids: &[u64],
     sparse_index: &mut SparseIndex,
     vector_dim: usize,
+    encoder: &dyn Encoder,
 ) -> Result<u32, MemHopError> {
     let mut topics_updated = 0u32;
 
@@ -368,7 +394,7 @@ pub fn update_topics(
         let node_ids: Vec<u64> = indices.iter().map(|&idx| l1_node_ids[idx]).collect();
 
         // Build summary text from all items in this topic group
-        let summary_text: String = {
+        let _summary_text: String = {
             let texts: Vec<&str> = indices
                 .iter()
                 .filter_map(|&idx| items.get(idx))
@@ -388,17 +414,6 @@ pub fn update_topics(
             .filter_map(|&idx| archive_ids.get(idx).copied())
             .collect();
 
-        let centroid_vector = calculate_centroid_from_nodes(engine, &node_ids, vector_dim)?;
-
-        let centroid_record_hash = if let Some(ref vec) = centroid_vector {
-            let vec_id_hash = hash_id(&format!("v:{}", context_id));
-            let vec_bytes: Vec<u8> = vec.iter().flat_map(|v| v.to_ne_bytes()).collect();
-            engine.write_record(0xF0, vec_id_hash, &vec_bytes)?;
-            vec_id_hash
-        } else {
-            0
-        };
-
         // Collect LLM-preprocessed keywords from items in this topic group.
         // Falls back to the topic label if no keywords are provided.
         let mut keyword_set: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -413,12 +428,38 @@ pub fn update_topics(
                 }
             }
         }
+        let has_real_keywords = !keyword_set.is_empty();
         let user_keywords: Vec<String> = if keyword_set.is_empty() {
             vec![label.clone()]
         } else {
             let mut kws: Vec<String> = keyword_set.into_iter().collect();
             kws.truncate(10);
             kws
+        };
+
+        // Use keyword-based centroid encoding when keywords are available
+        // (preserves vector space symmetry with the search pipeline).
+        // Falls back to L1 node vector averaging when no keywords are provided.
+        let centroid_record_hash = if has_real_keywords {
+            let encode_text = user_keywords.join(" ");
+            match encoder.encode(&encode_text) {
+                Ok(output) if !output.dense.is_empty() => {
+                    let vec_id_hash = hash_id(&format!("v:{}", context_id));
+                    let vec_bytes: Vec<u8> =
+                        output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
+                    engine.write_record(0xF0, vec_id_hash, &vec_bytes)?;
+                    vec_id_hash
+                }
+                _ => 0,
+            }
+        } else if let Some(ref vec) = calculate_centroid_from_nodes(engine, &node_ids, vector_dim)?
+        {
+            let vec_id_hash = hash_id(&format!("v:{}", context_id));
+            let vec_bytes: Vec<u8> = vec.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            engine.write_record(0xF0, vec_id_hash, &vec_bytes)?;
+            vec_id_hash
+        } else {
+            0
         };
 
         let context = ContextSlot {
@@ -436,7 +477,7 @@ pub fn update_topics(
             agent_l4_refs: vec![],
             agent_l3_refs: vec![],
             fused_keywords: vec![],
-            fused_summary: Some(summary_text.clone()),
+            fused_summary: None,
             centroid_page_ref: centroid_record_hash,
             created_at: now,
             updated_at: now,
@@ -446,8 +487,8 @@ pub fn update_topics(
         // Write context to engine
         write_slot(engine, REC_L2_TOPIC, context_id, &context)?;
 
-        let mut context_terms = sparse::tokenize(&label);
-        context_terms.extend(sparse::tokenize(&summary_text));
+        let keywords_text = context.user_keywords.join(" ");
+        let context_terms = sparse::tokenize(&keywords_text);
         let context_doc_len = context_terms.len() as u32;
         sparse_index.add_document(context_id, context_terms, context_doc_len);
 
@@ -575,14 +616,14 @@ pub fn create_batch_hyperedges(
 /// Main batch store function - five-phase pipeline
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "grpc-encoder")]
-pub fn batch_store(
+pub(crate) fn batch_store(
     engine: &mut StorageEngine,
-    batch: StoreBatch,
+    batch: InternalStoreBatch,
     sparse_index: &mut SparseIndex,
     vector_dim: usize,
     encoder: &dyn Encoder,
-) -> Result<BatchReport, MemHopError> {
-    let mut report = BatchReport {
+) -> Result<InternalBatchReport, MemHopError> {
+    let mut report = InternalBatchReport {
         l4_docs: 0,
         l1_nodes_created: 0,
         l1_nodes_updated: 0,
@@ -614,6 +655,7 @@ pub fn batch_store(
         &doc_ids,
         sparse_index,
         vector_dim,
+        encoder,
     )?;
     report.l2_topics_updated = topics_updated;
 

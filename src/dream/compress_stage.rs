@@ -26,7 +26,7 @@ pub fn apply_precomputed_groups(
     engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     l2_meta: &mut L2MetaIndex,
-    encoder: Option<&(dyn Encoder + Send + Sync)>,
+    encoder: &(dyn Encoder + Send + Sync),
 ) -> Result<(u32, u32, u32, u32, u32), MemHopError> {
     let mut groups_detected = 0u32;
     let mut nodes_merged = 0u32;
@@ -47,20 +47,15 @@ pub fn apply_precomputed_groups(
             crate::util::hash_id(&format!("merged_parent_{}_{}", scene_id, now_ms));
 
         // Centroid vector encoding (v2: centroid_page_ref is not used, set to 0)
-        let _centroid_bytes: Option<Vec<u8>> = if let Some(enc) = encoder {
-            match enc.encode(&group.merged_summary) {
-                Ok(output) => {
-                    let v_bytes: Vec<u8> =
-                        output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
-                    Some(v_bytes)
-                }
-                Err(e) => {
-                    tracing::warn!("Centroid encode failed: {}", e);
-                    None
-                }
+        let _centroid_bytes = match encoder.encode(&group.merged_summary) {
+            Ok(output) => {
+                let v_bytes: Vec<u8> = output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
+                Some(v_bytes)
             }
-        } else {
-            None
+            Err(e) => {
+                tracing::warn!("Centroid encode failed: {}", e);
+                None
+            }
         };
 
         let parent_node = TopicSlot {

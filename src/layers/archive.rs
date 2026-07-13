@@ -61,6 +61,7 @@ pub struct ArchiveSlot {
 }
 
 impl ArchiveSlot {
+    #[allow(dead_code)]
     pub fn request_source(&self) -> crate::query::types::RequestSource {
         self.metadata
             .as_deref()

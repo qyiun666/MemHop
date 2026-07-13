@@ -58,16 +58,6 @@ pub fn add_node_with_engine(
     Ok(format_hash(node.id_hash))
 }
 
-/// Add a HypergraphNode using the old v1 mmap API (kept for backward compat during migration).
-pub fn add_node(
-    engine: &mut StorageEngine,
-    node: HypergraphNode,
-    tracker: Option<&mut crate::l3::DegreeTracker>,
-    index_map: Option<&mut HashMap<u64, crate::l3::L3Index>>,
-) -> Result<String, MemHopError> {
-    add_node_with_engine(engine, node, tracker, index_map)
-}
-
 /// Delete a HypergraphNode and cascade-delete all edges that reference it.
 pub fn delete_node_with_engine(
     engine: &mut StorageEngine,
@@ -119,16 +109,6 @@ pub fn delete_node_with_engine(
     Ok(())
 }
 
-/// Delete a HypergraphNode using engine API (migration compat alias).
-pub fn delete_node(
-    engine: &mut StorageEngine,
-    node_id: &str,
-    tracker: Option<&mut crate::l3::DegreeTracker>,
-    index_map: Option<&mut HashMap<u64, crate::l3::L3Index>>,
-) -> Result<(), MemHopError> {
-    delete_node_with_engine(engine, node_id, tracker, index_map)
-}
-
 // ============================================================================
 // Edge CRUD
 // ============================================================================
@@ -146,15 +126,6 @@ pub fn add_edge_with_engine(
     }
 
     Ok(format_hash(edge.id_hash))
-}
-
-/// Add a HypergraphEdge using engine API (migration compat alias).
-pub fn add_edge(
-    engine: &mut StorageEngine,
-    edge: HypergraphEdge,
-    tracker: Option<&mut crate::l3::DegreeTracker>,
-) -> Result<String, MemHopError> {
-    add_edge_with_engine(engine, edge, tracker)
 }
 
 // ============================================================================

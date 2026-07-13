@@ -8,13 +8,12 @@
 //!   2. Bench: measure search, update, query, session, and layer CRUD
 
 use criterion::{black_box, criterion_group, Criterion};
-use memhop::query::types::{
-    ArchiveQuery, CrystalListQuery, KnowledgeNodeQuery,
-};
+use memhop::query::types::{ArchiveQuery, CrystalListQuery, KnowledgeNodeQuery};
 use memhop::{
-    ImportData, ImportMode, ImportRequest, KnowledgeImportItem, MemHop, MemHopConfig,
-    RequestSource, SearchQuery, TargetLayer, TopicListQuery, UpdateRequest,
+    ImportData, ImportMode, ImportRequest, KnowledgeImportItem, MemHop, MemHopConfig, SearchQuery,
+    TargetLayer, TopicListQuery, UpdateRequest,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use tempfile::TempDir;
@@ -35,21 +34,26 @@ fn db() -> &'static Mutex<MemHop> {
     DB.get_or_init(|| {
         let _ = std::fs::remove_file(DB_PATH);
         let mut config = MemHopConfig::new(PathBuf::from(DB_PATH), 768);
-        config.encoder_grpc_addr = Some(ENCODER_ADDR.to_string());
+        config.encoder_grpc_addr = ENCODER_ADDR.to_string();
         config.auto_dream_archive_threshold = 20;
         config.auto_dream_summary_bytes = 2048;
         let mut db = MemHop::open(config).expect("MemHop::open failed");
 
         // Pre-populate: create 10 topics
         for i in 0..10 {
-            let _ = db.search_context(SearchQuery {
-                dialogue: format!(
+            let _ = db.search(SearchQuery {
+                query: format!(
                     "Topic {} about machine learning neural networks deep learning",
                     i
                 ),
-                l2_id: None,
-                l3_id: None,
-                auto_create: true,
+                layers: vec![2],
+                max_results: 20,
+                min_score: 0.0,
+                include_profile: false,
+                filters: None,
+                directed_l2_id: None,
+                directed_l3_id: None,
+                auto_create: Some(1),
             });
         }
 
@@ -84,11 +88,16 @@ fn bench_search_recall(c: &mut Criterion) {
         b.iter(|| {
             let mut db = db().lock().unwrap();
             let res = db
-                .search_context(SearchQuery {
-                    dialogue: "neural network deep learning architecture".to_string(),
-                    l2_id: None,
-                    l3_id: None,
-                    auto_create: false,
+                .search(SearchQuery {
+                    query: "neural network deep learning architecture".to_string(),
+                    layers: vec![2],
+                    max_results: 20,
+                    min_score: 0.0,
+                    include_profile: false,
+                    filters: None,
+                    directed_l2_id: None,
+                    directed_l3_id: None,
+                    auto_create: None,
                 })
                 .expect("search failed");
             black_box(res.contexts.len())
@@ -109,17 +118,22 @@ fn bench_update_memory(c: &mut Criterion) {
                 let dir = TempDir::new().expect("TempDir");
                 let path = dir.path().join("update.meh");
                 let mut config = MemHopConfig::new(path, 768);
-                config.encoder_grpc_addr = Some(ENCODER_ADDR.to_string());
+                config.encoder_grpc_addr = ENCODER_ADDR.to_string();
                 config.auto_dream_archive_threshold = 20;
                 config.auto_dream_summary_bytes = 2048;
                 let mut db = MemHop::open(config).expect("open");
 
                 let res = db
-                    .search_context(SearchQuery {
-                        dialogue: "Rust ownership borrowing lifetime".to_string(),
-                        l2_id: None,
-                        l3_id: None,
-                        auto_create: true,
+                    .search(SearchQuery {
+                        query: "Rust ownership borrowing lifetime".to_string(),
+                        layers: vec![2],
+                        max_results: 20,
+                        min_score: 0.0,
+                        include_profile: false,
+                        filters: None,
+                        directed_l2_id: None,
+                        directed_l3_id: None,
+                        auto_create: Some(1),
                     })
                     .expect("search");
                 let topic_id = res.contexts[0].id.clone();
@@ -127,16 +141,15 @@ fn bench_update_memory(c: &mut Criterion) {
             },
             |(mut db, topic_id, _dir)| {
                 let res = db.update_memory(UpdateRequest {
-                    topic_id,
-                    dialogue_text: "User: How does Rust work?\nAssistant: Ownership and borrowing"
-                        .to_string(),
-                    summary: None,
-                    action_chain: Some(vec![]),
-                    instant_distill: false,
-                    scene_id: None,
-                    source: RequestSource::default(),
-                    user_keywords: None,
-                    agent_keywords: None,
+                    id: topic_id,
+                    layer: 2,
+                    fields: HashMap::from([(
+                        "dialogue_text".to_string(),
+                        serde_json::Value::String(
+                            "User: How does Rust work?\nAssistant: Ownership and borrowing"
+                                .to_string(),
+                        ),
+                    )]),
                 });
                 black_box(res.is_ok());
             },
@@ -340,7 +353,7 @@ fn bench_l5_crystal_get(c: &mut Criterion) {
             let dir = TempDir::new().expect("TempDir");
             let path = dir.path().join("l5.meh");
             let mut config = MemHopConfig::new(path, 768);
-            config.encoder_grpc_addr = None;
+            config.encoder_grpc_addr = "http://127.0.0.1:27110".to_string();
             let db = MemHop::open(config).expect("open");
             let res = db.get_l5("0000000000000060").expect("get_l5 failed");
             black_box(res.is_none());

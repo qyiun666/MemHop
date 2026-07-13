@@ -6,62 +6,34 @@ use serde::{Deserialize, Serialize};
 
 /// Report of dream operation
 ///
-/// Captures all changes made during the dream pipeline:
-/// - L2 depth demotion (主→次, 次→次次, 次次→移除)
-/// - L1 rebuild based on updated L2
-/// - L0 profile update based on L1
-/// - L3 knowledge distillation from active L2 contexts
-/// - L5 crystallization from all ActionChainSlots
+/// Simplified public report for agent consumption.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DreamReport {
-    /// Contexts demoted from depth 1 → depth 2 (with compressed summary)
-    pub demoted_to_secondary: Vec<DemotionResult>,
-    /// Contexts demoted from depth 2 → depth 3
-    pub demoted_to_tertiary: Vec<String>,
-    /// Contexts removed (depth 3 → gone)
-    pub removed_contexts: Vec<String>,
-    /// New compressed contexts created from demoted depth-1 nodes
-    pub new_compressed: Vec<CompressResult>,
-    /// Number of same-topic groups detected during L2 merge-compress
-    pub groups_detected: u32,
-    /// Total depth-1 nodes consumed by merging
-    pub nodes_merged: u32,
-    /// New parent nodes created during merge-compress
-    pub parent_nodes_created: u32,
-    /// Number of descendant nodes whose depth was sunk by 1
-    pub nodes_sunk: u32,
-    /// Number of nodes (depth>=4) removed during subtree sinking
-    pub nodes_removed: u32,
-    /// L1 nodes updated based on L2 changes
-    pub l1_updated: Vec<String>,
-    /// Number of L1 nodes whose importance was decayed/updated
-    pub l1_decayed_nodes: usize,
-    /// Number of edge pointers pruned from ContextNodes
-    pub l1_pruned_edges: usize,
-    /// Number of L1 ContextNodes removed due to low importance
-    pub l1_removed_nodes: usize,
-    /// Number of HyperedgeSlots removed due to low weight or underpopulation
-    pub l1_removed_edges: usize,
-    /// L0 profile updated: (profile_id, updated_fields)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub l0_updated: Option<(String, Vec<String>)>,
-    /// User language habits updated from dialogue analysis
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub habits_updated: Option<crate::dream::habit_distill_stage::HabitUpdate>,
-    /// New L3 nodes created via LLM-based knowledge distillation
-    pub new_l3_nodes: Vec<String>,
-    /// New crystals created from L5 crystallization
-    pub new_crystals: Vec<String>,
-    /// Low-quality crystals pruned
-    pub pruned_crystals: Vec<String>,
+    /// Total number of memory items consolidated
+    pub consolidated_count: u32,
+    /// IDs of any new skills/crystals created
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_skills: Option<Vec<String>>,
+    /// Which layers were compressed (e.g., [2, 3, 5])
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compressed_layers: Option<Vec<u8>>,
+    /// Number of new L3 knowledge nodes created
+    pub new_l3_nodes: u32,
+    /// Number of new L5 crystals created
+    pub new_crystals: u32,
+    /// Number of L5 crystals pruned
+    pub pruned_crystals: u32,
+    /// L1 nodes whose importance was decayed/updated
+    pub l1_decayed_nodes: u32,
+    /// Edge pointers pruned from ContextNodes
+    pub l1_pruned_edges: u32,
+    /// L1 ContextNodes removed due to low importance
+    pub l1_removed_nodes: u32,
+    /// HyperedgeSlots removed due to low weight or underpopulation
+    pub l1_removed_edges: u32,
     /// Per-stage execution reports
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub stages: Vec<StageReport>,
-    /// Total execution time in milliseconds
-    pub duration_ms: u64,
-    /// True if a fatal stage failed and the in-memory indices were rolled back
-    #[serde(default)]
-    pub rollback_incomplete: bool,
 }
 
 /// Result of demoting a depth-1 context to depth-2
@@ -95,43 +67,21 @@ mod tests {
     #[test]
     fn test_dream_report_structure() {
         let report = DreamReport {
-            demoted_to_secondary: vec![DemotionResult {
-                context_id: "ctx-1".to_string(),
-                original_title: "Rust dev".to_string(),
-                compressed_summary: "Rust development summary".to_string(),
-                new_depth: 2,
-            }],
-            demoted_to_tertiary: vec!["ctx-2".to_string()],
-            removed_contexts: vec!["ctx-3".to_string()],
-            new_compressed: vec![CompressResult {
-                new_context_id: "ctx-new-1".to_string(),
-                source_context_id: "ctx-1".to_string(),
-                new_summary: "compressed".to_string(),
-            }],
-            groups_detected: 0,
-            nodes_merged: 0,
-            parent_nodes_created: 0,
-            nodes_sunk: 0,
-            nodes_removed: 0,
-            l1_updated: vec!["node-1".to_string()],
-            l1_decayed_nodes: 0,
-            l1_pruned_edges: 0,
-            l1_removed_nodes: 0,
-            l1_removed_edges: 0,
-            l0_updated: Some(("profile-1".to_string(), vec!["personality".to_string()])),
-            habits_updated: None,
-            new_l3_nodes: vec!["l3-node-1".to_string()],
-            new_crystals: vec!["crystal-1".to_string()],
-            pruned_crystals: vec!["crystal-old".to_string()],
+            consolidated_count: 10,
+            new_skills: None,
+            compressed_layers: Some(vec![2, 3, 5]),
+            new_l3_nodes: 1,
+            new_crystals: 1,
+            pruned_crystals: 1,
+            l1_decayed_nodes: 5,
+            l1_pruned_edges: 3,
+            l1_removed_nodes: 2,
+            l1_removed_edges: 1,
             stages: vec![],
-            duration_ms: 500,
-            rollback_incomplete: false,
         };
 
-        assert_eq!(report.demoted_to_secondary.len(), 1);
-        assert_eq!(report.removed_contexts.len(), 1);
-        assert_eq!(report.new_crystals.len(), 1);
-        assert_eq!(report.duration_ms, 500);
-        assert!(!report.rollback_incomplete);
+        assert_eq!(report.consolidated_count, 10);
+        assert_eq!(report.pruned_crystals, 1);
+        assert!(report.stages.is_empty());
     }
 }

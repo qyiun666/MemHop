@@ -37,14 +37,14 @@ pub(crate) fn to_topic_detail(ctx: &ContextSlot) -> TopicDetail {
         id: format_hash(ctx.id),
         parent_id: ctx.parent_id.map(format_hash),
         depth: ctx.depth,
-        scene_id: ctx.scene_id,
+        scene_id: format_hash(ctx.scene_id),
         user_keywords: ctx.user_keywords.clone(),
         user_timestamp: ctx.user_timestamp,
         agent_keywords: ctx.agent_keywords.clone(),
         agent_timestamp: ctx.agent_timestamp,
         fused_keywords: ctx.fused_keywords.clone(),
         fused_summary: ctx.fused_summary.clone(),
-        children_ids: ctx.children_ids.clone(),
+        children_ids: ctx.children_ids.iter().map(|h| format_hash(*h)).collect(),
         user_l4_refs: ctx.user_l4_refs.iter().map(|h| format_hash(*h)).collect(),
         user_l3_refs: ctx.user_l3_refs.iter().map(|h| format_hash(*h)).collect(),
         agent_l4_refs: ctx.agent_l4_refs.iter().map(|h| format_hash(*h)).collect(),
@@ -55,14 +55,19 @@ pub(crate) fn to_topic_detail(ctx: &ContextSlot) -> TopicDetail {
 }
 
 fn to_topic_summary(ctx: &ContextSlot) -> TopicSummary {
+    let turn_count = ctx.user_l4_refs.len() + ctx.agent_l4_refs.len();
     TopicSummary {
         id: format_hash(ctx.id),
         depth: ctx.depth,
-        scene_id: ctx.scene_id,
+        scene_id: format_hash(ctx.scene_id),
         user_keywords: ctx.user_keywords.clone(),
         agent_keywords: ctx.agent_keywords.clone(),
         fused_keywords: ctx.fused_keywords.clone(),
-        l4_count: ctx.user_l4_refs.len() + ctx.agent_l4_refs.len(),
+        fused_summary: ctx.fused_summary.clone(),
+        turn_count,
+        is_active: false,
+        created_at: ctx.created_at,
+        l4_count: turn_count,
         l3_count: ctx.user_l3_refs.len() + ctx.agent_l3_refs.len(),
         updated_at: ctx.updated_at,
     }
@@ -361,9 +366,12 @@ pub fn merge_l2(
     let (terms, doc_len) = crate::shared::common::build_l2_sparse_terms(&kw_text, &summary);
     sparse_index.add_document(primary_hash, terms, doc_len);
 
+    let turn_count = (primary_ctx.user_l4_refs.len() + primary_ctx.agent_l4_refs.len()) as u32;
     Ok(MergeResult {
-        primary: to_topic_detail(&primary_ctx),
-        merged_ids: merge_ids,
+        primary_id: format_hash(primary_hash),
+        merged_count: merge_hashes.len() as u32,
+        new_turn_count: turn_count,
+        absorbed_topic_ids: merge_ids,
     })
 }
 
@@ -588,8 +596,9 @@ mod tests {
             vec!["00000000000007d2".into()],
         )
         .unwrap();
-        assert_eq!(merged.primary.user_l3_refs.len(), 1);
-        assert!(merged.primary.fused_summary.is_some());
+        assert_eq!(merged.primary_id, "00000000000007d1");
+        assert_eq!(merged.merged_count, 1);
+        assert_eq!(merged.absorbed_topic_ids, vec!["00000000000007d2"]);
         assert!(get_l2(&engine, "00000000000007d2").unwrap().is_none());
     }
 }

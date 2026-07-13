@@ -257,8 +257,6 @@ mod tests {
             node_prune_edges_threshold: 0.15,
             edge_remove_threshold: 0.05,
             min_edge_nodes: 2,
-            lambda_pathway: 0.01,
-            pathway_remove_threshold: 0.05,
         }
     }
 

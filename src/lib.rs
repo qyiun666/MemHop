@@ -41,17 +41,69 @@ pub use dream::llm_preprocess;
 pub use dream::openai_compatible::OpenAICompatibleLlmProvider;
 pub use dream::prune::DreamReport;
 pub use organize::extract_keywords;
-pub use query::batch::{BatchReport, EncodedItem, StoreBatch, StoreItem};
 
 pub use query::types::{
     ActionItem, ActionType, Archive, ArchiveListResult, ArchivePageQuery, ArchiveQuery, ArchiveRef,
-    ContextResult, CrystalListQuery, CrystalListResult, CrystalSummary, GraphEdge, GraphEdgeKind,
-    GraphNode, GraphSlot, HealthStatus, ImportData, ImportError, ImportMode, ImportRequest,
-    ImportResult, ImportStatus, KnowledgeDetail, KnowledgeImportItem, KnowledgeListQuery,
-    KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodeQuery, KnowledgeNodesResult,
-    KnowledgeSummary, L1Edge, L1Graph, L1Node, L3Detail, L3EntityHint, L3Preview,
-    MergeResult, ProfileResult, RequestSource, SceneTreeResult, SearchQuery, SearchResult,
-    SessionStatus, Subgraph, TargetLayer, TopicDetail, TopicImportItem, TopicListQuery,
-    TopicListResult, TopicSummary, TraversalHop, UpdateL2Fields, UpdateL3Fields, UpdateL5Fields,
-    UpdateRequest, UpdateResult, UpdateStatus,
+    ContextResult, CrystalListQuery, CrystalListResult, CrystalSummary, DreamStage, EdgeKind,
+    GraphEdge, GraphEdgeKind, GraphNode, GraphSlot, HealthStatus, ImportData, ImportError,
+    ImportMode, ImportRequest, ImportResult, ImportStatus, KnowledgeDetail, KnowledgeImportItem,
+    KnowledgeListQuery, KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodeQuery,
+    KnowledgeNodesResult, KnowledgeSummary, L1Edge, L1Graph, L1Node, L3Detail, L3EntityHint,
+    L3Preview, MergeResult, ProfileDelta, ProfileResult, RequestSource, SceneTreeResult,
+    SearchFilters, SearchQuery, SearchResult, SessionStatus, StoreBatch, StoreItem, StoreResult,
+    Subgraph, SubgraphEdge, SubgraphNode, TargetLayer, TopicDetail, TopicImportItem,
+    TopicListQuery, TopicListResult, TopicSummary, TraversalHop, UpdateL2Fields, UpdateL3Fields,
+    UpdateL5Fields, UpdateRequest, UpdateResult, UpdateStatus,
 };
+
+// ---------------------------------------------------------------------------
+// Modular re-exports for meowAgent SDK integration
+// ---------------------------------------------------------------------------
+
+pub mod search {
+    pub use crate::query::types::{ContextResult, SearchFilters, SearchQuery, SearchResult};
+}
+pub mod profile {
+    pub use crate::query::types::ProfileResult;
+}
+pub mod update {
+    pub use crate::query::types::{UpdateRequest, UpdateResult, UpdateStatus};
+}
+pub mod store_mod {
+    pub use crate::query::types::{StoreBatch, StoreItem, StoreResult};
+}
+pub mod l2 {
+    pub use crate::query::types::{
+        MergeResult, SceneTreeResult, TopicDetail, TopicListQuery, TopicListResult, TopicSummary,
+        UpdateL2Fields,
+    };
+}
+pub mod l4 {
+    pub use crate::query::types::{Archive, ArchiveListResult, ArchivePageQuery, ArchiveQuery};
+}
+pub mod l5 {
+    pub use crate::query::types::{
+        CrystalListQuery, CrystalListResult, CrystalSummary, UpdateL5Fields,
+    };
+}
+pub mod l1 {
+    pub use crate::query::types::{L1Edge, L1Graph, L1Node};
+}
+pub mod diagnostics {
+    pub use crate::query::types::HealthStatus;
+}
+pub mod session_mod {
+    pub use crate::query::types::SessionStatus;
+}
+pub mod import {
+    pub use crate::query::types::{
+        ImportData, ImportMode, ImportRequest, ImportResult, KnowledgeImportItem, TargetLayer,
+        TopicImportItem,
+    };
+}
+pub mod l3_types {
+    pub use crate::query::types::{
+        EdgeKind, GraphEdge, GraphEdgeKind, GraphNode, GraphSlot, L3Detail, L3Preview, Subgraph,
+        SubgraphEdge, SubgraphNode, TraversalHop, UpdateL3Fields,
+    };
+}

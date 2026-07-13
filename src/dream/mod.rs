@@ -17,8 +17,8 @@ pub mod prune;
 
 use crate::config::DecayConfig;
 use crate::dream::llm::{
-    ConsolidationInput, ConsolidationOutput, DreamSection, HabitAnalysis, L2Group, L2NodeData,
-    L3Extraction, LlmProvider, SceneData, Section,
+    ConsolidationInput, ConsolidationOutput, HabitAnalysis, L2Group, L2NodeData, L3Extraction,
+    LlmProvider, SceneData, Section,
 };
 use crate::dream::prune::DreamReport;
 use crate::encoder::Encoder;
@@ -33,59 +33,6 @@ use crate::MemHopError;
 use std::collections::HashSet;
 
 const MAX_RECENT_DIALOGUES: usize = 30;
-
-/// Run a single dream stage, recording its result and rolling back on fatal errors.
-#[allow(clippy::too_many_arguments)]
-fn run_stage<F, R>(
-    name: &str,
-    failure_description: &str,
-    f: F,
-    report: &mut DreamReport,
-    sparse_index: &mut SparseIndex,
-    stages: &mut Vec<StageReport>,
-    fatal: bool,
-    rollback: R,
-    start_time: std::time::Instant,
-) -> Result<(), MemHopError>
-where
-    F: FnOnce(&mut DreamReport, &mut SparseIndex) -> Result<(String, usize), MemHopError>,
-    R: FnOnce(&mut DreamReport, &mut SparseIndex),
-{
-    let stage_start = std::time::Instant::now();
-    match f(report, sparse_index) {
-        Ok((description, processed_count)) => {
-            stages.push(StageReport {
-                name: name.to_string(),
-                status: StageStatus::Success,
-                description,
-                processed_count,
-                duration_ms: stage_start.elapsed().as_millis() as u64,
-                error: None,
-            });
-            Ok(())
-        }
-        Err(e) => {
-            stages.push(StageReport {
-                name: name.to_string(),
-                status: StageStatus::Failed,
-                description: failure_description.to_string(),
-                processed_count: 0,
-                duration_ms: stage_start.elapsed().as_millis() as u64,
-                error: Some(e.to_string()),
-            });
-            if fatal {
-                rollback(report, sparse_index);
-                report.stages = std::mem::take(stages);
-                report.duration_ms = start_time.elapsed().as_millis() as u64;
-                if report.rollback_incomplete {
-                    tracing::error!("Dream rollback incomplete");
-                }
-                return Err(e);
-            }
-            Ok(())
-        }
-    }
-}
 
 // ============================================================================
 // Data collection — gather all info needed for the consolidated LLM call
@@ -159,7 +106,7 @@ fn apply_l2_groups(
     engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     l2_meta: &mut L2MetaIndex,
-    encoder: Option<&(dyn Encoder + Send + Sync)>,
+    encoder: &(dyn Encoder + Send + Sync),
 ) -> Result<(u32, u32, u32, u32, u32), MemHopError> {
     compress_stage::apply_precomputed_groups(groups, engine, sparse_index, l2_meta, encoder)
 }
@@ -190,136 +137,36 @@ fn apply_crystals(
 // Core function — two-phase consolidated dream
 // ============================================================================
 
-/// Run the LLM consolidation in two phases (Dream-A then Dream-B), collect
-/// failed sections, retry each group independently.
+/// Run the LLM consolidation. Returns error on any LLM failure or parse failure.
 fn run_consolidation(
     llm: &dyn LlmProvider,
     input: &ConsolidationInput,
-) -> (ConsolidationOutput, Vec<DreamSection>) {
-    let mut failed = Vec::new();
+) -> Result<ConsolidationOutput, MemHopError> {
+    let output = llm.consolidate(input)?;
 
-    let mut output = ConsolidationOutput {
-        l2_groups: Section::Empty,
-        l3_extractions: Section::Empty,
-        habits: Section::Empty,
-        crystals: Section::Empty,
-    };
-
-    // ========================================================================
-    // Phase A: L2 grouping + L3 distillation
-    // ========================================================================
-    let mut output_a = match llm.consolidate(input) {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::error!("consolidate LLM call failed: {}", e);
-            let err_msg = format!("consolidate: {}", e);
-            output.l2_groups = Section::ParseFailed(err_msg.clone());
-            output.l3_extractions = Section::ParseFailed(err_msg);
-            failed.extend_from_slice(&[DreamSection::L2Groups, DreamSection::L3Distill]);
-            // Continue to Phase B — A and B are independent
-            ConsolidationOutput {
-                l2_groups: Section::Empty,
-                l3_extractions: Section::Empty,
-                habits: Section::Empty,
-                crystals: Section::Empty,
-            }
-        }
-    };
-
-    // Retry failed A sections
-    {
-        let mut retry_a = Vec::new();
-        if output_a.l2_groups.needs_retry() {
-            retry_a.push(DreamSection::L2Groups);
-        }
-        if output_a.l3_extractions.needs_retry() {
-            retry_a.push(DreamSection::L3Distill);
-        }
-
-        if !retry_a.is_empty() {
-            tracing::info!("consolidate_a: phase 2 retry for {:?}", retry_a);
-            match llm.retry_sections(input, &retry_a) {
-                Ok(retry) => {
-                    if let Section::Valid(g) = retry.l2_groups {
-                        output_a.l2_groups = Section::Valid(g);
-                    }
-                    if let Section::Valid(e) = retry.l3_extractions {
-                        output_a.l3_extractions = Section::Valid(e);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("consolidate_a retry failed: {}", e);
-                }
-            }
-        }
+    // Any section that failed to parse is treated as an error
+    if output.l2_groups.needs_retry() {
+        return Err(MemHopError::LlmError(
+            "L2 groups section failed to parse from LLM response".into(),
+        ));
+    }
+    if output.l3_extractions.needs_retry() {
+        return Err(MemHopError::LlmError(
+            "L3 extractions section failed to parse from LLM response".into(),
+        ));
+    }
+    if output.habits.needs_retry() {
+        return Err(MemHopError::LlmError(
+            "Habits section failed to parse from LLM response".into(),
+        ));
+    }
+    if output.crystals.needs_retry() {
+        return Err(MemHopError::LlmError(
+            "Crystals section failed to parse from LLM response".into(),
+        ));
     }
 
-    // Collect A failures that remain
-    if output_a.l2_groups.needs_retry() {
-        failed.push(DreamSection::L2Groups);
-    }
-    if output_a.l3_extractions.needs_retry() {
-        failed.push(DreamSection::L3Distill);
-    }
-
-    output.l2_groups = output_a.l2_groups;
-    output.l3_extractions = output_a.l3_extractions;
-
-    // ========================================================================
-    // Phase B: habit analysis + crystal generation
-    // ========================================================================
-    let mut output_b = match llm.consolidate(input) {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::error!("consolidate LLM call failed: {}", e);
-            let err_msg = format!("consolidate: {}", e);
-            output.habits = Section::ParseFailed(err_msg.clone());
-            output.crystals = Section::ParseFailed(err_msg);
-            failed.extend_from_slice(&[DreamSection::Habits, DreamSection::Crystals]);
-            return (output, failed);
-        }
-    };
-
-    // Retry failed B sections
-    {
-        let mut retry_b = Vec::new();
-        if output_b.habits.needs_retry() {
-            retry_b.push(DreamSection::Habits);
-        }
-        if output_b.crystals.needs_retry() {
-            retry_b.push(DreamSection::Crystals);
-        }
-
-        if !retry_b.is_empty() {
-            tracing::info!("consolidate_b: phase 2 retry for {:?}", retry_b);
-            match llm.retry_sections(input, &retry_b) {
-                Ok(retry) => {
-                    if let Section::Valid(h) = retry.habits {
-                        output_b.habits = Section::Valid(h);
-                    }
-                    if let Section::Valid(c) = retry.crystals {
-                        output_b.crystals = Section::Valid(c);
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("consolidate_b retry failed: {}", e);
-                }
-            }
-        }
-    }
-
-    // Collect B failures that remain
-    if output_b.habits.needs_retry() {
-        failed.push(DreamSection::Habits);
-    }
-    if output_b.crystals.needs_retry() {
-        failed.push(DreamSection::Crystals);
-    }
-
-    output.habits = output_b.habits;
-    output.crystals = output_b.crystals;
-
-    (output, failed)
+    Ok(output)
 }
 
 // ============================================================================
@@ -334,124 +181,79 @@ pub fn dream_pipeline(
     l2_ids: Option<Vec<u64>>,
     decay_config: &DecayConfig,
     l2_meta: &mut L2MetaIndex,
-    encoder: Option<&(dyn Encoder + Send + Sync)>,
+    encoder: &(dyn Encoder + Send + Sync),
 ) -> Result<DreamReport, MemHopError> {
     let start_time = std::time::Instant::now();
-
-    let mut report = DreamReport {
-        demoted_to_secondary: Vec::new(),
-        demoted_to_tertiary: Vec::new(),
-        removed_contexts: Vec::new(),
-        new_compressed: Vec::new(),
-        groups_detected: 0,
-        nodes_merged: 0,
-        parent_nodes_created: 0,
-        nodes_sunk: 0,
-        nodes_removed: 0,
-        l1_updated: Vec::new(),
-        l1_decayed_nodes: 0,
-        l1_pruned_edges: 0,
-        l1_removed_nodes: 0,
-        l1_removed_edges: 0,
-        l0_updated: None,
-        habits_updated: None,
-        new_l3_nodes: Vec::new(),
-        new_crystals: Vec::new(),
-        pruned_crystals: Vec::new(),
-        stages: Vec::new(),
-        duration_ms: 0,
-        rollback_incomplete: false,
-    };
+    let _stages: Vec<StageReport> = Vec::new();
 
     let target_l2_ids = match l2_ids {
         Some(ids) if !ids.is_empty() => ids.into_iter().collect::<HashSet<u64>>(),
         _ => collect_all_l2_ids(engine),
     };
 
-    let sparse_snapshot = sparse_index.clone();
     let mut stages = Vec::new();
+
+    // Track L1 metrics for the new DreamReport
+    let mut l1_decayed: u32 = 0;
+    let mut l1_pruned_edges: u32 = 0;
+    let mut l1_removed_nodes: u32 = 0;
+    let mut l1_removed_edges: u32 = 0;
+    let mut l1_updated_nodes: Vec<String> = Vec::new();
+    let mut l2_total_affected: u32 = 0;
 
     // ========================================================================
     // Phase 1: collect data + one LLM call
     // ========================================================================
     let input = build_consolidation_input(engine, l2_meta, &target_l2_ids)?;
-    let (llm_output, failed_after_retry) = run_consolidation(llm, &input);
+    let llm_output = run_consolidation(llm, &input)?;
 
     // ========================================================================
     // Apply L2 groups
     // ========================================================================
-    match llm_output.l2_groups {
-        Section::Valid(ref groups) => {
-            match apply_l2_groups(groups, engine, sparse_index, l2_meta, encoder) {
-                Ok((groups_detected, nodes_merged, parents, sunk, removed)) => {
-                    report.groups_detected = groups_detected;
-                    report.nodes_merged = nodes_merged;
-                    report.parent_nodes_created = parents;
-                    report.nodes_sunk = sunk;
-                    report.nodes_removed = removed;
-                    stages.push(StageReport {
-                        name: "l2_compress".into(),
-                        status: StageStatus::Success,
-                        description: format!(
-                            "{} groups, {} merged, {} parents, {} sunk, {} removed",
-                            groups_detected, nodes_merged, parents, sunk, removed
-                        ),
-                        processed_count: (groups_detected + nodes_merged + parents + sunk + removed)
-                            as usize,
-                        duration_ms: 0,
-                        error: None,
-                    });
-                }
-                Err(e) => {
-                    stages.push(StageReport {
-                        name: "l2_compress".into(),
-                        status: StageStatus::Failed,
-                        description: "L2 merge failed".into(),
-                        processed_count: 0,
-                        duration_ms: 0,
-                        error: Some(e.to_string()),
-                    });
-                }
+    if let Section::Valid(ref groups) = llm_output.l2_groups {
+        match apply_l2_groups(groups, engine, sparse_index, l2_meta, encoder) {
+            Ok((groups_detected, nodes_merged, parents, sunk, removed)) => {
+                l2_total_affected += groups_detected + nodes_merged + parents + sunk + removed;
+                stages.push(StageReport {
+                    name: "l2_compress".into(),
+                    status: StageStatus::Success,
+                    description: format!(
+                        "{} groups, {} merged, {} parents, {} sunk, {} removed",
+                        groups_detected, nodes_merged, parents, sunk, removed
+                    ),
+                    processed_count: (groups_detected + nodes_merged + parents + sunk + removed)
+                        as usize,
+                    duration_ms: 0,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                stages.push(StageReport {
+                    name: "l2_compress".into(),
+                    status: StageStatus::Failed,
+                    description: "L2 merge failed".into(),
+                    processed_count: 0,
+                    duration_ms: 0,
+                    error: Some(e.to_string()),
+                });
             }
         }
-        Section::ParseFailed(ref msg) => {
-            // Fallback: use non-LLM merge
-            tracing::warn!(
-                "L2 groups from LLM failed ({}), using keyword-only fallback",
-                msg
-            );
-            let fallback_texts: Vec<String> = input
-                .scenes
-                .iter()
-                .flat_map(|s| s.nodes.iter())
-                .filter_map(|n| n.fused_summary.as_ref().cloned())
-                .collect();
-            let (title, _summary) = llm.fallback_summarize(&fallback_texts);
-            stages.push(StageReport {
-                name: "l2_compress".into(),
-                status: StageStatus::Failed,
-                description: format!("L2 merge fallback: \"{}\"", title),
-                processed_count: 0,
-                duration_ms: 0,
-                error: Some(msg.clone()),
-            });
-        }
-        _ => {}
     }
 
     // ========================================================================
     // Apply L3 extractions
     // ========================================================================
+    let mut new_l3_node_ids: Vec<String> = Vec::new();
     match llm_output.l3_extractions {
         Section::Valid(ref extractions) => {
             match apply_l3_extractions(engine, extractions, sparse_index) {
                 Ok(ids) => {
-                    report.new_l3_nodes = ids;
+                    new_l3_node_ids = ids;
                     stages.push(StageReport {
                         name: "l3_distill".into(),
                         status: StageStatus::Success,
-                        description: format!("Distilled {} L3 nodes", report.new_l3_nodes.len()),
-                        processed_count: report.new_l3_nodes.len(),
+                        description: format!("Distilled {} L3 nodes", new_l3_node_ids.len()),
+                        processed_count: new_l3_node_ids.len(),
                         duration_ms: 0,
                         error: None,
                     });
@@ -484,15 +286,9 @@ pub fn dream_pipeline(
     // ========================================================================
     // Apply habits
     // ========================================================================
-    match llm_output.habits {
-        Section::Valid(ref analysis) => match apply_habits(analysis, engine) {
+    if let Section::Valid(ref analysis) = llm_output.habits {
+        match apply_habits(analysis, engine) {
             Ok((new_l, new_s, new_e)) => {
-                report.habits_updated = Some(habit_distill_stage::HabitUpdate {
-                    new_lexicon: new_l,
-                    new_style_traits: new_s,
-                    new_emotion_patterns: new_e,
-                    total_dialogues_analyzed: input.recent_dialogues.len(),
-                });
                 stages.push(StageReport {
                     name: "habit_distill".into(),
                     status: StageStatus::Success,
@@ -515,35 +311,22 @@ pub fn dream_pipeline(
                     error: Some(e.to_string()),
                 });
             }
-        },
-        Section::ParseFailed(_) => {
-            // Non-LLM fallback
-            let fallback = llm.fallback_habits(&input.recent_dialogues);
-            let _ = apply_habits(&fallback, engine).ok();
-            stages.push(StageReport {
-                name: "habit_distill".into(),
-                status: StageStatus::Failed,
-                description: "Habit analysis: used keyword fallback".into(),
-                processed_count: fallback.lexicon.len(),
-                duration_ms: 0,
-                error: None,
-            });
         }
-        _ => {}
     }
 
     // ========================================================================
     // Apply crystals
     // ========================================================================
+    let mut new_crystal_ids: Vec<String> = Vec::new();
     match llm_output.crystals {
         Section::Valid(ref crystals) => match apply_crystals(crystals, engine) {
             Ok(ids) => {
-                report.new_crystals = ids;
+                new_crystal_ids = ids;
                 stages.push(StageReport {
                     name: "l5_crystallize".into(),
                     status: StageStatus::Success,
-                    description: format!("Crystallized {} patterns", report.new_crystals.len()),
-                    processed_count: report.new_crystals.len(),
+                    description: format!("Crystallized {} patterns", new_crystal_ids.len()),
+                    processed_count: new_crystal_ids.len(),
                     duration_ms: 0,
                     error: None,
                 });
@@ -572,119 +355,157 @@ pub fn dream_pipeline(
         _ => {}
     }
 
-    // Log final retry status
-    if !failed_after_retry.is_empty() {
-        tracing::warn!(
-            "consolidate: sections still failed after retry: {:?}",
-            failed_after_retry
-        );
-    }
-
     // ========================================================================
     // Non-LLM stages
     // ========================================================================
 
-    run_stage(
-        "l1_rebuild",
-        "L1 rebuild failed",
-        |report, sparse_index| {
-            let l1_updated =
-                rebuild_l1_from_l2(engine, sparse_index, &target_l2_ids, decay_config, l2_meta)?;
-            let count = l1_updated.len();
-            report.l1_updated = l1_updated;
-            Ok((format!("Rebuilt {} L1 associations", count), count))
-        },
-        &mut report,
-        sparse_index,
-        &mut stages,
-        true,
-        |report, sparse_index| {
-            *sparse_index = sparse_snapshot.clone();
-            report.rollback_incomplete = true;
-        },
-        start_time,
-    )?;
-
-    run_stage(
-        "l1_decay",
-        "L1 decay failed",
-        |report, _| {
-            let decay_report = l1_decay::decay_l1_network(engine, decay_config, l2_meta)?;
-            report.l1_decayed_nodes = decay_report.decayed_nodes;
-            report.l1_pruned_edges = decay_report.pruned_edges;
-            report.l1_removed_nodes = decay_report.removed_nodes;
-            report.l1_removed_edges = decay_report.removed_edges;
-            let count = report.l1_decayed_nodes
-                + report.l1_pruned_edges
-                + report.l1_removed_nodes
-                + report.l1_removed_edges;
-            Ok((
-                format!(
-                    "L1 decay: {} nodes, {} edges",
-                    report.l1_decayed_nodes, report.l1_pruned_edges
-                ),
-                count,
-            ))
-        },
-        &mut report,
-        sparse_index,
-        &mut stages,
-        true,
-        |report, sparse_index| {
-            *sparse_index = sparse_snapshot.clone();
-            report.rollback_incomplete = true;
-        },
-        start_time,
-    )?;
-
-    run_stage(
-        "l0_profile",
-        "L0 profile generation failed",
-        |report, sparse_index| {
-            l0_form_stage::generate_profile(engine, sparse_index)?;
-            if !target_l2_ids.is_empty() {
-                let pid = format_hash(crate::util::hash_id("profile"));
-                report.l0_updated = Some((pid, vec!["personality".into(), "preferences".into()]));
+    {
+        let stage_start = std::time::Instant::now();
+        match rebuild_l1_from_l2(engine, sparse_index, &target_l2_ids, decay_config, l2_meta) {
+            Ok(updated) => {
+                let count = updated.len();
+                l1_updated_nodes = updated;
+                stages.push(StageReport {
+                    name: "l1_rebuild".into(),
+                    status: StageStatus::Success,
+                    description: format!("Rebuilt {} L1 associations", count),
+                    processed_count: count,
+                    duration_ms: stage_start.elapsed().as_millis() as u64,
+                    error: None,
+                });
             }
-            Ok((
-                "L0 profile regenerated".into(),
-                if report.l0_updated.is_some() { 1 } else { 0 },
-            ))
-        },
-        &mut report,
-        sparse_index,
-        &mut stages,
-        true,
-        |report, sparse_index| {
-            *sparse_index = sparse_snapshot.clone();
-            report.rollback_incomplete = true;
-        },
-        start_time,
-    )?;
-
-    run_stage(
-        "crystal_prune",
-        "Crystal pruning failed",
-        |report, _| {
-            let pruned = crystallize_stage::prune_low_quality_crystals(engine)?;
-            let count = pruned.len();
-            report.pruned_crystals = pruned;
-            Ok((format!("Pruned {} low-quality crystals", count), count))
-        },
-        &mut report,
-        sparse_index,
-        &mut stages,
-        false,
-        |_, _| {},
-        start_time,
-    )?;
-
-    report.stages = stages;
-    report.duration_ms = start_time.elapsed().as_millis() as u64;
-
-    if report.rollback_incomplete {
-        tracing::error!("Dream rollback incomplete");
+            Err(e) => {
+                tracing::error!("L1 rebuild failed: {}", e);
+                stages.push(StageReport {
+                    name: "l1_rebuild".into(),
+                    status: StageStatus::Failed,
+                    description: "L1 rebuild failed".into(),
+                    processed_count: 0,
+                    duration_ms: stage_start.elapsed().as_millis() as u64,
+                    error: Some(e.to_string()),
+                });
+            }
+        }
     }
+
+    {
+        let stage_start = std::time::Instant::now();
+        match l1_decay::decay_l1_network(engine, decay_config, l2_meta) {
+            Ok(decay_report) => {
+                l1_decayed = decay_report.decayed_nodes as u32;
+                l1_pruned_edges = decay_report.pruned_edges as u32;
+                l1_removed_nodes = decay_report.removed_nodes as u32;
+                l1_removed_edges = decay_report.removed_edges as u32;
+                let count = l1_decayed + l1_pruned_edges + l1_removed_nodes + l1_removed_edges;
+                stages.push(StageReport {
+                    name: "l1_decay".into(),
+                    status: StageStatus::Success,
+                    description: format!(
+                        "L1 decay: {} nodes, {} edges",
+                        l1_decayed, l1_pruned_edges
+                    ),
+                    processed_count: count as usize,
+                    duration_ms: stage_start.elapsed().as_millis() as u64,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                stages.push(StageReport {
+                    name: "l1_decay".into(),
+                    status: StageStatus::Failed,
+                    description: "L1 decay failed".into(),
+                    processed_count: 0,
+                    duration_ms: stage_start.elapsed().as_millis() as u64,
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
+    {
+        let stage_start = std::time::Instant::now();
+        match l0_form_stage::generate_profile(engine, sparse_index) {
+            Ok(_) => {
+                stages.push(StageReport {
+                    name: "l0_profile".into(),
+                    status: StageStatus::Success,
+                    description: "L0 profile regenerated".into(),
+                    processed_count: 1,
+                    duration_ms: stage_start.elapsed().as_millis() as u64,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                stages.push(StageReport {
+                    name: "l0_profile".into(),
+                    status: StageStatus::Failed,
+                    description: "L0 profile generation failed".into(),
+                    processed_count: 0,
+                    duration_ms: stage_start.elapsed().as_millis() as u64,
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
+    let mut pruned_crystal_ids: Vec<String> = Vec::new();
+    {
+        match crystallize_stage::prune_low_quality_crystals(engine) {
+            Ok(pruned) => {
+                let count = pruned.len();
+                pruned_crystal_ids = pruned;
+                stages.push(StageReport {
+                    name: "crystal_prune".into(),
+                    status: StageStatus::Success,
+                    description: format!("Pruned {} low-quality crystals", count),
+                    processed_count: count,
+                    duration_ms: 0,
+                    error: None,
+                });
+            }
+            Err(e) => {
+                stages.push(StageReport {
+                    name: "crystal_prune".into(),
+                    status: StageStatus::Failed,
+                    description: "Crystal pruning failed".into(),
+                    processed_count: 0,
+                    duration_ms: 0,
+                    error: Some(e.to_string()),
+                });
+            }
+        }
+    }
+
+    let _duration_ms = start_time.elapsed().as_millis() as u64;
+    let consolidated_count = l2_total_affected
+        + new_l3_node_ids.len() as u32
+        + new_crystal_ids.len() as u32
+        + pruned_crystal_ids.len() as u32
+        + l1_decayed
+        + l1_pruned_edges
+        + l1_removed_nodes
+        + l1_removed_edges
+        + l1_updated_nodes.len() as u32;
+
+    // DreamStage is now an alias for StageReport, so we can use stages directly.
+    let report = DreamReport {
+        consolidated_count,
+        new_skills: if new_crystal_ids.is_empty() {
+            None
+        } else {
+            Some(new_crystal_ids.clone())
+        },
+        compressed_layers: Some(vec![2, 3, 5]),
+        new_l3_nodes: new_l3_node_ids.len() as u32,
+        new_crystals: new_crystal_ids.len() as u32,
+        pruned_crystals: pruned_crystal_ids.len() as u32,
+        l1_decayed_nodes: l1_decayed,
+        l1_pruned_edges,
+        l1_removed_nodes,
+        l1_removed_edges,
+        stages,
+    };
+
     Ok(report)
 }
 

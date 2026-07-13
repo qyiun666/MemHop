@@ -42,10 +42,7 @@ impl MemHop {
             *layer_counts.entry(key.to_string()).or_insert(0) += 1;
         }
 
-        #[cfg(feature = "grpc-encoder")]
-        let encoder_configured = self.encoder.is_some();
-        #[cfg(not(feature = "grpc-encoder"))]
-        let encoder_configured = false;
+        let encoder_configured = true;
 
         let ivf_index_built = self.ivf_index.as_ref().is_some_and(|ivf| ivf.k > 0);
 

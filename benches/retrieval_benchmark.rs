@@ -4,7 +4,7 @@
 //! throughput and recall@5 of `search_memory` over the provided questions.
 
 use criterion::{black_box, criterion_group, Criterion};
-use memhop::{MemHop, MemHopConfig, SearchQuery, SearchWeights};
+use memhop::{LlmConfig, MemHop, MemHopConfig, SearchQuery, SearchWeights};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -27,8 +27,6 @@ fn fixture_path() -> String {
         format!("{}/benches/fixtures/locomo_smoke.json", manifest)
     }
 }
-
-const K: usize = 5;
 
 #[derive(Debug, Deserialize)]
 struct Fixture {
@@ -64,13 +62,22 @@ fn bench_vector_dim() -> usize {
         .unwrap_or(768)
 }
 
+fn llm_config_from_env() -> LlmConfig {
+    let api_key = std::env::var("MEMHOP_LLM_API_KEY").unwrap_or_default();
+    let api_url = std::env::var("MEMHOP_LLM_API_URL")
+        .unwrap_or_else(|_| "https://api.deepseek.com/v1/chat/completions".to_string());
+    let model = std::env::var("MEMHOP_LLM_MODEL").unwrap_or_else(|_| "deepseek-chat".to_string());
+    let lang = std::env::var("MEMHOP_LLM_LANGUAGE").unwrap_or_else(|_| "zh".to_string());
+    LlmConfig::new(api_url, api_key, model, lang)
+}
+
 fn make_config(path: PathBuf) -> MemHopConfig {
     MemHopConfig {
         db_path: path,
-        encoder_grpc_addr: Some(encoder_addr()),
+        encoder_grpc_addr: encoder_addr(),
         vector_dim: bench_vector_dim(),
         crystal_path: None,
-        llm: Default::default(),
+        llm: llm_config_from_env(),
         auto_dream_on_evict: false,
         auto_dream_archive_threshold: 20,
         auto_dream_summary_bytes: 2048,
@@ -81,7 +88,6 @@ fn make_config(path: PathBuf) -> MemHopConfig {
             n_probes: 8,
             enable_reranker: true,
             rerank_max_candidates: 1,
-            recency_weight: 0.5,
             activation_boost: 1.3,
         }),
         decay_config: None,
@@ -89,7 +95,14 @@ fn make_config(path: PathBuf) -> MemHopConfig {
         dream_idle_threshold_secs: None,
         auto_checkpoint_interval: None,
         adjacency_cache_max_entries: 128,
-        llm_preprocess: Default::default(),
+        llm_preprocess: if std::env::var("BENCH_LLM_PREPROCESS").ok().is_some() {
+            Default::default()
+        } else {
+            memhop::LlmPreprocessConfig {
+                preprocess_temperature: 0.1,
+                preprocess_max_tokens: 0,
+            }
+        },
     }
 }
 
@@ -137,11 +150,16 @@ fn setup() -> (MemHop, Vec<Question>, HashMap<String, String>) {
         for turn in &session.turns {
             let dialogue = format!("{}: {}", turn.speaker, turn.text);
             let res = db
-                .search_context(SearchQuery {
-                    dialogue,
-                    l2_id: None,
-                    l3_id: None,
-                    auto_create: true,
+                .search(SearchQuery {
+                    query: dialogue,
+                    layers: vec![2],
+                    max_results: 20,
+                    min_score: 0.0,
+                    include_profile: false,
+                    filters: None,
+                    directed_l2_id: None,
+                    directed_l3_id: None,
+                    auto_create: Some(1),
                 })
                 .expect("ingest search failed");
             if let Some(ctx) = res.contexts.first() {
@@ -155,22 +173,36 @@ fn setup() -> (MemHop, Vec<Question>, HashMap<String, String>) {
 
 fn bench_retrieval(c: &mut Criterion) {
     let (mut db, questions, context_to_session) = setup();
+    let sessions: Vec<_> = {
+        let path = fixture_path();
+        let f: Fixture = serde_json::from_reader(std::fs::File::open(path).expect("open fixture"))
+            .expect("parse fixture");
+        f.sessions
+    };
 
-    // Compute recall@K and nDCG@K once for reporting (not part of the timed loop).
-    let mut total_recall = 0.0;
-    let mut total_ndcg = 0.0;
+    // Compute all metrics once for reporting (not part of the timed loop).
+    let mut recall_sums = [0.0f64; 4]; // indices: 0=R@1, 1=R@3, 2=R@5, 3=R@10
+    let ks = [1, 3, 5, 10];
+    let mut ndcg5_sum = 0.0;
+    let mut mrr_sum = 0.0;
     let mut latencies: Vec<Duration> = Vec::with_capacity(questions.len());
+
     for q in &questions {
         let relevant: Vec<&str> = q.relevant_sessions.iter().map(|s| s.as_str()).collect();
         let mut retrieved: Vec<&str> = Vec::new();
         let mut seen = HashSet::new();
 
         let start = Instant::now();
-        let search_result = db.search_context(SearchQuery {
-            dialogue: q.question.clone(),
-            l2_id: None,
-            l3_id: None,
-            auto_create: false,
+        let search_result = db.search(SearchQuery {
+            query: q.question.clone(),
+            layers: vec![2],
+            max_results: 20,
+            min_score: 0.0,
+            include_profile: false,
+            filters: None,
+            directed_l2_id: None,
+            directed_l3_id: None,
+            auto_create: None,
         });
         latencies.push(start.elapsed());
 
@@ -183,26 +215,39 @@ fn bench_retrieval(c: &mut Criterion) {
                 }
             }
         }
-        total_recall += common::recall_at_k(&retrieved, &relevant, K);
-        total_ndcg += common::ndcg_at_k(&retrieved, &relevant, K);
+
+        for (i, &k) in ks.iter().enumerate() {
+            recall_sums[i] += common::recall_at_k(&retrieved, &relevant, k);
+        }
+        ndcg5_sum += common::ndcg_at_k(&retrieved, &relevant, 5);
+        mrr_sum += common::mrr(&retrieved, &relevant);
     }
+
+    let n = questions.len() as f64;
     let stats = common::latency_stats(&latencies);
+    println!();
+    println!("================================================================");
+    println!("  MemHop Retrieval Benchmark Results");
     println!(
-        "retrieval recall@{} over {} questions: {:.2}",
-        K,
-        questions.len(),
-        total_recall / questions.len() as f64
+        "  Dataset: LOCOMO full ({} sessions, {} questions)",
+        sessions.len(),
+        questions.len()
     );
-    println!(
-        "retrieval nDCG@{} over {} questions: {:.2}",
-        K,
-        questions.len(),
-        total_ndcg / questions.len() as f64
-    );
-    println!(
-        "retrieval per-query latency P99: {:?}, max: {:?}",
-        stats.p99, stats.max
-    );
+    println!("================================================================");
+    println!("  Recall@1    = {:.4}", recall_sums[0] / n);
+    println!("  Recall@3    = {:.4}", recall_sums[1] / n);
+    println!("  Recall@5    = {:.4}", recall_sums[2] / n);
+    println!("  Recall@10   = {:.4}", recall_sums[3] / n);
+    println!("  nDCG@5      = {:.4}", ndcg5_sum / n);
+    println!("  MRR         = {:.4}", mrr_sum / n);
+    println!("----------------------------------------------------------------");
+    println!("  Latency P50  = {:?}", stats.p50);
+    println!("  Latency P95  = {:?}", stats.p95);
+    println!("  Latency P99  = {:?}", stats.p99);
+    println!("  Latency max  = {:?}", stats.max);
+    println!("  Latency mean = {:?}", stats.mean);
+    println!("================================================================");
+    println!();
 
     let mut group = c.benchmark_group("retrieval");
     group
@@ -214,11 +259,16 @@ fn bench_retrieval(c: &mut Criterion) {
         b.iter(|| {
             for q in &questions {
                 let res = db
-                    .search_context(SearchQuery {
-                        dialogue: q.question.clone(),
-                        l2_id: None,
-                        l3_id: None,
-                        auto_create: false,
+                    .search(SearchQuery {
+                        query: q.question.clone(),
+                        layers: vec![2],
+                        max_results: 20,
+                        min_score: 0.0,
+                        include_profile: false,
+                        filters: None,
+                        directed_l2_id: None,
+                        directed_l3_id: None,
+                        auto_create: None,
                     })
                     .expect("search failed");
                 black_box(res.contexts.len());

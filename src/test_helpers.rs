@@ -3,7 +3,7 @@
 
 //! Shared test helpers for MemHop unit tests.
 
-use crate::l3::store::{add_edge as l3_add_edge, add_node as l3_add_node};
+use crate::l3::store::{add_edge_with_engine, add_node_with_engine};
 use crate::layers::context::ContextSlot;
 use crate::layers::hypergraph::{
     GraphEdge, GraphEdgeKind, GraphNode, HypergraphEdge, HypergraphNode,
@@ -58,7 +58,7 @@ pub fn build_dsl_test_graph(engine: &mut StorageEngine) -> u64 {
         make_node(105, gid, "Trait"),
     ];
     for n in &nodes {
-        l3_add_node(engine, n.clone(), None, None).unwrap();
+        add_node_with_engine(engine, n.clone(), None, None).unwrap();
     }
     let edges = [
         make_edge(201, gid, vec![101, 102]),
@@ -67,7 +67,7 @@ pub fn build_dsl_test_graph(engine: &mut StorageEngine) -> u64 {
         make_edge(204, gid, vec![101, 105, 102]),
     ];
     for e in &edges {
-        l3_add_edge(engine, e.clone(), None).unwrap();
+        add_edge_with_engine(engine, e.clone(), None).unwrap();
     }
     gid
 }
@@ -121,7 +121,7 @@ pub fn build_test_graph(engine: &mut StorageEngine) -> (Vec<u64>, Vec<u64>) {
     let edge_ids = vec![201u64, 202, 203, 204];
 
     for &nid in &node_ids {
-        l3_add_node(
+        add_node_with_engine(
             engine,
             create_test_node(nid, graph_id, &format!("node{}", nid)),
             None,
@@ -130,25 +130,25 @@ pub fn build_test_graph(engine: &mut StorageEngine) -> (Vec<u64>, Vec<u64>) {
         .unwrap();
     }
 
-    l3_add_edge(
+    add_edge_with_engine(
         engine,
         create_test_edge(201, graph_id, GraphEdgeKind::Related, vec![101, 102]),
         None,
     )
     .unwrap();
-    l3_add_edge(
+    add_edge_with_engine(
         engine,
         create_test_edge(202, graph_id, GraphEdgeKind::Related, vec![102, 103]),
         None,
     )
     .unwrap();
-    l3_add_edge(
+    add_edge_with_engine(
         engine,
         create_test_edge(203, graph_id, GraphEdgeKind::Dependency, vec![103, 104]),
         None,
     )
     .unwrap();
-    l3_add_edge(
+    add_edge_with_engine(
         engine,
         create_test_edge(204, graph_id, GraphEdgeKind::Causal, vec![101, 103, 105]),
         None,

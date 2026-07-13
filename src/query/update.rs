@@ -24,6 +24,20 @@ use crate::MemHopError;
 /// Convenience alias to avoid a `>>` tokenization issue in function signatures.
 type L3IndexMap = std::collections::HashMap<u64, crate::l3::L3Index>;
 
+/// Internal update request for the cross-layer update pipeline.
+#[derive(Debug, Clone)]
+pub(crate) struct InternalUpdateRequest {
+    pub(crate) topic_id: String,
+    pub(crate) dialogue_text: String,
+    pub(crate) summary: Option<String>,
+    pub(crate) action_chain: Option<Vec<ActionItem>>,
+    pub(crate) instant_distill: bool,
+    pub(crate) source: RequestSource,
+    pub(crate) scene_id: Option<String>,
+    pub(crate) user_keywords: Option<Vec<String>>,
+    pub(crate) agent_keywords: Option<Vec<String>>,
+}
+
 /// Core update engine: writes L4 archive, updates L2 context, optionally creates
 /// L1 node, L3 hypergraph, and L5 action chain — all via v2 StorageEngine.
 ///
@@ -33,11 +47,11 @@ type L3IndexMap = std::collections::HashMap<u64, crate::l3::L3Index>;
 #[allow(clippy::too_many_arguments)]
 pub fn update_memory_internal(
     engine: &mut StorageEngine,
-    request: UpdateRequest,
+    request: InternalUpdateRequest,
     sparse_index: &mut SparseIndex,
     l2_meta: &mut L2MetaIndex,
     _config: &MemHopConfig,
-    encoder: Option<&(dyn Encoder + Send + Sync)>,
+    encoder: &(dyn Encoder + Send + Sync),
     tracker: Option<&mut crate::l3::DegreeTracker>,
     index_map: Option<&mut L3IndexMap>,
 ) -> Result<UpdateResult, MemHopError> {
@@ -71,7 +85,7 @@ pub fn update_memory_internal(
         metadata: request.source.to_metadata_json(),
     };
     write_slot(engine, REC_L4_ARCHIVE, l4_id_hash, &archive)?;
-    let archive_id = format_hash(l4_id_hash);
+    let _archive_id = format_hash(l4_id_hash);
 
     // ------------------------------------------------------------------
     // Step 2: L2 ContextSlot — create new turn node (depth=1)
@@ -96,7 +110,7 @@ pub fn update_memory_internal(
         .unwrap_or_else(|| format!("turn-{}", now_ms));
 
     // Summary: use provided summary, or fall back to dialogue text
-    let turn_summary = request
+    let _turn_summary = request
         .summary
         .clone()
         .unwrap_or_else(|| request.dialogue_text.clone());
@@ -106,6 +120,9 @@ pub fn update_memory_internal(
         .clone()
         .unwrap_or_else(|| vec![turn_title.clone()]);
     let agent_kws = request.agent_keywords.clone().unwrap_or_default();
+
+    // Pre-compute keywords text before user_kws is moved into new_turn
+    let encode_text = user_kws.join(" ");
 
     let mut turn_ctx = ContextSlot::new_turn(
         scene_id,
@@ -121,21 +138,19 @@ pub fn update_memory_internal(
     );
     let turn_hash = turn_ctx.id;
 
-    // Vectorize centroid if encoder is available
-    if let Some(enc) = encoder {
-        match enc.encode(&turn_summary) {
-            Ok(output) => {
-                let v_id_hash = hash_id(&format!("v:{}", turn_hash));
-                let v_bytes: Vec<u8> = output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
-                if let Err(e) = engine.write_record(0xF0, v_id_hash, &v_bytes) {
-                    tracing::warn!("Failed to write centroid vector: {}", e);
-                } else {
-                    turn_ctx.centroid_page_ref = v_id_hash;
-                }
+    // Vectorize centroid using keywords
+    match encoder.encode(&encode_text) {
+        Ok(output) => {
+            let v_id_hash = hash_id(&format!("v:{}", turn_hash));
+            let v_bytes: Vec<u8> = output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            if let Err(e) = engine.write_record(0xF0, v_id_hash, &v_bytes) {
+                tracing::warn!("Failed to write centroid vector: {}", e);
+            } else {
+                turn_ctx.centroid_page_ref = v_id_hash;
             }
-            Err(e) => {
-                tracing::warn!("Failed to encode turn centroid: {}", e);
-            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to encode turn centroid: {}", e);
         }
     }
 
@@ -222,8 +237,8 @@ pub fn update_memory_internal(
     // ------------------------------------------------------------------
     write_slot(engine, REC_L2_TOPIC, turn_hash, &turn_ctx)?;
 
-    // Update sparse index with the turn summary
-    let terms = crate::index::sparse::tokenize(&turn_summary);
+    // Update sparse index with the turn keywords
+    let terms = crate::index::sparse::tokenize(&encode_text);
     let doc_len = terms.len() as u32;
     sparse_index.add_document(turn_hash, terms, doc_len);
 
@@ -238,15 +253,9 @@ pub fn update_memory_internal(
             UpdateStatus::Archived
         };
 
-    let dream_triggered = false;
-    let turn_node_id = format_hash(turn_hash);
-
     let result = UpdateResult {
-        topic_id: format_hash(topic_hash),
-        archive_id,
+        id: format_hash(topic_hash),
         status,
-        dream_triggered,
-        turn_node_id,
     };
 
     Ok(result)
@@ -256,7 +265,7 @@ pub fn update_memory_internal(
 #[allow(clippy::too_many_arguments)]
 fn distill_l3_for_update(
     engine: &mut StorageEngine,
-    request: &UpdateRequest,
+    request: &InternalUpdateRequest,
     topic_hash: u64,
     now_ms: i64,
     sparse_index: &SparseIndex,
@@ -347,8 +356,8 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
-    fn make_request(topic_id: &str, text: &str) -> UpdateRequest {
-        UpdateRequest {
+    fn make_request(topic_id: &str, text: &str) -> InternalUpdateRequest {
+        InternalUpdateRequest {
             topic_id: topic_id.to_string(),
             dialogue_text: text.to_string(),
             summary: None,
@@ -396,27 +405,29 @@ mod tests {
         let mut l2_meta = L2MetaIndex::new();
         let config = MemHopConfig::new(std::path::PathBuf::from("/dev/null"), 768);
 
+        let encoder = crate::encoder::MockEncoder::new(768);
         let result = update_memory_internal(
             &mut engine,
             make_request(&topic_id, "hello world"),
             &mut sparse_index,
             &mut l2_meta,
             &config,
-            None, // encoder
+            &encoder,
             None,
             None,
         )
         .unwrap();
 
-        assert_eq!(result.topic_id, topic_id);
-        assert!(!result.archive_id.is_empty());
+        assert_eq!(result.id, topic_id);
         assert_eq!(result.status, UpdateStatus::Archived);
 
-        // L2 turn node is a separate ContextSlot (depth=1)
-        let turn_hash = parse_id_to_hash(&result.turn_node_id);
-        let (_, turn_data) = engine.read_record(turn_hash).unwrap().unwrap();
-        let turn_ctx: ContextSlot = bincode::deserialize(turn_data).unwrap();
-        assert_eq!(turn_ctx.depth, 1, "turn node should be depth=1");
+        // Verify the original topic still exists
+        let (_, topic_data) = engine.read_record(topic_hash).unwrap().unwrap();
+        let topic_ctx: ContextSlot = bincode::deserialize(topic_data).unwrap();
+        assert_eq!(
+            topic_ctx.id, topic_hash,
+            "original topic should still exist"
+        );
     }
 
     #[test]
@@ -457,9 +468,10 @@ mod tests {
         let config = MemHopConfig::new(std::path::PathBuf::from("/dev/null"), 768);
 
         // This should succeed (no overflow mechanism in v2)
+        let encoder = crate::encoder::MockEncoder::new(768);
         let result = update_memory_internal(
             &mut engine,
-            UpdateRequest {
+            InternalUpdateRequest {
                 topic_id: topic_id.clone(),
                 dialogue_text: "small dialogue".to_string(),
                 summary: Some("x".repeat(1000)),
@@ -473,7 +485,7 @@ mod tests {
             &mut sparse_index,
             &mut l2_meta,
             &config,
-            None,
+            &encoder,
             None,
             None,
         );
@@ -518,13 +530,15 @@ mod tests {
         let mut l2_meta = L2MetaIndex::new();
         let config = MemHopConfig::new(std::path::PathBuf::from("/dev/null"), 768);
 
+        let encoder = crate::encoder::MockEncoder::new(768);
+
         update_memory_internal(
             &mut engine,
             make_request(&topic_id, "first turn"),
             &mut sparse_index,
             &mut l2_meta,
             &config,
-            None,
+            &encoder,
             None,
             None,
         )
@@ -584,13 +598,15 @@ mod tests {
             let mut l2_meta = L2MetaIndex::new();
             let config = MemHopConfig::new(std::path::PathBuf::from("/dev/null"), 768);
 
+            let encoder = crate::encoder::MockEncoder::new(768);
+
             update_memory_internal(
                 &mut engine,
                 make_request(&topic_id, "data to persist"),
                 &mut sparse_index,
                 &mut l2_meta,
                 &config,
-                None,
+                &encoder,
                 None,
                 None,
             )

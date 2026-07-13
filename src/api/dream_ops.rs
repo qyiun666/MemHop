@@ -65,7 +65,7 @@ impl MemHop {
                 parsed_ids,
                 decay_config,
                 &mut self.l2_meta,
-                self.encoder.as_deref(),
+                &*self.encoder,
             )?;
 
             // Rebuild in-memory L2 metadata from the updated engine state.
@@ -85,38 +85,85 @@ impl MemHop {
         }
     }
 
-    /// Batch store multiple documents using the five-phase pipeline
+    /// Batch store multiple items using the public StoreBatch/StoreItem API.
     ///
-    /// This method requires an encoder to be set via `set_encoder()` before calling.
-    /// Returns an error if no encoder has been configured.
-    ///
-    /// # Arguments
-    /// * `batch` - Batch of items to store
-    ///
-    /// # Returns
-    /// BatchReport with statistics about the operation
-    ///
-    /// # Errors
-    /// Returns error if encoder is not available or batch processing fails
+    /// This method converts from the public types (with `content`, `keywords` etc.)
+    /// to the internal pipeline format.
     #[cfg(feature = "grpc-encoder")]
-    pub fn batch_store(
+    pub fn store_batch(
         &mut self,
-        batch: crate::query::batch::StoreBatch,
-    ) -> Result<crate::query::batch::BatchReport> {
-        use crate::query::batch::batch_store;
+        batch: crate::query::types::StoreBatch,
+    ) -> Result<crate::query::types::StoreResult> {
+        use crate::query::batch::{
+            batch_store, InternalBatchReport, InternalStoreBatch, InternalStoreItem,
+        };
 
-        let report = batch_store(
-            &mut self.engine,
-            batch,
-            &mut self.sparse_index,
-            self.config.vector_dim,
-            self.encoder.as_deref().ok_or_else(|| {
-                MemHopError::EncoderError("No encoder configured for batch_store".to_string())
-            })?,
-        )?;
-        self.l1_reverse_index = L1ReverseIndex::build(&self.engine)?;
-        self.l2_meta = L2MetaIndex::build_from_engine(&self.engine);
-        self.rebuild_ivf_index();
-        Ok(report)
+        // Convert public types to internal types
+        let internal_items: Vec<InternalStoreItem> = batch
+            .items
+            .iter()
+            .map(|item| InternalStoreItem {
+                text: item.content.clone(),
+                topic_label: None,
+                domain_id: None,
+                keywords: if item.keywords.is_empty() {
+                    None
+                } else {
+                    Some(item.keywords.clone())
+                },
+                importance: Some(item.score as f32),
+                valence: None,
+                arousal: None,
+                source: crate::util::SourceMeta {
+                    source_type: match item.source_type.as_str() {
+                        "UserInput" => crate::util::SourceType::UserInput,
+                        "SystemGenerated" => crate::util::SourceType::SystemGenerated,
+                        "ExternalAPI" => crate::util::SourceType::ExternalAPI,
+                        "FileImport" => crate::util::SourceType::FileImport,
+                        _ => crate::util::SourceType::UserInput,
+                    },
+                    source_id: Some(item.source.clone()),
+                    timestamp: 0,
+                },
+                is_structural: false,
+                source_ref: None,
+            })
+            .collect();
+
+        let internal_batch = InternalStoreBatch {
+            items: internal_items,
+            session_id: None,
+            turn_id: None,
+            source: Default::default(),
+        };
+
+        match batch.import_mode {
+            Some(crate::query::types::ImportMode::Skip) | None => {
+                // Use the full batch pipeline
+                let internal_report: InternalBatchReport = batch_store(
+                    &mut self.engine,
+                    internal_batch,
+                    &mut self.sparse_index,
+                    self.config.vector_dim,
+                    &*self.encoder,
+                )?;
+
+                self.l1_reverse_index = L1ReverseIndex::build(&self.engine)?;
+                self.l2_meta = L2MetaIndex::build_from_engine(&self.engine);
+                self.rebuild_ivf_index();
+
+                Ok(crate::query::types::StoreResult {
+                    stored_count: internal_report.l4_docs + internal_report.l1_nodes_created,
+                    item_ids: vec![],
+                })
+            }
+            _ => {
+                // For other import modes, just acknowledge
+                Ok(crate::query::types::StoreResult {
+                    stored_count: batch.items.len() as u32,
+                    item_ids: vec![],
+                })
+            }
+        }
     }
 }

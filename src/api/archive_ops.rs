@@ -7,6 +7,30 @@ use crate::query::types::{Archive, ArchiveQuery};
 use crate::{MemHop, Result};
 
 impl MemHop {
+    /// Get a single archive by ID.
+    pub fn get_archive(&self, id: &str) -> Result<Option<Archive>> {
+        use crate::layers::archive::ArchiveSlot;
+        use crate::storage::record::REC_L4_ARCHIVE;
+        let id_hash = crate::shared::common::parse_id_to_hash(id);
+        match self.engine.read_record(id_hash) {
+            Ok(Some((rt, data))) if rt == REC_L4_ARCHIVE => {
+                match bincode::deserialize::<ArchiveSlot>(data) {
+                    Ok(slot) => Ok(Some(Archive {
+                        id: crate::shared::common::format_hash(slot.id_hash),
+                        content: slot.content,
+                        content_type: slot.content_type.as_str().to_string(),
+                        source_ref: None,
+                        topic_id: Some(crate::shared::common::format_hash(slot.context_id)),
+                        engram_ids: vec![],
+                        created_at: slot.created_at,
+                    })),
+                    Err(_) => Ok(None),
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
     /// Unified L4 archive retrieval.
     ///
     /// When `topic_id` is provided, lists archives for that specific topic.
@@ -35,19 +59,14 @@ impl MemHop {
             let slots = search_l4(&self.engine, l4_query)?;
             Ok(slots
                 .into_iter()
-                .map(|arc| {
-                    let src = arc.request_source();
-                    Archive {
-                        id: crate::shared::common::format_hash(arc.id_hash),
-                        content: arc.content,
-                        content_type: arc.content_type.as_str().to_string(),
-                        source_ref: None,
-                        topic_id: Some(crate::shared::common::format_hash(arc.context_id)),
-                        engram_ids: vec![],
-                        created_at: arc.created_at,
-                        source_agent: src.source_agent,
-                        source_platform: src.source_platform,
-                    }
+                .map(|arc| Archive {
+                    id: crate::shared::common::format_hash(arc.id_hash),
+                    content: arc.content,
+                    content_type: arc.content_type.as_str().to_string(),
+                    source_ref: None,
+                    topic_id: Some(crate::shared::common::format_hash(arc.context_id)),
+                    engram_ids: vec![],
+                    created_at: arc.created_at,
                 })
                 .collect())
         }

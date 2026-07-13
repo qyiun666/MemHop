@@ -44,6 +44,7 @@ impl VectorPage {
         (PAGE_SIZE - 32) / self.slot_size()
     }
 
+    #[allow(dead_code)]
     pub fn slot_offset(&self, slot_index: u16) -> usize {
         32 + (slot_index as usize) * self.slot_size()
     }
@@ -243,6 +244,7 @@ pub fn write_vector(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn read_vector(data: &[u8], page_id: u32, slot_index: u16, dim: usize) -> IoResult<Vec<f16>> {
     let page = VectorPage::new(dim);
     let offset = page_id as usize * PAGE_SIZE + page.slot_offset(slot_index);
@@ -528,49 +530,6 @@ pub fn ivf_knn(
             }
             let vec_hash = vec_record_hash(id_hash);
             if let Ok(vector) = read_vector_from_engine(engine, vec_hash, ivf.dim) {
-                if vector.len() == ivf.dim {
-                    candidates.push((id_hash, cosine_similarity(query_vector, &vector)));
-                }
-            }
-        }
-    }
-    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-    candidates.truncate(k_results);
-    Ok(candidates)
-}
-
-/// Old v1 ivf_knn kept for backward compatibility (used from api/mod.rs which is not modified).
-#[allow(dead_code)]
-pub fn ivf_knn_v1(
-    ivf: &IVFIndex,
-    data: &[u8],
-    query_vector: &[f16],
-    k_results: usize,
-    n_probes: usize,
-) -> MemHopResult<Vec<(u64, f32)>> {
-    if ivf.centroids.is_empty() || ivf.buckets.is_empty() || query_vector.len() != ivf.dim {
-        return Ok(vec![]);
-    }
-    let probes = n_probes.min(ivf.k);
-    if probes == 0 {
-        return Ok(vec![]);
-    }
-    let mut centroid_scores: Vec<(usize, f32)> = ivf
-        .centroids
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (i, cosine_similarity(query_vector, c)))
-        .collect();
-    centroid_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal));
-    let selected: HashSet<usize> = centroid_scores.iter().take(probes).map(|x| x.0).collect();
-    let mut seen = HashSet::<u64>::new();
-    let mut candidates: Vec<(u64, f32)> = Vec::new();
-    for &idx in &selected {
-        for &(id_hash, vec_page_id, vec_slot_index) in &ivf.buckets[idx] {
-            if !seen.insert(id_hash) {
-                continue;
-            }
-            if let Ok(vector) = read_vector(data, vec_page_id, vec_slot_index, ivf.dim) {
                 if vector.len() == ivf.dim {
                     candidates.push((id_hash, cosine_similarity(query_vector, &vector)));
                 }

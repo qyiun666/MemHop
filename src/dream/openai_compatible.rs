@@ -3,22 +3,20 @@
 
 #![cfg(feature = "llm")]
 
-//! OpenAI-compatible LLM Provider — consolidated dream consolidation.
+//! OpenAI-compatible LLM Provider for consolidated dream consolidation.
 //!
-//! Two-phase architecture:
-//!   1. `consolidate()` — one monolithic call processes L2 grouping, L3 extraction,
-//!      habit analysis, and crystal generation in one prompt.
-//!   2. `retry_sections()` — if any section fails parsing, a second call targets
-//!      only the failed sections.
+//! Single-phase architecture:
+//!   `consolidate()` — one monolithic call processes L2 grouping, L3 extraction,
+//!   habit analysis, and crystal generation in one prompt.
+//!   LLM failures bubble up as errors — no fallback or retry.
 
 use crate::config::LlmConfig;
 use crate::dream::llm::{
-    ConsolidationInput, ConsolidationOutput, CrystalDef, CrystalStep, DreamSection, HabitAnalysis,
-    L2Group, L3Extraction, LlmConcept, LlmProvider, LlmRelation, Section,
+    ConsolidationInput, ConsolidationOutput, CrystalDef, CrystalStep, HabitAnalysis, L2Group,
+    L3Extraction, LlmConcept, LlmProvider, LlmRelation, Section,
 };
 use crate::MemHopError;
 use serde_json::json;
-use std::collections::{HashMap, HashSet};
 
 // ============================================================================
 // System prompt & constants
@@ -104,10 +102,10 @@ impl OpenAICompatibleLlmProvider {
             .json(&body)
             .timeout(std::time::Duration::from_secs(self.config.timeout_secs))
             .send()
-            .map_err(|e| MemHopError::EncoderError(format!("API call failed: {}", e)))?;
+            .map_err(|e| MemHopError::LlmError(format!("API call failed: {}", e)))?;
 
         if !response.status().is_success() {
-            return Err(MemHopError::EncoderError(format!(
+            return Err(MemHopError::LlmError(format!(
                 "API request failed: {} - {}",
                 response.status(),
                 response.text().unwrap_or_default()
@@ -195,9 +193,6 @@ impl OpenAICompatibleLlmProvider {
     fn cons_max_tokens() -> u32 {
         16384
     }
-    fn retry_max_tokens() -> u32 {
-        8192
-    }
 
     // ========================================================================
     // Prompt builders
@@ -260,19 +255,11 @@ impl OpenAICompatibleLlmProvider {
         s
     }
 
-    fn build_task_prompt(sections: Option<&[DreamSection]>) -> String {
-        let all = sections.is_none();
-        let targets = sections.unwrap_or(&[
-            DreamSection::L2Groups,
-            DreamSection::L3Distill,
-            DreamSection::Habits,
-            DreamSection::Crystals,
-        ]);
-        let want = |sec: DreamSection| -> bool { targets.contains(&sec) };
+    fn build_task_prompt() -> String {
         let mut s = String::from("# 任务\n\n各任务独立处理输入数据。每个任务独立输出。\n\n");
 
-        if all || want(DreamSection::L2Groups) {
-            s.push_str(r#"## 任务一：L2 话题压缩判断与执行
+        // L2 grouping
+        s.push_str(r#"## 任务一：L2 话题压缩判断与执行
 
 对每个 scene，分析其 depth-1 节点，判断是否需要压缩合并，如需则执行合并并标记级联更新。
 
@@ -298,10 +285,9 @@ impl OpenAICompatibleLlmProvider {
 
 空组时返回: {"l2_groups":[], "l2_compression_needed":false, "l1_rebuild":false, "l0_rebuild":false}
 "#);
-        }
 
-        if all || want(DreamSection::L3Distill) {
-            s.push_str(r#"## 任务二：L3 知识蒸馏
+        // L3 distillation
+        s.push_str(r#"## 任务二：L3 知识蒸馏
 
 从每个 L2 context 的标题+摘要中提取结构化概念和关系。跨 context 做实体对齐去重。
 
@@ -310,10 +296,9 @@ impl OpenAICompatibleLlmProvider {
 
 每个 context 最多 8 概念 + 12 条关系。无内容时 context 可不出现。
 "#);
-        }
 
-        if all || want(DreamSection::Habits) {
-            s.push_str(r#"## 任务三：用户习惯分析
+        // Habit analysis
+        s.push_str(r#"## 任务三：用户习惯分析
 
 从对话记录提取用户特征：词典(≤10条)、风格标签(≤5个)、情绪模式(≤5条)。
 
@@ -322,10 +307,9 @@ impl OpenAICompatibleLlmProvider {
 
 无对话数据时返回 null。
 "#);
-        }
 
-        if all || want(DreamSection::Crystals) {
-            s.push_str(r#"## 任务四：行为结晶生成
+        // Crystal generation
+        s.push_str(r#"## 任务四：行为结晶生成
 
 从行动链提取可复用规则，生成结构化结晶。
 
@@ -335,7 +319,6 @@ impl OpenAICompatibleLlmProvider {
 DSL 支持: == != > < >= <= AND OR NOT
 无数据时返回 []。
 "#);
-        }
 
         s.push_str("\n# 最终输出\n\n合并为单一 JSON，每字段独立可为 null:\n{\"l2_groups\":[...], \"l2_compression_needed\":bool, \"l1_rebuild\":bool, \"l0_rebuild\":bool, \"l3_extractions\":[...], \"habits\":{...}, \"crystals\":[...]}");
         s
@@ -462,125 +445,32 @@ DSL 支持: == != > < >= <= AND OR NOT
         Ok(out)
     }
 
-    fn parse_consolidated_response(
-        response: &str,
-        sections: Option<&[DreamSection]>,
-    ) -> Result<ConsolidationOutput, MemHopError> {
-        let all = sections.is_none();
-        let targets = sections.unwrap_or(&[
-            DreamSection::L2Groups,
-            DreamSection::L3Distill,
-            DreamSection::Habits,
-            DreamSection::Crystals,
-        ]);
-        let want = |s: DreamSection| -> bool { targets.contains(&s) };
+    fn parse_consolidated_response(response: &str) -> Result<ConsolidationOutput, MemHopError> {
         let cleaned = Self::strip_code_blocks(response);
         let root: serde_json::Value = serde_json::from_str(&cleaned)
             .map_err(|e| MemHopError::Serialization(format!("Parse JSON: {}", e)))?;
 
         macro_rules! parse_or_empty {
-            ($key:expr, $parser:expr, $wanted:expr, $ty:ty) => {{
-                if !$wanted {
-                    Section::Empty
-                } else {
-                    match root.get($key).filter(|v| !v.is_null()) {
-                        Some(v) => match $parser(v) {
-                            Ok(r) => Section::Valid(r),
-                            Err(e) => {
-                                tracing::warn!("section {}: {}", $key, e);
-                                Section::ParseFailed(e.to_string())
-                            }
-                        },
-                        None => Section::Empty,
-                    }
+            ($key:expr, $parser:expr) => {{
+                match root.get($key).filter(|v| !v.is_null()) {
+                    Some(v) => match $parser(v) {
+                        Ok(r) => Section::Valid(r),
+                        Err(e) => {
+                            tracing::warn!("section {}: {}", $key, e);
+                            Section::ParseFailed(e.to_string())
+                        }
+                    },
+                    None => Section::Empty,
                 }
             }};
         }
 
         Ok(ConsolidationOutput {
-            l2_groups: parse_or_empty!(
-                "l2_groups",
-                Self::parse_l2_groups,
-                all || want(DreamSection::L2Groups),
-                Vec<L2Group>
-            ),
-            l3_extractions: parse_or_empty!(
-                "l3_extractions",
-                Self::parse_l3_extractions,
-                all || want(DreamSection::L3Distill),
-                Vec<L3Extraction>
-            ),
-            habits: parse_or_empty!(
-                "habits",
-                Self::parse_habits,
-                all || want(DreamSection::Habits),
-                HabitAnalysis
-            ),
-            crystals: parse_or_empty!(
-                "crystals",
-                Self::parse_crystals,
-                all || want(DreamSection::Crystals),
-                Vec<CrystalDef>
-            ),
+            l2_groups: parse_or_empty!("l2_groups", Self::parse_l2_groups),
+            l3_extractions: parse_or_empty!("l3_extractions", Self::parse_l3_extractions),
+            habits: parse_or_empty!("habits", Self::parse_habits),
+            crystals: parse_or_empty!("crystals", Self::parse_crystals),
         })
-    }
-
-    fn fallback_summarize_inner(texts: &[String]) -> (String, String) {
-        let combined: String = texts
-            .iter()
-            .map(|t| t.chars().take(300).collect::<String>())
-            .collect::<Vec<_>>()
-            .join(" | ");
-        let mut keywords: HashMap<String, usize> = HashMap::new();
-        for text in texts {
-            for word in crate::index::sparse::tokenize(text) {
-                if word.len() > 1 {
-                    *keywords.entry(word).or_insert(0) += 1;
-                }
-            }
-        }
-        let mut sorted: Vec<_> = keywords.into_iter().collect();
-        sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
-        let kw_str: String = sorted
-            .iter()
-            .take(8)
-            .map(|(k, _)| k.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let title = combined.chars().take(20).collect::<String>();
-        (title, format!("[fallback] {}", kw_str))
-    }
-
-    fn fallback_habits_inner(dialogues: &[String]) -> HabitAnalysis {
-        let stop: HashSet<&str> = [
-            "the", "a", "an", "is", "are", "was", "were", "be", "to", "of", "in", "for", "on",
-            "with", "at", "by", "and", "but", "or", "not", "的", "了", "在", "是", "我", "有",
-            "和", "就", "不", "也", "很", "都",
-        ]
-        .iter()
-        .copied()
-        .collect();
-        let mut freq: HashMap<String, usize> = HashMap::new();
-        for text in dialogues {
-            for word in text.split_whitespace() {
-                let l = word.to_lowercase();
-                if l.len() > 1 && !stop.contains(l.as_str()) {
-                    *freq.entry(l).or_insert(0) += 1;
-                }
-            }
-        }
-        let mut sorted: Vec<_> = freq.into_iter().collect();
-        sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
-        let lexicon: HashMap<String, String> = sorted
-            .iter()
-            .take(8)
-            .map(|(w, c)| (w.clone(), format!("高频词(出现{}次)", c)))
-            .collect();
-        HabitAnalysis {
-            lexicon,
-            style_traits: vec![],
-            emotion_patterns: HashMap::new(),
-        }
     }
 }
 
@@ -591,7 +481,7 @@ DSL 支持: == != > < >= <= AND OR NOT
 impl LlmProvider for OpenAICompatibleLlmProvider {
     fn consolidate(&self, input: &ConsolidationInput) -> Result<ConsolidationOutput, MemHopError> {
         let data = Self::build_data_section(input);
-        let tasks = Self::build_task_prompt(None);
+        let tasks = Self::build_task_prompt();
         let user_prompt = format!("# 输入数据\n\n{}\n\n{}", data, tasks);
         tracing::info!(
             "consolidate: scenes={} dialogues={} chains={} prompt_len={}",
@@ -609,83 +499,8 @@ impl LlmProvider for OpenAICompatibleLlmProvider {
             Self::cons_top_p(),
             Self::cons_presence_penalty(),
             Self::cons_frequency_penalty(),
-            &|r| Self::parse_consolidated_response(r, None),
+            &|r| Self::parse_consolidated_response(r),
         )
-        .or_else(|e| {
-            tracing::warn!("consolidate failed: {}", e);
-            let err = format!("LLM error: {}", e);
-            Ok(ConsolidationOutput {
-                l2_groups: Section::ParseFailed(err.clone()),
-                l3_extractions: Section::ParseFailed(err.clone()),
-                habits: Section::ParseFailed(err.clone()),
-                crystals: Section::ParseFailed(err.clone()),
-            })
-        })
-    }
-
-    fn retry_sections(
-        &self,
-        input: &ConsolidationInput,
-        sections: &[DreamSection],
-    ) -> Result<ConsolidationOutput, MemHopError> {
-        if sections.is_empty() {
-            return Ok(ConsolidationOutput {
-                l2_groups: Section::Empty,
-                l3_extractions: Section::Empty,
-                habits: Section::Empty,
-                crystals: Section::Empty,
-            });
-        }
-        let names: Vec<&str> = sections
-            .iter()
-            .map(|s| match s {
-                DreamSection::L2Groups => "L2",
-                DreamSection::L3Distill => "L3",
-                DreamSection::Habits => "habits",
-                DreamSection::Crystals => "crystals",
-            })
-            .collect();
-        let data = Self::build_data_section(input);
-        let tasks = Self::build_task_prompt(Some(sections));
-        let user_prompt = format!(
-            "# 第二阶段重试\n仅处理: {}\n其他返回 null\n\n{}\n\n{}",
-            names.join(","),
-            data,
-            tasks
-        );
-        tracing::info!(
-            "retry: sections={:?} prompt_len={}",
-            names,
-            user_prompt.len()
-        );
-
-        self.call_with_retry(
-            SYSTEM_CONSOLIDATE,
-            &user_prompt,
-            Self::retry_max_tokens(),
-            Self::cons_temperature(),
-            Self::cons_top_p(),
-            Self::cons_presence_penalty(),
-            Self::cons_frequency_penalty(),
-            &|r| Self::parse_consolidated_response(r, Some(sections)),
-        )
-        .or_else(|e| {
-            tracing::warn!("retry failed: {}", e);
-            let err = format!("retry: {}", e);
-            Ok(ConsolidationOutput {
-                l2_groups: Section::ParseFailed(err.clone()),
-                l3_extractions: Section::ParseFailed(err.clone()),
-                habits: Section::ParseFailed(err.clone()),
-                crystals: Section::ParseFailed(err.clone()),
-            })
-        })
-    }
-
-    fn fallback_summarize(&self, texts: &[String]) -> (String, String) {
-        Self::fallback_summarize_inner(texts)
-    }
-    fn fallback_habits(&self, dialogues: &[String]) -> HabitAnalysis {
-        Self::fallback_habits_inner(dialogues)
     }
 
     fn chat(

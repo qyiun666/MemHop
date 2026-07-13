@@ -96,16 +96,11 @@ pub(crate) fn rerank_candidates(
     let docs: Vec<String> = candidates
         .iter()
         .map(|(ctx, _)| {
-            let mut text = if ctx.fused_keywords.is_empty() {
+            if ctx.fused_keywords.is_empty() {
                 ctx.user_keywords.join(", ")
             } else {
                 ctx.fused_keywords.join(", ")
-            };
-            if let Some(ref s) = ctx.fused_summary {
-                text.push(' ');
-                text.push_str(s);
             }
-            text
         })
         .collect();
 
@@ -285,7 +280,7 @@ pub fn search_l2_candidates(
     sparse_index: &SparseIndex,
     _l2_meta: &L2MetaIndex,
     vector_dim: usize,
-    encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
+    encoder: &(dyn crate::encoder::Encoder + Send + Sync),
     search_weights: &SearchWeights,
     ivf_index: Option<&IVFIndex>,
     context_limit: usize,
@@ -296,27 +291,25 @@ pub fn search_l2_candidates(
 
     let bm25_results = retrieve_l2_bm25(engine, query_text, sparse_index, fetch_limit, candidates)?;
 
-    let vector_results = if let Some(enc) = encoder {
-        // Gracefully degrade if encoder fails (e.g. dimension mismatch)
-        match enc.encode(query_text) {
-            Ok(output) if !output.dense.is_empty() => retrieve_l2_vector(
-                engine,
-                &output.dense,
-                vector_dim,
-                fetch_limit,
-                min_score,
-                candidates,
-                ivf_index,
-                search_weights.n_probes,
-            )?,
-            Ok(_) => vec![],
-            Err(e) => {
-                tracing::warn!("encoder encode failed, skipping vector retrieval: {}", e);
-                vec![]
-            }
+    let vector_results = match encoder.encode(query_text) {
+        Ok(output) if !output.dense.is_empty() => retrieve_l2_vector(
+            engine,
+            &output.dense,
+            vector_dim,
+            fetch_limit,
+            min_score,
+            candidates,
+            ivf_index,
+            search_weights.n_probes,
+        )?,
+        Ok(_) => {
+            return Err(MemHopError::EncoderError(
+                "empty dense vector from encoder".into(),
+            ))
         }
-    } else {
-        vec![]
+        Err(e) => {
+            return Err(MemHopError::EncoderError(format!("encode failed: {}", e)));
+        }
     };
 
     let config = MergeConfig {
@@ -328,17 +321,13 @@ pub fn search_l2_candidates(
     let merged = merge_and_rank(bm25_results, vector_results, config);
 
     if search_weights.enable_reranker {
-        if let Some(enc) = encoder {
-            rerank_candidates(
-                query_text,
-                &merged,
-                enc,
-                search_weights.rerank_max_candidates,
-                context_limit,
-            )
-        } else {
-            Ok(merged.into_iter().take(context_limit).collect())
-        }
+        rerank_candidates(
+            query_text,
+            &merged,
+            encoder,
+            search_weights.rerank_max_candidates,
+            context_limit,
+        )
     } else {
         Ok(merged.into_iter().take(context_limit).collect())
     }

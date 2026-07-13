@@ -6,9 +6,9 @@
 use criterion::{black_box, criterion_group, BenchmarkId, Criterion};
 use memhop::{
     ArchiveQuery, ImportData, ImportMode, ImportRequest, KnowledgeImportItem, KnowledgeListQuery,
-    MemHop, MemHopConfig, RequestSource, SearchQuery, TargetLayer, TopicListQuery, UpdateL2Fields,
-    UpdateRequest,
+    MemHop, MemHopConfig, SearchQuery, TargetLayer, TopicListQuery, UpdateL2Fields, UpdateRequest,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -21,7 +21,7 @@ const ENCODER_ADDR: &str = "http://127.0.0.1:27110";
 fn make_config(path: PathBuf) -> MemHopConfig {
     MemHopConfig {
         db_path: path,
-        encoder_grpc_addr: Some(ENCODER_ADDR.to_string()),
+        encoder_grpc_addr: ENCODER_ADDR.to_string(),
         vector_dim: 768,
         crystal_path: None,
         llm: Default::default(),
@@ -47,21 +47,31 @@ fn run_e2e_workflow(n_topics: usize) {
 
     // 1. Seed topics via search_memory with auto_create (profile update removed in v0.57+)
     for i in 0..n_topics {
-        let _ = db.search_context(SearchQuery {
-            dialogue: format!("end-to-end benchmark topic number {}", i),
-            l2_id: None,
-            l3_id: None,
-            auto_create: true,
+        let _ = db.search(SearchQuery {
+            query: format!("end-to-end benchmark topic number {}", i),
+            layers: vec![2],
+            max_results: 20,
+            min_score: 0.0,
+            include_profile: false,
+            filters: None,
+            directed_l2_id: None,
+            directed_l3_id: None,
+            auto_create: Some(1),
         });
     }
 
     // 3. Search with auto_create and update the resulting topic
     let search_res = db
-        .search_context(SearchQuery {
-            dialogue: "agent workflow orchestration benchmark".to_string(),
-            l2_id: None,
-            l3_id: None,
-            auto_create: true,
+        .search(SearchQuery {
+            query: "agent workflow orchestration benchmark".to_string(),
+            layers: vec![2],
+            max_results: 20,
+            min_score: 0.0,
+            include_profile: false,
+            filters: None,
+            directed_l2_id: None,
+            directed_l3_id: None,
+            auto_create: Some(1),
         })
         .expect("search_context failed");
     let topic_id = search_res
@@ -72,15 +82,20 @@ fn run_e2e_workflow(n_topics: usize) {
 
     let _update = db
         .update_memory(UpdateRequest {
-            topic_id,
-            dialogue_text: "User: what is MemHop?\nAssistant: an agent memory database".to_string(),
-            summary: Some("MemHop introduction".to_string()),
-            action_chain: None,
-            instant_distill: false,
-            scene_id: None,
-            source: RequestSource::default(),
-            user_keywords: None,
-            agent_keywords: None,
+            id: topic_id,
+            layer: 2,
+            fields: HashMap::from([
+                (
+                    "dialogue_text".to_string(),
+                    serde_json::Value::String(
+                        "User: what is MemHop?\nAssistant: an agent memory database".to_string(),
+                    ),
+                ),
+                (
+                    "summary".to_string(),
+                    serde_json::Value::String("MemHop introduction".to_string()),
+                ),
+            ]),
         })
         .expect("update_memory failed");
 

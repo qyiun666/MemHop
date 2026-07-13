@@ -88,30 +88,68 @@ pub struct WritePreprocessResult {
 // Search Memory Interface (Interface 2)
 // ============================================================================
 
+/// Search filters for memory retrieval
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SearchFilters {
+    /// Filter by scene ID
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scene_id: Option<String>,
+    /// Filter by keywords (only return results matching these keywords)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keywords: Option<Vec<String>>,
+}
+
 /// Search query for memory retrieval
 ///
-/// # Routing logic
-///
-/// | Parameter | Behavior |
-/// |-----------|----------|
-/// | `auto_create=true` | Skip all retrieval, create new L2 context directly |
-/// | `l2_id` present & L2 exists | Skip triple retrieval, only L1-associate from that L2 |
-/// | `l3_id` present | Restrict triple retrieval to L2 contexts containing this L3 |
-/// | default | Full triple retrieval (vector + BM25 + n-gram) |
+/// A general-purpose search interface that retrieves memories across specified
+/// cognitive layers (L0-L5). Results are ranked by relevance scores.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchQuery {
+    /// The search text / query string (required)
+    pub query: String,
+    /// Which cognitive layers to search (e.g., [0, 2, 3, 5])
+    #[serde(default)]
+    pub layers: Vec<u8>,
+    /// Maximum number of results to return
+    #[serde(default = "default_max_results")]
+    pub max_results: usize,
+    /// Minimum relevance score threshold [0.0, 1.0]
+    #[serde(default)]
+    pub min_score: f64,
+    /// Whether to include L0 profile in results
+    #[serde(default)]
+    pub include_profile: bool,
+    /// Optional filters to narrow results
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filters: Option<SearchFilters>,
+    /// Directly route to a specific L2 context by ID (skip vector search)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directed_l2_id: Option<String>,
+    /// Directly route to a specific L3 hypergraph by ID
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directed_l3_id: Option<String>,
+    /// Auto-create a new L2 context when search returns no matches (0=off, 1=on)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_create: Option<u8>,
+}
+
+fn default_max_results() -> usize {
+    20
+}
+
+/// Internal search query for the search pipeline — not part of public API.
+/// Contains routing fields used by the internal retrieval engine.
+#[derive(Debug, Clone)]
+pub(crate) struct InternalSearchQuery {
     /// Current user dialogue content (required)
     pub dialogue: String,
-    /// Directed L2 context ID (optional). If present and the L2 exists,
-    /// skip retrieval and directly associate from this L2.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// LLM-extracted keywords for encoding (when available)
+    pub keywords: Vec<String>,
+    /// Directed L2 context ID (optional)
     pub l2_id: Option<String>,
-    /// Directed L3 hypergraph ID (optional). Restrict retrieval to L2
-    /// contexts that contain this L3 in their l3_refs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Directed L3 hypergraph ID (optional)
     pub l3_id: Option<String>,
-    /// Auto-create new context when no match found (optional, replaces manual create_scene)
-    #[serde(default)]
+    /// Auto-create new context when no match found
     pub auto_create: bool,
 }
 
@@ -135,6 +173,12 @@ pub struct L1Preview {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recall_score: Option<f64>,
 }
+
+// Re-export canonical StageReport and StageStatus from diagnostics module.
+pub use crate::query::diagnostics::{StageReport, StageStatus};
+
+/// Alias: DreamStage is the same as StageReport.
+pub use crate::query::diagnostics::StageReport as DreamStage;
 
 /// L3 knowledge graph preview — lightweight summary for agent decision-making
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,12 +205,6 @@ pub struct SearchResult {
     /// L1 - Previews of matched ContextNodes
     #[serde(default)]
     pub l1_previews: Vec<L1Preview>,
-    /// LLM 预处理使用的关键词（回传给调用方用于展示/调试）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub llm_keywords_used: Option<Vec<String>>,
-    /// L3 知识图谱导入提示（needs_l3_import 为 true 时非空）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub l3_import_hints: Option<Vec<L3EntityHint>>,
 }
 
 /// L2 context hit from search (depth ≤ 2)
@@ -206,10 +244,6 @@ pub struct ContextResult {
     pub l3_refs: Vec<String>,
     /// Normalized retrieval fusion score [0.0, 1.0]
     pub retrieval_score: f32,
-    /// Created at (ms)
-    pub created_at: i64,
-    /// Updated at (ms)
-    pub updated_at: i64,
 }
 
 /// L4 archive reference (lightweight pointer)
@@ -256,46 +290,18 @@ pub struct ProfileResult {
 // Update Memory Interface (Interface 3)
 // ============================================================================
 
-/// Update request for activated L2 context memory updates
+/// Update request for layer-generic memory updates
 ///
-/// After search_memory activates an L2 context, this interface:
-/// 1. Writes dialogue_text to L4 ArchiveSlot on disk
-/// 2. Writes action_chain to L5 ActionChainSlot on disk
-/// 3. Appends L4 archive_id to L2 archive_refs index
-/// 4. Appends summary to L2 context summary
-///
-/// topic_id is required - the L2 must already be activated.
+/// After `search` activates a memory context, this interface updates
+/// the specified layer's fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateRequest {
-    /// Activated L2 topic ID (required, returned by search_memory)
-    pub topic_id: String,
-    /// Current round dialogue text (written to L4 on disk by this interface)
-    pub dialogue_text: String,
-    /// Compressed summary for current round (optional, appended to L2 context summary)
-    pub summary: Option<String>,
-    /// Action chain (written to L5 on disk by this interface)
-    #[serde(default)]
-    pub action_chain: Option<Vec<ActionItem>>,
-    /// Enable instant L3 knowledge distillation (optional, default: false)
-    #[serde(default)]
-    pub instant_distill: bool,
-    /// API 请求来源（记录是谁发起的更新，会写入 L4 ArchiveSlot.metadata）
-    #[serde(default, skip_serializing_if = "RequestSource::is_empty")]
-    pub source: RequestSource,
-    /// Scene identifier for grouping related contexts.
-    ///
-    /// **强烈建议传入**：相同 `scene_id` 的上下文会被 Dream 阶段的
-    /// 合并压缩（`l2_merge_compress`）检测并归入同一场景树，从而
-    /// 实现跨话题的摘要合并与深度降级。不传入时每个 topic 独立成场景，
-    /// 失去跨话题合并压缩的价值。
-    #[serde(default)]
-    pub scene_id: Option<String>,
-    /// LLM 预处理后的用户关键词（传入则直接用于 L2 存储，跳过默认值）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub user_keywords: Option<Vec<String>>,
-    /// LLM 预处理后的 Agent 关键词
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub agent_keywords: Option<Vec<String>>,
+    /// Target memory ID
+    pub id: String,
+    /// Target layer (0=profile, 2=context, 3=knowledge, 4=archive, 5=crystal)
+    pub layer: u8,
+    /// Fields to update as a map of field names to JSON values
+    pub fields: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// Action item for L5 action chain storage
@@ -327,19 +333,10 @@ pub enum ActionType {
 /// Update result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateResult {
-    /// L2 topic ID
-    pub topic_id: String,
-    /// L4 archive ID created by this update
-    pub archive_id: String,
     /// Update status
     pub status: UpdateStatus,
-    /// Whether this update triggered an automatic dream consolidation
-    /// because archive or summary thresholds were exceeded.
-    #[serde(default)]
-    pub dream_triggered: bool,
-    /// Node ID for the newly created turn (if created)
-    #[serde(default)]
-    pub turn_node_id: String,
+    /// Updated memory ID
+    pub id: String,
 }
 
 /// Update status enumeration
@@ -373,6 +370,17 @@ pub struct L1Node {
     pub importance: f32,
     pub valence: f64,
     pub arousal: f64,
+    /// LLM-generated summary (from associated L2 context)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    /// Dominant emotion label derived from valence/arousal
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dominant_emotion: Option<String>,
+    /// Keywords extracted from the associated topic
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    /// Recall/relevance score (derived from importance)
+    pub recall_score: f32,
     pub created_at: i64,
     pub updated_at: i64,
     pub edge_ids: Vec<String>,
@@ -453,10 +461,18 @@ pub struct TopicListResult {
 pub struct TopicSummary {
     pub id: String,
     pub depth: u8,
-    pub scene_id: u64,
+    pub scene_id: String,
     pub user_keywords: Vec<String>,
     pub agent_keywords: Vec<String>,
     pub fused_keywords: Vec<String>,
+    /// LLM-generated fused summary of the topic
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fused_summary: Option<String>,
+    /// Total number of turns (user + agent L4 refs)
+    pub turn_count: usize,
+    /// Whether this topic is currently active in a session
+    pub is_active: bool,
+    pub created_at: i64,
     pub l4_count: usize,
     pub l3_count: usize,
     pub updated_at: i64,
@@ -469,7 +485,7 @@ pub struct TopicDetail {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<String>,
     pub depth: u8,
-    pub scene_id: u64,
+    pub scene_id: String,
     pub user_keywords: Vec<String>,
     pub user_timestamp: i64,
     pub agent_keywords: Vec<String>,
@@ -477,7 +493,7 @@ pub struct TopicDetail {
     pub fused_keywords: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fused_summary: Option<String>,
-    pub children_ids: Vec<u64>,
+    pub children_ids: Vec<String>,
     pub user_l4_refs: Vec<String>,
     pub user_l3_refs: Vec<String>,
     pub agent_l4_refs: Vec<String>,
@@ -485,9 +501,6 @@ pub struct TopicDetail {
     pub created_at: i64,
     pub updated_at: i64,
 }
-
-/// Backward-compatibility alias for the unified LlmParams.
-pub type LlmParamsDto = LlmParams;
 
 /// Knowledge list query
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -622,18 +635,13 @@ pub struct Archive {
     pub topic_id: Option<String>,
     pub engram_ids: Vec<String>,
     pub created_at: i64,
-    /// 请求来源信息（从 ArchiveSlot.metadata 解析）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_agent: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_platform: Option<String>,
 }
 
 /// Crystal list query
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrystalListQuery {
-    pub page: usize,
-    pub page_size: usize,
+    pub page: u32,
+    pub page_size: u32,
     pub status_filter: Option<String>, // active/inactive/deprecated
     pub min_trigger_count: Option<u32>,
     pub keyword: Option<String>,
@@ -642,11 +650,9 @@ pub struct CrystalListQuery {
 /// Crystal list result
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrystalListResult {
-    pub items: Vec<CrystalSummary>,
-    pub total: usize,
-    pub page: usize,
-    pub page_size: usize,
-    pub has_more: bool,
+    pub crystals: Vec<CrystalSummary>,
+    pub total: u32,
+    pub page: u32,
 }
 
 /// Crystal summary
@@ -666,6 +672,9 @@ pub struct CrystalSummary {
 // ============================================================================
 // Update Title Interfaces (Interfaces 13-16)
 // ============================================================================
+
+/// Update profile request (also used as ProfileDelta)
+pub type ProfileDelta = UpdateProfileRequest;
 
 /// Update profile request
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -796,6 +805,57 @@ pub struct ImportError {
 }
 
 // ============================================================================
+// Store Batch Interface
+// ============================================================================
+
+/// Store result for batch store operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreResult {
+    /// Number of items successfully stored
+    pub stored_count: u32,
+    /// IDs of stored items
+    pub item_ids: Vec<String>,
+}
+
+/// Store batch request containing multiple items
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreBatch {
+    /// List of items to store
+    pub items: Vec<StoreItem>,
+    /// Source information (e.g., which agent/system triggered this)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_info: Option<String>,
+    /// Import mode for handling duplicates
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub import_mode: Option<ImportMode>,
+}
+
+/// Individual item in a batch store operation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoreItem {
+    /// The text content to store
+    pub content: String,
+    /// Keywords for retrieval indexing
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    /// Source identifier string
+    #[serde(default)]
+    pub source: String,
+    /// Target memory layer (0=profile, 1=L1, 2=context, 3=knowledge, 4=archive, 5=crystal)
+    pub layer: u8,
+    /// Source type categorization
+    #[serde(default = "default_store_source_type")]
+    pub source_type: String,
+    /// Importance/relevance score (0.0 - 1.0)
+    #[serde(default)]
+    pub score: f64,
+}
+
+fn default_store_source_type() -> String {
+    "UserInput".to_string()
+}
+
+// ============================================================================
 // L3 Hypergraph Types — public DTOs for hypergraph nodes, edges, and queries
 // ============================================================================
 
@@ -903,6 +963,13 @@ pub struct Subgraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
 }
+
+/// Type aliases for L3 subgraph nodes and edges.
+pub type SubgraphNode = GraphNode;
+/// Type alias for L3 subgraph edges.
+pub type SubgraphEdge = GraphEdge;
+/// Type alias for L3 edge kind.
+pub type EdgeKind = GraphEdgeKind;
 
 /// A single hop in graph traversal (BFS / shortest path).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1031,8 +1098,14 @@ pub struct L3Detail {
 /// Result of merging multiple L2 contexts into a primary context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergeResult {
-    pub primary: TopicDetail,
-    pub merged_ids: Vec<String>,
+    /// ID of the primary (surviving) context
+    pub primary_id: String,
+    /// Number of secondary contexts absorbed
+    pub merged_count: u32,
+    /// Total number of turns after merge
+    pub new_turn_count: u32,
+    /// IDs of the absorbed secondary contexts
+    pub absorbed_topic_ids: Vec<String>,
 }
 
 /// Result of querying a scene tree — all nodes in a scene with edge topology.

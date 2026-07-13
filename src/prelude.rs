@@ -5,8 +5,5 @@
 
 pub use crate::api::MemHop;
 pub use crate::api::{MemHopError, Result};
-pub use crate::config::{LlmConfig, MemHopConfig};
-pub use crate::dream::prune::DreamReport;
-pub use crate::query::types::{
-    ProfileResult, SearchQuery, SearchResult, UpdateRequest, UpdateResult,
-};
+pub use crate::{LlmConfig, MemHopConfig};
+pub use crate::{ProfileResult, SearchQuery, SearchResult, UpdateRequest, UpdateResult};

@@ -38,12 +38,12 @@ fn safe_char_slice(s: &str, max_chars: usize) -> String {
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "grpc-encoder")]
 pub fn search_context(
-    query: SearchQuery,
+    query: InternalSearchQuery,
     sparse_index: &mut SparseIndex,
     l2_meta: &L2MetaIndex,
     vector_dim: usize,
     engine: &mut StorageEngine,
-    encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
+    encoder: &(dyn crate::encoder::Encoder + Send + Sync),
     search_weights: &SearchWeights,
     ivf_index: Option<&IVFIndex>,
     l1_reverse: &L1ReverseIndex,
@@ -54,8 +54,20 @@ pub fn search_context(
     // Route 1: auto_create
     // ========================================================================
     let filtered_l2 = if query.auto_create {
-        let new_ctx =
-            create_new_l2_context(engine, sparse_index, &query.dialogue, vector_dim, encoder)?;
+        let keywords = if query.keywords.is_empty() {
+            // No LLM keywords available; tokenize dialogue as fallback
+            vec![query.dialogue.clone()]
+        } else {
+            query.keywords.clone()
+        };
+        let new_ctx = create_new_l2_context(
+            engine,
+            sparse_index,
+            &query.dialogue,
+            &keywords,
+            vector_dim,
+            encoder,
+        )?;
         vec![(new_ctx, 1.0)]
 
     // ========================================================================
@@ -218,12 +230,13 @@ impl L1ReverseIndex {
 /// Create a new L2 ContextSlot from dialogue content (auto_create fast path)
 #[allow(clippy::too_many_arguments)]
 #[cfg(feature = "grpc-encoder")]
-fn create_new_l2_context(
+pub(crate) fn create_new_l2_context(
     engine: &mut StorageEngine,
     sparse_index: &mut SparseIndex,
     dialogue: &str,
+    keywords: &[String],
     _vector_dim: usize,
-    encoder: Option<&(dyn crate::encoder::Encoder + Send + Sync)>,
+    encoder: &(dyn crate::encoder::Encoder + Send + Sync),
 ) -> Result<ContextSlot, MemHopError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -240,22 +253,22 @@ fn create_new_l2_context(
     let id_hash = hash_id(&id_str);
     let title = safe_char_slice(dialogue, 50);
 
-    // Store centroid vector as a separate engine record if encoder is available
-    let centroid_record_hash = if let Some(enc) = encoder {
-        match enc.encode(dialogue) {
-            Ok(output) if !output.dense.is_empty() => {
-                let vec_id_hash = hash_id(&format!("v:{}", id_hash));
-                let vec_bytes: Vec<u8> =
-                    output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
-                match engine.write_record(0xF0, vec_id_hash, &vec_bytes) {
-                    Ok(_) => vec_id_hash,
-                    Err(_) => 0,
-                }
-            }
-            _ => 0,
-        }
+    // Use LLM-extracted keywords for centroid encoding (preserving vector space symmetry)
+    let encode_text = if keywords.is_empty() {
+        dialogue.to_string()
     } else {
-        0
+        keywords.join(" ")
+    };
+    let centroid_record_hash = match encoder.encode(&encode_text) {
+        Ok(output) if !output.dense.is_empty() => {
+            let vec_id_hash = hash_id(&format!("v:{}", id_hash));
+            let vec_bytes: Vec<u8> = output.dense.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            match engine.write_record(0xF0, vec_id_hash, &vec_bytes) {
+                Ok(_) => vec_id_hash,
+                Err(_) => 0,
+            }
+        }
+        _ => 0,
     };
 
     let new_ctx = ContextSlot {
@@ -264,7 +277,11 @@ fn create_new_l2_context(
         children_ids: vec![],
         scene_id: 0,
         depth: 1,
-        user_keywords: vec![title],
+        user_keywords: if keywords.is_empty() {
+            vec![title]
+        } else {
+            keywords.to_vec()
+        },
         user_timestamp: now_ms,
         user_l4_refs: Vec::new(),
         user_l3_refs: Vec::new(),
@@ -371,7 +388,6 @@ mod tests {
             n_probes: 8,
             enable_reranker: true,
             rerank_max_candidates: 20,
-            recency_weight: 0.5,
             activation_boost: 1.3,
         }
     }
@@ -475,12 +491,17 @@ mod tests {
         let mut engine = StorageEngine::create(temp.path(), 768).unwrap();
         let (_sparse_index, l2_meta, l1_reverse) = build_test_indexes(&mut engine);
 
-        // Use a minimal SearchQuery for the test (requires grpc-encoder to actually run search_context)
-        let query = SearchQuery {
-            dialogue: "rust memory".to_string(),
-            l2_id: None,
-            l3_id: None,
-            auto_create: false,
+        // Use a minimal SearchQuery placeholder (the test only verifies engine writes, not search)
+        let _query = SearchQuery {
+            query: "rust memory".to_string(),
+            layers: vec![],
+            max_results: 20,
+            min_score: 0.0,
+            include_profile: false,
+            filters: None,
+            directed_l2_id: None,
+            directed_l3_id: None,
+            auto_create: None,
         };
 
         // Verify the data was written to the engine

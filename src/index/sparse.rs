@@ -32,6 +32,7 @@ impl Default for PostingList {
 }
 
 /// v1 multi-page directory magic — kept for backward compatibility with existing file headers.
+#[allow(dead_code)]
 pub const SPARSE_MAGIC: u32 = 0x4D485350; // "MHSP"
 
 /// 中英文停用词列表
@@ -296,52 +297,6 @@ pub(crate) fn tokenize_words(text: &str) -> Vec<String> {
         })
         .filter(|w| !w.is_empty())
         .collect()
-}
-
-// v1 multi-page persistence types/fns kept for backward compatibility with
-// existing file I/O paths (checkpoint.rs / index_chain.rs).
-
-/// Data container for v1 multi-page persistence. Kept for external callers.
-#[derive(Debug, Clone)]
-pub struct SparsePageData {
-    pub term_bucket_count: u32,
-    pub doc_bucket_count: u32,
-    pub term_count: u32,
-    pub doc_count: u32,
-    pub total_term_count: u64,
-    pub avg_doc_length: f32,
-    pub k1: f32,
-    pub b: f32,
-    /// Raw bincode payloads (v1 callers treat these as page chains).
-    pub term_buckets: Vec<Vec<Vec<u8>>>,
-    pub doc_buckets: Vec<Vec<Vec<u8>>>,
-}
-
-/// Build a v1 directory page payload. Kept for external callers.
-#[allow(dead_code)]
-pub fn build_sparse_directory(
-    page_data: &SparsePageData,
-    term_starts: &[u32],
-    doc_starts: &[u32],
-) -> Vec<u8> {
-    let mut dir = Vec::with_capacity(4096);
-    dir.extend_from_slice(&SPARSE_MAGIC.to_le_bytes());
-    dir.extend_from_slice(&page_data.term_bucket_count.to_le_bytes());
-    dir.extend_from_slice(&page_data.doc_bucket_count.to_le_bytes());
-    dir.extend_from_slice(&page_data.term_count.to_le_bytes());
-    dir.extend_from_slice(&page_data.doc_count.to_le_bytes());
-    dir.extend_from_slice(&page_data.total_term_count.to_le_bytes());
-    dir.extend_from_slice(&page_data.avg_doc_length.to_le_bytes());
-    dir.extend_from_slice(&page_data.k1.to_le_bytes());
-    dir.extend_from_slice(&page_data.b.to_le_bytes());
-    dir.extend_from_slice(&0u32.to_le_bytes());
-    for &p in term_starts {
-        dir.extend_from_slice(&p.to_le_bytes());
-    }
-    for &p in doc_starts {
-        dir.extend_from_slice(&p.to_le_bytes());
-    }
-    dir
 }
 
 // ============================================================================
@@ -857,35 +812,6 @@ impl SparseIndex {
     }
     pub fn deserialize(data: &[u8]) -> Result<Self, String> {
         bincode::deserialize(data).map_err(|e| format!("Deserialization failed: {}", e))
-    }
-
-    /// v2 bincode serialization (replaced v1 multi-page path).
-    /// Kept for backward compatibility — wraps bincode bytes in SparsePageData.
-    pub fn serialize_to_pages(&self) -> Result<SparsePageData, String> {
-        let data = self.serialize()?;
-        Ok(SparsePageData {
-            term_bucket_count: if self.postings.is_empty() { 0 } else { 1 },
-            doc_bucket_count: if self.doc_lengths.is_empty() { 0 } else { 1 },
-            term_count: self.postings.len() as u32,
-            doc_count: self.doc_lengths.len() as u32,
-            total_term_count: self.total_term_count,
-            avg_doc_length: self.avg_doc_length,
-            k1: self.k1,
-            b: self.b,
-            term_buckets: vec![vec![data]],
-            doc_buckets: vec![vec![]],
-        })
-    }
-
-    /// v2 bincode deserialization (replaced v1 multi-page path).
-    /// Kept for backward compatibility.
-    pub fn deserialize_from_pages(page_data: &SparsePageData) -> Result<Self, String> {
-        let bytes = if page_data.term_buckets.is_empty() || page_data.term_buckets[0].is_empty() {
-            return Ok(Self::new());
-        } else {
-            &page_data.term_buckets[0][0]
-        };
-        Self::deserialize(bytes)
     }
 }
 

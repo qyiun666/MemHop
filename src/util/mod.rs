@@ -8,6 +8,7 @@ pub use hash::hash_id;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+#[allow(dead_code)]
 pub const PAGE_SIZE: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

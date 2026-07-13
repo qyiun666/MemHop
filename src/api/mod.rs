@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io;
 use thiserror::Error;
 
-use crate::config::{self, MemHopConfig};
+use crate::config::MemHopConfig;
 use crate::index::l2_meta::L2MetaIndex;
 use crate::index::sparse::SparseIndex;
 use crate::index::vector::read_vector_from_engine;
@@ -83,6 +83,9 @@ pub enum MemHopError {
 
     #[error("Missing field: {0}")]
     MissingField(String),
+
+    #[error("LLM error: {0}")]
+    LlmError(String),
 }
 
 pub type Result<T> = std::result::Result<T, MemHopError>;
@@ -93,8 +96,7 @@ pub struct MemHop {
     pub(crate) config: MemHopConfig,
     pub(crate) sparse_index: SparseIndex,
     pub(crate) session_manager: SessionManager,
-    #[cfg(feature = "grpc-encoder")]
-    pub(crate) encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>>,
+    pub(crate) encoder: Box<dyn crate::encoder::Encoder + Send + Sync>,
     pub(crate) l1_reverse_index: L1ReverseIndex,
     pub(crate) ivf_index: Option<crate::index::vector::IVFIndex>,
     pub(crate) adjacency_cache: crate::l3::AdjacencyCache,
@@ -133,19 +135,23 @@ impl MemHop {
             if !snapshot.sparse_data.is_empty() {
                 match bincode::deserialize(&snapshot.sparse_data) {
                     Ok(idx) => sparse_index = idx,
-                    Err(e) => tracing::warn!(
-                        "Failed to deserialize sparse index from snapshot: {}. Using empty index.",
-                        e
-                    ),
+                    Err(e) => {
+                        return Err(MemHopError::Serialization(format!(
+                            "Failed to deserialize sparse index from snapshot: {}",
+                            e
+                        )));
+                    }
                 }
             }
             if !snapshot.l3_index_data.is_empty() {
                 match bincode::deserialize(&snapshot.l3_index_data) {
                     Ok(map) => l3_index_map = map,
-                    Err(e) => tracing::warn!(
-                        "Failed to deserialize L3 index map from snapshot: {}. Starting empty.",
-                        e
-                    ),
+                    Err(e) => {
+                        return Err(MemHopError::Serialization(format!(
+                            "Failed to deserialize L3 index map from snapshot: {}",
+                            e
+                        )));
+                    }
                 }
             }
         }
@@ -159,11 +165,10 @@ impl MemHop {
                 match L1ReverseIndex::deserialize(&snapshot.l1_reverse_data) {
                     Ok(idx) => idx,
                     Err(e) => {
-                        tracing::warn!(
-                            "Failed to deserialize L1 reverse index from snapshot: {}. Using rebuilt.",
+                        return Err(MemHopError::Serialization(format!(
+                            "Failed to deserialize L1 reverse index from snapshot: {}",
                             e
-                        );
-                        l1_reverse_index
+                        )));
                     }
                 }
             } else {
@@ -186,14 +191,10 @@ impl MemHop {
                 ))
             }
             Err(e) => {
-                tracing::warn!(
-                    "Failed to load IVF index from disk: {}. Creating new one.",
+                return Err(MemHopError::Serialization(format!(
+                    "Failed to load IVF index from disk: {}",
                     e
-                );
-                Some(crate::index::vector::IVFIndex::new(
-                    config.vector_dim,
-                    config.ivf_initial_k,
-                ))
+                )));
             }
         };
 
@@ -201,37 +202,28 @@ impl MemHop {
             config
                 .session_config
                 .as_ref()
-                .unwrap_or(&config::SessionConfig::default()),
+                .unwrap_or(&crate::config::SessionConfig::default()),
         );
 
-        #[cfg(feature = "grpc-encoder")]
-        let encoder: Option<Box<dyn crate::encoder::Encoder + Send + Sync>> = {
+        let encoder: Box<dyn crate::encoder::Encoder + Send + Sync> = {
             use crate::encoder::GrpcEncoder;
+            let grpc_addr = std::env::var("MEMHOP_ENCODER_GRPC_ADDR")
+                .unwrap_or_else(|_| config.encoder_grpc_addr.clone());
+            let grpc_addr = if grpc_addr.starts_with("http://") || grpc_addr.starts_with("https://")
+            {
+                grpc_addr
+            } else {
+                format!("http://{}", grpc_addr)
+            };
 
-            let grpc_addr = config
-                .encoder_grpc_addr
-                .clone()
-                .or_else(|| std::env::var("MEMHOP_ENCODER_GRPC_ADDR").ok());
-
-            match grpc_addr {
-                Some(addr) => match GrpcEncoder::new(&addr, config.vector_dim) {
-                    Ok(enc) => Some(Box::new(enc)),
-                    Err(e) => {
-                        tracing::warn!(
-                                "Failed to initialize gRPC encoder at {}: {} — vector search will be unavailable.",
-                                addr, e
-                            );
-                        None
-                    }
-                },
-                None => {
-                    tracing::warn!(
-                        "No gRPC encoder address configured — vector search will be unavailable. \
-                         Set encoder_grpc_addr in MemHopConfig or MEMHOP_ENCODER_GRPC_ADDR env var."
-                    );
-                    None
-                }
-            }
+            Box::new(
+                GrpcEncoder::new(&grpc_addr, config.vector_dim).map_err(|e| {
+                    MemHopError::EncoderError(format!(
+                        "Failed to connect encoder at {}: {}",
+                        grpc_addr, e
+                    ))
+                })?,
+            )
         };
 
         let l2_meta = L2MetaIndex::build_from_engine(&engine);
@@ -242,7 +234,6 @@ impl MemHop {
             config,
             sparse_index,
             session_manager,
-            #[cfg(feature = "grpc-encoder")]
             encoder,
             l1_reverse_index,
             ivf_index,

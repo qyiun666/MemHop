@@ -12,13 +12,17 @@ impl MemHop {
     /// Import memory into specified layer
     pub fn import_memory(&mut self, request: ImportRequest) -> Result<ImportResult> {
         use crate::query::import::import_memory as impl_fn;
-        impl_fn(
+        let result = impl_fn(
             &mut self.engine,
             &mut self.sparse_index,
             request,
             Some(&mut self.degree_tracker),
             Some(&mut self.l3_index_map),
-        )
+        )?;
+        // Rebuild in-memory L2 metadata after import so newly created
+        // L2 topics can be found by the search pipeline.
+        self.l2_meta = L2MetaIndex::build_from_engine(&self.engine);
+        Ok(result)
     }
 
     /// Build hypergraph edges from file path

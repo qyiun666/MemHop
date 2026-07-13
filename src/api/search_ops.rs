@@ -3,74 +3,96 @@
 
 //! Search API operations.
 
-use crate::query::types::{KnowledgeNodeQuery, KnowledgeNodesResult};
-#[cfg(feature = "grpc-encoder")]
-use crate::query::types::{L3EntityHint, SearchQuery, SearchResult};
+use crate::query::types::{
+    KnowledgeNodeQuery, KnowledgeNodesResult, SearchPreprocessResult, SearchQuery, SearchResult,
+};
 use crate::MemHop;
 use crate::MemHopError;
 use crate::Result;
 
 impl MemHop {
     /// Search memory using topic-centric retrieval model.
-    ///
-    /// When `enable_llm_preprocess` is true, the query dialogue is first sent
-    /// through LLM preprocessing to extract precise keywords and judge L3
-    /// import need. Results are then ranked by recency > activation > base score.
-    ///
-    /// # Arguments
-    /// * `query` - Search query with dialogue, filters, and optional LLM preprocessing
-    ///
-    /// # Returns
-    /// `SearchResult` containing profile, contexts, associated contexts, L3 IDs, etc.
     #[cfg(feature = "grpc-encoder")]
-    pub fn search_context(&mut self, query: SearchQuery) -> Result<SearchResult> {
+    pub fn search(&mut self, query: SearchQuery) -> Result<SearchResult> {
         use crate::query::search::search_context;
 
-        // Log a warning if encoder is not configured (vector search degraded to BM25-only)
-        if self.encoder.is_none() {
-            tracing::warn!(
-                "Encoder not configured — search falling back to BM25-only (vector search unavailable)."
-            );
+        // ====================================================================
+        // Directed L2: skip vector search, return the specified context directly
+        // ====================================================================
+        if let Some(ref l2_id) = query.directed_l2_id {
+            let topic = self.get_context(l2_id)?;
+            let profile = if query.include_profile {
+                self.get_profile()?
+            } else {
+                None
+            };
+            let contexts = match topic {
+                Some(ctx) => vec![ctx],
+                None => vec![],
+            };
+            return Ok(SearchResult {
+                profile,
+                contexts,
+                associated_contexts: vec![],
+                l3_ids: vec![],
+                l1_previews: vec![],
+            });
         }
 
-        // Determine effective keywords and L3 import hints via config-controlled LLM preprocessing
-        let (effective_keywords, l3_import_hints): (
-            Option<Vec<String>>,
-            Option<Vec<L3EntityHint>>,
-        ) = if self.config.llm_preprocess.enable_search_preprocess {
-            // Run LLM preprocessing inline
-            self.preprocess_search_query(&query.dialogue)
-        } else {
-            (None, None)
-        };
+        // Convert public SearchQuery to internal search query for the pipeline
+        let dialogue = query.query.clone();
 
-        // Build the search text: use LLM keywords if available, else raw dialogue.
-        // Keywords optimize BM25 retrieval; original dialogue preserved for vector encoding.
+        let preprocess_result = if self.config.llm_preprocess.preprocess_max_tokens > 0 {
+            self.preprocess_search_query(
+                &dialogue,
+                self.config.llm_preprocess.preprocess_temperature,
+                self.config.llm_preprocess.preprocess_max_tokens,
+            )?
+        } else {
+            SearchPreprocessResult {
+                keywords: vec![],
+                needs_l3_import: false,
+                l3_entities: vec![],
+            }
+        };
+        let effective_keywords = if preprocess_result.keywords.is_empty() {
+            None
+        } else {
+            Some(preprocess_result.keywords)
+        };
+        let l3_import_hints =
+            if preprocess_result.needs_l3_import && !preprocess_result.l3_entities.is_empty() {
+                Some(preprocess_result.l3_entities)
+            } else {
+                None
+            };
+
         let search_text = effective_keywords
             .as_ref()
             .map(|kws| kws.join(" "))
-            .unwrap_or_else(|| query.dialogue.clone());
+            .unwrap_or_else(|| dialogue.clone());
 
-        // Create a modified query that uses the optimized search text.
-        // The original dialogue is kept separately for vector encoding in the search pipeline.
-        let original_dialogue = query.dialogue.clone();
-        let mut search_query = query.clone();
-        search_query.dialogue = if effective_keywords.is_some() {
-            // Dual-channel: BM25 uses keywords, vector uses original dialogue.
-            // The search pipeline encode()s dialogue for vector; we replace it
-            // for BM25 but the pipeline internally re-tokenizes anyway.
-            search_text
-        } else {
-            original_dialogue
+        let original_dialogue = dialogue.clone();
+        let raw_keywords: Vec<String> = effective_keywords.unwrap_or_default();
+        let internal_search_query = crate::query::types::InternalSearchQuery {
+            dialogue: if !raw_keywords.is_empty() {
+                search_text
+            } else {
+                original_dialogue
+            },
+            keywords: raw_keywords.clone(),
+            l2_id: query.directed_l2_id.clone(),
+            l3_id: query.directed_l3_id.clone(),
+            auto_create: query.auto_create.unwrap_or(0) != 0,
         };
 
         let mut result = search_context(
-            search_query,
+            internal_search_query,
             &mut self.sparse_index,
             &self.l2_meta,
             self.config.vector_dim,
             &mut self.engine,
-            self.encoder.as_deref(),
+            &*self.encoder,
             self.config
                 .search_weights
                 .as_ref()
@@ -79,12 +101,58 @@ impl MemHop {
             &self.l1_reverse_index,
         )?;
 
-        // Apply recency + activation boosts to contexts
+        // ====================================================================
+        // Auto-create: when auto_create is 1 and no contexts found, create new L2
+        // ====================================================================
+        if query.auto_create.unwrap_or(0) != 0 && result.contexts.is_empty() {
+            tracing::info!(
+                "[search] auto_create=1, no matches found, creating new L2 context for: {}",
+                query.query
+            );
+            let create_keywords: Vec<String> = if raw_keywords.is_empty() {
+                vec![query.query.clone()]
+            } else {
+                raw_keywords.clone()
+            };
+            match crate::query::search::create_new_l2_context(
+                &mut self.engine,
+                &mut self.sparse_index,
+                &query.query,
+                &create_keywords,
+                self.config.vector_dim,
+                &*self.encoder,
+            ) {
+                Ok(new_ctx) => {
+                    let ctx_result =
+                        crate::api::l2_ops::slot_to_context_result(&new_ctx, new_ctx.id, 1.0);
+                    result.contexts.push(ctx_result);
+                    // Rebuild L2 metadata so the new context is findable in subsequent searches
+                    self.l2_meta =
+                        crate::index::l2_meta::L2MetaIndex::build_from_engine(&self.engine);
+                    tracing::info!(
+                        "[search] auto_create: new L2 context created: {}",
+                        crate::shared::common::format_hash(new_ctx.id)
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("[search] auto_create failed to create new L2: {}", e);
+                }
+            }
+        }
+
+        // Fire-and-forget L3 knowledge import: trigger based on search hints
+        if let Some(ref hints) = l3_import_hints {
+            if let Err(e) = self.import_l3_from_hints(hints) {
+                tracing::warn!("L3 import from search hints failed: {}", e);
+            }
+        }
+
+        // Apply activation boosts only (recency boost removed — ContextResult no longer has created_at)
         let active_ids = self.session_manager.get_active_topic_ids();
         let default_sw = crate::config::SearchWeights::default();
         let sw = self.config.search_weights.as_ref().unwrap_or(&default_sw);
-        apply_temporal_boosts(&mut result.contexts, &active_ids, sw);
-        apply_temporal_boosts(&mut result.associated_contexts, &active_ids, sw);
+        apply_activation_boost(&mut result.contexts, &active_ids, sw);
+        apply_activation_boost(&mut result.associated_contexts, &active_ids, sw);
 
         // Re-sort after boost application
         result.contexts.sort_by(|a, b| {
@@ -98,22 +166,11 @@ impl MemHop {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Attach LLM metadata to result
-        result.llm_keywords_used = effective_keywords;
-        result.l3_import_hints = l3_import_hints;
-
-        // After search (which may have auto-created a new context), rebuild IVF
         self.rebuild_ivf_index();
-
         Ok(result)
     }
 
     /// Unified L3 knowledge node retrieval.
-    ///
-    /// Matches on `KnowledgeNodeQuery` variant:
-    /// - `ByIds`: batch get nodes by their IDs
-    /// - `ByKeyword`: search within a graph by keyword
-    /// - `ByType`: get nodes within a graph by node type
     pub fn query_knowledge_nodes(&self, query: KnowledgeNodeQuery) -> Result<KnowledgeNodesResult> {
         match query {
             KnowledgeNodeQuery::ByIds { ids, include_text } => {
@@ -152,10 +209,6 @@ impl MemHop {
         }
     }
 
-    /// Search L3 knowledge nodes within a graph by exact keyword.
-    ///
-    /// Uses the in-memory L3 index for the graph and returns node details
-    /// (without full text). If the graph has no loaded L3 index, returns an error.
     fn search_knowledge_nodes_by_keyword(
         &self,
         graph_id: &str,
@@ -178,10 +231,6 @@ impl MemHop {
         })
     }
 
-    /// Get L3 knowledge nodes within a graph by node type.
-    ///
-    /// Uses the in-memory L3 index for the graph and returns node details
-    /// (without full text). If the graph has no loaded L3 index, returns an error.
     fn get_knowledge_nodes_by_type(
         &self,
         graph_id: &str,
@@ -204,74 +253,68 @@ impl MemHop {
         })
     }
 
-    /// Run LLM search preprocessing inline.
-    ///
-    /// Creates an OpenAI-compatible LLM provider from the current config and
-    /// calls the preprocess pipeline. Falls back to tokenizer on failure.
     #[cfg(feature = "llm")]
     fn preprocess_search_query(
         &self,
         dialogue: &str,
-    ) -> (Option<Vec<String>>, Option<Vec<L3EntityHint>>) {
+        temperature: f32,
+        max_tokens: u32,
+    ) -> Result<SearchPreprocessResult> {
         use crate::dream::llm_preprocess;
         use crate::dream::openai_compatible::OpenAICompatibleLlmProvider;
 
         let provider = OpenAICompatibleLlmProvider::new(self.config.llm.clone());
-        let result = llm_preprocess::preprocess_search_query(Some(&provider), dialogue);
-
-        let l3_hints = if result.needs_l3_import && !result.l3_entities.is_empty() {
-            Some(result.l3_entities)
-        } else {
-            None
-        };
-
-        (Some(result.keywords), l3_hints)
+        llm_preprocess::preprocess_search_query(&provider, dialogue, temperature, max_tokens)
     }
 
-    /// Fallback when LLM feature is disabled.
     #[cfg(not(feature = "llm"))]
     fn preprocess_search_query(
         &self,
         _dialogue: &str,
-    ) -> (Option<Vec<String>>, Option<Vec<L3EntityHint>>) {
-        (None, None)
+        _temperature: f32,
+        _max_tokens: u32,
+    ) -> Result<SearchPreprocessResult> {
+        Ok(SearchPreprocessResult {
+            keywords: vec![_dialogue.to_string()],
+            needs_l3_import: false,
+            l3_entities: vec![],
+        })
     }
 }
 
-/// Apply recency and activation boosts to context scores.
-///
-/// - **Recency boost**: `score += recency_weight * exp(-age_days / 7)`
-///   Recent contexts (within days) get higher boosts.
-/// - **Activation boost**: `score *= activation_boost` for topics in working memory.
-///
-/// Scores are clamped to [0.0, 1.0] after boost application.
+impl MemHop {
+    /// Import L3 knowledge nodes from entity hints (fire-and-forget).
+    ///
+    /// Uses a deterministic default graph (`hash_id("default_l3_graph")`)
+    /// that is automatically created on first use.
+    fn import_l3_from_hints(&mut self, hints: &[crate::query::types::L3EntityHint]) -> Result<()> {
+        let graph_id = crate::util::hash_id("default_l3_graph");
+        let _ = crate::query::pipeline::l3_import::import_entities_from_hints(
+            &mut self.engine,
+            &mut self.l3_index_map,
+            &mut self.degree_tracker,
+            graph_id,
+            hints,
+        )?;
+        Ok(())
+    }
+}
+
+/// Apply activation boost only (recency boost removed as ContextResult no longer has created_at)
 #[cfg(feature = "grpc-encoder")]
-#[allow(clippy::ptr_arg)]
-fn apply_temporal_boosts(
-    contexts: &mut Vec<crate::query::types::ContextResult>,
+fn apply_activation_boost(
+    contexts: &mut [crate::query::types::ContextResult],
     active_topic_ids: &[u64],
     weights: &crate::config::SearchWeights,
 ) {
-    let now_ms = crate::util::get_current_timestamp();
-    let ms_per_day: f64 = 86_400_000.0;
-
     for ctx in contexts.iter_mut() {
-        let age_ms = (now_ms - ctx.created_at).max(0) as f64;
-        let age_days = age_ms / ms_per_day;
-
-        // Recency boost: exponential decay, capped contribution
-        let recency = (weights.recency_weight as f64 * (-age_days / 7.0).exp()) as f32;
-
-        // Activation boost: check if this topic is in active session
         let ctx_hash = crate::shared::common::parse_id_to_hash(&ctx.id);
         let activation = if active_topic_ids.contains(&ctx_hash) {
             weights.activation_boost
         } else {
             1.0
         };
-
-        // Apply combined boost
-        ctx.retrieval_score = (ctx.retrieval_score + recency) * activation;
+        ctx.retrieval_score *= activation;
         ctx.retrieval_score = ctx.retrieval_score.clamp(0.0, 1.0);
     }
 }

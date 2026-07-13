@@ -35,8 +35,6 @@ fn convert_contexts(contexts: &[(ContextSlot, f32)]) -> Vec<ContextResult> {
                 .map(|h| format_hash(*h))
                 .collect(),
             retrieval_score: *score,
-            created_at: c.created_at,
-            updated_at: c.updated_at,
         })
         .collect()
 }
@@ -75,7 +73,5 @@ pub fn assemble_search_result(
         associated_contexts: convert_contexts(associated_contexts),
         l3_ids,
         l1_previews,
-        l3_import_hints: None,
-        llm_keywords_used: None,
     }
 }
