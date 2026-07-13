@@ -6,8 +6,8 @@
 
 use memhop::encoder::{Encoder, EncoderOutput};
 use memhop::{
-    ArchiveQuery, L6Filter, MemHop, MemHopConfig, PathwayWeightSlot, ProfileResult, SearchQuery,
-    SearchResult, TopicListQuery, UpdateL2Fields, UpdateL3Fields, UpdateL5Fields, UpdateL6Fields,
+    ArchiveQuery, MemHop, MemHopConfig, ProfileResult, SearchQuery,
+    SearchResult, TopicListQuery, UpdateL2Fields, UpdateL3Fields, UpdateL5Fields,
     UpdateRequest, UpdateResult,
 };
 use std::collections::HashMap;
@@ -150,42 +150,7 @@ fn api_surface_is_reachable() {
     );
     let _ = db.delete_l5("0000000000000006");
 
-    // API-10 L6 CRUD
-    let _ = db.get_l6("0000000000000007");
-    let _ = db.update_l6(
-        "0000000000000007",
-        UpdateL6Fields {
-            weight: Some(0.5),
-            ..Default::default()
-        },
-    );
-    let _ = db.delete_l6("0000000000000007");
-    let _ = db.list_l6(Some(L6Filter {
-        min_weight: Some(0.1),
-        ..Default::default()
-    }));
-    let _ = db.add_l6(vec![PathwayWeightSlot {
-        id_hash: 1,
-        source_node: "s".into(),
-        target_node: "t".into(),
-        weight: 0.5,
-        trigger_count: 0,
-        success_rate: 0.0,
-        last_accessed: 0,
-        metadata: String::new(),
-        created_at: 0,
-        updated_at: 0,
-        version: 1,
-    }]);
-    let _ = db.update_l6(
-        "0000000000000001",
-        UpdateL6Fields {
-            weight_delta: Some(0.1),
-            ..Default::default()
-        },
-    );
-
-    // API-11 dream
+    // API-10 dream
     let _ = db.dream(None);
 
     // API-12 close

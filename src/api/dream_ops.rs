@@ -19,7 +19,7 @@ impl MemHop {
     ///
     /// Executes the full memory consolidation pipeline on the requested L2 contexts:
     /// L3 distillation, L2 compression, L1 rebuild/decay, L0 profile regeneration,
-    /// habit distillation, L5 crystallization, L6 pathway decay, and crystal pruning.
+    /// habit distillation, L5 crystallization, and crystal pruning.
     ///
     /// # Arguments
     /// * `l2_ids` - Optional list of L2 context IDs (16-character hex strings). `None` or

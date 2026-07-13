@@ -987,19 +987,6 @@ pub struct UpdateL5Fields {
     pub last_triggered: Option<i64>,
 }
 
-/// Partial update fields for an L6 pathway weight.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct UpdateL6Fields {
-    pub source_node: Option<String>,
-    pub target_node: Option<String>,
-    pub weight: Option<f32>,
-    pub weight_delta: Option<f32>,
-    pub success_rate: Option<f32>,
-    pub trigger_count: Option<u32>,
-    pub last_accessed: Option<u64>,
-    pub metadata: Option<String>,
-}
-
 /// Query for L4 archive searches.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct L4SearchQuery {
@@ -1031,17 +1018,6 @@ pub struct ArchiveQuery {
 
 fn default_page_size() -> usize {
     20
-}
-
-/// Filter for listing L6 pathway weights.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct L6Filter {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_prefix: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub target_prefix: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min_weight: Option<f32>,
 }
 
 /// Detailed view of an L3 hypergraph: container + nodes + edges.
@@ -1140,8 +1116,6 @@ pub struct MemHopStats {
     pub l4_archive_count: usize,
     /// L5 action-chain / crystal count
     pub l5_crystal_count: usize,
-    /// L6 pathway weight entry count
-    pub l6_weight_count: usize,
     /// Database file size in bytes
     pub db_size_bytes: u64,
     /// IVF cluster count (0 if index not built)

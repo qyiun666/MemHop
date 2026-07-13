@@ -9,11 +9,11 @@
 
 use criterion::{black_box, criterion_group, Criterion};
 use memhop::query::types::{
-    ArchiveQuery, CrystalListQuery, KnowledgeNodeQuery, L6Filter, UpdateL6Fields,
+    ArchiveQuery, CrystalListQuery, KnowledgeNodeQuery,
 };
 use memhop::{
     ImportData, ImportMode, ImportRequest, KnowledgeImportItem, MemHop, MemHopConfig,
-    PathwayWeightSlot, RequestSource, SearchQuery, TargetLayer, TopicListQuery, UpdateRequest,
+    RequestSource, SearchQuery, TargetLayer, TopicListQuery, UpdateRequest,
 };
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
@@ -329,95 +329,6 @@ fn bench_l5_crystal_list(c: &mut Criterion) {
 }
 
 // ============================================================================
-// Benchmarks: L6 Pathway (list + CRUD on throw-away DB)
-// ============================================================================
-
-fn bench_l6_pathway_list(c: &mut Criterion) {
-    c.bench_function("l6_pathway_list", |b| {
-        b.iter(|| {
-            let db = db().lock().unwrap();
-            let res = db.list_l6(None).expect("list_l6 failed");
-            black_box(res.len())
-        })
-    });
-}
-
-fn bench_l6_pathway_crud(c: &mut Criterion) {
-    // Use a throw-away DB — L6 doesn't need encoder.
-    c.bench_function("l6_pathway_crud", |b| {
-        b.iter_batched(
-            || {
-                let dir = TempDir::new().expect("TempDir");
-                let path = dir.path().join("l6.meh");
-                let mut config = MemHopConfig::new(path, 768);
-                config.encoder_grpc_addr = None;
-                let db = MemHop::open(config).expect("open");
-                (db, dir)
-            },
-            |(mut db, _dir)| {
-                // Add
-                let slot = PathwayWeightSlot {
-                    id_hash: 42,
-                    source_node: "condition:deploy".into(),
-                    target_node: "action:restart".into(),
-                    weight: 0.9,
-                    trigger_count: 10,
-                    success_rate: 0.85,
-                    last_accessed: 1700000000000,
-                    metadata: r#"{"strategy":"react"}"#.into(),
-                    created_at: 1000,
-                    updated_at: 2000,
-                    version: 1,
-                };
-                db.add_l6(vec![slot]).expect("add_l6 failed");
-
-                // Get
-                let got = db.get_l6("000000000000002a").expect("get_l6 failed");
-                black_box(got.is_some());
-
-                // Update
-                let updated = db
-                    .update_l6(
-                        "000000000000002a",
-                        UpdateL6Fields {
-                            weight: Some(0.95),
-                            ..Default::default()
-                        },
-                    )
-                    .expect("update_l6 failed");
-                black_box(updated.weight);
-
-                // Update weight (via weight_delta)
-                let adjusted = db
-                    .update_l6(
-                        "000000000000002a",
-                        UpdateL6Fields {
-                            weight_delta: Some(0.05),
-                            ..Default::default()
-                        },
-                    )
-                    .expect("update_l6 with delta failed");
-                black_box(adjusted.weight);
-
-                // List with filter
-                let filtered = db
-                    .list_l6(Some(L6Filter {
-                        source_prefix: Some("condition:".into()),
-                        min_weight: Some(0.5),
-                        ..Default::default()
-                    }))
-                    .expect("list_l6(filtered) failed");
-                black_box(filtered.len());
-
-                // Delete
-                db.delete_l6("000000000000002a").expect("delete_l6 failed");
-            },
-            criterion::BatchSize::SmallInput,
-        )
-    });
-}
-
-// ============================================================================
 // Benchmarks: L5 Crystal update (throw-away DB — needs manually created data)
 // ============================================================================
 
@@ -512,9 +423,6 @@ criterion_group!(
     // L5
     bench_l5_crystal_list,
     bench_l5_crystal_get,
-    // L6
-    bench_l6_pathway_list,
-    bench_l6_pathway_crud,
 );
 
 fn main() {

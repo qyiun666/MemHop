@@ -8,7 +8,6 @@ pub(crate) mod habit_distill_stage;
 pub(crate) mod l0_form_stage;
 pub(crate) mod l1_decay;
 pub(crate) mod l3_distill_stage;
-pub(crate) mod l6_decay;
 pub mod llm;
 #[cfg(feature = "llm")]
 pub mod llm_preprocess;
@@ -359,10 +358,6 @@ pub fn dream_pipeline(
         new_l3_nodes: Vec::new(),
         new_crystals: Vec::new(),
         pruned_crystals: Vec::new(),
-        l6_decayed: 0,
-        l6_pruned: 0,
-        l6_decayed_details: None,
-        l6_pruned_details: None,
         stages: Vec::new(),
         duration_ms: 0,
         rollback_incomplete: false,
@@ -664,40 +659,6 @@ pub fn dream_pipeline(
             *sparse_index = sparse_snapshot.clone();
             report.rollback_incomplete = true;
         },
-        start_time,
-    )?;
-
-    run_stage(
-        "l6_decay",
-        "L6 pathway decay failed",
-        |report, _| {
-            let l6_report = l6_decay::decay_l6_pathways(engine, decay_config)?;
-            report.l6_decayed = l6_report.decayed;
-            report.l6_pruned = l6_report.pruned;
-            report.l6_decayed_details = if l6_report.decayed_details.is_empty() {
-                None
-            } else {
-                Some(l6_report.decayed_details)
-            };
-            report.l6_pruned_details = if l6_report.pruned_details.is_empty() {
-                None
-            } else {
-                Some(l6_report.pruned_details)
-            };
-            let count = l6_report.decayed + l6_report.pruned;
-            Ok((
-                format!(
-                    "L6 decay: {} decayed, {} pruned",
-                    l6_report.decayed, l6_report.pruned
-                ),
-                count,
-            ))
-        },
-        &mut report,
-        sparse_index,
-        &mut stages,
-        false,
-        |_, _| {},
         start_time,
     )?;
 

@@ -19,8 +19,6 @@ impl MemHop {
             l1_reverse_data: self.l1_reverse_index.serialize()?,
             l3_index_data: bincode::serialize(&self.l3_index_map)
                 .map_err(|e| MemHopError::Serialization(e.to_string()))?,
-            l6_pathway_data: bincode::serialize(&self.pathways)
-                .map_err(|e| MemHopError::Serialization(e.to_string()))?,
         };
 
         // Persist IVF index via engine records (non-fatal: warn on failure)

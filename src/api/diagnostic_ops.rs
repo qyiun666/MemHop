@@ -42,9 +42,6 @@ impl MemHop {
             *layer_counts.entry(key.to_string()).or_insert(0) += 1;
         }
 
-        // L6 pathway weights are stored as a serialized blob, count from in-memory cache.
-        layer_counts.insert("l6_pathway".to_string(), self.pathways.len());
-
         #[cfg(feature = "grpc-encoder")]
         let encoder_configured = self.encoder.is_some();
         #[cfg(not(feature = "grpc-encoder"))]

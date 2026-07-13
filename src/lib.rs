@@ -28,7 +28,6 @@ pub use api::{MemHopError, Result};
 
 // Backwards-compatible re-exports
 pub use config::{LlmConfig, LlmPreprocessConfig, MemHopConfig, SearchWeights};
-pub use layers::pathway::PathwayWeightSlot;
 pub use shared::common::{format_hash, parse_id_to_hash};
 pub use util::{hash_id, Layer, SourceMeta, SourceRef, SourceType};
 
@@ -50,9 +49,9 @@ pub use query::types::{
     GraphNode, GraphSlot, HealthStatus, ImportData, ImportError, ImportMode, ImportRequest,
     ImportResult, ImportStatus, KnowledgeDetail, KnowledgeImportItem, KnowledgeListQuery,
     KnowledgeListResult, KnowledgeNodeDetail, KnowledgeNodeQuery, KnowledgeNodesResult,
-    KnowledgeSummary, L1Edge, L1Graph, L1Node, L3Detail, L3EntityHint, L3Preview, L6Filter,
+    KnowledgeSummary, L1Edge, L1Graph, L1Node, L3Detail, L3EntityHint, L3Preview,
     MergeResult, ProfileResult, RequestSource, SceneTreeResult, SearchQuery, SearchResult,
     SessionStatus, Subgraph, TargetLayer, TopicDetail, TopicImportItem, TopicListQuery,
     TopicListResult, TopicSummary, TraversalHop, UpdateL2Fields, UpdateL3Fields, UpdateL5Fields,
-    UpdateL6Fields, UpdateRequest, UpdateResult, UpdateStatus,
+    UpdateRequest, UpdateResult, UpdateStatus,
 };

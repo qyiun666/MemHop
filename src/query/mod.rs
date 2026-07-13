@@ -11,7 +11,6 @@ pub(crate) mod l2_ops;
 pub(crate) mod l3_ops;
 pub(crate) mod l4_ops;
 pub(crate) mod l5_ops;
-pub(crate) mod l6_ops;
 pub(crate) mod list;
 pub(crate) mod pipeline;
 pub(crate) mod profile;

@@ -20,7 +20,6 @@ pub const REC_L2_SCENE: u8 = 0x05;
 pub const REC_L3_GRAPH_EDGE: u8 = 0x07;
 pub const REC_L4_ARCHIVE: u8 = 0x08;
 pub const REC_L5_ACTION_CHAIN: u8 = 0x09;
-pub const REC_L6_PATHWAY: u8 = 0x0A;
 pub const REC_L3_GRAPH_SLOT: u8 = 0x0B; // L3 图容器
 pub const REC_L5_ACTION_STEP: u8 = 0x0C; // L5 动作步骤
                                          // 0x0D-0xEF: reserved for L7+

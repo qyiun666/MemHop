@@ -12,7 +12,6 @@ mod dream_ops;
 mod graph_ops;
 mod import_ops;
 mod l2_ops;
-mod pathway_ops;
 mod profile_ops;
 mod search_ops;
 mod session_ops;
@@ -101,7 +100,6 @@ pub struct MemHop {
     pub(crate) adjacency_cache: crate::l3::AdjacencyCache,
     pub(crate) degree_tracker: crate::l3::DegreeTracker,
     pub(crate) l3_index_map: std::collections::HashMap<u64, crate::l3::L3Index>,
-    pub(crate) pathways: Vec<crate::layers::pathway::PathwayWeightSlot>,
     /// In-memory L2 context metadata index (rebuilt on open, updated on write).
     pub(crate) l2_meta: L2MetaIndex,
     pub(crate) closed: bool, // Prevent Drop from re-checkpointing after close()
@@ -130,8 +128,6 @@ impl MemHop {
 
         let mut sparse_index = SparseIndex::new();
         let mut l3_index_map: HashMap<u64, crate::l3::L3Index> = HashMap::new();
-        let mut pathways = Vec::new();
-
         // Load indices from v2 snapshot
         if let Some(snapshot) = engine.snapshot_data() {
             if !snapshot.sparse_data.is_empty() {
@@ -148,15 +144,6 @@ impl MemHop {
                     Ok(map) => l3_index_map = map,
                     Err(e) => tracing::warn!(
                         "Failed to deserialize L3 index map from snapshot: {}. Starting empty.",
-                        e
-                    ),
-                }
-            }
-            if !snapshot.l6_pathway_data.is_empty() {
-                match bincode::deserialize(&snapshot.l6_pathway_data) {
-                    Ok(pw) => pathways = pw,
-                    Err(e) => tracing::warn!(
-                        "Failed to deserialize L6 pathway data from snapshot: {}. Starting empty.",
                         e
                     ),
                 }
@@ -262,7 +249,6 @@ impl MemHop {
             adjacency_cache: crate::l3::AdjacencyCache::with_capacity(adjacency_cache_max_entries),
             degree_tracker: crate::l3::DegreeTracker::new(),
             l3_index_map,
-            pathways,
             l2_meta,
             closed: false,
         })

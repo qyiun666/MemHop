@@ -134,7 +134,6 @@ pub struct IndexSnapshotData {
     pub ivf_data: Vec<u8>,
     pub l1_reverse_data: Vec<u8>,
     pub l3_index_data: Vec<u8>,
-    pub l6_pathway_data: Vec<u8>,
 }
 
 /// V2 append-only storage engine.
@@ -442,8 +441,6 @@ impl StorageEngine {
         buf.extend_from_slice(&index_data.l1_reverse_data);
         buf.extend_from_slice(&(index_data.l3_index_data.len() as u32).to_le_bytes());
         buf.extend_from_slice(&index_data.l3_index_data);
-        buf.extend_from_slice(&(index_data.l6_pathway_data.len() as u32).to_le_bytes());
-        buf.extend_from_slice(&index_data.l6_pathway_data);
         let crc = crc32fast::hash(&buf);
         buf.extend_from_slice(&crc.to_le_bytes());
         Ok(buf)
@@ -512,7 +509,6 @@ impl StorageEngine {
         let ivf_data = parse_field(snap, &mut pos, "ivf_data")?;
         let l1_reverse_data = parse_field(snap, &mut pos, "l1_reverse_data")?;
         let l3_index_data = parse_field(snap, &mut pos, "l3_index_data")?;
-        let l6_pathway_data = parse_field(snap, &mut pos, "l6_pathway_data")?;
 
         // Verify CRC at the end
         if pos + 4 != len {
@@ -532,7 +528,6 @@ impl StorageEngine {
             ivf_data,
             l1_reverse_data,
             l3_index_data,
-            l6_pathway_data,
         });
         Ok(())
     }
@@ -692,7 +687,6 @@ mod tests {
                 ivf_data: b"ivf".to_vec(),
                 l1_reverse_data: b"l1".to_vec(),
                 l3_index_data: b"l3".to_vec(),
-                l6_pathway_data: b"l6".to_vec(),
             };
             engine.checkpoint(&snapshot).unwrap();
         }
