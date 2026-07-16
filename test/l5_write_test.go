@@ -12,7 +12,7 @@ import (
 // CreateActionChain, AppendActionStep, IncrChainTrigger,
 // UpdateChainConfidence, BatchDeleteCrystals.
 func TestL5WriteAPI(t *testing.T) {
-	mh := testsupport.OpenMemHop()
+	mh := testsupport.OpenMemHopMock(t)
 	defer mh.Close()
 
 	// ── 1. CreateActionChain ──
@@ -127,11 +127,11 @@ func TestL5WriteAPI(t *testing.T) {
 // TestUpdateL4Append tests that UpdateMemory with dialogue_text appends L4 archive
 // and updates the topic's L4 references.
 func TestUpdateL4Append(t *testing.T) {
-	mh := testsupport.OpenMemHop()
+	mh := testsupport.OpenMemHopMock(t)
 	defer mh.Close()
 
 	// ── 1. Search to create an L2 topic ──
-	result, err := mh.Search(memhop.SearchQuery{Text: "Hello, this is a test query for L4 append"})
+	result, err := mh.Search(memhop.SearchQuery{Text: "Hello, this is a test query for L4 append", AutoCreate: true})
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}

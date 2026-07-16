@@ -49,9 +49,9 @@ func F32ToF16(f float32) uint16 {
 		if exp < -10 {
 			return sign
 		}
-		// subnormal f16
+		// subnormal f16: m already holds the 10-bit mantissa
 		m := (mant | 0x800000) >> uint(14-exp)
-		return sign | uint16(m>>13)
+		return sign | uint16(m)
 	case exp >= 31: // overflow → inf
 		return sign | 0x7C00
 	default: // normal

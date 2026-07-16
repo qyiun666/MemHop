@@ -22,5 +22,20 @@ jobs:
       - name: Vet
         run: go vet ./memhop/... ./test/...
 
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l memhop test)
+          if [ -n "$unformatted" ]; then
+            echo "gofmt needed on:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Unit tests
         run: go test ./memhop/...
+
+      - name: Unit tests (race)
+        run: go test -race ./memhop/...
+
+      - name: Integration tests (offline/mock)
+        run: go test ./test/...

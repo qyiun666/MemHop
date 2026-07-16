@@ -141,7 +141,7 @@ func (m *MemHop) DeleteL3(id string) error {
 	if m.closed {
 		return core.ErrClosed
 	}
-	if err := query.DeleteL3(m.engine, id); err != nil {
+	if err := query.DeleteL3(m.engine, m.l3Index, id); err != nil {
 		return err
 	}
 	graphHash, _ := hash.ParseID(id)

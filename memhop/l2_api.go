@@ -42,7 +42,7 @@ func (m *MemHop) DeleteL2(id string) error {
 	if m.closed {
 		return core.ErrClosed
 	}
-	return query.DeleteL2(m.engine, m.l1Reverse, m.sparseIndex, id)
+	return query.DeleteL2(m.engine, m.l1Reverse, m.sparseIndex, m.l2Meta, id)
 }
 
 // MergeL2 merges multiple L2 topics into a primary topic.
@@ -52,7 +52,7 @@ func (m *MemHop) MergeL2(primaryID string, mergeIDs []string) (*query.MergeResul
 	if m.closed {
 		return nil, core.ErrClosed
 	}
-	return query.MergeL2(m.engine, m.sparseIndex, primaryID, mergeIDs)
+	return query.MergeL2(m.engine, m.l1Reverse, m.sparseIndex, m.l2Meta, primaryID, mergeIDs)
 }
 
 // GetSceneTree lists the full tree of nodes within a scene.

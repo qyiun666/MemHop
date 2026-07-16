@@ -143,6 +143,7 @@ func TestL2CRUD(t *testing.T) {
 	engine := createTestEngine(t)
 	sparse := index.NewSparseIndex()
 	l1Rev := NewL1ReverseIndex()
+	l2Meta := index.NewL2MetaIndex()
 
 	// Create
 	writeTestTopic(t, engine, 2001, "Rust refactoring")
@@ -179,7 +180,7 @@ func TestL2CRUD(t *testing.T) {
 	}
 
 	// Delete
-	if err := DeleteL2(engine, l1Rev, sparse, hexID); err != nil {
+	if err := DeleteL2(engine, l1Rev, sparse, l2Meta, hexID); err != nil {
 		t.Fatalf("delete l2: %v", err)
 	}
 	_, err = GetL2(engine, hexID)
@@ -323,7 +324,7 @@ func TestL3CRUD(t *testing.T) {
 	}
 
 	// Delete L3
-	if err := DeleteL3(engine, hexID); err != nil {
+	if err := DeleteL3(engine, nil, hexID); err != nil {
 		t.Fatalf("delete l3: %v", err)
 	}
 	_, err = GetL3(engine, hexID)

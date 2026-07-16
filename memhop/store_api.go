@@ -17,7 +17,9 @@ func (m *MemHop) BatchStore(batch query.StoreBatch) (*query.StoreResult, error) 
 		return nil, core.ErrClosed
 	}
 
-	report, err := query.BatchStore(batch, m.batchDeps())
+	deps := m.batchDeps()
+	deps.L2Meta = m.l2Meta
+	report, err := query.BatchStore(batch, deps)
 	if err != nil {
 		return nil, err
 	}
@@ -31,7 +33,7 @@ func (m *MemHop) BatchStore(batch query.StoreBatch) (*query.StoreResult, error) 
 func makeItemIDs(items []query.StoreItem, report *query.BatchReport) []string {
 	ids := make([]string, 0, len(items))
 	for _, item := range items {
-		ids = append(ids, hash.FormatHash(hash.HashID(item.Content)))
+		ids = append(ids, hash.FormatHash(query.L1NodeIDHash(item.Content)))
 	}
 	return ids
 }

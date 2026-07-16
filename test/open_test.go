@@ -44,22 +44,22 @@ func helloHandler(w http.ResponseWriter, r *http.Request) {
 // 测试数据集：语义对 + 多轮对话 + 长文本代码块
 // 第1-2条是语义变体（不同词同一意思），应归为同一话题
 var testQueries = []struct {
-	text     string
-	desc     string
+	text string
+	desc string
 }{
-	{"今天天气怎么样",               "天气询问-原版"},
-	{"明天的气候如何",               "天气询问-语义变体 → 应归入同一话题"},
-	{"推荐一部好看的科幻电影",        "电影推荐"},
-	{"如何学习Go语言编程",            "Go编程学习"},
-	{"最近人工智能有什么新进展",       "AI进展"},
-	{"帮我写一首关于秋天的诗",        "诗歌创作"},
-	{"周末想去户外活动有什么推荐",     "户外活动"},
+	{"今天天气怎么样", "天气询问-原版"},
+	{"明天的气候如何", "天气询问-语义变体 → 应归入同一话题"},
+	{"推荐一部好看的科幻电影", "电影推荐"},
+	{"如何学习Go语言编程", "Go编程学习"},
+	{"最近人工智能有什么新进展", "AI进展"},
+	{"帮我写一首关于秋天的诗", "诗歌创作"},
+	{"周末想去户外活动有什么推荐", "户外活动"},
 	{longCodeQuery, "长文本带代码块"},
 }
 
 func TestOpen(t *testing.T) {
-	// 清理旧数据库，确保从干净状态开始
-	mh := testsupport.OpenMemHop()
+	// 真实依赖（Ollama+LLM）缺失时自动 Skip；DB 在 t.TempDir() 中
+	mh := testsupport.OpenMemHop(t)
 	defer mh.Close()
 
 	// ============================================================
@@ -130,6 +130,13 @@ func TestOpen(t *testing.T) {
 		result, err := mh.Search(memhop.SearchQuery{Text: query})
 		if err != nil {
 			t.Fatalf("[迭代%d] Search(%q) failed: %v", iteration, query, err)
+		}
+		// 库在 t.TempDir() 中从空白开始：无匹配时显式建话题
+		if len(result.Contexts) == 0 {
+			result, err = mh.Search(memhop.SearchQuery{Text: query, AutoCreate: true})
+			if err != nil {
+				t.Fatalf("[迭代%d] AutoCreate Search(%q) failed: %v", iteration, query, err)
+			}
 		}
 		t.Logf("  检索结果: contexts=%d associated=%d crystals=%d",
 			len(result.Contexts), len(result.AssociatedContexts), len(result.Crystals))

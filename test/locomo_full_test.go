@@ -12,7 +12,7 @@ import (
 func TestLOCOMOFull(t *testing.T) {
 	fixture := loadFixture(t, "locomo_full.json")
 
-	mh := testsupport.OpenMemHop()
+	mh := testsupport.OpenMemHop(t)
 	defer mh.Close()
 
 	sessions := fixture["sessions"].([]interface{})

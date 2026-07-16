@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // helper: temp path for a .meh file
@@ -306,6 +307,136 @@ func TestContainsAndIterIndex(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("iter count: %d", count)
 	}
+}
+
+func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
+	p := tempPath(t, "crash")
+	eng, err := Create(p, 768)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// First batch, then checkpoint.
+	eng.WriteRecord(RecL0Profile, 1, []byte("one"))
+	eng.WriteRecord(RecL1SceneNode, 2, []byte("two"))
+	if err := eng.Checkpoint(&IndexSnapshotData{}); err != nil {
+		t.Fatal(err)
+	}
+	// Second batch appended after the checkpoint (includes an overwrite).
+	eng.WriteRecord(RecL2Topic, 3, []byte("three"))
+	eng.WriteRecord(RecL2Topic, 1, []byte("one-updated"))
+	// Simulate a crash: close without checkpoint.
+	if err := eng.CloseNoCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	eng2, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both batches must be visible after reopen.
+	if _, data, err := eng2.ReadRecord(2); err != nil || string(data) != "two" {
+		t.Fatalf("record 2: data=%q err=%v", data, err)
+	}
+	if _, data, err := eng2.ReadRecord(3); err != nil || string(data) != "three" {
+		t.Fatalf("record 3: data=%q err=%v", data, err)
+	}
+	// Later write for the same idHash wins.
+	if _, data, err := eng2.ReadRecord(1); err != nil || string(data) != "one-updated" {
+		t.Fatalf("record 1: data=%q err=%v", data, err)
+	}
+	if eng2.RecordCount() != 3 {
+		t.Fatalf("recordCount: want 3, got %d", eng2.RecordCount())
+	}
+	// nextOffset must be past the recovered tail: a new write must not
+	// clobber recovered records.
+	if _, err := eng2.WriteRecord(RecL4Archive, 4, []byte("four")); err != nil {
+		t.Fatal(err)
+	}
+	if _, data, err := eng2.ReadRecord(3); err != nil || string(data) != "three" {
+		t.Fatalf("record 3 after new write: data=%q err=%v", data, err)
+	}
+	if _, data, err := eng2.ReadRecord(4); err != nil || string(data) != "four" {
+		t.Fatalf("record 4: data=%q err=%v", data, err)
+	}
+	eng2.Close(&IndexSnapshotData{})
+}
+
+func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
+	p := tempPath(t, "nocp")
+	eng, err := Create(p, 768)
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng.WriteRecord(RecL0Profile, 1, []byte("a"))
+	snap := &IndexSnapshotData{SparseData: []byte("sparse")}
+	if err := eng.Checkpoint(snap); err != nil {
+		t.Fatal(err)
+	}
+	commitID := eng.activeHeaderRef().CommitID
+	if err := eng.CloseNoCheckpoint(); err != nil {
+		t.Fatal(err)
+	}
+
+	eng2, err := Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer eng2.Close(&IndexSnapshotData{})
+	// Header must not have flipped and the snapshot must be intact.
+	if got := eng2.activeHeaderRef().CommitID; got != commitID {
+		t.Fatalf("commitID: want %d, got %d", commitID, got)
+	}
+	sd := eng2.SnapshotData()
+	if sd == nil || string(sd.SparseData) != "sparse" {
+		t.Fatalf("snapshot lost: %+v", sd)
+	}
+	if _, data, err := eng2.ReadRecord(1); err != nil || string(data) != "a" {
+		t.Fatalf("record 1: data=%q err=%v", data, err)
+	}
+}
+
+func TestIterIndexCallbackMayReadRecord(t *testing.T) {
+	p := tempPath(t, "iterlock")
+	eng, err := Create(p, 768)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := uint64(0); i < 10; i++ {
+		eng.WriteRecord(RecL0Profile, i, []byte(fmt.Sprintf("v%d", i)))
+	}
+	// Queue a writer during iteration. Under the old implementation (fn
+	// invoked with RLock held) the waiting writer would make fn's recursive
+	// RLock deadlock.
+	writerDone := make(chan struct{})
+	first := true
+	eng.IterIndex(func(idHash, offset uint64) bool {
+		if first {
+			first = false
+			go func() {
+				defer close(writerDone)
+				eng.WriteRecord(RecL0Profile, 999, []byte("queued"))
+			}()
+			time.Sleep(50 * time.Millisecond)
+		}
+		if _, _, err := eng.ReadRecord(idHash); err != nil {
+			t.Errorf("ReadRecord(%d): %v", idHash, err)
+		}
+		return true
+	})
+	<-writerDone
+	if !eng.Contains(999) {
+		t.Fatal("queued writer record missing")
+	}
+	// fn returning false stops iteration.
+	count := 0
+	eng.IterIndex(func(idHash, offset uint64) bool {
+		count++
+		return count < 3
+	})
+	if count != 3 {
+		t.Fatalf("early stop: want 3 callbacks, got %d", count)
+	}
+	eng.Close(&IndexSnapshotData{})
 }
 
 func fileSize(t *testing.T, path string) int64 {

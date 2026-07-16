@@ -153,7 +153,9 @@ func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, e
 		return nil, err
 	}
 	if int(engine.VectorDim()) != config.VectorDim {
-		engine.Close(&storage.IndexSnapshotData{})
+		// Close without checkpointing: writing an (empty) snapshot here would
+		// flip the A/B header and destroy the on-disk index snapshot.
+		engine.CloseNoCheckpoint()
 		return nil, core.NewError(core.ErrVectorDimMismatch, "config vs engine")
 	}
 	sparseIdx, l1Rev := loadCachedIndices(engine)

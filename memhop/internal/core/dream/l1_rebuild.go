@@ -18,9 +18,10 @@ func RebuildL1FromL2(
 	engine *storage.StorageEngine,
 	sparseIdx *index.SparseIndex,
 	l2Meta *index.L2MetaIndex,
+	cfg *DecayParams,
 ) ([]string, error) {
 	staleNodes := findStaleL1Nodes(engine, l2Meta)
-	return removeStaleNodes(engine, sparseIdx, staleNodes)
+	return removeStaleNodes(engine, sparseIdx, staleNodes, cfg)
 }
 
 func findStaleL1Nodes(
@@ -105,6 +106,7 @@ func removeStaleNodes(
 	engine *storage.StorageEngine,
 	sparseIdx *index.SparseIndex,
 	staleNodes []uint64,
+	cfg *DecayParams,
 ) ([]string, error) {
 	var updated []string
 	for _, idHash := range staleNodes {
@@ -113,7 +115,7 @@ func removeStaleNodes(
 			continue
 		}
 		for _, edgeID := range node.EdgeIDs {
-			if err := removeEdgeFromNode(engine, edgeID, idHash); err != nil {
+			if _, err := removeNodeFromEdge(engine, edgeID, idHash, cfg); err != nil {
 				return updated, err
 			}
 		}

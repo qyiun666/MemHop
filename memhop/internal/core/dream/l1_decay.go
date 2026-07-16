@@ -27,11 +27,12 @@ func DecayL1Network(
 	engine *storage.StorageEngine,
 	cfg *DecayParams,
 	l2Meta *index.L2MetaIndex,
+	sparseIdx *index.SparseIndex,
 ) (*L1DecayReport, error) {
 	nowMs := timeutil.NowMs()
 	report := &L1DecayReport{}
 
-	removedNodeIDs, clearedEdges, err := decayNodes(engine, cfg, l2Meta, nowMs, report)
+	removedNodeIDs, clearedEdges, err := decayNodes(engine, cfg, l2Meta, sparseIdx, nowMs, report)
 	if err != nil {
 		return report, err
 	}
@@ -80,6 +81,7 @@ func decayNodes(
 	engine *storage.StorageEngine,
 	cfg *DecayParams,
 	l2Meta *index.L2MetaIndex,
+	sparseIdx *index.SparseIndex,
 	nowMs int64,
 	report *L1DecayReport,
 ) (map[uint64]bool, map[uint64]map[uint64]bool, error) {
@@ -100,7 +102,7 @@ func decayNodes(
 		if skipDeepNode(node, l2Meta) {
 			continue
 		}
-		if err := processNodeDecay(engine, cfg, node, idHash, nowMs, report, removedNodeIDs, clearedEdges); err != nil {
+		if err := processNodeDecay(engine, cfg, node, idHash, sparseIdx, nowMs, report, removedNodeIDs, clearedEdges); err != nil {
 			return removedNodeIDs, clearedEdges, err
 		}
 	}
@@ -120,6 +122,7 @@ func processNodeDecay(
 	cfg *DecayParams,
 	node *model.SceneNode,
 	idHash uint64,
+	sparseIdx *index.SparseIndex,
 	nowMs int64,
 	report *L1DecayReport,
 	removedNodeIDs map[uint64]bool,
@@ -133,6 +136,7 @@ func processNodeDecay(
 		if err != nil {
 			return err
 		}
+		sparseIdx.RemoveDocument(idHash)
 		removedNodeIDs[idHash] = true
 		report.RemovedNodes++
 		return nil
@@ -217,7 +221,13 @@ func decayOneEdge(
 	nowMs int64,
 	report *L1DecayReport,
 ) error {
-	dtHours := dtHoursFrom(nowMs, edge.CreatedAt)
+	// Decay incrementally since the last decay run; old records without a
+	// LastDecayAt timestamp decay from CreatedAt on their first run.
+	baseMs := edge.LastDecayAt
+	if baseMs == 0 {
+		baseMs = edge.CreatedAt
+	}
+	dtHours := dtHoursFrom(nowMs, baseMs)
 	newWeight := edge.Weight * float32(math.Exp(-cfg.LambdaEdge*dtHours))
 
 	// Clean references to removed nodes.
@@ -244,6 +254,7 @@ func decayOneEdge(
 	}
 
 	edge.Weight = newWeight
+	edge.LastDecayAt = nowMs
 	return writeSceneEdge(engine, idHash, edge)
 }
 

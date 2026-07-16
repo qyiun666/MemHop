@@ -17,21 +17,21 @@ import (
 func TestEnglishPromptFix(t *testing.T) {
 	// ── 1. LOCOMO smoke (all 2 sessions) ──
 	t.Run("LOCOMO_smoke", func(t *testing.T) {
-		mh := testsupport.OpenMemHop()
+		mh := testsupport.OpenMemHop(t)
 		defer mh.Close()
 		runSessions(t, mh, loadFixture(t, "locomo_smoke.json"), "LOCOMO_smoke")
 	})
 
 	// ── 2. LongMemEval smoke (all 2 sessions) ──
 	t.Run("LongMemEval_smoke", func(t *testing.T) {
-		mh := testsupport.OpenMemHop()
+		mh := testsupport.OpenMemHop(t)
 		defer mh.Close()
 		runSessions(t, mh, loadFixture(t, "longmemeval_smoke.json"), "LongMemEval_smoke")
 	})
 
 	// ── 3. LOCOMO full (first 20 sessions) ──
 	t.Run("LOCOMO_full_20", func(t *testing.T) {
-		mh := testsupport.OpenMemHop()
+		mh := testsupport.OpenMemHop(t)
 		defer mh.Close()
 		fixture := loadFixture(t, "locomo_full.json")
 		// Take only first 20 sessions
@@ -64,9 +64,8 @@ func runSessions(t *testing.T, mh *memhop.MemHop, fixture map[string]interface{}
 		for ti, turn := range turns {
 			turnData := turn.(map[string]interface{})
 			text := turnData["text"].(string)
-			_, err := mh.Search(memhop.SearchQuery{Text: text})
-			if err != nil {
-				t.Logf("  Turn %d search: %v", ti, err)
+			if searchOrCreate(t, mh, text) == nil {
+				t.Logf("  Turn %d store failed", ti)
 			}
 			totalTurns++
 
@@ -121,9 +120,9 @@ func runSessions(t *testing.T, mh *memhop.MemHop, fixture map[string]interface{}
 }
 
 type questionItem struct {
-	text        string
-	answer      string
-	sessionID   string
+	text      string
+	answer    string
+	sessionID string
 }
 
 func extractQuestions(q interface{}) []questionItem {

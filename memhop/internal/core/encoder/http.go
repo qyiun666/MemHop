@@ -5,6 +5,7 @@ package encoder
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +21,8 @@ const (
 	defaultEmbedModel  = "nomic-embed-text"
 	healthCheckTimeout = 5 * time.Second
 	encodeTimeout      = 20 * time.Second
+	// maxResponseBodyBytes caps response bodies read from the encoder service.
+	maxResponseBodyBytes = 64 << 20 // 64MB
 )
 
 // HttpEncoder is an HTTP client for an Ollama embedding API.
@@ -52,7 +55,9 @@ func NewHttpEncoder(baseURL string, dim int, model string) (*HttpEncoder, error)
 		model = defaultEmbedModel
 	}
 
-	client := &http.Client{Timeout: healthCheckTimeout}
+	// No client-level Timeout: per-request deadlines are set via context,
+	// so health checks (5s) and encodes (20s) can share one pooled client.
+	client := &http.Client{}
 	e := &HttpEncoder{baseURL: baseURL, dim: dim, model: model, httpClient: client}
 
 	if err := e.checkHealth(); err != nil {
@@ -63,7 +68,14 @@ func NewHttpEncoder(baseURL string, dim int, model string) (*HttpEncoder, error)
 
 // checkHealth calls GET /api/tags to verify Ollama is reachable.
 func (e *HttpEncoder) checkHealth() error {
-	resp, err := e.httpClient.Get(e.baseURL + "/api/tags")
+	ctx, cancel := context.WithTimeout(context.Background(), healthCheckTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+"/api/tags", nil)
+	if err != nil {
+		return core.NewError(core.ErrEncoder,
+			fmt.Sprintf("Ollama health check failed at %s", e.baseURL), err)
+	}
+	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		return core.NewError(core.ErrEncoder,
 			fmt.Sprintf("Ollama health check failed at %s", e.baseURL), err)
@@ -125,14 +137,21 @@ func (e *HttpEncoder) doPost(path string, payload any, timeout time.Duration) ([
 		return nil, err
 	}
 
-	client := &http.Client{Timeout: timeout}
-	resp, err := client.Post(e.baseURL+path, "application/json", bytes.NewReader(data))
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := e.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	if err != nil {
 		return nil, err
 	}

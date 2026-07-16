@@ -178,6 +178,7 @@ func TestL2Compress(t *testing.T) {
 
 func TestL1Decay(t *testing.T) {
 	engine := createTestEngine(t)
+	sparseIdx := index.NewSparseIndex()
 	l2Meta := index.NewL2MetaIndex()
 	nowMs := timeutil.NowMs()
 
@@ -205,7 +206,7 @@ func TestL1Decay(t *testing.T) {
 		MinEdgeNodes:           2,
 	}
 
-	report, err := DecayL1Network(engine, cfg, l2Meta)
+	report, err := DecayL1Network(engine, cfg, l2Meta, sparseIdx)
 	if err != nil {
 		t.Fatalf("DecayL1Network: %v", err)
 	}
@@ -226,6 +227,7 @@ func TestL1Decay(t *testing.T) {
 
 func TestL1DecayPruneEdges(t *testing.T) {
 	engine := createTestEngine(t)
+	sparseIdx := index.NewSparseIndex()
 	l2Meta := index.NewL2MetaIndex()
 	nowMs := timeutil.NowMs()
 	oldTime := nowMs - 20*3_600_000
@@ -251,7 +253,7 @@ func TestL1DecayPruneEdges(t *testing.T) {
 	}
 	writeTestSceneNode(t, engine, node)
 
-	report, err := DecayL1Network(engine, cfg, l2Meta)
+	report, err := DecayL1Network(engine, cfg, l2Meta, sparseIdx)
 	if err != nil {
 		t.Fatalf("DecayL1Network: %v", err)
 	}
@@ -265,6 +267,171 @@ func TestL1DecayPruneEdges(t *testing.T) {
 	n := readTestSceneNode(t, engine, 100)
 	if len(n.EdgeIDs) != 0 {
 		t.Errorf("node edges should be cleared, got %d", len(n.EdgeIDs))
+	}
+}
+
+// TestL1EdgeDecayNotCompounding verifies that repeated decay runs accumulate
+// as exp(-λ·totalElapsed), not by re-applying the full age on each run.
+func TestL1EdgeDecayNotCompounding(t *testing.T) {
+	engine := createTestEngine(t)
+	t0 := timeutil.NowMs() - 100*3_600_000
+
+	cfg := &DecayParams{
+		LambdaEdge:          0.02,
+		EdgeRemoveThreshold: 0.0001,
+		MinEdgeNodes:        2,
+	}
+
+	// Old record without LastDecayAt: first decay counts from CreatedAt.
+	writeTestSceneEdge(t, engine, &model.SceneEdge{
+		IDHash: 10, NodeIDs: []uint64{1, 2},
+		Weight: 1.0, CreatedAt: t0,
+	})
+	report := &L1DecayReport{}
+
+	// First decay run at t0+10h.
+	edge := readSceneEdge(engine, 10)
+	if edge == nil {
+		t.Fatal("edge should exist")
+	}
+	if err := decayOneEdge(engine, cfg, edge, 10, nil, t0+10*3_600_000, report); err != nil {
+		t.Fatalf("first decayOneEdge: %v", err)
+	}
+	edge = readSceneEdge(engine, 10)
+	wantFirst := float32(math.Exp(-cfg.LambdaEdge * 10.0))
+	if math.Abs(float64(edge.Weight-wantFirst)) > 1e-5 {
+		t.Errorf("after first decay weight = %v, want %v", edge.Weight, wantFirst)
+	}
+	if edge.LastDecayAt != t0+10*3_600_000 {
+		t.Errorf("LastDecayAt = %d, want %d", edge.LastDecayAt, t0+10*3_600_000)
+	}
+
+	// Second decay run at t0+25h: only the 15h increment may be applied.
+	if err := decayOneEdge(engine, cfg, edge, 10, nil, t0+25*3_600_000, report); err != nil {
+		t.Fatalf("second decayOneEdge: %v", err)
+	}
+	edge = readSceneEdge(engine, 10)
+	want := float32(math.Exp(-cfg.LambdaEdge * 25.0))
+	if math.Abs(float64(edge.Weight-want)) > 1e-5 {
+		t.Errorf("weight = %v, want %v (exp(-λ·total), not compounded)", edge.Weight, want)
+	}
+	if edge.LastDecayAt != t0+25*3_600_000 {
+		t.Errorf("LastDecayAt = %d, want %d", edge.LastDecayAt, t0+25*3_600_000)
+	}
+}
+
+// TestRebuildL1RemovesStaleNodeFromEdges verifies that removing a stale node
+// also cleans the node's reference from its edges' NodeIDs.
+func TestRebuildL1RemovesStaleNodeFromEdges(t *testing.T) {
+	engine := createTestEngine(t)
+	sparseIdx := index.NewSparseIndex()
+	l2Meta := index.NewL2MetaIndex()
+	nowMs := timeutil.NowMs()
+	cfg := &DecayParams{MinEdgeNodes: 2}
+
+	// Stale node: its L2 topic (999) no longer exists in the engine.
+	writeTestSceneNode(t, engine, &model.SceneNode{
+		IDHash: 100, SceneID: 1, TopicIDs: []uint64{999},
+		Depth: 1, Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
+		EdgeIDs: []uint64{500, 501},
+	})
+
+	// Live node: topic 300 exists and has no deep meta.
+	writeTestTopic(t, engine, &model.TopicSlot{
+		ID: 300, SceneID: 1, Depth: 1, CreatedAt: nowMs, UpdatedAt: nowMs, Version: 1,
+	})
+	writeTestSceneNode(t, engine, &model.SceneNode{
+		IDHash: 200, SceneID: 1, TopicIDs: []uint64{300},
+		Depth: 1, Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
+		EdgeIDs: []uint64{500, 501},
+	})
+
+	// Edge 500 keeps enough members after the stale node is removed.
+	writeTestSceneEdge(t, engine, &model.SceneEdge{
+		IDHash: 500, NodeIDs: []uint64{100, 200, 201}, Weight: 0.8, CreatedAt: nowMs,
+	})
+	// Edge 501 drops below MinEdgeNodes and must be deleted.
+	writeTestSceneEdge(t, engine, &model.SceneEdge{
+		IDHash: 501, NodeIDs: []uint64{100, 200}, Weight: 0.8, CreatedAt: nowMs,
+	})
+
+	if _, err := RebuildL1FromL2(engine, sparseIdx, l2Meta, cfg); err != nil {
+		t.Fatalf("RebuildL1FromL2: %v", err)
+	}
+
+	if engine.Contains(100) {
+		t.Error("stale node should be removed")
+	}
+	edge := readSceneEdge(engine, 500)
+	if edge == nil {
+		t.Fatal("edge 500 should survive")
+	}
+	if len(edge.NodeIDs) != 2 {
+		t.Errorf("edge 500 NodeIDs = %v, want 2 members", edge.NodeIDs)
+	}
+	for _, n := range edge.NodeIDs {
+		if n == 100 {
+			t.Errorf("edge 500 NodeIDs still references removed node: %v", edge.NodeIDs)
+		}
+	}
+	if engine.Contains(501) {
+		t.Error("edge 501 should be removed (below MinEdgeNodes)")
+	}
+	live := readTestSceneNode(t, engine, 200)
+	for _, e := range live.EdgeIDs {
+		if e == 501 {
+			t.Errorf("live node EdgeIDs still references removed edge: %v", live.EdgeIDs)
+		}
+	}
+}
+
+// TestL1DecayRemovesNodeFromSparseIndex verifies that decay-removed nodes are
+// also removed from the BM25 sparse index.
+func TestL1DecayRemovesNodeFromSparseIndex(t *testing.T) {
+	engine := createTestEngine(t)
+	sparseIdx := index.NewSparseIndex()
+	l2Meta := index.NewL2MetaIndex()
+	nowMs := timeutil.NowMs()
+
+	oldTime := nowMs - 400*3_600_000
+	writeTestSceneNode(t, engine, &model.SceneNode{
+		IDHash: 1, SceneID: 1000, TopicIDs: []uint64{1000},
+		Depth: 1, Importance: 0.5, CreatedAt: oldTime, UpdatedAt: oldTime,
+	})
+	writeTestSceneNode(t, engine, &model.SceneNode{
+		IDHash: 2, SceneID: 1000, TopicIDs: []uint64{1001},
+		Depth: 1, Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
+	})
+	sparseIdx.AddDocument(1, []string{"uniqueterm"}, 1)
+	sparseIdx.AddDocument(2, []string{"uniqueterm"}, 1)
+
+	cfg := &DecayParams{
+		LambdaNode:             0.01,
+		LambdaEdge:             0.02,
+		NodeRemoveThreshold:    0.05,
+		NodePruneEdgeThreshold: 0.15,
+		EdgeRemoveThreshold:    0.05,
+		MinEdgeNodes:           2,
+	}
+	report, err := DecayL1Network(engine, cfg, l2Meta, sparseIdx)
+	if err != nil {
+		t.Fatalf("DecayL1Network: %v", err)
+	}
+	if report.RemovedNodes != 1 {
+		t.Fatalf("RemovedNodes = %d, want 1", report.RemovedNodes)
+	}
+
+	foundSurvivor := false
+	for _, doc := range sparseIdx.Search([]string{"uniqueterm"}, 10) {
+		if doc.IDHash == 1 {
+			t.Error("BM25 should not return the decay-removed node")
+		}
+		if doc.IDHash == 2 {
+			foundSurvivor = true
+		}
+	}
+	if !foundSurvivor {
+		t.Error("BM25 should still return the surviving node")
 	}
 }
 

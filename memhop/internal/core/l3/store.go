@@ -58,8 +58,8 @@ func DeleteGraph(engine *storage.StorageEngine, graphID uint64) error {
 
 // AddNode persists a hypergraph node, truncating content to 200 chars.
 func AddNode(engine *storage.StorageEngine, node *model.HypergraphNode) error {
-	if len(node.Content) > maxNodeContentLen {
-		runes := []rune(node.Content)
+	runes := []rune(node.Content)
+	if len(runes) > maxNodeContentLen {
 		node.Content = string(runes[:maxNodeContentLen])
 	}
 	return writeSlot(engine, storage.RecL3GraphNode, node.IDHash, node)

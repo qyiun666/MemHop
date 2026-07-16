@@ -33,19 +33,19 @@ func TestMemHopTopicBenchmark(t *testing.T) {
 	lme := loadFixture(t, "longmemeval_smoke.json")
 
 	t.Run("LOCOMO_TopicCohesion", func(t *testing.T) {
-		mh := testsupport.OpenMemHop()
+		mh := testsupport.OpenMemHop(t)
 		defer mh.Close()
 		evalTopicCohesion(t, mh, locomo, "LOCOMO")
 	})
 
 	t.Run("LongMemEval_CrossSession", func(t *testing.T) {
-		mh := testsupport.OpenMemHop()
+		mh := testsupport.OpenMemHop(t)
 		defer mh.Close()
 		evalCrossSession(t, mh, lme, "LongMemEval")
 	})
 
 	t.Run("Dream_Consolidation", func(t *testing.T) {
-		mh := testsupport.OpenMemHop()
+		mh := testsupport.OpenMemHop(t)
 		defer mh.Close()
 		evalDreamEffect(t, mh, locomo, "LOCOMO")
 	})
@@ -68,13 +68,12 @@ func evalTopicCohesion(t *testing.T, mh *memhop.MemHop, fixture map[string]inter
 
 		sessionSceneMap[sessionID] = make(map[string]map[string]int)
 
-		for ti, turn := range turns {
+		for _, turn := range turns {
 			turnData := turn.(map[string]interface{})
 			text := turnData["text"].(string)
 
-			result, err := mh.Search(memhop.SearchQuery{Text: text})
-			if err != nil {
-				t.Logf("  Turn %d search failed: %v", ti, err)
+			result := searchOrCreate(t, mh, text)
+			if result == nil {
 				continue
 			}
 			if len(result.Contexts) > 0 {
@@ -204,7 +203,7 @@ func evalCrossSession(t *testing.T, mh *memhop.MemHop, fixture map[string]interf
 		t.Logf("[%s] 存储 Session %d: %d turns", name, si+1, len(turns))
 		for _, turn := range turns {
 			text := turn.(map[string]interface{})["text"].(string)
-			mh.Search(memhop.SearchQuery{Text: text})
+			searchOrCreate(t, mh, text)
 		}
 	}
 
@@ -257,7 +256,7 @@ func evalDreamEffect(t *testing.T, mh *memhop.MemHop, fixture map[string]interfa
 		session := s.(map[string]interface{})
 		for _, turn := range session["turns"].([]interface{}) {
 			text := turn.(map[string]interface{})["text"].(string)
-			mh.Search(memhop.SearchQuery{Text: text})
+			searchOrCreate(t, mh, text)
 		}
 	}
 
@@ -345,13 +344,32 @@ func evalDreamEffect(t *testing.T, mh *memhop.MemHop, fixture map[string]interfa
 
 // ── 工具函数 ─────────────────────────────────────────────
 
+// searchOrCreate 先检索已有话题，无匹配时显式 AutoCreate 建话题。
+// 测试库在 t.TempDir() 中从空白开始，不再依赖共享库累积的历史数据。
+func searchOrCreate(t *testing.T, mh *memhop.MemHop, text string) *memhop.SearchResult {
+	t.Helper()
+	result, err := mh.Search(memhop.SearchQuery{Text: text})
+	if err != nil {
+		t.Logf("search failed: %v", err)
+		return nil
+	}
+	if len(result.Contexts) == 0 {
+		result, err = mh.Search(memhop.SearchQuery{Text: text, AutoCreate: true})
+		if err != nil {
+			t.Logf("auto-create failed: %v", err)
+			return nil
+		}
+	}
+	return result
+}
+
 func loadFixture(t *testing.T, name string) map[string]interface{} {
 	t.Helper()
 	fixturesDir := findFixturesDir(t)
 	path := filepath.Join(fixturesDir, name)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read fixture %s: %v", name, err)
+		t.Skipf("跳过：fixture 不可用 %s: %v", name, err)
 	}
 	var result map[string]interface{}
 	if err := json.Unmarshal(data, &result); err != nil {
@@ -362,16 +380,15 @@ func loadFixture(t *testing.T, name string) map[string]interface{} {
 
 func findFixturesDir(t *testing.T) string {
 	t.Helper()
+	// 相对 test 包目录定位仓库根的 benches/fixtures
 	candidates := []string{
-		"/Volumes/zt_hd/projects/meow/memhop/benches/fixtures",
-		"../memhop/benches/fixtures",
-		"../../memhop/benches/fixtures",
+		"../benches/fixtures",
 	}
 	for _, c := range candidates {
 		if info, err := os.Stat(c); err == nil && info.IsDir() {
 			return c
 		}
 	}
-	t.Fatal("fixtures directory not found")
+	t.Skip("跳过：benches/fixtures 目录不存在")
 	return ""
 }

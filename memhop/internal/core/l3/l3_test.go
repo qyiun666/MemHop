@@ -5,6 +5,7 @@ package l3
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
@@ -491,6 +492,38 @@ func TestNodeContentTruncation(t *testing.T) {
 	}
 	if len([]rune(got.Content)) != maxNodeContentLen {
 		t.Fatalf("content len: %d, want %d", len([]rune(got.Content)), maxNodeContentLen)
+	}
+}
+
+func TestNodeContentTruncationCJK(t *testing.T) {
+	eng := tempEngine(t)
+	cases := []struct {
+		name    string
+		content string
+		want    int // expected rune count after AddNode
+	}{
+		{"cjk_100", strings.Repeat("汉", 100), 100}, // 300 bytes, under limit
+		{"cjk_200", strings.Repeat("汉", 200), 200}, // exactly at limit
+		{"cjk_201", strings.Repeat("汉", 201), 200}, // 603 bytes, 1 rune over
+		{"cjk_300", strings.Repeat("汉", 300), 200}, // well over
+		{"ascii_250", strings.Repeat("x", 250), 200},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			idHash := uint64(1000 + i)
+			node := makeNode(idHash, 1, tc.name)
+			node.Content = tc.content
+			if err := AddNode(eng, node); err != nil { // must not panic
+				t.Fatal(err)
+			}
+			got, err := GetNode(eng, idHash)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if n := len([]rune(got.Content)); n != tc.want {
+				t.Fatalf("content runes: %d, want %d", n, tc.want)
+			}
+		})
 	}
 }
 

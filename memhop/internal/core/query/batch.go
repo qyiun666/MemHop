@@ -9,6 +9,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/qyiun666/memhop/memhop/internal/core/encoder"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
@@ -32,6 +35,7 @@ type BatchReport struct {
 type BatchDeps struct {
 	Engine      *storage.StorageEngine
 	SparseIndex *index.SparseIndex
+	L2Meta      *index.L2MetaIndex
 	VectorDim   int
 	Encoder     encoder.Encoder
 }
@@ -143,6 +147,13 @@ func archiveDocuments(engine *storage.StorageEngine, items []encodedItem, source
 
 const cosineThreshold = 0.95
 
+// L1NodeIDHash returns the storage ID for an L1 node holding the given text.
+// The "l1:" prefix keeps L1 node IDs out of the L2 topic ID space
+// (topics use HashID(label)), preventing cross-type ID collisions.
+func L1NodeIDHash(text string) uint64 {
+	return hash.HashID("l1:" + text)
+}
+
 func dedupAndWriteL1(
 	deps *BatchDeps,
 	items []encodedItem,
@@ -153,7 +164,7 @@ func dedupAndWriteL1(
 	var created, skipped uint32
 
 	for i, item := range items {
-		idHash := hash.HashID(item.text)
+		idHash := L1NodeIDHash(item.text)
 		// Exact dedup
 		if deps.Engine.Contains(idHash) {
 			skipped++
@@ -293,7 +304,7 @@ func updateTopics(
 		centroidRef := computeTopicCentroid(deps, keywords, nodeIDs)
 
 		ctx := buildTopicSlot(contextID, label, keywords, archiveRefs, centroidRef, now)
-		writeTopicToEngine(deps.Engine, deps.SparseIndex, &ctx)
+		writeTopicToEngine(deps.Engine, deps.SparseIndex, deps.L2Meta, &ctx)
 		backfillContextID(deps.Engine, nodeIDs, contextID, now)
 		topicsUpdated++
 	}
@@ -404,9 +415,12 @@ func averageNodeCentroid(deps *BatchDeps, nodeIDs []uint64) uint64 {
 	for i := range sum {
 		centroid[i] = index.F32ToF16(sum[i] / float32(count))
 	}
-	contextID := hash.HashID("centroid")
-	vecIDHash := hash.HashID(fmt.Sprintf("v:%d", contextID))
 	vecBytes := f16SliceToBytes(centroid)
+	// Content-addressed ID: distinct centroids get distinct vector records
+	// instead of overwriting one shared record; identical centroids are
+	// idempotently written to the same record.
+	contextID := hash.HashID("centroid:" + string(vecBytes))
+	vecIDHash := hash.HashID(fmt.Sprintf("v:%d", contextID))
 	if _, err := deps.Engine.WriteRecord(0xF0, vecIDHash, vecBytes); err == nil {
 		return vecIDHash
 	}
@@ -464,6 +478,7 @@ func buildTopicSlot(
 func writeTopicToEngine(
 	engine *storage.StorageEngine,
 	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
 	ctx *model.TopicSlot,
 ) {
 	data, err := json.Marshal(ctx)
@@ -471,9 +486,11 @@ func writeTopicToEngine(
 		return
 	}
 	engine.WriteRecord(storage.RecL2Topic, ctx.ID, data)
-	kwText := joinStrings(ctx.UserKeywords, " ")
-	terms := index.Tokenize(kwText)
-	sparse.AddDocument(ctx.ID, terms, uint32(len(terms)))
+	reindexTopic(sparse, ctx)
+	// Keep L2Meta in sync so the topic is searchable before the next rebuild.
+	if l2Meta != nil {
+		l2Meta.Update(l2MetaFromTopic(ctx))
+	}
 }
 
 func backfillContextID(
@@ -483,8 +500,10 @@ func backfillContextID(
 	nowMs int64,
 ) {
 	for _, nid := range nodeIDs {
-		_, data, err := engine.ReadRecord(nid)
-		if err != nil {
+		rt, data, err := engine.ReadRecord(nid)
+		if err != nil || rt != storage.RecL1SceneNode {
+			// Not an L1 node (e.g. legacy ID collision with another record
+			// type): never overwrite a foreign record.
 			continue
 		}
 		var node model.ContextNode
@@ -511,9 +530,14 @@ func createBatchHyperedges(engine *storage.StorageEngine, l1NodeIDs []uint64) ui
 	now := timeutil.NowMs()
 	var edgeCount uint32
 
-	// Co-occurrence edge
+	// Co-occurrence edge. ID is derived from the sorted node set so that
+	// distinct batches never overwrite each other's edge, while re-importing
+	// the same set stays idempotent.
+	sortedIDs := make([]uint64, len(l1NodeIDs))
+	copy(sortedIDs, l1NodeIDs)
+	sort.Slice(sortedIDs, func(i, j int) bool { return sortedIDs[i] < sortedIDs[j] })
 	assocEdge := model.HyperedgeSlot{
-		IDHash:    hash.HashID("batch_association"),
+		IDHash:    hash.HashID("assoc:" + uint64sKey(sortedIDs)),
 		Kind:      model.HyperCoOccurrence,
 		NodePtrs:  l1NodeIDs,
 		Weight:    1.0,
@@ -523,9 +547,9 @@ func createBatchHyperedges(engine *storage.StorageEngine, l1NodeIDs []uint64) ui
 	writeHyperedge(engine, &assocEdge)
 	edgeCount++
 
-	// Temporal evolution edges
+	// Temporal evolution edges: ID derived from the endpoint pair.
 	for i := 1; i < len(l1NodeIDs); i++ {
-		edgeID := hash.HashID(fmt.Sprintf("evolution_%d_%d", i-1, i))
+		edgeID := hash.HashID(fmt.Sprintf("evolution:%x:%x", l1NodeIDs[i-1], l1NodeIDs[i]))
 		evolEdge := model.HyperedgeSlot{
 			IDHash:    edgeID,
 			Kind:      model.HyperTemporal,
@@ -538,6 +562,18 @@ func createBatchHyperedges(engine *storage.StorageEngine, l1NodeIDs []uint64) ui
 		edgeCount++
 	}
 	return edgeCount
+}
+
+// uint64sKey renders IDs as a comma-separated hex string for hashing.
+func uint64sKey(ids []uint64) string {
+	var sb strings.Builder
+	for i, id := range ids {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(strconv.FormatUint(id, 16))
+	}
+	return sb.String()
 }
 
 func writeHyperedge(engine *storage.StorageEngine, edge *model.HyperedgeSlot) {

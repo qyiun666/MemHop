@@ -1,0 +1,6 @@
+{
+  "api_url": "https://api.deepseek.com/v1/chat/completions",
+  "api_key": "sk-REPLACE-WITH-YOUR-OWN-KEY",
+  "model": "deepseek-v4-flash",
+  "timeout_secs": 120
+}

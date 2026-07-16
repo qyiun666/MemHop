@@ -47,6 +47,10 @@ memhop_brains/
 # Test artifacts
 _test_mcp.db/
 
+# Test LLM credentials (use key_config.json.example as template,
+# or set MEMHOP_TEST_LLM_KEY env var instead)
+test/testsupport/key_config.json
+
 # Large model files (user-downloaded)
 /models/
 

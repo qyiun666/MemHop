@@ -62,9 +62,10 @@ func DreamPipeline(
 
 	// Phase 2: apply results
 	var metrics pipelineMetrics
+	decayParams := DecayParamsFromConfig(decayCfg)
 	stages = applyL2Stage(llmOutput, engine, sparseIdx, l2Meta, enc, stages, &metrics)
-	stages = rebuildL1Stage(engine, sparseIdx, l2Meta, stages, &metrics)
-	stages = decayL1Stage(engine, decayCfg, l2Meta, stages, &metrics)
+	stages = rebuildL1Stage(engine, sparseIdx, l2Meta, decayParams, stages, &metrics)
+	stages = decayL1Stage(engine, sparseIdx, decayParams, l2Meta, stages, &metrics)
 	stages = profileL0Stage(engine, sparseIdx, stages)
 
 	report := buildDreamReport(stages, &metrics)
@@ -273,11 +274,12 @@ func rebuildL1Stage(
 	engine *storage.StorageEngine,
 	sparseIdx *index.SparseIndex,
 	l2Meta *index.L2MetaIndex,
+	params *DecayParams,
 	stages []StageReport,
 	m *pipelineMetrics,
 ) []StageReport {
 	start := time.Now()
-	updated, err := RebuildL1FromL2(engine, sparseIdx, l2Meta)
+	updated, err := RebuildL1FromL2(engine, sparseIdx, l2Meta, params)
 	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
 		return append(stages, failStage("l1_rebuild", "L1 rebuild failed", elapsed, err))
@@ -292,14 +294,14 @@ func rebuildL1Stage(
 
 func decayL1Stage(
 	engine *storage.StorageEngine,
-	decayCfg *core.DecayConfig,
+	sparseIdx *index.SparseIndex,
+	params *DecayParams,
 	l2Meta *index.L2MetaIndex,
 	stages []StageReport,
 	m *pipelineMetrics,
 ) []StageReport {
 	start := time.Now()
-	params := DecayParamsFromConfig(decayCfg)
-	dr, err := DecayL1Network(engine, params, l2Meta)
+	dr, err := DecayL1Network(engine, params, l2Meta, sparseIdx)
 	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
 		return append(stages, failStage("l1_decay", "L1 decay failed", elapsed, err))

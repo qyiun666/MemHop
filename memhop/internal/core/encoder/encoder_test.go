@@ -5,7 +5,11 @@ package encoder
 
 import (
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 )
@@ -60,3 +64,61 @@ func TestF32F16Roundtrip(t *testing.T) {
 
 // ErrEncoder is a sentinel for test assertions (mirrors core.ErrEncoder).
 var ErrEncoder = errors.New("memhop: encoder error")
+
+func TestHttpEncoderEncode(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/tags":
+			w.WriteHeader(http.StatusOK)
+		case "/api/embed":
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprint(w, `{"embeddings":[[0.1,0.2]]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	e, err := NewHttpEncoder(srv.URL, 2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+
+	out, err := e.Encode("hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Dense) != 2 {
+		t.Fatalf("dense dim: %d, want 2", len(out.Dense))
+	}
+	if got := index.F16ToF32(out.Dense[0]); got < 0.09 || got > 0.11 {
+		t.Fatalf("dense[0]: %v, want ~0.1", got)
+	}
+}
+
+func TestHttpEncoderEncodeTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	e := &HttpEncoder{baseURL: srv.URL, dim: 2, model: "m", httpClient: &http.Client{}}
+	_, err := e.doPost("/api/embed", ollamaEmbedRequest{Model: "m", Input: "x"}, 20*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+}
+
+func TestHttpEncoderEncodeNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	e := &HttpEncoder{baseURL: srv.URL, dim: 2, model: "m", httpClient: &http.Client{}}
+	if _, err := e.Encode("hello"); err == nil {
+		t.Fatal("expected error for non-200 response")
+	}
+}

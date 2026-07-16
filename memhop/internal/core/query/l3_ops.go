@@ -60,16 +60,29 @@ func UpdateL3(
 	return GetL3(engine, id)
 }
 
+// L3NodeRemover abstracts node removal from the L3 in-memory index.
+// Implemented by *l3.L3Index; avoids a circular import.
+type L3NodeRemover interface {
+	RemoveNode(nodeHash uint64)
+}
+
 // DeleteL3 deletes an L3 hypergraph and cleans up L2 references.
-func DeleteL3(engine *storage.StorageEngine, l3ID string) error {
+func DeleteL3(engine *storage.StorageEngine, l3Idx L3NodeRemover, l3ID string) error {
 	graphHash, err := hash.ParseID(l3ID)
 	if err != nil {
 		return core.NewError(core.ErrInvalidQuery, "parse l3 id", err)
 	}
 	l2Refs := findL2RefsToGraph(engine, graphHash)
-	deleteGraphMembers(engine, graphHash)
+	nodeHashes := deleteGraphMembers(engine, graphHash)
 	engine.DeleteRecord(graphHash)
 	removeL2GraphRefs(engine, l2Refs, graphHash)
+	// Drop the graph's nodes from the in-memory index so searches
+	// never return dangling IDs.
+	if l3Idx != nil {
+		for _, nh := range nodeHashes {
+			l3Idx.RemoveNode(nh)
+		}
+	}
 	return nil
 }
 
@@ -230,8 +243,11 @@ func findL2RefsToGraph(engine *storage.StorageEngine, graphHash uint64) []uint64
 	return refs
 }
 
-func deleteGraphMembers(engine *storage.StorageEngine, graphHash uint64) {
+// deleteGraphMembers removes all node and edge records of a graph and
+// returns the deleted node hashes (for in-memory index cleanup).
+func deleteGraphMembers(engine *storage.StorageEngine, graphHash uint64) []uint64 {
 	var toDelete []uint64
+	var nodeHashes []uint64
 	engine.IterIndex(func(idHash, _ uint64) bool {
 		rt, data, err := engine.ReadRecord(idHash)
 		if err != nil {
@@ -242,6 +258,7 @@ func deleteGraphMembers(engine *storage.StorageEngine, graphHash uint64) {
 			var node model.HypergraphNode
 			if json.Unmarshal(data, &node) == nil && node.GraphID == graphHash {
 				toDelete = append(toDelete, idHash)
+				nodeHashes = append(nodeHashes, idHash)
 			}
 		case storage.RecL3GraphEdge:
 			var edge model.HypergraphEdge
@@ -254,6 +271,7 @@ func deleteGraphMembers(engine *storage.StorageEngine, graphHash uint64) {
 	for _, h := range toDelete {
 		engine.DeleteRecord(h)
 	}
+	return nodeHashes
 }
 
 func removeL2GraphRefs(engine *storage.StorageEngine, l2IDs []uint64, graphHash uint64) {

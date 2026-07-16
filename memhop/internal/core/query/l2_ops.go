@@ -80,6 +80,7 @@ func DeleteL2(
 	engine *storage.StorageEngine,
 	l1Reverse *L1ReverseIndex,
 	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
 	id string,
 ) error {
 	idHash, err := hash.ParseID(id)
@@ -93,6 +94,9 @@ func DeleteL2(
 	deleteL1Nodes(engine, l1Reverse, idHash)
 	deleteL4Refs(engine, ctx)
 	sparse.RemoveDocument(idHash)
+	if l2Meta != nil {
+		l2Meta.Remove(idHash)
+	}
 	if l1Reverse != nil {
 		l1Reverse.RemoveContext(idHash)
 	}
@@ -103,7 +107,9 @@ func DeleteL2(
 // MergeL2 merges multiple L2 contexts into a primary context.
 func MergeL2(
 	engine *storage.StorageEngine,
+	l1Reverse *L1ReverseIndex,
 	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
 	primaryID string,
 	mergeIDs []string,
 ) (*MergeResult, error) {
@@ -118,17 +124,23 @@ func MergeL2(
 	if err != nil {
 		return nil, err
 	}
+	// Exclude self-merge: absorbing primary into itself would duplicate its
+	// own summary ("x | x") and delete the primary record.
+	mergeHashes, mergeIDs = excludeSelfMerge(primaryHash, mergeHashes, mergeIDs)
 	primaryCtx, err := loadTopic(engine, primaryHash)
 	if err != nil {
 		return nil, err
 	}
-	absorbSecondaries(engine, sparse, primaryCtx, mergeHashes, mergeIDs)
+	absorbSecondaries(engine, l1Reverse, sparse, l2Meta, primaryCtx, mergeHashes, mergeIDs)
 	primaryCtx.UpdatedAt = timeutil.NowMs()
 	primaryCtx.Version++
 	if err := writeTopic(engine, primaryHash, primaryCtx); err != nil {
 		return nil, err
 	}
 	reindexTopic(sparse, primaryCtx)
+	if l2Meta != nil {
+		l2Meta.Update(l2MetaFromTopic(primaryCtx))
+	}
 	turnCount := uint32(len(primaryCtx.UserL4Refs) + len(primaryCtx.AgentL4Refs))
 	return &MergeResult{
 		PrimaryID:        hash.FormatHash(primaryHash),
@@ -136,6 +148,20 @@ func MergeL2(
 		NewTurnCount:     turnCount,
 		AbsorbedTopicIDs: mergeIDs,
 	}, nil
+}
+
+// excludeSelfMerge drops the primary ID from the merge list.
+func excludeSelfMerge(primaryHash uint64, mergeHashes []uint64, mergeIDs []string) ([]uint64, []string) {
+	hashes := make([]uint64, 0, len(mergeHashes))
+	ids := make([]string, 0, len(mergeIDs))
+	for i, h := range mergeHashes {
+		if h == primaryHash {
+			continue
+		}
+		hashes = append(hashes, h)
+		ids = append(ids, mergeIDs[i])
+	}
+	return hashes, ids
 }
 
 // GetSceneTree lists the full tree of nodes within a scene.
@@ -334,7 +360,9 @@ func parseMergeIDs(ids []string) ([]uint64, error) {
 
 func absorbSecondaries(
 	engine *storage.StorageEngine,
+	l1Reverse *L1ReverseIndex,
 	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
 	primary *model.TopicSlot,
 	mergeHashes []uint64,
 	mergeIDs []string,
@@ -358,6 +386,15 @@ func absorbSecondaries(
 			summaries = append(summaries, *sec.FusedSummary)
 		}
 		sparse.RemoveDocument(secHash)
+		if l2Meta != nil {
+			l2Meta.Remove(secHash)
+		}
+		// Cascade cleanup aligned with DeleteL2: drop the secondary's
+		// associated L1 nodes and its reverse-index entries.
+		deleteL1Nodes(engine, l1Reverse, secHash)
+		if l1Reverse != nil {
+			l1Reverse.RemoveContext(secHash)
+		}
 		engine.DeleteRecord(secHash)
 		_ = i
 	}

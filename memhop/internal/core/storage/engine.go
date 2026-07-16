@@ -114,9 +114,12 @@ func Open(path string) (*StorageEngine, error) {
 			f.Close()
 			return nil, err
 		}
+		// Recover records appended after the snapshot (crash without checkpoint).
+		e.scanRecords(active.SnapshotOffset + uint64(active.SnapshotLength))
 	} else {
-		e.scanRecords()
+		e.scanRecords(DataStart)
 	}
+	e.recordCount = uint32(len(e.index))
 	return e, nil
 }
 
@@ -196,13 +199,33 @@ func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
 	return e.file.Close()
 }
 
+// CloseNoCheckpoint unmaps and closes the file without writing an index
+// snapshot or flipping the A/B header. On-disk state remains exactly as of
+// the last checkpoint plus any appended records.
+func (e *StorageEngine) CloseNoCheckpoint() error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if err := UnmapFile(e.mmap); err != nil {
+		return err
+	}
+	return e.file.Close()
+}
+
 // IterIndex iterates over all (idHash, offset) pairs.
-// Return false from fn to stop iteration.
+// The index is copied under the read lock first and fn is invoked without
+// holding any lock, so fn may safely call engine methods (e.g. ReadRecord);
+// a recursive read lock could deadlock once a writer is queued. Iteration
+// observes a snapshot: concurrent writes/deletes during iteration are not
+// seen. Return false from fn to stop iteration.
 func (e *StorageEngine) IterIndex(fn func(idHash, offset uint64) bool) {
 	e.mu.RLock()
-	defer e.mu.RUnlock()
+	pairs := make([]uint64, 0, len(e.index)*2)
 	for id, off := range e.index {
-		if !fn(id, off) {
+		pairs = append(pairs, id, off)
+	}
+	e.mu.RUnlock()
+	for i := 0; i < len(pairs); i += 2 {
+		if !fn(pairs[i], pairs[i+1]) {
 			return
 		}
 	}
@@ -355,8 +378,12 @@ func (e *StorageEngine) loadSnapshot() error {
 	return nil
 }
 
-func (e *StorageEngine) scanRecords() {
-	offset := uint64(DataStart)
+// scanRecords scans records starting at the given offset and merges them
+// into the index. A later record with the same idHash overrides an earlier
+// entry; records flagged FlagDeleted are skipped. Sets nextOffset just past
+// the last valid record.
+func (e *StorageEngine) scanRecords(start uint64) {
+	offset := start
 	for {
 		rt, flags, data, idHash, err := RecordData(e.mmap, offset)
 		if err != nil || (rt == 0 && data == nil && idHash == 0) {

@@ -122,21 +122,30 @@ func searchNormal(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 		rrfK = deps.Weights.RRFK
 	}
 	merged := RRFMerge3(bm25Results, vectorResults, entityResults, rrfK)
-	merged = applyChannelWeights(merged, bm25Results, vectorResults, entityResults, deps.Weights)
 
-	// Filter by minimum relevance threshold.
-	// Channel-weighted score formula:
-	//   score = BM25Weight*BM25_score + VectorWeight*cosine_sim + EntityWeight*entity_score
-	// Defaults: BM25Weight=0.45, VectorWeight=0.55, EntityWeight=1.0
-	// Threshold 0.30 means:
-	//   - Vector-only: need cosine >= 0.30/0.55 ≈ 0.55
-	//   - BM25-only: need BM25 >= 0.30/0.45 ≈ 0.67
-	//   - Combined: lower each channel's individual requirement
-	const minRelevanceScore = 0.30
 	var filtered []index.ScoredDoc
-	for _, doc := range merged {
-		if doc.Score >= minRelevanceScore {
-			filtered = append(filtered, doc)
+	if deps.Weights == nil {
+		// No channel weights configured: the RRF rank-fusion score is the
+		// final score. RRF scores are ranking scores (max ≈ 3/61), not
+		// similarities, so the absolute relevance threshold does not apply;
+		// results are truncated by rank (loadAndScoreContextsDepth1 honors limit).
+		filtered = merged
+	} else {
+		// Filter by minimum relevance threshold.
+		// Channel-weighted score formula:
+		//   score = BM25Weight*BM25_norm + VectorWeight*cosine_sim + EntityWeight*entity_score
+		// BM25_norm is the raw BM25 score normalized to [0,1] by this result
+		// set's maximum. Defaults: BM25Weight=0.45, VectorWeight=0.55, EntityWeight=1.0
+		// Threshold 0.30 means:
+		//   - Vector-only: need cosine >= 0.30/0.55 ≈ 0.55
+		//   - BM25-only: need BM25_norm >= 0.30/0.45 ≈ 0.67
+		//   - Combined: lower each channel's individual requirement
+		merged = applyChannelWeights(merged, bm25Results, vectorResults, entityResults, deps.Weights)
+		const minRelevanceScore = 0.30
+		for _, doc := range merged {
+			if doc.Score >= minRelevanceScore {
+				filtered = append(filtered, doc)
+			}
 		}
 	}
 
@@ -486,7 +495,37 @@ func createNewL2Context(q SearchQuery, deps *SearchDeps) (*model.TopicSlot, erro
 	terms := index.Tokenize(searchText)
 	deps.SparseIndex.AddDocument(idHash, terms, uint32(len(terms)))
 
+	// Keep L2MetaIndex in sync: the candidate set of searchNormal is built
+	// from L2Meta (depth<=2), which is otherwise only rebuilt on Open/Dream,
+	// so a freshly created topic would be filtered out until then.
+	if deps.L2Meta != nil {
+		deps.L2Meta.Update(l2MetaFromTopic(&topic))
+	}
+
 	return &topic, nil
+}
+
+// l2MetaFromTopic builds the lightweight L2Meta entry for a freshly written topic.
+func l2MetaFromTopic(t *model.TopicSlot) *index.L2Meta {
+	l3Refs := append(append([]uint64{}, t.UserL3Refs...), t.AgentL3Refs...)
+	ts := t.UpdatedAt
+	if ts < t.CreatedAt {
+		ts = t.CreatedAt
+	}
+	if ts < 0 {
+		ts = 0
+	}
+	return &index.L2Meta{
+		IDHash:       t.ID,
+		Title:        joinStrings(t.UserKeywords, ", "),
+		Depth:        t.Depth,
+		SceneID:      t.SceneID,
+		ChildrenIDs:  t.ChildrenIDs,
+		VectorOffset: t.CentroidPageRef,
+		ArchiveCount: len(t.UserL4Refs) + len(t.AgentL4Refs),
+		L3Refs:       l3Refs,
+		Timestamp:    uint64(ts),
+	}
 }
 
 // storeQueryAsL4 creates an L4 archive for the search query and links it
@@ -932,6 +971,9 @@ func sortSearchResults(contexts []ContextResult) {
 }
 
 // applyChannelWeights re-scores RRF results using per-channel weights from config.
+// Raw BM25 scores are unbounded, so they are normalized to [0,1] by the
+// maximum BM25 score in this result set (a max of 0 leaves them at 0);
+// vector (cosine ≤ 1) and entity scores are used as-is.
 func applyChannelWeights(
 	merged []index.ScoredDoc,
 	bm25, vector, entity []index.ScoredDoc,
@@ -944,11 +986,21 @@ func applyChannelWeights(
 	if bw == 0 && vw == 0 && ew == 0 {
 		return merged
 	}
+	bm25Max := float32(0)
+	for _, d := range bm25 {
+		if d.Score > bm25Max {
+			bm25Max = d.Score
+		}
+	}
 	bm25Scores := buildDocScoreMap(bm25)
 	vectorScores := buildDocScoreMap(vector)
 	entityScores := buildDocScoreMap(entity)
 	for i, doc := range merged {
-		merged[i].Score = bw*bm25Scores[doc.IDHash] +
+		bm25Norm := float32(0)
+		if bm25Max > 0 {
+			bm25Norm = bm25Scores[doc.IDHash] / bm25Max
+		}
+		merged[i].Score = bw*bm25Norm +
 			vw*vectorScores[doc.IDHash] +
 			ew*entityScores[doc.IDHash]
 	}

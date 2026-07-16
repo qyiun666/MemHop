@@ -228,5 +228,10 @@ func AppendDialogueL4(
 		return 0, err
 	}
 
+	// Rebuild the topic's BM25 document so merged keywords are searchable.
+	if sparseIdx != nil {
+		reindexTopic(sparseIdx, &topic)
+	}
+
 	return archiveIDHash, nil
 }

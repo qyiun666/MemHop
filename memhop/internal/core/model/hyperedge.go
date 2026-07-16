@@ -25,4 +25,7 @@ type SceneEdge struct {
 	NodeIDs   []uint64      `json:"node_ids"`
 	Weight    float32       `json:"weight"`
 	CreatedAt int64         `json:"created_at"`
+	// LastDecayAt is the last time decay was applied (ms); zero means never
+	// decayed, in which case the first decay counts from CreatedAt.
+	LastDecayAt int64 `json:"last_decay_at"`
 }

@@ -58,6 +58,31 @@ func TestF16SpecialValues(t *testing.T) {
 	}
 }
 
+func TestF16SubnormalRoundtrip(t *testing.T) {
+	// |v| < 2^-14 (~6.1e-5): f16 subnormal range, must not flush to zero.
+	values := []float32{1e-5, 3e-5, 6e-5, -1e-5}
+	for _, v := range values {
+		h := F32ToF16(v)
+		if h&0x7FFF == 0 {
+			t.Errorf("F32ToF16(%v) flushed to zero", v)
+			continue
+		}
+		back := F16ToF32(h)
+		diff := math.Abs(float64(back - v))
+		if diff > 0.01*math.Abs(float64(v))+1e-6 {
+			t.Errorf("F16 subnormal roundtrip of %v: got %v (h=%d)", v, back, h)
+		}
+	}
+	// Smallest positive subnormal: 2^-24.
+	if got := F16ToF32(0x0001); got != float32(math.Pow(2, -24)) {
+		t.Errorf("F16ToF32(0x0001) = %v, want 2^-24", got)
+	}
+	// Below 2^-24 underflows to zero.
+	if h := F32ToF16(1e-9); h != 0 {
+		t.Errorf("F32ToF16(1e-9) = %d, want 0 (underflow)", h)
+	}
+}
+
 // ============================================================================
 // cosine similarity tests
 // ============================================================================
