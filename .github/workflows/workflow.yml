@@ -10,16 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
         with:
-          components: clippy
-      - name: Install protoc
-        uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check
-        run: cargo check
-      - name: Clippy
-        run: cargo clippy -- -D warnings
-      - name: Test
-        run: cargo test
+          go-version: '1.25'
+
+      - name: Build
+        run: go build ./memhop/...
+
+      - name: Vet
+        run: go vet ./memhop/... ./test/...
+
+      - name: Unit tests
+        run: go test ./memhop/...

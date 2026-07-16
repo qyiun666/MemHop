@@ -26,7 +26,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 
 ## Quick Start
 
-### Go
+### Go (current)
 
 ```go
 import "github.com/qyiun666/memhop/memhop"
@@ -64,6 +64,75 @@ for _, ctx := range results.Contexts {
 report, err := db.Dream(nil)
 fmt.Printf("dream stages: %d\n", report.ConsolidatedCount)
 ```
+
+<details>
+<summary>Rust version (v0.18 – v0.61)</summary>
+
+```rust
+use memhop::{MemHop, MemHopConfig, SearchQuery, UpdateRequest};
+
+let mut db = MemHop::open(MemHopConfig::new("agent.meh".into(), 768))?;
+
+// 1. Retrieve relevant contexts
+let results = db.search_context(SearchQuery {
+    dialogue: "What did we discuss yesterday?".into(),
+    l2_id: None,
+    context_id: None,
+    l3_id: None,
+    context_limit: 10,
+    auto_create: 0,
+    min_score: 0.0,
+    source: Default::default(),
+})?;
+
+for ctx in &results.contexts {
+    println!("[{:.2}] {}", ctx.retrieval_score,
+        ctx.fused_summary.as_deref().unwrap_or(""));
+}
+
+// 2. Append a new turn
+if let Some(ctx) = results.contexts.first() {
+    db.update_memory(UpdateRequest {
+        topic_id: ctx.id.clone(),
+        dialogue_text: "We discussed Rust lifetimes.".into(),
+        summary: None,
+        action_chain: None,
+        instant_distill: false,
+        source: Default::default(),
+    })?;
+}
+
+// 3. Run Dream consolidation
+let report = db.dream(None)?;
+println!("dream stages: {:?}", report.stages);
+
+// 4. Graceful shutdown
+db.close()?;
+```
+
+</details>
+
+<details>
+<summary>Python version (v0.1 – v0.5)</summary>
+
+```python
+import memhop
+
+with memhop.open("brain.db") as db:
+    # Write memory
+    id = db.remember("今天吃了豆浆油条", meta={"tags": ["早餐"], "session_id": "s01"})
+
+    # O(1) associative recall
+    m = db.recall("早餐吃了什么")
+    print(m.text)        # "今天吃了豆浆油条"
+    print(m.confidence)  # 0.94
+
+    # Spread activation from seed
+    results = db.spread_activation("God Object", max_hops=2)
+    # → [{id: "...", activation: 0.85}, {id: "...", activation: 0.42}]
+```
+
+</details>
 
 ## Architecture
 
@@ -127,6 +196,15 @@ make bench
 - Go 1.25+
 - Ollama running locally (`ollama serve`) with embedding model (`ollama pull nomic-embed-text`)
 - CGO_ENABLED=1 for gojieba tokenizer (auto-fallback to gse without CGO)
+
+## Changelog
+
+| Version | Language | Highlights |
+|---|---|---|
+| **v0.57.0+** | Go | Go rewrite: HTTP Ollama encoder, log/slog, RRF fusion, 3 deps only |
+| **v0.18–v0.61** | Rust | V2 append-only .meh, BM25+IVF, L3 hypergraph DSL, Dream pipeline |
+| **v0.6–v0.17** | Rust | Pure Rust crate, LMDB → .meh migration, MCP server |
+| **v0.1–v0.5** | Python | Hopfield network, LMDB, pip install, associative recall |
 
 ## License
 
