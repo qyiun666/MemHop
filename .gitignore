@@ -4,28 +4,19 @@
 # macOS
 .DS_Store
 
-# Rust
-/target/
-/tools/
+# Go
+/vendor/
+bin/
+
+# CGO build artifacts
 *.so
 *.dylib
-*.pyd
-Cargo.lock
-Cargo.lock.bak
+*.dll
 
-# Python
+# Python (legacy scripts)
 __pycache__/
 *.pyc
 *.pyo
-*.egg-info/
-dist/
-build/
-*.egg
-
-# Virtual env
-venv/
-.venv/
-env/
 
 # IDE
 .vscode/
@@ -39,8 +30,6 @@ env/
 
 # Benchmarks
 .benchmarks/
-.pytest_cache/
-.ruff_cache/
 
 # Design docs & API docs (not for public repo)
 docs/
@@ -48,12 +37,6 @@ deliverables/
 
 # Screenshots
 *.png
-
-# Analysis docs (generated)
-ANALYSIS_SCOPE.md
-CONTEXT_FLOW_TRACE.md
-CONTEXT_SYSTEM_SUMMARY.md
-CROSS_PROJECT_UPGRADE_GUIDE.md
 
 # Local config & tools
 .history/
@@ -64,9 +47,8 @@ memhop_brains/
 # Test artifacts
 _test_mcp.db/
 
-# Python prototype (not for public repo)
-src/memhop/
-# v0.9.0: Large model files (user-downloaded)
+# Large model files (user-downloaded)
 /models/
+
 # Node.js
 /node_modules/

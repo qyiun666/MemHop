@@ -1,0 +1,152 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+package encoder
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/qyiun666/memhop/memhop/internal/core"
+	"github.com/qyiun666/memhop/memhop/internal/core/index"
+)
+
+const (
+	defaultEmbedModel  = "nomic-embed-text"
+	healthCheckTimeout = 5 * time.Second
+	encodeTimeout      = 20 * time.Second
+)
+
+// HttpEncoder is an HTTP client for an Ollama embedding API.
+type HttpEncoder struct {
+	baseURL    string
+	dim        int
+	model      string
+	httpClient *http.Client
+}
+
+// --- HTTP request / response types ---
+
+type ollamaEmbedRequest struct {
+	Model string `json:"model"`
+	Input string `json:"input"`
+}
+
+type ollamaEmbedResponse struct {
+	Embeddings [][]float32 `json:"embeddings"`
+}
+
+// NewHttpEncoder creates an HttpEncoder and verifies connectivity via /api/tags.
+func NewHttpEncoder(baseURL string, dim int, model string) (*HttpEncoder, error) {
+	baseURL = strings.TrimRight(baseURL, "/")
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		return nil, core.NewError(core.ErrConfig,
+			fmt.Sprintf("encoder address must use http:// or https:// scheme, got: %s", baseURL))
+	}
+	if model == "" {
+		model = defaultEmbedModel
+	}
+
+	client := &http.Client{Timeout: healthCheckTimeout}
+	e := &HttpEncoder{baseURL: baseURL, dim: dim, model: model, httpClient: client}
+
+	if err := e.checkHealth(); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// checkHealth calls GET /api/tags to verify Ollama is reachable.
+func (e *HttpEncoder) checkHealth() error {
+	resp, err := e.httpClient.Get(e.baseURL + "/api/tags")
+	if err != nil {
+		return core.NewError(core.ErrEncoder,
+			fmt.Sprintf("Ollama health check failed at %s", e.baseURL), err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return core.NewError(core.ErrEncoder,
+			fmt.Sprintf("Ollama unhealthy at %s: status %d", e.baseURL, resp.StatusCode))
+	}
+	return nil
+}
+
+// Encode sends POST /api/embed and returns an f16-converted dense vector.
+func (e *HttpEncoder) Encode(text string) (*EncoderOutput, error) {
+	body, err := e.doPost("/api/embed", ollamaEmbedRequest{
+		Model: e.model, Input: text,
+	}, encodeTimeout)
+	if err != nil {
+		return nil, core.NewError(core.ErrEncoder, "Ollama encode failed", err)
+	}
+
+	var resp ollamaEmbedResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, core.NewError(core.ErrEncoder, "Ollama encode decode failed", err)
+	}
+	if len(resp.Embeddings) == 0 {
+		return nil, core.NewError(core.ErrEncoder, "Ollama returned no embeddings")
+	}
+	if len(resp.Embeddings[0]) != e.dim {
+		return nil, core.NewError(core.ErrEncoder,
+			fmt.Sprintf("dimension mismatch: expected %d, got %d", e.dim, len(resp.Embeddings[0])))
+	}
+
+	return &EncoderOutput{Dense: f32SliceToF16(resp.Embeddings[0])}, nil
+}
+
+// Dim returns the configured dimension.
+func (e *HttpEncoder) Dim() int { return e.dim }
+
+// Mode returns the encoder mode.
+func (e *HttpEncoder) Mode() string { return "ollama:" + e.model }
+
+// IsAvailable probes the Ollama service health.
+func (e *HttpEncoder) IsAvailable() bool {
+	return e.checkHealth() == nil
+}
+
+// Close releases idle HTTP connections.
+func (e *HttpEncoder) Close() error {
+	e.httpClient.CloseIdleConnections()
+	return nil
+}
+
+// doPost sends a JSON POST request and returns the response body bytes.
+func (e *HttpEncoder) doPost(path string, payload any, timeout time.Duration) ([]byte, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Post(e.baseURL+path, "application/json", bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
+	}
+	return body, nil
+}
+
+// f32SliceToF16 converts a []float32 to []uint16 using f16 encoding.
+func f32SliceToF16(in []float32) []uint16 {
+	out := make([]uint16, len(in))
+	for i, v := range in {
+		out[i] = index.F32ToF16(v)
+	}
+	return out
+}
