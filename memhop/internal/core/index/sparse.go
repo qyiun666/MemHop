@@ -8,9 +8,9 @@ import (
 	"math"
 	"sort"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // PostingList is an inverted list for a single term.
@@ -314,9 +314,9 @@ type graphNodeJSON struct {
 }
 
 type topicJSON struct {
-	ID           uint64   `json:"id"`
-	UserL3Refs   []uint64 `json:"user_l3_refs"`
-	AgentL3Refs  []uint64 `json:"agent_l3_refs"`
+	ID          uint64   `json:"id"`
+	UserL3Refs  []uint64 `json:"user_l3_refs"`
+	AgentL3Refs []uint64 `json:"agent_l3_refs"`
 }
 
 // HasEntityIndex returns true if the entity index has entries.
@@ -364,8 +364,8 @@ func (s *SparseIndex) Merge(other *SparseIndex) {
 
 // TopTerms returns the top-n terms by document frequency.
 func (s *SparseIndex) TopTerms(n int) []struct {
-	Term     string
-	DocFreq  uint32
+	Term    string
+	DocFreq uint32
 } {
 	type tf struct {
 		Term    string
@@ -396,14 +396,14 @@ func (s *SparseIndex) TopTerms(n int) []struct {
 
 // sparseIndexJSON is the JSON serialization format for SparseIndex.
 type sparseIndexJSON struct {
-	K1           float32                       `json:"k1"`
-	B            float32                       `json:"b"`
-	Postings     map[string]*PostingList        `json:"postings"`
-	DocLengths   map[string]uint32              `json:"doc_lengths"`
-	AvgDocLength float32                       `json:"avg_doc_length"`
-	TotalDocs    uint32                        `json:"total_docs"`
-	TotalTerms   uint64                        `json:"total_terms"`
-	EntityIndex  *entityIndexJSON              `json:"entity_index,omitempty"`
+	K1           float32                 `json:"k1"`
+	B            float32                 `json:"b"`
+	Postings     map[string]*PostingList `json:"postings"`
+	DocLengths   map[string]uint32       `json:"doc_lengths"`
+	AvgDocLength float32                 `json:"avg_doc_length"`
+	TotalDocs    uint32                  `json:"total_docs"`
+	TotalTerms   uint64                  `json:"total_terms"`
+	EntityIndex  *entityIndexJSON        `json:"entity_index,omitempty"`
 }
 
 type entityIndexJSON struct {

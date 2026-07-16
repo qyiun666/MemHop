@@ -9,13 +9,13 @@ import "math"
 type EmotionType uint8
 
 const (
-	EmotionJoy     EmotionType = 0
-	EmotionSadness EmotionType = 1
-	EmotionAnger   EmotionType = 2
-	EmotionFear    EmotionType = 3
+	EmotionJoy      EmotionType = 0
+	EmotionSadness  EmotionType = 1
+	EmotionAnger    EmotionType = 2
+	EmotionFear     EmotionType = 3
 	EmotionSurprise EmotionType = 4
-	EmotionDisgust EmotionType = 5
-	EmotionNeutral EmotionType = 6
+	EmotionDisgust  EmotionType = 5
+	EmotionNeutral  EmotionType = 6
 )
 
 // ApplyEmotionalBoost adjusts decay lambda based on emotional intensity.

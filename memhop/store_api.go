@@ -4,9 +4,9 @@
 package memhop
 
 import (
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/query"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // BatchStore runs the five-phase batch store pipeline.

@@ -99,17 +99,17 @@ type ContextResult struct {
 
 // ProfileResult is the L0 agent profile in search results.
 type ProfileResult struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	Role             string            `json:"role"`
-	Personality      string            `json:"personality"`
-	Worldview        string            `json:"worldview"`
-	Preferences      map[string]string `json:"preferences"`
-	Lexicon          map[string]string `json:"lexicon"`
-	StyleTraits      []string          `json:"style_traits"`
-	EmotionPatterns  map[string]string `json:"emotion_patterns"`
-	CreatedAt        int64             `json:"created_at"`
-	UpdatedAt        int64             `json:"updated_at"`
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	Role            string            `json:"role"`
+	Personality     string            `json:"personality"`
+	Worldview       string            `json:"worldview"`
+	Preferences     map[string]string `json:"preferences"`
+	Lexicon         map[string]string `json:"lexicon"`
+	StyleTraits     []string          `json:"style_traits"`
+	EmotionPatterns map[string]string `json:"emotion_patterns"`
+	CreatedAt       int64             `json:"created_at"`
+	UpdatedAt       int64             `json:"updated_at"`
 }
 
 // L1Graph is the full L1 layer graph for visualization.
@@ -160,12 +160,6 @@ type SearchPreprocessResult struct {
 	Keywords      []string       `json:"keywords"`
 	NeedsL3Import bool           `json:"needs_l3_import"`
 	L3Entities    []L3EntityHint `json:"l3_entities,omitempty"`
-}
-
-// WritePreprocessResult is the result of LLM write content preprocessing.
-type WritePreprocessResult struct {
-	Keywords   []string `json:"keywords"`
-	Importance float32  `json:"importance"`
 }
 
 // L3SearchQuery is the unified L3 knowledge search request.

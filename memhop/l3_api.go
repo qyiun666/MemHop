@@ -4,11 +4,11 @@
 package memhop
 
 import (
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/l3"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/query"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // GetL3 loads an L3 hypergraph by ID with all nodes and edges.

@@ -10,12 +10,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
-	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 )
 
 // GetL2 loads a single L2 context by hex ID.
@@ -428,9 +428,9 @@ func buildSceneTree(sceneID uint64, nodes []model.TopicSlot) *SceneTreeResult {
 
 func emptySceneTree(sceneID uint64) *SceneTreeResult {
 	return &SceneTreeResult{
-		SceneID:    hash.FormatHash(sceneID),
-		Nodes:      []TopicDetail{},
-		Edges:      [][2]string{},
+		SceneID: hash.FormatHash(sceneID),
+		Nodes:   []TopicDetail{},
+		Edges:   [][2]string{},
 	}
 }
 

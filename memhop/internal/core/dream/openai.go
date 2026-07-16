@@ -126,11 +126,11 @@ func (p *OpenAIProvider) callAPI(system, user string) (string, error) {
 			{"role": "user", "content": user},
 		},
 		"max_tokens":        128000,
-		"temperature":        0.0,
-		"top_p":              0.0,
-		"presence_penalty":   0.0,
-		"frequency_penalty":  0.0,
-		"stream":             false,
+		"temperature":       0.0,
+		"top_p":             0.0,
+		"presence_penalty":  0.0,
+		"frequency_penalty": 0.0,
+		"stream":            false,
 	}
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
@@ -257,11 +257,8 @@ func buildTaskPrompt() string {
 	var b strings.Builder
 	b.WriteString("# Tasks\n\nProcess the input data for each task independently. Output everything merged into a single JSON.\n\n")
 	b.WriteString(l2TaskPrompt)
-	b.WriteString(l3TaskPrompt)
-	b.WriteString(habitTaskPrompt)
-	b.WriteString(crystalTaskPrompt)
 	b.WriteString("\n# Final JSON Format\n\nMerge all tasks into:\n")
-	b.WriteString(`{"l2_groups":[...], "l2_compression_needed":bool, "l1_rebuild":bool, "l0_rebuild":bool, "l3_extractions":[...], "habits":{...}, "crystals":[...]}`)
+	b.WriteString(`{"l2_groups":[...], "l2_compression_needed":bool, "l1_rebuild":bool, "l0_rebuild":bool}`)
 	return b.String()
 }
 

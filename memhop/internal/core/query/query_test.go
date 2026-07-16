@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 func createTestEngine(t *testing.T) *storage.StorageEngine {
@@ -36,16 +36,16 @@ func writeTestTopic(t *testing.T, engine *storage.StorageEngine, id uint64, titl
 		Depth:         1,
 		UserKeywords:  []string{title},
 		UserTimestamp: 1000,
-		UserL4Refs:   []uint64{},
-		UserL3Refs:   []uint64{},
+		UserL4Refs:    []uint64{},
+		UserL3Refs:    []uint64{},
 		AgentKeywords: []string{},
-		AgentL4Refs:  []uint64{},
-		AgentL3Refs:  []uint64{},
+		AgentL4Refs:   []uint64{},
+		AgentL3Refs:   []uint64{},
 		FusedKeywords: []string{},
-		ChildrenIDs:  []uint64{},
-		CreatedAt:    1000,
-		UpdatedAt:    1000,
-		Version:      1,
+		ChildrenIDs:   []uint64{},
+		CreatedAt:     1000,
+		UpdatedAt:     1000,
+		Version:       1,
 	}
 	if err := writeTopic(engine, id, &topic); err != nil {
 		t.Fatalf("write topic: %v", err)
@@ -100,7 +100,7 @@ func TestSearchWriteAndRecall(t *testing.T) {
 		Encoder:     nil,
 		L1Reverse:   l1Rev,
 	}
-	q := SearchQuery{Text: "Go programming"}
+	q := SearchQuery{Text: "Go programming", AutoCreate: true}
 	result, err := SearchContext(q, deps)
 	if err != nil {
 		t.Fatalf("search failed: %v", err)

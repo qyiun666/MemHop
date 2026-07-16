@@ -5,10 +5,10 @@ package dsl
 
 // QueryResult is the result of executing a DSL query.
 type QueryResult struct {
-	Nodes    *NodeResultList    `json:"nodes,omitempty"`
-	Edges    *EdgeResultList    `json:"edges,omitempty"`
-	Hops     *HopResultList     `json:"hops,omitempty"`
-	Subgraph *SubgraphResult    `json:"subgraph,omitempty"`
+	Nodes    *NodeResultList `json:"nodes,omitempty"`
+	Edges    *EdgeResultList `json:"edges,omitempty"`
+	Hops     *HopResultList  `json:"hops,omitempty"`
+	Subgraph *SubgraphResult `json:"subgraph,omitempty"`
 }
 
 // NodeResultList holds matched nodes.
@@ -48,11 +48,11 @@ type NodeResult struct {
 
 // EdgeResult is a matched graph edge.
 type EdgeResult struct {
-	IDHash    string  `json:"id_hash"`
-	GraphID   string  `json:"graph_id"`
-	Kind      string  `json:"kind"`
-	NodeIDs   []string `json:"node_ids"`
-	Weight    float32 `json:"weight"`
+	IDHash  string   `json:"id_hash"`
+	GraphID string   `json:"graph_id"`
+	Kind    string   `json:"kind"`
+	NodeIDs []string `json:"node_ids"`
+	Weight  float32  `json:"weight"`
 }
 
 // HopResult is a single traversal hop.

@@ -9,10 +9,10 @@ import (
 	"math"
 	"strings"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // Executor executes parsed DSL queries against the storage engine.

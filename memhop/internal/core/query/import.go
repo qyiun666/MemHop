@@ -9,13 +9,13 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
-	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/l3"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 )
 
 // ImportMemory imports data into the specified layer.
@@ -68,11 +68,11 @@ func mergeProfile(
 ) (*ImportResult, error) {
 	if mode == ImportSkip {
 		return &ImportResult{
-			Status:     ImportSuccess,
+			Status:       ImportSuccess,
 			SkippedCount: 1,
-			Errors:     []ImportError{},
-			CreatedIDs: []string{},
-			UpdatedIDs: []string{},
+			Errors:       []ImportError{},
+			CreatedIDs:   []string{},
+			UpdatedIDs:   []string{},
 		}, nil
 	}
 	_, data, err := engine.ReadRecord(profileHash)
@@ -293,13 +293,13 @@ func createNewTopic(
 		agentL3Refs = []uint64{l3Hash}
 	}
 	ctx := model.TopicSlot{
-		ID:              idHash,
+		ID:             idHash,
 		FusedKeywords:  []string{item.Title},
 		FusedSummary:   item.Summary,
 		ChildrenIDs:    []uint64{},
-		Depth:           1,
+		Depth:          1,
 		UserKeywords:   []string{},
-		UserTimestamp:   nowMs,
+		UserTimestamp:  nowMs,
 		UserL4Refs:     []uint64{},
 		UserL3Refs:     []uint64{},
 		AgentKeywords:  []string{},

@@ -31,17 +31,6 @@ Rules:
 - Keep bilingual terms as-is (e.g. "Docker容器", "JWT认证")
 - Keywords should be precise enough for BM25 + vector search`
 
-const systemWritePreprocess = `You extract keywords and importance from dialogue. Output JSON only.
-
-Examples:
-{"keywords":["app","build","React","UI"], "importance":0.7}
-{"keywords":["weather","sunny","weekend"], "importance":0.2}
-
-Rules:
-- Preserve all proper nouns, technical terms, version numbers
-- Keep bilingual terms as-is (e.g. "React组件", "状态管理")
-- Importance 0.0-0.2 casual, 0.3-0.5 routine, 0.6-0.8 technical, 0.9-1.0 critical`
-
 // ============================================================================
 // Internal JSON structures for deserialization
 // ============================================================================
@@ -53,11 +42,6 @@ type searchPreprocessJSON struct {
 		Name       string `json:"name"`
 		EntityType string `json:"type"`
 	} `json:"l3_entities"`
-}
-
-type writePreprocessJSON struct {
-	Keywords   []string `json:"keywords"`
-	Importance float32  `json:"importance"`
 }
 
 // ============================================================================
@@ -87,29 +71,6 @@ func PreprocessSearchQuery(llm ChatProvider, q string) (*query.SearchPreprocessR
 	return result, nil
 }
 
-// PreprocessWriteContent preprocesses write content with LLM for keyword
-// extraction and importance scoring.
-// Returns an error if the LLM call or response parsing fails.
-func PreprocessWriteContent(llm ChatProvider, content string) (*query.WritePreprocessResult, error) {
-	userPrompt := buildWritePrompt(content)
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return &query.WritePreprocessResult{Keywords: []string{content}, Importance: 0.5}, nil
-	}
-	response, err := callLLMWithRetry(llm, systemWritePreprocess, userPrompt, 2048, 0.0)
-	if err != nil {
-		return nil, core.NewError(core.ErrLLM, "write preprocess LLM call failed", err)
-	}
-	if strings.TrimSpace(response) == "" {
-		return &query.WritePreprocessResult{Keywords: []string{""}, Importance: 0.5}, nil
-	}
-	result, err := parseWriteResponse(response)
-	if err != nil {
-		return nil, core.NewError(core.ErrLLM, "write preprocess LLM response parse failed", err)
-	}
-	return result, nil
-}
-
 // ============================================================================
 // Internal helpers
 // ============================================================================
@@ -127,15 +88,6 @@ func callLLMWithRetry(
 
 func buildSearchPrompt(q string) string {
 	return "# Search Preprocessing\n\nOriginal user query:\n" + q + "\n\nExtract keywords and decide L3 import. Output JSON."
-}
-
-func buildWritePrompt(content string) string {
-	truncated := content
-	runes := []rune(content)
-	if len(runes) > 4000 {
-		truncated = string(runes[:4000])
-	}
-	return "# Write Preprocessing\n\nDialogue content:\n" + truncated + "\n\nExtract keywords and importance score. Output JSON."
 }
 
 func parseSearchResponse(response, originalQuery string) (*query.SearchPreprocessResult, error) {
@@ -157,26 +109,6 @@ func parseSearchResponse(response, originalQuery string) (*query.SearchPreproces
 		})
 	}
 	return result, nil
-}
-
-func parseWriteResponse(response string) (*query.WritePreprocessResult, error) {
-	cleaned := stripCodeBlocksLLM(response)
-	var raw writePreprocessJSON
-	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
-		return nil, core.NewError(core.ErrDeserialization, "parse write preprocess", err)
-	}
-	keywords := filterEmptyStrings(raw.Keywords)
-	importance := raw.Importance
-	if importance < 0 {
-		importance = 0
-	}
-	if importance > 1 {
-		importance = 1
-	}
-	return &query.WritePreprocessResult{
-		Keywords:   keywords,
-		Importance: importance,
-	}, nil
 }
 
 func filterEmptyStrings(ss []string) []string {

@@ -7,7 +7,6 @@
 package memhop
 
 import (
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/dream"
 	"github.com/qyiun666/memhop/memhop/internal/core/encoder"
@@ -15,6 +14,7 @@ import (
 	"github.com/qyiun666/memhop/memhop/internal/core/l3/dsl"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/query"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // --- Config types ---
@@ -28,19 +28,19 @@ var DefaultDefaults = core.DefaultMemHopDefaults
 // --- Error types ---
 
 var (
-	ErrIO              = core.ErrIO
-	ErrInvalidMagic    = core.ErrInvalidMagic
-	ErrCRCMismatch     = core.ErrCRCMismatch
-	ErrCorruption      = core.ErrCorruption
-	ErrNotFound        = core.ErrNotFound
+	ErrIO                = core.ErrIO
+	ErrInvalidMagic      = core.ErrInvalidMagic
+	ErrCRCMismatch       = core.ErrCRCMismatch
+	ErrCorruption        = core.ErrCorruption
+	ErrNotFound          = core.ErrNotFound
 	ErrVectorDimMismatch = core.ErrVectorDimMismatch
-	ErrSerialization   = core.ErrSerialization
-	ErrDeserialization = core.ErrDeserialization
-	ErrEncoder         = core.ErrEncoder
-	ErrConfig          = core.ErrConfig
-	ErrLLM             = core.ErrLLM
-	ErrInvalidQuery    = core.ErrInvalidQuery
-	ErrClosed          = core.ErrClosed
+	ErrSerialization     = core.ErrSerialization
+	ErrDeserialization   = core.ErrDeserialization
+	ErrEncoder           = core.ErrEncoder
+	ErrConfig            = core.ErrConfig
+	ErrLLM               = core.ErrLLM
+	ErrInvalidQuery      = core.ErrInvalidQuery
+	ErrClosed            = core.ErrClosed
 )
 
 type Error = core.MemHopError
@@ -70,8 +70,6 @@ type L3SearchResult = query.L3SearchResult
 type L3EntityHint = query.L3EntityHint
 
 type SearchPreprocessResult = query.SearchPreprocessResult
-
-type WritePreprocessResult = query.WritePreprocessResult
 
 // --- CRUD types ---
 
@@ -150,6 +148,14 @@ type UpdateL2Fields = query.UpdateL2Fields
 type UpdateL3Fields = query.UpdateL3Fields
 
 type UpdateL5Fields = query.UpdateL5Fields
+
+// --- L5 write types ---
+
+type L5ChainInput = query.L5ChainInput
+
+type L5StepInput = query.L5StepInput
+
+type L5ChainUpdate = query.L5ChainUpdate
 
 // --- Profile types ---
 

@@ -4,10 +4,10 @@
 package memhop
 
 import (
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/query"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // GetL5 loads an L5 action chain by hex ID and returns it as CrystalSummary.
@@ -42,6 +42,78 @@ func (m *MemHop) ListCrystals(q query.CrystalListQuery) (*query.CrystalListResul
 		return nil, core.ErrClosed
 	}
 	return query.ListCrystals(m.engine, q)
+}
+
+// CreateActionChain creates a new L5 action chain.
+func (m *MemHop) CreateActionChain(input query.L5ChainInput) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return "", core.ErrClosed
+	}
+	return query.CreateL5Chain(m.engine, input)
+}
+
+// AppendActionStep adds a step to an existing chain.
+func (m *MemHop) AppendActionStep(chainID string, step query.L5StepInput) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return "", core.ErrClosed
+	}
+	id, err := hash.ParseID(chainID)
+	if err != nil {
+		return "", core.NewError(core.ErrInvalidQuery, "invalid chain id", err)
+	}
+	return query.AppendL5Step(m.engine, id, step)
+}
+
+// UpdateChainConfidence applies EMA confidence update based on success/failure.
+func (m *MemHop) UpdateChainConfidence(chainID string, success bool) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return core.ErrClosed
+	}
+	id, err := hash.ParseID(chainID)
+	if err != nil {
+		return core.NewError(core.ErrInvalidQuery, "invalid chain id", err)
+	}
+	return query.UpdateL5Confidence(m.engine, id, success)
+}
+
+// IncrChainTrigger increments the trigger count and updates last triggered time.
+func (m *MemHop) IncrChainTrigger(chainID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return core.ErrClosed
+	}
+	id, err := hash.ParseID(chainID)
+	if err != nil {
+		return core.NewError(core.ErrInvalidQuery, "invalid chain id", err)
+	}
+	return query.IncrL5Trigger(m.engine, id)
+}
+
+// BatchDeleteCrystals deletes multiple L5 action chains and their steps.
+func (m *MemHop) BatchDeleteCrystals(ids []string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return core.ErrClosed
+	}
+	return query.BatchDeleteL5(m.engine, ids)
+}
+
+// BatchUpdateChains applies field updates to multiple L5 chains.
+func (m *MemHop) BatchUpdateChains(updates []query.L5ChainUpdate) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return core.ErrClosed
+	}
+	return query.BatchUpdateL5(m.engine, updates)
 }
 
 func actionChainToSummary(c *model.ActionChainSlot) *query.CrystalSummary {

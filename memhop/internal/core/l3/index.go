@@ -31,11 +31,11 @@ type ScoredNode struct {
 
 // L3Index is a concurrent-safe in-memory index over L3 hypergraph nodes.
 type L3Index struct {
-	byKeyword map[string]map[uint64]bool  // keyword → set of node hashes
-	byType    map[string]map[uint64]bool  // node_type → set of node hashes
-	byGraph   map[uint64]map[uint64]bool  // graph_id → set of node hashes
-	nodes     map[uint64]*IndexedNode     // node hash → cached info
-	bm25      *index.SparseIndex          // BM25 sparse index
+	byKeyword map[string]map[uint64]bool // keyword → set of node hashes
+	byType    map[string]map[uint64]bool // node_type → set of node hashes
+	byGraph   map[uint64]map[uint64]bool // graph_id → set of node hashes
+	nodes     map[uint64]*IndexedNode    // node hash → cached info
+	bm25      *index.SparseIndex         // BM25 sparse index
 	mu        sync.RWMutex
 }
 

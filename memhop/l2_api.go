@@ -4,10 +4,10 @@
 package memhop
 
 import (
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/query"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // GetL2 loads a single L2 topic by hex ID and returns it as TopicDetail.
@@ -105,4 +105,3 @@ func formatUint64s(ids []uint64) []string {
 	}
 	return out
 }
-

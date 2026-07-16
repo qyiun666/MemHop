@@ -14,9 +14,9 @@ import (
 
 // AdjacencyEntry is one entry in the adjacency index for a node.
 type AdjacencyEntry struct {
-	NodeHash    uint64
-	EdgeHash    uint64
-	Kind        model.GraphEdgeKind
+	NodeHash     uint64
+	EdgeHash     uint64
+	Kind         model.GraphEdgeKind
 	ConnectedIDs []uint64 // other nodes in this hyperedge (excluding NodeHash)
 }
 

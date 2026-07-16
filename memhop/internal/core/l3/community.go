@@ -8,9 +8,9 @@ package l3
 import (
 	"sort"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // CommunityConfig holds parameters for community detection.

@@ -10,12 +10,12 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
-	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 	"github.com/qyiun666/memhop/memhop/internal/core/encoder"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 )
 
 // BatchReport is the result of a batch store operation.
@@ -446,18 +446,18 @@ func buildTopicSlot(
 		Depth:           1,
 		UserKeywords:    userKws,
 		UserTimestamp:   nowMs,
-		UserL4Refs:     archiveRefs,
-		UserL3Refs:     []uint64{},
-		AgentKeywords:  []string{},
-		AgentTimestamp: nowMs,
-		AgentL4Refs:    []uint64{},
-		AgentL3Refs:    []uint64{},
-		FusedKeywords:  []string{},
-		ChildrenIDs:    []uint64{},
+		UserL4Refs:      archiveRefs,
+		UserL3Refs:      []uint64{},
+		AgentKeywords:   []string{},
+		AgentTimestamp:  nowMs,
+		AgentL4Refs:     []uint64{},
+		AgentL3Refs:     []uint64{},
+		FusedKeywords:   []string{},
+		ChildrenIDs:     []uint64{},
 		CentroidPageRef: centroidRef,
-		CreatedAt:      nowMs,
-		UpdatedAt:      nowMs,
-		Version:        1,
+		CreatedAt:       nowMs,
+		UpdatedAt:       nowMs,
+		Version:         1,
 	}
 }
 

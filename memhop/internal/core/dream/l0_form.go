@@ -7,12 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
-	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 )
 
 // GenerateProfile regenerates the L0 Profile from sparse index keyword distribution.

@@ -12,13 +12,13 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
-	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/encoder"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 )
 
 // SearchDeps holds all dependencies for the search pipeline.
@@ -39,9 +39,9 @@ type SearchDeps struct {
 
 // SearchContext orchestrates the search pipeline.
 // Steps: 1. LLM preprocess (skip if AutoCreate or DirectedL2ID)
-//        2. L2 retrieval (skip if AutoCreate or DirectedL2ID)
-//        3. L1-associated L2 lookup
-//        4. Assemble L0 + L2 + associated L2 + L5
+//  2. L2 retrieval (skip if AutoCreate or DirectedL2ID)
+//  3. L1-associated L2 lookup
+//  4. Assemble L0 + L2 + associated L2 + L5
 func SearchContext(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 	switch {
 	case q.AutoCreate:
@@ -145,8 +145,8 @@ func searchNormal(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 		return buildSearchResult(q, deps, scored)
 	}
 
-	// No match above threshold → auto-create new topic
-	return searchAutoCreate(q, deps)
+	// No match above threshold → return empty result
+	return emptyResult(), nil
 }
 
 // scoredContext pairs a ContextResult with its TopicSlot for reranking.
@@ -453,8 +453,8 @@ func createNewL2Context(q SearchQuery, deps *SearchDeps) (*model.TopicSlot, erro
 	}
 
 	topic := model.TopicSlot{
-		ID:              idHash,
-		SceneID:         idHash, // each auto-created topic is its own scene initially;
+		ID:      idHash,
+		SceneID: idHash, // each auto-created topic is its own scene initially;
 		// scenes are merged by Dream's L2 consolidation
 		Depth:           1,
 		UserKeywords:    keywords,
@@ -465,12 +465,12 @@ func createNewL2Context(q SearchQuery, deps *SearchDeps) (*model.TopicSlot, erro
 		AgentTimestamp:  0,
 		AgentL4Refs:     []uint64{},
 		AgentL3Refs:     []uint64{},
-		FusedKeywords:  []string{},
-		ChildrenIDs:    []uint64{},
+		FusedKeywords:   []string{},
+		ChildrenIDs:     []uint64{},
 		CentroidPageRef: centroidRef,
-		CreatedAt:      nowMs,
-		UpdatedAt:      nowMs,
-		Version:        1,
+		CreatedAt:       nowMs,
+		UpdatedAt:       nowMs,
+		Version:         1,
 	}
 
 	data, err := json.Marshal(topic)
@@ -490,59 +490,12 @@ func createNewL2Context(q SearchQuery, deps *SearchDeps) (*model.TopicSlot, erro
 }
 
 // storeQueryAsL4 creates an L4 archive for the search query and links it
-// to the given L2 topic, then re-indexes the sparse index with accumulated terms.
+// to the given L2 topic.
 func storeQueryAsL4(q SearchQuery, deps *SearchDeps, topicID uint64) {
 	if q.Text == "" {
 		return
 	}
-	nowMs := timeutil.NowMs()
-
-	// Create L4 archive for this query
-	archiveIDStr := fmt.Sprintf("msg_%d_%s", nowMs, safeCharSlice(q.Text, 10))
-	archiveIDHash := hash.HashID(archiveIDStr)
-	archive := model.ArchiveSlot{
-		IDHash:      archiveIDHash,
-		ContentType: model.ContentText,
-		Role:        0, // user
-		ContextID:   topicID,
-		CreatedAt:   nowMs,
-		Content:     q.Text,
-	}
-	data, err := json.Marshal(archive)
-	if err != nil {
-		slog.Warn("storeQueryAsL4: marshal archive failed", "error", err)
-		return
-	}
-	if _, err := deps.Engine.WriteRecord(storage.RecL4Archive, archiveIDHash, data); err != nil {
-		slog.Warn("storeQueryAsL4: write archive failed", "error", err)
-		return
-	}
-
-	// Load and update the L2 topic: append L4 ref, update timestamps
-	_, topicData, err := deps.Engine.ReadRecord(topicID)
-	if err != nil {
-		slog.Warn("storeQueryAsL4: read topic failed", "error", err)
-		return
-	}
-	var topic model.TopicSlot
-	if err := json.Unmarshal(topicData, &topic); err != nil {
-		slog.Warn("storeQueryAsL4: unmarshal topic failed", "error", err)
-		return
-	}
-
-	topic.UserL4Refs = append(topic.UserL4Refs, archiveIDHash)
-	topic.UpdatedAt = nowMs
-	topic.Version++
-
-	topicData2, err := json.Marshal(topic)
-	if err != nil {
-		slog.Warn("storeQueryAsL4: marshal topic failed", "error", err)
-		return
-	}
-	if _, err := deps.Engine.WriteRecord(storage.RecL2Topic, topicID, topicData2); err != nil {
-		slog.Warn("storeQueryAsL4: write topic failed", "error", err)
-		return
-	}
+	_, _ = AppendDialogueL4(deps.Engine, deps.SparseIndex, topicID, q.Text, 0, deps.PreprocessedKeywords)
 }
 
 // --- helpers ---
@@ -1015,4 +968,3 @@ func buildDocScoreMap(docs []index.ScoredDoc) map[uint64]float32 {
 }
 
 // boostContexts applies activation_boost (multiplicative) and recent_chat_bonus to matching contexts.
-

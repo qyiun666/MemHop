@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
-	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 )
 
 // ============================================================================
@@ -374,10 +374,10 @@ func TestPipelineStageFailure(t *testing.T) {
 	profileID := hash.HashID("profile")
 	profile := &model.ProfileSlot{
 		IDHash: profileID, Name: "Agent", Role: "assistant",
-		Lexicon: make(map[string]string),
-		Preferences: make(map[string]string),
+		Lexicon:         make(map[string]string),
+		Preferences:     make(map[string]string),
 		EmotionPatterns: make(map[string]string),
-		CreatedAt: timeutil.NowMs(), UpdatedAt: timeutil.NowMs(), Version: 1,
+		CreatedAt:       timeutil.NowMs(), UpdatedAt: timeutil.NowMs(), Version: 1,
 	}
 	writeTestProfile(t, engine, profile)
 
@@ -422,11 +422,11 @@ func TestDreamPipelineEndToEnd(t *testing.T) {
 	profileID := hash.HashID("profile")
 	profile := &model.ProfileSlot{
 		IDHash: profileID, Name: "Agent", Role: "assistant",
-		Lexicon: make(map[string]string),
-		StyleTraits: []string{},
+		Lexicon:         make(map[string]string),
+		StyleTraits:     []string{},
 		EmotionPatterns: make(map[string]string),
-		Preferences: make(map[string]string),
-		CreatedAt: nowMs, UpdatedAt: nowMs, Version: 1,
+		Preferences:     make(map[string]string),
+		CreatedAt:       nowMs, UpdatedAt: nowMs, Version: 1,
 	}
 	writeTestProfile(t, engine, profile)
 
@@ -459,8 +459,8 @@ func TestDreamPipelineEndToEnd(t *testing.T) {
 				Relations: []LlmRelation{},
 			}}),
 			Habits: NewValidSection(HabitAnalysis{
-				Lexicon:     map[string]string{"golang": "Go language"},
-				StyleTraits: []string{"technical"},
+				Lexicon:         map[string]string{"golang": "Go language"},
+				StyleTraits:     []string{"technical"},
 				EmotionPatterns: map[string]string{},
 			}),
 			Crystals: NewValidSection([]CrystalDef{{
@@ -486,16 +486,9 @@ func TestDreamPipelineEndToEnd(t *testing.T) {
 		t.Fatalf("DreamPipeline: %v", err)
 	}
 
-	if report.NewL3Nodes != 1 {
-		t.Errorf("NewL3Nodes = %d, want 1", report.NewL3Nodes)
-	}
-	if report.NewCrystals != 1 {
-		t.Errorf("NewCrystals = %d, want 1", report.NewCrystals)
-	}
-
-	// Check stage count (l2_compress, l3_distill, habit_distill, l5_crystallize, l1_rebuild, l1_decay, l0_profile, crystal_prune)
-	if len(report.Stages) < 7 {
-		t.Errorf("Stages count = %d, want >= 7", len(report.Stages))
+	// Check stage count (l2_compress, l1_rebuild, l1_decay, l0_profile)
+	if len(report.Stages) < 4 {
+		t.Errorf("Stages count = %d, want >= 4", len(report.Stages))
 	}
 
 	// All stages should succeed
@@ -515,11 +508,11 @@ func TestDreamReport(t *testing.T) {
 	profileID := hash.HashID("profile")
 	profile := &model.ProfileSlot{
 		IDHash: profileID, Name: "Agent", Role: "assistant",
-		Lexicon: make(map[string]string),
-		StyleTraits: []string{},
+		Lexicon:         make(map[string]string),
+		StyleTraits:     []string{},
 		EmotionPatterns: make(map[string]string),
-		Preferences: make(map[string]string),
-		CreatedAt: timeutil.NowMs(), UpdatedAt: timeutil.NowMs(), Version: 1,
+		Preferences:     make(map[string]string),
+		CreatedAt:       timeutil.NowMs(), UpdatedAt: timeutil.NowMs(), Version: 1,
 	}
 	writeTestProfile(t, engine, profile)
 
@@ -558,7 +551,7 @@ func TestDreamReport(t *testing.T) {
 	}
 	// Check that non-LLM stages are always present
 	expectedStages := []string{
-		"l1_rebuild", "l1_decay", "l0_profile", "crystal_prune",
+		"l1_rebuild", "l1_decay", "l0_profile",
 	}
 	for _, name := range expectedStages {
 		if !stageNames[name] {
@@ -566,7 +559,7 @@ func TestDreamReport(t *testing.T) {
 		}
 	}
 	// LLM-dependent stages are skipped when sections are Empty
-	skippedStages := []string{"l2_compress", "l3_distill", "habit_distill", "l5_crystallize"}
+	skippedStages := []string{"l2_compress"}
 	for _, name := range skippedStages {
 		if stageNames[name] {
 			t.Errorf("stage %q should be skipped for empty sections", name)

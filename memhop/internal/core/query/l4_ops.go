@@ -7,12 +7,16 @@ package query
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/core"
+	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 )
 
 // QueryArchives searches L4 archives with filters.
@@ -131,4 +135,98 @@ func toArchiveDTO(arc *model.ArchiveSlot) Archive {
 		Metadata:    arc.Metadata,
 		CreatedAt:   arc.CreatedAt,
 	}
+}
+
+// AppendDialogueL4 creates an L4 archive and appends it to a topic's L4Refs.
+// role: 0=user, 1=agent. Updates UserL4Refs or AgentL4Refs accordingly.
+func AppendDialogueL4(
+	engine *storage.StorageEngine,
+	sparseIdx *index.SparseIndex,
+	topicID uint64,
+	text string,
+	role uint8,
+	keywords []string,
+) (uint64, error) {
+	if text == "" {
+		return 0, core.NewError(core.ErrInvalidQuery, "cannot append empty dialogue as L4", nil)
+	}
+
+	nowMs := timeutil.NowMs()
+
+	// Create L4 archive
+	archiveIDStr := fmt.Sprintf("msg_%d_%d", nowMs, topicID)
+	archiveIDHash := hash.HashID(archiveIDStr)
+	archive := model.ArchiveSlot{
+		IDHash:      archiveIDHash,
+		ContentType: model.ContentText,
+		Role:        role,
+		ContextID:   topicID,
+		CreatedAt:   nowMs,
+		Content:     text,
+	}
+	archiveData, err := json.Marshal(archive)
+	if err != nil {
+		return 0, core.NewError(core.ErrSerialization, "marshal archive", err)
+	}
+	if _, err := engine.WriteRecord(storage.RecL4Archive, archiveIDHash, archiveData); err != nil {
+		return 0, err
+	}
+
+	// Load and update the L2 topic
+	_, topicData, err := engine.ReadRecord(topicID)
+	if err != nil {
+		return 0, core.NewError(core.ErrNotFound, "read topic for L4 append", err)
+	}
+	var topic model.TopicSlot
+	if err := json.Unmarshal(topicData, &topic); err != nil {
+		return 0, core.NewError(core.ErrDeserialization, "unmarshal topic for L4 append", err)
+	}
+
+	// Append ref and merge keywords based on role
+	if role == 0 {
+		topic.UserL4Refs = append(topic.UserL4Refs, archiveIDHash)
+		// Merge keywords into user keywords if provided and not already present
+		for _, kw := range keywords {
+			found := false
+			for _, existing := range topic.UserKeywords {
+				if existing == kw {
+					found = true
+					break
+				}
+			}
+			if !found {
+				topic.UserKeywords = append(topic.UserKeywords, kw)
+			}
+		}
+		topic.UserTimestamp = nowMs
+	} else {
+		topic.AgentL4Refs = append(topic.AgentL4Refs, archiveIDHash)
+		// Merge keywords into agent keywords
+		for _, kw := range keywords {
+			found := false
+			for _, existing := range topic.AgentKeywords {
+				if existing == kw {
+					found = true
+					break
+				}
+			}
+			if !found {
+				topic.AgentKeywords = append(topic.AgentKeywords, kw)
+			}
+		}
+		topic.AgentTimestamp = nowMs
+	}
+
+	topic.UpdatedAt = nowMs
+	topic.Version++
+
+	topicData2, err := json.Marshal(topic)
+	if err != nil {
+		return 0, core.NewError(core.ErrSerialization, "marshal topic after L4 append", err)
+	}
+	if _, err := engine.WriteRecord(storage.RecL2Topic, topicID, topicData2); err != nil {
+		return 0, err
+	}
+
+	return archiveIDHash, nil
 }

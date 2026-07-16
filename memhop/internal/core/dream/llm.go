@@ -52,7 +52,7 @@ type ChainSummary struct {
 
 // ConsolidationOutput holds the LLM response; each section is independently valid.
 type ConsolidationOutput struct {
-	L2Groups      Section[[]L2Group]     `json:"l2_groups"`
+	L2Groups      Section[[]L2Group]      `json:"l2_groups"`
 	L3Extractions Section[[]L3Extraction] `json:"l3_extractions"`
 	Habits        Section[HabitAnalysis]  `json:"habits"`
 	Crystals      Section[[]CrystalDef]   `json:"crystals"`
@@ -62,9 +62,9 @@ type ConsolidationOutput struct {
 type SectionStatus uint8
 
 const (
-	SectionValid      SectionStatus = iota // successfully parsed
-	SectionEmpty                           // no data
-	SectionParseFailed                     // LLM returned unparseable content
+	SectionValid       SectionStatus = iota // successfully parsed
+	SectionEmpty                            // no data
+	SectionParseFailed                      // LLM returned unparseable content
 )
 
 // Section wraps a value with parse status.
@@ -143,9 +143,9 @@ type LlmRelation struct {
 
 // HabitAnalysis holds user language habit analysis results.
 type HabitAnalysis struct {
-	Lexicon          map[string]string `json:"lexicon"`
-	StyleTraits      []string          `json:"style_traits"`
-	EmotionPatterns  map[string]string `json:"emotion_patterns"`
+	Lexicon         map[string]string `json:"lexicon"`
+	StyleTraits     []string          `json:"style_traits"`
+	EmotionPatterns map[string]string `json:"emotion_patterns"`
 }
 
 // ============================================================================

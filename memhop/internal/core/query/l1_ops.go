@@ -8,9 +8,9 @@ package query
 import (
 	"encoding/json"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // LoadL1Graph traverses the engine and builds the full L1 visualization graph.

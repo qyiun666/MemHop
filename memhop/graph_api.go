@@ -6,12 +6,12 @@ package memhop
 import (
 	"strings"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/l3"
 	"github.com/qyiun666/memhop/memhop/internal/core/l3/dsl"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/query"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // GraphQuery extracts a subgraph reachable from startNode within maxDepth hops.

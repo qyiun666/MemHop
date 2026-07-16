@@ -10,6 +10,7 @@ import (
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/dream"
 	"github.com/qyiun666/memhop/memhop/internal/core/query"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // UpdateMemory updates a memory item at the specified layer.
@@ -23,14 +24,6 @@ func (m *MemHop) UpdateMemory(req query.UpdateRequest) (*query.UpdateResult, err
 	defer m.mu.Unlock()
 	if m.closed {
 		return nil, core.ErrClosed
-	}
-
-	// Extract dialogue_text from fields for LLM preprocessing.
-	dialogueText := extractDialogueText(req.Fields)
-
-	// Auto-preprocess with LLM when enabled and no keywords provided by caller.
-	if dialogueText != "" {
-		m.maybePreprocessUpdate(req.Fields, dialogueText)
 	}
 
 	var result *query.UpdateResult
@@ -49,7 +42,8 @@ func (m *MemHop) UpdateMemory(req query.UpdateRequest) (*query.UpdateResult, err
 	}
 
 	// Rebuild IVF index after mutation (single update may have added vectors).
-	if err == nil {
+	// L2 dialogue updates (L4 append) do not change vectors, so skip rebuild.
+	if err == nil && req.Layer != 2 {
 		m.rebuildIVFIndex()
 	}
 
@@ -71,40 +65,70 @@ func extractDialogueText(fields map[string]json.RawMessage) string {
 
 // maybePreprocessUpdate runs LLM preprocessing on dialogue_text to extract
 // keywords, and injects them into the fields map if not already present.
-func (m *MemHop) maybePreprocessUpdate(fields map[string]json.RawMessage, dialogueText string) {
+func (m *MemHop) maybePreprocessUpdate(fields map[string]json.RawMessage, dialogueText string) *query.SearchPreprocessResult {
 	cfg := m.defaults.LlmPreprocess
 	if cfg == nil || cfg.PreprocessMaxTokens <= 0 {
-		return
+		return nil
 	}
 	// Only preprocess if no user_keywords already provided.
 	if _, ok := fields["user_keywords"]; ok {
-		return
+		return nil
 	}
 	llm := m.llmChatProvider()
 	if llm == nil {
-		return
+		return nil
 	}
-	result, err := preprocessWriteWithLLM(llm, dialogueText)
+	result, err := dream.PreprocessSearchQuery(llm, dialogueText)
 	if err != nil {
 		slog.Warn("LLM preprocess failed, continuing without enhancement", "error", err)
-		return
+		return nil
 	}
 	if result != nil && len(result.Keywords) > 0 {
 		kwJSON, marshalErr := json.Marshal(result.Keywords)
 		if marshalErr != nil {
 			slog.Warn("LLM preprocess: failed to marshal keywords", "error", marshalErr)
-			return
+			return nil
 		}
 		fields["user_keywords"] = kwJSON
 	}
-}
-
-// preprocessWriteWithLLM extracts keywords via LLM for write operations.
-func preprocessWriteWithLLM(llm dream.ChatProvider, content string) (*query.WritePreprocessResult, error) {
-	return dream.PreprocessWriteContent(llm, content)
+	return result
 }
 
 func (m *MemHop) updateL2Memory(req query.UpdateRequest) (*query.UpdateResult, error) {
+	// Extract dialogue_text and role from fields
+	dialogueText := extractDialogueText(req.Fields)
+	role := extractRole(req.Fields)
+
+	if dialogueText != "" {
+		// LLM preprocess
+		preprocessResult := m.maybePreprocessUpdate(req.Fields, dialogueText)
+
+		// Get keywords
+		var keywords []string
+		if preprocessResult != nil {
+			keywords = preprocessResult.Keywords
+		}
+
+		// Parse topic ID
+		topicID, err := hash.ParseID(req.ID)
+		if err != nil {
+			return nil, core.NewError(core.ErrInvalidQuery, "invalid topic id", err)
+		}
+
+		// Append L4 archive
+		if _, err := query.AppendDialogueL4(m.engine, m.sparseIndex, topicID, dialogueText, role, keywords); err != nil {
+			return nil, err
+		}
+
+		// Handle L3 import if needed
+		if preprocessResult != nil && preprocessResult.NeedsL3Import && len(preprocessResult.L3Entities) > 0 {
+			m.importL3Entities(topicID, preprocessResult.L3Entities)
+		}
+
+		return &query.UpdateResult{Status: query.StatusUpdated, ID: req.ID}, nil
+	}
+
+	// Fallback: original field-based update
 	var fields query.UpdateL2Fields
 	data, err := json.Marshal(req.Fields)
 	if err != nil {
@@ -118,6 +142,25 @@ func (m *MemHop) updateL2Memory(req query.UpdateRequest) (*query.UpdateResult, e
 		return nil, err
 	}
 	return &query.UpdateResult{Status: query.StatusUpdated, ID: req.ID}, nil
+}
+
+// extractRole extracts the "role" field from raw fields. Defaults to 1 (agent).
+func extractRole(fields map[string]json.RawMessage) uint8 {
+	raw, ok := fields["role"]
+	if !ok {
+		return 1 // default agent
+	}
+	var role uint8
+	if err := json.Unmarshal(raw, &role); err != nil {
+		return 1
+	}
+	return role
+}
+
+// importL3Entities imports L3 knowledge entities for a given topic.
+// TODO: implement L3 entity creation and linking to L2 topic.
+func (m *MemHop) importL3Entities(topicID uint64, entities []query.L3EntityHint) {
+	slog.Info("L3 import requested", "topic_id", hash.FormatHash(topicID), "entities", len(entities))
 }
 
 func (m *MemHop) updateL3Memory(req query.UpdateRequest) (*query.UpdateResult, error) {

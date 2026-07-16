@@ -43,23 +43,23 @@ type TopicSummary struct {
 
 // TopicDetail is the full L2 TopicSlot view.
 type TopicDetail struct {
-	ID            string   `json:"id"`
-	ParentID      *string  `json:"parent_id,omitempty"`
-	Depth         uint8    `json:"depth"`
-	SceneID       string   `json:"scene_id"`
-	UserKeywords  []string `json:"user_keywords"`
-	UserTimestamp int64    `json:"user_timestamp"`
-	AgentKeywords []string `json:"agent_keywords"`
-	AgentTimestamp int64   `json:"agent_timestamp"`
-	FusedKeywords []string `json:"fused_keywords"`
-	FusedSummary  *string  `json:"fused_summary,omitempty"`
-	ChildrenIDs   []string `json:"children_ids"`
-	UserL4Refs    []string `json:"user_l4_refs"`
-	UserL3Refs    []string `json:"user_l3_refs"`
-	AgentL4Refs   []string `json:"agent_l4_refs"`
-	AgentL3Refs   []string `json:"agent_l3_refs"`
-	CreatedAt     int64    `json:"created_at"`
-	UpdatedAt     int64    `json:"updated_at"`
+	ID             string   `json:"id"`
+	ParentID       *string  `json:"parent_id,omitempty"`
+	Depth          uint8    `json:"depth"`
+	SceneID        string   `json:"scene_id"`
+	UserKeywords   []string `json:"user_keywords"`
+	UserTimestamp  int64    `json:"user_timestamp"`
+	AgentKeywords  []string `json:"agent_keywords"`
+	AgentTimestamp int64    `json:"agent_timestamp"`
+	FusedKeywords  []string `json:"fused_keywords"`
+	FusedSummary   *string  `json:"fused_summary,omitempty"`
+	ChildrenIDs    []string `json:"children_ids"`
+	UserL4Refs     []string `json:"user_l4_refs"`
+	UserL3Refs     []string `json:"user_l3_refs"`
+	AgentL4Refs    []string `json:"agent_l4_refs"`
+	AgentL3Refs    []string `json:"agent_l3_refs"`
+	CreatedAt      int64    `json:"created_at"`
+	UpdatedAt      int64    `json:"updated_at"`
 }
 
 // KnowledgeListQuery is the L3 list query.
@@ -157,7 +157,7 @@ type KnowledgeNodesResult struct {
 
 // L3Detail is the detailed L3 hypergraph view.
 type L3Detail struct {
-	Slot  GraphSlot  `json:"slot"`
+	Slot  GraphSlot   `json:"slot"`
 	Nodes []GraphNode `json:"nodes"`
 	Edges []GraphEdge `json:"edges"`
 }
@@ -266,7 +266,7 @@ type Archive struct {
 	ID          string   `json:"id"`
 	Content     string   `json:"content"`
 	ContentType string   `json:"content_type"`
-	Role        uint8    `json:"role"`         // 0=user, 1=agent, 2=system
+	Role        uint8    `json:"role"` // 0=user, 1=agent, 2=system
 	ContextID   uint64   `json:"context_id"`
 	TopicID     *string  `json:"topic_id,omitempty"`
 	EngramIDs   []string `json:"engram_ids"`
@@ -380,10 +380,10 @@ type NodeListResult struct {
 
 // EdgeListQuery is the query for listing L3 edges by graph.
 type EdgeListQuery struct {
-	Page     int                `json:"page"`
-	PageSize int                `json:"page_size"`
+	Page     int                  `json:"page"`
+	PageSize int                  `json:"page_size"`
 	Kind     *model.GraphEdgeKind `json:"kind,omitempty"`
-	NodeID   *string            `json:"node_id,omitempty"`
+	NodeID   *string              `json:"node_id,omitempty"`
 }
 
 // EdgeListResult is the paginated L3 edge list response.
@@ -414,20 +414,20 @@ type MergeNodesRequest struct {
 
 // MergeNodesResult is the result of merging scenes.
 type MergeNodesResult struct {
-	MainSceneID    string `json:"main_scene_id"`
+	MainSceneID     string `json:"main_scene_id"`
 	MergedNodeCount uint32 `json:"merged_node_count"`
 }
 
 // UpdateProfileRequest is the request to update L0 profile.
 type UpdateProfileRequest struct {
-	Name            *string            `json:"name,omitempty"`
-	Role            *string            `json:"role,omitempty"`
-	Personality     *string            `json:"personality,omitempty"`
-	Worldview       *string            `json:"worldview,omitempty"`
-	Preferences     map[string]string  `json:"preferences,omitempty"`
-	Lexicon         map[string]string  `json:"lexicon,omitempty"`
-	StyleTraits     []string           `json:"style_traits,omitempty"`
-	EmotionPatterns map[string]string  `json:"emotion_patterns,omitempty"`
+	Name            *string           `json:"name,omitempty"`
+	Role            *string           `json:"role,omitempty"`
+	Personality     *string           `json:"personality,omitempty"`
+	Worldview       *string           `json:"worldview,omitempty"`
+	Preferences     map[string]string `json:"preferences,omitempty"`
+	Lexicon         map[string]string `json:"lexicon,omitempty"`
+	StyleTraits     []string          `json:"style_traits,omitempty"`
+	EmotionPatterns map[string]string `json:"emotion_patterns,omitempty"`
 }
 
 // ProfileDelta is an alias for UpdateProfileRequest.

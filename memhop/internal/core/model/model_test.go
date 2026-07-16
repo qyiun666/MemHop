@@ -34,18 +34,18 @@ func u64Ptr(v uint64) *uint64 { return &v }
 
 func TestProfileSlotRoundtrip(t *testing.T) {
 	p := ProfileSlot{
-		IDHash:      1,
-		Name:        "Meow",
-		Role:        "assistant",
-		Personality: "friendly, helpful, curious",
-		Worldview:   "knowledge should be accessible",
-		Preferences: map[string]string{"language": "Rust", "style": "concise"},
-		Lexicon:     map[string]string{"6": "厉害/牛"},
-		StyleTraits: []string{"prefers_brevity"},
+		IDHash:          1,
+		Name:            "Meow",
+		Role:            "assistant",
+		Personality:     "friendly, helpful, curious",
+		Worldview:       "knowledge should be accessible",
+		Preferences:     map[string]string{"language": "Rust", "style": "concise"},
+		Lexicon:         map[string]string{"6": "厉害/牛"},
+		StyleTraits:     []string{"prefers_brevity"},
 		EmotionPatterns: map[string]string{"呵呵": "不满或敷衍"},
-		CreatedAt:   1000,
-		UpdatedAt:   2000,
-		Version:     1,
+		CreatedAt:       1000,
+		UpdatedAt:       2000,
+		Version:         1,
 	}
 	var got ProfileSlot
 	jsonRoundtrip(t, p, &got)
@@ -347,9 +347,9 @@ func TestHypergraphNodeRoundtrip(t *testing.T) {
 	n := HypergraphNode{
 		IDHash: 1, GraphID: 100,
 		Title: "MemHop::Open", NodeType: "function",
-		Content: "Opens or creates a MemHop database",
-		Keywords: []string{"open", "database"},
-		SourceRef: strPtr("/src/lib.rs:L114-L288"),
+		Content:    "Opens or creates a MemHop database",
+		Keywords:   []string{"open", "database"},
+		SourceRef:  strPtr("/src/lib.rs:L114-L288"),
 		Importance: 0.9, ValidFrom: 0, ValidUntil: 0,
 		Summary: nil, CreatedAt: 1000, UpdatedAt: 2000, Version: 1,
 	}
@@ -480,10 +480,10 @@ func TestActionChainSlotRoundtrip(t *testing.T) {
 	c := ActionChainSlot{
 		IDHash: 123456789, Title: "Deploy Service",
 		Trigger: "keyword:deploy AND service:production",
-		Status: ChainActive, Confidence: 0.85,
+		Status:  ChainActive, Confidence: 0.85,
 		SuccessRate: 0.92, TriggerCount: 5,
 		LastTriggered: 1000000,
-		CreatedAt: 900000, UpdatedAt: 950000, Version: 1,
+		CreatedAt:     900000, UpdatedAt: 950000, Version: 1,
 	}
 	var got ActionChainSlot
 	jsonRoundtrip(t, c, &got)

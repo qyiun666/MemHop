@@ -73,7 +73,7 @@ func Tokenize(input string) ([]Token, error) {
 			}
 			tokens = append(tokens, tok)
 			i = end
-		case ch == '(' :
+		case ch == '(':
 			tokens = append(tokens, Token{Kind: TokLParen, Value: "(", Pos: i})
 			i++
 		case ch == ')':

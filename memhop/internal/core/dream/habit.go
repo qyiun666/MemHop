@@ -7,11 +7,11 @@ import (
 	"encoding/json"
 	"sort"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
-	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 )
 
 const (
@@ -23,9 +23,9 @@ const (
 
 // HabitUpdateResult holds habit merge metrics.
 type HabitUpdateResult struct {
-	NewLexicon   int
-	NewStyle     int
-	NewEmotion   int
+	NewLexicon int
+	NewStyle   int
+	NewEmotion int
 }
 
 // ExtractRecentDialogues extracts recent user dialogue texts from L4 archives.

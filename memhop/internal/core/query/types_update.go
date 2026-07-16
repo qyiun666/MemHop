@@ -127,3 +127,22 @@ type UpdateL5Fields struct {
 	TriggerCount  *uint32  `json:"trigger_count,omitempty"`
 	LastTriggered *int64   `json:"last_triggered,omitempty"`
 }
+
+// L5ChainInput defines a new L5 ActionChain to create.
+type L5ChainInput struct {
+	Title   string        `json:"title"`
+	Trigger string        `json:"trigger"`
+	Steps   []L5StepInput `json:"steps,omitempty"`
+}
+
+// L5StepInput defines a step to append to an ActionChain.
+type L5StepInput struct {
+	Action     string  `json:"action"`
+	Parameters *string `json:"parameters,omitempty"` // JSON string
+}
+
+// L5ChainUpdate pairs a chain ID with field updates for batch operations.
+type L5ChainUpdate struct {
+	ID     string         `json:"id"`
+	Fields UpdateL5Fields `json:"fields"`
+}

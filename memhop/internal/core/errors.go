@@ -32,8 +32,8 @@ func (e *MemHopError) Error() string {
 	return e.Kind.Error() + ": " + e.Message
 }
 
-func (e *MemHopError) Unwrap() error          { return e.Cause }
-func (e *MemHopError) Is(target error) bool    { return errors.Is(e.Kind, target) }
+func (e *MemHopError) Unwrap() error        { return e.Cause }
+func (e *MemHopError) Is(target error) bool { return errors.Is(e.Kind, target) }
 
 // NewError creates a MemHopError with kind, message, and optional cause.
 func NewError(kind error, message string, cause ...error) *MemHopError {

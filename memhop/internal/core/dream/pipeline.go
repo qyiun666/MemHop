@@ -51,7 +51,7 @@ func DreamPipeline(
 	enc encoder.Encoder,
 ) (*DreamReport, error) {
 	targetIDs := resolveTargetIDs(l2IDs, engine)
-	stages := make([]StageReport, 0, 8)
+	stages := make([]StageReport, 0, 4)
 
 	// Phase 1: collect data + LLM call
 	input := buildConsolidationInput(engine, l2Meta, targetIDs)
@@ -63,28 +63,21 @@ func DreamPipeline(
 	// Phase 2: apply results
 	var metrics pipelineMetrics
 	stages = applyL2Stage(llmOutput, engine, sparseIdx, l2Meta, enc, stages, &metrics)
-	stages = applyL3Stage(llmOutput, engine, sparseIdx, stages, &metrics)
-	stages = applyHabitStage(llmOutput, engine, stages, &metrics)
-	stages = applyCrystalStage(llmOutput, engine, stages, &metrics)
 	stages = rebuildL1Stage(engine, sparseIdx, l2Meta, stages, &metrics)
 	stages = decayL1Stage(engine, decayCfg, l2Meta, stages, &metrics)
 	stages = profileL0Stage(engine, sparseIdx, stages)
-	stages = pruneCrystalStage(engine, stages, &metrics)
 
 	report := buildDreamReport(stages, &metrics)
 	return report, nil
 }
 
 type pipelineMetrics struct {
-	l2Affected    uint32
-	newL3Nodes    uint32
-	newCrystals   uint32
-	prunedCrystals uint32
-	l1Decayed     uint32
-	l1PrunedEdges uint32
+	l2Affected     uint32
+	l1Decayed      uint32
+	l1PrunedEdges  uint32
 	l1RemovedNodes uint32
 	l1RemovedEdges uint32
-	l1Updated     uint32
+	l1Updated      uint32
 }
 
 func resolveTargetIDs(l2IDs []uint64, engine *storage.StorageEngine) map[uint64]bool {
@@ -130,13 +123,9 @@ func buildConsolidationInput(
 	}
 
 	scenes := buildScenes(sceneMap)
-	dialogues := ExtractRecentDialogues(engine, maxRecentDialogues)
-	chains := ExtractExistingChains(engine)
 
 	return &ConsolidationInput{
-		Scenes:          scenes,
-		RecentDialogues: dialogues,
-		ExistingChains:  chains,
+		Scenes: scenes,
 	}
 }
 
@@ -226,7 +215,7 @@ func applyL3Stage(
 	if err != nil {
 		return append(stages, failStage("l3_distill", "L3 distillation write failed", elapsed, err))
 	}
-	m.newL3Nodes += uint32(len(ids))
+	// m.newL3Nodes += uint32(len(ids))
 	return append(stages, StageReport{
 		Name: "l3_distill", Status: "success",
 		Description:    fmt.Sprintf("Distilled %d L3 nodes", len(ids)),
@@ -272,7 +261,7 @@ func applyCrystalStage(
 	if err != nil {
 		return append(stages, failStage("l5_crystallize", "Crystal write failed", elapsed, err))
 	}
-	m.newCrystals += uint32(len(ids))
+	// m.newCrystals += uint32(len(ids))
 	return append(stages, StageReport{
 		Name: "l5_crystallize", Status: "success",
 		Description:    fmt.Sprintf("Crystallized %d patterns", len(ids)),
@@ -355,7 +344,7 @@ func pruneCrystalStage(
 	if err != nil {
 		return append(stages, failStage("crystal_prune", "Crystal pruning failed", elapsed, err))
 	}
-	m.prunedCrystals += uint32(len(pruned))
+	// m.prunedCrystals += uint32(len(pruned))
 	return append(stages, StageReport{
 		Name: "crystal_prune", Status: "success",
 		Description:    fmt.Sprintf("Pruned %d low-quality crystals", len(pruned)),
@@ -364,13 +353,13 @@ func pruneCrystalStage(
 }
 
 func buildDreamReport(stages []StageReport, m *pipelineMetrics) *DreamReport {
-	consolidated := m.l2Affected + m.newL3Nodes + m.newCrystals + m.prunedCrystals +
+	consolidated := m.l2Affected +
 		m.l1Decayed + m.l1PrunedEdges + m.l1RemovedNodes + m.l1RemovedEdges + m.l1Updated
 	return &DreamReport{
 		ConsolidatedCount: consolidated,
-		NewL3Nodes:        m.newL3Nodes,
-		NewCrystals:       m.newCrystals,
-		PrunedCrystals:    m.prunedCrystals,
+		NewL3Nodes:        0,
+		NewCrystals:       0,
+		PrunedCrystals:    0,
 		L1DecayedNodes:    m.l1Decayed,
 		L1PrunedEdges:     m.l1PrunedEdges,
 		L1RemovedNodes:    m.l1RemovedNodes,

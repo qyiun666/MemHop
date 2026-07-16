@@ -6,18 +6,18 @@ package memhop
 import (
 	"log/slog"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/dream"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/query"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // Search runs the full search pipeline and returns matching contexts.
 // Steps: 1. LLM preprocess (extract keywords, judge L3 import)
-//        2. L2 retrieval (with activation/recent boosts)
-//        3. L1-associated L2 lookup
-//        4. Return L0 + L2 + associated L2 + L5
+//  2. L2 retrieval (with activation/recent boosts)
+//  3. L1-associated L2 lookup
+//  4. Return L0 + L2 + associated L2 + L5
 func (m *MemHop) Search(q query.SearchQuery) (*query.SearchResult, error) {
 	// Fast path: directed search only needs read lock.
 	if q.DirectedL2ID != nil {
@@ -48,7 +48,10 @@ func (m *MemHop) Search(q query.SearchQuery) (*query.SearchResult, error) {
 				"error", err)
 		} else if preprocessResult != nil {
 			keywords = preprocessResult.Keywords
-			// TODO: handle NeedsL3Import and L3Entities if needed
+			if preprocessResult.NeedsL3Import && len(preprocessResult.L3Entities) > 0 {
+				slog.Info("L3 import needed from search", "entities", len(preprocessResult.L3Entities))
+				// TODO: create L3 nodes and link to matched topics
+			}
 		}
 	}
 	// Fallback to tokenizer if LLM not configured or returned no keywords
@@ -99,8 +102,6 @@ func (m *MemHop) llmChatProvider() dream.ChatProvider {
 	}
 	return dream.NewOpenAIProvider(&m.config.LLM)
 }
-
-
 
 func (m *MemHop) touchSearchResults(result *query.SearchResult) {
 	ttlMs := int64(0)

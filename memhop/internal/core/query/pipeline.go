@@ -8,10 +8,10 @@ package query
 import (
 	"encoding/json"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // L1ReverseIndex maps L2 context_id → L1 ContextNode(s) pointing to it.

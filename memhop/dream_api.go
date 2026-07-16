@@ -60,8 +60,6 @@ func (m *MemHop) Dream(opts *DreamOptions) (*dream.DreamReport, error) {
 	// Rebuild indexes from updated engine state.
 	m.l2Meta = index.BuildL2MetaFromEngine(m.engine)
 	m.l1Reverse = query.BuildL1ReverseIndex(m.engine)
-	m.l3Cache.InvalidateAll()
-	m.l3Degree.InvalidateAll()
 
 	return report, nil
 }

@@ -9,9 +9,9 @@ import (
 	"math"
 	"sort"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // System record IDs for IVF persistence.
@@ -22,8 +22,8 @@ const (
 
 // IVF serialization magic bytes and version.
 var (
-	ivfClusterMagic = [4]byte{'M', 'H', 'I', 'V'}
-	ivfBucketMagic  = [4]byte{'M', 'H', 'I', 'B'}
+	ivfClusterMagic      = [4]byte{'M', 'H', 'I', 'V'}
+	ivfBucketMagic       = [4]byte{'M', 'H', 'I', 'B'}
 	ivfVersion      byte = 1
 )
 

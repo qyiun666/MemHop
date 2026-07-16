@@ -7,14 +7,15 @@ package query
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/qyiun666/memhop/memhop/internal/hash"
-	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 	"github.com/qyiun666/memhop/memhop/internal/core"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
+	"github.com/qyiun666/memhop/memhop/internal/hash"
+	"github.com/qyiun666/memhop/memhop/internal/timeutil"
 )
 
 // GetL5 loads an L5 action chain by hex ID.
@@ -223,4 +224,134 @@ func toCrystalSummary(c *model.ActionChainSlot) CrystalSummary {
 		LastTriggered: lastTriggered,
 		CreatedAt:     c.CreatedAt,
 	}
+}
+
+// CreateL5Chain creates a new L5 action chain with optional steps.
+func CreateL5Chain(engine *storage.StorageEngine, input L5ChainInput) (string, error) {
+	nowMs := timeutil.NowMs()
+	chainID := hash.HashID(fmt.Sprintf("crystal_%s_%d", input.Trigger, nowMs))
+
+	chain := model.ActionChainSlot{
+		IDHash:     chainID,
+		Title:      input.Title,
+		Trigger:    input.Trigger,
+		Status:     model.ChainDraft,
+		Confidence: 1.0,
+		CreatedAt:  nowMs,
+		UpdatedAt:  nowMs,
+		Version:    1,
+	}
+	if err := writeActionChain(engine, chainID, &chain); err != nil {
+		return "", err
+	}
+
+	for i, step := range input.Steps {
+		stepID := hash.HashID(fmt.Sprintf("step_%d_%d_%d", chainID, i, nowMs))
+		s := model.ActionStep{
+			IDHash:     stepID,
+			ChainID:    chainID,
+			StepOrder:  uint16(i),
+			Action:     step.Action,
+			Parameters: step.Parameters,
+			CreatedAt:  nowMs,
+		}
+		data, err := json.Marshal(s)
+		if err != nil {
+			return "", core.NewError(core.ErrSerialization, "marshal action step", err)
+		}
+		if _, err := engine.WriteRecord(storage.RecL5ActionStep, stepID, data); err != nil {
+			return "", err
+		}
+	}
+
+	return hash.FormatHash(chainID), nil
+}
+
+// AppendL5Step appends a new step to an existing L5 action chain.
+func AppendL5Step(engine *storage.StorageEngine, chainID uint64, step L5StepInput) (string, error) {
+	nowMs := timeutil.NowMs()
+
+	// Find the max existing step order
+	maxOrder := uint16(0)
+	engine.IterIndex(func(idHash, _ uint64) bool {
+		rt, data, err := engine.ReadRecord(idHash)
+		if err != nil || rt != storage.RecL5ActionStep {
+			return true
+		}
+		var s model.ActionStep
+		if json.Unmarshal(data, &s) == nil && s.ChainID == chainID {
+			if s.StepOrder >= maxOrder {
+				maxOrder = s.StepOrder + 1
+			}
+		}
+		return true
+	})
+
+	stepID := hash.HashID(fmt.Sprintf("step_%d_%d_%d", chainID, maxOrder, nowMs))
+	s := model.ActionStep{
+		IDHash:     stepID,
+		ChainID:    chainID,
+		StepOrder:  maxOrder,
+		Action:     step.Action,
+		Parameters: step.Parameters,
+		CreatedAt:  nowMs,
+	}
+	data, err := json.Marshal(s)
+	if err != nil {
+		return "", core.NewError(core.ErrSerialization, "marshal action step", err)
+	}
+	if _, err := engine.WriteRecord(storage.RecL5ActionStep, stepID, data); err != nil {
+		return "", err
+	}
+	return hash.FormatHash(stepID), nil
+}
+
+// IncrL5Trigger increments the trigger count and updates last triggered time.
+func IncrL5Trigger(engine *storage.StorageEngine, chainID uint64) error {
+	chain, err := loadActionChain(engine, chainID)
+	if err != nil {
+		return err
+	}
+	chain.TriggerCount++
+	chain.LastTriggered = timeutil.NowMs()
+	chain.UpdatedAt = timeutil.NowMs()
+	chain.Version++
+	return writeActionChain(engine, chainID, chain)
+}
+
+// UpdateL5Confidence applies EMA confidence update based on success/failure.
+func UpdateL5Confidence(engine *storage.StorageEngine, chainID uint64, success bool) error {
+	chain, err := loadActionChain(engine, chainID)
+	if err != nil {
+		return err
+	}
+	score := float32(0)
+	if success {
+		score = 1.0
+	}
+	chain.Confidence = 0.9*chain.Confidence + 0.1*score
+	chain.SuccessRate = 0.9*chain.SuccessRate + 0.1*score
+	chain.UpdatedAt = timeutil.NowMs()
+	chain.Version++
+	return writeActionChain(engine, chainID, chain)
+}
+
+// BatchDeleteL5 deletes multiple L5 action chains.
+func BatchDeleteL5(engine *storage.StorageEngine, ids []string) error {
+	for _, id := range ids {
+		if err := DeleteL5(engine, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// BatchUpdateL5 applies field updates to multiple L5 chains.
+func BatchUpdateL5(engine *storage.StorageEngine, updates []L5ChainUpdate) error {
+	for _, u := range updates {
+		if err := UpdateL5(engine, u.ID, u.Fields); err != nil {
+			return err
+		}
+	}
+	return nil
 }

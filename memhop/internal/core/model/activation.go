@@ -57,10 +57,10 @@ func (a *ActivationState) UnmarshalJSON(data []byte) error {
 
 // LlmParams holds LLM generation parameters for context-level overrides.
 type LlmParams struct {
-	Temperature       float32 `json:"temperature"`
-	TopP              float32 `json:"top_p"`
-	PresencePenalty   float32 `json:"presence_penalty"`
-	FrequencyPenalty  float32 `json:"frequency_penalty"`
+	Temperature      float32 `json:"temperature"`
+	TopP             float32 `json:"top_p"`
+	PresencePenalty  float32 `json:"presence_penalty"`
+	FrequencyPenalty float32 `json:"frequency_penalty"`
 }
 
 // DefaultLlmParams returns default LLM parameters.
