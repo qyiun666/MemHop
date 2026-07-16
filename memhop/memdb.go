@@ -183,7 +183,7 @@ func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, e
 	return &MemHop{
 		engine: engine, config: config, defaults: dflt,
 		sparseIndex: sparseIdx, l2Meta: l2MetaIdx,
-		l1Reverse: l1Rev,
+		l1Reverse:  l1Rev,
 		sessionMgr: sm, encoder: enc,
 		l3Index: l3Idx, l3Cache: l3C, l3Degree: l3Dt,
 	}, nil
