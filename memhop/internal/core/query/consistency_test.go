@@ -390,7 +390,7 @@ func TestAverageNodeCentroidContentAddressed(t *testing.T) {
 
 	writeVecNode := func(nodeID, vecID uint64, vec []uint16) {
 		t.Helper()
-		if _, err := engine.WriteRecord(0xF0, vecID, f16SliceToBytes(vec)); err != nil {
+		if _, err := engine.WriteRecord(storage.RecVecCentroid, vecID, f16SliceToBytes(vec)); err != nil {
 			t.Fatalf("write vector: %v", err)
 		}
 		node := model.ContextNode{IDHash: nodeID, VectorPageRef: vecID, CreatedAt: 1, UpdatedAt: 1, Version: 1, EdgePtrs: []uint64{}}
@@ -405,15 +405,25 @@ func TestAverageNodeCentroidContentAddressed(t *testing.T) {
 	writeVecNode(6001, 7001, []uint16{index.F32ToF16(1), index.F32ToF16(0)})
 	writeVecNode(6002, 7002, []uint16{index.F32ToF16(0), index.F32ToF16(1)})
 
-	ref1 := averageNodeCentroid(deps, []uint64{6001})
-	ref2 := averageNodeCentroid(deps, []uint64{6002})
+	ref1, err := averageNodeCentroid(deps, []uint64{6001})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref2, err := averageNodeCentroid(deps, []uint64{6002})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if ref1 == 0 || ref2 == 0 {
 		t.Fatalf("expected non-zero centroid refs, got %d and %d", ref1, ref2)
 	}
 	if ref1 == ref2 {
 		t.Error("distinct centroids share one vector record (mutual overwrite)")
 	}
-	if again := averageNodeCentroid(deps, []uint64{6001}); again != ref1 {
+	again, err := averageNodeCentroid(deps, []uint64{6001})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != ref1 {
 		t.Errorf("same input not idempotent: %d != %d", again, ref1)
 	}
 }

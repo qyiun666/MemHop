@@ -7,6 +7,7 @@ package query
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/qyiun666/memhop/memhop/internal/core/index"
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
@@ -151,13 +152,7 @@ func BuildCandidateSet(
 }
 
 func filterUint64(slice []uint64, v uint64) []uint64 {
-	result := make([]uint64, 0, len(slice))
-	for _, s := range slice {
-		if s != v {
-			result = append(result, s)
-		}
-	}
-	return result
+	return slices.DeleteFunc(slices.Clone(slice), func(x uint64) bool { return x == v })
 }
 
 // ============================================================================

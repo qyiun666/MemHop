@@ -16,7 +16,6 @@ const SnapshotMagic uint32 = 0x534E4150
 // IndexSnapshotData holds serialized index blobs persisted at checkpoint.
 type IndexSnapshotData struct {
 	SparseData    []byte
-	IVFData       []byte
 	L1ReverseData []byte
 	L3IndexData   []byte
 }
@@ -36,8 +35,8 @@ func BuildSnapshot(index map[uint64]uint64, snap *IndexSnapshotData) ([]byte, er
 		entries = append(entries, indexEntry{IDHash: id, Offset: off})
 	}
 	// Estimate capacity.
-	cap := 8 + len(entries)*16 + 16 +
-		len(snap.SparseData) + len(snap.IVFData) +
+	cap := 8 + len(entries)*16 + 12 +
+		len(snap.SparseData) +
 		len(snap.L1ReverseData) + len(snap.L3IndexData) + 4
 	buf := make([]byte, 0, cap)
 	// Magic + count.
@@ -48,9 +47,8 @@ func BuildSnapshot(index map[uint64]uint64, snap *IndexSnapshotData) ([]byte, er
 		buf = appendU64LE(buf, e.IDHash)
 		buf = appendU64LE(buf, e.Offset)
 	}
-	// Four data blobs.
+	// Three data blobs.
 	buf = appendBlob(buf, snap.SparseData)
-	buf = appendBlob(buf, snap.IVFData)
 	buf = appendBlob(buf, snap.L1ReverseData)
 	buf = appendBlob(buf, snap.L3IndexData)
 	// CRC32 over everything before the CRC field.
@@ -87,13 +85,9 @@ func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 		idx[idHash] = offset
 		pos += 16
 	}
-	// Parse four blobs.
+	// Parse three blobs.
 	var err error
 	sparse, pos, err := readBlob(raw, pos)
-	if err != nil {
-		return nil, nil, err
-	}
-	ivf, pos, err := readBlob(raw, pos)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -107,7 +101,6 @@ func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 	}
 	snap := &IndexSnapshotData{
 		SparseData:    sparse,
-		IVFData:       ivf,
 		L1ReverseData: l1rev,
 		L3IndexData:   l3idx,
 	}

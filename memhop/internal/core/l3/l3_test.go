@@ -5,12 +5,12 @@ package l3
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
-	"github.com/qyiun666/memhop/memhop/internal/hash"
 )
 
 // --- test helpers ---
@@ -199,8 +199,7 @@ func TestExtractSubgraph(t *testing.T) {
 		}
 	}
 
-	adj := BuildAdjacencyIndex(eng, graphID)
-	sub, err := ExtractSubgraph(eng, adj, visited)
+	sub, err := ExtractSubgraph(eng, visited)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +343,7 @@ func TestDegreeTracker(t *testing.T) {
 		t.Fatalf("999 degree: %d", d)
 	}
 	isolated := dt.FindIsolatedNodes(graphID)
-	if !contains(isolated, 999) {
+	if !slices.Contains(isolated, 999) {
 		t.Fatal("999 should be isolated")
 	}
 
@@ -354,7 +353,7 @@ func TestDegreeTracker(t *testing.T) {
 		t.Fatalf("999 degree after edge: %d", d)
 	}
 	isolated = dt.FindIsolatedNodes(graphID)
-	if contains(isolated, 999) {
+	if slices.Contains(isolated, 999) {
 		t.Fatal("999 should no longer be isolated")
 	}
 
@@ -439,41 +438,6 @@ func TestDeleteNodeCascade(t *testing.T) {
 	}
 }
 
-func TestImportEntities(t *testing.T) {
-	eng := tempEngine(t)
-	graphID := uint64(42)
-
-	hints := []EntityHint{
-		{Title: "Go Language", NodeType: "concept", Content: "A programming language", Keywords: []string{"go", "golang"}},
-		{Title: "Rust Language", NodeType: "concept", Content: "Systems language", Keywords: []string{"rust"}},
-	}
-
-	hashes, err := ImportEntities(eng, graphID, hints, 99)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(hashes) != 2 {
-		t.Fatalf("imported: %d", len(hashes))
-	}
-
-	// Verify nodes exist
-	for _, h := range hashes {
-		node, err := GetNode(eng, h)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if node.GraphID != graphID {
-			t.Fatalf("graph_id mismatch: %d", node.GraphID)
-		}
-	}
-
-	// Verify hash determinism
-	expected := hash.HashID("Go Language")
-	if hashes[0] != expected {
-		t.Fatalf("hash mismatch: got %d, want %d", hashes[0], expected)
-	}
-}
-
 func TestNodeContentTruncation(t *testing.T) {
 	eng := tempEngine(t)
 	long := make([]byte, 300)
@@ -535,15 +499,6 @@ func toSet(ids []uint64) map[uint64]bool {
 		s[id] = true
 	}
 	return s
-}
-
-func contains(ids []uint64, v uint64) bool {
-	for _, id := range ids {
-		if id == v {
-			return true
-		}
-	}
-	return false
 }
 
 // --- Community Detection Tests ---

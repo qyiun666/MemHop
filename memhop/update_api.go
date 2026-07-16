@@ -41,12 +41,6 @@ func (m *MemHop) UpdateMemory(req query.UpdateRequest) (*query.UpdateResult, err
 		return nil, core.NewError(core.ErrInvalidQuery, "unsupported layer for update")
 	}
 
-	// Rebuild IVF index after mutation (single update may have added vectors).
-	// L2 dialogue updates (L4 append) do not change vectors, so skip rebuild.
-	if err == nil && req.Layer != 2 {
-		m.rebuildIVFIndex()
-	}
-
 	return result, err
 }
 

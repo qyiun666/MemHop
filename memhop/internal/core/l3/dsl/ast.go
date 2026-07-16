@@ -23,7 +23,6 @@ type NodeMatch struct {
 // HyperedgeMatch represents: MATCH HYPEREDGE e-[n1, n2]- WHERE ... LIMIT 10
 type HyperedgeMatch struct {
 	EdgeVar     string
-	NodeVars    []string
 	WhereClause *WhereCondition
 	Limit       int
 }

@@ -67,9 +67,10 @@ func applyOneGroup(
 	if len(centroidVec) > 0 {
 		vecIDHash := index.VecRecordHash(parentID)
 		vecBytes := f16SliceToBytes(centroidVec)
-		if _, err := engine.WriteRecord(0xF0, vecIDHash, vecBytes); err == nil {
-			parent.CentroidPageRef = vecIDHash
+		if _, err := engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
+			return fmt.Errorf("write centroid vector: %w", err)
 		}
+		parent.CentroidPageRef = vecIDHash
 	}
 
 	if err := writeTopicRecord(engine, parentID, &parent); err != nil {

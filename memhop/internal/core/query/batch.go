@@ -8,7 +8,6 @@ package query
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -59,12 +58,18 @@ func BatchStore(batch StoreBatch, deps *BatchDeps) (*BatchReport, error) {
 	report.L4Docs = uint32(len(archiveIDs))
 
 	// Phase 3: L1 Write with dedup
-	l1IDs, created, skipped := dedupAndWriteL1(deps, encoded, skipExisting)
+	l1IDs, created, skipped, err := dedupAndWriteL1(deps, encoded, skipExisting)
+	if err != nil {
+		return nil, err
+	}
 	report.L1NodesCreated = created
 	report.DedupSkipped = skipped
 
 	// Phase 4: L2 Topic Update
-	topicsUpdated := updateTopics(deps, encoded, l1IDs, archiveIDs)
+	topicsUpdated, err := updateTopics(deps, encoded, l1IDs, archiveIDs)
+	if err != nil {
+		return nil, err
+	}
 	report.L2TopicsUpdated = topicsUpdated
 
 	// Phase 5: Hyperedges
@@ -158,7 +163,7 @@ func dedupAndWriteL1(
 	deps *BatchDeps,
 	items []encodedItem,
 	skipExisting bool,
-) ([]uint64, uint32, uint32) {
+) ([]uint64, uint32, uint32, error) {
 	now := timeutil.NowMs()
 	nodeIDs := make([]uint64, len(items))
 	var created, skipped uint32
@@ -186,9 +191,10 @@ func dedupAndWriteL1(
 		if len(item.dense) > 0 {
 			vecIDHash := hash.HashID(fmt.Sprintf("v:%d", idHash))
 			vecBytes := f16SliceToBytes(item.dense)
-			if _, err := deps.Engine.WriteRecord(0xF0, vecIDHash, vecBytes); err == nil {
-				vecRef = vecIDHash
+			if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
+				return nil, 0, 0, fmt.Errorf("write centroid vector: %w", err)
 			}
+			vecRef = vecIDHash
 		}
 		// Write L1 node
 		node := model.ContextNode{
@@ -205,7 +211,7 @@ func dedupAndWriteL1(
 		created++
 		nodeIDs[i] = idHash
 	}
-	return nodeIDs, created, skipped
+	return nodeIDs, created, skipped, nil
 }
 
 // buildArchiveMetadata constructs archive metadata from source info fields.
@@ -289,7 +295,7 @@ func updateTopics(
 	deps *BatchDeps,
 	items []encodedItem,
 	l1NodeIDs, archiveIDs []uint64,
-) uint32 {
+) (uint32, error) {
 	// Group by topic label
 	groups := groupByTopicLabel(items)
 	var topicsUpdated uint32
@@ -301,14 +307,17 @@ func updateTopics(
 		archiveRefs := collectArchiveRefs(indices, archiveIDs)
 		keywords := collectKeywords(items, indices)
 
-		centroidRef := computeTopicCentroid(deps, keywords, nodeIDs)
+		centroidRef, err := computeTopicCentroid(deps, keywords, nodeIDs)
+		if err != nil {
+			return 0, err
+		}
 
 		ctx := buildTopicSlot(contextID, label, keywords, archiveRefs, centroidRef, now)
 		writeTopicToEngine(deps.Engine, deps.SparseIndex, deps.L2Meta, &ctx)
 		backfillContextID(deps.Engine, nodeIDs, contextID, now)
 		topicsUpdated++
 	}
-	return topicsUpdated
+	return topicsUpdated, nil
 }
 
 func groupByTopicLabel(items []encodedItem) map[string][]int {
@@ -370,30 +379,31 @@ func computeTopicCentroid(
 	deps *BatchDeps,
 	keywords []string,
 	nodeIDs []uint64,
-) uint64 {
+) (uint64, error) {
 	// Prefer keyword-based encoding for vector space symmetry with search
 	if deps.Encoder != nil && deps.Encoder.IsAvailable() && len(keywords) > 0 {
 		encodeText := joinStrings(keywords, " ")
 		output, err := deps.Encoder.Encode(encodeText)
 		if err != nil {
-			slog.Warn("computeTopicCentroid: keyword encode failed, falling back to node vector average",
-				"error", err)
-		} else if len(output.Dense) > 0 {
+			return 0, fmt.Errorf("computeTopicCentroid: encode keywords: %w", err)
+		}
+		if len(output.Dense) > 0 {
 			contextID := hash.HashID(encodeText)
 			vecIDHash := hash.HashID(fmt.Sprintf("v:%d", contextID))
 			vecBytes := f16SliceToBytes(output.Dense)
-			if _, err := deps.Engine.WriteRecord(0xF0, vecIDHash, vecBytes); err == nil {
-				return vecIDHash
+			if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
+				return 0, fmt.Errorf("computeTopicCentroid: write record: %w", err)
 			}
+			return vecIDHash, nil
 		}
 	}
 	// Fallback: average L1 node vectors
 	return averageNodeCentroid(deps, nodeIDs)
 }
 
-func averageNodeCentroid(deps *BatchDeps, nodeIDs []uint64) uint64 {
+func averageNodeCentroid(deps *BatchDeps, nodeIDs []uint64) (uint64, error) {
 	if deps.VectorDim == 0 || len(nodeIDs) == 0 {
-		return 0
+		return 0, nil
 	}
 	sum := make([]float32, deps.VectorDim)
 	count := 0
@@ -409,22 +419,19 @@ func averageNodeCentroid(deps *BatchDeps, nodeIDs []uint64) uint64 {
 		count++
 	}
 	if count == 0 {
-		return 0
+		return 0, nil
 	}
 	centroid := make([]uint16, deps.VectorDim)
 	for i := range sum {
 		centroid[i] = index.F32ToF16(sum[i] / float32(count))
 	}
 	vecBytes := f16SliceToBytes(centroid)
-	// Content-addressed ID: distinct centroids get distinct vector records
-	// instead of overwriting one shared record; identical centroids are
-	// idempotently written to the same record.
 	contextID := hash.HashID("centroid:" + string(vecBytes))
 	vecIDHash := hash.HashID(fmt.Sprintf("v:%d", contextID))
-	if _, err := deps.Engine.WriteRecord(0xF0, vecIDHash, vecBytes); err == nil {
-		return vecIDHash
+	if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
+		return 0, fmt.Errorf("averageNodeCentroid: write record: %w", err)
 	}
-	return 0
+	return vecIDHash, nil
 }
 
 func readNodeVector(engine *storage.StorageEngine, nodeID uint64, dim int) []uint16 {

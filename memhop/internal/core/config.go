@@ -1,5 +1,7 @@
 package core
 
+import "math"
+
 type MemHopConfig struct {
 	DBPath      string          `json:"db_path"`
 	VectorDim   int             `json:"vector_dim"`
@@ -9,8 +11,40 @@ type MemHopConfig struct {
 	Defaults    *MemHopDefaults `json:"defaults,omitempty"`
 }
 
+// Validate reports nil or out-of-range configuration values.
+func (c *MemHopConfig) Validate() error {
+	if c == nil {
+		return NewError(ErrConfig, "config is required")
+	}
+	if c.VectorDim <= 0 || c.VectorDim > math.MaxUint16 {
+		return NewError(ErrConfig, "vector_dim must be in range (0, 65535]")
+	}
+	if c.Defaults == nil {
+		return nil
+	}
+	if w := c.Defaults.SearchWeights; w != nil {
+		if w.BM25Weight < 0 || w.VectorWeight < 0 || w.RRFK < 0 ||
+			w.EntityWeight < 0 || w.ActivationBonus < 0 ||
+			w.RecentChatBonus < 0 || w.ActivationBoost < 0 {
+			return NewError(ErrConfig, "search weights must be >= 0")
+		}
+	}
+	if d := c.Defaults.DecayConfig; d != nil {
+		if d.LambdaNode < 0 || d.LambdaEdge < 0 {
+			return NewError(ErrConfig, "decay lambda must be >= 0")
+		}
+		if !inUnitRange(d.NodeRemoveThreshold) ||
+			!inUnitRange(d.NodePruneEdgesThreshold) ||
+			!inUnitRange(d.EdgeRemoveThreshold) {
+			return NewError(ErrConfig, "decay thresholds must be in [0, 1]")
+		}
+	}
+	return nil
+}
+
+func inUnitRange(v float32) bool { return v >= 0 && v <= 1 }
+
 type MemHopDefaults struct {
-	IVFInitialK              int                  `json:"ivf_initial_k"`
 	SearchWeights            *SearchWeights       `json:"search_weights,omitempty"`
 	DecayConfig              *DecayConfig         `json:"decay_config,omitempty"`
 	SessionConfig            *SessionConfig       `json:"session_config,omitempty"`
@@ -63,7 +97,6 @@ type LlmPreprocessConfig struct {
 // DefaultMemHopDefaults returns MemHopDefaults with sensible defaults.
 func DefaultMemHopDefaults() *MemHopDefaults {
 	return &MemHopDefaults{
-		IVFInitialK:              16,
 		AdjacencyCacheMaxEntries: 128,
 		TokenizerEngine:          "auto",
 		SearchWeights: &SearchWeights{

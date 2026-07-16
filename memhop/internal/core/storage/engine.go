@@ -4,6 +4,7 @@
 package storage
 
 import (
+	"errors"
 	"io"
 	"os"
 	"sync"
@@ -29,6 +30,7 @@ type StorageEngine struct {
 	recordCount  uint32
 	nextOffset   uint64
 	snapshotData *IndexSnapshotData
+	dirty        bool // records written/deleted since the last checkpoint
 	mu           sync.RWMutex
 }
 
@@ -56,6 +58,11 @@ func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 	if err != nil {
 		f.Close()
 		return nil, err
+	}
+	if err := f.Sync(); err != nil {
+		UnmapFile(mm)
+		f.Close()
+		return nil, core.NewError(core.ErrIO, "sync", err)
 	}
 	return &StorageEngine{
 		file:         f,
@@ -115,9 +122,14 @@ func Open(path string) (*StorageEngine, error) {
 			return nil, err
 		}
 		// Recover records appended after the snapshot (crash without checkpoint).
-		e.scanRecords(active.SnapshotOffset + uint64(active.SnapshotLength))
+		err = e.scanRecords(active.SnapshotOffset + uint64(active.SnapshotLength))
 	} else {
-		e.scanRecords(DataStart)
+		err = e.scanRecords(DataStart)
+	}
+	if err != nil {
+		UnmapFile(mm)
+		f.Close()
+		return nil, err
 	}
 	e.recordCount = uint32(len(e.index))
 	return e, nil
@@ -156,15 +168,37 @@ func (e *StorageEngine) ReadRecord(idHash uint64) (uint8, []byte, error) {
 	return rt, data, nil
 }
 
-// DeleteRecord removes a record from the index (logical delete).
+// DeleteRecord removes a record by appending a FlagDeleted tombstone (same
+// idHash, original record type, empty data) and dropping it from the index.
+// The tombstone is synced to disk so the delete survives a crash before the
+// next checkpoint; scanRecords replays it as a delete on Open.
 func (e *StorageEngine) DeleteRecord(idHash uint64) (bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if _, ok := e.index[idHash]; !ok {
+	offset, ok := e.index[idHash]
+	if !ok {
 		return false, nil
+	}
+	// Preserve the original record type for forensics.
+	var rt uint8
+	if int(offset) < len(e.mmap) {
+		rt = e.mmap[int(offset)]
+	}
+	tombstone := EncodeRecord(rt, FlagDeleted, idHash, nil)
+	end, err := e.file.Seek(0, io.SeekEnd)
+	if err != nil {
+		return false, core.NewError(core.ErrIO, "seek end", err)
+	}
+	if _, err := e.file.Write(tombstone); err != nil {
+		return false, core.NewError(core.ErrIO, "write tombstone", err)
+	}
+	if err := e.file.Sync(); err != nil {
+		return false, core.NewError(core.ErrIO, "sync tombstone", err)
 	}
 	delete(e.index, idHash)
 	e.recordCount--
+	e.nextOffset = uint64(end) + uint64(len(tombstone))
+	e.dirty = true
 	return true, nil
 }
 
@@ -184,19 +218,21 @@ func (e *StorageEngine) Checkpoint(snap *IndexSnapshotData) error {
 }
 
 // Close checkpoints, syncs, unmaps, and closes the file.
+// All cleanup steps execute even if checkpoint fails.
 func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if err := e.checkpoint(snap); err != nil {
-		return err
-	}
+	ckptErr := e.checkpoint(snap)
 	if err := UnmapFile(e.mmap); err != nil {
 		return err
 	}
 	if err := e.file.Sync(); err != nil {
 		return core.NewError(core.ErrIO, "sync", err)
 	}
-	return e.file.Close()
+	if err := e.file.Close(); err != nil {
+		return err
+	}
+	return ckptErr
 }
 
 // CloseNoCheckpoint unmaps and closes the file without writing an index
@@ -272,6 +308,10 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 	if len(records) == 0 {
 		return nil, nil
 	}
+	// Append everything to the file first. The in-memory index, recordCount
+	// and mmap are updated only after all writes, the sync and the remap
+	// have succeeded, so a failure mid-batch leaves the engine state
+	// consistent (the stale bytes past nextOffset are ignored on Open).
 	offsets := make([]uint64, 0, len(records))
 	for _, rec := range records {
 		encoded := EncodeRecord(rec.RecordType, 0, rec.IDHash, rec.Data)
@@ -282,9 +322,6 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 		if _, err := e.file.Write(encoded); err != nil {
 			return nil, core.NewError(core.ErrIO, "write record", err)
 		}
-		e.index[rec.IDHash] = uint64(offset)
-		e.nextOffset = uint64(offset) + uint64(len(encoded))
-		e.recordCount++
 		offsets = append(offsets, uint64(offset))
 	}
 	if err := e.file.Sync(); err != nil {
@@ -295,6 +332,15 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 		return nil, err
 	}
 	e.mmap = mm
+	for i, rec := range records {
+		if _, exists := e.index[rec.IDHash]; !exists {
+			e.recordCount++
+		}
+		e.index[rec.IDHash] = offsets[i]
+	}
+	last := records[len(records)-1]
+	e.nextOffset = offsets[len(offsets)-1] + uint64(RecordHeaderSize+len(last.Data))
+	e.dirty = true
 	return offsets, nil
 }
 
@@ -382,12 +428,15 @@ func (e *StorageEngine) loadSnapshot() error {
 // into the index. A later record with the same idHash overrides an earlier
 // entry; records flagged FlagDeleted are skipped. Sets nextOffset just past
 // the last valid record.
-func (e *StorageEngine) scanRecords(start uint64) {
+func (e *StorageEngine) scanRecords(start uint64) error {
 	offset := start
 	for {
-		rt, flags, data, idHash, err := RecordData(e.mmap, offset)
-		if err != nil || (rt == 0 && data == nil && idHash == 0) {
-			break
+		_, flags, data, idHash, err := RecordData(e.mmap, offset)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
 		}
 		if flags&FlagDeleted == 0 {
 			e.index[idHash] = offset
@@ -395,13 +444,14 @@ func (e *StorageEngine) scanRecords(start uint64) {
 		offset += uint64(RecordHeaderSize) + uint64(len(data))
 	}
 	e.nextOffset = offset
+	return nil
 }
 
 func (e *StorageEngine) recomputeNextOffset() {
 	var maxEnd uint64 = DataStart
 	for _, off := range e.index {
-		rt, _, data, idHash, err := RecordData(e.mmap, off)
-		if err != nil || (rt == 0 && data == nil && idHash == 0) {
+		_, _, data, _, err := RecordData(e.mmap, off)
+		if err != nil {
 			continue
 		}
 		end := off + uint64(RecordHeaderSize) + uint64(len(data))

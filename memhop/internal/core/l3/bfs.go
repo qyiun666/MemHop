@@ -7,6 +7,7 @@ package l3
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
@@ -91,7 +92,7 @@ func buildAdjacencyWithKinds(
 		if json.Unmarshal(data, &edge) != nil || edge.GraphID != graphID {
 			return true
 		}
-		if filter && !containsKind(edgeKinds, edge.Kind) {
+		if filter && !slices.Contains(edgeKinds, edge.Kind) {
 			return true
 		}
 		info := edgeInfo{edgeHash: edge.IDHash, kind: edge.Kind, allIDs: edge.NodeIDs}
@@ -134,7 +135,7 @@ func BFSWithAdjacency(
 			if _, seen := visitedEdges[entry.EdgeHash]; seen {
 				continue
 			}
-			if filter && !containsKind(edgeKindFilter, entry.Kind) {
+			if filter && !slices.Contains(edgeKindFilter, entry.Kind) {
 				continue
 			}
 			visitedEdges[entry.EdgeHash] = struct{}{}
@@ -219,7 +220,6 @@ func bfsLayers(
 // It loads all visited nodes and all edges connecting them.
 func ExtractSubgraph(
 	engine *storage.StorageEngine,
-	adjacency map[uint64][]AdjacencyEntry,
 	visitedNodes map[uint64]bool,
 ) (*Subgraph, error) {
 	nodes := loadVisitedNodes(engine, visitedNodes)
@@ -246,7 +246,7 @@ func loadVisitedNodes(
 	return nodes
 }
 
-// loadConnectingEdges loads edges where all endpoints are in visited set.
+// loadConnectingEdges loads edges with at least 2 endpoints in the visited set.
 func loadConnectingEdges(
 	engine *storage.StorageEngine,
 	visited map[uint64]bool,
@@ -278,14 +278,4 @@ func allNodesVisited(nodeIDs []uint64, visited map[uint64]bool) bool {
 		}
 	}
 	return count >= 2
-}
-
-// containsKind checks if a kind is in the filter slice.
-func containsKind(kinds []model.GraphEdgeKind, k model.GraphEdgeKind) bool {
-	for _, kind := range kinds {
-		if kind == k {
-			return true
-		}
-	}
-	return false
 }

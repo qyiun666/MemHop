@@ -88,13 +88,6 @@ func (m *MemHop) searchDirected(q query.SearchQuery) (*query.SearchResult, error
 	return result, nil
 }
 
-// rebuildIVFIndex rebuilds the IVF index based on current engine record count.
-func (m *MemHop) rebuildIVFIndex() {
-	if m.ivfIndex != nil {
-		m.ivfIndex.RebuildIfNeeded(int(m.engine.RecordCount()))
-	}
-}
-
 // llmChatProvider returns a ChatProvider if LLM is configured, nil otherwise.
 func (m *MemHop) llmChatProvider() dream.ChatProvider {
 	if m.config.LLM.APIURL == "" || m.config.LLM.APIKey == "" {

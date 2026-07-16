@@ -18,23 +18,22 @@ func (m *MemHop) HealthCheck() (*query.HealthStatus, error) {
 		return nil, core.ErrClosed
 	}
 	layerCounts := m.countLayers()
-	issues := collectIssues(m.encoder, m.ivfIndex, layerCounts)
+	issues := collectIssues(m.encoder, layerCounts)
 	return &query.HealthStatus{
 		OK:                len(issues) == 0,
 		DBSizeBytes:       m.engine.FileSize(),
 		LayerCounts:       layerCounts,
 		EncoderConfigured: m.encoder != nil && m.encoder.IsAvailable(),
-		IVFIndexBuilt:     m.ivfIndex != nil && m.ivfIndex.Len() > 0,
 		Issues:            issues,
 	}, nil
 }
 
 // SessionStatus returns the current session activation state.
-func (m *MemHop) SessionStatus() *query.SessionStatus {
+func (m *MemHop) SessionStatus() (*query.SessionStatus, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	if m.closed {
-		return nil
+		return nil, core.ErrClosed
 	}
 	rawIDs := m.sessionMgr.GetActiveTopicIDs()
 	hexIDs := make([]string, len(rawIDs))
@@ -45,7 +44,7 @@ func (m *MemHop) SessionStatus() *query.SessionStatus {
 		ActiveTopicIDs: hexIDs,
 		Count:          len(hexIDs),
 		IsEmpty:        len(hexIDs) == 0,
-	}
+	}, nil
 }
 
 func (m *MemHop) countLayers() map[string]int {
@@ -82,15 +81,11 @@ func (m *MemHop) countLayers() map[string]int {
 
 func collectIssues(
 	enc interface{ IsAvailable() bool },
-	ivf interface{ Len() int },
 	counts map[string]int,
 ) []string {
 	var issues []string
 	if enc == nil || !enc.IsAvailable() {
 		issues = append(issues, "encoder not available")
-	}
-	if ivf == nil || ivf.Len() == 0 {
-		issues = append(issues, "IVF index empty")
 	}
 	if counts["l2_topic"] == 0 {
 		issues = append(issues, "no L2 topics")

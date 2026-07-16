@@ -22,3 +22,12 @@ func ParseID(id string) (uint64, error) {
 	_, err := fmt.Sscanf(id, "%016x", &h)
 	return h, err
 }
+
+// FormatIDs formats a slice of uint64 as hex strings.
+func FormatIDs(ids []uint64) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = FormatHash(id)
+	}
+	return out
+}

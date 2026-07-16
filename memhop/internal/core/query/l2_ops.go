@@ -491,13 +491,7 @@ func formatOptUint64(v *uint64) *string {
 	return &s
 }
 
-func formatUint64Slice(ids []uint64) []string {
-	out := make([]string, len(ids))
-	for i, id := range ids {
-		out[i] = hash.FormatHash(id)
-	}
-	return out
-}
+func formatUint64Slice(ids []uint64) []string { return hash.FormatIDs(ids) }
 
 func parseUint64Slice(ids []string) []uint64 {
 	out := make([]uint64, 0, len(ids))

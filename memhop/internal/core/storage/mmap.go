@@ -36,14 +36,21 @@ func UnmapFile(data []byte) error {
 	return nil
 }
 
-// RemapFile unmaps the old region and remaps the file at its current size.
+// RemapFile remaps the file at its current size and releases the old
+// mapping. The new mapping is established before the old one is released,
+// so on failure the old mapping stays valid and usable.
 func RemapFile(f *os.File, oldData []byte) ([]byte, error) {
-	if err := UnmapFile(oldData); err != nil {
-		return nil, err
-	}
 	info, err := f.Stat()
 	if err != nil {
 		return nil, core.NewError(core.ErrIO, fmt.Sprintf("stat failed for %s", f.Name()), err)
 	}
-	return MapFile(f, int(info.Size()))
+	newData, err := MapFile(f, int(info.Size()))
+	if err != nil {
+		return nil, err
+	}
+	if err := UnmapFile(oldData); err != nil {
+		UnmapFile(newData)
+		return nil, err
+	}
+	return newData, nil
 }

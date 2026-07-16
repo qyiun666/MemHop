@@ -5,6 +5,7 @@ package dream
 
 import (
 	"fmt"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -14,8 +15,6 @@ import (
 	"github.com/qyiun666/memhop/memhop/internal/core/model"
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
 )
-
-const maxRecentDialogues = 30
 
 // DreamReport holds the results of a dream pipeline run.
 type DreamReport struct {
@@ -53,11 +52,11 @@ func DreamPipeline(
 	targetIDs := resolveTargetIDs(l2IDs, engine)
 	stages := make([]StageReport, 0, 4)
 
-	// Phase 1: collect data + LLM call
+	// Phase 1: collect data + LLM call.
 	input := buildConsolidationInput(engine, l2Meta, targetIDs)
-	llmOutput, err := runConsolidation(llm, input)
+	llmOutput, err := llm.Consolidate(input)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("dream: LLM consolidation failed: %w", err)
 	}
 
 	// Phase 2: apply results
@@ -139,7 +138,6 @@ func topicToL2NodeData(t *model.TopicSlot) L2NodeData {
 		AgentKeywords: t.AgentKeywords,
 		FusedKeywords: t.FusedKeywords,
 		FusedSummary:  t.FusedSummary,
-		ChildrenIDs:   t.ChildrenIDs,
 	}
 }
 
@@ -153,24 +151,6 @@ func buildScenes(sceneMap map[uint64][]L2NodeData) []SceneData {
 	return scenes
 }
 
-func runConsolidation(llm LlmProvider, input *ConsolidationInput) (*ConsolidationOutput, error) {
-	output, err := llm.Consolidate(input)
-	if err != nil {
-		// LLM call itself failed (timeout, network, etc.)
-		// Return an output with all sections as Empty so downstream stages can proceed
-		return &ConsolidationOutput{
-			L2Groups:      NewEmptySection[[]L2Group](),
-			L3Extractions: NewEmptySection[[]L3Extraction](),
-			Habits:        NewEmptySection[HabitAnalysis](),
-			Crystals:      NewEmptySection[[]CrystalDef](),
-		}, nil
-	}
-	// Section-level parse failures are tolerated: failed sections are treated as Empty
-	// so that valid sections (e.g. habit analysis) still get applied.
-	// This is intentional: partial LLM results are better than skipping the entire Dream.
-	return output, nil
-}
-
 func applyL2Stage(
 	out *ConsolidationOutput,
 	engine *storage.StorageEngine,
@@ -180,6 +160,17 @@ func applyL2Stage(
 	stages []StageReport,
 	m *pipelineMetrics,
 ) []StageReport {
+	// Section-level parse failures are tolerated (partial LLM results are better
+	// than skipping the entire Dream), but they must be observable in the report.
+	if out.L2Groups.Status == SectionParseFailed {
+		slog.Warn("dream: LLM l2_groups output parse failed, L2 compression skipped",
+			"error", out.L2Groups.ParseError)
+		return append(stages, StageReport{
+			Name: "l2_compress", Status: "failed",
+			Description: "LLM l2_groups output parse failed",
+			Error:       out.L2Groups.ParseError,
+		})
+	}
 	if out.L2Groups.Status != SectionValid {
 		return stages
 	}
@@ -197,76 +188,6 @@ func applyL2Stage(
 		Name: "l2_compress", Status: "success",
 		Description:    desc,
 		ProcessedCount: int(total), DurationMs: elapsed,
-	})
-}
-
-func applyL3Stage(
-	out *ConsolidationOutput,
-	engine *storage.StorageEngine,
-	sparseIdx *index.SparseIndex,
-	stages []StageReport,
-	m *pipelineMetrics,
-) []StageReport {
-	if out.L3Extractions.Status != SectionValid {
-		return stages
-	}
-	start := time.Now()
-	ids, err := ApplyL3Extractions(out.L3Extractions.Value, engine, sparseIdx)
-	elapsed := time.Since(start).Milliseconds()
-	if err != nil {
-		return append(stages, failStage("l3_distill", "L3 distillation write failed", elapsed, err))
-	}
-	// m.newL3Nodes += uint32(len(ids))
-	return append(stages, StageReport{
-		Name: "l3_distill", Status: "success",
-		Description:    fmt.Sprintf("Distilled %d L3 nodes", len(ids)),
-		ProcessedCount: len(ids), DurationMs: elapsed,
-	})
-}
-
-func applyHabitStage(
-	out *ConsolidationOutput,
-	engine *storage.StorageEngine,
-	stages []StageReport,
-	m *pipelineMetrics,
-) []StageReport {
-	if out.Habits.Status != SectionValid {
-		return stages
-	}
-	start := time.Now()
-	hr, err := MergeHabitsIntoProfile(engine, &out.Habits.Value)
-	elapsed := time.Since(start).Milliseconds()
-	if err != nil {
-		return append(stages, failStage("habit_distill", "Habit merge failed", elapsed, err))
-	}
-	total := hr.NewLexicon + hr.NewStyle + hr.NewEmotion
-	return append(stages, StageReport{
-		Name: "habit_distill", Status: "success",
-		Description:    fmt.Sprintf("Habits: %d lexicon, %d style, %d emotion", hr.NewLexicon, hr.NewStyle, hr.NewEmotion),
-		ProcessedCount: total, DurationMs: elapsed,
-	})
-}
-
-func applyCrystalStage(
-	out *ConsolidationOutput,
-	engine *storage.StorageEngine,
-	stages []StageReport,
-	m *pipelineMetrics,
-) []StageReport {
-	if out.Crystals.Status != SectionValid {
-		return stages
-	}
-	start := time.Now()
-	ids, err := ApplyCrystals(out.Crystals.Value, engine)
-	elapsed := time.Since(start).Milliseconds()
-	if err != nil {
-		return append(stages, failStage("l5_crystallize", "Crystal write failed", elapsed, err))
-	}
-	// m.newCrystals += uint32(len(ids))
-	return append(stages, StageReport{
-		Name: "l5_crystallize", Status: "success",
-		Description:    fmt.Sprintf("Crystallized %d patterns", len(ids)),
-		ProcessedCount: len(ids), DurationMs: elapsed,
 	})
 }
 
@@ -335,25 +256,6 @@ func profileL0Stage(
 	})
 }
 
-func pruneCrystalStage(
-	engine *storage.StorageEngine,
-	stages []StageReport,
-	m *pipelineMetrics,
-) []StageReport {
-	start := time.Now()
-	pruned, err := PruneLowQualityCrystals(engine)
-	elapsed := time.Since(start).Milliseconds()
-	if err != nil {
-		return append(stages, failStage("crystal_prune", "Crystal pruning failed", elapsed, err))
-	}
-	// m.prunedCrystals += uint32(len(pruned))
-	return append(stages, StageReport{
-		Name: "crystal_prune", Status: "success",
-		Description:    fmt.Sprintf("Pruned %d low-quality crystals", len(pruned)),
-		ProcessedCount: len(pruned), DurationMs: elapsed,
-	})
-}
-
 func buildDreamReport(stages []StageReport, m *pipelineMetrics) *DreamReport {
 	consolidated := m.l2Affected +
 		m.l1Decayed + m.l1PrunedEdges + m.l1RemovedNodes + m.l1RemovedEdges + m.l1Updated
@@ -376,6 +278,3 @@ func failStage(name, desc string, elapsed int64, err error) StageReport {
 		DurationMs: elapsed, Error: err.Error(),
 	}
 }
-
-// suppress unused import warnings
-var _ = sort.Slice

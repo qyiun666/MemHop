@@ -7,6 +7,7 @@ package query
 
 import (
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 
@@ -454,13 +455,7 @@ func containsUint64(ids []uint64, v uint64) bool {
 }
 
 func removeUint64Val(ids []uint64, v uint64) []uint64 {
-	out := make([]uint64, 0, len(ids))
-	for _, id := range ids {
-		if id != v {
-			out = append(out, id)
-		}
-	}
-	return out
+	return slices.DeleteFunc(slices.Clone(ids), func(x uint64) bool { return x == v })
 }
 
 // ============================================================================

@@ -48,8 +48,7 @@ func (m *MemHop) graphQueryL3(
 	if len(visited) == 0 {
 		return &query.Subgraph{}, nil
 	}
-	adj := getOrBuildAdjacency(m, graphHash)
-	sub, err := l3.ExtractSubgraph(m.engine, adj, visited)
+	sub, err := l3.ExtractSubgraph(m.engine, visited)
 	if err != nil {
 		return nil, err
 	}
@@ -78,16 +77,6 @@ func collectBFSVisited(
 		}
 	}
 	return visited
-}
-
-// getOrBuildAdjacency returns cached adjacency or builds and caches a new one.
-func getOrBuildAdjacency(m *MemHop, graphHash uint64) map[uint64][]l3.AdjacencyEntry {
-	if adj, ok := m.l3Cache.Get(graphHash); ok {
-		return adj
-	}
-	adj := l3.BuildAdjacencyIndex(m.engine, graphHash)
-	m.l3Cache.Put(graphHash, adj)
-	return adj
 }
 
 // convertSubgraph converts l3.Subgraph to query.Subgraph.

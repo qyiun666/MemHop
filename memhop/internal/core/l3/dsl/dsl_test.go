@@ -139,9 +139,6 @@ func TestParseHyperedge(t *testing.T) {
 	if h.EdgeVar != "e" {
 		t.Errorf("edge_var = %q, want 'e'", h.EdgeVar)
 	}
-	if len(h.NodeVars) != 3 {
-		t.Errorf("node_vars length = %d, want 3", len(h.NodeVars))
-	}
 }
 
 func TestParsePath(t *testing.T) {

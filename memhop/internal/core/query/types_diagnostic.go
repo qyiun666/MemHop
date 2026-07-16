@@ -12,7 +12,6 @@ type HealthStatus struct {
 	LayerCounts       map[string]int `json:"layer_counts"`
 	LastDreamAt       *string        `json:"last_dream_at,omitempty"`
 	EncoderConfigured bool           `json:"encoder_configured"`
-	IVFIndexBuilt     bool           `json:"ivf_index_built"`
 	Issues            []string       `json:"issues"`
 }
 
@@ -25,6 +24,5 @@ type MemHopStats struct {
 	L4ArchiveCount  int     `json:"l4_archive_count"`
 	L5CrystalCount  int     `json:"l5_crystal_count"`
 	DBSizeBytes     uint64  `json:"db_size_bytes"`
-	IVFClusterCount int     `json:"ivf_cluster_count"`
 	CacheHitRate    float64 `json:"cache_hit_rate"`
 }

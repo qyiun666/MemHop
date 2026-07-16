@@ -5,6 +5,7 @@ package index
 
 import (
 	"encoding/json"
+	"slices"
 
 	"github.com/qyiun666/memhop/memhop/internal/core/storage"
 )
@@ -251,11 +252,5 @@ func (idx *L2MetaIndex) removeFromIndices(sceneID uint64, depth uint8, idHash ui
 }
 
 func removeUint64(slice []uint64, v uint64) []uint64 {
-	result := make([]uint64, 0, len(slice))
-	for _, s := range slice {
-		if s != v {
-			result = append(result, s)
-		}
-	}
-	return result
+	return slices.DeleteFunc(slices.Clone(slice), func(x uint64) bool { return x == v })
 }

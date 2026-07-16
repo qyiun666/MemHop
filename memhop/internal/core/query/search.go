@@ -29,7 +29,6 @@ type SearchDeps struct {
 	Engine      *storage.StorageEngine
 	Encoder     encoder.Encoder
 	Weights     *core.SearchWeights
-	IVFIndex    *index.IVFIndex
 	L1Reverse   *L1ReverseIndex
 
 	// PreprocessedKeywords holds LLM-extracted keywords (optional).
@@ -201,21 +200,6 @@ func retrieveL2VectorSafe(
 		slog.Warn("vector retrieval: encoder returned empty dense vector, vector channel skipped")
 		return nil
 	}
-	// Try IVF fast path
-	if deps.IVFIndex != nil && len(deps.IVFIndex.Centroids) > 0 {
-		nProbes := 8
-		if deps.Weights != nil && deps.Weights.NProbes > 0 {
-			nProbes = deps.Weights.NProbes
-		}
-		hits, err := index.IVFKNN(deps.IVFIndex, deps.Engine, output.Dense, 100, nProbes)
-		if err != nil {
-			slog.Warn("vector retrieval: IVF search failed, falling back to brute-force",
-				"error", err)
-		} else if len(hits) > 0 {
-			return filterByCandidates(hits, candidates, 100)
-		}
-	}
-	// Brute-force fallback
 	return bruteForceVectorSearch(deps.Engine, output.Dense, candidates, 100)
 }
 
@@ -433,12 +417,16 @@ func createNewL2Context(q SearchQuery, deps *SearchDeps) (*model.TopicSlot, erro
 	if deps.Encoder != nil && deps.Encoder.IsAvailable() {
 		encodeText := joinStrings(keywords, " ")
 		output, err := deps.Encoder.Encode(encodeText)
-		if err == nil && len(output.Dense) > 0 {
+		if err != nil {
+			return nil, fmt.Errorf("createNewL2Context: encode centroid: %w", err)
+		}
+		if len(output.Dense) > 0 {
 			vecIDHash := hash.HashID(fmt.Sprintf("v:%d", idHash))
 			vecBytes := f16SliceToBytes(output.Dense)
-			if _, err := deps.Engine.WriteRecord(0xF0, vecIDHash, vecBytes); err == nil {
-				centroidRef = vecIDHash
+			if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
+				return nil, fmt.Errorf("createNewL2Context: write centroid: %w", err)
 			}
+			centroidRef = vecIDHash
 		}
 	}
 

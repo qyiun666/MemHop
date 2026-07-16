@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package index implements in-memory indexes: BM25 sparse, IVF vector, and L2 metadata.
+// Package index implements in-memory indexes: BM25 sparse and L2 metadata.
 package index
 
 import "math"

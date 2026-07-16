@@ -161,13 +161,7 @@ func deriveNodeEmotion(valence, arousal float64) *string {
 	return &label
 }
 
-func formatIDSlice(ids []uint64) []string {
-	out := make([]string, len(ids))
-	for i, id := range ids {
-		out[i] = hash.FormatHash(id)
-	}
-	return out
-}
+func formatIDSlice(ids []uint64) []string { return hash.FormatIDs(ids) }
 
 func filterEdgesToNodes(edges *[]L1Edge, nodes []L1Node) {
 	if len(nodes) == 0 || edges == nil {

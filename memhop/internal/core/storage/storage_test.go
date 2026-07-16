@@ -82,7 +82,6 @@ func TestCheckpointReopen(t *testing.T) {
 	eng.WriteRecord(RecL2Topic, 100, []byte("checkpoint data"))
 	snap := &IndexSnapshotData{
 		SparseData:    []byte("sparse"),
-		IVFData:       []byte("ivf"),
 		L1ReverseData: []byte("l1"),
 		L3IndexData:   []byte("l3"),
 	}
@@ -224,8 +223,8 @@ func TestConcurrentReadWrite(t *testing.T) {
 			}
 		}()
 	}
-	// Concurrent writers.
-	for g := 0; g < 3; g++ {
+	// Concurrent writers (base 1,2,3 to avoid overlapping with seed 0-99).
+	for g := 1; g <= 3; g++ {
 		wg.Add(1)
 		go func(base uint64) {
 			defer wg.Done()

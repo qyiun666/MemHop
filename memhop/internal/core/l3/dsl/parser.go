@@ -294,12 +294,11 @@ func (p *parser) parseHyperedge() (*Query, error) {
 	if _, err := p.expect(TokLBracket, "["); err != nil {
 		return nil, err
 	}
-	// parse variable list
-	vars, err := p.parseVarList()
-	if err != nil {
+	// parse variable list (syntax validation only; the executor does
+	// not restrict which nodes the hyperedge connects)
+	if _, err := p.parseVarList(); err != nil {
 		return nil, err
 	}
-	h.NodeVars = vars
 	if _, err := p.expect(TokRBracket, "]"); err != nil {
 		return nil, err
 	}

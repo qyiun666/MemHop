@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package memdb provides the unified public API facade for the MemHop memory engine.
+// Package memhop provides the unified public API facade for the MemHop memory engine.
 // It assembles all underlying components (storage, index, query, dream, encoder)
 // into a single MemHop struct with thread-safe methods.
 package memhop
@@ -27,7 +27,6 @@ type MemHop struct {
 	defaults    *core.MemHopDefaults
 	sparseIndex *index.SparseIndex
 	l2Meta      *index.L2MetaIndex
-	ivfIndex    *index.IVFIndex
 	l1Reverse   *query.L1ReverseIndex
 	sessionMgr  *session.SessionManager
 	encoder     encoder.Encoder
@@ -41,6 +40,9 @@ type MemHop struct {
 // Open creates or opens a MemHop database.
 // Config.EncoderAddr and Config.EmbedModel are required.
 func Open(config *core.MemHopConfig) (*MemHop, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
 	enc, err := createEncoder(config)
 	if err != nil {
 		return nil, err
@@ -64,11 +66,17 @@ func (m *MemHop) Close() error {
 	if err != nil {
 		return err
 	}
-	m.closed = true
+	var encErr error
 	if c, ok := m.encoder.(interface{ Close() error }); ok {
-		c.Close()
+		encErr = c.Close()
 	}
-	return m.engine.Close(snap)
+	// Always close engine to release mmap/file even if encoder failed.
+	engErr := m.engine.Close(snap)
+	m.closed = true
+	if encErr != nil {
+		return core.NewError(core.ErrEncoder, "encoder close", encErr)
+	}
+	return engErr
 }
 
 // Checkpoint persists current state to disk without closing.
@@ -96,13 +104,11 @@ func (m *MemHop) buildSnapshot() (*storage.IndexSnapshotData, error) {
 	if err != nil {
 		return nil, core.NewError(core.ErrSerialization, "l1 reverse index", err)
 	}
-	ivfData := serializeIVFSnapshot(m.engine, m.ivfIndex)
 	// L3IndexData is intentionally left nil: L3 hypergraph data (graph slots,
 	// nodes, edges) is persisted directly as individual records in the storage
 	// engine and does not require a separate in-memory index snapshot.
 	return &storage.IndexSnapshotData{
 		SparseData:    sparseData,
-		IVFData:       ivfData,
 		L1ReverseData: l1RevData,
 		L3IndexData:   nil,
 	}, nil
@@ -116,7 +122,6 @@ func (m *MemHop) searchDeps() *query.SearchDeps {
 		Engine:      m.engine,
 		Encoder:     m.encoder,
 		Weights:     m.defaults.SearchWeights,
-		IVFIndex:    m.ivfIndex,
 		L1Reverse:   m.l1Reverse,
 	}
 }
@@ -133,6 +138,9 @@ func (m *MemHop) batchDeps() *query.BatchDeps {
 // --- package-level initialization helpers ---
 
 func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, error) {
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
 	dflt := config.Defaults
 	if dflt == nil {
 		dflt = core.DefaultMemHopDefaults()
@@ -159,7 +167,6 @@ func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, e
 		return nil, core.NewError(core.ErrVectorDimMismatch, "config vs engine")
 	}
 	sparseIdx, l1Rev := loadCachedIndices(engine)
-	ivfIdx := loadIVFIndex(engine, config, dflt)
 	l2MetaIdx := index.BuildL2MetaFromEngine(engine)
 	sm := session.NewSessionManager(dflt.SessionConfig)
 	l3Idx := l3.NewL3Index()
@@ -176,7 +183,7 @@ func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, e
 	return &MemHop{
 		engine: engine, config: config, defaults: dflt,
 		sparseIndex: sparseIdx, l2Meta: l2MetaIdx,
-		ivfIndex: ivfIdx, l1Reverse: l1Rev,
+		l1Reverse: l1Rev,
 		sessionMgr: sm, encoder: enc,
 		l3Index: l3Idx, l3Cache: l3C, l3Degree: l3Dt,
 	}, nil
@@ -219,34 +226,16 @@ func loadCachedIndices(engine *storage.StorageEngine) (*index.SparseIndex, *quer
 	if len(snap.SparseData) > 0 {
 		if idx, err := index.DeserializeSparseIndex(snap.SparseData); err == nil {
 			sparseIdx = idx
+		} else {
+			slog.Warn("sparse index snapshot deserialize failed, rebuilding empty", "error", err)
 		}
 	}
 	if len(snap.L1ReverseData) > 0 {
 		if idx, err := query.DeserializeL1ReverseIndex(snap.L1ReverseData); err == nil {
 			l1Rev = idx
+		} else {
+			slog.Warn("l1 reverse index snapshot deserialize failed, rebuilding empty", "error", err)
 		}
 	}
 	return sparseIdx, l1Rev
-}
-
-func loadIVFIndex(engine *storage.StorageEngine, config *core.MemHopConfig, dflt *core.MemHopDefaults) *index.IVFIndex {
-	ivfIdx, _ := index.ReadIVFIndex(engine)
-	if ivfIdx == nil {
-		ivfIdx = index.NewIVFIndex(config.VectorDim, dflt.IVFInitialK)
-	}
-	ivfIdx.RebuildIfNeeded(int(engine.RecordCount()))
-	return ivfIdx
-}
-
-// serializeIVFSnapshot persists IVF index to engine and returns nil on failure.
-func serializeIVFSnapshot(engine *storage.StorageEngine, ivf *index.IVFIndex) []byte {
-	if ivf == nil || len(ivf.Centroids) == 0 {
-		return nil
-	}
-	if err := index.WriteIVFIndex(engine, ivf); err != nil {
-		return nil
-	}
-	// IVF data is stored in-engine via WriteIVFIndex, not in snapshot.
-	// Return empty bytes to indicate IVF was persisted.
-	return nil
 }
