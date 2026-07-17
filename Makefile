@@ -14,11 +14,11 @@
 
 ## build the public SDK (main library only, no test packages)
 build:
-	go build ./memhop/...
+	go build ./api/... ./internal/...
 
-## unit tests — internal white-box tests under memhop/internal/**
+## unit tests — internal white-box tests (api + internal)
 test-unit:
-	go test ./memhop/...
+	go test ./api/... ./internal/...
 
 ## interface tests — external black-box tests under test/**
 ## Requires Ollama daemon + the embedding model to be available.
@@ -33,10 +33,10 @@ bench:
 	go test -bench=. -benchmem -run=^$$ ./test/...
 
 lint:
-	go vet ./memhop/... ./test/...
+	go vet ./api/... ./internal/... ./test/...
 
 fmt:
-	gofmt -w memhop test
+	gofmt -w api internal test
 
 clean:
 	rm -rf bin/ vendor/
@@ -48,6 +48,6 @@ help:
 	@echo "  test-unit         run only internal unit tests"
 	@echo "  test-integration  run only external interface tests (needs Ollama)"
 	@echo "  bench             run benchmarks (needs Ollama)"
-	@echo "  lint              go vet across memhop/ and test/"
+	@echo "  lint              go vet across api/, internal/ and test/"
 	@echo "  fmt               gofmt -w memhop test"
 	@echo "  clean             remove build artefacts"

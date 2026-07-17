@@ -6,7 +6,7 @@ package index
 import (
 	"fmt"
 
-	"memhop/internal/hash"
+	"memhop/internal/common/hash"
 )
 
 // VecRecordHash derives the storage ID hash for a topic's centroid vector record.

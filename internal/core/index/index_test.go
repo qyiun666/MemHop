@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"memhop/internal/common/numeric"
 	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
 )
@@ -33,8 +34,8 @@ func TestF16Conversion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := F32ToF16(tt.f32)
-			back := F16ToF32(h)
+			h := numeric.F32ToF16(tt.f32)
+			back := numeric.F16ToF32(h)
 			if math.Abs(float64(back-tt.f32)) > 0.01*math.Abs(float64(tt.f32))+0.001 {
 				t.Errorf("F16 roundtrip of %f: got %f (h=%d)", tt.f32, back, h)
 			}
@@ -44,15 +45,15 @@ func TestF16Conversion(t *testing.T) {
 
 func TestF16SpecialValues(t *testing.T) {
 	// Zero
-	if F16ToF32(0x0000) != 0.0 {
+	if numeric.F16ToF32(0x0000) != 0.0 {
 		t.Error("f16 zero should be 0.0")
 	}
 	// Negative zero
-	if F16ToF32(0x8000) != 0.0 {
+	if numeric.F16ToF32(0x8000) != 0.0 {
 		t.Error("f16 negative zero should be 0.0")
 	}
 	// Infinity
-	inf := F16ToF32(0x7C00)
+	inf := numeric.F16ToF32(0x7C00)
 	if !math.IsInf(float64(inf), 1) {
 		t.Errorf("f16 0x7C00 should be +Inf, got %f", inf)
 	}
@@ -62,23 +63,23 @@ func TestF16SubnormalRoundtrip(t *testing.T) {
 	// |v| < 2^-14 (~6.1e-5): f16 subnormal range, must not flush to zero.
 	values := []float32{1e-5, 3e-5, 6e-5, -1e-5}
 	for _, v := range values {
-		h := F32ToF16(v)
+		h := numeric.F32ToF16(v)
 		if h&0x7FFF == 0 {
 			t.Errorf("F32ToF16(%v) flushed to zero", v)
 			continue
 		}
-		back := F16ToF32(h)
+		back := numeric.F16ToF32(h)
 		diff := math.Abs(float64(back - v))
 		if diff > 0.01*math.Abs(float64(v))+1e-6 {
 			t.Errorf("F16 subnormal roundtrip of %v: got %v (h=%d)", v, back, h)
 		}
 	}
 	// Smallest positive subnormal: 2^-24.
-	if got := F16ToF32(0x0001); got != float32(math.Pow(2, -24)) {
+	if got := numeric.F16ToF32(0x0001); got != float32(math.Pow(2, -24)) {
 		t.Errorf("F16ToF32(0x0001) = %v, want 2^-24", got)
 	}
 	// Below 2^-24 underflows to zero.
-	if h := F32ToF16(1e-9); h != 0 {
+	if h := numeric.F32ToF16(1e-9); h != 0 {
 		t.Errorf("F32ToF16(1e-9) = %d, want 0 (underflow)", h)
 	}
 }
@@ -89,35 +90,35 @@ func TestF16SubnormalRoundtrip(t *testing.T) {
 
 func TestCosineSimilarity(t *testing.T) {
 	t.Run("identical", func(t *testing.T) {
-		a := []uint16{F32ToF16(1.0), F32ToF16(0.0), F32ToF16(0.0)}
-		sim := CosineSimilarity(a, a)
+		a := []uint16{numeric.F32ToF16(1.0), numeric.F32ToF16(0.0), numeric.F32ToF16(0.0)}
+		sim := numeric.CosineSimilarity(a, a)
 		if math.Abs(float64(sim-1.0)) > 1e-4 {
 			t.Errorf("identical vectors should have similarity 1.0, got %f", sim)
 		}
 	})
 
 	t.Run("orthogonal", func(t *testing.T) {
-		a := []uint16{F32ToF16(1.0), F32ToF16(0.0), F32ToF16(0.0)}
-		b := []uint16{F32ToF16(0.0), F32ToF16(1.0), F32ToF16(0.0)}
-		sim := CosineSimilarity(a, b)
+		a := []uint16{numeric.F32ToF16(1.0), numeric.F32ToF16(0.0), numeric.F32ToF16(0.0)}
+		b := []uint16{numeric.F32ToF16(0.0), numeric.F32ToF16(1.0), numeric.F32ToF16(0.0)}
+		sim := numeric.CosineSimilarity(a, b)
 		if math.Abs(float64(sim)) > 1e-4 {
 			t.Errorf("orthogonal vectors should have similarity ~0.0, got %f", sim)
 		}
 	})
 
 	t.Run("opposite", func(t *testing.T) {
-		a := []uint16{F32ToF16(1.0), F32ToF16(0.0), F32ToF16(0.0)}
-		b := []uint16{F32ToF16(-1.0), F32ToF16(0.0), F32ToF16(0.0)}
-		sim := CosineSimilarity(a, b)
+		a := []uint16{numeric.F32ToF16(1.0), numeric.F32ToF16(0.0), numeric.F32ToF16(0.0)}
+		b := []uint16{numeric.F32ToF16(-1.0), numeric.F32ToF16(0.0), numeric.F32ToF16(0.0)}
+		sim := numeric.CosineSimilarity(a, b)
 		if math.Abs(float64(sim+1.0)) > 1e-4 {
 			t.Errorf("opposite vectors should have similarity ~-1.0, got %f", sim)
 		}
 	})
 
 	t.Run("zero_vector", func(t *testing.T) {
-		a := []uint16{F32ToF16(0.0), F32ToF16(0.0)}
-		b := []uint16{F32ToF16(1.0), F32ToF16(0.0)}
-		sim := CosineSimilarity(a, b)
+		a := []uint16{numeric.F32ToF16(0.0), numeric.F32ToF16(0.0)}
+		b := []uint16{numeric.F32ToF16(1.0), numeric.F32ToF16(0.0)}
+		sim := numeric.CosineSimilarity(a, b)
 		if sim != 0.0 {
 			t.Errorf("zero vector should give similarity 0.0, got %f", sim)
 		}
@@ -128,10 +129,10 @@ func TestCosineSimilarity(t *testing.T) {
 		a := make([]uint16, n)
 		b := make([]uint16, n)
 		for i := 0; i < n; i++ {
-			a[i] = F32ToF16(float32(i) * 0.001)
-			b[i] = F32ToF16(float32(i) * 0.001)
+			a[i] = numeric.F32ToF16(float32(i) * 0.001)
+			b[i] = numeric.F32ToF16(float32(i) * 0.001)
 		}
-		sim := CosineSimilarity(a, b)
+		sim := numeric.CosineSimilarity(a, b)
 		if math.Abs(float64(sim-1.0)) > 1e-3 {
 			t.Errorf("identical large vectors should have similarity ~1.0, got %f", sim)
 		}
@@ -563,7 +564,7 @@ func TestBuildL2MetaFromEngine(t *testing.T) {
 func makeF16Vec(dim int, val float32) []uint16 {
 	v := make([]uint16, dim)
 	for i := range v {
-		v[i] = F32ToF16(val)
+		v[i] = numeric.F32ToF16(val)
 	}
 	return v
 }

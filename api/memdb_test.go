@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"memhop/internal/core"
-	"memhop/internal/core/encoder"
+	"memhop/internal/common/config"
+	"memhop/internal/query/encoder"
+	"memhop/internal/common/mherrors"
 )
 
 // fakeEncoder returns zero vectors of a fixed dimension.
@@ -27,7 +28,7 @@ func (f *fakeEncoder) IsAvailable() bool { return true }
 func TestOpenVectorDimMismatchPreservesData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "dim.meh")
 	const dim = 8
-	cfg := &core.MemHopConfig{DBPath: path, VectorDim: dim}
+	cfg := &config.MemHopConfig{DBPath: path, VectorDim: dim}
 
 	db, err := OpenWithEncoder(cfg, &fakeEncoder{dim: dim})
 	if err != nil {
@@ -43,8 +44,8 @@ func TestOpenVectorDimMismatchPreservesData(t *testing.T) {
 	}
 
 	// Reopen with a wrong dimension: must fail with ErrVectorDimMismatch.
-	badCfg := &core.MemHopConfig{DBPath: path, VectorDim: dim * 2}
-	if _, err := OpenWithEncoder(badCfg, &fakeEncoder{dim: dim * 2}); !errors.Is(err, core.ErrVectorDimMismatch) {
+	badCfg := &config.MemHopConfig{DBPath: path, VectorDim: dim * 2}
+	if _, err := OpenWithEncoder(badCfg, &fakeEncoder{dim: dim * 2}); !errors.Is(err, mherrors.ErrVectorDimMismatch) {
 		t.Fatalf("want ErrVectorDimMismatch, got %v", err)
 	}
 

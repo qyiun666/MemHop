@@ -6,7 +6,10 @@ package index
 import (
 	"encoding/json"
 	"slices"
+	"sync"
 
+	"memhop/internal/common/strutil"
+	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
 )
 
@@ -34,6 +37,7 @@ type L2Meta struct {
 
 // L2MetaIndex is an in-memory index of L2 metadata.
 type L2MetaIndex struct {
+	mu           sync.RWMutex
 	entries      map[uint64]*L2Meta
 	byScene      map[uint64][]uint64
 	bySceneDepth map[sceneDepthKey][]uint64
@@ -138,11 +142,15 @@ func joinKeywords(primary, fallback []string) string {
 
 // Get returns metadata for an L2 by idHash.
 func (idx *L2MetaIndex) Get(idHash uint64) *L2Meta {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	return idx.entries[idHash]
 }
 
 // Update inserts or replaces an L2Meta entry.
 func (idx *L2MetaIndex) Update(meta *L2Meta) {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
 	if old, exists := idx.entries[meta.IDHash]; exists {
 		idx.removeFromIndices(old.SceneID, old.Depth, meta.IDHash)
 	}
@@ -151,6 +159,8 @@ func (idx *L2MetaIndex) Update(meta *L2Meta) {
 
 // Remove removes and returns an entry.
 func (idx *L2MetaIndex) Remove(idHash uint64) *L2Meta {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
 	meta, ok := idx.entries[idHash]
 	if !ok {
 		return nil
@@ -162,16 +172,22 @@ func (idx *L2MetaIndex) Remove(idHash uint64) *L2Meta {
 
 // GetByScene returns all L2 IDs belonging to a scene.
 func (idx *L2MetaIndex) GetByScene(sceneID uint64) []uint64 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	return idx.byScene[sceneID]
 }
 
 // GetBySceneDepth returns L2 IDs for a scene at a specific depth.
 func (idx *L2MetaIndex) GetBySceneDepth(sceneID uint64, depth uint8) []uint64 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	return idx.bySceneDepth[sceneDepthKey{sceneID, depth}]
 }
 
 // BM25Prescreen uses the sparse index to find candidate L2 IDs matching a query.
 func (idx *L2MetaIndex) BM25Prescreen(query string, sparse *SparseIndex, limit int) []uint64 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	terms := Tokenize(query)
 	if len(terms) == 0 {
 		return nil
@@ -191,6 +207,8 @@ func (idx *L2MetaIndex) BM25Prescreen(query string, sparse *SparseIndex, limit i
 
 // GetL2IDsByL3 returns all L2 IDs whose l3_refs contain the given l3ID.
 func (idx *L2MetaIndex) GetL2IDsByL3(l3ID uint64) []uint64 {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	var ids []uint64
 	for _, meta := range idx.entries {
 		for _, ref := range meta.L3Refs {
@@ -205,16 +223,22 @@ func (idx *L2MetaIndex) GetL2IDsByL3(l3ID uint64) []uint64 {
 
 // Len returns the number of indexed L2 entries.
 func (idx *L2MetaIndex) Len() int {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	return len(idx.entries)
 }
 
 // IsEmpty returns true if no entries are indexed.
 func (idx *L2MetaIndex) IsEmpty() bool {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	return len(idx.entries) == 0
 }
 
 // Iter iterates over all entries. Return false from fn to stop.
 func (idx *L2MetaIndex) Iter(fn func(idHash uint64, meta *L2Meta) bool) {
+	idx.mu.RLock()
+	defer idx.mu.RUnlock()
 	for id, meta := range idx.entries {
 		if !fn(id, meta) {
 			return
@@ -253,4 +277,27 @@ func (idx *L2MetaIndex) removeFromIndices(sceneID uint64, depth uint8, idHash ui
 
 func removeUint64(slice []uint64, v uint64) []uint64 {
 	return slices.DeleteFunc(slices.Clone(slice), func(x uint64) bool { return x == v })
+}
+
+// L2MetaFromTopic builds a lightweight L2Meta entry from a TopicSlot.
+func L2MetaFromTopic(t *model.TopicSlot) *L2Meta {
+	l3Refs := append(append([]uint64{}, t.UserL3Refs...), t.AgentL3Refs...)
+	ts := t.UpdatedAt
+	if ts < t.CreatedAt {
+		ts = t.CreatedAt
+	}
+	if ts < 0 {
+		ts = 0
+	}
+	return &L2Meta{
+		IDHash:       t.ID,
+		Title:        strutil.JoinStrings(t.UserKeywords, ", "),
+		Depth:        t.Depth,
+		SceneID:      t.SceneID,
+		ChildrenIDs:  t.ChildrenIDs,
+		VectorOffset: t.CentroidPageRef,
+		ArchiveCount: len(t.UserL4Refs) + len(t.AgentL4Refs),
+		L3Refs:       l3Refs,
+		Timestamp:    uint64(ts),
+	}
 }

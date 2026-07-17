@@ -4,16 +4,14 @@
 package memhop
 
 import (
-	"memhop/internal/core"
-	"memhop/internal/core/query"
+	"memhop/internal/query/importx"
+	"memhop/internal/common/mherrors"
 )
 
 // ImportMemory imports data into the specified layer.
-func (m *MemHop) ImportMemory(req query.ImportRequest) (*query.ImportResult, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return nil, core.ErrClosed
+func (m *MemHop) ImportMemory(req importx.ImportRequest) (*importx.ImportResult, error) {
+	if m.closed.Load() {
+		return nil, mherrors.ErrClosed
 	}
-	return query.ImportMemory(m.engine, m.sparseIndex, m.l3Index, m.l3Degree, m.l3Cache, req)
+	return importx.ImportMemory(m.engine, m.sparseIndex, m.l3Index, m.l3Degree, m.l3Cache, req)
 }

@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/qyiun666/memhop/memhop"
+	"memhop/api"
 )
 
 // LLM config environment variables. Priority: env vars > key_config.json file.

@@ -1,4 +1,4 @@
-module github.com/qyiun666/memhop
+module memhop
 
 go 1.25.0
 

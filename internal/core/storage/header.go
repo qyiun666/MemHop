@@ -7,7 +7,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 
-	"memhop/internal/core"
+	"memhop/internal/common/mherrors"
 )
 
 // A/B dual header layout constants.
@@ -76,15 +76,15 @@ func (h *FileHeader) ToBytes() [HeaderSize]byte {
 // FileHeaderFromBytes deserializes a header from a 4096-byte buffer.
 func FileHeaderFromBytes(buf [HeaderSize]byte) (*FileHeader, error) {
 	if buf[0] != Magic[0] || buf[1] != Magic[1] || buf[2] != Magic[2] || buf[3] != Magic[3] {
-		return nil, core.ErrInvalidMagic
+		return nil, mherrors.ErrInvalidMagic
 	}
 	if buf[4092] != TailMagic[0] || buf[4093] != TailMagic[1] ||
 		buf[4094] != TailMagic[2] || buf[4095] != TailMagic[3] {
-		return nil, core.ErrInvalidMagic
+		return nil, mherrors.ErrInvalidMagic
 	}
 	storedCRC := binary.LittleEndian.Uint32(buf[4088:4092])
 	if crc32.ChecksumIEEE(buf[:4088]) != storedCRC {
-		return nil, core.ErrCRCMismatch
+		return nil, mherrors.ErrCRCMismatch
 	}
 	return &FileHeader{
 		Version:        binary.LittleEndian.Uint16(buf[4:6]),
@@ -119,6 +119,6 @@ func SelectValidHeader(a, b *FileHeader) (*FileHeader, error) {
 	case bValid:
 		return b, nil
 	default:
-		return nil, core.ErrCRCMismatch
+		return nil, mherrors.ErrCRCMismatch
 	}
 }

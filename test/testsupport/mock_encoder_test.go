@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/qyiun666/memhop/memhop"
+	"memhop/api"
 )
 
 func mustEncode(t *testing.T, enc *MockEncoder, text string) []uint16 {

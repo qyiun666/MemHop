@@ -4,27 +4,25 @@
 package memhop
 
 import (
-	"memhop/internal/core"
+	"memhop/internal/query/crud"
 	"memhop/internal/core/model"
-	"memhop/internal/core/query"
+	"memhop/internal/common/mherrors"
 )
 
 // GetProfile loads the L0 profile slot.
 func (m *MemHop) GetProfile() (*model.ProfileSlot, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.closed {
-		return nil, core.ErrClosed
+	if m.closed.Load() {
+		return nil, mherrors.ErrClosed
 	}
-	return query.LoadProfileSlot(m.engine)
+	return crud.LoadProfileSlot(m.engine)
 }
 
 // SetProfile overwrites the agent profile with the given delta.
-func (m *MemHop) SetProfile(delta query.ProfileDelta) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return core.ErrClosed
+func (m *MemHop) SetProfile(delta crud.ProfileDelta) error {
+	if m.closed.Load() {
+		return mherrors.ErrClosed
 	}
-	return query.WriteProfile(m.engine, delta)
+	// Invalidate profile cache on write.
+	m.profileCache = nil
+	return crud.WriteProfile(m.engine, delta)
 }

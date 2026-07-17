@@ -6,8 +6,8 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/qyiun666/memhop/memhop"
-	"github.com/qyiun666/memhop/test/testsupport"
+	"memhop/api"
+	"memhop/test/testsupport"
 )
 
 // 长文本带代码块 — 用拼接方式避免 raw string 中的反引号冲突

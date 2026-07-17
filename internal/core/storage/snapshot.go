@@ -7,7 +7,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 
-	"memhop/internal/core"
+	"memhop/internal/common/mherrors"
 )
 
 // SnapshotMagic identifies a valid snapshot block ("SNAP").
@@ -60,23 +60,23 @@ func BuildSnapshot(index map[uint64]uint64, snap *IndexSnapshotData) ([]byte, er
 // ParseSnapshot deserializes a snapshot blob, returning the index and snapshot data.
 func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 	if len(raw) < 12 { // magic(4) + count(4) + crc(4) minimum
-		return nil, nil, core.NewError(core.ErrCorruption, "snapshot too short")
+		return nil, nil, mherrors.NewError(mherrors.ErrCorruption, "snapshot too short")
 	}
 	// Verify CRC.
 	storedCRC := binary.LittleEndian.Uint32(raw[len(raw)-4:])
 	if crc32.ChecksumIEEE(raw[:len(raw)-4]) != storedCRC {
-		return nil, nil, core.ErrCRCMismatch
+		return nil, nil, mherrors.ErrCRCMismatch
 	}
 	magic := binary.LittleEndian.Uint32(raw[0:4])
 	if magic != SnapshotMagic {
-		return nil, nil, core.NewError(core.ErrCorruption, "invalid snapshot magic")
+		return nil, nil, mherrors.NewError(mherrors.ErrCorruption, "invalid snapshot magic")
 	}
 	count := int(binary.LittleEndian.Uint32(raw[4:8]))
 	pos := 8
 	// Parse entries.
 	needed := pos + count*16
 	if needed > len(raw)-4 {
-		return nil, nil, core.NewError(core.ErrCorruption, "snapshot entries truncated")
+		return nil, nil, mherrors.NewError(mherrors.ErrCorruption, "snapshot entries truncated")
 	}
 	idx := make(map[uint64]uint64, count)
 	for i := 0; i < count; i++ {
@@ -128,12 +128,12 @@ func appendBlob(buf []byte, data []byte) []byte {
 
 func readBlob(raw []byte, pos int) ([]byte, int, error) {
 	if pos+4 > len(raw)-4 {
-		return nil, 0, core.NewError(core.ErrCorruption, "snapshot blob length truncated")
+		return nil, 0, mherrors.NewError(mherrors.ErrCorruption, "snapshot blob length truncated")
 	}
 	blen := int(binary.LittleEndian.Uint32(raw[pos : pos+4]))
 	pos += 4
 	if pos+blen > len(raw)-4 {
-		return nil, 0, core.NewError(core.ErrCorruption, "snapshot blob data truncated")
+		return nil, 0, mherrors.NewError(mherrors.ErrCorruption, "snapshot blob data truncated")
 	}
 	data := make([]byte, blen)
 	copy(data, raw[pos:pos+blen])

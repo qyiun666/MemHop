@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qyiun666/memhop/memhop"
-	"github.com/qyiun666/memhop/test/testsupport"
+	"memhop/api"
+	"memhop/test/testsupport"
 )
 
 // ── 核心验证维度 ──────────────────────────────────────────

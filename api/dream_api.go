@@ -6,11 +6,9 @@ package memhop
 import (
 	"fmt"
 
-	"memhop/internal/core"
-	"memhop/internal/core/dream"
-	"memhop/internal/core/index"
-	"memhop/internal/core/query"
-	"memhop/internal/hash"
+	"memhop/internal/query/dream"
+	"memhop/internal/common/hash"
+	"memhop/internal/common/mherrors"
 )
 
 // DreamOptions holds optional parameters for the Dream call.
@@ -22,34 +20,26 @@ type DreamOptions struct {
 
 // Dream runs the memory consolidation pipeline.
 // opts may be nil for all-default behavior (use config LLM, process all topics).
-// Holds write lock for the entire duration to protect shared index mutations.
 func (m *MemHop) Dream(opts *DreamOptions) (*dream.DreamReport, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return nil, core.ErrClosed
+	if m.closed.Load() {
+		return nil, mherrors.ErrClosed
 	}
 
-	// Extract optional fields.
 	var llm dream.LlmProvider
 	var l2IDs []string
 	if opts != nil {
 		llm = opts.LLM
 		l2IDs = opts.L2IDs
 	}
-
-	// Fallback: use config LLM if caller did not provide one.
 	if llm == nil {
 		llm = dream.NewOpenAIProvider(&m.config.LLM)
 	}
-
 	uint64IDs, err := parseL2IDs(l2IDs)
 	if err != nil {
 		return nil, err
 	}
 
-	// Run dream pipeline under write lock (mutates SparseIndex/L2MetaIndex).
-	report, err := dream.DreamPipeline(
+	result, err := dream.RunPipeline(
 		m.engine, m.sparseIndex, llm,
 		uint64IDs, m.defaults.DecayConfig,
 		m.l2Meta, m.encoder,
@@ -58,11 +48,9 @@ func (m *MemHop) Dream(opts *DreamOptions) (*dream.DreamReport, error) {
 		return nil, err
 	}
 
-	// Rebuild indexes from updated engine state.
-	m.l2Meta = index.BuildL2MetaFromEngine(m.engine)
-	m.l1Reverse = query.BuildL1ReverseIndex(m.engine)
-
-	return report, nil
+	m.l2Meta = result.L2Meta
+	m.l1Reverse = result.L1Reverse
+	return result.Report, nil
 }
 
 func parseL2IDs(ids []string) ([]uint64, error) {

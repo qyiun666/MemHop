@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"memhop/internal/hash"
+	"memhop/internal/common/hash"
 )
 
 // ============================================================================
@@ -681,6 +681,6 @@ func makeTopic(id uint64, depth uint8) TopicSlot {
 		AgentKeywords: []string{"token"}, AgentTimestamp: 1001,
 		AgentL4Refs: []uint64{11}, AgentL3Refs: []uint64{21},
 		FusedKeywords: fusedKW, FusedSummary: fusedSummary,
-		CentroidPageRef: 42, CreatedAt: 1000, UpdatedAt: 2000, Version: 4,
+		CentroidPageRef: 42, CreatedAt: 1000, UpdatedAt: 2000,
 	}
 }

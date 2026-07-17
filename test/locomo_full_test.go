@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qyiun666/memhop/memhop"
-	"github.com/qyiun666/memhop/test/testsupport"
+	"memhop/api"
+	"memhop/test/testsupport"
 )
 
 // TestLOCOMOFull runs the full LOCOMO benchmark: 272 sessions, 1986 questions.

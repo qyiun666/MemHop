@@ -4,17 +4,15 @@
 package memhop
 
 import (
-	"memhop/internal/core"
-	"memhop/internal/core/query"
+	"memhop/internal/query/crud"
+	"memhop/internal/common/mherrors"
 )
 
 // GetL1Graph returns the full L1 layer graph (nodes + edges) for visualization.
-func (m *MemHop) GetL1Graph(sceneID *string) (*query.L1Graph, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.closed {
-		return nil, core.ErrClosed
+func (m *MemHop) GetL1Graph(sceneID *string) (*crud.L1Graph, error) {
+	if m.closed.Load() {
+		return nil, mherrors.ErrClosed
 	}
-	sceneFilter := query.ParseSceneFilter(sceneID)
-	return query.LoadL1Graph(m.engine, sceneFilter)
+	sceneFilter := crud.ParseSceneFilter(sceneID)
+	return crud.LoadL1Graph(m.engine, sceneFilter)
 }

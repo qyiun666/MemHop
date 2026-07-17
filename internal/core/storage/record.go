@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"memhop/internal/core"
+	"memhop/internal/common/mherrors"
 )
 
 // RecordHeaderSize is type(1) + flags(1) + length(4) + id_hash(8) = 14 bytes.
@@ -55,8 +55,8 @@ func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byt
 		return 0, 0, nil, 0, io.EOF
 	}
 	if off+RecordHeaderSize > len(mmap) {
-		return 0, 0, nil, 0, core.NewError(
-			core.ErrCorruption,
+		return 0, 0, nil, 0, mherrors.NewError(
+			mherrors.ErrCorruption,
 			fmt.Sprintf("record header at offset %d exceeds file size %d", offset, len(mmap)),
 		)
 	}
@@ -69,8 +69,8 @@ func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byt
 	}
 	dataEnd := off + RecordHeaderSize + dataLen
 	if dataEnd > len(mmap) {
-		return 0, 0, nil, 0, core.NewError(
-			core.ErrCorruption,
+		return 0, 0, nil, 0, mherrors.NewError(
+			mherrors.ErrCorruption,
 			fmt.Sprintf("record at offset %d claims length %d but file ends at %d", offset, dataLen, len(mmap)),
 		)
 	}

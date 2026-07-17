@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"memhop/internal/hash"
+	"memhop/internal/common/hash"
 )
 
 // ============================================================================
@@ -222,6 +222,19 @@ func (e HypergraphEdge) MarshalJSON() ([]byte, error) {
 		Label: e.Label, Description: e.Description, Confidence: e.Confidence,
 		ValidFrom: e.ValidFrom, ValidUntil: e.ValidUntil, CreatedAt: e.CreatedAt,
 	})
+}
+
+// ============================================================================
+// AdjacencyEntry — cache-friendly adjacency entry
+// ============================================================================
+
+// AdjacencyEntry is one entry in the adjacency index for a node.
+// Defined here to avoid core/index importing query/graph.
+type AdjacencyEntry struct {
+	NodeHash     uint64
+	EdgeHash     uint64
+	Kind         GraphEdgeKind
+	ConnectedIDs []uint64 // other nodes in this hyperedge (excluding NodeHash)
 }
 
 // UnmarshalJSON deserializes HypergraphEdge from hex-encoded hash fields.

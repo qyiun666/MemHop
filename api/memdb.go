@@ -9,37 +9,40 @@ package memhop
 import (
 	"log/slog"
 	"os"
-	"sync"
+	"sync/atomic"
 
-	"memhop/internal/core"
-	"memhop/internal/core/encoder"
+	"memhop/internal/common/config"
+	"memhop/internal/query/encoder"
+	"memhop/internal/query/search"
+	"memhop/internal/query/write"
 	"memhop/internal/core/index"
-	"memhop/internal/core/l3"
-	"memhop/internal/core/query"
-	"memhop/internal/core/session"
+	"memhop/internal/query/session"
 	"memhop/internal/core/storage"
+	"memhop/internal/common/mherrors"
 )
+
+// Lock order (to prevent deadlock): storage → l2meta → sparse → l1reverse → l3index → l3cache
 
 // MemHop is the main database instance.
 type MemHop struct {
 	engine      *storage.StorageEngine
-	config      *core.MemHopConfig
-	defaults    *core.MemHopDefaults
+	config      *config.MemHopConfig
+	defaults    *config.MemHopDefaults
 	sparseIndex *index.SparseIndex
 	l2Meta      *index.L2MetaIndex
-	l1Reverse   *query.L1ReverseIndex
+	l1Reverse   *index.L1ReverseIndex
 	sessionMgr  *session.SessionManager
 	encoder     encoder.Encoder
-	l3Index     *l3.L3Index
-	l3Cache     *l3.AdjacencyCache
-	l3Degree    *l3.DegreeTracker
-	closed      bool
-	mu          sync.RWMutex
+	l3Index     *index.L3Index
+	l3Cache     *index.AdjacencyCache
+	l3Degree    *index.DegreeTracker
+	profileCache *search.ProfileResult // L0 profile cache (nil = not cached)
+	closed      atomic.Bool
 }
 
 // Open creates or opens a MemHop database.
 // Config.EncoderAddr and Config.EmbedModel are required.
-func Open(config *core.MemHopConfig) (*MemHop, error) {
+func Open(config *config.MemHopConfig) (*MemHop, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
@@ -51,16 +54,14 @@ func Open(config *core.MemHopConfig) (*MemHop, error) {
 }
 
 // OpenWithEncoder creates or opens a MemHop database with a custom encoder.
-func OpenWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, error) {
+func OpenWithEncoder(config *config.MemHopConfig, enc encoder.Encoder) (*MemHop, error) {
 	return openWithEncoder(config, enc)
 }
 
 // Close persists all data and releases resources.
 func (m *MemHop) Close() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return core.ErrClosed
+	if !m.closed.CompareAndSwap(false, true) {
+		return mherrors.ErrClosed
 	}
 	snap, err := m.buildSnapshot()
 	if err != nil {
@@ -72,19 +73,16 @@ func (m *MemHop) Close() error {
 	}
 	// Always close engine to release mmap/file even if encoder failed.
 	engErr := m.engine.Close(snap)
-	m.closed = true
 	if encErr != nil {
-		return core.NewError(core.ErrEncoder, "encoder close", encErr)
+		return mherrors.NewError(mherrors.ErrEncoder, "encoder close", encErr)
 	}
 	return engErr
 }
 
 // Checkpoint persists current state to disk without closing.
 func (m *MemHop) Checkpoint() error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.closed {
-		return core.ErrClosed
+	if m.closed.Load() {
+		return mherrors.ErrClosed
 	}
 	snap, err := m.buildSnapshot()
 	if err != nil {
@@ -98,11 +96,11 @@ func (m *MemHop) Checkpoint() error {
 func (m *MemHop) buildSnapshot() (*storage.IndexSnapshotData, error) {
 	sparseData, err := m.sparseIndex.Serialize()
 	if err != nil {
-		return nil, core.NewError(core.ErrSerialization, "sparse index", err)
+		return nil, mherrors.NewError(mherrors.ErrSerialization, "sparse index", err)
 	}
 	l1RevData, err := m.l1Reverse.Serialize()
 	if err != nil {
-		return nil, core.NewError(core.ErrSerialization, "l1 reverse index", err)
+		return nil, mherrors.NewError(mherrors.ErrSerialization, "l1 reverse index", err)
 	}
 	// L3IndexData is intentionally left nil: L3 hypergraph data (graph slots,
 	// nodes, edges) is persisted directly as individual records in the storage
@@ -114,20 +112,21 @@ func (m *MemHop) buildSnapshot() (*storage.IndexSnapshotData, error) {
 	}, nil
 }
 
-func (m *MemHop) searchDeps() *query.SearchDeps {
-	return &query.SearchDeps{
-		SparseIndex: m.sparseIndex,
-		L2Meta:      m.l2Meta,
-		VectorDim:   m.config.VectorDim,
-		Engine:      m.engine,
-		Encoder:     m.encoder,
-		Weights:     m.defaults.SearchWeights,
-		L1Reverse:   m.l1Reverse,
+func (m *MemHop) searchDeps() *search.SearchDeps {
+	return &search.SearchDeps{
+		SparseIndex:  m.sparseIndex,
+		L2Meta:       m.l2Meta,
+		VectorDim:    m.config.VectorDim,
+		Engine:       m.engine,
+		Encoder:      m.encoder,
+		Weights:      m.defaults.SearchWeights,
+		L1Reverse:    m.l1Reverse,
+		ProfileCache: &m.profileCache,
 	}
 }
 
-func (m *MemHop) batchDeps() *query.BatchDeps {
-	return &query.BatchDeps{
+func (m *MemHop) batchDeps() *write.BatchDeps {
+	return &write.BatchDeps{
 		Engine:      m.engine,
 		SparseIndex: m.sparseIndex,
 		VectorDim:   m.config.VectorDim,
@@ -137,13 +136,13 @@ func (m *MemHop) batchDeps() *query.BatchDeps {
 
 // --- package-level initialization helpers ---
 
-func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, error) {
+func openWithEncoder(config *config.MemHopConfig, enc encoder.Encoder) (*MemHop, error) {
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
 	dflt := config.Defaults
 	if dflt == nil {
-		dflt = core.DefaultMemHopDefaults()
+		dflt = DefaultDefaults()
 	}
 
 	// Initialize the global tokenizer.
@@ -153,7 +152,7 @@ func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, e
 		tok = "auto"
 	}
 	if err := index.InitTokenizer(tok); err != nil {
-		return nil, core.NewError(core.ErrConfig, "tokenizer init failed", err)
+		return nil, mherrors.NewError(mherrors.ErrConfig, "tokenizer init failed", err)
 	}
 
 	engine, err := openOrCreateEngine(config)
@@ -164,12 +163,12 @@ func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, e
 		// Close without checkpointing: writing an (empty) snapshot here would
 		// flip the A/B header and destroy the on-disk index snapshot.
 		engine.CloseNoCheckpoint()
-		return nil, core.NewError(core.ErrVectorDimMismatch, "config vs engine")
+		return nil, mherrors.NewError(mherrors.ErrVectorDimMismatch, "config vs engine")
 	}
 	sparseIdx, l1Rev := loadCachedIndices(engine)
 	l2MetaIdx := index.BuildL2MetaFromEngine(engine)
 	sm := session.NewSessionManager(dflt.SessionConfig)
-	l3Idx := l3.NewL3Index()
+	l3Idx := index.NewL3Index()
 	if err := l3Idx.BuildFromEngine(engine); err != nil {
 		slog.Warn("l3 index build failed", "error", err)
 	}
@@ -178,8 +177,8 @@ func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, e
 		slog.Warn("AdjacencyCacheMaxEntries not set or <= 0, defaulting to 128")
 		l3CacheMax = 128
 	}
-	l3C := l3.NewAdjacencyCache(l3CacheMax)
-	l3Dt := l3.NewDegreeTracker()
+	l3C := index.NewAdjacencyCache(l3CacheMax)
+	l3Dt := index.NewDegreeTracker()
 	return &MemHop{
 		engine: engine, config: config, defaults: dflt,
 		sparseIndex: sparseIdx, l2Meta: l2MetaIdx,
@@ -189,17 +188,17 @@ func openWithEncoder(config *core.MemHopConfig, enc encoder.Encoder) (*MemHop, e
 	}, nil
 }
 
-func createEncoder(config *core.MemHopConfig) (encoder.Encoder, error) {
+func createEncoder(config *config.MemHopConfig) (encoder.Encoder, error) {
 	if config.EncoderAddr == "" {
-		return nil, core.NewError(core.ErrConfig,
+		return nil, mherrors.NewError(mherrors.ErrConfig,
 			"Config.EncoderAddr is required")
 	}
 	if config.EmbedModel == "" {
-		return nil, core.NewError(core.ErrConfig,
+		return nil, mherrors.NewError(mherrors.ErrConfig,
 			"Config.EmbedModel is required")
 	}
 	if config.LLM.APIURL == "" || config.LLM.APIKey == "" {
-		return nil, core.NewError(core.ErrConfig,
+		return nil, mherrors.NewError(mherrors.ErrConfig,
 			"LLM.APIURL and LLM.APIKey are required")
 	}
 	enc, err := encoder.NewHttpEncoder(config.EncoderAddr, config.VectorDim, config.EmbedModel)
@@ -209,16 +208,16 @@ func createEncoder(config *core.MemHopConfig) (encoder.Encoder, error) {
 	return enc, nil
 }
 
-func openOrCreateEngine(config *core.MemHopConfig) (*storage.StorageEngine, error) {
+func openOrCreateEngine(config *config.MemHopConfig) (*storage.StorageEngine, error) {
 	if _, err := os.Stat(config.DBPath); err == nil {
 		return storage.Open(config.DBPath)
 	}
 	return storage.Create(config.DBPath, uint16(config.VectorDim))
 }
 
-func loadCachedIndices(engine *storage.StorageEngine) (*index.SparseIndex, *query.L1ReverseIndex) {
+func loadCachedIndices(engine *storage.StorageEngine) (*index.SparseIndex, *index.L1ReverseIndex) {
 	sparseIdx := index.NewSparseIndex()
-	l1Rev := query.NewL1ReverseIndex()
+	l1Rev := index.NewL1ReverseIndex()
 	snap := engine.SnapshotData()
 	if snap == nil {
 		return sparseIdx, l1Rev
@@ -231,7 +230,7 @@ func loadCachedIndices(engine *storage.StorageEngine) (*index.SparseIndex, *quer
 		}
 	}
 	if len(snap.L1ReverseData) > 0 {
-		if idx, err := query.DeserializeL1ReverseIndex(snap.L1ReverseData); err == nil {
+		if idx, err := index.DeserializeL1ReverseIndex(snap.L1ReverseData); err == nil {
 			l1Rev = idx
 		} else {
 			slog.Warn("l1 reverse index snapshot deserialize failed, rebuilding empty", "error", err)

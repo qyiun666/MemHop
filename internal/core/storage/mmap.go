@@ -8,7 +8,7 @@ import (
 	"os"
 	"syscall"
 
-	"memhop/internal/core"
+	"memhop/internal/common/mherrors"
 )
 
 // MapFile maps a file region of the given size into memory.
@@ -20,7 +20,7 @@ func MapFile(f *os.File, size int) ([]byte, error) {
 		syscall.PROT_READ|syscall.PROT_WRITE,
 		syscall.MAP_SHARED)
 	if err != nil {
-		return nil, core.NewError(core.ErrIO, "mmap failed", err)
+		return nil, mherrors.NewError(mherrors.ErrIO, "mmap failed", err)
 	}
 	return data, nil
 }
@@ -31,7 +31,7 @@ func UnmapFile(data []byte) error {
 		return nil
 	}
 	if err := syscall.Munmap(data); err != nil {
-		return core.NewError(core.ErrIO, "munmap failed", err)
+		return mherrors.NewError(mherrors.ErrIO, "munmap failed", err)
 	}
 	return nil
 }
@@ -42,7 +42,7 @@ func UnmapFile(data []byte) error {
 func RemapFile(f *os.File, oldData []byte) ([]byte, error) {
 	info, err := f.Stat()
 	if err != nil {
-		return nil, core.NewError(core.ErrIO, fmt.Sprintf("stat failed for %s", f.Name()), err)
+		return nil, mherrors.NewError(mherrors.ErrIO, fmt.Sprintf("stat failed for %s", f.Name()), err)
 	}
 	newData, err := MapFile(f, int(info.Size()))
 	if err != nil {

@@ -3,103 +3,110 @@
 
 // Package memhop is the public facade for the MemHop memory database.
 // It re-exports only the types and functions needed by external consumers.
-// All internal implementation lives in memhop/internal/core.
+// All internal implementation lives in memhop/internal/query subpackages.
 package memhop
 
 import (
-	"memhop/internal/core"
-	"memhop/internal/core/dream"
-	"memhop/internal/core/encoder"
-	"memhop/internal/core/l3"
-	"memhop/internal/core/l3/dsl"
+	"memhop/internal/common/config"
+	"memhop/internal/query/dream"
+	"memhop/internal/query/encoder"
+	l3 "memhop/internal/query/graph"
+	"memhop/internal/query/graph/dsl"
 	"memhop/internal/core/model"
-	"memhop/internal/core/query"
-	"memhop/internal/hash"
+	"memhop/internal/query/search"
+	"memhop/internal/query/write"
+	"memhop/internal/query/crud"
+	"memhop/internal/query/importx"
+	"memhop/internal/query/health"
+	"memhop/internal/common/hash"
+	"memhop/internal/common/mherrors"
 )
 
 // --- Config types ---
 
-type Config = core.MemHopConfig
+type Config = config.MemHopConfig
 
-type ConfigDefaults = core.MemHopDefaults
+type ConfigDefaults = config.MemHopDefaults
 
-var DefaultDefaults = core.DefaultMemHopDefaults
+var DefaultDefaults = config.DefaultMemHopDefaults
 
 // --- Error types ---
 
 var (
-	ErrIO                = core.ErrIO
-	ErrInvalidMagic      = core.ErrInvalidMagic
-	ErrCRCMismatch       = core.ErrCRCMismatch
-	ErrCorruption        = core.ErrCorruption
-	ErrNotFound          = core.ErrNotFound
-	ErrVectorDimMismatch = core.ErrVectorDimMismatch
-	ErrSerialization     = core.ErrSerialization
-	ErrDeserialization   = core.ErrDeserialization
-	ErrEncoder           = core.ErrEncoder
-	ErrConfig            = core.ErrConfig
-	ErrLLM               = core.ErrLLM
-	ErrInvalidQuery      = core.ErrInvalidQuery
-	ErrClosed            = core.ErrClosed
+	ErrIO                = mherrors.ErrIO
+	ErrInvalidMagic      = mherrors.ErrInvalidMagic
+	ErrCRCMismatch       = mherrors.ErrCRCMismatch
+	ErrCorruption        = mherrors.ErrCorruption
+	ErrNotFound          = mherrors.ErrNotFound
+	ErrVectorDimMismatch = mherrors.ErrVectorDimMismatch
+	ErrSerialization     = mherrors.ErrSerialization
+	ErrDeserialization   = mherrors.ErrDeserialization
+	ErrEncoder           = mherrors.ErrEncoder
+	ErrConfig            = mherrors.ErrConfig
+	ErrLLM               = mherrors.ErrLLM
+	ErrInvalidQuery      = mherrors.ErrInvalidQuery
+	ErrClosed            = mherrors.ErrClosed
 )
 
-type Error = core.MemHopError
+type Error = mherrors.MemHopError
 
-var NewError = core.NewError
+var NewError = mherrors.NewError
 
 // --- Search types ---
 
-type SearchQuery = query.SearchQuery
+type SearchQuery = search.SearchQuery
 
-type SearchResult = query.SearchResult
+type SearchResult = search.SearchResult
 
-type SearchDefaults = query.SearchDefaults
+type SearchDefaults = search.SearchDefaults
 
-type ContextResult = query.ContextResult
+type ContextResult = search.ContextResult
 
-type ProfileResult = query.ProfileResult
+type ProfileResult = search.ProfileResult
 
-type L1Preview = query.L1Preview
+type L1Preview = search.L1Preview
 
-type L3Preview = query.L3Preview
+type L3Preview = search.L3Preview
 
-type L3SearchQuery = query.L3SearchQuery
+type L3SearchQuery = crud.L3SearchQuery
 
-type L3SearchResult = query.L3SearchResult
+type L3SearchResult = crud.L3SearchResult
 
-type L3EntityHint = query.L3EntityHint
+type L3EntityHint = dream.L3EntityHint
 
-type SearchPreprocessResult = query.SearchPreprocessResult
+type SearchPreprocessResult = dream.SearchPreprocessResult
+
+type RequestSource = search.RequestSource
 
 // --- CRUD types ---
 
-type TopicListQuery = query.TopicListQuery
+type TopicListQuery = crud.TopicListQuery
 
-type TopicListResult = query.TopicListResult
+type TopicListResult = crud.TopicListResult
 
-type TopicSummary = query.TopicSummary
+type TopicSummary = crud.TopicSummary
 
-type TopicDetail = query.TopicDetail
+type TopicDetail = crud.TopicDetail
 
-type L3Detail = query.L3Detail
+type L3Detail = crud.L3Detail
 
-type GraphNode = query.GraphNode
+type GraphNode = crud.GraphNode
 
-type GraphEdge = query.GraphEdge
+type GraphEdge = crud.GraphEdge
 
-type Subgraph = query.Subgraph
+type Subgraph = crud.Subgraph
 
-type TraversalHop = query.TraversalHop
+type TraversalHop = crud.TraversalHop
 
-type MergeResult = query.MergeResult
+type MergeResult = crud.MergeResult
 
-type SceneTreeResult = query.SceneTreeResult
+type SceneTreeResult = crud.SceneTreeResult
 
-type L1Graph = query.L1Graph
+type L1Graph = crud.L1Graph
 
-type L1Node = query.L1Node
+type L1Node = crud.L1Node
 
-type L1Edge = query.L1Edge
+type L1Edge = crud.L1Edge
 
 // --- L3 types ---
 
@@ -111,63 +118,63 @@ var DefaultCommunityConfig = l3.DefaultCommunityConfig
 
 // --- Archive types ---
 
-type ArchiveQuery = query.ArchiveQuery
+type ArchiveQuery = crud.ArchiveQuery
 
-type ArchiveListResult = query.ArchiveListResult
+type ArchiveListResult = crud.ArchiveListResult
 
-type Archive = query.Archive
+type Archive = crud.Archive
 
 // --- L5 types ---
 
-type CrystalListQuery = query.CrystalListQuery
+type CrystalListQuery = crud.CrystalListQuery
 
-type CrystalListResult = query.CrystalListResult
+type CrystalListResult = crud.CrystalListResult
 
-type CrystalSummary = query.CrystalSummary
+type CrystalSummary = crud.CrystalSummary
 
 // --- Import / Store types ---
 
-type ImportRequest = query.ImportRequest
+type ImportRequest = importx.ImportRequest
 
-type ImportResult = query.ImportResult
+type ImportResult = importx.ImportResult
 
-type StoreBatch = query.StoreBatch
+type StoreBatch = write.StoreBatch
 
-type StoreItem = query.StoreItem
+type StoreItem = write.StoreItem
 
-type StoreResult = query.StoreResult
+type StoreResult = write.StoreResult
 
 // --- Update types ---
 
-type UpdateRequest = query.UpdateRequest
+type UpdateRequest = crud.UpdateRequest
 
-type UpdateResult = query.UpdateResult
+type UpdateResult = crud.UpdateResult
 
-type UpdateL2Fields = query.UpdateL2Fields
+type UpdateL2Fields = crud.UpdateL2Fields
 
-type UpdateL3Fields = query.UpdateL3Fields
+type UpdateL3Fields = crud.UpdateL3Fields
 
-type UpdateL5Fields = query.UpdateL5Fields
+type UpdateL5Fields = crud.UpdateL5Fields
 
 // --- L5 write types ---
 
-type L5ChainInput = query.L5ChainInput
+type L5ChainInput = crud.L5ChainInput
 
-type L5StepInput = query.L5StepInput
+type L5StepInput = crud.L5StepInput
 
-type L5ChainUpdate = query.L5ChainUpdate
+type L5ChainUpdate = crud.L5ChainUpdate
 
 // --- Profile types ---
 
-type ProfileDelta = query.ProfileDelta
+type ProfileDelta = crud.ProfileDelta
 
 // --- Health types ---
 
-type HealthStatus = query.HealthStatus
+type HealthStatus = health.HealthStatus
 
-type SessionStatus = query.SessionStatus
+type SessionStatus = crud.SessionStatus
 
-type MemHopStats = query.MemHopStats
+type MemHopStats = health.MemHopStats
 
 // --- Model types (minimal exposure) ---
 
@@ -210,57 +217,55 @@ type DSLQueryResult = dsl.QueryResult
 
 // --- Knowledge types ---
 
-type KnowledgeListQuery = query.KnowledgeListQuery
+type KnowledgeListQuery = crud.KnowledgeListQuery
 
-type KnowledgeListResult = query.KnowledgeListResult
+type KnowledgeListResult = crud.KnowledgeListResult
 
-type KnowledgeSummary = query.KnowledgeSummary
+type KnowledgeSummary = crud.KnowledgeSummary
 
-type KnowledgeDetail = query.KnowledgeDetail
+type KnowledgeDetail = crud.KnowledgeDetail
 
-type KnowledgeNodeQuery = query.KnowledgeNodeQuery
+type KnowledgeNodeQuery = crud.KnowledgeNodeQuery
 
-type KnowledgeNodesResult = query.KnowledgeNodesResult
+type KnowledgeNodesResult = crud.KnowledgeNodesResult
 
-type KnowledgeNodeDetail = query.KnowledgeNodeDetail
+type KnowledgeNodeDetail = crud.KnowledgeNodeDetail
 
 // --- Import data types ---
 
-type ImportData = query.ImportData
+type ImportData = importx.ImportData
 
-type ProfileImportData = query.ProfileImportData
+type ProfileImportData = importx.ProfileImportData
 
-type TopicImportItem = query.TopicImportItem
+type TopicImportItem = importx.TopicImportItem
 
-type KnowledgeImportItem = query.KnowledgeImportItem
+type KnowledgeImportItem = importx.KnowledgeImportItem
 
-type ImportError = query.ImportError
-
-type RequestSource = query.RequestSource
+type ImportError = write.ImportError
 
 // --- Import target layers / modes / status ---
 
-type TargetLayer = query.TargetLayer
+type TargetLayer = write.TargetLayer
 
-type ImportMode = query.ImportMode
+type ImportMode = write.ImportMode
 
-type ImportStatus = query.ImportStatus
+type ImportStatus = write.ImportStatus
 
 var (
-	TargetProfile   = query.TargetProfile
-	TargetTopic     = query.TargetTopic
-	TargetKnowledge = query.TargetKnowledge
+	TargetProfile   = write.TargetProfile
+	TargetTopic     = write.TargetTopic
+	TargetKnowledge = write.TargetKnowledge
 
-	ImportMerge     = query.ImportMerge
-	ImportOverwrite = query.ImportOverwrite
-	ImportSkip      = query.ImportSkip
+	ImportMerge     = write.ImportMerge
+	ImportOverwrite = write.ImportOverwrite
+	ImportSkip      = write.ImportSkip
 
-	ImportSuccess = query.ImportSuccess
+	ImportSuccess = write.ImportSuccess
 )
 
 // --- Update action types ---
 
-type ActionItem = query.ActionItem
+type ActionItem = write.ActionItem
 
 // --- Encoder types (for OpenWithEncoder callers) ---
 

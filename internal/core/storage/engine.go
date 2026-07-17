@@ -9,7 +9,7 @@ import (
 	"os"
 	"sync"
 
-	"memhop/internal/core"
+	"memhop/internal/common/mherrors"
 )
 
 // RecordEntry is used for batch writes.
@@ -27,6 +27,7 @@ type StorageEngine struct {
 	headerB      *FileHeader
 	activeHeader uint8 // 0 = A, 1 = B
 	index        map[uint64]uint64
+	byType       map[uint8]map[uint64]struct{} // recordType → set of idHashes
 	recordCount  uint32
 	nextOffset   uint64
 	snapshotData *IndexSnapshotData
@@ -38,11 +39,11 @@ type StorageEngine struct {
 func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
-		return nil, core.NewError(core.ErrIO, "create file", err)
+		return nil, mherrors.NewError(mherrors.ErrIO, "create file", err)
 	}
 	if err := f.Truncate(DataStart); err != nil {
 		f.Close()
-		return nil, core.NewError(core.ErrIO, "truncate", err)
+		return nil, mherrors.NewError(mherrors.ErrIO, "truncate", err)
 	}
 	hdr := NewFileHeader(vectorDim)
 	hdrBytes := hdr.ToBytes()
@@ -62,7 +63,7 @@ func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 	if err := f.Sync(); err != nil {
 		UnmapFile(mm)
 		f.Close()
-		return nil, core.NewError(core.ErrIO, "sync", err)
+		return nil, mherrors.NewError(mherrors.ErrIO, "sync", err)
 	}
 	return &StorageEngine{
 		file:         f,
@@ -71,6 +72,7 @@ func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 		headerB:      copyHeader(hdr),
 		activeHeader: 0,
 		index:        make(map[uint64]uint64),
+		byType:       make(map[uint8]map[uint64]struct{}),
 		nextOffset:   DataStart,
 	}, nil
 }
@@ -79,16 +81,16 @@ func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 func Open(path string) (*StorageEngine, error) {
 	f, err := os.OpenFile(path, os.O_RDWR, 0644)
 	if err != nil {
-		return nil, core.NewError(core.ErrIO, "open file", err)
+		return nil, mherrors.NewError(mherrors.ErrIO, "open file", err)
 	}
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
-		return nil, core.NewError(core.ErrIO, "stat", err)
+		return nil, mherrors.NewError(mherrors.ErrIO, "stat", err)
 	}
 	if info.Size() < HeaderSize*2 {
 		f.Close()
-		return nil, core.NewError(core.ErrCorruption, "file too small for dual headers")
+		return nil, mherrors.NewError(mherrors.ErrCorruption, "file too small for dual headers")
 	}
 	mm, err := MapFile(f, int(info.Size()))
 	if err != nil {
@@ -112,6 +114,7 @@ func Open(path string) (*StorageEngine, error) {
 		headerB:      hB,
 		activeHeader: activeIdx,
 		index:        make(map[uint64]uint64),
+		byType:       make(map[uint8]map[uint64]struct{}),
 		recordCount:  active.RecordCount,
 		nextOffset:   DataStart,
 	}
@@ -132,6 +135,7 @@ func Open(path string) (*StorageEngine, error) {
 		return nil, err
 	}
 	e.recordCount = uint32(len(e.index))
+	e.rebuildByType()
 	return e, nil
 }
 
@@ -159,7 +163,7 @@ func (e *StorageEngine) ReadRecord(idHash uint64) (uint8, []byte, error) {
 	defer e.mu.RUnlock()
 	offset, ok := e.index[idHash]
 	if !ok {
-		return 0, nil, core.ErrNotFound
+		return 0, nil, mherrors.ErrNotFound
 	}
 	rt, _, data, _, err := RecordData(e.mmap, offset)
 	if err != nil {
@@ -187,15 +191,25 @@ func (e *StorageEngine) DeleteRecord(idHash uint64) (bool, error) {
 	tombstone := EncodeRecord(rt, FlagDeleted, idHash, nil)
 	end, err := e.file.Seek(0, io.SeekEnd)
 	if err != nil {
-		return false, core.NewError(core.ErrIO, "seek end", err)
+		return false, mherrors.NewError(mherrors.ErrIO, "seek end", err)
 	}
 	if _, err := e.file.Write(tombstone); err != nil {
-		return false, core.NewError(core.ErrIO, "write tombstone", err)
+		return false, mherrors.NewError(mherrors.ErrIO, "write tombstone", err)
 	}
 	if err := e.file.Sync(); err != nil {
-		return false, core.NewError(core.ErrIO, "sync tombstone", err)
+		return false, mherrors.NewError(mherrors.ErrIO, "sync tombstone", err)
 	}
 	delete(e.index, idHash)
+	// Remove from byType as well.
+	if int(offset) < len(e.mmap) {
+		oldRT := e.mmap[int(offset)]
+		if ids, ok := e.byType[oldRT]; ok {
+			delete(ids, idHash)
+			if len(ids) == 0 {
+				delete(e.byType, oldRT)
+			}
+		}
+	}
 	e.recordCount--
 	e.nextOffset = uint64(end) + uint64(len(tombstone))
 	e.dirty = true
@@ -227,7 +241,7 @@ func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
 		return err
 	}
 	if err := e.file.Sync(); err != nil {
-		return core.NewError(core.ErrIO, "sync", err)
+		return mherrors.NewError(mherrors.ErrIO, "sync", err)
 	}
 	if err := e.file.Close(); err != nil {
 		return err
@@ -265,6 +279,25 @@ func (e *StorageEngine) IterIndex(fn func(idHash, offset uint64) bool) {
 			return
 		}
 	}
+}
+
+// IterIndexByType iterates over all idHashes of a given record type.
+// A snapshot of matching IDs is taken under the read lock, then fn is invoked
+// without holding any lock, so fn may safely call engine methods (e.g. ReadRecord).
+// Returns stop=true if fn returned a non-nil error.
+func (e *StorageEngine) IterIndexByType(rt uint8, fn func(idHash uint64) error) error {
+	e.mu.RLock()
+	ids := make([]uint64, 0, len(e.byType[rt]))
+	for id := range e.byType[rt] {
+		ids = append(ids, id)
+	}
+	e.mu.RUnlock()
+	for _, id := range ids {
+		if err := fn(id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RecordCount returns the number of live records.
@@ -317,15 +350,15 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 		encoded := EncodeRecord(rec.RecordType, 0, rec.IDHash, rec.Data)
 		offset, err := e.file.Seek(0, io.SeekEnd)
 		if err != nil {
-			return nil, core.NewError(core.ErrIO, "seek end", err)
+			return nil, mherrors.NewError(mherrors.ErrIO, "seek end", err)
 		}
 		if _, err := e.file.Write(encoded); err != nil {
-			return nil, core.NewError(core.ErrIO, "write record", err)
+			return nil, mherrors.NewError(mherrors.ErrIO, "write record", err)
 		}
 		offsets = append(offsets, uint64(offset))
 	}
 	if err := e.file.Sync(); err != nil {
-		return nil, core.NewError(core.ErrIO, "sync", err)
+		return nil, mherrors.NewError(mherrors.ErrIO, "sync", err)
 	}
 	mm, err := RemapFile(e.file, e.mmap)
 	if err != nil {
@@ -336,7 +369,20 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 		if _, exists := e.index[rec.IDHash]; !exists {
 			e.recordCount++
 		}
+		// Remove idHash from old type set if it was previously indexed.
+		if oldOff, exists := e.index[rec.IDHash]; exists {
+			if int(oldOff) < len(e.mmap) {
+				oldRT := e.mmap[int(oldOff)]
+				if oldRT != rec.RecordType {
+					delete(e.byType[oldRT], rec.IDHash)
+				}
+			}
+		}
 		e.index[rec.IDHash] = offsets[i]
+		if e.byType[rec.RecordType] == nil {
+			e.byType[rec.RecordType] = make(map[uint64]struct{})
+		}
+		e.byType[rec.RecordType][rec.IDHash] = struct{}{}
 	}
 	last := records[len(records)-1]
 	e.nextOffset = offsets[len(offsets)-1] + uint64(RecordHeaderSize+len(last.Data))
@@ -351,13 +397,13 @@ func (e *StorageEngine) checkpoint(snap *IndexSnapshotData) error {
 	}
 	snapOffset, err := e.file.Seek(0, io.SeekEnd)
 	if err != nil {
-		return core.NewError(core.ErrIO, "seek snap", err)
+		return mherrors.NewError(mherrors.ErrIO, "seek snap", err)
 	}
 	if _, err := e.file.Write(blob); err != nil {
-		return core.NewError(core.ErrIO, "write snapshot", err)
+		return mherrors.NewError(mherrors.ErrIO, "write snapshot", err)
 	}
 	if err := e.file.Sync(); err != nil {
-		return core.NewError(core.ErrIO, "sync", err)
+		return mherrors.NewError(mherrors.ErrIO, "sync", err)
 	}
 	mm, err := RemapFile(e.file, e.mmap)
 	if err != nil {
@@ -375,7 +421,7 @@ func (e *StorageEngine) checkpoint(snap *IndexSnapshotData) error {
 		return err
 	}
 	if err := e.file.Sync(); err != nil {
-		return core.NewError(core.ErrIO, "sync header", err)
+		return mherrors.NewError(mherrors.ErrIO, "sync header", err)
 	}
 	mm, err = RemapFile(e.file, e.mmap)
 	if err != nil {
@@ -408,7 +454,7 @@ func (e *StorageEngine) loadSnapshot() error {
 	off := int(active.SnapshotOffset)
 	length := int(active.SnapshotLength)
 	if off+length > len(e.mmap) {
-		return core.NewError(core.ErrCorruption, "snapshot out of bounds")
+		return mherrors.NewError(mherrors.ErrCorruption, "snapshot out of bounds")
 	}
 	raw := make([]byte, length)
 	copy(raw, e.mmap[off:off+length])
@@ -462,14 +508,30 @@ func (e *StorageEngine) recomputeNextOffset() {
 	e.nextOffset = maxEnd
 }
 
+// rebuildByType rebuilds the byType secondary index from the current index.
+// Caller must hold e.mu (at least RLock).
+func (e *StorageEngine) rebuildByType() {
+	e.byType = make(map[uint8]map[uint64]struct{})
+	for id, off := range e.index {
+		if int(off) >= len(e.mmap) {
+			continue
+		}
+		rt := e.mmap[int(off)]
+		if e.byType[rt] == nil {
+			e.byType[rt] = make(map[uint64]struct{})
+		}
+		e.byType[rt][id] = struct{}{}
+	}
+}
+
 // --- package-level helpers ---
 
 func writeHeaderAt(f *os.File, offset int64, buf [HeaderSize]byte) error {
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return core.NewError(core.ErrIO, "seek header", err)
+		return mherrors.NewError(mherrors.ErrIO, "seek header", err)
 	}
 	if _, err := f.Write(buf[:]); err != nil {
-		return core.NewError(core.ErrIO, "write header", err)
+		return mherrors.NewError(mherrors.ErrIO, "write header", err)
 	}
 	return nil
 }
