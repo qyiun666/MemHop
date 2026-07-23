@@ -581,20 +581,6 @@ func emptyProfile() ProfileResult {
 	}
 }
 
-// filterByMinScore removes candidates below the minimum score threshold.
-func filterByMinScore(candidates []scoredContext, minScore float32) []scoredContext {
-	var filtered []scoredContext
-	for _, sc := range candidates {
-		if sc.score >= minScore {
-			filtered = append(filtered, sc)
-		}
-	}
-	if filtered == nil {
-		return []scoredContext{}
-	}
-	return filtered
-}
-
 // filterByLayers keeps only candidates whose depth matches one of the layers.
 func filterByLayers(candidates []scoredContext, layers []uint8) []scoredContext {
 	if len(layers) == 0 {

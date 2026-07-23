@@ -232,21 +232,26 @@ func (e *StorageEngine) Checkpoint(snap *IndexSnapshotData) error {
 }
 
 // Close checkpoints, syncs, unmaps, and closes the file.
-// All cleanup steps execute even if checkpoint fails.
+// All cleanup steps execute even if any of them fails; the first error
+// encountered is returned (checkpoint > unmap > sync > close) so no
+// mmap region or file descriptor is leaked on partial failure.
 func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ckptErr := e.checkpoint(snap)
-	if err := UnmapFile(e.mmap); err != nil {
-		return err
+	unmapErr := UnmapFile(e.mmap)
+	syncErr := e.file.Sync()
+	closeErr := e.file.Close()
+	switch {
+	case ckptErr != nil:
+		return ckptErr
+	case unmapErr != nil:
+		return unmapErr
+	case syncErr != nil:
+		return mherrors.NewError(mherrors.ErrIO, "sync", syncErr)
+	default:
+		return closeErr
 	}
-	if err := e.file.Sync(); err != nil {
-		return mherrors.NewError(mherrors.ErrIO, "sync", err)
-	}
-	if err := e.file.Close(); err != nil {
-		return err
-	}
-	return ckptErr
 }
 
 // CloseNoCheckpoint unmaps and closes the file without writing an index

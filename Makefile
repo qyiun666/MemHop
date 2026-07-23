@@ -51,28 +51,12 @@ fmt:
 clean:
 	rm -rf bin/ vendor/
 
-## check development environment (Go version, CGO, C++ compiler)
+## check development environment (Go version)
 doctor:
 	@echo "=== MemHop Development Environment Check ==="
 	@echo ""
-	@echo "[1/3] Go version..."
+	@echo "[1/1] Go version..."
 	@go version
-	@echo ""
-	@echo "[2/3] CGO_ENABLED..."
-	@cgo_status=$$(go env CGO_ENABLED); \
-	echo "  $$cgo_status"; \
-	if [ "$$cgo_status" != "1" ]; then \
-		echo "  WARNING: CGO_ENABLED=$$cgo_status — gojieba requires CGO_ENABLED=1"; \
-		echo "  Fix: export CGO_ENABLED=1 (or prepend to make command)"; \
-	fi
-	@echo ""
-	@echo "[3/3] C++ compiler..."
-	@if which c++ > /dev/null 2>&1; then \
-		c++ --version | head -1; \
-	else \
-		echo "  ERROR: C++ compiler not found. Install Xcode Command Line Tools:"; \
-		echo "    xcode-select --install"; \
-	fi
 	@echo ""
 	@echo "=== All checks complete ==="
 
@@ -88,4 +72,4 @@ help:
 	@echo "  lint              go vet across api/, internal/ and test/"
 	@echo "  fmt               gofmt -w memhop test"
 	@echo "  clean             remove build artefacts"
-	@echo "  doctor            check development environment (Go/CGO/compiler)"
+	@echo "  doctor            check development environment (Go version)"

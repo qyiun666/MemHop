@@ -46,7 +46,7 @@ make fmt
 
 - **六层记忆**: L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal
 - **存储格式**: V2 append-only `.meh`（魔数 `MEH2`），A/B 双 Header + CRC32 + 快照 + mmap 零拷贝读取
-- **检索**: BM25（gojieba/gse CJK 分词）+ f16 IVF 向量近似搜索 + RRF 融合
+- **检索**: BM25（gse CJK 分词）+ f16 IVF 向量近似搜索 + RRF 融合
 - **Dream 周期**: L3 蒸馏 → L2 压缩 → L1 重建 → L1 衰减 → L0 重建 → 语言习惯蒸馏 → L5 结晶
 - **编码器**: HTTP 调用 Ollama /api/embed，f16 半精度存储
 - **日志**: 标准库 `log/slog` 结构化日志

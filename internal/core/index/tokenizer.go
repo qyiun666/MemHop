@@ -5,6 +5,7 @@ package index
 
 import (
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"unicode"
@@ -18,28 +19,34 @@ type Tokenizer interface {
 	Close()
 }
 
-// Engine names for configuration.
+// Engine names for configuration. Only "auto" and "gse" are supported;
+// any other value is rejected by InitTokenizer.
 const (
-	EngineAuto    = "auto"
-	EngineGojieba = "gojieba"
-	EngineGse     = "gse"
+	EngineAuto = "auto"
+	EngineGse  = "gse"
 )
 
 var (
-	globalTokenizer Tokenizer
-	tokenizerOnce   sync.Once
-	tokenizerMu     sync.Mutex
-	tokenizerErr    error
+	globalTokenizer    Tokenizer
+	tokenizerOnce      sync.Once
+	tokenizerMu        sync.Mutex
+	tokenizerErr       error
+	tokenizerErrLogged sync.Once
 )
 
-// InitTokenizer initializes the global tokenizer with the specified engine.
-// Pass "auto" to prefer gojieba (if compiled with CGO), falling back to gse.
-// Returns an error if tokenizer initialization fails.
+// InitTokenizer initializes the global tokenizer.
+// Accepts "", "auto" or "gse"; any other value returns an error so stale
+// configuration is surfaced instead of silently downgraded.
 // Safe to call multiple times; only the first call takes effect unless
 // ResetTokenizer is called.
 func InitTokenizer(engine string) error {
 	tokenizerOnce.Do(func() {
-		globalTokenizer, tokenizerErr = createTokenizer(engine)
+		switch engine {
+		case "", EngineAuto, EngineGse:
+			globalTokenizer, tokenizerErr = createTokenizer(engine)
+		default:
+			tokenizerErr = fmt.Errorf("unknown tokenizer engine %q (supported: %q, %q)", engine, EngineAuto, EngineGse)
+		}
 	})
 	return tokenizerErr
 }
@@ -54,14 +61,22 @@ func ResetTokenizer() {
 	}
 	tokenizerErr = nil
 	tokenizerOnce = sync.Once{}
+	tokenizerErrLogged = sync.Once{}
 }
 
+// getTokenizer returns the global tokenizer, lazily initializing it via
+// EngineAuto on first use. If init fails (e.g. missing dictionaries), the
+// error is logged once and nil is returned; callers must treat nil as an
+// empty-token result rather than panicking. Hosts should call InitTokenizer
+// explicitly at startup to surface configuration issues early.
 func getTokenizer() Tokenizer {
 	if globalTokenizer == nil {
 		if err := InitTokenizer(EngineAuto); err != nil {
-			// This should never happen in normal operation since auto
-			// initialization errors indicate a fatal configuration problem.
-			panic(fmt.Sprintf("memhop: tokenizer auto-init failed: %v", err))
+			tokenizerErrLogged.Do(func() {
+				slog.Error("memhop: tokenizer auto-init failed; tokenization will return empty",
+					"error", err)
+			})
+			return nil
 		}
 	}
 	return globalTokenizer
@@ -121,6 +136,9 @@ func TokenizeWords(text string) []string {
 // runPipeline is the shared tokenization pipeline.
 func runPipeline(text string, filterStop bool) []string {
 	tok := getTokenizer()
+	if tok == nil {
+		return nil
+	}
 	preprocessed := preSplitCamelCase(text)
 	protected := strings.ReplaceAll(preprocessed, "_", "\x01")
 	segments := tok.Cut(protected)

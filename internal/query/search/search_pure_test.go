@@ -10,50 +10,6 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// filterByMinScore
-// ---------------------------------------------------------------------------
-
-func TestFilterByMinScore(t *testing.T) {
-	candidates := []scoredContext{
-		{score: 0.9},
-		{score: 0.3},
-		{score: 0.5},
-		{score: 0.1},
-	}
-
-	t.Run("filters below threshold", func(t *testing.T) {
-		got := filterByMinScore(candidates, 0.4)
-		if len(got) != 2 {
-			t.Fatalf("expected 2, got %d", len(got))
-		}
-		if got[0].score != 0.9 || got[1].score != 0.5 {
-			t.Errorf("unexpected scores: %f, %f", got[0].score, got[1].score)
-		}
-	})
-
-	t.Run("empty when all below", func(t *testing.T) {
-		got := filterByMinScore(candidates, 1.0)
-		if len(got) != 0 {
-			t.Errorf("expected empty, got %d", len(got))
-		}
-	})
-
-	t.Run("keeps all when threshold is zero", func(t *testing.T) {
-		got := filterByMinScore(candidates, 0)
-		if len(got) != 4 {
-			t.Errorf("expected 4, got %d", len(got))
-		}
-	})
-
-	t.Run("nil input returns empty slice", func(t *testing.T) {
-		got := filterByMinScore(nil, 0.5)
-		if got == nil || len(got) != 0 {
-			t.Errorf("expected non-nil empty slice, got %v", got)
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
 // filterByLayers
 // ---------------------------------------------------------------------------
 
