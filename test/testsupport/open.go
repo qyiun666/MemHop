@@ -12,6 +12,12 @@ import (
 	"memhop/api"
 )
 
+// isCI reports whether the test runs in a CI environment.
+// GitHub Actions sets CI=true.
+func isCI() bool {
+	return os.Getenv("CI") == "true"
+}
+
 // LLM config environment variables. Priority: env vars > key_config.json file.
 const (
 	EnvLLMKey   = "MEMHOP_TEST_LLM_KEY"
@@ -76,6 +82,10 @@ func loadLLMConfig(cfg *memhop.Config) error {
 // and t.Fatal on any other error. The caller must call Close() when done.
 func OpenMemHop(t *testing.T) *memhop.MemHop {
 	t.Helper()
+
+	if isCI() {
+		t.Skip("CI: skipping Ollama-dependent test")
+	}
 
 	cfg := memhop.Config{
 		DBPath:      filepath.Join(t.TempDir(), "test.meh"),

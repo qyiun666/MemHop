@@ -61,6 +61,9 @@ func findFix(t *testing.T) string {
 
 func openMH(t *testing.T) *memhop.MemHop {
 	t.Helper()
+	if os.Getenv("CI") == "true" {
+		t.Skip("CI: skipping Ollama-dependent test")
+	}
 	cfg := memhop.Config{
 		DBPath:      filepath.Join(t.TempDir(), "b.meh"),
 		VectorDim:   1024,
