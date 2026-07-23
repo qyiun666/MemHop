@@ -20,58 +20,58 @@ import (
 //
 // recallGroundTruth 定义了 topic 的"种子文本"和期望被召回的相关查询。
 var recallGroundTruth = []struct {
-	seedText string // AutoCreate 写入的原始文本
-	related  string // 语义相近的查询（应召回该 topic）
+	seedText  string // AutoCreate 写入的原始文本
+	related   string // 语义相近的查询（应召回该 topic）
 	unrelated string // 语义相远的查询（不应召回该 topic）
-	topic    string // 话题标签（仅用于日志）
+	topic     string // 话题标签（仅用于日志）
 }{
 	{
-		seedText: "今天天气怎么样，北京明天会下雨吗，气温多少度",
-		related:  "北京天气预报",
+		seedText:  "今天天气怎么样，北京明天会下雨吗，气温多少度",
+		related:   "北京天气预报",
 		unrelated: "推荐一部好看的科幻电影",
-		topic:    "天气",
+		topic:     "天气",
 	},
 	{
-		seedText: "Go语言入门学习，推荐教程和练习项目，并发编程怎么学",
-		related:  "Go语言学习教程",
+		seedText:  "Go语言入门学习，推荐教程和练习项目，并发编程怎么学",
+		related:   "Go语言学习教程",
 		unrelated: "电影推荐",
-		topic:    "编程学习",
+		topic:     "编程学习",
 	},
 	{
-		seedText: "推荐好看的科幻电影，最近有什么新片上映，评分高的电影",
-		related:  "科幻电影推荐新片",
+		seedText:  "推荐好看的科幻电影，最近有什么新片上映，评分高的电影",
+		related:   "科幻电影推荐新片",
 		unrelated: "如何学习Go语言",
-		topic:    "电影推荐",
+		topic:     "电影推荐",
 	},
 	{
-		seedText: "微服务架构设计，服务拆分原则，gRPC通信，分布式事务",
-		related:  "微服务gRPC分布式架构",
+		seedText:  "微服务架构设计，服务拆分原则，gRPC通信，分布式事务",
+		related:   "微服务gRPC分布式架构",
 		unrelated: "早餐吃什么有营养",
-		topic:    "架构设计",
+		topic:     "架构设计",
 	},
 	{
-		seedText: "健康饮食食谱，减肥餐怎么搭配，早餐营养均衡",
-		related:  "健康减肥食谱",
+		seedText:  "健康饮食食谱，减肥餐怎么搭配，早餐营养均衡",
+		related:   "健康减肥食谱",
 		unrelated: "Go语言并发编程",
-		topic:    "健康饮食",
+		topic:     "健康饮食",
 	},
 	{
-		seedText: "Python机器学习的入门路径，scikit-learn和TensorFlow推荐",
-		related:  "Python机器学习框架",
+		seedText:  "Python机器学习的入门路径，scikit-learn和TensorFlow推荐",
+		related:   "Python机器学习框架",
 		unrelated: "北京天气",
-		topic:    "机器学习",
+		topic:     "机器学习",
 	},
 	{
-		seedText: "新能源汽车推荐，特斯拉和比亚迪对比，续航里程",
-		related:  "新能源电动车推荐",
+		seedText:  "新能源汽车推荐，特斯拉和比亚迪对比，续航里程",
+		related:   "新能源电动车推荐",
 		unrelated: "微服务架构",
-		topic:    "新能源车",
+		topic:     "新能源车",
 	},
 	{
-		seedText: "日本旅游攻略，东京大阪京都，樱花季什么时候",
-		related:  "日本东京旅游",
+		seedText:  "日本旅游攻略，东京大阪京都，樱花季什么时候",
+		related:   "日本东京旅游",
 		unrelated: "机器学习入门",
-		topic:    "旅游",
+		topic:     "旅游",
 	},
 }
 
@@ -970,5 +970,3 @@ func TestSearchResultIntegrity(t *testing.T) {
 	// AssociatedContexts
 	t.Logf("  ✓ AssociatedContexts: %d 个", len(result.AssociatedContexts))
 }
-
-
