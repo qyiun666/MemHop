@@ -4,9 +4,9 @@
 package memhop
 
 import (
-	"memhop/internal/query/write"
-	"memhop/internal/query/crud"
 	"memhop/internal/common/mherrors"
+	"memhop/internal/query/crud"
+	"memhop/internal/query/write"
 )
 
 // UpdateMemory updates a memory item at the specified layer.

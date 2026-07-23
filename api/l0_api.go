@@ -4,9 +4,9 @@
 package memhop
 
 import (
-	"memhop/internal/query/crud"
-	"memhop/internal/core/model"
 	"memhop/internal/common/mherrors"
+	"memhop/internal/core/model"
+	"memhop/internal/query/crud"
 )
 
 // GetProfile loads the L0 profile slot.

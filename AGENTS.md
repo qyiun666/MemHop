@@ -7,7 +7,7 @@ This file provides guidance to AI agents when working on the MemHop repository.
 MemHop 是一个面向 AI Agent 的嵌入式记忆数据库，用单个 `.meh` 文件实现六层认知架构（L0–L5）。它通过 Go module API 暴露给 MeowAgent 等宿主。
 
 - **语言**: Go 1.25+
-- **模块路径**: `github.com/qyiun666/memhop`
+- **模块路径**: `memhop`
 - **版本**: v0.57.0
 - **许可证**: MIT OR Apache-2.0
 - **核心形态**: 嵌入式 Go library，极简依赖（仅 3 个直接依赖）
@@ -16,16 +16,17 @@ MemHop 是一个面向 AI Agent 的嵌入式记忆数据库，用单个 `.meh` �
 
 ```bash
 # 构建
-go build ./memhop/...
+go build ./api/... ./internal/...
 
 # 测试
-go test ./memhop/...                    # 单元测试
-go test ./test/...                      # 集成测试（需要 Ollama）
+go test ./api/... ./internal/...           # 单元测试
+go test ./test/... -count=1 -v -timeout=10m # e2e 测试（需要 Ollama）
+go test ./test/... -tags=integration -count=1 -v -timeout=30m # 集成测试（需要 Ollama）
 go test ./...                           # 全部测试
 
 # 代码质量
 go vet ./...
-gofmt -w memhop test
+gofmt -w api internal test
 
 # 基准
 go test -bench=. -benchmem -run=^$ ./test/...
@@ -34,6 +35,7 @@ go test -bench=. -benchmem -run=^$ ./test/...
 make build
 make test
 make test-unit
+make test-e2e
 make test-integration
 make bench
 make lint
@@ -53,25 +55,36 @@ make fmt
 ## 代码组织
 
 ```
-memhop/                          # 对外 API 门面
+api/                             # 对外 API 门面
 ├── memdb.go                     # 主入口 + 生命周期
-├── export.go                    # 类型别名统一导出
 ├── search_api.go                # Search
 ├── update_api.go                # Update
-├── *_api.go                     # 各层 CRUD API
-└── internal/
-    ├── core/
-    │   ├── config.go            # 配置
-    │   ├── errors.go            # 错误定义
-    │   ├── model/               # L0-L5 数据模型
-    │   ├── storage/             # V2 存储引擎
-    │   ├── index/               # BM25/IVF/L2Meta 索引 + 分词器
-    │   ├── query/               # 检索管线 + DTO
-    │   ├── dream/               # Dream 巩固管线
-    │   ├── encoder/             # HTTP 编码器
-    │   ├── l3/                  # L3 超图引擎 + DSL
-    │   └── session/             # 会话管理
-    └── hash/                    # xxHash64
+├── store_api.go                 # Store
+├── dream_api.go                 # Dream
+├── l0_api.go ~ l5_api.go        # 各层 CRUD API
+internal/
+├── common/
+│   ├── config/                  # 配置
+│   ├── hash/                    # xxHash64
+│   ├── mherrors/                # 错误定义
+│   ├── numeric/                 # 数值工具
+│   ├── strutil/                 # 字符串工具
+│   └── timeutil/                # 时间工具
+├── core/
+│   ├── index/                   # BM25/IVF/L2Meta 索引 + 分词器
+│   ├── model/                   # L0-L5 数据模型
+│   ├── record/                  # 记录
+│   └── storage/                 # V2 存储引擎
+└── query/
+    ├── crud/                    # CRUD
+    ├── dream/                   # Dream 巩固管线
+    ├── encoder/                 # HTTP 编码器
+    ├── graph/                   # 图
+    ├── health/                  # 健康检查
+    ├── importx/                 # 导入
+    ├── search/                  # 检索管线
+    ├── session/                 # 会话管理
+    └── write/                   # 写入管线
 ```
 
 ## 开发规则优先级（冲突时按序号）

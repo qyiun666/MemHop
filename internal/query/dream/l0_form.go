@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"memhop/internal/common/hash"
+	"memhop/internal/common/mherrors"
+	"memhop/internal/common/timeutil"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/record"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/timeutil"
-	"memhop/internal/common/mherrors"
 )
 
 // GenerateProfile regenerates the L0 Profile from sparse index keyword distribution.

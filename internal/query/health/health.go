@@ -6,8 +6,8 @@
 package health
 
 import (
-	"memhop/internal/core/storage"
 	"memhop/internal/common/hash"
+	"memhop/internal/core/storage"
 )
 
 // CountLayers scans the engine and counts records by layer type.

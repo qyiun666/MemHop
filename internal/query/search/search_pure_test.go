@@ -6,8 +6,6 @@ package search
 import (
 	"testing"
 
-	"memhop/internal/common/config"
-	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 )
 
@@ -90,34 +88,6 @@ func TestFilterByLayers(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// buildDocScoreMap
-// ---------------------------------------------------------------------------
-
-func TestBuildDocScoreMap(t *testing.T) {
-	t.Run("builds correct map", func(t *testing.T) {
-		docs := []index.ScoredDoc{
-			{IDHash: 100, Score: 0.8},
-			{IDHash: 200, Score: 0.5},
-			{IDHash: 300, Score: 0.3},
-		}
-		m := buildDocScoreMap(docs)
-		if len(m) != 3 {
-			t.Fatalf("expected 3 entries, got %d", len(m))
-		}
-		if m[100] != 0.8 || m[200] != 0.5 || m[300] != 0.3 {
-			t.Errorf("unexpected scores in map")
-		}
-	})
-
-	t.Run("empty input", func(t *testing.T) {
-		m := buildDocScoreMap(nil)
-		if len(m) != 0 {
-			t.Errorf("expected empty map, got %d entries", len(m))
-		}
-	})
-}
-
-// ---------------------------------------------------------------------------
 // collectL3Refs
 // ---------------------------------------------------------------------------
 
@@ -188,70 +158,4 @@ func TestEmptyResult(t *testing.T) {
 	if len(r.Contexts) != 0 || len(r.AssociatedContexts) != 0 {
 		t.Error("expected empty slices")
 	}
-}
-
-// ---------------------------------------------------------------------------
-// applyChannelWeights
-// ---------------------------------------------------------------------------
-
-func TestApplyChannelWeights(t *testing.T) {
-	bm25 := []index.ScoredDoc{
-		{IDHash: 1, Score: 10.0},
-		{IDHash: 2, Score: 5.0},
-	}
-	vector := []index.ScoredDoc{
-		{IDHash: 1, Score: 0.9},
-	}
-	entity := []index.ScoredDoc{
-		{IDHash: 2, Score: 0.8},
-	}
-	merged := []index.ScoredDoc{
-		{IDHash: 1, Score: 0},
-		{IDHash: 2, Score: 0},
-	}
-
-	t.Run("nil weights returns merged unchanged", func(t *testing.T) {
-		result := applyChannelWeights(merged, bm25, vector, entity, nil)
-		if result[0].Score != 0 || result[1].Score != 0 {
-			t.Error("expected unchanged scores with nil weights")
-		}
-	})
-
-	t.Run("zero weights returns merged unchanged", func(t *testing.T) {
-		w := &config.SearchWeights{}
-		result := applyChannelWeights(merged, bm25, vector, entity, w)
-		if result[0].Score != 0 || result[1].Score != 0 {
-			t.Error("expected unchanged scores with zero weights")
-		}
-	})
-
-	t.Run("BM25 normalized and weighted", func(t *testing.T) {
-		mergedCopy := []index.ScoredDoc{{IDHash: 1}, {IDHash: 2}}
-		w := &config.SearchWeights{BM25Weight: 1.0}
-		result := applyChannelWeights(mergedCopy, bm25, nil, nil, w)
-		// Doc 1: bm25=10/10=1.0 * 1.0 = 1.0
-		// Doc 2: bm25=5/10=0.5 * 1.0 = 0.5
-		if result[0].IDHash != 1 || result[0].Score < 0.99 {
-			t.Errorf("expected doc 1 score ~1.0, got id=%d score=%f", result[0].IDHash, result[0].Score)
-		}
-		if result[1].IDHash != 2 || result[1].Score < 0.49 || result[1].Score > 0.51 {
-			t.Errorf("expected doc 2 score ~0.5, got id=%d score=%f", result[1].IDHash, result[1].Score)
-		}
-	})
-
-	t.Run("multi-channel combination", func(t *testing.T) {
-		mergedCopy := []index.ScoredDoc{{IDHash: 1}, {IDHash: 2}}
-		w := &config.SearchWeights{BM25Weight: 0.5, VectorWeight: 0.3, EntityWeight: 0.2}
-		result := applyChannelWeights(mergedCopy, bm25, vector, entity, w)
-		// Doc 1: 0.5*(10/10) + 0.3*0.9 + 0.2*0 = 0.5+0.27 = 0.77
-		// Doc 2: 0.5*(5/10) + 0.3*0 + 0.2*0.8 = 0.25+0.16 = 0.41
-		// Sorted: doc 1 first (0.77 > 0.41)
-		if result[0].IDHash != 1 {
-			t.Errorf("expected doc 1 first, got %d", result[0].IDHash)
-		}
-		const expected1 = 0.77
-		if diff := float64(result[0].Score) - expected1; diff < -0.01 || diff > 0.01 {
-			t.Errorf("doc 1: expected ~%f, got %f", expected1, result[0].Score)
-		}
-	})
 }

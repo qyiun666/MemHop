@@ -4,9 +4,9 @@
 package memhop
 
 import (
-	"memhop/internal/query/crud"
 	"memhop/internal/common/hash"
 	"memhop/internal/common/mherrors"
+	"memhop/internal/query/crud"
 )
 
 // GetL2 loads a single L2 topic by hex ID and returns it as TopicDetail.
@@ -35,7 +35,7 @@ func (m *MemHop) DeleteL2(id string) error {
 	if m.closed.Load() {
 		return mherrors.ErrClosed
 	}
-	return crud.DeleteL2(m.engine, m.l1Reverse, m.sparseIndex, m.l2Meta, id)
+	return crud.DeleteL2(m.engine, m.getL1Reverse(), m.sparseIndex, m.getL2Meta(), id)
 }
 
 // MergeL2 merges multiple L2 topics into a primary topic.
@@ -43,7 +43,7 @@ func (m *MemHop) MergeL2(primaryID string, mergeIDs []string) (*crud.MergeResult
 	if m.closed.Load() {
 		return nil, mherrors.ErrClosed
 	}
-	return crud.MergeL2(m.engine, m.l1Reverse, m.sparseIndex, m.l2Meta, primaryID, mergeIDs)
+	return crud.MergeL2(m.engine, m.getL1Reverse(), m.sparseIndex, m.getL2Meta(), primaryID, mergeIDs)
 }
 
 // GetSceneTree lists the full tree of nodes within a scene.
@@ -56,5 +56,5 @@ func (m *MemHop) GetSceneTree(sceneID string) (*crud.SceneTreeResult, error) {
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "parse scene_id", err)
 	}
-	return crud.GetSceneTree(m.engine, m.l2Meta, sceneHash)
+	return crud.GetSceneTree(m.engine, m.getL2Meta(), sceneHash)
 }

@@ -50,11 +50,11 @@ type HyperedgeSlot struct {
 // SceneEdge 是 HyperedgeSlot 的 v2 简化版本，用于上层衰减逻辑。
 // 去掉了 Version 和 OverflowPage，增加了 LastDecayAt 追踪衰减进度。
 type SceneEdge struct {
-	IDHash    uint64        `json:"id_hash"`     // 边唯一哈希标识
-	Kind      HyperedgeKind `json:"kind"`        // 边的语义类型（共现/因果/语义/时序/层级/序列）
-	NodeIDs   []uint64      `json:"node_ids"`    // 关联的 L1 SceneNode ID 列表
-	Weight    float32       `json:"weight"`      // 边权重，用于衰减和排序
-	CreatedAt int64         `json:"created_at"`  // 创建时间戳（毫秒）
+	IDHash    uint64        `json:"id_hash"`    // 边唯一哈希标识
+	Kind      HyperedgeKind `json:"kind"`       // 边的语义类型（共现/因果/语义/时序/层级/序列）
+	NodeIDs   []uint64      `json:"node_ids"`   // 关联的 L1 SceneNode ID 列表
+	Weight    float32       `json:"weight"`     // 边权重，用于衰减和排序
+	CreatedAt int64         `json:"created_at"` // 创建时间戳（毫秒）
 	// LastDecayAt 是上次衰减时间戳（毫秒）；0 表示从未衰减过，
 	// 此时首次衰减从 CreatedAt 开始计算。
 	LastDecayAt int64 `json:"last_decay_at"`

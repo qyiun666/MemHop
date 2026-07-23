@@ -9,10 +9,10 @@ import (
 	"testing"
 
 	"memhop/internal/common/config"
+	"memhop/internal/common/hash"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
 )
 
 func createTestEngine(t *testing.T) *storage.StorageEngine {
@@ -121,9 +121,8 @@ func TestAutoCreatedTopicRecallableWithoutRebuild(t *testing.T) {
 	}
 }
 
-// TestSearchNilWeightsRRFScores covers the Weights==nil path: the RRF score
-// is the final score and the 0.30 similarity threshold must not apply,
-// otherwise callers that pass no weights always get empty results.
+// TestSearchNilWeightsRRFScores covers the unified RRF path: the RRF score
+// is the final score, no absolute threshold applies.
 func TestSearchNilWeightsRRFScores(t *testing.T) {
 	engine := createTestEngine(t)
 	sparse := index.NewSparseIndex()
@@ -175,10 +174,9 @@ func TestSearchNilWeightsRRFScores(t *testing.T) {
 	}
 }
 
-// TestSearchDefaultWeightsNormalizedBM25 covers the Weights!=nil path:
-// raw BM25 scores must be normalized to [0,1] by the result set's maximum
-// before weighting, so the 0.30 threshold behaves per the documented formula.
-func TestSearchDefaultWeightsNormalizedBM25(t *testing.T) {
+// TestSearchUnifiedRRFReturnsMultipleResults verifies the unified RRF pipeline
+// returns all matching results (no minRelevanceScore threshold).
+func TestSearchUnifiedRRFReturnsMultipleResults(t *testing.T) {
 	engine := createTestEngine(t)
 	sparse := index.NewSparseIndex()
 
@@ -195,13 +193,8 @@ func TestSearchDefaultWeightsNormalizedBM25(t *testing.T) {
 		VectorDim:   768,
 		Engine:      engine,
 		Encoder:     nil,
-		Weights: &config.SearchWeights{
-			BM25Weight:   0.45,
-			VectorWeight: 0.55,
-			EntityWeight: 1.0,
-			RRFK:         60,
-		},
-		L1Reverse: index.NewL1ReverseIndex(),
+		Weights:     &config.SearchWeights{RRFK: 60},
+		L1Reverse:   index.NewL1ReverseIndex(),
 	}
 
 	result, err := SearchContext(SearchQuery{Text: "rust programming"}, deps)
@@ -209,18 +202,12 @@ func TestSearchDefaultWeightsNormalizedBM25(t *testing.T) {
 		t.Fatalf("search failed: %v", err)
 	}
 
-	// 5001 matches both terms → normalized BM25 = 1.0 → score = 0.45 ≥ 0.30.
-	// 5002 matches only the low-IDF term "rust" (df=2 in a 2-doc corpus) →
-	// normalized ≈ 0.21 → score ≈ 0.09 < 0.30 → filtered by the threshold.
-	if len(result.Contexts) != 1 {
-		t.Fatalf("expected exactly 1 context after threshold, got %d", len(result.Contexts))
+	// Both docs match "rust"; unified RRF returns all matching results.
+	if len(result.Contexts) < 1 {
+		t.Fatal("expected at least 1 context from unified RRF")
 	}
-	top := result.Contexts[0]
-	if top.ID != hash.FormatHash(5001) {
-		t.Errorf("expected top doc 5001, got %s", top.ID)
-	}
-	// No vector/entity hits in this setup: score must equal BM25Weight * 1.0.
-	if diff := float64(top.RetrievalScore) - 0.45; diff < -1e-5 || diff > 1e-5 {
-		t.Errorf("expected normalized score 0.45, got %f", top.RetrievalScore)
+	// Top result matches both query terms.
+	if result.Contexts[0].ID != hash.FormatHash(5001) {
+		t.Errorf("expected top doc 5001, got %s", result.Contexts[0].ID)
 	}
 }

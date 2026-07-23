@@ -8,9 +8,9 @@ package graph
 import (
 	"sort"
 
+	"memhop/internal/common/hash"
 	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
 )
 
 // CommunityConfig holds parameters for community detection.

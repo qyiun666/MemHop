@@ -11,13 +11,13 @@ import (
 	"sort"
 	"strings"
 
+	"memhop/internal/common/hash"
+	"memhop/internal/common/mherrors"
+	"memhop/internal/common/timeutil"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/record"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/timeutil"
-	"memhop/internal/common/mherrors"
 )
 
 // GetL3 loads an L3 hypergraph by ID with all nodes and edges.
@@ -690,5 +690,3 @@ func searchByMinScore(
 	}
 	return filtered
 }
-
-

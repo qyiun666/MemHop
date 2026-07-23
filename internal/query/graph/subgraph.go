@@ -62,7 +62,6 @@ func collectBFSVisited(
 	return visited
 }
 
-
 // ParseGraphEdgeKinds converts string edge kinds to model types.
 func ParseGraphEdgeKinds(kinds []string) []model.GraphEdgeKind {
 	if len(kinds) == 0 {

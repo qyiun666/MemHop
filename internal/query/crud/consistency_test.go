@@ -10,10 +10,10 @@ import (
 	"encoding/json"
 	"testing"
 
+	"memhop/internal/common/hash"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
 )
 
 func sparseContainsID(sparse *index.SparseIndex, queryText string, id uint64) bool {
@@ -24,8 +24,6 @@ func sparseContainsID(sparse *index.SparseIndex, queryText string, id uint64) bo
 	}
 	return false
 }
-
-
 
 // DeleteL3 must drop the graph's nodes from L3Index so SearchL3Nodes never
 // returns dangling IDs.
@@ -101,7 +99,7 @@ func TestAppendDialogueL4IndexesKeywords(t *testing.T) {
 	topicID := uint64(2301)
 	writeTestTopic(t, engine, topicID, "original title")
 
-	if _, err := AppendDialogueL4(engine, sparse, topicID, "hello from user", 0, []string{"brandnewkeyword"}); err != nil {
+	if _, err := AppendDialogueL4(engine, sparse, topicID, "hello from user", 0, []string{"brandnewkeyword"}, 1000000); err != nil {
 		t.Fatalf("append dialogue l4: %v", err)
 	}
 
@@ -234,7 +232,3 @@ func TestMergeL2SelfMergeIdempotent(t *testing.T) {
 		}
 	}
 }
-
-
-
-

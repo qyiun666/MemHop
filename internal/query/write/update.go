@@ -139,7 +139,7 @@ func updateL2(req crud.UpdateRequest, deps *UpdateDeps) (*crud.UpdateResult, err
 		}
 
 		// Append L4 archive
-		if _, err := crud.AppendDialogueL4(deps.Engine, deps.SparseIndex, topicID, dialogueText, role, keywords); err != nil {
+		if _, err := crud.AppendDialogueL4(deps.Engine, deps.SparseIndex, topicID, dialogueText, role, keywords, req.Timestamp); err != nil {
 			return nil, err
 		}
 
@@ -160,7 +160,7 @@ func updateL2(req crud.UpdateRequest, deps *UpdateDeps) (*crud.UpdateResult, err
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return nil, mherrors.NewError(mherrors.ErrDeserialization, "unmarshal update fields", err)
 	}
-	_, err = crud.UpdateL2(deps.Engine, deps.SparseIndex, req.ID, fields)
+	_, err = crud.UpdateL2(deps.Engine, deps.SparseIndex, req.ID, fields, req.Timestamp)
 	if err != nil {
 		return nil, err
 	}

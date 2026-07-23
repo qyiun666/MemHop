@@ -66,9 +66,9 @@ type TopicSlot struct {
 	CentroidPageRef uint64 `json:"centroid_page_ref"` // 本体向量嵌入页面引用（f16）
 
 	// Metadata 元数据
-	CreatedAt int64 `json:"created_at"` // 创建时间戳（毫秒）
-	UpdatedAt int64 `json:"updated_at"` // 更新时间戳（毫秒）
-	Version   uint32 `json:"version"`   // 版本号，用于乐观锁
+	CreatedAt int64  `json:"created_at"` // 创建时间戳（毫秒）
+	UpdatedAt int64  `json:"updated_at"` // 更新时间戳（毫秒）
+	Version   uint32 `json:"version"`    // 版本号，用于乐观锁
 }
 
 // ComputeTopicID 根据 sceneID 和用户/agent 时间戳计算 Topic 唯一 ID。

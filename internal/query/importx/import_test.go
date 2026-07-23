@@ -362,7 +362,7 @@ func TestImportMemory_L2Topics_WithKnowledgeTitle(t *testing.T) {
 
 	// Now import a topic that references the knowledge title
 	result, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
-		TargetLayer:    write.TargetTopic,
+		TargetLayer: write.TargetTopic,
 		Data: ImportData{
 			Topics: []TopicImportItem{
 				{Title: "TopicWithRef", Summary: strPtr("refers to knowledge"), Keywords: []string{"ref"}},

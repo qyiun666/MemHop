@@ -7,11 +7,11 @@ import (
 	"math"
 
 	"memhop/internal/common/config"
+	"memhop/internal/common/timeutil"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/record"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/timeutil"
 )
 
 // L1DecayReport holds metrics from the L1 decay stage.

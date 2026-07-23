@@ -5,10 +5,10 @@
 package memhop
 
 import (
-	"memhop/internal/query/write"
-	"memhop/internal/query/importx"
 	"memhop/internal/common/hash"
 	"memhop/internal/common/mherrors"
+	"memhop/internal/query/importx"
+	"memhop/internal/query/write"
 )
 
 // BatchStore runs the five-phase batch store pipeline.
@@ -18,7 +18,7 @@ func (m *MemHop) BatchStore(batch write.StoreBatch) (*write.StoreResult, error) 
 	}
 
 	deps := m.batchDeps()
-	deps.L2Meta = m.l2Meta
+	deps.L2Meta = m.getL2Meta()
 	report, err := write.BatchStore(batch, deps)
 	if err != nil {
 		return nil, err

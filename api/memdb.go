@@ -35,23 +35,34 @@ import (
 )
 
 // Lock order (to prevent deadlock): storage → l2meta → sparse → l1reverse → l3index → l3cache
+//
+// l2Meta / l1Reverse are held as atomic.Pointer so Dream() can atomically
+// swap them at the end of a consolidation cycle without blocking readers.
+// The pointed-to index instances remain immutable snapshots between swaps;
+// concurrent mutation of a loaded snapshot is out of scope for this lock.
 
 // MemHop is the main database instance.
 type MemHop struct {
-	engine      *storage.StorageEngine
-	config      *config.MemHopConfig
-	defaults    *config.MemHopDefaults
-	sparseIndex *index.SparseIndex
-	l2Meta      *index.L2MetaIndex
-	l1Reverse   *index.L1ReverseIndex
-	sessionMgr  *session.SessionManager
-	encoder     encoder.Encoder
-	l3Index     *index.L3Index
-	l3Cache     *index.AdjacencyCache
-	l3Degree    *index.DegreeTracker
+	engine       *storage.StorageEngine
+	config       *config.MemHopConfig
+	defaults     *config.MemHopDefaults
+	sparseIndex  *index.SparseIndex
+	l2Meta       atomic.Pointer[index.L2MetaIndex]
+	l1Reverse    atomic.Pointer[index.L1ReverseIndex]
+	sessionMgr   *session.SessionManager
+	encoder      encoder.Encoder
+	l3Index      *index.L3Index
+	l3Cache      *index.AdjacencyCache
+	l3Degree     *index.DegreeTracker
 	profileCache *search.ProfileResult // L0 profile cache (nil = not cached)
-	closed      atomic.Bool
+	closed       atomic.Bool
 }
+
+// getL2Meta returns the currently active L2 metadata index snapshot.
+func (m *MemHop) getL2Meta() *index.L2MetaIndex { return m.l2Meta.Load() }
+
+// getL1Reverse returns the currently active L1 reverse index snapshot.
+func (m *MemHop) getL1Reverse() *index.L1ReverseIndex { return m.l1Reverse.Load() }
 
 // Open creates or opens a MemHop database.
 // Config.EncoderAddr and Config.EmbedModel are required.
@@ -144,7 +155,7 @@ func (m *MemHop) buildSnapshot() (*storage.IndexSnapshotData, error) {
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrSerialization, "sparse index", err)
 	}
-	l1RevData, err := m.l1Reverse.Serialize()
+	l1RevData, err := m.getL1Reverse().Serialize()
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrSerialization, "l1 reverse index", err)
 	}
@@ -161,12 +172,12 @@ func (m *MemHop) buildSnapshot() (*storage.IndexSnapshotData, error) {
 func (m *MemHop) searchDeps() *search.SearchDeps {
 	return &search.SearchDeps{
 		SparseIndex:  m.sparseIndex,
-		L2Meta:       m.l2Meta,
+		L2Meta:       m.getL2Meta(),
 		VectorDim:    m.config.VectorDim,
 		Engine:       m.engine,
 		Encoder:      m.encoder,
 		Weights:      m.defaults.SearchWeights,
-		L1Reverse:    m.l1Reverse,
+		L1Reverse:    m.getL1Reverse(),
 		ProfileCache: &m.profileCache,
 	}
 }
@@ -225,13 +236,15 @@ func openWithEncoder(config *config.MemHopConfig, enc encoder.Encoder) (*MemHop,
 	}
 	l3C := index.NewAdjacencyCache(l3CacheMax)
 	l3Dt := index.NewDegreeTracker()
-	return &MemHop{
+	m := &MemHop{
 		engine: engine, config: config, defaults: dflt,
-		sparseIndex: sparseIdx, l2Meta: l2MetaIdx,
-		l1Reverse:  l1Rev,
-		sessionMgr: sm, encoder: enc,
+		sparseIndex: sparseIdx,
+		sessionMgr:  sm, encoder: enc,
 		l3Index: l3Idx, l3Cache: l3C, l3Degree: l3Dt,
-	}, nil
+	}
+	m.l2Meta.Store(l2MetaIdx)
+	m.l1Reverse.Store(l1Rev)
+	return m, nil
 }
 
 func createEncoder(config *config.MemHopConfig) (encoder.Encoder, error) {

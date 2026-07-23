@@ -8,9 +8,9 @@ package write
 import (
 	"encoding/json"
 
-	"memhop/internal/query/encoder"
 	"memhop/internal/core/index"
 	"memhop/internal/core/storage"
+	"memhop/internal/query/encoder"
 )
 
 // TargetLayer identifies which layer to import into.

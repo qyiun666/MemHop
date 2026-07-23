@@ -8,9 +8,9 @@ import (
 	"os"
 	"testing"
 
+	"memhop/internal/common/hash"
 	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
 )
 
 func TestTokenize(t *testing.T) {

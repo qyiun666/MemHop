@@ -6,12 +6,12 @@ package dream
 import (
 	"encoding/json"
 
+	"memhop/internal/common/hash"
+	"memhop/internal/common/mherrors"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/record"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/mherrors"
 )
 
 // RebuildL1FromL2 removes stale L1 SceneNodes whose L2 topics are gone or too deep.

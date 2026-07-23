@@ -57,13 +57,13 @@ type KnowledgeImportItem struct {
 
 // ImportResult is the response to an import request.
 type ImportResult struct {
-	Status         write.ImportStatus `json:"status"`
-	ID             *string            `json:"id,omitempty"`
-	IDs            []string           `json:"ids,omitempty"`
-	CreatedIDs     []string           `json:"created_ids"`
-	UpdatedIDs     []string           `json:"updated_ids"`
-	SkippedCount   int                `json:"skipped_count"`
+	Status         write.ImportStatus  `json:"status"`
+	ID             *string             `json:"id,omitempty"`
+	IDs            []string            `json:"ids,omitempty"`
+	CreatedIDs     []string            `json:"created_ids"`
+	UpdatedIDs     []string            `json:"updated_ids"`
+	SkippedCount   int                 `json:"skipped_count"`
 	Errors         []write.ImportError `json:"errors"`
-	KnowledgeTitle *string            `json:"knowledge_title,omitempty"`
-	NodeCount      int                `json:"node_count"`
+	KnowledgeTitle *string             `json:"knowledge_title,omitempty"`
+	NodeCount      int                 `json:"node_count"`
 }

@@ -12,17 +12,16 @@ import (
 	"sort"
 	"strings"
 
+	"memhop/internal/common/config"
+	"memhop/internal/common/hash"
+	"memhop/internal/common/mherrors"
 	"memhop/internal/common/numeric"
 	"memhop/internal/common/strutil"
-	"memhop/internal/common/config"
-	"memhop/internal/query/crud"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/record"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/mherrors"
-	"memhop/internal/common/timeutil"
+	"memhop/internal/query/crud"
 )
 
 // SearchContext orchestrates the search pipeline.
@@ -111,38 +110,13 @@ func searchNormal(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 	}
 	merged := RRFMerge3(bm25Results, vectorResults, entityResults, rrfK)
 
-	var filtered []index.ScoredDoc
-	if deps.Weights == nil {
-		// No channel weights configured: the RRF rank-fusion score is the
-		// final score. RRF scores are ranking scores (max ≈ 3/61), not
-		// similarities, so the absolute relevance threshold does not apply;
-		// results are truncated by rank (loadAndScoreContextsDepth1 honors limit).
-		filtered = merged
-	} else {
-		// Filter by minimum relevance threshold.
-		// Channel-weighted score formula:
-		//   score = BM25Weight*BM25_norm + VectorWeight*cosine_sim + EntityWeight*entity_score
-		// BM25_norm is the raw BM25 score normalized to [0,1] by this result
-		// set's maximum. Defaults: BM25Weight=0.45, VectorWeight=0.55, EntityWeight=1.0
-		// Threshold 0.30 means:
-		//   - Vector-only: need cosine >= 0.30/0.55 ≈ 0.55
-		//   - BM25-only: need BM25_norm >= 0.30/0.45 ≈ 0.67
-		//   - Combined: lower each channel's individual requirement
-		merged = applyChannelWeights(merged, bm25Results, vectorResults, entityResults, deps.Weights)
-		const minRelevanceScore = 0.30
-		for _, doc := range merged {
-			if doc.Score >= minRelevanceScore {
-				filtered = append(filtered, doc)
-			}
-		}
-	}
-
-	scored := loadAndScoreContextsDepth1(deps.Engine, filtered, limit)
+	// RRF scores are ranking scores (max ≈ 3/61), truncated by limit.
+	scored := loadAndScoreContextsDepth1(deps.Engine, merged, limit)
 	if len(scored) > 0 {
 		return buildSearchResult(q, deps, scored)
 	}
 
-	// No match above threshold → return empty result
+	// No match → return empty result
 	return emptyResult(), nil
 }
 
@@ -388,7 +362,7 @@ func getL1Previews(
 
 // createNewL2Context creates a new L2 topic + L4 archive from dialogue (auto_create path).
 func createNewL2Context(q SearchQuery, deps *SearchDeps) (*model.TopicSlot, error) {
-	nowMs := timeutil.NowMs()
+	nowMs := q.Timestamp
 
 	// Use LLM keywords when available, fall back to tokenizer
 	keywords := deps.PreprocessedKeywords
@@ -481,7 +455,7 @@ func storeQueryAsL4(q SearchQuery, deps *SearchDeps, topicID uint64) {
 		return
 	}
 	// Best-effort: store query as L4 archive; failure is non-critical.
-	_, _ = crud.AppendDialogueL4(deps.Engine, deps.SparseIndex, topicID, q.Text, 0, deps.PreprocessedKeywords)
+	_, _ = crud.AppendDialogueL4(deps.Engine, deps.SparseIndex, topicID, q.Text, 0, deps.PreprocessedKeywords, q.Timestamp)
 }
 
 // --- helpers ---
@@ -761,13 +735,12 @@ func float64Ptr(v float64) *float64 { return &v }
 
 // BoostSearchResults re-scores contexts by SCENE (not by individual topic).
 //
-// SceneScore = sum_of_topic_scores + activation_bonus
-// activation_bonus:
-//   - If ANY topic in the scene is activated → multiply by ActivationBoost
-//   - Else if the scene has the mostRecent topic → add RecentChatBonus
+// Additive scene bonus (v0.58 unified):
+//   - If ANY topic in the scene is activated → add ActivationBonus to each topic
+//   - Else if the scene has the mostRecent topic → add RecentChatBonus to each topic
 //   - Active takes priority; only one bonus can apply per scene.
 //
-// Contexts are then sorted: highest-score scene first, then by individual score within each scene.
+// Contexts are then sorted by final score descending.
 func BoostSearchResults(
 	result *SearchResult,
 	activeIDs []uint64,
@@ -782,24 +755,15 @@ func BoostSearchResults(
 		activeSet[id] = struct{}{}
 	}
 
-	applySceneBoost(result.Contexts, activeSet, mostRecent, weights)
-	applySceneBoost(result.AssociatedContexts, activeSet, mostRecent, weights)
-	sortSearchResults(result.Contexts)
-	sortSearchResults(result.AssociatedContexts)
+	applyAdditiveBoost(result.Contexts, activeSet, mostRecent, weights)
+	applyAdditiveBoost(result.AssociatedContexts, activeSet, mostRecent, weights)
+	sortByScore(result.Contexts)
+	sortByScore(result.AssociatedContexts)
 }
 
-// sceneGroup holds per-scene aggregate data for boosting.
-type sceneGroup struct {
-	sceneID      uint64
-	baseScore    float32
-	hasActivated bool
-	isRecent     bool
-	indices      []int // indices into the original contexts slice
-}
-
-// applySceneBoost groups contexts by scene, computes scene-level scores with bonuses,
-// then re-orders contexts so that higher-scoring scenes appear first.
-func applySceneBoost(
+// applyAdditiveBoost adds a fixed bonus to each topic's RetrievalScore based on
+// scene-level activation state. Mutual exclusion: active takes priority over recent.
+func applyAdditiveBoost(
 	contexts []ContextResult,
 	activeSet map[uint64]struct{},
 	mostRecent *uint64,
@@ -809,8 +773,12 @@ func applySceneBoost(
 		return
 	}
 
-	// Step 1: Group by scene, compute base scores and per-scene metadata.
-	sceneMap := make(map[uint64]*sceneGroup)
+	// Step 1: Determine per-scene activation state.
+	type sceneState struct {
+		hasActivated bool
+		isRecent     bool
+	}
+	sceneMap := make(map[uint64]*sceneState)
 	for i := range contexts {
 		ctx := &contexts[i]
 		ctxHash, err := hash.ParseID(ctx.ID)
@@ -821,119 +789,39 @@ func applySceneBoost(
 		if err != nil {
 			continue
 		}
-
-		sg, exists := sceneMap[sceneHash]
+		ss, exists := sceneMap[sceneHash]
 		if !exists {
-			sg = &sceneGroup{sceneID: sceneHash}
-			sceneMap[sceneHash] = sg
+			ss = &sceneState{}
+			sceneMap[sceneHash] = ss
 		}
-		sg.baseScore += ctx.RetrievalScore
-		sg.indices = append(sg.indices, i)
 		if _, ok := activeSet[ctxHash]; ok {
-			sg.hasActivated = true
+			ss.hasActivated = true
 		}
 		if mostRecent != nil && *mostRecent == ctxHash {
-			sg.isRecent = true
+			ss.isRecent = true
 		}
 	}
 
-	// Step 2: Compute per-scene final score with bonuses.
-	type sceneScore struct {
-		sceneID uint64
-		total   float32
+	// Step 2: Apply additive bonus per topic.
+	for i := range contexts {
+		sceneHash, err := hash.ParseID(contexts[i].SceneID)
+		if err != nil {
+			continue
+		}
+		ss := sceneMap[sceneHash]
+		if ss == nil {
+			continue
+		}
+		if ss.hasActivated {
+			contexts[i].RetrievalScore += weights.ActivationBonus
+		} else if ss.isRecent {
+			contexts[i].RetrievalScore += weights.RecentChatBonus
+		}
 	}
-	scenes := make([]sceneScore, 0, len(sceneMap))
-	for _, sg := range sceneMap {
-		total := sg.baseScore
-		if sg.hasActivated && weights.ActivationBoost > 0 {
-			// Active takes priority: multiplicative boost on the scene total
-			total *= weights.ActivationBoost
-		} else if sg.isRecent {
-			// Recent chat bonus: additive
-			total += weights.RecentChatBonus
-		}
-		// Clamp
-		if total > 1.0 {
-			total = 1.0
-		}
-		if total < 0.0 {
-			total = 0.0
-		}
-		scenes = append(scenes, sceneScore{sg.sceneID, total})
-	}
+}
 
-	// Step 3: Sort scenes by total score descending.
-	sort.Slice(scenes, func(i, j int) bool {
-		return scenes[i].total > scenes[j].total
+func sortByScore(contexts []ContextResult) {
+	sort.Slice(contexts, func(i, j int) bool {
+		return contexts[i].RetrievalScore > contexts[j].RetrievalScore
 	})
-
-	// Step 4: Re-order contexts: scenes sorted by score, topics sorted within each scene.
-	reordered := make([]ContextResult, 0, len(contexts))
-	for _, sc := range scenes {
-		sg := sceneMap[sc.sceneID]
-		// Sort topics within this scene by individual score descending
-		sort.Slice(sg.indices, func(a, b int) bool {
-			return contexts[sg.indices[a]].RetrievalScore > contexts[sg.indices[b]].RetrievalScore
-		})
-		for _, idx := range sg.indices {
-			reordered = append(reordered, contexts[idx])
-		}
-	}
-	copy(contexts, reordered)
 }
-
-func sortSearchResults(contexts []ContextResult) {
-	// Already sorted by scene during applySceneBoost.
-	// No additional top-level sort needed.
-}
-
-// applyChannelWeights re-scores RRF results using per-channel weights from config.
-// Raw BM25 scores are unbounded, so they are normalized to [0,1] by the
-// maximum BM25 score in this result set (a max of 0 leaves them at 0);
-// vector (cosine ≤ 1) and entity scores are used as-is.
-func applyChannelWeights(
-	merged []index.ScoredDoc,
-	bm25, vector, entity []index.ScoredDoc,
-	w *config.SearchWeights,
-) []index.ScoredDoc {
-	if w == nil {
-		return merged
-	}
-	bw, vw, ew := w.BM25Weight, w.VectorWeight, w.EntityWeight
-	if bw == 0 && vw == 0 && ew == 0 {
-		return merged
-	}
-	bm25Max := float32(0)
-	for _, d := range bm25 {
-		if d.Score > bm25Max {
-			bm25Max = d.Score
-		}
-	}
-	bm25Scores := buildDocScoreMap(bm25)
-	vectorScores := buildDocScoreMap(vector)
-	entityScores := buildDocScoreMap(entity)
-	for i, doc := range merged {
-		bm25Norm := float32(0)
-		if bm25Max > 0 {
-			bm25Norm = bm25Scores[doc.IDHash] / bm25Max
-		}
-		merged[i].Score = bw*bm25Norm +
-			vw*vectorScores[doc.IDHash] +
-			ew*entityScores[doc.IDHash]
-	}
-	sort.Slice(merged, func(i, j int) bool {
-		return merged[i].Score > merged[j].Score
-	})
-	return merged
-}
-
-// buildDocScoreMap creates a map from doc ID to its original channel score.
-func buildDocScoreMap(docs []index.ScoredDoc) map[uint64]float32 {
-	m := make(map[uint64]float32, len(docs))
-	for _, d := range docs {
-		m[d.IDHash] = d.Score
-	}
-	return m
-}
-
-// boostContexts applies activation_boost (multiplicative) and recent_chat_bonus to matching contexts.

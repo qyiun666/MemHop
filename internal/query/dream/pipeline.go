@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"memhop/internal/common/config"
-	"memhop/internal/query/encoder"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
+	"memhop/internal/query/encoder"
 )
 
 // PipelineResult holds the output of RunPipeline.
@@ -21,6 +21,15 @@ type PipelineResult struct {
 	Report    *DreamReport
 	L2Meta    *index.L2MetaIndex
 	L1Reverse *index.L1ReverseIndex
+}
+
+// RunOptions collects tunable knobs for one Dream pipeline invocation.
+// All fields are optional; the zero value matches historical defaults.
+type RunOptions struct {
+	// SkipDistill disables the L0 emotion/MBTI distill stage. When true the
+	// l0_distill StageReport is still appended (Status="skipped", Description=
+	// "disabled by RunOptions") so DreamReport.Stages length stays fixed at 5.
+	SkipDistill bool
 }
 
 // DreamReport holds the results of a dream pipeline run.
@@ -33,6 +42,8 @@ type DreamReport struct {
 	L1PrunedEdges     uint32        `json:"l1_pruned_edges"`
 	L1RemovedNodes    uint32        `json:"l1_removed_nodes"`
 	L1RemovedEdges    uint32        `json:"l1_removed_edges"`
+	L0Distilled       bool          `json:"l0_distilled"`
+	MBTIType          string        `json:"mbti_type,omitempty"`
 	Stages            []StageReport `json:"stages"`
 }
 
@@ -47,17 +58,22 @@ type StageReport struct {
 }
 
 // DreamPipeline runs the full consolidated dream pipeline.
+// chat is optional: when non-nil the l0_distill stage derives emotion/MBTI
+// from the L1 network via LLM; when nil (or opts.SkipDistill is true) the
+// stage is skipped.
 func DreamPipeline(
 	engine *storage.StorageEngine,
 	sparseIdx *index.SparseIndex,
 	llm LlmProvider,
+	chat ChatProvider,
 	l2IDs []uint64,
 	decayCfg *config.DecayConfig,
 	l2Meta *index.L2MetaIndex,
 	enc encoder.Encoder,
+	opts RunOptions,
 ) (*DreamReport, error) {
 	targetIDs := resolveTargetIDs(l2IDs, engine)
-	stages := make([]StageReport, 0, 4)
+	stages := make([]StageReport, 0, 5)
 
 	// Phase 1: collect data + LLM call.
 	input := buildConsolidationInput(engine, l2Meta, targetIDs)
@@ -73,6 +89,7 @@ func DreamPipeline(
 	stages = rebuildL1Stage(engine, sparseIdx, l2Meta, decayParams, stages, &metrics)
 	stages = decayL1Stage(engine, sparseIdx, decayParams, l2Meta, stages, &metrics)
 	stages = profileL0Stage(engine, sparseIdx, stages)
+	stages = distillL0Stage(engine, chat, opts.SkipDistill, stages, &metrics)
 
 	report := buildDreamReport(stages, &metrics)
 	return report, nil
@@ -85,12 +102,14 @@ func RunPipeline(
 	engine *storage.StorageEngine,
 	sparseIdx *index.SparseIndex,
 	llm LlmProvider,
+	chat ChatProvider,
 	l2IDs []uint64,
 	decayCfg *config.DecayConfig,
 	l2Meta *index.L2MetaIndex,
 	enc encoder.Encoder,
+	opts RunOptions,
 ) (*PipelineResult, error) {
-	report, err := DreamPipeline(engine, sparseIdx, llm, l2IDs, decayCfg, l2Meta, enc)
+	report, err := DreamPipeline(engine, sparseIdx, llm, chat, l2IDs, decayCfg, l2Meta, enc, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -111,6 +130,7 @@ type pipelineMetrics struct {
 	l1RemovedNodes uint32
 	l1RemovedEdges uint32
 	l1Updated      uint32
+	l0Distill      *L0DistillReport
 }
 
 func resolveTargetIDs(l2IDs []uint64, engine *storage.StorageEngine) map[uint64]bool {
@@ -205,7 +225,10 @@ func applyL2Stage(
 		})
 	}
 	if out.L2Groups.Status != SectionValid {
-		return stages
+		return append(stages, StageReport{
+			Name: "l2_compress", Status: "skipped",
+			Description: "no L2 groups from LLM",
+		})
 	}
 	start := time.Now()
 	cr, err := ApplyL2Groups(out.L2Groups.Value, engine, sparseIdx, l2Meta, enc)
@@ -289,10 +312,58 @@ func profileL0Stage(
 	})
 }
 
+// distillL0Stage derives emotion + MBTI from the L1 network via LLM and merges
+// the result into the L0 ProfileSlot. Non-fatal: any failure is reported
+// per-stage while the rest of the pipeline continues.
+// When skip is true the stage records a `skipped` StageReport without calling
+// the LLM (caller opted out via RunOptions.SkipDistill).
+func distillL0Stage(
+	engine *storage.StorageEngine,
+	chat ChatProvider,
+	skip bool,
+	stages []StageReport,
+	m *pipelineMetrics,
+) []StageReport {
+	start := time.Now()
+	if skip {
+		return append(stages, StageReport{
+			Name: "l0_distill", Status: "skipped",
+			Description: "disabled by RunOptions",
+			DurationMs:  time.Since(start).Milliseconds(),
+		})
+	}
+	if chat == nil {
+		return append(stages, StageReport{
+			Name: "l0_distill", Status: "skipped",
+			Description: "ChatProvider not configured",
+			DurationMs:  time.Since(start).Milliseconds(),
+		})
+	}
+	rep, err := DistillL0(engine, chat)
+	elapsed := time.Since(start).Milliseconds()
+	if err != nil {
+		return append(stages, failStage("l0_distill", "L0 distill failed", elapsed, err))
+	}
+	m.l0Distill = rep
+	if rep.SampledCount == 0 {
+		return append(stages, StageReport{
+			Name: "l0_distill", Status: "skipped",
+			Description: "no L1 samples available",
+			DurationMs:  elapsed,
+		})
+	}
+	return append(stages, StageReport{
+		Name: "l0_distill", Status: "success",
+		Description: fmt.Sprintf("sampled=%d/%d mbti=%s l1_backfilled=%d",
+			rep.SampledCount, rep.TotalL1Count, rep.MBTIType, rep.L1Backfilled),
+		ProcessedCount: rep.SampledCount, DurationMs: elapsed,
+	})
+}
+
 func buildDreamReport(stages []StageReport, m *pipelineMetrics) *DreamReport {
 	consolidated := m.l2Affected +
 		m.l1Decayed + m.l1PrunedEdges + m.l1RemovedNodes + m.l1RemovedEdges + m.l1Updated
-	return &DreamReport{
+	report := &DreamReport{
 		ConsolidatedCount: consolidated,
 		NewL3Nodes:        0,
 		NewCrystals:       0,
@@ -303,6 +374,11 @@ func buildDreamReport(stages []StageReport, m *pipelineMetrics) *DreamReport {
 		L1RemovedEdges:    m.l1RemovedEdges,
 		Stages:            stages,
 	}
+	if m.l0Distill != nil && m.l0Distill.SampledCount > 0 {
+		report.L0Distilled = true
+		report.MBTIType = m.l0Distill.MBTIType
+	}
+	return report
 }
 
 func failStage(name, desc string, elapsed int64, err error) StageReport {

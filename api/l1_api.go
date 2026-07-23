@@ -4,8 +4,8 @@
 package memhop
 
 import (
-	"memhop/internal/query/crud"
 	"memhop/internal/common/mherrors"
+	"memhop/internal/query/crud"
 )
 
 // GetL1Graph returns the full L1 layer graph (nodes + edges) for visualization.

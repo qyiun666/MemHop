@@ -6,11 +6,11 @@
 package search
 
 import (
-	"memhop/internal/query/crud"
-	"memhop/internal/query/encoder"
+	"memhop/internal/common/config"
 	"memhop/internal/core/index"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/config"
+	"memhop/internal/query/crud"
+	"memhop/internal/query/encoder"
 )
 
 // RequestSource records who initiated an API request.
@@ -31,24 +31,22 @@ type SearchQuery struct {
 	DirectedL2ID *string `json:"directed_l2_id,omitempty"`
 	DirectedL3ID *string `json:"directed_l3_id,omitempty"`
 	AutoCreate   bool    `json:"auto_create,omitempty"`
+	Timestamp    int64   `json:"timestamp"`
 }
 
-// DefaultMaxResults returns the default max results when not specified.
-func DefaultMaxResults() int { return 20 }
-
-// EffectiveMaxResults returns MaxResults if set, otherwise the default.
+// EffectiveMaxResults returns MaxResults if set, otherwise 20.
 func (q SearchQuery) EffectiveMaxResults() int {
 	if q.MaxResults > 0 {
 		return q.MaxResults
 	}
-	return DefaultMaxResults()
+	return 20
 }
 
 // SearchDefaults holds default configuration for the search pipeline.
 type SearchDefaults struct {
 	MaxResults      int
 	DefaultRRFK     float32
-	ActivationBoost float32
+	ActivationBonus float32
 	RecentChatBonus float32
 }
 
@@ -56,8 +54,8 @@ type SearchDefaults struct {
 var DefaultSearchConfig = SearchDefaults{
 	MaxResults:      20,
 	DefaultRRFK:     60.0,
-	ActivationBoost: 1.2,
-	RecentChatBonus: 0.1,
+	ActivationBonus: 0.02,
+	RecentChatBonus: 0.01,
 }
 
 // L1Preview is a lightweight L1 node summary for agent decision-making.
@@ -81,9 +79,9 @@ type L3Preview struct {
 
 // SearchResult is the top-level search response.
 type SearchResult struct {
-	Profile            ProfileResult      `json:"profile"`
-	Contexts           []ContextResult    `json:"contexts"`
-	AssociatedContexts []ContextResult    `json:"associated_contexts"`
+	Profile            ProfileResult         `json:"profile"`
+	Contexts           []ContextResult       `json:"contexts"`
+	AssociatedContexts []ContextResult       `json:"associated_contexts"`
 	Crystals           []crud.CrystalSummary `json:"crystals"`
 }
 
@@ -120,19 +118,15 @@ type ProfileResult struct {
 	UpdatedAt       int64             `json:"updated_at"`
 }
 
-
-
-
-
 // SearchDeps holds all dependencies injected into the search pipeline.
 type SearchDeps struct {
-	SparseIndex        *index.SparseIndex
-	L2Meta             *index.L2MetaIndex
-	VectorDim          int
-	Engine             *storage.StorageEngine
-	Encoder            encoder.Encoder
-	Weights            *config.SearchWeights
-	L1Reverse          *index.L1ReverseIndex
+	SparseIndex          *index.SparseIndex
+	L2Meta               *index.L2MetaIndex
+	VectorDim            int
+	Engine               *storage.StorageEngine
+	Encoder              encoder.Encoder
+	Weights              *config.SearchWeights
+	L1Reverse            *index.L1ReverseIndex
 	PreprocessedKeywords []string
-	ProfileCache       **ProfileResult // &MemHop.profileCache for caching; nil = no cache
+	ProfileCache         **ProfileResult // &MemHop.profileCache for caching; nil = no cache
 }

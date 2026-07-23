@@ -29,7 +29,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 ### Go (current)
 
 ```go
-import "github.com/qyiun666/memhop/memhop"
+import "memhop/api"
 
 db, err := memhop.Open(&memhop.Config{
     DBPath:      "agent.meh",
@@ -64,6 +64,11 @@ for _, ctx := range results.Contexts {
 report, err := db.Dream(nil)
 fmt.Printf("dream stages: %d\n", report.ConsolidatedCount)
 ```
+
+> **APIURL forms** — `LlmConfig.APIURL` accepts a base URL
+> (`https://api.deepseek.com`), an API root (`https://api.openai.com/v1`),
+> or the full endpoint (`https://api.deepseek.com/v1/chat/completions`); all
+> three are normalized to `/v1/chat/completions` at construction.
 
 <details>
 <summary>Rust version (v0.18 – v0.61)</summary>
@@ -175,11 +180,72 @@ MemHop uses **two-channel retrieval fusion** (BM25 + vector) with RRF (Reciproca
 | BM25 | 0.45 | Keyword matching via inverted index (gojieba/gse CJK tokenization) |
 | Vector | 0.55 | Semantic similarity with f16 half-precision via Ollama HTTP API |
 
+## Benchmarks
+
+### LOCOMO10 Retrieval Benchmark
+
+Tested on [LOCOMO10](https://github.com/snap-research/LOCOMO) (ACL 2024) dataset:
+- **Engine**: MemHop Go v0.57+, Ollama bge-m3 (1024d, Q4_K_M)
+- **Search**: Pure retrieval mode (AutoCreate=false, no DirectedL2ID/DirectedL3ID, tokenizer keywords)
+- **Storage**: 419 turns, 1 full conversation via Search+AutoCreate
+- **Queries**: 199 LOCOMO QA questions (categories 1-5: single-hop, multi-hop, open-domain, temporal, abstention)
+
+| Metric | Result |
+|--------|--------|
+| Recall@1 | **100.0%** (199/199) |
+| Recall@3 | **99.0%** (197/199) |
+| Recall@5 | **98.5%** (196/199) |
+| Avg Top-1 Score | 0.7094 |
+| P50 Latency | 877ms |
+| P95 Latency | 1.239s |
+| Storage Throughput | 0.9 turns/s |
+
+**By Category:**
+
+| Category | Recall@1 | Recall@3 |
+|----------|----------|----------|
+| Single-hop | 100.0% (32/32) | 100.0% (32/32) |
+| Multi-hop | 100.0% (37/37) | 100.0% (37/37) |
+| Open-domain | 100.0% (13/13) | 100.0% (13/13) |
+| Temporal | 100.0% (70/70) | 98.6% (69/70) |
+| Abstention | 100.0% (47/47) | 97.9% (46/47) |
+
+> **Note**: Recall@k is a retrieval-only metric (did the search return relevant contexts?).
+> End-to-end QA Accuracy requires an additional LLM step to answer from retrieved context
+> and is NOT directly comparable.
+> Full 10-conversation run (1986 QA queries) omitted due to Ollama encode latency (~2s/call).
+
+### 2026 Memory System Comparison
+
+| System | GitHub Stars | LOCOMO | LongMemEval | Recall@5 | P95 Latency | Deploy | Language |
+|--------|-------------|--------|-------------|----------|-------------|--------|----------|
+| ZeroMemory | ~200 | **96.1%** | — | — | — | Embedded | — |
+| MemoryLake | ~500 | **94.03%** | — | — | — | SaaS/OSS | Python |
+| Zep/Graphiti | ~5k | **94.7%*** | **90.2%** | — | **0.63s** | Go core | Go/Python |
+| **MemHop (R@k)** | — | — | — | **98.5%*** | **1.24s** | **Embedded Go** | **Go** |
+| Mem0 2026 | ~51k | **92.5%** | **93.4%** | — | 1.44s | SaaS/OSS | Python |
+| Hindsight | ~800 | **92.0%** | **94.6%** | — | — | OSS/MCP | Python |
+| EverMemOS | ~300 | **92.32%** | — | — | — | OSS | Python |
+| ByteRover | ~100 | **92.2%** | **92.8%** | — | 1.6s | SaaS | — |
+| Dakera | ~500 | **87.8%** | — | — | — | Self-host | Rust+Go SDK |
+| MemMachine | ~1.5k | **84.87%** | — | — | — | OSS | Python |
+| Cognee | ~28k | **80.3%** | — | — | — | OSS | Python |
+| Letta | ~13k | — | — | — | — | OSS | Python |
+| agentmemory | ~20k | — | — | **95.2%** | — | Embedded TS | TypeScript |
+| MemPalace | ~41k* | — | — | **96.6%** | — | Local | JS/TS |
+| engram | ~150 | — | — | — | — | Embedded Go | Go |
+| OMEGA | ~300 | — | — | — | **<50ms** | Local MCP | Python |
+| LangMem | ~500 | **58.1%** | — | — | — | Embedded | Python |
+
+> \* Zep LOCOMO self-reported. MemPalace stars disputed (bot inflation).
+> MemHop Recall@5 is retrieval-only, NOT comparable with end-to-end LOCOMO Accuracy.
+> MemoryLake tested full-context baseline at 91.21%, suggesting near-saturation for this benchmark.
+
 ## Development
 
 ```bash
-go build ./memhop/...          # Build
-go test ./memhop/...           # Unit tests
+go build ./api/... ./internal/...          # Build
+go test ./api/... ./internal/...           # Unit tests
 go test ./test/...             # Integration tests (requires Ollama)
 go vet ./...                   # Static analysis
 

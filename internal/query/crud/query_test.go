@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"memhop/internal/common/hash"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
 )
 
 func createTestEngine(t *testing.T) *storage.StorageEngine {
@@ -75,7 +75,7 @@ func TestL2CRUD(t *testing.T) {
 
 	// Update
 	newKws := []string{"Updated title"}
-	detail, err := UpdateL2(engine, sparse, hexID, UpdateL2Fields{UserKeywords: newKws})
+	detail, err := UpdateL2(engine, sparse, hexID, UpdateL2Fields{UserKeywords: newKws}, 1000000)
 	if err != nil {
 		t.Fatalf("update l2: %v", err)
 	}
@@ -101,8 +101,6 @@ func TestL2CRUD(t *testing.T) {
 		t.Error("expected error after delete")
 	}
 }
-
-
 
 func TestL3CRUD(t *testing.T) {
 	engine := createTestEngine(t)

@@ -7,13 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"memhop/internal/query/encoder"
+	"memhop/internal/common/hash"
+	"memhop/internal/common/timeutil"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/record"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/timeutil"
+	"memhop/internal/query/encoder"
 )
 
 // CompressResult holds L2 compression metrics.

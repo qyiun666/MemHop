@@ -8,10 +8,10 @@ package search
 import (
 	"encoding/json"
 
+	"memhop/internal/common/hash"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
 )
 
 // BuildCandidateSet returns L2 IDs for scoped search.
@@ -51,8 +51,6 @@ func BuildCandidateSet(
 	}
 	return set
 }
-
-
 
 // ============================================================================
 // L1 Associated Contexts & Previews (public API)

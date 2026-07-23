@@ -4,8 +4,8 @@
 package memhop
 
 import (
-	"memhop/internal/query/search"
 	"memhop/internal/common/mherrors"
+	"memhop/internal/query/search"
 )
 
 // Search runs the full search pipeline and returns matching contexts.
@@ -18,5 +18,3 @@ func (m *MemHop) Search(q search.SearchQuery) (*search.SearchResult, error) {
 	}
 	return search.RunSearch(q, m.searchDeps(), m.sessionMgr, &m.config.LLM, m.defaults)
 }
-
-

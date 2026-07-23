@@ -4,8 +4,8 @@
 package memhop
 
 import (
-	"memhop/internal/query/crud"
 	"memhop/internal/common/mherrors"
+	"memhop/internal/query/crud"
 )
 
 // QueryArchives searches L4 archives with filters.

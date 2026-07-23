@@ -6,11 +6,11 @@
 package memhop
 
 import (
-	l3 "memhop/internal/query/graph"
-	"memhop/internal/core/model"
-	"memhop/internal/query/crud"
 	"memhop/internal/common/hash"
 	"memhop/internal/common/mherrors"
+	"memhop/internal/core/model"
+	"memhop/internal/query/crud"
+	l3 "memhop/internal/query/graph"
 	"memhop/internal/query/graph/dsl"
 )
 
@@ -215,4 +215,3 @@ func (m *MemHop) DSLQuery(dslStr string) (*dsl.QueryResult, error) {
 func IsDSLQuery(input string) bool {
 	return l3.IsDSLQuery(input)
 }
-

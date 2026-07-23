@@ -1,3 +1,5 @@
+//go:build integration
+
 package test
 
 import (
@@ -331,8 +333,4 @@ func TestOpen(t *testing.T) {
 
 	t.Log("")
 	t.Log("✓ 全流程测试完成 — 所有迭代数据一致性验证通过")
-}
-
-func strPtr(s string) *string {
-	return &s
 }

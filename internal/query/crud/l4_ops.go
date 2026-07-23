@@ -11,13 +11,12 @@ import (
 	"sort"
 	"strings"
 
+	"memhop/internal/common/hash"
+	"memhop/internal/common/mherrors"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/record"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/timeutil"
-	"memhop/internal/common/mherrors"
 )
 
 // QueryArchives searches L4 archives with filters.
@@ -161,6 +160,7 @@ func ToArchiveDTO(arc *model.ArchiveSlot) Archive {
 
 // AppendDialogueL4 creates an L4 archive and appends it to a topic's L4Refs.
 // role: 0=user, 1=agent. Updates UserL4Refs or AgentL4Refs accordingly.
+// timestamp is the message timestamp in milliseconds; it replaces the internally-generated time.
 func AppendDialogueL4(
 	engine *storage.StorageEngine,
 	sparseIdx *index.SparseIndex,
@@ -168,12 +168,13 @@ func AppendDialogueL4(
 	text string,
 	role uint8,
 	keywords []string,
+	timestamp int64,
 ) (uint64, error) {
 	if text == "" {
 		return 0, mherrors.NewError(mherrors.ErrInvalidQuery, "cannot append empty dialogue as L4", nil)
 	}
 
-	nowMs := timeutil.NowMs()
+	nowMs := timestamp
 
 	// Create L4 archive
 	archiveIDStr := fmt.Sprintf("msg_%d_%d", nowMs, topicID)

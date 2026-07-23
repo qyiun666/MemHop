@@ -6,16 +6,15 @@ package dream
 import (
 	"encoding/json"
 	"math"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"memhop/internal/common/config"
+	"memhop/internal/common/hash"
+	"memhop/internal/common/timeutil"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/timeutil"
 )
 
 // ============================================================================
@@ -550,10 +549,7 @@ func TestPipelineStageFailure(t *testing.T) {
 
 	mockLLM := &MockLlmProvider{
 		Output: &ConsolidationOutput{
-			L2Groups:      NewEmptySection[[]L2Group](),
-			L3Extractions: NewEmptySection[[]L3Extraction](),
-			Habits:        NewEmptySection[HabitAnalysis](),
-			Crystals:      NewEmptySection[[]CrystalDef](),
+			L2Groups: NewEmptySection[[]L2Group](),
 		},
 	}
 
@@ -566,7 +562,7 @@ func TestPipelineStageFailure(t *testing.T) {
 		MinEdgeNodes:            2,
 	}
 
-	report, err := DreamPipeline(engine, sparseIdx, mockLLM, nil, decayCfg, l2Meta, nil)
+	report, err := DreamPipeline(engine, sparseIdx, mockLLM, nil, nil, decayCfg, l2Meta, nil, RunOptions{})
 	if err != nil {
 		t.Fatalf("DreamPipeline: %v", err)
 	}
@@ -618,24 +614,6 @@ func TestDreamPipelineEndToEnd(t *testing.T) {
 				MergedTitle:   "Test Merge",
 				MergedSummary: "Merged summary for end-to-end test",
 			}}),
-			L3Extractions: NewValidSection([]L3Extraction{{
-				ContextID: id1,
-				Concepts: []LlmConcept{
-					{Name: "Go", NodeType: "language", Description: "Go programming language"},
-				},
-				Relations: []LlmRelation{},
-			}}),
-			Habits: NewValidSection(HabitAnalysis{
-				Lexicon:         map[string]string{"golang": "Go language"},
-				StyleTraits:     []string{"technical"},
-				EmotionPatterns: map[string]string{},
-			}),
-			Crystals: NewValidSection([]CrystalDef{{
-				Condition:  "user_asks == true",
-				Action:     "provide_answer",
-				Steps:      []CrystalStep{{Action: "search", Parameters: nil}},
-				Confidence: 0.8,
-			}}),
 		},
 	}
 
@@ -648,19 +626,19 @@ func TestDreamPipelineEndToEnd(t *testing.T) {
 		MinEdgeNodes:            2,
 	}
 
-	report, err := DreamPipeline(engine, sparseIdx, mockLLM, []uint64{id1, id2}, decayCfg, l2Meta, nil)
+	report, err := DreamPipeline(engine, sparseIdx, mockLLM, nil, []uint64{id1, id2}, decayCfg, l2Meta, nil, RunOptions{})
 	if err != nil {
 		t.Fatalf("DreamPipeline: %v", err)
 	}
 
-	// Check stage count (l2_compress, l1_rebuild, l1_decay, l0_profile)
+	// Check stage count (l2_compress, l1_rebuild, l1_decay, l0_profile, l0_distill)
 	if len(report.Stages) < 4 {
 		t.Errorf("Stages count = %d, want >= 4", len(report.Stages))
 	}
 
 	// All stages should succeed
 	for _, s := range report.Stages {
-		if s.Status != "success" {
+		if s.Status != "success" && s.Status != "skipped" {
 			t.Errorf("stage %q status = %q, want success (error: %s)", s.Name, s.Status, s.Error)
 		}
 	}
@@ -685,10 +663,7 @@ func TestDreamReport(t *testing.T) {
 
 	mockLLM := &MockLlmProvider{
 		Output: &ConsolidationOutput{
-			L2Groups:      NewEmptySection[[]L2Group](),
-			L3Extractions: NewEmptySection[[]L3Extraction](),
-			Habits:        NewEmptySection[HabitAnalysis](),
-			Crystals:      NewEmptySection[[]CrystalDef](),
+			L2Groups: NewEmptySection[[]L2Group](),
 		},
 	}
 
@@ -701,7 +676,7 @@ func TestDreamReport(t *testing.T) {
 		MinEdgeNodes:            2,
 	}
 
-	report, err := DreamPipeline(engine, sparseIdx, mockLLM, nil, decayCfg, l2Meta, nil)
+	report, err := DreamPipeline(engine, sparseIdx, mockLLM, nil, nil, decayCfg, l2Meta, nil, RunOptions{})
 	if err != nil {
 		t.Fatalf("DreamPipeline: %v", err)
 	}
@@ -712,24 +687,31 @@ func TestDreamReport(t *testing.T) {
 	}
 
 	// Check that all expected stages are present
-	stageNames := make(map[string]bool)
+	stageNames := make(map[string]string) // name -> status
 	for _, s := range report.Stages {
-		stageNames[s.Name] = true
+		stageNames[s.Name] = s.Status
 	}
-	// Check that non-LLM stages are always present
+	// Check that non-LLM stages are always present.
 	expectedStages := []string{
 		"l1_rebuild", "l1_decay", "l0_profile",
 	}
 	for _, name := range expectedStages {
-		if !stageNames[name] {
+		if _, ok := stageNames[name]; !ok {
 			t.Errorf("missing stage: %s", name)
 		}
 	}
-	// LLM-dependent stages are skipped when sections are Empty
+	// LLM-dependent stages are marked as skipped (with Status="skipped")
+	// when sections are Empty; the stage entry is still appended so Stages
+	// length remains a stable contract.
 	skippedStages := []string{"l2_compress"}
 	for _, name := range skippedStages {
-		if stageNames[name] {
-			t.Errorf("stage %q should be skipped for empty sections", name)
+		status, ok := stageNames[name]
+		if !ok {
+			t.Errorf("missing stage: %s (expected skipped entry)", name)
+			continue
+		}
+		if status != "skipped" {
+			t.Errorf("stage %s: status = %q, want %q", name, status, "skipped")
 		}
 	}
 }
@@ -769,43 +751,3 @@ func TestSectionHelpers(t *testing.T) {
 		t.Error("failed section should need retry")
 	}
 }
-
-func TestPruneLowQualityCrystals(t *testing.T) {
-	engine := createTestEngine(t)
-	nowMs := timeutil.NowMs()
-
-	// Low quality chain: should be pruned
-	lowChain := &model.ActionChainSlot{
-		IDHash: 1001, Title: "low", Trigger: "test",
-		Status: model.ChainDraft, Confidence: 0.2, TriggerCount: 2,
-		CreatedAt: nowMs, UpdatedAt: nowMs, Version: 1,
-	}
-	data, _ := json.Marshal(lowChain)
-	_, _ = engine.WriteRecord(storage.RecL5ActionChain, 1001, data)
-
-	// High quality chain: should survive
-	highChain := &model.ActionChainSlot{
-		IDHash: 1002, Title: "high", Trigger: "test",
-		Status: model.ChainDraft, Confidence: 0.9, TriggerCount: 10,
-		CreatedAt: nowMs, UpdatedAt: nowMs, Version: 1,
-	}
-	data, _ = json.Marshal(highChain)
-	_, _ = engine.WriteRecord(storage.RecL5ActionChain, 1002, data)
-
-	pruned, err := PruneLowQualityCrystals(engine)
-	if err != nil {
-		t.Fatalf("PruneLowQualityCrystals: %v", err)
-	}
-	if len(pruned) != 1 {
-		t.Errorf("pruned count = %d, want 1", len(pruned))
-	}
-	if engine.Contains(1001) {
-		t.Error("low quality chain should be pruned")
-	}
-	if !engine.Contains(1002) {
-		t.Error("high quality chain should survive")
-	}
-}
-
-// suppress unused import
-var _ = os.DevNull

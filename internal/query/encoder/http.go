@@ -19,10 +19,10 @@ import (
 )
 
 const (
-	defaultEmbedModel     = "nomic-embed-text"
-	healthCheckTimeout    = 5 * time.Second
-	encodeTimeout         = 20 * time.Second
-	healthCheckTTL        = 5 * time.Second // IsAvailable cache TTL
+	defaultEmbedModel  = "nomic-embed-text"
+	healthCheckTimeout = 5 * time.Second
+	encodeTimeout      = 20 * time.Second
+	healthCheckTTL     = 5 * time.Second // IsAvailable cache TTL
 	// maxResponseBodyBytes caps response bodies read from the encoder service.
 	maxResponseBodyBytes = 64 << 20 // 64MB
 )
@@ -35,10 +35,10 @@ type HttpEncoder struct {
 	httpClient *http.Client
 
 	// TTL cache for IsAvailable
-	healthMu    sync.Mutex
-	lastCheck   time.Time
-	lastResult  bool
-	healthTTL   time.Duration
+	healthMu   sync.Mutex
+	lastCheck  time.Time
+	lastResult bool
+	healthTTL  time.Duration
 }
 
 // --- HTTP request / response types ---

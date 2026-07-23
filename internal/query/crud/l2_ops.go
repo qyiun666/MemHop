@@ -10,13 +10,13 @@ import (
 	"sort"
 	"strings"
 
+	"memhop/internal/common/hash"
+	"memhop/internal/common/mherrors"
+	"memhop/internal/common/timeutil"
 	"memhop/internal/core/index"
 	"memhop/internal/core/model"
 	"memhop/internal/core/record"
 	"memhop/internal/core/storage"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/timeutil"
-	"memhop/internal/common/mherrors"
 )
 
 // GetL2 loads a single L2 context by hex ID.
@@ -54,6 +54,7 @@ func UpdateL2(
 	sparse *index.SparseIndex,
 	id string,
 	fields UpdateL2Fields,
+	timestamp int64,
 ) (*TopicDetail, error) {
 	idHash, err := hash.ParseID(id)
 	if err != nil {
@@ -67,7 +68,7 @@ func UpdateL2(
 	if indexChanged {
 		ReindexTopic(sparse, ctx)
 	}
-	ctx.UpdatedAt = timeutil.NowMs()
+	ctx.UpdatedAt = timestamp
 	ctx.Version++
 	if err := WriteTopic(engine, idHash, ctx); err != nil {
 		return nil, err

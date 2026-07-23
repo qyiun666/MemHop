@@ -27,9 +27,7 @@ func (c *MemHopConfig) Validate() error {
 		return nil
 	}
 	if w := c.Defaults.SearchWeights; w != nil {
-		if w.BM25Weight < 0 || w.VectorWeight < 0 || w.RRFK < 0 ||
-			w.EntityWeight < 0 || w.ActivationBonus < 0 ||
-			w.RecentChatBonus < 0 || w.ActivationBoost < 0 {
+		if w.RRFK < 0 || w.ActivationBonus < 0 || w.RecentChatBonus < 0 {
 			return mherrors.NewError(mherrors.ErrConfig, "search weights must be >= 0")
 		}
 	}
@@ -58,23 +56,21 @@ type MemHopDefaults struct {
 }
 
 // SearchWeights controls retrieval scoring.
+// v0.58: unified RRF pipeline — channel weights and multiplicative boost removed.
 type SearchWeights struct {
-	BM25Weight      float32 `json:"bm25_weight"`
-	VectorWeight    float32 `json:"vector_weight"`
-	NProbes         int     `json:"n_probes"`
 	RRFK            float32 `json:"rrf_k"`
-	EntityWeight    float32 `json:"entity_weight"`
+	NProbes         int     `json:"n_probes"`
 	ActivationBonus float32 `json:"activation_bonus"`
 	RecentChatBonus float32 `json:"recent_chat_bonus"`
-	ActivationBoost float32 `json:"activation_boost"`
 }
 
 // LlmConfig holds LLM provider settings.
 type LlmConfig struct {
-	APIURL      string `json:"api_url"`
-	APIKey      string `json:"api_key"`
-	Model       string `json:"model"`
-	TimeoutSecs int    `json:"timeout_secs"`
+	APIURL          string `json:"api_url"`
+	APIKey          string `json:"api_key"`
+	Model           string `json:"model"`
+	TimeoutSecs     int    `json:"timeout_secs"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
 }
 
 // DecayConfig controls memory decay parameters.
@@ -104,14 +100,10 @@ func DefaultMemHopDefaults() *MemHopDefaults {
 		AdjacencyCacheMaxEntries: 128,
 		TokenizerEngine:          "auto",
 		SearchWeights: &SearchWeights{
-			BM25Weight:      0.45,
-			VectorWeight:    0.55,
-			NProbes:         8,
 			RRFK:            60.0,
-			EntityWeight:    1.0,
-			ActivationBonus: 0.1,
-			RecentChatBonus: 0.05,
-			ActivationBoost: 1.3,
+			NProbes:         8,
+			ActivationBonus: 0.02,
+			RecentChatBonus: 0.01,
 		},
 		DecayConfig: &DecayConfig{
 			LambdaNode:              0.01,

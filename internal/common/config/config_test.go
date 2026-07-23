@@ -67,11 +67,15 @@ func TestValidateNegativeSearchWeights(t *testing.T) {
 		name  string
 		setup func() *SearchWeights
 	}{
-		{"negative BM25Weight", func() *SearchWeights { return &SearchWeights{BM25Weight: -1, VectorWeight: 0.5, RRFK: 1, EntityWeight: 1, ActivationBonus: 0.1, RecentChatBonus: 0.1, ActivationBoost: 1} }},
-		{"negative VectorWeight", func() *SearchWeights { return &SearchWeights{BM25Weight: 0.5, VectorWeight: -1, RRFK: 1, EntityWeight: 1, ActivationBonus: 0.1, RecentChatBonus: 0.1, ActivationBoost: 1} }},
-		{"negative RRFK", func() *SearchWeights { return &SearchWeights{BM25Weight: 0.5, VectorWeight: 0.5, RRFK: -1, EntityWeight: 1, ActivationBonus: 0.1, RecentChatBonus: 0.1, ActivationBoost: 1} }},
-		{"negative ActivationBonus", func() *SearchWeights { return &SearchWeights{BM25Weight: 0.5, VectorWeight: 0.5, RRFK: 1, EntityWeight: 1, ActivationBonus: -0.1, RecentChatBonus: 0.1, ActivationBoost: 1} }},
-		{"negative ActivationBoost", func() *SearchWeights { return &SearchWeights{BM25Weight: 0.5, VectorWeight: 0.5, RRFK: 1, EntityWeight: 1, ActivationBonus: 0.1, RecentChatBonus: 0.1, ActivationBoost: -1} }},
+		{"negative RRFK", func() *SearchWeights {
+			return &SearchWeights{RRFK: -1, ActivationBonus: 0.1, RecentChatBonus: 0.1}
+		}},
+		{"negative ActivationBonus", func() *SearchWeights {
+			return &SearchWeights{RRFK: 60, ActivationBonus: -0.1, RecentChatBonus: 0.1}
+		}},
+		{"negative RecentChatBonus", func() *SearchWeights {
+			return &SearchWeights{RRFK: 60, ActivationBonus: 0.1, RecentChatBonus: -0.1}
+		}},
 	}
 
 	for _, tt := range tests {
@@ -95,9 +99,8 @@ func TestValidateValidSearchWeights(t *testing.T) {
 		VectorDim: 768,
 		Defaults: &MemHopDefaults{
 			SearchWeights: &SearchWeights{
-				BM25Weight: 0.5, VectorWeight: 0.5, RRFK: 60,
-				EntityWeight: 1, ActivationBonus: 0.1,
-				RecentChatBonus: 0.05, ActivationBoost: 1.3,
+				RRFK: 60, NProbes: 8,
+				ActivationBonus: 0.02, RecentChatBonus: 0.01,
 			},
 		},
 	}
@@ -148,14 +151,14 @@ func TestDefaultMemHopDefaults(t *testing.T) {
 		if d.SearchWeights == nil {
 			t.Fatal("SearchWeights should not be nil")
 		}
-		if d.SearchWeights.BM25Weight != 0.45 {
-			t.Errorf("BM25Weight = %f; want 0.45", d.SearchWeights.BM25Weight)
-		}
-		if d.SearchWeights.VectorWeight != 0.55 {
-			t.Errorf("VectorWeight = %f; want 0.55", d.SearchWeights.VectorWeight)
-		}
 		if d.SearchWeights.RRFK != 60.0 {
 			t.Errorf("RRFK = %f; want 60.0", d.SearchWeights.RRFK)
+		}
+		if d.SearchWeights.ActivationBonus != 0.02 {
+			t.Errorf("ActivationBonus = %f; want 0.02", d.SearchWeights.ActivationBonus)
+		}
+		if d.SearchWeights.RecentChatBonus != 0.01 {
+			t.Errorf("RecentChatBonus = %f; want 0.01", d.SearchWeights.RecentChatBonus)
 		}
 	})
 

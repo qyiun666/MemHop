@@ -487,5 +487,3 @@ func TestCommunityDetectionEmptyGraph(t *testing.T) {
 		t.Fatalf("expected 0 nodes, got %d", result.TotalNodes)
 	}
 }
-
-

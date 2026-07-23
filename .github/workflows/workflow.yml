@@ -17,14 +17,14 @@ jobs:
           go-version: '1.25'
 
       - name: Build
-        run: go build ./memhop/...
+        run: go build ./api/... ./internal/...
 
       - name: Vet
-        run: go vet ./memhop/... ./test/...
+        run: go vet ./api/... ./internal/... ./test/...
 
       - name: Check formatting
         run: |
-          unformatted=$(gofmt -l memhop test)
+          unformatted=$(gofmt -l api internal test)
           if [ -n "$unformatted" ]; then
             echo "gofmt needed on:"
             echo "$unformatted"
@@ -32,10 +32,10 @@ jobs:
           fi
 
       - name: Unit tests
-        run: go test ./memhop/...
+        run: go test ./api/... ./internal/...
 
       - name: Unit tests (race)
-        run: go test -race ./memhop/...
+        run: go test -race ./api/... ./internal/...
 
       - name: Integration tests (offline/mock)
         run: go test ./test/...
