@@ -3,6 +3,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -75,19 +76,23 @@ func TestOpen(t *testing.T) {
 
 	// 更新 L0
 	{
-		err := mh.SetProfile(memhop.ProfileDelta{
-			Name:        strPtr("MemHop助手"),
-			Role:        strPtr("AI助手"),
-			Personality: strPtr("友善、专业、乐于助人"),
-			Worldview:   strPtr("关注用户需求"),
+		err := mh.Topic(memhop.TopicOp{
+			Kind: memhop.TOpSetProfile,
+			ProfileDelta: &memhop.ProfileDelta{
+				Name:        strPtr("MemHop助手"),
+				Role:        strPtr("AI助手"),
+				Personality: strPtr("友善、专业、乐于助人"),
+				Worldview:   strPtr("关注用户需求"),
+			},
 		})
 		if err != nil {
-			t.Fatalf("SetProfile failed: %v", err)
+			t.Fatalf("Topic(TOpSetProfile) failed: %v", err)
 		}
-		profile, err := mh.GetProfile()
+		profRes, err := mh.Get(memhop.LayerProfile, "")
 		if err != nil {
-			t.Fatalf("GetProfile failed: %v", err)
+			t.Fatalf("Get(LayerProfile) failed: %v", err)
 		}
+		profile := profRes.Profile
 		t.Logf("L0 基础画像: Name=%q Role=%q Personality=%q",
 			profile.Name, profile.Role, profile.Personality)
 		if profile.Name != "MemHop助手" {
@@ -171,8 +176,9 @@ func TestOpen(t *testing.T) {
 		for ci, ctx := range result.Contexts {
 			if len(ctx.L4Refs) == 0 {
 				// 旧数据可能没有 L4Refs，但新创建的必须有
-				// 通过 GetL2 确认是否有 UserL4Refs
-				if detail, err := mh.GetL2(ctx.ID); err == nil {
+				// 通过 Get(LayerTopic) 确认是否有 UserL4Refs
+				if detailRes, err := mh.Get(memhop.LayerTopic, ctx.ID); err == nil {
+					detail := detailRes.Topic
 					if len(detail.UserL4Refs) == 0 && len(detail.AgentL4Refs) == 0 {
 						t.Logf("  Ctx[%d] 的 L2 topic 无 L4Refs (历史数据)", ci)
 					} else {
@@ -186,12 +192,13 @@ func TestOpen(t *testing.T) {
 
 			// 对每个 L4Ref，验证 archive 存在且内容匹配
 			for ri, refID := range ctx.L4Refs {
-				archive, err := mh.GetArchive(refID)
+				archRes, err := mh.Get(memhop.LayerArchive, refID)
 				if err != nil {
-					t.Errorf("[迭代%d] Ctx[%d] L4Ref[%d]=%s GetArchive 失败: %v",
+					t.Errorf("[迭代%d] Ctx[%d] L4Ref[%d]=%s Get(LayerArchive) 失败: %v",
 						iteration, ci, ri, refID, err)
 					continue
 				}
+				archive := archRes.Archive
 				if archive == nil {
 					t.Errorf("[迭代%d] Ctx[%d] L4Ref[%d]=%s: archive 不存在",
 						iteration, ci, ri, refID)
@@ -262,7 +269,7 @@ func TestOpen(t *testing.T) {
 
 		if shouldDream {
 			t.Logf("  → 触发 Dream...")
-			report, err := mh.Dream(nil)
+			report, err := mh.Dream(context.Background(), nil)
 			if err != nil {
 				t.Logf("  Dream 预期失败 (长文本/代码内容可能导致 L3 解析失败): %v", err)
 			} else {
@@ -271,17 +278,18 @@ func TestOpen(t *testing.T) {
 					report.L1DecayedNodes)
 
 				// 检查 L0 更新
-				if profile, err := mh.GetProfile(); err == nil {
+				if profRes, err := mh.Get(memhop.LayerProfile, ""); err == nil {
+					profile := profRes.Profile
 					t.Logf("  L0 更新后: Name=%q Role=%q Personality=%q Lexicon=%d Style=%d Emotion=%d",
 						profile.Name, profile.Role, profile.Personality,
 						len(profile.Lexicon), len(profile.StyleTraits), len(profile.EmotionPatterns))
 				}
 
 				// 检查 L2 更新（总数和融合信息）
-				if l2List, err := mh.ListL2(memhop.TopicListQuery{
-					Page:     1,
-					PageSize: 100,
+				if l2Res, err := mh.List(memhop.LayerTopic, memhop.ListRequest{
+					Topic: &memhop.TopicListQuery{Page: 1, PageSize: 100},
 				}); err == nil {
+					l2List := l2Res.Topics
 					t.Logf("  L2 更新后: total=%d topics", l2List.Total)
 					for ti, topic := range l2List.Items {
 						fusedInfo := ""

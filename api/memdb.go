@@ -352,10 +352,6 @@ type L3SearchQuery = crud.L3SearchQuery
 
 type L3SearchResult = crud.L3SearchResult
 
-type L3EntityHint = dream.L3EntityHint
-
-type SearchPreprocessResult = dream.SearchPreprocessResult
-
 type RequestSource = search.RequestSource
 
 // --- CRUD types ---

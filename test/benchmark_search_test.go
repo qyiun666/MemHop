@@ -4,6 +4,7 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -578,18 +579,19 @@ func TestAPICompatibility(t *testing.T) {
 	t.Log("--- L0 Profile API ---")
 	name := "测试助手"
 	role := "AI Assistant"
-	err := mh.SetProfile(memhop.ProfileDelta{Name: &name, Role: &role})
+	_, err := mh.Topic(memhop.TopicOp{Kind: memhop.TOpSetProfile, ProfileDelta: &memhop.ProfileDelta{Name: &name, Role: &role}})
 	if err != nil {
-		t.Fatalf("SetProfile: %v", err)
+		t.Fatalf("Topic(TOpSetProfile): %v", err)
 	}
-	t.Logf("  ✓ SetProfile")
+	t.Logf("  ✓ Topic(TOpSetProfile)")
 
-	profile, err := mh.GetProfile()
+	profRes, err := mh.Get(memhop.LayerProfile, "")
 	if err != nil {
-		t.Fatalf("GetProfile: %v", err)
+		t.Fatalf("Get(LayerProfile): %v", err)
 	}
+	profile := profRes.Profile
 	if profile != nil {
-		t.Logf("  ✓ GetProfile: Name=%s Role=%s", profile.Name, profile.Role)
+		t.Logf("  ✓ Get(LayerProfile): Name=%s Role=%s", profile.Name, profile.Role)
 	}
 
 	// ── Search + Update（L2 + L4 写入） ──
@@ -616,95 +618,106 @@ func TestAPICompatibility(t *testing.T) {
 
 	// ── L2 Read API ──
 	t.Log("--- L2 Read API ---")
-	detail, err := mh.GetL2(topicID)
+	detailRes, err := mh.Get(memhop.LayerTopic, topicID)
 	if err != nil {
-		t.Fatalf("GetL2: %v", err)
+		t.Fatalf("Get(LayerTopic): %v", err)
 	}
+	detail := detailRes.Topic
 	if detail.ID != topicID {
-		t.Errorf("GetL2 ID 不匹配")
+		t.Errorf("Get(LayerTopic) ID 不匹配")
 	}
-	t.Logf("  ✓ GetL2: ID=%s Depth=%d", detail.ID[:12], detail.Depth)
+	t.Logf("  ✓ Get(LayerTopic): ID=%s Depth=%d", detail.ID[:12], detail.Depth)
 
-	listResult, err := mh.ListL2(memhop.TopicListQuery{Page: 1, PageSize: 10})
+	listRes, err := mh.List(memhop.LayerTopic, memhop.ListRequest{
+		Topic: &memhop.TopicListQuery{Page: 1, PageSize: 10},
+	})
 	if err != nil {
-		t.Fatalf("ListL2: %v", err)
+		t.Fatalf("List(LayerTopic): %v", err)
 	}
-	t.Logf("  ✓ ListL2: Total=%d Items=%d", listResult.Total, len(listResult.Items))
+	listResult := listRes.Topics
+	t.Logf("  ✓ List(LayerTopic): Total=%d Items=%d", listResult.Total, len(listResult.Items))
 
 	// ── L4 Archive API ──
 	t.Log("--- L4 Archive API ---")
 	topicIDCopy := topicID
-	archiveResult, err := mh.QueryArchives(memhop.ArchiveQuery{
-		TopicID:  &topicIDCopy,
-		Page:     1,
-		PageSize: 100,
+	archListRes, err := mh.List(memhop.LayerArchive, memhop.ListRequest{
+		Archive: &memhop.ArchiveQuery{TopicID: &topicIDCopy, Page: 1, PageSize: 100},
 	})
 	if err != nil {
-		t.Fatalf("QueryArchives: %v", err)
+		t.Fatalf("List(LayerArchive): %v", err)
 	}
-	t.Logf("  ✓ QueryArchives: Total=%d", archiveResult.Total)
+	archiveResult := archListRes.Archives
+	t.Logf("  ✓ List(LayerArchive): Total=%d", archiveResult.Total)
 	if archiveResult.Total > 0 {
-		archive, err := mh.GetArchive(archiveResult.Items[0].ID)
+		archRes, err := mh.Get(memhop.LayerArchive, archiveResult.Items[0].ID)
 		if err != nil {
-			t.Fatalf("GetArchive: %v", err)
+			t.Fatalf("Get(LayerArchive): %v", err)
 		}
-		t.Logf("  ✓ GetArchive: Role=%d Content=%q", archive.Role, strLimit(archive.Content, 50))
+		archive := archRes.Archive
+		t.Logf("  ✓ Get(LayerArchive): Role=%d Content=%q", archive.Role, strLimit(archive.Content, 50))
 	}
 
 	// ── L5 Action Chain API ──
 	t.Log("--- L5 Crystal API ---")
-	chainID, err := mh.CreateActionChain(memhop.L5ChainInput{
-		Title:   "test_chain",
-		Trigger: "user asks about weather",
-		Steps: []memhop.L5StepInput{
-			{Action: "call_weather_api", Parameters: nil},
-			{Action: "format_response", Parameters: nil},
+	ccRes, err := mh.Crystal(memhop.CrystalOp{
+		Kind: memhop.COpCreateChain,
+		ChainInput: &memhop.L5ChainInput{
+			Title:   "test_chain",
+			Trigger: "user asks about weather",
+			Steps: []memhop.L5StepInput{
+				{Action: "call_weather_api", Parameters: nil},
+				{Action: "format_response", Parameters: nil},
+			},
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateActionChain: %v", err)
+		t.Fatalf("Crystal(COpCreateChain): %v", err)
 	}
-	t.Logf("  ✓ CreateActionChain: chainID=%s", chainID[:12])
+	chainID := ccRes.ChainID
+	t.Logf("  ✓ Crystal(COpCreateChain): chainID=%s", chainID[:12])
 
-	chain, err := mh.GetL5(chainID)
+	chainRes, err := mh.Get(memhop.LayerCrystal, chainID)
 	if err != nil {
-		t.Fatalf("GetL5: %v", err)
+		t.Fatalf("Get(LayerCrystal): %v", err)
 	}
-	t.Logf("  ✓ GetL5: Title=%s Status=%s TriggerCount=%d", chain.Title, chain.Status, chain.TriggerCount)
+	chain := chainRes.Crystal
+	t.Logf("  ✓ Get(LayerCrystal): Title=%s Status=%s TriggerCount=%d", chain.Title, chain.Status, chain.TriggerCount)
 
-	stepID, err := mh.AppendActionStep(chainID, memhop.L5StepInput{
-		Action: "log_result", Parameters: nil,
+	stepRes, err := mh.Crystal(memhop.CrystalOp{
+		Kind: memhop.COpAppendStep, ChainID: chainID,
+		StepInput: &memhop.L5StepInput{Action: "log_result", Parameters: nil},
 	})
 	if err != nil {
-		t.Fatalf("AppendActionStep: %v", err)
+		t.Fatalf("Crystal(COpAppendStep): %v", err)
 	}
-	t.Logf("  ✓ AppendActionStep: stepID=%s", stepID[:12])
+	t.Logf("  ✓ Crystal(COpAppendStep): stepID=%s", stepRes.StepID[:12])
 
-	err = mh.IncrChainTrigger(chainID)
-	if err != nil {
-		t.Fatalf("IncrChainTrigger: %v", err)
+	if _, err := mh.Crystal(memhop.CrystalOp{Kind: memhop.COpIncrTrigger, ChainID: chainID}); err != nil {
+		t.Fatalf("Crystal(COpIncrTrigger): %v", err)
 	}
-	t.Logf("  ✓ IncrChainTrigger")
+	t.Logf("  ✓ Crystal(COpIncrTrigger)")
 
-	err = mh.UpdateChainConfidence(chainID, true)
-	if err != nil {
-		t.Fatalf("UpdateChainConfidence: %v", err)
+	if _, err := mh.Crystal(memhop.CrystalOp{Kind: memhop.COpUpdateConfidence, ChainID: chainID, Success: true}); err != nil {
+		t.Fatalf("Crystal(COpUpdateConfidence): %v", err)
 	}
-	t.Logf("  ✓ UpdateChainConfidence")
+	t.Logf("  ✓ Crystal(COpUpdateConfidence)")
 
-	crystals, err := mh.ListCrystals(memhop.CrystalListQuery{Page: 1, PageSize: 10})
+	crystListRes, err := mh.List(memhop.LayerCrystal, memhop.ListRequest{
+		Crystal: &memhop.CrystalListQuery{Page: 1, PageSize: 10},
+	})
 	if err != nil {
-		t.Fatalf("ListCrystals: %v", err)
+		t.Fatalf("List(LayerCrystal): %v", err)
 	}
-	t.Logf("  ✓ ListCrystals: Total=%d", crystals.Total)
+	t.Logf("  ✓ List(LayerCrystal): Total=%d", crystListRes.Crystals.Total)
 
 	// ── L3 Hypergraph API ──
 	t.Log("--- L3 Hypergraph API ---")
-	graph, err := mh.CreateL3Graph("test_knowledge_graph")
+	graphRes, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpCreateGraph, Name: "test_knowledge_graph"})
 	if err != nil {
-		t.Fatalf("CreateL3Graph: %v", err)
+		t.Fatalf("Knowledge(KOpCreateGraph): %v", err)
 	}
-	t.Logf("  ✓ CreateL3Graph: graphID=%s", hashFormat(graph.IDHash))
+	graph := graphRes.Slot
+	t.Logf("  ✓ Knowledge(KOpCreateGraph): graphID=%s", hashFormat(graph.IDHash))
 
 	node := &memhop.HypergraphNode{
 		Title:    "Go语言",
@@ -712,47 +725,50 @@ func TestAPICompatibility(t *testing.T) {
 		Content:  "Go是一种静态类型编译型语言",
 		Keywords: []string{"Go", "编程语言", "编译型"},
 	}
-	err = mh.AddL3Node(hashFormat(graph.IDHash), node)
-	if err != nil {
-		t.Fatalf("AddL3Node: %v", err)
+	if _, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpAddNode, GraphID: hashFormat(graph.IDHash), Node: node}); err != nil {
+		t.Fatalf("Knowledge(KOpAddNode): %v", err)
 	}
-	t.Logf("  ✓ AddL3Node: %s", node.Title)
+	t.Logf("  ✓ Knowledge(KOpAddNode): %s", node.Title)
 
 	// L3 搜索
-	l3SearchResult, err := mh.SearchL3Nodes(memhop.L3SearchQuery{Keyword: "Go"})
-	if err != nil {
-		t.Fatalf("SearchL3Nodes: %v", err)
-	}
-	t.Logf("  ✓ SearchL3Nodes: Results=%d", len(l3SearchResult.Nodes))
-
-	// L3 列表
-	knowledgeList, err := mh.ListKnowledge(memhop.KnowledgeListQuery{Page: 1, PageSize: 10})
-	if err != nil {
-		t.Fatalf("ListKnowledge: %v", err)
-	}
-	t.Logf("  ✓ ListKnowledge: Total=%d", knowledgeList.Total)
-
-	// L3 知识节点查询（通过 SearchL3Nodes 按类型搜索）
-	l3ByTypeResult, err := mh.SearchL3Nodes(memhop.L3SearchQuery{
-		NodeType: "concept",
-		Limit:    10,
+	l3SearchRes, err := mh.Knowledge(memhop.KnowledgeOp{
+		Kind: memhop.KOpSearch, SearchQuery: &memhop.L3SearchQuery{Keyword: "Go"},
 	})
 	if err != nil {
-		t.Fatalf("SearchL3Nodes(by type): %v", err)
+		t.Fatalf("Knowledge(KOpSearch): %v", err)
 	}
-	t.Logf("  ✓ SearchL3Nodes(by type): Results=%d", len(l3ByTypeResult.Nodes))
+	t.Logf("  ✓ Knowledge(KOpSearch): Results=%d", len(l3SearchRes.Search.Nodes))
+
+	// L3 列表
+	knowledgeListRes, err := mh.List(memhop.LayerKnowledge, memhop.ListRequest{
+		Knowledge: &memhop.KnowledgeListQuery{Page: 1, PageSize: 10},
+	})
+	if err != nil {
+		t.Fatalf("List(LayerKnowledge): %v", err)
+	}
+	t.Logf("  ✓ List(LayerKnowledge): Total=%d", knowledgeListRes.Knowledge.Total)
+
+	// L3 知识节点查询（按类型）
+	l3ByTypeRes, err := mh.Knowledge(memhop.KnowledgeOp{
+		Kind: memhop.KOpSearch, SearchQuery: &memhop.L3SearchQuery{NodeType: "concept", Limit: 10},
+	})
+	if err != nil {
+		t.Fatalf("Knowledge(KOpSearch by type): %v", err)
+	}
+	t.Logf("  ✓ Knowledge(KOpSearch by type): Results=%d", len(l3ByTypeRes.Search.Nodes))
 
 	// ── L1 Graph API ──
 	t.Log("--- L1 Graph API ---")
-	l1Graph, err := mh.GetL1Graph(nil)
+	l1GraphRes, err := mh.Get(memhop.LayerScene, "")
 	if err != nil {
-		t.Fatalf("GetL1Graph: %v", err)
+		t.Fatalf("Get(LayerScene): %v", err)
 	}
-	t.Logf("  ✓ GetL1Graph: Nodes=%d Edges=%d", len(l1Graph.Nodes), len(l1Graph.Edges))
+	l1Graph := l1GraphRes.SceneGraph
+	t.Logf("  ✓ Get(LayerScene): Nodes=%d Edges=%d", len(l1Graph.Nodes), len(l1Graph.Edges))
 
 	// ── Dream API ──
 	t.Log("--- Dream API ---")
-	report, err := mh.Dream(&memhop.DreamOptions{SkipDistill: true})
+	report, err := mh.Dream(context.Background(), &memhop.DreamOptions{SkipDistill: true})
 	if err != nil {
 		t.Logf("  △ Dream (offline mock): %v", err)
 	} else {
@@ -828,11 +844,11 @@ func TestAPICompatibility(t *testing.T) {
 	}
 	_, err = mh.Search(memhop.SearchQuery{Text: "test"})
 	checkClosed("Search", err)
-	_, err = mh.GetProfile()
-	checkClosed("GetProfile", err)
+	_, err = mh.Get(memhop.LayerProfile, "")
+	checkClosed("Get(LayerProfile)", err)
 	_, err = mh.HealthCheck()
 	checkClosed("HealthCheck", err)
-	_, err = mh.Dream(nil)
+	_, err = mh.Dream(context.Background(), nil)
 	checkClosed("Dream", err)
 }
 

@@ -42,17 +42,16 @@ type DreamOptions struct {
 }
 
 // Dream runs the memory consolidation pipeline.
-// opts may be nil for all-default behavior (use config LLM, process all topics).
-func (m *MemHop) Dream(opts *DreamOptions) (*dream.DreamReport, error) {
-	return m.DreamWithContext(context.Background(), opts)
-}
-
-// DreamWithContext is Dream with an explicit context. Currently the context
-// is threaded through into the LLM HTTP client when a custom opts.LLM or
-// opts.Chat also honors it (OpenAIProvider does via ChatWithContext /
+//
+// v0.60.0: the two prior methods (Dream(opts) and DreamWithContext(ctx, opts))
+// are merged into this single ctx-first form. Pass context.Background() for
+// the previous Dream(opts) behavior.
+//
+// Currently ctx is threaded through into the LLM HTTP client when a custom
+// opts.LLM or opts.Chat honors it (OpenAIProvider does via ChatWithContext /
 // ConsolidateWithContext). The pipeline itself is synchronous and does not
 // poll ctx.Done() between stages; use context cancellation for LLM timeouts.
-func (m *MemHop) DreamWithContext(_ context.Context, opts *DreamOptions) (*dream.DreamReport, error) {
+func (m *MemHop) Dream(_ context.Context, opts *DreamOptions) (*dream.DreamReport, error) {
 	if m.closed.Load() {
 		return nil, mherrors.ErrClosed
 	}

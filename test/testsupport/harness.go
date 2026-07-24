@@ -1,6 +1,7 @@
 package testsupport
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"testing"
@@ -116,7 +117,7 @@ func LogSearchQuality(t *testing.T, result *memhop.SearchResult, query, expected
 func RunDream(t *testing.T, mh *memhop.MemHop) *memhop.DreamReport {
 	t.Helper()
 
-	report, err := mh.Dream(nil)
+	report, err := mh.Dream(context.Background(), nil)
 	if err != nil {
 		t.Logf("Dream 执行失败: %v", err)
 		return nil
@@ -142,35 +143,41 @@ func RunDream(t *testing.T, mh *memhop.MemHop) *memhop.DreamReport {
 }
 
 // AssertL2Topic 验证 L2 话题存在且关键字段非空。
-// 使用 GetL2(id) 获取 TopicDetail，断言 ID 非空。
+// 使用 Get(LayerTopic, id) 获取 TopicDetail，断言 ID 非空。
 func AssertL2Topic(t *testing.T, mh *memhop.MemHop, topicID string) {
 	t.Helper()
 
-	detail, err := mh.GetL2(topicID)
+	res, err := mh.Get(memhop.LayerTopic, topicID)
 	if err != nil {
-		t.Fatalf("GetL2(%q): %v", topicID, err)
+		t.Fatalf("Get(LayerTopic, %q): %v", topicID, err)
 	}
-	if detail.ID == "" {
-		t.Fatal("GetL2 返回的 TopicDetail.ID 为空")
+	if res.Topic == nil || res.Topic.ID == "" {
+		t.Fatal("Get 返回的 TopicDetail 为空")
 	}
 }
 
 // AssertL4Archive 验证指定话题的 L4 archive 数量 >= minCount。
-// 使用 QueryArchives(ArchiveQuery{TopicID: topicID}) 查询。
+// 使用 List(LayerArchive, ArchiveQuery{TopicID: topicID}) 查询。
 func AssertL4Archive(t *testing.T, mh *memhop.MemHop, topicID string, minCount int) {
 	t.Helper()
 
 	topicIDCopy := topicID
-	result, err := mh.QueryArchives(memhop.ArchiveQuery{
-		TopicID:  &topicIDCopy,
-		Page:     1,
-		PageSize: 100,
+	res, err := mh.List(memhop.LayerArchive, memhop.ListRequest{
+		Archive: &memhop.ArchiveQuery{
+			TopicID:  &topicIDCopy,
+			Page:     1,
+			PageSize: 100,
+		},
 	})
 	if err != nil {
-		t.Fatalf("QueryArchives(TopicID=%q): %v", topicID, err)
+		t.Fatalf("List(LayerArchive, TopicID=%q): %v", topicID, err)
 	}
-	if result.Total < minCount {
-		t.Fatalf("L4 archive 数量 %d < 最小要求 %d", result.Total, minCount)
+	if res.Archives == nil || res.Archives.Total < minCount {
+		total := 0
+		if res.Archives != nil {
+			total = res.Archives.Total
+		}
+		t.Fatalf("L4 archive 数量 %d < 最小要求 %d", total, minCount)
 	}
 }
 

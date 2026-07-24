@@ -20,10 +20,9 @@ import (
 
 // UpdateDeps holds all dependencies injected into the update pipeline.
 type UpdateDeps struct {
-	Engine        *storage.StorageEngine
-	SparseIndex   *index.SparseIndex
-	LlmCfg        *config.LlmConfig
-	PreprocessCfg *config.LlmPreprocessConfig
+	Engine      *storage.StorageEngine
+	SparseIndex *index.SparseIndex
+	LlmCfg      *config.LlmConfig
 }
 
 // UpdateMemory updates a memory item at the specified layer.
@@ -77,23 +76,14 @@ func extractRole(fields map[string]json.RawMessage) uint8 {
 	return role
 }
 
-// importL3Entities logs L3 entity import requests (stub for future implementation).
-func importL3Entities(topicID uint64, entities []dream.L3EntityHint) {
-	slog.Info("L3 import requested", "topic_id", hash.FormatHash(topicID), "entities", len(entities))
-}
-
-// maybePreprocessUpdate runs LLM preprocessing on dialogue_text to extract
-// keywords, and injects them into the fields map if not already present.
+// maybePreprocessUpdate runs LLM fact extraction on dialogue_text to extract
+// atomic memory facts, and injects them into the fields map if not already present.
 func maybePreprocessUpdate(
 	fields map[string]json.RawMessage,
 	dialogueText string,
 	deps *UpdateDeps,
-) *dream.SearchPreprocessResult {
-	cfg := deps.PreprocessCfg
-	if cfg == nil || cfg.PreprocessMaxTokens <= 0 {
-		return nil
-	}
-	// Only preprocess if no user_keywords already provided.
+) *dream.FactExtractionResult {
+	// Only extract if no user_keywords already provided.
 	if _, ok := fields["user_keywords"]; ok {
 		return nil
 	}
@@ -101,15 +91,15 @@ func maybePreprocessUpdate(
 	if llm == nil {
 		return nil
 	}
-	result, err := dream.PreprocessSearchQuery(llm, dialogueText)
+	result, err := dream.ExtractFacts(llm, dialogueText)
 	if err != nil {
-		slog.Warn("LLM preprocess failed, continuing without enhancement", "error", err)
+		slog.Warn("LLM fact extraction failed", "error", err)
 		return nil
 	}
-	if result != nil && len(result.Keywords) > 0 {
-		kwJSON, marshalErr := json.Marshal(result.Keywords)
+	if result != nil && len(result.Facts) > 0 {
+		kwJSON, marshalErr := json.Marshal(result.Facts)
 		if marshalErr != nil {
-			slog.Warn("LLM preprocess: failed to marshal keywords", "error", marshalErr)
+			slog.Warn("LLM fact extraction: failed to marshal facts", "error", marshalErr)
 			return nil
 		}
 		fields["user_keywords"] = kwJSON
@@ -123,13 +113,13 @@ func updateL2(req crud.UpdateRequest, deps *UpdateDeps) (*crud.UpdateResult, err
 	role := extractRole(req.Fields)
 
 	if dialogueText != "" {
-		// LLM preprocess
-		preprocessResult := maybePreprocessUpdate(req.Fields, dialogueText, deps)
+		// LLM fact extraction
+		factResult := maybePreprocessUpdate(req.Fields, dialogueText, deps)
 
-		// Get keywords
+		// Get extracted facts as keywords
 		var keywords []string
-		if preprocessResult != nil {
-			keywords = preprocessResult.Keywords
+		if factResult != nil {
+			keywords = factResult.Facts
 		}
 
 		// Parse topic ID
@@ -141,11 +131,6 @@ func updateL2(req crud.UpdateRequest, deps *UpdateDeps) (*crud.UpdateResult, err
 		// Append L4 archive
 		if _, err := crud.AppendDialogueL4(deps.Engine, deps.SparseIndex, topicID, dialogueText, role, keywords, req.Timestamp); err != nil {
 			return nil, err
-		}
-
-		// Handle L3 import if needed
-		if preprocessResult != nil && preprocessResult.NeedsL3Import && len(preprocessResult.L3Entities) > 0 {
-			importL3Entities(topicID, preprocessResult.L3Entities)
 		}
 
 		return &crud.UpdateResult{Status: crud.StatusUpdated, ID: req.ID}, nil

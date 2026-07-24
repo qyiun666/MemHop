@@ -35,18 +35,22 @@ func TestCoreFlow(t *testing.T) {
 	defer mh.Close()
 
 	// 设置 L0 Profile
-	err := mh.SetProfile(memhop.ProfileDelta{
-		Name: strPtr("助手"),
-		Role: strPtr("AI Assistant"),
+	_, err := mh.Topic(memhop.TopicOp{
+		Kind: memhop.TOpSetProfile,
+		ProfileDelta: &memhop.ProfileDelta{
+			Name: strPtr("助手"),
+			Role: strPtr("AI Assistant"),
+		},
 	})
 	if err != nil {
-		t.Fatalf("SetProfile failed: %v", err)
+		t.Fatalf("Topic(TOpSetProfile) failed: %v", err)
 	}
 
-	profile, err := mh.GetProfile()
+	profRes, err := mh.Get(memhop.LayerProfile, "")
 	if err != nil {
-		t.Fatalf("GetProfile failed: %v", err)
+		t.Fatalf("Get(LayerProfile) failed: %v", err)
 	}
+	profile := profRes.Profile
 	if profile.Name != "助手" {
 		t.Fatalf("profile.Name expected '助手', got %q", profile.Name)
 	}
@@ -133,12 +137,13 @@ func TestCoreFlow(t *testing.T) {
 	// ============================================================
 	t.Log("")
 	t.Log("████ Phase 3: L0 画像验证")
-	afterProfile, err := mh.GetProfile()
+	afterRes, err := mh.Get(memhop.LayerProfile, "")
 	if err != nil {
-		t.Fatalf("GetProfile 失败: %v", err)
+		t.Fatalf("Get(LayerProfile) 失败: %v", err)
 	}
+	afterProfile := afterRes.Profile
 	if afterProfile == nil {
-		t.Fatal("GetProfile 返回 nil")
+		t.Fatal("Get(LayerProfile) 返回 nil profile")
 	}
 	t.Logf("Profile: Name=%s, Role=%s", afterProfile.Name, afterProfile.Role)
 	t.Logf("  Lexicon:         %v", afterProfile.Lexicon)
@@ -152,12 +157,13 @@ func TestCoreFlow(t *testing.T) {
 	// ============================================================
 	t.Log("")
 	t.Log("████ Phase 4: L1 图验证")
-	l1Graph, err := mh.GetL1Graph(nil)
+	l1GraphRes, err := mh.Get(memhop.LayerScene, "")
 	if err != nil {
-		t.Fatalf("GetL1Graph 失败: %v", err)
+		t.Fatalf("Get(LayerScene) 失败: %v", err)
 	}
+	l1Graph := l1GraphRes.SceneGraph
 	if l1Graph == nil {
-		t.Fatal("GetL1Graph 返回 nil")
+		t.Fatal("Get(LayerScene) 返回 nil")
 	}
 	if len(l1Graph.Nodes) == 0 {
 		t.Logf("L1 Graph: 0 nodes（可能尚未构建，属于正常状态）")

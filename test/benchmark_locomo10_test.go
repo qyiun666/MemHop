@@ -226,21 +226,27 @@ func TestLocomo10APISmoke(t *testing.T) {
 	t.Logf("  Search: %d contexts", len(result.Contexts))
 
 	name := "MemHop"
-	mh.SetProfile(memhop.ProfileDelta{Name: &name})
-	p, _ := mh.GetProfile()
-	t.Logf("  Profile: %s", p.Name)
+	mh.Topic(memhop.TopicOp{Kind: memhop.TOpSetProfile, ProfileDelta: &memhop.ProfileDelta{Name: &name}})
+	profRes, _ := mh.Get(memhop.LayerProfile, "")
+	t.Logf("  Profile: %s", profRes.Profile.Name)
 
-	l2list, _ := mh.ListL2(memhop.TopicListQuery{Page: 1, PageSize: 5})
-	t.Logf("  L2 List: %d topics", l2list.Total)
+	l2res, _ := mh.List(memhop.LayerTopic, memhop.ListRequest{
+		Topic: &memhop.TopicListQuery{Page: 1, PageSize: 5},
+	})
+	t.Logf("  L2 List: %d topics", l2res.Topics.Total)
 
-	archives, _ := mh.QueryArchives(memhop.ArchiveQuery{Page: 1, PageSize: 5})
-	t.Logf("  Archives: %d", archives.Total)
+	archRes, _ := mh.List(memhop.LayerArchive, memhop.ListRequest{
+		Archive: &memhop.ArchiveQuery{Page: 1, PageSize: 5},
+	})
+	t.Logf("  Archives: %d", archRes.Archives.Total)
 
 	hs, _ := mh.HealthCheck()
 	t.Logf("  Health: OK=%v enc=%v size=%d", hs.OK, hs.EncoderConfigured, hs.DBSizeBytes)
 
-	crystals, _ := mh.ListCrystals(memhop.CrystalListQuery{Page: 1, PageSize: 5})
-	t.Logf("  Crystals: %d", crystals.Total)
+	crystRes, _ := mh.List(memhop.LayerCrystal, memhop.ListRequest{
+		Crystal: &memhop.CrystalListQuery{Page: 1, PageSize: 5},
+	})
+	t.Logf("  Crystals: %d", crystRes.Crystals.Total)
 
 	mh.Checkpoint()
 	t.Log("  Checkpoint: OK")

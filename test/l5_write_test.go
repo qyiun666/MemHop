@@ -8,34 +8,38 @@ import (
 	"memhop/test/testsupport"
 )
 
-// TestL5WriteAPI tests the new L5 write API methods:
-// CreateActionChain, AppendActionStep, IncrChainTrigger,
-// UpdateChainConfidence, BatchDeleteCrystals.
+// TestL5WriteAPI tests the new L5 write API methods via v0.60.0 Crystal(op).
+// Covers: create chain, append step, incr trigger, update confidence, batch delete.
 func TestL5WriteAPI(t *testing.T) {
 	mh := testsupport.OpenMemHopMock(t)
 	defer mh.Close()
 
-	// ── 1. CreateActionChain ──
-	chainID, err := mh.CreateActionChain(memhop.L5ChainInput{
-		Title:   "test_chain",
-		Trigger: "user asks about weather",
-		Steps: []memhop.L5StepInput{
-			{Action: "call_weather_api", Parameters: nil},
+	// ── 1. Create action chain ──
+	r, err := mh.Crystal(memhop.CrystalOp{
+		Kind: memhop.COpCreateChain,
+		ChainInput: &memhop.L5ChainInput{
+			Title:   "test_chain",
+			Trigger: "user asks about weather",
+			Steps: []memhop.L5StepInput{
+				{Action: "call_weather_api", Parameters: nil},
+			},
 		},
 	})
 	if err != nil {
-		t.Fatalf("CreateActionChain failed: %v", err)
+		t.Fatalf("Crystal(COpCreateChain) failed: %v", err)
 	}
+	chainID := r.ChainID
 	if chainID == "" {
-		t.Fatal("CreateActionChain returned empty ID")
+		t.Fatal("COpCreateChain returned empty ID")
 	}
 	t.Logf("Created chain: %s", chainID)
 
-	// ── 2. GetL5 verifies chain exists ──
-	chain, err := mh.GetL5(chainID)
+	// ── 2. Get(LayerCrystal) verifies chain exists ──
+	getRes, err := mh.Get(memhop.LayerCrystal, chainID)
 	if err != nil {
-		t.Fatalf("GetL5 failed: %v", err)
+		t.Fatalf("Get(LayerCrystal) failed: %v", err)
 	}
+	chain := getRes.Crystal
 	if chain.Title != "test_chain" {
 		t.Errorf("Title = %q, want %q", chain.Title, "test_chain")
 	}
@@ -49,76 +53,81 @@ func TestL5WriteAPI(t *testing.T) {
 		t.Errorf("TriggerCount = %d, want 0", chain.TriggerCount)
 	}
 
-	// ── 3. AppendActionStep ──
-	stepID, err := mh.AppendActionStep(chainID, memhop.L5StepInput{
-		Action:     "parse_result",
-		Parameters: nil,
+	// ── 3. Append step ──
+	r2, err := mh.Crystal(memhop.CrystalOp{
+		Kind:      memhop.COpAppendStep,
+		ChainID:   chainID,
+		StepInput: &memhop.L5StepInput{Action: "parse_result", Parameters: nil},
 	})
 	if err != nil {
-		t.Fatalf("AppendActionStep failed: %v", err)
+		t.Fatalf("Crystal(COpAppendStep) failed: %v", err)
 	}
-	if stepID == "" {
-		t.Fatal("AppendActionStep returned empty ID")
+	if r2.StepID == "" {
+		t.Fatal("COpAppendStep returned empty ID")
 	}
-	t.Logf("Appended step: %s", stepID)
+	t.Logf("Appended step: %s", r2.StepID)
 
-	// ── 4. IncrChainTrigger ──
-	err = mh.IncrChainTrigger(chainID)
-	if err != nil {
-		t.Fatalf("IncrChainTrigger failed: %v", err)
+	// ── 4. Incr trigger ──
+	if _, err := mh.Crystal(memhop.CrystalOp{Kind: memhop.COpIncrTrigger, ChainID: chainID}); err != nil {
+		t.Fatalf("Crystal(COpIncrTrigger) failed: %v", err)
 	}
-	chain, err = mh.GetL5(chainID)
+	getRes, err = mh.Get(memhop.LayerCrystal, chainID)
 	if err != nil {
-		t.Fatalf("GetL5 after IncrChainTrigger failed: %v", err)
+		t.Fatalf("Get(LayerCrystal) after COpIncrTrigger failed: %v", err)
 	}
+	chain = getRes.Crystal
 	if chain.TriggerCount != 1 {
 		t.Errorf("TriggerCount = %d, want 1", chain.TriggerCount)
 	}
 	if chain.LastTriggered == nil {
-		t.Error("LastTriggered should be set after IncrChainTrigger")
+		t.Error("LastTriggered should be set after COpIncrTrigger")
 	}
 
-	// ── 5. UpdateChainConfidence (success) ──
-	err = mh.UpdateChainConfidence(chainID, true)
-	if err != nil {
-		t.Fatalf("UpdateChainConfidence(success) failed: %v", err)
+	// ── 5. Update confidence (success) ──
+	if _, err := mh.Crystal(memhop.CrystalOp{
+		Kind: memhop.COpUpdateConfidence, ChainID: chainID, Success: true,
+	}); err != nil {
+		t.Fatalf("Crystal(COpUpdateConfidence success) failed: %v", err)
 	}
-	chain, err = mh.GetL5(chainID)
+	getRes, err = mh.Get(memhop.LayerCrystal, chainID)
 	if err != nil {
-		t.Fatalf("GetL5 after UpdateChainConfidence(success) failed: %v", err)
+		t.Fatalf("Get(LayerCrystal) after COpUpdateConfidence(success) failed: %v", err)
 	}
-	if chain.SuccessRate <= 0 {
-		t.Errorf("SuccessRate = %f, want > 0", chain.SuccessRate)
+	if getRes.Crystal.SuccessRate <= 0 {
+		t.Errorf("SuccessRate = %f, want > 0", getRes.Crystal.SuccessRate)
 	}
 
-	// ── 6. UpdateChainConfidence (failure) ──
-	err = mh.UpdateChainConfidence(chainID, false)
-	if err != nil {
-		t.Fatalf("UpdateChainConfidence(failure) failed: %v", err)
+	// ── 6. Update confidence (failure) ──
+	if _, err := mh.Crystal(memhop.CrystalOp{
+		Kind: memhop.COpUpdateConfidence, ChainID: chainID, Success: false,
+	}); err != nil {
+		t.Fatalf("Crystal(COpUpdateConfidence failure) failed: %v", err)
 	}
 
-	// ── 7. BatchDeleteCrystals ──
-	chainID2, err := mh.CreateActionChain(memhop.L5ChainInput{
-		Title:   "test_chain_2",
-		Trigger: "user asks about time",
+	// ── 7. Batch delete ──
+	r3, err := mh.Crystal(memhop.CrystalOp{
+		Kind: memhop.COpCreateChain,
+		ChainInput: &memhop.L5ChainInput{
+			Title:   "test_chain_2",
+			Trigger: "user asks about time",
+		},
 	})
 	if err != nil {
-		t.Fatalf("CreateActionChain (2nd) failed: %v", err)
+		t.Fatalf("COpCreateChain (2nd) failed: %v", err)
 	}
 
-	err = mh.BatchDeleteCrystals([]string{chainID, chainID2})
-	if err != nil {
-		t.Fatalf("BatchDeleteCrystals failed: %v", err)
+	if _, err := mh.Crystal(memhop.CrystalOp{
+		Kind: memhop.COpBatchDelete, IDs: []string{chainID, r3.ChainID},
+	}); err != nil {
+		t.Fatalf("Crystal(COpBatchDelete) failed: %v", err)
 	}
 
 	// Verify both chains are deleted
-	_, err = mh.GetL5(chainID)
-	if err == nil {
-		t.Error("GetL5 should return error for deleted chain")
+	if _, err := mh.Get(memhop.LayerCrystal, chainID); err == nil {
+		t.Error("Get(LayerCrystal) should return error for deleted chain")
 	}
-	_, err = mh.GetL5(chainID2)
-	if err == nil {
-		t.Error("GetL5 should return error for deleted chain 2")
+	if _, err := mh.Get(memhop.LayerCrystal, r3.ChainID); err == nil {
+		t.Error("Get(LayerCrystal) should return error for deleted chain 2")
 	}
 
 	t.Log("✓ All L5 Write API tests passed")
@@ -142,11 +151,12 @@ func TestUpdateL4Append(t *testing.T) {
 	topicID := result.Contexts[0].ID
 	t.Logf("Created L2 topic: %s (scene=%s)", topicID, result.Contexts[0].SceneID)
 
-	// Verify the topic exists via GetL2
-	beforeDetail, err := mh.GetL2(topicID)
+	// Verify the topic exists via Get(LayerTopic)
+	beforeRes, err := mh.Get(memhop.LayerTopic, topicID)
 	if err != nil {
-		t.Fatalf("GetL2 failed: %v", err)
+		t.Fatalf("Get(LayerTopic) failed: %v", err)
 	}
+	beforeDetail := beforeRes.Topic
 	beforeRefCount := len(beforeDetail.UserL4Refs) + len(beforeDetail.AgentL4Refs)
 	t.Logf("Before update: L4 refs = %d (user=%d agent=%d)",
 		beforeRefCount, len(beforeDetail.UserL4Refs), len(beforeDetail.AgentL4Refs))
@@ -169,11 +179,12 @@ func TestUpdateL4Append(t *testing.T) {
 		t.Errorf("Status = %q, want %q", updateResult.Status, "Updated")
 	}
 
-	// ── 3. Verify L4 refs via GetL2 ──
-	afterDetail, err := mh.GetL2(topicID)
+	// ── 3. Verify L4 refs via Get(LayerTopic) ──
+	afterRes, err := mh.Get(memhop.LayerTopic, topicID)
 	if err != nil {
-		t.Fatalf("GetL2 after update failed: %v", err)
+		t.Fatalf("Get(LayerTopic) after update failed: %v", err)
 	}
+	afterDetail := afterRes.Topic
 
 	afterRefCount := len(afterDetail.UserL4Refs) + len(afterDetail.AgentL4Refs)
 	if afterRefCount <= beforeRefCount {
@@ -187,11 +198,12 @@ func TestUpdateL4Append(t *testing.T) {
 		// Find the new ref
 		newRefs := afterDetail.AgentL4Refs[len(beforeDetail.AgentL4Refs):]
 		for _, refID := range newRefs {
-			archive, err := mh.GetArchive(refID)
+			archRes, err := mh.Get(memhop.LayerArchive, refID)
 			if err != nil {
-				t.Errorf("GetArchive(%s) failed: %v", refID, err)
+				t.Errorf("Get(LayerArchive, %s) failed: %v", refID, err)
 				continue
 			}
+			archive := archRes.Archive
 			if archive == nil {
 				t.Errorf("Archive %s is nil", refID)
 				continue

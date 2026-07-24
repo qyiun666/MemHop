@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // L3 hypergraph E2E test using real Ollama + LLM environment.
+// v0.60.0: rewritten to use the unified Knowledge(op) domain method plus
+// the generic Get/Delete/List entry points.
 
 package test
 
@@ -20,13 +22,13 @@ func TestL3Graph(t *testing.T) {
 	defer mh.Close()
 
 	// === 1. Create a hypergraph slot ===
-	slot, err := mh.CreateL3Graph("测试知识图谱")
+	res, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpCreateGraph, Name: "测试知识图谱"})
 	if err != nil {
-		t.Fatalf("CreateL3Graph failed: %v", err)
+		t.Fatalf("Knowledge(KOpCreateGraph) failed: %v", err)
 	}
+	slot := res.Slot
 	graphID := hash.FormatHash(slot.IDHash)
 	graphHash := slot.IDHash
-
 	t.Logf("Created L3 graph: id=%s name=%s", graphID, slot.Name)
 
 	// === 2. Add 3 nodes ===
@@ -61,14 +63,10 @@ func TestL3Graph(t *testing.T) {
 		Summary:    strPtr("微服务架构概述"),
 	}
 
-	if err := mh.AddL3Node(graphID, node1); err != nil {
-		t.Fatalf("AddL3Node node1 failed: %v", err)
-	}
-	if err := mh.AddL3Node(graphID, node2); err != nil {
-		t.Fatalf("AddL3Node node2 failed: %v", err)
-	}
-	if err := mh.AddL3Node(graphID, node3); err != nil {
-		t.Fatalf("AddL3Node node3 failed: %v", err)
+	for _, n := range []*memhop.HypergraphNode{node1, node2, node3} {
+		if _, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpAddNode, GraphID: graphID, Node: n}); err != nil {
+			t.Fatalf("Knowledge(KOpAddNode) failed: %v", err)
+		}
 	}
 	t.Log("Added 3 nodes")
 
@@ -90,148 +88,154 @@ func TestL3Graph(t *testing.T) {
 		Label:   strPtr("related"),
 	}
 
-	if err := mh.AddL3Edge(graphID, edge1); err != nil {
-		t.Fatalf("AddL3Edge edge1 failed: %v", err)
-	}
-	if err := mh.AddL3Edge(graphID, edge2); err != nil {
-		t.Fatalf("AddL3Edge edge2 failed: %v", err)
+	for _, e := range []*memhop.HypergraphEdge{edge1, edge2} {
+		if _, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpAddEdge, GraphID: graphID, Edge: e}); err != nil {
+			t.Fatalf("Knowledge(KOpAddEdge) failed: %v", err)
+		}
 	}
 	t.Log("Added 2 edges")
 
 	// === 4. Sub-tests ===
 
-	t.Run("GetL3", func(t *testing.T) {
-		detail, err := mh.GetL3(graphID)
+	t.Run("GetKnowledge", func(t *testing.T) {
+		r, err := mh.Get(memhop.LayerKnowledge, graphID)
 		if err != nil {
-			t.Fatalf("GetL3 failed: %v", err)
+			t.Fatalf("Get(LayerKnowledge) failed: %v", err)
 		}
+		detail := r.Knowledge
 		if len(detail.Nodes) != 3 {
 			t.Errorf("expected 3 nodes, got %d", len(detail.Nodes))
 		}
 		if len(detail.Edges) != 2 {
 			t.Errorf("expected 2 edges, got %d", len(detail.Edges))
 		}
-		t.Logf("GetL3 OK: nodes=%d edges=%d", len(detail.Nodes), len(detail.Edges))
+		t.Logf("Get(LayerKnowledge) OK: nodes=%d edges=%d", len(detail.Nodes), len(detail.Edges))
 	})
 
-	t.Run("SearchL3Nodes", func(t *testing.T) {
-		result, err := mh.SearchL3Nodes(memhop.L3SearchQuery{Keyword: "Go"})
+	t.Run("SearchKnowledge", func(t *testing.T) {
+		r, err := mh.Knowledge(memhop.KnowledgeOp{
+			Kind:        memhop.KOpSearch,
+			SearchQuery: &memhop.L3SearchQuery{Keyword: "Go"},
+		})
 		if err != nil {
-			t.Fatalf("SearchL3Nodes failed: %v", err)
+			t.Fatalf("Knowledge(KOpSearch) failed: %v", err)
 		}
-		if len(result.Nodes) == 0 {
-			t.Error("SearchL3Nodes returned no results for keyword 'Go'")
+		if len(r.Search.Nodes) == 0 {
+			t.Error("KOpSearch returned no results for keyword 'Go'")
 		}
-		t.Logf("SearchL3Nodes OK: matched %d nodes", len(result.Nodes))
+		t.Logf("KOpSearch OK: matched %d nodes", len(r.Search.Nodes))
 	})
 
 	t.Run("GraphQuery", func(t *testing.T) {
 		startNode := hash.FormatHash(node1.IDHash)
-		subgraph, err := mh.GraphQuery(graphID, startNode, 2, nil)
+		r, err := mh.Knowledge(memhop.KnowledgeOp{
+			Kind:      memhop.KOpGraphQuery,
+			GraphID:   graphID,
+			StartNode: startNode,
+			MaxDepth:  2,
+		})
 		if err != nil {
-			t.Fatalf("GraphQuery failed: %v", err)
+			t.Fatalf("Knowledge(KOpGraphQuery) failed: %v", err)
 		}
-		if len(subgraph.Nodes) == 0 {
-			t.Error("GraphQuery returned no nodes")
+		if len(r.Subgraph.Nodes) == 0 {
+			t.Error("KOpGraphQuery returned no nodes")
 		}
-		if len(subgraph.Edges) == 0 {
-			t.Error("GraphQuery returned no edges")
+		if len(r.Subgraph.Edges) == 0 {
+			t.Error("KOpGraphQuery returned no edges")
 		}
-		t.Logf("GraphQuery OK: nodes=%d edges=%d", len(subgraph.Nodes), len(subgraph.Edges))
+		t.Logf("KOpGraphQuery OK: nodes=%d edges=%d", len(r.Subgraph.Nodes), len(r.Subgraph.Edges))
 	})
 
 	t.Run("DSLQueryMatch", func(t *testing.T) {
-		// MATCH all nodes in the graph
-		result, err := mh.DSLQuery("MATCH (n)")
+		r, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDSL, DSLString: "MATCH (n)"})
 		if err != nil {
-			t.Fatalf("DSLQuery MATCH failed: %v", err)
+			t.Fatalf("Knowledge(KOpDSL) MATCH failed: %v", err)
 		}
-		if result.Nodes == nil || result.Nodes.Total == 0 {
-			t.Error("DSLQuery MATCH returned no nodes")
+		if r.DSL.Nodes == nil || r.DSL.Nodes.Total == 0 {
+			t.Error("KOpDSL MATCH returned no nodes")
 		}
-		t.Logf("DSLQuery MATCH OK: %d nodes", result.Nodes.Total)
+		t.Logf("KOpDSL MATCH OK: %d nodes", r.DSL.Nodes.Total)
 	})
 
 	t.Run("DSLQueryPath", func(t *testing.T) {
 		startHex := hash.FormatHash(node1.IDHash)
-		dsl := `PATH FROM "` + startHex + `" DEPTH 2`
-		result, err := mh.DSLQuery(dsl)
+		dslStr := `PATH FROM "` + startHex + `" DEPTH 2`
+		r, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDSL, DSLString: dslStr})
 		if err != nil {
-			t.Fatalf("DSLQuery PATH failed: %v", err)
+			t.Fatalf("Knowledge(KOpDSL) PATH failed: %v", err)
 		}
-		if result.Hops == nil || result.Hops.Total == 0 {
-			t.Error("DSLQuery PATH returned no hops")
+		if r.DSL.Hops == nil || r.DSL.Hops.Total == 0 {
+			t.Error("KOpDSL PATH returned no hops")
 		}
-		t.Logf("DSLQuery PATH OK: %d hops", result.Hops.Total)
+		t.Logf("KOpDSL PATH OK: %d hops", r.DSL.Hops.Total)
 	})
 
 	t.Run("DetectCommunities", func(t *testing.T) {
-		result, err := mh.DetectCommunities(graphID, nil)
+		r, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDetectCommunities, GraphID: graphID})
 		if err != nil {
-			t.Fatalf("DetectCommunities failed: %v", err)
+			t.Fatalf("Knowledge(KOpDetectCommunities) failed: %v", err)
 		}
-		if result.TotalNodes != 3 {
-			t.Errorf("expected TotalNodes=3, got %d", result.TotalNodes)
+		if r.Community.TotalNodes != 3 {
+			t.Errorf("expected TotalNodes=3, got %d", r.Community.TotalNodes)
 		}
-		t.Logf("DetectCommunities OK: %d nodes, %d communities",
-			result.TotalNodes, len(result.Communities))
+		t.Logf("KOpDetectCommunities OK: %d nodes, %d communities",
+			r.Community.TotalNodes, len(r.Community.Communities))
 	})
 
 	t.Run("ListKnowledge", func(t *testing.T) {
-		result, err := mh.ListKnowledge(memhop.KnowledgeListQuery{Page: 1, PageSize: 10})
+		r, err := mh.List(memhop.LayerKnowledge, memhop.ListRequest{
+			Knowledge: &memhop.KnowledgeListQuery{Page: 1, PageSize: 10},
+		})
 		if err != nil {
-			t.Fatalf("ListKnowledge failed: %v", err)
+			t.Fatalf("List(LayerKnowledge) failed: %v", err)
 		}
-		if result.Total < 1 {
-			t.Errorf("expected at least 1 knowledge graph, got %d", result.Total)
+		if r.Knowledge.Total < 1 {
+			t.Errorf("expected at least 1 knowledge graph, got %d", r.Knowledge.Total)
 		}
-		t.Logf("ListKnowledge OK: total=%d items=%d", result.Total, len(result.Items))
+		t.Logf("List(LayerKnowledge) OK: total=%d items=%d", r.Knowledge.Total, len(r.Knowledge.Items))
 	})
 
 	t.Run("GetKnowledgeNodes", func(t *testing.T) {
-		result, err := mh.GetKnowledgeNodes(memhop.KnowledgeNodeQuery{
-			ByKeyword: &crud.ByKeywordQuery{
-				GraphID: graphID,
-				Keyword: "并发",
-				Limit:   10,
+		r, err := mh.Knowledge(memhop.KnowledgeOp{
+			Kind: memhop.KOpGetNodes,
+			NodesQuery: &memhop.KnowledgeNodeQuery{
+				ByKeyword: &crud.ByKeywordQuery{
+					GraphID: graphID,
+					Keyword: "并发",
+					Limit:   10,
+				},
 			},
 		})
 		if err != nil {
-			t.Fatalf("GetKnowledgeNodes failed: %v", err)
+			t.Fatalf("Knowledge(KOpGetNodes) failed: %v", err)
 		}
-		if result.Total == 0 {
-			t.Error("GetKnowledgeNodes returned no results for keyword '并发'")
+		if r.Nodes.Total == 0 {
+			t.Error("KOpGetNodes returned no results for keyword '并发'")
 		}
-		t.Logf("GetKnowledgeNodes OK: total=%d", result.Total)
+		t.Logf("KOpGetNodes OK: total=%d", r.Nodes.Total)
 	})
 
 	// === 5. Cleanup ===
 	t.Run("Cleanup", func(t *testing.T) {
 		// Delete edges first, then nodes, then the graph
-		if err := mh.DeleteL3Edge(edge1.IDHash); err != nil {
-			t.Errorf("DeleteL3Edge edge1 failed: %v", err)
+		for _, eh := range []uint64{edge1.IDHash, edge2.IDHash} {
+			if _, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteEdge, EdgeHash: eh}); err != nil {
+				t.Errorf("KOpDeleteEdge %x failed: %v", eh, err)
+			}
 		}
-		if err := mh.DeleteL3Edge(edge2.IDHash); err != nil {
-			t.Errorf("DeleteL3Edge edge2 failed: %v", err)
+		for _, nh := range []uint64{node1.IDHash, node2.IDHash, node3.IDHash} {
+			if _, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteNode, NodeHash: nh}); err != nil {
+				t.Errorf("KOpDeleteNode %x failed: %v", nh, err)
+			}
 		}
-		if err := mh.DeleteL3Node(node1.IDHash); err != nil {
-			t.Errorf("DeleteL3Node node1 failed: %v", err)
-		}
-		if err := mh.DeleteL3Node(node2.IDHash); err != nil {
-			t.Errorf("DeleteL3Node node2 failed: %v", err)
-		}
-		if err := mh.DeleteL3Node(node3.IDHash); err != nil {
-			t.Errorf("DeleteL3Node node3 failed: %v", err)
-		}
-		if err := mh.DeleteL3(graphID); err != nil {
-			t.Errorf("DeleteL3 failed: %v", err)
+		if err := mh.Delete(memhop.LayerKnowledge, graphID); err != nil {
+			t.Errorf("Delete(LayerKnowledge) failed: %v", err)
 		}
 		// Verify deletion
-		_, err := mh.GetL3(graphID)
-		if err == nil {
-			t.Error("expected error after DeleteL3, got nil")
+		if _, err := mh.Get(memhop.LayerKnowledge, graphID); err == nil {
+			t.Error("expected error after Delete(LayerKnowledge), got nil")
 		} else {
-			t.Logf("DeleteL3 verified: %v", err)
+			t.Logf("Delete(LayerKnowledge) verified: %v", err)
 		}
 	})
 }

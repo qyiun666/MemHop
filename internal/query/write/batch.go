@@ -84,19 +84,21 @@ type encodedItem struct {
 func encodeItems(items []StoreItem, deps *BatchDeps) ([]encodedItem, error) {
 	encoded := make([]encodedItem, 0, len(items))
 	for i, item := range items {
+		keywords := item.Keywords
+		// For batch import, keywords are required (caller must provide pre-extracted facts).
+		if len(keywords) == 0 {
+			return nil, fmt.Errorf("encode item %d: keywords required for batch import", i)
+		}
 		ei := encodedItem{
 			text:       item.Content,
-			keywords:   item.Keywords,
+			keywords:   keywords,
 			topicLabel: item.TopicLabel,
 			importance: float32(item.Score),
 			source:     item.Source,
 			sourceType: item.SourceType,
 		}
 		if deps.Encoder != nil && deps.Encoder.IsAvailable() {
-			encodeText := item.Content
-			if len(item.Keywords) > 0 {
-				encodeText = strutil.JoinStrings(item.Keywords, " ")
-			}
+			encodeText := strutil.JoinStrings(keywords, " ")
 			output, err := deps.Encoder.Encode(encodeText)
 			if err != nil {
 				return nil, fmt.Errorf("encode item %d (%q): %w", i, strutil.SafeCharSlice(item.Content, 40), err)
@@ -382,9 +384,6 @@ func collectKeywords(items []encodedItem, indices []int) []string {
 	kws := make([]string, 0, len(seen))
 	for k := range seen {
 		kws = append(kws, k)
-	}
-	if len(kws) > 10 {
-		kws = kws[:10]
 	}
 	return kws
 }

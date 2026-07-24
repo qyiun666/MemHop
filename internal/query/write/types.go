@@ -87,7 +87,7 @@ type StoreBatch struct {
 // StoreItem is a single item in a batch store operation.
 type StoreItem struct {
 	Content    string   `json:"content"`
-	Keywords   []string `json:"keywords"`
+	Keywords   []string `json:"keywords,omitempty"`
 	Source     string   `json:"source"`
 	SourceType string   `json:"source_type"`
 	Score      float64  `json:"score"`

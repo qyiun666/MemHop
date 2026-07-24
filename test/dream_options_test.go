@@ -9,6 +9,7 @@
 package test
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -82,7 +83,7 @@ func TestDreamOptions_NilOptsWithInjectedLLM(t *testing.T) {
 
 	llm := &mockLLMAndChat{}
 	// Nil opts path uses config LLM; to stay offline, use empty opts + injected LLM.
-	report, err := mh.Dream(&memhop.DreamOptions{LLM: llm})
+	report, err := mh.Dream(context.Background(), &memhop.DreamOptions{LLM: llm})
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
@@ -102,7 +103,7 @@ func TestDreamOptions_LLMReusedAsChat(t *testing.T) {
 	defer mh.Close()
 
 	llm := &mockLLMAndChat{}
-	_, err := mh.Dream(&memhop.DreamOptions{LLM: llm})
+	_, err := mh.Dream(context.Background(), &memhop.DreamOptions{LLM: llm})
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
@@ -121,7 +122,7 @@ func TestDreamOptions_SkipDistill(t *testing.T) {
 
 	llm := &mockLLMOnly{}
 	chat := &mockChat{}
-	report, err := mh.Dream(&memhop.DreamOptions{
+	report, err := mh.Dream(context.Background(), &memhop.DreamOptions{
 		LLM: llm, Chat: chat, SkipDistill: true,
 	})
 	if err != nil {
@@ -150,7 +151,7 @@ func TestDreamOptions_SeparateProviders(t *testing.T) {
 
 	llm := &mockLLMOnly{}
 	chat := &mockChat{}
-	_, err := mh.Dream(&memhop.DreamOptions{LLM: llm, Chat: chat})
+	_, err := mh.Dream(context.Background(), &memhop.DreamOptions{LLM: llm, Chat: chat})
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
@@ -171,7 +172,7 @@ func TestDreamOptions_L2IDsStrictSemantics(t *testing.T) {
 	defer mh.Close()
 
 	llm := &mockLLMAndChat{}
-	report, err := mh.Dream(&memhop.DreamOptions{
+	report, err := mh.Dream(context.Background(), &memhop.DreamOptions{
 		LLM:   llm,
 		L2IDs: []string{"not-a-hex-id"},
 	})
@@ -197,7 +198,7 @@ func TestDreamOptions_L2IDsValidHex(t *testing.T) {
 
 	llm := &mockLLMAndChat{}
 	// 16 hex chars representing a phantom L2 ID.
-	report, err := mh.Dream(&memhop.DreamOptions{
+	report, err := mh.Dream(context.Background(), &memhop.DreamOptions{
 		LLM:   llm,
 		L2IDs: []string{"0123456789abcdef"},
 	})
@@ -217,7 +218,7 @@ func TestDreamOptions_EmptyOptsWithInjection(t *testing.T) {
 
 	llm := &mockLLMAndChat{}
 	// &DreamOptions{LLM: llm} equivalent to just setting LLM.
-	_, err := mh.Dream(&memhop.DreamOptions{LLM: llm})
+	_, err := mh.Dream(context.Background(), &memhop.DreamOptions{LLM: llm})
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
@@ -234,7 +235,7 @@ func TestDreamOptions_ClosedInstance(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 	llm := &mockLLMAndChat{}
-	_, err := mh.Dream(&memhop.DreamOptions{LLM: llm})
+	_, err := mh.Dream(context.Background(), &memhop.DreamOptions{LLM: llm})
 	if err == nil {
 		t.Fatal("Dream on closed instance returned nil error")
 	}
@@ -314,7 +315,7 @@ func TestDreamOptions_NilOpts_ConfigLevel(t *testing.T) {
 	mh := openMemHopWithLLMURL(t, srv.URL)
 	defer mh.Close()
 
-	report, err := mh.Dream(nil)
+	report, err := mh.Dream(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("Dream(nil): %v", err)
 	}
@@ -335,7 +336,7 @@ func TestDreamOptions_BaseURLConfig(t *testing.T) {
 	mh := openMemHopWithLLMURL(t, srv.URL)
 	defer mh.Close()
 
-	if _, err := mh.Dream(nil); err != nil {
+	if _, err := mh.Dream(context.Background(), nil); err != nil {
 		t.Fatalf("Dream(nil) with base URL: %v", err)
 	}
 }
@@ -360,7 +361,7 @@ func TestDreamOptions_Retry429(t *testing.T) {
 	defer mh.Close()
 
 	start := time.Now()
-	report, err := mh.Dream(nil)
+	report, err := mh.Dream(context.Background(), nil)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Dream(nil) with 429 backoff: %v", err)

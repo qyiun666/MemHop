@@ -3,6 +3,7 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -109,7 +110,7 @@ func evalTopicCohesion(t *testing.T, mh *memhop.MemHop, fixture map[string]inter
 		}
 
 		// Run Dream
-		if _, err := mh.Dream(nil); err != nil {
+		if _, err := mh.Dream(context.Background(), nil); err != nil {
 			t.Logf("  Dream: %v", err)
 		}
 	}
@@ -217,7 +218,7 @@ func evalCrossSession(t *testing.T, mh *memhop.MemHop, fixture map[string]interf
 
 	// Dream
 	t.Log("执行 Dream...")
-	if _, err := mh.Dream(nil); err != nil {
+	if _, err := mh.Dream(context.Background(), nil); err != nil {
 		t.Logf("  Dream: %v", err)
 	}
 
@@ -264,7 +265,11 @@ func evalDreamEffect(t *testing.T, mh *memhop.MemHop, fixture map[string]interfa
 
 	// Dream 前状态
 	healthBefore, _ := mh.HealthCheck()
-	profileBefore, _ := mh.GetProfile()
+	profileBeforeRes, _ := mh.Get(memhop.LayerProfile, "")
+	var profileBefore *memhop.ProfileSlot
+	if profileBeforeRes != nil {
+		profileBefore = profileBeforeRes.Profile
+	}
 	t.Logf("[%s] Dream 前: L0=%d L1=%d L2=%d L3=%d L4=%d L5=%d",
 		name,
 		healthBefore.LayerCounts["l0_profile"],
@@ -280,7 +285,7 @@ func evalDreamEffect(t *testing.T, mh *memhop.MemHop, fixture map[string]interfa
 
 	// 执行 Dream
 	t.Log("执行 Dream...")
-	report, err := mh.Dream(nil)
+	report, err := mh.Dream(context.Background(), nil)
 	if err != nil {
 		t.Logf("  Dream 失败: %v", err)
 		t.Logf("  (Dream 依赖 LLM，英文对话 + DeepSeek 可能解析失败)")
@@ -301,7 +306,11 @@ func evalDreamEffect(t *testing.T, mh *memhop.MemHop, fixture map[string]interfa
 
 	// Dream 后状态
 	healthAfter, _ := mh.HealthCheck()
-	profileAfter, _ := mh.GetProfile()
+	profileAfterRes, _ := mh.Get(memhop.LayerProfile, "")
+	var profileAfter *memhop.ProfileSlot
+	if profileAfterRes != nil {
+		profileAfter = profileAfterRes.Profile
+	}
 
 	t.Logf("")
 	t.Logf("Dream 效果对比:")

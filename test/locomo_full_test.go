@@ -3,6 +3,7 @@
 package test
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -39,7 +40,7 @@ func TestLOCOMOFull(t *testing.T) {
 
 		// Dream every ~20 turns (after each session batch if close enough)
 		if totalTurns-lastDreamTurn >= 20 {
-			if _, err := mh.Dream(nil); err != nil {
+			if _, err := mh.Dream(context.Background(), nil); err != nil {
 				t.Logf("  Dream at turn %d: %v", totalTurns, err)
 			} else {
 				t.Logf("  Dream at turn %d: OK (L1=%d L2=%d L3=%d)",
@@ -50,7 +51,7 @@ func TestLOCOMOFull(t *testing.T) {
 	}
 	// Final Dream after all sessions
 	t.Log("Final Dream...")
-	report, err := mh.Dream(nil)
+	report, err := mh.Dream(context.Background(), nil)
 	if err != nil {
 		t.Logf("  Final Dream: %v", err)
 	} else {
@@ -98,10 +99,11 @@ func TestLOCOMOFull(t *testing.T) {
 		// For each scene, get ALL depth-1 topics and check their keywords
 		found := false
 		for sceneID := range sceneIDs {
-			tree, err := mh.GetSceneTree(sceneID)
-			if err != nil || tree == nil {
+			treeRes, err := mh.Topic(memhop.TopicOp{Kind: memhop.TOpSceneTree, SceneID: sceneID})
+			if err != nil || treeRes == nil || treeRes.SceneTree == nil {
 				continue
 			}
+			tree := treeRes.SceneTree
 			for _, node := range tree.Nodes {
 				for _, kw := range node.UserKeywords {
 					if strings.Contains(strings.ToLower(kw), answerLower) ||

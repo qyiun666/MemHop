@@ -3,6 +3,7 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -73,7 +74,7 @@ func runSessions(t *testing.T, mh *memhop.MemHop, fixture map[string]interface{}
 
 			// Dream every 20 turns
 			if totalTurns%20 == 0 {
-				report, err := mh.Dream(nil)
+				report, err := mh.Dream(context.Background(), nil)
 				if err != nil {
 					t.Logf("  Dream at turn %d: %v", totalTurns, err)
 				} else {
@@ -92,7 +93,7 @@ func runSessions(t *testing.T, mh *memhop.MemHop, fixture map[string]interface{}
 	}
 
 	// Final Dream
-	report, err := mh.Dream(nil)
+	report, err := mh.Dream(context.Background(), nil)
 	if err != nil {
 		t.Logf("[%s] Final Dream: %v", name, err)
 	} else {
@@ -211,8 +212,9 @@ func evaluateQuestions(t *testing.T, mh *memhop.MemHop, questions []questionItem
 		// 如果直接 context 没找到，检查场景树
 		if !found && len(result.Contexts) > 0 {
 			sceneID := result.Contexts[0].SceneID
-			tree, err := mh.GetSceneTree(sceneID)
-			if err == nil && tree != nil {
+			treeRes, err := mh.Topic(memhop.TopicOp{Kind: memhop.TOpSceneTree, SceneID: sceneID})
+			if err == nil && treeRes != nil && treeRes.SceneTree != nil {
+				tree := treeRes.SceneTree
 				for _, node := range tree.Nodes {
 					for _, kw := range node.UserKeywords {
 						if matchAnswer(strings.ToLower(kw), q.answer) {

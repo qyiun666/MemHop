@@ -17,10 +17,10 @@ import (
 )
 
 // RunSearch orchestrates the full search pipeline:
-//  1. LLM preprocessing (extract keywords, judge L3 import)
+//  1. LLM fact extraction (atomic facts from user dialogue)
 //  2. L2 retrieval (with activation/recent boosts)
 //  3. L1-associated L2 lookup
-//  4. Return L0 + L2 + associated L2 + L5
+//  4. Store user content to matched topic
 //  5. Touch search results for session management
 func RunSearch(
 	q SearchQuery,
@@ -29,25 +29,22 @@ func RunSearch(
 	llmCfg *config.LlmConfig,
 	defaults *config.MemHopDefaults,
 ) (*SearchResult, error) {
-	// Step 1: LLM preprocessing — extract keywords for topic creation and L3 import decision.
-	var keywords []string
+	// Step 1: LLM fact extraction — extract atomic memory facts from user content.
+	var facts []string
 	if llm := dream.BuildChatProvider(llmCfg); llm != nil {
-		preprocessResult, err := dream.PreprocessSearchQuery(llm, q.Text)
+		factResult, err := dream.ExtractFacts(llm, q.Text)
 		if err != nil {
-			slog.Warn("[search] LLM preprocessing failed, falling back to tokenizer",
+			slog.Warn("[search] LLM fact extraction failed, falling back to tokenizer",
 				"error", err)
-		} else if preprocessResult != nil {
-			keywords = preprocessResult.Keywords
-			if preprocessResult.NeedsL3Import && len(preprocessResult.L3Entities) > 0 {
-				slog.Info("L3 import needed from search", "entities", len(preprocessResult.L3Entities))
-			}
+		} else if factResult != nil && len(factResult.Facts) > 0 {
+			facts = factResult.Facts
 		}
 	}
-	// Fallback to tokenizer if LLM not configured or returned no keywords
-	if len(keywords) == 0 {
-		keywords = index.Tokenize(q.Text)
+	// Fallback to tokenizer if LLM not configured or returned no facts
+	if len(facts) == 0 {
+		facts = index.Tokenize(q.Text)
 	}
-	deps.PreprocessedKeywords = keywords
+	deps.PreprocessedKeywords = facts
 
 	// Step 2: Search or auto-create L2 context.
 	result, err := SearchContext(q, deps)
@@ -69,18 +66,42 @@ func RunSearch(
 	return result, nil
 }
 
-// RunDirectedSearch handles the directed_l2_id fast path: load context directly
-// without running LLM preprocessing or search pipeline.
+// RunDirectedSearch handles the directed_l2_id fast path: load context directly,
+// store user content to the directed topic, and touch session.
 func RunDirectedSearch(
 	q SearchQuery,
 	deps *SearchDeps,
 	sessionMgr *session.SessionManager,
+	llmCfg *config.LlmConfig,
 	defaults *config.MemHopDefaults,
 ) (*SearchResult, error) {
+	// Extract facts for user content storage.
+	var facts []string
+	if llm := dream.BuildChatProvider(llmCfg); llm != nil {
+		factResult, err := dream.ExtractFacts(llm, q.Text)
+		if err != nil {
+			slog.Warn("[search-directed] LLM fact extraction failed", "error", err)
+		} else if factResult != nil && len(factResult.Facts) > 0 {
+			facts = factResult.Facts
+		}
+	}
+	if len(facts) == 0 {
+		facts = index.Tokenize(q.Text)
+	}
+	deps.PreprocessedKeywords = facts
+
 	result, err := SearchContext(q, deps)
 	if err != nil {
 		return nil, err
 	}
+
+	// Store user content to the directed topic.
+	if len(result.Contexts) > 0 {
+		if topicHash, parseErr := hash.ParseID(result.Contexts[0].ID); parseErr == nil {
+			storeQueryAsL4(q, deps, topicHash)
+		}
+	}
+
 	touchContexts(result.Contexts, sessionMgr, defaults)
 	return result, nil
 }
