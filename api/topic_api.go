@@ -7,9 +7,9 @@
 package memhop
 
 import (
-	"memhop/internal/common/hash"
-	"memhop/internal/common/mherrors"
-	"memhop/internal/query/crud"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/query/crud"
 )
 
 // Topic performs an L0 / L2 sub-operation identified by op.Kind.

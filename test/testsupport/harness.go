@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"memhop/api"
+	"github.com/qyiun666/MemHop/api"
 )
 
 // SearchUpdatePair 执行一次完整的用户-Agent 交互：

@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	memhop "memhop/api"
-	"memhop/internal/query/encoder"
+	memhop "github.com/qyiun666/MemHop/api"
+	"github.com/qyiun666/MemHop/internal/query/encoder"
 )
 
 // LOCOMO10 Retrieval Benchmark

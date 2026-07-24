@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"memhop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
 // MapFile is platform-specific — see mmap_unix.go or mmap_windows.go.

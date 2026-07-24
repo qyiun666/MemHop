@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"memhop/api"
-	"memhop/test/testsupport"
+	"github.com/qyiun666/MemHop/api"
+	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
 // ── 核心验证维度 ──────────────────────────────────────────

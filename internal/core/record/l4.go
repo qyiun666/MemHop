@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"memhop/internal/core/model"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // ReadArchiveSlot reads and deserializes an ArchiveSlot from the storage engine.

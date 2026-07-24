@@ -19,9 +19,9 @@ import (
 	"testing"
 	"time"
 
-	memhop "memhop/api"
-	"memhop/internal/query/dream"
-	"memhop/test/testsupport"
+	memhop "github.com/qyiun666/MemHop/api"
+	"github.com/qyiun666/MemHop/internal/query/dream"
+	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
 // --- mocks -----------------------------------------------------------------

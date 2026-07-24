@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode"
 
-	"memhop/api"
+	"github.com/qyiun666/MemHop/api"
 )
 
 // MockVectorDim is the default dimension used by MockEncoder and OpenMemHopMock.

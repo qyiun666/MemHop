@@ -8,11 +8,11 @@ package crud
 import (
 	"encoding/json"
 
-	"memhop/internal/common/hash"
-	"memhop/internal/common/mherrors"
-	"memhop/internal/common/timeutil"
-	"memhop/internal/core/model"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/timeutil"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // LoadProfileSlot reads the L0 profile from the engine.

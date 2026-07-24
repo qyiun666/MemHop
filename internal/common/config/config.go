@@ -3,7 +3,7 @@ package config
 import (
 	"math"
 
-	"memhop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
 type MemHopConfig struct {

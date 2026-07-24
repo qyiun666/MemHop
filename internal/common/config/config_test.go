@@ -8,7 +8,7 @@ import (
 	"math"
 	"testing"
 
-	"memhop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
 func TestValidateNilConfig(t *testing.T) {

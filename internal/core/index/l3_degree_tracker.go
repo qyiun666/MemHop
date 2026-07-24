@@ -9,8 +9,8 @@ import (
 	"encoding/json"
 	"sync"
 
-	"memhop/internal/core/model"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // DegreeTracker tracks per-node degree counts per graph.

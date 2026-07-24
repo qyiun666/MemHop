@@ -9,11 +9,11 @@ package search
 import (
 	"log/slog"
 
-	"memhop/internal/common/config"
-	"memhop/internal/common/hash"
-	"memhop/internal/core/index"
-	"memhop/internal/query/dream"
-	"memhop/internal/query/session"
+	"github.com/qyiun666/MemHop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/query/dream"
+	"github.com/qyiun666/MemHop/internal/query/session"
 )
 
 // RunSearch orchestrates the full search pipeline:

@@ -6,11 +6,11 @@
 package search
 
 import (
-	"memhop/internal/common/config"
-	"memhop/internal/core/index"
-	"memhop/internal/core/storage"
-	"memhop/internal/query/crud"
-	"memhop/internal/query/encoder"
+	"github.com/qyiun666/MemHop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/query/crud"
+	"github.com/qyiun666/MemHop/internal/query/encoder"
 )
 
 // RequestSource records who initiated an API request.

@@ -6,7 +6,7 @@
 package importx
 
 import (
-	"memhop/internal/query/write"
+	"github.com/qyiun666/MemHop/internal/query/write"
 )
 
 // ImportRequest is a memory import request.

@@ -8,7 +8,7 @@ package crud
 import (
 	"encoding/json"
 
-	"memhop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/model"
 )
 
 // TopicListQuery is the L2 list query.

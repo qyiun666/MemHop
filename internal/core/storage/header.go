@@ -7,7 +7,7 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 
-	"memhop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
 // A/B dual header layout constants.

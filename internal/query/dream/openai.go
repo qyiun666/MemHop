@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"memhop/internal/common/config"
-	"memhop/internal/common/mherrors"
-	"memhop/internal/common/strutil"
+	"github.com/qyiun666/MemHop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/strutil"
 )
 
 const (

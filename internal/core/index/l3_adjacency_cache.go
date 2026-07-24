@@ -9,7 +9,7 @@ import (
 	"container/list"
 	"sync"
 
-	"memhop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/model"
 )
 
 // cacheEntry holds the adjacency data and its position in the LRU list.

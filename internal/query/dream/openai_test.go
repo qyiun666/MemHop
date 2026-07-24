@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"memhop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/common/config"
 )
 
 // TestNormalizeChatURL covers the pure normalization logic — no HTTP.

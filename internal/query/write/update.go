@@ -9,13 +9,13 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"memhop/internal/common/config"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/mherrors"
-	"memhop/internal/core/index"
-	"memhop/internal/core/storage"
-	"memhop/internal/query/crud"
-	"memhop/internal/query/dream"
+	"github.com/qyiun666/MemHop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/query/crud"
+	"github.com/qyiun666/MemHop/internal/query/dream"
 )
 
 // UpdateDeps holds all dependencies injected into the update pipeline.

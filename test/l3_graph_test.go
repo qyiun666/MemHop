@@ -10,10 +10,10 @@ package test
 import (
 	"testing"
 
-	"memhop/api"
-	"memhop/internal/common/hash"
-	"memhop/internal/query/crud"
-	"memhop/test/testsupport"
+	"github.com/qyiun666/MemHop/api"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/query/crud"
+	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
 // TestL3Graph exercises all L3 hypergraph APIs end-to-end.

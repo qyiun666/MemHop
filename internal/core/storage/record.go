@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"io"
 
-	"memhop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
 // RecordHeaderSize is type(1) + flags(1) + length(4) + id_hash(8) = 14 bytes.

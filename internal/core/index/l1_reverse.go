@@ -10,9 +10,9 @@ import (
 	"slices"
 	"sync"
 
-	"memhop/internal/common/hash"
-	"memhop/internal/core/model"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // L1ReverseIndex maps L2 context_id → L1 ContextNode(s) pointing to it.

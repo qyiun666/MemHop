@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	"memhop/api"
+	"github.com/qyiun666/MemHop/api"
 )
 
 // 环境变量提供完整 LLM 配置时优先于 key_config.json 文件。

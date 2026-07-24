@@ -7,9 +7,9 @@ import (
 	"context"
 	"fmt"
 
-	"memhop/internal/common/hash"
-	"memhop/internal/common/mherrors"
-	"memhop/internal/query/dream"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/query/dream"
 )
 
 // DreamOptions holds optional parameters for the Dream call.

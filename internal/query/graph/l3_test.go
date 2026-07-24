@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"memhop/internal/core/model"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // --- test helpers ---

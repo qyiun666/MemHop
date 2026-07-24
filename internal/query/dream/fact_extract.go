@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"memhop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
 // FactExtractionResult holds the extracted atomic facts from dialogue content.

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"memhop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/common/config"
 )
 
 // TopicActivation tracks a single topic's activation state.

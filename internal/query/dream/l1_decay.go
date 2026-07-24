@@ -6,12 +6,12 @@ package dream
 import (
 	"math"
 
-	"memhop/internal/common/config"
-	"memhop/internal/common/timeutil"
-	"memhop/internal/core/index"
-	"memhop/internal/core/model"
-	"memhop/internal/core/record"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/common/timeutil"
+	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/record"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // L1DecayReport holds metrics from the L1 decay stage.

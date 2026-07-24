@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"memhop/internal/common/numeric"
+	"github.com/qyiun666/MemHop/internal/common/numeric"
 )
 
 func TestHttpEncoderUnavailable(t *testing.T) {

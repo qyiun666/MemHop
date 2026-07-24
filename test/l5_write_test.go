@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"memhop/api"
-	"memhop/test/testsupport"
+	"github.com/qyiun666/MemHop/api"
+	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
 // TestL5WriteAPI tests the new L5 write API methods via v0.60.0 Crystal(op).

@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"sort"
 
-	"memhop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/core/index"
 )
 
 // RRFMerge fuses two ranked lists using Reciprocal Rank Fusion.

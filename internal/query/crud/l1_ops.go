@@ -8,9 +8,9 @@ package crud
 import (
 	"encoding/json"
 
-	"memhop/internal/common/hash"
-	"memhop/internal/core/model"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // LoadL1Graph traverses the engine and builds the full L1 visualization graph.

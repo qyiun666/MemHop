@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"memhop/internal/common/mherrors"
-	"memhop/internal/common/numeric"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/numeric"
 )
 
 const (

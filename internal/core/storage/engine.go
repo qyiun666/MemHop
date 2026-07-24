@@ -9,7 +9,7 @@ import (
 	"os"
 	"sync"
 
-	"memhop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
 // RecordEntry is used for batch writes.

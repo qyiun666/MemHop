@@ -12,15 +12,15 @@ import (
 	"strconv"
 	"strings"
 
-	"memhop/internal/common/hash"
-	"memhop/internal/common/numeric"
-	"memhop/internal/common/strutil"
-	"memhop/internal/common/timeutil"
-	"memhop/internal/core/index"
-	"memhop/internal/core/model"
-	"memhop/internal/core/record"
-	"memhop/internal/core/storage"
-	"memhop/internal/query/crud"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/numeric"
+	"github.com/qyiun666/MemHop/internal/common/strutil"
+	"github.com/qyiun666/MemHop/internal/common/timeutil"
+	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/record"
+	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/query/crud"
 )
 
 // BatchStore runs the five-phase batch store pipeline.

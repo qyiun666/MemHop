@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"memhop/internal/common/config"
-	"memhop/internal/common/hash"
-	"memhop/internal/common/timeutil"
-	"memhop/internal/core/index"
-	"memhop/internal/core/model"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/timeutil"
+	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // ============================================================================

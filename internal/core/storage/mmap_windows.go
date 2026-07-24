@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"memhop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
 // MapFile maps a file region of the given size into memory using Windows

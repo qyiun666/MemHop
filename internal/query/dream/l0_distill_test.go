@@ -7,9 +7,9 @@ import (
 	"errors"
 	"testing"
 
-	"memhop/internal/common/hash"
-	"memhop/internal/core/model"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // mockChatProvider drives DistillL0 without hitting a real LLM.

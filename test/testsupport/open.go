@@ -9,7 +9,7 @@ import (
 	"runtime"
 	"testing"
 
-	"memhop/api"
+	"github.com/qyiun666/MemHop/api"
 )
 
 // isCI reports whether the test runs in a CI environment.

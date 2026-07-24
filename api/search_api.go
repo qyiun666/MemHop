@@ -4,8 +4,8 @@
 package memhop
 
 import (
-	"memhop/internal/common/mherrors"
-	"memhop/internal/query/search"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/query/search"
 )
 
 // Search runs the full search pipeline and returns matching contexts.

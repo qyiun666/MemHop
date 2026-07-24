@@ -6,12 +6,12 @@ package memhop
 import (
 	"log/slog"
 
-	"memhop/internal/common/hash"
-	"memhop/internal/common/mherrors"
-	"memhop/internal/core/index"
-	"memhop/internal/query/crud"
-	"memhop/internal/query/dream"
-	"memhop/internal/query/write"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/query/crud"
+	"github.com/qyiun666/MemHop/internal/query/dream"
+	"github.com/qyiun666/MemHop/internal/query/write"
 )
 
 // Update appends an agent reply to the specified topic.

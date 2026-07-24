@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"memhop/api"
-	"memhop/test/testsupport"
+	"github.com/qyiun666/MemHop/api"
+	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
 // TestEnglishPromptFix validates the English prompt fix by running

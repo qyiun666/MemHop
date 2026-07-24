@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"memhop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/hash"
 )
 
 // ============================================================================

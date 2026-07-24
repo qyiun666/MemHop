@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	memhop "memhop/api"
-	"memhop/test/testsupport"
+	memhop "github.com/qyiun666/MemHop/api"
+	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
 // ── 基准测试数据集 ──────────────────────────────────────────

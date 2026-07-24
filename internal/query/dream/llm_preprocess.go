@@ -6,7 +6,7 @@ package dream
 import (
 	"strings"
 
-	"memhop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/common/config"
 )
 
 // ChatProvider is the interface for LLM chat completions.

@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"memhop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/hash"
 )
 
 // ============================================================================

@@ -9,9 +9,9 @@ import (
 	"sort"
 	"sync"
 
-	"memhop/internal/common/hash"
-	"memhop/internal/common/mherrors"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // PostingList is an inverted list for a single term.

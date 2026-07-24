@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"memhop/internal/common/config"
+	"github.com/qyiun666/MemHop/internal/common/config"
 )
 
 func TestNewSessionManager(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"memhop/internal/query/crud"
+	"github.com/qyiun666/MemHop/internal/query/crud"
 )
 
 // ---------------------------------------------------------------------------

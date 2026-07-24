@@ -6,11 +6,11 @@
 package memhop
 
 import (
-	"memhop/internal/common/mherrors"
-	"memhop/internal/core/model"
-	"memhop/internal/query/crud"
-	l3 "memhop/internal/query/graph"
-	"memhop/internal/query/graph/dsl"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/query/crud"
+	l3 "github.com/qyiun666/MemHop/internal/query/graph"
+	"github.com/qyiun666/MemHop/internal/query/graph/dsl"
 )
 
 // Knowledge performs an L3 sub-operation identified by op.Kind. See

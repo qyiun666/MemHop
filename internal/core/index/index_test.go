@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"memhop/internal/common/numeric"
-	"memhop/internal/core/model"
-	"memhop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/common/numeric"
+	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
 // ============================================================================
