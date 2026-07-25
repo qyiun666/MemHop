@@ -76,7 +76,7 @@ func TestOpen(t *testing.T) {
 
 	// 更新 L0
 	{
-		err := mh.Topic(memhop.TopicOp{
+		_, err := mh.Topic(memhop.TopicOp{
 			Kind: memhop.TOpSetProfile,
 			ProfileDelta: &memhop.ProfileDelta{
 				Name:        strPtr("MemHop助手"),

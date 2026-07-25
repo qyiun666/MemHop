@@ -211,3 +211,77 @@ func TestSearchUnifiedRRFReturnsMultipleResults(t *testing.T) {
 		t.Errorf("expected top doc 5001, got %s", result.Contexts[0].ID)
 	}
 }
+
+// TestSearchNewTopicIDContract verifies that every search path exposes the
+// write target (the depth1 topic created for the current turn) via
+// SearchResult.NewTopicID, independent of Contexts ordering.
+func TestSearchNewTopicIDContract(t *testing.T) {
+	engine := createTestEngine(t)
+	sparse := index.NewSparseIndex()
+
+	writeTestTopic(t, engine, 6001, "rust programming guide")
+	terms := index.Tokenize("rust programming guide")
+	sparse.AddDocument(6001, terms, uint32(len(terms)))
+
+	deps := &SearchDeps{
+		SparseIndex: sparse,
+		L2Meta:      index.BuildL2MetaFromEngine(engine),
+		VectorDim:   768,
+		Engine:      engine,
+		Encoder:     nil,
+		L1Reverse:   index.NewL1ReverseIndex(),
+	}
+	existingID := hash.FormatHash(6001)
+
+	assertNewTopic := func(label string, result *SearchResult) {
+		t.Helper()
+		if result.NewTopicID == "" {
+			t.Fatalf("%s: NewTopicID is empty", label)
+		}
+		if result.NewTopicID == existingID {
+			t.Errorf("%s: NewTopicID equals pre-existing topic %s", label, existingID)
+		}
+		found := false
+		for _, ctx := range result.Contexts {
+			if ctx.ID == result.NewTopicID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s: NewTopicID %s not in Contexts", label, result.NewTopicID)
+		}
+	}
+
+	// Normal search with a hit: new topic is created in the matched scene.
+	hitRes, err := SearchContext(SearchQuery{Text: "rust programming", Timestamp: 1}, deps)
+	if err != nil {
+		t.Fatalf("normal hit search failed: %v", err)
+	}
+	assertNewTopic("normal-hit", hitRes)
+
+	// Normal search without a hit: new scene + topic is still created.
+	missRes, err := SearchContext(SearchQuery{Text: "quantum entanglement basics", Timestamp: 2}, deps)
+	if err != nil {
+		t.Fatalf("normal miss search failed: %v", err)
+	}
+	assertNewTopic("normal-miss", missRes)
+
+	// AutoCreate: created topic is the write target.
+	autoRes, err := SearchContext(SearchQuery{Text: "cooking pasta tonight", AutoCreate: true, Timestamp: 3}, deps)
+	if err != nil {
+		t.Fatalf("auto-create search failed: %v", err)
+	}
+	assertNewTopic("auto-create", autoRes)
+
+	// Directed: new topic is created in the target scene; the target itself
+	// is returned as an associated context, not as the write target.
+	dirRes, err := SearchContext(SearchQuery{Text: "more rust talk", DirectedL2ID: &existingID, Timestamp: 4}, deps)
+	if err != nil {
+		t.Fatalf("directed search failed: %v", err)
+	}
+	assertNewTopic("directed", dirRes)
+	if len(dirRes.AssociatedContexts) == 0 || dirRes.AssociatedContexts[0].ID != existingID {
+		t.Errorf("directed: target topic %s not in AssociatedContexts", existingID)
+	}
+}

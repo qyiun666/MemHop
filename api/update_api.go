@@ -15,7 +15,8 @@ import (
 )
 
 // Update appends an agent reply to the specified topic.
-// topicID is the hex topic ID returned by Search (ContextResult.ID).
+// topicID is the hex topic ID returned by Search (SearchResult.NewTopicID,
+// the depth1 topic created for the current turn).
 // It extracts atomic facts via LLM and appends the reply as L4 archive.
 // This is the core-loop counterpart to Search: Search stores user content,
 // Update stores agent content.

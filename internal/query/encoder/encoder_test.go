@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
+
+	"github.com/ollama/ollama/api"
 
 	"github.com/qyiun666/MemHop/internal/common/numeric"
 )
@@ -65,12 +68,19 @@ func TestF32F16Roundtrip(t *testing.T) {
 // ErrEncoder is a sentinel for test assertions (mirrors mherrors.ErrEncoder).
 var ErrEncoder = errors.New("memhop: encoder error")
 
+// newTestClient creates an api.Client pointing at the given test server.
+func newTestClient(srv *httptest.Server) *api.Client {
+	parsed, _ := url.Parse(srv.URL)
+	return api.NewClient(parsed, &http.Client{})
+}
+
 func TestHttpEncoderEncode(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/tags":
+		switch {
+		case r.Method == http.MethodHead && r.URL.Path == "/":
+			// Heartbeat
 			w.WriteHeader(http.StatusOK)
-		case "/api/embed":
+		case r.Method == http.MethodPost && r.URL.Path == "/api/embed":
 			w.Header().Set("Content-Type", "application/json")
 			fmt.Fprint(w, `{"embeddings":[[0.1,0.2]]}`)
 		default:
@@ -104,8 +114,8 @@ func TestHttpEncoderEncodeTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := &HttpEncoder{baseURL: srv.URL, dim: 2, model: "m", httpClient: &http.Client{}}
-	_, err := e.doPost("/api/embed", ollamaEmbedRequest{Model: "m", Input: "x"}, 20*time.Millisecond)
+	e := &HttpEncoder{client: newTestClient(srv), httpClient: &http.Client{}, dim: 2, model: "m"}
+	_, err := e.Encode("hello")
 	if err == nil {
 		t.Fatal("expected timeout error")
 	}
@@ -117,7 +127,7 @@ func TestHttpEncoderEncodeNon200(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := &HttpEncoder{baseURL: srv.URL, dim: 2, model: "m", httpClient: &http.Client{}}
+	e := &HttpEncoder{client: newTestClient(srv), httpClient: &http.Client{}, dim: 2, model: "m"}
 	if _, err := e.Encode("hello"); err == nil {
 		t.Fatal("expected error for non-200 response")
 	}

@@ -4,14 +4,15 @@
 package dream
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	openai "github.com/sashabaranov/go-openai"
 
 	"github.com/qyiun666/MemHop/internal/common/config"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
@@ -23,8 +24,6 @@ const (
 	defaultTimeoutSecs = 120
 	// defaultMaxOutputTokens covers DeepSeek-chat / Qwen / Claude Haiku output ceilings.
 	defaultMaxOutputTokens = 8192
-	// chatCompletionsSuffix is the OpenAI-compatible chat completions path.
-	chatCompletionsSuffix = "/v1/chat/completions"
 )
 
 const systemConsolidate = `You are a JSON extraction engine for memory consolidation. Analyze the chat memories and output structured JSON.
@@ -46,18 +45,15 @@ Rules:
 // are intentionally allowed to support local Ollama and self-hosted LLM
 // endpoints, so no SSRF allowlist is enforced at this layer.
 type OpenAIProvider struct {
-	apiURL          string
-	apiKey          string
+	client          *openai.Client
 	model           string
 	maxOutputTokens int
-	timeout         time.Duration
-	httpClient      *http.Client
 }
 
 // NewOpenAIProvider creates an OpenAI provider from config.
 // The APIURL is normalized at construction so callers may pass any of:
 // base URL (https://api.deepseek.com), API root (https://api.openai.com/v1),
-// or the full chat completions endpoint — all three resolve to /v1/chat/completions.
+// or the full chat completions endpoint — all three resolve to the same base.
 func NewOpenAIProvider(cfg *config.LlmConfig) *OpenAIProvider {
 	timeoutSecs := cfg.TimeoutSecs
 	if timeoutSecs <= 0 {
@@ -68,30 +64,34 @@ func NewOpenAIProvider(cfg *config.LlmConfig) *OpenAIProvider {
 		maxTokens = defaultMaxOutputTokens
 	}
 	timeout := time.Duration(timeoutSecs) * time.Second
+
+	baseURL := normalizeBaseURL(cfg.APIURL)
+	oc := openai.DefaultConfig(cfg.APIKey)
+	oc.BaseURL = baseURL
+	oc.HTTPClient = &http.Client{Timeout: timeout}
+
 	return &OpenAIProvider{
-		apiURL:          normalizeChatURL(cfg.APIURL),
-		apiKey:          cfg.APIKey,
+		client:          openai.NewClientWithConfig(oc),
 		model:           cfg.Model,
 		maxOutputTokens: maxTokens,
-		timeout:         timeout,
-		httpClient:      &http.Client{Timeout: timeout},
 	}
 }
 
-// normalizeChatURL accepts a base URL, /v1 root, or full chat completions
-// URL and returns the full /v1/chat/completions endpoint. Trailing slashes
-// are stripped before matching so both "https://x.y/" and "https://x.y"
-// resolve identically.
-func normalizeChatURL(raw string) string {
+// normalizeBaseURL accepts a base URL, /v1 root, or full chat completions
+// URL and returns the base URL suitable for go-openai's config.BaseURL.
+// The SDK appends /chat/completions automatically, so we strip that suffix.
+// We ensure the result ends with /v1 since the SDK does NOT add it.
+func normalizeBaseURL(raw string) string {
 	u := strings.TrimRight(strings.TrimSpace(raw), "/")
-	switch {
-	case strings.HasSuffix(u, chatCompletionsSuffix):
-		return u
-	case strings.HasSuffix(u, "/v1"):
-		return u + "/chat/completions"
-	default:
-		return u + chatCompletionsSuffix
+	// Strip the full chat completions suffix if present — SDK re-appends it.
+	if strings.HasSuffix(u, "/chat/completions") {
+		u = strings.TrimSuffix(u, "/chat/completions")
 	}
+	// Ensure the URL ends with /v1 — the SDK appends /chat/completions only.
+	if !strings.HasSuffix(u, "/v1") {
+		u += "/v1"
+	}
+	return u
 }
 
 // chatParams collects the tunable knobs for a single chat completion call.
@@ -149,29 +149,26 @@ func (p *OpenAIProvider) callAPI(ctx context.Context, system, user string) (stri
 	})
 }
 
-// do is the single HTTP dispatch path used by every chat / consolidate call.
+// do is the single dispatch path used by every chat / consolidate call.
 // It transparently retries 429 and 5xx (500/502/503/504) responses with
 // exponential backoff (500ms -> 2s), honoring ctx.Done().
 func (p *OpenAIProvider) do(
 	ctx context.Context, system, user string, params chatParams,
 ) (string, error) {
-	body := map[string]interface{}{
-		"model": p.model,
-		"messages": []map[string]string{
-			{"role": "system", "content": system},
-			{"role": "user", "content": user},
+	req := openai.ChatCompletionRequest{
+		Model: p.model,
+		Messages: []openai.ChatCompletionMessage{
+			{Role: openai.ChatMessageRoleSystem, Content: system},
+			{Role: openai.ChatMessageRoleUser, Content: user},
 		},
-		"max_tokens":        params.MaxTokens,
-		"temperature":       params.Temperature,
-		"top_p":             params.TopP,
-		"presence_penalty":  0.0,
-		"frequency_penalty": 0.0,
-		"stream":            false,
+		MaxTokens:        params.MaxTokens,
+		Temperature:      params.Temperature,
+		TopP:             params.TopP,
+		PresencePenalty:  0.0,
+		FrequencyPenalty: 0.0,
+		Stream:           false,
 	}
-	bodyBytes, err := json.Marshal(body)
-	if err != nil {
-		return "", mherrors.NewError(mherrors.ErrLLM, "marshal "+params.ErrPrefix+" request", err)
-	}
+
 	// Backoff schedule: len(delays)+1 total attempts; delays[i] is the sleep BEFORE attempt i+1.
 	delays := []time.Duration{500 * time.Millisecond, 2 * time.Second}
 	var lastErr error
@@ -183,42 +180,44 @@ func (p *OpenAIProvider) do(
 			case <-time.After(delays[attempt-1]):
 			}
 		}
-		status, respBody, err := p.attempt(ctx, bodyBytes, params.ErrPrefix)
+		resp, err := p.client.CreateChatCompletion(ctx, req)
 		if err != nil {
-			// Network / marshal / request-build error: don't retry.
-			return "", err
+			statusCode, msg := extractHTTPError(err)
+			if statusCode > 0 {
+				httpErr := mherrors.NewError(mherrors.ErrLLM,
+					fmt.Sprintf("%s: %d - %s", params.ErrPrefix, statusCode, msg))
+				if !isRetryableStatus(statusCode) || attempt == len(delays) {
+					return "", httpErr
+				}
+				lastErr = httpErr
+				continue
+			}
+			// Network / context / other error: don't retry.
+			return "", mherrors.NewError(mherrors.ErrLLM, params.ErrPrefix+" call failed", err)
 		}
-		if status == http.StatusOK {
-			return decodeChatContent(respBody, params.ErrPrefix)
+		if len(resp.Choices) == 0 {
+			return "", mherrors.NewError(mherrors.ErrSerialization,
+				"no content in "+params.ErrPrefix+" response")
 		}
-		httpErr := mherrors.NewError(mherrors.ErrLLM,
-			fmt.Sprintf("%s: %d - %s", params.ErrPrefix, status, string(respBody)))
-		if !isRetryableStatus(status) || attempt == len(delays) {
-			return "", httpErr
-		}
-		lastErr = httpErr
+		return resp.Choices[0].Message.Content, nil
 	}
 	return "", lastErr
 }
 
-// attempt sends one HTTP request and returns the status code plus the read body.
-// The response body is fully drained and closed before returning.
-func (p *OpenAIProvider) attempt(
-	ctx context.Context, bodyBytes []byte, errPrefix string,
-) (int, []byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.apiURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return 0, nil, mherrors.NewError(mherrors.ErrLLM, "create "+errPrefix+" request", err)
+// extractHTTPError extracts the HTTP status code and message from a go-openai
+// error. RequestError is checked first because go-openai may wrap a zero-value
+// APIError inside it (when the error body isn't valid JSON). Returns (0, "")
+// for non-HTTP errors.
+func extractHTTPError(err error) (int, string) {
+	var reqErr *openai.RequestError
+	if errors.As(err, &reqErr) && reqErr.HTTPStatusCode > 0 {
+		return reqErr.HTTPStatusCode, string(reqErr.Body)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+p.apiKey)
-	resp, err := p.httpClient.Do(req)
-	if err != nil {
-		return 0, nil, mherrors.NewError(mherrors.ErrLLM, errPrefix+" call failed", err)
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) && apiErr.HTTPStatusCode > 0 {
+		return apiErr.HTTPStatusCode, apiErr.Message
 	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, body, nil
+	return 0, ""
 }
 
 // isRetryableStatus returns true for status codes that indicate a transient
@@ -233,25 +232,6 @@ func isRetryableStatus(status int) bool {
 		return true
 	}
 	return false
-}
-
-// decodeChatContent extracts the first choice's message.content from a
-// non-streaming chat completions response body.
-func decodeChatContent(body []byte, errPrefix string) (string, error) {
-	var result struct {
-		Choices []struct {
-			Message struct {
-				Content string `json:"content"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", mherrors.NewError(mherrors.ErrSerialization, "parse "+errPrefix+" response", err)
-	}
-	if len(result.Choices) == 0 {
-		return "", mherrors.NewError(mherrors.ErrSerialization, "no content in "+errPrefix+" response")
-	}
-	return result.Choices[0].Message.Content, nil
 }
 
 // callWithRetry invokes callAPI once, and on JSON parse failure retries once
@@ -348,6 +328,8 @@ For each scene, group related depth-1 nodes and decide if they should be merged.
 
 Output format:
 {"l2_groups": [{"scene_id": 12345, "node_hashes": [1001,1002,1003], "merged_title": "Japan Trip Planning", "merged_summary": "User planned a 7-day trip to Tokyo and Kyoto, visited temples and tried local ramen. Budget was around 200000 yen."}], "l2_compression_needed": true}
+
+IMPORTANT: scene_id and node_hashes must echo the input id_hash values EXACTLY as given (decimal integers, do not convert to hex or truncate).
 
 When no compression is needed:
 {"l2_groups":[], "l2_compression_needed":false}

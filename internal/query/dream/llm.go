@@ -4,6 +4,13 @@
 // Package dream implements the memory consolidation (dream) pipeline.
 package dream
 
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+	"strings"
+)
+
 // LlmProvider is the interface for LLM-based memory consolidation.
 type LlmProvider interface {
 	Consolidate(input *ConsolidationInput) (*ConsolidationOutput, error)
@@ -96,4 +103,50 @@ type L2Group struct {
 	NodeHashes    []uint64 `json:"node_hashes"`
 	MergedTitle   string   `json:"merged_title"`
 	MergedSummary string   `json:"merged_summary"`
+}
+
+// UnmarshalJSON accepts scene_id and node_hashes as either JSON numbers or
+// strings. LLMs often quote 20-digit uint64 hashes because they exceed the
+// JSON safe-integer range (2^53).
+func (g *L2Group) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		SceneID       json.RawMessage   `json:"scene_id"`
+		NodeHashes    []json.RawMessage `json:"node_hashes"`
+		MergedTitle   string            `json:"merged_title"`
+		MergedSummary string            `json:"merged_summary"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	sceneID, err := parseFlexUint64(raw.SceneID)
+	if err != nil {
+		return fmt.Errorf("l2group scene_id: %w", err)
+	}
+	hashes := make([]uint64, 0, len(raw.NodeHashes))
+	for _, h := range raw.NodeHashes {
+		v, err := parseFlexUint64(h)
+		if err != nil {
+			return fmt.Errorf("l2group node_hashes: %w", err)
+		}
+		hashes = append(hashes, v)
+	}
+	g.SceneID = sceneID
+	g.NodeHashes = hashes
+	g.MergedTitle = raw.MergedTitle
+	g.MergedSummary = raw.MergedSummary
+	return nil
+}
+
+// parseFlexUint64 parses a JSON number or quoted string into uint64.
+// Accepts decimal first, then hex (with or without 0x prefix), since LLMs
+// echo IDs in whichever form they appeared in the input.
+func parseFlexUint64(raw json.RawMessage) (uint64, error) {
+	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	if s == "" || s == "null" {
+		return 0, fmt.Errorf("empty uint64 value")
+	}
+	if v, err := strconv.ParseUint(s, 10, 64); err == nil {
+		return v, nil
+	}
+	return strconv.ParseUint(strings.TrimPrefix(s, "0x"), 16, 64)
 }

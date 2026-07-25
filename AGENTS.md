@@ -117,8 +117,22 @@ internal/
 
 ## 多 Agent 协作
 
-- **新功能开发**: developer 实现 → reviewer 审查 → tester 补充测试
-- **Bug 修复**: debugger 复现定位 → 最小修复 → tester 写回归测试
+项目内置 Agent 定义位于 `.qoder/agents/builtin/`，与下方角色一一对应：
+
+| 角色 | 文件 | 职责 |
+|------|------|------|
+| full-stack-engineer | `.qoder/agents/builtin/full-stack-engineer.md` | 按复杂度分级执行代码实现，覆盖领域模型到接口适配的完整开发链路 |
+| code-reviewer | `.qoder/agents/builtin/code-reviewer.md` | 对代码变更进行专业审查，确保符合架构、质量门禁和安全红线 |
+| debugger | `.qoder/agents/builtin/debugger.md` | 复现、定位、诊断缺陷和异常行为，提供最小化修复方案 |
+| qa | `.qoder/agents/builtin/qa.md` | 测试策略制定、测试用例编写、覆盖率分析和缺陷预防 |
+| researcher | `.qoder/agents/builtin/researcher.md` | 技术调研、竞品分析、可行性验证 |
+| ui-operator | `.qoder/agents/builtin/ui-operator.md` | UI 操作与交互相关任务 |
+
+### 协作路由
+
+- **新功能开发**: full-stack-engineer 实现 → code-reviewer 审查 → qa 补充测试
+- **Bug 修复**: debugger 复现定位 → full-stack-engineer 最小修复 → qa 写回归测试
 - **技术调研**: researcher 收集分析 → 输出建议
+- **UI 相关任务**: ui-operator 执行操作 → full-stack-engineer 实现逻辑
 
 协作时始终遵循本文件的规则优先级。

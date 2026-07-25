@@ -17,26 +17,26 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/config"
 )
 
-// TestNormalizeChatURL covers the pure normalization logic — no HTTP.
-func TestNormalizeChatURL(t *testing.T) {
+// TestNormalizeBaseURL covers the pure normalization logic — no HTTP.
+func TestNormalizeBaseURL(t *testing.T) {
 	cases := []struct {
 		name string
 		in   string
 		want string
 	}{
-		{"base_url", "https://api.deepseek.com", "https://api.deepseek.com/v1/chat/completions"},
-		{"base_url_trailing_slash", "https://api.deepseek.com/", "https://api.deepseek.com/v1/chat/completions"},
-		{"v1_root", "https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"},
-		{"v1_root_trailing_slash", "https://api.openai.com/v1/", "https://api.openai.com/v1/chat/completions"},
-		{"full_url", "https://api.deepseek.com/v1/chat/completions", "https://api.deepseek.com/v1/chat/completions"},
-		{"full_url_trailing_slash", "https://api.deepseek.com/v1/chat/completions/", "https://api.deepseek.com/v1/chat/completions"},
-		{"whitespace_padded", "  https://api.deepseek.com  ", "https://api.deepseek.com/v1/chat/completions"},
+		{"base_url", "https://api.deepseek.com", "https://api.deepseek.com/v1"},
+		{"base_url_trailing_slash", "https://api.deepseek.com/", "https://api.deepseek.com/v1"},
+		{"v1_root", "https://api.openai.com/v1", "https://api.openai.com/v1"},
+		{"v1_root_trailing_slash", "https://api.openai.com/v1/", "https://api.openai.com/v1"},
+		{"full_url", "https://api.deepseek.com/v1/chat/completions", "https://api.deepseek.com/v1"},
+		{"full_url_trailing_slash", "https://api.deepseek.com/v1/chat/completions/", "https://api.deepseek.com/v1"},
+		{"whitespace_padded", "  https://api.deepseek.com  ", "https://api.deepseek.com/v1"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := normalizeChatURL(tc.in)
+			got := normalizeBaseURL(tc.in)
 			if got != tc.want {
-				t.Fatalf("normalizeChatURL(%q) = %q, want %q", tc.in, got, tc.want)
+				t.Fatalf("normalizeBaseURL(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
 	}

@@ -44,18 +44,20 @@ func (q SearchQuery) EffectiveMaxResults() int {
 
 // SearchDefaults holds default configuration for the search pipeline.
 type SearchDefaults struct {
-	MaxResults      int
-	DefaultRRFK     float32
-	ActivationBonus float32
-	RecentChatBonus float32
+	MaxResults        int
+	DefaultRRFK       float32
+	ActivationBonus   float32
+	RecentChatBonus   float32
+	MinRelevanceScore float32 // minimum RRF score to consider a match (0 = disabled)
 }
 
 // DefaultSearchConfig is the built-in default search configuration.
 var DefaultSearchConfig = SearchDefaults{
-	MaxResults:      20,
-	DefaultRRFK:     60.0,
-	ActivationBonus: 0.02,
-	RecentChatBonus: 0.01,
+	MaxResults:        20,
+	DefaultRRFK:       60.0,
+	ActivationBonus:   0.02,
+	RecentChatBonus:   0.01,
+	MinRelevanceScore: 0.015, // ~1/60: at least one channel must rank in top ~60
 }
 
 // L1Preview is a lightweight L1 node summary for agent decision-making.
@@ -83,6 +85,10 @@ type SearchResult struct {
 	Contexts           []ContextResult       `json:"contexts"`
 	AssociatedContexts []ContextResult       `json:"associated_contexts"`
 	Crystals           []crud.CrystalSummary `json:"crystals"`
+	// NewTopicID is the hex ID of the depth1 topic created for this turn.
+	// It is the write target: pass it to Update to append the agent reply.
+	// Empty only when no topic was created (e.g. directed target not found).
+	NewTopicID string `json:"new_topic_id,omitempty"`
 }
 
 // ContextResult represents an L2 context hit from search.

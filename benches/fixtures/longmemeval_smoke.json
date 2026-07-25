@@ -1,0 +1,54 @@
+{
+  "sessions": [
+    {
+      "id": "session_1_1:56 pm on 8 May, 2023",
+      "turns": [
+        {
+          "text": "Hey Mel! Good to see you! How have you been?",
+          "speaker": "Caroline"
+        },
+        {
+          "text": "Hey Caroline! Good to see you! I'm swamped with the kids & work. What's up with you? Anything new?",
+          "speaker": "Melanie"
+        },
+        {
+          "text": "I went to a LGBTQ support group yesterday and it was so powerful.",
+          "speaker": "Caroline"
+        },
+        {
+          "text": "Wow, that's cool, Caroline! What happened that was so awesome? Did you hear any inspiring stories?",
+          "speaker": "Melanie"
+        },
+        {
+          "text": "The transgender stories were so inspiring! I was so happy and thankful for all the support.",
+          "speaker": "Caroline"
+        }
+      ]
+    },
+    {
+      "id": "session_2_1:14 pm on 25 May, 2023",
+      "turns": [
+        {
+          "text": "Hey Caroline, since we last chatted, I've had a lot of things happening to me. I ran a charity race for mental health last Saturday \u2013 it was really rewarding. Really made me think about taking care of our minds.",
+          "speaker": "Melanie"
+        },
+        {
+          "text": "That charity race sounds great, Mel! Making a difference & raising awareness for mental health is super rewarding - I'm really proud of you for taking part!",
+          "speaker": "Caroline"
+        },
+        {
+          "text": "Thanks, Caroline! The event was really thought-provoking. I'm starting to realize that self-care is really important. It's a journey for me, but when I look after myself, I'm able to better look after my family.",
+          "speaker": "Melanie"
+        },
+        {
+          "text": "I totally agree, Melanie. Taking care of ourselves is so important - even if it's not always easy. Great that you're prioritizing self-care.",
+          "speaker": "Caroline"
+        },
+        {
+          "text": "Yeah, it's tough. So I'm carving out some me-time each day - running, reading, or playing my violin - which refreshes me and helps me stay present for my fam!",
+          "speaker": "Melanie"
+        }
+      ]
+    }
+  ]
+}

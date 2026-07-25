@@ -512,11 +512,14 @@ func TestSearchVariousParameters(t *testing.T) {
 	}
 
 	// 3. DirectedL2ID
+	// 契约: 在目标话题所属 scene 创建新 depth1 topic 返回于 Contexts[0]，
+	// 原目标话题作为 AssociatedContexts[0] 返回，保留历史数据可见性。
 	firstResult, err := mh.Search(memhop.SearchQuery{Text: recallGroundTruth[0].seedText})
 	if err != nil || len(firstResult.Contexts) == 0 {
 		t.Fatalf("无法获取 topicID: %v", err)
 	}
 	topicID := firstResult.Contexts[0].ID
+	targetScene := firstResult.Contexts[0].SceneID
 
 	result, err := mh.Search(memhop.SearchQuery{
 		Text:         "任意内容",
@@ -525,10 +528,17 @@ func TestSearchVariousParameters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DirectedL2ID: %v", err)
 	}
-	if len(result.Contexts) == 0 || result.Contexts[0].ID != topicID {
-		t.Errorf("DirectedL2ID 未返回指定话题: got %v", result.Contexts)
-	} else {
-		t.Logf("  ✓ DirectedL2ID: 正确返回话题 %s", topicID[:12])
+	switch {
+	case len(result.Contexts) == 0:
+		t.Errorf("DirectedL2ID 未返回新话题")
+	case result.Contexts[0].SceneID != targetScene:
+		t.Errorf("DirectedL2ID 新话题未落在目标 scene: got=%s want=%s",
+			result.Contexts[0].SceneID, targetScene)
+	case len(result.AssociatedContexts) == 0 || result.AssociatedContexts[0].ID != topicID:
+		t.Errorf("DirectedL2ID 原话题未出现在 AssociatedContexts: got %v", result.AssociatedContexts)
+	default:
+		t.Logf("  ✓ DirectedL2ID: 新话题 %s 落在目标 scene，原话题 %s 为关联上下文",
+			result.Contexts[0].ID[:12], topicID[:12])
 	}
 
 	// 4. DirectedL2ID 无效 ID

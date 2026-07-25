@@ -95,12 +95,8 @@ func RunDirectedSearch(
 		return nil, err
 	}
 
-	// Store user content to the directed topic.
-	if len(result.Contexts) > 0 {
-		if topicHash, parseErr := hash.ParseID(result.Contexts[0].ID); parseErr == nil {
-			storeQueryAsL4(q, deps, topicHash)
-		}
-	}
+	// Note: L4 persistence is handled inside createTopicInScene (called by
+	// searchDirected), so no additional storeQueryAsL4 is needed here.
 
 	touchContexts(result.Contexts, sessionMgr, defaults)
 	return result, nil

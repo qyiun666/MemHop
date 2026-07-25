@@ -34,24 +34,6 @@ func callLLMWithRetry(
 	return response, nil
 }
 
-// stripCodeBlocksLLM removes markdown code block fencing from LLM responses.
-func stripCodeBlocksLLM(s string) string {
-	trimmed := strings.TrimSpace(s)
-	if !strings.HasPrefix(trimmed, "```") {
-		return trimmed
-	}
-	stripped := trimmed[3:]
-	start := strings.IndexByte(stripped, '\n')
-	if start >= 0 {
-		stripped = stripped[start+1:]
-	}
-	end := strings.LastIndex(stripped, "```")
-	if end >= 0 {
-		stripped = stripped[:end]
-	}
-	return strings.TrimSpace(stripped)
-}
-
 // filterEmptyStrings removes empty/whitespace-only strings from a slice.
 func filterEmptyStrings(ss []string) []string {
 	out := make([]string, 0, len(ss))

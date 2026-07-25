@@ -52,12 +52,15 @@ func searchAutoCreate(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 		Contexts:           []ContextResult{cr},
 		AssociatedContexts: []ContextResult{},
 		Crystals:           []crud.CrystalSummary{},
+		NewTopicID:         cr.ID,
 	}
 	result.Crystals = matchActionChains(deps.Engine, q.Text)
 	return result, nil
 }
 
-// searchDirected loads a specific L2 by ID, skipping retrieval.
+// searchDirected loads a specific L2 by ID, creates a new depth1 topic in that scene,
+// and returns the target topic as an associated context so callers retain access to
+// the existing topic's historical data.
 func searchDirected(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 	targetHash, err := hash.ParseID(*q.DirectedL2ID)
 	if err != nil {
@@ -67,16 +70,26 @@ func searchDirected(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 	if err != nil {
 		return emptyResult(), nil
 	}
-	var ctx model.TopicSlot
-	if err := json.Unmarshal(data, &ctx); err != nil {
+	var targetTopic model.TopicSlot
+	if err := json.Unmarshal(data, &targetTopic); err != nil {
 		return emptyResult(), nil
 	}
-	cr := topicToContextResult(&ctx, 1.0)
+
+	// Create new depth1 topic in the target scene
+	newTopic, err := createTopicInScene(q, deps, targetTopic.SceneID)
+	if err != nil {
+		return nil, fmt.Errorf("searchDirected: create topic in scene: %w", err)
+	}
+
+	cr := topicToContextResult(newTopic, 1.0)
+	// Include the target topic as associated context so its historical data is visible
+	targetCR := topicToContextResult(&targetTopic, 0.9)
 	result := &SearchResult{
 		Profile:            readProfileResult(deps),
 		Contexts:           []ContextResult{cr},
-		AssociatedContexts: []ContextResult{},
+		AssociatedContexts: []ContextResult{targetCR},
 		Crystals:           []crud.CrystalSummary{},
+		NewTopicID:         cr.ID,
 	}
 	result.Crystals = matchActionChains(deps.Engine, q.Text)
 	return result, nil
@@ -110,14 +123,119 @@ func searchNormal(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 	}
 	merged := RRFMerge3(bm25Results, vectorResults, entityResults, rrfK)
 
-	// RRF scores are ranking scores (max ≈ 3/61), truncated by limit.
-	scored := loadAndScoreContextsDepth1(deps.Engine, merged, limit)
+	scored := loadAndScoreContextsDepth1(deps.Engine, merged, limit, DefaultSearchConfig.MinRelevanceScore)
 	if len(scored) > 0 {
 		return buildSearchResult(q, deps, scored)
 	}
 
-	// No match → return empty result
-	return emptyResult(), nil
+	// No match → create new scene + depth1 topic (same as AutoCreate=true behavior)
+	// This ensures user content is always persisted, regardless of retrieval result.
+	ctx, err := createNewL2Context(q, deps)
+	if err != nil {
+		return nil, err
+	}
+	cr := topicToContextResult(ctx, 1.0)
+	result := &SearchResult{
+		Profile:            readProfileResult(deps),
+		Contexts:           []ContextResult{cr},
+		AssociatedContexts: []ContextResult{},
+		Crystals:           []crud.CrystalSummary{},
+		NewTopicID:         cr.ID,
+	}
+	result.Crystals = matchActionChains(deps.Engine, q.Text)
+	return result, nil
+}
+
+// createTopicInScene creates a new depth1 topic in the given scene,
+// writes keywords+timestamp, appends Text to L4, and links L4 ref to the topic.
+// If sceneID is 0, the topic becomes its own scene (auto-create behavior).
+func createTopicInScene(q SearchQuery, deps *SearchDeps, sceneID uint64) (*model.TopicSlot, error) {
+	nowMs := q.Timestamp
+
+	// Use LLM keywords when available, fall back to tokenizer
+	keywords := deps.PreprocessedKeywords
+	if len(keywords) == 0 {
+		keywords = index.Tokenize(q.Text)
+	}
+	if len(keywords) == 0 {
+		keywords = []string{strutil.SafeCharSlice(q.Text, 50)}
+	}
+	idStr := fmt.Sprintf("ctx_%d_%s", nowMs, strutil.SafeCharSlice(q.Text, 10))
+	idHash := hash.HashID(idStr)
+
+	// If sceneID is 0, this topic becomes its own scene
+	if sceneID == 0 {
+		sceneID = idHash
+	}
+
+	// Encode centroid
+	var centroidRef uint64
+	if deps.Encoder != nil && deps.Encoder.IsAvailable() {
+		encodeText := strutil.JoinStrings(keywords, " ")
+		output, err := deps.Encoder.Encode(encodeText)
+		if err != nil {
+			return nil, fmt.Errorf("createTopicInScene: encode centroid: %w", err)
+		}
+		if len(output.Dense) > 0 {
+			vecIDHash := hash.HashID(fmt.Sprintf("v:%d", idHash))
+			vecBytes := numeric.F16SliceToBytes(output.Dense)
+			if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
+				return nil, fmt.Errorf("createTopicInScene: write centroid: %w", err)
+			}
+			centroidRef = vecIDHash
+		}
+	}
+
+	// Create L4 archive for this query text
+	archiveIDStr := fmt.Sprintf("archive_%d_%s", nowMs, strutil.SafeCharSlice(q.Text, 10))
+	archiveIDHash := hash.HashID(archiveIDStr)
+	archive := model.ArchiveSlot{
+		IDHash:      archiveIDHash,
+		ContentType: model.ContentText,
+		Role:        0, // user
+		ContextID:   idHash,
+		CreatedAt:   nowMs,
+		Content:     q.Text,
+	}
+	if err := record.WriteArchiveSlot(deps.Engine, archiveIDHash, &archive); err != nil {
+		return nil, err
+	}
+
+	topic := model.TopicSlot{
+		ID:              idHash,
+		SceneID:         sceneID,
+		Depth:           1,
+		UserKeywords:    keywords,
+		UserTimestamp:   nowMs,
+		UserL4Refs:      []uint64{archiveIDHash},
+		UserL3Refs:      []uint64{},
+		AgentKeywords:   []string{},
+		AgentTimestamp:  0,
+		AgentL4Refs:     []uint64{},
+		AgentL3Refs:     []uint64{},
+		FusedKeywords:   []string{},
+		ChildrenIDs:     []uint64{},
+		CentroidPageRef: centroidRef,
+		CreatedAt:       nowMs,
+		UpdatedAt:       nowMs,
+		Version:         1,
+	}
+
+	if err := record.WriteTopicSlot(deps.Engine, idHash, &topic); err != nil {
+		return nil, err
+	}
+
+	// Update sparse index
+	searchText := strutil.JoinStrings(topic.UserKeywords, " ")
+	terms := index.Tokenize(searchText)
+	deps.SparseIndex.AddDocument(idHash, terms, uint32(len(terms)))
+
+	// Keep L2MetaIndex in sync
+	if deps.L2Meta != nil {
+		deps.L2Meta.Update(index.L2MetaFromTopic(&topic))
+	}
+
+	return &topic, nil
 }
 
 // scoredContext pairs a ContextResult with its TopicSlot for reranking.
@@ -247,20 +365,33 @@ func filterByCandidates(
 	return filtered
 }
 
-// loadAndScoreContexts loads TopicSlots and filters depth ≤ 2.
+// loadAndScoreContexts loads TopicSlots and filters by depth.
+// If depth1Only is true, only loads topics with Depth == 1.
+// Topics with RRF score below minScore are discarded to prevent false matches.
 func loadAndScoreContexts(
 	engine *storage.StorageEngine,
 	merged []index.ScoredDoc,
 	limit int,
+	minScore float32,
+	depth1Only bool,
 ) []scoredContext {
 	var result []scoredContext
 	for _, doc := range merged {
+		if minScore > 0 && doc.Score < minScore {
+			continue
+		}
 		_, data, err := engine.ReadRecord(doc.IDHash)
 		if err != nil {
 			continue
 		}
 		var topic model.TopicSlot
-		if json.Unmarshal(data, &topic) != nil || topic.Depth > 2 {
+		if json.Unmarshal(data, &topic) != nil {
+			continue
+		}
+		if depth1Only && topic.Depth != 1 {
+			continue
+		}
+		if !depth1Only && topic.Depth > 2 {
 			continue
 		}
 		cr := topicToContextResult(&topic, doc.Score)
@@ -274,10 +405,12 @@ func loadAndScoreContexts(
 }
 
 // getL1Associated finds L1-associated contexts via the reverse index.
+// If depth1Only is true, only returns contexts with Depth == 1.
 func getL1Associated(
 	engine *storage.StorageEngine,
 	primary []scoredContext,
 	l1Reverse *index.L1ReverseIndex,
+	depth1Only bool,
 ) []ContextResult {
 	if l1Reverse == nil || len(primary) == 0 {
 		return []ContextResult{}
@@ -311,6 +444,9 @@ func getL1Associated(
 		}
 		var ctx model.TopicSlot
 		if json.Unmarshal(ctxData, &ctx) != nil {
+			continue
+		}
+		if depth1Only && ctx.Depth != 1 {
 			continue
 		}
 		cr := topicToContextResult(&ctx, float32(node.Importance))
@@ -361,91 +497,9 @@ func getL1Previews(
 }
 
 // createNewL2Context creates a new L2 topic + L4 archive from dialogue (auto_create path).
+// This is a convenience wrapper around createTopicInScene with sceneID=0.
 func createNewL2Context(q SearchQuery, deps *SearchDeps) (*model.TopicSlot, error) {
-	nowMs := q.Timestamp
-
-	// Use LLM keywords when available, fall back to tokenizer
-	keywords := deps.PreprocessedKeywords
-	if len(keywords) == 0 {
-		keywords = index.Tokenize(q.Text)
-	}
-	if len(keywords) == 0 {
-		keywords = []string{strutil.SafeCharSlice(q.Text, 50)}
-	}
-	idStr := fmt.Sprintf("ctx_%d_%s", nowMs, strutil.SafeCharSlice(q.Text, 10))
-	idHash := hash.HashID(idStr)
-
-	// Encode centroid
-	var centroidRef uint64
-	if deps.Encoder != nil && deps.Encoder.IsAvailable() {
-		encodeText := strutil.JoinStrings(keywords, " ")
-		output, err := deps.Encoder.Encode(encodeText)
-		if err != nil {
-			return nil, fmt.Errorf("createNewL2Context: encode centroid: %w", err)
-		}
-		if len(output.Dense) > 0 {
-			vecIDHash := hash.HashID(fmt.Sprintf("v:%d", idHash))
-			vecBytes := numeric.F16SliceToBytes(output.Dense)
-			if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
-				return nil, fmt.Errorf("createNewL2Context: write centroid: %w", err)
-			}
-			centroidRef = vecIDHash
-		}
-	}
-
-	// Create L4 archive for this query text
-	archiveIDStr := fmt.Sprintf("archive_%d_%s", nowMs, strutil.SafeCharSlice(q.Text, 10))
-	archiveIDHash := hash.HashID(archiveIDStr)
-	archive := model.ArchiveSlot{
-		IDHash:      archiveIDHash,
-		ContentType: model.ContentText,
-		Role:        0, // user
-		ContextID:   idHash,
-		CreatedAt:   nowMs,
-		Content:     q.Text,
-	}
-	if err := record.WriteArchiveSlot(deps.Engine, archiveIDHash, &archive); err != nil {
-		return nil, err
-	}
-
-	topic := model.TopicSlot{
-		ID:      idHash,
-		SceneID: idHash, // each auto-created topic is its own scene initially;
-		// scenes are merged by Dream's L2 consolidation
-		Depth:           1,
-		UserKeywords:    keywords,
-		UserTimestamp:   nowMs,
-		UserL4Refs:      []uint64{archiveIDHash},
-		UserL3Refs:      []uint64{},
-		AgentKeywords:   []string{},
-		AgentTimestamp:  0,
-		AgentL4Refs:     []uint64{},
-		AgentL3Refs:     []uint64{},
-		FusedKeywords:   []string{},
-		ChildrenIDs:     []uint64{},
-		CentroidPageRef: centroidRef,
-		CreatedAt:       nowMs,
-		UpdatedAt:       nowMs,
-		Version:         1,
-	}
-
-	if err := record.WriteTopicSlot(deps.Engine, idHash, &topic); err != nil {
-		return nil, err
-	}
-
-	// Update sparse index
-	searchText := strutil.JoinStrings(topic.UserKeywords, " ")
-	terms := index.Tokenize(searchText)
-	deps.SparseIndex.AddDocument(idHash, terms, uint32(len(terms)))
-
-	// Keep L2MetaIndex in sync: the candidate set of searchNormal is built
-	// from L2Meta (depth<=2), which is otherwise only rebuilt on Open/Dream,
-	// so a freshly created topic would be filtered out until then.
-	if deps.L2Meta != nil {
-		deps.L2Meta.Update(index.L2MetaFromTopic(&topic))
-	}
-
-	return &topic, nil
+	return createTopicInScene(q, deps, 0)
 }
 
 // storeQueryAsL4 creates an L4 archive for the search query and links it
@@ -622,52 +676,86 @@ func emptyResult() *SearchResult {
 }
 
 // loadAndScoreContextsDepth1 loads TopicSlots and filters depth == 1 only.
+// This is a convenience wrapper around loadAndScoreContexts with depth1Only=true.
 func loadAndScoreContextsDepth1(
 	engine *storage.StorageEngine,
 	merged []index.ScoredDoc,
 	limit int,
+	minScore float32,
 ) []scoredContext {
-	var result []scoredContext
-	for _, doc := range merged {
-		_, data, err := engine.ReadRecord(doc.IDHash)
-		if err != nil {
-			continue
-		}
-		var topic model.TopicSlot
-		if json.Unmarshal(data, &topic) != nil || topic.Depth != 1 {
-			continue
-		}
-		cr := topicToContextResult(&topic, doc.Score)
-		t := topic // copy
-		result = append(result, scoredContext{result: &cr, topic: &t, score: doc.Score})
-		if len(result) >= limit {
-			break
-		}
-	}
-	return result
+	return loadAndScoreContexts(engine, merged, limit, minScore, true)
 }
 
 // matchActionChains finds L5 action chains matching the query text.
 // buildSearchResult assembles the full SearchResult from scored contexts.
-// It stores the query as L4 archive, builds associations, and returns the result.
+// It aggregates scores by scene, creates a new depth1 topic in the best-matching scene,
+// and returns the result with scenes sorted by aggregated score.
 func buildSearchResult(q SearchQuery, deps *SearchDeps, scored []scoredContext) (*SearchResult, error) {
-	// Store query as L4 archive linked to the best-matching topic
-	storeQueryAsL4(q, deps, scored[0].topic.ID)
-
-	// Build associated contexts from L1 reverse index
-	associated := getL1Associated(deps.Engine, scored, deps.L1Reverse)
-
-	// Assemble result
-	contexts := make([]ContextResult, len(scored))
-	for i, sc := range scored {
-		contexts[i] = *sc.result
+	// Aggregate scores by scene (take max score per scene)
+	sceneScores := make(map[uint64]float32)
+	sceneTopics := make(map[uint64][]scoredContext)
+	for _, sc := range scored {
+		sceneID := sc.topic.SceneID
+		if score, ok := sceneScores[sceneID]; !ok || sc.score > score {
+			sceneScores[sceneID] = sc.score
+		}
+		sceneTopics[sceneID] = append(sceneTopics[sceneID], sc)
 	}
+
+	// Sort scenes by aggregated score (descending)
+	type sceneScore struct {
+		sceneID uint64
+		score   float32
+	}
+	var sortedScenes []sceneScore
+	for sceneID, score := range sceneScores {
+		sortedScenes = append(sortedScenes, sceneScore{sceneID, score})
+	}
+	sort.Slice(sortedScenes, func(i, j int) bool {
+		return sortedScenes[i].score > sortedScenes[j].score
+	})
+
+	// Create new depth1 topic in the best-matching scene
+	bestSceneID := sortedScenes[0].sceneID
+	newTopic, err := createTopicInScene(q, deps, bestSceneID)
+	if err != nil {
+		return nil, fmt.Errorf("buildSearchResult: create topic in scene: %w", err)
+	}
+
+	// Build associated contexts from L1 reverse index (only depth1)
+	associated := getL1Associated(deps.Engine, scored, deps.L1Reverse, true)
+
+	// Assemble result: topics grouped by scene (sorted by scene score), then new topic
+	contexts := make([]ContextResult, 0, len(scored)+1)
+	for _, ss := range sortedScenes {
+		for _, sc := range sceneTopics[ss.sceneID] {
+			contexts = append(contexts, *sc.result)
+		}
+	}
+	// Sort matches by score descending (RRF scores are per-topic, not per-scene)
+	sort.Slice(contexts, func(i, j int) bool {
+		return contexts[i].RetrievalScore > contexts[j].RetrievalScore
+	})
+	// Cap matches to limit-1 so appending the new topic keeps len <= MaxResults.
+	// The new topic must stay: it is the write target for the current turn.
+	if limit := q.EffectiveMaxResults(); limit > 0 && len(contexts) > limit-1 {
+		contexts = contexts[:limit-1]
+	}
+	// New topic score is set below the lowest scene score to rank near the end
+	newTopicScore := sortedScenes[len(sortedScenes)-1].score * 0.99
+	newTopicCR := topicToContextResult(newTopic, newTopicScore)
+	contexts = append(contexts, newTopicCR)
+	// Re-sort: the new topic may outscore low-ranked matches from other scenes
+	sort.Slice(contexts, func(i, j int) bool {
+		return contexts[i].RetrievalScore > contexts[j].RetrievalScore
+	})
 
 	result := &SearchResult{
 		Profile:            readProfileResult(deps),
 		Contexts:           contexts,
 		AssociatedContexts: associated,
 		Crystals:           []crud.CrystalSummary{},
+		NewTopicID:         newTopicCR.ID,
 	}
 	result.Crystals = matchActionChains(deps.Engine, q.Text)
 	return result, nil

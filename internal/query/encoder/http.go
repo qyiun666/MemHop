@@ -4,15 +4,15 @@
 package encoder
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ollama/ollama/api"
 
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/common/numeric"
@@ -23,16 +23,14 @@ const (
 	healthCheckTimeout = 5 * time.Second
 	encodeTimeout      = 20 * time.Second
 	healthCheckTTL     = 5 * time.Second // IsAvailable cache TTL
-	// maxResponseBodyBytes caps response bodies read from the encoder service.
-	maxResponseBodyBytes = 64 << 20 // 64MB
 )
 
 // HttpEncoder is an HTTP client for an Ollama embedding API.
 type HttpEncoder struct {
-	baseURL    string
+	client     *api.Client
+	httpClient *http.Client
 	dim        int
 	model      string
-	httpClient *http.Client
 
 	// TTL cache for IsAvailable
 	healthMu   sync.Mutex
@@ -41,18 +39,7 @@ type HttpEncoder struct {
 	healthTTL  time.Duration
 }
 
-// --- HTTP request / response types ---
-
-type ollamaEmbedRequest struct {
-	Model string `json:"model"`
-	Input string `json:"input"`
-}
-
-type ollamaEmbedResponse struct {
-	Embeddings [][]float32 `json:"embeddings"`
-}
-
-// NewHttpEncoder creates an HttpEncoder and verifies connectivity via /api/tags.
+// NewHttpEncoder creates an HttpEncoder and verifies connectivity via heartbeat.
 func NewHttpEncoder(baseURL string, dim int, model string) (*HttpEncoder, error) {
 	baseURL = strings.TrimRight(baseURL, "/")
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
@@ -63,14 +50,20 @@ func NewHttpEncoder(baseURL string, dim int, model string) (*HttpEncoder, error)
 		model = defaultEmbedModel
 	}
 
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return nil, mherrors.NewError(mherrors.ErrConfig,
+			fmt.Sprintf("invalid encoder address %s", baseURL), err)
+	}
+
 	// No client-level Timeout: per-request deadlines are set via context,
 	// so health checks (5s) and encodes (20s) can share one pooled client.
-	client := &http.Client{}
+	httpClient := &http.Client{}
 	e := &HttpEncoder{
-		baseURL:    baseURL,
+		client:     api.NewClient(parsed, httpClient),
+		httpClient: httpClient,
 		dim:        dim,
 		model:      model,
-		httpClient: client,
 		healthTTL:  healthCheckTTL,
 	}
 
@@ -80,41 +73,28 @@ func NewHttpEncoder(baseURL string, dim int, model string) (*HttpEncoder, error)
 	return e, nil
 }
 
-// checkHealth calls GET /api/tags to verify Ollama is reachable.
+// checkHealth calls Heartbeat to verify Ollama is reachable.
 func (e *HttpEncoder) checkHealth() error {
 	ctx, cancel := context.WithTimeout(context.Background(), healthCheckTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, e.baseURL+"/api/tags", nil)
-	if err != nil {
+	if err := e.client.Heartbeat(ctx); err != nil {
 		return mherrors.NewError(mherrors.ErrEncoder,
-			fmt.Sprintf("Ollama health check failed at %s", e.baseURL), err)
-	}
-	resp, err := e.httpClient.Do(req)
-	if err != nil {
-		return mherrors.NewError(mherrors.ErrEncoder,
-			fmt.Sprintf("Ollama health check failed at %s", e.baseURL), err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return mherrors.NewError(mherrors.ErrEncoder,
-			fmt.Sprintf("Ollama unhealthy at %s: status %d", e.baseURL, resp.StatusCode))
+			"Ollama health check failed", err)
 	}
 	return nil
 }
 
-// Encode sends POST /api/embed and returns an f16-converted dense vector.
+// Encode sends an embed request and returns an f16-converted dense vector.
 func (e *HttpEncoder) Encode(text string) (*EncoderOutput, error) {
-	body, err := e.doPost("/api/embed", ollamaEmbedRequest{
-		Model: e.model, Input: text,
-	}, encodeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), encodeTimeout)
+	defer cancel()
+
+	resp, err := e.client.Embed(ctx, &api.EmbedRequest{
+		Model: e.model,
+		Input: text,
+	})
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrEncoder, "Ollama encode failed", err)
-	}
-
-	var resp ollamaEmbedResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, mherrors.NewError(mherrors.ErrEncoder, "Ollama encode decode failed", err)
 	}
 	if len(resp.Embeddings) == 0 {
 		return nil, mherrors.NewError(mherrors.ErrEncoder, "Ollama returned no embeddings")
@@ -156,37 +136,6 @@ func (e *HttpEncoder) IsAvailable() bool {
 func (e *HttpEncoder) Close() error {
 	e.httpClient.CloseIdleConnections()
 	return nil
-}
-
-// doPost sends a JSON POST request and returns the response body bytes.
-func (e *HttpEncoder) doPost(path string, payload any, timeout time.Duration) ([]byte, error) {
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+path, bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := e.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("status %d: %s", resp.StatusCode, string(body))
-	}
-	return body, nil
 }
 
 // f32SliceToF16 converts a []float32 to []uint16 using f16 encoding.

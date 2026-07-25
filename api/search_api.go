@@ -9,7 +9,9 @@ import (
 )
 
 // Search runs the full search pipeline and returns matching contexts.
-// It also stores the user's dialogue content to the matched/created topic.
+// It also stores the user's dialogue content to a new depth1 topic created
+// for this turn; its ID is exposed as SearchResult.NewTopicID and must be
+// passed to Update to append the agent reply.
 func (m *MemHop) Search(q search.SearchQuery) (*search.SearchResult, error) {
 	if m.closed.Load() {
 		return nil, mherrors.ErrClosed
