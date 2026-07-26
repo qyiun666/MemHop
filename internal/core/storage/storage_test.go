@@ -25,6 +25,7 @@ func TestCreateWriteRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	data := []byte("hello storage engine")
 	offset, err := eng.WriteRecord(RecL0Profile, 12345, data)
 	if err != nil {
@@ -124,6 +125,7 @@ func TestDeleteRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	eng.WriteRecord(RecL0Profile, 1, []byte("first"))
 	eng.WriteRecord(RecL1SceneNode, 2, []byte("second"))
 	eng.WriteRecord(RecL2Topic, 3, []byte("third"))
@@ -154,6 +156,7 @@ func TestCompact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	eng.WriteRecord(RecL0Profile, 1, []byte("keep"))
 	eng.WriteRecord(RecL1SceneNode, 2, []byte("delete me"))
 	eng.WriteRecord(RecL2Topic, 3, []byte("also keep"))
@@ -218,6 +221,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	// Seed some records.
 	for i := uint64(0); i < 100; i++ {
 		eng.WriteRecord(RecL0Profile, i, []byte(fmt.Sprintf("seed-%d", i)))
@@ -261,6 +265,7 @@ func TestWriteRecordBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	records := []RecordEntry{
 		{RecordType: RecL0Profile, IDHash: 10, Data: []byte("ten")},
 		{RecordType: RecL1SceneNode, IDHash: 20, Data: []byte("twenty")},
@@ -290,6 +295,7 @@ func TestFileSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	if eng.FileSize() != DataStart {
 		t.Fatalf("initial size: %d", eng.FileSize())
 	}
@@ -301,6 +307,7 @@ func TestContainsAndIterIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	eng.WriteRecord(RecL0Profile, 42, []byte("x"))
 	if !eng.Contains(42) {
 		t.Fatal("should contain 42")
@@ -324,6 +331,7 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	// First batch, then checkpoint.
 	eng.WriteRecord(RecL0Profile, 1, []byte("one"))
 	eng.WriteRecord(RecL1SceneNode, 2, []byte("two"))

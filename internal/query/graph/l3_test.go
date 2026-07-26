@@ -21,6 +21,11 @@ func tempEngine(t *testing.T) *storage.StorageEngine {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if e := eng.Close(&storage.IndexSnapshotData{}); e != nil {
+			t.Logf("tempEngine Close: %v", e)
+		}
+	})
 	return eng
 }
 
