@@ -8,7 +8,7 @@
     &middot;
     <a href="https://qyiun666.github.io/meowagent.github.io/">Website</a>
     &middot;
-    <a href="https://github.com/meowagent/meowagent">MeowAgent</a>
+    <a href="https://github.com/meowagent/meowagent">MeowAgent (即将开源)</a>
   </p>
 </p>
 
@@ -24,7 +24,7 @@ MemHop is not a vector database. It is a memory system modeled after how the hum
 
 MemHop is an **agent-dedicated** memory database: each agent binds to exactly one `.meh` file, and a file-level exclusive lock guarantees a single instance per file (a second `Open` fails fast). It runs on **Linux, macOS, and Windows** with no cgo and no external services beyond your embedding/LLM endpoints.
 
-Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent), MemHop works as an embedded organ rather than a standalone service. No server to run, no configuration to manage — just open a file and your agent has memory.
+Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent) (coming soon), MemHop works as an embedded organ rather than a standalone service. No server to run, no configuration to manage — just open a file and your agent has memory.
 
 > **Our stance on agent memory.** Memory should not be an afterthought bolted on with a vector database plugin or a plain-text log dumped into a context window. An agent without internalised memory is just a stateless function pretending to be intelligent. MemHop exists because we believe memory must be *cognitive* — structured, compressed, consolidated, and forgotten the way a human brain does — and *embedded* — living inside the agent process itself, not behind a network call. One file, zero infrastructure, a mind that grows with every conversation.
 
@@ -219,9 +219,9 @@ go vet ./...                               # Static analysis
 
 | | |
 |---|---|
-| MeowAgent | [github.com/meowagent/meowagent](https://github.com/meowagent/meowagent) |
+| MeowAgent | [github.com/meowagent/meowagent](https://github.com/meowagent/meowagent) — coming soon |
 | MemHop | [github.com/qyiun666/MemHop](https://github.com/qyiun666/MemHop) |
-| MeowDesk | [github.com/qyiun666/MeowDesk](https://github.com/qyiun666/MeowDesk) |
+| MeowDesk | [github.com/qyiun666/MeowDesk](https://github.com/qyiun666/MeowDesk) — coming soon |
 | Website | [qyiun666.github.io/meowagent.github.io](https://qyiun666.github.io/meowagent.github.io/) |
 | Email | qyiun666@163.com |
 

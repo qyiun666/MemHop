@@ -8,7 +8,7 @@
     &middot;
     <a href="https://qyiun666.github.io/meowagent.github.io/">官方网站</a>
     &middot;
-    <a href="https://github.com/meowagent/meowagent">MeowAgent</a>
+    <a href="https://github.com/meowagent/meowagent">MeowAgent (即将开源)</a>
   </p>
 </p>
 
@@ -24,7 +24,7 @@ MemHop 不是一个向量数据库。它是一个以人脑知识组织方式为�
 
 MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh` 文件，文件级排他锁保证同一文件同时只有一个实例（第二次 `Open` 直接报错）。支持 **Linux、macOS、Windows** 全平台，无 cgo，除嵌入/LLM 接口外无任何外部服务。
 
-作为 [MeowAgent](https://github.com/meowagent/meowagent) 的大脑记忆模块，MemHop 以内嵌器官而非独立服务的形式运行。无需启动服务器，无需管理配置——打开文件，Agent 便拥有记忆。
+作为 [MeowAgent](https://github.com/meowagent/meowagent)（即将开源）的大脑记忆模块，MemHop 以内嵌器官而非独立服务的形式运行。无需启动服务器，无需管理配置——打开文件，Agent 便拥有记忆。
 
 > **我们对 Agent 记忆的立场。** 记忆不应该是事后用向量数据库插件外挂上去的附属品，也不该是被塞进上下文窗口的纯文本日志。没有内化记忆的 Agent，不过是一个假装聪明的无状态函数。MemHop 的存在基于一个信念：记忆必须是*认知的*——像人脑一样结构化、压缩、巩固、遗忘——并且是*内嵌的*——活在 Agent 进程内部，而非躲在一次网络调用的背后。一个文件，零基础设施，心智随每次对话成长。
 
@@ -219,9 +219,9 @@ go vet ./...                               # 静态分析
 
 | | |
 |---|---|
-| MeowAgent | [github.com/meowagent/meowagent](https://github.com/meowagent/meowagent) |
+| MeowAgent | [github.com/meowagent/meowagent](https://github.com/meowagent/meowagent) — 即将开源 |
 | MemHop | [github.com/qyiun666/MemHop](https://github.com/qyiun666/MemHop) |
-| MeowDesk | [github.com/qyiun666/MeowDesk](https://github.com/qyiun666/MeowDesk) |
+| MeowDesk | [github.com/qyiun666/MeowDesk](https://github.com/qyiun666/MeowDesk) — 即将开源 |
 | 官网 | [qyiun666.github.io/meowagent.github.io](https://qyiun666.github.io/meowagent.github.io/) |
 | 邮箱 | qyiun666@163.com |
 

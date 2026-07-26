@@ -1,5 +1,5 @@
 //go:build integration
-//
+
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
@@ -19,17 +19,17 @@ import (
 )
 
 // ── 核心验证维度 ──────────────────────────────────────────
-//
+
 // MemHop 是记忆跳转系统，核心能力是：
-//
+
 //	1. 话题分类：同一会话的不同轮次应归入同一 L2 topic
 //	2. 话题分离：不同会话的轮次应归入不同 L2 topic
 //	3. 跨会话关联：Dream 应在相关会话之间建立 L1 关联
 //	4. 画像演化：Dream 应从对话中学习 lexicon/style/emotion
 //	5. 知识蒸馏：Dream 应从 L4 内容中抽取 L3 知识节点
-//
+
 // 评测方式不是"在 L4 里找答案"，而是：
-//
+
 //	- 检查话题分配是否正确（同 session → 同 topic）
 //	- 检查 Dream 后各层的状态变化
 //	- 检查跨会话搜索时关联话题是否出现
