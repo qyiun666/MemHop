@@ -52,7 +52,7 @@ db, err := memhop.Open(&memhop.Config{
     DBPath:      "agent.meh",
     VectorDim:   768,
     EncoderAddr: "http://127.0.0.1:11434",
-    EmbedModel:  "nomic-embed-text",
+    EmbedModel:  "qllama/bge-m3:q4_k_m",
     LLM: memhop.LlmConfig{ // 必填：Open 时校验
         APIURL: "https://api.openai.com/v1",
         APIKey: os.Getenv("OPENAI_API_KEY"),
@@ -84,7 +84,7 @@ db.BatchStore(memhop.StoreBatch{Items: []memhop.StoreItem{{
 report, _ := db.Dream(context.Background(), nil)
 ```
 
-前置条件：Go 1.26+，Ollama（`ollama pull nomic-embed-text`），OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）
+前置条件：Go 1.26+，Ollama（`ollama pull qllama/bge-m3:q4_k_m`），OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）
 
 ## 架构
 
