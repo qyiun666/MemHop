@@ -57,6 +57,7 @@ func TestABHeaderSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	eng.WriteRecord(RecL1SceneNode, 1, []byte("a"))
 	snap := &IndexSnapshotData{SparseData: []byte("s")}
 	for i := 0; i < 4; i++ {
