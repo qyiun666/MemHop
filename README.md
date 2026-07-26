@@ -8,7 +8,7 @@
     &middot;
     <a href="https://qyiun666.github.io/meowagent.github.io/">Website</a>
     &middot;
-    <a href="https://github.com/meowagent/meowagent">MeowAgent (即将开源)</a>
+    <a href="https://github.com/meowagent/meowagent">MeowAgent (coming soon)</a>
   </p>
 </p>
 
@@ -148,22 +148,11 @@ go test -tags integration ./test/ -run TestLocomo10Recall -v
 | System | GitHub Stars | LOCOMO | LongMemEval | Recall@5 | P95 Latency | Deploy | Language |
 |--------|-------------|--------|-------------|----------|-------------|--------|----------|
 | **MemHop** | — | — | — | **100%** ² | 3.97s ¹ | Embedded .meh | **Go** |
-| ZeroMemory | ~200 | 96.1% | — | — | — | Embedded | — |
-| MemoryLake | ~500 | 94.03% | — | — | — | SaaS/OSS | Python |
-| Zep/Graphiti | ~5k | 94.7%\* | 90.2% | — | 0.63s | Go core | Go/Python |
 | Mem0 2026 | ~51k | 92.5% | 93.4% | — | 1.44s | SaaS/OSS | Python |
-| Hindsight | ~800 | 92.0% | 94.6% | — | — | OSS/MCP | Python |
-| EverMemOS | ~300 | 92.32% | — | — | — | OSS | Python |
-| ByteRover | ~100 | 92.2% | 92.8% | — | 1.6s | SaaS | — |
-| Dakera | ~500 | 87.8% | — | — | — | Self-host | Rust+Go SDK |
-| MemMachine | ~1.5k | 84.87% | — | — | — | OSS | Python |
 | Cognee | ~28k | 80.3% | — | — | — | OSS | Python |
 | Letta | ~13k | — | — | — | — | OSS | Python |
 | agentmemory | ~20k | — | — | 95.2% | — | Embedded TS | TypeScript |
 | MemPalace | ~41k\* | — | — | 96.6% | — | Local | JS/TS |
-| engram | ~150 | — | — | — | — | Embedded Go | Go |
-| OMEGA | ~300 | — | — | — | <50ms | Local MCP | Python |
-| LangMem | ~500 | 58.1% | — | — | — | Embedded | Python |
 
 ² LOCOMO10-subset retrieval-only recall, NOT directly comparable with end-to-end QA Accuracy (the LOCOMO column) · \* Zep LOCOMO is self-reported; MemPalace star count is disputed (bot inflation)
 
