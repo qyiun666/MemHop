@@ -5,6 +5,7 @@ package storage
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
@@ -12,6 +13,9 @@ import (
 
 // SnapshotMagic identifies a valid snapshot block ("SNAP").
 const SnapshotMagic uint32 = 0x534E4150
+
+// SnapshotVersion is the on-disk snapshot blob format version.
+const SnapshotVersion uint8 = 0x01
 
 // IndexSnapshotData holds serialized index blobs persisted at checkpoint.
 type IndexSnapshotData struct {
@@ -28,19 +32,20 @@ type indexEntry struct {
 
 // BuildSnapshot serializes the index and snapshot data into a single blob.
 //
-// Format: SNAP_MAGIC(4) + COUNT(4) + entries(16 each) + 4×blob(len+data) + CRC32(4)
+// Format: SNAP_MAGIC(4) + VERSION(1) + COUNT(4) + entries(16 each) + 3×blob(len+data) + CRC32(4)
 func BuildSnapshot(index map[uint64]uint64, snap *IndexSnapshotData) ([]byte, error) {
 	entries := make([]indexEntry, 0, len(index))
 	for id, off := range index {
 		entries = append(entries, indexEntry{IDHash: id, Offset: off})
 	}
 	// Estimate capacity.
-	cap := 8 + len(entries)*16 + 12 +
+	cap := 9 + len(entries)*16 + 12 +
 		len(snap.SparseData) +
 		len(snap.L1ReverseData) + len(snap.L3IndexData) + 4
 	buf := make([]byte, 0, cap)
-	// Magic + count.
+	// Magic + version + count.
 	buf = appendU32LE(buf, SnapshotMagic)
+	buf = append(buf, SnapshotVersion)
 	buf = appendU32LE(buf, uint32(len(entries)))
 	// Entries.
 	for _, e := range entries {
@@ -59,7 +64,7 @@ func BuildSnapshot(index map[uint64]uint64, snap *IndexSnapshotData) ([]byte, er
 
 // ParseSnapshot deserializes a snapshot blob, returning the index and snapshot data.
 func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
-	if len(raw) < 12 { // magic(4) + count(4) + crc(4) minimum
+	if len(raw) < 13 { // magic(4) + version(1) + count(4) + crc(4) minimum
 		return nil, nil, mherrors.NewError(mherrors.ErrCorruption, "snapshot too short")
 	}
 	// Verify CRC.
@@ -71,8 +76,12 @@ func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 	if magic != SnapshotMagic {
 		return nil, nil, mherrors.NewError(mherrors.ErrCorruption, "invalid snapshot magic")
 	}
-	count := int(binary.LittleEndian.Uint32(raw[4:8]))
-	pos := 8
+	if raw[4] != SnapshotVersion {
+		return nil, nil, mherrors.NewError(mherrors.ErrCorruption,
+			fmt.Sprintf("unsupported snapshot version 0x%02x (expected 0x%02x)", raw[4], SnapshotVersion))
+	}
+	count := int(binary.LittleEndian.Uint32(raw[5:9]))
+	pos := 9
 	// Parse entries.
 	needed := pos + count*16
 	if needed > len(raw)-4 {

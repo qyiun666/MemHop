@@ -9,6 +9,7 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/common/timeutil"
 	"github.com/qyiun666/MemHop/internal/query/dream"
 )
 
@@ -43,15 +44,21 @@ type DreamOptions struct {
 
 // Dream runs the memory consolidation pipeline.
 //
-// v0.60.0: the two prior methods (Dream(opts) and DreamWithContext(ctx, opts))
-// are merged into this single ctx-first form. Pass context.Background() for
-// the previous Dream(opts) behavior.
-//
-// Currently ctx is threaded through into the LLM HTTP client when a custom
-// opts.LLM or opts.Chat honors it (OpenAIProvider does via ChatWithContext /
-// ConsolidateWithContext). The pipeline itself is synchronous and does not
-// poll ctx.Done() between stages; use context cancellation for LLM timeouts.
-func (m *MemHop) Dream(_ context.Context, opts *DreamOptions) (*dream.DreamReport, error) {
+// Dream takes the instance write lock: all other public methods block for
+// its duration, and Dream calls are serialized — a concurrent Dream returns
+// an explicit error instead of queuing. ctx is passed through to every LLM
+// call and checked between stages; on cancellation a wrapped ctx.Err() is
+// returned.
+func (m *MemHop) Dream(ctx context.Context, opts *DreamOptions) (*dream.DreamReport, error) {
+	if m.closed.Load() {
+		return nil, mherrors.ErrClosed
+	}
+	if !m.dreaming.CompareAndSwap(false, true) {
+		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "dream already in progress")
+	}
+	defer m.dreaming.Store(false)
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.closed.Load() {
 		return nil, mherrors.ErrClosed
 	}
@@ -63,7 +70,7 @@ func (m *MemHop) Dream(_ context.Context, opts *DreamOptions) (*dream.DreamRepor
 	}
 
 	result, err := dream.RunPipeline(
-		m.engine, m.sparseIndex, llm, chat,
+		ctx, m.engine, m.sparseIndex, llm, chat,
 		uint64IDs, m.defaults.DecayConfig,
 		m.getL2Meta(), m.encoder,
 		dream.RunOptions{SkipDistill: skipDistill},
@@ -74,6 +81,9 @@ func (m *MemHop) Dream(_ context.Context, opts *DreamOptions) (*dream.DreamRepor
 
 	m.l2Meta.Store(result.L2Meta)
 	m.l1Reverse.Store(result.L1Reverse)
+	// The l0_profile / l0_distill stages rewrite the L0 profile record.
+	m.profileCache.Store(nil)
+	m.lastDreamAt.Store(timeutil.NowMs())
 	return result.Report, nil
 }
 

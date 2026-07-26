@@ -101,6 +101,44 @@ type HypergraphSlot struct {
 	Version   uint32           `json:"version"`
 }
 
+// hypergraphSlotJSON is the JSON wire format with a hex-encoded id_hash,
+// matching the ID format used by HypergraphNode/HypergraphEdge.
+type hypergraphSlotJSON struct {
+	IDHash    string           `json:"id_hash"`
+	Name      string           `json:"name"`
+	Source    HypergraphSource `json:"source"`
+	NodeCount uint32           `json:"node_count"`
+	EdgeCount uint32           `json:"edge_count"`
+	CreatedAt int64            `json:"created_at"`
+	UpdatedAt int64            `json:"updated_at"`
+	Version   uint32           `json:"version"`
+}
+
+// MarshalJSON serializes HypergraphSlot with a hex-encoded id_hash.
+func (s HypergraphSlot) MarshalJSON() ([]byte, error) {
+	return json.Marshal(hypergraphSlotJSON{
+		IDHash: hash.FormatHash(s.IDHash), Name: s.Name, Source: s.Source,
+		NodeCount: s.NodeCount, EdgeCount: s.EdgeCount,
+		CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Version: s.Version,
+	})
+}
+
+// UnmarshalJSON deserializes HypergraphSlot from a hex-encoded id_hash.
+func (s *HypergraphSlot) UnmarshalJSON(data []byte) error {
+	var j hypergraphSlotJSON
+	if err := json.Unmarshal(data, &j); err != nil {
+		return err
+	}
+	id, err := hash.ParseID(j.IDHash)
+	if err != nil {
+		return fmt.Errorf("parse id_hash: %w", err)
+	}
+	s.IDHash, s.Name, s.Source = id, j.Name, j.Source
+	s.NodeCount, s.EdgeCount = j.NodeCount, j.EdgeCount
+	s.CreatedAt, s.UpdatedAt, s.Version = j.CreatedAt, j.UpdatedAt, j.Version
+	return nil
+}
+
 // ============================================================================
 // HypergraphNode — id_hash and graph_id are hex-serialized in JSON
 // ============================================================================

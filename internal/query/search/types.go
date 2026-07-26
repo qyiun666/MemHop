@@ -6,6 +6,8 @@
 package search
 
 import (
+	"sync/atomic"
+
 	"github.com/qyiun666/MemHop/internal/common/config"
 	"github.com/qyiun666/MemHop/internal/core/index"
 	"github.com/qyiun666/MemHop/internal/core/storage"
@@ -31,7 +33,9 @@ type SearchQuery struct {
 	DirectedL2ID *string `json:"directed_l2_id,omitempty"`
 	DirectedL3ID *string `json:"directed_l3_id,omitempty"`
 	AutoCreate   bool    `json:"auto_create,omitempty"`
-	Timestamp    int64   `json:"timestamp"`
+	// Timestamp is required: the Unix-millisecond time of this dialogue turn.
+	// Timestamp <= 0 is rejected with ErrInvalidQuery.
+	Timestamp int64 `json:"timestamp"`
 }
 
 // EffectiveMaxResults returns MaxResults if set, otherwise 20.
@@ -134,5 +138,5 @@ type SearchDeps struct {
 	Weights              *config.SearchWeights
 	L1Reverse            *index.L1ReverseIndex
 	PreprocessedKeywords []string
-	ProfileCache         **ProfileResult // &MemHop.profileCache for caching; nil = no cache
+	ProfileCache         *atomic.Pointer[ProfileResult] // &MemHop.profileCache for caching; nil = no cache
 }

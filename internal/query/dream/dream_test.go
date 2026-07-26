@@ -4,6 +4,7 @@
 package dream
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"path/filepath"
@@ -27,7 +28,7 @@ type MockLlmProvider struct {
 	Err    error
 }
 
-func (m *MockLlmProvider) Consolidate(_ *ConsolidationInput) (*ConsolidationOutput, error) {
+func (m *MockLlmProvider) Consolidate(_ context.Context, _ *ConsolidationInput) (*ConsolidationOutput, error) {
 	if m.Err != nil {
 		return nil, m.Err
 	}
@@ -562,7 +563,7 @@ func TestPipelineStageFailure(t *testing.T) {
 		MinEdgeNodes:            2,
 	}
 
-	report, err := DreamPipeline(engine, sparseIdx, mockLLM, nil, nil, decayCfg, l2Meta, nil, RunOptions{})
+	report, err := DreamPipeline(context.Background(), engine, sparseIdx, mockLLM, nil, nil, decayCfg, l2Meta, nil, RunOptions{})
 	if err != nil {
 		t.Fatalf("DreamPipeline: %v", err)
 	}
@@ -626,7 +627,7 @@ func TestDreamPipelineEndToEnd(t *testing.T) {
 		MinEdgeNodes:            2,
 	}
 
-	report, err := DreamPipeline(engine, sparseIdx, mockLLM, nil, []uint64{id1, id2}, decayCfg, l2Meta, nil, RunOptions{})
+	report, err := DreamPipeline(context.Background(), engine, sparseIdx, mockLLM, nil, []uint64{id1, id2}, decayCfg, l2Meta, nil, RunOptions{})
 	if err != nil {
 		t.Fatalf("DreamPipeline: %v", err)
 	}
@@ -676,7 +677,7 @@ func TestDreamReport(t *testing.T) {
 		MinEdgeNodes:            2,
 	}
 
-	report, err := DreamPipeline(engine, sparseIdx, mockLLM, nil, nil, decayCfg, l2Meta, nil, RunOptions{})
+	report, err := DreamPipeline(context.Background(), engine, sparseIdx, mockLLM, nil, nil, decayCfg, l2Meta, nil, RunOptions{})
 	if err != nil {
 		t.Fatalf("DreamPipeline: %v", err)
 	}

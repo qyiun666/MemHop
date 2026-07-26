@@ -54,8 +54,14 @@ func DeleteL5(engine *storage.StorageEngine, id string) error {
 	if err != nil {
 		return mherrors.NewError(mherrors.ErrInvalidQuery, "parse l5 id", err)
 	}
-	engine.DeleteRecord(idHash)
-	deleteActionSteps(engine, idHash)
+	// Steps first, then the chain record: a failure mid-cascade leaves the
+	// chain discoverable so the delete can be retried.
+	if err := deleteActionSteps(engine, idHash); err != nil {
+		return fmt.Errorf("delete l5 %s: steps: %w", id, err)
+	}
+	if _, err := engine.DeleteRecord(idHash); err != nil {
+		return fmt.Errorf("delete l5 %s: %w", id, err)
+	}
 	return nil
 }
 
@@ -140,7 +146,7 @@ func parseChainStatus(s string) model.ChainStatus {
 	}
 }
 
-func deleteActionSteps(engine *storage.StorageEngine, chainID uint64) {
+func deleteActionSteps(engine *storage.StorageEngine, chainID uint64) error {
 	var stepHashes []uint64
 	engine.IterIndex(func(idHash, _ uint64) bool {
 		rt, data, err := engine.ReadRecord(idHash)
@@ -154,8 +160,11 @@ func deleteActionSteps(engine *storage.StorageEngine, chainID uint64) {
 		return true
 	})
 	for _, h := range stepHashes {
-		engine.DeleteRecord(h)
+		if _, err := engine.DeleteRecord(h); err != nil {
+			return fmt.Errorf("delete action step %016x: %w", h, err)
+		}
 	}
+	return nil
 }
 
 func collectAllChains(engine *storage.StorageEngine) []model.ActionChainSlot {

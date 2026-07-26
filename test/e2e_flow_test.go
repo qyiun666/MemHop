@@ -25,6 +25,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	memhop "github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/internal/common/hash"
@@ -112,7 +113,7 @@ func TestE2EFlow(t *testing.T) {
 			// ==========================================================
 			t.Log("--- [3] Search + 检查返回内容 ---")
 
-			result, err := mh.Search(memhop.SearchQuery{
+			result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 				Text:       round.user,
 				AutoCreate: true,
 			})
@@ -142,7 +143,7 @@ func TestE2EFlow(t *testing.T) {
 			}
 
 			// Agent 侧写入（Update）
-			err = mh.Update(ctx0.ID, round.agent, 0)
+			err = mh.Update(ctx0.ID, round.agent, time.Now().UnixMilli())
 			if err != nil {
 				t.Fatalf("[3] Update 失败: %v", err)
 			}
@@ -228,8 +229,6 @@ func TestE2EFlow(t *testing.T) {
 			dreamCount++
 			t.Logf("  ✓ Dream[%d] 完成:", dreamCount)
 			t.Logf("    ConsolidatedCount=%d", report.ConsolidatedCount)
-			t.Logf("    NewL3Nodes=%d", report.NewL3Nodes)
-			t.Logf("    NewCrystals=%d", report.NewCrystals)
 			t.Logf("    L1DecayedNodes=%d", report.L1DecayedNodes)
 			for si, stage := range report.Stages {
 				t.Logf("    Stage[%d] %s: %s (%dms)", si, stage.Name, stage.Status, stage.DurationMs)
@@ -498,10 +497,10 @@ func TestE2EFlow_L3(t *testing.T) {
 	// 清理
 	t.Log("  清理 L3 数据...")
 	for _, nh := range []uint64{edge.IDHash} {
-		mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteEdge, EdgeHash: nh})
+		mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteEdge, EdgeID: hash.FormatHash(nh)})
 	}
 	for _, nh := range []uint64{node1.IDHash, node2.IDHash} {
-		mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteNode, NodeHash: nh})
+		mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteNode, NodeID: hash.FormatHash(nh)})
 	}
 	mh.Delete(memhop.LayerKnowledge, graphID)
 }

@@ -499,7 +499,7 @@ type L1Edge struct {
 // UpdateRequest is a layer-generic memory update request.
 type UpdateRequest struct {
 	ID        string                     `json:"id"`
-	Layer     uint8                      `json:"layer"`
+	Layer     model.Layer                `json:"layer"`
 	Fields    map[string]json.RawMessage `json:"fields"`
 	Timestamp int64                      `json:"timestamp"`
 }

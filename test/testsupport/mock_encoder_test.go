@@ -3,6 +3,7 @@ package testsupport
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/api"
 )
@@ -105,7 +106,7 @@ func TestOpenMemHopMockOffline(t *testing.T) {
 	defer mh.Close()
 
 	const text = "apple banana cherry smoothie recipe"
-	created, err := mh.Search(memhop.SearchQuery{Text: text, AutoCreate: true})
+	created, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: text, AutoCreate: true})
 	if err != nil {
 		t.Fatalf("AutoCreate Search: %v", err)
 	}
@@ -114,7 +115,7 @@ func TestOpenMemHopMockOffline(t *testing.T) {
 	}
 	topicID := created.Contexts[0].ID
 
-	got, err := mh.Search(memhop.SearchQuery{Text: text})
+	got, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: text})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

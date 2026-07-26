@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -79,9 +80,8 @@ func runSessions(t *testing.T, mh *memhop.MemHop, fixture map[string]interface{}
 					t.Logf("  Dream at turn %d: %v", totalTurns, err)
 				} else {
 					dreamCount++
-					t.Logf("  Dream[%d] at turn %d: consolidated=%d L3=%d Crystals=%d",
-						dreamCount, totalTurns,
-						report.ConsolidatedCount, report.NewL3Nodes, report.NewCrystals)
+					t.Logf("  Dream[%d] at turn %d: consolidated=%d",
+						dreamCount, totalTurns, report.ConsolidatedCount)
 					for _, stage := range report.Stages {
 						if stage.Status != "success" {
 							t.Logf("    ⚠ Stage %s: %s", stage.Name, stage.Description)
@@ -98,8 +98,7 @@ func runSessions(t *testing.T, mh *memhop.MemHop, fixture map[string]interface{}
 		t.Logf("[%s] Final Dream: %v", name, err)
 	} else {
 		dreamCount++
-		t.Logf("[%s] Final Dream: consolidated=%d L3=%d Crystals=%d",
-			name, report.ConsolidatedCount, report.NewL3Nodes, report.NewCrystals)
+		t.Logf("[%s] Final Dream: consolidated=%d", name, report.ConsolidatedCount)
 	}
 
 	// Phase 2: Evaluate questions
@@ -165,7 +164,7 @@ func evaluateQuestions(t *testing.T, mh *memhop.MemHop, questions []questionItem
 	writeResult(fmt.Sprintf("\n=== %s ===", name))
 
 	for qi, q := range questions {
-		result, err := mh.Search(memhop.SearchQuery{Text: q.text})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: q.text})
 		if err != nil {
 			t.Logf("  Q%d search failed: %v", qi+1, err)
 			continue

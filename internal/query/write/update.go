@@ -6,6 +6,7 @@
 package write
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/core/model"
 	"github.com/qyiun666/MemHop/internal/core/storage"
 	"github.com/qyiun666/MemHop/internal/query/crud"
 	"github.com/qyiun666/MemHop/internal/query/dream"
@@ -32,17 +34,22 @@ func UpdateMemory(req crud.UpdateRequest, deps *UpdateDeps) (*crud.UpdateResult,
 	if req.ID == "" {
 		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "id is required")
 	}
+	// Required contract: Unix ms supplied by the caller. Archive IDs are
+	// derived from it, so a zero timestamp would collide successive appends.
+	if req.Timestamp <= 0 {
+		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "timestamp is required (Unix milliseconds)")
+	}
 
 	var result *crud.UpdateResult
 	var err error
 	switch req.Layer {
-	case 2:
+	case model.LayerL2:
 		result, err = updateL2(req, deps)
-	case 3:
+	case model.LayerL3:
 		result, err = updateL3(req, deps)
-	case 5:
+	case model.LayerL5:
 		result, err = updateL5(req, deps)
-	case 0:
+	case model.LayerL0:
 		result, err = crud.UpdateProfile(deps.Engine, req)
 	default:
 		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "unsupported layer for update")
@@ -91,7 +98,7 @@ func maybePreprocessUpdate(
 	if llm == nil {
 		return nil
 	}
-	result, err := dream.ExtractFacts(llm, dialogueText)
+	result, err := dream.ExtractFacts(context.Background(), llm, dialogueText)
 	if err != nil {
 		slog.Warn("LLM fact extraction failed", "error", err)
 		return nil

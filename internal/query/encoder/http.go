@@ -19,18 +19,18 @@ import (
 )
 
 const (
-	defaultEmbedModel  = "nomic-embed-text"
-	healthCheckTimeout = 5 * time.Second
-	encodeTimeout      = 20 * time.Second
-	healthCheckTTL     = 5 * time.Second // IsAvailable cache TTL
+	healthCheckTimeout   = 5 * time.Second
+	defaultEncodeTimeout = 20 * time.Second
+	healthCheckTTL       = 5 * time.Second // IsAvailable cache TTL
 )
 
 // HttpEncoder is an HTTP client for an Ollama embedding API.
 type HttpEncoder struct {
-	client     *api.Client
-	httpClient *http.Client
-	dim        int
-	model      string
+	client        *api.Client
+	httpClient    *http.Client
+	dim           int
+	model         string
+	encodeTimeout time.Duration
 
 	// TTL cache for IsAvailable
 	healthMu   sync.Mutex
@@ -39,15 +39,22 @@ type HttpEncoder struct {
 	healthTTL  time.Duration
 }
 
-// NewHttpEncoder creates an HttpEncoder and verifies connectivity via heartbeat.
-func NewHttpEncoder(baseURL string, dim int, model string) (*HttpEncoder, error) {
+// NewHttpEncoder creates an HttpEncoder and verifies connectivity via
+// heartbeat. model is required (validated in config.Validate; no fallback
+// model is substituted). timeoutSecs bounds each embed request; 0 selects
+// the documented 20-second default.
+func NewHttpEncoder(baseURL string, dim int, model string, timeoutSecs int) (*HttpEncoder, error) {
 	baseURL = strings.TrimRight(baseURL, "/")
 	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
 		return nil, mherrors.NewError(mherrors.ErrConfig,
 			fmt.Sprintf("encoder address must use http:// or https:// scheme, got: %s", baseURL))
 	}
 	if model == "" {
-		model = defaultEmbedModel
+		return nil, mherrors.NewError(mherrors.ErrConfig, "embed model is required")
+	}
+	encodeTimeout := defaultEncodeTimeout
+	if timeoutSecs > 0 {
+		encodeTimeout = time.Duration(timeoutSecs) * time.Second
 	}
 
 	parsed, err := url.Parse(baseURL)
@@ -57,14 +64,15 @@ func NewHttpEncoder(baseURL string, dim int, model string) (*HttpEncoder, error)
 	}
 
 	// No client-level Timeout: per-request deadlines are set via context,
-	// so health checks (5s) and encodes (20s) can share one pooled client.
+	// so health checks (5s) and encodes can share one pooled client.
 	httpClient := &http.Client{}
 	e := &HttpEncoder{
-		client:     api.NewClient(parsed, httpClient),
-		httpClient: httpClient,
-		dim:        dim,
-		model:      model,
-		healthTTL:  healthCheckTTL,
+		client:        api.NewClient(parsed, httpClient),
+		httpClient:    httpClient,
+		dim:           dim,
+		model:         model,
+		encodeTimeout: encodeTimeout,
+		healthTTL:     healthCheckTTL,
 	}
 
 	if err := e.checkHealth(); err != nil {
@@ -86,7 +94,7 @@ func (e *HttpEncoder) checkHealth() error {
 
 // Encode sends an embed request and returns an f16-converted dense vector.
 func (e *HttpEncoder) Encode(text string) (*EncoderOutput, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), encodeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), e.encodeTimeout)
 	defer cancel()
 
 	resp, err := e.client.Embed(ctx, &api.EmbedRequest{

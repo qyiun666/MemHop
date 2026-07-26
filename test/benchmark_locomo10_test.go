@@ -70,7 +70,14 @@ func openMH(t *testing.T) *memhop.MemHop {
 		EncoderAddr: "http://127.0.0.1:11434",
 		EmbedModel:  "qllama/bge-m3:q4_k_m",
 	}
-	enc, err := encoder.NewHttpEncoder(cfg.EncoderAddr, cfg.VectorDim, cfg.EmbedModel)
+	// Per the benchmark contract above: no real LLM. Point at an unroutable
+	// port so fact extraction fails instantly and falls back to tokenizer
+	// keywords (otherwise every Search costs a 5-10s remote LLM round-trip).
+	cfg.LLM.APIURL = "http://127.0.0.1:1"
+	cfg.LLM.APIKey = "sk-bench"
+	cfg.LLM.Model = "bench-none"
+	cfg.LLM.TimeoutSecs = 1
+	enc, err := encoder.NewHttpEncoder(cfg.EncoderAddr, cfg.VectorDim, cfg.EmbedModel, cfg.EncoderTimeoutSecs)
 	if err != nil {
 		t.Skipf("encoder: %v", err)
 	}
@@ -131,7 +138,7 @@ func TestLocomo10Recall(t *testing.T) {
 			if turn.Text == "" {
 				continue
 			}
-			mh.Search(memhop.SearchQuery{Text: turn.Text, AutoCreate: true})
+			mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: turn.Text, AutoCreate: true})
 			nTurn++
 		}
 	}
@@ -151,7 +158,7 @@ func TestLocomo10Recall(t *testing.T) {
 	benchStart := time.Now()
 	for _, q := range qa {
 		tq := time.Now()
-		r, _ := mh.Search(memhop.SearchQuery{Text: q.Question, MaxResults: 10})
+		r, _ := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: q.Question, MaxResults: 10})
 		lats = append(lats, time.Since(tq))
 		totalQ++
 
@@ -222,7 +229,7 @@ func TestLocomo10APISmoke(t *testing.T) {
 	defer mh.Close()
 
 	t.Log("LOCOMO10 API Smoke Test")
-	result, _ := mh.Search(memhop.SearchQuery{Text: "machine learning", MaxResults: 5})
+	result, _ := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "machine learning", MaxResults: 5})
 	t.Logf("  Search: %d contexts", len(result.Contexts))
 
 	name := "MemHop"

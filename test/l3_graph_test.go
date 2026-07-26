@@ -219,12 +219,12 @@ func TestL3Graph(t *testing.T) {
 	t.Run("Cleanup", func(t *testing.T) {
 		// Delete edges first, then nodes, then the graph
 		for _, eh := range []uint64{edge1.IDHash, edge2.IDHash} {
-			if _, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteEdge, EdgeHash: eh}); err != nil {
+			if _, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteEdge, EdgeID: hash.FormatHash(eh)}); err != nil {
 				t.Errorf("KOpDeleteEdge %x failed: %v", eh, err)
 			}
 		}
 		for _, nh := range []uint64{node1.IDHash, node2.IDHash, node3.IDHash} {
-			if _, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteNode, NodeHash: nh}); err != nil {
+			if _, err := mh.Knowledge(memhop.KnowledgeOp{Kind: memhop.KOpDeleteNode, NodeID: hash.FormatHash(nh)}); err != nil {
 				t.Errorf("KOpDeleteNode %x failed: %v", nh, err)
 			}
 		}

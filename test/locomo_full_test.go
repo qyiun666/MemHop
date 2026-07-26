@@ -6,6 +6,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -30,7 +31,7 @@ func TestLOCOMOFull(t *testing.T) {
 		turns := session["turns"].([]interface{})
 		for _, turn := range turns {
 			text := turn.(map[string]interface{})["text"].(string)
-			mh.Search(memhop.SearchQuery{Text: text, AutoCreate: true})
+			mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: text, AutoCreate: true})
 			totalTurns++
 		}
 		sessionCount++
@@ -55,8 +56,7 @@ func TestLOCOMOFull(t *testing.T) {
 	if err != nil {
 		t.Logf("  Final Dream: %v", err)
 	} else {
-		t.Logf("  Final Dream: consolidated=%d L3=%d Crystals=%d",
-			report.ConsolidatedCount, report.NewL3Nodes, report.NewCrystals)
+		t.Logf("  Final Dream: consolidated=%d", report.ConsolidatedCount)
 	}
 	t.Logf("All %d sessions stored (%d turns total), Dream %d times", sessionCount, totalTurns, totalTurns/20)
 
@@ -81,7 +81,7 @@ func TestLOCOMOFull(t *testing.T) {
 		total++
 		byCategory[qCategory]++
 
-		result, err := mh.Search(memhop.SearchQuery{Text: qText, AutoCreate: true})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: qText, AutoCreate: true})
 		if err != nil {
 			continue
 		}

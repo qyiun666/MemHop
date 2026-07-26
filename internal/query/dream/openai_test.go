@@ -67,7 +67,7 @@ func TestOpenAIProvider_ChatURLForms(t *testing.T) {
 				APIURL: form, APIKey: "sk-test", Model: "test-model",
 				TimeoutSecs: 5,
 			})
-			resp, err := p.Chat("sys", "usr", 128, 0.0, 1.0)
+			resp, err := p.Chat(context.Background(), "sys", "usr", 128, 0.0, 1.0)
 			if err != nil {
 				t.Fatalf("Chat: %v", err)
 			}
@@ -104,7 +104,7 @@ func TestOpenAIProvider_MaxTokensPayload(t *testing.T) {
 		p := NewOpenAIProvider(&config.LlmConfig{
 			APIURL: srv.URL, APIKey: "sk-test", Model: "m", TimeoutSecs: 5,
 		})
-		if _, err := p.Consolidate(&ConsolidationInput{}); err != nil {
+		if _, err := p.Consolidate(context.Background(), &ConsolidationInput{}); err != nil {
 			t.Fatalf("Consolidate: %v", err)
 		}
 		if got := seenMaxTokens.Load(); got != 8192 {
@@ -118,7 +118,7 @@ func TestOpenAIProvider_MaxTokensPayload(t *testing.T) {
 			APIURL: srv.URL, APIKey: "sk-test", Model: "m",
 			TimeoutSecs: 5, MaxOutputTokens: 4096,
 		})
-		if _, err := p.Consolidate(&ConsolidationInput{}); err != nil {
+		if _, err := p.Consolidate(context.Background(), &ConsolidationInput{}); err != nil {
 			t.Fatalf("Consolidate: %v", err)
 		}
 		if got := seenMaxTokens.Load(); got != 4096 {
@@ -148,7 +148,7 @@ func TestOpenAIProvider_RetryOn5xx(t *testing.T) {
 		APIURL: srv.URL, APIKey: "sk-test", Model: "m", TimeoutSecs: 10,
 	})
 	start := time.Now()
-	resp, err := p.Chat("sys", "usr", 128, 0.0, 1.0)
+	resp, err := p.Chat(context.Background(), "sys", "usr", 128, 0.0, 1.0)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -165,7 +165,7 @@ func TestOpenAIProvider_RetryOn5xx(t *testing.T) {
 	}
 }
 
-// TestOpenAIProvider_ContextCancel ensures ChatWithContext honors an
+// TestOpenAIProvider_ContextCancel ensures Chat honors an
 // already-canceled context — the request must fail before hitting the wire.
 func TestOpenAIProvider_ContextCancel(t *testing.T) {
 	// Point at an unreachable port; the pre-canceled ctx must short-circuit
@@ -176,7 +176,7 @@ func TestOpenAIProvider_ContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel
 	start := time.Now()
-	_, err := p.ChatWithContext(ctx, "sys", "usr", 128, 0.0, 1.0)
+	_, err := p.Chat(ctx, "sys", "usr", 128, 0.0, 1.0)
 	if err == nil {
 		t.Fatal("Chat returned nil error after ctx cancel")
 	}
@@ -224,7 +224,7 @@ func TestOpenAIProvider_ErrorSurface(t *testing.T) {
 	p := NewOpenAIProvider(&config.LlmConfig{
 		APIURL: srv.URL, APIKey: "sk", Model: "m", TimeoutSecs: 5,
 	})
-	_, err := p.Chat("sys", "usr", 128, 0.0, 1.0)
+	_, err := p.Chat(context.Background(), "sys", "usr", 128, 0.0, 1.0)
 	if err == nil {
 		t.Fatal("expected error on 400 response")
 	}

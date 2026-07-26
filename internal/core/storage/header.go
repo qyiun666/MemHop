@@ -5,6 +5,7 @@ package storage
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
@@ -17,6 +18,9 @@ const (
 	HeaderBOffset = 4096
 	DataStart     = 8192
 )
+
+// FormatVersion is the on-disk file format version.
+const FormatVersion uint16 = 0x0002
 
 // Magic bytes for file identification.
 var (
@@ -52,7 +56,7 @@ type FileHeader struct {
 
 // NewFileHeader creates a fresh header with the given vector dimension.
 func NewFileHeader(vectorDim uint16) *FileHeader {
-	return &FileHeader{Version: 0x0002, VectorDim: vectorDim}
+	return &FileHeader{Version: FormatVersion, VectorDim: vectorDim}
 }
 
 // ToBytes serializes the header into a 4096-byte buffer with CRC32.
@@ -86,8 +90,13 @@ func FileHeaderFromBytes(buf [HeaderSize]byte) (*FileHeader, error) {
 	if crc32.ChecksumIEEE(buf[:4088]) != storedCRC {
 		return nil, mherrors.ErrCRCMismatch
 	}
+	version := binary.LittleEndian.Uint16(buf[4:6])
+	if version != FormatVersion {
+		return nil, mherrors.NewError(mherrors.ErrCorruption,
+			fmt.Sprintf("unsupported file format version 0x%04x (expected 0x%04x)", version, FormatVersion))
+	}
 	return &FileHeader{
-		Version:        binary.LittleEndian.Uint16(buf[4:6]),
+		Version:        version,
 		VectorDim:      binary.LittleEndian.Uint16(buf[6:8]),
 		CommitID:       binary.LittleEndian.Uint64(buf[8:16]),
 		SnapshotOffset: binary.LittleEndian.Uint64(buf[16:24]),

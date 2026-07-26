@@ -7,6 +7,7 @@ package crud
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -70,9 +71,16 @@ func DeleteL3(engine *storage.StorageEngine, l3Idx *index.L3Index, l3ID string) 
 		return mherrors.NewError(mherrors.ErrInvalidQuery, "parse l3 id", err)
 	}
 	l2Refs := findL2RefsToGraph(engine, graphHash)
-	nodeHashes := deleteGraphMembers(engine, graphHash)
-	engine.DeleteRecord(graphHash)
-	removeL2GraphRefs(engine, l2Refs, graphHash)
+	nodeHashes, err := deleteGraphMembers(engine, graphHash)
+	if err != nil {
+		return fmt.Errorf("delete l3 %s: members: %w", l3ID, err)
+	}
+	if _, err := engine.DeleteRecord(graphHash); err != nil {
+		return fmt.Errorf("delete l3 %s: %w", l3ID, err)
+	}
+	if err := removeL2GraphRefs(engine, l2Refs, graphHash); err != nil {
+		return fmt.Errorf("delete l3 %s: l2 refs: %w", l3ID, err)
+	}
 	// Drop the graph's nodes from the in-memory index so searches
 	// never return dangling IDs.
 	if l3Idx != nil {
@@ -237,7 +245,7 @@ func findL2RefsToGraph(engine *storage.StorageEngine, graphHash uint64) []uint64
 
 // deleteGraphMembers removes all node and edge records of a graph and
 // returns the deleted node hashes (for in-memory index cleanup).
-func deleteGraphMembers(engine *storage.StorageEngine, graphHash uint64) []uint64 {
+func deleteGraphMembers(engine *storage.StorageEngine, graphHash uint64) ([]uint64, error) {
 	var toDelete []uint64
 	var nodeHashes []uint64
 	engine.IterIndex(func(idHash, _ uint64) bool {
@@ -261,12 +269,14 @@ func deleteGraphMembers(engine *storage.StorageEngine, graphHash uint64) []uint6
 		return true
 	})
 	for _, h := range toDelete {
-		engine.DeleteRecord(h)
+		if _, err := engine.DeleteRecord(h); err != nil {
+			return nodeHashes, fmt.Errorf("delete graph member %016x: %w", h, err)
+		}
 	}
-	return nodeHashes
+	return nodeHashes, nil
 }
 
-func removeL2GraphRefs(engine *storage.StorageEngine, l2IDs []uint64, graphHash uint64) {
+func removeL2GraphRefs(engine *storage.StorageEngine, l2IDs []uint64, graphHash uint64) error {
 	for _, idHash := range l2IDs {
 		_, data, err := engine.ReadRecord(idHash)
 		if err != nil {
@@ -279,8 +289,11 @@ func removeL2GraphRefs(engine *storage.StorageEngine, l2IDs []uint64, graphHash 
 		ctx.UserL3Refs = removeUint64Val(ctx.UserL3Refs, graphHash)
 		ctx.AgentL3Refs = removeUint64Val(ctx.AgentL3Refs, graphHash)
 		ctx.UpdatedAt = timeutil.NowMs()
-		WriteTopic(engine, idHash, &ctx)
+		if err := WriteTopic(engine, idHash, &ctx); err != nil {
+			return fmt.Errorf("rewrite topic %016x: %w", idHash, err)
+		}
 	}
+	return nil
 }
 
 func collectAllGraphSlots(engine *storage.StorageEngine) []model.HypergraphSlot {

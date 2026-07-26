@@ -103,14 +103,9 @@ type chatParams struct {
 	ErrPrefix string
 }
 
-// Chat sends a chat completion request with custom parameters.
-// The request runs on context.Background(); use ChatWithContext for cancellation.
-func (p *OpenAIProvider) Chat(system, user string, maxTokens int, temperature, topP float32) (string, error) {
-	return p.ChatWithContext(context.Background(), system, user, maxTokens, temperature, topP)
-}
-
-// ChatWithContext is Chat with an explicit context for cancellation / deadline propagation.
-func (p *OpenAIProvider) ChatWithContext(
+// Chat sends a chat completion request with custom parameters, honoring ctx
+// for cancellation / deadline propagation.
+func (p *OpenAIProvider) Chat(
 	ctx context.Context, system, user string, maxTokens int, temperature, topP float32,
 ) (string, error) {
 	return p.do(ctx, system, user, chatParams{
@@ -119,13 +114,8 @@ func (p *OpenAIProvider) ChatWithContext(
 	})
 }
 
-// Consolidate performs the LLM consolidation call.
-func (p *OpenAIProvider) Consolidate(input *ConsolidationInput) (*ConsolidationOutput, error) {
-	return p.ConsolidateWithContext(context.Background(), input)
-}
-
-// ConsolidateWithContext runs Consolidate with an explicit context.
-func (p *OpenAIProvider) ConsolidateWithContext(
+// Consolidate performs the LLM consolidation call, honoring ctx.
+func (p *OpenAIProvider) Consolidate(
 	ctx context.Context, input *ConsolidationInput,
 ) (*ConsolidationOutput, error) {
 	data := buildDataSection(input)

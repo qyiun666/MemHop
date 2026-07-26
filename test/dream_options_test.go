@@ -32,7 +32,7 @@ type mockLLMOnly struct {
 	calls atomic.Int64
 }
 
-func (m *mockLLMOnly) Consolidate(_ *dream.ConsolidationInput) (*dream.ConsolidationOutput, error) {
+func (m *mockLLMOnly) Consolidate(_ context.Context, _ *dream.ConsolidationInput) (*dream.ConsolidationOutput, error) {
 	m.calls.Add(1)
 	return &dream.ConsolidationOutput{
 		L2Groups: dream.NewEmptySection[[]dream.L2Group](),
@@ -48,7 +48,7 @@ type mockChat struct {
 
 const defaultDistillResp = `{"emotion":{"valence":0.5,"arousal":0.3,"dominance":0.5},"mbti":{"i_e":-0.5,"n_s":0.5,"t_f":-0.5,"j_p":0.5,"type":"INFJ"},"per_node":[]}`
 
-func (m *mockChat) Chat(_ string, _ string, _ int, _, _ float32) (string, error) {
+func (m *mockChat) Chat(_ context.Context, _ string, _ string, _ int, _, _ float32) (string, error) {
 	m.calls.Add(1)
 	if m.resp != "" {
 		return m.resp, nil
@@ -63,12 +63,12 @@ type mockLLMAndChat struct {
 	mockChat
 }
 
-func (m *mockLLMAndChat) Consolidate(in *dream.ConsolidationInput) (*dream.ConsolidationOutput, error) {
-	return m.mockLLMOnly.Consolidate(in)
+func (m *mockLLMAndChat) Consolidate(ctx context.Context, in *dream.ConsolidationInput) (*dream.ConsolidationOutput, error) {
+	return m.mockLLMOnly.Consolidate(ctx, in)
 }
 
-func (m *mockLLMAndChat) Chat(system, user string, maxTokens int, temperature, topP float32) (string, error) {
-	return m.mockChat.Chat(system, user, maxTokens, temperature, topP)
+func (m *mockLLMAndChat) Chat(ctx context.Context, system, user string, maxTokens int, temperature, topP float32) (string, error) {
+	return m.mockChat.Chat(ctx, system, user, maxTokens, temperature, topP)
 }
 
 // --- tests ------------------------------------------------------------------
@@ -250,8 +250,9 @@ func TestDreamOptions_ClosedInstance(t *testing.T) {
 func openMemHopWithLLMURL(t *testing.T, llmURL string) *memhop.MemHop {
 	t.Helper()
 	cfg := memhop.Config{
-		DBPath:    filepath.Join(t.TempDir(), "cfg.meh"),
-		VectorDim: testsupport.MockVectorDim,
+		DBPath:     filepath.Join(t.TempDir(), "cfg.meh"),
+		VectorDim:  testsupport.MockVectorDim,
+		EmbedModel: "mock-embed",
 	}
 	cfg.LLM.APIURL = llmURL
 	cfg.LLM.APIKey = "sk-test"

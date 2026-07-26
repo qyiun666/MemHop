@@ -14,11 +14,13 @@ import (
 )
 
 // Get retrieves a single record from the given layer.
-// LayerScene ignores id and returns the full scene graph; pass "" for id.
+// LayerScene: an empty id returns the full scene graph; a non-empty id
+// filters the graph to that scene.
 func (m *MemHop) Get(layer Layer, id string) (*GetResult, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 	switch layer {
 	case LayerProfile:
 		p, err := crud.LoadProfileSlot(m.engine)
@@ -71,9 +73,10 @@ func (m *MemHop) Get(layer Layer, id string) (*GetResult, error) {
 // The corresponding sub-query in req (Topic / Knowledge / Archive / Crystal)
 // must be populated for that layer.
 func (m *MemHop) List(layer Layer, req ListRequest) (*ListResult, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 	switch layer {
 	case LayerTopic:
 		q := TopicListQuery{}
@@ -125,9 +128,10 @@ func (m *MemHop) List(layer Layer, req ListRequest) (*ListResult, error) {
 // return ErrInvalidQuery (Profile is a singleton; Scene / Archive have no
 // direct delete semantics).
 func (m *MemHop) Delete(layer Layer, id string) error {
-	if m.closed.Load() {
-		return mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return err
 	}
+	defer m.mu.RUnlock()
 	switch layer {
 	case LayerTopic:
 		return crud.DeleteL2(m.engine, m.getL1Reverse(), m.sparseIndex, m.getL2Meta(), id)

@@ -87,9 +87,16 @@ func TestUpdateMemoryValidation(t *testing.T) {
 	})
 
 	t.Run("unsupported layer", func(t *testing.T) {
-		_, err := UpdateMemory(crud.UpdateRequest{ID: "abc", Layer: 99}, &UpdateDeps{})
+		_, err := UpdateMemory(crud.UpdateRequest{ID: "abc", Layer: 99, Timestamp: 1700000000000}, &UpdateDeps{})
 		if err == nil {
 			t.Fatal("expected error for unsupported layer")
+		}
+	})
+
+	t.Run("missing timestamp", func(t *testing.T) {
+		_, err := UpdateMemory(crud.UpdateRequest{ID: "abc", Layer: 2}, &UpdateDeps{})
+		if err == nil {
+			t.Fatal("expected error for missing timestamp")
 		}
 	})
 }

@@ -4,6 +4,7 @@
 package dream
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -18,7 +19,7 @@ type mockChatProvider struct {
 	Err      error
 }
 
-func (m *mockChatProvider) Chat(_, _ string, _ int, _, _ float32) (string, error) {
+func (m *mockChatProvider) Chat(_ context.Context, _, _ string, _ int, _, _ float32) (string, error) {
 	if m.Err != nil {
 		return "", m.Err
 	}
@@ -59,7 +60,7 @@ func TestDistillL0_HappyPath(t *testing.T) {
 		Response: formatResponse(happyPathResponse, hash.FormatHash(ids[0])),
 	}
 
-	report, err := DistillL0(engine, chat)
+	report, err := DistillL0(context.Background(), engine, chat)
 	if err != nil {
 		t.Fatalf("DistillL0 err: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestDistillL0_PreservesOtherProfileFields(t *testing.T) {
 	writeTestProfile(t, engine, seed)
 
 	chat := &mockChatProvider{Response: `{"emotion":{"valence":0.5,"arousal":0.5,"dominance":0.5},"mbti":{"i_e":0.1,"n_s":0.1,"t_f":0.1,"j_p":0.1,"type":"ESFP"},"per_node":[]}`}
-	if _, err := DistillL0(engine, chat); err != nil {
+	if _, err := DistillL0(context.Background(), engine, chat); err != nil {
 		t.Fatalf("DistillL0 err: %v", err)
 	}
 	p := readTestProfile(t, engine, profileID)
@@ -149,7 +150,7 @@ func TestDistillL0_BackfillSkipsNonZeroNodes(t *testing.T) {
 	chat := &mockChatProvider{
 		Response: formatResponse(happyPathResponse, hash.FormatHash(ids[0])),
 	}
-	report, err := DistillL0(engine, chat)
+	report, err := DistillL0(context.Background(), engine, chat)
 	if err != nil {
 		t.Fatalf("DistillL0 err: %v", err)
 	}
@@ -165,7 +166,7 @@ func TestDistillL0_BackfillSkipsNonZeroNodes(t *testing.T) {
 func TestDistillL0_EmptyL1(t *testing.T) {
 	engine := createTestEngine(t)
 	chat := &mockChatProvider{Response: `{"should":"not be called"}`}
-	report, err := DistillL0(engine, chat)
+	report, err := DistillL0(context.Background(), engine, chat)
 	if err != nil {
 		t.Fatalf("DistillL0 err on empty L1: %v", err)
 	}
@@ -181,7 +182,7 @@ func TestDistillL0_EmptyL1(t *testing.T) {
 func TestDistillL0_LLMError(t *testing.T) {
 	engine, _ := distillTestFixture(t, 1)
 	chat := &mockChatProvider{Err: errors.New("network timeout")}
-	if _, err := DistillL0(engine, chat); err == nil {
+	if _, err := DistillL0(context.Background(), engine, chat); err == nil {
 		t.Error("expected error when LLM fails, got nil")
 	}
 }
@@ -189,7 +190,7 @@ func TestDistillL0_LLMError(t *testing.T) {
 func TestDistillL0_MalformedJSON(t *testing.T) {
 	engine, _ := distillTestFixture(t, 1)
 	chat := &mockChatProvider{Response: "not a json"}
-	if _, err := DistillL0(engine, chat); err == nil {
+	if _, err := DistillL0(context.Background(), engine, chat); err == nil {
 		t.Error("expected error on malformed JSON, got nil")
 	}
 }
@@ -199,7 +200,7 @@ func TestDistillL0_MBTIClamp(t *testing.T) {
 	// Feed out-of-range dims plus an inconsistent type field.
 	body := `{"emotion":{"valence":2.5,"arousal":-0.4,"dominance":0.5},"mbti":{"i_e":2.5,"n_s":-3.0,"t_f":0.0,"j_p":-0.5,"type":"WRONG"},"per_node":[]}`
 	chat := &mockChatProvider{Response: body}
-	report, err := DistillL0(engine, chat)
+	report, err := DistillL0(context.Background(), engine, chat)
 	if err != nil {
 		t.Fatalf("DistillL0 err: %v", err)
 	}
@@ -231,7 +232,7 @@ func TestDistillL0_MBTIClamp(t *testing.T) {
 
 func TestDistillL0_NilChatSkips(t *testing.T) {
 	engine, _ := distillTestFixture(t, 1)
-	if _, err := DistillL0(engine, nil); err == nil {
+	if _, err := DistillL0(context.Background(), engine, nil); err == nil {
 		t.Error("expected error when chat is nil, got nil")
 	}
 }

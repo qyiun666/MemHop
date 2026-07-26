@@ -31,24 +31,43 @@ var (
 	tokenizerOnce      sync.Once
 	tokenizerMu        sync.Mutex
 	tokenizerErr       error
+	tokenizerEngine    string // normalized engine of the active singleton
 	tokenizerErrLogged sync.Once
 )
 
-// InitTokenizer initializes the global tokenizer.
+// normalizeEngine maps the empty string to EngineAuto.
+func normalizeEngine(engine string) string {
+	if engine == "" {
+		return EngineAuto
+	}
+	return engine
+}
+
+// InitTokenizer initializes the global tokenizer (process-wide singleton).
 // Accepts "", "auto" or "gse"; any other value returns an error so stale
 // configuration is surfaced instead of silently downgraded.
-// Safe to call multiple times; only the first call takes effect unless
-// ResetTokenizer is called.
+// A repeated call with the same engine is a no-op; a repeated call with a
+// DIFFERENT engine returns an explicit error rather than silently keeping
+// the first instance. Use ResetTokenizer to re-initialize.
 func InitTokenizer(engine string) error {
+	want := normalizeEngine(engine)
 	tokenizerOnce.Do(func() {
-		switch engine {
-		case "", EngineAuto, EngineGse:
+		switch want {
+		case EngineAuto, EngineGse:
 			globalTokenizer, tokenizerErr = createTokenizer(engine)
+			tokenizerEngine = want
 		default:
 			tokenizerErr = fmt.Errorf("unknown tokenizer engine %q (supported: %q, %q)", engine, EngineAuto, EngineGse)
 		}
 	})
-	return tokenizerErr
+	if tokenizerErr != nil {
+		return tokenizerErr
+	}
+	if want != tokenizerEngine {
+		return fmt.Errorf("tokenizer already initialized with engine %q; cannot switch to %q in the same process (call ResetTokenizer first)",
+			tokenizerEngine, want)
+	}
+	return nil
 }
 
 // ResetTokenizer releases the current tokenizer and allows re-initialization.
@@ -60,6 +79,7 @@ func ResetTokenizer() {
 		globalTokenizer = nil
 	}
 	tokenizerErr = nil
+	tokenizerEngine = ""
 	tokenizerOnce = sync.Once{}
 	tokenizerErrLogged = sync.Once{}
 }

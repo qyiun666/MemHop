@@ -19,16 +19,17 @@ import (
 //   - TOpMerge      — merge secondary L2 topics into a primary (op.PrimaryID + op.MergeIDs required)
 //   - TOpSceneTree  — return the full L2 scene tree (op.SceneID required)
 func (m *MemHop) Topic(op TopicOp) (*TopicResult, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 	switch op.Kind {
 	case TOpSetProfile:
 		if op.ProfileDelta == nil {
 			return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "TOpSetProfile requires ProfileDelta")
 		}
 		// Invalidate profile cache on write.
-		m.profileCache = nil
+		m.profileCache.Store(nil)
 		if err := crud.WriteProfile(m.engine, *op.ProfileDelta); err != nil {
 			return nil, err
 		}

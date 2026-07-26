@@ -5,6 +5,19 @@
 // It assembles all underlying components (storage, index, query, dream, encoder)
 // into a single MemHop struct with thread-safe methods.
 //
+// # Single-instance contract
+//
+// MemHop is an agent-dedicated memory database: one agent binds to exactly
+// one .meh file. A file-level exclusive lock enforces that at most one
+// MemHop instance (across all processes) has a given file open at a time;
+// a second Open returns an error instead of sharing the file. Multi-user
+// or namespace separation within one database file is out of scope by
+// design — use one file per agent.
+//
+// Note: the tokenizer is a process-level singleton loaded on first Open
+// (dictionary loading takes noticeable time once per process), and all
+// MemHop instances in a process must use the same tokenizer engine.
+//
 // This file contains:
 //   - Lifecycle: Open, OpenWithEncoder, Close, Checkpoint
 //   - Health: HealthCheck, SessionStatus
@@ -14,7 +27,9 @@ package memhop
 import (
 	"log/slog"
 	"os"
+	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/common/config"
 	"github.com/qyiun666/MemHop/internal/common/hash"
@@ -54,8 +69,11 @@ type MemHop struct {
 	l3Index      *index.L3Index
 	l3Cache      *index.AdjacencyCache
 	l3Degree     *index.DegreeTracker
-	profileCache *search.ProfileResult // L0 profile cache (nil = not cached)
+	profileCache atomic.Pointer[search.ProfileResult] // L0 profile cache (nil = not cached)
+	lastDreamAt  atomic.Int64                         // Unix ms of the last successful Dream (0 = never)
 	closed       atomic.Bool
+	dreaming     atomic.Bool  // serializes Dream: concurrent calls error out
+	mu           sync.RWMutex // public methods RLock; Close/Dream Lock
 }
 
 // getL2Meta returns the currently active L2 metadata index snapshot.
@@ -63,6 +81,17 @@ func (m *MemHop) getL2Meta() *index.L2MetaIndex { return m.l2Meta.Load() }
 
 // getL1Reverse returns the currently active L1 reverse index snapshot.
 func (m *MemHop) getL1Reverse() *index.L1ReverseIndex { return m.l1Reverse.Load() }
+
+// beginRead takes the shared read lock for a public operation and rejects
+// use after Close. On nil error the caller must defer m.mu.RUnlock().
+func (m *MemHop) beginRead() error {
+	m.mu.RLock()
+	if m.closed.Load() {
+		m.mu.RUnlock()
+		return mherrors.ErrClosed
+	}
+	return nil
+}
 
 // Open creates or opens a MemHop database.
 // Config.EncoderAddr and Config.EmbedModel are required.
@@ -87,6 +116,8 @@ func (m *MemHop) Close() error {
 	if !m.closed.CompareAndSwap(false, true) {
 		return mherrors.ErrClosed
 	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	snap, err := m.buildSnapshot()
 	if err != nil {
 		return err
@@ -105,9 +136,10 @@ func (m *MemHop) Close() error {
 
 // Checkpoint persists current state to disk without closing.
 func (m *MemHop) Checkpoint() error {
-	if m.closed.Load() {
-		return mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return err
 	}
+	defer m.mu.RUnlock()
 	snap, err := m.buildSnapshot()
 	if err != nil {
 		return err
@@ -117,15 +149,22 @@ func (m *MemHop) Checkpoint() error {
 
 // HealthCheck returns the current health status of the database.
 func (m *MemHop) HealthCheck() (*health.HealthStatus, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 	layerCounts := health.CountLayers(m.engine)
 	issues := health.CollectIssues(m.encoder, layerCounts)
+	var lastDreamAt *string
+	if ms := m.lastDreamAt.Load(); ms > 0 {
+		s := time.UnixMilli(ms).UTC().Format(time.RFC3339)
+		lastDreamAt = &s
+	}
 	return &health.HealthStatus{
 		OK:                len(issues) == 0,
 		DBSizeBytes:       m.engine.FileSize(),
 		LayerCounts:       layerCounts,
+		LastDreamAt:       lastDreamAt,
 		EncoderConfigured: m.encoder != nil && m.encoder.IsAvailable(),
 		Issues:            issues,
 	}, nil
@@ -133,9 +172,10 @@ func (m *MemHop) HealthCheck() (*health.HealthStatus, error) {
 
 // SessionStatus returns the current session activation state.
 func (m *MemHop) SessionStatus() (*crud.SessionStatus, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 	rawIDs := m.sessionMgr.GetActiveTopicIDs()
 	hexIDs := make([]string, len(rawIDs))
 	for i, id := range rawIDs {
@@ -197,18 +237,10 @@ func openWithEncoder(config *config.MemHopConfig, enc encoder.Encoder) (*MemHop,
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
-	dflt := config.Defaults
-	if dflt == nil {
-		dflt = DefaultDefaults()
-	}
+	dflt := mergeDefaults(config.Defaults)
 
-	// Initialize the global tokenizer.
-	tok := dflt.TokenizerEngine
-	if tok == "" {
-		slog.Warn("TokenizerEngine not set, defaulting to auto")
-		tok = "auto"
-	}
-	if err := index.InitTokenizer(tok); err != nil {
+	// Initialize the global tokenizer (process-wide singleton).
+	if err := index.InitTokenizer(dflt.TokenizerEngine); err != nil {
 		return nil, mherrors.NewError(mherrors.ErrConfig, "tokenizer init failed", err)
 	}
 
@@ -222,7 +254,11 @@ func openWithEncoder(config *config.MemHopConfig, enc encoder.Encoder) (*MemHop,
 		engine.CloseNoCheckpoint()
 		return nil, mherrors.NewError(mherrors.ErrVectorDimMismatch, "config vs engine")
 	}
-	sparseIdx, l1Rev := loadCachedIndices(engine)
+	sparseIdx, l1Rev, err := loadCachedIndices(engine)
+	if err != nil {
+		engine.CloseNoCheckpoint()
+		return nil, err
+	}
 	l2MetaIdx := index.BuildL2MetaFromEngine(engine)
 	sm := session.NewSessionManager(dflt.SessionConfig)
 	l3Idx := index.NewL3Index()
@@ -230,10 +266,6 @@ func openWithEncoder(config *config.MemHopConfig, enc encoder.Encoder) (*MemHop,
 		slog.Warn("l3 index build failed", "error", err)
 	}
 	l3CacheMax := dflt.AdjacencyCacheMaxEntries
-	if l3CacheMax <= 0 {
-		slog.Warn("AdjacencyCacheMaxEntries not set or <= 0, defaulting to 128")
-		l3CacheMax = 128
-	}
 	l3C := index.NewAdjacencyCache(l3CacheMax)
 	l3Dt := index.NewDegreeTracker()
 	m := &MemHop{
@@ -252,19 +284,38 @@ func createEncoder(config *config.MemHopConfig) (encoder.Encoder, error) {
 		return nil, mherrors.NewError(mherrors.ErrConfig,
 			"Config.EncoderAddr is required")
 	}
-	if config.EmbedModel == "" {
-		return nil, mherrors.NewError(mherrors.ErrConfig,
-			"Config.EmbedModel is required")
-	}
-	if config.LLM.APIURL == "" || config.LLM.APIKey == "" {
-		return nil, mherrors.NewError(mherrors.ErrConfig,
-			"LLM.APIURL and LLM.APIKey are required")
-	}
-	enc, err := encoder.NewHttpEncoder(config.EncoderAddr, config.VectorDim, config.EmbedModel)
+	enc, err := encoder.NewHttpEncoder(config.EncoderAddr, config.VectorDim, config.EmbedModel, config.EncoderTimeoutSecs)
 	if err != nil {
 		return nil, err
 	}
 	return enc, nil
+}
+
+// mergeDefaults fills nil sub-configurations of user-provided Defaults with
+// the documented default values, once, at Open. This is contract defaulting,
+// not a runtime fallback: after Open every sub-config is non-nil.
+func mergeDefaults(user *config.MemHopDefaults) *config.MemHopDefaults {
+	base := DefaultDefaults()
+	if user == nil {
+		return base
+	}
+	merged := *user
+	if merged.SearchWeights == nil {
+		merged.SearchWeights = base.SearchWeights
+	}
+	if merged.DecayConfig == nil {
+		merged.DecayConfig = base.DecayConfig
+	}
+	if merged.SessionConfig == nil {
+		merged.SessionConfig = base.SessionConfig
+	}
+	if merged.AdjacencyCacheMaxEntries <= 0 {
+		merged.AdjacencyCacheMaxEntries = base.AdjacencyCacheMaxEntries
+	}
+	if merged.TokenizerEngine == "" {
+		merged.TokenizerEngine = base.TokenizerEngine
+	}
+	return &merged
 }
 
 func openOrCreateEngine(config *config.MemHopConfig) (*storage.StorageEngine, error) {
@@ -274,28 +325,34 @@ func openOrCreateEngine(config *config.MemHopConfig) (*storage.StorageEngine, er
 	return storage.Create(config.DBPath, uint16(config.VectorDim))
 }
 
-func loadCachedIndices(engine *storage.StorageEngine) (*index.SparseIndex, *index.L1ReverseIndex) {
+// loadCachedIndices restores the sparse and L1 reverse indices from the
+// engine's checkpoint snapshot. A snapshot section that exists but fails to
+// deserialize is corruption and aborts Open; silent rebuild would hide data
+// loss.
+func loadCachedIndices(engine *storage.StorageEngine) (*index.SparseIndex, *index.L1ReverseIndex, error) {
 	sparseIdx := index.NewSparseIndex()
 	l1Rev := index.NewL1ReverseIndex()
 	snap := engine.SnapshotData()
 	if snap == nil {
-		return sparseIdx, l1Rev
+		return sparseIdx, l1Rev, nil
 	}
 	if len(snap.SparseData) > 0 {
-		if idx, err := index.DeserializeSparseIndex(snap.SparseData); err == nil {
-			sparseIdx = idx
-		} else {
-			slog.Warn("sparse index snapshot deserialize failed, rebuilding empty", "error", err)
+		idx, err := index.DeserializeSparseIndex(snap.SparseData)
+		if err != nil {
+			return nil, nil, mherrors.NewError(mherrors.ErrCorruption,
+				"sparse index snapshot deserialize failed", err)
 		}
+		sparseIdx = idx
 	}
 	if len(snap.L1ReverseData) > 0 {
-		if idx, err := index.DeserializeL1ReverseIndex(snap.L1ReverseData); err == nil {
-			l1Rev = idx
-		} else {
-			slog.Warn("l1 reverse index snapshot deserialize failed, rebuilding empty", "error", err)
+		idx, err := index.DeserializeL1ReverseIndex(snap.L1ReverseData)
+		if err != nil {
+			return nil, nil, mherrors.NewError(mherrors.ErrCorruption,
+				"l1 reverse index snapshot deserialize failed", err)
 		}
+		l1Rev = idx
 	}
-	return sparseIdx, l1Rev
+	return sparseIdx, l1Rev, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -449,8 +506,6 @@ type ProfileDelta = crud.ProfileDelta
 type HealthStatus = health.HealthStatus
 
 type SessionStatus = crud.SessionStatus
-
-type MemHopStats = health.MemHopStats
 
 // --- Model types (minimal exposure) ---
 

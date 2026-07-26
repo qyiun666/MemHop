@@ -44,6 +44,8 @@ func F32ToF16(f float32) uint16 {
 	switch {
 	case (bits & 0x7FFFFFFF) == 0: // ±0
 		return sign
+	case (bits&0x7F800000) == 0x7F800000 && mant != 0: // NaN → f16 quiet NaN
+		return sign | 0x7E00
 	case exp <= 0: // subnormal or underflow
 		if exp < -10 {
 			return sign

@@ -7,6 +7,7 @@ package crud
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
@@ -69,7 +70,9 @@ func UpdateProfile(
 	if err := json.Unmarshal(data, &profile); err != nil {
 		return nil, mherrors.NewError(mherrors.ErrDeserialization, "profile", err)
 	}
-	applyRawProfileUpdates(&profile, req.Fields)
+	if err := applyRawProfileUpdates(&profile, req.Fields); err != nil {
+		return nil, err
+	}
 	profile.UpdatedAt = timeutil.NowMs()
 	profile.Version++
 	pData, err := json.Marshal(profile)
@@ -106,29 +109,44 @@ func derefSlice(s []string) []string {
 	return s
 }
 
-func applyRawProfileUpdates(p *model.ProfileSlot, fields map[string]json.RawMessage) {
-	if raw, ok := fields["name"]; ok {
-		json.Unmarshal(raw, &p.Name)
+// applyRawProfileUpdates applies raw JSON field updates to the profile.
+// Any field whose JSON does not match the target type returns an
+// ErrInvalidQuery instead of being silently skipped.
+func applyRawProfileUpdates(p *model.ProfileSlot, fields map[string]json.RawMessage) error {
+	apply := func(key string, dst any) error {
+		raw, ok := fields[key]
+		if !ok {
+			return nil
+		}
+		if err := json.Unmarshal(raw, dst); err != nil {
+			return mherrors.NewError(mherrors.ErrInvalidQuery,
+				fmt.Sprintf("profile field %q has wrong type", key), err)
+		}
+		return nil
 	}
-	if raw, ok := fields["role"]; ok {
-		json.Unmarshal(raw, &p.Role)
+	if err := apply("name", &p.Name); err != nil {
+		return err
 	}
-	if raw, ok := fields["personality"]; ok {
-		json.Unmarshal(raw, &p.Personality)
+	if err := apply("role", &p.Role); err != nil {
+		return err
 	}
-	if raw, ok := fields["worldview"]; ok {
-		json.Unmarshal(raw, &p.Worldview)
+	if err := apply("personality", &p.Personality); err != nil {
+		return err
 	}
-	if raw, ok := fields["preferences"]; ok {
-		json.Unmarshal(raw, &p.Preferences)
+	if err := apply("worldview", &p.Worldview); err != nil {
+		return err
 	}
-	if raw, ok := fields["lexicon"]; ok {
-		json.Unmarshal(raw, &p.Lexicon)
+	if err := apply("preferences", &p.Preferences); err != nil {
+		return err
 	}
-	if raw, ok := fields["style_traits"]; ok {
-		json.Unmarshal(raw, &p.StyleTraits)
+	if err := apply("lexicon", &p.Lexicon); err != nil {
+		return err
 	}
-	if raw, ok := fields["emotion_patterns"]; ok {
-		json.Unmarshal(raw, &p.EmotionPatterns)
+	if err := apply("style_traits", &p.StyleTraits); err != nil {
+		return err
 	}
+	if err := apply("emotion_patterns", &p.EmotionPatterns); err != nil {
+		return err
+	}
+	return nil
 }

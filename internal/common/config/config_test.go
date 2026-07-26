@@ -11,6 +11,17 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
+// validBase returns a config with all required fields populated so each
+// test can focus on the single field it mutates.
+func validBase() *MemHopConfig {
+	return &MemHopConfig{
+		DBPath:     "/tmp/test.meh",
+		VectorDim:  768,
+		EmbedModel: "test-embed",
+		LLM:        LlmConfig{APIURL: "http://localhost", APIKey: "k", Model: "m"},
+	}
+}
+
 func TestValidateNilConfig(t *testing.T) {
 	err := (*MemHopConfig)(nil).Validate()
 	if err == nil {
@@ -37,7 +48,8 @@ func TestValidateVectorDim(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &MemHopConfig{VectorDim: tt.dim}
+			c := validBase()
+			c.VectorDim = tt.dim
 			err := c.Validate()
 			if tt.want == "" {
 				if err != nil {
@@ -56,9 +68,36 @@ func TestValidateVectorDim(t *testing.T) {
 }
 
 func TestValidateDefaultsNilReturnsNil(t *testing.T) {
-	c := &MemHopConfig{VectorDim: 768}
+	c := validBase()
 	if err := c.Validate(); err != nil {
 		t.Fatalf("expected nil when Defaults is nil, got %v", err)
+	}
+}
+
+func TestValidateRequiredFields(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*MemHopConfig)
+	}{
+		{"missing DBPath", func(c *MemHopConfig) { c.DBPath = "" }},
+		{"missing EmbedModel", func(c *MemHopConfig) { c.EmbedModel = "" }},
+		{"missing LLM APIURL", func(c *MemHopConfig) { c.LLM.APIURL = "" }},
+		{"missing LLM APIKey", func(c *MemHopConfig) { c.LLM.APIKey = "" }},
+		{"missing LLM Model", func(c *MemHopConfig) { c.LLM.Model = "" }},
+		{"negative encoder timeout", func(c *MemHopConfig) { c.EncoderTimeoutSecs = -1 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := validBase()
+			tt.mutate(c)
+			err := c.Validate()
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !errors.Is(err, mherrors.ErrConfig) {
+				t.Errorf("error should wrap ErrConfig")
+			}
+		})
 	}
 }
 
@@ -80,11 +119,9 @@ func TestValidateNegativeSearchWeights(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &MemHopConfig{
-				VectorDim: 768,
-				Defaults: &MemHopDefaults{
-					SearchWeights: tt.setup(),
-				},
+			c := validBase()
+			c.Defaults = &MemHopDefaults{
+				SearchWeights: tt.setup(),
 			}
 			err := c.Validate()
 			if err == nil {
@@ -95,13 +132,11 @@ func TestValidateNegativeSearchWeights(t *testing.T) {
 }
 
 func TestValidateValidSearchWeights(t *testing.T) {
-	c := &MemHopConfig{
-		VectorDim: 768,
-		Defaults: &MemHopDefaults{
-			SearchWeights: &SearchWeights{
-				RRFK: 60, NProbes: 8,
-				ActivationBonus: 0.02, RecentChatBonus: 0.01,
-			},
+	c := validBase()
+	c.Defaults = &MemHopDefaults{
+		SearchWeights: &SearchWeights{
+			RRFK:            60,
+			ActivationBonus: 0.02, RecentChatBonus: 0.01,
 		},
 	}
 	if err := c.Validate(); err != nil {
@@ -124,11 +159,9 @@ func TestValidateDecayConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := &MemHopConfig{
-				VectorDim: 768,
-				Defaults: &MemHopDefaults{
-					DecayConfig: tt.decay,
-				},
+			c := validBase()
+			c.Defaults = &MemHopDefaults{
+				DecayConfig: tt.decay,
 			}
 			err := c.Validate()
 			if tt.wantErr && err == nil {
@@ -180,15 +213,6 @@ func TestDefaultMemHopDefaults(t *testing.T) {
 		}
 		if d.SessionConfig.Capacity != 7 {
 			t.Errorf("Capacity = %d; want 7", d.SessionConfig.Capacity)
-		}
-	})
-
-	t.Run("llm preprocess defaults", func(t *testing.T) {
-		if d.LlmPreprocess == nil {
-			t.Fatal("LlmPreprocess should not be nil")
-		}
-		if d.LlmPreprocess.PreprocessMaxTokens != 512 {
-			t.Errorf("PreprocessMaxTokens = %d; want 512", d.LlmPreprocess.PreprocessMaxTokens)
 		}
 	})
 

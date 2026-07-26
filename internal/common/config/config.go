@@ -7,21 +7,38 @@ import (
 )
 
 type MemHopConfig struct {
-	DBPath      string          `json:"db_path"`
-	VectorDim   int             `json:"vector_dim"`
-	EncoderAddr string          `json:"encoder_addr"`
-	EmbedModel  string          `json:"embed_model"`
-	LLM         LlmConfig       `json:"llm"`
-	Defaults    *MemHopDefaults `json:"defaults,omitempty"`
+	DBPath      string `json:"db_path"`
+	VectorDim   int    `json:"vector_dim"`
+	EncoderAddr string `json:"encoder_addr"`
+	EmbedModel  string `json:"embed_model"`
+	// EncoderTimeoutSecs bounds each embedding HTTP request; 0 means the
+	// documented default of 20 seconds.
+	EncoderTimeoutSecs int             `json:"encoder_timeout_secs,omitempty"`
+	LLM                LlmConfig       `json:"llm"`
+	Defaults           *MemHopDefaults `json:"defaults,omitempty"`
 }
 
-// Validate reports nil or out-of-range configuration values.
+// Validate reports nil, missing, or out-of-range configuration values.
+// All required fields fail here, at Open time, instead of deep inside a
+// runtime code path.
 func (c *MemHopConfig) Validate() error {
 	if c == nil {
 		return mherrors.NewError(mherrors.ErrConfig, "config is required")
 	}
+	if c.DBPath == "" {
+		return mherrors.NewError(mherrors.ErrConfig, "DBPath is required")
+	}
 	if c.VectorDim <= 0 || c.VectorDim > math.MaxUint16 {
 		return mherrors.NewError(mherrors.ErrConfig, "vector_dim must be in range (0, 65535]")
+	}
+	if c.EmbedModel == "" {
+		return mherrors.NewError(mherrors.ErrConfig, "EmbedModel is required")
+	}
+	if c.EncoderTimeoutSecs < 0 {
+		return mherrors.NewError(mherrors.ErrConfig, "encoder_timeout_secs must be >= 0")
+	}
+	if c.LLM.APIURL == "" || c.LLM.APIKey == "" || c.LLM.Model == "" {
+		return mherrors.NewError(mherrors.ErrConfig, "LLM.APIURL, LLM.APIKey and LLM.Model are required")
 	}
 	if c.Defaults == nil {
 		return nil
@@ -47,19 +64,17 @@ func (c *MemHopConfig) Validate() error {
 func inUnitRange(v float32) bool { return v >= 0 && v <= 1 }
 
 type MemHopDefaults struct {
-	SearchWeights            *SearchWeights       `json:"search_weights,omitempty"`
-	DecayConfig              *DecayConfig         `json:"decay_config,omitempty"`
-	SessionConfig            *SessionConfig       `json:"session_config,omitempty"`
-	AdjacencyCacheMaxEntries int                  `json:"adjacency_cache_max_entries"`
-	LlmPreprocess            *LlmPreprocessConfig `json:"llm_preprocess,omitempty"`
-	TokenizerEngine          string               `json:"tokenizer_engine,omitempty"`
+	SearchWeights            *SearchWeights `json:"search_weights,omitempty"`
+	DecayConfig              *DecayConfig   `json:"decay_config,omitempty"`
+	SessionConfig            *SessionConfig `json:"session_config,omitempty"`
+	AdjacencyCacheMaxEntries int            `json:"adjacency_cache_max_entries"`
+	TokenizerEngine          string         `json:"tokenizer_engine,omitempty"`
 }
 
 // SearchWeights controls retrieval scoring.
 // v0.58: unified RRF pipeline — channel weights and multiplicative boost removed.
 type SearchWeights struct {
 	RRFK            float32 `json:"rrf_k"`
-	NProbes         int     `json:"n_probes"`
 	ActivationBonus float32 `json:"activation_bonus"`
 	RecentChatBonus float32 `json:"recent_chat_bonus"`
 }
@@ -89,11 +104,6 @@ type SessionConfig struct {
 	Capacity     int   `json:"capacity"`
 }
 
-// LlmPreprocessConfig holds LLM preprocessing settings.
-type LlmPreprocessConfig struct {
-	PreprocessMaxTokens int `json:"preprocess_max_tokens"`
-}
-
 // DefaultMemHopDefaults returns MemHopDefaults with sensible defaults.
 func DefaultMemHopDefaults() *MemHopDefaults {
 	return &MemHopDefaults{
@@ -101,7 +111,6 @@ func DefaultMemHopDefaults() *MemHopDefaults {
 		TokenizerEngine:          "auto",
 		SearchWeights: &SearchWeights{
 			RRFK:            60.0,
-			NProbes:         8,
 			ActivationBonus: 0.02,
 			RecentChatBonus: 0.01,
 		},
@@ -116,9 +125,6 @@ func DefaultMemHopDefaults() *MemHopDefaults {
 		SessionConfig: &SessionConfig{
 			DefaultTTLMs: 3600000, // 1 hour
 			Capacity:     7,
-		},
-		LlmPreprocess: &LlmPreprocessConfig{
-			PreprocessMaxTokens: 512,
 		},
 	}
 }

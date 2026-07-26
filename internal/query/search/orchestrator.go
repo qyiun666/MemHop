@@ -7,10 +7,12 @@
 package search
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/qyiun666/MemHop/internal/common/config"
 	"github.com/qyiun666/MemHop/internal/common/hash"
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/core/index"
 	"github.com/qyiun666/MemHop/internal/query/dream"
 	"github.com/qyiun666/MemHop/internal/query/session"
@@ -29,10 +31,14 @@ func RunSearch(
 	llmCfg *config.LlmConfig,
 	defaults *config.MemHopDefaults,
 ) (*SearchResult, error) {
+	if q.Timestamp <= 0 {
+		return nil, mherrors.NewError(mherrors.ErrInvalidQuery,
+			"SearchQuery.Timestamp is required (Unix milliseconds)")
+	}
 	// Step 1: LLM fact extraction — extract atomic memory facts from user content.
 	var facts []string
 	if llm := dream.BuildChatProvider(llmCfg); llm != nil {
-		factResult, err := dream.ExtractFacts(llm, q.Text)
+		factResult, err := dream.ExtractFacts(context.Background(), llm, q.Text)
 		if err != nil {
 			slog.Warn("[search] LLM fact extraction failed, falling back to tokenizer",
 				"error", err)
@@ -59,7 +65,9 @@ func RunSearch(
 	if defaults != nil {
 		weights = defaults.SearchWeights
 	}
-	BoostSearchResults(result, activeIDs, mostRecent, weights)
+	if err := BoostSearchResults(result, activeIDs, mostRecent, weights); err != nil {
+		return nil, err
+	}
 
 	// Step 4: Touch search results for session management.
 	touchContexts(result.Contexts, sessionMgr, defaults)
@@ -75,10 +83,14 @@ func RunDirectedSearch(
 	llmCfg *config.LlmConfig,
 	defaults *config.MemHopDefaults,
 ) (*SearchResult, error) {
+	if q.Timestamp <= 0 {
+		return nil, mherrors.NewError(mherrors.ErrInvalidQuery,
+			"SearchQuery.Timestamp is required (Unix milliseconds)")
+	}
 	// Extract facts for user content storage.
 	var facts []string
 	if llm := dream.BuildChatProvider(llmCfg); llm != nil {
-		factResult, err := dream.ExtractFacts(llm, q.Text)
+		factResult, err := dream.ExtractFacts(context.Background(), llm, q.Text)
 		if err != nil {
 			slog.Warn("[search-directed] LLM fact extraction failed", "error", err)
 		} else if factResult != nil && len(factResult.Facts) > 0 {

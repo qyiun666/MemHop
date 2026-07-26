@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	memhop "github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -83,7 +84,7 @@ func populateRecallData(t testing.TB, mh *memhop.MemHop) []string {
 	t.Helper()
 	ids := make([]string, len(recallGroundTruth))
 	for i, gt := range recallGroundTruth {
-		result, err := mh.Search(memhop.SearchQuery{
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 			Text:       gt.seedText,
 			AutoCreate: true,
 		})
@@ -153,7 +154,7 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 		b.Run(fmt.Sprintf("Recall@1_%s", gt.topic), func(b *testing.B) {
 			b.ReportAllocs()
 			for n := 0; n < b.N; n++ {
-				result, err := mh.Search(memhop.SearchQuery{Text: gt.related})
+				result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: gt.related})
 				if err != nil {
 					b.Fatalf("Search: %v", err)
 				}
@@ -166,7 +167,7 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 		b.Run(fmt.Sprintf("Recall@3_%s", gt.topic), func(b *testing.B) {
 			b.ReportAllocs()
 			for n := 0; n < b.N; n++ {
-				result, err := mh.Search(memhop.SearchQuery{Text: gt.related})
+				result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: gt.related})
 				if err != nil {
 					b.Fatalf("Search: %v", err)
 				}
@@ -177,7 +178,7 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 		b.Run(fmt.Sprintf("Recall@5_%s", gt.topic), func(b *testing.B) {
 			b.ReportAllocs()
 			for n := 0; n < b.N; n++ {
-				result, err := mh.Search(memhop.SearchQuery{Text: gt.related, MaxResults: 10})
+				result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: gt.related, MaxResults: 10})
 				if err != nil {
 					b.Fatalf("Search: %v", err)
 				}
@@ -196,7 +197,7 @@ func BenchmarkSearchParams(b *testing.B) {
 	populateRecallData(b, mh)
 
 	// 获取第一个 topicID 用于 DirectedL2ID 测试
-	firstResult, err := mh.Search(memhop.SearchQuery{Text: recallGroundTruth[0].seedText})
+	firstResult, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: recallGroundTruth[0].seedText})
 	if err != nil || len(firstResult.Contexts) == 0 {
 		b.Fatalf("无法获取 topicID: %v", err)
 	}
@@ -214,7 +215,7 @@ func BenchmarkSearchParams(b *testing.B) {
 		b.Run(fmt.Sprintf("MaxResults_%d", maxRes), func(b *testing.B) {
 			b.ReportAllocs()
 			for n := 0; n < b.N; n++ {
-				_, err := mh.Search(memhop.SearchQuery{
+				_, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 					Text:       "天气",
 					MaxResults: maxRes,
 				})
@@ -229,7 +230,7 @@ func BenchmarkSearchParams(b *testing.B) {
 	b.Run("DirectedL2ID", func(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
-			_, err := mh.Search(memhop.SearchQuery{
+			_, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 				Text:         "测试",
 				DirectedL2ID: &firstTopicID,
 			})
@@ -243,7 +244,7 @@ func BenchmarkSearchParams(b *testing.B) {
 	b.Run("AutoCreate", func(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
-			_, err := mh.Search(memhop.SearchQuery{
+			_, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 				Text:       fmt.Sprintf("新话题测试%d", n),
 				AutoCreate: true,
 			})
@@ -257,7 +258,7 @@ func BenchmarkSearchParams(b *testing.B) {
 	b.Run("NoMatch", func(b *testing.B) {
 		b.ReportAllocs()
 		for n := 0; n < b.N; n++ {
-			_, err := mh.Search(memhop.SearchQuery{Text: "xyzzy_nonexistent_12345"})
+			_, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "xyzzy_nonexistent_12345"})
 			if err != nil {
 				b.Fatalf("Search no-match: %v", err)
 			}
@@ -271,14 +272,14 @@ func BenchmarkSceneSeparation(b *testing.B) {
 	defer mh.Close()
 
 	// 写入同一话题的两条相似文本
-	r1, err := mh.Search(memhop.SearchQuery{Text: "今天北京天气怎么样", AutoCreate: true})
+	r1, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "今天北京天气怎么样", AutoCreate: true})
 	if err != nil || len(r1.Contexts) == 0 {
 		b.Fatalf("AutoCreate: %v", err)
 	}
 	topicID1 := r1.Contexts[0].ID
 	sceneID1 := r1.Contexts[0].SceneID
 
-	_, err = mh.Search(memhop.SearchQuery{Text: "明天上海天气如何"})
+	_, err = mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "明天上海天气如何"})
 	if err != nil {
 		b.Fatalf("Search: %v", err)
 	}
@@ -286,7 +287,7 @@ func BenchmarkSceneSeparation(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for n := 0; n < b.N; n++ {
-		result, err := mh.Search(memhop.SearchQuery{Text: "后天会下雨吗"})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "后天会下雨吗"})
 		if err != nil {
 			b.Fatalf("Search: %v", err)
 		}
@@ -326,7 +327,7 @@ func TestRetrievalRecallRate(t *testing.T) {
 		topicID := topicIDs[i]
 
 		// 用 related 查询测试召回
-		result, err := mh.Search(memhop.SearchQuery{Text: gt.related})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: gt.related})
 		if err != nil {
 			t.Fatalf("Search(%q): %v", gt.related, err)
 		}
@@ -365,7 +366,7 @@ func TestRetrievalRecallRate(t *testing.T) {
 		}
 
 		// 用 unrelated 查询验证不应召回（精确率检查）
-		resultUnrel, err := mh.Search(memhop.SearchQuery{Text: gt.unrelated, MaxResults: 5})
+		resultUnrel, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: gt.unrelated, MaxResults: 5})
 		if err != nil {
 			t.Fatalf("Search(%q): %v", gt.unrelated, err)
 		}
@@ -415,7 +416,7 @@ func TestSearchPrecision(t *testing.T) {
 	var allStats precisionStat
 
 	for i, gt := range recallGroundTruth {
-		result, err := mh.Search(memhop.SearchQuery{Text: gt.related, MaxResults: 5})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: gt.related, MaxResults: 5})
 		if err != nil {
 			t.Fatalf("Search(%q): %v", gt.related, err)
 		}
@@ -468,7 +469,7 @@ func TestSearchPrecision(t *testing.T) {
 		strings.Repeat("测试", 50), // 超长文本
 	}
 	for _, nq := range noiseQueries {
-		result, err := mh.Search(memhop.SearchQuery{Text: nq, MaxResults: 5})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: nq, MaxResults: 5})
 		if err != nil {
 			t.Fatalf("Search(%q): %v", nq, err)
 		}
@@ -492,7 +493,7 @@ func TestSearchVariousParameters(t *testing.T) {
 	t.Log("══════ 搜索参数兼容性测试 ══════")
 
 	// 1. 基本搜索 - 空文本
-	_, err := mh.Search(memhop.SearchQuery{Text: ""})
+	_, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: ""})
 	if err != nil {
 		t.Logf("  △ 空文本搜索: %v（可能是预期行为）", err)
 	} else {
@@ -501,7 +502,7 @@ func TestSearchVariousParameters(t *testing.T) {
 
 	// 2. 不同 MaxResults
 	for _, mr := range []int{0, 1, 3, 10, 100} {
-		result, err := mh.Search(memhop.SearchQuery{Text: "天气", MaxResults: mr})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "天气", MaxResults: mr})
 		if err != nil {
 			t.Fatalf("MaxResults=%d: %v", mr, err)
 		}
@@ -514,14 +515,14 @@ func TestSearchVariousParameters(t *testing.T) {
 	// 3. DirectedL2ID
 	// 契约: 在目标话题所属 scene 创建新 depth1 topic 返回于 Contexts[0]，
 	// 原目标话题作为 AssociatedContexts[0] 返回，保留历史数据可见性。
-	firstResult, err := mh.Search(memhop.SearchQuery{Text: recallGroundTruth[0].seedText})
+	firstResult, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: recallGroundTruth[0].seedText})
 	if err != nil || len(firstResult.Contexts) == 0 {
 		t.Fatalf("无法获取 topicID: %v", err)
 	}
 	topicID := firstResult.Contexts[0].ID
 	targetScene := firstResult.Contexts[0].SceneID
 
-	result, err := mh.Search(memhop.SearchQuery{
+	result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 		Text:         "任意内容",
 		DirectedL2ID: &topicID,
 	})
@@ -543,7 +544,7 @@ func TestSearchVariousParameters(t *testing.T) {
 
 	// 4. DirectedL2ID 无效 ID
 	invalidID := "0000000000000000"
-	result, err = mh.Search(memhop.SearchQuery{
+	result, err = mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 		Text:         "test",
 		DirectedL2ID: &invalidID,
 	})
@@ -555,7 +556,7 @@ func TestSearchVariousParameters(t *testing.T) {
 	}
 
 	// 5. DirectedL3ID（如果可用）
-	l3Result, err := mh.Search(memhop.SearchQuery{
+	l3Result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 		Text:       "天气",
 		MaxResults: 5,
 	})
@@ -782,8 +783,7 @@ func TestAPICompatibility(t *testing.T) {
 	if err != nil {
 		t.Logf("  △ Dream (offline mock): %v", err)
 	} else {
-		t.Logf("  ✓ Dream: Consolidated=%d L3=%d Crystals=%d",
-			report.ConsolidatedCount, report.NewL3Nodes, report.NewCrystals)
+		t.Logf("  ✓ Dream: Consolidated=%d", report.ConsolidatedCount)
 		for _, stage := range report.Stages {
 			t.Logf("    Stage: %s Status=%s (%dms)", stage.Name, stage.Status, stage.DurationMs)
 		}
@@ -852,7 +852,7 @@ func TestAPICompatibility(t *testing.T) {
 			t.Logf("  △ %s 关闭后返回其他错误: %v", name, gotErr)
 		}
 	}
-	_, err = mh.Search(memhop.SearchQuery{Text: "test"})
+	_, err = mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "test"})
 	checkClosed("Search", err)
 	_, err = mh.Get(memhop.LayerProfile, "")
 	checkClosed("Get(LayerProfile)", err)
@@ -884,13 +884,13 @@ func TestRetrievalScale(t *testing.T) {
 			if i == 0 {
 				text = "今天天气怎么样明天会下雨吗气温多少度" // 目标话题
 			}
-			_, err := mh.Search(memhop.SearchQuery{Text: text, AutoCreate: true})
+			_, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: text, AutoCreate: true})
 			if err != nil {
 				t.Fatalf("AutoCreate[%d]: %v", i, err)
 			}
 		}
 
-		result, err := mh.Search(memhop.SearchQuery{Text: query, MaxResults: 10})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: query, MaxResults: 10})
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
@@ -906,9 +906,14 @@ func TestRetrievalScale(t *testing.T) {
 func openMemHopMockTB(t testing.TB) *memhop.MemHop {
 	t.Helper()
 	cfg := memhop.Config{
-		DBPath:    filepath.Join(t.TempDir(), "mock.meh"),
-		VectorDim: testsupport.MockVectorDim,
+		DBPath:     filepath.Join(t.TempDir(), "mock.meh"),
+		VectorDim:  testsupport.MockVectorDim,
+		EmbedModel: "mock-embed",
 	}
+	cfg.LLM.APIURL = "http://127.0.0.1:1"
+	cfg.LLM.APIKey = "sk-test"
+	cfg.LLM.Model = "mock-model"
+	cfg.LLM.TimeoutSecs = 1
 	mh, err := memhop.OpenWithEncoder(&cfg, testsupport.NewMockEncoder(testsupport.MockVectorDim))
 	if err != nil {
 		t.Fatalf("OpenWithEncoder: %v", err)
@@ -962,7 +967,7 @@ func TestSearchResultIntegrity(t *testing.T) {
 	t.Log("")
 	t.Log("══════ 搜索结果结构完整性测试 ══════")
 
-	result, err := mh.Search(memhop.SearchQuery{Text: "天气", MaxResults: 5})
+	result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "天气", MaxResults: 5})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

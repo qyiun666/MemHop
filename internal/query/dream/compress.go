@@ -213,7 +213,9 @@ func cleanDeletedChildren(
 	return nil
 }
 
-// freeNodeAndDescendants recursively deletes a node and all descendants.
+// freeNodeAndDescendants recursively deletes a node and all descendants,
+// including their L4 archives and centroid vectors (mirrors crud.DeleteL2
+// so compression leaves no orphan records behind).
 func freeNodeAndDescendants(
 	idHash uint64,
 	engine *storage.StorageEngine,
@@ -230,6 +232,9 @@ func freeNodeAndDescendants(
 			return err
 		}
 	}
+	if err := freeTopicOrphans(engine, topic); err != nil {
+		return err
+	}
 	sparseIdx.RemoveDocument(idHash)
 	l2Meta.Remove(idHash)
 	_, err = engine.DeleteRecord(idHash)
@@ -237,6 +242,29 @@ func freeNodeAndDescendants(
 		return err
 	}
 	result.NodesRemoved++
+	return nil
+}
+
+// freeTopicOrphans deletes a topic's dependent records (L4 archives and
+// the centroid vector) before the topic itself is removed. DeleteRecord
+// treats already-missing records as a no-op, so shared/duplicate refs are
+// safe to pass twice.
+func freeTopicOrphans(engine *storage.StorageEngine, topic *model.TopicSlot) error {
+	for _, ref := range topic.UserL4Refs {
+		if _, err := engine.DeleteRecord(ref); err != nil {
+			return fmt.Errorf("compress: delete l4 ref %016x: %w", ref, err)
+		}
+	}
+	for _, ref := range topic.AgentL4Refs {
+		if _, err := engine.DeleteRecord(ref); err != nil {
+			return fmt.Errorf("compress: delete l4 ref %016x: %w", ref, err)
+		}
+	}
+	if topic.CentroidPageRef != 0 {
+		if _, err := engine.DeleteRecord(topic.CentroidPageRef); err != nil {
+			return fmt.Errorf("compress: delete centroid %016x: %w", topic.CentroidPageRef, err)
+		}
+	}
 	return nil
 }
 

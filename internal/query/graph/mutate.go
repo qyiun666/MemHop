@@ -6,6 +6,10 @@
 package graph
 
 import (
+	"errors"
+	"fmt"
+
+	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/core/model"
 	"github.com/qyiun666/MemHop/internal/core/storage"
 )
@@ -48,10 +52,14 @@ func AddEdgeWithIndexes(engine *storage.StorageEngine, edge *model.HypergraphEdg
 }
 
 // DeleteNodeWithIndexes deletes an L3 node and updates all associated indexes.
+// A missing node is a no-op; any other error is propagated.
 func DeleteNodeWithIndexes(engine *storage.StorageEngine, nodeHash uint64, nodeIdx NodeIndex, degree DegreeManager, cache AdjacencyCache) error {
 	node, err := GetNode(engine, nodeHash)
 	if err != nil {
-		return nil // node not found, nothing to do
+		if errors.Is(err, mherrors.ErrNotFound) {
+			return nil // node not found, nothing to do
+		}
+		return fmt.Errorf("delete node with indexes %016x: %w", nodeHash, err)
 	}
 	graphID := node.GraphID
 	if err := DeleteNode(engine, nodeHash); err != nil {
@@ -64,10 +72,14 @@ func DeleteNodeWithIndexes(engine *storage.StorageEngine, nodeHash uint64, nodeI
 }
 
 // DeleteEdgeWithIndexes deletes an L3 edge and updates all associated indexes.
+// A missing edge is a no-op; any other error is propagated.
 func DeleteEdgeWithIndexes(engine *storage.StorageEngine, edgeHash uint64, degree DegreeManager, cache AdjacencyCache) error {
 	edge, err := GetEdge(engine, edgeHash)
 	if err != nil {
-		return nil // edge not found, nothing to do
+		if errors.Is(err, mherrors.ErrNotFound) {
+			return nil // edge not found, nothing to do
+		}
+		return fmt.Errorf("delete edge with indexes %016x: %w", edgeHash, err)
 	}
 	graphID := edge.GraphID
 	if err := DeleteEdge(engine, edgeHash); err != nil {

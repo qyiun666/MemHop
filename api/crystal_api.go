@@ -14,9 +14,10 @@ import (
 // Crystal performs an L5 sub-operation identified by op.Kind. See
 // CrystalOpKind constants for supported operations and required op fields.
 func (m *MemHop) Crystal(op CrystalOp) (*CrystalResult, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 	switch op.Kind {
 	case COpCreateChain:
 		if op.ChainInput == nil {

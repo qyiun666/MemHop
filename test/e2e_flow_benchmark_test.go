@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	memhop "github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/internal/common/hash"
@@ -98,7 +99,7 @@ func BenchmarkE2EFlow(b *testing.B) {
 			mm := openMemHopMockTB(b)
 			b.StartTimer()
 
-			result, err := mm.Search(memhop.SearchQuery{
+			result, err := mm.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 				Text:       fmt.Sprintf("基准查询%d", i),
 				AutoCreate: true,
 			})
@@ -119,7 +120,7 @@ func BenchmarkE2EFlow(b *testing.B) {
 		b.StopTimer()
 		mm := openMemHopMockTB(b)
 		// 预先创建话题
-		res, err := mm.Search(memhop.SearchQuery{
+		res, err := mm.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 			Text:       "预写入话题",
 			AutoCreate: true,
 		})
@@ -131,7 +132,7 @@ func BenchmarkE2EFlow(b *testing.B) {
 		b.ReportAllocs()
 
 		for i := 0; i < b.N; i++ {
-			_, err := mm.Search(memhop.SearchQuery{Text: "预写入话题"})
+			_, err := mm.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "预写入话题"})
 			if err != nil {
 				b.Fatalf("Search: %v", err)
 			}
@@ -168,7 +169,7 @@ func BenchmarkE2EFlow_FullCycle(b *testing.B) {
 		// 写入所有对话
 		var topicIDs []string
 		for _, d := range benchDialogues {
-			result, err := mh.Search(memhop.SearchQuery{
+			result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(),
 				Text:       d.user,
 				AutoCreate: true,
 			})
@@ -178,7 +179,7 @@ func BenchmarkE2EFlow_FullCycle(b *testing.B) {
 			topicID := result.Contexts[0].ID
 			topicIDs = append(topicIDs, topicID)
 
-			err = mh.Update(topicID, d.agent, 0)
+			err = mh.Update(topicID, d.agent, time.Now().UnixMilli())
 			if err != nil {
 				b.Fatalf("Update(%s): %v", d.label, err)
 			}

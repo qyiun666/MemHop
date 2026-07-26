@@ -45,12 +45,13 @@ func BatchStore(batch StoreBatch, deps *BatchDeps) (*BatchReport, error) {
 	report.L4Docs = uint32(len(archiveIDs))
 
 	// Phase 3: L1 Write with dedup
-	l1IDs, created, skipped, err := dedupAndWriteL1(deps, encoded, skipExisting)
+	l1IDs, outcomes, created, skipped, err := dedupAndWriteL1(deps, encoded, skipExisting)
 	if err != nil {
 		return nil, err
 	}
 	report.L1NodesCreated = created
 	report.DedupSkipped = skipped
+	report.Items = outcomes
 
 	// Phase 4: L2 Topic Update
 	topicsUpdated, err := updateTopics(deps, encoded, l1IDs, archiveIDs)
@@ -153,9 +154,10 @@ func dedupAndWriteL1(
 	deps *BatchDeps,
 	items []encodedItem,
 	skipExisting bool,
-) ([]uint64, uint32, uint32, error) {
+) ([]uint64, []ItemOutcome, uint32, uint32, error) {
 	now := timeutil.NowMs()
 	nodeIDs := make([]uint64, len(items))
+	outcomes := make([]ItemOutcome, len(items))
 	var created, skipped uint32
 
 	for i, item := range items {
@@ -164,6 +166,7 @@ func dedupAndWriteL1(
 		if deps.Engine.Contains(idHash) {
 			skipped++
 			nodeIDs[i] = idHash
+			outcomes[i] = ItemOutcome{NodeID: idHash, Dedup: true}
 			if skipExisting {
 				continue
 			}
@@ -178,6 +181,7 @@ func dedupAndWriteL1(
 		if existingID := findDuplicate(deps, item.dense, topicLabel); existingID != 0 {
 			skipped++
 			nodeIDs[i] = existingID
+			outcomes[i] = ItemOutcome{NodeID: existingID, Dedup: true}
 			continue
 		}
 		// Write vector
@@ -186,7 +190,7 @@ func dedupAndWriteL1(
 			vecIDHash := hash.HashID(fmt.Sprintf("v:%d", idHash))
 			vecBytes := numeric.F16SliceToBytes(item.dense)
 			if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
-				return nil, 0, 0, fmt.Errorf("write centroid vector: %w", err)
+				return nil, nil, 0, 0, fmt.Errorf("write centroid vector: %w", err)
 			}
 			vecRef = vecIDHash
 		}
@@ -201,12 +205,13 @@ func dedupAndWriteL1(
 			EdgeIDs:       []uint64{},
 		}
 		if err := writeL1Node(deps.Engine, &node, item.keywords, deps.SparseIndex); err != nil {
-			return nil, 0, 0, err
+			return nil, nil, 0, 0, err
 		}
 		created++
 		nodeIDs[i] = idHash
+		outcomes[i] = ItemOutcome{NodeID: idHash}
 	}
-	return nodeIDs, created, skipped, nil
+	return nodeIDs, outcomes, created, skipped, nil
 }
 
 // buildArchiveMetadata constructs archive metadata from source info fields.
@@ -271,6 +276,7 @@ func findDuplicate(deps *BatchDeps, queryVec []uint16, topicLabel string) uint64
 	}
 
 	var best uint64
+	var bestSim float32
 	_ = deps.Engine.IterIndexByType(storage.RecL1SceneNode, func(idHash uint64) error {
 		_, data, err := deps.Engine.ReadRecord(idHash)
 		if err != nil {
@@ -295,8 +301,11 @@ func findDuplicate(deps *BatchDeps, queryVec []uint16, topicLabel string) uint64
 			return nil
 		}
 		sim := numeric.CosineSimilarity(queryVec, existingVec)
-		if sim > cosineThreshold {
+		// Keep the highest-similarity match so the dedup target is
+		// deterministic regardless of index iteration order.
+		if sim > cosineThreshold && sim > bestSim {
 			best = idHash
+			bestSim = sim
 		}
 		return nil
 	})

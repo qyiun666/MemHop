@@ -86,18 +86,28 @@ type StoreBatch struct {
 
 // StoreItem is a single item in a batch store operation.
 type StoreItem struct {
-	Content    string   `json:"content"`
-	Keywords   []string `json:"keywords,omitempty"`
+	Content string `json:"content"`
+	// Keywords are REQUIRED: pre-extracted facts/terms used for indexing
+	// and encoding. BatchStore fails with an error when empty (no silent
+	// keyword extraction fallback).
+	Keywords   []string `json:"keywords"`
 	Source     string   `json:"source"`
 	SourceType string   `json:"source_type"`
 	Score      float64  `json:"score"`
 	TopicLabel *string  `json:"topic_label,omitempty"`
 }
 
+// StoreItemStatus is the per-item outcome of a batch store.
+type StoreItemStatus struct {
+	ID    string `json:"id"`    // resulting L1 node ID (16-char hex); the existing node's ID when deduplicated
+	Dedup bool   `json:"dedup"` // true when the item was skipped as a duplicate of an existing node
+}
+
 // StoreResult is the response to a batch store.
 type StoreResult struct {
-	StoredCount uint32   `json:"stored_count"`
-	ItemIDs     []string `json:"item_ids"`
+	StoredCount uint32            `json:"stored_count"`
+	ItemIDs     []string          `json:"item_ids"` // resulting node ID per input item (same order)
+	Items       []StoreItemStatus `json:"items"`    // per-item status, same order as the input
 }
 
 // BatchDeps holds all dependencies injected into the batch store pipeline.
@@ -117,6 +127,14 @@ type BatchReport struct {
 	L2TopicsUpdated uint32 `json:"l2_topics_updated"`
 	EdgesCreated    uint32 `json:"edges_created"`
 	DedupSkipped    uint32 `json:"dedup_skipped"`
+	// Items holds the per-item outcome of Phase 3, same order as the input.
+	Items []ItemOutcome `json:"items"`
+}
+
+// ItemOutcome reports the per-item result of the L1 write/dedup phase.
+type ItemOutcome struct {
+	NodeID uint64 `json:"node_id"` // resulting L1 node ID (dedup target when skipped)
+	Dedup  bool   `json:"dedup"`   // true when the item was skipped as a duplicate
 }
 
 // ImportMode controls how existing data is handled during import.

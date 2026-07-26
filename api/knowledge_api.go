@@ -16,9 +16,10 @@ import (
 // Knowledge performs an L3 sub-operation identified by op.Kind. See
 // KnowledgeOpKind constants for supported operations and required op fields.
 func (m *MemHop) Knowledge(op KnowledgeOp) (*KnowledgeResult, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 	switch op.Kind {
 	case KOpCreateGraph:
 		if op.Name == "" {
@@ -43,10 +44,18 @@ func (m *MemHop) Knowledge(op KnowledgeOp) (*KnowledgeResult, error) {
 		return &KnowledgeResult{}, l3.AddEdgeWithIndexes(m.engine, op.Edge, m.l3Degree, m.l3Cache)
 
 	case KOpDeleteNode:
-		return &KnowledgeResult{}, l3.DeleteNodeWithIndexes(m.engine, op.NodeHash, m.l3Index, m.l3Degree, m.l3Cache)
+		nodeHash, err := parseGraphID(op.NodeID)
+		if err != nil {
+			return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "KOpDeleteNode requires a valid NodeID", err)
+		}
+		return &KnowledgeResult{}, l3.DeleteNodeWithIndexes(m.engine, nodeHash, m.l3Index, m.l3Degree, m.l3Cache)
 
 	case KOpDeleteEdge:
-		return &KnowledgeResult{}, l3.DeleteEdgeWithIndexes(m.engine, op.EdgeHash, m.l3Degree, m.l3Cache)
+		edgeHash, err := parseGraphID(op.EdgeID)
+		if err != nil {
+			return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "KOpDeleteEdge requires a valid EdgeID", err)
+		}
+		return &KnowledgeResult{}, l3.DeleteEdgeWithIndexes(m.engine, edgeHash, m.l3Degree, m.l3Cache)
 
 	case KOpSearch:
 		if op.SearchQuery == nil {

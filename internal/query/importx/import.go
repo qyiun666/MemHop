@@ -7,6 +7,7 @@ package importx
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
@@ -25,6 +26,7 @@ import (
 func ImportMemory(
 	engine *storage.StorageEngine,
 	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
 	l3Idx *index.L3Index,
 	l3Deg *index.DegreeTracker,
 	l3Cac *index.AdjacencyCache,
@@ -34,7 +36,7 @@ func ImportMemory(
 	case write.TargetProfile:
 		return importL0Profile(engine, req.Data, req.Mode)
 	case write.TargetTopic:
-		return importL2Topics(engine, sparse, req.Data, req.Mode, req.KnowledgeTitle)
+		return importL2Topics(engine, sparse, l2Meta, req.Data, req.Mode, req.KnowledgeTitle)
 	case write.TargetKnowledge:
 		return importL3Knowledge(engine, req.Data, req.Mode, req.KnowledgeTitle, l3Idx, l3Deg, l3Cac)
 	default:
@@ -182,6 +184,7 @@ func applyProfileUpdates(p *model.ProfileSlot, upd *ProfileImportData) {
 func importL2Topics(
 	engine *storage.StorageEngine,
 	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
 	data ImportData,
 	mode write.ImportMode,
 	knowledgeTitle *string,
@@ -196,7 +199,7 @@ func importL2Topics(
 	var errors []write.ImportError
 
 	for i, item := range data.Topics {
-		err := importOneTopic(engine, sparse, &item, mode, l3Hash, nowMs, &createdIDs, &updatedIDs, &skipped)
+		err := importOneTopic(engine, sparse, l2Meta, &item, mode, l3Hash, nowMs, &createdIDs, &updatedIDs, &skipped)
 		if err != nil {
 			errors = append(errors, write.ImportError{Index: i, Message: err.Error()})
 		}
@@ -232,6 +235,7 @@ func resolveL3Hash(engine *storage.StorageEngine, title *string) uint64 {
 func importOneTopic(
 	engine *storage.StorageEngine,
 	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
 	item *TopicImportItem,
 	mode write.ImportMode,
 	l3Hash uint64,
@@ -241,14 +245,15 @@ func importOneTopic(
 ) error {
 	idHash := hash.HashID(item.Title)
 	if engine.Contains(idHash) {
-		return handleExistingTopic(engine, sparse, idHash, item, mode, l3Hash, nowMs, updatedIDs, skipped)
+		return handleExistingTopic(engine, sparse, l2Meta, idHash, item, mode, l3Hash, nowMs, updatedIDs, skipped)
 	}
-	return createNewTopic(engine, sparse, idHash, item, l3Hash, nowMs, createdIDs)
+	return createNewTopic(engine, sparse, l2Meta, idHash, item, l3Hash, nowMs, createdIDs)
 }
 
 func handleExistingTopic(
 	engine *storage.StorageEngine,
 	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
 	idHash uint64,
 	item *TopicImportItem,
 	mode write.ImportMode,
@@ -274,9 +279,16 @@ func handleExistingTopic(
 	}
 	ctx.UpdatedAt = nowMs
 	ctx.Version++
+	// Disk first, then reindex: a failed write must not leave the sparse
+	// index pointing at content that was never persisted.
+	if err := crud.WriteTopic(engine, idHash, &ctx); err != nil {
+		return fmt.Errorf("import: rewrite topic %016x: %w", idHash, err)
+	}
 	sparse.RemoveDocument(ctx.ID)
 	crud.ReindexTopic(sparse, &ctx)
-	crud.WriteTopic(engine, idHash, &ctx)
+	if l2Meta != nil {
+		l2Meta.Update(crud.L2MetaFromTopic(&ctx))
+	}
 	*updatedIDs = append(*updatedIDs, hash.FormatHash(idHash))
 	return nil
 }
@@ -284,6 +296,7 @@ func handleExistingTopic(
 func createNewTopic(
 	engine *storage.StorageEngine,
 	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
 	idHash uint64,
 	item *TopicImportItem,
 	l3Hash uint64,
@@ -295,7 +308,10 @@ func createNewTopic(
 		agentL3Refs = []uint64{l3Hash}
 	}
 	ctx := model.TopicSlot{
-		ID:             idHash,
+		ID: idHash,
+		// An imported topic starts as its own scene, mirroring the
+		// auto-create behavior of Search (sceneID == own idHash).
+		SceneID:        idHash,
 		FusedKeywords:  []string{item.Title},
 		FusedSummary:   item.Summary,
 		ChildrenIDs:    []uint64{},
@@ -316,6 +332,9 @@ func createNewTopic(
 		return err
 	}
 	crud.ReindexTopic(sparse, &ctx)
+	if l2Meta != nil {
+		l2Meta.Update(crud.L2MetaFromTopic(&ctx))
+	}
 	*createdIDs = append(*createdIDs, hash.FormatHash(idHash))
 	return nil
 }

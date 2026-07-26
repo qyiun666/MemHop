@@ -13,10 +13,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/core/storage"
 )
 
-// AdjacencyEntry is one entry in the adjacency index for a node.
-// Deprecated: use model.AdjacencyEntry instead.
-type AdjacencyEntry = model.AdjacencyEntry
-
 // Subgraph holds extracted nodes and edges from BFS.
 type Subgraph struct {
 	Nodes []*model.HypergraphNode

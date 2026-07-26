@@ -18,7 +18,7 @@ import (
 )
 
 func TestHttpEncoderUnavailable(t *testing.T) {
-	_, err := NewHttpEncoder("http://127.0.0.1:1", 768, "")
+	_, err := NewHttpEncoder("http://127.0.0.1:1", 768, "test-embed", 0)
 	if err == nil {
 		t.Fatal("expected error connecting to non-existent service")
 	}
@@ -28,14 +28,14 @@ func TestHttpEncoderUnavailable(t *testing.T) {
 }
 
 func TestHttpEncoderRejectsBadScheme(t *testing.T) {
-	_, err := NewHttpEncoder("unix:///tmp/test.sock", 768, "")
+	_, err := NewHttpEncoder("unix:///tmp/test.sock", 768, "test-embed", 0)
 	if err == nil {
 		t.Fatal("expected error for unix scheme")
 	}
 }
 
 func TestHttpEncoderRejectsBareAddr(t *testing.T) {
-	_, err := NewHttpEncoder("127.0.0.1:27110", 768, "")
+	_, err := NewHttpEncoder("127.0.0.1:27110", 768, "test-embed", 0)
 	if err == nil {
 		t.Fatal("expected error for bare address without scheme")
 	}
@@ -89,7 +89,7 @@ func TestHttpEncoderEncode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e, err := NewHttpEncoder(srv.URL, 2, "")
+	e, err := NewHttpEncoder(srv.URL, 2, "test-embed", 0)
 	if err != nil {
 		t.Fatal(err)
 	}

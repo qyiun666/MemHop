@@ -5,6 +5,7 @@
 package dream
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -12,8 +13,9 @@ import (
 )
 
 // LlmProvider is the interface for LLM-based memory consolidation.
+// Implementations must honor ctx cancellation and deadlines.
 type LlmProvider interface {
-	Consolidate(input *ConsolidationInput) (*ConsolidationOutput, error)
+	Consolidate(ctx context.Context, input *ConsolidationInput) (*ConsolidationOutput, error)
 }
 
 // ============================================================================

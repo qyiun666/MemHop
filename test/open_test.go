@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -134,13 +135,13 @@ func TestOpen(t *testing.T) {
 		t.Logf("  文本: %s", query)
 
 		// ── 2a. 执行检索（识别场景 + 添加消息到该场景）──
-		result, err := mh.Search(memhop.SearchQuery{Text: query})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: query})
 		if err != nil {
 			t.Fatalf("[迭代%d] Search(%q) failed: %v", iteration, query, err)
 		}
 		// 库在 t.TempDir() 中从空白开始：无匹配时显式建话题
 		if len(result.Contexts) == 0 {
-			result, err = mh.Search(memhop.SearchQuery{Text: query, AutoCreate: true})
+			result, err = mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: query, AutoCreate: true})
 			if err != nil {
 				t.Fatalf("[迭代%d] AutoCreate Search(%q) failed: %v", iteration, query, err)
 			}
@@ -164,9 +165,9 @@ func TestOpen(t *testing.T) {
 			if ctx.Depth < 1 {
 				t.Errorf("[迭代%d] Ctx[%d]: Depth=%d 无效", iteration, ci, ctx.Depth)
 			}
-			// keywords 要么是当前的搜索词, 要么是历史数据, 不应为空
-			if len(ctx.UserKeywords) == 0 && len(ctx.AgentKeywords) == 0 {
-				t.Errorf("[迭代%d] Ctx[%d]: UserKeywords 和 AgentKeywords 都为空", iteration, ci)
+			// keywords 要么是当前的搜索词, 要么是历史数据, 要么是 Dream 合并后的 FusedKeywords, 不应全为空
+			if len(ctx.UserKeywords) == 0 && len(ctx.AgentKeywords) == 0 && len(ctx.FusedKeywords) == 0 {
+				t.Errorf("[迭代%d] Ctx[%d]: UserKeywords、AgentKeywords 与 FusedKeywords 都为空", iteration, ci)
 			}
 			t.Logf("    UserKw=%v AgentKw=%v FusedKw=%v",
 				ctx.UserKeywords, ctx.AgentKeywords, ctx.FusedKeywords)
@@ -273,9 +274,8 @@ func TestOpen(t *testing.T) {
 			if err != nil {
 				t.Logf("  Dream 预期失败 (长文本/代码内容可能导致 L3 解析失败): %v", err)
 			} else {
-				t.Logf("  Dream 完成: consolidated=%d L3Nodes=%d Crystals=%d L1Decay=%d",
-					report.ConsolidatedCount, report.NewL3Nodes, report.NewCrystals,
-					report.L1DecayedNodes)
+				t.Logf("  Dream 完成: consolidated=%d L1Decay=%d",
+					report.ConsolidatedCount, report.L1DecayedNodes)
 
 				// 检查 L0 更新
 				if profRes, err := mh.Get(memhop.LayerProfile, ""); err == nil {

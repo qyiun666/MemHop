@@ -7,6 +7,8 @@
 # Go
 /vendor/
 bin/
+go.work
+go.work.sum
 
 # CGO build artifacts
 *.so
@@ -31,8 +33,11 @@ __pycache__/
 # Benchmarks
 .benchmarks/
 
-# Design docs & API docs (not for public repo)
-docs/
+# Design docs (not for public repo) — docs/specs/API.md is the public API contract and IS tracked
+docs/*
+!docs/specs/
+docs/specs/*
+!docs/specs/API.md
 deliverables/
 
 # Screenshots
@@ -56,3 +61,4 @@ test/testsupport/key_config.json
 
 # Node.js
 /node_modules/
+.better-harness/

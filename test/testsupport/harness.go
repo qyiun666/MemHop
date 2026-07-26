@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/api"
 )
@@ -20,7 +21,7 @@ func SearchUpdatePair(t *testing.T, mh *memhop.MemHop, userText, agentText strin
 	t.Helper()
 
 	// 第一步：不带 AutoCreate 搜索
-	q := memhop.SearchQuery{Text: userText}
+	q := memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: userText}
 	result, err := mh.Search(q)
 	if err != nil {
 		t.Fatalf("Search(Text=%q, AutoCreate=false): %v", userText, err)
@@ -46,8 +47,9 @@ func SearchUpdatePair(t *testing.T, mh *memhop.MemHop, userText, agentText strin
 		t.Fatalf("json.Marshal(userText): %v", err)
 	}
 	_, err = mh.UpdateMemory(memhop.UpdateRequest{
-		ID:    topicID,
-		Layer: 2,
+		ID:        topicID,
+		Layer:     2,
+		Timestamp: time.Now().UnixMilli(),
 		Fields: map[string]json.RawMessage{
 			"dialogue_text": userTextJSON,
 			"role":          json.RawMessage(`0`),
@@ -63,8 +65,9 @@ func SearchUpdatePair(t *testing.T, mh *memhop.MemHop, userText, agentText strin
 		t.Fatalf("json.Marshal(agentText): %v", err)
 	}
 	_, err = mh.UpdateMemory(memhop.UpdateRequest{
-		ID:    topicID,
-		Layer: 2,
+		ID:        topicID,
+		Layer:     2,
+		Timestamp: time.Now().UnixMilli(),
 		Fields: map[string]json.RawMessage{
 			"dialogue_text": agentTextJSON,
 			"role":          json.RawMessage(`1`),
@@ -75,7 +78,7 @@ func SearchUpdatePair(t *testing.T, mh *memhop.MemHop, userText, agentText strin
 	}
 
 	// 最终搜索，返回最新结果
-	finalResult, err := mh.Search(memhop.SearchQuery{Text: userText})
+	finalResult, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: userText})
 	if err != nil {
 		t.Fatalf("最终 Search(Text=%q): %v", userText, err)
 	}
@@ -125,9 +128,6 @@ func RunDream(t *testing.T, mh *memhop.MemHop) *memhop.DreamReport {
 
 	t.Logf("--- Dream 结果 ---")
 	t.Logf("  ConsolidatedCount: %d", report.ConsolidatedCount)
-	t.Logf("  NewL3Nodes:        %d", report.NewL3Nodes)
-	t.Logf("  NewCrystals:       %d", report.NewCrystals)
-	t.Logf("  PrunedCrystals:    %d", report.PrunedCrystals)
 	t.Logf("  L1DecayedNodes:    %d", report.L1DecayedNodes)
 	t.Logf("  L1PrunedEdges:     %d", report.L1PrunedEdges)
 	t.Logf("  L1RemovedNodes:    %d", report.L1RemovedNodes)
@@ -220,7 +220,7 @@ func SnapshotHealth(t *testing.T, mh *memhop.MemHop, label string) *memhop.Healt
 func EnsureSearchResult(t *testing.T, mh *memhop.MemHop, query string, areaID string) *memhop.SearchResult {
 	t.Helper()
 
-	result, err := mh.Search(memhop.SearchQuery{Text: query})
+	result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: query})
 	if err != nil {
 		msg := fmt.Sprintf("Search(Text=%q) 失败: %v", query, err)
 		if areaID != "" {

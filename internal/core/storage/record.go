@@ -6,13 +6,16 @@ package storage
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"io"
 
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 )
 
-// RecordHeaderSize is type(1) + flags(1) + length(4) + id_hash(8) = 14 bytes.
-const RecordHeaderSize = 14
+// RecordHeaderSize is type(1) + flags(1) + length(4) + id_hash(8) + crc32(4) = 18 bytes.
+// The CRC32 covers the first 14 header bytes plus the record data, so a torn
+// write (crash mid-append) is detected on Open and the tail can be truncated.
+const RecordHeaderSize = 18
 
 // FlagDeleted marks a record as logically deleted.
 const FlagDeleted uint8 = 0x01
@@ -41,6 +44,9 @@ func EncodeRecord(recordType, flags uint8, idHash uint64, data []byte) []byte {
 	binary.LittleEndian.PutUint32(buf[2:6], uint32(len(data)))
 	binary.LittleEndian.PutUint64(buf[6:14], idHash)
 	copy(buf[RecordHeaderSize:], data)
+	crc := crc32.ChecksumIEEE(buf[:14])
+	crc = crc32.Update(crc, crc32.IEEETable, data)
+	binary.LittleEndian.PutUint32(buf[14:18], crc)
 	return buf
 }
 
@@ -48,7 +54,8 @@ func EncodeRecord(recordType, flags uint8, idHash uint64, data []byte) []byte {
 // Returns a **copy** of the data to be GC-safe (not a sub-slice of mmap).
 // An offset exactly at the end of the mapped region, or an all-zero header
 // (never-written space), reports io.EOF; a truncated record header or body
-// in the middle of the file reports corruption.
+// reports corruption; a frame whose CRC32 does not match reports
+// mherrors.ErrCRCMismatch (torn write or non-record bytes).
 func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byte, idHash uint64, err error) {
 	off := int(offset)
 	if off == len(mmap) {
@@ -72,6 +79,15 @@ func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byt
 		return 0, 0, nil, 0, mherrors.NewError(
 			mherrors.ErrCorruption,
 			fmt.Sprintf("record at offset %d claims length %d but file ends at %d", offset, dataLen, len(mmap)),
+		)
+	}
+	storedCRC := binary.LittleEndian.Uint32(mmap[off+14 : off+18])
+	crc := crc32.ChecksumIEEE(mmap[off : off+14])
+	crc = crc32.Update(crc, crc32.IEEETable, mmap[off+RecordHeaderSize:dataEnd])
+	if crc != storedCRC {
+		return 0, 0, nil, 0, mherrors.NewError(
+			mherrors.ErrCRCMismatch,
+			fmt.Sprintf("record at offset %d failed CRC32 check", offset),
 		)
 	}
 	// Return a copy for GC safety.

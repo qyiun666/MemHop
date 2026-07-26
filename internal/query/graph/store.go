@@ -7,6 +7,8 @@ package graph
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
@@ -47,12 +49,18 @@ func DeleteGraph(engine *storage.StorageEngine, graphID uint64) error {
 	}
 	nodeHashes, edgeHashes := collectMemberHashes(engine, graphID)
 	for _, h := range edgeHashes {
-		engine.DeleteRecord(h)
+		if _, err := engine.DeleteRecord(h); err != nil {
+			return fmt.Errorf("delete graph edge %016x: %w", h, err)
+		}
 	}
 	for _, h := range nodeHashes {
-		engine.DeleteRecord(h)
+		if _, err := engine.DeleteRecord(h); err != nil {
+			return fmt.Errorf("delete graph node %016x: %w", h, err)
+		}
 	}
-	engine.DeleteRecord(graphID)
+	if _, err := engine.DeleteRecord(graphID); err != nil {
+		return fmt.Errorf("delete graph slot %016x: %w", graphID, err)
+	}
 	return nil
 }
 
@@ -103,23 +111,33 @@ func GetEdge(engine *storage.StorageEngine, edgeHash uint64) (*model.HypergraphE
 }
 
 // DeleteNode deletes a node and cascade-deletes all edges referencing it.
+// A missing node is a no-op; any other error is propagated.
 func DeleteNode(engine *storage.StorageEngine, nodeHash uint64) error {
 	node, err := GetNode(engine, nodeHash)
 	if err != nil {
-		return nil // node not found, nothing to do
+		if errors.Is(err, mherrors.ErrNotFound) {
+			return nil // node not found, nothing to do
+		}
+		return fmt.Errorf("delete node %016x: %w", nodeHash, err)
 	}
 	graphID := node.GraphID
 	edgeHashes := findEdgesContainingNode(engine, graphID, nodeHash)
 	for _, eh := range edgeHashes {
-		engine.DeleteRecord(eh)
+		if _, err := engine.DeleteRecord(eh); err != nil {
+			return fmt.Errorf("delete referencing edge %016x: %w", eh, err)
+		}
 	}
-	engine.DeleteRecord(nodeHash)
+	if _, err := engine.DeleteRecord(nodeHash); err != nil {
+		return fmt.Errorf("delete node %016x: %w", nodeHash, err)
+	}
 	return nil
 }
 
 // DeleteEdge deletes a single edge.
 func DeleteEdge(engine *storage.StorageEngine, edgeHash uint64) error {
-	engine.DeleteRecord(edgeHash)
+	if _, err := engine.DeleteRecord(edgeHash); err != nil {
+		return fmt.Errorf("delete edge %016x: %w", edgeHash, err)
+	}
 	return nil
 }
 

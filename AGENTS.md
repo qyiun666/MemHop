@@ -6,11 +6,12 @@ This file provides guidance to AI agents when working on the MemHop repository.
 
 MemHop 是一个面向 AI Agent 的嵌入式记忆数据库，用单个 `.meh` 文件实现六层认知架构（L0–L5）。它通过 Go module API 暴露给 MeowAgent 等宿主。
 
-- **语言**: Go 1.25+
-- **模块路径**: `memhop`
+- **语言**: Go 1.26+
+- **模块路径**: `github.com/qyiun666/MemHop`（公开包为 `api/`，包名 `memhop`）
 - **版本**: v0.60.0
 - **许可证**: MIT OR Apache-2.0
-- **核心形态**: 嵌入式 Go library，极简依赖（仅 3 个直接依赖）
+- **核心形态**: 嵌入式 Go library，极简依赖（4 个直接依赖：xxhash、gse、ollama、go-openai）
+- **单实例契约**: 一个 Agent 绑定一个 `.meh` 文件，文件排他锁强制单实例，全平台（linux/darwin/windows）
 
 ## 常用命令
 
@@ -45,9 +46,9 @@ make fmt
 ## 架构要点
 
 - **六层记忆**: L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal
-- **存储格式**: V2 append-only `.meh`（魔数 `MEH2`），A/B 双 Header + CRC32 + 快照 + mmap 零拷贝读取
-- **检索**: BM25（gse CJK 分词）+ f16 IVF 向量近似搜索 + RRF 融合
-- **Dream 周期**: L3 蒸馏 → L2 压缩 → L1 重建 → L1 衰减 → L0 重建 → 语言习惯蒸馏 → L5 结晶
+- **存储格式**: V2 append-only `.meh`（魔数 `MEH2`），A/B 双 Header + 记录级 CRC32 + 撕裂尾帧截断恢复 + 快照 + mmap 零拷贝读取
+- **检索**: BM25（gse CJK 分词）+ f16 向量暂存扫描 + 实体模糊匹配，三通道 RRF 融合
+- **Dream 周期**: 仅 L0–L2，五阶段：L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏（L3 蒸馏/L5 结晶为设计外）
 - **编码器**: HTTP 调用 Ollama /api/embed，f16 半精度存储
 - **日志**: 标准库 `log/slog` 结构化日志
 - **错误处理**: sentinel errors + 结构化 MemHopError
@@ -55,13 +56,18 @@ make fmt
 ## 代码组织
 
 ```
-api/                             # 对外 API 门面
-├── memdb.go                     # 主入口 + 生命周期
+api/                             # 对外 API 门面（package memhop）
+├── memdb.go                     # 主入口 + 生命周期 + 类型别名
 ├── search_api.go                # Search
-├── update_api.go                # Update
-├── store_api.go                 # Store
+├── update_api.go                # Update / UpdateMemory
+├── store_api.go                 # BatchStore / ImportMemory
 ├── dream_api.go                 # Dream
-├── l0_api.go ~ l5_api.go        # 各层 CRUD API
+├── crud_api.go                  # Get / List / Delete
+├── topic_api.go                 # Topic 聚合操作
+├── knowledge_api.go             # L3 Knowledge 聚合操作
+├── crystal_api.go               # L5 Crystal 聚合操作
+├── types_ops.go                 # 操作入口的枚举与 DTO
+├── helpers_api.go               # 内部助手
 internal/
 ├── common/
 │   ├── config/                  # 配置
@@ -71,7 +77,7 @@ internal/
 │   ├── strutil/                 # 字符串工具
 │   └── timeutil/                # 时间工具
 ├── core/
-│   ├── index/                   # BM25/IVF/L2Meta 索引 + 分词器
+│   ├── index/                   # BM25 稀疏/L2Meta/L3/实体索引 + 分词器
 │   ├── model/                   # L0-L5 数据模型
 │   ├── record/                  # 记录
 │   └── storage/                 # V2 存储引擎

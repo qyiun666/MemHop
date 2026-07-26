@@ -102,15 +102,21 @@ func f32ToF16Bits(f float32) uint16 {
 }
 
 // OpenMemHopMock opens a fully offline MemHop database backed by MockEncoder:
-// the DB file lives in t.TempDir() and the LLM config is left empty, so Search
-// falls back to the local tokenizer and no network access happens at all.
+// the DB file lives in t.TempDir() and the LLM config points at an unroutable
+// local port, so LLM calls fail instantly and Search falls back to the local
+// tokenizer without real network access.
 // The caller must call Close() when done.
 func OpenMemHopMock(t *testing.T) *memhop.MemHop {
 	t.Helper()
 	cfg := memhop.Config{
-		DBPath:    filepath.Join(t.TempDir(), "mock.meh"),
-		VectorDim: MockVectorDim,
+		DBPath:     filepath.Join(t.TempDir(), "mock.meh"),
+		VectorDim:  MockVectorDim,
+		EmbedModel: "mock-embed",
 	}
+	cfg.LLM.APIURL = "http://127.0.0.1:1"
+	cfg.LLM.APIKey = "sk-test"
+	cfg.LLM.Model = "mock-model"
+	cfg.LLM.TimeoutSecs = 1
 	mh, err := memhop.OpenWithEncoder(&cfg, NewMockEncoder(MockVectorDim))
 	if err != nil {
 		t.Fatalf("OpenWithEncoder: %v", err)

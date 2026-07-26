@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -213,7 +214,7 @@ func evalCrossSession(t *testing.T, mh *memhop.MemHop, fixture map[string]interf
 	// Dream 前：检查关联
 	t.Log("[Dream 前] 搜索第一个 session 的话题...")
 	s0t0 := sessions[0].(map[string]interface{})["turns"].([]interface{})[0].(map[string]interface{})["text"].(string)
-	resultBefore, _ := mh.Search(memhop.SearchQuery{Text: s0t0})
+	resultBefore, _ := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: s0t0})
 	t.Logf("  关联话题: %d 个 (Dream 前)", len(resultBefore.AssociatedContexts))
 
 	// Dream
@@ -223,7 +224,7 @@ func evalCrossSession(t *testing.T, mh *memhop.MemHop, fixture map[string]interf
 	}
 
 	// Dream 后：检查关联是否建立
-	resultAfter, _ := mh.Search(memhop.SearchQuery{Text: s0t0})
+	resultAfter, _ := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: s0t0})
 	t.Logf("[Dream 后] 搜索相同话题 → 关联话题: %d 个", len(resultAfter.AssociatedContexts))
 	for i, asc := range resultAfter.AssociatedContexts {
 		t.Logf("  Assoc[%d]: ID=%s Depth=%d Score=%.4f", i, asc.ID[:12], asc.Depth, asc.RetrievalScore)
@@ -293,9 +294,8 @@ func evalDreamEffect(t *testing.T, mh *memhop.MemHop, fixture map[string]interfa
 	}
 
 	// Dream 报告
-	t.Logf("  Dream 报告: consolidated=%d L3=%d Crystals=%d L1Decay=%d Habits=%d",
-		report.ConsolidatedCount, report.NewL3Nodes, report.NewCrystals,
-		report.L1DecayedNodes, 0)
+	t.Logf("  Dream 报告: consolidated=%d L1Decay=%d",
+		report.ConsolidatedCount, report.L1DecayedNodes)
 	for _, stage := range report.Stages {
 		mark := "✓"
 		if stage.Status != "success" {
@@ -359,13 +359,13 @@ func evalDreamEffect(t *testing.T, mh *memhop.MemHop, fixture map[string]interfa
 // 测试库在 t.TempDir() 中从空白开始，不再依赖共享库累积的历史数据。
 func searchOrCreate(t *testing.T, mh *memhop.MemHop, text string) *memhop.SearchResult {
 	t.Helper()
-	result, err := mh.Search(memhop.SearchQuery{Text: text})
+	result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: text})
 	if err != nil {
 		t.Logf("search failed: %v", err)
 		return nil
 	}
 	if len(result.Contexts) == 0 {
-		result, err = mh.Search(memhop.SearchQuery{Text: text, AutoCreate: true})
+		result, err = mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: text, AutoCreate: true})
 		if err != nil {
 			t.Logf("auto-create failed: %v", err)
 			return nil

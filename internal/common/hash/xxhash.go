@@ -2,6 +2,7 @@ package hash
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/cespare/xxhash/v2"
 )
@@ -16,11 +17,17 @@ func FormatHash(h uint64) string {
 	return fmt.Sprintf("%016x", h)
 }
 
-// ParseID parses a 16-char hex string back to uint64.
+// ParseID parses a 16-char lowercase/uppercase hex string back to uint64.
+// Malformed IDs (wrong length or non-hex characters) return an error.
 func ParseID(id string) (uint64, error) {
-	var h uint64
-	_, err := fmt.Sscanf(id, "%016x", &h)
-	return h, err
+	if len(id) != 16 {
+		return 0, fmt.Errorf("invalid id %q: want exactly 16 hex chars", id)
+	}
+	h, err := strconv.ParseUint(id, 16, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid id %q: %w", id, err)
+	}
+	return h, nil
 }
 
 // FormatIDs formats a slice of uint64 as hex strings.

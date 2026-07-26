@@ -4,6 +4,7 @@
 package dream
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -33,11 +34,11 @@ type RunOptions struct {
 }
 
 // DreamReport holds the results of a dream pipeline run.
+//
+// Dream operates on L0-L2 only (L2 compression, L1 rebuild/decay, L0
+// profile/distill); L3 distillation and L5 crystallization are out of scope.
 type DreamReport struct {
 	ConsolidatedCount uint32        `json:"consolidated_count"`
-	NewL3Nodes        uint32        `json:"new_l3_nodes"`
-	NewCrystals       uint32        `json:"new_crystals"`
-	PrunedCrystals    uint32        `json:"pruned_crystals"`
 	L1DecayedNodes    uint32        `json:"l1_decayed_nodes"`
 	L1PrunedEdges     uint32        `json:"l1_pruned_edges"`
 	L1RemovedNodes    uint32        `json:"l1_removed_nodes"`
@@ -60,8 +61,10 @@ type StageReport struct {
 // DreamPipeline runs the full consolidated dream pipeline.
 // chat is optional: when non-nil the l0_distill stage derives emotion/MBTI
 // from the L1 network via LLM; when nil (or opts.SkipDistill is true) the
-// stage is skipped.
+// stage is skipped. ctx cancellation is honored by the LLM calls and checked
+// between stages; on cancellation a wrapped ctx.Err() is returned.
 func DreamPipeline(
+	ctx context.Context,
 	engine *storage.StorageEngine,
 	sparseIdx *index.SparseIndex,
 	llm LlmProvider,
@@ -77,7 +80,7 @@ func DreamPipeline(
 
 	// Phase 1: collect data + LLM call.
 	input := buildConsolidationInput(engine, l2Meta, targetIDs)
-	llmOutput, err := llm.Consolidate(input)
+	llmOutput, err := llm.Consolidate(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("dream: LLM consolidation failed: %w", err)
 	}
@@ -86,19 +89,41 @@ func DreamPipeline(
 	var metrics pipelineMetrics
 	decayParams := DecayParamsFromConfig(decayCfg)
 	stages = applyL2Stage(llmOutput, engine, sparseIdx, l2Meta, enc, stages, &metrics)
+	if err := stageCancelled(ctx, "l2_compress"); err != nil {
+		return nil, err
+	}
 	stages = rebuildL1Stage(engine, sparseIdx, l2Meta, decayParams, stages, &metrics)
+	if err := stageCancelled(ctx, "l1_rebuild"); err != nil {
+		return nil, err
+	}
 	stages = decayL1Stage(engine, sparseIdx, decayParams, l2Meta, stages, &metrics)
+	if err := stageCancelled(ctx, "l1_decay"); err != nil {
+		return nil, err
+	}
 	stages = profileL0Stage(engine, sparseIdx, stages)
-	stages = distillL0Stage(engine, chat, opts.SkipDistill, stages, &metrics)
+	if err := stageCancelled(ctx, "l0_profile"); err != nil {
+		return nil, err
+	}
+	stages = distillL0Stage(ctx, engine, chat, opts.SkipDistill, stages, &metrics)
 
 	report := buildDreamReport(stages, &metrics)
 	return report, nil
+}
+
+// stageCancelled reports a wrapped ctx.Err() when the context was cancelled
+// after the named stage completed.
+func stageCancelled(ctx context.Context, stage string) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("dream: cancelled after %s stage: %w", stage, err)
+	}
+	return nil
 }
 
 // RunPipeline runs the dream consolidation pipeline and rebuilds indexes.
 // Returns the report along with freshly-built L2Meta and L1Reverse indexes
 // so the caller can assign them after the write lock is released.
 func RunPipeline(
+	ctx context.Context,
 	engine *storage.StorageEngine,
 	sparseIdx *index.SparseIndex,
 	llm LlmProvider,
@@ -109,7 +134,7 @@ func RunPipeline(
 	enc encoder.Encoder,
 	opts RunOptions,
 ) (*PipelineResult, error) {
-	report, err := DreamPipeline(engine, sparseIdx, llm, chat, l2IDs, decayCfg, l2Meta, enc, opts)
+	report, err := DreamPipeline(ctx, engine, sparseIdx, llm, chat, l2IDs, decayCfg, l2Meta, enc, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -318,6 +343,7 @@ func profileL0Stage(
 // When skip is true the stage records a `skipped` StageReport without calling
 // the LLM (caller opted out via RunOptions.SkipDistill).
 func distillL0Stage(
+	ctx context.Context,
 	engine *storage.StorageEngine,
 	chat ChatProvider,
 	skip bool,
@@ -339,7 +365,7 @@ func distillL0Stage(
 			DurationMs:  time.Since(start).Milliseconds(),
 		})
 	}
-	rep, err := DistillL0(engine, chat)
+	rep, err := DistillL0(ctx, engine, chat)
 	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
 		return append(stages, failStage("l0_distill", "L0 distill failed", elapsed, err))
@@ -365,9 +391,6 @@ func buildDreamReport(stages []StageReport, m *pipelineMetrics) *DreamReport {
 		m.l1Decayed + m.l1PrunedEdges + m.l1RemovedNodes + m.l1RemovedEdges + m.l1Updated
 	report := &DreamReport{
 		ConsolidatedCount: consolidated,
-		NewL3Nodes:        0,
-		NewCrystals:       0,
-		PrunedCrystals:    0,
 		L1DecayedNodes:    m.l1Decayed,
 		L1PrunedEdges:     m.l1PrunedEdges,
 		L1RemovedNodes:    m.l1RemovedNodes,

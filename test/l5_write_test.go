@@ -3,6 +3,7 @@ package test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -140,7 +141,7 @@ func TestUpdateL4Append(t *testing.T) {
 	defer mh.Close()
 
 	// ── 1. Search to create an L2 topic ──
-	result, err := mh.Search(memhop.SearchQuery{Text: "Hello, this is a test query for L4 append", AutoCreate: true})
+	result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: "Hello, this is a test query for L4 append", AutoCreate: true})
 	if err != nil {
 		t.Fatalf("Search failed: %v", err)
 	}
@@ -168,9 +169,10 @@ func TestUpdateL4Append(t *testing.T) {
 	}
 
 	updateResult, err := mh.UpdateMemory(memhop.UpdateRequest{
-		ID:     topicID,
-		Layer:  2,
-		Fields: fields,
+		ID:        topicID,
+		Layer:     2,
+		Fields:    fields,
+		Timestamp: time.Now().UnixMilli(),
 	})
 	if err != nil {
 		t.Fatalf("UpdateMemory failed: %v", err)

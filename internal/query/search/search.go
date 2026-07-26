@@ -458,44 +458,6 @@ func getL1Associated(
 	return associated
 }
 
-// getL1Previews builds lightweight L1 previews for matched contexts.
-func getL1Previews(
-	engine *storage.StorageEngine,
-	primary []scoredContext,
-	l1Reverse *index.L1ReverseIndex,
-	queryText string,
-) []L1Preview {
-	if l1Reverse == nil || len(primary) == 0 {
-		return []L1Preview{}
-	}
-	primaryIDs := make(map[uint64]struct{}, len(primary))
-	for _, sc := range primary {
-		primaryIDs[sc.topic.ID] = struct{}{}
-	}
-	nodeIDs := l1Reverse.FindAssociated(primaryIDs)
-	var previews []L1Preview
-	for _, nodeHash := range nodeIDs {
-		rt, data, err := engine.ReadRecord(nodeHash)
-		if err != nil || rt != storage.RecL1SceneNode {
-			continue
-		}
-		var node model.SceneNode
-		if json.Unmarshal(data, &node) != nil {
-			continue
-		}
-		p := L1Preview{
-			ID:              hash.FormatHash(nodeHash),
-			Importance:      float64Ptr(float64(node.Importance)),
-			MatchedKeywords: []string{},
-		}
-		previews = append(previews, p)
-	}
-	if previews == nil {
-		return []L1Preview{}
-	}
-	return previews
-}
-
 // createNewL2Context creates a new L2 topic + L4 archive from dialogue (auto_create path).
 // This is a convenience wrapper around createTopicInScene with sceneID=0.
 func createNewL2Context(q SearchQuery, deps *SearchDeps) (*model.TopicSlot, error) {
@@ -594,8 +556,10 @@ func collectAllL3IDs(scored []scoredContext) []string {
 
 func readProfileResult(deps *SearchDeps) ProfileResult {
 	// Return cached profile if available, avoiding deserialization.
-	if deps.ProfileCache != nil && *deps.ProfileCache != nil {
-		return **deps.ProfileCache
+	if deps.ProfileCache != nil {
+		if cached := deps.ProfileCache.Load(); cached != nil {
+			return *cached
+		}
 	}
 	profileHash := hash.HashID("profile")
 	_, data, err := deps.Engine.ReadRecord(profileHash)
@@ -621,7 +585,7 @@ func readProfileResult(deps *SearchDeps) ProfileResult {
 	}
 	// Populate cache for subsequent calls.
 	if deps.ProfileCache != nil {
-		*deps.ProfileCache = &pr
+		deps.ProfileCache.Store(&pr)
 	}
 	return pr
 }
@@ -805,8 +769,6 @@ func matchActionChains(engine *storage.StorageEngine, queryText string) []crud.C
 	return matches
 }
 
-func float64Ptr(v float64) *float64 { return &v }
-
 // BoostSearchResults re-scores contexts by SCENE (not by individual topic).
 //
 // Additive scene bonus (v0.58 unified):
@@ -814,15 +776,17 @@ func float64Ptr(v float64) *float64 { return &v }
 //   - Else if the scene has the mostRecent topic → add RecentChatBonus to each topic
 //   - Active takes priority; only one bonus can apply per scene.
 //
-// Contexts are then sorted by final score descending.
+// Contexts are then sorted by final score descending. A nil weights is a
+// configuration bug (Open merges documented defaults) and returns ErrConfig
+// instead of silently skipping the boost.
 func BoostSearchResults(
 	result *SearchResult,
 	activeIDs []uint64,
 	mostRecent *uint64,
 	weights *config.SearchWeights,
-) {
+) error {
 	if weights == nil {
-		return
+		return mherrors.NewError(mherrors.ErrConfig, "search weights are required")
 	}
 	activeSet := make(map[uint64]struct{}, len(activeIDs))
 	for _, id := range activeIDs {
@@ -833,6 +797,7 @@ func BoostSearchResults(
 	applyAdditiveBoost(result.AssociatedContexts, activeSet, mostRecent, weights)
 	sortByScore(result.Contexts)
 	sortByScore(result.AssociatedContexts)
+	return nil
 }
 
 // applyAdditiveBoost adds a fixed bonus to each topic's RetrievalScore based on

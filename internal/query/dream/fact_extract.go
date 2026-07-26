@@ -4,6 +4,7 @@
 package dream
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 
@@ -46,14 +47,14 @@ Output: {"facts":["我去年三月从北京搬到了深圳","我现在在腾讯�
 
 // ExtractFacts uses LLM to extract atomic memory facts from dialogue content.
 // Returns error if LLM is unavailable or extraction fails.
-func ExtractFacts(llm ChatProvider, content string) (*FactExtractionResult, error) {
+func ExtractFacts(ctx context.Context, llm ChatProvider, content string) (*FactExtractionResult, error) {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
 		return &FactExtractionResult{Facts: []string{}}, nil
 	}
 
 	userPrompt := "Extract atomic facts from:\n" + trimmed + "\n\nOutput JSON."
-	response, err := callLLMWithRetry(llm, systemFactExtraction, userPrompt, 4096, 0.0)
+	response, err := callLLMWithRetry(ctx, llm, systemFactExtraction, userPrompt, 4096, 0.0)
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrLLM, "fact extraction LLM call failed", err)
 	}

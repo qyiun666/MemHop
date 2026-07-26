@@ -8,6 +8,7 @@
 package dream
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -87,13 +88,13 @@ type nodeEmotion struct {
 // DistillL0 samples the L1 network, invokes the LLM to derive emotion + MBTI,
 // then merges the results into the L0 ProfileSlot and back-fills L1 nodes.
 // ChatProvider must be non-nil; the pipeline stage handles nil-chat as skip.
-func DistillL0(engine *storage.StorageEngine, chat ChatProvider) (*L0DistillReport, error) {
+func DistillL0(ctx context.Context, engine *storage.StorageEngine, chat ChatProvider) (*L0DistillReport, error) {
 	samples, total := sampleL1ForDistill(engine)
 	report := &L0DistillReport{SampledCount: len(samples), TotalL1Count: total}
 	if len(samples) == 0 {
 		return report, nil
 	}
-	output, err := callDistillLLM(chat, samples)
+	output, err := callDistillLLM(ctx, chat, samples)
 	if err != nil {
 		return report, err
 	}
@@ -164,12 +165,12 @@ func collectSampleContext(engine *storage.StorageEngine, topicIDs []uint64) ([]s
 }
 
 // callDistillLLM builds the prompt, sends the request, and parses the response.
-func callDistillLLM(chat ChatProvider, samples []l1Sample) (*distillOutput, error) {
+func callDistillLLM(ctx context.Context, chat ChatProvider, samples []l1Sample) (*distillOutput, error) {
 	if chat == nil {
 		return nil, mherrors.NewError(mherrors.ErrLLM, "distill: chat provider is nil")
 	}
 	user := buildDistillPrompt(samples)
-	response, err := chat.Chat(systemDistill, user, 4096, 0.0, 1.0)
+	response, err := chat.Chat(ctx, systemDistill, user, 4096, 0.0, 1.0)
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrLLM, "distill chat call failed", err)
 	}

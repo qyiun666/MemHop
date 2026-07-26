@@ -7,22 +7,27 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.25'
+          go-version: '1.26'
 
       - name: Build
-        run: go build ./api/... ./internal/...
+        run: go build ./...
 
       - name: Vet
         run: go vet ./api/... ./internal/... ./test/...
 
       - name: Check formatting
+        if: runner.os != 'Windows'
         run: |
           unformatted=$(gofmt -l api internal test)
           if [ -n "$unformatted" ]; then
@@ -38,4 +43,5 @@ jobs:
         run: go test -race ./api/... ./internal/...
 
       - name: Integration tests (offline/mock)
+        if: runner.os == 'Linux'
         run: go test ./test/...

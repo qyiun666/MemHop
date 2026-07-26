@@ -4,6 +4,7 @@
 package memhop
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
@@ -25,11 +26,16 @@ import (
 // UpdateResult whose Status was always "Updated" and ID was always empty —
 // both carried no information for the caller.
 func (m *MemHop) Update(topicID string, text string, timestamp int64) error {
-	if m.closed.Load() {
-		return mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return err
 	}
+	defer m.mu.RUnlock()
 	if text == "" {
 		return mherrors.NewError(mherrors.ErrInvalidQuery, "text is required")
+	}
+	if timestamp <= 0 {
+		return mherrors.NewError(mherrors.ErrInvalidQuery,
+			"timestamp is required (Unix milliseconds)")
 	}
 
 	// Parse topic ID from Search result.
@@ -41,7 +47,7 @@ func (m *MemHop) Update(topicID string, text string, timestamp int64) error {
 	// Extract atomic facts from agent reply.
 	var facts []string
 	if llm := dream.BuildChatProvider(&m.config.LLM); llm != nil {
-		factResult, err := dream.ExtractFacts(llm, text)
+		factResult, err := dream.ExtractFacts(context.Background(), llm, text)
 		if err != nil {
 			slog.Warn("[update] LLM fact extraction failed", "error", err)
 		} else if factResult != nil && len(factResult.Facts) > 0 {
@@ -60,9 +66,10 @@ func (m *MemHop) Update(topicID string, text string, timestamp int64) error {
 // UpdateMemory is the layer-generic field-level update entry point.
 // Dispatches to L0 / L2 / L3 / L5 field updates based on req.Layer.
 func (m *MemHop) UpdateMemory(req crud.UpdateRequest) (*crud.UpdateResult, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 	deps := &write.UpdateDeps{
 		Engine:      m.engine,
 		SparseIndex: m.sparseIndex,

@@ -6,6 +6,7 @@ package test
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	memhop "github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -94,8 +95,7 @@ func TestCoreFlow(t *testing.T) {
 			t.Logf("=== Dream 触发（第 %d 轮后）===", i+1)
 			report := testsupport.RunDream(t, mh)
 			if report != nil {
-				t.Logf("Dream: ConsolidatedCount=%d, NewL3Nodes=%d, NewCrystals=%d",
-					report.ConsolidatedCount, report.NewL3Nodes, report.NewCrystals)
+				t.Logf("Dream: ConsolidatedCount=%d", report.ConsolidatedCount)
 			}
 			testsupport.SnapshotHealth(t, mh, fmt.Sprintf("Dream后(第%d轮)", i+1))
 		}
@@ -109,7 +109,7 @@ func TestCoreFlow(t *testing.T) {
 	for _, pair := range dialoguePairs[:3] { // 复检前 3 个话题
 		t.Logf("")
 		t.Logf("--- 复检: %s ---", pair.desc)
-		result, err := mh.Search(memhop.SearchQuery{Text: pair.user})
+		result, err := mh.Search(memhop.SearchQuery{Timestamp: time.Now().UnixMilli(), Text: pair.user})
 		if err != nil {
 			t.Fatalf("Search(Text=%q) 复检失败: %v", pair.user, err)
 		}

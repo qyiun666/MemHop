@@ -4,7 +4,6 @@
 package memhop
 
 import (
-	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/query/search"
 )
 
@@ -13,9 +12,10 @@ import (
 // for this turn; its ID is exposed as SearchResult.NewTopicID and must be
 // passed to Update to append the agent reply.
 func (m *MemHop) Search(q search.SearchQuery) (*search.SearchResult, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 	if q.DirectedL2ID != nil {
 		return search.RunDirectedSearch(q, m.searchDeps(), m.sessionMgr, &m.config.LLM, m.defaults)
 	}

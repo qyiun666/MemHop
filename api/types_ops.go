@@ -106,8 +106,8 @@ const (
 	KOpCreateGraph       KnowledgeOpKind = 1  // create a new hypergraph slot
 	KOpAddNode           KnowledgeOpKind = 2  // add a node to a graph
 	KOpAddEdge           KnowledgeOpKind = 3  // add an edge to a graph
-	KOpDeleteNode        KnowledgeOpKind = 4  // delete a node by uint64 hash
-	KOpDeleteEdge        KnowledgeOpKind = 5  // delete an edge by uint64 hash
+	KOpDeleteNode        KnowledgeOpKind = 4  // delete a node by 16-char hex ID
+	KOpDeleteEdge        KnowledgeOpKind = 5  // delete an edge by 16-char hex ID
 	KOpSearch            KnowledgeOpKind = 6  // unified L3 node search
 	KOpGetNodes          KnowledgeOpKind = 7  // batch fetch nodes (by IDs / keyword / type)
 	KOpGraphQuery        KnowledgeOpKind = 8  // BFS subgraph extraction
@@ -128,9 +128,10 @@ type KnowledgeOp struct {
 	Node    *HypergraphNode
 	Edge    *HypergraphEdge
 
-	// KOpDeleteNode / KOpDeleteEdge
-	NodeHash uint64
-	EdgeHash uint64
+	// KOpDeleteNode / KOpDeleteEdge: 16-char hex IDs, matching the ID
+	// format returned by every other API surface.
+	NodeID string
+	EdgeID string
 
 	// KOpSearch
 	SearchQuery *L3SearchQuery

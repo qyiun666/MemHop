@@ -6,16 +6,20 @@ package memhop
 
 import (
 	"github.com/qyiun666/MemHop/internal/common/hash"
-	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/query/importx"
 	"github.com/qyiun666/MemHop/internal/query/write"
 )
 
 // BatchStore runs the five-phase batch store pipeline.
+//
+// Every StoreItem must carry non-empty Keywords (pre-extracted facts/terms);
+// items without keywords fail the whole batch with an error. The result
+// reports one status per input item, flagging deduplicated items.
 func (m *MemHop) BatchStore(batch write.StoreBatch) (*write.StoreResult, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
+	defer m.mu.RUnlock()
 
 	deps := m.batchDeps()
 	deps.L2Meta = m.getL2Meta()
@@ -23,25 +27,24 @@ func (m *MemHop) BatchStore(batch write.StoreBatch) (*write.StoreResult, error) 
 	if err != nil {
 		return nil, err
 	}
-	ids := makeItemIDs(batch.Items, report)
+	ids := make([]string, len(report.Items))
+	items := make([]write.StoreItemStatus, len(report.Items))
+	for i, oc := range report.Items {
+		ids[i] = hash.FormatHash(oc.NodeID)
+		items[i] = write.StoreItemStatus{ID: ids[i], Dedup: oc.Dedup}
+	}
 	return &write.StoreResult{
 		StoredCount: report.L1NodesCreated + report.L4Docs,
 		ItemIDs:     ids,
+		Items:       items,
 	}, nil
-}
-
-func makeItemIDs(items []write.StoreItem, report *write.BatchReport) []string {
-	ids := make([]string, 0, len(items))
-	for _, item := range items {
-		ids = append(ids, hash.FormatHash(write.L1NodeIDHash(item.Content)))
-	}
-	return ids
 }
 
 // ImportMemory imports data into the specified layer.
 func (m *MemHop) ImportMemory(req importx.ImportRequest) (*importx.ImportResult, error) {
-	if m.closed.Load() {
-		return nil, mherrors.ErrClosed
+	if err := m.beginRead(); err != nil {
+		return nil, err
 	}
-	return importx.ImportMemory(m.engine, m.sparseIndex, m.l3Index, m.l3Degree, m.l3Cache, req)
+	defer m.mu.RUnlock()
+	return importx.ImportMemory(m.engine, m.sparseIndex, m.getL2Meta(), m.l3Index, m.l3Degree, m.l3Cache, req)
 }

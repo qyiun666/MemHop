@@ -165,7 +165,8 @@ func TestCompact(t *testing.T) {
 	eng.Checkpoint(&IndexSnapshotData{})
 
 	compactPath := tempPath(t, "compact_dst")
-	if err := eng.Compact(compactPath); err != nil {
+	snap := &IndexSnapshotData{SparseData: []byte("sparse")}
+	if err := eng.Compact(compactPath, snap); err != nil {
 		t.Fatal(err)
 	}
 
@@ -192,6 +193,15 @@ func TestCompact(t *testing.T) {
 	_, data3, err := eng2.ReadRecord(3)
 	if err != nil || string(data3) != "also keep" {
 		t.Fatal("record 3 missing or wrong")
+	}
+	// The caller-provided snapshot must be carried into the compacted file.
+	sd := eng2.SnapshotData()
+	if sd == nil || string(sd.SparseData) != "sparse" {
+		t.Fatalf("compacted snapshot lost: %+v", sd)
+	}
+	// A nil snapshot is a caller bug, not a silent empty checkpoint.
+	if err := eng.Compact(tempPath(t, "compact_nil"), nil); err == nil {
+		t.Fatal("expected error for nil snapshot")
 	}
 
 	// Compacted file should be smaller (fewer records + no dead records).

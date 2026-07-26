@@ -104,7 +104,7 @@ func TestImportMemory_UnknownLayer(t *testing.T) {
 	eng, sparse, l3Idx, l3Deg, l3Cac := setupDeps(t)
 	defer closeEngine(t, eng)
 
-	_, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	_, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: "InvalidLayer",
 	})
 	if err == nil {
@@ -119,7 +119,7 @@ func TestImportMemory_L0Profile_NilProfileData(t *testing.T) {
 	eng, sparse, l3Idx, l3Deg, l3Cac := setupDeps(t)
 	defer closeEngine(t, eng)
 
-	_, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	_, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetProfile,
 		Data:        ImportData{Profile: nil},
 		Mode:        write.ImportOverwrite,
@@ -133,7 +133,7 @@ func TestImportMemory_L0Profile_CreateNew(t *testing.T) {
 	eng, sparse, l3Idx, l3Deg, l3Cac := setupDeps(t)
 	defer closeEngine(t, eng)
 
-	result, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	result, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetProfile,
 		Data: ImportData{
 			Profile: &ProfileImportData{
@@ -162,7 +162,7 @@ func TestImportMemory_L0Profile_SkipExisting(t *testing.T) {
 	defer closeEngine(t, eng)
 
 	// First create a profile
-	_, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	_, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetProfile,
 		Data: ImportData{
 			Profile: &ProfileImportData{Name: strPtr("Existing")},
@@ -174,7 +174,7 @@ func TestImportMemory_L0Profile_SkipExisting(t *testing.T) {
 	}
 
 	// Import with Skip mode should succeed and report skip
-	result, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	result, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetProfile,
 		Data: ImportData{
 			Profile: &ProfileImportData{Name: strPtr("Skipped")},
@@ -196,7 +196,7 @@ func TestImportMemory_L2Topics_EmptyTopics(t *testing.T) {
 	eng, sparse, l3Idx, l3Deg, l3Cac := setupDeps(t)
 	defer closeEngine(t, eng)
 
-	_, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	_, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetTopic,
 		Data:        ImportData{Topics: []TopicImportItem{}},
 		Mode:        write.ImportOverwrite,
@@ -213,7 +213,7 @@ func TestImportMemory_L2Topics_CreateNew(t *testing.T) {
 	eng, sparse, l3Idx, l3Deg, l3Cac := setupDeps(t)
 	defer closeEngine(t, eng)
 
-	result, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	result, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetTopic,
 		Data: ImportData{
 			Topics: []TopicImportItem{
@@ -237,7 +237,7 @@ func TestImportMemory_L3Knowledge_EmptyKnowledge(t *testing.T) {
 	eng, sparse, l3Idx, l3Deg, l3Cac := setupDeps(t)
 	defer closeEngine(t, eng)
 
-	_, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	_, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetKnowledge,
 		Data:        ImportData{Knowledge: []KnowledgeImportItem{}},
 		Mode:        write.ImportOverwrite,
@@ -254,7 +254,7 @@ func TestImportMemory_L3Knowledge_CreateNew(t *testing.T) {
 	eng, sparse, l3Idx, l3Deg, l3Cac := setupDeps(t)
 	defer closeEngine(t, eng)
 
-	result, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	result, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetKnowledge,
 		Data: ImportData{
 			Knowledge: []KnowledgeImportItem{
@@ -293,7 +293,7 @@ func TestImportMemory_L3Knowledge_SkipExisting(t *testing.T) {
 	}
 
 	// Create first
-	_, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	_, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetKnowledge,
 		Data:        ImportData{Knowledge: []KnowledgeImportItem{item}},
 		Mode:        write.ImportOverwrite,
@@ -303,7 +303,7 @@ func TestImportMemory_L3Knowledge_SkipExisting(t *testing.T) {
 	}
 
 	// Skip mode should skip existing
-	result, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	result, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetKnowledge,
 		Data:        ImportData{Knowledge: []KnowledgeImportItem{item}},
 		Mode:        write.ImportSkip,
@@ -347,7 +347,7 @@ func TestImportMemory_L2Topics_WithKnowledgeTitle(t *testing.T) {
 
 	// First create a knowledge node so the title resolves to a valid L3 hash
 	knowledgeTitle := "MyKnowledge"
-	_, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	_, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetKnowledge,
 		Data: ImportData{
 			Knowledge: []KnowledgeImportItem{
@@ -361,7 +361,7 @@ func TestImportMemory_L2Topics_WithKnowledgeTitle(t *testing.T) {
 	}
 
 	// Now import a topic that references the knowledge title
-	result, err := ImportMemory(eng, sparse, l3Idx, l3Deg, l3Cac, ImportRequest{
+	result, err := ImportMemory(eng, sparse, index.NewL2MetaIndex(), l3Idx, l3Deg, l3Cac, ImportRequest{
 		TargetLayer: write.TargetTopic,
 		Data: ImportData{
 			Topics: []TopicImportItem{

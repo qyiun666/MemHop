@@ -7,6 +7,7 @@ package crud
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -93,8 +94,17 @@ func DeleteL2(
 	if err != nil {
 		return nil // not found = already deleted
 	}
-	deleteL1Nodes(engine, l1Reverse, idHash)
-	deleteL4Refs(engine, ctx)
+	// Disk first, then in-memory indices: a failed tombstone must not leave
+	// the indices claiming the record is gone.
+	if err := deleteL1Nodes(engine, l1Reverse, idHash); err != nil {
+		return fmt.Errorf("delete l2 %s: cascade l1 nodes: %w", id, err)
+	}
+	if err := deleteL4Refs(engine, ctx); err != nil {
+		return fmt.Errorf("delete l2 %s: cascade l4 refs: %w", id, err)
+	}
+	if _, err := engine.DeleteRecord(idHash); err != nil {
+		return fmt.Errorf("delete l2 %s: %w", id, err)
+	}
 	sparse.RemoveDocument(idHash)
 	if l2Meta != nil {
 		l2Meta.Remove(idHash)
@@ -102,7 +112,6 @@ func DeleteL2(
 	if l1Reverse != nil {
 		l1Reverse.RemoveContext(idHash)
 	}
-	engine.DeleteRecord(idHash)
 	return nil
 }
 
@@ -133,7 +142,10 @@ func MergeL2(
 	if err != nil {
 		return nil, err
 	}
-	absorbSecondaries(engine, l1Reverse, sparse, l2Meta, primaryCtx, mergeHashes, mergeIDs)
+	absorbErr := absorbSecondaries(engine, l1Reverse, sparse, l2Meta, primaryCtx, mergeHashes)
+	if absorbErr != nil {
+		return nil, fmt.Errorf("merge l2: absorb secondaries: %w", absorbErr)
+	}
 	primaryCtx.UpdatedAt = timeutil.NowMs()
 	primaryCtx.Version++
 	if err := WriteTopic(engine, primaryHash, primaryCtx); err != nil {
@@ -141,7 +153,7 @@ func MergeL2(
 	}
 	ReindexTopic(sparse, primaryCtx)
 	if l2Meta != nil {
-		l2Meta.Update(l2MetaFromTopic(primaryCtx))
+		l2Meta.Update(L2MetaFromTopic(primaryCtx))
 	}
 	turnCount := uint32(len(primaryCtx.UserL4Refs) + len(primaryCtx.AgentL4Refs))
 	return &MergeResult{
@@ -191,8 +203,8 @@ func WriteTopic(engine *storage.StorageEngine, idHash uint64, ctx *model.TopicSl
 	return record.WriteTopicSlot(engine, idHash, ctx)
 }
 
-// l2MetaFromTopic converts a TopicSlot to an L2MetaEntry (local copy to avoid cycle).
-func l2MetaFromTopic(t *model.TopicSlot) *index.L2Meta {
+// L2MetaFromTopic converts a TopicSlot to an L2Meta entry (local copy to avoid cycle).
+func L2MetaFromTopic(t *model.TopicSlot) *index.L2Meta {
 	l3Refs := append(append([]uint64{}, t.UserL3Refs...), t.AgentL3Refs...)
 	ts := t.UpdatedAt
 	if ts < t.CreatedAt {
@@ -331,28 +343,37 @@ func ReindexTopic(sparse *index.SparseIndex, ctx *model.TopicSlot) {
 	sparse.AddDocument(ctx.ID, terms, uint32(len(terms)))
 }
 
-func deleteL1Nodes(engine *storage.StorageEngine, l1Reverse *index.L1ReverseIndex, ctxID uint64) {
+func deleteL1Nodes(engine *storage.StorageEngine, l1Reverse *index.L1ReverseIndex, ctxID uint64) error {
 	if l1Reverse == nil {
-		return
+		return nil
 	}
 	ids := map[uint64]struct{}{ctxID: {}}
 	nodeHashes := l1Reverse.FindAssociated(ids)
 	for _, nodeHash := range nodeHashes {
 		rt, _, err := engine.ReadRecord(nodeHash)
-		if err == nil && rt == storage.RecL1SceneNode {
-			engine.DeleteRecord(nodeHash)
-			l1Reverse.RemoveNode(nodeHash)
+		if err != nil || rt != storage.RecL1SceneNode {
+			continue // dangling reverse-index entry, nothing on disk to delete
 		}
+		if _, err := engine.DeleteRecord(nodeHash); err != nil {
+			return fmt.Errorf("delete l1 node %016x: %w", nodeHash, err)
+		}
+		l1Reverse.RemoveNode(nodeHash)
 	}
+	return nil
 }
 
-func deleteL4Refs(engine *storage.StorageEngine, ctx *model.TopicSlot) {
+func deleteL4Refs(engine *storage.StorageEngine, ctx *model.TopicSlot) error {
 	for _, ref := range ctx.UserL4Refs {
-		engine.DeleteRecord(ref)
+		if _, err := engine.DeleteRecord(ref); err != nil {
+			return fmt.Errorf("delete l4 ref %016x: %w", ref, err)
+		}
 	}
 	for _, ref := range ctx.AgentL4Refs {
-		engine.DeleteRecord(ref)
+		if _, err := engine.DeleteRecord(ref); err != nil {
+			return fmt.Errorf("delete l4 ref %016x: %w", ref, err)
+		}
 	}
+	return nil
 }
 
 func parseMergeIDs(ids []string) ([]uint64, error) {
@@ -374,15 +395,14 @@ func absorbSecondaries(
 	l2Meta *index.L2MetaIndex,
 	primary *model.TopicSlot,
 	mergeHashes []uint64,
-	mergeIDs []string,
-) {
+) error {
 	l4Set := toSet(primary.UserL4Refs)
 	agL4Set := toSet(primary.AgentL4Refs)
 	l3Set := toSet(primary.UserL3Refs)
 	agL3Set := toSet(primary.AgentL3Refs)
 	var summaries []string
 
-	for i, secHash := range mergeHashes {
+	for _, secHash := range mergeHashes {
 		sec, err := loadTopic(engine, secHash)
 		if err != nil {
 			continue
@@ -394,18 +414,21 @@ func absorbSecondaries(
 		if sec.FusedSummary != nil {
 			summaries = append(summaries, *sec.FusedSummary)
 		}
+		// Cascade cleanup aligned with DeleteL2: disk deletes first, then
+		// in-memory index removal, and every error is propagated.
+		if err := deleteL1Nodes(engine, l1Reverse, secHash); err != nil {
+			return err
+		}
+		if _, err := engine.DeleteRecord(secHash); err != nil {
+			return fmt.Errorf("delete secondary %016x: %w", secHash, err)
+		}
 		sparse.RemoveDocument(secHash)
 		if l2Meta != nil {
 			l2Meta.Remove(secHash)
 		}
-		// Cascade cleanup aligned with DeleteL2: drop the secondary's
-		// associated L1 nodes and its reverse-index entries.
-		deleteL1Nodes(engine, l1Reverse, secHash)
 		if l1Reverse != nil {
 			l1Reverse.RemoveContext(secHash)
 		}
-		engine.DeleteRecord(secHash)
-		_ = i
 	}
 	primary.UserL4Refs = sortedKeys(l4Set)
 	primary.AgentL4Refs = sortedKeys(agL4Set)
@@ -424,6 +447,7 @@ func absorbSecondaries(
 		}
 		primary.FusedSummary = &combined
 	}
+	return nil
 }
 
 func loadTopicsByIDs(engine *storage.StorageEngine, ids []uint64) []model.TopicSlot {

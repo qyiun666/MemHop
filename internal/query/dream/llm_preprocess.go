@@ -4,14 +4,16 @@
 package dream
 
 import (
+	"context"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common/config"
 )
 
 // ChatProvider is the interface for LLM chat completions.
+// Implementations must honor ctx cancellation and deadlines.
 type ChatProvider interface {
-	Chat(system, user string, maxTokens int, temperature, topP float32) (string, error)
+	Chat(ctx context.Context, system, user string, maxTokens int, temperature, topP float32) (string, error)
 }
 
 // BuildChatProvider returns a ChatProvider if LLM is configured, nil otherwise.
@@ -24,10 +26,10 @@ func BuildChatProvider(cfg *config.LlmConfig) ChatProvider {
 
 // callLLMWithRetry calls the LLM with a single attempt.
 func callLLMWithRetry(
-	llm ChatProvider, system, user string,
+	ctx context.Context, llm ChatProvider, system, user string,
 	maxTokens int, temperature float32,
 ) (string, error) {
-	response, err := llm.Chat(system, user, maxTokens, temperature, 0.85)
+	response, err := llm.Chat(ctx, system, user, maxTokens, temperature, 0.85)
 	if err != nil {
 		return "", err
 	}

@@ -32,6 +32,7 @@ type StorageEngine struct {
 	nextOffset   uint64
 	snapshotData *IndexSnapshotData
 	dirty        bool // records written/deleted since the last checkpoint
+	closed       bool // Close called; all operations return ErrClosed
 	mu           sync.RWMutex
 }
 
@@ -40,6 +41,10 @@ func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrIO, "create file", err)
+	}
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return nil, err
 	}
 	if err := f.Truncate(DataStart); err != nil {
 		f.Close()
@@ -83,6 +88,10 @@ func Open(path string) (*StorageEngine, error) {
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrIO, "open file", err)
 	}
+	if err := lockFile(f); err != nil {
+		f.Close()
+		return nil, err
+	}
 	info, err := f.Stat()
 	if err != nil {
 		f.Close()
@@ -118,6 +127,7 @@ func Open(path string) (*StorageEngine, error) {
 		recordCount:  active.RecordCount,
 		nextOffset:   DataStart,
 	}
+	var scanStart uint64 = DataStart
 	if active.SnapshotOffset > 0 && active.SnapshotLength > 0 {
 		if err := e.loadSnapshot(); err != nil {
 			UnmapFile(mm)
@@ -125,14 +135,23 @@ func Open(path string) (*StorageEngine, error) {
 			return nil, err
 		}
 		// Recover records appended after the snapshot (crash without checkpoint).
-		err = e.scanRecords(active.SnapshotOffset + uint64(active.SnapshotLength))
-	} else {
-		err = e.scanRecords(DataStart)
+		scanStart = active.SnapshotOffset + uint64(active.SnapshotLength)
 	}
+	end, truncate, err := e.scanRecords(scanStart)
 	if err != nil {
-		UnmapFile(mm)
+		UnmapFile(e.mmap)
 		f.Close()
 		return nil, err
+	}
+	e.nextOffset = end
+	if truncate {
+		// Drop crash residue (torn frame or orphan snapshot blob) past the
+		// last valid record so future appends start from a clean tail.
+		if err := e.truncateTail(int64(end)); err != nil {
+			UnmapFile(e.mmap)
+			f.Close()
+			return nil, err
+		}
 	}
 	e.recordCount = uint32(len(e.index))
 	e.rebuildByType()
@@ -143,6 +162,9 @@ func Open(path string) (*StorageEngine, error) {
 func (e *StorageEngine) WriteRecord(recordType uint8, idHash uint64, data []byte) (uint64, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed {
+		return 0, mherrors.ErrClosed
+	}
 	offsets, err := e.writeRecordBatch([]RecordEntry{{RecordType: recordType, IDHash: idHash, Data: data}})
 	if err != nil {
 		return 0, err
@@ -154,6 +176,9 @@ func (e *StorageEngine) WriteRecord(recordType uint8, idHash uint64, data []byte
 func (e *StorageEngine) WriteRecordBatch(records []RecordEntry) ([]uint64, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed {
+		return nil, mherrors.ErrClosed
+	}
 	return e.writeRecordBatch(records)
 }
 
@@ -161,6 +186,9 @@ func (e *StorageEngine) WriteRecordBatch(records []RecordEntry) ([]uint64, error
 func (e *StorageEngine) ReadRecord(idHash uint64) (uint8, []byte, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	if e.closed {
+		return 0, nil, mherrors.ErrClosed
+	}
 	offset, ok := e.index[idHash]
 	if !ok {
 		return 0, nil, mherrors.ErrNotFound
@@ -179,6 +207,9 @@ func (e *StorageEngine) ReadRecord(idHash uint64) (uint8, []byte, error) {
 func (e *StorageEngine) DeleteRecord(idHash uint64) (bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed {
+		return false, mherrors.ErrClosed
+	}
 	offset, ok := e.index[idHash]
 	if !ok {
 		return false, nil
@@ -220,6 +251,9 @@ func (e *StorageEngine) DeleteRecord(idHash uint64) (bool, error) {
 func (e *StorageEngine) Contains(idHash uint64) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
+	if e.closed {
+		return false
+	}
 	_, ok := e.index[idHash]
 	return ok
 }
@@ -228,6 +262,9 @@ func (e *StorageEngine) Contains(idHash uint64) bool {
 func (e *StorageEngine) Checkpoint(snap *IndexSnapshotData) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed {
+		return mherrors.ErrClosed
+	}
 	return e.checkpoint(snap)
 }
 
@@ -238,9 +275,15 @@ func (e *StorageEngine) Checkpoint(snap *IndexSnapshotData) error {
 func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed {
+		return mherrors.ErrClosed
+	}
+	e.closed = true
 	ckptErr := e.checkpoint(snap)
 	unmapErr := UnmapFile(e.mmap)
+	e.mmap = nil
 	syncErr := e.file.Sync()
+	unlockErr := unlockFile(e.file)
 	closeErr := e.file.Close()
 	switch {
 	case ckptErr != nil:
@@ -249,6 +292,8 @@ func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
 		return unmapErr
 	case syncErr != nil:
 		return mherrors.NewError(mherrors.ErrIO, "sync", syncErr)
+	case unlockErr != nil:
+		return unlockErr
 	default:
 		return closeErr
 	}
@@ -260,7 +305,15 @@ func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
 func (e *StorageEngine) CloseNoCheckpoint() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed {
+		return mherrors.ErrClosed
+	}
+	e.closed = true
 	if err := UnmapFile(e.mmap); err != nil {
+		return err
+	}
+	e.mmap = nil
+	if err := unlockFile(e.file); err != nil {
 		return err
 	}
 	return e.file.Close()
@@ -274,6 +327,10 @@ func (e *StorageEngine) CloseNoCheckpoint() error {
 // seen. Return false from fn to stop iteration.
 func (e *StorageEngine) IterIndex(fn func(idHash, offset uint64) bool) {
 	e.mu.RLock()
+	if e.closed {
+		e.mu.RUnlock()
+		return
+	}
 	pairs := make([]uint64, 0, len(e.index)*2)
 	for id, off := range e.index {
 		pairs = append(pairs, id, off)
@@ -292,6 +349,10 @@ func (e *StorageEngine) IterIndex(fn func(idHash, offset uint64) bool) {
 // Returns stop=true if fn returned a non-nil error.
 func (e *StorageEngine) IterIndexByType(rt uint8, fn func(idHash uint64) error) error {
 	e.mu.RLock()
+	if e.closed {
+		e.mu.RUnlock()
+		return mherrors.ErrClosed
+	}
 	ids := make([]uint64, 0, len(e.byType[rt]))
 	for id := range e.byType[rt] {
 		ids = append(ids, id)
@@ -470,16 +531,17 @@ func (e *StorageEngine) loadSnapshot() error {
 	e.index = idx
 	e.recordCount = uint32(len(idx))
 	e.snapshotData = snap
-	// Recompute nextOffset from index.
-	e.recomputeNextOffset()
 	return nil
 }
 
 // scanRecords scans records starting at the given offset and merges them
 // into the index. A later record with the same idHash overrides an earlier
-// entry; records flagged FlagDeleted are skipped. Sets nextOffset just past
-// the last valid record.
-func (e *StorageEngine) scanRecords(start uint64) error {
+// entry; a FlagDeleted tombstone deletes the entry (delete replay). The scan
+// stops at the first frame that is truncated or fails its CRC32 check: such
+// a frame is crash residue (torn append or orphan snapshot blob) and marks
+// the end of the record region. Returns the offset just past the last valid
+// record and whether trailing crash residue must be truncated.
+func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, err error) {
 	offset := start
 	for {
 		_, flags, data, idHash, err := RecordData(e.mmap, offset)
@@ -487,30 +549,40 @@ func (e *StorageEngine) scanRecords(start uint64) error {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return err
+			if errors.Is(err, mherrors.ErrCRCMismatch) || errors.Is(err, mherrors.ErrCorruption) {
+				return offset, true, nil
+			}
+			return 0, false, err
 		}
-		if flags&FlagDeleted == 0 {
+		if flags&FlagDeleted != 0 {
+			delete(e.index, idHash)
+		} else {
 			e.index[idHash] = offset
 		}
 		offset += uint64(RecordHeaderSize) + uint64(len(data))
 	}
-	e.nextOffset = offset
-	return nil
+	return offset, false, nil
 }
 
-func (e *StorageEngine) recomputeNextOffset() {
-	var maxEnd uint64 = DataStart
-	for _, off := range e.index {
-		_, _, data, _, err := RecordData(e.mmap, off)
-		if err != nil {
-			continue
-		}
-		end := off + uint64(RecordHeaderSize) + uint64(len(data))
-		if end > maxEnd {
-			maxEnd = end
-		}
+// truncateTail shrinks the file to size and remaps it, discarding crash
+// residue past the last valid record. Caller must hold e.mu.
+func (e *StorageEngine) truncateTail(size int64) error {
+	if err := UnmapFile(e.mmap); err != nil {
+		return err
 	}
-	e.nextOffset = maxEnd
+	e.mmap = nil
+	if err := e.file.Truncate(size); err != nil {
+		return mherrors.NewError(mherrors.ErrIO, "truncate crash residue", err)
+	}
+	if err := e.file.Sync(); err != nil {
+		return mherrors.NewError(mherrors.ErrIO, "sync after truncate", err)
+	}
+	mm, err := MapFile(e.file, int(size))
+	if err != nil {
+		return err
+	}
+	e.mmap = mm
+	return nil
 }
 
 // rebuildByType rebuilds the byType secondary index from the current index.
