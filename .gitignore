@@ -1,3 +1,12 @@
+# Agent config (internal instructions, not for public)
+AGENTS.md
+
+# Design docs (not for public repo)
+docs/
+
+# Development harness
+.better-harness/
+
 # Environment
 .env
 
@@ -33,13 +42,6 @@ __pycache__/
 # Benchmarks
 .benchmarks/
 
-# Design docs (not for public repo) — docs/specs/API.md is the public API contract and IS tracked
-docs/*
-!docs/specs/
-docs/specs/*
-!docs/specs/API.md
-deliverables/
-
 # Screenshots
 *.png
 
@@ -61,4 +63,3 @@ test/testsupport/key_config.json
 
 # Node.js
 /node_modules/
-.better-harness/
