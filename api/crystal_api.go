@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// v0.60.0 Crystal domain: L5 action chain create / append / batch operations.
+// Crystal domain: L5 action chain create / append / batch operations.
 
 package memhop
 

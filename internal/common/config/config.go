@@ -1,3 +1,6 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 package config
 
 import (
@@ -72,7 +75,7 @@ type MemHopDefaults struct {
 }
 
 // SearchWeights controls retrieval scoring.
-// v0.58: unified RRF pipeline — channel weights and multiplicative boost removed.
+// Unified RRF pipeline — channel weights and multiplicative boost removed.
 type SearchWeights struct {
 	RRFK            float32 `json:"rrf_k"`
 	ActivationBonus float32 `json:"activation_bonus"`

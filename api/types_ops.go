@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// v0.60.0 unified API types: Layer enum, per-domain Op/Result structs.
+// Unified API types: Layer enum, per-domain Op/Result structs.
 // Introduced to consolidate previous per-layer methods (GetL2/GetL3/...)
 // into a small set of generic entry points (Get/List/Delete + Topic/Knowledge/Crystal).
 

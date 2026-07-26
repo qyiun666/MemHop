@@ -21,10 +21,6 @@ import (
 // It extracts atomic facts via LLM and appends the reply as L4 archive.
 // This is the core-loop counterpart to Search: Search stores user content,
 // Update stores agent content.
-//
-// v0.60.0: return type is now just error. Previously returned an
-// UpdateResult whose Status was always "Updated" and ID was always empty —
-// both carried no information for the caller.
 func (m *MemHop) Update(topicID string, text string, timestamp int64) error {
 	if err := m.beginRead(); err != nil {
 		return err

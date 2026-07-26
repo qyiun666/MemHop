@@ -771,7 +771,7 @@ func matchActionChains(engine *storage.StorageEngine, queryText string) []crud.C
 
 // BoostSearchResults re-scores contexts by SCENE (not by individual topic).
 //
-// Additive scene bonus (v0.58 unified):
+// Additive scene bonus (unified RRF pipeline):
 //   - If ANY topic in the scene is activated → add ActivationBonus to each topic
 //   - Else if the scene has the mostRecent topic → add RecentChatBonus to each topic
 //   - Active takes priority; only one bonus can apply per scene.

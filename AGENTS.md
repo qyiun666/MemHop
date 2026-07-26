@@ -8,7 +8,7 @@ MemHop 是一个面向 AI Agent 的嵌入式记忆数据库，用单个 `.meh` �
 
 - **语言**: Go 1.26+
 - **模块路径**: `github.com/qyiun666/MemHop`（公开包为 `api/`，包名 `memhop`）
-- **版本**: v0.60.0
+- **版本**: v1.0.0
 - **许可证**: MIT OR Apache-2.0
 - **核心形态**: 嵌入式 Go library，极简依赖（4 个直接依赖：xxhash、gse、ollama、go-openai）
 - **单实例契约**: 一个 Agent 绑定一个 `.meh` 文件，文件排他锁强制单实例，全平台（linux/darwin/windows）

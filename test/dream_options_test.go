@@ -1,8 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Integration coverage for DreamOptions parameter combinations introduced in
-// v0.57.1. All scenarios run fully offline against the mock encoder; the LLM
+// Integration coverage for DreamOptions parameter combinations.
+// All scenarios run fully offline against the mock encoder; the LLM
 // side is either injected via opts.LLM / opts.Chat or short-circuited via
 // SkipDistill so no real network I/O happens.
 

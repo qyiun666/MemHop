@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //
 // L3 hypergraph E2E test using real Ollama + LLM environment.
-// v0.60.0: rewritten to use the unified Knowledge(op) domain method plus
+// Rewritten to use the unified Knowledge(op) domain method plus
 // the generic Get/Delete/List entry points.
 
 package test

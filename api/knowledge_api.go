@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// v0.60.0 Knowledge domain: L3 hypergraph CRUD, search, and graph analysis.
+// Knowledge domain: L3 hypergraph CRUD, search, and graph analysis.
 
 package memhop
 

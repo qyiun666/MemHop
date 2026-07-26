@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// v0.60.0: internal helpers for the API layer (DTO conversion + ID parsing).
+// Internal helpers for the API layer (DTO conversion + ID parsing).
 // Extracted from the removed l3_api.go so both crud_api.go and knowledge_api.go
 // can share them without a cross-package dependency.
 

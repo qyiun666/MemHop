@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// v0.60.0 Topic domain: L0 profile write + L2 specialized operations that
+// Topic domain: L0 profile write + L2 specialized operations that
 // don't fit the generic Get/List/Delete/Update surface.
 
 package memhop

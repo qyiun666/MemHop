@@ -1,3 +1,6 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
 package test
 
 import (
@@ -9,7 +12,7 @@ import (
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
-// TestL5WriteAPI tests the new L5 write API methods via v0.60.0 Crystal(op).
+// TestL5WriteAPI tests the new L5 write API methods via Crystal(op).
 // Covers: create chain, append step, incr trigger, update confidence, batch delete.
 func TestL5WriteAPI(t *testing.T) {
 	mh := testsupport.OpenMemHopMock(t)
