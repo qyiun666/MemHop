@@ -230,11 +230,15 @@ func makeTestEngine(t *testing.T) (*storage.StorageEngine, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { os.Remove(f.Name()); f.Close() })
 	engine, err := storage.Create(f.Name(), 768)
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		engine.Close(&storage.IndexSnapshotData{})
+		os.Remove(f.Name())
+		f.Close()
+	})
 	return engine, f.Name()
 }
 

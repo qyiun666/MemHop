@@ -20,6 +20,7 @@ func tempEngine(t *testing.T) *storage.StorageEngine {
 	if err != nil {
 		t.Fatalf("create engine: %v", err)
 	}
+	t.Cleanup(func() { eng.Close(&storage.IndexSnapshotData{}) })
 	return eng
 }
 
