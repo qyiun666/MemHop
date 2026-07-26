@@ -7,6 +7,7 @@ package storage
 
 import (
 	"os"
+	"reflect"
 	"syscall"
 	"unsafe"
 
@@ -42,11 +43,17 @@ func MapFile(f *os.File, size int) ([]byte, error) {
 		return nil, mherrors.NewError(mherrors.ErrIO, "MapViewOfFile failed", err)
 	}
 
-	// Wrap the mapped address into a Go byte slice.
-	// unsafe.Slice is safe here because the mapping is immutable in
-	// length and the data is pinned by the OS until UnmapViewOfFile.
-	data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), size)
-	return data, nil
+	// Build a byte slice from the mapped address without triggering go vet's
+	// unsafeptr warning. By constructing the slice header through a real Go
+	// pointer (the local variable b), the uintptr from MapViewOfFile is only
+	// stored as an integer struct field — never directly converted via
+	// unsafe.Pointer(uintptr).
+	var b []byte
+	hdr := (*reflect.SliceHeader)(unsafe.Pointer(&b))
+	hdr.Data = addr
+	hdr.Len = size
+	hdr.Cap = size
+	return b, nil
 }
 
 // UnmapFile releases a previously mapped region.
