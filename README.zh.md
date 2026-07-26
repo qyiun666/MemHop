@@ -214,6 +214,8 @@ go vet ./...                               # 静态分析
 | 官网 | [qyiun666.github.io/meowagent.github.io](https://qyiun666.github.io/meowagent.github.io/) |
 | 邮箱 | qyiun666@163.com |
 
+<p align="center">⭐️ <a href="https://github.com/qyiun666/MemHop">在 GitHub 上给 MemHop 点个小星星</a> — 你的支持是我们的动力！</p>
+
 ## 许可证
 
 MIT OR Apache-2.0

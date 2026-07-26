@@ -214,6 +214,8 @@ go vet ./...                               # Static analysis
 | Website | [qyiun666.github.io/meowagent.github.io](https://qyiun666.github.io/meowagent.github.io/) |
 | Email | qyiun666@163.com |
 
+<p align="center">⭐️ <a href="https://github.com/qyiun666/MemHop">Star MemHop on GitHub</a> — your support keeps us building!</p>
+
 ## License
 
 MIT OR Apache-2.0
