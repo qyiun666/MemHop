@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">MemHop</h1>
   <p align="center">
-    <strong>你的 Agent 拥有类人记忆 —— 六层认知架构，单文件嵌入式记忆数据库。</strong>
+    <strong>AI Agent 的长期记忆数据库 —— 六层认知架构，单文件嵌入式，纯 Go 实现，零基础设施。</strong>
   </p>
   <p align="center">
     <a href="README.md">English</a>
@@ -13,14 +13,16 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="license">
+  <a href="https://github.com/qyiun666/MemHop/actions/workflows/workflow.yml"><img src="https://github.com/qyiun666/MemHop/actions/workflows/workflow.yml/badge.svg" alt="CI"></a>
+  <a href="https://pkg.go.dev/github.com/qyiun666/MemHop/api"><img src="https://pkg.go.dev/badge/github.com/qyiun666/MemHop/api.svg" alt="Go Reference"></a>
+  <a href="https://goreportcard.com/report/github.com/qyiun666/MemHop"><img src="https://goreportcard.com/badge/github.com/qyiun666/MemHop" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.26+-00ADD8.svg" alt="go">
-  <img src="https://img.shields.io/badge/test-passing-brightgreen.svg" alt="test">
+  <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="license">
 </p>
 
 ---
 
-MemHop 不是一个向量数据库。它是一个以人脑知识组织方式为蓝本的记忆系统——具备身份认同、情景回忆、语义压缩、技能习得、归档存储和结晶化专长。一个 Agent，一个 `.meh` 文件，零基础设施。
+MemHop 是一个面向 AI Agent / 大模型（LLM）应用的**嵌入式长期记忆数据库**，纯 Go 实现。它不是一个向量数据库——它是以人脑知识组织方式为蓝本的记忆系统：具备身份认同、情景回忆、语义压缩、知识图谱、归档存储和结晶化技能。一个 Agent，一个 `.meh` 文件，零基础设施。
 
 MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh` 文件，文件级排他锁保证同一文件同时只有一个实例（第二次 `Open` 直接报错）。支持 **Linux、macOS、Windows** 全平台，无 cgo，除嵌入/LLM 接口外无任何外部服务。
 
@@ -144,6 +146,8 @@ go test -tags integration ./test/ -run TestLocomo10Recall -v
 ```
 
 ### 竞品对比（2026 记忆系统）
+
+在寻找 **Go 语言的 Mem0 / Letta / Zep 替代品**？以下是 MemHop 与 2026 年主流 Agent 记忆系统的对比：
 
 | 系统 | GitHub Stars | LOCOMO | LongMemEval | Recall@5 | P95 延迟 | 部署 | 语言 |
 |------|-------------|--------|-------------|----------|----------|------|------|

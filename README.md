@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">MemHop</h1>
   <p align="center">
-    <strong>Your agent remembers like a human — six-layer cognitive memory in a single embedded file.</strong>
+    <strong>Long-term memory for AI agents — a six-layer cognitive memory database in a single embedded file. Pure Go, zero infrastructure.</strong>
   </p>
   <p align="center">
     <a href="README.zh.md">中文</a>
@@ -13,14 +13,16 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="license">
+  <a href="https://github.com/qyiun666/MemHop/actions/workflows/workflow.yml"><img src="https://github.com/qyiun666/MemHop/actions/workflows/workflow.yml/badge.svg" alt="CI"></a>
+  <a href="https://pkg.go.dev/github.com/qyiun666/MemHop/api"><img src="https://pkg.go.dev/badge/github.com/qyiun666/MemHop/api.svg" alt="Go Reference"></a>
+  <a href="https://goreportcard.com/report/github.com/qyiun666/MemHop"><img src="https://goreportcard.com/badge/github.com/qyiun666/MemHop" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.26+-00ADD8.svg" alt="go">
-  <img src="https://img.shields.io/badge/test-passing-brightgreen.svg" alt="test">
+  <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="license">
 </p>
 
 ---
 
-MemHop is not a vector database. It is a memory system modeled after how the human brain organizes knowledge — with identity, episodic recall, semantic compression, skill acquisition, archival storage, and crystallized expertise. One agent, one `.meh` file, zero infrastructure.
+MemHop is an **embedded long-term memory database for AI agents and LLM applications**, written in pure Go. It is not a vector database — it is a memory system modeled after how the human brain organizes knowledge, with identity, episodic recall, semantic compression, a knowledge graph, archival storage, and crystallized skills. One agent, one `.meh` file, zero infrastructure.
 
 MemHop is an **agent-dedicated** memory database: each agent binds to exactly one `.meh` file, and a file-level exclusive lock guarantees a single instance per file (a second `Open` fails fast). It runs on **Linux, macOS, and Windows** with no cgo and no external services beyond your embedding/LLM endpoints.
 
@@ -144,6 +146,8 @@ go test -tags integration ./test/ -run TestLocomo10Recall -v
 ```
 
 ### Comparison (2026 memory systems)
+
+Looking for a **Mem0, Letta, or Zep alternative in Go**? Here is how MemHop compares with 2026 agent memory systems:
 
 | System | GitHub Stars | LOCOMO | LongMemEval | Recall@5 | P95 Latency | Deploy | Language |
 |--------|-------------|--------|-------------|----------|-------------|--------|----------|
