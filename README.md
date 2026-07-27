@@ -15,7 +15,6 @@
 <p align="center">
   <a href="https://github.com/qyiun666/MemHop/actions/workflows/workflow.yml"><img src="https://github.com/qyiun666/MemHop/actions/workflows/workflow.yml/badge.svg" alt="CI"></a>
   <a href="https://pkg.go.dev/github.com/qyiun666/MemHop/api"><img src="https://pkg.go.dev/badge/github.com/qyiun666/MemHop/api.svg" alt="Go Reference"></a>
-  <a href="https://goreportcard.com/report/github.com/qyiun666/MemHop"><img src="https://goreportcard.com/badge/github.com/qyiun666/MemHop" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.26+-00ADD8.svg" alt="go">
   <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="license">
 </p>
