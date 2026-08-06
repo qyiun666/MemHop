@@ -18,7 +18,7 @@ build:
 
 ## unit tests — internal white-box tests (api + internal)
 test-unit:
-	go test ./api/... ./internal/...
+	go test -race ./api/... ./internal/...
 
 ## interface tests — external black-box tests under test/**
 ## Requires Ollama daemon + the embedding model to be available.

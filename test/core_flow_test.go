@@ -118,11 +118,8 @@ func TestCoreFlow(t *testing.T) {
 		}
 		testsupport.LogSearchQuality(t, result, pair.user, pair.desc+" (复检)")
 
-		// 验证 FusedSummary / FusedKeywords 是否被 Dream 填充
+		// 验证 FusedKeywords 是否被 Dream 填充
 		ctx := result.Contexts[0]
-		if ctx.FusedSummary != nil {
-			t.Logf("[Dream增强] %s: FusedSummary=%s", pair.desc, *ctx.FusedSummary)
-		}
 		if len(ctx.FusedKeywords) > 0 {
 			t.Logf("[Dream增强] %s: FusedKeywords=%v", pair.desc, ctx.FusedKeywords)
 		}
@@ -150,7 +147,6 @@ func TestCoreFlow(t *testing.T) {
 	t.Logf("  StyleTraits:     %v", afterProfile.StyleTraits)
 	t.Logf("  EmotionPatterns: %v", afterProfile.EmotionPatterns)
 	t.Logf("  Personality:     %s", afterProfile.Personality)
-	t.Logf("  Worldview:       %s", afterProfile.Worldview)
 
 	// ============================================================
 	// Phase 4: L1 图可视化

@@ -41,7 +41,6 @@ type L2NodeData struct {
 	UserKeywords  []string `json:"user_keywords"`
 	AgentKeywords []string `json:"agent_keywords"`
 	FusedKeywords []string `json:"fused_keywords"`
-	FusedSummary  *string  `json:"fused_summary,omitempty"`
 	ChildrenIDs   []uint64 `json:"children_ids"`
 }
 

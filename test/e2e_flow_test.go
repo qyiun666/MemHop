@@ -183,9 +183,6 @@ func TestE2EFlow(t *testing.T) {
 			l3Count := len(detail.UserL3Refs) + len(detail.AgentL3Refs)
 			t.Logf("  指定话题 %s: Depth=%d L4=%d L3=%d FusedKw=%v",
 				detail.ID[:12], detail.Depth, l4Count, l3Count, detail.FusedKeywords)
-			if detail.FusedSummary != nil {
-				t.Logf("    FusedSummary: %s", *detail.FusedSummary)
-			}
 
 			// L4 Archive 查看
 			topicIDCopy := ctx0.ID
@@ -253,9 +250,6 @@ func TestE2EFlow(t *testing.T) {
 			fused := ""
 			if len(topic.FusedKeywords) > 0 {
 				fused = fmt.Sprintf(" FusedKw=%v", topic.FusedKeywords)
-			}
-			if topic.FusedSummary != nil {
-				fused += fmt.Sprintf(" Summary=%s", *topic.FusedSummary)
 			}
 			t.Logf("    Topic[%d]: ID=%s Depth=%d TurnCnt=%d L4=%d%s",
 				ti, topic.ID[:12], topic.Depth, topic.TurnCount, topic.L4Count, fused)

@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common/config"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/l2"
 	"github.com/qyiun666/MemHop/internal/query/encoder"
 )
 
@@ -171,13 +173,9 @@ func resolveTargetIDs(l2IDs []uint64, engine *storage.StorageEngine) map[uint64]
 
 func collectAllL2IDs(engine *storage.StorageEngine) map[uint64]bool {
 	ids := make(map[uint64]bool)
-	engine.IterIndex(func(idHash, _ uint64) bool {
-		rt, _, err := engine.ReadRecord(idHash)
-		if err == nil && rt == storage.RecL2Topic {
-			ids[idHash] = true
-		}
-		return true
-	})
+	for _, topic := range record.CollectAllTopics(engine) {
+		ids[topic.ID] = true
+	}
 	return ids
 }
 
@@ -188,7 +186,7 @@ func buildConsolidationInput(
 ) *ConsolidationInput {
 	sceneMap := make(map[uint64][]L2NodeData)
 	for id := range targetIDs {
-		topic, err := readTopic(engine, id)
+		topic, err := record.ReadTopicLenient(engine, id)
 		if err != nil || topic == nil {
 			continue
 		}
@@ -210,12 +208,10 @@ func buildConsolidationInput(
 func topicToL2NodeData(t *model.TopicSlot) L2NodeData {
 	return L2NodeData{
 		IDHash:        t.ID,
-		CreatedAt:     t.CreatedAt,
 		Depth:         t.Depth,
 		UserKeywords:  t.UserKeywords,
 		AgentKeywords: t.AgentKeywords,
 		FusedKeywords: t.FusedKeywords,
-		FusedSummary:  t.FusedSummary,
 	}
 }
 
@@ -256,7 +252,7 @@ func applyL2Stage(
 		})
 	}
 	start := time.Now()
-	cr, err := ApplyL2Groups(out.L2Groups.Value, engine, sparseIdx, l2Meta, enc)
+	cr, err := l2.ApplyL2Groups(toMergeGroups(out.L2Groups.Value), engine, sparseIdx, l2Meta, enc)
 	elapsed := time.Since(start).Milliseconds()
 	if err != nil {
 		return append(stages, failStage("l2_compress", "L2 merge failed", elapsed, err))
@@ -409,4 +405,18 @@ func failStage(name, desc string, elapsed int64, err error) StageReport {
 		Name: name, Status: "failed", Description: desc,
 		DurationMs: elapsed, Error: err.Error(),
 	}
+}
+
+// toMergeGroups converts LLM L2 groups to the neutral repo/l2 input type.
+func toMergeGroups(groups []L2Group) []l2.MergeGroup {
+	out := make([]l2.MergeGroup, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, l2.MergeGroup{
+			SceneID:       g.SceneID,
+			NodeHashes:    g.NodeHashes,
+			MergedTitle:   g.MergedTitle,
+			MergedSummary: g.MergedSummary,
+		})
+	}
+	return out
 }

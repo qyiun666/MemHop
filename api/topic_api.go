@@ -15,9 +15,13 @@ import (
 // Topic performs an L0 / L2 sub-operation identified by op.Kind.
 //
 // Supported operations:
-//   - TOpSetProfile — overwrite L0 profile with op.ProfileDelta (op.ProfileDelta required)
-//   - TOpMerge      — merge secondary L2 topics into a primary (op.PrimaryID + op.MergeIDs required)
-//   - TOpSceneTree  — return the full L2 scene tree (op.SceneID required)
+//   - TOpSetProfile  — overwrite L0 profile with op.ProfileDelta (op.ProfileDelta required)
+//   - TOpMerge       — merge secondary L2 topics into a primary (op.PrimaryID + op.MergeIDs required)
+//   - TOpSceneTree   — return the full L2 scene tree (op.SceneID required)
+//   - TOpListScenes  — list all scenes aggregated from the L2MetaIndex
+//   - TOpDeleteScene — delete every L2 topic of a scene (op.SceneID required)
+//   - TOpMergeScenes — rewrite all secondary-scene topics into the primary scene
+//     (op.PrimarySceneID + op.SecondarySceneID required)
 func (m *MemHop) Topic(op TopicOp) (*TopicResult, error) {
 	if err := m.beginRead(); err != nil {
 		return nil, err
@@ -58,6 +62,28 @@ func (m *MemHop) Topic(op TopicOp) (*TopicResult, error) {
 			return nil, err
 		}
 		return &TopicResult{SceneTree: r}, nil
+
+	case TOpListScenes:
+		return &TopicResult{Scenes: crud.ListScenes(m.getL2Meta())}, nil
+
+	case TOpDeleteScene:
+		if op.SceneID == "" {
+			return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "TOpDeleteScene requires SceneID")
+		}
+		if err := crud.DeleteScene(m.engine, m.getL1Reverse(), m.sparseIndex, m.getL2Meta(), op.SceneID); err != nil {
+			return nil, err
+		}
+		return &TopicResult{}, nil
+
+	case TOpMergeScenes:
+		if op.PrimarySceneID == "" || op.SecondarySceneID == "" {
+			return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "TOpMergeScenes requires PrimarySceneID and SecondarySceneID")
+		}
+		r, err := crud.MergeScenes(m.engine, m.getL2Meta(), op.PrimarySceneID, op.SecondarySceneID)
+		if err != nil {
+			return nil, err
+		}
+		return &TopicResult{MergeScenes: r}, nil
 
 	default:
 		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "unsupported TopicOpKind")

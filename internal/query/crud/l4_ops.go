@@ -13,10 +13,10 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // QueryArchives searches L4 archives with filters.
@@ -235,9 +235,6 @@ func AppendDialogueL4(
 		}
 		topic.AgentTimestamp = nowMs
 	}
-
-	topic.UpdatedAt = nowMs
-	topic.Version++
 
 	if err := record.WriteTopicSlot(engine, topicID, topic); err != nil {
 		return 0, err

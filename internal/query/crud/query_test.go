@@ -9,9 +9,10 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 func createTestEngine(t *testing.T) *storage.StorageEngine {
@@ -43,11 +44,8 @@ func writeTestTopic(t *testing.T, engine *storage.StorageEngine, id uint64, titl
 		AgentL3Refs:   []uint64{},
 		FusedKeywords: []string{},
 		ChildrenIDs:   []uint64{},
-		CreatedAt:     1000,
-		UpdatedAt:     1000,
-		Version:       1,
 	}
-	if err := WriteTopic(engine, id, &topic); err != nil {
+	if err := record.WriteTopicSlot(engine, id, &topic); err != nil {
 		t.Fatalf("write topic: %v", err)
 	}
 }
@@ -113,7 +111,6 @@ func TestL3CRUD(t *testing.T) {
 		Source:    model.HypergraphSource{Kind: model.SourceManual},
 		CreatedAt: 1000,
 		UpdatedAt: 1000,
-		Version:   1,
 	}
 	writeGraphSlot(engine, graphID, &slot)
 
@@ -129,7 +126,6 @@ func TestL3CRUD(t *testing.T) {
 		Importance: 0.5,
 		CreatedAt:  1000,
 		UpdatedAt:  1000,
-		Version:    1,
 	}
 	data, _ := node.MarshalJSON()
 	engine.WriteRecord(storage.RecL3GraphNode, nodeID, data)
@@ -180,7 +176,6 @@ func TestL5CRUD(t *testing.T) {
 		SuccessRate: 0.9,
 		CreatedAt:   1000,
 		UpdatedAt:   1000,
-		Version:     1,
 	}
 	writeActionChain(engine, chainID, &chain)
 

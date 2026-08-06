@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"github.com/ollama/ollama/api"
-
-	"github.com/qyiun666/MemHop/internal/common/numeric"
 )
 
 func TestHttpEncoderUnavailable(t *testing.T) {
@@ -38,30 +36,6 @@ func TestHttpEncoderRejectsBareAddr(t *testing.T) {
 	_, err := NewHttpEncoder("127.0.0.1:27110", 768, "test-embed", 0)
 	if err == nil {
 		t.Fatal("expected error for bare address without scheme")
-	}
-}
-
-func TestF32F16Roundtrip(t *testing.T) {
-	values := []float32{0.0, 0.1, -0.1, 1.0, -1.0, 65504.0, 0.001}
-	for _, v := range values {
-		h := numeric.F32ToF16(v)
-		got := numeric.F16ToF32(h)
-		diff := got - v
-		if diff < 0 {
-			diff = -diff
-		}
-		// Allow 1% relative error or 0.01 absolute for small values
-		tolerance := v * 0.01
-		if tolerance < 0 {
-			tolerance = -tolerance
-		}
-		if tolerance < 0.01 {
-			tolerance = 0.01
-		}
-		if diff > tolerance {
-			t.Errorf("f32(%v) → f16(%d) → f32(%v): diff=%v > tolerance=%v",
-				v, h, got, diff, tolerance)
-		}
 	}
 }
 
@@ -102,7 +76,7 @@ func TestHttpEncoderEncode(t *testing.T) {
 	if len(out.Dense) != 2 {
 		t.Fatalf("dense dim: %d, want 2", len(out.Dense))
 	}
-	if got := numeric.F16ToF32(out.Dense[0]); got < 0.09 || got > 0.11 {
+	if got := out.Dense[0]; got < 0.09 || got > 0.11 {
 		t.Fatalf("dense[0]: %v, want ~0.1", got)
 	}
 }

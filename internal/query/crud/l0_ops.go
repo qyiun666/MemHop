@@ -11,9 +11,8 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // LoadProfileSlot reads the L0 profile from the engine.
@@ -32,21 +31,16 @@ func LoadProfileSlot(engine *storage.StorageEngine) (*model.ProfileSlot, error) 
 
 // WriteProfile writes a ProfileSlot derived from delta to the engine.
 func WriteProfile(engine *storage.StorageEngine, delta ProfileDelta) error {
-	now := timeutil.NowMs()
 	profileHash := hash.HashID("profile")
 	slot := model.ProfileSlot{
 		IDHash:          profileHash,
 		Name:            derefStr(delta.Name),
 		Role:            derefStr(delta.Role),
 		Personality:     derefStr(delta.Personality),
-		Worldview:       derefStr(delta.Worldview),
 		Preferences:     derefMap(delta.Preferences),
 		Lexicon:         derefMap(delta.Lexicon),
 		StyleTraits:     derefSlice(delta.StyleTraits),
 		EmotionPatterns: derefMap(delta.EmotionPatterns),
-		CreatedAt:       now,
-		UpdatedAt:       now,
-		Version:         1,
 	}
 	data, err := json.Marshal(slot)
 	if err != nil {
@@ -73,8 +67,6 @@ func UpdateProfile(
 	if err := applyRawProfileUpdates(&profile, req.Fields); err != nil {
 		return nil, err
 	}
-	profile.UpdatedAt = timeutil.NowMs()
-	profile.Version++
 	pData, err := json.Marshal(profile)
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrSerialization, "marshal profile", err)
@@ -131,9 +123,6 @@ func applyRawProfileUpdates(p *model.ProfileSlot, fields map[string]json.RawMess
 		return err
 	}
 	if err := apply("personality", &p.Personality); err != nil {
-		return err
-	}
-	if err := apply("worldview", &p.Worldview); err != nil {
 		return err
 	}
 	if err := apply("preferences", &p.Preferences); err != nil {

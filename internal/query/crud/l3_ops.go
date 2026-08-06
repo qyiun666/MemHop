@@ -15,10 +15,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // GetL3 loads an L3 hypergraph by ID with all nodes and edges.
@@ -57,7 +57,6 @@ func UpdateL3(
 		slot.Name = *fields.Name
 	}
 	slot.UpdatedAt = timeutil.NowMs()
-	slot.Version++
 	if err := writeGraphSlot(engine, graphHash, slot); err != nil {
 		return nil, err
 	}
@@ -190,7 +189,6 @@ func toGraphNode(n *model.HypergraphNode) GraphNode {
 		Keywords:   n.Keywords,
 		SourceRef:  n.SourceRef,
 		Importance: n.Importance,
-		Summary:    n.Summary,
 		CreatedAt:  n.CreatedAt,
 		UpdatedAt:  n.UpdatedAt,
 	}
@@ -208,8 +206,6 @@ func toGraphEdge(e *model.HypergraphEdge) GraphEdge {
 		NodeIDs:     nodeIDs,
 		Weight:      e.Weight,
 		Label:       e.Label,
-		Description: e.Description,
-		Confidence:  e.Confidence,
 		CreatedAt:   e.CreatedAt,
 	}
 }
@@ -218,8 +214,6 @@ func toGraphSlot(s *model.HypergraphSlot) GraphSlot {
 	return GraphSlot{
 		ID:        hash.FormatHash(s.IDHash),
 		Name:      s.Name,
-		NodeCount: s.NodeCount,
-		EdgeCount: s.EdgeCount,
 		CreatedAt: s.CreatedAt,
 		UpdatedAt: s.UpdatedAt,
 	}
@@ -227,19 +221,11 @@ func toGraphSlot(s *model.HypergraphSlot) GraphSlot {
 
 func findL2RefsToGraph(engine *storage.StorageEngine, graphHash uint64) []uint64 {
 	var refs []uint64
-	engine.IterIndex(func(idHash, _ uint64) bool {
-		rt, data, err := engine.ReadRecord(idHash)
-		if err != nil || rt != storage.RecL2Topic {
-			return true
+	for _, ctx := range record.CollectAllTopics(engine) {
+		if ContainsUint64(ctx.UserL3Refs, graphHash) || ContainsUint64(ctx.AgentL3Refs, graphHash) {
+			refs = append(refs, ctx.ID)
 		}
-		var ctx model.TopicSlot
-		if json.Unmarshal(data, &ctx) == nil {
-			if ContainsUint64(ctx.UserL3Refs, graphHash) || ContainsUint64(ctx.AgentL3Refs, graphHash) {
-				refs = append(refs, idHash)
-			}
-		}
-		return true
-	})
+	}
 	return refs
 }
 
@@ -278,18 +264,13 @@ func deleteGraphMembers(engine *storage.StorageEngine, graphHash uint64) ([]uint
 
 func removeL2GraphRefs(engine *storage.StorageEngine, l2IDs []uint64, graphHash uint64) error {
 	for _, idHash := range l2IDs {
-		_, data, err := engine.ReadRecord(idHash)
+		ctx, err := record.ReadTopicSlot(engine, idHash)
 		if err != nil {
-			continue
-		}
-		var ctx model.TopicSlot
-		if json.Unmarshal(data, &ctx) != nil {
 			continue
 		}
 		ctx.UserL3Refs = removeUint64Val(ctx.UserL3Refs, graphHash)
 		ctx.AgentL3Refs = removeUint64Val(ctx.AgentL3Refs, graphHash)
-		ctx.UpdatedAt = timeutil.NowMs()
-		if err := WriteTopic(engine, idHash, &ctx); err != nil {
+		if err := record.WriteTopicSlot(engine, idHash, ctx); err != nil {
 			return fmt.Errorf("rewrite topic %016x: %w", idHash, err)
 		}
 	}

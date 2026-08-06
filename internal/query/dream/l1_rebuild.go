@@ -8,10 +8,10 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // RebuildL1FromL2 removes stale L1 SceneNodes whose L2 topics are gone or too deep.
@@ -92,7 +92,7 @@ func shouldKeepDeepNode(
 	if meta.Depth != 3 {
 		return false
 	}
-	topic, err := readTopic(engine, topicID)
+	topic, err := record.ReadTopicLenient(engine, topicID)
 	if err != nil || topic == nil || topic.ParentID == nil {
 		return false
 	}

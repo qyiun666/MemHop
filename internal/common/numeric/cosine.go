@@ -5,9 +5,9 @@ package numeric
 
 import "math"
 
-// CosineSimilarity computes the cosine similarity of two f16 vectors (uint16 slices).
+// CosineSimilarity computes the cosine similarity of two f32 vectors (float32 slices).
 // Uses goroutine chunking for large vectors: each chunk handles 500 elements, up to 10 goroutines.
-func CosineSimilarity(a, b []uint16) float32 {
+func CosineSimilarity(a, b []float32) float32 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0
 	}
@@ -39,8 +39,8 @@ func CosineSimilarity(a, b []uint16) float32 {
 		go func(idx, s, e int) {
 			var dot, na, nb float32
 			for j := s; j < e; j++ {
-				av := F16ToF32(a[j])
-				bv := F16ToF32(b[j])
+				av := a[j]
+				bv := b[j]
 				dot += av * bv
 				na += av * av
 				nb += bv * bv
@@ -63,11 +63,11 @@ func CosineSimilarity(a, b []uint16) float32 {
 	return finalizeCosine(dot, normA, normB)
 }
 
-func cosineScalar(a, b []uint16) float32 {
+func cosineScalar(a, b []float32) float32 {
 	var dot, normA, normB float32
 	for i := range a {
-		av := F16ToF32(a[i])
-		bv := F16ToF32(b[i])
+		av := a[i]
+		bv := b[i]
 		dot += av * bv
 		normA += av * av
 		normB += bv * bv

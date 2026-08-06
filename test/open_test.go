@@ -299,9 +299,6 @@ func TestOpen(t *testing.T) {
 						if len(topic.FusedKeywords) > 0 {
 							fusedInfo = fmt.Sprintf(" FusedKw=%v", topic.FusedKeywords)
 						}
-						if topic.FusedSummary != nil {
-							fusedInfo += fmt.Sprintf(" Summary=%s", *topic.FusedSummary)
-						}
 						t.Logf("    Topic[%d]: ID=%s Depth=%d L4=%d L3=%d TurnCnt=%d%s",
 							ti, topic.ID, topic.Depth, topic.L4Count, topic.L3Count,
 							topic.TurnCount, fusedInfo)

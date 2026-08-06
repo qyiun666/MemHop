@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"sort"
 
-	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
 )
 
 // RRFMerge3 fuses three ranked lists (BM25 + vector + entity) using RRF.

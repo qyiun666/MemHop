@@ -11,7 +11,7 @@ import (
 	"github.com/qyiun666/MemHop/api"
 )
 
-func mustEncode(t *testing.T, enc *MockEncoder, text string) []uint16 {
+func mustEncode(t *testing.T, enc *MockEncoder, text string) []float32 {
 	t.Helper()
 	out, err := enc.Encode(text)
 	if err != nil {
@@ -30,7 +30,7 @@ func TestMockEncoderDeterministic(t *testing.T) {
 	b := mustEncode(t, enc, "apple banana cherry 天气")
 	for i := range a {
 		if a[i] != b[i] {
-			t.Fatalf("Encode 不确定: index %d differs (%d != %d)", i, a[i], b[i])
+			t.Fatalf("Encode 不确定: index %d differs (%v != %v)", i, a[i], b[i])
 		}
 	}
 	if enc.Mode() == "" {
@@ -41,27 +41,10 @@ func TestMockEncoderDeterministic(t *testing.T) {
 	}
 }
 
-// f16BitsToF32 是 f32ToF16Bits 的逆变换（次正规数按 0 处理，测试不会触及）。
-func f16BitsToF32(b uint16) float32 {
-	sign := uint32(b&0x8000) << 16
-	exp := uint32(b>>10) & 0x1f
-	mant := uint32(b & 0x3ff)
-	var bits uint32
-	switch exp {
-	case 0:
-		bits = sign
-	case 0x1f:
-		bits = sign | 0x7f800000 | mant<<13
-	default:
-		bits = sign | (exp-15+127)<<23 | mant<<13
-	}
-	return math.Float32frombits(bits)
-}
-
-func cosineDense(a, b []uint16) float64 {
+func cosineDense(a, b []float32) float64 {
 	var dot, na, nb float64
 	for i := range a {
-		x, y := float64(f16BitsToF32(a[i])), float64(f16BitsToF32(b[i]))
+		x, y := float64(a[i]), float64(b[i])
 		dot += x * y
 		na += x * x
 		nb += y * y

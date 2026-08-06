@@ -138,11 +138,6 @@ func TestLOCOMOFull(t *testing.T) {
 				if found {
 					break
 				}
-				if node.FusedSummary != nil &&
-					strings.Contains(strings.ToLower(*node.FusedSummary), answerLower) {
-					found = true
-					break
-				}
 			}
 			if found {
 				break

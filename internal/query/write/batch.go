@@ -16,10 +16,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/numeric"
 	"github.com/qyiun666/MemHop/internal/common/strutil"
 	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 	"github.com/qyiun666/MemHop/internal/query/crud"
 )
 
@@ -74,7 +74,7 @@ func BatchStore(batch StoreBatch, deps *BatchDeps) (*BatchReport, error) {
 
 type encodedItem struct {
 	text       string
-	dense      []uint16
+	dense      []float32
 	keywords   []string
 	topicLabel *string
 	importance float32
@@ -188,7 +188,7 @@ func dedupAndWriteL1(
 		var vecRef uint64
 		if len(item.dense) > 0 {
 			vecIDHash := hash.HashID(fmt.Sprintf("v:%d", idHash))
-			vecBytes := numeric.F16SliceToBytes(item.dense)
+			vecBytes := numeric.F32SliceToBytes(item.dense)
 			if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
 				return nil, nil, 0, 0, fmt.Errorf("write centroid vector: %w", err)
 			}
@@ -256,7 +256,7 @@ func writeL1Node(
 	return nil
 }
 
-func findDuplicate(deps *BatchDeps, queryVec []uint16, topicLabel string) uint64 {
+func findDuplicate(deps *BatchDeps, queryVec []float32, topicLabel string) uint64 {
 	if len(queryVec) == 0 {
 		return 0
 	}
@@ -293,10 +293,10 @@ func findDuplicate(deps *BatchDeps, queryVec []uint16, topicLabel string) uint64
 			}
 		}
 		_, vecData, err := deps.Engine.ReadRecord(node.VectorPageRef)
-		if err != nil || len(vecData) < len(queryVec)*2 {
+		if err != nil || len(vecData) < len(queryVec)*4 {
 			return nil
 		}
-		existingVec := numeric.DecodeF16Vec(vecData, len(queryVec))
+		existingVec := numeric.DecodeF32Vec(vecData, len(queryVec))
 		if len(existingVec) != len(queryVec) {
 			return nil
 		}
@@ -412,7 +412,7 @@ func computeTopicCentroid(
 		if len(output.Dense) > 0 {
 			contextID := hash.HashID(encodeText)
 			vecIDHash := hash.HashID(fmt.Sprintf("v:%d", contextID))
-			vecBytes := numeric.F16SliceToBytes(output.Dense)
+			vecBytes := numeric.F32SliceToBytes(output.Dense)
 			if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
 				return 0, fmt.Errorf("computeTopicCentroid: write record: %w", err)
 			}
@@ -435,19 +435,18 @@ func AverageNodeCentroid(deps *BatchDeps, nodeIDs []uint64) (uint64, error) {
 			continue
 		}
 		for i, v := range vec {
-			f32 := numeric.F16ToF32(v)
-			sum[i] += f32
+			sum[i] += v
 		}
 		count++
 	}
 	if count == 0 {
 		return 0, nil
 	}
-	centroid := make([]uint16, deps.VectorDim)
+	centroid := make([]float32, deps.VectorDim)
 	for i := range sum {
-		centroid[i] = numeric.F32ToF16(sum[i] / float32(count))
+		centroid[i] = sum[i] / float32(count)
 	}
-	vecBytes := numeric.F16SliceToBytes(centroid)
+	vecBytes := numeric.F32SliceToBytes(centroid)
 	contextID := hash.HashID("centroid:" + string(vecBytes))
 	vecIDHash := hash.HashID(fmt.Sprintf("v:%d", contextID))
 	if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
@@ -456,7 +455,7 @@ func AverageNodeCentroid(deps *BatchDeps, nodeIDs []uint64) (uint64, error) {
 	return vecIDHash, nil
 }
 
-func readNodeVector(engine *storage.StorageEngine, nodeID uint64, dim int) []uint16 {
+func readNodeVector(engine *storage.StorageEngine, nodeID uint64, dim int) []float32 {
 	_, data, err := engine.ReadRecord(nodeID)
 	if err != nil {
 		return nil
@@ -466,10 +465,10 @@ func readNodeVector(engine *storage.StorageEngine, nodeID uint64, dim int) []uin
 		return nil
 	}
 	_, vecData, err := engine.ReadRecord(node.VectorPageRef)
-	if err != nil || len(vecData) < dim*2 {
+	if err != nil || len(vecData) < dim*4 {
 		return nil
 	}
-	return numeric.DecodeF16Vec(vecData, dim)
+	return numeric.DecodeF32Vec(vecData, dim)
 }
 
 func buildTopicSlot(
@@ -498,9 +497,6 @@ func buildTopicSlot(
 		FusedKeywords:   []string{},
 		ChildrenIDs:     []uint64{},
 		CentroidPageRef: centroidRef,
-		CreatedAt:       nowMs,
-		UpdatedAt:       nowMs,
-		Version:         1,
 	}
 }
 
@@ -561,13 +557,12 @@ func createBatchHyperedges(engine *storage.StorageEngine, l1NodeIDs []uint64) (u
 	sortedIDs := make([]uint64, len(l1NodeIDs))
 	copy(sortedIDs, l1NodeIDs)
 	sort.Slice(sortedIDs, func(i, j int) bool { return sortedIDs[i] < sortedIDs[j] })
-	assocEdge := model.HyperedgeSlot{
+	assocEdge := model.SceneEdge{
 		IDHash:    hash.HashID("assoc:" + uint64sKey(sortedIDs)),
 		Kind:      model.HyperCoOccurrence,
-		NodePtrs:  l1NodeIDs,
+		NodeIDs:   l1NodeIDs,
 		Weight:    1.0,
 		CreatedAt: now,
-		Version:   1,
 	}
 	if err := writeHyperedge(engine, &assocEdge); err != nil {
 		return 0, err
@@ -577,13 +572,12 @@ func createBatchHyperedges(engine *storage.StorageEngine, l1NodeIDs []uint64) (u
 	// Temporal evolution edges: ID derived from the endpoint pair.
 	for i := 1; i < len(l1NodeIDs); i++ {
 		edgeID := hash.HashID(fmt.Sprintf("evolution:%x:%x", l1NodeIDs[i-1], l1NodeIDs[i]))
-		evolEdge := model.HyperedgeSlot{
+		evolEdge := model.SceneEdge{
 			IDHash:    edgeID,
 			Kind:      model.HyperTemporal,
-			NodePtrs:  []uint64{l1NodeIDs[i-1], l1NodeIDs[i]},
+			NodeIDs:   []uint64{l1NodeIDs[i-1], l1NodeIDs[i]},
 			Weight:    1.0,
 			CreatedAt: now,
-			Version:   1,
 		}
 		if err := writeHyperedge(engine, &evolEdge); err != nil {
 			return 0, err
@@ -605,8 +599,13 @@ func uint64sKey(ids []uint64) string {
 	return sb.String()
 }
 
-func writeHyperedge(engine *storage.StorageEngine, edge *model.HyperedgeSlot) error {
-	if err := record.WriteHyperedgeSlot(engine, edge.IDHash, edge); err != nil {
+func writeHyperedge(engine *storage.StorageEngine, edge *model.SceneEdge) error {
+	data, err := json.Marshal(edge)
+	if err != nil {
+		return fmt.Errorf("marshal hyperedge: %w", err)
+	}
+	_, err = engine.WriteRecord(storage.RecL1Hyperedge, edge.IDHash, data)
+	if err != nil {
 		return fmt.Errorf("write hyperedge slot: %w", err)
 	}
 	return nil

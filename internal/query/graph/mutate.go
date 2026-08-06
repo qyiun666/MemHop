@@ -10,8 +10,8 @@ import (
 	"fmt"
 
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // NodeIndex defines L3Index operations needed by mutation functions.

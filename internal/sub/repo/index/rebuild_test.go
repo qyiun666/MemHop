@@ -1,0 +1,62 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+package index
+
+import (
+	"encoding/json"
+	"path/filepath"
+	"testing"
+
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
+)
+
+func writeRawTopic(t *testing.T, engine *storage.StorageEngine, id uint64, sceneID uint64, depth uint8, kws []string) {
+	t.Helper()
+	topic := model.TopicSlot{ID: id, SceneID: sceneID, Depth: depth, UserKeywords: kws}
+	data, err := json.Marshal(topic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.WriteRecord(storage.RecL2Topic, id, data); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRebuildSearchIndexes(t *testing.T) {
+	engine, err := storage.Create(filepath.Join(t.TempDir(), "rebuild.meh"), 768)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close(&storage.IndexSnapshotData{})
+
+	// depth 1/2 应进 sparse；depth 3 不应进 sparse；三个都应进 L2Meta。
+	writeRawTopic(t, engine, 1, 100, 1, []string{"alpha", "memory"})
+	writeRawTopic(t, engine, 2, 100, 2, []string{"beta", "rust"})
+	writeRawTopic(t, engine, 3, 200, 3, []string{"gamma", "deep"})
+
+	sparse, l1Rev, l2Meta, err := RebuildSearchIndexes(engine)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// depth≤2 的文档可被 BM25 搜索到
+	if len(sparse.Search([]string{"memory"}, 10)) != 1 {
+		t.Error("depth-1 topic should be searchable")
+	}
+	if len(sparse.Search([]string{"rust"}, 10)) != 1 {
+		t.Error("depth-2 topic should be searchable")
+	}
+	if len(sparse.Search([]string{"deep"}, 10)) != 0 {
+		t.Error("depth-3 topic should NOT be in sparse index")
+	}
+	// L2Meta 包含全部三个话题
+	if l2Meta.Len() != 3 {
+		t.Errorf("l2Meta should have 3 entries, got %d", l2Meta.Len())
+	}
+	// L1 反向索引非空且可用
+	if l1Rev == nil {
+		t.Fatal("l1Reverse should not be nil")
+	}
+}

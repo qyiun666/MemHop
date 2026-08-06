@@ -13,9 +13,11 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/config"
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/l2"
 )
 
 // ============================================================================
@@ -53,12 +55,7 @@ func createTestEngine(t *testing.T) *storage.StorageEngine {
 
 func writeTestTopic(t *testing.T, engine *storage.StorageEngine, topic *model.TopicSlot) {
 	t.Helper()
-	data, err := json.Marshal(topic)
-	if err != nil {
-		t.Fatalf("marshal topic: %v", err)
-	}
-	_, err = engine.WriteRecord(storage.RecL2Topic, topic.ID, data)
-	if err != nil {
+	if err := record.WriteTopicSlot(engine, topic.ID, topic); err != nil {
 		t.Fatalf("write topic: %v", err)
 	}
 }
@@ -101,11 +98,26 @@ func writeTestProfile(t *testing.T, engine *storage.StorageEngine, profile *mode
 
 func readTestTopic(t *testing.T, engine *storage.StorageEngine, id uint64) *model.TopicSlot {
 	t.Helper()
-	topic, err := readTopic(engine, id)
+	topic, err := record.ReadTopicLenient(engine, id)
 	if err != nil {
 		t.Fatalf("read topic: %v", err)
 	}
 	return topic
+}
+
+// metaFromTopic mirrors the (moved-to-repo/l2) helper for test setup.
+func metaFromTopic(id uint64, t *model.TopicSlot) *index.L2Meta {
+	title := ""
+	if len(t.FusedKeywords) > 0 {
+		title = t.FusedKeywords[0]
+	}
+	return &index.L2Meta{
+		IDHash:      id,
+		Title:       title,
+		Depth:       t.Depth,
+		SceneID:     t.SceneID,
+		ChildrenIDs: t.ChildrenIDs,
+	}
 }
 
 func readTestSceneNode(t *testing.T, engine *storage.StorageEngine, id uint64) *model.SceneNode {
@@ -126,7 +138,6 @@ func TestL2Compress(t *testing.T) {
 	sparseIdx := index.NewSparseIndex()
 	l2Meta := index.NewL2MetaIndex()
 
-	nowMs := timeutil.NowMs()
 	sceneID := uint64(100)
 
 	// Create 3 depth-1 nodes
@@ -136,21 +147,20 @@ func TestL2Compress(t *testing.T) {
 			ID: id, SceneID: sceneID, Depth: 1,
 			UserKeywords:  []string{"keyword" + string(rune('A'+i))},
 			AgentKeywords: []string{"agent" + string(rune('A'+i))},
-			CreatedAt:     nowMs, UpdatedAt: nowMs, Version: 1,
 		}
 		writeTestTopic(t, engine, topic)
 		l2Meta.Update(metaFromTopic(id, topic))
 		sparseIdx.AddDocument(id, topic.UserKeywords, uint32(len(topic.UserKeywords)))
 	}
 
-	groups := []L2Group{{
+	groups := []l2.MergeGroup{{
 		SceneID:       sceneID,
 		NodeHashes:    ids,
 		MergedTitle:   "Merged Topic",
 		MergedSummary: "Summary of merged topics",
 	}}
 
-	result, err := ApplyL2Groups(groups, engine, sparseIdx, l2Meta, nil)
+	result, err := l2.ApplyL2Groups(groups, engine, sparseIdx, l2Meta, nil)
 	if err != nil {
 		t.Fatalf("ApplyL2Groups: %v", err)
 	}
@@ -187,14 +197,14 @@ func TestL1Decay(t *testing.T) {
 	oldTime := nowMs - 400*3_600_000
 	node1 := &model.SceneNode{
 		IDHash: 1, SceneID: 1000, TopicIDs: []uint64{1000},
-		Depth: 1, Importance: 0.5, CreatedAt: oldTime, UpdatedAt: oldTime,
+		Importance: 0.5, CreatedAt: oldTime, UpdatedAt: oldTime,
 	}
 	writeTestSceneNode(t, engine, node1)
 
 	// Recent node: stays
 	node2 := &model.SceneNode{
 		IDHash: 2, SceneID: 1000, TopicIDs: []uint64{1001},
-		Depth: 1, Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
+		Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
 	}
 	writeTestSceneNode(t, engine, node2)
 
@@ -248,7 +258,7 @@ func TestL1DecayPruneEdges(t *testing.T) {
 
 	node := &model.SceneNode{
 		IDHash: 100, SceneID: 1, TopicIDs: []uint64{1},
-		Depth: 1, Importance: startImp,
+		Importance: startImp,
 		CreatedAt: oldTime, UpdatedAt: oldTime,
 		EdgeIDs: []uint64{50, 51},
 	}
@@ -333,17 +343,17 @@ func TestRebuildL1RemovesStaleNodeFromEdges(t *testing.T) {
 	// Stale node: its L2 topic (999) no longer exists in the engine.
 	writeTestSceneNode(t, engine, &model.SceneNode{
 		IDHash: 100, SceneID: 1, TopicIDs: []uint64{999},
-		Depth: 1, Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
+		Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
 		EdgeIDs: []uint64{500, 501},
 	})
 
 	// Live node: topic 300 exists and has no deep meta.
 	writeTestTopic(t, engine, &model.TopicSlot{
-		ID: 300, SceneID: 1, Depth: 1, CreatedAt: nowMs, UpdatedAt: nowMs, Version: 1,
+		ID: 300, SceneID: 1, Depth: 1,
 	})
 	writeTestSceneNode(t, engine, &model.SceneNode{
 		IDHash: 200, SceneID: 1, TopicIDs: []uint64{300},
-		Depth: 1, Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
+		Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
 		EdgeIDs: []uint64{500, 501},
 	})
 
@@ -397,11 +407,11 @@ func TestL1DecayRemovesNodeFromSparseIndex(t *testing.T) {
 	oldTime := nowMs - 400*3_600_000
 	writeTestSceneNode(t, engine, &model.SceneNode{
 		IDHash: 1, SceneID: 1000, TopicIDs: []uint64{1000},
-		Depth: 1, Importance: 0.5, CreatedAt: oldTime, UpdatedAt: oldTime,
+		Importance: 0.5, CreatedAt: oldTime, UpdatedAt: oldTime,
 	})
 	writeTestSceneNode(t, engine, &model.SceneNode{
 		IDHash: 2, SceneID: 1000, TopicIDs: []uint64{1001},
-		Depth: 1, Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
+		Importance: 0.9, CreatedAt: nowMs, UpdatedAt: nowMs,
 	})
 	sparseIdx.AddDocument(1, []string{"uniqueterm"}, 1)
 	sparseIdx.AddDocument(2, []string{"uniqueterm"}, 1)
@@ -492,9 +502,6 @@ func TestL0FormUpdate(t *testing.T) {
 		Role:        "assistant",
 		Personality: "old",
 		Lexicon:     map[string]string{"hello": "greeting"},
-		CreatedAt:   timeutil.NowMs(),
-		UpdatedAt:   timeutil.NowMs(),
-		Version:     1,
 	}
 	writeTestProfile(t, engine, profile)
 
@@ -545,7 +552,6 @@ func TestPipelineStageFailure(t *testing.T) {
 		Lexicon:         make(map[string]string),
 		Preferences:     make(map[string]string),
 		EmotionPatterns: make(map[string]string),
-		CreatedAt:       timeutil.NowMs(), UpdatedAt: timeutil.NowMs(), Version: 1,
 	}
 	writeTestProfile(t, engine, profile)
 
@@ -581,7 +587,6 @@ func TestDreamPipelineEndToEnd(t *testing.T) {
 	engine := createTestEngine(t)
 	sparseIdx := index.NewSparseIndex()
 	l2Meta := index.NewL2MetaIndex()
-	nowMs := timeutil.NowMs()
 
 	// Create profile for habit stage
 	profileID := hash.HashID("profile")
@@ -591,7 +596,6 @@ func TestDreamPipelineEndToEnd(t *testing.T) {
 		StyleTraits:     []string{},
 		EmotionPatterns: make(map[string]string),
 		Preferences:     make(map[string]string),
-		CreatedAt:       nowMs, UpdatedAt: nowMs, Version: 1,
 	}
 	writeTestProfile(t, engine, profile)
 
@@ -602,7 +606,7 @@ func TestDreamPipelineEndToEnd(t *testing.T) {
 	for _, id := range []uint64{id1, id2} {
 		topic := &model.TopicSlot{
 			ID: id, SceneID: sceneID, Depth: 1,
-			UserKeywords: []string{"test"}, CreatedAt: nowMs, UpdatedAt: nowMs, Version: 1,
+			UserKeywords: []string{"test"},
 		}
 		writeTestTopic(t, engine, topic)
 		l2Meta.Update(metaFromTopic(id, topic))
@@ -659,7 +663,6 @@ func TestDreamReport(t *testing.T) {
 		StyleTraits:     []string{},
 		EmotionPatterns: make(map[string]string),
 		Preferences:     make(map[string]string),
-		CreatedAt:       timeutil.NowMs(), UpdatedAt: timeutil.NowMs(), Version: 1,
 	}
 	writeTestProfile(t, engine, profile)
 

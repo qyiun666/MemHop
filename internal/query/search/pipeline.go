@@ -7,7 +7,7 @@ package search
 
 import (
 	"github.com/qyiun666/MemHop/internal/common/hash"
-	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
 )
 
 // BuildCandidateSet returns L2 IDs for scoped search.

@@ -14,9 +14,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // GetL5 loads an L5 action chain by hex ID.
@@ -44,7 +44,6 @@ func UpdateL5(
 	}
 	applyL5Updates(chain, fields)
 	chain.UpdatedAt = timeutil.NowMs()
-	chain.Version++
 	return writeActionChain(engine, idHash, chain)
 }
 
@@ -244,7 +243,6 @@ func CreateL5Chain(engine *storage.StorageEngine, input L5ChainInput) (string, e
 		Confidence: 1.0,
 		CreatedAt:  nowMs,
 		UpdatedAt:  nowMs,
-		Version:    1,
 	}
 	if err := writeActionChain(engine, chainID, &chain); err != nil {
 		return "", err
@@ -312,7 +310,6 @@ func IncrL5Trigger(engine *storage.StorageEngine, chainID uint64) error {
 	chain.TriggerCount++
 	chain.LastTriggered = timeutil.NowMs()
 	chain.UpdatedAt = timeutil.NowMs()
-	chain.Version++
 	return writeActionChain(engine, chainID, chain)
 }
 
@@ -329,7 +326,6 @@ func UpdateL5Confidence(engine *storage.StorageEngine, chainID uint64, success b
 	chain.Confidence = 0.9*chain.Confidence + 0.1*score
 	chain.SuccessRate = 0.9*chain.SuccessRate + 0.1*score
 	chain.UpdatedAt = timeutil.NowMs()
-	chain.Version++
 	return writeActionChain(engine, chainID, chain)
 }
 

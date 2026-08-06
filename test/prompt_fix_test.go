@@ -195,11 +195,6 @@ func evaluateQuestions(t *testing.T, mh *memhop.MemHop, questions []questionItem
 			if found {
 				break
 			}
-			// 检查 fused 摘要
-			if ctx.FusedSummary != nil && matchAnswer(strings.ToLower(*ctx.FusedSummary), q.answer) {
-				found = true
-				break
-			}
 			for _, kw := range ctx.FusedKeywords {
 				if matchAnswer(strings.ToLower(kw), q.answer) {
 					found = true

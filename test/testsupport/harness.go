@@ -93,7 +93,6 @@ func SearchUpdatePair(t *testing.T, mh *memhop.MemHop, userText, agentText strin
 //   - Contexts 数量
 //   - 首个 Context 的 RetrievalScore
 //   - UserKeywords / AgentKeywords 数量
-//   - FusedSummary 是否存在
 //   - L4Refs 数量
 //   - AssociatedContexts 数量
 func LogSearchQuality(t *testing.T, result *memhop.SearchResult, query, expectedDesc string) {
@@ -108,11 +107,6 @@ func LogSearchQuality(t *testing.T, result *memhop.SearchResult, query, expected
 		t.Logf("  RetrievalScore:   %.4f", c.RetrievalScore)
 		t.Logf("  UserKeywords:     %d", len(c.UserKeywords))
 		t.Logf("  AgentKeywords:    %d", len(c.AgentKeywords))
-		if c.FusedSummary != nil {
-			t.Logf("  FusedSummary:     %q", *c.FusedSummary)
-		} else {
-			t.Logf("  FusedSummary:     (无)")
-		}
 		t.Logf("  L4Refs:           %d", len(c.L4Refs))
 	}
 	t.Logf("  AssociatedContexts: %d", len(result.AssociatedContexts))

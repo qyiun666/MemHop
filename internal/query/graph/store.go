@@ -13,8 +13,8 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // maxNodeContentLen is the maximum content length for a knowledge node.
@@ -34,7 +34,6 @@ func CreateGraph(
 		Source:    source,
 		CreatedAt: now,
 		UpdatedAt: now,
-		Version:   1,
 	}
 	if err := writeSlot(engine, storage.RecL3GraphSlot, idHash, slot); err != nil {
 		return nil, err

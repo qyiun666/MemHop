@@ -69,9 +69,12 @@ type ListResult struct {
 type TopicOpKind uint8
 
 const (
-	TOpSetProfile TopicOpKind = 1 // L0 — overwrite profile with delta
-	TOpMerge      TopicOpKind = 2 // L2 — merge secondary topics into primary
-	TOpSceneTree  TopicOpKind = 3 // L2 — full scene tree query
+	TOpSetProfile  TopicOpKind = 1 // L0 — overwrite profile with delta
+	TOpMerge       TopicOpKind = 2 // L2 — merge secondary topics into primary
+	TOpSceneTree   TopicOpKind = 3 // L2 — full scene tree query
+	TOpListScenes  TopicOpKind = 4 // L2 — list all scenes from L2MetaIndex aggregation
+	TOpDeleteScene TopicOpKind = 5 // L2 — delete all topics of a scene
+	TOpMergeScenes TopicOpKind = 6 // L2 — rewrite secondary scene topics into primary scene
 )
 
 // TopicOp is the input envelope for MemHop.Topic. Fields required depend on Kind.
@@ -85,14 +88,20 @@ type TopicOp struct {
 	PrimaryID string
 	MergeIDs  []string
 
-	// TOpSceneTree
+	// TOpSceneTree / TOpDeleteScene
 	SceneID string
+
+	// TOpMergeScenes
+	PrimarySceneID   string
+	SecondarySceneID string
 }
 
 // TopicResult is the union response for MemHop.Topic.
 type TopicResult struct {
-	Merge     *MergeResult     `json:"merge,omitempty"`
-	SceneTree *SceneTreeResult `json:"scene_tree,omitempty"`
+	Merge       *MergeResult        `json:"merge,omitempty"`
+	SceneTree   *SceneTreeResult    `json:"scene_tree,omitempty"`
+	Scenes      []SceneSummary      `json:"scenes,omitempty"`
+	MergeScenes *MergeScenesResult  `json:"merge_scenes,omitempty"`
 }
 
 // ============================================================================

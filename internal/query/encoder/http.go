@@ -15,7 +15,6 @@ import (
 	"github.com/ollama/ollama/api"
 
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/common/numeric"
 )
 
 const (
@@ -92,7 +91,7 @@ func (e *HttpEncoder) checkHealth() error {
 	return nil
 }
 
-// Encode sends an embed request and returns an f16-converted dense vector.
+// Encode sends an embed request and returns an f32 dense vector.
 func (e *HttpEncoder) Encode(text string) (*EncoderOutput, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), e.encodeTimeout)
 	defer cancel()
@@ -112,7 +111,7 @@ func (e *HttpEncoder) Encode(text string) (*EncoderOutput, error) {
 			fmt.Sprintf("dimension mismatch: expected %d, got %d", e.dim, len(resp.Embeddings[0])))
 	}
 
-	return &EncoderOutput{Dense: f32SliceToF16(resp.Embeddings[0])}, nil
+	return &EncoderOutput{Dense: resp.Embeddings[0]}, nil
 }
 
 // Dim returns the configured dimension.
@@ -144,13 +143,4 @@ func (e *HttpEncoder) IsAvailable() bool {
 func (e *HttpEncoder) Close() error {
 	e.httpClient.CloseIdleConnections()
 	return nil
-}
-
-// f32SliceToF16 converts a []float32 to []uint16 using f16 encoding.
-func f32SliceToF16(in []float32) []uint16 {
-	out := make([]uint16, len(in))
-	for i, v := range in {
-		out[i] = numeric.F32ToF16(v)
-	}
-	return out
 }

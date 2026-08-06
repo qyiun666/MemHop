@@ -9,8 +9,8 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // mockChatProvider drives DistillL0 without hitting a real LLM.
@@ -36,7 +36,7 @@ func distillTestFixture(t *testing.T, n int) (*storage.StorageEngine, []uint64) 
 		ids[i] = id
 		node := &model.SceneNode{
 			IDHash: id, SceneID: uint64(1000 + i),
-			TopicIDs: []uint64{}, Depth: 1,
+			TopicIDs: []uint64{},
 			Importance: 0.8, Valence: 0, Arousal: 0,
 			CreatedAt: 100, UpdatedAt: 100,
 		}
@@ -97,7 +97,6 @@ func TestDistillL0_PreservesOtherProfileFields(t *testing.T) {
 	profileID := hash.HashID("profile")
 	seed := &model.ProfileSlot{
 		IDHash: profileID, Name: "Alice", Role: "assistant",
-		Worldview: "curious about the world",
 		Preferences: map[string]string{
 			"top_keywords":            "cats, tea",
 			"personality.temperature": "0.7",
@@ -105,7 +104,6 @@ func TestDistillL0_PreservesOtherProfileFields(t *testing.T) {
 		Lexicon:         map[string]string{"docker": "container tool"},
 		StyleTraits:     []string{"concise"},
 		EmotionPatterns: map[string]string{"legacy_marker": "keep_me"},
-		CreatedAt:       1, UpdatedAt: 1, Version: 3,
 	}
 	writeTestProfile(t, engine, seed)
 
@@ -114,9 +112,9 @@ func TestDistillL0_PreservesOtherProfileFields(t *testing.T) {
 		t.Fatalf("DistillL0 err: %v", err)
 	}
 	p := readTestProfile(t, engine, profileID)
-	if p.Name != "Alice" || p.Role != "assistant" || p.Worldview != "curious about the world" {
-		t.Errorf("core identity fields were overwritten: name=%q role=%q worldview=%q",
-			p.Name, p.Role, p.Worldview)
+	if p.Name != "Alice" || p.Role != "assistant" {
+		t.Errorf("core identity fields were overwritten: name=%q role=%q",
+			p.Name, p.Role)
 	}
 	if p.Preferences["top_keywords"] != "cats, tea" {
 		t.Errorf("top_keywords lost: %q", p.Preferences["top_keywords"])

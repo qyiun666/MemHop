@@ -8,12 +8,12 @@ package graph
 import (
 	"strings"
 
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // AdjacencyCache defines the interface for graph adjacency caching.
-// This avoids a circular dependency: internal/core/index imports graph,
+// This avoids a circular dependency: internal/repo/core/index imports graph,
 // so graph cannot import index.AdjacencyCache directly.
 type AdjacencyCache interface {
 	Get(graphID uint64) (map[uint64][]model.AdjacencyEntry, bool)

@@ -6,7 +6,7 @@ package search
 import (
 	"testing"
 
-	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
 )
 
 // ---------------------------------------------------------------------------

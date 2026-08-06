@@ -7,7 +7,7 @@ package health
 
 import (
 	"github.com/qyiun666/MemHop/internal/common/hash"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // CountLayers scans the engine and counts records by layer type.

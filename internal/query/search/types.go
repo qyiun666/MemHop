@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 
 	"github.com/qyiun666/MemHop/internal/common/config"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 	"github.com/qyiun666/MemHop/internal/query/crud"
 	"github.com/qyiun666/MemHop/internal/query/encoder"
 )
@@ -106,7 +106,6 @@ type ContextResult struct {
 	AgentKeywords  []string `json:"agent_keywords"`
 	AgentTimestamp int64    `json:"agent_timestamp"`
 	FusedKeywords  []string `json:"fused_keywords,omitempty"`
-	FusedSummary   *string  `json:"fused_summary,omitempty"`
 	ChildrenIDs    []string `json:"children_ids,omitempty"`
 	L4Refs         []string `json:"l4_refs,omitempty"`
 	L3Refs         []string `json:"l3_refs,omitempty"`
@@ -124,8 +123,6 @@ type ProfileResult struct {
 	Lexicon         map[string]string `json:"lexicon"`
 	StyleTraits     []string          `json:"style_traits"`
 	EmotionPatterns map[string]string `json:"emotion_patterns"`
-	CreatedAt       int64             `json:"created_at"`
-	UpdatedAt       int64             `json:"updated_at"`
 }
 
 // SearchDeps holds all dependencies injected into the search pipeline.

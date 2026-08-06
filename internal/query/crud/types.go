@@ -8,7 +8,8 @@ package crud
 import (
 	"encoding/json"
 
-	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/l2"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
 )
 
 // TopicListQuery is the L2 list query.
@@ -36,7 +37,6 @@ type TopicSummary struct {
 	UserKeywords  []string `json:"user_keywords"`
 	AgentKeywords []string `json:"agent_keywords"`
 	FusedKeywords []string `json:"fused_keywords"`
-	FusedSummary  *string  `json:"fused_summary,omitempty"`
 	TurnCount     int      `json:"turn_count"`
 	IsActive      bool     `json:"is_active"`
 	CreatedAt     int64    `json:"created_at"`
@@ -46,25 +46,7 @@ type TopicSummary struct {
 }
 
 // TopicDetail is the full L2 TopicSlot view.
-type TopicDetail struct {
-	ID             string   `json:"id"`
-	ParentID       *string  `json:"parent_id,omitempty"`
-	Depth          uint8    `json:"depth"`
-	SceneID        string   `json:"scene_id"`
-	UserKeywords   []string `json:"user_keywords"`
-	UserTimestamp  int64    `json:"user_timestamp"`
-	AgentKeywords  []string `json:"agent_keywords"`
-	AgentTimestamp int64    `json:"agent_timestamp"`
-	FusedKeywords  []string `json:"fused_keywords"`
-	FusedSummary   *string  `json:"fused_summary,omitempty"`
-	ChildrenIDs    []string `json:"children_ids"`
-	UserL4Refs     []string `json:"user_l4_refs"`
-	UserL3Refs     []string `json:"user_l3_refs"`
-	AgentL4Refs    []string `json:"agent_l4_refs"`
-	AgentL3Refs    []string `json:"agent_l3_refs"`
-	CreatedAt      int64    `json:"created_at"`
-	UpdatedAt      int64    `json:"updated_at"`
-}
+type TopicDetail = l2.TopicDetail
 
 // KnowledgeListQuery is the L3 list query.
 type KnowledgeListQuery struct {
@@ -219,21 +201,16 @@ type TraversalHop struct {
 }
 
 // MergeResult is the result of merging L2 contexts.
-type MergeResult struct {
-	PrimaryID        string   `json:"primary_id"`
-	MergedCount      uint32   `json:"merged_count"`
-	NewTurnCount     uint32   `json:"new_turn_count"`
-	AbsorbedTopicIDs []string `json:"absorbed_topic_ids"`
-}
+type MergeResult = l2.MergeResult
 
 // SceneTreeResult is the full scene tree query result.
-type SceneTreeResult struct {
-	SceneID           string        `json:"scene_id"`
-	TotalTurns        uint32        `json:"total_turns"`
-	DepthDistribution [4]uint32     `json:"depth_distribution"`
-	Nodes             []TopicDetail `json:"nodes"`
-	Edges             [][2]string   `json:"edges"`
-}
+type SceneTreeResult = l2.SceneTreeResult
+
+// SceneSummary is a single scene in ListScenes results.
+type SceneSummary = l2.SceneSummary
+
+// MergeScenesResult is the result of merging two scenes.
+type MergeScenesResult = l2.MergeScenesResult
 
 // TimeRange represents an inclusive time range as [start_ms, end_ms].
 type TimeRange [2]int64
@@ -538,7 +515,6 @@ func (s *UpdateStatus) UnmarshalJSON(data []byte) error {
 type UpdateL2Fields struct {
 	UserKeywords  []string `json:"user_keywords,omitempty"`
 	AgentKeywords []string `json:"agent_keywords,omitempty"`
-	FusedSummary  *string  `json:"fused_summary,omitempty"`
 	L3Refs        []string `json:"l3_refs,omitempty"`
 }
 

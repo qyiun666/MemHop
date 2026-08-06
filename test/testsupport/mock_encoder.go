@@ -31,7 +31,7 @@ func NewMockEncoder(dim int) *MockEncoder {
 	return &MockEncoder{dim: dim}
 }
 
-// Encode maps text to a deterministic dense vector (f16 bits).
+// Encode maps text to a deterministic dense vector (f32).
 func (m *MockEncoder) Encode(text string) (*memhop.EncoderOutput, error) {
 	vec := make([]float32, m.dim)
 	for _, tok := range mockTokens(text) {
@@ -41,13 +41,13 @@ func (m *MockEncoder) Encode(text string) (*memhop.EncoderOutput, error) {
 	for _, v := range vec {
 		norm += float64(v) * float64(v)
 	}
-	out := make([]uint16, m.dim)
+	out := make([]float32, m.dim)
 	if norm == 0 {
 		return &memhop.EncoderOutput{Dense: out}, nil
 	}
 	inv := float32(1 / math.Sqrt(norm))
 	for i, v := range vec {
-		out[i] = f32ToF16Bits(v * inv)
+		out[i] = v * inv
 	}
 	return &memhop.EncoderOutput{Dense: out}, nil
 }
@@ -86,22 +86,6 @@ func mockTokens(text string) []string {
 	}
 	flush()
 	return tokens
-}
-
-// f32ToF16Bits converts a float32 to IEEE 754 half-precision bits.
-func f32ToF16Bits(f float32) uint16 {
-	bits := math.Float32bits(f)
-	sign := uint16((bits >> 16) & 0x8000)
-	exp := int32((bits>>23)&0xff) - 127 + 15
-	mant := bits & 0x7fffff
-	switch {
-	case exp <= 0: // underflow to signed zero
-		return sign
-	case exp >= 31: // overflow to infinity
-		return sign | 0x7c00
-	default:
-		return sign | uint16(exp)<<10 | uint16(mant>>13)
-	}
 }
 
 // OpenMemHopMock opens a fully offline MemHop database backed by MockEncoder:

@@ -11,9 +11,10 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 func sparseContainsID(sparse *index.SparseIndex, queryText string, id uint64) bool {
@@ -38,7 +39,6 @@ func TestDeleteL3CleansL3Index(t *testing.T) {
 		Source:    model.HypergraphSource{Kind: model.SourceManual},
 		CreatedAt: 1000,
 		UpdatedAt: 1000,
-		Version:   1,
 	}
 	writeGraphSlot(engine, graphID, &slot)
 
@@ -53,7 +53,6 @@ func TestDeleteL3CleansL3Index(t *testing.T) {
 			Importance: 0.5,
 			CreatedAt:  1000,
 			UpdatedAt:  1000,
-			Version:    1,
 		}
 		data, err := node.MarshalJSON()
 		if err != nil {
@@ -109,7 +108,7 @@ func TestAppendDialogueL4IndexesKeywords(t *testing.T) {
 	if !sparseContainsID(sparse, "original", topicID) {
 		t.Error("existing keyword lost from BM25 after AppendDialogueL4")
 	}
-	topic, err := loadTopic(engine, topicID)
+	topic, err := record.ReadTopicSlot(engine, topicID)
 	if err != nil {
 		t.Fatalf("load topic: %v", err)
 	}
@@ -192,7 +191,6 @@ func TestMergeL2SelfMergeIdempotent(t *testing.T) {
 	l2Meta := index.NewL2MetaIndex()
 
 	idA := uint64(2201)
-	summary := "x"
 	topic := model.TopicSlot{
 		ID:            idA,
 		Depth:         1,
@@ -204,13 +202,9 @@ func TestMergeL2SelfMergeIdempotent(t *testing.T) {
 		AgentL4Refs:   []uint64{},
 		AgentL3Refs:   []uint64{},
 		FusedKeywords: []string{},
-		FusedSummary:  &summary,
 		ChildrenIDs:   []uint64{},
-		CreatedAt:     1000,
-		UpdatedAt:     1000,
-		Version:       1,
 	}
-	if err := WriteTopic(engine, idA, &topic); err != nil {
+	if err := record.WriteTopicSlot(engine, idA, &topic); err != nil {
 		t.Fatalf("write topic: %v", err)
 	}
 
@@ -223,12 +217,9 @@ func TestMergeL2SelfMergeIdempotent(t *testing.T) {
 		if res.MergedCount != 0 {
 			t.Errorf("round %d: expected 0 merged for self merge, got %d", round, res.MergedCount)
 		}
-		got, err := loadTopic(engine, idA)
+		_, err = record.ReadTopicSlot(engine, idA)
 		if err != nil {
 			t.Fatalf("round %d: primary record lost after self merge: %v", round, err)
-		}
-		if got.FusedSummary == nil || *got.FusedSummary != "x" {
-			t.Errorf("round %d: self merge corrupted summary: %v", round, got.FusedSummary)
 		}
 	}
 }

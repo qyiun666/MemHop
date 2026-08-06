@@ -16,7 +16,6 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common/config"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/common/strutil"
 )
 
 const (
@@ -283,12 +282,6 @@ func buildDataSection(input *ConsolidationInput) string {
 			title := joinStrs(node.FusedKeywords, node.UserKeywords)
 			fmt.Fprintf(&b, "- id=%016x  depth=%d  user_kw=%v  agent_kw=%v  title=%q\n",
 				node.IDHash, node.Depth, node.UserKeywords, node.AgentKeywords, title)
-			if node.FusedSummary != nil {
-				// Rune-safe truncation preserves CJK boundaries so the prompt
-				// never contains a partial multi-byte sequence.
-				summary := strutil.SafeCharSlice(*node.FusedSummary, 400)
-				fmt.Fprintf(&b, "  fused_summary: %s\n", summary)
-			}
 		}
 		b.WriteByte('\n')
 	}

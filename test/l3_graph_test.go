@@ -40,7 +40,6 @@ func TestL3Graph(t *testing.T) {
 		Content:    "Go是Google开发的静态类型编译语言，以并发和简洁著称",
 		Keywords:   []string{"Go", "编程语言", "并发", "goroutine"},
 		Importance: 0.8,
-		Summary:    strPtr("Go语言概述"),
 	}
 	node2 := &memhop.HypergraphNode{
 		IDHash:     hash.HashID("并发编程"),
@@ -50,7 +49,6 @@ func TestL3Graph(t *testing.T) {
 		Content:    "并发编程是一种同时执行多个计算任务的编程范式",
 		Keywords:   []string{"并发", "并行", "goroutine", "channel"},
 		Importance: 0.75,
-		Summary:    strPtr("并发编程概述"),
 	}
 	node3 := &memhop.HypergraphNode{
 		IDHash:     hash.HashID("微服务架构"),
@@ -60,7 +58,6 @@ func TestL3Graph(t *testing.T) {
 		Content:    "微服务架构将应用划分为多个独立部署的小型服务",
 		Keywords:   []string{"微服务", "分布式", "架构"},
 		Importance: 0.7,
-		Summary:    strPtr("微服务架构概述"),
 	}
 
 	for _, n := range []*memhop.HypergraphNode{node1, node2, node3} {

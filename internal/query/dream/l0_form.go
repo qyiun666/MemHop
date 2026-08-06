@@ -10,10 +10,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // GenerateProfile regenerates the L0 Profile from sparse index keyword distribution.
@@ -72,8 +72,6 @@ func updateExistingProfile(
 	}
 	profile.Preferences["top_keywords"] = joinTopTerms(topTerms, 20)
 	profile.Preferences["total_engrams"] = fmt.Sprintf("%d", totalEngrams)
-	profile.UpdatedAt = nowMs
-	profile.Version++
 	return record.WriteProfileSlot(engine, profileID, profile)
 }
 
@@ -93,14 +91,10 @@ func createNewProfile(
 		Name:            "Agent",
 		Role:            "assistant",
 		Personality:     joinTopTerms(topTerms, 5),
-		Worldview:       "",
 		Preferences:     prefs,
 		Lexicon:         make(map[string]string),
 		StyleTraits:     []string{},
 		EmotionPatterns: make(map[string]string),
-		CreatedAt:       nowMs,
-		UpdatedAt:       nowMs,
-		Version:         1,
 	}
 	return record.WriteProfileSlot(engine, profileID, &slot)
 }

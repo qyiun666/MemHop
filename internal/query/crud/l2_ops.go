@@ -6,18 +6,16 @@
 package crud
 
 import (
-	"encoding/json"
-	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/l2"
 )
 
 // GetL2 loads a single L2 context by hex ID.
@@ -26,14 +24,13 @@ func GetL2(engine *storage.StorageEngine, id string) (*model.TopicSlot, error) {
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "parse l2 id", err)
 	}
-	return loadTopic(engine, idHash)
+	return record.ReadTopicSlot(engine, idHash)
 }
 
 // ListL2 lists L2 contexts with pagination and keyword filter.
 func ListL2(engine *storage.StorageEngine, q TopicListQuery) (*TopicListResult, error) {
-	all := collectAllTopics(engine)
+	all := record.CollectAllTopics(engine)
 	filterByKeyword(&all, q.Keyword)
-	sortTopicsByUpdated(all)
 	skip, take := paginationParams(q.Page, q.PageSize)
 	total := len(all)
 	items := make([]TopicSummary, 0, take)
@@ -61,7 +58,7 @@ func UpdateL2(
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "parse l2 id", err)
 	}
-	ctx, err := loadTopic(engine, idHash)
+	ctx, err := record.ReadTopicSlot(engine, idHash)
 	if err != nil {
 		return nil, err
 	}
@@ -69,9 +66,7 @@ func UpdateL2(
 	if indexChanged {
 		ReindexTopic(sparse, ctx)
 	}
-	ctx.UpdatedAt = timestamp
-	ctx.Version++
-	if err := WriteTopic(engine, idHash, ctx); err != nil {
+	if err := record.WriteTopicSlot(engine, idHash, ctx); err != nil {
 		return nil, err
 	}
 	detail := ToTopicDetail(ctx)
@@ -86,33 +81,7 @@ func DeleteL2(
 	l2Meta *index.L2MetaIndex,
 	id string,
 ) error {
-	idHash, err := hash.ParseID(id)
-	if err != nil {
-		return mherrors.NewError(mherrors.ErrInvalidQuery, "parse l2 id", err)
-	}
-	ctx, err := loadTopic(engine, idHash)
-	if err != nil {
-		return nil // not found = already deleted
-	}
-	// Disk first, then in-memory indices: a failed tombstone must not leave
-	// the indices claiming the record is gone.
-	if err := deleteL1Nodes(engine, l1Reverse, idHash); err != nil {
-		return fmt.Errorf("delete l2 %s: cascade l1 nodes: %w", id, err)
-	}
-	if err := deleteL4Refs(engine, ctx); err != nil {
-		return fmt.Errorf("delete l2 %s: cascade l4 refs: %w", id, err)
-	}
-	if _, err := engine.DeleteRecord(idHash); err != nil {
-		return fmt.Errorf("delete l2 %s: %w", id, err)
-	}
-	sparse.RemoveDocument(idHash)
-	if l2Meta != nil {
-		l2Meta.Remove(idHash)
-	}
-	if l1Reverse != nil {
-		l1Reverse.RemoveContext(idHash)
-	}
-	return nil
+	return l2.DeleteL2(engine, l1Reverse, sparse, l2Meta, id)
 }
 
 // MergeL2 merges multiple L2 contexts into a primary context.
@@ -124,58 +93,7 @@ func MergeL2(
 	primaryID string,
 	mergeIDs []string,
 ) (*MergeResult, error) {
-	primaryHash, err := hash.ParseID(primaryID)
-	if err != nil {
-		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "parse primary id", err)
-	}
-	if !engine.Contains(primaryHash) {
-		return nil, mherrors.NewError(mherrors.ErrNotFound, "primary not found")
-	}
-	mergeHashes, err := parseMergeIDs(mergeIDs)
-	if err != nil {
-		return nil, err
-	}
-	// Exclude self-merge: absorbing primary into itself would duplicate its
-	// own summary ("x | x") and delete the primary record.
-	mergeHashes, mergeIDs = excludeSelfMerge(primaryHash, mergeHashes, mergeIDs)
-	primaryCtx, err := loadTopic(engine, primaryHash)
-	if err != nil {
-		return nil, err
-	}
-	absorbErr := absorbSecondaries(engine, l1Reverse, sparse, l2Meta, primaryCtx, mergeHashes)
-	if absorbErr != nil {
-		return nil, fmt.Errorf("merge l2: absorb secondaries: %w", absorbErr)
-	}
-	primaryCtx.UpdatedAt = timeutil.NowMs()
-	primaryCtx.Version++
-	if err := WriteTopic(engine, primaryHash, primaryCtx); err != nil {
-		return nil, err
-	}
-	ReindexTopic(sparse, primaryCtx)
-	if l2Meta != nil {
-		l2Meta.Update(L2MetaFromTopic(primaryCtx))
-	}
-	turnCount := uint32(len(primaryCtx.UserL4Refs) + len(primaryCtx.AgentL4Refs))
-	return &MergeResult{
-		PrimaryID:        hash.FormatHash(primaryHash),
-		MergedCount:      uint32(len(mergeHashes)),
-		NewTurnCount:     turnCount,
-		AbsorbedTopicIDs: mergeIDs,
-	}, nil
-}
-
-// excludeSelfMerge drops the primary ID from the merge list.
-func excludeSelfMerge(primaryHash uint64, mergeHashes []uint64, mergeIDs []string) ([]uint64, []string) {
-	hashes := make([]uint64, 0, len(mergeHashes))
-	ids := make([]string, 0, len(mergeIDs))
-	for i, h := range mergeHashes {
-		if h == primaryHash {
-			continue
-		}
-		hashes = append(hashes, h)
-		ids = append(ids, mergeIDs[i])
-	}
-	return hashes, ids
+	return l2.MergeL2(engine, l1Reverse, sparse, l2Meta, primaryID, mergeIDs)
 }
 
 // GetSceneTree lists the full tree of nodes within a scene.
@@ -184,35 +102,40 @@ func GetSceneTree(
 	l2Meta *index.L2MetaIndex,
 	sceneID uint64,
 ) (*SceneTreeResult, error) {
-	nodeIDs := l2Meta.GetByScene(sceneID)
-	if len(nodeIDs) == 0 {
-		return emptySceneTree(sceneID), nil
-	}
-	nodes := loadTopicsByIDs(engine, nodeIDs)
-	sortTopicsByCreated(nodes)
-	return buildSceneTree(sceneID, nodes), nil
+	return l2.GetSceneTree(engine, l2Meta, sceneID)
+}
+
+// ListScenes aggregates all scenes from the L2MetaIndex byScene view.
+func ListScenes(l2Meta *index.L2MetaIndex) []SceneSummary {
+	return l2.ListScenes(l2Meta)
+}
+
+// DeleteScene deletes every L2 topic belonging to the scene.
+func DeleteScene(
+	engine *storage.StorageEngine,
+	l1Reverse *index.L1ReverseIndex,
+	sparse *index.SparseIndex,
+	l2Meta *index.L2MetaIndex,
+	sceneID string,
+) error {
+	return l2.DeleteScene(engine, l1Reverse, sparse, l2Meta, sceneID)
+}
+
+// MergeScenes rewrites all secondary-scene topics to the primary scene.
+func MergeScenes(
+	engine *storage.StorageEngine,
+	l2Meta *index.L2MetaIndex,
+	primaryID string,
+	secondaryID string,
+) (*MergeScenesResult, error) {
+	return l2.MergeScenes(engine, l2Meta, primaryID, secondaryID)
 }
 
 // --- internal helpers ---
 
-func loadTopic(engine *storage.StorageEngine, idHash uint64) (*model.TopicSlot, error) {
-	return record.ReadTopicSlot(engine, idHash)
-}
-
-func WriteTopic(engine *storage.StorageEngine, idHash uint64, ctx *model.TopicSlot) error {
-	return record.WriteTopicSlot(engine, idHash, ctx)
-}
-
 // L2MetaFromTopic converts a TopicSlot to an L2Meta entry (local copy to avoid cycle).
 func L2MetaFromTopic(t *model.TopicSlot) *index.L2Meta {
 	l3Refs := append(append([]uint64{}, t.UserL3Refs...), t.AgentL3Refs...)
-	ts := t.UpdatedAt
-	if ts < t.CreatedAt {
-		ts = t.CreatedAt
-	}
-	if ts < 0 {
-		ts = 0
-	}
 	return &index.L2Meta{
 		IDHash:       t.ID,
 		Title:        strings.Join(t.UserKeywords, ", "),
@@ -222,24 +145,7 @@ func L2MetaFromTopic(t *model.TopicSlot) *index.L2Meta {
 		VectorOffset: t.CentroidPageRef,
 		ArchiveCount: len(t.UserL4Refs) + len(t.AgentL4Refs),
 		L3Refs:       l3Refs,
-		Timestamp:    uint64(ts),
 	}
-}
-
-func collectAllTopics(engine *storage.StorageEngine) []model.TopicSlot {
-	var all []model.TopicSlot
-	engine.IterIndex(func(idHash, _ uint64) bool {
-		rt, data, err := engine.ReadRecord(idHash)
-		if err != nil || rt != storage.RecL2Topic {
-			return true
-		}
-		var ctx model.TopicSlot
-		if json.Unmarshal(data, &ctx) == nil {
-			all = append(all, ctx)
-		}
-		return true
-	})
-	return all
 }
 
 func filterByKeyword(all *[]model.TopicSlot, keyword *string) {
@@ -257,18 +163,6 @@ func filterByKeyword(all *[]model.TopicSlot, keyword *string) {
 	*all = filtered
 }
 
-func sortTopicsByUpdated(all []model.TopicSlot) {
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].UpdatedAt > all[j].UpdatedAt
-	})
-}
-
-func sortTopicsByCreated(all []model.TopicSlot) {
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].CreatedAt < all[j].CreatedAt
-	})
-}
-
 func toTopicSummary(ctx *model.TopicSlot) TopicSummary {
 	turnCount := len(ctx.UserL4Refs) + len(ctx.AgentL4Refs)
 	l3Count := len(ctx.UserL3Refs) + len(ctx.AgentL3Refs)
@@ -279,36 +173,15 @@ func toTopicSummary(ctx *model.TopicSlot) TopicSummary {
 		UserKeywords:  ctx.UserKeywords,
 		AgentKeywords: ctx.AgentKeywords,
 		FusedKeywords: ctx.FusedKeywords,
-		FusedSummary:  ctx.FusedSummary,
 		TurnCount:     turnCount,
 		IsActive:      false,
-		CreatedAt:     ctx.CreatedAt,
 		L4Count:       turnCount,
 		L3Count:       l3Count,
-		UpdatedAt:     ctx.UpdatedAt,
 	}
 }
 
 func ToTopicDetail(ctx *model.TopicSlot) TopicDetail {
-	return TopicDetail{
-		ID:             hash.FormatHash(ctx.ID),
-		ParentID:       formatOptUint64(ctx.ParentID),
-		Depth:          ctx.Depth,
-		SceneID:        hash.FormatHash(ctx.SceneID),
-		UserKeywords:   ctx.UserKeywords,
-		UserTimestamp:  ctx.UserTimestamp,
-		AgentKeywords:  ctx.AgentKeywords,
-		AgentTimestamp: ctx.AgentTimestamp,
-		FusedKeywords:  ctx.FusedKeywords,
-		FusedSummary:   ctx.FusedSummary,
-		ChildrenIDs:    formatUint64Slice(ctx.ChildrenIDs),
-		UserL4Refs:     formatUint64Slice(ctx.UserL4Refs),
-		UserL3Refs:     formatUint64Slice(ctx.UserL3Refs),
-		AgentL4Refs:    formatUint64Slice(ctx.AgentL4Refs),
-		AgentL3Refs:    formatUint64Slice(ctx.AgentL3Refs),
-		CreatedAt:      ctx.CreatedAt,
-		UpdatedAt:      ctx.UpdatedAt,
-	}
+	return l2.ToTopicDetail(ctx)
 }
 
 func applyL2Updates(ctx *model.TopicSlot, fields UpdateL2Fields) bool {
@@ -319,10 +192,6 @@ func applyL2Updates(ctx *model.TopicSlot, fields UpdateL2Fields) bool {
 	}
 	if fields.AgentKeywords != nil {
 		ctx.AgentKeywords = fields.AgentKeywords
-	}
-	if fields.FusedSummary != nil {
-		ctx.FusedSummary = fields.FusedSummary
-		changed = true
 	}
 	if fields.L3Refs != nil {
 		refs := parseUint64Slice(fields.L3Refs)
@@ -336,172 +205,11 @@ func applyL2Updates(ctx *model.TopicSlot, fields UpdateL2Fields) bool {
 func ReindexTopic(sparse *index.SparseIndex, ctx *model.TopicSlot) {
 	sparse.RemoveDocument(ctx.ID)
 	text := strings.Join(ctx.UserKeywords, " ")
-	if ctx.FusedSummary != nil {
-		text += " " + *ctx.FusedSummary
+	if len(ctx.FusedKeywords) > 0 {
+		text += " " + strings.Join(ctx.FusedKeywords, " ")
 	}
 	terms := index.Tokenize(text)
 	sparse.AddDocument(ctx.ID, terms, uint32(len(terms)))
-}
-
-func deleteL1Nodes(engine *storage.StorageEngine, l1Reverse *index.L1ReverseIndex, ctxID uint64) error {
-	if l1Reverse == nil {
-		return nil
-	}
-	ids := map[uint64]struct{}{ctxID: {}}
-	nodeHashes := l1Reverse.FindAssociated(ids)
-	for _, nodeHash := range nodeHashes {
-		rt, _, err := engine.ReadRecord(nodeHash)
-		if err != nil || rt != storage.RecL1SceneNode {
-			continue // dangling reverse-index entry, nothing on disk to delete
-		}
-		if _, err := engine.DeleteRecord(nodeHash); err != nil {
-			return fmt.Errorf("delete l1 node %016x: %w", nodeHash, err)
-		}
-		l1Reverse.RemoveNode(nodeHash)
-	}
-	return nil
-}
-
-func deleteL4Refs(engine *storage.StorageEngine, ctx *model.TopicSlot) error {
-	for _, ref := range ctx.UserL4Refs {
-		if _, err := engine.DeleteRecord(ref); err != nil {
-			return fmt.Errorf("delete l4 ref %016x: %w", ref, err)
-		}
-	}
-	for _, ref := range ctx.AgentL4Refs {
-		if _, err := engine.DeleteRecord(ref); err != nil {
-			return fmt.Errorf("delete l4 ref %016x: %w", ref, err)
-		}
-	}
-	return nil
-}
-
-func parseMergeIDs(ids []string) ([]uint64, error) {
-	hashes := make([]uint64, len(ids))
-	for i, id := range ids {
-		h, err := hash.ParseID(id)
-		if err != nil {
-			return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "parse merge id", err)
-		}
-		hashes[i] = h
-	}
-	return hashes, nil
-}
-
-func absorbSecondaries(
-	engine *storage.StorageEngine,
-	l1Reverse *index.L1ReverseIndex,
-	sparse *index.SparseIndex,
-	l2Meta *index.L2MetaIndex,
-	primary *model.TopicSlot,
-	mergeHashes []uint64,
-) error {
-	l4Set := toSet(primary.UserL4Refs)
-	agL4Set := toSet(primary.AgentL4Refs)
-	l3Set := toSet(primary.UserL3Refs)
-	agL3Set := toSet(primary.AgentL3Refs)
-	var summaries []string
-
-	for _, secHash := range mergeHashes {
-		sec, err := loadTopic(engine, secHash)
-		if err != nil {
-			continue
-		}
-		addAll(l4Set, sec.UserL4Refs)
-		addAll(agL4Set, sec.AgentL4Refs)
-		addAll(l3Set, sec.UserL3Refs)
-		addAll(agL3Set, sec.AgentL3Refs)
-		if sec.FusedSummary != nil {
-			summaries = append(summaries, *sec.FusedSummary)
-		}
-		// Cascade cleanup aligned with DeleteL2: disk deletes first, then
-		// in-memory index removal, and every error is propagated.
-		if err := deleteL1Nodes(engine, l1Reverse, secHash); err != nil {
-			return err
-		}
-		if _, err := engine.DeleteRecord(secHash); err != nil {
-			return fmt.Errorf("delete secondary %016x: %w", secHash, err)
-		}
-		sparse.RemoveDocument(secHash)
-		if l2Meta != nil {
-			l2Meta.Remove(secHash)
-		}
-		if l1Reverse != nil {
-			l1Reverse.RemoveContext(secHash)
-		}
-	}
-	primary.UserL4Refs = sortedKeys(l4Set)
-	primary.AgentL4Refs = sortedKeys(agL4Set)
-	primary.UserL3Refs = sortedKeys(l3Set)
-	primary.AgentL3Refs = sortedKeys(agL3Set)
-	if len(summaries) > 0 {
-		combined := ""
-		if primary.FusedSummary != nil {
-			combined = *primary.FusedSummary
-		}
-		for _, s := range summaries {
-			if combined != "" {
-				combined += " | "
-			}
-			combined += s
-		}
-		primary.FusedSummary = &combined
-	}
-	return nil
-}
-
-func loadTopicsByIDs(engine *storage.StorageEngine, ids []uint64) []model.TopicSlot {
-	var nodes []model.TopicSlot
-	for _, id := range ids {
-		rt, data, err := engine.ReadRecord(id)
-		if err != nil || rt != storage.RecL2Topic {
-			continue
-		}
-		var ctx model.TopicSlot
-		if json.Unmarshal(data, &ctx) == nil {
-			nodes = append(nodes, ctx)
-		}
-	}
-	return nodes
-}
-
-func buildSceneTree(sceneID uint64, nodes []model.TopicSlot) *SceneTreeResult {
-	totalTurns := uint32(len(nodes))
-	var depthDist [4]uint32
-	var edges [][2]string
-	details := make([]TopicDetail, len(nodes))
-	for i, ctx := range nodes {
-		depthIdx := int(ctx.Depth) - 1
-		if depthIdx < 0 {
-			depthIdx = 0
-		}
-		if depthIdx > 3 {
-			depthIdx = 3
-		}
-		depthDist[depthIdx]++
-		if ctx.ParentID != nil {
-			edges = append(edges, [2]string{hash.FormatHash(*ctx.ParentID), hash.FormatHash(ctx.ID)})
-		}
-		for _, childID := range ctx.ChildrenIDs {
-			edges = append(edges, [2]string{hash.FormatHash(ctx.ID), hash.FormatHash(childID)})
-		}
-		details[i] = ToTopicDetail(&nodes[i])
-	}
-	return &SceneTreeResult{
-		SceneID:           hash.FormatHash(sceneID),
-		TotalTurns:        totalTurns,
-		DepthDistribution: depthDist,
-		Nodes:             details,
-		Edges:             edges,
-	}
-}
-
-func emptySceneTree(sceneID uint64) *SceneTreeResult {
-	return &SceneTreeResult{
-		SceneID: hash.FormatHash(sceneID),
-		Nodes:   []TopicDetail{},
-		Edges:   [][2]string{},
-	}
 }
 
 // --- pagination & format helpers ---
@@ -516,16 +224,6 @@ func paginationParams(page, pageSize int) (skip, take int) {
 	return (page - 1) * pageSize, pageSize
 }
 
-func formatOptUint64(v *uint64) *string {
-	if v == nil {
-		return nil
-	}
-	s := hash.FormatHash(*v)
-	return &s
-}
-
-func formatUint64Slice(ids []uint64) []string { return hash.FormatIDs(ids) }
-
 func parseUint64Slice(ids []string) []uint64 {
 	out := make([]uint64, 0, len(ids))
 	for _, s := range ids {
@@ -534,29 +232,6 @@ func parseUint64Slice(ids []string) []uint64 {
 			out = append(out, h)
 		}
 	}
-	return out
-}
-
-func toSet(ids []uint64) map[uint64]struct{} {
-	s := make(map[uint64]struct{}, len(ids))
-	for _, id := range ids {
-		s[id] = struct{}{}
-	}
-	return s
-}
-
-func addAll(s map[uint64]struct{}, ids []uint64) {
-	for _, id := range ids {
-		s[id] = struct{}{}
-	}
-}
-
-func sortedKeys(s map[uint64]struct{}) []uint64 {
-	out := make([]uint64, 0, len(s))
-	for k := range s {
-		out = append(out, k)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 

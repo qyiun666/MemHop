@@ -17,10 +17,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/common/numeric"
 	"github.com/qyiun666/MemHop/internal/common/strutil"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 	"github.com/qyiun666/MemHop/internal/query/crud"
 )
 
@@ -66,12 +66,8 @@ func searchDirected(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 	if err != nil {
 		return nil, mherrors.NewError(mherrors.ErrInvalidQuery, "parse directed l2 id", err)
 	}
-	_, data, err := deps.Engine.ReadRecord(targetHash)
+	targetTopic, err := record.ReadTopicSlot(deps.Engine, targetHash)
 	if err != nil {
-		return emptyResult(), nil
-	}
-	var targetTopic model.TopicSlot
-	if err := json.Unmarshal(data, &targetTopic); err != nil {
 		return emptyResult(), nil
 	}
 
@@ -83,7 +79,7 @@ func searchDirected(q SearchQuery, deps *SearchDeps) (*SearchResult, error) {
 
 	cr := topicToContextResult(newTopic, 1.0)
 	// Include the target topic as associated context so its historical data is visible
-	targetCR := topicToContextResult(&targetTopic, 0.9)
+	targetCR := topicToContextResult(targetTopic, 0.9)
 	result := &SearchResult{
 		Profile:            readProfileResult(deps),
 		Contexts:           []ContextResult{cr},
@@ -178,7 +174,7 @@ func createTopicInScene(q SearchQuery, deps *SearchDeps, sceneID uint64) (*model
 		}
 		if len(output.Dense) > 0 {
 			vecIDHash := hash.HashID(fmt.Sprintf("v:%d", idHash))
-			vecBytes := numeric.F16SliceToBytes(output.Dense)
+			vecBytes := numeric.F32SliceToBytes(output.Dense)
 			if _, err := deps.Engine.WriteRecord(storage.RecVecCentroid, vecIDHash, vecBytes); err != nil {
 				return nil, fmt.Errorf("createTopicInScene: write centroid: %w", err)
 			}
@@ -216,9 +212,6 @@ func createTopicInScene(q SearchQuery, deps *SearchDeps, sceneID uint64) (*model
 		FusedKeywords:   []string{},
 		ChildrenIDs:     []uint64{},
 		CentroidPageRef: centroidRef,
-		CreatedAt:       nowMs,
-		UpdatedAt:       nowMs,
-		Version:         1,
 	}
 
 	if err := record.WriteTopicSlot(deps.Engine, idHash, &topic); err != nil {
@@ -287,7 +280,7 @@ func retrieveL2VectorSafe(
 // bruteForceVectorSearch scans all L2 topics for vector similarity.
 func bruteForceVectorSearch(
 	engine *storage.StorageEngine,
-	queryVec []uint16,
+	queryVec []float32,
 	candidates map[uint64]struct{},
 	limit int,
 ) []index.ScoredDoc {
@@ -298,22 +291,18 @@ func bruteForceVectorSearch(
 				return nil
 			}
 		}
-		_, data, err := engine.ReadRecord(idHash)
-		if err != nil {
-			return nil
-		}
-		var topic model.TopicSlot
-		if json.Unmarshal(data, &topic) != nil || topic.Depth > 2 {
+		topic, err := record.ReadTopicSlot(engine, idHash)
+		if err != nil || topic.Depth > 2 {
 			return nil
 		}
 		if topic.CentroidPageRef == 0 {
 			return nil
 		}
 		_, vecData, err := engine.ReadRecord(topic.CentroidPageRef)
-		if err != nil || len(vecData) < len(queryVec)*2 {
+		if err != nil || len(vecData) < len(queryVec)*4 {
 			return nil
 		}
-		centroid := numeric.DecodeF16Vec(vecData, len(queryVec))
+		centroid := numeric.DecodeF32Vec(vecData, len(queryVec))
 		if len(centroid) != len(queryVec) {
 			return nil
 		}
@@ -380,12 +369,8 @@ func loadAndScoreContexts(
 		if minScore > 0 && doc.Score < minScore {
 			continue
 		}
-		_, data, err := engine.ReadRecord(doc.IDHash)
+		topic, err := record.ReadTopicSlot(engine, doc.IDHash)
 		if err != nil {
-			continue
-		}
-		var topic model.TopicSlot
-		if json.Unmarshal(data, &topic) != nil {
 			continue
 		}
 		if depth1Only && topic.Depth != 1 {
@@ -394,8 +379,8 @@ func loadAndScoreContexts(
 		if !depth1Only && topic.Depth > 2 {
 			continue
 		}
-		cr := topicToContextResult(&topic, doc.Score)
-		t := topic // copy
+		cr := topicToContextResult(topic, doc.Score)
+		t := *topic // copy
 		result = append(result, scoredContext{result: &cr, topic: &t, score: doc.Score})
 		if len(result) >= limit {
 			break
@@ -438,18 +423,14 @@ func getL1Associated(
 			continue
 		}
 		seen[node.SceneID] = struct{}{}
-		_, ctxData, err := engine.ReadRecord(node.SceneID)
+		ctx, err := record.ReadTopicSlot(engine, node.SceneID)
 		if err != nil {
-			continue
-		}
-		var ctx model.TopicSlot
-		if json.Unmarshal(ctxData, &ctx) != nil {
 			continue
 		}
 		if depth1Only && ctx.Depth != 1 {
 			continue
 		}
-		cr := topicToContextResult(&ctx, float32(node.Importance))
+		cr := topicToContextResult(ctx, float32(node.Importance))
 		associated = append(associated, cr)
 	}
 	if associated == nil {
@@ -510,7 +491,6 @@ func topicToContextResult(ctx *model.TopicSlot, score float32) ContextResult {
 		AgentKeywords:  ctx.AgentKeywords,
 		AgentTimestamp: ctx.AgentTimestamp,
 		FusedKeywords:  ctx.FusedKeywords,
-		FusedSummary:   ctx.FusedSummary,
 		ChildrenIDs:    childIDs,
 		L4Refs:         l4Refs,
 		L3Refs:         l3Refs,
@@ -575,13 +555,10 @@ func readProfileResult(deps *SearchDeps) ProfileResult {
 		Name:            p.Name,
 		Role:            p.Role,
 		Personality:     p.Personality,
-		Worldview:       p.Worldview,
 		Preferences:     p.Preferences,
 		Lexicon:         p.Lexicon,
 		StyleTraits:     p.StyleTraits,
 		EmotionPatterns: p.EmotionPatterns,
-		CreatedAt:       p.CreatedAt,
-		UpdatedAt:       p.UpdatedAt,
 	}
 	// Populate cache for subsequent calls.
 	if deps.ProfileCache != nil {

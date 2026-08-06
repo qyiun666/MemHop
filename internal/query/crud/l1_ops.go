@@ -9,8 +9,9 @@ import (
 	"encoding/json"
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // LoadL1Graph traverses the engine and builds the full L1 visualization graph.
@@ -78,7 +79,6 @@ func loadL1Node(
 		ID:              hash.FormatHash(sn.IDHash),
 		SceneID:         hash.FormatHash(sn.SceneID),
 		TopicIDs:        formatIDSlice(sn.TopicIDs),
-		Depth:           sn.Depth,
 		Importance:      sn.Importance,
 		Valence:         sn.Valence,
 		Arousal:         sn.Arousal,
@@ -113,16 +113,12 @@ func resolveL2ContextInfo(
 	if len(topicIDs) == 0 {
 		return nil, []string{}
 	}
-	_, data, err := engine.ReadRecord(topicIDs[0])
+	ctx, err := record.ReadTopicSlot(engine, topicIDs[0])
 	if err != nil {
 		return nil, []string{}
 	}
-	var ctx model.TopicSlot
-	if json.Unmarshal(data, &ctx) != nil {
-		return nil, []string{}
-	}
 	kw := mergeKeywords(ctx.UserKeywords, ctx.AgentKeywords)
-	return ctx.FusedSummary, kw
+	return nil, kw
 }
 
 func mergeKeywords(a, b []string) []string {

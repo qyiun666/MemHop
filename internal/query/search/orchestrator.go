@@ -13,7 +13,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/config"
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
 	"github.com/qyiun666/MemHop/internal/query/dream"
 	"github.com/qyiun666/MemHop/internal/query/session"
 )

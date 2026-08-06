@@ -5,7 +5,7 @@ package encoder
 
 // EncoderOutput holds the result of encoding a text.
 type EncoderOutput struct {
-	Dense []uint16 // f16 dense vector
+	Dense []float32 // f32 dense vector
 }
 
 // Encoder defines the interface for text encoding.

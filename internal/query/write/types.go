@@ -8,8 +8,8 @@ package write
 import (
 	"encoding/json"
 
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 	"github.com/qyiun666/MemHop/internal/query/encoder"
 )
 

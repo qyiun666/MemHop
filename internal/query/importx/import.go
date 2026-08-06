@@ -14,10 +14,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
 	"github.com/qyiun666/MemHop/internal/common/strutil"
 	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/index"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/index"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 	"github.com/qyiun666/MemHop/internal/query/crud"
 	"github.com/qyiun666/MemHop/internal/query/write"
 )
@@ -87,8 +87,6 @@ func mergeProfile(
 		return nil, mherrors.NewError(mherrors.ErrDeserialization, "unmarshal profile", err)
 	}
 	applyProfileUpdates(&profile, p)
-	profile.UpdatedAt = nowMs
-	profile.Version++
 	if err := writeProfile(engine, profileHash, &profile); err != nil {
 		return nil, err
 	}
@@ -112,14 +110,10 @@ func createProfile(
 		Name:            stringOr(p.Name, "Agent"),
 		Role:            stringOr(p.Role, "Assistant"),
 		Personality:     stringOr(p.Personality, ""),
-		Worldview:       stringOr(p.Worldview, ""),
 		Preferences:     p.Preferences,
 		Lexicon:         p.Lexicon,
 		StyleTraits:     p.StyleTraits,
 		EmotionPatterns: p.EmotionPatterns,
-		CreatedAt:       nowMs,
-		UpdatedAt:       nowMs,
-		Version:         1,
 	}
 	if profile.Preferences == nil {
 		profile.Preferences = make(map[string]string)
@@ -161,9 +155,6 @@ func applyProfileUpdates(p *model.ProfileSlot, upd *ProfileImportData) {
 	}
 	if upd.Personality != nil {
 		p.Personality = *upd.Personality
-	}
-	if upd.Worldview != nil {
-		p.Worldview = *upd.Worldview
 	}
 	if upd.Preferences != nil {
 		p.Preferences = upd.Preferences
@@ -266,28 +257,23 @@ func handleExistingTopic(
 		*skipped++
 		return nil
 	}
-	var ctx model.TopicSlot
-	if _, data, err := engine.ReadRecord(idHash); err != nil {
-		return err
-	} else if err := json.Unmarshal(data, &ctx); err != nil {
+	ctx, err := record.ReadTopicSlot(engine, idHash)
+	if err != nil {
 		return err
 	}
 	ctx.FusedKeywords = []string{item.Title}
-	ctx.FusedSummary = item.Summary
 	if l3Hash != 0 && !crud.ContainsUint64(ctx.UserL3Refs, l3Hash) && !crud.ContainsUint64(ctx.AgentL3Refs, l3Hash) {
 		ctx.AgentL3Refs = append(ctx.AgentL3Refs, l3Hash)
 	}
-	ctx.UpdatedAt = nowMs
-	ctx.Version++
 	// Disk first, then reindex: a failed write must not leave the sparse
 	// index pointing at content that was never persisted.
-	if err := crud.WriteTopic(engine, idHash, &ctx); err != nil {
+	if err := record.WriteTopicSlot(engine, idHash, ctx); err != nil {
 		return fmt.Errorf("import: rewrite topic %016x: %w", idHash, err)
 	}
 	sparse.RemoveDocument(ctx.ID)
-	crud.ReindexTopic(sparse, &ctx)
+	crud.ReindexTopic(sparse, ctx)
 	if l2Meta != nil {
-		l2Meta.Update(crud.L2MetaFromTopic(&ctx))
+		l2Meta.Update(crud.L2MetaFromTopic(ctx))
 	}
 	*updatedIDs = append(*updatedIDs, hash.FormatHash(idHash))
 	return nil
@@ -313,7 +299,6 @@ func createNewTopic(
 		// auto-create behavior of Search (sceneID == own idHash).
 		SceneID:        idHash,
 		FusedKeywords:  []string{item.Title},
-		FusedSummary:   item.Summary,
 		ChildrenIDs:    []uint64{},
 		Depth:          1,
 		UserKeywords:   []string{},
@@ -324,11 +309,8 @@ func createNewTopic(
 		AgentTimestamp: nowMs,
 		AgentL4Refs:    []uint64{},
 		AgentL3Refs:    agentL3Refs,
-		CreatedAt:      nowMs,
-		UpdatedAt:      nowMs,
-		Version:        1,
 	}
-	if err := crud.WriteTopic(engine, idHash, &ctx); err != nil {
+	if err := record.WriteTopicSlot(engine, idHash, &ctx); err != nil {
 		return err
 	}
 	crud.ReindexTopic(sparse, &ctx)
@@ -428,10 +410,8 @@ func importOneKnowledge(
 		Keywords:   item.Keywords,
 		SourceRef:  item.SourceRef,
 		Importance: 0.7,
-		ValidFrom:  nowMs,
 		CreatedAt:  nowMs,
 		UpdatedAt:  nowMs,
-		Version:    1,
 	}
 	if err := record.WriteHypergraphNode(engine, titleHash, &node); err != nil {
 		return nil, err
@@ -460,7 +440,6 @@ func ensureGraphSlot(
 		Source:    model.HypergraphSource{Kind: model.SourceManual},
 		CreatedAt: nowMs,
 		UpdatedAt: nowMs,
-		Version:   1,
 	}
 	if err := record.WriteGraphSlot(engine, gid, &slot); err != nil {
 		return gid, err

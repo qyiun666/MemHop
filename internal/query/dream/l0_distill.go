@@ -18,11 +18,10 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/common/strutil"
 	"github.com/qyiun666/MemHop/internal/common/timeutil"
-	"github.com/qyiun666/MemHop/internal/core/model"
-	"github.com/qyiun666/MemHop/internal/core/record"
-	"github.com/qyiun666/MemHop/internal/core/storage"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/record"
+	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // maxDistillSamples caps the number of L1 SceneNodes fed into the LLM to
@@ -120,8 +119,8 @@ func sampleL1ForDistill(engine *storage.StorageEngine) ([]l1Sample, int) {
 		candidates = append(candidates, l1Sample{
 			IDHash: idHash, IDHex: hash.FormatHash(idHash),
 			Importance: node.Importance, Valence: node.Valence, Arousal: node.Arousal,
-			UpdatedAt: node.UpdatedAt, Depth: node.Depth,
-			Keywords: kw, Summary: summary,
+			UpdatedAt: node.UpdatedAt,
+			Keywords:  kw, Summary: summary,
 		})
 		return true
 	})
@@ -151,15 +150,11 @@ func collectSampleContext(engine *storage.StorageEngine, topicIDs []uint64) ([]s
 	var kws []string
 	var parts []string
 	for _, tid := range topicIDs {
-		t, err := readTopic(engine, tid)
+		t, err := record.ReadTopicLenient(engine, tid)
 		if err != nil || t == nil {
 			continue
 		}
 		kws = append(kws, t.FusedKeywords...)
-		if t.FusedSummary != nil && *t.FusedSummary != "" {
-			// Rune-safe truncation preserves CJK boundaries.
-			parts = append(parts, strutil.SafeCharSlice(*t.FusedSummary, 400))
-		}
 	}
 	return kws, strings.Join(parts, " | ")
 }
@@ -193,8 +188,6 @@ func mergeIntoProfile(engine *storage.StorageEngine, out *distillOutput) error {
 	applyEmotionPatch(slot, out.Emotion, nowMs)
 	applyMBTIPatch(slot, out.MBTI, nowMs)
 	slot.Personality = out.MBTI.Type
-	slot.UpdatedAt = nowMs
-	slot.Version++
 	return record.WriteProfileSlot(engine, profileID, slot)
 }
 
@@ -223,8 +216,6 @@ func loadOrInitProfile(engine *storage.StorageEngine, id uint64, nowMs int64) (*
 		Lexicon:         map[string]string{},
 		StyleTraits:     []string{},
 		EmotionPatterns: map[string]string{},
-		CreatedAt:       nowMs,
-		UpdatedAt:       nowMs,
 	}, nil
 }
 

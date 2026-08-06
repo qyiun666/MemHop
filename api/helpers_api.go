@@ -10,7 +10,7 @@ package memhop
 import (
 	"github.com/qyiun666/MemHop/internal/common/hash"
 	"github.com/qyiun666/MemHop/internal/common/mherrors"
-	"github.com/qyiun666/MemHop/internal/core/model"
+	"github.com/qyiun666/MemHop/internal/repo/core/model"
 	"github.com/qyiun666/MemHop/internal/query/crud"
 	l3 "github.com/qyiun666/MemHop/internal/query/graph"
 )
@@ -53,7 +53,6 @@ func hypergraphNodeToGraphNode(n *model.HypergraphNode) crud.GraphNode {
 		Keywords:   n.Keywords,
 		SourceRef:  n.SourceRef,
 		Importance: n.Importance,
-		Summary:    n.Summary,
 		CreatedAt:  n.CreatedAt,
 		UpdatedAt:  n.UpdatedAt,
 	}
@@ -71,8 +70,6 @@ func hypergraphEdgeToGraphEdge(e *model.HypergraphEdge) crud.GraphEdge {
 		NodeIDs:     hexIDs,
 		Weight:      e.Weight,
 		Label:       e.Label,
-		Description: e.Description,
-		Confidence:  e.Confidence,
 		CreatedAt:   e.CreatedAt,
 	}
 }
