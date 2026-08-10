@@ -9,10 +9,6 @@ import (
 	"encoding/json"
 	"slices"
 	"sync"
-
-	"github.com/qyiun666/MemHop/internal/common/hash"
-	"github.com/qyiun666/MemHop/internal/repo/core/model"
-	"github.com/qyiun666/MemHop/internal/repo/core/storage"
 )
 
 // L1ReverseIndex maps L2 context_id → L1 ContextNode(s) pointing to it.
@@ -40,19 +36,12 @@ func (r *L1ReverseIndex) Add(contextID, nodeIDHash uint64) {
 	r.index[contextID] = append(nodes, nodeIDHash)
 }
 
-// RemoveContext removes all nodes for a context.
-func (r *L1ReverseIndex) RemoveContext(contextID uint64) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	delete(r.index, contextID)
-}
-
 // RemoveNode removes a specific node from all contexts.
 func (r *L1ReverseIndex) RemoveNode(nodeIDHash uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for ctxID, nodes := range r.index {
-		filtered := filterUint64(nodes, nodeIDHash)
+		filtered := slices.DeleteFunc(slices.Clone(nodes), func(x uint64) bool { return x == nodeIDHash })
 		if len(filtered) == 0 {
 			delete(r.index, ctxID)
 		} else if len(filtered) != len(nodes) {
@@ -82,48 +71,16 @@ func (r *L1ReverseIndex) FindAssociated(contextIDs map[uint64]struct{}) []uint64
 func (r *L1ReverseIndex) Serialize() ([]byte, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	// Convert to serializable map with hex keys.
-	out := make(map[string][]uint64, len(r.index))
-	for k, v := range r.index {
-		out[hash.FormatHash(k)] = v
-	}
-	return json.Marshal(out)
+	return json.Marshal(r.index)
 }
 
 // DeserializeL1ReverseIndex restores from JSON bytes.
 func DeserializeL1ReverseIndex(data []byte) (*L1ReverseIndex, error) {
-	var raw map[string][]uint64
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, err
-	}
 	idx := NewL1ReverseIndex()
-	for k, v := range raw {
-		id, err := hash.ParseID(k)
-		if err != nil {
-			continue
-		}
-		idx.index[id] = v
+	if err := json.Unmarshal(data, &idx.index); err != nil {
+		return nil, err
 	}
 	return idx, nil
 }
 
-func filterUint64(slice []uint64, v uint64) []uint64 {
-	return slices.DeleteFunc(slices.Clone(slice), func(x uint64) bool { return x == v })
-}
-
-// BuildL1ReverseIndex scans the engine for L1 ContextNode records.
-func BuildL1ReverseIndex(engine *storage.StorageEngine) *L1ReverseIndex {
-	idx := NewL1ReverseIndex()
-	engine.IterIndex(func(idHash, _ uint64) bool {
-		rt, data, err := engine.ReadRecord(idHash)
-		if err != nil || rt != storage.RecL1SceneNode {
-			return true
-		}
-		var node model.SceneNode
-		if json.Unmarshal(data, &node) == nil && node.SceneID != 0 {
-			idx.Add(node.SceneID, idHash)
-		}
-		return true
-	})
-	return idx
-}
+// BuildL1ReverseIndex is defined in rebuild.go (shared single-pass scan).

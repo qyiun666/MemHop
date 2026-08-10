@@ -1,0 +1,37 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+package common
+
+import (
+	"maps"
+	"slices"
+)
+
+// DedupSorted sorts ids ascending and removes duplicates via the stdlib
+// slices pipeline (Compact requires sorted input).
+func DedupSorted(ids []uint64) []uint64 {
+	return slices.Compact(slices.Sorted(slices.Values(ids)))
+}
+
+// ToSet converts a slice of ids into a set for O(1) membership checks.
+func ToSet(ids []uint64) map[uint64]struct{} {
+	s := make(map[uint64]struct{}, len(ids))
+	for _, id := range ids {
+		s[id] = struct{}{}
+	}
+	return s
+}
+
+// SetToSlice converts a map[uint64]bool set to a sorted slice, optionally
+// limited to the first limit elements.
+func SetToSlice(s map[uint64]bool, limit int) []uint64 {
+	if len(s) == 0 {
+		return nil
+	}
+	out := slices.Sorted(maps.Keys(s))
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}

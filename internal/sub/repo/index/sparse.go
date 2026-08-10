@@ -9,8 +9,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/qyiun666/MemHop/internal/common/hash"
-	"github.com/qyiun666/MemHop/internal/common/mherrors"
+	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
 // PostingList is an inverted list for a single term.
@@ -226,31 +225,6 @@ func (s *SparseIndex) IsEmpty() bool {
 	return s.totalDocs == 0
 }
 
-// Merge merges another SparseIndex into this one. Assumes disjoint document IDs.
-func (s *SparseIndex) Merge(other *SparseIndex) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for term, otherPL := range other.postings {
-		pl, ok := s.postings[term]
-		if !ok {
-			pl = &PostingList{TermFreq: make(map[uint64]uint32)}
-			s.postings[term] = pl
-		}
-		for docID, tf := range otherPL.TermFreq {
-			pl.TermFreq[docID] = tf
-		}
-		pl.DocFreq = uint32(len(pl.TermFreq))
-	}
-	for docID, docLen := range other.docLengths {
-		s.docLengths[docID] = docLen
-	}
-	s.totalDocs += other.totalDocs
-	s.totalTerms += other.totalTerms
-	if s.totalDocs > 0 {
-		s.avgDocLength = float32(s.totalTerms) / float32(s.totalDocs)
-	}
-}
-
 // TopTerms returns the top-n terms by document frequency.
 func (s *SparseIndex) TopTerms(n int) []struct {
 	Term    string
@@ -290,7 +264,7 @@ type sparseIndexJSON struct {
 	K1           float32                 `json:"k1"`
 	B            float32                 `json:"b"`
 	Postings     map[string]*PostingList `json:"postings"`
-	DocLengths   map[string]uint32       `json:"doc_lengths"`
+	DocLengths   map[uint64]uint32       `json:"doc_lengths"`
 	AvgDocLength float32                 `json:"avg_doc_length"`
 	TotalDocs    uint32                  `json:"total_docs"`
 	TotalTerms   uint64                  `json:"total_terms"`
@@ -310,16 +284,11 @@ type entityEntryJSON struct {
 func (s *SparseIndex) Serialize() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	docLens := make(map[string]uint32, len(s.docLengths))
-	for k, v := range s.docLengths {
-		docLens[hash.FormatHash(k)] = v
-	}
-
 	j := sparseIndexJSON{
 		K1:           s.k1,
 		B:            s.b,
 		Postings:     s.postings,
-		DocLengths:   docLens,
+		DocLengths:   s.docLengths,
 		AvgDocLength: s.avgDocLength,
 		TotalDocs:    s.totalDocs,
 		TotalTerms:   s.totalTerms,
@@ -345,23 +314,14 @@ func (s *SparseIndex) Serialize() ([]byte, error) {
 func DeserializeSparseIndex(data []byte) (*SparseIndex, error) {
 	var j sparseIndexJSON
 	if err := json.Unmarshal(data, &j); err != nil {
-		return nil, mherrors.NewError(mherrors.ErrDeserialization, "sparse index", err)
-	}
-
-	docLens := make(map[uint64]uint32, len(j.DocLengths))
-	for k, v := range j.DocLengths {
-		id, err := hash.ParseID(k)
-		if err != nil {
-			return nil, mherrors.NewError(mherrors.ErrDeserialization, "parse doc id", err)
-		}
-		docLens[id] = v
+		return nil, common.NewError(common.ErrDeserialization, "sparse index", err)
 	}
 
 	s := &SparseIndex{
 		k1:           j.K1,
 		b:            j.B,
 		postings:     j.Postings,
-		docLengths:   docLens,
+		docLengths:   j.DocLengths,
 		avgDocLength: j.AvgDocLength,
 		totalDocs:    j.TotalDocs,
 		totalTerms:   j.TotalTerms,

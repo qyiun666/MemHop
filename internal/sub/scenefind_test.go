@@ -1,0 +1,351 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+package sub
+
+import (
+	"context"
+	"encoding/json"
+	"math"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/qyiun666/MemHop/internal/sub/common"
+	"github.com/qyiun666/MemHop/internal/sub/repo/core"
+	"github.com/qyiun666/MemHop/internal/sub/repo/index"
+)
+
+// mockEncoder 返回固定向量，模拟可用编码器。
+type mockEncoder struct {
+	vec []float32
+}
+
+func (m *mockEncoder) Encode(string) ([]float32, error) { return m.vec, nil }
+func (m *mockEncoder) Dim() int                         { return len(m.vec) }
+func (m *mockEncoder) Mode() string                     { return "mock" }
+func (m *mockEncoder) IsAvailable() bool                { return true }
+
+// testVec 与话题向量页共用：相同的 768 维向量，余弦相似度为 1.0。
+var testVec = func() []float32 {
+	v := make([]float32, 768)
+	for i := range v {
+		v[i] = 0.5
+	}
+	return v
+}()
+
+func TestMain(m *testing.M) {
+	if err := index.InitTokenizer(index.EngineAuto); err != nil {
+		panic(err)
+	}
+	os.Exit(m.Run())
+}
+
+func newTestEngine(t *testing.T) *core.StorageEngine {
+	t.Helper()
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"), 768)
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { engine.Close(&core.IndexSnapshotData{}) })
+	return engine
+}
+
+func newTopic(id, scene uint64, ts int64, kws []string) core.TopicSlot {
+	return core.TopicSlot{
+		ID:            id,
+		SceneID:       scene,
+		Depth:         1,
+		UserKeywords:  kws,
+		UserTimestamp: ts,
+	}
+}
+
+// writeTopic 写入话题记录 + 稀疏索引；CentroidPageRef != 0 时写入固定向量页。
+func writeTopic(t *testing.T, engine *core.StorageEngine, sparse *index.SparseIndex, topic core.TopicSlot) {
+	t.Helper()
+	data, err := json.Marshal(topic)
+	if err != nil {
+		t.Fatalf("marshal topic: %v", err)
+	}
+	if _, err := engine.WriteRecord(core.RecL2Topic, topic.ID, data); err != nil {
+		t.Fatalf("write topic: %v", err)
+	}
+	fields := make([]string, 0, len(topic.FusedKeywords)+len(topic.UserKeywords)+len(topic.AgentKeywords))
+	fields = append(fields, topic.FusedKeywords...)
+	fields = append(fields, topic.UserKeywords...)
+	fields = append(fields, topic.AgentKeywords...)
+	terms := index.Tokenize(strings.Join(fields, " "))
+	sparse.AddDocument(topic.ID, terms, uint32(len(terms)))
+	if topic.CentroidPageRef != 0 {
+		if _, err := engine.WriteRecord(core.RecVecCentroid, topic.CentroidPageRef, common.F32SliceToBytes(testVec)); err != nil {
+			t.Fatalf("write vector: %v", err)
+		}
+	}
+}
+
+func approx(a, b float32) bool { return math.Abs(float64(a-b)) < 1e-4 }
+
+// TestKeywordHit 验证 3 个 []string 字段并集、去重与命中比例。
+func TestKeywordHit(t *testing.T) {
+	topic := core.TopicSlot{
+		FusedKeywords: []string{"rust"},
+		UserKeywords:  []string{"rust", "tokio"},
+		AgentKeywords: []string{"Tokio", "async"},
+	}
+	// 3 字段并集（小写去重）：rust, tokio, async；请求 rust, async, cpp → 命中 2/3。
+	got := keywordHit(topic, keywordSet([]string{"rust", "async", "cpp"}))
+	if want := float32(2) / 3; !approx(got, want) {
+		t.Errorf("keywordHit = %v; want %v", got, want)
+	}
+	// 空请求关键词 → 0。
+	if got := keywordHit(topic, keywordSet(nil)); got != 0 {
+		t.Errorf("keywordHit(empty) = %v; want 0", got)
+	}
+	// 请求关键词去重：重复关键词只算一次分母。
+	if got := keywordHit(topic, keywordSet([]string{"rust", "rust"})); !approx(got, 1.0) {
+		t.Errorf("keywordHit(dup) = %v; want 1.0", got)
+	}
+}
+
+// TestApplySceneBonuses 验证场景加分：0.2/0.1 各仅一次、激活优先互斥。
+func TestApplySceneBonuses(t *testing.T) {
+	// 激活场景 +0.2（仅一次）。
+	scores := map[uint64]float32{1: 1.0}
+	applySceneBonuses(scores, map[uint64]struct{}{1: {}}, 1, DefaultMemHopDefaults)
+	if !approx(scores[1], 1.2) {
+		t.Errorf("active bonus: scores[1] = %v; want 1.2", scores[1])
+	}
+
+	// 最近场景 +0.1（不在激活集合时）。
+	scores = map[uint64]float32{2: 1.0}
+	applySceneBonuses(scores, map[uint64]struct{}{}, 2, DefaultMemHopDefaults)
+	if !approx(scores[2], 1.1) {
+		t.Errorf("recent bonus: scores[2] = %v; want 1.1", scores[2])
+	}
+
+	// 激活优先互斥：同场景既激活又是最近 → 只加 0.2。
+	scores = map[uint64]float32{3: 1.0}
+	applySceneBonuses(scores, map[uint64]struct{}{3: {}}, 3, DefaultMemHopDefaults)
+	if !approx(scores[3], 1.2) {
+		t.Errorf("mutual exclusion: scores[3] = %v; want 1.2", scores[3])
+	}
+
+	// 最近场景无话题得分 → 不加分。
+	scores = map[uint64]float32{4: 1.0}
+	applySceneBonuses(scores, map[uint64]struct{}{}, 5, DefaultMemHopDefaults)
+	if !approx(scores[4], 1.0) {
+		t.Errorf("no bonus for missing scene: scores[4] = %v; want 1.0", scores[4])
+	}
+}
+
+// TestTopSceneBasic 基础检索：命中场景胜出。
+func TestTopSceneBasic(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
+	writeTopic(t, engine, sparse, newTopic(4002, 2, 200, []string{"cooking"}))
+
+	hit, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 0, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if hit.SceneID != 1 {
+		t.Errorf("SceneID = %d; want 1", hit.SceneID)
+	}
+	if hit.Score <= 1.0 {
+		t.Errorf("Score = %v; want > 1.0 (rrf + keyword hit)", hit.Score)
+	}
+}
+
+// TestTopSceneAggregation 同场景多话题得分相加。
+func TestTopSceneAggregation(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
+	writeTopic(t, engine, sparse, newTopic(4002, 1, 200, []string{"rust"}))
+	writeTopic(t, engine, sparse, newTopic(4003, 2, 300, []string{"cooking"}))
+
+	hit, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 0, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if hit.SceneID != 1 {
+		t.Errorf("SceneID = %d; want 1", hit.SceneID)
+	}
+	// 两个话题各 hit=1.0，RRF 分非负 → 场景总分 >= 2.0。
+	if hit.Score < 2.0 {
+		t.Errorf("Score = %v; want >= 2.0 (two topics summed)", hit.Score)
+	}
+}
+
+// TestTopSceneActivationBonus 激活场景 +0.2，重复激活只加一次。
+func TestTopSceneActivationBonus(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	// 唯一话题：bm25 rank1 → rrf = 1/61，hit = 1.0。
+	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
+
+	want := float32(1.0) + 1.0/61.0 + 0.2
+	hit, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, []uint64{1, 1}, DefaultMemHopDefaults, 1.15, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if hit.SceneID != 1 || !approx(hit.Score, want) {
+		t.Errorf("hit = %+v; want SceneID=1 Score=%v (bonus added once)", hit, want)
+	}
+
+	// 无激活 → 无 0.2，低于 1.15 阈值 → 空。
+	empty, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 1.15, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if empty.SceneID != 0 || empty.Score != 0 {
+		t.Errorf("expected empty hit, got %+v", empty)
+	}
+}
+
+// TestTopSceneRecentBonus 时间戳最后话题所在场景 +0.1，激活优先互斥。
+func TestTopSceneRecentBonus(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
+
+	// 最后话题场景 +0.1：score = 1.0 + 1/61 + 0.1。
+	recent, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 1.05, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	wantRecent := float32(1.0) + 1.0/61.0 + 0.1
+	if recent.SceneID != 1 || !approx(recent.Score, wantRecent) {
+		t.Errorf("recent hit = %+v; want Score=%v", recent, wantRecent)
+	}
+
+	// 同场景激活 → 激活优先，只加 0.2 不加 0.1。
+	active, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, []uint64{1}, DefaultMemHopDefaults, 1.15, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	wantActive := float32(1.0) + 1.0/61.0 + 0.2
+	if active.SceneID != 1 || !approx(active.Score, wantActive) {
+		t.Errorf("active hit = %+v; want Score=%v (active takes priority)", active, wantActive)
+	}
+}
+
+// TestTopSceneVectorChannel 向量通道：编码器可用时按余弦命中，不可用时通道为空。
+func TestTopSceneVectorChannel(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	// 话题关键词不匹配查询，仅靠向量通道命中（余弦 1.0）。
+	topic := newTopic(4001, 1, 100, []string{"rust"})
+	topic.CentroidPageRef = 9001
+	writeTopic(t, engine, sparse, topic)
+
+	// 有编码器：向量通道命中 → rrf = 1/61；唯一话题同时是最后话题场景 → +0.1。
+	hit, err := TopScene(context.Background(), engine, sparse, &mockEncoder{vec: testVec}, "unrelated", []string{"zzz"}, nil, DefaultMemHopDefaults, 0.05, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	want := float32(1.0)/61.0 + 0.1
+	if hit.SceneID != 1 || !approx(hit.Score, want) {
+		t.Errorf("vector hit = %+v; want SceneID=1 Score=%v", hit, want)
+	}
+
+	// 无编码器：通道为空 → 无命中 → 空。
+	empty, err := TopScene(context.Background(), engine, sparse, nil, "unrelated", []string{"zzz"}, nil, DefaultMemHopDefaults, 0, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if empty.SceneID != 0 || empty.Score != 0 {
+		t.Errorf("expected empty hit without encoder, got %+v", empty)
+	}
+}
+
+// TestTopSceneThreshold 阈值过滤：不高于阈值返回空。
+func TestTopSceneThreshold(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
+
+	// 低于阈值（score ≈ 1.016）→ 返回。
+	hit, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 1.0, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if hit.SceneID != 1 {
+		t.Errorf("SceneID = %d; want 1", hit.SceneID)
+	}
+	// 高于场景分（score ≈ 1.116：hit 1.0 + rrf 1/61 + 最近场景 0.1）→ 空。
+	empty, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 1.2, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if empty.SceneID != 0 || empty.Score != 0 {
+		t.Errorf("expected empty hit above threshold, got %+v", empty)
+	}
+}
+
+// TestTopSceneMultiActiveScenes 多个激活场景各自 +0.2（仅一次）；等于阈值返回空。
+// 场景分 = hit 1.0 + rrf(≤1/61+1/62) + 0.2：不加分 ≤1.033，加一次 ∈(1.2,1.25)，加两次 ≥1.4。
+func TestTopSceneMultiActiveScenes(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
+	writeTopic(t, engine, sparse, newTopic(4002, 2, 200, []string{"rust"}))
+
+	// 仅场景 2 激活 → 场景 2 胜出且只加一次 0.2。
+	hit2, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, []uint64{2}, DefaultMemHopDefaults, 1.1, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if hit2.SceneID != 2 || hit2.Score <= 1.2 || hit2.Score >= 1.25 {
+		t.Errorf("active[2] hit = %+v; want SceneID=2 Score in (1.2, 1.25)", hit2)
+	}
+
+	// 两个场景都激活 → 各自 +0.2，最高分在两场景之一。
+	hitBoth, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, []uint64{1, 2}, DefaultMemHopDefaults, 1.1, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if (hitBoth.SceneID != 1 && hitBoth.SceneID != 2) || hitBoth.Score <= 1.2 || hitBoth.Score >= 1.25 {
+		t.Errorf("active[1,2] hit = %+v; want SceneID in {1,2} Score in (1.2, 1.25)", hitBoth)
+	}
+
+	// 阈值高于全部场景分 → 空。
+	equal, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, []uint64{1, 2}, DefaultMemHopDefaults, 1.25, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if equal.SceneID != 0 || equal.Score != 0 {
+		t.Errorf("expected empty hit above all scene scores, got %+v", equal)
+	}
+}
+
+// TestTopSceneEmpty 空库返回空。
+func TestTopSceneEmpty(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	hit, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 0, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if hit.SceneID != 0 || hit.Score != 0 {
+		t.Errorf("expected empty hit on empty db, got %+v", hit)
+	}
+}
+
+// TestActivateSceneDedup 激活场景幂等去重：重复追加只保留首次顺序。
+func TestActivateSceneDedup(t *testing.T) {
+	db := &DB{}
+	db.activateScene(7)
+	db.activateScene(7)
+	db.activateScene(9)
+	if len(db.activeScenes) != 2 {
+		t.Fatalf("len(activeScenes) = %d; want 2", len(db.activeScenes))
+	}
+	if db.activeScenes[0] != 7 || db.activeScenes[1] != 9 {
+		t.Errorf("activeScenes = %v; want [7 9]", db.activeScenes)
+	}
+}

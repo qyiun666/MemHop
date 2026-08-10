@@ -21,9 +21,6 @@ type MemHopConfig struct {
 	Defaults           *MemHopDefaults `json:"defaults,omitempty"`
 }
 
-// Validate reports nil, missing, or out-of-range configuration values.
-// All required fields fail here, at Open time, instead of deep inside a
-// runtime code path.
 func (c *MemHopConfig) Validate() error {
 	if c == nil {
 		return mherrors.NewError(mherrors.ErrConfig, "config is required")

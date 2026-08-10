@@ -6,26 +6,20 @@
 package index
 
 import (
+	"encoding/json"
 	"sort"
 	"sync"
 
-	"github.com/qyiun666/MemHop/internal/repo/core/model"
-	"github.com/qyiun666/MemHop/internal/repo/core/storage"
+	"github.com/qyiun666/MemHop/internal/sub/common"
+	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
 // IndexedNode caches key fields of an L3 node for fast lookup.
 type IndexedNode struct {
 	IDHash   uint64
 	GraphID  uint64
-	Title    string
 	NodeType string
 	Keywords []string
-}
-
-// ScoredNode pairs a node hash with a BM25 relevance score.
-type ScoredNode struct {
-	NodeHash uint64
-	Score    float32
 }
 
 // L3Index is a concurrent-safe in-memory index over L3 hypergraph nodes.
@@ -50,7 +44,7 @@ func NewL3Index() *L3Index {
 }
 
 // BuildFromEngine scans the engine and indexes all L3 graph nodes.
-func (idx *L3Index) BuildFromEngine(engine *storage.StorageEngine) error {
+func (idx *L3Index) BuildFromEngine(engine *core.StorageEngine) error {
 	nodes, err := loadAllL3Nodes(engine)
 	if err != nil {
 		return err
@@ -64,13 +58,13 @@ func (idx *L3Index) BuildFromEngine(engine *storage.StorageEngine) error {
 }
 
 // AddNode adds a single node to the index.
-func (idx *L3Index) AddNode(node *model.HypergraphNode) {
+func (idx *L3Index) AddNode(node *core.HypergraphNode) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.addNodeLocked(node)
 }
 
-// RemoveNode removes a node from the index by hash.
+// RemoveNode removes a node from the index by common.
 func (idx *L3Index) RemoveNode(nodeHash uint64) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -86,7 +80,7 @@ func (idx *L3Index) SearchByKeyword(keyword string, limit int) []uint64 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	set := idx.byKeyword[keyword]
-	return setToSlice(set, limit)
+	return common.SetToSlice(set, limit)
 }
 
 // SearchByType returns node hashes of a given type, optionally filtered by graph.
@@ -95,35 +89,9 @@ func (idx *L3Index) SearchByType(nodeType string, graphID uint64, limit int) []u
 	defer idx.mu.RUnlock()
 	typeSet := idx.byType[nodeType]
 	if graphID == 0 {
-		return setToSlice(typeSet, limit)
+		return common.SetToSlice(typeSet, limit)
 	}
 	return intersectWithGraph(typeSet, idx.byGraph[graphID], limit)
-}
-
-// SearchByGraph returns all node hashes belonging to a graph.
-func (idx *L3Index) SearchByGraph(graphID uint64) []uint64 {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	return setToSlice(idx.byGraph[graphID], 0)
-}
-
-// GetNodeInfo returns cached node info, or nil if not indexed.
-func (idx *L3Index) GetNodeInfo(nodeHash uint64) *IndexedNode {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	return idx.nodes[nodeHash]
-}
-
-// BM25Search performs full-text BM25 search over indexed node content.
-func (idx *L3Index) BM25Search(queryTerms []string, k int) []ScoredNode {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	docs := idx.bm25.Search(queryTerms, k)
-	result := make([]ScoredNode, len(docs))
-	for i, d := range docs {
-		result[i] = ScoredNode{NodeHash: d.IDHash, Score: d.Score}
-	}
-	return result
 }
 
 // Len returns the number of indexed nodes.
@@ -135,7 +103,7 @@ func (idx *L3Index) Len() int {
 
 // --- internal helpers (caller must hold idx.mu) ---
 
-func (idx *L3Index) addNodeLocked(node *model.HypergraphNode) {
+func (idx *L3Index) addNodeLocked(node *core.HypergraphNode) {
 	h := node.IDHash
 	if old, ok := idx.nodes[h]; ok {
 		idx.removeNodeLocked(h, old)
@@ -143,7 +111,6 @@ func (idx *L3Index) addNodeLocked(node *model.HypergraphNode) {
 	info := &IndexedNode{
 		IDHash:   h,
 		GraphID:  node.GraphID,
-		Title:    node.Title,
 		NodeType: node.NodeType,
 		Keywords: node.Keywords,
 	}
@@ -198,36 +165,20 @@ func (idx *L3Index) removeNodeLocked(nodeHash uint64, info *IndexedNode) {
 }
 
 // loadAllL3Nodes reads every L3 node from the engine.
-func loadAllL3Nodes(engine *storage.StorageEngine) ([]*model.HypergraphNode, error) {
-	var nodes []*model.HypergraphNode
+func loadAllL3Nodes(engine *core.StorageEngine) ([]*core.HypergraphNode, error) {
+	var nodes []*core.HypergraphNode
 	engine.IterIndex(func(idHash, _ uint64) bool {
 		rt, data, err := engine.ReadRecord(idHash)
-		if err != nil || rt != storage.RecL3GraphNode {
+		if err != nil || rt != core.RecL3GraphNode {
 			return true
 		}
-		var node model.HypergraphNode
-		if err := node.UnmarshalJSON(data); err == nil {
+		var node core.HypergraphNode
+		if err := json.Unmarshal(data, &node); err == nil {
 			nodes = append(nodes, &node)
 		}
 		return true
 	})
 	return nodes, nil
-}
-
-// setToSlice converts a set to a sorted slice, optionally limited.
-func setToSlice(s map[uint64]bool, limit int) []uint64 {
-	if len(s) == 0 {
-		return nil
-	}
-	out := make([]uint64, 0, len(s))
-	for h := range s {
-		out = append(out, h)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
 }
 
 // intersectWithGraph returns hashes present in both sets, sorted and limited.

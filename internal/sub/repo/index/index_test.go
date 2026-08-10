@@ -9,9 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/qyiun666/MemHop/internal/common/numeric"
-	"github.com/qyiun666/MemHop/internal/repo/core/model"
-	"github.com/qyiun666/MemHop/internal/repo/core/storage"
+	"github.com/qyiun666/MemHop/internal/sub/common"
+	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
 // ============================================================================
@@ -21,7 +20,7 @@ import (
 func TestCosineSimilarity(t *testing.T) {
 	t.Run("identical", func(t *testing.T) {
 		a := []float32{1.0, 0.0, 0.0}
-		sim := numeric.CosineSimilarity(a, a)
+		sim := common.CosineSimilarity(a, a)
 		if math.Abs(float64(sim-1.0)) > 1e-4 {
 			t.Errorf("identical vectors should have similarity 1.0, got %f", sim)
 		}
@@ -30,7 +29,7 @@ func TestCosineSimilarity(t *testing.T) {
 	t.Run("orthogonal", func(t *testing.T) {
 		a := []float32{1.0, 0.0, 0.0}
 		b := []float32{0.0, 1.0, 0.0}
-		sim := numeric.CosineSimilarity(a, b)
+		sim := common.CosineSimilarity(a, b)
 		if math.Abs(float64(sim)) > 1e-4 {
 			t.Errorf("orthogonal vectors should have similarity ~0.0, got %f", sim)
 		}
@@ -39,7 +38,7 @@ func TestCosineSimilarity(t *testing.T) {
 	t.Run("opposite", func(t *testing.T) {
 		a := []float32{1.0, 0.0, 0.0}
 		b := []float32{-1.0, 0.0, 0.0}
-		sim := numeric.CosineSimilarity(a, b)
+		sim := common.CosineSimilarity(a, b)
 		if math.Abs(float64(sim+1.0)) > 1e-4 {
 			t.Errorf("opposite vectors should have similarity ~-1.0, got %f", sim)
 		}
@@ -48,7 +47,7 @@ func TestCosineSimilarity(t *testing.T) {
 	t.Run("zero_vector", func(t *testing.T) {
 		a := []float32{0.0, 0.0}
 		b := []float32{1.0, 0.0}
-		sim := numeric.CosineSimilarity(a, b)
+		sim := common.CosineSimilarity(a, b)
 		if sim != 0.0 {
 			t.Errorf("zero vector should give similarity 0.0, got %f", sim)
 		}
@@ -62,7 +61,7 @@ func TestCosineSimilarity(t *testing.T) {
 			a[i] = float32(i) * 0.001
 			b[i] = float32(i) * 0.001
 		}
-		sim := numeric.CosineSimilarity(a, b)
+		sim := common.CosineSimilarity(a, b)
 		if math.Abs(float64(sim-1.0)) > 1e-3 {
 			t.Errorf("identical large vectors should have similarity ~1.0, got %f", sim)
 		}
@@ -187,7 +186,7 @@ func TestSplitCamelCase(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := splitCamelCase(tt.input)
+			got := common.SplitCamelCase(tt.input)
 			if len(got) != len(tt.expected) {
 				t.Errorf("splitCamelCase(%q) = %v, want %v", tt.input, got, tt.expected)
 				return
@@ -297,17 +296,6 @@ func TestSparseSerializeRoundtrip(t *testing.T) {
 	}
 }
 
-func TestMergeSparseIndex(t *testing.T) {
-	idx1 := NewSparseIndex()
-	idx1.AddDocument(1, Tokenize("rust memory safety"), 3)
-	idx2 := NewSparseIndex()
-	idx2.AddDocument(2, Tokenize("rust concurrency"), 2)
-	idx1.Merge(idx2)
-	if idx1.Len() != 2 {
-		t.Errorf("merged index should have 2 docs, got %d", idx1.Len())
-	}
-}
-
 // ============================================================================
 // EntityIndex tests
 // ============================================================================
@@ -349,40 +337,14 @@ func TestEntityIndex(t *testing.T) {
 	})
 }
 
-func TestBKTree(t *testing.T) {
-	tree := newBkTree()
-	tree.insert("apple")
-	tree.insert("apply")
-
-	// Exact match
-	matches := tree.search("apple", 0)
-	if len(matches) != 1 {
-		t.Errorf("exact search should find 1, got %d", len(matches))
-	}
-
-	// Fuzzy
-	matches = tree.search("aple", 1)
-	if len(matches) == 0 {
-		t.Error("fuzzy search should find at least 1 match")
-	}
-
-	// Duplicate insertion
-	for i := 0; i < 100; i++ {
-		tree.insert("apple")
-	}
-	if len(tree.nodes) != 2 { // apple + apply
-		t.Errorf("duplicate insertions should not create new nodes, got %d", len(tree.nodes))
-	}
-}
-
 func TestLevenshteinDistance(t *testing.T) {
-	if d := levenshteinDistance("kitten", "sitting"); d != 3 {
+	if d := common.LevenshteinDistance("kitten", "sitting"); d != 3 {
 		t.Errorf("kitten→sitting should be 3, got %d", d)
 	}
-	if d := levenshteinDistance("abc", "abc"); d != 0 {
+	if d := common.LevenshteinDistance("abc", "abc"); d != 0 {
 		t.Errorf("same string should be 0, got %d", d)
 	}
-	if d := levenshteinDistance("", "abc"); d != 3 {
+	if d := common.LevenshteinDistance("", "abc"); d != 3 {
 		t.Errorf("empty→abc should be 3, got %d", d)
 	}
 }
@@ -430,13 +392,13 @@ func TestL2MetaIndex(t *testing.T) {
 func TestBuildL2MetaFromEngine(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "l2meta.meh")
-	engine, err := storage.Create(path, 768)
+	engine, err := core.Create(path, 768)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(&storage.IndexSnapshotData{})
+	defer engine.Close(&core.IndexSnapshotData{})
 
-	topic := model.TopicSlot{
+	topic := core.TopicSlot{
 		ID:           101,
 		SceneID:      1,
 		Depth:        1,
@@ -444,7 +406,7 @@ func TestBuildL2MetaFromEngine(t *testing.T) {
 		L3Refs:       []uint64{501},
 	}
 	data, _ := json.Marshal(topic)
-	engine.WriteRecord(storage.RecL2Topic, 101, data)
+	engine.WriteRecord(core.RecL2Topic, 101, data)
 
 	l2idx := BuildL2MetaFromEngine(engine)
 	if l2idx.Len() != 1 {

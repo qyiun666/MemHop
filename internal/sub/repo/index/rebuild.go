@@ -9,46 +9,63 @@ import (
 	"encoding/json"
 	"strings"
 
-	"github.com/qyiun666/MemHop/internal/repo/core/model"
-	"github.com/qyiun666/MemHop/internal/repo/core/storage"
+	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
 // RebuildSearchIndexes scans the engine once and rebuilds all retrieval
 // indexes: the BM25 sparse index (only L2 topics with Depth <= 2), the L1
 // reverse index and the L2 meta index.
-func RebuildSearchIndexes(engine *storage.StorageEngine) (*SparseIndex, *L1ReverseIndex, *L2MetaIndex, error) {
-	sparse := NewSparseIndex()
-	err := engine.IterIndexByType(storage.RecL2Topic, func(idHash uint64) error {
-		topic, err := readTopicForIndex(engine, idHash)
-		if err != nil {
-			return nil // 单条损坏/解析失败不影响整体重建
-		}
-		if topic.Depth > 2 {
-			return nil // 只索引 depth≤2 的话题
-		}
-		text := strings.Join(topic.UserKeywords, " ")
-		if len(topic.FusedKeywords) > 0 {
-			text += " " + strings.Join(topic.FusedKeywords, " ")
-		}
-		terms := Tokenize(text)
-		sparse.AddDocument(idHash, terms, uint32(len(terms)))
-		return nil
-	})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return sparse, BuildL1ReverseIndex(engine), BuildL2MetaFromEngine(engine), nil
+func RebuildSearchIndexes(engine *core.StorageEngine) (*SparseIndex, *L1ReverseIndex, *L2MetaIndex, error) {
+	sparse, l1Reverse, l2Meta := buildIndexesFromEngine(engine)
+	return sparse, l1Reverse, l2Meta, nil
 }
 
-// readTopicForIndex reads and deserializes an L2 TopicSlot record.
-func readTopicForIndex(engine *storage.StorageEngine, idHash uint64) (*model.TopicSlot, error) {
-	_, data, err := engine.ReadRecord(idHash)
-	if err != nil {
-		return nil, err
-	}
-	var topic model.TopicSlot
-	if err := json.Unmarshal(data, &topic); err != nil {
-		return nil, err
-	}
-	return &topic, nil
+// BuildL1ReverseIndex scans the engine for L1 ContextNode records.
+func BuildL1ReverseIndex(engine *core.StorageEngine) *L1ReverseIndex {
+	_, l1Reverse, _ := buildIndexesFromEngine(engine)
+	return l1Reverse
+}
+
+// BuildL2MetaFromEngine scans the storage engine for L2 TopicSlot records.
+func BuildL2MetaFromEngine(engine *core.StorageEngine) *L2MetaIndex {
+	_, _, l2Meta := buildIndexesFromEngine(engine)
+	return l2Meta
+}
+
+// buildIndexesFromEngine scans the engine once and builds the sparse, L1
+// reverse and L2 meta indexes in a single pass. Corrupt or unparsable
+// records are skipped without aborting the rebuild.
+func buildIndexesFromEngine(engine *core.StorageEngine) (*SparseIndex, *L1ReverseIndex, *L2MetaIndex) {
+	sparse := NewSparseIndex()
+	l1Reverse := NewL1ReverseIndex()
+	l2Meta := NewL2MetaIndex()
+	engine.IterIndex(func(idHash, _ uint64) bool {
+		rt, data, err := engine.ReadRecord(idHash)
+		if err != nil {
+			return true // 单条损坏不影响整体重建
+		}
+		switch rt {
+		case core.RecL1SceneNode:
+			var node core.SceneNode
+			if json.Unmarshal(data, &node) == nil && node.SceneID != 0 {
+				l1Reverse.Add(node.SceneID, idHash)
+			}
+		case core.RecL2Topic:
+			var topic topicSlotJSON
+			if json.Unmarshal(data, &topic) != nil {
+				return true // 单条解析失败不影响整体重建
+			}
+			if topic.Depth <= 2 {
+				text := strings.Join(topic.UserKeywords, " ")
+				if len(topic.FusedKeywords) > 0 {
+					text += " " + strings.Join(topic.FusedKeywords, " ")
+				}
+				terms := Tokenize(text)
+				sparse.AddDocument(idHash, terms, uint32(len(terms)))
+			}
+			l2Meta.insertMeta(topicToL2Meta(idHash, &topic))
+		}
+		return true
+	})
+	return sparse, l1Reverse, l2Meta
 }

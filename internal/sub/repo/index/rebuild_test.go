@@ -8,28 +8,27 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/qyiun666/MemHop/internal/repo/core/model"
-	"github.com/qyiun666/MemHop/internal/repo/core/storage"
+	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-func writeRawTopic(t *testing.T, engine *storage.StorageEngine, id uint64, sceneID uint64, depth uint8, kws []string) {
+func writeRawTopic(t *testing.T, engine *core.StorageEngine, id uint64, sceneID uint64, depth uint8, kws []string) {
 	t.Helper()
-	topic := model.TopicSlot{ID: id, SceneID: sceneID, Depth: depth, UserKeywords: kws}
+	topic := core.TopicSlot{ID: id, SceneID: sceneID, Depth: depth, UserKeywords: kws}
 	data, err := json.Marshal(topic)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.WriteRecord(storage.RecL2Topic, id, data); err != nil {
+	if _, err := engine.WriteRecord(core.RecL2Topic, id, data); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestRebuildSearchIndexes(t *testing.T) {
-	engine, err := storage.Create(filepath.Join(t.TempDir(), "rebuild.meh"), 768)
+	engine, err := core.Create(filepath.Join(t.TempDir(), "rebuild.meh"), 768)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(&storage.IndexSnapshotData{})
+	defer engine.Close(&core.IndexSnapshotData{})
 
 	// depth 1/2 应进 sparse；depth 3 不应进 sparse；三个都应进 L2Meta。
 	writeRawTopic(t, engine, 1, 100, 1, []string{"alpha", "memory"})

@@ -9,6 +9,10 @@ import (
 	"strings"
 	"sync"
 	"unicode"
+
+	"github.com/go-ego/gse"
+
+	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
 // Tokenizer defines the interface for text tokenization engines.
@@ -54,18 +58,17 @@ func InitTokenizer(engine string) error {
 	tokenizerOnce.Do(func() {
 		switch want {
 		case EngineAuto, EngineGse:
-			globalTokenizer, tokenizerErr = createTokenizer(engine)
+			globalTokenizer, tokenizerErr = createTokenizer()
 			tokenizerEngine = want
 		default:
-			tokenizerErr = fmt.Errorf("unknown tokenizer engine %q (supported: %q, %q)", engine, EngineAuto, EngineGse)
+			tokenizerErr = common.NewError(common.ErrConfig, fmt.Sprintf("unknown tokenizer engine %q (supported: %q, %q)", engine, EngineAuto, EngineGse))
 		}
 	})
 	if tokenizerErr != nil {
 		return tokenizerErr
 	}
 	if want != tokenizerEngine {
-		return fmt.Errorf("tokenizer already initialized with engine %q; cannot switch to %q in the same process (call ResetTokenizer first)",
-			tokenizerEngine, want)
+		return common.NewError(common.ErrConfig, fmt.Sprintf("tokenizer already initialized with engine %q; cannot switch to %q in the same process (call ResetTokenizer first)", tokenizerEngine, want))
 	}
 	return nil
 }
@@ -199,9 +202,9 @@ func processSegments(segments []string, filterStop bool) []string {
 
 	var result []string
 	for _, tok := range tokens {
-		parts := splitCamelCase(tok)
+		parts := common.SplitCamelCase(tok)
 		for _, p := range parts {
-			cleaned := trimPunctuation(p)
+			cleaned := common.TrimPunctuation(p)
 			cleaned = strings.ToLower(cleaned)
 			if cleaned == "" {
 				continue
@@ -215,55 +218,28 @@ func processSegments(segments []string, filterStop bool) []string {
 	return result
 }
 
-// splitCamelCase splits camelCase/PascalCase identifiers:
-//
-//	"fetchUserData" → ["fetch", "user", "data"]
-//	"JSONParser"    → ["json", "parser"]
-//	"getUserID"     → ["get", "user", "id"]
-//
-// Tokens containing '_' are kept intact.
-func splitCamelCase(word string) []string {
-	if strings.Contains(word, "_") {
-		return []string{word}
-	}
-
-	runes := []rune(word)
-	hasUpper, hasLower := false, false
-	for _, r := range runes {
-		if unicode.IsUpper(r) {
-			hasUpper = true
-		}
-		if unicode.IsLower(r) {
-			hasLower = true
-		}
-	}
-	if !hasUpper || !hasLower {
-		return []string{word}
-	}
-
-	lower := []rune(strings.ToLower(word))
-	n := len(runes)
-	var parts []string
-	start := 0
-
-	for i := 1; i < n; i++ {
-		if unicode.IsLower(runes[i-1]) && unicode.IsUpper(runes[i]) {
-			parts = append(parts, string(lower[start:i]))
-			start = i
-			continue
-		}
-		if i+1 < n && unicode.IsUpper(runes[i-1]) && unicode.IsUpper(runes[i]) && unicode.IsLower(runes[i+1]) {
-			parts = append(parts, string(lower[start:i]))
-			start = i
-		}
-	}
-	parts = append(parts, string(lower[start:]))
-	return parts
+// gseTokenizer implements Tokenizer using the pure-Go gse library.
+// It loads the embedded "zh_s" dictionary (~350k Simplified-Chinese
+// tokens) at construction so BM25 recall stays strong without CGO or
+// external dictionary files.
+type gseTokenizer struct {
+	seg *gse.Segmenter
 }
 
-// trimPunctuation removes non-alphanumeric (except '_') from both ends.
-func trimPunctuation(s string) string {
-	return strings.TrimFunc(s, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
-	})
+// createTokenizer builds the global tokenizer. gse is the only backend.
+func createTokenizer() (Tokenizer, error) {
+	s, err := gse.NewEmbed("zh_s")
+	if err != nil {
+		return nil, common.NewError(common.ErrConfig, "gse tokenizer init failed", err)
+	}
+	return &gseTokenizer{seg: &s}, nil
 }
+
+// Cut segments text in precise mode with HMM enabled so out-of-vocabulary
+// CJK terms are still recognised.
+func (g *gseTokenizer) Cut(text string) []string {
+	return g.seg.Cut(text, true)
+}
+
+// Close is a no-op for gse (no native resources to release).
+func (g *gseTokenizer) Close() {}

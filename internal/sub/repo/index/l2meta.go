@@ -4,13 +4,11 @@
 package index
 
 import (
-	"encoding/json"
 	"slices"
+	"strings"
 	"sync"
 
-	"github.com/qyiun666/MemHop/internal/common/strutil"
-	"github.com/qyiun666/MemHop/internal/repo/core/model"
-	"github.com/qyiun666/MemHop/internal/repo/core/storage"
+	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
 // L2Meta is lightweight metadata for an L2 TopicSlot.
@@ -43,31 +41,11 @@ func NewL2MetaIndex() *L2MetaIndex {
 	}
 }
 
-// BuildL2MetaFromEngine scans the storage engine for L2 TopicSlot records.
-func BuildL2MetaFromEngine(engine *storage.StorageEngine) *L2MetaIndex {
-	idx := NewL2MetaIndex()
+// BuildL2MetaFromEngine is defined in rebuild.go (shared single-pass scan).
 
-	engine.IterIndex(func(idHash, _ uint64) bool {
-		rt, data, err := engine.ReadRecord(idHash)
-		if err != nil {
-			return true
-		}
-		if rt != storage.RecL2Topic {
-			return true
-		}
-		var topic topicSlotJSON
-		if err := json.Unmarshal(data, &topic); err != nil {
-			return true
-		}
-		meta := topicToL2Meta(idHash, &topic)
-		idx.insertMeta(meta)
-		return true
-	})
-
-	return idx
-}
-
-// topicSlotJSON is a minimal deserialization target for TopicSlot.
+// topicSlotJSON is a minimal deserialization target for TopicSlot records.
+// It carries created_at/updated_at keys that core.TopicSlot does not model,
+// so engine scans keep the original Timestamp semantics.
 type topicSlotJSON struct {
 	ID              uint64   `json:"id"`
 	SceneID         uint64   `json:"scene_id"`
@@ -77,19 +55,21 @@ type topicSlotJSON struct {
 	AgentKeywords   []string `json:"agent_keywords"`
 	FusedKeywords   []string `json:"fused_keywords"`
 	CentroidPageRef uint64   `json:"centroid_page_ref"`
-	L4Refs          uint64   `json:"l4_refs"`
+	L4Refs          []uint64 `json:"l4_refs"`
 	L3Refs          []uint64 `json:"l3_refs"`
 	CreatedAt       int64    `json:"created_at"`
 	UpdatedAt       int64    `json:"updated_at"`
 }
 
+// topicToL2Meta converts a TopicSlot record into an L2Meta entry.
 func topicToL2Meta(idHash uint64, t *topicSlotJSON) *L2Meta {
-	title := joinKeywords(t.FusedKeywords, t.UserKeywords)
-	l3Refs := t.L3Refs
-	archiveCount := 0
-	if t.L4Refs != 0 {
-		archiveCount = 1
+	src := t.FusedKeywords
+	if len(src) == 0 {
+		src = t.UserKeywords
 	}
+	title := strings.Join(src, ", ")
+	l3Refs := t.L3Refs
+	archiveCount := len(t.L4Refs)
 	ts := t.UpdatedAt
 	if ts < t.CreatedAt {
 		ts = t.CreatedAt
@@ -109,21 +89,6 @@ func topicToL2Meta(idHash uint64, t *topicSlotJSON) *L2Meta {
 		L3Refs:       l3Refs,
 		Timestamp:    uint64(ts),
 	}
-}
-
-func joinKeywords(primary, fallback []string) string {
-	src := primary
-	if len(src) == 0 {
-		src = fallback
-	}
-	if len(src) == 0 {
-		return ""
-	}
-	result := src[0]
-	for _, s := range src[1:] {
-		result += ", " + s
-	}
-	return result
 }
 
 // Get returns metadata for an L2 by idHash.
@@ -213,7 +178,7 @@ func (idx *L2MetaIndex) insertMeta(meta *L2Meta) {
 
 func (idx *L2MetaIndex) removeFromIndices(sceneID uint64, idHash uint64) {
 	if ids, ok := idx.byScene[sceneID]; ok {
-		filtered := removeUint64(ids, idHash)
+		filtered := slices.DeleteFunc(slices.Clone(ids), func(x uint64) bool { return x == idHash })
 		if len(filtered) == 0 {
 			delete(idx.byScene, sceneID)
 		} else {
@@ -222,19 +187,12 @@ func (idx *L2MetaIndex) removeFromIndices(sceneID uint64, idHash uint64) {
 	}
 }
 
-func removeUint64(slice []uint64, v uint64) []uint64 {
-	return slices.DeleteFunc(slices.Clone(slice), func(x uint64) bool { return x == v })
-}
-
 // L2MetaFromTopic builds a lightweight L2Meta entry from a TopicSlot.
-func L2MetaFromTopic(t *model.TopicSlot) *L2Meta {
-	archiveCount := 0
-	if t.L4Refs != 0 {
-		archiveCount = 1
-	}
+func L2MetaFromTopic(t *core.TopicSlot) *L2Meta {
+	archiveCount := len(t.L4Refs)
 	return &L2Meta{
 		IDHash:       t.ID,
-		Title:        strutil.JoinStrings(t.UserKeywords, ", "),
+		Title:        strings.Join(t.UserKeywords, ", "),
 		Depth:        t.Depth,
 		SceneID:      t.SceneID,
 		ChildrenIDs:  t.ChildrenIDs,
