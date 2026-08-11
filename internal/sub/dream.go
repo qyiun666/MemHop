@@ -143,7 +143,8 @@ func (db *DB) applyGroups(ctx context.Context, sceneID uint64, topics []core.Top
 			continue
 		}
 
-		// 2. 对 MergedSummary 提取关键词，作为融合话题的关键词（保留细节、供检索）。
+		// 2. 对 MergedSummary 提取关键词，作为融合话题的 FusedKeywords（MergedSummary
+		//    本身是 LLM 压缩 User+Agent 双侧的产物，故其关键词即双侧融合结果）。
 		keywords, err := db.llm.ExtractKeywords(ctx, g.MergedSummary)
 		if err != nil || len(keywords) == 0 {
 			keywords = []string{g.MergedTitle}
@@ -156,7 +157,7 @@ func (db *DB) applyGroups(ctx context.Context, sceneID uint64, topics []core.Top
 			continue
 		}
 
-		// 4. 创建融合话题（UserKeywords=FusedKeywords=提取的关键词，带质心向量）。
+		// 4. 创建融合话题（仅 FusedKeywords 有值，User/Agent 轨道清空，带质心向量）。
 		if !repo.CreateFusedTopicL2(db.engine, common.FormatHash(sceneID), keywords, minTS, maxTS, g.NodeHashes, centroidRef) {
 			slog.Warn("dream: create fused topic failed", "parent", parentIDStr)
 			continue

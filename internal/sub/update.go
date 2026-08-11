@@ -47,7 +47,13 @@ func (db *DB) Update(topicID string, text string, timestamp int64) bool {
 	if !repo.UpdateTopicL2(db.engine, topicIDStr, keywords, timestamp) {
 		return false
 	}
-	terms := index.Tokenize(strings.Join(append(topic.UserKeywords, topic.FusedKeywords...), " "))
+	// 更新 BM25 索引：未压缩话题的语义载体是 User+Agent 双侧关键词（压缩话题是 FusedKeywords）。
+	// 注意 topic 是 UpdateTopicL2 之前读回的，其 AgentKeywords 为旧值，这里用刚提取的 keywords（新 agent 侧）。
+	all := make([]string, 0, len(topic.UserKeywords)+len(keywords)+len(topic.FusedKeywords))
+	all = append(all, topic.UserKeywords...)
+	all = append(all, keywords...)
+	all = append(all, topic.FusedKeywords...)
+	terms := index.Tokenize(strings.Join(all, " "))
 	db.sparseIndex.AddDocument(parsedID, terms, uint32(len(terms)))
 	return true
 }

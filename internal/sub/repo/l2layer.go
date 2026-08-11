@@ -251,10 +251,10 @@ func CreateTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []st
 	return core.WriteTopicSlot(engine, topic.ID, &topic) == nil
 }
 
-// CreateFusedTopicL2 新增话题并附带融合字段：ID 由 ComputeTopicID 生成（sceneID + 双时间戳哈希），
-// depth 固定 1，除基础字段外额外写 AgentTimestamp、FusedKeywords（复用 userKeywords）与
-// ChildrenIDs，成功返回 true。L3/L4 由 AppendTopicL3RefsL2 / UpdateTopicL4RefsL2 更新。
-func CreateFusedTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []string, userTS, agentTS int64, childrenIDs []uint64, centroidRef uint64) bool {
+// CreateFusedTopicL2 新增融合话题（压缩产物）：ID 由 ComputeTopicID 生成（sceneID + 双时间戳哈希），
+// depth 固定 1。按话题模型，压缩后 UserKeywords/AgentKeywords 清空，仅 FusedKeywords 有值
+// （FusedKeywords 是 User+Agent 双侧压缩融合的产物）。L3/L4 由 AppendTopicL3RefsL2 / UpdateTopicL4RefsL2 更新。
+func CreateFusedTopicL2(engine *core.StorageEngine, sceneID string, fusedKeywords []string, userTS, agentTS int64, childrenIDs []uint64, centroidRef uint64) bool {
 	sceneHash, err := common.ParseID(sceneID)
 	if err != nil {
 		return false
@@ -263,10 +263,9 @@ func CreateFusedTopicL2(engine *core.StorageEngine, sceneID string, userKeywords
 		ID:              core.ComputeTopicID(sceneHash, userTS, agentTS),
 		SceneID:         sceneHash,
 		Depth:           1,
-		UserKeywords:    userKeywords,
 		UserTimestamp:   userTS,
 		AgentTimestamp:  agentTS,
-		FusedKeywords:   userKeywords,
+		FusedKeywords:   fusedKeywords,
 		ChildrenIDs:     childrenIDs,
 		CentroidPageRef: centroidRef,
 	}

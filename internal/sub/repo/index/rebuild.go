@@ -56,7 +56,11 @@ func buildIndexesFromEngine(engine *core.StorageEngine) (*SparseIndex, *L1Revers
 				return true // 单条解析失败不影响整体重建
 			}
 			if topic.Depth <= 2 {
+				// 未压缩话题的语义载体是 User+Agent 双侧关键词，压缩话题是 FusedKeywords。
 				text := strings.Join(topic.UserKeywords, " ")
+				if len(topic.AgentKeywords) > 0 {
+					text += " " + strings.Join(topic.AgentKeywords, " ")
+				}
 				if len(topic.FusedKeywords) > 0 {
 					text += " " + strings.Join(topic.FusedKeywords, " ")
 				}

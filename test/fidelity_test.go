@@ -283,10 +283,16 @@ func TestDreamCompressionFidelity(t *testing.T) {
 		t.Fatal("no keywords after Dream")
 	}
 	// 压缩后检索结果应包含融合话题（FusedKeywords 非空）。
+	// 按话题模型：融合话题 FusedKeywords 有值时，User/Agent 轨道应为空。
 	var fusedSeen bool
 	for i := range res.Contexts {
-		if len(res.Contexts[i].FusedKeywords) > 0 {
+		c := &res.Contexts[i]
+		if len(c.FusedKeywords) > 0 {
 			fusedSeen = true
+			if len(c.UserKeywords) > 0 || len(c.AgentKeywords) > 0 {
+				t.Errorf("fused topic should have empty User/Agent keywords, got user=%v agent=%v",
+					c.UserKeywords, c.AgentKeywords)
+			}
 		}
 	}
 	if !fusedSeen {
