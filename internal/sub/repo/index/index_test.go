@@ -13,10 +13,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// ============================================================================
-// cosine similarity tests
-// ============================================================================
-
 func TestCosineSimilarity(t *testing.T) {
 	t.Run("identical", func(t *testing.T) {
 		a := []float32{1.0, 0.0, 0.0}
@@ -67,10 +63,6 @@ func TestCosineSimilarity(t *testing.T) {
 		}
 	})
 }
-
-// ============================================================================
-// tokenizer tests
-// ============================================================================
 
 func TestTokenize(t *testing.T) {
 	t.Run("english", func(t *testing.T) {
@@ -200,10 +192,6 @@ func TestSplitCamelCase(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// BM25 / SparseIndex tests
-// ============================================================================
-
 func TestBM25Score(t *testing.T) {
 	idx := NewSparseIndex()
 	idx.AddDocument(1, []string{"test", "term"}, 2)
@@ -296,10 +284,6 @@ func TestSparseSerializeRoundtrip(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// EntityIndex tests
-// ============================================================================
-
 func TestEntityIndex(t *testing.T) {
 	t.Run("exact_match", func(t *testing.T) {
 		ei := NewEntityIndex()
@@ -348,10 +332,6 @@ func TestLevenshteinDistance(t *testing.T) {
 		t.Errorf("empty→abc should be 3, got %d", d)
 	}
 }
-
-// ============================================================================
-// L2MetaIndex tests
-// ============================================================================
 
 func TestL2MetaIndex(t *testing.T) {
 	t.Run("basic_crud", func(t *testing.T) {
@@ -423,10 +403,6 @@ func TestBuildL2MetaFromEngine(t *testing.T) {
 		t.Errorf("expected L3Refs [501], got %v", meta.L3Refs)
 	}
 }
-
-// ============================================================================
-// helpers
-// ============================================================================
 
 func assertContains(t *testing.T, tokens []string, expected string) {
 	t.Helper()

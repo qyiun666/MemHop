@@ -8,8 +8,8 @@ import (
 	"fmt"
 )
 
-// EnumString returns the display name of v from names, falling back to
-// "TypeName(n)" for unknown values.
+// EnumString returns the display name of v, falling back to "TypeName(n)"
+// for unknown values.
 func EnumString[T ~uint8](v T, names map[T]string, typeName string) string {
 	if s, ok := names[v]; ok {
 		return s
@@ -17,12 +17,10 @@ func EnumString[T ~uint8](v T, names map[T]string, typeName string) string {
 	return fmt.Sprintf("%s(%d)", typeName, uint8(v))
 }
 
-// EnumMarshal serializes an enum as its raw uint8 value.
 func EnumMarshal[T ~uint8](v T) ([]byte, error) {
 	return json.Marshal(uint8(v))
 }
 
-// EnumAssign deserializes a raw uint8 value into dst.
 func EnumAssign[T ~uint8](dst *T, data []byte) error {
 	var v uint8
 	if err := json.Unmarshal(data, &v); err != nil {

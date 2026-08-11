@@ -10,7 +10,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// TestListScenesEmpty 空库返回空切片。
+// TestListScenesEmpty empty db returns an empty slice.
 func TestListScenesEmpty(t *testing.T) {
 	db := &DB{engine: newTestEngine(t)}
 	scenes, err := db.ListScenes()
@@ -22,7 +22,7 @@ func TestListScenesEmpty(t *testing.T) {
 	}
 }
 
-// TestListScenesReturnsIDName 多场景返回 scene_id + scene_name。
+// TestListScenesReturnsIDName multiple scenes return scene_id + scene_name.
 func TestListScenesReturnsIDName(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
@@ -50,7 +50,7 @@ func TestListScenesReturnsIDName(t *testing.T) {
 	}
 }
 
-// TestMergeScenesMovesTopics 合并后话题归属迁移、副场景删除、主场景保留。
+// TestMergeScenesMovesTopics topics move to primary, secondary deleted, primary kept.
 func TestMergeScenesMovesTopics(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
@@ -74,15 +74,15 @@ func TestMergeScenesMovesTopics(t *testing.T) {
 	if err := db.MergeScenes(common.FormatHash(primary.SceneID), []string{common.FormatHash(secondary.SceneID)}); err != nil {
 		t.Fatalf("MergeScenes: %v", err)
 	}
-	// 副场景记录已删除。
+	// Secondary scene record deleted.
 	if _, err := core.ReadSceneSlot(engine, secondary.SceneID); err == nil {
 		t.Fatal("secondary scene should be deleted")
 	}
-	// 主场景保留。
+	// Primary scene remains.
 	if _, err := core.ReadSceneSlot(engine, primary.SceneID); err != nil {
 		t.Fatal("primary scene should remain")
 	}
-	// 话题归属已迁移。
+	// Topic ownership migrated.
 	for _, id := range []uint64{t1.ID, t2.ID} {
 		topics, err := core.ReadTopicSlot(engine, id)
 		if err != nil {
@@ -94,7 +94,7 @@ func TestMergeScenesMovesTopics(t *testing.T) {
 	}
 }
 
-// TestMergeScenesInvalid 无效主场景 ID 与空副场景列表报错。
+// TestMergeScenesInvalid invalid primary ID and empty secondary list error.
 func TestMergeScenesInvalid(t *testing.T) {
 	db := &DB{engine: newTestEngine(t)}
 	if err := db.MergeScenes("nothex", []string{"abc"}); err == nil {
@@ -105,7 +105,7 @@ func TestMergeScenesInvalid(t *testing.T) {
 	}
 }
 
-// TestMergeScenesRemovesActiveScene 合并后激活场景列表移除副场景。
+// TestMergeScenesRemovesActiveScene merged secondary scenes drop from the active list.
 func TestMergeScenesRemovesActiveScene(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}

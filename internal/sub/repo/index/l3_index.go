@@ -1,8 +1,6 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L3Index provides keyword, type, graph, and BM25 search for L3 hypergraph nodes.
-
 package index
 
 import (
@@ -14,7 +12,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// IndexedNode caches key fields of an L3 node for fast lookup.
 type IndexedNode struct {
 	IDHash   uint64
 	GraphID  uint64
@@ -32,7 +29,6 @@ type L3Index struct {
 	mu        sync.RWMutex
 }
 
-// NewL3Index creates an empty L3Index.
 func NewL3Index() *L3Index {
 	return &L3Index{
 		byKeyword: make(map[string]map[uint64]bool),
@@ -43,7 +39,6 @@ func NewL3Index() *L3Index {
 	}
 }
 
-// BuildFromEngine scans the engine and indexes all L3 graph nodes.
 func (idx *L3Index) BuildFromEngine(engine *core.StorageEngine) error {
 	nodes, err := loadAllL3Nodes(engine)
 	if err != nil {
@@ -57,14 +52,12 @@ func (idx *L3Index) BuildFromEngine(engine *core.StorageEngine) error {
 	return nil
 }
 
-// AddNode adds a single node to the index.
 func (idx *L3Index) AddNode(node *core.HypergraphNode) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	idx.addNodeLocked(node)
 }
 
-// RemoveNode removes a node from the index by common.
 func (idx *L3Index) RemoveNode(nodeHash uint64) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -75,7 +68,6 @@ func (idx *L3Index) RemoveNode(nodeHash uint64) {
 	idx.removeNodeLocked(nodeHash, info)
 }
 
-// SearchByKeyword returns node hashes matching a keyword (exact match).
 func (idx *L3Index) SearchByKeyword(keyword string, limit int) []uint64 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -83,7 +75,6 @@ func (idx *L3Index) SearchByKeyword(keyword string, limit int) []uint64 {
 	return common.SetToSlice(set, limit)
 }
 
-// SearchByType returns node hashes of a given type, optionally filtered by graph.
 func (idx *L3Index) SearchByType(nodeType string, graphID uint64, limit int) []uint64 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -94,14 +85,11 @@ func (idx *L3Index) SearchByType(nodeType string, graphID uint64, limit int) []u
 	return intersectWithGraph(typeSet, idx.byGraph[graphID], limit)
 }
 
-// Len returns the number of indexed nodes.
 func (idx *L3Index) Len() int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return len(idx.nodes)
 }
-
-// --- internal helpers (caller must hold idx.mu) ---
 
 func (idx *L3Index) addNodeLocked(node *core.HypergraphNode) {
 	h := node.IDHash
@@ -133,7 +121,6 @@ func (idx *L3Index) addNodeLocked(node *core.HypergraphNode) {
 	}
 	idx.byGraph[node.GraphID][h] = true
 
-	// BM25: index title + content.
 	tokens := TokenizeWords(node.Title + " " + node.Content)
 	idx.bm25.AddDocument(h, tokens, uint32(len(tokens)))
 }
@@ -164,7 +151,6 @@ func (idx *L3Index) removeNodeLocked(nodeHash uint64, info *IndexedNode) {
 	idx.bm25.RemoveDocument(nodeHash)
 }
 
-// loadAllL3Nodes reads every L3 node from the engine.
 func loadAllL3Nodes(engine *core.StorageEngine) ([]*core.HypergraphNode, error) {
 	var nodes []*core.HypergraphNode
 	engine.IterIndex(func(idHash, _ uint64) bool {
@@ -181,7 +167,6 @@ func loadAllL3Nodes(engine *core.StorageEngine) ([]*core.HypergraphNode, error) 
 	return nodes, nil
 }
 
-// intersectWithGraph returns hashes present in both sets, sorted and limited.
 func intersectWithGraph(typeSet, graphSet map[uint64]bool, limit int) []uint64 {
 	if len(typeSet) == 0 || len(graphSet) == 0 {
 		return nil

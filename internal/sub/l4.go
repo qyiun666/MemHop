@@ -11,17 +11,16 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// L4Query 对话原文查询条件。三模式互斥，优先级：Keyword > 时间范围 > IDs；
-// TopicID 在所有模式下叠加过滤。
+// L4Query archive query: the three modes are exclusive with priority
+// Keyword > time range > IDs; TopicID filters in all modes.
 type L4Query struct {
-	Keyword string   `json:"keyword,omitempty"` // 模式1：内容子串匹配
-	Start   int64    `json:"start,omitempty"`   // 模式2：时间范围 [Start, End]（毫秒）
+	Keyword string   `json:"keyword,omitempty"` // mode 1: content substring
+	Start   int64    `json:"start,omitempty"`   // mode 2: time range [Start, End] (ms)
 	End     int64    `json:"end,omitempty"`
-	IDs     []string `json:"ids,omitempty"`      // 模式3：按 id 读取
-	TopicID *string  `json:"topic_id,omitempty"` // 叠加：仅返回该话题的归档
+	IDs     []string `json:"ids,omitempty"`      // mode 3: by id
+	TopicID *string  `json:"topic_id,omitempty"` // extra: only archives of this topic
 }
 
-// SearchL4 搜索对话原文；条件全空时返回空结果。
 func (db *DB) SearchL4(q L4Query) ([]core.ArchiveSlot, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err
@@ -57,7 +56,6 @@ func (db *DB) SearchL4(q L4Query) ([]core.ArchiveSlot, error) {
 	return out, nil
 }
 
-// GetArchive 按 ID 读取单条归档；不存在返回 ErrNotFound。
 func (db *DB) GetArchive(id string) (*core.ArchiveSlot, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err

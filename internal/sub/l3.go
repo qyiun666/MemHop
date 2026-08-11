@@ -13,14 +13,12 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// L3Graph 单个超图的完整视图。
 type L3Graph struct {
 	Slot  core.HypergraphSlot
 	Nodes []core.HypergraphNode
 	Edges []core.HypergraphEdge
 }
 
-// L3ImportItem 单个 L3 知识节点导入项。
 type L3ImportItem struct {
 	Title    string   `json:"title"`
 	Domain   string   `json:"domain"`
@@ -29,7 +27,6 @@ type L3ImportItem struct {
 	Keywords []string `json:"keywords"`
 }
 
-// L3ImportMode 导入冲突处理模式。
 type L3ImportMode string
 
 const (
@@ -38,14 +35,12 @@ const (
 	L3ImportOverwrite L3ImportMode = "Overwrite"
 )
 
-// L3ImportResult 导入结果。
 type L3ImportResult struct {
 	CreatedIDs   []string `json:"created_ids"`
 	UpdatedIDs   []string `json:"updated_ids"`
 	SkippedCount int      `json:"skipped_count"`
 }
 
-// GetL3 查看单个超图：图槽 + 全部节点与边。
 func (db *DB) GetL3(id string) (*L3Graph, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err
@@ -54,7 +49,7 @@ func (db *DB) GetL3(id string) (*L3Graph, error) {
 	return db.getL3Graph(id)
 }
 
-// getL3Graph 无锁实现：GetL3 与 UpdateL3（写锁下）共用。
+// getL3Graph is the lock-free impl shared by GetL3 and UpdateL3 (write lock).
 func (db *DB) getL3Graph(id string) (*L3Graph, error) {
 	graphHash, err := common.ParseID(id)
 	if err != nil {
@@ -82,7 +77,6 @@ func (db *DB) getL3Graph(id string) (*L3Graph, error) {
 	return &L3Graph{Slot: *slot, Nodes: nodes, Edges: edges}, nil
 }
 
-// ListL3 返回全部超图列表。
 func (db *DB) ListL3() ([]core.HypergraphSlot, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err
@@ -95,7 +89,8 @@ func (db *DB) ListL3() ([]core.HypergraphSlot, error) {
 	return all, nil
 }
 
-// ImportL3 批量导入知识节点：按 Domain 建/复用图槽，按 mode 处理已存在节点。
+// ImportL3 batch-imports knowledge nodes: per-Domain graph slot create/reuse,
+// existing nodes handled by mode.
 func (db *DB) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error) {
 	if len(items) == 0 {
 		return nil, common.NewError(common.ErrInvalidQuery, "import: no items")
@@ -107,7 +102,7 @@ func (db *DB) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult
 	for _, g := range repo.ListGraphsL3(db.engine) {
 		graphCache[g.Name] = g.IDHash
 	}
-	nodeTitles := make(map[uint64]map[string]struct{}) // graphID → 已存在节点标题
+	nodeTitles := make(map[uint64]map[string]struct{}) // graphID → existing node titles
 	result := &L3ImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}}
 	for _, item := range items {
 		if item.Title == "" {
@@ -148,7 +143,7 @@ func (db *DB) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult
 	return result, nil
 }
 
-// UpdateL3 部分更新超图槽（当前仅 Name），返回更新后的完整视图。
+// UpdateL3 partially updates a graph slot (currently Name only).
 func (db *DB) UpdateL3(id string, name *string) (*L3Graph, error) {
 	if _, err := repo.UpdateGraphL3(db.engine, id, name); err != nil {
 		return nil, err
@@ -156,7 +151,7 @@ func (db *DB) UpdateL3(id string, name *string) (*L3Graph, error) {
 	return db.getL3Graph(id)
 }
 
-// DeleteL3 级联删除超图及其全部节点与边。
+// DeleteL3 cascades: deletes the graph with all its nodes and edges.
 func (db *DB) DeleteL3(id string) error {
 	if _, err := common.ParseID(id); err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)

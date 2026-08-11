@@ -14,7 +14,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// L5UpdateFields 动作链部分更新字段，nil = 不更新。
+// L5UpdateFields holds partial chain update fields; nil = not updated.
 type L5UpdateFields struct {
 	Title         *string           `json:"title,omitempty"`
 	Trigger       *string           `json:"trigger,omitempty"`
@@ -25,7 +25,6 @@ type L5UpdateFields struct {
 	LastTriggered *int64            `json:"last_triggered,omitempty"`
 }
 
-// GetL5 按 id 查询动作链。
 func (db *DB) GetL5(id string) (*core.ActionChainSlot, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err
@@ -34,7 +33,6 @@ func (db *DB) GetL5(id string) (*core.ActionChainSlot, error) {
 	return repo.GetChainL5(db.engine, id)
 }
 
-// CreateL5 新建动作链，返回链 ID（hex）。
 func (db *DB) CreateL5(title, trigger string) (string, error) {
 	if title == "" || trigger == "" {
 		return "", common.NewError(common.ErrInvalidQuery, "title and trigger are required")
@@ -46,7 +44,8 @@ func (db *DB) CreateL5(title, trigger string) (string, error) {
 	return common.FormatHash(id), nil
 }
 
-// UpdateL5 部分更新动作链字段（读-改-写，未指定的字段保持不变）。
+// UpdateL5 partially updates chain fields (read-modify-write; unset fields
+// stay unchanged).
 func (db *DB) UpdateL5(id string, fields *L5UpdateFields) error {
 	if fields == nil {
 		return nil
@@ -79,7 +78,7 @@ func (db *DB) UpdateL5(id string, fields *L5UpdateFields) error {
 	return repo.UpdateChainL5(db.engine, id, chain)
 }
 
-// DeleteL5 删除动作链，级联清理其 ActionStep。
+// DeleteL5 deletes a chain, cascading to its ActionSteps.
 func (db *DB) DeleteL5(id string) error {
 	if _, err := common.ParseID(id); err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse chain id", err)
@@ -90,14 +89,12 @@ func (db *DB) DeleteL5(id string) error {
 	return nil
 }
 
-// L5ListQuery 动作链列表查询条件。
 type L5ListQuery struct {
-	Status          *string `json:"status,omitempty"`            // 状态字符串："draft"/"active"/"deprecated"
-	MinTriggerCount *uint32 `json:"min_trigger_count,omitempty"` // 触发次数下限
-	Keyword         string  `json:"keyword,omitempty"`           // Title 子串匹配（大小写不敏感）
+	Status          *string `json:"status,omitempty"`            // "draft"/"active"/"deprecated"
+	MinTriggerCount *uint32 `json:"min_trigger_count,omitempty"` // lower bound
+	Keyword         string  `json:"keyword,omitempty"`           // Title substring (case-insensitive)
 }
 
-// ListL5 列出动作链：过滤 → 按 UpdatedAt 降序 → 返回全量。
 func (db *DB) ListL5(q L5ListQuery) ([]core.ActionChainSlot, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err

@@ -1,8 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// llm_ops.go 是 Provider 的三个 LLM 调用点：语义关键词提取、
-// L2 压缩（Consolidate）与 L1→L0 蒸馏（Distill）。
+// llm_ops.go hosts the Provider's three LLM call points: keyword extraction,
+// L2 consolidation and L1→L0 distillation.
 
 package sub
 
@@ -19,8 +19,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// ---------- 语义关键词提取 ----------
-
 const systemKeywords = `You extract keywords that capture the core semantics of the text.
 
 Rules:
@@ -32,8 +30,8 @@ Rules:
 - Do not include greetings, filler words, or non-informational content
 - Output ONLY valid JSON: {"keywords":[...]}, no markdown, no code fences`
 
-// ExtractKeywords 提取文本的语义关键词。返回的关键词集合
-// 拼合起来能代表原文的核心语义，数量不限制。
+// ExtractKeywords extracts semantic keywords whose union represents the
+// text's core meaning (unlimited count).
 func (p *Provider) ExtractKeywords(ctx context.Context, text string) ([]string, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -53,7 +51,6 @@ func (p *Provider) ExtractKeywords(ctx context.Context, text string) ([]string, 
 	return dedupeKeywords(raw.Keywords), nil
 }
 
-// dedupeKeywords 过滤空串并去重（保留首次出现顺序）。
 func dedupeKeywords(ss []string) []string {
 	seen := make(map[string]struct{}, len(ss))
 	out := make([]string, 0, len(ss))
@@ -71,17 +68,13 @@ func dedupeKeywords(ss []string) []string {
 	return out
 }
 
-// ---------- L2 压缩（Consolidate） ----------
-
-// L2Group 描述一组被压缩的 L2 话题。
 type L2Group struct {
-	SceneID       uint64   `json:"scene_id"`       // 所属场景 ID
-	NodeHashes    []uint64 `json:"node_hashes"`    // 被压缩的话题 ID 列表
-	MergedTitle   string   `json:"merged_title"`   // 压缩后的话题标题
-	MergedSummary string   `json:"merged_summary"` // 压缩后的内容总结
+	SceneID       uint64   `json:"scene_id"`
+	NodeHashes    []uint64 `json:"node_hashes"`
+	MergedTitle   string   `json:"merged_title"`
+	MergedSummary string   `json:"merged_summary"`
 }
 
-// ConsolidationOutput 是 L2 压缩的 LLM 返回。
 type ConsolidationOutput struct {
 	L2Groups            []L2Group `json:"l2_groups"`
 	L2CompressionNeeded bool      `json:"l2_compression_needed"`
@@ -110,8 +103,8 @@ Output ONLY valid JSON in this exact shape (no markdown, no code fences):
 }
 Every merged group MUST include non-empty merged_title and merged_summary.`
 
-// Consolidate 判断一批 L2 话题是否属于同一话题、可否进一步压缩。
-// 返回被压缩话题的分组与保留全部细节的内容总结。
+// Consolidate decides whether a batch of L2 topics share a topic and
+// returns compression groups preserving all details.
 func (p *Provider) Consolidate(ctx context.Context, topics []core.TopicSlot) (*ConsolidationOutput, error) {
 	if len(topics) == 0 {
 		return &ConsolidationOutput{L2Groups: []L2Group{}, L2CompressionNeeded: false}, nil
@@ -124,8 +117,8 @@ func (p *Provider) Consolidate(ctx context.Context, topics []core.TopicSlot) (*C
 	return parseConsolidateResponse(response)
 }
 
-// buildConsolidatePrompt 按 SceneID 分组列出话题数据，场景内按用户发言时间升序
-// （时间相邻才有"同一话题可压缩"的判断意义）。
+// buildConsolidatePrompt lists topics grouped by scene, sorted by user turn
+// time (adjacency matters for merge judgment).
 func buildConsolidatePrompt(topics []core.TopicSlot) string {
 	byScene := make(map[uint64][]core.TopicSlot)
 	for _, t := range topics {
@@ -158,8 +151,8 @@ func buildConsolidatePrompt(topics []core.TopicSlot) string {
 	return b.String()
 }
 
-// parseConsolidateResponse 解析 LLM 返回；scene_id / node_hashes
-// 兼容 JSON 数字或引号字符串（LLM 常引号化超 2^53 的哈希）。
+// parseConsolidateResponse parses the LLM reply; scene_id/node_hashes
+// accept JSON numbers or quoted strings.
 func parseConsolidateResponse(response string) (*ConsolidationOutput, error) {
 	cleaned := stripCodeBlocks(response)
 	var raw struct {
@@ -199,8 +192,8 @@ func parseConsolidateResponse(response string) (*ConsolidationOutput, error) {
 	return out, nil
 }
 
-// parseUint64Flex 将 JSON 数字或引号字符串解析为 uint64，
-// 先按十进制，失败再按十六进制（含 0x 前缀）。
+// parseUint64Flex parses a JSON number or quoted string as uint64, decimal
+// first then hex (0x prefix).
 func parseUint64Flex(raw json.RawMessage) (uint64, error) {
 	s := strings.Trim(strings.TrimSpace(string(raw)), `"`)
 	if s == "" || s == "null" {
@@ -212,26 +205,23 @@ func parseUint64Flex(raw json.RawMessage) (uint64, error) {
 	return strconv.ParseUint(strings.TrimPrefix(s, "0x"), 16, 64)
 }
 
-// ---------- L1→L0 蒸馏（Distill） ----------
-
-// L1Sample 是送入蒸馏的 L1 节点样本，由调用方从 L1 节点及其关联话题组装
-// （L1 SceneNode 本身不含关键词，关键词取自关联的 L2 Topic）。
+// L1Sample is a distill input assembled from an L1 node and its topics
+// (keywords come from linked L2 topics).
 type L1Sample struct {
-	IDHash     uint64   // 节点哈希
-	Keywords   []string // 关联话题的融合关键词
-	Summary    string   // 可选的摘要文本
-	Importance float32  // 重要性
-	Depth      uint8    // 节点深度
+	IDHash     uint64
+	Keywords   []string
+	Summary    string
+	Importance float32
+	Depth      uint8
 }
 
-// EmotionScore 情绪 VAD 三维度，范围 [0,1]。
 type EmotionScore struct {
-	Valence   float64 `json:"valence"`   // 0=非常负面, 1=非常正面
-	Arousal   float64 `json:"arousal"`   // 0=平静, 1=高度兴奋
-	Dominance float64 `json:"dominance"` // 0=顺从, 1=主导
+	Valence   float64 `json:"valence"`
+	Arousal   float64 `json:"arousal"`
+	Dominance float64 `json:"dominance"`
 }
 
-// MBTIScore MBTI 四维度，范围 [-1,1]；Type 由维度推导，维度为负取 I/N/T/J，为正取 E/S/F/P。
+// MBTIScore holds four MBTI dimensions in [-1,1]; Type is derived from the dimensions.
 type MBTIScore struct {
 	IE   float64 `json:"i_e"`
 	NS   float64 `json:"n_s"`
@@ -240,14 +230,12 @@ type MBTIScore struct {
 	Type string  `json:"type"`
 }
 
-// NodeEmotion 单个 L1 节点的情感值。
 type NodeEmotion struct {
-	IDHex   string  `json:"id_hex"` // 16 位 hex 节点 ID
+	IDHex   string  `json:"id_hex"`
 	Valence float64 `json:"valence"`
 	Arousal float64 `json:"arousal"`
 }
 
-// DistillOutput 是 L1→L0 蒸馏的 LLM 返回，供调用方更新 L0 画像字段。
 type DistillOutput struct {
 	Emotion EmotionScore
 	MBTI    MBTIScore
@@ -271,8 +259,8 @@ Rules:
 - per_node only for nodes with a clear emotional signal (skip neutral ones)
 - No markdown, no code fences, no commentary — JSON only`
 
-// Distill 通过 L1 节点样本推导情绪状态与 MBTI 画像，
-// 返回结果供调用方合并更新 L0 ProfileSlot 字段。
+// Distill derives emotional state and MBTI profile from L1 node samples
+// for L0 profile merging.
 func (p *Provider) Distill(ctx context.Context, samples []L1Sample) (*DistillOutput, error) {
 	if len(samples) == 0 {
 		return nil, common.NewError(common.ErrLLM, "distill: no samples")
@@ -323,11 +311,11 @@ func parseDistillResponse(response string) (*DistillOutput, error) {
 		},
 		PerNode: make([]NodeEmotion, 0, len(raw.PerNode)),
 	}
-	// Type 由四维重新推导，保证维度与类型一致（不信任 LLM 的 type 字段）。
+	// Type re-derived from the four dimensions (LLM type field not trusted).
 	out.MBTI.Type = deriveMBTIType(out.MBTI)
 	for _, n := range raw.PerNode {
 		if _, err := common.ParseID(n.IDHex); err != nil {
-			continue // 跳过 id 解析失败的行
+			continue // skip rows with unparsable ids
 		}
 		out.PerNode = append(out.PerNode, NodeEmotion{
 			IDHex: n.IDHex, Valence: clampUnit(n.Valence), Arousal: clampUnit(n.Arousal),

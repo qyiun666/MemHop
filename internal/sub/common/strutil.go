@@ -1,8 +1,6 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// String utility functions.
-
 package common
 
 import (
@@ -11,7 +9,6 @@ import (
 	"unicode/utf8"
 )
 
-// SafeCharSlice returns a prefix of s up to maxChars runes.
 func SafeCharSlice(s string, maxChars int) string {
 	if utf8.RuneCountInString(s) <= maxChars {
 		return s
@@ -26,7 +23,6 @@ func SafeCharSlice(s string, maxChars int) string {
 	return s
 }
 
-// LevenshteinDistance computes the edit distance between two strings.
 func LevenshteinDistance(a, b string) int {
 	aRunes := []rune(a)
 	bRunes := []rune(b)
@@ -57,13 +53,9 @@ func LevenshteinDistance(a, b string) int {
 	return prev[n]
 }
 
-// SplitCamelCase splits camelCase/PascalCase identifiers:
-//
-//	"fetchUserData" → ["fetch", "user", "data"]
-//	"JSONParser"    → ["json", "parser"]
-//	"getUserID"     → ["get", "user", "id"]
-//
-// Tokens containing '_' are kept intact.
+// SplitCamelCase splits camelCase/PascalCase identifiers
+// ("fetchUserData" → [fetch, user, data], "JSONParser" → [json, parser]);
+// tokens containing '_' are kept intact.
 func SplitCamelCase(word string) []string {
 	if strings.Contains(word, "_") {
 		return []string{word}
@@ -103,7 +95,6 @@ func SplitCamelCase(word string) []string {
 	return parts
 }
 
-// TrimPunctuation removes non-alphanumeric (except '_') from both ends.
 func TrimPunctuation(s string) string {
 	return strings.TrimFunc(s, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'

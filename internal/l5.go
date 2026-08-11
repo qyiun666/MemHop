@@ -12,12 +12,12 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// GetL5 薄层：实现见 internal/sub/l5.go（(db *DB) GetL5）。
+// Thin wrapper; see internal/sub/l5.go ((db *DB) GetL5).
 func (db *DB) GetL5(id string) (*core.ActionChainSlot, error) {
 	return db.DB.GetL5(id)
 }
 
-// CreateL5 薄层：写操作，持写锁后委托 sub 实现。
+// Thin wrapper; write op, delegates under the write lock.
 func (db *DB) CreateL5(title, trigger string) (string, error) {
 	db.DB.Lock()
 	defer db.DB.Unlock()
@@ -27,7 +27,7 @@ func (db *DB) CreateL5(title, trigger string) (string, error) {
 	return db.DB.CreateL5(title, trigger)
 }
 
-// UpdateL5 薄层：写操作，持写锁后委托 sub 实现。
+// Thin wrapper; write op, delegates under the write lock.
 func (db *DB) UpdateL5(id string, fields *sub.L5UpdateFields) error {
 	db.DB.Lock()
 	defer db.DB.Unlock()
@@ -37,7 +37,7 @@ func (db *DB) UpdateL5(id string, fields *sub.L5UpdateFields) error {
 	return db.DB.UpdateL5(id, fields)
 }
 
-// DeleteL5 薄层：写操作，持写锁后委托 sub 实现。
+// Thin wrapper; write op, delegates under the write lock.
 func (db *DB) DeleteL5(id string) error {
 	db.DB.Lock()
 	defer db.DB.Unlock()
@@ -47,7 +47,7 @@ func (db *DB) DeleteL5(id string) error {
 	return db.DB.DeleteL5(id)
 }
 
-// ListL5 薄层：实现见 internal/sub/l5.go（(db *DB) ListL5）。
+// Thin wrapper; see internal/sub/l5.go ((db *DB) ListL5).
 func (db *DB) ListL5(q sub.L5ListQuery) ([]core.ActionChainSlot, error) {
 	return db.DB.ListL5(q)
 }

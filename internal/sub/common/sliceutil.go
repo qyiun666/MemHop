@@ -8,13 +8,12 @@ import (
 	"slices"
 )
 
-// DedupSorted sorts ids ascending and removes duplicates via the stdlib
-// slices pipeline (Compact requires sorted input).
+// DedupSorted sorts ascending and dedups via the stdlib slices pipeline
+// (Compact requires sorted input).
 func DedupSorted(ids []uint64) []uint64 {
 	return slices.Compact(slices.Sorted(slices.Values(ids)))
 }
 
-// ToSet converts a slice of ids into a set for O(1) membership checks.
 func ToSet(ids []uint64) map[uint64]struct{} {
 	s := make(map[uint64]struct{}, len(ids))
 	for _, id := range ids {
@@ -23,8 +22,7 @@ func ToSet(ids []uint64) map[uint64]struct{} {
 	return s
 }
 
-// SetToSlice converts a map[uint64]bool set to a sorted slice, optionally
-// limited to the first limit elements.
+// SetToSlice converts a set to a sorted slice, limited to the first limit elements.
 func SetToSlice(s map[uint64]bool, limit int) []uint64 {
 	if len(s) == 0 {
 		return nil

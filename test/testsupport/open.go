@@ -81,10 +81,9 @@ func loadLLMConfig(cfg *sub.MemHopConfig) error {
 	return nil
 }
 
-// OpenMemHop opens a MemHop database backed by real services
-// (Ollama encoder + DeepSeek LLM). The DB file lives in t.TempDir().
-// It calls t.Skip when LLM config is missing or Ollama is unavailable,
-// and t.Fatal on any other error. The caller must call Close() when done.
+// OpenMemHop opens a DB backed by real services (Ollama encoder + DeepSeek LLM)
+// in t.TempDir(); skips when LLM config is missing or Ollama unavailable, and
+// fatals otherwise. The caller must Close() it.
 func OpenMemHop(t *testing.T) *memhop.DB {
 	t.Helper()
 	return open(t)

@@ -5,7 +5,7 @@ package memhop
 
 import "github.com/qyiun666/MemHop/internal/sub"
 
-// DB 对外句柄：嵌入 sub.DB，方法全部由底层实例提供（复用 Open 创建的同一实例）。
+// DB is the public handle: embeds sub.DB, all methods come from the instance Open created.
 type DB struct {
 	*sub.DB
 }

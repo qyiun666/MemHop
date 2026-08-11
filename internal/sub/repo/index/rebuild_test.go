@@ -30,7 +30,7 @@ func TestRebuildSearchIndexes(t *testing.T) {
 	}
 	defer engine.Close(&core.IndexSnapshotData{})
 
-	// depth 1/2 应进 sparse；depth 3 不应进 sparse；三个都应进 L2Meta。
+	// depth 1/2 enter sparse; depth 3 does not; all three enter L2Meta.
 	writeRawTopic(t, engine, 1, 100, 1, []string{"alpha", "memory"})
 	writeRawTopic(t, engine, 2, 100, 2, []string{"beta", "rust"})
 	writeRawTopic(t, engine, 3, 200, 3, []string{"gamma", "deep"})
@@ -40,7 +40,7 @@ func TestRebuildSearchIndexes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// depth≤2 的文档可被 BM25 搜索到
+	// depth<=2 documents are BM25-searchable
 	if len(sparse.Search([]string{"memory"}, 10)) != 1 {
 		t.Error("depth-1 topic should be searchable")
 	}
@@ -50,11 +50,11 @@ func TestRebuildSearchIndexes(t *testing.T) {
 	if len(sparse.Search([]string{"deep"}, 10)) != 0 {
 		t.Error("depth-3 topic should NOT be in sparse index")
 	}
-	// L2Meta 包含全部三个话题
+	// L2Meta contains all three topics
 	if l2Meta.Len() != 3 {
 		t.Errorf("l2Meta should have 3 entries, got %d", l2Meta.Len())
 	}
-	// L1 反向索引非空且可用
+	// L1 reverse index is non-empty and usable
 	if l1Rev == nil {
 		t.Fatal("l1Reverse should not be nil")
 	}

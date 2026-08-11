@@ -65,8 +65,6 @@ func (c *MemHopConfig) Validate() error {
 
 func inUnitRange(v float32) bool { return v >= 0 && v <= 1 }
 
-// OpenOrCreateEngine opens an existing .meh file, or creates a new one when
-// the path does not exist yet.
 func OpenOrCreateEngine(cfg *MemHopConfig) (*repo.StorageEngine, error) {
 	if _, err := os.Stat(cfg.DBPath); err == nil {
 		return repo.Open(cfg.DBPath)
@@ -74,10 +72,9 @@ func OpenOrCreateEngine(cfg *MemHopConfig) (*repo.StorageEngine, error) {
 	return repo.Create(cfg.DBPath, uint16(cfg.VectorDim))
 }
 
-// CheckVectorDim verifies the on-disk vector dimension matches the
-// configuration. On mismatch the caller must roll back via CloseNoCheckpoint:
-// writing an (empty) snapshot here would flip the A/B header and destroy the
-// on-disk index snapshot.
+// CheckVectorDim verifies the on-disk vector dimension; on mismatch the
+// caller must roll back via CloseNoCheckpoint (an empty snapshot here would
+// flip the A/B header and destroy the index snapshot).
 func CheckVectorDim(engine *repo.StorageEngine, cfg *MemHopConfig) error {
 	if int(repo.VectorDim(engine)) != cfg.VectorDim {
 		return common.NewError(common.ErrVectorDimMismatch, "config vs engine")
@@ -86,9 +83,8 @@ func CheckVectorDim(engine *repo.StorageEngine, cfg *MemHopConfig) error {
 }
 
 // LoadCachedIndices restores the sparse and L1 reverse indices from the
-// engine's checkpoint snapshot. A snapshot section that exists but fails to
-// deserialize is corruption and aborts Open; silent rebuild would hide data
-// loss.
+// checkpoint snapshot; a corrupt snapshot aborts Open rather than silently
+// rebuilding.
 func LoadCachedIndices(engine *repo.StorageEngine) (*repo.SparseIndex, *repo.L1ReverseIndex, error) {
 	sparseIdx := repo.NewSparseIndex()
 	l1Rev := repo.NewL1ReverseIndex()
@@ -115,8 +111,7 @@ func LoadCachedIndices(engine *repo.StorageEngine) (*repo.SparseIndex, *repo.L1R
 	return sparseIdx, l1Rev, nil
 }
 
-// InitTokenizer initializes the process-wide tokenizer singleton. Failures
-// surface here, at Open time, so stale tokenizer configuration is reported
+// InitTokenizer surfaces tokenizer configuration errors at Open time
 // instead of silently degrading to empty tokenization.
 func InitTokenizer(engine string) error {
 	if err := repo.InitTokenizer(engine); err != nil {
@@ -125,10 +120,8 @@ func InitTokenizer(engine string) error {
 	return nil
 }
 
-// Open assembles a DB instance: initializes the tokenizer, opens/creates the
-// engine, verifies the vector dimension, and restores cached indices.
-// search/dream/update 状态对象由调用方按次构造，不挂在 DB 上。
-// Called by the internal assembly layer.
+// Open assembles a DB instance: tokenizer init, engine open/create,
+// vector-dim check and index restore. Called by the internal assembly layer.
 func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 	if err := InitTokenizer(cfg.Defaults.TokenizerEngine); err != nil {
 		return nil, err

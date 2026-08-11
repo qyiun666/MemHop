@@ -17,7 +17,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/index"
 )
 
-// SearchQuery is the search request.
 type SearchQuery struct {
 	Text         string  `json:"text"`
 	DirectedL2ID *string `json:"directed_l2_id,omitempty"`
@@ -26,7 +25,6 @@ type SearchQuery struct {
 	Timestamp    int64   `json:"timestamp"`
 }
 
-// SearchResult is the top-level search response.
 type SearchResult struct {
 	Profile            core.ProfileSlot       `json:"profile"`
 	Contexts           []core.TopicSlot       `json:"contexts"`
@@ -35,8 +33,9 @@ type SearchResult struct {
 	NewTopicID         uint64                 `json:"new_topic_id,omitempty"`
 }
 
-// Search 三路由检索：AutoCreate 直建、DirectedL2ID 定向、默认检索
-// （DirectedL3ID 非空时限定含该 L3 的话题）。LLM 关键词提取失败即返回错误，不降级分词。
+// Search runs three-route retrieval (AutoCreate, DirectedL2ID, default;
+// DirectedL3ID restricts topics referencing that L3). LLM keyword
+// extraction failure returns an error, never degrades.
 func (db *DB) Search(q SearchQuery) (*SearchResult, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err
@@ -65,12 +64,11 @@ func (db *DB) Search(q SearchQuery) (*SearchResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 新建话题写入稀疏索引（仅本轮新建时，命中场景复用既有索引）。
+	// Add the new topic to the sparse index (only when created this round).
 	if newTopicID != 0 {
 		terms := index.Tokenize(strings.Join(keywords, " "))
 		db.sparseIndex.AddDocument(newTopicID, terms, uint32(len(terms)))
 	}
-	// L1 管理的关联话题：统一在主流程计算。
 	var associated []core.TopicSlot
 	if len(contexts) > 0 {
 		associated = db.associatedContexts(contexts[0].SceneID)
@@ -78,7 +76,7 @@ func (db *DB) Search(q SearchQuery) (*SearchResult, error) {
 	return db.assembleResult(q, contexts, associated, newTopicID)
 }
 
-// searchAutoCreate 直接创建新场景与新话题，跳过检索，返回该场景 depth<=1 的话题列表。
+// searchAutoCreate creates a new scene and topic directly, skipping retrieval.
 func (db *DB) searchAutoCreate(q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
 	topics, topicID, err := db.createTopicInScene(q, keywords, 0)
 	if err != nil {
@@ -87,7 +85,7 @@ func (db *DB) searchAutoCreate(q SearchQuery, keywords []string) ([]core.TopicSl
 	return topics, topicID, nil
 }
 
-// searchDirected 在指定场景下创建新话题与 L4 归档，返回该场景 depth<=1 的话题列表。
+// searchDirected creates a topic and L4 archive in the given scene.
 func (db *DB) searchDirected(q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
 	sceneID, err := common.ParseID(*q.DirectedL2ID)
 	if err != nil {
@@ -100,9 +98,9 @@ func (db *DB) searchDirected(q SearchQuery, keywords []string) ([]core.TopicSlot
 	return topics, topicID, nil
 }
 
-// searchNormal 三通道检索（DirectedL3ID 非空时限定含该 L3 的话题）：
-// 在评分最高场景（无命中时新建场景）下新建话题与 L4 归档，
-// 返回该场景 depth<=1 的话题列表与新建话题 ID。
+// searchNormal runs three-channel retrieval (DirectedL3ID restricts topics),
+// creates a topic in the top scene (or a new one), and returns the scene's
+// depth<=1 topics plus the new topic ID.
 func (db *DB) searchNormal(q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
 	hit, err := TopScene(context.Background(), db.engine, db.sparseIndex, db.encoder,
 		q.Text, keywords, db.activeScenes, &db.config.Defaults, db.config.Defaults.MinSceneScore, q.DirectedL3ID)
@@ -116,9 +114,8 @@ func (db *DB) searchNormal(q SearchQuery, keywords []string) ([]core.TopicSlot, 
 	return topics, topicID, nil
 }
 
-// createTopicInScene 创建话题：sceneID 为 0 时新建场景，否则写入指定场景；
-// 同时写 L4 归档并更新 L4Refs；稀疏索引由 Search 主流程统一写入。
-// 返回该场景 depth<=1 的话题列表与新建话题 ID。
+// createTopicInScene creates a topic (new scene when sceneID==0) with an
+// L4 archive and L4Refs; sparse index updates happen in Search.
 func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint64) ([]core.TopicSlot, uint64, error) {
 	if sceneID == 0 {
 		sceneName := fmt.Sprintf("%d:%s", q.Timestamp, common.SafeCharSlice(q.Text, 10))
@@ -129,7 +126,6 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 		sceneID = sid
 	}
 	topicID := core.ComputeTopicID(sceneID, q.Timestamp, 0)
-	// 编码话题文本为质心向量并写入向量记录，供向量通道检索；编码失败即报错，不降级。
 	centroidRef, err := db.writeCentroid(q.Text)
 	if err != nil {
 		return nil, 0, err
@@ -145,18 +141,17 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 	if !repo.UpdateTopicL4RefsL2(db.engine, topicIDStr, []uint64{archiveID}) {
 		return nil, 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
-	// 按场景 ID 读回 depth<=1 话题列表（含刚写入的 L4Refs 等字段）。
 	latest, err := repo.ListTopicsL2(db.engine, common.FormatHash(sceneID), 1, 2)
 	if err != nil {
 		return nil, 0, err
 	}
-	// 激活场景：新建/指定/命中三路由统一在此收口，重复激活幂等去重。
+	// Activation unified here for all three routes; idempotent.
 	db.activateScene(sceneID)
 	return latest, topicID, nil
 }
 
-// associatedContexts 通过 L1 反查取关联度最高的场景：命中场景的 L1 节点
-// 的 TopicIDs 按所属场景聚合，取话题总数最多的场景，返回该场景 depth<=1 话题列表。
+// associatedContexts finds the scene with the most linked topics via L1
+// reverse lookup and returns its depth<=1 topics.
 func (db *DB) associatedContexts(sceneID uint64) []core.TopicSlot {
 	l1Rev := db.l1Reverse.Load()
 	if l1Rev == nil {
@@ -189,7 +184,6 @@ func (db *DB) associatedContexts(sceneID uint64) []core.TopicSlot {
 	return topics
 }
 
-// assembleResult 组装统一结果：Profile + Crystals + 路由产出。
 func (db *DB) assembleResult(q SearchQuery, contexts, associated []core.TopicSlot, newTopicID uint64) (*SearchResult, error) {
 	return &SearchResult{
 		Profile:            db.readProfile(),
@@ -200,7 +194,6 @@ func (db *DB) assembleResult(q SearchQuery, contexts, associated []core.TopicSlo
 	}, nil
 }
 
-// readProfile 读取 L0 画像；不存在时返回空画像。
 func (db *DB) readProfile() core.ProfileSlot {
 	slot, err := repo.GetProfileL0(db.engine)
 	if err != nil {
@@ -209,7 +202,6 @@ func (db *DB) readProfile() core.ProfileSlot {
 	return *slot
 }
 
-// matchCrystals 按查询文本匹配 L5 动作链。
 func (db *DB) matchCrystals(text string) []core.ActionChainSlot {
 	chains := repo.MatchChainsL5(db.engine, text)
 	if chains == nil {
@@ -218,8 +210,8 @@ func (db *DB) matchCrystals(text string) []core.ActionChainSlot {
 	return chains
 }
 
-// writeCentroid 编码文本为质心向量并写入向量记录，返回记录 idHash。
-// encoder 不可用或编码失败即报错（不降级、不静默跳过），保证向量通道数据完整。
+// writeCentroid encodes text as a centroid vector record; encoder failure
+// returns an error (no silent skip).
 func (db *DB) writeCentroid(text string) (uint64, error) {
 	if db.encoder == nil || !db.encoder.IsAvailable() {
 		return 0, common.NewError(common.ErrEncoder, "encoder unavailable for centroid", nil)

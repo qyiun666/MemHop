@@ -8,7 +8,6 @@ type BKTree struct {
 	nodes []bkNode
 }
 
-// BKMatch is one search hit with its edit distance.
 type BKMatch struct {
 	Word string
 	Dist int
@@ -19,12 +18,10 @@ type bkNode struct {
 	children map[int]int // edit_distance → node index
 }
 
-// NewBKTree creates an empty BK-Tree.
 func NewBKTree() *BKTree {
 	return &BKTree{}
 }
 
-// Insert adds a word to the tree (duplicates are ignored).
 func (t *BKTree) Insert(word string) {
 	if len(t.nodes) == 0 {
 		t.nodes = append(t.nodes, bkNode{word: word, children: make(map[int]int)})
@@ -36,7 +33,6 @@ func (t *BKTree) Insert(word string) {
 	t.insertRecursive(0, word)
 }
 
-// Search returns all words within maxDist edit distance of word.
 func (t *BKTree) Search(word string, maxDist int) []BKMatch {
 	if len(t.nodes) == 0 {
 		return nil

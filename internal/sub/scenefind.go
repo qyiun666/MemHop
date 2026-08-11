@@ -1,11 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package sub 对全量 L2 话题做三重并发检索打分（BM25 + 向量 + 实体），
-// 三通道 RRF 融合后叠加请求关键词重合分得到话题得分；按相同场景 ID 将话题
-// 得分相加，再对场景加分（激活场景 +0.2、时间戳最后话题所在场景 +0.1，
-// 每场景至多一种、激活优先）；返回得分高于阈值的最高分场景，无命中或全部
-// 不高于阈值时返回空。
+// Package sub scores all L2 topics via three concurrent channels (BM25 +
+// vector + entity), fuses them with RRF, adds keyword overlap, then
+// aggregates by scene with bonuses (active +0.2, latest-timestamp +0.1).
 package sub
 
 import (
@@ -21,26 +19,24 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/index"
 )
 
-// SceneHit 检索结果：场景 ID 及其聚合得分。
 type SceneHit struct {
 	SceneID uint64
 	Score   float32
 }
 
-// Encoder 文本编码接口（向量通道）：由调用方适配注入，scenefind 不依赖 query 层。
+// Encoder is the text encoding interface for the vector channel, injected by the host.
 type Encoder interface {
 	Encode(text string) ([]float32, error)
 	IsAvailable() bool
 }
 
-// TopScene 对全量 L2 话题三重并发检索打分，按场景聚合得分并加场景分，
-// 返回得分高于 threshold 的最高分场景；无命中或全部不高于阈值时返回零值 SceneHit。
-// activeSceneIDs 为 DB.activeScenes（激活场景，每场景 +0.2，仅一次）。
-// l3ID 非 nil 时只对 L3Refs 含目标 L3 的话题检索（nil = 全量）。
+// TopScene scores all L2 topics via three concurrent channels, aggregates
+// by scene with bonuses, and returns the top scene above threshold.
+// activeSceneIDs get +0.2 once; l3ID restricts topics referencing that L3.
 func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.SparseIndex,
 	enc Encoder, query string, keywords []string,
 	activeSceneIDs []uint64, defaults *MemHopDefaults, threshold float32, l3ID *string) (SceneHit, error) {
-	topics, err := repo.ListTopicsL2(engine, "", 2, 1) // 全部场景 depth<=2 的话题，按 UserTimestamp 升序
+	topics, err := repo.ListTopicsL2(engine, "", 2, 1) // all scenes, depth<=2, by UserTimestamp
 	if err != nil {
 		return SceneHit{}, err
 	}
@@ -64,8 +60,8 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.Spa
 		}
 	}
 
-	// 三通道并发检索打分：各自写独立结果，无共享写；
-	// SparseIndex 方法自带 RWMutex、ReadRecord 只读，并发安全。
+	// Three channels score concurrently with no shared writes; SparseIndex is
+	// self-locked and ReadRecord is read-only.
 	var wg sync.WaitGroup
 	var bm25Docs, vecDocs, entDocs []index.ScoredDoc
 	wg.Add(3)
@@ -83,13 +79,12 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.Spa
 	}()
 	wg.Wait()
 
-	// RRF 融合（k=60，三通道等权）：score(id) = Σ 1/(k+rank)。
+	// RRF fusion (k=60, equal weights): score(id) = sum 1/(k+rank).
 	rrf := rrfFuse(defaults.RRFK, bm25Docs, vecDocs, entDocs)
 	if len(rrf) == 0 {
 		return SceneHit{}, nil
 	}
 
-	// 关键词重合分 + 按场景聚合话题得分。
 	kwSet := keywordSet(keywords)
 	byID := make(map[uint64]core.TopicSlot, len(topics))
 	for _, t := range topics {
@@ -104,10 +99,9 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.Spa
 		sceneScores[t.SceneID] += r + keywordHit(t, kwSet)
 	}
 
-	// 向量通道独立阈值保底：跨措辞查询（关键词零重叠）时 BM25/实体通道打零分，
-	// 语义相似的话题仅靠向量通道 RRF 分（~1/(60+rank)）难过 MinSceneScore。
-	// 向量余弦相似度 ≥ VectorMinScore 的话题，其场景保底到阈值之上（叠加相似度，
-	// 保留语义排序），确保语义召回；末尾 best.Score <= threshold 判断不会误挡。
+	// Vector floor: when keyword overlap is zero, BM25/entity score nothing,
+	// so topics with cosine >= VectorMinScore get their scene floored to
+	// threshold + similarity, preserving semantic recall.
 	for _, d := range vecDocs {
 		if d.Score < defaults.VectorMinScore {
 			continue
@@ -125,15 +119,14 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.Spa
 		return SceneHit{}, nil
 	}
 
-	// 场景加分：激活场景 +0.2、时间戳最后话题所在场景 +0.1（每场景至多一种、激活优先）。
+	// Scene bonuses: active scenes +0.2, latest-timestamp scene +0.1 (one per scene, active wins).
 	activeSet := make(map[uint64]struct{}, len(activeSceneIDs))
 	for _, sid := range activeSceneIDs {
 		activeSet[sid] = struct{}{}
 	}
-	lastSceneID := topics[len(topics)-1].SceneID // ListAllTopics 末位 = UserTimestamp 最大
+	lastSceneID := topics[len(topics)-1].SceneID // last item = max UserTimestamp
 	applySceneBonuses(sceneScores, activeSet, lastSceneID, defaults)
 
-	// 取最高分场景；同分取 SceneID 小者保证确定性。
 	var best SceneHit
 	for sid, sc := range sceneScores {
 		if sc > best.Score || (sc == best.Score && sid < best.SceneID) {
@@ -146,8 +139,8 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.Spa
 	return best, nil
 }
 
-// applySceneBonuses 对场景得分加分：激活场景 +defaults.ActivationBonus（同一场景仅一次），
-// 时间戳最后话题所在场景 +defaults.RecentChatBonus（同一场景仅一次）；激活优先，每场景至多一种加分。
+// applySceneBonuses adds ActivationBonus (active scenes) and RecentChatBonus
+// (latest-timestamp scene), one per scene, active first.
 func applySceneBonuses(scores map[uint64]float32, activeSet map[uint64]struct{}, lastSceneID uint64, defaults *MemHopDefaults) {
 	for sid := range activeSet {
 		if _, ok := scores[sid]; ok {
@@ -161,7 +154,6 @@ func applySceneBonuses(scores map[uint64]float32, activeSet map[uint64]struct{},
 	}
 }
 
-// filterByL3 保留 L3Refs 含目标 L3 的话题，保持原顺序。
 func filterByL3(topics []core.TopicSlot, l3Hash uint64) []core.TopicSlot {
 	var filtered []core.TopicSlot
 	for _, t := range topics {
@@ -175,7 +167,6 @@ func filterByL3(topics []core.TopicSlot, l3Hash uint64) []core.TopicSlot {
 	return filtered
 }
 
-// retrieveBM25 以查询文本分词对每个话题计算 BM25 得分，取 >0 结果按分降序。
 func retrieveBM25(sparse *index.SparseIndex, topics []core.TopicSlot, text string) []index.ScoredDoc {
 	terms := index.Tokenize(text)
 	if len(terms) == 0 {
@@ -191,8 +182,8 @@ func retrieveBM25(sparse *index.SparseIndex, topics []core.TopicSlot, text strin
 	return docs
 }
 
-// retrieveVector 编码查询文本后对每个话题的质心向量计算余弦相似度，
-// 取 >0 结果按分降序；编码器不可用或编码失败时通道为空。
+// retrieveVector encodes the query and computes cosine similarity against
+// each topic centroid; the channel is empty when the encoder is unavailable.
 func retrieveVector(engine *core.StorageEngine, enc Encoder,
 	topics []core.TopicSlot, text string) []index.ScoredDoc {
 	if enc == nil || !enc.IsAvailable() {
@@ -227,7 +218,6 @@ func retrieveVector(engine *core.StorageEngine, enc Encoder,
 	return docs
 }
 
-// rrfFuse 将多路按得分降序的排名列表按 RRF 融合为 id → 分数映射。
 func rrfFuse(k float32, rankedLists ...[]index.ScoredDoc) map[uint64]float32 {
 	scores := make(map[uint64]float32)
 	for _, docs := range rankedLists {
@@ -238,7 +228,6 @@ func rrfFuse(k float32, rankedLists ...[]index.ScoredDoc) map[uint64]float32 {
 	return scores
 }
 
-// keywordSet 将请求关键词小写归一并去重。
 func keywordSet(keywords []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(keywords))
 	for _, kw := range keywords {
@@ -247,8 +236,8 @@ func keywordSet(keywords []string) map[string]struct{} {
 	return set
 }
 
-// keywordHit 计算话题 3 个 []string 检索字段（FusedKeywords ∪ UserKeywords ∪
-// AgentKeywords）与请求关键词的重合比例：命中数 / 请求关键词数（去重后）。
+// keywordHit computes the overlap ratio of request keywords across the
+// topic's Fused/User/Agent keywords.
 func keywordHit(topic core.TopicSlot, kwSet map[string]struct{}) float32 {
 	if len(kwSet) == 0 {
 		return 0

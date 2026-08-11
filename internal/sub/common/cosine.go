@@ -5,8 +5,8 @@ package common
 
 import "math"
 
-// CosineSimilarity computes the cosine similarity of two f32 vectors (float32 slices).
-// Uses goroutine chunking for large vectors: each chunk handles 500 elements, up to 10 goroutines.
+// CosineSimilarity computes the cosine similarity of two f32 vectors; large
+// vectors use goroutine chunking (500 elements per chunk, up to 10 goroutines).
 func CosineSimilarity(a, b []float32) float32 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0

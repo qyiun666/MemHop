@@ -147,10 +147,9 @@ func TestTrimTailSnapshotOnWrite(t *testing.T) {
 	}
 }
 
-// TestOpenAfterReclaimTruncateWindow simulates a crash right after the
-// reclaim truncate but before the null header write: the active header still
-// points at the deleted snapshot (out of bounds). Open must fall back to a
-// full scan instead of failing.
+// TestOpenAfterReclaimTruncateWindow simulates a crash after the reclaim
+// truncate but before the null header write: the active header points at the
+// deleted snapshot, and Open must fall back to a full scan.
 func TestOpenAfterReclaimTruncateWindow(t *testing.T) {
 	p := tempPath(t, "reclaim_window")
 	eng, err := Create(p, 768)

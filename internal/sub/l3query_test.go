@@ -10,7 +10,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// testNode 构造 L3 节点辅助。
+// testNode builds an L3 node helper.
 func testNode(id, graphID uint64, title, nodeType, content string, kws []string) core.HypergraphNode {
 	return core.HypergraphNode{
 		IDHash:   id,
@@ -22,7 +22,7 @@ func testNode(id, graphID uint64, title, nodeType, content string, kws []string)
 	}
 }
 
-// writeNode 写入 L3 节点记录。
+// writeNode writes an L3 node record.
 func writeNode(t *testing.T, engine *core.StorageEngine, n *core.HypergraphNode) {
 	t.Helper()
 	if err := core.WriteHypergraphNode(engine, n.IDHash, n); err != nil {
@@ -30,7 +30,7 @@ func writeNode(t *testing.T, engine *core.StorageEngine, n *core.HypergraphNode)
 	}
 }
 
-// writeEdge 写入 L3 边记录。
+// writeEdge writes an L3 edge record.
 func writeEdge(t *testing.T, engine *core.StorageEngine, e *core.HypergraphEdge) {
 	t.Helper()
 	if err := core.WriteHypergraphEdge(engine, e.IDHash, e); err != nil {
@@ -38,7 +38,7 @@ func writeEdge(t *testing.T, engine *core.StorageEngine, e *core.HypergraphEdge)
 	}
 }
 
-// TestQueryL3NodesModes 验证 IDs / Keyword / NodeType 三种模式与 Limit。
+// TestQueryL3NodesModes verifies the IDs/Keyword/NodeType modes and Limit.
 func TestQueryL3NodesModes(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
@@ -51,7 +51,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 	writeNode(t, engine, &nodeC)
 	graphHex := common.FormatHash(graphID)
 
-	// ByIDs：不存在的 ID 跳过。
+	// ByIDs: missing IDs are skipped.
 	out, err := db.QueryL3Nodes(L3NodeQuery{GraphID: graphHex, IDs: []string{common.FormatHash(nodeA.IDHash), common.FormatHash(nodeB.IDHash), common.FormatHash(99999)}})
 	if err != nil {
 		t.Fatalf("QueryL3Nodes by ids: %v", err)
@@ -60,7 +60,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 		t.Fatalf("by ids: want 2 nodes, got %d", len(out))
 	}
 
-	// ByKeyword：大小写不敏感子串。
+	// ByKeyword: case-insensitive substring.
 	out, err = db.QueryL3Nodes(L3NodeQuery{GraphID: graphHex, Keyword: "RUST"})
 	if err != nil {
 		t.Fatalf("QueryL3Nodes by keyword: %v", err)
@@ -69,7 +69,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 		t.Fatalf("by keyword: want node A, got %v", out)
 	}
 
-	// ByType：精确匹配。
+	// ByType: exact match.
 	out, err = db.QueryL3Nodes(L3NodeQuery{GraphID: graphHex, NodeType: "concept"})
 	if err != nil {
 		t.Fatalf("QueryL3Nodes by type: %v", err)
@@ -78,7 +78,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 		t.Fatalf("by type: want 2 nodes, got %d", len(out))
 	}
 
-	// Limit 截断。
+	// Limit truncation.
 	out, err = db.QueryL3Nodes(L3NodeQuery{GraphID: graphHex, NodeType: "concept", Limit: 1})
 	if err != nil {
 		t.Fatalf("QueryL3Nodes with limit: %v", err)
@@ -87,13 +87,13 @@ func TestQueryL3NodesModes(t *testing.T) {
 		t.Fatalf("limit: want 1 node, got %d", len(out))
 	}
 
-	// GraphID 必填。
+	// GraphID required.
 	if _, err := db.QueryL3Nodes(L3NodeQuery{}); err == nil {
 		t.Fatal("want error for missing graph id")
 	}
 }
 
-// TestQueryL3SubgraphDepth 多跳 BFS 与 maxDepth 截断。
+// TestQueryL3SubgraphDepth multi-hop BFS with maxDepth truncation.
 func TestQueryL3SubgraphDepth(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
@@ -115,7 +115,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 	writeEdge(t, engine, &e3)
 	graphHex := common.FormatHash(graphID)
 
-	// 1 跳：A → B；仅 e1 两端均在子图内。
+	// 1 hop: A -> B; only e1 has both ends in the subgraph.
 	sub, err := db.QueryL3Subgraph(graphHex, common.FormatHash(idA), 1, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph depth 1: %v", err)
@@ -127,7 +127,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 		t.Fatalf("depth 1: want only e1, got %v", sub.Edges)
 	}
 
-	// 2 跳：A → B → C；e1、e2 入选。
+	// 2 hops: A -> B -> C; e1 and e2 selected.
 	sub, err = db.QueryL3Subgraph(graphHex, common.FormatHash(idA), 2, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph depth 2: %v", err)
@@ -139,7 +139,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 		t.Fatalf("depth 2: want 2 edges, got %d", len(sub.Edges))
 	}
 
-	// 3 跳：全图。
+	// 3 hops: the whole graph.
 	sub, err = db.QueryL3Subgraph(graphHex, common.FormatHash(idA), 3, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph depth 3: %v", err)
@@ -148,7 +148,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 		t.Fatalf("depth 3: want 4 nodes / 3 edges, got %d / %d", len(sub.Nodes), len(sub.Edges))
 	}
 
-	// maxDepth<=0 视为 1 跳。
+	// maxDepth<=0 counts as 1 hop.
 	sub, err = db.QueryL3Subgraph(graphHex, common.FormatHash(idA), 0, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph depth 0: %v", err)
@@ -158,7 +158,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 	}
 }
 
-// TestQueryL3SubgraphHyperedge 超边降级：一条边连接三节点，1 跳可达全部。
+// TestQueryL3SubgraphHyperedge hyperedge: one edge linking three nodes, all reachable in 1 hop.
 func TestQueryL3SubgraphHyperedge(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
@@ -186,7 +186,7 @@ func TestQueryL3SubgraphHyperedge(t *testing.T) {
 	}
 }
 
-// TestQueryL3SubgraphEdgeKinds edgeKinds 过滤：仅 causal 时 A 无邻居。
+// TestQueryL3SubgraphEdgeKinds edgeKinds filter: with causal only, A has no neighbors.
 func TestQueryL3SubgraphEdgeKinds(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
@@ -210,7 +210,7 @@ func TestQueryL3SubgraphEdgeKinds(t *testing.T) {
 	}
 }
 
-// TestQueryL3SubgraphStartMissing 起始节点不存在返回 ErrNotFound。
+// TestQueryL3SubgraphStartMissing missing start node returns ErrNotFound.
 func TestQueryL3SubgraphStartMissing(t *testing.T) {
 	db := &DB{engine: newTestEngine(t)}
 	_, err := db.QueryL3Subgraph(common.FormatHash(1), common.FormatHash(99999), 1, nil)

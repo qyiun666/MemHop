@@ -35,7 +35,7 @@ func (db *DB) Update(topicID string, text string, timestamp int64) bool {
 	if err != nil {
 		return false
 	}
-	// 读回话题（不存在即失败），写入 agent 关键词。
+	// Read back the topic (missing fails) and write agent keywords.
 	topics, err := repo.ListTopicsL2(db.engine, topicIDStr, 0, 3)
 	if err != nil {
 		return false
@@ -47,8 +47,8 @@ func (db *DB) Update(topicID string, text string, timestamp int64) bool {
 	if !repo.UpdateTopicL2(db.engine, topicIDStr, keywords, timestamp) {
 		return false
 	}
-	// 更新 BM25 索引：未压缩话题的语义载体是 User+Agent 双侧关键词（压缩话题是 FusedKeywords）。
-	// 注意 topic 是 UpdateTopicL2 之前读回的，其 AgentKeywords 为旧值，这里用刚提取的 keywords（新 agent 侧）。
+	// Update BM25: uncompressed topics carry User+Agent keywords (compressed
+	// use FusedKeywords); topic.AgentKeywords is stale here, use fresh ones.
 	all := make([]string, 0, len(topic.UserKeywords)+len(keywords)+len(topic.FusedKeywords))
 	all = append(all, topic.UserKeywords...)
 	all = append(all, keywords...)

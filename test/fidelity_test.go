@@ -193,9 +193,9 @@ func TestKeywordPersistence(t *testing.T) {
 	t.Logf("persistence OK: anchor keywords still retrievable: %v", kws)
 }
 
-// ingestSameScene 把一组相关话语灌入同一场景（首句 AutoCreate，后续定向），
-// 每句用户发言后调 Update 补一条 agent 回复（贴近真实使用，也让话题带上
-// AgentTimestamp，Dream 压缩时融合话题 ID 才不会与原始话题冲突）。返回场景 ID。
+// ingestSameScene feeds a group of related turns into one scene (first turn
+// AutoCreate, the rest directed), adding an agent Update after each user turn
+// so Dream fused-topic IDs do not collide with original topics. Returns the scene ID.
 func ingestSameScene(t *testing.T, db *memhop.DB, texts []string, base int64) uint64 {
 	t.Helper()
 	var sceneID uint64
@@ -218,16 +218,15 @@ func ingestSameScene(t *testing.T, db *memhop.DB, texts []string, base int64) ui
 			}
 			sceneID = res.Contexts[0].SceneID
 		}
-		// 补 agent 回复：真实场景里每个用户发言都有 agent 应答。
+		// Add the agent reply: every user turn has an agent response in real usage.
 		db.Update(common.FormatHash(res.NewTopicID), "好的，我记下了。", ts+500)
 	}
 	return sceneID
 }
 
-// TestDreamCompressionFidelity verifies point 3 with enough topics to trigger
-// real compression: >DreamCompressMinTopics(20) related utterances in one scene
-// are merged by Dream, and the fused topic's keywords must faithfully summarize
-// all merged details.
+// TestDreamCompressionFidelity verifies real compression: >20 related
+// utterances in one scene are merged by Dream, and the fused topic's keywords
+// must faithfully summarize all merged details.
 func TestDreamCompressionFidelity(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
@@ -235,8 +234,8 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	model := judgeModel(t)
 
 	base := time.Now().UnixMilli()
-	// 25 句同主题（跑步习惯）的话，超过 DreamCompressMinTopics=20，触发真实压缩。
-	// 语义高度重叠，LLM 应合并成组。
+	// 25 same-topic (running habit) turns exceed DreamCompressMinTopics=20 and trigger
+	// real compression; overlapping semantics should make the LLM merge them.
 	related := []string{
 		"我喜欢早上六点去公园慢跑",
 		"跑步的时候我习惯听播客",
@@ -282,8 +281,8 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	if len(kws) == 0 {
 		t.Fatal("no keywords after Dream")
 	}
-	// 压缩后检索结果应包含融合话题（FusedKeywords 非空）。
-	// 按话题模型：融合话题 FusedKeywords 有值时，User/Agent 轨道应为空。
+	// Post-compression retrieval includes the fused topic (non-empty FusedKeywords);
+	// per the model, User/Agent tracks are empty when FusedKeywords carry values.
 	var fusedSeen bool
 	for i := range res.Contexts {
 		c := &res.Contexts[i]
@@ -300,7 +299,7 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	}
 
 	// Judge whether the returned keywords faithfully summarize the running theme.
-	source := strings.Join(related[:4], "；") // 核心 4 句即全部事实
+	source := strings.Join(related[:4], "；") // the core 4 turns hold all facts
 	v := judgeFaithful(t, judge, model, source, kws)
 	t.Logf("post-dream fidelity=%v kws=%v reason=%s", v.Faithful, kws, v.Reason)
 	if !v.Faithful {

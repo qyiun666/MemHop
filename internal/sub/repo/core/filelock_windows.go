@@ -25,9 +25,8 @@ const (
 	lockAllBytes            = ^uint32(0) // lock the whole file range
 )
 
-// lockFile acquires an exclusive, non-blocking lock on the file via
-// LockFileEx. One agent binds one MemHop database: a second instance
-// opening the same file must fail fast instead of corrupting shared state.
+// lockFile acquires an exclusive, non-blocking LockFileEx lock: a second
+// instance opening the same file must fail fast, not corrupt shared state.
 func lockFile(f *os.File) error {
 	var ol syscall.Overlapped
 	r1, _, err := procLockFileEx.Call(
@@ -43,7 +42,6 @@ func lockFile(f *os.File) error {
 	return nil
 }
 
-// unlockFile releases the exclusive lock acquired by lockFile.
 func unlockFile(f *os.File) error {
 	var ol syscall.Overlapped
 	r1, _, err := procUnlockFileEx.Call(

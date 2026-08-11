@@ -14,9 +14,13 @@
 
 <p align="center">
   <a href="https://github.com/qyiun666/MemHop/actions/workflows/workflow.yml"><img src="https://github.com/qyiun666/MemHop/actions/workflows/workflow.yml/badge.svg" alt="CI"></a>
-  <a href="https://pkg.go.dev/github.com/qyiun666/MemHop/api"><img src="https://pkg.go.dev/badge/github.com/qyiun666/MemHop/api.svg" alt="Go Reference"></a>
+  <a href="https://pkg.go.dev/github.com/qyiun666/MemHop"><img src="https://pkg.go.dev/badge/github.com/qyiun666/MemHop.svg" alt="Go Reference"></a>
   <img src="https://img.shields.io/badge/go-1.26+-00ADD8.svg" alt="go">
   <img src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg" alt="license">
+</p>
+
+<p align="center">
+  <strong>Current: v1.1.0 (architecture refactor) · Latest stable tag: v1.0.1</strong>
 </p>
 
 ---
@@ -32,8 +36,8 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 ## Features
 
 - **Six-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal, with Dream consolidation
-- **Three-Channel RRF** — BM25 (gse CJK) + f16 vector + entity fuzzy matching, fused via Reciprocal Rank Fusion (k=60)
-- **V2 Storage** — `.meh` format with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint
+- **Three-Channel RRF** — BM25 (gse CJK) + f32 vector + entity fuzzy matching, fused via Reciprocal Rank Fusion (k=60)
+- **V2 Storage** — `.meh` format (`FormatVersion=0x0004`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. **Not compatible with v1 `.meh` data files** (JSON serialization switched to native numbers)
 - **Dream Pipeline** — five stages over L0–L2: L2 compress → L1 rebuild → L1 decay → L0 profile → L0 distill (emotion/MBTI)
 - **L3 Knowledge Graph** — Multi-hypergraph with community detection (clique + Louvain), BFS, adjacency caching
 - **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)
@@ -44,48 +48,63 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 ```go
 import (
     "context"
+    "os"
     "time"
 
-    memhop "github.com/qyiun666/MemHop/api"
+    memhop "github.com/qyiun666/MemHop/internal"
+    "github.com/qyiun666/MemHop/internal/sub"
+    "github.com/qyiun666/MemHop/internal/sub/common"
 )
 
-db, err := memhop.Open(&memhop.Config{
+db, err := memhop.Open(&sub.MemHopConfig{
     DBPath:      "agent.meh",
-    VectorDim:   768,
+    VectorDim:   1024,
     EncoderAddr: "http://127.0.0.1:11434",
     EmbedModel:  "qllama/bge-m3:q4_k_m",
-    LLM: memhop.LlmConfig{ // required: validated at Open
+    LLM: sub.LlmConfig{ // required: validated at Open
         APIURL: "https://api.openai.com/v1",
         APIKey: os.Getenv("OPENAI_API_KEY"),
         Model:  "gpt-4o-mini",
     },
+    Defaults: *sub.DefaultMemHopDefaults,
 })
 if err != nil {
     log.Fatal(err)
 }
 defer db.Close()
 
-// Search (Timestamp is required: Unix milliseconds of the message)
-results, _ := db.Search(memhop.SearchQuery{
-    Text:       "What did we discuss?",
-    Timestamp:  time.Now().UnixMilli(),
-    MaxResults: 10,
+// Search — three routes: AutoCreate (skip retrieval, new scene+topic),
+// DirectedL2ID (append to a specific scene), or default three-channel retrieval.
+// Timestamp is required: Unix milliseconds of the message.
+res, err := db.Search(sub.SearchQuery{
+    Text:      "What did we discuss?",
+    Timestamp: time.Now().UnixMilli(),
 })
+if err != nil {
+    log.Fatal(err)
+}
 
-// Append the agent reply to the topic created by Search
-_ = db.Update(results.NewTopicID, "Agent: ...", time.Now().UnixMilli())
+// Append the agent reply to the topic created by Search.
+// Update takes the topic ID as a hex string (common.FormatHash).
+topicID := common.FormatHash(res.NewTopicID)
+_ = db.Update(topicID, "Agent: ...", time.Now().UnixMilli())
 
-// Batch store (Keywords are required per item)
-db.BatchStore(memhop.StoreBatch{Items: []memhop.StoreItem{{
-    Content:  "User: ...\nAgent: ...",
-    Keywords: []string{"project", "deadline"},
-}}})
-
-// Dream consolidation (L0-L2)
-report, _ := db.Dream(context.Background(), nil)
+// Dream consolidation over active scenes (L0-L2)
+ok, err := db.Dream(context.Background())
 ```
 
 Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-compatible LLM endpoint (`Config.LLM` is required)
+
+### API Overview
+
+| Group | Methods |
+|-------|---------|
+| Core loop | `Search` · `Update` · `Dream` · `Checkpoint` · `Close` |
+| L0 Profile | `GetL0` · `UpdateL0` |
+| L2 Context | `ListScenes` · `MergeScenes` |
+| L3 Knowledge | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
+| L4 Archive | `SearchL4` · `GetArchive` |
+| L5 Crystal | `CreateL5` · `GetL5` · `UpdateL5` · `DeleteL5` · `ListL5` |
 
 ## Architecture
 
@@ -104,103 +123,87 @@ Layer   Name             Human Parallel          Mechanism
 
 The Dream cycle is an automatic memory consolidation process inspired by how the human brain processes experiences during sleep. It operates on **L0–L2 only** (L3 distillation and L5 crystallization are out of scope by design) and runs five stages:
 
-1. **L2 Compression** — LLM groups and merges related topics, demotes stale contexts
-2. **L1 Rebuild** — Rebuild the hypergraph skeleton linking L2 contexts
+1. **L2 Compression** — LLM groups and merges related topics, one goroutine per active scene, demotes stale contexts
+2. **L1 Rebuild** — Rebuild the hypergraph skeleton linking L2 contexts (search indexes rebuilt in the same pass)
 3. **L1 Decay** — Decay episodic importance, prune weak nodes/edges
 4. **L0 Profile** — Regenerate the agent profile from consolidated memory
-5. **L0 Distill** — Distill emotion/MBTI patterns (optional, `SkipDistill`)
+5. **L0 Distill** — Distill emotion/MBTI patterns (always runs; skipped automatically when no L1 samples exist)
 
-Each Dream call makes at most three outbound LLM requests. `Dream(ctx, opts)` serializes concurrent calls (the second returns an error) and honors `ctx` cancellation between stages.
+`Dream(ctx) (bool, error)` takes the write lock for the whole cycle, returns success immediately when no scenes are active, and honors `ctx` cancellation between stages.
 
 ### Search
 
-MemHop uses **three-channel retrieval fusion** (BM25 + vector + entity) with RRF:
+`Search` dispatches to one of three routes: `AutoCreate` (skip retrieval, create a fresh scene+topic), `DirectedL2ID` (append to a specific scene), or the default retrieval route (optionally scoped by `DirectedL3ID`). The retrieval route uses **three-channel fusion** (BM25 + vector + entity) with RRF:
 
-| Channel | Method                                                                   |
-| ------- | ------------------------------------------------------------------------ |
-| BM25    | Keyword matching via inverted index (gse CJK tokenization)       |
-| Vector  | Semantic similarity with f16 half-precision via Ollama HTTP `/api/embed` |
-| Entity  | Fuzzy entity name matching for knowledge graph queries                   |
+| Channel | Method                                                              |
+| ------- | ------------------------------------------------------------------- |
+| BM25    | Keyword matching via inverted index (gse CJK tokenization)          |
+| Vector  | Semantic similarity with f32 single-precision via Ollama HTTP embed |
+| Entity  | Fuzzy entity name matching for knowledge graph queries              |
 
-Post-fusion: additive scene bonuses for active/recent sessions, then L1 association expansion + L5 crystal matching + L0 profile assembly.
+Post-fusion: keyword-overlap scoring, additive scene bonuses for active/recent scenes, then L1 association expansion + L5 crystal matching + L0 profile assembly.
 
 ## Benchmarks
 
-Tested on [LOCOMO10](https://github.com/snap-research/LOCOMO) (ACL 2024) — 419 turns stored, 199 QA queries across 5 categories (Single/Multi/Open/Temporal/Abs all at 100%):
+### LoCoMo Retrieval Recall (v1.1.0)
 
-| Metric | Result |
-|--------|--------|
-| Recall@1 | **100.0%** (199/199) |
-| Recall@3 | **100.0%** (199/199) |
-| Recall@5 | **100.0%** (199/199) |
-| P50 / P95 Latency | 1.76s / 3.97s ¹ |
-| Engine-side search latency | P50 ≈ 15ms (offline MockEncoder benchmark) |
+Long-term conversational memory recall on [LoCoMo](https://github.com/snap-research/locomo) (ACL 2024), evaluated at the **retrieval layer only** (no answer generation): each QA is searched against the ingested `.meh` memory, and an LLM judge decides whether the returned context alone is enough to answer.
 
-¹ End-to-end latency is dominated by embedding encode (Apple M2, Ollama bge-m3 running CPU-only); the engine's BM25 + vector + entity three-channel search itself takes single-digit milliseconds.
+| Scope | Sessions | Turns | QA | Recall (answerable) | Entity hit |
+|-------|----------|-------|-----|---------------------|------------|
+| 3 conversations (conv-26/30/41) | 70 | 1,451 | 497 | 0.531 (264/497) | 0.945 |
+| 1 conversation (conv-26) | 19 | 419 | 199 | 0.709 (141/199) | 0.883 |
 
-Reproduce locally (requires Ollama + the LOCOMO10 dataset under `test/`):
+- **Recall** covers all five LoCoMo categories, including 22.5% adversarial questions whose correct behavior is abstention (an unanswerable context is a correct outcome), so it is a conservative lower bound; answerable categories 1–4 estimate to ~0.69.
+- **Entity hit** is a model-free metric: the fraction of QAs whose answer tokens appear in the retrieved context.
+- `Search` returns the context to the host (e.g. MeowAgent) as the generation context; retrieval is not answer generation.
+
+Reproduce:
 
 ```bash
-go test -tags integration ./test/ -run TestLocomo10Recall -v
+# 1 conversation
+go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
+# 3 conversations
+MEMHOP_LOCOMO_ITEMS=3 go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
 ```
 
-### Comparison (2026 memory systems)
-
-Looking for a **Mem0, Letta, or Zep alternative in Go**? Here is how MemHop compares with 2026 agent memory systems:
-
-| System | GitHub Stars | LOCOMO | LongMemEval | Recall@5 | P95 Latency | Deploy | Language |
-|--------|-------------|--------|-------------|----------|-------------|--------|----------|
-| **MemHop** | — | — | — | **100%** ² | 3.97s ¹ | Embedded .meh | **Go** |
-| Mem0 2026 | ~51k | 92.5% | 93.4% | — | 1.44s | SaaS/OSS | Python |
-| Cognee | ~28k | 80.3% | — | — | — | OSS | Python |
-| Letta | ~13k | — | — | — | — | OSS | Python |
-| agentmemory | ~20k | — | — | 95.2% | — | Embedded TS | TypeScript |
-| MemPalace | ~41k\* | — | — | 96.6% | — | Local | JS/TS |
-
-² LOCOMO10-subset retrieval-only recall, NOT directly comparable with end-to-end QA Accuracy (the LOCOMO column) · \* Zep LOCOMO is self-reported; MemPalace star count is disputed (bot inflation)
+Analysis and competitor positioning: [docs/benchmarks/locomo_recall_analysis.md](docs/benchmarks/locomo_recall_analysis.md)
 
 ## Project Structure
 
 ```
-api/                              ← Public API (Open, Search, BatchStore, Dream, L0-L5)
-internal/
-├── common/
-│   ├── config/                   ← Configuration
-│   ├── hash/                     ← xxhash
-│   ├── mherrors/                 ← Error types
-│   ├── numeric/                  ← f16, cosine
-│   ├── strutil/                  ← String utils
-│   └── timeutil/                 ← Time utils
-├── core/
-│   ├── index/                    ← L1 reverse, L2 meta, L3, sparse, entity, tokenizer, vector
-│   ├── model/                    ← profile, hypergraph, scene_node, archive, enums
-│   ├── record/                   ← L0, L4, L5, graph, topic
-│   └── storage/                  ← V2 .meh engine (header, mmap, compact, snapshot)
-└── query/
-    ├── crud/                     ← L0-L5 CRUD
-    ├── dream/                    ← Dream pipeline (compress, emotion, l0_distill, l0_form, l1_decay, l1_rebuild, llm, pipeline)
-    ├── encoder/                  ← Ollama HTTP embedding client
-    ├── graph/                    ← L3 graph (bfs, community, dsl, mutate, store, subgraph)
-    ├── health/                   ← Encoder health check
-    ├── importx/                  ← Document import
-    ├── search/                   ← RRF search (orchestrator, pipeline, rrf, search)
-    ├── session/                  ← Session management
-    └── write/                    ← Batch store + update
+internal/                     ← Assembly layer: DB facade (open, search, update, dream, l0–l5)
+internal/sub/                 ← Business assembly: config / db / defaults / search / update /
+                                dream / scenefind / llm_client / llm_ops / encoder
+internal/sub/repo/            ← Data layer: open + l0layer–l5layer (record read/write, vectors)
+internal/sub/repo/index/      ← Index layer: sparse (BM25) / l1_reverse / l2meta / l3_index /
+                                entity / rebuild / tokenizer (gse)
+internal/sub/repo/core/       ← .meh engine: engine / frame / header / snapshot / reclaim /
+                                record / model / mmap / filelock
+internal/sub/common/          ← Bottom-level utils: bktree / cosine / enum / errors / hash /
+                                sliceutil / strutil / vec
+test/                         ← Integration tests (build tag: integration)
+benches/fixtures/             ← Benchmark datasets (locomo10, locomo_smoke, longmemeval_smoke)
 ```
+
+Dependency direction is strictly one-way: `internal → sub → repo → core`, with `common` at the bottom (no references to any other internal package).
 
 ## Development
 
 ```bash
-go build ./api/... ./internal/...          # Build
-go test ./api/... ./internal/...           # Unit tests
-go test ./test/...                         # Integration tests (requires Ollama)
-go vet ./...                               # Static analysis
+go build ./...                          # Build
+go vet ./...                            # Static analysis
+go test ./internal/...                  # Unit tests (no external services)
+go test -tags integration ./test/...    # Integration tests (requires Ollama + LLM key)
 ```
+
+Integration tests run against real services (Ollama encoder + an OpenAI-compatible LLM). Configure the LLM via environment variables `MEMHOP_TEST_LLM_KEY` / `MEMHOP_TEST_LLM_URL` / `MEMHOP_TEST_LLM_MODEL` (defaults to the DeepSeek endpoint when only the key is set), or via `test/testsupport/key_config.json`.
 
 ## Changelog
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
+| v1.1.0 | 2026-07-27 ~ 08.11 | Architecture refactor | Layered `internal` rewrite (assembly → sub → repo → core/index/common) · f16 → f32 single-precision vectors · topic centroid vector retrieval · `BatchStore` removed · `Dream(ctx)` narrowed to `(bool, error)` · `.meh` format `0x0004`, incompatible with v1 data · integration tests rebuilt against the new internal API |
 | v1.0.0 | 2026-07-26 | First stable release | Go rewrite with six-layer cognitive architecture, V2 .meh storage, BM25+vector+entity RRF search, Dream consolidation pipeline, L3 hypergraph with community detection. |
 | v0.54–v0.58 | 2026-07-16 ~ 07-23 | Go Rewrite | v0.58: Unified RRF — additive scene bonuses, three-channel fusion, L6 removed, atomic.Pointer · v0.57: Dream narrowed to L0+L1+L2, LLM hardening, L5 Write API, SkipDistill · v0.55: Stability — IVF removed, panic→error, crash recovery, L5 write pipeline · v0.54: Go foundation — 4-layer arch, V2 .meh storage, 2 deps, log/slog |
 | v0.18–v0.63 | 2026-05-31 ~ 07-10 | Rust | V2 append-only `.meh` with snapshot/checkpoint · BM25 + IVF hybrid retrieval · L3 hypergraph DSL, community detection (clique + Louvain), BFS/caching · Full Dream pipeline: L3 distill → L2 compress → L1 decay → L0 rebuild → L5 crystallize · FFI (cdylib), MCP Server, gRPC/Unix Socket encoder |

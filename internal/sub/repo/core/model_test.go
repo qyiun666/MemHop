@@ -10,10 +10,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
-// ============================================================================
-// Helper: JSON roundtrip
-// ============================================================================
-
 func jsonRoundtrip(t *testing.T, v any, out any) {
 	t.Helper()
 	data, err := json.Marshal(v)
@@ -27,10 +23,6 @@ func jsonRoundtrip(t *testing.T, v any, out any) {
 
 func strPtr(s string) *string { return &s }
 func u64Ptr(v uint64) *uint64 { return &v }
-
-// ============================================================================
-// L0 ProfileSlot
-// ============================================================================
 
 func TestProfileSlotRoundtrip(t *testing.T) {
 	p := ProfileSlot{
@@ -61,10 +53,6 @@ func TestProfileSlotRoundtrip(t *testing.T) {
 		t.Fatalf("emotion_patterns mismatch")
 	}
 }
-
-// ============================================================================
-// L1 SceneNode
-// ============================================================================
 
 func TestSceneNodeRoundtripLegacy(t *testing.T) {
 	n := SceneNode{
@@ -110,10 +98,6 @@ func TestSceneNodeRoundtrip(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// L1 SceneEdge
-// ============================================================================
-
 func TestSceneEdgeRoundtrip(t *testing.T) {
 	e := SceneEdge{
 		IDHash: 999, Kind: HyperCausal,
@@ -125,10 +109,6 @@ func TestSceneEdgeRoundtrip(t *testing.T) {
 		t.Fatalf("mismatch: %+v", got)
 	}
 }
-
-// ============================================================================
-// L2 SceneSlot
-// ============================================================================
 
 func TestSceneSlotRoundtrip(t *testing.T) {
 	s := SceneSlot{SceneID: 12345, SceneName: "测试场景"}
@@ -148,10 +128,6 @@ func TestNewSceneSlot(t *testing.T) {
 		t.Fatalf("scene_name mismatch")
 	}
 }
-
-// ============================================================================
-// L2 TopicSlot + ComputeTopicID
-// ============================================================================
 
 func TestTopicSlotRoundtripDepth1(t *testing.T) {
 	topic := makeTopic(111, 1)
@@ -223,10 +199,6 @@ func TestComputeTopicIDConsistency(t *testing.T) {
 		t.Fatalf("ComputeTopicID mismatch: got %d, want %d", got, expected)
 	}
 }
-
-// ============================================================================
-// L3 HypergraphSlot + Node + Edge
-// ============================================================================
 
 func TestHypergraphSlotRoundtripPath(t *testing.T) {
 	s := HypergraphSlot{
@@ -378,10 +350,6 @@ func TestHypergraphEdgeAllKinds(t *testing.T) {
 	}
 }
 
-// ============================================================================
-// L4 ArchiveSlot
-// ============================================================================
-
 func TestArchiveSlotRoundtrip(t *testing.T) {
 	a := ArchiveSlot{
 		IDHash: 1, ContentType: ContentText, Role: 0,
@@ -425,10 +393,6 @@ func TestArchiveSlotImagePath(t *testing.T) {
 		t.Fatalf("content_type mismatch")
 	}
 }
-
-// ============================================================================
-// L5 ActionChainSlot + ActionStep
-// ============================================================================
 
 func TestActionChainSlotRoundtrip(t *testing.T) {
 	c := ActionChainSlot{
@@ -485,10 +449,6 @@ func TestActionStepNoParams(t *testing.T) {
 		t.Fatalf("expected nil parameters")
 	}
 }
-
-// ============================================================================
-// Enum serialization tests
-// ============================================================================
 
 func TestContentTypeValues(t *testing.T) {
 	tests := []struct {
@@ -605,10 +565,6 @@ func TestLayerValues(t *testing.T) {
 		}
 	}
 }
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 func makeTopic(id uint64, depth uint8) TopicSlot {
 	var parentID *uint64

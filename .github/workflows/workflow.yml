@@ -24,12 +24,12 @@ jobs:
         run: go build ./...
 
       - name: Vet
-        run: go vet ./api/... ./internal/... ./test/...
+        run: go vet ./...
 
       - name: Check formatting
         if: runner.os != 'Windows'
         run: |
-          unformatted=$(gofmt -l api internal test)
+          unformatted=$(gofmt -l internal test)
           if [ -n "$unformatted" ]; then
             echo "gofmt needed on:"
             echo "$unformatted"
@@ -37,11 +37,14 @@ jobs:
           fi
 
       - name: Unit tests
-        run: go test ./api/... ./internal/...
+        run: go test ./internal/...
 
       - name: Unit tests (race)
-        run: go test -race ./api/... ./internal/...
+        run: go test -race ./internal/...
 
-      - name: Integration tests (offline/mock)
+      # Integration tests require real Ollama + LLM credentials; without
+      # MEMHOP_TEST_LLM_KEY the suite skips, so this step mainly verifies
+      # that the integration-tagged code compiles on all platforms.
+      - name: Integration tests (skipped without LLM credentials)
         if: runner.os == 'Linux'
-        run: go test ./test/...
+        run: go test -tags=integration ./test/...

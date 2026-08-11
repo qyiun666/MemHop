@@ -15,13 +15,11 @@ func HashID(s string) uint64 {
 	return xxhash.Sum64String(s)
 }
 
-// FormatHash formats a uint64 as a 16-char hex string.
 func FormatHash(h uint64) string {
 	return fmt.Sprintf("%016x", h)
 }
 
-// ParseID parses a 16-char lowercase/uppercase hex string back to uint64.
-// Malformed IDs (wrong length or non-hex characters) return an error.
+// ParseID parses a 16-char hex string back to uint64; malformed IDs return an error.
 func ParseID(id string) (uint64, error) {
 	if len(id) != 16 {
 		return 0, NewError(ErrInvalidQuery, fmt.Sprintf("invalid id %q: want exactly 16 hex chars", id))
@@ -33,8 +31,7 @@ func ParseID(id string) (uint64, error) {
 	return h, nil
 }
 
-// ParseAll parses a slice of id strings into hashes; any malformed id makes
-// the whole call fail and returns false.
+// ParseAll parses id strings into hashes; any malformed id fails the whole call.
 func ParseAll(ids []string) ([]uint64, bool) {
 	out := make([]uint64, 0, len(ids))
 	for _, id := range ids {
@@ -47,7 +44,6 @@ func ParseAll(ids []string) ([]uint64, bool) {
 	return out, true
 }
 
-// FormatIDs formats a slice of uint64 as hex strings.
 func FormatIDs(ids []uint64) []string {
 	out := make([]string, len(ids))
 	for i, id := range ids {

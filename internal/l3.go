@@ -12,17 +12,17 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// GetL3 薄层：实现见 internal/sub/l3.go（(db *DB) GetL3）。
+// Thin wrapper; see internal/sub/l3.go ((db *DB) GetL3).
 func (db *DB) GetL3(id string) (*sub.L3Graph, error) {
 	return db.DB.GetL3(id)
 }
 
-// ListL3 薄层：实现见 internal/sub/l3.go（(db *DB) ListL3）。
+// Thin wrapper; see internal/sub/l3.go ((db *DB) ListL3).
 func (db *DB) ListL3() ([]core.HypergraphSlot, error) {
 	return db.DB.ListL3()
 }
 
-// ImportL3 薄层：写操作，持写锁后委托 sub 实现。
+// Thin wrapper; write op, delegates under the write lock.
 func (db *DB) ImportL3(items []sub.L3ImportItem, mode sub.L3ImportMode) (*sub.L3ImportResult, error) {
 	db.DB.Lock()
 	defer db.DB.Unlock()
@@ -32,7 +32,7 @@ func (db *DB) ImportL3(items []sub.L3ImportItem, mode sub.L3ImportMode) (*sub.L3
 	return db.DB.ImportL3(items, mode)
 }
 
-// UpdateL3 薄层：写操作，持写锁后委托 sub 实现。
+// Thin wrapper; write op, delegates under the write lock.
 func (db *DB) UpdateL3(id string, name *string) (*sub.L3Graph, error) {
 	db.DB.Lock()
 	defer db.DB.Unlock()
@@ -42,7 +42,7 @@ func (db *DB) UpdateL3(id string, name *string) (*sub.L3Graph, error) {
 	return db.DB.UpdateL3(id, name)
 }
 
-// DeleteL3 薄层：写操作，持写锁后委托 sub 实现。
+// Thin wrapper; write op, delegates under the write lock.
 func (db *DB) DeleteL3(id string) error {
 	db.DB.Lock()
 	defer db.DB.Unlock()
@@ -52,12 +52,12 @@ func (db *DB) DeleteL3(id string) error {
 	return db.DB.DeleteL3(id)
 }
 
-// QueryL3Nodes 薄层：实现见 internal/sub/l3query.go（(db *DB) QueryL3Nodes）。
+// Thin wrapper; see internal/sub/l3query.go ((db *DB) QueryL3Nodes).
 func (db *DB) QueryL3Nodes(q sub.L3NodeQuery) ([]core.HypergraphNode, error) {
 	return db.DB.QueryL3Nodes(q)
 }
 
-// QueryL3Subgraph 薄层：实现见 internal/sub/l3query.go（(db *DB) QueryL3Subgraph）。
+// Thin wrapper; see internal/sub/l3query.go ((db *DB) QueryL3Subgraph).
 func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*sub.L3Subgraph, error) {
 	return db.DB.QueryL3Subgraph(graphID, startNodeID, maxDepth, edgeKinds)
 }

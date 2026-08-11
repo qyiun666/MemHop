@@ -12,7 +12,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
-// RecordEntry is used for batch writes.
 type RecordEntry struct {
 	RecordType uint8
 	IDHash     uint64
@@ -36,7 +35,6 @@ type StorageEngine struct {
 	mu           sync.RWMutex
 }
 
-// Create creates a new .meh file at the given path.
 func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
@@ -82,7 +80,6 @@ func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 	}, nil
 }
 
-// Open opens an existing .meh file.
 func Open(path string) (*StorageEngine, error) {
 	f, err := os.OpenFile(path, os.O_RDWR, 0644)
 	if err != nil {
@@ -131,8 +128,8 @@ func Open(path string) (*StorageEngine, error) {
 	snapshotCorrupt := false
 	if active.SnapshotOffset > 0 && active.SnapshotLength > 0 {
 		if err := e.loadSnapshot(); err != nil {
-			// 快照损坏或越界（回收式 checkpoint 的截断窗口）：回退全文件扫描
-			// 重建索引，而不是拒绝打开。
+			// Snapshot corrupt or out of bounds (reclaim checkpoint truncation window):
+			// fall back to a full scan instead of refusing to open.
 			e.index = make(map[uint64]uint64)
 			e.recordCount = 0
 			e.snapshotData = nil
@@ -159,7 +156,7 @@ func Open(path string) (*StorageEngine, error) {
 		}
 	}
 	if snapshotCorrupt {
-		// 清空 active 头快照指针并写盘，避免后续 Open 反复越界重扫。
+		// Clear the active header snapshot pointer to avoid repeated out-of-bounds rescans on Open.
 		hdr := copyHeader(e.activeHeaderRef())
 		hdr.SnapshotOffset = 0
 		hdr.SnapshotLength = 0
@@ -180,7 +177,6 @@ func Open(path string) (*StorageEngine, error) {
 	return e, nil
 }
 
-// WriteRecord writes a single record and returns its file offset.
 func (e *StorageEngine) WriteRecord(recordType uint8, idHash uint64, data []byte) (uint64, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -194,7 +190,7 @@ func (e *StorageEngine) WriteRecord(recordType uint8, idHash uint64, data []byte
 	return offsets[0], nil
 }
 
-// WriteRecordBatch writes multiple records in a single flush+remap cycle.
+// WriteRecordBatch writes all records in one flush+remap cycle.
 func (e *StorageEngine) WriteRecordBatch(records []RecordEntry) ([]uint64, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -204,7 +200,6 @@ func (e *StorageEngine) WriteRecordBatch(records []RecordEntry) ([]uint64, error
 	return e.writeRecordBatch(records)
 }
 
-// ReadRecord reads a record by idHash, returning a copy of the data.
 func (e *StorageEngine) ReadRecord(idHash uint64) (uint8, []byte, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -222,10 +217,8 @@ func (e *StorageEngine) ReadRecord(idHash uint64) (uint8, []byte, error) {
 	return rt, data, nil
 }
 
-// DeleteRecord removes a record by appending a FlagDeleted tombstone (same
-// idHash, original record type, empty data) and dropping it from the index.
-// The tombstone is synced to disk so the delete survives a crash before the
-// next checkpoint; scanRecords replays it as a delete on Open.
+// DeleteRecord appends a FlagDeleted tombstone (same idHash, original type,
+// empty data) and drops the record from the index.
 func (e *StorageEngine) DeleteRecord(idHash uint64) (bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -236,10 +229,8 @@ func (e *StorageEngine) DeleteRecord(idHash uint64) (bool, error) {
 	return deleted > 0, err
 }
 
-// DeleteRecordBatch deletes multiple records in one flush+remap cycle: all
-// tombstones are appended with a single write and one fsync, then the index
-// is updated in bulk. Returns the number of records actually deleted (already
-// missing records are skipped).
+// DeleteRecordBatch deletes multiple records in one flush+remap cycle;
+// already-missing ids are skipped. Returns the number deleted.
 func (e *StorageEngine) DeleteRecordBatch(idHashes []uint64) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -249,11 +240,10 @@ func (e *StorageEngine) DeleteRecordBatch(idHashes []uint64) (int, error) {
 	return e.deleteRecordBatchLocked(idHashes)
 }
 
-// deleteRecordBatchLocked appends tombstones for the existing ids, syncs once,
-// remaps once, then updates the in-memory index in bulk. Caller must hold e.mu.
+// deleteRecordBatchLocked appends tombstones, syncs once, remaps once, then
+// bulk-updates the index. Caller must hold e.mu.
 func (e *StorageEngine) deleteRecordBatchLocked(idHashes []uint64) (int, error) {
-	// Collect tombstones for existing records, preserving the original record
-	// type for forensics.
+	// Collect tombstones for existing records, keeping the original type for forensics.
 	var tombstones []byte
 	deleted := 0
 	for _, idHash := range idHashes {
@@ -271,7 +261,7 @@ func (e *StorageEngine) deleteRecordBatchLocked(idHashes []uint64) (int, error) 
 	if deleted == 0 {
 		return 0, nil
 	}
-	// 截断文件尾的旧快照（如有），维持记录帧恒在快照之前。
+	// Trim any trailing snapshot so record frames always precede snapshots.
 	if err := e.trimTailSnapshot(); err != nil {
 		return 0, err
 	}
@@ -312,7 +302,6 @@ func (e *StorageEngine) deleteRecordBatchLocked(idHashes []uint64) (int, error) 
 	return deleted, nil
 }
 
-// Contains checks whether idHash exists in the index.
 func (e *StorageEngine) Contains(idHash uint64) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
@@ -333,10 +322,9 @@ func (e *StorageEngine) Checkpoint(snap *IndexSnapshotData) error {
 	return e.checkpoint(snap)
 }
 
-// Close checkpoints, syncs, unmaps, and closes the file.
-// All cleanup steps execute even if any of them fails; the first error
-// encountered is returned (checkpoint > unmap > sync > close) so no
-// mmap region or file descriptor is leaked on partial failure.
+// Close checkpoints, unmaps, and closes the file. All steps run even on
+// failure; the first error wins (checkpoint > unmap > sync > close) so
+// no mmap region or descriptor leaks.
 func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -364,9 +352,8 @@ func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
 	}
 }
 
-// CloseNoCheckpoint unmaps and closes the file without writing an index
-// snapshot or flipping the A/B header. On-disk state remains exactly as of
-// the last checkpoint plus any appended records.
+// CloseNoCheckpoint unmaps and closes without a snapshot or A/B flip; the
+// on-disk state stays as the last checkpoint plus appended records.
 func (e *StorageEngine) CloseNoCheckpoint() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -384,12 +371,9 @@ func (e *StorageEngine) CloseNoCheckpoint() error {
 	return e.file.Close()
 }
 
-// IterIndex iterates over all (idHash, offset) pairs.
-// The index is copied under the read lock first and fn is invoked without
-// holding any lock, so fn may safely call engine methods (e.g. ReadRecord);
-// a recursive read lock could deadlock once a writer is queued. Iteration
-// observes a snapshot: concurrent writes/deletes during iteration are not
-// seen. Return false from fn to stop iteration.
+// IterIndex iterates over all (idHash, offset) pairs. The index is copied
+// first and fn runs lock-free so it may call engine methods; iteration sees
+// a snapshot. Return false from fn to stop.
 func (e *StorageEngine) IterIndex(fn func(idHash, offset uint64) bool) {
 	e.mu.RLock()
 	if e.closed {
@@ -408,10 +392,8 @@ func (e *StorageEngine) IterIndex(fn func(idHash, offset uint64) bool) {
 	}
 }
 
-// IterIndexByType iterates over all idHashes of a given record type.
-// A snapshot of matching IDs is taken under the read lock, then fn is invoked
-// without holding any lock, so fn may safely call engine methods (e.g. ReadRecord).
-// Returns stop=true if fn returned a non-nil error.
+// IterIndexByType iterates all idHashes of a record type over a snapshot;
+// fn runs lock-free. Returns the first error from fn.
 func (e *StorageEngine) IterIndexByType(rt uint8, fn func(idHash uint64) error) error {
 	e.mu.RLock()
 	if e.closed {
@@ -431,35 +413,29 @@ func (e *StorageEngine) IterIndexByType(rt uint8, fn func(idHash uint64) error) 
 	return nil
 }
 
-// RecordCount returns the number of live records.
 func (e *StorageEngine) RecordCount() uint32 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.recordCount
 }
 
-// VectorDim returns the configured vector dimension.
 func (e *StorageEngine) VectorDim() uint16 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.activeHeaderRef().VectorDim
 }
 
-// FileSize returns the total mapped file size.
 func (e *StorageEngine) FileSize() uint64 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return uint64(len(e.mmap))
 }
 
-// SnapshotData returns the last loaded snapshot data, if any.
 func (e *StorageEngine) SnapshotData() *IndexSnapshotData {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.snapshotData
 }
-
-// --- internal helpers (must be called with lock held) ---
 
 func (e *StorageEngine) activeHeaderRef() *FileHeader {
 	if e.activeHeader == 0 {
@@ -472,14 +448,12 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 	if len(records) == 0 {
 		return nil, nil
 	}
-	// 截断文件尾的旧快照（如有），维持记录帧恒在快照之前。
+	// Trim any trailing snapshot so record frames always precede snapshots.
 	if err := e.trimTailSnapshot(); err != nil {
 		return nil, err
 	}
-	// Append everything to the file first. The in-memory index, recordCount
-	// and mmap are updated only after all writes, the sync and the remap
-	// have succeeded, so a failure mid-batch leaves the engine state
-	// consistent (the stale bytes past nextOffset are ignored on Open).
+	// Append first; index, recordCount and mmap update only after writes,
+	// sync and remap succeed, so a mid-batch failure leaves consistent state.
 	offsets := make([]uint64, 0, len(records))
 	for _, rec := range records {
 		encoded := EncodeRecord(rec.RecordType, 0, rec.IDHash, rec.Data)
@@ -504,7 +478,6 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 		if _, exists := e.index[rec.IDHash]; !exists {
 			e.recordCount++
 		}
-		// Remove idHash from old type set if it was previously indexed.
 		if oldOff, exists := e.index[rec.IDHash]; exists {
 			if int(oldOff) < len(e.mmap) {
 				oldRT := e.mmap[int(oldOff)]
@@ -545,7 +518,6 @@ func (e *StorageEngine) checkpoint(snap *IndexSnapshotData) error {
 		return err
 	}
 	e.mmap = mm
-	// Build new header written to inactive slot.
 	newHdr := e.buildCheckpointHeader(snapOffset, uint32(len(blob)))
 	if err := e.writeInactiveHeader(newHdr); err != nil {
 		return err
@@ -555,7 +527,6 @@ func (e *StorageEngine) checkpoint(snap *IndexSnapshotData) error {
 		return err
 	}
 	e.mmap = mm
-	// Switch active.
 	e.switchHeader(newHdr)
 	return nil
 }
@@ -589,13 +560,9 @@ func (e *StorageEngine) loadSnapshot() error {
 	return nil
 }
 
-// scanRecords scans records starting at the given offset and merges them
-// into the index. A later record with the same idHash overrides an earlier
-// entry; a FlagDeleted tombstone deletes the entry (delete replay). The scan
-// stops at the first frame that is truncated or fails its CRC32 check: such
-// a frame is crash residue (torn append or orphan snapshot blob) and marks
-// the end of the record region. Returns the offset just past the last valid
-// record and whether trailing crash residue must be truncated.
+// scanRecords scans from offset, merging records into the index (a later
+// same-idHash overrides; a tombstone deletes). Stops at the first truncated
+// or CRC-failed frame (crash residue) and reports whether it must be truncated.
 func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, err error) {
 	offset := start
 	for {
@@ -619,8 +586,8 @@ func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, er
 	return offset, false, nil
 }
 
-// truncateTail shrinks the file to size and remaps it, discarding crash
-// residue past the last valid record. Caller must hold e.mu.
+// truncateTail shrinks the file and remaps, discarding crash residue.
+// Caller must hold e.mu.
 func (e *StorageEngine) truncateTail(size int64) error {
 	if err := UnmapFile(e.mmap); err != nil {
 		return err
@@ -640,8 +607,7 @@ func (e *StorageEngine) truncateTail(size int64) error {
 	return nil
 }
 
-// rebuildByType rebuilds the byType secondary index from the current index.
-// Caller must hold e.mu (at least RLock).
+// rebuildByType rebuilds the byType secondary index. Caller must hold e.mu.
 func (e *StorageEngine) rebuildByType() {
 	e.byType = make(map[uint8]map[uint64]struct{})
 	for id, off := range e.index {
@@ -656,10 +622,8 @@ func (e *StorageEngine) rebuildByType() {
 	}
 }
 
-// --- package-level helpers ---
-
-// writeInactiveHeader writes hdr to the inactive A/B header slot and syncs
-// it to disk. Caller must hold e.mu.
+// writeInactiveHeader writes hdr to the inactive A/B slot and syncs it.
+// Caller must hold e.mu.
 func (e *StorageEngine) writeInactiveHeader(hdr *FileHeader) error {
 	writeOffset := int64(HeaderAOffset)
 	if e.activeHeader != 1 {

@@ -10,7 +10,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// writeChain 写入 L5 动作链记录。
+// writeChain writes an L5 action chain record.
 func writeChain(t *testing.T, engine *core.StorageEngine, c *core.ActionChainSlot) {
 	t.Helper()
 	if err := core.WriteActionChainSlot(engine, c.IDHash, c); err != nil {
@@ -18,7 +18,7 @@ func writeChain(t *testing.T, engine *core.StorageEngine, c *core.ActionChainSlo
 	}
 }
 
-// TestListL5 全量、过滤与排序。
+// TestListL5 all, filters and ordering.
 func TestListL5(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
@@ -29,7 +29,7 @@ func TestListL5(t *testing.T) {
 	writeChain(t, engine, &c2)
 	writeChain(t, engine, &c3)
 
-	// 全量：按 UpdatedAt 降序 → c1, c3, c2。
+	// All: sorted by UpdatedAt desc -> c1, c3, c2.
 	out, err := db.ListL5(L5ListQuery{})
 	if err != nil {
 		t.Fatalf("ListL5: %v", err)
@@ -38,7 +38,7 @@ func TestListL5(t *testing.T) {
 		t.Fatalf("all: want [c1 c3 c2], got %v", idsOfChains(out))
 	}
 
-	// Status 过滤。
+	// Status filter.
 	out, err = db.ListL5(L5ListQuery{Status: strPtr("active")})
 	if err != nil {
 		t.Fatalf("ListL5 status: %v", err)
@@ -47,7 +47,7 @@ func TestListL5(t *testing.T) {
 		t.Fatalf("status active: want 2 chains, got %d", len(out))
 	}
 
-	// MinTriggerCount 过滤。
+	// MinTriggerCount filter.
 	min := uint32(2)
 	out, err = db.ListL5(L5ListQuery{MinTriggerCount: &min})
 	if err != nil {
@@ -57,7 +57,7 @@ func TestListL5(t *testing.T) {
 		t.Fatalf("min trigger: want [c1 c3], got %v", idsOfChains(out))
 	}
 
-	// Keyword 大小写不敏感子串匹配。
+	// Keyword case-insensitive substring match.
 	out, err = db.ListL5(L5ListQuery{Keyword: "编译"})
 	if err != nil {
 		t.Fatalf("ListL5 keyword: %v", err)
@@ -66,7 +66,7 @@ func TestListL5(t *testing.T) {
 		t.Fatalf("keyword: want [c1], got %v", idsOfChains(out))
 	}
 
-	// 组合过滤。
+	// Combined filters.
 	out, err = db.ListL5(L5ListQuery{Status: strPtr("active"), Keyword: "发布"})
 	if err != nil {
 		t.Fatalf("ListL5 combo: %v", err)
@@ -76,7 +76,7 @@ func TestListL5(t *testing.T) {
 	}
 }
 
-// TestListL5Empty 空库返回空切片。
+// TestListL5Empty empty db returns an empty slice.
 func TestListL5Empty(t *testing.T) {
 	db := &DB{engine: newTestEngine(t)}
 	out, err := db.ListL5(L5ListQuery{})

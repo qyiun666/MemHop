@@ -9,17 +9,16 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// MaxDepth 话题下沉后触发删除的深度阈值。
+// MaxDepth: topic depth threshold that triggers deletion on sinking.
 const MaxDepth = 4
 
-// CompressResult 是压缩聚合结果。
 type CompressResult struct {
-	L3Refs         []uint64 // L3 合体去重后的引用列表
-	UserTimestamp  int64    // 最早的用户时间戳
-	AgentTimestamp int64    // 最晚的 agent 时间戳
+	L3Refs         []uint64 // deduplicated merged L3 refs
+	UserTimestamp  int64    // earliest user timestamp
+	AgentTimestamp int64    // latest agent timestamp
 }
 
-// CompressTopicsL2 压缩L2场景下的话题
+// CompressTopicsL2 compresses topics under a scene.
 func CompressTopicsL2(engine *core.StorageEngine, ids []uint64, parentID uint64) (*CompressResult, error) {
 	result := &CompressResult{
 		UserTimestamp:  math.MaxInt64,
@@ -30,7 +29,7 @@ func CompressTopicsL2(engine *core.StorageEngine, ids []uint64, parentID uint64)
 	for _, id := range ids {
 		topic, err := core.ReadTopicLenient(engine, id)
 		if err != nil || topic == nil {
-			continue // 记录不存在或非话题类型：跳过
+			continue // skip missing or non-topic records
 		}
 		topic.Depth++
 		topic.ParentID = &parentID
@@ -77,7 +76,8 @@ func CompressTopicsL2(engine *core.StorageEngine, ids []uint64, parentID uint64)
 	return result, nil
 }
 
-// DeleteL2 批量删除。num==1 时 ids 是场景 id 列表：遍历所有话题删除 SceneID
+// DeleteL2 batch-deletes: num==1 treats ids as scene IDs (all topics of the
+// scene plus the scene record itself); num==2 treats them as topic IDs.
 func DeleteL2(engine *core.StorageEngine, ids []string, num uint8) bool {
 	hashes, ok := common.ParseAll(ids)
 	if !ok {
@@ -85,15 +85,15 @@ func DeleteL2(engine *core.StorageEngine, ids []string, num uint8) bool {
 	}
 	var targets []uint64
 	switch num {
-	case 1: // 场景
+	case 1: // scenes
 		sceneSet := common.ToSet(hashes)
 		for _, topic := range core.CollectAllTopics(engine) {
 			if _, ok := sceneSet[topic.SceneID]; ok {
 				targets = append(targets, topic.ID)
 			}
 		}
-		targets = append(targets, hashes...) // 场景记录本身
-	case 2: // 话题
+		targets = append(targets, hashes...) // the scene records themselves
+	case 2: // topics
 		idSet := common.ToSet(hashes)
 		for _, topic := range core.CollectAllTopics(engine) {
 			if _, ok := idSet[topic.ID]; ok {
@@ -107,9 +107,8 @@ func DeleteL2(engine *core.StorageEngine, ids []string, num uint8) bool {
 	return err == nil
 }
 
-// MergeScenesL2 遍历所有话题：SceneID 属于副场景 id 列表的，改写为主场景 id
-// 并收集，遍历结束后一次性批量写回；随后复用 DeleteL2 的场景模式删除副场景
-// （此时副场景下已无话题，只删场景记录本身）。成功返回 true。
+// MergeScenesL2 rewrites topics of the secondary scenes to the primary
+// scene in one batch, then deletes the secondary scene records (now empty).
 func MergeScenesL2(engine *core.StorageEngine, primaryID string, secondaryIDs []string) bool {
 	primaryHash, err := common.ParseID(primaryID)
 	if err != nil {
@@ -144,7 +143,6 @@ func MergeScenesL2(engine *core.StorageEngine, primaryID string, secondaryIDs []
 	return DeleteL2(engine, secondaryIDs, 1)
 }
 
-// ListScenesL2 按场景 id 列表查询场景，不存在的场景跳过。
 func ListScenesL2(engine *core.StorageEngine, ids []string) []core.SceneSlot {
 	var out []core.SceneSlot
 	for _, id := range ids {
@@ -161,7 +159,7 @@ func ListScenesL2(engine *core.StorageEngine, ids []string) []core.SceneSlot {
 	return out
 }
 
-// CreateSceneL2 新增场景：ID 由场景名哈希生成并写入文件，返回场景 ID。
+// CreateSceneL2 creates a scene; the ID is the hash of the name.
 func CreateSceneL2(engine *core.StorageEngine, name string) (uint64, error) {
 	slot := core.NewSceneSlot(name)
 	if err := core.WriteSceneSlot(engine, slot.SceneID, &slot); err != nil {
@@ -170,7 +168,6 @@ func CreateSceneL2(engine *core.StorageEngine, name string) (uint64, error) {
 	return slot.SceneID, nil
 }
 
-// CollectAllScenesL2 返回全部场景槽，按记录扫描顺序。
 func CollectAllScenesL2(engine *core.StorageEngine) []core.SceneSlot {
 	var out []core.SceneSlot
 	engine.IterIndexByType(core.RecL2Scene, func(idHash uint64) error {
@@ -184,10 +181,9 @@ func CollectAllScenesL2(engine *core.StorageEngine) []core.SceneSlot {
 	return out
 }
 
-// ListTopicsL2 查询话题列表：num==1 返回全部话题（所有场景）中 depth 深度以内
-// 的，num==2 返回指定场景中 depth 深度以内的（depth==0 视为 1，超过 MaxDepth
-// 截断为 MaxDepth），num==3 按 ID 读取单个话题（sceneID 参数为话题 ID）。
-// num==1/2 均按 UserTimestamp 升序返回。
+// ListTopicsL2 lists topics by mode: 1 = all topics up to depth, 2 = same but
+// restricted to sceneID, 3 = one topic by ID. depth is clamped to [1, MaxDepth];
+// results sorted by UserTimestamp for modes 1/2.
 func ListTopicsL2(engine *core.StorageEngine, sceneID string, depth uint8, num uint8) ([]core.TopicSlot, error) {
 	var idHash uint64
 	var err error
@@ -219,8 +215,8 @@ func ListTopicsL2(engine *core.StorageEngine, sceneID string, depth uint8, num u
 	return out, nil
 }
 
-// WriteVecCentroid 将话题质心向量（f32）写为一条 RecVecCentroid 记录，
-// 返回该记录的 idHash（存入话题 CentroidPageRef 供向量通道检索）。
+// WriteVecCentroid writes the topic centroid vector (f32) as a
+// RecVecCentroid record and returns its idHash for CentroidPageRef.
 func WriteVecCentroid(engine *core.StorageEngine, vec []float32) (uint64, error) {
 	if len(vec) == 0 {
 		return 0, common.NewError(common.ErrInvalidQuery, "empty centroid vector", nil)
@@ -233,8 +229,8 @@ func WriteVecCentroid(engine *core.StorageEngine, vec []float32) (uint64, error)
 	return idHash, nil
 }
 
-// CreateTopicL2 新增话题：ID 由 ComputeTopicID 生成（sceneID + 双时间戳哈希），
-// depth 固定 1，centroidRef 为质心向量记录 idHash（0 表示无向量）。成功返回 true。
+// CreateTopicL2 creates a topic (ID from ComputeTopicID, depth 1);
+// centroidRef 0 means no vector.
 func CreateTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []string, userTS int64, centroidRef uint64) bool {
 	sceneHash, err := common.ParseID(sceneID)
 	if err != nil {
@@ -251,9 +247,9 @@ func CreateTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []st
 	return core.WriteTopicSlot(engine, topic.ID, &topic) == nil
 }
 
-// CreateFusedTopicL2 新增融合话题（压缩产物）：ID 由 ComputeTopicID 生成（sceneID + 双时间戳哈希），
-// depth 固定 1。按话题模型，压缩后 UserKeywords/AgentKeywords 清空，仅 FusedKeywords 有值
-// （FusedKeywords 是 User+Agent 双侧压缩融合的产物）。L3/L4 由 AppendTopicL3RefsL2 / UpdateTopicL4RefsL2 更新。
+// CreateFusedTopicL2 creates a compressed topic (ID from ComputeTopicID,
+// depth 1): only FusedKeywords carry values; L3/L4 refs are added via
+// AppendTopicL3RefsL2 / UpdateTopicL4RefsL2.
 func CreateFusedTopicL2(engine *core.StorageEngine, sceneID string, fusedKeywords []string, userTS, agentTS int64, childrenIDs []uint64, centroidRef uint64) bool {
 	sceneHash, err := common.ParseID(sceneID)
 	if err != nil {
@@ -272,7 +268,6 @@ func CreateFusedTopicL2(engine *core.StorageEngine, sceneID string, fusedKeyword
 	return core.WriteTopicSlot(engine, topic.ID, &topic) == nil
 }
 
-// AppendTopicL3RefsL2 追加 L3 引用到指定话题并去重，成功返回 true。
 func AppendTopicL3RefsL2(engine *core.StorageEngine, id string, l3Refs []uint64) bool {
 	idHash, err := common.ParseID(id)
 	if err != nil {
@@ -286,7 +281,6 @@ func AppendTopicL3RefsL2(engine *core.StorageEngine, id string, l3Refs []uint64)
 	return core.WriteTopicSlot(engine, idHash, topic) == nil
 }
 
-// UpdateTopicL4RefsL2 追加 L4 引用到指定话题并去重，成功返回 true。
 func UpdateTopicL4RefsL2(engine *core.StorageEngine, id string, l4Refs []uint64) bool {
 	idHash, err := common.ParseID(id)
 	if err != nil {
@@ -300,7 +294,6 @@ func UpdateTopicL4RefsL2(engine *core.StorageEngine, id string, l4Refs []uint64)
 	return core.WriteTopicSlot(engine, idHash, topic) == nil
 }
 
-// UpdateTopicL2 更新指定话题的 AgentKeywords 与 AgentTimestamp，成功返回 true。
 func UpdateTopicL2(engine *core.StorageEngine, id string, agentKeywords []string, agentTS int64) bool {
 	idHash, err := common.ParseID(id)
 	if err != nil {
@@ -315,7 +308,6 @@ func UpdateTopicL2(engine *core.StorageEngine, id string, agentKeywords []string
 	return core.WriteTopicSlot(engine, idHash, topic) == nil
 }
 
-// UpdateChildrenL2 替换指定话题的 ChildrenIDs，成功返回 true。
 func UpdateChildrenL2(engine *core.StorageEngine, id string, childrenIDs []uint64) bool {
 	idHash, err := common.ParseID(id)
 	if err != nil {

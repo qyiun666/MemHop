@@ -17,7 +17,7 @@ func (db *DB) Dream(ctx context.Context) (bool, error) {
 		return false, common.NewError(common.ErrClosed, "database is closed")
 	}
 	if !db.DB.HasActiveScenes() {
-		return true, nil // 无激活场景：不处理，直接成功
+		return true, nil // no active scenes: nothing to do, succeed
 	}
 	ok, err := db.DB.RunDream(ctx)
 	if err != nil {

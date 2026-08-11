@@ -13,7 +13,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
-// A/B dual header layout constants.
 const (
 	HeaderSize    = 4096
 	HeaderAOffset = 0
@@ -24,27 +23,14 @@ const (
 // FormatVersion is the on-disk file format version.
 const FormatVersion uint16 = 0x0004
 
-// Magic bytes for file identification.
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}
 	TailMagic = [4]byte{'2', 'H', 'E', 'M'}
 )
 
 // FileHeader is the on-disk file header (4096 bytes).
-//
-// Layout:
-//
-//	[0..4)     magic
-//	[4..6)     version (le16)
-//	[6..8)     vector_dim (le16)
-//	[8..16)    commit_id (le64)
-//	[16..24)   snapshot_offset (le64)
-//	[24..28)   snapshot_length (le32)
-//	[28..32)   record_count (le32)
-//	[32..36)   flags (le32)
-//	[36..4088) reserved (zeroed)
-//	[4088..4092) crc32 (le32)
-//	[4092..4096) tail_magic
+// Layout: magic(4) version(2) vector_dim(2) commit_id(8) snapshot_off(8)
+// snapshot_len(4) record_count(4) flags(4) reserved crc32(4) tail_magic(4)
 type FileHeader struct {
 	Version        uint16
 	VectorDim      uint16
@@ -56,12 +42,10 @@ type FileHeader struct {
 	CRC32          uint32
 }
 
-// NewFileHeader creates a fresh header with the given vector dimension.
 func NewFileHeader(vectorDim uint16) *FileHeader {
 	return &FileHeader{Version: FormatVersion, VectorDim: vectorDim}
 }
 
-// ToBytes serializes the header into a 4096-byte buffer with CRC32.
 func (h *FileHeader) ToBytes() [HeaderSize]byte {
 	var buf [HeaderSize]byte
 	copy(buf[0:4], Magic[:])
@@ -72,14 +56,12 @@ func (h *FileHeader) ToBytes() [HeaderSize]byte {
 	binary.LittleEndian.PutUint32(buf[24:28], h.SnapshotLength)
 	binary.LittleEndian.PutUint32(buf[28:32], h.RecordCount)
 	binary.LittleEndian.PutUint32(buf[32:36], h.Flags)
-	// reserved [36..4088) stays zero
 	crc := crc32.ChecksumIEEE(buf[:4088])
 	binary.LittleEndian.PutUint32(buf[4088:4092], crc)
 	copy(buf[4092:4096], TailMagic[:])
 	return buf
 }
 
-// FileHeaderFromBytes deserializes a header from a 4096-byte buffer.
 func FileHeaderFromBytes(buf [HeaderSize]byte) (*FileHeader, error) {
 	if buf[0] != Magic[0] || buf[1] != Magic[1] || buf[2] != Magic[2] || buf[3] != Magic[3] {
 		return nil, common.NewError(common.ErrInvalidMagic, "invalid magic bytes")
@@ -109,7 +91,6 @@ func FileHeaderFromBytes(buf [HeaderSize]byte) (*FileHeader, error) {
 	}, nil
 }
 
-// calculateCRC returns what the CRC32 should be for this header.
 func (h *FileHeader) calculateCRC() uint32 {
 	b := h.ToBytes()
 	return crc32.ChecksumIEEE(b[:4088])
@@ -134,7 +115,6 @@ func SelectValidHeader(a, b *FileHeader) (*FileHeader, error) {
 	}
 }
 
-// writeHeaderAt writes a serialized header at the given file offset.
 func writeHeaderAt(f *os.File, offset int64, buf [HeaderSize]byte) error {
 	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return common.NewError(common.ErrIO, "seek header", err)
@@ -145,8 +125,6 @@ func writeHeaderAt(f *os.File, offset int64, buf [HeaderSize]byte) error {
 	return nil
 }
 
-// loadHeaders parses both A/B headers from the mapped prefix and reports
-// which slot is active.
 func loadHeaders(mm []byte) (hA, hB *FileHeader, activeIdx uint8, err error) {
 	var bufA, bufB [HeaderSize]byte
 	copy(bufA[:], mm[:HeaderSize])
@@ -169,7 +147,6 @@ func loadHeaders(mm []byte) (hA, hB *FileHeader, activeIdx uint8, err error) {
 	return hA, hB, 1, nil
 }
 
-// copyHeader returns a shallow copy of h.
 func copyHeader(h *FileHeader) *FileHeader {
 	c := *h
 	return &c

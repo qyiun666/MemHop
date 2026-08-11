@@ -12,13 +12,11 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
-// PostingList is an inverted list for a single term.
 type PostingList struct {
 	TermFreq map[uint64]uint32 `json:"tf"` // id_hash → term frequency
 	DocFreq  uint32            `json:"df"` // number of documents containing this term
 }
 
-// ScoredDoc pairs a document ID hash with a relevance score.
 type ScoredDoc struct {
 	IDHash uint64
 	Score  float32
@@ -50,7 +48,6 @@ func NewSparseIndex() *SparseIndex {
 	}
 }
 
-// internal helpers: caller must hold s.mu.
 func (s *SparseIndex) addDocumentLocked(idHash uint64, terms []string, docLen uint32) {
 	if _, exists := s.docLengths[idHash]; exists {
 		s.removeDocumentLocked(idHash)
@@ -60,7 +57,6 @@ func (s *SparseIndex) addDocumentLocked(idHash uint64, terms []string, docLen ui
 	s.totalTerms += uint64(docLen)
 	s.avgDocLength = float32(s.totalTerms) / float32(s.totalDocs)
 
-	// Build per-document term frequency map.
 	tfMap := make(map[string]uint32)
 	for _, term := range terms {
 		tfMap[term]++
@@ -94,7 +90,6 @@ func (s *SparseIndex) removeDocumentLocked(idHash uint64) {
 			pl.DocFreq--
 		}
 	}
-	// Remove empty postings.
 	for term, pl := range s.postings {
 		if pl.DocFreq == 0 {
 			delete(s.postings, term)
@@ -103,14 +98,13 @@ func (s *SparseIndex) removeDocumentLocked(idHash uint64) {
 	delete(s.docLengths, idHash)
 }
 
-// AddDocument indexes a document. If idHash already exists, it is removed first.
+// AddDocument indexes a document, removing any existing idHash first.
 func (s *SparseIndex) AddDocument(idHash uint64, terms []string, docLen uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.addDocumentLocked(idHash, terms, docLen)
 }
 
-// RemoveDocument removes a document from the index.
 func (s *SparseIndex) RemoveDocument(idHash uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -124,7 +118,6 @@ func (s *SparseIndex) idf(docFreq uint32) float32 {
 	return float32(math.Log(float64((nt-n+0.5)/(n+0.5) + 1.0)))
 }
 
-// BM25Score computes the BM25 score for a document given query terms.
 func (s *SparseIndex) BM25Score(queryTerms []string, docIDHash uint64) float32 {
 	docLen, ok := s.docLengths[docIDHash]
 	if !ok {
@@ -149,7 +142,6 @@ func (s *SparseIndex) BM25Score(queryTerms []string, docIDHash uint64) float32 {
 	return score
 }
 
-// Search finds top-k documents matching the query terms using inverted index pruning.
 func (s *SparseIndex) Search(queryTerms []string, k int) []ScoredDoc {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -178,14 +170,12 @@ func (s *SparseIndex) Search(queryTerms []string, k int) []ScoredDoc {
 	return scores
 }
 
-// EntitySearch scores L2 documents by entity recognition in the query text.
 func (s *SparseIndex) EntitySearch(query string) []ScoredDoc {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	words := TokenizeWords(query)
 	tokens := make([]string, len(words))
 	copy(tokens, words)
-	// Add adjacent word pairs for multi-word entity matching.
 	for i := 0; i+1 < len(words); i++ {
 		tokens = append(tokens, words[i]+" "+words[i+1])
 	}
@@ -211,21 +201,18 @@ func (s *SparseIndex) EntitySearch(query string) []ScoredDoc {
 	return results
 }
 
-// Len returns the number of indexed documents.
 func (s *SparseIndex) Len() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return int(s.totalDocs)
 }
 
-// IsEmpty returns true if no documents are indexed.
 func (s *SparseIndex) IsEmpty() bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.totalDocs == 0
 }
 
-// TopTerms returns the top-n terms by document frequency.
 func (s *SparseIndex) TopTerms(n int) []struct {
 	Term    string
 	DocFreq uint32
@@ -259,7 +246,6 @@ func (s *SparseIndex) TopTerms(n int) []struct {
 	return result
 }
 
-// sparseIndexJSON is the JSON serialization format for SparseIndex.
 type sparseIndexJSON struct {
 	K1           float32                 `json:"k1"`
 	B            float32                 `json:"b"`
@@ -280,7 +266,6 @@ type entityEntryJSON struct {
 	L2IDs    []uint64 `json:"l2_ids"`
 }
 
-// Serialize serializes the SparseIndex to JSON bytes.
 func (s *SparseIndex) Serialize() ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -310,7 +295,6 @@ func (s *SparseIndex) Serialize() ([]byte, error) {
 	return json.Marshal(j)
 }
 
-// DeserializeSparseIndex restores a SparseIndex from JSON bytes.
 func DeserializeSparseIndex(data []byte) (*SparseIndex, error) {
 	var j sparseIndexJSON
 	if err := json.Unmarshal(data, &j); err != nil {

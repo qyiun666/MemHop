@@ -12,12 +12,10 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
-// RecordHeaderSize is type(1) + flags(1) + length(4) + id_hash(8) + crc32(4) = 18 bytes.
-// The CRC32 covers the first 14 header bytes plus the record data, so a torn
-// write (crash mid-append) is detected on Open and the tail can be truncated.
+// RecordHeaderSize is type(1)+flags(1)+length(4)+id_hash(8)+crc32(4) = 18 bytes;
+// CRC covers header plus data so a torn write is detected on Open.
 const RecordHeaderSize = 18
 
-// FlagDeleted marks a record as logically deleted.
 const FlagDeleted uint8 = 0x01
 
 // Record type constants.
@@ -36,7 +34,6 @@ const (
 	RecVecCentroid   uint8 = 0xF0 // centroid vector for brute-force search
 )
 
-// EncodeRecord encodes a record into a byte slice.
 func EncodeRecord(recordType, flags uint8, idHash uint64, data []byte) []byte {
 	buf := make([]byte, RecordHeaderSize+len(data))
 	buf[0] = recordType
@@ -50,12 +47,9 @@ func EncodeRecord(recordType, flags uint8, idHash uint64, data []byte) []byte {
 	return buf
 }
 
-// RecordData decodes a record from a byte slice at the given offset.
-// Returns a **copy** of the data to be GC-safe (not a sub-slice of mmap).
-// An offset exactly at the end of the mapped region, or an all-zero header
-// (never-written space), reports io.EOF; a truncated record header or body
-// reports corruption; a frame whose CRC32 does not match reports
-// common.ErrCRCMismatch (torn write or non-record bytes).
+// RecordData decodes a record at offset into a GC-safe data copy. io.EOF at
+// region end or zero-filled space; ErrCorruption on truncated header/body;
+// ErrCRCMismatch on bad CRC (torn write).
 func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byte, idHash uint64, err error) {
 	off := int(offset)
 	if off == len(mmap) {
@@ -72,7 +66,7 @@ func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byt
 	dataLen := int(binary.LittleEndian.Uint32(mmap[off+2 : off+6]))
 	idHash = binary.LittleEndian.Uint64(mmap[off+6 : off+14])
 	if recordType == 0 && flags == 0 && dataLen == 0 && idHash == 0 {
-		return 0, 0, nil, 0, io.EOF // zero-filled space counts as end of data
+		return 0, 0, nil, 0, io.EOF
 	}
 	dataEnd := off + RecordHeaderSize + dataLen
 	if dataEnd > len(mmap) {
@@ -90,7 +84,6 @@ func RecordData(mmap []byte, offset uint64) (recordType, flags uint8, data []byt
 			fmt.Sprintf("record at offset %d failed CRC32 check", offset),
 		)
 	}
-	// Return a copy for GC safety.
 	data = make([]byte, dataLen)
 	copy(data, mmap[off+RecordHeaderSize:dataEnd])
 	return

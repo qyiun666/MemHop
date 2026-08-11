@@ -163,7 +163,7 @@ func TestDeleteRecordBatch(t *testing.T) {
 	eng.WriteRecord(RecL2Topic, 3, []byte("third"))
 	eng.WriteRecord(RecL2Scene, 4, []byte("scene"))
 
-	// 混合存在/不存在的 id：不存在的跳过，不影响结果
+	// Mixed existing/missing ids: missing ones are skipped without affecting the result
 	n, err := eng.DeleteRecordBatch([]uint64{1, 2, 99})
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +174,7 @@ func TestDeleteRecordBatch(t *testing.T) {
 	if eng.RecordCount() != 2 {
 		t.Fatalf("count: %d", eng.RecordCount())
 	}
-	// 已删的不再可读，未删的可读
+	// Deleted ones unreadable, remaining ones readable
 	for _, id := range []uint64{1, 2} {
 		if _, _, err := eng.ReadRecord(id); err == nil {
 			t.Errorf("record %d should be deleted", id)
@@ -186,7 +186,7 @@ func TestDeleteRecordBatch(t *testing.T) {
 	if _, _, err := eng.ReadRecord(4); err != nil {
 		t.Error("record 4 should survive")
 	}
-	// 全部不存在时返回 0
+	// All missing returns 0
 	n, err = eng.DeleteRecordBatch([]uint64{99})
 	if err != nil || n != 0 {
 		t.Fatalf("missing-only batch: n=%d err=%v", n, err)

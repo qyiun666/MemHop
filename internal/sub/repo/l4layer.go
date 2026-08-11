@@ -12,9 +12,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// L4 对话原文操作：search/update 时追加消息返回 id；查询按 num 枚举
-// （1=关键词、2=时间范围、3=按 id），统一返回 []ArchiveSlot。
-// AppendArchiveL4 追加一条对话原文，ID = hash(contextID:createdAt:content)，返回消息 ID。
+// L4 archive operations: AppendArchiveL4 stores a message (ID =
+// hash(contextID:createdAt:content)); QueryArchiveL4 queries by num
+// (1=keyword, 2=time range, 3=by id).
 func AppendArchiveL4(engine *core.StorageEngine, contextID string, role uint8, contentType core.ContentType, content string, createdAt int64) (uint64, error) {
 	ctxHash, err := common.ParseID(contextID)
 	if err != nil {
@@ -35,12 +35,11 @@ func AppendArchiveL4(engine *core.StorageEngine, contextID string, role uint8, c
 	return archiveID, nil
 }
 
-// QueryArchiveL4 查询对话原文。num==1 关键词子串匹配；num==2 时间范围
-// [start, end]（按 CreatedAt 升序）；num==3 按 id 读取（跳过不存在的）。
-// 其他 num 返回 nil。
+// QueryArchiveL4 queries archives: num==1 keyword substring match, num==2
+// time range [start, end] sorted by CreatedAt, num==3 by id (missing skipped).
 func QueryArchiveL4(engine *core.StorageEngine, num uint8, keyword string, start, end int64, ids []string) []core.ArchiveSlot {
 	switch num {
-	case 1: // 关键词
+	case 1: // keyword
 		var out []core.ArchiveSlot
 		for _, arc := range core.CollectAllArchives(engine) {
 			if strings.Contains(arc.Content, keyword) {
@@ -48,7 +47,7 @@ func QueryArchiveL4(engine *core.StorageEngine, num uint8, keyword string, start
 			}
 		}
 		return out
-	case 2: // 时间范围
+	case 2: // time range
 		var out []core.ArchiveSlot
 		for _, arc := range core.CollectAllArchives(engine) {
 			if arc.CreatedAt >= start && arc.CreatedAt <= end {
@@ -57,7 +56,7 @@ func QueryArchiveL4(engine *core.StorageEngine, num uint8, keyword string, start
 		}
 		sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt < out[j].CreatedAt })
 		return out
-	case 3: // 按 id
+	case 3: // by id
 		var out []core.ArchiveSlot
 		for _, id := range ids {
 			idHash, err := common.ParseID(id)

@@ -104,7 +104,6 @@ func TestE2EL5Crystal(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
-	// Create
 	id, err := db.CreateL5("晨跑流程", "用户提到周末海边跑步")
 	if err != nil {
 		t.Fatalf("CreateL5: %v", err)
@@ -113,7 +112,6 @@ func TestE2EL5Crystal(t *testing.T) {
 		t.Fatal("CreateL5 returned empty id")
 	}
 
-	// Get
 	chain, err := db.GetL5(id)
 	if err != nil {
 		t.Fatalf("GetL5(%s): %v", id, err)
@@ -131,7 +129,6 @@ func TestE2EL5Crystal(t *testing.T) {
 		t.Fatal("ListL5(Keyword=晨跑) returned no chains")
 	}
 
-	// Delete
 	if err := db.DeleteL5(id); err != nil {
 		t.Fatalf("DeleteL5(%s): %v", id, err)
 	}

@@ -10,12 +10,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
-// MapFile is platform-specific — see mmap_unix.go or mmap_windows.go.
-// UnmapFile is platform-specific — see mmap_unix.go or mmap_windows.go.
-
-// RemapFile remaps the file at its current size and releases the old
-// mapping. The new mapping is established before the old one is released,
-// so on failure the old mapping stays valid and usable.
+// RemapFile remaps the file at its current size; the new mapping is
+// established before the old one is released, so on failure the old
+// mapping stays valid.
 func RemapFile(f *os.File, oldData []byte) ([]byte, error) {
 	info, err := f.Stat()
 	if err != nil {

@@ -17,9 +17,7 @@ import (
 
 // Tokenizer defines the interface for text tokenization engines.
 type Tokenizer interface {
-	// Cut segments text into words.
 	Cut(text string) []string
-	// Close releases resources held by the tokenizer.
 	Close()
 }
 
@@ -39,7 +37,6 @@ var (
 	tokenizerErrLogged sync.Once
 )
 
-// normalizeEngine maps the empty string to EngineAuto.
 func normalizeEngine(engine string) string {
 	if engine == "" {
 		return EngineAuto
@@ -47,12 +44,9 @@ func normalizeEngine(engine string) string {
 	return engine
 }
 
-// InitTokenizer initializes the global tokenizer (process-wide singleton).
-// Accepts "", "auto" or "gse"; any other value returns an error so stale
-// configuration is surfaced instead of silently downgraded.
-// A repeated call with the same engine is a no-op; a repeated call with a
-// DIFFERENT engine returns an explicit error rather than silently keeping
-// the first instance. Use ResetTokenizer to re-initialize.
+// InitTokenizer initializes the global tokenizer singleton ("", "auto" or
+// "gse"; anything else errors). Same-engine repeats are no-ops; a different
+// engine errors — use ResetTokenizer to re-initialize.
 func InitTokenizer(engine string) error {
 	want := normalizeEngine(engine)
 	tokenizerOnce.Do(func() {
@@ -87,11 +81,8 @@ func ResetTokenizer() {
 	tokenizerErrLogged = sync.Once{}
 }
 
-// getTokenizer returns the global tokenizer, lazily initializing it via
-// EngineAuto on first use. If init fails (e.g. missing dictionaries), the
-// error is logged once and nil is returned; callers must treat nil as an
-// empty-token result rather than panicking. Hosts should call InitTokenizer
-// explicitly at startup to surface configuration issues early.
+// getTokenizer lazily initializes the tokenizer on first use; on init
+// failure it logs once and returns nil (callers treat nil as empty tokens).
 func getTokenizer() Tokenizer {
 	tokenizerMu.Lock()
 	defer tokenizerMu.Unlock()
@@ -107,7 +98,6 @@ func getTokenizer() Tokenizer {
 	return globalTokenizer
 }
 
-// stopWords contains common Chinese and English stop words.
 var stopWords = map[string]struct{}{
 	"the": {}, "a": {}, "an": {}, "is": {}, "are": {}, "was": {}, "were": {},
 	"be": {}, "been": {}, "being": {}, "have": {}, "has": {}, "had": {},
@@ -129,7 +119,6 @@ var stopWords = map[string]struct{}{
 	"he": {}, "him": {}, "his": {}, "she": {}, "her": {},
 	"it": {}, "its": {}, "they": {}, "them": {}, "their": {},
 	"what": {}, "which": {}, "who": {},
-	// Chinese stop words
 	"的": {}, "了": {}, "在": {}, "是": {}, "我": {}, "有": {}, "和": {},
 	"就": {}, "不": {}, "人": {}, "都": {}, "一": {}, "一个": {}, "上": {},
 	"也": {}, "很": {}, "到": {}, "说": {}, "要": {}, "去": {}, "你": {},
@@ -145,10 +134,8 @@ func isStopWord(w string) bool {
 	return ok
 }
 
-// Tokenize performs unified tokenization with stop-word filtering.
-// Pipeline: preSplitCamelCase → protect underscores → engine.Cut →
-//
-//	restore underscores → splitCamelCase → trim punctuation → filter stop words.
+// Tokenize runs unified tokenization with stop-word filtering
+// (pipeline in runPipeline).
 func Tokenize(text string) []string {
 	return runPipeline(text, true)
 }
@@ -158,7 +145,6 @@ func TokenizeWords(text string) []string {
 	return runPipeline(text, false)
 }
 
-// runPipeline is the shared tokenization pipeline.
 func runPipeline(text string, filterStop bool) []string {
 	tok := getTokenizer()
 	if tok == nil {
@@ -170,8 +156,6 @@ func runPipeline(text string, filterStop bool) []string {
 	return processSegments(segments, filterStop)
 }
 
-// preSplitCamelCase inserts spaces at camelCase boundaries so the
-// segmentation engine can split them.
 func preSplitCamelCase(text string) string {
 	runes := []rune(text)
 	var result []rune
@@ -218,15 +202,13 @@ func processSegments(segments []string, filterStop bool) []string {
 	return result
 }
 
-// gseTokenizer implements Tokenizer using the pure-Go gse library.
-// It loads the embedded "zh_s" dictionary (~350k Simplified-Chinese
-// tokens) at construction so BM25 recall stays strong without CGO or
+// gseTokenizer wraps the pure-Go gse library with the embedded "zh_s"
+// dictionary (~350k tokens) for strong CJK recall without CGO or
 // external dictionary files.
 type gseTokenizer struct {
 	seg *gse.Segmenter
 }
 
-// createTokenizer builds the global tokenizer. gse is the only backend.
 func createTokenizer() (Tokenizer, error) {
 	s, err := gse.NewEmbed("zh_s")
 	if err != nil {
@@ -235,11 +217,9 @@ func createTokenizer() (Tokenizer, error) {
 	return &gseTokenizer{seg: &s}, nil
 }
 
-// Cut segments text in precise mode with HMM enabled so out-of-vocabulary
-// CJK terms are still recognised.
+// Cut uses precise mode with HMM so out-of-vocabulary CJK terms are recognised.
 func (g *gseTokenizer) Cut(text string) []string {
 	return g.seg.Cut(text, true)
 }
 
-// Close is a no-op for gse (no native resources to release).
 func (g *gseTokenizer) Close() {}

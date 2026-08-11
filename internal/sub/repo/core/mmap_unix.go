@@ -12,7 +12,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
-// MapFile maps a file region of the given size into memory.
 func MapFile(f *os.File, size int) ([]byte, error) {
 	if size == 0 {
 		return nil, nil
@@ -26,7 +25,6 @@ func MapFile(f *os.File, size int) ([]byte, error) {
 	return data, nil
 }
 
-// UnmapFile releases a previously mapped region.
 func UnmapFile(data []byte) error {
 	if len(data) == 0 {
 		return nil

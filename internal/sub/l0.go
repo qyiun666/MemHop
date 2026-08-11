@@ -10,7 +10,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// GetL0 读取 L0 画像单例；不存在时返回空画像（调用方无需区分空库）。
+// GetL0 reads the profile singleton; returns an empty profile when absent.
 func (db *DB) GetL0() (*core.ProfileSlot, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err
@@ -23,8 +23,8 @@ func (db *DB) GetL0() (*core.ProfileSlot, error) {
 	return slot, nil
 }
 
-// UpdateL0 全量覆盖写回画像（ID 强制固定为 hash("profile")）。
-// 写锁由 internal 层组合（Lock/Unlock），此处不重复加锁。
+// UpdateL0 overwrites the profile (ID forced to hash("profile")); the
+// write lock comes from the internal layer.
 func (db *DB) UpdateL0(slot *core.ProfileSlot) error {
 	return repo.UpdateProfileL0(db.engine, slot)
 }

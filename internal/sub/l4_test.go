@@ -10,7 +10,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// writeArchive 写入 L4 归档记录。
+// writeArchive writes an L4 archive record.
 func writeArchive(t *testing.T, engine *core.StorageEngine, arc *core.ArchiveSlot) {
 	t.Helper()
 	if err := core.WriteArchiveSlot(engine, arc.IDHash, arc); err != nil {
@@ -18,7 +18,7 @@ func writeArchive(t *testing.T, engine *core.StorageEngine, arc *core.ArchiveSlo
 	}
 }
 
-// TestGetArchive 按 ID 读取单条归档；不存在返回 ErrNotFound。
+// TestGetArchive reads one archive by ID; missing returns ErrNotFound.
 func TestGetArchive(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
@@ -39,7 +39,7 @@ func TestGetArchive(t *testing.T) {
 	}
 }
 
-// TestSearchL4TopicFilter 三模式叠加 TopicID 过滤。
+// TestSearchL4TopicFilter three modes combined with TopicID filtering.
 func TestSearchL4TopicFilter(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
@@ -52,7 +52,7 @@ func TestSearchL4TopicFilter(t *testing.T) {
 	writeArchive(t, engine, &a3)
 	t1Hex, t2Hex := common.FormatHash(t1), common.FormatHash(t2)
 
-	// Keyword + TopicID：a1 命中（a3 属于 t2 被排除）。
+	// Keyword + TopicID: a1 hits (a3 belongs to t2 and is excluded).
 	out, err := db.SearchL4(L4Query{Keyword: "rust", TopicID: &t1Hex})
 	if err != nil {
 		t.Fatalf("SearchL4 keyword+topic: %v", err)
@@ -61,7 +61,7 @@ func TestSearchL4TopicFilter(t *testing.T) {
 		t.Fatalf("keyword+topic: want [m1], got %v", out)
 	}
 
-	// 时间范围 + TopicID：a1 only（Start 需 > 0，0 视为未设置）。
+	// Time range + TopicID: a1 only (Start must be > 0; 0 means unset).
 	out, err = db.SearchL4(L4Query{Start: 500, End: 1500, TopicID: &t1Hex})
 	if err != nil {
 		t.Fatalf("SearchL4 range+topic: %v", err)
@@ -70,7 +70,7 @@ func TestSearchL4TopicFilter(t *testing.T) {
 		t.Fatalf("range+topic: want [m1], got %v", out)
 	}
 
-	// IDs 模式 + TopicID：仅 a3。
+	// IDs mode + TopicID: only a3.
 	out, err = db.SearchL4(L4Query{IDs: []string{common.FormatHash(a1.IDHash), common.FormatHash(a2.IDHash), common.FormatHash(a3.IDHash)}, TopicID: &t2Hex})
 	if err != nil {
 		t.Fatalf("SearchL4 ids+topic: %v", err)
@@ -79,7 +79,7 @@ func TestSearchL4TopicFilter(t *testing.T) {
 		t.Fatalf("ids+topic: want [m3], got %v", out)
 	}
 
-	// 无效 TopicID 报错。
+	// Invalid TopicID errors.
 	if _, err := db.SearchL4(L4Query{Keyword: "rust", TopicID: strPtr("nothex")}); err == nil {
 		t.Fatal("want error for invalid topic id")
 	}

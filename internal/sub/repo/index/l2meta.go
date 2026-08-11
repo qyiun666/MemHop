@@ -11,7 +11,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// L2Meta is lightweight metadata for an L2 TopicSlot.
 type L2Meta struct {
 	IDHash       uint64
 	PageRef      uint64
@@ -26,14 +25,12 @@ type L2Meta struct {
 	Timestamp    uint64
 }
 
-// L2MetaIndex is an in-memory index of L2 metadata.
 type L2MetaIndex struct {
 	mu      sync.RWMutex
 	entries map[uint64]*L2Meta
 	byScene map[uint64][]uint64
 }
 
-// NewL2MetaIndex creates an empty L2MetaIndex.
 func NewL2MetaIndex() *L2MetaIndex {
 	return &L2MetaIndex{
 		entries: make(map[uint64]*L2Meta),
@@ -43,9 +40,8 @@ func NewL2MetaIndex() *L2MetaIndex {
 
 // BuildL2MetaFromEngine is defined in rebuild.go (shared single-pass scan).
 
-// topicSlotJSON is a minimal deserialization target for TopicSlot records.
-// It carries created_at/updated_at keys that core.TopicSlot does not model,
-// so engine scans keep the original Timestamp semantics.
+// topicSlotJSON carries created_at/updated_at keys that core.TopicSlot does
+// not model, keeping the original Timestamp semantics in engine scans.
 type topicSlotJSON struct {
 	ID              uint64   `json:"id"`
 	SceneID         uint64   `json:"scene_id"`
@@ -61,7 +57,6 @@ type topicSlotJSON struct {
 	UpdatedAt       int64    `json:"updated_at"`
 }
 
-// topicToL2Meta converts a TopicSlot record into an L2Meta entry.
 func topicToL2Meta(idHash uint64, t *topicSlotJSON) *L2Meta {
 	src := t.FusedKeywords
 	if len(src) == 0 {
@@ -91,14 +86,12 @@ func topicToL2Meta(idHash uint64, t *topicSlotJSON) *L2Meta {
 	}
 }
 
-// Get returns metadata for an L2 by idHash.
 func (idx *L2MetaIndex) Get(idHash uint64) *L2Meta {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.entries[idHash]
 }
 
-// Update inserts or replaces an L2Meta entry.
 func (idx *L2MetaIndex) Update(meta *L2Meta) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -108,7 +101,6 @@ func (idx *L2MetaIndex) Update(meta *L2Meta) {
 	idx.insertMeta(meta)
 }
 
-// Remove removes and returns an entry.
 func (idx *L2MetaIndex) Remove(idHash uint64) *L2Meta {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
@@ -121,14 +113,12 @@ func (idx *L2MetaIndex) Remove(idHash uint64) *L2Meta {
 	return meta
 }
 
-// GetByScene returns all L2 IDs belonging to a scene.
 func (idx *L2MetaIndex) GetByScene(sceneID uint64) []uint64 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return idx.byScene[sceneID]
 }
 
-// GetL2IDsByL3 returns all L2 IDs whose l3_refs contain the given l3ID.
 func (idx *L2MetaIndex) GetL2IDsByL3(l3ID uint64) []uint64 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -144,14 +134,12 @@ func (idx *L2MetaIndex) GetL2IDsByL3(l3ID uint64) []uint64 {
 	return ids
 }
 
-// Len returns the number of indexed L2 entries.
 func (idx *L2MetaIndex) Len() int {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
 	return len(idx.entries)
 }
 
-// IsEmpty returns true if no entries are indexed.
 func (idx *L2MetaIndex) IsEmpty() bool {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
@@ -169,8 +157,6 @@ func (idx *L2MetaIndex) Iter(fn func(idHash uint64, meta *L2Meta) bool) {
 	}
 }
 
-// --- internal helpers ---
-
 func (idx *L2MetaIndex) insertMeta(meta *L2Meta) {
 	idx.entries[meta.IDHash] = meta
 	idx.byScene[meta.SceneID] = append(idx.byScene[meta.SceneID], meta.IDHash)
@@ -187,7 +173,6 @@ func (idx *L2MetaIndex) removeFromIndices(sceneID uint64, idHash uint64) {
 	}
 }
 
-// L2MetaFromTopic builds a lightweight L2Meta entry from a TopicSlot.
 func L2MetaFromTopic(t *core.TopicSlot) *L2Meta {
 	archiveCount := len(t.L4Refs)
 	return &L2Meta{

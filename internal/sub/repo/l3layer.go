@@ -11,7 +11,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// CreateEdgeL3 创建超图边，ID = hash(graphID:nodeIDs)，返回边 ID。
+// CreateEdgeL3 creates a hyperedge; ID = hash(graphID:nodeIDs).
 func CreateEdgeL3(engine *core.StorageEngine, graphID string, kind core.GraphEdgeKind, nodeIDs []uint64, weight float32) (uint64, error) {
 	graphHash, err := parseGraphID(graphID)
 	if err != nil {
@@ -32,7 +32,6 @@ func CreateEdgeL3(engine *core.StorageEngine, graphID string, kind core.GraphEdg
 	return edgeID, nil
 }
 
-// ListEdgeL3 按图查询边。
 func ListEdgeL3(engine *core.StorageEngine, graphID string) []core.HypergraphEdge {
 	graphHash, err := common.ParseID(graphID)
 	if err != nil {
@@ -47,7 +46,7 @@ func ListEdgeL3(engine *core.StorageEngine, graphID string) []core.HypergraphEdg
 	return out
 }
 
-// CreateGraphL3 导入/创建超图，ID = hash(name)，返回图 ID。
+// CreateGraphL3 imports/creates a hypergraph; ID = hash(name).
 func CreateGraphL3(engine *core.StorageEngine, name string, source core.HypergraphSource) (uint64, error) {
 	graphID := common.HashID(name)
 	now := time.Now().UnixMilli()
@@ -64,12 +63,12 @@ func CreateGraphL3(engine *core.StorageEngine, name string, source core.Hypergra
 	return graphID, nil
 }
 
-// ListGraphsL3 返回全部超图列表。
 func ListGraphsL3(engine *core.StorageEngine) []core.HypergraphSlot {
 	return core.CollectAllGraphSlots(engine)
 }
 
-// DeleteGraphL3 级联删除：收集该图全部 node/edge + 图记录，一次性批量落盘。
+// DeleteGraphL3 cascades: collects all nodes/edges of the graph plus the
+// graph record and deletes them in one batch.
 func DeleteGraphL3(engine *core.StorageEngine, id string) bool {
 	graphHash, err := common.ParseID(id)
 	if err != nil {
@@ -91,7 +90,7 @@ func DeleteGraphL3(engine *core.StorageEngine, id string) bool {
 	return err == nil
 }
 
-// UpdateGraphL3 部分更新超图槽（当前仅 Name），返回更新后的槽。
+// UpdateGraphL3 partially updates a graph slot (currently Name only).
 func UpdateGraphL3(engine *core.StorageEngine, id string, name *string) (*core.HypergraphSlot, error) {
 	graphHash, err := parseGraphID(id)
 	if err != nil {
@@ -111,7 +110,6 @@ func UpdateGraphL3(engine *core.StorageEngine, id string, name *string) (*core.H
 	return slot, nil
 }
 
-// parseGraphID 解析图 id，失败返回错误。
 func parseGraphID(id string) (uint64, error) {
 	graphHash, err := common.ParseID(id)
 	if err != nil {
@@ -120,7 +118,7 @@ func parseGraphID(id string) (uint64, error) {
 	return graphHash, nil
 }
 
-// CreateNodeL3 创建超图节点，ID = hash(graphID:title)，返回节点 ID。
+// CreateNodeL3 creates a hypergraph node; ID = hash(graphID:title).
 func CreateNodeL3(engine *core.StorageEngine, graphID, title, nodeType, content string, keywords []string) (uint64, error) {
 	graphHash, err := parseGraphID(graphID)
 	if err != nil {
@@ -144,7 +142,6 @@ func CreateNodeL3(engine *core.StorageEngine, graphID, title, nodeType, content 
 	return nodeID, nil
 }
 
-// ListNodeL3 按图查询节点。
 func ListNodeL3(engine *core.StorageEngine, graphID string) []core.HypergraphNode {
 	graphHash, err := common.ParseID(graphID)
 	if err != nil {

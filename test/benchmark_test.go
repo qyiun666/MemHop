@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -154,15 +155,14 @@ func BenchmarkUpdate(b *testing.B) {
 	}
 }
 
-// BenchmarkDreamConsolidation measures the Dream consolidation pipeline after
-// seeding >DreamCompressMinTopics(20) related topics in one scene (real
-// compression path: LLM Consolidate + summary archive + keyword extraction +
-// centroid encode + fused topic + child sink + index rebuild).
+// BenchmarkDreamConsolidation measures the Dream pipeline after seeding >20
+// related topics in one scene: real compression path with LLM consolidate,
+// summary archive, centroid encode, fused topic, child sink and index rebuild.
 func BenchmarkDreamConsolidation(b *testing.B) {
 	db := testsupport.OpenMemHopB(b)
 	defer db.Close()
 
-	// 25 句同主题的话，触发真实压缩。
+	// 25 same-topic turns trigger real compression.
 	related := []string{
 		"我喜欢早上六点去公园慢跑", "跑步的时候我习惯听播客", "我每周跑步大概三次，每次五公里",
 		"跑完步我会喝一杯蛋白粉", "我早上六点出门跑步", "慢跑时我听健身播客",
@@ -202,15 +202,14 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 	}
 }
 
-// BenchmarkRetrievalRecall measures retrieval quality: seed several facts on
-// distinct topics, then issue cross-phrased queries and measure how often the
-// stored fact's distinctive keyword is recalled in the returned context
-// keywords. Reports recall ratio via b.ReportMetric.
+// BenchmarkRetrievalRecall measures retrieval quality: seed facts on distinct
+// topics, then issue cross-phrased queries and measure how often the stored
+// fact's distinctive keyword is recalled in the returned context.
 func BenchmarkRetrievalRecall(b *testing.B) {
 	db := testsupport.OpenMemHopB(b)
 	defer db.Close()
 
-	// 每个锚点：事实原文 + 跨措辞查询 + 判命中的区分性关键词。
+	// Each anchor: fact text + cross-phrased query + distinctive keyword for the hit check.
 	type anchor struct {
 		fact, query, marker string
 	}
@@ -254,4 +253,63 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 	if total > 0 {
 		b.ReportMetric(float64(hits)/float64(total), "recall")
 	}
+}
+
+// BenchmarkSearchLatency runs repeated retrieve-route searches and reports the
+// per-iteration latency distribution (min/p50/p95/max in ms) so stability is
+// visible, not just the mean that testing.B reports.
+func BenchmarkSearchLatency(b *testing.B) {
+	db := testsupport.OpenMemHopB(b)
+	defer db.Close()
+
+	// Seed a handful of topics so retrieve has something to hit.
+	base := time.Now().UnixMilli()
+	seeds := []string{
+		"我喜欢早上六点去公园慢跑",
+		"我的狗叫旺财，是一只金毛",
+		"我住在北京市朝阳区",
+		"我现在做后端开发工作",
+	}
+	for i, s := range seeds {
+		ts := base + int64(i)*2000
+		res, err := db.Search(sub.SearchQuery{Text: s, AutoCreate: true, Timestamp: ts})
+		if err != nil {
+			b.Fatalf("seed: %v", err)
+		}
+		db.Update(common.FormatHash(res.NewTopicID), "好的", ts+500)
+	}
+
+	queries := []string{"我的跑步习惯", "我的狗叫什么", "我住在哪", "我做什么工作"}
+	lat := make([]time.Duration, 0, b.N)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		q := queries[i%len(queries)]
+		ts := base + int64(1_000_000+i)*1000
+		start := time.Now()
+		if _, err := db.Search(sub.SearchQuery{Text: q, Timestamp: ts}); err != nil {
+			b.Fatalf("Search: %v", err)
+		}
+		lat = append(lat, time.Since(start))
+	}
+	b.StopTimer()
+	reportLatency(b, lat)
+}
+
+// reportLatency sorts observed durations and reports min/p50/p95/max in ms.
+func reportLatency(b *testing.B, lat []time.Duration) {
+	b.Helper()
+	if len(lat) == 0 {
+		return
+	}
+	sorted := make([]time.Duration, len(lat))
+	copy(sorted, lat)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	pct := func(p float64) time.Duration {
+		idx := int(p * float64(len(sorted)-1))
+		return sorted[idx]
+	}
+	b.ReportMetric(float64(sorted[0].Milliseconds()), "min_ms")
+	b.ReportMetric(float64(pct(0.50).Milliseconds()), "p50_ms")
+	b.ReportMetric(float64(pct(0.95).Milliseconds()), "p95_ms")
+	b.ReportMetric(float64(sorted[len(sorted)-1].Milliseconds()), "max_ms")
 }

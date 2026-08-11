@@ -8,7 +8,7 @@ package memhop
 
 import "github.com/qyiun666/MemHop/internal/sub"
 
-// Search 薄层：实现见 internal/sub/search.go（(db *DB) Search），复用 Open 返回的 db。
+// Thin wrapper; see internal/sub/search.go ((db *DB) Search).
 func (db *DB) Search(q sub.SearchQuery) (*sub.SearchResult, error) {
 	return db.DB.Search(q)
 }

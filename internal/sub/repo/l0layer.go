@@ -14,9 +14,8 @@ import (
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L0 画像操作：单例 ProfileSlot，固定 ID = hash("profile")（与 crud/l0_ops.go
-// 既有约定一致）。外部接口更新字段与 dream 蒸馏更新共用 UpdateProfileL0。
-// GetProfileL0 读取 L0 画像单例，不存在返回 ErrNotFound。
+// L0 profile operations: singleton ProfileSlot at the fixed ID hash("profile");
+// GetProfileL0 returns ErrNotFound when absent.
 func GetProfileL0(engine *core.StorageEngine) (*core.ProfileSlot, error) {
 	slot, err := core.ReadProfileSlot(engine, common.HashID("profile"))
 	if err != nil {
@@ -25,24 +24,17 @@ func GetProfileL0(engine *core.StorageEngine) (*core.ProfileSlot, error) {
 	return slot, nil
 }
 
-// UpdateProfileL0 全量覆盖写回画像单例（ID 强制为固定 ID）。
 func UpdateProfileL0(engine *core.StorageEngine, slot *core.ProfileSlot) error {
 	slot.IDHash = common.HashID("profile")
 	return core.WriteProfileSlot(engine, slot.IDHash, slot)
 }
 
-// ============================================================================
-// Dream 辅助：L0 画像生成与蒸馏存储侧
-// ============================================================================
-
-// maxDistillSamples 是送入蒸馏 LLM 的 L1 节点样本上限。
 const maxDistillSamples = 1000
 
-// distillSampleLambda 是样本排序的年龄衰减率（每小时），仅用于排序，
-// 与衰减配置 LambdaNode 解耦。
+// distillSampleLambda: sample-rank age decay per hour (ranking only,
+// decoupled from the LambdaNode decay config).
 const distillSampleLambda = 0.01
 
-// L1DistillSample 是蒸馏采样的 L1 节点（关键词取自关联话题）。
 type L1DistillSample struct {
 	IDHash     uint64
 	Keywords   []string
@@ -50,14 +42,12 @@ type L1DistillSample struct {
 	UpdatedAt  int64
 }
 
-// DistillEmotion 是蒸馏输出的情绪三维度（[0,1]）。
 type DistillEmotion struct {
 	Valence   float64
 	Arousal   float64
 	Dominance float64
 }
 
-// DistillMBTI 是蒸馏输出的 MBTI 四维度（[-1,1]）与推导类型。
 type DistillMBTI struct {
 	IE   float64
 	NS   float64
@@ -66,14 +56,14 @@ type DistillMBTI struct {
 	Type string
 }
 
-// L1NodeEmotion 是单个 L1 节点的情感回填值。
 type L1NodeEmotion struct {
 	Valence float64
 	Arousal float64
 }
 
-// GenerateProfileL0 从稀疏索引关键词分布重建 L0 画像：不存在时创建默认
-// 画像，存在时更新人格与关键词/记忆量字段。
+// GenerateProfileL0 rebuilds the L0 profile from the sparse keyword
+// distribution: creates a default profile if missing, else updates
+// personality and keyword/memory fields.
 func GenerateProfileL0(engine *core.StorageEngine, sparse *SparseIndex) error {
 	topKeywords := sparse.TopTerms(20)
 	topTerms := make([]string, len(topKeywords))
@@ -124,8 +114,8 @@ func joinTopTerms(terms []string, n int) string {
 	return result
 }
 
-// SampleL1ForDistill 按 Importance×exp(-lambda×age) 排序取前 maxDistillSamples
-// 个 L1 节点，返回样本与节点总数。
+// SampleL1ForDistill ranks L1 nodes by Importance×exp(-lambda×age) and
+// returns the top maxDistillSamples plus the total node count.
 func SampleL1ForDistill(engine *core.StorageEngine) ([]L1DistillSample, int) {
 	nowMs := time.Now().UnixMilli()
 	candidates := make([]L1DistillSample, 0)
@@ -163,7 +153,8 @@ func collectSampleKeywords(engine *core.StorageEngine, topicIDs []uint64) []stri
 	return kws
 }
 
-// MergeDistillIntoProfile 把蒸馏结果合并进 L0 画像（不清空其他字段）。
+// MergeDistillIntoProfile merges distill results into the profile without
+// clearing other fields.
 func MergeDistillIntoProfile(engine *core.StorageEngine, emo DistillEmotion, mbti DistillMBTI) error {
 	nowMs := time.Now().UnixMilli()
 	slot, err := GetProfileL0(engine)
@@ -190,8 +181,8 @@ func MergeDistillIntoProfile(engine *core.StorageEngine, emo DistillEmotion, mbt
 	return UpdateProfileL0(engine, slot)
 }
 
-// BackfillL1Emotions 把蒸馏的单节点情感写入尚无情感信号的 L1 节点，
-// 返回写入数。
+// BackfillL1Emotions writes per-node emotions into L1 nodes lacking signals;
+// returns the count written.
 func BackfillL1Emotions(engine *core.StorageEngine, perNode map[uint64]L1NodeEmotion) int {
 	written := 0
 	for id, em := range perNode {

@@ -10,19 +10,16 @@ func TestBKTree(t *testing.T) {
 	tree.Insert("apple")
 	tree.Insert("apply")
 
-	// Exact match
 	matches := tree.Search("apple", 0)
 	if len(matches) != 1 {
 		t.Errorf("exact search should find 1, got %d", len(matches))
 	}
 
-	// Fuzzy
 	matches = tree.Search("aple", 1)
 	if len(matches) == 0 {
 		t.Error("fuzzy search should find at least 1 match")
 	}
 
-	// Duplicate insertion
 	for i := 0; i < 100; i++ {
 		tree.Insert("apple")
 	}

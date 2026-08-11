@@ -11,12 +11,12 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// ListScenes 薄层：实现见 internal/sub/l2.go（(db *DB) ListScenes）。
+// Thin wrapper; see internal/sub/l2.go ((db *DB) ListScenes).
 func (db *DB) ListScenes() ([]core.SceneSlot, error) {
 	return db.DB.ListScenes()
 }
 
-// MergeScenes 薄层：写操作，持写锁后委托 sub 实现。
+// Thin wrapper; write op, delegates under the write lock.
 func (db *DB) MergeScenes(primaryID string, secondaryIDs []string) error {
 	db.DB.Lock()
 	defer db.DB.Unlock()

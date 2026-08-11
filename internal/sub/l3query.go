@@ -13,16 +13,15 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// L3NodeQuery 节点条件查询。GraphID 必填；IDs / Keyword / NodeType 三者选一（IDs 优先）。
+// L3NodeQuery is a node query: GraphID required; one of IDs/Keyword/NodeType.
 type L3NodeQuery struct {
 	GraphID  string   `json:"graph_id"`
 	IDs      []string `json:"ids,omitempty"`
 	Keyword  string   `json:"keyword,omitempty"`
 	NodeType string   `json:"node_type,omitempty"`
-	Limit    int      `json:"limit,omitempty"` // <=0 不限制
+	Limit    int      `json:"limit,omitempty"` // <=0 means unlimited
 }
 
-// QueryL3Nodes 按条件查询 L3 节点；结果空时返回空切片。
 func (db *DB) QueryL3Nodes(q L3NodeQuery) ([]core.HypergraphNode, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err
@@ -70,7 +69,6 @@ func (db *DB) QueryL3Nodes(q L3NodeQuery) ([]core.HypergraphNode, error) {
 	return out, nil
 }
 
-// nodeMatchesKeyword 大小写不敏感子串匹配 Title / Keywords / Content。
 func nodeMatchesKeyword(n core.HypergraphNode, kw string) bool {
 	if strings.Contains(strings.ToLower(n.Title), kw) {
 		return true
@@ -86,14 +84,13 @@ func nodeMatchesKeyword(n core.HypergraphNode, kw string) bool {
 	return false
 }
 
-// L3Subgraph BFS 子图查询结果。
 type L3Subgraph struct {
 	Nodes []core.HypergraphNode
 	Edges []core.HypergraphEdge
 }
 
-// QueryL3Subgraph 从 startNodeID 出发 BFS，返回 maxDepth 层内可达子图；
-// edgeKinds 非空时仅经指定边类型可达的节点纳入；maxDepth<=0 视为 1。
+// QueryL3Subgraph BFS from startNodeID up to maxDepth; edgeKinds restricts
+// reachable edges (maxDepth<=0 means 1).
 func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*L3Subgraph, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err
@@ -110,7 +107,7 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 		maxDepth = 1
 	}
 
-	// 邻接表：图内全部边（按 edgeKinds 过滤），超边 nodeIDs 两两互连。
+	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs fully connected.
 	adj := make(map[uint64]map[uint64]struct{})
 	var edges []core.HypergraphEdge
 	for _, e := range repo.ListEdgeL3(db.engine, graphID) {
@@ -121,7 +118,7 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 		connectNodes(adj, e.NodeIDs)
 	}
 
-	// BFS 分层遍历：maxDepth 为跳数，每轮扩展一跳。
+	// BFS level order: maxDepth hops, one hop per round.
 	visited := map[uint64]struct{}{startHash: {}}
 	queue := []uint64{startHash}
 	for depth := 0; depth < maxDepth && len(queue) > 0; depth++ {
@@ -138,7 +135,7 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 		queue = next
 	}
 
-	// 子图提取：visited 节点 + 两端均在 visited 中的边。
+	// Subgraph extraction: visited nodes plus edges with both ends visited.
 	nodes := make([]core.HypergraphNode, 0, len(visited))
 	for h := range visited {
 		if n, err := core.ReadHypergraphNode(db.engine, h); err == nil {
@@ -154,7 +151,6 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 	return &L3Subgraph{Nodes: nodes, Edges: subEdges}, nil
 }
 
-// connectNodes 将超边 nodeIDs 两两互连（跳过自环）。
 func connectNodes(adj map[uint64]map[uint64]struct{}, nodeIDs []uint64) {
 	for i, a := range nodeIDs {
 		for _, b := range nodeIDs[i+1:] {

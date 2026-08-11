@@ -8,7 +8,6 @@ import (
 	"math"
 )
 
-// DecodeF32Vec decodes a byte slice into a f32 (float32) vector.
 func DecodeF32Vec(data []byte, dim int) []float32 {
 	if len(data) < dim*4 {
 		return nil
@@ -20,7 +19,6 @@ func DecodeF32Vec(data []byte, dim int) []float32 {
 	return vec
 }
 
-// F32SliceToBytes encodes a f32 (float32) vector into a byte slice.
 func F32SliceToBytes(vec []float32) []byte {
 	buf := make([]byte, len(vec)*4)
 	for i, v := range vec {

@@ -11,28 +11,23 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/common"
 )
 
-// SnapshotMagic identifies a valid snapshot block ("SNAP").
 const SnapshotMagic uint32 = 0x534E4150
 
-// SnapshotVersion is the on-disk snapshot blob format version.
 const SnapshotVersion uint8 = 0x01
 
-// IndexSnapshotData holds serialized index blobs persisted at checkpoint.
 type IndexSnapshotData struct {
 	SparseData    []byte
 	L1ReverseData []byte
 	L3IndexData   []byte
 }
 
-// indexEntry is a single (idHash, offset) pair in the snapshot.
 type indexEntry struct {
 	IDHash uint64
 	Offset uint64
 }
 
 // BuildSnapshot serializes the index and snapshot data into a single blob.
-//
-// Format: SNAP_MAGIC(4) + VERSION(1) + COUNT(4) + entries(16 each) + 3×blob(len+data) + CRC32(4)
+// Format: MAGIC(4) VERSION(1) COUNT(4) entries(16 each) 3x blob(len+data) CRC32(4)
 func BuildSnapshot(index map[uint64]uint64, snap *IndexSnapshotData) ([]byte, error) {
 	entries := make([]indexEntry, 0, len(index))
 	for id, off := range index {
@@ -43,26 +38,21 @@ func BuildSnapshot(index map[uint64]uint64, snap *IndexSnapshotData) ([]byte, er
 		len(snap.SparseData) +
 		len(snap.L1ReverseData) + len(snap.L3IndexData) + 4
 	buf := make([]byte, 0, cap)
-	// Magic + version + count.
 	buf = appendU32LE(buf, SnapshotMagic)
 	buf = append(buf, SnapshotVersion)
 	buf = appendU32LE(buf, uint32(len(entries)))
-	// Entries.
 	for _, e := range entries {
 		buf = appendU64LE(buf, e.IDHash)
 		buf = appendU64LE(buf, e.Offset)
 	}
-	// Three data blobs.
 	buf = appendBlob(buf, snap.SparseData)
 	buf = appendBlob(buf, snap.L1ReverseData)
 	buf = appendBlob(buf, snap.L3IndexData)
-	// CRC32 over everything before the CRC field.
 	crc := crc32.ChecksumIEEE(buf)
 	buf = appendU32LE(buf, crc)
 	return buf, nil
 }
 
-// ParseSnapshot deserializes a snapshot blob, returning the index and snapshot data.
 func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 	if len(raw) < 13 { // magic(4) + version(1) + count(4) + crc(4) minimum
 		return nil, nil, common.NewError(common.ErrCorruption, "snapshot too short")
@@ -82,7 +72,6 @@ func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 	}
 	count := int(binary.LittleEndian.Uint32(raw[5:9]))
 	pos := 9
-	// Parse entries.
 	needed := pos + count*16
 	if needed > len(raw)-4 {
 		return nil, nil, common.NewError(common.ErrCorruption, "snapshot entries truncated")
@@ -115,8 +104,6 @@ func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 	}
 	return idx, snap, nil
 }
-
-// --- helpers ---
 
 func appendU32LE(buf []byte, v uint32) []byte {
 	var b [4]byte
