@@ -12,7 +12,6 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/sub"
 	"github.com/qyiun666/MemHop/internal/sub/common"
-	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -146,10 +145,10 @@ func TestE2EL0Profile(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
-	// Fresh DB: GetL0 returns ErrNotFound; start from an empty slot then update.
+	// Fresh DB: GetL0 returns an empty profile (no ErrNotFound).
 	slot, err := db.GetL0()
 	if err != nil {
-		slot = &core.ProfileSlot{}
+		t.Fatalf("GetL0: %v", err)
 	}
 	slot.Personality = "热爱户外运动的用户"
 	if err := db.UpdateL0(slot); err != nil {

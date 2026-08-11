@@ -331,12 +331,20 @@ type AdjacencyEntry struct {
 // L4 ArchiveSlot — 聊天记录
 // ============================================================================
 
+// ArchiveSlot 消息角色取值。
+const (
+	RoleUser   uint8 = 0 // 用户发言
+	RoleAgent  uint8 = 1 // agent 回复
+	RoleSystem uint8 = 2 // 系统消息
+	RoleDream  uint8 = 3 // 梦境产物（MergedSummary 归档）
+)
+
 // ArchiveSlot 存储用户与 agent 的历史对话消息，
 // 每条消息归属于一个 L2 Context（场景），构成完整的对话上下文。
 type ArchiveSlot struct {
 	IDHash      uint64      `json:"id_hash"`            // 消息唯一哈希标识
 	ContentType ContentType `json:"content_type"`       // 内容类型（TEXT/IMAGE/CODE 等）
-	Role        uint8       `json:"role"`               // 消息角色：0=user, 1=agent, 2=system
+	Role        uint8       `json:"role"`               // 消息角色：见 Role* 常量
 	ContextID   uint64      `json:"context_id"`         // 所属 L2 Context（场景）ID
 	CreatedAt   int64       `json:"created_at"`         // 创建时间戳（毫秒）
 	Content     string      `json:"content"`            // 消息正文

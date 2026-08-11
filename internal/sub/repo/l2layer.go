@@ -219,19 +219,34 @@ func ListTopicsL2(engine *core.StorageEngine, sceneID string, depth uint8, num u
 	return out, nil
 }
 
+// WriteVecCentroid 将话题质心向量（f32）写为一条 RecVecCentroid 记录，
+// 返回该记录的 idHash（存入话题 CentroidPageRef 供向量通道检索）。
+func WriteVecCentroid(engine *core.StorageEngine, vec []float32) (uint64, error) {
+	if len(vec) == 0 {
+		return 0, common.NewError(common.ErrInvalidQuery, "empty centroid vector", nil)
+	}
+	data := common.F32SliceToBytes(vec)
+	idHash := common.HashID(string(data))
+	if _, err := engine.WriteRecord(core.RecVecCentroid, idHash, data); err != nil {
+		return 0, err
+	}
+	return idHash, nil
+}
+
 // CreateTopicL2 新增话题：ID 由 ComputeTopicID 生成（sceneID + 双时间戳哈希），
-// depth 固定 1，只写 ID/SceneID/Depth/UserKeywords/UserTimestamp，成功返回 true。
-func CreateTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []string, userTS int64) bool {
+// depth 固定 1，centroidRef 为质心向量记录 idHash（0 表示无向量）。成功返回 true。
+func CreateTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []string, userTS int64, centroidRef uint64) bool {
 	sceneHash, err := common.ParseID(sceneID)
 	if err != nil {
 		return false
 	}
 	topic := core.TopicSlot{
-		ID:            core.ComputeTopicID(sceneHash, userTS, 0),
-		SceneID:       sceneHash,
-		Depth:         1,
-		UserKeywords:  userKeywords,
-		UserTimestamp: userTS,
+		ID:              core.ComputeTopicID(sceneHash, userTS, 0),
+		SceneID:         sceneHash,
+		Depth:           1,
+		UserKeywords:    userKeywords,
+		UserTimestamp:   userTS,
+		CentroidPageRef: centroidRef,
 	}
 	return core.WriteTopicSlot(engine, topic.ID, &topic) == nil
 }
@@ -239,20 +254,21 @@ func CreateTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []st
 // CreateFusedTopicL2 新增话题并附带融合字段：ID 由 ComputeTopicID 生成（sceneID + 双时间戳哈希），
 // depth 固定 1，除基础字段外额外写 AgentTimestamp、FusedKeywords（复用 userKeywords）与
 // ChildrenIDs，成功返回 true。L3/L4 由 AppendTopicL3RefsL2 / UpdateTopicL4RefsL2 更新。
-func CreateFusedTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []string, userTS, agentTS int64, childrenIDs []uint64) bool {
+func CreateFusedTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []string, userTS, agentTS int64, childrenIDs []uint64, centroidRef uint64) bool {
 	sceneHash, err := common.ParseID(sceneID)
 	if err != nil {
 		return false
 	}
 	topic := core.TopicSlot{
-		ID:             core.ComputeTopicID(sceneHash, userTS, agentTS),
-		SceneID:        sceneHash,
-		Depth:          1,
-		UserKeywords:   userKeywords,
-		UserTimestamp:  userTS,
-		AgentTimestamp: agentTS,
-		FusedKeywords:  userKeywords,
-		ChildrenIDs:    childrenIDs,
+		ID:              core.ComputeTopicID(sceneHash, userTS, agentTS),
+		SceneID:         sceneHash,
+		Depth:           1,
+		UserKeywords:    userKeywords,
+		UserTimestamp:   userTS,
+		AgentTimestamp:  agentTS,
+		FusedKeywords:   userKeywords,
+		ChildrenIDs:     childrenIDs,
+		CentroidPageRef: centroidRef,
 	}
 	return core.WriteTopicSlot(engine, topic.ID, &topic) == nil
 }

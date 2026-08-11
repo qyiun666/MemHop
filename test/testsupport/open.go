@@ -41,6 +41,10 @@ func keyConfigPath() string {
 	return filepath.Join(filepath.Dir(filename), "key_config.json")
 }
 
+// LoadLLMConfig fills cfg.LLM from env vars first, then key_config.json.
+// Exported for tests that build their own LLM client (e.g. the quality judge).
+func LoadLLMConfig(cfg *sub.MemHopConfig) error { return loadLLMConfig(cfg) }
+
 // loadLLMConfig fills cfg.LLM from env vars first, then key_config.json.
 func loadLLMConfig(cfg *sub.MemHopConfig) error {
 	if key := os.Getenv(EnvLLMKey); key != "" {

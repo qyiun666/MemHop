@@ -129,7 +129,12 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 		sceneID = sid
 	}
 	topicID := core.ComputeTopicID(sceneID, q.Timestamp, 0)
-	if !repo.CreateTopicL2(db.engine, common.FormatHash(sceneID), keywords, q.Timestamp) {
+	// 编码话题文本为质心向量并写入向量记录，供向量通道检索；编码失败即报错，不降级。
+	centroidRef, err := db.writeCentroid(q.Text)
+	if err != nil {
+		return nil, 0, err
+	}
+	if !repo.CreateTopicL2(db.engine, common.FormatHash(sceneID), keywords, q.Timestamp, centroidRef) {
 		return nil, 0, common.NewError(common.ErrIO, "create topic", nil)
 	}
 	topicIDStr := common.FormatHash(topicID)
@@ -211,4 +216,20 @@ func (db *DB) matchCrystals(text string) []core.ActionChainSlot {
 		return []core.ActionChainSlot{}
 	}
 	return chains
+}
+
+// writeCentroid 编码文本为质心向量并写入向量记录，返回记录 idHash。
+// encoder 不可用或编码失败即报错（不降级、不静默跳过），保证向量通道数据完整。
+func (db *DB) writeCentroid(text string) (uint64, error) {
+	if db.encoder == nil || !db.encoder.IsAvailable() {
+		return 0, common.NewError(common.ErrEncoder, "encoder unavailable for centroid", nil)
+	}
+	vec, err := db.encoder.Encode(text)
+	if err != nil {
+		return 0, common.NewError(common.ErrEncoder, "encode centroid", err)
+	}
+	if len(vec) == 0 {
+		return 0, common.NewError(common.ErrEncoder, "encode centroid: empty vector", nil)
+	}
+	return repo.WriteVecCentroid(db.engine, vec)
 }

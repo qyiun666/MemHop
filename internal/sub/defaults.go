@@ -18,6 +18,8 @@ type MemHopDefaults struct {
 	Capacity                int     `json:"capacity"`
 	TokenizerEngine         string  `json:"tokenizer_engine,omitempty"`
 	MinSceneScore           float32 `json:"min_scene_score"`
+	VectorMinScore          float32 `json:"vector_min_score"`
+	DreamCompressMinTopics  int     `json:"dream_compress_min_topics"`
 	MaxResults              int     `json:"max_results"`
 	DefaultTimeoutSecs      int     `json:"default_timeout_secs"`
 	DefaultMaxOutputTokens  int     `json:"default_max_output_tokens"`
@@ -39,6 +41,8 @@ var DefaultMemHopDefaults = &MemHopDefaults{
 	DefaultTTLMs:            3600000, // 1 hour
 	Capacity:                7,
 	MinSceneScore:           1.0,
+	VectorMinScore:          0.5,
+	DreamCompressMinTopics:  20,
 	MaxResults:              20,
 	DefaultTimeoutSecs:      60,
 	DefaultMaxOutputTokens:  8192,

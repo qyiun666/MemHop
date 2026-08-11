@@ -243,14 +243,15 @@ func TestTopSceneVectorChannel(t *testing.T) {
 	topic.CentroidPageRef = 9001
 	writeTopic(t, engine, sparse, topic)
 
-	// 有编码器：向量通道命中 → rrf = 1/61；唯一话题同时是最后话题场景 → +0.1。
+	// 有编码器：向量通道命中（余弦 1.0 ≥ VectorMinScore 0.5）→ 触发向量保底，
+	// 场景分抬到 threshold+1.0=1.05；唯一话题同时是最后话题场景 → +0.1，合计 1.15。
 	hit, err := TopScene(context.Background(), engine, sparse, &mockEncoder{vec: testVec}, "unrelated", []string{"zzz"}, nil, DefaultMemHopDefaults, 0.05, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
-	want := float32(1.0)/61.0 + 0.1
+	want := float32(0.05) + 1.0 + 0.1
 	if hit.SceneID != 1 || !approx(hit.Score, want) {
-		t.Errorf("vector hit = %+v; want SceneID=1 Score=%v", hit, want)
+		t.Errorf("vector hit = %+v; want SceneID=1 Score=%v (vector floor)", hit, want)
 	}
 
 	// 无编码器：通道为空 → 无命中 → 空。

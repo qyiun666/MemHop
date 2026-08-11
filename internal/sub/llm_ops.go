@@ -95,7 +95,20 @@ Rules:
 - Do not generalize or drop details
 - Echo scene_id and node_hashes EXACTLY as given in the input
 - When no compression is needed, output l2_groups as an empty array
-- Output ONLY valid JSON: {"l2_groups":[...],"l2_compression_needed":bool}, no markdown, no code fences`
+
+Output ONLY valid JSON in this exact shape (no markdown, no code fences):
+{
+  "l2_groups": [
+    {
+      "scene_id": <number>,
+      "node_hashes": [<number>, ...],
+      "merged_title": "<short topic title>",
+      "merged_summary": "<detailed summary preserving all facts>"
+    }
+  ],
+  "l2_compression_needed": <bool>
+}
+Every merged group MUST include non-empty merged_title and merged_summary.`
 
 // Consolidate 判断一批 L2 话题是否属于同一话题、可否进一步压缩。
 // 返回被压缩话题的分组与保留全部细节的内容总结。

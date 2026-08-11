@@ -103,6 +103,24 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.Spa
 		}
 		sceneScores[t.SceneID] += r + keywordHit(t, kwSet)
 	}
+
+	// 向量通道独立阈值保底：跨措辞查询（关键词零重叠）时 BM25/实体通道打零分，
+	// 语义相似的话题仅靠向量通道 RRF 分（~1/(60+rank)）难过 MinSceneScore。
+	// 向量余弦相似度 ≥ VectorMinScore 的话题，其场景保底到阈值之上（叠加相似度，
+	// 保留语义排序），确保语义召回；末尾 best.Score <= threshold 判断不会误挡。
+	for _, d := range vecDocs {
+		if d.Score < defaults.VectorMinScore {
+			continue
+		}
+		t, ok := byID[d.IDHash]
+		if !ok {
+			continue
+		}
+		floor := threshold + d.Score
+		if sceneScores[t.SceneID] < floor {
+			sceneScores[t.SceneID] = floor
+		}
+	}
 	if len(sceneScores) == 0 {
 		return SceneHit{}, nil
 	}

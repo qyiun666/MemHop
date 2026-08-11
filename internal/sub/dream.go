@@ -6,6 +6,7 @@ package sub
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
@@ -91,7 +92,11 @@ func (db *DB) compressActiveScenes(ctx context.Context) (uint32, int) {
 		go func(sceneID uint64) {
 			defer wg.Done()
 			topics, err := repo.ListTopicsL2(db.engine, common.FormatHash(sceneID), 1, 2)
-			if err != nil || len(topics) == 0 {
+			if err != nil {
+				return
+			}
+			// 话题数低于压缩阈值则跳过：少量话题保留原始细节，不值得压缩。
+			if len(topics) < db.config.Defaults.DreamCompressMinTopics {
 				return
 			}
 			out, err := db.llm.Consolidate(ctx, topics)
@@ -101,7 +106,7 @@ func (db *DB) compressActiveScenes(ctx context.Context) (uint32, int) {
 				mu.Unlock()
 				return
 			}
-			applied := db.applyGroups(sceneID, topics, out)
+			applied := db.applyGroups(ctx, sceneID, topics, out)
 			mu.Lock()
 			groups += applied
 			mu.Unlock()
@@ -111,9 +116,10 @@ func (db *DB) compressActiveScenes(ctx context.Context) (uint32, int) {
 	return groups, failures
 }
 
-// applyGroups 应用单个场景的压缩分组：创建 parent 话题并下沉组内节点，
-// 返回实际压缩的组数。
-func (db *DB) applyGroups(sceneID uint64, topics []core.TopicSlot, out *ConsolidationOutput) uint32 {
+// applyGroups 应用单个场景的压缩分组：每组先把 MergedSummary 存为 L4 压缩归档，
+// 再对其提取关键词作为融合话题的关键词，创建 parent 话题并挂 summary 归档引用，
+// 最后下沉组内节点。返回实际压缩的组数。
+func (db *DB) applyGroups(ctx context.Context, sceneID uint64, topics []core.TopicSlot, out *ConsolidationOutput) uint32 {
 	byID := make(map[uint64]core.TopicSlot, len(topics))
 	for _, t := range topics {
 		byID[t.ID] = t
@@ -128,10 +134,40 @@ func (db *DB) applyGroups(sceneID uint64, topics []core.TopicSlot, out *Consolid
 			continue
 		}
 		parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
-		if !repo.CreateFusedTopicL2(db.engine, common.FormatHash(sceneID), []string{g.MergedTitle}, minTS, maxTS, g.NodeHashes) {
+		parentIDStr := common.FormatHash(parentID)
+
+		// 1. MergedSummary 存为 L4 梦境归档（role=RoleDream），保留全部细节原文。
+		archiveID, err := repo.AppendArchiveL4(db.engine, parentIDStr, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
+		if err != nil {
+			slog.Warn("dream: archive merged summary failed", "parent", parentIDStr, "err", err)
+			continue
+		}
+
+		// 2. 对 MergedSummary 提取关键词，作为融合话题的关键词（保留细节、供检索）。
+		keywords, err := db.llm.ExtractKeywords(ctx, g.MergedSummary)
+		if err != nil || len(keywords) == 0 {
+			keywords = []string{g.MergedTitle}
+		}
+
+		// 3. 编码 MergedSummary 为质心向量并写入向量记录；编码失败即报错。
+		centroidRef, err := db.writeCentroid(g.MergedSummary)
+		if err != nil {
+			slog.Warn("dream: encode merged summary centroid failed", "parent", parentIDStr, "err", err)
+			continue
+		}
+
+		// 4. 创建融合话题（UserKeywords=FusedKeywords=提取的关键词，带质心向量）。
+		if !repo.CreateFusedTopicL2(db.engine, common.FormatHash(sceneID), keywords, minTS, maxTS, g.NodeHashes, centroidRef) {
+			slog.Warn("dream: create fused topic failed", "parent", parentIDStr)
+			continue
+		}
+		// 5. 融合话题挂 summary 归档引用，检索到时可取回完整总结原文。
+		if !repo.UpdateTopicL4RefsL2(db.engine, parentIDStr, []uint64{archiveID}) {
+			slog.Warn("dream: attach summary archive ref failed", "parent", parentIDStr)
 			continue
 		}
 		if _, err := repo.CompressTopicsL2(db.engine, g.NodeHashes, parentID); err != nil {
+			slog.Warn("dream: compress child topics failed", "parent", parentIDStr, "err", err)
 			continue
 		}
 		count++

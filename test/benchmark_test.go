@@ -6,9 +6,11 @@
 package test
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -149,5 +151,107 @@ func BenchmarkUpdate(b *testing.B) {
 		if !db.Update(topicID, "agent reply for benchmark", ts) {
 			b.Fatal("Update failed")
 		}
+	}
+}
+
+// BenchmarkDreamConsolidation measures the Dream consolidation pipeline after
+// seeding >DreamCompressMinTopics(20) related topics in one scene (real
+// compression path: LLM Consolidate + summary archive + keyword extraction +
+// centroid encode + fused topic + child sink + index rebuild).
+func BenchmarkDreamConsolidation(b *testing.B) {
+	db := testsupport.OpenMemHopB(b)
+	defer db.Close()
+
+	// 25 句同主题的话，触发真实压缩。
+	related := []string{
+		"我喜欢早上六点去公园慢跑", "跑步的时候我习惯听播客", "我每周跑步大概三次，每次五公里",
+		"跑完步我会喝一杯蛋白粉", "我早上六点出门跑步", "慢跑时我听健身播客",
+		"我一周跑三次步", "每次跑步五公里左右", "运动后我喝蛋白粉补充",
+		"清晨六点我在公园跑步", "跑步路上我放播客听", "每周三次是我的跑步频率",
+		"五公里是我每次的跑步距离", "跑完我习惯喝杯蛋白粉", "我早上喜欢去公园慢跑",
+		"边跑步边听播客是我的习惯", "我每周坚持跑三次", "每次我都跑五公里",
+		"跑步后我必喝蛋白粉", "六点起床去公园跑步", "慢跑配播客最舒服",
+		"一周三次跑步不间断", "五公里跑完很爽", "蛋白粉是跑后必备", "早上公园跑步我很享受",
+	}
+	base := time.Now().UnixMilli()
+	var sceneID uint64
+	for i, text := range related {
+		ts := base + int64(i)*1000
+		q := sub.SearchQuery{Text: text, Timestamp: ts}
+		if i == 0 {
+			q.AutoCreate = true
+		} else {
+			sid := common.FormatHash(sceneID)
+			q.DirectedL2ID = &sid
+		}
+		res, err := db.Search(q)
+		if err != nil {
+			b.Fatalf("seed Search[%d]: %v", i, err)
+		}
+		if i == 0 {
+			sceneID = res.Contexts[0].SceneID
+		}
+		db.Update(common.FormatHash(res.NewTopicID), "好的", ts+500)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := db.Dream(context.Background()); err != nil {
+			b.Fatalf("Dream: %v", err)
+		}
+	}
+}
+
+// BenchmarkRetrievalRecall measures retrieval quality: seed several facts on
+// distinct topics, then issue cross-phrased queries and measure how often the
+// stored fact's distinctive keyword is recalled in the returned context
+// keywords. Reports recall ratio via b.ReportMetric.
+func BenchmarkRetrievalRecall(b *testing.B) {
+	db := testsupport.OpenMemHopB(b)
+	defer db.Close()
+
+	// 每个锚点：事实原文 + 跨措辞查询 + 判命中的区分性关键词。
+	type anchor struct {
+		fact, query, marker string
+	}
+	anchors := []anchor{
+		{"我的狗叫旺财，是一只金毛，今年五岁了", "我的狗叫什么名字", "旺财"},
+		{"我的猫叫咪咪，最喜欢吃三文鱼罐头", "我的猫爱吃什么", "咪咪"},
+		{"我住在北京市朝阳区，住了十年了", "我住在哪个城市", "北京"},
+		{"我上个月刚换了工作，现在做后端开发", "我现在做什么工作", "后端"},
+	}
+
+	base := time.Now().UnixMilli()
+	for i, a := range anchors {
+		ts := base + int64(i)*2000
+		res, err := db.Search(sub.SearchQuery{Text: a.fact, AutoCreate: true, Timestamp: ts})
+		if err != nil {
+			b.Fatalf("seed Search[%d]: %v", i, err)
+		}
+		db.Update(common.FormatHash(res.NewTopicID), "好的，记下了。", ts+500)
+	}
+
+	b.ResetTimer()
+	var hits, total int
+	for i := 0; i < b.N; i++ {
+		a := anchors[i%len(anchors)]
+		ts := base + int64(1_000_000+i)*1000
+		res, err := db.Search(sub.SearchQuery{Text: a.query, Timestamp: ts})
+		if err != nil {
+			b.Fatalf("Search: %v", err)
+		}
+		total++
+		var kws []string
+		for j := range res.Contexts {
+			kws = append(kws, res.Contexts[j].UserKeywords...)
+			kws = append(kws, res.Contexts[j].FusedKeywords...)
+		}
+		if strings.Contains(strings.ToLower(strings.Join(kws, " ")), strings.ToLower(a.marker)) {
+			hits++
+		}
+	}
+	b.StopTimer()
+	if total > 0 {
+		b.ReportMetric(float64(hits)/float64(total), "recall")
 	}
 }
