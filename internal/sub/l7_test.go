@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
@@ -186,6 +188,99 @@ func TestCrystallizeIdempotent(t *testing.T) {
 	chains := repoListChains(t, db)
 	if len(chains) != 1 {
 		t.Fatalf("want 1 chain after re-crystallize, got %d", len(chains))
+	}
+}
+
+// mockLLMServerSeq serves one fixed completion response per request, in
+// order, cycling back to the first when exhausted.
+func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
+	t.Helper()
+	var mu sync.Mutex
+	idx := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		content := contents[idx%len(contents)]
+		idx++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"role": "assistant", "content": content},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// TestCrystallizeIdempotentPreservesRuntimeFields re-crystallizing the same
+// session reuses the chain ID, keeps host-accumulated runtime fields, and
+// replaces the old step set (no orphans when the new pattern has fewer steps).
+func TestCrystallizeIdempotentPreservesRuntimeFields(t *testing.T) {
+	srv := mockLLMServerSeq(t,
+		`{"chains":[{"title":"发布流程","trigger":"准备发布时","steps":[{"action":"run_test"},{"action":"deploy"}]}]}`,
+		`{"chains":[{"title":"发布流程","trigger":"准备发布时","steps":[{"action":"run_test"}]}]}`,
+	)
+	db := &DB{
+		engine: newTestEngine(t),
+		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
+	}
+	session := common.FormatHash(456)
+	if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	first, err := db.Crystallize(context.Background(), session)
+	if err != nil {
+		t.Fatalf("first crystallize: %v", err)
+	}
+	// Host accumulates runtime fields on the chain.
+	conf := float32(0.9)
+	trig := uint32(5)
+	status := core.ChainActive
+	if err := db.UpdateL5(first.ChainIDs[0], &L5UpdateFields{Confidence: &conf, TriggerCount: &trig, Status: &status}); err != nil {
+		t.Fatalf("update chain: %v", err)
+	}
+	// Re-crystallize with a different (shorter) step set.
+	second, err := db.Crystallize(context.Background(), session)
+	if err != nil {
+		t.Fatalf("second crystallize: %v", err)
+	}
+	if len(first.ChainIDs) != 1 || len(second.ChainIDs) != 1 || first.ChainIDs[0] != second.ChainIDs[0] {
+		t.Fatalf("expected idempotent chain ids, got %v vs %v", first.ChainIDs, second.ChainIDs)
+	}
+	chain, err := db.GetL5(first.ChainIDs[0])
+	if err != nil {
+		t.Fatalf("get chain: %v", err)
+	}
+	if chain.Confidence != 0.9 || chain.TriggerCount != 5 || chain.Status != core.ChainActive {
+		t.Fatalf("runtime fields reset by re-crystallize: %+v", chain)
+	}
+	if chain.Path == nil || *chain.Path != session {
+		t.Fatalf("path not updated: %+v", chain)
+	}
+	steps := core.CollectAllActionSteps(db.engine)
+	if len(steps) != 1 || steps[0].Action != "run_test" {
+		t.Fatalf("old steps not replaced, got %+v", steps)
+	}
+}
+
+func TestTruncateUTF8(t *testing.T) {
+	s := "你好世界" // 3 bytes per rune
+	if got := truncateUTF8(s, 4); got != "你" {
+		t.Fatalf("truncate 4: %q", got)
+	}
+	if got := truncateUTF8(s, 6); got != "你好" {
+		t.Fatalf("truncate 6: %q", got)
+	}
+	if got := truncateUTF8(s, 100); got != s {
+		t.Fatalf("truncate 100: %q", got)
+	}
+	if got := truncateUTF8("a"+s, 5); !utf8.ValidString(got) {
+		t.Fatalf("result invalid utf8: %q", got)
 	}
 }
 

@@ -84,3 +84,68 @@ func TestCreateChainL5WithPathAndSteps(t *testing.T) {
 		t.Fatalf("step parameters mismatch")
 	}
 }
+
+func TestCreateOrUpdateChainL5WithPathPreservesFields(t *testing.T) {
+	engine := tempEngine(t)
+	path1 := "session:a"
+	id, existed, err := CreateOrUpdateChainL5WithPath(engine, "t", "tr", &path1)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if existed {
+		t.Fatal("fresh chain should not exist yet")
+	}
+	// Host accumulates runtime fields.
+	chain, err := GetChainL5(engine, common.FormatHash(id))
+	if err != nil {
+		t.Fatalf("get chain: %v", err)
+	}
+	chain.Confidence = 0.8
+	chain.TriggerCount = 3
+	if err := UpdateChainL5(engine, common.FormatHash(id), chain); err != nil {
+		t.Fatalf("update chain: %v", err)
+	}
+	// Re-create with a new path: runtime fields must survive, Path refreshed.
+	path2 := "session:b"
+	id2, existed, err := CreateOrUpdateChainL5WithPath(engine, "t", "tr", &path2)
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !existed || id2 != id {
+		t.Fatalf("expected existing chain id %d, got %d (existed=%v)", id, id2, existed)
+	}
+	got, err := GetChainL5(engine, common.FormatHash(id2))
+	if err != nil {
+		t.Fatalf("get updated chain: %v", err)
+	}
+	if got.Confidence != 0.8 || got.TriggerCount != 3 {
+		t.Fatalf("runtime fields lost: %+v", got)
+	}
+	if got.Path == nil || *got.Path != "session:b" {
+		t.Fatalf("path not refreshed: %+v", got)
+	}
+}
+
+func TestDeleteStepsL5(t *testing.T) {
+	engine := tempEngine(t)
+	id, err := CreateChainL5WithPath(engine, "t", "tr", nil)
+	if err != nil {
+		t.Fatalf("create chain: %v", err)
+	}
+	if _, err := CreateStepL5(engine, id, 1, "a", nil); err != nil {
+		t.Fatalf("step 1: %v", err)
+	}
+	if _, err := CreateStepL5(engine, id, 2, "b", nil); err != nil {
+		t.Fatalf("step 2: %v", err)
+	}
+	if err := DeleteStepsL5(engine, id); err != nil {
+		t.Fatalf("delete steps: %v", err)
+	}
+	if steps := core.CollectAllActionSteps(engine); len(steps) != 0 {
+		t.Fatalf("want 0 steps, got %+v", steps)
+	}
+	// Chain record itself must survive.
+	if _, err := GetChainL5(engine, common.FormatHash(id)); err != nil {
+		t.Fatalf("chain should survive step deletion: %v", err)
+	}
+}

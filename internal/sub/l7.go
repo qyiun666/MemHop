@@ -9,6 +9,7 @@ package sub
 
 import (
 	"context"
+	"unicode/utf8"
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
 	"github.com/qyiun666/MemHop/internal/sub/repo"
@@ -20,11 +21,8 @@ const maxTrajectoryPayload = 4 * 1024
 
 // AppendTrajectory appends one event to a session's trajectory; Seq is
 // derived from the current max + 1, so the host never counts sequences.
+// The write lock comes from the internal layer to serialize Seq allocation.
 func (db *DB) AppendTrajectory(sessionID string, ev core.TrajectorySlot) error {
-	if err := db.beginRead(); err != nil {
-		return err
-	}
-	defer db.mu.RUnlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse session id", err)
@@ -43,11 +41,23 @@ func (db *DB) AppendTrajectory(sessionID string, ev core.TrajectorySlot) error {
 		}
 	}
 	if len(ev.Payload) > maxTrajectoryPayload {
-		ev.Payload = ev.Payload[:maxTrajectoryPayload]
+		ev.Payload = truncateUTF8(ev.Payload, maxTrajectoryPayload)
 	}
 	ev.SessionID = parsed
 	ev.Seq = maxSeq + 1
 	return repo.AppendTrajectory(db.engine, ev)
+}
+
+// truncateUTF8 cuts s to at most max bytes without splitting a UTF-8 rune.
+func truncateUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	t := s[:max]
+	for len(t) > 0 && !utf8.ValidString(t) {
+		t = t[:len(t)-1]
+	}
+	return t
 }
 
 // ReadTrajectory returns a session's trajectory events ordered by Seq.
@@ -112,8 +122,14 @@ func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeRe
 	result := &CrystallizeResult{ChainIDs: []string{}}
 	path := sessionID
 	for _, c := range out.Chains {
-		chainID, err := repo.CreateChainL5WithPath(db.engine, c.Title, c.Trigger, &path)
+		// Re-crystallizing the same title:trigger reuses the chain ID, keeps
+		// runtime fields (Confidence/SuccessRate/TriggerCount/...), and
+		// replaces the old step set so fewer steps leave no orphans.
+		chainID, _, err := repo.CreateOrUpdateChainL5WithPath(db.engine, c.Title, c.Trigger, &path)
 		if err != nil {
+			return nil, err
+		}
+		if err := repo.DeleteStepsL5(db.engine, chainID); err != nil {
 			return nil, err
 		}
 		for i, s := range c.Steps {

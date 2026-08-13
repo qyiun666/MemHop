@@ -14,8 +14,15 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// Thin wrapper; see internal/sub/l7.go ((db *DB) AppendTrajectory).
+// Thin wrapper; write op, delegates under the write lock. The write lock
+// serializes Seq allocation in AppendTrajectory so concurrent appends to
+// the same session cannot overwrite each other.
 func (db *DB) AppendTrajectory(sessionID string, ev core.TrajectorySlot) error {
+	db.DB.Lock()
+	defer db.DB.Unlock()
+	if db.DB.IsClosed() {
+		return common.NewError(common.ErrClosed, "database is closed")
+	}
 	return db.DB.AppendTrajectory(sessionID, ev)
 }
 

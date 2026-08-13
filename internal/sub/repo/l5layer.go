@@ -38,6 +38,51 @@ func CreateChainL5WithPath(engine *core.StorageEngine, title, trigger string, pa
 	return chainID, nil
 }
 
+// CreateOrUpdateChainL5WithPath creates a chain or, when the same
+// title:trigger already exists, preserves its runtime fields
+// (Confidence/SuccessRate/TriggerCount/...) and only refreshes Path and
+// UpdatedAt. Returns the chain ID and whether it already existed.
+func CreateOrUpdateChainL5WithPath(engine *core.StorageEngine, title, trigger string, path *string) (uint64, bool, error) {
+	chainID := common.HashID(fmt.Sprintf("%s:%s", title, trigger))
+	now := time.Now().UnixMilli()
+	if existing, err := core.ReadActionChainSlot(engine, chainID); err == nil {
+		existing.Path = path
+		existing.UpdatedAt = now
+		if err := core.WriteActionChainSlot(engine, chainID, existing); err != nil {
+			return 0, true, err
+		}
+		return chainID, true, nil
+	}
+	chain := &core.ActionChainSlot{
+		IDHash:    chainID,
+		Title:     title,
+		Trigger:   trigger,
+		Path:      path,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if err := core.WriteActionChainSlot(engine, chainID, chain); err != nil {
+		return 0, false, err
+	}
+	return chainID, false, nil
+}
+
+// DeleteStepsL5 removes all steps of a chain (keeps the chain record),
+// so re-crystallization with fewer steps leaves no orphan steps behind.
+func DeleteStepsL5(engine *core.StorageEngine, chainID uint64) error {
+	var targets []uint64
+	for _, step := range core.CollectAllActionSteps(engine) {
+		if step.ChainID == chainID {
+			targets = append(targets, step.IDHash)
+		}
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	_, err := engine.DeleteRecordBatch(targets)
+	return err
+}
+
 // CreateStepL5 creates one action step; ID = hash(chainID:stepOrder).
 func CreateStepL5(engine *core.StorageEngine, chainID uint64, stepOrder uint16, action string, params *string) (uint64, error) {
 	stepID := common.HashID(fmt.Sprintf("%d:%d", chainID, stepOrder))
