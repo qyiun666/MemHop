@@ -31,6 +31,8 @@ const (
 	RecL5ActionChain uint8 = 0x09
 	RecL3GraphSlot   uint8 = 0x0B
 	RecL5ActionStep  uint8 = 0x0C
+	RecL6SceneUsage  uint8 = 0x0D // scene-level retrieval usage feedback (one per scene)
+	RecL7Trajectory  uint8 = 0x0E // host-appended operation trajectory event
 	RecVecCentroid   uint8 = 0xF0 // centroid vector for brute-force search
 )
 

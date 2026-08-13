@@ -361,3 +361,103 @@ func deriveMBTIType(m MBTIScore) string {
 		pick(m.JP, 'J', 'P'),
 	})
 }
+
+// CrystallizeStep is one step of a crystallized action chain.
+type CrystallizeStep struct {
+	Action     string  `json:"action"`
+	Parameters *string `json:"parameters,omitempty"`
+}
+
+// CrystallizeChain is one reusable behavior pattern extracted from a trajectory.
+type CrystallizeChain struct {
+	Title   string            `json:"title"`
+	Trigger string            `json:"trigger"`
+	Steps   []CrystallizeStep `json:"steps"`
+}
+
+type CrystallizeOutput struct {
+	Chains []CrystallizeChain `json:"chains"`
+}
+
+const systemCrystallize = `You analyze an agent's operation trajectory and extract reusable behavior patterns (action chains).
+
+Rules:
+- Only extract patterns that are clearly reusable (appear at least twice or are obviously generic procedures)
+- A pattern is an ordered sequence of tool calls that accomplishes one goal; omit tool results
+- trigger: the condition that should invoke this pattern
+- Do not invent tools that are not present in the trajectory
+- When no reusable pattern exists, output chains as an empty array
+
+Output ONLY valid JSON in this exact shape (no markdown, no code fences):
+{
+  "chains": [
+    {
+      "title": "<short pattern title>",
+      "trigger": "<when this pattern applies>",
+      "steps": [{"action": "<tool name>", "parameters": "<json string or omitted>"}]
+    }
+  ]
+}`
+
+// Crystallize extracts reusable action chains from a trajectory event batch.
+func (p *Provider) Crystallize(ctx context.Context, events []core.TrajectorySlot) (*CrystallizeOutput, error) {
+	if len(events) == 0 {
+		return &CrystallizeOutput{Chains: []CrystallizeChain{}}, nil
+	}
+	user := buildCrystallizePrompt(events)
+	response, err := p.chat(ctx, systemCrystallize, user, p.maxOutputTokens, 0.0, 1.0)
+	if err != nil {
+		return nil, err
+	}
+	return parseCrystallizeResponse(response)
+}
+
+// buildCrystallizePrompt lists trajectory events in sequence order.
+func buildCrystallizePrompt(events []core.TrajectorySlot) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Operation Trajectory (%d events)\n\n", len(events))
+	for _, ev := range events {
+		fmt.Fprintf(&b, "[seq=%d type=%s] %s\n", ev.Seq, ev.EventType, ev.Payload)
+	}
+	b.WriteString("\nExtract reusable behavior patterns now.")
+	return b.String()
+}
+
+// parseCrystallizeResponse parses the LLM reply, dropping malformed rows.
+func parseCrystallizeResponse(response string) (*CrystallizeOutput, error) {
+	cleaned := stripCodeBlocks(response)
+	var raw struct {
+		Chains []struct {
+			Title   string `json:"title"`
+			Trigger string `json:"trigger"`
+			Steps   []struct {
+				Action     string  `json:"action"`
+				Parameters *string `json:"parameters"`
+			} `json:"steps"`
+		} `json:"chains"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
+		return nil, common.NewError(common.ErrLLM, "crystallize response parse failed", err)
+	}
+	out := &CrystallizeOutput{Chains: make([]CrystallizeChain, 0, len(raw.Chains))}
+	for _, c := range raw.Chains {
+		if strings.TrimSpace(c.Title) == "" || strings.TrimSpace(c.Trigger) == "" {
+			continue
+		}
+		chain := CrystallizeChain{
+			Title: c.Title, Trigger: c.Trigger,
+			Steps: make([]CrystallizeStep, 0, len(c.Steps)),
+		}
+		for _, s := range c.Steps {
+			if strings.TrimSpace(s.Action) == "" {
+				continue
+			}
+			chain.Steps = append(chain.Steps, CrystallizeStep{Action: s.Action, Parameters: s.Parameters})
+		}
+		if len(chain.Steps) == 0 {
+			continue
+		}
+		out.Chains = append(out.Chains, chain)
+	}
+	return out, nil
+}

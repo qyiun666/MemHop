@@ -16,12 +16,19 @@ import (
 
 // CreateChainL5 creates an action chain; ID = hash(title:trigger).
 func CreateChainL5(engine *core.StorageEngine, title, trigger string) (uint64, error) {
+	return CreateChainL5WithPath(engine, title, trigger, nil)
+}
+
+// CreateChainL5WithPath creates an action chain with an optional location;
+// ID = hash(title:trigger), so re-crystallizing the same pattern is idempotent.
+func CreateChainL5WithPath(engine *core.StorageEngine, title, trigger string, path *string) (uint64, error) {
 	chainID := common.HashID(fmt.Sprintf("%s:%s", title, trigger))
 	now := time.Now().UnixMilli()
 	chain := &core.ActionChainSlot{
 		IDHash:    chainID,
 		Title:     title,
 		Trigger:   trigger,
+		Path:      path,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -29,6 +36,23 @@ func CreateChainL5(engine *core.StorageEngine, title, trigger string) (uint64, e
 		return 0, err
 	}
 	return chainID, nil
+}
+
+// CreateStepL5 creates one action step; ID = hash(chainID:stepOrder).
+func CreateStepL5(engine *core.StorageEngine, chainID uint64, stepOrder uint16, action string, params *string) (uint64, error) {
+	stepID := common.HashID(fmt.Sprintf("%d:%d", chainID, stepOrder))
+	step := &core.ActionStep{
+		IDHash:     stepID,
+		ChainID:    chainID,
+		StepOrder:  stepOrder,
+		Action:     action,
+		Parameters: params,
+		CreatedAt:  time.Now().UnixMilli(),
+	}
+	if err := core.WriteActionStep(engine, stepID, step); err != nil {
+		return 0, err
+	}
+	return stepID, nil
 }
 
 func GetChainL5(engine *core.StorageEngine, id string) (*core.ActionChainSlot, error) {

@@ -189,3 +189,27 @@ func CollectAllActionChains(engine *StorageEngine) []ActionChainSlot {
 func CollectAllActionSteps(engine *StorageEngine) []ActionStep {
 	return collectAll[ActionStep](engine, RecL5ActionStep)
 }
+
+func ReadSceneUsageSlot(engine *StorageEngine, id uint64) (*SceneUsageSlot, error) {
+	return readJSON[SceneUsageSlot](engine, id, "SceneUsageSlot")
+}
+
+func WriteSceneUsageSlot(engine *StorageEngine, id uint64, slot *SceneUsageSlot) error {
+	return writeJSON(engine, RecL6SceneUsage, id, slot, "SceneUsageSlot")
+}
+
+func CollectAllSceneUsages(engine *StorageEngine) []SceneUsageSlot {
+	return collectAll[SceneUsageSlot](engine, RecL6SceneUsage)
+}
+
+func ReadTrajectorySlot(engine *StorageEngine, id uint64) (*TrajectorySlot, error) {
+	return readJSON[TrajectorySlot](engine, id, "TrajectorySlot")
+}
+
+func WriteTrajectorySlot(engine *StorageEngine, id uint64, slot *TrajectorySlot) error {
+	return writeJSON(engine, RecL7Trajectory, id, slot, "TrajectorySlot")
+}
+
+func CollectAllTrajectories(engine *StorageEngine) []TrajectorySlot {
+	return collectAll[TrajectorySlot](engine, RecL7Trajectory)
+}

@@ -1,0 +1,71 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+// Package memhop is the public export layer of the MemHop memory engine.
+//
+// The v2 implementation lives entirely under internal/ (packages internal,
+// internal/sub, internal/sub/repo/core and internal/sub/common). This root
+// package re-exports the public surface as type aliases plus one-line
+// constructor wrappers, so external modules can import
+// github.com/qyiun666/MemHop without reaching into internal packages.
+//
+// Open returns a *DB whose full method set is available directly: Search,
+// Update, Dream, the L0-L5 APIs, plus the promoted sub-layer methods
+// Close / Checkpoint / RunDream / IsClosed / HasActiveScenes /
+// TouchLastDreamAt / Lock / Unlock.
+package memhop
+
+import (
+	memhopinternal "github.com/qyiun666/MemHop/internal"
+	"github.com/qyiun666/MemHop/internal/sub"
+	"github.com/qyiun666/MemHop/internal/sub/common"
+)
+
+// DB is the public database handle returned by Open / OpenWithEncoder.
+// All methods of the internal DB are available on *DB.
+type DB = memhopinternal.DB
+
+// MemHopConfig configures a MemHop database.
+type MemHopConfig = sub.MemHopConfig
+
+// Encoder is the embedding encoder contract required by OpenWithEncoder.
+type Encoder = sub.Encoder
+
+// HttpEncoder is the Ollama-backed Encoder implementation.
+type HttpEncoder = sub.HttpEncoder
+
+// Code is the numeric error-code type carried inside Error.
+type Code = common.Code
+
+// Error is the structured error returned by MemHop operations.
+type Error = common.Error
+
+// Open creates or opens a MemHop database using a default Ollama encoder.
+func Open(cfg *MemHopConfig) (*DB, error) {
+	return memhopinternal.Open(cfg)
+}
+
+// OpenWithEncoder creates or opens a MemHop database with a custom encoder.
+func OpenWithEncoder(cfg *MemHopConfig, enc Encoder) (*DB, error) {
+	return memhopinternal.OpenWithEncoder(cfg, enc)
+}
+
+// CreateEncoder builds the default Ollama HTTP encoder for a config.
+func CreateEncoder(cfg *MemHopConfig) (*HttpEncoder, error) {
+	return sub.CreateEncoder(cfg)
+}
+
+// NewHttpEncoder constructs an Ollama encoder from raw parameters.
+func NewHttpEncoder(baseURL string, dim int, model string, timeoutSecs int) (*HttpEncoder, error) {
+	return sub.NewHttpEncoder(baseURL, dim, model, timeoutSecs)
+}
+
+// NewError builds a structured MemHop error.
+func NewError(code Code, message string, cause ...error) *Error {
+	return common.NewError(code, message, cause...)
+}
+
+// CodeOf extracts the numeric error code of err (0 when it is not a MemHop Error).
+func CodeOf(err error) Code {
+	return common.CodeOf(err)
+}

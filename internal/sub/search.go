@@ -9,7 +9,9 @@ package sub
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
 	"github.com/qyiun666/MemHop/internal/sub/repo"
@@ -147,6 +149,10 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 	}
 	// Activation unified here for all three routes; idempotent.
 	db.activateScene(sceneID)
+	// L6: record scene-level retrieval usage feedback (best-effort, non-fatal).
+	if err := repo.UpsertSceneUsage(db.engine, sceneID, time.Now().UnixMilli()); err != nil {
+		slog.Warn("search: record scene usage failed", "err", err)
+	}
 	return latest, topicID, nil
 }
 

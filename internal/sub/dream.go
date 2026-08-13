@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
 	"github.com/qyiun666/MemHop/internal/sub/repo"
@@ -43,6 +44,10 @@ func (db *DB) RunDream(ctx context.Context) (bool, error) {
 		EdgeRemoveThreshold:    db.config.Defaults.EdgeRemoveThreshold,
 		MinEdgeNodes:           db.config.Defaults.MinEdgeNodes,
 	}
+
+	// Stage 2.5: L6 usage feedback — adjust L1 importance from scene-level
+	// retrieval usage so the rebuild/decay below reflects actual usage.
+	db.applyUsageFeedback()
 
 	// Stage 3: L1 rebuild (remove stale nodes).
 	if _, err := repo.RebuildL1FromL2(db.engine, newL2Meta, &decayParams); err != nil {
@@ -220,6 +225,44 @@ func (db *DB) distillL0Stage(ctx context.Context) error {
 	}
 	repo.BackfillL1Emotions(db.engine, perNode)
 	return nil
+}
+
+// applyUsageFeedback adjusts L1 node importance from L6 scene usage stats:
+// scenes hit within DefaultTTLMs get +0.05 (active), the rest get -0.05
+// (cold). Best-effort; failures only warn and never abort Dream.
+func (db *DB) applyUsageFeedback() {
+	usages := repo.CollectAllSceneUsages(db.engine)
+	if len(usages) == 0 {
+		return
+	}
+	now := time.Now().UnixMilli()
+	ttl := db.config.Defaults.DefaultTTLMs
+	byScene := make(map[uint64]core.SceneUsageSlot, len(usages))
+	for _, u := range usages {
+		byScene[u.SceneID] = u
+	}
+	const step = 0.05
+	for _, node := range core.CollectAllSceneNodes(db.engine) {
+		u, ok := byScene[node.SceneID]
+		imp := node.Importance
+		switch {
+		case !ok || u.HitCount == 0 || now-u.LastHitAt >= ttl:
+			if imp -= step; imp < 0 {
+				imp = 0
+			}
+		default:
+			if imp += step; imp > 1 {
+				imp = 1
+			}
+		}
+		if imp == node.Importance {
+			continue
+		}
+		node.Importance = imp
+		if err := core.WriteSceneNode(db.engine, node.IDHash, &node); err != nil {
+			slog.Warn("dream: apply usage feedback failed", "node", node.IDHash, "err", err)
+		}
+	}
 }
 
 func (db *DB) stageCancelled(ctx context.Context, stage string) error {

@@ -450,6 +450,43 @@ func TestActionStepNoParams(t *testing.T) {
 	}
 }
 
+func TestSceneUsageSlotRoundtrip(t *testing.T) {
+	s := SceneUsageSlot{IDHash: 1, SceneID: 42, HitCount: 3, LastHitAt: 1000}
+	var got SceneUsageSlot
+	jsonRoundtrip(t, s, &got)
+	if got != s {
+		t.Fatalf("mismatch: %+v", got)
+	}
+}
+
+func TestTrajectorySlotRoundtrip(t *testing.T) {
+	ev := TrajectorySlot{
+		IDHash: 1, SessionID: 42, Seq: 2, EventType: "tool_call",
+		Payload: `{"tool":"read"}`, L4Ref: u64Ptr(7), Timestamp: 1000,
+	}
+	var got TrajectorySlot
+	jsonRoundtrip(t, ev, &got)
+	if got.IDHash != ev.IDHash || got.SessionID != ev.SessionID || got.Seq != ev.Seq ||
+		got.EventType != ev.EventType || got.Payload != ev.Payload || got.Timestamp != ev.Timestamp {
+		t.Fatalf("mismatch: %+v", got)
+	}
+	if got.L4Ref == nil || *got.L4Ref != 7 {
+		t.Fatalf("l4_ref mismatch")
+	}
+}
+
+func TestActionChainSlotPathRoundtrip(t *testing.T) {
+	c := ActionChainSlot{
+		IDHash: 1, Title: "t", Trigger: "tr", Status: ChainActive,
+		Path: strPtr("session:abc"),
+	}
+	var got ActionChainSlot
+	jsonRoundtrip(t, c, &got)
+	if got.Path == nil || *got.Path != "session:abc" {
+		t.Fatalf("path mismatch: %+v", got)
+	}
+}
+
 func TestContentTypeValues(t *testing.T) {
 	tests := []struct {
 		ct   ContentType

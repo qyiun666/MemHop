@@ -311,6 +311,7 @@ type ActionChainSlot struct {
 	LastTriggered int64       `json:"last_triggered"`
 	CreatedAt     int64       `json:"created_at"`
 	UpdatedAt     int64       `json:"updated_at"`
+	Path          *string     `json:"path,omitempty"` // crystallization source or user-specified location
 }
 
 // ActionStep is an individual step within an ActionChainSlot.
@@ -321,4 +322,25 @@ type ActionStep struct {
 	Action     string  `json:"action"`
 	Parameters *string `json:"parameters,omitempty"`
 	CreatedAt  int64   `json:"created_at"`
+}
+
+// SceneUsageSlot is an L6 scene-level retrieval usage feedback record,
+// one per scene (ID = hash("usage:"+sceneID), upserted on every Search hit).
+type SceneUsageSlot struct {
+	IDHash    uint64 `json:"id_hash"`
+	SceneID   uint64 `json:"scene_id"`
+	HitCount  uint32 `json:"hit_count"`   // cumulative retrieval hit count
+	LastHitAt int64  `json:"last_hit_at"` // last hit time (Unix ms)
+}
+
+// TrajectorySlot is an L7 operation trajectory event appended by the host
+// during the agent loop; short-lived, purged by the host via DeleteTrajectory.
+type TrajectorySlot struct {
+	IDHash    uint64  `json:"id_hash"`          // hash(sessionID:seq)
+	SessionID uint64  `json:"session_id"`       // owning L2 scene
+	Seq       uint64  `json:"seq"`              // per-session increasing sequence
+	EventType string  `json:"event_type"`       // turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end
+	Payload   string  `json:"payload"`          // event content (truncated to 4KB; no raw token stream)
+	L4Ref     *uint64 `json:"l4_ref,omitempty"` // reference to the L4 archive instead of duplicating dialogue
+	Timestamp int64   `json:"timestamp"`
 }

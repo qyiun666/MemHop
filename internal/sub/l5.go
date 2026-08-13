@@ -23,6 +23,7 @@ type L5UpdateFields struct {
 	SuccessRate   *float32          `json:"success_rate,omitempty"`
 	TriggerCount  *uint32           `json:"trigger_count,omitempty"`
 	LastTriggered *int64            `json:"last_triggered,omitempty"`
+	Path          *string           `json:"path,omitempty"`
 }
 
 func (db *DB) GetL5(id string) (*core.ActionChainSlot, error) {
@@ -34,10 +35,19 @@ func (db *DB) GetL5(id string) (*core.ActionChainSlot, error) {
 }
 
 func (db *DB) CreateL5(title, trigger string) (string, error) {
+	return db.CreateL5WithPath(title, trigger, "")
+}
+
+// CreateL5WithPath creates an action chain with an optional location.
+func (db *DB) CreateL5WithPath(title, trigger, path string) (string, error) {
 	if title == "" || trigger == "" {
 		return "", common.NewError(common.ErrInvalidQuery, "title and trigger are required")
 	}
-	id, err := repo.CreateChainL5(db.engine, title, trigger)
+	var pathPtr *string
+	if path != "" {
+		pathPtr = &path
+	}
+	id, err := repo.CreateChainL5WithPath(db.engine, title, trigger, pathPtr)
 	if err != nil {
 		return "", err
 	}
@@ -74,6 +84,9 @@ func (db *DB) UpdateL5(id string, fields *L5UpdateFields) error {
 	}
 	if fields.LastTriggered != nil {
 		chain.LastTriggered = *fields.LastTriggered
+	}
+	if fields.Path != nil {
+		chain.Path = fields.Path
 	}
 	return repo.UpdateChainL5(db.engine, id, chain)
 }
