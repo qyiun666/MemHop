@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">MemHop</h1>
   <p align="center">
-    <strong>AI Agent 的长期记忆数据库 —— 六层认知架构，单文件嵌入式，纯 Go 实现，零基础设施。</strong>
+    <strong>AI Agent 的长期记忆数据库 —— 八层认知架构，单文件嵌入式，纯 Go 实现，零基础设施。</strong>
   </p>
   <p align="center">
     <a href="README.md">English</a>
@@ -35,7 +35,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 
 ## 核心特性
 
-- **六层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶，配合 Dream 巩固管线
+- **八层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 场景使用 → L7 轨迹，配合 Dream 巩固管线
 - **三通道 RRF 检索** — BM25（gse CJK 分词）+ f32 向量 + 实体模糊匹配，通过 Reciprocal Rank Fusion（k=60）融合
 - **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0004`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。**与 v1 的 `.meh` 数据文件不兼容**（JSON 序列化切换为原生数字）
 - **Dream 巩固管线** — 仅作用于 L0–L2 的五阶段：L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏（情绪/MBTI）
@@ -104,14 +104,16 @@ ok, err := db.Dream(context.Background())
 | L2 上下文 | `ListScenes` · `MergeScenes` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 归档 | `SearchL4` · `GetArchive` |
-| L5 结晶 | `CreateL5` · `GetL5` · `UpdateL5` · `DeleteL5` · `ListL5` |
+| L5 插件 | `ImportPlugin` · `GetPlugin` · `DeletePlugin` · `ListPlugins` · `Crystallize` |
 
 ## 架构
 
 ```
 层级  名称            人脑类比              机制
 ───── ────────────── ───────────────────  ─────────────────────────────────────────────
- L5    Crystal         肌肉记忆             结晶化的流程与可复用技能
+ L7    Trajectory      程序性日志             宿主追加的操作轨迹事件，结晶为 L5 插件
+ L6    Scene Usage     检索反馈               场景级检索命中计数，反馈 L1 衰减
+ L5    Crystal         肌肉记忆             可复用的能力包（技能 · MCP · 工具 · 提示词 · 服务）
  L4    Archive         长期记忆             原始对话日志与历史记录
  L3    Knowledge       语义记忆             多源超图知识库
  L2    Context         工作记忆             压缩的话题结构（4 级压缩深度）
@@ -141,7 +143,7 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 | 向量 | 通过 Ollama HTTP embed 接口进行 f32 单精度语义相似度检索 |
 | 实体 | 知识图谱实体模糊名称匹配 |
 
-融合后处理：关键词重合打分 → 活跃/最近场景的加性场景加分 → L1 关联扩展 → L5 结晶匹配 → L0 画像组装。
+融合后处理：关键词重合打分 → 活跃/最近场景的加性场景加分 → L1 关联扩展 → L5 插件匹配 → L0 画像组装。
 
 ## 基准测试
 

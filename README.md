@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">MemHop</h1>
   <p align="center">
-    <strong>Long-term memory for AI agents — a six-layer cognitive memory database in a single embedded file. Pure Go, zero infrastructure.</strong>
+    <strong>Long-term memory for AI agents — an eight-layer cognitive memory database in a single embedded file. Pure Go, zero infrastructure.</strong>
   </p>
   <p align="center">
     <a href="README.zh.md">中文</a>
@@ -35,7 +35,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 
 ## Features
 
-- **Six-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal, with Dream consolidation
+- **Eight-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal → L6 Scene Usage → L7 Trajectory, with Dream consolidation
 - **Three-Channel RRF** — BM25 (gse CJK) + f32 vector + entity fuzzy matching, fused via Reciprocal Rank Fusion (k=60)
 - **V2 Storage** — `.meh` format (`FormatVersion=0x0004`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. **Not compatible with v1 `.meh` data files** (JSON serialization switched to native numbers)
 - **Dream Pipeline** — five stages over L0–L2: L2 compress → L1 rebuild → L1 decay → L0 profile → L0 distill (emotion/MBTI)
@@ -104,14 +104,16 @@ Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-
 | L2 Context | `ListScenes` · `MergeScenes` |
 | L3 Knowledge | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 Archive | `SearchL4` · `GetArchive` |
-| L5 Crystal | `CreateL5` · `GetL5` · `UpdateL5` · `DeleteL5` · `ListL5` |
+| L5 Plugin | `ImportPlugin` · `GetPlugin` · `DeletePlugin` · `ListPlugins` · `Crystallize` |
 
 ## Architecture
 
 ```
 Layer   Name             Human Parallel          Mechanism
 ─────   ──────────────   ───────────────────     ─────────────────────────────────────────────
- L5     Crystal          Muscle memory           Crystallized procedures & reusable skills
+ L7     Trajectory       Procedural log          Host-appended operation events; crystallized into L5 plugins
+ L6     Scene Usage      Retrieval feedback      Per-scene search hit counters feeding L1 decay
+ L5     Crystal          Muscle memory           Reusable capability packages (skills · MCP · tools · prompts · services)
  L4     Archive          Long-term memory        Raw dialogue logs & historical records
  L3     Knowledge        Semantic memory         Multi-source hypergraph knowledge base
  L2     Context          Working memory          Compressed topic structures (4 depth levels)
@@ -141,7 +143,7 @@ The Dream cycle is an automatic memory consolidation process inspired by how the
 | Vector  | Semantic similarity with f32 single-precision via Ollama HTTP embed |
 | Entity  | Fuzzy entity name matching for knowledge graph queries              |
 
-Post-fusion: keyword-overlap scoring, additive scene bonuses for active/recent scenes, then L1 association expansion + L5 crystal matching + L0 profile assembly.
+Post-fusion: keyword-overlap scoring, additive scene bonuses for active/recent scenes, then L1 association expansion + L5 plugin matching + L0 profile assembly.
 
 ## Benchmarks
 
