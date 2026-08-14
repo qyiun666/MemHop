@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
+	"github.com/qyiun666/MemHop/internal/sub/repo"
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
@@ -111,10 +112,10 @@ func mockLLMServer(t *testing.T, content string) *httptest.Server {
 }
 
 // TestCrystallizeFullFlow drives the whole L7 → L5 pipeline against a mock
-// LLM: trajectory events → provider.Crystallize → L5 chain + steps with
-// Path backfilled to the session ID.
+// LLM: trajectory events → provider.Crystallize → L5 plugin with Path
+// backfilled to the session ID.
 func TestCrystallizeFullFlow(t *testing.T) {
-	srv := mockLLMServer(t, `{"chains":[{"title":"重构流程","trigger":"用户要求重构","steps":[{"action":"read_file","parameters":"{\"file\":\"a.go\"}"},{"action":"write_file"}]}]}`)
+	srv := mockLLMServer(t, `{"plugins":[{"name":"重构流程","trigger":"用户要求重构","plugin_type":"workflow","manifest":{"tools":[{"name":"read_file","config":"{\"file\":\"a.go\"}"},{"name":"write_file"}],"prompts":[{"name":"重构提示","config":"先读后写"}]}}]}`)
 	db := &DB{
 		engine: newTestEngine(t),
 		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
@@ -130,42 +131,45 @@ func TestCrystallizeFullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("crystallize: %v", err)
 	}
-	if len(result.ChainIDs) != 1 {
-		t.Fatalf("want 1 chain, got %d", len(result.ChainIDs))
+	if len(result.PluginIDs) != 1 {
+		t.Fatalf("want 1 plugin, got %d", len(result.PluginIDs))
 	}
 
-	// Chain persisted with Path = sessionID.
-	chain, err := db.GetL5(result.ChainIDs[0])
+	// Plugin persisted with Path = sessionID.
+	plugin, err := db.GetPlugin(result.PluginIDs[0])
 	if err != nil {
-		t.Fatalf("get chain: %v", err)
+		t.Fatalf("get plugin: %v", err)
 	}
-	if chain.Path == nil || *chain.Path != session {
-		t.Fatalf("path not backfilled: %+v", chain)
+	if plugin.Path == nil || *plugin.Path != session {
+		t.Fatalf("path not backfilled: %+v", plugin)
 	}
-	if chain.Title != "重构流程" || chain.Trigger != "用户要求重构" {
-		t.Fatalf("chain fields mismatch: %+v", chain)
+	if plugin.Name != "重构流程" || plugin.Trigger != "用户要求重构" || plugin.PluginType != "workflow" {
+		t.Fatalf("plugin fields mismatch: %+v", plugin)
 	}
 
-	// Steps persisted in order with parameters.
-	steps := core.CollectAllActionSteps(db.engine)
-	if len(steps) != 2 {
-		t.Fatalf("want 2 steps, got %d", len(steps))
+	// Manifest persisted: tools in order with config, prompts section kept.
+	tools := plugin.Manifest.Tools
+	if len(tools) != 2 {
+		t.Fatalf("want 2 tools, got %d", len(tools))
 	}
-	if steps[0].StepOrder != 1 || steps[0].Action != "read_file" || steps[1].StepOrder != 2 || steps[1].Action != "write_file" {
-		t.Fatalf("steps mismatch: %+v", steps)
+	if tools[0].Name != "read_file" || tools[1].Name != "write_file" {
+		t.Fatalf("tools mismatch: %+v", tools)
 	}
-	if steps[0].Parameters == nil || *steps[0].Parameters != `{"file":"a.go"}` {
-		t.Fatalf("step parameters mismatch")
+	if tools[0].Config == nil || !strings.Contains(*tools[0].Config, "a.go") {
+		t.Fatalf("tool config mismatch")
 	}
-	if steps[1].Parameters != nil {
-		t.Fatalf("omitted parameters should stay nil")
+	if tools[1].Config != nil {
+		t.Fatalf("omitted config should stay nil")
+	}
+	if len(plugin.Manifest.Prompts) != 1 || plugin.Manifest.Prompts[0].Name != "重构提示" {
+		t.Fatalf("prompts mismatch: %+v", plugin.Manifest.Prompts)
 	}
 }
 
 // TestCrystallizeIdempotent re-crystallizing the same session returns the
-// same chain ID (title:trigger hash) instead of duplicating.
+// same plugin ID (name:trigger hash) instead of duplicating.
 func TestCrystallizeIdempotent(t *testing.T) {
-	srv := mockLLMServer(t, `{"chains":[{"title":"发布流程","trigger":"准备发布时","steps":[{"action":"run_test"}]}]}`)
+	srv := mockLLMServer(t, `{"plugins":[{"name":"发布流程","trigger":"准备发布时","plugin_type":"workflow","manifest":{"tools":[{"name":"run_test"}]}}]}`)
 	db := &DB{
 		engine: newTestEngine(t),
 		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
@@ -182,12 +186,12 @@ func TestCrystallizeIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second crystallize: %v", err)
 	}
-	if len(first.ChainIDs) != 1 || len(second.ChainIDs) != 1 || first.ChainIDs[0] != second.ChainIDs[0] {
-		t.Fatalf("expected idempotent chain ids, got %v vs %v", first.ChainIDs, second.ChainIDs)
+	if len(first.PluginIDs) != 1 || len(second.PluginIDs) != 1 || first.PluginIDs[0] != second.PluginIDs[0] {
+		t.Fatalf("expected idempotent plugin ids, got %v vs %v", first.PluginIDs, second.PluginIDs)
 	}
-	chains := repoListChains(t, db)
-	if len(chains) != 1 {
-		t.Fatalf("want 1 chain after re-crystallize, got %d", len(chains))
+	plugins := repoListPlugins(t, db)
+	if len(plugins) != 1 {
+		t.Fatalf("want 1 plugin after re-crystallize, got %d", len(plugins))
 	}
 }
 
@@ -218,12 +222,12 @@ func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 }
 
 // TestCrystallizeIdempotentPreservesRuntimeFields re-crystallizing the same
-// session reuses the chain ID, keeps host-accumulated runtime fields, and
-// replaces the old step set (no orphans when the new pattern has fewer steps).
+// session reuses the plugin ID, keeps host-accumulated runtime fields, and
+// refreshes the manifest and type label.
 func TestCrystallizeIdempotentPreservesRuntimeFields(t *testing.T) {
 	srv := mockLLMServerSeq(t,
-		`{"chains":[{"title":"发布流程","trigger":"准备发布时","steps":[{"action":"run_test"},{"action":"deploy"}]}]}`,
-		`{"chains":[{"title":"发布流程","trigger":"准备发布时","steps":[{"action":"run_test"}]}]}`,
+		`{"plugins":[{"name":"发布流程","trigger":"准备发布时","plugin_type":"workflow","manifest":{"tools":[{"name":"run_test"},{"name":"deploy"}]}}]}`,
+		`{"plugins":[{"name":"发布流程","trigger":"准备发布时","plugin_type":"skill","manifest":{"skills":[{"name":"发布清单"}]}}]}`,
 	)
 	db := &DB{
 		engine: newTestEngine(t),
@@ -237,34 +241,37 @@ func TestCrystallizeIdempotentPreservesRuntimeFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first crystallize: %v", err)
 	}
-	// Host accumulates runtime fields on the chain.
-	conf := float32(0.9)
-	trig := uint32(5)
-	status := core.ChainActive
-	if err := db.UpdateL5(first.ChainIDs[0], &L5UpdateFields{Confidence: &conf, TriggerCount: &trig, Status: &status}); err != nil {
-		t.Fatalf("update chain: %v", err)
+	// Host accumulates runtime fields on the plugin.
+	plugin, err := db.GetPlugin(first.PluginIDs[0])
+	if err != nil {
+		t.Fatalf("get plugin: %v", err)
 	}
-	// Re-crystallize with a different (shorter) step set.
+	plugin.Confidence = 0.9
+	plugin.TriggerCount = 5
+	plugin.Status = core.PluginActive
+	if err := repo.UpdatePluginL5(db.engine, first.PluginIDs[0], plugin); err != nil {
+		t.Fatalf("update plugin: %v", err)
+	}
+	// Re-crystallize with a different manifest and type label.
 	second, err := db.Crystallize(context.Background(), session)
 	if err != nil {
 		t.Fatalf("second crystallize: %v", err)
 	}
-	if len(first.ChainIDs) != 1 || len(second.ChainIDs) != 1 || first.ChainIDs[0] != second.ChainIDs[0] {
-		t.Fatalf("expected idempotent chain ids, got %v vs %v", first.ChainIDs, second.ChainIDs)
+	if len(first.PluginIDs) != 1 || len(second.PluginIDs) != 1 || first.PluginIDs[0] != second.PluginIDs[0] {
+		t.Fatalf("expected idempotent plugin ids, got %v vs %v", first.PluginIDs, second.PluginIDs)
 	}
-	chain, err := db.GetL5(first.ChainIDs[0])
+	got, err := db.GetPlugin(first.PluginIDs[0])
 	if err != nil {
-		t.Fatalf("get chain: %v", err)
+		t.Fatalf("get plugin: %v", err)
 	}
-	if chain.Confidence != 0.9 || chain.TriggerCount != 5 || chain.Status != core.ChainActive {
-		t.Fatalf("runtime fields reset by re-crystallize: %+v", chain)
+	if got.Confidence != 0.9 || got.TriggerCount != 5 || got.Status != core.PluginActive {
+		t.Fatalf("runtime fields reset by re-crystallize: %+v", got)
 	}
-	if chain.Path == nil || *chain.Path != session {
-		t.Fatalf("path not updated: %+v", chain)
+	if got.PluginType != "skill" || len(got.Manifest.Skills) != 1 || len(got.Manifest.Tools) != 0 {
+		t.Fatalf("manifest not refreshed: %+v", got)
 	}
-	steps := core.CollectAllActionSteps(db.engine)
-	if len(steps) != 1 || steps[0].Action != "run_test" {
-		t.Fatalf("old steps not replaced, got %+v", steps)
+	if got.Path == nil || *got.Path != session {
+		t.Fatalf("path not updated: %+v", got)
 	}
 }
 
@@ -284,44 +291,48 @@ func TestTruncateUTF8(t *testing.T) {
 	}
 }
 
-func repoListChains(t *testing.T, db *DB) []core.ActionChainSlot {
+func repoListPlugins(t *testing.T, db *DB) []core.PluginSlot {
 	t.Helper()
-	out, err := db.ListL5(L5ListQuery{})
+	out, err := db.ListPlugins(PluginListQuery{})
 	if err != nil {
-		t.Fatalf("list chains: %v", err)
+		t.Fatalf("list plugins: %v", err)
 	}
 	return out
 }
 
 func TestParseCrystallizeResponse(t *testing.T) {
 	resp := `{
-  "chains": [
-    {"title": "重构流程", "trigger": "需要重构时", "steps": [
-      {"action": "read_file", "parameters": "{\"file\":\"a.go\"}"},
-      {"action": "write_file"}
-    ]},
-    {"title": "无步骤链", "trigger": "x", "steps": []}
+  "plugins": [
+    {"name": "重构流程", "trigger": "需要重构时", "plugin_type": "workflow", "manifest": {
+      "tools": [{"name": "read_file", "config": "{\"file\":\"a.go\"}"}, {"name": "write_file"}],
+      "skills": [{"name": "s1", "description": "d"}]
+    }},
+    {"name": "无名字", "trigger": "x", "manifest": {}},
+    {"name": "", "trigger": "x", "manifest": {}}
   ]
 }`
 	out, err := parseCrystallizeResponse(resp)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(out.Chains) != 1 {
-		t.Fatalf("want 1 valid chain, got %d", len(out.Chains))
+	if len(out.Plugins) != 2 {
+		t.Fatalf("want 2 valid plugins, got %d", len(out.Plugins))
 	}
-	c := out.Chains[0]
-	if c.Title != "重构流程" || c.Trigger != "需要重构时" {
-		t.Fatalf("chain mismatch: %+v", c)
+	p := out.Plugins[0]
+	if p.Name != "重构流程" || p.Trigger != "需要重构时" || p.PluginType != "workflow" {
+		t.Fatalf("plugin mismatch: %+v", p)
 	}
-	if len(c.Steps) != 2 || c.Steps[0].Action != "read_file" || c.Steps[1].Action != "write_file" {
-		t.Fatalf("steps mismatch: %+v", c.Steps)
+	if len(p.Manifest.Tools) != 2 || p.Manifest.Tools[0].Name != "read_file" || p.Manifest.Tools[1].Name != "write_file" {
+		t.Fatalf("tools mismatch: %+v", p.Manifest.Tools)
 	}
-	if c.Steps[0].Parameters == nil || !strings.Contains(*c.Steps[0].Parameters, "a.go") {
-		t.Fatalf("step parameters mismatch")
+	if p.Manifest.Tools[0].Config == nil || !strings.Contains(*p.Manifest.Tools[0].Config, "a.go") {
+		t.Fatalf("tool config mismatch")
 	}
-	if c.Steps[1].Parameters != nil {
-		t.Fatalf("omitted parameters should stay nil")
+	if p.Manifest.Tools[1].Config != nil {
+		t.Fatalf("omitted config should stay nil")
+	}
+	if len(p.Manifest.Skills) != 1 || p.Manifest.Skills[0].Name != "s1" {
+		t.Fatalf("skills mismatch: %+v", p.Manifest.Skills)
 	}
 }
 

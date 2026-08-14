@@ -10,88 +10,88 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// writeChain writes an L5 action chain record.
-func writeChain(t *testing.T, engine *core.StorageEngine, c *core.ActionChainSlot) {
+// writePlugin writes an L5 plugin record directly.
+func writePlugin(t *testing.T, engine *core.StorageEngine, p *core.PluginSlot) {
 	t.Helper()
-	if err := core.WriteActionChainSlot(engine, c.IDHash, c); err != nil {
-		t.Fatalf("write chain: %v", err)
+	if err := core.WritePluginSlot(engine, p.IDHash, p); err != nil {
+		t.Fatalf("write plugin: %v", err)
 	}
 }
 
-// TestListL5 all, filters and ordering.
-func TestListL5(t *testing.T) {
+// TestListPlugins covers all, filters (status/type/keyword) and ordering.
+func TestListPlugins(t *testing.T) {
 	engine := newTestEngine(t)
 	db := &DB{engine: engine}
-	c1 := core.ActionChainSlot{IDHash: common.HashID("c1"), Title: "修复编译错误", Status: core.ChainActive, TriggerCount: 5, UpdatedAt: 3000}
-	c2 := core.ActionChainSlot{IDHash: common.HashID("c2"), Title: "代码审查流程", Status: core.ChainDraft, TriggerCount: 1, UpdatedAt: 1000}
-	c3 := core.ActionChainSlot{IDHash: common.HashID("c3"), Title: "发布版本", Status: core.ChainActive, TriggerCount: 2, UpdatedAt: 2000}
-	writeChain(t, engine, &c1)
-	writeChain(t, engine, &c2)
-	writeChain(t, engine, &c3)
+	p1 := core.PluginSlot{IDHash: common.HashID("p1"), Name: "修复编译错误", PluginType: "skill", Status: core.PluginActive, TriggerCount: 5, UpdatedAt: 3000}
+	p2 := core.PluginSlot{IDHash: common.HashID("p2"), Name: "代码审查流程", PluginType: "workflow", Status: core.PluginDraft, TriggerCount: 1, UpdatedAt: 1000}
+	p3 := core.PluginSlot{IDHash: common.HashID("p3"), Name: "发布版本", PluginType: "workflow", Status: core.PluginActive, TriggerCount: 2, UpdatedAt: 2000}
+	writePlugin(t, engine, &p1)
+	writePlugin(t, engine, &p2)
+	writePlugin(t, engine, &p3)
 
-	// All: sorted by UpdatedAt desc -> c1, c3, c2.
-	out, err := db.ListL5(L5ListQuery{})
+	// All: sorted by UpdatedAt desc -> p1, p3, p2.
+	out, err := db.ListPlugins(PluginListQuery{})
 	if err != nil {
-		t.Fatalf("ListL5: %v", err)
+		t.Fatalf("ListPlugins: %v", err)
 	}
-	if len(out) != 3 || out[0].IDHash != c1.IDHash || out[1].IDHash != c3.IDHash || out[2].IDHash != c2.IDHash {
-		t.Fatalf("all: want [c1 c3 c2], got %v", idsOfChains(out))
+	if len(out) != 3 || out[0].IDHash != p1.IDHash || out[1].IDHash != p3.IDHash || out[2].IDHash != p2.IDHash {
+		t.Fatalf("all: want [p1 p3 p2], got %v", idsOfPlugins(out))
 	}
 
 	// Status filter.
-	out, err = db.ListL5(L5ListQuery{Status: strPtr("active")})
+	out, err = db.ListPlugins(PluginListQuery{Status: strPtr("active")})
 	if err != nil {
-		t.Fatalf("ListL5 status: %v", err)
+		t.Fatalf("ListPlugins status: %v", err)
 	}
 	if len(out) != 2 {
-		t.Fatalf("status active: want 2 chains, got %d", len(out))
+		t.Fatalf("status active: want 2 plugins, got %d", len(out))
 	}
 
-	// MinTriggerCount filter.
-	min := uint32(2)
-	out, err = db.ListL5(L5ListQuery{MinTriggerCount: &min})
+	// PluginType filter.
+	tp := "workflow"
+	out, err = db.ListPlugins(PluginListQuery{PluginType: &tp})
 	if err != nil {
-		t.Fatalf("ListL5 min trigger: %v", err)
+		t.Fatalf("ListPlugins type: %v", err)
 	}
-	if len(out) != 2 || out[0].IDHash != c1.IDHash {
-		t.Fatalf("min trigger: want [c1 c3], got %v", idsOfChains(out))
+	if len(out) != 2 || out[0].IDHash != p3.IDHash {
+		t.Fatalf("type workflow: want [p3 p2], got %v", idsOfPlugins(out))
 	}
 
-	// Keyword case-insensitive substring match.
-	out, err = db.ListL5(L5ListQuery{Keyword: "编译"})
+	// Keyword case-insensitive substring match on name.
+	out, err = db.ListPlugins(PluginListQuery{Keyword: "编译"})
 	if err != nil {
-		t.Fatalf("ListL5 keyword: %v", err)
+		t.Fatalf("ListPlugins keyword: %v", err)
 	}
-	if len(out) != 1 || out[0].IDHash != c1.IDHash {
-		t.Fatalf("keyword: want [c1], got %v", idsOfChains(out))
+	if len(out) != 1 || out[0].IDHash != p1.IDHash {
+		t.Fatalf("keyword: want [p1], got %v", idsOfPlugins(out))
 	}
 
 	// Combined filters.
-	out, err = db.ListL5(L5ListQuery{Status: strPtr("active"), Keyword: "发布"})
+	out, err = db.ListPlugins(PluginListQuery{Status: strPtr("active"), Keyword: "发布"})
 	if err != nil {
-		t.Fatalf("ListL5 combo: %v", err)
+		t.Fatalf("ListPlugins combo: %v", err)
 	}
-	if len(out) != 1 || out[0].IDHash != c3.IDHash {
-		t.Fatalf("combo: want [c3], got %v", idsOfChains(out))
+	if len(out) != 1 || out[0].IDHash != p3.IDHash {
+		t.Fatalf("combo: want [p3], got %v", idsOfPlugins(out))
 	}
 }
 
-// TestListL5Empty empty db returns an empty slice.
-func TestListL5Empty(t *testing.T) {
+// TestListPluginsEmpty empty db returns an empty slice.
+func TestListPluginsEmpty(t *testing.T) {
 	db := &DB{engine: newTestEngine(t)}
-	out, err := db.ListL5(L5ListQuery{})
+	out, err := db.ListPlugins(PluginListQuery{})
 	if err != nil {
-		t.Fatalf("ListL5: %v", err)
+		t.Fatalf("ListPlugins: %v", err)
 	}
 	if len(out) != 0 {
-		t.Fatalf("want 0 chains, got %d", len(out))
+		t.Fatalf("want 0 plugins, got %d", len(out))
 	}
 }
 
-func idsOfChains(chains []core.ActionChainSlot) []uint64 {
-	out := make([]uint64, len(chains))
-	for i, c := range chains {
-		out[i] = c.IDHash
+func idsOfPlugins(plugins []core.PluginSlot) []uint64 {
+	out := make([]uint64, len(plugins))
+	for i, p := range plugins {
+		out[i] = p.IDHash
 	}
 	return out
 }

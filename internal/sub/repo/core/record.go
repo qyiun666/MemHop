@@ -166,28 +166,16 @@ func CollectAllArchives(engine *StorageEngine) []ArchiveSlot {
 	return collectAll[ArchiveSlot](engine, RecL4Archive)
 }
 
-func ReadActionChainSlot(engine *StorageEngine, id uint64) (*ActionChainSlot, error) {
-	return readJSON[ActionChainSlot](engine, id, "ActionChainSlot")
+func ReadPluginSlot(engine *StorageEngine, id uint64) (*PluginSlot, error) {
+	return readJSON[PluginSlot](engine, id, "PluginSlot")
 }
 
-func WriteActionChainSlot(engine *StorageEngine, id uint64, slot *ActionChainSlot) error {
-	return writeJSON(engine, RecL5ActionChain, id, slot, "ActionChainSlot")
+func WritePluginSlot(engine *StorageEngine, id uint64, slot *PluginSlot) error {
+	return writeJSON(engine, RecL5Plugin, id, slot, "PluginSlot")
 }
 
-func ReadActionStep(engine *StorageEngine, id uint64) (*ActionStep, error) {
-	return readJSON[ActionStep](engine, id, "ActionStep")
-}
-
-func WriteActionStep(engine *StorageEngine, id uint64, step *ActionStep) error {
-	return writeJSON(engine, RecL5ActionStep, id, step, "ActionStep")
-}
-
-func CollectAllActionChains(engine *StorageEngine) []ActionChainSlot {
-	return collectAll[ActionChainSlot](engine, RecL5ActionChain)
-}
-
-func CollectAllActionSteps(engine *StorageEngine) []ActionStep {
-	return collectAll[ActionStep](engine, RecL5ActionStep)
+func CollectAllPlugins(engine *StorageEngine) []PluginSlot {
+	return collectAll[PluginSlot](engine, RecL5Plugin)
 }
 
 func ReadSceneUsageSlot(engine *StorageEngine, id uint64) (*SceneUsageSlot, error) {

@@ -44,13 +44,13 @@ type L3Subgraph = sub.L3Subgraph
 // L4Query is an archive query.
 type L4Query = sub.L4Query
 
-// L5UpdateFields holds partial L5 chain update fields.
-type L5UpdateFields = sub.L5UpdateFields
+// PluginImport is the JSON description of a plugin read from an import path.
+type PluginImport = sub.PluginImport
 
-// L5ListQuery filters the L5 chain list.
-type L5ListQuery = sub.L5ListQuery
+// PluginListQuery filters the L5 plugin list.
+type PluginListQuery = sub.PluginListQuery
 
-// CrystallizeResult reports the L5 chains created from a trajectory.
+// CrystallizeResult reports the L5 plugins created from a trajectory.
 type CrystallizeResult = sub.CrystallizeResult
 
 // ---- core (L0-L5 slot models) types ----
@@ -58,8 +58,8 @@ type CrystallizeResult = sub.CrystallizeResult
 // ContentType is the type of content stored in an ArchiveSlot.
 type ContentType = core.ContentType
 
-// ChainStatus is the lifecycle state of an ActionChainSlot.
-type ChainStatus = core.ChainStatus
+// PluginStatus is the lifecycle state of a PluginSlot.
+type PluginStatus = core.PluginStatus
 
 // SourceKind identifies how an L3 HypergraphSlot was created.
 type SourceKind = core.SourceKind
@@ -91,8 +91,14 @@ type HypergraphEdge = core.HypergraphEdge
 // ArchiveSlot is an L4 user/agent chat message.
 type ArchiveSlot = core.ArchiveSlot
 
-// ActionChainSlot is an L5 action chain.
-type ActionChainSlot = core.ActionChainSlot
+// PluginSlot is an L5 plugin capability package.
+type PluginSlot = core.PluginSlot
+
+// PluginManifest is the structured content of a PluginSlot.
+type PluginManifest = core.PluginManifest
+
+// PluginItem is one entry within a plugin manifest section.
+type PluginItem = core.PluginItem
 
 // SceneUsageSlot is an L6 scene-level retrieval usage feedback record.
 type SceneUsageSlot = core.SceneUsageSlot
@@ -121,9 +127,9 @@ const (
 )
 
 const (
-	ChainDraft      = core.ChainDraft
-	ChainActive     = core.ChainActive
-	ChainDeprecated = core.ChainDeprecated
+	PluginDraft      = core.PluginDraft
+	PluginActive     = core.PluginActive
+	PluginDeprecated = core.PluginDeprecated
 )
 
 const (

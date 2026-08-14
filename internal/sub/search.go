@@ -28,11 +28,11 @@ type SearchQuery struct {
 }
 
 type SearchResult struct {
-	Profile            core.ProfileSlot       `json:"profile"`
-	Contexts           []core.TopicSlot       `json:"contexts"`
-	AssociatedContexts []core.TopicSlot       `json:"associated_contexts"`
-	Crystals           []core.ActionChainSlot `json:"crystals"`
-	NewTopicID         uint64                 `json:"new_topic_id,omitempty"`
+	Profile            core.ProfileSlot  `json:"profile"`
+	Contexts           []core.TopicSlot  `json:"contexts"`
+	AssociatedContexts []core.TopicSlot  `json:"associated_contexts"`
+	Plugins            []core.PluginSlot `json:"plugins"`
+	NewTopicID         uint64            `json:"new_topic_id,omitempty"`
 }
 
 // Search runs three-route retrieval (AutoCreate, DirectedL2ID, default;
@@ -195,7 +195,7 @@ func (db *DB) assembleResult(q SearchQuery, contexts, associated []core.TopicSlo
 		Profile:            db.readProfile(),
 		Contexts:           contexts,
 		AssociatedContexts: associated,
-		Crystals:           db.matchCrystals(q.Text),
+		Plugins:            db.matchPlugins(q.Text),
 		NewTopicID:         newTopicID,
 	}, nil
 }
@@ -208,12 +208,12 @@ func (db *DB) readProfile() core.ProfileSlot {
 	return *slot
 }
 
-func (db *DB) matchCrystals(text string) []core.ActionChainSlot {
-	chains := repo.MatchChainsL5(db.engine, text)
-	if chains == nil {
-		return []core.ActionChainSlot{}
+func (db *DB) matchPlugins(text string) []core.PluginSlot {
+	plugins := repo.MatchPluginsL5(db.engine, text)
+	if plugins == nil {
+		return []core.PluginSlot{}
 	}
-	return chains
+	return plugins
 }
 
 // writeCentroid encodes text as a centroid vector record; encoder failure

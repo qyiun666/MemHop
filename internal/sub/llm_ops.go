@@ -362,47 +362,51 @@ func deriveMBTIType(m MBTIScore) string {
 	})
 }
 
-// CrystallizeStep is one step of a crystallized action chain.
-type CrystallizeStep struct {
-	Action     string  `json:"action"`
-	Parameters *string `json:"parameters,omitempty"`
-}
-
-// CrystallizeChain is one reusable behavior pattern extracted from a trajectory.
-type CrystallizeChain struct {
-	Title   string            `json:"title"`
-	Trigger string            `json:"trigger"`
-	Steps   []CrystallizeStep `json:"steps"`
+// CrystallizePlugin is one reusable capability package extracted from a
+// trajectory; its manifest follows the L5 plugin layout.
+type CrystallizePlugin struct {
+	Name       string              `json:"name"`
+	Trigger    string              `json:"trigger"`
+	PluginType string              `json:"plugin_type"`
+	Manifest   core.PluginManifest `json:"manifest"`
 }
 
 type CrystallizeOutput struct {
-	Chains []CrystallizeChain `json:"chains"`
+	Plugins []CrystallizePlugin `json:"plugins"`
 }
 
-const systemCrystallize = `You analyze an agent's operation trajectory and extract reusable behavior patterns (action chains).
+const systemCrystallize = `You analyze an agent's operation trajectory and extract reusable capabilities as plugins.
 
 Rules:
-- Only extract patterns that are clearly reusable (appear at least twice or are obviously generic procedures)
-- A pattern is an ordered sequence of tool calls that accomplishes one goal; omit tool results
-- trigger: the condition that should invoke this pattern
-- Do not invent tools that are not present in the trajectory
-- When no reusable pattern exists, output chains as an empty array
+- Only extract capabilities that are clearly reusable (appear at least twice or are obviously generic procedures)
+- A plugin is a self-contained capability package; choose its primary type label (plugin_type) from: skill, mcp, toolkit, workflow, service, or another short label that fits
+- Fill the manifest sections that apply (skills / mcps / tools / prompts / services); omit empty sections
+- Each manifest entry has a name, an optional description, and an optional config (JSON string or template text)
+- Do not invent tools or services that are not present in the trajectory
+- When no reusable capability exists, output plugins as an empty array
 
 Output ONLY valid JSON in this exact shape (no markdown, no code fences):
 {
-  "chains": [
+  "plugins": [
     {
-      "title": "<short pattern title>",
-      "trigger": "<when this pattern applies>",
-      "steps": [{"action": "<tool name>", "parameters": "<json string or omitted>"}]
+      "name": "<short plugin name>",
+      "trigger": "<when this plugin applies>",
+      "plugin_type": "<skill|mcp|toolkit|workflow|service|...>",
+      "manifest": {
+        "skills": [{"name": "...", "description": "...", "config": "..."}],
+        "mcps": [{"name": "...", "config": "<endpoint or connection JSON>"}],
+        "tools": [{"name": "<tool name>", "description": "..."}],
+        "prompts": [{"name": "...", "config": "<prompt template>"}],
+        "services": [{"name": "...", "config": "<service definition JSON>"}]
+      }
     }
   ]
 }`
 
-// Crystallize extracts reusable action chains from a trajectory event batch.
+// Crystallize extracts reusable plugins from a trajectory event batch.
 func (p *Provider) Crystallize(ctx context.Context, events []core.TrajectorySlot) (*CrystallizeOutput, error) {
 	if len(events) == 0 {
-		return &CrystallizeOutput{Chains: []CrystallizeChain{}}, nil
+		return &CrystallizeOutput{Plugins: []CrystallizePlugin{}}, nil
 	}
 	user := buildCrystallizePrompt(events)
 	response, err := p.chat(ctx, systemCrystallize, user, p.maxOutputTokens, 0.0, 1.0)
@@ -419,7 +423,7 @@ func buildCrystallizePrompt(events []core.TrajectorySlot) string {
 	for _, ev := range events {
 		fmt.Fprintf(&b, "[seq=%d type=%s] %s\n", ev.Seq, ev.EventType, ev.Payload)
 	}
-	b.WriteString("\nExtract reusable behavior patterns now.")
+	b.WriteString("\nExtract reusable plugins now.")
 	return b.String()
 }
 
@@ -427,37 +431,37 @@ func buildCrystallizePrompt(events []core.TrajectorySlot) string {
 func parseCrystallizeResponse(response string) (*CrystallizeOutput, error) {
 	cleaned := stripCodeBlocks(response)
 	var raw struct {
-		Chains []struct {
-			Title   string `json:"title"`
-			Trigger string `json:"trigger"`
-			Steps   []struct {
-				Action     string  `json:"action"`
-				Parameters *string `json:"parameters"`
-			} `json:"steps"`
-		} `json:"chains"`
+		Plugins []struct {
+			Name       string `json:"name"`
+			Trigger    string `json:"trigger"`
+			PluginType string `json:"plugin_type"`
+			Manifest   struct {
+				Skills   []core.PluginItem `json:"skills"`
+				MCPs     []core.PluginItem `json:"mcps"`
+				Tools    []core.PluginItem `json:"tools"`
+				Prompts  []core.PluginItem `json:"prompts"`
+				Services []core.PluginItem `json:"services"`
+			} `json:"manifest"`
+		} `json:"plugins"`
 	}
 	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
 		return nil, common.NewError(common.ErrLLM, "crystallize response parse failed", err)
 	}
-	out := &CrystallizeOutput{Chains: make([]CrystallizeChain, 0, len(raw.Chains))}
-	for _, c := range raw.Chains {
-		if strings.TrimSpace(c.Title) == "" || strings.TrimSpace(c.Trigger) == "" {
+	out := &CrystallizeOutput{Plugins: make([]CrystallizePlugin, 0, len(raw.Plugins))}
+	for _, p := range raw.Plugins {
+		if strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.Trigger) == "" {
 			continue
 		}
-		chain := CrystallizeChain{
-			Title: c.Title, Trigger: c.Trigger,
-			Steps: make([]CrystallizeStep, 0, len(c.Steps)),
-		}
-		for _, s := range c.Steps {
-			if strings.TrimSpace(s.Action) == "" {
-				continue
-			}
-			chain.Steps = append(chain.Steps, CrystallizeStep{Action: s.Action, Parameters: s.Parameters})
-		}
-		if len(chain.Steps) == 0 {
-			continue
-		}
-		out.Chains = append(out.Chains, chain)
+		out.Plugins = append(out.Plugins, CrystallizePlugin{
+			Name: p.Name, Trigger: p.Trigger, PluginType: p.PluginType,
+			Manifest: core.PluginManifest{
+				Skills:   p.Manifest.Skills,
+				MCPs:     p.Manifest.MCPs,
+				Tools:    p.Manifest.Tools,
+				Prompts:  p.Manifest.Prompts,
+				Services: p.Manifest.Services,
+			},
+		})
 	}
 	return out, nil
 }

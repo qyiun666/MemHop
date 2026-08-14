@@ -35,24 +35,24 @@ func (c ContentType) MarshalJSON() ([]byte, error) { return common.EnumMarshal(c
 
 func (c *ContentType) UnmarshalJSON(data []byte) error { return common.EnumAssign(c, data) }
 
-// ChainStatus represents the lifecycle state of an ActionChainSlot.
-type ChainStatus uint8
+// PluginStatus represents the lifecycle state of a PluginSlot.
+type PluginStatus uint8
 
 const (
-	ChainDraft      ChainStatus = 0
-	ChainActive     ChainStatus = 1
-	ChainDeprecated ChainStatus = 2
+	PluginDraft      PluginStatus = 0
+	PluginActive     PluginStatus = 1
+	PluginDeprecated PluginStatus = 2
 )
 
-var chainStatusNames = map[ChainStatus]string{
-	ChainDraft: "draft", ChainActive: "active", ChainDeprecated: "deprecated",
+var pluginStatusNames = map[PluginStatus]string{
+	PluginDraft: "draft", PluginActive: "active", PluginDeprecated: "deprecated",
 }
 
-func (c ChainStatus) String() string { return common.EnumString(c, chainStatusNames, "ChainStatus") }
+func (c PluginStatus) String() string { return common.EnumString(c, pluginStatusNames, "PluginStatus") }
 
-func (c ChainStatus) MarshalJSON() ([]byte, error) { return common.EnumMarshal(c) }
+func (c PluginStatus) MarshalJSON() ([]byte, error) { return common.EnumMarshal(c) }
 
-func (c *ChainStatus) UnmarshalJSON(data []byte) error { return common.EnumAssign(c, data) }
+func (c *PluginStatus) UnmarshalJSON(data []byte) error { return common.EnumAssign(c, data) }
 
 // HyperedgeKind classifies L1 hyperedges in the hypergraph skeleton.
 type HyperedgeKind uint8
@@ -299,29 +299,41 @@ type ArchiveSlot struct {
 	Metadata    *string     `json:"metadata,omitempty"`
 }
 
-// ActionChainSlot is an L5 action chain.
-type ActionChainSlot struct {
-	IDHash        uint64      `json:"id_hash"`
-	Title         string      `json:"title"`
-	Trigger       string      `json:"trigger"`
-	Status        ChainStatus `json:"status"`
-	Confidence    float32     `json:"confidence"`
-	SuccessRate   float32     `json:"success_rate"`
-	TriggerCount  uint32      `json:"trigger_count"`
-	LastTriggered int64       `json:"last_triggered"`
-	CreatedAt     int64       `json:"created_at"`
-	UpdatedAt     int64       `json:"updated_at"`
-	Path          *string     `json:"path,omitempty"` // crystallization source or user-specified location
+// PluginSlot is an L5 plugin: a self-contained capability package with a
+// structured manifest (skills / MCPs / tools / prompts / services). The ID
+// (hash(name:trigger)) makes import and crystallization idempotent.
+type PluginSlot struct {
+	IDHash        uint64         `json:"id_hash"`
+	Name          string         `json:"name"`
+	Trigger       string         `json:"trigger"`
+	PluginType    string         `json:"plugin_type"` // primary type label: skill/mcp/toolkit/workflow/...
+	Status        PluginStatus   `json:"status"`
+	Confidence    float32        `json:"confidence"`
+	SuccessRate   float32        `json:"success_rate"`
+	TriggerCount  uint32         `json:"trigger_count"`
+	LastTriggered int64          `json:"last_triggered"`
+	Manifest      PluginManifest `json:"manifest"`
+	Path          *string        `json:"path,omitempty"` // import path or crystallization source
+	CreatedAt     int64          `json:"created_at"`
+	UpdatedAt     int64          `json:"updated_at"`
 }
 
-// ActionStep is an individual step within an ActionChainSlot.
-type ActionStep struct {
-	IDHash     uint64  `json:"id_hash"`
-	ChainID    uint64  `json:"chain_id"`
-	StepOrder  uint16  `json:"step_order"`
-	Action     string  `json:"action"`
-	Parameters *string `json:"parameters,omitempty"`
-	CreatedAt  int64   `json:"created_at"`
+// PluginManifest is the structured content of a PluginSlot; each section
+// holds homogeneous entries. MemHop stores but does not interpret the
+// Config payloads.
+type PluginManifest struct {
+	Skills   []PluginItem `json:"skills,omitempty"`
+	MCPs     []PluginItem `json:"mcps,omitempty"`
+	Tools    []PluginItem `json:"tools,omitempty"`
+	Prompts  []PluginItem `json:"prompts,omitempty"`
+	Services []PluginItem `json:"services,omitempty"`
+}
+
+// PluginItem is one entry within a manifest section.
+type PluginItem struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description,omitempty"`
+	Config      *string `json:"config,omitempty"` // section-specific definition (JSON string or template)
 }
 
 // SceneUsageSlot is an L6 scene-level retrieval usage feedback record,

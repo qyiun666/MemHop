@@ -394,27 +394,40 @@ func TestArchiveSlotImagePath(t *testing.T) {
 	}
 }
 
-func TestActionChainSlotRoundtrip(t *testing.T) {
-	c := ActionChainSlot{
-		IDHash: 123456789, Title: "Deploy Service",
-		Trigger: "keyword:deploy AND service:production",
-		Status:  ChainActive, Confidence: 0.85,
+func TestPluginSlotRoundtrip(t *testing.T) {
+	cfg := `{"endpoint":"http://localhost:9000"}`
+	c := PluginSlot{
+		IDHash: 123456789, Name: "Deploy Service",
+		Trigger:    "keyword:deploy AND service:production",
+		PluginType: "workflow", Status: PluginActive, Confidence: 0.85,
 		SuccessRate: 0.92, TriggerCount: 5,
 		LastTriggered: 1000000,
-		CreatedAt:     900000, UpdatedAt: 950000,
+		Manifest: PluginManifest{
+			Skills: []PluginItem{{Name: "deploy-checklist", Description: "pre-deploy checks"}},
+			MCPs:   []PluginItem{{Name: "deploy-mcp", Config: &cfg}},
+			Tools:  []PluginItem{{Name: "run_test"}},
+			Prompts: []PluginItem{{Name: "deploy-review",
+				Config: strPtr("review the deploy plan")}},
+			Services: []PluginItem{{Name: "registry", Config: &cfg}},
+		},
+		CreatedAt: 900000, UpdatedAt: 950000,
 	}
-	var got ActionChainSlot
+	var got PluginSlot
 	jsonRoundtrip(t, c, &got)
-	if got.Status != ChainActive || got.SuccessRate != 0.92 {
+	if got.Status != PluginActive || got.SuccessRate != 0.92 {
 		t.Fatalf("mismatch: %+v", got)
+	}
+	if len(got.Manifest.Skills) != 1 || len(got.Manifest.MCPs) != 1 ||
+		len(got.Manifest.Tools) != 1 || len(got.Manifest.Prompts) != 1 || len(got.Manifest.Services) != 1 {
+		t.Fatalf("manifest mismatch: %+v", got.Manifest)
 	}
 }
 
-func TestActionChainAllStatuses(t *testing.T) {
-	statuses := []ChainStatus{ChainDraft, ChainActive, ChainDeprecated}
+func TestPluginAllStatuses(t *testing.T) {
+	statuses := []PluginStatus{PluginDraft, PluginActive, PluginDeprecated}
 	for _, s := range statuses {
-		c := ActionChainSlot{IDHash: 1, Status: s}
-		var got ActionChainSlot
+		c := PluginSlot{IDHash: 1, Status: s}
+		var got PluginSlot
 		jsonRoundtrip(t, c, &got)
 		if got.Status != s {
 			t.Fatalf("status mismatch: want %d got %d", s, got.Status)
@@ -422,31 +435,21 @@ func TestActionChainAllStatuses(t *testing.T) {
 	}
 }
 
-func TestActionStepRoundtrip(t *testing.T) {
-	s := ActionStep{
-		IDHash: 1, ChainID: 100, StepOrder: 1,
-		Action: "search", Parameters: strPtr(`{"query":"Rust docs"}`),
-		CreatedAt: 1000,
-	}
-	var got ActionStep
-	jsonRoundtrip(t, s, &got)
-	if got.Action != "search" || got.StepOrder != 1 {
-		t.Fatalf("mismatch: %+v", got)
-	}
-	if got.Parameters == nil || *got.Parameters != `{"query":"Rust docs"}` {
-		t.Fatalf("parameters mismatch")
+func TestPluginManifestEmptySectionsOmitted(t *testing.T) {
+	c := PluginSlot{IDHash: 1, Manifest: PluginManifest{Skills: []PluginItem{{Name: "s"}}}}
+	var got PluginSlot
+	jsonRoundtrip(t, c, &got)
+	if len(got.Manifest.Skills) != 1 || got.Manifest.MCPs != nil {
+		t.Fatalf("mismatch: %+v", got.Manifest)
 	}
 }
 
-func TestActionStepNoParams(t *testing.T) {
-	s := ActionStep{
-		IDHash: 2, ChainID: 100, StepOrder: 2,
-		Action: "summarize", Parameters: nil, CreatedAt: 2000,
-	}
-	var got ActionStep
-	jsonRoundtrip(t, s, &got)
-	if got.Parameters != nil {
-		t.Fatalf("expected nil parameters")
+func TestPluginItemConfigNil(t *testing.T) {
+	p := PluginItem{Name: "tool", Config: nil}
+	var got PluginItem
+	jsonRoundtrip(t, p, &got)
+	if got.Config != nil {
+		t.Fatalf("expected nil config")
 	}
 }
 
@@ -475,12 +478,12 @@ func TestTrajectorySlotRoundtrip(t *testing.T) {
 	}
 }
 
-func TestActionChainSlotPathRoundtrip(t *testing.T) {
-	c := ActionChainSlot{
-		IDHash: 1, Title: "t", Trigger: "tr", Status: ChainActive,
+func TestPluginSlotPathRoundtrip(t *testing.T) {
+	c := PluginSlot{
+		IDHash: 1, Name: "t", Trigger: "tr", Status: PluginActive,
 		Path: strPtr("session:abc"),
 	}
-	var got ActionChainSlot
+	var got PluginSlot
 	jsonRoundtrip(t, c, &got)
 	if got.Path == nil || *got.Path != "session:abc" {
 		t.Fatalf("path mismatch: %+v", got)
@@ -516,14 +519,14 @@ func TestContentTypeValues(t *testing.T) {
 	}
 }
 
-func TestChainStatusValues(t *testing.T) {
+func TestPluginStatusValues(t *testing.T) {
 	tests := []struct {
-		cs   ChainStatus
+		cs   PluginStatus
 		val  uint8
 		name string
 	}{
-		{ChainDraft, 0, "draft"}, {ChainActive, 1, "active"},
-		{ChainDeprecated, 2, "deprecated"},
+		{PluginDraft, 0, "draft"}, {PluginActive, 1, "active"},
+		{PluginDeprecated, 2, "deprecated"},
 	}
 	for _, tt := range tests {
 		if uint8(tt.cs) != tt.val {

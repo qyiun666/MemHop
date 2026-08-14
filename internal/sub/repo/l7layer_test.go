@@ -58,94 +58,97 @@ func TestDeleteTrajectory(t *testing.T) {
 	}
 }
 
-func TestCreateChainL5WithPathAndSteps(t *testing.T) {
+func TestCreateOrUpdatePluginL5PersistsManifest(t *testing.T) {
 	engine := tempEngine(t)
 	path := "session:abc"
-	chainID, err := CreateChainL5WithPath(engine, "整理代码", "用户要求重构", &path)
+	cfg := `{"endpoint":"http://localhost:9000"}`
+	manifest := core.PluginManifest{
+		Skills: []core.PluginItem{{Name: "deploy-checklist"}},
+		MCPs:   []core.PluginItem{{Name: "deploy-mcp", Config: &cfg}},
+		Tools:  []core.PluginItem{{Name: "run_test"}},
+	}
+	pluginID, existed, err := CreateOrUpdatePluginL5(engine, "整理代码", "用户要求重构", "workflow", manifest, &path)
 	if err != nil {
-		t.Fatalf("create chain: %v", err)
+		t.Fatalf("create plugin: %v", err)
 	}
-	chain, err := GetChainL5(engine, common.FormatHash(chainID))
+	if existed {
+		t.Fatal("fresh plugin should not exist yet")
+	}
+	plugin, err := GetPluginL5(engine, common.FormatHash(pluginID))
 	if err != nil {
-		t.Fatalf("get chain: %v", err)
+		t.Fatalf("get plugin: %v", err)
 	}
-	if chain.Path == nil || *chain.Path != "session:abc" {
-		t.Fatalf("path not persisted: %+v", chain)
+	if plugin.Path == nil || *plugin.Path != "session:abc" {
+		t.Fatalf("path not persisted: %+v", plugin)
 	}
-	params := `{"file":"a.go"}`
-	if _, err := CreateStepL5(engine, chainID, 1, "read_file", &params); err != nil {
-		t.Fatalf("create step: %v", err)
+	if plugin.PluginType != "workflow" || len(plugin.Manifest.Skills) != 1 ||
+		len(plugin.Manifest.MCPs) != 1 || len(plugin.Manifest.Tools) != 1 {
+		t.Fatalf("manifest mismatch: %+v", plugin)
 	}
-	steps := core.CollectAllActionSteps(engine)
-	if len(steps) != 1 || steps[0].ChainID != chainID || steps[0].StepOrder != 1 || steps[0].Action != "read_file" {
-		t.Fatalf("step mismatch: %+v", steps)
-	}
-	if steps[0].Parameters == nil || *steps[0].Parameters != params {
-		t.Fatalf("step parameters mismatch")
+	if plugin.Manifest.MCPs[0].Config == nil || *plugin.Manifest.MCPs[0].Config != cfg {
+		t.Fatalf("mcp config mismatch")
 	}
 }
 
-func TestCreateOrUpdateChainL5WithPathPreservesFields(t *testing.T) {
+func TestCreateOrUpdatePluginL5PreservesFields(t *testing.T) {
 	engine := tempEngine(t)
 	path1 := "session:a"
-	id, existed, err := CreateOrUpdateChainL5WithPath(engine, "t", "tr", &path1)
+	id, existed, err := CreateOrUpdatePluginL5(engine, "t", "tr", "skill", core.PluginManifest{Skills: []core.PluginItem{{Name: "s1"}}}, &path1)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if existed {
-		t.Fatal("fresh chain should not exist yet")
+		t.Fatal("fresh plugin should not exist yet")
 	}
 	// Host accumulates runtime fields.
-	chain, err := GetChainL5(engine, common.FormatHash(id))
+	plugin, err := GetPluginL5(engine, common.FormatHash(id))
 	if err != nil {
-		t.Fatalf("get chain: %v", err)
+		t.Fatalf("get plugin: %v", err)
 	}
-	chain.Confidence = 0.8
-	chain.TriggerCount = 3
-	if err := UpdateChainL5(engine, common.FormatHash(id), chain); err != nil {
-		t.Fatalf("update chain: %v", err)
+	plugin.Confidence = 0.8
+	plugin.TriggerCount = 3
+	if err := UpdatePluginL5(engine, common.FormatHash(id), plugin); err != nil {
+		t.Fatalf("update plugin: %v", err)
 	}
-	// Re-create with a new path: runtime fields must survive, Path refreshed.
+	// Re-create with a new path and manifest: runtime fields must survive,
+	// Path/Manifest/PluginType refreshed.
 	path2 := "session:b"
-	id2, existed, err := CreateOrUpdateChainL5WithPath(engine, "t", "tr", &path2)
+	id2, existed, err := CreateOrUpdatePluginL5(engine, "t", "tr", "workflow", core.PluginManifest{Tools: []core.PluginItem{{Name: "tool"}}}, &path2)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if !existed || id2 != id {
-		t.Fatalf("expected existing chain id %d, got %d (existed=%v)", id, id2, existed)
+		t.Fatalf("expected existing plugin id %d, got %d (existed=%v)", id, id2, existed)
 	}
-	got, err := GetChainL5(engine, common.FormatHash(id2))
+	got, err := GetPluginL5(engine, common.FormatHash(id2))
 	if err != nil {
-		t.Fatalf("get updated chain: %v", err)
+		t.Fatalf("get updated plugin: %v", err)
 	}
 	if got.Confidence != 0.8 || got.TriggerCount != 3 {
 		t.Fatalf("runtime fields lost: %+v", got)
+	}
+	if got.PluginType != "workflow" || len(got.Manifest.Tools) != 1 {
+		t.Fatalf("manifest not refreshed: %+v", got)
 	}
 	if got.Path == nil || *got.Path != "session:b" {
 		t.Fatalf("path not refreshed: %+v", got)
 	}
 }
 
-func TestDeleteStepsL5(t *testing.T) {
+func TestDeletePluginL5(t *testing.T) {
 	engine := tempEngine(t)
-	id, err := CreateChainL5WithPath(engine, "t", "tr", nil)
+	id, _, err := CreateOrUpdatePluginL5(engine, "t", "tr", "skill", core.PluginManifest{}, nil)
 	if err != nil {
-		t.Fatalf("create chain: %v", err)
+		t.Fatalf("create plugin: %v", err)
 	}
-	if _, err := CreateStepL5(engine, id, 1, "a", nil); err != nil {
-		t.Fatalf("step 1: %v", err)
+	if !DeletePluginL5(engine, common.FormatHash(id)) {
+		t.Fatalf("delete plugin failed")
 	}
-	if _, err := CreateStepL5(engine, id, 2, "b", nil); err != nil {
-		t.Fatalf("step 2: %v", err)
+	if plugins := core.CollectAllPlugins(engine); len(plugins) != 0 {
+		t.Fatalf("want 0 plugins, got %+v", plugins)
 	}
-	if err := DeleteStepsL5(engine, id); err != nil {
-		t.Fatalf("delete steps: %v", err)
-	}
-	if steps := core.CollectAllActionSteps(engine); len(steps) != 0 {
-		t.Fatalf("want 0 steps, got %+v", steps)
-	}
-	// Chain record itself must survive.
-	if _, err := GetChainL5(engine, common.FormatHash(id)); err != nil {
-		t.Fatalf("chain should survive step deletion: %v", err)
+	// Deleting a missing record is idempotent (no error).
+	if !DeletePluginL5(engine, common.FormatHash(id)) {
+		t.Fatalf("second delete should stay idempotent")
 	}
 }

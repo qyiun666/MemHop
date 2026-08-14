@@ -12,42 +12,32 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-// Thin wrapper; see internal/sub/l5.go ((db *DB) GetL5).
-func (db *DB) GetL5(id string) (*core.ActionChainSlot, error) {
-	return db.DB.GetL5(id)
+// Thin wrapper; see internal/sub/l5.go ((db *DB) GetPlugin).
+func (db *DB) GetPlugin(id string) (*core.PluginSlot, error) {
+	return db.DB.GetPlugin(id)
 }
 
 // Thin wrapper; write op, delegates under the write lock.
-func (db *DB) CreateL5(title, trigger string) (string, error) {
+func (db *DB) ImportPlugin(path string) (string, error) {
 	db.DB.Lock()
 	defer db.DB.Unlock()
 	if db.DB.IsClosed() {
 		return "", common.NewError(common.ErrClosed, "database is closed")
 	}
-	return db.DB.CreateL5(title, trigger)
+	return db.DB.ImportPlugin(path)
 }
 
 // Thin wrapper; write op, delegates under the write lock.
-func (db *DB) UpdateL5(id string, fields *sub.L5UpdateFields) error {
+func (db *DB) DeletePlugin(id string) error {
 	db.DB.Lock()
 	defer db.DB.Unlock()
 	if db.DB.IsClosed() {
 		return common.NewError(common.ErrClosed, "database is closed")
 	}
-	return db.DB.UpdateL5(id, fields)
+	return db.DB.DeletePlugin(id)
 }
 
-// Thin wrapper; write op, delegates under the write lock.
-func (db *DB) DeleteL5(id string) error {
-	db.DB.Lock()
-	defer db.DB.Unlock()
-	if db.DB.IsClosed() {
-		return common.NewError(common.ErrClosed, "database is closed")
-	}
-	return db.DB.DeleteL5(id)
-}
-
-// Thin wrapper; see internal/sub/l5.go ((db *DB) ListL5).
-func (db *DB) ListL5(q sub.L5ListQuery) ([]core.ActionChainSlot, error) {
-	return db.DB.ListL5(q)
+// Thin wrapper; see internal/sub/l5.go ((db *DB) ListPlugins).
+func (db *DB) ListPlugins(q sub.PluginListQuery) ([]core.PluginSlot, error) {
+	return db.DB.ListPlugins(q)
 }

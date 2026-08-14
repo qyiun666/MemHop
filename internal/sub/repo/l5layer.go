@@ -1,7 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L5 action chain operations; deletion cascades to ActionSteps.
+// L5 plugin operations: query / import (path) / crystallization upsert /
+// update / delete / list / match.
+
 package repo
 
 import (
@@ -14,143 +16,85 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/index"
 )
 
-// CreateChainL5 creates an action chain; ID = hash(title:trigger).
-func CreateChainL5(engine *core.StorageEngine, title, trigger string) (uint64, error) {
-	return CreateChainL5WithPath(engine, title, trigger, nil)
-}
-
-// CreateChainL5WithPath creates an action chain with an optional location;
-// ID = hash(title:trigger), so re-crystallizing the same pattern is idempotent.
-func CreateChainL5WithPath(engine *core.StorageEngine, title, trigger string, path *string) (uint64, error) {
-	chainID := common.HashID(fmt.Sprintf("%s:%s", title, trigger))
+// CreateOrUpdatePluginL5 creates a plugin or, when the same name:trigger
+// already exists, preserves its runtime fields (Confidence/SuccessRate/
+// TriggerCount/...) and only refreshes Manifest, PluginType, Path and
+// UpdatedAt. Returns the plugin ID and whether it already existed.
+func CreateOrUpdatePluginL5(engine *core.StorageEngine, name, trigger, pluginType string, manifest core.PluginManifest, path *string) (uint64, bool, error) {
+	pluginID := common.HashID(fmt.Sprintf("%s:%s", name, trigger))
 	now := time.Now().UnixMilli()
-	chain := &core.ActionChainSlot{
-		IDHash:    chainID,
-		Title:     title,
-		Trigger:   trigger,
-		Path:      path,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-	if err := core.WriteActionChainSlot(engine, chainID, chain); err != nil {
-		return 0, err
-	}
-	return chainID, nil
-}
-
-// CreateOrUpdateChainL5WithPath creates a chain or, when the same
-// title:trigger already exists, preserves its runtime fields
-// (Confidence/SuccessRate/TriggerCount/...) and only refreshes Path and
-// UpdatedAt. Returns the chain ID and whether it already existed.
-func CreateOrUpdateChainL5WithPath(engine *core.StorageEngine, title, trigger string, path *string) (uint64, bool, error) {
-	chainID := common.HashID(fmt.Sprintf("%s:%s", title, trigger))
-	now := time.Now().UnixMilli()
-	if existing, err := core.ReadActionChainSlot(engine, chainID); err == nil {
+	if existing, err := core.ReadPluginSlot(engine, pluginID); err == nil {
+		existing.Manifest = manifest
+		existing.PluginType = pluginType
 		existing.Path = path
 		existing.UpdatedAt = now
-		if err := core.WriteActionChainSlot(engine, chainID, existing); err != nil {
+		if err := core.WritePluginSlot(engine, pluginID, existing); err != nil {
 			return 0, true, err
 		}
-		return chainID, true, nil
+		return pluginID, true, nil
 	}
-	chain := &core.ActionChainSlot{
-		IDHash:    chainID,
-		Title:     title,
-		Trigger:   trigger,
-		Path:      path,
-		CreatedAt: now,
-		UpdatedAt: now,
+	plugin := &core.PluginSlot{
+		IDHash:     pluginID,
+		Name:       name,
+		Trigger:    trigger,
+		PluginType: pluginType,
+		Status:     core.PluginActive,
+		Manifest:   manifest,
+		Path:       path,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
-	if err := core.WriteActionChainSlot(engine, chainID, chain); err != nil {
+	if err := core.WritePluginSlot(engine, pluginID, plugin); err != nil {
 		return 0, false, err
 	}
-	return chainID, false, nil
+	return pluginID, false, nil
 }
 
-// DeleteStepsL5 removes all steps of a chain (keeps the chain record),
-// so re-crystallization with fewer steps leaves no orphan steps behind.
-func DeleteStepsL5(engine *core.StorageEngine, chainID uint64) error {
-	var targets []uint64
-	for _, step := range core.CollectAllActionSteps(engine) {
-		if step.ChainID == chainID {
-			targets = append(targets, step.IDHash)
-		}
-	}
-	if len(targets) == 0 {
-		return nil
-	}
-	_, err := engine.DeleteRecordBatch(targets)
-	return err
-}
-
-// CreateStepL5 creates one action step; ID = hash(chainID:stepOrder).
-func CreateStepL5(engine *core.StorageEngine, chainID uint64, stepOrder uint16, action string, params *string) (uint64, error) {
-	stepID := common.HashID(fmt.Sprintf("%d:%d", chainID, stepOrder))
-	step := &core.ActionStep{
-		IDHash:     stepID,
-		ChainID:    chainID,
-		StepOrder:  stepOrder,
-		Action:     action,
-		Parameters: params,
-		CreatedAt:  time.Now().UnixMilli(),
-	}
-	if err := core.WriteActionStep(engine, stepID, step); err != nil {
-		return 0, err
-	}
-	return stepID, nil
-}
-
-func GetChainL5(engine *core.StorageEngine, id string) (*core.ActionChainSlot, error) {
+func GetPluginL5(engine *core.StorageEngine, id string) (*core.PluginSlot, error) {
 	idHash, err := common.ParseID(id)
 	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse chain id", err)
+		return nil, common.NewError(common.ErrInvalidQuery, "parse plugin id", err)
 	}
-	return core.ReadActionChainSlot(engine, idHash)
+	return core.ReadPluginSlot(engine, idHash)
 }
 
-func UpdateChainL5(engine *core.StorageEngine, id string, slot *core.ActionChainSlot) error {
+func UpdatePluginL5(engine *core.StorageEngine, id string, slot *core.PluginSlot) error {
 	idHash, err := common.ParseID(id)
 	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse chain id", err)
+		return common.NewError(common.ErrInvalidQuery, "parse plugin id", err)
 	}
 	slot.IDHash = idHash
 	slot.UpdatedAt = time.Now().UnixMilli()
-	return core.WriteActionChainSlot(engine, idHash, slot)
+	return core.WritePluginSlot(engine, idHash, slot)
 }
 
-// DeleteChainL5 deletes all ActionSteps of the chain plus the chain record
-// in one batch.
-func DeleteChainL5(engine *core.StorageEngine, id string) bool {
-	chainHash, err := common.ParseID(id)
+// DeletePluginL5 removes a plugin record (plugins have no child records).
+func DeletePluginL5(engine *core.StorageEngine, id string) bool {
+	pluginHash, err := common.ParseID(id)
 	if err != nil {
 		return false
 	}
-	var targets []uint64
-	for _, step := range core.CollectAllActionSteps(engine) {
-		if step.ChainID == chainHash {
-			targets = append(targets, step.IDHash)
-		}
-	}
-	targets = append(targets, chainHash)
-	_, err = engine.DeleteRecordBatch(targets)
+	_, err = engine.DeleteRecordBatch([]uint64{pluginHash})
 	return err == nil
 }
 
-func ListChainsL5(engine *core.StorageEngine) []core.ActionChainSlot {
-	return core.CollectAllActionChains(engine)
+func ListPluginsL5(engine *core.StorageEngine) []core.PluginSlot {
+	return core.CollectAllPlugins(engine)
 }
 
-func MatchChainsL5(engine *core.StorageEngine, query string) []core.ActionChainSlot {
+// MatchPluginsL5 returns plugins whose name or trigger contains any query
+// term (case-insensitive substring, tokenized by the shared tokenizer).
+func MatchPluginsL5(engine *core.StorageEngine, query string) []core.PluginSlot {
 	terms := index.Tokenize(query)
 	if len(terms) == 0 {
 		return nil
 	}
-	var out []core.ActionChainSlot
-	for _, chain := range core.CollectAllActionChains(engine) {
-		text := strings.ToLower(chain.Title + " " + chain.Trigger)
+	var out []core.PluginSlot
+	for _, plugin := range core.CollectAllPlugins(engine) {
+		text := strings.ToLower(plugin.Name + " " + plugin.Trigger)
 		for _, term := range terms {
 			if strings.Contains(text, strings.ToLower(term)) {
-				out = append(out, chain)
+				out = append(out, plugin)
 				break
 			}
 		}

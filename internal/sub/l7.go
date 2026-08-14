@@ -83,14 +83,14 @@ func (db *DB) DeleteTrajectory(sessionID string) error {
 	return repo.DeleteTrajectory(db.engine, parsed)
 }
 
-// CrystallizeResult reports the chains created from a trajectory.
+// CrystallizeResult reports the plugins created from a trajectory.
 type CrystallizeResult struct {
-	ChainIDs []string `json:"chain_ids"`
+	PluginIDs []string `json:"plugin_ids"`
 }
 
-// Crystallize extracts reusable action chains from a session's trajectory
-// (L7 → L5) and persists them with Path = sessionID. The chain ID
-// (hash(title:trigger)) makes repeated crystallization idempotent. The
+// Crystallize extracts reusable plugins from a session's trajectory
+// (L7 → L5) and persists them with Path = sessionID. The plugin ID
+// (hash(name:trigger)) makes repeated crystallization idempotent. The
 // LLM call runs outside both locks; writes take the write lock.
 func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeResult, error) {
 	if err := db.beginRead(); err != nil {
@@ -119,25 +119,17 @@ func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeRe
 	if db.closed.Load() {
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
-	result := &CrystallizeResult{ChainIDs: []string{}}
+	result := &CrystallizeResult{PluginIDs: []string{}}
 	path := sessionID
-	for _, c := range out.Chains {
-		// Re-crystallizing the same title:trigger reuses the chain ID, keeps
+	for _, p := range out.Plugins {
+		// Re-crystallizing the same name:trigger reuses the plugin ID, keeps
 		// runtime fields (Confidence/SuccessRate/TriggerCount/...), and
-		// replaces the old step set so fewer steps leave no orphans.
-		chainID, _, err := repo.CreateOrUpdateChainL5WithPath(db.engine, c.Title, c.Trigger, &path)
+		// refreshes the manifest and type label.
+		pluginID, _, err := repo.CreateOrUpdatePluginL5(db.engine, p.Name, p.Trigger, p.PluginType, p.Manifest, &path)
 		if err != nil {
 			return nil, err
 		}
-		if err := repo.DeleteStepsL5(db.engine, chainID); err != nil {
-			return nil, err
-		}
-		for i, s := range c.Steps {
-			if _, err := repo.CreateStepL5(db.engine, chainID, uint16(i+1), s.Action, s.Parameters); err != nil {
-				return nil, err
-			}
-		}
-		result.ChainIDs = append(result.ChainIDs, common.FormatHash(chainID))
+		result.PluginIDs = append(result.PluginIDs, common.FormatHash(pluginID))
 	}
 	return result, nil
 }

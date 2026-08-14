@@ -20,20 +20,19 @@ const FlagDeleted uint8 = 0x01
 
 // Record type constants.
 const (
-	RecL0Profile     uint8 = 0x01
-	RecL1SceneNode   uint8 = 0x02
-	RecL1Hyperedge   uint8 = 0x03
-	RecL2Topic       uint8 = 0x04
-	RecL2Scene       uint8 = 0x05
-	RecL3GraphNode   uint8 = 0x06
-	RecL3GraphEdge   uint8 = 0x07
-	RecL4Archive     uint8 = 0x08
-	RecL5ActionChain uint8 = 0x09
-	RecL3GraphSlot   uint8 = 0x0B
-	RecL5ActionStep  uint8 = 0x0C
-	RecL6SceneUsage  uint8 = 0x0D // scene-level retrieval usage feedback (one per scene)
-	RecL7Trajectory  uint8 = 0x0E // host-appended operation trajectory event
-	RecVecCentroid   uint8 = 0xF0 // centroid vector for brute-force search
+	RecL0Profile    uint8 = 0x01
+	RecL1SceneNode  uint8 = 0x02
+	RecL1Hyperedge  uint8 = 0x03
+	RecL2Topic      uint8 = 0x04
+	RecL2Scene      uint8 = 0x05
+	RecL3GraphNode  uint8 = 0x06
+	RecL3GraphEdge  uint8 = 0x07
+	RecL4Archive    uint8 = 0x08
+	RecL3GraphSlot  uint8 = 0x0B
+	RecL5Plugin     uint8 = 0x0F // plugin slot (name:trigger hash), replaces action chains
+	RecL6SceneUsage uint8 = 0x0D // scene-level retrieval usage feedback (one per scene)
+	RecL7Trajectory uint8 = 0x0E // host-appended operation trajectory event
+	RecVecCentroid  uint8 = 0xF0 // centroid vector for brute-force search
 )
 
 func EncodeRecord(recordType, flags uint8, idHash uint64, data []byte) []byte {

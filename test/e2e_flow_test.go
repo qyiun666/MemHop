@@ -7,6 +7,8 @@ package test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -99,41 +101,52 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	t.Logf("post-dream search returned %d contexts", len(res3.Contexts))
 }
 
-// TestE2EL5Crystal covers the L5 action-chain CRUD against a live DB.
-func TestE2EL5Crystal(t *testing.T) {
+// TestE2EPlugin covers L5 plugin import (path) / query / delete against a
+// live DB.
+func TestE2EPlugin(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
-	id, err := db.CreateL5("晨跑流程", "用户提到周末海边跑步")
+	// Plugins enter only via path import; write a PluginImport JSON file.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "morning_run.json")
+	content := `{"name":"晨跑流程","trigger":"用户提到周末海边跑步","plugin_type":"skill","manifest":{"skills":[{"name":"晨跑计划","description":"周末清晨海边跑步"}]}}`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write import file: %v", err)
+	}
+	id, err := db.ImportPlugin(path)
 	if err != nil {
-		t.Fatalf("CreateL5: %v", err)
+		t.Fatalf("ImportPlugin: %v", err)
 	}
 	if id == "" {
-		t.Fatal("CreateL5 returned empty id")
+		t.Fatal("ImportPlugin returned empty id")
 	}
 
-	chain, err := db.GetL5(id)
+	plugin, err := db.GetPlugin(id)
 	if err != nil {
-		t.Fatalf("GetL5(%s): %v", id, err)
+		t.Fatalf("GetPlugin(%s): %v", id, err)
 	}
-	if chain.Title != "晨跑流程" {
-		t.Fatalf("unexpected chain title %q", chain.Title)
+	if plugin.Name != "晨跑流程" || plugin.PluginType != "skill" {
+		t.Fatalf("unexpected plugin: %+v", plugin)
+	}
+	if len(plugin.Manifest.Skills) != 1 || plugin.Manifest.Skills[0].Name != "晨跑计划" {
+		t.Fatalf("manifest mismatch: %+v", plugin.Manifest)
 	}
 
 	// List with keyword filter
-	chains, err := db.ListL5(sub.L5ListQuery{Keyword: "晨跑"})
+	plugins, err := db.ListPlugins(sub.PluginListQuery{Keyword: "晨跑"})
 	if err != nil {
-		t.Fatalf("ListL5: %v", err)
+		t.Fatalf("ListPlugins: %v", err)
 	}
-	if len(chains) == 0 {
-		t.Fatal("ListL5(Keyword=晨跑) returned no chains")
+	if len(plugins) == 0 {
+		t.Fatal("ListPlugins(Keyword=晨跑) returned no plugins")
 	}
 
-	if err := db.DeleteL5(id); err != nil {
-		t.Fatalf("DeleteL5(%s): %v", id, err)
+	if err := db.DeletePlugin(id); err != nil {
+		t.Fatalf("DeletePlugin(%s): %v", id, err)
 	}
-	if _, err := db.GetL5(id); err == nil {
-		t.Fatal("GetL5 after DeleteL5 should fail")
+	if _, err := db.GetPlugin(id); err == nil {
+		t.Fatal("GetPlugin after DeletePlugin should fail")
 	}
 }
 
