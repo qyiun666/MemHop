@@ -10,7 +10,7 @@
 // github.com/qyiun666/MemHop without reaching into internal packages.
 //
 // Open returns a *DB whose full method set is available directly: Search,
-// Update, Dream, the L0-L5 APIs, plus the promoted sub-layer methods
+// Update, Dream, the L0-L7 APIs, plus the promoted sub-layer methods
 // Close / Checkpoint / RunDream / IsClosed / HasActiveScenes /
 // TouchLastDreamAt / Lock / Unlock.
 package memhop

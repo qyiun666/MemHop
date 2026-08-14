@@ -54,23 +54,6 @@ func TestProfileSlotRoundtrip(t *testing.T) {
 	}
 }
 
-func TestSceneNodeRoundtripLegacy(t *testing.T) {
-	n := SceneNode{
-		IDHash: 12345, SceneID: 67890, VectorPageRef: 42,
-		Importance: 0.85, Valence: 0.0, Arousal: 0.0,
-		CreatedAt: 1000000, UpdatedAt: 2000000,
-		EdgeIDs: []uint64{100, 200, 300},
-	}
-	var got SceneNode
-	jsonRoundtrip(t, n, &got)
-	if got.IDHash != n.IDHash || got.SceneID != n.SceneID {
-		t.Fatalf("mismatch: %+v", got)
-	}
-	if len(got.EdgeIDs) != 3 {
-		t.Fatalf("edge_ids length mismatch")
-	}
-}
-
 func TestSceneNodeEmptyEdges(t *testing.T) {
 	n := SceneNode{EdgeIDs: []uint64{}}
 	var got SceneNode

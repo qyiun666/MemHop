@@ -53,7 +53,7 @@ type PluginListQuery = sub.PluginListQuery
 // CrystallizeResult reports the L5 plugins created from a trajectory.
 type CrystallizeResult = sub.CrystallizeResult
 
-// ---- core (L0-L5 slot models) types ----
+// ---- core (L0-L7 slot models) types ----
 
 // ContentType is the type of content stored in an ArchiveSlot.
 type ContentType = core.ContentType
