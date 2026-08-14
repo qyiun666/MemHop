@@ -3,18 +3,80 @@ package repo
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L1 hypergraph operations: SceneNode writes synced with the L1ReverseIndex.
-// Dream calls CreateNodeL1/UpdateNodeL1; search calls FindAssociatedNodesL1.
+// L1 hypergraph operations: SceneNode writes happen only during Dream via
+// SyncL1NodesFromL2; search reads the L1ReverseIndex via FindAssociatedNodesL1.
 import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 	"github.com/qyiun666/MemHop/internal/sub/repo/index"
 )
+
+// SyncL1NodesFromL2 rebuilds one L1 node per scene from the current
+// depth<=2 topics; L1 is written/updated only during Dream. The node ID
+// (hash("l1:"+sceneID)) is stable across dreams: existing nodes keep
+// Importance/Valence/Arousal (decay belongs to DecayL1Network) and are
+// refreshed only when the topic set changed, so UpdatedAt keeps
+// accumulating decay. Returns the number of nodes created or updated.
+func SyncL1NodesFromL2(engine *core.StorageEngine) (int, error) {
+	byScene := make(map[uint64]map[uint64]struct{})
+	if err := engine.IterIndexByType(core.RecL2Topic, func(idHash uint64) error {
+		topic, err := core.ReadTopicLenient(engine, idHash)
+		if err != nil || topic == nil || topic.Depth > 2 {
+			return nil
+		}
+		set := byScene[topic.SceneID]
+		if set == nil {
+			set = make(map[uint64]struct{})
+			byScene[topic.SceneID] = set
+		}
+		set[idHash] = struct{}{}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	now := time.Now().UnixMilli()
+	changed := 0
+	for sceneID, set := range byScene {
+		ids := make([]uint64, 0, len(set))
+		for id := range set {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		nodeID := common.HashID("l1:" + common.FormatHash(sceneID))
+		node := readSceneNode(engine, nodeID)
+		if node != nil && equalUint64s(node.TopicIDs, ids) {
+			continue // unchanged; keep UpdatedAt so decay accumulates
+		}
+		if node == nil {
+			node = &core.SceneNode{IDHash: nodeID, SceneID: sceneID, CreatedAt: now, Importance: 1.0}
+		}
+		node.TopicIDs = ids
+		node.UpdatedAt = now
+		if err := core.WriteSceneNode(engine, nodeID, node); err != nil {
+			return changed, err
+		}
+		changed++
+	}
+	return changed, nil
+}
+
+func equalUint64s(a, b []uint64) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
 
 // CreateNodeL1 writes a SceneNode (ID = hash(sceneID:topics)) and registers
 // it in the L1 reverse index.

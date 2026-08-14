@@ -49,6 +49,12 @@ func (db *DB) RunDream(ctx context.Context) (bool, error) {
 	// retrieval usage so the rebuild/decay below reflects actual usage.
 	db.applyUsageFeedback()
 
+	// Stage 2.25: L1 write/update from the current L2 structure (L1 is
+	// written only during Dream; stale nodes are removed in Stage 3).
+	if _, err := repo.SyncL1NodesFromL2(db.engine); err != nil {
+		return false, err
+	}
+
 	// Stage 3: L1 rebuild (remove stale nodes).
 	if _, err := repo.RebuildL1FromL2(db.engine, newL2Meta, &decayParams); err != nil {
 		return false, err
