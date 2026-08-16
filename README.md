@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>Current: v1.2.0 (L5 plugin layer) · Latest stable tag: v1.0.1</strong>
+  <strong>Current: v1.2.1 (MCP server) · Latest stable tag: v1.0.1</strong>
 </p>
 
 ---
@@ -42,6 +42,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 - **L3 Knowledge Graph** — Multi-hypergraph with community detection (clique + Louvain), BFS, adjacency caching
 - **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)
 - **Minimal & Embeddable** — 4 direct Go deps (xxhash, gse, ollama, go-openai), `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
+- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 26 MCP tools over stdio (official `modelcontextprotocol/go-sdk`), ready for Claude Code / Cursor / any MCP client
 
 ## Quick Start
 
@@ -205,6 +206,7 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
+| v1.2.1 | 2026-08-16 | MCP server | New `cmd/memhop-mcp` binary: MCP server over stdio (official go-sdk v1.7.0) mapping the full public API to 26 tools (search/update/dream/checkpoint/status, profile, scenes, knowledge, archive, plugins, trajectory/crystallize) · graceful shutdown persists via snapshot · offline unit + stdio smoke tests (`make test-mcp`) · usage docs under `docs/mcp/` (local) |
 | v1.2.0 | 2026-08-14 | L5 plugin layer | L5 action chains → plugin slots (PluginSlot + structured five-section manifest: skills / MCPs / tools / prompts / services) · path-only import via `ImportPlugin`, hand-written create/update removed · Crystallize dispatches plugins by type from L7 trajectories · `SearchResult.Crystals` → `Plugins` · eight-layer architecture (L0–L7) docs |
 | v1.1.0 | 2026-07-27 ~ 08.11 | Architecture refactor | Layered `internal` rewrite (assembly → sub → repo → core/index/common) · f16 → f32 single-precision vectors · topic centroid vector retrieval · `BatchStore` removed · `Dream(ctx)` narrowed to `(bool, error)` · `.meh` format `0x0004`, incompatible with v1 data · integration tests rebuilt against the new internal API |
 | v1.0.0 | 2026-07-26 | First stable release | Go rewrite with six-layer cognitive architecture, V2 .meh storage, BM25+vector+entity RRF search, Dream consolidation pipeline, L3 hypergraph with community detection. |

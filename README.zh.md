@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：v1.2.0（L5 插件层）· 最新稳定 tag：v1.0.1</strong>
+  <strong>当前版本：v1.2.1（MCP Server）· 最新稳定 tag：v1.0.1</strong>
 </p>
 
 ---
@@ -42,6 +42,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **L3 知识图谱** — 多独立超图，内置团扩展 + Louvain 社区发现、BFS 遍历与邻接缓存
 - **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）
 - **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、gse、ollama、go-openai），`sync.RWMutex` + `atomic.Pointer`，零基础设施
+- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 26 个 MCP 工具暴露于 stdio（官方 `modelcontextprotocol/go-sdk`），可直接接入 Claude Code / Cursor 等任意 MCP 客户端
 
 ## 快速开始
 
@@ -205,6 +206,7 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
+| v1.2.1 | 2026-08-16 | MCP Server | 新增 `cmd/memhop-mcp` 二进制：基于 stdio 的 MCP Server（官方 go-sdk v1.7.0），将全部公开 API 映射为 26 个工具（search/update/dream/checkpoint/status、档案、场景、知识图谱、归档、插件、轨迹/结晶）· 优雅退出时落盘快照 · 离线单元 + stdio 冒烟测试（`make test-mcp`）· 使用文档见 `docs/mcp/`（本地） |
 | v1.2.0 | 2026-08-14 | L5 插件层 | L5 动作链 → 插件槽位（PluginSlot + 结构化五段 Manifest：技能 / MCP / 工具 / 提示词 / 服务）· 仅路径导入 `ImportPlugin`，移除手工写入 Create/Update · Crystallize 从 L7 轨迹按类型分派插件 · `SearchResult.Crystals` → `Plugins` · 八层架构（L0–L7）文档 |
 | v1.1.0 | 2026-07-27 ~ 08.11 | 架构重构 | `internal` 分层重写（装配层 → sub → repo → core/index/common）· f16 → f32 单精度向量 · 话题质心向量检索 · 移除 `BatchStore` · `Dream(ctx)` 签名收窄为 `(bool, error)` · `.meh` 磁盘格式 `0x0004`，与 v1 数据不兼容 · 集成测试按新 internal API 重建 |
 | v1.0.0 | 2026-07-26         | 首个稳定版 | Go 重写，六层认知架构、V2 .meh 存储、BM25+向量+实体 RRF 检索、Dream 巩固管线、L3 超图社区发现。 |
