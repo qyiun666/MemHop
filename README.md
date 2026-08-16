@@ -42,7 +42,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 - **L3 Knowledge Graph** — Multi-hypergraph with community detection (clique + Louvain), BFS, adjacency caching
 - **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)
 - **Minimal & Embeddable** — 4 direct Go deps (xxhash, gse, ollama, go-openai), `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
-- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 26 MCP tools over stdio (official `modelcontextprotocol/go-sdk`), ready for Claude Code / Cursor / any MCP client
+- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 26 MCP tools over multi-tenant SSE (official `modelcontextprotocol/go-sdk`): one process serves many hosts, each isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file
 
 ## Quick Start
 

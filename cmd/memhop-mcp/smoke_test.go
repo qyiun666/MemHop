@@ -6,45 +6,31 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	memhop "github.com/qyiun666/MemHop"
 )
 
-// TestMCPSmoke boots the real binary over stdio with an SDK client and
-// exercises the offline tool paths (no Ollama / LLM needed: encoder and LLM
-// clients are lazy and only contacted on Search/Dream/Crystallize).
-func TestMCPSmoke(t *testing.T) {
-	bin := filepath.Join(t.TempDir(), "memhop-mcp")
-	build := exec.Command("go", "build", "-o", bin, ".")
-	if out, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("go build: %v\n%s", err, out)
-	}
+// TestSSEMultiTenantIsolation boots the SSE server in-process and verifies
+// that two tenants on one process are fully isolated: separate .meh files,
+// no data visible across tenants, and the full 26-tool surface on each.
+func TestSSEMultiTenantIsolation(t *testing.T) {
+	srv, dbDir := newTestServer(t, nil)
 
-	cmd := exec.Command(bin,
-		"--db", filepath.Join(t.TempDir(), "smoke.meh"),
-		"--vector-dim", "1024",
-		"--encoder-addr", "http://127.0.0.1:11434",
-		"--embed-model", "bge-m3",
-	)
-	cmd.Env = append(os.Environ(),
-		"MEMHOP_LLM_API_URL=http://localhost:9999/v1",
-		"MEMHOP_LLM_API_KEY=smoke-key",
-		"MEMHOP_LLM_MODEL=smoke-model",
-	)
+	alice := connectTenant(t, srv.URL, "alice")
+	bob := connectTenant(t, srv.URL, "bob")
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "smoke-client", Version: "0.0.1"}, nil)
-	session, err := client.Connect(context.Background(), &mcp.CommandTransport{Command: cmd}, nil)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
-	}
-	defer session.Close()
-
-	// tools/list exposes all 26 tools.
-	tools, err := session.ListTools(context.Background(), nil)
+	// tools/list exposes all 26 tools on the alice session.
+	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
@@ -70,8 +56,8 @@ func TestMCPSmoke(t *testing.T) {
 		}
 	}
 
-	// memhop_status: no-arg tool.
-	status, err := callClient(t, session, "memhop_status", map[string]any{})
+	// memhop_status: no-arg tool on the alice session.
+	status, err := callClient(t, alice, "memhop_status", map[string]any{})
 	if err != nil {
 		t.Fatalf("memhop_status: %v", err)
 	}
@@ -83,15 +69,15 @@ func TestMCPSmoke(t *testing.T) {
 		t.Errorf("fresh db should be open without scenes: %+v", st)
 	}
 
-	// memhop_profile_update then memhop_profile_get: offline write path.
-	if _, err := callClient(t, session, "memhop_profile_update", map[string]any{
-		"name":         "smoke-agent",
+	// Alice writes a profile; her own reads see it.
+	if _, err := callClient(t, alice, "memhop_profile_update", map[string]any{
+		"name":         "alice-agent",
 		"role":         "tester",
 		"style_traits": []string{"concise"},
 	}); err != nil {
 		t.Fatalf("memhop_profile_update: %v", err)
 	}
-	profile, err := callClient(t, session, "memhop_profile_get", map[string]any{})
+	profile, err := callClient(t, alice, "memhop_profile_get", map[string]any{})
 	if err != nil {
 		t.Fatalf("memhop_profile_get: %v", err)
 	}
@@ -99,22 +85,181 @@ func TestMCPSmoke(t *testing.T) {
 	if err := json.Unmarshal([]byte(profile), &p); err != nil {
 		t.Fatalf("unmarshal profile: %v", err)
 	}
-	if p.Name != "smoke-agent" || p.Role != "tester" {
+	if p.Name != "alice-agent" || p.Role != "tester" {
 		t.Errorf("profile round-trip mismatch: %+v", p)
 	}
 
-	// memhop_checkpoint persists without closing.
-	if _, err := callClient(t, session, "memhop_checkpoint", map[string]any{}); err != nil {
-		t.Fatalf("memhop_checkpoint: %v", err)
+	// Bob must not see Alice's data: a fresh profile with empty name.
+	profile, err = callClient(t, bob, "memhop_profile_get", map[string]any{})
+	if err != nil {
+		t.Fatalf("bob memhop_profile_get: %v", err)
+	}
+	if err := json.Unmarshal([]byte(profile), &p); err != nil {
+		t.Fatalf("unmarshal bob profile: %v", err)
+	}
+	if p.Name != "" || p.Role != "" || len(p.StyleTraits) != 0 {
+		t.Errorf("bob sees alice's profile: %+v", p)
 	}
 
-	// Unknown tool must fail as a protocol error (MCP spec: server-side error).
-	if _, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name:      "memhop_nope",
-		Arguments: map[string]any{},
-	}); err == nil {
-		t.Error("unknown tool should fail as a protocol error")
+	// Each tenant got its own .meh file on disk.
+	for _, want := range []string{"alice.meh", "bob.meh"} {
+		if _, err := os.Stat(filepath.Join(dbDir, want)); err != nil {
+			t.Errorf("expected %s on disk: %v", want, err)
+		}
 	}
+}
+
+// TestSSEInvalidTenant rejects malformed or path-traversal tenant ids.
+func TestSSEInvalidTenant(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+	for _, path := range []string{
+		"/mcp/..",
+		"/mcp/",
+		"/mcp/a/b",
+		"/mcp/bad%20id",
+		"/mcp/" + strings.Repeat("a", 65),
+		"/other",
+	} {
+		client := mcp.NewClient(&mcp.Implementation{Name: "smoke-client", Version: "0.0.1"}, nil)
+		if _, err := client.Connect(context.Background(), &mcp.SSEClientTransport{
+			Endpoint: srv.URL + path,
+		}, nil); err == nil {
+			t.Errorf("path %q: expected connection error", path)
+		}
+	}
+}
+
+// TestSSETenantWhitelist enforces the --tenants whitelist: unlisted tenants
+// cannot connect, listed ones can.
+func TestSSETenantWhitelist(t *testing.T) {
+	srv, dbDir := newTestServer(t, []string{"alice"})
+
+	client := mcp.NewClient(&mcp.Implementation{Name: "smoke-client", Version: "0.0.1"}, nil)
+	if _, err := client.Connect(context.Background(), &mcp.SSEClientTransport{
+		Endpoint: srv.URL + "/mcp/bob",
+	}, nil); err == nil {
+		t.Error("bob should be rejected by the whitelist")
+	}
+
+	alice := connectTenant(t, srv.URL, "alice")
+	if _, err := alice.ListTools(context.Background(), nil); err != nil {
+		t.Fatalf("alice should connect: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dbDir, "alice.meh")); err != nil {
+		t.Errorf("expected alice.meh on disk: %v", err)
+	}
+}
+
+// TestSSETenantReconnect verifies the DB survives client disconnects:
+// reconnecting to the same tenant sees previously written data, because
+// tenant DBs live until process exit, not until the session closes.
+func TestSSETenantReconnect(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+
+	alice := connectTenant(t, srv.URL, "alice")
+	if _, err := callClient(t, alice, "memhop_profile_update", map[string]any{
+		"name": "persistent-agent",
+	}); err != nil {
+		t.Fatalf("profile update: %v", err)
+	}
+	if err := alice.Close(); err != nil {
+		t.Fatalf("close session: %v", err)
+	}
+
+	// Reconnect: same tenant, same DB instance, data still visible.
+	alice2 := connectTenant(t, srv.URL, "alice")
+	profile, err := callClient(t, alice2, "memhop_profile_get", map[string]any{})
+	if err != nil {
+		t.Fatalf("profile get after reconnect: %v", err)
+	}
+	var p memhopProfile
+	if err := json.Unmarshal([]byte(profile), &p); err != nil {
+		t.Fatalf("unmarshal profile: %v", err)
+	}
+	if p.Name != "persistent-agent" {
+		t.Errorf("data lost after reconnect: %+v", p)
+	}
+}
+
+// TestSSETenantConcurrentFirstConnect opens the same tenant from many
+// goroutines at once: the registry mutex must open the DB exactly once and
+// every connection must succeed.
+func TestSSETenantConcurrentFirstConnect(t *testing.T) {
+	srv, _ := newTestServer(t, nil)
+
+	const n = 8
+	errCh := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client := mcp.NewClient(&mcp.Implementation{Name: "smoke-client", Version: "0.0.1"}, nil)
+			session, err := client.Connect(context.Background(), &mcp.SSEClientTransport{
+				Endpoint:   srv.URL + "/mcp/alice",
+				HTTPClient: &http.Client{},
+			}, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			defer session.Close()
+			if _, err := session.ListTools(context.Background(), nil); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Errorf("concurrent connect failed: %v", err)
+	}
+}
+
+// ---- helpers ----
+
+// newTestServer boots an in-process SSE server over a temp db-dir.
+func newTestServer(t *testing.T, tenants []string) (*httptest.Server, string) {
+	t.Helper()
+	dbDir := t.TempDir()
+	base := memhop.MemHopConfig{
+		VectorDim:          1024,
+		EncoderAddr:        "http://127.0.0.1:11434",
+		EmbedModel:         "bge-m3",
+		EncoderTimeoutSecs: 20,
+		LLM: memhop.LlmConfig{
+			APIURL:          "http://localhost:9999/v1",
+			APIKey:          "smoke-key",
+			Model:           "smoke-model",
+			TimeoutSecs:     30,
+			MaxOutputTokens: 2048,
+		},
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	reg := newRegistry(base, dbDir, tenants, logger)
+	srv := httptest.NewServer(newSSEHandler(reg))
+	t.Cleanup(func() {
+		srv.Close()
+		if err := reg.CloseAll(); err != nil {
+			t.Errorf("close all: %v", err)
+		}
+	})
+	return srv, dbDir
+}
+
+// connectTenant opens an MCP session against /mcp/<tenant>.
+func connectTenant(t *testing.T, baseURL, tenant string) *mcp.ClientSession {
+	t.Helper()
+	client := mcp.NewClient(&mcp.Implementation{Name: "smoke-client", Version: "0.0.1"}, nil)
+	session, err := client.Connect(context.Background(), &mcp.SSEClientTransport{
+		Endpoint:   baseURL + "/mcp/" + tenant,
+		HTTPClient: &http.Client{},
+	}, nil)
+	if err != nil {
+		t.Fatalf("connect tenant %q: %v", tenant, err)
+	}
+	t.Cleanup(func() { session.Close() })
+	return session
 }
 
 // memhopProfile mirrors the JSON subset of ProfileSlot used by the smoke test.

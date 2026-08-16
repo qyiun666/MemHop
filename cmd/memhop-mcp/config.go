@@ -13,9 +13,22 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	memhop "github.com/qyiun666/MemHop"
 )
+
+// serverConfig is the resolved memhop-mcp configuration.
+type serverConfig struct {
+	Listen string // HTTP listen address for the SSE transport
+	DBDir  string // root directory holding one .meh file per tenant
+	// Tenants is the optional tenant whitelist; empty allows any valid
+	// tenant id to create its database on first access.
+	Tenants []string
+	// Base is the shared engine configuration. DBPath is left empty here and
+	// filled per tenant as <DBDir>/<tenant-id>.meh by the tenant registry.
+	Base memhop.MemHopConfig
+}
 
 // envOr returns the environment value when set, otherwise the fallback.
 func envOr(envKey, fallback string) string {
@@ -35,10 +48,32 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// loadConfig parses flags and environment into a MemHopConfig.
-func loadConfig(args []string) (*memhop.MemHopConfig, error) {
+// splitTenants parses a comma-separated tenant whitelist, dropping empty
+// entries. Invalid ids are rejected at load time, not on first access.
+func splitTenants(raw string) ([]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" {
+			continue
+		}
+		if !tenantIDRe.MatchString(id) {
+			return nil, fmt.Errorf("invalid tenant id %q in --tenants", id)
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// loadConfig parses flags and environment into a serverConfig.
+func loadConfig(args []string) (*serverConfig, error) {
 	fs := flag.NewFlagSet("memhop-mcp", flag.ContinueOnError)
-	dbPath := fs.String("db", "", "path to the .meh database file (required)")
+	listen := fs.String("listen", "127.0.0.1:3939", "HTTP listen address for the SSE transport")
+	dbDir := fs.String("db-dir", "", "directory holding one .meh database per tenant (required)")
+	tenants := fs.String("tenants", "", "optional comma-separated tenant whitelist")
 	vectorDim := fs.Int("vector-dim", 1024, "embedding vector dimension")
 	encoderAddr := fs.String("encoder-addr", "", "embedding encoder HTTP address (e.g. http://127.0.0.1:11434)")
 	embedModel := fs.String("embed-model", "", "embedding model name on the encoder (required)")
@@ -50,6 +85,9 @@ func loadConfig(args []string) (*memhop.MemHopConfig, error) {
 	if fs.NArg() > 0 {
 		return nil, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 	}
+	if *dbDir == "" {
+		return nil, fmt.Errorf("--db-dir is required")
+	}
 
 	llmTimeout, err := envInt("MEMHOP_LLM_TIMEOUT_SECS", 30)
 	if err != nil {
@@ -60,24 +98,43 @@ func loadConfig(args []string) (*memhop.MemHopConfig, error) {
 		return nil, err
 	}
 
-	cfg := &memhop.MemHopConfig{
-		DBPath:             *dbPath,
+	llm := memhop.LlmConfig{
+		APIURL:          envOr("MEMHOP_LLM_API_URL", ""),
+		APIKey:          os.Getenv("MEMHOP_LLM_API_KEY"),
+		Model:           firstNonEmpty(*llmModel, os.Getenv("MEMHOP_LLM_MODEL")),
+		TimeoutSecs:     llmTimeout,
+		MaxOutputTokens: llmMaxTokens,
+	}
+	base := memhop.MemHopConfig{
 		VectorDim:          *vectorDim,
 		EncoderAddr:        *encoderAddr,
 		EmbedModel:         *embedModel,
 		EncoderTimeoutSecs: *encoderTimeoutSecs,
-		LLM: memhop.LlmConfig{
-			APIURL:          envOr("MEMHOP_LLM_API_URL", ""),
-			APIKey:          os.Getenv("MEMHOP_LLM_API_KEY"),
-			Model:           firstNonEmpty(*llmModel, os.Getenv("MEMHOP_LLM_MODEL")),
-			TimeoutSecs:     llmTimeout,
-			MaxOutputTokens: llmMaxTokens,
-		},
+		LLM:                llm,
 	}
-	if err := cfg.Validate(); err != nil {
+
+	// Field-level checks mirroring MemHopConfig.Validate minus DBPath
+	// (filled per tenant by the registry, which runs the full Validate).
+	if base.VectorDim <= 0 || base.VectorDim > 65535 {
+		return nil, fmt.Errorf("vector-dim must be in range (0, 65535]")
+	}
+	if base.EmbedModel == "" {
+		return nil, fmt.Errorf("--embed-model is required")
+	}
+	if llm.APIURL == "" || llm.APIKey == "" || llm.Model == "" {
+		return nil, fmt.Errorf("MEMHOP_LLM_API_URL, MEMHOP_LLM_API_KEY and MEMHOP_LLM_MODEL are required")
+	}
+
+	allowed, err := splitTenants(*tenants)
+	if err != nil {
 		return nil, err
 	}
-	return cfg, nil
+	return &serverConfig{
+		Listen:  *listen,
+		DBDir:   *dbDir,
+		Tenants: allowed,
+		Base:    base,
+	}, nil
 }
 
 func envInt(key string, fallback int) (int, error) {
