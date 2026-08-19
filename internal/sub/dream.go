@@ -16,14 +16,23 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/index"
 )
 
-// RunDream runs one full dream pipeline: parallel L2 compression on active
-// scenes, then L1 rebuild/decay, L0 profile/distill; rebuilt sparse and L1
-// reverse indexes are installed into db. Any stage failure returns an error.
-func (db *DB) RunDream(ctx context.Context) (bool, error) {
+// RunDream runs one full dream pipeline: parallel L2 compression on the
+// given scene (or all active scenes when sceneID is empty), then L1
+// rebuild/decay, L0 profile/distill; rebuilt sparse and L1 reverse indexes
+// are installed into db. Any stage failure returns an error.
+func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
+	scenes := db.activeScenes
+	if sceneID != "" {
+		hash, err := common.ParseID(sceneID)
+		if err != nil {
+			return false, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+		}
+		scenes = []uint64{hash}
+	}
 
-	// Stage 1: one goroutine per active scene compresses L2 (writes only;
+	// Stage 1: one goroutine per scene compresses L2 (writes only;
 	// indexes rebuilt at the end).
-	groups, failures := db.compressActiveScenes(ctx)
+	groups, failures := db.compressActiveScenes(ctx, scenes)
 	if groups == 0 && failures > 0 {
 		return false, fmt.Errorf("dream: LLM consolidation failed for all scenes")
 	}
@@ -90,17 +99,17 @@ func (db *DB) RunDream(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// compressActiveScenes runs one goroutine per active scene: reads depth-1
-// topics, asks the LLM for merge groups and applies them; returns merged
-// group count and LLM failure count.
-func (db *DB) compressActiveScenes(ctx context.Context) (uint32, int) {
+// compressActiveScenes runs one goroutine per scene: reads depth-1 topics,
+// asks the LLM for merge groups and applies them; returns merged group
+// count and LLM failure count.
+func (db *DB) compressActiveScenes(ctx context.Context, scenes []uint64) (uint32, int) {
 	var (
 		wg       sync.WaitGroup
 		mu       sync.Mutex
 		groups   uint32
 		failures int
 	)
-	for _, sid := range db.activeScenes {
+	for _, sid := range scenes {
 		wg.Add(1)
 		go func(sceneID uint64) {
 			defer wg.Done()
@@ -158,7 +167,8 @@ func (db *DB) applyGroups(ctx context.Context, sceneID uint64, topics []core.Top
 		// Keywords of MergedSummary become FusedKeywords (it already merges both sides).
 		keywords, err := db.llm.ExtractKeywords(ctx, g.MergedSummary)
 		if err != nil || len(keywords) == 0 {
-			keywords = []string{g.MergedTitle}
+			slog.Warn("dream: extract keywords from merged summary failed, skip group", "parent", parentIDStr, "err", err)
+			continue
 		}
 
 		centroidRef, err := db.writeCentroid(g.MergedSummary)

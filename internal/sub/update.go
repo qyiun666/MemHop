@@ -13,39 +13,45 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/index"
 )
 
-// Update appends an agent reply to the specified topic.
-func (db *DB) Update(topicID string, text string, timestamp int64) bool {
+// Update appends an agent reply to the specified topic. It returns
+// (true, nil) on success and (false, err) on any failure so hosts no longer
+// have to guess whether a false result was validation, LLM, or storage.
+func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error) {
 	if err := db.beginRead(); err != nil {
-		return false
+		return false, err
 	}
 	defer db.mu.RUnlock()
 	if text == "" || timestamp <= 0 {
-		return false
+		return false, common.NewError(common.ErrInvalidQuery, "Update requires text and a positive timestamp")
 	}
 	parsedID, err := common.ParseID(topicID)
 	if err != nil {
-		return false
+		return false, err
 	}
-	keywords, err := db.llm.ExtractKeywords(context.Background(), text)
-	if err != nil {
-		return false
-	}
+	// Validate the topic before any write or LLM call: a missing topic must
+	// not leave an orphan L4 archive behind.
 	topicIDStr := common.FormatHash(parsedID)
-	archiveID, err := repo.AppendArchiveL4(db.engine, topicIDStr, 1, core.ContentText, text, timestamp)
-	if err != nil {
-		return false
-	}
-	// Read back the topic (missing fails) and write agent keywords.
 	topics, err := repo.ListTopicsL2(db.engine, topicIDStr, 0, 3)
 	if err != nil {
-		return false
+		return false, err
+	}
+	if len(topics) == 0 {
+		return false, common.NewError(common.ErrNotFound, "topic not found")
 	}
 	topic := topics[0]
+	keywords, err := db.llm.ExtractKeywords(context.Background(), text)
+	if err != nil {
+		return false, err
+	}
+	archiveID, err := repo.AppendArchiveL4(db.engine, topicIDStr, 1, core.ContentText, text, timestamp)
+	if err != nil {
+		return false, err
+	}
 	if !repo.UpdateTopicL4RefsL2(db.engine, topicIDStr, []uint64{archiveID}) {
-		return false
+		return false, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
 	if !repo.UpdateTopicL2(db.engine, topicIDStr, keywords, timestamp) {
-		return false
+		return false, common.NewError(common.ErrIO, "update topic keywords", nil)
 	}
 	// Update BM25: uncompressed topics carry User+Agent keywords (compressed
 	// use FusedKeywords); topic.AgentKeywords is stale here, use fresh ones.
@@ -55,5 +61,5 @@ func (db *DB) Update(topicID string, text string, timestamp int64) bool {
 	all = append(all, topic.FusedKeywords...)
 	terms := index.Tokenize(strings.Join(all, " "))
 	db.sparseIndex.AddDocument(parsedID, terms, uint32(len(terms)))
-	return true
+	return true, nil
 }

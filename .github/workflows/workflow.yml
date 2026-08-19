@@ -29,15 +29,15 @@ jobs:
       - name: Check formatting
         if: runner.os != 'Windows'
         run: |
-          unformatted=$(gofmt -l internal test)
+          unformatted=$(gofmt -l internal cmd test *.go)
           if [ -n "$unformatted" ]; then
             echo "gofmt needed on:"
             echo "$unformatted"
             exit 1
           fi
 
-      - name: Unit tests
-        run: go test ./internal/...
+      - name: Unit tests (includes public SDK and offline MCP smoke tests)
+        run: go test ./...
 
       - name: Unit tests (race)
         run: go test -race ./internal/...

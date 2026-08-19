@@ -22,20 +22,20 @@ import (
 
 // TestSSEMultiTenantIsolation boots the SSE server in-process and verifies
 // that two tenants on one process are fully isolated: separate .meh files,
-// no data visible across tenants, and the full 26-tool surface on each.
+// no data visible across tenants, and the full 31-tool surface on each.
 func TestSSEMultiTenantIsolation(t *testing.T) {
 	srv, dbDir := newTestServer(t, nil)
 
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 26 tools on the alice session.
+	// tools/list exposes all 31 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 26 {
-		t.Errorf("expected 26 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 31 {
+		t.Errorf("expected 31 tools, got %d", len(tools.Tools))
 	}
 	names := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -43,11 +43,12 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	}
 	for _, want := range []string{
 		"memhop_search", "memhop_update", "memhop_dream", "memhop_checkpoint", "memhop_status",
-		"memhop_profile_get", "memhop_profile_update", "memhop_scene_list", "memhop_scene_merge",
+		"memhop_profile_get", "memhop_profile_update", "memhop_scene_list", "memhop_scene_active_list", "memhop_scene_merge",
+		"memhop_scene_topics",
 		"memhop_knowledge_get", "memhop_knowledge_list", "memhop_knowledge_import",
 		"memhop_knowledge_update", "memhop_knowledge_delete", "memhop_knowledge_nodes",
 		"memhop_knowledge_subgraph", "memhop_archive_search", "memhop_archive_get",
-		"memhop_plugin_import", "memhop_plugin_get", "memhop_plugin_delete", "memhop_plugin_list",
+		"memhop_capability_import", "memhop_capability_get", "memhop_capability_delete", "memhop_capability_list", "memhop_capability_update", "memhop_capability_activate", "memhop_capability_usage",
 		"memhop_trajectory_append", "memhop_trajectory_read", "memhop_trajectory_delete",
 		"memhop_crystallize",
 	} {
@@ -99,6 +100,30 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	}
 	if p.Name != "" || p.Role != "" || len(p.StyleTraits) != 0 {
 		t.Errorf("bob sees alice's profile: %+v", p)
+	}
+
+	// memhop_scene_list returns scene slots with topic counts on a fresh db.
+	scenes, err := callClient(t, alice, "memhop_scene_list", map[string]any{})
+	if err != nil {
+		t.Fatalf("memhop_scene_list: %v", err)
+	}
+	if scenes != "[]" {
+		t.Errorf("fresh db scene_list: want [], got %s", scenes)
+	}
+
+	// memhop_scene_active_list mirrors scene_list on a fresh db (no scenes).
+	activeScenes, err := callClient(t, alice, "memhop_scene_active_list", map[string]any{})
+	if err != nil {
+		t.Fatalf("memhop_scene_active_list: %v", err)
+	}
+	if activeScenes != "[]" {
+		t.Errorf("fresh db scene_active_list: want [], got %s", activeScenes)
+	}
+
+	// memhop_scene_topics on an unknown scene returns an error
+	// (SceneContext rejects unknown scene ids).
+	if _, err := callClient(t, alice, "memhop_scene_topics", map[string]any{"scene_id": "0000000000000000"}); err == nil {
+		t.Error("memhop_scene_topics on unknown scene: expected error")
 	}
 
 	// Each tenant got its own .meh file on disk.
@@ -216,6 +241,19 @@ func TestSSETenantConcurrentFirstConnect(t *testing.T) {
 	}
 }
 
+// smokeEncoder lets the MCP smoke tests open tenant DBs without Ollama.
+type smokeEncoder struct{ dim int }
+
+func (e *smokeEncoder) Encode(string) ([]float32, error) {
+	vec := make([]float32, e.dim)
+	for i := range vec {
+		vec[i] = 0.1
+	}
+	return vec, nil
+}
+
+func (*smokeEncoder) IsAvailable() bool { return true }
+
 // ---- helpers ----
 
 // newTestServer boots an in-process SSE server over a temp db-dir.
@@ -237,6 +275,11 @@ func newTestServer(t *testing.T, tenants []string) (*httptest.Server, string) {
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reg := newRegistry(base, dbDir, tenants, logger)
+	// Keep the SSE smoke tests offline: open tenants through a mock encoder
+	// instead of memhop.Open's Ollama health check.
+	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.DB, error) {
+		return memhop.OpenWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
+	}
 	srv := httptest.NewServer(newSSEHandler(reg))
 	t.Cleanup(func() {
 		srv.Close()

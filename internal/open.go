@@ -3,7 +3,13 @@
 
 package memhop
 
-import "github.com/qyiun666/MemHop/internal/sub"
+import (
+	"io/fs"
+
+	"github.com/qyiun666/MemHop/capabilities"
+	"github.com/qyiun666/MemHop/internal/sub"
+	"github.com/qyiun666/MemHop/internal/sub/repo/core"
+)
 
 // DB is the public handle: embeds sub.DB, all methods come from the instance Open created.
 type DB struct {
@@ -19,11 +25,7 @@ func Open(cfg *sub.MemHopConfig) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	d, err := sub.Open(cfg, enc)
-	if err != nil {
-		return nil, err
-	}
-	return &DB{d}, nil
+	return openWithEncoder(cfg, enc)
 }
 
 // OpenWithEncoder creates or opens a MemHop database with a custom encoder.
@@ -31,9 +33,52 @@ func OpenWithEncoder(cfg *sub.MemHopConfig, enc sub.Encoder) (*DB, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
+	return openWithEncoder(cfg, enc)
+}
+
+// openWithEncoder opens the engine and attaches the embedded built-in
+// capability manuals to the DB. Built-ins are read-only reference cards
+// appended to L5 query responses — nothing is written into the .meh file.
+func openWithEncoder(cfg *sub.MemHopConfig, enc sub.Encoder) (*DB, error) {
 	d, err := sub.Open(cfg, enc)
 	if err != nil {
 		return nil, err
 	}
+	builtins, err := loadBuiltinCapabilities()
+	if err != nil {
+		_ = d.Close()
+		return nil, err
+	}
+	d.SetBuiltinCapabilities(builtins)
 	return &DB{d}, nil
+}
+
+// loadBuiltinCapabilities parses the embedded memhop-capability/v2 manuals
+// (root capabilities/ directory) into read-only in-memory capabilities with
+// stable name-derived IDs. The files are validated by unit tests, so a
+// parse failure here means a corrupted build and aborts Open.
+func loadBuiltinCapabilities() ([]core.Capability, error) {
+	entries, err := fs.ReadDir(capabilities.FS, ".")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.Capability, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		data, err := fs.ReadFile(capabilities.FS, entry.Name())
+		if err != nil {
+			return nil, err
+		}
+		cap, err := sub.BuildCapability(data, "builtin:"+entry.Name())
+		if err != nil {
+			return nil, err
+		}
+		cap.IDHash = core.CapabilityID(cap.Name)
+		cap.Status = core.CapabilityActive
+		cap.Origin = core.CapabilityOriginBuiltin
+		out = append(out, *cap)
+	}
+	return out, nil
 }

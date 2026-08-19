@@ -40,6 +40,13 @@ func (ei *EntityIndex) AddEntity(name string, nodeHash uint64, l2IDs []uint64) {
 	ei.bkTree.Insert(key)
 }
 
+// RemoveEntity drops an entity from the lookup map. The BK-Tree keeps the
+// word for structural reasons, but FuzzyMatch verifies map membership before
+// returning a match, so removed entities are never observable.
+func (ei *EntityIndex) RemoveEntity(name string) {
+	delete(ei.entities, strings.ToLower(name))
+}
+
 func (ei *EntityIndex) ExactMatch(term string) (uint64, []uint64, bool) {
 	entry, ok := ei.entities[strings.ToLower(term)]
 	if !ok {

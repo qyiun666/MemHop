@@ -1,0 +1,54 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "memhop-guide",
+  "version": "1",
+  "type": "composite",
+  "summary": "MemHop 记忆系统总说明书：Search 回忆并存储、Update 回写回复、Dream 巩固、L7 轨迹结晶为 L5 能力的完整循环",
+  "trigger": "使用 memhop 记忆数据库，或不确定该调用哪个 MemHop API 时；memhop memory guide 入门 指南",
+  "resources": [
+    {
+      "type": "mcp",
+      "name": "memhop_search",
+      "ref": "memhop-mcp",
+      "description": "每轮收到用户消息时调用：检索相关记忆并把本条消息写入 L2 主题与 L4 档案；用返回的 profile/contexts/archives/capabilities 组装提示上下文"
+    },
+    {
+      "type": "mcp",
+      "name": "memhop_update",
+      "ref": "memhop-mcp",
+      "description": "每次生成回复后调用：把回复追加到 Search 返回的 new_topic_id"
+    },
+    {
+      "type": "mcp",
+      "name": "memhop_dream",
+      "ref": "memhop-mcp",
+      "description": "空闲期/固定周期调用：巩固记忆（L2 压缩、L1 衰减、L0 画像蒸馏）"
+    },
+    {
+      "type": "mcp",
+      "name": "memhop_crystallize",
+      "ref": "memhop-mcp",
+      "description": "轨迹积累后调用：把 L7 操作轨迹结晶为 L5 能力草稿，宿主激活后复用"
+    }
+  ],
+  "workflow": {
+    "steps": [
+      {
+        "ref": "memhop_search",
+        "action": "每轮对话开始：回忆并存储用户消息"
+      },
+      {
+        "ref": "memhop_update",
+        "action": "每轮对话结束：回写 Agent 回复"
+      },
+      {
+        "ref": "memhop_dream",
+        "action": "空闲期：巩固压缩记忆"
+      },
+      {
+        "ref": "memhop_crystallize",
+        "action": "轨迹充足时：结晶可复用能力"
+      }
+    ]
+  }
+}

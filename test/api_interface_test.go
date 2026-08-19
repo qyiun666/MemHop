@@ -76,7 +76,7 @@ func newMockLLM(t *testing.T) *mockLLM {
 		var content string
 		lower := strings.ToLower(sys)
 		switch {
-		case strings.Contains(lower, "extract keywords"):
+		case strings.Contains(lower, "meaningful keywords"):
 			m.calls["keywords"]++
 			content = `{"keywords":["重构","代码","测试"]}`
 		case strings.Contains(lower, "l2 chat memory"):
@@ -87,7 +87,7 @@ func newMockLLM(t *testing.T) *mockLLM {
 			content = `{"emotion":{"valence":0.8,"arousal":0.6,"dominance":0.5},"mbti":{"i_e":0.2,"n_s":0.3,"t_f":-0.1,"j_p":0.4,"type":"ESFP"},"per_node":[]}`
 		case strings.Contains(lower, "operation trajectory"):
 			m.calls["crystallize"]++
-			content = `{"plugins":[{"name":"重构流程","trigger":"用户要求重构","plugin_type":"workflow","manifest":{"tools":[{"name":"read_file","config":"{\"file\":\"a.go\"}"}]}}]}`
+			content = `{"capabilities":[{"action":"create","capability":{"format":"memhop-capability/v2","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","ref":"read_file","config":"{\"file\":\"a.go\"}"}]}}]}`
 		default:
 			t.Errorf("mockLLM: unknown system prompt: %.80s", sys)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -112,7 +112,7 @@ func consolidateReply(user string) string {
 	if len(scene) == 0 || len(ids) < 2 {
 		return `{"l2_groups":[],"l2_compression_needed":false}`
 	}
-	return fmt.Sprintf(`{"l2_groups":[{"scene_id":%s,"node_hashes":[%s,%s],"merged_title":"合并主题","merged_summary":"合并摘要保留全部细节"}],"l2_compression_needed":true}`,
+	return fmt.Sprintf(`{"l2_groups":[{"scene_id":%s,"node_hashes":[%s,%s],"merged_summary":"合并摘要保留全部细节"}],"l2_compression_needed":true}`,
 		scene[1], ids[0][1], ids[1][1])
 }
 
@@ -162,15 +162,27 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if res.NewTopicID == 0 || len(res.Contexts) == 0 {
 		t.Fatalf("auto-create should return new topic and contexts: %+v", res)
 	}
+	// auto-create links an L4 archive to the new topic; verify the link so
+	// the host can expand the archive content from Contexts' L4Refs.
+	linked := false
+	for _, ctx := range res.Contexts {
+		if len(ctx.L4Refs) > 0 {
+			linked = true
+			break
+		}
+	}
+	if !linked {
+		t.Fatal("auto-create Search should link L4 archives to topics")
+	}
 
 	// Update appends an agent reply to the topic.
 	topicID := common.FormatHash(res.NewTopicID)
-	if !db.Update(topicID, "好的,我来重构这段代码", ts+1000) {
-		t.Fatal("Update should succeed on an existing topic")
+	if ok, err := db.Update(topicID, "好的,我来重构这段代码", ts+1000); err != nil || !ok {
+		t.Fatalf("Update should succeed on an existing topic: ok=%v err=%v", ok, err)
 	}
-	// Update on a missing topic fails silently.
-	if db.Update(common.FormatHash(999), "无主话题", ts+2000) {
-		t.Fatal("Update on missing topic should fail")
+	// Update on a missing topic must return an error.
+	if ok, err := db.Update(common.FormatHash(999), "无主话题", ts+2000); err == nil || ok {
+		t.Fatalf("Update on missing topic should fail: ok=%v err=%v", ok, err)
 	}
 
 	// Normal Search retrieves the stored contexts.
@@ -274,6 +286,27 @@ func TestInterfaceL3(t *testing.T) {
 		t.Fatal("QueryL3Subgraph should return nodes")
 	}
 
+	// Search must link the matching L3 graph onto the new topic as L3Refs,
+	// which is what makes DirectedL3ID scoping work.
+	sres, err := db.Search(memhop.SearchQuery{Text: "Go 内存模型", AutoCreate: true, Timestamp: time.Now().UnixMilli()})
+	if err != nil {
+		t.Fatalf("Search after ImportL3: %v", err)
+	}
+	linked := false
+	for _, topic := range sres.Contexts {
+		if topic.ID != sres.NewTopicID {
+			continue
+		}
+		for _, ref := range topic.L3Refs {
+			if ref == graphs[0].IDHash {
+				linked = true
+			}
+		}
+	}
+	if !linked {
+		t.Fatalf("Search should link matching L3 graph into topic L3Refs: %+v", sres.Contexts)
+	}
+
 	newName := "改名"
 	if _, err := db.UpdateL3(graphID, &newName); err != nil {
 		t.Fatalf("UpdateL3: %v", err)
@@ -293,49 +326,58 @@ func TestInterfaceL3(t *testing.T) {
 func TestInterfaceL5(t *testing.T) {
 	db, _ := openTestDB(t)
 	dir := t.TempDir()
-	path := filepath.Join(dir, "plugin.json")
-	content := `{"name":"重构流程","trigger":"用户要求重构","plugin_type":"workflow","manifest":{"tools":[{"name":"read_file"}]}}`
+	path := filepath.Join(dir, "capability.json")
+	content := `{"format":"memhop-capability/v2","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file"}]}`
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write plugin file: %v", err)
+		t.Fatalf("write capability file: %v", err)
 	}
 
-	id, err := db.ImportPlugin(path)
+	cap, err := db.ImportCapability(path)
 	if err != nil {
-		t.Fatalf("ImportPlugin: %v", err)
+		t.Fatalf("ImportCapability: %v", err)
 	}
-	plugin, err := db.GetPlugin(id)
+	if cap == nil {
+		t.Fatal("ImportCapability returned nil")
+	}
+	id := common.FormatHash(cap.IDHash)
+	got, err := db.GetCapability(id)
 	if err != nil {
-		t.Fatalf("GetPlugin: %v", err)
+		t.Fatalf("GetCapability: %v", err)
 	}
-	if plugin.Name != "重构流程" || plugin.PluginType != "workflow" {
-		t.Fatalf("plugin mismatch: %+v", plugin)
+	if got.Name != "重构流程" || got.Type != memhop.CapabilityMCP {
+		t.Fatalf("capability mismatch: %+v", got)
 	}
-	plugins, err := db.ListPlugins(memhop.PluginListQuery{})
+	caps, err := db.ListCapabilities(memhop.CapabilityListQuery{})
 	if err != nil {
-		t.Fatalf("ListPlugins: %v", err)
+		t.Fatalf("ListCapabilities: %v", err)
 	}
-	if len(plugins) != 1 {
-		t.Fatalf("want 1 plugin, got %d", len(plugins))
+	// The response includes the read-only built-in toolbox; the imported
+	// capability must be present and every other entry must be a built-in.
+	found := false
+	for _, c := range caps {
+		if c.Name == "重构流程" {
+			found = true
+			continue
+		}
+		if c.Origin != memhop.CapabilityOriginBuiltin {
+			t.Fatalf("unexpected non-builtin capability: %+v", c)
+		}
+	}
+	if !found {
+		t.Fatal("imported capability missing from list")
 	}
 
-	// Search matches plugins by trigger text.
-	res, err := db.Search(memhop.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: time.Now().UnixMilli()})
+	if err := db.DeleteCapability(id); err != nil {
+		t.Fatalf("DeleteCapability: %v", err)
+	}
+	caps, err = db.ListCapabilities(memhop.CapabilityListQuery{})
 	if err != nil {
-		t.Fatalf("Search: %v", err)
+		t.Fatalf("ListCapabilities after delete: %v", err)
 	}
-	if len(res.Plugins) == 0 {
-		t.Fatal("Search should match the imported plugin by trigger")
-	}
-
-	if err := db.DeletePlugin(id); err != nil {
-		t.Fatalf("DeletePlugin: %v", err)
-	}
-	plugins, err = db.ListPlugins(memhop.PluginListQuery{})
-	if err != nil {
-		t.Fatalf("ListPlugins after delete: %v", err)
-	}
-	if len(plugins) != 0 {
-		t.Fatalf("want 0 plugins after delete, got %d", len(plugins))
+	for _, c := range caps {
+		if c.Origin != memhop.CapabilityOriginBuiltin {
+			t.Fatalf("stored capability should be deleted: %+v", c)
+		}
 	}
 }
 
@@ -367,15 +409,18 @@ func TestInterfaceL7(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Crystallize: %v", err)
 	}
-	if len(res.PluginIDs) != 1 {
-		t.Fatalf("want 1 plugin id: %+v", res)
+	if len(res.CreatedIDs) != 1 {
+		t.Fatalf("want 1 created capability id: %+v", res)
 	}
-	plugins, err := db.ListPlugins(memhop.PluginListQuery{})
+	// Built-ins are all active, so filtering by draft isolates the
+	// crystallized capability.
+	draft := memhop.CapabilityDraft
+	caps, err := db.ListCapabilities(memhop.CapabilityListQuery{Status: &draft})
 	if err != nil {
-		t.Fatalf("ListPlugins after crystallize: %v", err)
+		t.Fatalf("ListCapabilities after crystallize: %v", err)
 	}
-	if len(plugins) != 1 {
-		t.Fatalf("want 1 plugin after crystallize, got %d", len(plugins))
+	if len(caps) != 1 || caps[0].Status != memhop.CapabilityDraft {
+		t.Fatalf("want 1 draft capability after crystallize, got %d", len(caps))
 	}
 
 	if err := db.DeleteTrajectory(session); err != nil {
@@ -422,7 +467,7 @@ func TestInterfaceDream(t *testing.T) {
 		t.Fatalf("Search #2: %v", err)
 	}
 
-	ok, err := db.Dream(context.Background())
+	ok, err := db.Dream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
@@ -443,6 +488,14 @@ func TestInterfaceDream(t *testing.T) {
 	}
 	if profile.EmotionPatterns["valence"] == "" || profile.Personality == "" {
 		t.Fatalf("dream distill should backfill emotion/mbti: %+v", profile)
+	}
+
+	// Directed Dream: an invalid scene id is rejected, a valid one succeeds.
+	if _, err := db.Dream(context.Background(), "zz"); err == nil {
+		t.Fatal("Dream with invalid scene_id should error")
+	}
+	if ok, err := db.Dream(context.Background(), sceneID); err != nil || !ok {
+		t.Fatalf("directed Dream on scene %s: ok=%v err=%v", sceneID, ok, err)
 	}
 }
 

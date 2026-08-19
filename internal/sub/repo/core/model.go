@@ -6,6 +6,7 @@ package core
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
 )
@@ -35,24 +36,49 @@ func (c ContentType) MarshalJSON() ([]byte, error) { return common.EnumMarshal(c
 
 func (c *ContentType) UnmarshalJSON(data []byte) error { return common.EnumAssign(c, data) }
 
-// PluginStatus represents the lifecycle state of a PluginSlot.
-type PluginStatus uint8
+// CapabilityStatus represents the lifecycle state of an L5 capability.
+type CapabilityStatus uint8
 
 const (
-	PluginDraft      PluginStatus = 0
-	PluginActive     PluginStatus = 1
-	PluginDeprecated PluginStatus = 2
+	CapabilityDraft      CapabilityStatus = 0
+	CapabilityActive     CapabilityStatus = 1
+	CapabilityDeprecated CapabilityStatus = 2
 )
 
-var pluginStatusNames = map[PluginStatus]string{
-	PluginDraft: "draft", PluginActive: "active", PluginDeprecated: "deprecated",
+var capabilityStatusNames = map[CapabilityStatus]string{
+	CapabilityDraft: "draft", CapabilityActive: "active", CapabilityDeprecated: "deprecated",
 }
 
-func (c PluginStatus) String() string { return common.EnumString(c, pluginStatusNames, "PluginStatus") }
+func (c CapabilityStatus) String() string {
+	return common.EnumString(c, capabilityStatusNames, "CapabilityStatus")
+}
 
-func (c PluginStatus) MarshalJSON() ([]byte, error) { return common.EnumMarshal(c) }
+func (c CapabilityStatus) MarshalJSON() ([]byte, error) { return common.EnumMarshal(c) }
 
-func (c *PluginStatus) UnmarshalJSON(data []byte) error { return common.EnumAssign(c, data) }
+func (c *CapabilityStatus) UnmarshalJSON(data []byte) error { return common.EnumAssign(c, data) }
+
+// CapabilityType describes how an L5 capability is implemented: a wrapper
+// around a single MCP tool, a single skill, or a composite of several
+// resources.
+type CapabilityType string
+
+const (
+	CapabilityMCP       CapabilityType = "mcp"
+	CapabilitySkill     CapabilityType = "skill"
+	CapabilityComposite CapabilityType = "composite"
+)
+
+// CapabilityOrigin records where a capability came from.
+type CapabilityOrigin string
+
+const (
+	CapabilityOriginImported     CapabilityOrigin = "imported"
+	CapabilityOriginCrystallized CapabilityOrigin = "crystallized"
+	CapabilityOriginHost         CapabilityOrigin = "host"
+	// CapabilityOriginBuiltin marks the read-only reference manuals shipped
+	// with the project; they are attached to L5 responses, never stored.
+	CapabilityOriginBuiltin CapabilityOrigin = "builtin"
+)
 
 // HyperedgeKind classifies L1 hyperedges in the hypergraph skeleton.
 type HyperedgeKind uint8
@@ -189,8 +215,9 @@ type SceneEdge struct {
 
 // SceneSlot is an L2 scene container holding multiple session topics.
 type SceneSlot struct {
-	SceneID   uint64 `json:"scene_id"`
-	SceneName string `json:"scene_name"`
+	SceneID    uint64 `json:"scene_id"`
+	SceneName  string `json:"scene_name"`
+	TopicCount int    `json:"topic_count"` // depth-1 root topics under this scene
 }
 
 // NewSceneSlot builds a SceneSlot from a name; ID is the xxhash64 of the name.
@@ -225,9 +252,19 @@ type TopicSlot struct {
 	CentroidPageRef uint64 `json:"centroid_page_ref"`
 }
 
-// ComputeTopicID derives a unique topic ID from sceneID and both timestamps.
+// ComputeTopicID derives a topic ID from sceneID and both timestamps.
+// Dream-created fused topics use this form for deterministic replay.
 func ComputeTopicID(sceneID uint64, userTS, agentTS int64) uint64 {
 	combined := fmt.Sprintf("%d:%d:%d", sceneID, userTS, agentTS)
+	return common.HashID(combined)
+}
+
+// ComputeTopicIDForText derives a Search-created topic ID that also binds
+// the user text. This keeps the timestamp-only ID stable for Dream, while
+// two different messages that happen to share scene and millisecond no
+// longer collide and overwrite each other.
+func ComputeTopicIDForText(sceneID uint64, userTS int64, text string) uint64 {
+	combined := fmt.Sprintf("%d:%d:0:%s", sceneID, userTS, text)
 	return common.HashID(combined)
 }
 
@@ -299,41 +336,97 @@ type ArchiveSlot struct {
 	Metadata    *string     `json:"metadata,omitempty"`
 }
 
-// PluginSlot is an L5 plugin: a self-contained capability package with a
-// structured manifest (skills / MCPs / tools / prompts / services). The ID
-// (hash(name:trigger)) makes import and crystallization idempotent.
-type PluginSlot struct {
-	IDHash        uint64         `json:"id_hash"`
-	Name          string         `json:"name"`
-	Trigger       string         `json:"trigger"`
-	PluginType    string         `json:"plugin_type"` // primary type label: skill/mcp/toolkit/workflow/...
-	Status        PluginStatus   `json:"status"`
-	Confidence    float32        `json:"confidence"`
-	SuccessRate   float32        `json:"success_rate"`
-	TriggerCount  uint32         `json:"trigger_count"`
-	LastTriggered int64          `json:"last_triggered"`
-	Manifest      PluginManifest `json:"manifest"`
-	Path          *string        `json:"path,omitempty"` // import path or crystallization source
-	CreatedAt     int64          `json:"created_at"`
-	UpdatedAt     int64          `json:"updated_at"`
+// Capability is an L5 reusable capability: a wrapper around host resources
+// (MCP tools / skills) that MemHop stores and matches but never executes.
+type Capability struct {
+	IDHash        uint64           `json:"id_hash"`
+	Name          string           `json:"name"`
+	Version       string           `json:"version"`
+	Type          CapabilityType   `json:"type"`
+	Summary       string           `json:"summary"`
+	Trigger       string           `json:"trigger"`
+	Resources     []ResourceRef    `json:"resources"`
+	Workflow      *Workflow        `json:"workflow,omitempty"`
+	Status        CapabilityStatus `json:"status"`
+	Origin        CapabilityOrigin `json:"origin"`
+	FileHash      string           `json:"file_hash,omitempty"`
+	SuccessRate   float32          `json:"success_rate"`
+	TriggerCount  uint32           `json:"trigger_count"`
+	LastTriggered int64            `json:"last_triggered"`
+	CreatedAt     int64            `json:"created_at"`
+	UpdatedAt     int64            `json:"updated_at"`
 }
 
-// PluginManifest is the structured content of a PluginSlot; each section
-// holds homogeneous entries. MemHop stores but does not interpret the
-// Config payloads.
-type PluginManifest struct {
-	Skills   []PluginItem `json:"skills,omitempty"`
-	MCPs     []PluginItem `json:"mcps,omitempty"`
-	Tools    []PluginItem `json:"tools,omitempty"`
-	Prompts  []PluginItem `json:"prompts,omitempty"`
-	Services []PluginItem `json:"services,omitempty"`
+// NormalizeCapabilityName returns the canonical lowercase name used for IDs
+// and duplicate detection.
+func NormalizeCapabilityName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
-// PluginItem is one entry within a manifest section.
-type PluginItem struct {
-	Name        string  `json:"name"`
-	Description string  `json:"description,omitempty"`
-	Config      *string `json:"config,omitempty"` // section-specific definition (JSON string or template)
+// CapabilityID derives the stable L5 record ID from a capability name.
+func CapabilityID(name string) uint64 {
+	return common.HashID("capability:" + NormalizeCapabilityName(name))
+}
+
+// PromptCard renders the concise capability view intended for an LLM prompt.
+func (c Capability) PromptCard() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[capability: %s]\n", c.Name)
+	fmt.Fprintf(&b, "id: %s\n", common.FormatHash(c.IDHash))
+	fmt.Fprintf(&b, "type: %s\n", c.Type)
+	if c.Version != "" {
+		fmt.Fprintf(&b, "version: %s\n", c.Version)
+	}
+	if c.Summary != "" {
+		fmt.Fprintf(&b, "summary: %s\n", c.Summary)
+	}
+	if c.Trigger != "" {
+		fmt.Fprintf(&b, "trigger: %s\n", c.Trigger)
+	}
+	for _, r := range c.Resources {
+		fmt.Fprintf(&b, "resource: %s %s", r.Type, r.Name)
+		if r.Ref != "" {
+			fmt.Fprintf(&b, " (%s)", r.Ref)
+		}
+		b.WriteByte('\n')
+		if r.Description != "" {
+			fmt.Fprintf(&b, "  use: %s\n", r.Description)
+		}
+	}
+	if c.Workflow != nil {
+		refs := make([]string, 0, len(c.Workflow.Steps))
+		for _, step := range c.Workflow.Steps {
+			refs = append(refs, step.Ref)
+		}
+		fmt.Fprintf(&b, "flow: %s\n", strings.Join(refs, " -> "))
+	}
+	if c.TriggerCount > 0 || c.SuccessRate > 0 {
+		fmt.Fprintf(&b, "usage: %d, success_rate: %.2f\n", c.TriggerCount, c.SuccessRate)
+	}
+	return b.String()
+}
+
+// ResourceRef is one wrapped resource: an MCP tool or a skill together with
+// usage instructions for the host. MemHop stores these references but does
+// not execute them.
+type ResourceRef struct {
+	Type        CapabilityType `json:"type"` // mcp | skill
+	Name        string         `json:"name"`
+	Ref         string         `json:"ref,omitempty"` // MCP server address / skill path / command
+	Description string         `json:"description,omitempty"`
+	Config      *string        `json:"config,omitempty"`
+}
+
+// Workflow is the ordered orchestration of a composite capability.
+type Workflow struct {
+	Steps []WorkflowStep `json:"steps"`
+}
+
+// WorkflowStep is one orchestration step referencing a resource (by
+// Resources[].Name) or another capability (by name).
+type WorkflowStep struct {
+	Ref    string `json:"ref"`
+	Action string `json:"action,omitempty"`
 }
 
 // SceneUsageSlot is an L6 scene-level retrieval usage feedback record,

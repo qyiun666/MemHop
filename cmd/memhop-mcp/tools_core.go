@@ -31,6 +31,10 @@ type updateResult struct {
 	OK bool `json:"ok"`
 }
 
+type dreamArgs struct {
+	SceneID string `json:"scene_id"`
+}
+
 type dreamResult struct {
 	Consolidated bool `json:"consolidated"`
 }
@@ -43,7 +47,7 @@ type statusResult struct {
 func registerCoreTools(s *mcp.Server, db *memhop.DB) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_search",
-		Description: "核心记忆检索：回忆与用户侧写入。以文本检索匹配上下文（BM25 + 向量 + 实体三通道 RRF），同时将用户原文提取事实后追加到最佳匹配话题。返回匹配上下文、档案摘要与本轮新建 topic ID（供 memhop_update 追加 Agent 回复）。",
+		Description: "核心记忆检索：回忆与用户侧写入。以文本检索匹配上下文（BM25 + 向量 + 实体模糊三通道 RRF），同时将用户原文提取事实后追加到最佳匹配话题。返回匹配 topic、对应的 L4 archive 全文与本轮新建 topic ID（供 memhop_update 追加 Agent 回复）。",
 		InputSchema: objSchema(map[string]any{
 			"text":           strProp("搜索文本（对话原文），必填"),
 			"timestamp":      intProp("消息的 Unix 毫秒时间戳，必填"),
@@ -74,15 +78,23 @@ func registerCoreTools(s *mcp.Server, db *memhop.DB) {
 			"timestamp": intProp("Unix 毫秒时间戳，必填"),
 		}, "topic_id", "text", "timestamp"),
 	}, handle[updateArgs, updateResult](func(a updateArgs) (updateResult, error) {
-		return updateResult{OK: db.Update(a.TopicID, a.Text, a.Timestamp)}, nil
+		ok, err := db.Update(a.TopicID, a.Text, a.Timestamp)
+		if err != nil {
+			return updateResult{}, err
+		}
+		return updateResult{OK: ok}, nil
 	}))
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_dream",
-		Description: "记忆巩固周期（模拟睡眠）：五阶段流水线（L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏）。会调用 LLM，耗时长，客户端需放宽超时。",
-		InputSchema: objSchema(nil),
-	}, handleNoArgs[dreamResult](func() (dreamResult, error) {
-		ok, err := db.RunDream(context.Background())
+		Description: "记忆巩固周期（模拟睡眠）：五阶段流水线（L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏）。会调用 LLM，耗时长，客户端需放宽超时。scene_id 可选：指定仅在该场景内巩固；不传则巩固内存中全部激活场景。",
+		InputSchema: objSchema(map[string]any{
+			"scene_id": strProp("可选：指定仅在该场景内巩固（16 位 hex）；不传则巩固全部激活场景"),
+		}),
+	}, handle[dreamArgs, dreamResult](func(a dreamArgs) (dreamResult, error) {
+		// Use Dream (not RunDream): Dream takes the DB write lock and checks
+		// the closed flag, matching the single-agent serial contract.
+		ok, err := db.Dream(context.Background(), a.SceneID)
 		return dreamResult{Consolidated: ok}, err
 	}))
 

@@ -88,7 +88,7 @@ func TestLoadConfigDefaults(t *testing.T) {
 	if cfg.Listen != "127.0.0.1:3939" {
 		t.Errorf("default listen mismatch: %q", cfg.Listen)
 	}
-	if cfg.Base.EncoderTimeoutSecs != 20 || cfg.Base.LLM.TimeoutSecs != 30 || cfg.Base.LLM.MaxOutputTokens != 2048 {
+	if cfg.Base.EncoderTimeoutSecs != 20 || cfg.Base.LLM.TimeoutSecs != 30 || cfg.Base.LLM.MaxOutputTokens != 8192 {
 		t.Errorf("defaults mismatch: %+v", cfg.Base)
 	}
 }

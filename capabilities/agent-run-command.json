@@ -1,0 +1,16 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "agent-run-command",
+  "version": "1",
+  "type": "skill",
+  "summary": "执行 shell 命令：构建、测试、脚本执行与结果回收",
+  "trigger": "需要执行命令、构建、跑测试、运行脚本时；run command shell bash 执行 命令",
+  "resources": [
+    {
+      "type": "skill",
+      "name": "run-command",
+      "ref": "agent-skills/run-command/SKILL.md",
+      "description": "怎么用：参数 command=shell 命令、timeout_ms=超时毫秒（可选）、background=是否后台执行（可选）；构建/测试/脚本执行与结果回收"
+    }
+  ]
+}

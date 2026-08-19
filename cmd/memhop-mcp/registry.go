@@ -30,11 +30,14 @@ type tenantEntry struct {
 // bound to it.
 type tenantRegistry struct {
 	mu      sync.Mutex
-	base    memhop.MemHopConfig // shared engine config; DBPath set per tenant
+	base    memhop.MemHopConfig // shared engine config; DBPath filled per tenant
 	dbDir   string
 	allowed map[string]bool // empty means any valid tenant id
 	entries map[string]*tenantEntry
 	logger  *slog.Logger
+	// open is a small injection seam for offline tests; production always
+	// uses memhop.Open.
+	open func(cfg *memhop.MemHopConfig) (*memhop.DB, error)
 }
 
 // newRegistry builds a tenant registry. allowed is the tenant whitelist;
@@ -45,6 +48,7 @@ func newRegistry(base memhop.MemHopConfig, dbDir string, allowed []string, logge
 		dbDir:   dbDir,
 		entries: make(map[string]*tenantEntry),
 		logger:  logger,
+		open:    memhop.Open,
 	}
 	if len(allowed) > 0 {
 		r.allowed = make(map[string]bool, len(allowed))
@@ -77,7 +81,7 @@ func (r *tenantRegistry) get(tenant string) (*tenantEntry, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	db, err := memhop.Open(&cfg)
+	db, err := r.open(&cfg)
 	if err != nil {
 		return nil, err
 	}

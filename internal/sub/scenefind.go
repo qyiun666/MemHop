@@ -19,9 +19,18 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/index"
 )
 
+// SceneHit is the retrieval result: the winning scene, its aggregated
+// score, and the scene's topics ordered by fused relevance.
 type SceneHit struct {
 	SceneID uint64
 	Score   float32
+	Topics  []ScoredTopic
+}
+
+// ScoredTopic is one topic of the hit scene with its fused relevance score.
+type ScoredTopic struct {
+	Topic core.TopicSlot
+	Score float32
 }
 
 // Encoder is the text encoding interface for the vector channel, injected by the host.
@@ -91,12 +100,15 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.Spa
 		byID[t.ID] = t
 	}
 	sceneScores := make(map[uint64]float32)
+	topicScores := make(map[uint64]float32)
 	for id, r := range rrf {
 		t, ok := byID[id]
 		if !ok {
 			continue
 		}
-		sceneScores[t.SceneID] += r + keywordHit(t, kwSet)
+		sc := r + keywordHit(t, kwSet)
+		sceneScores[t.SceneID] += sc
+		topicScores[id] = sc
 	}
 
 	// Vector floor: when keyword overlap is zero, BM25/entity score nothing,
@@ -136,6 +148,22 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.Spa
 	if best.Score <= threshold {
 		return SceneHit{}, nil
 	}
+
+	// Winning scene's topics, ordered by fused relevance (ties by ID for
+	// determinism); topics with no channel hit still carry their keyword score.
+	best.Topics = make([]ScoredTopic, 0, len(byID))
+	for id, t := range byID {
+		if t.SceneID != best.SceneID {
+			continue
+		}
+		best.Topics = append(best.Topics, ScoredTopic{Topic: t, Score: topicScores[id]})
+	}
+	sort.Slice(best.Topics, func(i, j int) bool {
+		if best.Topics[i].Score != best.Topics[j].Score {
+			return best.Topics[i].Score > best.Topics[j].Score
+		}
+		return best.Topics[i].Topic.ID < best.Topics[j].Topic.ID
+	})
 	return best, nil
 }
 

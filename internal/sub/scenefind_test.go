@@ -141,6 +141,31 @@ func TestApplySceneBonuses(t *testing.T) {
 	}
 }
 
+// TestTopSceneRelevanceOrder: the hit scene's Topics must be ordered by
+// fused relevance, not recency — an older matching topic ranks above a
+// newer non-matching one.
+func TestTopSceneRelevanceOrder(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	// scene 1: old topic about rust (t=100), new topic about cooking (t=300).
+	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
+	writeTopic(t, engine, sparse, newTopic(4002, 1, 300, []string{"cooking"}))
+
+	hit, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 0, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	if len(hit.Topics) != 2 {
+		t.Fatalf("Topics = %d entries; want 2", len(hit.Topics))
+	}
+	if hit.Topics[0].Topic.ID != 4001 {
+		t.Errorf("Topics[0] = %d; want 4001 (rust topic first by relevance, not recency)", hit.Topics[0].Topic.ID)
+	}
+	if hit.Topics[0].Score <= hit.Topics[1].Score {
+		t.Errorf("Topics[0].Score = %v; want > Topics[1].Score = %v", hit.Topics[0].Score, hit.Topics[1].Score)
+	}
+}
+
 // TestTopSceneBasic basic retrieval: the hit scene wins.
 func TestTopSceneBasic(t *testing.T) {
 	engine := newTestEngine(t)
@@ -185,10 +210,10 @@ func TestTopSceneAggregation(t *testing.T) {
 func TestTopSceneActivationBonus(t *testing.T) {
 	engine := newTestEngine(t)
 	sparse := index.NewSparseIndex()
-	// Single topic: bm25 rank1 -> rrf = 1/61, hit = 1.0.
+	// Single topic: bm25 + entity channels each contribute 1/61, keyword hit = 1.0.
 	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
 
-	want := float32(1.0) + 1.0/61.0 + 0.2
+	want := float32(1.0) + 2.0/61.0 + 0.2
 	hit, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, []uint64{1, 1}, DefaultMemHopDefaults, 1.15, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
@@ -213,12 +238,12 @@ func TestTopSceneRecentBonus(t *testing.T) {
 	sparse := index.NewSparseIndex()
 	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
 
-	// Latest-topic scene +0.1: score = 1.0 + 1/61 + 0.1.
+	// Latest-topic scene +0.1: score = 1.0 + 2/61 (bm25+entity) + 0.1.
 	recent, err := TopScene(context.Background(), engine, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 1.05, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
-	wantRecent := float32(1.0) + 1.0/61.0 + 0.1
+	wantRecent := float32(1.0) + 2.0/61.0 + 0.1
 	if recent.SceneID != 1 || !approx(recent.Score, wantRecent) {
 		t.Errorf("recent hit = %+v; want Score=%v", recent, wantRecent)
 	}
@@ -228,7 +253,7 @@ func TestTopSceneRecentBonus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
-	wantActive := float32(1.0) + 1.0/61.0 + 0.2
+	wantActive := float32(1.0) + 2.0/61.0 + 0.2
 	if active.SceneID != 1 || !approx(active.Score, wantActive) {
 		t.Errorf("active hit = %+v; want Score=%v (active takes priority)", active, wantActive)
 	}
@@ -339,7 +364,9 @@ func TestTopSceneEmpty(t *testing.T) {
 
 // TestActivateSceneDedup activation dedup: repeats keep first-order positions.
 func TestActivateSceneDedup(t *testing.T) {
-	db := &DB{}
+	cfg := *DefaultMemHopDefaults
+	cfg.Capacity = 7
+	db := &DB{config: &MemHopConfig{Defaults: cfg}}
 	db.activateScene(7)
 	db.activateScene(7)
 	db.activateScene(9)
@@ -348,5 +375,18 @@ func TestActivateSceneDedup(t *testing.T) {
 	}
 	if db.activeScenes[0] != 7 || db.activeScenes[1] != 9 {
 		t.Errorf("activeScenes = %v; want [7 9]", db.activeScenes)
+	}
+}
+
+// TestActivateSceneEvictsOldest bounds Dream work to Defaults.Capacity.
+func TestActivateSceneEvictsOldest(t *testing.T) {
+	cfg := *DefaultMemHopDefaults
+	cfg.Capacity = 2
+	db := &DB{config: &MemHopConfig{Defaults: cfg}}
+	db.activateScene(7)
+	db.activateScene(9)
+	db.activateScene(11)
+	if len(db.activeScenes) != 2 || db.activeScenes[0] != 9 || db.activeScenes[1] != 11 {
+		t.Fatalf("activeScenes = %v; want [9 11]", db.activeScenes)
 	}
 }

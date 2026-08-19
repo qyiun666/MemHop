@@ -20,7 +20,7 @@ build:
 build-mcp:
 	go build -o bin/memhop-mcp ./cmd/memhop-mcp
 
-## MCP server unit + stdio smoke tests (offline, no Ollama/LLM needed)
+## MCP server unit + SSE smoke tests (offline, no Ollama/LLM needed)
 test-mcp:
 	go test ./cmd/memhop-mcp/...
 
@@ -75,7 +75,7 @@ help:
 	@echo "  test              run all tests (unit + interface)"
 	@echo "  test-affected     run tests for Go packages changed since HEAD"
 	@echo "  test-unit         run only internal unit tests"
-	@echo "  test-mcp          run MCP server unit + smoke tests (offline)"
+	@echo "  test-mcp          run MCP server unit + SSE smoke tests (offline)"
 	@echo "  test-e2e          run integration tests (needs Ollama + LLM)"
 	@echo "  test-integration  run integration tests (needs Ollama + LLM)"
 	@echo "  bench             run benchmarks (needs Ollama)"

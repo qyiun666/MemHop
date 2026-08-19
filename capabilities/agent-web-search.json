@@ -1,0 +1,16 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "agent-web-search",
+  "version": "1",
+  "type": "skill",
+  "summary": "联网搜索：获取当前公开信息并附来源链接",
+  "trigger": "需要查询最新资料、文档、报错信息时；web search 联网 搜索 查询 资料",
+  "resources": [
+    {
+      "type": "skill",
+      "name": "web-search",
+      "ref": "agent-skills/web-search/SKILL.md",
+      "description": "怎么用：参数 query=搜索关键词；获取当前公开信息并附来源链接"
+    }
+  ]
+}

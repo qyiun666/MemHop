@@ -1,0 +1,16 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "agent-write-file",
+  "version": "1",
+  "type": "skill",
+  "summary": "创建或整体重写文件：一次性写入完整 UTF-8 内容",
+  "trigger": "需要新建文件或整体替换文件内容时；write file 写入 创建文件 保存",
+  "resources": [
+    {
+      "type": "skill",
+      "name": "write-file",
+      "ref": "agent-skills/write-file/SKILL.md",
+      "description": "怎么用：参数 path=目标文件绝对路径、content=完整文件内容（UTF-8）；创建或整体重写文件"
+    }
+  ]
+}

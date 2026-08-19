@@ -10,6 +10,7 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
 	"github.com/qyiun666/MemHop/internal/sub/repo"
+	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
 // DB is the global in-memory database instance returned by Open; business
@@ -22,9 +23,13 @@ type DB struct {
 	l1Reverse    atomic.Pointer[repo.L1ReverseIndex]
 	encoder      Encoder
 	activeScenes []uint64
-	lastDreamAt  atomic.Int64 // Unix ms of the last successful Dream (0 = never)
-	closed       atomic.Bool
-	mu           sync.RWMutex // public methods RLock; Close/Dream Lock
+	// builtinCapabilities are read-only reference capabilities attached to
+	// L5 query responses; they are never written to the .meh file. Set once
+	// via SetBuiltinCapabilities before the DB is published.
+	builtinCapabilities []core.Capability
+	lastDreamAt         atomic.Int64 // Unix ms of the last successful Dream (0 = never)
+	closed              atomic.Bool
+	mu                  sync.RWMutex // public methods RLock; Close/Dream Lock
 }
 
 // Lock/Unlock provide the write lock for combined internal-layer write ops.
@@ -35,12 +40,23 @@ func (db *DB) IsClosed() bool { return db.closed.Load() }
 
 func (db *DB) HasActiveScenes() bool { return len(db.activeScenes) > 0 }
 
-// activateScene appends a scene idempotently; Search holds RLock and calls are serialized.
+// activateScene appends a scene idempotently and bounds the active set to
+// Defaults.Capacity. When full, the oldest activation is evicted; that scene
+// remains searchable on disk but is no longer a Dream compression target.
 func (db *DB) activateScene(sceneID uint64) {
 	for _, sid := range db.activeScenes {
 		if sid == sceneID {
 			return
 		}
+	}
+	capacity := 0
+	if db.config != nil {
+		capacity = db.config.Defaults.Capacity
+	}
+	if capacity > 0 && len(db.activeScenes) >= capacity {
+		copy(db.activeScenes, db.activeScenes[1:])
+		db.activeScenes[len(db.activeScenes)-1] = sceneID
+		return
 	}
 	db.activeScenes = append(db.activeScenes, sceneID)
 }

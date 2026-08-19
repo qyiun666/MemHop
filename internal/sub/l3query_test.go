@@ -221,3 +221,43 @@ func TestQueryL3SubgraphStartMissing(t *testing.T) {
 		t.Fatalf("want ErrNotFound, got %v", err)
 	}
 }
+
+// TestQueryL3SubgraphStartWrongGraph rejects a start node that belongs to
+// another graph instead of silently returning a disconnected singleton.
+func TestQueryL3SubgraphStartWrongGraph(t *testing.T) {
+	engine := newTestEngine(t)
+	db := &DB{engine: engine}
+	graphID := common.HashID("graph-a")
+	otherID := common.HashID("graph-b")
+	node := testNode(common.HashID("n"), otherID, "N", "t", "", nil)
+	writeNode(t, engine, &node)
+
+	_, err := db.QueryL3Subgraph(common.FormatHash(graphID), common.FormatHash(node.IDHash), 1, nil)
+	if err == nil {
+		t.Fatal("want error for start node from another graph")
+	}
+	if common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("want ErrInvalidQuery, got %v", err)
+	}
+}
+
+// TestQueryL3NodesIDsRespectGraphID filters ID lookups by the requested graph.
+func TestQueryL3NodesIDsRespectGraphID(t *testing.T) {
+	engine := newTestEngine(t)
+	db := &DB{engine: engine}
+	graphID := common.HashID("graph-a")
+	otherID := common.HashID("graph-b")
+	node := testNode(common.HashID("n"), otherID, "N", "t", "", nil)
+	writeNode(t, engine, &node)
+
+	out, err := db.QueryL3Nodes(L3NodeQuery{
+		GraphID: common.FormatHash(graphID),
+		IDs:     []string{common.FormatHash(node.IDHash)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("node from another graph should be filtered: %+v", out)
+	}
+}

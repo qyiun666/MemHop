@@ -14,12 +14,16 @@ import (
 
 type knowledgeImportArgs struct {
 	Items []memhop.L3ImportItem `json:"items"`
-	Mode  memhop.L3ImportMode   `json:"mode,omitempty"` // "Skip" / "Merge" / "Overwrite"（默认 Overwrite）
+	Mode  memhop.L3ImportMode   `json:"mode,omitempty"` // "Skip" / "Merge" / "Overwrite" (default: Overwrite)
 }
 
 type knowledgeUpdateArgs struct {
 	ID   string  `json:"id"`
 	Name *string `json:"name,omitempty"`
+}
+
+type knowledgeGetArgs struct {
+	ID string `json:"id"`
 }
 
 type knowledgeDeleteArgs struct {
@@ -48,7 +52,7 @@ func registerL3Tools(s *mcp.Server, db *memhop.DB) {
 		InputSchema: objSchema(map[string]any{
 			"id": strProp("图谱 ID（16 位 hex），必填"),
 		}, "id"),
-	}, handle[knowledgeDeleteArgs, memhop.L3Graph](func(a knowledgeDeleteArgs) (memhop.L3Graph, error) {
+	}, handle[knowledgeGetArgs, memhop.L3Graph](func(a knowledgeGetArgs) (memhop.L3Graph, error) {
 		g, err := db.GetL3(a.ID)
 		if err != nil {
 			return memhop.L3Graph{}, err

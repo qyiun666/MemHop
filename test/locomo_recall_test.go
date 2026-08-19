@@ -89,7 +89,9 @@ func BenchmarkLocomoRecall(b *testing.B) {
 					activeTopic = common.FormatHash(res.NewTopicID)
 				} else if activeTopic != "" {
 					// Agent turn: record the reply on the user turn's topic.
-					db.Update(activeTopic, tn.Text, ts)
+					if _, err := db.Update(activeTopic, tn.Text, ts); err != nil {
+						b.Fatalf("ingest Update: %v", err)
+					}
 				}
 			}
 		}

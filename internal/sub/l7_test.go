@@ -14,7 +14,6 @@ import (
 	"unicode/utf8"
 
 	"github.com/qyiun666/MemHop/internal/sub/common"
-	"github.com/qyiun666/MemHop/internal/sub/repo"
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
@@ -91,12 +90,10 @@ func TestCrystallizeNoTrajectory(t *testing.T) {
 	}
 }
 
-// mockLLMServer serves a fixed crystallize completion response on the
-// OpenAI-compatible chat/completions endpoint.
 func mockLLMServer(t *testing.T, content string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+		if strings.HasSuffix(r.URL.Path, "/chat/completions") == false {
 			http.NotFound(w, r)
 			return
 		}
@@ -111,11 +108,8 @@ func mockLLMServer(t *testing.T, content string) *httptest.Server {
 	return srv
 }
 
-// TestCrystallizeFullFlow drives the whole L7 → L5 pipeline against a mock
-// LLM: trajectory events → provider.Crystallize → L5 plugin with Path
-// backfilled to the session ID.
 func TestCrystallizeFullFlow(t *testing.T) {
-	srv := mockLLMServer(t, `{"plugins":[{"name":"重构流程","trigger":"用户要求重构","plugin_type":"workflow","manifest":{"tools":[{"name":"read_file","config":"{\"file\":\"a.go\"}"},{"name":"write_file"}],"prompts":[{"name":"重构提示","config":"先读后写"}]}}]}`)
+	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"重构流程","type":"composite","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","config":"{\"file\":\"a.go\"}"},{"type":"mcp","name":"write_file"}]}}]}`)
 	db := &DB{
 		engine: newTestEngine(t),
 		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
@@ -131,45 +125,27 @@ func TestCrystallizeFullFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("crystallize: %v", err)
 	}
-	if len(result.PluginIDs) != 1 {
-		t.Fatalf("want 1 plugin, got %d", len(result.PluginIDs))
+	if len(result.CreatedIDs) != 1 || len(result.ReusedIDs) != 0 || len(result.MergedIDs) != 0 {
+		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	// Plugin persisted with Path = sessionID.
-	plugin, err := db.GetPlugin(result.PluginIDs[0])
+	cap, err := db.GetCapability(result.CreatedIDs[0])
 	if err != nil {
-		t.Fatalf("get plugin: %v", err)
+		t.Fatalf("get capability: %v", err)
 	}
-	if plugin.Path == nil || *plugin.Path != session {
-		t.Fatalf("path not backfilled: %+v", plugin)
+	if cap.Status != core.CapabilityDraft || cap.Origin != core.CapabilityOriginCrystallized {
+		t.Fatalf("crystallized capability metadata mismatch: %+v", cap)
 	}
-	if plugin.Name != "重构流程" || plugin.Trigger != "用户要求重构" || plugin.PluginType != "workflow" {
-		t.Fatalf("plugin fields mismatch: %+v", plugin)
+	if cap.Type != core.CapabilityComposite || cap.Name != "重构流程" {
+		t.Fatalf("capability fields mismatch: %+v", cap)
 	}
-
-	// Manifest persisted: tools in order with config, prompts section kept.
-	tools := plugin.Manifest.Tools
-	if len(tools) != 2 {
-		t.Fatalf("want 2 tools, got %d", len(tools))
-	}
-	if tools[0].Name != "read_file" || tools[1].Name != "write_file" {
-		t.Fatalf("tools mismatch: %+v", tools)
-	}
-	if tools[0].Config == nil || !strings.Contains(*tools[0].Config, "a.go") {
-		t.Fatalf("tool config mismatch")
-	}
-	if tools[1].Config != nil {
-		t.Fatalf("omitted config should stay nil")
-	}
-	if len(plugin.Manifest.Prompts) != 1 || plugin.Manifest.Prompts[0].Name != "重构提示" {
-		t.Fatalf("prompts mismatch: %+v", plugin.Manifest.Prompts)
+	if len(cap.Resources) != 2 || cap.Resources[0].Name != "read_file" || cap.Resources[1].Name != "write_file" {
+		t.Fatalf("resources mismatch: %+v", cap.Resources)
 	}
 }
 
-// TestCrystallizeIdempotent re-crystallizing the same session returns the
-// same plugin ID (name:trigger hash) instead of duplicating.
-func TestCrystallizeIdempotent(t *testing.T) {
-	srv := mockLLMServer(t, `{"plugins":[{"name":"发布流程","trigger":"准备发布时","plugin_type":"workflow","manifest":{"tools":[{"name":"run_test"}]}}]}`)
+func TestCrystallizeReusesExisting(t *testing.T) {
+	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"发布流程","type":"mcp","summary":"发布","trigger":"准备发布时","resources":[{"type":"mcp","name":"run_test"}]}}]}`)
 	db := &DB{
 		engine: newTestEngine(t),
 		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
@@ -182,27 +158,35 @@ func TestCrystallizeIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first crystallize: %v", err)
 	}
+	if len(first.CreatedIDs) != 1 {
+		t.Fatalf("first result: %+v", first)
+	}
+
+	secondContent := `{"capabilities":[{"action":"reuse","reuse_id":"` + first.CreatedIDs[0] + `","capability":{"name":"发布流程","type":"mcp","summary":"发布","trigger":"准备发布时","resources":[{"type":"mcp","name":"run_test"}]}}]}`
+	srv2 := mockLLMServer(t, secondContent)
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
 	second, err := db.Crystallize(context.Background(), session)
 	if err != nil {
 		t.Fatalf("second crystallize: %v", err)
 	}
-	if len(first.PluginIDs) != 1 || len(second.PluginIDs) != 1 || first.PluginIDs[0] != second.PluginIDs[0] {
-		t.Fatalf("expected idempotent plugin ids, got %v vs %v", first.PluginIDs, second.PluginIDs)
+	if len(second.CreatedIDs) != 0 || len(second.ReusedIDs) != 1 || second.ReusedIDs[0] != first.CreatedIDs[0] {
+		t.Fatalf("second result: %+v", second)
 	}
-	plugins := repoListPlugins(t, db)
-	if len(plugins) != 1 {
-		t.Fatalf("want 1 plugin after re-crystallize, got %d", len(plugins))
+	caps, err := db.ListCapabilities(CapabilityListQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(caps) != 1 {
+		t.Fatalf("want 1 capability, got %d", len(caps))
 	}
 }
 
-// mockLLMServerSeq serves one fixed completion response per request, in
-// order, cycling back to the first when exhausted.
 func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 	t.Helper()
 	var mu sync.Mutex
 	idx := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+		if strings.HasSuffix(r.URL.Path, "/chat/completions") == false {
 			http.NotFound(w, r)
 			return
 		}
@@ -221,62 +205,41 @@ func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 	return srv
 }
 
-// TestCrystallizeIdempotentPreservesRuntimeFields re-crystallizing the same
-// session reuses the plugin ID, keeps host-accumulated runtime fields, and
-// refreshes the manifest and type label.
-func TestCrystallizeIdempotentPreservesRuntimeFields(t *testing.T) {
-	srv := mockLLMServerSeq(t,
-		`{"plugins":[{"name":"发布流程","trigger":"准备发布时","plugin_type":"workflow","manifest":{"tools":[{"name":"run_test"},{"name":"deploy"}]}}]}`,
-		`{"plugins":[{"name":"发布流程","trigger":"准备发布时","plugin_type":"skill","manifest":{"skills":[{"name":"发布清单"}]}}]}`,
-	)
+func TestCrystallizeReuseMinimalPayload(t *testing.T) {
+	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"最小复用","type":"mcp","summary":"s","trigger":"t","resources":[{"type":"mcp","name":"x"}]}}]}`)
 	db := &DB{
 		engine: newTestEngine(t),
 		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
 	}
-	session := common.FormatHash(456)
+	session := common.FormatHash(321)
 	if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
-		t.Fatalf("append: %v", err)
+		t.Fatal(err)
 	}
 	first, err := db.Crystallize(context.Background(), session)
 	if err != nil {
 		t.Fatalf("first crystallize: %v", err)
 	}
-	// Host accumulates runtime fields on the plugin.
-	plugin, err := db.GetPlugin(first.PluginIDs[0])
-	if err != nil {
-		t.Fatalf("get plugin: %v", err)
-	}
-	plugin.Confidence = 0.9
-	plugin.TriggerCount = 5
-	plugin.Status = core.PluginActive
-	if err := repo.UpdatePluginL5(db.engine, first.PluginIDs[0], plugin); err != nil {
-		t.Fatalf("update plugin: %v", err)
-	}
-	// Re-crystallize with a different manifest and type label.
+
+	// A reuse decision carries a minimal payload (name only, no
+	// type/resources): it must be accepted, not rejected by import
+	// validation.
+	secondContent := `{"capabilities":[{"action":"reuse","reuse_id":"` + first.CreatedIDs[0] + `","capability":{"name":"最小复用"}}]}`
+	srv2 := mockLLMServer(t, secondContent)
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
 	second, err := db.Crystallize(context.Background(), session)
 	if err != nil {
 		t.Fatalf("second crystallize: %v", err)
 	}
-	if len(first.PluginIDs) != 1 || len(second.PluginIDs) != 1 || first.PluginIDs[0] != second.PluginIDs[0] {
-		t.Fatalf("expected idempotent plugin ids, got %v vs %v", first.PluginIDs, second.PluginIDs)
+	if len(second.Errors) != 0 {
+		t.Fatalf("minimal reuse produced errors: %+v", second.Errors)
 	}
-	got, err := db.GetPlugin(first.PluginIDs[0])
-	if err != nil {
-		t.Fatalf("get plugin: %v", err)
-	}
-	if got.Confidence != 0.9 || got.TriggerCount != 5 || got.Status != core.PluginActive {
-		t.Fatalf("runtime fields reset by re-crystallize: %+v", got)
-	}
-	if got.PluginType != "skill" || len(got.Manifest.Skills) != 1 || len(got.Manifest.Tools) != 0 {
-		t.Fatalf("manifest not refreshed: %+v", got)
-	}
-	if got.Path == nil || *got.Path != session {
-		t.Fatalf("path not updated: %+v", got)
+	if len(second.ReusedIDs) != 1 || second.ReusedIDs[0] != first.CreatedIDs[0] {
+		t.Fatalf("minimal reuse must be accepted: %+v", second)
 	}
 }
 
 func TestTruncateUTF8(t *testing.T) {
-	s := "你好世界" // 3 bytes per rune
+	s := "你好世界"
 	if got := truncateUTF8(s, 4); got != "你" {
 		t.Fatalf("truncate 4: %q", got)
 	}
@@ -286,63 +249,80 @@ func TestTruncateUTF8(t *testing.T) {
 	if got := truncateUTF8(s, 100); got != s {
 		t.Fatalf("truncate 100: %q", got)
 	}
-	if got := truncateUTF8("a"+s, 5); !utf8.ValidString(got) {
+	if got := truncateUTF8("a"+s, 5); utf8.ValidString(got) == false {
 		t.Fatalf("result invalid utf8: %q", got)
 	}
 }
 
-func repoListPlugins(t *testing.T, db *DB) []core.PluginSlot {
-	t.Helper()
-	out, err := db.ListPlugins(PluginListQuery{})
-	if err != nil {
-		t.Fatalf("list plugins: %v", err)
-	}
-	return out
-}
-
 func TestParseCrystallizeResponse(t *testing.T) {
 	resp := `{
-  "plugins": [
-    {"name": "重构流程", "trigger": "需要重构时", "plugin_type": "workflow", "manifest": {
-      "tools": [{"name": "read_file", "config": "{\"file\":\"a.go\"}"}, {"name": "write_file"}],
-      "skills": [{"name": "s1", "description": "d"}]
-    }},
-    {"name": "无名字", "trigger": "x", "manifest": {}},
-    {"name": "", "trigger": "x", "manifest": {}}
+  "capabilities": [
+    {"action": "create", "capability": {"name": "重构流程", "type": "composite", "summary": "重构", "trigger": "需要重构时", "resources": [
+      {"type": "mcp", "name": "read_file", "config": "{\"file\":\"a.go\"}"}, {"type": "mcp", "name": "write_file"},
+      {"type": "skill", "name": "s1", "description": "d"}
+    ]}},
+    {"action": "reuse", "reuse_id": "a1b2c3d4e5f67890", "capability": {"name": "已有能力"}},
+    {"action": "create", "capability": {"name": ""}}
   ]
 }`
 	out, err := parseCrystallizeResponse(resp)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	if len(out.Plugins) != 2 {
-		t.Fatalf("want 2 valid plugins, got %d", len(out.Plugins))
+	if len(out.Capabilities) != 2 {
+		t.Fatalf("want 2 valid capabilities, got %d", len(out.Capabilities))
 	}
-	p := out.Plugins[0]
-	if p.Name != "重构流程" || p.Trigger != "需要重构时" || p.PluginType != "workflow" {
-		t.Fatalf("plugin mismatch: %+v", p)
+	c := out.Capabilities[0]
+	if c.Action != "create" || c.Capability.Name != "重构流程" || c.Capability.Type != core.CapabilityComposite {
+		t.Fatalf("capability mismatch: %+v", c)
 	}
-	if len(p.Manifest.Tools) != 2 || p.Manifest.Tools[0].Name != "read_file" || p.Manifest.Tools[1].Name != "write_file" {
-		t.Fatalf("tools mismatch: %+v", p.Manifest.Tools)
-	}
-	if p.Manifest.Tools[0].Config == nil || !strings.Contains(*p.Manifest.Tools[0].Config, "a.go") {
-		t.Fatalf("tool config mismatch")
-	}
-	if p.Manifest.Tools[1].Config != nil {
-		t.Fatalf("omitted config should stay nil")
-	}
-	if len(p.Manifest.Skills) != 1 || p.Manifest.Skills[0].Name != "s1" {
-		t.Fatalf("skills mismatch: %+v", p.Manifest.Skills)
+	if len(c.Capability.Resources) != 3 || c.Capability.Resources[0].Name != "read_file" {
+		t.Fatalf("resources mismatch: %+v", c.Capability.Resources)
 	}
 }
 
 func TestBuildCrystallizePrompt(t *testing.T) {
 	events := []core.TrajectorySlot{
-		{Seq: 1, EventType: "turn_start", Payload: "hi", Timestamp: 100},
-		{Seq: 2, EventType: "tool_call", Payload: "read a.go", Timestamp: 200},
+		{Seq: 1, EventType: "tool_call", Payload: "read file"},
+		{Seq: 2, EventType: "tool_result", Payload: "ok"},
 	}
-	prompt := buildCrystallizePrompt(events)
-	if !strings.Contains(prompt, "tool_call") || !strings.Contains(prompt, "read a.go") {
-		t.Fatalf("prompt missing events: %s", prompt)
+	existing := []core.Capability{{Name: "deploy-runbook", Type: core.CapabilitySkill, Summary: "部署", Trigger: "部署"}}
+	prompt := buildCrystallizePrompt(events, existing)
+	if strings.Contains(prompt, "read file") == false || strings.Contains(prompt, "deploy-runbook") == false {
+		t.Fatalf("prompt missing inputs: %s", prompt)
+	}
+}
+
+func TestCrystallizeCreateDoesNotOverwriteActiveByName(t *testing.T) {
+	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"已有能力","type":"mcp","summary":"新摘要","trigger":"新触发","resources":[{"type":"mcp","name":"new_tool"}]}}]}`)
+	db := &DB{
+		engine: newTestEngine(t),
+		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
+	}
+	cap := &core.Capability{
+		IDHash: core.CapabilityID("已有能力"), Name: "已有能力", Type: core.CapabilityMCP,
+		Summary: "旧摘要", Trigger: "旧触发", Status: core.CapabilityActive,
+		Origin: core.CapabilityOriginImported, Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "old_tool"}},
+	}
+	if err := core.WriteCapability(db.engine, cap.IDHash, cap); err != nil {
+		t.Fatal(err)
+	}
+	session := common.FormatHash(789)
+	if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := db.Crystallize(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.CreatedIDs) != 0 || len(result.ReusedIDs) != 1 {
+		t.Fatalf("same-name create should be reuse: %+v", result)
+	}
+	got, err := db.GetCapability(common.FormatHash(cap.IDHash))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Summary != "旧摘要" || got.Resources[0].Name != "old_tool" {
+		t.Fatalf("active capability was overwritten: %+v", got)
 	}
 }

@@ -25,6 +25,10 @@ type serverConfig struct {
 	// Tenants is the optional tenant whitelist; empty allows any valid
 	// tenant id to create its database on first access.
 	Tenants []string
+	// Transport selects the multi-tenant HTTP transport: "sse" (default,
+	// 2024-11-05 spec) or "streamable-http" (2025-03-26 spec, supported by
+	// dsh-mcp-client and other modern MCP clients).
+	Transport string
 	// Base is the shared engine configuration. DBPath is left empty here and
 	// filled per tenant as <DBDir>/<tenant-id>.meh by the tenant registry.
 	Base memhop.MemHopConfig
@@ -74,6 +78,7 @@ func loadConfig(args []string) (*serverConfig, error) {
 	listen := fs.String("listen", "127.0.0.1:3939", "HTTP listen address for the SSE transport")
 	dbDir := fs.String("db-dir", "", "directory holding one .meh database per tenant (required)")
 	tenants := fs.String("tenants", "", "optional comma-separated tenant whitelist")
+	transport := fs.String("transport", "sse", "multi-tenant HTTP transport: sse or streamable-http")
 	vectorDim := fs.Int("vector-dim", 1024, "embedding vector dimension")
 	encoderAddr := fs.String("encoder-addr", "", "embedding encoder HTTP address (e.g. http://127.0.0.1:11434)")
 	embedModel := fs.String("embed-model", "", "embedding model name on the encoder (required)")
@@ -88,12 +93,15 @@ func loadConfig(args []string) (*serverConfig, error) {
 	if *dbDir == "" {
 		return nil, fmt.Errorf("--db-dir is required")
 	}
+	if *transport != "sse" && *transport != "streamable-http" {
+		return nil, fmt.Errorf("--transport must be sse or streamable-http, got %q", *transport)
+	}
 
 	llmTimeout, err := envInt("MEMHOP_LLM_TIMEOUT_SECS", 30)
 	if err != nil {
 		return nil, err
 	}
-	llmMaxTokens, err := envInt("MEMHOP_LLM_MAX_OUTPUT_TOKENS", 2048)
+	llmMaxTokens, err := envInt("MEMHOP_LLM_MAX_OUTPUT_TOKENS", 8192)
 	if err != nil {
 		return nil, err
 	}
@@ -106,6 +114,7 @@ func loadConfig(args []string) (*serverConfig, error) {
 		MaxOutputTokens: llmMaxTokens,
 	}
 	base := memhop.MemHopConfig{
+		DBPath:             "", // filled per tenant by the registry
 		VectorDim:          *vectorDim,
 		EncoderAddr:        *encoderAddr,
 		EmbedModel:         *embedModel,
@@ -130,10 +139,11 @@ func loadConfig(args []string) (*serverConfig, error) {
 		return nil, err
 	}
 	return &serverConfig{
-		Listen:  *listen,
-		DBDir:   *dbDir,
-		Tenants: allowed,
-		Base:    base,
+		Listen:    *listen,
+		DBDir:     *dbDir,
+		Tenants:   allowed,
+		Transport: *transport,
+		Base:      base,
 	}, nil
 }
 

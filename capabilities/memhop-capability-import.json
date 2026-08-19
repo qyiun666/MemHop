@@ -1,0 +1,16 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "memhop-capability-import",
+  "version": "1",
+  "type": "mcp",
+  "summary": "L5 能力导入说明书：memhop-capability/v2 文件格式与导入语义；内置能力工具箱无需导入，ListCapabilities 直接返回",
+  "trigger": "需要导入能力定义或了解内置能力工具箱时；capability 能力 导入 import l5 插件 skill 插件包",
+  "resources": [
+    {
+      "type": "mcp",
+      "name": "memhop_capability_import",
+      "ref": "memhop-mcp",
+      "description": "怎么用：按格式编写 JSON（必填 format=memhop-capability/v2、name、type；mcp/skill 需恰 1 个 resources 条目，composite 需至少 1 个资源、workflow 可选）后调用；参数 path=能力 JSON 文件或包含 capability.json 的目录；导入即 active；同名重复导入按名称 upsert（定义更新、统计保留）；文件内容未变时完全跳过；内置能力卡（memhop 说明书 + agent 原子卡）无需导入，ListCapabilities 直接返回、只读不落库"
+    }
+  ]
+}

@@ -149,8 +149,8 @@ func BenchmarkUpdate(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ts := base + int64(i+1)*1000
-		if !db.Update(topicID, "agent reply for benchmark", ts) {
-			b.Fatal("Update failed")
+		if ok, err := db.Update(topicID, "agent reply for benchmark", ts); err != nil || !ok {
+			b.Fatalf("Update failed: ok=%v err=%v", ok, err)
 		}
 	}
 }
@@ -191,12 +191,14 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 		if i == 0 {
 			sceneID = res.Contexts[0].SceneID
 		}
-		db.Update(common.FormatHash(res.NewTopicID), "好的", ts+500)
+		if _, err := db.Update(common.FormatHash(res.NewTopicID), "好的", ts+500); err != nil {
+			b.Fatalf("seed Update: %v", err)
+		}
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := db.Dream(context.Background()); err != nil {
+		if _, err := db.Dream(context.Background(), ""); err != nil {
 			b.Fatalf("Dream: %v", err)
 		}
 	}
@@ -227,7 +229,9 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 		if err != nil {
 			b.Fatalf("seed Search[%d]: %v", i, err)
 		}
-		db.Update(common.FormatHash(res.NewTopicID), "好的，记下了。", ts+500)
+		if _, err := db.Update(common.FormatHash(res.NewTopicID), "好的，记下了。", ts+500); err != nil {
+			b.Fatalf("seed Update: %v", err)
+		}
 	}
 
 	b.ResetTimer()
@@ -276,7 +280,9 @@ func BenchmarkSearchLatency(b *testing.B) {
 		if err != nil {
 			b.Fatalf("seed: %v", err)
 		}
-		db.Update(common.FormatHash(res.NewTopicID), "好的", ts+500)
+		if _, err := db.Update(common.FormatHash(res.NewTopicID), "好的", ts+500); err != nil {
+			b.Fatalf("seed Update: %v", err)
+		}
 	}
 
 	queries := []string{"我的跑步习惯", "我的狗叫什么", "我住在哪", "我做什么工作"}

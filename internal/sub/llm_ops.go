@@ -19,16 +19,40 @@ import (
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
 
-const systemKeywords = `You extract keywords that capture the core semantics of the text.
+// Per-call output caps. Config.MaxOutputTokens is a global ceiling; these
+// caps keep the hot path cheap while leaving Dream enough room for its
+// context-bearing output.
+const (
+	keywordExtractionMaxTokens = 512
+	// Retry budget: reasoning tokens count toward completion_tokens and can
+	// exhaust the 512-token first attempt, leaving content empty.
+	keywordRetryMaxTokens = 4096
+	// L2 consolidation output becomes host context: keep it generous rather
+	// than risk truncating merged summaries for large scenes.
+	consolidationMaxTokens = 8192
+	distillMaxTokens       = 2048
+)
+
+func minTokens(configured, cap int) int {
+	if configured <= 0 || configured > cap {
+		return cap
+	}
+	return configured
+}
+
+const systemKeywords = `You compress text by extracting all meaningful keywords and phrases, removing noise while preserving full meaning and tone.
 
 Rules:
-- The keyword list, when read together, must convey the same meaning as the original text
-- Include named entities, terms, topics, actions, time, locations, and any key details
-- Keep mixed-language terms (English+Chinese) in their original form
-- Preserve numbers and proper nouns exactly as-is
-- Do not set a limit on the number of keywords; extract all that are needed to preserve the meaning
-- Do not include greetings, filler words, or non-informational content
-- Output ONLY valid JSON: {"keywords":[...]}, no markdown, no code fences`
+1. Semantic completeness — the extracted items, read together, must let a reader understand the original text's facts, intent, relationships, and emotional tone as if reading the original
+2. Retrieval-oriented — think: "What words or phrases would someone use to find this content later?" Extract those exact terms
+3. Include: named entities (people, places, orgs, products), specific topics, key actions with their objects, time expressions, locations, numbers, cause-effect relationships, emotional tone and attitude markers
+4. Use both individual keywords AND short phrases — phrases preserve context that single words lose (e.g. "cancel picnic due to rain" is more meaningful than just "rain" + "picnic")
+5. No limit on count — extract everything meaningful; for long text, extract proportionally more; never truncate or summarize — only remove noise (greetings, filler, repetition)
+6. Colloquial variants — for important terms, include common synonyms or colloquial alternatives (e.g. "肚子疼" → also add "胃痛"; "bug" → also add "缺陷") so different phrasings can match via BM25
+7. Keep each entry concise: prefer keywords and short phrases, avoid full sentences
+8. Preserve original language; keep mixed-language terms as-is; preserve numbers and proper nouns exactly
+9. Exclude: greetings, filler words, question words (when/where/what/why/how/who/which), generic verbs (go/do/get/run/make/have/want/like/think) unless tied to a specific action
+10. Output ONLY valid JSON: {"keywords":[...]}, no markdown, no code fences`
 
 // ExtractKeywords extracts semantic keywords whose union represents the
 // text's core meaning (unlimited count).
@@ -38,17 +62,35 @@ func (p *Provider) ExtractKeywords(ctx context.Context, text string) ([]string, 
 		return []string{}, nil
 	}
 	user := "Extract keywords from:\n" + trimmed
-	response, err := p.chat(ctx, systemKeywords, user, p.maxOutputTokens, 0.0, 1.0)
-	if err != nil {
-		return nil, err
+	// Reasoning models consume part of max_tokens for reasoning; on
+	// truncation (finish_reason=length) retry with the next larger budget.
+	// The final budget is the full consolidation ceiling, bypassing the
+	// configured cap exactly like Consolidate's retry does.
+	budgets := []int{
+		minTokens(p.maxOutputTokens, keywordExtractionMaxTokens),
+		minTokens(p.maxOutputTokens, keywordRetryMaxTokens),
+		consolidationMaxTokens,
 	}
-	var raw struct {
-		Keywords []string `json:"keywords"`
+	for attempt, maxTokens := range budgets {
+		response, err := p.chat(ctx, systemKeywords, user, maxTokens, 0.0, 1.0)
+		if err != nil {
+			if attempt < len(budgets)-1 && strings.Contains(err.Error(), "truncated") {
+				continue
+			}
+			return nil, err
+		}
+		var raw struct {
+			Keywords []string `json:"keywords"`
+		}
+		if err := json.Unmarshal([]byte(stripCodeBlocks(response)), &raw); err != nil {
+			if attempt < len(budgets)-1 {
+				continue
+			}
+			return nil, common.NewError(common.ErrLLM, fmt.Sprintf("keywords response parse failed (raw: %q)", response), err)
+		}
+		return dedupeKeywords(raw.Keywords), nil
 	}
-	if err := json.Unmarshal([]byte(stripCodeBlocks(response)), &raw); err != nil {
-		return nil, common.NewError(common.ErrLLM, "keywords response parse failed", err)
-	}
-	return dedupeKeywords(raw.Keywords), nil
+	return nil, common.NewError(common.ErrLLM, "keywords extraction exhausted retries")
 }
 
 func dedupeKeywords(ss []string) []string {
@@ -71,7 +113,6 @@ func dedupeKeywords(ss []string) []string {
 type L2Group struct {
 	SceneID       uint64   `json:"scene_id"`
 	NodeHashes    []uint64 `json:"node_hashes"`
-	MergedTitle   string   `json:"merged_title"`
 	MergedSummary string   `json:"merged_summary"`
 }
 
@@ -80,14 +121,18 @@ type ConsolidationOutput struct {
 	L2CompressionNeeded bool      `json:"l2_compression_needed"`
 }
 
-const systemConsolidate = `You analyze L2 chat memory topics and decide whether adjacent topics belong to the same topic and can be further compressed.
+const systemConsolidate = `You analyze L2 chat memory topics, identify which adjacent topics belong to the same conversation thread, and reconstruct their keywords into natural text that reads like the original conversation.
 
 Rules:
-- Only merge topics that clearly belong to the same conversation topic and can be meaningfully compressed
-- For each merged group, write a summary that preserves ALL details (time, location, people, numbers, facts); the summary alone must be enough to know what this batch of content is about
-- Do not generalize or drop details
-- Echo scene_id and node_hashes EXACTLY as given in the input
-- When no compression is needed, output l2_groups as an empty array
+1. Scan from the most recent topic backwards — group adjacent topics that share the same conversation thread (same subject, causal chain, topic continuation, or semantic overlap)
+2. Do NOT merge topics that are clearly about different subjects, even if they occur in the same scene
+3. Compression target: the total number of remaining topics after merging must be 20 or fewer. If the input has more than 20 topics, you MUST merge enough groups to bring the count down to 20 or below
+4. For each merged group, reconstruct the multi-turn keywords into a single coherent natural-language text — write it as if you are rewriting what was originally said, not summarizing
+5. No length limit on the reconstructed text — it must be as long as needed to faithfully preserve ALL details: names, numbers, dates, times, locations, cause-effect chains, emotional tone, attitudes, preferences, and specific facts
+6. Preserve the emotional tone and attitude present in the keywords — if the original tone was frustrated, excited, curious, etc., the reconstructed text should reflect that
+7. Preserve original language; keep mixed-language terms as-is; preserve numbers and proper nouns exactly
+8. Echo scene_id and node_hashes EXACTLY as given in the input
+9. When no compression is needed (no adjacent topics share a thread, or total topics already <= 20), output l2_groups as an empty array
 
 Output ONLY valid JSON in this exact shape (no markdown, no code fences):
 {
@@ -95,13 +140,12 @@ Output ONLY valid JSON in this exact shape (no markdown, no code fences):
     {
       "scene_id": <number>,
       "node_hashes": [<number>, ...],
-      "merged_title": "<short topic title>",
-      "merged_summary": "<detailed summary preserving all facts>"
+      "merged_summary": "<natural-language reconstruction of the original conversation from the keywords>"
     }
   ],
   "l2_compression_needed": <bool>
 }
-Every merged group MUST include non-empty merged_title and merged_summary.`
+Every merged group MUST include non-empty merged_summary.`
 
 // Consolidate decides whether a batch of L2 topics share a topic and
 // returns compression groups preserving all details.
@@ -110,11 +154,26 @@ func (p *Provider) Consolidate(ctx context.Context, topics []core.TopicSlot) (*C
 		return &ConsolidationOutput{L2Groups: []L2Group{}, L2CompressionNeeded: false}, nil
 	}
 	user := buildConsolidatePrompt(topics)
-	response, err := p.chat(ctx, systemConsolidate, user, p.maxOutputTokens, 0.0, 1.0)
+	// Two-budget attempt: the first pass uses the configured ceiling; when
+	// the response is truncated (finish_reason=length, common with reasoning
+	// models), retry once with the full consolidation budget so merged
+	// summaries are never cut mid-JSON.
+	response, err := p.chatWithRetry(ctx, systemConsolidate, user, minTokens(p.maxOutputTokens, consolidationMaxTokens), consolidationMaxTokens)
 	if err != nil {
 		return nil, err
 	}
 	return parseConsolidateResponse(response)
+}
+
+// chatWithRetry runs chat with a primary max-token budget; if the response
+// is truncated by the token ceiling, retries once with the retry budget.
+// Non-truncation errors are returned immediately.
+func (p *Provider) chatWithRetry(ctx context.Context, system, user string, primaryMax, retryMax int) (string, error) {
+	response, err := p.chat(ctx, system, user, primaryMax, 0.0, 1.0)
+	if err == nil || !strings.Contains(err.Error(), "truncated") || primaryMax >= retryMax {
+		return response, err
+	}
+	return p.chat(ctx, system, user, retryMax, 0.0, 1.0)
 }
 
 // buildConsolidatePrompt lists topics grouped by scene, sorted by user turn
@@ -159,7 +218,6 @@ func parseConsolidateResponse(response string) (*ConsolidationOutput, error) {
 		L2Groups []struct {
 			SceneID       json.RawMessage   `json:"scene_id"`
 			NodeHashes    []json.RawMessage `json:"node_hashes"`
-			MergedTitle   string            `json:"merged_title"`
 			MergedSummary string            `json:"merged_summary"`
 		} `json:"l2_groups"`
 		L2CompressionNeeded bool `json:"l2_compression_needed"`
@@ -186,7 +244,7 @@ func parseConsolidateResponse(response string) (*ConsolidationOutput, error) {
 		}
 		out.L2Groups = append(out.L2Groups, L2Group{
 			SceneID: sceneID, NodeHashes: hashes,
-			MergedTitle: g.MergedTitle, MergedSummary: g.MergedSummary,
+			MergedSummary: g.MergedSummary,
 		})
 	}
 	return out, nil
@@ -266,7 +324,9 @@ func (p *Provider) Distill(ctx context.Context, samples []L1Sample) (*DistillOut
 		return nil, common.NewError(common.ErrLLM, "distill: no samples")
 	}
 	user := buildDistillPrompt(samples)
-	response, err := p.chat(ctx, systemDistill, user, p.maxOutputTokens, 0.0, 1.0)
+	// Same truncation-retry as Consolidate: reasoning tokens can exhaust the
+	// 2048 first-pass budget, cutting the JSON mid-stream.
+	response, err := p.chatWithRetry(ctx, systemDistill, user, minTokens(p.maxOutputTokens, distillMaxTokens), consolidationMaxTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -362,53 +422,71 @@ func deriveMBTIType(m MBTIScore) string {
 	})
 }
 
-// CrystallizePlugin is one reusable capability package extracted from a
-// trajectory; its manifest follows the L5 plugin layout.
-type CrystallizePlugin struct {
-	Name       string              `json:"name"`
-	Trigger    string              `json:"trigger"`
-	PluginType string              `json:"plugin_type"`
-	Manifest   core.PluginManifest `json:"manifest"`
+// CrystallizeCapability is one capability candidate extracted from a
+// trajectory. Action is create, reuse or merge.
+type CrystallizeCapability struct {
+	Action     string           `json:"action"`
+	ReuseID    string           `json:"reuse_id,omitempty"`
+	Capability CapabilityImport `json:"capability"`
 }
 
 type CrystallizeOutput struct {
-	Plugins []CrystallizePlugin `json:"plugins"`
+	Capabilities []CrystallizeCapability `json:"capabilities"`
 }
 
-const systemCrystallize = `You analyze an agent's operation trajectory and extract reusable capabilities as plugins.
+const systemCrystallize = `You analyze an agent's operation trajectory and extract reusable L5 capabilities.
 
 Rules:
 - Only extract capabilities that are clearly reusable (appear at least twice or are obviously generic procedures)
-- A plugin is a self-contained capability package; choose its primary type label (plugin_type) from: skill, mcp, toolkit, workflow, service, or another short label that fits
-- Fill the manifest sections that apply (skills / mcps / tools / prompts / services); omit empty sections
-- Each manifest entry has a name, an optional description, and an optional config (JSON string or template text)
-- Do not invent tools or services that are not present in the trajectory
-- When no reusable capability exists, output plugins as an empty array
+- A capability has kind manual, atomic, or composite:
+  * manual: a runbook/SOP/instruction sequence
+  * atomic: a single reusable resource (skill, mcp, tool, prompt, or service)
+  * composite: an orchestration of skills, MCPs, tools, prompts, services, manuals, or other capabilities
+- For composite capabilities, fill manifest sections for the referenced resources and workflow.steps with id/ref/depends_on. Do not invent tools or services that are not present in the trajectory
+- Compare against the existing capabilities listed below. If the same capability already exists:
+  * action = "reuse" and reuse_id = its 16-hex id
+  * do not duplicate it
+- If a candidate is a newer variant of an existing capability, use action = "merge" and reuse_id = its existing id
+- Otherwise action = "create"
+- When no reusable capability exists, output capabilities as an empty array
 
 Output ONLY valid JSON in this exact shape (no markdown, no code fences):
 {
-  "plugins": [
+  "capabilities": [
     {
-      "name": "<short plugin name>",
-      "trigger": "<when this plugin applies>",
-      "plugin_type": "<skill|mcp|toolkit|workflow|service|...>",
-      "manifest": {
-        "skills": [{"name": "...", "description": "...", "config": "..."}],
-        "mcps": [{"name": "...", "config": "<endpoint or connection JSON>"}],
-        "tools": [{"name": "<tool name>", "description": "..."}],
-        "prompts": [{"name": "...", "config": "<prompt template>"}],
-        "services": [{"name": "...", "config": "<service definition JSON>"}]
+      "action": "create|reuse|merge",
+      "reuse_id": "16-hex-id when action is reuse or merge, otherwise omit",
+      "capability": {
+        "name": "<short capability name>",
+        "version": "1",
+        "kind": "manual|atomic|composite",
+        "summary": "<one sentence>",
+        "trigger": "<when this capability applies>",
+        "when_to_use": "<optional conditions>",
+        "tags": ["<tag>"],
+        "interface": {"inputs": [{"name":"topic","type":"string"}], "outputs": [{"name":"report","type":"string"}]},
+        "manual": {"goal": "<goal>", "steps": ["<step>"]},
+        "manifest": {
+          "skills": [{"name": "...", "ref": "...", "description": "...", "config": "..."}],
+          "mcps": [{"name": "...", "ref": "...", "config": "<endpoint or connection JSON>"}],
+          "tools": [{"name": "<tool name>", "ref": "<command or tool ref>"}],
+          "prompts": [{"name": "...", "config": "<prompt template>"}],
+          "services": [{"name": "...", "config": "<service definition JSON>"}]
+        },
+        "workflow": {"steps": [{"id": "step1", "ref": "skill:name", "depends_on": [], "on_error": "fail"}]}
       }
     }
   ]
 }`
 
-// Crystallize extracts reusable plugins from a trajectory event batch.
-func (p *Provider) Crystallize(ctx context.Context, events []core.TrajectorySlot) (*CrystallizeOutput, error) {
+// Crystallize extracts reusable L5 capabilities from a trajectory event
+// batch. Existing capabilities are included in the prompt so the model can
+// reuse or merge instead of duplicating.
+func (p *Provider) Crystallize(ctx context.Context, events []core.TrajectorySlot, existing []core.Capability) (*CrystallizeOutput, error) {
 	if len(events) == 0 {
-		return &CrystallizeOutput{Plugins: []CrystallizePlugin{}}, nil
+		return &CrystallizeOutput{Capabilities: []CrystallizeCapability{}}, nil
 	}
-	user := buildCrystallizePrompt(events)
+	user := buildCrystallizePrompt(events, existing)
 	response, err := p.chat(ctx, systemCrystallize, user, p.maxOutputTokens, 0.0, 1.0)
 	if err != nil {
 		return nil, err
@@ -416,14 +494,24 @@ func (p *Provider) Crystallize(ctx context.Context, events []core.TrajectorySlot
 	return parseCrystallizeResponse(response)
 }
 
-// buildCrystallizePrompt lists trajectory events in sequence order.
-func buildCrystallizePrompt(events []core.TrajectorySlot) string {
+// buildCrystallizePrompt lists trajectory events followed by existing L5
+// capability prompt cards.
+func buildCrystallizePrompt(events []core.TrajectorySlot, existing []core.Capability) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Operation Trajectory (%d events)\n\n", len(events))
 	for _, ev := range events {
 		fmt.Fprintf(&b, "[seq=%d type=%s] %s\n", ev.Seq, ev.EventType, ev.Payload)
 	}
-	b.WriteString("\nExtract reusable plugins now.")
+	b.WriteString("\n# Existing L5 capabilities\n")
+	if len(existing) == 0 {
+		b.WriteString("(none)\n")
+	} else {
+		for _, cap := range existing {
+			b.WriteString(cap.PromptCard())
+			b.WriteByte('\n')
+		}
+	}
+	b.WriteString("\nExtract reusable capabilities now.")
 	return b.String()
 }
 
@@ -431,36 +519,29 @@ func buildCrystallizePrompt(events []core.TrajectorySlot) string {
 func parseCrystallizeResponse(response string) (*CrystallizeOutput, error) {
 	cleaned := stripCodeBlocks(response)
 	var raw struct {
-		Plugins []struct {
-			Name       string `json:"name"`
-			Trigger    string `json:"trigger"`
-			PluginType string `json:"plugin_type"`
-			Manifest   struct {
-				Skills   []core.PluginItem `json:"skills"`
-				MCPs     []core.PluginItem `json:"mcps"`
-				Tools    []core.PluginItem `json:"tools"`
-				Prompts  []core.PluginItem `json:"prompts"`
-				Services []core.PluginItem `json:"services"`
-			} `json:"manifest"`
-		} `json:"plugins"`
+		Capabilities []struct {
+			Action     string           `json:"action"`
+			ReuseID    string           `json:"reuse_id,omitempty"`
+			Capability CapabilityImport `json:"capability"`
+		} `json:"capabilities"`
 	}
 	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
 		return nil, common.NewError(common.ErrLLM, "crystallize response parse failed", err)
 	}
-	out := &CrystallizeOutput{Plugins: make([]CrystallizePlugin, 0, len(raw.Plugins))}
-	for _, p := range raw.Plugins {
-		if strings.TrimSpace(p.Name) == "" || strings.TrimSpace(p.Trigger) == "" {
+	out := &CrystallizeOutput{Capabilities: make([]CrystallizeCapability, 0, len(raw.Capabilities))}
+	for _, c := range raw.Capabilities {
+		if strings.TrimSpace(c.Capability.Name) == "" {
 			continue
 		}
-		out.Plugins = append(out.Plugins, CrystallizePlugin{
-			Name: p.Name, Trigger: p.Trigger, PluginType: p.PluginType,
-			Manifest: core.PluginManifest{
-				Skills:   p.Manifest.Skills,
-				MCPs:     p.Manifest.MCPs,
-				Tools:    p.Manifest.Tools,
-				Prompts:  p.Manifest.Prompts,
-				Services: p.Manifest.Services,
-			},
+		action := strings.ToLower(strings.TrimSpace(c.Action))
+		if action == "" {
+			action = "create"
+		}
+		if action != "create" && action != "reuse" && action != "merge" {
+			continue
+		}
+		out.Capabilities = append(out.Capabilities, CrystallizeCapability{
+			Action: action, ReuseID: c.ReuseID, Capability: c.Capability,
 		})
 	}
 	return out, nil

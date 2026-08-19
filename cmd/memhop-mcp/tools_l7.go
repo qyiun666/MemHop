@@ -2,14 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L7 trajectory tools: host-appended operation events plus crystallize
-// (L7 → L5 plugin extraction).
+// (L7 → L5 capability extraction).
 
 package main
 
 import (
 	"context"
-	"fmt"
-	"strconv"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	memhop "github.com/qyiun666/MemHop"
@@ -41,7 +39,7 @@ func registerL7Tools(s *mcp.Server, db *memhop.DB) {
 	}, handle[trajectoryAppendArgs, updateResult](func(a trajectoryAppendArgs) (updateResult, error) {
 		var l4Ref *uint64
 		if a.L4Ref != nil && *a.L4Ref != "" {
-			v, err := parseHexID(*a.L4Ref)
+			v, err := memhop.ParseID(*a.L4Ref)
 			if err != nil {
 				return updateResult{}, err
 			}
@@ -78,7 +76,7 @@ func registerL7Tools(s *mcp.Server, db *memhop.DB) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_crystallize",
-		Description: "从会话轨迹提取可复用插件（L7 → L5，按事件类型分派）。调用 LLM，耗时长；插件 ID 为 hash(name:trigger)，重复结晶幂等。",
+		Description: "从会话轨迹提取可复用 L5 能力候选（L7 → L5）。调用 LLM，耗时长；候选保存为 draft，需宿主激活；重复结晶按名称和指纹去重。",
 		InputSchema: objSchema(map[string]any{
 			"session_id": strProp("会话 ID（16 位 hex），必填"),
 		}, "session_id"),
@@ -89,13 +87,4 @@ func registerL7Tools(s *mcp.Server, db *memhop.DB) {
 		}
 		return *res, nil
 	}))
-}
-
-// parseHexID parses a 16-digit hex ID string into uint64.
-func parseHexID(s string) (uint64, error) {
-	v, err := strconv.ParseUint(s, 16, 64)
-	if err != nil || len(s) != 16 {
-		return 0, fmt.Errorf("invalid hex id %q: must be 16 hex digits", s)
-	}
-	return v, nil
 }

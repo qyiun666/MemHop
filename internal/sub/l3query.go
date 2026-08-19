@@ -30,6 +30,10 @@ func (db *DB) QueryL3Nodes(q L3NodeQuery) ([]core.HypergraphNode, error) {
 	if q.GraphID == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "graph_id is required")
 	}
+	graphHash, err := common.ParseID(q.GraphID)
+	if err != nil {
+		return nil, err
+	}
 	var out []core.HypergraphNode
 	switch {
 	case len(q.IDs) > 0:
@@ -39,7 +43,7 @@ func (db *DB) QueryL3Nodes(q L3NodeQuery) ([]core.HypergraphNode, error) {
 				continue
 			}
 			node, err := core.ReadHypergraphNode(db.engine, idHash)
-			if err != nil {
+			if err != nil || node.GraphID != graphHash {
 				continue
 			}
 			out = append(out, *node)
@@ -96,12 +100,21 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 		return nil, err
 	}
 	defer db.mu.RUnlock()
+	graphHash, err := common.ParseID(graphID)
+	if err != nil {
+		return nil, common.NewError(common.ErrInvalidQuery, "parse graph id", err)
+	}
 	startHash, err := common.ParseID(startNodeID)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse start node id", err)
 	}
-	if _, err := core.ReadHypergraphNode(db.engine, startHash); err != nil {
+	startNode, err := core.ReadHypergraphNode(db.engine, startHash)
+	if err != nil {
 		return nil, common.NewError(common.ErrNotFound, "start node not found", err)
+	}
+	if startNode.GraphID != graphHash {
+		return nil, common.NewError(common.ErrInvalidQuery,
+			"start node does not belong to the requested graph")
 	}
 	if maxDepth <= 0 {
 		maxDepth = 1

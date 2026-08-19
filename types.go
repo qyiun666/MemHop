@@ -44,22 +44,38 @@ type L3Subgraph = sub.L3Subgraph
 // L4Query is an archive query.
 type L4Query = sub.L4Query
 
-// PluginImport is the JSON description of a plugin read from an import path.
-type PluginImport = sub.PluginImport
+// CapabilityListQuery filters the L5 capability list.
+type CapabilityListQuery = sub.CapabilityListQuery
 
-// PluginListQuery filters the L5 plugin list.
-type PluginListQuery = sub.PluginListQuery
+// CapabilityPatch is the partial-update payload of UpdateCapability.
+type CapabilityPatch = sub.CapabilityPatch
 
-// CrystallizeResult reports the L5 plugins created from a trajectory.
-type CrystallizeResult = sub.CrystallizeResult
-
-// ---- core (L0-L7 slot models) types ----
+// ---- core (L0-L5 slot models) types ----
 
 // ContentType is the type of content stored in an ArchiveSlot.
 type ContentType = core.ContentType
 
-// PluginStatus is the lifecycle state of a PluginSlot.
-type PluginStatus = core.PluginStatus
+// Capability is an L5 reusable capability wrapping host resources.
+type Capability = core.Capability
+
+// CapabilityType describes how an L5 capability is implemented.
+type CapabilityType = core.CapabilityType
+
+// CapabilityStatus is the lifecycle state of an L5 capability.
+type CapabilityStatus = core.CapabilityStatus
+
+// CapabilityOrigin records where a capability came from.
+type CapabilityOrigin = core.CapabilityOrigin
+
+// ResourceRef is one wrapped resource (MCP tool or skill) inside a
+// capability.
+type ResourceRef = core.ResourceRef
+
+// Workflow is the ordered orchestration of a composite capability.
+type Workflow = core.Workflow
+
+// WorkflowStep is one orchestration step of a composite capability.
+type WorkflowStep = core.WorkflowStep
 
 // SourceKind identifies how an L3 HypergraphSlot was created.
 type SourceKind = core.SourceKind
@@ -72,6 +88,9 @@ type ProfileSlot = core.ProfileSlot
 
 // SceneSlot is an L2 scene container.
 type SceneSlot = core.SceneSlot
+
+// SceneContext is the full L2 context of one scene (topics + messages).
+type SceneContext = sub.SceneContext
 
 // TopicSlot is an L2 dual-track session node.
 type TopicSlot = core.TopicSlot
@@ -91,20 +110,12 @@ type HypergraphEdge = core.HypergraphEdge
 // ArchiveSlot is an L4 user/agent chat message.
 type ArchiveSlot = core.ArchiveSlot
 
-// PluginSlot is an L5 plugin capability package.
-type PluginSlot = core.PluginSlot
-
-// PluginManifest is the structured content of a PluginSlot.
-type PluginManifest = core.PluginManifest
-
-// PluginItem is one entry within a plugin manifest section.
-type PluginItem = core.PluginItem
-
-// SceneUsageSlot is an L6 scene-level retrieval usage feedback record.
-type SceneUsageSlot = core.SceneUsageSlot
-
 // TrajectorySlot is an L7 operation trajectory event.
 type TrajectorySlot = core.TrajectorySlot
+
+// CrystallizeResult reports L5 capabilities created/reused/merged from a
+// trajectory.
+type CrystallizeResult = sub.CrystallizeResult
 
 // ---- sub L3 import mode constants ----
 
@@ -127,9 +138,22 @@ const (
 )
 
 const (
-	PluginDraft      = core.PluginDraft
-	PluginActive     = core.PluginActive
-	PluginDeprecated = core.PluginDeprecated
+	CapabilityMCP       = core.CapabilityMCP
+	CapabilitySkill     = core.CapabilitySkill
+	CapabilityComposite = core.CapabilityComposite
+)
+
+const (
+	CapabilityDraft      = core.CapabilityDraft
+	CapabilityActive     = core.CapabilityActive
+	CapabilityDeprecated = core.CapabilityDeprecated
+)
+
+const (
+	CapabilityOriginImported     = core.CapabilityOriginImported
+	CapabilityOriginCrystallized = core.CapabilityOriginCrystallized
+	CapabilityOriginHost         = core.CapabilityOriginHost
+	CapabilityOriginBuiltin      = core.CapabilityOriginBuiltin
 )
 
 const (

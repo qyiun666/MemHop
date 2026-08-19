@@ -423,3 +423,48 @@ func assertNotContains(t *testing.T, tokens []string, unexpected string) {
 		}
 	}
 }
+
+// TestSparseIndexEntityChannelAutoPopulated verifies the third retrieval
+// channel is fed automatically from indexed topic terms and stays consistent
+// when documents are updated or removed.
+func TestSparseIndexEntityChannelAutoPopulated(t *testing.T) {
+	idx := NewSparseIndex()
+	idx.AddDocument(10, []string{"memhop"}, 1)
+	results := idx.EntitySearch("memhope")
+	if len(results) == 0 {
+		t.Fatal("entity channel should find the indexed term")
+	}
+	if results[0].IDHash != 10 {
+		t.Fatalf("entity topic = %d, want topic 10", results[0].IDHash)
+	}
+
+	// Replacing a document updates the term association instead of keeping
+	// stale terms.
+	idx.AddDocument(10, []string{"agentdb"}, 1)
+	if got := idx.EntitySearch("memhop"); len(got) != 0 {
+		t.Fatalf("stale term memhop should be removed: %+v", got)
+	}
+	if got := idx.EntitySearch("agentdb"); len(got) == 0 {
+		t.Fatal("replacement term agentdb should be indexed")
+	}
+
+	// Removal drops the term from the fuzzy channel.
+	idx.RemoveDocument(10)
+	if got := idx.EntitySearch("agentdb"); len(got) != 0 {
+		t.Fatalf("removed term should disappear: %+v", got)
+	}
+
+	// Serialize/deserialize keeps the automatic entity index.
+	idx.AddDocument(20, []string{"memory"}, 1)
+	data, err := idx.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := DeserializeSparseIndex(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.EntitySearch("memroy"); len(got) == 0 {
+		t.Fatal("entity index lost after sparse index roundtrip")
+	}
+}

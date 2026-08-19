@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：v1.2.1（MCP Server）· 最新稳定 tag：v1.0.1</strong>
+  <strong>当前版本：v1.2.3（MCP Server + DSH 接入）· 最新稳定 tag：v1.0.1</strong>
 </p>
 
 ---
@@ -36,38 +36,37 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 ## 核心特性
 
 - **八层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 场景使用 → L7 轨迹，配合 Dream 巩固管线
-- **三通道 RRF 检索** — BM25（gse CJK 分词）+ f32 向量 + 实体模糊匹配，通过 Reciprocal Rank Fusion（k=60）融合
-- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0004`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。**与 v1 的 `.meh` 数据文件不兼容**（JSON 序列化切换为原生数字）
+- **三通道 RRF 检索** — BM25（gse CJK 分词）+ f32 向量 + 实体/词项模糊匹配（实体索引由已索引 topic 词项自动灌入），通过 Reciprocal Rank Fusion（k=60）融合
+- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0005`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。**与 v1 的 `.meh` 数据文件不兼容**（JSON 序列化切换为原生数字）；0x0004 文件（v1.2.0 的 L5 插件槽位格式）在 Open 时被显式拒绝，无迁移路径
 - **Dream 巩固管线** — 仅作用于 L0–L2 的五阶段：L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏（情绪/MBTI）
-- **L3 知识图谱** — 多独立超图，内置团扩展 + Louvain 社区发现、BFS 遍历与邻接缓存
+- **L3 知识图谱** — 多独立超图，支持节点/边导入、CRUD、关键词/类型查询与 BFS 子图
 - **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）
-- **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、gse、ollama、go-openai），`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 26 个 MCP 工具暴露于 stdio（官方 `modelcontextprotocol/go-sdk`），可直接接入 Claude Code / Cursor 等任意 MCP 客户端
+- **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、gse、go-openai、go-sdk）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
+- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 31 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 `.meh` 文件
 
 ## 快速开始
 
 ```go
 import (
     "context"
+    "log"
     "os"
     "time"
 
-    memhop "github.com/qyiun666/MemHop/internal"
-    "github.com/qyiun666/MemHop/internal/sub"
-    "github.com/qyiun666/MemHop/internal/sub/common"
+    memhop "github.com/qyiun666/MemHop"
 )
 
-db, err := memhop.Open(&sub.MemHopConfig{
+db, err := memhop.Open(&memhop.MemHopConfig{
     DBPath:      "agent.meh",
     VectorDim:   1024,
     EncoderAddr: "http://127.0.0.1:11434",
     EmbedModel:  "qllama/bge-m3:q4_k_m",
-    LLM: sub.LlmConfig{ // 必填：Open 时校验
+    LLM: memhop.LlmConfig{ // 必填：Open 时校验
         APIURL: "https://api.openai.com/v1",
         APIKey: os.Getenv("OPENAI_API_KEY"),
         Model:  "gpt-4o-mini",
     },
-    Defaults: *sub.DefaultMemHopDefaults,
+    Defaults: *memhop.DefaultMemHopDefaults,
 })
 if err != nil {
     log.Fatal(err)
@@ -77,7 +76,7 @@ defer db.Close()
 // 检索 —— 三条路由：AutoCreate（跳过检索，直建新场景+话题）、
 // DirectedL2ID（定向写入指定场景）、默认三通道检索。
 // Timestamp 必填：消息的 Unix 毫秒时间戳。
-res, err := db.Search(sub.SearchQuery{
+res, err := db.Search(memhop.SearchQuery{
     Text:      "昨天我们讨论了什么？",
     Timestamp: time.Now().UnixMilli(),
 })
@@ -86,13 +85,18 @@ if err != nil {
 }
 
 // 将 Agent 回复追加到 Search 创建的话题。
-// Update 的 topicID 参数为 hex 字符串（common.FormatHash）。
-topicID := common.FormatHash(res.NewTopicID)
-_ = db.Update(topicID, "Agent：...", time.Now().UnixMilli())
+// Update 的 topicID 参数为 hex 字符串。
+topicID := memhop.FormatHash(res.NewTopicID)
+if _, err = db.Update(topicID, "Agent：...", time.Now().UnixMilli()); err != nil {
+    log.Fatal(err)
+}
 
 // Dream 巩固（作用于激活场景，L0-L2）
 ok, err := db.Dream(context.Background())
 ```
+
+
+> **并发契约。** 一个 `*DB` 是单 Agent 句柄：宿主必须保证同一 DB 实例上的 Search / Update / Dream / 写操作串行调用。MCP 多租户按文件隔离；发往同一租户的调用同样遵循该串行契约。
 
 前置条件：Go 1.26+，Ollama（`ollama pull qllama/bge-m3:q4_k_m`），OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）
 
@@ -105,20 +109,24 @@ ok, err := db.Dream(context.Background())
 | L2 上下文 | `ListScenes` · `MergeScenes` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 归档 | `SearchL4` · `GetArchive` |
-| L5 插件 | `ImportPlugin` · `GetPlugin` · `DeletePlugin` · `ListPlugins` · `Crystallize` |
+| L5 能力 | `ImportCapability` · `GetCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` · `Crystallize` |
+
+### 内置 L5 能力
+
+仓库根目录 `capabilities/` 内置了一套开箱即用的能力工具箱（`memhop-capability/v1` 格式），随库内嵌（`memhop.BuiltinCapabilityFS`），分两类：MemHop 自身的使用说明书（manual：总指南、Search、Update、Dream、L7 轨迹、L5 结晶与导入）和 harness/agent 应具备的原子能力卡（atomic：文件读写/编辑、命令执行、文件搜索、联网搜索）。**零配置、零写入**：`ListCapabilities` / `GetCapability` 直接返回内置工具箱（与库存能力同套过滤器，可按 status/kind/tag/keyword 过滤），宿主 LLM 拉取后即可对照使用；内置能力为只读、不落 `.meh` 文件，与库存同名能力按 ID 去重（库存记录优先），`Search` 响应不附带内置能力——检索只返回库存匹配结果。
 
 ## 架构
 
 ```
 层级  名称            人脑类比              机制
 ───── ────────────── ───────────────────  ─────────────────────────────────────────────
- L7    Trajectory      程序性日志             宿主追加的操作轨迹事件，结晶为 L5 插件
+ L7    Trajectory      程序性日志             宿主追加的操作轨迹事件，结晶为 L5 能力草稿
  L6    Scene Usage     检索反馈               场景级检索命中计数，反馈 L1 衰减
  L5    Crystal         肌肉记忆             可复用的能力包（技能 · MCP · 工具 · 提示词 · 服务）
  L4    Archive         长期记忆             原始对话日志与历史记录
  L3    Knowledge       语义记忆             多源超图知识库
  L2    Context         工作记忆             压缩的话题结构（4 级压缩深度）
- L1    Engram          联想超图             连接 L2 上下文的超图骨架
+ L1    Engram          场景图               场景节点 + 反向索引连接 L2 上下文（超边创建预留）
  L0    Profile         身份认同             Agent 人格、偏好与语言习惯
 ```
 
@@ -127,8 +135,8 @@ ok, err := db.Dream(context.Background())
 Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历的机制启发。Dream **仅作用于 L0–L2**（L3 蒸馏与 L5 结晶为设计外），共五个阶段：
 
 1. **L2 压缩** — LLM 归组合并相关话题，每个激活场景一个 goroutine 并行处理，降级陈旧上下文
-2. **L1 重建** — 重建连接 L2 上下文的超图骨架（检索索引在同一趟扫盘中重建）
-3. **L1 衰减** — 衰减情景重要性，剪枝弱节点/边
+2. **L1 重建** — 从 L2 同步场景节点，并在同一趟扫盘中重建检索索引
+3. **L1 衰减** — 衰减场景重要性，剪枝弱节点
 4. **L0 画像** — 基于巩固后的记忆重建 Agent 画像
 5. **L0 蒸馏** — 蒸馏情绪/MBTI 模式（恒执行；L1 采样为空时自动跳过）
 
@@ -136,16 +144,20 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 
 ### 检索
 
-`Search` 分发到三条路由之一：`AutoCreate`（跳过检索，直建新场景+话题）、`DirectedL2ID`（定向写入指定场景）、默认检索路由（可通过 `DirectedL3ID` 限定范围）。检索路由使用**三通道融合召回**（BM25 + 向量 + 实体）配合 RRF：
+`Search` 分发到三条路由之一：`AutoCreate`（跳过检索，直建新场景+话题）、`DirectedL2ID`（定向写入指定场景）、默认检索路由（可通过 `DirectedL3ID` 限定范围）。检索路由使用**三通道 RRF 融合**（BM25 + 向量 + 实体/词项模糊匹配）：
 
 | 通道 | 方法 |
 |------|------|
 | BM25 | 通过倒排索引进行关键词匹配（gse CJK 分词） |
 | 向量 | 通过 Ollama HTTP embed 接口进行 f32 单精度语义相似度检索 |
-| 实体 | 知识图谱实体模糊名称匹配 |
+| 实体 | 对已索引 topic 词项做模糊匹配（BK-Tree，编辑距离 ≤ 2） |
 
-融合后处理：关键词重合打分 → 活跃/最近场景的加性场景加分 → L1 关联扩展 → L5 插件匹配 → L0 画像组装。
+融合后处理：关键词重合打分 → 活跃/最近场景的加性场景加分 → L1 关联扩展 → L5 能力匹配 → L0 画像组装。
 
+
+`SearchResult` 还会把返回 topic 的 `L4Refs` 展开成 `Archives`（L4 全文），宿主可直接用 `Contexts` + `Archives` 组装 LLM 上下文，无需手动逐个查档案。
+
+`Search` 创建 topic 时会同时匹配相关 L3 知识节点，并把图谱 ID 写入 `TopicSlot.L3Refs`；`DirectedL3ID` 就是基于这些引用做过滤。
 ## 基准测试
 
 ### LoCoMo 检索召回（v1.1.0）
@@ -191,6 +203,16 @@ benches/fixtures/             ← 基准数据集（locomo10、locomo_smoke、lo
 
 依赖方向严格单向：`internal → sub → repo → core`，`common` 位于最底层（不引用任何其他 internal 包）。
 
+
+> 说明：`docs/` 与 `AGENTS.md` 有意保留为本地文件（见 `.gitignore`），因此公开 clone 中 `docs/` 下的链接可能无法打开。
+
+### LLM 调用与成本模型
+
+- **热路径**（`Search` + `Update`）：每次各一次关键词提取小调用，输出上限 512 token。单次成本很低，主要感知是延迟。
+- **Dream**：每个达到 20 个 topic 的激活场景调用一次 L2 合并（激活场景集合受 `Capacity` 限制，默认 7），再加一次 L0 蒸馏（最多 200 个排序后的 L1 样本，每个样本最多 20 个关键词）。输出上限分别为 8192 / 2048 token。
+- **Crystallize**：每次显式触发调用一次，按 session 轨迹输入。
+- 成本敏感时，给 `Config.LLM` 配一个快速小模型即可（本地 Ollama 模型或便宜 API 模型）；关键词提取不需要旗舰模型。
+
 ## 开发
 
 ```bash
@@ -206,7 +228,8 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
-| v1.2.1 | 2026-08-16 | MCP Server | 新增 `cmd/memhop-mcp` 二进制：基于 stdio 的 MCP Server（官方 go-sdk v1.7.0），将全部公开 API 映射为 26 个工具（search/update/dream/checkpoint/status、档案、场景、知识图谱、归档、插件、轨迹/结晶）· 优雅退出时落盘快照 · 离线单元 + stdio 冒烟测试（`make test-mcp`）· 使用文档见 `docs/mcp/`（本地） |
+| v1.2.3 | 2026-08-18 | MCP 兼容性修复 + DSH 接入 + 检索质量修复 | MCP 工具 schema 修复（无参工具 `properties` 不再输出 null，兼容严格 MCP 客户端）· 工具输出 ID 全部改为 16 位 hex 字符串（uint64 JSON 数字在 JS/TS 宿主丢精度，`new_topic_id` 回传失败已修复）· 新增 `--transport streamable-http`（2025-03-26 规范，Stateless 多租户，DSH 的 dsh-mcp-client 支持）· DeepSeek Harness 接入文档与引导词（`docs/dsh/`）· streamable-http 冒烟测试 · 关键词提取 prompt 全面优化（语义完整 + 同义词变体 + 短语）+ Search 按相关性返回全部相关话题（移除场景上下文截断），LoCoMo 召回 0.392 → 0.668、实体命中 0.284 → 0.877 |
+| v1.2.1 | 2026-08-16 | MCP Server + L5 能力层 | 新增 `cmd/memhop-mcp` 二进制：多租户 SSE MCP Server（官方 go-sdk v1.7.0），将全部公开 API 映射为 28 个工具（search/update/dream/checkpoint/status、画像、场景、知识图谱、归档、能力、轨迹/结晶）· 租户路径隔离 `/mcp/<tenant-id>` · 优雅退出时落盘快照 · 离线 SSE 冒烟测试（`make test-mcp`）· 使用文档见 `docs/mcp/`（本地）· L5 插件层重构为能力层（`memhop-capability/v1`：manual/atomic/composite 三种 kind，`ActivateCapability` 实现 draft→active 生命周期，指纹去重，Crystallize 产出 create/reuse/merge 候选）· 内置能力工具箱（`capabilities/`，embed 只读，Open 时自动挂载）· `Update` 返回 `(bool, error)` · `.meh` 格式升至 `0x0005`——0x0004 文件（v1.2.0 插件记录）在 Open 时被拒绝，不迁移 · 编码器健康检查要求端点根路径 2xx 响应 HEAD（无 fallback）· 活跃场景受 `Capacity`（默认 7，最旧场景被移出 Dream 目标）限制 · `RecordEnd` 头字段 + A/B 头损坏恢复 |
 | v1.2.0 | 2026-08-14 | L5 插件层 | L5 动作链 → 插件槽位（PluginSlot + 结构化五段 Manifest：技能 / MCP / 工具 / 提示词 / 服务）· 仅路径导入 `ImportPlugin`，移除手工写入 Create/Update · Crystallize 从 L7 轨迹按类型分派插件 · `SearchResult.Crystals` → `Plugins` · 八层架构（L0–L7）文档 |
 | v1.1.0 | 2026-07-27 ~ 08.11 | 架构重构 | `internal` 分层重写（装配层 → sub → repo → core/index/common）· f16 → f32 单精度向量 · 话题质心向量检索 · 移除 `BatchStore` · `Dream(ctx)` 签名收窄为 `(bool, error)` · `.meh` 磁盘格式 `0x0004`，与 v1 数据不兼容 · 集成测试按新 internal API 重建 |
 | v1.0.0 | 2026-07-26         | 首个稳定版 | Go 重写，六层认知架构、V2 .meh 存储、BM25+向量+实体 RRF 检索、Dream 巩固管线、L3 超图社区发现。 |

@@ -56,6 +56,56 @@ func TestHandleInvalidArgs(t *testing.T) {
 	}
 }
 
+func TestMarshalResultIDsAsHex(t *testing.T) {
+	// uint64 IDs must serialize as 16-digit hex strings (JS hosts lose
+	// precision on JSON numbers); timestamps and values stay numeric.
+	type sample struct {
+		ID        uint64   `json:"id"`
+		SceneID   uint64   `json:"scene_id"`
+		L4Refs    []uint64 `json:"l4_refs"`
+		CreatedAt int64    `json:"created_at"`
+		Score     float64  `json:"score"`
+	}
+	data, err := marshalResult(sample{
+		ID: 0x506056d97468a833, SceneID: 0x77cf4d9fbc676640,
+		L4Refs: []uint64{0xeccd7bd4d0db74cc}, CreatedAt: 1786987484275, Score: 0.5,
+	})
+	if err != nil {
+		t.Fatalf("marshalResult: %v", err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["id"] != "506056d97468a833" {
+		t.Errorf("id = %v, want hex string", got["id"])
+	}
+	if got["scene_id"] != "77cf4d9fbc676640" {
+		t.Errorf("scene_id = %v, want hex string", got["scene_id"])
+	}
+	refs, ok := got["l4_refs"].([]any)
+	if !ok || len(refs) != 1 || refs[0] != "eccd7bd4d0db74cc" {
+		t.Errorf("l4_refs = %v, want hex array", got["l4_refs"])
+	}
+	if got["created_at"] != float64(1786987484275) {
+		t.Errorf("created_at = %v, want numeric timestamp", got["created_at"])
+	}
+	if got["score"] != 0.5 {
+		t.Errorf("score = %v, want numeric", got["score"])
+	}
+}
+
+func TestMarshalResultZeroIDs(t *testing.T) {
+	// Zero-value IDs (e.g. a fresh profile) must stay present and hex-shaped.
+	data, err := marshalResult(map[string]any{"id_hash": uint64(0)})
+	if err != nil {
+		t.Fatalf("marshalResult: %v", err)
+	}
+	if string(data) != `{"id_hash":"0000000000000000"}` {
+		t.Errorf("zero id = %s, want 0000000000000000", data)
+	}
+}
+
 func TestHandleEmptyArgs(t *testing.T) {
 	h := handle[searchArgs, searchArgs](func(a searchArgs) (searchArgs, error) { return a, nil })
 	if _, isErr := call(t, h, ""); isErr {
@@ -105,22 +155,6 @@ func TestParseEdgeKind(t *testing.T) {
 	}
 	if _, err := parseEdgeKind("bogus"); err == nil {
 		t.Error("expected error for unknown edge kind")
-	}
-}
-
-func TestParseHexID(t *testing.T) {
-	v, err := parseHexID("a1b2c3d4e5f67890")
-	if err != nil {
-		t.Fatalf("parseHexID: %v", err)
-	}
-	if v != 0xa1b2c3d4e5f67890 {
-		t.Errorf("value mismatch: %x", v)
-	}
-	if _, err := parseHexID("short"); err == nil {
-		t.Error("expected error for short id")
-	}
-	if _, err := parseHexID("zzzzzzzzzzzzzzzz"); err == nil {
-		t.Error("expected error for non-hex id")
 	}
 }
 

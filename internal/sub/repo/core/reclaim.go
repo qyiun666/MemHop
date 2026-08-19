@@ -92,6 +92,12 @@ func (e *StorageEngine) countTailSnapshots() (int, error) {
 	return count, nil
 }
 
+// isSnapshotBlobAt reports whether raw starts with a snapshot magic and is
+// long enough for snapshotBlobLength to inspect it.
+func isSnapshotBlobAt(raw []byte) bool {
+	return len(raw) >= 13 && binary.LittleEndian.Uint32(raw[0:4]) == SnapshotMagic
+}
+
 // snapshotBlobLength parses a snapshot blob's total length.
 func snapshotBlobLength(raw []byte) (int, error) {
 	if len(raw) < 13 {
@@ -125,11 +131,16 @@ func (e *StorageEngine) trimTailSnapshot() error {
 	if uint64(h.SnapshotOffset)+uint64(h.SnapshotLength) != uint64(len(e.mmap)) {
 		return nil // snapshot not at tail (legacy layout); leave to Reclaim/Compact
 	}
-	// nextOffset stays at the frame end after checkpoint, so one truncate drops all snapshots.
+	// nextOffset points at the end of the record area (not at the snapshot
+	// tail), so one truncate drops all snapshots before the next append.
 	if err := e.truncateTail(int64(e.nextOffset)); err != nil {
 		return err
 	}
-	return e.writeNullSnapshotHeader()
+	if err := e.writeNullSnapshotHeader(); err != nil {
+		return err
+	}
+	e.snapshotData = nil
+	return nil
 }
 
 // writeNullSnapshotHeader writes a no-snapshot header (CommitID++, pointers

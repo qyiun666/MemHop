@@ -1,0 +1,16 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "agent-read-file",
+  "version": "1",
+  "type": "skill",
+  "summary": "读取文件内容：按路径读取文本文件并带行号返回，是理解代码与配置的第一步",
+  "trigger": "需要查看文件内容、阅读代码或配置时；read file 读取 查看 打开文件",
+  "resources": [
+    {
+      "type": "skill",
+      "name": "read-file",
+      "ref": "agent-skills/read-file/SKILL.md",
+      "description": "怎么用：参数 path=文件绝对路径、offset/limit=行号区间（可选）；按路径读取文本文件并带行号返回"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "memhop-trajectory",
+  "version": "1",
+  "type": "mcp",
+  "summary": "L7 轨迹说明书：按会话追加 Agent 操作事件流（工具调用、子代理、LLM 请求），作为 L5 结晶的原料",
+  "trigger": "需要记录操作轨迹、收集结晶原料时；trajectory 轨迹 l7 事件 操作日志 operation log",
+  "resources": [
+    {
+      "type": "mcp",
+      "name": "memhop_trajectory_append",
+      "ref": "memhop-mcp",
+      "description": "怎么用：重要操作（工具调用、子任务、关键决策）时调用；参数 session_id=会话 ID（16 位 hex）、event_type=turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end、payload=事件内容（截断 4KB）、l4_ref=关联 L4 档案（可选）、timestamp=Unix 毫秒"
+    }
+  ]
+}

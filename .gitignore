@@ -63,3 +63,6 @@ test/testsupport/key_config.json
 
 # Node.js
 /node_modules/
+
+# Local Go build cache (sandboxed builds)
+/.gocache/

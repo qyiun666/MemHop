@@ -166,16 +166,16 @@ func CollectAllArchives(engine *StorageEngine) []ArchiveSlot {
 	return collectAll[ArchiveSlot](engine, RecL4Archive)
 }
 
-func ReadPluginSlot(engine *StorageEngine, id uint64) (*PluginSlot, error) {
-	return readJSON[PluginSlot](engine, id, "PluginSlot")
+func ReadCapability(engine *StorageEngine, id uint64) (*Capability, error) {
+	return readJSON[Capability](engine, id, "Capability")
 }
 
-func WritePluginSlot(engine *StorageEngine, id uint64, slot *PluginSlot) error {
-	return writeJSON(engine, RecL5Plugin, id, slot, "PluginSlot")
+func WriteCapability(engine *StorageEngine, id uint64, slot *Capability) error {
+	return writeJSON(engine, RecL5Capability, id, slot, "Capability")
 }
 
-func CollectAllPlugins(engine *StorageEngine) []PluginSlot {
-	return collectAll[PluginSlot](engine, RecL5Plugin)
+func CollectAllCapabilities(engine *StorageEngine) []Capability {
+	return collectAll[Capability](engine, RecL5Capability)
 }
 
 func ReadSceneUsageSlot(engine *StorageEngine, id uint64) (*SceneUsageSlot, error) {

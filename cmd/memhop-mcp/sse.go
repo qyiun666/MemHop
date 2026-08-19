@@ -36,11 +36,11 @@ func parseTenant(path string) (string, error) {
 	return id, nil
 }
 
-// newSSEHandler returns the MCP SSE handler that routes each new session to
-// the tenant registry. An unknown or malformed tenant yields no server,
-// which the SDK answers with 400 Bad Request.
-func newSSEHandler(reg *tenantRegistry) *mcp.SSEHandler {
-	return mcp.NewSSEHandler(func(req *http.Request) *mcp.Server {
+// serverForRequest routes each incoming MCP request to the tenant identified
+// by its URL path (/mcp/<tenant-id>). An unknown or malformed tenant yields
+// no server, which the SDK answers with 400 Bad Request.
+func serverForRequest(reg *tenantRegistry) func(*http.Request) *mcp.Server {
+	return func(req *http.Request) *mcp.Server {
 		tenant, err := parseTenant(req.URL.Path)
 		if err != nil {
 			return nil
@@ -50,5 +50,21 @@ func newSSEHandler(reg *tenantRegistry) *mcp.SSEHandler {
 			return nil
 		}
 		return e.server
-	}, nil)
+	}
+}
+
+// newSSEHandler returns the MCP SSE handler that routes each new session to
+// the tenant registry.
+func newSSEHandler(reg *tenantRegistry) *mcp.SSEHandler {
+	return mcp.NewSSEHandler(serverForRequest(reg), nil)
+}
+
+// newStreamableHandler returns the MCP Streamable HTTP handler (2025-03-26
+// spec) routing each request to the tenant registry. Stateless mode avoids
+// cross-request session state, so every POST independently resolves its
+// tenant from the URL path — the same isolation model as the SSE transport.
+// Stateless servers cannot send server-initiated requests; MCP clients such
+// as dsh-mcp-client (streamable-http transport) work within that contract.
+func newStreamableHandler(reg *tenantRegistry) *mcp.StreamableHTTPHandler {
+	return mcp.NewStreamableHTTPHandler(serverForRequest(reg), &mcp.StreamableHTTPOptions{Stateless: true})
 }

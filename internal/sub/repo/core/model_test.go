@@ -183,6 +183,17 @@ func TestComputeTopicIDConsistency(t *testing.T) {
 	}
 }
 
+func TestComputeTopicIDForTextDifferentiatesContent(t *testing.T) {
+	id1 := ComputeTopicIDForText(100, 1000, "hello")
+	id2 := ComputeTopicIDForText(100, 1000, "world")
+	if id1 == id2 {
+		t.Fatalf("same timestamp but different text should not collide: %d", id1)
+	}
+	if id1 != ComputeTopicIDForText(100, 1000, "hello") {
+		t.Fatal("text-based topic ID must stay deterministic")
+	}
+}
+
 func TestHypergraphSlotRoundtripPath(t *testing.T) {
 	s := HypergraphSlot{
 		IDHash: 1, Name: "memhop code graph",
@@ -377,40 +388,43 @@ func TestArchiveSlotImagePath(t *testing.T) {
 	}
 }
 
-func TestPluginSlotRoundtrip(t *testing.T) {
+func TestCapabilityRoundtrip(t *testing.T) {
 	cfg := `{"endpoint":"http://localhost:9000"}`
-	c := PluginSlot{
-		IDHash: 123456789, Name: "Deploy Service",
-		Trigger:    "keyword:deploy AND service:production",
-		PluginType: "workflow", Status: PluginActive, Confidence: 0.85,
+	c := Capability{
+		IDHash: 123456789, Name: "Deploy Service", Version: "1",
+		Type: CapabilityComposite, Summary: "deploy service", Trigger: "deploy", Status: CapabilityActive,
 		SuccessRate: 0.92, TriggerCount: 5,
 		LastTriggered: 1000000,
-		Manifest: PluginManifest{
-			Skills: []PluginItem{{Name: "deploy-checklist", Description: "pre-deploy checks"}},
-			MCPs:   []PluginItem{{Name: "deploy-mcp", Config: &cfg}},
-			Tools:  []PluginItem{{Name: "run_test"}},
-			Prompts: []PluginItem{{Name: "deploy-review",
-				Config: strPtr("review the deploy plan")}},
-			Services: []PluginItem{{Name: "registry", Config: &cfg}},
+		Resources: []ResourceRef{
+			{Type: CapabilitySkill, Name: "deploy-checklist", Description: "pre-deploy checks"},
+			{Type: CapabilityMCP, Name: "deploy-mcp", Ref: "localhost:9000", Config: &cfg},
+			{Type: CapabilityMCP, Name: "run_test"},
 		},
+		Workflow: &Workflow{Steps: []WorkflowStep{
+			{Ref: "deploy-checklist", Action: "run checks"},
+			{Ref: "deploy-mcp", Action: "deploy"},
+		}},
 		CreatedAt: 900000, UpdatedAt: 950000,
 	}
-	var got PluginSlot
+	var got Capability
 	jsonRoundtrip(t, c, &got)
-	if got.Status != PluginActive || got.SuccessRate != 0.92 {
+	if got.Status != CapabilityActive || got.SuccessRate != 0.92 {
 		t.Fatalf("mismatch: %+v", got)
 	}
-	if len(got.Manifest.Skills) != 1 || len(got.Manifest.MCPs) != 1 ||
-		len(got.Manifest.Tools) != 1 || len(got.Manifest.Prompts) != 1 || len(got.Manifest.Services) != 1 {
-		t.Fatalf("manifest mismatch: %+v", got.Manifest)
+	if len(got.Resources) != 3 || got.Resources[0].Type != CapabilitySkill ||
+		got.Resources[1].Name != "deploy-mcp" || got.Resources[2].Name != "run_test" {
+		t.Fatalf("resources mismatch: %+v", got.Resources)
+	}
+	if got.Workflow == nil || len(got.Workflow.Steps) != 2 || got.Workflow.Steps[1].Ref != "deploy-mcp" {
+		t.Fatalf("workflow mismatch: %+v", got.Workflow)
 	}
 }
 
-func TestPluginAllStatuses(t *testing.T) {
-	statuses := []PluginStatus{PluginDraft, PluginActive, PluginDeprecated}
+func TestCapabilityAllStatuses(t *testing.T) {
+	statuses := []CapabilityStatus{CapabilityDraft, CapabilityActive, CapabilityDeprecated}
 	for _, s := range statuses {
-		c := PluginSlot{IDHash: 1, Status: s}
-		var got PluginSlot
+		c := Capability{IDHash: 1, Status: s}
+		var got Capability
 		jsonRoundtrip(t, c, &got)
 		if got.Status != s {
 			t.Fatalf("status mismatch: want %d got %d", s, got.Status)
@@ -418,18 +432,18 @@ func TestPluginAllStatuses(t *testing.T) {
 	}
 }
 
-func TestPluginManifestEmptySectionsOmitted(t *testing.T) {
-	c := PluginSlot{IDHash: 1, Manifest: PluginManifest{Skills: []PluginItem{{Name: "s"}}}}
-	var got PluginSlot
+func TestCapabilityResourcesOmitted(t *testing.T) {
+	c := Capability{IDHash: 1, Resources: []ResourceRef{{Type: CapabilityMCP, Name: "s"}}}
+	var got Capability
 	jsonRoundtrip(t, c, &got)
-	if len(got.Manifest.Skills) != 1 || got.Manifest.MCPs != nil {
-		t.Fatalf("mismatch: %+v", got.Manifest)
+	if len(got.Resources) != 1 || got.Workflow != nil {
+		t.Fatalf("mismatch: %+v", got)
 	}
 }
 
-func TestPluginItemConfigNil(t *testing.T) {
-	p := PluginItem{Name: "tool", Config: nil}
-	var got PluginItem
+func TestResourceRefConfigNil(t *testing.T) {
+	p := ResourceRef{Type: CapabilityMCP, Name: "tool", Config: nil}
+	var got ResourceRef
 	jsonRoundtrip(t, p, &got)
 	if got.Config != nil {
 		t.Fatalf("expected nil config")
@@ -461,14 +475,14 @@ func TestTrajectorySlotRoundtrip(t *testing.T) {
 	}
 }
 
-func TestPluginSlotPathRoundtrip(t *testing.T) {
-	c := PluginSlot{
-		IDHash: 1, Name: "t", Trigger: "tr", Status: PluginActive,
-		Path: strPtr("session:abc"),
+func TestCapabilityPathRoundtrip(t *testing.T) {
+	c := Capability{
+		IDHash: 1, Name: "t", Trigger: "tr", Status: CapabilityActive,
+		Resources: []ResourceRef{{Type: CapabilityMCP, Name: "tool", Ref: "session:abc"}},
 	}
-	var got PluginSlot
+	var got Capability
 	jsonRoundtrip(t, c, &got)
-	if got.Path == nil || *got.Path != "session:abc" {
+	if len(got.Resources) != 1 || got.Resources[0].Ref != "session:abc" {
 		t.Fatalf("path mismatch: %+v", got)
 	}
 }
@@ -502,14 +516,14 @@ func TestContentTypeValues(t *testing.T) {
 	}
 }
 
-func TestPluginStatusValues(t *testing.T) {
+func TestCapabilityStatusValues(t *testing.T) {
 	tests := []struct {
-		cs   PluginStatus
+		cs   CapabilityStatus
 		val  uint8
 		name string
 	}{
-		{PluginDraft, 0, "draft"}, {PluginActive, 1, "active"},
-		{PluginDeprecated, 2, "deprecated"},
+		{CapabilityDraft, 0, "draft"}, {CapabilityActive, 1, "active"},
+		{CapabilityDeprecated, 2, "deprecated"},
 	}
 	for _, tt := range tests {
 		if uint8(tt.cs) != tt.val {

@@ -12,14 +12,12 @@ import (
 
 func TestAppendReadTrajectoryOrdered(t *testing.T) {
 	engine := tempEngine(t)
-	// Append out of order; Read must return by Seq ascending.
 	if err := AppendTrajectory(engine, core.TrajectorySlot{SessionID: 7, Seq: 2, EventType: "tool_call", Payload: "b", Timestamp: 200}); err != nil {
 		t.Fatalf("append seq2: %v", err)
 	}
 	if err := AppendTrajectory(engine, core.TrajectorySlot{SessionID: 7, Seq: 1, EventType: "turn_start", Payload: "a", Timestamp: 100}); err != nil {
 		t.Fatalf("append seq1: %v", err)
 	}
-	// Another session must not leak in.
 	if err := AppendTrajectory(engine, core.TrajectorySlot{SessionID: 8, Seq: 1, EventType: "turn_start", Payload: "other", Timestamp: 100}); err != nil {
 		t.Fatalf("append other: %v", err)
 	}
@@ -52,103 +50,105 @@ func TestDeleteTrajectory(t *testing.T) {
 	if len(events) != 0 {
 		t.Fatalf("want empty trajectory, got %d events", len(events))
 	}
-	// Deleting a session without trajectory is a no-op.
 	if err := DeleteTrajectory(engine, 999); err != nil {
 		t.Fatalf("delete missing session: %v", err)
 	}
 }
 
-func TestCreateOrUpdatePluginL5PersistsManifest(t *testing.T) {
+func TestUpsertCapabilityL5PersistsDefinition(t *testing.T) {
 	engine := tempEngine(t)
-	path := "session:abc"
 	cfg := `{"endpoint":"http://localhost:9000"}`
-	manifest := core.PluginManifest{
-		Skills: []core.PluginItem{{Name: "deploy-checklist"}},
-		MCPs:   []core.PluginItem{{Name: "deploy-mcp", Config: &cfg}},
-		Tools:  []core.PluginItem{{Name: "run_test"}},
+	cap := &core.Capability{
+		Name: "整理代码", Type: core.CapabilityMCP, Summary: "整理代码",
+		Trigger: "用户要求重构", Status: core.CapabilityActive,
+		Origin: core.CapabilityOriginCrystallized,
+		Resources: []core.ResourceRef{
+			{Type: core.CapabilitySkill, Name: "deploy-checklist"},
+			{Type: core.CapabilityMCP, Name: "deploy-mcp", Ref: "localhost:9000", Config: &cfg},
+			{Type: core.CapabilityMCP, Name: "run_test"},
+		},
 	}
-	pluginID, existed, err := CreateOrUpdatePluginL5(engine, "整理代码", "用户要求重构", "workflow", manifest, &path)
+	existed, err := UpsertCapabilityL5(engine, cap)
 	if err != nil {
-		t.Fatalf("create plugin: %v", err)
+		t.Fatalf("create capability: %v", err)
 	}
 	if existed {
-		t.Fatal("fresh plugin should not exist yet")
+		t.Fatal("fresh capability should not exist yet")
 	}
-	plugin, err := GetPluginL5(engine, common.FormatHash(pluginID))
+	got, err := GetCapabilityL5(engine, common.FormatHash(cap.IDHash))
 	if err != nil {
-		t.Fatalf("get plugin: %v", err)
+		t.Fatalf("get capability: %v", err)
 	}
-	if plugin.Path == nil || *plugin.Path != "session:abc" {
-		t.Fatalf("path not persisted: %+v", plugin)
-	}
-	if plugin.PluginType != "workflow" || len(plugin.Manifest.Skills) != 1 ||
-		len(plugin.Manifest.MCPs) != 1 || len(plugin.Manifest.Tools) != 1 {
-		t.Fatalf("manifest mismatch: %+v", plugin)
-	}
-	if plugin.Manifest.MCPs[0].Config == nil || *plugin.Manifest.MCPs[0].Config != cfg {
-		t.Fatalf("mcp config mismatch")
+	if got.Type != core.CapabilityMCP || len(got.Resources) != 3 ||
+		got.Resources[1].Name != "deploy-mcp" {
+		t.Fatalf("resources mismatch: %+v", got)
 	}
 }
 
-func TestCreateOrUpdatePluginL5PreservesFields(t *testing.T) {
+func TestUpsertCapabilityL5PreservesRuntimeFields(t *testing.T) {
 	engine := tempEngine(t)
-	path1 := "session:a"
-	id, existed, err := CreateOrUpdatePluginL5(engine, "t", "tr", "skill", core.PluginManifest{Skills: []core.PluginItem{{Name: "s1"}}}, &path1)
+	cap := &core.Capability{
+		Name: "t", Type: core.CapabilityMCP, Summary: "s", Trigger: "tr",
+		Status: core.CapabilityActive, Origin: core.CapabilityOriginHost,
+		Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "s1"}},
+	}
+	existed, err := UpsertCapabilityL5(engine, cap)
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
 	if existed {
-		t.Fatal("fresh plugin should not exist yet")
+		t.Fatal("fresh capability should not exist yet")
 	}
-	// Host accumulates runtime fields.
-	plugin, err := GetPluginL5(engine, common.FormatHash(id))
+	got, err := GetCapabilityL5(engine, common.FormatHash(cap.IDHash))
 	if err != nil {
-		t.Fatalf("get plugin: %v", err)
+		t.Fatalf("get: %v", err)
 	}
-	plugin.Confidence = 0.8
-	plugin.TriggerCount = 3
-	if err := UpdatePluginL5(engine, common.FormatHash(id), plugin); err != nil {
-		t.Fatalf("update plugin: %v", err)
+	got.TriggerCount = 3
+	got.SuccessRate = 0.75
+	if err := core.WriteCapability(engine, got.IDHash, got); err != nil {
+		t.Fatalf("write runtime fields: %v", err)
 	}
-	// Re-create with a new path and manifest: runtime fields must survive,
-	// Path/Manifest/PluginType refreshed.
-	path2 := "session:b"
-	id2, existed, err := CreateOrUpdatePluginL5(engine, "t", "tr", "workflow", core.PluginManifest{Tools: []core.PluginItem{{Name: "tool"}}}, &path2)
+
+	cap2 := &core.Capability{
+		Name: "t", Version: "2", Type: core.CapabilityComposite, Summary: "s2",
+		Trigger: "tr2", Status: core.CapabilityDraft, Origin: core.CapabilityOriginHost,
+		Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "tool"}},
+		Workflow:  &core.Workflow{Steps: []core.WorkflowStep{{Ref: "tool"}}},
+	}
+	existed, err = UpsertCapabilityL5(engine, cap2)
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if !existed || id2 != id {
-		t.Fatalf("expected existing plugin id %d, got %d (existed=%v)", id, id2, existed)
+	if existed == false {
+		t.Fatal("expected existing capability")
 	}
-	got, err := GetPluginL5(engine, common.FormatHash(id2))
+	got, err = GetCapabilityL5(engine, common.FormatHash(cap.IDHash))
 	if err != nil {
-		t.Fatalf("get updated plugin: %v", err)
+		t.Fatalf("get updated: %v", err)
 	}
-	if got.Confidence != 0.8 || got.TriggerCount != 3 {
+	if got.TriggerCount != 3 || got.SuccessRate != 0.75 {
 		t.Fatalf("runtime fields lost: %+v", got)
 	}
-	if got.PluginType != "workflow" || len(got.Manifest.Tools) != 1 {
-		t.Fatalf("manifest not refreshed: %+v", got)
-	}
-	if got.Path == nil || *got.Path != "session:b" {
-		t.Fatalf("path not refreshed: %+v", got)
+	if got.Version != "2" || got.Type != core.CapabilityComposite || got.Status != core.CapabilityActive {
+		t.Fatalf("definition not refreshed: %+v", got)
 	}
 }
 
-func TestDeletePluginL5(t *testing.T) {
+func TestDeleteCapabilityL5(t *testing.T) {
 	engine := tempEngine(t)
-	id, _, err := CreateOrUpdatePluginL5(engine, "t", "tr", "skill", core.PluginManifest{}, nil)
-	if err != nil {
-		t.Fatalf("create plugin: %v", err)
+	cap := &core.Capability{Name: "t", Type: core.CapabilityMCP, Summary: "s", Trigger: "tr",
+		Status: core.CapabilityDraft, Origin: core.CapabilityOriginHost,
+		Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "s1"}}}
+	if _, err := UpsertCapabilityL5(engine, cap); err != nil {
+		t.Fatalf("create capability: %v", err)
 	}
-	if !DeletePluginL5(engine, common.FormatHash(id)) {
-		t.Fatalf("delete plugin failed")
+	if DeleteCapabilityL5(engine, common.FormatHash(cap.IDHash)) == false {
+		t.Fatalf("delete capability failed")
 	}
-	if plugins := core.CollectAllPlugins(engine); len(plugins) != 0 {
-		t.Fatalf("want 0 plugins, got %+v", plugins)
+	if got := core.CollectAllCapabilities(engine); len(got) != 0 {
+		t.Fatalf("want 0 capabilities, got %+v", got)
 	}
-	// Deleting a missing record is idempotent (no error).
-	if !DeletePluginL5(engine, common.FormatHash(id)) {
+	if DeleteCapabilityL5(engine, common.FormatHash(cap.IDHash)) == false {
 		t.Fatalf("second delete should stay idempotent")
 	}
 }

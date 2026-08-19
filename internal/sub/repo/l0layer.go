@@ -29,7 +29,13 @@ func UpdateProfileL0(engine *core.StorageEngine, slot *core.ProfileSlot) error {
 	return core.WriteProfileSlot(engine, slot.IDHash, slot)
 }
 
-const maxDistillSamples = 1000
+// maxDistillSamples bounds both prompt cost and LLM input size for L0
+// distillation. 200 top-ranked nodes is far more signal than emotion/MBTI
+// extraction needs.
+const maxDistillSamples = 200
+
+// maxDistillKeywordsPerSample bounds the keyword list sent for each node.
+const maxDistillKeywordsPerSample = 20
 
 // distillSampleLambda: sample-rank age decay per hour (ranking only,
 // decoupled from the LambdaNode decay config).
@@ -148,7 +154,12 @@ func collectSampleKeywords(engine *core.StorageEngine, topicIDs []uint64) []stri
 		if err != nil || t == nil {
 			continue
 		}
-		kws = append(kws, t.FusedKeywords...)
+		for _, kw := range t.FusedKeywords {
+			if len(kws) >= maxDistillKeywordsPerSample {
+				return kws
+			}
+			kws = append(kws, kw)
+		}
 	}
 	return kws
 }
@@ -182,13 +193,14 @@ func MergeDistillIntoProfile(engine *core.StorageEngine, emo DistillEmotion, mbt
 }
 
 // BackfillL1Emotions writes per-node emotions into L1 nodes lacking signals;
-// returns the count written.
-func BackfillL1Emotions(engine *core.StorageEngine, perNode map[uint64]L1NodeEmotion) int {
+// returns the count written. A missing node or a write failure is returned
+// as an error — nothing is silently skipped.
+func BackfillL1Emotions(engine *core.StorageEngine, perNode map[uint64]L1NodeEmotion) (int, error) {
 	written := 0
 	for id, em := range perNode {
 		node := readSceneNode(engine, id)
 		if node == nil {
-			continue
+			return written, fmt.Errorf("backfill L1 emotions: node %s not found", common.FormatHash(id))
 		}
 		if node.Valence != 0 || node.Arousal != 0 {
 			continue
@@ -196,11 +208,12 @@ func BackfillL1Emotions(engine *core.StorageEngine, perNode map[uint64]L1NodeEmo
 		node.Valence = em.Valence
 		node.Arousal = em.Arousal
 		node.UpdatedAt = time.Now().UnixMilli()
-		if core.WriteSceneNode(engine, id, node) == nil {
-			written++
+		if err := core.WriteSceneNode(engine, id, node); err != nil {
+			return written, err
 		}
+		written++
 	}
-	return written
+	return written, nil
 }
 
 func ftoa(v float64) string { return strconv.FormatFloat(v, 'f', 3, 64) }

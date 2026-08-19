@@ -28,11 +28,10 @@ type SearchQuery struct {
 }
 
 type SearchResult struct {
-	Profile            core.ProfileSlot  `json:"profile"`
-	Contexts           []core.TopicSlot  `json:"contexts"`
-	AssociatedContexts []core.TopicSlot  `json:"associated_contexts"`
-	Plugins            []core.PluginSlot `json:"plugins"`
-	NewTopicID         uint64            `json:"new_topic_id,omitempty"`
+	Profile            core.ProfileSlot `json:"profile"`
+	Contexts           []core.TopicSlot `json:"contexts"`
+	AssociatedContexts []core.TopicSlot `json:"associated_contexts"`
+	NewTopicID         uint64           `json:"new_topic_id,omitempty"`
 }
 
 // Search runs three-route retrieval (AutoCreate, DirectedL2ID, default;
@@ -143,6 +142,13 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 	if !repo.UpdateTopicL4RefsL2(db.engine, topicIDStr, []uint64{archiveID}) {
 		return nil, 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
+	// Link matching L3 graphs onto the new topic: this is what makes
+	// DirectedL3ID scoping work.
+	if ids := repo.MatchL3Graphs(db.engine, keywords, q.Text); len(ids) > 0 {
+		if !repo.AppendTopicL3RefsL2(db.engine, topicIDStr, ids) {
+			return nil, 0, common.NewError(common.ErrIO, "link topic l3 refs", nil)
+		}
+	}
 	latest, err := repo.ListTopicsL2(db.engine, common.FormatHash(sceneID), 1, 2)
 	if err != nil {
 		return nil, 0, err
@@ -190,12 +196,11 @@ func (db *DB) associatedContexts(sceneID uint64) []core.TopicSlot {
 	return topics
 }
 
-func (db *DB) assembleResult(q SearchQuery, contexts, associated []core.TopicSlot, newTopicID uint64) (*SearchResult, error) {
+func (db *DB) assembleResult(_ SearchQuery, contexts, associated []core.TopicSlot, newTopicID uint64) (*SearchResult, error) {
 	return &SearchResult{
 		Profile:            db.readProfile(),
 		Contexts:           contexts,
 		AssociatedContexts: associated,
-		Plugins:            db.matchPlugins(q.Text),
 		NewTopicID:         newTopicID,
 	}, nil
 }
@@ -206,14 +211,6 @@ func (db *DB) readProfile() core.ProfileSlot {
 		return core.ProfileSlot{}
 	}
 	return *slot
-}
-
-func (db *DB) matchPlugins(text string) []core.PluginSlot {
-	plugins := repo.MatchPluginsL5(db.engine, text)
-	if plugins == nil {
-		return []core.PluginSlot{}
-	}
-	return plugins
 }
 
 // writeCentroid encodes text as a centroid vector record; encoder failure

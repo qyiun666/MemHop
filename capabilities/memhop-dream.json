@@ -1,0 +1,16 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "memhop-dream",
+  "version": "1",
+  "type": "mcp",
+  "summary": "Dream 说明书：记忆巩固周期——活跃场景 L2 压缩、检索索引重建、L1 衰减重建、L0 画像蒸馏",
+  "trigger": "需要巩固压缩记忆、执行记忆整理周期时；dream 巩固 压缩 衰减 consolidate",
+  "resources": [
+    {
+      "type": "mcp",
+      "name": "memhop_dream",
+      "ref": "memhop-mcp",
+      "description": "怎么用：空闲期/固定周期/长会话结束后调用（可取消，取消中断当前阶段）；参数 scene_id 可选，指定后只巩固该场景；无活跃场景时安全 no-op；耗时较长需耐心等待"
+    }
+  ]
+}

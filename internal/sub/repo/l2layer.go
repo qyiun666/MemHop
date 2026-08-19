@@ -168,6 +168,8 @@ func CreateSceneL2(engine *core.StorageEngine, name string) (uint64, error) {
 	return slot.SceneID, nil
 }
 
+// CollectAllScenesL2 returns every scene with TopicCount set to the number
+// of depth-1 root topics under it (single pass over all topics).
 func CollectAllScenesL2(engine *core.StorageEngine) []core.SceneSlot {
 	var out []core.SceneSlot
 	engine.IterIndexByType(core.RecL2Scene, func(idHash uint64) error {
@@ -178,6 +180,18 @@ func CollectAllScenesL2(engine *core.StorageEngine) []core.SceneSlot {
 		out = append(out, *slot)
 		return nil
 	})
+	if len(out) == 0 {
+		return out
+	}
+	counts := make(map[uint64]int, len(out))
+	for _, topic := range core.CollectAllTopics(engine) {
+		if topic.Depth == 1 {
+			counts[topic.SceneID]++
+		}
+	}
+	for i := range out {
+		out[i].TopicCount = counts[out[i].SceneID]
+	}
 	return out
 }
 
@@ -236,8 +250,16 @@ func CreateTopicL2(engine *core.StorageEngine, sceneID string, userKeywords []st
 	if err != nil {
 		return false
 	}
+	return CreateTopicL2WithID(engine, sceneHash, core.ComputeTopicID(sceneHash, userTS, 0),
+		userKeywords, userTS, centroidRef)
+}
+
+// CreateTopicL2WithID writes a topic with a caller-derived ID. Search uses
+// ComputeTopicIDForText so same-scene/same-millisecond messages with
+// different content no longer overwrite each other.
+func CreateTopicL2WithID(engine *core.StorageEngine, sceneHash uint64, topicID uint64, userKeywords []string, userTS int64, centroidRef uint64) bool {
 	topic := core.TopicSlot{
-		ID:              core.ComputeTopicID(sceneHash, userTS, 0),
+		ID:              topicID,
 		SceneID:         sceneHash,
 		Depth:           1,
 		UserKeywords:    userKeywords,
@@ -319,4 +341,27 @@ func UpdateChildrenL2(engine *core.StorageEngine, id string, childrenIDs []uint6
 	}
 	topic.ChildrenIDs = childrenIDs
 	return core.WriteTopicSlot(engine, idHash, topic) == nil
+}
+
+// RecoverDeletedScenesL2 re-appends the pre-delete payload of every L2
+// scene record whose newest frame is a tombstone, returning the restored
+// scene IDs. Frames reclaimed by compaction cannot be recovered.
+func RecoverDeletedScenesL2(engine *core.StorageEngine) ([]uint64, error) {
+	payloads, err := engine.ScanDeletedPayloads(core.RecL2Scene)
+	if err != nil {
+		return nil, err
+	}
+	if len(payloads) == 0 {
+		return nil, nil
+	}
+	writes := make([]core.RecordEntry, 0, len(payloads))
+	ids := make([]uint64, 0, len(payloads))
+	for id, data := range payloads {
+		writes = append(writes, core.RecordEntry{RecordType: core.RecL2Scene, IDHash: id, Data: data})
+		ids = append(ids, id)
+	}
+	if _, err := engine.WriteRecordBatch(writes); err != nil {
+		return nil, err
+	}
+	return ids, nil
 }

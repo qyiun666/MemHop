@@ -14,6 +14,7 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/sub"
 	"github.com/qyiun666/MemHop/internal/sub/common"
+	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -48,8 +49,8 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 
 	// 2. Update: append the agent reply to the topic.
 	agentText := "海边晨跑很不错，空气清新还能看日出，记得做好防晒"
-	if !db.Update(topicID, agentText, ts+1000) {
-		t.Fatalf("Update(topicID=%s) failed", topicID)
+	if _, err := db.Update(topicID, agentText, ts+1000); err != nil {
+		t.Fatalf("Update(topicID=%s) failed: %v", topicID, err)
 	}
 
 	// 3. Search again (normal route): should hit the existing scene.
@@ -82,7 +83,7 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	t.Logf("L4 archives for topic: %d", len(archives))
 
 	// 5. Dream: consolidate active scenes (L2 compression + L1 rebuild/decay).
-	ok, err := db.Dream(context.Background())
+	ok, err := db.Dream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
@@ -101,52 +102,51 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	t.Logf("post-dream search returned %d contexts", len(res3.Contexts))
 }
 
-// TestE2EPlugin covers L5 plugin import (path) / query / delete against a
-// live DB.
-func TestE2EPlugin(t *testing.T) {
+// TestE2ECapability covers L5 capability import (path) / query / delete
+// against a live DB.
+func TestE2ECapability(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
-	// Plugins enter only via path import; write a PluginImport JSON file.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "morning_run.json")
-	content := `{"name":"晨跑流程","trigger":"用户提到周末海边跑步","plugin_type":"skill","manifest":{"skills":[{"name":"晨跑计划","description":"周末清晨海边跑步"}]}}`
+	content := `{"format":"memhop-capability/v2","name":"晨跑流程","version":"1","type":"skill","summary":"周末海边晨跑","trigger":"用户提到周末海边跑步","resources":[{"type":"skill","name":"晨跑计划","description":"周末清晨海边跑步"}]}`
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write import file: %v", err)
 	}
-	id, err := db.ImportPlugin(path)
+	cap, err := db.ImportCapability(path)
 	if err != nil {
-		t.Fatalf("ImportPlugin: %v", err)
+		t.Fatalf("ImportCapability: %v", err)
 	}
-	if id == "" {
-		t.Fatal("ImportPlugin returned empty id")
+	if cap == nil || cap.IDHash == 0 {
+		t.Fatal("ImportCapability returned empty capability")
+	}
+	id := common.FormatHash(cap.IDHash)
+
+	got, err := db.GetCapability(id)
+	if err != nil {
+		t.Fatalf("GetCapability(%s): %v", id, err)
+	}
+	if got.Name != "晨跑流程" || got.Type != core.CapabilitySkill {
+		t.Fatalf("unexpected capability: %+v", got)
+	}
+	if len(got.Resources) != 1 || got.Resources[0].Name != "晨跑计划" {
+		t.Fatalf("resources mismatch: %+v", got.Resources)
 	}
 
-	plugin, err := db.GetPlugin(id)
+	caps, err := db.ListCapabilities(sub.CapabilityListQuery{Keyword: "晨跑"})
 	if err != nil {
-		t.Fatalf("GetPlugin(%s): %v", id, err)
+		t.Fatalf("ListCapabilities: %v", err)
 	}
-	if plugin.Name != "晨跑流程" || plugin.PluginType != "skill" {
-		t.Fatalf("unexpected plugin: %+v", plugin)
-	}
-	if len(plugin.Manifest.Skills) != 1 || plugin.Manifest.Skills[0].Name != "晨跑计划" {
-		t.Fatalf("manifest mismatch: %+v", plugin.Manifest)
+	if len(caps) == 0 {
+		t.Fatal("ListCapabilities(Keyword=晨跑) returned no capabilities")
 	}
 
-	// List with keyword filter
-	plugins, err := db.ListPlugins(sub.PluginListQuery{Keyword: "晨跑"})
-	if err != nil {
-		t.Fatalf("ListPlugins: %v", err)
+	if err := db.DeleteCapability(id); err != nil {
+		t.Fatalf("DeleteCapability(%s): %v", id, err)
 	}
-	if len(plugins) == 0 {
-		t.Fatal("ListPlugins(Keyword=晨跑) returned no plugins")
-	}
-
-	if err := db.DeletePlugin(id); err != nil {
-		t.Fatalf("DeletePlugin(%s): %v", id, err)
-	}
-	if _, err := db.GetPlugin(id); err == nil {
-		t.Fatal("GetPlugin after DeletePlugin should fail")
+	if _, err := db.GetCapability(id); err == nil {
+		t.Fatal("GetCapability after DeleteCapability should fail")
 	}
 }
 

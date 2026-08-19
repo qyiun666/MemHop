@@ -126,6 +126,7 @@ func Open(path string) (*StorageEngine, error) {
 	}
 	var scanStart uint64 = DataStart
 	snapshotCorrupt := false
+	snapshotLoaded := false
 	if active.SnapshotOffset > 0 && active.SnapshotLength > 0 {
 		if err := e.loadSnapshot(); err != nil {
 			// Snapshot corrupt or out of bounds (reclaim checkpoint truncation window):
@@ -136,6 +137,7 @@ func Open(path string) (*StorageEngine, error) {
 			snapshotCorrupt = true
 		} else {
 			// Recover records appended after the snapshot (crash without checkpoint).
+			snapshotLoaded = true
 			scanStart = active.SnapshotOffset + uint64(active.SnapshotLength)
 		}
 	}
@@ -154,6 +156,13 @@ func Open(path string) (*StorageEngine, error) {
 			f.Close()
 			return nil, err
 		}
+	}
+	if snapshotLoaded && end == scanStart {
+		// trimTailSnapshot must truncate at the record-area end (the start
+		// of the first tail snapshot), not at the latest snapshot offset or
+		// at the end of the snapshot chain. New headers store RecordEnd
+		// directly; legacy files get a one-time reconstruction scan.
+		e.nextOffset = e.recoverRecordAreaEnd()
 	}
 	if snapshotCorrupt {
 		// Clear the active header snapshot pointer to avoid repeated out-of-bounds rescans on Open.
@@ -310,6 +319,49 @@ func (e *StorageEngine) Contains(idHash uint64) bool {
 	}
 	_, ok := e.index[idHash]
 	return ok
+}
+
+// ScanDeletedPayloads returns, for every record of the given type whose
+// newest frame is a tombstone, the payload of the newest non-tombstone
+// frame (the pre-delete value). Frames already reclaimed or compacted are
+// gone forever and cannot be recovered. Payloads are copied so callers may
+// write them back without holding the mmap view.
+func (e *StorageEngine) ScanDeletedPayloads(recordType uint8) (map[uint64][]byte, error) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.closed {
+		return nil, common.NewError(common.ErrClosed, "engine is closed")
+	}
+	payload := make(map[uint64][]byte)
+	deleted := make(map[uint64]bool)
+	offset := uint64(DataStart)
+	for offset < e.nextOffset {
+		rt, flags, data, idHash, err := RecordData(e.mmap, offset)
+		if err != nil {
+			if errors.Is(err, io.EOF) || common.CodeOf(err) == common.ErrCRCMismatch {
+				break // crash residue after the last clean frame
+			}
+			return nil, err
+		}
+		if rt == recordType {
+			if flags&FlagDeleted != 0 {
+				deleted[idHash] = true
+			} else {
+				deleted[idHash] = false
+				payload[idHash] = append([]byte(nil), data...)
+			}
+		}
+		offset += uint64(RecordHeaderSize) + uint64(len(data))
+	}
+	out := make(map[uint64][]byte)
+	for id, del := range deleted {
+		if del {
+			if p, ok := payload[id]; ok {
+				out[id] = p
+			}
+		}
+	}
+	return out, nil
 }
 
 // Checkpoint persists the index snapshot and switches A/B headers.
@@ -537,6 +589,7 @@ func (e *StorageEngine) buildCheckpointHeader(snapOffset int64, snapLen uint32) 
 	h.SnapshotOffset = uint64(snapOffset)
 	h.SnapshotLength = snapLen
 	h.RecordCount = e.recordCount
+	h.RecordEnd = e.nextOffset
 	h.CRC32 = h.calculateCRC()
 	return h
 }
@@ -545,7 +598,7 @@ func (e *StorageEngine) loadSnapshot() error {
 	active := e.activeHeaderRef()
 	off := int(active.SnapshotOffset)
 	length := int(active.SnapshotLength)
-	if off+length > len(e.mmap) {
+	if off < DataStart || off+length > len(e.mmap) {
 		return common.NewError(common.ErrCorruption, "snapshot out of bounds")
 	}
 	raw := make([]byte, length)
@@ -584,6 +637,47 @@ func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, er
 		offset += uint64(RecordHeaderSize) + uint64(len(data))
 	}
 	return offset, false, nil
+}
+
+// recoverRecordAreaEnd returns the end of the record area for files with a
+// valid tail snapshot. New headers carry RecordEnd directly; legacy files
+// (RecordEnd == 0) are reconstructed by walking record frames and skipping
+// snapshot blobs until the end of the file. This matters when several
+// snapshots are chained at the tail: trimming at the latest snapshot offset
+// would leave older snapshots behind and recreate the append/crash data-loss
+// window.
+func (e *StorageEngine) recoverRecordAreaEnd() uint64 {
+	active := e.activeHeaderRef()
+	if active.RecordEnd >= DataStart &&
+		active.RecordEnd <= active.SnapshotOffset &&
+		active.RecordEnd <= uint64(len(e.mmap)) {
+		return active.RecordEnd
+	}
+
+	offset := uint64(DataStart)
+	recordEnd := uint64(DataStart)
+	for offset < uint64(len(e.mmap)) {
+		if isSnapshotBlobAt(e.mmap[offset:]) {
+			n, err := snapshotBlobLength(e.mmap[offset:])
+			if err != nil {
+				return active.SnapshotOffset
+			}
+			offset += uint64(n)
+			continue
+		}
+		_, _, data, _, err := RecordData(e.mmap, offset)
+		if err != nil {
+			return active.SnapshotOffset
+		}
+		offset += uint64(RecordHeaderSize) + uint64(len(data))
+		recordEnd = offset
+	}
+	if offset != uint64(len(e.mmap)) {
+		// Zero padding or an unrecognized tail: do not guess a truncation
+		// point that could drop existing records.
+		return active.SnapshotOffset
+	}
+	return recordEnd
 }
 
 // truncateTail shrinks the file and remaps, discarding crash residue.

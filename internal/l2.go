@@ -7,6 +7,7 @@
 package memhop
 
 import (
+	"github.com/qyiun666/MemHop/internal/sub"
 	"github.com/qyiun666/MemHop/internal/sub/common"
 	"github.com/qyiun666/MemHop/internal/sub/repo/core"
 )
@@ -14,6 +15,16 @@ import (
 // Thin wrapper; see internal/sub/l2.go ((db *DB) ListScenes).
 func (db *DB) ListScenes() ([]core.SceneSlot, error) {
 	return db.DB.ListScenes()
+}
+
+// Thin wrapper; returns a copy of the in-memory active scene IDs.
+func (db *DB) ActiveSceneIDs() []uint64 {
+	return db.DB.ActiveSceneIDs()
+}
+
+// Thin wrapper; returns one scene's topics with their L4 messages.
+func (db *DB) SceneContext(sceneID string) (*sub.SceneContext, error) {
+	return db.DB.SceneContext(sceneID)
 }
 
 // Thin wrapper; write op, delegates under the write lock.

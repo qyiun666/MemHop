@@ -8,9 +8,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	memhop "github.com/qyiun666/MemHop"
@@ -41,13 +43,95 @@ func handleNoArgs[Out any](fn func() (Out, error)) mcp.ToolHandler {
 }
 
 // okResult serializes v as the JSON text content of a successful result.
+// MemHop record IDs are uint64 on the wire; strict JSON numbers cannot carry
+// them losslessly (JS/TS hosts parse into doubles, losing low bits), so every
+// known ID field is rendered as the canonical 16-digit lowercase hex string —
+// the same format the tools' *_id arguments require. Timestamps and numeric
+// values are left untouched.
 func okResult(v any) *mcp.CallToolResult {
-	data, err := json.Marshal(v)
+	data, err := marshalResult(v)
 	if err != nil {
 		return errResult(fmt.Errorf("serialize result: %w", err))
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(data)}},
+	}
+}
+
+// idHexFields are the JSON keys whose values are MemHop record IDs. Only
+// these are converted to hex strings; everything else stays numeric.
+var idHexFields = map[string]bool{
+	"id":           true, // TopicSlot.ID
+	"id_hash":      true, // slots (L0/L1/L3/L4/L5/L6/L7)
+	"scene_id":     true,
+	"parent_id":    true,
+	"new_topic_id": true,
+	"context_id":   true, // HypergraphSource / ArchiveSlot
+	"graph_id":     true, // L3 hypergraph + node
+	"topic_ids":    true, // L1 scene slot
+	"children_ids": true,
+	"edge_ids":     true, // L1 scene slot
+	"l4_refs":      true,
+	"l3_refs":      true,
+	"session_id":   true, // L7 TrajectorySlot
+	"l4_ref":       true, // L7 TrajectorySlot optional archive ref
+}
+
+// marshalResult marshals v with ID fields converted to hex strings.
+func marshalResult(v any) ([]byte, error) {
+	// Round-trip through json.Number so uint64 values never lose precision
+	// before the conversion (encoding/json decodes into float64 by default).
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	var tree any
+	if err := dec.Decode(&tree); err != nil {
+		return nil, err
+	}
+	return json.Marshal(idsToHex(tree))
+}
+
+// idsToHex recursively converts ID fields (by key) and all elements of ID
+// arrays to 16-digit hex strings.
+func idsToHex(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			if idHexFields[k] {
+				t[k] = idValueToHex(val)
+			} else {
+				t[k] = idsToHex(val)
+			}
+		}
+		return t
+	case []any:
+		for i, val := range t {
+			t[i] = idsToHex(val)
+		}
+		return t
+	default:
+		return v
+	}
+}
+
+// idValueToHex converts a uint64-ish JSON number (or array of them) to hex.
+func idValueToHex(v any) any {
+	switch t := v.(type) {
+	case json.Number:
+		if u, err := strconv.ParseUint(string(t), 10, 64); err == nil {
+			return fmt.Sprintf("%016x", u)
+		}
+		return t.String()
+	case []any:
+		for i, val := range t {
+			t[i] = idValueToHex(val)
+		}
+		return t
+	default:
+		return v
 	}
 }
 
@@ -61,6 +145,12 @@ func errResult(err error) *mcp.CallToolResult {
 // ---- input schema helpers (JSON Schema 2020-12) ----
 
 func objSchema(props map[string]any, required ...string) map[string]any {
+	// JSON Schema 2020-12: properties defaults to {}; an explicit JSON null
+	// (Go nil map) breaks strict MCP clients (e.g. the TypeScript SDK's zod
+	// validation requires a record for tools/inputSchema/properties).
+	if props == nil {
+		props = map[string]any{}
+	}
 	s := map[string]any{"type": "object", "properties": props}
 	if len(required) > 0 {
 		s["required"] = required
@@ -78,6 +168,15 @@ func intProp(desc string) map[string]any {
 
 func boolProp(desc string) map[string]any {
 	return map[string]any{"type": "boolean", "description": desc}
+}
+
+// mapProp declares a string-to-string object property (e.g. Preferences).
+func mapProp(desc string) map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"additionalProperties": map[string]any{"type": "string"},
+		"description":          desc,
+	}
 }
 
 func arrProp(desc, itemType string) map[string]any {

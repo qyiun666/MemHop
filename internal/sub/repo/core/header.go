@@ -20,8 +20,12 @@ const (
 	DataStart     = 8192
 )
 
-// FormatVersion is the on-disk file format version.
-const FormatVersion uint16 = 0x0004
+// FormatVersion is the on-disk file format version. 0x0005 introduced the
+// L5 capability record (0x0F) whose payload schema replaced the v1.2.0
+// PluginSlot; 0x0006 re-designed the capability payload as the v2
+// mcp/skill/composite resource-wrapper model. Files with 0x0005 (or older)
+// are rejected at Open — there is no migration path for the old payloads.
+const FormatVersion uint16 = 0x0006
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}
@@ -30,7 +34,12 @@ var (
 
 // FileHeader is the on-disk file header (4096 bytes).
 // Layout: magic(4) version(2) vector_dim(2) commit_id(8) snapshot_off(8)
-// snapshot_len(4) record_count(4) flags(4) reserved crc32(4) tail_magic(4)
+// snapshot_len(4) record_count(4) flags(4) record_end(8) reserved
+// crc32(4) tail_magic(4).
+// RecordEnd is the end of the record area (start of the first tail
+// snapshot). It is always written by 0x0005+ checkpoints; zero means
+// "unknown" and Open reconstructs it with a one-time scan as a defensive
+// measure against torn or hand-edited headers.
 type FileHeader struct {
 	Version        uint16
 	VectorDim      uint16
@@ -39,6 +48,7 @@ type FileHeader struct {
 	SnapshotLength uint32
 	RecordCount    uint32
 	Flags          uint32
+	RecordEnd      uint64
 	CRC32          uint32
 }
 
@@ -56,6 +66,7 @@ func (h *FileHeader) ToBytes() [HeaderSize]byte {
 	binary.LittleEndian.PutUint32(buf[24:28], h.SnapshotLength)
 	binary.LittleEndian.PutUint32(buf[28:32], h.RecordCount)
 	binary.LittleEndian.PutUint32(buf[32:36], h.Flags)
+	binary.LittleEndian.PutUint64(buf[36:44], h.RecordEnd)
 	crc := crc32.ChecksumIEEE(buf[:4088])
 	binary.LittleEndian.PutUint32(buf[4088:4092], crc)
 	copy(buf[4092:4096], TailMagic[:])
@@ -87,6 +98,7 @@ func FileHeaderFromBytes(buf [HeaderSize]byte) (*FileHeader, error) {
 		SnapshotLength: binary.LittleEndian.Uint32(buf[24:28]),
 		RecordCount:    binary.LittleEndian.Uint32(buf[28:32]),
 		Flags:          binary.LittleEndian.Uint32(buf[32:36]),
+		RecordEnd:      binary.LittleEndian.Uint64(buf[36:44]),
 		CRC32:          storedCRC,
 	}, nil
 }
@@ -129,22 +141,30 @@ func loadHeaders(mm []byte) (hA, hB *FileHeader, activeIdx uint8, err error) {
 	var bufA, bufB [HeaderSize]byte
 	copy(bufA[:], mm[:HeaderSize])
 	copy(bufB[:], mm[HeaderSize:HeaderSize*2])
-	hA, err = FileHeaderFromBytes(bufA)
-	if err != nil {
-		return nil, nil, 0, err
+
+	a, errA := FileHeaderFromBytes(bufA)
+	b, errB := FileHeaderFromBytes(bufB)
+	switch {
+	case errA == nil && errB == nil:
+		active, err := SelectValidHeader(a, b)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if active.CommitID == a.CommitID {
+			return a, b, 0, nil
+		}
+		return a, b, 1, nil
+	case errA == nil:
+		// Header B is torn/corrupt, but A is valid: recover with A. The
+		// in-memory B slot starts as a copy of A so it is never nil.
+		return a, copyHeader(a), 0, nil
+	case errB == nil:
+		// Header A is torn/corrupt, but B is valid: recover with B.
+		return copyHeader(b), b, 1, nil
+	default:
+		return nil, nil, 0, common.NewError(common.ErrCorruption,
+			fmt.Sprintf("both file headers are invalid (A: %v; B: %v)", errA, errB))
 	}
-	hB, err = FileHeaderFromBytes(bufB)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	active, err := SelectValidHeader(hA, hB)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-	if active.CommitID == hA.CommitID {
-		return hA, hB, 0, nil
-	}
-	return hA, hB, 1, nil
 }
 
 func copyHeader(h *FileHeader) *FileHeader {

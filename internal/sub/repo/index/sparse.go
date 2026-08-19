@@ -31,6 +31,7 @@ type SparseIndex struct {
 	b            float32
 	postings     map[string]*PostingList
 	docLengths   map[uint64]uint32 // id_hash → document length
+	docTerms     map[uint64][]string
 	avgDocLength float32
 	totalDocs    uint32
 	totalTerms   uint64
@@ -44,6 +45,7 @@ func NewSparseIndex() *SparseIndex {
 		b:           0.75,
 		postings:    make(map[string]*PostingList),
 		docLengths:  make(map[uint64]uint32),
+		docTerms:    make(map[uint64][]string),
 		entityIndex: NewEntityIndex(),
 	}
 }
@@ -61,6 +63,7 @@ func (s *SparseIndex) addDocumentLocked(idHash uint64, terms []string, docLen ui
 	for _, term := range terms {
 		tfMap[term]++
 	}
+	newTerms := make([]string, 0, len(tfMap))
 	for term, tf := range tfMap {
 		pl, ok := s.postings[term]
 		if !ok {
@@ -69,7 +72,11 @@ func (s *SparseIndex) addDocumentLocked(idHash uint64, terms []string, docLen ui
 		}
 		pl.TermFreq[idHash] = tf
 		pl.DocFreq++
+		newTerms = append(newTerms, term)
+		s.syncEntityTermLocked(term)
 	}
+	sort.Strings(newTerms)
+	s.docTerms[idHash] = newTerms
 }
 
 func (s *SparseIndex) removeDocumentLocked(idHash uint64) {
@@ -84,18 +91,50 @@ func (s *SparseIndex) removeDocumentLocked(idHash uint64) {
 	} else {
 		s.avgDocLength = 0
 	}
-	for _, pl := range s.postings {
-		if _, removed := pl.TermFreq[idHash]; removed {
-			delete(pl.TermFreq, idHash)
-			pl.DocFreq--
+
+	terms := s.docTerms[idHash]
+	if len(terms) == 0 {
+		// Snapshot written before doc_terms existed: rebuild the term list
+		// from postings for this one document.
+		for term, pl := range s.postings {
+			if _, ok := pl.TermFreq[idHash]; ok {
+				terms = append(terms, term)
+			}
 		}
+		sort.Strings(terms)
 	}
-	for term, pl := range s.postings {
-		if pl.DocFreq == 0 {
-			delete(s.postings, term)
+	for _, term := range terms {
+		pl := s.postings[term]
+		if pl == nil {
+			continue
 		}
+		delete(pl.TermFreq, idHash)
+		if len(pl.TermFreq) == 0 {
+			delete(s.postings, term)
+		} else {
+			pl.DocFreq = uint32(len(pl.TermFreq))
+		}
+		s.syncEntityTermLocked(term)
 	}
 	delete(s.docLengths, idHash)
+	delete(s.docTerms, idHash)
+}
+
+// syncEntityTermLocked keeps the entity fuzzy-match channel aligned with the
+// BM25 postings: each indexed term maps to every L2 topic containing it.
+// Caller must hold s.mu.
+func (s *SparseIndex) syncEntityTermLocked(term string) {
+	pl := s.postings[term]
+	if pl == nil || len(pl.TermFreq) == 0 {
+		s.entityIndex.RemoveEntity(term)
+		return
+	}
+	ids := make([]uint64, 0, len(pl.TermFreq))
+	for id := range pl.TermFreq {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	s.entityIndex.AddEntity(term, ids[0], ids)
 }
 
 // AddDocument indexes a document, removing any existing idHash first.
@@ -251,6 +290,7 @@ type sparseIndexJSON struct {
 	B            float32                 `json:"b"`
 	Postings     map[string]*PostingList `json:"postings"`
 	DocLengths   map[uint64]uint32       `json:"doc_lengths"`
+	DocTerms     map[uint64][]string     `json:"doc_terms,omitempty"`
 	AvgDocLength float32                 `json:"avg_doc_length"`
 	TotalDocs    uint32                  `json:"total_docs"`
 	TotalTerms   uint64                  `json:"total_terms"`
@@ -274,6 +314,7 @@ func (s *SparseIndex) Serialize() ([]byte, error) {
 		B:            s.b,
 		Postings:     s.postings,
 		DocLengths:   s.docLengths,
+		DocTerms:     s.docTerms,
 		AvgDocLength: s.avgDocLength,
 		TotalDocs:    s.totalDocs,
 		TotalTerms:   s.totalTerms,
@@ -306,10 +347,23 @@ func DeserializeSparseIndex(data []byte) (*SparseIndex, error) {
 		b:            j.B,
 		postings:     j.Postings,
 		docLengths:   j.DocLengths,
+		docTerms:     j.DocTerms,
 		avgDocLength: j.AvgDocLength,
 		totalDocs:    j.TotalDocs,
 		totalTerms:   j.TotalTerms,
 		entityIndex:  NewEntityIndex(),
+	}
+	if s.docTerms == nil {
+		s.docTerms = make(map[uint64][]string)
+		for term, pl := range s.postings {
+			for id := range pl.TermFreq {
+				s.docTerms[id] = append(s.docTerms[id], term)
+			}
+		}
+		for id, terms := range s.docTerms {
+			sort.Strings(terms)
+			s.docTerms[id] = terms
+		}
 	}
 
 	if j.EntityIndex != nil {

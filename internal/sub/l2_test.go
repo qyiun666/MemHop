@@ -105,6 +105,46 @@ func TestMergeScenesInvalid(t *testing.T) {
 	}
 }
 
+// TestMergeScenesPrimaryInSecondary primary must never be deleted by a merge.
+func TestMergeScenesPrimaryInSecondary(t *testing.T) {
+	engine := newTestEngine(t)
+	db := &DB{engine: engine}
+	primary := core.NewSceneSlot("主场景")
+	secondary := core.NewSceneSlot("副场景")
+	if err := core.WriteSceneSlot(engine, primary.SceneID, &primary); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.WriteSceneSlot(engine, secondary.SceneID, &secondary); err != nil {
+		t.Fatal(err)
+	}
+	t1 := newTopic(common.HashID("t1"), primary.SceneID, 1000, []string{"a"})
+	t2 := newTopic(common.HashID("t2"), secondary.SceneID, 2000, []string{"b"})
+	if err := core.WriteTopicSlot(engine, t1.ID, &t1); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.WriteTopicSlot(engine, t2.ID, &t2); err != nil {
+		t.Fatal(err)
+	}
+
+	// primary listed among secondaries -> rejected, nothing deleted.
+	if err := db.MergeScenes(common.FormatHash(primary.SceneID), []string{
+		common.FormatHash(primary.SceneID), common.FormatHash(secondary.SceneID),
+	}); err == nil {
+		t.Fatal("want error when primary is also a secondary")
+	}
+	if _, err := core.ReadSceneSlot(engine, primary.SceneID); err != nil {
+		t.Fatal("primary scene must remain after rejected merge")
+	}
+	if _, err := core.ReadSceneSlot(engine, secondary.SceneID); err != nil {
+		t.Fatal("secondary scene must remain after rejected merge")
+	}
+	for _, id := range []uint64{t1.ID, t2.ID} {
+		if _, err := core.ReadTopicSlot(engine, id); err != nil {
+			t.Fatalf("topic %d must remain after rejected merge", id)
+		}
+	}
+}
+
 // TestMergeScenesRemovesActiveScene merged secondary scenes drop from the active list.
 func TestMergeScenesRemovesActiveScene(t *testing.T) {
 	engine := newTestEngine(t)
@@ -123,5 +163,52 @@ func TestMergeScenesRemovesActiveScene(t *testing.T) {
 	}
 	if len(db.activeScenes) != 1 || db.activeScenes[0] != primary.SceneID {
 		t.Fatalf("active scenes: want [%d], got %v", primary.SceneID, db.activeScenes)
+	}
+}
+
+// TestListScenesTopicCounts: ListScenes fills TopicCount with depth-1 root
+// topics only; compressed (depth>=2) nodes do not inflate it, and scenes
+// without topics report 0.
+func TestListScenesTopicCounts(t *testing.T) {
+	engine := newTestEngine(t)
+	db := &DB{engine: engine}
+	s1 := core.NewSceneSlot("场景一")
+	s2 := core.NewSceneSlot("场景二")
+	s3 := core.NewSceneSlot("空场景")
+	for _, s := range []core.SceneSlot{s1, s2, s3} {
+		if err := core.WriteSceneSlot(engine, s.SceneID, &s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// s1: two depth-1 roots.
+	t1 := newTopic(common.HashID("s1t1"), s1.SceneID, 1000, []string{"a"})
+	t2 := newTopic(common.HashID("s1t2"), s1.SceneID, 2000, []string{"b"})
+	// s2: one root + one compressed node (depth 2, parented).
+	t3 := newTopic(common.HashID("s2t1"), s2.SceneID, 3000, []string{"c"})
+	parent := common.HashID("s2t2-parent")
+	t4 := newTopic(common.HashID("s2t2"), s2.SceneID, 4000, []string{"d"})
+	t4.Depth = 2
+	t4.ParentID = &parent
+	for _, tp := range []core.TopicSlot{t1, t2, t3, t4} {
+		if err := core.WriteTopicSlot(engine, tp.ID, &tp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scenes, err := db.ListScenes()
+	if err != nil {
+		t.Fatalf("ListScenes: %v", err)
+	}
+	got := map[uint64]int{}
+	for _, s := range scenes {
+		got[s.SceneID] = s.TopicCount
+	}
+	if got[s1.SceneID] != 2 {
+		t.Errorf("场景一: want 2, got %d", got[s1.SceneID])
+	}
+	if got[s2.SceneID] != 1 {
+		t.Errorf("场景二: want 1 (depth-1 roots only), got %d", got[s2.SceneID])
+	}
+	if got[s3.SceneID] != 0 {
+		t.Errorf("空场景: want 0, got %d", got[s3.SceneID])
 	}
 }

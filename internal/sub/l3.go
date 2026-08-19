@@ -39,6 +39,7 @@ type L3ImportResult struct {
 	CreatedIDs   []string `json:"created_ids"`
 	UpdatedIDs   []string `json:"updated_ids"`
 	SkippedCount int      `json:"skipped_count"`
+	Errors       []string `json:"errors,omitempty"`
 }
 
 func (db *DB) GetL3(id string) (*L3Graph, error) {
@@ -90,13 +91,19 @@ func (db *DB) ListL3() ([]core.HypergraphSlot, error) {
 }
 
 // ImportL3 batch-imports knowledge nodes: per-Domain graph slot create/reuse,
-// existing nodes handled by mode.
+// existing nodes handled by mode. Per-item failures are recorded in
+// result.Errors and the batch continues; nil is only returned on success.
 func (db *DB) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error) {
 	if len(items) == 0 {
 		return nil, common.NewError(common.ErrInvalidQuery, "import: no items")
 	}
-	if mode == "" {
+	switch mode {
+	case "":
 		mode = L3ImportOverwrite
+	case L3ImportSkip, L3ImportMerge, L3ImportOverwrite:
+	default:
+		return nil, common.NewError(common.ErrInvalidQuery,
+			"import mode must be Skip, Merge or Overwrite")
 	}
 	graphCache := make(map[string]uint64, len(items)) // Domain → graphID
 	for _, g := range repo.ListGraphsL3(db.engine) {
@@ -108,39 +115,60 @@ func (db *DB) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult
 		if item.Title == "" {
 			continue
 		}
-		graphID, ok := graphCache[item.Domain]
-		if !ok {
-			gid, err := repo.CreateGraphL3(db.engine, item.Domain, core.HypergraphSource{Kind: core.SourceManual})
-			if err != nil {
-				continue
-			}
-			graphID, graphCache[item.Domain] = gid, gid
-		}
-		if _, seen := nodeTitles[graphID]; !seen {
-			titles := make(map[string]struct{})
-			for _, n := range repo.ListNodeL3(db.engine, common.FormatHash(graphID)) {
-				titles[n.Title] = struct{}{}
-			}
-			nodeTitles[graphID] = titles
-		}
-		if _, exists := nodeTitles[graphID][item.Title]; exists {
-			switch mode {
-			case L3ImportSkip:
-				result.SkippedCount++
-			case L3ImportMerge:
-				result.UpdatedIDs = append(result.UpdatedIDs,
-					common.FormatHash(common.HashID(fmt.Sprintf("%s:%s", common.FormatHash(graphID), item.Title))))
-			}
+		if err := db.importOneL3Item(item, mode, graphCache, nodeTitles, result); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", item.Title, err))
 			continue
 		}
-		id, err := repo.CreateNodeL3(db.engine, common.FormatHash(graphID), item.Title, item.NodeType, item.Content, item.Keywords)
-		if err != nil {
-			continue
-		}
-		nodeTitles[graphID][item.Title] = struct{}{}
-		result.CreatedIDs = append(result.CreatedIDs, common.FormatHash(id))
 	}
 	return result, nil
+}
+
+// importOneL3Item applies one item: graph slot create/reuse, then node
+// create/merge/overwrite per mode. Per-node outcomes (created/updated/
+// skipped) are recorded on result; any failure is returned so ImportL3 can
+// report it in result.Errors.
+func (db *DB) importOneL3Item(item L3ImportItem, mode L3ImportMode, graphCache map[string]uint64, nodeTitles map[uint64]map[string]struct{}, result *L3ImportResult) error {
+	graphID, ok := graphCache[item.Domain]
+	if !ok {
+		gid, err := repo.CreateGraphL3(db.engine, item.Domain, core.HypergraphSource{Kind: core.SourceManual})
+		if err != nil {
+			return err
+		}
+		graphID, graphCache[item.Domain] = gid, gid
+	}
+	if _, seen := nodeTitles[graphID]; !seen {
+		titles := make(map[string]struct{})
+		for _, n := range repo.ListNodeL3(db.engine, common.FormatHash(graphID)) {
+			titles[n.Title] = struct{}{}
+		}
+		nodeTitles[graphID] = titles
+	}
+	graphIDStr := common.FormatHash(graphID)
+	nodeID := repo.NodeIDL3(graphIDStr, item.Title)
+	if _, exists := nodeTitles[graphID][item.Title]; exists {
+		switch mode {
+		case L3ImportSkip:
+			result.SkippedCount++
+			return nil
+		case L3ImportMerge:
+			if _, err := repo.MergeNodeL3(db.engine, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords); err != nil {
+				return err
+			}
+		case L3ImportOverwrite:
+			if _, err := repo.OverwriteNodeL3(db.engine, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords); err != nil {
+				return err
+			}
+		}
+		result.UpdatedIDs = append(result.UpdatedIDs, common.FormatHash(nodeID))
+		return nil
+	}
+	id, err := repo.CreateNodeL3(db.engine, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords)
+	if err != nil {
+		return err
+	}
+	nodeTitles[graphID][item.Title] = struct{}{}
+	result.CreatedIDs = append(result.CreatedIDs, common.FormatHash(id))
+	return nil
 }
 
 // UpdateL3 partially updates a graph slot (currently Name only).

@@ -84,6 +84,28 @@ func stripJSONFence(s string) string {
 	return strings.TrimSpace(s)
 }
 
+// fusedTopicKeywords flattens only FusedKeywords from compressed topics.
+// The post-Dream Search also creates a fresh raw topic for the query itself;
+// its UserKeywords describe the query, not the compressed memory.
+func fusedTopicKeywords(ts *sub.SearchResult) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for i := range ts.Contexts {
+		for _, kw := range ts.Contexts[i].FusedKeywords {
+			kw = strings.TrimSpace(kw)
+			if kw == "" {
+				continue
+			}
+			if _, ok := seen[kw]; ok {
+				continue
+			}
+			seen[kw] = struct{}{}
+			out = append(out, kw)
+		}
+	}
+	return out
+}
+
 // topicKeywords flattens a TopicSlot's keyword tracks into one set for
 // fidelity judgement (user + agent + fused).
 func topicKeywords(ts *sub.SearchResult) []string {
@@ -175,10 +197,14 @@ func TestKeywordPersistence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("noise Search: %v", err)
 		}
-		db.Update(common.FormatHash(r.NewTopicID), "好的，记下了", ts+500)
+		if _, err := db.Update(common.FormatHash(r.NewTopicID), "好的，记下了", ts+500); err != nil {
+			t.Fatalf("noise Update: %v", err)
+		}
 	}
 	// Also update the anchor topic to simulate continued activity.
-	db.Update(anchorTopic, "旺财真可爱", base+100)
+	if _, err := db.Update(anchorTopic, "旺财真可爱", base+100); err != nil {
+		t.Fatalf("anchor Update: %v", err)
+	}
 
 	// Retrieve with a query about the anchor fact.
 	got, err := db.Search(sub.SearchQuery{Text: "我的狗叫什么名字，多大了", Timestamp: base + 10000})
@@ -219,7 +245,9 @@ func ingestSameScene(t *testing.T, db *memhop.DB, texts []string, base int64) ui
 			sceneID = res.Contexts[0].SceneID
 		}
 		// Add the agent reply: every user turn has an agent response in real usage.
-		db.Update(common.FormatHash(res.NewTopicID), "好的，我记下了。", ts+500)
+		if _, err := db.Update(common.FormatHash(res.NewTopicID), "好的，我记下了。", ts+500); err != nil {
+			t.Fatalf("ingest Update: %v", err)
+		}
 	}
 	return sceneID
 }
@@ -266,7 +294,7 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	t.Logf("ingesting %d related utterances into one scene", len(related))
 	ingestSameScene(t, db, related, base)
 
-	compressed, err := db.Dream(context.Background())
+	compressed, err := db.Dream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}

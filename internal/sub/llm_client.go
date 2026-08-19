@@ -1,8 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// llm_client.go wraps the LLM client: one Provider shared by the three
-// call points (keyword extraction, L2 consolidation, L1→L0 distillation).
+// llm_client.go 封装 LLM 调用客户端：一个 Provider 供三个调用点共享
+// （语义关键词提取、L2 压缩、L1→L0 蒸馏）。只负责
+// 参数进来 → 构建 prompt → 调 LLM → 解析 → 返回结果。
 
 package sub
 
@@ -19,18 +20,20 @@ import (
 )
 
 const (
-	// defaultTimeoutSecs: HTTP timeout when Config.TimeoutSecs is unset.
+	// defaultTimeoutSecs 是 Config.TimeoutSecs 未设置时的 HTTP 超时。
 	defaultTimeoutSecs = 120
-	// defaultMaxOutputTokens: output cap when Config.MaxOutputTokens is unset.
+	// defaultMaxOutputTokens 是 Config.MaxOutputTokens 未设置时的输出上限。
 	defaultMaxOutputTokens = 8192
 )
 
+// Provider 是 go-openai 客户端的薄封装，供三个调用点共享。
 type Provider struct {
 	client          *openai.Client
 	model           string
 	maxOutputTokens int
 }
 
+// New 从配置创建 Provider。
 func New(cfg *MemHopConfig) *Provider {
 	timeoutSecs := cfg.LLM.TimeoutSecs
 	if timeoutSecs <= 0 {
@@ -50,8 +53,8 @@ func New(cfg *MemHopConfig) *Provider {
 	}
 }
 
-// normalizeBaseURL ensures a /v1 suffix (go-openai does not append it)
-// and strips a full /chat/completions suffix.
+// normalizeBaseURL 确保 BaseURL 以 /v1 结尾（go-openai 不自动补），
+// 并剥离可能传入的完整 /chat/completions 后缀（SDK 会重新拼接）。
 func normalizeBaseURL(raw string) string {
 	u := strings.TrimRight(strings.TrimSpace(raw), "/")
 	if strings.HasSuffix(u, "/chat/completions") {
@@ -63,8 +66,8 @@ func normalizeBaseURL(raw string) string {
 	return u
 }
 
-// chat runs one non-streaming completion with exponential backoff on
-// 429/5xx (500ms → 2s, 3 attempts); other errors are not retried.
+// chat 执行一次非流式 chat completion，对 429/5xx 做指数退避重试
+// （500ms → 2s，共 3 次尝试），其余错误不重试。
 func (p *Provider) chat(
 	ctx context.Context, system, user string, maxTokens int, temperature, topP float32,
 ) (string, error) {
@@ -111,8 +114,9 @@ func (p *Provider) chat(
 	return "", lastErr
 }
 
-// httpError extracts the HTTP status and body from go-openai errors;
-// non-HTTP errors return (0, "").
+// httpError 从 go-openai 错误中提取 HTTP 状态码与消息体；
+// RequestError 优先（go-openai 可能在其中包裹零值 APIError），
+// 非 HTTP 错误返回 (0, "")。
 func httpError(err error) (int, string) {
 	var reqErr *openai.RequestError
 	if errors.As(err, &reqErr) && reqErr.HTTPStatusCode > 0 {
@@ -125,6 +129,7 @@ func httpError(err error) (int, string) {
 	return 0, ""
 }
 
+// retryable 判断状态码是否属于值得重试的瞬时错误（429 与 5xx）。
 func retryable(status int) bool {
 	switch status {
 	case http.StatusTooManyRequests,
@@ -137,7 +142,7 @@ func retryable(status int) bool {
 	return false
 }
 
-// stripCodeBlocks removes ```lang ... ``` markdown fences from LLM output.
+// stripCodeBlocks 去掉 LLM 输出中 ```lang ... ``` markdown 围栏。
 func stripCodeBlocks(s string) string {
 	trimmed := strings.TrimSpace(s)
 	if !strings.HasPrefix(trimmed, "```") {
@@ -147,7 +152,7 @@ func stripCodeBlocks(s string) string {
 	if nl := strings.IndexByte(body, '\n'); nl >= 0 {
 		body = body[nl+1:]
 	} else {
-		// fence without body (e.g. "```json```") counts as empty
+		// 只有围栏没有正文（如 "```json```"），视为空内容。
 		body = ""
 	}
 	if end := strings.LastIndex(body, "```"); end >= 0 {
