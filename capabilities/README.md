@@ -1,6 +1,6 @@
 # capabilities/ — 内置 L5 能力工具箱（对外能力合集）
 
-本目录是 MemHop 对外的**能力工具箱**，`memhop-capability/v1` 格式，通过 `capabilities.go` 的 `//go:embed` 内嵌进库与 `memhop-mcp` 二进制。内置能力分两类：
+本目录是 MemHop 对外的**能力工具箱**，`memhop-capability/v1` 格式，通过 `capabilities.go` 的 `//go:embed` 内嵌进库。内置能力分两类：
 
 1. **MemHop 自身的能力说明书**（`memhop-*`，manual）：教宿主 LLM 正确驱动记忆循环
 2. **harness/agent 应具备的原子能力卡**（`agent-*`，atomic）：通用工具契约卡，宿主据此映射自己的实际工具
@@ -12,7 +12,7 @@
 - **只读**：内置能力不落 `.meh` 文件、不参与 Activate / RecordCapabilityUsage / Delete 生命周期
 - **去重**：宿主导入同名能力后，库存记录（含使用统计）优先，内置副本自动让位
 
-宿主可通过 `memhop.BuiltinCapabilityFS` 读取这套内嵌文件（检查、扩展或自行入库）。
+宿主可通过 `api.BuiltinCapabilityFS` 读取这套内嵌文件（检查、扩展或自行入库）。
 
 ## 清单
 

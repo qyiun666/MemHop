@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	memhop "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/sub"
-	"github.com/qyiun666/MemHop/internal/sub/common"
+	memhop "github.com/qyiun666/MemHop/api"
+	internal "github.com/qyiun666/MemHop/internal"
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -20,12 +20,12 @@ import (
 func TestLocomoFailDiag(t *testing.T) {
 	items := loadLocomo10(t, 1)
 	item := items[0]
-	cfg := &sub.MemHopConfig{
+	cfg := &internal.MemHopConfig{
 		DBPath:      filepath.Join(t.TempDir(), "diag.meh"),
 		VectorDim:   1024,
 		EncoderAddr: "http://127.0.0.1:11434",
 		EmbedModel:  "qllama/bge-m3:q4_k_m",
-		Defaults:    *sub.DefaultMemHopDefaults,
+		Defaults:    *internal.DefaultMemHopDefaults,
 	}
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		t.Skipf("skip: %v", err)
@@ -49,7 +49,7 @@ func TestLocomoFailDiag(t *testing.T) {
 			seq++
 			ts := sessionBase + int64(i)*30_000
 			if tn.Speaker == item.SpeakerA {
-				res, err := db.Search(sub.SearchQuery{Text: tn.Text, Timestamp: ts})
+				res, err := db.Search(internal.SearchQuery{Text: tn.Text, Timestamp: ts})
 				if err != nil {
 					t.Fatalf("ingest: %v", err)
 				}
@@ -72,7 +72,7 @@ func TestLocomoFailDiag(t *testing.T) {
 	for _, qa := range item.QA {
 		seq++
 		ts := base + seq*1000
-		res, err := db.Search(sub.SearchQuery{Text: qa.Question, Timestamp: ts})
+		res, err := db.Search(internal.SearchQuery{Text: qa.Question, Timestamp: ts})
 		if err != nil {
 			t.Fatalf("query: %v", err)
 		}

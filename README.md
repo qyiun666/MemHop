@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>Current: v1.2.3 (MCP server + DSH integration) · Latest stable tag: v1.0.1</strong>
+  <strong>Current: v1.2.4 (api/ facade + internal/ flattening) · Latest stable tag: v1.0.1</strong>
 </p>
 
 ---
@@ -41,8 +41,8 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 - **Dream Pipeline** — five stages over L0–L2: L2 compress → L1 rebuild → L1 decay → L0 profile → L0 distill (emotion/MBTI)
 - **L3 Knowledge Graph** — Multiple independent hypergraphs with node/edge import, CRUD, keyword/type lookup and BFS subgraph queries
 - **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)
-- **Minimal & Embeddable** — 4 direct Go deps (xxhash, gse, go-openai, go-sdk); Ollama is accessed through its plain HTTP API, no Ollama SDK dependency, `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
-- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 31 MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts, each isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file
+- **Minimal & Embeddable** — 3 direct Go deps (xxhash, gse, go-openai); Ollama is accessed through its plain HTTP API, no Ollama SDK dependency, `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
+- **Single Agent, Single File** — one agent = one `.meh` file, no server process, no background daemon
 
 ## Quick Start
 
@@ -53,7 +53,7 @@ import (
     "os"
     "time"
 
-    memhop "github.com/qyiun666/MemHop"
+    memhop "github.com/qyiun666/MemHop/api"
 )
 
 db, err := memhop.Open(&memhop.MemHopConfig{
@@ -96,7 +96,7 @@ ok, err := db.Dream(context.Background())
 ```
 
 
-> **Concurrency contract.** A `*DB` is a single-agent handle. The host must serialize Search / Update / Dream / write APIs on one DB instance. The MCP server isolates tenants by file; calls targeting the same tenant still follow this serial contract.
+> **Concurrency contract.** A `*DB` is a single-agent handle. The host must serialize Search / Update / Dream / write APIs on one DB instance.
 
 Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-compatible LLM endpoint (`Config.LLM` is required)
 
@@ -113,7 +113,7 @@ Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-
 
 ### Built-in L5 Capabilities
 
-The root `capabilities/` directory ships a ready-to-use capability toolbox (`memhop-capability/v1`), embedded into the library as `memhop.BuiltinCapabilityFS`, in two groups: MemHop's own usage manuals (`manual`: guide, Search, Update, Dream, L7 trajectory, L5 crystallize and import) and atomic capability cards a harness/agent is expected to have (`atomic`: file read/write/edit, command execution, file search, web search). **Zero config, zero writes**: `ListCapabilities` / `GetCapability` serve the built-in toolbox directly (same status/kind/tag/keyword filters as stored records), so the host LLM can fetch and consult it. Built-ins are read-only, never persisted to the `.meh` file, dedupe by ID against stored same-name records (stored wins), and are NOT attached to `Search` responses — retrieval returns stored matches only.
+The root `capabilities/` directory ships a ready-to-use capability toolbox (`memhop-capability/v1`), embedded into the library as `api.BuiltinCapabilityFS`, in two groups: MemHop's own usage manuals (`manual`: guide, Search, Update, Dream, L7 trajectory, L5 crystallize and import) and atomic capability cards a harness/agent is expected to have (`atomic`: file read/write/edit, command execution, file search, web search). **Zero config, zero writes**: `ListCapabilities` / `GetCapability` serve the built-in toolbox directly (same status/kind/tag/keyword filters as stored records), so the host LLM can fetch and consult it. Built-ins are read-only, never persisted to the `.meh` file, dedupe by ID against stored same-name records (stored wins), and are NOT attached to `Search` responses — retrieval returns stored matches only.
 
 ## Architecture
 
@@ -187,21 +187,21 @@ Analysis and competitor positioning: [docs/benchmarks/locomo_recall_analysis.md]
 ## Project Structure
 
 ```
-internal/                     ← Assembly layer: DB facade (open, search, update, dream, l0–l5)
-internal/sub/                 ← Business assembly: config / db / defaults / search / update /
-                                dream / scenefind / llm_client / llm_ops / encoder
-internal/sub/repo/            ← Data layer: open + l0layer–l5layer (record read/write, vectors)
-internal/sub/repo/index/      ← Index layer: sparse (BM25) / l1_reverse / l2meta / l3_index /
-                                entity / rebuild / tokenizer (gse)
-internal/sub/repo/core/       ← .meh engine: engine / frame / header / snapshot / reclaim /
-                                record / model / mmap / filelock
-internal/sub/common/          ← Bottom-level utils: bktree / cosine / enum / errors / hash /
-                                sliceutil / strutil / vec
+api/                         ← Public facade: DB handle (open/search/update/dream/l0–l7) + type aliases/constructors
+internal/                    ← Business assembly: config / db / defaults / l0 / l2 / l3 / l3query /
+                               l4 / l5 / l7 / search / update / dream / scenefind / llm_client / llm_ops / encoder
+internal/repo/               ← Data layer: open + l0layer–l7layer (record read/write, vectors)
+internal/repo/index/         ← Index layer: sparse (BM25) / l1_reverse / l2meta / l3_index /
+                               entity / rebuild / tokenizer (gse)
+internal/repo/core/          ← .meh engine: engine / frame / header / snapshot / reclaim /
+                               record / model / mmap / filelock
+internal/common/             ← Bottom-level utils: bktree / cosine / enum / errors / hash /
+                               sliceutil / strutil / vec
 test/                         ← Integration tests (build tag: integration)
 benches/fixtures/             ← Benchmark datasets (locomo10, locomo_smoke, longmemeval_smoke)
 ```
 
-Dependency direction is strictly one-way: `internal → sub → repo → core`, with `common` at the bottom (no references to any other internal package).
+Dependency direction is strictly one-way: `api → internal → repo → core`, with `common` at the bottom (no references to any other internal package).
 
 
 > Note: `docs/` and `AGENTS.md` are intentionally kept local-only (see `.gitignore`), so links under `docs/` may not resolve in a public clone.
@@ -228,6 +228,7 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
+| v1.2.4 | 2026-08-19 | api/ facade + internal/ flattening | Public Go API moved from the root package to `github.com/qyiun666/MemHop/api` (root `memhop.go`/`types.go` removed) · `internal/sub/` flattened into `internal/` (`package sub` → `package internal`), `internal/sub/repo` → `internal/repo`, `internal/sub/common` → `internal/common` · `cmd/memhop-mcp` now imports the `api` package under the `memhop` alias (zero tool-code changes) · build config (Makefile fmt, pre-commit hook, CI gofmt) updated · breaking change: hosts importing the root package must switch to `/api` |
 | v1.2.3 | 2026-08-18 | MCP compatibility fixes + DSH integration + retrieval quality | MCP tool schemas fixed (no-arg tools no longer emit `properties: null`, breaking strict clients) · all tool outputs render record IDs as 16-char hex strings (uint64 JSON numbers lose precision in JS/TS hosts, breaking `new_topic_id` round-trips) · new `--transport streamable-http` (2025-03-26 spec, stateless multi-tenant; supported by DSH's dsh-mcp-client) · DeepSeek Harness integration guide + agent instructions (`docs/dsh/`) · streamable-http smoke test · keyword-extraction prompt overhauled (semantic completeness + colloquial variants + phrases) + Search returns all relevance-ordered topics (scene-context truncation removed), LoCoMo recall 0.392 → 0.668, entity_hit 0.284 → 0.877 |
 | v1.2.1 | 2026-08-16 | MCP server + L5 capability layer | New `cmd/memhop-mcp` binary: multi-tenant SSE MCP server (official go-sdk v1.7.0) mapping the full public API to 28 tools (search/update/dream/checkpoint/status, profile, scenes, knowledge, archive, capabilities, trajectory/crystallize) · tenant path isolation `/mcp/<tenant-id>` · graceful shutdown persists via snapshot · offline SSE smoke tests (`make test-mcp`) · usage docs under `docs/mcp/` (local) · L5 plugin layer refactored into the capability layer (`memhop-capability/v1`: manual/atomic/composite kinds, draft→active lifecycle via `ActivateCapability`, fingerprint dedup, Crystallize emits create/reuse/merge candidates) · built-in capability toolbox (`capabilities/`, embedded, read-only, attached at Open) · `Update` returns `(bool, error)` · `.meh` format bumped to `0x0005` — 0x0004 files (v1.2.0 plugin records) are rejected at Open, no migration · encoder health check requires a 2xx HEAD on the endpoint root (no fallback) · active scenes bounded by `Capacity` (default 7, oldest evicted from Dream targets) · `RecordEnd` header field + A/B header damage recovery |
 | v1.2.0 | 2026-08-14 | L5 plugin layer | L5 action chains → plugin slots (PluginSlot + structured five-section manifest: skills / MCPs / tools / prompts / services) · path-only import via `ImportPlugin`, hand-written create/update removed · Crystallize dispatches plugins by type from L7 trajectories · `SearchResult.Crystals` → `Plugins` · eight-layer architecture (L0–L7) docs |

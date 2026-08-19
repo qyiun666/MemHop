@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：v1.2.3（MCP Server + DSH 接入）· 最新稳定 tag：v1.0.1</strong>
+  <strong>当前版本：v1.2.4（api/ 公开门面 + internal/ 平铺重构）· 最新稳定 tag：v1.0.1</strong>
 </p>
 
 ---
@@ -41,8 +41,8 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **Dream 巩固管线** — 仅作用于 L0–L2 的五阶段：L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏（情绪/MBTI）
 - **L3 知识图谱** — 多独立超图，支持节点/边导入、CRUD、关键词/类型查询与 BFS 子图
 - **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）
-- **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、gse、go-openai、go-sdk）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 31 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 `.meh` 文件
+- **极简依赖、可内嵌** — 3 个直接 Go 依赖（xxhash、gse、go-openai）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
+- **单 Agent 单文件** — 一个 Agent = 一个 `.meh` 文件，无服务进程、无后台守护
 
 ## 快速开始
 
@@ -53,7 +53,7 @@ import (
     "os"
     "time"
 
-    memhop "github.com/qyiun666/MemHop"
+    memhop "github.com/qyiun666/MemHop/api"
 )
 
 db, err := memhop.Open(&memhop.MemHopConfig{
@@ -96,7 +96,7 @@ ok, err := db.Dream(context.Background())
 ```
 
 
-> **并发契约。** 一个 `*DB` 是单 Agent 句柄：宿主必须保证同一 DB 实例上的 Search / Update / Dream / 写操作串行调用。MCP 多租户按文件隔离；发往同一租户的调用同样遵循该串行契约。
+> **并发契约。** 一个 `*DB` 是单 Agent 句柄：宿主必须保证同一 DB 实例上的 Search / Update / Dream / 写操作串行调用。
 
 前置条件：Go 1.26+，Ollama（`ollama pull qllama/bge-m3:q4_k_m`），OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）
 
@@ -113,7 +113,7 @@ ok, err := db.Dream(context.Background())
 
 ### 内置 L5 能力
 
-仓库根目录 `capabilities/` 内置了一套开箱即用的能力工具箱（`memhop-capability/v1` 格式），随库内嵌（`memhop.BuiltinCapabilityFS`），分两类：MemHop 自身的使用说明书（manual：总指南、Search、Update、Dream、L7 轨迹、L5 结晶与导入）和 harness/agent 应具备的原子能力卡（atomic：文件读写/编辑、命令执行、文件搜索、联网搜索）。**零配置、零写入**：`ListCapabilities` / `GetCapability` 直接返回内置工具箱（与库存能力同套过滤器，可按 status/kind/tag/keyword 过滤），宿主 LLM 拉取后即可对照使用；内置能力为只读、不落 `.meh` 文件，与库存同名能力按 ID 去重（库存记录优先），`Search` 响应不附带内置能力——检索只返回库存匹配结果。
+仓库根目录 `capabilities/` 内置了一套开箱即用的能力工具箱（`memhop-capability/v1` 格式），随库内嵌（`api.BuiltinCapabilityFS`），分两类：MemHop 自身的使用说明书（manual：总指南、Search、Update、Dream、L7 轨迹、L5 结晶与导入）和 harness/agent 应具备的原子能力卡（atomic：文件读写/编辑、命令执行、文件搜索、联网搜索）。**零配置、零写入**：`ListCapabilities` / `GetCapability` 直接返回内置工具箱（与库存能力同套过滤器，可按 status/kind/tag/keyword 过滤），宿主 LLM 拉取后即可对照使用；内置能力为只读、不落 `.meh` 文件，与库存同名能力按 ID 去重（库存记录优先），`Search` 响应不附带内置能力——检索只返回库存匹配结果。
 
 ## 架构
 
@@ -187,21 +187,21 @@ MEMHOP_LOCOMO_ITEMS=3 go test -tags integration ./test/ -run '^$' -bench Benchma
 ## 项目结构
 
 ```
-internal/                     ← 装配层：DB 门面（open、search、update、dream、l0~l5）
-internal/sub/                 ← 业务装配层：config / db / defaults / search / update /
-                                dream / scenefind / llm_client / llm_ops / encoder
-internal/sub/repo/            ← 数据层：open + l0layer~l5layer（记录读写、向量存取）
-internal/sub/repo/index/      ← 索引层：sparse（BM25）/ l1_reverse / l2meta / l3_index /
-                                entity / rebuild / tokenizer（gse）
-internal/sub/repo/core/       ← .meh 引擎：engine / frame / header / snapshot / reclaim /
-                                record / model / mmap / filelock
-internal/sub/common/          ← 最底层工具：bktree / cosine / enum / errors / hash /
-                                sliceutil / strutil / vec
+api/                         ← 公开门面：DB 句柄（open/search/update/dream/l0~l7）+ 类型别名/构造器
+internal/                    ← 业务装配层：config / db / defaults / l0 / l2 / l3 / l3query /
+                               l4 / l5 / l7 / search / update / dream / scenefind / llm_client / llm_ops / encoder
+internal/repo/               ← 数据层：open + l0layer~l7layer（记录读写、向量存取）
+internal/repo/index/         ← 索引层：sparse（BM25）/ l1_reverse / l2meta / l3_index /
+                               entity / rebuild / tokenizer（gse）
+internal/repo/core/          ← .meh 引擎：engine / frame / header / snapshot / reclaim /
+                               record / model / mmap / filelock
+internal/common/             ← 最底层工具：bktree / cosine / enum / errors / hash /
+                               sliceutil / strutil / vec
 test/                         ← 集成测试（build tag：integration）
 benches/fixtures/             ← 基准数据集（locomo10、locomo_smoke、longmemeval_smoke）
 ```
 
-依赖方向严格单向：`internal → sub → repo → core`，`common` 位于最底层（不引用任何其他 internal 包）。
+依赖方向严格单向：`api → internal → repo → core`，`common` 位于最底层（不引用任何其他 internal 包）。
 
 
 > 说明：`docs/` 与 `AGENTS.md` 有意保留为本地文件（见 `.gitignore`），因此公开 clone 中 `docs/` 下的链接可能无法打开。
@@ -228,6 +228,7 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
+| v1.2.4 | 2026-08-19 | api/ 公开门面 + internal/ 平铺 | 公开 Go API 从根包迁移至 `github.com/qyiun666/MemHop/api`（根目录 `memhop.go`/`types.go` 移除）· `internal/sub/` 上提平铺为 `internal/`（`package sub` → `package internal`），`internal/sub/repo` → `internal/repo`，`internal/sub/common` → `internal/common` · `cmd/memhop-mcp` 改 import 别名 `memhop "github.com/qyiun666/MemHop/api"`（工具代码零改动）· 构建配置同步（Makefile fmt、pre-commit hook、CI gofmt）· 破坏性变更：直接 import 根包的宿主需切换到 `/api` |
 | v1.2.3 | 2026-08-18 | MCP 兼容性修复 + DSH 接入 + 检索质量修复 | MCP 工具 schema 修复（无参工具 `properties` 不再输出 null，兼容严格 MCP 客户端）· 工具输出 ID 全部改为 16 位 hex 字符串（uint64 JSON 数字在 JS/TS 宿主丢精度，`new_topic_id` 回传失败已修复）· 新增 `--transport streamable-http`（2025-03-26 规范，Stateless 多租户，DSH 的 dsh-mcp-client 支持）· DeepSeek Harness 接入文档与引导词（`docs/dsh/`）· streamable-http 冒烟测试 · 关键词提取 prompt 全面优化（语义完整 + 同义词变体 + 短语）+ Search 按相关性返回全部相关话题（移除场景上下文截断），LoCoMo 召回 0.392 → 0.668、实体命中 0.284 → 0.877 |
 | v1.2.1 | 2026-08-16 | MCP Server + L5 能力层 | 新增 `cmd/memhop-mcp` 二进制：多租户 SSE MCP Server（官方 go-sdk v1.7.0），将全部公开 API 映射为 28 个工具（search/update/dream/checkpoint/status、画像、场景、知识图谱、归档、能力、轨迹/结晶）· 租户路径隔离 `/mcp/<tenant-id>` · 优雅退出时落盘快照 · 离线 SSE 冒烟测试（`make test-mcp`）· 使用文档见 `docs/mcp/`（本地）· L5 插件层重构为能力层（`memhop-capability/v1`：manual/atomic/composite 三种 kind，`ActivateCapability` 实现 draft→active 生命周期，指纹去重，Crystallize 产出 create/reuse/merge 候选）· 内置能力工具箱（`capabilities/`，embed 只读，Open 时自动挂载）· `Update` 返回 `(bool, error)` · `.meh` 格式升至 `0x0005`——0x0004 文件（v1.2.0 插件记录）在 Open 时被拒绝，不迁移 · 编码器健康检查要求端点根路径 2xx 响应 HEAD（无 fallback）· 活跃场景受 `Capacity`（默认 7，最旧场景被移出 Dream 目标）限制 · `RecordEnd` 头字段 + A/B 头损坏恢复 |
 | v1.2.0 | 2026-08-14 | L5 插件层 | L5 动作链 → 插件槽位（PluginSlot + 结构化五段 Manifest：技能 / MCP / 工具 / 提示词 / 服务）· 仅路径导入 `ImportPlugin`，移除手工写入 Create/Update · Crystallize 从 L7 轨迹按类型分派插件 · `SearchResult.Crystals` → `Plugins` · 八层架构（L0–L7）文档 |

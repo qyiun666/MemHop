@@ -3,7 +3,7 @@
 本文档定义 MemHop 接入 DeepSeek Harness（DSH）后的**工具分工**与**界面适配方案**：
 哪些工具暴露给用户（聊天界面 UI 化）、哪些保留给模型/宿主自动调用。
 
-对应版本：MemHop v1.2.3 · MCP 31 工具 · DSH cordis 接入（常驻多租户 memhop-mcp，streamable-http，serverName: memhop）
+对应版本：MemHop v1.2.4 · MCP 31 工具 · DSH cordis 接入（常驻多租户 memhop-mcp，streamable-http，serverName: memhop）
 
 ## 1. 31 个工具分类总表
 

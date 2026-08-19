@@ -16,9 +16,9 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
-	memhop "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/sub"
-	"github.com/qyiun666/MemHop/internal/sub/common"
+	memhop "github.com/qyiun666/MemHop/api"
+	internal "github.com/qyiun666/MemHop/internal"
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -32,7 +32,7 @@ type judgeVerdict struct {
 // config. Returns nil (and skips) when no key is configured.
 func newJudge(t *testing.T) *openai.Client {
 	t.Helper()
-	cfg := &sub.MemHopConfig{}
+	cfg := &internal.MemHopConfig{}
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		t.Skipf("judge LLM not configured: %v", err)
 	}
@@ -87,7 +87,7 @@ func stripJSONFence(s string) string {
 // fusedTopicKeywords flattens only FusedKeywords from compressed topics.
 // The post-Dream Search also creates a fresh raw topic for the query itself;
 // its UserKeywords describe the query, not the compressed memory.
-func fusedTopicKeywords(ts *sub.SearchResult) []string {
+func fusedTopicKeywords(ts *internal.SearchResult) []string {
 	seen := map[string]struct{}{}
 	var out []string
 	for i := range ts.Contexts {
@@ -108,7 +108,7 @@ func fusedTopicKeywords(ts *sub.SearchResult) []string {
 
 // topicKeywords flattens a TopicSlot's keyword tracks into one set for
 // fidelity judgement (user + agent + fused).
-func topicKeywords(ts *sub.SearchResult) []string {
+func topicKeywords(ts *internal.SearchResult) []string {
 	seen := map[string]struct{}{}
 	var out []string
 	add := func(kws []string) {
@@ -148,7 +148,7 @@ func TestKeywordFidelity(t *testing.T) {
 	base := time.Now().UnixMilli()
 	var faithful, total int
 	for i, text := range cases {
-		res, err := db.Search(sub.SearchQuery{Text: text, AutoCreate: true, Timestamp: base + int64(i)*1000})
+		res, err := db.Search(internal.SearchQuery{Text: text, AutoCreate: true, Timestamp: base + int64(i)*1000})
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
@@ -178,7 +178,7 @@ func TestKeywordPersistence(t *testing.T) {
 	base := time.Now().UnixMilli()
 	// Store a distinctive fact early.
 	anchor := "我的狗叫旺财，是一只金毛，今年五岁了"
-	res, err := db.Search(sub.SearchQuery{Text: anchor, AutoCreate: true, Timestamp: base})
+	res, err := db.Search(internal.SearchQuery{Text: anchor, AutoCreate: true, Timestamp: base})
 	if err != nil {
 		t.Fatalf("anchor Search: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestKeywordPersistence(t *testing.T) {
 	}
 	for i, ntext := range noise {
 		ts := base + int64(i+1)*1000
-		r, err := db.Search(sub.SearchQuery{Text: ntext, AutoCreate: true, Timestamp: ts})
+		r, err := db.Search(internal.SearchQuery{Text: ntext, AutoCreate: true, Timestamp: ts})
 		if err != nil {
 			t.Fatalf("noise Search: %v", err)
 		}
@@ -207,7 +207,7 @@ func TestKeywordPersistence(t *testing.T) {
 	}
 
 	// Retrieve with a query about the anchor fact.
-	got, err := db.Search(sub.SearchQuery{Text: "我的狗叫什么名字，多大了", Timestamp: base + 10000})
+	got, err := db.Search(internal.SearchQuery{Text: "我的狗叫什么名字，多大了", Timestamp: base + 10000})
 	if err != nil {
 		t.Fatalf("retrieve Search: %v", err)
 	}
@@ -227,7 +227,7 @@ func ingestSameScene(t *testing.T, db *memhop.DB, texts []string, base int64) ui
 	var sceneID uint64
 	for i, text := range texts {
 		ts := base + int64(i)*1000
-		q := sub.SearchQuery{Text: text, Timestamp: ts}
+		q := internal.SearchQuery{Text: text, Timestamp: ts}
 		if i == 0 {
 			q.AutoCreate = true
 		} else {
@@ -301,7 +301,7 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	t.Logf("Dream compressed=%v", compressed)
 
 	// After Dream, retrieve on the theme and inspect the keywords now returned.
-	res, err := db.Search(sub.SearchQuery{Text: "我的跑步习惯是怎样的", Timestamp: base + 60000})
+	res, err := db.Search(internal.SearchQuery{Text: "我的跑步习惯是怎样的", Timestamp: base + 60000})
 	if err != nil {
 		t.Fatalf("post-dream Search: %v", err)
 	}
@@ -338,7 +338,7 @@ func TestDreamCompressionFidelity(t *testing.T) {
 // judgeModel returns the configured judge model name.
 func judgeModel(t *testing.T) string {
 	t.Helper()
-	cfg := &sub.MemHopConfig{}
+	cfg := &internal.MemHopConfig{}
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		t.Skipf("judge LLM not configured: %v", err)
 	}

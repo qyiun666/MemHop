@@ -14,8 +14,8 @@ import (
 	"runtime"
 	"testing"
 
-	memhop "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/sub"
+	memhop "github.com/qyiun666/MemHop/api"
+	internal "github.com/qyiun666/MemHop/internal"
 )
 
 // LLM config environment variables. Priority: env vars > key_config.json file.
@@ -43,10 +43,10 @@ func keyConfigPath() string {
 
 // LoadLLMConfig fills cfg.LLM from env vars first, then key_config.json.
 // Exported for tests that build their own LLM client (e.g. the quality judge).
-func LoadLLMConfig(cfg *sub.MemHopConfig) error { return loadLLMConfig(cfg) }
+func LoadLLMConfig(cfg *internal.MemHopConfig) error { return loadLLMConfig(cfg) }
 
 // loadLLMConfig fills cfg.LLM from env vars first, then key_config.json.
-func loadLLMConfig(cfg *sub.MemHopConfig) error {
+func loadLLMConfig(cfg *internal.MemHopConfig) error {
 	if key := os.Getenv(EnvLLMKey); key != "" {
 		cfg.LLM.APIKey = key
 		cfg.LLM.APIURL = os.Getenv(EnvLLMURL)
@@ -97,12 +97,12 @@ func OpenMemHopB(b *testing.B) *memhop.DB {
 
 // open is the shared implementation for testing.T and testing.B.
 func open(tb testing.TB) *memhop.DB {
-	cfg := &sub.MemHopConfig{
+	cfg := &internal.MemHopConfig{
 		DBPath:      filepath.Join(tb.TempDir(), "test.meh"),
 		VectorDim:   1024,
 		EncoderAddr: "http://127.0.0.1:11434",
 		EmbedModel:  "qllama/bge-m3:q4_k_m",
-		Defaults:    *sub.DefaultMemHopDefaults,
+		Defaults:    *internal.DefaultMemHopDefaults,
 	}
 	if err := loadLLMConfig(cfg); err != nil {
 		tb.Skipf("跳过真实依赖测试: %v", err)

@@ -20,13 +20,13 @@ import (
 	"testing"
 	"time"
 
-	memhop "github.com/qyiun666/MemHop"
-	"github.com/qyiun666/MemHop/internal/sub"
-	"github.com/qyiun666/MemHop/internal/sub/common"
-	"github.com/qyiun666/MemHop/internal/sub/repo/core"
+	memhop "github.com/qyiun666/MemHop/api"
+	internal "github.com/qyiun666/MemHop/internal"
+	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// mockEncoder implements sub.Encoder with a deterministic pseudo-vector.
+// mockEncoder implements internal.Encoder with a deterministic pseudo-vector.
 type mockEncoder struct{ dim int }
 
 func (m *mockEncoder) Encode(text string) ([]float32, error) {
@@ -120,7 +120,7 @@ func consolidateReply(user string) string {
 func openTestDB(t *testing.T) (*memhop.DB, *mockLLM) {
 	t.Helper()
 	llm := newMockLLM(t)
-	cfg := &memhop.MemHopConfig{
+	cfg := &internal.MemHopConfig{
 		DBPath:     filepath.Join(t.TempDir(), "test.meh"),
 		VectorDim:  16,
 		EmbedModel: "mock-embed",
@@ -128,7 +128,7 @@ func openTestDB(t *testing.T) (*memhop.DB, *mockLLM) {
 	cfg.LLM.APIURL = llm.srv.URL
 	cfg.LLM.APIKey = "mock-key"
 	cfg.LLM.Model = "mock-model"
-	cfg.Defaults = *sub.DefaultMemHopDefaults
+	cfg.Defaults = *internal.DefaultMemHopDefaults
 	db, err := memhop.OpenWithEncoder(cfg, &mockEncoder{dim: 16})
 	if err != nil {
 		t.Fatalf("OpenWithEncoder: %v", err)
@@ -155,7 +155,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	ts := time.Now().UnixMilli()
 
 	// Search with AutoCreate creates a scene + topic + L4 archive + centroid.
-	res, err := db.Search(memhop.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
+	res, err := db.Search(internal.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
 	if err != nil {
 		t.Fatalf("Search(auto_create): %v", err)
 	}
@@ -186,7 +186,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 
 	// Normal Search retrieves the stored contexts.
-	res2, err := db.Search(memhop.SearchQuery{Text: "重构代码", Timestamp: ts + 3000})
+	res2, err := db.Search(internal.SearchQuery{Text: "重构代码", Timestamp: ts + 3000})
 	if err != nil {
 		t.Fatalf("Search(normal): %v", err)
 	}
@@ -204,7 +204,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 
 	// L4: archives written by Search/Update are searchable.
-	arcs, err := db.SearchL4(memhop.L4Query{Keyword: "重构"})
+	arcs, err := db.SearchL4(internal.L4Query{Keyword: "重构"})
 	if err != nil {
 		t.Fatalf("SearchL4: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 
 	// Validation: Timestamp is required.
-	if _, err := db.Search(memhop.SearchQuery{Text: "重构"}); err == nil {
+	if _, err := db.Search(internal.SearchQuery{Text: "重构"}); err == nil {
 		t.Fatal("Search without Timestamp should fail")
 	}
 }
@@ -242,10 +242,10 @@ func TestInterfaceL0(t *testing.T) {
 
 func TestInterfaceL3(t *testing.T) {
 	db, _ := openTestDB(t)
-	res, err := db.ImportL3([]memhop.L3ImportItem{
+	res, err := db.ImportL3([]internal.L3ImportItem{
 		{Title: "Go 内存模型", Domain: "go", NodeType: "concept",
 			Content: "Go 内存模型定义了 happens-before 规则", Keywords: []string{"go", "内存"}},
-	}, memhop.L3ImportSkip)
+	}, internal.L3ImportSkip)
 	if err != nil {
 		t.Fatalf("ImportL3: %v", err)
 	}
@@ -270,7 +270,7 @@ func TestInterfaceL3(t *testing.T) {
 		t.Fatal("GetL3 should return nodes")
 	}
 
-	nodes, err := db.QueryL3Nodes(memhop.L3NodeQuery{GraphID: graphID, Keyword: "go"})
+	nodes, err := db.QueryL3Nodes(internal.L3NodeQuery{GraphID: graphID, Keyword: "go"})
 	if err != nil {
 		t.Fatalf("QueryL3Nodes: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestInterfaceL3(t *testing.T) {
 
 	// Search must link the matching L3 graph onto the new topic as L3Refs,
 	// which is what makes DirectedL3ID scoping work.
-	sres, err := db.Search(memhop.SearchQuery{Text: "Go 内存模型", AutoCreate: true, Timestamp: time.Now().UnixMilli()})
+	sres, err := db.Search(internal.SearchQuery{Text: "Go 内存模型", AutoCreate: true, Timestamp: time.Now().UnixMilli()})
 	if err != nil {
 		t.Fatalf("Search after ImportL3: %v", err)
 	}
@@ -344,10 +344,10 @@ func TestInterfaceL5(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCapability: %v", err)
 	}
-	if got.Name != "重构流程" || got.Type != memhop.CapabilityMCP {
+	if got.Name != "重构流程" || got.Type != core.CapabilityMCP {
 		t.Fatalf("capability mismatch: %+v", got)
 	}
-	caps, err := db.ListCapabilities(memhop.CapabilityListQuery{})
+	caps, err := db.ListCapabilities(internal.CapabilityListQuery{})
 	if err != nil {
 		t.Fatalf("ListCapabilities: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestInterfaceL5(t *testing.T) {
 			found = true
 			continue
 		}
-		if c.Origin != memhop.CapabilityOriginBuiltin {
+		if c.Origin != core.CapabilityOriginBuiltin {
 			t.Fatalf("unexpected non-builtin capability: %+v", c)
 		}
 	}
@@ -370,12 +370,12 @@ func TestInterfaceL5(t *testing.T) {
 	if err := db.DeleteCapability(id); err != nil {
 		t.Fatalf("DeleteCapability: %v", err)
 	}
-	caps, err = db.ListCapabilities(memhop.CapabilityListQuery{})
+	caps, err = db.ListCapabilities(internal.CapabilityListQuery{})
 	if err != nil {
 		t.Fatalf("ListCapabilities after delete: %v", err)
 	}
 	for _, c := range caps {
-		if c.Origin != memhop.CapabilityOriginBuiltin {
+		if c.Origin != core.CapabilityOriginBuiltin {
 			t.Fatalf("stored capability should be deleted: %+v", c)
 		}
 	}
@@ -414,12 +414,12 @@ func TestInterfaceL7(t *testing.T) {
 	}
 	// Built-ins are all active, so filtering by draft isolates the
 	// crystallized capability.
-	draft := memhop.CapabilityDraft
-	caps, err := db.ListCapabilities(memhop.CapabilityListQuery{Status: &draft})
+	draft := core.CapabilityDraft
+	caps, err := db.ListCapabilities(internal.CapabilityListQuery{Status: &draft})
 	if err != nil {
 		t.Fatalf("ListCapabilities after crystallize: %v", err)
 	}
-	if len(caps) != 1 || caps[0].Status != memhop.CapabilityDraft {
+	if len(caps) != 1 || caps[0].Status != core.CapabilityDraft {
 		t.Fatalf("want 1 draft capability after crystallize, got %d", len(caps))
 	}
 
@@ -439,7 +439,7 @@ func TestInterfaceDream(t *testing.T) {
 	// Lower the compress threshold so two topics in one scene trigger the
 	// consolidate call.
 	llm := newMockLLM(t)
-	cfg := &memhop.MemHopConfig{
+	cfg := &internal.MemHopConfig{
 		DBPath:     filepath.Join(t.TempDir(), "test.meh"),
 		VectorDim:  16,
 		EmbedModel: "mock-embed",
@@ -447,7 +447,7 @@ func TestInterfaceDream(t *testing.T) {
 	cfg.LLM.APIURL = llm.srv.URL
 	cfg.LLM.APIKey = "mock-key"
 	cfg.LLM.Model = "mock-model"
-	cfg.Defaults = *sub.DefaultMemHopDefaults
+	cfg.Defaults = *internal.DefaultMemHopDefaults
 	cfg.Defaults.DreamCompressMinTopics = 2
 	db, err := memhop.OpenWithEncoder(cfg, &mockEncoder{dim: 16})
 	if err != nil {
@@ -456,12 +456,12 @@ func TestInterfaceDream(t *testing.T) {
 	defer db.Close()
 
 	ts := time.Now().UnixMilli()
-	res, err := db.Search(memhop.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
+	res, err := db.Search(internal.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
 	if err != nil {
 		t.Fatalf("Search #1: %v", err)
 	}
 	sceneID := common.FormatHash(res.Contexts[0].SceneID)
-	if _, err := db.Search(memhop.SearchQuery{
+	if _, err := db.Search(internal.SearchQuery{
 		Text: "继续重构第二个模块", DirectedL2ID: &sceneID, Timestamp: ts + 1000,
 	}); err != nil {
 		t.Fatalf("Search #2: %v", err)
@@ -502,7 +502,7 @@ func TestInterfaceDream(t *testing.T) {
 func TestInterfaceCheckpointPersist(t *testing.T) {
 	llm := newMockLLM(t)
 	path := filepath.Join(t.TempDir(), "persist.meh")
-	cfg := &memhop.MemHopConfig{
+	cfg := &internal.MemHopConfig{
 		DBPath:     path,
 		VectorDim:  16,
 		EmbedModel: "mock-embed",
@@ -510,13 +510,13 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	cfg.LLM.APIURL = llm.srv.URL
 	cfg.LLM.APIKey = "mock-key"
 	cfg.LLM.Model = "mock-model"
-	cfg.Defaults = *sub.DefaultMemHopDefaults
+	cfg.Defaults = *internal.DefaultMemHopDefaults
 
 	db, err := memhop.OpenWithEncoder(cfg, &mockEncoder{dim: 16})
 	if err != nil {
 		t.Fatalf("OpenWithEncoder: %v", err)
 	}
-	if _, err := db.Search(memhop.SearchQuery{
+	if _, err := db.Search(internal.SearchQuery{
 		Text: "用户要求重构代码", AutoCreate: true, Timestamp: time.Now().UnixMilli(),
 	}); err != nil {
 		t.Fatalf("Search: %v", err)
@@ -541,7 +541,7 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	if len(scenes) == 0 {
 		t.Fatal("scenes should persist across reopen")
 	}
-	arcs, err := db2.SearchL4(memhop.L4Query{Keyword: "重构"})
+	arcs, err := db2.SearchL4(internal.L4Query{Keyword: "重构"})
 	if err != nil {
 		t.Fatalf("SearchL4 after reopen: %v", err)
 	}

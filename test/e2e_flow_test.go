@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qyiun666/MemHop/internal/sub"
-	"github.com/qyiun666/MemHop/internal/sub/common"
-	"github.com/qyiun666/MemHop/internal/sub/repo/core"
+	internal "github.com/qyiun666/MemHop/internal"
+	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -30,7 +30,7 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 
 	// 1. Search with AutoCreate: no match expected on a fresh DB, so this
 	//    creates a new scene + topic and returns it.
-	res, err := db.Search(sub.SearchQuery{
+	res, err := db.Search(internal.SearchQuery{
 		Text:       userText,
 		AutoCreate: true,
 		Timestamp:  ts,
@@ -54,7 +54,7 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	}
 
 	// 3. Search again (normal route): should hit the existing scene.
-	res2, err := db.Search(sub.SearchQuery{
+	res2, err := db.Search(internal.SearchQuery{
 		Text:      "周末海边跑步",
 		Timestamp: ts + 2000,
 	})
@@ -69,7 +69,7 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 
 	// 4. L4 archive readback: TopicID is an overlay filter, so combine it with
 	//    a primary mode (time range) to select the topic's archives.
-	archives, err := db.SearchL4(sub.L4Query{
+	archives, err := db.SearchL4(internal.L4Query{
 		Start:   ts - 1000,
 		End:     ts + 5000,
 		TopicID: &topicID,
@@ -92,7 +92,7 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	}
 
 	// 6. After dream the DB must still be readable.
-	res3, err := db.Search(sub.SearchQuery{
+	res3, err := db.Search(internal.SearchQuery{
 		Text:      "海边",
 		Timestamp: ts + 3000,
 	})
@@ -134,7 +134,7 @@ func TestE2ECapability(t *testing.T) {
 		t.Fatalf("resources mismatch: %+v", got.Resources)
 	}
 
-	caps, err := db.ListCapabilities(sub.CapabilityListQuery{Keyword: "晨跑"})
+	caps, err := db.ListCapabilities(internal.CapabilityListQuery{Keyword: "晨跑"})
 	if err != nil {
 		t.Fatalf("ListCapabilities: %v", err)
 	}

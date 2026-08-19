@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	memhop "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/sub"
-	"github.com/qyiun666/MemHop/internal/sub/common"
+	memhop "github.com/qyiun666/MemHop/api"
+	internal "github.com/qyiun666/MemHop/internal"
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -51,12 +51,12 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 		t.Fatalf("need %d facts, have %d", turns, len(facts))
 	}
 
-	cfg := &sub.MemHopConfig{
+	cfg := &internal.MemHopConfig{
 		DBPath:      filepath.Join(t.TempDir(), "cycle.meh"),
 		VectorDim:   1024,
 		EncoderAddr: "http://127.0.0.1:11434",
 		EmbedModel:  "qllama/bge-m3:q4_k_m",
-		Defaults:    *sub.DefaultMemHopDefaults,
+		Defaults:    *internal.DefaultMemHopDefaults,
 	}
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		t.Skipf("skip: %v", err)
@@ -70,7 +70,7 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 	// Phase 1: ingest via Search + Update (the real host pattern).
 	base := time.Now().UnixMilli()
 	for i, f := range facts {
-		res, err := db.Search(sub.SearchQuery{Text: f, Timestamp: base + int64(i)*1000})
+		res, err := db.Search(internal.SearchQuery{Text: f, Timestamp: base + int64(i)*1000})
 		if err != nil {
 			t.Fatalf("search ingest %d: %v", i, err)
 		}
@@ -90,7 +90,7 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 
 	// Phase 3: retrieval must still surface the facts, including the newest
 	// one added right before Dream and the merged summary details.
-	res, err := db.Search(sub.SearchQuery{Text: "支持小组最近有什么安排？", Timestamp: base + 1_000_000})
+	res, err := db.Search(internal.SearchQuery{Text: "支持小组最近有什么安排？", Timestamp: base + 1_000_000})
 	if err != nil {
 		t.Fatalf("post-dream search: %v", err)
 	}

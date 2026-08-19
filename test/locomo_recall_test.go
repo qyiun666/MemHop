@@ -19,9 +19,9 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
-	memhop "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/sub"
-	"github.com/qyiun666/MemHop/internal/sub/common"
+	memhop "github.com/qyiun666/MemHop/api"
+	internal "github.com/qyiun666/MemHop/internal"
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -82,7 +82,7 @@ func BenchmarkLocomoRecall(b *testing.B) {
 				seq++
 				ts := sessionBase + int64(i)*30_000
 				if tn.Speaker == item.SpeakerA {
-					res, err := db.Search(sub.SearchQuery{Text: tn.Text, Timestamp: ts})
+					res, err := db.Search(internal.SearchQuery{Text: tn.Text, Timestamp: ts})
 					if err != nil {
 						b.Fatalf("ingest Search: %v", err)
 					}
@@ -108,7 +108,7 @@ func BenchmarkLocomoRecall(b *testing.B) {
 		for _, qa := range item.QA {
 			seq++
 			ts := base + seq*1000
-			res, err := db.Search(sub.SearchQuery{Text: qa.Question, Timestamp: ts})
+			res, err := db.Search(internal.SearchQuery{Text: qa.Question, Timestamp: ts})
 			if err != nil {
 				searchErr++
 				if searchErr <= 3 {
@@ -172,7 +172,7 @@ func loadLocomo10(tb testing.TB, maxItems int) []locomo10Item {
 // gatherLocomoContext collects the keyword context from a search result: each
 // returned topic's timestamps, User/Agent/Fused keywords plus the L4 archive
 // text they reference. This is the context handed to the judge.
-func gatherLocomoContext(db *memhop.DB, res *sub.SearchResult) string {
+func gatherLocomoContext(db *memhop.DB, res *internal.SearchResult) string {
 	var sb strings.Builder
 	for i := range res.Contexts {
 		c := &res.Contexts[i]
@@ -243,7 +243,7 @@ func locomoEntityHit(answer, ctxText string) float64 {
 // newLocomoJudge builds an LLM client for recall judgement.
 func newLocomoJudge(tb testing.TB) (*openai.Client, string) {
 	tb.Helper()
-	cfg := &sub.MemHopConfig{}
+	cfg := &internal.MemHopConfig{}
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		tb.Skipf("judge LLM not configured: %v", err)
 	}

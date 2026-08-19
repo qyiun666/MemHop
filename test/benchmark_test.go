@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qyiun666/MemHop/internal/sub"
-	"github.com/qyiun666/MemHop/internal/sub/common"
+	internal "github.com/qyiun666/MemHop/internal"
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -71,7 +71,7 @@ func BenchmarkSearchAutoCreate(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ts := base + int64(i)*1000
-		res, err := db.Search(sub.SearchQuery{
+		res, err := db.Search(internal.SearchQuery{
 			Text:       turns[i%len(turns)],
 			AutoCreate: true,
 			Timestamp:  ts,
@@ -100,7 +100,7 @@ func BenchmarkSearchRetrieve(b *testing.B) {
 	for _, s := range fx.Sessions {
 		for _, tn := range s.Turns {
 			ts := base + int64(i)*1000
-			res, err := db.Search(sub.SearchQuery{
+			res, err := db.Search(internal.SearchQuery{
 				Text:       tn.Text,
 				AutoCreate: true,
 				Timestamp:  ts,
@@ -120,7 +120,7 @@ func BenchmarkSearchRetrieve(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		ts := base + int64(1_000_000+i)*1000
-		if _, err := db.Search(sub.SearchQuery{
+		if _, err := db.Search(internal.SearchQuery{
 			Text:      query,
 			Timestamp: ts,
 		}); err != nil {
@@ -136,7 +136,7 @@ func BenchmarkUpdate(b *testing.B) {
 	defer db.Close()
 
 	base := time.Now().UnixMilli()
-	res, err := db.Search(sub.SearchQuery{
+	res, err := db.Search(internal.SearchQuery{
 		Text:       fx.Sessions[0].Turns[0].Text,
 		AutoCreate: true,
 		Timestamp:  base,
@@ -177,7 +177,7 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 	var sceneID uint64
 	for i, text := range related {
 		ts := base + int64(i)*1000
-		q := sub.SearchQuery{Text: text, Timestamp: ts}
+		q := internal.SearchQuery{Text: text, Timestamp: ts}
 		if i == 0 {
 			q.AutoCreate = true
 		} else {
@@ -225,7 +225,7 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 	base := time.Now().UnixMilli()
 	for i, a := range anchors {
 		ts := base + int64(i)*2000
-		res, err := db.Search(sub.SearchQuery{Text: a.fact, AutoCreate: true, Timestamp: ts})
+		res, err := db.Search(internal.SearchQuery{Text: a.fact, AutoCreate: true, Timestamp: ts})
 		if err != nil {
 			b.Fatalf("seed Search[%d]: %v", i, err)
 		}
@@ -239,7 +239,7 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		a := anchors[i%len(anchors)]
 		ts := base + int64(1_000_000+i)*1000
-		res, err := db.Search(sub.SearchQuery{Text: a.query, Timestamp: ts})
+		res, err := db.Search(internal.SearchQuery{Text: a.query, Timestamp: ts})
 		if err != nil {
 			b.Fatalf("Search: %v", err)
 		}
@@ -276,7 +276,7 @@ func BenchmarkSearchLatency(b *testing.B) {
 	}
 	for i, s := range seeds {
 		ts := base + int64(i)*2000
-		res, err := db.Search(sub.SearchQuery{Text: s, AutoCreate: true, Timestamp: ts})
+		res, err := db.Search(internal.SearchQuery{Text: s, AutoCreate: true, Timestamp: ts})
 		if err != nil {
 			b.Fatalf("seed: %v", err)
 		}
@@ -292,7 +292,7 @@ func BenchmarkSearchLatency(b *testing.B) {
 		q := queries[i%len(queries)]
 		ts := base + int64(1_000_000+i)*1000
 		start := time.Now()
-		if _, err := db.Search(sub.SearchQuery{Text: q, Timestamp: ts}); err != nil {
+		if _, err := db.Search(internal.SearchQuery{Text: q, Timestamp: ts}); err != nil {
 			b.Fatalf("Search: %v", err)
 		}
 		lat = append(lat, time.Since(start))
