@@ -9,6 +9,7 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // Copyright (c) 2026 qyiun666
@@ -70,7 +71,7 @@ type L1NodeEmotion struct {
 // GenerateProfileL0 rebuilds the L0 profile from the sparse keyword
 // distribution: creates a default profile if missing, else updates
 // personality and keyword/memory fields.
-func GenerateProfileL0(engine *core.StorageEngine, sparse *SparseIndex) error {
+func GenerateProfileL0(engine *core.StorageEngine, sparse *index.SparseIndex) error {
 	topKeywords := sparse.TopTerms(20)
 	topTerms := make([]string, len(topKeywords))
 	for i, tk := range topKeywords {

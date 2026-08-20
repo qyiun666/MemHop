@@ -11,11 +11,11 @@ import (
 )
 
 func TestCreateTopicL2WithIDSameTimestampDifferentText(t *testing.T) {
-	engine, err := Create(filepath.Join(t.TempDir(), "topics.meh"), 16)
+	engine, err := core.Create(filepath.Join(t.TempDir(), "topics.meh"), 16)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { engine.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { engine.Close(&core.IndexSnapshotData{}) })
 
 	sceneID := core.NewSceneSlot("scene").SceneID
 	id1 := core.ComputeTopicIDForText(sceneID, 1000, "hello")

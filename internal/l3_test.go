@@ -8,18 +8,17 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 func newL3TestDB(t *testing.T) *DB {
 	t.Helper()
-	engine, err := repo.Create(filepath.Join(t.TempDir(), "l3.meh"), 16)
+	engine, err := core.Create(filepath.Join(t.TempDir(), "l3.meh"), 16)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := repo.Close(engine, &repo.IndexSnapshotData{}); err != nil {
+		if err := engine.Close(&core.IndexSnapshotData{}); err != nil {
 			t.Errorf("close engine: %v", err)
 		}
 	})

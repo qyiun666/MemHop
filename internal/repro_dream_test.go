@@ -18,6 +18,7 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
+	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 func TestReproDreamConsolidate(t *testing.T) {
@@ -39,11 +40,11 @@ func TestReproDreamConsolidate(t *testing.T) {
 		},
 		Defaults: *DefaultMemHopDefaults,
 	}
-	engine, err := repo.Open(path)
+	engine, err := core.Open(path)
 	if err != nil {
 		t.Fatalf("open engine: %v", err)
 	}
-	defer repo.CloseNoCheckpoint(engine)
+	defer engine.CloseNoCheckpoint()
 
 	enc, err := NewHttpEncoder("http://127.0.0.1:11434", 1024, "qllama/bge-m3:q4_k_m", 20)
 	if err != nil {

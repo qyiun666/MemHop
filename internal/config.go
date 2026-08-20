@@ -8,7 +8,8 @@ import (
 	"os"
 
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/repo"
+	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 type MemHopConfig struct {
@@ -65,18 +66,18 @@ func (c *MemHopConfig) Validate() error {
 
 func inUnitRange(v float32) bool { return v >= 0 && v <= 1 }
 
-func OpenOrCreateEngine(cfg *MemHopConfig) (*repo.StorageEngine, error) {
+func OpenOrCreateEngine(cfg *MemHopConfig) (*core.StorageEngine, error) {
 	if _, err := os.Stat(cfg.DBPath); err == nil {
-		return repo.Open(cfg.DBPath)
+		return core.Open(cfg.DBPath)
 	}
-	return repo.Create(cfg.DBPath, uint16(cfg.VectorDim))
+	return core.Create(cfg.DBPath, uint16(cfg.VectorDim))
 }
 
 // CheckVectorDim verifies the on-disk vector dimension; on mismatch the
 // caller must roll back via CloseNoCheckpoint (an empty snapshot here would
 // flip the A/B header and destroy the index snapshot).
-func CheckVectorDim(engine *repo.StorageEngine, cfg *MemHopConfig) error {
-	if int(repo.VectorDim(engine)) != cfg.VectorDim {
+func CheckVectorDim(engine *core.StorageEngine, cfg *MemHopConfig) error {
+	if int(engine.VectorDim()) != cfg.VectorDim {
 		return common.NewError(common.ErrVectorDimMismatch, "config vs engine")
 	}
 	return nil
@@ -85,15 +86,15 @@ func CheckVectorDim(engine *repo.StorageEngine, cfg *MemHopConfig) error {
 // LoadCachedIndices restores the sparse and L1 reverse indices from the
 // checkpoint snapshot; a corrupt snapshot aborts Open rather than silently
 // rebuilding.
-func LoadCachedIndices(engine *repo.StorageEngine) (*repo.SparseIndex, *repo.L1ReverseIndex, error) {
-	sparseIdx := repo.NewSparseIndex()
-	l1Rev := repo.NewL1ReverseIndex()
-	snap := repo.SnapshotData(engine)
+func LoadCachedIndices(engine *core.StorageEngine) (*index.SparseIndex, *index.L1ReverseIndex, error) {
+	sparseIdx := index.NewSparseIndex()
+	l1Rev := index.NewL1ReverseIndex()
+	snap := engine.SnapshotData()
 	if snap == nil {
 		return sparseIdx, l1Rev, nil
 	}
 	if len(snap.SparseData) > 0 {
-		idx, err := repo.DeserializeSparseIndex(snap.SparseData)
+		idx, err := index.DeserializeSparseIndex(snap.SparseData)
 		if err != nil {
 			return nil, nil, common.NewError(common.ErrCorruption,
 				"sparse index snapshot deserialize failed", err)
@@ -101,7 +102,7 @@ func LoadCachedIndices(engine *repo.StorageEngine) (*repo.SparseIndex, *repo.L1R
 		sparseIdx = idx
 	}
 	if len(snap.L1ReverseData) > 0 {
-		idx, err := repo.DeserializeL1ReverseIndex(snap.L1ReverseData)
+		idx, err := index.DeserializeL1ReverseIndex(snap.L1ReverseData)
 		if err != nil {
 			return nil, nil, common.NewError(common.ErrCorruption,
 				"l1 reverse index snapshot deserialize failed", err)
@@ -114,7 +115,7 @@ func LoadCachedIndices(engine *repo.StorageEngine) (*repo.SparseIndex, *repo.L1R
 // InitTokenizer surfaces tokenizer configuration errors at Open time
 // instead of silently degrading to empty tokenization.
 func InitTokenizer(engine string) error {
-	if err := repo.InitTokenizer(engine); err != nil {
+	if err := index.InitTokenizer(engine); err != nil {
 		return common.NewError(common.ErrConfig, "tokenizer init failed", err)
 	}
 	return nil
@@ -131,12 +132,12 @@ func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 		return nil, err
 	}
 	if err := CheckVectorDim(engine, cfg); err != nil {
-		repo.CloseNoCheckpoint(engine)
+		engine.CloseNoCheckpoint()
 		return nil, err
 	}
 	sparseIdx, l1Rev, err := LoadCachedIndices(engine)
 	if err != nil {
-		repo.CloseNoCheckpoint(engine)
+		engine.CloseNoCheckpoint()
 		return nil, err
 	}
 

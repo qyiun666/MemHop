@@ -9,18 +9,18 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // DB is the global in-memory database instance returned by Open; business
 // methods (search/dream/update) hang directly on it.
 type DB struct {
-	engine       *repo.StorageEngine
+	engine       *core.StorageEngine
 	config       *MemHopConfig
-	sparseIndex  *repo.SparseIndex
+	sparseIndex  *index.SparseIndex
 	llm          *Provider
-	l1Reverse    atomic.Pointer[repo.L1ReverseIndex]
+	l1Reverse    atomic.Pointer[index.L1ReverseIndex]
 	encoder      Encoder
 	activeScenes []uint64
 	// builtinCapabilities are read-only reference capabilities attached to
@@ -63,7 +63,7 @@ func (db *DB) activateScene(sceneID uint64) {
 
 func (db *DB) TouchLastDreamAt() { db.lastDreamAt.Store(time.Now().UnixMilli()) }
 
-func (db *DB) getL1Reverse() *repo.L1ReverseIndex { return db.l1Reverse.Load() }
+func (db *DB) getL1Reverse() *index.L1ReverseIndex { return db.l1Reverse.Load() }
 
 // beginRead takes the shared lock for a public operation and rejects use
 // after Close.
@@ -91,7 +91,7 @@ func (db *DB) Close() error {
 		encErr = c.Close()
 	}
 	// Always close the engine to release mmap/file even if the encoder failed.
-	engErr := repo.Close(db.engine, snap)
+	engErr := db.engine.Close(snap)
 	if encErr != nil {
 		return common.NewError(common.ErrEncoder, "encoder close", encErr)
 	}
@@ -107,21 +107,21 @@ func (db *DB) Checkpoint() error {
 	if err != nil {
 		return err
 	}
-	return repo.Checkpoint(db.engine, snap)
+	return db.engine.Checkpoint(snap)
 }
 
 // buildSnapshot serializes the in-memory indices for checkpoint persistence.
 // L3IndexData stays nil: L3 data is persisted as individual records.
-func (db *DB) buildSnapshot() (*repo.IndexSnapshotData, error) {
-	sparseData, err := repo.SerializeSparseIndex(db.sparseIndex)
+func (db *DB) buildSnapshot() (*core.IndexSnapshotData, error) {
+	sparseData, err := db.sparseIndex.Serialize()
 	if err != nil {
 		return nil, common.NewError(common.ErrSerialization, "sparse index", err)
 	}
-	l1RevData, err := repo.SerializeL1ReverseIndex(db.getL1Reverse())
+	l1RevData, err := db.getL1Reverse().Serialize()
 	if err != nil {
 		return nil, common.NewError(common.ErrSerialization, "l1 reverse index", err)
 	}
-	return &repo.IndexSnapshotData{
+	return &core.IndexSnapshotData{
 		SparseData:    sparseData,
 		L1ReverseData: l1RevData,
 		L3IndexData:   nil,

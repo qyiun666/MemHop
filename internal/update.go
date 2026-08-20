@@ -30,8 +30,7 @@ func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error)
 	}
 	// Validate the topic before any write or LLM call: a missing topic must
 	// not leave an orphan L4 archive behind.
-	topicIDStr := common.FormatHash(parsedID)
-	topics, err := repo.ListTopicsL2(db.engine, topicIDStr, 0, 3)
+	topics, err := repo.ListTopicsL2(db.engine, topicID, 0, 3)
 	if err != nil {
 		return false, err
 	}
@@ -43,14 +42,14 @@ func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error)
 	if err != nil {
 		return false, err
 	}
-	archiveID, err := repo.AppendArchiveL4(db.engine, topicIDStr, 1, core.ContentText, text, timestamp)
+	archiveID, err := repo.AppendArchiveL4(db.engine, topicID, 1, core.ContentText, text, timestamp)
 	if err != nil {
 		return false, err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, topicIDStr, []uint64{archiveID}) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, topicID, []uint64{archiveID}) {
 		return false, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
-	if !repo.UpdateTopicL2(db.engine, topicIDStr, keywords, timestamp) {
+	if !repo.UpdateTopicL2(db.engine, topicID, keywords, timestamp) {
 		return false, common.NewError(common.ErrIO, "update topic keywords", nil)
 	}
 	// Update BM25: uncompressed topics carry User+Agent keywords (compressed
