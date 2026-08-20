@@ -249,6 +249,7 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 |---|---|
 | MeowAgent | [github.com/meowagent/meowagent](https://github.com/meowagent/meowagent) — 即将开源 |
 | MemHop | [github.com/qyiun666/MemHop](https://github.com/qyiun666/MemHop) |
+| Meowire | [github.com/qyiun666/meowire](https://github.com/qyiun666/meowire) |
 | MeowDesk | [github.com/qyiun666/MeowDesk](https://github.com/qyiun666/MeowDesk) — 即将开源 |
 | 官网 | [qyiun666.github.io/meowagent.github.io](https://qyiun666.github.io/meowagent.github.io/) |
 | 邮箱 | qyiun666@163.com |

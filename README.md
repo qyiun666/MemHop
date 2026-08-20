@@ -249,6 +249,7 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 |---|---|
 | MeowAgent | [github.com/meowagent/meowagent](https://github.com/meowagent/meowagent) — coming soon |
 | MemHop | [github.com/qyiun666/MemHop](https://github.com/qyiun666/MemHop) |
+| Meowire | [github.com/qyiun666/meowire](https://github.com/qyiun666/meowire) |
 | MeowDesk | [github.com/qyiun666/MeowDesk](https://github.com/qyiun666/MeowDesk) — coming soon |
 | Website | [qyiun666.github.io/meowagent.github.io](https://qyiun666.github.io/meowagent.github.io/) |
 | Email | qyiun666@163.com |
