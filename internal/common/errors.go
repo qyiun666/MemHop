@@ -53,8 +53,7 @@ func NewError(code Code, message string, cause ...error) *Error {
 }
 
 func CodeOf(err error) Code {
-	var e *Error
-	if errors.As(err, &e) {
+	if e, ok := errors.AsType[*Error](err); ok {
 		return e.Code
 	}
 	return 0

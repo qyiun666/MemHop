@@ -5,65 +5,15 @@ package common
 
 import "math"
 
-// CosineSimilarity computes the cosine similarity of two f32 vectors; large
-// vectors use goroutine chunking (500 elements per chunk, up to 10 goroutines).
+// CosineSimilarity computes the cosine similarity of two f32 vectors.
+//
+// A single scalar loop is used even for large vectors: goroutine chunking
+// costs more (spawn + channel sync) than it saves below ~10k elements, and
+// the default embedding dimension is only 1024.
 func CosineSimilarity(a, b []float32) float32 {
 	if len(a) != len(b) || len(a) == 0 {
 		return 0
 	}
-	const chunkSize = 500
-	const maxGoroutines = 10
-	n := len(a)
-
-	if n < chunkSize*2 {
-		return cosineScalar(a, b)
-	}
-
-	numChunks := (n + chunkSize - 1) / chunkSize
-	if numChunks > maxGoroutines {
-		numChunks = maxGoroutines
-	}
-
-	type partial struct {
-		dot, normA, normB float32
-	}
-	results := make([]partial, numChunks)
-	done := make(chan struct{}, numChunks)
-
-	for i := 0; i < numChunks; i++ {
-		start := i * (n / numChunks)
-		end := start + n/numChunks
-		if i == numChunks-1 {
-			end = n
-		}
-		go func(idx, s, e int) {
-			var dot, na, nb float32
-			for j := s; j < e; j++ {
-				av := a[j]
-				bv := b[j]
-				dot += av * bv
-				na += av * av
-				nb += bv * bv
-			}
-			results[idx] = partial{dot, na, nb}
-			done <- struct{}{}
-		}(i, start, end)
-	}
-
-	for i := 0; i < numChunks; i++ {
-		<-done
-	}
-
-	var dot, normA, normB float32
-	for _, r := range results {
-		dot += r.dot
-		normA += r.normA
-		normB += r.normB
-	}
-	return finalizeCosine(dot, normA, normB)
-}
-
-func cosineScalar(a, b []float32) float32 {
 	var dot, normA, normB float32
 	for i := range a {
 		av := a[i]

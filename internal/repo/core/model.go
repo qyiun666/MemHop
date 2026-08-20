@@ -32,10 +32,6 @@ var contentTypeNames = map[ContentType]string{
 
 func (c ContentType) String() string { return common.EnumString(c, contentTypeNames, "ContentType") }
 
-func (c ContentType) MarshalJSON() ([]byte, error) { return common.EnumMarshal(c) }
-
-func (c *ContentType) UnmarshalJSON(data []byte) error { return common.EnumAssign(c, data) }
-
 // CapabilityStatus represents the lifecycle state of an L5 capability.
 type CapabilityStatus uint8
 
@@ -52,10 +48,6 @@ var capabilityStatusNames = map[CapabilityStatus]string{
 func (c CapabilityStatus) String() string {
 	return common.EnumString(c, capabilityStatusNames, "CapabilityStatus")
 }
-
-func (c CapabilityStatus) MarshalJSON() ([]byte, error) { return common.EnumMarshal(c) }
-
-func (c *CapabilityStatus) UnmarshalJSON(data []byte) error { return common.EnumAssign(c, data) }
 
 // CapabilityType describes how an L5 capability is implemented: a wrapper
 // around a single MCP tool, a single skill, or a composite of several
@@ -102,10 +94,6 @@ func (k HyperedgeKind) String() string {
 	return common.EnumString(k, hyperedgeKindNames, "HyperedgeKind")
 }
 
-func (k HyperedgeKind) MarshalJSON() ([]byte, error) { return common.EnumMarshal(k) }
-
-func (k *HyperedgeKind) UnmarshalJSON(data []byte) error { return common.EnumAssign(k, data) }
-
 // SourceKind identifies how an L3 HypergraphSlot was created.
 type SourceKind uint8
 
@@ -122,10 +110,6 @@ var sourceKindNames = map[SourceKind]string{
 }
 
 func (s SourceKind) String() string { return common.EnumString(s, sourceKindNames, "SourceKind") }
-
-func (s SourceKind) MarshalJSON() ([]byte, error) { return common.EnumMarshal(s) }
-
-func (s *SourceKind) UnmarshalJSON(data []byte) error { return common.EnumAssign(s, data) }
 
 // GraphEdgeKind classifies edges within an L3 hypergraph.
 type GraphEdgeKind uint8
@@ -148,10 +132,6 @@ func (k GraphEdgeKind) String() string {
 	return common.EnumString(k, graphEdgeKindNames, "GraphEdgeKind")
 }
 
-func (k GraphEdgeKind) MarshalJSON() ([]byte, error) { return common.EnumMarshal(k) }
-
-func (k *GraphEdgeKind) UnmarshalJSON(data []byte) error { return common.EnumAssign(k, data) }
-
 // Layer identifies which of the six cognitive memory layers a value belongs to.
 type Layer uint8
 
@@ -170,10 +150,6 @@ var layerNames = map[Layer]string{
 }
 
 func (l Layer) String() string { return common.EnumString(l, layerNames, "Layer") }
-
-func (l Layer) MarshalJSON() ([]byte, error) { return common.EnumMarshal(l) }
-
-func (l *Layer) UnmarshalJSON(data []byte) error { return common.EnumAssign(l, data) }
 
 type ProfileSlot struct {
 	IDHash          uint64            `json:"id_hash"`
