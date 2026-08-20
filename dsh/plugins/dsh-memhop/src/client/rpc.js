@@ -1,18 +1,23 @@
-// rpc.js — client → host RPC 桥（与 lib/index.js 的 /memhop/* 拦截器对应）。
-const NS = "memhop";
+// rpc.js — client → host RPC 桥（与 lib/index.js 的 handle("/memhop") 对应）。
+// 注意:必须用独立单段通道 "/memhop" 而非共享通道 "/api"。
+//  1. /api 共享通道的 intercept 只允许一个拦截器,dsh-api-gateway 已独占;
+//  2. handle() 的 assertChannel 只接受单段通道(/^\/[A-Za-z0-9._~-]+$/),
+//     "/api/memhop" 含斜杠会被直接拒绝。
+// 因此前端以 rpc.call("/memhop", "<method>") 走官方独立通道,
+// host 侧 connection.rpc.handle("/memhop", ...) 接收,互不冲突。
 
 /**
  * 调用一个 memhop 端点（经 host 桥转发到 core 服务）。
  * @param {object} rpc - client connection 的 rpc 调用器。
- * @param {string} method - 端点后缀（如 `session`、`agents`、`prefs`、`scene_list`）。
+ * @param {string} method - 端点名（如 `session`、`agents`、`prefs`、`scene_list`）。
  * @param {object} [args] - 工具参数。
  * @param {string} [agentId] - 目标 agent（缺省由 host 半自动选最活跃连接）。
  * @returns {Promise<*>} 工具结果值。
  */
 async function callMemhop(rpc, method, args, agentId) {
   const response = await rpc.call(
-    "/api",
-    `${NS}/${method}`,
+    "/memhop",
+    method,
     { args: agentId ? { ...(args ?? {}), agentId } : (args ?? {}) }
   );
   if (!response.ok) {

@@ -5,7 +5,7 @@ package index
 
 import (
 	"encoding/json"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -153,17 +153,16 @@ func (idx *L3Index) removeNodeLocked(nodeHash uint64, info *IndexedNode) {
 
 func loadAllL3Nodes(engine *core.StorageEngine) ([]*core.HypergraphNode, error) {
 	var nodes []*core.HypergraphNode
-	engine.IterIndex(func(idHash, _ uint64) bool {
+	for idHash := range engine.Index() {
 		rt, data, err := engine.ReadRecord(idHash)
 		if err != nil || rt != core.RecL3GraphNode {
-			return true
+			continue
 		}
 		var node core.HypergraphNode
 		if err := json.Unmarshal(data, &node); err == nil {
 			nodes = append(nodes, &node)
 		}
-		return true
-	})
+	}
 	return nodes, nil
 }
 
@@ -177,7 +176,7 @@ func intersectWithGraph(typeSet, graphSet map[uint64]bool, limit int) []uint64 {
 			out = append(out, h)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	if limit > 0 && len(out) > limit {
 		out = out[:limit]
 	}

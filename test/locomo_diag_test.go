@@ -5,6 +5,7 @@ package test
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -88,12 +89,12 @@ func TestLocomoFailDiag(t *testing.T) {
 			s.entityHit++
 		}
 		if ent < 0.5 && len(missSamples) < 8 {
-			sceneIDs := ""
+			var sceneIDs strings.Builder
 			for i := range res.Contexts {
-				sceneIDs += fmt.Sprintf("%d,", res.Contexts[i].SceneID)
+				sceneIDs.WriteString(fmt.Sprintf("%d,", res.Contexts[i].SceneID))
 			}
 			missSamples = append(missSamples, fmt.Sprintf("cat=%d | Q: %s | A: %s | ent=%.2f | scenes=[%s] | ctxTopics=%d",
-				qa.Category, qa.Question, qa.Answer, ent, sceneIDs, len(res.Contexts)))
+				qa.Category, qa.Question, qa.Answer, ent, sceneIDs.String(), len(res.Contexts)))
 		}
 	}
 	for cat, s := range stats {

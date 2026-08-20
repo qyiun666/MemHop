@@ -1,3 +1,208 @@
+window.__ModuleLoader__.load({
+	id: "@deepseek-ai/dsh-memhop",
+	factory: (require) => {
+		var module = { exports: {} };
+		var exports = module.exports;
+		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
+		let react = require("react");
+		let react_jsx_runtime = require("react/jsx-runtime");
+		/** React 绑定（源码用全局 React 名）。 */
+		const React = react;
+
+//#region src/client/theme.js
+// theme.js — 复用 DSH Web（DSW）的 CSS alias 变量，保证深浅色主题自适应。
+const c = {
+  bgPanel: "var(--dsw-alias-bg-layer-2)",
+  bgInput: "var(--dsw-alias-bg-layer-3)",
+  bgActive: "var(--dsw-alias-interactive-bg-active)",
+  border: "var(--dsw-alias-border-l2)",
+  textPrimary: "var(--dsw-alias-label-primary)",
+  textSecondary: "var(--dsw-alias-label-secondary)",
+  textTertiary: "var(--dsw-alias-label-tertiary)",
+  btnPrimary: "var(--dsw-alias-button-primary-fill)",
+  btnGhost: "var(--dsw-alias-button-ghost-active-fill)",
+  danger: "var(--dsw-static-red-500)",
+  success: "var(--dsw-static-green-500)",
+  chip: "var(--dsw-alias-markdown-inline-code)",
+  codeBg: "var(--dsw-alias-markdown-code-block)",
+  shadow: "var(--dsw-alias-bg-mask-3)",
+  brand: "var(--dsw-alias-brand-primary)",
+  fgOnPrimary: "var(--dsw-alias-label-primary-foreground)",
+};
+
+/** 面板 overlay 容器样式。 */
+const overlay = {
+  position: "fixed",
+  top: 0,
+  right: 0,
+  bottom: 0,
+  width: 460,
+  maxWidth: "94vw",
+  background: c.bgPanel,
+  color: c.textPrimary,
+  borderLeft: "1px solid " + c.border,
+  boxShadow: "-8px 0 24px " + c.shadow,
+  zIndex: 9999,
+  display: "flex",
+  flexDirection: "column",
+  fontSize: 13,
+};
+
+/** 通用小按钮。 */
+function buttonStyle(variant) {
+  const base = {
+    padding: "3px 10px",
+    borderRadius: 6,
+    border: "1px solid " + c.border,
+    background: variant === "primary" ? c.btnPrimary : variant === "danger" ? c.danger : c.bgInput,
+    color: variant === "primary" ? c.fgOnPrimary : variant === "danger" ? "#fff" : c.textPrimary,
+    cursor: "pointer",
+    fontSize: 12,
+    lineHeight: "18px",
+  };
+  if (variant === "primary") base.border = "none";
+  if (variant === "danger") base.border = "none";
+  return base;
+}
+
+/** 小号灰字。 */
+const muted = { fontSize: 11, color: c.textSecondary };
+/** 更弱灰字。 */
+const faint = { fontSize: 10, color: c.textTertiary };
+/** dream 压缩摘要话题徽标。 */
+const fusedBadge = {
+  display: "inline-block",
+  padding: "1px 6px",
+  borderRadius: 4,
+  fontSize: 10,
+  fontWeight: 700,
+  background: "rgba(255,180,0,0.18)",
+  color: "var(--dsw-static-orange-500, #e8930c)",
+  flexShrink: 0,
+};
+/** 等宽代码块。 */
+const mono = { fontFamily: "var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace)", fontSize: 11, wordBreak: "break-all" };
+/** 标签 chip。 */
+const chip = {
+  display: "inline-block",
+  padding: "1px 6px",
+  borderRadius: 4,
+  fontSize: 10,
+  background: c.chip,
+  color: c.textPrimary,
+  marginRight: 4,
+};
+/** 卡片容器。 */
+const card = {
+  background: c.bgInput,
+  border: "1px solid " + c.border,
+  borderRadius: 8,
+  padding: "8px 10px",
+  marginBottom: 8,
+};
+/** 输入框。 */
+const input = {
+  background: c.bgInput,
+  border: "1px solid " + c.border,
+  borderRadius: 6,
+  color: c.textPrimary,
+  padding: "4px 8px",
+  fontSize: 12,
+  width: "100%",
+  boxSizing: "border-box",
+};
+//#endregion
+
+//#region src/client/rpc.js
+// rpc.js — client → host RPC 桥（与 lib/index.js 的 handle("/memhop") 对应）。
+// 注意:必须用独立单段通道 "/memhop" 而非共享通道 "/api"。
+//  1. /api 共享通道的 intercept 只允许一个拦截器,dsh-api-gateway 已独占;
+//  2. handle() 的 assertChannel 只接受单段通道(/^\/[A-Za-z0-9._~-]+$/),
+//     "/api/memhop" 含斜杠会被直接拒绝。
+// 因此前端以 rpc.call("/memhop", "<method>") 走官方独立通道,
+// host 侧 connection.rpc.handle("/memhop", ...) 接收,互不冲突。
+
+/**
+ * 调用一个 memhop 端点（经 host 桥转发到 core 服务）。
+ * @param {object} rpc - client connection 的 rpc 调用器。
+ * @param {string} method - 端点名（如 `session`、`agents`、`prefs`、`scene_list`）。
+ * @param {object} [args] - 工具参数。
+ * @param {string} [agentId] - 目标 agent（缺省由 host 半自动选最活跃连接）。
+ * @returns {Promise<*>} 工具结果值。
+ */
+async function callMemhop(rpc, method, args, agentId) {
+  const response = await rpc.call(
+    "/memhop",
+    method,
+    { args: agentId ? { ...(args ?? {}), agentId } : (args ?? {}) }
+  );
+  if (!response.ok) {
+    throw new Error(`memhop.${method}: ${response.error?.message ?? "unknown error"}`);
+  }
+  return response.value;
+}
+
+/** 同 callMemhop，但把字符串结果按 JSON 解析后返回。 */
+async function callMemhopJson(rpc, method, args, agentId) {
+  const value = await callMemhop(rpc, method, args, agentId);
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+  return value;
+}
+
+/** 格式化时间为 `HH:MM:SS`。 */
+function fmtTime(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** 格式化时间为正式时间 `YYYY-MM-DD HH:MM:SS`（时间戳转可读时间）。 */
+function fmtFullTime(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms);
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
+/** 格式化毫秒时长为 `Xd Xh Xm Xs`（<=0 显示 —）。 */
+function fmtDuration(ms) {
+  if (!ms || ms <= 0) return "—";
+  const s = Math.floor(ms / 1000);
+  const parts = [];
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  if (days) parts.push(days + "d");
+  if (hours) parts.push(hours + "h");
+  if (mins) parts.push(mins + "m");
+  if (secs || parts.length === 0) parts.push(secs + "s");
+  return parts.join(" ");
+}
+
+/** 安全字符串化（Error → message，对象 → JSON，其他 → String）。 */
+function str(v) {
+  if (v instanceof Error) return v.message || String(v);
+  if (v === null || v === undefined) return "";
+  if (typeof v === "object") {
+    try {
+      return JSON.stringify(v);
+    } catch {
+      return String(v);
+    }
+  }
+  return String(v);
+}
+//#endregion
+
+//#region src/client/sections.js
 // sections.js — 面板各分区组件（状态自检/场景/知识/档案/能力/画像）。
 // 所有数据均来自当前会话的 memhop 数据库（agent 作用域工具）。
 
@@ -1083,3 +1288,568 @@ function SearchPrefsSection({ rpc, agentId, toast }) {
     )
   );
 }
+
+// ---------- 服务器管理(ServerSection)----------
+// RPC 端点:memhop/server(状态)、server/start、server/stop、
+// server/install、server/uninstall、server/logs。
+// 管理常驻 memhop-mcp 进程(launchd 或直启)与日志查看。
+
+function statusBadge(st) {
+  const ok = st && st.health === "ok" && st.running;
+  const color = ok ? c.success : st && st.health === "ok" ? c.brand : c.danger;
+  return React.createElement(
+    "span",
+    {
+      style: {
+        display: "inline-block",
+        padding: "2px 8px",
+        borderRadius: 10,
+        fontSize: 11,
+        fontWeight: 600,
+        color: "#fff",
+        background: color,
+      },
+    },
+    ok ? "运行中" : st && st.health === "ok" ? "进程外运行" : "已停止"
+  );
+}
+
+function ServerSection({ rpc, toast }) {
+  const [st, setSt] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [logs, setLogs] = React.useState(null);
+  const [err, setErr] = React.useState(null);
+
+  const refresh = React.useCallback(async () => {
+    setBusy(true);
+    try {
+      const s = await callMemhopJson(rpc, "server", {});
+      setSt(s);
+      setErr(null);
+    } catch (e) {
+      setErr(e);
+    }
+    setBusy(false);
+  }, [rpc]);
+
+  React.useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rpc]);
+
+  const act = async (method, label) => {
+    setBusy(true);
+    try {
+      const r = await callMemhopJson(rpc, method, {});
+      if (r && r.message) toast(label + ": " + r.message);
+      await refresh();
+    } catch (e) {
+      setErr(e);
+    }
+    setBusy(false);
+  };
+
+  const showLogs = async () => {
+    try {
+      setLogs(await callMemhopJson(rpc, "server/logs", { limit: 80 }));
+    } catch (e) {
+      setErr(e);
+    }
+  };
+
+  const kv = (label, value, extraStyle) =>
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, fontSize: 11, lineHeight: "18px", alignItems: "baseline" } },
+      React.createElement("span", { style: { color: c.textSecondary, minWidth: 100 } }, label),
+      React.createElement("span", { style: { color: c.textPrimary, wordBreak: "break-all", ...(extraStyle || {}) } }, value === null || value === undefined ? "—" : String(value))
+    );
+
+  return React.createElement(
+    "div",
+    { style: { display: "flex", flexDirection: "column", gap: 10 } },
+    React.createElement(SectionHeader, { title: "memhop-mcp 服务器", onReload: refresh, loading: busy }),
+    !st && !err
+      ? React.createElement(Loading, { label: "服务器状态" })
+      : err
+        ? React.createElement(ErrBox, { error: err })
+        : React.createElement(
+            React.Fragment,
+            null,
+            React.createElement(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "8px 10px",
+                  border: "1px solid " + c.border,
+                  borderRadius: 8,
+                  background: c.bgInput,
+                },
+              },
+              statusBadge(st),
+              React.createElement("span", { style: { fontSize: 11, color: c.textSecondary } }, "spawnMode: " + st.spawnMode + " · port " + st.port),
+              st.pids && st.pids.length > 0
+                ? React.createElement("span", { style: { fontSize: 11, color: c.textSecondary } }, "pid " + st.pids.join(", "))
+                : null
+            ),
+            React.createElement(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  gap: 6,
+                  flexWrap: "wrap",
+                },
+              },
+              React.createElement("button", { type: "button", style: buttonStyle("primary"), onClick: () => act("server/start", "启动"), disabled: busy }, "启动"),
+              React.createElement("button", { type: "button", style: buttonStyle(), onClick: () => act("server/stop", "停止"), disabled: busy }, "停止"),
+              React.createElement("button", { type: "button", style: buttonStyle(), onClick: () => act("server/install", "安装 launchd"), disabled: busy }, "安装 launchd"),
+              React.createElement("button", { type: "button", style: buttonStyle(), onClick: () => act("server/uninstall", "卸载 launchd"), disabled: busy }, "卸载 launchd"),
+              React.createElement("button", { type: "button", style: buttonStyle(), onClick: showLogs, disabled: busy }, logs ? "刷新日志" : "查看日志")
+            ),
+            React.createElement(
+              "div",
+              { style: { padding: "8px 10px", border: "1px solid " + c.border, borderRadius: 8, background: c.bgInput } },
+              kv("健康", st.health),
+              kv("launchd", (st.launchdInstalled ? "已安装" : "未安装") + (st.launchdLoaded ? "(已加载)" : "")),
+              kv("label", st.launchdLabel),
+              kv("dbDir", st.dbDir),
+              kv("bin", st.serverBin),
+              kv("wrapper", st.wrapper || "(无)"),
+              kv("env", st.envPresent ? "已注入" : "未找到 server.env")
+            ),
+            logs
+              ? React.createElement(
+                  React.Fragment,
+                  null,
+                  React.createElement(
+                    "div",
+                    { style: { fontSize: 11, color: c.textSecondary, marginTop: 4 } },
+                    "stdout 尾部:"
+                  ),
+                  React.createElement(
+                    "pre",
+                    { style: { ...codeBlockStyle, maxHeight: 140, overflow: "auto", fontSize: 10, lineHeight: "14px", whiteSpace: "pre-wrap", wordBreak: "break-all" } },
+                    logs.out || "(空)"
+                  ),
+                  React.createElement(
+                    "div",
+                    { style: { fontSize: 11, color: c.textSecondary, marginTop: 8 } },
+                    "stderr 尾部:"
+                  ),
+                  React.createElement(
+                    "pre",
+                    { style: { ...codeBlockStyle, maxHeight: 140, overflow: "auto", fontSize: 10, lineHeight: "14px", whiteSpace: "pre-wrap", wordBreak: "break-all" } },
+                    logs.err || "(空)"
+                  )
+                )
+              : null
+          )
+  );
+}
+//#endregion
+
+//#region src/client/Panel.js
+// Panel.js — 主面板：顶栏（agent 选择 + 巩固操作）+ 页签容器。
+
+const TABS = [
+  { id: "status", label: "状态" },
+  { id: "search", label: "搜索" },
+  { id: "scene", label: "场景" },
+  { id: "knowledge", label: "知识" },
+  { id: "archive", label: "档案" },
+  { id: "capability", label: "能力" },
+  { id: "profile", label: "画像" },
+  { id: "sleep", label: "睡眠" },
+  { id: "server", label: "服务器" },
+];
+
+const tabStyle = (active) => ({
+  padding: "5px 10px",
+  borderRadius: 6,
+  border: "none",
+  background: active ? c.bgActive : "transparent",
+  color: active ? c.textPrimary : c.textSecondary,
+  cursor: "pointer",
+  fontSize: 12,
+  fontWeight: active ? 600 : 400,
+});
+
+/**
+ * MemHop 记忆面板（P4 重做）：
+ * - 状态页签：会话数据库自检（session + L0/L2/L3/L4/L5 读取工具连通性）
+ * - 搜索页签：自动 search 参数偏好（auto_create / 定向 L2 / 定向 L3），
+ *   保存后每轮发送对话都会携带这些参数
+ * - 场景/知识/档案/能力/画像：浏览选中 agent 的 .meh 数据库各层内容
+ * - 睡眠页签：勾选内存中的场景执行巩固（dream），可全选
+ * - 顶栏：agent 选择器（多会话切换）
+ * 记忆循环（search/update）由宿主自动执行，面板只做浏览与管理。
+ */
+function MemhopPanel({ rpc, sessions, sessionId, onClose }) {
+  const [tab, setTab] = React.useState("status");
+  const [toastMsg, setToastMsg] = React.useState(null);
+  const [agents, setAgents] = React.useState([]);
+  // 会话 tab 场景：初始即当前会话（agentId === sessionId，1:1）。
+  const [agentId, setAgentId] = React.useState(sessionId || null);
+  const [agentsError, setAgentsError] = React.useState(null);
+  // 用户手动切换过 agent 后暂停自动跟随（重开面板恢复跟随）。
+  const manualRef = React.useRef(false);
+
+  // 会话 tab 由 conversation.view 注入 sessionId：切换会话时面板自动跟随。
+  React.useEffect(() => {
+    if (sessionId && !manualRef.current) {
+      setAgentId((prev) => (prev === sessionId ? prev : sessionId));
+    }
+  }, [sessionId]);
+
+  // 跟随 DSH 当前激活的会话：agentId === sessionId（1:1）。
+  // sessions.list 是 client runtime 的 snapshot store，current 即当前选中会话。
+  React.useEffect(() => {
+    if (!sessions || !sessions.list) return;
+    const apply = (state) => {
+      const cur = state && state.current;
+      if (cur && !manualRef.current) {
+        setAgentId((prev) => (prev === cur ? prev : cur));
+      }
+    };
+    apply(sessions.list.getSnapshot());
+    return sessions.list.subscribe(apply);
+  }, [sessions]);
+
+  // 加载 agent 连接列表（host 半按 lastSearchAt 排序），作为跟随的兜底：
+  // sessions 不可用或未选中会话时，默认选最活跃的已就绪连接。
+  React.useEffect(() => {
+    let alive = true;
+    callMemhopJson(rpc, "agents", {})
+      .then((list) => {
+        if (!alive) return;
+        const arr = Array.isArray(list) ? list : [];
+        setAgents(arr);
+        if (!manualRef.current && arr.length > 0) {
+          setAgentId((prev) => prev || arr[0].agentId);
+        }
+      })
+      .catch((e) => {
+        if (alive) setAgentsError(e);
+      });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rpc]);
+
+  const toast = (msg) => {
+    setToastMsg(String(msg));
+    setTimeout(() => setToastMsg(null), 3000);
+  };
+
+  const sectionProps = { rpc, agentId, toast };
+  const currentAgent = agents.find((a) => a.agentId === agentId);
+
+  // tab 场景（onClose 为空）渲染为会话内页面：撑满容器；弹层场景保持 fixed 侧栏。
+  const rootStyle = onClose
+    ? overlay
+    : { ...overlay, position: "relative", width: "100%", maxWidth: "none", height: "100%", minHeight: 0, borderLeft: "none", boxShadow: "none" };
+
+  return React.createElement(
+    "div",
+    { style: rootStyle },
+    // 顶栏
+    React.createElement(
+      "div",
+      {
+        style: {
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "10px 12px",
+          borderBottom: "1px solid " + c.border,
+          background: c.bgInput,
+        },
+      },
+      React.createElement("span", { "aria-hidden": true, style: { fontSize: 15 } }, "🧠"),
+      React.createElement("span", { style: { fontWeight: 700, fontSize: 13 } }, "MemHop 记忆面板"),
+      React.createElement(
+        "select",
+        {
+          style: { ...input, flex: 1, minWidth: 0, fontSize: 11, padding: "3px 6px" },
+          value: agentId || "",
+          onChange: (e) => {
+            manualRef.current = true;
+            setAgentId(e.target.value || null);
+          },
+          title: "目标会话（agent）——所有页签操作都作用于该会话的 .meh 数据库（默认跟随 DSH 当前会话）",
+        },
+        agents.length === 0
+          ? React.createElement("option", { value: "" }, agentsError ? "加载失败" : "加载中…")
+          : agents.map((a) =>
+              React.createElement(
+                "option",
+                { key: a.agentId, value: a.agentId },
+                (a.ready ? "● " : "○ ") + String(a.agentId).slice(0, 13) + "…"
+              )
+            )
+      ),
+      onClose
+        ? React.createElement(
+            "button",
+            {
+              type: "button",
+              style: { ...buttonStyle(), padding: "3px 8px", fontSize: 13, lineHeight: "16px" },
+              onClick: onClose,
+              title: "关闭面板",
+            },
+            "✕"
+          )
+        : null
+    ),
+    currentAgent && currentAgent.dbPath
+      ? React.createElement(
+          "div",
+          { style: { ...faint, padding: "4px 12px", borderBottom: "1px solid " + c.border, fontSize: 10, wordBreak: "break-all" } },
+          "db: " + currentAgent.dbPath
+        )
+      : null,
+    // 页签
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 2, padding: "8px 12px 0", borderBottom: "1px solid " + c.border } },
+      TABS.map((t) =>
+        React.createElement(
+          "button",
+          { key: t.id, type: "button", style: tabStyle(tab === t.id), onClick: () => setTab(t.id) },
+          t.label
+        )
+      )
+    ),
+    // 内容
+    React.createElement(
+      "div",
+      { style: { flex: 1, overflowY: "auto", padding: 10 } },
+      !agentId
+        ? React.createElement(
+            "div",
+            { style: { ...faint, padding: 12 } },
+            agentsError ? "加载 agent 列表失败: " + str(agentsError) : "等待 agent 连接…"
+          )
+        : React.createElement(
+            React.Fragment,
+            null,
+            tab === "status" ? React.createElement(StatusSection, sectionProps) : null,
+            tab === "search" ? React.createElement(SearchPrefsSection, sectionProps) : null,
+            tab === "scene" ? React.createElement(SceneSection, sectionProps) : null,
+            tab === "knowledge" ? React.createElement(KnowledgeSection, sectionProps) : null,
+            tab === "archive" ? React.createElement(ArchiveSection, sectionProps) : null,
+            tab === "capability" ? React.createElement(CapabilitySection, sectionProps) : null,
+            tab === "profile" ? React.createElement(ProfileSection, sectionProps) : null,
+            tab === "sleep" ? React.createElement(SleepSection, sectionProps) : null,
+            tab === "server" ? React.createElement(ServerSection, sectionProps) : null
+          )
+    ),
+    // Toast
+    toastMsg
+      ? React.createElement(
+          "div",
+          {
+            style: {
+              position: "absolute",
+              bottom: 16,
+              left: 12,
+              right: 12,
+              background: c.bgInput,
+              border: "1px solid " + c.border,
+              borderRadius: 8,
+              padding: "8px 12px",
+              fontSize: 12,
+              boxShadow: "0 4px 16px " + c.shadow,
+              wordBreak: "break-word",
+            },
+          },
+          toastMsg
+        )
+      : null
+  );
+}
+
+
+/**
+ * 会话内 tab 视图（conversation.view id="memhop"）：
+ * 出现在对话 / 轨迹旁边，天然跟随当前会话——inject 直接携带 sessionId
+ * （agentId === sessionId，1:1），DSH 切到哪个会话，这个 tab 就属于哪个会话。
+ */
+function MemhopTab({ rpc, sessionId }) {
+  return React.createElement(
+    "div",
+    { style: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0, position: "relative" } },
+    React.createElement(MemhopPanel, { rpc, sessionId })
+  );
+}
+//#endregion
+
+//#region src/client/SearchChip.js
+// SearchChip.js — 输入框（conversation.composer.dock）内的自动 search 参数指示条。
+// 实时显示当前会话的检索偏好：auto_create 开/关 + 定向 L2 场景 + 定向 L3 图谱，
+// 保存后（面板广播 memhop:prefs-saved 事件）立即刷新。
+// 错误处理原则：失败就显示错误，不做退避重试、不静默吞错。
+
+const chipStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  fontSize: 11,
+  lineHeight: "16px",
+  color: "var(--dsw-alias-label-tertiary)",
+  background: "var(--dsw-alias-interactive-bg-hover)",
+  borderRadius: 999,
+  padding: "0 8px",
+  whiteSpace: "nowrap",
+};
+
+const chipActiveStyle = {
+  ...chipStyle,
+  color: "var(--dsw-alias-state-business-primary)",
+};
+
+function SearchPrefsChip({ rpc, sessionId }) {
+  const [prefs, setPrefs] = React.useState(null);
+  const [scenes, setScenes] = React.useState([]);
+  const [graphs, setGraphs] = React.useState([]);
+  const [error, setError] = React.useState(null);
+
+  // 一次性加载：任一请求失败立即显示真实错误，不重试。
+  const load = React.useCallback(() => {
+    if (!rpc || !sessionId) return undefined;
+    let alive = true;
+    callMemhopJson(rpc, "prefs", {}, sessionId)
+      .then((v) => {
+        if (alive) setPrefs(v || {});
+      })
+      .catch((e) => {
+        if (alive) setError(e);
+      });
+    callMemhopJson(rpc, "scene_list", {}, sessionId)
+      .then((v) => {
+        if (alive) setScenes(Array.isArray(v) ? v : []);
+      })
+      .catch((e) => {
+        if (alive) setError(e);
+      });
+    callMemhopJson(rpc, "knowledge_list", {}, sessionId)
+      .then((v) => {
+        if (alive) setGraphs(Array.isArray(v) ? v : []);
+      })
+      .catch((e) => {
+        if (alive) setError(e);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [rpc, sessionId]);
+
+  // 挂载或会话切换时加载。
+  React.useEffect(() => {
+    return load();
+  }, [load]);
+
+  // 面板「保存 search 参数」成功后广播，这里同步刷新。
+  React.useEffect(() => {
+    const onSaved = () => {
+      setError(null);
+      load();
+    };
+    window.addEventListener("memhop:prefs-saved", onSaved);
+    return () => window.removeEventListener("memhop:prefs-saved", onSaved);
+  }, [load]);
+
+  if (!rpc || !sessionId) return null;
+
+  const p = prefs || {};
+  const autoOn = p.autoCreate === true; // 默认关闭
+  const scene = scenes.find((s) => s.scene_id === p.directedL2Id);
+  const graph = graphs.find((g) => g.id_hash === p.directedL3Id);
+
+  const chip = (text, active) =>
+    React.createElement(
+      "span",
+      { style: active ? chipActiveStyle : chipStyle, title: text },
+      text
+    );
+
+  return React.createElement(
+    "div",
+    { style: { display: "flex", alignItems: "center", gap: 6, padding: "2px 10px", minWidth: 0, overflow: "hidden" } },
+    React.createElement("span", { style: { fontSize: 11, color: "var(--dsw-alias-label-tertiary)", flex: "none" } }, "🧠"),
+    error
+      ? React.createElement(
+          "span",
+          { style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary)" }, title: str(error) },
+          "检索参数加载失败: " + str(error)
+        )
+      : prefs === null
+        ? React.createElement("span", { style: { fontSize: 11, color: "var(--dsw-alias-label-tertiary)" } }, "加载中…")
+        : React.createElement(
+            React.Fragment,
+            null,
+            chip(autoOn ? "auto_create: 开" : "auto_create: 关", autoOn),
+            chip("场景: " + (scene ? scene.scene_name : "不限定"), !!scene),
+            chip("图谱: " + (graph ? graph.name : "不限定"), !!graph)
+          )
+  );
+}
+//#endregion
+
+//#region src/client/index.js
+// index.js — client 插件入口：注册侧边栏底部触发器。
+// 上下文按结构使用（无 cordis 类型导入），保持 bundle 自包含。
+
+// 依赖 sessions 服务（client runtime 提供）：面板跟随 DSH 当前激活的会话
+// （agentId === sessionId，1:1），切换会话时面板自动切换目标数据库。
+const inject = ["connection", "slots", "sessions"];
+
+function apply(ctx) {
+  // 入口 0：输入框（composer dock）内的自动 search 参数指示条——
+  // 会话级 slot，inject 携带 sessionId；面板保存参数后经 window 事件刷新。
+  ctx.slots.inject("conversation.composer.dock", () =>
+    ctx.slots.register(
+      {
+        name: "conversation.composer.dock",
+        id: "memhop-search-prefs",
+        order: 10,
+        inject: (sessionId) => ({ rpc: ctx.connection.rpc, sessionId }),
+      },
+      SearchPrefsChip
+    )
+  );
+  // 入口 1（主）：会话内 tab —— 对话 / 轨迹旁边出现「记忆」tab，
+  // inject 直接携带 sessionId，天然跟随当前会话（agentId === sessionId）。
+  ctx.slots.inject("conversation.view", () =>
+    ctx.slots.register(
+      {
+        name: "conversation.view",
+        id: "memhop",
+        order: 20,
+        label: "记忆",
+        inject: (sessionId) => ({ rpc: ctx.connection.rpc, sessionId }),
+      },
+      MemhopTab
+    )
+  );
+}
+
+module.exports = {
+  MemhopPanel,
+  MemhopTab,
+  SearchPrefsChip,
+  apply,
+  inject,
+  callMemhop,
+  callMemhopJson,
+};
+//#endregion
+
+		return module.exports;
+	}
+});

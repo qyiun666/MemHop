@@ -30,7 +30,13 @@ func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error)
 	}
 	// Validate the topic before any write or LLM call: a missing topic must
 	// not leave an orphan L4 archive behind.
-	topics, err := repo.ListTopicsL2(db.engine, topicID, 0, 3)
+	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+		Engine:  db.engine,
+		MetaIdx: db.l2Meta,
+		SceneID: topicID,
+		Depth:   0,
+		Num:     3,
+	})
 	if err != nil {
 		return false, err
 	}
@@ -54,6 +60,8 @@ func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error)
 	}
 	// Update BM25: uncompressed topics carry User+Agent keywords (compressed
 	// use FusedKeywords); topic.AgentKeywords is stale here, use fresh ones.
+	// Refresh the L2Meta entry first per the storage → l2meta → sparse order.
+	db.syncL2Meta(parsedID)
 	all := make([]string, 0, len(topic.UserKeywords)+len(keywords)+len(topic.FusedKeywords))
 	all = append(all, topic.UserKeywords...)
 	all = append(all, keywords...)

@@ -7,18 +7,18 @@ package core
 
 import (
 	"os"
-	"syscall"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"golang.org/x/sys/unix"
 )
 
 func MapFile(f *os.File, size int) ([]byte, error) {
 	if size == 0 {
 		return nil, nil
 	}
-	data, err := syscall.Mmap(int(f.Fd()), 0, size,
-		syscall.PROT_READ,
-		syscall.MAP_SHARED)
+	data, err := unix.Mmap(int(f.Fd()), 0, size,
+		unix.PROT_READ,
+		unix.MAP_SHARED)
 	if err != nil {
 		return nil, common.NewError(common.ErrIO, "mmap failed", err)
 	}
@@ -29,7 +29,7 @@ func UnmapFile(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
-	if err := syscall.Munmap(data); err != nil {
+	if err := unix.Munmap(data); err != nil {
 		return common.NewError(common.ErrIO, "munmap failed", err)
 	}
 	return nil

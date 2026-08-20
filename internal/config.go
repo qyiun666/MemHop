@@ -149,5 +149,9 @@ func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 		encoder:     enc,
 	}
 	db.l1Reverse.Store(l1Rev)
+	// L2Meta is not snapshot-persisted (snapshot format is fixed), so it is
+	// rebuilt once at Open with a single RecL2Topic scan; after that all
+	// candidate listing serves from memory.
+	db.l2Meta = index.BuildL2MetaFromEngine(engine)
 	return db, nil
 }

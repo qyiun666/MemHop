@@ -66,6 +66,8 @@ func (db *DB) Search(q SearchQuery) (*SearchResult, error) {
 		return nil, err
 	}
 	// Add the new topic to the sparse index (only when created this round).
+	// L2Meta was already refreshed inside createTopicInScene (before the
+	// depth<=1 listing); sparse comes last per storage → l2meta → sparse.
 	if newTopicID != 0 {
 		terms := index.Tokenize(strings.Join(keywords, " "))
 		db.sparseIndex.AddDocument(newTopicID, terms, uint32(len(terms)))
@@ -103,7 +105,7 @@ func (db *DB) searchDirected(q SearchQuery, keywords []string) ([]core.TopicSlot
 // creates a topic in the top scene (or a new one), and returns the scene's
 // depth<=1 topics plus the new topic ID.
 func (db *DB) searchNormal(q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
-	hit, err := TopScene(context.Background(), db.engine, db.sparseIndex, db.encoder,
+	hit, err := TopScene(context.Background(), db.engine, db.l2Meta, db.sparseIndex, db.encoder,
 		q.Text, keywords, db.activeScenes, &db.config.Defaults, db.config.Defaults.MinSceneScore, q.DirectedL3ID)
 	if err != nil {
 		return nil, 0, err
@@ -149,7 +151,17 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 			return nil, 0, common.NewError(common.ErrIO, "link topic l3 refs", nil)
 		}
 	}
-	latest, err := repo.ListTopicsL2(db.engine, common.FormatHash(sceneID), 1, 2)
+	// Refresh the L2Meta entry before the listing below so the newly
+	// created topic is part of the returned Contexts (all three routes flow
+	// through here). Lock order: storage writes above → l2meta → sparse.
+	db.syncL2Meta(topicID)
+	latest, err := repo.ListTopicsL2(repo.TopicListQuery{
+		Engine:  db.engine,
+		MetaIdx: db.l2Meta,
+		SceneID: common.FormatHash(sceneID),
+		Depth:   1,
+		Num:     2,
+	})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -173,7 +185,13 @@ func (db *DB) associatedContexts(sceneID uint64) []core.TopicSlot {
 	counts := make(map[uint64]int)
 	for _, node := range nodes {
 		for _, topicID := range node.TopicIDs {
-			ts, err := repo.ListTopicsL2(db.engine, common.FormatHash(topicID), 0, 3)
+			ts, err := repo.ListTopicsL2(repo.TopicListQuery{
+				Engine:  db.engine,
+				MetaIdx: db.l2Meta,
+				SceneID: common.FormatHash(topicID),
+				Depth:   0,
+				Num:     3,
+			})
 			if err != nil {
 				continue
 			}
@@ -189,7 +207,13 @@ func (db *DB) associatedContexts(sceneID uint64) []core.TopicSlot {
 			bestScene, bestCount = sid, n
 		}
 	}
-	topics, err := repo.ListTopicsL2(db.engine, common.FormatHash(bestScene), 1, 2)
+	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+		Engine:  db.engine,
+		MetaIdx: db.l2Meta,
+		SceneID: common.FormatHash(bestScene),
+		Depth:   1,
+		Num:     2,
+	})
 	if err != nil {
 		return []core.TopicSlot{}
 	}

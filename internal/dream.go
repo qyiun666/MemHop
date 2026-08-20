@@ -95,6 +95,7 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 
 	// Final: rebuild the reverse index after L1 mutations and install into db.
 	db.sparseIndex = newSparse
+	db.l2Meta = newL2Meta
 	db.l1Reverse.Store(index.BuildL1ReverseIndex(db.engine))
 	return true, nil
 }
@@ -113,7 +114,13 @@ func (db *DB) compressActiveScenes(ctx context.Context, scenes []uint64) (uint32
 		wg.Add(1)
 		go func(sceneID uint64) {
 			defer wg.Done()
-			topics, err := repo.ListTopicsL2(db.engine, common.FormatHash(sceneID), 1, 2)
+			topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+				Engine:  db.engine,
+				MetaIdx: db.l2Meta,
+				SceneID: common.FormatHash(sceneID),
+				Depth:   1,
+				Num:     2,
+			})
 			if err != nil {
 				return
 			}

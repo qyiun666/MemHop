@@ -23,8 +23,23 @@ func BuildL1ReverseIndex(engine *core.StorageEngine) *L1ReverseIndex {
 	return l1Reverse
 }
 
+// BuildL2MetaFromEngine scans only RecL2Topic records and fills an
+// L2MetaIndex; corrupt or unparsable records are skipped (same tolerance
+// as buildIndexesFromEngine). Used at Open time, where sparse/L1Reverse
+// come from the snapshot instead.
 func BuildL2MetaFromEngine(engine *core.StorageEngine) *L2MetaIndex {
-	_, _, l2Meta := buildIndexesFromEngine(engine)
+	l2Meta := NewL2MetaIndex()
+	for idHash := range engine.IndexByType(core.RecL2Topic) {
+		_, data, err := engine.ReadRecord(idHash)
+		if err != nil {
+			continue // skip corrupt records
+		}
+		var topic topicSlotJSON
+		if json.Unmarshal(data, &topic) != nil {
+			continue // skip unparsable records
+		}
+		l2Meta.insertMeta(topicToL2Meta(idHash, &topic))
+	}
 	return l2Meta
 }
 
@@ -34,10 +49,10 @@ func buildIndexesFromEngine(engine *core.StorageEngine) (*SparseIndex, *L1Revers
 	sparse := NewSparseIndex()
 	l1Reverse := NewL1ReverseIndex()
 	l2Meta := NewL2MetaIndex()
-	engine.IterIndex(func(idHash, _ uint64) bool {
+	for idHash := range engine.Index() {
 		rt, data, err := engine.ReadRecord(idHash)
 		if err != nil {
-			return true // skip corrupt records
+			continue // skip corrupt records
 		}
 		switch rt {
 		case core.RecL1SceneNode:
@@ -48,7 +63,7 @@ func buildIndexesFromEngine(engine *core.StorageEngine) (*SparseIndex, *L1Revers
 		case core.RecL2Topic:
 			var topic topicSlotJSON
 			if json.Unmarshal(data, &topic) != nil {
-				return true // skip unparsable records
+				continue // skip unparsable records
 			}
 			if topic.Depth <= 2 {
 				// Uncompressed topics carry User+Agent keywords; compressed ones carry FusedKeywords.
@@ -64,7 +79,6 @@ func buildIndexesFromEngine(engine *core.StorageEngine) (*SparseIndex, *L1Revers
 			}
 			l2Meta.insertMeta(topicToL2Meta(idHash, &topic))
 		}
-		return true
-	})
+	}
 	return sparse, l1Reverse, l2Meta
 }

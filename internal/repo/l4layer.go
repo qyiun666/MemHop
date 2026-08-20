@@ -4,8 +4,9 @@
 package repo
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -54,7 +55,9 @@ func QueryArchiveL4(engine *core.StorageEngine, num uint8, keyword string, start
 				out = append(out, arc)
 			}
 		}
-		sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt < out[j].CreatedAt })
+		slices.SortFunc(out, func(a, b core.ArchiveSlot) int {
+			return cmp.Compare(a.CreatedAt, b.CreatedAt)
+		})
 		return out
 	case 3: // by id
 		var out []core.ArchiveSlot

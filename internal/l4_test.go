@@ -80,9 +80,10 @@ func TestSearchL4TopicFilter(t *testing.T) {
 	}
 
 	// Invalid TopicID errors.
-	if _, err := db.SearchL4(L4Query{Keyword: "rust", TopicID: strPtr("nothex")}); err == nil {
+	if _, err := db.SearchL4(L4Query{Keyword: "rust", TopicID: new("nothex")}); err == nil {
 		t.Fatal("want error for invalid topic id")
 	}
 }
 
-func strPtr(s string) *string { return &s }
+//go:fix inline
+func strPtr(s string) *string { return new(s) }

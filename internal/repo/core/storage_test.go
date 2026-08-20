@@ -60,7 +60,7 @@ func TestABHeaderSwitch(t *testing.T) {
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	eng.WriteRecord(RecL1SceneNode, 1, []byte("a"))
 	snap := &IndexSnapshotData{SparseData: []byte("s")}
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		if err := eng.Checkpoint(snap); err != nil {
 			t.Fatal(err)
 		}
@@ -266,33 +266,31 @@ func TestConcurrentReadWrite(t *testing.T) {
 	}
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	// Seed some records.
-	for i := uint64(0); i < 100; i++ {
-		eng.WriteRecord(RecL0Profile, i, []byte(fmt.Sprintf("seed-%d", i)))
+	for i := range uint64(100) {
+		eng.WriteRecord(RecL0Profile, i, fmt.Appendf(nil, "seed-%d", i))
 	}
 	var wg sync.WaitGroup
 	// Concurrent readers.
-	for g := 0; g < 5; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for i := uint64(0); i < 100; i++ {
+	for range 5 {
+		wg.Go(func() {
+			for i := range uint64(100) {
 				eng.ReadRecord(i)
 			}
-		}()
+		})
 	}
 	// Concurrent writers (base 1,2,3 to avoid overlapping with seed 0-99).
 	for g := 1; g <= 3; g++ {
 		wg.Add(1)
 		go func(base uint64) {
 			defer wg.Done()
-			for i := uint64(0); i < 50; i++ {
-				eng.WriteRecord(RecL2Topic, base*1000+i, []byte(fmt.Sprintf("w-%d", i)))
+			for i := range uint64(50) {
+				eng.WriteRecord(RecL2Topic, base*1000+i, fmt.Appendf(nil, "w-%d", i))
 			}
 		}(uint64(g))
 	}
 	wg.Wait()
 	// Verify all seed records intact.
-	for i := uint64(0); i < 100; i++ {
+	for i := range uint64(100) {
 		if !eng.Contains(i) {
 			t.Fatalf("seed record %d missing", i)
 		}
@@ -344,7 +342,7 @@ func TestFileSize(t *testing.T) {
 	}
 }
 
-func TestContainsAndIterIndex(t *testing.T) {
+func TestContainsAndIndex(t *testing.T) {
 	p := tempPath(t, "iter")
 	eng, err := Create(p, 768)
 	if err != nil {
@@ -359,10 +357,9 @@ func TestContainsAndIterIndex(t *testing.T) {
 		t.Fatal("should not contain 99")
 	}
 	count := 0
-	eng.IterIndex(func(idHash, offset uint64) bool {
+	for range eng.Index() {
 		count++
-		return true
-	})
+	}
 	if count != 1 {
 		t.Fatalf("iter count: %d", count)
 	}
@@ -455,21 +452,22 @@ func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 	}
 }
 
-func TestIterIndexCallbackMayReadRecord(t *testing.T) {
+func TestIndexCallbackMayReadRecord(t *testing.T) {
 	p := tempPath(t, "iterlock")
 	eng, err := Create(p, 768)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := uint64(0); i < 10; i++ {
-		eng.WriteRecord(RecL0Profile, i, []byte(fmt.Sprintf("v%d", i)))
+	for i := range uint64(10) {
+		eng.WriteRecord(RecL0Profile, i, fmt.Appendf(nil, "v%d", i))
 	}
-	// Queue a writer during iteration. Under the old implementation (fn
-	// invoked with RLock held) the waiting writer would make fn's recursive
-	// RLock deadlock.
+	// Queue a writer during iteration. Under the old callback-based
+	// implementation (fn invoked with RLock held) the waiting writer would
+	// make fn's recursive RLock deadlock; the iterator copies the index
+	// under RLock and yields lock-free, so engine methods stay callable.
 	writerDone := make(chan struct{})
 	first := true
-	eng.IterIndex(func(idHash, offset uint64) bool {
+	for idHash := range eng.Index() {
 		if first {
 			first = false
 			go func() {
@@ -481,20 +479,21 @@ func TestIterIndexCallbackMayReadRecord(t *testing.T) {
 		if _, _, err := eng.ReadRecord(idHash); err != nil {
 			t.Errorf("ReadRecord(%d): %v", idHash, err)
 		}
-		return true
-	})
+	}
 	<-writerDone
 	if !eng.Contains(999) {
 		t.Fatal("queued writer record missing")
 	}
-	// fn returning false stops iteration.
+	// yield returning false stops iteration.
 	count := 0
-	eng.IterIndex(func(idHash, offset uint64) bool {
+	for range eng.Index() {
 		count++
-		return count < 3
-	})
+		if count >= 3 {
+			break
+		}
+	}
 	if count != 3 {
-		t.Fatalf("early stop: want 3 callbacks, got %d", count)
+		t.Fatalf("early stop: want 3 yields, got %d", count)
 	}
 	eng.Close(&IndexSnapshotData{})
 }

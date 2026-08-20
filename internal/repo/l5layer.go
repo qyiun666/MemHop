@@ -7,7 +7,7 @@
 package repo
 
 import (
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -159,6 +159,6 @@ func CapabilityIDsFromNames(names []string) []uint64 {
 	for _, name := range names {
 		ids = append(ids, core.CapabilityID(name))
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	return ids
 }

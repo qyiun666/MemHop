@@ -57,8 +57,8 @@ func New(cfg *MemHopConfig) *Provider {
 // 并剥离可能传入的完整 /chat/completions 后缀（SDK 会重新拼接）。
 func normalizeBaseURL(raw string) string {
 	u := strings.TrimRight(strings.TrimSpace(raw), "/")
-	if strings.HasSuffix(u, "/chat/completions") {
-		u = strings.TrimSuffix(u, "/chat/completions")
+	if before, ok := strings.CutSuffix(u, "/chat/completions"); ok {
+		u = before
 	}
 	if !strings.HasSuffix(u, "/v1") {
 		u += "/v1"

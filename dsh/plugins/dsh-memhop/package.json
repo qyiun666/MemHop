@@ -1,0 +1,30 @@
+{
+  "name": "@deepseek-ai/dsh-memhop",
+  "version": "1.0.0",
+  "description": "MemHop memory subsystem for DSH — single plugin: control plane (per-agent .meh connections, 31 mcp__memhop__* tools, automatic search/update/dream lifecycle), memory snapshot in the system prompt, history window control, memhop-mcp server & launchd management, and the web memory panel (scene/knowledge/archive/capability/profile/sleep/server).",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": { "default": "./lib/index.js" },
+    "./client": { "default": "./lib/client.js" },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "harness": {
+      "inject": ["tools", "systemPrompt", "agents", "connection"]
+    },
+    "client": {
+      "inject": ["connection", "slots", "sessions"],
+      "platform": "web"
+    }
+  },
+  "scripts": {
+    "bundle": "node scripts/bundle.mjs",
+    "check": "node --check lib/index.js && node --check lib/client.js",
+    "install": "node scripts/install.mjs"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^"
+  }
+}

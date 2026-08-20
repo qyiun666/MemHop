@@ -65,8 +65,8 @@ func TestStreamableMultiTenant(t *testing.T) {
 		sc := bufio.NewScanner(resp.Body)
 		for sc.Scan() {
 			line := sc.Text()
-			if strings.HasPrefix(line, "data: ") {
-				data = append(data, strings.TrimPrefix(line, "data: ")...)
+			if after, ok := strings.CutPrefix(line, "data: "); ok {
+				data = append(data, after...)
 			}
 		}
 		if err := sc.Err(); err != nil {

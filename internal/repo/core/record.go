@@ -7,6 +7,8 @@ package core
 
 import (
 	"encoding/json"
+	"iter"
+	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
@@ -32,17 +34,20 @@ func writeJSON[T any](engine *StorageEngine, rt uint8, id uint64, v *T, label st
 	return err
 }
 
-func collectAll[T any](engine *StorageEngine, rt uint8) []T {
-	var all []T
-	_ = engine.IterIndexByType(rt, func(idHash uint64) error {
-		slot, err := readJSON[T](engine, idHash, "")
-		if err != nil {
-			return nil // skip corrupt records; keep scanning
+// IterAll iterates over all records of type rt; corrupt or unparsable
+// records are skipped, preserving the historical scan tolerance.
+func IterAll[T any](engine *StorageEngine, rt uint8) iter.Seq[T] {
+	return func(yield func(T) bool) {
+		for idHash := range engine.IndexByType(rt) {
+			slot, err := readJSON[T](engine, idHash, "")
+			if err != nil {
+				continue // skip corrupt records; keep scanning
+			}
+			if !yield(*slot) {
+				return
+			}
 		}
-		all = append(all, *slot)
-		return nil
-	})
-	return all
+	}
 }
 
 func ReadProfileSlot(engine *StorageEngine, id uint64) (*ProfileSlot, error) {
@@ -62,7 +67,7 @@ func WriteSceneNode(engine *StorageEngine, id uint64, slot *SceneNode) error {
 }
 
 func CollectAllSceneNodes(engine *StorageEngine) []SceneNode {
-	return collectAll[SceneNode](engine, RecL1SceneNode)
+	return slices.Collect(IterAll[SceneNode](engine, RecL1SceneNode))
 }
 
 func ReadSceneSlot(engine *StorageEngine, id uint64) (*SceneSlot, error) {
@@ -98,7 +103,7 @@ func WriteTopicSlot(engine *StorageEngine, id uint64, slot *TopicSlot) error {
 }
 
 func CollectAllTopics(engine *StorageEngine) []TopicSlot {
-	return collectAll[TopicSlot](engine, RecL2Topic)
+	return slices.Collect(IterAll[TopicSlot](engine, RecL2Topic))
 }
 
 // ReadTopicLenient returns (nil, nil) for non-RecL2Topic records instead of
@@ -143,15 +148,15 @@ func WriteGraphSlot(engine *StorageEngine, id uint64, slot *HypergraphSlot) erro
 }
 
 func CollectAllGraphSlots(engine *StorageEngine) []HypergraphSlot {
-	return collectAll[HypergraphSlot](engine, RecL3GraphSlot)
+	return slices.Collect(IterAll[HypergraphSlot](engine, RecL3GraphSlot))
 }
 
 func CollectAllHypergraphNodes(engine *StorageEngine) []HypergraphNode {
-	return collectAll[HypergraphNode](engine, RecL3GraphNode)
+	return slices.Collect(IterAll[HypergraphNode](engine, RecL3GraphNode))
 }
 
 func CollectAllHypergraphEdges(engine *StorageEngine) []HypergraphEdge {
-	return collectAll[HypergraphEdge](engine, RecL3GraphEdge)
+	return slices.Collect(IterAll[HypergraphEdge](engine, RecL3GraphEdge))
 }
 
 func ReadArchiveSlot(engine *StorageEngine, id uint64) (*ArchiveSlot, error) {
@@ -163,7 +168,7 @@ func WriteArchiveSlot(engine *StorageEngine, id uint64, slot *ArchiveSlot) error
 }
 
 func CollectAllArchives(engine *StorageEngine) []ArchiveSlot {
-	return collectAll[ArchiveSlot](engine, RecL4Archive)
+	return slices.Collect(IterAll[ArchiveSlot](engine, RecL4Archive))
 }
 
 func ReadCapability(engine *StorageEngine, id uint64) (*Capability, error) {
@@ -175,7 +180,7 @@ func WriteCapability(engine *StorageEngine, id uint64, slot *Capability) error {
 }
 
 func CollectAllCapabilities(engine *StorageEngine) []Capability {
-	return collectAll[Capability](engine, RecL5Capability)
+	return slices.Collect(IterAll[Capability](engine, RecL5Capability))
 }
 
 func ReadSceneUsageSlot(engine *StorageEngine, id uint64) (*SceneUsageSlot, error) {
@@ -187,7 +192,7 @@ func WriteSceneUsageSlot(engine *StorageEngine, id uint64, slot *SceneUsageSlot)
 }
 
 func CollectAllSceneUsages(engine *StorageEngine) []SceneUsageSlot {
-	return collectAll[SceneUsageSlot](engine, RecL6SceneUsage)
+	return slices.Collect(IterAll[SceneUsageSlot](engine, RecL6SceneUsage))
 }
 
 func ReadTrajectorySlot(engine *StorageEngine, id uint64) (*TrajectorySlot, error) {
@@ -199,5 +204,5 @@ func WriteTrajectorySlot(engine *StorageEngine, id uint64, slot *TrajectorySlot)
 }
 
 func CollectAllTrajectories(engine *StorageEngine) []TrajectorySlot {
-	return collectAll[TrajectorySlot](engine, RecL7Trajectory)
+	return slices.Collect(IterAll[TrajectorySlot](engine, RecL7Trajectory))
 }

@@ -9,6 +9,7 @@ const TABS = [
   { id: "capability", label: "能力" },
   { id: "profile", label: "画像" },
   { id: "sleep", label: "睡眠" },
+  { id: "server", label: "服务器" },
 ];
 
 const tabStyle = (active) => ({
@@ -189,7 +190,8 @@ function MemhopPanel({ rpc, sessions, sessionId, onClose }) {
             tab === "archive" ? React.createElement(ArchiveSection, sectionProps) : null,
             tab === "capability" ? React.createElement(CapabilitySection, sectionProps) : null,
             tab === "profile" ? React.createElement(ProfileSection, sectionProps) : null,
-            tab === "sleep" ? React.createElement(SleepSection, sectionProps) : null
+            tab === "sleep" ? React.createElement(SleepSection, sectionProps) : null,
+            tab === "server" ? React.createElement(ServerSection, sectionProps) : null
           )
     ),
     // Toast

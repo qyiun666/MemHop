@@ -37,8 +37,9 @@ func (t *BKTree) Search(word string, maxDist int) []BKMatch {
 	if len(t.nodes) == 0 {
 		return nil
 	}
+	var prev, curr []int // Levenshtein work buffers, reused across the whole search
 	var results []BKMatch
-	t.searchRecursive(0, word, maxDist, &results)
+	t.searchRecursive(0, word, maxDist, &results, &prev, &curr)
 	return results
 }
 
@@ -68,20 +69,18 @@ func (t *BKTree) insertRecursive(nodeIdx int, word string) {
 	t.nodes[nodeIdx].children[dist] = newIdx
 }
 
-func (t *BKTree) searchRecursive(nodeIdx int, word string, maxDist int, results *[]BKMatch) {
+func (t *BKTree) searchRecursive(nodeIdx int, word string, maxDist int, results *[]BKMatch, prev, curr *[]int) {
 	node := &t.nodes[nodeIdx]
-	dist := LevenshteinDistance(node.word, word)
+	dist, p, c := LevenshteinDistanceInto(node.word, word, *prev, *curr)
+	*prev, *curr = p, c
 	if dist <= maxDist {
 		*results = append(*results, BKMatch{Word: node.word, Dist: dist})
 	}
-	minDist := dist - maxDist
-	if minDist < 0 {
-		minDist = 0
-	}
+	minDist := max(dist-maxDist, 0)
 	maxDistRange := dist + maxDist
 	for childDist, childIdx := range node.children {
 		if childDist >= minDist && childDist <= maxDistRange {
-			t.searchRecursive(childIdx, word, maxDist, results)
+			t.searchRecursive(childIdx, word, maxDist, results, prev, curr)
 		}
 	}
 }

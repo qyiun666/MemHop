@@ -23,10 +23,8 @@ func (r *L1ReverseIndex) Add(contextID, nodeIDHash uint64) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	nodes := r.index[contextID]
-	for _, nid := range nodes {
-		if nid == nodeIDHash {
-			return
-		}
+	if slices.Contains(nodes, nodeIDHash) {
+		return
 	}
 	r.index[contextID] = append(nodes, nodeIDHash)
 }

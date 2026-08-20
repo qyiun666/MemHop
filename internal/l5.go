@@ -8,12 +8,13 @@
 package internal
 
 import (
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -229,7 +230,9 @@ func (db *DB) ListCapabilities(q CapabilityListQuery) ([]core.Capability, error)
 		stored[cap.IDHash] = struct{}{}
 	}
 	filtered = append(filtered, db.builtinMatchingList(q, kw, stored)...)
-	sort.Slice(filtered, func(i, j int) bool { return filtered[i].UpdatedAt > filtered[j].UpdatedAt })
+	slices.SortFunc(filtered, func(a, b core.Capability) int {
+		return cmp.Compare(b.UpdatedAt, a.UpdatedAt)
+	})
 	if filtered == nil {
 		return []core.Capability{}, nil
 	}

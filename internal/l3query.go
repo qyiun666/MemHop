@@ -6,6 +6,7 @@
 package internal
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -183,12 +184,7 @@ func connectNodes(adj map[uint64]map[uint64]struct{}, nodeIDs []uint64) {
 }
 
 func containsEdgeKind(kinds []core.GraphEdgeKind, k core.GraphEdgeKind) bool {
-	for _, kk := range kinds {
-		if kk == k {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(kinds, k)
 }
 
 func allNodesVisited(nodeIDs []uint64, visited map[uint64]struct{}) bool {

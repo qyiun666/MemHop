@@ -37,7 +37,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 
 - **Eight-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal → L6 Scene Usage → L7 Trajectory, with Dream consolidation
 - **Three-Channel RRF Retrieval** — BM25 (gse CJK) + f32 vector + fuzzy entity/term matching (entity index auto-fed from indexed topic terms), fused via Reciprocal Rank Fusion (k=60)
-- **V2 Storage** — `.meh` format (`FormatVersion=0x0005`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. **Not compatible with v1 `.meh` data files** (JSON serialization switched to native numbers); 0x0004 files (the v1.2.0 L5 plugin-slot format) are rejected at Open with no migration
+- **V2 Storage** — `.meh` format (`FormatVersion=0x0006`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. **Not compatible with v1 `.meh` data files** (JSON serialization switched to native numbers); 0x0005 introduced the 0x0F Capability record (its payload replaced the v1.2.0 PluginSlot), 0x0006 re-designed the capability payload as the v2 mcp/skill/composite resource-wrapper model — files with 0x0005 (or older) are rejected at Open with no migration path
 - **Dream Pipeline** — five stages over L0–L2: L2 compress → L1 rebuild → L1 decay → L0 profile → L0 distill (emotion/MBTI)
 - **L3 Knowledge Graph** — Multiple independent hypergraphs with node/edge import, CRUD, keyword/type lookup and BFS subgraph queries
 - **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)

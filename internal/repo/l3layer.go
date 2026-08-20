@@ -5,7 +5,7 @@ package repo
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -271,7 +271,7 @@ func MatchL3Graphs(engine *core.StorageEngine, keywords []string, text string) [
 	if len(graphIDs) == 0 {
 		return nil
 	}
-	sort.Slice(graphIDs, func(i, j int) bool { return graphIDs[i] < graphIDs[j] })
+	slices.Sort(graphIDs)
 	return common.DedupSorted(graphIDs)
 }
 

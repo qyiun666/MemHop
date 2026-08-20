@@ -7,9 +7,10 @@
 package internal
 
 import (
+	"cmp"
 	"context"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -42,10 +43,19 @@ type Encoder interface {
 // TopScene scores all L2 topics via three concurrent channels, aggregates
 // by scene with bonuses, and returns the top scene above threshold.
 // activeSceneIDs get +0.2 once; l3ID restricts topics referencing that L3.
-func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.SparseIndex,
+// l2Meta supplies the candidate topics from the in-memory cache (nil falls
+// back to a full record scan).
+func TopScene(ctx context.Context, engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
+	sparse *index.SparseIndex,
 	enc Encoder, query string, keywords []string,
 	activeSceneIDs []uint64, defaults *MemHopDefaults, threshold float32, l3ID *string) (SceneHit, error) {
-	topics, err := repo.ListTopicsL2(engine, "", 2, 1) // all scenes, depth<=2, by UserTimestamp
+	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+		Engine:  engine,
+		MetaIdx: l2Meta,
+		SceneID: "",
+		Depth:   2,
+		Num:     1,
+	}) // all scenes, depth<=2, by UserTimestamp
 	if err != nil {
 		return SceneHit{}, err
 	}
@@ -158,11 +168,11 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, sparse *index.Spa
 		}
 		best.Topics = append(best.Topics, ScoredTopic{Topic: t, Score: topicScores[id]})
 	}
-	sort.Slice(best.Topics, func(i, j int) bool {
-		if best.Topics[i].Score != best.Topics[j].Score {
-			return best.Topics[i].Score > best.Topics[j].Score
+	slices.SortStableFunc(best.Topics, func(a, b ScoredTopic) int {
+		if a.Score != b.Score {
+			return cmp.Compare(b.Score, a.Score) // higher score first
 		}
-		return best.Topics[i].Topic.ID < best.Topics[j].Topic.ID
+		return cmp.Compare(a.Topic.ID, b.Topic.ID) // ties by ID for determinism
 	})
 	return best, nil
 }
@@ -185,11 +195,8 @@ func applySceneBonuses(scores map[uint64]float32, activeSet map[uint64]struct{},
 func filterByL3(topics []core.TopicSlot, l3Hash uint64) []core.TopicSlot {
 	var filtered []core.TopicSlot
 	for _, t := range topics {
-		for _, ref := range t.L3Refs {
-			if ref == l3Hash {
-				filtered = append(filtered, t)
-				break
-			}
+		if slices.Contains(t.L3Refs, l3Hash) {
+			filtered = append(filtered, t)
 		}
 	}
 	return filtered
@@ -206,7 +213,9 @@ func retrieveBM25(sparse *index.SparseIndex, topics []core.TopicSlot, text strin
 			docs = append(docs, index.ScoredDoc{IDHash: t.ID, Score: sc})
 		}
 	}
-	sort.Slice(docs, func(i, j int) bool { return docs[i].Score > docs[j].Score })
+	slices.SortFunc(docs, func(a, b index.ScoredDoc) int {
+		return cmp.Compare(b.Score, a.Score)
+	})
 	return docs
 }
 
@@ -225,6 +234,7 @@ func retrieveVector(engine *core.StorageEngine, enc Encoder,
 	if len(queryVec) == 0 {
 		return nil
 	}
+	var centroidBuf []float32 // reused across topics to avoid one allocation per centroid
 	var docs []index.ScoredDoc
 	for _, t := range topics {
 		if t.CentroidPageRef == 0 {
@@ -234,15 +244,18 @@ func retrieveVector(engine *core.StorageEngine, enc Encoder,
 		if err != nil || len(vecData) < len(queryVec)*4 {
 			continue
 		}
-		centroid := common.DecodeF32Vec(vecData, len(queryVec))
-		if len(centroid) != len(queryVec) {
+		centroid, err := common.DecodeF32VecInto(vecData, len(queryVec), centroidBuf)
+		if err != nil {
 			continue
 		}
+		centroidBuf = centroid
 		if sc := common.CosineSimilarity(queryVec, centroid); sc > 0 {
 			docs = append(docs, index.ScoredDoc{IDHash: t.ID, Score: sc})
 		}
 	}
-	sort.Slice(docs, func(i, j int) bool { return docs[i].Score > docs[j].Score })
+	slices.SortFunc(docs, func(a, b index.ScoredDoc) int {
+		return cmp.Compare(b.Score, a.Score)
+	})
 	return docs
 }
 

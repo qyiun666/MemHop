@@ -4,9 +4,10 @@
 package index
 
 import (
+	"cmp"
 	"encoding/json"
 	"math"
-	"sort"
+	"slices"
 	"sync"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -36,6 +37,12 @@ type SparseIndex struct {
 	totalDocs    uint32
 	totalTerms   uint64
 	entityIndex  *EntityIndex
+	// dirtyTerms records terms whose postings changed since the entity
+	// fuzzy-match channel was last resynced. The sorted doc-id list is only
+	// needed on the read path, so writes only mark terms dirty and defer the
+	// O(K log K) sort to the first read (EntitySearch / Serialize).
+	// All accesses must happen while holding s.mu.
+	dirtyTerms map[string]struct{}
 }
 
 // NewSparseIndex creates a SparseIndex with default BM25 parameters (k1=1.2, b=0.75).
@@ -47,6 +54,7 @@ func NewSparseIndex() *SparseIndex {
 		docLengths:  make(map[uint64]uint32),
 		docTerms:    make(map[uint64][]string),
 		entityIndex: NewEntityIndex(),
+		dirtyTerms:  make(map[string]struct{}),
 	}
 }
 
@@ -73,9 +81,9 @@ func (s *SparseIndex) addDocumentLocked(idHash uint64, terms []string, docLen ui
 		pl.TermFreq[idHash] = tf
 		pl.DocFreq++
 		newTerms = append(newTerms, term)
-		s.syncEntityTermLocked(term)
+		s.markDirtyLocked(term)
 	}
-	sort.Strings(newTerms)
+	slices.Sort(newTerms)
 	s.docTerms[idHash] = newTerms
 }
 
@@ -101,7 +109,7 @@ func (s *SparseIndex) removeDocumentLocked(idHash uint64) {
 				terms = append(terms, term)
 			}
 		}
-		sort.Strings(terms)
+		slices.Sort(terms)
 	}
 	for _, term := range terms {
 		pl := s.postings[term]
@@ -114,15 +122,55 @@ func (s *SparseIndex) removeDocumentLocked(idHash uint64) {
 		} else {
 			pl.DocFreq = uint32(len(pl.TermFreq))
 		}
-		s.syncEntityTermLocked(term)
+		s.markDirtyLocked(term)
 	}
 	delete(s.docLengths, idHash)
 	delete(s.docTerms, idHash)
 }
 
+// markDirtyLocked records that term's postings changed, deferring the entity
+// fuzzy-match resync (and its O(K log K) doc-id sort) until the next read.
+// Caller must hold s.mu write lock.
+func (s *SparseIndex) markDirtyLocked(term string) {
+	s.dirtyTerms[term] = struct{}{}
+}
+
+// ensureSortedLocked resyncs the entity channel for every dirty term,
+// sorting each posting's doc ids exactly once. Caller must hold s.mu write
+// lock.
+func (s *SparseIndex) ensureSortedLocked() {
+	if len(s.dirtyTerms) == 0 {
+		return
+	}
+	for term := range s.dirtyTerms {
+		s.syncEntityTermLocked(term)
+	}
+	clear(s.dirtyTerms)
+}
+
+// ensureSorted lazily sorts dirty postings and resyncs the entity channel
+// before a read that depends on ordered doc-id lists. It is a no-op when
+// everything is already synced. Double-checked: the read lock check and the
+// upgrade are separate critical sections, so a concurrent writer may still
+// interleave between them. Readers observe a snapshot that may lag the
+// latest writes (unobservable under the single-instance serial contract);
+// the entity index itself is mutated exclusively under the write lock, so
+// a snapshot is never torn.
+func (s *SparseIndex) ensureSorted() {
+	s.mu.RLock()
+	dirty := len(s.dirtyTerms) > 0
+	s.mu.RUnlock()
+	if !dirty {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ensureSortedLocked()
+}
+
 // syncEntityTermLocked keeps the entity fuzzy-match channel aligned with the
 // BM25 postings: each indexed term maps to every L2 topic containing it.
-// Caller must hold s.mu.
+// Only called from ensureSortedLocked; caller must hold s.mu write lock.
 func (s *SparseIndex) syncEntityTermLocked(term string) {
 	pl := s.postings[term]
 	if pl == nil || len(pl.TermFreq) == 0 {
@@ -133,7 +181,7 @@ func (s *SparseIndex) syncEntityTermLocked(term string) {
 	for id := range pl.TermFreq {
 		ids = append(ids, id)
 	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	slices.Sort(ids)
 	s.entityIndex.AddEntity(term, ids[0], ids)
 }
 
@@ -200,8 +248,8 @@ func (s *SparseIndex) Search(queryTerms []string, k int) []ScoredDoc {
 			scores = append(scores, ScoredDoc{IDHash: docID, Score: sc})
 		}
 	}
-	sort.Slice(scores, func(i, j int) bool {
-		return scores[i].Score > scores[j].Score
+	slices.SortFunc(scores, func(a, b ScoredDoc) int {
+		return cmp.Compare(b.Score, a.Score)
 	})
 	if k > 0 && len(scores) > k {
 		scores = scores[:k]
@@ -210,6 +258,7 @@ func (s *SparseIndex) Search(queryTerms []string, k int) []ScoredDoc {
 }
 
 func (s *SparseIndex) EntitySearch(query string) []ScoredDoc {
+	s.ensureSorted()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	words := TokenizeWords(query)
@@ -234,8 +283,8 @@ func (s *SparseIndex) EntitySearch(query string) []ScoredDoc {
 	for id, sc := range scoreMap {
 		results = append(results, ScoredDoc{IDHash: id, Score: sc})
 	}
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
+	slices.SortFunc(results, func(a, b ScoredDoc) int {
+		return cmp.Compare(b.Score, a.Score)
 	})
 	return results
 }
@@ -266,8 +315,8 @@ func (s *SparseIndex) TopTerms(n int) []struct {
 	for term, pl := range s.postings {
 		all = append(all, tf{Term: term, DocFreq: pl.DocFreq})
 	}
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].DocFreq > all[j].DocFreq
+	slices.SortFunc(all, func(a, b tf) int {
+		return cmp.Compare(b.DocFreq, a.DocFreq)
 	})
 	if n > 0 && len(all) > n {
 		all = all[:n]
@@ -307,8 +356,24 @@ type entityEntryJSON struct {
 }
 
 func (s *SparseIndex) Serialize() ([]byte, error) {
+	// Snapshot bytes must reflect the fully synced entity channel. When no
+	// term is dirty the read lock alone guarantees a consistent snapshot;
+	// otherwise upgrade to the write lock, resync, and marshal atomically.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	if len(s.dirtyTerms) == 0 {
+		defer s.mu.RUnlock()
+		return s.serializeLocked()
+	}
+	s.mu.RUnlock()
+	s.mu.Lock()
+	s.ensureSortedLocked()
+	defer s.mu.Unlock()
+	return s.serializeLocked()
+}
+
+// serializeLocked marshals the index to JSON. Caller must hold s.mu (read
+// or write lock).
+func (s *SparseIndex) serializeLocked() ([]byte, error) {
 	j := sparseIndexJSON{
 		K1:           s.k1,
 		B:            s.b,
@@ -352,6 +417,7 @@ func DeserializeSparseIndex(data []byte) (*SparseIndex, error) {
 		totalDocs:    j.TotalDocs,
 		totalTerms:   j.TotalTerms,
 		entityIndex:  NewEntityIndex(),
+		dirtyTerms:   make(map[string]struct{}),
 	}
 	if s.docTerms == nil {
 		s.docTerms = make(map[uint64][]string)
@@ -361,7 +427,7 @@ func DeserializeSparseIndex(data []byte) (*SparseIndex, error) {
 			}
 		}
 		for id, terms := range s.docTerms {
-			sort.Strings(terms)
+			slices.Sort(terms)
 			s.docTerms[id] = terms
 		}
 	}

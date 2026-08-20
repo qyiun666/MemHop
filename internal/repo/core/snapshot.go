@@ -77,7 +77,7 @@ func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 		return nil, nil, common.NewError(common.ErrCorruption, "snapshot entries truncated")
 	}
 	idx := make(map[uint64]uint64, count)
-	for i := 0; i < count; i++ {
+	for range count {
 		idHash := binary.LittleEndian.Uint64(raw[pos : pos+8])
 		offset := binary.LittleEndian.Uint64(raw[pos+8 : pos+16])
 		idx[idHash] = offset

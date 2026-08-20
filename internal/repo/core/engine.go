@@ -6,6 +6,7 @@ package core
 import (
 	"errors"
 	"io"
+	"iter"
 	"os"
 	"sync"
 
@@ -423,46 +424,49 @@ func (e *StorageEngine) CloseNoCheckpoint() error {
 	return e.file.Close()
 }
 
-// IterIndex iterates over all (idHash, offset) pairs. The index is copied
-// first and fn runs lock-free so it may call engine methods; iteration sees
-// a snapshot. Return false from fn to stop.
-func (e *StorageEngine) IterIndex(fn func(idHash, offset uint64) bool) {
-	e.mu.RLock()
-	if e.closed {
-		e.mu.RUnlock()
-		return
-	}
-	pairs := make([]uint64, 0, len(e.index)*2)
-	for id, off := range e.index {
-		pairs = append(pairs, id, off)
-	}
-	e.mu.RUnlock()
-	for i := 0; i < len(pairs); i += 2 {
-		if !fn(pairs[i], pairs[i+1]) {
+// Index iterates over all (idHash, offset) pairs. The index is copied
+// first and the yield runs lock-free so engine methods may be called;
+// iteration sees a snapshot. Returning false from yield stops iteration.
+func (e *StorageEngine) Index() iter.Seq2[uint64, uint64] {
+	return func(yield func(uint64, uint64) bool) {
+		e.mu.RLock()
+		if e.closed {
+			e.mu.RUnlock()
 			return
+		}
+		pairs := make([]uint64, 0, len(e.index)*2)
+		for id, off := range e.index {
+			pairs = append(pairs, id, off)
+		}
+		e.mu.RUnlock()
+		for i := 0; i < len(pairs); i += 2 {
+			if !yield(pairs[i], pairs[i+1]) {
+				return
+			}
 		}
 	}
 }
 
-// IterIndexByType iterates all idHashes of a record type over a snapshot;
-// fn runs lock-free. Returns the first error from fn.
-func (e *StorageEngine) IterIndexByType(rt uint8, fn func(idHash uint64) error) error {
-	e.mu.RLock()
-	if e.closed {
+// IndexByType iterates all idHashes of a record type over a snapshot; the
+// yield runs lock-free. A closed engine yields nothing.
+func (e *StorageEngine) IndexByType(rt uint8) iter.Seq[uint64] {
+	return func(yield func(uint64) bool) {
+		e.mu.RLock()
+		if e.closed {
+			e.mu.RUnlock()
+			return
+		}
+		ids := make([]uint64, 0, len(e.byType[rt]))
+		for id := range e.byType[rt] {
+			ids = append(ids, id)
+		}
 		e.mu.RUnlock()
-		return common.NewError(common.ErrClosed, "engine is closed")
-	}
-	ids := make([]uint64, 0, len(e.byType[rt]))
-	for id := range e.byType[rt] {
-		ids = append(ids, id)
-	}
-	e.mu.RUnlock()
-	for _, id := range ids {
-		if err := fn(id); err != nil {
-			return err
+		for _, id := range ids {
+			if !yield(id) {
+				return
+			}
 		}
 	}
-	return nil
 }
 
 func (e *StorageEngine) RecordCount() uint32 {

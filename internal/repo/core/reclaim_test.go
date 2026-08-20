@@ -20,7 +20,7 @@ func TestCheckpointReclaim(t *testing.T) {
 	eng.WriteRecord(RecL2Topic, 2, []byte("second"))
 	snap := &IndexSnapshotData{SparseData: []byte("sparse")}
 	// Consecutive checkpoints without writes pile up snapshots at the tail.
-	for i := 0; i < ReclaimMinSnapshots; i++ {
+	for i := range ReclaimMinSnapshots {
 		if err := eng.Checkpoint(snap); err != nil {
 			t.Fatalf("checkpoint %d: %v", i, err)
 		}
@@ -71,7 +71,7 @@ func TestCheckpointReclaimSkipsFewSnapshots(t *testing.T) {
 	}
 	eng.WriteRecord(RecL0Profile, 1, []byte("first"))
 	snap := &IndexSnapshotData{SparseData: []byte("sparse")}
-	for i := 0; i < ReclaimMinSnapshots-1; i++ {
+	for i := range ReclaimMinSnapshots - 1 {
 		if err := eng.Checkpoint(snap); err != nil {
 			t.Fatalf("checkpoint %d: %v", i, err)
 		}

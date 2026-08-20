@@ -25,7 +25,7 @@ const body = files
   .join("\n\n");
 
 const out = `window.__ModuleLoader__.load({
-	id: "@deepseek-ai/dsh-client-memhop-ui",
+	id: "@deepseek-ai/dsh-memhop",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;

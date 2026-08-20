@@ -1,10 +1,12 @@
 package repo
 
 import (
+	"cmp"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -107,18 +109,15 @@ func newDefaultProfile(topTerms []string, totalEngrams uint32) *core.ProfileSlot
 }
 
 func joinTopTerms(terms []string, n int) string {
-	limit := n
-	if limit > len(terms) {
-		limit = len(terms)
-	}
-	result := ""
-	for i := 0; i < limit; i++ {
+	limit := min(n, len(terms))
+	var result strings.Builder
+	for i := range limit {
 		if i > 0 {
-			result += ", "
+			result.WriteString(", ")
 		}
-		result += terms[i]
+		result.WriteString(terms[i])
 	}
-	return result
+	return result.String()
 }
 
 // SampleL1ForDistill ranks L1 nodes by Importance×exp(-lambda×age) and
@@ -135,8 +134,8 @@ func SampleL1ForDistill(engine *core.StorageEngine) ([]L1DistillSample, int) {
 		})
 	}
 	total := len(candidates)
-	sort.Slice(candidates, func(i, j int) bool {
-		return sampleRank(candidates[i], nowMs) > sampleRank(candidates[j], nowMs)
+	slices.SortFunc(candidates, func(a, b L1DistillSample) int {
+		return cmp.Compare(sampleRank(b, nowMs), sampleRank(a, nowMs))
 	})
 	if len(candidates) > maxDistillSamples {
 		candidates = candidates[:maxDistillSamples]

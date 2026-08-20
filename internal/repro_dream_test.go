@@ -65,7 +65,13 @@ func TestReproDreamConsolidate(t *testing.T) {
 	scenes := repo.CollectAllScenesL2(engine)
 	t.Logf("scenes on disk: %d", len(scenes))
 	for _, s := range scenes {
-		topics, err := repo.ListTopicsL2(engine, common.FormatHash(s.SceneID), 1, 2)
+		topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+			Engine:  engine,
+			MetaIdx: nil,
+			SceneID: common.FormatHash(s.SceneID),
+			Depth:   1,
+			Num:     2,
+		})
 		if err != nil {
 			t.Logf("scene %s: ListTopicsL2 error: %v", s.SceneName, err)
 			continue
@@ -120,7 +126,13 @@ func dumpSceneContext(t *testing.T, db *DB, cfg *MemHopConfig, label string) {
 	t.Logf("--- %s ---", label)
 	scenes := repo.CollectAllScenesL2(db.engine)
 	for _, s := range scenes {
-		topics, err := repo.ListTopicsL2(db.engine, common.FormatHash(s.SceneID), 1, 2)
+		topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+			Engine:  db.engine,
+			MetaIdx: nil,
+			SceneID: common.FormatHash(s.SceneID),
+			Depth:   1,
+			Num:     2,
+		})
 		if err != nil {
 			t.Logf("scene %q: ListTopicsL2 error: %v", s.SceneName, err)
 			continue

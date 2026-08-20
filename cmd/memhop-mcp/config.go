@@ -59,7 +59,7 @@ func splitTenants(raw string) ([]string, error) {
 		return nil, nil
 	}
 	var out []string
-	for _, part := range strings.Split(raw, ",") {
+	for part := range strings.SplitSeq(raw, ",") {
 		id := strings.TrimSpace(part)
 		if id == "" {
 			continue

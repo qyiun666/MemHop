@@ -17,12 +17,22 @@ type L2Meta struct {
 	Title        string
 	Depth        uint8
 	SceneID      uint64
+	ParentID     *uint64
 	ChildrenIDs  []uint64
 	VectorOffset uint64
 	TurnCount    uint32
 	ArchiveCount int
 	L3Refs       []uint64
+	L4Refs       []uint64
 	Timestamp    uint64
+
+	// Full topic fields cached so ListTopicsL2 modes 1/2 can rebuild
+	// TopicSlot values without reading topic records.
+	UserKeywords   []string
+	UserTimestamp  int64
+	AgentKeywords  []string
+	AgentTimestamp int64
+	FusedKeywords  []string
 }
 
 type L2MetaIndex struct {
@@ -40,19 +50,23 @@ func NewL2MetaIndex() *L2MetaIndex {
 
 // BuildL2MetaFromEngine is defined in rebuild.go (shared single-pass scan).
 
-// topicSlotJSON carries created_at/updated_at keys that core.TopicSlot does
-// not model, keeping the original Timestamp semantics in engine scans.
+// topicSlotJSON mirrors core.TopicSlot with every field plus the legacy
+// created_at/updated_at keys that core.TopicSlot does not model, keeping
+// the original Timestamp semantics in engine scans.
 type topicSlotJSON struct {
 	ID              uint64   `json:"id"`
 	SceneID         uint64   `json:"scene_id"`
+	ParentID        *uint64  `json:"parent_id"`
 	ChildrenIDs     []uint64 `json:"children_ids"`
 	Depth           uint8    `json:"depth"`
 	UserKeywords    []string `json:"user_keywords"`
-	AgentKeywords   []string `json:"agent_keywords"`
-	FusedKeywords   []string `json:"fused_keywords"`
-	CentroidPageRef uint64   `json:"centroid_page_ref"`
+	UserTimestamp   int64    `json:"user_timestamp"`
 	L4Refs          []uint64 `json:"l4_refs"`
 	L3Refs          []uint64 `json:"l3_refs"`
+	AgentKeywords   []string `json:"agent_keywords"`
+	AgentTimestamp  int64    `json:"agent_timestamp"`
+	FusedKeywords   []string `json:"fused_keywords"`
+	CentroidPageRef uint64   `json:"centroid_page_ref"`
 	CreatedAt       int64    `json:"created_at"`
 	UpdatedAt       int64    `json:"updated_at"`
 }
@@ -65,24 +79,25 @@ func topicToL2Meta(idHash uint64, t *topicSlotJSON) *L2Meta {
 	title := strings.Join(src, ", ")
 	l3Refs := t.L3Refs
 	archiveCount := len(t.L4Refs)
-	ts := t.UpdatedAt
-	if ts < t.CreatedAt {
-		ts = t.CreatedAt
-	}
-	if ts < 0 {
-		ts = 0
-	}
+	ts := max(max(t.UpdatedAt, t.CreatedAt), 0)
 	return &L2Meta{
-		IDHash:       idHash,
-		Title:        title,
-		Depth:        t.Depth,
-		SceneID:      t.SceneID,
-		ChildrenIDs:  t.ChildrenIDs,
-		VectorOffset: t.CentroidPageRef,
-		TurnCount:    uint32(len(t.ChildrenIDs)),
-		ArchiveCount: archiveCount,
-		L3Refs:       l3Refs,
-		Timestamp:    uint64(ts),
+		IDHash:         idHash,
+		Title:          title,
+		Depth:          t.Depth,
+		SceneID:        t.SceneID,
+		ParentID:       t.ParentID,
+		ChildrenIDs:    t.ChildrenIDs,
+		VectorOffset:   t.CentroidPageRef,
+		TurnCount:      uint32(len(t.ChildrenIDs)),
+		ArchiveCount:   archiveCount,
+		L3Refs:         l3Refs,
+		L4Refs:         t.L4Refs,
+		Timestamp:      uint64(ts),
+		UserKeywords:   t.UserKeywords,
+		UserTimestamp:  t.UserTimestamp,
+		AgentKeywords:  t.AgentKeywords,
+		AgentTimestamp: t.AgentTimestamp,
+		FusedKeywords:  t.FusedKeywords,
 	}
 }
 
@@ -116,7 +131,9 @@ func (idx *L2MetaIndex) Remove(idHash uint64) *L2Meta {
 func (idx *L2MetaIndex) GetByScene(sceneID uint64) []uint64 {
 	idx.mu.RLock()
 	defer idx.mu.RUnlock()
-	return idx.byScene[sceneID]
+	// Clone so callers never hold or mutate the internal slice; the
+	// byScene list may be rebuilt on the next Remove/Update.
+	return slices.Clone(idx.byScene[sceneID])
 }
 
 func (idx *L2MetaIndex) GetL2IDsByL3(l3ID uint64) []uint64 {
@@ -124,11 +141,8 @@ func (idx *L2MetaIndex) GetL2IDsByL3(l3ID uint64) []uint64 {
 	defer idx.mu.RUnlock()
 	var ids []uint64
 	for _, meta := range idx.entries {
-		for _, ref := range meta.L3Refs {
-			if ref == l3ID {
-				ids = append(ids, meta.IDHash)
-				break
-			}
+		if slices.Contains(meta.L3Refs, l3ID) {
+			ids = append(ids, meta.IDHash)
 		}
 	}
 	return ids
@@ -174,15 +188,47 @@ func (idx *L2MetaIndex) removeFromIndices(sceneID uint64, idHash uint64) {
 }
 
 func L2MetaFromTopic(t *core.TopicSlot) *L2Meta {
-	archiveCount := len(t.L4Refs)
+	src := t.FusedKeywords
+	if len(src) == 0 {
+		src = t.UserKeywords
+	}
 	return &L2Meta{
-		IDHash:       t.ID,
-		Title:        strings.Join(t.UserKeywords, ", "),
-		Depth:        t.Depth,
-		SceneID:      t.SceneID,
-		ChildrenIDs:  t.ChildrenIDs,
-		VectorOffset: t.CentroidPageRef,
-		ArchiveCount: archiveCount,
-		L3Refs:       t.L3Refs,
+		IDHash:         t.ID,
+		Title:          strings.Join(src, ", "),
+		Depth:          t.Depth,
+		SceneID:        t.SceneID,
+		ParentID:       t.ParentID,
+		ChildrenIDs:    t.ChildrenIDs,
+		VectorOffset:   t.CentroidPageRef,
+		TurnCount:      uint32(len(t.ChildrenIDs)),
+		ArchiveCount:   len(t.L4Refs),
+		L3Refs:         t.L3Refs,
+		L4Refs:         t.L4Refs,
+		UserKeywords:   t.UserKeywords,
+		UserTimestamp:  t.UserTimestamp,
+		AgentKeywords:  t.AgentKeywords,
+		AgentTimestamp: t.AgentTimestamp,
+		FusedKeywords:  t.FusedKeywords,
+	}
+}
+
+// ToTopicSlot rebuilds the full topic slot from cached metadata. The field
+// mapping matches core.TopicSlot exactly, so candidates returned from the
+// cache are identical to freshly unmarshalled records.
+func (m *L2Meta) ToTopicSlot() core.TopicSlot {
+	return core.TopicSlot{
+		ID:              m.IDHash,
+		SceneID:         m.SceneID,
+		ParentID:        m.ParentID,
+		ChildrenIDs:     m.ChildrenIDs,
+		Depth:           m.Depth,
+		UserKeywords:    m.UserKeywords,
+		UserTimestamp:   m.UserTimestamp,
+		L4Refs:          m.L4Refs,
+		L3Refs:          m.L3Refs,
+		AgentKeywords:   m.AgentKeywords,
+		AgentTimestamp:  m.AgentTimestamp,
+		FusedKeywords:   m.FusedKeywords,
+		CentroidPageRef: m.VectorOffset,
 	}
 }

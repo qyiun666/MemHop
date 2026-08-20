@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"math"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -53,7 +54,7 @@ func TestCosineSimilarity(t *testing.T) {
 		n := 2000
 		a := make([]float32, n)
 		b := make([]float32, n)
-		for i := 0; i < n; i++ {
+		for i := range n {
 			a[i] = float32(i) * 0.001
 			b[i] = float32(i) * 0.001
 		}
@@ -206,7 +207,7 @@ func TestBM25Score(t *testing.T) {
 
 func TestBM25IDFRareTerm(t *testing.T) {
 	idx := NewSparseIndex()
-	for i := uint64(0); i < 10; i++ {
+	for i := range uint64(10) {
 		idx.AddDocument(i, []string{"common"}, 1)
 	}
 	idx.AddDocument(100, []string{"rare"}, 1)
@@ -237,7 +238,7 @@ func TestSparseIndexSearch(t *testing.T) {
 
 func TestSparseIndexTopK(t *testing.T) {
 	idx := NewSparseIndex()
-	for i := uint64(0); i < 5; i++ {
+	for i := range uint64(5) {
 		tokens := Tokenize("document number " + string(rune('a'+i)))
 		idx.AddDocument(i, tokens, uint32(len(tokens)))
 	}
@@ -406,21 +407,17 @@ func TestBuildL2MetaFromEngine(t *testing.T) {
 
 func assertContains(t *testing.T, tokens []string, expected string) {
 	t.Helper()
-	for _, tok := range tokens {
-		if tok == expected {
-			return
-		}
+	if slices.Contains(tokens, expected) {
+		return
 	}
 	t.Errorf("tokens %v should contain %q", tokens, expected)
 }
 
 func assertNotContains(t *testing.T, tokens []string, unexpected string) {
 	t.Helper()
-	for _, tok := range tokens {
-		if tok == unexpected {
-			t.Errorf("tokens %v should not contain %q", tokens, unexpected)
-			return
-		}
+	if slices.Contains(tokens, unexpected) {
+		t.Errorf("tokens %v should not contain %q", tokens, unexpected)
+		return
 	}
 }
 

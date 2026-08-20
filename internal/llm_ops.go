@@ -7,11 +7,12 @@
 package internal
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -187,17 +188,17 @@ func buildConsolidatePrompt(topics []core.TopicSlot) string {
 	for sid := range byScene {
 		sceneIDs = append(sceneIDs, sid)
 	}
-	sort.Slice(sceneIDs, func(i, j int) bool { return sceneIDs[i] < sceneIDs[j] })
+	slices.Sort(sceneIDs)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "# L2 Topic Data (%d scenes)\n\n", len(sceneIDs))
 	for _, sid := range sceneIDs {
 		nodes := byScene[sid]
-		sort.Slice(nodes, func(i, j int) bool {
-			if nodes[i].UserTimestamp != nodes[j].UserTimestamp {
-				return nodes[i].UserTimestamp < nodes[j].UserTimestamp
+		slices.SortStableFunc(nodes, func(a, b core.TopicSlot) int {
+			if a.UserTimestamp != b.UserTimestamp {
+				return cmp.Compare(a.UserTimestamp, b.UserTimestamp)
 			}
-			return nodes[i].ID < nodes[j].ID
+			return cmp.Compare(a.ID, b.ID)
 		})
 		fmt.Fprintf(&b, "## scene_id = %d\n", sid)
 		for _, n := range nodes {

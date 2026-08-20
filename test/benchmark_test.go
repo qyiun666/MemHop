@@ -10,7 +10,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -69,7 +69,8 @@ func BenchmarkSearchAutoCreate(b *testing.B) {
 
 	base := time.Now().UnixMilli()
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		ts := base + int64(i)*1000
 		res, err := db.Search(internal.SearchQuery{
 			Text:       turns[i%len(turns)],
@@ -82,6 +83,7 @@ func BenchmarkSearchAutoCreate(b *testing.B) {
 		if res.NewTopicID == 0 {
 			b.Fatal("expected NewTopicID")
 		}
+		i++
 	}
 }
 
@@ -118,7 +120,8 @@ func BenchmarkSearchRetrieve(b *testing.B) {
 
 	query := fx.Sessions[0].Turns[0].Text
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	i = 0 // reuse seed counter; iteration timestamps restart from 1_000_000
+	for b.Loop() {
 		ts := base + int64(1_000_000+i)*1000
 		if _, err := db.Search(internal.SearchQuery{
 			Text:      query,
@@ -126,6 +129,7 @@ func BenchmarkSearchRetrieve(b *testing.B) {
 		}); err != nil {
 			b.Fatalf("Search: %v", err)
 		}
+		i++
 	}
 }
 
@@ -147,11 +151,13 @@ func BenchmarkUpdate(b *testing.B) {
 	topicID := common.FormatHash(res.Contexts[0].ID)
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		ts := base + int64(i+1)*1000
 		if ok, err := db.Update(topicID, "agent reply for benchmark", ts); err != nil || !ok {
 			b.Fatalf("Update failed: ok=%v err=%v", ok, err)
 		}
+		i++
 	}
 }
 
@@ -197,7 +203,7 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		if _, err := db.Dream(context.Background(), ""); err != nil {
 			b.Fatalf("Dream: %v", err)
 		}
@@ -235,8 +241,9 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 	}
 
 	b.ResetTimer()
-	var hits, total int
-	for i := 0; i < b.N; i++ {
+	hits, total := 0, 0
+	i := 0
+	for b.Loop() {
 		a := anchors[i%len(anchors)]
 		ts := base + int64(1_000_000+i)*1000
 		res, err := db.Search(internal.SearchQuery{Text: a.query, Timestamp: ts})
@@ -252,6 +259,7 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 		if strings.Contains(strings.ToLower(strings.Join(kws, " ")), strings.ToLower(a.marker)) {
 			hits++
 		}
+		i++
 	}
 	b.StopTimer()
 	if total > 0 {
@@ -288,7 +296,8 @@ func BenchmarkSearchLatency(b *testing.B) {
 	queries := []string{"我的跑步习惯", "我的狗叫什么", "我住在哪", "我做什么工作"}
 	lat := make([]time.Duration, 0, b.N)
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		q := queries[i%len(queries)]
 		ts := base + int64(1_000_000+i)*1000
 		start := time.Now()
@@ -296,6 +305,7 @@ func BenchmarkSearchLatency(b *testing.B) {
 			b.Fatalf("Search: %v", err)
 		}
 		lat = append(lat, time.Since(start))
+		i++
 	}
 	b.StopTimer()
 	reportLatency(b, lat)
@@ -309,7 +319,7 @@ func reportLatency(b *testing.B, lat []time.Duration) {
 	}
 	sorted := make([]time.Duration, len(lat))
 	copy(sorted, lat)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+	slices.Sort(sorted)
 	pct := func(p float64) time.Duration {
 		idx := int(p * float64(len(sorted)-1))
 		return sorted[idx]

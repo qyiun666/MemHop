@@ -1,12 +1,14 @@
 package repo
 
 import (
+	"cmp"
 	"encoding/json"
 	"math"
-	"sort"
+	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // MaxDepth: topic depth threshold that triggers deletion on sinking.
@@ -172,14 +174,13 @@ func CreateSceneL2(engine *core.StorageEngine, name string) (uint64, error) {
 // of depth-1 root topics under it (single pass over all topics).
 func CollectAllScenesL2(engine *core.StorageEngine) []core.SceneSlot {
 	var out []core.SceneSlot
-	engine.IterIndexByType(core.RecL2Scene, func(idHash uint64) error {
+	for idHash := range engine.IndexByType(core.RecL2Scene) {
 		slot, err := core.ReadSceneSlot(engine, idHash)
 		if err != nil {
-			return nil
+			continue
 		}
 		out = append(out, *slot)
-		return nil
-	})
+	}
 	if len(out) == 0 {
 		return out
 	}
@@ -195,37 +196,65 @@ func CollectAllScenesL2(engine *core.StorageEngine) []core.SceneSlot {
 	return out
 }
 
+// TopicListQuery carries ListTopicsL2 inputs. MetaIdx is the L2MetaIndex
+// cache: modes 1/2 rebuild candidates from it instead of unmarshalling
+// every topic record; a nil MetaIdx falls back to the full record scan
+// with identical semantics.
+type TopicListQuery struct {
+	Engine  *core.StorageEngine
+	MetaIdx *index.L2MetaIndex
+	SceneID string
+	Depth   uint8
+	Num     uint8
+}
+
 // ListTopicsL2 lists topics by mode: 1 = all topics up to depth, 2 = same but
 // restricted to sceneID, 3 = one topic by ID. depth is clamped to [1, MaxDepth];
 // results sorted by UserTimestamp for modes 1/2.
-func ListTopicsL2(engine *core.StorageEngine, sceneID string, depth uint8, num uint8) ([]core.TopicSlot, error) {
+func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 	var idHash uint64
 	var err error
+	depth := q.Depth
 	if depth == 0 {
 		depth = 1
 	} else if depth > MaxDepth {
 		depth = MaxDepth
 	}
-	if num != 1 {
-		idHash, err = common.ParseID(sceneID)
+	if q.Num != 1 {
+		idHash, err = common.ParseID(q.SceneID)
 		if err != nil {
 			return nil, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
 		}
 	}
-	if num == 3 {
-		return core.ReadTopicSlot(engine, idHash)
+	if q.Num == 3 {
+		return core.ReadTopicSlot(q.Engine, idHash)
 	}
 	var out []core.TopicSlot
-	for _, topic := range core.CollectAllTopics(engine) {
-		if topic.Depth > depth {
-			continue
+	if q.MetaIdx != nil {
+		q.MetaIdx.Iter(func(_ uint64, meta *index.L2Meta) bool {
+			if meta.Depth > depth {
+				return true
+			}
+			if q.Num == 2 && meta.SceneID != idHash {
+				return true
+			}
+			out = append(out, meta.ToTopicSlot())
+			return true
+		})
+	} else {
+		for _, topic := range core.CollectAllTopics(q.Engine) {
+			if topic.Depth > depth {
+				continue
+			}
+			if q.Num == 2 && topic.SceneID != idHash {
+				continue
+			}
+			out = append(out, topic)
 		}
-		if num == 2 && topic.SceneID != idHash {
-			continue
-		}
-		out = append(out, topic)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].UserTimestamp < out[j].UserTimestamp })
+	slices.SortFunc(out, func(a, b core.TopicSlot) int {
+		return cmp.Compare(a.UserTimestamp, b.UserTimestamp)
+	})
 	return out, nil
 }
 

@@ -20,7 +20,7 @@ func TestBKTree(t *testing.T) {
 		t.Error("fuzzy search should find at least 1 match")
 	}
 
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		tree.Insert("apple")
 	}
 	if len(tree.nodes) != 2 { // apple + apply

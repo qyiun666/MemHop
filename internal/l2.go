@@ -51,8 +51,11 @@ func (db *DB) MergeScenes(primaryID string, secondaryIDs []string) error {
 	if !repo.MergeScenesL2(db.engine, primaryID, secondaryIDs) {
 		return common.NewError(common.ErrIO, "merge scenes", nil)
 	}
-	// Drop merged secondary scenes so Dream does not spin empty goroutines.
 	removed := common.ToSet(hashes)
+	// Mirror the scene retarget in the L2MetaIndex so cached candidates
+	// match the merged records (storage write already done).
+	db.retargetL2Meta(primaryHash, removed)
+	// Drop merged secondary scenes so Dream does not spin empty goroutines.
 	kept := db.activeScenes[:0]
 	for _, sid := range db.activeScenes {
 		if _, drop := removed[sid]; !drop {
@@ -100,7 +103,13 @@ func (db *DB) SceneContext(sceneID string) (*SceneContext, error) {
 	if len(scenes) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "scene not found", nil)
 	}
-	topics, err := repo.ListTopicsL2(db.engine, sceneID, 2, 2)
+	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+		Engine:  db.engine,
+		MetaIdx: db.l2Meta,
+		SceneID: sceneID,
+		Depth:   2,
+		Num:     2,
+	})
 	if err != nil {
 		return nil, err
 	}

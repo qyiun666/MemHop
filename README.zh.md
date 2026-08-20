@@ -37,7 +37,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 
 - **八层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 场景使用 → L7 轨迹，配合 Dream 巩固管线
 - **三通道 RRF 检索** — BM25（gse CJK 分词）+ f32 向量 + 实体/词项模糊匹配（实体索引由已索引 topic 词项自动灌入），通过 Reciprocal Rank Fusion（k=60）融合
-- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0005`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。**与 v1 的 `.meh` 数据文件不兼容**（JSON 序列化切换为原生数字）；0x0004 文件（v1.2.0 的 L5 插件槽位格式）在 Open 时被显式拒绝，无迁移路径
+- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0006`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。**与 v1 的 `.meh` 数据文件不兼容**（JSON 序列化切换为原生数字）；0x0005 引入 0x0F Capability 记录（其 payload 取代 v1.2.0 的 PluginSlot），0x0006 将 capability payload 重设计为 v2 mcp/skill/composite resource-wrapper 模型；0x0005 及更早文件在 Open 时被显式拒绝，无迁移路径
 - **Dream 巩固管线** — 仅作用于 L0–L2 的五阶段：L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏（情绪/MBTI）
 - **L3 知识图谱** — 多独立超图，支持节点/边导入、CRUD、关键词/类型查询与 BFS 子图
 - **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）

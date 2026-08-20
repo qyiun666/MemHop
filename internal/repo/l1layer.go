@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -25,10 +25,10 @@ import (
 // accumulating decay. Returns the number of nodes created or updated.
 func SyncL1NodesFromL2(engine *core.StorageEngine) (int, error) {
 	byScene := make(map[uint64]map[uint64]struct{})
-	if err := engine.IterIndexByType(core.RecL2Topic, func(idHash uint64) error {
+	for idHash := range engine.IndexByType(core.RecL2Topic) {
 		topic, err := core.ReadTopicLenient(engine, idHash)
 		if err != nil || topic == nil || topic.Depth > 2 {
-			return nil
+			continue
 		}
 		set := byScene[topic.SceneID]
 		if set == nil {
@@ -36,9 +36,6 @@ func SyncL1NodesFromL2(engine *core.StorageEngine) (int, error) {
 			byScene[topic.SceneID] = set
 		}
 		set[idHash] = struct{}{}
-		return nil
-	}); err != nil {
-		return 0, err
 	}
 	now := time.Now().UnixMilli()
 	changed := 0
@@ -47,7 +44,7 @@ func SyncL1NodesFromL2(engine *core.StorageEngine) (int, error) {
 		for id := range set {
 			ids = append(ids, id)
 		}
-		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		slices.Sort(ids)
 		nodeID := common.HashID("l1:" + common.FormatHash(sceneID))
 		node := readSceneNode(engine, nodeID)
 		if node != nil && equalUint64s(node.TopicIDs, ids) {
@@ -327,11 +324,7 @@ func propagateClearedEdges(engine *core.StorageEngine, cfg *DecayParams, cleared
 }
 
 func decayRemainingEdges(engine *core.StorageEngine, cfg *DecayParams, removedNodeIDs map[uint64]bool, nowMs int64, report *L1DecayReport) error {
-	var entries []uint64
-	_ = engine.IterIndexByType(core.RecL1Hyperedge, func(idHash uint64) error {
-		entries = append(entries, idHash)
-		return nil
-	})
+	entries := slices.Collect(engine.IndexByType(core.RecL1Hyperedge))
 	for _, idHash := range entries {
 		edge := readSceneEdge(engine, idHash)
 		if edge == nil {
@@ -480,9 +473,6 @@ func applyEmotionalBoost(baseLambda float64, valence, arousal float64) float64 {
 }
 
 func dtHoursFrom(nowMs, updatedAtMs int64) float64 {
-	dtMs := nowMs - updatedAtMs
-	if dtMs < 0 {
-		dtMs = 0
-	}
+	dtMs := max(nowMs-updatedAtMs, 0)
 	return float64(dtMs) / 3_600_000.0
 }

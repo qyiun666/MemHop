@@ -4,6 +4,7 @@
 package internal
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +20,7 @@ type DB struct {
 	engine       *core.StorageEngine
 	config       *MemHopConfig
 	sparseIndex  *index.SparseIndex
+	l2Meta       *index.L2MetaIndex
 	llm          *Provider
 	l1Reverse    atomic.Pointer[index.L1ReverseIndex]
 	encoder      Encoder
@@ -44,10 +46,8 @@ func (db *DB) HasActiveScenes() bool { return len(db.activeScenes) > 0 }
 // Defaults.Capacity. When full, the oldest activation is evicted; that scene
 // remains searchable on disk but is no longer a Dream compression target.
 func (db *DB) activateScene(sceneID uint64) {
-	for _, sid := range db.activeScenes {
-		if sid == sceneID {
-			return
-		}
+	if slices.Contains(db.activeScenes, sceneID) {
+		return
 	}
 	capacity := 0
 	if db.config != nil {
@@ -64,6 +64,40 @@ func (db *DB) activateScene(sceneID uint64) {
 func (db *DB) TouchLastDreamAt() { db.lastDreamAt.Store(time.Now().UnixMilli()) }
 
 func (db *DB) getL1Reverse() *index.L1ReverseIndex { return db.l1Reverse.Load() }
+
+// syncL2Meta refreshes one topic entry of the L2MetaIndex from the record
+// just written; call it right after engine writes, before the sparse index
+// update (storage → l2meta → sparse lock order). On read failure the entry
+// is removed so stale metadata is never served.
+func (db *DB) syncL2Meta(idHash uint64) {
+	if db.l2Meta == nil {
+		return
+	}
+	topic, err := core.ReadTopicLenient(db.engine, idHash)
+	if err != nil || topic == nil {
+		db.l2Meta.Remove(idHash)
+		return
+	}
+	db.l2Meta.Update(index.L2MetaFromTopic(topic))
+}
+
+// retargetL2Meta moves every topic of the merged-away scenes to the primary
+// scene in the L2MetaIndex, mirroring repo.MergeScenesL2 after a merge.
+func (db *DB) retargetL2Meta(primaryHash uint64, removed map[uint64]struct{}) {
+	if db.l2Meta == nil {
+		return
+	}
+	for sid := range removed {
+		for _, id := range db.l2Meta.GetByScene(sid) {
+			meta := db.l2Meta.Remove(id)
+			if meta == nil {
+				continue
+			}
+			meta.SceneID = primaryHash
+			db.l2Meta.Update(meta)
+		}
+	}
+}
 
 // beginRead takes the shared lock for a public operation and rejects use
 // after Close.

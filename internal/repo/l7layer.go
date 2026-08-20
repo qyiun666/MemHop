@@ -7,8 +7,9 @@
 package repo
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -33,7 +34,9 @@ func ReadTrajectory(engine *core.StorageEngine, sessionID uint64) ([]core.Trajec
 	if out == nil {
 		out = []core.TrajectorySlot{}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	slices.SortFunc(out, func(a, b core.TrajectorySlot) int {
+		return cmp.Compare(a.Seq, b.Seq)
+	})
 	return out, nil
 }
 

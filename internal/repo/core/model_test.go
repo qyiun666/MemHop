@@ -21,8 +21,11 @@ func jsonRoundtrip(t *testing.T, v any, out any) {
 	}
 }
 
-func strPtr(s string) *string { return &s }
-func u64Ptr(v uint64) *uint64 { return &v }
+//go:fix inline
+func strPtr(s string) *string { return new(s) }
+
+//go:fix inline
+func u64Ptr(v uint64) *uint64 { return new(v) }
 
 func TestProfileSlotRoundtrip(t *testing.T) {
 	p := ProfileSlot{
@@ -270,7 +273,7 @@ func TestHypergraphNodeRoundtrip(t *testing.T) {
 		Title: "MemHop::Open", NodeType: "function",
 		Content:    "Opens or creates a MemHop database",
 		Keywords:   []string{"open", "database"},
-		SourceRef:  strPtr("/src/lib.rs:L114-L288"),
+		SourceRef:  new("/src/lib.rs:L114-L288"),
 		Importance: 0.9,
 		CreatedAt:  1000, UpdatedAt: 2000,
 	}
@@ -311,7 +314,7 @@ func TestHypergraphEdgeRoundtrip(t *testing.T) {
 	e := HypergraphEdge{
 		IDHash: 1, GraphID: 100, Kind: EdgeDependency,
 		NodeIDs: []uint64{10, 20, 30}, Weight: 0.8,
-		Label: strPtr("depends_on"), CreatedAt: 1000,
+		Label: new("depends_on"), CreatedAt: 1000,
 	}
 	var got HypergraphEdge
 	jsonRoundtrip(t, e, &got)
@@ -365,7 +368,7 @@ func TestArchiveSlotWithMetadata(t *testing.T) {
 		IDHash: 2, ContentType: ContentCode, Role: 1,
 		ContextID: 30, CreatedAt: 2000,
 		Content:  "fn main() {}",
-		Metadata: strPtr(`{"lang":"rust"}`),
+		Metadata: new(`{"lang":"rust"}`),
 	}
 	var got ArchiveSlot
 	jsonRoundtrip(t, a, &got)
@@ -379,7 +382,7 @@ func TestArchiveSlotImagePath(t *testing.T) {
 		IDHash: 3, ContentType: ContentImage, Role: 0,
 		ContextID: 20, CreatedAt: 1000,
 		Content:  "/img/screenshot.png",
-		Metadata: strPtr(`{"w":1920,"h":1080}`),
+		Metadata: new(`{"w":1920,"h":1080}`),
 	}
 	var got ArchiveSlot
 	jsonRoundtrip(t, a, &got)
@@ -462,7 +465,7 @@ func TestSceneUsageSlotRoundtrip(t *testing.T) {
 func TestTrajectorySlotRoundtrip(t *testing.T) {
 	ev := TrajectorySlot{
 		IDHash: 1, SessionID: 42, Seq: 2, EventType: "tool_call",
-		Payload: `{"tool":"read"}`, L4Ref: u64Ptr(7), Timestamp: 1000,
+		Payload: `{"tool":"read"}`, L4Ref: new(uint64(7)), Timestamp: 1000,
 	}
 	var got TrajectorySlot
 	jsonRoundtrip(t, ev, &got)

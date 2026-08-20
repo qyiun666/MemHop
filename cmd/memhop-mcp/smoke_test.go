@@ -219,10 +219,8 @@ func TestSSETenantConcurrentFirstConnect(t *testing.T) {
 	const n = 8
 	errCh := make(chan error, n)
 	var wg sync.WaitGroup
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range n {
+		wg.Go(func() {
 			client := mcp.NewClient(&mcp.Implementation{Name: "smoke-client", Version: "0.0.1"}, nil)
 			session, err := client.Connect(context.Background(), &mcp.SSEClientTransport{
 				Endpoint:   srv.URL + "/mcp/alice",
@@ -236,7 +234,7 @@ func TestSSETenantConcurrentFirstConnect(t *testing.T) {
 			if _, err := session.ListTools(context.Background(), nil); err != nil {
 				errCh <- err
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errCh)
