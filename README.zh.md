@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：v1.2.4（api/ 公开门面 + internal/ 平铺重构）· 最新稳定 tag：v1.0.1</strong>
+  <strong>当前版本：v1.2.5（MCP server 重写）· 最新稳定 tag：v1.0.1</strong>
 </p>
 
 ---
@@ -41,7 +41,8 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **Dream 巩固管线** — 仅作用于 L0–L2 的五阶段：L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏（情绪/MBTI）
 - **L3 知识图谱** — 多独立超图，支持节点/边导入、CRUD、关键词/类型查询与 BFS 子图
 - **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）
-- **极简依赖、可内嵌** — 3 个直接 Go 依赖（xxhash、gse、go-openai）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
+- **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、gse、go-openai、go-sdk）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
+- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 31 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 `.meh` 文件
 - **单 Agent 单文件** — 一个 Agent = 一个 `.meh` 文件，无服务进程、无后台守护
 
 ## 快速开始
@@ -96,7 +97,7 @@ ok, err := db.Dream(context.Background())
 ```
 
 
-> **并发契约。** 一个 `*DB` 是单 Agent 句柄：宿主必须保证同一 DB 实例上的 Search / Update / Dream / 写操作串行调用。
+> **并发契约。** 一个 `*DB` 是单 Agent 句柄：宿主必须保证同一 DB 实例上的 Search / Update / Dream / 写操作串行调用。MCP server 对每个租户保持同一契约：一个租户 = 一个 `.meh` 文件，经由其专属 `*DB` 串行访问。
 
 前置条件：Go 1.26+，Ollama（`ollama pull qllama/bge-m3:q4_k_m`），OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）
 
@@ -228,7 +229,8 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
-| v1.2.4 | 2026-08-19 | api/ 公开门面 + internal/ 平铺 | 公开 Go API 从根包迁移至 `github.com/qyiun666/MemHop/api`（根目录 `memhop.go`/`types.go` 移除）· `internal/sub/` 上提平铺为 `internal/`（`package sub` → `package internal`），`internal/sub/repo` → `internal/repo`，`internal/sub/common` → `internal/common` · `cmd/memhop-mcp` 改 import 别名 `memhop "github.com/qyiun666/MemHop/api"`（工具代码零改动）· 构建配置同步（Makefile fmt、pre-commit hook、CI gofmt）· 破坏性变更：直接 import 根包的宿主需切换到 `/api` |
+| v1.2.5 | 2026-08-20 | MCP server 重写 | `cmd/memhop-mcp` 对照 `api` 公开门面完全重写（v1.2.4 曾删除）：31 个 MCP 工具与 `api.DB` 方法一一对应 · 多租户 HTTP 暴露——SSE + streamable-http（2025-03-26 spec、无状态），租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 `.meh` 文件，懒打开注册表 + 首开互斥 · 工具输出中记录 ID 统一 16 位 hex 字符串序列化（uint64 JSON 数字在 JS/TS 宿主丢精度）· 租户 ID 白名单 + 路径逃逸拦截（防御纵深）· LLM 凭据仅环境变量（无 CLI flag）· go-sdk v1.7.0 回归直接依赖（3→4）· config/registry/tools/streamable 离线测试 + 多租户 SSE 冒烟 |
+| v1.2.4 | 2026-08-19 | api/ 公开门面 + internal/ 平铺 | 公开 Go API 从根包迁移至 `github.com/qyiun666/MemHop/api`（根目录 `memhop.go`/`types.go` 移除）· `internal/sub/` 上提平铺为 `internal/`（`package sub` → `package internal`），`internal/sub/repo` → `internal/repo`，`internal/sub/common` → `internal/common` · `cmd/memhop-mcp` 移除（v1.2.5 重写回归）· 构建配置同步（Makefile fmt、pre-commit hook、CI gofmt）· 破坏性变更：直接 import 根包的宿主需切换到 `/api` |
 | v1.2.3 | 2026-08-18 | MCP 兼容性修复 + DSH 接入 + 检索质量修复 | MCP 工具 schema 修复（无参工具 `properties` 不再输出 null，兼容严格 MCP 客户端）· 工具输出 ID 全部改为 16 位 hex 字符串（uint64 JSON 数字在 JS/TS 宿主丢精度，`new_topic_id` 回传失败已修复）· 新增 `--transport streamable-http`（2025-03-26 规范，Stateless 多租户，DSH 的 dsh-mcp-client 支持）· DeepSeek Harness 接入文档与引导词（`docs/dsh/`）· streamable-http 冒烟测试 · 关键词提取 prompt 全面优化（语义完整 + 同义词变体 + 短语）+ Search 按相关性返回全部相关话题（移除场景上下文截断），LoCoMo 召回 0.392 → 0.668、实体命中 0.284 → 0.877 |
 | v1.2.1 | 2026-08-16 | MCP Server + L5 能力层 | 新增 `cmd/memhop-mcp` 二进制：多租户 SSE MCP Server（官方 go-sdk v1.7.0），将全部公开 API 映射为 28 个工具（search/update/dream/checkpoint/status、画像、场景、知识图谱、归档、能力、轨迹/结晶）· 租户路径隔离 `/mcp/<tenant-id>` · 优雅退出时落盘快照 · 离线 SSE 冒烟测试（`make test-mcp`）· 使用文档见 `docs/mcp/`（本地）· L5 插件层重构为能力层（`memhop-capability/v1`：manual/atomic/composite 三种 kind，`ActivateCapability` 实现 draft→active 生命周期，指纹去重，Crystallize 产出 create/reuse/merge 候选）· 内置能力工具箱（`capabilities/`，embed 只读，Open 时自动挂载）· `Update` 返回 `(bool, error)` · `.meh` 格式升至 `0x0005`——0x0004 文件（v1.2.0 插件记录）在 Open 时被拒绝，不迁移 · 编码器健康检查要求端点根路径 2xx 响应 HEAD（无 fallback）· 活跃场景受 `Capacity`（默认 7，最旧场景被移出 Dream 目标）限制 · `RecordEnd` 头字段 + A/B 头损坏恢复 |
 | v1.2.0 | 2026-08-14 | L5 插件层 | L5 动作链 → 插件槽位（PluginSlot + 结构化五段 Manifest：技能 / MCP / 工具 / 提示词 / 服务）· 仅路径导入 `ImportPlugin`，移除手工写入 Create/Update · Crystallize 从 L7 轨迹按类型分派插件 · `SearchResult.Crystals` → `Plugins` · 八层架构（L0–L7）文档 |

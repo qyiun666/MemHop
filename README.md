@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>Current: v1.2.4 (api/ facade + internal/ flattening) · Latest stable tag: v1.0.1</strong>
+  <strong>Current: v1.2.5 (MCP server rewritten) · Latest stable tag: v1.0.1</strong>
 </p>
 
 ---
@@ -41,7 +41,8 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 - **Dream Pipeline** — five stages over L0–L2: L2 compress → L1 rebuild → L1 decay → L0 profile → L0 distill (emotion/MBTI)
 - **L3 Knowledge Graph** — Multiple independent hypergraphs with node/edge import, CRUD, keyword/type lookup and BFS subgraph queries
 - **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)
-- **Minimal & Embeddable** — 3 direct Go deps (xxhash, gse, go-openai); Ollama is accessed through its plain HTTP API, no Ollama SDK dependency, `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
+- **Minimal & Embeddable** — 4 direct Go deps (xxhash, gse, go-openai, go-sdk); Ollama is accessed through its plain HTTP API, no Ollama SDK dependency, `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
+- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 31 MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts, each isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file
 - **Single Agent, Single File** — one agent = one `.meh` file, no server process, no background daemon
 
 ## Quick Start
@@ -96,7 +97,7 @@ ok, err := db.Dream(context.Background())
 ```
 
 
-> **Concurrency contract.** A `*DB` is a single-agent handle. The host must serialize Search / Update / Dream / write APIs on one DB instance.
+> **Concurrency contract.** A `*DB` is a single-agent handle. The host must serialize Search / Update / Dream / write APIs on one DB instance. The MCP server keeps the same contract per tenant: one tenant = one `.meh` file, serialized through its own `*DB`.
 
 Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-compatible LLM endpoint (`Config.LLM` is required)
 
@@ -228,7 +229,8 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
-| v1.2.4 | 2026-08-19 | api/ facade + internal/ flattening | Public Go API moved from the root package to `github.com/qyiun666/MemHop/api` (root `memhop.go`/`types.go` removed) · `internal/sub/` flattened into `internal/` (`package sub` → `package internal`), `internal/sub/repo` → `internal/repo`, `internal/sub/common` → `internal/common` · `cmd/memhop-mcp` now imports the `api` package under the `memhop` alias (zero tool-code changes) · build config (Makefile fmt, pre-commit hook, CI gofmt) updated · breaking change: hosts importing the root package must switch to `/api` |
+| v1.2.5 | 2026-08-20 | MCP server rewritten | `cmd/memhop-mcp` fully rewritten against the `api` facade (v1.2.4 removed it): all 31 MCP tools map 1:1 to `api.DB` methods · multi-tenant HTTP — SSE + streamable-http (2025-03-26 spec, stateless), each tenant isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file, lazy-open registry with a first-open mutex · all tool outputs serialize record IDs as 16-char hex strings (uint64 JSON numbers lose precision in JS/TS hosts) · tenant-ID whitelist + path-traversal rejection (defense in depth) · LLM credentials via env vars only (no CLI flag) · go-sdk v1.7.0 back as a direct dep (3 → 4) · offline tests for config/registry/tools/streamable + multi-tenant SSE smoke |
+| v1.2.4 | 2026-08-19 | api/ facade + internal/ flattening | Public Go API moved from the root package to `github.com/qyiun666/MemHop/api` (root `memhop.go`/`types.go` removed) · `internal/sub/` flattened into `internal/` (`package sub` → `package internal`), `internal/sub/repo` → `internal/repo`, `internal/sub/common` → `internal/common` · `cmd/memhop-mcp` removed (rewritten in v1.2.5) · build config (Makefile fmt, pre-commit hook, CI gofmt) updated · breaking change: hosts importing the root package must switch to `/api` |
 | v1.2.3 | 2026-08-18 | MCP compatibility fixes + DSH integration + retrieval quality | MCP tool schemas fixed (no-arg tools no longer emit `properties: null`, breaking strict clients) · all tool outputs render record IDs as 16-char hex strings (uint64 JSON numbers lose precision in JS/TS hosts, breaking `new_topic_id` round-trips) · new `--transport streamable-http` (2025-03-26 spec, stateless multi-tenant; supported by DSH's dsh-mcp-client) · DeepSeek Harness integration guide + agent instructions (`docs/dsh/`) · streamable-http smoke test · keyword-extraction prompt overhauled (semantic completeness + colloquial variants + phrases) + Search returns all relevance-ordered topics (scene-context truncation removed), LoCoMo recall 0.392 → 0.668, entity_hit 0.284 → 0.877 |
 | v1.2.1 | 2026-08-16 | MCP server + L5 capability layer | New `cmd/memhop-mcp` binary: multi-tenant SSE MCP server (official go-sdk v1.7.0) mapping the full public API to 28 tools (search/update/dream/checkpoint/status, profile, scenes, knowledge, archive, capabilities, trajectory/crystallize) · tenant path isolation `/mcp/<tenant-id>` · graceful shutdown persists via snapshot · offline SSE smoke tests (`make test-mcp`) · usage docs under `docs/mcp/` (local) · L5 plugin layer refactored into the capability layer (`memhop-capability/v1`: manual/atomic/composite kinds, draft→active lifecycle via `ActivateCapability`, fingerprint dedup, Crystallize emits create/reuse/merge candidates) · built-in capability toolbox (`capabilities/`, embedded, read-only, attached at Open) · `Update` returns `(bool, error)` · `.meh` format bumped to `0x0005` — 0x0004 files (v1.2.0 plugin records) are rejected at Open, no migration · encoder health check requires a 2xx HEAD on the endpoint root (no fallback) · active scenes bounded by `Capacity` (default 7, oldest evicted from Dream targets) · `RecordEnd` header field + A/B header damage recovery |
 | v1.2.0 | 2026-08-14 | L5 plugin layer | L5 action chains → plugin slots (PluginSlot + structured five-section manifest: skills / MCPs / tools / prompts / services) · path-only import via `ImportPlugin`, hand-written create/update removed · Crystallize dispatches plugins by type from L7 trajectories · `SearchResult.Crystals` → `Plugins` · eight-layer architecture (L0–L7) docs |
