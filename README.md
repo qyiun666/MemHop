@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>Current: v1.2.5 (MCP server rewritten) · Latest stable tag: v1.0.1</strong>
+  <strong>Current: v1.2.5 · Latest stable tag: v1.2.5</strong>
 </p>
 
 ---
@@ -50,6 +50,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 ```go
 import (
     "context"
+    "fmt"
     "log"
     "os"
     "time"
@@ -86,14 +87,14 @@ if err != nil {
 }
 
 // Append the agent reply to the topic created by Search.
-// Update takes the topic ID as a hex string.
-topicID := memhop.FormatHash(res.NewTopicID)
+// Update takes the topic ID as a 16-char hex string (NewTopicID is uint64).
+topicID := fmt.Sprintf("%016x", res.NewTopicID)
 if _, err = db.Update(topicID, "Agent: ...", time.Now().UnixMilli()); err != nil {
     log.Fatal(err)
 }
 
-// Dream consolidation over active scenes (L0-L2)
-ok, err := db.Dream(context.Background())
+// Dream consolidation over active scenes (L0-L2); sceneID "" = all active scenes.
+ok, err := db.Dream(context.Background(), "")
 ```
 
 
@@ -107,14 +108,15 @@ Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-
 |-------|---------|
 | Core loop | `Search` · `Update` · `Dream` · `Checkpoint` · `Close` |
 | L0 Profile | `GetL0` · `UpdateL0` |
-| L2 Context | `ListScenes` · `MergeScenes` |
+| L2 Context | `ListScenes` · `SceneContext` · `ActiveSceneIDs` · `MergeScenes` |
 | L3 Knowledge | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 Archive | `SearchL4` · `GetArchive` |
-| L5 Capability | `ImportCapability` · `GetCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` · `Crystallize` |
+| L5 Capability | `ImportCapability` · `GetCapability` · `UpdateCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` |
+| L7 Trajectory | `AppendTrajectory` · `ReadTrajectory` · `DeleteTrajectory` · `Crystallize` |
 
 ### Built-in L5 Capabilities
 
-The root `capabilities/` directory ships a ready-to-use capability toolbox (`memhop-capability/v1`), embedded into the library as `api.BuiltinCapabilityFS`, in two groups: MemHop's own usage manuals (`manual`: guide, Search, Update, Dream, L7 trajectory, L5 crystallize and import) and atomic capability cards a harness/agent is expected to have (`atomic`: file read/write/edit, command execution, file search, web search). **Zero config, zero writes**: `ListCapabilities` / `GetCapability` serve the built-in toolbox directly (same status/kind/tag/keyword filters as stored records), so the host LLM can fetch and consult it. Built-ins are read-only, never persisted to the `.meh` file, dedupe by ID against stored same-name records (stored wins), and are NOT attached to `Search` responses — retrieval returns stored matches only.
+The root `capabilities/` directory ships a ready-to-use capability toolbox (`memhop-capability/v2`), embedded into the library at build time, in two groups: MemHop's own usage manuals (`manual`: guide, Search, Update, Dream, L7 trajectory, L5 crystallize and import) and atomic capability cards a harness/agent is expected to have (`atomic`: file read/write/edit, command execution, file search, web search). **Zero config, zero writes**: `ListCapabilities` / `GetCapability` serve the built-in toolbox directly (same status/type/keyword filters as stored records), so the host LLM can fetch and consult it. Built-ins are read-only, never persisted to the `.meh` file, dedupe by ID against stored same-name records (stored wins), and are NOT attached to `Search` responses — retrieval returns stored matches only.
 
 ## Architecture
 
@@ -156,7 +158,7 @@ The Dream cycle is an automatic memory consolidation process inspired by how the
 Post-fusion: keyword-overlap scoring, additive scene bonuses for active/recent scenes, then L1 association expansion + L5 capability matching + L0 profile assembly.
 
 
-`SearchResult` also expands every returned topic's `L4Refs` into `Archives` (full L4 text), so a host can build LLM context directly from `Contexts` + `Archives` without walking archive IDs manually.
+`SearchResult` returns `Contexts` (the hit scene's depth-≤1 topics, each carrying `L4Refs`) and `AssociatedContexts` (topics from the L1-associated scene); hosts pull the L4 original text via `SceneContext` or `SearchL4`.
 
 When `Search` creates a topic it also matches relevant L3 knowledge nodes and writes their graph IDs into `TopicSlot.L3Refs`; `DirectedL3ID` filters topics on these refs.
 ## Benchmarks
@@ -191,7 +193,7 @@ Analysis and competitor positioning: [docs/benchmarks/locomo_recall_analysis.md]
 api/                         ← Public facade: DB handle (open/search/update/dream/l0–l7) + type aliases/constructors
 internal/                    ← Business assembly: config / db / defaults / l0 / l2 / l3 / l3query /
                                l4 / l5 / l7 / search / update / dream / scenefind / llm_client / llm_ops / encoder
-internal/repo/               ← Data layer: open + l0layer–l7layer (record read/write, vectors)
+internal/repo/               ← Data layer: l0layer–l7layer (record read/write, vectors)
 internal/repo/index/         ← Index layer: sparse (BM25) / l1_reverse / l2meta / l3_index /
                                entity / rebuild / tokenizer (gse)
 internal/repo/core/          ← .meh engine: engine / frame / header / snapshot / reclaim /
@@ -229,7 +231,7 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
-| v1.2.5 | 2026-08-20 | MCP server rewritten | `cmd/memhop-mcp` fully rewritten against the `api` facade (v1.2.4 removed it): all 31 MCP tools map 1:1 to `api.DB` methods · multi-tenant HTTP — SSE + streamable-http (2025-03-26 spec, stateless), each tenant isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file, lazy-open registry with a first-open mutex · all tool outputs serialize record IDs as 16-char hex strings (uint64 JSON numbers lose precision in JS/TS hosts) · tenant-ID whitelist + path-traversal rejection (defense in depth) · LLM credentials via env vars only (no CLI flag) · go-sdk v1.7.0 back as a direct dep (3 → 4) · offline tests for config/registry/tools/streamable + multi-tenant SSE smoke |
+| v1.2.5 | 2026-08-20 | MCP server rewritten | `cmd/memhop-mcp` fully rewritten against the `api` facade (v1.2.4 removed it): all 31 MCP tools map 1:1 to `api.DB` methods · multi-tenant HTTP — SSE + streamable-http (2025-03-26 spec, stateless), each tenant isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file, lazy-open registry with a first-open mutex · all tool outputs serialize record IDs as 16-char hex strings (uint64 JSON numbers lose precision in JS/TS hosts) · tenant-ID whitelist + path-traversal rejection (defense in depth) · LLM credentials via env vars only (no CLI flag) · go-sdk v1.7.0 back as a direct dep (3 → 4) · offline tests for config/registry/tools/streamable + multi-tenant SSE smoke · codebase cleanup: dropped redundant enum JSON helpers (default `~uint8` JSON behavior is identical), `CodeOf` migrated to Go 1.26 `errors.AsType`, scalar cosine loop (2.7× faster at 1024 dims), deleted the `internal/repo/open.go` forwarding layer (17 funcs + 8 aliases; internal calls core/index directly), removed the `ParseID→FormatHash` round-trip in Update |
 | v1.2.4 | 2026-08-19 | api/ facade + internal/ flattening | Public Go API moved from the root package to `github.com/qyiun666/MemHop/api` (root `memhop.go`/`types.go` removed) · `internal/sub/` flattened into `internal/` (`package sub` → `package internal`), `internal/sub/repo` → `internal/repo`, `internal/sub/common` → `internal/common` · `cmd/memhop-mcp` removed (rewritten in v1.2.5) · build config (Makefile fmt, pre-commit hook, CI gofmt) updated · breaking change: hosts importing the root package must switch to `/api` |
 | v1.2.3 | 2026-08-18 | MCP compatibility fixes + DSH integration + retrieval quality | MCP tool schemas fixed (no-arg tools no longer emit `properties: null`, breaking strict clients) · all tool outputs render record IDs as 16-char hex strings (uint64 JSON numbers lose precision in JS/TS hosts, breaking `new_topic_id` round-trips) · new `--transport streamable-http` (2025-03-26 spec, stateless multi-tenant; supported by DSH's dsh-mcp-client) · DeepSeek Harness integration guide + agent instructions (`docs/dsh/`) · streamable-http smoke test · keyword-extraction prompt overhauled (semantic completeness + colloquial variants + phrases) + Search returns all relevance-ordered topics (scene-context truncation removed), LoCoMo recall 0.392 → 0.668, entity_hit 0.284 → 0.877 |
 | v1.2.1 | 2026-08-16 | MCP server + L5 capability layer | New `cmd/memhop-mcp` binary: multi-tenant SSE MCP server (official go-sdk v1.7.0) mapping the full public API to 28 tools (search/update/dream/checkpoint/status, profile, scenes, knowledge, archive, capabilities, trajectory/crystallize) · tenant path isolation `/mcp/<tenant-id>` · graceful shutdown persists via snapshot · offline SSE smoke tests (`make test-mcp`) · usage docs under `docs/mcp/` (local) · L5 plugin layer refactored into the capability layer (`memhop-capability/v1`: manual/atomic/composite kinds, draft→active lifecycle via `ActivateCapability`, fingerprint dedup, Crystallize emits create/reuse/merge candidates) · built-in capability toolbox (`capabilities/`, embedded, read-only, attached at Open) · `Update` returns `(bool, error)` · `.meh` format bumped to `0x0005` — 0x0004 files (v1.2.0 plugin records) are rejected at Open, no migration · encoder health check requires a 2xx HEAD on the endpoint root (no fallback) · active scenes bounded by `Capacity` (default 7, oldest evicted from Dream targets) · `RecordEnd` header field + A/B header damage recovery |

@@ -1,18 +1,18 @@
 # capabilities/ — 内置 L5 能力工具箱（对外能力合集）
 
-本目录是 MemHop 对外的**能力工具箱**，`memhop-capability/v1` 格式，通过 `capabilities.go` 的 `//go:embed` 内嵌进库。内置能力分两类：
+本目录是 MemHop 对外的**能力工具箱**，`memhop-capability/v2` 格式，通过 `capabilities.go` 的 `//go:embed` 内嵌进库。内置能力分两类：
 
 1. **MemHop 自身的能力说明书**（`memhop-*`，manual）：教宿主 LLM 正确驱动记忆循环
 2. **harness/agent 应具备的原子能力卡**（`agent-*`，atomic）：通用工具契约卡，宿主据此映射自己的实际工具
 
 ## 工作方式：单独获取，零配置、零写入
 
-- **获取通道**：`ListCapabilities` / `GetCapability` 直接返回内置工具箱，与库存能力共用同一套过滤器（status / kind / tag / keyword）；宿主可在系统提示词组装时一次性拉全量
-- **不附带检索**：`Search` 的 `capabilities` 字段只返回库内存储并按查询匹配的能力，不携带内置工具箱
+- **获取通道**：`ListCapabilities` / `GetCapability` 直接返回内置工具箱，与库存能力共用同一套过滤器（status / type / keyword）；宿主可在系统提示词组装时一次性拉全量
+- **不附带检索**：`Search` 响应不携带内置工具箱——检索只返回库内存储并按查询匹配的能力
 - **只读**：内置能力不落 `.meh` 文件、不参与 Activate / RecordCapabilityUsage / Delete 生命周期
 - **去重**：宿主导入同名能力后，库存记录（含使用统计）优先，内置副本自动让位
 
-宿主可通过 `api.BuiltinCapabilityFS` 读取这套内嵌文件（检查、扩展或自行入库）。
+宿主可通过 `capabilities.FS` 读取这套内嵌文件（检查、扩展或自行入库）。
 
 ## 清单
 
@@ -43,31 +43,38 @@
 
 宿主自己的能力走 `ImportCapability(path)` 入库（单文件，或含 `capability.json` 的目录），导入即 `active`、参与 Search 关键词匹配；内容未变（FileHash 相同）的重复导入会跳过，不产生新记录。
 
-最小 manual 示例：
+最小 mcp 示例（`type: mcp` / `skill` 需要恰好一个同类型 resource）：
 
 ```json
 {
-  "format": "memhop-capability/v1",
+  "format": "memhop-capability/v2",
   "name": "my-runbook",
-  "kind": "manual",
+  "version": "1",
+  "type": "mcp",
   "summary": "一句话说明",
   "trigger": "什么时候命中该能力（参与 Search 匹配的关键词）",
-  "tags": ["tag"],
-  "manual": {"goal": "目标", "steps": ["步骤一", "步骤二"]}
+  "resources": [
+    {"type": "mcp", "name": "my_tool", "ref": "harness:my_tool", "description": "工具契约"}
+  ]
 }
 ```
 
-最小 atomic 示例：
+最小 composite 示例（`type: composite` 需要至少一个 resource；workflow 可选，若存在则每步 `ref` 必填）：
 
 ```json
 {
-  "format": "memhop-capability/v1",
-  "name": "my-tool",
-  "kind": "atomic",
+  "format": "memhop-capability/v2",
+  "name": "my-composite",
+  "version": "1",
+  "type": "composite",
   "summary": "一句话说明",
   "trigger": "命中关键词",
-  "manifest": {"tools": [{"name": "my_tool", "ref": "harness:my_tool", "description": "工具契约"}]}
+  "resources": [
+    {"type": "skill", "name": "step1", "ref": "skills/step1.md"},
+    {"type": "skill", "name": "step2", "ref": "skills/step2.md"}
+  ],
+  "workflow": {"steps": [{"ref": "step1", "action": "run"}, {"ref": "step2", "action": "run"}]}
 }
 ```
 
-校验规则：`manual` 必须有 `goal` 和 `steps`；`atomic` 至少一个 `manifest` 项；`composite` 必须有 `workflow.steps`。MemHop 只存储与匹配能力，不执行其中引用的工具或服务。
+校验规则：`name` 必填；`trigger` 或 `summary` 至少一个；`mcp`/`skill` 恰好一个同类型 resource；`composite` 至少一个 resource；`workflow.steps[].ref` 必填。MemHop 只存储与匹配能力，不执行其中引用的工具或服务。
