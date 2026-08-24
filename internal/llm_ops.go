@@ -11,13 +11,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"math"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // Per-call output caps. Config.MaxOutputTokens is a global ceiling; these
@@ -32,6 +35,11 @@ const (
 	// than risk truncating merged summaries for large scenes.
 	consolidationMaxTokens = 8192
 	distillMaxTokens       = 2048
+	// keywordChunkRunes is the input-length threshold (in runes) above
+	// which extraction splits the text first: prompt constraint weakens
+	// with input length, and long inputs are the main trigger of
+	// natural-language-summary replies.
+	keywordChunkRunes = 2000
 )
 
 func minTokens(configured, cap int) int {
@@ -55,13 +63,34 @@ Rules:
 9. Exclude: greetings, filler words, question words (when/where/what/why/how/who/which), generic verbs (go/do/get/run/make/have/want/like/think) unless tied to a specific action
 10. Output ONLY valid JSON: {"keywords":[...]}, no markdown, no code fences`
 
+// keywordFormatRetry is appended to the user prompt for the format-constrained
+// retry: long inputs drift toward natural-language summaries, and restating
+// the hard JSON-only constraint measurably improves structured replies.
+const keywordFormatRetry = `
+
+Output ONLY valid JSON: {"keywords":["keyword1", "keyword2", ...]}.
+No markdown, no code fences, no explanations.`
+
 // ExtractKeywords extracts semantic keywords whose union represents the
-// text's core meaning (unlimited count).
+// text's core meaning (unlimited count). Parse failures self-heal: one
+// format-constrained retry, then heuristic tokenization, then an empty
+// list — Search/Update must never fail because of this preprocessing step.
+// Long inputs are chunked first so the JSON constraint stays effective.
+// Only the LLM call itself failing surfaces an error.
 func (p *Provider) ExtractKeywords(ctx context.Context, text string) ([]string, error) {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return []string{}, nil
 	}
+	if utf8.RuneCountInString(trimmed) > keywordChunkRunes {
+		return p.extractKeywordsChunked(ctx, trimmed)
+	}
+	return p.extractKeywordsWithRetry(ctx, trimmed)
+}
+
+// extractKeywordsWithRetry runs the single-pass path: token budgets for
+// truncation, then one format-constrained retry, then heuristic fallback.
+func (p *Provider) extractKeywordsWithRetry(ctx context.Context, trimmed string) ([]string, error) {
 	user := "Extract keywords from:\n" + trimmed
 	// Reasoning models consume part of max_tokens for reasoning; on
 	// truncation (finish_reason=length) retry with the next larger budget.
@@ -72,6 +101,7 @@ func (p *Provider) ExtractKeywords(ctx context.Context, text string) ([]string, 
 		minTokens(p.maxOutputTokens, keywordRetryMaxTokens),
 		consolidationMaxTokens,
 	}
+	var lastRaw string
 	for attempt, maxTokens := range budgets {
 		response, err := p.chat(ctx, systemKeywords, user, maxTokens, 0.0, 1.0)
 		if err != nil {
@@ -80,18 +110,112 @@ func (p *Provider) ExtractKeywords(ctx context.Context, text string) ([]string, 
 			}
 			return nil, err
 		}
-		var raw struct {
-			Keywords []string `json:"keywords"`
+		lastRaw = response
+		if keywords, ok := parseKeywords(response); ok {
+			return dedupeKeywords(keywords), nil
 		}
-		if err := json.Unmarshal([]byte(stripCodeBlocks(response)), &raw); err != nil {
-			if attempt < len(budgets)-1 {
-				continue
-			}
-			return nil, common.NewError(common.ErrLLM, fmt.Sprintf("keywords response parse failed (raw: %q)", response), err)
-		}
-		return dedupeKeywords(raw.Keywords), nil
+		// Invalid JSON: a truncated response may parse on a larger budget,
+		// so keep iterating; format failures are handled after the loop.
 	}
-	return nil, common.NewError(common.ErrLLM, "keywords extraction exhausted retries")
+	// Every budget failed to parse: one format-constrained retry before
+	// degrading, so long-input summaries still get a structured attempt.
+	response, err := p.chat(ctx, systemKeywords, user+keywordFormatRetry, consolidationMaxTokens, 0.0, 1.0)
+	if err != nil {
+		// The second-chance call failed (transient); degrade instead of
+		// aborting the host's search round.
+		slog.Warn("llm: keyword extraction retry failed, degrading", "err", err)
+		return fallbackKeywords(trimmed, lastRaw), nil
+	}
+	if keywords, ok := parseKeywords(response); ok {
+		return dedupeKeywords(keywords), nil
+	}
+	return fallbackKeywords(trimmed, response), nil
+}
+
+// extractKeywordsChunked extracts per chunk (one attempt each, retry-level
+// budget) and merges the results. Unparseable chunks are dropped with a
+// warning; when every chunk fails, the whole text degrades via heuristic
+// fallback. LLM call failures still surface as errors.
+func (p *Provider) extractKeywordsChunked(ctx context.Context, trimmed string) ([]string, error) {
+	chunks := splitForExtraction(trimmed, keywordChunkRunes)
+	merged := make([]string, 0, len(chunks)*4)
+	for i, chunk := range chunks {
+		response, err := p.chat(ctx, systemKeywords, "Extract keywords from:\n"+chunk,
+			minTokens(p.maxOutputTokens, keywordRetryMaxTokens), 0.0, 1.0)
+		if err != nil {
+			return nil, err
+		}
+		if keywords, ok := parseKeywords(response); ok {
+			merged = append(merged, keywords...)
+		} else {
+			slog.Warn("llm: keyword extraction chunk parse failed, skipped",
+				"chunk", i, "raw", common.SafeCharSlice(response, 120))
+		}
+	}
+	merged = dedupeKeywords(merged)
+	if len(merged) == 0 {
+		return fallbackKeywords(trimmed, ""), nil
+	}
+	return merged, nil
+}
+
+// splitForExtraction splits text into chunks of at most limit runes,
+// preferring sentence/line boundaries in the trailing window so keywords
+// survive the split; cuts hard at the limit otherwise.
+func splitForExtraction(text string, limit int) []string {
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return []string{text}
+	}
+	chunks := make([]string, 0, (len(runes)+limit-1)/limit)
+	for start := 0; start < len(runes); {
+		end := start + limit
+		if end >= len(runes) {
+			chunks = append(chunks, string(runes[start:]))
+			break
+		}
+		window := runes[start:end]
+		cut := limit
+		for i := len(window) - 1; i >= len(window)/2; i-- {
+			if window[i] == '\n' || window[i] == '。' || window[i] == '；' || window[i] == ';' || window[i] == '.' {
+				cut = i
+				break
+			}
+		}
+		chunks = append(chunks, string(runes[start:start+cut]))
+		start += cut
+	}
+	return chunks
+}
+
+// parseKeywords parses the LLM keyword reply; ok=false means the response
+// is not valid JSON.
+func parseKeywords(response string) ([]string, bool) {
+	var raw struct {
+		Keywords []string `json:"keywords"`
+	}
+	if err := json.Unmarshal([]byte(stripCodeBlocks(response)), &raw); err != nil {
+		return nil, false
+	}
+	return raw.Keywords, true
+}
+
+// fallbackKeywords degrades keyword extraction: heuristic tokenization
+// first (index-side pipeline, matching the BM25 vocabulary), then an empty
+// list so retrieval falls back to vector/BM25 over the raw query. Never
+// returns an error.
+func fallbackKeywords(text, raw string) []string {
+	if kw := heuristicKeywords(text); len(kw) > 0 {
+		slog.Warn("llm: keywords parse failed, fell back to heuristic keywords", "raw", common.SafeCharSlice(raw, 120))
+		return kw
+	}
+	slog.Warn("llm: keywords parse failed, proceeding without keywords", "raw", common.SafeCharSlice(raw, 120))
+	return []string{}
+}
+
+// heuristicKeywords tokenizes the source text as fallback keywords.
+func heuristicKeywords(text string) []string {
+	return index.Tokenize(text)
 }
 
 func dedupeKeywords(ss []string) []string {

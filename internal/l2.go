@@ -78,6 +78,7 @@ type SceneContextTopic struct {
 	TopicID    string         `json:"topic_id"`
 	Depth      int            `json:"depth"`
 	Keywords   []string       `json:"keywords"`
+	L4IDs      []string       `json:"l4_ids,omitempty"` // 话题内的 L4 档案 ID,供按 ID 拉取原文
 	Messages   []SceneMessage `json:"messages,omitempty"`
 	ChildCount int            `json:"child_count"`
 }
@@ -126,8 +127,10 @@ func (db *DB) SceneContext(sceneID string) (*SceneContext, error) {
 			Depth:      int(t.Depth),
 			Keywords:   append(append(append([]string{}, t.FusedKeywords...), t.UserKeywords...), t.AgentKeywords...),
 			ChildCount: children[t.ID],
+			L4IDs:      make([]string, 0, len(t.L4Refs)),
 		}
 		for _, ref := range t.L4Refs {
+			st.L4IDs = append(st.L4IDs, common.FormatHash(ref))
 			arc, err := core.ReadArchiveSlot(db.engine, ref)
 			if err != nil {
 				continue
