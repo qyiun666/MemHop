@@ -47,6 +47,9 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 
 ## Quick Start
 
+> Full integration guide (config, all layer APIs, N:N turns, pitfalls):
+> [INTEGRATION_GUIDE.md](INTEGRATION_GUIDE.md) · 中文: [INTEGRATION_GUIDE.zh.md](INTEGRATION_GUIDE.zh.md)
+
 ```go
 import (
     "context"
@@ -107,13 +110,13 @@ Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-
 
 | Group | Methods |
 |-------|---------|
-| Core loop | `Search` · `Update` · `Dream` · `Checkpoint` · `Close` |
+| Core loop | `Search(ctx, q)` · `Update` · `Dream(ctx)` · `Checkpoint` · `Close` |
 | L0 Profile | `GetL0` · `UpdateL0` |
-| L2 Context | `ListScenes` · `SceneContext` · `ActiveSceneIDs` · `MergeScenes` |
+| L2 Context | `ListScenes` · `SceneContext` · `ActiveSceneIDs` · `MergeScenes` · `RefineTopicKeywords(ctx, id)` |
 | L3 Knowledge | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
-| L4 Archive | `SearchL4` · `GetArchive` |
+| L4 Archive | `SearchL4` · `GetArchive` · `AppendL4Message` |
 | L5 Capability | `ImportCapability` · `GetCapability` · `UpdateCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` |
-| L7 Trajectory | `AppendTrajectory` · `ReadTrajectory` · `DeleteTrajectory` · `Crystallize` |
+| L7 Trajectory | `AppendTrajectory` · `ReadTrajectory` · `TrajectoryStats` · `DeleteTrajectory` · `Crystallize` |
 
 ### Built-in L5 Capabilities
 
@@ -232,6 +235,7 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
+| v1.2.7 | 2026-08-25 | Host alignment + bilingual integration guides | `Search(ctx, q)` and `RefineTopicKeywords(ctx, id)` accept a context (cancels LLM extraction, encoder calls, internally triggered Dream) · `api` exports `LlmConfig` / `MemHopDefaults` / `TopicSlot` / `ResourceRef` / `CrystallizeDetail` / `TrajectoryStats` · new `TrajectoryStats` (per-session L7 stats) + `memhop_trajectory_stats` MCP tool (31 → 32 tools) · `CrystallizeResult.Details` — per-candidate create/reuse/merge/skip disposition · `AppendL4Message` (pure L4 append, no LLM) · active-scene capacity: Update triggers a Dream on the oldest scene at Capacity with a compressibility pre-check; `SearchDreamContextThreshold` zero-value guard · bilingual integration guides added at repo root (`INTEGRATION_GUIDE.md` / `INTEGRATION_GUIDE.zh.md`) |
 | v1.2.5 | 2026-08-20 | MCP server rewritten | `cmd/memhop-mcp` fully rewritten against the `api` facade (v1.2.4 removed it): all 31 MCP tools map 1:1 to `api.DB` methods · multi-tenant HTTP — SSE + streamable-http (2025-03-26 spec, stateless), each tenant isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file, lazy-open registry with a first-open mutex · all tool outputs serialize record IDs as 16-char hex strings (uint64 JSON numbers lose precision in JS/TS hosts) · tenant-ID whitelist + path-traversal rejection (defense in depth) · LLM credentials via env vars only (no CLI flag) · go-sdk v1.7.0 back as a direct dep (3 → 4) · offline tests for config/registry/tools/streamable + multi-tenant SSE smoke · codebase cleanup: dropped redundant enum JSON helpers (default `~uint8` JSON behavior is identical), `CodeOf` migrated to Go 1.26 `errors.AsType`, scalar cosine loop (2.7× faster at 1024 dims), deleted the `internal/repo/open.go` forwarding layer (17 funcs + 8 aliases; internal calls core/index directly), removed the `ParseID→FormatHash` round-trip in Update |
 | v1.2.4 | 2026-08-19 | api/ facade + internal/ flattening | Public Go API moved from the root package to `github.com/qyiun666/MemHop/api` (root `memhop.go`/`types.go` removed) · `internal/sub/` flattened into `internal/` (`package sub` → `package internal`), `internal/sub/repo` → `internal/repo`, `internal/sub/common` → `internal/common` · `cmd/memhop-mcp` removed (rewritten in v1.2.5) · build config (Makefile fmt, pre-commit hook, CI gofmt) updated · breaking change: hosts importing the root package must switch to `/api` |
 | v1.2.3 | 2026-08-18 | MCP compatibility fixes + DSH integration + retrieval quality | MCP tool schemas fixed (no-arg tools no longer emit `properties: null`, breaking strict clients) · all tool outputs render record IDs as 16-char hex strings (uint64 JSON numbers lose precision in JS/TS hosts, breaking `new_topic_id` round-trips) · new `--transport streamable-http` (2025-03-26 spec, stateless multi-tenant; supported by DSH's dsh-mcp-client) · DeepSeek Harness integration guide + agent instructions (`docs/dsh/`) · streamable-http smoke test · keyword-extraction prompt overhauled (semantic completeness + colloquial variants + phrases) + Search returns all relevance-ordered topics (scene-context truncation removed), LoCoMo recall 0.392 → 0.668, entity_hit 0.284 → 0.877 |
