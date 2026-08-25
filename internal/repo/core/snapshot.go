@@ -16,9 +16,8 @@ const SnapshotMagic uint32 = 0x534E4150
 const SnapshotVersion uint8 = 0x01
 
 type IndexSnapshotData struct {
-	SparseData    []byte
-	L1ReverseData []byte
-	L3IndexData   []byte
+	SparseData  []byte
+	L3IndexData []byte
 }
 
 type indexEntry struct {
@@ -27,16 +26,15 @@ type indexEntry struct {
 }
 
 // BuildSnapshot serializes the index and snapshot data into a single blob.
-// Format: MAGIC(4) VERSION(1) COUNT(4) entries(16 each) 3x blob(len+data) CRC32(4)
+// Format: MAGIC(4) VERSION(1) COUNT(4) entries(16 each) 2x blob(len+data) CRC32(4)
 func BuildSnapshot(index map[uint64]uint64, snap *IndexSnapshotData) ([]byte, error) {
 	entries := make([]indexEntry, 0, len(index))
 	for id, off := range index {
 		entries = append(entries, indexEntry{IDHash: id, Offset: off})
 	}
 	// Estimate capacity.
-	cap := 9 + len(entries)*16 + 12 +
-		len(snap.SparseData) +
-		len(snap.L1ReverseData) + len(snap.L3IndexData) + 4
+	cap := 9 + len(entries)*16 + 8 +
+		len(snap.SparseData) + len(snap.L3IndexData) + 4
 	buf := make([]byte, 0, cap)
 	buf = appendU32LE(buf, SnapshotMagic)
 	buf = append(buf, SnapshotVersion)
@@ -46,7 +44,6 @@ func BuildSnapshot(index map[uint64]uint64, snap *IndexSnapshotData) ([]byte, er
 		buf = appendU64LE(buf, e.Offset)
 	}
 	buf = appendBlob(buf, snap.SparseData)
-	buf = appendBlob(buf, snap.L1ReverseData)
 	buf = appendBlob(buf, snap.L3IndexData)
 	crc := crc32.ChecksumIEEE(buf)
 	buf = appendU32LE(buf, crc)
@@ -83,13 +80,9 @@ func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 		idx[idHash] = offset
 		pos += 16
 	}
-	// Parse three blobs.
+	// Parse two blobs.
 	var err error
 	sparse, pos, err := readBlob(raw, pos)
-	if err != nil {
-		return nil, nil, err
-	}
-	l1rev, pos, err := readBlob(raw, pos)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -98,9 +91,8 @@ func ParseSnapshot(raw []byte) (map[uint64]uint64, *IndexSnapshotData, error) {
 		return nil, nil, err
 	}
 	snap := &IndexSnapshotData{
-		SparseData:    sparse,
-		L1ReverseData: l1rev,
-		L3IndexData:   l3idx,
+		SparseData:  sparse,
+		L3IndexData: l3idx,
 	}
 	return idx, snap, nil
 }

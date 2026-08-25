@@ -36,6 +36,18 @@ func AppendArchiveL4(engine *core.StorageEngine, contextID string, role uint8, c
 	return archiveID, nil
 }
 
+// DeleteArchivesL4 batch-deletes archive records by ID; missing IDs are
+// skipped (DeleteRecordBatch is a best-effort tombstone pass).
+func DeleteArchivesL4(engine *core.StorageEngine, ids []uint64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if _, err := engine.DeleteRecordBatch(ids); err != nil {
+		return common.NewError(common.ErrIO, "delete l4 archives", err)
+	}
+	return nil
+}
+
 // QueryArchiveL4 queries archives: num==1 keyword substring match, num==2
 // time range [start, end] sorted by CreatedAt, num==3 by id (missing skipped).
 func QueryArchiveL4(engine *core.StorageEngine, num uint8, keyword string, start, end int64, ids []string) []core.ArchiveSlot {

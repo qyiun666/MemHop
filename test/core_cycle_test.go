@@ -74,7 +74,7 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 		if err != nil {
 			t.Fatalf("search ingest %d: %v", i, err)
 		}
-		if _, err := db.Update(common.FormatHash(res.NewTopicID), "Agent: 明白了，已记录。", base+int64(i)*1000+500); err != nil {
+		if err := db.Update(common.FormatHash(res.NewTopicID), "Agent: 明白了，已记录。", base+int64(i)*1000+500); err != nil {
 			t.Fatalf("update ingest %d: %v", i, err)
 		}
 	}

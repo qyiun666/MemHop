@@ -66,6 +66,14 @@ func WriteSceneNode(engine *StorageEngine, id uint64, slot *SceneNode) error {
 	return writeJSON(engine, RecL1SceneNode, id, slot, "SceneNode")
 }
 
+func ReadSceneEdge(engine *StorageEngine, id uint64) (*SceneEdge, error) {
+	return readJSON[SceneEdge](engine, id, "SceneEdge")
+}
+
+func WriteSceneEdge(engine *StorageEngine, id uint64, slot *SceneEdge) error {
+	return writeJSON(engine, RecL1Hyperedge, id, slot, "SceneEdge")
+}
+
 func CollectAllSceneNodes(engine *StorageEngine) []SceneNode {
 	return slices.Collect(IterAll[SceneNode](engine, RecL1SceneNode))
 }
@@ -181,18 +189,6 @@ func WriteCapability(engine *StorageEngine, id uint64, slot *Capability) error {
 
 func CollectAllCapabilities(engine *StorageEngine) []Capability {
 	return slices.Collect(IterAll[Capability](engine, RecL5Capability))
-}
-
-func ReadSceneUsageSlot(engine *StorageEngine, id uint64) (*SceneUsageSlot, error) {
-	return readJSON[SceneUsageSlot](engine, id, "SceneUsageSlot")
-}
-
-func WriteSceneUsageSlot(engine *StorageEngine, id uint64, slot *SceneUsageSlot) error {
-	return writeJSON(engine, RecL6SceneUsage, id, slot, "SceneUsageSlot")
-}
-
-func CollectAllSceneUsages(engine *StorageEngine) []SceneUsageSlot {
-	return slices.Collect(IterAll[SceneUsageSlot](engine, RecL6SceneUsage))
 }
 
 func ReadTrajectorySlot(engine *StorageEngine, id uint64) (*TrajectorySlot, error) {

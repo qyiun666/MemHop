@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.2.7**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.3.2**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 ---
@@ -158,21 +158,23 @@ triggered Dream — pass a request-scoped context.
 | Field | Meaning | Host use |
 |---|---|---|
 | `Profile` | L0 profile snapshot (name/role/personality/preferences/lexicon/style/emotions) | can be spliced into the system prompt |
+| `ProfileBrief` | Compact profile digest (name/role/top preferences/style/emotions, bounded) | lighter per-turn injection; full `Profile` only when needed |
 | `Contexts` | Hit scene's context (`TopicSlot` list, depth ≤ 1) | **the memory to splice into this turn's LLM prompt** |
-| `AssociatedContexts` | Linked scene topics (L1 reverse lookup) | optional extra memory |
+| `AssociatedContexts` | Activated scene topics (L1 hypergraph spreading activation) | optional extra memory |
 | `NewTopicID` | ID of the topic created this round (16-hex); 0 = hit existing | feed to Update |
 
 **Side effects (Search writes, it is not read-only):** LLM keyword extraction →
 three-channel retrieval (BM25 + f32 vector + entity BK-Tree, RRF fusion) →
 topic creation + centroid encoding + one L4 archive + L3 graph linking + scene
-activation + L6 usage count. An unavailable encoder is an error.
+activation + scene usage count (folded into the scene record). An unavailable
+encoder is an error.
 
 ### 6.2 Turn end: `Update`
 
 ```go
-ok, err := db.Update(topicID, agentReplyText, time.Now().UnixMilli())
+err := db.Update(topicID, agentReplyText, time.Now().UnixMilli())
 // topicID: Search's NewTopicID, or an existing topic ID from Contexts (16-hex)
-// (false, err) is the only failure; a missing topic returns ErrNotFound
+// nil means appended + indexed; a missing topic returns ErrNotFound
 ```
 
 Appends a `Role=Agent` L4 archive → refreshes topic keywords and the BM25 index.
@@ -407,7 +409,7 @@ func main() {
     // Per turn: end. NewTopicID is a uint64 — format it to 16-hex first
     // (0 means the turn hit an existing topic; pick its ID from Contexts).
     topicID := fmt.Sprintf("%016x", res.NewTopicID)
-    if _, err := db.Update(topicID, "agent reply", time.Now().UnixMilli()); err != nil {
+    if err := db.Update(topicID, "agent reply", time.Now().UnixMilli()); err != nil {
         log.Fatal(err)
     }
 

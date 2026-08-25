@@ -13,20 +13,20 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// Update appends an agent reply to the specified topic. It returns
-// (true, nil) on success and (false, err) on any failure so hosts no longer
-// have to guess whether a false result was validation, LLM, or storage.
-func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error) {
+// Update appends an agent reply to the specified topic. It returns an error
+// on any failure (validation, LLM, or storage); nil means the reply was
+// appended and all indexes were refreshed.
+func (db *DB) Update(topicID string, text string, timestamp int64) error {
 	if err := db.beginRead(); err != nil {
-		return false, err
+		return err
 	}
 	defer db.mu.RUnlock()
 	if text == "" || timestamp <= 0 {
-		return false, common.NewError(common.ErrInvalidQuery, "Update requires text and a positive timestamp")
+		return common.NewError(common.ErrInvalidQuery, "Update requires text and a positive timestamp")
 	}
 	parsedID, err := common.ParseID(topicID)
 	if err != nil {
-		return false, err
+		return err
 	}
 	// Validate the topic before any write or LLM call: a missing topic must
 	// not leave an orphan L4 archive behind.
@@ -38,25 +38,25 @@ func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error)
 		Num:     3,
 	})
 	if err != nil {
-		return false, err
+		return err
 	}
 	if len(topics) == 0 {
-		return false, common.NewError(common.ErrNotFound, "topic not found")
+		return common.NewError(common.ErrNotFound, "topic not found")
 	}
 	topic := topics[0]
 	keywords, err := db.llm.ExtractKeywords(context.Background(), text)
 	if err != nil {
-		return false, err
+		return err
 	}
 	archiveID, err := repo.AppendArchiveL4(db.engine, topicID, 1, core.ContentText, text, timestamp)
 	if err != nil {
-		return false, err
+		return err
 	}
 	if !repo.UpdateTopicL4RefsL2(db.engine, topicID, []uint64{archiveID}) {
-		return false, common.NewError(common.ErrIO, "update topic l4 ref", nil)
+		return common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
 	if !repo.UpdateTopicL2(db.engine, topicID, keywords, timestamp) {
-		return false, common.NewError(common.ErrIO, "update topic keywords", nil)
+		return common.NewError(common.ErrIO, "update topic keywords", nil)
 	}
 	// Update BM25: uncompressed topics carry User+Agent keywords (compressed
 	// use FusedKeywords); topic.AgentKeywords is stale here, use fresh ones.
@@ -72,7 +72,8 @@ func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error)
 	// room instead of silently evicting it (best-effort, never fails Update).
 	// Pre-check compressibility: a full Dream runs index rebuilds + LLM
 	// distill even when no group was merged, so scenes below the compress
-	// threshold (few topics keep raw detail) are skipped here.
+	// threshold (few topics keep raw detail) are skipped here. The Dream is
+	// scheduled in the background and never blocks this call.
 	if capacity := db.config.Defaults.Capacity; capacity > 0 && len(db.activeScenes) >= capacity {
 		oldest := db.activeScenes[0]
 		if topics, err := repo.ListTopicsL2(repo.TopicListQuery{
@@ -82,8 +83,8 @@ func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error)
 			Depth:   1,
 			Num:     2,
 		}); err == nil && len(topics) >= db.config.Defaults.DreamCompressMinTopics {
-			db.triggerSceneDream(context.Background(), oldest)
+			db.triggerSceneDream(oldest)
 		}
 	}
-	return true, nil
+	return nil
 }

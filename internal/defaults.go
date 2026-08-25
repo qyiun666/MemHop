@@ -21,6 +21,11 @@ type MemHopDefaults struct {
 	VectorMinScore              float32 `json:"vector_min_score"`
 	DreamCompressMinTopics      int     `json:"dream_compress_min_topics"`
 	SearchDreamContextThreshold int     `json:"search_dream_context_threshold"`
+	L1EdgeMinSimilarity         float32 `json:"l1_edge_min_similarity"`
+	L1EdgeMaxHops               int     `json:"l1_edge_max_hops"`
+	L1ActivationDampening       float32 `json:"l1_activation_dampening"`
+	L1ActivationThreshold       float32 `json:"l1_activation_threshold"`
+	L1AssocMaxScenes            int     `json:"l1_assoc_max_scenes"`
 	MaxResults                  int     `json:"max_results"`
 	DefaultTimeoutSecs          int     `json:"default_timeout_secs"`
 	DefaultMaxOutputTokens      int     `json:"default_max_output_tokens"`
@@ -44,7 +49,12 @@ var DefaultMemHopDefaults = &MemHopDefaults{
 	MinSceneScore:               1.0,
 	VectorMinScore:              0.5,
 	DreamCompressMinTopics:      20,
-	SearchDreamContextThreshold: 30, // Search triggers a scene Dream when its context exceeds this many topics
+	SearchDreamContextThreshold: 30,   // Search triggers a scene Dream when its context exceeds this many topics
+	L1EdgeMinSimilarity:         0.15, // min keyword-overlap Jaccard to create an L1 hyperedge during Dream
+	L1EdgeMaxHops:               2,    // spreading-activation walk depth
+	L1ActivationDampening:       0.5,  // activation decay per hop
+	L1ActivationThreshold:       0.05, // activation cutoff; weaker paths stop spreading
+	L1AssocMaxScenes:            3,    // associated scenes returned by spreading activation
 	MaxResults:                  20,
 	DefaultTimeoutSecs:          60,
 	DefaultMaxOutputTokens:      8192,

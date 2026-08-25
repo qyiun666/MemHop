@@ -142,3 +142,148 @@ func (db *DB) SceneContext(sceneID string) (*SceneContext, error) {
 	out.TopicCount = len(out.Topics)
 	return out, nil
 }
+
+// DeleteTopic removes a topic and its whole subtree (children at any
+// depth), the L4 archives they reference, and their L2Meta/sparse entries,
+// so the deleted topic no longer surfaces in retrieval. The surviving
+// parent (if any) has its ChildrenIDs pruned. Deleting a missing topic
+// returns ErrNotFound. The caller must hold the write lock.
+func (db *DB) DeleteTopic(topicID string) error {
+	parsedID, err := common.ParseID(topicID)
+	if err != nil {
+		return common.NewError(common.ErrInvalidQuery, "parse topic id", err)
+	}
+	topics, archives := collectTopicClosure(db.engine, parsedID)
+	if len(topics) == 0 {
+		return common.NewError(common.ErrNotFound, "topic not found")
+	}
+	if err := db.pruneParentChild(parsedID); err != nil {
+		return err
+	}
+	return db.deleteTopics(topics, archives)
+}
+
+// pruneParentChild removes the deleted topic from its surviving parent's
+// ChildrenIDs and refreshes the parent record and L2Meta entry, so no
+// dangling child reference survives the deletion.
+func (db *DB) pruneParentChild(topicID uint64) error {
+	root, err := core.ReadTopicSlot(db.engine, topicID)
+	if err != nil || len(root) == 0 || root[0].ParentID == nil {
+		return err
+	}
+	parentID := *root[0].ParentID
+	parent, err := core.ReadTopicSlot(db.engine, parentID)
+	if err != nil || len(parent) == 0 {
+		return err
+	}
+	parent[0].ChildrenIDs = removeOnceUint64(parent[0].ChildrenIDs, topicID)
+	if err := core.WriteTopicSlot(db.engine, parentID, &parent[0]); err != nil {
+		return err
+	}
+	db.syncL2Meta(parentID)
+	return nil
+}
+
+// removeOnceUint64 removes the first occurrence of v from s (no-op when
+// absent); s is returned unchanged when v is not found.
+func removeOnceUint64(s []uint64, v uint64) []uint64 {
+	for i, x := range s {
+		if x == v {
+			return append(s[:i], s[i+1:]...)
+		}
+	}
+	return s
+}
+
+// DeleteScene removes a scene: its scene record, every topic (all depths),
+// the referenced L4 archives, the L2Meta/sparse entries, and its active-set
+// membership, so the scene disappears from listings and retrieval. The
+// caller must hold the write lock.
+func (db *DB) DeleteScene(sceneID string) error {
+	sceneHash, err := common.ParseID(sceneID)
+	if err != nil {
+		return common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+	}
+	if _, err := core.ReadSceneSlot(db.engine, sceneHash); err != nil {
+		return common.NewError(common.ErrNotFound, "scene not found")
+	}
+	var (
+		topics   []uint64
+		archives []uint64
+	)
+	for _, t := range core.CollectAllTopics(db.engine) {
+		if t.SceneID == sceneHash {
+			topics = append(topics, t.ID)
+			archives = append(archives, t.L4Refs...)
+		}
+	}
+	if !repo.DeleteL2(db.engine, []string{sceneID}, 1) {
+		return common.NewError(common.ErrIO, "delete scene", nil)
+	}
+	if err := repo.DeleteArchivesL4(db.engine, common.DedupSorted(archives)); err != nil {
+		return err
+	}
+	// Drop the L1 scene node right away (its ID is derivable without an
+	// index); incident hyperedges are cleaned by the next Dream's rebuild.
+	if err := repo.DeleteSceneNodeL1(db.engine, sceneHash); err != nil {
+		return err
+	}
+	for _, id := range topics {
+		db.l2Meta.Remove(id)
+		db.sparseIndex.RemoveDocument(id)
+	}
+	kept := db.activeScenes[:0]
+	for _, sid := range db.activeScenes {
+		if sid != sceneHash {
+			kept = append(kept, sid)
+		}
+	}
+	db.activeScenes = kept
+	return nil
+}
+
+// collectTopicClosure gathers a topic, its recursive children (any depth)
+// and the L4 archives referenced by any of them. topics is empty when the
+// root topic does not exist (DeleteTopic then reports ErrNotFound).
+func collectTopicClosure(engine *core.StorageEngine, root uint64) (topics, archives []uint64) {
+	all := core.CollectAllTopics(engine)
+	byID := make(map[uint64]core.TopicSlot, len(all))
+	children := make(map[uint64][]uint64, len(all))
+	for _, t := range all {
+		byID[t.ID] = t
+		if t.ParentID != nil {
+			children[*t.ParentID] = append(children[*t.ParentID], t.ID)
+		}
+	}
+	if _, ok := byID[root]; !ok {
+		return nil, nil
+	}
+	topics = append(topics, root)
+	for i := 0; i < len(topics); i++ {
+		topics = append(topics, children[topics[i]]...)
+	}
+	for _, id := range topics {
+		archives = append(archives, byID[id].L4Refs...)
+	}
+	return topics, common.DedupSorted(archives)
+}
+
+// deleteTopics removes the given topics (with their L2Meta/sparse entries)
+// and the given archives in one engine pass.
+func (db *DB) deleteTopics(topics, archives []uint64) error {
+	ids := make([]string, 0, len(topics))
+	for _, id := range topics {
+		ids = append(ids, common.FormatHash(id))
+	}
+	if !repo.DeleteL2(db.engine, ids, 2) {
+		return common.NewError(common.ErrIO, "delete topics", nil)
+	}
+	if err := repo.DeleteArchivesL4(db.engine, archives); err != nil {
+		return err
+	}
+	for _, id := range topics {
+		db.l2Meta.Remove(id)
+		db.sparseIndex.RemoveDocument(id)
+	}
+	return nil
+}

@@ -37,7 +37,8 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 
 - **八层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 场景使用 → L7 轨迹，配合 Dream 巩固管线
 - **三通道 RRF 检索** — BM25（gse CJK 分词）+ f32 向量 + 实体/词项模糊匹配（实体索引由已索引 topic 词项自动灌入），通过 Reciprocal Rank Fusion（k=60）融合
-- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0006`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。**与 v1 的 `.meh` 数据文件不兼容**（JSON 序列化切换为原生数字）；0x0005 引入 0x0F Capability 记录（其 payload 取代 v1.2.0 的 PluginSlot），0x0006 将 capability payload 重设计为 v2 mcp/skill/composite resource-wrapper 模型；0x0005 及更早文件在 Open 时被显式拒绝，无迁移路径
+- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0007`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。**与 v1 的 `.meh` 数据文件不兼容**（JSON 序列化切换为原生数字）；0x0005 引入 0x0F Capability 记录，0x0006 将 capability payload 重设计为 v2 mcp/skill/composite resource-wrapper 模型，0x0007 将 L6 场景使用记录并入 L2 场景槽位、从快照移除 L1 反向索引并新增 L1 超图建边；0x0006 及更早文件在 Open 时被显式拒绝，无迁移路径
+- **L1 场景超图 + 扩散激活** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）；Search 联想从命中场景沿图扩散激活（每跳 × 边权 × 衰减系数），返回 Top 关联场景的话题作为 `AssociatedContexts`——真正的跨场景联想记忆，边权由 Dream 管线衰减剪枝
 - **Dream 巩固管线** — 仅作用于 L0–L2 的五阶段：L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏（情绪/MBTI）
 - **L3 知识图谱** — 多独立超图，支持节点/边导入、CRUD、关键词/类型查询与 BFS 子图
 - **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）
@@ -128,12 +129,12 @@ ok, err := db.Dream(context.Background(), "")
 层级  名称            人脑类比              机制
 ───── ────────────── ───────────────────  ─────────────────────────────────────────────
  L7    Trajectory      程序性日志             宿主追加的操作轨迹事件，结晶为 L5 能力草稿
- L6    Scene Usage     检索反馈               场景级检索命中计数，反馈 L1 衰减
+ L6    Scene Usage     检索反馈               场景级检索命中计数并入 L2 场景记录，反馈 L1 衰减
  L5    Crystal         肌肉记忆             可复用的能力包（技能 · MCP · 工具 · 提示词 · 服务）
  L4    Archive         长期记忆             原始对话日志与历史记录
  L3    Knowledge       语义记忆             多源超图知识库
  L2    Context         工作记忆             压缩的话题结构（4 级压缩深度）
- L1    Engram          场景图               场景节点 + 反向索引连接 L2 上下文（超边创建预留）
+ L1    Engram          场景超图             场景节点 + 关键词重叠超边；Search 联想时激活在此扩散
  L0    Profile         身份认同             Agent 人格、偏好与语言习惯
 ```
 
@@ -142,8 +143,8 @@ ok, err := db.Dream(context.Background(), "")
 Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历的机制启发。Dream **仅作用于 L0–L2**（L3 蒸馏与 L5 结晶为设计外），共五个阶段：
 
 1. **L2 压缩** — LLM 归组合并相关话题，每个激活场景一个 goroutine 并行处理，降级陈旧上下文
-2. **L1 重建** — 从 L2 同步场景节点，并在同一趟扫盘中重建检索索引
-3. **L1 衰减** — 衰减场景重要性，剪枝弱节点
+2. **L1 重建** — 从 L2 同步场景节点，并在同一趟扫盘中重建检索索引、创建/刷新场景间关键词重叠超边
+3. **L1 衰减** — 衰减场景重要性与边权，剪枝弱节点
 4. **L0 画像** — 基于巩固后的记忆重建 Agent 画像
 5. **L0 蒸馏** — 蒸馏情绪/MBTI 模式（恒执行；L1 采样为空时自动跳过）
 
@@ -159,10 +160,10 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 | 向量 | 通过 Ollama HTTP embed 接口进行 f32 单精度语义相似度检索 |
 | 实体 | 对已索引 topic 词项做模糊匹配（BK-Tree，编辑距离 ≤ 2） |
 
-融合后处理：关键词重合打分 → 活跃/最近场景的加性场景加分 → L1 关联扩展 → L5 能力匹配 → L0 画像组装。
+融合后处理：关键词重合打分 → 活跃/最近场景的加性场景加分 → L1 扩散激活（场景超图上的跨场景联想召回） → L5 能力匹配 → L0 画像组装。
 
 
-`SearchResult` 返回 `Contexts`（命中场景深度≤1 的话题，每条携带 `L4Refs`）与 `AssociatedContexts`（L1 关联场景的话题）；宿主通过 `SceneContext` 或 `SearchL4` 拉取 L4 原文组装上下文。
+`SearchResult` 返回 `Contexts`（命中场景深度≤1 的话题，每条携带 `L4Refs`）与 `AssociatedContexts`（扩散激活命中的关联场景话题）；宿主通过 `SceneContext` 或 `SearchL4` 拉取 L4 原文组装上下文。
 
 `Search` 创建 topic 时会同时匹配相关 L3 知识节点，并把图谱 ID 写入 `TopicSlot.L3Refs`；`DirectedL3ID` 就是基于这些引用做过滤。
 ## 基准测试
@@ -235,6 +236,8 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
+| v1.3.2 | 2026-08-26 | API 修复：异步 Dream + 删除接口 + Update 简化 | Search/Update 不再被内部触发的 Dream 阻塞（后台 goroutine、按场景 in-flight 防重入、Close 取消在途 Dream）· 新增 `DeleteTopic`（子树闭包 + L4 + 索引 + 父话题 ChildrenIDs 修剪）与 `DeleteScene`（场景 + 全部话题 + 原文 + L1 节点 + 激活集）用于记忆纠错 · `Update` 返回值由 `(bool, error)` 简化为 `error` · `SearchResult.ProfileBrief`——紧凑画像摘要（name/role/偏好/风格/情绪，带边界）· 格式版本不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·
+| v1.3.0 | 2026-08-26 | L1 场景超图 + 扩散激活联想 | Dream 在场景间创建真实的 `RecL1Hyperedge` 共现边（关键词重叠 Jaccard ≥ `L1EdgeMinSimilarity`）；Search 的 `AssociatedContexts` 由空转的同场景列表替换为图遍历（每跳激活 × 边权 × 衰减系数，≤ `L1EdgeMaxHops`，取 Top `L1AssocMaxScenes` 个其他场景）· L6 场景使用记录删除——命中计数并入 L2 `SceneSlot`（`HitCount`/`LastHitAt`）· `L1ReverseIndex`（含快照字段）与 4 个 L1 死函数删除，联想变为纯存储层图读取 · `.meh` 格式升至 `0x0007`——0x0006 文件 Open 时被拒绝，不迁移 · 新默认项：`L1EdgeMinSimilarity`（0.15）、`L1EdgeMaxHops`（2）、`L1ActivationDampening`（0.5）、`L1ActivationThreshold`（0.05）、`L1AssocMaxScenes`（3） |
 | v1.2.7 | 2026-08-25 | 宿主对齐 + 双语集成指南 | `Search(ctx, q)` 与 `RefineTopicKeywords(ctx, id)` 接收 context（可取消 LLM 关键词提取、编码调用与内部触发的 Dream）· `api` 导出 `LlmConfig` / `MemHopDefaults` / `TopicSlot` / `ResourceRef` / `CrystallizeDetail` / `TrajectoryStats` · 新增 `TrajectoryStats`（会话级 L7 统计）+ `memhop_trajectory_stats` MCP 工具（31 → 32 工具）· `CrystallizeResult.Details`——逐候选 create/reuse/merge/skip 处置明细 · `AppendL4Message`（纯 L4 追加，不调 LLM）· 活跃场景容量策略：Update 在达到 Capacity 时对最老场景触发 Dream（带可压缩性预检）；`SearchDreamContextThreshold` 零值守卫 · 仓库根目录新增双语集成指南（`INTEGRATION_GUIDE.md` / `INTEGRATION_GUIDE.zh.md`） |
 | v1.2.5 | 2026-08-20 | MCP server 重写 | `cmd/memhop-mcp` 对照 `api` 公开门面完全重写（v1.2.4 曾删除）：31 个 MCP 工具与 `api.DB` 方法一一对应 · 多租户 HTTP 暴露——SSE + streamable-http（2025-03-26 spec、无状态），租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 `.meh` 文件，懒打开注册表 + 首开互斥 · 工具输出中记录 ID 统一 16 位 hex 字符串序列化（uint64 JSON 数字在 JS/TS 宿主丢精度）· 租户 ID 白名单 + 路径逃逸拦截（防御纵深）· LLM 凭据仅环境变量（无 CLI flag）· go-sdk v1.7.0 回归直接依赖（3→4）· config/registry/tools/streamable 离线测试 + 多租户 SSE 冒烟 · 代码清理：删除冗余枚举 JSON 辅助函数（`~uint8` 默认 JSON 行为等价）、`CodeOf` 迁移 Go 1.26 `errors.AsType`、cosine 标量循环（1024 维快 2.7×）、删除 `internal/repo/open.go` 转发层（17 函数 + 8 alias，internal 直调 core/index）、Update 移除 `ParseID→FormatHash` 往返转换 |
 | v1.2.4 | 2026-08-19 | api/ 公开门面 + internal/ 平铺 | 公开 Go API 从根包迁移至 `github.com/qyiun666/MemHop/api`（根目录 `memhop.go`/`types.go` 移除）· `internal/sub/` 上提平铺为 `internal/`（`package sub` → `package internal`），`internal/sub/repo` → `internal/repo`，`internal/sub/common` → `internal/common` · `cmd/memhop-mcp` 移除（v1.2.5 重写回归）· 构建配置同步（Makefile fmt、pre-commit hook、CI gofmt）· 破坏性变更：直接 import 根包的宿主需切换到 `/api` |

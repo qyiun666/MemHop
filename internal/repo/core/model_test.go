@@ -97,10 +97,10 @@ func TestSceneEdgeRoundtrip(t *testing.T) {
 }
 
 func TestSceneSlotRoundtrip(t *testing.T) {
-	s := SceneSlot{SceneID: 12345, SceneName: "测试场景"}
+	s := SceneSlot{SceneID: 12345, SceneName: "测试场景", HitCount: 3, LastHitAt: 1000}
 	var got SceneSlot
 	jsonRoundtrip(t, s, &got)
-	if got.SceneID != s.SceneID || got.SceneName != s.SceneName {
+	if got.SceneID != s.SceneID || got.SceneName != s.SceneName || got.HitCount != s.HitCount || got.LastHitAt != s.LastHitAt {
 		t.Fatalf("mismatch: %+v", got)
 	}
 }
@@ -450,15 +450,6 @@ func TestResourceRefConfigNil(t *testing.T) {
 	jsonRoundtrip(t, p, &got)
 	if got.Config != nil {
 		t.Fatalf("expected nil config")
-	}
-}
-
-func TestSceneUsageSlotRoundtrip(t *testing.T) {
-	s := SceneUsageSlot{IDHash: 1, SceneID: 42, HitCount: 3, LastHitAt: 1000}
-	var got SceneUsageSlot
-	jsonRoundtrip(t, s, &got)
-	if got != s {
-		t.Fatalf("mismatch: %+v", got)
 	}
 }
 

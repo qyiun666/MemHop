@@ -43,7 +43,7 @@ func TestLocomoDebug(t *testing.T) {
 			}
 			activeTopic = common.FormatHash(res.NewTopicID)
 		} else if activeTopic != "" {
-			if _, err := db.Update(activeTopic, tn.Text, ts); err != nil {
+			if err := db.Update(activeTopic, tn.Text, ts); err != nil {
 				t.Fatalf("ingest Update: %v", err)
 			}
 		}

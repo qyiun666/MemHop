@@ -108,7 +108,7 @@ func snapshotBlobLength(raw []byte) (int, error) {
 	}
 	count := int(binary.LittleEndian.Uint32(raw[5:9]))
 	pos := 9 + count*16
-	for range 3 {
+	for range 2 { // two blobs: sparse + L3 index (L1 reverse index removed in 0x0007)
 		if pos+4 > len(raw) {
 			return 0, common.NewError(common.ErrCorruption, "snapshot blob truncated")
 		}

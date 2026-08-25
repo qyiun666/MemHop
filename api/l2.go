@@ -41,3 +41,27 @@ func (db *DB) MergeScenes(primaryID string, secondaryIDs []string) error {
 	}
 	return db.DB.MergeScenes(primaryID, secondaryIDs)
 }
+
+// DeleteTopic removes a topic and its whole subtree (children at any
+// depth), the L4 archives they reference, and their L2Meta/sparse entries,
+// so the deleted topic no longer surfaces in retrieval.
+func (db *DB) DeleteTopic(topicID string) error {
+	db.DB.Lock()
+	defer db.DB.Unlock()
+	if db.DB.IsClosed() {
+		return common.NewError(common.ErrClosed, "database is closed")
+	}
+	return db.DB.DeleteTopic(topicID)
+}
+
+// DeleteScene removes a scene: its scene record, every topic (all depths),
+// the referenced L4 archives, and the L2Meta/sparse entries, so the scene
+// disappears from listings and retrieval.
+func (db *DB) DeleteScene(sceneID string) error {
+	db.DB.Lock()
+	defer db.DB.Unlock()
+	if db.DB.IsClosed() {
+		return common.NewError(common.ErrClosed, "database is closed")
+	}
+	return db.DB.DeleteScene(sceneID)
+}

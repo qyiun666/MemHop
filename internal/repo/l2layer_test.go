@@ -199,3 +199,24 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		}
 	})
 }
+
+func TestTouchSceneUsageIncrements(t *testing.T) {
+	engine := tempEngine(t)
+	sceneID := core.NewSceneSlot("scene-usage-1").SceneID
+	if _, err := CreateSceneL2(engine, "scene-usage-1"); err != nil {
+		t.Fatalf("create scene: %v", err)
+	}
+	if err := TouchSceneUsage(engine, sceneID, 1000); err != nil {
+		t.Fatalf("first touch: %v", err)
+	}
+	if err := TouchSceneUsage(engine, sceneID, 2000); err != nil {
+		t.Fatalf("second touch: %v", err)
+	}
+	slot, err := core.ReadSceneSlot(engine, sceneID)
+	if err != nil {
+		t.Fatalf("read scene: %v", err)
+	}
+	if slot.HitCount != 2 || slot.LastHitAt != 2000 {
+		t.Fatalf("usage mismatch: %+v", slot)
+	}
+}

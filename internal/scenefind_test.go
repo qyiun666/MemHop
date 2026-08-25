@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -391,4 +392,84 @@ func TestActivateSceneUnbounded(t *testing.T) {
 	if len(db.activeScenes) != 3 || db.activeScenes[0] != 7 || db.activeScenes[1] != 9 || db.activeScenes[2] != 11 {
 		t.Fatalf("activeScenes = %v; want [7 9 11]", db.activeScenes)
 	}
+}
+
+// TestSpreadingActivation covers one-hop and two-hop activation, start-scene
+// exclusion, threshold pruning and the no-node/isolated empty results.
+func TestSpreadingActivation(t *testing.T) {
+	engine := newTestEngine(t)
+	sceneA := common.FormatHash(common.HashID("sceneA"))
+	sceneB := common.FormatHash(common.HashID("sceneB"))
+	sceneC := common.FormatHash(common.HashID("sceneC"))
+	sceneD := common.FormatHash(common.HashID("sceneD")) // isolated: node, no edges
+
+	mk := func(scene string, kws []string) {
+		t.Helper()
+		if !repo.CreateTopicL2(engine, scene, kws, 1000, 0) {
+			t.Fatal("create topic")
+		}
+	}
+	mk(sceneA, []string{"memory", "agent"})
+	mk(sceneB, []string{"memory", "database"})
+	mk(sceneC, []string{"database", "code"})
+	mk(sceneD, []string{"cooking", "food"})
+	if _, err := repo.SyncL1NodesFromL2(engine); err != nil {
+		t.Fatalf("sync: %v", err)
+	}
+	if _, err := repo.BuildL1Hyperedges(engine, 0.15); err != nil {
+		t.Fatalf("build edges: %v", err)
+	}
+	defaults := &MemHopDefaults{
+		L1EdgeMaxHops:         2,
+		L1ActivationDampening: 0.5,
+		L1ActivationThreshold: 0.05,
+		L1AssocMaxScenes:      3,
+	}
+	l2Meta := index.BuildL2MetaFromEngine(engine)
+	sceneBHash := mustParse(t, sceneB)
+	sceneCHash := mustParse(t, sceneC)
+	sceneDHash := mustParse(t, sceneD)
+
+	// A-B share "memory" (J=1/3): activation = 1×1/3×0.5 ≈ 0.1667. The
+	// two-hop B→C path yields 0.1667×1/3×0.5 ≈ 0.0278 < 0.05 → pruned.
+	hits := SpreadingActivation(engine, l2Meta, mustParse(t, sceneA), defaults)
+	if len(hits) != 1 || hits[0].SceneID != sceneBHash {
+		t.Fatalf("want only scene B, got %+v", hits)
+	}
+	if math.Abs(float64(hits[0].Score)-1.0/6.0) > 1e-4 {
+		t.Fatalf("activation = %.4f, want 0.1667", hits[0].Score)
+	}
+	if len(hits[0].Topics) != 1 {
+		t.Fatalf("want 1 topic on B, got %d", len(hits[0].Topics))
+	}
+
+	// Lower threshold lets the two-hop path through: C joins after B.
+	defaults.L1ActivationThreshold = 0.01
+	hits = SpreadingActivation(engine, l2Meta, mustParse(t, sceneA), defaults)
+	if len(hits) != 2 || hits[0].SceneID != sceneBHash || hits[1].SceneID != sceneCHash {
+		t.Fatalf("want B then C, got %+v", hits)
+	}
+	if hits[0].Score < hits[1].Score {
+		t.Fatal("B must activate stronger than C")
+	}
+
+	// A scene without an L1 node (created after the last Dream) → empty.
+	sceneFresh := common.FormatHash(common.HashID("sceneFresh"))
+	if hits := SpreadingActivation(engine, l2Meta, mustParse(t, sceneFresh), defaults); len(hits) != 0 {
+		t.Fatalf("fresh scene must have no associations, got %+v", hits)
+	}
+
+	// An isolated scene has a node but no edges → empty.
+	if hits := SpreadingActivation(engine, l2Meta, sceneDHash, defaults); len(hits) != 0 {
+		t.Fatalf("isolated scene must have no associations, got %+v", hits)
+	}
+}
+
+func mustParse(t *testing.T, s string) uint64 {
+	t.Helper()
+	v, err := common.ParseID(s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return v
 }

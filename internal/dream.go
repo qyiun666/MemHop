@@ -53,8 +53,8 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 		db.activeScenes = kept
 	}
 
-	// Stage 2: rebuild retrieval indexes (sparse/L1Reverse/L2Meta) in one scan.
-	newSparse, _, newL2Meta, err := index.RebuildSearchIndexes(db.engine)
+	// Stage 2: rebuild retrieval indexes (sparse/L2Meta) in one scan.
+	newSparse, newL2Meta, err := index.RebuildSearchIndexes(db.engine)
 	if err != nil {
 		return false, err
 	}
@@ -74,6 +74,16 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 	// Stage 2.25: L1 write/update from the current L2 structure (L1 is
 	// written only during Dream; stale nodes are removed in Stage 3).
 	if _, err := repo.SyncL1NodesFromL2(db.engine); err != nil {
+		return false, err
+	}
+
+	// Stage 2.3: create/refresh co-occurrence hyperedges between scenes
+	// (keyword-overlap Jaccard >= L1EdgeMinSimilarity). Fresh edges are
+	// decayed by Stage 4 like every other edge.
+	if _, err := repo.BuildL1Hyperedges(db.engine, db.config.Defaults.L1EdgeMinSimilarity); err != nil {
+		return false, err
+	}
+	if err := db.stageCancelled(ctx, "l1_hyperedges"); err != nil {
 		return false, err
 	}
 
@@ -106,30 +116,46 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 		return false, err
 	}
 
-	// Final: rebuild the reverse index after L1 mutations and install into db.
+	// Final: install the rebuilt indexes into db.
 	db.sparseIndex = newSparse
 	db.l2Meta = newL2Meta
-	db.l1Reverse.Store(index.BuildL1ReverseIndex(db.engine))
 	return true, nil
 }
 
-// triggerSceneDream runs one scene's Dream pipeline while the caller holds
-// the read lock: the read lock is released first (RunDream needs the write
-// lock), then re-acquired. Failures are logged and never fail the caller.
-func (db *DB) triggerSceneDream(ctx context.Context, sceneID uint64) {
-	db.mu.RUnlock()
-	db.mu.Lock()
-	// Re-check closed: Close may have completed while the lock was handed
-	// over; RunDream must not write to a closed engine.
-	var err error
-	if !db.closed.Load() {
-		_, err = db.RunDream(ctx, common.FormatHash(sceneID))
+// triggerSceneDream schedules one scene's Dream in the background so the
+// caller (Search/Update) returns immediately instead of blocking on the
+// LLM-heavy pipeline. The goroutine acquires the write lock itself and
+// exits when RunDream returns or the DB is closed; an in-flight set
+// prevents stacking multiple Dreams for the same scene. Failures are
+// logged and never fail the caller. RunDream runs under db.dreamCtx, a
+// detached context cancelled at Close so a pending Dream never blocks
+// shutdown on LLM calls.
+func (db *DB) triggerSceneDream(sceneID uint64) {
+	db.dreamMu.Lock()
+	if _, ok := db.dreamInFlight[sceneID]; ok {
+		db.dreamMu.Unlock()
+		return
 	}
-	db.mu.Unlock()
-	db.mu.RLock()
-	if err != nil {
-		slog.Warn("dream: trigger failed", "scene", common.FormatHash(sceneID), "err", err)
-	}
+	db.dreamInFlight[sceneID] = struct{}{}
+	db.dreamMu.Unlock()
+
+	go func() {
+		defer func() {
+			db.dreamMu.Lock()
+			delete(db.dreamInFlight, sceneID)
+			db.dreamMu.Unlock()
+		}()
+		db.mu.Lock()
+		defer db.mu.Unlock()
+		// Re-check closed: Close may have completed while the write lock
+		// was waited for; RunDream must not write to a closed engine.
+		if db.closed.Load() {
+			return
+		}
+		if _, err := db.RunDream(db.dreamCtx, common.FormatHash(sceneID)); err != nil {
+			slog.Warn("dream: trigger failed", "scene", common.FormatHash(sceneID), "err", err)
+		}
+	}()
 }
 
 // compressActiveScenes runs one goroutine per scene: reads depth-1 topics,
@@ -283,19 +309,20 @@ func (db *DB) distillL0Stage(ctx context.Context) error {
 	return nil
 }
 
-// applyUsageFeedback adjusts L1 node importance from L6 scene usage stats:
-// scenes hit within DefaultTTLMs get +0.05 (active), the rest get -0.05
-// (cold). Best-effort; failures only warn and never abort Dream.
+// applyUsageFeedback adjusts L1 node importance from scene usage stats
+// (folded into the L2 scene record): scenes hit within DefaultTTLMs get
+// +0.05 (active), the rest get -0.05 (cold). Best-effort; failures only
+// warn and never abort Dream.
 func (db *DB) applyUsageFeedback() {
-	usages := repo.CollectAllSceneUsages(db.engine)
-	if len(usages) == 0 {
+	scenes := repo.CollectAllScenesL2(db.engine)
+	if len(scenes) == 0 {
 		return
 	}
 	now := time.Now().UnixMilli()
 	ttl := db.config.Defaults.DefaultTTLMs
-	byScene := make(map[uint64]core.SceneUsageSlot, len(usages))
-	for _, u := range usages {
-		byScene[u.SceneID] = u
+	byScene := make(map[uint64]core.SceneSlot, len(scenes))
+	for _, s := range scenes {
+		byScene[s.SceneID] = s
 	}
 	const step = 0.05
 	for _, node := range core.CollectAllSceneNodes(db.engine) {

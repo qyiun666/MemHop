@@ -177,12 +177,12 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 
 	// Update appends an agent reply to the topic.
 	topicID := common.FormatHash(res.NewTopicID)
-	if ok, err := db.Update(topicID, "好的,我来重构这段代码", ts+1000); err != nil || !ok {
-		t.Fatalf("Update should succeed on an existing topic: ok=%v err=%v", ok, err)
+	if err := db.Update(topicID, "好的,我来重构这段代码", ts+1000); err != nil {
+		t.Fatalf("Update should succeed on an existing topic: %v", err)
 	}
 	// Update on a missing topic must return an error.
-	if ok, err := db.Update(common.FormatHash(999), "无主话题", ts+2000); err == nil || ok {
-		t.Fatalf("Update on missing topic should fail: ok=%v err=%v", ok, err)
+	if err := db.Update(common.FormatHash(999), "无主话题", ts+2000); err == nil {
+		t.Fatalf("Update on missing topic should fail")
 	}
 
 	// Normal Search retrieves the stored contexts.

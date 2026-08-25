@@ -155,14 +155,14 @@ res, err := db.Search(ctx, api.SearchQuery{
 | `AssociatedContexts` | 关联场景的主题（L1 反查） | 可选附加记忆 |
 | `NewTopicID` | 本轮新建主题 ID（16 位 hex）；0=命中旧主题 | 传给 Update 使用 |
 
-**副作用须知（Search 是写操作，不只读）**：LLM 抽关键词 → 三通道检索（BM25 + f32 向量 + 实体 BK-Tree，RRF 融合）→ 建主题 + 编码器算 centroid 向量 + 写一条 L4 原文存档 + 关联 L3 图谱 + 激活场景 + L6 使用计数。编码器不可用直接报错。
+**副作用须知（Search 是写操作，不只读）**：LLM 抽关键词 → 三通道检索（BM25 + f32 向量 + 实体 BK-Tree，RRF 融合）→ 建主题 + 编码器算 centroid 向量 + 写一条 L4 原文存档 + 关联 L3 图谱 + 激活场景 + 场景使用计数（并入场景记录）。编码器不可用直接报错。
 
 ### 6.2 轮次结束：`Update`
 
 ```go
-ok, err := db.Update(topicID, agentReplyText, time.Now().UnixMilli())
+err := db.Update(topicID, agentReplyText, time.Now().UnixMilli())
 // topicID: Search 返回的 NewTopicID，或 Contexts 中已有主题的 ID（16 位 hex）
-// 返回 (false, err) 才是失败；topic 不存在返回 ErrNotFound
+// 返回 nil 表示已追加并更新索引；topic 不存在返回 ErrNotFound
 ```
 
 追加一条 `Role=Agent` 的 L4 存档 → 刷新主题关键词与 BM25 索引。内部调 LLM 抽关键词。
@@ -374,7 +374,7 @@ func main() {
     // 每轮对话：结束。NewTopicID 是 uint64——先转 16 位 hex
     // （0 表示命中旧主题，从 Contexts 取已有 ID）。
     topicID := fmt.Sprintf("%016x", res.NewTopicID)
-    if _, err := db.Update(topicID, "Agent 回复原文", time.Now().UnixMilli()); err != nil {
+    if err := db.Update(topicID, "Agent 回复原文", time.Now().UnixMilli()); err != nil {
         log.Fatal(err)
     }
 

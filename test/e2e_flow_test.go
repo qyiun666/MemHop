@@ -49,7 +49,7 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 
 	// 2. Update: append the agent reply to the topic.
 	agentText := "海边晨跑很不错，空气清新还能看日出，记得做好防晒"
-	if _, err := db.Update(topicID, agentText, ts+1000); err != nil {
+	if err := db.Update(topicID, agentText, ts+1000); err != nil {
 		t.Fatalf("Update(topicID=%s) failed: %v", topicID, err)
 	}
 

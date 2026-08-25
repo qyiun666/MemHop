@@ -4,18 +4,30 @@ package repo
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L1 hypergraph operations: SceneNode writes happen only during Dream via
-// SyncL1NodesFromL2; search reads the L1ReverseIndex via FindAssociatedNodesL1.
+// SyncL1NodesFromL2; BuildL1Hyperedges creates co-occurrence edges between
+// scenes whose topic keyword sets overlap; search walks the graph at query
+// time via SpreadingActivation (internal/scenefind.go).
 import (
-	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
+
+// DeleteSceneNodeL1 removes one scene's L1 node record by scene ID (the
+// node ID is derivable without an index); missing nodes are a no-op.
+// Incident hyperedges are cleaned by the next Dream's rebuild.
+func DeleteSceneNodeL1(engine *core.StorageEngine, sceneID uint64) error {
+	if _, err := engine.DeleteRecordBatch([]uint64{core.SceneNodeID(sceneID)}); err != nil {
+		return common.NewError(common.ErrIO, "delete l1 scene node", err)
+	}
+	return nil
+}
 
 // SyncL1NodesFromL2 rebuilds one L1 node per scene from the current
 // depth<=2 topics; L1 is written/updated only during Dream. The node ID
@@ -45,8 +57,11 @@ func SyncL1NodesFromL2(engine *core.StorageEngine) (int, error) {
 			ids = append(ids, id)
 		}
 		slices.Sort(ids)
-		nodeID := common.HashID("l1:" + common.FormatHash(sceneID))
-		node := readSceneNode(engine, nodeID)
+		nodeID := core.SceneNodeID(sceneID)
+		node, err := core.ReadSceneNode(engine, nodeID)
+		if err != nil {
+			node = nil
+		}
 		if node != nil && equalUint64s(node.TopicIDs, ids) {
 			continue // unchanged; keep UpdatedAt so decay accumulates
 		}
@@ -75,94 +90,120 @@ func equalUint64s(a, b []uint64) bool {
 	return true
 }
 
-// CreateNodeL1 writes a SceneNode (ID = hash(sceneID:topics)) and registers
-// it in the L1 reverse index.
-func CreateNodeL1(engine *core.StorageEngine, l1Idx *index.L1ReverseIndex, sceneID string, topicIDs []uint64) (uint64, error) {
-	sceneHash, err := common.ParseID(sceneID)
-	if err != nil {
-		return 0, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+// BuildL1Hyperedges creates or refreshes co-occurrence hyperedges between
+// scene nodes whose topic keyword sets overlap (Jaccard >= minSimilarity).
+// It must run after SyncL1NodesFromL2 and before DecayL1Network so freshly
+// created edges are decayed by the same pass. Edge weight is the Jaccard
+// similarity; updates keep the max of old and new so decayed weights are
+// never silently restored by stale similarities. Stale edges are left to
+// DecayL1Network (natural forgetting), never deleted here. Returns the
+// number of edges created or updated.
+func BuildL1Hyperedges(engine *core.StorageEngine, minSimilarity float32) (int, error) {
+	nodes := core.CollectAllSceneNodes(engine)
+	if len(nodes) < 2 {
+		return 0, nil
 	}
-	nodeID := common.HashID(fmt.Sprintf("%s:%v", sceneID, topicIDs))
+	// Aggregate per-node keyword sets (lowercased, deduped) and build the
+	// keyword → nodeID inverted index to skip pairs sharing no terms.
+	kwByNode := make(map[uint64]map[string]struct{}, len(nodes))
+	inverted := make(map[string][]uint64)
+	for i := range nodes {
+		node := &nodes[i]
+		set := make(map[string]struct{})
+		for _, topicID := range node.TopicIDs {
+			topic, err := core.ReadTopicLenient(engine, topicID)
+			if err != nil || topic == nil {
+				continue
+			}
+			for _, kw := range topic.UserKeywords {
+				set[strings.ToLower(kw)] = struct{}{}
+			}
+			for _, kw := range topic.AgentKeywords {
+				set[strings.ToLower(kw)] = struct{}{}
+			}
+			for _, kw := range topic.FusedKeywords {
+				set[strings.ToLower(kw)] = struct{}{}
+			}
+		}
+		if len(set) == 0 {
+			continue
+		}
+		kwByNode[node.IDHash] = set
+		for kw := range set {
+			inverted[kw] = append(inverted[kw], node.IDHash)
+		}
+	}
+	// Pairwise Jaccard over keyword-sharing node pairs only.
 	now := time.Now().UnixMilli()
-	node := &core.SceneNode{
-		IDHash:    nodeID,
-		SceneID:   sceneHash,
-		TopicIDs:  topicIDs,
-		CreatedAt: now,
-		UpdatedAt: now,
+	changed := 0
+	seen := make(map[[2]uint64]struct{})
+	for _, nodes := range inverted {
+		for i, a := range nodes {
+			for _, b := range nodes[i+1:] {
+				lo, hi := min(a, b), max(a, b)
+				pair := [2]uint64{lo, hi}
+				if _, dup := seen[pair]; dup {
+					continue
+				}
+				seen[pair] = struct{}{}
+				setA, setB := kwByNode[lo], kwByNode[hi]
+				inter, union := 0, len(setA)
+				for kw := range setB {
+					if _, ok := setA[kw]; ok {
+						inter++
+					} else {
+						union++
+					}
+				}
+				if union == 0 || float32(inter)/float32(union) < minSimilarity {
+					continue
+				}
+				if written, err := upsertSceneEdge(engine, lo, hi, float32(inter)/float32(union), now); err != nil {
+					return changed, err
+				} else if written {
+					changed++
+				}
+			}
+		}
 	}
-	if err := core.WriteSceneNode(engine, nodeID, node); err != nil {
-		return 0, err
-	}
-	l1Idx.Add(sceneHash, nodeID)
-	return nodeID, nil
+	return changed, nil
 }
 
-// UpdateNodeL1 overwrites the node and re-registers it: old registrations
-// are removed from all scenes, then the new SceneID is registered.
-func UpdateNodeL1(engine *core.StorageEngine, l1Idx *index.L1ReverseIndex, id string, slot *core.SceneNode) error {
-	idHash, err := common.ParseID(id)
+// upsertSceneEdge writes the co-occurrence edge between two scene nodes
+// (ID = hash("l1edge:"+min+":"+max), deterministic and idempotent) and
+// attaches it to both nodes' EdgeIDs. Weight keeps max(old, new); returns
+// whether the edge was actually written.
+func upsertSceneEdge(engine *core.StorageEngine, nodeA, nodeB uint64, weight float32, now int64) (bool, error) {
+	lo, hi := min(nodeA, nodeB), max(nodeA, nodeB)
+	edgeID := common.HashID(fmt.Sprintf("l1edge:%d:%d", lo, hi))
+	edge, err := core.ReadSceneEdge(engine, edgeID)
 	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse node id", err)
-	}
-	if _, err := core.ReadSceneNode(engine, idHash); err != nil {
-		return err
-	}
-	slot.IDHash = idHash
-	slot.UpdatedAt = time.Now().UnixMilli()
-	if err := core.WriteSceneNode(engine, idHash, slot); err != nil {
-		return err
-	}
-	l1Idx.RemoveNode(idHash)
-	l1Idx.Add(slot.SceneID, idHash)
-	return nil
-}
-
-func RebuildIndexL1(engine *core.StorageEngine) *index.L1ReverseIndex {
-	return index.BuildL1ReverseIndex(engine)
-}
-
-func ListNodesL1(engine *core.StorageEngine, sceneID *string) []core.SceneNode {
-	var sceneHash uint64
-	filter := false
-	if sceneID != nil {
-		h, err := common.ParseID(*sceneID)
-		if err != nil {
-			return nil
+		edge = &core.SceneEdge{
+			IDHash:    edgeID,
+			Kind:      core.HyperCoOccurrence,
+			NodeIDs:   []uint64{lo, hi},
+			CreatedAt: now,
 		}
-		sceneHash = h
-		filter = true
+	} else if weight <= edge.Weight {
+		return false, nil // existing edge is at least as strong; nothing to refresh
 	}
-	var out []core.SceneNode
-	for _, node := range core.CollectAllSceneNodes(engine) {
-		if filter && node.SceneID != sceneHash {
-			continue
-		}
-		out = append(out, node)
+	edge.Weight = max(edge.Weight, weight)
+	if err := core.WriteSceneEdge(engine, edgeID, edge); err != nil {
+		return false, err
 	}
-	return out
-}
-
-// FindAssociatedNodesL1 looks up nodes for the given scenes via the L1
-// reverse index; callers read node.TopicIDs for the associated contexts.
-func FindAssociatedNodesL1(engine *core.StorageEngine, l1Idx *index.L1ReverseIndex, sceneIDs []string) []core.SceneNode {
-	ctxSet := make(map[uint64]struct{}, len(sceneIDs))
-	for _, sid := range sceneIDs {
-		h, err := common.ParseID(sid)
-		if err != nil {
-			continue
-		}
-		ctxSet[h] = struct{}{}
-	}
-	var out []core.SceneNode
-	for _, nodeID := range l1Idx.FindAssociated(ctxSet) {
+	for _, nodeID := range []uint64{lo, hi} {
 		node, err := core.ReadSceneNode(engine, nodeID)
 		if err != nil {
-			continue
+			continue // node vanished between Sync and here; edge dangles but decays away
 		}
-		out = append(out, *node)
+		if !slices.Contains(node.EdgeIDs, edgeID) {
+			node.EdgeIDs = append(node.EdgeIDs, edgeID)
+			if err := core.WriteSceneNode(engine, nodeID, node); err != nil {
+				return false, err
+			}
+		}
 	}
-	return out
+	return true, nil
 }
 
 type DecayParams struct {
@@ -326,8 +367,8 @@ func propagateClearedEdges(engine *core.StorageEngine, cfg *DecayParams, cleared
 func decayRemainingEdges(engine *core.StorageEngine, cfg *DecayParams, removedNodeIDs map[uint64]bool, nowMs int64, report *L1DecayReport) error {
 	entries := slices.Collect(engine.IndexByType(core.RecL1Hyperedge))
 	for _, idHash := range entries {
-		edge := readSceneEdge(engine, idHash)
-		if edge == nil {
+		edge, err := core.ReadSceneEdge(engine, idHash)
+		if err != nil {
 			continue
 		}
 		if err := decayOneEdge(engine, cfg, edge, idHash, removedNodeIDs, nowMs, report); err != nil {
@@ -370,15 +411,15 @@ func decayOneEdge(engine *core.StorageEngine, cfg *DecayParams, edge *core.Scene
 	}
 	edge.Weight = newWeight
 	edge.LastDecayAt = nowMs
-	return writeSceneEdge(engine, idHash, edge)
+	return core.WriteSceneEdge(engine, idHash, edge)
 }
 
 // removeNodeFromEdge removes a node from an edge; when the edge falls below
 // MinEdgeNodes it is deleted and its refs are cleared from other nodes.
 // Returns whether the edge was deleted.
 func removeNodeFromEdge(engine *core.StorageEngine, edgeID, nodeID uint64, cfg *DecayParams) (bool, error) {
-	edge := readSceneEdge(engine, edgeID)
-	if edge == nil {
+	edge, err := core.ReadSceneEdge(engine, edgeID)
+	if err != nil {
 		return false, nil
 	}
 	found := false
@@ -405,12 +446,12 @@ func removeNodeFromEdge(engine *core.StorageEngine, edgeID, nodeID uint64, cfg *
 		}
 		return true, nil
 	}
-	return false, writeSceneEdge(engine, edgeID, edge)
+	return false, core.WriteSceneEdge(engine, edgeID, edge)
 }
 
 func removeEdgeFromNode(engine *core.StorageEngine, nodeID, edgeID uint64) error {
-	node := readSceneNode(engine, nodeID)
-	if node == nil {
+	node, err := core.ReadSceneNode(engine, nodeID)
+	if err != nil {
 		return nil
 	}
 	found := false
@@ -427,39 +468,6 @@ func removeEdgeFromNode(engine *core.StorageEngine, nodeID, edgeID uint64) error
 	}
 	node.EdgeIDs = filtered
 	return core.WriteSceneNode(engine, nodeID, node)
-}
-
-func readSceneNode(engine *core.StorageEngine, idHash uint64) *core.SceneNode {
-	rt, data, err := engine.ReadRecord(idHash)
-	if err != nil || rt != core.RecL1SceneNode {
-		return nil
-	}
-	var node core.SceneNode
-	if json.Unmarshal(data, &node) != nil {
-		return nil
-	}
-	return &node
-}
-
-func readSceneEdge(engine *core.StorageEngine, idHash uint64) *core.SceneEdge {
-	rt, data, err := engine.ReadRecord(idHash)
-	if err != nil || rt != core.RecL1Hyperedge {
-		return nil
-	}
-	var edge core.SceneEdge
-	if json.Unmarshal(data, &edge) != nil {
-		return nil
-	}
-	return &edge
-}
-
-func writeSceneEdge(engine *core.StorageEngine, id uint64, edge *core.SceneEdge) error {
-	data, err := json.Marshal(edge)
-	if err != nil {
-		return common.NewError(common.ErrSerialization, "marshal scene edge", err)
-	}
-	_, err = engine.WriteRecord(core.RecL1Hyperedge, id, data)
-	return err
 }
 
 // applyEmotionalBoost: stronger emotions (|valence|×arousal) decay slower;

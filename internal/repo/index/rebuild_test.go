@@ -35,7 +35,7 @@ func TestRebuildSearchIndexes(t *testing.T) {
 	writeRawTopic(t, engine, 2, 100, 2, []string{"beta", "rust"})
 	writeRawTopic(t, engine, 3, 200, 3, []string{"gamma", "deep"})
 
-	sparse, l1Rev, l2Meta, err := RebuildSearchIndexes(engine)
+	sparse, l2Meta, err := RebuildSearchIndexes(engine)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,9 +53,5 @@ func TestRebuildSearchIndexes(t *testing.T) {
 	// L2Meta contains all three topics
 	if l2Meta.Len() != 3 {
 		t.Errorf("l2Meta should have 3 entries, got %d", l2Meta.Len())
-	}
-	// L1 reverse index is non-empty and usable
-	if l1Rev == nil {
-		t.Fatal("l1Reverse should not be nil")
 	}
 }

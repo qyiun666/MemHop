@@ -37,7 +37,8 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 
 - **Eight-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal → L6 Scene Usage → L7 Trajectory, with Dream consolidation
 - **Three-Channel RRF Retrieval** — BM25 (gse CJK) + f32 vector + fuzzy entity/term matching (entity index auto-fed from indexed topic terms), fused via Reciprocal Rank Fusion (k=60)
-- **V2 Storage** — `.meh` format (`FormatVersion=0x0006`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. **Not compatible with v1 `.meh` data files** (JSON serialization switched to native numbers); 0x0005 introduced the 0x0F Capability record (its payload replaced the v1.2.0 PluginSlot), 0x0006 re-designed the capability payload as the v2 mcp/skill/composite resource-wrapper model — files with 0x0005 (or older) are rejected at Open with no migration path
+- **V2 Storage** — `.meh` format (`FormatVersion=0x0007`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. **Not compatible with v1 `.meh` data files** (JSON serialization switched to native numbers); 0x0005 introduced the 0x0F Capability record, 0x0006 re-designed the capability payload as the v2 mcp/skill/composite resource-wrapper model, 0x0007 folded the L6 scene-usage record into the L2 scene slot, removed the L1 reverse index from the snapshot and added real L1 hyperedge creation — files with 0x0006 (or older) are rejected at Open with no migration path
+- **L1 Scene Hypergraph + Spreading Activation** — Dream creates co-occurrence hyperedges between scenes whose topic keyword sets overlap (Jaccard ≥ `L1EdgeMinSimilarity`); Search association walks the graph from the hit scene, propagating activation (× edge weight × dampening per hop) and returns the top associated scenes' topics as `AssociatedContexts` — real cross-scene associative recall ("联想记忆"), with edge weights decayed and pruned by the Dream pipeline
 - **Dream Pipeline** — five stages over L0–L2: L2 compress → L1 rebuild → L1 decay → L0 profile → L0 distill (emotion/MBTI)
 - **L3 Knowledge Graph** — Multiple independent hypergraphs with node/edge import, CRUD, keyword/type lookup and BFS subgraph queries
 - **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)
@@ -128,12 +129,12 @@ The root `capabilities/` directory ships a ready-to-use capability toolbox (`mem
 Layer   Name             Human Parallel          Mechanism
 ─────   ──────────────   ───────────────────     ─────────────────────────────────────────────
  L7     Trajectory       Procedural log          Host-appended operation events; crystallized into L5 capability drafts
- L6     Scene Usage      Retrieval feedback      Per-scene search hit counters feeding L1 decay
+ L6     Scene Usage      Retrieval feedback      Scene hit counters folded into L2 scene records, feeding L1 decay
  L5     Crystal          Muscle memory           Reusable capability packages (skills · MCP · tools · prompts · services)
  L4     Archive          Long-term memory        Raw dialogue logs & historical records
  L3     Knowledge        Semantic memory         Multi-source hypergraph knowledge base
  L2     Context          Working memory          Compressed topic structures (4 depth levels)
- L1     Engram           Scene graph             Scene nodes + reverse index linking L2 contexts (hyperedge creation reserved)
+ L1     Engram           Scene hypergraph        Scene nodes + keyword-overlap hyperedges; activation spreads here during Search association
  L0     Profile          Identity                Agent personality, preferences & language habits
 ```
 
@@ -142,8 +143,8 @@ Layer   Name             Human Parallel          Mechanism
 The Dream cycle is an automatic memory consolidation process inspired by how the human brain processes experiences during sleep. It operates on **L0–L2 only** (L3 distillation and L5 crystallization are out of scope by design) and runs five stages:
 
 1. **L2 Compression** — LLM groups and merges related topics, one goroutine per active scene, demotes stale contexts
-2. **L1 Rebuild** — Sync L1 scene nodes from L2 and rebuild search indexes in the same pass
-3. **L1 Decay** — Decay scene importance and prune weak nodes
+2. **L1 Rebuild** — Sync L1 scene nodes from L2, rebuild search indexes, and create/refresh keyword-overlap hyperedges between scenes in the same pass
+3. **L1 Decay** — Decay scene importance and edge weights, prune weak nodes
 4. **L0 Profile** — Regenerate the agent profile from consolidated memory
 5. **L0 Distill** — Distill emotion/MBTI patterns (always runs; skipped automatically when no L1 samples exist)
 
@@ -159,7 +160,7 @@ The Dream cycle is an automatic memory consolidation process inspired by how the
 | Vector  | Semantic similarity with f32 single-precision via Ollama HTTP embed |
 | Entity  | Fuzzy term/entity matching over indexed topic terms (BK-Tree, edit distance ≤ 2) |
 
-Post-fusion: keyword-overlap scoring, additive scene bonuses for active/recent scenes, then L1 association expansion + L5 capability matching + L0 profile assembly.
+Post-fusion: keyword-overlap scoring, additive scene bonuses for active/recent scenes, then L1 spreading activation (cross-scene associative recall over the scene hypergraph) + L5 capability matching + L0 profile assembly.
 
 
 `SearchResult` returns `Contexts` (the hit scene's depth-≤1 topics, each carrying `L4Refs`) and `AssociatedContexts` (topics from the L1-associated scene); hosts pull the L4 original text via `SceneContext` or `SearchL4`.
@@ -235,6 +236,8 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
+| v1.3.2 | 2026-08-26 | API fixes: async Dream + deletion + Update simplification | Search/Update no longer block on an internally triggered Dream (background goroutine, per-scene in-flight dedup, Close cancels a pending Dream) · new `DeleteTopic` (subtree closure + L4 + indexes + parent ChildrenIDs pruning) and `DeleteScene` (scene + all topics + archives + L1 node + active set) for memory correction · `Update` returns `error` instead of `(bool, error)` · `SearchResult.ProfileBrief` — compact profile digest (name/role/top preferences/style/emotions, bounded) · no format change (stays `0x0007`) · MCP tool set unchanged (32) ·
+| v1.3.0 | 2026-08-26 | L1 scene hypergraph + spreading-activation association | Dream creates real `RecL1Hyperedge` co-occurrence edges between scenes (keyword-overlap Jaccard ≥ `L1EdgeMinSimilarity`); Search `AssociatedContexts` replaced the no-op same-scene listing with a graph walk (activation × edge weight × dampening per hop, ≤ `L1EdgeMaxHops`, top `L1AssocMaxScenes` other scenes) · L6 scene-usage record removed — hit counters folded into the L2 `SceneSlot` (`HitCount`/`LastHitAt`) · `L1ReverseIndex` (incl. snapshot field) and 4 dead L1 functions removed; association is now a pure storage-level graph read · `.meh` format bumped to `0x0007` — 0x0006 files are rejected at Open, no migration · new defaults: `L1EdgeMinSimilarity` (0.15), `L1EdgeMaxHops` (2), `L1ActivationDampening` (0.5), `L1ActivationThreshold` (0.05), `L1AssocMaxScenes` (3)
 | v1.2.7 | 2026-08-25 | Host alignment + bilingual integration guides | `Search(ctx, q)` and `RefineTopicKeywords(ctx, id)` accept a context (cancels LLM extraction, encoder calls, internally triggered Dream) · `api` exports `LlmConfig` / `MemHopDefaults` / `TopicSlot` / `ResourceRef` / `CrystallizeDetail` / `TrajectoryStats` · new `TrajectoryStats` (per-session L7 stats) + `memhop_trajectory_stats` MCP tool (31 → 32 tools) · `CrystallizeResult.Details` — per-candidate create/reuse/merge/skip disposition · `AppendL4Message` (pure L4 append, no LLM) · active-scene capacity: Update triggers a Dream on the oldest scene at Capacity with a compressibility pre-check; `SearchDreamContextThreshold` zero-value guard · bilingual integration guides added at repo root (`INTEGRATION_GUIDE.md` / `INTEGRATION_GUIDE.zh.md`) |
 | v1.2.5 | 2026-08-20 | MCP server rewritten | `cmd/memhop-mcp` fully rewritten against the `api` facade (v1.2.4 removed it): all 31 MCP tools map 1:1 to `api.DB` methods · multi-tenant HTTP — SSE + streamable-http (2025-03-26 spec, stateless), each tenant isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file, lazy-open registry with a first-open mutex · all tool outputs serialize record IDs as 16-char hex strings (uint64 JSON numbers lose precision in JS/TS hosts) · tenant-ID whitelist + path-traversal rejection (defense in depth) · LLM credentials via env vars only (no CLI flag) · go-sdk v1.7.0 back as a direct dep (3 → 4) · offline tests for config/registry/tools/streamable + multi-tenant SSE smoke · codebase cleanup: dropped redundant enum JSON helpers (default `~uint8` JSON behavior is identical), `CodeOf` migrated to Go 1.26 `errors.AsType`, scalar cosine loop (2.7× faster at 1024 dims), deleted the `internal/repo/open.go` forwarding layer (17 funcs + 8 aliases; internal calls core/index directly), removed the `ParseID→FormatHash` round-trip in Update |
 | v1.2.4 | 2026-08-19 | api/ facade + internal/ flattening | Public Go API moved from the root package to `github.com/qyiun666/MemHop/api` (root `memhop.go`/`types.go` removed) · `internal/sub/` flattened into `internal/` (`package sub` → `package internal`), `internal/sub/repo` → `internal/repo`, `internal/sub/common` → `internal/common` · `cmd/memhop-mcp` removed (rewritten in v1.2.5) · build config (Makefile fmt, pre-commit hook, CI gofmt) updated · breaking change: hosts importing the root package must switch to `/api` |

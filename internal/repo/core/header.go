@@ -23,9 +23,12 @@ const (
 // FormatVersion is the on-disk file format version. 0x0005 introduced the
 // L5 capability record (0x0F) whose payload schema replaced the v1.2.0
 // PluginSlot; 0x0006 re-designed the capability payload as the v2
-// mcp/skill/composite resource-wrapper model. Files with 0x0005 (or older)
-// are rejected at Open — there is no migration path for the old payloads.
-const FormatVersion uint16 = 0x0006
+// mcp/skill/composite resource-wrapper model; 0x0007 removed the L6 scene
+// usage record (folded into SceneSlot), removed the L1 reverse index from
+// the snapshot (L1 association now walks the scene hypergraph at query
+// time) and added L1 hyperedge creation during Dream. Files with 0x0006
+// (or older) are rejected at Open — there is no migration path.
+const FormatVersion uint16 = 0x0007
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

@@ -4,6 +4,7 @@
 package internal
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -22,7 +23,6 @@ type DB struct {
 	sparseIndex  *index.SparseIndex
 	l2Meta       *index.L2MetaIndex
 	llm          *Provider
-	l1Reverse    atomic.Pointer[index.L1ReverseIndex]
 	encoder      Encoder
 	activeScenes []uint64
 	// builtinCapabilities are read-only reference capabilities attached to
@@ -32,6 +32,15 @@ type DB struct {
 	lastDreamAt         atomic.Int64 // Unix ms of the last successful Dream (0 = never)
 	closed              atomic.Bool
 	mu                  sync.RWMutex // public methods RLock; Close/Dream Lock
+	// dreamMu guards dreamInFlight: scenes with a background Dream already
+	// scheduled by Search/Update, so repeated triggers never stack.
+	dreamMu       sync.Mutex
+	dreamInFlight map[uint64]struct{}
+	// dreamCtx/dreamCancel own the background Dream pipelines: Close cancels
+	// them so an in-flight Dream exits at its next stage boundary instead of
+	// blocking Close on LLM calls.
+	dreamCtx    context.Context
+	dreamCancel context.CancelFunc
 }
 
 // Lock/Unlock provide the write lock for combined internal-layer write ops.
@@ -54,8 +63,6 @@ func (db *DB) activateScene(sceneID uint64) {
 }
 
 func (db *DB) TouchLastDreamAt() { db.lastDreamAt.Store(time.Now().UnixMilli()) }
-
-func (db *DB) getL1Reverse() *index.L1ReverseIndex { return db.l1Reverse.Load() }
 
 // syncL2Meta refreshes one topic entry of the L2MetaIndex from the record
 // just written; call it right after engine writes, before the sparse index
@@ -106,6 +113,10 @@ func (db *DB) Close() error {
 	if !db.closed.CompareAndSwap(false, true) {
 		return common.NewError(common.ErrClosed, "database is closed")
 	}
+	// Cancel background Dreams so an in-flight pipeline exits at its next
+	// stage boundary; the write lock below serializes with any Dream that
+	// already holds it.
+	db.dreamCancel()
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	snap, err := db.buildSnapshot()
@@ -143,13 +154,8 @@ func (db *DB) buildSnapshot() (*core.IndexSnapshotData, error) {
 	if err != nil {
 		return nil, common.NewError(common.ErrSerialization, "sparse index", err)
 	}
-	l1RevData, err := db.getL1Reverse().Serialize()
-	if err != nil {
-		return nil, common.NewError(common.ErrSerialization, "l1 reverse index", err)
-	}
 	return &core.IndexSnapshotData{
-		SparseData:    sparseData,
-		L1ReverseData: l1RevData,
-		L3IndexData:   nil,
+		SparseData:  sparseData,
+		L3IndexData: nil,
 	}, nil
 }

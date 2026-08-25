@@ -10,6 +10,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,6 +31,7 @@ type SearchQuery struct {
 
 type SearchResult struct {
 	Profile            core.ProfileSlot `json:"profile"`
+	ProfileBrief       string           `json:"profile_brief"`
 	Contexts           []core.TopicSlot `json:"contexts"`
 	AssociatedContexts []core.TopicSlot `json:"associated_contexts"`
 	NewTopicID         uint64           `json:"new_topic_id,omitempty"`
@@ -77,11 +80,13 @@ func (db *DB) Search(ctx context.Context, q SearchQuery) (*SearchResult, error) 
 	if len(contexts) > 0 {
 		associated = db.associatedContexts(contexts[0].SceneID)
 		// Trigger a Dream when the scene's context grows beyond the
-		// threshold so its depth-1 topics get compressed (best-effort;
-		// the scene is re-activated by the next hit). Zero threshold
-		// (host-constructed literal) disables the trigger.
+		// threshold so its depth-1 topics get compressed (best-effort and
+		// asynchronous: Search returns immediately, the Dream runs in the
+		// background under the write lock; the scene is re-activated by the
+		// next hit). Zero threshold (host-constructed literal) disables the
+		// trigger.
 		if t := db.config.Defaults.SearchDreamContextThreshold; t > 0 && len(contexts) > t {
-			db.triggerSceneDream(ctx, contexts[0].SceneID)
+			db.triggerSceneDream(contexts[0].SceneID)
 		}
 	}
 	return db.assembleResult(q, contexts, associated, newTopicID)
@@ -175,66 +180,106 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 	}
 	// Activation unified here for all three routes; idempotent.
 	db.activateScene(sceneID)
-	// L6: record scene-level retrieval usage feedback (best-effort, non-fatal).
-	if err := repo.UpsertSceneUsage(db.engine, sceneID, time.Now().UnixMilli()); err != nil {
+	// Scene-level retrieval usage feedback, folded into the scene record
+	// (best-effort, non-fatal).
+	if err := repo.TouchSceneUsage(db.engine, sceneID, time.Now().UnixMilli()); err != nil {
 		slog.Warn("search: record scene usage failed", "err", err)
 	}
 	return latest, topicID, nil
 }
 
-// associatedContexts finds the scene with the most linked topics via L1
-// reverse lookup and returns its depth<=1 topics.
+// associatedContexts runs spreading activation over the L1 scene hypergraph
+// from the hit scene and flattens the activated scenes' depth<=1 topics
+// (activation order preserved). Empty when the scene has no L1 node yet.
 func (db *DB) associatedContexts(sceneID uint64) []core.TopicSlot {
-	l1Rev := db.l1Reverse.Load()
-	if l1Rev == nil {
+	hits := SpreadingActivation(db.engine, db.l2Meta, sceneID, &db.config.Defaults)
+	if len(hits) == 0 {
 		return []core.TopicSlot{}
 	}
-	nodes := repo.FindAssociatedNodesL1(db.engine, l1Rev, []string{common.FormatHash(sceneID)})
-	counts := make(map[uint64]int)
-	for _, node := range nodes {
-		for _, topicID := range node.TopicIDs {
-			ts, err := repo.ListTopicsL2(repo.TopicListQuery{
-				Engine:  db.engine,
-				MetaIdx: db.l2Meta,
-				SceneID: common.FormatHash(topicID),
-				Depth:   0,
-				Num:     3,
-			})
-			if err != nil {
-				continue
-			}
-			counts[ts[0].SceneID]++
+	out := make([]core.TopicSlot, 0, len(hits)*2)
+	for _, h := range hits {
+		for _, st := range h.Topics {
+			out = append(out, st.Topic)
 		}
 	}
-	if len(counts) == 0 {
-		return []core.TopicSlot{}
-	}
-	bestScene, bestCount := uint64(0), 0
-	for sid, n := range counts {
-		if n > bestCount {
-			bestScene, bestCount = sid, n
-		}
-	}
-	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
-		Engine:  db.engine,
-		MetaIdx: db.l2Meta,
-		SceneID: common.FormatHash(bestScene),
-		Depth:   1,
-		Num:     2,
-	})
-	if err != nil {
-		return []core.TopicSlot{}
-	}
-	return topics
+	return out
 }
 
 func (db *DB) assembleResult(_ SearchQuery, contexts, associated []core.TopicSlot, newTopicID uint64) (*SearchResult, error) {
+	profile := db.readProfile()
 	return &SearchResult{
-		Profile:            db.readProfile(),
+		Profile:            profile,
+		ProfileBrief:       profileBrief(profile),
 		Contexts:           contexts,
 		AssociatedContexts: associated,
 		NewTopicID:         newTopicID,
 	}, nil
+}
+
+// profileBrief renders a compact profile digest for prompt injection: name,
+// role, top preferences, style traits and emotion patterns, bounded so the
+// per-turn Search payload stays small. Hosts needing the full profile read
+// it once via GetL0 instead of every turn.
+func profileBrief(slot core.ProfileSlot) string {
+	if slot.Name == "" && slot.Role == "" && len(slot.Preferences) == 0 &&
+		len(slot.StyleTraits) == 0 && len(slot.EmotionPatterns) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	if slot.Name != "" {
+		fmt.Fprintf(&b, "name: %s\n", slot.Name)
+	}
+	if slot.Role != "" {
+		fmt.Fprintf(&b, "role: %s\n", slot.Role)
+	}
+	if len(slot.Preferences) > 0 {
+		b.WriteString("preferences: ")
+		writeKV(&b, slot.Preferences, 5)
+		b.WriteByte('\n')
+	}
+	if len(slot.StyleTraits) > 0 {
+		b.WriteString("style: ")
+		b.WriteString(strings.Join(head3(slot.StyleTraits), ", "))
+		b.WriteByte('\n')
+	}
+	if len(slot.EmotionPatterns) > 0 {
+		b.WriteString("emotions: ")
+		writeKV(&b, slot.EmotionPatterns, 3)
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// writeKV writes up to max sorted key=value pairs of m into b; map
+// iteration order is random, so keys are sorted for a stable digest. Each
+// value is truncated to keep the digest compact even for long inputs.
+func writeKV(b *strings.Builder, m map[string]string, max int) {
+	keys := slices.Sorted(maps.Keys(m))
+	for i, k := range keys {
+		if i == max {
+			break
+		}
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(b, "%s=%s", k, truncateRunes(m[k], 120))
+	}
+}
+
+// truncateRunes caps s at n runes, appending "…" when truncated.
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "…"
+}
+
+func head3(s []string) []string {
+	if len(s) <= 3 {
+		return s
+	}
+	return s[:3]
 }
 
 func (db *DB) readProfile() core.ProfileSlot {

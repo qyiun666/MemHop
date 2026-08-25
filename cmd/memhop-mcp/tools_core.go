@@ -74,8 +74,8 @@ func registerCoreTools(s *mcp.Server, db *memhop.DB) {
 			"timestamp": intProp("Unix 毫秒时间戳，必填"),
 		}, "topic_id", "text", "timestamp"),
 	}, handle[updateArgs, updateResult](func(a updateArgs) (updateResult, error) {
-		ok, err := db.Update(a.TopicID, a.Text, a.Timestamp)
-		return updateResult{OK: ok}, err
+		err := db.Update(a.TopicID, a.Text, a.Timestamp)
+		return updateResult{OK: err == nil}, err
 	}))
 
 	s.AddTool(&mcp.Tool{

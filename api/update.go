@@ -4,6 +4,6 @@
 package api
 
 // Thin wrapper; see internal/update.go ((db *DB) Update).
-func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error) {
+func (db *DB) Update(topicID string, text string, timestamp int64) error {
 	return db.DB.Update(topicID, text, timestamp)
 }

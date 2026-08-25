@@ -197,12 +197,12 @@ func TestKeywordPersistence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("noise Search: %v", err)
 		}
-		if _, err := db.Update(common.FormatHash(r.NewTopicID), "好的，记下了", ts+500); err != nil {
+		if err := db.Update(common.FormatHash(r.NewTopicID), "好的，记下了", ts+500); err != nil {
 			t.Fatalf("noise Update: %v", err)
 		}
 	}
 	// Also update the anchor topic to simulate continued activity.
-	if _, err := db.Update(anchorTopic, "旺财真可爱", base+100); err != nil {
+	if err := db.Update(anchorTopic, "旺财真可爱", base+100); err != nil {
 		t.Fatalf("anchor Update: %v", err)
 	}
 
@@ -245,7 +245,7 @@ func ingestSameScene(t *testing.T, db *memhop.DB, texts []string, base int64) ui
 			sceneID = res.Contexts[0].SceneID
 		}
 		// Add the agent reply: every user turn has an agent response in real usage.
-		if _, err := db.Update(common.FormatHash(res.NewTopicID), "好的，我记下了。", ts+500); err != nil {
+		if err := db.Update(common.FormatHash(res.NewTopicID), "好的，我记下了。", ts+500); err != nil {
 			t.Fatalf("ingest Update: %v", err)
 		}
 	}

@@ -386,11 +386,11 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 }
 
 // Files with an unsupported format version must be rejected explicitly:
-// 0x0004 is the legacy L5 plugin-slot format and 0x0005 the previous
-// capability schema (neither has a migration path), 0x0007 a future
+// 0x0004 is the legacy L5 plugin-slot format, 0x0005/0x0006 the previous
+// capability schemas (none has a migration path), 0x0008 a future
 // version.
 func TestHeaderVersionRejected(t *testing.T) {
-	for _, v := range []uint16{0x0004, 0x0005, 0x0007} {
+	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0008} {
 		t.Run(fmt.Sprintf("0x%04x", v), func(t *testing.T) {
 			p := tempPath(t, "ver")
 			eng, err := Create(p, 768)

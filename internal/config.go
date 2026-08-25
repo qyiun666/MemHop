@@ -4,6 +4,7 @@
 package internal
 
 import (
+	"context"
 	"math"
 	"os"
 
@@ -83,33 +84,25 @@ func CheckVectorDim(engine *core.StorageEngine, cfg *MemHopConfig) error {
 	return nil
 }
 
-// LoadCachedIndices restores the sparse and L1 reverse indices from the
-// checkpoint snapshot; a corrupt snapshot aborts Open rather than silently
-// rebuilding.
-func LoadCachedIndices(engine *core.StorageEngine) (*index.SparseIndex, *index.L1ReverseIndex, error) {
+// LoadCachedIndices restores the sparse index from the checkpoint
+// snapshot; a corrupt snapshot aborts Open rather than silently rebuilding.
+// L1 association is a storage-level graph walk (SpreadingActivation), so no
+// in-memory L1 index is loaded.
+func LoadCachedIndices(engine *core.StorageEngine) (*index.SparseIndex, error) {
 	sparseIdx := index.NewSparseIndex()
-	l1Rev := index.NewL1ReverseIndex()
 	snap := engine.SnapshotData()
 	if snap == nil {
-		return sparseIdx, l1Rev, nil
+		return sparseIdx, nil
 	}
 	if len(snap.SparseData) > 0 {
 		idx, err := index.DeserializeSparseIndex(snap.SparseData)
 		if err != nil {
-			return nil, nil, common.NewError(common.ErrCorruption,
+			return nil, common.NewError(common.ErrCorruption,
 				"sparse index snapshot deserialize failed", err)
 		}
 		sparseIdx = idx
 	}
-	if len(snap.L1ReverseData) > 0 {
-		idx, err := index.DeserializeL1ReverseIndex(snap.L1ReverseData)
-		if err != nil {
-			return nil, nil, common.NewError(common.ErrCorruption,
-				"l1 reverse index snapshot deserialize failed", err)
-		}
-		l1Rev = idx
-	}
-	return sparseIdx, l1Rev, nil
+	return sparseIdx, nil
 }
 
 // InitTokenizer surfaces tokenizer configuration errors at Open time
@@ -124,20 +117,25 @@ func InitTokenizer(engine string) error {
 // Open assembles a DB instance: tokenizer init, engine open/create,
 // vector-dim check and index restore. Called by the internal assembly layer.
 func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
+	ctx, cancel := context.WithCancel(context.Background())
 	if err := InitTokenizer(cfg.Defaults.TokenizerEngine); err != nil {
+		cancel()
 		return nil, err
 	}
 	engine, err := OpenOrCreateEngine(cfg)
 	if err != nil {
+		cancel()
 		return nil, err
 	}
 	if err := CheckVectorDim(engine, cfg); err != nil {
 		engine.CloseNoCheckpoint()
+		cancel()
 		return nil, err
 	}
-	sparseIdx, l1Rev, err := LoadCachedIndices(engine)
+	sparseIdx, err := LoadCachedIndices(engine)
 	if err != nil {
 		engine.CloseNoCheckpoint()
+		cancel()
 		return nil, err
 	}
 
@@ -147,8 +145,12 @@ func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 		llm:         New(cfg),
 		sparseIndex: sparseIdx,
 		encoder:     enc,
+		// dreamInFlight guards background Dreams triggered by Search/Update;
+		// dreamCtx cancels them at Close so the pipeline exits promptly.
+		dreamInFlight: make(map[uint64]struct{}),
+		dreamCtx:      ctx,
+		dreamCancel:   cancel,
 	}
-	db.l1Reverse.Store(l1Rev)
 	// L2Meta is not snapshot-persisted (snapshot format is fixed), so it is
 	// rebuilt once at Open with a single RecL2Topic scan; after that all
 	// candidate listing serves from memory.

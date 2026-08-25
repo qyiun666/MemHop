@@ -83,9 +83,8 @@ func TestCheckpointReopen(t *testing.T) {
 	}
 	eng.WriteRecord(RecL2Topic, 100, []byte("checkpoint data"))
 	snap := &IndexSnapshotData{
-		SparseData:    []byte("sparse"),
-		L1ReverseData: []byte("l1"),
-		L3IndexData:   []byte("l3"),
+		SparseData:  []byte("sparse"),
+		L3IndexData: []byte("l3"),
 	}
 	if err := eng.Checkpoint(snap); err != nil {
 		t.Fatal(err)

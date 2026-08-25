@@ -8,9 +8,11 @@ package internal
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -41,6 +43,37 @@ func TestSearchAutoCreateContextsIncludeNewTopic(t *testing.T) {
 	}
 }
 
+// TestSearchReturnsProfileBrief a stored profile shows up as a compact
+// digest in ProfileBrief while the full Profile stays available.
+func TestSearchReturnsProfileBrief(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["rust"]}`)
+	db := newSearchTestDB(t, srv.URL)
+	profile := core.ProfileSlot{
+		Name:        "meow",
+		Role:        "helper",
+		Preferences: map[string]string{"lang": "zh", "style": "concise"},
+		StyleTraits: []string{"direct", "friendly", "thorough", "extra"},
+	}
+	if err := repo.UpdateProfileL0(db.engine, &profile); err != nil {
+		t.Fatalf("UpdateProfileL0: %v", err)
+	}
+	res, err := db.Search(context.Background(), SearchQuery{Text: "hello", AutoCreate: true, Timestamp: 1000})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	for _, want := range []string{"name: meow", "role: helper", "lang=zh", "style=concise", "direct"} {
+		if !strings.Contains(res.ProfileBrief, want) {
+			t.Errorf("ProfileBrief missing %q: %q", want, res.ProfileBrief)
+		}
+	}
+	if strings.Contains(res.ProfileBrief, "extra") {
+		t.Errorf("ProfileBrief should cap style traits at 3, got %q", res.ProfileBrief)
+	}
+	if res.Profile.Name != "meow" {
+		t.Errorf("full Profile must stay intact, got %+v", res.Profile)
+	}
+}
+
 // TestSearchDirectedContextsIncludeNewTopic covers the directed route: the
 // topic created into an existing scene must show up in Contexts too.
 func TestSearchDirectedContextsIncludeNewTopic(t *testing.T) {
@@ -66,14 +99,20 @@ func TestSearchDirectedContextsIncludeNewTopic(t *testing.T) {
 func newSearchTestDB(t *testing.T, llmURL string) *DB {
 	t.Helper()
 	cfg := &MemHopConfig{Defaults: *DefaultMemHopDefaults}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
 	db := &DB{
 		engine:      newTestEngine(t),
 		config:      cfg,
 		llm:         New(&MemHopConfig{LLM: LlmConfig{APIURL: llmURL, APIKey: "test", Model: "mock"}}),
 		encoder:     &mockEncoder{vec: testVec},
 		sparseIndex: index.NewSparseIndex(),
+		// Mirror the Open() initialization so background-Dream paths never
+		// hit a nil map or nil context in tests.
+		dreamInFlight: make(map[uint64]struct{}),
+		dreamCtx:      ctx,
+		dreamCancel:   cancel,
 	}
-	db.l1Reverse.Store(index.NewL1ReverseIndex())
 	db.l2Meta = index.BuildL2MetaFromEngine(db.engine)
 	return db
 }

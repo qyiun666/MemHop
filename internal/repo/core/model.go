@@ -189,11 +189,23 @@ type SceneEdge struct {
 	LastDecayAt int64 `json:"last_decay_at"`
 }
 
-// SceneSlot is an L2 scene container holding multiple session topics.
+// SceneNodeID derives the stable L1 node ID of a scene: hash("l1:"+hex(sceneID)).
+// The node is created/updated only during Dream, but the ID is computable at
+// query time without any index, which is what makes spreading-activation
+// association a pure storage-level graph walk.
+func SceneNodeID(sceneID uint64) uint64 {
+	return common.HashID("l1:" + common.FormatHash(sceneID))
+}
+
+// SceneSlot is an L2 scene container holding multiple session topics;
+// HitCount/LastHitAt fold the former L6 scene-usage feedback into the scene
+// record (retrieval-hit statistics consumed by Dream's usage feedback).
 type SceneSlot struct {
 	SceneID    uint64 `json:"scene_id"`
 	SceneName  string `json:"scene_name"`
 	TopicCount int    `json:"topic_count"` // depth-1 root topics under this scene
+	HitCount   uint32 `json:"hit_count"`   // cumulative retrieval hit count
+	LastHitAt  int64  `json:"last_hit_at"` // last hit time (Unix ms)
 }
 
 // NewSceneSlot builds a SceneSlot from a name; ID is the xxhash64 of the name.
@@ -403,15 +415,6 @@ type Workflow struct {
 type WorkflowStep struct {
 	Ref    string `json:"ref"`
 	Action string `json:"action,omitempty"`
-}
-
-// SceneUsageSlot is an L6 scene-level retrieval usage feedback record,
-// one per scene (ID = hash("usage:"+sceneID), upserted on every Search hit).
-type SceneUsageSlot struct {
-	IDHash    uint64 `json:"id_hash"`
-	SceneID   uint64 `json:"scene_id"`
-	HitCount  uint32 `json:"hit_count"`   // cumulative retrieval hit count
-	LastHitAt int64  `json:"last_hit_at"` // last hit time (Unix ms)
 }
 
 // TrajectorySlot is an L7 operation trajectory event appended by the host

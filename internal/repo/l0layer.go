@@ -198,8 +198,8 @@ func MergeDistillIntoProfile(engine *core.StorageEngine, emo DistillEmotion, mbt
 func BackfillL1Emotions(engine *core.StorageEngine, perNode map[uint64]L1NodeEmotion) (int, error) {
 	written := 0
 	for id, em := range perNode {
-		node := readSceneNode(engine, id)
-		if node == nil {
+		node, err := core.ReadSceneNode(engine, id)
+		if err != nil {
 			return written, fmt.Errorf("backfill L1 emotions: node %s not found", common.FormatHash(id))
 		}
 		if node.Valence != 0 || node.Arousal != 0 {

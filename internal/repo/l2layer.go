@@ -145,6 +145,20 @@ func MergeScenesL2(engine *core.StorageEngine, primaryID string, secondaryIDs []
 	return DeleteL2(engine, secondaryIDs, 1)
 }
 
+// TouchSceneUsage bumps the scene record's retrieval-hit counters (folded
+// from the former L6 usage record into SceneSlot). Best-effort by design:
+// concurrent hits may lose an increment; Dream only distinguishes
+// HitCount == 0, so the impact is nil.
+func TouchSceneUsage(engine *core.StorageEngine, sceneID uint64, ts int64) error {
+	slot, err := core.ReadSceneSlot(engine, sceneID)
+	if err != nil {
+		return err
+	}
+	slot.HitCount++
+	slot.LastHitAt = ts
+	return core.WriteSceneSlot(engine, sceneID, slot)
+}
+
 func ListScenesL2(engine *core.StorageEngine, ids []string) []core.SceneSlot {
 	var out []core.SceneSlot
 	for _, id := range ids {

@@ -30,7 +30,6 @@ const (
 	RecL4Archive    uint8 = 0x08
 	RecL3GraphSlot  uint8 = 0x0B
 	RecL5Capability uint8 = 0x0F // L5 capability record (id = hash("capability:"+name))
-	RecL6SceneUsage uint8 = 0x0D // scene-level retrieval usage feedback (one per scene)
 	RecL7Trajectory uint8 = 0x0E // host-appended operation trajectory event
 	RecVecCentroid  uint8 = 0xF0 // centroid vector for brute-force search
 )

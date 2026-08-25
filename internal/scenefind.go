@@ -301,3 +301,103 @@ func keywordHit(topic core.TopicSlot, kwSet map[string]struct{}) float32 {
 	}
 	return float32(hit) / float32(len(kwSet))
 }
+
+// SpreadingActivation walks the L1 scene hypergraph from startSceneID and
+// returns the most strongly activated other scenes with their depth<=1
+// topics, ordered by activation (desc). Activation starts at 1.0 at the
+// source node and propagates along hyperedges as act × edge.Weight ×
+// dampening per hop; paths below L1ActivationThreshold stop spreading and
+// the walk never exceeds L1EdgeMaxHops. The start scene itself is never
+// returned. A scene without an L1 node (created after the last Dream)
+// yields an empty result. The walk is a pure storage-level graph read — no
+// in-memory graph index is maintained.
+func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
+	startSceneID uint64, defaults *MemHopDefaults) []SceneHit {
+	maxHops, dampening, threshold, maxScenes := defaults.L1EdgeMaxHops,
+		defaults.L1ActivationDampening, defaults.L1ActivationThreshold, defaults.L1AssocMaxScenes
+	if maxHops <= 0 || maxScenes <= 0 || dampening <= 0 {
+		return nil
+	}
+	startNodeID := core.SceneNodeID(startSceneID)
+	if _, err := core.ReadSceneNode(engine, startNodeID); err != nil {
+		return nil // never dreamed; nothing associated yet
+	}
+
+	type entry struct {
+		nodeID uint64
+		act    float32
+		hops   int
+	}
+	queue := []entry{{nodeID: startNodeID, act: 1.0}}
+	sceneAct := make(map[uint64]float32)
+	for len(queue) > 0 {
+		e := queue[0]
+		queue = queue[1:]
+		if e.hops >= maxHops {
+			continue
+		}
+		node, err := core.ReadSceneNode(engine, e.nodeID)
+		if err != nil {
+			continue
+		}
+		for _, edgeID := range node.EdgeIDs {
+			edge, err := core.ReadSceneEdge(engine, edgeID)
+			if err != nil {
+				continue
+			}
+			for _, neighborID := range edge.NodeIDs {
+				if neighborID == e.nodeID {
+					continue
+				}
+				act := e.act * edge.Weight * dampening
+				if act < threshold {
+					continue
+				}
+				neighbor, err := core.ReadSceneNode(engine, neighborID)
+				if err != nil {
+					continue
+				}
+				if neighbor.SceneID != startSceneID && act > sceneAct[neighbor.SceneID] {
+					sceneAct[neighbor.SceneID] = act
+				}
+				queue = append(queue, entry{nodeID: neighborID, act: act, hops: e.hops + 1})
+			}
+		}
+	}
+	if len(sceneAct) == 0 {
+		return nil
+	}
+
+	ids := make([]uint64, 0, len(sceneAct))
+	for sid := range sceneAct {
+		ids = append(ids, sid)
+	}
+	slices.SortFunc(ids, func(a, b uint64) int {
+		if sceneAct[a] != sceneAct[b] {
+			return cmp.Compare(sceneAct[b], sceneAct[a]) // higher activation first
+		}
+		return cmp.Compare(a, b) // ties by scene ID for determinism
+	})
+	if len(ids) > maxScenes {
+		ids = ids[:maxScenes]
+	}
+	hits := make([]SceneHit, 0, len(ids))
+	for _, sid := range ids {
+		topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+			Engine:  engine,
+			MetaIdx: l2Meta,
+			SceneID: common.FormatHash(sid),
+			Depth:   1,
+			Num:     2,
+		})
+		if err != nil {
+			continue
+		}
+		scored := make([]ScoredTopic, 0, len(topics))
+		for _, t := range topics {
+			scored = append(scored, ScoredTopic{Topic: t, Score: sceneAct[sid]})
+		}
+		hits = append(hits, SceneHit{SceneID: sid, Score: sceneAct[sid], Topics: scored})
+	}
+	return hits
+}
