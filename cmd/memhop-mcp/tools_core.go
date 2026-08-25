@@ -51,8 +51,8 @@ func registerCoreTools(s *mcp.Server, db *memhop.DB) {
 			"auto_create":    boolProp("无命中时自动创建新话题（可选，默认 false）"),
 			"timestamp":      intProp("Unix 毫秒时间戳，必填"),
 		}, "text", "timestamp"),
-	}, handle[searchArgs, memhop.SearchResult](func(a searchArgs) (memhop.SearchResult, error) {
-		res, err := db.Search(memhop.SearchQuery{
+	}, handleWithCtx[searchArgs, memhop.SearchResult](func(ctx context.Context, a searchArgs) (memhop.SearchResult, error) {
+		res, err := db.Search(ctx, memhop.SearchQuery{
 			Text:         a.Text,
 			DirectedL2ID: a.DirectedL2ID,
 			DirectedL3ID: a.DirectedL3ID,

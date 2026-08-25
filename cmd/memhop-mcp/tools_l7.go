@@ -70,6 +70,20 @@ func registerL7Tools(s *mcp.Server, db *memhop.DB) {
 	}))
 
 	s.AddTool(&mcp.Tool{
+		Name:        "memhop_trajectory_stats",
+		Description: "返回会话 L7 轨迹统计：事件总数、各事件类型计数、最后事件时间戳，供宿主判断该会话是否值得结晶（工具调用数阈值）。",
+		InputSchema: objSchema(map[string]any{
+			"session_id": strProp("会话 ID（16 位 hex），必填"),
+		}, "session_id"),
+	}, handle[sessionIDArgs, memhop.TrajectoryStats](func(a sessionIDArgs) (memhop.TrajectoryStats, error) {
+		stats, err := db.TrajectoryStats(a.SessionID)
+		if err != nil {
+			return memhop.TrajectoryStats{}, err
+		}
+		return *stats, nil
+	}))
+
+	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_delete",
 		Description: "删除会话的整条 L7 操作轨迹。",
 		InputSchema: objSchema(map[string]any{

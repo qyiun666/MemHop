@@ -42,7 +42,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 - **L3 Knowledge Graph** — Multiple independent hypergraphs with node/edge import, CRUD, keyword/type lookup and BFS subgraph queries
 - **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)
 - **Minimal & Embeddable** — 4 direct Go deps (xxhash, gse, go-openai, go-sdk); Ollama is accessed through its plain HTTP API, no Ollama SDK dependency, `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
-- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 31 MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts, each isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file
+- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 32 MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts, each isolated by URL path `/mcp/<tenant-id>` into its own `.meh` file
 - **Single Agent, Single File** — one agent = one `.meh` file, no server process, no background daemon
 
 ## Quick Start
@@ -77,8 +77,9 @@ defer db.Close()
 
 // Search — three routes: AutoCreate (skip retrieval, new scene+topic),
 // DirectedL2ID (append to a specific scene), or default three-channel retrieval.
-// Timestamp is required: Unix milliseconds of the message.
-res, err := db.Search(memhop.SearchQuery{
+// Timestamp is required: Unix milliseconds of the message. ctx cancels LLM
+// keyword extraction, encoder calls and any internally triggered Dream.
+res, err := db.Search(ctx, memhop.SearchQuery{
     Text:      "What did we discuss?",
     Timestamp: time.Now().UnixMilli(),
 })

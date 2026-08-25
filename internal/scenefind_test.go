@@ -378,15 +378,17 @@ func TestActivateSceneDedup(t *testing.T) {
 	}
 }
 
-// TestActivateSceneEvictsOldest bounds Dream work to Defaults.Capacity.
-func TestActivateSceneEvictsOldest(t *testing.T) {
+// TestActivateSceneUnbounded verifies the active set grows past Capacity
+// without eviction: Dream size is controlled by Update, which triggers a
+// Dream on the oldest scene at Defaults.Capacity.
+func TestActivateSceneUnbounded(t *testing.T) {
 	cfg := *DefaultMemHopDefaults
 	cfg.Capacity = 2
 	db := &DB{config: &MemHopConfig{Defaults: cfg}}
 	db.activateScene(7)
 	db.activateScene(9)
 	db.activateScene(11)
-	if len(db.activeScenes) != 2 || db.activeScenes[0] != 9 || db.activeScenes[1] != 11 {
-		t.Fatalf("activeScenes = %v; want [9 11]", db.activeScenes)
+	if len(db.activeScenes) != 3 || db.activeScenes[0] != 7 || db.activeScenes[1] != 9 || db.activeScenes[2] != 11 {
+		t.Fatalf("activeScenes = %v; want [7 9 11]", db.activeScenes)
 	}
 }

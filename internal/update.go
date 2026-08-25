@@ -68,5 +68,22 @@ func (db *DB) Update(topicID string, text string, timestamp int64) (bool, error)
 	all = append(all, topic.FusedKeywords...)
 	terms := index.Tokenize(strings.Join(all, " "))
 	db.sparseIndex.AddDocument(parsedID, terms, uint32(len(terms)))
+	// Full active set: compress the oldest scene so the next activation has
+	// room instead of silently evicting it (best-effort, never fails Update).
+	// Pre-check compressibility: a full Dream runs index rebuilds + LLM
+	// distill even when no group was merged, so scenes below the compress
+	// threshold (few topics keep raw detail) are skipped here.
+	if capacity := db.config.Defaults.Capacity; capacity > 0 && len(db.activeScenes) >= capacity {
+		oldest := db.activeScenes[0]
+		if topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+			Engine:  db.engine,
+			MetaIdx: db.l2Meta,
+			SceneID: common.FormatHash(oldest),
+			Depth:   1,
+			Num:     2,
+		}); err == nil && len(topics) >= db.config.Defaults.DreamCompressMinTopics {
+			db.triggerSceneDream(context.Background(), oldest)
+		}
+	}
 	return true, nil
 }

@@ -70,7 +70,7 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 	// Phase 1: ingest via Search + Update (the real host pattern).
 	base := time.Now().UnixMilli()
 	for i, f := range facts {
-		res, err := db.Search(internal.SearchQuery{Text: f, Timestamp: base + int64(i)*1000})
+		res, err := db.Search(context.Background(), internal.SearchQuery{Text: f, Timestamp: base + int64(i)*1000})
 		if err != nil {
 			t.Fatalf("search ingest %d: %v", i, err)
 		}
@@ -90,7 +90,7 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 
 	// Phase 3: retrieval must still surface the facts, including the newest
 	// one added right before Dream and the merged summary details.
-	res, err := db.Search(internal.SearchQuery{Text: "支持小组最近有什么安排？", Timestamp: base + 1_000_000})
+	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "支持小组最近有什么安排？", Timestamp: base + 1_000_000})
 	if err != nil {
 		t.Fatalf("post-dream search: %v", err)
 	}

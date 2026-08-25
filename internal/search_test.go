@@ -7,6 +7,7 @@
 package internal
 
 import (
+	"context"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -22,7 +23,7 @@ func TestSearchAutoCreateContextsIncludeNewTopic(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["rust","memory"]}`)
 	db := newSearchTestDB(t, srv.URL)
 
-	res, err := db.Search(SearchQuery{Text: "hello world", AutoCreate: true, Timestamp: 1000})
+	res, err := db.Search(context.Background(), SearchQuery{Text: "hello world", AutoCreate: true, Timestamp: 1000})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -48,7 +49,7 @@ func TestSearchDirectedContextsIncludeNewTopic(t *testing.T) {
 
 	scene := core.NewSceneSlot("scene").SceneID
 	sceneID := common.FormatHash(scene)
-	res, err := db.Search(SearchQuery{Text: "hello world", DirectedL2ID: &sceneID, Timestamp: 1000})
+	res, err := db.Search(context.Background(), SearchQuery{Text: "hello world", DirectedL2ID: &sceneID, Timestamp: 1000})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}

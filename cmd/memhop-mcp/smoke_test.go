@@ -21,20 +21,20 @@ import (
 
 // TestSSEMultiTenantIsolation boots the SSE server in-process and verifies
 // that two tenants on one process are fully isolated: separate .meh files,
-// no data visible across tenants, and the full 31-tool surface on each.
+// no data visible across tenants, and the full 32-tool surface on each.
 func TestSSEMultiTenantIsolation(t *testing.T) {
 	srv, dbDir := newTestServer(t, nil)
 
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 31 tools on the alice session.
+	// tools/list exposes all 32 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 31 {
-		t.Errorf("expected 31 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 32 {
+		t.Errorf("expected 32 tools, got %d", len(tools.Tools))
 	}
 	names := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -48,7 +48,7 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		"memhop_knowledge_update", "memhop_knowledge_delete", "memhop_knowledge_nodes",
 		"memhop_knowledge_subgraph", "memhop_archive_search", "memhop_archive_get",
 		"memhop_capability_import", "memhop_capability_get", "memhop_capability_delete", "memhop_capability_list", "memhop_capability_update", "memhop_capability_activate", "memhop_capability_usage",
-		"memhop_trajectory_append", "memhop_trajectory_read", "memhop_trajectory_delete",
+		"memhop_trajectory_append", "memhop_trajectory_read", "memhop_trajectory_stats", "memhop_trajectory_delete",
 		"memhop_crystallize",
 	} {
 		if !names[want] {

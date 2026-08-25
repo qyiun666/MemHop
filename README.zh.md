@@ -42,7 +42,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **L3 知识图谱** — 多独立超图，支持节点/边导入、CRUD、关键词/类型查询与 BFS 子图
 - **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）
 - **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、gse、go-openai、go-sdk）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 31 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 `.meh` 文件
+- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 32 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 `.meh` 文件
 - **单 Agent 单文件** — 一个 Agent = 一个 `.meh` 文件，无服务进程、无后台守护
 
 ## 快速开始
@@ -77,8 +77,9 @@ defer db.Close()
 
 // 检索 —— 三条路由：AutoCreate（跳过检索，直建新场景+话题）、
 // DirectedL2ID（定向写入指定场景）、默认三通道检索。
-// Timestamp 必填：消息的 Unix 毫秒时间戳。
-res, err := db.Search(memhop.SearchQuery{
+// Timestamp 必填：消息的 Unix 毫秒时间戳；ctx 可取消 LLM 关键词提取、
+// 编码调用与内部触发的 Dream。
+res, err := db.Search(ctx, memhop.SearchQuery{
     Text:      "昨天我们讨论了什么？",
     Timestamp: time.Now().UnixMilli(),
 })

@@ -29,6 +29,11 @@ func (db *DB) ReadTrajectory(sessionID string) ([]TrajectorySlot, error) {
 	return db.DB.ReadTrajectory(sessionID)
 }
 
+// Thin wrapper; see internal/l7.go ((db *DB) TrajectoryStats).
+func (db *DB) TrajectoryStats(sessionID string) (*TrajectoryStats, error) {
+	return db.DB.TrajectoryStats(sessionID)
+}
+
 // Thin wrapper; write op, delegates under the write lock.
 func (db *DB) DeleteTrajectory(sessionID string) error {
 	db.DB.Lock()

@@ -42,20 +42,12 @@ func (db *DB) IsClosed() bool { return db.closed.Load() }
 
 func (db *DB) HasActiveScenes() bool { return len(db.activeScenes) > 0 }
 
-// activateScene appends a scene idempotently and bounds the active set to
-// Defaults.Capacity. When full, the oldest activation is evicted; that scene
-// remains searchable on disk but is no longer a Dream compression target.
+// activateScene appends a scene idempotently; repeats keep first-order
+// positions. The active set is unbounded here: Update triggers a Dream on
+// the oldest scene when it reaches Defaults.Capacity, and RunDream removes
+// compressed scenes to bring it back down.
 func (db *DB) activateScene(sceneID uint64) {
 	if slices.Contains(db.activeScenes, sceneID) {
-		return
-	}
-	capacity := 0
-	if db.config != nil {
-		capacity = db.config.Defaults.Capacity
-	}
-	if capacity > 0 && len(db.activeScenes) >= capacity {
-		copy(db.activeScenes, db.activeScenes[1:])
-		db.activeScenes[len(db.activeScenes)-1] = sceneID
 		return
 	}
 	db.activeScenes = append(db.activeScenes, sceneID)

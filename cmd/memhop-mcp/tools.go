@@ -38,6 +38,24 @@ func handle[In, Out any](fn func(In) (Out, error)) mcp.ToolHandler {
 	}
 }
 
+// handleWithCtx wraps a typed handler that needs the request context
+// (currently only Search, whose retrieval must be cancellable); see handle.
+func handleWithCtx[In, Out any](fn func(context.Context, In) (Out, error)) mcp.ToolHandler {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		var in In
+		if len(req.Params.Arguments) > 0 {
+			if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
+				return errResult(fmt.Errorf("invalid arguments: %w", err)), nil
+			}
+		}
+		out, err := fn(ctx, in)
+		if err != nil {
+			return errResult(err), nil
+		}
+		return okResult(out), nil
+	}
+}
+
 // handleNoArgs wraps a handler that takes no arguments.
 func handleNoArgs[Out any](fn func() (Out, error)) mcp.ToolHandler {
 	return handle(func(struct{}) (Out, error) { return fn() })
@@ -186,7 +204,7 @@ func arrProp(desc, itemType string) map[string]any {
 	return map[string]any{"type": "array", "items": map[string]any{"type": itemType}, "description": desc}
 }
 
-// registerTools attaches all 31 tools to the server for one tenant DB.
+// registerTools attaches all 32 tools to the server for one tenant DB.
 func registerTools(s *mcp.Server, db *memhop.DB) {
 	registerCoreTools(s, db)
 	registerL2Tools(s, db)

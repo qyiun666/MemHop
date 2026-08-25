@@ -359,6 +359,24 @@ func UpdateTopicL2(engine *core.StorageEngine, id string, agentKeywords []string
 	return core.WriteTopicSlot(engine, idHash, topic) == nil
 }
 
+// RefineTopicKeywordsL2 replaces the topic's keyword tracks with a fused
+// set: FusedKeywords = fused, User/AgentKeywords cleared. Timestamps are
+// preserved — Dream grouping (groupTimestamps) relies on them.
+func RefineTopicKeywordsL2(engine *core.StorageEngine, id string, fusedKeywords []string) bool {
+	idHash, err := common.ParseID(id)
+	if err != nil {
+		return false
+	}
+	topic, err := core.ReadTopicLenient(engine, idHash)
+	if err != nil || topic == nil {
+		return false
+	}
+	topic.FusedKeywords = fusedKeywords
+	topic.UserKeywords = nil
+	topic.AgentKeywords = nil
+	return core.WriteTopicSlot(engine, idHash, topic) == nil
+}
+
 func UpdateChildrenL2(engine *core.StorageEngine, id string, childrenIDs []uint64) bool {
 	idHash, err := common.ParseID(id)
 	if err != nil {

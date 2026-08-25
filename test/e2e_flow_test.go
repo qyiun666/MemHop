@@ -30,7 +30,7 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 
 	// 1. Search with AutoCreate: no match expected on a fresh DB, so this
 	//    creates a new scene + topic and returns it.
-	res, err := db.Search(internal.SearchQuery{
+	res, err := db.Search(context.Background(), internal.SearchQuery{
 		Text:       userText,
 		AutoCreate: true,
 		Timestamp:  ts,
@@ -54,7 +54,7 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	}
 
 	// 3. Search again (normal route): should hit the existing scene.
-	res2, err := db.Search(internal.SearchQuery{
+	res2, err := db.Search(context.Background(), internal.SearchQuery{
 		Text:      "周末海边跑步",
 		Timestamp: ts + 2000,
 	})
@@ -92,7 +92,7 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	}
 
 	// 6. After dream the DB must still be readable.
-	res3, err := db.Search(internal.SearchQuery{
+	res3, err := db.Search(context.Background(), internal.SearchQuery{
 		Text:      "海边",
 		Timestamp: ts + 3000,
 	})

@@ -326,3 +326,96 @@ func TestCrystallizeCreateDoesNotOverwriteActiveByName(t *testing.T) {
 		t.Fatalf("active capability was overwritten: %+v", got)
 	}
 }
+
+func TestTrajectoryStats(t *testing.T) {
+	db := &DB{engine: newTestEngine(t)}
+	session := common.FormatHash(55)
+
+	// Empty session: zero-valued stats, no error.
+	stats, err := db.TrajectoryStats(session)
+	if err != nil {
+		t.Fatalf("stats on empty session: %v", err)
+	}
+	if stats.Steps != 0 || len(stats.ToolUsage) != 0 || stats.LastAppendAt != 0 {
+		t.Fatalf("empty stats = %+v, want zeros", stats)
+	}
+
+	// Mixed event types with out-of-order timestamps.
+	for _, ev := range []core.TrajectorySlot{
+		{EventType: "turn_start", Timestamp: 400},
+		{EventType: "tool_call", Timestamp: 100},
+		{EventType: "tool_call", Timestamp: 200},
+		{EventType: "tool_result", Timestamp: 300},
+	} {
+		if err := db.AppendTrajectory(session, ev); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	stats, err = db.TrajectoryStats(session)
+	if err != nil {
+		t.Fatalf("stats: %v", err)
+	}
+	if stats.Steps != 4 {
+		t.Fatalf("Steps = %d, want 4", stats.Steps)
+	}
+	if stats.ToolUsage["tool_call"] != 2 || stats.ToolUsage["tool_result"] != 1 || stats.ToolUsage["turn_start"] != 1 {
+		t.Fatalf("ToolUsage = %v, want tool_call:2 tool_result:1 turn_start:1", stats.ToolUsage)
+	}
+	if stats.LastAppendAt != 400 {
+		t.Fatalf("LastAppendAt = %d, want 400 (max timestamp, not last append order)", stats.LastAppendAt)
+	}
+}
+
+func TestCrystallizeDetails(t *testing.T) {
+	// Phase 1: one valid create + one invalid create (mcp type without the
+	// required resource → validate fails → skip detail).
+	srv := mockLLMServer(t, `{"capabilities":[
+		{"action":"create","capability":{"name":"明细测试能力","type":"composite","summary":"s","trigger":"t","resources":[{"type":"mcp","name":"x"}]}},
+		{"action":"create","capability":{"name":"无效能力","type":"mcp","summary":"s","trigger":"t"}}
+	]}`)
+	db := &DB{
+		engine: newTestEngine(t),
+		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
+	}
+	session := common.FormatHash(888)
+	if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := db.Crystallize(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.CreatedIDs) != 1 || len(first.Errors) != 1 {
+		t.Fatalf("phase1 result: %+v", first)
+	}
+	if len(first.Details) != 2 {
+		t.Fatalf("phase1 Details = %d, want 2", len(first.Details))
+	}
+	byName := map[string]CrystallizeDetail{}
+	for _, d := range first.Details {
+		byName[d.Name] = d
+	}
+	create := byName["明细测试能力"]
+	if create.Action != "create" || create.CapabilityID != first.CreatedIDs[0] || create.Reason != "" {
+		t.Fatalf("create detail: %+v", create)
+	}
+	skip := byName["无效能力"]
+	if skip.Action != "skip" || skip.CapabilityID != "" || skip.Reason == "" {
+		t.Fatalf("skip detail: %+v", skip)
+	}
+
+	// Phase 2: reuse the created capability → detail carries the reused ID.
+	srv2 := mockLLMServer(t, `{"capabilities":[{"action":"reuse","reuse_id":"`+first.CreatedIDs[0]+`","capability":{"name":"明细测试能力"}}]}`)
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
+	second, err := db.Crystallize(context.Background(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.ReusedIDs) != 1 || len(second.Details) != 1 {
+		t.Fatalf("phase2 result: %+v", second)
+	}
+	reuse := second.Details[0]
+	if reuse.Action != "reuse" || reuse.CapabilityID != first.CreatedIDs[0] || reuse.Reason != "" {
+		t.Fatalf("reuse detail: %+v", reuse)
+	}
+}

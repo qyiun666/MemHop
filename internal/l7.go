@@ -75,6 +75,40 @@ func (db *DB) ReadTrajectory(sessionID string) ([]core.TrajectorySlot, error) {
 	return repo.ReadTrajectory(db.engine, parsed)
 }
 
+// TrajectoryStats aggregates a session's L7 events for the host's
+// "is this session worth crystallizing" decision (event volume, tool-call
+// distribution, recency). Read-only; no engine state mutation.
+type TrajectoryStats struct {
+	Steps        int            `json:"steps"`          // 事件总数
+	ToolUsage    map[string]int `json:"tool_usage"`     // EventType → 计数（turn_start/tool_call/...）
+	LastAppendAt int64          `json:"last_append_at"` // 最后事件时间戳（Unix 毫秒）
+}
+
+// TrajectoryStats returns per-session statistics over the trajectory log.
+func (db *DB) TrajectoryStats(sessionID string) (*TrajectoryStats, error) {
+	if err := db.beginRead(); err != nil {
+		return nil, err
+	}
+	defer db.mu.RUnlock()
+	parsed, err := common.ParseID(sessionID)
+	if err != nil {
+		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
+	}
+	events, err := repo.ReadTrajectory(db.engine, parsed)
+	if err != nil {
+		return nil, err
+	}
+	stats := &TrajectoryStats{ToolUsage: make(map[string]int, 8)}
+	for _, e := range events {
+		stats.Steps++
+		stats.ToolUsage[e.EventType]++
+		if e.Timestamp > stats.LastAppendAt {
+			stats.LastAppendAt = e.Timestamp
+		}
+	}
+	return stats, nil
+}
+
 // DeleteTrajectory removes a session's trajectory events; write lock comes
 // from the internal layer.
 func (db *DB) DeleteTrajectory(sessionID string) error {
@@ -89,10 +123,20 @@ func (db *DB) DeleteTrajectory(sessionID string) error {
 // trajectory. Crystallized capabilities are drafts until the host activates
 // them.
 type CrystallizeResult struct {
-	CreatedIDs []string `json:"created_ids"`
-	ReusedIDs  []string `json:"reused_ids"`
-	MergedIDs  []string `json:"merged_ids"`
-	Errors     []string `json:"errors,omitempty"`
+	CreatedIDs []string            `json:"created_ids"`
+	ReusedIDs  []string            `json:"reused_ids"`
+	MergedIDs  []string            `json:"merged_ids"`
+	Errors     []string            `json:"errors,omitempty"`
+	Details    []CrystallizeDetail `json:"details,omitempty"` // v1.3: per-candidate disposition
+}
+
+// CrystallizeDetail is one candidate's disposition: which capability it
+// created/reused/merged, or why it was skipped.
+type CrystallizeDetail struct {
+	Name         string `json:"name"`                    // 候选能力卡名
+	Action       string `json:"action"`                  // create | reuse | merge | skip
+	CapabilityID string `json:"capability_id,omitempty"` // 16 位 hex；skip 时为空
+	Reason       string `json:"reason,omitempty"`        // skipped_reason（validate 失败原因）
 }
 
 // Crystallize extracts L5 capability candidates from a session's trajectory
@@ -134,9 +178,13 @@ func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeRe
 		// not require a full type/resources). Only create candidates need
 		// the complete import validation.
 		action := strings.ToLower(strings.TrimSpace(cand.Action))
+		detail := CrystallizeDetail{Name: cand.Capability.Name}
 		if action != "reuse" && action != "merge" {
 			if err := validateCapabilityImport(&cand.Capability); err != nil {
 				result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())
+				detail.Action = "skip"
+				detail.Reason = err.Error()
+				result.Details = append(result.Details, detail)
 				continue
 			}
 		}
@@ -144,6 +192,9 @@ func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeRe
 		if err != nil {
 			return nil, err
 		}
+		detail.Action = disposition // create | reuse | merge
+		detail.CapabilityID = id
+		result.Details = append(result.Details, detail)
 		switch disposition {
 		case "reuse":
 			result.ReusedIDs = append(result.ReusedIDs, id)

@@ -155,7 +155,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	ts := time.Now().UnixMilli()
 
 	// Search with AutoCreate creates a scene + topic + L4 archive + centroid.
-	res, err := db.Search(internal.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
+	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
 	if err != nil {
 		t.Fatalf("Search(auto_create): %v", err)
 	}
@@ -186,7 +186,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 
 	// Normal Search retrieves the stored contexts.
-	res2, err := db.Search(internal.SearchQuery{Text: "重构代码", Timestamp: ts + 3000})
+	res2, err := db.Search(context.Background(), internal.SearchQuery{Text: "重构代码", Timestamp: ts + 3000})
 	if err != nil {
 		t.Fatalf("Search(normal): %v", err)
 	}
@@ -216,7 +216,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 
 	// Validation: Timestamp is required.
-	if _, err := db.Search(internal.SearchQuery{Text: "重构"}); err == nil {
+	if _, err := db.Search(context.Background(), internal.SearchQuery{Text: "重构"}); err == nil {
 		t.Fatal("Search without Timestamp should fail")
 	}
 }
@@ -288,7 +288,7 @@ func TestInterfaceL3(t *testing.T) {
 
 	// Search must link the matching L3 graph onto the new topic as L3Refs,
 	// which is what makes DirectedL3ID scoping work.
-	sres, err := db.Search(internal.SearchQuery{Text: "Go 内存模型", AutoCreate: true, Timestamp: time.Now().UnixMilli()})
+	sres, err := db.Search(context.Background(), internal.SearchQuery{Text: "Go 内存模型", AutoCreate: true, Timestamp: time.Now().UnixMilli()})
 	if err != nil {
 		t.Fatalf("Search after ImportL3: %v", err)
 	}
@@ -456,12 +456,12 @@ func TestInterfaceDream(t *testing.T) {
 	defer db.Close()
 
 	ts := time.Now().UnixMilli()
-	res, err := db.Search(internal.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
+	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
 	if err != nil {
 		t.Fatalf("Search #1: %v", err)
 	}
 	sceneID := common.FormatHash(res.Contexts[0].SceneID)
-	if _, err := db.Search(internal.SearchQuery{
+	if _, err := db.Search(context.Background(), internal.SearchQuery{
 		Text: "继续重构第二个模块", DirectedL2ID: &sceneID, Timestamp: ts + 1000,
 	}); err != nil {
 		t.Fatalf("Search #2: %v", err)
@@ -516,7 +516,7 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenWithEncoder: %v", err)
 	}
-	if _, err := db.Search(internal.SearchQuery{
+	if _, err := db.Search(context.Background(), internal.SearchQuery{
 		Text: "用户要求重构代码", AutoCreate: true, Timestamp: time.Now().UnixMilli(),
 	}); err != nil {
 		t.Fatalf("Search: %v", err)

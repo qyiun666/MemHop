@@ -148,7 +148,7 @@ func TestKeywordFidelity(t *testing.T) {
 	base := time.Now().UnixMilli()
 	var faithful, total int
 	for i, text := range cases {
-		res, err := db.Search(internal.SearchQuery{Text: text, AutoCreate: true, Timestamp: base + int64(i)*1000})
+		res, err := db.Search(context.Background(), internal.SearchQuery{Text: text, AutoCreate: true, Timestamp: base + int64(i)*1000})
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
@@ -178,7 +178,7 @@ func TestKeywordPersistence(t *testing.T) {
 	base := time.Now().UnixMilli()
 	// Store a distinctive fact early.
 	anchor := "我的狗叫旺财，是一只金毛，今年五岁了"
-	res, err := db.Search(internal.SearchQuery{Text: anchor, AutoCreate: true, Timestamp: base})
+	res, err := db.Search(context.Background(), internal.SearchQuery{Text: anchor, AutoCreate: true, Timestamp: base})
 	if err != nil {
 		t.Fatalf("anchor Search: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestKeywordPersistence(t *testing.T) {
 	}
 	for i, ntext := range noise {
 		ts := base + int64(i+1)*1000
-		r, err := db.Search(internal.SearchQuery{Text: ntext, AutoCreate: true, Timestamp: ts})
+		r, err := db.Search(context.Background(), internal.SearchQuery{Text: ntext, AutoCreate: true, Timestamp: ts})
 		if err != nil {
 			t.Fatalf("noise Search: %v", err)
 		}
@@ -207,7 +207,7 @@ func TestKeywordPersistence(t *testing.T) {
 	}
 
 	// Retrieve with a query about the anchor fact.
-	got, err := db.Search(internal.SearchQuery{Text: "我的狗叫什么名字，多大了", Timestamp: base + 10000})
+	got, err := db.Search(context.Background(), internal.SearchQuery{Text: "我的狗叫什么名字，多大了", Timestamp: base + 10000})
 	if err != nil {
 		t.Fatalf("retrieve Search: %v", err)
 	}
@@ -234,7 +234,7 @@ func ingestSameScene(t *testing.T, db *memhop.DB, texts []string, base int64) ui
 			sid := common.FormatHash(sceneID)
 			q.DirectedL2ID = &sid
 		}
-		res, err := db.Search(q)
+		res, err := db.Search(context.Background(), q)
 		if err != nil {
 			t.Fatalf("ingest Search[%d]: %v", i, err)
 		}
@@ -301,7 +301,7 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	t.Logf("Dream compressed=%v", compressed)
 
 	// After Dream, retrieve on the theme and inspect the keywords now returned.
-	res, err := db.Search(internal.SearchQuery{Text: "我的跑步习惯是怎样的", Timestamp: base + 60000})
+	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "我的跑步习惯是怎样的", Timestamp: base + 60000})
 	if err != nil {
 		t.Fatalf("post-dream Search: %v", err)
 	}

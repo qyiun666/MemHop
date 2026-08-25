@@ -25,6 +25,12 @@ type (
 	MemHopConfig = internal.MemHopConfig
 	// Encoder is the embedding encoder contract required by OpenWithEncoder.
 	Encoder = internal.Encoder
+	// LlmConfig holds LLM provider settings; exported so hosts can build
+	// MemHopConfig.LLM by literal instead of field-by-field assignment.
+	LlmConfig = internal.LlmConfig
+	// MemHopDefaults holds all tunable engine defaults; exported so hosts
+	// can name the type instead of copying DefaultMemHopDefaults.
+	MemHopDefaults = internal.MemHopDefaults
 )
 
 // DefaultMemHopDefaults is the shared default engine configuration; assign
@@ -47,6 +53,8 @@ type (
 	CapabilityListQuery = internal.CapabilityListQuery
 	CapabilityPatch     = internal.CapabilityPatch
 	CrystallizeResult   = internal.CrystallizeResult
+	CrystallizeDetail   = internal.CrystallizeDetail
+	TrajectoryStats     = internal.TrajectoryStats
 )
 
 // ---- core (L0-L7 slot models) ----
@@ -60,6 +68,12 @@ type (
 	Capability     = core.Capability
 	TrajectorySlot = core.TrajectorySlot
 	GraphEdgeKind  = core.GraphEdgeKind
+	// TopicSlot is an L2 dual-track session node (user/agent); the element
+	// type of SearchResult.Contexts / AssociatedContexts.
+	TopicSlot = core.TopicSlot
+	// ResourceRef is one wrapped resource (an MCP tool or a skill) inside a
+	// Capability; the element type of Capability.Resources.
+	ResourceRef = core.ResourceRef
 )
 
 // ---- error contract ----

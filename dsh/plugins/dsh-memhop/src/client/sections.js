@@ -326,13 +326,16 @@ function SceneDetail({ rpc, agentId, sceneId, name }) {
   const { data, error, loading, reload } = useLoad(rpc, "scene_topics", { scene_id: sceneId }, agentId);
   const [openTopic, setOpenTopic] = React.useState(null); // { topic_id, loading, msgs, error }
   const all = data && Array.isArray(data.topics) ? data.topics : [];
-  // SceneContext 已按用户首条时间升序，直接取 depth1 层话题。
-  const topics = all.filter((t) => t.depth === 1);
+  // SceneContext 已按用户首条时间升序;话题含 dream 压缩层级
+  // (depth 0 = 原始话题、1 = 压缩组、2+ = 再次压缩),全部列出。
+  const topics = all;
   // dream 压缩话题：带子节点（child_count 非空）的 depth1 根话题，
   // 消息即合并摘要（L4 dream archive）。
   const isFused = (tp) => (tp.child_count || 0) > 0;
 
-  // 「原文」按需拉取：L4 消息经 memhop_archive_search(topic_id) 单独请求。
+  // 「全文」按需拉取:优先用话题携带的 L4 档案 ID 列表一次批量取原文
+  // (memhop_archive_search ids 模式);无 l4_ids(旧版数据/压缩摘要)
+  // 时回退按 topic_id + 时间区间检索。
   const toggleOriginal = async (tp) => {
     if (openTopic && openTopic.topic_id === tp.topic_id) {
       setOpenTopic(null);
@@ -340,13 +343,14 @@ function SceneDetail({ rpc, agentId, sceneId, name }) {
     }
     setOpenTopic({ topic_id: tp.topic_id, loading: true, msgs: [], error: null });
     try {
-      const msgs = await callMemhopJson(
-        rpc,
-        "archive_search",
-        { topic_id: tp.topic_id, start: 0, end: Date.now() },
-        agentId
-      );
-      setOpenTopic({ topic_id: tp.topic_id, loading: false, msgs: Array.isArray(msgs) ? msgs : [], error: null });
+      const l4ids = Array.isArray(tp.l4_ids) ? tp.l4_ids.filter((x) => x) : [];
+      const msgs = l4ids.length > 0
+        ? await callMemhopJson(rpc, "archive_search", { ids: l4ids }, agentId)
+        : await callMemhopJson(rpc, "archive_search", { topic_id: tp.topic_id, start: 0, end: Date.now() }, agentId);
+      const list = Array.isArray(msgs) ? msgs : [];
+      // 聊天记录格式:按时间升序排列。
+      list.sort((a, b) => (Number(a.created_at) || 0) - (Number(b.created_at) || 0));
+      setOpenTopic({ topic_id: tp.topic_id, loading: false, msgs: list, error: null });
     } catch (e) {
       setOpenTopic({ topic_id: tp.topic_id, loading: false, msgs: [], error: str(e) });
     }
@@ -361,7 +365,7 @@ function SceneDetail({ rpc, agentId, sceneId, name }) {
       React.createElement(
         "span",
         { style: { fontSize: 12, fontWeight: 600, flex: 1, wordBreak: "break-all" } },
-        "L2 场景查询（" + sceneId + "）→ depth1 话题 " + topics.length + " 个"
+        "L2 场景查询（" + sceneId + "）→ 话题 " + topics.length + " 个"
       ),
       React.createElement(
         "button",
@@ -369,11 +373,11 @@ function SceneDetail({ rpc, agentId, sceneId, name }) {
         loading ? "…" : "刷新"
       )
     ),
-    React.createElement("div", { style: faint, marginBottom: 4 }, "memhop_scene_topics(scene_id=" + sceneId + ") · 共 " + (data ? data.topic_count : "…") + " 个话题，此处仅列 depth1 根话题；原文经 memhop_archive_search 按需加载"),
+    React.createElement("div", { style: faint, marginBottom: 4 }, "memhop_scene_topics(scene_id=" + sceneId + ") · 共 " + (data ? data.topic_count : "…") + " 个话题（含 dream 压缩层级）· 原文经 memhop_archive_search 按需加载"),
     React.createElement(ErrBox, { error }),
     loading && !data ? React.createElement(Loading, { label: "场景上下文" }) : null,
     data && topics.length === 0
-      ? React.createElement("div", { style: faint }, "该场景暂无 depth1 话题。")
+      ? React.createElement("div", { style: faint }, "该场景暂无话题。")
       : null,
     topics.map((tp, idx) => {
       const fused = isFused(tp);
@@ -407,6 +411,7 @@ function SceneDetail({ rpc, agentId, sceneId, name }) {
             "#" + (idx + 1)
           ),
           fused ? React.createElement("span", { style: fusedBadge }, "🧩 压缩摘要") : null,
+          React.createElement("span", { style: { ...faint, fontSize: 10, marginLeft: 2 } }, "d" + tp.depth),
           React.createElement(
             "span",
             { style: { flex: 1, ...faint, fontSize: 10, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
@@ -415,7 +420,7 @@ function SceneDetail({ rpc, agentId, sceneId, name }) {
           React.createElement(
             "button",
             { type: "button", style: buttonStyle("ghost"), onClick: () => toggleOriginal(tp), disabled: !!(openTopic && openTopic.topic_id !== tp.topic_id && openTopic.loading) },
-            isOpen ? (openTopic.loading ? "加载中…" : "收起") : "原文"
+            isOpen ? (openTopic.loading ? "加载中…" : "收起") : "全文"
           )
         ),
         metaRow("关键词", kw, true),
@@ -435,9 +440,12 @@ function SceneDetail({ rpc, agentId, sceneId, name }) {
                           React.createElement(
                             "span",
                             { style: { ...roleBadge(m.role), fontWeight: 700 } },
-                            m.role === 1 ? "A" : "U"
+                            m.role === 1 ? "🤖 助手" : "👤 用户"
                           ),
-                          React.createElement("span", { style: faint, fontSize: 10 }, fmtFullTime(m.created_at))
+                          React.createElement("span", { style: faint, fontSize: 10 }, fmtFullTime(m.created_at)),
+                          m.id_hash
+                            ? React.createElement("span", { style: { ...faint, fontSize: 10, marginLeft: "auto" } }, "L4 " + str(m.id_hash))
+                            : null
                         ),
                         m.content || ""
                       )
@@ -1114,6 +1122,10 @@ function ServerSection({ rpc, toast }) {
   const [busy, setBusy] = React.useState(false);
   const [logs, setLogs] = React.useState(null);
   const [err, setErr] = React.useState(null);
+  const [cfg, setCfg] = React.useState(null);
+  const [editing, setEditing] = React.useState(false);
+  const [form, setForm] = React.useState({});
+  const [saving, setSaving] = React.useState(false);
 
   const refresh = React.useCallback(async () => {
     setBusy(true);
@@ -1131,6 +1143,56 @@ function ServerSection({ rpc, toast }) {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rpc]);
+
+  const loadConfig = React.useCallback(async () => {
+    try {
+      setCfg(await callMemhopJson(rpc, "server/config", {}));
+    } catch (e) {
+      setErr(e);
+    }
+  }, [rpc]);
+
+  React.useEffect(() => {
+    loadConfig();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rpc]);
+
+  const startEdit = () => {
+    const c = cfg || {};
+    setForm({
+      llmApiUrl: c.llmApiUrl || "",
+      llmApiKey: "",
+      llmModel: c.llmModel || "",
+      embedModel: c.embedModel || "",
+      encoderAddr: c.encoderAddr || "",
+      dbDir: c.dbDir || "",
+      port: c.port ? String(c.port) : "",
+    });
+    setEditing(true);
+  };
+
+  const saveConfig = async () => {
+    setSaving(true);
+    try {
+      const res = await callMemhopJson(rpc, "server/save", {
+        llmApiUrl: form.llmApiUrl || undefined,
+        llmApiKey: form.llmApiKey || undefined,
+        llmModel: form.llmModel || undefined,
+        embedModel: form.embedModel || undefined,
+        encoderAddr: form.encoderAddr || undefined,
+        dbDir: form.dbDir || undefined,
+        port: form.port ? Number(form.port) : undefined,
+      });
+      setCfg(res);
+      toast(res.message || "配置已保存");
+      setEditing(false);
+      refresh();
+    } catch (e) {
+      toast("保存失败: " + str(e));
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const act = async (method, label) => {
     setBusy(true);
@@ -1158,6 +1220,28 @@ function ServerSection({ rpc, toast }) {
       { style: { display: "flex", gap: 8, fontSize: 11, lineHeight: "18px", alignItems: "baseline" } },
       React.createElement("span", { style: { color: c.textSecondary, minWidth: 100 } }, label),
       React.createElement("span", { style: { color: c.textPrimary, wordBreak: "break-all", ...(extraStyle || {}) } }, value === null || value === undefined ? "—" : String(value))
+    );
+
+  const cfgRow = (label, value) =>
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, fontSize: 11, lineHeight: "18px", alignItems: "baseline" } },
+      React.createElement("span", { style: { color: c.textSecondary, minWidth: 110 } }, label),
+      React.createElement("span", { style: { color: c.textPrimary, wordBreak: "break-all" } }, value || "—")
+    );
+
+  const cfgInput = (label, key, placeholder, type) =>
+    React.createElement(
+      "div",
+      { style: { marginBottom: 6 } },
+      React.createElement("div", { style: { ...faint, marginBottom: 2, fontSize: 11 } }, label),
+      React.createElement("input", {
+        style: { ...input, width: "100%" },
+        type: type || "text",
+        placeholder: placeholder || "",
+        value: form[key] || "",
+        onChange: (e) => setForm({ ...form, [key]: e.target.value }),
+      })
     );
 
   return React.createElement(
@@ -1215,6 +1299,53 @@ function ServerSection({ rpc, toast }) {
               kv("bin", st.serverBin),
               kv("wrapper", st.wrapper || "(无)"),
               kv("env", st.envPresent ? "已注入" : "未找到 server.env")
+            ),
+            React.createElement(
+              "div",
+              { style: { padding: "8px 10px", border: "1px solid " + c.border, borderRadius: 8, background: c.bgInput } },
+              React.createElement(
+                "div",
+                { style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 6 } },
+                React.createElement("span", { style: { fontWeight: 600, fontSize: 12 } }, "配置"),
+                React.createElement(
+                  "button",
+                  { type: "button", style: buttonStyle(), onClick: editing ? saveConfig : startEdit, disabled: saving, title: "编辑并保存服务器配置(env + wrapper,保存后自动重启服务)" },
+                  saving ? "保存中…" : editing ? "保存" : "编辑"
+                ),
+                editing
+                  ? React.createElement(
+                      "button",
+                      { type: "button", style: buttonStyle("ghost"), onClick: () => setEditing(false), disabled: saving },
+                      "取消"
+                    )
+                  : null
+              ),
+              !editing
+                ? React.createElement(
+                    React.Fragment,
+                    null,
+                    cfgRow("LLM API URL", cfg && cfg.llmApiUrl),
+                    cfgRow("LLM API Key", cfg && cfg.llmApiKeySet ? cfg.llmApiKeyMasked + " (已设置)" : "未设置"),
+                    cfgRow("LLM 模型", cfg && cfg.llmModel),
+                    cfgRow("嵌入模型", cfg && cfg.embedModel),
+                    cfgRow("编码器地址 (ollama)", cfg && cfg.encoderAddr),
+                    cfgRow("数据目录", cfg && cfg.dbDir),
+                    cfgRow("监听端口", cfg && String(cfg.port)),
+                    React.createElement("div", { style: { ...faint, marginTop: 4 } }, "env: " + (cfg && cfg.envFile ? cfg.envFile : "…") + " · wrapper: " + (cfg && cfg.wrapperPath ? cfg.wrapperPath : "…"))
+                  )
+                : React.createElement(
+                    React.Fragment,
+                    null,
+                    cfgInput("LLM API URL(deepseek 等 OpenAI 兼容端点)", "llmApiUrl", "https://api.deepseek.com/v1"),
+                    cfgInput("LLM API Key(留空保持不变)", "llmApiKey", cfg && cfg.llmApiKeySet ? "已设置,留空保持不变" : "sk-…", "password"),
+                    cfgInput("LLM 模型", "llmModel", "deepseek-chat"),
+                    cfgInput("嵌入模型(ollama 模型名)", "embedModel", "qllama/bge-m3:q4_k_m"),
+                    cfgInput("编码器地址(ollama)", "encoderAddr", "http://127.0.0.1:11434"),
+                    cfgInput("数据目录(db-dir)", "dbDir", "~/.memhop/agents"),
+                    cfgInput("监听端口", "port", "3939"),
+                    React.createElement("div", { style: { ...faint, lineHeight: "15px", marginTop: 2 } },
+                      "保存后自动重启 memhop-mcp 服务使配置生效;API Key 留空表示保留原值(不会覆盖)。")
+                  )
             ),
             logs
               ? React.createElement(

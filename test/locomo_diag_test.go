@@ -3,6 +3,7 @@
 package test
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -50,7 +51,7 @@ func TestLocomoFailDiag(t *testing.T) {
 			seq++
 			ts := sessionBase + int64(i)*30_000
 			if tn.Speaker == item.SpeakerA {
-				res, err := db.Search(internal.SearchQuery{Text: tn.Text, Timestamp: ts})
+				res, err := db.Search(context.Background(), internal.SearchQuery{Text: tn.Text, Timestamp: ts})
 				if err != nil {
 					t.Fatalf("ingest: %v", err)
 				}
@@ -73,7 +74,7 @@ func TestLocomoFailDiag(t *testing.T) {
 	for _, qa := range item.QA {
 		seq++
 		ts := base + seq*1000
-		res, err := db.Search(internal.SearchQuery{Text: qa.Question, Timestamp: ts})
+		res, err := db.Search(context.Background(), internal.SearchQuery{Text: qa.Question, Timestamp: ts})
 		if err != nil {
 			t.Fatalf("query: %v", err)
 		}

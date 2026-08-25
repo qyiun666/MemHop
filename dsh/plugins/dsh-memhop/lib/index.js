@@ -35,6 +35,21 @@ export const name = "dsh-memhop";
 
 export const inject = ["tools", "systemPrompt", "agents", "connection"];
 
+/** 剥离 DSH 注入到 user 消息的系统段(runtime context 快照 / MemHop
+ *  记忆快照),避免把注入文本当作用户原文写入记忆。 */
+function stripInjected(text) {
+  const markers = [
+    "Current runtime context. This snapshot supersedes",
+    "【MemHop 记忆快照】",
+  ];
+  let cut = text;
+  for (const mk of markers) {
+    const i = cut.indexOf(mk);
+    if (i !== -1) cut = cut.slice(0, i);
+  }
+  return cut.trim();
+}
+
 /** 默认配置:与 memhop-mcp 多租户 HTTP 接入对齐。 */
 export const DEFAULTS = {
   /** 多租户 memhop-mcp server 地址(streamable-http);server 以 --db-dir 启动。 */
@@ -403,11 +418,12 @@ function parseResultContent(content) {
   }
 }
 
-/** 渲染 search 结果为模型可读的记忆快照文本(截断到 maxChars)。 */
+/** 渲染 search 结果为模型可读的记忆快照文本(截断到 maxChars)。
+ *  过往对话按聊天记录形式:时间升序、角色前缀、紧凑时间戳。 */
 function renderSnapshot(res, maxChars) {
   if (!res) return "";
   const lines = [];
-  lines.push("【MemHop 记忆快照】以下为本会话此前记忆的检索结果,供参考(以当前对话消息为准)。");
+  lines.push("【MemHop 记忆快照】以下为本会话此前记忆的检索结果(以当前对话消息为准)。");
   const profile = res.profile;
   if (profile && (profile.name || profile.role || profile.personality)) {
     const bits = [profile.name, profile.role, profile.personality].filter(Boolean);
@@ -421,10 +437,30 @@ function renderSnapshot(res, maxChars) {
     if (topics.length > 0) lines.push(`相关话题(${contexts.length}): ${topics.join(" | ")}`);
   }
   const archives = res.archives ?? [];
-  for (const a of archives) {
-    const who = a.role === 1 ? "助手" : "用户";
-    const text = String(a.content ?? "").replace(/\s+/g, " ").trim();
-    if (text) lines.push(`${who}: ${text}`);
+  const msgs = archives
+    .map((a) => ({
+      role: a.role,
+      t: Number(a.created_at) || 0,
+      text: String(a.content ?? "").replace(/\s+/g, " ").trim(),
+    }))
+    .filter((m) => m.text)
+    .sort((a, b) => a.t - b.t);
+  if (msgs.length > 0) {
+    lines.push("──────── 过往对话 ────────");
+    for (const m of msgs) {
+      const who = m.role === 1 ? "🤖 助手" : "👤 用户";
+      const stamp = m.t
+        ? new Date(m.t).toLocaleString("zh-CN", {
+            month: "2-digit",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          })
+        : "····";
+      lines.push(`[${stamp}] ${who}: ${m.text}`);
+    }
+    lines.push("──────── 对话结束 ────────");
   }
   let out = lines.join("\n");
   if (out.length > maxChars) out = `${out.slice(0, maxChars)}\n…(快照截断)`;
@@ -564,6 +600,54 @@ function tailFile(file, limit) {
   } catch {
     return "";
   }
+}
+
+/** env 值引用化:含空白/引号时加双引号(API key、URL 一般无需)。 */
+function quoteEnv(v) {
+  const s = String(v);
+  return /[\s"']/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s;
+}
+
+/** 序列化 env 为 KEY=VALUE 文本(已知键固定顺序在前,其余保留)。 */
+function serializeEnv(env) {
+  const order = ["MEMHOP_LLM_API_URL", "MEMHOP_LLM_API_KEY", "MEMHOP_LLM_MODEL"];
+  const lines = ["# MemHop 服务器环境变量 —— 由 dsh-memhop 面板「服务器 → 配置」管理"];
+  for (const k of order) {
+    if (env[k]) lines.push(`${k}=${quoteEnv(env[k])}`);
+  }
+  for (const [k, v] of Object.entries(env)) {
+    if (!order.includes(k)) lines.push(`${k}=${quoteEnv(v)}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+/** 从 wrapper 脚本解析 memhop-mcp 启动参数(bin/dbDir/embedModel/encoderAddr/port)。 */
+function parseWrapper(file) {
+  const out = { bin: "", dbDir: "", embedModel: "", encoderAddr: "", port: 0 };
+  try {
+    const execLine = (readFileSync(file, "utf8").split("\n").find((l) => l.trim().startsWith("exec ")) || "");
+    const binM = execLine.match(/^exec\s+["']?([^"'\s]+)/);
+    if (binM) out.bin = binM[1];
+    const flag = (name) => {
+      const r = execLine.match(new RegExp(`-${name}\\s+["']?([^"'\\s]+)`));
+      return r ? String(r[1]).replace(/["']$/, "") : "";
+    };
+    out.dbDir = flag("db-dir");
+    out.embedModel = flag("embed-model");
+    out.encoderAddr = flag("encoder-addr");
+    const listen = flag("listen");
+    out.port = listen ? Number(String(listen).split(":").pop()) || 0 : 0;
+  } catch {
+    /* 无 wrapper 视为空 */
+  }
+  return out;
+}
+
+/** API key 打码:仅显示首尾 4 位。 */
+function maskSecret(s) {
+  if (!s) return "";
+  if (s.length <= 8) return `${s.slice(0, 2)}***`;
+  return `${s.slice(0, 4)}…${s.slice(-4)}`;
 }
 
 function plistTemplate(wrapperPath, outLog, errLog) {
@@ -814,13 +898,95 @@ class MemhopServerControl extends Service {
     const n = Math.max(1, Math.min(1000, Number(limit) || 100));
     return { out: tailFile(this.outLog, n), err: tailFile(this.errLog, n) };
   }
+
+  /** 读取当前配置(env + wrapper 实参;API key 仅返回打码值)。 */
+  getConfig() {
+    const env = parseEnvFile(this.envFile);
+    const w = parseWrapper(this.wrapperPath);
+    return {
+      envFile: this.envFile,
+      wrapperPath: this.wrapperPath,
+      llmApiUrl: env.MEMHOP_LLM_API_URL ?? "",
+      llmApiKeyMasked: maskSecret(env.MEMHOP_LLM_API_KEY),
+      llmApiKeySet: !!env.MEMHOP_LLM_API_KEY,
+      llmModel: env.MEMHOP_LLM_MODEL ?? "",
+      embedModel: w.embedModel || this.cfg.embedModel,
+      encoderAddr: w.encoderAddr || this.cfg.encoderAddr,
+      dbDir: w.dbDir || this.dbDir,
+      port: w.port || this.port,
+      bin: w.bin || this.detectBin(),
+      serverUrl: this.cfg.serverUrl,
+    };
+  }
+
+  /** 保存配置:合并写 server.env + 重写 wrapper,并重启服务使配置生效。 */
+  async saveConfig(patch = {}) {
+    const env = parseEnvFile(this.envFile);
+    const w = parseWrapper(this.wrapperPath);
+    const next = { ...env };
+    const apply = (key, val) => {
+      if (val !== undefined && val !== null && String(val).trim() !== "") {
+        next[key] = String(val).trim();
+      }
+    };
+    apply("MEMHOP_LLM_API_URL", patch.llmApiUrl);
+    apply("MEMHOP_LLM_MODEL", patch.llmModel);
+    apply("MEMHOP_LLM_API_KEY", patch.llmApiKey); // 空 = 保留原 key
+    writeFileSync(this.envFile, serializeEnv(next));
+
+    const dbDir = String(patch.dbDir || w.dbDir || this.dbDir);
+    const embedModel = String(patch.embedModel || w.embedModel || this.cfg.embedModel);
+    const encoderAddr = String(patch.encoderAddr || w.encoderAddr || this.cfg.encoderAddr);
+    const port = Number(patch.port || w.port || this.port) || this.port;
+    const bin = w.bin || this.detectBin();
+    writeFileSync(this.wrapperPath, wrapperTemplate(bin, dbDir, embedModel, encoderAddr, port));
+    spawnSync("chmod", ["755", this.wrapperPath], { timeout: 5000 });
+
+    // 重启服务使配置生效(launchd 优先;其次插件 spawn 的 child;再次外部进程)。
+    let restarted = false;
+    let message = "配置已写入";
+    try {
+      const st = await this.status();
+      if (st.launchdLoaded) {
+        spawnSync("launchctl", ["bootout", `gui/${guiUid()}/${MCP_PLIST_LABEL}`], { timeout: 10000 });
+        const r = spawnSync("launchctl", ["bootstrap", `gui/${guiUid()}`, this.plistPath], {
+          encoding: "utf8",
+          timeout: 10000,
+        });
+        restarted = r.status === 0 || this.launchdLoaded();
+      } else if (this.child) {
+        try {
+          this.child.kill("SIGTERM");
+        } catch {
+          /* noop */
+        }
+        this.child = null;
+        const started = await this.start();
+        restarted = started.started;
+      } else if (st.running) {
+        for (const pid of st.pids) {
+          try {
+            process.kill(pid, "SIGTERM");
+          } catch {
+            /* noop */
+          }
+        }
+        const started = await this.start();
+        restarted = started.started;
+      }
+      if (restarted) message = "配置已写入,服务已重启生效";
+    } catch (e) {
+      message = `配置已写入,但服务重启失败: ${String(e?.message ?? e)}`;
+    }
+    return { ...this.getConfig(), saved: true, restarted, message, status: await this.status() };
+  }
 }
 
 // ---- UI RPC 桥(原 dsh-client-memhop-ui host 半)----
 
 const MEMHOP_RPC_NS = "memhop";
 /** 允许的复合端点(方法名含 "/")。 */
-const COMPOSITE_ENDPOINTS = new Set(["server/start", "server/stop", "server/install", "server/uninstall", "server/logs"]);
+const COMPOSITE_ENDPOINTS = new Set(["server/start", "server/stop", "server/install", "server/uninstall", "server/logs", "server/config", "server/save"]);
 
 function rpcError(message, code = "command-error") {
   const error = { code, message };
@@ -938,6 +1104,12 @@ async function handleEndpoint(ctx, endpoint, payload) {
   }
   if (method === "server/logs") {
     return rpcOk(ctx.memhopServer.logs(args.limit));
+  }
+  if (method === "server/config") {
+    return rpcOk(ctx.memhopServer.getConfig());
+  }
+  if (method === "server/save") {
+    return rpcOk(await ctx.memhopServer.saveConfig(args));
   }
 
   // 其余:直连该 agent 的 memhop-mcp 调用 MCP 工具。
@@ -1114,13 +1286,15 @@ export function apply(ctx, config = {}) {
     if (!conn || !conn.ready || payload.step !== 1) return decision;
     // 提取本轮第一条非 tool-result 的 user 消息原文。
     const messages = decision.messages ?? [];
-    const userText = messages
-      .map((m) => m.content)
-      .flat()
-      .filter((b) => b && (b.type === "text" || b.type === "content")) // 保守过滤
-      .map((b) => (typeof b.text === "string" ? b.text : ""))
-      .join("")
-      .trim();
+    const userText = stripInjected(
+      messages
+        .map((m) => m.content)
+        .flat()
+        .filter((b) => b && (b.type === "text" || b.type === "content")) // 保守过滤
+        .map((b) => (typeof b.text === "string" ? b.text : ""))
+        .join("")
+        .trim()
+    );
     if (!userText) return decision;
     try {
       // 合并 UI 面板设置的 search 参数偏好(auto_create / 定向 L2 / 定向 L3)。

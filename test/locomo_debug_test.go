@@ -6,6 +6,7 @@
 package test
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -36,7 +37,7 @@ func TestLocomoDebug(t *testing.T) {
 	for i, tn := range sess.Turns {
 		ts := sessionBase + int64(i)*30_000
 		if tn.Speaker == item.SpeakerA {
-			res, err := db.Search(internal.SearchQuery{Text: tn.Text, Timestamp: ts})
+			res, err := db.Search(context.Background(), internal.SearchQuery{Text: tn.Text, Timestamp: ts})
 			if err != nil {
 				t.Fatalf("ingest Search: %v", err)
 			}
@@ -54,7 +55,7 @@ func TestLocomoDebug(t *testing.T) {
 	t.Logf("question: %s", qa.Question)
 	t.Logf("reference answer: %s", qa.Answer)
 
-	res, err := db.Search(internal.SearchQuery{Text: qa.Question, Timestamp: sessionBase + 90_000})
+	res, err := db.Search(context.Background(), internal.SearchQuery{Text: qa.Question, Timestamp: sessionBase + 90_000})
 	if err != nil {
 		t.Fatalf("query Search: %v", err)
 	}

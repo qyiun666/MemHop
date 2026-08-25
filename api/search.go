@@ -6,7 +6,10 @@
 
 package api
 
-// Thin wrapper; see internal/search.go ((db *DB) Search).
-func (db *DB) Search(q SearchQuery) (*SearchResult, error) {
-	return db.DB.Search(q)
+import "context"
+
+// Thin wrapper; see internal/search.go ((db *DB) Search). The ctx cancels
+// LLM keyword extraction, encoder calls and the internally triggered Dream.
+func (db *DB) Search(ctx context.Context, q SearchQuery) (*SearchResult, error) {
+	return db.DB.Search(ctx, q)
 }

@@ -31,13 +31,26 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 	}
 
 	// Stage 1: one goroutine per scene compresses L2 (writes only;
-	// indexes rebuilt at the end).
-	groups, failures := db.compressActiveScenes(ctx, scenes)
-	if groups == 0 && failures > 0 {
+	// indexes rebuilt at the end). Scenes with at least one merged group
+	// leave the in-memory active set here; Search re-activates them.
+	succeeded, failures := db.compressActiveScenes(ctx, scenes)
+	if len(succeeded) == 0 && failures > 0 {
 		return false, fmt.Errorf("dream: LLM consolidation failed for all scenes")
 	}
 	if err := db.stageCancelled(ctx, "l2_compress"); err != nil {
 		return false, err
+	}
+	// Drop compressed scenes so Dream does not spin empty goroutines.
+	// Scenes skipped below the compress threshold stay active for the
+	// next Dream; Search re-activates a compressed scene on its next hit.
+	if len(succeeded) > 0 {
+		kept := db.activeScenes[:0]
+		for _, sid := range db.activeScenes {
+			if _, done := succeeded[sid]; !done {
+				kept = append(kept, sid)
+			}
+		}
+		db.activeScenes = kept
 	}
 
 	// Stage 2: rebuild retrieval indexes (sparse/L1Reverse/L2Meta) in one scan.
@@ -100,15 +113,34 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 	return true, nil
 }
 
+// triggerSceneDream runs one scene's Dream pipeline while the caller holds
+// the read lock: the read lock is released first (RunDream needs the write
+// lock), then re-acquired. Failures are logged and never fail the caller.
+func (db *DB) triggerSceneDream(ctx context.Context, sceneID uint64) {
+	db.mu.RUnlock()
+	db.mu.Lock()
+	// Re-check closed: Close may have completed while the lock was handed
+	// over; RunDream must not write to a closed engine.
+	var err error
+	if !db.closed.Load() {
+		_, err = db.RunDream(ctx, common.FormatHash(sceneID))
+	}
+	db.mu.Unlock()
+	db.mu.RLock()
+	if err != nil {
+		slog.Warn("dream: trigger failed", "scene", common.FormatHash(sceneID), "err", err)
+	}
+}
+
 // compressActiveScenes runs one goroutine per scene: reads depth-1 topics,
-// asks the LLM for merge groups and applies them; returns merged group
-// count and LLM failure count.
-func (db *DB) compressActiveScenes(ctx context.Context, scenes []uint64) (uint32, int) {
+// asks the LLM for merge groups and applies them; returns the set of scenes
+// that had at least one group applied and the LLM failure count.
+func (db *DB) compressActiveScenes(ctx context.Context, scenes []uint64) (map[uint64]struct{}, int) {
 	var (
-		wg       sync.WaitGroup
-		mu       sync.Mutex
-		groups   uint32
-		failures int
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		succeeded = make(map[uint64]struct{})
+		failures  int
 	)
 	for _, sid := range scenes {
 		wg.Add(1)
@@ -135,14 +167,15 @@ func (db *DB) compressActiveScenes(ctx context.Context, scenes []uint64) (uint32
 				mu.Unlock()
 				return
 			}
-			applied := db.applyGroups(ctx, sceneID, topics, out)
-			mu.Lock()
-			groups += applied
-			mu.Unlock()
+			if applied := db.applyGroups(ctx, sceneID, topics, out); applied > 0 {
+				mu.Lock()
+				succeeded[sceneID] = struct{}{}
+				mu.Unlock()
+			}
 		}(sid)
 	}
 	wg.Wait()
-	return groups, failures
+	return succeeded, failures
 }
 
 // applyGroups applies one scene's groups: store MergedSummary as an L4

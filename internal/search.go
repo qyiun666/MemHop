@@ -36,8 +36,9 @@ type SearchResult struct {
 
 // Search runs three-route retrieval (AutoCreate, DirectedL2ID, default;
 // DirectedL3ID restricts topics referencing that L3). LLM keyword
-// extraction failure returns an error, never degrades.
-func (db *DB) Search(q SearchQuery) (*SearchResult, error) {
+// extraction failure returns an error, never degrades. The ctx cancels LLM
+// keyword extraction, encoder calls and the internally triggered Dream.
+func (db *DB) Search(ctx context.Context, q SearchQuery) (*SearchResult, error) {
 	if err := db.beginRead(); err != nil {
 		return nil, err
 	}
@@ -46,7 +47,7 @@ func (db *DB) Search(q SearchQuery) (*SearchResult, error) {
 		return nil, common.NewError(common.ErrInvalidQuery,
 			"SearchQuery.Timestamp is required (Unix milliseconds)")
 	}
-	keywords, err := db.llm.ExtractKeywords(context.Background(), q.Text)
+	keywords, err := db.llm.ExtractKeywords(ctx, q.Text)
 	if err != nil {
 		return nil, err
 	}
@@ -60,7 +61,7 @@ func (db *DB) Search(q SearchQuery) (*SearchResult, error) {
 	case q.DirectedL2ID != nil:
 		contexts, newTopicID, err = db.searchDirected(q, keywords)
 	default:
-		contexts, newTopicID, err = db.searchNormal(q, keywords)
+		contexts, newTopicID, err = db.searchNormal(ctx, q, keywords)
 	}
 	if err != nil {
 		return nil, err
@@ -75,6 +76,13 @@ func (db *DB) Search(q SearchQuery) (*SearchResult, error) {
 	var associated []core.TopicSlot
 	if len(contexts) > 0 {
 		associated = db.associatedContexts(contexts[0].SceneID)
+		// Trigger a Dream when the scene's context grows beyond the
+		// threshold so its depth-1 topics get compressed (best-effort;
+		// the scene is re-activated by the next hit). Zero threshold
+		// (host-constructed literal) disables the trigger.
+		if t := db.config.Defaults.SearchDreamContextThreshold; t > 0 && len(contexts) > t {
+			db.triggerSceneDream(ctx, contexts[0].SceneID)
+		}
 	}
 	return db.assembleResult(q, contexts, associated, newTopicID)
 }
@@ -104,8 +112,8 @@ func (db *DB) searchDirected(q SearchQuery, keywords []string) ([]core.TopicSlot
 // searchNormal runs three-channel retrieval (DirectedL3ID restricts topics),
 // creates a topic in the top scene (or a new one), and returns the scene's
 // depth<=1 topics plus the new topic ID.
-func (db *DB) searchNormal(q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
-	hit, err := TopScene(context.Background(), db.engine, db.l2Meta, db.sparseIndex, db.encoder,
+func (db *DB) searchNormal(ctx context.Context, q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
+	hit, err := TopScene(ctx, db.engine, db.l2Meta, db.sparseIndex, db.encoder,
 		q.Text, keywords, db.activeScenes, &db.config.Defaults, db.config.Defaults.MinSceneScore, q.DirectedL3ID)
 	if err != nil {
 		return nil, 0, err

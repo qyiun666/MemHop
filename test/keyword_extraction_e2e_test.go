@@ -78,7 +78,7 @@ func TestSearchLongInputNeverFails(t *testing.T) {
 	texts := []string{longSessionText(t, 2), longSessionText(t, 0)}
 	base := time.Now().UnixMilli()
 	for i, text := range texts {
-		res, err := db.Search(internal.SearchQuery{Text: text, Timestamp: base + int64(i)*1000})
+		res, err := db.Search(context.Background(), internal.SearchQuery{Text: text, Timestamp: base + int64(i)*1000})
 		if err != nil {
 			t.Fatalf("attempt %d: Search returned error: %v", i, err)
 		}
