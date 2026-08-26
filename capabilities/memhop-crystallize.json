@@ -3,15 +3,15 @@
   "name": "memhop-crystallize",
   "version": "3",
   "type": "api",
-  "summary": "L5 能力生成说明书：从 L7 轨迹结晶出可复用能力（draft），宿主审核激活后进入 Search 自动匹配",
+  "summary": "L5 能力生成说明书：从 L6 轨迹结晶出可复用能力（draft），宿主审核激活后进入 Search 自动匹配",
   "trigger": "需要从操作轨迹生成或沉淀可复用能力时；crystallize 结晶 l5 能力 生成 提取 capability",
   "resources": [
     {
       "type": "api",
       "name": "Crystallize",
       "ref": "api:Crystallize",
-      "desc": "会话积累足够 L7 轨迹（同类操作出现两次以上）后调用，不在交互热路径；结晶产物是 draft，需宿主用 ActivateCapability 审核激活",
-      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"已有 L7 轨迹的会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
+      "desc": "会话积累足够 L6 轨迹（同类操作出现两次以上）后调用，不在交互热路径；结晶产物是 draft，需宿主用 ActivateCapability 审核激活",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"已有 L6 轨迹的会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
       "output": "CrystallizeResult（CreatedIDs/ReusedIDs/MergedIDs/Errors/Details）"
     }
   ]

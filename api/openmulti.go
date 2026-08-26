@@ -53,7 +53,7 @@ func (m *MultiAgentDB) Session(agentID uint64) (*AgentSession, error) {
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
 	if !m.db.HasAgent(agentID) {
-		return nil, common.NewError(common.ErrNotFound, "unknown agent: "+common.FormatHash(agentID))
+		return nil, common.NewError(common.ErrAgentNotFound, "unknown agent: "+common.FormatHash(agentID))
 	}
 	return &AgentSession{db: m.db, agentID: agentID}, nil
 }

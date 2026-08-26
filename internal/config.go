@@ -72,13 +72,10 @@ func CheckVectorDim(engine *core.StorageEngine, cfg *MemHopConfig) error {
 	return nil
 }
 
-// LoadCachedIndices restores the sparse index from the checkpoint
-// snapshot; a corrupt snapshot aborts Open rather than silently rebuilding.
-// L1 association is a storage-level graph walk (SpreadingActivation), so no
-// in-memory L1 index is loaded.
-// LoadCachedIndices validates every per-agent sparse blob of the snapshot
-// and returns them as the lazy-restore cache; a corrupt blob aborts Open
-// rather than silently rebuilding.
+// LoadCachedIndices validates every per-agent sparse blob of the checkpoint
+// snapshot and returns them as the lazy-restore cache; a corrupt blob aborts
+// Open rather than silently rebuilding. L1 association is a storage-level
+// graph walk (SpreadingActivation), so no in-memory L1 index is loaded.
 func LoadCachedIndices(engine *core.StorageEngine) (map[uint64][]byte, error) {
 	blobs := make(map[uint64][]byte)
 	snap := engine.SnapshotData()

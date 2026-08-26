@@ -136,6 +136,7 @@ const (
 	ErrVectorDimMismatch = common.ErrVectorDimMismatch
 	ErrInvalidQuery      = common.ErrInvalidQuery
 	ErrNotFound          = common.ErrNotFound
+	ErrAgentNotFound     = common.ErrAgentNotFound
 	ErrIO                = common.ErrIO
 	ErrClosed            = common.ErrClosed
 	ErrInvalidMagic      = common.ErrInvalidMagic

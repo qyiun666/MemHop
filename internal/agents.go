@@ -10,6 +10,7 @@
 package internal
 
 import (
+	"cmp"
 	"crypto/rand"
 	"encoding/binary"
 	"slices"
@@ -28,7 +29,9 @@ type AgentInfo struct {
 
 // CreateAgent returns the stable agentID for name, allocating a fresh
 // crypto/rand ID (and writing its registry record) on first use. Different
-// names never share an ID; the default domain is never handed out.
+// names never share an ID; the default domain is never handed out. The
+// registry record is written outside agentsMu so the fsync never blocks
+// concurrent domain lookups; a failed write rolls the reservation back.
 func (db *DB) CreateAgent(name string) (uint64, error) {
 	if db.closed.Load() {
 		return 0, common.NewError(common.ErrClosed, "database is closed")
@@ -38,33 +41,41 @@ func (db *DB) CreateAgent(name string) (uint64, error) {
 		return 0, common.NewError(common.ErrInvalidQuery, "agent name is empty")
 	}
 	db.agentsMu.Lock()
-	defer db.agentsMu.Unlock()
 	if db.nameToID == nil {
 		db.nameToID = make(map[string]uint64)
 		db.idToName = make(map[uint64]string)
 	}
 	if id, ok := db.nameToID[name]; ok {
+		db.agentsMu.Unlock()
 		return id, nil
 	}
+	var id uint64
 	for {
 		var b [8]byte
 		if _, err := rand.Read(b[:]); err != nil {
+			db.agentsMu.Unlock()
 			return 0, common.NewError(common.ErrIO, "agent id allocation", err)
 		}
-		id := binary.LittleEndian.Uint64(b[:])
+		id = binary.LittleEndian.Uint64(b[:])
 		if id == core.DefaultAgentID {
 			continue
 		}
 		if _, taken := db.idToName[id]; taken {
 			continue
 		}
-		if err := repo.WriteAgentRegistry(db.engine, id, name); err != nil {
-			return 0, err
-		}
-		db.nameToID[name] = id
-		db.idToName[id] = name
-		return id, nil
+		break
 	}
+	db.nameToID[name] = id
+	db.idToName[id] = name
+	db.agentsMu.Unlock()
+	if err := repo.WriteAgentRegistry(db.engine, id, name); err != nil {
+		db.agentsMu.Lock()
+		delete(db.nameToID, name)
+		delete(db.idToName, id)
+		db.agentsMu.Unlock()
+		return 0, err
+	}
+	return id, nil
 }
 
 // ListAgents returns every registered agent sorted by ID; the default
@@ -80,14 +91,7 @@ func (db *DB) ListAgents() ([]AgentInfo, error) {
 		out = append(out, AgentInfo{ID: id, Name: name})
 	}
 	slices.SortFunc(out, func(a, b AgentInfo) int {
-		switch {
-		case a.ID < b.ID:
-			return -1
-		case a.ID > b.ID:
-			return 1
-		default:
-			return 0
-		}
+		return cmp.Compare(a.ID, b.ID)
 	})
 	return out, nil
 }
@@ -104,10 +108,14 @@ func (db *DB) HasAgent(agentID uint64) bool {
 	return ok
 }
 
-// DeleteAgent cancels the agent's Dreams, waits for in-flight operations,
-// tombstones every record of the domain (registry record included) and
-// drops the tenant mapping. Space is reclaimed by the engine's Compact
-// path. The default domain cannot be deleted.
+// DeleteAgent tombstones every record of the domain (registry record
+// included) and drops the tenant mapping. The mapping goes first so no new
+// context can be created mid-delete; the context's tombstone then rejects
+// stale handles, dreamCtx cancels so a pending Dream exits at its next
+// stage boundary, and the domain-lock barrier waits for any operation
+// still holding ac.mu before the engine deletes the records. Space is
+// reclaimed by the engine's Compact path. The default domain cannot be
+// deleted.
 func (db *DB) DeleteAgent(agentID uint64) error {
 	if agentID == core.DefaultAgentID {
 		return common.NewError(common.ErrInvalidQuery, "the default domain cannot be deleted")
@@ -115,21 +123,17 @@ func (db *DB) DeleteAgent(agentID uint64) error {
 	if db.closed.Load() {
 		return common.NewError(common.ErrClosed, "database is closed")
 	}
-	// Destroy the context first: dreamCtx cancels so a pending Dream exits
-	// at its next stage boundary, and the domain-lock barrier below then
-	// waits for any operation still holding ac.mu.
-	if ac := db.destroyContext(agentID); ac != nil {
-		ac.mu.Lock()
-		ac.mu.Unlock() //nolint:staticcheck // barrier only
-	}
-	if _, err := db.engine.DeleteAgentRecords(agentID); err != nil {
-		return err
-	}
 	db.agentsMu.Lock()
-	defer db.agentsMu.Unlock()
 	if name := db.idToName[agentID]; name != "" {
 		delete(db.nameToID, name)
 	}
 	delete(db.idToName, agentID)
-	return nil
+	db.agentsMu.Unlock()
+	if ac := db.destroyContext(agentID); ac != nil {
+		ac.deleted.Store(true)
+		ac.mu.Lock()
+		ac.mu.Unlock() //nolint:staticcheck // barrier only
+	}
+	_, err := db.engine.DeleteAgentRecords(agentID)
+	return err
 }

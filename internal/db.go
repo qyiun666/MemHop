@@ -67,18 +67,31 @@ func (db *DB) Unlock() {
 func (db *DB) IsClosed() bool { return db.closed.Load() }
 
 // contextFor returns the agent's context, creating it lazily on first
-// access, and opportunistically sweeps idle domains.
+// access, and opportunistically sweeps idle domains. Non-default IDs must
+// be registered tenants: a stale handle to a deleted agent never revives
+// its domain.
 func (db *DB) contextFor(agentID uint64) (*agentContext, error) {
 	if db.closed.Load() {
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
 	db.agentsMu.Lock()
 	defer db.agentsMu.Unlock()
+	if db.closed.Load() { // re-check under the lock: Close may have raced the check above
+		return nil, common.NewError(common.ErrClosed, "database is closed")
+	}
+	if agentID != core.DefaultAgentID {
+		if _, ok := db.idToName[agentID]; !ok {
+			return nil, common.NewError(common.ErrAgentNotFound, "agent is not registered")
+		}
+	}
 	db.sweepIdleLocked()
 	ac := db.agents[agentID]
 	if ac == nil {
 		ac = db.newAgentContextLocked(agentID)
 		db.agents[agentID] = ac
+	}
+	if ac.deleted.Load() {
+		return nil, common.NewError(common.ErrAgentNotFound, "agent is being deleted")
 	}
 	ac.lastActiveAt.Store(time.Now().UnixMilli())
 	return ac, nil
@@ -113,8 +126,9 @@ func (db *DB) newAgentContextLocked(agentID uint64) *agentContext {
 
 // sweepIdleLocked reclaims contexts idle longer than Defaults.AgentIdleTTLMs:
 // indices are dropped from memory, the domain's records stay on disk and
-// the context rebuilds transparently on the next access. Busy domains and
-// the default domain are never reclaimed. Caller must hold db.agentsMu.
+// the context rebuilds transparently on the next access. Domains whose lock
+// is currently held (in-flight operation or scheduled Dream) and the default
+// domain are never reclaimed. Caller must hold db.agentsMu.
 func (db *DB) sweepIdleLocked() {
 	ttl := db.config.Defaults.AgentIdleTTLMs
 	if ttl <= 0 {
@@ -122,13 +136,25 @@ func (db *DB) sweepIdleLocked() {
 	}
 	now := time.Now().UnixMilli()
 	for id, ac := range db.agents {
-		if id == core.DefaultAgentID || ac.dreamBusy() {
+		if id == core.DefaultAgentID {
 			continue
 		}
 		if now-ac.lastActiveAt.Load() <= ttl {
 			continue
 		}
-		if blob, err := ac.sparseIndex.Serialize(); err == nil {
+		if !ac.mu.TryLock() { // an operation holds the domain lock: reclaim on a later pass
+			continue
+		}
+		busy := len(ac.dreamInFlight) > 0
+		var blob []byte
+		if !busy {
+			blob, _ = ac.sparseIndex.Serialize()
+		}
+		ac.mu.Unlock()
+		if busy {
+			continue
+		}
+		if len(blob) > 0 {
 			db.snapshotBlobs[id] = blob
 		}
 		ac.dreamCancel()
@@ -167,13 +193,6 @@ func (db *DB) HasActiveScenesFor(agentID uint64) bool {
 	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	return len(ac.activeScenes) > 0
-}
-
-// TouchLastDreamAt marks a successful Dream for the given agent.
-func (db *DB) TouchLastDreamAt(agentID uint64) {
-	if ac := db.peekContext(agentID); ac != nil {
-		ac.lastDreamAt.Store(time.Now().UnixMilli())
-	}
 }
 
 // syncL2Meta refreshes one topic entry of the agent's L2MetaIndex from the

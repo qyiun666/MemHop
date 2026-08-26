@@ -27,6 +27,7 @@ type agentContext struct {
 
 	lastDreamAt  atomic.Int64 // Unix ms of the last successful Dream (0 = never)
 	lastActiveAt atomic.Int64 // Unix ms of the last context access (idle sweep)
+	deleted      atomic.Bool  // DeleteAgent tombstone: contextFor rejects a destroyed domain
 
 	// dreamCtx owns the background Dream pipelines of this agent; DeleteAgent
 	// and Close cancel it so an in-flight Dream exits at its next stage
@@ -43,14 +44,6 @@ func newAgentContext(id uint64, parent context.Context) *agentContext {
 		dreamCtx:      ctx,
 		dreamCancel:   cancel,
 	}
-}
-
-// dreamBusy reports whether any background Dream is scheduled for this
-// domain; the idle sweep never reclaims a busy domain.
-func (ac *agentContext) dreamBusy() bool {
-	ac.mu.Lock()
-	defer ac.mu.Unlock()
-	return len(ac.dreamInFlight) > 0
 }
 
 // activateScene appends a scene idempotently; repeats keep first-order

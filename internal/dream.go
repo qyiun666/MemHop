@@ -134,7 +134,7 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID string) (boo
 	// Final: install the rebuilt indexes into the agent context.
 	ac.sparseIndex = newSparse
 	ac.l2Meta = newL2Meta
-	db.TouchLastDreamAt(agentID)
+	ac.lastDreamAt.Store(time.Now().UnixMilli()) // direct store: peekContext would take agentsMu under ac.mu (lock-order cycle)
 	return true, nil
 }
 

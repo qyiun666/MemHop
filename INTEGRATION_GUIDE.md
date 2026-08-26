@@ -23,7 +23,7 @@ host process
 | Contract | Meaning |
 |---|---|
 | **Single instance** | One `.meh` file is locked exclusively; a second `*DB` on the same file fails. |
-| **Serial calls** | Search / Update / Dream / write APIs on one `*DB` must be called serially by the host (queue them yourself across goroutines). |
+| **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`. The host needs no external queue. `Lock()`/`Unlock()` stay available for host-critical sections and panic on a closed DB. |
 | **LLM is required** | Search / Update / RefineTopicKeywords do LLM keyword extraction and return an error when the LLM is down (no silent degradation). |
 | **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque; format uint64 ids with `fmt.Sprintf("%016x", n)` (MemHop does not re-export id helpers). |
 | **Timestamps** | Unix milliseconds everywhere; `<= 0` is `ErrInvalidQuery`. |
@@ -366,7 +366,7 @@ if api.CodeOf(err) == api.ErrNotFound { ... }
 
 Codes: `ErrConfig`, `ErrVectorDimMismatch`, `ErrInvalidQuery`, `ErrNotFound`,
 `ErrIO`, `ErrClosed`, `ErrInvalidMagic`, `ErrCRCMismatch`, `ErrCorruption`,
-`ErrSerialization`, `ErrDeserialization`, `ErrEncoder`, `ErrLLM`.
+`ErrSerialization`, `ErrDeserialization`, `ErrEncoder`, `ErrLLM`, `ErrAgentNotFound` (agentID not registered or deleted).
 
 ---
 

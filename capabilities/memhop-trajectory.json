@@ -3,7 +3,7 @@
   "name": "memhop-trajectory",
   "version": "3",
   "type": "composite",
-  "summary": "L7 轨迹说明书：按会话追加 Agent 操作事件流、读取轨迹、查看统计（判断是否值得结晶）、删除轨迹",
+  "summary": "L6 轨迹说明书：按会话追加 Agent 操作事件流、读取轨迹、查看统计（判断是否值得结晶）、删除轨迹",
   "trigger": "需要记录操作轨迹、查看轨迹事件、判断结晶时机或清理轨迹时；trajectory 轨迹 l7 事件 操作日志 operation log",
   "resources": [
     {

@@ -104,7 +104,7 @@ ok, err := db.Dream(context.Background(), "")
 ```
 
 
-> **并发契约。** 一个 `*DB` 是单 Agent 句柄：宿主必须保证同一 DB 实例上的 Search / Update / Dream / 写操作串行调用。MCP server 对每个租户保持同一契约：一个租户 = 一个 `.meh` 文件，经由其专属 `*DB` 串行访问。
+> **并发契约。** 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行，宿主无需自行排队。`*DB` 是绑定默认域的单 Agent 句柄。文件排他锁仍保证一个 `.meh` 文件只能被一个进程打开；`Lock()`/`Unlock()` 保留供宿主关键区使用，对已关闭的 DB 调用会 panic。
 
 前置条件：Go 1.26+，Ollama（`ollama pull qllama/bge-m3:q4_k_m`），OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）
 
@@ -236,7 +236,7 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
-| v1.4.0 | 2026-08-26 | 多 agent 记忆数据库 | 一个 `.meh` 文件承载多个完全隔离的 agent 域：记录帧新增 `agent_id`（26 字节帧头），引擎索引与快照（0x02）按 agent 分域，租户注册记录把名字映射到稳定的 crypto/rand agentID · `api.OpenMulti` / `AgentSession` / `CreateAgent` / `ListAgents` / `DeleteAgent`；`Open` 对单 agent 宿主零改动（默认域）· 业务层重构为按 agent 的 `agentContext` + 域级锁（同 agent 串行、跨 agent 并行）、空闲域内存回收与域化 Dream 管线 · L7 轨迹层改编号为 **L6**（认知层收敛为 L0–L6）· MCP registry 共享单个 `MultiAgentDB`（单文件 `<db-dir>/memhop.meh`），`os.Root` 锚定 db 目录 · 删除重复结构体/转换层（`topicSlotJSON`、`topicToL2Meta`、单元素切片包装）· Go 1.23–1.26 标准库现代化（`iter.Seq2`、`unique.Make`、`os.Root`）· 零新增依赖 · **破坏性变更**：`FormatVersion <= 0x0007` 的旧 `.meh` 文件在 Open 时被拒绝，无迁移 |
+| v1.4.0 | 2026-08-26 | 多 agent 记忆数据库 | 一个 `.meh` 文件承载多个完全隔离的 agent 域：记录帧新增 `agent_id`（26 字节帧头），引擎索引与快照（0x02）按 agent 分域，租户注册记录把名字映射到稳定的 crypto/rand agentID · `api.OpenMulti` / `AgentSession` / `CreateAgent` / `ListAgents` / `DeleteAgent`；`Open` 对单 agent 宿主零改动（默认域）· 业务层重构为按 agent 的 `agentContext` + 域级锁（同 agent 串行、跨 agent 并行）、空闲域内存回收与域化 Dream 管线 · L7 轨迹层改编号为 **L6**（认知层收敛为 L0–L6）· MCP registry 共享单个 `MultiAgentDB`（单文件 `<db-dir>/memhop.meh`），`os.Root` 锚定 db 目录 · 删除重复结构体/转换层（`topicSlotJSON`、`topicToL2Meta`、单元素切片包装）· Go 1.23–1.26 标准库现代化（`iter.Seq2`、`unique.Make`、`os.Root`）· 零新增依赖 · **破坏性变更**：`FormatVersion <= 0x0007` 的旧 `.meh` 文件在 Open 时被拒绝，无迁移；`api.DB` 上提升自 `internal.DB` 的方法新增 `agentID` 参数（门面方法签名不变），`Lock()` 对已关闭的 DB 会 panic |
 | v1.3.4 | 2026-08-26 | L5 工具声明同构 | `memhop-capability` 格式升级 v3：`ResourceRef` 的 `description` 改名 `desc` 并新增 `input`（JSON Schema 字符串）/`output`——工具声明字段与宿主工具规格（meowire `ToolSpec`）完全同构，宿主纯字段拷贝即可投影、零格式转换 · `WorkflowStep` 新增 `args`——动作链参数官方化（不再依赖私有 config 格式）· 结晶 prompt 输出 v3 形状（`type`/`resources` 取代 `kind`/`manifest`）· `validateCapabilityImport` 强制资源名非空并校验 `input` 为合法 JSON · **破坏性变更**：v2 卡导入被拒绝（format 必须为 `memhop-capability/v3`）；旧版本写入的存量能力记录读取时 `desc/input/output` 为空 · 内置能力工具箱（`capabilities/*.json`）全部重写为 v3 并携带真实 JSON Schema |
 | v1.3.3 | 2026-08-26 | 检索评分归一化 + 参数面收敛 | vector floor 从“覆盖式垄断”改为“仅抬升未过线场景”（floor = threshold + cosine×0.5）：真实信号（RRF + 关键词重叠 + 加分）决定排序，语义兜底保留 · `MemHopDefaults` 从 24 字段收敛到 3 个业务开关（`Capacity` / `DreamCompressMinTopics` / `SearchDreamContextThreshold`）；删除 4 个死字段（`MaxResults` / `DefaultTimeoutSecs` / `DefaultMaxOutputTokens` / `MaxDepth`），16 个调优常量移入包级私有 `internal/tuning.go` · `TopScene` / `SpreadingActivation` / `applySceneBonuses` / `rrfFuse` 签名去掉 defaults 参数 · **破坏性变更**：引用被删字段的宿主需同步清理 · 格式版本不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·
 | v1.3.2 | 2026-08-26 | API 修复：异步 Dream + 删除接口 + Update 简化 | Search/Update 不再被内部触发的 Dream 阻塞（后台 goroutine、按场景 in-flight 防重入、Close 取消在途 Dream）· 新增 `DeleteTopic`（子树闭包 + L4 + 索引 + 父话题 ChildrenIDs 修剪）与 `DeleteScene`（场景 + 全部话题 + 原文 + L1 节点 + 激活集）用于记忆纠错 · `Update` 返回值由 `(bool, error)` 简化为 `error` · `SearchResult.ProfileBrief`——紧凑画像摘要（name/role/偏好/风格/情绪，带边界）· 格式版本 不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·

@@ -22,7 +22,7 @@
 | 契约 | 说明 |
 |---|---|
 | **单实例** | 一个 `.meh` 文件被排他锁独占；同一文件不能开第二个 `*DB` |
-| **串行调用** | 同一 `*DB` 上的 Search / Update / Dream / 写 API 必须由宿主串行调用（多 goroutine 时自行排队） |
+| **串行调用** | 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行；宿主无需自行排队。`Lock()`/`Unlock()` 仍可用于宿主关键区，对已关闭的 DB 调用会 panic |
 | **LLM 硬依赖** | Search / Update / RefineTopicKeywords 内部做关键词抽取，LLM 不可用直接报错（不降级） |
 | **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；宿主按不透明字符串传递，uint64 用 `fmt.Sprintf("%016x", n)` 格式化（api 未再导出 ID 工具函数） |
 | **时间戳** | 一律 Unix 毫秒；`<= 0` 视为非法参数（`ErrInvalidQuery`） |
@@ -329,7 +329,7 @@ res, err := db.Crystallize(ctx, sessionIDHex)
 if api.CodeOf(err) == api.ErrNotFound { ... }
 ```
 
-错误码：`ErrConfig`、`ErrVectorDimMismatch`、`ErrInvalidQuery`、`ErrNotFound`、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrEncoder`、`ErrLLM`。
+错误码：`ErrConfig`、`ErrVectorDimMismatch`、`ErrInvalidQuery`、`ErrNotFound`、`ErrAgentNotFound`（agentID 未注册或已删除）、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrEncoder`、`ErrLLM`。
 
 ---
 

@@ -17,11 +17,12 @@ README 的版本表与 git log。
 - **业务层（`internal`）**
   - `agentContext` 每 agent 业务态：域级锁（同 agent 串行、跨 agent 并行）、独立稀疏索引 / L2Meta / 活跃场景 / Dream 簿记 / `dreamCtx`
   - 空闲域内存回收：`Defaults.AgentIdleTTLMs`（默认 60 分钟），无后台定时器，随访问清扫，数据仍在文件
-  - `CreateAgent(name)` / `ListAgents()` / `DeleteAgent(agentID)`（取消在飞 Dream → 域锁屏障 → 引擎域删除）
+  - `CreateAgent(name)` / `ListAgents()` / `DeleteAgent(agentID)`（域墓碑 + 取消在飞 Dream → 域锁屏障 → 引擎域删除）；删除后的 agentID 永不复活（`contextFor` 校验注册表）
 - **api 门面**
   - `OpenMulti(cfg) (*MultiAgentDB, error)`、`OpenMultiWithEncoder`
   - `AgentSession`：方法集对齐单 agent `DB`（Search/Update/Dream/L0–L6 全量）
   - `FormatAgentID` / `ParseAgentID`（16 位 hex）
+  - 新错误码 `ErrAgentNotFound` (3002)：agentID 未注册或已删除
   - `Open` 保留且宿主零改动（内部映射默认域 `DefaultAgentID = 0`）
 - **MCP（`cmd/memhop-mcp`）**
   - registry 共享单个 `MultiAgentDB`：`/mcp/<tenant-id>` → `CreateAgent(tenant)` 稳定 agentID → `Session`；单文件 `<db-dir>/memhop.meh`
@@ -39,6 +40,8 @@ README 的版本表与 git log。
 
 - **格式不兼容**：`FormatVersion = 0x0008`；`<= 0x0007` 的旧 `.meh` 文件在 Open 时被显式拒绝，**无迁移路径**
 - `internal` 层全部读写函数签名加 `agentID` 首参（仅影响直接依赖 `internal` 的代码；`api.Open` 宿主不受影响）
+- `api.DB` 上提升自 `internal.DB` 的方法随之新增 `agentID` 参数（门面方法签名不变）；`Lock()` 对已关闭的 DB 会 panic（与旧无条件锁同契约）
+- 并发契约变更：同 agent 串行、跨 agent 并行由库内域级锁保证，宿主无需自行排队
 
 ### 测试
 

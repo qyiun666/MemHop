@@ -12,18 +12,23 @@
 
 1. **先域锁后存储**：所有公开方法先 `db.contextFor(agentID)` 取域、
    `ac.mu.Lock()`，再进入存储读写；引擎自带的锁在内层，顺序不可颠倒。
-   同 agent 串行、跨 agent 并行。
+   同 agent 串行、跨 agent 并行。`contextFor` 对非默认域校验注册表：
+   未注册/已删除的 agentID 直接 `ErrAgentNotFound`，域永不复活。
 2. **索引锁序**：同一操作内更新索引遵循 **存储 -> l2meta -> sparse**
    （先落记录帧，再 `ac.syncL2Meta`，最后更新稀疏索引）。
+   **禁止在域锁内取 `db.agentsMu`**（锁序环：sweep 走 agentsMu -> ac.mu），
+   域内簿记（如 `lastDreamAt`）直接写 atomic 字段。
 3. **Dream 域化**：`RunDream` 全程持本域锁；后台触发经
    `triggerSceneDream(ac, sceneID)`（调用方持 `ac.mu`），goroutine 运行在
    `ac.dreamCtx` 下——`Close`/`DeleteAgent` 取消它，任何在飞 Dream 在下一
    阶段边界退出，绝不写入已销毁的域。
 4. **空闲回收**：无后台定时器；`contextFor` 顺带清扫超
-   `Defaults.AgentIdleTTLMs` 未访问的域（默认域与忙碌域豁免），回收时
-   快照 sparse blob 进缓存，数据仍在文件，下次访问透明重建。
-5. **DeleteAgent 屏障**：先 `destroyContext`（取消 dreamCtx），再取
-   `ac.mu` 屏障等待在飞操作退出，最后引擎域删除 + 租户映射清理。
+   `Defaults.AgentIdleTTLMs` 未访问的域（默认域豁免），回收前先对域锁
+   `TryLock`：锁被占用（在飞操作）或 `dreamInFlight` 非空则跳过，留待下轮。
+   回收时快照 sparse blob 进缓存，数据仍在文件，下次访问透明重建。
+5. **DeleteAgent 顺序**：先摘租户映射（断绝新 `contextFor`）→
+   `destroyContext`（取消 dreamCtx）→ `ac.deleted` 墓碑（陈旧句柄立即被拒）
+   → `ac.mu` 屏障等待在飞操作 → 引擎域删除。
 
 ## 数据访问纪律
 

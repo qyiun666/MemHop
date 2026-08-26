@@ -3,7 +3,7 @@
   "name": "memhop-guide",
   "version": "3",
   "type": "composite",
-  "summary": "MemHop 记忆系统总说明书：Search 回忆并存储、Update 回写回复、Dream 巩固、L7 轨迹结晶为 L5 能力的完整循环（宿主通过 api 包直接调用）",
+  "summary": "MemHop 记忆系统总说明书：Search 回忆并存储、Update 回写回复、Dream 巩固、L6 轨迹结晶为 L5 能力的完整循环（宿主通过 api 包直接调用）",
   "trigger": "使用 memhop 记忆数据库，或不确定该调用哪个 MemHop API 时；memhop memory guide 入门 指南",
   "resources": [
     {
@@ -34,7 +34,7 @@
       "type": "api",
       "name": "Crystallize",
       "ref": "api:Crystallize",
-      "desc": "轨迹积累后调用：把 L7 操作轨迹结晶为 L5 能力草稿，宿主激活后复用",
+      "desc": "轨迹积累后调用：把 L6 操作轨迹结晶为 L5 能力草稿，宿主激活后复用",
       "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
       "output": "CrystallizeResult（CreatedIDs/ReusedIDs/MergedIDs/Details）"
     }

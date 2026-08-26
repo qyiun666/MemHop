@@ -15,7 +15,8 @@ const (
 	ErrVectorDimMismatch Code = 1002 // 1002 vector dimension mismatch: config vs engine (config.go)
 	ErrInvalidQuery      Code = 1003 // 1003 invalid query or ID parse failure (l1-l5layer/scenefind/hash parse, reclaim legacy layout)
 
-	ErrNotFound Code = 3001 // 3001 resource not found (profile missing, record lookup)
+	ErrNotFound      Code = 3001 // 3001 resource not found (profile missing, record lookup)
+	ErrAgentNotFound Code = 3002 // 3002 agent domain not found: unregistered or deleted agentID (contextFor, Session)
 
 	ErrIO              Code = 5001 // 5001 io error: file read/write/lock/mmap failure (storage file operations)
 	ErrClosed          Code = 5002 // 5002 database is closed: instance unavailable (engine/reclaim)

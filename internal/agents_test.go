@@ -8,7 +8,9 @@ package internal
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -157,5 +159,45 @@ func TestDeleteAgent(t *testing.T) {
 	}
 	if p, err := db.GetL0(a2); err != nil || (p != nil && p.Name == "victim") {
 		t.Fatalf("deleted domain leaked into re-registration: %+v err=%v", p, err)
+	}
+}
+
+// TestDeleteAgentUnderConcurrency races domain operations against
+// DeleteAgent: every op either completes before the delete or fails with
+// ErrAgentNotFound, and a stale handle never revives the deleted domain.
+func TestDeleteAgentUnderConcurrency(t *testing.T) {
+	db := openMultiTestDB(t, filepath.Join(t.TempDir(), "delcon.meh"))
+	t.Cleanup(func() { _ = db.Close() })
+	a, err := db.CreateAgent("busy")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 200 {
+				if err := db.UpdateL0(a, &core.ProfileSlot{Name: "busy"}); err != nil {
+					if common.CodeOf(err) != common.ErrAgentNotFound {
+						t.Errorf("UpdateL0 racing DeleteAgent: %v", err)
+					}
+					return
+				}
+			}
+		}()
+	}
+	time.Sleep(5 * time.Millisecond) // let the writers ramp up
+	if err := db.DeleteAgent(a); err != nil {
+		t.Fatalf("DeleteAgent: %v", err)
+	}
+	wg.Wait()
+
+	if err := db.UpdateL0(a, &core.ProfileSlot{Name: "zombie"}); common.CodeOf(err) != common.ErrAgentNotFound {
+		t.Fatalf("deleted domain revived on write: err=%v", err)
+	}
+	if _, err := db.GetL0(a); common.CodeOf(err) != common.ErrAgentNotFound {
+		t.Fatalf("deleted domain revived on read: err=%v", err)
 	}
 }

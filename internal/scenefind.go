@@ -47,12 +47,13 @@ type Encoder interface {
 // back to a full record scan). Scoring constants (RRF k, bonuses, vector
 // floor scale) are package-private tuning constants; threshold stays an
 // explicit parameter so tests can exercise it.
-func TopScene(ctx context.Context, engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
+func TopScene(ctx context.Context, agentID uint64, engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 	sparse *index.SparseIndex,
 	enc Encoder, query string, keywords []string,
 	activeSceneIDs []uint64, threshold float32, l3ID *string) (SceneHit, error) {
 	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 		Engine:  engine,
+		AgentID: agentID,
 		MetaIdx: l2Meta,
 		SceneID: "",
 		Depth:   2,
@@ -92,7 +93,7 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, l2Meta *index.L2M
 	}()
 	go func() {
 		defer wg.Done()
-		vecDocs = retrieveVector(engine, enc, topics, searchText)
+		vecDocs = retrieveVector(agentID, engine, enc, topics, searchText)
 	}()
 	go func() {
 		defer wg.Done()
@@ -230,7 +231,7 @@ func retrieveBM25(sparse *index.SparseIndex, topics []core.TopicSlot, text strin
 
 // retrieveVector encodes the query and computes cosine similarity against
 // each topic centroid; the channel is empty when the encoder is unavailable.
-func retrieveVector(engine *core.StorageEngine, enc Encoder,
+func retrieveVector(agentID uint64, engine *core.StorageEngine, enc Encoder,
 	topics []core.TopicSlot, text string) []index.ScoredDoc {
 	if enc == nil || !enc.IsAvailable() {
 		return nil
@@ -249,7 +250,7 @@ func retrieveVector(engine *core.StorageEngine, enc Encoder,
 		if t.CentroidPageRef == 0 {
 			continue
 		}
-		_, vecData, err := engine.ReadRecord(core.DefaultAgentID, t.CentroidPageRef)
+		_, vecData, err := engine.ReadRecord(agentID, t.CentroidPageRef)
 		if err != nil || len(vecData) < len(queryVec)*4 {
 			continue
 		}
@@ -320,7 +321,7 @@ func keywordHit(topic core.TopicSlot, kwSet map[string]struct{}) float32 {
 // A scene without an L1 node (created after the last Dream) yields an empty
 // result. The walk is a pure storage-level graph read — no in-memory graph
 // index is maintained. All walk limits are package-private tuning constants.
-func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
+func SpreadingActivation(agentID uint64, engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 	startSceneID uint64) []SceneHit {
 	maxHops, dampening, threshold, maxScenes := l1EdgeMaxHops,
 		l1ActivationDampening, l1ActivationThreshold, l1AssocMaxScenes
@@ -328,7 +329,7 @@ func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 		return nil
 	}
 	startNodeID := core.SceneNodeID(startSceneID)
-	if _, err := core.ReadSceneNode(engine, core.DefaultAgentID, startNodeID); err != nil {
+	if _, err := core.ReadSceneNode(engine, agentID, startNodeID); err != nil {
 		return nil // never dreamed; nothing associated yet
 	}
 
@@ -345,12 +346,12 @@ func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 		if e.hops >= maxHops {
 			continue
 		}
-		node, err := core.ReadSceneNode(engine, core.DefaultAgentID, e.nodeID)
+		node, err := core.ReadSceneNode(engine, agentID, e.nodeID)
 		if err != nil {
 			continue
 		}
 		for _, edgeID := range node.EdgeIDs {
-			edge, err := core.ReadSceneEdge(engine, core.DefaultAgentID, edgeID)
+			edge, err := core.ReadSceneEdge(engine, agentID, edgeID)
 			if err != nil {
 				continue
 			}
@@ -362,7 +363,7 @@ func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 				if act < threshold {
 					continue
 				}
-				neighbor, err := core.ReadSceneNode(engine, core.DefaultAgentID, neighborID)
+				neighbor, err := core.ReadSceneNode(engine, agentID, neighborID)
 				if err != nil {
 					continue
 				}
@@ -394,6 +395,7 @@ func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 	for _, sid := range ids {
 		topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 			Engine:  engine,
+			AgentID: agentID,
 			MetaIdx: l2Meta,
 			SceneID: common.FormatHash(sid),
 			Depth:   1,
