@@ -21,7 +21,7 @@ import (
 // serverConfig is the resolved memhop-mcp configuration.
 type serverConfig struct {
 	Listen string // HTTP listen address
-	DBDir  string // root directory holding one .meh file per tenant
+	DBDir  string // root directory holding the shared memhop.meh multi-agent database
 	// Tenants is the optional tenant whitelist; empty allows any valid
 	// tenant id to create its database on first access.
 	Tenants []string
@@ -30,7 +30,7 @@ type serverConfig struct {
 	// dsh-mcp-client and other modern MCP clients).
 	Transport string
 	// Base is the shared engine configuration. DBPath is left empty here and
-	// filled per tenant as <DBDir>/<tenant-id>.meh by the tenant registry.
+	// filled once by the registry with <DBDir>/memhop.meh.
 	Base memhop.MemHopConfig
 }
 
@@ -76,7 +76,7 @@ func splitTenants(raw string) ([]string, error) {
 func loadConfig(args []string) (*serverConfig, error) {
 	fs := flag.NewFlagSet("memhop-mcp", flag.ContinueOnError)
 	listen := fs.String("listen", "127.0.0.1:3939", "HTTP listen address")
-	dbDir := fs.String("db-dir", "", "directory holding one .meh database per tenant (required)")
+	dbDir := fs.String("db-dir", "", "directory holding the shared multi-agent memhop.meh database (required)")
 	tenants := fs.String("tenants", "", "optional comma-separated tenant whitelist")
 	transport := fs.String("transport", "sse", "multi-tenant HTTP transport: sse or streamable-http")
 	vectorDim := fs.Int("vector-dim", 1024, "embedding vector dimension")

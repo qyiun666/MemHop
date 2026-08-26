@@ -296,7 +296,7 @@ arcs, err := db.SearchL4(api.L4Query{
 
 > The built-in toolbox (19 cards: 13 manual API manuals + 6 atomic cards) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on `*api.DB`. Resources are tool declarations (`name/desc/input/output` mirror the host tool spec; `input` is a JSON Schema string), so hosts project them with a pure field copy.
 
-### L7 trajectory + crystallization (v1.2.7 additions)
+### L6 trajectory + crystallization (v1.2.7 additions)
 
 ```go
 // Record key operations (tool calls / sub-tasks / decisions).
@@ -316,7 +316,7 @@ stats, err := db.TrajectoryStats(sessionIDHex)
 // stats.ToolUsage  — EventType → count (map)
 // stats.LastAppendAt — last event timestamp (Unix ms)
 
-// L7 → L5: distill the trajectory into capability drafts.
+// L6 → L5: distill the trajectory into capability drafts.
 res, err := db.Crystallize(ctx, sessionIDHex)
 // res.CreatedIDs / ReusedIDs / MergedIDs / Errors
 // res.Details — per-candidate disposition: []CrystallizeDetail{

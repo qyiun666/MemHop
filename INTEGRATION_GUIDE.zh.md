@@ -266,7 +266,7 @@ arcs, err := db.SearchL4(api.L4Query{
 
 > 内置能力工具箱（19 张：13 张 manual API 说明书 + 6 张 atomic 原子卡）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；manual 卡 `type: "api"`、`ref: "api:MethodName"`，宿主在 `*api.DB` 上直接调用。
 
-### L7 轨迹 + 结晶（v1.2.7 新增能力）
+### L6 轨迹 + 结晶（v1.2.7 新增能力）
 
 ```go
 // 记录关键操作（工具调用 / 子任务 / 决策）。
@@ -286,7 +286,7 @@ stats, err := db.TrajectoryStats(sessionIDHex)
 // stats.ToolUsage     — EventType → 计数（map）
 // stats.LastAppendAt  — 最后事件时间戳（Unix 毫秒）
 
-// L7 → L5：把轨迹沉淀为能力草稿。
+// L6 → L5：把轨迹沉淀为能力草稿。
 res, err := db.Crystallize(ctx, sessionIDHex)
 // res.CreatedIDs / ReusedIDs / MergedIDs / Errors
 // res.Details — 逐候选处置明细：[]CrystallizeDetail{

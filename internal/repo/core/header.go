@@ -29,7 +29,8 @@ const (
 // time) and added L1 hyperedge creation during Dream; 0x0008 added
 // agent_id to the record frame (18 -> 26 bytes) so one file hosts
 // multiple physically separated agent domains, and renumbered the
-// trajectory layer from L7 to L6 (RecL6Trajectory). Files with 0x0007
+// trajectory layer down to L6 (RecL6Trajectory), converging the
+// cognitive stack to L0-L6. Files with 0x0007
 // (or older) are rejected at Open — there is no migration path.
 const FormatVersion uint16 = 0x0008
 

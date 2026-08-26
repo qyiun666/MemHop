@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // memhop-mcp exposes the MemHop memory database as a Model Context Protocol
-// (MCP) server over HTTP. A single multi-tenant process serves many hosts:
-// each tenant reaches its own isolated database through the URL path
-// /mcp/<tenant-id>, and every tenant's data lives in a dedicated .meh file
-// under --db-dir — no data is shared across tenants.
+// (MCP) server over HTTP. A single multi-tenant process serves many hosts
+// through one shared multi-agent database: each tenant reaches its own
+// isolated agent domain through the URL path /mcp/<tenant-id> (a stable
+// agentID per tenant name inside the single <db-dir>/memhop.meh file), so
+// no data is ever shared across tenants.
 //
 // Two HTTP transports are supported:
 //
@@ -28,7 +29,7 @@ import (
 	"time"
 )
 
-const version = "v1.3.4"
+const version = "v1.4.0"
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))

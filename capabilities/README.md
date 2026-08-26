@@ -20,11 +20,11 @@
 
 | 文件 | 能力 | 内容 |
 |---|---|---|
-| `memhop-guide.json` | `memhop-guide` | 记忆循环总纲：Search 回忆+存储 → Update 回写 → Dream 巩固 → L7 轨迹 → L5 结晶 |
+| `memhop-guide.json` | `memhop-guide` | 记忆循环总纲：Search 回忆+存储 → Update 回写 → Dream 巩固 → L6 轨迹 → L5 结晶 |
 | `memhop-search.json` | `memhop-search` | Search 三路由（默认混合检索 / auto_create / directed_l2_id / directed_l3_id）与返回字段用法 |
 | `memhop-update.json` | `memhop-update` | Update 回写契约（new_topic_id、参数校验、串行调用） |
 | `memhop-dream.json` | `memhop-dream` | Dream 巩固周期的阶段、no-op 条件与注意事项 |
-| `memhop-trajectory.json` | `memhop-trajectory` | L7 轨迹全生命周期：追加（event_type 约定、4KB 截断、Seq 自动分配）/ 读取 / 统计 / 删除 |
+| `memhop-trajectory.json` | `memhop-trajectory` | L6 轨迹全生命周期：追加（event_type 约定、4KB 截断、Seq 自动分配）/ 读取 / 统计 / 删除 |
 | `memhop-crystallize.json` | `memhop-crystallize` | L5 生成：Crystallize → draft → ActivateCapability → RecordCapabilityUsage 闭环 |
 | `memhop-capability-import.json` | `memhop-capability-import` | L5 导入：文件格式与幂等语义 |
 | `memhop-profile.json` | `memhop-profile` | L0 画像读取与全量更新（GetL0 后回填再 UpdateL0） |
