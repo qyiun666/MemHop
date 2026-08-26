@@ -52,11 +52,13 @@ type capabilityUpdateArgs struct {
 }
 
 type resourceArg struct {
-	Type        string  `json:"type"`
-	Name        string  `json:"name"`
-	Ref         string  `json:"ref,omitempty"`
-	Description string  `json:"description,omitempty"`
-	Config      *string `json:"config,omitempty"`
+	Type   string  `json:"type"`
+	Name   string  `json:"name"`
+	Desc   string  `json:"desc"`
+	Input  string  `json:"input,omitempty"`
+	Output string  `json:"output,omitempty"`
+	Ref    string  `json:"ref,omitempty"`
+	Config *string `json:"config,omitempty"`
 }
 
 type workflowArg struct {
@@ -64,8 +66,9 @@ type workflowArg struct {
 }
 
 type workflowStepArg struct {
-	Ref    string `json:"ref"`
-	Action string `json:"action,omitempty"`
+	Ref    string         `json:"ref"`
+	Action string         `json:"action,omitempty"`
+	Args   map[string]any `json:"args,omitempty"`
 }
 
 // validCapabilityStatus validates a status string before the typed switch.
@@ -91,11 +94,13 @@ func resourceArrayProp(desc string) map[string]any {
 	return map[string]any{
 		"type": "array",
 		"items": objSchema(map[string]any{
-			"type":        strProp("mcp 或 skill"),
-			"name":        strProp("mcp 工具名 / skill 名"),
-			"ref":         strProp("mcp server 地址 / skill 路径 / 命令"),
-			"description": strProp("怎么调用（给 LLM）"),
-			"config":      strProp("可选配置（JSON）"),
+			"type":   strProp("mcp | skill | api"),
+			"name":   strProp("工具名（= ToolSpec.Name）"),
+			"desc":   strProp("怎么调用（给 LLM，= ToolSpec.Desc）"),
+			"input":  strProp("参数 JSON Schema 字符串（= ToolSpec.Input）"),
+			"output": strProp("输出描述（= ToolSpec.Output）"),
+			"ref":    strProp("mcp server 地址 / skill 路径 / api:Method / 命令"),
+			"config": strProp("连接配置（JSON，可选）"),
 		}),
 		"description": desc,
 	}
@@ -111,6 +116,7 @@ func workflowProp() map[string]any {
 				"items": objSchema(map[string]any{
 					"ref":    strProp("资源名（Resources[].Name）或另一能力名"),
 					"action": strProp("动作说明"),
+					"args":   strProp("步骤参数（JSON 对象，可选）"),
 				}),
 				"description": "有序编排步骤",
 			},
@@ -122,7 +128,7 @@ func workflowProp() map[string]any {
 func registerL5Tools(s *mcp.Server, db *memhop.DB) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_import",
-		Description: "导入 memhop-capability/v2 能力文件（文件或包含 capability.json 的目录）。能力是对宿主资源的封装：type=mcp（单个 mcp 工具）、type=skill（单个 skill）、type=api（单个 api 方法）、type=composite（多个 mcp/skill/api 集合，可选 workflow 编排）。",
+		Description: "导入 memhop-capability/v3 能力文件（文件或包含 capability.json 的目录）。能力是对宿主资源的封装：type=mcp（单个 mcp 工具）、type=skill（单个 skill）、type=api（单个 api 方法）、type=composite（多个 mcp/skill/api 集合，可选 workflow 编排）；资源即工具声明（name/desc/input/output 与宿主 ToolSpec 同构）。",
 		InputSchema: objSchema(map[string]any{
 			"path": strProp("能力文件或目录路径，必填"),
 		}, "path"),

@@ -87,7 +87,7 @@ func newMockLLM(t *testing.T) *mockLLM {
 			content = `{"emotion":{"valence":0.8,"arousal":0.6,"dominance":0.5},"mbti":{"i_e":0.2,"n_s":0.3,"t_f":-0.1,"j_p":0.4,"type":"ESFP"},"per_node":[]}`
 		case strings.Contains(lower, "operation trajectory"):
 			m.calls["crystallize"]++
-			content = `{"capabilities":[{"action":"create","capability":{"format":"memhop-capability/v2","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","ref":"read_file","config":"{\"file\":\"a.go\"}"}]}}]}`
+			content = `{"capabilities":[{"action":"create","capability":{"format":"memhop-capability/v3","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","ref":"read_file","desc":"读文件","input":"{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}","output":"内容","config":"{\"file\":\"a.go\"}"}]}}]}`
 		default:
 			t.Errorf("mockLLM: unknown system prompt: %.80s", sys)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -327,7 +327,7 @@ func TestInterfaceL5(t *testing.T) {
 	db, _ := openTestDB(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "capability.json")
-	content := `{"format":"memhop-capability/v2","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file"}]}`
+	content := `{"format":"memhop-capability/v3","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file"}]}`
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write capability file: %v", err)
 	}

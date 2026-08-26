@@ -1,7 +1,7 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "memhop-update",
-  "version": "2",
+  "version": "3",
   "type": "api",
   "summary": "Update 说明书：把 Agent 回复追加到指定 L2 主题（写入 L4 档案并刷新关键词与 BM25 索引）",
   "trigger": "需要把回复写回记忆、保存本轮回答时；update 回写 写入 保存 回复 write reply",
@@ -10,7 +10,9 @@
       "type": "api",
       "name": "Update",
       "ref": "api:Update",
-      "description": "怎么用：每次生成回复后调用。签名 Update(topicID string, text string, timestamp int64) error；topicID=Search 返回的 NewTopicID（16 位 hex）、text=Agent 回复原文、timestamp=Unix 毫秒；把回复追加到指定 L2 主题并刷新索引"
+      "desc": "每次生成回复后调用：把回复追加到指定 L2 主题并刷新索引",
+      "input": "{\"type\":\"object\",\"properties\":{\"topic_id\":{\"type\":\"string\",\"description\":\"Search 返回的 NewTopicID（16 位 hex）\"},\"text\":{\"type\":\"string\",\"description\":\"Agent 回复原文\"},\"timestamp\":{\"type\":\"integer\",\"description\":\"Unix 毫秒\"}},\"required\":[\"topic_id\",\"text\",\"timestamp\"]}",
+      "output": "ok"
     }
   ]
 }

@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：v1.3.3 · 最新稳定 tag：v1.3.3</strong>
+  <strong>当前版本：v1.3.4 · 最新稳定 tag：v1.3.4</strong>
 </p>
 
 ---
@@ -121,7 +121,7 @@ ok, err := db.Dream(context.Background(), "")
 
 ### 内置 L5 能力
 
-仓库根目录 `capabilities/` 内置了一套开箱即用的能力工具箱（`memhop-capability/v2` 格式），构建时随库内嵌（只读，Open 时自动挂载）——**共 19 张卡，分两类**：MemHop 自身的 API 说明书（manual，13 张：guide、search、update、dream、trajectory、crystallize、capability-import、profile、scene、archive、capability、knowledge、refine，覆盖除 `Open`/`Close`/`Dream`/`Update`/`Search`/L5 读取外的全部对外 API）和 harness/agent 应具备的原子能力卡（atomic：文件读写/编辑、命令执行、文件搜索、联网搜索）。manual 卡直接引用 Go API（`type: "api"`、`ref: "api:MethodName"`），宿主在 `*api.DB` 上直接调用，无需 MCP 层。**零配置、零写入**：`ListCapabilities`/`GetCapability` 直接返回内置工具箱（与库存能力同套过滤器，可按 status/type/keyword 过滤），宿主 LLM 拉取后即可对照使用；内置能力为只读、不落 `.meh` 文件，与库存同名能力按 ID 去重（库存记录优先），`Search` 响应不附带内置能力——检索只返回库存匹配结果。
+仓库根目录 `capabilities/` 内置了一套开箱即用的能力工具箱（`memhop-capability/v3` 格式），构建时随库内嵌（只读，Open 时自动挂载）——**共 19 张卡，分两类**：MemHop 自身的 API 说明书（13 张：guide、search、update、dream、trajectory、crystallize、capability-import、profile、scene、archive、capability、knowledge、refine，覆盖除 `Open`/`Close`/`Dream`/`Update`/`Search`/L5 读取外的全部对外 API）和 harness/agent 应具备的原子能力卡（文件读写/编辑、命令执行、文件搜索、联网搜索）。说明书卡直接引用 Go API（`type: "api"`、`ref: "api:MethodName"`），宿主在 `*api.DB` 上直接调用，无需 MCP 层。**资源即工具声明**：`name/desc/input/output` 与宿主工具规格（meowire `ToolSpec`）字段完全同构，宿主纯字段拷贝即可投影、零格式转换。**零配置、零写入**：`ListCapabilities`/`GetCapability` 直接返回内置工具箱（与库存能力同套过滤器，可按 status/type/keyword 过滤），宿主 LLM 拉取后即可对照使用；内置能力为只读、不落 `.meh` 文件，与库存同名能力按 ID 去重（库存记录优先），`Search` 响应不附带内置能力——检索只返回库存匹配结果。
 
 ## 架构
 
@@ -165,44 +165,31 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 `SearchResult` 返回 `Contexts`（命中场景深度≤1 的话题，每条携带 `L4Refs`）与 `AssociatedContexts`（扩散激活命中的关联场景话题）；宿主通过 `SceneContext` 或 `SearchL4` 拉取 L4 原文组装上下文。
 
 `Search` 创建 topic 时会同时匹配相关 L3 知识节点，并把图谱 ID 写入 `TopicSlot.L3Refs`；`DirectedL3ID` 就是基于这些引用做过滤。
-## 基准测试
+## 测试与基准
 
-### LoCoMo 检索召回（v1.3.3）
+MemHop 的测试套件只驱动公开 `api` 表面——即宿主（如 MeowAgent）实际发起的调用——并直接断言引擎自身的记忆结构，而非外部可答性 judge。
 
-基于 [LoCoMo](https://github.com/snap-research/locomo)（ACL 2024）的长期对话记忆召回测试，**仅评估检索层**（不含答案生成）：每个 QA 对已灌入的 `.meh` 记忆发起检索，由 LLM judge 判定返回的上下文单独是否足以回答问题。
+### 集成测试（`test/`，build tag `integration`）
 
-| 范围 | 会话数 | 轮数 | QA | 可答率 recall | 实体命中率 |
-|------|--------|------|-----|---------------|------------|
-| 1 个对话集（conv-26），v1.3.3 | 19 | 419 | 199 | 0.392（78/199） | 0.307 |
+- **记忆循环**（`TestCoreCycleSearchUpdateDream`）：按真实宿主的调用方式灌入 N 轮 Search+Update，每几轮做一次**周期性 L0/L1/L4 一致性检查**——L0 画像可读、L1 场景图存在（`ListScenes`/`SceneContext`）、L4 保留原文逐字一致；Dream 巩固后场景必须仍暴露合并后的话题，且检索仍能浮出已存事实。
+- **关键词保真与持久**（`TestKeywordFidelity`/`TestKeywordPersistence`/`TestDreamCompressionFidelity`）：从对话话语中提取的关键词忠实承载其含义、在噪声轮次后仍可检索、并经受住 Dream 压缩的检验。
+- **API 契约**（`TestInterface*`）、**e2e 流程**（`TestE2E*`）、**关键词提取健壮性**（`TestExtractKeywordsLongInputRealLLM`/`TestSearchLongInputNeverFails`）。
 
-- **A/B 回归对照**（同一 fixture、同一 Ollama/DeepSeek 服务）：v1.3.2 实测 recall 0.352 / 实体命中 0.352；v1.3.3 实测 0.392 / 0.307——两指标反向波动，处于 LLM judge 噪声范围，无系统性回归。
-- **历史说明**：v1.1.0 在同一对话集上实测 0.709 / 0.883。差距自 v1.3.x 系列（L1 超图、异步 Dream、灌入期间自动 Dream 触发）起已存在，并非 v1.3.3 引入。
-- **可答率**覆盖 LoCoMo 全部五类问题，含 22.5% 对抗陷阱题（其正确行为是拒答，上下文不可答即为正确结果），因此是保守下界；可答类（1-4 类）估算更高。
-- **实体命中率**为无模型硬指标：答案关键 token 出现在检索上下文中的平均比例。
-- `Search` 将上下文返回给宿主（如 MeowAgent）作为生成上下文；检索本身不做答案生成。
+### 基准（`go test -tags integration -bench .`）
 
-复现：
+所有基准都驱动真实 api 循环（真实编码器 + 真实 LLM，无外部 judge）：
 
-```bash
-# 1 个对话集
-MEMHOP_LOCOMO_ITEMS=1 go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
-# 3 个对话集
-MEMHOP_LOCOMO_ITEMS=3 go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
-```
+| 基准 | 测量 |
+|------|------|
+| `BenchmarkMemoryLoop` | 稳态 Search+Update 记忆循环，含引擎**自动触发的 Dream**（场景 depth-1 上下文超过 30 话题阈值）与周期性 L0/L1 验证 |
+| `BenchmarkSearchAutoCreate` / `BenchmarkSearchRetrieve` | 首次写入 vs 检索式 Search 延迟 |
+| `BenchmarkUpdate` | 追加 agent 回复延迟 |
+| `BenchmarkDreamConsolidation` | 完整 Dream 流水线延迟 |
+| `BenchmarkSearchLatency` | 检索延迟分布（min/p50/p95/max） |
 
-分析与竞品定位：[docs/benchmarks/locomo_recall_analysis.md](docs/benchmarks/locomo_recall_analysis.md)
+### 为什么不跑外部数据集基准？
 
-### 竞品定位（方法学对比）
-
-MemHop 报告的是**检索层召回**（LLM judge 判定：仅凭检索上下文能否回答？），而非端到端答案准确率。下表竞品报告的是端到端准确率（生成 + judge），两者口径不同、不可直接比较——端到端分数通常偏高，因为生成阶段即使检索不完整也能借助常识作答。
-
-| 系统 | LoCoMo 指标 | 方法学 | 备注 |
-|------|------------|--------|------|
-| MemHop v1.3.3 | recall 0.392 | 仅检索层，LLM judge 判定上下文充分性 | 实体命中 0.307；嵌入式单文件、零基础设施 |
-| OpenViking | 80–83% | 端到端准确率 | Claude Code 原生 57.21% → 接入后 80.32% |
-| TiMem | 75.30% | 端到端准确率 | LongMemEval-S 76.88%，token 节省约 52% |
-| Mem0 | 66.9% | 端到端准确率 | 生产级记忆层 |
-| MindMemOS | 94.03% | 端到端准确率 | 研究系统，Dreaming 巩固 |
+公开记忆基准（LoCoMo、LongMemEval）评估的是“检索 → LLM judge 可答性”——与 MemHop 分层设计要断言的（L0 画像蒸馏、L1 场景图一致性、L2 压缩语义、L4 原文归档）是不同的问题。形态最贴近的 LongMemEval（多会话 user-assistant 对话、约 500 题）单题需 115K–1.5M tokens，不具备作为持续集成基准的可行性。因此 MemHop 通过 api 循环直接验证自身的记忆结构，而非追逐一个泛化的 QA 分数。
 
 ## 项目结构
 
@@ -248,7 +235,8 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
-| v1.3.3 | 2026-08-26 | 检索评分归一化 + 参数面收敛 | vector floor 从"覆盖式垄断"改为"仅抬升未过线场景"（floor = threshold + cosine×0.5）：真实信号（RRF + 关键词重叠 + 加分）决定排序，语义兜底保留 · `MemHopDefaults` 从 24 字段收敛到 3 个业务开关（`Capacity` / `DreamCompressMinTopics` / `SearchDreamContextThreshold`）；删除 4 个死字段（`MaxResults` / `DefaultTimeoutSecs` / `DefaultMaxOutputTokens` / `MaxDepth`），16 个调优常量移入包级私有 `internal/tuning.go` · `TopScene` / `SpreadingActivation` / `applySceneBonuses` / `rrfFuse` 签名去掉 defaults 参数 · **破坏性变更**：引用被删字段的宿主需同步清理 · 格式版本不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·
+| v1.3.4 | 2026-08-26 | L5 工具声明同构 | `memhop-capability` 格式升级 v3：`ResourceRef` 的 `description` 改名 `desc` 并新增 `input`（JSON Schema 字符串）/`output`——工具声明字段与宿主工具规格（meowire `ToolSpec`）完全同构，宿主纯字段拷贝即可投影、零格式转换 · `WorkflowStep` 新增 `args`——动作链参数官方化（不再依赖私有 config 格式）· 结晶 prompt 输出 v3 形状（`type`/`resources` 取代 `kind`/`manifest`）· `validateCapabilityImport` 强制资源名非空并校验 `input` 为合法 JSON · **破坏性变更**：v2 卡导入被拒绝（format 必须为 `memhop-capability/v3`）；旧版本写入的存量能力记录读取时 `desc/input/output` 为空 · 内置能力工具箱（`capabilities/*.json`）全部重写为 v3 并携带真实 JSON Schema |
+| v1.3.3 | 2026-08-26 | 检索评分归一化 + 参数面收敛 | vector floor 从“覆盖式垄断”改为“仅抬升未过线场景”（floor = threshold + cosine×0.5）：真实信号（RRF + 关键词重叠 + 加分）决定排序，语义兜底保留 · `MemHopDefaults` 从 24 字段收敛到 3 个业务开关（`Capacity` / `DreamCompressMinTopics` / `SearchDreamContextThreshold`）；删除 4 个死字段（`MaxResults` / `DefaultTimeoutSecs` / `DefaultMaxOutputTokens` / `MaxDepth`），16 个调优常量移入包级私有 `internal/tuning.go` · `TopScene` / `SpreadingActivation` / `applySceneBonuses` / `rrfFuse` 签名去掉 defaults 参数 · **破坏性变更**：引用被删字段的宿主需同步清理 · 格式版本不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·
 | v1.3.2 | 2026-08-26 | API 修复：异步 Dream + 删除接口 + Update 简化 | Search/Update 不再被内部触发的 Dream 阻塞（后台 goroutine、按场景 in-flight 防重入、Close 取消在途 Dream）· 新增 `DeleteTopic`（子树闭包 + L4 + 索引 + 父话题 ChildrenIDs 修剪）与 `DeleteScene`（场景 + 全部话题 + 原文 + L1 节点 + 激活集）用于记忆纠错 · `Update` 返回值由 `(bool, error)` 简化为 `error` · `SearchResult.ProfileBrief`——紧凑画像摘要（name/role/偏好/风格/情绪，带边界）· 格式版本 不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·
 | v1.3.0 | 2026-08-26 | L1 场景超图 + 扩散激活联想 | Dream 在场景间创建真实的 `RecL1Hyperedge` 共现边（关键词重叠 Jaccard ≥ `L1EdgeMinSimilarity`）；Search 的 `AssociatedContexts` 由空转的同场景列表替换为图遍历（每跳激活 × 边权 × 衰减系数，≤ `L1EdgeMaxHops`，取 Top `L1AssocMaxScenes` 个其他场景）· L6 场景使用记录删除——命中计数并入 L2 `SceneSlot`（`HitCount`/`LastHitAt`）· `L1ReverseIndex`（含快照字段）与 4 个 L1 死函数删除，联想变为纯存储层图读取 · `.meh` 格式升至 `0x0007`——0x0006 文件 Open 时被拒绝，不迁移 · 新默认项：`L1EdgeMinSimilarity`（0.15）、`L1EdgeMaxHops`（2）、`L1ActivationDampening`（0.5）、`L1ActivationThreshold`（0.05）、`L1AssocMaxScenes`（3） |
 | v1.2.7 | 2026-08-25 | 宿主对齐 + 双语集成指南 | `Search(ctx, q)` 与 `RefineTopicKeywords(ctx, id)` 接收 context（可取消 LLM 关键词提取、编码调用与内部触发的 Dream）· `api` 导出 `LlmConfig` / `MemHopDefaults` / `TopicSlot` / `ResourceRef` / `CrystallizeDetail` / `TrajectoryStats` · 新增 `TrajectoryStats`（会话级 L7 统计）+ `memhop_trajectory_stats` MCP 工具（31 → 32 工具）· `CrystallizeResult.Details`——逐候选 create/reuse/merge/skip 处置明细 · `AppendL4Message`（纯 L4 追加，不调 LLM）· 活跃场景容量策略：Update 在达到 Capacity 时对最老场景触发 Dream（带可压缩性预检）；`SearchDreamContextThreshold` 零值守卫 · 仓库根目录新增双语集成指南（`INTEGRATION_GUIDE.md` / `INTEGRATION_GUIDE.zh.md`） |

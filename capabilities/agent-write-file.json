@@ -1,5 +1,5 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "agent-write-file",
   "version": "1",
   "type": "skill",
@@ -10,7 +10,9 @@
       "type": "skill",
       "name": "write-file",
       "ref": "agent-skills/write-file/SKILL.md",
-      "description": "怎么用：参数 path=目标文件绝对路径、content=完整文件内容（UTF-8）；创建或整体重写文件"
+      "desc": "创建或整体重写文件；自动创建父目录",
+      "input": "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"目标文件绝对路径\"},\"content\":{\"type\":\"string\",\"description\":\"完整文件内容（UTF-8）\"}},\"required\":[\"path\",\"content\"]}",
+      "output": "写入确认（含字节数）"
     }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "agent-search-files",
   "version": "1",
   "type": "skill",
@@ -10,7 +10,9 @@
       "type": "skill",
       "name": "search-files",
       "ref": "agent-skills/search-files/SKILL.md",
-      "description": "怎么用：参数 pattern=glob 或正则表达式、path=搜索范围目录（可选）；按 glob 找文件路径、按正则搜文件内容"
+      "desc": "按 glob 找文件路径、按正则搜文件内容",
+      "input": "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\",\"description\":\"glob 或正则表达式\"},\"path\":{\"type\":\"string\",\"description\":\"搜索范围目录（可选）\"}},\"required\":[\"pattern\"]}",
+      "output": "命中文件路径列表（含行号）"
     }
   ]
 }

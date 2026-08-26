@@ -1,7 +1,7 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "memhop-scene",
-  "version": "2",
+  "version": "3",
   "type": "composite",
   "summary": "L2 场景说明书：列出全部/激活场景、读取场景内话题上下文、合并重复场景、删除话题与场景（记忆纠错）",
   "trigger": "需要查看场景列表、读取某个场景的话题上下文、合并重复场景或删除错误记忆时；scene 场景 l2 话题 合并 删除 上下文",
@@ -10,37 +10,49 @@
       "type": "api",
       "name": "ListScenes",
       "ref": "api:ListScenes",
-      "description": "列出所有 L2 场景。签名 ListScenes() ([]SceneSlot, error)；返回 SceneID/名称/depth1 话题条数"
+      "desc": "列出所有 L2 场景；返回 SceneID/名称/depth1 话题条数",
+      "input": "{\"type\":\"object\",\"properties\":{}}",
+      "output": "SceneSlot 列表"
     },
     {
       "type": "api",
       "name": "ActiveSceneIDs",
       "ref": "api:ActiveSceneIDs",
-      "description": "列出内存中激活的场景 ID（Dream 巩固目标）。签名 ActiveSceneIDs() []string；未激活场景可检索但不会被巩固"
+      "desc": "列出内存中激活的场景 ID（Dream 巩固目标）；未激活场景可检索但不会被巩固",
+      "input": "{\"type\":\"object\",\"properties\":{}}",
+      "output": "场景 ID 列表（16 位 hex）"
     },
     {
       "type": "api",
       "name": "SceneContext",
       "ref": "api:SceneContext",
-      "description": "读取场景上下文。签名 SceneContext(sceneID string) (*SceneContext, error)；sceneID=场景 ID（16 位 hex）；返回 SceneName/Topics（depth-1 话题元信息，含 L4IDs 供按 ID 拉取原文）与 TopicCount"
+      "desc": "读取场景上下文；返回 SceneName/Topics（depth-1 话题元信息，含 L4IDs 供按 ID 拉取原文）与 TopicCount",
+      "input": "{\"type\":\"object\",\"properties\":{\"scene_id\":{\"type\":\"string\",\"description\":\"场景 ID（16 位 hex）\"}},\"required\":[\"scene_id\"]}",
+      "output": "SceneContext（SceneName/Topics/TopicCount）"
     },
     {
       "type": "api",
       "name": "MergeScenes",
       "ref": "api:MergeScenes",
-      "description": "合并场景。签名 MergeScenes(primaryID string, secondaryIDs []string) error；primaryID=主场景 ID（16 位 hex）、secondaryIDs=次要场景 ID 列表（16 位 hex）；次要场景的全部话题迁入主场景后删除"
+      "desc": "合并场景：primaryID=主场景、secondaryIDs=次要场景列表；次要场景的全部话题迁入主场景后删除",
+      "input": "{\"type\":\"object\",\"properties\":{\"primary_id\":{\"type\":\"string\",\"description\":\"主场景 ID（16 位 hex）\"},\"secondary_ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"次要场景 ID 列表（16 位 hex）\"}},\"required\":[\"primary_id\",\"secondary_ids\"]}",
+      "output": "ok"
     },
     {
       "type": "api",
       "name": "DeleteTopic",
       "ref": "api:DeleteTopic",
-      "description": "删除一个 L2 话题及其子树与 L4 原文（记忆纠错）。签名 DeleteTopic(topicID string) error；topicID=话题 ID（16 位 hex）；级联删除子话题并修剪父话题引用"
+      "desc": "删除一个 L2 话题及其子树与 L4 原文（记忆纠错）；级联删除子话题并修剪父话题引用",
+      "input": "{\"type\":\"object\",\"properties\":{\"topic_id\":{\"type\":\"string\",\"description\":\"话题 ID（16 位 hex）\"}},\"required\":[\"topic_id\"]}",
+      "output": "ok"
     },
     {
       "type": "api",
       "name": "DeleteScene",
       "ref": "api:DeleteScene",
-      "description": "删除整个 L2 场景（含全部话题、L4 原文与 L1 节点）。签名 DeleteScene(sceneID string) error；sceneID=场景 ID（16 位 hex）；未知场景返回 ErrNotFound"
+      "desc": "删除整个 L2 场景（含全部话题、L4 原文与 L1 节点）；未知场景返回 ErrNotFound",
+      "input": "{\"type\":\"object\",\"properties\":{\"scene_id\":{\"type\":\"string\",\"description\":\"场景 ID（16 位 hex）\"}},\"required\":[\"scene_id\"]}",
+      "output": "ok"
     }
   ],
   "workflow": {

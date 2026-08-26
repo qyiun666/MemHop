@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.3.3**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.3.4**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 ---
@@ -288,13 +288,13 @@ arcs, err := db.SearchL4(api.L4Query{
 | Method | Meaning |
 |---|---|
 | `db.ListCapabilities(CapabilityListQuery{Status, Type, Keyword})` | list capability cards |
-| `db.ImportCapability(path)` | import a memhop-capability/v2 JSON file |
+| `db.ImportCapability(path)` | import a memhop-capability/v3 JSON file |
 | `db.GetCapability(id)` / `db.DeleteCapability(id)` | read / delete |
 | `db.UpdateCapability(id, CapabilityPatch{...})` | partial update (built-ins rejected) |
 | `db.ActivateCapability(id)` | draft → active |
 | `db.RecordCapabilityUsage(id, success)` | usage feedback |
 
-> The built-in toolbox (19 cards: 13 manual API manuals + 6 atomic cards) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on `*api.DB`.
+> The built-in toolbox (19 cards: 13 manual API manuals + 6 atomic cards) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on `*api.DB`. Resources are tool declarations (`name/desc/input/output` mirror the host tool spec; `input` is a JSON Schema string), so hosts project them with a pure field copy.
 
 ### L7 trajectory + crystallization (v1.2.7 additions)
 

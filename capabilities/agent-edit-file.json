@@ -1,5 +1,5 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "agent-edit-file",
   "version": "1",
   "type": "skill",
@@ -10,7 +10,9 @@
       "type": "skill",
       "name": "edit-file",
       "ref": "agent-skills/edit-file/SKILL.md",
-      "description": "怎么用：参数 path=目标文件绝对路径、old_string=待替换原文（须与文件精确匹配）、new_string=替换内容；按原文片段定点替换，避免整文件重写"
+      "desc": "按原文片段定点替换；old_string 必须与文件精确匹配且唯一",
+      "input": "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"目标文件绝对路径\"},\"old_string\":{\"type\":\"string\",\"description\":\"待替换原文（须与文件精确匹配且唯一）\"},\"new_string\":{\"type\":\"string\",\"description\":\"替换内容\"}},\"required\":[\"path\",\"old_string\",\"new_string\"]}",
+      "output": "替换确认（1 处）"
     }
   ]
 }

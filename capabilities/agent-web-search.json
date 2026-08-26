@@ -1,5 +1,5 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "agent-web-search",
   "version": "1",
   "type": "skill",
@@ -10,7 +10,9 @@
       "type": "skill",
       "name": "web-search",
       "ref": "agent-skills/web-search/SKILL.md",
-      "description": "怎么用：参数 query=搜索关键词；获取当前公开信息并附来源链接"
+      "desc": "获取当前公开信息并附来源链接",
+      "input": "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"搜索关键词\"}},\"required\":[\"query\"]}",
+      "output": "检索结果摘要与来源链接"
     }
   ]
 }

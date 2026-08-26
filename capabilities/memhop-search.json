@@ -1,7 +1,7 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "memhop-search",
-  "version": "2",
+  "version": "3",
   "type": "api",
   "summary": "Search 说明书：三路由检索（默认混合检索 / auto_create 新建 / directed_l2_id 定向），返回画像、上下文、档案与匹配的 L5 能力",
   "trigger": "需要检索回忆记忆、查询历史上下文时；search 检索 回忆 查询 上下文 recall memory",
@@ -10,7 +10,9 @@
       "type": "api",
       "name": "Search",
       "ref": "api:Search",
-      "description": "怎么用：每轮对话收到用户消息时调用（自动回忆+存储）。签名 Search(ctx context.Context, q SearchQuery) (*SearchResult, error)；q 字段：Text=用户消息原文、Timestamp=Unix 毫秒（必填）、AutoCreate=true 跳过检索直建新话题、DirectedL2ID=定向写入指定场景（*string）、DirectedL3ID=限定知识图谱范围（*string）；返回 Profile/ProfileBrief（L0 画像）、Contexts/AssociatedContexts（L2 话题，TopicSlot 含 L4Refs 可拉取原文）与 NewTopicID；注意：L4 原文与 L5 能力命中不在本响应中，分别用 SearchL4/SceneContext 与 ListCapabilities 获取"
+      "desc": "每轮对话收到用户消息时调用（自动回忆+存储）。返回 Profile/ProfileBrief（L0 画像）、Contexts/AssociatedContexts（L2 话题，TopicSlot 含 L4Refs 可拉取原文）与 NewTopicID；注意：L4 原文与 L5 能力命中不在本响应中，分别用 SearchL4/SceneContext 与 ListCapabilities 获取",
+      "input": "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"用户消息原文\"},\"timestamp\":{\"type\":\"integer\",\"description\":\"Unix 毫秒（必填）\"},\"auto_create\":{\"type\":\"boolean\",\"description\":\"true 跳过检索直建新话题\"},\"directed_l2_id\":{\"type\":\"string\",\"description\":\"定向写入指定场景（16 位 hex）\"},\"directed_l3_id\":{\"type\":\"string\",\"description\":\"限定知识图谱范围（16 位 hex）\"}},\"required\":[\"text\",\"timestamp\"]}",
+      "output": "SearchResult JSON（Profile/ProfileBrief/Contexts/AssociatedContexts/NewTopicID）"
     }
   ]
 }

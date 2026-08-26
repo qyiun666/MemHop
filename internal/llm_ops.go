@@ -252,8 +252,8 @@ Rules:
 1. Scan from the most recent topic backwards — group adjacent topics that share the same conversation thread (same subject, causal chain, topic continuation, or semantic overlap)
 2. Do NOT merge topics that are clearly about different subjects, even if they occur in the same scene
 3. Compression target: the total number of remaining topics after merging must be 20 or fewer. If the input has more than 20 topics, you MUST merge enough groups to bring the count down to 20 or below
-4. For each merged group, reconstruct the multi-turn keywords into a single coherent natural-language text — write it as if you are rewriting what was originally said, not summarizing
-5. No length limit on the reconstructed text — it must be as long as needed to faithfully preserve ALL details: names, numbers, dates, times, locations, cause-effect chains, emotional tone, attitudes, preferences, and specific facts
+4. For each merged group, reconstruct the multi-turn keywords into a single coherent natural-language text — write it as if you are rewriting what was originally said, not summarizing. The keywords are a fact checklist: every keyword or phrase from every topic in the group MUST appear in the reconstructed text, either verbatim or as the exact fact it stands for. Never drop, merge away, or generalize a fact (e.g. "yesterday" must stay "yesterday", not become "recently")
+5. No length limit on the reconstructed text — it must be as long as needed to faithfully preserve ALL details: names, numbers, dates, times (including relative references such as "yesterday", "last week", "next month" — keep them exactly as said), locations, cause-effect chains, emotional tone, attitudes, preferences, and specific facts
 6. Preserve the emotional tone and attitude present in the keywords — if the original tone was frustrated, excited, curious, etc., the reconstructed text should reflect that
 7. Preserve original language; keep mixed-language terms as-is; preserve numbers and proper nouns exactly
 8. Echo scene_id and node_hashes EXACTLY as given in the input
@@ -563,11 +563,13 @@ const systemCrystallize = `You analyze an agent's operation trajectory and extra
 
 Rules:
 - Only extract capabilities that are clearly reusable (appear at least twice or are obviously generic procedures)
-- A capability has kind manual, atomic, or composite:
-  * manual: a runbook/SOP/instruction sequence
-  * atomic: a single reusable resource (skill, mcp, tool, prompt, or service)
-  * composite: an orchestration of skills, MCPs, tools, prompts, services, manuals, or other capabilities
-- For composite capabilities, fill manifest sections for the referenced resources and workflow.steps with id/ref/depends_on. Do not invent tools or services that are not present in the trajectory
+- A capability has type skill, mcp, api, or composite:
+  * skill: a reusable skill/runbook/SOP (ref = skill path or manual reference)
+  * mcp: a single reusable tool provided by an MCP server (ref = server address)
+  * api: a single reusable host method (ref = "api:MethodName")
+  * composite: an orchestration of the above resources, with an optional workflow
+- For composite capabilities, list the referenced resources in "resources" and their ordered orchestration in workflow.steps (ref refers to a resources[].name; args carries step parameters). Do not invent tools or services that are not present in the trajectory
+- Every resource is a tool declaration: name = tool name, desc = how to call it (for the LLM), input = args JSON Schema string (omit when none), output = output description, ref = server address / skill path / api:Method, config = connection JSON (optional)
 - Compare against the existing capabilities listed below. If the same capability already exists:
   * action = "reuse" and reuse_id = its 16-hex id
   * do not duplicate it
@@ -584,21 +586,13 @@ Output ONLY valid JSON in this exact shape (no markdown, no code fences):
       "capability": {
         "name": "<short capability name>",
         "version": "1",
-        "kind": "manual|atomic|composite",
+        "type": "skill|mcp|api|composite",
         "summary": "<one sentence>",
         "trigger": "<when this capability applies>",
-        "when_to_use": "<optional conditions>",
-        "tags": ["<tag>"],
-        "interface": {"inputs": [{"name":"topic","type":"string"}], "outputs": [{"name":"report","type":"string"}]},
-        "manual": {"goal": "<goal>", "steps": ["<step>"]},
-        "manifest": {
-          "skills": [{"name": "...", "ref": "...", "description": "...", "config": "..."}],
-          "mcps": [{"name": "...", "ref": "...", "config": "<endpoint or connection JSON>"}],
-          "tools": [{"name": "<tool name>", "ref": "<command or tool ref>"}],
-          "prompts": [{"name": "...", "config": "<prompt template>"}],
-          "services": [{"name": "...", "config": "<service definition JSON>"}]
-        },
-        "workflow": {"steps": [{"id": "step1", "ref": "skill:name", "depends_on": [], "on_error": "fail"}]}
+        "resources": [
+          {"type": "skill|mcp|api", "name": "<tool name>", "desc": "<how to call it, for the LLM>", "input": "<args JSON Schema string, omit when none>", "output": "<output description>", "ref": "<server address / skill path / api:Method>", "config": "<connection JSON, optional>"}
+        ],
+        "workflow": {"steps": [{"ref": "<resources[].name>", "action": "<what this step does>", "args": {"<param>": "<value>"}}]}
       }
     }
   ]

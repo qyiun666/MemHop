@@ -1,7 +1,7 @@
 # MemHop 宿主集成指南（Go API 方式）
 
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序（不经 MCP server）。
-> 适用版本：**v1.3.3**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 适用版本：**v1.3.4**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 ---
 
@@ -258,7 +258,7 @@ arcs, err := db.SearchL4(api.L4Query{
 | 方法 | 说明 |
 |---|---|
 | `db.ListCapabilities(CapabilityListQuery{Status, Type, Keyword})` | 列出能力卡 |
-| `db.ImportCapability(path)` | 导入 memhop-capability/v2 JSON 文件 |
+| `db.ImportCapability(path)` | 导入 memhop-capability/v3 JSON 文件 |
 | `db.GetCapability(id)` / `db.DeleteCapability(id)` | 读 / 删 |
 | `db.UpdateCapability(id, CapabilityPatch{...})` | 部分更新（内置卡只读，被拒绝） |
 | `db.ActivateCapability(id)` | 草稿 → 激活 |

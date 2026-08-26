@@ -15,7 +15,7 @@ func (db *DB) GetCapability(id string) (*Capability, error) {
 	return db.DB.GetCapability(id)
 }
 
-// ImportCapability imports/upserts a memhop-capability/v2 file. The write
+// ImportCapability imports/upserts a memhop-capability/v3 file. The write
 // lock is held here; internal.ImportCapability does no locking itself.
 func (db *DB) ImportCapability(path string) (*Capability, error) {
 	db.DB.Lock()

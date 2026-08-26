@@ -113,7 +113,9 @@ func capabilitySearchText(cap core.Capability) string {
 	for _, r := range cap.Resources {
 		write(r.Name)
 		write(r.Ref)
-		write(r.Description)
+		write(r.Desc)
+		write(r.Input)
+		write(r.Output)
 	}
 	return strings.ToLower(b.String())
 }

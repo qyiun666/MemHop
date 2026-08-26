@@ -1,5 +1,5 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "agent-read-file",
   "version": "1",
   "type": "skill",
@@ -10,7 +10,9 @@
       "type": "skill",
       "name": "read-file",
       "ref": "agent-skills/read-file/SKILL.md",
-      "description": "怎么用：参数 path=文件绝对路径、offset/limit=行号区间（可选）；按路径读取文本文件并带行号返回"
+      "desc": "按路径读取文本文件并带行号返回；支持 offset/limit 分段读取",
+      "input": "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"文件绝对路径\"},\"offset\":{\"type\":\"integer\",\"description\":\"起始行号（0 基，可选）\"},\"limit\":{\"type\":\"integer\",\"description\":\"最大读取行数（可选）\"}},\"required\":[\"path\"]}",
+      "output": "文件内容（带行号），超出长度自动截断并标注"
     }
   ]
 }

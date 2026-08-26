@@ -110,7 +110,7 @@ func TestE2ECapability(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "morning_run.json")
-	content := `{"format":"memhop-capability/v2","name":"晨跑流程","version":"1","type":"skill","summary":"周末海边晨跑","trigger":"用户提到周末海边跑步","resources":[{"type":"skill","name":"晨跑计划","description":"周末清晨海边跑步"}]}`
+	content := `{"format":"memhop-capability/v3","name":"晨跑流程","version":"1","type":"skill","summary":"周末海边晨跑","trigger":"用户提到周末海边跑步","resources":[{"type":"skill","name":"晨跑计划","desc":"周末清晨海边跑步","input":"{\"type\":\"object\",\"properties\":{\"time\":{\"type\":\"string\"}}}","output":"晨跑计划"}]}`
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write import file: %v", err)
 	}

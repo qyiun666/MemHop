@@ -4,6 +4,7 @@ package test
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,6 +15,36 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
+
+// gatherLocomoContext flattens the returned topics' keyword tracks (user +
+// agent + fused) with their timestamps into one searchable text. It reflects
+// what a host sees after Search: the L2 keyword view of each returned topic.
+func gatherLocomoContext(_ *memhop.DB, res *internal.SearchResult) string {
+	var sb strings.Builder
+	for i := range res.Contexts {
+		c := &res.Contexts[i]
+		if c.UserTimestamp > 0 {
+			fmt.Fprintf(&sb, "[user: %s] ", time.UnixMilli(c.UserTimestamp).UTC().Format("2006-01-02 15:04"))
+		}
+		if c.AgentTimestamp > 0 {
+			fmt.Fprintf(&sb, "[agent: %s] ", time.UnixMilli(c.AgentTimestamp).UTC().Format("2006-01-02 15:04"))
+		}
+		sb.WriteByte('\n')
+		for _, kw := range c.UserKeywords {
+			sb.WriteString(kw)
+			sb.WriteByte(' ')
+		}
+		for _, kw := range c.AgentKeywords {
+			sb.WriteString(kw)
+			sb.WriteByte(' ')
+		}
+		for _, kw := range c.FusedKeywords {
+			sb.WriteString(kw)
+			sb.WriteByte(' ')
+		}
+	}
+	return sb.String()
+}
 
 // TestCoreCycleSearchUpdateDream exercises the full memory loop against real
 // services: N Search+Update turns ingested into one scene, then Dream
@@ -67,15 +98,55 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 	}
 	defer db.Close()
 
-	// Phase 1: ingest via Search + Update (the real host pattern).
+	// Phase 1: ingest via Search + Update (the real host pattern), checking
+	// L0/L1/L4 consistency every few turns — the periodic verification a host
+	// should be able to rely on at any point in the loop.
 	base := time.Now().UnixMilli()
+	var sceneID uint64
 	for i, f := range facts {
 		res, err := db.Search(context.Background(), internal.SearchQuery{Text: f, Timestamp: base + int64(i)*1000})
 		if err != nil {
 			t.Fatalf("search ingest %d: %v", i, err)
 		}
+		if len(res.Contexts) > 0 && sceneID == 0 {
+			sceneID = res.Contexts[0].SceneID
+		}
 		if err := db.Update(common.FormatHash(res.NewTopicID), "Agent: 明白了，已记录。", base+int64(i)*1000+500); err != nil {
 			t.Fatalf("update ingest %d: %v", i, err)
+		}
+		// Periodic consistency check: L0 profile readable, L1 scene graph
+		// present, L4 archive holds the just-ingested utterance verbatim.
+		if (i+1)%8 == 0 {
+			if _, err := db.GetL0(); err != nil {
+				t.Fatalf("GetL0 at turn %d: %v", i+1, err)
+			}
+			scenes, err := db.ListScenes()
+			if err != nil || len(scenes) == 0 {
+				t.Fatalf("ListScenes at turn %d: scenes=%d err=%v", i+1, len(scenes), err)
+			}
+			if sc, err := db.SceneContext(common.FormatHash(sceneID)); err != nil || sc.TopicCount == 0 {
+				t.Fatalf("SceneContext at turn %d: topics=%d err=%v", i+1, sc.TopicCount, err)
+			}
+			arc, err := db.SearchL4(internal.L4Query{
+				Start: base + int64(i)*1000 - 100,
+				End:   base + int64(i)*1000 + 600,
+			})
+			if err != nil || len(arc) == 0 {
+				t.Fatalf("SearchL4 at turn %d: archives=%d err=%v", i+1, len(arc), err)
+			}
+			// The window holds both the user utterance and the agent reply;
+			// one archive must carry the raw user text verbatim.
+			verbatim := false
+			for _, a := range arc {
+				if strings.Contains(a.Content, f) {
+					verbatim = true
+					break
+				}
+			}
+			if !verbatim {
+				t.Errorf("L4 at turn %d does not hold the raw utterance verbatim", i+1)
+			}
+			t.Logf("periodic check @turn %d: L0 ok, scenes=%d, L4 verbatim=%v", i+1, len(scenes), verbatim)
 		}
 	}
 
@@ -86,6 +157,25 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 	}
 	if !ok {
 		t.Logf("dream reported no consolidation (no active scenes or below threshold)")
+	}
+
+	// Phase 2.5: post-Dream L0/L1 consistency — profile still readable, the
+	// scene graph still exposes the consolidated scene with topics.
+	if _, err := db.GetL0(); err != nil {
+		t.Fatalf("GetL0 after Dream: %v", err)
+	}
+	scenes, err := db.ListScenes()
+	if err != nil || len(scenes) == 0 {
+		t.Fatalf("ListScenes after Dream: scenes=%d err=%v", len(scenes), err)
+	}
+	sc, err := db.SceneContext(common.FormatHash(sceneID))
+	if err != nil || sc.TopicCount == 0 {
+		t.Fatalf("SceneContext after Dream: topics=%d err=%v", sc.TopicCount, err)
+	}
+	if sc.TopicCount >= len(facts) {
+		t.Logf("note: Dream merged nothing this run (topics=%d == ingested %d)", sc.TopicCount, len(facts))
+	} else {
+		t.Logf("post-Dream scene topics=%d (compressed from %d)", sc.TopicCount, len(facts))
 	}
 
 	// Phase 3: retrieval must still surface the facts, including the newest

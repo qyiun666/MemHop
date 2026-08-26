@@ -380,8 +380,14 @@ func (c Capability) PromptCard() string {
 			fmt.Fprintf(&b, " (%s)", r.Ref)
 		}
 		b.WriteByte('\n')
-		if r.Description != "" {
-			fmt.Fprintf(&b, "  use: %s\n", r.Description)
+		if r.Desc != "" {
+			fmt.Fprintf(&b, "  use: %s\n", r.Desc)
+		}
+		if r.Input != "" {
+			fmt.Fprintf(&b, "  input: %s\n", r.Input)
+		}
+		if r.Output != "" {
+			fmt.Fprintf(&b, "  output: %s\n", r.Output)
 		}
 	}
 	if c.Workflow != nil {
@@ -397,15 +403,19 @@ func (c Capability) PromptCard() string {
 	return b.String()
 }
 
-// ResourceRef is one wrapped resource: an MCP tool or a skill together with
-// usage instructions for the host. MemHop stores these references but does
-// not execute them.
+// ResourceRef is one wrapped resource (an MCP tool, a skill, or an api
+// method). The tool-declaration fields (Name/Desc/Input/Output) mirror the
+// host tool spec shape exactly (meowire ToolSpec semantics): a host projects
+// a resource to its own tool declaration with a pure field copy, no format
+// conversion. MemHop stores these references but does not execute them.
 type ResourceRef struct {
-	Type        CapabilityType `json:"type"` // mcp | skill | api
-	Name        string         `json:"name"`
-	Ref         string         `json:"ref,omitempty"` // MCP server address / skill path / api:Method / command
-	Description string         `json:"description,omitempty"`
-	Config      *string        `json:"config,omitempty"`
+	Type   CapabilityType `json:"type"`             // mcp | skill | api
+	Name   string         `json:"name"`             // tool name (ToolSpec.Name)
+	Desc   string         `json:"desc"`             // call contract for the LLM (ToolSpec.Desc)
+	Input  string         `json:"input,omitempty"`  // args JSON Schema string (ToolSpec.Input)
+	Output string         `json:"output,omitempty"` // output description (ToolSpec.Output)
+	Ref    string         `json:"ref,omitempty"`    // MCP server address / skill path / api:Method / command
+	Config *string        `json:"config,omitempty"` // connection config (endpoint etc.), not an args schema
 }
 
 // Workflow is the ordered orchestration of a composite capability.
@@ -414,10 +424,12 @@ type Workflow struct {
 }
 
 // WorkflowStep is one orchestration step referencing a resource (by
-// Resources[].Name) or another capability (by name).
+// Resources[].Name) or another capability (by name). Args carries the step
+// parameters a host replays the action chain with (JSON Schema in Input).
 type WorkflowStep struct {
-	Ref    string `json:"ref"`
-	Action string `json:"action,omitempty"`
+	Ref    string         `json:"ref"`
+	Action string         `json:"action,omitempty"`
+	Args   map[string]any `json:"args,omitempty"`
 }
 
 // TrajectorySlot is an L7 operation trajectory event appended by the host

@@ -1,7 +1,7 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "memhop-archive",
-  "version": "2",
+  "version": "3",
   "type": "composite",
   "summary": "L4 档案说明书：检索历史对话原文（关键词/时间范围/ID 列表三种模式）、按 ID 读取单条、追加一条消息",
   "trigger": "需要查询历史对话原文、翻找旧消息或手动追加消息时；archive 档案 l4 原文 历史 对话 检索",
@@ -10,19 +10,25 @@
       "type": "api",
       "name": "SearchL4",
       "ref": "api:SearchL4",
-      "description": "检索 L4 原文。签名 SearchL4(q L4Query) ([]ArchiveSlot, error)；q 字段：Keyword（子串匹配）、Start/End（毫秒时间范围）、IDs（档案 ID 列表）三种模式选一，可附加 TopicID 限定话题（*string，16 位 hex）"
+      "desc": "检索 L4 原文；q 字段：Keyword（子串匹配）、Start/End（毫秒时间范围）、IDs（档案 ID 列表）三种模式选一，可附加 TopicID 限定话题（16 位 hex）",
+      "input": "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\",\"description\":\"内容子串匹配（模式 1）\"},\"start\":{\"type\":\"integer\",\"description\":\"时间范围起点毫秒（模式 2）\"},\"end\":{\"type\":\"integer\",\"description\":\"时间范围终点毫秒（模式 2）\"},\"ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"档案 ID 列表（模式 3）\"},\"topic_id\":{\"type\":\"string\",\"description\":\"限定话题（16 位 hex，可选）\"}}}",
+      "output": "ArchiveSlot 列表（Content/Role/CreatedAt/Metadata）"
     },
     {
       "type": "api",
       "name": "GetArchive",
       "ref": "api:GetArchive",
-      "description": "按 ID 读取单条 L4 原文。签名 GetArchive(id string) (*ArchiveSlot, error)；id=档案 ID（16 位 hex）；未知 ID 返回错误"
+      "desc": "按 ID 读取单条 L4 原文；未知 ID 返回错误",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"档案 ID（16 位 hex）\"}},\"required\":[\"id\"]}",
+      "output": "ArchiveSlot"
     },
     {
       "type": "api",
       "name": "AppendL4Message",
       "ref": "api:AppendL4Message",
-      "description": "向话题手动追加一条 L4 消息（纯存储追加，不触发关键词提取或 LLM）。签名 AppendL4Message(topicID string, text string, timestamp int64, role uint8) (uint64, error)；role=0 用户 / 1 Agent；返回新档案 ID（16 位 hex）"
+      "desc": "向话题手动追加一条 L4 消息（纯存储追加，不触发关键词提取或 LLM）；role=0 用户 / 1 Agent；返回新档案 ID",
+      "input": "{\"type\":\"object\",\"properties\":{\"topic_id\":{\"type\":\"string\",\"description\":\"话题 ID（16 位 hex）\"},\"text\":{\"type\":\"string\",\"description\":\"消息原文\"},\"timestamp\":{\"type\":\"integer\",\"description\":\"Unix 毫秒\"},\"role\":{\"type\":\"integer\",\"description\":\"0=用户 / 1=Agent\"}},\"required\":[\"topic_id\",\"text\",\"timestamp\",\"role\"]}",
+      "output": "新档案 ID（16 位 hex）"
     }
   ],
   "workflow": {

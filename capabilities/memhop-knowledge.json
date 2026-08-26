@@ -1,7 +1,7 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "memhop-knowledge",
-  "version": "1",
+  "version": "3",
   "type": "composite",
   "summary": "L3 知识图谱说明书：读取/列出/导入/更新/删除语义图谱，查询节点与子图",
   "trigger": "需要管理或查询 L3 语义知识图谱、结构化知识时；knowledge 知识 l3 图谱 语义 节点 边 hypergraph",
@@ -10,43 +10,57 @@
       "type": "api",
       "name": "GetL3",
       "ref": "api:GetL3",
-      "description": "按 ID 读取一个 L3 知识图谱。签名 GetL3(id string) (*L3Graph, error)；id=图谱 ID（16 位 hex）"
+      "desc": "按 ID 读取一个 L3 知识图谱",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"图谱 ID（16 位 hex）\"}},\"required\":[\"id\"]}",
+      "output": "L3Graph"
     },
     {
       "type": "api",
       "name": "ListL3",
       "ref": "api:ListL3",
-      "description": "列出全部 L3 知识图谱。签名 ListL3() ([]HypergraphSlot, error)；返回图谱摘要（ID/名称/节点边计数）"
+      "desc": "列出全部 L3 知识图谱；返回图谱摘要（ID/名称/节点边计数）",
+      "input": "{\"type\":\"object\",\"properties\":{}}",
+      "output": "HypergraphSlot 列表（摘要）"
     },
     {
       "type": "api",
       "name": "ImportL3",
       "ref": "api:ImportL3",
-      "description": "批量导入 L3 实体/关系。签名 ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error)；items=待导入节点/边列表、mode=覆盖/合并模式；返回新建/更新/跳过统计"
+      "desc": "批量导入 L3 实体/关系；items=待导入节点/边列表、mode=覆盖/合并模式；返回新建/更新/跳过统计",
+      "input": "{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\"},\"description\":\"待导入节点/边列表\"},\"mode\":{\"type\":\"string\",\"description\":\"覆盖/合并模式\"}},\"required\":[\"items\",\"mode\"]}",
+      "output": "L3ImportResult（新建/更新/跳过统计）"
     },
     {
       "type": "api",
       "name": "UpdateL3",
       "ref": "api:UpdateL3",
-      "description": "更新 L3 图谱元信息。签名 UpdateL3(id string, name *string) (*L3Graph, error)；name=nil 表示不改名"
+      "desc": "更新 L3 图谱元信息；name=nil 表示不改名",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"图谱 ID（16 位 hex）\"},\"name\":{\"type\":\"string\",\"description\":\"新名称（缺省不改名）\"}},\"required\":[\"id\"]}",
+      "output": "L3Graph（更新后）"
     },
     {
       "type": "api",
       "name": "DeleteL3",
       "ref": "api:DeleteL3",
-      "description": "删除整个 L3 知识图谱。签名 DeleteL3(id string) error；id=图谱 ID（16 位 hex）"
+      "desc": "删除整个 L3 知识图谱",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"图谱 ID（16 位 hex）\"}},\"required\":[\"id\"]}",
+      "output": "ok"
     },
     {
       "type": "api",
       "name": "QueryL3Nodes",
       "ref": "api:QueryL3Nodes",
-      "description": "按条件查询 L3 节点。签名 QueryL3Nodes(q L3NodeQuery) ([]HypergraphNode, error)；q 支持按图谱/标签/关键词过滤"
+      "desc": "按条件查询 L3 节点；q 支持按图谱/标签/关键词过滤",
+      "input": "{\"type\":\"object\",\"properties\":{\"graph_id\":{\"type\":\"string\"},\"tag\":{\"type\":\"string\"},\"keyword\":{\"type\":\"string\"}}}",
+      "output": "HypergraphNode 列表"
     },
     {
       "type": "api",
       "name": "QueryL3Subgraph",
       "ref": "api:QueryL3Subgraph",
-      "description": "从起始节点展开子图。签名 QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKinds []GraphEdgeKind) (*L3Subgraph, error)；edgeKinds 限定关系类型（causal/semantic/temporal 等），maxDepth 限制展开深度"
+      "desc": "从起始节点展开子图；edgeKinds 限定关系类型（causal/semantic/temporal 等），maxDepth 限制展开深度",
+      "input": "{\"type\":\"object\",\"properties\":{\"graph_id\":{\"type\":\"string\",\"description\":\"图谱 ID（16 位 hex）\"},\"start_node_id\":{\"type\":\"string\",\"description\":\"起始节点 ID（16 位 hex）\"},\"max_depth\":{\"type\":\"integer\",\"description\":\"展开深度限制\"},\"edge_kinds\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"限定关系类型\"}},\"required\":[\"graph_id\",\"start_node_id\",\"max_depth\"]}",
+      "output": "L3Subgraph（节点与边）"
     }
   ],
   "workflow": {

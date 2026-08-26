@@ -1,5 +1,5 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "agent-run-command",
   "version": "1",
   "type": "skill",
@@ -10,7 +10,9 @@
       "type": "skill",
       "name": "run-command",
       "ref": "agent-skills/run-command/SKILL.md",
-      "description": "怎么用：参数 command=shell 命令、timeout_ms=超时毫秒（可选）、background=是否后台执行（可选）；构建/测试/脚本执行与结果回收"
+      "desc": "执行 shell 命令并回收 stdout/stderr 与退出码",
+      "input": "{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\",\"description\":\"shell 命令\"},\"timeout_ms\":{\"type\":\"integer\",\"description\":\"超时毫秒（可选）\"},\"background\":{\"type\":\"boolean\",\"description\":\"是否后台执行（可选）\"}},\"required\":[\"command\"]}",
+      "output": "命令输出（stdout/stderr 合并）+ 退出码"
     }
   ]
 }

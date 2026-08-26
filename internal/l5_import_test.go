@@ -12,13 +12,13 @@ import (
 )
 
 const testCapabilityJSON = `{
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "测试工具",
   "type": "mcp",
   "summary": "测试用 mcp 封装能力",
   "trigger": "测试触发",
   "resources": [
-    {"type": "mcp", "name": "test_tool", "ref": "test-server", "description": "测试用"}
+    {"type": "mcp", "name": "test_tool", "ref": "test-server", "desc": "测试用"}
   ]
 }`
 
@@ -37,13 +37,13 @@ func TestImportCapabilityAPIType(t *testing.T) {
 	db := &DB{engine: newTestEngine(t)}
 
 	apiPath := writeTempCapability(t, t.TempDir(), "cap.json", `{
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "api-测试卡",
   "type": "api",
   "summary": "封装一个 api 方法",
   "trigger": "api 测试",
   "resources": [
-    {"type": "api", "name": "GetL0", "ref": "api:GetL0", "description": "读取画像"}
+    {"type": "api", "name": "GetL0", "ref": "api:GetL0", "desc": "读取画像"}
   ]
 }`)
 	cap, err := db.ImportCapability(apiPath)
@@ -55,14 +55,14 @@ func TestImportCapabilityAPIType(t *testing.T) {
 	}
 
 	badPath := writeTempCapability(t, t.TempDir(), "bad.json", `{
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "api-坏卡",
   "type": "api",
   "summary": "两个资源应被拒绝",
   "trigger": "api 测试",
   "resources": [
-    {"type": "api", "name": "GetL0", "ref": "api:GetL0", "description": "a"},
-    {"type": "api", "name": "UpdateL0", "ref": "api:UpdateL0", "description": "b"}
+    {"type": "api", "name": "GetL0", "ref": "api:GetL0", "desc": "a"},
+    {"type": "api", "name": "UpdateL0", "ref": "api:UpdateL0", "desc": "b"}
   ]
 }`)
 	if _, err := db.ImportCapability(badPath); err == nil {

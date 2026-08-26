@@ -53,7 +53,7 @@ func openWithEncoder(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 	return &DB{d}, nil
 }
 
-// loadBuiltinCapabilities parses the embedded memhop-capability/v2 manuals
+// loadBuiltinCapabilities parses the embedded memhop-capability/v3 manuals
 // (root capabilities/ directory) into read-only in-memory capabilities with
 // stable name-derived IDs. The files are validated by unit tests, so a
 // parse failure here means a corrupted build and aborts Open.

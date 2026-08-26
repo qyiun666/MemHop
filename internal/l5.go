@@ -23,9 +23,11 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-const capabilityFormatV2 = "memhop-capability/v2"
+const capabilityFormatV3 = "memhop-capability/v3"
 
-// CapabilityImport is the memhop-capability/v2 JSON file loaded from a path.
+// CapabilityImport is the memhop-capability/v3 JSON file loaded from a path.
+// The resource tool-declaration fields (Name/Desc/Input/Output) mirror the
+// host tool spec shape so hosts project capabilities with a pure field copy.
 type CapabilityImport struct {
 	Format    string              `json:"format"`
 	Name      string              `json:"name"`
@@ -44,7 +46,7 @@ type CapabilityListQuery struct {
 	Keyword string                 `json:"keyword,omitempty"`
 }
 
-// ImportCapability reads a memhop-capability/v2 file (or a directory
+// ImportCapability reads a memhop-capability/v3 file (or a directory
 // containing capability.json) and upserts it into L5. Repeated imports by
 // the same name update the definition while preserving usage statistics.
 func (db *DB) ImportCapability(path string) (*core.Capability, error) {
@@ -55,7 +57,7 @@ func (db *DB) ImportCapability(path string) (*core.Capability, error) {
 	return db.importCapabilityData(data, resolved)
 }
 
-// BuildCapability parses and validates one memhop-capability/v2 document
+// BuildCapability parses and validates one memhop-capability/v3 document
 // into an in-memory Capability. It touches no storage: lifecycle fields
 // (Status/Origin/timestamps) and IDHash are left to the caller.
 func BuildCapability(data []byte, source string) (*core.Capability, error) {
@@ -63,9 +65,9 @@ func BuildCapability(data []byte, source string) (*core.Capability, error) {
 	if err := json.Unmarshal(data, &in); err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse capability import file "+source, err)
 	}
-	if in.Format != capabilityFormatV2 {
+	if in.Format != capabilityFormatV3 {
 		return nil, common.NewError(common.ErrInvalidQuery,
-			"capability file must declare format "+capabilityFormatV2)
+			"capability file must declare format "+capabilityFormatV3)
 	}
 	if err := validateCapabilityImport(&in); err != nil {
 		return nil, err
@@ -337,6 +339,15 @@ func validateCapabilityImport(in *CapabilityImport) error {
 		return common.NewError(common.ErrInvalidQuery, "capability type is required")
 	default:
 		return common.NewError(common.ErrInvalidQuery, "unknown capability type: "+string(in.Type))
+	}
+	for _, res := range in.Resources {
+		if strings.TrimSpace(res.Name) == "" {
+			return common.NewError(common.ErrInvalidQuery, "resource name is required")
+		}
+		if strings.TrimSpace(res.Input) != "" && !json.Valid([]byte(res.Input)) {
+			return common.NewError(common.ErrInvalidQuery,
+				"resource input must be a valid JSON Schema string: "+res.Name)
+		}
 	}
 	return nil
 }

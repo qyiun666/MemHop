@@ -1,7 +1,7 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "memhop-guide",
-  "version": "2",
+  "version": "3",
   "type": "composite",
   "summary": "MemHop 记忆系统总说明书：Search 回忆并存储、Update 回写回复、Dream 巩固、L7 轨迹结晶为 L5 能力的完整循环（宿主通过 api 包直接调用）",
   "trigger": "使用 memhop 记忆数据库，或不确定该调用哪个 MemHop API 时；memhop memory guide 入门 指南",
@@ -10,25 +10,33 @@
       "type": "api",
       "name": "Search",
       "ref": "api:Search",
-      "description": "每轮收到用户消息时调用：检索相关记忆并把本条消息写入 L2 主题与 L4 档案；用返回的 Profile/ProfileBrief/Contexts/AssociatedContexts 组装提示上下文"
+      "desc": "每轮收到用户消息时调用：检索相关记忆并把本条消息写入 L2 主题与 L4 档案；用返回的 Profile/ProfileBrief/Contexts/AssociatedContexts 组装提示上下文",
+      "input": "{\"type\":\"object\",\"properties\":{\"text\":{\"type\":\"string\",\"description\":\"用户消息原文\"},\"timestamp\":{\"type\":\"integer\",\"description\":\"Unix 毫秒\"},\"auto_create\":{\"type\":\"boolean\",\"description\":\"跳过检索直建新话题（可选）\"},\"directed_l2_id\":{\"type\":\"string\",\"description\":\"定向写入指定场景（可选）\"},\"directed_l3_id\":{\"type\":\"string\",\"description\":\"限定知识图谱范围（可选）\"}},\"required\":[\"text\",\"timestamp\"]}",
+      "output": "SearchResult（Profile/Contexts/AssociatedContexts/NewTopicID）"
     },
     {
       "type": "api",
       "name": "Update",
       "ref": "api:Update",
-      "description": "每次生成回复后调用：把回复追加到 Search 返回的 NewTopicID"
+      "desc": "每次生成回复后调用：把回复追加到 Search 返回的 NewTopicID",
+      "input": "{\"type\":\"object\",\"properties\":{\"topic_id\":{\"type\":\"string\",\"description\":\"Search 返回的 NewTopicID（16 位 hex）\"},\"text\":{\"type\":\"string\",\"description\":\"Agent 回复原文\"},\"timestamp\":{\"type\":\"integer\",\"description\":\"Unix 毫秒\"}},\"required\":[\"topic_id\",\"text\",\"timestamp\"]}",
+      "output": "ok"
     },
     {
       "type": "api",
       "name": "Dream",
       "ref": "api:Dream",
-      "description": "空闲期/固定周期调用：巩固记忆（L2 压缩、L1 衰减、L0 画像蒸馏）"
+      "desc": "空闲期/固定周期调用：巩固记忆（L2 压缩、L1 衰减、L0 画像蒸馏）",
+      "input": "{\"type\":\"object\",\"properties\":{\"scene_id\":{\"type\":\"string\",\"description\":\"指定场景 ID（16 位 hex，空串巩固全部活跃场景）\"}},\"required\":[\"scene_id\"]}",
+      "output": "bool（是否有活跃场景被巩固）"
     },
     {
       "type": "api",
       "name": "Crystallize",
       "ref": "api:Crystallize",
-      "description": "轨迹积累后调用：把 L7 操作轨迹结晶为 L5 能力草稿，宿主激活后复用"
+      "desc": "轨迹积累后调用：把 L7 操作轨迹结晶为 L5 能力草稿，宿主激活后复用",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
+      "output": "CrystallizeResult（CreatedIDs/ReusedIDs/MergedIDs/Details）"
     }
   ],
   "workflow": {

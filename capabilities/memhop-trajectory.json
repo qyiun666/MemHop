@@ -1,7 +1,7 @@
 {
-  "format": "memhop-capability/v2",
+  "format": "memhop-capability/v3",
   "name": "memhop-trajectory",
-  "version": "2",
+  "version": "3",
   "type": "composite",
   "summary": "L7 轨迹说明书：按会话追加 Agent 操作事件流、读取轨迹、查看统计（判断是否值得结晶）、删除轨迹",
   "trigger": "需要记录操作轨迹、查看轨迹事件、判断结晶时机或清理轨迹时；trajectory 轨迹 l7 事件 操作日志 operation log",
@@ -10,25 +10,33 @@
       "type": "api",
       "name": "AppendTrajectory",
       "ref": "api:AppendTrajectory",
-      "description": "怎么用：重要操作（工具调用、子任务、关键决策）时调用。签名 AppendTrajectory(sessionID string, ev TrajectorySlot) error；ev 字段：EventType=turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end、Payload=事件内容（截断 4KB）、L4Ref=关联 L4 档案（可选）、Timestamp=Unix 毫秒；Seq 自动分配"
+      "desc": "重要操作（工具调用、子任务、关键决策）时调用；EventType=turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end、Payload=事件内容（截断 4KB）、L4Ref=关联 L4 档案（可选）、Timestamp=Unix 毫秒；Seq 自动分配",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"},\"event_type\":{\"type\":\"string\",\"description\":\"turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end\"},\"payload\":{\"type\":\"string\",\"description\":\"事件内容（截断 4KB）\"},\"timestamp\":{\"type\":\"integer\",\"description\":\"Unix 毫秒\"}},\"required\":[\"session_id\",\"event_type\",\"payload\",\"timestamp\"]}",
+      "output": "ok（Seq 自动分配）"
     },
     {
       "type": "api",
       "name": "ReadTrajectory",
       "ref": "api:ReadTrajectory",
-      "description": "读取会话全部轨迹事件（按 Seq 升序）。签名 ReadTrajectory(sessionID string) ([]TrajectorySlot, error)；sessionID=会话 ID（16 位 hex）"
+      "desc": "读取会话全部轨迹事件（按 Seq 升序）",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
+      "output": "TrajectorySlot 列表（按 Seq 升序）"
     },
     {
       "type": "api",
       "name": "TrajectoryStats",
       "ref": "api:TrajectoryStats",
-      "description": "轨迹统计：事件总数、各事件类型计数、最后事件时间戳。签名 TrajectoryStats(sessionID string) (*TrajectoryStats, error)；用于判断该会话是否值得结晶（工具调用数阈值）"
+      "desc": "轨迹统计：事件总数、各事件类型计数、最后事件时间戳；用于判断该会话是否值得结晶（工具调用数阈值）",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
+      "output": "TrajectoryStats（Steps/ToolUsage/LastAppendAt）"
     },
     {
       "type": "api",
       "name": "DeleteTrajectory",
       "ref": "api:DeleteTrajectory",
-      "description": "删除会话整条轨迹。签名 DeleteTrajectory(sessionID string) error；sessionID=会话 ID（16 位 hex）；清理后该会话不可再结晶"
+      "desc": "删除会话整条轨迹；清理后该会话不可再结晶",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
+      "output": "ok"
     }
   ],
   "workflow": {

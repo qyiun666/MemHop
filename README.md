@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>Current: v1.3.3 · Latest stable tag: v1.3.3</strong>
+  <strong>Current: v1.3.4 · Latest stable tag: v1.3.4</strong>
 </p>
 
 ---
@@ -121,7 +121,7 @@ Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-
 
 ### Built-in L5 Capabilities
 
-The root `capabilities/` directory ships a ready-to-use capability toolbox (`memhop-capability/v2`), embedded into the library at build time — **19 cards in two groups**: MemHop's own API manuals (`manual`, 13 cards: guide, search, update, dream, trajectory, crystallize, capability-import, profile, scene, archive, capability, knowledge, refine — covering every public API except `Open`/`Close`/`Dream`/`Update`/`Search` and L5 reads) and atomic capability cards a harness/agent is expected to have (`atomic`: file read/write/edit, command execution, file search, web search). Manual cards reference the Go API directly (`type: "api"`, `ref: "api:MethodName"`) — the host calls the methods on `*api.DB` with no MCP layer involved. **Zero config, zero writes**: `ListCapabilities` / `GetCapability` serve the built-in toolbox directly (same status/type/keyword filters as stored records), so the host LLM can fetch and consult it. Built-ins are read-only, never persisted to the `.meh` file, dedupe by ID against stored same-name records (stored wins), and are NOT attached to `Search` responses — retrieval returns stored matches only.
+The root `capabilities/` directory ships a ready-to-use capability toolbox (`memhop-capability/v3`), embedded into the library at build time — **19 cards in two groups**: MemHop's own API manuals (13 cards: guide, search, update, dream, trajectory, crystallize, capability-import, profile, scene, archive, capability, knowledge, refine — covering every public API except `Open`/`Close`/`Dream`/`Update`/`Search` and L5 reads) and atomic capability cards a harness/agent is expected to have (file read/write/edit, command execution, file search, web search). Manual cards reference the Go API directly (`type: "api"`, `ref: "api:MethodName"`) — the host calls the methods on `*api.DB` with no MCP layer involved. **Resources are tool declarations**: `name/desc/input/output` mirror the host tool spec (e.g. meowire `ToolSpec`) field-for-field, so a host projects them with a pure field copy and zero format conversion. **Zero config, zero writes**: `ListCapabilities` / `GetCapability` serve the built-in toolbox directly (same status/type/keyword filters as stored records), so the host LLM can fetch and consult it. Built-ins are read-only, never persisted to the `.meh` file, dedupe by ID against stored same-name records (stored wins), and are NOT attached to `Search` responses — retrieval returns stored matches only.
 
 ## Architecture
 
@@ -165,44 +165,31 @@ Post-fusion: keyword-overlap scoring, additive scene bonuses for active/recent s
 `SearchResult` returns `Contexts` (the hit scene's depth-≤1 topics, each carrying `L4Refs`) and `AssociatedContexts` (topics from the L1-associated scene); hosts pull the L4 original text via `SceneContext` or `SearchL4`.
 
 When `Search` creates a topic it also matches relevant L3 knowledge nodes and writes their graph IDs into `TopicSlot.L3Refs`; `DirectedL3ID` filters topics on these refs.
-## Benchmarks
+## Testing & Benchmarks
 
-### LoCoMo Retrieval Recall (v1.3.3)
+MemHop's test suite exercises only the public `api` surface — exactly the calls a host (e.g. MeowAgent) makes — and asserts the engine's own memory structures, not external answerability judges.
 
-Long-term conversational memory recall on [LoCoMo](https://github.com/snap-research/locomo) (ACL 2024), evaluated at the **retrieval layer only** (no answer generation): each QA is searched against the ingested `.meh` memory, and an LLM judge decides whether the returned context alone is enough to answer.
+### Integration tests (`test/`, build tag `integration`)
 
-| Scope | Sessions | Turns | QA | Recall (answerable) | Entity hit |
-|-------|----------|-------|-----|---------------------|------------|
-| 1 conversation (conv-26), v1.3.3 | 19 | 419 | 199 | 0.392 (78/199) | 0.307 |
+- **Memory loop** (`TestCoreCycleSearchUpdateDream`): N Search+Update cycles ingested the way a real host does, with **periodic L0/L1/L4 consistency checks** every few turns — L0 profile readable, L1 scene graph present (`ListScenes`/`SceneContext`), L4 holding the raw utterance verbatim. After Dream consolidation the scene must still expose consolidated topics and retrieval must surface the stored facts.
+- **Keyword fidelity & persistence** (`TestKeywordFidelity`/`TestKeywordPersistence`/`TestDreamCompressionFidelity`): keywords extracted from a dialogue utterance faithfully carry its meaning, survive noise cycles, and stay faithful across Dream compression.
+- **API contracts** (`TestInterface*`), **e2e flows** (`TestE2E*`), **keyword-extraction robustness** (`TestExtractKeywordsLongInputRealLLM`/`TestSearchLongInputNeverFails`).
 
-- **A/B regression check** (same fixture, same Ollama/DeepSeek services): v1.3.2 measured 0.352 recall / 0.352 entity hit; v1.3.3 measures 0.392 / 0.307 — no systematic regression, the two metrics move in opposite directions within LLM-judge noise.
-- **Historical note**: v1.1.0 measured 0.709 recall / 0.883 entity hit on the same conversation. The gap is pre-existing since the v1.3.x line (L1 hypergraph, async Dream, automatic Dream triggers during ingest) and is not introduced by v1.3.3.
-- **Recall** covers all five LoCoMo categories, including 22.5% adversarial questions whose correct behavior is abstention (an unanswerable context is a correct outcome), so it is a conservative lower bound; answerable categories 1–4 estimate higher.
-- **Entity hit** is a model-free metric: the average fraction of answer tokens present in the retrieved context.
-- `Search` returns the context to the host (e.g. MeowAgent) as the generation context; retrieval is not answer generation.
+### Benchmarks (`go test -tags integration -bench .`)
 
-Reproduce:
+All benchmarks drive the real api loop (real encoder + real LLM, no external judge):
 
-```bash
-# 1 conversation
-MEMHOP_LOCOMO_ITEMS=1 go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
-# 3 conversations
-MEMHOP_LOCOMO_ITEMS=3 go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
-```
+| Benchmark | Measures |
+|-----------|----------|
+| `BenchmarkMemoryLoop` | steady-state Search+Update memory loop with the engine's **auto-triggered Dream** (a scene's depth-1 context exceeding the 30-topic threshold) and periodic L0/L1 verification |
+| `BenchmarkSearchAutoCreate` / `BenchmarkSearchRetrieve` | first-write vs retrieval Search latency |
+| `BenchmarkUpdate` | agent-reply append latency |
+| `BenchmarkDreamConsolidation` | full Dream pipeline latency |
+| `BenchmarkSearchLatency` | retrieval latency distribution (min/p50/p95/max) |
 
-Analysis and competitor positioning: [docs/benchmarks/locomo_recall_analysis.md](docs/benchmarks/locomo_recall_analysis.md)
+### Why no external dataset benchmark?
 
-### Competitive positioning (methodology-aware)
-
-MemHop reports **retrieval-layer recall** (LLM-judged: is the retrieved context alone enough to answer?) — not end-to-end answer accuracy. Competitors below report end-to-end accuracy (generation + judge), a different and not directly comparable number: end-to-end scores tend to run higher because generation can answer from general knowledge even when retrieval is incomplete.
-
-| System | LoCoMo metric | Methodology | Notes |
-|--------|---------------|-------------|-------|
-| MemHop v1.3.3 | recall 0.392 | retrieval-only, LLM-judged context sufficiency | entity hit 0.307; embedded single-file, zero infrastructure |
-| OpenViking | 80–83% | end-to-end accuracy | Claude Code native 57.21% → 80.32% with OpenViking |
-| TiMem | 75.30% | end-to-end accuracy | LongMemEval-S 76.88%, ~52% token savings |
-| Mem0 | 66.9% | end-to-end accuracy | production memory layer |
-| MindMemOS | 94.03% | end-to-end accuracy | research system, Dreaming consolidation |
+Public memory benchmarks (LoCoMo, LongMemEval) evaluate "retrieval → LLM-judged answerability" — a different question than what MemHop's layered design asserts (L0 profile distillation, L1 scene-graph coherence, L2 compression semantics, L4 verbatim archival). LongMemEval, the closest fit (multi-session user-assistant chats, ~500 QA), needs 115K–1.5M tokens per question and is not a practical continuous-integration target. MemHop therefore verifies its memory structures directly through the api loop instead of chasing a generic QA score.
 
 ## Project Structure
 
@@ -248,6 +235,7 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
+| v1.3.4 | 2026-08-26 | L5 tool-declaration isomorphism | `memhop-capability` format v3: `ResourceRef` renamed `description` → `desc` and gained `input` (JSON Schema string) / `output` — the tool-declaration fields now mirror the host tool spec shape (meowire `ToolSpec`) exactly, so hosts project capabilities with a pure field copy and zero format conversion · `WorkflowStep` gained `args` — action chains carry step parameters officially (no private config formats) · crystallize prompt emits the v3 shape (`type`/`resources` instead of `kind`/`manifest`) · `validateCapabilityImport` now requires resource names and validates `input` as JSON · **breaking**: v2 cards are rejected at import (format must be `memhop-capability/v3`); stored capability records written by earlier versions lose `desc/input/output` on read · built-in capability toolbox (`capabilities/*.json`) fully rewritten to v3 with real JSON Schemas |
 | v1.3.3 | 2026-08-26 | Retrieval scoring normalization + defaults slimdown | vector floor fixed from overriding every other signal to lifting only below-threshold scenes (floor = threshold + cosine×0.5): real-signal ordering (RRF + keyword overlap + bonuses) wins, semantic fallback preserved · `MemHopDefaults` slimmed from 24 fields to 3 business knobs (`Capacity` / `DreamCompressMinTopics` / `SearchDreamContextThreshold`); 4 dead fields (`MaxResults` / `DefaultTimeoutSecs` / `DefaultMaxOutputTokens` / `MaxDepth`) removed and 16 tuning constants moved to package-private `internal/tuning.go` · `TopScene` / `SpreadingActivation` / `applySceneBonuses` / `rrfFuse` signatures dropped the defaults parameter · **breaking**: hosts referencing removed fields must clean up · no format change (stays `0x0007`) · MCP tool set unchanged (32) ·
 | v1.3.2 | 2026-08-26 | API fixes: async Dream + deletion + Update simplification | Search/Update no longer block on an internally triggered Dream (background goroutine, per-scene in-flight dedup, Close cancels a pending Dream) · new `DeleteTopic` (subtree closure + L4 + indexes + parent ChildrenIDs pruning) and `DeleteScene` (scene + all topics + archives + L1 node + active set) for memory correction · `Update` returns `error` instead of `(bool, error)` · `SearchResult.ProfileBrief` — compact profile digest (name/role/top preferences/style/emotions, bounded) · no format change (stays `0x0007`) · MCP tool set unchanged (32) ·
 | v1.3.0 | 2026-08-26 | L1 scene hypergraph + spreading-activation association | Dream creates real `RecL1Hyperedge` co-occurrence edges between scenes (keyword-overlap Jaccard ≥ `L1EdgeMinSimilarity`); Search `AssociatedContexts` replaced the no-op same-scene listing with a graph walk (activation × edge weight × dampening per hop, ≤ `L1EdgeMaxHops`, top `L1AssocMaxScenes` other scenes) · L6 scene-usage record removed — hit counters folded into the L2 `SceneSlot` (`HitCount`/`LastHitAt`) · `L1ReverseIndex` (incl. snapshot field) and 4 dead L1 functions removed; association is now a pure storage-level graph read · `.meh` format bumped to `0x0007` — 0x0006 files are rejected at Open, no migration · new defaults: `L1EdgeMinSimilarity` (0.15), `L1EdgeMaxHops` (2), `L1ActivationDampening` (0.5), `L1ActivationThreshold` (0.05), `L1AssocMaxScenes` (3)

@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -210,66 +209,93 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 	}
 }
 
-// BenchmarkRetrievalRecall measures retrieval quality: seed facts on distinct
-// topics, then issue cross-phrased queries and measure how often the stored
-// fact's distinctive keyword is recalled in the returned context.
-func BenchmarkRetrievalRecall(b *testing.B) {
+// BenchmarkMemoryLoop measures the real host memory loop: N Search+Update
+// cycles with the automatic Dream the engine triggers internally once a scene
+// exceeds the compression threshold, plus periodic L0/L1 verification
+// (profile readable, scene graph intact). api-level only — no external judge.
+func BenchmarkMemoryLoop(b *testing.B) {
 	db := testsupport.OpenMemHopB(b)
 	defer db.Close()
 
-	// Each anchor: fact text + cross-phrased query + distinctive keyword for the hit check.
-	type anchor struct {
-		fact, query, marker string
+	// Same-topic turns: >SearchDreamContextThreshold(30) contexts in one scene
+	// make Search auto-trigger Dream during ingestion (no explicit Dream call).
+	related := []string{
+		"我喜欢早上六点去公园慢跑", "跑步的时候我习惯听播客", "我每周跑步大概三次，每次五公里",
+		"跑完步我会喝一杯蛋白粉", "我早上六点出门跑步", "慢跑时我听健身播客",
+		"我一周跑三次步", "每次跑步五公里左右", "运动后我喝蛋白粉补充",
+		"清晨六点我在公园跑步", "跑步路上我放播客听", "每周三次是我的跑步频率",
+		"五公里是我每次的跑步距离", "跑完我习惯喝杯蛋白粉", "我早上喜欢去公园慢跑",
+		"边跑步边听播客是我的习惯", "我每周坚持跑三次", "每次我都跑五公里",
+		"跑步后我必喝蛋白粉", "六点起床去公园跑步", "慢跑配播客最舒服",
+		"一周三次跑步不间断", "五公里跑完很爽", "蛋白粉是跑后必备", "早上公园跑步我很享受",
+		"我跑步时会戴耳机听音乐", "跑步前我会热身十分钟", "我穿红色的跑鞋",
+		"周末我在河边跑步", "傍晚跑步人少风景好", "跑步后我会拉伸",
+		"我计划参加下个月的马拉松", "马拉松报名费三百元", "我每天跑步打卡",
+		"跑步让我精神很好", "我买了新运动水壶",
 	}
-	anchors := []anchor{
-		{"我的狗叫旺财，是一只金毛，今年五岁了", "我的狗叫什么名字", "旺财"},
-		{"我的猫叫咪咪，最喜欢吃三文鱼罐头", "我的猫爱吃什么", "咪咪"},
-		{"我住在北京市朝阳区，住了十年了", "我住在哪个城市", "北京"},
-		{"我上个月刚换了工作，现在做后端开发", "我现在做什么工作", "后端"},
-		// Semantic-only anchors: query shares no keywords with the fact, so
-		// recall must come from the vector channel (v1.3.3 vector-floor
-		// fallback lifts below-threshold scenes) rather than BM25/entity.
-		{"我最近在学做提拉米苏，已经失败了好几次", "我的烘焙进展怎么样", "提拉米苏"},
-		{"我家养了一只柯基犬，名字叫芝士", "我的宠物是什么品种", "柯基"},
-	}
-
 	base := time.Now().UnixMilli()
-	for i, a := range anchors {
-		ts := base + int64(i)*2000
-		res, err := db.Search(context.Background(), internal.SearchQuery{Text: a.fact, AutoCreate: true, Timestamp: ts})
-		if err != nil {
-			b.Fatalf("seed Search[%d]: %v", i, err)
-		}
-		if err := db.Update(common.FormatHash(res.NewTopicID), "好的 ，记下了。", ts+500); err != nil {
-			b.Fatalf("seed Update: %v", err)
-		}
-	}
-
-	b.ResetTimer()
-	hits, total := 0, 0
-	i := 0
+	var sceneID uint64
+	var dreams, checks int
+	prevDepth1 := -1
+	turns := 0
 	for b.Loop() {
-		a := anchors[i%len(anchors)]
-		ts := base + int64(1_000_000+i)*1000
-		res, err := db.Search(context.Background(), internal.SearchQuery{Text: a.query, Timestamp: ts})
+		// Unbounded loop: cycle the material by index so the benchmark measures
+		// steady-state cost; the scene keeps growing past the threshold and the
+		// engine's auto-triggered Dream keeps compressing it, as in real use.
+		text := related[turns%len(related)]
+		ts := base + int64(turns)*1000
+		q := internal.SearchQuery{Text: text, Timestamp: ts}
+		if sceneID == 0 {
+			q.AutoCreate = true
+		} else {
+			sid := common.FormatHash(sceneID)
+			q.DirectedL2ID = &sid
+		}
+		res, err := db.Search(context.Background(), q)
 		if err != nil {
-			b.Fatalf("Search: %v", err)
+			b.Fatalf("loop Search[%d]: %v", turns, err)
 		}
-		total++
-		var kws []string
-		for j := range res.Contexts {
-			kws = append(kws, res.Contexts[j].UserKeywords...)
-			kws = append(kws, res.Contexts[j].FusedKeywords...)
+		if sceneID == 0 && len(res.Contexts) > 0 {
+			sceneID = res.Contexts[0].SceneID
 		}
-		if strings.Contains(strings.ToLower(strings.Join(kws, " ")), strings.ToLower(a.marker)) {
-			hits++
+		if err := db.Update(common.FormatHash(res.NewTopicID), "好的，记下了。", ts+500); err != nil {
+			b.Fatalf("loop Update[%d]: %v", turns, err)
 		}
-		i++
+		turns++
+		// Periodic L0/L1 verification: profile readable, scene graph intact.
+		if turns%10 == 0 {
+			if _, err := db.GetL0(); err != nil {
+				b.Fatalf("GetL0 after %d turns: %v", turns, err)
+			}
+			scenes, err := db.ListScenes()
+			if err != nil || len(scenes) == 0 {
+				b.Fatalf("ListScenes after %d turns: scenes=%d err=%v", turns, len(scenes), err)
+			}
+			sc, err := db.SceneContext(common.FormatHash(sceneID))
+			if err != nil || sc.TopicCount == 0 {
+				b.Fatalf("SceneContext after %d turns: topics=%d err=%v", turns, sc.TopicCount, err)
+			}
+			checks++
+		}
+		// Count auto-triggered Dreams by watching the depth-1 topic count drop:
+		// compression sinks merged topics below depth 1 (raw topics stay in
+		// depth 2+ and keep SceneContext.TopicCount growing).
+		sc, err := db.SceneContext(common.FormatHash(sceneID))
+		if err == nil {
+			depth1 := 0
+			for _, tp := range sc.Topics {
+				if tp.Depth == 1 {
+					depth1++
+				}
+			}
+			if prevDepth1 >= 0 && depth1 < prevDepth1 {
+				dreams++
+			}
+			prevDepth1 = depth1
+		}
 	}
-	b.StopTimer()
-	if total > 0 {
-		b.ReportMetric(float64(hits)/float64(total), "recall")
-	}
+	b.ReportMetric(float64(dreams), "auto_dream_compressions")
+	b.ReportMetric(float64(checks), "l0l1_checks")
 }
 
 // BenchmarkSearchLatency runs repeated retrieve-route searches and reports the

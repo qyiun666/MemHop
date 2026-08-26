@@ -259,7 +259,7 @@ func TestParseCrystallizeResponse(t *testing.T) {
   "capabilities": [
     {"action": "create", "capability": {"name": "重构流程", "type": "composite", "summary": "重构", "trigger": "需要重构时", "resources": [
       {"type": "mcp", "name": "read_file", "config": "{\"file\":\"a.go\"}"}, {"type": "mcp", "name": "write_file"},
-      {"type": "skill", "name": "s1", "description": "d"}
+      {"type": "skill", "name": "s1", "desc": "d"}
     ]}},
     {"action": "reuse", "reuse_id": "a1b2c3d4e5f67890", "capability": {"name": "已有能力"}},
     {"action": "create", "capability": {"name": ""}}

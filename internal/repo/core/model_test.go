@@ -399,7 +399,7 @@ func TestCapabilityRoundtrip(t *testing.T) {
 		SuccessRate: 0.92, TriggerCount: 5,
 		LastTriggered: 1000000,
 		Resources: []ResourceRef{
-			{Type: CapabilitySkill, Name: "deploy-checklist", Description: "pre-deploy checks"},
+			{Type: CapabilitySkill, Name: "deploy-checklist", Desc: "pre-deploy checks"},
 			{Type: CapabilityMCP, Name: "deploy-mcp", Ref: "localhost:9000", Config: &cfg},
 			{Type: CapabilityMCP, Name: "run_test"},
 		},
