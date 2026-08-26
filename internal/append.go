@@ -43,11 +43,11 @@ func (db *DB) AppendL4Message(topicID string, text string, timestamp int64, role
 	if len(topics) == 0 {
 		return 0, common.NewError(common.ErrNotFound, "topic not found")
 	}
-	archiveID, err := repo.AppendArchiveL4(db.engine, topicID, role, core.ContentText, text, timestamp)
+	archiveID, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicID, role, core.ContentText, text, timestamp)
 	if err != nil {
 		return 0, err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, topicID, []uint64{archiveID}) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, topicID, []uint64{archiveID}) {
 		return 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
 	return archiveID, nil

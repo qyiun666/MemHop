@@ -71,7 +71,7 @@ func writeTopic(t *testing.T, engine *core.StorageEngine, sparse *index.SparseIn
 	if err != nil {
 		t.Fatalf("marshal topic: %v", err)
 	}
-	if _, err := engine.WriteRecord(core.RecL2Topic, topic.ID, data); err != nil {
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, topic.ID, data); err != nil {
 		t.Fatalf("write topic: %v", err)
 	}
 	fields := make([]string, 0, len(topic.FusedKeywords)+len(topic.UserKeywords)+len(topic.AgentKeywords))
@@ -81,7 +81,7 @@ func writeTopic(t *testing.T, engine *core.StorageEngine, sparse *index.SparseIn
 	terms := index.Tokenize(strings.Join(fields, " "))
 	sparse.AddDocument(topic.ID, terms, uint32(len(terms)))
 	if topic.CentroidPageRef != 0 {
-		if _, err := engine.WriteRecord(core.RecVecCentroid, topic.CentroidPageRef, common.F32SliceToBytes(testVec)); err != nil {
+		if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecVecCentroid, topic.CentroidPageRef, common.F32SliceToBytes(testVec)); err != nil {
 			t.Fatalf("write vector: %v", err)
 		}
 	}
@@ -406,7 +406,7 @@ func TestSpreadingActivation(t *testing.T) {
 
 	mk := func(scene string, kws []string) {
 		t.Helper()
-		if !repo.CreateTopicL2(engine, scene, kws, 1000, 0) {
+		if !repo.CreateTopicL2(engine, core.DefaultAgentID, scene, kws, 1000, 0) {
 			t.Fatal("create topic")
 		}
 	}
@@ -414,13 +414,13 @@ func TestSpreadingActivation(t *testing.T) {
 	mk(sceneB, []string{"memory", "database"})
 	mk(sceneC, []string{"database", "code"})
 	mk(sceneD, []string{"cooking", "food"})
-	if _, err := repo.SyncL1NodesFromL2(engine); err != nil {
+	if _, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	if _, err := repo.BuildL1Hyperedges(engine, 0.15); err != nil {
+	if _, err := repo.BuildL1Hyperedges(engine, core.DefaultAgentID, 0.15); err != nil {
 		t.Fatalf("build edges: %v", err)
 	}
-	l2Meta := index.BuildL2MetaFromEngine(engine)
+	l2Meta := index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
 	sceneBHash := mustParse(t, sceneB)
 	sceneDHash := mustParse(t, sceneD)
 

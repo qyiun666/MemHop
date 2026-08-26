@@ -90,7 +90,7 @@ func TestImportCapabilityUnchangedSkip(t *testing.T) {
 	if second.UpdatedAt != first.UpdatedAt {
 		t.Fatalf("unchanged re-import must be a no-op: UpdatedAt %d -> %d", first.UpdatedAt, second.UpdatedAt)
 	}
-	if got := len(core.CollectAllCapabilities(db.engine)); got != 1 {
+	if got := len(core.CollectAllCapabilities(db.engine, core.DefaultAgentID)); got != 1 {
 		t.Fatalf("unchanged re-import appended a record: %d capabilities", got)
 	}
 }

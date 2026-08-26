@@ -54,7 +54,7 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 	}
 
 	// Stage 2: rebuild retrieval indexes (sparse/L2Meta) in one scan.
-	newSparse, newL2Meta, err := index.RebuildSearchIndexes(db.engine)
+	newSparse, newL2Meta, err := index.RebuildSearchIndexes(db.engine, core.DefaultAgentID)
 	if err != nil {
 		return false, err
 	}
@@ -73,14 +73,14 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 
 	// Stage 2.25: L1 write/update from the current L2 structure (L1 is
 	// written only during Dream; stale nodes are removed in Stage 3).
-	if _, err := repo.SyncL1NodesFromL2(db.engine); err != nil {
+	if _, err := repo.SyncL1NodesFromL2(db.engine, core.DefaultAgentID); err != nil {
 		return false, err
 	}
 
 	// Stage 2.3: create/refresh co-occurrence hyperedges between scenes
 	// (keyword-overlap Jaccard >= L1EdgeMinSimilarity). Fresh edges are
 	// decayed by Stage 4 like every other edge.
-	if _, err := repo.BuildL1Hyperedges(db.engine, l1EdgeMinSimilarity); err != nil {
+	if _, err := repo.BuildL1Hyperedges(db.engine, core.DefaultAgentID, l1EdgeMinSimilarity); err != nil {
 		return false, err
 	}
 	if err := db.stageCancelled(ctx, "l1_hyperedges"); err != nil {
@@ -88,7 +88,7 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 	}
 
 	// Stage 3: L1 rebuild (remove stale nodes).
-	if _, err := repo.RebuildL1FromL2(db.engine, newL2Meta, &decayParams); err != nil {
+	if _, err := repo.RebuildL1FromL2(db.engine, core.DefaultAgentID, newL2Meta, &decayParams); err != nil {
 		return false, err
 	}
 	if err := db.stageCancelled(ctx, "l1_rebuild"); err != nil {
@@ -96,7 +96,7 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 	}
 
 	// Stage 4: L1 time decay.
-	if _, err := repo.DecayL1Network(db.engine, newL2Meta, &decayParams); err != nil {
+	if _, err := repo.DecayL1Network(db.engine, core.DefaultAgentID, newL2Meta, &decayParams); err != nil {
 		return false, err
 	}
 	if err := db.stageCancelled(ctx, "l1_decay"); err != nil {
@@ -104,7 +104,7 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 	}
 
 	// Stage 5: L0 profile rebuild.
-	if err := repo.GenerateProfileL0(db.engine, newSparse); err != nil {
+	if err := repo.GenerateProfileL0(db.engine, core.DefaultAgentID, newSparse); err != nil {
 		return false, err
 	}
 	if err := db.stageCancelled(ctx, "l0_profile"); err != nil {
@@ -224,7 +224,7 @@ func (db *DB) applyGroups(ctx context.Context, sceneID uint64, topics []core.Top
 		parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
 		parentIDStr := common.FormatHash(parentID)
 
-		archiveID, err := repo.AppendArchiveL4(db.engine, parentIDStr, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
+		archiveID, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, parentIDStr, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
 		if err != nil {
 			slog.Warn("dream: archive merged summary failed", "parent", parentIDStr, "err", err)
 			continue
@@ -243,16 +243,16 @@ func (db *DB) applyGroups(ctx context.Context, sceneID uint64, topics []core.Top
 			continue
 		}
 
-		if !repo.CreateFusedTopicL2(db.engine, common.FormatHash(sceneID), keywords, minTS, maxTS, g.NodeHashes, centroidRef) {
+		if !repo.CreateFusedTopicL2(db.engine, core.DefaultAgentID, common.FormatHash(sceneID), keywords, minTS, maxTS, g.NodeHashes, centroidRef) {
 			slog.Warn("dream: create fused topic failed", "parent", parentIDStr)
 			continue
 		}
 		// Attach the summary archive ref so retrieval can return the full text.
-		if !repo.UpdateTopicL4RefsL2(db.engine, parentIDStr, []uint64{archiveID}) {
+		if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, parentIDStr, []uint64{archiveID}) {
 			slog.Warn("dream: attach summary archive ref failed", "parent", parentIDStr)
 			continue
 		}
-		if _, err := repo.CompressTopicsL2(db.engine, g.NodeHashes, parentID); err != nil {
+		if _, err := repo.CompressTopicsL2(db.engine, core.DefaultAgentID, g.NodeHashes, parentID); err != nil {
 			slog.Warn("dream: compress child topics failed", "parent", parentIDStr, "err", err)
 			continue
 		}
@@ -279,7 +279,7 @@ func (db *DB) groupTimestamps(nodeHashes []uint64, byID map[uint64]core.TopicSlo
 }
 
 func (db *DB) distillL0Stage(ctx context.Context) error {
-	samples, _ := repo.SampleL1ForDistill(db.engine)
+	samples, _ := repo.SampleL1ForDistill(db.engine, core.DefaultAgentID)
 	if len(samples) == 0 {
 		return nil
 	}
@@ -291,7 +291,7 @@ func (db *DB) distillL0Stage(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := repo.MergeDistillIntoProfile(db.engine,
+	if err := repo.MergeDistillIntoProfile(db.engine, core.DefaultAgentID,
 		repo.DistillEmotion{Valence: out.Emotion.Valence, Arousal: out.Emotion.Arousal, Dominance: out.Emotion.Dominance},
 		repo.DistillMBTI{IE: out.MBTI.IE, NS: out.MBTI.NS, TF: out.MBTI.TF, JP: out.MBTI.JP, Type: out.MBTI.Type},
 	); err != nil {
@@ -305,7 +305,7 @@ func (db *DB) distillL0Stage(ctx context.Context) error {
 		}
 		perNode[id] = repo.L1NodeEmotion{Valence: n.Valence, Arousal: n.Arousal}
 	}
-	repo.BackfillL1Emotions(db.engine, perNode)
+	repo.BackfillL1Emotions(db.engine, core.DefaultAgentID, perNode)
 	return nil
 }
 
@@ -314,7 +314,7 @@ func (db *DB) distillL0Stage(ctx context.Context) error {
 // +0.05 (active), the rest get -0.05 (cold). Best-effort; failures only
 // warn and never abort Dream.
 func (db *DB) applyUsageFeedback() {
-	scenes := repo.CollectAllScenesL2(db.engine)
+	scenes := repo.CollectAllScenesL2(db.engine, core.DefaultAgentID)
 	if len(scenes) == 0 {
 		return
 	}
@@ -325,7 +325,7 @@ func (db *DB) applyUsageFeedback() {
 		byScene[s.SceneID] = s
 	}
 	const step = 0.05
-	for _, node := range core.CollectAllSceneNodes(db.engine) {
+	for _, node := range core.CollectAllSceneNodes(db.engine, core.DefaultAgentID) {
 		u, ok := byScene[node.SceneID]
 		imp := node.Importance
 		switch {
@@ -342,7 +342,7 @@ func (db *DB) applyUsageFeedback() {
 			continue
 		}
 		node.Importance = imp
-		if err := core.WriteSceneNode(db.engine, node.IDHash, &node); err != nil {
+		if err := core.WriteSceneNode(db.engine, core.DefaultAgentID, node.IDHash, &node); err != nil {
 			slog.Warn("dream: apply usage feedback failed", "node", node.IDHash, "err", err)
 		}
 	}

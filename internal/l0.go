@@ -18,7 +18,7 @@ func (db *DB) GetL0() (*core.ProfileSlot, error) {
 		return nil, err
 	}
 	defer db.mu.RUnlock()
-	slot, err := repo.GetProfileL0(db.engine)
+	slot, err := repo.GetProfileL0(db.engine, core.DefaultAgentID)
 	if err != nil {
 		if common.CodeOf(err) == common.ErrNotFound {
 			return &core.ProfileSlot{}, nil
@@ -34,5 +34,5 @@ func (db *DB) UpdateL0(slot *core.ProfileSlot) error {
 	if slot == nil {
 		return common.NewError(common.ErrInvalidQuery, "UpdateL0: slot is required")
 	}
-	return repo.UpdateProfileL0(db.engine, slot)
+	return repo.UpdateProfileL0(db.engine, core.DefaultAgentID, slot)
 }

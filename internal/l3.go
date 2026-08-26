@@ -57,7 +57,7 @@ func (db *DB) getL3Graph(id string) (*L3Graph, error) {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
 	var slot *core.HypergraphSlot
-	graphs := repo.ListGraphsL3(db.engine)
+	graphs := repo.ListGraphsL3(db.engine, core.DefaultAgentID)
 	for i := range graphs {
 		if graphs[i].IDHash == graphHash {
 			slot = &graphs[i]
@@ -67,8 +67,8 @@ func (db *DB) getL3Graph(id string) (*L3Graph, error) {
 	if slot == nil {
 		return nil, common.NewError(common.ErrNotFound, "graph not found")
 	}
-	nodes := repo.ListNodeL3(db.engine, id)
-	edges := repo.ListEdgeL3(db.engine, id)
+	nodes := repo.ListNodeL3(db.engine, core.DefaultAgentID, id)
+	edges := repo.ListEdgeL3(db.engine, core.DefaultAgentID, id)
 	if nodes == nil {
 		nodes = []core.HypergraphNode{}
 	}
@@ -83,7 +83,7 @@ func (db *DB) ListL3() ([]core.HypergraphSlot, error) {
 		return nil, err
 	}
 	defer db.mu.RUnlock()
-	all := repo.ListGraphsL3(db.engine)
+	all := repo.ListGraphsL3(db.engine, core.DefaultAgentID)
 	if all == nil {
 		return []core.HypergraphSlot{}, nil
 	}
@@ -106,7 +106,7 @@ func (db *DB) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult
 			"import mode must be Skip, Merge or Overwrite")
 	}
 	graphCache := make(map[string]uint64, len(items)) // Domain → graphID
-	for _, g := range repo.ListGraphsL3(db.engine) {
+	for _, g := range repo.ListGraphsL3(db.engine, core.DefaultAgentID) {
 		graphCache[g.Name] = g.IDHash
 	}
 	nodeTitles := make(map[uint64]map[string]struct{}) // graphID → existing node titles
@@ -130,7 +130,7 @@ func (db *DB) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult
 func (db *DB) importOneL3Item(item L3ImportItem, mode L3ImportMode, graphCache map[string]uint64, nodeTitles map[uint64]map[string]struct{}, result *L3ImportResult) error {
 	graphID, ok := graphCache[item.Domain]
 	if !ok {
-		gid, err := repo.CreateGraphL3(db.engine, item.Domain, core.HypergraphSource{Kind: core.SourceManual})
+		gid, err := repo.CreateGraphL3(db.engine, core.DefaultAgentID, item.Domain, core.HypergraphSource{Kind: core.SourceManual})
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func (db *DB) importOneL3Item(item L3ImportItem, mode L3ImportMode, graphCache m
 	}
 	if _, seen := nodeTitles[graphID]; !seen {
 		titles := make(map[string]struct{})
-		for _, n := range repo.ListNodeL3(db.engine, common.FormatHash(graphID)) {
+		for _, n := range repo.ListNodeL3(db.engine, core.DefaultAgentID, common.FormatHash(graphID)) {
 			titles[n.Title] = struct{}{}
 		}
 		nodeTitles[graphID] = titles
@@ -151,18 +151,18 @@ func (db *DB) importOneL3Item(item L3ImportItem, mode L3ImportMode, graphCache m
 			result.SkippedCount++
 			return nil
 		case L3ImportMerge:
-			if _, err := repo.MergeNodeL3(db.engine, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords); err != nil {
+			if _, err := repo.MergeNodeL3(db.engine, core.DefaultAgentID, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords); err != nil {
 				return err
 			}
 		case L3ImportOverwrite:
-			if _, err := repo.OverwriteNodeL3(db.engine, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords); err != nil {
+			if _, err := repo.OverwriteNodeL3(db.engine, core.DefaultAgentID, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords); err != nil {
 				return err
 			}
 		}
 		result.UpdatedIDs = append(result.UpdatedIDs, common.FormatHash(nodeID))
 		return nil
 	}
-	id, err := repo.CreateNodeL3(db.engine, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords)
+	id, err := repo.CreateNodeL3(db.engine, core.DefaultAgentID, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords)
 	if err != nil {
 		return err
 	}
@@ -173,7 +173,7 @@ func (db *DB) importOneL3Item(item L3ImportItem, mode L3ImportMode, graphCache m
 
 // UpdateL3 partially updates a graph slot (currently Name only).
 func (db *DB) UpdateL3(id string, name *string) (*L3Graph, error) {
-	if _, err := repo.UpdateGraphL3(db.engine, id, name); err != nil {
+	if _, err := repo.UpdateGraphL3(db.engine, core.DefaultAgentID, id, name); err != nil {
 		return nil, err
 	}
 	return db.getL3Graph(id)
@@ -184,7 +184,7 @@ func (db *DB) DeleteL3(id string) error {
 	if _, err := common.ParseID(id); err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
-	if !repo.DeleteGraphL3(db.engine, id) {
+	if !repo.DeleteGraphL3(db.engine, core.DefaultAgentID, id) {
 		return common.NewError(common.ErrIO, "delete graph", nil)
 	}
 	return nil

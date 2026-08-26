@@ -29,20 +29,20 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	engine := tempEngine(t)
 	sceneA := common.FormatHash(common.HashID("sceneA"))
 
-	if !CreateTopicL2(engine, sceneA, []string{"k1"}, 1000, 0) {
+	if !CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k1"}, 1000, 0) {
 		t.Fatal("create topic 1")
 	}
-	if !CreateTopicL2(engine, sceneA, []string{"k2"}, 2000, 0) {
+	if !CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k2"}, 2000, 0) {
 		t.Fatal("create topic 2")
 	}
-	changed, err := SyncL1NodesFromL2(engine)
+	changed, err := SyncL1NodesFromL2(engine, core.DefaultAgentID)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 	if changed != 1 {
 		t.Fatalf("want 1 node created, got %d", changed)
 	}
-	node, err := core.ReadSceneNode(engine, common.HashID("l1:"+sceneA))
+	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+sceneA))
 	if err != nil {
 		t.Fatal("l1 node missing")
 	}
@@ -55,29 +55,29 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	firstUpdatedAt := node.UpdatedAt
 
 	// Unchanged topic set must be a no-op so decay keeps accumulating.
-	changed, err = SyncL1NodesFromL2(engine)
+	changed, err = SyncL1NodesFromL2(engine, core.DefaultAgentID)
 	if err != nil {
 		t.Fatalf("sync #2: %v", err)
 	}
 	if changed != 0 {
 		t.Fatalf("want 0 changes, got %d", changed)
 	}
-	if node, err := core.ReadSceneNode(engine, common.HashID("l1:"+sceneA)); err == nil && node.UpdatedAt != firstUpdatedAt {
+	if node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+sceneA)); err == nil && node.UpdatedAt != firstUpdatedAt {
 		t.Fatalf("no-op sync must not refresh UpdatedAt")
 	}
 
 	// A new topic in the scene updates the node in place.
-	if !CreateTopicL2(engine, sceneA, []string{"k3"}, 3000, 0) {
+	if !CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k3"}, 3000, 0) {
 		t.Fatal("create topic 3")
 	}
-	changed, err = SyncL1NodesFromL2(engine)
+	changed, err = SyncL1NodesFromL2(engine, core.DefaultAgentID)
 	if err != nil {
 		t.Fatalf("sync #3: %v", err)
 	}
 	if changed != 1 {
 		t.Fatalf("want 1 node updated, got %d", changed)
 	}
-	node, err = core.ReadSceneNode(engine, common.HashID("l1:"+sceneA))
+	node, err = core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+sceneA))
 	if err != nil {
 		t.Fatalf("read node after update: %v", err)
 	}
@@ -87,17 +87,17 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 
 	// A second scene gets its own node.
 	sceneB := common.FormatHash(common.HashID("sceneB"))
-	if !CreateTopicL2(engine, sceneB, []string{"kb"}, 1000, 0) {
+	if !CreateTopicL2(engine, core.DefaultAgentID, sceneB, []string{"kb"}, 1000, 0) {
 		t.Fatal("create topic in scene B")
 	}
-	changed, err = SyncL1NodesFromL2(engine)
+	changed, err = SyncL1NodesFromL2(engine, core.DefaultAgentID)
 	if err != nil {
 		t.Fatalf("sync #4: %v", err)
 	}
 	if changed != 1 {
 		t.Fatalf("want 1 node for scene B, got %d", changed)
 	}
-	nodes := core.CollectAllSceneNodes(engine)
+	nodes := core.CollectAllSceneNodes(engine, core.DefaultAgentID)
 	if len(nodes) != 2 {
 		t.Fatalf("want 2 nodes total, got %d", len(nodes))
 	}
@@ -108,7 +108,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 func TestSyncL1NodesFromL2SkipsCompressed(t *testing.T) {
 	engine := tempEngine(t)
 	sceneA := common.FormatHash(common.HashID("sceneA"))
-	CreateTopicL2(engine, sceneA, []string{"k1"}, 1000, 0)
+	CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k1"}, 1000, 0)
 
 	parentID := core.ComputeTopicID(common.HashID(sceneA), 1000, 2000)
 	deep := core.TopicSlot{
@@ -116,13 +116,13 @@ func TestSyncL1NodesFromL2SkipsCompressed(t *testing.T) {
 		ParentID: &parentID, Depth: 3, UserKeywords: []string{"deep"},
 		UserTimestamp: 1000, AgentTimestamp: 2000,
 	}
-	if err := core.WriteTopicSlot(engine, deep.ID, &deep); err != nil {
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, deep.ID, &deep); err != nil {
 		t.Fatalf("write deep topic: %v", err)
 	}
-	if _, err := SyncL1NodesFromL2(engine); err != nil {
+	if _, err := SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	node, err := core.ReadSceneNode(engine, common.HashID("l1:"+sceneA))
+	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+sceneA))
 	if err != nil || len(node.TopicIDs) != 1 {
 		t.Fatalf("depth-3 topic must be excluded from the node: %+v", node)
 	}
@@ -139,32 +139,32 @@ func TestBuildL1Hyperedges(t *testing.T) {
 	sceneB := common.FormatHash(common.HashID("sceneB"))
 	sceneC := common.FormatHash(common.HashID("sceneC"))
 
-	if !CreateTopicL2(engine, sceneA, []string{"memory", "agent"}, 1000, 0) {
+	if !CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"memory", "agent"}, 1000, 0) {
 		t.Fatal("create topic A1")
 	}
-	if !CreateTopicL2(engine, sceneB, []string{"memory", "database"}, 1000, 0) {
+	if !CreateTopicL2(engine, core.DefaultAgentID, sceneB, []string{"memory", "database"}, 1000, 0) {
 		t.Fatal("create topic B1")
 	}
-	if !CreateTopicL2(engine, sceneC, []string{"cooking", "food"}, 1000, 0) {
+	if !CreateTopicL2(engine, core.DefaultAgentID, sceneC, []string{"cooking", "food"}, 1000, 0) {
 		t.Fatal("create topic C1")
 	}
-	if _, err := SyncL1NodesFromL2(engine); err != nil {
+	if _, err := SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
 
 	// A-B share "memory" → Jaccard 1/3 ≈ 0.33 ≥ 0.15; A-C and B-C share nothing.
-	n, err := BuildL1Hyperedges(engine, 0.15)
+	n, err := BuildL1Hyperedges(engine, core.DefaultAgentID, 0.15)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	if n != 1 {
 		t.Fatalf("want 1 edge, got %d", n)
 	}
-	nodeA, err := core.ReadSceneNode(engine, core.SceneNodeID(mustParse(t, sceneA)))
+	nodeA, err := core.ReadSceneNode(engine, core.DefaultAgentID, core.SceneNodeID(mustParse(t, sceneA)))
 	if err != nil || len(nodeA.EdgeIDs) != 1 {
 		t.Fatalf("node A should hold 1 edge: %+v err=%v", nodeA, err)
 	}
-	edge, err := core.ReadSceneEdge(engine, nodeA.EdgeIDs[0])
+	edge, err := core.ReadSceneEdge(engine, core.DefaultAgentID, nodeA.EdgeIDs[0])
 	if err != nil {
 		t.Fatalf("read edge: %v", err)
 	}
@@ -176,29 +176,29 @@ func TestBuildL1Hyperedges(t *testing.T) {
 	}
 
 	// Idempotent: same overlap must not refresh (weight unchanged → no write).
-	n, err = BuildL1Hyperedges(engine, 0.15)
+	n, err = BuildL1Hyperedges(engine, core.DefaultAgentID, 0.15)
 	if err != nil || n != 0 {
 		t.Fatalf("idempotent rebuild: n=%d err=%v", n, err)
 	}
 
 	// A higher threshold filters the weak edge out (nothing new created).
-	n, err = BuildL1Hyperedges(engine, 0.5)
+	n, err = BuildL1Hyperedges(engine, core.DefaultAgentID, 0.5)
 	if err != nil || n != 0 {
 		t.Fatalf("threshold filter: n=%d err=%v", n, err)
 	}
 
 	// More shared terms strengthen the edge (max update wins).
-	if !CreateTopicL2(engine, sceneA, []string{"database"}, 2000, 0) {
+	if !CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"database"}, 2000, 0) {
 		t.Fatal("create topic A2")
 	}
-	if _, err := SyncL1NodesFromL2(engine); err != nil {
+	if _, err := SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
 		t.Fatalf("sync #2: %v", err)
 	}
-	n, err = BuildL1Hyperedges(engine, 0.15)
+	n, err = BuildL1Hyperedges(engine, core.DefaultAgentID, 0.15)
 	if err != nil || n != 1 {
 		t.Fatalf("strengthen: n=%d err=%v", n, err)
 	}
-	edge, err = core.ReadSceneEdge(engine, nodeA.EdgeIDs[0])
+	edge, err = core.ReadSceneEdge(engine, core.DefaultAgentID, nodeA.EdgeIDs[0])
 	if err != nil {
 		t.Fatalf("read edge after strengthen: %v", err)
 	}

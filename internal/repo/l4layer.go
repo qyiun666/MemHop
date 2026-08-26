@@ -16,7 +16,7 @@ import (
 // L4 archive operations: AppendArchiveL4 stores a message (ID =
 // hash(contextID:createdAt:content)); QueryArchiveL4 queries by num
 // (1=keyword, 2=time range, 3=by id).
-func AppendArchiveL4(engine *core.StorageEngine, contextID string, role uint8, contentType core.ContentType, content string, createdAt int64) (uint64, error) {
+func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, contextID string, role uint8, contentType core.ContentType, content string, createdAt int64) (uint64, error) {
 	ctxHash, err := common.ParseID(contextID)
 	if err != nil {
 		return 0, common.NewError(common.ErrInvalidQuery, "parse context id", err)
@@ -30,7 +30,7 @@ func AppendArchiveL4(engine *core.StorageEngine, contextID string, role uint8, c
 		CreatedAt:   createdAt,
 		Content:     content,
 	}
-	if err := core.WriteArchiveSlot(engine, archiveID, arc); err != nil {
+	if err := core.WriteArchiveSlot(engine, agentID, archiveID, arc); err != nil {
 		return 0, err
 	}
 	return archiveID, nil
@@ -38,11 +38,11 @@ func AppendArchiveL4(engine *core.StorageEngine, contextID string, role uint8, c
 
 // DeleteArchivesL4 batch-deletes archive records by ID; missing IDs are
 // skipped (DeleteRecordBatch is a best-effort tombstone pass).
-func DeleteArchivesL4(engine *core.StorageEngine, ids []uint64) error {
+func DeleteArchivesL4(engine *core.StorageEngine, agentID uint64, ids []uint64) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	if _, err := engine.DeleteRecordBatch(ids); err != nil {
+	if _, err := engine.DeleteRecordBatch(agentID, ids); err != nil {
 		return common.NewError(common.ErrIO, "delete l4 archives", err)
 	}
 	return nil
@@ -50,11 +50,11 @@ func DeleteArchivesL4(engine *core.StorageEngine, ids []uint64) error {
 
 // QueryArchiveL4 queries archives: num==1 keyword substring match, num==2
 // time range [start, end] sorted by CreatedAt, num==3 by id (missing skipped).
-func QueryArchiveL4(engine *core.StorageEngine, num uint8, keyword string, start, end int64, ids []string) []core.ArchiveSlot {
+func QueryArchiveL4(engine *core.StorageEngine, agentID uint64, num uint8, keyword string, start, end int64, ids []string) []core.ArchiveSlot {
 	switch num {
 	case 1: // keyword
 		var out []core.ArchiveSlot
-		for _, arc := range core.CollectAllArchives(engine) {
+		for _, arc := range core.CollectAllArchives(engine, agentID) {
 			if strings.Contains(arc.Content, keyword) {
 				out = append(out, arc)
 			}
@@ -62,7 +62,7 @@ func QueryArchiveL4(engine *core.StorageEngine, num uint8, keyword string, start
 		return out
 	case 2: // time range
 		var out []core.ArchiveSlot
-		for _, arc := range core.CollectAllArchives(engine) {
+		for _, arc := range core.CollectAllArchives(engine, agentID) {
 			if arc.CreatedAt >= start && arc.CreatedAt <= end {
 				out = append(out, arc)
 			}
@@ -78,7 +78,7 @@ func QueryArchiveL4(engine *core.StorageEngine, num uint8, keyword string, start
 			if err != nil {
 				continue
 			}
-			arc, err := core.ReadArchiveSlot(engine, idHash)
+			arc, err := core.ReadArchiveSlot(engine, agentID, idHash)
 			if err != nil {
 				continue
 			}

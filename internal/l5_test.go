@@ -12,7 +12,7 @@ import (
 
 func writeCapability(t *testing.T, engine *core.StorageEngine, c *core.Capability) {
 	t.Helper()
-	if err := core.WriteCapability(engine, c.IDHash, c); err != nil {
+	if err := core.WriteCapability(engine, core.DefaultAgentID, c.IDHash, c); err != nil {
 		t.Fatalf("write capability: %v", err)
 	}
 }

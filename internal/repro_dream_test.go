@@ -62,7 +62,7 @@ func TestReproDreamConsolidate(t *testing.T) {
 
 	dumpSceneContext(t, db, cfg, "after dream")
 
-	scenes := repo.CollectAllScenesL2(engine)
+	scenes := repo.CollectAllScenesL2(engine, core.DefaultAgentID)
 	t.Logf("scenes on disk: %d", len(scenes))
 	for _, s := range scenes {
 		topics, err := repo.ListTopicsL2(repo.TopicListQuery{
@@ -124,7 +124,7 @@ func clip(s string, lo, hi int) string {
 // rendering path ("scene 查看" → ListScenes).
 func dumpSceneContext(t *testing.T, db *DB, cfg *MemHopConfig, label string) {
 	t.Logf("--- %s ---", label)
-	scenes := repo.CollectAllScenesL2(db.engine)
+	scenes := repo.CollectAllScenesL2(db.engine, core.DefaultAgentID)
 	for _, s := range scenes {
 		topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 			Engine:  db.engine,

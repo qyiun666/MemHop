@@ -135,7 +135,7 @@ func (db *DB) searchNormal(ctx context.Context, q SearchQuery, keywords []string
 func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint64) ([]core.TopicSlot, uint64, error) {
 	if sceneID == 0 {
 		sceneName := fmt.Sprintf("%d:%s", q.Timestamp, common.SafeCharSlice(q.Text, 10))
-		sid, err := repo.CreateSceneL2(db.engine, sceneName)
+		sid, err := repo.CreateSceneL2(db.engine, core.DefaultAgentID, sceneName)
 		if err != nil {
 			return nil, 0, err
 		}
@@ -146,21 +146,21 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 	if err != nil {
 		return nil, 0, err
 	}
-	if !repo.CreateTopicL2(db.engine, common.FormatHash(sceneID), keywords, q.Timestamp, centroidRef) {
+	if !repo.CreateTopicL2(db.engine, core.DefaultAgentID, common.FormatHash(sceneID), keywords, q.Timestamp, centroidRef) {
 		return nil, 0, common.NewError(common.ErrIO, "create topic", nil)
 	}
 	topicIDStr := common.FormatHash(topicID)
-	archiveID, err := repo.AppendArchiveL4(db.engine, topicIDStr, 0, core.ContentText, q.Text, q.Timestamp)
+	archiveID, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicIDStr, 0, core.ContentText, q.Text, q.Timestamp)
 	if err != nil {
 		return nil, 0, err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, topicIDStr, []uint64{archiveID}) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, topicIDStr, []uint64{archiveID}) {
 		return nil, 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
 	// Link matching L3 graphs onto the new topic: this is what makes
 	// DirectedL3ID scoping work.
-	if ids := repo.MatchL3Graphs(db.engine, keywords, q.Text); len(ids) > 0 {
-		if !repo.AppendTopicL3RefsL2(db.engine, topicIDStr, ids) {
+	if ids := repo.MatchL3Graphs(db.engine, core.DefaultAgentID, keywords, q.Text); len(ids) > 0 {
+		if !repo.AppendTopicL3RefsL2(db.engine, core.DefaultAgentID, topicIDStr, ids) {
 			return nil, 0, common.NewError(common.ErrIO, "link topic l3 refs", nil)
 		}
 	}
@@ -182,7 +182,7 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 	db.activateScene(sceneID)
 	// Scene-level retrieval usage feedback, folded into the scene record
 	// (best-effort, non-fatal).
-	if err := repo.TouchSceneUsage(db.engine, sceneID, time.Now().UnixMilli()); err != nil {
+	if err := repo.TouchSceneUsage(db.engine, core.DefaultAgentID, sceneID, time.Now().UnixMilli()); err != nil {
 		slog.Warn("search: record scene usage failed", "err", err)
 	}
 	return latest, topicID, nil
@@ -283,7 +283,7 @@ func head3(s []string) []string {
 }
 
 func (db *DB) readProfile() core.ProfileSlot {
-	slot, err := repo.GetProfileL0(db.engine)
+	slot, err := repo.GetProfileL0(db.engine, core.DefaultAgentID)
 	if err != nil {
 		return core.ProfileSlot{}
 	}
@@ -303,5 +303,5 @@ func (db *DB) writeCentroid(text string) (uint64, error) {
 	if len(vec) == 0 {
 		return 0, common.NewError(common.ErrEncoder, "encode centroid: empty vector", nil)
 	}
-	return repo.WriteVecCentroid(db.engine, vec)
+	return repo.WriteVecCentroid(db.engine, core.DefaultAgentID, vec)
 }

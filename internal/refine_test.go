@@ -22,12 +22,12 @@ import (
 // AppendL4Message ×N → Update turn. Returns the topic id string.
 func refineTestTopic(t *testing.T, db *DB, nL4 int) string {
 	t.Helper()
-	sceneID, err := repo.CreateSceneL2(db.engine, "refine-scene")
+	sceneID, err := repo.CreateSceneL2(db.engine, core.DefaultAgentID, "refine-scene")
 	if err != nil {
 		t.Fatalf("create scene: %v", err)
 	}
 	topicID := common.HashID("refine-topic")
-	if !repo.CreateTopicL2WithID(db.engine, sceneID, topicID, []string{"user-kw"}, 1000, 0) {
+	if !repo.CreateTopicL2WithID(db.engine, core.DefaultAgentID, sceneID, topicID, []string{"user-kw"}, 1000, 0) {
 		t.Fatal("create topic")
 	}
 	topicIDStr := common.FormatHash(topicID)
@@ -37,16 +37,16 @@ func refineTestTopic(t *testing.T, db *DB, nL4 int) string {
 		if i == nL4-1 {
 			role = core.RoleAgent
 		}
-		id, err := repo.AppendArchiveL4(db.engine, topicIDStr, role, core.ContentText, "msg-"+strings.Repeat("x", i+1), int64(1000+i))
+		id, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicIDStr, role, core.ContentText, "msg-"+strings.Repeat("x", i+1), int64(1000+i))
 		if err != nil {
 			t.Fatalf("append l4: %v", err)
 		}
 		ids = append(ids, id)
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, topicIDStr, ids) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, topicIDStr, ids) {
 		t.Fatal("update l4 refs")
 	}
-	if !repo.UpdateTopicL2(db.engine, topicIDStr, []string{"agent-kw"}, 2000) {
+	if !repo.UpdateTopicL2(db.engine, core.DefaultAgentID, topicIDStr, []string{"agent-kw"}, 2000) {
 		t.Fatal("update topic")
 	}
 	return topicIDStr
@@ -103,7 +103,7 @@ func TestRefineTopicKeywords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse id: %v", err)
 	}
-	topic, err := core.ReadTopicLenient(db.engine, parsedID)
+	topic, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
 	if err != nil || topic == nil {
 		t.Fatalf("read topic: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestRefineTopicKeywords(t *testing.T) {
 	for _, id := range topic.L4Refs {
 		ids = append(ids, common.FormatHash(id))
 	}
-	if arcs := repo.QueryArchiveL4(db.engine, 3, "", 0, 0, ids); len(arcs) != 3 {
+	if arcs := repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, ids); len(arcs) != 3 {
 		t.Errorf("archives = %d, want 3", len(arcs))
 	}
 }
@@ -143,7 +143,7 @@ func TestRefineTopicKeywordsGuard1to1(t *testing.T) {
 		t.Fatalf("LLM called %d times, want 0", got)
 	}
 	parsedID, _ := common.ParseID(topicID)
-	topic, _ := core.ReadTopicLenient(db.engine, parsedID)
+	topic, _ := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
 	if len(topic.UserKeywords) != 1 || topic.UserKeywords[0] != "user-kw" ||
 		len(topic.AgentKeywords) != 1 || topic.AgentKeywords[0] != "agent-kw" {
 		t.Errorf("dual-track changed: user=%v agent=%v", topic.UserKeywords, topic.AgentKeywords)
@@ -170,7 +170,7 @@ func TestRefineTopicKeywordsIdempotent(t *testing.T) {
 		t.Fatalf("LLM called %d times, want 1 (once for the first refine)", got)
 	}
 	parsedID, _ := common.ParseID(topicID)
-	topic, _ := core.ReadTopicLenient(db.engine, parsedID)
+	topic, _ := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
 	if len(topic.FusedKeywords) != 2 || topic.FusedKeywords[0] != "fused1" {
 		t.Errorf("FusedKeywords changed on second refine: %v", topic.FusedKeywords)
 	}
@@ -196,7 +196,7 @@ func TestRefineTopicKeywordsErrors(t *testing.T) {
 			t.Fatalf("err = %v, want ErrLLM", err)
 		}
 		parsedID, _ := common.ParseID(topicID)
-		topic, _ := core.ReadTopicLenient(db.engine, parsedID)
+		topic, _ := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
 		if len(topic.UserKeywords) != 1 || len(topic.AgentKeywords) != 1 || len(topic.FusedKeywords) != 0 {
 			t.Errorf("topic changed after llm failure: user=%v agent=%v fused=%v",
 				topic.UserKeywords, topic.AgentKeywords, topic.FusedKeywords)
@@ -211,7 +211,7 @@ func TestRefineTopicKeywordsErrors(t *testing.T) {
 			t.Fatalf("err = %v, want ErrLLM", err)
 		}
 		parsedID, _ := common.ParseID(topicID)
-		topic, _ := core.ReadTopicLenient(db.engine, parsedID)
+		topic, _ := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
 		if len(topic.UserKeywords) != 1 || len(topic.AgentKeywords) != 1 || len(topic.FusedKeywords) != 0 {
 			t.Errorf("topic changed after empty extraction: user=%v agent=%v fused=%v",
 				topic.UserKeywords, topic.AgentKeywords, topic.FusedKeywords)

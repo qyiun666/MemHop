@@ -32,7 +32,7 @@ func (db *DB) AppendTrajectory(sessionID string, ev core.TrajectorySlot) error {
 	if ev.EventType == "" || ev.Timestamp <= 0 {
 		return common.NewError(common.ErrInvalidQuery, "EventType and Timestamp are required")
 	}
-	events, err := repo.ReadTrajectory(db.engine, parsed)
+	events, err := repo.ReadTrajectory(db.engine, core.DefaultAgentID, parsed)
 	if err != nil {
 		return err
 	}
@@ -47,7 +47,7 @@ func (db *DB) AppendTrajectory(sessionID string, ev core.TrajectorySlot) error {
 	}
 	ev.SessionID = parsed
 	ev.Seq = maxSeq + 1
-	return repo.AppendTrajectory(db.engine, ev)
+	return repo.AppendTrajectory(db.engine, core.DefaultAgentID, ev)
 }
 
 // truncateUTF8 cuts s to at most max bytes without splitting a UTF-8 rune.
@@ -72,7 +72,7 @@ func (db *DB) ReadTrajectory(sessionID string) ([]core.TrajectorySlot, error) {
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
-	return repo.ReadTrajectory(db.engine, parsed)
+	return repo.ReadTrajectory(db.engine, core.DefaultAgentID, parsed)
 }
 
 // TrajectoryStats aggregates a session's L7 events for the host's
@@ -94,7 +94,7 @@ func (db *DB) TrajectoryStats(sessionID string) (*TrajectoryStats, error) {
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
-	events, err := repo.ReadTrajectory(db.engine, parsed)
+	events, err := repo.ReadTrajectory(db.engine, core.DefaultAgentID, parsed)
 	if err != nil {
 		return nil, err
 	}
@@ -116,7 +116,7 @@ func (db *DB) DeleteTrajectory(sessionID string) error {
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
-	return repo.DeleteTrajectory(db.engine, parsed)
+	return repo.DeleteTrajectory(db.engine, core.DefaultAgentID, parsed)
 }
 
 // CrystallizeResult reports L5 capabilities created/reused/merged from a
@@ -152,8 +152,8 @@ func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeRe
 		db.mu.RUnlock()
 		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
-	events, err := repo.ReadTrajectory(db.engine, parsed)
-	existing := activeCapabilities(repo.ListCapabilitiesL5(db.engine))
+	events, err := repo.ReadTrajectory(db.engine, core.DefaultAgentID, parsed)
+	existing := activeCapabilities(repo.ListCapabilitiesL5(db.engine, core.DefaultAgentID))
 	db.mu.RUnlock()
 	if err != nil {
 		return nil, err
@@ -237,7 +237,7 @@ func (db *DB) applyCrystallizedCapability(cand CrystallizeCapability, sessionID 
 		}
 		return id, "reuse", nil
 	}
-	if _, err := repo.UpsertCapabilityL5(db.engine, cap); err != nil {
+	if _, err := repo.UpsertCapabilityL5(db.engine, core.DefaultAgentID, cap); err != nil {
 		return "", "", err
 	}
 	return common.FormatHash(cap.IDHash), "create", nil
@@ -266,11 +266,11 @@ func buildCrystallizedCapability(in CapabilityImport, _ string, now int64) *core
 // created.
 func (db *DB) findCrystallizeTarget(cap *core.Capability, reuseID string) (*core.Capability, string, bool) {
 	nameID := common.FormatHash(core.CapabilityID(cap.Name))
-	if existing, err := repo.GetCapabilityL5(db.engine, nameID); err == nil {
+	if existing, err := repo.GetCapabilityL5(db.engine, core.DefaultAgentID, nameID); err == nil {
 		return existing, nameID, true
 	}
 	if reuseID != "" {
-		if existing, err := repo.GetCapabilityL5(db.engine, reuseID); err == nil {
+		if existing, err := repo.GetCapabilityL5(db.engine, core.DefaultAgentID, reuseID); err == nil {
 			return existing, common.FormatHash(existing.IDHash), true
 		}
 	}
@@ -285,6 +285,6 @@ func mergeCapabilityDefinition(engine *core.StorageEngine, existing, incoming *c
 	existing.Resources = incoming.Resources
 	existing.Workflow = incoming.Workflow
 	existing.UpdatedAt = now
-	_, err := repo.UpsertCapabilityL5(engine, existing)
+	_, err := repo.UpsertCapabilityL5(engine, core.DefaultAgentID, existing)
 	return err
 }

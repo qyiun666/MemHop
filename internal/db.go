@@ -72,7 +72,7 @@ func (db *DB) syncL2Meta(idHash uint64) {
 	if db.l2Meta == nil {
 		return
 	}
-	topic, err := core.ReadTopicLenient(db.engine, idHash)
+	topic, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, idHash)
 	if err != nil || topic == nil {
 		db.l2Meta.Remove(idHash)
 		return
@@ -148,14 +148,14 @@ func (db *DB) Checkpoint() error {
 }
 
 // buildSnapshot serializes the in-memory indices for checkpoint persistence.
-// L3IndexData stays nil: L3 data is persisted as individual records.
+// The single active domain is stored under DefaultAgentID; per-agent
+// snapshotting lands with the business-layer agent context.
 func (db *DB) buildSnapshot() (*core.IndexSnapshotData, error) {
 	sparseData, err := db.sparseIndex.Serialize()
 	if err != nil {
 		return nil, common.NewError(common.ErrSerialization, "sparse index", err)
 	}
 	return &core.IndexSnapshotData{
-		SparseData:  sparseData,
-		L3IndexData: nil,
+		SparseByAgent: map[uint64][]byte{core.DefaultAgentID: sparseData},
 	}, nil
 }

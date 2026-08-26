@@ -39,8 +39,8 @@ func NewL3Index() *L3Index {
 	}
 }
 
-func (idx *L3Index) BuildFromEngine(engine *core.StorageEngine) error {
-	nodes, err := loadAllL3Nodes(engine)
+func (idx *L3Index) BuildFromEngine(engine *core.StorageEngine, agentID uint64) error {
+	nodes, err := loadAllL3Nodes(engine, agentID)
 	if err != nil {
 		return err
 	}
@@ -151,10 +151,10 @@ func (idx *L3Index) removeNodeLocked(nodeHash uint64, info *IndexedNode) {
 	idx.bm25.RemoveDocument(nodeHash)
 }
 
-func loadAllL3Nodes(engine *core.StorageEngine) ([]*core.HypergraphNode, error) {
+func loadAllL3Nodes(engine *core.StorageEngine, agentID uint64) ([]*core.HypergraphNode, error) {
 	var nodes []*core.HypergraphNode
-	for idHash := range engine.Index() {
-		rt, data, err := engine.ReadRecord(idHash)
+	for idHash := range engine.Index(agentID) {
+		rt, data, err := engine.ReadRecord(agentID, idHash)
 		if err != nil || rt != core.RecL3GraphNode {
 			continue
 		}

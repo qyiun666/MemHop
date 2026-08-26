@@ -9,6 +9,7 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
+	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
@@ -61,7 +62,7 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, topicID string) error {
 	for _, id := range topic.L4Refs {
 		ids = append(ids, common.FormatHash(id))
 	}
-	archives := repo.QueryArchiveL4(db.engine, 3, "", 0, 0, ids)
+	archives := repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, ids)
 	parts := make([]string, 0, len(archives))
 	for _, a := range archives {
 		parts = append(parts, a.Content)
@@ -76,7 +77,7 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, topicID string) error {
 	if len(keywords) == 0 {
 		return common.NewError(common.ErrLLM, "refine extracted no keywords")
 	}
-	if !repo.RefineTopicKeywordsL2(db.engine, topicID, keywords) {
+	if !repo.RefineTopicKeywordsL2(db.engine, core.DefaultAgentID, topicID, keywords) {
 		return common.NewError(common.ErrIO, "refine topic keywords", nil)
 	}
 	// Refresh the L2Meta entry then rebuild the BM25 document: AddDocument

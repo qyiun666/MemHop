@@ -64,7 +64,7 @@ func TestListCapabilitiesWithBuiltins(t *testing.T) {
 	}
 
 	// Listing never persists built-ins.
-	if got := len(core.CollectAllCapabilities(engine)); got != 1 {
+	if got := len(core.CollectAllCapabilities(engine, core.DefaultAgentID)); got != 1 {
 		t.Fatalf("builtins must not be stored, want 1 stored record, got %d", got)
 	}
 }

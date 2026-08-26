@@ -16,12 +16,12 @@ import (
 // mirroring what Search produces for a topic to append to.
 func newTopicForAppend(t *testing.T, engine *core.StorageEngine) string {
 	t.Helper()
-	sceneID, err := repo.CreateSceneL2(engine, "append-scene")
+	sceneID, err := repo.CreateSceneL2(engine, core.DefaultAgentID, "append-scene")
 	if err != nil {
 		t.Fatalf("create scene: %v", err)
 	}
 	topicID := common.HashID("append-topic")
-	if !repo.CreateTopicL2WithID(engine, sceneID, topicID, []string{"kw"}, 1000, 0) {
+	if !repo.CreateTopicL2WithID(engine, core.DefaultAgentID, sceneID, topicID, []string{"kw"}, 1000, 0) {
 		t.Fatal("create topic")
 	}
 	return common.FormatHash(topicID)
@@ -62,7 +62,7 @@ func TestAppendL4Message(t *testing.T) {
 	}
 
 	// Read-back by id: role, content and timestamp must be exact.
-	got := repo.QueryArchiveL4(engine, 3, "", 0, 0, []string{
+	got := repo.QueryArchiveL4(engine, core.DefaultAgentID, 3, "", 0, 0, []string{
 		common.FormatHash(ids[0]), common.FormatHash(ids[1]), common.FormatHash(ids[2]),
 	})
 	if len(got) != 3 {
@@ -115,7 +115,7 @@ func TestAppendL4MessageErrors(t *testing.T) {
 	if _, err := db.AppendL4Message(common.FormatHash(common.HashID("missing")), "x", 1000, core.RoleUser); common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("missing topic: want ErrNotFound, got %v", err)
 	}
-	if out := repo.QueryArchiveL4(engine, 2, "", 0, 5000, nil); len(out) != 0 {
+	if out := repo.QueryArchiveL4(engine, core.DefaultAgentID, 2, "", 0, 5000, nil); len(out) != 0 {
 		t.Fatalf("failed appends left orphan archives: %+v", out)
 	}
 }

@@ -26,16 +26,16 @@ func TestCreateTopicL2WithIDSameTimestampDifferentText(t *testing.T) {
 	if id1 == id2 {
 		t.Fatal("different text must produce different topic IDs")
 	}
-	if !CreateTopicL2WithID(engine, sceneID, id1, []string{"hello"}, 1000, 0) {
+	if !CreateTopicL2WithID(engine, core.DefaultAgentID, sceneID, id1, []string{"hello"}, 1000, 0) {
 		t.Fatal("create first topic")
 	}
-	if !CreateTopicL2WithID(engine, sceneID, id2, []string{"world"}, 1000, 0) {
+	if !CreateTopicL2WithID(engine, core.DefaultAgentID, sceneID, id2, []string{"world"}, 1000, 0) {
 		t.Fatal("create second topic")
 	}
-	if _, err := core.ReadTopicSlot(engine, id1); err != nil {
+	if _, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id1); err != nil {
 		t.Fatalf("read first topic: %v", err)
 	}
-	if _, err := core.ReadTopicSlot(engine, id2); err != nil {
+	if _, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id2); err != nil {
 		t.Fatalf("read second topic: %v", err)
 	}
 }
@@ -69,12 +69,12 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 			UserTimestamp: 150},
 	}
 	for i := range raw {
-		if err := core.WriteTopicSlot(engine, raw[i].ID, &raw[i]); err != nil {
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, raw[i].ID, &raw[i]); err != nil {
 			t.Fatalf("write topic %d: %v", raw[i].ID, err)
 		}
 	}
 
-	l2Meta := index.BuildL2MetaFromEngine(engine)
+	l2Meta := index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
 	if l2Meta.Len() != len(raw) {
 		t.Fatalf("L2MetaIndex entries = %d, want %d", l2Meta.Len(), len(raw))
 	}
@@ -148,13 +148,13 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, tp := range got {
-			record, err := core.ReadTopicSlot(engine, tp.ID)
+			record, err := core.ReadTopicSlot(engine, core.DefaultAgentID, tp.ID)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !reflect.DeepEqual(tp, record[0]) {
+			if !reflect.DeepEqual(tp, *record) {
 				t.Errorf("topic %d rebuilt from cache differs from record:\ncache:  %+v\nrecord: %+v",
-					tp.ID, tp, record[0])
+					tp.ID, tp, *record)
 			}
 		}
 	})
@@ -203,16 +203,16 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 func TestTouchSceneUsageIncrements(t *testing.T) {
 	engine := tempEngine(t)
 	sceneID := core.NewSceneSlot("scene-usage-1").SceneID
-	if _, err := CreateSceneL2(engine, "scene-usage-1"); err != nil {
+	if _, err := CreateSceneL2(engine, core.DefaultAgentID, "scene-usage-1"); err != nil {
 		t.Fatalf("create scene: %v", err)
 	}
-	if err := TouchSceneUsage(engine, sceneID, 1000); err != nil {
+	if err := TouchSceneUsage(engine, core.DefaultAgentID, sceneID, 1000); err != nil {
 		t.Fatalf("first touch: %v", err)
 	}
-	if err := TouchSceneUsage(engine, sceneID, 2000); err != nil {
+	if err := TouchSceneUsage(engine, core.DefaultAgentID, sceneID, 2000); err != nil {
 		t.Fatalf("second touch: %v", err)
 	}
-	slot, err := core.ReadSceneSlot(engine, sceneID)
+	slot, err := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID)
 	if err != nil {
 		t.Fatalf("read scene: %v", err)
 	}

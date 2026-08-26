@@ -29,11 +29,11 @@ func (db *DB) SearchL4(q L4Query) ([]core.ArchiveSlot, error) {
 	var out []core.ArchiveSlot
 	switch {
 	case q.Keyword != "":
-		out = repo.QueryArchiveL4(db.engine, 1, q.Keyword, 0, 0, nil)
+		out = repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 1, q.Keyword, 0, 0, nil)
 	case q.Start > 0 && q.End > 0:
-		out = repo.QueryArchiveL4(db.engine, 2, "", q.Start, q.End, nil)
+		out = repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 2, "", q.Start, q.End, nil)
 	case len(q.IDs) > 0:
-		out = repo.QueryArchiveL4(db.engine, 3, "", 0, 0, q.IDs)
+		out = repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, q.IDs)
 	default:
 		return []core.ArchiveSlot{}, nil
 	}
@@ -61,7 +61,7 @@ func (db *DB) GetArchive(id string) (*core.ArchiveSlot, error) {
 		return nil, err
 	}
 	defer db.mu.RUnlock()
-	out := repo.QueryArchiveL4(db.engine, 3, "", 0, 0, []string{id})
+	out := repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, []string{id})
 	if len(out) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "archive not found")
 	}

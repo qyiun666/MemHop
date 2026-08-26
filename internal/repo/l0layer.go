@@ -17,19 +17,19 @@ import (
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L0 profile operations: singleton ProfileSlot at the fixed ID hash("profile");
-// GetProfileL0 returns ErrNotFound when absent.
-func GetProfileL0(engine *core.StorageEngine) (*core.ProfileSlot, error) {
-	slot, err := core.ReadProfileSlot(engine, common.HashID("profile"))
+// L0 profile operations: singleton ProfileSlot at the fixed ID hash("profile")
+// inside the agent domain; GetProfileL0 returns ErrNotFound when absent.
+func GetProfileL0(engine *core.StorageEngine, agentID uint64) (*core.ProfileSlot, error) {
+	slot, err := core.ReadProfileSlot(engine, agentID, common.HashID("profile"))
 	if err != nil {
 		return nil, common.NewError(common.ErrNotFound, "profile not found", err)
 	}
 	return slot, nil
 }
 
-func UpdateProfileL0(engine *core.StorageEngine, slot *core.ProfileSlot) error {
+func UpdateProfileL0(engine *core.StorageEngine, agentID uint64, slot *core.ProfileSlot) error {
 	slot.IDHash = common.HashID("profile")
-	return core.WriteProfileSlot(engine, slot.IDHash, slot)
+	return core.WriteProfileSlot(engine, agentID, slot.IDHash, slot)
 }
 
 // maxDistillSamples bounds both prompt cost and LLM input size for L0
@@ -73,16 +73,16 @@ type L1NodeEmotion struct {
 // GenerateProfileL0 rebuilds the L0 profile from the sparse keyword
 // distribution: creates a default profile if missing, else updates
 // personality and keyword/memory fields.
-func GenerateProfileL0(engine *core.StorageEngine, sparse *index.SparseIndex) error {
+func GenerateProfileL0(engine *core.StorageEngine, agentID uint64, sparse *index.SparseIndex) error {
 	topKeywords := sparse.TopTerms(20)
 	topTerms := make([]string, len(topKeywords))
 	for i, tk := range topKeywords {
 		topTerms[i] = tk.Term
 	}
-	totalEngrams := engine.RecordCount()
-	slot, err := GetProfileL0(engine)
+	totalEngrams := engine.AgentRecordCount(agentID)
+	slot, err := GetProfileL0(engine, agentID)
 	if err != nil {
-		return UpdateProfileL0(engine, newDefaultProfile(topTerms, totalEngrams))
+		return UpdateProfileL0(engine, agentID, newDefaultProfile(topTerms, totalEngrams))
 	}
 	slot.Personality = joinTopTerms(topTerms, 5)
 	if slot.Preferences == nil {
@@ -90,7 +90,7 @@ func GenerateProfileL0(engine *core.StorageEngine, sparse *index.SparseIndex) er
 	}
 	slot.Preferences["top_keywords"] = joinTopTerms(topTerms, 20)
 	slot.Preferences["total_engrams"] = fmt.Sprintf("%d", totalEngrams)
-	return UpdateProfileL0(engine, slot)
+	return UpdateProfileL0(engine, agentID, slot)
 }
 
 func newDefaultProfile(topTerms []string, totalEngrams uint32) *core.ProfileSlot {
@@ -122,13 +122,13 @@ func joinTopTerms(terms []string, n int) string {
 
 // SampleL1ForDistill ranks L1 nodes by Importance×exp(-lambda×age) and
 // returns the top maxDistillSamples plus the total node count.
-func SampleL1ForDistill(engine *core.StorageEngine) ([]L1DistillSample, int) {
+func SampleL1ForDistill(engine *core.StorageEngine, agentID uint64) ([]L1DistillSample, int) {
 	nowMs := time.Now().UnixMilli()
 	candidates := make([]L1DistillSample, 0)
-	for _, node := range core.CollectAllSceneNodes(engine) {
+	for _, node := range core.CollectAllSceneNodes(engine, agentID) {
 		candidates = append(candidates, L1DistillSample{
 			IDHash:     node.IDHash,
-			Keywords:   collectSampleKeywords(engine, node.TopicIDs),
+			Keywords:   collectSampleKeywords(engine, agentID, node.TopicIDs),
 			Importance: node.Importance,
 			UpdatedAt:  node.UpdatedAt,
 		})
@@ -147,10 +147,10 @@ func sampleRank(s L1DistillSample, nowMs int64) float64 {
 	return float64(s.Importance) * math.Exp(-distillSampleLambda*dtHoursFrom(nowMs, s.UpdatedAt))
 }
 
-func collectSampleKeywords(engine *core.StorageEngine, topicIDs []uint64) []string {
+func collectSampleKeywords(engine *core.StorageEngine, agentID uint64, topicIDs []uint64) []string {
 	var kws []string
 	for _, tid := range topicIDs {
-		t, err := core.ReadTopicLenient(engine, tid)
+		t, err := core.ReadTopicLenient(engine, agentID, tid)
 		if err != nil || t == nil {
 			continue
 		}
@@ -166,9 +166,9 @@ func collectSampleKeywords(engine *core.StorageEngine, topicIDs []uint64) []stri
 
 // MergeDistillIntoProfile merges distill results into the profile without
 // clearing other fields.
-func MergeDistillIntoProfile(engine *core.StorageEngine, emo DistillEmotion, mbti DistillMBTI) error {
+func MergeDistillIntoProfile(engine *core.StorageEngine, agentID uint64, emo DistillEmotion, mbti DistillMBTI) error {
 	nowMs := time.Now().UnixMilli()
-	slot, err := GetProfileL0(engine)
+	slot, err := GetProfileL0(engine, agentID)
 	if err != nil {
 		slot = newDefaultProfile(nil, 0)
 	}
@@ -189,16 +189,16 @@ func MergeDistillIntoProfile(engine *core.StorageEngine, emo DistillEmotion, mbt
 	slot.Preferences["mbti_j_p"] = ftoa(mbti.JP)
 	slot.Preferences["mbti_updated_at_ms"] = strconv.FormatInt(nowMs, 10)
 	slot.Personality = mbti.Type
-	return UpdateProfileL0(engine, slot)
+	return UpdateProfileL0(engine, agentID, slot)
 }
 
 // BackfillL1Emotions writes per-node emotions into L1 nodes lacking signals;
 // returns the count written. A missing node or a write failure is returned
 // as an error — nothing is silently skipped.
-func BackfillL1Emotions(engine *core.StorageEngine, perNode map[uint64]L1NodeEmotion) (int, error) {
+func BackfillL1Emotions(engine *core.StorageEngine, agentID uint64, perNode map[uint64]L1NodeEmotion) (int, error) {
 	written := 0
 	for id, em := range perNode {
-		node, err := core.ReadSceneNode(engine, id)
+		node, err := core.ReadSceneNode(engine, agentID, id)
 		if err != nil {
 			return written, fmt.Errorf("backfill L1 emotions: node %s not found", common.FormatHash(id))
 		}
@@ -208,7 +208,7 @@ func BackfillL1Emotions(engine *core.StorageEngine, perNode map[uint64]L1NodeEmo
 		node.Valence = em.Valence
 		node.Arousal = em.Arousal
 		node.UpdatedAt = time.Now().UnixMilli()
-		if err := core.WriteSceneNode(engine, id, node); err != nil {
+		if err := core.WriteSceneNode(engine, agentID, id, node); err != nil {
 			return written, err
 		}
 		written++

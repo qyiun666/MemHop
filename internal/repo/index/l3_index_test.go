@@ -46,11 +46,11 @@ func TestL3IndexBuild(t *testing.T) {
 		makeTestNode(3, graphID, "HTTP Server", "function", "Handles HTTP requests", []string{"http", "server"}),
 	}
 	for _, n := range nodes {
-		writeTestNode(eng, n)
+		writeTestNode(eng, core.DefaultAgentID, n)
 	}
 
 	idx := NewL3Index()
-	if err := idx.BuildFromEngine(eng); err != nil {
+	if err := idx.BuildFromEngine(eng, core.DefaultAgentID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,7 +147,7 @@ func TestL3IndexTypeFilterByGraph(t *testing.T) {
 
 // --- test helpers ---
 
-func writeTestNode(eng *core.StorageEngine, node *core.HypergraphNode) {
+func writeTestNode(eng *core.StorageEngine, agentID uint64, node *core.HypergraphNode) {
 	data, _ := json.Marshal(node)
-	eng.WriteRecord(core.RecL3GraphNode, node.IDHash, data)
+	eng.WriteRecord(agentID, core.RecL3GraphNode, node.IDHash, data)
 }

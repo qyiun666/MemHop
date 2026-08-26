@@ -304,7 +304,7 @@ func TestCrystallizeCreateDoesNotOverwriteActiveByName(t *testing.T) {
 		Summary: "旧摘要", Trigger: "旧触发", Status: core.CapabilityActive,
 		Origin: core.CapabilityOriginImported, Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "old_tool"}},
 	}
-	if err := core.WriteCapability(db.engine, cap.IDHash, cap); err != nil {
+	if err := core.WriteCapability(db.engine, core.DefaultAgentID, cap.IDHash, cap); err != nil {
 		t.Fatal(err)
 	}
 	session := common.FormatHash(789)

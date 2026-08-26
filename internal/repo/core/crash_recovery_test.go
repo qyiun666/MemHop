@@ -22,9 +22,9 @@ func TestTombstoneReplayAfterCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.WriteRecord(RecL0Profile, 1, []byte("one"))
-	eng.WriteRecord(RecL1SceneNode, 2, []byte("two"))
-	if ok, err := eng.DeleteRecord(1); err != nil || !ok {
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one"))
+	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("two"))
+	if ok, err := eng.DeleteRecord(DefaultAgentID, 1); err != nil || !ok {
 		t.Fatalf("delete: ok=%v err=%v", ok, err)
 	}
 	// Simulate a crash: close without checkpoint.
@@ -37,10 +37,10 @@ func TestTombstoneReplayAfterCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng2.Close(&IndexSnapshotData{})
-	if eng2.Contains(1) {
+	if eng2.Contains(DefaultAgentID, 1) {
 		t.Fatal("deleted record resurrected after reopen")
 	}
-	if !eng2.Contains(2) {
+	if !eng2.Contains(DefaultAgentID, 2) {
 		t.Fatal("live record lost after reopen")
 	}
 	if eng2.RecordCount() != 1 {
@@ -55,12 +55,12 @@ func TestTombstoneReplayOverridesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.WriteRecord(RecL0Profile, 1, []byte("one"))
-	eng.WriteRecord(RecL1SceneNode, 2, []byte("two"))
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one"))
+	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("two"))
 	if err := eng.Checkpoint(&IndexSnapshotData{}); err != nil {
 		t.Fatal(err)
 	}
-	if ok, err := eng.DeleteRecord(1); err != nil || !ok {
+	if ok, err := eng.DeleteRecord(DefaultAgentID, 1); err != nil || !ok {
 		t.Fatalf("delete: ok=%v err=%v", ok, err)
 	}
 	if err := eng.CloseNoCheckpoint(); err != nil {
@@ -72,10 +72,10 @@ func TestTombstoneReplayOverridesSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng2.Close(&IndexSnapshotData{})
-	if eng2.Contains(1) {
+	if eng2.Contains(DefaultAgentID, 1) {
 		t.Fatal("tombstone did not override snapshot entry")
 	}
-	if !eng2.Contains(2) {
+	if !eng2.Contains(DefaultAgentID, 2) {
 		t.Fatal("live record lost after reopen")
 	}
 }
@@ -87,7 +87,7 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.WriteRecord(RecL0Profile, 1, []byte("keep me"))
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("keep me"))
 	if err := eng.CloseNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 
 	// Append a full frame with a flipped data byte (CRC mismatch) — the
 	// classic torn write.
-	frame := EncodeRecord(RecL2Topic, 0, 2, []byte("torn victim"))
+	frame := EncodeRecord(DefaultAgentID, RecL2Topic, 0, 2, []byte("torn victim"))
 	frame[len(frame)-1] ^= 0xFF
 	appendBytes(t, p, frame)
 
@@ -103,14 +103,14 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open after torn write: %v", err)
 	}
-	if _, data, err := eng2.ReadRecord(1); err != nil || string(data) != "keep me" {
+	if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "keep me" {
 		t.Fatalf("record 1: data=%q err=%v", data, err)
 	}
-	if eng2.Contains(2) {
+	if eng2.Contains(DefaultAgentID, 2) {
 		t.Fatal("torn frame must not be indexed")
 	}
 	// New appends must land on the clean tail, not after the residue.
-	if _, err := eng2.WriteRecord(RecL2Topic, 3, []byte("after")); err != nil {
+	if _, err := eng2.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("after")); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng2.CloseNoCheckpoint(); err != nil {
@@ -127,7 +127,7 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 		t.Fatalf("open after partial frame: %v", err)
 	}
 	defer eng3.Close(&IndexSnapshotData{})
-	if !eng3.Contains(1) || !eng3.Contains(3) {
+	if !eng3.Contains(DefaultAgentID, 1) || !eng3.Contains(DefaultAgentID, 3) {
 		t.Fatal("live records lost after partial-frame recovery")
 	}
 }
@@ -140,16 +140,16 @@ func TestOrphanSnapshotBlobTruncatedOnOpen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.WriteRecord(RecL0Profile, 1, []byte("one"))
-	eng.WriteRecord(RecL1SceneNode, 2, []byte("two"))
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseData: []byte("s1")}); err != nil {
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one"))
+	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("two"))
+	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.CloseNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate the crash window: snapshot blob synced, header never flipped.
-	blob, err := BuildSnapshot(map[uint64]uint64{1: DataStart}, &IndexSnapshotData{SparseData: []byte("s2")})
+	blob, err := BuildSnapshot(map[uint64]map[uint64]uint64{DefaultAgentID: {1: DataStart}}, &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,12 +160,12 @@ func TestOrphanSnapshotBlobTruncatedOnOpen(t *testing.T) {
 		t.Fatalf("open with orphan snapshot blob: %v", err)
 	}
 	defer eng2.Close(&IndexSnapshotData{})
-	if !eng2.Contains(1) || !eng2.Contains(2) {
+	if !eng2.Contains(DefaultAgentID, 1) || !eng2.Contains(DefaultAgentID, 2) {
 		t.Fatal("records lost after orphan blob recovery")
 	}
 	// The committed snapshot (s1) must still be the active one.
 	sd := eng2.SnapshotData()
-	if sd == nil || string(sd.SparseData) != "s1" {
+	if sd == nil || string(sd.SparseByAgent[DefaultAgentID]) != "s1" {
 		t.Fatalf("active snapshot wrong: %+v", sd)
 	}
 }
@@ -203,10 +203,10 @@ func TestAppendAfterReopenWithTailSnapshotSurvivesCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.WriteRecord(RecL0Profile, 1, []byte("one")); err != nil {
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseData: []byte("s1")}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.CloseNoCheckpoint(); err != nil {
@@ -217,7 +217,7 @@ func TestAppendAfterReopenWithTailSnapshotSurvivesCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng2.WriteRecord(RecL2Topic, 2, []byte("two")); err != nil {
+	if _, err := eng2.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("two")); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a crash: no checkpoint, no normal Close.
@@ -230,10 +230,10 @@ func TestAppendAfterReopenWithTailSnapshotSurvivesCrash(t *testing.T) {
 		t.Fatalf("reopen after crash: %v", err)
 	}
 	defer eng3.Close(&IndexSnapshotData{})
-	if _, data, err := eng3.ReadRecord(1); err != nil || string(data) != "one" {
+	if _, data, err := eng3.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "one" {
 		t.Fatalf("record 1: data=%q err=%v", data, err)
 	}
-	if _, data, err := eng3.ReadRecord(2); err != nil || string(data) != "two" {
+	if _, data, err := eng3.ReadRecord(DefaultAgentID, 2); err != nil || string(data) != "two" {
 		t.Fatalf("record 2 after crash: data=%q err=%v", data, err)
 	}
 }
@@ -247,13 +247,13 @@ func TestAppendAfterReopenWithMultipleTailSnapshotsSurvivesCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.WriteRecord(RecL0Profile, 1, []byte("one")); err != nil {
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseData: []byte("s1")}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseData: []byte("s2")}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.CloseNoCheckpoint(); err != nil {
@@ -264,7 +264,7 @@ func TestAppendAfterReopenWithMultipleTailSnapshotsSurvivesCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng2.WriteRecord(RecL2Topic, 2, []byte("two")); err != nil {
+	if _, err := eng2.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("two")); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng2.CloseNoCheckpoint(); err != nil {
@@ -277,7 +277,7 @@ func TestAppendAfterReopenWithMultipleTailSnapshotsSurvivesCrash(t *testing.T) {
 	}
 	defer eng3.Close(&IndexSnapshotData{})
 	for id, want := range map[uint64]string{1: "one", 2: "two"} {
-		if _, data, err := eng3.ReadRecord(id); err != nil || string(data) != want {
+		if _, data, err := eng3.ReadRecord(DefaultAgentID, id); err != nil || string(data) != want {
 			t.Fatalf("record %d: data=%q err=%v", id, data, err)
 		}
 	}
@@ -291,13 +291,13 @@ func TestAppendAfterReopenWithLegacyHeaderRecordEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng.WriteRecord(RecL0Profile, 1, []byte("one")); err != nil {
+	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseData: []byte("s1")}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseData: []byte("s2")}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}}); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a pre-RecordEnd file: clear the field in the active header
@@ -319,7 +319,7 @@ func TestAppendAfterReopenWithLegacyHeaderRecordEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := eng2.WriteRecord(RecL2Topic, 2, []byte("two")); err != nil {
+	if _, err := eng2.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("two")); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng2.CloseNoCheckpoint(); err != nil {
@@ -332,7 +332,7 @@ func TestAppendAfterReopenWithLegacyHeaderRecordEnd(t *testing.T) {
 	}
 	defer eng3.Close(&IndexSnapshotData{})
 	for id, want := range map[uint64]string{1: "one", 2: "two"} {
-		if _, data, err := eng3.ReadRecord(id); err != nil || string(data) != want {
+		if _, data, err := eng3.ReadRecord(DefaultAgentID, id); err != nil || string(data) != want {
 			t.Fatalf("record %d: data=%q err=%v", id, data, err)
 		}
 	}
@@ -348,10 +348,10 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := eng.WriteRecord(RecL0Profile, 1, []byte("keep me")); err != nil {
+			if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("keep me")); err != nil {
 				t.Fatal(err)
 			}
-			if err := eng.Checkpoint(&IndexSnapshotData{SparseData: []byte("s1")}); err != nil {
+			if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 				t.Fatal(err)
 			}
 			if err := eng.CloseNoCheckpoint(); err != nil {
@@ -374,7 +374,7 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Open with one corrupt header: %v", err)
 			}
-			if _, data, err := eng2.ReadRecord(1); err != nil || string(data) != "keep me" {
+			if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "keep me" {
 				eng2.CloseNoCheckpoint()
 				t.Fatalf("record 1: data=%q err=%v", data, err)
 			}
@@ -387,10 +387,10 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 
 // Files with an unsupported format version must be rejected explicitly:
 // 0x0004 is the legacy L5 plugin-slot format, 0x0005/0x0006 the previous
-// capability schemas (none has a migration path), 0x0008 a future
-// version.
+// capability schemas, 0x0007 the single-agent frame format (none has a
+// migration path), 0x0009 a future version.
 func TestHeaderVersionRejected(t *testing.T) {
-	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0008} {
+	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0009} {
 		t.Run(fmt.Sprintf("0x%04x", v), func(t *testing.T) {
 			p := tempPath(t, "ver")
 			eng, err := Create(p, 768)
@@ -427,7 +427,7 @@ func TestHeaderVersionRejected(t *testing.T) {
 
 // A snapshot blob with an unsupported version must be rejected explicitly.
 func TestSnapshotVersionRejected(t *testing.T) {
-	blob, err := BuildSnapshot(map[uint64]uint64{1: DataStart}, &IndexSnapshotData{})
+	blob, err := BuildSnapshot(map[uint64]map[uint64]uint64{DefaultAgentID: {1: DataStart}}, &IndexSnapshotData{})
 	if err != nil {
 		t.Fatal(err)
 	}

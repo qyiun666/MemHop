@@ -54,7 +54,7 @@ func TestSearchReturnsProfileBrief(t *testing.T) {
 		Preferences: map[string]string{"lang": "zh", "style": "concise"},
 		StyleTraits: []string{"direct", "friendly", "thorough", "extra"},
 	}
-	if err := repo.UpdateProfileL0(db.engine, &profile); err != nil {
+	if err := repo.UpdateProfileL0(db.engine, core.DefaultAgentID, &profile); err != nil {
 		t.Fatalf("UpdateProfileL0: %v", err)
 	}
 	res, err := db.Search(context.Background(), SearchQuery{Text: "hello", AutoCreate: true, Timestamp: 1000})
@@ -113,6 +113,6 @@ func newSearchTestDB(t *testing.T, llmURL string) *DB {
 		dreamCtx:      ctx,
 		dreamCancel:   cancel,
 	}
-	db.l2Meta = index.BuildL2MetaFromEngine(db.engine)
+	db.l2Meta = index.BuildL2MetaFromEngine(db.engine, core.DefaultAgentID)
 	return db
 }

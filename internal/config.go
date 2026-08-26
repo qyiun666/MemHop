@@ -81,8 +81,8 @@ func LoadCachedIndices(engine *core.StorageEngine) (*index.SparseIndex, error) {
 	if snap == nil {
 		return sparseIdx, nil
 	}
-	if len(snap.SparseData) > 0 {
-		idx, err := index.DeserializeSparseIndex(snap.SparseData)
+	if blob := snap.SparseByAgent[core.DefaultAgentID]; len(blob) > 0 {
+		idx, err := index.DeserializeSparseIndex(blob)
 		if err != nil {
 			return nil, common.NewError(common.ErrCorruption,
 				"sparse index snapshot deserialize failed", err)
@@ -141,6 +141,6 @@ func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 	// L2Meta is not snapshot-persisted (snapshot format is fixed), so it is
 	// rebuilt once at Open with a single RecL2Topic scan; after that all
 	// candidate listing serves from memory.
-	db.l2Meta = index.BuildL2MetaFromEngine(engine)
+	db.l2Meta = index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
 	return db, nil
 }

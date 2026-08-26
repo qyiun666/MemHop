@@ -43,7 +43,7 @@ func (db *DB) QueryL3Nodes(q L3NodeQuery) ([]core.HypergraphNode, error) {
 			if err != nil {
 				continue
 			}
-			node, err := core.ReadHypergraphNode(db.engine, idHash)
+			node, err := core.ReadHypergraphNode(db.engine, core.DefaultAgentID, idHash)
 			if err != nil || node.GraphID != graphHash {
 				continue
 			}
@@ -51,13 +51,13 @@ func (db *DB) QueryL3Nodes(q L3NodeQuery) ([]core.HypergraphNode, error) {
 		}
 	case q.Keyword != "":
 		kw := strings.ToLower(q.Keyword)
-		for _, n := range repo.ListNodeL3(db.engine, q.GraphID) {
+		for _, n := range repo.ListNodeL3(db.engine, core.DefaultAgentID, q.GraphID) {
 			if nodeMatchesKeyword(n, kw) {
 				out = append(out, n)
 			}
 		}
 	case q.NodeType != "":
-		for _, n := range repo.ListNodeL3(db.engine, q.GraphID) {
+		for _, n := range repo.ListNodeL3(db.engine, core.DefaultAgentID, q.GraphID) {
 			if n.NodeType == q.NodeType {
 				out = append(out, n)
 			}
@@ -109,7 +109,7 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse start node id", err)
 	}
-	startNode, err := core.ReadHypergraphNode(db.engine, startHash)
+	startNode, err := core.ReadHypergraphNode(db.engine, core.DefaultAgentID, startHash)
 	if err != nil {
 		return nil, common.NewError(common.ErrNotFound, "start node not found", err)
 	}
@@ -124,7 +124,7 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs fully connected.
 	adj := make(map[uint64]map[uint64]struct{})
 	var edges []core.HypergraphEdge
-	for _, e := range repo.ListEdgeL3(db.engine, graphID) {
+	for _, e := range repo.ListEdgeL3(db.engine, core.DefaultAgentID, graphID) {
 		if len(edgeKinds) > 0 && !containsEdgeKind(edgeKinds, e.Kind) {
 			continue
 		}
@@ -152,7 +152,7 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 	// Subgraph extraction: visited nodes plus edges with both ends visited.
 	nodes := make([]core.HypergraphNode, 0, len(visited))
 	for h := range visited {
-		if n, err := core.ReadHypergraphNode(db.engine, h); err == nil {
+		if n, err := core.ReadHypergraphNode(db.engine, core.DefaultAgentID, h); err == nil {
 			nodes = append(nodes, *n)
 		}
 	}

@@ -13,7 +13,7 @@ import (
 // writeArchive writes an L4 archive record.
 func writeArchive(t *testing.T, engine *core.StorageEngine, arc *core.ArchiveSlot) {
 	t.Helper()
-	if err := core.WriteArchiveSlot(engine, arc.IDHash, arc); err != nil {
+	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arc.IDHash, arc); err != nil {
 		t.Fatalf("write archive: %v", err)
 	}
 }

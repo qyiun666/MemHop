@@ -48,14 +48,14 @@ func (db *DB) Update(topicID string, text string, timestamp int64) error {
 	if err != nil {
 		return err
 	}
-	archiveID, err := repo.AppendArchiveL4(db.engine, topicID, 1, core.ContentText, text, timestamp)
+	archiveID, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicID, 1, core.ContentText, text, timestamp)
 	if err != nil {
 		return err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, topicID, []uint64{archiveID}) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, topicID, []uint64{archiveID}) {
 		return common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
-	if !repo.UpdateTopicL2(db.engine, topicID, keywords, timestamp) {
+	if !repo.UpdateTopicL2(db.engine, core.DefaultAgentID, topicID, keywords, timestamp) {
 		return common.NewError(common.ErrIO, "update topic keywords", nil)
 	}
 	// Update BM25: uncompressed topics carry User+Agent keywords (compressed

@@ -135,7 +135,7 @@ func TestImportL3RejectsUnknownMode(t *testing.T) {
 	if err == nil || common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("expected ErrInvalidQuery, got %v", err)
 	}
-	if got := core.CollectAllGraphSlots(db.engine); len(got) != 0 {
+	if got := core.CollectAllGraphSlots(db.engine, core.DefaultAgentID); len(got) != 0 {
 		t.Fatalf("no graph should be created for invalid mode: %+v", got)
 	}
 }

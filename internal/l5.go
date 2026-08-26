@@ -99,11 +99,11 @@ func (db *DB) importCapabilityData(data []byte, source string) (*core.Capability
 	cap.UpdatedAt = now
 	// Byte-identical re-import under the same name: return the stored
 	// record without appending, preserving usage stats and timestamps.
-	if existing, err := core.ReadCapability(db.engine, core.CapabilityID(cap.Name)); err == nil &&
+	if existing, err := core.ReadCapability(db.engine, core.DefaultAgentID, core.CapabilityID(cap.Name)); err == nil &&
 		existing.FileHash != "" && existing.FileHash == cap.FileHash {
 		return existing, nil
 	}
-	if _, err := repo.UpsertCapabilityL5(db.engine, cap); err != nil {
+	if _, err := repo.UpsertCapabilityL5(db.engine, core.DefaultAgentID, cap); err != nil {
 		return nil, err
 	}
 	return cap, nil
@@ -116,7 +116,7 @@ func (db *DB) GetCapability(id string) (*core.Capability, error) {
 		return nil, err
 	}
 	defer db.mu.RUnlock()
-	cap, err := repo.GetCapabilityL5(db.engine, id)
+	cap, err := repo.GetCapabilityL5(db.engine, core.DefaultAgentID, id)
 	if err != nil {
 		if common.CodeOf(err) == common.ErrNotFound {
 			if b := db.findBuiltinCapability(id); b != nil {
@@ -147,7 +147,7 @@ func (db *DB) UpdateCapability(id string, patch CapabilityPatch) (*core.Capabili
 	if db.findBuiltinCapability(id) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	cap, err := repo.GetCapabilityL5(db.engine, id)
+	cap, err := repo.GetCapabilityL5(db.engine, core.DefaultAgentID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (db *DB) UpdateCapability(id string, patch CapabilityPatch) (*core.Capabili
 	}
 	// The stored content is no longer the imported bytes.
 	cap.FileHash = ""
-	if _, err := repo.UpsertCapabilityL5(db.engine, cap); err != nil {
+	if _, err := repo.UpsertCapabilityL5(db.engine, core.DefaultAgentID, cap); err != nil {
 		return nil, err
 	}
 	return cap, nil
@@ -196,7 +196,7 @@ func (db *DB) DeleteCapability(id string) error {
 	if db.findBuiltinCapability(id) != nil {
 		return common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	if !repo.DeleteCapabilityL5(db.engine, id) {
+	if !repo.DeleteCapabilityL5(db.engine, core.DefaultAgentID, id) {
 		return common.NewError(common.ErrIO, "delete capability", nil)
 	}
 	return nil
@@ -209,7 +209,7 @@ func (db *DB) ListCapabilities(q CapabilityListQuery) ([]core.Capability, error)
 	}
 	defer db.mu.RUnlock()
 	kw := strings.ToLower(q.Keyword)
-	all := repo.ListCapabilitiesL5(db.engine)
+	all := repo.ListCapabilitiesL5(db.engine, core.DefaultAgentID)
 	filtered := make([]core.Capability, 0, len(all))
 	for _, cap := range all {
 		if q.Status != nil && cap.Status != *q.Status {
@@ -256,7 +256,7 @@ func (db *DB) ActivateCapability(id string) (*core.Capability, error) {
 	if db.findBuiltinCapability(id) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	return repo.ActivateCapabilityL5(db.engine, id)
+	return repo.ActivateCapabilityL5(db.engine, core.DefaultAgentID, id)
 }
 
 // RecordCapabilityUsage records host feedback after a capability was used.
@@ -274,7 +274,7 @@ func (db *DB) RecordCapabilityUsage(id string, success bool) (*core.Capability, 
 	if db.findBuiltinCapability(id) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	return repo.RecordCapabilityUsageL5(db.engine, id, success)
+	return repo.RecordCapabilityUsageL5(db.engine, core.DefaultAgentID, id, success)
 }
 
 // RenderCapabilityPrompt renders capabilities as compact prompt cards for an
@@ -368,5 +368,5 @@ func sha256Hex(data []byte) string {
 // pure retrieval: the built-in toolbox is never attached to Search
 // responses.
 func (db *DB) matchCapabilities(text string) []core.Capability {
-	return repo.MatchCapabilitiesL5(db.engine, text)
+	return repo.MatchCapabilitiesL5(db.engine, core.DefaultAgentID, text)
 }

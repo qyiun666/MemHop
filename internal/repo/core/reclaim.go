@@ -98,7 +98,8 @@ func isSnapshotBlobAt(raw []byte) bool {
 	return len(raw) >= 13 && binary.LittleEndian.Uint32(raw[0:4]) == SnapshotMagic
 }
 
-// snapshotBlobLength parses a snapshot blob's total length.
+// snapshotBlobLength parses a snapshot blob's total length (0x02 per-agent
+// layout).
 func snapshotBlobLength(raw []byte) (int, error) {
 	if len(raw) < 13 {
 		return 0, common.NewError(common.ErrCorruption, "snapshot too short")
@@ -106,9 +107,14 @@ func snapshotBlobLength(raw []byte) (int, error) {
 	if binary.LittleEndian.Uint32(raw[0:4]) != SnapshotMagic || raw[4] != SnapshotVersion {
 		return 0, common.NewError(common.ErrCorruption, "not a snapshot blob")
 	}
-	count := int(binary.LittleEndian.Uint32(raw[5:9]))
-	pos := 9 + count*16
-	for range 2 { // two blobs: sparse + L3 index (L1 reverse index removed in 0x0007)
+	agentCount := int(binary.LittleEndian.Uint32(raw[5:9]))
+	pos := 9
+	for range agentCount {
+		if pos+12 > len(raw) {
+			return 0, common.NewError(common.ErrCorruption, "snapshot agent header truncated")
+		}
+		count := int(binary.LittleEndian.Uint32(raw[pos+8 : pos+12]))
+		pos += 12 + count*16
 		if pos+4 > len(raw) {
 			return 0, common.NewError(common.ErrCorruption, "snapshot blob truncated")
 		}
@@ -158,9 +164,9 @@ func (e *StorageEngine) writeNullSnapshotHeader() error {
 	return nil
 }
 
-// Compact creates a new file at newPath containing only live records. snap
-// must carry the caller's serialized indices or the sparse/L1/L3 data is
-// silently dropped.
+// Compact creates a new file at newPath containing only live records,
+// preserving each record's agent domain. snap must carry the caller's
+// serialized indices or the per-agent sparse data is silently dropped.
 func (e *StorageEngine) Compact(newPath string, snap *IndexSnapshotData) error {
 	if snap == nil {
 		return common.NewError(common.ErrInvalidQuery, "compact requires an index snapshot")
@@ -179,13 +185,15 @@ func (e *StorageEngine) Compact(newPath string, snap *IndexSnapshotData) error {
 			newEng.file.Close()
 		}
 	}()
-	for idHash, offset := range e.index {
-		rt, _, data, _, readErr := RecordData(e.mmap, offset)
-		if readErr != nil {
-			return common.NewError(common.ErrCorruption, "compact: read live record", readErr)
-		}
-		if _, writeErr := newEng.WriteRecord(rt, idHash, data); writeErr != nil {
-			return writeErr
+	for agentID, m := range e.index {
+		for idHash, offset := range m {
+			rt, _, data, _, _, readErr := RecordData(e.mmap, offset)
+			if readErr != nil {
+				return common.NewError(common.ErrCorruption, "compact: read live record", readErr)
+			}
+			if _, writeErr := newEng.WriteRecord(agentID, rt, idHash, data); writeErr != nil {
+				return writeErr
+			}
 		}
 	}
 	if err := newEng.Checkpoint(snap); err != nil {

@@ -387,9 +387,9 @@ func TestBuildL2MetaFromEngine(t *testing.T) {
 		L3Refs:       []uint64{501},
 	}
 	data, _ := json.Marshal(topic)
-	engine.WriteRecord(core.RecL2Topic, 101, data)
+	engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, 101, data)
 
-	l2idx := BuildL2MetaFromEngine(engine)
+	l2idx := BuildL2MetaFromEngine(engine, core.DefaultAgentID)
 	if l2idx.Len() != 1 {
 		t.Errorf("expected 1 L2 entry, got %d", l2idx.Len())
 	}

@@ -12,19 +12,19 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-func RebuildSearchIndexes(engine *core.StorageEngine) (*SparseIndex, *L2MetaIndex, error) {
-	sparse, l2Meta := buildIndexesFromEngine(engine)
+func RebuildSearchIndexes(engine *core.StorageEngine, agentID uint64) (*SparseIndex, *L2MetaIndex, error) {
+	sparse, l2Meta := buildIndexesFromEngine(engine, agentID)
 	return sparse, l2Meta, nil
 }
 
-// BuildL2MetaFromEngine scans only RecL2Topic records and fills an
-// L2MetaIndex; corrupt or unparsable records are skipped (same tolerance
-// as buildIndexesFromEngine). Used at Open time, where sparse comes from
-// the snapshot instead.
-func BuildL2MetaFromEngine(engine *core.StorageEngine) *L2MetaIndex {
+// BuildL2MetaFromEngine scans only RecL2Topic records of one agent domain
+// and fills an L2MetaIndex; corrupt or unparsable records are skipped
+// (same tolerance as buildIndexesFromEngine). Used at Open time, where
+// sparse comes from the snapshot instead.
+func BuildL2MetaFromEngine(engine *core.StorageEngine, agentID uint64) *L2MetaIndex {
 	l2Meta := NewL2MetaIndex()
-	for idHash := range engine.IndexByType(core.RecL2Topic) {
-		_, data, err := engine.ReadRecord(idHash)
+	for idHash := range engine.IndexByType(agentID, core.RecL2Topic) {
+		_, data, err := engine.ReadRecord(agentID, idHash)
 		if err != nil {
 			continue // skip corrupt records
 		}
@@ -37,13 +37,13 @@ func BuildL2MetaFromEngine(engine *core.StorageEngine) *L2MetaIndex {
 	return l2Meta
 }
 
-// buildIndexesFromEngine scans once, building sparse/L2Meta; corrupt or
-// unparsable records are skipped.
-func buildIndexesFromEngine(engine *core.StorageEngine) (*SparseIndex, *L2MetaIndex) {
+// buildIndexesFromEngine scans one agent domain once, building sparse/L2Meta;
+// corrupt or unparsable records are skipped.
+func buildIndexesFromEngine(engine *core.StorageEngine, agentID uint64) (*SparseIndex, *L2MetaIndex) {
 	sparse := NewSparseIndex()
 	l2Meta := NewL2MetaIndex()
-	for idHash := range engine.Index() {
-		rt, data, err := engine.ReadRecord(idHash)
+	for idHash := range engine.Index(agentID) {
+		rt, data, err := engine.ReadRecord(agentID, idHash)
 		if err != nil {
 			continue // skip corrupt records
 		}

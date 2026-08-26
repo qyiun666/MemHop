@@ -19,10 +19,10 @@ import (
 // UpsertCapabilityL5 writes a capability by stable name ID. Existing runtime
 // fields (SuccessRate/TriggerCount/LastTriggered/Status when the capability
 // is active or deprecated) are preserved.
-func UpsertCapabilityL5(engine *core.StorageEngine, cap *core.Capability) (bool, error) {
+func UpsertCapabilityL5(engine *core.StorageEngine, agentID uint64, cap *core.Capability) (bool, error) {
 	cap.IDHash = core.CapabilityID(cap.Name)
 	now := time.Now().UnixMilli()
-	if existing, err := core.ReadCapability(engine, cap.IDHash); err == nil {
+	if existing, err := core.ReadCapability(engine, agentID, cap.IDHash); err == nil {
 		cap.SuccessRate = existing.SuccessRate
 		cap.TriggerCount = existing.TriggerCount
 		cap.LastTriggered = existing.LastTriggered
@@ -31,7 +31,7 @@ func UpsertCapabilityL5(engine *core.StorageEngine, cap *core.Capability) (bool,
 			cap.Status = existing.Status
 		}
 		cap.UpdatedAt = now
-		if err := core.WriteCapability(engine, cap.IDHash, cap); err != nil {
+		if err := core.WriteCapability(engine, agentID, cap.IDHash, cap); err != nil {
 			return true, err
 		}
 		return true, nil
@@ -42,43 +42,43 @@ func UpsertCapabilityL5(engine *core.StorageEngine, cap *core.Capability) (bool,
 	if cap.Origin == "" {
 		cap.Origin = core.CapabilityOriginHost
 	}
-	if err := core.WriteCapability(engine, cap.IDHash, cap); err != nil {
+	if err := core.WriteCapability(engine, agentID, cap.IDHash, cap); err != nil {
 		return false, err
 	}
 	return false, nil
 }
 
-func GetCapabilityL5(engine *core.StorageEngine, id string) (*core.Capability, error) {
+func GetCapabilityL5(engine *core.StorageEngine, agentID uint64, id string) (*core.Capability, error) {
 	idHash, err := common.ParseID(id)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
 	}
-	return core.ReadCapability(engine, idHash)
+	return core.ReadCapability(engine, agentID, idHash)
 }
 
-func DeleteCapabilityL5(engine *core.StorageEngine, id string) bool {
+func DeleteCapabilityL5(engine *core.StorageEngine, agentID uint64, id string) bool {
 	capHash, err := common.ParseID(id)
 	if err != nil {
 		return false
 	}
-	_, err = engine.DeleteRecordBatch([]uint64{capHash})
+	_, err = engine.DeleteRecordBatch(agentID, []uint64{capHash})
 	return err == nil
 }
 
-func ListCapabilitiesL5(engine *core.StorageEngine) []core.Capability {
-	return core.CollectAllCapabilities(engine)
+func ListCapabilitiesL5(engine *core.StorageEngine, agentID uint64) []core.Capability {
+	return core.CollectAllCapabilities(engine, agentID)
 }
 
 // MatchCapabilitiesL5 returns active capabilities relevant to a query.
 // Matching covers name, summary, trigger, resource names/descriptions and
 // workflow refs.
-func MatchCapabilitiesL5(engine *core.StorageEngine, query string) []core.Capability {
+func MatchCapabilitiesL5(engine *core.StorageEngine, agentID uint64, query string) []core.Capability {
 	terms := index.Tokenize(query)
 	if len(terms) == 0 {
 		return nil
 	}
 	var out []core.Capability
-	for _, cap := range core.CollectAllCapabilities(engine) {
+	for _, cap := range core.CollectAllCapabilities(engine, agentID) {
 		if cap.Status != core.CapabilityActive {
 			continue
 		}
@@ -121,14 +121,14 @@ func capabilitySearchText(cap core.Capability) string {
 }
 
 // ActivateCapabilityL5 promotes a draft to active.
-func ActivateCapabilityL5(engine *core.StorageEngine, id string) (*core.Capability, error) {
-	cap, err := GetCapabilityL5(engine, id)
+func ActivateCapabilityL5(engine *core.StorageEngine, agentID uint64, id string) (*core.Capability, error) {
+	cap, err := GetCapabilityL5(engine, agentID, id)
 	if err != nil {
 		return nil, err
 	}
 	cap.Status = core.CapabilityActive
 	cap.UpdatedAt = time.Now().UnixMilli()
-	if err := core.WriteCapability(engine, cap.IDHash, cap); err != nil {
+	if err := core.WriteCapability(engine, agentID, cap.IDHash, cap); err != nil {
 		return nil, err
 	}
 	return cap, nil
@@ -136,8 +136,8 @@ func ActivateCapabilityL5(engine *core.StorageEngine, id string) (*core.Capabili
 
 // RecordCapabilityUsageL5 updates runtime feedback after a host uses a
 // capability.
-func RecordCapabilityUsageL5(engine *core.StorageEngine, id string, success bool) (*core.Capability, error) {
-	cap, err := GetCapabilityL5(engine, id)
+func RecordCapabilityUsageL5(engine *core.StorageEngine, agentID uint64, id string, success bool) (*core.Capability, error) {
+	cap, err := GetCapabilityL5(engine, agentID, id)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func RecordCapabilityUsageL5(engine *core.StorageEngine, id string, success bool
 	cap.SuccessRate = float32(oldSuccess / float64(cap.TriggerCount))
 	cap.LastTriggered = time.Now().UnixMilli()
 	cap.UpdatedAt = cap.LastTriggered
-	if err := core.WriteCapability(engine, cap.IDHash, cap); err != nil {
+	if err := core.WriteCapability(engine, agentID, cap.IDHash, cap); err != nil {
 		return nil, err
 	}
 	return cap, nil

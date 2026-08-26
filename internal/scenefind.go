@@ -249,7 +249,7 @@ func retrieveVector(engine *core.StorageEngine, enc Encoder,
 		if t.CentroidPageRef == 0 {
 			continue
 		}
-		_, vecData, err := engine.ReadRecord(t.CentroidPageRef)
+		_, vecData, err := engine.ReadRecord(core.DefaultAgentID, t.CentroidPageRef)
 		if err != nil || len(vecData) < len(queryVec)*4 {
 			continue
 		}
@@ -328,7 +328,7 @@ func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 		return nil
 	}
 	startNodeID := core.SceneNodeID(startSceneID)
-	if _, err := core.ReadSceneNode(engine, startNodeID); err != nil {
+	if _, err := core.ReadSceneNode(engine, core.DefaultAgentID, startNodeID); err != nil {
 		return nil // never dreamed; nothing associated yet
 	}
 
@@ -345,12 +345,12 @@ func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 		if e.hops >= maxHops {
 			continue
 		}
-		node, err := core.ReadSceneNode(engine, e.nodeID)
+		node, err := core.ReadSceneNode(engine, core.DefaultAgentID, e.nodeID)
 		if err != nil {
 			continue
 		}
 		for _, edgeID := range node.EdgeIDs {
-			edge, err := core.ReadSceneEdge(engine, edgeID)
+			edge, err := core.ReadSceneEdge(engine, core.DefaultAgentID, edgeID)
 			if err != nil {
 				continue
 			}
@@ -362,7 +362,7 @@ func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 				if act < threshold {
 					continue
 				}
-				neighbor, err := core.ReadSceneNode(engine, neighborID)
+				neighbor, err := core.ReadSceneNode(engine, core.DefaultAgentID, neighborID)
 				if err != nil {
 					continue
 				}

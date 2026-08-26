@@ -18,7 +18,7 @@ func writeRawTopic(t *testing.T, engine *core.StorageEngine, id uint64, sceneID 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := engine.WriteRecord(core.RecL2Topic, id, data); err != nil {
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, id, data); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -35,7 +35,7 @@ func TestRebuildSearchIndexes(t *testing.T) {
 	writeRawTopic(t, engine, 2, 100, 2, []string{"beta", "rust"})
 	writeRawTopic(t, engine, 3, 200, 3, []string{"gamma", "deep"})
 
-	sparse, l2Meta, err := RebuildSearchIndexes(engine)
+	sparse, l2Meta, err := RebuildSearchIndexes(engine, core.DefaultAgentID)
 	if err != nil {
 		t.Fatal(err)
 	}

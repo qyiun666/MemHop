@@ -14,20 +14,24 @@ import (
 )
 
 type RecordEntry struct {
+	AgentID    uint64
 	RecordType uint8
 	IDHash     uint64
 	Data       []byte
 }
 
 // StorageEngine is a V2 append-only storage engine with A/B dual headers.
+// Records live in per-agent domains: the record index and the type
+// secondary index are keyed by agentID first, so two agents may hold the
+// same idHash without conflict and no scan crosses domain boundaries.
 type StorageEngine struct {
 	file         *os.File
 	mmap         []byte
 	headerA      *FileHeader
 	headerB      *FileHeader
-	activeHeader uint8 // 0 = A, 1 = B
-	index        map[uint64]uint64
-	byType       map[uint8]map[uint64]struct{} // recordType → set of idHashes
+	activeHeader uint8                                    // 0 = A, 1 = B
+	index        map[uint64]map[uint64]uint64             // agentID → idHash → offset
+	byAgentType  map[uint64]map[uint8]map[uint64]struct{} // agentID → recordType → idHashes
 	recordCount  uint32
 	nextOffset   uint64
 	snapshotData *IndexSnapshotData
@@ -75,8 +79,8 @@ func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 		headerA:      hdr,
 		headerB:      copyHeader(hdr),
 		activeHeader: 0,
-		index:        make(map[uint64]uint64),
-		byType:       make(map[uint8]map[uint64]struct{}),
+		index:        make(map[uint64]map[uint64]uint64),
+		byAgentType:  make(map[uint64]map[uint8]map[uint64]struct{}),
 		nextOffset:   DataStart,
 	}, nil
 }
@@ -120,8 +124,8 @@ func Open(path string) (*StorageEngine, error) {
 		headerA:      hA,
 		headerB:      hB,
 		activeHeader: activeIdx,
-		index:        make(map[uint64]uint64),
-		byType:       make(map[uint8]map[uint64]struct{}),
+		index:        make(map[uint64]map[uint64]uint64),
+		byAgentType:  make(map[uint64]map[uint8]map[uint64]struct{}),
 		recordCount:  active.RecordCount,
 		nextOffset:   DataStart,
 	}
@@ -132,7 +136,7 @@ func Open(path string) (*StorageEngine, error) {
 		if err := e.loadSnapshot(); err != nil {
 			// Snapshot corrupt or out of bounds (reclaim checkpoint truncation window):
 			// fall back to a full scan instead of refusing to open.
-			e.index = make(map[uint64]uint64)
+			e.index = make(map[uint64]map[uint64]uint64)
 			e.recordCount = 0
 			e.snapshotData = nil
 			snapshotCorrupt = true
@@ -182,18 +186,18 @@ func Open(path string) (*StorageEngine, error) {
 			e.headerB = hdr
 		}
 	}
-	e.recordCount = uint32(len(e.index))
-	e.rebuildByType()
+	e.recordCount = uint32(e.totalRecordsLocked())
+	e.rebuildByAgentType()
 	return e, nil
 }
 
-func (e *StorageEngine) WriteRecord(recordType uint8, idHash uint64, data []byte) (uint64, error) {
+func (e *StorageEngine) WriteRecord(agentID uint64, recordType uint8, idHash uint64, data []byte) (uint64, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return 0, common.NewError(common.ErrClosed, "engine is closed")
 	}
-	offsets, err := e.writeRecordBatch([]RecordEntry{{RecordType: recordType, IDHash: idHash, Data: data}})
+	offsets, err := e.writeRecordBatch([]RecordEntry{{AgentID: agentID, RecordType: recordType, IDHash: idHash, Data: data}})
 	if err != nil {
 		return 0, err
 	}
@@ -210,17 +214,17 @@ func (e *StorageEngine) WriteRecordBatch(records []RecordEntry) ([]uint64, error
 	return e.writeRecordBatch(records)
 }
 
-func (e *StorageEngine) ReadRecord(idHash uint64) (uint8, []byte, error) {
+func (e *StorageEngine) ReadRecord(agentID, idHash uint64) (uint8, []byte, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.closed {
 		return 0, nil, common.NewError(common.ErrClosed, "engine is closed")
 	}
-	offset, ok := e.index[idHash]
+	offset, ok := e.index[agentID][idHash]
 	if !ok {
 		return 0, nil, common.NewError(common.ErrNotFound, "record not found")
 	}
-	rt, _, data, _, err := RecordData(e.mmap, offset)
+	rt, _, data, _, _, err := RecordData(e.mmap, offset)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -229,35 +233,61 @@ func (e *StorageEngine) ReadRecord(idHash uint64) (uint8, []byte, error) {
 
 // DeleteRecord appends a FlagDeleted tombstone (same idHash, original type,
 // empty data) and drops the record from the index.
-func (e *StorageEngine) DeleteRecord(idHash uint64) (bool, error) {
+func (e *StorageEngine) DeleteRecord(agentID, idHash uint64) (bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return false, common.NewError(common.ErrClosed, "engine is closed")
 	}
-	deleted, err := e.deleteRecordBatchLocked([]uint64{idHash})
+	deleted, err := e.deleteRecordBatchLocked(agentID, []uint64{idHash})
 	return deleted > 0, err
 }
 
-// DeleteRecordBatch deletes multiple records in one flush+remap cycle;
-// already-missing ids are skipped. Returns the number deleted.
-func (e *StorageEngine) DeleteRecordBatch(idHashes []uint64) (int, error) {
+// DeleteRecordBatch deletes multiple records of one agent domain in one
+// flush+remap cycle; already-missing ids are skipped. Returns the number
+// deleted.
+func (e *StorageEngine) DeleteRecordBatch(agentID uint64, idHashes []uint64) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return 0, common.NewError(common.ErrClosed, "engine is closed")
 	}
-	return e.deleteRecordBatchLocked(idHashes)
+	return e.deleteRecordBatchLocked(agentID, idHashes)
+}
+
+// DeleteAgentRecords tombstones every record of the agent domain,
+// including its registration record. The domain disappears from the index
+// immediately; disk space is reclaimed by the Compact path.
+func (e *StorageEngine) DeleteAgentRecords(agentID uint64) (int, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.closed {
+		return 0, common.NewError(common.ErrClosed, "engine is closed")
+	}
+	ids := make([]uint64, 0, len(e.index[agentID]))
+	for id := range e.index[agentID] {
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	deleted, err := e.deleteRecordBatchLocked(agentID, ids)
+	if err != nil {
+		return deleted, err
+	}
+	delete(e.index, agentID)
+	delete(e.byAgentType, agentID)
+	return deleted, nil
 }
 
 // deleteRecordBatchLocked appends tombstones, syncs once, remaps once, then
 // bulk-updates the index. Caller must hold e.mu.
-func (e *StorageEngine) deleteRecordBatchLocked(idHashes []uint64) (int, error) {
+func (e *StorageEngine) deleteRecordBatchLocked(agentID uint64, idHashes []uint64) (int, error) {
 	// Collect tombstones for existing records, keeping the original type for forensics.
 	var tombstones []byte
 	deleted := 0
 	for _, idHash := range idHashes {
-		offset, ok := e.index[idHash]
+		offset, ok := e.index[agentID][idHash]
 		if !ok {
 			continue
 		}
@@ -265,7 +295,7 @@ func (e *StorageEngine) deleteRecordBatchLocked(idHashes []uint64) (int, error) 
 		if int(offset) < len(e.mmap) {
 			rt = e.mmap[int(offset)]
 		}
-		tombstones = append(tombstones, EncodeRecord(rt, FlagDeleted, idHash, nil)...)
+		tombstones = append(tombstones, EncodeRecord(agentID, rt, FlagDeleted, idHash, nil)...)
 		deleted++
 	}
 	if deleted == 0 {
@@ -291,43 +321,50 @@ func (e *StorageEngine) deleteRecordBatchLocked(idHashes []uint64) (int, error) 
 	}
 	e.mmap = mm
 	for _, idHash := range idHashes {
-		offset, ok := e.index[idHash]
+		offset, ok := e.index[agentID][idHash]
 		if !ok {
 			continue
 		}
-		delete(e.index, idHash)
+		delete(e.index[agentID], idHash)
 		if int(offset) < len(e.mmap) {
 			oldRT := e.mmap[int(offset)]
-			if ids, ok := e.byType[oldRT]; ok {
+			if ids, ok := e.byAgentType[agentID][oldRT]; ok {
 				delete(ids, idHash)
 				if len(ids) == 0 {
-					delete(e.byType, oldRT)
+					delete(e.byAgentType[agentID], oldRT)
+					if len(e.byAgentType[agentID]) == 0 {
+						delete(e.byAgentType, agentID)
+					}
 				}
 			}
 		}
 		e.recordCount--
+	}
+	if len(e.index[agentID]) == 0 {
+		delete(e.index, agentID)
 	}
 	e.nextOffset = uint64(end) + uint64(len(tombstones))
 	e.dirty = true
 	return deleted, nil
 }
 
-func (e *StorageEngine) Contains(idHash uint64) bool {
+func (e *StorageEngine) Contains(agentID, idHash uint64) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.closed {
 		return false
 	}
-	_, ok := e.index[idHash]
+	_, ok := e.index[agentID][idHash]
 	return ok
 }
 
-// ScanDeletedPayloads returns, for every record of the given type whose
-// newest frame is a tombstone, the payload of the newest non-tombstone
-// frame (the pre-delete value). Frames already reclaimed or compacted are
-// gone forever and cannot be recovered. Payloads are copied so callers may
-// write them back without holding the mmap view.
-func (e *StorageEngine) ScanDeletedPayloads(recordType uint8) (map[uint64][]byte, error) {
+// ScanDeletedPayloads returns, for every record of the given type in the
+// agent domain whose newest frame is a tombstone, the payload of the
+// newest non-tombstone frame (the pre-delete value). Frames already
+// reclaimed or compacted are gone forever and cannot be recovered.
+// Payloads are copied so callers may write them back without holding the
+// mmap view.
+func (e *StorageEngine) ScanDeletedPayloads(agentID uint64, recordType uint8) (map[uint64][]byte, error) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	if e.closed {
@@ -337,14 +374,14 @@ func (e *StorageEngine) ScanDeletedPayloads(recordType uint8) (map[uint64][]byte
 	deleted := make(map[uint64]bool)
 	offset := uint64(DataStart)
 	for offset < e.nextOffset {
-		rt, flags, data, idHash, err := RecordData(e.mmap, offset)
+		rt, flags, data, recAgent, idHash, err := RecordData(e.mmap, offset)
 		if err != nil {
 			if errors.Is(err, io.EOF) || common.CodeOf(err) == common.ErrCRCMismatch {
 				break // crash residue after the last clean frame
 			}
 			return nil, err
 		}
-		if rt == recordType {
+		if recAgent == agentID && rt == recordType {
 			if flags&FlagDeleted != 0 {
 				deleted[idHash] = true
 			} else {
@@ -424,18 +461,19 @@ func (e *StorageEngine) CloseNoCheckpoint() error {
 	return e.file.Close()
 }
 
-// Index iterates over all (idHash, offset) pairs. The index is copied
-// first and the yield runs lock-free so engine methods may be called;
-// iteration sees a snapshot. Returning false from yield stops iteration.
-func (e *StorageEngine) Index() iter.Seq2[uint64, uint64] {
+// Index iterates over all (idHash, offset) pairs of one agent domain. The
+// index is copied first and the yield runs lock-free so engine methods may
+// be called; iteration sees a snapshot. Returning false from yield stops
+// iteration.
+func (e *StorageEngine) Index(agentID uint64) iter.Seq2[uint64, uint64] {
 	return func(yield func(uint64, uint64) bool) {
 		e.mu.RLock()
 		if e.closed {
 			e.mu.RUnlock()
 			return
 		}
-		pairs := make([]uint64, 0, len(e.index)*2)
-		for id, off := range e.index {
+		pairs := make([]uint64, 0, len(e.index[agentID])*2)
+		for id, off := range e.index[agentID] {
 			pairs = append(pairs, id, off)
 		}
 		e.mu.RUnlock()
@@ -447,17 +485,18 @@ func (e *StorageEngine) Index() iter.Seq2[uint64, uint64] {
 	}
 }
 
-// IndexByType iterates all idHashes of a record type over a snapshot; the
-// yield runs lock-free. A closed engine yields nothing.
-func (e *StorageEngine) IndexByType(rt uint8) iter.Seq[uint64] {
+// IndexByType iterates all idHashes of a record type inside one agent
+// domain over a snapshot; the yield runs lock-free. A closed engine yields
+// nothing.
+func (e *StorageEngine) IndexByType(agentID uint64, rt uint8) iter.Seq[uint64] {
 	return func(yield func(uint64) bool) {
 		e.mu.RLock()
 		if e.closed {
 			e.mu.RUnlock()
 			return
 		}
-		ids := make([]uint64, 0, len(e.byType[rt]))
-		for id := range e.byType[rt] {
+		ids := make([]uint64, 0, len(e.byAgentType[agentID][rt]))
+		for id := range e.byAgentType[agentID][rt] {
 			ids = append(ids, id)
 		}
 		e.mu.RUnlock()
@@ -467,6 +506,35 @@ func (e *StorageEngine) IndexByType(rt uint8) iter.Seq[uint64] {
 			}
 		}
 	}
+}
+
+// IterAgents iterates every agentID that currently holds at least one
+// live record, over a snapshot copy.
+func (e *StorageEngine) IterAgents() iter.Seq[uint64] {
+	return func(yield func(uint64) bool) {
+		e.mu.RLock()
+		if e.closed {
+			e.mu.RUnlock()
+			return
+		}
+		ids := make([]uint64, 0, len(e.index))
+		for agentID := range e.index {
+			ids = append(ids, agentID)
+		}
+		e.mu.RUnlock()
+		for _, id := range ids {
+			if !yield(id) {
+				return
+			}
+		}
+	}
+}
+
+// AgentRecordCount returns the number of live records in one agent domain.
+func (e *StorageEngine) AgentRecordCount(agentID uint64) uint32 {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return uint32(len(e.index[agentID]))
 }
 
 func (e *StorageEngine) RecordCount() uint32 {
@@ -512,7 +580,7 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 	// sync and remap succeed, so a mid-batch failure leaves consistent state.
 	offsets := make([]uint64, 0, len(records))
 	for _, rec := range records {
-		encoded := EncodeRecord(rec.RecordType, 0, rec.IDHash, rec.Data)
+		encoded := EncodeRecord(rec.AgentID, rec.RecordType, 0, rec.IDHash, rec.Data)
 		offset, err := e.file.Seek(0, io.SeekEnd)
 		if err != nil {
 			return nil, common.NewError(common.ErrIO, "seek end", err)
@@ -531,22 +599,28 @@ func (e *StorageEngine) writeRecordBatch(records []RecordEntry) ([]uint64, error
 	}
 	e.mmap = mm
 	for i, rec := range records {
-		if _, exists := e.index[rec.IDHash]; !exists {
+		if e.index[rec.AgentID] == nil {
+			e.index[rec.AgentID] = make(map[uint64]uint64)
+		}
+		if _, exists := e.index[rec.AgentID][rec.IDHash]; !exists {
 			e.recordCount++
 		}
-		if oldOff, exists := e.index[rec.IDHash]; exists {
+		if oldOff, exists := e.index[rec.AgentID][rec.IDHash]; exists {
 			if int(oldOff) < len(e.mmap) {
 				oldRT := e.mmap[int(oldOff)]
 				if oldRT != rec.RecordType {
-					delete(e.byType[oldRT], rec.IDHash)
+					delete(e.byAgentType[rec.AgentID][oldRT], rec.IDHash)
 				}
 			}
 		}
-		e.index[rec.IDHash] = offsets[i]
-		if e.byType[rec.RecordType] == nil {
-			e.byType[rec.RecordType] = make(map[uint64]struct{})
+		e.index[rec.AgentID][rec.IDHash] = offsets[i]
+		if e.byAgentType[rec.AgentID] == nil {
+			e.byAgentType[rec.AgentID] = make(map[uint8]map[uint64]struct{})
 		}
-		e.byType[rec.RecordType][rec.IDHash] = struct{}{}
+		if e.byAgentType[rec.AgentID][rec.RecordType] == nil {
+			e.byAgentType[rec.AgentID][rec.RecordType] = make(map[uint64]struct{})
+		}
+		e.byAgentType[rec.AgentID][rec.RecordType][rec.IDHash] = struct{}{}
 	}
 	last := records[len(records)-1]
 	e.nextOffset = offsets[len(offsets)-1] + uint64(RecordHeaderSize+len(last.Data))
@@ -612,18 +686,29 @@ func (e *StorageEngine) loadSnapshot() error {
 		return err
 	}
 	e.index = idx
-	e.recordCount = uint32(len(idx))
+	e.recordCount = uint32(e.totalRecordsLocked())
 	e.snapshotData = snap
 	return nil
 }
 
-// scanRecords scans from offset, merging records into the index (a later
-// same-idHash overrides; a tombstone deletes). Stops at the first truncated
-// or CRC-failed frame (crash residue) and reports whether it must be truncated.
+// totalRecordsLocked sums live records across all agent domains. Caller
+// must hold e.mu.
+func (e *StorageEngine) totalRecordsLocked() int {
+	total := 0
+	for _, m := range e.index {
+		total += len(m)
+	}
+	return total
+}
+
+// scanRecords scans from offset, merging records into the per-agent index
+// (a later same-(agent,idHash) overrides; a tombstone deletes). Stops at
+// the first truncated or CRC-failed frame (crash residue) and reports
+// whether it must be truncated.
 func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, err error) {
 	offset := start
 	for {
-		_, flags, data, idHash, err := RecordData(e.mmap, offset)
+		_, flags, data, agentID, idHash, err := RecordData(e.mmap, offset)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				break
@@ -634,9 +719,17 @@ func (e *StorageEngine) scanRecords(start uint64) (end uint64, truncate bool, er
 			return 0, false, err
 		}
 		if flags&FlagDeleted != 0 {
-			delete(e.index, idHash)
+			if m := e.index[agentID]; m != nil {
+				delete(m, idHash)
+				if len(m) == 0 {
+					delete(e.index, agentID)
+				}
+			}
 		} else {
-			e.index[idHash] = offset
+			if e.index[agentID] == nil {
+				e.index[agentID] = make(map[uint64]uint64)
+			}
+			e.index[agentID][idHash] = offset
 		}
 		offset += uint64(RecordHeaderSize) + uint64(len(data))
 	}
@@ -669,7 +762,7 @@ func (e *StorageEngine) recoverRecordAreaEnd() uint64 {
 			offset += uint64(n)
 			continue
 		}
-		_, _, data, _, err := RecordData(e.mmap, offset)
+		_, _, data, _, _, err := RecordData(e.mmap, offset)
 		if err != nil {
 			return active.SnapshotOffset
 		}
@@ -705,18 +798,24 @@ func (e *StorageEngine) truncateTail(size int64) error {
 	return nil
 }
 
-// rebuildByType rebuilds the byType secondary index. Caller must hold e.mu.
-func (e *StorageEngine) rebuildByType() {
-	e.byType = make(map[uint8]map[uint64]struct{})
-	for id, off := range e.index {
-		if int(off) >= len(e.mmap) {
-			continue
+// rebuildByAgentType rebuilds the (agent, type) secondary index. Caller
+// must hold e.mu.
+func (e *StorageEngine) rebuildByAgentType() {
+	e.byAgentType = make(map[uint64]map[uint8]map[uint64]struct{})
+	for agentID, m := range e.index {
+		for id, off := range m {
+			if int(off) >= len(e.mmap) {
+				continue
+			}
+			rt := e.mmap[int(off)]
+			if e.byAgentType[agentID] == nil {
+				e.byAgentType[agentID] = make(map[uint8]map[uint64]struct{})
+			}
+			if e.byAgentType[agentID][rt] == nil {
+				e.byAgentType[agentID][rt] = make(map[uint64]struct{})
+			}
+			e.byAgentType[agentID][rt][id] = struct{}{}
 		}
-		rt := e.mmap[int(off)]
-		if e.byType[rt] == nil {
-			e.byType[rt] = make(map[uint64]struct{})
-		}
-		e.byType[rt][id] = struct{}{}
 	}
 }
 

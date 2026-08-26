@@ -26,9 +26,12 @@ const (
 // mcp/skill/composite resource-wrapper model; 0x0007 removed the L6 scene
 // usage record (folded into SceneSlot), removed the L1 reverse index from
 // the snapshot (L1 association now walks the scene hypergraph at query
-// time) and added L1 hyperedge creation during Dream. Files with 0x0006
+// time) and added L1 hyperedge creation during Dream; 0x0008 added
+// agent_id to the record frame (18 -> 26 bytes) so one file hosts
+// multiple physically separated agent domains, and renumbered the
+// trajectory layer from L7 to L6 (RecL6Trajectory). Files with 0x0007
 // (or older) are rejected at Open — there is no migration path.
-const FormatVersion uint16 = 0x0007
+const FormatVersion uint16 = 0x0008
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

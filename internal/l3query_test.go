@@ -25,7 +25,7 @@ func testNode(id, graphID uint64, title, nodeType, content string, kws []string)
 // writeNode writes an L3 node record.
 func writeNode(t *testing.T, engine *core.StorageEngine, n *core.HypergraphNode) {
 	t.Helper()
-	if err := core.WriteHypergraphNode(engine, n.IDHash, n); err != nil {
+	if err := core.WriteHypergraphNode(engine, core.DefaultAgentID, n.IDHash, n); err != nil {
 		t.Fatalf("write node: %v", err)
 	}
 }
@@ -33,7 +33,7 @@ func writeNode(t *testing.T, engine *core.StorageEngine, n *core.HypergraphNode)
 // writeEdge writes an L3 edge record.
 func writeEdge(t *testing.T, engine *core.StorageEngine, e *core.HypergraphEdge) {
 	t.Helper()
-	if err := core.WriteHypergraphEdge(engine, e.IDHash, e); err != nil {
+	if err := core.WriteHypergraphEdge(engine, core.DefaultAgentID, e.IDHash, e); err != nil {
 		t.Fatalf("write edge: %v", err)
 	}
 }

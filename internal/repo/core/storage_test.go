@@ -27,14 +27,14 @@ func TestCreateWriteRead(t *testing.T) {
 	}
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	data := []byte("hello storage engine")
-	offset, err := eng.WriteRecord(RecL0Profile, 12345, data)
+	offset, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 12345, data)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if offset != DataStart {
 		t.Fatalf("expected offset %d, got %d", DataStart, offset)
 	}
-	rt, got, err := eng.ReadRecord(12345)
+	rt, got, err := eng.ReadRecord(DefaultAgentID, 12345)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestCreateWriteRead(t *testing.T) {
 		t.Fatalf("data mismatch: %q vs %q", got, data)
 	}
 	// NotFound
-	_, _, err = eng.ReadRecord(99999)
+	_, _, err = eng.ReadRecord(DefaultAgentID, 99999)
 	if err == nil {
 		t.Fatal("expected error for missing record")
 	}
@@ -58,8 +58,8 @@ func TestABHeaderSwitch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
-	eng.WriteRecord(RecL1SceneNode, 1, []byte("a"))
-	snap := &IndexSnapshotData{SparseData: []byte("s")}
+	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 1, []byte("a"))
+	snap := &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s")}}
 	for range 4 {
 		if err := eng.Checkpoint(snap); err != nil {
 			t.Fatal(err)
@@ -81,10 +81,9 @@ func TestCheckpointReopen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.WriteRecord(RecL2Topic, 100, []byte("checkpoint data"))
+	eng.WriteRecord(DefaultAgentID, RecL2Topic, 100, []byte("checkpoint data"))
 	snap := &IndexSnapshotData{
-		SparseData:  []byte("sparse"),
-		L3IndexData: []byte("l3"),
+		SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")},
 	}
 	if err := eng.Checkpoint(snap); err != nil {
 		t.Fatal(err)
@@ -99,7 +98,7 @@ func TestCheckpointReopen(t *testing.T) {
 	if eng2.RecordCount() != 1 {
 		t.Fatalf("recordCount: want 1, got %d", eng2.RecordCount())
 	}
-	rt, data, err := eng2.ReadRecord(100)
+	rt, data, err := eng2.ReadRecord(DefaultAgentID, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,8 +113,8 @@ func TestCheckpointReopen(t *testing.T) {
 	if sd == nil {
 		t.Fatal("snapshot data is nil")
 	}
-	if string(sd.SparseData) != "sparse" {
-		t.Fatalf("sparse: %q", sd.SparseData)
+	if string(sd.SparseByAgent[DefaultAgentID]) != "sparse" {
+		t.Fatalf("sparse: %q", sd.SparseByAgent[DefaultAgentID])
 	}
 }
 
@@ -126,15 +125,15 @@ func TestDeleteRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
-	eng.WriteRecord(RecL0Profile, 1, []byte("first"))
-	eng.WriteRecord(RecL1SceneNode, 2, []byte("second"))
-	eng.WriteRecord(RecL2Topic, 3, []byte("third"))
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("first"))
+	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("second"))
+	eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("third"))
 
-	ok, err := eng.DeleteRecord(2)
+	ok, err := eng.DeleteRecord(DefaultAgentID, 2)
 	if err != nil || !ok {
 		t.Fatalf("delete: ok=%v err=%v", ok, err)
 	}
-	_, _, err = eng.ReadRecord(2)
+	_, _, err = eng.ReadRecord(DefaultAgentID, 2)
 	if err == nil {
 		t.Fatal("expected not found after delete")
 	}
@@ -142,10 +141,10 @@ func TestDeleteRecord(t *testing.T) {
 		t.Fatalf("count: %d", eng.RecordCount())
 	}
 	// Others still readable.
-	if _, _, err := eng.ReadRecord(1); err != nil {
+	if _, _, err := eng.ReadRecord(DefaultAgentID, 1); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := eng.ReadRecord(3); err != nil {
+	if _, _, err := eng.ReadRecord(DefaultAgentID, 3); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -157,13 +156,13 @@ func TestDeleteRecordBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
-	eng.WriteRecord(RecL0Profile, 1, []byte("first"))
-	eng.WriteRecord(RecL1SceneNode, 2, []byte("second"))
-	eng.WriteRecord(RecL2Topic, 3, []byte("third"))
-	eng.WriteRecord(RecL2Scene, 4, []byte("scene"))
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("first"))
+	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("second"))
+	eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("third"))
+	eng.WriteRecord(DefaultAgentID, RecL2Scene, 4, []byte("scene"))
 
 	// Mixed existing/missing ids: missing ones are skipped without affecting the result
-	n, err := eng.DeleteRecordBatch([]uint64{1, 2, 99})
+	n, err := eng.DeleteRecordBatch(DefaultAgentID, []uint64{1, 2, 99})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,18 +174,18 @@ func TestDeleteRecordBatch(t *testing.T) {
 	}
 	// Deleted ones unreadable, remaining ones readable
 	for _, id := range []uint64{1, 2} {
-		if _, _, err := eng.ReadRecord(id); err == nil {
+		if _, _, err := eng.ReadRecord(DefaultAgentID, id); err == nil {
 			t.Errorf("record %d should be deleted", id)
 		}
 	}
-	if _, _, err := eng.ReadRecord(3); err != nil {
+	if _, _, err := eng.ReadRecord(DefaultAgentID, 3); err != nil {
 		t.Error("record 3 should survive")
 	}
-	if _, _, err := eng.ReadRecord(4); err != nil {
+	if _, _, err := eng.ReadRecord(DefaultAgentID, 4); err != nil {
 		t.Error("record 4 should survive")
 	}
 	// All missing returns 0
-	n, err = eng.DeleteRecordBatch([]uint64{99})
+	n, err = eng.DeleteRecordBatch(DefaultAgentID, []uint64{99})
 	if err != nil || n != 0 {
 		t.Fatalf("missing-only batch: n=%d err=%v", n, err)
 	}
@@ -199,18 +198,18 @@ func TestCompact(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
-	eng.WriteRecord(RecL0Profile, 1, []byte("keep"))
-	eng.WriteRecord(RecL1SceneNode, 2, []byte("delete me"))
-	eng.WriteRecord(RecL2Topic, 3, []byte("also keep"))
-	eng.WriteRecord(RecL3GraphNode, 4, []byte("keep too"))
-	eng.WriteRecord(RecL4Archive, 5, []byte("remove"))
-	eng.DeleteRecord(2)
-	eng.DeleteRecord(5)
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("keep"))
+	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("delete me"))
+	eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("also keep"))
+	eng.WriteRecord(DefaultAgentID, RecL3GraphNode, 4, []byte("keep too"))
+	eng.WriteRecord(DefaultAgentID, RecL4Archive, 5, []byte("remove"))
+	eng.DeleteRecord(DefaultAgentID, 2)
+	eng.DeleteRecord(DefaultAgentID, 5)
 	// Checkpoint so original has a snapshot (fair comparison).
 	eng.Checkpoint(&IndexSnapshotData{})
 
 	compactPath := tempPath(t, "compact_dst")
-	snap := &IndexSnapshotData{SparseData: []byte("sparse")}
+	snap := &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
 	if err := eng.Compact(compactPath, snap); err != nil {
 		t.Fatal(err)
 	}
@@ -224,24 +223,24 @@ func TestCompact(t *testing.T) {
 	if eng2.RecordCount() != 3 {
 		t.Fatalf("compact count: %d", eng2.RecordCount())
 	}
-	_, data, err := eng2.ReadRecord(1)
+	_, data, err := eng2.ReadRecord(DefaultAgentID, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != "keep" {
 		t.Fatalf("data: %q", data)
 	}
-	_, _, err = eng2.ReadRecord(2)
+	_, _, err = eng2.ReadRecord(DefaultAgentID, 2)
 	if err == nil {
 		t.Fatal("expected not found in compacted file")
 	}
-	_, data3, err := eng2.ReadRecord(3)
+	_, data3, err := eng2.ReadRecord(DefaultAgentID, 3)
 	if err != nil || string(data3) != "also keep" {
 		t.Fatal("record 3 missing or wrong")
 	}
 	// The caller-provided snapshot must be carried into the compacted file.
 	sd := eng2.SnapshotData()
-	if sd == nil || string(sd.SparseData) != "sparse" {
+	if sd == nil || string(sd.SparseByAgent[DefaultAgentID]) != "sparse" {
 		t.Fatalf("compacted snapshot lost: %+v", sd)
 	}
 	// A nil snapshot is a caller bug, not a silent empty checkpoint.
@@ -266,14 +265,14 @@ func TestConcurrentReadWrite(t *testing.T) {
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	// Seed some records.
 	for i := range uint64(100) {
-		eng.WriteRecord(RecL0Profile, i, fmt.Appendf(nil, "seed-%d", i))
+		eng.WriteRecord(DefaultAgentID, RecL0Profile, i, fmt.Appendf(nil, "seed-%d", i))
 	}
 	var wg sync.WaitGroup
 	// Concurrent readers.
 	for range 5 {
 		wg.Go(func() {
 			for i := range uint64(100) {
-				eng.ReadRecord(i)
+				eng.ReadRecord(DefaultAgentID, i)
 			}
 		})
 	}
@@ -283,14 +282,14 @@ func TestConcurrentReadWrite(t *testing.T) {
 		go func(base uint64) {
 			defer wg.Done()
 			for i := range uint64(50) {
-				eng.WriteRecord(RecL2Topic, base*1000+i, fmt.Appendf(nil, "w-%d", i))
+				eng.WriteRecord(DefaultAgentID, RecL2Topic, base*1000+i, fmt.Appendf(nil, "w-%d", i))
 			}
 		}(uint64(g))
 	}
 	wg.Wait()
 	// Verify all seed records intact.
 	for i := range uint64(100) {
-		if !eng.Contains(i) {
+		if !eng.Contains(DefaultAgentID, i) {
 			t.Fatalf("seed record %d missing", i)
 		}
 	}
@@ -319,7 +318,7 @@ func TestWriteRecordBatch(t *testing.T) {
 		t.Fatalf("offsets len: %d", len(offsets))
 	}
 	for _, rec := range records {
-		rt, data, err := eng.ReadRecord(rec.IDHash)
+		rt, data, err := eng.ReadRecord(DefaultAgentID, rec.IDHash)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -348,15 +347,15 @@ func TestContainsAndIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
-	eng.WriteRecord(RecL0Profile, 42, []byte("x"))
-	if !eng.Contains(42) {
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 42, []byte("x"))
+	if !eng.Contains(DefaultAgentID, 42) {
 		t.Fatal("should contain 42")
 	}
-	if eng.Contains(99) {
+	if eng.Contains(DefaultAgentID, 99) {
 		t.Fatal("should not contain 99")
 	}
 	count := 0
-	for range eng.Index() {
+	for range eng.Index(DefaultAgentID) {
 		count++
 	}
 	if count != 1 {
@@ -372,14 +371,14 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 	}
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	// First batch, then checkpoint.
-	eng.WriteRecord(RecL0Profile, 1, []byte("one"))
-	eng.WriteRecord(RecL1SceneNode, 2, []byte("two"))
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one"))
+	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("two"))
 	if err := eng.Checkpoint(&IndexSnapshotData{}); err != nil {
 		t.Fatal(err)
 	}
 	// Second batch appended after the checkpoint (includes an overwrite).
-	eng.WriteRecord(RecL2Topic, 3, []byte("three"))
-	eng.WriteRecord(RecL2Topic, 1, []byte("one-updated"))
+	eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("three"))
+	eng.WriteRecord(DefaultAgentID, RecL2Topic, 1, []byte("one-updated"))
 	// Simulate a crash: close without checkpoint.
 	if err := eng.CloseNoCheckpoint(); err != nil {
 		t.Fatal(err)
@@ -390,14 +389,14 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Both batches must be visible after reopen.
-	if _, data, err := eng2.ReadRecord(2); err != nil || string(data) != "two" {
+	if _, data, err := eng2.ReadRecord(DefaultAgentID, 2); err != nil || string(data) != "two" {
 		t.Fatalf("record 2: data=%q err=%v", data, err)
 	}
-	if _, data, err := eng2.ReadRecord(3); err != nil || string(data) != "three" {
+	if _, data, err := eng2.ReadRecord(DefaultAgentID, 3); err != nil || string(data) != "three" {
 		t.Fatalf("record 3: data=%q err=%v", data, err)
 	}
 	// Later write for the same idHash wins.
-	if _, data, err := eng2.ReadRecord(1); err != nil || string(data) != "one-updated" {
+	if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "one-updated" {
 		t.Fatalf("record 1: data=%q err=%v", data, err)
 	}
 	if eng2.RecordCount() != 3 {
@@ -405,13 +404,13 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 	}
 	// nextOffset must be past the recovered tail: a new write must not
 	// clobber recovered records.
-	if _, err := eng2.WriteRecord(RecL4Archive, 4, []byte("four")); err != nil {
+	if _, err := eng2.WriteRecord(DefaultAgentID, RecL4Archive, 4, []byte("four")); err != nil {
 		t.Fatal(err)
 	}
-	if _, data, err := eng2.ReadRecord(3); err != nil || string(data) != "three" {
+	if _, data, err := eng2.ReadRecord(DefaultAgentID, 3); err != nil || string(data) != "three" {
 		t.Fatalf("record 3 after new write: data=%q err=%v", data, err)
 	}
-	if _, data, err := eng2.ReadRecord(4); err != nil || string(data) != "four" {
+	if _, data, err := eng2.ReadRecord(DefaultAgentID, 4); err != nil || string(data) != "four" {
 		t.Fatalf("record 4: data=%q err=%v", data, err)
 	}
 	eng2.Close(&IndexSnapshotData{})
@@ -423,8 +422,8 @@ func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	eng.WriteRecord(RecL0Profile, 1, []byte("a"))
-	snap := &IndexSnapshotData{SparseData: []byte("sparse")}
+	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("a"))
+	snap := &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
 	if err := eng.Checkpoint(snap); err != nil {
 		t.Fatal(err)
 	}
@@ -443,10 +442,10 @@ func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 		t.Fatalf("commitID: want %d, got %d", commitID, got)
 	}
 	sd := eng2.SnapshotData()
-	if sd == nil || string(sd.SparseData) != "sparse" {
+	if sd == nil || string(sd.SparseByAgent[DefaultAgentID]) != "sparse" {
 		t.Fatalf("snapshot lost: %+v", sd)
 	}
-	if _, data, err := eng2.ReadRecord(1); err != nil || string(data) != "a" {
+	if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "a" {
 		t.Fatalf("record 1: data=%q err=%v", data, err)
 	}
 }
@@ -458,7 +457,7 @@ func TestIndexCallbackMayReadRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range uint64(10) {
-		eng.WriteRecord(RecL0Profile, i, fmt.Appendf(nil, "v%d", i))
+		eng.WriteRecord(DefaultAgentID, RecL0Profile, i, fmt.Appendf(nil, "v%d", i))
 	}
 	// Queue a writer during iteration. Under the old callback-based
 	// implementation (fn invoked with RLock held) the waiting writer would
@@ -466,26 +465,26 @@ func TestIndexCallbackMayReadRecord(t *testing.T) {
 	// under RLock and yields lock-free, so engine methods stay callable.
 	writerDone := make(chan struct{})
 	first := true
-	for idHash := range eng.Index() {
+	for idHash := range eng.Index(DefaultAgentID) {
 		if first {
 			first = false
 			go func() {
 				defer close(writerDone)
-				eng.WriteRecord(RecL0Profile, 999, []byte("queued"))
+				eng.WriteRecord(DefaultAgentID, RecL0Profile, 999, []byte("queued"))
 			}()
 			time.Sleep(50 * time.Millisecond)
 		}
-		if _, _, err := eng.ReadRecord(idHash); err != nil {
+		if _, _, err := eng.ReadRecord(DefaultAgentID, idHash); err != nil {
 			t.Errorf("ReadRecord(%d): %v", idHash, err)
 		}
 	}
 	<-writerDone
-	if !eng.Contains(999) {
+	if !eng.Contains(DefaultAgentID, 999) {
 		t.Fatal("queued writer record missing")
 	}
 	// yield returning false stops iteration.
 	count := 0
-	for range eng.Index() {
+	for range eng.Index(DefaultAgentID) {
 		count++
 		if count >= 3 {
 			break
