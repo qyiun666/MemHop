@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">MemHop</h1>
   <p align="center">
-    <strong>Long-term memory for AI agents — an eight-layer cognitive memory database in a single embedded file. Pure Go, zero infrastructure.</strong>
+    <strong>Long-term memory for AI agents — a seven-layer cognitive memory database in a single embedded file. Pure Go, zero infrastructure.</strong>
   </p>
   <p align="center">
     <a href="README.zh.md">中文</a>
@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>Current: v1.2.5 · Latest stable tag: v1.2.5</strong>
+  <strong>Current: v1.3.2 · Latest stable tag: v1.3.2</strong>
 </p>
 
 ---
@@ -35,7 +35,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 
 ## Features
 
-- **Eight-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal → L6 Scene Usage → L7 Trajectory, with Dream consolidation
+- **Seven-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal → L7 Trajectory (L6 scene usage folded into L2), with Dream consolidation
 - **Three-Channel RRF Retrieval** — BM25 (gse CJK) + f32 vector + fuzzy entity/term matching (entity index auto-fed from indexed topic terms), fused via Reciprocal Rank Fusion (k=60)
 - **V2 Storage** — `.meh` format (`FormatVersion=0x0007`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. **Not compatible with v1 `.meh` data files** (JSON serialization switched to native numbers); 0x0005 introduced the 0x0F Capability record, 0x0006 re-designed the capability payload as the v2 mcp/skill/composite resource-wrapper model, 0x0007 folded the L6 scene-usage record into the L2 scene slot, removed the L1 reverse index from the snapshot and added real L1 hyperedge creation — files with 0x0006 (or older) are rejected at Open with no migration path
 - **L1 Scene Hypergraph + Spreading Activation** — Dream creates co-occurrence hyperedges between scenes whose topic keyword sets overlap (Jaccard ≥ `L1EdgeMinSimilarity`); Search association walks the graph from the hit scene, propagating activation (× edge weight × dampening per hop) and returns the top associated scenes' topics as `AssociatedContexts` — real cross-scene associative recall ("联想记忆"), with edge weights decayed and pruned by the Dream pipeline
@@ -94,7 +94,7 @@ if err != nil {
 // Append the agent reply to the topic created by Search.
 // Update takes the topic ID as a 16-char hex string (NewTopicID is uint64).
 topicID := fmt.Sprintf("%016x", res.NewTopicID)
-if _, err = db.Update(topicID, "Agent: ...", time.Now().UnixMilli()); err != nil {
+if err = db.Update(topicID, "Agent: ...", time.Now().UnixMilli()); err != nil {
     log.Fatal(err)
 }
 
@@ -113,7 +113,7 @@ Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-
 |-------|---------|
 | Core loop | `Search(ctx, q)` · `Update` · `Dream(ctx)` · `Checkpoint` · `Close` |
 | L0 Profile | `GetL0` · `UpdateL0` |
-| L2 Context | `ListScenes` · `SceneContext` · `ActiveSceneIDs` · `MergeScenes` · `RefineTopicKeywords(ctx, id)` |
+| L2 Context | `ListScenes` · `SceneContext` · `ActiveSceneIDs` · `MergeScenes` · `DeleteTopic` · `DeleteScene` · `RefineTopicKeywords(ctx, id)` |
 | L3 Knowledge | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 Archive | `SearchL4` · `GetArchive` · `AppendL4Message` |
 | L5 Capability | `ImportCapability` · `GetCapability` · `UpdateCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` |
@@ -121,7 +121,7 @@ Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-
 
 ### Built-in L5 Capabilities
 
-The root `capabilities/` directory ships a ready-to-use capability toolbox (`memhop-capability/v2`), embedded into the library at build time, in two groups: MemHop's own usage manuals (`manual`: guide, Search, Update, Dream, L7 trajectory, L5 crystallize and import) and atomic capability cards a harness/agent is expected to have (`atomic`: file read/write/edit, command execution, file search, web search). **Zero config, zero writes**: `ListCapabilities` / `GetCapability` serve the built-in toolbox directly (same status/type/keyword filters as stored records), so the host LLM can fetch and consult it. Built-ins are read-only, never persisted to the `.meh` file, dedupe by ID against stored same-name records (stored wins), and are NOT attached to `Search` responses — retrieval returns stored matches only.
+The root `capabilities/` directory ships a ready-to-use capability toolbox (`memhop-capability/v2`), embedded into the library at build time — **19 cards in two groups**: MemHop's own API manuals (`manual`, 13 cards: guide, search, update, dream, trajectory, crystallize, capability-import, profile, scene, archive, capability, knowledge, refine — covering every public API except `Open`/`Close`/`Dream`/`Update`/`Search` and L5 reads) and atomic capability cards a harness/agent is expected to have (`atomic`: file read/write/edit, command execution, file search, web search). Manual cards reference the Go API directly (`type: "api"`, `ref: "api:MethodName"`) — the host calls the methods on `*api.DB` with no MCP layer involved. **Zero config, zero writes**: `ListCapabilities` / `GetCapability` serve the built-in toolbox directly (same status/type/keyword filters as stored records), so the host LLM can fetch and consult it. Built-ins are read-only, never persisted to the `.meh` file, dedupe by ID against stored same-name records (stored wins), and are NOT attached to `Search` responses — retrieval returns stored matches only.
 
 ## Architecture
 
@@ -129,7 +129,6 @@ The root `capabilities/` directory ships a ready-to-use capability toolbox (`mem
 Layer   Name             Human Parallel          Mechanism
 ─────   ──────────────   ───────────────────     ─────────────────────────────────────────────
  L7     Trajectory       Procedural log          Host-appended operation events; crystallized into L5 capability drafts
- L6     Scene Usage      Retrieval feedback      Scene hit counters folded into L2 scene records, feeding L1 decay
  L5     Crystal          Muscle memory           Reusable capability packages (skills · MCP · tools · prompts · services)
  L4     Archive          Long-term memory        Raw dialogue logs & historical records
  L3     Knowledge        Semantic memory         Multi-source hypergraph knowledge base
@@ -195,10 +194,10 @@ Analysis and competitor positioning: [docs/benchmarks/locomo_recall_analysis.md]
 ## Project Structure
 
 ```
-api/                         ← Public facade: DB handle (open/search/update/dream/l0–l7) + type aliases/constructors
+api/                         ← Public facade: DB handle (open/search/update/dream/l0–l5/l7) + type aliases/constructors
 internal/                    ← Business assembly: config / db / defaults / l0 / l2 / l3 / l3query /
                                l4 / l5 / l7 / search / update / dream / scenefind / llm_client / llm_ops / encoder
-internal/repo/               ← Data layer: l0layer–l7layer (record read/write, vectors)
+internal/repo/               ← Data layer: l0layer–l5layer + l7layer (record read/write, vectors)
 internal/repo/index/         ← Index layer: sparse (BM25) / l1_reverse / l2meta / l3_index /
                                entity / rebuild / tokenizer (gse)
 internal/repo/core/          ← .meh engine: engine / frame / header / snapshot / reclaim /

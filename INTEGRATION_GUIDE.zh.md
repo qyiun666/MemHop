@@ -1,7 +1,7 @@
 # MemHop 宿主集成指南（Go API 方式）
 
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序（不经 MCP server）。
-> 适用版本：**v1.2.7**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 适用版本：**v1.3.2**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 ---
 
@@ -93,6 +93,7 @@ import "github.com/qyiun666/MemHop/api"
 | VectorMinScore | 0.5 | 向量通道相似度阈值 |
 | RRFK / ActivationBonus / RecentChatBonus | 60 / 0.2 / 0.1 | RRF 融合与场景加分权重 |
 | LambdaNode / LambdaEdge | 0.01 / 0.02 | 节点/边衰减速率 |
+| L1EdgeMinSimilarity / L1EdgeMaxHops / L1ActivationDampening / L1ActivationThreshold / L1AssocMaxScenes | 0.15 / 2 / 0.5 / 0.05 / 3 | L1 超边共现阈值与扩散激活遍历调参 |
 | TokenizerEngine | "auto" | 分词引擎（gse） |
 
 ---
@@ -151,8 +152,9 @@ res, err := db.Search(ctx, api.SearchQuery{
 | 字段 | 内容 | 宿主用途 |
 |---|---|---|
 | `Profile` | L0 画像快照（名字/角色/性格/偏好/词汇表/风格/情绪模式） | 可拼入系统提示词 |
+| `ProfileBrief` | 紧凑画像摘要（名字/角色/主要偏好/风格/情绪，有界） | 轻量按轮注入；仅在需要时拉完整 `Profile` |
 | `Contexts` | 命中场景的上下文（`TopicSlot` 列表，深度≤1） | **拼进本次 LLM prompt 的记忆** |
-| `AssociatedContexts` | 关联场景的主题（L1 反查） | 可选附加记忆 |
+| `AssociatedContexts` | 关联场景的主题（L1 超图扩散激活） | 可选附加记忆 |
 | `NewTopicID` | 本轮新建主题 ID（16 位 hex）；0=命中旧主题 | 传给 Update 使用 |
 
 **副作用须知（Search 是写操作，不只读）**：LLM 抽关键词 → 三通道检索（BM25 + f32 向量 + 实体 BK-Tree，RRF 融合）→ 建主题 + 编码器算 centroid 向量 + 写一条 L4 原文存档 + 关联 L3 图谱 + 激活场景 + 场景使用计数（并入场景记录）。编码器不可用直接报错。
@@ -225,6 +227,8 @@ err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
 | `db.SceneContext(sceneID) (*SceneContext, error)` | 场景全貌（含各主题 L4 消息）——**会话恢复用这个** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | 场景合并 |
 | `db.ActiveSceneIDs() []string` | 当前活跃场景 ID |
+| `db.DeleteTopic(topicID) error` | 删除话题子树 + 其 L4 原文 + 索引，并修剪父话题 `ChildrenIDs`（记忆纠错） |
+| `db.DeleteScene(sceneID) error` | 删除场景 + 全部话题/原文 + L1 节点；不存在返回 `ErrNotFound`（记忆纠错） |
 
 ### L3 知识图谱（稳定事实：人物 / 项目 / 偏好）
 
@@ -264,6 +268,8 @@ arcs, err := db.SearchL4(api.L4Query{
 | `db.UpdateCapability(id, CapabilityPatch{...})` | 部分更新（内置卡只读，被拒绝） |
 | `db.ActivateCapability(id)` | 草稿 → 激活 |
 | `db.RecordCapabilityUsage(id, success)` | 使用后反馈 |
+
+> 内置能力工具箱（19 张：13 张 manual API 说明书 + 6 张 atomic 原子卡）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；manual 卡 `type: "api"`、`ref: "api:MethodName"`，宿主在 `*api.DB` 上直接调用。
 
 ### L7 轨迹 + 结晶（v1.2.7 新增能力）
 

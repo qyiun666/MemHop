@@ -98,6 +98,7 @@ re-exported from `api` as type aliases (see §9). No other import required.
 | VectorMinScore | 0.5 | Vector-channel similarity threshold. |
 | RRFK / ActivationBonus / RecentChatBonus | 60 / 0.2 / 0.1 | RRF fusion and scene-bonus weights. |
 | LambdaNode / LambdaEdge | 0.01 / 0.02 | Node/edge decay rates. |
+| L1EdgeMinSimilarity / L1EdgeMaxHops / L1ActivationDampening / L1ActivationThreshold / L1AssocMaxScenes | 0.15 / 2 / 0.5 / 0.05 / 3 | L1 hyperedge co-occurrence threshold + spreading-activation walk tuning. |
 | TokenizerEngine | "auto" | Tokenizer (gse). |
 
 ---
@@ -249,6 +250,8 @@ Usually maintained by Dream automatically; manual writes only when forced.
 | `db.SceneContext(sceneID) (*SceneContext, error)` | full scene view (topics + L4 messages) — **use for session resume** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | merge scenes |
 | `db.ActiveSceneIDs() []string` | currently active scene IDs |
+| `db.DeleteTopic(topicID) error` | delete a topic subtree + its L4 archives + indexes; prunes parent `ChildrenIDs` (memory correction) |
+| `db.DeleteScene(sceneID) error` | delete a scene + all topics/archives + L1 node; `ErrNotFound` if missing (memory correction) |
 
 ### L3 knowledge graphs (stable facts: people / projects / preferences)
 
@@ -292,6 +295,8 @@ arcs, err := db.SearchL4(api.L4Query{
 | `db.UpdateCapability(id, CapabilityPatch{...})` | partial update (built-ins rejected) |
 | `db.ActivateCapability(id)` | draft → active |
 | `db.RecordCapabilityUsage(id, success)` | usage feedback |
+
+> The built-in toolbox (19 cards: 13 manual API manuals + 6 atomic cards) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on `*api.DB`.
 
 ### L7 trajectory + crystallization (v1.2.7 additions)
 

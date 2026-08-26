@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">MemHop</h1>
   <p align="center">
-    <strong>AI Agent 的长期记忆数据库 —— 八层认知架构，单文件嵌入式，纯 Go 实现，零基础设施。</strong>
+    <strong>AI Agent 的长期记忆数据库 —— 七层认知架构，单文件嵌入式，纯 Go 实现，零基础设施。</strong>
   </p>
   <p align="center">
     <a href="README.md">English</a>
@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：v1.2.5 · 最新稳定 tag：v1.2.5</strong>
+  <strong>当前版本：v1.3.2 · 最新稳定 tag：v1.3.2</strong>
 </p>
 
 ---
@@ -35,7 +35,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 
 ## 核心特性
 
-- **八层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 场景使用 → L7 轨迹，配合 Dream 巩固管线
+- **七层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L7 轨迹（L6 场景使用并入 L2），配合 Dream 巩固管线
 - **三通道 RRF 检索** — BM25（gse CJK 分词）+ f32 向量 + 实体/词项模糊匹配（实体索引由已索引 topic 词项自动灌入），通过 Reciprocal Rank Fusion（k=60）融合
 - **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0007`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。**与 v1 的 `.meh` 数据文件不兼容**（JSON 序列化切换为原生数字）；0x0005 引入 0x0F Capability 记录，0x0006 将 capability payload 重设计为 v2 mcp/skill/composite resource-wrapper 模型，0x0007 将 L6 场景使用记录并入 L2 场景槽位、从快照移除 L1 反向索引并新增 L1 超图建边；0x0006 及更早文件在 Open 时被显式拒绝，无迁移路径
 - **L1 场景超图 + 扩散激活** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）；Search 联想从命中场景沿图扩散激活（每跳 × 边权 × 衰减系数），返回 Top 关联场景的话题作为 `AssociatedContexts`——真正的跨场景联想记忆，边权由 Dream 管线衰减剪枝
@@ -94,7 +94,7 @@ if err != nil {
 // 将 Agent 回复追加到 Search 创建的话题。
 // Update 的 topicID 参数为 16 位 hex 字符串（NewTopicID 是 uint64）。
 topicID := fmt.Sprintf("%016x", res.NewTopicID)
-if _, err = db.Update(topicID, "Agent：...", time.Now().UnixMilli()); err != nil {
+if err = db.Update(topicID, "Agent：...", time.Now().UnixMilli()); err != nil {
     log.Fatal(err)
 }
 
@@ -113,7 +113,7 @@ ok, err := db.Dream(context.Background(), "")
 |------|------|
 | 核心循环 | `Search(ctx, q)` · `Update` · `Dream(ctx)` · `Checkpoint` · `Close` |
 | L0 画像 | `GetL0` · `UpdateL0` |
-| L2 上下文 | `ListScenes` · `SceneContext` · `ActiveSceneIDs` · `MergeScenes` · `RefineTopicKeywords(ctx, id)` |
+| L2 上下文 | `ListScenes` · `SceneContext` · `ActiveSceneIDs` · `MergeScenes` · `DeleteTopic` · `DeleteScene` · `RefineTopicKeywords(ctx, id)` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 归档 | `SearchL4` · `GetArchive` · `AppendL4Message` |
 | L5 能力 | `ImportCapability` · `GetCapability` · `UpdateCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` |
@@ -121,7 +121,7 @@ ok, err := db.Dream(context.Background(), "")
 
 ### 内置 L5 能力
 
-仓库根目录 `capabilities/` 内置了一套开箱即用的能力工具箱（`memhop-capability/v2` 格式），构建时随库内嵌（只读，Open 时自动挂载），分两类：MemHop 自身的使用说明书（manual：总指南、Search、Update、Dream、L7 轨迹、L5 结晶与导入）和 harness/agent 应具备的原子能力卡（atomic：文件读写/编辑、命令执行、文件搜索、联网搜索）。**零配置、零写入**：`ListCapabilities` / `GetCapability` 直接返回内置工具箱（与库存能力同套过滤器，可按 status/type/keyword 过滤），宿主 LLM 拉取后即可对照使用；内置能力为只读、不落 `.meh` 文件，与库存同名能力按 ID 去重（库存记录优先），`Search` 响应不附带内置能力——检索只返回库存匹配结果。
+仓库根目录 `capabilities/` 内置了一套开箱即用的能力工具箱（`memhop-capability/v2` 格式），构建时随库内嵌（只读，Open 时自动挂载）——**共 19 张卡，分两类**：MemHop 自身的 API 说明书（manual，13 张：guide、search、update、dream、trajectory、crystallize、capability-import、profile、scene、archive、capability、knowledge、refine，覆盖除 `Open`/`Close`/`Dream`/`Update`/`Search`/L5 读取外的全部对外 API）和 harness/agent 应具备的原子能力卡（atomic：文件读写/编辑、命令执行、文件搜索、联网搜索）。manual 卡直接引用 Go API（`type: "api"`、`ref: "api:MethodName"`），宿主在 `*api.DB` 上直接调用，无需 MCP 层。**零配置、零写入**：`ListCapabilities`/`GetCapability` 直接返回内置工具箱（与库存能力同套过滤器，可按 status/type/keyword 过滤），宿主 LLM 拉取后即可对照使用；内置能力为只读、不落 `.meh` 文件，与库存同名能力按 ID 去重（库存记录优先），`Search` 响应不附带内置能力——检索只返回库存匹配结果。
 
 ## 架构
 
@@ -129,7 +129,6 @@ ok, err := db.Dream(context.Background(), "")
 层级  名称            人脑类比              机制
 ───── ────────────── ───────────────────  ─────────────────────────────────────────────
  L7    Trajectory      程序性日志             宿主追加的操作轨迹事件，结晶为 L5 能力草稿
- L6    Scene Usage     检索反馈               场景级检索命中计数并入 L2 场景记录，反馈 L1 衰减
  L5    Crystal         肌肉记忆             可复用的能力包（技能 · MCP · 工具 · 提示词 · 服务）
  L4    Archive         长期记忆             原始对话日志与历史记录
  L3    Knowledge       语义记忆             多源超图知识库
@@ -195,10 +194,10 @@ MEMHOP_LOCOMO_ITEMS=3 go test -tags integration ./test/ -run '^$' -bench Benchma
 ## 项目结构
 
 ```
-api/                         ← 公开门面：DB 句柄（open/search/update/dream/l0~l7）+ 类型别名/构造器
+api/                         ← 公开门面：DB 句柄（open/search/update/dream/l0–l5/l7）+ 类型别名/构造器
 internal/                    ← 业务装配层：config / db / defaults / l0 / l2 / l3 / l3query /
                                l4 / l5 / l7 / search / update / dream / scenefind / llm_client / llm_ops / encoder
-internal/repo/               ← 数据层：l0layer~l7layer（记录读写、向量存取）
+internal/repo/               ← 数据层：l0layer–l5layer + l7layer（记录读写、向量存取）
 internal/repo/index/         ← 索引层：sparse（BM25）/ l1_reverse / l2meta / l3_index /
                                entity / rebuild / tokenizer（gse）
 internal/repo/core/          ← .meh 引擎：engine / frame / header / snapshot / reclaim /
