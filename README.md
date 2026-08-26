@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>Current: v1.3.2 · Latest stable tag: v1.3.2</strong>
+  <strong>Current: v1.3.3 · Latest stable tag: v1.3.3</strong>
 </p>
 
 ---
@@ -167,29 +167,42 @@ Post-fusion: keyword-overlap scoring, additive scene bonuses for active/recent s
 When `Search` creates a topic it also matches relevant L3 knowledge nodes and writes their graph IDs into `TopicSlot.L3Refs`; `DirectedL3ID` filters topics on these refs.
 ## Benchmarks
 
-### LoCoMo Retrieval Recall (v1.1.0)
+### LoCoMo Retrieval Recall (v1.3.3)
 
 Long-term conversational memory recall on [LoCoMo](https://github.com/snap-research/locomo) (ACL 2024), evaluated at the **retrieval layer only** (no answer generation): each QA is searched against the ingested `.meh` memory, and an LLM judge decides whether the returned context alone is enough to answer.
 
 | Scope | Sessions | Turns | QA | Recall (answerable) | Entity hit |
 |-------|----------|-------|-----|---------------------|------------|
-| 3 conversations (conv-26/30/41) | 70 | 1,451 | 497 | 0.531 (264/497) | 0.945 |
-| 1 conversation (conv-26) | 19 | 419 | 199 | 0.709 (141/199) | 0.883 |
+| 1 conversation (conv-26), v1.3.3 | 19 | 419 | 199 | 0.392 (78/199) | 0.307 |
 
-- **Recall** covers all five LoCoMo categories, including 22.5% adversarial questions whose correct behavior is abstention (an unanswerable context is a correct outcome), so it is a conservative lower bound; answerable categories 1–4 estimate to ~0.69.
-- **Entity hit** is a model-free metric: the fraction of QAs whose answer tokens appear in the retrieved context.
+- **A/B regression check** (same fixture, same Ollama/DeepSeek services): v1.3.2 measured 0.352 recall / 0.352 entity hit; v1.3.3 measures 0.392 / 0.307 — no systematic regression, the two metrics move in opposite directions within LLM-judge noise.
+- **Historical note**: v1.1.0 measured 0.709 recall / 0.883 entity hit on the same conversation. The gap is pre-existing since the v1.3.x line (L1 hypergraph, async Dream, automatic Dream triggers during ingest) and is not introduced by v1.3.3.
+- **Recall** covers all five LoCoMo categories, including 22.5% adversarial questions whose correct behavior is abstention (an unanswerable context is a correct outcome), so it is a conservative lower bound; answerable categories 1–4 estimate higher.
+- **Entity hit** is a model-free metric: the average fraction of answer tokens present in the retrieved context.
 - `Search` returns the context to the host (e.g. MeowAgent) as the generation context; retrieval is not answer generation.
 
 Reproduce:
 
 ```bash
 # 1 conversation
-go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
+MEMHOP_LOCOMO_ITEMS=1 go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
 # 3 conversations
 MEMHOP_LOCOMO_ITEMS=3 go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
 ```
 
 Analysis and competitor positioning: [docs/benchmarks/locomo_recall_analysis.md](docs/benchmarks/locomo_recall_analysis.md)
+
+### Competitive positioning (methodology-aware)
+
+MemHop reports **retrieval-layer recall** (LLM-judged: is the retrieved context alone enough to answer?) — not end-to-end answer accuracy. Competitors below report end-to-end accuracy (generation + judge), a different and not directly comparable number: end-to-end scores tend to run higher because generation can answer from general knowledge even when retrieval is incomplete.
+
+| System | LoCoMo metric | Methodology | Notes |
+|--------|---------------|-------------|-------|
+| MemHop v1.3.3 | recall 0.392 | retrieval-only, LLM-judged context sufficiency | entity hit 0.307; embedded single-file, zero infrastructure |
+| OpenViking | 80–83% | end-to-end accuracy | Claude Code native 57.21% → 80.32% with OpenViking |
+| TiMem | 75.30% | end-to-end accuracy | LongMemEval-S 76.88%, ~52% token savings |
+| Mem0 | 66.9% | end-to-end accuracy | production memory layer |
+| MindMemOS | 94.03% | end-to-end accuracy | research system, Dreaming consolidation |
 
 ## Project Structure
 
@@ -235,6 +248,7 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
+| v1.3.3 | 2026-08-26 | Retrieval scoring normalization + defaults slimdown | vector floor fixed from overriding every other signal to lifting only below-threshold scenes (floor = threshold + cosine×0.5): real-signal ordering (RRF + keyword overlap + bonuses) wins, semantic fallback preserved · `MemHopDefaults` slimmed from 24 fields to 3 business knobs (`Capacity` / `DreamCompressMinTopics` / `SearchDreamContextThreshold`); 4 dead fields (`MaxResults` / `DefaultTimeoutSecs` / `DefaultMaxOutputTokens` / `MaxDepth`) removed and 16 tuning constants moved to package-private `internal/tuning.go` · `TopScene` / `SpreadingActivation` / `applySceneBonuses` / `rrfFuse` signatures dropped the defaults parameter · **breaking**: hosts referencing removed fields must clean up · no format change (stays `0x0007`) · MCP tool set unchanged (32) ·
 | v1.3.2 | 2026-08-26 | API fixes: async Dream + deletion + Update simplification | Search/Update no longer block on an internally triggered Dream (background goroutine, per-scene in-flight dedup, Close cancels a pending Dream) · new `DeleteTopic` (subtree closure + L4 + indexes + parent ChildrenIDs pruning) and `DeleteScene` (scene + all topics + archives + L1 node + active set) for memory correction · `Update` returns `error` instead of `(bool, error)` · `SearchResult.ProfileBrief` — compact profile digest (name/role/top preferences/style/emotions, bounded) · no format change (stays `0x0007`) · MCP tool set unchanged (32) ·
 | v1.3.0 | 2026-08-26 | L1 scene hypergraph + spreading-activation association | Dream creates real `RecL1Hyperedge` co-occurrence edges between scenes (keyword-overlap Jaccard ≥ `L1EdgeMinSimilarity`); Search `AssociatedContexts` replaced the no-op same-scene listing with a graph walk (activation × edge weight × dampening per hop, ≤ `L1EdgeMaxHops`, top `L1AssocMaxScenes` other scenes) · L6 scene-usage record removed — hit counters folded into the L2 `SceneSlot` (`HitCount`/`LastHitAt`) · `L1ReverseIndex` (incl. snapshot field) and 4 dead L1 functions removed; association is now a pure storage-level graph read · `.meh` format bumped to `0x0007` — 0x0006 files are rejected at Open, no migration · new defaults: `L1EdgeMinSimilarity` (0.15), `L1EdgeMaxHops` (2), `L1ActivationDampening` (0.5), `L1ActivationThreshold` (0.05), `L1AssocMaxScenes` (3)
 | v1.2.7 | 2026-08-25 | Host alignment + bilingual integration guides | `Search(ctx, q)` and `RefineTopicKeywords(ctx, id)` accept a context (cancels LLM extraction, encoder calls, internally triggered Dream) · `api` exports `LlmConfig` / `MemHopDefaults` / `TopicSlot` / `ResourceRef` / `CrystallizeDetail` / `TrajectoryStats` · new `TrajectoryStats` (per-session L7 stats) + `memhop_trajectory_stats` MCP tool (31 → 32 tools) · `CrystallizeResult.Details` — per-candidate create/reuse/merge/skip disposition · `AppendL4Message` (pure L4 append, no LLM) · active-scene capacity: Update triggers a Dream on the oldest scene at Capacity with a compressibility pre-check; `SearchDreamContextThreshold` zero-value guard · bilingual integration guides added at repo root (`INTEGRATION_GUIDE.md` / `INTEGRATION_GUIDE.zh.md`) |

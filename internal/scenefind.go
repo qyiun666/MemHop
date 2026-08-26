@@ -44,11 +44,13 @@ type Encoder interface {
 // by scene with bonuses, and returns the top scene above threshold.
 // activeSceneIDs get +0.2 once; l3ID restricts topics referencing that L3.
 // l2Meta supplies the candidate topics from the in-memory cache (nil falls
-// back to a full record scan).
+// back to a full record scan). Scoring constants (RRF k, bonuses, vector
+// floor scale) are package-private tuning constants; threshold stays an
+// explicit parameter so tests can exercise it.
 func TopScene(ctx context.Context, engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 	sparse *index.SparseIndex,
 	enc Encoder, query string, keywords []string,
-	activeSceneIDs []uint64, defaults *MemHopDefaults, threshold float32, l3ID *string) (SceneHit, error) {
+	activeSceneIDs []uint64, threshold float32, l3ID *string) (SceneHit, error) {
 	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 		Engine:  engine,
 		MetaIdx: l2Meta,
@@ -99,7 +101,7 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, l2Meta *index.L2M
 	wg.Wait()
 
 	// RRF fusion (k=60, equal weights): score(id) = sum 1/(k+rank).
-	rrf := rrfFuse(defaults.RRFK, bm25Docs, vecDocs, entDocs)
+	rrf := rrfFuse(bm25Docs, vecDocs, entDocs)
 	if len(rrf) == 0 {
 		return SceneHit{}, nil
 	}
@@ -121,18 +123,25 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, l2Meta *index.L2M
 		topicScores[id] = sc
 	}
 
-	// Vector floor: when keyword overlap is zero, BM25/entity score nothing,
-	// so topics with cosine >= VectorMinScore get their scene floored to
-	// threshold + similarity, preserving semantic recall.
+	// Vector floor: a semantic fallback that only lifts below-threshold
+	// scenes. When keyword/entity channels score nothing, a topic with
+	// cosine >= vectorMinScore floors its scene to
+	// threshold + cosine*vectorFloorScale so the scene still enters
+	// contention. Scenes already above threshold are never touched — their
+	// ordering comes from real signals (RRF + keyword overlap + bonuses),
+	// not from the fallback.
 	for _, d := range vecDocs {
-		if d.Score < defaults.VectorMinScore {
+		if d.Score < vectorMinScore {
 			continue
 		}
 		t, ok := byID[d.IDHash]
 		if !ok {
 			continue
 		}
-		floor := threshold + d.Score
+		if sceneScores[t.SceneID] > threshold {
+			continue // already above threshold: keep real-signal score
+		}
+		floor := threshold + d.Score*vectorFloorScale
 		if sceneScores[t.SceneID] < floor {
 			sceneScores[t.SceneID] = floor
 		}
@@ -147,7 +156,7 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, l2Meta *index.L2M
 		activeSet[sid] = struct{}{}
 	}
 	lastSceneID := topics[len(topics)-1].SceneID // last item = max UserTimestamp
-	applySceneBonuses(sceneScores, activeSet, lastSceneID, defaults)
+	applySceneBonuses(sceneScores, activeSet, lastSceneID)
 
 	var best SceneHit
 	for sid, sc := range sceneScores {
@@ -179,15 +188,15 @@ func TopScene(ctx context.Context, engine *core.StorageEngine, l2Meta *index.L2M
 
 // applySceneBonuses adds ActivationBonus (active scenes) and RecentChatBonus
 // (latest-timestamp scene), one per scene, active first.
-func applySceneBonuses(scores map[uint64]float32, activeSet map[uint64]struct{}, lastSceneID uint64, defaults *MemHopDefaults) {
+func applySceneBonuses(scores map[uint64]float32, activeSet map[uint64]struct{}, lastSceneID uint64) {
 	for sid := range activeSet {
 		if _, ok := scores[sid]; ok {
-			scores[sid] += defaults.ActivationBonus
+			scores[sid] += activationBonus
 		}
 	}
 	if _, ok := scores[lastSceneID]; ok {
 		if _, isActive := activeSet[lastSceneID]; !isActive {
-			scores[lastSceneID] += defaults.RecentChatBonus
+			scores[lastSceneID] += recentChatBonus
 		}
 	}
 }
@@ -259,11 +268,11 @@ func retrieveVector(engine *core.StorageEngine, enc Encoder,
 	return docs
 }
 
-func rrfFuse(k float32, rankedLists ...[]index.ScoredDoc) map[uint64]float32 {
+func rrfFuse(rankedLists ...[]index.ScoredDoc) map[uint64]float32 {
 	scores := make(map[uint64]float32)
 	for _, docs := range rankedLists {
 		for i, doc := range docs {
-			scores[doc.IDHash] += 1.0 / (k + float32(i+1))
+			scores[doc.IDHash] += 1.0 / (rrfK + float32(i+1))
 		}
 	}
 	return scores
@@ -306,15 +315,15 @@ func keywordHit(topic core.TopicSlot, kwSet map[string]struct{}) float32 {
 // returns the most strongly activated other scenes with their depth<=1
 // topics, ordered by activation (desc). Activation starts at 1.0 at the
 // source node and propagates along hyperedges as act × edge.Weight ×
-// dampening per hop; paths below L1ActivationThreshold stop spreading and
-// the walk never exceeds L1EdgeMaxHops. The start scene itself is never
-// returned. A scene without an L1 node (created after the last Dream)
-// yields an empty result. The walk is a pure storage-level graph read — no
-// in-memory graph index is maintained.
+// dampening per hop; paths below the activation threshold stop spreading and
+// the walk never exceeds max hops. The start scene itself is never returned.
+// A scene without an L1 node (created after the last Dream) yields an empty
+// result. The walk is a pure storage-level graph read — no in-memory graph
+// index is maintained. All walk limits are package-private tuning constants.
 func SpreadingActivation(engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
-	startSceneID uint64, defaults *MemHopDefaults) []SceneHit {
-	maxHops, dampening, threshold, maxScenes := defaults.L1EdgeMaxHops,
-		defaults.L1ActivationDampening, defaults.L1ActivationThreshold, defaults.L1AssocMaxScenes
+	startSceneID uint64) []SceneHit {
+	maxHops, dampening, threshold, maxScenes := l1EdgeMaxHops,
+		l1ActivationDampening, l1ActivationThreshold, l1AssocMaxScenes
 	if maxHops <= 0 || maxScenes <= 0 || dampening <= 0 {
 		return nil
 	}

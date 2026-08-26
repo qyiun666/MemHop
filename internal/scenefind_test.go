@@ -115,28 +115,28 @@ func TestKeywordHit(t *testing.T) {
 func TestApplySceneBonuses(t *testing.T) {
 	// Active scene +0.2 (once).
 	scores := map[uint64]float32{1: 1.0}
-	applySceneBonuses(scores, map[uint64]struct{}{1: {}}, 1, DefaultMemHopDefaults)
+	applySceneBonuses(scores, map[uint64]struct{}{1: {}}, 1)
 	if !approx(scores[1], 1.2) {
 		t.Errorf("active bonus: scores[1] = %v; want 1.2", scores[1])
 	}
 
 	// Latest-timestamp scene +0.1 (when not active).
 	scores = map[uint64]float32{2: 1.0}
-	applySceneBonuses(scores, map[uint64]struct{}{}, 2, DefaultMemHopDefaults)
+	applySceneBonuses(scores, map[uint64]struct{}{}, 2)
 	if !approx(scores[2], 1.1) {
 		t.Errorf("recent bonus: scores[2] = %v; want 1.1", scores[2])
 	}
 
 	// Mutual exclusion: active + latest -> only +0.2.
 	scores = map[uint64]float32{3: 1.0}
-	applySceneBonuses(scores, map[uint64]struct{}{3: {}}, 3, DefaultMemHopDefaults)
+	applySceneBonuses(scores, map[uint64]struct{}{3: {}}, 3)
 	if !approx(scores[3], 1.2) {
 		t.Errorf("mutual exclusion: scores[3] = %v; want 1.2", scores[3])
 	}
 
 	// Latest scene without a score -> no bonus.
 	scores = map[uint64]float32{4: 1.0}
-	applySceneBonuses(scores, map[uint64]struct{}{}, 5, DefaultMemHopDefaults)
+	applySceneBonuses(scores, map[uint64]struct{}{}, 5)
 	if !approx(scores[4], 1.0) {
 		t.Errorf("no bonus for missing scene: scores[4] = %v; want 1.0", scores[4])
 	}
@@ -152,7 +152,7 @@ func TestTopSceneRelevanceOrder(t *testing.T) {
 	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
 	writeTopic(t, engine, sparse, newTopic(4002, 1, 300, []string{"cooking"}))
 
-	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 0, nil)
+	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestTopSceneBasic(t *testing.T) {
 	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
 	writeTopic(t, engine, sparse, newTopic(4002, 2, 200, []string{"cooking"}))
 
-	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 0, nil)
+	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -194,7 +194,7 @@ func TestTopSceneAggregation(t *testing.T) {
 	writeTopic(t, engine, sparse, newTopic(4002, 1, 200, []string{"rust"}))
 	writeTopic(t, engine, sparse, newTopic(4003, 2, 300, []string{"cooking"}))
 
-	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 0, nil)
+	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestTopSceneActivationBonus(t *testing.T) {
 	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
 
 	want := float32(1.0) + 2.0/61.0 + 0.2
-	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{1, 1}, DefaultMemHopDefaults, 1.15, nil)
+	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{1, 1}, 1.15, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -224,7 +224,7 @@ func TestTopSceneActivationBonus(t *testing.T) {
 	}
 
 	// No active scene -> no 0.2, below the 1.15 threshold -> empty.
-	empty, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 1.15, nil)
+	empty, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, 1.15, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -240,7 +240,7 @@ func TestTopSceneRecentBonus(t *testing.T) {
 	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
 
 	// Latest-topic scene +0.1: score = 1.0 + 2/61 (bm25+entity) + 0.1.
-	recent, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 1.05, nil)
+	recent, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, 1.05, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestTopSceneRecentBonus(t *testing.T) {
 	}
 
 	// Same scene active -> active priority, only +0.2 not +0.1.
-	active, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{1}, DefaultMemHopDefaults, 1.15, nil)
+	active, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{1}, 1.15, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -269,19 +269,20 @@ func TestTopSceneVectorChannel(t *testing.T) {
 	topic.CentroidPageRef = 9001
 	writeTopic(t, engine, sparse, topic)
 
-	// With encoder: vector hit (cosine 1.0 >= VectorMinScore 0.5) floors the scene
-	// to threshold+1.0=1.05; also the latest scene -> +0.1, total 1.15.
-	hit, err := TopScene(context.Background(), engine, nil, sparse, &mockEncoder{vec: testVec}, "unrelated", []string{"zzz"}, nil, DefaultMemHopDefaults, 0.05, nil)
+	// With encoder: below-threshold scene is floored by the vector hit
+	// (cosine 1.0 >= vectorMinScore 0.5) to threshold + cosine*0.5 = 0.55;
+	// also the latest scene -> +0.1, total 0.65.
+	hit, err := TopScene(context.Background(), engine, nil, sparse, &mockEncoder{vec: testVec}, "unrelated", []string{"zzz"}, nil, 0.05, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
-	want := float32(0.05) + 1.0 + 0.1
+	want := float32(0.05) + 1.0*vectorFloorScale + 0.1
 	if hit.SceneID != 1 || !approx(hit.Score, want) {
-		t.Errorf("vector hit = %+v; want SceneID=1 Score=%v (vector floor)", hit, want)
+		t.Errorf("vector hit = %+v; want SceneID=1 Score=%v (vector floor lifts below-threshold scene)", hit, want)
 	}
 
 	// No encoder: empty channel -> no hit -> empty.
-	empty, err := TopScene(context.Background(), engine, nil, sparse, nil, "unrelated", []string{"zzz"}, nil, DefaultMemHopDefaults, 0, nil)
+	empty, err := TopScene(context.Background(), engine, nil, sparse, nil, "unrelated", []string{"zzz"}, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -297,7 +298,7 @@ func TestTopSceneThreshold(t *testing.T) {
 	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
 
 	// Below threshold (score ~ 1.016) -> hit returned.
-	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 1.0, nil)
+	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, 1.0, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -305,7 +306,7 @@ func TestTopSceneThreshold(t *testing.T) {
 		t.Errorf("SceneID = %d; want 1", hit.SceneID)
 	}
 	// Above scene score (~1.116: hit 1.0 + rrf 1/61 + recent 0.1) -> empty.
-	empty, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 1.2, nil)
+	empty, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, 1.2, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -323,7 +324,7 @@ func TestTopSceneMultiActiveScenes(t *testing.T) {
 	writeTopic(t, engine, sparse, newTopic(4002, 2, 200, []string{"rust"}))
 
 	// Only scene 2 active -> scene 2 wins with exactly one +0.2.
-	hit2, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{2}, DefaultMemHopDefaults, 1.1, nil)
+	hit2, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{2}, 1.1, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -332,7 +333,7 @@ func TestTopSceneMultiActiveScenes(t *testing.T) {
 	}
 
 	// Both scenes active -> each +0.2, top score in one of them.
-	hitBoth, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{1, 2}, DefaultMemHopDefaults, 1.1, nil)
+	hitBoth, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{1, 2}, 1.1, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -341,7 +342,7 @@ func TestTopSceneMultiActiveScenes(t *testing.T) {
 	}
 
 	// Threshold above all scene scores -> empty.
-	equal, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{1, 2}, DefaultMemHopDefaults, 1.25, nil)
+	equal, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, []uint64{1, 2}, 1.25, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -354,7 +355,7 @@ func TestTopSceneMultiActiveScenes(t *testing.T) {
 func TestTopSceneEmpty(t *testing.T) {
 	engine := newTestEngine(t)
 	sparse := index.NewSparseIndex()
-	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, DefaultMemHopDefaults, 0, nil)
+	hit, err := TopScene(context.Background(), engine, nil, sparse, nil, "rust", []string{"rust"}, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("TopScene: %v", err)
 	}
@@ -419,20 +420,14 @@ func TestSpreadingActivation(t *testing.T) {
 	if _, err := repo.BuildL1Hyperedges(engine, 0.15); err != nil {
 		t.Fatalf("build edges: %v", err)
 	}
-	defaults := &MemHopDefaults{
-		L1EdgeMaxHops:         2,
-		L1ActivationDampening: 0.5,
-		L1ActivationThreshold: 0.05,
-		L1AssocMaxScenes:      3,
-	}
 	l2Meta := index.BuildL2MetaFromEngine(engine)
 	sceneBHash := mustParse(t, sceneB)
-	sceneCHash := mustParse(t, sceneC)
 	sceneDHash := mustParse(t, sceneD)
 
 	// A-B share "memory" (J=1/3): activation = 1×1/3×0.5 ≈ 0.1667. The
-	// two-hop B→C path yields 0.1667×1/3×0.5 ≈ 0.0278 < 0.05 → pruned.
-	hits := SpreadingActivation(engine, l2Meta, mustParse(t, sceneA), defaults)
+	// two-hop B→C path yields 0.1667×1/3×0.5 ≈ 0.0278 < l1ActivationThreshold
+	// (0.05) → pruned by the default walk limits.
+	hits := SpreadingActivation(engine, l2Meta, mustParse(t, sceneA))
 	if len(hits) != 1 || hits[0].SceneID != sceneBHash {
 		t.Fatalf("want only scene B, got %+v", hits)
 	}
@@ -443,25 +438,42 @@ func TestSpreadingActivation(t *testing.T) {
 		t.Fatalf("want 1 topic on B, got %d", len(hits[0].Topics))
 	}
 
-	// Lower threshold lets the two-hop path through: C joins after B.
-	defaults.L1ActivationThreshold = 0.01
-	hits = SpreadingActivation(engine, l2Meta, mustParse(t, sceneA), defaults)
-	if len(hits) != 2 || hits[0].SceneID != sceneBHash || hits[1].SceneID != sceneCHash {
-		t.Fatalf("want B then C, got %+v", hits)
-	}
-	if hits[0].Score < hits[1].Score {
-		t.Fatal("B must activate stronger than C")
-	}
-
 	// A scene without an L1 node (created after the last Dream) → empty.
 	sceneFresh := common.FormatHash(common.HashID("sceneFresh"))
-	if hits := SpreadingActivation(engine, l2Meta, mustParse(t, sceneFresh), defaults); len(hits) != 0 {
+	if hits := SpreadingActivation(engine, l2Meta, mustParse(t, sceneFresh)); len(hits) != 0 {
 		t.Fatalf("fresh scene must have no associations, got %+v", hits)
 	}
 
 	// An isolated scene has a node but no edges → empty.
-	if hits := SpreadingActivation(engine, l2Meta, sceneDHash, defaults); len(hits) != 0 {
+	if hits := SpreadingActivation(engine, l2Meta, sceneDHash); len(hits) != 0 {
 		t.Fatalf("isolated scene must have no associations, got %+v", hits)
+	}
+}
+
+// TestTopSceneVectorFloorNoOverride: the vector floor only lifts
+// below-threshold scenes — a scene whose real signals (RRF + keyword
+// overlap) already cleared the threshold keeps its score, even when another
+// scene carries a perfect vector hit. Under the old formula
+// (threshold + cosine) the 2.1-score vector scene would have overridden the
+// 2.066 real-signal scene; the scaled fallback keeps real-signal ordering.
+func TestTopSceneVectorFloorNoOverride(t *testing.T) {
+	engine := newTestEngine(t)
+	sparse := index.NewSparseIndex()
+	// Scene 1: two keyword-matching topics (real signal ≈ 2.066), older.
+	writeTopic(t, engine, sparse, newTopic(4001, 1, 100, []string{"rust"}))
+	writeTopic(t, engine, sparse, newTopic(4002, 1, 200, []string{"rust"}))
+	// Scene 2: unrelated keywords, perfect vector hit (cosine 1.0), newest.
+	topic := newTopic(4003, 2, 300, []string{"unrelated"})
+	topic.CentroidPageRef = 9002
+	writeTopic(t, engine, sparse, topic)
+
+	hit, err := TopScene(context.Background(), engine, nil, sparse, &mockEncoder{vec: testVec}, "rust", []string{"rust"}, nil, 1.0, nil)
+	if err != nil {
+		t.Fatalf("TopScene: %v", err)
+	}
+	want := float32(2.0) + 2.0/61.0 + 2.0/62.0 // two topics: keyword hit 1.0 each + RRF ranks 1/2 per channel
+	if hit.SceneID != 1 || !approx(hit.Score, want) {
+		t.Errorf("hit = %+v; want SceneID=1 Score=%v (real-signal scene not overridden by vector floor)", hit, want)
 	}
 }
 

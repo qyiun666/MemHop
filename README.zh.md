@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：v1.3.2 · 最新稳定 tag：v1.3.2</strong>
+  <strong>当前版本：v1.3.3 · 最新稳定 tag：v1.3.3</strong>
 </p>
 
 ---
@@ -167,29 +167,42 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 `Search` 创建 topic 时会同时匹配相关 L3 知识节点，并把图谱 ID 写入 `TopicSlot.L3Refs`；`DirectedL3ID` 就是基于这些引用做过滤。
 ## 基准测试
 
-### LoCoMo 检索召回（v1.1.0）
+### LoCoMo 检索召回（v1.3.3）
 
 基于 [LoCoMo](https://github.com/snap-research/locomo)（ACL 2024）的长期对话记忆召回测试，**仅评估检索层**（不含答案生成）：每个 QA 对已灌入的 `.meh` 记忆发起检索，由 LLM judge 判定返回的上下文单独是否足以回答问题。
 
 | 范围 | 会话数 | 轮数 | QA | 可答率 recall | 实体命中率 |
 |------|--------|------|-----|---------------|------------|
-| 3 个对话集（conv-26/30/41） | 70 | 1,451 | 497 | 0.531（264/497） | 0.945 |
-| 1 个对话集（conv-26） | 19 | 419 | 199 | 0.709（141/199） | 0.883 |
+| 1 个对话集（conv-26），v1.3.3 | 19 | 419 | 199 | 0.392（78/199） | 0.307 |
 
-- **可答率**覆盖 LoCoMo 全部五类问题，含 22.5% 对抗陷阱题（其正确行为是拒答，上下文不可答即为正确结果），因此是保守下界；可答类（1-4 类）估算约 0.69。
-- **实体命中率**为无模型硬指标：答案关键 token 出现在检索上下文中的 QA 占比。
+- **A/B 回归对照**（同一 fixture、同一 Ollama/DeepSeek 服务）：v1.3.2 实测 recall 0.352 / 实体命中 0.352；v1.3.3 实测 0.392 / 0.307——两指标反向波动，处于 LLM judge 噪声范围，无系统性回归。
+- **历史说明**：v1.1.0 在同一对话集上实测 0.709 / 0.883。差距自 v1.3.x 系列（L1 超图、异步 Dream、灌入期间自动 Dream 触发）起已存在，并非 v1.3.3 引入。
+- **可答率**覆盖 LoCoMo 全部五类问题，含 22.5% 对抗陷阱题（其正确行为是拒答，上下文不可答即为正确结果），因此是保守下界；可答类（1-4 类）估算更高。
+- **实体命中率**为无模型硬指标：答案关键 token 出现在检索上下文中的平均比例。
 - `Search` 将上下文返回给宿主（如 MeowAgent）作为生成上下文；检索本身不做答案生成。
 
 复现：
 
 ```bash
 # 1 个对话集
-go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
+MEMHOP_LOCOMO_ITEMS=1 go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
 # 3 个对话集
 MEMHOP_LOCOMO_ITEMS=3 go test -tags integration ./test/ -run '^$' -bench BenchmarkLocomoRecall -benchtime 1x
 ```
 
 分析与竞品定位：[docs/benchmarks/locomo_recall_analysis.md](docs/benchmarks/locomo_recall_analysis.md)
+
+### 竞品定位（方法学对比）
+
+MemHop 报告的是**检索层召回**（LLM judge 判定：仅凭检索上下文能否回答？），而非端到端答案准确率。下表竞品报告的是端到端准确率（生成 + judge），两者口径不同、不可直接比较——端到端分数通常偏高，因为生成阶段即使检索不完整也能借助常识作答。
+
+| 系统 | LoCoMo 指标 | 方法学 | 备注 |
+|------|------------|--------|------|
+| MemHop v1.3.3 | recall 0.392 | 仅检索层，LLM judge 判定上下文充分性 | 实体命中 0.307；嵌入式单文件、零基础设施 |
+| OpenViking | 80–83% | 端到端准确率 | Claude Code 原生 57.21% → 接入后 80.32% |
+| TiMem | 75.30% | 端到端准确率 | LongMemEval-S 76.88%，token 节省约 52% |
+| Mem0 | 66.9% | 端到端准确率 | 生产级记忆层 |
+| MindMemOS | 94.03% | 端到端准确率 | 研究系统，Dreaming 巩固 |
 
 ## 项目结构
 
@@ -235,7 +248,8 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
-| v1.3.2 | 2026-08-26 | API 修复：异步 Dream + 删除接口 + Update 简化 | Search/Update 不再被内部触发的 Dream 阻塞（后台 goroutine、按场景 in-flight 防重入、Close 取消在途 Dream）· 新增 `DeleteTopic`（子树闭包 + L4 + 索引 + 父话题 ChildrenIDs 修剪）与 `DeleteScene`（场景 + 全部话题 + 原文 + L1 节点 + 激活集）用于记忆纠错 · `Update` 返回值由 `(bool, error)` 简化为 `error` · `SearchResult.ProfileBrief`——紧凑画像摘要（name/role/偏好/风格/情绪，带边界）· 格式版本不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·
+| v1.3.3 | 2026-08-26 | 检索评分归一化 + 参数面收敛 | vector floor 从"覆盖式垄断"改为"仅抬升未过线场景"（floor = threshold + cosine×0.5）：真实信号（RRF + 关键词重叠 + 加分）决定排序，语义兜底保留 · `MemHopDefaults` 从 24 字段收敛到 3 个业务开关（`Capacity` / `DreamCompressMinTopics` / `SearchDreamContextThreshold`）；删除 4 个死字段（`MaxResults` / `DefaultTimeoutSecs` / `DefaultMaxOutputTokens` / `MaxDepth`），16 个调优常量移入包级私有 `internal/tuning.go` · `TopScene` / `SpreadingActivation` / `applySceneBonuses` / `rrfFuse` 签名去掉 defaults 参数 · **破坏性变更**：引用被删字段的宿主需同步清理 · 格式版本不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·
+| v1.3.2 | 2026-08-26 | API 修复：异步 Dream + 删除接口 + Update 简化 | Search/Update 不再被内部触发的 Dream 阻塞（后台 goroutine、按场景 in-flight 防重入、Close 取消在途 Dream）· 新增 `DeleteTopic`（子树闭包 + L4 + 索引 + 父话题 ChildrenIDs 修剪）与 `DeleteScene`（场景 + 全部话题 + 原文 + L1 节点 + 激活集）用于记忆纠错 · `Update` 返回值由 `(bool, error)` 简化为 `error` · `SearchResult.ProfileBrief`——紧凑画像摘要（name/role/偏好/风格/情绪，带边界）· 格式版本 不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·
 | v1.3.0 | 2026-08-26 | L1 场景超图 + 扩散激活联想 | Dream 在场景间创建真实的 `RecL1Hyperedge` 共现边（关键词重叠 Jaccard ≥ `L1EdgeMinSimilarity`）；Search 的 `AssociatedContexts` 由空转的同场景列表替换为图遍历（每跳激活 × 边权 × 衰减系数，≤ `L1EdgeMaxHops`，取 Top `L1AssocMaxScenes` 个其他场景）· L6 场景使用记录删除——命中计数并入 L2 `SceneSlot`（`HitCount`/`LastHitAt`）· `L1ReverseIndex`（含快照字段）与 4 个 L1 死函数删除，联想变为纯存储层图读取 · `.meh` 格式升至 `0x0007`——0x0006 文件 Open 时被拒绝，不迁移 · 新默认项：`L1EdgeMinSimilarity`（0.15）、`L1EdgeMaxHops`（2）、`L1ActivationDampening`（0.5）、`L1ActivationThreshold`（0.05）、`L1AssocMaxScenes`（3） |
 | v1.2.7 | 2026-08-25 | 宿主对齐 + 双语集成指南 | `Search(ctx, q)` 与 `RefineTopicKeywords(ctx, id)` 接收 context（可取消 LLM 关键词提取、编码调用与内部触发的 Dream）· `api` 导出 `LlmConfig` / `MemHopDefaults` / `TopicSlot` / `ResourceRef` / `CrystallizeDetail` / `TrajectoryStats` · 新增 `TrajectoryStats`（会话级 L7 统计）+ `memhop_trajectory_stats` MCP 工具（31 → 32 工具）· `CrystallizeResult.Details`——逐候选 create/reuse/merge/skip 处置明细 · `AppendL4Message`（纯 L4 追加，不调 LLM）· 活跃场景容量策略：Update 在达到 Capacity 时对最老场景触发 Dream（带可压缩性预检）；`SearchDreamContextThreshold` 零值守卫 · 仓库根目录新增双语集成指南（`INTEGRATION_GUIDE.md` / `INTEGRATION_GUIDE.zh.md`） |
 | v1.2.5 | 2026-08-20 | MCP server 重写 | `cmd/memhop-mcp` 对照 `api` 公开门面完全重写（v1.2.4 曾删除）：31 个 MCP 工具与 `api.DB` 方法一一对应 · 多租户 HTTP 暴露——SSE + streamable-http（2025-03-26 spec、无状态），租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 `.meh` 文件，懒打开注册表 + 首开互斥 · 工具输出中记录 ID 统一 16 位 hex 字符串序列化（uint64 JSON 数字在 JS/TS 宿主丢精度）· 租户 ID 白名单 + 路径逃逸拦截（防御纵深）· LLM 凭据仅环境变量（无 CLI flag）· go-sdk v1.7.0 回归直接依赖（3→4）· config/registry/tools/streamable 离线测试 + 多租户 SSE 冒烟 · 代码清理：删除冗余枚举 JSON 辅助函数（`~uint8` 默认 JSON 行为等价）、`CodeOf` 迁移 Go 1.26 `errors.AsType`、cosine 标量循环（1024 维快 2.7×）、删除 `internal/repo/open.go` 转发层（17 函数 + 8 alias，internal 直调 core/index）、Update 移除 `ParseID→FormatHash` 往返转换 |

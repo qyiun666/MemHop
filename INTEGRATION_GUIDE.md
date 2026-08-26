@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.3.2**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.3.3**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 ---
@@ -88,18 +88,16 @@ re-exported from `api` as type aliases (see §9). No other import required.
 
 ### `MemHopDefaults` — common overrides (also exported since v1.2.7)
 
+`MemHopDefaults` exposes only the three business knobs. Engine tuning constants
+(RRF k, scene bonuses, decay lambdas, L1 activation limits, scoring thresholds)
+are package-private in `internal/tuning.go` and no longer configurable — hosts
+should not need to tune them; if you think you do, open an issue.
+
 | Field | Default | Meaning |
 |---|---|---|
 | Capacity | 7 | Active-scene bound. When the active set reaches it, **Update** triggers a Dream on the oldest scene (pre-checked for compressibility). |
 | SearchDreamContextThreshold | 30 | A Search triggers a scene Dream when the returned context exceeds this many topics. **0 disables the trigger** (relevant if you build a partial literal). |
 | DreamCompressMinTopics | 20 | Topics per scene before Dream will compress. |
-| MaxResults | 20 | Retrieval result cap. |
-| MinSceneScore | 1.0 | Scene hit threshold. |
-| VectorMinScore | 0.5 | Vector-channel similarity threshold. |
-| RRFK / ActivationBonus / RecentChatBonus | 60 / 0.2 / 0.1 | RRF fusion and scene-bonus weights. |
-| LambdaNode / LambdaEdge | 0.01 / 0.02 | Node/edge decay rates. |
-| L1EdgeMinSimilarity / L1EdgeMaxHops / L1ActivationDampening / L1ActivationThreshold / L1AssocMaxScenes | 0.15 / 2 / 0.5 / 0.05 / 3 | L1 hyperedge co-occurrence threshold + spreading-activation walk tuning. |
-| TokenizerEngine | "auto" | Tokenizer (gse). |
 
 ---
 

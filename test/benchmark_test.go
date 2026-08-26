@@ -226,6 +226,11 @@ func BenchmarkRetrievalRecall(b *testing.B) {
 		{"我的猫叫咪咪，最喜欢吃三文鱼罐头", "我的猫爱吃什么", "咪咪"},
 		{"我住在北京市朝阳区，住了十年了", "我住在哪个城市", "北京"},
 		{"我上个月刚换了工作，现在做后端开发", "我现在做什么工作", "后端"},
+		// Semantic-only anchors: query shares no keywords with the fact, so
+		// recall must come from the vector channel (v1.3.3 vector-floor
+		// fallback lifts below-threshold scenes) rather than BM25/entity.
+		{"我最近在学做提拉米苏，已经失败了好几次", "我的烘焙进展怎么样", "提拉米苏"},
+		{"我家养了一只柯基犬，名字叫芝士", "我的宠物是什么品种", "柯基"},
 	}
 
 	base := time.Now().UnixMilli()

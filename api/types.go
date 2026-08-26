@@ -28,8 +28,10 @@ type (
 	// LlmConfig holds LLM provider settings; exported so hosts can build
 	// MemHopConfig.LLM by literal instead of field-by-field assignment.
 	LlmConfig = internal.LlmConfig
-	// MemHopDefaults holds all tunable engine defaults; exported so hosts
-	// can name the type instead of copying DefaultMemHopDefaults.
+	// MemHopDefaults holds the host-facing business knobs (Capacity,
+	// DreamCompressMinTopics, SearchDreamContextThreshold); engine tuning
+	// constants are package-private. Exported so hosts can name the type
+	// instead of copying DefaultMemHopDefaults.
 	MemHopDefaults = internal.MemHopDefaults
 )
 

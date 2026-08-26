@@ -51,21 +51,8 @@ func (c *MemHopConfig) Validate() error {
 	if c.LLM.APIURL == "" || c.LLM.APIKey == "" || c.LLM.Model == "" {
 		return common.NewError(common.ErrConfig, "LLM.APIURL, LLM.APIKey and LLM.Model are required")
 	}
-	if c.Defaults.RRFK < 0 || c.Defaults.ActivationBonus < 0 || c.Defaults.RecentChatBonus < 0 {
-		return common.NewError(common.ErrConfig, "search weights must be >= 0")
-	}
-	if c.Defaults.LambdaNode < 0 || c.Defaults.LambdaEdge < 0 {
-		return common.NewError(common.ErrConfig, "decay lambda must be >= 0")
-	}
-	if !inUnitRange(c.Defaults.NodeRemoveThreshold) ||
-		!inUnitRange(c.Defaults.NodePruneEdgesThreshold) ||
-		!inUnitRange(c.Defaults.EdgeRemoveThreshold) {
-		return common.NewError(common.ErrConfig, "decay thresholds must be in [0, 1]")
-	}
 	return nil
 }
-
-func inUnitRange(v float32) bool { return v >= 0 && v <= 1 }
 
 func OpenOrCreateEngine(cfg *MemHopConfig) (*core.StorageEngine, error) {
 	if _, err := os.Stat(cfg.DBPath); err == nil {
@@ -118,7 +105,7 @@ func InitTokenizer(engine string) error {
 // vector-dim check and index restore. Called by the internal assembly layer.
 func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := InitTokenizer(cfg.Defaults.TokenizerEngine); err != nil {
+	if err := InitTokenizer(defaultTokenizerEngine); err != nil {
 		cancel()
 		return nil, err
 	}

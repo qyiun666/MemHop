@@ -119,7 +119,7 @@ func (db *DB) searchDirected(q SearchQuery, keywords []string) ([]core.TopicSlot
 // depth<=1 topics plus the new topic ID.
 func (db *DB) searchNormal(ctx context.Context, q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
 	hit, err := TopScene(ctx, db.engine, db.l2Meta, db.sparseIndex, db.encoder,
-		q.Text, keywords, db.activeScenes, &db.config.Defaults, db.config.Defaults.MinSceneScore, q.DirectedL3ID)
+		q.Text, keywords, db.activeScenes, minSceneScore, q.DirectedL3ID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -192,7 +192,7 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 // from the hit scene and flattens the activated scenes' depth<=1 topics
 // (activation order preserved). Empty when the scene has no L1 node yet.
 func (db *DB) associatedContexts(sceneID uint64) []core.TopicSlot {
-	hits := SpreadingActivation(db.engine, db.l2Meta, sceneID, &db.config.Defaults)
+	hits := SpreadingActivation(db.engine, db.l2Meta, sceneID)
 	if len(hits) == 0 {
 		return []core.TopicSlot{}
 	}

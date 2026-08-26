@@ -1,7 +1,7 @@
 # MemHop 宿主集成指南（Go API 方式）
 
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序（不经 MCP server）。
-> 适用版本：**v1.3.2**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 适用版本：**v1.3.3**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 ---
 
@@ -83,18 +83,13 @@ import "github.com/qyiun666/MemHop/api"
 
 ### `MemHopDefaults` 常用覆盖项（v1.2.7 起导出）
 
+`MemHopDefaults` 只暴露三个业务开关。引擎调优常量（RRF k、场景加分、衰减速率、L1 扩散激活限制、评分阈值）已内部化为 `internal/tuning.go` 包级常量，不再可配置——宿主不应需要调整；如有调整诉求请提 issue。
+
 | 字段 | 默认 | 含义 |
 |---|---|---|
 | Capacity | 7 | 活跃场景数边界：达到后 **Update 会对最老场景触发一次 Dream**（已做可压缩性预检，场景话题不足时跳过） |
 | SearchDreamContextThreshold | 30 | Search 返回上下文超过该话题数时触发场景 Dream；**0 表示禁用触发**（部分字面量构造时注意） |
 | DreamCompressMinTopics | 20 | 场景话题数达到该值才执行压缩 |
-| MaxResults | 20 | 检索结果上限 |
-| MinSceneScore | 1.0 | 场景命中阈值 |
-| VectorMinScore | 0.5 | 向量通道相似度阈值 |
-| RRFK / ActivationBonus / RecentChatBonus | 60 / 0.2 / 0.1 | RRF 融合与场景加分权重 |
-| LambdaNode / LambdaEdge | 0.01 / 0.02 | 节点/边衰减速率 |
-| L1EdgeMinSimilarity / L1EdgeMaxHops / L1ActivationDampening / L1ActivationThreshold / L1AssocMaxScenes | 0.15 / 2 / 0.5 / 0.05 / 3 | L1 超边共现阈值与扩散激活遍历调参 |
-| TokenizerEngine | "auto" | 分词引擎（gse） |
 
 ---
 

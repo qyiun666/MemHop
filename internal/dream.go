@@ -59,12 +59,12 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 		return false, err
 	}
 	decayParams := repo.DecayParams{
-		LambdaNode:             float64(db.config.Defaults.LambdaNode),
-		LambdaEdge:             float64(db.config.Defaults.LambdaEdge),
-		NodeRemoveThreshold:    db.config.Defaults.NodeRemoveThreshold,
-		NodePruneEdgeThreshold: db.config.Defaults.NodePruneEdgesThreshold,
-		EdgeRemoveThreshold:    db.config.Defaults.EdgeRemoveThreshold,
-		MinEdgeNodes:           db.config.Defaults.MinEdgeNodes,
+		LambdaNode:             float64(lambdaNode),
+		LambdaEdge:             float64(lambdaEdge),
+		NodeRemoveThreshold:    nodeRemoveThreshold,
+		NodePruneEdgeThreshold: nodePruneEdgesThreshold,
+		EdgeRemoveThreshold:    edgeRemoveThreshold,
+		MinEdgeNodes:           minEdgeNodes,
 	}
 
 	// Stage 2.5: L6 usage feedback — adjust L1 importance from scene-level
@@ -80,7 +80,7 @@ func (db *DB) RunDream(ctx context.Context, sceneID string) (bool, error) {
 	// Stage 2.3: create/refresh co-occurrence hyperedges between scenes
 	// (keyword-overlap Jaccard >= L1EdgeMinSimilarity). Fresh edges are
 	// decayed by Stage 4 like every other edge.
-	if _, err := repo.BuildL1Hyperedges(db.engine, db.config.Defaults.L1EdgeMinSimilarity); err != nil {
+	if _, err := repo.BuildL1Hyperedges(db.engine, l1EdgeMinSimilarity); err != nil {
 		return false, err
 	}
 	if err := db.stageCancelled(ctx, "l1_hyperedges"); err != nil {
@@ -310,7 +310,7 @@ func (db *DB) distillL0Stage(ctx context.Context) error {
 }
 
 // applyUsageFeedback adjusts L1 node importance from scene usage stats
-// (folded into the L2 scene record): scenes hit within DefaultTTLMs get
+// (folded into the L2 scene record): scenes hit within the usage TTL get
 // +0.05 (active), the rest get -0.05 (cold). Best-effort; failures only
 // warn and never abort Dream.
 func (db *DB) applyUsageFeedback() {
@@ -319,7 +319,7 @@ func (db *DB) applyUsageFeedback() {
 		return
 	}
 	now := time.Now().UnixMilli()
-	ttl := db.config.Defaults.DefaultTTLMs
+	ttl := defaultTTLMs
 	byScene := make(map[uint64]core.SceneSlot, len(scenes))
 	for _, s := range scenes {
 		byScene[s.SceneID] = s
