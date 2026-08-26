@@ -12,7 +12,7 @@ import (
 
 // Dream runs the L2 compression over the given scene (or all active scenes
 // when sceneID is empty), then L1 rebuild/decay. RunDream takes the domain
-// lock itself.
+// lock itself and marks the Dream timestamp on success.
 func (db *DB) Dream(ctx context.Context, sceneID string) (bool, error) {
 	if db.DB.IsClosed() {
 		return false, common.NewError(common.ErrClosed, "database is closed")
@@ -20,12 +20,5 @@ func (db *DB) Dream(ctx context.Context, sceneID string) (bool, error) {
 	if sceneID == "" && !db.DB.HasActiveScenes() {
 		return true, nil // no active scenes: nothing to do, succeed
 	}
-	ok, err := db.DB.RunDream(ctx, core.DefaultAgentID, sceneID)
-	if err != nil {
-		return false, err
-	}
-	if ok {
-		db.DB.TouchLastDreamAt(core.DefaultAgentID)
-	}
-	return ok, nil
+	return db.DB.RunDream(ctx, core.DefaultAgentID, sceneID)
 }

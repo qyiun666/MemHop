@@ -31,7 +31,7 @@ type sceneMergeArgs struct {
 	SecondaryIDs []string `json:"secondary_ids"`
 }
 
-func registerL2Tools(s *mcp.Server, db *memhop.DB) {
+func registerL2Tools(s *mcp.Server, db *memhop.AgentSession) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_profile_get",
 		Description: "读取 L0 宿主画像（角色、个性、偏好、词表、风格与情绪模式）。",

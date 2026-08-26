@@ -125,18 +125,17 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		t.Error("memhop_scene_topics on unknown scene: expected error")
 	}
 
-	// Each tenant got its own .meh file on disk.
-	for _, want := range []string{"alice.meh", "bob.meh"} {
-		if _, err := os.Stat(filepath.Join(dbDir, want)); err != nil {
-			t.Errorf("expected %s on disk: %v", want, err)
-		}
+	// All tenants share one .meh file on disk (each gets its own agent
+	// domain inside it).
+	if _, err := os.Stat(filepath.Join(dbDir, "memhop.meh")); err != nil {
+		t.Errorf("expected memhop.meh on disk: %v", err)
 	}
 }
 
 // TestSSETenantWhitelist verifies that --tenants restricts which tenants may
 // open a database; unknown tenants are rejected without creating files.
 func TestSSETenantWhitelist(t *testing.T) {
-	srv, dbDir := newTestServer(t, []string{"alice"})
+	srv, _ := newTestServer(t, []string{"alice"})
 
 	// alice is allowed and opens fine.
 	session := connectTenant(t, srv.URL, "alice")
@@ -151,9 +150,6 @@ func TestSSETenantWhitelist(t *testing.T) {
 		HTTPClient: &http.Client{},
 	}, nil); err == nil {
 		t.Error("bob should be rejected by the whitelist")
-	}
-	if _, err := os.Stat(filepath.Join(dbDir, "bob.meh")); !os.IsNotExist(err) {
-		t.Errorf("bob.meh should not exist, stat err = %v", err)
 	}
 }
 
@@ -294,8 +290,8 @@ func newTestServerWithDir(t *testing.T, dbDir string, tenants []string) (*httpte
 	reg := newRegistry(testBase(t), dbDir, tenants, logger)
 	// Keep the SSE smoke tests offline: open tenants through a mock encoder
 	// instead of memhop.Open's Ollama health check.
-	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.DB, error) {
-		return memhop.OpenWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
+	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.MultiAgentDB, error) {
+		return memhop.OpenMultiWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
 	}
 	srv := httptest.NewServer(newSSEHandler(reg))
 	t.Cleanup(func() {
@@ -364,8 +360,8 @@ func (e errTool) Error() string { return string(e) }
 // must stay inside db-dir.
 func TestSSERegistryRejectsPathTraversal(t *testing.T) {
 	reg := newRegistry(testBase(t), t.TempDir(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.DB, error) {
-		return memhop.OpenWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
+	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.MultiAgentDB, error) {
+		return memhop.OpenMultiWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
 	}
 	for _, id := range []string{"..", ".", "a/b", "a\\b"} {
 		if _, err := reg.get(id); err == nil {
@@ -378,8 +374,8 @@ func TestSSERegistryRejectsPathTraversal(t *testing.T) {
 func TestSSECloseAllPersists(t *testing.T) {
 	dbDir := t.TempDir()
 	reg := newRegistry(testBase(t), dbDir, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.DB, error) {
-		return memhop.OpenWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
+	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.MultiAgentDB, error) {
+		return memhop.OpenMultiWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
 	}
 	if _, err := reg.get("alice"); err != nil {
 		t.Fatalf("open alice: %v", err)
@@ -393,9 +389,7 @@ func TestSSECloseAllPersists(t *testing.T) {
 	if len(reg.entries) != 0 {
 		t.Errorf("entries not cleared: %d", len(reg.entries))
 	}
-	for _, want := range []string{"alice.meh", "bob.meh"} {
-		if _, err := os.Stat(filepath.Join(dbDir, want)); err != nil {
-			t.Errorf("expected %s persisted: %v", want, err)
-		}
+	if _, err := os.Stat(filepath.Join(dbDir, "memhop.meh")); err != nil {
+		t.Errorf("expected memhop.meh persisted: %v", err)
 	}
 }

@@ -35,10 +35,13 @@ type DB struct {
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
 
-	// agentsMu guards the agents registry and the snapshot blob cache.
+	// agentsMu guards the agents registry, the snapshot blob cache and the
+	// tenant name maps (nameToID/idToName).
 	agentsMu      sync.Mutex
 	agents        map[uint64]*agentContext
 	snapshotBlobs map[uint64][]byte // sparse blobs of reclaimed agents
+	nameToID      map[string]uint64 // tenant registry: name -> agentID
+	idToName      map[uint64]string // tenant registry: agentID -> name
 
 	// mu serializes Close against itself; per-operation domain locking is on
 	// agentContext.mu instead of this DB-wide lock.
@@ -151,7 +154,13 @@ func (db *DB) destroyContext(agentID uint64) *agentContext {
 // HasActiveScenes reports whether the default domain has active scenes
 // (compatibility path used by the single-agent facade).
 func (db *DB) HasActiveScenes() bool {
-	ac := db.peekContext(core.DefaultAgentID)
+	return db.HasActiveScenesFor(core.DefaultAgentID)
+}
+
+// HasActiveScenesFor reports whether the agent domain has active scenes;
+// a domain that was never materialized (or already reclaimed) has none.
+func (db *DB) HasActiveScenesFor(agentID uint64) bool {
+	ac := db.peekContext(agentID)
 	if ac == nil {
 		return false
 	}

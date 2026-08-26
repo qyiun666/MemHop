@@ -22,7 +22,7 @@ type archiveGetArgs struct {
 	ID string `json:"id"`
 }
 
-func registerL4Tools(s *mcp.Server, db *memhop.DB) {
+func registerL4Tools(s *mcp.Server, db *memhop.AgentSession) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_archive_search",
 		Description: "检索 L4 对话原文档案：按内容关键词 / 时间范围 [start,end]（毫秒）/ ID 列表三种模式之一，可附加 topic_id 限定话题。",

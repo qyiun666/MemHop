@@ -40,7 +40,7 @@ type statusResult struct {
 	HasActiveScenes bool `json:"has_active_scenes"`
 }
 
-func registerCoreTools(s *mcp.Server, db *memhop.DB) {
+func registerCoreTools(s *mcp.Server, db *memhop.AgentSession) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_search",
 		Description: "搜索记忆并写入用户原文：三通道混合检索（BM25 + 向量 + 实体模糊），RRF 融合。返回 L0 画像、命中的 L2 场景上下文与关联上下文；auto_create=true 时自动建新话题并返回 new_topic_id（16 位 hex）。timestamp 为 Unix 毫秒，必填。",

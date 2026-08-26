@@ -16,7 +16,8 @@ type DB struct {
 	*internal.DB
 }
 
-// Open creates or opens a MemHop database.
+// Open creates or opens a MemHop database bound to the default agent
+// domain; multi-tenant hosts use OpenMulti instead.
 func Open(cfg *MemHopConfig) (*DB, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -36,10 +37,19 @@ func OpenWithEncoder(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 	return openWithEncoder(cfg, enc)
 }
 
-// openWithEncoder opens the engine and attaches the embedded built-in
+// openWithEncoder wraps the shared assembly for the single-agent facade.
+func openWithEncoder(cfg *MemHopConfig, enc Encoder) (*DB, error) {
+	d, err := openInternal(cfg, enc)
+	if err != nil {
+		return nil, err
+	}
+	return &DB{d}, nil
+}
+
+// openInternal opens the engine and attaches the embedded built-in
 // capability manuals to the DB. Built-ins are read-only reference cards
 // appended to L5 query responses — nothing is written into the .meh file.
-func openWithEncoder(cfg *MemHopConfig, enc Encoder) (*DB, error) {
+func openInternal(cfg *MemHopConfig, enc Encoder) (*internal.DB, error) {
 	d, err := internal.Open(cfg, enc)
 	if err != nil {
 		return nil, err
@@ -50,7 +60,7 @@ func openWithEncoder(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 		return nil, err
 	}
 	d.SetBuiltinCapabilities(builtins)
-	return &DB{d}, nil
+	return d, nil
 }
 
 // loadBuiltinCapabilities parses the embedded memhop-capability/v3 manuals

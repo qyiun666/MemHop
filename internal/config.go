@@ -9,6 +9,7 @@ import (
 	"os"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -133,6 +134,14 @@ func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 		return nil, err
 	}
 
+	// Rebuild the tenant name map from the on-file registry records so
+	// CreateAgent reuses stable IDs across restarts.
+	idToName := repo.ListAgentRegistry(engine)
+	nameToID := make(map[string]uint64, len(idToName))
+	for id, name := range idToName {
+		nameToID[name] = id
+	}
+
 	return &DB{
 		engine:  engine,
 		config:  cfg,
@@ -144,5 +153,7 @@ func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 		baseCancel:    cancel,
 		agents:        make(map[uint64]*agentContext),
 		snapshotBlobs: blobs,
+		nameToID:      nameToID,
+		idToName:      idToName,
 	}, nil
 }

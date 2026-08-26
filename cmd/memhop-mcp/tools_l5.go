@@ -125,7 +125,7 @@ func workflowProp() map[string]any {
 	}
 }
 
-func registerL5Tools(s *mcp.Server, db *memhop.DB) {
+func registerL5Tools(s *mcp.Server, db *memhop.AgentSession) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_import",
 		Description: "导入 memhop-capability/v3 能力文件（文件或包含 capability.json 的目录）。能力是对宿主资源的封装：type=mcp（单个 mcp 工具）、type=skill（单个 skill）、type=api（单个 api 方法）、type=composite（多个 mcp/skill/api 集合，可选 workflow 编排）；资源即工具声明（name/desc/input/output 与宿主 ToolSpec 同构）。",

@@ -90,7 +90,7 @@ func parseEdgeKinds(kinds []string) ([]memhop.GraphEdgeKind, error) {
 	return out, nil
 }
 
-func registerL3Tools(s *mcp.Server, db *memhop.DB) {
+func registerL3Tools(s *mcp.Server, db *memhop.AgentSession) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_get",
 		Description: "读取一个 L3 知识超图（图元信息 + 全部节点与边）。",

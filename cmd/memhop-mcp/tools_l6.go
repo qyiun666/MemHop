@@ -26,7 +26,7 @@ type sessionIDArgs struct {
 	SessionID string `json:"session_id"`
 }
 
-func registerL6Tools(s *mcp.Server, db *memhop.DB) {
+func registerL6Tools(s *mcp.Server, db *memhop.AgentSession) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_append",
 		Description: "向会话追加一条 L6 操作轨迹事件（Seq 自动分配）。event_type 示例：turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end。Payload 超过 4KB 会被截断。",

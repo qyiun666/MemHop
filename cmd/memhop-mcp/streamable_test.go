@@ -23,8 +23,8 @@ func TestStreamableMultiTenant(t *testing.T) {
 	dbDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reg := newRegistry(testBase(t), dbDir, nil, logger)
-	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.DB, error) {
-		return memhop.OpenWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
+	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.MultiAgentDB, error) {
+		return memhop.OpenMultiWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
 	}
 	srv := httptest.NewServer(newStreamableHandler(reg))
 	t.Cleanup(func() {
