@@ -31,8 +31,9 @@ type AgentInfo struct {
 // crypto/rand ID (and writing its registry record) on first use. Different
 // names never share an ID; the default domain is never handed out. The
 // registry record is written under agentsMu so an ID becomes visible only
-// after it is persisted — concurrent same-name callers either wait or see
-// a fully registered ID.
+// after it is persisted; the fsync briefly blocks every domain lookup
+// (agentsMu also guards contextFor) — accepted because CreateAgent is a
+// low-frequency lifecycle operation.
 func (db *DB) CreateAgent(name string) (uint64, error) {
 	if db.closed.Load() {
 		return 0, common.NewError(common.ErrClosed, "database is closed")

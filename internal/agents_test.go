@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -206,5 +207,43 @@ func TestDeleteAgentUnderConcurrency(t *testing.T) {
 	}
 	if _, err := db.GetL0(a); common.CodeOf(err) != common.ErrAgentNotFound {
 		t.Fatalf("deleted domain revived on read: err=%v", err)
+	}
+}
+
+// TestDeleteAgentVsLockedDomain an operation already holding the domain
+// lock (a long LLM-bound pipeline) completes its write before the engine
+// deletion, and every later lock attempt is rejected.
+func TestDeleteAgentVsLockedDomain(t *testing.T) {
+	db := openMultiTestDB(t, filepath.Join(t.TempDir(), "locked.meh"))
+	t.Cleanup(func() { _ = db.Close() })
+	a, err := db.CreateAgent("locked")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ac, err := db.lockAgent(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- db.DeleteAgent(a) }()
+	time.Sleep(20 * time.Millisecond) // DeleteAgent parks on the domain-lock barrier
+	if err := repo.UpdateProfileL0(db.engine, a, &core.ProfileSlot{Name: "inflight"}); err != nil {
+		t.Fatalf("in-flight write under the domain lock: %v", err)
+	}
+	ac.mu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatalf("DeleteAgent: %v", err)
+	}
+
+	// The in-flight write completed before the barrier, so it was deleted
+	// with the domain: no orphan records may survive.
+	for id := range db.engine.IterAgents() {
+		if id == a {
+			t.Fatal("orphan records survived DeleteAgent")
+		}
+	}
+	if _, err := db.lockAgent(a); common.CodeOf(err) != common.ErrAgentNotFound {
+		t.Fatalf("deleted domain accepted a new lock: err=%v", err)
 	}
 }
