@@ -241,16 +241,15 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 	}
 	var out []core.TopicSlot
 	if q.MetaIdx != nil {
-		q.MetaIdx.Iter(func(_ uint64, meta *index.L2Meta) bool {
+		for _, meta := range q.MetaIdx.Iter() {
 			if meta.Depth > depth {
-				return true
+				continue
 			}
 			if q.Num == 2 && meta.SceneID != idHash {
-				return true
+				continue
 			}
 			out = append(out, meta.ToTopicSlot())
-			return true
-		})
+		}
 	} else {
 		for _, topic := range core.CollectAllTopics(q.Engine, q.AgentID) {
 			if topic.Depth > depth {

@@ -28,11 +28,11 @@ func BuildL2MetaFromEngine(engine *core.StorageEngine, agentID uint64) *L2MetaIn
 		if err != nil {
 			continue // skip corrupt records
 		}
-		var topic topicSlotJSON
+		var topic core.TopicSlot
 		if json.Unmarshal(data, &topic) != nil {
 			continue // skip unparsable records
 		}
-		l2Meta.insertMeta(topicToL2Meta(idHash, &topic))
+		l2Meta.insertMeta(L2MetaFromTopic(&topic))
 	}
 	return l2Meta
 }
@@ -50,7 +50,7 @@ func buildIndexesFromEngine(engine *core.StorageEngine, agentID uint64) (*Sparse
 		if rt != core.RecL2Topic {
 			continue
 		}
-		var topic topicSlotJSON
+		var topic core.TopicSlot
 		if json.Unmarshal(data, &topic) != nil {
 			continue // skip unparsable records
 		}
@@ -66,7 +66,7 @@ func buildIndexesFromEngine(engine *core.StorageEngine, agentID uint64) (*Sparse
 			terms := Tokenize(text)
 			sparse.AddDocument(idHash, terms, uint32(len(terms)))
 		}
-		l2Meta.insertMeta(topicToL2Meta(idHash, &topic))
+		l2Meta.insertMeta(L2MetaFromTopic(&topic))
 	}
 	return sparse, l2Meta
 }

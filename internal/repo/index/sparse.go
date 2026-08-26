@@ -9,6 +9,7 @@ import (
 	"math"
 	"slices"
 	"sync"
+	"unique"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
@@ -58,6 +59,13 @@ func NewSparseIndex() *SparseIndex {
 	}
 }
 
+// internTerm returns the canonical form of term so identical strings share
+// one backing allocation across postings, docTerms and dirtyTerms (the
+// vocabulary is bounded by the index itself).
+func internTerm(term string) string {
+	return unique.Make(term).Value()
+}
+
 func (s *SparseIndex) addDocumentLocked(idHash uint64, terms []string, docLen uint32) {
 	if _, exists := s.docLengths[idHash]; exists {
 		s.removeDocumentLocked(idHash)
@@ -69,7 +77,7 @@ func (s *SparseIndex) addDocumentLocked(idHash uint64, terms []string, docLen ui
 
 	tfMap := make(map[string]uint32)
 	for _, term := range terms {
-		tfMap[term]++
+		tfMap[internTerm(term)]++
 	}
 	newTerms := make([]string, 0, len(tfMap))
 	for term, tf := range tfMap {

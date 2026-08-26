@@ -65,7 +65,7 @@ func handleNoArgs[Out any](fn func() (Out, error)) mcp.ToolHandler {
 // these are converted to hex strings; everything else stays numeric.
 var idHexFields = map[string]bool{
 	"id":           true, // TopicSlot.ID
-	"id_hash":      true, // slots (L0/L1/L3/L4/L5/L6/L7)
+	"id_hash":      true, // slots (L0/L1/L3/L4/L5/L6)
 	"scene_id":     true,
 	"parent_id":    true,
 	"new_topic_id": true,
@@ -76,8 +76,8 @@ var idHexFields = map[string]bool{
 	"edge_ids":     true, // L1 scene slot
 	"l4_refs":      true,
 	"l3_refs":      true,
-	"session_id":   true, // L7 TrajectorySlot
-	"l4_ref":       true, // L7 TrajectorySlot optional archive ref
+	"session_id":   true, // L6 TrajectorySlot
+	"l4_ref":       true, // L6 TrajectorySlot optional archive ref
 }
 
 // marshalResult marshals v with ID fields converted to hex strings.
@@ -211,5 +211,5 @@ func registerTools(s *mcp.Server, db *memhop.DB) {
 	registerL3Tools(s, db)
 	registerL4Tools(s, db)
 	registerL5Tools(s, db)
-	registerL7Tools(s, db)
+	registerL6Tools(s, db)
 }

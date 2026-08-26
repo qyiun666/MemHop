@@ -381,7 +381,7 @@ func TestInterfaceL5(t *testing.T) {
 	}
 }
 
-func TestInterfaceL7(t *testing.T) {
+func TestInterfaceL6(t *testing.T) {
 	db, _ := openTestDB(t)
 	session := "0000000000000001"
 	ts := time.Now().UnixMilli()

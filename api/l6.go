@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L7 API of the public facade: thin delegation to the internal layer
+// L6 API of the public facade: thin delegation to the internal layer
 // DB methods, reusing the DB instance returned by Open.
 
 package api

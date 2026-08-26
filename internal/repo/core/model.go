@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L0-L7 data models for the MemHop memory database.
+// L0-L6 data models for the MemHop memory database.
 package core
 
 import (
@@ -432,7 +432,7 @@ type WorkflowStep struct {
 	Args   map[string]any `json:"args,omitempty"`
 }
 
-// TrajectorySlot is an L7 operation trajectory event appended by the host
+// TrajectorySlot is an L6 operation trajectory event appended by the host
 // during the agent loop; short-lived, purged by the host via DeleteTrajectory.
 type TrajectorySlot struct {
 	IDHash    uint64  `json:"id_hash"`          // hash(sessionID:seq)

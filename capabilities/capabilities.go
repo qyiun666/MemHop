@@ -3,7 +3,7 @@
 
 // Package capabilities ships MemHop's built-in L5 capability cards
 // (memhop-capability/v3 JSON): wrappers that teach a host agent how to
-// drive the memory loop — Search / Update / Dream / L7 trajectory / L5
+// drive the memory loop — Search / Update / Dream / L6 trajectory / L5
 // crystallize and import. The files are embedded so the Go library can
 // load them without any on-disk path.
 //

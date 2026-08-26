@@ -1,9 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L7 trajectory operations of the internal layer: host-appended event log per
-// session plus Crystallize (L7 → L5) as an explicit host-triggered step.
-// Dream does not participate in L7; the host purges via DeleteTrajectory.
+// L6 trajectory operations of the internal layer: host-appended event log per
+// session plus Crystallize (L6 → L5) as an explicit host-triggered step.
+// Dream does not participate in L6; the host purges via DeleteTrajectory.
 
 package internal
 
@@ -75,7 +75,7 @@ func (db *DB) ReadTrajectory(sessionID string) ([]core.TrajectorySlot, error) {
 	return repo.ReadTrajectory(db.engine, core.DefaultAgentID, parsed)
 }
 
-// TrajectoryStats aggregates a session's L7 events for the host's
+// TrajectoryStats aggregates a session's L6 events for the host's
 // "is this session worth crystallizing" decision (event volume, tool-call
 // distribution, recency). Read-only; no engine state mutation.
 type TrajectoryStats struct {
@@ -140,7 +140,7 @@ type CrystallizeDetail struct {
 }
 
 // Crystallize extracts L5 capability candidates from a session's trajectory
-// (L7 → L5). The LLM receives the existing capability catalog so repeated
+// (L6 → L5). The LLM receives the existing capability catalog so repeated
 // crystallization reuses or merges instead of duplicating. The LLM call runs
 // outside both locks; writes take the write lock.
 func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeResult, error) {

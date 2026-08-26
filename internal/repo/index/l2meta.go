@@ -4,6 +4,7 @@
 package index
 
 import (
+	"iter"
 	"slices"
 	"strings"
 	"sync"
@@ -50,49 +51,27 @@ func NewL2MetaIndex() *L2MetaIndex {
 
 // BuildL2MetaFromEngine is defined in rebuild.go (shared single-pass scan).
 
-// topicSlotJSON mirrors core.TopicSlot with every field plus the legacy
-// created_at/updated_at keys that core.TopicSlot does not model, keeping
-// the original Timestamp semantics in engine scans.
-type topicSlotJSON struct {
-	ID              uint64   `json:"id"`
-	SceneID         uint64   `json:"scene_id"`
-	ParentID        *uint64  `json:"parent_id"`
-	ChildrenIDs     []uint64 `json:"children_ids"`
-	Depth           uint8    `json:"depth"`
-	UserKeywords    []string `json:"user_keywords"`
-	UserTimestamp   int64    `json:"user_timestamp"`
-	L4Refs          []uint64 `json:"l4_refs"`
-	L3Refs          []uint64 `json:"l3_refs"`
-	AgentKeywords   []string `json:"agent_keywords"`
-	AgentTimestamp  int64    `json:"agent_timestamp"`
-	FusedKeywords   []string `json:"fused_keywords"`
-	CentroidPageRef uint64   `json:"centroid_page_ref"`
-	CreatedAt       int64    `json:"created_at"`
-	UpdatedAt       int64    `json:"updated_at"`
-}
-
-func topicToL2Meta(idHash uint64, t *topicSlotJSON) *L2Meta {
+// L2MetaFromTopic is the single conversion point from a stored topic record
+// to its cached metadata; Timestamp derives from the newer of the two
+// keyword-track timestamps.
+func L2MetaFromTopic(t *core.TopicSlot) *L2Meta {
 	src := t.FusedKeywords
 	if len(src) == 0 {
 		src = t.UserKeywords
 	}
-	title := strings.Join(src, ", ")
-	l3Refs := t.L3Refs
-	archiveCount := len(t.L4Refs)
-	ts := max(max(t.UpdatedAt, t.CreatedAt), 0)
 	return &L2Meta{
-		IDHash:         idHash,
-		Title:          title,
+		IDHash:         t.ID,
+		Title:          strings.Join(src, ", "),
 		Depth:          t.Depth,
 		SceneID:        t.SceneID,
 		ParentID:       t.ParentID,
 		ChildrenIDs:    t.ChildrenIDs,
 		VectorOffset:   t.CentroidPageRef,
 		TurnCount:      uint32(len(t.ChildrenIDs)),
-		ArchiveCount:   archiveCount,
-		L3Refs:         l3Refs,
+		ArchiveCount:   len(t.L4Refs),
+		L3Refs:         t.L3Refs,
 		L4Refs:         t.L4Refs,
-		Timestamp:      uint64(ts),
+		Timestamp:      uint64(max(max(t.UserTimestamp, t.AgentTimestamp), 0)),
 		UserKeywords:   t.UserKeywords,
 		UserTimestamp:  t.UserTimestamp,
 		AgentKeywords:  t.AgentKeywords,
@@ -160,13 +139,16 @@ func (idx *L2MetaIndex) IsEmpty() bool {
 	return len(idx.entries) == 0
 }
 
-// Iter iterates over all entries. Return false from fn to stop.
-func (idx *L2MetaIndex) Iter(fn func(idHash uint64, meta *L2Meta) bool) {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	for id, meta := range idx.entries {
-		if !fn(id, meta) {
-			return
+// Iter iterates over all entries as a pull iterator; the read lock is held
+// for the whole loop, so yields must not call back into the index.
+func (idx *L2MetaIndex) Iter() iter.Seq2[uint64, *L2Meta] {
+	return func(yield func(uint64, *L2Meta) bool) {
+		idx.mu.RLock()
+		defer idx.mu.RUnlock()
+		for id, meta := range idx.entries {
+			if !yield(id, meta) {
+				return
+			}
 		}
 	}
 }
@@ -184,31 +166,6 @@ func (idx *L2MetaIndex) removeFromIndices(sceneID uint64, idHash uint64) {
 		} else {
 			idx.byScene[sceneID] = filtered
 		}
-	}
-}
-
-func L2MetaFromTopic(t *core.TopicSlot) *L2Meta {
-	src := t.FusedKeywords
-	if len(src) == 0 {
-		src = t.UserKeywords
-	}
-	return &L2Meta{
-		IDHash:         t.ID,
-		Title:          strings.Join(src, ", "),
-		Depth:          t.Depth,
-		SceneID:        t.SceneID,
-		ParentID:       t.ParentID,
-		ChildrenIDs:    t.ChildrenIDs,
-		VectorOffset:   t.CentroidPageRef,
-		TurnCount:      uint32(len(t.ChildrenIDs)),
-		ArchiveCount:   len(t.L4Refs),
-		L3Refs:         t.L3Refs,
-		L4Refs:         t.L4Refs,
-		UserKeywords:   t.UserKeywords,
-		UserTimestamp:  t.UserTimestamp,
-		AgentKeywords:  t.AgentKeywords,
-		AgentTimestamp: t.AgentTimestamp,
-		FusedKeywords:  t.FusedKeywords,
 	}
 }
 

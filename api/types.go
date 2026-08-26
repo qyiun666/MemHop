@@ -59,7 +59,7 @@ type (
 	TrajectoryStats     = internal.TrajectoryStats
 )
 
-// ---- core (L0-L7 slot models) ----
+// ---- core (L0-L6 slot models) ----
 
 type (
 	ProfileSlot    = core.ProfileSlot

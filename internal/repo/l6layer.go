@@ -1,9 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L7 operation trajectory operations: host-appended event log per session.
+// L6 operation trajectory operations: host-appended event log per session.
 // Short-lived by design; purged by the host via DeleteTrajectory (Dream
-// does not participate in L7).
+// does not participate in L6).
 package repo
 
 import (
