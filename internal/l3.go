@@ -43,11 +43,10 @@ type L3ImportResult struct {
 }
 
 func (db *DB) GetL3(agentID uint64, id string) (*L3Graph, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	return db.getL3Graph(agentID, id)
 }
@@ -81,11 +80,10 @@ func (db *DB) getL3Graph(agentID uint64, id string) (*L3Graph, error) {
 }
 
 func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	all := repo.ListGraphsL3(db.engine, agentID)
 	if all == nil {
@@ -98,11 +96,10 @@ func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 // existing nodes handled by mode. Per-item failures are recorded in
 // result.Errors and the batch continues; nil is only returned on success.
 func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if len(items) == 0 {
 		return nil, common.NewError(common.ErrInvalidQuery, "import: no items")
@@ -183,11 +180,10 @@ func (db *DB) importOneL3Item(agentID uint64, item L3ImportItem, mode L3ImportMo
 
 // UpdateL3 partially updates a graph slot (currently Name only).
 func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if _, err := repo.UpdateGraphL3(db.engine, agentID, id, name); err != nil {
 		return nil, err
@@ -197,11 +193,10 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 
 // DeleteL3 cascades: deletes the graph with all its nodes and edges.
 func (db *DB) DeleteL3(agentID uint64, id string) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if _, err := common.ParseID(id); err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)

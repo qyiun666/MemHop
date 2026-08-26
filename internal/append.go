@@ -16,11 +16,10 @@ import (
 // undefined values are rejected. Returns the new L4 record id (uint64
 // hash); hosts format it with common.FormatHash.
 func (db *DB) AppendL4Message(agentID uint64, topicID string, text string, timestamp int64, role uint8) (uint64, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return 0, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if text == "" || timestamp <= 0 {
 		return 0, common.NewError(common.ErrInvalidQuery, "AppendL4Message requires text and a positive timestamp")

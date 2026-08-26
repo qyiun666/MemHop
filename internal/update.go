@@ -17,11 +17,10 @@ import (
 // on any failure (validation, LLM, or storage); nil means the reply was
 // appended and all indexes were refreshed.
 func (db *DB) Update(agentID uint64, topicID string, text string, timestamp int64) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if text == "" || timestamp <= 0 {
 		return common.NewError(common.ErrInvalidQuery, "Update requires text and a positive timestamp")

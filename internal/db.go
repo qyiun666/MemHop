@@ -90,10 +90,24 @@ func (db *DB) contextFor(agentID uint64) (*agentContext, error) {
 		ac = db.newAgentContextLocked(agentID)
 		db.agents[agentID] = ac
 	}
+	ac.lastActiveAt.Store(time.Now().UnixMilli())
+	return ac, nil
+}
+
+// lockAgent takes the domain lock and re-checks the DeleteAgent tombstone
+// under it: a handle that raced a deletion is rejected instead of writing
+// into a tombstoned domain. Every business entry point must go through
+// this helper.
+func (db *DB) lockAgent(agentID uint64) (*agentContext, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
+		return nil, err
+	}
+	ac.mu.Lock()
 	if ac.deleted.Load() {
+		ac.mu.Unlock()
 		return nil, common.NewError(common.ErrAgentNotFound, "agent is being deleted")
 	}
-	ac.lastActiveAt.Store(time.Now().UnixMilli())
 	return ac, nil
 }
 

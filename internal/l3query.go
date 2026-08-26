@@ -24,11 +24,10 @@ type L3NodeQuery struct {
 }
 
 func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if q.GraphID == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "graph_id is required")
@@ -99,11 +98,10 @@ type L3Subgraph struct {
 // QueryL3Subgraph BFS from startNodeID up to maxDepth; edgeKinds restricts
 // reachable edges (maxDepth<=0 means 1).
 func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*L3Subgraph, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	graphHash, err := common.ParseID(graphID)
 	if err != nil {

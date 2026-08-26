@@ -15,11 +15,10 @@ import (
 // returned as an empty, non-nil ProfileSlot; storage/corruption errors are
 // surfaced.
 func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	slot, err := repo.GetProfileL0(db.engine, agentID)
 	if err != nil {
@@ -34,11 +33,10 @@ func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
 // UpdateL0 overwrites the profile (ID forced to hash("profile")); the
 // domain lock comes from the agent context.
 func (db *DB) UpdateL0(agentID uint64, slot *core.ProfileSlot) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if slot == nil {
 		return common.NewError(common.ErrInvalidQuery, "UpdateL0: slot is required")

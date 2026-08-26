@@ -23,11 +23,10 @@ import (
 // returns an error. The whole pipeline holds the domain lock, so same-agent
 // operations wait while different agents run in parallel.
 func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID string) (bool, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return false, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	// Re-check closed: Close may have completed while the lock was waited
 	// for; RunDream must not write to a closed engine.

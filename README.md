@@ -195,10 +195,10 @@ Public memory benchmarks (LoCoMo, LongMemEval) evaluate "retrieval → LLM-judge
 ## Project Structure
 
 ```
-api/                         ← Public facade: DB handle (open/search/update/dream/l0–l5/l7) + type aliases/constructors
+api/                         ← Public facade: DB handle (open/search/update/dream/l0–l6) + multi-agent facade (openmulti/session/agents) + type aliases/constructors
 internal/                    ← Business assembly: config / db / defaults / l0 / l2 / l3 / l3query /
-                               l4 / l5 / l7 / search / update / dream / scenefind / llm_client / llm_ops / encoder
-internal/repo/               ← Data layer: l0layer–l5layer + l7layer (record read/write, vectors)
+                               l4 / l5 / l6 / agents / agentctx / search / update / dream / scenefind / llm_client / llm_ops / encoder
+internal/repo/               ← Data layer: l0layer–l6layer + agentlayer (record read/write, vectors)
 internal/repo/index/         ← Index layer: sparse (BM25) / l1_reverse / l2meta / l3_index /
                                entity / rebuild / tokenizer (gse)
 internal/repo/core/          ← .meh engine: engine / frame / header / snapshot / reclaim /

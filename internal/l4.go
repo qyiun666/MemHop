@@ -22,11 +22,10 @@ type L4Query struct {
 }
 
 func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	var out []core.ArchiveSlot
 	switch {
@@ -59,11 +58,10 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 }
 
 func (db *DB) GetArchive(agentID uint64, id string) (*core.ArchiveSlot, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	out := repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, []string{id})
 	if len(out) == 0 {

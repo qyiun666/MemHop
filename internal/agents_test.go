@@ -194,6 +194,13 @@ func TestDeleteAgentUnderConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 
+	// No orphan records: the engine's agent index must not contain the domain.
+	for id := range db.engine.IterAgents() {
+		if id == a {
+			t.Fatal("orphan records survived DeleteAgent")
+		}
+	}
+
 	if err := db.UpdateL0(a, &core.ProfileSlot{Name: "zombie"}); common.CodeOf(err) != common.ErrAgentNotFound {
 		t.Fatalf("deleted domain revived on write: err=%v", err)
 	}

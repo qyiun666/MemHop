@@ -23,11 +23,10 @@ import (
 // keyword tracks (Search → AppendL4Message ×N → Update → refine). The ctx
 // cancels LLM keyword extraction.
 func (db *DB) RefineTopicKeywords(ctx context.Context, agentID uint64, topicID string) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	parsedID, err := common.ParseID(topicID)
 	if err != nil {

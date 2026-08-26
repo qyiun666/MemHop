@@ -42,11 +42,10 @@ type SearchResult struct {
 // extraction failure returns an error, never degrades. The ctx cancels LLM
 // keyword extraction, encoder calls and the internally triggered Dream.
 func (db *DB) Search(ctx context.Context, agentID uint64, q SearchQuery) (*SearchResult, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if q.Timestamp <= 0 {
 		return nil, common.NewError(common.ErrInvalidQuery,

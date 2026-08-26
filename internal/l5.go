@@ -88,11 +88,10 @@ func BuildCapability(data []byte, source string) (*core.Capability, error) {
 // Re-importing byte-identical content under the same name is a no-op: the
 // append-only file must not grow on every startup import.
 func (db *DB) importCapabilityData(agentID uint64, data []byte, source string) (*core.Capability, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	cap, err := BuildCapability(data, source)
 	if err != nil {
@@ -118,11 +117,10 @@ func (db *DB) importCapabilityData(agentID uint64, data []byte, source string) (
 // GetCapability reads one L5 capability by ID. IDs not stored in the file
 // fall back to the built-in toolbox, so listed built-ins stay retrievable.
 func (db *DB) GetCapability(agentID uint64, id string) (*core.Capability, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	cap, err := repo.GetCapabilityL5(db.engine, agentID, id)
 	if err != nil {
@@ -152,11 +150,10 @@ type CapabilityPatch struct {
 // UpdateCapability partially updates a stored capability (built-ins are
 // read-only and rejected).
 func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch) (*core.Capability, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if db.findBuiltinCapability(id) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
@@ -204,11 +201,10 @@ func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch)
 // DeleteCapability removes a capability record. Built-in capabilities are
 // read-only: deleting one is rejected instead of silently succeeding.
 func (db *DB) DeleteCapability(agentID uint64, id string) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if _, err := common.ParseID(id); err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse capability id", err)
@@ -224,11 +220,10 @@ func (db *DB) DeleteCapability(agentID uint64, id string) error {
 
 // ListCapabilities lists and filters L5 capabilities.
 func (db *DB) ListCapabilities(agentID uint64, q CapabilityListQuery) ([]core.Capability, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	kw := strings.ToLower(q.Keyword)
 	all := repo.ListCapabilitiesL5(db.engine, agentID)
@@ -266,11 +261,10 @@ func (db *DB) ListCapabilities(agentID uint64, q CapabilityListQuery) ([]core.Ca
 // ActivateCapability promotes a draft capability to active. Built-in
 // capabilities are read-only and rejected.
 func (db *DB) ActivateCapability(agentID uint64, id string) (*core.Capability, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if db.findBuiltinCapability(id) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
@@ -281,11 +275,10 @@ func (db *DB) ActivateCapability(agentID uint64, id string) (*core.Capability, e
 // RecordCapabilityUsage records host feedback after a capability was used.
 // Built-in capabilities are read-only and rejected.
 func (db *DB) RecordCapabilityUsage(agentID uint64, id string, success bool) (*core.Capability, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if db.findBuiltinCapability(id) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")

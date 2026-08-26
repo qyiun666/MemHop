@@ -30,8 +30,9 @@ type AgentInfo struct {
 // CreateAgent returns the stable agentID for name, allocating a fresh
 // crypto/rand ID (and writing its registry record) on first use. Different
 // names never share an ID; the default domain is never handed out. The
-// registry record is written outside agentsMu so the fsync never blocks
-// concurrent domain lookups; a failed write rolls the reservation back.
+// registry record is written under agentsMu so an ID becomes visible only
+// after it is persisted — concurrent same-name callers either wait or see
+// a fully registered ID.
 func (db *DB) CreateAgent(name string) (uint64, error) {
 	if db.closed.Load() {
 		return 0, common.NewError(common.ErrClosed, "database is closed")
@@ -41,41 +42,33 @@ func (db *DB) CreateAgent(name string) (uint64, error) {
 		return 0, common.NewError(common.ErrInvalidQuery, "agent name is empty")
 	}
 	db.agentsMu.Lock()
+	defer db.agentsMu.Unlock()
 	if db.nameToID == nil {
 		db.nameToID = make(map[string]uint64)
 		db.idToName = make(map[uint64]string)
 	}
 	if id, ok := db.nameToID[name]; ok {
-		db.agentsMu.Unlock()
 		return id, nil
 	}
-	var id uint64
 	for {
 		var b [8]byte
 		if _, err := rand.Read(b[:]); err != nil {
-			db.agentsMu.Unlock()
 			return 0, common.NewError(common.ErrIO, "agent id allocation", err)
 		}
-		id = binary.LittleEndian.Uint64(b[:])
+		id := binary.LittleEndian.Uint64(b[:])
 		if id == core.DefaultAgentID {
 			continue
 		}
 		if _, taken := db.idToName[id]; taken {
 			continue
 		}
-		break
+		if err := repo.WriteAgentRegistry(db.engine, id, name); err != nil {
+			return 0, err
+		}
+		db.nameToID[name] = id
+		db.idToName[id] = name
+		return id, nil
 	}
-	db.nameToID[name] = id
-	db.idToName[id] = name
-	db.agentsMu.Unlock()
-	if err := repo.WriteAgentRegistry(db.engine, id, name); err != nil {
-		db.agentsMu.Lock()
-		delete(db.nameToID, name)
-		delete(db.idToName, id)
-		db.agentsMu.Unlock()
-		return 0, err
-	}
-	return id, nil
 }
 
 // ListAgents returns every registered agent sorted by ID; the default

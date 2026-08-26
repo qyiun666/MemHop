@@ -12,11 +12,10 @@ import (
 )
 
 func (db *DB) ListScenes(agentID uint64) ([]core.SceneSlot, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	all := repo.CollectAllScenesL2(db.engine, agentID)
 	if all == nil {
@@ -40,11 +39,10 @@ func (db *DB) ActiveSceneIDs(agentID uint64) []uint64 {
 // MergeScenes rewrites all topics of secondary scenes to the primary scene
 // and deletes the secondary records.
 func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []string) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	primaryHash, err := common.ParseID(primaryID)
 	if err != nil {
@@ -105,11 +103,10 @@ type SceneContext struct {
 // SceneContext returns one scene's topics sorted by user timestamp with
 // their L4 messages; unknown scenes return an error.
 func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	if _, err := common.ParseID(sceneID); err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
@@ -164,11 +161,10 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 // parent (if any) has its ChildrenIDs pruned. Deleting a missing topic
 // returns ErrNotFound.
 func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	parsedID, err := common.ParseID(topicID)
 	if err != nil {
@@ -220,11 +216,10 @@ func removeOnceUint64(s []uint64, v uint64) []uint64 {
 // the referenced L4 archives, the L2Meta/sparse entries, and its active-set
 // membership, so the scene disappears from listings and retrieval.
 func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	sceneHash, err := common.ParseID(sceneID)
 	if err != nil {

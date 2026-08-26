@@ -25,11 +25,10 @@ const maxTrajectoryPayload = 4 * 1024
 // derived from the current max + 1, so the host never counts sequences.
 // The domain lock serializes Seq allocation.
 func (db *DB) AppendTrajectory(agentID uint64, sessionID string, ev core.TrajectorySlot) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
@@ -70,11 +69,10 @@ func truncateUTF8(s string, max int) string {
 
 // ReadTrajectory returns a session's trajectory events ordered by Seq.
 func (db *DB) ReadTrajectory(agentID uint64, sessionID string) ([]core.TrajectorySlot, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
@@ -94,11 +92,10 @@ type TrajectoryStats struct {
 
 // TrajectoryStats returns per-session statistics over the trajectory log.
 func (db *DB) TrajectoryStats(agentID uint64, sessionID string) (*TrajectoryStats, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
@@ -122,11 +119,10 @@ func (db *DB) TrajectoryStats(agentID uint64, sessionID string) (*TrajectoryStat
 // DeleteTrajectory removes a session's trajectory events; the domain lock
 // comes from the internal layer.
 func (db *DB) DeleteTrajectory(agentID uint64, sessionID string) error {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
@@ -161,11 +157,10 @@ type CrystallizeDetail struct {
 // runs under the agent's domain lock; the LLM call holds no storage lock
 // beyond the engine's own short-lived record locks.
 func (db *DB) Crystallize(ctx context.Context, agentID uint64, sessionID string) (*CrystallizeResult, error) {
-	ac, err := db.contextFor(agentID)
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {

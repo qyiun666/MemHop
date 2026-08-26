@@ -195,10 +195,10 @@ MemHop 的测试套件只驱动公开 `api` 表面——即宿主（如 MeowAgen
 ## 项目结构
 
 ```
-api/                         ← 公开门面：DB 句柄（open/search/update/dream/l0–l5/l7）+ 类型别名/构造器
+api/                         ← 公开门面：DB 句柄（open/search/update/dream/l0–l6）+ 多 agent 门面（openmulti/session/agents）+ 类型别名/构造器
 internal/                    ← 业务装配层：config / db / defaults / l0 / l2 / l3 / l3query /
-                               l4 / l5 / l7 / search / update / dream / scenefind / llm_client / llm_ops / encoder
-internal/repo/               ← 数据层：l0layer–l5layer + l7layer（记录读写、向量存取）
+                               l4 / l5 / l6 / agents / agentctx / search / update / dream / scenefind / llm_client / llm_ops / encoder
+internal/repo/               ← 数据层：l0layer–l6layer + agentlayer（记录读写、向量存取）
 internal/repo/index/         ← 索引层：sparse（BM25）/ l1_reverse / l2meta / l3_index /
                                entity / rebuild / tokenizer（gse）
 internal/repo/core/          ← .meh 引擎：engine / frame / header / snapshot / reclaim /
