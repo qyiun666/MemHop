@@ -8,18 +8,19 @@ package api
 
 import (
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // Thin wrapper; see internal/l2.go ((db *DB) ListScenes).
 func (db *DB) ListScenes() ([]SceneSlot, error) {
-	return db.DB.ListScenes()
+	return db.DB.ListScenes(core.DefaultAgentID)
 }
 
 // ActiveSceneIDs returns the active scene IDs as 16-char hex strings,
 // consistent with the hex ID parameters of SceneContext / MergeScenes /
 // Search.DirectedL2ID.
 func (db *DB) ActiveSceneIDs() []string {
-	ids := db.DB.ActiveSceneIDs()
+	ids := db.DB.ActiveSceneIDs(core.DefaultAgentID)
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
 		out = append(out, common.FormatHash(id))
@@ -29,39 +30,24 @@ func (db *DB) ActiveSceneIDs() []string {
 
 // Thin wrapper; returns one scene's topics with their L4 messages.
 func (db *DB) SceneContext(sceneID string) (*SceneContext, error) {
-	return db.DB.SceneContext(sceneID)
+	return db.DB.SceneContext(core.DefaultAgentID, sceneID)
 }
 
-// Thin wrapper; write op, delegates under the write lock.
+// Thin wrapper; see internal/l2.go ((db *DB) MergeScenes).
 func (db *DB) MergeScenes(primaryID string, secondaryIDs []string) error {
-	db.DB.Lock()
-	defer db.DB.Unlock()
-	if db.DB.IsClosed() {
-		return common.NewError(common.ErrClosed, "database is closed")
-	}
-	return db.DB.MergeScenes(primaryID, secondaryIDs)
+	return db.DB.MergeScenes(core.DefaultAgentID, primaryID, secondaryIDs)
 }
 
 // DeleteTopic removes a topic and its whole subtree (children at any
 // depth), the L4 archives they reference, and their L2Meta/sparse entries,
 // so the deleted topic no longer surfaces in retrieval.
 func (db *DB) DeleteTopic(topicID string) error {
-	db.DB.Lock()
-	defer db.DB.Unlock()
-	if db.DB.IsClosed() {
-		return common.NewError(common.ErrClosed, "database is closed")
-	}
-	return db.DB.DeleteTopic(topicID)
+	return db.DB.DeleteTopic(core.DefaultAgentID, topicID)
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
 // the referenced L4 archives, and the L2Meta/sparse entries, so the scene
 // disappears from listings and retrieval.
 func (db *DB) DeleteScene(sceneID string) error {
-	db.DB.Lock()
-	defer db.DB.Unlock()
-	if db.DB.IsClosed() {
-		return common.NewError(common.ErrClosed, "database is closed")
-	}
-	return db.DB.DeleteScene(sceneID)
+	return db.DB.DeleteScene(core.DefaultAgentID, sceneID)
 }

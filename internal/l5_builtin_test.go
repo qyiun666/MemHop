@@ -31,12 +31,12 @@ func testBuiltinCapabilities() []core.Capability {
 // built-ins pass the same list filters and are never written to the engine.
 func TestListCapabilitiesWithBuiltins(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	db.SetBuiltinCapabilities(testBuiltinCapabilities())
 	stored := core.Capability{IDHash: common.HashID("stored"), Name: "库存能力", Type: core.CapabilityMCP, Status: core.CapabilityActive, UpdatedAt: 1000}
 	writeCapability(t, engine, &stored)
 
-	out, err := db.ListCapabilities(CapabilityListQuery{})
+	out, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestListCapabilitiesWithBuiltins(t *testing.T) {
 
 	// Filters apply to built-ins too (they are active mcp/skill cards).
 	draft := core.CapabilityDraft
-	out, err = db.ListCapabilities(CapabilityListQuery{Status: &draft})
+	out, err = db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{Status: &draft})
 	if err != nil {
 		t.Fatalf("list draft: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestListCapabilitiesWithBuiltins(t *testing.T) {
 	}
 
 	skill := core.CapabilitySkill
-	out, err = db.ListCapabilities(CapabilityListQuery{Type: &skill})
+	out, err = db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{Type: &skill})
 	if err != nil {
 		t.Fatalf("list skill: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestListCapabilitiesWithBuiltins(t *testing.T) {
 // A stored record with the same name/ID wins over its built-in twin.
 func TestListCapabilitiesBuiltinDedup(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	db.SetBuiltinCapabilities(testBuiltinCapabilities())
 	stored := core.Capability{
 		IDHash: core.CapabilityID("内置手册"), Name: "内置手册",
@@ -81,7 +81,7 @@ func TestListCapabilitiesBuiltinDedup(t *testing.T) {
 	}
 	writeCapability(t, engine, &stored)
 
-	out, err := db.ListCapabilities(CapabilityListQuery{})
+	out, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -102,18 +102,18 @@ func TestListCapabilitiesBuiltinDedup(t *testing.T) {
 // GetCapability falls back to the built-in toolbox for IDs not stored in
 // the file, so every listed capability stays retrievable.
 func TestGetCapabilityBuiltinFallback(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 	db.SetBuiltinCapabilities(testBuiltinCapabilities())
 
 	id := common.FormatHash(core.CapabilityID("内置手册"))
-	cap, err := db.GetCapability(id)
+	cap, err := db.GetCapability(core.DefaultAgentID, id)
 	if err != nil {
 		t.Fatalf("get builtin: %v", err)
 	}
 	if cap.Name != "内置手册" || cap.Origin != core.CapabilityOriginBuiltin {
 		t.Fatalf("builtin fallback mismatch: %+v", cap)
 	}
-	if _, err := db.GetCapability(common.FormatHash(common.HashID("不存在"))); err == nil {
+	if _, err := db.GetCapability(core.DefaultAgentID, common.FormatHash(common.HashID("不存在"))); err == nil {
 		t.Fatal("unknown id must still fail")
 	}
 }
@@ -122,7 +122,7 @@ func TestGetCapabilityBuiltinFallback(t *testing.T) {
 // the built-in toolbox is NOT attached to Search responses.
 func TestMatchCapabilitiesExcludesBuiltins(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	db.SetBuiltinCapabilities(testBuiltinCapabilities())
 
 	out := db.matchCapabilities("内置手册 检索")

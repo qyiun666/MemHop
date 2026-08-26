@@ -23,8 +23,14 @@ const maxTrajectoryPayload = 4 * 1024
 
 // AppendTrajectory appends one event to a session's trajectory; Seq is
 // derived from the current max + 1, so the host never counts sequences.
-// The write lock comes from the internal layer to serialize Seq allocation.
-func (db *DB) AppendTrajectory(sessionID string, ev core.TrajectorySlot) error {
+// The domain lock serializes Seq allocation.
+func (db *DB) AppendTrajectory(agentID uint64, sessionID string, ev core.TrajectorySlot) error {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
+		return err
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse session id", err)
@@ -32,7 +38,7 @@ func (db *DB) AppendTrajectory(sessionID string, ev core.TrajectorySlot) error {
 	if ev.EventType == "" || ev.Timestamp <= 0 {
 		return common.NewError(common.ErrInvalidQuery, "EventType and Timestamp are required")
 	}
-	events, err := repo.ReadTrajectory(db.engine, core.DefaultAgentID, parsed)
+	events, err := repo.ReadTrajectory(db.engine, agentID, parsed)
 	if err != nil {
 		return err
 	}
@@ -47,7 +53,7 @@ func (db *DB) AppendTrajectory(sessionID string, ev core.TrajectorySlot) error {
 	}
 	ev.SessionID = parsed
 	ev.Seq = maxSeq + 1
-	return repo.AppendTrajectory(db.engine, core.DefaultAgentID, ev)
+	return repo.AppendTrajectory(db.engine, agentID, ev)
 }
 
 // truncateUTF8 cuts s to at most max bytes without splitting a UTF-8 rune.
@@ -63,16 +69,18 @@ func truncateUTF8(s string, max int) string {
 }
 
 // ReadTrajectory returns a session's trajectory events ordered by Seq.
-func (db *DB) ReadTrajectory(sessionID string) ([]core.TrajectorySlot, error) {
-	if err := db.beginRead(); err != nil {
+func (db *DB) ReadTrajectory(agentID uint64, sessionID string) ([]core.TrajectorySlot, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
-	return repo.ReadTrajectory(db.engine, core.DefaultAgentID, parsed)
+	return repo.ReadTrajectory(db.engine, agentID, parsed)
 }
 
 // TrajectoryStats aggregates a session's L6 events for the host's
@@ -85,16 +93,18 @@ type TrajectoryStats struct {
 }
 
 // TrajectoryStats returns per-session statistics over the trajectory log.
-func (db *DB) TrajectoryStats(sessionID string) (*TrajectoryStats, error) {
-	if err := db.beginRead(); err != nil {
+func (db *DB) TrajectoryStats(agentID uint64, sessionID string) (*TrajectoryStats, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
-	events, err := repo.ReadTrajectory(db.engine, core.DefaultAgentID, parsed)
+	events, err := repo.ReadTrajectory(db.engine, agentID, parsed)
 	if err != nil {
 		return nil, err
 	}
@@ -109,14 +119,20 @@ func (db *DB) TrajectoryStats(sessionID string) (*TrajectoryStats, error) {
 	return stats, nil
 }
 
-// DeleteTrajectory removes a session's trajectory events; write lock comes
-// from the internal layer.
-func (db *DB) DeleteTrajectory(sessionID string) error {
+// DeleteTrajectory removes a session's trajectory events; the domain lock
+// comes from the internal layer.
+func (db *DB) DeleteTrajectory(agentID uint64, sessionID string) error {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
+		return err
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
-	return repo.DeleteTrajectory(db.engine, core.DefaultAgentID, parsed)
+	return repo.DeleteTrajectory(db.engine, agentID, parsed)
 }
 
 // CrystallizeResult reports L5 capabilities created/reused/merged from a
@@ -141,20 +157,22 @@ type CrystallizeDetail struct {
 
 // Crystallize extracts L5 capability candidates from a session's trajectory
 // (L6 → L5). The LLM receives the existing capability catalog so repeated
-// crystallization reuses or merges instead of duplicating. The LLM call runs
-// outside both locks; writes take the write lock.
-func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeResult, error) {
-	if err := db.beginRead(); err != nil {
+// crystallization reuses or merges instead of duplicating. The whole pipeline
+// runs under the agent's domain lock; the LLM call holds no storage lock
+// beyond the engine's own short-lived record locks.
+func (db *DB) Crystallize(ctx context.Context, agentID uint64, sessionID string) (*CrystallizeResult, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
-		db.mu.RUnlock()
 		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
-	events, err := repo.ReadTrajectory(db.engine, core.DefaultAgentID, parsed)
-	existing := activeCapabilities(repo.ListCapabilitiesL5(db.engine, core.DefaultAgentID))
-	db.mu.RUnlock()
+	events, err := repo.ReadTrajectory(db.engine, agentID, parsed)
+	existing := activeCapabilities(repo.ListCapabilitiesL5(db.engine, agentID))
 	if err != nil {
 		return nil, err
 	}
@@ -166,8 +184,6 @@ func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeRe
 		return nil, err
 	}
 
-	db.mu.Lock()
-	defer db.mu.Unlock()
 	if db.closed.Load() {
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
@@ -188,7 +204,7 @@ func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeRe
 				continue
 			}
 		}
-		id, disposition, err := db.applyCrystallizedCapability(cand, sessionID)
+		id, disposition, err := db.applyCrystallizedCapability(agentID, cand, sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -217,7 +233,7 @@ func activeCapabilities(caps []core.Capability) []core.Capability {
 	return out
 }
 
-func (db *DB) applyCrystallizedCapability(cand CrystallizeCapability, sessionID string) (string, string, error) {
+func (db *DB) applyCrystallizedCapability(agentID uint64, cand CrystallizeCapability, sessionID string) (string, string, error) {
 	now := time.Now().UnixMilli()
 	action := strings.ToLower(strings.TrimSpace(cand.Action))
 	if action == "" {
@@ -228,16 +244,16 @@ func (db *DB) applyCrystallizedCapability(cand CrystallizeCapability, sessionID 
 	// Name is the canonical identity. A create candidate whose name already
 	// exists is always treated as reuse: crystallization must never silently
 	// overwrite an active capability.
-	if existing, id, ok := db.findCrystallizeTarget(cap, cand.ReuseID); ok {
+	if existing, id, ok := db.findCrystallizeTarget(agentID, cap, cand.ReuseID); ok {
 		if action == "merge" {
-			if err := mergeCapabilityDefinition(db.engine, existing, cap, sessionID, now); err != nil {
+			if err := mergeCapabilityDefinition(db.engine, agentID, existing, cap, sessionID, now); err != nil {
 				return "", "", err
 			}
 			return id, "merge", nil
 		}
 		return id, "reuse", nil
 	}
-	if _, err := repo.UpsertCapabilityL5(db.engine, core.DefaultAgentID, cap); err != nil {
+	if _, err := repo.UpsertCapabilityL5(db.engine, agentID, cap); err != nil {
 		return "", "", err
 	}
 	return common.FormatHash(cap.IDHash), "create", nil
@@ -264,20 +280,20 @@ func buildCrystallizedCapability(in CapabilityImport, _ string, now int64) *core
 // findCrystallizeTarget locates an existing capability by name ID (canonical
 // identity) then explicit ReuseID. found=false means a new record must be
 // created.
-func (db *DB) findCrystallizeTarget(cap *core.Capability, reuseID string) (*core.Capability, string, bool) {
+func (db *DB) findCrystallizeTarget(agentID uint64, cap *core.Capability, reuseID string) (*core.Capability, string, bool) {
 	nameID := common.FormatHash(core.CapabilityID(cap.Name))
-	if existing, err := repo.GetCapabilityL5(db.engine, core.DefaultAgentID, nameID); err == nil {
+	if existing, err := repo.GetCapabilityL5(db.engine, agentID, nameID); err == nil {
 		return existing, nameID, true
 	}
 	if reuseID != "" {
-		if existing, err := repo.GetCapabilityL5(db.engine, core.DefaultAgentID, reuseID); err == nil {
+		if existing, err := repo.GetCapabilityL5(db.engine, agentID, reuseID); err == nil {
 			return existing, common.FormatHash(existing.IDHash), true
 		}
 	}
 	return nil, "", false
 }
 
-func mergeCapabilityDefinition(engine *core.StorageEngine, existing, incoming *core.Capability, _ string, now int64) error {
+func mergeCapabilityDefinition(engine *core.StorageEngine, agentID uint64, existing, incoming *core.Capability, _ string, now int64) error {
 	existing.Version = incoming.Version
 	existing.Type = incoming.Type
 	existing.Summary = incoming.Summary
@@ -285,6 +301,6 @@ func mergeCapabilityDefinition(engine *core.StorageEngine, existing, incoming *c
 	existing.Resources = incoming.Resources
 	existing.Workflow = incoming.Workflow
 	existing.UpdatedAt = now
-	_, err := repo.UpsertCapabilityL5(engine, core.DefaultAgentID, existing)
+	_, err := repo.UpsertCapabilityL5(engine, agentID, existing)
 	return err
 }

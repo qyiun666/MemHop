@@ -41,11 +41,13 @@ type SearchResult struct {
 // DirectedL3ID restricts topics referencing that L3). LLM keyword
 // extraction failure returns an error, never degrades. The ctx cancels LLM
 // keyword extraction, encoder calls and the internally triggered Dream.
-func (db *DB) Search(ctx context.Context, q SearchQuery) (*SearchResult, error) {
-	if err := db.beginRead(); err != nil {
+func (db *DB) Search(ctx context.Context, agentID uint64, q SearchQuery) (*SearchResult, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	if q.Timestamp <= 0 {
 		return nil, common.NewError(common.ErrInvalidQuery,
 			"SearchQuery.Timestamp is required (Unix milliseconds)")
@@ -60,11 +62,11 @@ func (db *DB) Search(ctx context.Context, q SearchQuery) (*SearchResult, error) 
 	)
 	switch {
 	case q.AutoCreate:
-		contexts, newTopicID, err = db.searchAutoCreate(q, keywords)
+		contexts, newTopicID, err = ac.searchAutoCreate(db, q, keywords)
 	case q.DirectedL2ID != nil:
-		contexts, newTopicID, err = db.searchDirected(q, keywords)
+		contexts, newTopicID, err = ac.searchDirected(db, q, keywords)
 	default:
-		contexts, newTopicID, err = db.searchNormal(ctx, q, keywords)
+		contexts, newTopicID, err = ac.searchNormal(ctx, db, q, keywords)
 	}
 	if err != nil {
 		return nil, err
@@ -74,27 +76,27 @@ func (db *DB) Search(ctx context.Context, q SearchQuery) (*SearchResult, error) 
 	// depth<=1 listing); sparse comes last per storage → l2meta → sparse.
 	if newTopicID != 0 {
 		terms := index.Tokenize(strings.Join(keywords, " "))
-		db.sparseIndex.AddDocument(newTopicID, terms, uint32(len(terms)))
+		ac.sparseIndex.AddDocument(newTopicID, terms, uint32(len(terms)))
 	}
 	var associated []core.TopicSlot
 	if len(contexts) > 0 {
-		associated = db.associatedContexts(contexts[0].SceneID)
+		associated = ac.associatedContexts(db, contexts[0].SceneID)
 		// Trigger a Dream when the scene's context grows beyond the
 		// threshold so its depth-1 topics get compressed (best-effort and
 		// asynchronous: Search returns immediately, the Dream runs in the
-		// background under the write lock; the scene is re-activated by the
+		// background under the domain lock; the scene is re-activated by the
 		// next hit). Zero threshold (host-constructed literal) disables the
 		// trigger.
 		if t := db.config.Defaults.SearchDreamContextThreshold; t > 0 && len(contexts) > t {
-			db.triggerSceneDream(contexts[0].SceneID)
+			db.triggerSceneDream(ac, contexts[0].SceneID)
 		}
 	}
-	return db.assembleResult(q, contexts, associated, newTopicID)
+	return db.assembleResult(agentID, q, contexts, associated, newTopicID)
 }
 
 // searchAutoCreate creates a new scene and topic directly, skipping retrieval.
-func (db *DB) searchAutoCreate(q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
-	topics, topicID, err := db.createTopicInScene(q, keywords, 0)
+func (ac *agentContext) searchAutoCreate(db *DB, q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
+	topics, topicID, err := ac.createTopicInScene(db, q, keywords, 0)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -102,12 +104,12 @@ func (db *DB) searchAutoCreate(q SearchQuery, keywords []string) ([]core.TopicSl
 }
 
 // searchDirected creates a topic and L4 archive in the given scene.
-func (db *DB) searchDirected(q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
+func (ac *agentContext) searchDirected(db *DB, q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
 	sceneID, err := common.ParseID(*q.DirectedL2ID)
 	if err != nil {
 		return nil, 0, err
 	}
-	topics, topicID, err := db.createTopicInScene(q, keywords, sceneID)
+	topics, topicID, err := ac.createTopicInScene(db, q, keywords, sceneID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -117,13 +119,13 @@ func (db *DB) searchDirected(q SearchQuery, keywords []string) ([]core.TopicSlot
 // searchNormal runs three-channel retrieval (DirectedL3ID restricts topics),
 // creates a topic in the top scene (or a new one), and returns the scene's
 // depth<=1 topics plus the new topic ID.
-func (db *DB) searchNormal(ctx context.Context, q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
-	hit, err := TopScene(ctx, db.engine, db.l2Meta, db.sparseIndex, db.encoder,
-		q.Text, keywords, db.activeScenes, minSceneScore, q.DirectedL3ID)
+func (ac *agentContext) searchNormal(ctx context.Context, db *DB, q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
+	hit, err := TopScene(ctx, db.engine, ac.l2Meta, ac.sparseIndex, db.encoder,
+		q.Text, keywords, ac.activeScenes, minSceneScore, q.DirectedL3ID)
 	if err != nil {
 		return nil, 0, err
 	}
-	topics, topicID, err := db.createTopicInScene(q, keywords, hit.SceneID)
+	topics, topicID, err := ac.createTopicInScene(db, q, keywords, hit.SceneID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -132,45 +134,46 @@ func (db *DB) searchNormal(ctx context.Context, q SearchQuery, keywords []string
 
 // createTopicInScene creates a topic (new scene when sceneID==0) with an
 // L4 archive and L4Refs; sparse index updates happen in Search.
-func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint64) ([]core.TopicSlot, uint64, error) {
+func (ac *agentContext) createTopicInScene(db *DB, q SearchQuery, keywords []string, sceneID uint64) ([]core.TopicSlot, uint64, error) {
 	if sceneID == 0 {
 		sceneName := fmt.Sprintf("%d:%s", q.Timestamp, common.SafeCharSlice(q.Text, 10))
-		sid, err := repo.CreateSceneL2(db.engine, core.DefaultAgentID, sceneName)
+		sid, err := repo.CreateSceneL2(db.engine, ac.id, sceneName)
 		if err != nil {
 			return nil, 0, err
 		}
 		sceneID = sid
 	}
 	topicID := core.ComputeTopicID(sceneID, q.Timestamp, 0)
-	centroidRef, err := db.writeCentroid(q.Text)
+	centroidRef, err := db.writeCentroid(ac.id, q.Text)
 	if err != nil {
 		return nil, 0, err
 	}
-	if !repo.CreateTopicL2(db.engine, core.DefaultAgentID, common.FormatHash(sceneID), keywords, q.Timestamp, centroidRef) {
+	if !repo.CreateTopicL2(db.engine, ac.id, common.FormatHash(sceneID), keywords, q.Timestamp, centroidRef) {
 		return nil, 0, common.NewError(common.ErrIO, "create topic", nil)
 	}
 	topicIDStr := common.FormatHash(topicID)
-	archiveID, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicIDStr, 0, core.ContentText, q.Text, q.Timestamp)
+	archiveID, err := repo.AppendArchiveL4(db.engine, ac.id, topicIDStr, 0, core.ContentText, q.Text, q.Timestamp)
 	if err != nil {
 		return nil, 0, err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, topicIDStr, []uint64{archiveID}) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, ac.id, topicIDStr, []uint64{archiveID}) {
 		return nil, 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
 	// Link matching L3 graphs onto the new topic: this is what makes
 	// DirectedL3ID scoping work.
-	if ids := repo.MatchL3Graphs(db.engine, core.DefaultAgentID, keywords, q.Text); len(ids) > 0 {
-		if !repo.AppendTopicL3RefsL2(db.engine, core.DefaultAgentID, topicIDStr, ids) {
+	if ids := repo.MatchL3Graphs(db.engine, ac.id, keywords, q.Text); len(ids) > 0 {
+		if !repo.AppendTopicL3RefsL2(db.engine, ac.id, topicIDStr, ids) {
 			return nil, 0, common.NewError(common.ErrIO, "link topic l3 refs", nil)
 		}
 	}
 	// Refresh the L2Meta entry before the listing below so the newly
 	// created topic is part of the returned Contexts (all three routes flow
 	// through here). Lock order: storage writes above → l2meta → sparse.
-	db.syncL2Meta(topicID)
+	ac.syncL2Meta(db, topicID)
 	latest, err := repo.ListTopicsL2(repo.TopicListQuery{
 		Engine:  db.engine,
-		MetaIdx: db.l2Meta,
+		AgentID: ac.id,
+		MetaIdx: ac.l2Meta,
 		SceneID: common.FormatHash(sceneID),
 		Depth:   1,
 		Num:     2,
@@ -179,10 +182,10 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 		return nil, 0, err
 	}
 	// Activation unified here for all three routes; idempotent.
-	db.activateScene(sceneID)
+	ac.activateScene(sceneID)
 	// Scene-level retrieval usage feedback, folded into the scene record
 	// (best-effort, non-fatal).
-	if err := repo.TouchSceneUsage(db.engine, core.DefaultAgentID, sceneID, time.Now().UnixMilli()); err != nil {
+	if err := repo.TouchSceneUsage(db.engine, ac.id, sceneID, time.Now().UnixMilli()); err != nil {
 		slog.Warn("search: record scene usage failed", "err", err)
 	}
 	return latest, topicID, nil
@@ -191,8 +194,8 @@ func (db *DB) createTopicInScene(q SearchQuery, keywords []string, sceneID uint6
 // associatedContexts runs spreading activation over the L1 scene hypergraph
 // from the hit scene and flattens the activated scenes' depth<=1 topics
 // (activation order preserved). Empty when the scene has no L1 node yet.
-func (db *DB) associatedContexts(sceneID uint64) []core.TopicSlot {
-	hits := SpreadingActivation(db.engine, db.l2Meta, sceneID)
+func (ac *agentContext) associatedContexts(db *DB, sceneID uint64) []core.TopicSlot {
+	hits := SpreadingActivation(db.engine, ac.l2Meta, sceneID)
 	if len(hits) == 0 {
 		return []core.TopicSlot{}
 	}
@@ -205,8 +208,8 @@ func (db *DB) associatedContexts(sceneID uint64) []core.TopicSlot {
 	return out
 }
 
-func (db *DB) assembleResult(_ SearchQuery, contexts, associated []core.TopicSlot, newTopicID uint64) (*SearchResult, error) {
-	profile := db.readProfile()
+func (db *DB) assembleResult(agentID uint64, _ SearchQuery, contexts, associated []core.TopicSlot, newTopicID uint64) (*SearchResult, error) {
+	profile := db.readProfile(agentID)
 	return &SearchResult{
 		Profile:            profile,
 		ProfileBrief:       profileBrief(profile),
@@ -282,8 +285,8 @@ func head3(s []string) []string {
 	return s[:3]
 }
 
-func (db *DB) readProfile() core.ProfileSlot {
-	slot, err := repo.GetProfileL0(db.engine, core.DefaultAgentID)
+func (db *DB) readProfile(agentID uint64) core.ProfileSlot {
+	slot, err := repo.GetProfileL0(db.engine, agentID)
 	if err != nil {
 		return core.ProfileSlot{}
 	}
@@ -292,7 +295,7 @@ func (db *DB) readProfile() core.ProfileSlot {
 
 // writeCentroid encodes text as a centroid vector record; encoder failure
 // returns an error (no silent skip).
-func (db *DB) writeCentroid(text string) (uint64, error) {
+func (db *DB) writeCentroid(agentID uint64, text string) (uint64, error) {
 	if db.encoder == nil || !db.encoder.IsAvailable() {
 		return 0, common.NewError(common.ErrEncoder, "encoder unavailable for centroid", nil)
 	}
@@ -303,5 +306,5 @@ func (db *DB) writeCentroid(text string) (uint64, error) {
 	if len(vec) == 0 {
 		return 0, common.NewError(common.ErrEncoder, "encode centroid: empty vector", nil)
 	}
-	return repo.WriteVecCentroid(db.engine, core.DefaultAgentID, vec)
+	return repo.WriteVecCentroid(db.engine, agentID, vec)
 }

@@ -96,7 +96,7 @@ func TestRefineTopicKeywords(t *testing.T) {
 	db := newSearchTestDB(t, srv.URL)
 	topicID := refineTestTopic(t, db, 3)
 
-	if err := db.RefineTopicKeywords(context.Background(), topicID); err != nil {
+	if err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, topicID); err != nil {
 		t.Fatalf("RefineTopicKeywords: %v", err)
 	}
 	parsedID, err := common.ParseID(topicID)
@@ -136,7 +136,7 @@ func TestRefineTopicKeywordsGuard1to1(t *testing.T) {
 	db := newSearchTestDB(t, srv.URL)
 	topicID := refineTestTopic(t, db, 2)
 
-	if err := db.RefineTopicKeywords(context.Background(), topicID); err != nil {
+	if err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, topicID); err != nil {
 		t.Fatalf("RefineTopicKeywords: %v", err)
 	}
 	if got := calls.Load(); got != 0 {
@@ -160,10 +160,10 @@ func TestRefineTopicKeywordsIdempotent(t *testing.T) {
 	db := newSearchTestDB(t, srv.URL)
 	topicID := refineTestTopic(t, db, 3)
 
-	if err := db.RefineTopicKeywords(context.Background(), topicID); err != nil {
+	if err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, topicID); err != nil {
 		t.Fatalf("first refine: %v", err)
 	}
-	if err := db.RefineTopicKeywords(context.Background(), topicID); err != nil {
+	if err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, topicID); err != nil {
 		t.Fatalf("second refine: %v", err)
 	}
 	if got := calls.Load(); got != 1 {
@@ -182,7 +182,7 @@ func TestRefineTopicKeywordsErrors(t *testing.T) {
 	t.Run("missing topic", func(t *testing.T) {
 		srv := mockLLMServer(t, `{"keywords":["x"]}`)
 		db := newSearchTestDB(t, srv.URL)
-		err := db.RefineTopicKeywords(context.Background(), "deadbeefdeadbeef")
+		err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, "deadbeefdeadbeef")
 		if common.CodeOf(err) != common.ErrNotFound {
 			t.Fatalf("err = %v, want ErrNotFound", err)
 		}
@@ -191,7 +191,7 @@ func TestRefineTopicKeywordsErrors(t *testing.T) {
 		srv := failingLLMServer(t, http.StatusBadRequest)
 		db := newSearchTestDB(t, srv.URL)
 		topicID := refineTestTopic(t, db, 3)
-		err := db.RefineTopicKeywords(context.Background(), topicID)
+		err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, topicID)
 		if common.CodeOf(err) != common.ErrLLM {
 			t.Fatalf("err = %v, want ErrLLM", err)
 		}
@@ -206,7 +206,7 @@ func TestRefineTopicKeywordsErrors(t *testing.T) {
 		srv := mockLLMServer(t, `{"keywords":[]}`)
 		db := newSearchTestDB(t, srv.URL)
 		topicID := refineTestTopic(t, db, 3)
-		err := db.RefineTopicKeywords(context.Background(), topicID)
+		err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, topicID)
 		if common.CodeOf(err) != common.ErrLLM {
 			t.Fatalf("err = %v, want ErrLLM", err)
 		}

@@ -366,17 +366,15 @@ func TestTopSceneEmpty(t *testing.T) {
 
 // TestActivateSceneDedup activation dedup: repeats keep first-order positions.
 func TestActivateSceneDedup(t *testing.T) {
-	cfg := *DefaultMemHopDefaults
-	cfg.Capacity = 7
-	db := &DB{config: &MemHopConfig{Defaults: cfg}}
-	db.activateScene(7)
-	db.activateScene(7)
-	db.activateScene(9)
-	if len(db.activeScenes) != 2 {
-		t.Fatalf("len(activeScenes) = %d; want 2", len(db.activeScenes))
+	ac := newAgentContext(core.DefaultAgentID, context.Background())
+	ac.activateScene(7)
+	ac.activateScene(7)
+	ac.activateScene(9)
+	if len(ac.activeScenes) != 2 {
+		t.Fatalf("len(activeScenes) = %d; want 2", len(ac.activeScenes))
 	}
-	if db.activeScenes[0] != 7 || db.activeScenes[1] != 9 {
-		t.Errorf("activeScenes = %v; want [7 9]", db.activeScenes)
+	if ac.activeScenes[0] != 7 || ac.activeScenes[1] != 9 {
+		t.Errorf("activeScenes = %v; want [7 9]", ac.activeScenes)
 	}
 }
 
@@ -384,14 +382,12 @@ func TestActivateSceneDedup(t *testing.T) {
 // without eviction: Dream size is controlled by Update, which triggers a
 // Dream on the oldest scene at Defaults.Capacity.
 func TestActivateSceneUnbounded(t *testing.T) {
-	cfg := *DefaultMemHopDefaults
-	cfg.Capacity = 2
-	db := &DB{config: &MemHopConfig{Defaults: cfg}}
-	db.activateScene(7)
-	db.activateScene(9)
-	db.activateScene(11)
-	if len(db.activeScenes) != 3 || db.activeScenes[0] != 7 || db.activeScenes[1] != 9 || db.activeScenes[2] != 11 {
-		t.Fatalf("activeScenes = %v; want [7 9 11]", db.activeScenes)
+	ac := newAgentContext(core.DefaultAgentID, context.Background())
+	ac.activateScene(7)
+	ac.activateScene(9)
+	ac.activateScene(11)
+	if len(ac.activeScenes) != 3 || ac.activeScenes[0] != 7 || ac.activeScenes[1] != 9 || ac.activeScenes[2] != 11 {
+		t.Fatalf("activeScenes = %v; want [7 9 11]", ac.activeScenes)
 	}
 }
 

@@ -6,10 +6,14 @@
 
 package api
 
-import "context"
+import (
+	"context"
+
+	"github.com/qyiun666/MemHop/internal/repo/core"
+)
 
 // Thin wrapper; see internal/search.go ((db *DB) Search). The ctx cancels
 // LLM keyword extraction, encoder calls and the internally triggered Dream.
 func (db *DB) Search(ctx context.Context, q SearchQuery) (*SearchResult, error) {
-	return db.DB.Search(ctx, q)
+	return db.DB.Search(ctx, core.DefaultAgentID, q)
 }

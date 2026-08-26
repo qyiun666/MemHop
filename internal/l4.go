@@ -21,19 +21,21 @@ type L4Query struct {
 	TopicID *string  `json:"topic_id,omitempty"` // extra: only archives of this topic
 }
 
-func (db *DB) SearchL4(q L4Query) ([]core.ArchiveSlot, error) {
-	if err := db.beginRead(); err != nil {
+func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	var out []core.ArchiveSlot
 	switch {
 	case q.Keyword != "":
-		out = repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 1, q.Keyword, 0, 0, nil)
+		out = repo.QueryArchiveL4(db.engine, agentID, 1, q.Keyword, 0, 0, nil)
 	case q.Start > 0 && q.End > 0:
-		out = repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 2, "", q.Start, q.End, nil)
+		out = repo.QueryArchiveL4(db.engine, agentID, 2, "", q.Start, q.End, nil)
 	case len(q.IDs) > 0:
-		out = repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, q.IDs)
+		out = repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, q.IDs)
 	default:
 		return []core.ArchiveSlot{}, nil
 	}
@@ -56,12 +58,14 @@ func (db *DB) SearchL4(q L4Query) ([]core.ArchiveSlot, error) {
 	return out, nil
 }
 
-func (db *DB) GetArchive(id string) (*core.ArchiveSlot, error) {
-	if err := db.beginRead(); err != nil {
+func (db *DB) GetArchive(agentID uint64, id string) (*core.ArchiveSlot, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
-	out := repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, []string{id})
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	out := repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, []string{id})
 	if len(out) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "archive not found")
 	}

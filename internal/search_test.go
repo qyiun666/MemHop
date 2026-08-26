@@ -14,7 +14,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // TestSearchAutoCreateContextsIncludeNewTopic locks the timing: on an empty
@@ -25,7 +24,7 @@ func TestSearchAutoCreateContextsIncludeNewTopic(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["rust","memory"]}`)
 	db := newSearchTestDB(t, srv.URL)
 
-	res, err := db.Search(context.Background(), SearchQuery{Text: "hello world", AutoCreate: true, Timestamp: 1000})
+	res, err := db.Search(context.Background(), core.DefaultAgentID, SearchQuery{Text: "hello world", AutoCreate: true, Timestamp: 1000})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -57,7 +56,7 @@ func TestSearchReturnsProfileBrief(t *testing.T) {
 	if err := repo.UpdateProfileL0(db.engine, core.DefaultAgentID, &profile); err != nil {
 		t.Fatalf("UpdateProfileL0: %v", err)
 	}
-	res, err := db.Search(context.Background(), SearchQuery{Text: "hello", AutoCreate: true, Timestamp: 1000})
+	res, err := db.Search(context.Background(), core.DefaultAgentID, SearchQuery{Text: "hello", AutoCreate: true, Timestamp: 1000})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -82,7 +81,7 @@ func TestSearchDirectedContextsIncludeNewTopic(t *testing.T) {
 
 	scene := core.NewSceneSlot("scene").SceneID
 	sceneID := common.FormatHash(scene)
-	res, err := db.Search(context.Background(), SearchQuery{Text: "hello world", DirectedL2ID: &sceneID, Timestamp: 1000})
+	res, err := db.Search(context.Background(), core.DefaultAgentID, SearchQuery{Text: "hello world", DirectedL2ID: &sceneID, Timestamp: 1000})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -94,25 +93,14 @@ func TestSearchDirectedContextsIncludeNewTopic(t *testing.T) {
 	}
 }
 
-// newSearchTestDB assembles a DB with a mock LLM server, a working encoder
-// and fresh in-memory indices, mirroring the Open assembly.
+// newSearchTestDB assembles a DB with a mock LLM server and a working
+// encoder over a fresh engine; the default-domain context (sparse/L2Meta
+// indexes, Dream bookkeeping) is created lazily by contextFor, mirroring
+// the Open assembly so background-Dream paths never hit nil state.
 func newSearchTestDB(t *testing.T, llmURL string) *DB {
 	t.Helper()
-	cfg := &MemHopConfig{Defaults: *DefaultMemHopDefaults}
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	db := &DB{
-		engine:      newTestEngine(t),
-		config:      cfg,
-		llm:         New(&MemHopConfig{LLM: LlmConfig{APIURL: llmURL, APIKey: "test", Model: "mock"}}),
-		encoder:     &mockEncoder{vec: testVec},
-		sparseIndex: index.NewSparseIndex(),
-		// Mirror the Open() initialization so background-Dream paths never
-		// hit a nil map or nil context in tests.
-		dreamInFlight: make(map[uint64]struct{}),
-		dreamCtx:      ctx,
-		dreamCancel:   cancel,
-	}
-	db.l2Meta = index.BuildL2MetaFromEngine(db.engine, core.DefaultAgentID)
+	db := newTestDB(t, newTestEngine(t))
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: llmURL, APIKey: "test", Model: "mock"}})
+	db.encoder = &mockEncoder{vec: testVec}
 	return db
 }

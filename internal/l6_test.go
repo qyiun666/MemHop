@@ -18,14 +18,14 @@ import (
 )
 
 func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(99)
 	for i := 1; i <= 3; i++ {
-		if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "turn_start", Timestamp: int64(i)}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "turn_start", Timestamp: int64(i)}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	events, err := db.ReadTrajectory(session)
+	events, err := db.ReadTrajectory(core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -40,22 +40,22 @@ func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
 }
 
 func TestAppendTrajectoryValidation(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
-	if err := db.AppendTrajectory(common.FormatHash(1), core.TrajectorySlot{Timestamp: 1}); err == nil {
+	db := newTestDB(t, newTestEngine(t))
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), core.TrajectorySlot{Timestamp: 1}); err == nil {
 		t.Fatal("empty event type should fail")
 	}
-	if err := db.AppendTrajectory(common.FormatHash(1), core.TrajectorySlot{EventType: "tool_call"}); err == nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), core.TrajectorySlot{EventType: "tool_call"}); err == nil {
 		t.Fatal("zero timestamp should fail")
 	}
 }
 
 func TestAppendTrajectoryPayloadTruncated(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 	long := strings.Repeat("x", maxTrajectoryPayload+100)
-	if err := db.AppendTrajectory(common.FormatHash(3), core.TrajectorySlot{EventType: "tool_call", Payload: long, Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(3), core.TrajectorySlot{EventType: "tool_call", Payload: long, Timestamp: 1}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	events, err := db.ReadTrajectory(common.FormatHash(3))
+	events, err := db.ReadTrajectory(core.DefaultAgentID, common.FormatHash(3))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -65,15 +65,15 @@ func TestAppendTrajectoryPayloadTruncated(t *testing.T) {
 }
 
 func TestDeleteTrajectorySub(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(77)
-	if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "turn_start", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "turn_start", Timestamp: 1}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	if err := db.DeleteTrajectory(session); err != nil {
+	if err := db.DeleteTrajectory(core.DefaultAgentID, session); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	events, err := db.ReadTrajectory(session)
+	events, err := db.ReadTrajectory(core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -83,8 +83,8 @@ func TestDeleteTrajectorySub(t *testing.T) {
 }
 
 func TestCrystallizeNoTrajectory(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
-	_, err := db.Crystallize(context.Background(), common.FormatHash(1))
+	db := newTestDB(t, newTestEngine(t))
+	_, err := db.Crystallize(context.Background(), core.DefaultAgentID, common.FormatHash(1))
 	if err == nil {
 		t.Fatal("crystallize on empty session should fail")
 	}
@@ -110,18 +110,16 @@ func mockLLMServer(t *testing.T, content string) *httptest.Server {
 
 func TestCrystallizeFullFlow(t *testing.T) {
 	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"重构流程","type":"composite","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","config":"{\"file\":\"a.go\"}"},{"type":"mcp","name":"write_file"}]}}]}`)
-	db := &DB{
-		engine: newTestEngine(t),
-		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
-	}
+	db := newTestDB(t, newTestEngine(t))
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(123)
 	for i := 1; i <= 3; i++ {
-		if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "tool_call", Payload: "step", Timestamp: int64(i)}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Payload: "step", Timestamp: int64(i)}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
 
-	result, err := db.Crystallize(context.Background(), session)
+	result, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("crystallize: %v", err)
 	}
@@ -129,7 +127,7 @@ func TestCrystallizeFullFlow(t *testing.T) {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 
-	cap, err := db.GetCapability(result.CreatedIDs[0])
+	cap, err := db.GetCapability(core.DefaultAgentID, result.CreatedIDs[0])
 	if err != nil {
 		t.Fatalf("get capability: %v", err)
 	}
@@ -146,15 +144,13 @@ func TestCrystallizeFullFlow(t *testing.T) {
 
 func TestCrystallizeReusesExisting(t *testing.T) {
 	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"发布流程","type":"mcp","summary":"发布","trigger":"准备发布时","resources":[{"type":"mcp","name":"run_test"}]}}]}`)
-	db := &DB{
-		engine: newTestEngine(t),
-		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
-	}
+	db := newTestDB(t, newTestEngine(t))
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(456)
-	if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
-	first, err := db.Crystallize(context.Background(), session)
+	first, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("first crystallize: %v", err)
 	}
@@ -165,14 +161,14 @@ func TestCrystallizeReusesExisting(t *testing.T) {
 	secondContent := `{"capabilities":[{"action":"reuse","reuse_id":"` + first.CreatedIDs[0] + `","capability":{"name":"发布流程","type":"mcp","summary":"发布","trigger":"准备发布时","resources":[{"type":"mcp","name":"run_test"}]}}]}`
 	srv2 := mockLLMServer(t, secondContent)
 	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
-	second, err := db.Crystallize(context.Background(), session)
+	second, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("second crystallize: %v", err)
 	}
 	if len(second.CreatedIDs) != 0 || len(second.ReusedIDs) != 1 || second.ReusedIDs[0] != first.CreatedIDs[0] {
 		t.Fatalf("second result: %+v", second)
 	}
-	caps, err := db.ListCapabilities(CapabilityListQuery{})
+	caps, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,15 +203,13 @@ func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 
 func TestCrystallizeReuseMinimalPayload(t *testing.T) {
 	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"最小复用","type":"mcp","summary":"s","trigger":"t","resources":[{"type":"mcp","name":"x"}]}}]}`)
-	db := &DB{
-		engine: newTestEngine(t),
-		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
-	}
+	db := newTestDB(t, newTestEngine(t))
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(321)
-	if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := db.Crystallize(context.Background(), session)
+	first, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("first crystallize: %v", err)
 	}
@@ -226,7 +220,7 @@ func TestCrystallizeReuseMinimalPayload(t *testing.T) {
 	secondContent := `{"capabilities":[{"action":"reuse","reuse_id":"` + first.CreatedIDs[0] + `","capability":{"name":"最小复用"}}]}`
 	srv2 := mockLLMServer(t, secondContent)
 	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
-	second, err := db.Crystallize(context.Background(), session)
+	second, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("second crystallize: %v", err)
 	}
@@ -295,10 +289,8 @@ func TestBuildCrystallizePrompt(t *testing.T) {
 
 func TestCrystallizeCreateDoesNotOverwriteActiveByName(t *testing.T) {
 	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"已有能力","type":"mcp","summary":"新摘要","trigger":"新触发","resources":[{"type":"mcp","name":"new_tool"}]}}]}`)
-	db := &DB{
-		engine: newTestEngine(t),
-		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
-	}
+	db := newTestDB(t, newTestEngine(t))
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	cap := &core.Capability{
 		IDHash: core.CapabilityID("已有能力"), Name: "已有能力", Type: core.CapabilityMCP,
 		Summary: "旧摘要", Trigger: "旧触发", Status: core.CapabilityActive,
@@ -308,17 +300,17 @@ func TestCrystallizeCreateDoesNotOverwriteActiveByName(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := common.FormatHash(789)
-	if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
 		t.Fatal(err)
 	}
-	result, err := db.Crystallize(context.Background(), session)
+	result, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.CreatedIDs) != 0 || len(result.ReusedIDs) != 1 {
 		t.Fatalf("same-name create should be reuse: %+v", result)
 	}
-	got, err := db.GetCapability(common.FormatHash(cap.IDHash))
+	got, err := db.GetCapability(core.DefaultAgentID, common.FormatHash(cap.IDHash))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,11 +320,11 @@ func TestCrystallizeCreateDoesNotOverwriteActiveByName(t *testing.T) {
 }
 
 func TestTrajectoryStats(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(55)
 
 	// Empty session: zero-valued stats, no error.
-	stats, err := db.TrajectoryStats(session)
+	stats, err := db.TrajectoryStats(core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("stats on empty session: %v", err)
 	}
@@ -347,11 +339,11 @@ func TestTrajectoryStats(t *testing.T) {
 		{EventType: "tool_call", Timestamp: 200},
 		{EventType: "tool_result", Timestamp: 300},
 	} {
-		if err := db.AppendTrajectory(session, ev); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, ev); err != nil {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	stats, err = db.TrajectoryStats(session)
+	stats, err = db.TrajectoryStats(core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("stats: %v", err)
 	}
@@ -373,15 +365,13 @@ func TestCrystallizeDetails(t *testing.T) {
 		{"action":"create","capability":{"name":"明细测试能力","type":"composite","summary":"s","trigger":"t","resources":[{"type":"mcp","name":"x"}]}},
 		{"action":"create","capability":{"name":"无效能力","type":"mcp","summary":"s","trigger":"t"}}
 	]}`)
-	db := &DB{
-		engine: newTestEngine(t),
-		llm:    New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}}),
-	}
+	db := newTestDB(t, newTestEngine(t))
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(888)
-	if err := db.AppendTrajectory(session, core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := db.Crystallize(context.Background(), session)
+	first, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +397,7 @@ func TestCrystallizeDetails(t *testing.T) {
 	// Phase 2: reuse the created capability → detail carries the reused ID.
 	srv2 := mockLLMServer(t, `{"capabilities":[{"action":"reuse","reuse_id":"`+first.CreatedIDs[0]+`","capability":{"name":"明细测试能力"}}]}`)
 	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
-	second, err := db.Crystallize(context.Background(), session)
+	second, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatal(err)
 	}

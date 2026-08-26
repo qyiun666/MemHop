@@ -51,13 +51,16 @@ func TestReproDreamConsolidate(t *testing.T) {
 		t.Fatalf("encoder: %v", err)
 	}
 
-	db := &DB{engine: engine, config: cfg, llm: New(cfg), encoder: enc}
+	db := newTestDB(t, engine)
+	db.config = cfg
+	db.llm = New(cfg)
+	db.encoder = enc
 
 	dumpSceneContext(t, db, cfg, "before dream")
 
 	// Full pipeline on a copy: exercises L2 consolidation (LLM), index
 	// rebuild, L1 sync/decay, L0 profile + distillation (LLM) end to end.
-	ok, err := db.RunDream(context.Background(), "")
+	ok, err := db.RunDream(context.Background(), core.DefaultAgentID, "")
 	t.Logf("RunDream(all): ok=%v err=%v", ok, err)
 
 	dumpSceneContext(t, db, cfg, "after dream")

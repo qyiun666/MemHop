@@ -6,12 +6,14 @@
 
 package api
 
+import "github.com/qyiun666/MemHop/internal/repo/core"
+
 // Thin wrapper; see internal/l4.go ((db *DB) SearchL4).
 func (db *DB) SearchL4(q L4Query) ([]ArchiveSlot, error) {
-	return db.DB.SearchL4(q)
+	return db.DB.SearchL4(core.DefaultAgentID, q)
 }
 
 // Thin wrapper; see internal/l4.go ((db *DB) GetArchive).
 func (db *DB) GetArchive(id string) (*ArchiveSlot, error) {
-	return db.DB.GetArchive(id)
+	return db.DB.GetArchive(core.DefaultAgentID, id)
 }

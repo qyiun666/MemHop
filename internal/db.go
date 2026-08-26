@@ -5,7 +5,6 @@ package internal
 
 import (
 	"context"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,110 +14,213 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// DB is the global in-memory database instance returned by Open; business
-// methods (search/dream/update) hang directly on it.
+// DB is the multi-agent database instance returned by Open. Business state
+// (indices, active scenes, Dream bookkeeping, locks) lives in one
+// agentContext per agent; llm/encoder/builtinCapabilities are stateless or
+// connection-level and stay shared at the DB level.
 type DB struct {
-	engine       *core.StorageEngine
-	config       *MemHopConfig
-	sparseIndex  *index.SparseIndex
-	l2Meta       *index.L2MetaIndex
-	llm          *Provider
-	encoder      Encoder
-	activeScenes []uint64
+	engine  *core.StorageEngine
+	config  *MemHopConfig
+	llm     *Provider
+	encoder Encoder
 	// builtinCapabilities are read-only reference capabilities attached to
-	// L5 query responses; they are never written to the .meh file. Set once
-	// via SetBuiltinCapabilities before the DB is published.
+	// L5 query responses; they are never written to the file. Set once via
+	// SetBuiltinCapabilities before the DB is published.
 	builtinCapabilities []core.Capability
-	lastDreamAt         atomic.Int64 // Unix ms of the last successful Dream (0 = never)
-	closed              atomic.Bool
-	mu                  sync.RWMutex // public methods RLock; Close/Dream Lock
-	// dreamMu guards dreamInFlight: scenes with a background Dream already
-	// scheduled by Search/Update, so repeated triggers never stack.
-	dreamMu       sync.Mutex
-	dreamInFlight map[uint64]struct{}
-	// dreamCtx/dreamCancel own the background Dream pipelines: Close cancels
-	// them so an in-flight Dream exits at its next stage boundary instead of
-	// blocking Close on LLM calls.
-	dreamCtx    context.Context
-	dreamCancel context.CancelFunc
+
+	closed atomic.Bool
+
+	// baseCtx bounds every per-agent dreamCtx: Close cancels it so all
+	// in-flight Dreams exit at their next stage boundary.
+	baseCtx    context.Context
+	baseCancel context.CancelFunc
+
+	// agentsMu guards the agents registry and the snapshot blob cache.
+	agentsMu      sync.Mutex
+	agents        map[uint64]*agentContext
+	snapshotBlobs map[uint64][]byte // sparse blobs of reclaimed agents
+
+	// mu serializes Close against itself; per-operation domain locking is on
+	// agentContext.mu instead of this DB-wide lock.
+	mu sync.Mutex
 }
 
-// Lock/Unlock provide the write lock for combined internal-layer write ops.
-func (db *DB) Lock()   { db.mu.Lock() }
-func (db *DB) Unlock() { db.mu.Unlock() }
+// Lock/Unlock keep the combined write-lock seam for hosts; they map to the
+// default agent domain.
+func (db *DB) Lock() {
+	ac, err := db.contextFor(core.DefaultAgentID)
+	if err != nil {
+		panic(err) // closed DB: same contract as the old unconditional lock
+	}
+	ac.mu.Lock()
+}
+
+func (db *DB) Unlock() {
+	if ac := db.peekContext(core.DefaultAgentID); ac != nil {
+		ac.mu.Unlock()
+	}
+}
 
 func (db *DB) IsClosed() bool { return db.closed.Load() }
 
-func (db *DB) HasActiveScenes() bool { return len(db.activeScenes) > 0 }
-
-// activateScene appends a scene idempotently; repeats keep first-order
-// positions. The active set is unbounded here: Update triggers a Dream on
-// the oldest scene when it reaches Defaults.Capacity, and RunDream removes
-// compressed scenes to bring it back down.
-func (db *DB) activateScene(sceneID uint64) {
-	if slices.Contains(db.activeScenes, sceneID) {
-		return
+// contextFor returns the agent's context, creating it lazily on first
+// access, and opportunistically sweeps idle domains.
+func (db *DB) contextFor(agentID uint64) (*agentContext, error) {
+	if db.closed.Load() {
+		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
-	db.activeScenes = append(db.activeScenes, sceneID)
+	db.agentsMu.Lock()
+	defer db.agentsMu.Unlock()
+	db.sweepIdleLocked()
+	ac := db.agents[agentID]
+	if ac == nil {
+		ac = db.newAgentContextLocked(agentID)
+		db.agents[agentID] = ac
+	}
+	ac.lastActiveAt.Store(time.Now().UnixMilli())
+	return ac, nil
 }
 
-func (db *DB) TouchLastDreamAt() { db.lastDreamAt.Store(time.Now().UnixMilli()) }
+// peekContext returns an existing context without creating one (nil when
+// absent or the DB is closed).
+func (db *DB) peekContext(agentID uint64) *agentContext {
+	if db.closed.Load() {
+		return nil
+	}
+	db.agentsMu.Lock()
+	defer db.agentsMu.Unlock()
+	return db.agents[agentID]
+}
 
-// syncL2Meta refreshes one topic entry of the L2MetaIndex from the record
-// just written; call it right after engine writes, before the sparse index
-// update (storage → l2meta → sparse lock order). On read failure the entry
-// is removed so stale metadata is never served.
-func (db *DB) syncL2Meta(idHash uint64) {
-	if db.l2Meta == nil {
+// newAgentContextLocked builds a context with its indices restored: the
+// sparse index from the snapshot blob cache (empty for agents that never
+// checkpointed), the L2Meta cache by scanning the agent's topic records.
+// Caller must hold db.agentsMu.
+func (db *DB) newAgentContextLocked(agentID uint64) *agentContext {
+	ac := newAgentContext(agentID, db.baseCtx)
+	ac.sparseIndex = index.NewSparseIndex()
+	if blob := db.snapshotBlobs[agentID]; len(blob) > 0 {
+		if idx, err := index.DeserializeSparseIndex(blob); err == nil {
+			ac.sparseIndex = idx
+		}
+	}
+	ac.l2Meta = index.BuildL2MetaFromEngine(db.engine, agentID)
+	return ac
+}
+
+// sweepIdleLocked reclaims contexts idle longer than Defaults.AgentIdleTTLMs:
+// indices are dropped from memory, the domain's records stay on disk and
+// the context rebuilds transparently on the next access. Busy domains and
+// the default domain are never reclaimed. Caller must hold db.agentsMu.
+func (db *DB) sweepIdleLocked() {
+	ttl := db.config.Defaults.AgentIdleTTLMs
+	if ttl <= 0 {
 		return
 	}
-	topic, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, idHash)
+	now := time.Now().UnixMilli()
+	for id, ac := range db.agents {
+		if id == core.DefaultAgentID || ac.dreamBusy() {
+			continue
+		}
+		if now-ac.lastActiveAt.Load() <= ttl {
+			continue
+		}
+		if blob, err := ac.sparseIndex.Serialize(); err == nil {
+			db.snapshotBlobs[id] = blob
+		}
+		ac.dreamCancel()
+		delete(db.agents, id)
+	}
+}
+
+// destroyContext cancels the agent's Dreams, removes its context and drops
+// the cached snapshot blob. Returns the destroyed context (nil when absent)
+// so callers can wait for in-flight work if needed.
+func (db *DB) destroyContext(agentID uint64) *agentContext {
+	db.agentsMu.Lock()
+	defer db.agentsMu.Unlock()
+	ac := db.agents[agentID]
+	if ac != nil {
+		ac.dreamCancel()
+		delete(db.agents, agentID)
+	}
+	delete(db.snapshotBlobs, agentID)
+	return ac
+}
+
+// HasActiveScenes reports whether the default domain has active scenes
+// (compatibility path used by the single-agent facade).
+func (db *DB) HasActiveScenes() bool {
+	ac := db.peekContext(core.DefaultAgentID)
+	if ac == nil {
+		return false
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	return len(ac.activeScenes) > 0
+}
+
+// TouchLastDreamAt marks a successful Dream for the given agent.
+func (db *DB) TouchLastDreamAt(agentID uint64) {
+	if ac := db.peekContext(agentID); ac != nil {
+		ac.lastDreamAt.Store(time.Now().UnixMilli())
+	}
+}
+
+// syncL2Meta refreshes one topic entry of the agent's L2MetaIndex from the
+// record just written; call it right after engine writes, before the sparse
+// index update (storage → l2meta → sparse lock order). On read failure the
+// entry is removed so stale metadata is never served.
+func (ac *agentContext) syncL2Meta(db *DB, idHash uint64) {
+	if ac.l2Meta == nil {
+		return
+	}
+	topic, err := core.ReadTopicLenient(db.engine, ac.id, idHash)
 	if err != nil || topic == nil {
-		db.l2Meta.Remove(idHash)
+		ac.l2Meta.Remove(idHash)
 		return
 	}
-	db.l2Meta.Update(index.L2MetaFromTopic(topic))
+	ac.l2Meta.Update(index.L2MetaFromTopic(topic))
 }
 
 // retargetL2Meta moves every topic of the merged-away scenes to the primary
 // scene in the L2MetaIndex, mirroring repo.MergeScenesL2 after a merge.
-func (db *DB) retargetL2Meta(primaryHash uint64, removed map[uint64]struct{}) {
-	if db.l2Meta == nil {
+func (ac *agentContext) retargetL2Meta(primaryHash uint64, removed map[uint64]struct{}) {
+	if ac.l2Meta == nil {
 		return
 	}
 	for sid := range removed {
-		for _, id := range db.l2Meta.GetByScene(sid) {
-			meta := db.l2Meta.Remove(id)
+		for _, id := range ac.l2Meta.GetByScene(sid) {
+			meta := ac.l2Meta.Remove(id)
 			if meta == nil {
 				continue
 			}
 			meta.SceneID = primaryHash
-			db.l2Meta.Update(meta)
+			ac.l2Meta.Update(meta)
 		}
 	}
 }
 
-// beginRead takes the shared lock for a public operation and rejects use
-// after Close.
-func (db *DB) beginRead() error {
-	db.mu.RLock()
-	if db.closed.Load() {
-		db.mu.RUnlock()
-		return common.NewError(common.ErrClosed, "database is closed")
-	}
-	return nil
-}
-
 func (db *DB) Close() error {
+	db.mu.Lock()
+	defer db.mu.Unlock()
 	if !db.closed.CompareAndSwap(false, true) {
 		return common.NewError(common.ErrClosed, "database is closed")
 	}
 	// Cancel background Dreams so an in-flight pipeline exits at its next
-	// stage boundary; the write lock below serializes with any Dream that
-	// already holds it.
-	db.dreamCancel()
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	// stage boundary; then wait for every domain lock so no operation is
+	// mid-write when the engine closes.
+	db.baseCancel()
+	db.agentsMu.Lock()
+	acs := make([]*agentContext, 0, len(db.agents))
+	for _, ac := range db.agents {
+		acs = append(acs, ac)
+	}
+	db.agentsMu.Unlock()
+	for _, ac := range acs {
+		ac.mu.Lock()
+		ac.mu.Unlock() //nolint:staticcheck // barrier only
+	}
 	snap, err := db.buildSnapshot()
 	if err != nil {
 		return err
@@ -136,10 +238,9 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) Checkpoint() error {
-	if err := db.beginRead(); err != nil {
-		return err
+	if db.closed.Load() {
+		return common.NewError(common.ErrClosed, "database is closed")
 	}
-	defer db.mu.RUnlock()
 	snap, err := db.buildSnapshot()
 	if err != nil {
 		return err
@@ -147,15 +248,23 @@ func (db *DB) Checkpoint() error {
 	return db.engine.Checkpoint(snap)
 }
 
-// buildSnapshot serializes the in-memory indices for checkpoint persistence.
-// The single active domain is stored under DefaultAgentID; per-agent
-// snapshotting lands with the business-layer agent context.
+// buildSnapshot serializes the in-memory indices for checkpoint persistence:
+// live contexts are serialized fresh; reclaimed contexts keep the blob they
+// were serialized with at reclaim time, so no index data is lost.
 func (db *DB) buildSnapshot() (*core.IndexSnapshotData, error) {
-	sparseData, err := db.sparseIndex.Serialize()
-	if err != nil {
-		return nil, common.NewError(common.ErrSerialization, "sparse index", err)
+	db.agentsMu.Lock()
+	defer db.agentsMu.Unlock()
+	blobs := make(map[uint64][]byte, len(db.snapshotBlobs)+len(db.agents))
+	for id, blob := range db.snapshotBlobs {
+		blobs[id] = blob
 	}
-	return &core.IndexSnapshotData{
-		SparseByAgent: map[uint64][]byte{core.DefaultAgentID: sparseData},
-	}, nil
+	for id, ac := range db.agents {
+		data, err := ac.sparseIndex.Serialize()
+		if err != nil {
+			return nil, common.NewError(common.ErrSerialization, "sparse index", err)
+		}
+		blobs[id] = data
+		delete(db.snapshotBlobs, id)
+	}
+	return &core.IndexSnapshotData{SparseByAgent: blobs}, nil
 }

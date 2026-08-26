@@ -22,19 +22,19 @@ func newL3TestDB(t *testing.T) *DB {
 			t.Errorf("close engine: %v", err)
 		}
 	})
-	return &DB{engine: engine}
+	return newTestDB(t, engine)
 }
 
 func l3TestGraph(t *testing.T, db *DB) *L3Graph {
 	t.Helper()
-	graphs, err := db.ListL3()
+	graphs, err := db.ListL3(core.DefaultAgentID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(graphs) != 1 {
 		t.Fatalf("want 1 graph, got %d", len(graphs))
 	}
-	graph, err := db.getL3Graph(common.FormatHash(graphs[0].IDHash))
+	graph, err := db.getL3Graph(core.DefaultAgentID, common.FormatHash(graphs[0].IDHash))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,14 +47,14 @@ func TestImportL3OverwriteExisting(t *testing.T) {
 		Title: "go-memory-model", Domain: "go", NodeType: "concept",
 		Content: "old content", Keywords: []string{"old"},
 	}}
-	if _, err := db.ImportL3(items, L3ImportSkip); err != nil {
+	if _, err := db.ImportL3(core.DefaultAgentID, items, L3ImportSkip); err != nil {
 		t.Fatal(err)
 	}
 
 	items[0].NodeType = "fact"
 	items[0].Content = "new content"
 	items[0].Keywords = []string{"new"}
-	res, err := db.ImportL3(items, L3ImportOverwrite)
+	res, err := db.ImportL3(core.DefaultAgentID, items, L3ImportOverwrite)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,14 +80,14 @@ func TestImportL3MergeExisting(t *testing.T) {
 		Title: "merge-node", Domain: "go", NodeType: "concept",
 		Content: "base", Keywords: []string{"a"},
 	}}
-	if _, err := db.ImportL3(items, L3ImportOverwrite); err != nil {
+	if _, err := db.ImportL3(core.DefaultAgentID, items, L3ImportOverwrite); err != nil {
 		t.Fatal(err)
 	}
 
 	items[0].NodeType = "fact"
 	items[0].Content = "extra"
 	items[0].Keywords = []string{"b", "a"}
-	res, err := db.ImportL3(items, L3ImportMerge)
+	res, err := db.ImportL3(core.DefaultAgentID, items, L3ImportMerge)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,11 +112,11 @@ func TestImportL3SkipExisting(t *testing.T) {
 	items := []L3ImportItem{{
 		Title: "skip-node", Domain: "go", NodeType: "concept", Content: "keep",
 	}}
-	if _, err := db.ImportL3(items, L3ImportOverwrite); err != nil {
+	if _, err := db.ImportL3(core.DefaultAgentID, items, L3ImportOverwrite); err != nil {
 		t.Fatal(err)
 	}
 	items[0].Content = "changed"
-	res, err := db.ImportL3(items, L3ImportSkip)
+	res, err := db.ImportL3(core.DefaultAgentID, items, L3ImportSkip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestImportL3SkipExisting(t *testing.T) {
 
 func TestImportL3RejectsUnknownMode(t *testing.T) {
 	db := newL3TestDB(t)
-	_, err := db.ImportL3([]L3ImportItem{{Title: "x", Domain: "d"}}, L3ImportMode("bogus"))
+	_, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{{Title: "x", Domain: "d"}}, L3ImportMode("bogus"))
 	if err == nil || common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("expected ErrInvalidQuery, got %v", err)
 	}

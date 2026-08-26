@@ -9,7 +9,6 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
@@ -23,11 +22,13 @@ import (
 // N:N turn where AppendL4Message appended messages that never entered the
 // keyword tracks (Search → AppendL4Message ×N → Update → refine). The ctx
 // cancels LLM keyword extraction.
-func (db *DB) RefineTopicKeywords(ctx context.Context, topicID string) error {
-	if err := db.beginRead(); err != nil {
+func (db *DB) RefineTopicKeywords(ctx context.Context, agentID uint64, topicID string) error {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return err
 	}
-	defer db.mu.RUnlock()
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	parsedID, err := common.ParseID(topicID)
 	if err != nil {
 		return err
@@ -36,7 +37,8 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, topicID string) error {
 	// leave a half-written refine behind.
 	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 		Engine:  db.engine,
-		MetaIdx: db.l2Meta,
+		AgentID: agentID,
+		MetaIdx: ac.l2Meta,
 		SceneID: topicID,
 		Depth:   0,
 		Num:     3,
@@ -62,7 +64,7 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, topicID string) error {
 	for _, id := range topic.L4Refs {
 		ids = append(ids, common.FormatHash(id))
 	}
-	archives := repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, ids)
+	archives := repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, ids)
 	parts := make([]string, 0, len(archives))
 	for _, a := range archives {
 		parts = append(parts, a.Content)
@@ -77,13 +79,13 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, topicID string) error {
 	if len(keywords) == 0 {
 		return common.NewError(common.ErrLLM, "refine extracted no keywords")
 	}
-	if !repo.RefineTopicKeywordsL2(db.engine, core.DefaultAgentID, topicID, keywords) {
+	if !repo.RefineTopicKeywordsL2(db.engine, agentID, topicID, keywords) {
 		return common.NewError(common.ErrIO, "refine topic keywords", nil)
 	}
 	// Refresh the L2Meta entry then rebuild the BM25 document: AddDocument
 	// replaces the old user/agent terms. storage → l2meta → sparse order.
-	db.syncL2Meta(parsedID)
+	ac.syncL2Meta(db, parsedID)
 	terms := index.Tokenize(strings.Join(keywords, " "))
-	db.sparseIndex.AddDocument(parsedID, terms, uint32(len(terms)))
+	ac.sparseIndex.AddDocument(parsedID, terms, uint32(len(terms)))
 	return nil
 }

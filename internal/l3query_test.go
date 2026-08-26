@@ -41,7 +41,7 @@ func writeEdge(t *testing.T, engine *core.StorageEngine, e *core.HypergraphEdge)
 // TestQueryL3NodesModes verifies the IDs/Keyword/NodeType modes and Limit.
 func TestQueryL3NodesModes(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	graphID := common.HashID("graph")
 	nodeA := testNode(common.HashID("a"), graphID, "Rust 所有权", "concept", "所有权系统", []string{"rust", "memory"})
 	nodeB := testNode(common.HashID("b"), graphID, "Go 并发", "concept", "goroutine 与 channel", []string{"go"})
@@ -52,7 +52,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 	graphHex := common.FormatHash(graphID)
 
 	// ByIDs: missing IDs are skipped.
-	out, err := db.QueryL3Nodes(L3NodeQuery{GraphID: graphHex, IDs: []string{common.FormatHash(nodeA.IDHash), common.FormatHash(nodeB.IDHash), common.FormatHash(99999)}})
+	out, err := db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{GraphID: graphHex, IDs: []string{common.FormatHash(nodeA.IDHash), common.FormatHash(nodeB.IDHash), common.FormatHash(99999)}})
 	if err != nil {
 		t.Fatalf("QueryL3Nodes by ids: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 	}
 
 	// ByKeyword: case-insensitive substring.
-	out, err = db.QueryL3Nodes(L3NodeQuery{GraphID: graphHex, Keyword: "RUST"})
+	out, err = db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{GraphID: graphHex, Keyword: "RUST"})
 	if err != nil {
 		t.Fatalf("QueryL3Nodes by keyword: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 	}
 
 	// ByType: exact match.
-	out, err = db.QueryL3Nodes(L3NodeQuery{GraphID: graphHex, NodeType: "concept"})
+	out, err = db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{GraphID: graphHex, NodeType: "concept"})
 	if err != nil {
 		t.Fatalf("QueryL3Nodes by type: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 	}
 
 	// Limit truncation.
-	out, err = db.QueryL3Nodes(L3NodeQuery{GraphID: graphHex, NodeType: "concept", Limit: 1})
+	out, err = db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{GraphID: graphHex, NodeType: "concept", Limit: 1})
 	if err != nil {
 		t.Fatalf("QueryL3Nodes with limit: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 	}
 
 	// GraphID required.
-	if _, err := db.QueryL3Nodes(L3NodeQuery{}); err == nil {
+	if _, err := db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{}); err == nil {
 		t.Fatal("want error for missing graph id")
 	}
 }
@@ -96,7 +96,7 @@ func TestQueryL3NodesModes(t *testing.T) {
 // TestQueryL3SubgraphDepth multi-hop BFS with maxDepth truncation.
 func TestQueryL3SubgraphDepth(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	graphID := common.HashID("graph")
 	idA, idB, idC, idD := common.HashID("a"), common.HashID("b"), common.HashID("c"), common.HashID("d")
 	for _, n := range []core.HypergraphNode{
@@ -116,7 +116,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 	graphHex := common.FormatHash(graphID)
 
 	// 1 hop: A -> B; only e1 has both ends in the subgraph.
-	sub, err := db.QueryL3Subgraph(graphHex, common.FormatHash(idA), 1, nil)
+	sub, err := db.QueryL3Subgraph(core.DefaultAgentID, graphHex, common.FormatHash(idA), 1, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph depth 1: %v", err)
 	}
@@ -128,7 +128,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 	}
 
 	// 2 hops: A -> B -> C; e1 and e2 selected.
-	sub, err = db.QueryL3Subgraph(graphHex, common.FormatHash(idA), 2, nil)
+	sub, err = db.QueryL3Subgraph(core.DefaultAgentID, graphHex, common.FormatHash(idA), 2, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph depth 2: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 	}
 
 	// 3 hops: the whole graph.
-	sub, err = db.QueryL3Subgraph(graphHex, common.FormatHash(idA), 3, nil)
+	sub, err = db.QueryL3Subgraph(core.DefaultAgentID, graphHex, common.FormatHash(idA), 3, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph depth 3: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 	}
 
 	// maxDepth<=0 counts as 1 hop.
-	sub, err = db.QueryL3Subgraph(graphHex, common.FormatHash(idA), 0, nil)
+	sub, err = db.QueryL3Subgraph(core.DefaultAgentID, graphHex, common.FormatHash(idA), 0, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph depth 0: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestQueryL3SubgraphDepth(t *testing.T) {
 // TestQueryL3SubgraphHyperedge hyperedge: one edge linking three nodes, all reachable in 1 hop.
 func TestQueryL3SubgraphHyperedge(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	graphID := common.HashID("graph")
 	idA, idB, idC := common.HashID("a"), common.HashID("b"), common.HashID("c")
 	for _, n := range []core.HypergraphNode{
@@ -174,7 +174,7 @@ func TestQueryL3SubgraphHyperedge(t *testing.T) {
 	eH := core.HypergraphEdge{IDHash: common.HashID("eh"), GraphID: graphID, Kind: core.EdgeRelated, NodeIDs: []uint64{idA, idB, idC}}
 	writeEdge(t, engine, &eH)
 
-	sub, err := db.QueryL3Subgraph(common.FormatHash(graphID), common.FormatHash(idA), 1, nil)
+	sub, err := db.QueryL3Subgraph(core.DefaultAgentID, common.FormatHash(graphID), common.FormatHash(idA), 1, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph hyperedge: %v", err)
 	}
@@ -189,7 +189,7 @@ func TestQueryL3SubgraphHyperedge(t *testing.T) {
 // TestQueryL3SubgraphEdgeKinds edgeKinds filter: with causal only, A has no neighbors.
 func TestQueryL3SubgraphEdgeKinds(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	graphID := common.HashID("graph")
 	idA, idB := common.HashID("a"), common.HashID("b")
 	for _, n := range []core.HypergraphNode{
@@ -201,7 +201,7 @@ func TestQueryL3SubgraphEdgeKinds(t *testing.T) {
 	e1 := core.HypergraphEdge{IDHash: common.HashID("e1"), GraphID: graphID, Kind: core.EdgeRelated, NodeIDs: []uint64{idA, idB}}
 	writeEdge(t, engine, &e1)
 
-	sub, err := db.QueryL3Subgraph(common.FormatHash(graphID), common.FormatHash(idA), 3, []core.GraphEdgeKind{core.EdgeCausal})
+	sub, err := db.QueryL3Subgraph(core.DefaultAgentID, common.FormatHash(graphID), common.FormatHash(idA), 3, []core.GraphEdgeKind{core.EdgeCausal})
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph kinds: %v", err)
 	}
@@ -212,8 +212,8 @@ func TestQueryL3SubgraphEdgeKinds(t *testing.T) {
 
 // TestQueryL3SubgraphStartMissing missing start node returns ErrNotFound.
 func TestQueryL3SubgraphStartMissing(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
-	_, err := db.QueryL3Subgraph(common.FormatHash(1), common.FormatHash(99999), 1, nil)
+	db := newTestDB(t, newTestEngine(t))
+	_, err := db.QueryL3Subgraph(core.DefaultAgentID, common.FormatHash(1), common.FormatHash(99999), 1, nil)
 	if err == nil {
 		t.Fatal("want error for missing start node")
 	}
@@ -226,13 +226,13 @@ func TestQueryL3SubgraphStartMissing(t *testing.T) {
 // another graph instead of silently returning a disconnected singleton.
 func TestQueryL3SubgraphStartWrongGraph(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	graphID := common.HashID("graph-a")
 	otherID := common.HashID("graph-b")
 	node := testNode(common.HashID("n"), otherID, "N", "t", "", nil)
 	writeNode(t, engine, &node)
 
-	_, err := db.QueryL3Subgraph(common.FormatHash(graphID), common.FormatHash(node.IDHash), 1, nil)
+	_, err := db.QueryL3Subgraph(core.DefaultAgentID, common.FormatHash(graphID), common.FormatHash(node.IDHash), 1, nil)
 	if err == nil {
 		t.Fatal("want error for start node from another graph")
 	}
@@ -244,13 +244,13 @@ func TestQueryL3SubgraphStartWrongGraph(t *testing.T) {
 // TestQueryL3NodesIDsRespectGraphID filters ID lookups by the requested graph.
 func TestQueryL3NodesIDsRespectGraphID(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	graphID := common.HashID("graph-a")
 	otherID := common.HashID("graph-b")
 	node := testNode(common.HashID("n"), otherID, "N", "t", "", nil)
 	writeNode(t, engine, &node)
 
-	out, err := db.QueryL3Nodes(L3NodeQuery{
+	out, err := db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{
 		GraphID: common.FormatHash(graphID),
 		IDs:     []string{common.FormatHash(node.IDHash)},
 	})

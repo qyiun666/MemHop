@@ -16,11 +16,13 @@ import (
 // Update appends an agent reply to the specified topic. It returns an error
 // on any failure (validation, LLM, or storage); nil means the reply was
 // appended and all indexes were refreshed.
-func (db *DB) Update(topicID string, text string, timestamp int64) error {
-	if err := db.beginRead(); err != nil {
+func (db *DB) Update(agentID uint64, topicID string, text string, timestamp int64) error {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return err
 	}
-	defer db.mu.RUnlock()
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	if text == "" || timestamp <= 0 {
 		return common.NewError(common.ErrInvalidQuery, "Update requires text and a positive timestamp")
 	}
@@ -32,7 +34,8 @@ func (db *DB) Update(topicID string, text string, timestamp int64) error {
 	// not leave an orphan L4 archive behind.
 	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 		Engine:  db.engine,
-		MetaIdx: db.l2Meta,
+		AgentID: agentID,
+		MetaIdx: ac.l2Meta,
 		SceneID: topicID,
 		Depth:   0,
 		Num:     3,
@@ -48,42 +51,43 @@ func (db *DB) Update(topicID string, text string, timestamp int64) error {
 	if err != nil {
 		return err
 	}
-	archiveID, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicID, 1, core.ContentText, text, timestamp)
+	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, topicID, 1, core.ContentText, text, timestamp)
 	if err != nil {
 		return err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, topicID, []uint64{archiveID}) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, topicID, []uint64{archiveID}) {
 		return common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
-	if !repo.UpdateTopicL2(db.engine, core.DefaultAgentID, topicID, keywords, timestamp) {
+	if !repo.UpdateTopicL2(db.engine, agentID, topicID, keywords, timestamp) {
 		return common.NewError(common.ErrIO, "update topic keywords", nil)
 	}
 	// Update BM25: uncompressed topics carry User+Agent keywords (compressed
 	// use FusedKeywords); topic.AgentKeywords is stale here, use fresh ones.
 	// Refresh the L2Meta entry first per the storage → l2meta → sparse order.
-	db.syncL2Meta(parsedID)
+	ac.syncL2Meta(db, parsedID)
 	all := make([]string, 0, len(topic.UserKeywords)+len(keywords)+len(topic.FusedKeywords))
 	all = append(all, topic.UserKeywords...)
 	all = append(all, keywords...)
 	all = append(all, topic.FusedKeywords...)
 	terms := index.Tokenize(strings.Join(all, " "))
-	db.sparseIndex.AddDocument(parsedID, terms, uint32(len(terms)))
+	ac.sparseIndex.AddDocument(parsedID, terms, uint32(len(terms)))
 	// Full active set: compress the oldest scene so the next activation has
 	// room instead of silently evicting it (best-effort, never fails Update).
 	// Pre-check compressibility: a full Dream runs index rebuilds + LLM
 	// distill even when no group was merged, so scenes below the compress
 	// threshold (few topics keep raw detail) are skipped here. The Dream is
 	// scheduled in the background and never blocks this call.
-	if capacity := db.config.Defaults.Capacity; capacity > 0 && len(db.activeScenes) >= capacity {
-		oldest := db.activeScenes[0]
+	if capacity := db.config.Defaults.Capacity; capacity > 0 && len(ac.activeScenes) >= capacity {
+		oldest := ac.activeScenes[0]
 		if topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 			Engine:  db.engine,
-			MetaIdx: db.l2Meta,
+			AgentID: agentID,
+			MetaIdx: ac.l2Meta,
 			SceneID: common.FormatHash(oldest),
 			Depth:   1,
 			Num:     2,
 		}); err == nil && len(topics) >= db.config.Defaults.DreamCompressMinTopics {
-			db.triggerSceneDream(oldest)
+			db.triggerSceneDream(ac, oldest)
 		}
 	}
 	return nil

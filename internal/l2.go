@@ -11,29 +11,41 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-func (db *DB) ListScenes() ([]core.SceneSlot, error) {
-	if err := db.beginRead(); err != nil {
+func (db *DB) ListScenes(agentID uint64) ([]core.SceneSlot, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
-	all := repo.CollectAllScenesL2(db.engine, core.DefaultAgentID)
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	all := repo.CollectAllScenesL2(db.engine, agentID)
 	if all == nil {
 		return []core.SceneSlot{}, nil
 	}
 	return all, nil
 }
 
-// ActiveSceneIDs returns a copy of the in-memory active scene IDs (the
-// Dream consolidation targets).
-func (db *DB) ActiveSceneIDs() []uint64 {
-	db.mu.RLock()
-	defer db.mu.RUnlock()
-	return append([]uint64(nil), db.activeScenes...)
+// ActiveSceneIDs returns a copy of the agent's in-memory active scene IDs
+// (the Dream consolidation targets).
+func (db *DB) ActiveSceneIDs(agentID uint64) []uint64 {
+	ac := db.peekContext(agentID)
+	if ac == nil {
+		return nil
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	return append([]uint64(nil), ac.activeScenes...)
 }
 
 // MergeScenes rewrites all topics of secondary scenes to the primary scene
-// and deletes the secondary records; caller holds the write lock.
-func (db *DB) MergeScenes(primaryID string, secondaryIDs []string) error {
+// and deletes the secondary records.
+func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []string) error {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
+		return err
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	primaryHash, err := common.ParseID(primaryID)
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse primary scene id", err)
@@ -48,21 +60,21 @@ func (db *DB) MergeScenes(primaryID string, secondaryIDs []string) error {
 	if _, dup := common.ToSet(hashes)[primaryHash]; dup {
 		return common.NewError(common.ErrInvalidQuery, "primary scene id must not be a secondary", nil)
 	}
-	if !repo.MergeScenesL2(db.engine, core.DefaultAgentID, primaryID, secondaryIDs) {
+	if !repo.MergeScenesL2(db.engine, agentID, primaryID, secondaryIDs) {
 		return common.NewError(common.ErrIO, "merge scenes", nil)
 	}
 	removed := common.ToSet(hashes)
 	// Mirror the scene retarget in the L2MetaIndex so cached candidates
 	// match the merged records (storage write already done).
-	db.retargetL2Meta(primaryHash, removed)
+	ac.retargetL2Meta(primaryHash, removed)
 	// Drop merged secondary scenes so Dream does not spin empty goroutines.
-	kept := db.activeScenes[:0]
-	for _, sid := range db.activeScenes {
+	kept := ac.activeScenes[:0]
+	for _, sid := range ac.activeScenes {
 		if _, drop := removed[sid]; !drop {
 			kept = append(kept, sid)
 		}
 	}
-	db.activeScenes = kept
+	ac.activeScenes = kept
 	return nil
 }
 
@@ -92,21 +104,24 @@ type SceneContext struct {
 
 // SceneContext returns one scene's topics sorted by user timestamp with
 // their L4 messages; unknown scenes return an error.
-func (db *DB) SceneContext(sceneID string) (*SceneContext, error) {
-	if err := db.beginRead(); err != nil {
+func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	if _, err := common.ParseID(sceneID); err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
-	scenes := repo.ListScenesL2(db.engine, core.DefaultAgentID, []string{sceneID})
+	scenes := repo.ListScenesL2(db.engine, agentID, []string{sceneID})
 	if len(scenes) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "scene not found", nil)
 	}
 	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 		Engine:  db.engine,
-		MetaIdx: db.l2Meta,
+		AgentID: agentID,
+		MetaIdx: ac.l2Meta,
 		SceneID: sceneID,
 		Depth:   2,
 		Num:     2,
@@ -131,7 +146,7 @@ func (db *DB) SceneContext(sceneID string) (*SceneContext, error) {
 		}
 		for _, ref := range t.L4Refs {
 			st.L4IDs = append(st.L4IDs, common.FormatHash(ref))
-			arc, err := core.ReadArchiveSlot(db.engine, core.DefaultAgentID, ref)
+			arc, err := core.ReadArchiveSlot(db.engine, agentID, ref)
 			if err != nil {
 				continue
 			}
@@ -147,40 +162,46 @@ func (db *DB) SceneContext(sceneID string) (*SceneContext, error) {
 // depth), the L4 archives they reference, and their L2Meta/sparse entries,
 // so the deleted topic no longer surfaces in retrieval. The surviving
 // parent (if any) has its ChildrenIDs pruned. Deleting a missing topic
-// returns ErrNotFound. The caller must hold the write lock.
-func (db *DB) DeleteTopic(topicID string) error {
+// returns ErrNotFound.
+func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
+		return err
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	parsedID, err := common.ParseID(topicID)
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse topic id", err)
 	}
-	topics, archives := collectTopicClosure(db.engine, core.DefaultAgentID, parsedID)
+	topics, archives := collectTopicClosure(db.engine, agentID, parsedID)
 	if len(topics) == 0 {
 		return common.NewError(common.ErrNotFound, "topic not found")
 	}
-	if err := db.pruneParentChild(parsedID); err != nil {
+	if err := ac.pruneParentChild(db, parsedID); err != nil {
 		return err
 	}
-	return db.deleteTopics(topics, archives)
+	return ac.deleteTopics(db, agentID, topics, archives)
 }
 
 // pruneParentChild removes the deleted topic from its surviving parent's
 // ChildrenIDs and refreshes the parent record and L2Meta entry, so no
 // dangling child reference survives the deletion.
-func (db *DB) pruneParentChild(topicID uint64) error {
-	root, err := core.ReadTopicSlot(db.engine, core.DefaultAgentID, topicID)
+func (ac *agentContext) pruneParentChild(db *DB, topicID uint64) error {
+	root, err := core.ReadTopicSlot(db.engine, ac.id, topicID)
 	if err != nil || root == nil || root.ParentID == nil {
 		return err
 	}
 	parentID := *root.ParentID
-	parent, err := core.ReadTopicSlot(db.engine, core.DefaultAgentID, parentID)
+	parent, err := core.ReadTopicSlot(db.engine, ac.id, parentID)
 	if err != nil || parent == nil {
 		return err
 	}
 	parent.ChildrenIDs = removeOnceUint64(parent.ChildrenIDs, topicID)
-	if err := core.WriteTopicSlot(db.engine, core.DefaultAgentID, parentID, parent); err != nil {
+	if err := core.WriteTopicSlot(db.engine, ac.id, parentID, parent); err != nil {
 		return err
 	}
-	db.syncL2Meta(parentID)
+	ac.syncL2Meta(db, parentID)
 	return nil
 }
 
@@ -197,48 +218,53 @@ func removeOnceUint64(s []uint64, v uint64) []uint64 {
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
 // the referenced L4 archives, the L2Meta/sparse entries, and its active-set
-// membership, so the scene disappears from listings and retrieval. The
-// caller must hold the write lock.
-func (db *DB) DeleteScene(sceneID string) error {
+// membership, so the scene disappears from listings and retrieval.
+func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
+		return err
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	sceneHash, err := common.ParseID(sceneID)
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
-	if _, err := core.ReadSceneSlot(db.engine, core.DefaultAgentID, sceneHash); err != nil {
+	if _, err := core.ReadSceneSlot(db.engine, agentID, sceneHash); err != nil {
 		return common.NewError(common.ErrNotFound, "scene not found")
 	}
 	var (
 		topics   []uint64
 		archives []uint64
 	)
-	for _, t := range core.CollectAllTopics(db.engine, core.DefaultAgentID) {
+	for _, t := range core.CollectAllTopics(db.engine, agentID) {
 		if t.SceneID == sceneHash {
 			topics = append(topics, t.ID)
 			archives = append(archives, t.L4Refs...)
 		}
 	}
-	if !repo.DeleteL2(db.engine, core.DefaultAgentID, []string{sceneID}, 1) {
+	if !repo.DeleteL2(db.engine, agentID, []string{sceneID}, 1) {
 		return common.NewError(common.ErrIO, "delete scene", nil)
 	}
-	if err := repo.DeleteArchivesL4(db.engine, core.DefaultAgentID, common.DedupSorted(archives)); err != nil {
+	if err := repo.DeleteArchivesL4(db.engine, agentID, common.DedupSorted(archives)); err != nil {
 		return err
 	}
 	// Drop the L1 scene node right away (its ID is derivable without an
 	// index); incident hyperedges are cleaned by the next Dream's rebuild.
-	if err := repo.DeleteSceneNodeL1(db.engine, core.DefaultAgentID, sceneHash); err != nil {
+	if err := repo.DeleteSceneNodeL1(db.engine, agentID, sceneHash); err != nil {
 		return err
 	}
 	for _, id := range topics {
-		db.l2Meta.Remove(id)
-		db.sparseIndex.RemoveDocument(id)
+		ac.l2Meta.Remove(id)
+		ac.sparseIndex.RemoveDocument(id)
 	}
-	kept := db.activeScenes[:0]
-	for _, sid := range db.activeScenes {
+	kept := ac.activeScenes[:0]
+	for _, sid := range ac.activeScenes {
 		if sid != sceneHash {
 			kept = append(kept, sid)
 		}
 	}
-	db.activeScenes = kept
+	ac.activeScenes = kept
 	return nil
 }
 
@@ -270,20 +296,20 @@ func collectTopicClosure(engine *core.StorageEngine, agentID uint64, root uint64
 
 // deleteTopics removes the given topics (with their L2Meta/sparse entries)
 // and the given archives in one engine pass.
-func (db *DB) deleteTopics(topics, archives []uint64) error {
+func (ac *agentContext) deleteTopics(db *DB, agentID uint64, topics, archives []uint64) error {
 	ids := make([]string, 0, len(topics))
 	for _, id := range topics {
 		ids = append(ids, common.FormatHash(id))
 	}
-	if !repo.DeleteL2(db.engine, core.DefaultAgentID, ids, 2) {
+	if !repo.DeleteL2(db.engine, agentID, ids, 2) {
 		return common.NewError(common.ErrIO, "delete topics", nil)
 	}
-	if err := repo.DeleteArchivesL4(db.engine, core.DefaultAgentID, archives); err != nil {
+	if err := repo.DeleteArchivesL4(db.engine, agentID, archives); err != nil {
 		return err
 	}
 	for _, id := range topics {
-		db.l2Meta.Remove(id)
-		db.sparseIndex.RemoveDocument(id)
+		ac.l2Meta.Remove(id)
+		ac.sparseIndex.RemoveDocument(id)
 	}
 	return nil
 }

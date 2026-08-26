@@ -9,42 +9,32 @@ package api
 import (
 	"context"
 
-	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// Thin wrapper; write op, delegates under the write lock. The write lock
-// serializes Seq allocation in AppendTrajectory so concurrent appends to
-// the same session cannot overwrite each other.
+// Thin wrapper; the domain lock serializes Seq allocation in
+// AppendTrajectory so concurrent appends to the same session cannot
+// overwrite each other.
 func (db *DB) AppendTrajectory(sessionID string, ev TrajectorySlot) error {
-	db.DB.Lock()
-	defer db.DB.Unlock()
-	if db.DB.IsClosed() {
-		return common.NewError(common.ErrClosed, "database is closed")
-	}
-	return db.DB.AppendTrajectory(sessionID, ev)
+	return db.DB.AppendTrajectory(core.DefaultAgentID, sessionID, ev)
 }
 
-// Thin wrapper; see internal/l7.go ((db *DB) ReadTrajectory).
+// Thin wrapper; see internal/l6.go ((db *DB) ReadTrajectory).
 func (db *DB) ReadTrajectory(sessionID string) ([]TrajectorySlot, error) {
-	return db.DB.ReadTrajectory(sessionID)
+	return db.DB.ReadTrajectory(core.DefaultAgentID, sessionID)
 }
 
-// Thin wrapper; see internal/l7.go ((db *DB) TrajectoryStats).
+// Thin wrapper; see internal/l6.go ((db *DB) TrajectoryStats).
 func (db *DB) TrajectoryStats(sessionID string) (*TrajectoryStats, error) {
-	return db.DB.TrajectoryStats(sessionID)
+	return db.DB.TrajectoryStats(core.DefaultAgentID, sessionID)
 }
 
-// Thin wrapper; write op, delegates under the write lock.
+// Thin wrapper; see internal/l6.go ((db *DB) DeleteTrajectory).
 func (db *DB) DeleteTrajectory(sessionID string) error {
-	db.DB.Lock()
-	defer db.DB.Unlock()
-	if db.DB.IsClosed() {
-		return common.NewError(common.ErrClosed, "database is closed")
-	}
-	return db.DB.DeleteTrajectory(sessionID)
+	return db.DB.DeleteTrajectory(core.DefaultAgentID, sessionID)
 }
 
-// Thin wrapper; see internal/l7.go ((db *DB) Crystallize).
+// Thin wrapper; see internal/l6.go ((db *DB) Crystallize).
 func (db *DB) Crystallize(ctx context.Context, sessionID string) (*CrystallizeResult, error) {
-	return db.DB.Crystallize(ctx, sessionID)
+	return db.DB.Crystallize(ctx, core.DefaultAgentID, sessionID)
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // slowLLMServer answers chat completions after delay ms, so the caller can
@@ -43,22 +44,26 @@ func slowLLMServer(t *testing.T, delay time.Duration, content string) *httptest.
 func TestTriggerSceneDreamSchedulesBackground(t *testing.T) {
 	srv := slowLLMServer(t, 200*time.Millisecond, `{"keywords":["x"]}`)
 	db := newSearchTestDB(t, srv.URL)
+	ac, err := db.contextFor(core.DefaultAgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sceneID := common.HashID("scene")
 
-	db.triggerSceneDream(sceneID)
+	ac.mu.Lock()
+	db.triggerSceneDream(ac, sceneID)
 	// The trigger must have returned with the Dream still running.
-	db.dreamMu.Lock()
-	_, inFlight := db.dreamInFlight[sceneID]
-	db.dreamMu.Unlock()
+	_, inFlight := ac.dreamInFlight[sceneID]
+	ac.mu.Unlock()
 	if !inFlight {
 		t.Fatal("trigger returned but the Dream is not in flight: expected async scheduling")
 	}
 
 	// A second trigger for the same scene must be a no-op (no stacking).
-	db.triggerSceneDream(sceneID)
-	db.dreamMu.Lock()
-	count := len(db.dreamInFlight)
-	db.dreamMu.Unlock()
+	ac.mu.Lock()
+	db.triggerSceneDream(ac, sceneID)
+	count := len(ac.dreamInFlight)
+	ac.mu.Unlock()
 	if count != 1 {
 		t.Fatalf("in-flight scenes = %d, want 1 (dedup)", count)
 	}
@@ -66,9 +71,9 @@ func TestTriggerSceneDreamSchedulesBackground(t *testing.T) {
 	// The background goroutine clears the marker after RunDream exits.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		db.dreamMu.Lock()
-		_, still := db.dreamInFlight[sceneID]
-		db.dreamMu.Unlock()
+		ac.mu.Lock()
+		_, still := ac.dreamInFlight[sceneID]
+		ac.mu.Unlock()
 		if !still {
 			return
 		}
@@ -90,12 +95,18 @@ func TestOpenInitializesDreamState(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if db.dreamInFlight == nil {
-		t.Fatal("Open must initialize dreamInFlight")
+	if db.agents == nil {
+		t.Fatal("Open must initialize the agents registry")
 	}
-	if db.dreamCancel == nil {
-		t.Fatal("Open must initialize dreamCancel")
+	if db.baseCtx == nil {
+		t.Fatal("Open must initialize the base context")
 	}
 	// A trigger on the freshly opened DB must not panic (nil map write).
-	db.triggerSceneDream(common.HashID("scene"))
+	ac, err := db.contextFor(core.DefaultAgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ac.mu.Lock()
+	db.triggerSceneDream(ac, common.HashID("scene"))
+	ac.mu.Unlock()
 }

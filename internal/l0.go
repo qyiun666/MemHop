@@ -11,14 +11,17 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// GetL0 reads the profile singleton. An absent profile is returned as an
-// empty, non-nil ProfileSlot; storage/corruption errors are surfaced.
-func (db *DB) GetL0() (*core.ProfileSlot, error) {
-	if err := db.beginRead(); err != nil {
+// GetL0 reads the profile singleton of one agent. An absent profile is
+// returned as an empty, non-nil ProfileSlot; storage/corruption errors are
+// surfaced.
+func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
-	slot, err := repo.GetProfileL0(db.engine, core.DefaultAgentID)
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	slot, err := repo.GetProfileL0(db.engine, agentID)
 	if err != nil {
 		if common.CodeOf(err) == common.ErrNotFound {
 			return &core.ProfileSlot{}, nil
@@ -29,10 +32,16 @@ func (db *DB) GetL0() (*core.ProfileSlot, error) {
 }
 
 // UpdateL0 overwrites the profile (ID forced to hash("profile")); the
-// write lock comes from the internal layer.
-func (db *DB) UpdateL0(slot *core.ProfileSlot) error {
+// domain lock comes from the agent context.
+func (db *DB) UpdateL0(agentID uint64, slot *core.ProfileSlot) error {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
+		return err
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	if slot == nil {
 		return common.NewError(common.ErrInvalidQuery, "UpdateL0: slot is required")
 	}
-	return repo.UpdateProfileL0(db.engine, core.DefaultAgentID, slot)
+	return repo.UpdateProfileL0(db.engine, agentID, slot)
 }

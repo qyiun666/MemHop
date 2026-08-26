@@ -23,11 +23,13 @@ type L3NodeQuery struct {
 	Limit    int      `json:"limit,omitempty"` // <=0 means unlimited
 }
 
-func (db *DB) QueryL3Nodes(q L3NodeQuery) ([]core.HypergraphNode, error) {
-	if err := db.beginRead(); err != nil {
+func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	if q.GraphID == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "graph_id is required")
 	}
@@ -43,7 +45,7 @@ func (db *DB) QueryL3Nodes(q L3NodeQuery) ([]core.HypergraphNode, error) {
 			if err != nil {
 				continue
 			}
-			node, err := core.ReadHypergraphNode(db.engine, core.DefaultAgentID, idHash)
+			node, err := core.ReadHypergraphNode(db.engine, agentID, idHash)
 			if err != nil || node.GraphID != graphHash {
 				continue
 			}
@@ -51,13 +53,13 @@ func (db *DB) QueryL3Nodes(q L3NodeQuery) ([]core.HypergraphNode, error) {
 		}
 	case q.Keyword != "":
 		kw := strings.ToLower(q.Keyword)
-		for _, n := range repo.ListNodeL3(db.engine, core.DefaultAgentID, q.GraphID) {
+		for _, n := range repo.ListNodeL3(db.engine, agentID, q.GraphID) {
 			if nodeMatchesKeyword(n, kw) {
 				out = append(out, n)
 			}
 		}
 	case q.NodeType != "":
-		for _, n := range repo.ListNodeL3(db.engine, core.DefaultAgentID, q.GraphID) {
+		for _, n := range repo.ListNodeL3(db.engine, agentID, q.GraphID) {
 			if n.NodeType == q.NodeType {
 				out = append(out, n)
 			}
@@ -96,11 +98,13 @@ type L3Subgraph struct {
 
 // QueryL3Subgraph BFS from startNodeID up to maxDepth; edgeKinds restricts
 // reachable edges (maxDepth<=0 means 1).
-func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*L3Subgraph, error) {
-	if err := db.beginRead(); err != nil {
+func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*L3Subgraph, error) {
+	ac, err := db.contextFor(agentID)
+	if err != nil {
 		return nil, err
 	}
-	defer db.mu.RUnlock()
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
 	graphHash, err := common.ParseID(graphID)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse graph id", err)
@@ -109,7 +113,7 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse start node id", err)
 	}
-	startNode, err := core.ReadHypergraphNode(db.engine, core.DefaultAgentID, startHash)
+	startNode, err := core.ReadHypergraphNode(db.engine, agentID, startHash)
 	if err != nil {
 		return nil, common.NewError(common.ErrNotFound, "start node not found", err)
 	}
@@ -124,7 +128,7 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs fully connected.
 	adj := make(map[uint64]map[uint64]struct{})
 	var edges []core.HypergraphEdge
-	for _, e := range repo.ListEdgeL3(db.engine, core.DefaultAgentID, graphID) {
+	for _, e := range repo.ListEdgeL3(db.engine, agentID, graphID) {
 		if len(edgeKinds) > 0 && !containsEdgeKind(edgeKinds, e.Kind) {
 			continue
 		}
@@ -152,7 +156,7 @@ func (db *DB) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edgeKin
 	// Subgraph extraction: visited nodes plus edges with both ends visited.
 	nodes := make([]core.HypergraphNode, 0, len(visited))
 	for h := range visited {
-		if n, err := core.ReadHypergraphNode(db.engine, core.DefaultAgentID, h); err == nil {
+		if n, err := core.ReadHypergraphNode(db.engine, agentID, h); err == nil {
 			nodes = append(nodes, *n)
 		}
 	}

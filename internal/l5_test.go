@@ -19,7 +19,7 @@ func writeCapability(t *testing.T, engine *core.StorageEngine, c *core.Capabilit
 
 func TestListCapabilities(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	c1 := core.Capability{IDHash: common.HashID("c1"), Name: "修复编译错误", Type: core.CapabilityMCP, Status: core.CapabilityActive, UpdatedAt: 3000}
 	c2 := core.Capability{IDHash: common.HashID("c2"), Name: "代码审查流程", Type: core.CapabilitySkill, Status: core.CapabilityDraft, UpdatedAt: 1000}
 	c3 := core.Capability{IDHash: common.HashID("c3"), Name: "发布版本", Type: core.CapabilityComposite, Status: core.CapabilityActive, UpdatedAt: 2000}
@@ -27,7 +27,7 @@ func TestListCapabilities(t *testing.T) {
 	writeCapability(t, engine, &c2)
 	writeCapability(t, engine, &c3)
 
-	out, err := db.ListCapabilities(CapabilityListQuery{})
+	out, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{})
 	if err != nil {
 		t.Fatalf("ListCapabilities: %v", err)
 	}
@@ -36,7 +36,7 @@ func TestListCapabilities(t *testing.T) {
 	}
 
 	active := core.CapabilityActive
-	out, err = db.ListCapabilities(CapabilityListQuery{Status: &active})
+	out, err = db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{Status: &active})
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestListCapabilities(t *testing.T) {
 	}
 
 	typ := core.CapabilityComposite
-	out, err = db.ListCapabilities(CapabilityListQuery{Type: &typ})
+	out, err = db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{Type: &typ})
 	if err != nil {
 		t.Fatalf("type: %v", err)
 	}
@@ -53,7 +53,7 @@ func TestListCapabilities(t *testing.T) {
 		t.Fatalf("type composite: want [c3], got %v", idsOfCapabilities(out))
 	}
 
-	out, err = db.ListCapabilities(CapabilityListQuery{Keyword: "编译"})
+	out, err = db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{Keyword: "编译"})
 	if err != nil {
 		t.Fatalf("keyword: %v", err)
 	}
@@ -63,8 +63,8 @@ func TestListCapabilities(t *testing.T) {
 }
 
 func TestListCapabilitiesEmpty(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
-	out, err := db.ListCapabilities(CapabilityListQuery{})
+	db := newTestDB(t, newTestEngine(t))
+	out, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{})
 	if err != nil {
 		t.Fatalf("ListCapabilities: %v", err)
 	}
@@ -74,12 +74,12 @@ func TestListCapabilitiesEmpty(t *testing.T) {
 }
 
 func TestActivateCapability(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 	cap := &core.Capability{Name: "待激活", Type: core.CapabilityMCP, Status: core.CapabilityDraft, IDHash: core.CapabilityID("待激活")}
 	writeCapability(t, db.engine, cap)
 	id := common.FormatHash(cap.IDHash)
 
-	got, err := db.ActivateCapability(id)
+	got, err := db.ActivateCapability(core.DefaultAgentID, id)
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -90,22 +90,22 @@ func TestActivateCapability(t *testing.T) {
 		t.Fatalf("UpdatedAt not refreshed: %+v", got)
 	}
 	// Re-activating an active capability is idempotent.
-	if _, err := db.ActivateCapability(id); err != nil {
+	if _, err := db.ActivateCapability(core.DefaultAgentID, id); err != nil {
 		t.Fatalf("re-activate: %v", err)
 	}
 	// Unknown IDs surface ErrNotFound instead of inventing a record.
-	if _, err := db.ActivateCapability(common.FormatHash(common.HashID("missing"))); common.CodeOf(err) != common.ErrNotFound {
+	if _, err := db.ActivateCapability(core.DefaultAgentID, common.FormatHash(common.HashID("missing"))); common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("missing id: want ErrNotFound, got %v", err)
 	}
 }
 
 func TestRecordCapabilityUsage(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 	cap := &core.Capability{Name: "用量能力", Type: core.CapabilityMCP, Status: core.CapabilityActive, IDHash: core.CapabilityID("用量能力")}
 	writeCapability(t, db.engine, cap)
 	id := common.FormatHash(cap.IDHash)
 
-	got, err := db.RecordCapabilityUsage(id, true)
+	got, err := db.RecordCapabilityUsage(core.DefaultAgentID, id, true)
 	if err != nil {
 		t.Fatalf("first usage: %v", err)
 	}
@@ -113,7 +113,7 @@ func TestRecordCapabilityUsage(t *testing.T) {
 		t.Fatalf("first success: %+v", got)
 	}
 
-	got, err = db.RecordCapabilityUsage(id, false)
+	got, err = db.RecordCapabilityUsage(core.DefaultAgentID, id, false)
 	if err != nil {
 		t.Fatalf("second usage: %v", err)
 	}
@@ -121,13 +121,13 @@ func TestRecordCapabilityUsage(t *testing.T) {
 		t.Fatalf("second failure: %+v", got)
 	}
 
-	if _, err := db.RecordCapabilityUsage(common.FormatHash(common.HashID("missing")), true); common.CodeOf(err) != common.ErrNotFound {
+	if _, err := db.RecordCapabilityUsage(core.DefaultAgentID, common.FormatHash(common.HashID("missing")), true); common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("missing id: want ErrNotFound, got %v", err)
 	}
 }
 
 func TestUpdateCapability(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 	cap := &core.Capability{Name: "可更新", Type: core.CapabilityMCP, Status: core.CapabilityActive, IDHash: core.CapabilityID("可更新")}
 	writeCapability(t, db.engine, cap)
 	id := common.FormatHash(cap.IDHash)
@@ -141,7 +141,7 @@ func TestUpdateCapability(t *testing.T) {
 	}
 	workflow := &core.Workflow{Steps: []core.WorkflowStep{{Ref: "m1", Action: "do"}, {Ref: "s1"}}}
 
-	got, err := db.UpdateCapability(id, CapabilityPatch{
+	got, err := db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{
 		Summary: &summary, Trigger: &trigger, Type: &typ, Resources: &resources, Workflow: workflow,
 	})
 	if err != nil {
@@ -160,7 +160,7 @@ func TestUpdateCapability(t *testing.T) {
 
 	// Partial update leaves untouched fields unchanged.
 	version := "2.0"
-	got, err = db.UpdateCapability(id, CapabilityPatch{Version: &version})
+	got, err = db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{Version: &version})
 	if err != nil {
 		t.Fatalf("partial update: %v", err)
 	}
@@ -169,36 +169,34 @@ func TestUpdateCapability(t *testing.T) {
 	}
 
 	// Unknown ID fails.
-	if _, err := db.UpdateCapability(common.FormatHash(common.HashID("missing")), CapabilityPatch{}); common.CodeOf(err) != common.ErrNotFound {
+	if _, err := db.UpdateCapability(core.DefaultAgentID, common.FormatHash(common.HashID("missing")), CapabilityPatch{}); common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("missing id: want ErrNotFound, got %v", err)
 	}
 
 	// Invalid patch (mcp type without exactly one mcp resource) is rejected.
 	badType := core.CapabilityMCP
-	if _, err := db.UpdateCapability(id, CapabilityPatch{Type: &badType}); err == nil {
+	if _, err := db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{Type: &badType}); err == nil {
 		t.Fatal("invalid type/resources combination must be rejected")
 	}
 }
 
 func TestBuiltinCapabilitiesReadOnly(t *testing.T) {
-	db := &DB{
-		engine: newTestEngine(t),
-		builtinCapabilities: []core.Capability{{
-			Name: "内置手册", Type: core.CapabilitySkill, Status: core.CapabilityActive,
-			Origin: core.CapabilityOriginBuiltin, IDHash: core.CapabilityID("内置手册"),
-		}},
-	}
+	db := newTestDB(t, newTestEngine(t))
+	db.builtinCapabilities = []core.Capability{{
+		Name: "内置手册", Type: core.CapabilitySkill, Status: core.CapabilityActive,
+		Origin: core.CapabilityOriginBuiltin, IDHash: core.CapabilityID("内置手册"),
+	}}
 	id := common.FormatHash(core.CapabilityID("内置手册"))
-	if _, err := db.ActivateCapability(id); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.ActivateCapability(core.DefaultAgentID, id); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("activate builtin: want ErrInvalidQuery, got %v", err)
 	}
-	if _, err := db.RecordCapabilityUsage(id, true); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.RecordCapabilityUsage(core.DefaultAgentID, id, true); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("usage builtin: want ErrInvalidQuery, got %v", err)
 	}
-	if err := db.DeleteCapability(id); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.DeleteCapability(core.DefaultAgentID, id); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("delete builtin: want ErrInvalidQuery, got %v", err)
 	}
-	if _, err := db.UpdateCapability(id, CapabilityPatch{}); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("update builtin: want ErrInvalidQuery, got %v", err)
 	}
 }

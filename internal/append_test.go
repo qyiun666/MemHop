@@ -33,7 +33,7 @@ func newTopicForAppend(t *testing.T, engine *core.StorageEngine) string {
 // semantics, not overwrite).
 func TestAppendL4Message(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	topicID := newTopicForAppend(t, engine)
 
 	type msg struct {
@@ -48,7 +48,7 @@ func TestAppendL4Message(t *testing.T) {
 	}
 	var ids []uint64
 	for _, m := range msgs {
-		id, err := db.AppendL4Message(topicID, m.text, m.ts, m.role)
+		id, err := db.AppendL4Message(core.DefaultAgentID, topicID, m.text, m.ts, m.role)
 		if err != nil {
 			t.Fatalf("AppendL4Message(%q): %v", m.text, err)
 		}
@@ -97,22 +97,22 @@ func TestAppendL4Message(t *testing.T) {
 // any write, so no orphan L4 archive is left behind.
 func TestAppendL4MessageErrors(t *testing.T) {
 	engine := newTestEngine(t)
-	db := &DB{engine: engine}
+	db := newTestDB(t, engine)
 	topicID := newTopicForAppend(t, engine)
 
-	if _, err := db.AppendL4Message(topicID, "", 1000, core.RoleUser); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.AppendL4Message(core.DefaultAgentID, topicID, "", 1000, core.RoleUser); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("empty text: want ErrInvalidQuery, got %v", err)
 	}
-	if _, err := db.AppendL4Message(topicID, "x", 0, core.RoleUser); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.AppendL4Message(core.DefaultAgentID, topicID, "x", 0, core.RoleUser); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("zero timestamp: want ErrInvalidQuery, got %v", err)
 	}
-	if _, err := db.AppendL4Message(topicID, "x", 1000, core.RoleDream+1); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.AppendL4Message(core.DefaultAgentID, topicID, "x", 1000, core.RoleDream+1); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("undefined role: want ErrInvalidQuery, got %v", err)
 	}
-	if _, err := db.AppendL4Message("nothex", "x", 1000, core.RoleUser); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := db.AppendL4Message(core.DefaultAgentID, "nothex", "x", 1000, core.RoleUser); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("malformed topic id: want ErrInvalidQuery, got %v", err)
 	}
-	if _, err := db.AppendL4Message(common.FormatHash(common.HashID("missing")), "x", 1000, core.RoleUser); common.CodeOf(err) != common.ErrNotFound {
+	if _, err := db.AppendL4Message(core.DefaultAgentID, common.FormatHash(common.HashID("missing")), "x", 1000, core.RoleUser); common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("missing topic: want ErrNotFound, got %v", err)
 	}
 	if out := repo.QueryArchiveL4(engine, core.DefaultAgentID, 2, "", 0, 5000, nil); len(out) != 0 {

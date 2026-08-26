@@ -75,21 +75,26 @@ func CheckVectorDim(engine *core.StorageEngine, cfg *MemHopConfig) error {
 // snapshot; a corrupt snapshot aborts Open rather than silently rebuilding.
 // L1 association is a storage-level graph walk (SpreadingActivation), so no
 // in-memory L1 index is loaded.
-func LoadCachedIndices(engine *core.StorageEngine) (*index.SparseIndex, error) {
-	sparseIdx := index.NewSparseIndex()
+// LoadCachedIndices validates every per-agent sparse blob of the snapshot
+// and returns them as the lazy-restore cache; a corrupt blob aborts Open
+// rather than silently rebuilding.
+func LoadCachedIndices(engine *core.StorageEngine) (map[uint64][]byte, error) {
+	blobs := make(map[uint64][]byte)
 	snap := engine.SnapshotData()
 	if snap == nil {
-		return sparseIdx, nil
+		return blobs, nil
 	}
-	if blob := snap.SparseByAgent[core.DefaultAgentID]; len(blob) > 0 {
-		idx, err := index.DeserializeSparseIndex(blob)
-		if err != nil {
+	for agentID, blob := range snap.SparseByAgent {
+		if len(blob) == 0 {
+			continue
+		}
+		if _, err := index.DeserializeSparseIndex(blob); err != nil {
 			return nil, common.NewError(common.ErrCorruption,
 				"sparse index snapshot deserialize failed", err)
 		}
-		sparseIdx = idx
+		blobs[agentID] = blob
 	}
-	return sparseIdx, nil
+	return blobs, nil
 }
 
 // InitTokenizer surfaces tokenizer configuration errors at Open time
@@ -102,7 +107,9 @@ func InitTokenizer(engine string) error {
 }
 
 // Open assembles a DB instance: tokenizer init, engine open/create,
-// vector-dim check and index restore. Called by the internal assembly layer.
+// vector-dim check and snapshot validation. Agent contexts are created
+// lazily on first access (contextFor), each rebuilding its L2Meta cache
+// from its own domain. Called by the internal assembly layer.
 func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := InitTokenizer(defaultTokenizerEngine); err != nil {
@@ -119,28 +126,23 @@ func Open(cfg *MemHopConfig, enc Encoder) (*DB, error) {
 		cancel()
 		return nil, err
 	}
-	sparseIdx, err := LoadCachedIndices(engine)
+	blobs, err := LoadCachedIndices(engine)
 	if err != nil {
 		engine.CloseNoCheckpoint()
 		cancel()
 		return nil, err
 	}
 
-	db := &DB{
-		engine:      engine,
-		config:      cfg,
-		llm:         New(cfg),
-		sparseIndex: sparseIdx,
-		encoder:     enc,
-		// dreamInFlight guards background Dreams triggered by Search/Update;
-		// dreamCtx cancels them at Close so the pipeline exits promptly.
-		dreamInFlight: make(map[uint64]struct{}),
-		dreamCtx:      ctx,
-		dreamCancel:   cancel,
-	}
-	// L2Meta is not snapshot-persisted (snapshot format is fixed), so it is
-	// rebuilt once at Open with a single RecL2Topic scan; after that all
-	// candidate listing serves from memory.
-	db.l2Meta = index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
-	return db, nil
+	return &DB{
+		engine:  engine,
+		config:  cfg,
+		llm:     New(cfg),
+		encoder: enc,
+		// baseCtx bounds every per-agent dreamCtx; Close cancels it so
+		// in-flight Dreams exit at the next stage boundary.
+		baseCtx:       ctx,
+		baseCancel:    cancel,
+		agents:        make(map[uint64]*agentContext),
+		snapshotBlobs: blobs,
+	}, nil
 }

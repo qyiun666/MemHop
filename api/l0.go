@@ -6,19 +6,12 @@
 
 package api
 
-import (
-	"github.com/qyiun666/MemHop/internal/common"
-)
+import "github.com/qyiun666/MemHop/internal/repo/core"
 
 func (db *DB) GetL0() (*ProfileSlot, error) {
-	return db.DB.GetL0()
+	return db.DB.GetL0(core.DefaultAgentID)
 }
 
 func (db *DB) UpdateL0(slot *ProfileSlot) error {
-	db.DB.Lock()
-	defer db.DB.Unlock()
-	if db.DB.IsClosed() {
-		return common.NewError(common.ErrClosed, "database is closed")
-	}
-	return db.DB.UpdateL0(slot)
+	return db.DB.UpdateL0(core.DefaultAgentID, slot)
 }

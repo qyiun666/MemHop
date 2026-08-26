@@ -34,7 +34,7 @@ func writeTempCapability(t *testing.T, dir, name, content string) string {
 // An api-typed capability (ref api:MethodName) imports like any other:
 // exactly one same-typed resource is required, more are rejected.
 func TestImportCapabilityAPIType(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 
 	apiPath := writeTempCapability(t, t.TempDir(), "cap.json", `{
   "format": "memhop-capability/v3",
@@ -46,7 +46,7 @@ func TestImportCapabilityAPIType(t *testing.T) {
     {"type": "api", "name": "GetL0", "ref": "api:GetL0", "desc": "读取画像"}
   ]
 }`)
-	cap, err := db.ImportCapability(apiPath)
+	cap, err := db.ImportCapability(core.DefaultAgentID, apiPath)
 	if err != nil {
 		t.Fatalf("import api capability: %v", err)
 	}
@@ -65,7 +65,7 @@ func TestImportCapabilityAPIType(t *testing.T) {
     {"type": "api", "name": "UpdateL0", "ref": "api:UpdateL0", "desc": "b"}
   ]
 }`)
-	if _, err := db.ImportCapability(badPath); err == nil {
+	if _, err := db.ImportCapability(core.DefaultAgentID, badPath); err == nil {
 		t.Fatal("api capability with two resources must be rejected")
 	}
 }
@@ -73,17 +73,17 @@ func TestImportCapabilityAPIType(t *testing.T) {
 // Byte-identical re-import under the same name must not append a record:
 // the file is append-only and hosts may re-import at every startup.
 func TestImportCapabilityUnchangedSkip(t *testing.T) {
-	db := &DB{engine: newTestEngine(t)}
+	db := newTestDB(t, newTestEngine(t))
 	path := writeTempCapability(t, t.TempDir(), "cap.json", testCapabilityJSON)
 
-	first, err := db.ImportCapability(path)
+	first, err := db.ImportCapability(core.DefaultAgentID, path)
 	if err != nil {
 		t.Fatalf("first import: %v", err)
 	}
 	if first.Status != core.CapabilityActive || first.Origin != core.CapabilityOriginImported {
 		t.Fatalf("first import: status=%v origin=%v", first.Status, first.Origin)
 	}
-	second, err := db.ImportCapability(path)
+	second, err := db.ImportCapability(core.DefaultAgentID, path)
 	if err != nil {
 		t.Fatalf("second import: %v", err)
 	}
