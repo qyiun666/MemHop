@@ -80,10 +80,10 @@ func validCapabilityStatus(s string) error {
 // validCapabilityType validates a type string before the typed switch.
 func validCapabilityType(s string) error {
 	switch s {
-	case "mcp", "skill", "composite":
+	case "mcp", "skill", "api", "composite":
 		return nil
 	}
-	return fmt.Errorf("invalid capability type %q (want mcp, skill or composite)", s)
+	return fmt.Errorf("invalid capability type %q (want mcp, skill, api or composite)", s)
 }
 
 // resourceArrayProp is the JSON Schema for a []ResourceRef.
@@ -122,7 +122,7 @@ func workflowProp() map[string]any {
 func registerL5Tools(s *mcp.Server, db *memhop.DB) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_import",
-		Description: "导入 memhop-capability/v2 能力文件（文件或包含 capability.json 的目录）。能力是对宿主资源的封装：type=mcp（单个 mcp 工具）、type=skill（单个 skill）、type=composite（多个 mcp/skill 集合，可选 workflow 编排）。",
+		Description: "导入 memhop-capability/v2 能力文件（文件或包含 capability.json 的目录）。能力是对宿主资源的封装：type=mcp（单个 mcp 工具）、type=skill（单个 skill）、type=api（单个 api 方法）、type=composite（多个 mcp/skill/api 集合，可选 workflow 编排）。",
 		InputSchema: objSchema(map[string]any{
 			"path": strProp("能力文件或目录路径，必填"),
 		}, "path"),
@@ -160,10 +160,10 @@ func registerL5Tools(s *mcp.Server, db *memhop.DB) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_list",
-		Description: "列出 L5 能力（含内置能力卡）。可按状态（draft/active/deprecated）、类型（mcp/skill/composite）与关键词过滤。",
+		Description: "列出 L5 能力（含内置能力卡）。可按状态（draft/active/deprecated）、类型（mcp/skill/api/composite）与关键词过滤。",
 		InputSchema: objSchema(map[string]any{
 			"status":  strProp("状态过滤：draft | active | deprecated"),
-			"type":    strProp("类型过滤：mcp | skill | composite"),
+			"type":    strProp("类型过滤：mcp | skill | api | composite"),
 			"keyword": strProp("名称关键词过滤"),
 		}),
 	}, handle[capabilityListArgs, []memhop.Capability](func(a capabilityListArgs) ([]memhop.Capability, error) {
@@ -191,6 +191,8 @@ func registerL5Tools(s *mcp.Server, db *memhop.DB) {
 			switch a.Type {
 			case "skill":
 				typ = memhop.CapabilitySkill
+			case "api":
+				typ = memhop.CapabilityAPI
 			case "composite":
 				typ = memhop.CapabilityComposite
 			}
@@ -235,7 +237,7 @@ func registerL5Tools(s *mcp.Server, db *memhop.DB) {
 		InputSchema: objSchema(map[string]any{
 			"id":        strProp("能力 ID（16 位 hex），必填"),
 			"version":   strProp("版本号"),
-			"type":      strProp("类型：mcp | skill | composite"),
+			"type":      strProp("类型：mcp | skill | api | composite"),
 			"summary":   strProp("能力摘要"),
 			"trigger":   strProp("触发条件描述"),
 			"status":    strProp("状态：draft | active | deprecated"),
@@ -261,6 +263,8 @@ func registerL5Tools(s *mcp.Server, db *memhop.DB) {
 			switch a.Type {
 			case "skill":
 				typ = memhop.CapabilitySkill
+			case "api":
+				typ = memhop.CapabilityAPI
 			case "composite":
 				typ = memhop.CapabilityComposite
 			}

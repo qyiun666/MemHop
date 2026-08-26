@@ -344,7 +344,7 @@ cleans up (trajectories are short-lived — the host owns cleanup).
 | `ProfileSlot` / `HypergraphSlot` / `HypergraphNode` / `GraphEdgeKind` | core | models |
 
 Enum constants are exported too: `L3ImportSkip/Merge/Overwrite`,
-`CapabilityMCP/Skill/Composite`, `CapabilityDraft/Active/Deprecated`,
+`CapabilityMCP/Skill/API/Composite`, `CapabilityDraft/Active/Deprecated`,
 `CapabilityOrigin*`, `EdgeRelated...EdgeCustom`.
 
 > Note: `Role*` constants are **not** re-exported — `AppendL4Message` takes a

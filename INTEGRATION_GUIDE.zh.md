@@ -314,7 +314,7 @@ res, err := db.Crystallize(ctx, sessionIDHex)
 | **`ResourceRef`** | core（v1.2.7 新增导出） | `Capability.Resources` 元素类型 |
 | `ProfileSlot` / `HypergraphSlot` / `HypergraphNode` / `GraphEdgeKind` | core | 模型 |
 
-枚举常量同样导出：`L3ImportSkip/Merge/Overwrite`、`CapabilityMCP/Skill/Composite`、`CapabilityDraft/Active/Deprecated`、`CapabilityOrigin*`、`EdgeRelated...EdgeCustom`。
+枚举常量同样导出：`L3ImportSkip/Merge/Overwrite`、`CapabilityMCP/Skill/API/Composite`、`CapabilityDraft/Active/Deprecated`、`CapabilityOrigin*`、`EdgeRelated...EdgeCustom`。
 
 > 注意：`Role*` 常量**未**导出——`AppendL4Message` 直接收裸 `uint8`（0=用户，1=agent，2=system，3=dream）。
 

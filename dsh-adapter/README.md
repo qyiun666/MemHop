@@ -22,7 +22,7 @@
 | `memhop_knowledge_delete` | 删除图谱 | 面板：删除按钮 + 确认 |
 | `memhop_archive_search` | 档案检索（关键词/时间区间/ID） | 面板：检索表单 + 结果列表 |
 | `memhop_archive_get` | 单条档案 | 面板：详情展开（对话原文） |
-| `memhop_capability_list` | 能力清单（内置 13 张 + 库存） | 面板：能力卡片网格，按 kind/status 过滤 |
+| `memhop_capability_list` | 能力清单（内置 19 张 + 库存） | 面板：能力卡片网格，按 kind/status 过滤 |
 | `memhop_capability_get` | 能力详情 | 面板：卡片详情（manual/atomic/composite） |
 | `memhop_capability_activate` | 激活 draft 能力 | 面板：draft 卡片上的激活按钮 |
 | `memhop_capability_import` | 导入能力文件 | 面板：文件选择 |

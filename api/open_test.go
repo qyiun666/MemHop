@@ -31,6 +31,8 @@ func openTestConfig(dbPath string) *internal.MemHopConfig {
 var builtinManualNames = []string{
 	"memhop-guide", "memhop-search", "memhop-update", "memhop-dream",
 	"memhop-trajectory", "memhop-crystallize", "memhop-capability-import",
+	"memhop-profile", "memhop-scene", "memhop-archive", "memhop-capability",
+	"memhop-knowledge", "memhop-refine",
 }
 
 var builtinAtomicNames = []string{
@@ -62,7 +64,7 @@ func TestLoadBuiltinCapabilities(t *testing.T) {
 			t.Fatalf("builtin %s: missing file hash", c.Name)
 		}
 		switch c.Type {
-		case core.CapabilityMCP, core.CapabilitySkill:
+		case core.CapabilityMCP, core.CapabilitySkill, core.CapabilityAPI:
 			if len(c.Resources) != 1 || c.Resources[0].Type != c.Type {
 				t.Fatalf("builtin %s: resources mismatch %+v", c.Name, c)
 			}

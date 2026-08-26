@@ -1,0 +1,44 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "memhop-archive",
+  "version": "2",
+  "type": "composite",
+  "summary": "L4 档案说明书：检索历史对话原文（关键词/时间范围/ID 列表三种模式）、按 ID 读取单条、追加一条消息",
+  "trigger": "需要查询历史对话原文、翻找旧消息或手动追加消息时；archive 档案 l4 原文 历史 对话 检索",
+  "resources": [
+    {
+      "type": "api",
+      "name": "SearchL4",
+      "ref": "api:SearchL4",
+      "description": "检索 L4 原文。签名 SearchL4(q L4Query) ([]ArchiveSlot, error)；q 字段：Keyword（子串匹配）、Start/End（毫秒时间范围）、IDs（档案 ID 列表）三种模式选一，可附加 TopicID 限定话题（*string，16 位 hex）"
+    },
+    {
+      "type": "api",
+      "name": "GetArchive",
+      "ref": "api:GetArchive",
+      "description": "按 ID 读取单条 L4 原文。签名 GetArchive(id string) (*ArchiveSlot, error)；id=档案 ID（16 位 hex）；未知 ID 返回错误"
+    },
+    {
+      "type": "api",
+      "name": "AppendL4Message",
+      "ref": "api:AppendL4Message",
+      "description": "向话题手动追加一条 L4 消息（纯存储追加，不触发关键词提取或 LLM）。签名 AppendL4Message(topicID string, text string, timestamp int64, role uint8) (uint64, error)；role=0 用户 / 1 Agent；返回新档案 ID（16 位 hex）"
+    }
+  ],
+  "workflow": {
+    "steps": [
+      {
+        "ref": "SearchL4",
+        "action": "按关键词/时间/ID 检索命中的档案"
+      },
+      {
+        "ref": "GetArchive",
+        "action": "按 ID 精确读取单条原文"
+      },
+      {
+        "ref": "AppendL4Message",
+        "action": "需要手动追加消息时写入"
+      }
+    ]
+  }
+}

@@ -99,6 +99,7 @@ const (
 const (
 	CapabilityMCP       = core.CapabilityMCP
 	CapabilitySkill     = core.CapabilitySkill
+	CapabilityAPI       = core.CapabilityAPI
 	CapabilityComposite = core.CapabilityComposite
 )
 

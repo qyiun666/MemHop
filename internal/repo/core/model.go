@@ -55,8 +55,11 @@ func (c CapabilityStatus) String() string {
 type CapabilityType string
 
 const (
-	CapabilityMCP       CapabilityType = "mcp"
-	CapabilitySkill     CapabilityType = "skill"
+	CapabilityMCP   CapabilityType = "mcp"
+	CapabilitySkill CapabilityType = "skill"
+	// CapabilityAPI wraps one method of the MemHop Go API (api package);
+	// the host calls it directly through the library facade.
+	CapabilityAPI       CapabilityType = "api"
 	CapabilityComposite CapabilityType = "composite"
 )
 
@@ -398,9 +401,9 @@ func (c Capability) PromptCard() string {
 // usage instructions for the host. MemHop stores these references but does
 // not execute them.
 type ResourceRef struct {
-	Type        CapabilityType `json:"type"` // mcp | skill
+	Type        CapabilityType `json:"type"` // mcp | skill | api
 	Name        string         `json:"name"`
-	Ref         string         `json:"ref,omitempty"` // MCP server address / skill path / command
+	Ref         string         `json:"ref,omitempty"` // MCP server address / skill path / api:Method / command
 	Description string         `json:"description,omitempty"`
 	Config      *string        `json:"config,omitempty"`
 }

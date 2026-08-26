@@ -1,0 +1,16 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "memhop-refine",
+  "version": "1",
+  "type": "api",
+  "summary": "Refine 说明书：对话题累积的 L4 消息调用 LLM 重新提取关键词，刷新融合关键词与 BM25 索引",
+  "trigger": "话题关键词过时、N:N 回合积累多条消息后需要重新提炼关键词时；refine 提炼 关键词 精炼 keywords",
+  "resources": [
+    {
+      "type": "api",
+      "name": "RefineTopicKeywords",
+      "ref": "api:RefineTopicKeywords",
+      "description": "怎么用：话题下积累了新消息（如多轮 N:N 对话）后调用，重新提取并融合关键词。签名 RefineTopicKeywords(ctx context.Context, topicID string) error；topicID=话题 ID（16 位 hex）；调用 LLM 耗时较长；成功后重建该话题的 BM25 索引"
+    }
+  ]
+}

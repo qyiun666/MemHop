@@ -1,16 +1,16 @@
 {
   "format": "memhop-capability/v2",
   "name": "memhop-update",
-  "version": "1",
-  "type": "mcp",
+  "version": "2",
+  "type": "api",
   "summary": "Update 说明书：把 Agent 回复追加到指定 L2 主题（写入 L4 档案并刷新关键词与 BM25 索引）",
   "trigger": "需要把回复写回记忆、保存本轮回答时；update 回写 写入 保存 回复 write reply",
   "resources": [
     {
-      "type": "mcp",
-      "name": "memhop_update",
-      "ref": "memhop-mcp",
-      "description": "怎么用：每次生成回复后调用。参数 topic_id=Search 返回的 new_topic_id（16 位 hex）、text=Agent 回复原文、timestamp=Unix 毫秒；把回复追加到指定 L2 主题并刷新索引"
+      "type": "api",
+      "name": "Update",
+      "ref": "api:Update",
+      "description": "怎么用：每次生成回复后调用。签名 Update(topicID string, text string, timestamp int64) error；topicID=Search 返回的 NewTopicID（16 位 hex）、text=Agent 回复原文、timestamp=Unix 毫秒；把回复追加到指定 L2 主题并刷新索引"
     }
   ]
 }

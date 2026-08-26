@@ -317,7 +317,7 @@ func validateCapabilityImport(in *CapabilityImport) error {
 		return common.NewError(common.ErrInvalidQuery, "capability trigger or summary is required")
 	}
 	switch in.Type {
-	case core.CapabilityMCP, core.CapabilitySkill:
+	case core.CapabilityMCP, core.CapabilitySkill, core.CapabilityAPI:
 		if len(in.Resources) != 1 || in.Resources[0].Type != in.Type {
 			return common.NewError(common.ErrInvalidQuery,
 				"capability of type "+string(in.Type)+" requires exactly one resource of the same type")

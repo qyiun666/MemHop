@@ -1,0 +1,34 @@
+{
+  "format": "memhop-capability/v2",
+  "name": "memhop-profile",
+  "version": "2",
+  "type": "composite",
+  "summary": "L0 画像说明书：读取/更新宿主身份画像（角色、个性、偏好、专属词表、风格特征与情绪模式）",
+  "trigger": "需要查看或调整宿主画像、身份、偏好时；profile 画像 l0 身份 角色 偏好 性格 词表",
+  "resources": [
+    {
+      "type": "api",
+      "name": "GetL0",
+      "ref": "api:GetL0",
+      "description": "读取当前 L0 画像。签名 GetL0() (*ProfileSlot, error)；返回 Name/Role/Personality/Preferences/Lexicon/StyleTraits/EmotionPatterns"
+    },
+    {
+      "type": "api",
+      "name": "UpdateL0",
+      "ref": "api:UpdateL0",
+      "description": "整体更新 L0 画像（全量覆盖）。签名 UpdateL0(slot *ProfileSlot) error；缺省字段会被清空，更新前先 GetL0 当前值再回填；Preferences/Lexicon/EmotionPatterns 为键值对，StyleTraits 为字符串列表"
+    }
+  ],
+  "workflow": {
+    "steps": [
+      {
+        "ref": "GetL0",
+        "action": "需要画像信息或更新前读取当前值"
+      },
+      {
+        "ref": "UpdateL0",
+        "action": "全量回填后覆盖更新画像"
+      }
+    ]
+  }
+}
