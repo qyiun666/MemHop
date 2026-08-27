@@ -35,21 +35,24 @@ var DefaultMemHopDefaults = internal.DefaultMemHopDefaults
 // ---- internal-layer types (method signatures) ----
 
 type (
-	SearchQuery         = internal.SearchQuery
-	SearchResult        = internal.SearchResult
-	SceneContext        = internal.SceneContext
-	L3Graph             = internal.L3Graph
-	L3ImportItem        = internal.L3ImportItem
-	L3ImportMode        = internal.L3ImportMode
-	L3ImportResult      = internal.L3ImportResult
-	L3NodeQuery         = internal.L3NodeQuery
-	L3Subgraph          = internal.L3Subgraph
-	L4Query             = internal.L4Query
-	CapabilityListQuery = internal.CapabilityListQuery
-	CapabilityPatch     = internal.CapabilityPatch
-	CrystallizeResult   = internal.CrystallizeResult
-	CrystallizeDetail   = internal.CrystallizeDetail
-	TrajectoryStats     = internal.TrajectoryStats
+	SearchQuery              = internal.SearchQuery
+	SearchResult             = internal.SearchResult
+	SceneContext             = internal.SceneContext
+	L3Graph                  = internal.L3Graph
+	L3ImportItem             = internal.L3ImportItem
+	L3ImportMode             = internal.L3ImportMode
+	L3ImportResult           = internal.L3ImportResult
+	L3NodeQuery              = internal.L3NodeQuery
+	L3Subgraph               = internal.L3Subgraph
+	L4Query                  = internal.L4Query
+	CapabilityListQuery      = internal.CapabilityListQuery
+	CapabilityPatch          = internal.CapabilityPatch
+	CrystallizeResult        = internal.CrystallizeResult
+	CrystallizeDetail        = internal.CrystallizeDetail
+	TrajectoryStats          = internal.TrajectoryStats
+	TrajectorySessionSummary = internal.TrajectorySessionSummary
+	DreamReport              = internal.DreamReport
+	DreamStage               = internal.DreamStage
 )
 
 // ---- L3 import mode constants ----

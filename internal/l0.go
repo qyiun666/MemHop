@@ -6,6 +6,8 @@
 package internal
 
 import (
+	"context"
+
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -42,4 +44,18 @@ func (db *DB) UpdateL0(agentID uint64, slot *core.ProfileSlot) error {
 		return common.NewError(common.ErrInvalidQuery, "UpdateL0: slot is required")
 	}
 	return repo.UpdateProfileL0(db.engine, agentID, slot)
+}
+
+// DistillL0 runs only Dream's L0 distillation stage (LLM emotion/MBTI
+// refresh backfilled into L1), leaving L1/L2 untouched; a cheap refresh
+// entry after long conversations or profile edits. Skipped silently when
+// the domain has no profile samples.
+func (db *DB) DistillL0(ctx context.Context, agentID uint64) error {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return err
+	}
+	defer ac.mu.Unlock()
+	_, err = db.distillL0Stage(ctx, agentID)
+	return err
 }

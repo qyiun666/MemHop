@@ -161,9 +161,12 @@ func TestSurfaceClosedContract(t *testing.T) {
 func TestSurfaceDreamEmptyDomain(t *testing.T) {
 	db, _ := openSurfaceDB(t)
 	// A domain with no active scenes succeeds without doing work.
-	done, err := db.Dream(context.Background(), "")
-	if err != nil || !done {
-		t.Fatalf("dream on empty domain: done=%v err=%v", done, err)
+	rep, err := db.Dream(context.Background(), "")
+	if err != nil || rep == nil {
+		t.Fatalf("dream on empty domain: rep=%v err=%v", rep, err)
+	}
+	if rep.ConsolidatedScenes != 0 {
+		t.Fatalf("empty domain must not consolidate: %+v", rep)
 	}
 	// A directed dream on a nonexistent scene must parse-fail cleanly.
 	if _, err := db.Dream(context.Background(), "bad-hex"); CodeOf(err) != ErrInvalidQuery {

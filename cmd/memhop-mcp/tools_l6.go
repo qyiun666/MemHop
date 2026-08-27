@@ -78,8 +78,17 @@ func toTrajectorySlot(a trajectoryAppendArgs) (memhop.TrajectorySlot, error) {
 	}, nil
 }
 
-// registerTrajectoryReadTools installs read/stats/delete over one session.
+// registerTrajectoryReadTools installs the trajectory read surface:
+// per-session read/stats/delete plus the domain-wide session list.
 func registerTrajectoryReadTools(s *mcp.Server, db *memhop.Session) {
+	s.AddTool(&mcp.Tool{
+		Name:        "memhop_trajectory_sessions",
+		Description: "列出本租户全部 L6 轨迹会话（16 位 hex 会话 ID、事件数、最后追加时间），用于发现可结晶或可清理的会话。",
+		InputSchema: objSchema(nil),
+	}, handleNoArgs(func() ([]memhop.TrajectorySessionSummary, error) {
+		return db.ListTrajectorySessions()
+	}))
+
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_read",
 		Description: "读取会话的 L6 操作轨迹（按 Seq 升序）。",

@@ -66,8 +66,8 @@ func (s *Session) RefineTopicKeywords(ctx context.Context, topicID string) error
 
 // Dream runs the consolidation pipeline over the given scene (or all active
 // scenes when sceneID is empty); RunDream takes the domain lock itself and
-// reports success without work when the domain has no active scenes.
-func (s *Session) Dream(ctx context.Context, sceneID string) (bool, error) {
+// returns a zero-valued report when the domain has no active scenes.
+func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, error) {
 	return s.db.RunDream(ctx, s.agentID, sceneID)
 }
 
@@ -79,6 +79,13 @@ func (s *Session) GetL0() (*ProfileSlot, error) {
 
 func (s *Session) UpdateL0(slot *ProfileSlot) error {
 	return s.db.UpdateL0(s.agentID, slot)
+}
+
+// DistillL0 runs only Dream's L0 distillation stage (emotion/MBTI),
+// leaving L1/L2 untouched; skipped silently when the domain has no
+// profile samples.
+func (s *Session) DistillL0(ctx context.Context) error {
+	return s.db.DistillL0(ctx, s.agentID)
 }
 
 // ---- L2 scenes/topics ----
@@ -202,6 +209,19 @@ func (s *Session) TrajectoryStats(sessionID string) (*TrajectoryStats, error) {
 
 func (s *Session) DeleteTrajectory(sessionID string) error {
 	return s.db.DeleteTrajectory(s.agentID, sessionID)
+}
+
+// ListTrajectorySessions summarizes the domain's L6 sessions (steps and
+// last-append time each); the returned hex IDs feed DeleteTrajectory /
+// PruneTrajectory / Crystallize directly.
+func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
+	return s.db.ListTrajectorySessions(s.agentID)
+}
+
+// PruneTrajectory batch-deletes trajectory events older than the Unix-ms
+// cutoff and reports how many were removed.
+func (s *Session) PruneTrajectory(before int64) (int, error) {
+	return s.db.PruneTrajectory(s.agentID, before)
 }
 
 func (s *Session) Crystallize(ctx context.Context, sessionID string) (*CrystallizeResult, error) {

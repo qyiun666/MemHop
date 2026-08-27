@@ -14,26 +14,29 @@ import (
 )
 
 type (
-	SearchQuery         = core.SearchQuery
-	SearchResult        = core.SearchResult
-	SceneMessage        = core.SceneMessage
-	SceneContextTopic   = core.SceneContextTopic
-	SceneContext        = core.SceneContext
-	L3Graph             = core.L3Graph
-	L3ImportItem        = core.L3ImportItem
-	L3ImportResult      = core.L3ImportResult
-	L3ImportMode        = core.L3ImportMode
-	L3NodeQuery         = core.L3NodeQuery
-	L3Subgraph          = core.L3Subgraph
-	L4Query             = core.L4Query
-	CapabilityImport    = core.CapabilityImport
-	CapabilityPatch     = core.CapabilityPatch
-	CapabilityListQuery = core.CapabilityListQuery
-	TrajectoryStats     = core.TrajectoryStats
-	CrystallizeResult   = core.CrystallizeResult
-	CrystallizeDetail   = core.CrystallizeDetail
-	SceneHit            = core.SceneHit
-	ScoredTopic         = core.ScoredTopic
+	SearchQuery              = core.SearchQuery
+	SearchResult             = core.SearchResult
+	SceneMessage             = core.SceneMessage
+	SceneContextTopic        = core.SceneContextTopic
+	SceneContext             = core.SceneContext
+	L3Graph                  = core.L3Graph
+	L3ImportItem             = core.L3ImportItem
+	L3ImportResult           = core.L3ImportResult
+	L3ImportMode             = core.L3ImportMode
+	L3NodeQuery              = core.L3NodeQuery
+	L3Subgraph               = core.L3Subgraph
+	L4Query                  = core.L4Query
+	CapabilityImport         = core.CapabilityImport
+	CapabilityPatch          = core.CapabilityPatch
+	CapabilityListQuery      = core.CapabilityListQuery
+	TrajectoryStats          = core.TrajectoryStats
+	TrajectorySessionSummary = core.TrajectorySessionSummary
+	DreamReport              = core.DreamReport
+	DreamStage               = core.DreamStage
+	CrystallizeResult        = core.CrystallizeResult
+	CrystallizeDetail        = core.CrystallizeDetail
+	SceneHit                 = core.SceneHit
+	ScoredTopic              = core.ScoredTopic
 
 	// LLM capability contracts (prompt inputs / parsed outputs) live in the
 	// llmops capability package.

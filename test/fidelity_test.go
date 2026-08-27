@@ -293,11 +293,11 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	t.Logf("ingesting %d related utterances into one scene", len(related))
 	ingestSameScene(t, db, related, base)
 
-	compressed, err := db.Dream(context.Background(), "")
+	rep, err := db.Dream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
-	t.Logf("Dream compressed=%v", compressed)
+	t.Logf("Dream consolidated=%d compressed_groups=%d stages=%d", rep.ConsolidatedScenes, rep.L2TopicsCompressed, len(rep.Stages))
 
 	// After Dream, retrieve on the theme and inspect the keywords now returned.
 	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "我的跑步习惯是怎样的", Timestamp: base + 60000})

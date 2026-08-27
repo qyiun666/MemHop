@@ -38,19 +38,37 @@ func TestInterfaceDream(t *testing.T) {
 		t.Fatalf("Search #2: %v", err)
 	}
 
-	ok, err := db.Dream(context.Background(), "")
+	rep, err := db.Dream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
-	if !ok {
-		t.Fatal("Dream should report progress")
+	if rep == nil || rep.ConsolidatedScenes < 1 || rep.L2TopicsCompressed < 1 {
+		t.Fatalf("Dream should consolidate the active scene: %+v", rep)
 	}
 	if llm.calls["consolidate"] < 1 {
 		t.Fatal("Dream should call consolidate on the active scene")
 	}
+	// Stage timeline covers the full pipeline, distillation included.
+	if len(rep.Stages) == 0 {
+		t.Fatal("Dream report must carry stage records")
+	}
+	for _, st := range []string{"l2_compress", "l0_distill"} {
+		found := false
+		for _, s := range rep.Stages {
+			if s.Name == st && s.Status == "ok" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("report missing ok stage %s: %+v", st, rep.Stages)
+		}
+	}
 	// L1 nodes were synced from L2 during Dream, so the distill stage runs.
 	if llm.calls["distill"] < 1 {
 		t.Fatal("Dream should call distill for L0 profile")
+	}
+	if !rep.L0Updated {
+		t.Fatalf("distill ran and merged; L0Updated must hold: %+v", rep)
 	}
 	// Distill output was merged into the L0 profile.
 	profile, err := db.GetL0()
@@ -65,8 +83,8 @@ func TestInterfaceDream(t *testing.T) {
 	if _, err := db.Dream(context.Background(), "zz"); err == nil {
 		t.Fatal("Dream with invalid scene_id should error")
 	}
-	if ok, err := db.Dream(context.Background(), sceneID); err != nil || !ok {
-		t.Fatalf("directed Dream on scene %s: ok=%v err=%v", sceneID, ok, err)
+	if _, err := db.Dream(context.Background(), sceneID); err != nil {
+		t.Fatalf("directed Dream on scene %s: err=%v", sceneID, err)
 	}
 }
 

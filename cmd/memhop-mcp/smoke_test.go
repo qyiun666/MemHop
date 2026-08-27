@@ -28,13 +28,13 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 32 tools on the alice session.
+	// tools/list exposes all 33 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 32 {
-		t.Errorf("expected 32 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 33 {
+		t.Errorf("expected 33 tools, got %d", len(tools.Tools))
 	}
 	names := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {

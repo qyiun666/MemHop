@@ -136,12 +136,14 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 	}
 
 	// Phase 2: Dream consolidation (LLM merge of the 24 same-topic turns).
-	ok, err := db.Dream(context.Background(), "")
+	rep, err := db.Dream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("dream: %v", err)
 	}
-	if !ok {
-		t.Logf("dream reported no consolidation (no active scenes or below threshold)")
+	if rep == nil || rep.ConsolidatedScenes == 0 {
+		t.Logf("dream reported no consolidation (no active scenes or below threshold): %+v", rep)
+	} else {
+		t.Logf("dream consolidated %d scene(s), compressed %d topic group(s)", rep.ConsolidatedScenes, rep.L2TopicsCompressed)
 	}
 
 	// Phase 2.5: post-Dream L0/L1 consistency — profile still readable, the

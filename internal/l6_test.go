@@ -58,6 +58,53 @@ func TestAppendTrajectoryPayloadTruncated(t *testing.T) {
 	}
 }
 
+func TestListAndPruneTrajectorySessions(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	a, b := common.FormatHash(11), common.FormatHash(22)
+	appendOne := func(id string, ts int64) {
+		if err := db.AppendTrajectory(core.DefaultAgentID, id, core.TrajectorySlot{EventType: "turn_start", Timestamp: ts}); err != nil {
+			t.Fatalf("append %s: %v", id, err)
+		}
+	}
+	appendOne(a, 100)
+	appendOne(a, 900)
+	appendOne(b, 500)
+
+	list, err := db.ListTrajectorySessions(core.DefaultAgentID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("want 2 sessions, got %+v", list)
+	}
+	byID := make(map[string]core.TrajectorySessionSummary, len(list))
+	for _, sum := range list {
+		byID[sum.SessionID] = sum
+	}
+	if sum := byID[a]; sum.Steps != 2 || sum.LastAppendAt != 900 {
+		t.Fatalf("session a summary mismatch: %+v", sum)
+	}
+	if sum := byID[b]; sum.Steps != 1 || sum.LastAppendAt != 500 {
+		t.Fatalf("session b summary mismatch: %+v", sum)
+	}
+
+	pruned, err := db.PruneTrajectory(core.DefaultAgentID, 550)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if pruned != 2 {
+		t.Fatalf("pruned = %d, want 2 (a@100, b@500)", pruned)
+	}
+	list, err = db.ListTrajectorySessions(core.DefaultAgentID)
+	if err != nil || len(list) != 1 || list[0].SessionID != a {
+		t.Fatalf("only session a survives: %+v err=%v", list, err)
+	}
+	events, err := db.ReadTrajectory(core.DefaultAgentID, b)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("pruned session must read empty: %+v err=%v", events, err)
+	}
+}
+
 func TestDeleteTrajectorySub(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(77)

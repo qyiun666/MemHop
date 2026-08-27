@@ -136,6 +136,15 @@ type TrajectoryStats struct {
 	LastAppendAt int64          `json:"last_append_at"` // 最后事件时间戳（Unix 毫秒）
 }
 
+// TrajectorySessionSummary is one L6 session's footprint; SessionID is the
+// external 16-hex form so it feeds ReadTrajectory / DeleteTrajectory /
+// Crystallize directly.
+type TrajectorySessionSummary struct {
+	SessionID    string `json:"session_id"`     // 16 位 hex
+	Steps        int    `json:"steps"`          // 事件总数
+	LastAppendAt int64  `json:"last_append_at"` // 最近事件时间戳（Unix 毫秒）
+}
+
 // CrystallizeResult reports L5 capabilities created/reused/merged from a
 // trajectory. Crystallized capabilities are drafts until the host activates
 // them.
@@ -154,6 +163,27 @@ type CrystallizeDetail struct {
 	Action       string `json:"action"`                  // create | reuse | merge | skip
 	CapabilityID string `json:"capability_id,omitempty"` // 16 位 hex；skip 时为空
 	Reason       string `json:"reason,omitempty"`        // skipped_reason（validate 失败原因）
+}
+
+// DreamStage is one pipeline phase's outcome inside a DreamReport.
+type DreamStage struct {
+	Name       string `json:"name"`   // l2_compress/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_profile/l0_distill
+	Status     string `json:"status"` // ok | skipped | cancelled | error
+	DurationMs int64  `json:"duration_ms"`
+}
+
+// DreamReport is Dream's structured result for host observability; counts
+// describe what this pass actually did. On mid-pipeline failures the
+// partially filled report is returned together with the error.
+type DreamReport struct {
+	ConsolidatedScenes int          `json:"consolidated_scenes"` // 场景数（≥1 个合并组生效）
+	L2TopicsCompressed int          `json:"l2_topics_compressed"`
+	L1NodesAdded       int          `json:"l1_nodes_added"`   // 同步创建/更新的场景节点
+	L1EdgesAdded       int          `json:"l1_edges_added"`   // 新建超边
+	L1NodesRemoved     int          `json:"l1_nodes_removed"` // 陈旧重建 + 衰减移除
+	L1EdgesRemoved     int          `json:"l1_edges_removed"`
+	L0Updated          bool         `json:"l0_updated"` // 本轮执行了情感/MBTI 蒸馏并回写
+	Stages             []DreamStage `json:"stages,omitempty"`
 }
 
 // SceneHit is the retrieval result: the winning scene, its aggregated

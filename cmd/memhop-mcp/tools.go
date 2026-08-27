@@ -204,7 +204,7 @@ func arrProp(desc, itemType string) map[string]any {
 	return map[string]any{"type": "array", "items": map[string]any{"type": itemType}, "description": desc}
 }
 
-// registerTools attaches all 32 tools to the server for one tenant DB.
+// registerTools attaches all 33 tools to the server for one tenant DB.
 func registerTools(s *mcp.Server, db *memhop.Session) {
 	registerCoreTools(s, db)
 	registerL2Tools(s, db)

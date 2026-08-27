@@ -32,7 +32,8 @@ type dreamArgs struct {
 }
 
 type dreamResult struct {
-	Consolidated bool `json:"consolidated"`
+	Consolidated bool                `json:"consolidated"`
+	Report       *memhop.DreamReport `json:"report,omitempty"`
 }
 
 type statusResult struct {
@@ -93,13 +94,18 @@ func registerUpdateTool(s *mcp.Server, db *memhop.Session) {
 func registerDreamTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_dream",
-		Description: "对指定场景执行梦境巩固（睡眠模拟）：L2 话题压缩融合、L1 节点同步、衰减与 L0 画像蒸馏。耗时较长；返回是否实际发生了巩固。",
+		Description: "对指定场景执行梦境巩固（睡眠模拟）：L2 话题压缩融合、L1 节点同步、衰减与 L0 画像蒸馏。耗时较长；返回是否实际发生巩固（consolidated）与结构化报告 report（各阶段名称/状态/耗时、L2 压缩计数、L1 增删计数、L0 是否蒸馏）。",
 		InputSchema: objSchema(map[string]any{
 			"scene_id": strProp("场景 ID（16 位 hex），必填"),
 		}, "scene_id"),
 	}, handle[dreamArgs, dreamResult](func(a dreamArgs) (dreamResult, error) {
-		ok, err := db.Dream(context.Background(), a.SceneID)
-		return dreamResult{Consolidated: ok}, err
+		rep, err := db.Dream(context.Background(), a.SceneID)
+		out := dreamResult{}
+		if rep != nil {
+			out.Consolidated = rep.ConsolidatedScenes > 0
+			out.Report = rep
+		}
+		return out, err
 	}))
 }
 

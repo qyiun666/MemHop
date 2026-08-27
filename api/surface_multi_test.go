@@ -83,8 +83,8 @@ func TestSurfaceMultiAgent(t *testing.T) {
 		t.Fatal("alice must see her own scene")
 	}
 	// Empty-scene dream succeeds via the session handle.
-	if done, err := bobSess.Dream(context.Background(), ""); err != nil || !done {
-		t.Fatalf("bob empty dream: done=%v err=%v", done, err)
+	if rep, err := bobSess.Dream(context.Background(), ""); err != nil || rep == nil {
+		t.Fatalf("bob empty dream: rep=%v err=%v", rep, err)
 	}
 	if err := m.DeleteAgent(alice); err != nil {
 		t.Fatalf("delete alice: %v", err)

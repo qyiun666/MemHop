@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L6 operation trajectory operations: host-appended event log per session.
-// Short-lived by design; purged by the host via DeleteTrajectory (Dream
-// does not participate in L6).
+// Short-lived by design; purged by the host via DeleteTrajectory or
+// PruneTrajectoryBefore (Dream does not participate in L6).
 package repo
 
 import (
@@ -54,4 +54,54 @@ func DeleteTrajectory(engine *core.StorageEngine, agentID uint64, sessionID uint
 	}
 	_, err := engine.DeleteRecordBatch(agentID, targets)
 	return err
+}
+
+// ListTrajectorySessions summarizes every session of the domain's L6 log
+// (event count and latest timestamp each), sorted by external hex id for a
+// deterministic order.
+func ListTrajectorySessions(engine *core.StorageEngine, agentID uint64) ([]core.TrajectorySessionSummary, error) {
+	type agg struct {
+		steps int
+		last  int64
+	}
+	bySession := make(map[uint64]agg)
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		a := bySession[ev.SessionID]
+		a.steps++
+		if ev.Timestamp > a.last {
+			a.last = ev.Timestamp
+		}
+		bySession[ev.SessionID] = a
+	}
+	out := make([]core.TrajectorySessionSummary, 0, len(bySession))
+	for sid, a := range bySession {
+		out = append(out, core.TrajectorySessionSummary{
+			SessionID:    common.FormatHash(sid),
+			Steps:        a.steps,
+			LastAppendAt: a.last,
+		})
+	}
+	slices.SortFunc(out, func(x, y core.TrajectorySessionSummary) int {
+		return cmp.Compare(x.SessionID, y.SessionID)
+	})
+	return out, nil
+}
+
+// PruneTrajectoryBefore deletes events strictly older than before (Unix ms)
+// across every session of the domain and returns how many were removed;
+// newer events are untouched.
+func PruneTrajectoryBefore(engine *core.StorageEngine, agentID uint64, before int64) (int, error) {
+	var targets []uint64
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		if ev.Timestamp < before {
+			targets = append(targets, ev.IDHash)
+		}
+	}
+	if len(targets) == 0 {
+		return 0, nil
+	}
+	if _, err := engine.DeleteRecordBatch(agentID, targets); err != nil {
+		return 0, common.NewError(common.ErrIO, "prune trajectory", err)
+	}
+	return len(targets), nil
 }

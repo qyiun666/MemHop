@@ -290,10 +290,11 @@ type WorkflowStep struct {
 }
 
 // TrajectorySlot is an L6 operation trajectory event appended by the host
-// during the agent loop; short-lived, purged by the host via DeleteTrajectory.
+// during the agent loop; short-lived, purged by the host via DeleteTrajectory
+// or PruneTrajectoryBefore.
 type TrajectorySlot struct {
 	IDHash    uint64  `json:"id_hash"`          // hash(sessionID:seq)
-	SessionID uint64  `json:"session_id"`       // owning L2 scene
+	SessionID uint64  `json:"session_id"`       // host-chosen trajectory session key (parsed from the api's 16-hex id)
 	Seq       uint64  `json:"seq"`              // per-session increasing sequence
 	EventType string  `json:"event_type"`       // turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end
 	Payload   string  `json:"payload"`          // event content (truncated to 4KB; no raw token stream)

@@ -5,6 +5,7 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -23,50 +24,68 @@ import (
 // L2 compression on the given scene (or all active scenes when sceneID is
 // empty), then L1 rebuild/decay, L0 profile/distill; rebuilt sparse and
 // L2Meta indexes are installed into the agent context. Any stage failure
-// returns an error. The whole pipeline holds the domain lock, so same-agent
-// operations wait while different agents run in parallel.
-func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID string) (bool, error) {
+// returns an error together with the partially filled DreamReport. The whole
+// pipeline holds the domain lock, so same-agent operations wait while
+// different agents run in parallel.
+func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID string) (*DreamReport, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	defer ac.mu.Unlock()
-	// Re-check closed: Close may have completed while the lock was waited
-	// for; RunDream must not write to a closed engine.
-	if db.closed.Load() {
-		return false, common.NewError(common.ErrClosed, "database is closed")
-	}
 
 	scenes, err := dreamSceneSet(ac, sceneID)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if sceneID == "" && len(scenes) == 0 {
 		// Nothing to consolidate: decide under the domain lock so a scene
 		// registered by a racing Update is never missed (check-then-act).
-		return true, nil
+		return &DreamReport{}, nil
 	}
 
-	// Stage 1: one goroutine per scene compresses L2 (writes only;
-	// indexes rebuilt at the end). Scenes with at least one merged group
-	// leave the in-memory active set here; Search re-activates them.
-	succeeded, failures := db.compressActiveScenes(ctx, ac, scenes)
+	rep := &DreamReport{}
+	start := time.Now()
+	succeeded, failures := db.compressActiveScenes(ctx, ac, scenes, rep)
 	if len(succeeded) == 0 && failures > 0 {
-		return false, fmt.Errorf("dream: LLM consolidation failed for all scenes")
+		err = errors.New("dream: LLM consolidation failed for all scenes")
+		appendStage(rep, "l2_compress", start, err)
+		return rep, err
 	}
-	if err := db.stageCancelled(ctx, "l2_compress"); err != nil {
-		return false, err
+	rep.ConsolidatedScenes = len(succeeded)
+	appendStage(rep, "l2_compress", start, db.stageCancelled(ctx, "l2_compress"))
+	if cerr := ctx.Err(); cerr != nil {
+		return rep, fmt.Errorf("dream: cancelled after l2_compress stage: %w", cerr)
 	}
 	// Drop compressed scenes so Dream does not spin empty goroutines.
 	// Scenes skipped below the compress threshold stay active for the
 	// next Dream; Search re-activates a compressed scene on its next hit.
 	ac.dropActiveScenes(succeeded)
 
-	if err := db.dreamStructureStages(ctx, agentID, ac); err != nil {
-		return false, err
+	if err := db.dreamStructureStages(ctx, agentID, ac, rep); err != nil {
+		return rep, err
 	}
 	ac.lastDreamAt.Store(time.Now().UnixMilli()) // direct store: peekContext would take agentsMu under ac.mu (lock-order cycle)
-	return true, nil
+	return rep, nil
+}
+
+// stageStatus classifies a stage outcome into a report status string:
+// ok / cancelled (context errors) / error.
+func stageStatus(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded):
+		return "cancelled"
+	default:
+		return "error"
+	}
+}
+
+// appendStage records one pipeline phase's outcome and wall time in the
+// report; a non-nil err is classified cancelled-vs-error via context errors.
+func appendStage(rep *DreamReport, name string, start time.Time, err error) {
+	rep.Stages = append(rep.Stages, DreamStage{Name: name, Status: stageStatus(err), DurationMs: time.Since(start).Milliseconds()})
 }
 
 // dreamSceneSet resolves the target scenes of one pass: an explicit hex
@@ -85,7 +104,8 @@ func dreamSceneSet(ac *agentContext, sceneID string) ([]uint64, error) {
 // dreamStructureStages runs stages 2 through 6 of the pipeline: index
 // rebuild, L1 sync/edges/rebuild/decay, L0 profile/distill, then installs
 // the rebuilt indexes into the agent context.
-func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agentContext) error {
+func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agentContext, rep *DreamReport) error {
+	start := time.Now()
 	// Stage 2: rebuild retrieval indexes (sparse/L2Meta) in one scan of the
 	// agent domain.
 	newSparse, newL2Meta := index.RebuildSearchIndexes(db.engine, agentID)
@@ -101,23 +121,41 @@ func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agen
 	// Stage 2.5: L6 usage feedback — adjust L1 importance from scene-level
 	// retrieval usage so the rebuild/decay below reflects actual usage.
 	db.applyUsageFeedback(agentID)
+	appendStage(rep, "index_rebuild", start, nil)
 
-	// Stages 2.25 to 4: L1 write/update/rebuild/decay.
-	if err := db.dreamL1Stages(ctx, agentID, newL2Meta, &decayParams); err != nil {
+	if err := db.dreamL1Stages(ctx, agentID, newL2Meta, &decayParams, rep); err != nil {
 		return err
 	}
 
 	// Stage 5: L0 profile rebuild.
-	if err := profile.Generate(db.engine, agentID, newSparse); err != nil {
-		return err
+	start = time.Now()
+	pErr := profile.Generate(db.engine, agentID, newSparse)
+	cErr := pErr
+	if cErr == nil {
+		cErr = db.stageCancelled(ctx, "l0_profile")
 	}
-	if err := db.stageCancelled(ctx, "l0_profile"); err != nil {
-		return err
+	appendStage(rep, "l0_profile", start, cErr)
+	if pErr != nil {
+		return pErr
+	}
+	if cErr != nil {
+		return cErr
 	}
 
 	// Stage 6: L0 distillation (LLM emotion/MBTI, backfilled into L1).
-	if err := db.distillL0Stage(ctx, agentID); err != nil {
-		return err
+	start = time.Now()
+	ran, dErr := db.distillL0Stage(ctx, agentID)
+	status := stageStatus(dErr)
+	if dErr == nil {
+		if ran {
+			rep.L0Updated = true
+		} else {
+			status = "skipped"
+		}
+	}
+	rep.Stages = append(rep.Stages, DreamStage{Name: "l0_distill", Status: status, DurationMs: time.Since(start).Milliseconds()})
+	if dErr != nil {
+		return dErr
 	}
 
 	// Final: install the rebuilt indexes into the agent context.
@@ -131,26 +169,61 @@ func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agen
 // nodes removed below), co-occurrence hyperedges (keyword-overlap Jaccard
 // >= L1EdgeMinSimilarity; fresh edges decayed like every other edge),
 // stale-node rebuild and finally time decay.
-func (db *DB) dreamL1Stages(ctx context.Context, agentID uint64, newL2Meta *index.L2MetaIndex, decayParams *engram.DecayParams) error {
-	if _, err := repo.SyncL1NodesFromL2(db.engine, agentID); err != nil {
+func (db *DB) dreamL1Stages(ctx context.Context, agentID uint64, newL2Meta *index.L2MetaIndex, decayParams *engram.DecayParams, rep *DreamReport) error {
+	start := time.Now()
+	synced, err := repo.SyncL1NodesFromL2(db.engine, agentID)
+	if err != nil {
+		appendStage(rep, "l1_nodes", start, err)
 		return err
 	}
-	if _, err := engram.BuildHyperedges(db.engine, agentID, l1EdgeMinSimilarity); err != nil {
+	rep.L1NodesAdded += synced
+	appendStage(rep, "l1_nodes", start, nil)
+
+	start = time.Now()
+	added, err := engram.BuildHyperedges(db.engine, agentID, l1EdgeMinSimilarity)
+	cErr := err
+	if cErr == nil {
+		cErr = db.stageCancelled(ctx, "l1_hyperedges")
+	}
+	rep.L1EdgesAdded += added
+	appendStage(rep, "l1_hyperedges", start, cErr)
+	if err != nil || cErr != nil {
+		if err != nil {
+			return err
+		}
+		return cErr
+	}
+
+	start = time.Now()
+	removedIDs, err := engram.RebuildFromL2(db.engine, agentID, newL2Meta, decayParams)
+	cErr = err
+	if cErr == nil {
+		cErr = db.stageCancelled(ctx, "l1_rebuild")
+	}
+	rep.L1NodesRemoved += len(removedIDs)
+	appendStage(rep, "l1_rebuild", start, cErr)
+	if err != nil {
 		return err
 	}
-	if err := db.stageCancelled(ctx, "l1_hyperedges"); err != nil {
+	if cErr != nil {
+		return cErr
+	}
+
+	start = time.Now()
+	report, err := engram.DecayNetwork(db.engine, agentID, newL2Meta, decayParams)
+	if report != nil {
+		rep.L1NodesRemoved += report.RemovedNodes
+		rep.L1EdgesRemoved += report.RemovedEdges
+	}
+	cErr = err
+	if cErr == nil {
+		cErr = db.stageCancelled(ctx, "l1_decay")
+	}
+	appendStage(rep, "l1_decay", start, cErr)
+	if err != nil {
 		return err
 	}
-	if _, err := engram.RebuildFromL2(db.engine, agentID, newL2Meta, decayParams); err != nil {
-		return err
-	}
-	if err := db.stageCancelled(ctx, "l1_rebuild"); err != nil {
-		return err
-	}
-	if _, err := engram.DecayNetwork(db.engine, agentID, newL2Meta, decayParams); err != nil {
-		return err
-	}
-	return db.stageCancelled(ctx, "l1_decay")
+	return cErr
 }
 
 // triggerSceneDream schedules one scene's Dream in the background so the
@@ -183,9 +256,10 @@ func (db *DB) triggerSceneDream(ac *agentContext, sceneID uint64) {
 
 // compressActiveScenes runs one goroutine per scene: reads depth-1 topics,
 // asks the LLM for merge groups and applies them; returns the set of scenes
-// that had at least one group applied and the LLM failure count. All scenes
-// belong to ac's domain; cross-agent merging is structurally impossible.
-func (db *DB) compressActiveScenes(ctx context.Context, ac *agentContext, scenes []uint64) (map[uint64]struct{}, int) {
+// that had at least one group applied and the LLM failure count. Applied
+// groups accumulate into rep.L2TopicsCompressed under mu. All scenes belong
+// to ac's domain; cross-agent merging is structurally impossible.
+func (db *DB) compressActiveScenes(ctx context.Context, ac *agentContext, scenes []uint64, rep *DreamReport) (map[uint64]struct{}, int) {
 	var (
 		wg        sync.WaitGroup
 		mu        sync.Mutex
@@ -221,6 +295,7 @@ func (db *DB) compressActiveScenes(ctx context.Context, ac *agentContext, scenes
 			if applied := db.applyGroups(ctx, ac.id, sceneID, topics, out); applied > 0 {
 				mu.Lock()
 				succeeded[sceneID] = struct{}{}
+				rep.L2TopicsCompressed += int(applied)
 				mu.Unlock()
 			}
 		}(sid)
@@ -313,10 +388,10 @@ func (db *DB) groupTimestamps(nodeHashes []uint64, byID map[uint64]core.TopicSlo
 	return minTS, maxTS, ok
 }
 
-func (db *DB) distillL0Stage(ctx context.Context, agentID uint64) error {
+func (db *DB) distillL0Stage(ctx context.Context, agentID uint64) (bool, error) {
 	samples, _ := profile.Samples(db.engine, agentID)
 	if len(samples) == 0 {
-		return nil
+		return false, nil
 	}
 	llmSamples := make([]L1Sample, len(samples))
 	for i, s := range samples {
@@ -324,12 +399,12 @@ func (db *DB) distillL0Stage(ctx context.Context, agentID uint64) error {
 	}
 	out, err := llmops.Distill(ctx, db.llm, llmSamples)
 	if err != nil {
-		return err
+		return false, err
 	}
 	emo := core.EmotionScore{Valence: out.Emotion.Valence, Arousal: out.Emotion.Arousal, Dominance: out.Emotion.Dominance}
 	mbti := core.MBTIScore{IE: out.MBTI.IE, NS: out.MBTI.NS, TF: out.MBTI.TF, JP: out.MBTI.JP, Type: out.MBTI.Type}
 	if err := profile.MergeDistill(db.engine, agentID, emo, mbti); err != nil {
-		return err
+		return false, err
 	}
 	perNode := make(map[uint64]core.NodeEmotion, len(out.PerNode))
 	for _, n := range out.PerNode {
@@ -339,8 +414,10 @@ func (db *DB) distillL0Stage(ctx context.Context, agentID uint64) error {
 		}
 		perNode[id] = core.NodeEmotion{Valence: n.Valence, Arousal: n.Arousal}
 	}
-	repo.BackfillL1Emotions(db.engine, agentID, perNode)
-	return nil
+	if _, err := repo.BackfillL1Emotions(db.engine, agentID, perNode); err != nil {
+		return false, fmt.Errorf("distill l0: backfill l1 emotions: %w", err)
+	}
+	return true, nil
 }
 
 // applyUsageFeedback adjusts L1 node importance from scene usage stats

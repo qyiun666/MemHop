@@ -55,6 +55,81 @@ func TestDeleteTrajectory(t *testing.T) {
 	}
 }
 
+func TestListTrajectorySessionsGroupsBySession(t *testing.T) {
+	engine := tempEngine(t)
+	append := func(sid, seq uint64, ts int64) {
+		if err := AppendTrajectory(engine, core.DefaultAgentID, core.TrajectorySlot{SessionID: sid, Seq: seq, EventType: "turn_start", Timestamp: ts}); err != nil {
+			t.Fatalf("append %d/%d: %v", sid, seq, err)
+		}
+	}
+	append(7, 1, 100)
+	append(7, 2, 250)
+	append(8, 1, 300)
+
+	list, err := ListTrajectorySessions(engine, core.DefaultAgentID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("want 2 sessions, got %+v", list)
+	}
+	if list[0].SessionID != common.FormatHash(7) || list[0].Steps != 2 || list[0].LastAppendAt != 250 {
+		t.Fatalf("session 7 summary mismatch: %+v", list[0])
+	}
+	if list[1].SessionID != common.FormatHash(8) || list[1].Steps != 1 || list[1].LastAppendAt != 300 {
+		t.Fatalf("session 8 summary mismatch: %+v", list[1])
+	}
+}
+
+func TestListTrajectorySessionsEmptyDomain(t *testing.T) {
+	engine := tempEngine(t)
+	list, err := ListTrajectorySessions(engine, core.DefaultAgentID)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("want 0 sessions, got %+v", list)
+	}
+}
+
+func TestPruneTrajectoryBeforeDeletesOlderEvents(t *testing.T) {
+	engine := tempEngine(t)
+	append := func(sid, seq uint64, ts int64) {
+		if err := AppendTrajectory(engine, core.DefaultAgentID, core.TrajectorySlot{SessionID: sid, Seq: seq, EventType: "turn_start", Timestamp: ts}); err != nil {
+			t.Fatalf("append %d/%d: %v", sid, seq, err)
+		}
+	}
+	append(5, 1, 100)
+	append(5, 2, 200)
+	append(6, 1, 300)
+
+	n, err := PruneTrajectoryBefore(engine, core.DefaultAgentID, 200)
+	if err != nil {
+		t.Fatalf("prune: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("pruned = %d, want 1 (only ts<200)", n)
+	}
+	events, err := ReadTrajectory(engine, core.DefaultAgentID, 5)
+	if err != nil || len(events) != 1 || events[0].Timestamp != 200 {
+		t.Fatalf("session 5 after prune: %+v err=%v", events, err)
+	}
+	if other, err := ReadTrajectory(engine, core.DefaultAgentID, 6); err != nil || len(other) != 1 {
+		t.Fatalf("session 6 must survive: %+v err=%v", other, err)
+	}
+
+	n, err = PruneTrajectoryBefore(engine, core.DefaultAgentID, 10_000)
+	if err != nil || n != 2 {
+		t.Fatalf("second prune = %d err=%v, want 2", n, err)
+	}
+	if left, err := ReadTrajectory(engine, core.DefaultAgentID, 6); err != nil || len(left) != 0 {
+		t.Fatalf("session 6 should be empty: %+v err=%v", left, err)
+	}
+	if list, err := ListTrajectorySessions(engine, core.DefaultAgentID); err != nil || len(list) != 0 {
+		t.Fatalf("post-prune list = %+v err=%v, want empty", list, err)
+	}
+}
+
 func TestUpsertCapabilityL5PersistsDefinition(t *testing.T) {
 	engine := tempEngine(t)
 	cfg := `{"endpoint":"http://localhost:9000"}`

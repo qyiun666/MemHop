@@ -95,6 +95,28 @@ func (db *DB) DeleteTrajectory(agentID uint64, sessionID string) error {
 	return repo.DeleteTrajectory(db.engine, agentID, parsed)
 }
 
+// ListTrajectorySessions summarizes every session of the domain's L6 log
+// under the domain lock (same serialization contract as Append).
+func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSummary, error) {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer ac.mu.Unlock()
+	return repo.ListTrajectorySessions(db.engine, agentID)
+}
+
+// PruneTrajectory deletes trajectory events older than the given Unix-ms
+// cutoff across all sessions of this domain, reporting the removed count.
+func (db *DB) PruneTrajectory(agentID uint64, before int64) (int, error) {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return 0, err
+	}
+	defer ac.mu.Unlock()
+	return repo.PruneTrajectoryBefore(db.engine, agentID, before)
+}
+
 // Crystallize extracts L5 capability candidates from a session's trajectory
 // (L6 → L5). The LLM receives the existing capability catalog so repeated
 // crystallization reuses or merges instead of duplicating. The whole pipeline

@@ -61,8 +61,8 @@ func TestReproDreamConsolidate(t *testing.T) {
 
 	// Full pipeline on a copy: exercises L2 consolidation (LLM), index
 	// rebuild, L1 sync/decay, L0 profile + distillation (LLM) end to end.
-	ok, err := db.RunDream(context.Background(), core.DefaultAgentID, "")
-	t.Logf("RunDream(all): ok=%v err=%v", ok, err)
+	rep, err := db.RunDream(context.Background(), core.DefaultAgentID, "")
+	t.Logf("RunDream(all): rep=%+v err=%v", rep, err)
 
 	dumpSceneContext(t, db, cfg, "after dream")
 

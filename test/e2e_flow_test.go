@@ -83,13 +83,14 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	t.Logf("L4 archives for topic: %d", len(archives))
 
 	// 5. Dream: consolidate active scenes (L2 compression + L1 rebuild/decay).
-	ok, err := db.Dream(context.Background(), "")
+	rep, err := db.Dream(context.Background(), "")
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
-	if !ok {
-		t.Fatal("Dream returned ok=false")
+	if rep == nil {
+		t.Fatal("Dream returned nil report")
 	}
+	t.Logf("dream report: consolidated=%d compressed=%d stages=%d", rep.ConsolidatedScenes, rep.L2TopicsCompressed, len(rep.Stages))
 
 	// 6. After dream the DB must still be readable.
 	res3, err := db.Search(context.Background(), internal.SearchQuery{
