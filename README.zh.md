@@ -38,7 +38,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **七层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 轨迹，配合 Dream 巩固管线
 - **三通道 RRF 检索** — BM25（gse CJK 分词）+ f32 向量 + 实体/词项模糊匹配（实体索引由已索引 topic 词项自动灌入），通过 Reciprocal Rank Fusion（k=60）融合
 - **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0008`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。**与 `0x0007`（及更早）的 `.meh` 数据文件不兼容**——Open 时显式拒绝，无迁移路径
-- **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（索引、活跃场景、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。单 agent 宿主继续用 `Open` 零改动（默认域）
+- **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（索引、活跃场景、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行
 - **L1 场景超图 + 扩散激活** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）；Search 联想从命中场景沿图扩散激活（每跳 × 边权 × 衰减系数），返回 Top 关联场景的话题作为 `AssociatedContexts`——真正的跨场景联想记忆，边权由 Dream 管线衰减剪枝
 - **Dream 巩固管线** — 仅作用于 L0–L2 的五阶段：L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏（情绪/MBTI）
 - **L3 知识图谱** — 多独立超图，支持节点/边导入、CRUD、关键词/类型查询与 BFS 子图
@@ -63,7 +63,7 @@ import (
     memhop "github.com/qyiun666/MemHop/api"
 )
 
-db, err := memhop.Open(&memhop.MemHopConfig{
+dbm, err := memhop.OpenMulti(&memhop.MemHopConfig{
     DBPath:      "agent.meh",
     VectorDim:   1024,
     EncoderAddr: "http://127.0.0.1:11434",
@@ -78,13 +78,24 @@ db, err := memhop.Open(&memhop.MemHopConfig{
 if err != nil {
     log.Fatal(err)
 }
-defer db.Close()
+defer dbm.Close()
+
+// 一个 .meh 文件承载多个隔离域。CreateAgent 返回稳定的 16 位 hex ID；
+// Session 把每次调用绑定到该域。
+agentID, err := dbm.CreateAgent("my-agent")
+if err != nil {
+    log.Fatal(err)
+}
+sess, err := dbm.Session(agentID)
+if err != nil {
+    log.Fatal(err)
+}
 
 // 检索 —— 三条路由：AutoCreate（跳过检索，直建新场景+话题）、
 // DirectedL2ID（定向写入指定场景）、默认三通道检索。
 // Timestamp 必填：消息的 Unix 毫秒时间戳；ctx 可取消 LLM 关键词提取、
 // 编码调用与内部触发的 Dream。
-res, err := db.Search(ctx, memhop.SearchQuery{
+res, err := sess.Search(ctx, memhop.SearchQuery{
     Text:      "昨天我们讨论了什么？",
     Timestamp: time.Now().UnixMilli(),
 })
@@ -95,18 +106,18 @@ if err != nil {
 // 将 Agent 回复追加到 Search 创建的话题。
 // Update 的 topicID 参数为 16 位 hex 字符串（NewTopicID 是 uint64）。
 topicID := fmt.Sprintf("%016x", res.NewTopicID)
-if err = db.Update(topicID, "Agent：...", time.Now().UnixMilli()); err != nil {
+if err = sess.Update(topicID, "Agent：...", time.Now().UnixMilli()); err != nil {
     log.Fatal(err)
 }
 
 // Dream 巩固（作用于激活场景，L0-L2）；sceneID 传空串 = 全部激活场景
-ok, err := db.Dream(context.Background(), "")
+ok, err := sess.Dream(context.Background(), "")
 ```
 
 
-> **并发契约。** 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行，宿主无需自行排队。`*DB` 是绑定默认域的单 Agent 句柄。文件排他锁仍保证一个 `.meh` 文件只能被一个进程打开；`Lock()`/`Unlock()` 保留供宿主关键区使用，对已关闭的 DB 调用会 panic。
+> **并发契约。** 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行，宿主无需自行排队。`*memhop.Session` 除绑定的域 ID 外不携带任何跨域状态。文件排他锁仍保证一个 `.meh` 文件只能被一个进程打开；`*MultiAgentDB` 的 `Lock()`/`Unlock()` 保留供宿主关键区使用。
 
-前置条件：Go 1.26+，Ollama（`ollama pull qllama/bge-m3:q4_k_m`），OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）
+前置条件：Go 1.27+，Ollama（`ollama pull qllama/bge-m3:q4_k_m`），OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）
 
 ### API 概览
 

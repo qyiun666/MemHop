@@ -22,7 +22,7 @@
 | 契约 | 说明 |
 |---|---|
 | **单实例** | 一个 `.meh` 文件被排他锁独占；同一文件不能开第二个 `*DB` |
-| **串行调用** | 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行；宿主无需自行排队。`Lock()`/`Unlock()` 仍可用于宿主关键区，对已关闭的 DB 调用会 panic |
+| **串行调用** | 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行；宿主无需自行排队。`Lock()`/`Unlock()` 保留给宿主对文件做旁路写入的关键区——只串行化**默认域**，其他域照常运行；对已关闭的 DB 调用 `Lock()` 会 panic（此时 `Unlock()` 为空操作） |
 | **LLM 硬依赖** | Search / Update / RefineTopicKeywords 内部做关键词抽取，LLM 不可用直接报错（不降级） |
 | **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；宿主按不透明字符串传递，uint64 用 `fmt.Sprintf("%016x", n)` 格式化（api 未再导出 ID 工具函数） |
 | **时间戳** | 一律 Unix 毫秒；`<= 0` 视为非法参数（`ErrInvalidQuery`） |
@@ -33,11 +33,11 @@
 
 | 依赖 | 要求 | 示例 |
 |---|---|---|
-| Go 1.26+ | 构建要求 | — |
+| Go 1.27+ | 构建要求 | — |
 | Ollama | 运行中的 embedding 服务 | `http://localhost:11434` + `nomic-embed-text`（dim 768） |
 | LLM | OpenAI 兼容 API | DeepSeek / OpenAI / 任意兼容端点 |
 
-编码器也可自研：实现 `api.Encoder` 接口（`Encode(text string) ([]float32, error)` + `IsAvailable() bool`），用 `api.OpenWithEncoder` 注入。
+编码器也可自研：实现 `api.Encoder` 接口（`Encode(text string) ([]float32, error)` + `IsAvailable() bool`），用 `api.OpenMultiWithEncoder` 注入。
 
 ---
 
@@ -111,13 +111,13 @@ cfg := &api.MemHopConfig{
     Defaults: *api.DefaultMemHopDefaults,
 }
 
-db, err := api.Open(cfg)
+dbm, err := api.OpenMulti(cfg)
 if err != nil { /* 处理 ErrConfig / ErrVectorDimMismatch / ErrCorruption */ }
-defer db.Close() // 写检查点快照 + 关闭编码器 + 释放 mmap/文件锁
+defer dbm.Close() // 写检查点快照 + 关闭编码器 + 释放 mmap/文件锁
 ```
 
-- `api.Open`：默认构建 Ollama HTTP 编码器。
-- `api.OpenWithEncoder(cfg, enc)`：注入自研编码器（mock / 本地模型）。
+- `api.OpenMulti(cfg)`：默认构建 Ollama HTTP 编码器。
+- `api.OpenMultiWithEncoder(cfg, enc)`：注入自研编码器（mock / 本地模型）。
 - Open 成功即自动挂载内置能力卡（只读，不写入 .meh）。
 - 中途主动落盘：`db.Checkpoint()`。
 
@@ -349,7 +349,7 @@ import (
 )
 
 func main() {
-    db, err := api.Open(&api.MemHopConfig{
+    dbm, err := api.OpenMulti(&api.MemHopConfig{
         DBPath:      os.Getenv("MEH_PATH"),        // /data/agent.meh
         VectorDim:   768,
         EncoderAddr: os.Getenv("OLLAMA_URL"),      // http://localhost:11434
@@ -362,7 +362,13 @@ func main() {
         Defaults: *api.DefaultMemHopDefaults,
     })
     if err != nil { log.Fatal(err) }
-    defer db.Close()
+    defer dbm.Close()
+
+    // Multi-agent is the only mode: bind every call to one agent domain.
+    agentID, err := dbm.CreateAgent("guide-agent")
+    if err != nil { log.Fatal(err) }
+    db, err := dbm.Session(agentID)
+    if err != nil { log.Fatal(err) }
 
     // 每轮对话：开始
     res, err := db.Search(context.Background(), api.SearchQuery{
@@ -391,11 +397,11 @@ func main() {
 ## 12. 陷阱清单
 
 1. **LLM 挂掉 = 记忆循环挂掉**：Search/Update/RefineTopicKeywords 不降级。集成前先做好 LLM 可用性兜底。
-2. **编码器维度锁死**：`VectorDim` 与模型输出不一致 → Open 失败（`ErrVectorDimMismatch`），且不迁移旧文件。
+2. **编码器维度锁死**：`VectorDim` 与模型输出不一致 → Open 失败（`ErrVectorDimMismatch`）；不迁移旧文件——`FormatVersion < 0x0008` 的旧库在 Open 时直接拒绝。
 3. **时间戳用 Unix 毫秒**，`<=0` 报 `ErrInvalidQuery`。
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；用 `fmt.Sprintf("%016x", n)` 生成，需要校验时用 `strconv`。
 5. **Search 是写操作**：不需要新建记忆时，读历史用 `SceneContext` / `SearchL4`。
-6. **一个 Agent 一个 DB**：多 Agent = 多 `.meh` 文件，宿主负责映射；MemHop 本身无多租户（那是 MCP server 层的事）。
+6. **单文件多 agent 域**：v1.4 起所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），按域完全隔离；旧单 agent 库（`FormatVersion < 0x0008`）无法打开、不做迁移。
 7. **内置能力卡只读**：`UpdateCapability` 对内置卡返回错误。
 8. **轨迹短期数据**：宿主负责按会话清理（`DeleteTrajectory`），MemHop 不自动清。
 9. **Capacity 语义（v1.2.7）**：活跃集合无界累积；达到 `Capacity` 时 Update 对最老场景触发 Dream——场景话题数低于 `DreamCompressMinTopics` 时跳过（已预检）。

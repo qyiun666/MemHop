@@ -23,7 +23,7 @@ host process
 | Contract | Meaning |
 |---|---|
 | **Single instance** | One `.meh` file is locked exclusively; a second `*DB` on the same file fails. |
-| **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`. The host needs no external queue. `Lock()`/`Unlock()` stay available for host-critical sections and panic on a closed DB. |
+| **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`. The host needs no external queue. `Lock()`/`Unlock()` remain for host-critical sections around raw file access — they serialize **the default domain only** and panic on a closed DB (`Unlock` on a closed DB is a no-op). |
 | **LLM is required** | Search / Update / RefineTopicKeywords do LLM keyword extraction and return an error when the LLM is down (no silent degradation). |
 | **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque; format uint64 ids with `fmt.Sprintf("%016x", n)` (MemHop does not re-export id helpers). |
 | **Timestamps** | Unix milliseconds everywhere; `<= 0` is `ErrInvalidQuery`. |
@@ -34,13 +34,13 @@ host process
 
 | Dependency | Requirement | Example |
 |---|---|---|
-| Go 1.26+ | build requirement | — |
+| Go 1.27+ | build requirement | — |
 | Ollama | running embedding endpoint | `http://localhost:11434` + `nomic-embed-text` (dim 768) |
 | LLM | OpenAI-compatible API | DeepSeek / OpenAI / any compatible endpoint |
 
 You can also bring your own encoder: implement the `api.Encoder` interface
 (`Encode(text string) ([]float32, error)` + `IsAvailable() bool`) and inject it
-via `api.OpenWithEncoder`.
+via `api.OpenMultiWithEncoder`.
 
 ---
 
@@ -119,14 +119,19 @@ cfg := &api.MemHopConfig{
     Defaults: *api.DefaultMemHopDefaults,
 }
 
-db, err := api.Open(cfg)
+dbm, err := api.OpenMulti(cfg)
 if err != nil { /* ErrConfig / ErrVectorDimMismatch / ErrCorruption */ }
-defer db.Close() // checkpoint snapshot + close encoder + release mmap/file lock
+defer dbm.Close() // checkpoint snapshot + close encoder + release mmap/file lock
+
+// Multi-agent is the only mode: bind a session to a stable hex agent id.
+agentID, err := dbm.CreateAgent("guide")
+if err != nil { /* ... */ }
+db, err := dbm.Session(agentID)
 ```
 
-- `api.Open` — default Ollama HTTP encoder.
-- `api.OpenWithEncoder(cfg, enc)` — custom encoder (mock / local model).
-- Open mounts the built-in read-only capability cards (nothing written to `.meh`).
+- `api.OpenMulti(cfg)` — default Ollama HTTP encoder.
+- `api.OpenMultiWithEncoder(cfg, enc)` — custom encoder (mock / local model).
+- `OpenMulti` mounts the built-in read-only capability cards (nothing written to `.meh`).
 - Explicit flush: `db.Checkpoint()`.
 
 ---
@@ -386,7 +391,7 @@ import (
 )
 
 func main() {
-    db, err := api.Open(&api.MemHopConfig{
+    dbm, err := api.OpenMulti(&api.MemHopConfig{
         DBPath:      os.Getenv("MEH_PATH"),        // /data/agent.meh
         VectorDim:   768,
         EncoderAddr: os.Getenv("OLLAMA_URL"),      // http://localhost:11434
@@ -399,7 +404,13 @@ func main() {
         Defaults: *api.DefaultMemHopDefaults,
     })
     if err != nil { log.Fatal(err) }
-    defer db.Close()
+    defer dbm.Close()
+
+    // Multi-agent is the only mode: bind every call to one agent domain.
+    agentID, err := dbm.CreateAgent("guide-agent")
+    if err != nil { log.Fatal(err) }
+    db, err := dbm.Session(agentID)
+    if err != nil { log.Fatal(err) }
 
     // Per turn: start
     res, err := db.Search(context.Background(), api.SearchQuery{
@@ -430,14 +441,17 @@ func main() {
 1. **LLM down = memory loop down**: Search/Update/RefineTopicKeywords do not
    degrade. Have an LLM availability fallback before integrating.
 2. **Encoder dimension is locked**: `VectorDim` mismatch → Open fails
-   (`ErrVectorDimMismatch`), no migration of old files.
+   (`ErrVectorDimMismatch`), no migration of old files: headers older than
+   format `0x0008` are rejected outright at Open.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; generate them
    with `fmt.Sprintf("%016x", n)` and validate with `strconv` when needed.
 5. **Search is a write**: to read history without creating memory, use
    `SceneContext` / `SearchL4`.
-6. **One agent, one DB**: multi-agent = multiple `.meh` files; MemHop itself is
-   not multi-tenant (that's the MCP server layer).
+6. **One file, many agent domains**: since v1.4 all tenants live inside one
+   `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
+   isolated per domain; legacy single-agent files (`FormatVersion < 0x0008`)
+   cannot be opened or migrated.
 7. **Built-in capability cards are read-only**: `UpdateCapability` rejects them.
 8. **Trajectories are short-lived**: the host owns cleanup via
    `DeleteTrajectory`; MemHop never auto-deletes.

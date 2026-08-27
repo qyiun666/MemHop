@@ -38,7 +38,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 - **Seven-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal → L6 Trajectory, with Dream consolidation
 - **Three-Channel RRF Retrieval** — BM25 (gse CJK) + f32 vector + fuzzy entity/term matching (entity index auto-fed from indexed topic terms), fused via Reciprocal Rank Fusion (k=60)
 - **V2 Storage** — `.meh` format (`FormatVersion=0x0008`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. Record frames carry an 8-byte `agent_id` (26-byte header) and the engine indexes every record by `(agent, idHash)` domain. **Not compatible with `0x0007` (or older) `.meh` data files** — they are rejected at Open with no migration path
-- **Multi-Agent Domains** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`: many agents share one `.meh` file with fully isolated per-agent domains (indices, active scenes, Dream pipelines, domain locks); same-agent operations serialize, different agents run in parallel; idle domains reclaim memory on access cadence (`Defaults.AgentIdleTTLMs`) while their records stay on disk. Single-agent hosts keep using `Open` unchanged (default domain)
+- **Multi-Agent Domains** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`: many agents share one `.meh` file with fully isolated per-agent domains (indices, active scenes, Dream pipelines, domain locks); same-agent operations serialize, different agents run in parallel; idle domains reclaim memory on access cadence (`Defaults.AgentIdleTTLMs`) while their records stay on disk. Multi-agent is the only mode — every operation runs through a per-domain session
 - **L1 Scene Hypergraph + Spreading Activation** — Dream creates co-occurrence hyperedges between scenes whose topic keyword sets overlap (Jaccard ≥ `L1EdgeMinSimilarity`); Search association walks the graph from the hit scene, propagating activation (× edge weight × dampening per hop) and returns the top associated scenes' topics as `AssociatedContexts` — real cross-scene associative recall ("联想记忆"), with edge weights decayed and pruned by the Dream pipeline
 - **Dream Pipeline** — five stages over L0–L2: L2 compress → L1 rebuild → L1 decay → L0 profile → L0 distill (emotion/MBTI)
 - **L3 Knowledge Graph** — Multiple independent hypergraphs with node/edge import, CRUD, keyword/type lookup and BFS subgraph queries
@@ -63,7 +63,7 @@ import (
     memhop "github.com/qyiun666/MemHop/api"
 )
 
-db, err := memhop.Open(&memhop.MemHopConfig{
+dbm, err := memhop.OpenMulti(&memhop.MemHopConfig{
     DBPath:      "agent.meh",
     VectorDim:   1024,
     EncoderAddr: "http://127.0.0.1:11434",
@@ -78,13 +78,24 @@ db, err := memhop.Open(&memhop.MemHopConfig{
 if err != nil {
     log.Fatal(err)
 }
-defer db.Close()
+defer dbm.Close()
+
+// One .meh file, one isolated domain per agent. CreateAgent returns a
+// stable 16-char hex agent id; Session binds every call to that domain.
+agentID, err := dbm.CreateAgent("my-agent")
+if err != nil {
+    log.Fatal(err)
+}
+sess, err := dbm.Session(agentID)
+if err != nil {
+    log.Fatal(err)
+}
 
 // Search — three routes: AutoCreate (skip retrieval, new scene+topic),
 // DirectedL2ID (append to a specific scene), or default three-channel retrieval.
 // Timestamp is required: Unix milliseconds of the message. ctx cancels LLM
 // keyword extraction, encoder calls and any internally triggered Dream.
-res, err := db.Search(ctx, memhop.SearchQuery{
+res, err := sess.Search(ctx, memhop.SearchQuery{
     Text:      "What did we discuss?",
     Timestamp: time.Now().UnixMilli(),
 })
@@ -95,18 +106,18 @@ if err != nil {
 // Append the agent reply to the topic created by Search.
 // Update takes the topic ID as a 16-char hex string (NewTopicID is uint64).
 topicID := fmt.Sprintf("%016x", res.NewTopicID)
-if err = db.Update(topicID, "Agent: ...", time.Now().UnixMilli()); err != nil {
+if err = sess.Update(topicID, "Agent: ...", time.Now().UnixMilli()); err != nil {
     log.Fatal(err)
 }
 
 // Dream consolidation over active scenes (L0-L2); sceneID "" = all active scenes.
-ok, err := db.Dream(context.Background(), "")
+ok, err := sess.Dream(context.Background(), "")
 ```
 
 
-> **Concurrency contract.** Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`, so the host needs no external queue. `*DB` is the single-agent handle bound to the default domain. The file's exclusive lock still allows only one process per `.meh` file; `Lock()`/`Unlock()` remain available for host-critical sections and panic on a closed DB.
+> **Concurrency contract.** Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`, so the host needs no external queue. `*memhop.Session` carries no cross-domain state beyond its bound id. The file's exclusive lock still allows only one process per `.meh` file; `Lock()`/`Unlock()` on `*MultiAgentDB` remain available for host-critical sections.
 
-Prerequisites: Go 1.26+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-compatible LLM endpoint (`Config.LLM` is required)
+Prerequisites: Go 1.27+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-compatible LLM endpoint (`Config.LLM` is required)
 
 ### API Overview
 
