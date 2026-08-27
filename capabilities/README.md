@@ -1,49 +1,40 @@
-# capabilities/ — 内置 L5 能力工具箱（对外能力合集）
+# capabilities/ — 内置 L5 能力卡（LLM 可调用面）
 
-本目录是 MemHop 对外的**能力工具箱**，`memhop-capability/v3` 格式，通过 `capabilities.go` 的 `//go:embed` 内嵌进库。内置能力分两类：
+本目录是 MemHop 内置的 **L5 能力卡工具箱**，`memhop-capability/v3` 格式，通过 `capabilities.go` 的 `//go:embed` 内嵌进库。卡的受众是 **LLM**：宿主获取后投影为工具契约/说明书注入上下文，LLM 据此调用 MemHop。
 
-1. **MemHop 自身的能力说明书**（`memhop-*`）：教宿主 LLM 正确驱动记忆循环与全部对外 API（resource 类型为 `api`，宿主通过 `api` 包直接调用）
-2. **harness/agent 应具备的原子能力卡**（`agent-*`）：通用工具契约卡，宿主据此映射自己的实际工具
+**只收录 LLM 可调用的能力**。宿主自动执行的核心循环（`OpenMulti` / `Search` / `Update` / `Dream` / `Checkpoint`）不做成卡——它们是宿主每轮的固定职责，不占 LLM 上下文；对应 Go API 与 MCP 工具不受影响。
+
+## 卡定位：说明书，不是执行接口
+
+卡描述"该调哪个 API、传什么参数"（resource 的 `name/desc/input/output` 与宿主工具规格同构，`ref` 用 `api:MethodName` 指向 `api` 包方法），真正执行永远走 `api/` 的全部对外方法或 MCP 32 工具。
+
+## 分层注入契约（省 token）
+
+全量 7 张卡共 22.3KB、全英文（≈5–6K token，比中文版省约 15–25% 注入 token），**默认不要全量注入**：
+
+1. **默认注入**：`ListCapabilities` 结果投影成一行一卡索引（`id + name + summary + trigger`，7 张共 ≈300–500 token；**必须带 id**——`GetCapability` 只收 16 位 hex ID），外加 `memhop-guide` 的循环分工说明（约 2KB，也可只取其 summary/trigger 两行）
+2. **按需取详情**：LLM 首次使用某张卡前，先 `GetCapability(id)`（MCP `memhop_capability_get`）取完整参数 schema，再调具体 API
 
 ## 工作方式：单独获取，零配置、零写入
 
-- **获取通道**：`ListCapabilities` / `GetCapability` 直接返回内置工具箱，与库存能力共用同一套过滤器（status / type / keyword）；宿主可在系统提示词组装时一次性拉全量
-- **不附带检索**：`Search` 响应不携带内置工具箱——检索只返回库内存储并按查询匹配的能力
-- **只读**：内置能力不落 `.meh` 文件、不参与 Activate / RecordCapabilityUsage / Delete 生命周期
+- **获取通道**：`ListCapabilities` / `GetCapability` 直接返回内置卡，与库存能力共用同一套过滤器（status / type / keyword）
+- **不附带检索**：`Search` 响应不携带内置卡——检索只返回库内存储并按查询匹配的能力
+- **只读**：内置卡不落 `.meh` 文件、不参与 Activate / RecordCapabilityUsage / Update / Delete 生命周期
 - **去重**：宿主导入同名能力后，库存记录（含使用统计）优先，内置副本自动让位
 
 宿主可通过 `capabilities.FS` 读取这套内嵌文件（检查、扩展或自行入库）。
 
-## 清单
-
-### MemHop 说明书
+## 清单（7 张）
 
 | 文件 | 能力 | 内容 |
 |---|---|---|
-| `memhop-guide.json` | `memhop-guide` | 记忆循环总纲：Search 回忆+存储 → Update 回写 → Dream 巩固 → L6 轨迹 → L5 结晶 |
-| `memhop-search.json` | `memhop-search` | Search 三路由（默认混合检索 / auto_create / directed_l2_id / directed_l3_id）与返回字段用法 |
-| `memhop-update.json` | `memhop-update` | Update 回写契约（new_topic_id、参数校验、串行调用） |
-| `memhop-dream.json` | `memhop-dream` | Dream 巩固周期的阶段、no-op 条件与注意事项 |
-| `memhop-trajectory.json` | `memhop-trajectory` | L6 轨迹全生命周期：追加（event_type 约定、4KB 截断、Seq 自动分配）/ 读取 / 统计 / 删除 |
-| `memhop-crystallize.json` | `memhop-crystallize` | L5 生成：Crystallize → draft → ActivateCapability → RecordCapabilityUsage 闭环 |
-| `memhop-capability-import.json` | `memhop-capability-import` | L5 导入：文件格式与幂等语义 |
+| `memhop-guide.json` | `memhop-guide` | 记忆循环分工总纲（Search/Update/Dream 宿主自动，LLM 勿手动调）+ 六张卡的索引 |
+| `memhop-knowledge.json` | `memhop-knowledge` | L3 知识图谱：读取/列出/导入/更新/删除/节点查询/子图展开 |
+| `memhop-scene.json` | `memhop-scene` | L2 场景管理：列表/激活场景/话题上下文/合并/DeleteTopic/DeleteScene（记忆纠错） |
+| `memhop-archive.json` | `memhop-archive` | L4 档案：关键词/时间范围/ID 列表三种模式检索 + 单条读取 |
 | `memhop-profile.json` | `memhop-profile` | L0 画像读取与全量更新（GetL0 后回填再 UpdateL0） |
-| `memhop-scene.json` | `memhop-scene` | L2 场景管理：列表 / 激活场景 / 话题上下文 / 合并 / DeleteTopic / DeleteScene（记忆纠错） |
-| `memhop-archive.json` | `memhop-archive` | L4 档案：关键词 / 时间范围 / ID 列表三种模式检索 + 单条读取 + AppendL4Message |
-| `memhop-capability.json` | `memhop-capability` | L5 能力生命周期：导入 / 激活 / 使用反馈 / 更新 / 删除 |
-| `memhop-knowledge.json` | `memhop-knowledge` | L3 知识图谱：读取 / 列出 / 导入 / 更新 / 删除 / 节点查询 / 子图展开 |
-| `memhop-refine.json` | `memhop-refine` | RefineTopicKeywords：对话题 L4 消息重新提取融合关键词 |
-
-### Agent 原子能力卡
-
-| 文件 | 能力 | 工具契约 |
-|---|---|---|
-| `agent-read-file.json` | `agent-read-file` | 按路径读文件，带行号，支持分段 |
-| `agent-write-file.json` | `agent-write-file` | 创建或整体重写文件 |
-| `agent-edit-file.json` | `agent-edit-file` | 原文唯一定点替换 |
-| `agent-run-command.json` | `agent-run-command` | 执行 shell，回收 stdout/stderr/退出码 |
-| `agent-search-files.json` | `agent-search-files` | glob 找路径 + 正则搜内容 |
-| `agent-web-search.json` | `agent-web-search` | 联网搜索，附来源链接 |
+| `memhop-trajectory.json` | `memhop-trajectory` | L6 轨迹：追加（event_type 约定、4KB 截断、Seq 自动分配）/读取/统计/删除 |
+| `memhop-capability.json` | `memhop-capability` | L5 能力闭环：Crystallize 结晶 → Activate 激活 → Usage 反馈 + Import 导入 + List/Get 索引与详情 + Update/Delete |
 
 ## 编写宿主自己的能力
 
@@ -101,4 +92,4 @@
 }
 ```
 
-校验规则：`name` 必填；`trigger` 或 `summary` 至少一个；`mcp`/`skill`/`api` 恰好一个同类型 resource（`api` 的 `ref` 用 `api:MethodName`，如 `api:Search`，宿主通过 `api` 包直接调用）；`composite` 至少一个 resource；`workflow.steps[].ref` 必填；资源 `name` 必填，`input` 非空时必须是合法 JSON（Schema）。MemHop 只存储与匹配能力，不执行其中引用的工具或服务。
+校验规则：`name` 必填；`trigger` 或 `summary` 至少一个；`mcp`/`skill`/`api` 恰好一个同类型 resource（`api` 的 `ref` 用 `api:MethodName`，如 `api:GetL3`，宿主通过 `api` 包直接调用）；`composite` 至少一个 resource；`workflow.steps[].ref` 必填；资源 `name` 必填，`input` 非空时必须是合法 JSON（Schema）。guide 卡的卡指针用 `type=api` + `ref=capability:<卡名>` 指向工具箱内另一张卡（校验不约束 ref 格式）；`GetCapability` 只收 16 位 hex ID，宿主从 `ListCapabilities` 响应的 `id_hash` 取得。MemHop 只存储与匹配能力，不执行其中引用的工具或服务。

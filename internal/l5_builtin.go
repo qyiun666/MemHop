@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Built-in L5 capabilities: read-only reference capabilities shipped with
-// the project (see the root capabilities/ directory) — MemHop's own usage
-// manuals plus the atomic capability cards a harness/agent is expected to
-// have. They form the toolbox served by the L5 read APIs (ListCapabilities
-// / GetCapability), are never written to the .meh file, and are NOT
-// attached to Search responses (Search stays pure retrieval of stored
-// capabilities). Lifecycle writes (Activate/Usage/Delete) do not apply to
-// them.
+// the project (see the root capabilities/ directory) — manuals for the
+// capabilities an LLM may call itself, plus the guide card indexing them
+// (Search / Update / Dream are host-driven loop operations and
+// intentionally carry no card). They form the toolbox served by the L5
+// read APIs (ListCapabilities / GetCapability), are never written to the
+// .meh file, and are NOT attached to Search responses (Search stays pure
+// retrieval of stored capabilities). Lifecycle writes (Activate/Usage/
+// Delete) do not apply to them.
 
 package internal
 

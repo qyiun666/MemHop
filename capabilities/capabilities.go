@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package capabilities ships MemHop's built-in L5 capability cards
-// (memhop-capability/v3 JSON): wrappers that teach a host agent how to
-// drive the memory loop — Search / Update / Dream / L6 trajectory / L5
-// crystallize and import. The files are embedded so the Go library can
-// load them without any on-disk path.
+// (memhop-capability/v3 JSON): usage manuals for the capabilities an LLM
+// may call itself — L2 scenes, L3 knowledge, L4 archive, L0 profile, L6
+// trajectory and the L5 lifecycle — plus a guide card that documents the
+// loop split (Search / Update / Dream run host-side, never manual LLM
+// calls) and indexes the other cards. The files are embedded so the Go
+// library can load them without any on-disk path.
 //
 // Data only: this package must never import other MemHop packages.
 package capabilities

@@ -3,91 +3,91 @@
   "name": "memhop-knowledge",
   "version": "3",
   "type": "composite",
-  "summary": "L3 知识图谱说明书：读取/列出/导入/更新/删除语义图谱，查询节点与子图",
-  "trigger": "需要管理或查询 L3 语义知识图谱、结构化知识时；knowledge 知识 l3 图谱 语义 节点 边 hypergraph",
+  "summary": "L3 knowledge-graph manual: read/list/import/update/delete semantic graphs, query nodes and expand subgraphs",
+  "trigger": "need to manage or query the L3 semantic knowledge graph, structured knowledge; knowledge l3 graph semantic node edge hypergraph",
   "resources": [
     {
       "type": "api",
       "name": "GetL3",
       "ref": "api:GetL3",
-      "desc": "按 ID 读取一个 L3 知识图谱",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"图谱 ID（16 位 hex）\"}},\"required\":[\"id\"]}",
+      "desc": "Read one L3 knowledge graph by ID",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"}},\"required\":[\"id\"]}",
       "output": "L3Graph"
     },
     {
       "type": "api",
       "name": "ListL3",
       "ref": "api:ListL3",
-      "desc": "列出全部 L3 知识图谱；返回图谱摘要（ID/名称/节点边计数）",
+      "desc": "List all L3 knowledge graphs; returns graph summaries (ID/name/node-edge counts)",
       "input": "{\"type\":\"object\",\"properties\":{}}",
-      "output": "HypergraphSlot 列表（摘要）"
+      "output": "List of HypergraphSlot (summaries)"
     },
     {
       "type": "api",
       "name": "ImportL3",
       "ref": "api:ImportL3",
-      "desc": "批量导入 L3 实体/关系；items=待导入节点/边列表、mode=覆盖/合并模式；返回新建/更新/跳过统计",
-      "input": "{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\"},\"description\":\"待导入节点/边列表\"},\"mode\":{\"type\":\"string\",\"description\":\"覆盖/合并模式\"}},\"required\":[\"items\",\"mode\"]}",
-      "output": "L3ImportResult（新建/更新/跳过统计）"
+      "desc": "Bulk-import L3 knowledge entries (nodes only: title/domain/node_type/content, keywords optional — empty title entries are skipped); mode is case-sensitive Skip|Merge|Overwrite; returns created/updated/skipped stats",
+      "input": "{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"domain\":{\"type\":\"string\"},\"node_type\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"},\"keywords\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"title\",\"domain\",\"node_type\",\"content\"]},\"description\":\"Knowledge entries (nodes) to import\"},\"mode\":{\"type\":\"string\",\"description\":\"Skip|Merge|Overwrite (case-sensitive)\"}},\"required\":[\"items\",\"mode\"]}",
+      "output": "L3ImportResult (created/updated/skipped stats)"
     },
     {
       "type": "api",
       "name": "UpdateL3",
       "ref": "api:UpdateL3",
-      "desc": "更新 L3 图谱元信息；name=nil 表示不改名",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"图谱 ID（16 位 hex）\"},\"name\":{\"type\":\"string\",\"description\":\"新名称（缺省不改名）\"}},\"required\":[\"id\"]}",
-      "output": "L3Graph（更新后）"
+      "desc": "Update L3 graph metadata; name omitted means no rename",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"},\"name\":{\"type\":\"string\",\"description\":\"New name (omit to keep)\"}},\"required\":[\"id\"]}",
+      "output": "L3Graph (updated)"
     },
     {
       "type": "api",
       "name": "DeleteL3",
       "ref": "api:DeleteL3",
-      "desc": "删除整个 L3 知识图谱",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"图谱 ID（16 位 hex）\"}},\"required\":[\"id\"]}",
+      "desc": "Delete an entire L3 knowledge graph",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"}},\"required\":[\"id\"]}",
       "output": "ok"
     },
     {
       "type": "api",
       "name": "QueryL3Nodes",
       "ref": "api:QueryL3Nodes",
-      "desc": "按条件查询 L3 节点；q 支持按图谱/标签/关键词过滤",
-      "input": "{\"type\":\"object\",\"properties\":{\"graph_id\":{\"type\":\"string\"},\"tag\":{\"type\":\"string\"},\"keyword\":{\"type\":\"string\"}}}",
-      "output": "HypergraphNode 列表"
+      "desc": "Query L3 nodes by condition; graph_id required, plus one or more of ids/keyword/node_type; limit caps the result count (<=0 means unlimited)",
+      "input": "{\"type\":\"object\",\"properties\":{\"graph_id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"},\"ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Node ID list (16-char hex)\"},\"keyword\":{\"type\":\"string\",\"description\":\"Keyword match\"},\"node_type\":{\"type\":\"string\",\"description\":\"Node type filter\"},\"limit\":{\"type\":\"integer\",\"description\":\"Max results (<=0 unlimited)\"}},\"required\":[\"graph_id\"]}",
+      "output": "List of HypergraphNode"
     },
     {
       "type": "api",
       "name": "QueryL3Subgraph",
       "ref": "api:QueryL3Subgraph",
-      "desc": "从起始节点展开子图；edgeKinds 限定关系类型（causal/semantic/temporal 等），maxDepth 限制展开深度",
-      "input": "{\"type\":\"object\",\"properties\":{\"graph_id\":{\"type\":\"string\",\"description\":\"图谱 ID（16 位 hex）\"},\"start_node_id\":{\"type\":\"string\",\"description\":\"起始节点 ID（16 位 hex）\"},\"max_depth\":{\"type\":\"integer\",\"description\":\"展开深度限制\"},\"edge_kinds\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"限定关系类型\"}},\"required\":[\"graph_id\",\"start_node_id\",\"max_depth\"]}",
-      "output": "L3Subgraph（节点与边）"
+      "desc": "Expand a subgraph from a start node; edge_kinds limits relation types (related/causal/part_of/sequence/dependency/custom), max_depth limits expansion depth",
+      "input": "{\"type\":\"object\",\"properties\":{\"graph_id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"},\"start_node_id\":{\"type\":\"string\",\"description\":\"Start node ID (16-char hex)\"},\"max_depth\":{\"type\":\"integer\",\"description\":\"Max expansion depth\"},\"edge_kinds\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Edge kind filter\"}},\"required\":[\"graph_id\",\"start_node_id\",\"max_depth\"]}",
+      "output": "L3Subgraph (nodes and edges)"
     }
   ],
   "workflow": {
     "steps": [
       {
         "ref": "ListL3",
-        "action": "浏览全部图谱"
+        "action": "Browse all graphs"
       },
       {
         "ref": "ImportL3",
-        "action": "导入新实体与关系"
+        "action": "Import new entities and relations"
       },
       {
         "ref": "QueryL3Subgraph",
-        "action": "从关键节点展开关联子图"
+        "action": "Expand related subgraph from a key node"
       },
       {
         "ref": "GetL3",
-        "action": "读取单个图谱详情"
+        "action": "Read one graph in detail"
       },
       {
         "ref": "UpdateL3",
-        "action": "修改图谱名称"
+        "action": "Rename a graph"
       },
       {
         "ref": "DeleteL3",
-        "action": "删除废弃图谱"
+        "action": "Delete a deprecated graph"
       }
     ]
   }

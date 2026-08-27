@@ -3,39 +3,47 @@
   "name": "memhop-trajectory",
   "version": "3",
   "type": "composite",
-  "summary": "L6 轨迹说明书：按会话追加 Agent 操作事件流、读取轨迹、查看统计（判断是否值得结晶）、删除轨迹",
-  "trigger": "需要记录操作轨迹、查看轨迹事件、判断结晶时机或清理轨迹时；trajectory 轨迹 l6 事件 操作日志 operation log",
+  "summary": "L6 trajectory manual: append agent operation events per session, list sessions, read trajectories, view stats (to judge crystallization worthiness), delete trajectories",
+  "trigger": "need to record operation trajectories, view trajectory events, judge crystallization timing or clean up trajectories; trajectory l6 event operation log",
   "resources": [
     {
       "type": "api",
       "name": "AppendTrajectory",
       "ref": "api:AppendTrajectory",
-      "desc": "重要操作（工具调用、子任务、关键决策）时调用；EventType=turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end、Payload=事件内容（截断 4KB）、L4Ref=关联 L4 档案（可选）、Timestamp=Unix 毫秒；Seq 自动分配",
-      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"},\"event_type\":{\"type\":\"string\",\"description\":\"turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end\"},\"payload\":{\"type\":\"string\",\"description\":\"事件内容（截断 4KB）\"},\"timestamp\":{\"type\":\"integer\",\"description\":\"Unix 毫秒\"}},\"required\":[\"session_id\",\"event_type\",\"payload\",\"timestamp\"]}",
-      "output": "ok（Seq 自动分配）"
+      "desc": "Call on important operations (tool calls, subtasks, key decisions); EventType=turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end, Payload=event content (truncated to 4KB), L4Ref=related L4 archive (optional), Timestamp=Unix ms; Seq auto-assigned",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"Session ID (16-char hex)\"},\"event_type\":{\"type\":\"string\",\"description\":\"turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end\"},\"payload\":{\"type\":\"string\",\"description\":\"Event content (truncated to 4KB)\"},\"timestamp\":{\"type\":\"integer\",\"description\":\"Unix ms\"},\"l4_ref\":{\"type\":\"string\",\"description\":\"Related L4 archive ID (16-char hex, optional)\"}},\"required\":[\"session_id\",\"event_type\",\"payload\",\"timestamp\"]}",
+      "output": "ok (Seq auto-assigned)"
+    },
+    {
+      "type": "api",
+      "name": "ListTrajectorySessions",
+      "ref": "api:ListTrajectorySessions",
+      "desc": "List the domain's L6 sessions (16-char hex id, event counts, last-append time); use to discover sessions worth crystallizing or cleaning up",
+      "input": "{\"type\":\"object\",\"properties\":{}}",
+      "output": "List of TrajectorySessionSummary"
     },
     {
       "type": "api",
       "name": "ReadTrajectory",
       "ref": "api:ReadTrajectory",
-      "desc": "读取会话全部轨迹事件（按 Seq 升序）",
-      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
-      "output": "TrajectorySlot 列表（按 Seq 升序）"
+      "desc": "Read all trajectory events of a session (ascending by Seq)",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"Session ID (16-char hex)\"}},\"required\":[\"session_id\"]}",
+      "output": "List of TrajectorySlot (ascending by Seq)"
     },
     {
       "type": "api",
       "name": "TrajectoryStats",
       "ref": "api:TrajectoryStats",
-      "desc": "轨迹统计：事件总数、各事件类型计数、最后事件时间戳；用于判断该会话是否值得结晶（工具调用数阈值）",
-      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
-      "output": "TrajectoryStats（Steps/ToolUsage/LastAppendAt）"
+      "desc": "Trajectory stats: total events, per-type counts, last event timestamp; use to judge whether the session is worth crystallizing (tool-call count threshold)",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"Session ID (16-char hex)\"}},\"required\":[\"session_id\"]}",
+      "output": "TrajectoryStats (Steps/ToolUsage/LastAppendAt)"
     },
     {
       "type": "api",
       "name": "DeleteTrajectory",
       "ref": "api:DeleteTrajectory",
-      "desc": "删除会话整条轨迹；清理后该会话不可再结晶",
-      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"会话 ID（16 位 hex）\"}},\"required\":[\"session_id\"]}",
+      "desc": "Delete a session's whole trajectory; the session can no longer be crystallized afterwards",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"Session ID (16-char hex)\"}},\"required\":[\"session_id\"]}",
       "output": "ok"
     }
   ],
@@ -43,19 +51,23 @@
     "steps": [
       {
         "ref": "AppendTrajectory",
-        "action": "操作过程中持续追加事件（重要操作必记）"
+        "action": "Keep appending events during operations (must for important ones)"
       },
       {
         "ref": "TrajectoryStats",
-        "action": "查看轨迹统计判断结晶时机"
+        "action": "Check stats to judge crystallization timing"
+      },
+      {
+        "ref": "ListTrajectorySessions",
+        "action": "Discover sessions to crystallize or clean up"
       },
       {
         "ref": "ReadTrajectory",
-        "action": "需要回看事件细节时读取"
+        "action": "Read when event details are needed"
       },
       {
         "ref": "DeleteTrajectory",
-        "action": "会话结束或轨迹无用时清理"
+        "action": "Clean up when a session ends or the trajectory is useless"
       }
     ]
   }

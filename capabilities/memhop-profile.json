@@ -3,22 +3,22 @@
   "name": "memhop-profile",
   "version": "3",
   "type": "composite",
-  "summary": "L0 画像说明书：读取/更新宿主身份画像（角色、个性、偏好、专属词表、风格特征与情绪模式）",
-  "trigger": "需要查看或调整宿主画像、身份、偏好时；profile 画像 l0 身份 角色 偏好 性格 词表",
+  "summary": "L0 profile manual: read/update the host identity profile (role, personality, preferences, lexicon, style traits, emotion patterns)",
+  "trigger": "need to view or adjust the host profile, identity, preferences; profile l0 identity role preference personality lexicon",
   "resources": [
     {
       "type": "api",
       "name": "GetL0",
       "ref": "api:GetL0",
-      "desc": "读取当前 L0 画像；返回 Name/Role/Personality/Preferences/Lexicon/StyleTraits/EmotionPatterns",
+      "desc": "Read the current L0 profile; returns Name/Role/Personality/Preferences/Lexicon/StyleTraits/EmotionPatterns",
       "input": "{\"type\":\"object\",\"properties\":{}}",
-      "output": "ProfileSlot（Name/Role/Personality/Preferences/Lexicon/StyleTraits/EmotionPatterns）"
+      "output": "ProfileSlot (Name/Role/Personality/Preferences/Lexicon/StyleTraits/EmotionPatterns)"
     },
     {
       "type": "api",
       "name": "UpdateL0",
       "ref": "api:UpdateL0",
-      "desc": "整体更新 L0 画像（全量覆盖）；缺省字段会被清空，更新前先 GetL0 当前值再回填；Preferences/Lexicon/EmotionPatterns 为键值对，StyleTraits 为字符串列表",
+      "desc": "Replace the L0 profile wholesale (full overwrite); omitted fields are cleared, so GetL0 first and fill values back; Preferences/Lexicon/EmotionPatterns are key-value maps, StyleTraits is a string list",
       "input": "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"personality\":{\"type\":\"string\"},\"preferences\":{\"type\":\"object\"},\"lexicon\":{\"type\":\"object\"},\"style_traits\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"emotion_patterns\":{\"type\":\"object\"}}}",
       "output": "ok"
     }
@@ -27,11 +27,11 @@
     "steps": [
       {
         "ref": "GetL0",
-        "action": "需要画像信息或更新前读取当前值"
+        "action": "Read current values when profile info is needed or before updating"
       },
       {
         "ref": "UpdateL0",
-        "action": "全量回填后覆盖更新画像"
+        "action": "Overwrite the profile with fully filled-back values"
       }
     ]
   }

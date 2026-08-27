@@ -3,47 +3,35 @@
   "name": "memhop-archive",
   "version": "3",
   "type": "composite",
-  "summary": "L4 档案说明书：检索历史对话原文（关键词/时间范围/ID 列表三种模式）、按 ID 读取单条、追加一条消息",
-  "trigger": "需要查询历史对话原文、翻找旧消息或手动追加消息时；archive 档案 l4 原文 历史 对话 检索",
+  "summary": "L4 archive manual: search historical conversation text (keyword / time range / ID list modes), read single entries by ID",
+  "trigger": "need to look up past conversation text or dig out old messages; archive l4 raw text history conversation search",
   "resources": [
     {
       "type": "api",
       "name": "SearchL4",
       "ref": "api:SearchL4",
-      "desc": "检索 L4 原文；q 字段：Keyword（子串匹配）、Start/End（毫秒时间范围）、IDs（档案 ID 列表）三种模式选一，可附加 TopicID 限定话题（16 位 hex）",
-      "input": "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\",\"description\":\"内容子串匹配（模式 1）\"},\"start\":{\"type\":\"integer\",\"description\":\"时间范围起点毫秒（模式 2）\"},\"end\":{\"type\":\"integer\",\"description\":\"时间范围终点毫秒（模式 2）\"},\"ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"档案 ID 列表（模式 3）\"},\"topic_id\":{\"type\":\"string\",\"description\":\"限定话题（16 位 hex，可选）\"}}}",
-      "output": "ArchiveSlot 列表（Content/Role/CreatedAt/Metadata）"
+      "desc": "Search L4 raw text; pick one of three q modes: Keyword (substring), Start/End (millisecond time range), IDs (archive ID list); optionally narrow with TopicID (16-char hex)",
+      "input": "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\",\"description\":\"Substring match (mode 1)\"},\"start\":{\"type\":\"integer\",\"description\":\"Time range start in ms (mode 2)\"},\"end\":{\"type\":\"integer\",\"description\":\"Time range end in ms (mode 2)\"},\"ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Archive ID list (mode 3)\"},\"topic_id\":{\"type\":\"string\",\"description\":\"Limit to topic (16-char hex, optional)\"}}}",
+      "output": "List of ArchiveSlot (Content/Role/CreatedAt/Metadata)"
     },
     {
       "type": "api",
       "name": "GetArchive",
       "ref": "api:GetArchive",
-      "desc": "按 ID 读取单条 L4 原文；未知 ID 返回错误",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"档案 ID（16 位 hex）\"}},\"required\":[\"id\"]}",
+      "desc": "Read one L4 entry by ID; unknown ID returns an error",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Archive ID (16-char hex)\"}},\"required\":[\"id\"]}",
       "output": "ArchiveSlot"
-    },
-    {
-      "type": "api",
-      "name": "AppendL4Message",
-      "ref": "api:AppendL4Message",
-      "desc": "向话题手动追加一条 L4 消息（纯存储追加，不触发关键词提取或 LLM）；role=0 用户 / 1 Agent；返回新档案 ID",
-      "input": "{\"type\":\"object\",\"properties\":{\"topic_id\":{\"type\":\"string\",\"description\":\"话题 ID（16 位 hex）\"},\"text\":{\"type\":\"string\",\"description\":\"消息原文\"},\"timestamp\":{\"type\":\"integer\",\"description\":\"Unix 毫秒\"},\"role\":{\"type\":\"integer\",\"description\":\"0=用户 / 1=Agent\"}},\"required\":[\"topic_id\",\"text\",\"timestamp\",\"role\"]}",
-      "output": "新档案 ID（16 位 hex）"
     }
   ],
   "workflow": {
     "steps": [
       {
         "ref": "SearchL4",
-        "action": "按关键词/时间/ID 检索命中的档案"
+        "action": "Search archives by keyword/time/IDs"
       },
       {
         "ref": "GetArchive",
-        "action": "按 ID 精确读取单条原文"
-      },
-      {
-        "ref": "AppendL4Message",
-        "action": "需要手动追加消息时写入"
+        "action": "Read one entry precisely by ID"
       }
     ]
   }

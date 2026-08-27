@@ -10,16 +10,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-var builtinManualNames = []string{
-	"memhop-guide", "memhop-search", "memhop-update", "memhop-dream",
-	"memhop-trajectory", "memhop-crystallize", "memhop-capability-import",
-	"memhop-profile", "memhop-scene", "memhop-archive", "memhop-capability",
-	"memhop-knowledge", "memhop-refine",
-}
-
-var builtinAtomicNames = []string{
-	"agent-read-file", "agent-write-file", "agent-edit-file",
-	"agent-run-command", "agent-search-files", "agent-web-search",
+var builtinNames = []string{
+	"memhop-guide", "memhop-knowledge", "memhop-scene", "memhop-archive",
+	"memhop-profile", "memhop-trajectory", "memhop-capability",
 }
 
 // The embedded toolbox must parse into valid active capabilities with
@@ -29,7 +22,7 @@ func TestLoadBuiltinCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadBuiltinCapabilities: %v", err)
 	}
-	want := len(builtinManualNames) + len(builtinAtomicNames)
+	want := len(builtinNames)
 	if len(caps) != want {
 		t.Fatalf("want %d builtin capabilities, got %d", want, len(caps))
 	}
@@ -58,7 +51,7 @@ func TestLoadBuiltinCapabilities(t *testing.T) {
 			t.Fatalf("builtin %s: unexpected type %v", c.Name, c.Type)
 		}
 	}
-	for _, name := range append(append([]string{}, builtinManualNames...), builtinAtomicNames...) {
+	for _, name := range builtinNames {
 		if _, ok := seen[name]; !ok {
 			t.Fatalf("builtin %s missing", name)
 		}

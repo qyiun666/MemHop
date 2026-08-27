@@ -28,16 +28,9 @@ func openTestConfig(dbPath string) *internal.MemHopConfig {
 	}
 }
 
-var builtinManualNames = []string{
-	"memhop-guide", "memhop-search", "memhop-update", "memhop-dream",
-	"memhop-trajectory", "memhop-crystallize", "memhop-capability-import",
-	"memhop-profile", "memhop-scene", "memhop-archive", "memhop-capability",
-	"memhop-knowledge", "memhop-refine",
-}
-
-var builtinAtomicNames = []string{
-	"agent-read-file", "agent-write-file", "agent-edit-file",
-	"agent-run-command", "agent-search-files", "agent-web-search",
+var builtinNames = []string{
+	"memhop-guide", "memhop-knowledge", "memhop-scene", "memhop-archive",
+	"memhop-profile", "memhop-trajectory", "memhop-capability",
 }
 
 // OpenMulti attaches the toolbox in memory: ListCapabilities/GetCapability
@@ -63,7 +56,7 @@ func TestOpenAttachesBuiltins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	want := len(builtinManualNames) + len(builtinAtomicNames)
+	want := len(builtinNames)
 	if len(caps) != want {
 		t.Fatalf("want %d builtin capabilities served, got %d", want, len(caps))
 	}

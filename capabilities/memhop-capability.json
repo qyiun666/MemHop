@@ -3,71 +3,91 @@
   "name": "memhop-capability",
   "version": "3",
   "type": "composite",
-  "summary": "L5 能力生命周期说明书：导入/激活/使用反馈/更新/删除（内置能力卡只读）",
-  "trigger": "需要管理 L5 能力（导入、激活 draft、记录使用结果、更新或删除）时；capability 能力 l5 导入 激活 生命周期 draft",
+  "summary": "L5 capability loop manual: crystallize reusable abilities from L6 trajectories (draft) -> activate -> usage feedback, import external capability files, List/Get index and details (built-in cards are read-only)",
+  "trigger": "need to distill reusable abilities, import capability definitions, activate drafts, record usage results, view the capability list or fetch card details; capability l5 crystallize import activate draft lifecycle",
   "resources": [
     {
       "type": "api",
-      "name": "ImportCapability",
-      "ref": "api:ImportCapability",
-      "desc": "导入 memhop-capability/v3 能力文件（单文件或含 capability.json 的目录），内容未变（FileHash 相同）时幂等跳过；导入即 active",
-      "input": "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"能力文件或目录路径\"}},\"required\":[\"path\"]}",
-      "output": "Capability（16 位 hex ID）"
+      "name": "Crystallize",
+      "ref": "api:Crystallize",
+      "desc": "Call after a session has accumulated enough L6 trajectory (same kind of operation seen twice or more); not on the interactive hot path; the product is a draft and must be reviewed and activated via ActivateCapability",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"Session ID with existing L6 trajectory (16-char hex)\"}},\"required\":[\"session_id\"]}",
+      "output": "CrystallizeResult (CreatedIDs/ReusedIDs/MergedIDs/Errors/Details)"
     },
     {
       "type": "api",
       "name": "ActivateCapability",
       "ref": "api:ActivateCapability",
-      "desc": "激活 draft 能力（draft → active）；激活后参与 Search 匹配；结晶产物必须先激活再用",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"能力 ID（16 位 hex）\"}},\"required\":[\"id\"]}",
-      "output": "Capability（Status=active）"
+      "desc": "Promote a draft capability (draft -> active); active capabilities participate in Search matching; crystallized products must be activated before use",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Capability ID (16-char hex)\"}},\"required\":[\"id\"]}",
+      "output": "Capability (Status=active)"
     },
     {
       "type": "api",
       "name": "RecordCapabilityUsage",
       "ref": "api:RecordCapabilityUsage",
-      "desc": "宿主调用某能力后记录结果；更新成功率与触发计数",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"能力 ID（16 位 hex）\"},\"success\":{\"type\":\"boolean\",\"description\":\"调用是否成功\"}},\"required\":[\"id\",\"success\"]}",
-      "output": "Capability（SuccessRate/TriggerCount 已更新）"
+      "desc": "Host feedback after a capability was used; updates success rate and trigger count",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Capability ID (16-char hex)\"},\"success\":{\"type\":\"boolean\",\"description\":\"Whether the call succeeded\"}},\"required\":[\"id\",\"success\"]}",
+      "output": "Capability (SuccessRate/TriggerCount updated)"
+    },
+    {
+      "type": "api",
+      "name": "ImportCapability",
+      "ref": "api:ImportCapability",
+      "desc": "Import a memhop-capability/v3 capability file (single file, or a directory containing capability.json — format reference: capabilities/README.md); imported as active; same-name imports upsert (definition updated, stats preserved), byte-identical content is skipped; built-in cards need no import, ListCapabilities returns them directly",
+      "input": "{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\",\"description\":\"Capability file or directory path\"}},\"required\":[\"path\"]}",
+      "output": "Capability (with 16-char hex ID)"
+    },
+    {
+      "type": "api",
+      "name": "ListCapabilities",
+      "ref": "api:ListCapabilities",
+      "desc": "List/filter capability cards (status/type/keyword filters); returns built-in read-only cards plus stored ones, each carrying its 16-char hex id for GetCapability",
+      "input": "{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\",\"description\":\"draft/active/deprecated filter (optional)\"},\"type\":{\"type\":\"string\",\"description\":\"mcp/skill/api/composite filter (optional)\"},\"keyword\":{\"type\":\"string\",\"description\":\"Keyword matched against name+summary+trigger (optional)\"}}}",
+      "output": "List of Capability (descending by UpdatedAt)"
+    },
+    {
+      "type": "api",
+      "name": "GetCapability",
+      "ref": "api:GetCapability",
+      "desc": "Read one capability card's full definition by ID (including resource input JSON Schemas); fetch the detail before calling concrete APIs the first time a card is used",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Capability ID (16-char hex)\"}},\"required\":[\"id\"]}",
+      "output": "Capability (full definition)"
     },
     {
       "type": "api",
       "name": "UpdateCapability",
       "ref": "api:UpdateCapability",
-      "desc": "部分更新能力；patch 中 nil 字段不修改（Name 不可变）；内置能力卡只读，更新被拒绝",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"能力 ID（16 位 hex）\"},\"version\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"trigger\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"resources\":{\"type\":\"array\",\"items\":{\"type\":\"object\"}},\"workflow\":{\"type\":\"object\"}},\"required\":[\"id\"]}",
-      "output": "Capability（更新后）"
+      "desc": "Partially update a capability; nil patch fields are left unchanged (Name is immutable); built-in cards are read-only and updates are rejected",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Capability ID (16-char hex)\"},\"version\":{\"type\":\"string\"},\"type\":{\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"trigger\":{\"type\":\"string\"},\"status\":{\"type\":\"string\"},\"resources\":{\"type\":\"array\",\"items\":{\"type\":\"object\"}},\"workflow\":{\"type\":\"object\"}},\"required\":[\"id\"]}",
+      "output": "Capability (updated)"
     },
     {
       "type": "api",
       "name": "DeleteCapability",
       "ref": "api:DeleteCapability",
-      "desc": "删除能力记录；内置能力卡只读，删除被拒绝",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"能力 ID（16 位 hex）\"}},\"required\":[\"id\"]}",
+      "desc": "Delete a capability record; built-in cards are read-only and deletion is rejected",
+      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Capability ID (16-char hex)\"}},\"required\":[\"id\"]}",
       "output": "ok"
     }
   ],
   "workflow": {
     "steps": [
       {
-        "ref": "ImportCapability",
-        "action": "导入新能力文件"
+        "ref": "Crystallize",
+        "action": "Crystallize a draft capability when trajectories suffice"
       },
       {
         "ref": "ActivateCapability",
-        "action": "审核并激活 draft 能力"
+        "action": "Review and activate draft capabilities"
       },
       {
         "ref": "RecordCapabilityUsage",
-        "action": "每次调用后记录成功/失败反馈"
+        "action": "Record success/failure feedback after each call"
       },
       {
-        "ref": "UpdateCapability",
-        "action": "调整能力定义"
-      },
-      {
-        "ref": "DeleteCapability",
-        "action": "删除废弃能力"
+        "ref": "ImportCapability",
+        "action": "Import host-provided capability files"
       }
     ]
   }
