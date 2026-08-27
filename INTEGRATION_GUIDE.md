@@ -187,13 +187,18 @@ Calls the LLM for keyword extraction.
 ### 6.3 Idle time: `Dream(ctx, sceneID)`
 
 ```go
-ok, err := db.Dream(ctx, "")      // "" = consolidate all active scenes
+rep, err := db.Dream(ctx, "")      // "" = consolidate all active scenes
 // or db.Dream(ctx, sceneIDHex)   // one scene only
-// ok=false means nothing to consolidate, not an error
 ```
 
 Runs the L2 → L1 → L0 pipeline (compression / decay / profile distillation;
 multiple LLM calls — run it in a background goroutine or between turns).
+It returns a structured `*DreamReport` for observability:
+`ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed /
+L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status,
+DurationMs}` (statuses `ok | skipped | cancelled | error`). A zero report
+means nothing to consolidate, not an error; on a mid-pipeline failure the
+partially filled report comes back together with the error.
 
 ---
 
@@ -241,9 +246,12 @@ if err := db.RefineTopicKeywords(ctx, topicID); err != nil { /* LLM failure etc.
 ```go
 slot, err := db.GetL0()                       // *api.ProfileSlot
 err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
+err = db.DistillL0(ctx)                       // runs only Dream's emotion/MBTI stage
 ```
 
 Usually maintained by Dream automatically; manual writes only when forced.
+`DistillL0` is the lightweight refresh entry (no-op when the domain has no
+profile samples).
 
 ### L2 scenes
 
@@ -299,7 +307,7 @@ arcs, err := db.SearchL4(api.L4Query{
 | `db.ActivateCapability(id)` | draft → active |
 | `db.RecordCapabilityUsage(id, success)` | usage feedback |
 
-> The built-in toolbox (19 cards: 13 manual API manuals + 6 atomic cards) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on `*api.DB`. Resources are tool declarations (`name/desc/input/output` mirror the host tool spec; `input` is a JSON Schema string), so hosts project them with a pure field copy.
+> The built-in toolbox (7 English cards: `memhop-guide` + 6 LLM-callable manuals) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `GetCapability(id)`. Resources are tool declarations (`name/desc/input/output` mirror the host tool spec; `input` is a JSON Schema string), so hosts project them with a pure field copy.
 
 ### L6 trajectory + crystallization (v1.2.7 additions)
 
@@ -327,14 +335,20 @@ res, err := db.Crystallize(ctx, sessionIDHex)
 // res.Details — per-candidate disposition: []CrystallizeDetail{
 //   {Name, Action: "create|reuse|merge|skip", CapabilityID, Reason}}
 // Activate drafts with ActivateCapability afterwards.
+
+// Enumerate + time-based cleanup close the lifecycle loop.
+sessions, err := db.ListTrajectorySessions()
+// sessions[i] = TrajectorySessionSummary{SessionID hex, Steps, LastAppendAt}
+n, err := db.PruneTrajectory(beforeUnixMs)     // deletes events older than before
 ```
 
 `ReadTrajectory(sessionID)` reads events in Seq order; `DeleteTrajectory(sessionID)`
-cleans up (trajectories are short-lived — the host owns cleanup).
+cleans up one session; `PruneTrajectory(before)` sweeps every session at once
+(trajectories are short-lived — the host owns cleanup).
 
 ---
 
-## 9. Exported types (v1.2.7)
+## 9. Exported types (v1.4.0)
 
 | Alias | Source | Use |
 |---|---|---|
@@ -346,7 +360,8 @@ cleans up (trajectories are short-lived — the host owns cleanup).
 | `L3Graph` / `L3ImportItem` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L3Subgraph` | internal | knowledge graph |
 | `L4Query` / `ArchiveSlot` | internal / core | archive search |
 | `Capability` / `CapabilityListQuery` / `CapabilityPatch` / `CrystallizeResult` / **`CrystallizeDetail`** | core / internal | capabilities |
-| **`TrajectoryStats`** / `TrajectorySlot` | internal / core | trajectory + stats |
+| **`TrajectoryStats`** / `TrajectorySlot` / `TrajectorySessionSummary` | internal / core | trajectory + stats |
+| **`DreamReport`** / `DreamStage` | core / internal (new in v1.4.0) | Dream pipeline report |
 | **`TopicSlot`** | core (new in v1.2.7) | element of `SearchResult.Contexts` |
 | **`ResourceRef`** | core (new in v1.2.7) | element of `Capability.Resources` |
 | `ProfileSlot` / `HypergraphSlot` / `HypergraphNode` / `GraphEdgeKind` | core | models |
@@ -375,7 +390,7 @@ Codes: `ErrConfig`, `ErrVectorDimMismatch`, `ErrInvalidQuery`, `ErrNotFound`,
 
 ---
 
-## 11. Minimal runnable skeleton (v1.2.7 signatures)
+## 11. Minimal runnable skeleton (v1.4.0 signatures)
 
 ```go
 package main
@@ -453,8 +468,10 @@ func main() {
    isolated per domain; legacy single-agent files (`FormatVersion < 0x0008`)
    cannot be opened or migrated.
 7. **Built-in capability cards are read-only**: `UpdateCapability` rejects them.
-8. **Trajectories are short-lived**: the host owns cleanup via
-   `DeleteTrajectory`; MemHop never auto-deletes.
+8. **Trajectories are short-lived**: the host owns cleanup; MemHop never
+   auto-deletes. `DeleteTrajectory` clears one session;
+   `PruneTrajectory(beforeMs)` sweeps events older than `beforeMs` across
+   every session (enumerate first with `ListTrajectorySessions`).
 9. **Capacity semantics (v1.2.7)**: the active set is unbounded; reaching
    `Capacity` makes Update trigger a Dream on the oldest scene — Dream is
    skipped when the scene is below `DreamCompressMinTopics` (pre-checked).

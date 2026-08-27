@@ -167,12 +167,12 @@ err := db.Update(topicID, agentReplyText, time.Now().UnixMilli())
 ### 6.3 空闲时：`Dream(ctx, sceneID)`
 
 ```go
-ok, err := db.Dream(ctx, "")       // sceneID 传 "" = 巩固全部活跃场景
+rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 巩固全部活跃场景
 // 或 db.Dream(ctx, sceneIDHex)     // 只巩固指定场景
-// ok=false 表示无内容可巩固，不算错误
 ```
 
 执行 L2→L1→L0 压缩 / 衰减 / 画像蒸馏（多次 LLM 调用，耗时较长）——放后台 goroutine 或对话间隔执行。
+返回结构化 `*DreamReport` 供宿主观测：`ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated`，外加 `Stages []DreamStage{Name, Status, DurationMs}`（状态取值 `ok | skipped | cancelled | error`）。空报告表示无内容可巩固，不算错误；管线中途失败时部分填充的报告随错误一起返回。
 
 ---
 
@@ -210,9 +210,10 @@ if err := db.RefineTopicKeywords(ctx, topicID); err != nil { /* LLM 失败等 */
 ```go
 slot, err := db.GetL0()                       // *api.ProfileSlot
 err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
+err = db.DistillL0(ctx)                       // 只跑 Dream 的情感/MBTI 蒸馏阶段
 ```
 
-日常由 Dream 自动蒸馏，仅强制写入时手动维护。
+日常由 Dream 自动蒸馏，仅强制写入时手动维护；`DistillL0` 是长对话后的轻量刷新入口（域内无画像样本时空转）。
 
 ### L2 场景管理
 
@@ -264,7 +265,7 @@ arcs, err := db.SearchL4(api.L4Query{
 | `db.ActivateCapability(id)` | 草稿 → 激活 |
 | `db.RecordCapabilityUsage(id, success)` | 使用后反馈 |
 
-> 内置能力工具箱（19 张：13 张 manual API 说明书 + 6 张 atomic 原子卡）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；manual 卡 `type: "api"`、`ref: "api:MethodName"`，宿主在 `*api.DB` 上直接调用。
+> 内置能力工具箱（7 张英文卡：`memhop-guide` 总纲 + 6 张 LLM 可调用说明书）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；说明书卡 `type: "api"`、`ref: "api:MethodName"`，宿主在门面上直接调用。默认分层注入——只投影一行索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `GetCapability(id)` 获取。资源即工具声明（`name/desc/input/output` 与宿主工具规格同构；`input` 为 JSON Schema 字符串），宿主纯字段拷贝即可投影。
 
 ### L6 轨迹 + 结晶（v1.2.7 新增能力）
 
@@ -292,13 +293,18 @@ res, err := db.Crystallize(ctx, sessionIDHex)
 // res.Details — 逐候选处置明细：[]CrystallizeDetail{
 //   {Name, Action: "create|reuse|merge|skip", CapabilityID, Reason}}
 // 草稿随后用 ActivateCapability 激活
+
+// 会话枚举 + 按时间批量清理补全生命周期闭环。
+sessions, err := db.ListTrajectorySessions()
+// sessions[i] = TrajectorySessionSummary{SessionID hex, Steps, LastAppendAt}
+n, err := db.PruneTrajectory(beforeUnixMs)    // 删除早于 before 的所有事件
 ```
 
-`ReadTrajectory(sessionID)` 按 Seq 序读全部事件；`DeleteTrajectory(sessionID)` 清理（轨迹是短期数据，宿主负责清，MemHop 不自动清）。
+`ReadTrajectory(sessionID)` 按 Seq 序读全部事件；`DeleteTrajectory(sessionID)` 清理单会话；`PruneTrajectory(before)` 一次清所有会话的旧事件（轨迹是短期数据，宿主负责清，MemHop 不自动清）。
 
 ---
 
-## 9. 导出类型清单（v1.2.7）
+## 9. 导出类型清单（v1.4.0）
 
 | 别名 | 来源 | 用途 |
 |---|---|---|
@@ -310,7 +316,8 @@ res, err := db.Crystallize(ctx, sessionIDHex)
 | `L3Graph` / `L3ImportItem` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L3Subgraph` | internal | 知识图谱 |
 | `L4Query` / `ArchiveSlot` | internal / core | 原文检索 |
 | `Capability` / `CapabilityListQuery` / `CapabilityPatch` / `CrystallizeResult` / **`CrystallizeDetail`** | core / internal | 能力卡 |
-| **`TrajectoryStats`** / `TrajectorySlot` | internal / core | 轨迹 + 统计 |
+| **`TrajectoryStats`** / `TrajectorySlot` / `TrajectorySessionSummary` | internal / core | 轨迹 + 统计 |
+| **`DreamReport`** / `DreamStage` | core / internal（v1.4.0 新增） | Dream 巩固管线报告 |
 | **`TopicSlot`** | core（v1.2.7 新增导出） | `SearchResult.Contexts` 元素类型 |
 | **`ResourceRef`** | core（v1.2.7 新增导出） | `Capability.Resources` 元素类型 |
 | `ProfileSlot` / `HypergraphSlot` / `HypergraphNode` / `GraphEdgeKind` | core | 模型 |
@@ -333,7 +340,7 @@ if api.CodeOf(err) == api.ErrNotFound { ... }
 
 ---
 
-## 11. 最小可运行骨架（v1.2.7 签名）
+## 11. 最小可运行骨架（v1.4.0 签名）
 
 ```go
 package main
@@ -403,6 +410,6 @@ func main() {
 5. **Search 是写操作**：不需要新建记忆时，读历史用 `SceneContext` / `SearchL4`。
 6. **单文件多 agent 域**：v1.4 起所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），按域完全隔离；旧单 agent 库（`FormatVersion < 0x0008`）无法打开、不做迁移。
 7. **内置能力卡只读**：`UpdateCapability` 对内置卡返回错误。
-8. **轨迹短期数据**：宿主负责按会话清理（`DeleteTrajectory`），MemHop 不自动清。
+8. **轨迹短期数据**：宿主负责清理，MemHop 不自动清——单会话用 `DeleteTrajectory`；全会话按时间批量清理用 `PruneTrajectory(beforeMs)`（可先用 `ListTrajectorySessions` 枚举）。
 9. **Capacity 语义（v1.2.7）**：活跃集合无界累积；达到 `Capacity` 时 Update 对最老场景触发 Dream——场景话题数低于 `DreamCompressMinTopics` 时跳过（已预检）。
 10. **`SearchDreamContextThreshold` 默认 30**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用** Search 触发的 Dream——先赋 `*api.DefaultMemHopDefaults` 再覆盖。

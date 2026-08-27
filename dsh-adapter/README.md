@@ -22,7 +22,7 @@
 | `memhop_knowledge_delete` | 删除图谱 | 面板：删除按钮 + 确认 |
 | `memhop_archive_search` | 档案检索（关键词/时间区间/ID） | 面板：检索表单 + 结果列表 |
 | `memhop_archive_get` | 单条档案 | 面板：详情展开（对话原文） |
-| `memhop_capability_list` | 能力清单（内置 19 张 + 库存） | 面板：能力卡片网格，按 kind/status 过滤 |
+| `memhop_capability_list` | 能力清单（内置 7 张 + 库存） | 面板：能力卡片网格，按 kind/status 过滤 |
 | `memhop_capability_get` | 能力详情 | 面板：卡片详情（manual/atomic/composite） |
 | `memhop_capability_activate` | 激活 draft 能力 | 面板：draft 卡片上的激活按钮 |
 | `memhop_capability_import` | 导入能力文件 | 面板：文件选择 |
@@ -33,6 +33,7 @@
 | `memhop_checkpoint` | 落盘快照 | 面板：手动保存按钮 |
 | `memhop_dream` | 记忆巩固（五阶段） | 面板：**一键巩固按钮**（确认 + 进度提示，耗时较长） |
 | `memhop_crystallize` | 从轨迹结晶能力 | 面板：一键触发 + 结果草稿列表 |
+| `memhop_trajectory_sessions` | 会话轨迹清单 | 宿主：发现待结晶/待清理会话 |
 | `memhop_trajectory_read` | 轨迹查看 | 面板：会话轨迹时间线（诊断用） |
 
 ### B. 模型/宿主组（保持 MCP 工具，不 UI 化）

@@ -44,7 +44,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **L3 知识图谱** — 多独立超图，支持节点/边导入、CRUD、关键词/类型查询与 BFS 子图
 - **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）
 - **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、gse、go-openai、go-sdk）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 32 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录）
+- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 33 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录）
 - **单 Agent 单文件** — 默认一个 Agent = 一个 `.meh` 文件，无服务进程、无后台守护；用 `OpenMulti` 可选切换到多 agent 共享
 
 ## 快速开始
@@ -133,7 +133,7 @@ ok, err := sess.Dream(context.Background(), "")
 
 ### 内置 L5 能力
 
-仓库根目录 `capabilities/` 内置了一套开箱即用的能力工具箱（`memhop-capability/v3` 格式），构建时随库内嵌（只读，Open 时自动挂载）——**共 19 张卡，分两类**：MemHop 自身的 API 说明书（13 张：guide、search、update、dream、trajectory、crystallize、capability-import、profile、scene、archive、capability、knowledge、refine，覆盖除 `Open`/`Close`/`Dream`/`Update`/`Search`/L5 读取外的全部对外 API）和 harness/agent 应具备的原子能力卡（文件读写/编辑、命令执行、文件搜索、联网搜索）。说明书卡直接引用 Go API（`type: "api"`、`ref: "api:MethodName"`），宿主在 `*api.DB` 上直接调用，无需 MCP 层。**资源即工具声明**：`name/desc/input/output` 与宿主工具规格（meowire `ToolSpec`）字段完全同构，宿主纯字段拷贝即可投影、零格式转换。**零配置、零写入**：`ListCapabilities`/`GetCapability` 直接返回内置工具箱（与库存能力同套过滤器，可按 status/type/keyword 过滤），宿主 LLM 拉取后即可对照使用；内置能力为只读、不落 `.meh` 文件，与库存同名能力按 ID 去重（库存记录优先），`Search` 响应不附带内置能力——检索只返回库存匹配结果。
+仓库根目录 `capabilities/` 内置 **7 张能力卡**（`memhop-capability/v3` 格式，构建时随库内嵌，英文）：`memhop-guide`（循环分工总纲——Search/Update/Dream 由宿主自动执行、LLM 勿手动调用——外加其余六张卡的索引）+ 六张 LLM 可调用说明书（knowledge、scene、archive、profile、trajectory、capability）。卡描述 Go API 调用契约（`type: "api"`、`ref: "api:MethodName"`），宿主直接调用，无需 MCP 层。**资源即工具声明**：`name/desc/input/output` 与宿主工具规格（meowire `ToolSpec`）字段完全同构，宿主纯字段拷贝即可投影、零格式转换。**分层注入**：`ListCapabilities`/`GetCapability` 只读返回内置卡（与库存能力同套过滤器，不落 `.meh` 文件，同名能力按 ID 去重库存优先，`Search` 响应不附带）；默认只投影一行一卡索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `GetCapability(id)` 获取。
 
 ## 架构
 
