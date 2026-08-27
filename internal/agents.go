@@ -102,10 +102,24 @@ func (db *DB) HasAgent(agentID uint64) bool {
 	return ok
 }
 
+// CheckSession is the session-eligibility policy for the multi-agent
+// facade: the database must be open and agentID must address a registered
+// tenant or the default domain. It returns the error the public Session
+// constructor surfaces, keeping the decision in the business layer.
+func (db *DB) CheckSession(agentID uint64) error {
+	if db.closed.Load() {
+		return common.NewError(common.ErrClosed, "database is closed")
+	}
+	if !db.HasAgent(agentID) {
+		return common.NewError(common.ErrAgentNotFound, "unknown agent: "+common.FormatHash(agentID))
+	}
+	return nil
+}
+
 // DeleteAgent tombstones every record of the domain (registry record
 // included) and drops the tenant mapping. The mapping goes first so no new
 // context can be created mid-delete; the context's tombstone then rejects
-// stale handles, dreamCtx cancels so a pending Dream exits at its next
+// stale handles, opCtx cancels so a pending Dream exits at its next
 // stage boundary, and the domain-lock barrier waits for any operation
 // still holding ac.mu before the engine deletes the records. Space is
 // reclaimed by the engine's Compact path. The default domain cannot be
@@ -118,7 +132,8 @@ func (db *DB) DeleteAgent(agentID uint64) error {
 		return common.NewError(common.ErrClosed, "database is closed")
 	}
 	db.agentsMu.Lock()
-	if name := db.idToName[agentID]; name != "" {
+	name := db.idToName[agentID]
+	if name != "" {
 		delete(db.nameToID, name)
 	}
 	delete(db.idToName, agentID)
@@ -128,6 +143,24 @@ func (db *DB) DeleteAgent(agentID uint64) error {
 		ac.mu.Lock()
 		ac.mu.Unlock() //nolint:staticcheck // barrier only
 	}
-	_, err := db.engine.DeleteAgentRecords(agentID)
-	return err
+	if _, err := db.engine.DeleteAgentRecords(agentID); err != nil {
+		// The record deletion failed: restore the tenant mapping so the
+		// domain stays reachable (a name that vanished while its records
+		// survive would orphan them and let CreateAgent mint a duplicate ID).
+		// Guarded: never write a ghost idToName entry for an unregistered ID
+		// (name == ""), and never clobber a same-name mapping a concurrent
+		// CreateAgent re-established while this deletion was in flight.
+		db.agentsMu.Lock()
+		if name != "" {
+			if _, exists := db.nameToID[name]; !exists {
+				db.nameToID[name] = agentID
+			}
+			if _, exists := db.idToName[agentID]; !exists {
+				db.idToName[agentID] = name
+			}
+		}
+		db.agentsMu.Unlock()
+		return err
+	}
+	return nil
 }

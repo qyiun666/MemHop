@@ -10,6 +10,12 @@ import "errors"
 
 type Code uint16
 
+// ErrTruncated marks an LLM response cut off by the output token ceiling
+// (finish_reason=length); callers use errors.Is to escalate their budget and
+// retry. Transport-level sentinel, shared by the provider and the LLM
+// capabilities.
+var ErrTruncated = errors.New("llm response truncated")
+
 const (
 	ErrConfig            Code = 1001 // 1001 configuration error: missing or invalid parameters (config.go validation, encoder address/model, tokenizer init)
 	ErrVectorDimMismatch Code = 1002 // 1002 vector dimension mismatch: config vs engine (config.go)

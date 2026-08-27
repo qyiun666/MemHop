@@ -66,38 +66,8 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	// match the merged records (storage write already done).
 	ac.retargetL2Meta(primaryHash, removed)
 	// Drop merged secondary scenes so Dream does not spin empty goroutines.
-	kept := ac.activeScenes[:0]
-	for _, sid := range ac.activeScenes {
-		if _, drop := removed[sid]; !drop {
-			kept = append(kept, sid)
-		}
-	}
-	ac.activeScenes = kept
+	ac.dropActiveScenes(removed)
 	return nil
-}
-
-// SceneMessage is one L4 archive message inside a scene context topic.
-type SceneMessage struct {
-	Role      uint8  `json:"role"`
-	Content   string `json:"content"`
-	CreatedAt int64  `json:"created_at"`
-}
-
-// SceneContextTopic is one depth-1 topic with its L4 messages and child count.
-type SceneContextTopic struct {
-	TopicID    string         `json:"topic_id"`
-	Depth      int            `json:"depth"`
-	Keywords   []string       `json:"keywords"`
-	L4IDs      []string       `json:"l4_ids,omitempty"` // 话题内的 L4 档案 ID,供按 ID 拉取原文
-	Messages   []SceneMessage `json:"messages,omitempty"`
-	ChildCount int            `json:"child_count"`
-}
-
-// SceneContext is a scene's full depth-1 conversation context.
-type SceneContext struct {
-	SceneName  string              `json:"scene_name"`
-	TopicCount int                 `json:"topic_count"`
-	Topics     []SceneContextTopic `json:"topics"`
 }
 
 // SceneContext returns one scene's topics sorted by user timestamp with
@@ -134,25 +104,32 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 	}
 	out := &SceneContext{SceneName: scenes[0].SceneName}
 	for _, t := range topics {
-		st := SceneContextTopic{
-			TopicID:    common.FormatHash(t.ID),
-			Depth:      int(t.Depth),
-			Keywords:   append(append(append([]string{}, t.FusedKeywords...), t.UserKeywords...), t.AgentKeywords...),
-			ChildCount: children[t.ID],
-			L4IDs:      make([]string, 0, len(t.L4Refs)),
-		}
-		for _, ref := range t.L4Refs {
-			st.L4IDs = append(st.L4IDs, common.FormatHash(ref))
-			arc, err := core.ReadArchiveSlot(db.engine, agentID, ref)
-			if err != nil {
-				continue
-			}
-			st.Messages = append(st.Messages, SceneMessage{Role: arc.Role, Content: arc.Content, CreatedAt: arc.CreatedAt})
-		}
-		out.Topics = append(out.Topics, st)
+		out.Topics = append(out.Topics, db.sceneContextTopic(agentID, t, children))
 	}
 	out.TopicCount = len(out.Topics)
 	return out, nil
+}
+
+// sceneContextTopic renders one topic of a scene context: merged keyword
+// tracks, child count, and its L4 messages (unreadable archives are
+// skipped, the id ref is still reported).
+func (db *DB) sceneContextTopic(agentID uint64, t core.TopicSlot, children map[uint64]int) SceneContextTopic {
+	st := SceneContextTopic{
+		TopicID:    common.FormatHash(t.ID),
+		Depth:      int(t.Depth),
+		Keywords:   append(append(append([]string{}, t.FusedKeywords...), t.UserKeywords...), t.AgentKeywords...),
+		ChildCount: children[t.ID],
+		L4IDs:      make([]string, 0, len(t.L4Refs)),
+	}
+	for _, ref := range t.L4Refs {
+		st.L4IDs = append(st.L4IDs, common.FormatHash(ref))
+		arc, err := core.ReadArchiveSlot(db.engine, agentID, ref)
+		if err != nil {
+			continue
+		}
+		st.Messages = append(st.Messages, SceneMessage{Role: arc.Role, Content: arc.Content, CreatedAt: arc.CreatedAt})
+	}
+	return st
 }
 
 // DeleteTopic removes a topic and its whole subtree (children at any
@@ -170,7 +147,7 @@ func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse topic id", err)
 	}
-	topics, archives := collectTopicClosure(db.engine, agentID, parsedID)
+	topics, archives := repo.TopicClosureL2(db.engine, agentID, parsedID)
 	if len(topics) == 0 {
 		return common.NewError(common.ErrNotFound, "topic not found")
 	}
@@ -193,23 +170,12 @@ func (ac *agentContext) pruneParentChild(db *DB, topicID uint64) error {
 	if err != nil || parent == nil {
 		return err
 	}
-	parent.ChildrenIDs = removeOnceUint64(parent.ChildrenIDs, topicID)
+	parent.ChildrenIDs = common.RemoveOnce(parent.ChildrenIDs, topicID)
 	if err := core.WriteTopicSlot(db.engine, ac.id, parentID, parent); err != nil {
 		return err
 	}
 	ac.syncL2Meta(db, parentID)
 	return nil
-}
-
-// removeOnceUint64 removes the first occurrence of v from s (no-op when
-// absent); s is returned unchanged when v is not found.
-func removeOnceUint64(s []uint64, v uint64) []uint64 {
-	for i, x := range s {
-		if x == v {
-			return append(s[:i], s[i+1:]...)
-		}
-	}
-	return s
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
@@ -249,44 +215,9 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 	if err := repo.DeleteSceneNodeL1(db.engine, agentID, sceneHash); err != nil {
 		return err
 	}
-	for _, id := range topics {
-		ac.l2Meta.Remove(id)
-		ac.sparseIndex.RemoveDocument(id)
-	}
-	kept := ac.activeScenes[:0]
-	for _, sid := range ac.activeScenes {
-		if sid != sceneHash {
-			kept = append(kept, sid)
-		}
-	}
-	ac.activeScenes = kept
+	ac.removeTopicsFromIndices(topics)
+	ac.dropActiveScenes(map[uint64]struct{}{sceneHash: {}})
 	return nil
-}
-
-// collectTopicClosure gathers a topic, its recursive children (any depth)
-// and the L4 archives referenced by any of them. topics is empty when the
-// root topic does not exist (DeleteTopic then reports ErrNotFound).
-func collectTopicClosure(engine *core.StorageEngine, agentID uint64, root uint64) (topics, archives []uint64) {
-	all := core.CollectAllTopics(engine, agentID)
-	byID := make(map[uint64]core.TopicSlot, len(all))
-	children := make(map[uint64][]uint64, len(all))
-	for _, t := range all {
-		byID[t.ID] = t
-		if t.ParentID != nil {
-			children[*t.ParentID] = append(children[*t.ParentID], t.ID)
-		}
-	}
-	if _, ok := byID[root]; !ok {
-		return nil, nil
-	}
-	topics = append(topics, root)
-	for i := 0; i < len(topics); i++ {
-		topics = append(topics, children[topics[i]]...)
-	}
-	for _, id := range topics {
-		archives = append(archives, byID[id].L4Refs...)
-	}
-	return topics, common.DedupSorted(archives)
 }
 
 // deleteTopics removes the given topics (with their L2Meta/sparse entries)
@@ -302,9 +233,6 @@ func (ac *agentContext) deleteTopics(db *DB, agentID uint64, topics, archives []
 	if err := repo.DeleteArchivesL4(db.engine, agentID, archives); err != nil {
 		return err
 	}
-	for _, id := range topics {
-		ac.l2Meta.Remove(id)
-		ac.sparseIndex.RemoveDocument(id)
-	}
+	ac.removeTopicsFromIndices(topics)
 	return nil
 }

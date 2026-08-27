@@ -11,16 +11,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// L4Query archive query: the three modes are exclusive with priority
-// Keyword > time range > IDs; TopicID filters in all modes.
-type L4Query struct {
-	Keyword string   `json:"keyword,omitempty"` // mode 1: content substring
-	Start   int64    `json:"start,omitempty"`   // mode 2: time range [Start, End] (ms)
-	End     int64    `json:"end,omitempty"`
-	IDs     []string `json:"ids,omitempty"`      // mode 3: by id
-	TopicID *string  `json:"topic_id,omitempty"` // extra: only archives of this topic
-}
-
 func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {

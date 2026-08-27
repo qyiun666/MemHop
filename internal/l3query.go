@@ -14,15 +14,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// L3NodeQuery is a node query: GraphID required; one of IDs/Keyword/NodeType.
-type L3NodeQuery struct {
-	GraphID  string   `json:"graph_id"`
-	IDs      []string `json:"ids,omitempty"`
-	Keyword  string   `json:"keyword,omitempty"`
-	NodeType string   `json:"node_type,omitempty"`
-	Limit    int      `json:"limit,omitempty"` // <=0 means unlimited
-}
-
 func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -39,17 +30,7 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 	var out []core.HypergraphNode
 	switch {
 	case len(q.IDs) > 0:
-		for _, id := range q.IDs {
-			idHash, err := common.ParseID(id)
-			if err != nil {
-				continue
-			}
-			node, err := core.ReadHypergraphNode(db.engine, agentID, idHash)
-			if err != nil || node.GraphID != graphHash {
-				continue
-			}
-			out = append(out, *node)
-		}
+		out = db.queryNodesByIDs(agentID, graphHash, q.IDs)
 	case q.Keyword != "":
 		kw := strings.ToLower(q.Keyword)
 		for _, n := range repo.ListNodeL3(db.engine, agentID, q.GraphID) {
@@ -75,6 +56,24 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 	return out, nil
 }
 
+// queryNodesByIDs reads the requested nodes, keeping only the ones that
+// exist and belong to graphHash; unparsable/missing ids are skipped.
+func (db *DB) queryNodesByIDs(agentID, graphHash uint64, ids []string) []core.HypergraphNode {
+	var out []core.HypergraphNode
+	for _, id := range ids {
+		idHash, err := common.ParseID(id)
+		if err != nil {
+			continue
+		}
+		node, err := core.ReadHypergraphNode(db.engine, agentID, idHash)
+		if err != nil || node.GraphID != graphHash {
+			continue
+		}
+		out = append(out, *node)
+	}
+	return out
+}
+
 func nodeMatchesKeyword(n core.HypergraphNode, kw string) bool {
 	if strings.Contains(strings.ToLower(n.Title), kw) {
 		return true
@@ -90,11 +89,6 @@ func nodeMatchesKeyword(n core.HypergraphNode, kw string) bool {
 	return false
 }
 
-type L3Subgraph struct {
-	Nodes []core.HypergraphNode
-	Edges []core.HypergraphEdge
-}
-
 // QueryL3Subgraph BFS from startNodeID up to maxDepth; edgeKinds restricts
 // reachable edges (maxDepth<=0 means 1).
 func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*L3Subgraph, error) {
@@ -103,53 +97,19 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	graphHash, err := common.ParseID(graphID)
+	startHash, err := db.resolveSubgraphStart(agentID, graphID, startNodeID)
 	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse graph id", err)
-	}
-	startHash, err := common.ParseID(startNodeID)
-	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse start node id", err)
-	}
-	startNode, err := core.ReadHypergraphNode(db.engine, agentID, startHash)
-	if err != nil {
-		return nil, common.NewError(common.ErrNotFound, "start node not found", err)
-	}
-	if startNode.GraphID != graphHash {
-		return nil, common.NewError(common.ErrInvalidQuery,
-			"start node does not belong to the requested graph")
+		return nil, err
 	}
 	if maxDepth <= 0 {
 		maxDepth = 1
 	}
 
 	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs fully connected.
-	adj := make(map[uint64]map[uint64]struct{})
-	var edges []core.HypergraphEdge
-	for _, e := range repo.ListEdgeL3(db.engine, agentID, graphID) {
-		if len(edgeKinds) > 0 && !containsEdgeKind(edgeKinds, e.Kind) {
-			continue
-		}
-		edges = append(edges, e)
-		connectNodes(adj, e.NodeIDs)
-	}
+	adj, edges := db.subgraphAdjacency(agentID, graphID, edgeKinds)
 
 	// BFS level order: maxDepth hops, one hop per round.
-	visited := map[uint64]struct{}{startHash: {}}
-	queue := []uint64{startHash}
-	for depth := 0; depth < maxDepth && len(queue) > 0; depth++ {
-		var next []uint64
-		for _, cur := range queue {
-			for nb := range adj[cur] {
-				if _, seen := visited[nb]; seen {
-					continue
-				}
-				visited[nb] = struct{}{}
-				next = append(next, nb)
-			}
-		}
-		queue = next
-	}
+	visited := bfsWithinDepth(startHash, adj, maxDepth)
 
 	// Subgraph extraction: visited nodes plus edges with both ends visited.
 	nodes := make([]core.HypergraphNode, 0, len(visited))
@@ -165,6 +125,65 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 		}
 	}
 	return &L3Subgraph{Nodes: nodes, Edges: subEdges}, nil
+}
+
+// resolveSubgraphStart parses the graph/start ids and verifies the start
+// node exists and belongs to the requested graph.
+func (db *DB) resolveSubgraphStart(agentID uint64, graphID, startNodeID string) (uint64, error) {
+	graphHash, err := common.ParseID(graphID)
+	if err != nil {
+		return 0, common.NewError(common.ErrInvalidQuery, "parse graph id", err)
+	}
+	startHash, err := common.ParseID(startNodeID)
+	if err != nil {
+		return 0, common.NewError(common.ErrInvalidQuery, "parse start node id", err)
+	}
+	startNode, err := core.ReadHypergraphNode(db.engine, agentID, startHash)
+	if err != nil {
+		return 0, common.NewError(common.ErrNotFound, "start node not found", err)
+	}
+	if startNode.GraphID != graphHash {
+		return 0, common.NewError(common.ErrInvalidQuery,
+			"start node does not belong to the requested graph")
+	}
+	return startHash, nil
+}
+
+// subgraphAdjacency builds the undirected adjacency map from the graph's
+// edges (restricted to edgeKinds when non-empty) and returns the kept
+// edges alongside.
+func (db *DB) subgraphAdjacency(agentID uint64, graphID string, edgeKinds []core.GraphEdgeKind) (map[uint64]map[uint64]struct{}, []core.HypergraphEdge) {
+	adj := make(map[uint64]map[uint64]struct{})
+	var edges []core.HypergraphEdge
+	for _, e := range repo.ListEdgeL3(db.engine, agentID, graphID) {
+		if len(edgeKinds) > 0 && !containsEdgeKind(edgeKinds, e.Kind) {
+			continue
+		}
+		edges = append(edges, e)
+		connectNodes(adj, e.NodeIDs)
+	}
+	return adj, edges
+}
+
+// bfsWithinDepth returns the ids reachable from start within maxDepth
+// hops (level order, one hop per round), including start itself.
+func bfsWithinDepth(start uint64, adj map[uint64]map[uint64]struct{}, maxDepth int) map[uint64]struct{} {
+	visited := map[uint64]struct{}{start: {}}
+	queue := []uint64{start}
+	for depth := 0; depth < maxDepth && len(queue) > 0; depth++ {
+		var next []uint64
+		for _, cur := range queue {
+			for nb := range adj[cur] {
+				if _, seen := visited[nb]; seen {
+					continue
+				}
+				visited[nb] = struct{}{}
+				next = append(next, nb)
+			}
+		}
+		queue = next
+	}
+	return visited
 }
 
 func connectNodes(adj map[uint64]map[uint64]struct{}, nodeIDs []uint64) {

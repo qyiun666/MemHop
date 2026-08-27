@@ -205,7 +205,7 @@ func arrProp(desc, itemType string) map[string]any {
 }
 
 // registerTools attaches all 32 tools to the server for one tenant DB.
-func registerTools(s *mcp.Server, db *memhop.AgentSession) {
+func registerTools(s *mcp.Server, db *memhop.Session) {
 	registerCoreTools(s, db)
 	registerL2Tools(s, db)
 	registerL3Tools(s, db)

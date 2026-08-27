@@ -30,7 +30,7 @@ const dbFileName = "memhop.meh"
 // tenantEntry pairs a tenant's agent session with the MCP server exposing
 // its tools.
 type tenantEntry struct {
-	session *memhop.AgentSession
+	session *memhop.Session
 	server  *mcp.Server
 }
 

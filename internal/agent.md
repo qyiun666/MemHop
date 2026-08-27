@@ -6,7 +6,8 @@
 ## 唯一职责
 
 编排 Search/Update/Dream/L0-L6 业务管线与多 agent 生命周期
-（`agentContext`、`CreateAgent`/`ListAgents`/`DeleteAgent`）。
+（`agentContext`、`CreateAgent`/`ListAgents`/`DeleteAgent`），并以
+`Session`（session.go）向 `api` 门面暴露按域绑定的公开操作面。
 
 ## agentContext 域级锁纪律
 
@@ -15,6 +16,8 @@
    存储读写；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent
    并行。`contextFor` 对非默认域校验注册表：未注册/已删除的 agentID 直接
    `ErrAgentNotFound`，域永不复活；与删除对撞的陈旧句柄由锁内墓碑复检拒绝。
+   L6 会话族统一走 `db.lockSession(agentID, sessionID)`（lockAgent + hex
+   解析，解析失败先解锁），门面侧的会话准入策略在 `CheckSession`。
 2. **索引锁序**：同一操作内更新索引遵循 **存储 -> l2meta -> sparse**
    （先落记录帧，再 `ac.syncL2Meta`，最后更新稀疏索引）。
    **禁止在域锁内取 `db.agentsMu`**（锁序环：sweep 走 agentsMu -> ac.mu），
@@ -35,16 +38,35 @@
 
 - 只经 `internal/repo`（及 `repo/core` 导出的 Slot 读写）访问数据；
   **禁止**直接操作帧、文件头、快照结构。
-- `StorageEngine` 句柄由装配层 `config.go` 的 `Open` 唯一持有并注入
-  `DB.engine`；业务代码不得自行打开/关闭引擎。
+- `StorageEngine` 句柄由装配层 `config.go` 的 `Open(cfg, enc, builtins)`
+  唯一持有并注入 `DB.engine`；业务代码不得自行打开/关闭引擎。内建能力
+  工具箱由 `api` 门面以 `fs.FS` 注入（api 传 `capabilities.FS`），
+  `Open` 负责解析并 attach——internal 不得 import `capabilities`。
+- **能力下沉**：算法与策略一律在 `internal/cap/<feature>` 能力包
+  （scenefind 三通道+RRF 评分、engram L1 建边与遗忘衰减、llmops 四类
+  LLM 提示契约与解析、capability 能力卡解析校验合并、profile 画像摘要
+  与蒸馏生成、knowledge L3 匹配与节点合并策略）；本包保留"取数 → 调
+  能力 → 落库"的编排，不做算法。LLM 传输策略（截断升级重试）在本包
+  `llm_ops.go` 的 `Provider.ChatWithRetry`，prompt 构建属于 llmops。
+- 新增能力时：先建 `cap/<feature>` 包（依赖注入 + 窄接口，禁止 import
+  internal 根），再由本层组装；共享 DTO 下沉 `repo/core/model_dto.go`
+  / `model_distill.go`，本包以恒等别名引用（`models.go`）。
+- **会话面（session.go）**：`Session` 是绑定单个 agent 域的唯一对外操作
+  入口（含 ActiveSceneIDs 的外部 hex 渲染）；`api.Session` 只内嵌本类型做
+  纯转发，api 侧禁止出现业务逻辑、格式化或域绑定代码。多 agent 是唯一
+  模式：`NewSession(agentID)` 是唯一会话构造器，`DefaultSession` 已删除。
+  `exports.go` 是给 api 门面的恒等再导出接缝（Slot 别名、枚举常量、
+  Code/CodeOf、FormatAgentID/ParseAgentID）；`api` 包禁止直接 import
+  `repo/core` 或 `common`。
 - LLM/encoder 为 DB 级共享（无租户状态），可在域锁内调用，但不得持存储
   事务等待网络返回。
 
 ## 单向依赖
 
-`internal -> internal/repo -> repo/{core,index}`，外加 `common`；
-禁止依赖 `api`、`cmd`、`capabilities`。`api` 门面（含 `AgentSession`）
-是本层唯一对外出口。
+`internal -> internal/cap -> internal/repo -> repo/{core,index}`，
+外加 `common`；能力包之间互不 import（需要交互时回到组装根）。
+禁止依赖 `api`、`cmd`、`capabilities`。`api` 门面（`MultiAgentDB`/
+`Session`）是本层唯一对外出口。
 
 ## 修改者义务
 

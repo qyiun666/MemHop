@@ -72,74 +72,105 @@ func splitTenants(raw string) ([]string, error) {
 	return out, nil
 }
 
-// loadConfig parses flags and environment into a serverConfig.
-func loadConfig(args []string) (*serverConfig, error) {
+// flagValues holds the parsed command-line flags of the server.
+type flagValues struct {
+	listen             string
+	dbDir              string
+	tenants            string
+	transport          string
+	vectorDim          int
+	encoderAddr        string
+	embedModel         string
+	encoderTimeoutSecs int
+	llmModel           string
+}
+
+// parseFlags registers and parses the memhop-mcp command line, rejecting
+// unknown positional args and enforcing flag-level invariants.
+func parseFlags(args []string) (*flagValues, error) {
 	fs := flag.NewFlagSet("memhop-mcp", flag.ContinueOnError)
-	listen := fs.String("listen", "127.0.0.1:3939", "HTTP listen address")
-	dbDir := fs.String("db-dir", "", "directory holding the shared multi-agent memhop.meh database (required)")
-	tenants := fs.String("tenants", "", "optional comma-separated tenant whitelist")
-	transport := fs.String("transport", "sse", "multi-tenant HTTP transport: sse or streamable-http")
-	vectorDim := fs.Int("vector-dim", 1024, "embedding vector dimension")
-	encoderAddr := fs.String("encoder-addr", "", "embedding encoder HTTP address (e.g. http://127.0.0.1:11434)")
-	embedModel := fs.String("embed-model", "", "embedding model name on the encoder (required)")
-	encoderTimeoutSecs := fs.Int("encoder-timeout-secs", 20, "encoder request timeout in seconds")
-	llmModel := fs.String("llm-model", "", "LLM model name (overrides MEMHOP_LLM_MODEL)")
+	v := &flagValues{}
+	fs.StringVar(&v.listen, "listen", "127.0.0.1:3939", "HTTP listen address")
+	fs.StringVar(&v.dbDir, "db-dir", "", "directory holding the shared multi-agent memhop.meh database (required)")
+	fs.StringVar(&v.tenants, "tenants", "", "optional comma-separated tenant whitelist")
+	fs.StringVar(&v.transport, "transport", "sse", "multi-tenant HTTP transport: sse or streamable-http")
+	fs.IntVar(&v.vectorDim, "vector-dim", 1024, "embedding vector dimension")
+	fs.StringVar(&v.encoderAddr, "encoder-addr", "", "embedding encoder HTTP address (e.g. http://127.0.0.1:11434)")
+	fs.StringVar(&v.embedModel, "embed-model", "", "embedding model name on the encoder (required)")
+	fs.IntVar(&v.encoderTimeoutSecs, "encoder-timeout-secs", 20, "encoder request timeout in seconds")
+	fs.StringVar(&v.llmModel, "llm-model", "", "LLM model name (overrides MEMHOP_LLM_MODEL)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}
 	if fs.NArg() > 0 {
 		return nil, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 	}
-	if *dbDir == "" {
+	if v.dbDir == "" {
 		return nil, fmt.Errorf("--db-dir is required")
 	}
-	if *transport != "sse" && *transport != "streamable-http" {
-		return nil, fmt.Errorf("--transport must be sse or streamable-http, got %q", *transport)
+	if v.transport != "sse" && v.transport != "streamable-http" {
+		return nil, fmt.Errorf("--transport must be sse or streamable-http, got %q", v.transport)
 	}
+	return v, nil
+}
 
+// buildBaseConfig assembles the shared engine config from flags plus the
+// MEMHOP_* environment (LLM credentials come from the environment only).
+func buildBaseConfig(v *flagValues) (memhop.MemHopConfig, error) {
+	var base memhop.MemHopConfig
 	llmTimeout, err := envInt("MEMHOP_LLM_TIMEOUT_SECS", 30)
 	if err != nil {
-		return nil, err
+		return base, err
 	}
 	llmMaxTokens, err := envInt("MEMHOP_LLM_MAX_OUTPUT_TOKENS", 8192)
 	if err != nil {
-		return nil, err
+		return base, err
 	}
-
-	base := memhop.MemHopConfig{
+	base = memhop.MemHopConfig{
 		DBPath:             "", // filled per tenant by the registry
-		VectorDim:          *vectorDim,
-		EncoderAddr:        *encoderAddr,
-		EmbedModel:         *embedModel,
-		EncoderTimeoutSecs: *encoderTimeoutSecs,
+		VectorDim:          v.vectorDim,
+		EncoderAddr:        v.encoderAddr,
+		EmbedModel:         v.embedModel,
+		EncoderTimeoutSecs: v.encoderTimeoutSecs,
 	}
 	base.LLM.APIURL = envOr("MEMHOP_LLM_API_URL", "")
 	base.LLM.APIKey = os.Getenv("MEMHOP_LLM_API_KEY")
-	base.LLM.Model = firstNonEmpty(*llmModel, os.Getenv("MEMHOP_LLM_MODEL"))
+	base.LLM.Model = firstNonEmpty(v.llmModel, os.Getenv("MEMHOP_LLM_MODEL"))
 	base.LLM.TimeoutSecs = llmTimeout
 	base.LLM.MaxOutputTokens = llmMaxTokens
-
 	// Field-level checks mirroring MemHopConfig.Validate minus DBPath
 	// (filled per tenant by the registry, which runs the full Validate).
 	if base.VectorDim <= 0 || base.VectorDim > 65535 {
-		return nil, fmt.Errorf("vector-dim must be in range (0, 65535]")
+		return base, fmt.Errorf("vector-dim must be in range (0, 65535]")
 	}
 	if base.EmbedModel == "" {
-		return nil, fmt.Errorf("--embed-model is required")
+		return base, fmt.Errorf("--embed-model is required")
 	}
 	if base.LLM.APIURL == "" || base.LLM.APIKey == "" || base.LLM.Model == "" {
-		return nil, fmt.Errorf("MEMHOP_LLM_API_URL, MEMHOP_LLM_API_KEY and MEMHOP_LLM_MODEL are required")
+		return base, fmt.Errorf("MEMHOP_LLM_API_URL, MEMHOP_LLM_API_KEY and MEMHOP_LLM_MODEL are required")
 	}
+	return base, nil
+}
 
-	allowed, err := splitTenants(*tenants)
+// loadConfig parses flags and environment into a serverConfig.
+func loadConfig(args []string) (*serverConfig, error) {
+	v, err := parseFlags(args)
+	if err != nil {
+		return nil, err
+	}
+	base, err := buildBaseConfig(v)
+	if err != nil {
+		return nil, err
+	}
+	allowed, err := splitTenants(v.tenants)
 	if err != nil {
 		return nil, err
 	}
 	return &serverConfig{
-		Listen:    *listen,
-		DBDir:     *dbDir,
+		Listen:    v.listen,
+		DBDir:     v.dbDir,
 		Tenants:   allowed,
-		Transport: *transport,
+		Transport: v.transport,
 		Base:      base,
 	}, nil
 }

@@ -27,9 +27,6 @@ func (t *BKTree) Insert(word string) {
 		t.nodes = append(t.nodes, bkNode{word: word, children: make(map[int]int)})
 		return
 	}
-	if t.contains(word) {
-		return
-	}
 	t.insertRecursive(0, word)
 }
 
@@ -43,23 +40,11 @@ func (t *BKTree) Search(word string, maxDist int) []BKMatch {
 	return results
 }
 
-func (t *BKTree) contains(word string) bool {
-	return t.containsRecursive(0, word)
-}
-
-func (t *BKTree) containsRecursive(nodeIdx int, word string) bool {
-	dist := LevenshteinDistance(t.nodes[nodeIdx].word, word)
-	if dist == 0 {
-		return true
-	}
-	if nextIdx, ok := t.nodes[nodeIdx].children[dist]; ok {
-		return t.containsRecursive(nextIdx, word)
-	}
-	return false
-}
-
 func (t *BKTree) insertRecursive(nodeIdx int, word string) {
 	dist := LevenshteinDistance(t.nodes[nodeIdx].word, word)
+	if dist == 0 {
+		return // word already present: BK-trees keep unique keys
+	}
 	if nextIdx, ok := t.nodes[nodeIdx].children[dist]; ok {
 		t.insertRecursive(nextIdx, word)
 		return

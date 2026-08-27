@@ -1,9 +1,11 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package encoder provides the embedding encoder implementation backed by
-// the Ollama HTTP API. HttpEncoder satisfies the scenefind.Encoder narrow
-// interface (Encode returns a dense f32 vector, IsAvailable probes health).
+// Encoder injection seam of the composition root: HttpEncoder is the
+// built-in implementation backed by the Ollama HTTP API (Encode returns a
+// dense f32 vector, IsAvailable probes health). Capability packages declare
+// the narrow Encoder they need (e.g. scenefind.Encoder); HttpEncoder
+// satisfies all of them structurally.
 //
 // MemHop talks to Ollama directly over plain HTTP. Ollama is owned and
 // operated by the host; importing its Go SDK here would pull in a large
@@ -30,6 +32,15 @@ const (
 	defaultEncodeTimeout = 20 * time.Second
 	healthCheckTTL       = 5 * time.Second // IsAvailable cache TTL
 )
+
+// Encoder is the host-injected embedding contract re-exported by the public
+// facade (api.Encoder): Open assembles an HttpEncoder when the host does not
+// supply one. Capability packages declare the narrower shape they use, which
+// this satisfies structurally.
+type Encoder interface {
+	Encode(text string) ([]float32, error)
+	IsAvailable() bool
+}
 
 // HttpEncoder is a minimal HTTP client for the Ollama embed API.
 type HttpEncoder struct {

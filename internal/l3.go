@@ -7,40 +7,13 @@ package internal
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/qyiun666/MemHop/internal/cap/knowledge"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
-
-type L3Graph struct {
-	Slot  core.HypergraphSlot
-	Nodes []core.HypergraphNode
-	Edges []core.HypergraphEdge
-}
-
-type L3ImportItem struct {
-	Title    string   `json:"title"`
-	Domain   string   `json:"domain"`
-	NodeType string   `json:"node_type"`
-	Content  string   `json:"content"`
-	Keywords []string `json:"keywords"`
-}
-
-type L3ImportMode string
-
-const (
-	L3ImportSkip      L3ImportMode = "Skip"
-	L3ImportMerge     L3ImportMode = "Merge"
-	L3ImportOverwrite L3ImportMode = "Overwrite"
-)
-
-type L3ImportResult struct {
-	CreatedIDs   []string `json:"created_ids"`
-	UpdatedIDs   []string `json:"updated_ids"`
-	SkippedCount int      `json:"skipped_count"`
-	Errors       []string `json:"errors,omitempty"`
-}
 
 func (db *DB) GetL3(agentID uint64, id string) (*L3Graph, error) {
 	ac, err := db.lockAgent(agentID)
@@ -58,7 +31,7 @@ func (db *DB) getL3Graph(agentID uint64, id string) (*L3Graph, error) {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
 	var slot *core.HypergraphSlot
-	graphs := repo.ListGraphsL3(db.engine, agentID)
+	graphs := core.CollectAllGraphSlots(db.engine, agentID)
 	for i := range graphs {
 		if graphs[i].IDHash == graphHash {
 			slot = &graphs[i]
@@ -85,7 +58,7 @@ func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	all := repo.ListGraphsL3(db.engine, agentID)
+	all := core.CollectAllGraphSlots(db.engine, agentID)
 	if all == nil {
 		return []core.HypergraphSlot{}, nil
 	}
@@ -113,7 +86,7 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 			"import mode must be Skip, Merge or Overwrite")
 	}
 	graphCache := make(map[string]uint64, len(items)) // Domain → graphID
-	for _, g := range repo.ListGraphsL3(db.engine, agentID) {
+	for _, g := range core.CollectAllGraphSlots(db.engine, agentID) {
 		graphCache[g.Name] = g.IDHash
 	}
 	nodeTitles := make(map[uint64]map[string]struct{}) // graphID → existing node titles
@@ -158,11 +131,11 @@ func (db *DB) importOneL3Item(agentID uint64, item L3ImportItem, mode L3ImportMo
 			result.SkippedCount++
 			return nil
 		case L3ImportMerge:
-			if _, err := repo.MergeNodeL3(db.engine, agentID, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords); err != nil {
+			if err := mutateImportedNode(db, agentID, graphIDStr, item, knowledge.MergeFields); err != nil {
 				return err
 			}
 		case L3ImportOverwrite:
-			if _, err := repo.OverwriteNodeL3(db.engine, agentID, graphIDStr, item.Title, item.NodeType, item.Content, item.Keywords); err != nil {
+			if err := mutateImportedNode(db, agentID, graphIDStr, item, knowledge.OverwriteFields); err != nil {
 				return err
 			}
 		}
@@ -205,4 +178,15 @@ func (db *DB) DeleteL3(agentID uint64, id string) error {
 		return common.NewError(common.ErrIO, "delete graph", nil)
 	}
 	return nil
+}
+
+// mutateImportedNode applies one knowledge field-merge policy to the stored
+// node of an import item (record access and membership stay in the repo).
+func mutateImportedNode(db *DB, agentID uint64, graphID string, item L3ImportItem,
+	merge func(*core.HypergraphNode, string, string, []string, int64)) error {
+	now := time.Now().UnixMilli()
+	_, err := repo.MutateNodeL3(db.engine, agentID, graphID, item.Title, func(n *core.HypergraphNode) {
+		merge(n, item.NodeType, item.Content, item.Keywords, now)
+	})
+	return err
 }

@@ -26,7 +26,15 @@ type sessionIDArgs struct {
 	SessionID string `json:"session_id"`
 }
 
-func registerL6Tools(s *mcp.Server, db *memhop.AgentSession) {
+// registerL6Tools installs the trajectory and crystallize tools; each
+// register function owns one cohesive tool group.
+func registerL6Tools(s *mcp.Server, db *memhop.Session) {
+	registerTrajectoryAppendTool(s, db)
+	registerTrajectoryReadTools(s, db)
+	registerCrystallizeTool(s, db)
+}
+
+func registerTrajectoryAppendTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_append",
 		Description: "向会话追加一条 L6 操作轨迹事件（Seq 自动分配）。event_type 示例：turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end。Payload 超过 4KB 会被截断。",
@@ -38,27 +46,40 @@ func registerL6Tools(s *mcp.Server, db *memhop.AgentSession) {
 			"timestamp":  intProp("Unix 毫秒时间戳，必填"),
 		}, "session_id", "event_type", "timestamp"),
 	}, handle[trajectoryAppendArgs, updateResult](func(a trajectoryAppendArgs) (updateResult, error) {
-		sessionID, err := strconv.ParseUint(a.SessionID, 16, 64)
+		slot, err := toTrajectorySlot(a)
 		if err != nil {
 			return updateResult{}, err
 		}
-		var l4Ref *uint64
-		if a.L4Ref != nil {
-			v, err := strconv.ParseUint(*a.L4Ref, 16, 64)
-			if err != nil {
-				return updateResult{}, err
-			}
-			l4Ref = &v
-		}
-		return updateResult{OK: true}, db.AppendTrajectory(a.SessionID, memhop.TrajectorySlot{
-			SessionID: sessionID,
-			EventType: a.EventType,
-			Payload:   a.Payload,
-			L4Ref:     l4Ref,
-			Timestamp: a.Timestamp,
-		})
+		return updateResult{OK: true}, db.AppendTrajectory(a.SessionID, slot)
 	}))
+}
 
+// toTrajectorySlot parses the hex session/l4 refs of an append request
+// into the api DTO (Seq is assigned by the store).
+func toTrajectorySlot(a trajectoryAppendArgs) (memhop.TrajectorySlot, error) {
+	sessionID, err := strconv.ParseUint(a.SessionID, 16, 64)
+	if err != nil {
+		return memhop.TrajectorySlot{}, err
+	}
+	var l4Ref *uint64
+	if a.L4Ref != nil {
+		v, err := strconv.ParseUint(*a.L4Ref, 16, 64)
+		if err != nil {
+			return memhop.TrajectorySlot{}, err
+		}
+		l4Ref = &v
+	}
+	return memhop.TrajectorySlot{
+		SessionID: sessionID,
+		EventType: a.EventType,
+		Payload:   a.Payload,
+		L4Ref:     l4Ref,
+		Timestamp: a.Timestamp,
+	}, nil
+}
+
+// registerTrajectoryReadTools installs read/stats/delete over one session.
+func registerTrajectoryReadTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_read",
 		Description: "读取会话的 L6 操作轨迹（按 Seq 升序）。",
@@ -92,7 +113,9 @@ func registerL6Tools(s *mcp.Server, db *memhop.AgentSession) {
 	}, handle[sessionIDArgs, updateResult](func(a sessionIDArgs) (updateResult, error) {
 		return updateResult{OK: true}, db.DeleteTrajectory(a.SessionID)
 	}))
+}
 
+func registerCrystallizeTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_crystallize",
 		Description: "从会话轨迹提取可复用 L5 能力候选（L6 → L5）。调用 LLM，耗时长；候选保存为 draft，需宿主激活；重复结晶按名称和指纹去重。",

@@ -7,53 +7,51 @@ package index
 
 import (
 	"encoding/json"
+	"iter"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-func RebuildSearchIndexes(engine *core.StorageEngine, agentID uint64) (*SparseIndex, *L2MetaIndex, error) {
-	sparse, l2Meta := buildIndexesFromEngine(engine, agentID)
-	return sparse, l2Meta, nil
+func RebuildSearchIndexes(engine *core.StorageEngine, agentID uint64) (*SparseIndex, *L2MetaIndex) {
+	return buildIndexesFromEngine(engine, agentID)
 }
 
-// BuildL2MetaFromEngine scans only RecL2Topic records of one agent domain
-// and fills an L2MetaIndex; corrupt or unparsable records are skipped
-// (same tolerance as buildIndexesFromEngine). Used at Open time, where
-// sparse comes from the snapshot instead.
+// forEachTopic yields every parsable L2 topic record of one agent domain;
+// corrupt or unparsable records are skipped (tolerated torn residue).
+func forEachTopic(engine *core.StorageEngine, agentID uint64) iter.Seq2[uint64, *core.TopicSlot] {
+	return func(yield func(uint64, *core.TopicSlot) bool) {
+		for idHash := range engine.IndexByType(agentID, core.RecL2Topic) {
+			_, data, err := engine.ReadRecord(agentID, idHash)
+			if err != nil {
+				continue // skip corrupt records
+			}
+			var topic core.TopicSlot
+			if json.Unmarshal(data, &topic) != nil {
+				continue // skip unparsable records
+			}
+			if !yield(idHash, &topic) {
+				return
+			}
+		}
+	}
+}
+
+// BuildL2MetaFromEngine fills an L2MetaIndex from one agent domain's topic
+// records. Used at Open time, where sparse comes from the snapshot instead.
 func BuildL2MetaFromEngine(engine *core.StorageEngine, agentID uint64) *L2MetaIndex {
 	l2Meta := NewL2MetaIndex()
-	for idHash := range engine.IndexByType(agentID, core.RecL2Topic) {
-		_, data, err := engine.ReadRecord(agentID, idHash)
-		if err != nil {
-			continue // skip corrupt records
-		}
-		var topic core.TopicSlot
-		if json.Unmarshal(data, &topic) != nil {
-			continue // skip unparsable records
-		}
-		l2Meta.insertMeta(L2MetaFromTopic(&topic))
+	for _, topic := range forEachTopic(engine, agentID) {
+		l2Meta.insertMeta(L2MetaFromTopic(topic))
 	}
 	return l2Meta
 }
 
-// buildIndexesFromEngine scans one agent domain once, building sparse/L2Meta;
-// corrupt or unparsable records are skipped.
+// buildIndexesFromEngine scans one agent domain once, building sparse/L2Meta.
 func buildIndexesFromEngine(engine *core.StorageEngine, agentID uint64) (*SparseIndex, *L2MetaIndex) {
 	sparse := NewSparseIndex()
 	l2Meta := NewL2MetaIndex()
-	for idHash := range engine.Index(agentID) {
-		rt, data, err := engine.ReadRecord(agentID, idHash)
-		if err != nil {
-			continue // skip corrupt records
-		}
-		if rt != core.RecL2Topic {
-			continue
-		}
-		var topic core.TopicSlot
-		if json.Unmarshal(data, &topic) != nil {
-			continue // skip unparsable records
-		}
+	for idHash, topic := range forEachTopic(engine, agentID) {
 		if topic.Depth <= 2 {
 			// Uncompressed topics carry User+Agent keywords; compressed ones carry FusedKeywords.
 			text := strings.Join(topic.UserKeywords, " ")
@@ -66,7 +64,7 @@ func buildIndexesFromEngine(engine *core.StorageEngine, agentID uint64) (*Sparse
 			terms := Tokenize(text)
 			sparse.AddDocument(idHash, terms, uint32(len(terms)))
 		}
-		l2Meta.insertMeta(L2MetaFromTopic(&topic))
+		l2Meta.insertMeta(L2MetaFromTopic(topic))
 	}
 	return sparse, l2Meta
 }

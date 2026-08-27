@@ -16,6 +16,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -85,14 +86,14 @@ func TestReproDreamConsolidate(t *testing.T) {
 			t.Logf("  -> below threshold, consolidation skipped (not a failure)")
 			continue
 		}
-		out, err := db.llm.Consolidate(context.Background(), topics)
+		out, err := llmops.Consolidate(context.Background(), db.llm, topics)
 		if err != nil {
 			t.Logf("  -> CONSOLIDATE ERROR: %v", err)
 			// Raw response evidence: call chat directly (same package) to
 			// inspect what the LLM actually returned.
-			user := buildConsolidatePrompt(topics)
-			resp, chatErr := db.llm.chat(context.Background(), systemConsolidate, user,
-				minTokens(db.llm.maxOutputTokens, consolidationMaxTokens), 0.0, 1.0)
+			user := llmops.BuildConsolidatePrompt(topics)
+			resp, chatErr := db.llm.Chat(context.Background(), llmops.SystemConsolidate, user,
+				llmops.ConsolidationMaxTokens, 0.0, 1.0)
 			if chatErr != nil {
 				t.Logf("  -> raw chat error: %v", chatErr)
 			} else {
@@ -100,7 +101,7 @@ func TestReproDreamConsolidate(t *testing.T) {
 					len(resp), clip(resp, 0, 200), clip(resp, len(resp)-200, len(resp)))
 			}
 			t.Logf("  -> prompt chars: %d (first topic id=%d)",
-				len(buildConsolidatePrompt(topics)), topics[0].ID)
+				len(llmops.BuildConsolidatePrompt(topics)), topics[0].ID)
 			continue
 		}
 		t.Logf("  -> consolidate ok, groups=%d compressionNeeded=%v",

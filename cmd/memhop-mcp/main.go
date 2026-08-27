@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -42,13 +43,8 @@ func main() {
 	}
 
 	reg := newRegistry(cfg.Base, cfg.DBDir, cfg.Tenants, logger)
-	var handler http.Handler
-	switch cfg.Transport {
-	case "sse":
-		handler = newSSEHandler(reg)
-	case "streamable-http":
-		handler = newStreamableHandler(reg)
-	default:
+	handler, err := buildHandler(cfg, reg)
+	if err != nil {
 		logger.Error("unknown transport", "transport", cfg.Transport)
 		os.Exit(2)
 	}
@@ -59,7 +55,35 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if err := serve(ctx, srv, cfg, logger); err != nil {
+		logger.Error("server failed", "error", err)
+		os.Exit(1)
+	}
 
+	// Persist every open tenant DB (Close builds the index snapshot first).
+	if cerr := gracefulShutdown(srv, reg, logger); cerr != nil {
+		logger.Error("close databases", "error", cerr)
+		os.Exit(1)
+	}
+	logger.Info("server exited cleanly")
+}
+
+// buildHandler wires the tenant registry into the selected MCP HTTP
+// transport.
+func buildHandler(cfg *serverConfig, reg *tenantRegistry) (http.Handler, error) {
+	switch cfg.Transport {
+	case "sse":
+		return newSSEHandler(reg), nil
+	case "streamable-http":
+		return newStreamableHandler(reg), nil
+	default:
+		return nil, fmt.Errorf("unknown transport %q", cfg.Transport)
+	}
+}
+
+// serve runs the HTTP server until a shutdown signal arrives or the
+// server fails; the listen goroutine exits once the server is closed.
+func serve(ctx context.Context, srv *http.Server, cfg *serverConfig, logger *slog.Logger) error {
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("memhop-mcp listening", "addr", cfg.Listen, "db_dir", cfg.DBDir)
@@ -67,27 +91,23 @@ func main() {
 			errCh <- err
 		}
 	}()
-
 	select {
 	case <-ctx.Done():
 		logger.Info("shutting down")
+		return nil
 	case err := <-errCh:
-		logger.Error("server failed", "error", err)
-		os.Exit(1)
+		return err
 	}
+}
 
-	// SSE sessions hold hanging GETs open, so Shutdown must be bounded;
-	// remaining connections are dropped and the registry persists below.
+// gracefulShutdown bounds the HTTP drain (SSE sessions hold hanging GETs
+// open, so Shutdown is time-boxed; remaining connections are dropped)
+// then persists and closes every open tenant database.
+func gracefulShutdown(srv *http.Server, reg *tenantRegistry, logger *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Warn("http shutdown incomplete", "error", err)
 	}
-
-	// Persist every open tenant DB (Close builds the index snapshot first).
-	if cerr := reg.CloseAll(); cerr != nil {
-		logger.Error("close databases", "error", cerr)
-		os.Exit(1)
-	}
-	logger.Info("server exited cleanly")
+	return reg.CloseAll()
 }

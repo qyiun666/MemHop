@@ -90,7 +90,16 @@ func parseEdgeKinds(kinds []string) ([]memhop.GraphEdgeKind, error) {
 	return out, nil
 }
 
-func registerL3Tools(s *mcp.Server, db *memhop.AgentSession) {
+// registerL3Tools installs the hypergraph tools; each register function
+// owns one cohesive tool group.
+func registerL3Tools(s *mcp.Server, db *memhop.Session) {
+	registerKnowledgeReadTools(s, db)
+	registerKnowledgeImportTool(s, db)
+	registerKnowledgeWriteTools(s, db)
+	registerKnowledgeQueryTools(s, db)
+}
+
+func registerKnowledgeReadTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_get",
 		Description: "读取一个 L3 知识超图（图元信息 + 全部节点与边）。",
@@ -112,7 +121,9 @@ func registerL3Tools(s *mcp.Server, db *memhop.AgentSession) {
 	}, handleNoArgs[[]memhop.HypergraphSlot](func() ([]memhop.HypergraphSlot, error) {
 		return db.ListL3()
 	}))
+}
 
+func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_import",
 		Description: "批量导入 L3 知识条目（按标题+领域匹配既有图）：mode=Skip 跳过已存在、Merge 合并节点、Overwrite 覆盖。返回创建/更新的图 ID 与跳过数。",
@@ -135,23 +146,30 @@ func registerL3Tools(s *mcp.Server, db *memhop.AgentSession) {
 		if err != nil {
 			return memhop.L3ImportResult{}, err
 		}
-		items := make([]memhop.L3ImportItem, 0, len(a.Items))
-		for _, it := range a.Items {
-			items = append(items, memhop.L3ImportItem{
-				Title:    it.Title,
-				Domain:   it.Domain,
-				NodeType: it.NodeType,
-				Content:  it.Content,
-				Keywords: it.Keywords,
-			})
-		}
-		res, err := db.ImportL3(items, mode)
+		res, err := db.ImportL3(toImportItems(a.Items), mode)
 		if err != nil {
 			return memhop.L3ImportResult{}, err
 		}
 		return *res, nil
 	}))
+}
 
+// toImportItems maps JSON import items to the api DTO.
+func toImportItems(in []knowledgeImportItem) []memhop.L3ImportItem {
+	items := make([]memhop.L3ImportItem, 0, len(in))
+	for _, it := range in {
+		items = append(items, memhop.L3ImportItem{
+			Title:    it.Title,
+			Domain:   it.Domain,
+			NodeType: it.NodeType,
+			Content:  it.Content,
+			Keywords: it.Keywords,
+		})
+	}
+	return items
+}
+
+func registerKnowledgeWriteTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_update",
 		Description: "重命名一个 L3 知识超图（name 缺省则不修改）。",
@@ -176,7 +194,9 @@ func registerL3Tools(s *mcp.Server, db *memhop.AgentSession) {
 	}, handle[knowledgeIDArgs, updateResult](func(a knowledgeIDArgs) (updateResult, error) {
 		return updateResult{OK: true}, db.DeleteL3(a.ID)
 	}))
+}
 
+func registerKnowledgeQueryTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_nodes",
 		Description: "按条件查询 L3 节点：ID 列表、关键词（模糊匹配标题）、节点类型；limit<=0 表示不限制。",

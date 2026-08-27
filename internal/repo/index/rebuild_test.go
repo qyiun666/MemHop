@@ -35,10 +35,7 @@ func TestRebuildSearchIndexes(t *testing.T) {
 	writeRawTopic(t, engine, 2, 100, 2, []string{"beta", "rust"})
 	writeRawTopic(t, engine, 3, 200, 3, []string{"gamma", "deep"})
 
-	sparse, l2Meta, err := RebuildSearchIndexes(engine, core.DefaultAgentID)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sparse, l2Meta := RebuildSearchIndexes(engine, core.DefaultAgentID)
 
 	// depth<=2 documents are BM25-searchable
 	if len(sparse.Search([]string{"memory"}, 10)) != 1 {

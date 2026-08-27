@@ -8,12 +8,10 @@ package repo
 
 import (
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // UpsertCapabilityL5 writes a capability by stable name ID. Existing runtime
@@ -63,61 +61,6 @@ func DeleteCapabilityL5(engine *core.StorageEngine, agentID uint64, id string) b
 	}
 	_, err = engine.DeleteRecordBatch(agentID, []uint64{capHash})
 	return err == nil
-}
-
-func ListCapabilitiesL5(engine *core.StorageEngine, agentID uint64) []core.Capability {
-	return core.CollectAllCapabilities(engine, agentID)
-}
-
-// MatchCapabilitiesL5 returns active capabilities relevant to a query.
-// Matching covers name, summary, trigger, resource names/descriptions and
-// workflow refs.
-func MatchCapabilitiesL5(engine *core.StorageEngine, agentID uint64, query string) []core.Capability {
-	terms := index.Tokenize(query)
-	if len(terms) == 0 {
-		return nil
-	}
-	var out []core.Capability
-	for _, cap := range core.CollectAllCapabilities(engine, agentID) {
-		if cap.Status != core.CapabilityActive {
-			continue
-		}
-		text := capabilitySearchText(cap)
-		for _, term := range terms {
-			if strings.Contains(text, strings.ToLower(term)) {
-				out = append(out, cap)
-				break
-			}
-		}
-	}
-	return out
-}
-
-func capabilitySearchText(cap core.Capability) string {
-	var b strings.Builder
-	write := func(s string) {
-		if s != "" {
-			b.WriteByte(' ')
-			b.WriteString(s)
-		}
-	}
-	write(cap.Name)
-	write(cap.Summary)
-	write(cap.Trigger)
-	if cap.Workflow != nil {
-		for _, step := range cap.Workflow.Steps {
-			write(step.Ref)
-			write(step.Action)
-		}
-	}
-	for _, r := range cap.Resources {
-		write(r.Name)
-		write(r.Ref)
-		write(r.Desc)
-		write(r.Input)
-		write(r.Output)
-	}
-	return strings.ToLower(b.String())
 }
 
 // ActivateCapabilityL5 promotes a draft to active.

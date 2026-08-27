@@ -5,11 +5,13 @@ package internal
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -30,7 +32,7 @@ type DB struct {
 
 	closed atomic.Bool
 
-	// baseCtx bounds every per-agent dreamCtx: Close cancels it so all
+	// baseCtx bounds every per-agent opCtx: Close cancels it so all
 	// in-flight Dreams exit at their next stage boundary.
 	baseCtx    context.Context
 	baseCancel context.CancelFunc
@@ -104,11 +106,36 @@ func (db *DB) lockAgent(agentID uint64) (*agentContext, error) {
 		return nil, err
 	}
 	ac.mu.Lock()
+	if db.closed.Load() {
+		// A caller that fetched its context before Close ran can still be
+		// waiting here when the barrier passes and the engine shuts down:
+		// reject instead of reporting success on a closed database.
+		ac.mu.Unlock()
+		return nil, common.NewError(common.ErrClosed, "database is closed")
+	}
 	if ac.deleted.Load() {
 		ac.mu.Unlock()
 		return nil, common.NewError(common.ErrAgentNotFound, "agent is being deleted")
 	}
 	return ac, nil
+}
+
+// lockSession is the shared prologue of the L6 session-scoped operations:
+// take the domain lock, then parse the hex session id. On a parse failure
+// the lock is released before returning, so callers add `defer ac.mu.Unlock()`
+// only after the error check. It returns the locked context and the parsed
+// session id.
+func (db *DB) lockSession(agentID uint64, sessionID string) (*agentContext, uint64, error) {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return nil, 0, err
+	}
+	parsed, err := common.ParseID(sessionID)
+	if err != nil {
+		ac.mu.Unlock()
+		return nil, 0, common.NewError(common.ErrInvalidQuery, "parse session id", err)
+	}
+	return ac, parsed, nil
 }
 
 // peekContext returns an existing context without creating one (nil when
@@ -161,22 +188,32 @@ func (db *DB) sweepIdleLocked() {
 		}
 		busy := len(ac.dreamInFlight) > 0
 		var blob []byte
+		var serr error
 		if !busy {
-			blob, _ = ac.sparseIndex.Serialize()
+			blob, serr = ac.sparseIndex.Serialize()
 		}
 		ac.mu.Unlock()
 		if busy {
 			continue
 		}
+		if serr != nil {
+			// A reclaim that drops the live index on a serialize failure would
+			// silently lose the domain's BM25 state (rebuild starts empty).
+			// Keep the domain in memory and retry the sweep on a later pass.
+			slog.Warn("agents: idle sweep skipped, sparse index serialize failed",
+				"agent", common.FormatHash(id), "err", serr)
+			continue
+		}
 		if len(blob) > 0 {
 			db.snapshotBlobs[id] = blob
 		}
-		ac.dreamCancel()
+		ac.opCancel()
 		delete(db.agents, id)
 	}
 }
 
-// destroyContext cancels the agent's Dreams, removes its context and drops
+// destroyContext cancels the agent's cancellable work (Dreams and in-flight
+// LLM calls), removes its context and drops
 // the cached snapshot blob. Returns the destroyed context (nil when absent)
 // so callers can wait for in-flight work if needed.
 func (db *DB) destroyContext(agentID uint64) *agentContext {
@@ -184,7 +221,7 @@ func (db *DB) destroyContext(agentID uint64) *agentContext {
 	defer db.agentsMu.Unlock()
 	ac := db.agents[agentID]
 	if ac != nil {
-		ac.dreamCancel()
+		ac.opCancel()
 		delete(db.agents, agentID)
 	}
 	delete(db.snapshotBlobs, agentID)
@@ -209,6 +246,30 @@ func (db *DB) HasActiveScenesFor(agentID uint64) bool {
 	return len(ac.activeScenes) > 0
 }
 
+// loadTopicForWrite resolves a hex topic ID to its stored slot before a
+// lifecycle write (Update / AppendL4Message / RefineTopicKeywords): a
+// missing or unreadable topic is rejected with ErrNotFound so no orphan
+// L4 archive or half-written refine is ever produced. Callers must hold
+// ac.mu.
+func (ac *agentContext) loadTopicForWrite(db *DB, topicID string) (*core.TopicSlot, error) {
+	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
+		Engine:  db.engine,
+		AgentID: ac.id,
+		MetaIdx: ac.l2Meta,
+		SceneID: topicID,
+		Depth:   0,
+		Num:     3,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(topics) == 0 {
+		return nil, common.NewError(common.ErrNotFound, "topic not found")
+	}
+	topic := topics[0]
+	return &topic, nil
+}
+
 // syncL2Meta refreshes one topic entry of the agent's L2MetaIndex from the
 // record just written; call it right after engine writes, before the sparse
 // index update (storage → l2meta → sparse lock order). On read failure the
@@ -223,6 +284,16 @@ func (ac *agentContext) syncL2Meta(db *DB, idHash uint64) {
 		return
 	}
 	ac.l2Meta.Update(index.L2MetaFromTopic(topic))
+}
+
+// removeTopicsFromIndices drops the given topics from both the L2Meta cache
+// and the BM25 sparse index of the agent's context; used by the DeleteScene /
+// DeleteTopic paths after their records are tombstoned. Callers hold ac.mu.
+func (ac *agentContext) removeTopicsFromIndices(ids []uint64) {
+	for _, id := range ids {
+		ac.l2Meta.Remove(id)
+		ac.sparseIndex.RemoveDocument(id)
+	}
 }
 
 // retargetL2Meta moves every topic of the merged-away scenes to the primary

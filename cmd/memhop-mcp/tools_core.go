@@ -40,7 +40,16 @@ type statusResult struct {
 	HasActiveScenes bool `json:"has_active_scenes"`
 }
 
-func registerCoreTools(s *mcp.Server, db *memhop.AgentSession) {
+// registerCoreTools installs the memory-loop entry points; one register
+// function per tool keeps each declaration list short.
+func registerCoreTools(s *mcp.Server, db *memhop.Session) {
+	registerSearchTool(s, db)
+	registerUpdateTool(s, db)
+	registerDreamTool(s, db)
+	registerMaintenanceTools(s, db)
+}
+
+func registerSearchTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_search",
 		Description: "搜索记忆并写入用户原文：三通道混合检索（BM25 + 向量 + 实体模糊），RRF 融合。返回 L0 画像、命中的 L2 场景上下文与关联上下文；auto_create=true 时自动建新话题并返回 new_topic_id（16 位 hex）。timestamp 为 Unix 毫秒，必填。",
@@ -64,7 +73,9 @@ func registerCoreTools(s *mcp.Server, db *memhop.AgentSession) {
 		}
 		return *res, nil
 	}))
+}
 
+func registerUpdateTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_update",
 		Description: "将一条对话消息写入既有话题（不建新话题）：更新 L2 话题元数据、L4 档案与检索索引。返回是否成功写入。",
@@ -77,7 +88,9 @@ func registerCoreTools(s *mcp.Server, db *memhop.AgentSession) {
 		err := db.Update(a.TopicID, a.Text, a.Timestamp)
 		return updateResult{OK: err == nil}, err
 	}))
+}
 
+func registerDreamTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_dream",
 		Description: "对指定场景执行梦境巩固（睡眠模拟）：L2 话题压缩融合、L1 节点同步、衰减与 L0 画像蒸馏。耗时较长；返回是否实际发生了巩固。",
@@ -88,7 +101,10 @@ func registerCoreTools(s *mcp.Server, db *memhop.AgentSession) {
 		ok, err := db.Dream(context.Background(), a.SceneID)
 		return dreamResult{Consolidated: ok}, err
 	}))
+}
 
+// registerMaintenanceTools installs the two no-argument lifecycle tools.
+func registerMaintenanceTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_checkpoint",
 		Description: "将当前状态持久化到磁盘（索引快照 + A/B header），不关闭数据库。",

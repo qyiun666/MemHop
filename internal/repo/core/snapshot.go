@@ -72,56 +72,72 @@ func BuildSnapshot(index map[uint64]map[uint64]uint64, snap *IndexSnapshotData) 
 
 // ParseSnapshot restores the per-agent record index and snapshot blobs.
 func ParseSnapshot(raw []byte) (map[uint64]map[uint64]uint64, *IndexSnapshotData, error) {
-	if len(raw) < 13 { // magic(4) + version(1) + agent_count(4) + crc(4) minimum
-		return nil, nil, common.NewError(common.ErrCorruption, "snapshot too short")
-	}
-	// Verify CRC.
-	storedCRC := binary.LittleEndian.Uint32(raw[len(raw)-4:])
-	if crc32.ChecksumIEEE(raw[:len(raw)-4]) != storedCRC {
-		return nil, nil, common.NewError(common.ErrCRCMismatch, "crc32 mismatch")
-	}
-	magic := binary.LittleEndian.Uint32(raw[0:4])
-	if magic != SnapshotMagic {
-		return nil, nil, common.NewError(common.ErrCorruption, "invalid snapshot magic")
-	}
-	if raw[4] != SnapshotVersion {
-		return nil, nil, common.NewError(common.ErrCorruption,
-			fmt.Sprintf("unsupported snapshot version 0x%02x (expected 0x%02x)", raw[4], SnapshotVersion))
+	if err := checkSnapshotEnvelope(raw); err != nil {
+		return nil, nil, err
 	}
 	agentCount := int(binary.LittleEndian.Uint32(raw[5:9]))
 	pos := 9
 	idx := make(map[uint64]map[uint64]uint64, agentCount)
 	snap := &IndexSnapshotData{SparseByAgent: make(map[uint64][]byte, agentCount)}
 	for range agentCount {
-		if pos+12 > len(raw)-4 {
-			return nil, nil, common.NewError(common.ErrCorruption, "snapshot agent header truncated")
-		}
-		agentID := binary.LittleEndian.Uint64(raw[pos : pos+8])
-		count := int(binary.LittleEndian.Uint32(raw[pos+8 : pos+12]))
-		pos += 12
-		needed := pos + count*16
-		if needed > len(raw)-4 {
-			return nil, nil, common.NewError(common.ErrCorruption, "snapshot entries truncated")
-		}
-		m := make(map[uint64]uint64, count)
-		for range count {
-			idHash := binary.LittleEndian.Uint64(raw[pos : pos+8])
-			offset := binary.LittleEndian.Uint64(raw[pos+8 : pos+16])
-			m[idHash] = offset
-			pos += 16
-		}
-		idx[agentID] = m
-		var blob []byte
-		var err error
-		blob, pos, err = readBlob(raw, pos)
+		agentID, m, blob, next, err := parseSnapshotAgent(raw, pos)
 		if err != nil {
 			return nil, nil, err
 		}
+		idx[agentID] = m
 		if len(blob) > 0 {
 			snap.SparseByAgent[agentID] = blob
 		}
+		pos = next
 	}
 	return idx, snap, nil
+}
+
+// checkSnapshotEnvelope validates length, CRC, magic and version of a
+// snapshot blob (CRC covers everything but its own trailing 4 bytes).
+func checkSnapshotEnvelope(raw []byte) error {
+	if len(raw) < 13 { // magic(4) + version(1) + agent_count(4) + crc(4) minimum
+		return common.NewError(common.ErrCorruption, "snapshot too short")
+	}
+	storedCRC := binary.LittleEndian.Uint32(raw[len(raw)-4:])
+	if crc32.ChecksumIEEE(raw[:len(raw)-4]) != storedCRC {
+		return common.NewError(common.ErrCRCMismatch, "crc32 mismatch")
+	}
+	magic := binary.LittleEndian.Uint32(raw[0:4])
+	if magic != SnapshotMagic {
+		return common.NewError(common.ErrCorruption, "invalid snapshot magic")
+	}
+	if raw[4] != SnapshotVersion {
+		return common.NewError(common.ErrCorruption,
+			fmt.Sprintf("unsupported snapshot version 0x%02x (expected 0x%02x)", raw[4], SnapshotVersion))
+	}
+	return nil
+}
+
+// parseSnapshotAgent reads one agent section (id header, offset entries,
+// sparse blob) starting at pos; next is the offset after the section.
+func parseSnapshotAgent(raw []byte, pos int) (agentID uint64, m map[uint64]uint64, blob []byte, next int, err error) {
+	if pos+12 > len(raw)-4 {
+		return 0, nil, nil, 0, common.NewError(common.ErrCorruption, "snapshot agent header truncated")
+	}
+	agentID = binary.LittleEndian.Uint64(raw[pos : pos+8])
+	count := int(binary.LittleEndian.Uint32(raw[pos+8 : pos+12]))
+	pos += 12
+	if pos+count*16 > len(raw)-4 {
+		return 0, nil, nil, 0, common.NewError(common.ErrCorruption, "snapshot entries truncated")
+	}
+	m = make(map[uint64]uint64, count)
+	for range count {
+		idHash := binary.LittleEndian.Uint64(raw[pos : pos+8])
+		offset := binary.LittleEndian.Uint64(raw[pos+8 : pos+16])
+		m[idHash] = offset
+		pos += 16
+	}
+	blob, pos, err = readBlob(raw, pos)
+	if err != nil {
+		return 0, nil, nil, 0, err
+	}
+	return agentID, m, blob, pos, nil
 }
 
 func appendU32LE(buf []byte, v uint32) []byte {

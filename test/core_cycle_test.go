@@ -5,12 +5,10 @@ package test
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -19,7 +17,7 @@ import (
 // gatherLocomoContext flattens the returned topics' keyword tracks (user +
 // agent + fused) with their timestamps into one searchable text. It reflects
 // what a host sees after Search: the L2 keyword view of each returned topic.
-func gatherLocomoContext(_ *memhop.DB, res *internal.SearchResult) string {
+func gatherLocomoContext(_ *testsupport.Handle, res *internal.SearchResult) string {
 	var sb strings.Builder
 	for i := range res.Contexts {
 		c := &res.Contexts[i]
@@ -82,20 +80,7 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 		t.Fatalf("need %d facts, have %d", turns, len(facts))
 	}
 
-	cfg := &internal.MemHopConfig{
-		DBPath:      filepath.Join(t.TempDir(), "cycle.meh"),
-		VectorDim:   1024,
-		EncoderAddr: "http://127.0.0.1:11434",
-		EmbedModel:  "qllama/bge-m3:q4_k_m",
-		Defaults:    *internal.DefaultMemHopDefaults,
-	}
-	if err := testsupport.LoadLLMConfig(cfg); err != nil {
-		t.Skipf("skip: %v", err)
-	}
-	db, err := memhop.Open(cfg)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
 	// Phase 1: ingest via Search + Update (the real host pattern), checking

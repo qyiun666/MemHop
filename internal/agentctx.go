@@ -29,11 +29,13 @@ type agentContext struct {
 	lastActiveAt atomic.Int64 // Unix ms of the last context access (idle sweep)
 	deleted      atomic.Bool  // DeleteAgent tombstone: contextFor rejects a destroyed domain
 
-	// dreamCtx owns the background Dream pipelines of this agent; DeleteAgent
-	// and Close cancel it so an in-flight Dream exits at its next stage
-	// boundary instead of writing to a destroyed domain.
-	dreamCtx    context.Context
-	dreamCancel context.CancelFunc
+	// opCtx bounds the agent's cancellable work: background Dream pipelines
+	// and foreground LLM calls made while holding mu (Update's keyword
+	// extraction). DeleteAgent, the idle sweep and Close cancel it so pending
+	// work exits promptly instead of blocking the lifecycle barriers for a
+	// full LLM round-trip.
+	opCtx    context.Context
+	opCancel context.CancelFunc
 }
 
 func newAgentContext(id uint64, parent context.Context) *agentContext {
@@ -41,8 +43,8 @@ func newAgentContext(id uint64, parent context.Context) *agentContext {
 	return &agentContext{
 		id:            id,
 		dreamInFlight: make(map[uint64]struct{}),
-		dreamCtx:      ctx,
-		dreamCancel:   cancel,
+		opCtx:         ctx,
+		opCancel:      cancel,
 	}
 }
 
@@ -55,4 +57,16 @@ func (ac *agentContext) activateScene(sceneID uint64) {
 		return
 	}
 	ac.activeScenes = append(ac.activeScenes, sceneID)
+}
+
+// dropActiveScenes removes the given scenes from the active set, keeping
+// insertion order of the survivors. Callers must hold ac.mu.
+func (ac *agentContext) dropActiveScenes(ids map[uint64]struct{}) {
+	if len(ids) == 0 {
+		return
+	}
+	ac.activeScenes = slices.DeleteFunc(ac.activeScenes, func(sid uint64) bool {
+		_, drop := ids[sid]
+		return drop
+	})
 }

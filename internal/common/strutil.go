@@ -119,3 +119,15 @@ func TrimPunctuation(s string) string {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '_'
 	})
 }
+
+// TruncateUTF8 cuts s to at most max bytes without splitting a UTF-8 rune.
+func TruncateUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	t := s[:max]
+	for len(t) > 0 && !utf8.ValidString(t) {
+		t = t[:len(t)-1]
+	}
+	return t
+}

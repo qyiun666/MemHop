@@ -16,7 +16,6 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
-	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -222,7 +221,7 @@ func TestKeywordPersistence(t *testing.T) {
 // ingestSameScene feeds a group of related turns into one scene (first turn
 // AutoCreate, the rest directed), adding an agent Update after each user turn
 // so Dream fused-topic IDs do not collide with original topics. Returns the scene ID.
-func ingestSameScene(t *testing.T, db *memhop.DB, texts []string, base int64) uint64 {
+func ingestSameScene(t *testing.T, db *testsupport.Handle, texts []string, base int64) uint64 {
 	t.Helper()
 	var sceneID uint64
 	for i, text := range texts {
@@ -347,6 +346,3 @@ func judgeModel(t *testing.T) string {
 	}
 	return cfg.LLM.Model
 }
-
-// ensure memhop import is used (OpenMemHop returns *memhop.DB).
-var _ = memhop.Open

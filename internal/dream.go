@@ -10,6 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qyiun666/MemHop/internal/cap/engram"
+	"github.com/qyiun666/MemHop/internal/cap/llmops"
+	"github.com/qyiun666/MemHop/internal/cap/profile"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -34,13 +37,14 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID string) (boo
 		return false, common.NewError(common.ErrClosed, "database is closed")
 	}
 
-	scenes := ac.activeScenes
-	if sceneID != "" {
-		hash, err := common.ParseID(sceneID)
-		if err != nil {
-			return false, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
-		}
-		scenes = []uint64{hash}
+	scenes, err := dreamSceneSet(ac, sceneID)
+	if err != nil {
+		return false, err
+	}
+	if sceneID == "" && len(scenes) == 0 {
+		// Nothing to consolidate: decide under the domain lock so a scene
+		// registered by a racing Update is never missed (check-then-act).
+		return true, nil
 	}
 
 	// Stage 1: one goroutine per scene compresses L2 (writes only;
@@ -56,23 +60,36 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID string) (boo
 	// Drop compressed scenes so Dream does not spin empty goroutines.
 	// Scenes skipped below the compress threshold stay active for the
 	// next Dream; Search re-activates a compressed scene on its next hit.
-	if len(succeeded) > 0 {
-		kept := ac.activeScenes[:0]
-		for _, sid := range ac.activeScenes {
-			if _, done := succeeded[sid]; !done {
-				kept = append(kept, sid)
-			}
-		}
-		ac.activeScenes = kept
-	}
+	ac.dropActiveScenes(succeeded)
 
-	// Stage 2: rebuild retrieval indexes (sparse/L2Meta) in one scan of the
-	// agent domain.
-	newSparse, newL2Meta, err := index.RebuildSearchIndexes(db.engine, agentID)
-	if err != nil {
+	if err := db.dreamStructureStages(ctx, agentID, ac); err != nil {
 		return false, err
 	}
-	decayParams := repo.DecayParams{
+	ac.lastDreamAt.Store(time.Now().UnixMilli()) // direct store: peekContext would take agentsMu under ac.mu (lock-order cycle)
+	return true, nil
+}
+
+// dreamSceneSet resolves the target scenes of one pass: an explicit hex
+// scene id, or the domain's active scene set.
+func dreamSceneSet(ac *agentContext, sceneID string) ([]uint64, error) {
+	if sceneID == "" {
+		return ac.activeScenes, nil
+	}
+	hash, err := common.ParseID(sceneID)
+	if err != nil {
+		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+	}
+	return []uint64{hash}, nil
+}
+
+// dreamStructureStages runs stages 2 through 6 of the pipeline: index
+// rebuild, L1 sync/edges/rebuild/decay, L0 profile/distill, then installs
+// the rebuilt indexes into the agent context.
+func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agentContext) error {
+	// Stage 2: rebuild retrieval indexes (sparse/L2Meta) in one scan of the
+	// agent domain.
+	newSparse, newL2Meta := index.RebuildSearchIndexes(db.engine, agentID)
+	decayParams := engram.DecayParams{
 		LambdaNode:             float64(lambdaNode),
 		LambdaEdge:             float64(lambdaEdge),
 		NodeRemoveThreshold:    nodeRemoveThreshold,
@@ -85,56 +102,55 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID string) (boo
 	// retrieval usage so the rebuild/decay below reflects actual usage.
 	db.applyUsageFeedback(agentID)
 
-	// Stage 2.25: L1 write/update from the current L2 structure (L1 is
-	// written only during Dream; stale nodes are removed in Stage 3).
-	if _, err := repo.SyncL1NodesFromL2(db.engine, agentID); err != nil {
-		return false, err
-	}
-
-	// Stage 2.3: create/refresh co-occurrence hyperedges between scenes
-	// (keyword-overlap Jaccard >= L1EdgeMinSimilarity). Fresh edges are
-	// decayed by Stage 4 like every other edge.
-	if _, err := repo.BuildL1Hyperedges(db.engine, agentID, l1EdgeMinSimilarity); err != nil {
-		return false, err
-	}
-	if err := db.stageCancelled(ctx, "l1_hyperedges"); err != nil {
-		return false, err
-	}
-
-	// Stage 3: L1 rebuild (remove stale nodes).
-	if _, err := repo.RebuildL1FromL2(db.engine, agentID, newL2Meta, &decayParams); err != nil {
-		return false, err
-	}
-	if err := db.stageCancelled(ctx, "l1_rebuild"); err != nil {
-		return false, err
-	}
-
-	// Stage 4: L1 time decay.
-	if _, err := repo.DecayL1Network(db.engine, agentID, newL2Meta, &decayParams); err != nil {
-		return false, err
-	}
-	if err := db.stageCancelled(ctx, "l1_decay"); err != nil {
-		return false, err
+	// Stages 2.25 to 4: L1 write/update/rebuild/decay.
+	if err := db.dreamL1Stages(ctx, agentID, newL2Meta, &decayParams); err != nil {
+		return err
 	}
 
 	// Stage 5: L0 profile rebuild.
-	if err := repo.GenerateProfileL0(db.engine, agentID, newSparse); err != nil {
-		return false, err
+	if err := profile.Generate(db.engine, agentID, newSparse); err != nil {
+		return err
 	}
 	if err := db.stageCancelled(ctx, "l0_profile"); err != nil {
-		return false, err
+		return err
 	}
 
 	// Stage 6: L0 distillation (LLM emotion/MBTI, backfilled into L1).
 	if err := db.distillL0Stage(ctx, agentID); err != nil {
-		return false, err
+		return err
 	}
 
 	// Final: install the rebuilt indexes into the agent context.
 	ac.sparseIndex = newSparse
 	ac.l2Meta = newL2Meta
-	ac.lastDreamAt.Store(time.Now().UnixMilli()) // direct store: peekContext would take agentsMu under ac.mu (lock-order cycle)
-	return true, nil
+	return nil
+}
+
+// dreamL1Stages runs the L1 portion of the pipeline: scene nodes synced
+// from the current L2 structure (L1 is written only during Dream; stale
+// nodes removed below), co-occurrence hyperedges (keyword-overlap Jaccard
+// >= L1EdgeMinSimilarity; fresh edges decayed like every other edge),
+// stale-node rebuild and finally time decay.
+func (db *DB) dreamL1Stages(ctx context.Context, agentID uint64, newL2Meta *index.L2MetaIndex, decayParams *engram.DecayParams) error {
+	if _, err := repo.SyncL1NodesFromL2(db.engine, agentID); err != nil {
+		return err
+	}
+	if _, err := engram.BuildHyperedges(db.engine, agentID, l1EdgeMinSimilarity); err != nil {
+		return err
+	}
+	if err := db.stageCancelled(ctx, "l1_hyperedges"); err != nil {
+		return err
+	}
+	if _, err := engram.RebuildFromL2(db.engine, agentID, newL2Meta, decayParams); err != nil {
+		return err
+	}
+	if err := db.stageCancelled(ctx, "l1_rebuild"); err != nil {
+		return err
+	}
+	if _, err := engram.DecayNetwork(db.engine, agentID, newL2Meta, decayParams); err != nil {
+		return err
+	}
+	return db.stageCancelled(ctx, "l1_decay")
 }
 
 // triggerSceneDream schedules one scene's Dream in the background so the
@@ -143,7 +159,7 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID string) (boo
 // exits when RunDream returns or the DB is closed; the per-agent in-flight
 // set prevents stacking multiple Dreams for the same scene. Failures are
 // logged and never fail the caller. RunDream runs under the agent's
-// dreamCtx, cancelled at Close/DeleteAgent so a pending Dream never writes
+// opCtx, cancelled at Close/DeleteAgent so a pending Dream never writes
 // to a destroyed domain nor blocks shutdown on LLM calls. Caller must hold
 // ac.mu.
 func (db *DB) triggerSceneDream(ac *agentContext, sceneID uint64) {
@@ -158,7 +174,7 @@ func (db *DB) triggerSceneDream(ac *agentContext, sceneID uint64) {
 			delete(ac.dreamInFlight, sceneID)
 			ac.mu.Unlock()
 		}()
-		if _, err := db.RunDream(ac.dreamCtx, ac.id, common.FormatHash(sceneID)); err != nil {
+		if _, err := db.RunDream(ac.opCtx, ac.id, common.FormatHash(sceneID)); err != nil {
 			slog.Warn("dream: trigger failed",
 				"agent", common.FormatHash(ac.id), "scene", common.FormatHash(sceneID), "err", err)
 		}
@@ -195,7 +211,7 @@ func (db *DB) compressActiveScenes(ctx context.Context, ac *agentContext, scenes
 			if len(topics) < db.config.Defaults.DreamCompressMinTopics {
 				return
 			}
-			out, err := db.llm.Consolidate(ctx, topics)
+			out, err := llmops.Consolidate(ctx, db.llm, topics)
 			if err != nil {
 				mu.Lock()
 				failures++
@@ -230,44 +246,54 @@ func (db *DB) applyGroups(ctx context.Context, agentID uint64, sceneID uint64, t
 		if !ok {
 			continue
 		}
-		parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
-		parentIDStr := common.FormatHash(parentID)
-
-		archiveID, err := repo.AppendArchiveL4(db.engine, agentID, parentIDStr, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
-		if err != nil {
-			slog.Warn("dream: archive merged summary failed", "parent", parentIDStr, "err", err)
-			continue
+		if db.applyOneGroup(ctx, agentID, sceneID, g, minTS, maxTS) {
+			count++
 		}
-
-		// Keywords of MergedSummary become FusedKeywords (it already merges both sides).
-		keywords, err := db.llm.ExtractKeywords(ctx, g.MergedSummary)
-		if err != nil || len(keywords) == 0 {
-			slog.Warn("dream: extract keywords from merged summary failed, skip group", "parent", parentIDStr, "err", err)
-			continue
-		}
-
-		centroidRef, err := db.writeCentroid(agentID, g.MergedSummary)
-		if err != nil {
-			slog.Warn("dream: encode merged summary centroid failed", "parent", parentIDStr, "err", err)
-			continue
-		}
-
-		if !repo.CreateFusedTopicL2(db.engine, agentID, common.FormatHash(sceneID), keywords, minTS, maxTS, g.NodeHashes, centroidRef) {
-			slog.Warn("dream: create fused topic failed", "parent", parentIDStr)
-			continue
-		}
-		// Attach the summary archive ref so retrieval can return the full text.
-		if !repo.UpdateTopicL4RefsL2(db.engine, agentID, parentIDStr, []uint64{archiveID}) {
-			slog.Warn("dream: attach summary archive ref failed", "parent", parentIDStr)
-			continue
-		}
-		if _, err := repo.CompressTopicsL2(db.engine, agentID, g.NodeHashes, parentID); err != nil {
-			slog.Warn("dream: compress child topics failed", "parent", parentIDStr, "err", err)
-			continue
-		}
-		count++
 	}
 	return count
+}
+
+// applyOneGroup consolidates a single merge group: stores MergedSummary as
+// an L4 dream archive, extracts keywords for the fused topic, creates the
+// parent topic with the archive ref, then sinks the group nodes. Any failed
+// step skips the group (logged) and reports false.
+func (db *DB) applyOneGroup(ctx context.Context, agentID uint64, sceneID uint64, g L2Group, minTS, maxTS int64) bool {
+	parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
+	parentIDStr := common.FormatHash(parentID)
+
+	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, parentIDStr, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
+	if err != nil {
+		slog.Warn("dream: archive merged summary failed", "parent", parentIDStr, "err", err)
+		return false
+	}
+
+	// Keywords of MergedSummary become FusedKeywords (it already merges both sides).
+	keywords, err := llmops.ExtractKeywords(ctx, db.llm, g.MergedSummary)
+	if err != nil || len(keywords) == 0 {
+		slog.Warn("dream: extract keywords from merged summary failed, skip group", "parent", parentIDStr, "err", err)
+		return false
+	}
+
+	centroidRef, err := db.writeCentroid(agentID, g.MergedSummary)
+	if err != nil {
+		slog.Warn("dream: encode merged summary centroid failed", "parent", parentIDStr, "err", err)
+		return false
+	}
+
+	if !repo.CreateFusedTopicL2(db.engine, agentID, common.FormatHash(sceneID), keywords, minTS, maxTS, g.NodeHashes, centroidRef) {
+		slog.Warn("dream: create fused topic failed", "parent", parentIDStr)
+		return false
+	}
+	// Attach the summary archive ref so retrieval can return the full text.
+	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, parentIDStr, []uint64{archiveID}) {
+		slog.Warn("dream: attach summary archive ref failed", "parent", parentIDStr)
+		return false
+	}
+	if _, err := repo.CompressTopicsL2(db.engine, agentID, g.NodeHashes, parentID); err != nil {
+		slog.Warn("dream: compress child topics failed", "parent", parentIDStr, "err", err)
+		return false
+	}
+	return true
 }
 
 func (db *DB) groupTimestamps(nodeHashes []uint64, byID map[uint64]core.TopicSlot) (minTS, maxTS int64, ok bool) {
@@ -288,7 +314,7 @@ func (db *DB) groupTimestamps(nodeHashes []uint64, byID map[uint64]core.TopicSlo
 }
 
 func (db *DB) distillL0Stage(ctx context.Context, agentID uint64) error {
-	samples, _ := repo.SampleL1ForDistill(db.engine, agentID)
+	samples, _ := profile.Samples(db.engine, agentID)
 	if len(samples) == 0 {
 		return nil
 	}
@@ -296,23 +322,22 @@ func (db *DB) distillL0Stage(ctx context.Context, agentID uint64) error {
 	for i, s := range samples {
 		llmSamples[i] = L1Sample{IDHash: s.IDHash, Keywords: s.Keywords, Importance: s.Importance}
 	}
-	out, err := db.llm.Distill(ctx, llmSamples)
+	out, err := llmops.Distill(ctx, db.llm, llmSamples)
 	if err != nil {
 		return err
 	}
-	if err := repo.MergeDistillIntoProfile(db.engine, agentID,
-		repo.DistillEmotion{Valence: out.Emotion.Valence, Arousal: out.Emotion.Arousal, Dominance: out.Emotion.Dominance},
-		repo.DistillMBTI{IE: out.MBTI.IE, NS: out.MBTI.NS, TF: out.MBTI.TF, JP: out.MBTI.JP, Type: out.MBTI.Type},
-	); err != nil {
+	emo := core.EmotionScore{Valence: out.Emotion.Valence, Arousal: out.Emotion.Arousal, Dominance: out.Emotion.Dominance}
+	mbti := core.MBTIScore{IE: out.MBTI.IE, NS: out.MBTI.NS, TF: out.MBTI.TF, JP: out.MBTI.JP, Type: out.MBTI.Type}
+	if err := profile.MergeDistill(db.engine, agentID, emo, mbti); err != nil {
 		return err
 	}
-	perNode := make(map[uint64]repo.L1NodeEmotion, len(out.PerNode))
+	perNode := make(map[uint64]core.NodeEmotion, len(out.PerNode))
 	for _, n := range out.PerNode {
 		id, err := common.ParseID(n.IDHex)
 		if err != nil {
 			continue
 		}
-		perNode[id] = repo.L1NodeEmotion{Valence: n.Valence, Arousal: n.Arousal}
+		perNode[id] = core.NodeEmotion{Valence: n.Valence, Arousal: n.Arousal}
 	}
 	repo.BackfillL1Emotions(db.engine, agentID, perNode)
 	return nil

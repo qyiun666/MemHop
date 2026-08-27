@@ -117,16 +117,3 @@ func TestGetCapabilityBuiltinFallback(t *testing.T) {
 		t.Fatal("unknown id must still fail")
 	}
 }
-
-// Search capability matching stays pure retrieval over stored records:
-// the built-in toolbox is NOT attached to Search responses.
-func TestMatchCapabilitiesExcludesBuiltins(t *testing.T) {
-	engine := newTestEngine(t)
-	db := newTestDB(t, engine)
-	db.SetBuiltinCapabilities(testBuiltinCapabilities())
-
-	out := db.matchCapabilities("内置手册 检索")
-	if len(out) != 0 {
-		t.Fatalf("search must not carry builtins, got %d", len(out))
-	}
-}

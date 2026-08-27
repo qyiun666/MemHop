@@ -61,12 +61,9 @@ func TestRefineTopicKeywordsFacade(t *testing.T) {
 	srv := refineLLM(t)
 	cfg := openTestConfig(filepath.Join(t.TempDir(), "refine.meh"))
 	cfg.LLM.APIURL = srv.URL
-	db, err := OpenWithEncoder(cfg, &openTestEncoder{dim: 4})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
+	m, db := openMultiSession(t, cfg, &openTestEncoder{dim: 4})
 	defer func() {
-		if err := db.Close(); err != nil {
+		if err := m.Close(); err != nil {
 			t.Fatalf("close: %v", err)
 		}
 	}()

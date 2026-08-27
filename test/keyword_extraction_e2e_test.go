@@ -16,6 +16,7 @@ import (
 	"time"
 
 	internal "github.com/qyiun666/MemHop/internal"
+	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -57,7 +58,7 @@ func TestExtractKeywordsLongInputRealLLM(t *testing.T) {
 			// Sampling variance: several attempts raise the chance of hitting
 			// the summary-output form the bug report observed.
 			for i := 0; i < 3; i++ {
-				kw, err := p.ExtractKeywords(context.Background(), text)
+				kw, err := llmops.ExtractKeywords(context.Background(), p, text)
 				if err != nil {
 					t.Fatalf("attempt %d: ExtractKeywords returned error: %v", i, err)
 				}

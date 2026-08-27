@@ -1,9 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// llm_client.go 封装 LLM 调用客户端：一个 Provider 供三个调用点共享
-// （语义关键词提取、L2 压缩、L1→L0 蒸馏）。只负责
-// 参数进来 → 构建 prompt → 调 LLM → 解析 → 返回结果。
+// llm_client.go 封装 LLM 传输客户端：Provider 实现 cap/llmops 注入的 Chat
+// 契约（单次 chat、截断升级重试、输出上限），prompt 构建与解析属于能力层。
 
 package internal
 
@@ -66,9 +65,9 @@ func normalizeBaseURL(raw string) string {
 	return u
 }
 
-// chat 执行一次非流式 chat completion，对 429/5xx 做指数退避重试
+// Chat 执行一次非流式 chat completion，对 429/5xx 做指数退避重试
 // （500ms → 2s，共 3 次尝试），其余错误不重试。
-func (p *Provider) chat(
+func (p *Provider) Chat(
 	ctx context.Context, system, user string, maxTokens int, temperature, topP float32,
 ) (string, error) {
 	req := openai.ChatCompletionRequest{
@@ -109,6 +108,9 @@ func (p *Provider) chat(
 		if len(resp.Choices) == 0 {
 			return "", common.NewError(common.ErrLLM, "llm response has no choices")
 		}
+		if resp.Choices[0].FinishReason == openai.FinishReasonLength {
+			return "", fmt.Errorf("llm response truncated at max_tokens=%d: %w", maxTokens, common.ErrTruncated)
+		}
 		return resp.Choices[0].Message.Content, nil
 	}
 	return "", lastErr
@@ -140,23 +142,4 @@ func retryable(status int) bool {
 		return true
 	}
 	return false
-}
-
-// stripCodeBlocks 去掉 LLM 输出中 ```lang ... ``` markdown 围栏。
-func stripCodeBlocks(s string) string {
-	trimmed := strings.TrimSpace(s)
-	if !strings.HasPrefix(trimmed, "```") {
-		return trimmed
-	}
-	body := trimmed[3:]
-	if nl := strings.IndexByte(body, '\n'); nl >= 0 {
-		body = body[nl+1:]
-	} else {
-		// 只有围栏没有正文（如 "```json```"），视为空内容。
-		body = ""
-	}
-	if end := strings.LastIndex(body, "```"); end >= 0 {
-		body = body[:end]
-	}
-	return strings.TrimSpace(body)
 }

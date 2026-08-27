@@ -5,7 +5,6 @@ package core
 
 import (
 	"encoding/binary"
-	"io"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
@@ -22,17 +21,10 @@ func (e *StorageEngine) CheckpointReclaim(snap *IndexSnapshotData) (*IndexSnapsh
 	if e.closed {
 		return nil, common.NewError(common.ErrClosed, "engine is closed")
 	}
-	h := e.activeHeaderRef()
-	if h.SnapshotOffset > 0 &&
-		uint64(h.SnapshotOffset)+uint64(h.SnapshotLength) != uint64(len(e.mmap)) {
-		return nil, common.NewError(common.ErrInvalidQuery,
-			"snapshot not at file tail; run Compact instead")
-	}
-	n, err := e.countTailSnapshots()
-	if err != nil {
+	if err := e.requireTailSnapshot(); err != nil {
 		return nil, err
 	}
-	if n < ReclaimMinSnapshots {
+	if e.countTailSnapshots() < ReclaimMinSnapshots {
 		return snap, nil
 	}
 	blob, err := BuildSnapshot(e.index, snap)
@@ -47,49 +39,41 @@ func (e *StorageEngine) CheckpointReclaim(snap *IndexSnapshotData) (*IndexSnapsh
 	if err := e.writeNullSnapshotHeader(); err != nil {
 		return nil, err
 	}
-	snapOffset, err := e.file.Seek(0, io.SeekEnd)
-	if err != nil {
-		return nil, common.NewError(common.ErrIO, "seek snap", err)
-	}
-	if _, err := e.file.Write(blob); err != nil {
-		return nil, common.NewError(common.ErrIO, "write snapshot", err)
-	}
-	if err := e.file.Sync(); err != nil {
-		return nil, common.NewError(common.ErrIO, "sync", err)
-	}
-	mm, err := RemapFile(e.file, e.mmap)
-	if err != nil {
+	// 3. Re-append the single snapshot behind the record area and flip the header.
+	if err := e.appendSnapshot(blob); err != nil {
 		return nil, err
 	}
-	e.mmap = mm
-	newHdr := e.buildCheckpointHeader(snapOffset, uint32(len(blob)))
-	if err := e.writeInactiveHeader(newHdr); err != nil {
-		return nil, err
-	}
-	mm, err = RemapFile(e.file, e.mmap)
-	if err != nil {
-		return nil, err
-	}
-	e.mmap = mm
-	e.switchHeader(newHdr)
 	e.snapshotData = snap
 	return snap, nil
 }
 
+// requireTailSnapshot rejects the legacy layout where the snapshot is not
+// the file tail (only Compact may rewrite such files). Caller must hold e.mu.
+func (e *StorageEngine) requireTailSnapshot() error {
+	h := e.activeHeaderRef()
+	if h.SnapshotOffset > 0 &&
+		uint64(h.SnapshotOffset)+uint64(h.SnapshotLength) != uint64(len(e.mmap)) {
+		return common.NewError(common.ErrInvalidQuery,
+			"snapshot not at file tail; run Compact instead")
+	}
+	return nil
+}
+
 // countTailSnapshots counts consecutive snapshot blobs after nextOffset.
-// Caller must hold e.mu.
-func (e *StorageEngine) countTailSnapshots() (int, error) {
+// A parse failure on the first non-blob is "end of consecutive snapshots",
+// not an error; hence no error return. Caller must hold e.mu.
+func (e *StorageEngine) countTailSnapshots() int {
 	count := 0
 	pos := e.nextOffset
 	for pos < uint64(len(e.mmap)) {
 		n, err := snapshotBlobLength(e.mmap[pos:])
 		if err != nil {
-			return count, nil
+			return count
 		}
 		pos += uint64(n)
 		count++
 	}
-	return count, nil
+	return count
 }
 
 // isSnapshotBlobAt reports whether raw starts with a snapshot magic and is

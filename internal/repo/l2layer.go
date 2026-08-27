@@ -1,13 +1,14 @@
+// Copyright (c) 2026 qyiun666
+// SPDX-License-Identifier: MIT OR Apache-2.0
+
+// L2 scene record primitives plus topic compression planning.
 package repo
 
 import (
-	"cmp"
 	"math"
-	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // MaxDepth: topic depth threshold that triggers deletion on sinking.
@@ -25,33 +26,9 @@ func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, 
 		UserTimestamp:  math.MaxInt64,
 		AgentTimestamp: math.MinInt64,
 	}
-	var writes []core.RecordEntry
-	var deletes []uint64
-	for _, id := range ids {
-		topic, err := core.ReadTopicLenient(engine, agentID, id)
-		if err != nil || topic == nil {
-			continue // skip missing or non-topic records
-		}
-		topic.Depth++
-		topic.ParentID = &parentID
-
-		result.L3Refs = append(result.L3Refs, topic.L3Refs...)
-		if topic.UserTimestamp < result.UserTimestamp {
-			result.UserTimestamp = topic.UserTimestamp
-		}
-		if topic.AgentTimestamp > result.AgentTimestamp {
-			result.AgentTimestamp = topic.AgentTimestamp
-		}
-
-		if topic.Depth >= MaxDepth {
-			deletes = append(deletes, topic.ID)
-			continue
-		}
-		entry, err := core.TopicEntry(agentID, topic)
-		if err != nil {
-			return result, err
-		}
-		writes = append(writes, entry)
+	writes, deletes, err := planCompressedWrites(engine, agentID, ids, parentID, result)
+	if err != nil {
+		return result, err
 	}
 	if len(writes) > 0 {
 		if _, err := engine.WriteRecordBatch(writes); err != nil {
@@ -63,6 +40,51 @@ func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, 
 			return result, err
 		}
 	}
+	finalizeCompressResult(result)
+	return result, nil
+}
+
+// planCompressedWrites sinks every existing topic one level deeper under
+// parentID (collecting its L3 refs and timestamp bounds into result) and
+// plans the batch: topics at MaxDepth are deleted instead of rewritten.
+func planCompressedWrites(engine *core.StorageEngine, agentID uint64, ids []uint64, parentID uint64, result *CompressResult) ([]core.RecordEntry, []uint64, error) {
+	var writes []core.RecordEntry
+	var deletes []uint64
+	for _, id := range ids {
+		topic, err := core.ReadTopicLenient(engine, agentID, id)
+		if err != nil || topic == nil {
+			continue // skip missing or non-topic records
+		}
+		topic.Depth++
+		topic.ParentID = &parentID
+		foldCompressBounds(result, topic)
+		if topic.Depth >= MaxDepth {
+			deletes = append(deletes, topic.ID)
+			continue
+		}
+		entry, err := core.TopicEntry(agentID, topic)
+		if err != nil {
+			return nil, nil, err
+		}
+		writes = append(writes, entry)
+	}
+	return writes, deletes, nil
+}
+
+// foldCompressBounds accumulates one sunk topic into the group aggregate.
+func foldCompressBounds(result *CompressResult, topic *core.TopicSlot) {
+	result.L3Refs = append(result.L3Refs, topic.L3Refs...)
+	if topic.UserTimestamp < result.UserTimestamp {
+		result.UserTimestamp = topic.UserTimestamp
+	}
+	if topic.AgentTimestamp > result.AgentTimestamp {
+		result.AgentTimestamp = topic.AgentTimestamp
+	}
+}
+
+// finalizeCompressResult resets untouched sentinel bounds to zero and
+// deduplicates the collected L3 refs.
+func finalizeCompressResult(result *CompressResult) {
 	if result.UserTimestamp == math.MaxInt64 {
 		result.UserTimestamp = 0
 	}
@@ -70,7 +92,6 @@ func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, 
 		result.AgentTimestamp = 0
 	}
 	result.L3Refs = common.DedupSorted(result.L3Refs)
-	return result, nil
 }
 
 // DeleteL2 batch-deletes: num==1 treats ids as scene IDs (all topics of the
@@ -201,204 +222,6 @@ func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) []core.Scene
 	return out
 }
 
-// TopicListQuery carries ListTopicsL2 inputs. MetaIdx is the L2MetaIndex
-// cache: modes 1/2 rebuild candidates from it instead of unmarshalling
-// every topic record; a nil MetaIdx falls back to the full record scan
-// with identical semantics.
-type TopicListQuery struct {
-	Engine  *core.StorageEngine
-	AgentID uint64
-	MetaIdx *index.L2MetaIndex
-	SceneID string
-	Depth   uint8
-	Num     uint8
-}
-
-// ListTopicsL2 lists topics by mode: 1 = all topics up to depth, 2 = same but
-// restricted to sceneID, 3 = one topic by ID. depth is clamped to [1, MaxDepth];
-// results sorted by UserTimestamp for modes 1/2.
-func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
-	var idHash uint64
-	var err error
-	depth := q.Depth
-	if depth == 0 {
-		depth = 1
-	} else if depth > MaxDepth {
-		depth = MaxDepth
-	}
-	if q.Num != 1 {
-		idHash, err = common.ParseID(q.SceneID)
-		if err != nil {
-			return nil, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
-		}
-	}
-	if q.Num == 3 {
-		slot, err := core.ReadTopicSlot(q.Engine, q.AgentID, idHash)
-		if err != nil {
-			return nil, err
-		}
-		return []core.TopicSlot{*slot}, nil
-	}
-	var out []core.TopicSlot
-	if q.MetaIdx != nil {
-		for _, meta := range q.MetaIdx.Iter() {
-			if meta.Depth > depth {
-				continue
-			}
-			if q.Num == 2 && meta.SceneID != idHash {
-				continue
-			}
-			out = append(out, meta.ToTopicSlot())
-		}
-	} else {
-		for _, topic := range core.CollectAllTopics(q.Engine, q.AgentID) {
-			if topic.Depth > depth {
-				continue
-			}
-			if q.Num == 2 && topic.SceneID != idHash {
-				continue
-			}
-			out = append(out, topic)
-		}
-	}
-	slices.SortFunc(out, func(a, b core.TopicSlot) int {
-		return cmp.Compare(a.UserTimestamp, b.UserTimestamp)
-	})
-	return out, nil
-}
-
-// WriteVecCentroid writes the topic centroid vector (f32) as a
-// RecVecCentroid record and returns its idHash for CentroidPageRef.
-func WriteVecCentroid(engine *core.StorageEngine, agentID uint64, vec []float32) (uint64, error) {
-	if len(vec) == 0 {
-		return 0, common.NewError(common.ErrInvalidQuery, "empty centroid vector", nil)
-	}
-	data := common.F32SliceToBytes(vec)
-	idHash := common.HashID(string(data))
-	if _, err := engine.WriteRecord(agentID, core.RecVecCentroid, idHash, data); err != nil {
-		return 0, err
-	}
-	return idHash, nil
-}
-
-// CreateTopicL2 creates a topic (ID from ComputeTopicID, depth 1);
-// centroidRef 0 means no vector.
-func CreateTopicL2(engine *core.StorageEngine, agentID uint64, sceneID string, userKeywords []string, userTS int64, centroidRef uint64) bool {
-	sceneHash, err := common.ParseID(sceneID)
-	if err != nil {
-		return false
-	}
-	return CreateTopicL2WithID(engine, agentID, sceneHash, core.ComputeTopicID(sceneHash, userTS, 0),
-		userKeywords, userTS, centroidRef)
-}
-
-// CreateTopicL2WithID writes a topic with a caller-derived ID. Search uses
-// ComputeTopicIDForText so same-scene/same-millisecond messages with
-// different content no longer overwrite each other.
-func CreateTopicL2WithID(engine *core.StorageEngine, agentID uint64, sceneHash uint64, topicID uint64, userKeywords []string, userTS int64, centroidRef uint64) bool {
-	topic := core.TopicSlot{
-		ID:              topicID,
-		SceneID:         sceneHash,
-		Depth:           1,
-		UserKeywords:    userKeywords,
-		UserTimestamp:   userTS,
-		CentroidPageRef: centroidRef,
-	}
-	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic) == nil
-}
-
-// CreateFusedTopicL2 creates a compressed topic (ID from ComputeTopicID,
-// depth 1): only FusedKeywords carry values; L3/L4 refs are added via
-// AppendTopicL3RefsL2 / UpdateTopicL4RefsL2.
-func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID string, fusedKeywords []string, userTS, agentTS int64, childrenIDs []uint64, centroidRef uint64) bool {
-	sceneHash, err := common.ParseID(sceneID)
-	if err != nil {
-		return false
-	}
-	topic := core.TopicSlot{
-		ID:              core.ComputeTopicID(sceneHash, userTS, agentTS),
-		SceneID:         sceneHash,
-		Depth:           1,
-		UserTimestamp:   userTS,
-		AgentTimestamp:  agentTS,
-		FusedKeywords:   fusedKeywords,
-		ChildrenIDs:     childrenIDs,
-		CentroidPageRef: centroidRef,
-	}
-	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic) == nil
-}
-
-func AppendTopicL3RefsL2(engine *core.StorageEngine, agentID uint64, id string, l3Refs []uint64) bool {
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return false
-	}
-	topic, err := core.ReadTopicLenient(engine, agentID, idHash)
-	if err != nil || topic == nil {
-		return false
-	}
-	topic.L3Refs = common.DedupSorted(append(topic.L3Refs, l3Refs...))
-	return core.WriteTopicSlot(engine, agentID, idHash, topic) == nil
-}
-
-func UpdateTopicL4RefsL2(engine *core.StorageEngine, agentID uint64, id string, l4Refs []uint64) bool {
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return false
-	}
-	topic, err := core.ReadTopicLenient(engine, agentID, idHash)
-	if err != nil || topic == nil {
-		return false
-	}
-	topic.L4Refs = common.DedupSorted(append(topic.L4Refs, l4Refs...))
-	return core.WriteTopicSlot(engine, agentID, idHash, topic) == nil
-}
-
-func UpdateTopicL2(engine *core.StorageEngine, agentID uint64, id string, agentKeywords []string, agentTS int64) bool {
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return false
-	}
-	topic, err := core.ReadTopicLenient(engine, agentID, idHash)
-	if err != nil || topic == nil {
-		return false
-	}
-	topic.AgentKeywords = agentKeywords
-	topic.AgentTimestamp = agentTS
-	return core.WriteTopicSlot(engine, agentID, idHash, topic) == nil
-}
-
-// RefineTopicKeywordsL2 replaces the topic's keyword tracks with a fused
-// set: FusedKeywords = fused, User/AgentKeywords cleared. Timestamps are
-// preserved — Dream grouping (groupTimestamps) relies on them.
-func RefineTopicKeywordsL2(engine *core.StorageEngine, agentID uint64, id string, fusedKeywords []string) bool {
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return false
-	}
-	topic, err := core.ReadTopicLenient(engine, agentID, idHash)
-	if err != nil || topic == nil {
-		return false
-	}
-	topic.FusedKeywords = fusedKeywords
-	topic.UserKeywords = nil
-	topic.AgentKeywords = nil
-	return core.WriteTopicSlot(engine, agentID, idHash, topic) == nil
-}
-
-func UpdateChildrenL2(engine *core.StorageEngine, agentID uint64, id string, childrenIDs []uint64) bool {
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return false
-	}
-	topic, err := core.ReadTopicLenient(engine, agentID, idHash)
-	if err != nil || topic == nil {
-		return false
-	}
-	topic.ChildrenIDs = childrenIDs
-	return core.WriteTopicSlot(engine, agentID, idHash, topic) == nil
-}
-
 // RecoverDeletedScenesL2 re-appends the pre-delete payload of every L2
 // scene record whose newest frame is a tombstone, returning the restored
 // scene IDs. Frames reclaimed by compaction cannot be recovered.
@@ -420,4 +243,30 @@ func RecoverDeletedScenesL2(engine *core.StorageEngine, agentID uint64) ([]uint6
 		return nil, err
 	}
 	return ids, nil
+}
+
+// TopicClosureL2 gathers a topic, its recursive children (any depth) and the L4
+// archives referenced by any of them; topics is empty when the root topic
+// does not exist (DeleteTopic then reports ErrNotFound).
+func TopicClosureL2(engine *core.StorageEngine, agentID uint64, root uint64) (topics, archives []uint64) {
+	all := core.CollectAllTopics(engine, agentID)
+	byID := make(map[uint64]core.TopicSlot, len(all))
+	children := make(map[uint64][]uint64, len(all))
+	for _, t := range all {
+		byID[t.ID] = t
+		if t.ParentID != nil {
+			children[*t.ParentID] = append(children[*t.ParentID], t.ID)
+		}
+	}
+	if _, ok := byID[root]; !ok {
+		return nil, nil
+	}
+	topics = append(topics, root)
+	for i := 0; i < len(topics); i++ {
+		topics = append(topics, children[topics[i]]...)
+	}
+	for _, id := range topics {
+		archives = append(archives, byID[id].L4Refs...)
+	}
+	return topics, common.DedupSorted(archives)
 }

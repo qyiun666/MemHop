@@ -8,13 +8,12 @@ import (
 	"math"
 )
 
+// DecodeF32Vec decodes a little-endian f32 vector of the given dim into a
+// fresh slice, returning nil when data is shorter than dim*4 bytes.
 func DecodeF32Vec(data []byte, dim int) []float32 {
-	if len(data) < dim*4 {
+	vec, err := DecodeF32VecInto(data, dim, nil)
+	if err != nil {
 		return nil
-	}
-	vec := make([]float32, dim)
-	for i := range dim {
-		vec[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:]))
 	}
 	return vec
 }

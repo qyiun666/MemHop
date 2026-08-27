@@ -81,22 +81,34 @@ func loadLLMConfig(cfg *internal.MemHopConfig) error {
 	return nil
 }
 
+// Handle is the test handle of the multi-agent-only API: an agent-domain
+// session plus the file-level lifecycle methods of the underlying
+// MultiAgentDB (Close / Checkpoint / IsClosed).
+type Handle struct {
+	*memhop.Session
+	m *memhop.MultiAgentDB
+}
+
+func (h *Handle) Checkpoint() error { return h.m.Checkpoint() }
+func (h *Handle) Close() error      { return h.m.Close() }
+func (h *Handle) IsClosed() bool    { return h.m.IsClosed() }
+
 // OpenMemHop opens a DB backed by real services (Ollama encoder + DeepSeek LLM)
 // in t.TempDir(); skips when LLM config is missing or Ollama unavailable, and
 // fatals otherwise. The caller must Close() it.
-func OpenMemHop(t *testing.T) *memhop.DB {
+func OpenMemHop(t *testing.T) *Handle {
 	t.Helper()
 	return open(t)
 }
 
 // OpenMemHopB is the *testing.B variant of OpenMemHop.
-func OpenMemHopB(b *testing.B) *memhop.DB {
+func OpenMemHopB(b *testing.B) *Handle {
 	b.Helper()
 	return open(b)
 }
 
 // open is the shared implementation for testing.T and testing.B.
-func open(tb testing.TB) *memhop.DB {
+func open(tb testing.TB) *Handle {
 	cfg := &internal.MemHopConfig{
 		DBPath:      filepath.Join(tb.TempDir(), "test.meh"),
 		VectorDim:   1024,
@@ -108,9 +120,19 @@ func open(tb testing.TB) *memhop.DB {
 		tb.Skipf("跳过真实依赖测试: %v", err)
 	}
 
-	db, err := memhop.Open(cfg)
+	m, err := memhop.OpenMulti(cfg)
 	if err != nil {
-		tb.Fatalf("memhop.Open: %v", err)
+		tb.Fatalf("memhop.OpenMulti: %v", err)
 	}
-	return db
+	id, err := m.CreateAgent("test")
+	if err != nil {
+		m.Close()
+		tb.Fatalf("CreateAgent: %v", err)
+	}
+	sess, err := m.Session(id)
+	if err != nil {
+		m.Close()
+		tb.Fatalf("Session: %v", err)
+	}
+	return &Handle{Session: sess, m: m}
 }

@@ -13,8 +13,7 @@
 package internal
 
 import (
-	"strings"
-
+	"github.com/qyiun666/MemHop/internal/cap/capability"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -43,24 +42,18 @@ func (db *DB) findBuiltinCapability(id string) *core.Capability {
 }
 
 // builtinMatchingList returns built-in capabilities passing the list
-// filters, excluding any whose ID is already stored (the stored copy
-// carries usage statistics and wins).
+// filters (capability.Matches, the shared predicate), excluding any whose ID
+// is already stored (the stored copy carries usage statistics and wins).
 func (db *DB) builtinMatchingList(q CapabilityListQuery, kw string, stored map[uint64]struct{}) []core.Capability {
 	var out []core.Capability
-	for _, b := range db.builtinCapabilities {
+	for i := range db.builtinCapabilities {
+		b := &db.builtinCapabilities[i]
 		if _, ok := stored[b.IDHash]; ok {
 			continue
 		}
-		if q.Status != nil && b.Status != *q.Status {
-			continue
+		if capability.Matches(b, &q, kw) {
+			out = append(out, *b)
 		}
-		if q.Type != nil && b.Type != *q.Type {
-			continue
-		}
-		if kw != "" && !strings.Contains(strings.ToLower(b.Name+" "+b.Summary+" "+b.Trigger), kw) {
-			continue
-		}
-		out = append(out, b)
 	}
 	return out
 }

@@ -11,8 +11,9 @@ import (
 	"context"
 	"strings"
 	"time"
-	"unicode/utf8"
 
+	"github.com/qyiun666/MemHop/internal/cap/capability"
+	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -25,15 +26,11 @@ const maxTrajectoryPayload = 4 * 1024
 // derived from the current max + 1, so the host never counts sequences.
 // The domain lock serializes Seq allocation.
 func (db *DB) AppendTrajectory(agentID uint64, sessionID string, ev core.TrajectorySlot) error {
-	ac, err := db.lockAgent(agentID)
+	ac, parsed, err := db.lockSession(agentID, sessionID)
 	if err != nil {
 		return err
 	}
 	defer ac.mu.Unlock()
-	parsed, err := common.ParseID(sessionID)
-	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse session id", err)
-	}
 	if ev.EventType == "" || ev.Timestamp <= 0 {
 		return common.NewError(common.ErrInvalidQuery, "EventType and Timestamp are required")
 	}
@@ -48,59 +45,30 @@ func (db *DB) AppendTrajectory(agentID uint64, sessionID string, ev core.Traject
 		}
 	}
 	if len(ev.Payload) > maxTrajectoryPayload {
-		ev.Payload = truncateUTF8(ev.Payload, maxTrajectoryPayload)
+		ev.Payload = common.TruncateUTF8(ev.Payload, maxTrajectoryPayload)
 	}
 	ev.SessionID = parsed
 	ev.Seq = maxSeq + 1
 	return repo.AppendTrajectory(db.engine, agentID, ev)
 }
 
-// truncateUTF8 cuts s to at most max bytes without splitting a UTF-8 rune.
-func truncateUTF8(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	t := s[:max]
-	for len(t) > 0 && !utf8.ValidString(t) {
-		t = t[:len(t)-1]
-	}
-	return t
-}
-
 // ReadTrajectory returns a session's trajectory events ordered by Seq.
 func (db *DB) ReadTrajectory(agentID uint64, sessionID string) ([]core.TrajectorySlot, error) {
-	ac, err := db.lockAgent(agentID)
+	ac, parsed, err := db.lockSession(agentID, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	parsed, err := common.ParseID(sessionID)
-	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
-	}
 	return repo.ReadTrajectory(db.engine, agentID, parsed)
-}
-
-// TrajectoryStats aggregates a session's L6 events for the host's
-// "is this session worth crystallizing" decision (event volume, tool-call
-// distribution, recency). Read-only; no engine state mutation.
-type TrajectoryStats struct {
-	Steps        int            `json:"steps"`          // 事件总数
-	ToolUsage    map[string]int `json:"tool_usage"`     // EventType → 计数（turn_start/tool_call/...）
-	LastAppendAt int64          `json:"last_append_at"` // 最后事件时间戳（Unix 毫秒）
 }
 
 // TrajectoryStats returns per-session statistics over the trajectory log.
 func (db *DB) TrajectoryStats(agentID uint64, sessionID string) (*TrajectoryStats, error) {
-	ac, err := db.lockAgent(agentID)
+	ac, parsed, err := db.lockSession(agentID, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	parsed, err := common.ParseID(sessionID)
-	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
-	}
 	events, err := repo.ReadTrajectory(db.engine, agentID, parsed)
 	if err != nil {
 		return nil, err
@@ -119,36 +87,12 @@ func (db *DB) TrajectoryStats(agentID uint64, sessionID string) (*TrajectoryStat
 // DeleteTrajectory removes a session's trajectory events; the domain lock
 // comes from the internal layer.
 func (db *DB) DeleteTrajectory(agentID uint64, sessionID string) error {
-	ac, err := db.lockAgent(agentID)
+	ac, parsed, err := db.lockSession(agentID, sessionID)
 	if err != nil {
 		return err
 	}
 	defer ac.mu.Unlock()
-	parsed, err := common.ParseID(sessionID)
-	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse session id", err)
-	}
 	return repo.DeleteTrajectory(db.engine, agentID, parsed)
-}
-
-// CrystallizeResult reports L5 capabilities created/reused/merged from a
-// trajectory. Crystallized capabilities are drafts until the host activates
-// them.
-type CrystallizeResult struct {
-	CreatedIDs []string            `json:"created_ids"`
-	ReusedIDs  []string            `json:"reused_ids"`
-	MergedIDs  []string            `json:"merged_ids"`
-	Errors     []string            `json:"errors,omitempty"`
-	Details    []CrystallizeDetail `json:"details,omitempty"` // v1.3: per-candidate disposition
-}
-
-// CrystallizeDetail is one candidate's disposition: which capability it
-// created/reused/merged, or why it was skipped.
-type CrystallizeDetail struct {
-	Name         string `json:"name"`                    // 候选能力卡名
-	Action       string `json:"action"`                  // create | reuse | merge | skip
-	CapabilityID string `json:"capability_id,omitempty"` // 16 位 hex；skip 时为空
-	Reason       string `json:"reason,omitempty"`        // skipped_reason（validate 失败原因）
 }
 
 // Crystallize extracts L5 capability candidates from a session's trajectory
@@ -157,24 +101,20 @@ type CrystallizeDetail struct {
 // runs under the agent's domain lock; the LLM call holds no storage lock
 // beyond the engine's own short-lived record locks.
 func (db *DB) Crystallize(ctx context.Context, agentID uint64, sessionID string) (*CrystallizeResult, error) {
-	ac, err := db.lockAgent(agentID)
+	ac, parsed, err := db.lockSession(agentID, sessionID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	parsed, err := common.ParseID(sessionID)
-	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse session id", err)
-	}
 	events, err := repo.ReadTrajectory(db.engine, agentID, parsed)
-	existing := activeCapabilities(repo.ListCapabilitiesL5(db.engine, agentID))
 	if err != nil {
 		return nil, err
 	}
 	if len(events) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "no trajectory for session")
 	}
-	out, err := db.llm.Crystallize(ctx, events, existing)
+	existing := capability.ActiveOnly(core.CollectAllCapabilities(db.engine, agentID))
+	out, err := llmops.Crystallize(ctx, db.llm, events, existing)
 	if err != nil {
 		return nil, err
 	}
@@ -184,48 +124,46 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, sessionID string)
 	}
 	result := &CrystallizeResult{CreatedIDs: []string{}, ReusedIDs: []string{}, MergedIDs: []string{}}
 	for _, cand := range out.Capabilities {
-		// reuse/merge candidates locate an existing capability by name or
-		// ReuseID, so their payload may be minimal (a reuse decision does
-		// not require a full type/resources). Only create candidates need
-		// the complete import validation.
-		action := strings.ToLower(strings.TrimSpace(cand.Action))
-		detail := CrystallizeDetail{Name: cand.Capability.Name}
-		if action != "reuse" && action != "merge" {
-			if err := validateCapabilityImport(&cand.Capability); err != nil {
-				result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())
-				detail.Action = "skip"
-				detail.Reason = err.Error()
-				result.Details = append(result.Details, detail)
-				continue
-			}
-		}
-		id, disposition, err := db.applyCrystallizedCapability(agentID, cand, sessionID)
-		if err != nil {
+		if err := db.applyCrystallizeCandidate(agentID, cand, sessionID, result); err != nil {
 			return nil, err
-		}
-		detail.Action = disposition // create | reuse | merge
-		detail.CapabilityID = id
-		result.Details = append(result.Details, detail)
-		switch disposition {
-		case "reuse":
-			result.ReusedIDs = append(result.ReusedIDs, id)
-		case "merge":
-			result.MergedIDs = append(result.MergedIDs, id)
-		default:
-			result.CreatedIDs = append(result.CreatedIDs, id)
 		}
 	}
 	return result, nil
 }
 
-func activeCapabilities(caps []core.Capability) []core.Capability {
-	out := caps[:0]
-	for _, cap := range caps {
-		if cap.Status == core.CapabilityActive {
-			out = append(out, cap)
+// applyCrystallizeCandidate folds one LLM candidate into the result.
+// reuse/merge candidates locate an existing capability by name or
+// ReuseID, so their payload may be minimal (a reuse decision does not
+// require a full type/resources); only create candidates run the complete
+// import validation, otherwise the candidate is recorded as skipped.
+func (db *DB) applyCrystallizeCandidate(agentID uint64, cand CrystallizeCapability, sessionID string, result *CrystallizeResult) error {
+	action := strings.ToLower(strings.TrimSpace(cand.Action))
+	detail := CrystallizeDetail{Name: cand.Capability.Name}
+	if action != "reuse" && action != "merge" {
+		if err := capability.Validate(&cand.Capability); err != nil {
+			result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())
+			detail.Action = "skip"
+			detail.Reason = err.Error()
+			result.Details = append(result.Details, detail)
+			return nil
 		}
 	}
-	return out
+	id, disposition, err := db.applyCrystallizedCapability(agentID, cand, sessionID)
+	if err != nil {
+		return err
+	}
+	detail.Action = disposition // create | reuse | merge
+	detail.CapabilityID = id
+	result.Details = append(result.Details, detail)
+	switch disposition {
+	case "reuse":
+		result.ReusedIDs = append(result.ReusedIDs, id)
+	case "merge":
+		result.MergedIDs = append(result.MergedIDs, id)
+	default:
+		result.CreatedIDs = append(result.CreatedIDs, id)
+	}
+	return nil
 }
 
 func (db *DB) applyCrystallizedCapability(agentID uint64, cand CrystallizeCapability, sessionID string) (string, string, error) {
@@ -234,14 +172,15 @@ func (db *DB) applyCrystallizedCapability(agentID uint64, cand CrystallizeCapabi
 	if action == "" {
 		action = "create"
 	}
-	cap := buildCrystallizedCapability(cand.Capability, sessionID, now)
+	cap := capability.BuildCrystallized(&cand.Capability, now)
 
 	// Name is the canonical identity. A create candidate whose name already
 	// exists is always treated as reuse: crystallization must never silently
 	// overwrite an active capability.
 	if existing, id, ok := db.findCrystallizeTarget(agentID, cap, cand.ReuseID); ok {
 		if action == "merge" {
-			if err := mergeCapabilityDefinition(db.engine, agentID, existing, cap, sessionID, now); err != nil {
+			capability.MergeDefinition(existing, cap, now)
+			if _, err := repo.UpsertCapabilityL5(db.engine, agentID, existing); err != nil {
 				return "", "", err
 			}
 			return id, "merge", nil
@@ -252,24 +191,6 @@ func (db *DB) applyCrystallizedCapability(agentID uint64, cand CrystallizeCapabi
 		return "", "", err
 	}
 	return common.FormatHash(cap.IDHash), "create", nil
-}
-
-// buildCrystallizedCapability assembles the draft capability record from a
-// crystallize candidate; lifecycle fields are left to the caller.
-func buildCrystallizedCapability(in CapabilityImport, _ string, now int64) *core.Capability {
-	return &core.Capability{
-		Name:      in.Name,
-		Version:   defaultString(in.Version, "1"),
-		Type:      in.Type,
-		Summary:   in.Summary,
-		Trigger:   in.Trigger,
-		Resources: in.Resources,
-		Workflow:  in.Workflow,
-		Status:    core.CapabilityDraft,
-		Origin:    core.CapabilityOriginCrystallized,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
 }
 
 // findCrystallizeTarget locates an existing capability by name ID (canonical
@@ -286,16 +207,4 @@ func (db *DB) findCrystallizeTarget(agentID uint64, cap *core.Capability, reuseI
 		}
 	}
 	return nil, "", false
-}
-
-func mergeCapabilityDefinition(engine *core.StorageEngine, agentID uint64, existing, incoming *core.Capability, _ string, now int64) error {
-	existing.Version = incoming.Version
-	existing.Type = incoming.Type
-	existing.Summary = incoming.Summary
-	existing.Trigger = incoming.Trigger
-	existing.Resources = incoming.Resources
-	existing.Workflow = incoming.Workflow
-	existing.UpdatedAt = now
-	_, err := repo.UpsertCapabilityL5(engine, agentID, existing)
-	return err
 }

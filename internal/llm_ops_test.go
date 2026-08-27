@@ -7,6 +7,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/qyiun666/MemHop/internal/cap/llmops"
 )
 
 // TestExtractKeywordsFormatRetry verifies the format-constrained retry:
@@ -20,7 +22,7 @@ func TestExtractKeywordsFormatRetry(t *testing.T) {
 		`{"keywords":["童年书籍","家庭时刻","分享"]}`,
 	)
 	p := New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	kw, err := p.ExtractKeywords(context.Background(), "我们聊了童年读过的书和家里的温馨时刻")
+	kw, err := llmops.ExtractKeywords(context.Background(), p, "我们聊了童年读过的书和家里的温馨时刻")
 	if err != nil {
 		t.Fatalf("ExtractKeywords: %v", err)
 	}
@@ -35,7 +37,7 @@ func TestExtractKeywordsFormatRetry(t *testing.T) {
 func TestExtractKeywordsHeuristicFallback(t *testing.T) {
 	srv := mockLLMServerSeq(t, "摘要", "摘要", "摘要", "还是摘要")
 	p := New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	kw, err := p.ExtractKeywords(context.Background(), "我们讨论了 Python 的性能优化和数据库索引")
+	kw, err := llmops.ExtractKeywords(context.Background(), p, "我们讨论了 Python 的性能优化和数据库索引")
 	if err != nil {
 		t.Fatalf("ExtractKeywords should degrade, got error: %v", err)
 	}
@@ -49,7 +51,7 @@ func TestExtractKeywordsHeuristicFallback(t *testing.T) {
 func TestExtractKeywordsEmptyResponsesDegrade(t *testing.T) {
 	srv := mockLLMServerSeq(t, "", "", "", "")
 	p := New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	kw, err := p.ExtractKeywords(context.Background(), "今天天气不错我们去爬山")
+	kw, err := llmops.ExtractKeywords(context.Background(), p, "今天天气不错我们去爬山")
 	if err != nil {
 		t.Fatalf("ExtractKeywords should degrade, got error: %v", err)
 	}
@@ -62,7 +64,7 @@ func TestExtractKeywordsEmptyResponsesDegrade(t *testing.T) {
 // without any LLM call.
 func TestExtractKeywordsBlankText(t *testing.T) {
 	p := New(&MemHopConfig{LLM: LlmConfig{APIURL: "http://127.0.0.1:1", APIKey: "test", Model: "mock"}})
-	kw, err := p.ExtractKeywords(context.Background(), "   ")
+	kw, err := llmops.ExtractKeywords(context.Background(), p, "   ")
 	if err != nil {
 		t.Fatalf("ExtractKeywords: %v", err)
 	}
@@ -85,7 +87,7 @@ func TestExtractKeywordsChunkedMerge(t *testing.T) {
 		`{"keywords":["好天气"]}`,
 	)
 	p := New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	kw, err := p.ExtractKeywords(context.Background(), longText())
+	kw, err := llmops.ExtractKeywords(context.Background(), p, longText())
 	if err != nil {
 		t.Fatalf("ExtractKeywords: %v", err)
 	}
@@ -109,7 +111,7 @@ func TestExtractKeywordsChunkedPartialFailure(t *testing.T) {
 		`{"keywords":["好天气"]}`,
 	)
 	p := New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	kw, err := p.ExtractKeywords(context.Background(), longText())
+	kw, err := llmops.ExtractKeywords(context.Background(), p, longText())
 	if err != nil {
 		t.Fatalf("ExtractKeywords should degrade, got error: %v", err)
 	}
@@ -123,7 +125,7 @@ func TestExtractKeywordsChunkedPartialFailure(t *testing.T) {
 func TestExtractKeywordsChunkedAllFail(t *testing.T) {
 	srv := mockLLMServerSeq(t, "摘要一", "摘要二", "摘要三")
 	p := New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	kw, err := p.ExtractKeywords(context.Background(), longText())
+	kw, err := llmops.ExtractKeywords(context.Background(), p, longText())
 	if err != nil {
 		t.Fatalf("ExtractKeywords should degrade, got error: %v", err)
 	}

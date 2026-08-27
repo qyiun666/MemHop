@@ -31,7 +31,15 @@ type sceneMergeArgs struct {
 	SecondaryIDs []string `json:"secondary_ids"`
 }
 
-func registerL2Tools(s *mcp.Server, db *memhop.AgentSession) {
+// registerL2Tools installs the L0 profile and L2 scene tools; each
+// register function owns one cohesive tool group.
+func registerL2Tools(s *mcp.Server, db *memhop.Session) {
+	registerProfileTools(s, db)
+	registerSceneListTools(s, db)
+	registerSceneDetailTools(s, db)
+}
+
+func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_profile_get",
 		Description: "读取 L0 宿主画像（角色、个性、偏好、词表、风格与情绪模式）。",
@@ -67,7 +75,9 @@ func registerL2Tools(s *mcp.Server, db *memhop.AgentSession) {
 			EmotionPatterns: a.EmotionPatterns,
 		})
 	}))
+}
 
+func registerSceneListTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_scene_list",
 		Description: "列出所有 L2 场景（场景 ID、名称与 depth1 话题条数）。",
@@ -101,7 +111,9 @@ func registerL2Tools(s *mcp.Server, db *memhop.AgentSession) {
 		}
 		return out, nil
 	}))
+}
 
+func registerSceneDetailTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_scene_topics",
 		Description: "读取 L2 场景上下文：场景内 depth-1 话题元信息（不含 L4 消息）；话题下的 L4 对话原文请用 memhop_archive_search（topic_id 参数）单独查询。未知场景返回错误。",

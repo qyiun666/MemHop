@@ -10,9 +10,21 @@
 - `core/`：.meh 引擎——记录帧（26 字节：type/flags/length/agent_id/
   id_hash/crc32）、A/B 文件头、快照（0x02 分域）、空间回收、
   `StorageEngine` 索引（`agent -> idHash -> offset` 两级分域）、Slot 数据模型。
-- `index/`：检索索引——BM25 sparse、L2Meta、L1 实体索引、重建。只依赖 `core`。
+  `StorageEngine` 按功能分文件：`engine.go`（索引模型/访问器）、
+  `engine_lifecycle.go`（Create/Open/Checkpoint/Close）、`engine_write.go`（追加）、
+  `engine_read.go`（读/删除载荷扫描）、`engine_delete.go`（墓碑删除）、
+  `engine_recovery.go`（扫描/撕裂尾帧截断/索引重建）；数据模型分
+  `model.go`（Slot 结构）/ `model_enums.go`（枚举）。
+- `index/`：检索索引——BM25 sparse（`sparse.go` 活动路径 /
+  `sparse_serialize.go` 快照线格式）、L2Meta、L1 实体索引、重建。只依赖 `core`。
 - 根目录 `l0layer.go` ~ `l6layer.go`、`agentlayer.go`：各层记录读写原语，
-  一层一文件，所有函数以 `agentID` 为域参数。
+  一层一个文件组（单文件超 400 行时按功能拆分，命名
+  `<layer>layer_<aspect>.go`：`l1layer_sync.go`、`l2layer_topic.go`），
+  所有函数以 `agentID` 为域参数。L1 建边/遗忘算法已上提至
+  `internal/cap/engram`（ DecayNetwork/RebuildFromL2/BuildHyperedges）、
+  L0 画像生成/蒸馏合并至 `internal/cap/profile`、L3 匹配与节点合并至
+  `internal/cap/knowledge`——本层只保留记录读写原语
+  （如 `MutateNodeL3` 以回调接受调用方策略）与索引维护。
 
 ## 边界纪律
 
@@ -25,7 +37,7 @@
    帧或操作 `StorageEngine` 未导出的状态。
 4. **单向依赖**：`repo -> repo/core`、`repo/index -> repo/core`、
    `repo -> common`；禁止反向依赖 `internal`、`api`、`cmd`。
-5. **默认域**：`core.DefaultAgentID = 0` 是单 agent 宿主的默认域；
+5. **默认域**：`core.DefaultAgentID = 0` 即全零 hex 域，公开 `Session("0000000000000000")` 可绑定；
    注册记录 `RecAgentRegistry (0x10)` 的 `idHash == agentID`，data 为
    agent 名 JSON，Open 时扫描重建 `name -> agentID` 映射。
 

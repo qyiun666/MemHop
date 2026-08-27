@@ -2,21 +2,14 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Offline interface tests: exercise the public API surface through
-// memhop.OpenWithEncoder with a mock encoder and a mock OpenAI-compatible
+// memhop.OpenMultiWithEncoder with a mock encoder and a mock OpenAI-compatible
 // LLM server. No external services required; run with `go test ./test/...`.
 
 package test
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"net/http"
-	"net/http/httptest"
-	"os"
 	"path/filepath"
-	"regexp"
-	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +18,67 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
+
+// testDB is the offline test handle: an agent-domain session plus the
+// file-level lifecycle methods of the underlying MultiAgentDB.
+type testDB struct {
+	*memhop.Session
+	m *memhop.MultiAgentDB
+}
+
+func (h *testDB) Checkpoint() error { return h.m.Checkpoint() }
+func (h *testDB) Close() error      { return h.m.Close() }
+func (h *testDB) IsClosed() bool    { return h.m.IsClosed() }
+
+// openMockMulti opens a multi-agent DB with the mock encoder + mock LLM at
+// path; multi-agent is the only mode, so every handle goes through
+// CreateAgent + Session. Opts tweak cfg.Defaults per scenario.
+func openMockMulti(t *testing.T, path, llmURL string, opts ...func(*internal.MemHopDefaults)) *memhop.MultiAgentDB {
+	t.Helper()
+	cfg := &internal.MemHopConfig{
+		DBPath:     path,
+		VectorDim:  16,
+		EmbedModel: "mock-embed",
+	}
+	cfg.LLM.APIURL = llmURL
+	cfg.LLM.APIKey = "mock-key"
+	cfg.LLM.Model = "mock-model"
+	cfg.Defaults = *internal.DefaultMemHopDefaults
+	for _, opt := range opts {
+		opt(&cfg.Defaults)
+	}
+	m, err := memhop.OpenMultiWithEncoder(cfg, &mockEncoder{dim: 16})
+	if err != nil {
+		t.Fatalf("OpenMultiWithEncoder: %v", err)
+	}
+	return m
+}
+
+// newTestDB binds a session (tenant "test") to an opened multi-agent DB.
+func newTestDB(t *testing.T, m *memhop.MultiAgentDB) *testDB {
+	t.Helper()
+	id, err := m.CreateAgent("test")
+	if err != nil {
+		m.Close()
+		t.Fatalf("CreateAgent: %v", err)
+	}
+	sess, err := m.Session(id)
+	if err != nil {
+		m.Close()
+		t.Fatalf("Session: %v", err)
+	}
+	return &testDB{Session: sess, m: m}
+}
+
+// openTestDB opens a DB backed by mock encoder + mock LLM in a temp dir.
+func openTestDB(t *testing.T) (*testDB, *mockLLM) {
+	t.Helper()
+	llm := newMockLLM(t)
+	m := openMockMulti(t, filepath.Join(t.TempDir(), "test.meh"), llm.srv.URL)
+	h := newTestDB(t, m)
+	t.Cleanup(func() { _ = h.Close() })
+	return h, llm
+}
 
 // mockEncoder implements internal.Encoder with a deterministic pseudo-vector.
 type mockEncoder struct{ dim int }
@@ -42,100 +96,6 @@ func (m *mockEncoder) Encode(text string) ([]float32, error) {
 }
 
 func (m *mockEncoder) IsAvailable() bool { return true }
-
-// mockLLM serves OpenAI-compatible /chat/completions and dispatches by the
-// system prompt of each LLM call point; call counters are exposed.
-type mockLLM struct {
-	srv   *httptest.Server
-	calls map[string]int
-}
-
-func newMockLLM(t *testing.T) *mockLLM {
-	t.Helper()
-	m := &mockLLM{calls: map[string]int{}}
-	m.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req struct {
-			Messages []struct {
-				Role    string `json:"role"`
-				Content string `json:"content"`
-			} `json:"messages"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		var sys, user string
-		for _, msg := range req.Messages {
-			switch msg.Role {
-			case "system":
-				sys = msg.Content
-			case "user":
-				user = msg.Content
-			}
-		}
-		var content string
-		lower := strings.ToLower(sys)
-		switch {
-		case strings.Contains(lower, "meaningful keywords"):
-			m.calls["keywords"]++
-			content = `{"keywords":["重构","代码","测试"]}`
-		case strings.Contains(lower, "l2 chat memory"):
-			m.calls["consolidate"]++
-			content = consolidateReply(user)
-		case strings.Contains(lower, "l1 associative"):
-			m.calls["distill"]++
-			content = `{"emotion":{"valence":0.8,"arousal":0.6,"dominance":0.5},"mbti":{"i_e":0.2,"n_s":0.3,"t_f":-0.1,"j_p":0.4,"type":"ESFP"},"per_node":[]}`
-		case strings.Contains(lower, "operation trajectory"):
-			m.calls["crystallize"]++
-			content = `{"capabilities":[{"action":"create","capability":{"format":"memhop-capability/v3","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","ref":"read_file","desc":"读文件","input":"{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}","output":"内容","config":"{\"file\":\"a.go\"}"}]}}]}`
-		default:
-			t.Errorf("mockLLM: unknown system prompt: %.80s", sys)
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		resp := map[string]any{
-			"choices": []map[string]any{{"message": map[string]any{"content": content}}},
-		}
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	t.Cleanup(m.srv.Close)
-	return m
-}
-
-// consolidateReply builds a merge group from the first two topic ids echoed
-// in the consolidate user prompt ("- id=... depth=..." lines).
-func consolidateReply(user string) string {
-	idRe := regexp.MustCompile(`id=(\d+)`)
-	sceneRe := regexp.MustCompile(`## scene_id = (\d+)`)
-	ids := idRe.FindAllStringSubmatch(user, -1)
-	scene := sceneRe.FindStringSubmatch(user)
-	if len(scene) == 0 || len(ids) < 2 {
-		return `{"l2_groups":[],"l2_compression_needed":false}`
-	}
-	return fmt.Sprintf(`{"l2_groups":[{"scene_id":%s,"node_hashes":[%s,%s],"merged_summary":"合并摘要保留全部细节"}],"l2_compression_needed":true}`,
-		scene[1], ids[0][1], ids[1][1])
-}
-
-// openTestDB opens a DB backed by mock encoder + mock LLM in a temp dir.
-func openTestDB(t *testing.T) (*memhop.DB, *mockLLM) {
-	t.Helper()
-	llm := newMockLLM(t)
-	cfg := &internal.MemHopConfig{
-		DBPath:     filepath.Join(t.TempDir(), "test.meh"),
-		VectorDim:  16,
-		EmbedModel: "mock-embed",
-	}
-	cfg.LLM.APIURL = llm.srv.URL
-	cfg.LLM.APIKey = "mock-key"
-	cfg.LLM.Model = "mock-model"
-	cfg.Defaults = *internal.DefaultMemHopDefaults
-	db, err := memhop.OpenWithEncoder(cfg, &mockEncoder{dim: 16})
-	if err != nil {
-		t.Fatalf("OpenWithEncoder: %v", err)
-	}
-	t.Cleanup(func() { db.Close() })
-	return db, llm
-}
 
 func TestInterfaceOpenClose(t *testing.T) {
 	db, _ := openTestDB(t)
@@ -237,315 +197,5 @@ func TestInterfaceL0(t *testing.T) {
 	}
 	if got.Name != "测试画像" || got.Preferences["language"] != "Go" {
 		t.Fatalf("L0 mismatch: %+v", got)
-	}
-}
-
-func TestInterfaceL3(t *testing.T) {
-	db, _ := openTestDB(t)
-	res, err := db.ImportL3([]internal.L3ImportItem{
-		{Title: "Go 内存模型", Domain: "go", NodeType: "concept",
-			Content: "Go 内存模型定义了 happens-before 规则", Keywords: []string{"go", "内存"}},
-	}, internal.L3ImportSkip)
-	if err != nil {
-		t.Fatalf("ImportL3: %v", err)
-	}
-	if len(res.CreatedIDs) == 0 {
-		t.Fatalf("ImportL3 should create nodes: %+v", res)
-	}
-
-	graphs, err := db.ListL3()
-	if err != nil {
-		t.Fatalf("ListL3: %v", err)
-	}
-	if len(graphs) != 1 {
-		t.Fatalf("want 1 graph, got %d", len(graphs))
-	}
-	graphID := common.FormatHash(graphs[0].IDHash)
-
-	g, err := db.GetL3(graphID)
-	if err != nil {
-		t.Fatalf("GetL3: %v", err)
-	}
-	if len(g.Nodes) == 0 {
-		t.Fatal("GetL3 should return nodes")
-	}
-
-	nodes, err := db.QueryL3Nodes(internal.L3NodeQuery{GraphID: graphID, Keyword: "go"})
-	if err != nil {
-		t.Fatalf("QueryL3Nodes: %v", err)
-	}
-	if len(nodes) == 0 {
-		t.Fatal("QueryL3Nodes should find the imported node")
-	}
-
-	subgraph, err := db.QueryL3Subgraph(graphID, common.FormatHash(nodes[0].IDHash), 2, nil)
-	if err != nil {
-		t.Fatalf("QueryL3Subgraph: %v", err)
-	}
-	if len(subgraph.Nodes) == 0 {
-		t.Fatal("QueryL3Subgraph should return nodes")
-	}
-
-	// Search must link the matching L3 graph onto the new topic as L3Refs,
-	// which is what makes DirectedL3ID scoping work.
-	sres, err := db.Search(context.Background(), internal.SearchQuery{Text: "Go 内存模型", AutoCreate: true, Timestamp: time.Now().UnixMilli()})
-	if err != nil {
-		t.Fatalf("Search after ImportL3: %v", err)
-	}
-	linked := false
-	for _, topic := range sres.Contexts {
-		if topic.ID != sres.NewTopicID {
-			continue
-		}
-		for _, ref := range topic.L3Refs {
-			if ref == graphs[0].IDHash {
-				linked = true
-			}
-		}
-	}
-	if !linked {
-		t.Fatalf("Search should link matching L3 graph into topic L3Refs: %+v", sres.Contexts)
-	}
-
-	newName := "改名"
-	if _, err := db.UpdateL3(graphID, &newName); err != nil {
-		t.Fatalf("UpdateL3: %v", err)
-	}
-	if err := db.DeleteL3(graphID); err != nil {
-		t.Fatalf("DeleteL3: %v", err)
-	}
-	graphs, err = db.ListL3()
-	if err != nil {
-		t.Fatalf("ListL3 after delete: %v", err)
-	}
-	if len(graphs) != 0 {
-		t.Fatalf("want 0 graphs after delete, got %d", len(graphs))
-	}
-}
-
-func TestInterfaceL5(t *testing.T) {
-	db, _ := openTestDB(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "capability.json")
-	content := `{"format":"memhop-capability/v3","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file"}]}`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write capability file: %v", err)
-	}
-
-	cap, err := db.ImportCapability(path)
-	if err != nil {
-		t.Fatalf("ImportCapability: %v", err)
-	}
-	if cap == nil {
-		t.Fatal("ImportCapability returned nil")
-	}
-	id := common.FormatHash(cap.IDHash)
-	got, err := db.GetCapability(id)
-	if err != nil {
-		t.Fatalf("GetCapability: %v", err)
-	}
-	if got.Name != "重构流程" || got.Type != core.CapabilityMCP {
-		t.Fatalf("capability mismatch: %+v", got)
-	}
-	caps, err := db.ListCapabilities(internal.CapabilityListQuery{})
-	if err != nil {
-		t.Fatalf("ListCapabilities: %v", err)
-	}
-	// The response includes the read-only built-in toolbox; the imported
-	// capability must be present and every other entry must be a built-in.
-	found := false
-	for _, c := range caps {
-		if c.Name == "重构流程" {
-			found = true
-			continue
-		}
-		if c.Origin != core.CapabilityOriginBuiltin {
-			t.Fatalf("unexpected non-builtin capability: %+v", c)
-		}
-	}
-	if !found {
-		t.Fatal("imported capability missing from list")
-	}
-
-	if err := db.DeleteCapability(id); err != nil {
-		t.Fatalf("DeleteCapability: %v", err)
-	}
-	caps, err = db.ListCapabilities(internal.CapabilityListQuery{})
-	if err != nil {
-		t.Fatalf("ListCapabilities after delete: %v", err)
-	}
-	for _, c := range caps {
-		if c.Origin != core.CapabilityOriginBuiltin {
-			t.Fatalf("stored capability should be deleted: %+v", c)
-		}
-	}
-}
-
-func TestInterfaceL6(t *testing.T) {
-	db, _ := openTestDB(t)
-	session := "0000000000000001"
-	ts := time.Now().UnixMilli()
-
-	if err := db.AppendTrajectory(session, core.TrajectorySlot{
-		EventType: "tool_call", Payload: `{"tool":"read_file","file":"a.go"}`, Timestamp: ts,
-	}); err != nil {
-		t.Fatalf("AppendTrajectory: %v", err)
-	}
-	if err := db.AppendTrajectory(session, core.TrajectorySlot{
-		EventType: "tool_result", Payload: "file content", Timestamp: ts + 500,
-	}); err != nil {
-		t.Fatalf("AppendTrajectory #2: %v", err)
-	}
-	events, err := db.ReadTrajectory(session)
-	if err != nil {
-		t.Fatalf("ReadTrajectory: %v", err)
-	}
-	if len(events) != 2 || events[0].Seq != 1 || events[1].Seq != 2 {
-		t.Fatalf("want 2 events with seq 1,2: %+v", events)
-	}
-
-	// Crystallize turns the trajectory into an L5 plugin via the mock LLM.
-	res, err := db.Crystallize(context.Background(), session)
-	if err != nil {
-		t.Fatalf("Crystallize: %v", err)
-	}
-	if len(res.CreatedIDs) != 1 {
-		t.Fatalf("want 1 created capability id: %+v", res)
-	}
-	// Built-ins are all active, so filtering by draft isolates the
-	// crystallized capability.
-	draft := core.CapabilityDraft
-	caps, err := db.ListCapabilities(internal.CapabilityListQuery{Status: &draft})
-	if err != nil {
-		t.Fatalf("ListCapabilities after crystallize: %v", err)
-	}
-	if len(caps) != 1 || caps[0].Status != core.CapabilityDraft {
-		t.Fatalf("want 1 draft capability after crystallize, got %d", len(caps))
-	}
-
-	if err := db.DeleteTrajectory(session); err != nil {
-		t.Fatalf("DeleteTrajectory: %v", err)
-	}
-	events, err = db.ReadTrajectory(session)
-	if err != nil {
-		t.Fatalf("ReadTrajectory after delete: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("want 0 events after delete, got %d", len(events))
-	}
-}
-
-func TestInterfaceDream(t *testing.T) {
-	// Lower the compress threshold so two topics in one scene trigger the
-	// consolidate call.
-	llm := newMockLLM(t)
-	cfg := &internal.MemHopConfig{
-		DBPath:     filepath.Join(t.TempDir(), "test.meh"),
-		VectorDim:  16,
-		EmbedModel: "mock-embed",
-	}
-	cfg.LLM.APIURL = llm.srv.URL
-	cfg.LLM.APIKey = "mock-key"
-	cfg.LLM.Model = "mock-model"
-	cfg.Defaults = *internal.DefaultMemHopDefaults
-	cfg.Defaults.DreamCompressMinTopics = 2
-	db, err := memhop.OpenWithEncoder(cfg, &mockEncoder{dim: 16})
-	if err != nil {
-		t.Fatalf("OpenWithEncoder: %v", err)
-	}
-	defer db.Close()
-
-	ts := time.Now().UnixMilli()
-	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
-	if err != nil {
-		t.Fatalf("Search #1: %v", err)
-	}
-	sceneID := common.FormatHash(res.Contexts[0].SceneID)
-	if _, err := db.Search(context.Background(), internal.SearchQuery{
-		Text: "继续重构第二个模块", DirectedL2ID: &sceneID, Timestamp: ts + 1000,
-	}); err != nil {
-		t.Fatalf("Search #2: %v", err)
-	}
-
-	ok, err := db.Dream(context.Background(), "")
-	if err != nil {
-		t.Fatalf("Dream: %v", err)
-	}
-	if !ok {
-		t.Fatal("Dream should report progress")
-	}
-	if llm.calls["consolidate"] < 1 {
-		t.Fatal("Dream should call consolidate on the active scene")
-	}
-	// L1 nodes were synced from L2 during Dream, so the distill stage runs.
-	if llm.calls["distill"] < 1 {
-		t.Fatal("Dream should call distill for L0 profile")
-	}
-	// Distill output was merged into the L0 profile.
-	profile, err := db.GetL0()
-	if err != nil {
-		t.Fatalf("GetL0 after dream: %v", err)
-	}
-	if profile.EmotionPatterns["valence"] == "" || profile.Personality == "" {
-		t.Fatalf("dream distill should backfill emotion/mbti: %+v", profile)
-	}
-
-	// Directed Dream: an invalid scene id is rejected, a valid one succeeds.
-	if _, err := db.Dream(context.Background(), "zz"); err == nil {
-		t.Fatal("Dream with invalid scene_id should error")
-	}
-	if ok, err := db.Dream(context.Background(), sceneID); err != nil || !ok {
-		t.Fatalf("directed Dream on scene %s: ok=%v err=%v", sceneID, ok, err)
-	}
-}
-
-func TestInterfaceCheckpointPersist(t *testing.T) {
-	llm := newMockLLM(t)
-	path := filepath.Join(t.TempDir(), "persist.meh")
-	cfg := &internal.MemHopConfig{
-		DBPath:     path,
-		VectorDim:  16,
-		EmbedModel: "mock-embed",
-	}
-	cfg.LLM.APIURL = llm.srv.URL
-	cfg.LLM.APIKey = "mock-key"
-	cfg.LLM.Model = "mock-model"
-	cfg.Defaults = *internal.DefaultMemHopDefaults
-
-	db, err := memhop.OpenWithEncoder(cfg, &mockEncoder{dim: 16})
-	if err != nil {
-		t.Fatalf("OpenWithEncoder: %v", err)
-	}
-	if _, err := db.Search(context.Background(), internal.SearchQuery{
-		Text: "用户要求重构代码", AutoCreate: true, Timestamp: time.Now().UnixMilli(),
-	}); err != nil {
-		t.Fatalf("Search: %v", err)
-	}
-	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("Checkpoint: %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	// Reopen the same file: scenes and archives must survive.
-	db2, err := memhop.OpenWithEncoder(cfg, &mockEncoder{dim: 16})
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer db2.Close()
-	scenes, err := db2.ListScenes()
-	if err != nil {
-		t.Fatalf("ListScenes after reopen: %v", err)
-	}
-	if len(scenes) == 0 {
-		t.Fatal("scenes should persist across reopen")
-	}
-	arcs, err := db2.SearchL4(internal.L4Query{Keyword: "重构"})
-	if err != nil {
-		t.Fatalf("SearchL4 after reopen: %v", err)
-	}
-	if len(arcs) == 0 {
-		t.Fatal("archives should persist across reopen")
 	}
 }

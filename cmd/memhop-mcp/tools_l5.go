@@ -80,6 +80,40 @@ func validCapabilityStatus(s string) error {
 	return fmt.Errorf("invalid capability status %q (want draft, active or deprecated)", s)
 }
 
+// parseCapabilityStatus maps a validated status string to the api enum
+// (shared by list filtering and partial update).
+func parseCapabilityStatus(s string) (*memhop.CapabilityStatus, error) {
+	if err := validCapabilityStatus(s); err != nil {
+		return nil, err
+	}
+	st := memhop.CapabilityDraft
+	switch s {
+	case "active":
+		st = memhop.CapabilityActive
+	case "deprecated":
+		st = memhop.CapabilityDeprecated
+	}
+	return &st, nil
+}
+
+// parseCapabilityType maps a validated type string to the api enum (shared
+// by list filtering and partial update).
+func parseCapabilityType(s string) (*memhop.CapabilityType, error) {
+	if err := validCapabilityType(s); err != nil {
+		return nil, err
+	}
+	typ := memhop.CapabilityMCP
+	switch s {
+	case "skill":
+		typ = memhop.CapabilitySkill
+	case "api":
+		typ = memhop.CapabilityAPI
+	case "composite":
+		typ = memhop.CapabilityComposite
+	}
+	return &typ, nil
+}
+
 // validCapabilityType validates a type string before the typed switch.
 func validCapabilityType(s string) error {
 	switch s {
@@ -125,7 +159,16 @@ func workflowProp() map[string]any {
 	}
 }
 
-func registerL5Tools(s *mcp.Server, db *memhop.AgentSession) {
+// registerL5Tools installs the capability tools; each register function
+// owns one cohesive tool group.
+func registerL5Tools(s *mcp.Server, db *memhop.Session) {
+	registerCapabilityIOTools(s, db)
+	registerCapabilityListTool(s, db)
+	registerCapabilityLifecycleTools(s, db)
+	registerCapabilityUpdateTool(s, db)
+}
+
+func registerCapabilityIOTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_import",
 		Description: "导入 memhop-capability/v3 能力文件（文件或包含 capability.json 的目录）。能力是对宿主资源的封装：type=mcp（单个 mcp 工具）、type=skill（单个 skill）、type=api（单个 api 方法）、type=composite（多个 mcp/skill/api 集合，可选 workflow 编排）；资源即工具声明（name/desc/input/output 与宿主 ToolSpec 同构）。",
@@ -163,7 +206,9 @@ func registerL5Tools(s *mcp.Server, db *memhop.AgentSession) {
 	}, handle[capabilityIDArgs, updateResult](func(a capabilityIDArgs) (updateResult, error) {
 		return updateResult{OK: true}, db.DeleteCapability(a.ID)
 	}))
+}
 
+func registerCapabilityListTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_list",
 		Description: "列出 L5 能力（含内置能力卡）。可按状态（draft/active/deprecated）、类型（mcp/skill/api/composite）与关键词过滤。",
@@ -175,39 +220,26 @@ func registerL5Tools(s *mcp.Server, db *memhop.AgentSession) {
 	}, handle[capabilityListArgs, []memhop.Capability](func(a capabilityListArgs) ([]memhop.Capability, error) {
 		var q memhop.CapabilityListQuery
 		if a.Status != "" {
-			if err := validCapabilityStatus(a.Status); err != nil {
+			st, err := parseCapabilityStatus(a.Status)
+			if err != nil {
 				return nil, err
 			}
-			// Seed from the api constant: the inferred variable already has
-			// the CapabilityStatus type, so &st matches the query field.
-			var st = memhop.CapabilityDraft
-			switch a.Status {
-			case "active":
-				st = memhop.CapabilityActive
-			case "deprecated":
-				st = memhop.CapabilityDeprecated
-			}
-			q.Status = &st
+			q.Status = st
 		}
 		if a.Type != "" {
-			if err := validCapabilityType(a.Type); err != nil {
+			typ, err := parseCapabilityType(a.Type)
+			if err != nil {
 				return nil, err
 			}
-			var typ = memhop.CapabilityMCP
-			switch a.Type {
-			case "skill":
-				typ = memhop.CapabilitySkill
-			case "api":
-				typ = memhop.CapabilityAPI
-			case "composite":
-				typ = memhop.CapabilityComposite
-			}
-			q.Type = &typ
+			q.Type = typ
 		}
 		q.Keyword = a.Keyword
 		return db.ListCapabilities(q)
 	}))
+}
 
+// registerCapabilityLifecycleTools installs activate/usage over one capability.
+func registerCapabilityLifecycleTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_activate",
 		Description: "激活一个 draft 能力（draft → active）。",
@@ -236,7 +268,9 @@ func registerL5Tools(s *mcp.Server, db *memhop.AgentSession) {
 		}
 		return *cap, nil
 	}))
+}
 
+func registerCapabilityUpdateTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_update",
 		Description: "部分更新一个 L5 能力（空字符串字段表示不修改；内置能力卡只读，更新会被拒绝）。",
@@ -251,60 +285,9 @@ func registerL5Tools(s *mcp.Server, db *memhop.AgentSession) {
 			"workflow":  workflowProp(),
 		}, "id"),
 	}, handle[capabilityUpdateArgs, memhop.Capability](func(a capabilityUpdateArgs) (memhop.Capability, error) {
-		var patch memhop.CapabilityPatch
-		if a.Version != "" {
-			patch.Version = &a.Version
-		}
-		if a.Summary != "" {
-			patch.Summary = &a.Summary
-		}
-		if a.Trigger != "" {
-			patch.Trigger = &a.Trigger
-		}
-		if a.Type != "" {
-			if err := validCapabilityType(a.Type); err != nil {
-				return memhop.Capability{}, err
-			}
-			var typ = memhop.CapabilityMCP
-			switch a.Type {
-			case "skill":
-				typ = memhop.CapabilitySkill
-			case "api":
-				typ = memhop.CapabilityAPI
-			case "composite":
-				typ = memhop.CapabilityComposite
-			}
-			patch.Type = &typ
-		}
-		if a.Status != "" {
-			if err := validCapabilityStatus(a.Status); err != nil {
-				return memhop.Capability{}, err
-			}
-			var st = memhop.CapabilityDraft
-			switch a.Status {
-			case "active":
-				st = memhop.CapabilityActive
-			case "deprecated":
-				st = memhop.CapabilityDeprecated
-			}
-			patch.Status = &st
-		}
-		if len(a.Resources) > 0 || a.Workflow != nil {
-			// Round-trip through JSON: resourceArg/workflowArg field names
-			// match the core ResourceRef/Workflow DTOs exactly.
-			payload, err := json.Marshal(map[string]any{
-				"resources": a.Resources,
-				"workflow":  a.Workflow,
-			})
-			if err != nil {
-				return memhop.Capability{}, err
-			}
-			var nested memhop.CapabilityPatch
-			if err := json.Unmarshal(payload, &nested); err != nil {
-				return memhop.Capability{}, err
-			}
-			patch.Resources = nested.Resources
-			patch.Workflow = nested.Workflow
+		patch, err := buildCapabilityPatch(a)
+		if err != nil {
+			return memhop.Capability{}, err
 		}
 		cap, err := db.UpdateCapability(a.ID, patch)
 		if err != nil {
@@ -312,4 +295,59 @@ func registerL5Tools(s *mcp.Server, db *memhop.AgentSession) {
 		}
 		return *cap, nil
 	}))
+}
+
+// buildCapabilityPatch converts the update request into a partial patch
+// (empty strings mean "leave unchanged").
+func buildCapabilityPatch(a capabilityUpdateArgs) (memhop.CapabilityPatch, error) {
+	var patch memhop.CapabilityPatch
+	if a.Version != "" {
+		patch.Version = &a.Version
+	}
+	if a.Summary != "" {
+		patch.Summary = &a.Summary
+	}
+	if a.Trigger != "" {
+		patch.Trigger = &a.Trigger
+	}
+	if a.Type != "" {
+		typ, err := parseCapabilityType(a.Type)
+		if err != nil {
+			return patch, err
+		}
+		patch.Type = typ
+	}
+	if a.Status != "" {
+		st, err := parseCapabilityStatus(a.Status)
+		if err != nil {
+			return patch, err
+		}
+		patch.Status = st
+	}
+	if len(a.Resources) > 0 || a.Workflow != nil {
+		if err := applyNestedPatch(&patch, a); err != nil {
+			return patch, err
+		}
+	}
+	return patch, nil
+}
+
+// applyNestedPatch round-trips the nested resources/workflow payloads
+// through JSON: resourceArg/workflowArg field names match the core
+// ResourceRef/Workflow DTOs exactly.
+func applyNestedPatch(patch *memhop.CapabilityPatch, a capabilityUpdateArgs) error {
+	payload, err := json.Marshal(map[string]any{
+		"resources": a.Resources,
+		"workflow":  a.Workflow,
+	})
+	if err != nil {
+		return err
+	}
+	var nested memhop.CapabilityPatch
+	if err := json.Unmarshal(payload, &nested); err != nil {
+		return err
+	}
+	patch.Resources = nested.Resources
+	patch.Workflow = nested.Workflow
+	return nil
 }

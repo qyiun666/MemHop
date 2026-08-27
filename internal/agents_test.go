@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qyiun666/MemHop/capabilities"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -24,7 +25,7 @@ func openMultiTestDB(t *testing.T, path string) *DB {
 		VectorDim: 768,
 		Defaults:  *DefaultMemHopDefaults,
 	}
-	db, err := Open(cfg, &mockEncoder{vec: testVec})
+	db, err := Open(cfg, &mockEncoder{vec: testVec}, capabilities.FS)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
