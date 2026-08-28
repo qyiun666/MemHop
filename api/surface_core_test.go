@@ -21,13 +21,13 @@ func TestSurfaceSearchUpdateAppend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search autocreate: %v", err)
 	}
-	if res.NewTopicID == 0 {
+	if res.NewTopicID == "" {
 		t.Fatal("autocreate search must return a new topic id")
 	}
 	if res.Contexts == nil {
 		t.Fatal("SearchResult.Contexts must be non-nil")
 	}
-	topicID := common.FormatHash(res.NewTopicID)
+	topicID := res.NewTopicID
 	if !isHexID(topicID) {
 		t.Fatalf("topic id not hex: %q", topicID)
 	}
@@ -45,22 +45,22 @@ func TestSurfaceSearchUpdateAppend(t *testing.T) {
 	if err != nil || len(scenes) == 0 {
 		t.Fatalf("list scenes after writes: %d err=%v", len(scenes), err)
 	}
-	sceneID := common.FormatHash(scenes[0].SceneID)
+	sceneID := scenes[0].SceneID
 	if _, err := db.Search(ctx, SearchQuery{Text: "monday", DirectedL2ID: &sceneID, Timestamp: 1_700_000_002_000}); err != nil {
 		t.Fatalf("search directed: %v", err)
 	}
 
 	// AppendL4Message returns a new hex archive id.
-	arcID, err := db.AppendL4Message(topicID, "extra context line", 1_700_000_002_500, 1)
+	arcID, err := db.AppendL4Message(topicID, "extra context line", 1_700_000_002_500, 1, 0)
 	if err != nil {
 		t.Fatalf("append l4: %v", err)
 	}
-	if !isHexID(common.FormatHash(arcID)) {
-		t.Fatalf("archive id not hex: %d", arcID)
+	if !isHexID(arcID) {
+		t.Fatalf("archive id not hex: %s", arcID)
 	}
 	// Guard: unknown topic must be ErrNotFound, not an orphan write.
 	ghost := common.FormatHash(common.HashID("ghost-topic"))
-	if _, err := db.AppendL4Message(ghost, "x", 1_700_000_003_000, 0); CodeOf(err) != ErrNotFound {
+	if _, err := db.AppendL4Message(ghost, "x", 1_700_000_003_000, 0, 0); CodeOf(err) != ErrNotFound {
 		t.Fatalf("append to missing topic: want ErrNotFound, got %v", err)
 	}
 	// Timestamp validation contract.

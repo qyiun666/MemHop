@@ -27,24 +27,28 @@ import (
 // returns an error together with the partially filled DreamReport. The whole
 // pipeline holds the domain lock, so same-agent operations wait while
 // different agents run in parallel.
-func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID string) (*DreamReport, error) {
+func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*DreamReport, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.mu.Unlock()
 
+	rep := &DreamReport{}
+	// Retention first: the L6 prune runs on every Dream, even when there is
+	// nothing to consolidate (early return below).
+	db.pruneTrajectoryStage(agentID, ac, rep)
+
 	scenes, err := dreamSceneSet(ac, sceneID)
 	if err != nil {
 		return nil, err
 	}
-	if sceneID == "" && len(scenes) == 0 {
+	if sceneID == 0 && len(scenes) == 0 {
 		// Nothing to consolidate: decide under the domain lock so a scene
 		// registered by a racing Update is never missed (check-then-act).
-		return &DreamReport{}, nil
+		return rep, nil
 	}
 
-	rep := &DreamReport{}
 	start := time.Now()
 	succeeded, failures := db.compressActiveScenes(ctx, ac, scenes, rep)
 	if len(succeeded) == 0 && failures > 0 {
@@ -88,21 +92,33 @@ func appendStage(rep *DreamReport, name string, start time.Time, err error) {
 	rep.Stages = append(rep.Stages, DreamStage{Name: name, Status: stageStatus(err), DurationMs: time.Since(start).Milliseconds()})
 }
 
-// dreamSceneSet resolves the target scenes of one pass: an explicit hex
-// scene id, or the domain's active scene set.
-func dreamSceneSet(ac *agentContext, sceneID string) ([]uint64, error) {
-	if sceneID == "" {
+// dreamSceneSet resolves the target scenes of one pass: a non-zero scene
+// id, or the domain's active scene set.
+func dreamSceneSet(ac *agentContext, sceneID uint64) ([]uint64, error) {
+	if sceneID == 0 {
 		return ac.activeScenes, nil
 	}
-	hash, err := common.ParseID(sceneID)
-	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
-	}
-	return []uint64{hash}, nil
+	return []uint64{sceneID}, nil
 }
 
-// dreamStructureStages runs stages 2 through 6 of the pipeline: index
-// rebuild, L1 sync/edges/rebuild/decay, L0 profile/distill, then installs
+// pruneTrajectoryStage drops L6 trajectory events older than the retention
+// window; durable products live in L4/L5, so L6 stays a bounded process
+// index. Best-effort: a failure is logged and recorded in the report but
+// never aborts Dream.
+func (db *DB) pruneTrajectoryStage(agentID uint64, ac *agentContext, rep *DreamReport) {
+	start := time.Now()
+	hashes := ac.traj.RemoveBefore(time.Now().Add(-trajectoryRetention).UnixMilli())
+	var err error
+	if len(hashes) > 0 {
+		if _, err = repo.DeleteTrajectoryByIDs(db.engine, agentID, hashes); err != nil {
+			slog.Warn("dream: trajectory prune failed", "agent", common.FormatHash(agentID), "err", err)
+		}
+	}
+	appendStage(rep, "l6_prune", start, err)
+}
+
+// dreamStructureStages runs stages 2 through 5 of the pipeline: index
+// rebuild, L1 sync/edges/rebuild/decay, L0 distillation, then installs
 // the rebuilt indexes into the agent context.
 func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agentContext, rep *DreamReport) error {
 	start := time.Now()
@@ -127,22 +143,7 @@ func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agen
 		return err
 	}
 
-	// Stage 5: L0 profile rebuild.
-	start = time.Now()
-	pErr := profile.Generate(db.engine, agentID, newSparse)
-	cErr := pErr
-	if cErr == nil {
-		cErr = db.stageCancelled(ctx, "l0_profile")
-	}
-	appendStage(rep, "l0_profile", start, cErr)
-	if pErr != nil {
-		return pErr
-	}
-	if cErr != nil {
-		return cErr
-	}
-
-	// Stage 6: L0 distillation (LLM emotion/MBTI, backfilled into L1).
+	// Stage 5: L0 distillation (LLM emotion/MBTI, backfilled into L1).
 	start = time.Now()
 	ran, dErr := db.distillL0Stage(ctx, agentID)
 	status := stageStatus(dErr)
@@ -247,7 +248,7 @@ func (db *DB) triggerSceneDream(ac *agentContext, sceneID uint64) {
 			delete(ac.dreamInFlight, sceneID)
 			ac.mu.Unlock()
 		}()
-		if _, err := db.RunDream(ac.opCtx, ac.id, common.FormatHash(sceneID)); err != nil {
+		if _, err := db.RunDream(ac.opCtx, ac.id, sceneID); err != nil {
 			slog.Warn("dream: trigger failed",
 				"agent", common.FormatHash(ac.id), "scene", common.FormatHash(sceneID), "err", err)
 		}
@@ -274,7 +275,7 @@ func (db *DB) compressActiveScenes(ctx context.Context, ac *agentContext, scenes
 				Engine:  db.engine,
 				AgentID: ac.id,
 				MetaIdx: ac.l2Meta,
-				SceneID: common.FormatHash(sceneID),
+				SceneID: sceneID,
 				Depth:   1,
 				Num:     2,
 			})
@@ -334,38 +335,36 @@ func (db *DB) applyGroups(ctx context.Context, agentID uint64, sceneID uint64, t
 // step skips the group (logged) and reports false.
 func (db *DB) applyOneGroup(ctx context.Context, agentID uint64, sceneID uint64, g L2Group, minTS, maxTS int64) bool {
 	parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
-	parentIDStr := common.FormatHash(parentID)
-
-	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, parentIDStr, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
+	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, parentID, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
 	if err != nil {
-		slog.Warn("dream: archive merged summary failed", "parent", parentIDStr, "err", err)
+		slog.Warn("dream: archive merged summary failed", "parent", common.FormatHash(parentID), "err", err)
 		return false
 	}
 
 	// Keywords of MergedSummary become FusedKeywords (it already merges both sides).
 	keywords, err := llmops.ExtractKeywords(ctx, db.llm, g.MergedSummary)
 	if err != nil || len(keywords) == 0 {
-		slog.Warn("dream: extract keywords from merged summary failed, skip group", "parent", parentIDStr, "err", err)
+		slog.Warn("dream: extract keywords from merged summary failed, skip group", "parent", common.FormatHash(parentID), "err", err)
 		return false
 	}
 
 	centroidRef, err := db.writeCentroid(agentID, g.MergedSummary)
 	if err != nil {
-		slog.Warn("dream: encode merged summary centroid failed", "parent", parentIDStr, "err", err)
+		slog.Warn("dream: encode merged summary centroid failed", "parent", common.FormatHash(parentID), "err", err)
 		return false
 	}
 
-	if !repo.CreateFusedTopicL2(db.engine, agentID, common.FormatHash(sceneID), keywords, minTS, maxTS, g.NodeHashes, centroidRef) {
-		slog.Warn("dream: create fused topic failed", "parent", parentIDStr)
+	if !repo.CreateFusedTopicL2(db.engine, agentID, sceneID, keywords, minTS, maxTS, g.NodeHashes, centroidRef) {
+		slog.Warn("dream: create fused topic failed", "parent", common.FormatHash(parentID))
 		return false
 	}
 	// Attach the summary archive ref so retrieval can return the full text.
-	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, parentIDStr, []uint64{archiveID}) {
-		slog.Warn("dream: attach summary archive ref failed", "parent", parentIDStr)
+	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, parentID, []uint64{archiveID}) {
+		slog.Warn("dream: attach summary archive ref failed", "parent", common.FormatHash(parentID))
 		return false
 	}
 	if _, err := repo.CompressTopicsL2(db.engine, agentID, g.NodeHashes, parentID); err != nil {
-		slog.Warn("dream: compress child topics failed", "parent", parentIDStr, "err", err)
+		slog.Warn("dream: compress child topics failed", "parent", common.FormatHash(parentID), "err", err)
 		return false
 	}
 	return true
@@ -403,7 +402,7 @@ func (db *DB) distillL0Stage(ctx context.Context, agentID uint64) (bool, error) 
 	}
 	emo := core.EmotionScore{Valence: out.Emotion.Valence, Arousal: out.Emotion.Arousal, Dominance: out.Emotion.Dominance}
 	mbti := core.MBTIScore{IE: out.MBTI.IE, NS: out.MBTI.NS, TF: out.MBTI.TF, JP: out.MBTI.JP, Type: out.MBTI.Type}
-	if err := profile.MergeDistill(db.engine, agentID, emo, mbti); err != nil {
+	if err := profile.MergeDistill(db.engine, agentID, emo, mbti, out.Personality); err != nil {
 		return false, err
 	}
 	perNode := make(map[uint64]core.NodeEmotion, len(out.PerNode))

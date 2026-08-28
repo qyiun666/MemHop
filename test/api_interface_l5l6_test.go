@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -35,7 +35,7 @@ func TestInterfaceL5(t *testing.T) {
 	if cap == nil {
 		t.Fatal("ImportCapability returned nil")
 	}
-	id := common.FormatHash(cap.IDHash)
+	id := cap.IDHash
 	got, err := db.GetCapability(id)
 	if err != nil {
 		t.Fatalf("GetCapability: %v", err)
@@ -82,12 +82,12 @@ func TestInterfaceL6(t *testing.T) {
 	session := "0000000000000001"
 	ts := time.Now().UnixMilli()
 
-	if err := db.AppendTrajectory(session, core.TrajectorySlot{
+	if err := db.AppendTrajectory(session, api.TrajectorySlot{
 		EventType: "tool_call", Payload: `{"tool":"read_file","file":"a.go"}`, Timestamp: ts,
 	}); err != nil {
 		t.Fatalf("AppendTrajectory: %v", err)
 	}
-	if err := db.AppendTrajectory(session, core.TrajectorySlot{
+	if err := db.AppendTrajectory(session, api.TrajectorySlot{
 		EventType: "tool_result", Payload: "file content", Timestamp: ts + 500,
 	}); err != nil {
 		t.Fatalf("AppendTrajectory #2: %v", err)
@@ -117,16 +117,5 @@ func TestInterfaceL6(t *testing.T) {
 	}
 	if len(caps) != 1 || caps[0].Status != core.CapabilityDraft {
 		t.Fatalf("want 1 draft capability after crystallize, got %d", len(caps))
-	}
-
-	if err := db.DeleteTrajectory(session); err != nil {
-		t.Fatalf("DeleteTrajectory: %v", err)
-	}
-	events, err = db.ReadTrajectory(session)
-	if err != nil {
-		t.Fatalf("ReadTrajectory after delete: %v", err)
-	}
-	if len(events) != 0 {
-		t.Fatalf("want 0 events after delete, got %d", len(events))
 	}
 }

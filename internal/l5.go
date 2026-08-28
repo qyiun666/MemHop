@@ -68,10 +68,14 @@ func (db *DB) GetCapability(agentID uint64, id string) (*core.Capability, error)
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	cap, err := repo.GetCapabilityL5(db.engine, agentID, id)
+	idHash, err := common.ParseID(id)
+	if err != nil {
+		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
+	}
+	cap, err := repo.GetCapabilityL5(db.engine, agentID, idHash)
 	if err != nil {
 		if common.CodeOf(err) == common.ErrNotFound {
-			if b := db.findBuiltinCapability(id); b != nil {
+			if b := db.findBuiltinCapability(idHash); b != nil {
 				return b, nil
 			}
 		}
@@ -88,10 +92,14 @@ func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch)
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	if db.findBuiltinCapability(id) != nil {
+	idHash, err := common.ParseID(id)
+	if err != nil {
+		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
+	}
+	if db.findBuiltinCapability(idHash) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	cap, err := repo.GetCapabilityL5(db.engine, agentID, id)
+	cap, err := repo.GetCapabilityL5(db.engine, agentID, idHash)
 	if err != nil {
 		return nil, err
 	}
@@ -139,13 +147,14 @@ func (db *DB) DeleteCapability(agentID uint64, id string) error {
 		return err
 	}
 	defer ac.mu.Unlock()
-	if _, err := common.ParseID(id); err != nil {
+	idHash, err := common.ParseID(id)
+	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse capability id", err)
 	}
-	if db.findBuiltinCapability(id) != nil {
+	if db.findBuiltinCapability(idHash) != nil {
 		return common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	if !repo.DeleteCapabilityL5(db.engine, agentID, id) {
+	if !repo.DeleteCapabilityL5(db.engine, agentID, idHash) {
 		return common.NewError(common.ErrIO, "delete capability", nil)
 	}
 	return nil
@@ -192,10 +201,14 @@ func (db *DB) ActivateCapability(agentID uint64, id string) (*core.Capability, e
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	if db.findBuiltinCapability(id) != nil {
+	idHash, err := common.ParseID(id)
+	if err != nil {
+		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
+	}
+	if db.findBuiltinCapability(idHash) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	return repo.ActivateCapabilityL5(db.engine, agentID, id)
+	return repo.ActivateCapabilityL5(db.engine, agentID, idHash)
 }
 
 // RecordCapabilityUsage records host feedback after a capability was used.
@@ -206,8 +219,12 @@ func (db *DB) RecordCapabilityUsage(agentID uint64, id string, success bool) (*c
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	if db.findBuiltinCapability(id) != nil {
+	idHash, err := common.ParseID(id)
+	if err != nil {
+		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
+	}
+	if db.findBuiltinCapability(idHash) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	return repo.RecordCapabilityUsageL5(db.engine, agentID, id, success)
+	return repo.RecordCapabilityUsageL5(db.engine, agentID, idHash, success)
 }

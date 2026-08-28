@@ -98,7 +98,7 @@ func candidateTopics(agentID uint64, engine *core.StorageEngine, l2Meta *index.L
 		Engine:  engine,
 		AgentID: agentID,
 		MetaIdx: l2Meta,
-		SceneID: "",
+		SceneID: 0,
 		Depth:   2,
 		Num:     1,
 	}) // all scenes, depth<=2, by UserTimestamp

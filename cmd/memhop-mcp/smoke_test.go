@@ -21,20 +21,20 @@ import (
 
 // TestSSEMultiTenantIsolation boots the SSE server in-process and verifies
 // that two tenants on one process are fully isolated: separate .meh files,
-// no data visible across tenants, and the full 32-tool surface on each.
+// no data visible across tenants, and the full 31-tool surface on each.
 func TestSSEMultiTenantIsolation(t *testing.T) {
 	srv, dbDir := newTestServer(t, nil)
 
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 33 tools on the alice session.
+	// tools/list exposes all 31 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 33 {
-		t.Errorf("expected 33 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 31 {
+		t.Errorf("expected 31 tools, got %d", len(tools.Tools))
 	}
 	names := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -48,7 +48,7 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		"memhop_knowledge_update", "memhop_knowledge_delete", "memhop_knowledge_nodes",
 		"memhop_knowledge_subgraph", "memhop_archive_search", "memhop_archive_get",
 		"memhop_capability_import", "memhop_capability_get", "memhop_capability_delete", "memhop_capability_list", "memhop_capability_update", "memhop_capability_activate", "memhop_capability_usage",
-		"memhop_trajectory_append", "memhop_trajectory_read", "memhop_trajectory_stats", "memhop_trajectory_delete",
+		"memhop_trajectory_append", "memhop_trajectory_read", "memhop_trajectory_sessions",
 		"memhop_crystallize",
 	} {
 		if !names[want] {
@@ -71,9 +71,9 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 
 	// Alice writes a profile; her own reads see it.
 	if _, err := callClient(t, alice, "memhop_profile_update", map[string]any{
-		"name":         "alice-agent",
-		"role":         "tester",
-		"style_traits": []string{"concise"},
+		"name":        "alice-agent",
+		"role":        "tester",
+		"personality": "concise",
 	}); err != nil {
 		t.Fatalf("memhop_profile_update: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	if err := json.Unmarshal([]byte(profile), &p); err != nil {
 		t.Fatalf("unmarshal profile: %v", err)
 	}
-	if p.Name != "alice-agent" || p.Role != "tester" {
+	if p.Name != "alice-agent" || p.Role != "tester" || p.Personality != "concise" {
 		t.Errorf("profile round-trip mismatch: %+v", p)
 	}
 
@@ -97,7 +97,7 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	if err := json.Unmarshal([]byte(profile), &p); err != nil {
 		t.Fatalf("unmarshal bob profile: %v", err)
 	}
-	if p.Name != "" || p.Role != "" || len(p.StyleTraits) != 0 {
+	if p.Name != "" || p.Role != "" || p.Personality != "" {
 		t.Errorf("bob sees alice's profile: %+v", p)
 	}
 
@@ -320,9 +320,9 @@ func connectTenant(t *testing.T, baseURL, tenant string) *mcp.ClientSession {
 
 // memhopProfile mirrors the JSON subset of ProfileSlot used by the smoke test.
 type memhopProfile struct {
-	Name        string   `json:"name"`
-	Role        string   `json:"role"`
-	StyleTraits []string `json:"style_traits"`
+	Name        string `json:"name"`
+	Role        string `json:"role"`
+	Personality string `json:"personality"`
 }
 
 // callClient invokes a tool and returns the first text content.

@@ -50,8 +50,8 @@ func TestSearchReturnsProfileBrief(t *testing.T) {
 	profile := core.ProfileSlot{
 		Name:        "meow",
 		Role:        "helper",
+		Personality: "curious",
 		Preferences: map[string]string{"lang": "zh", "style": "concise"},
-		StyleTraits: []string{"direct", "friendly", "thorough", "extra"},
 	}
 	if err := repo.UpdateProfileL0(db.engine, core.DefaultAgentID, &profile); err != nil {
 		t.Fatalf("UpdateProfileL0: %v", err)
@@ -60,13 +60,10 @@ func TestSearchReturnsProfileBrief(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	for _, want := range []string{"name: meow", "role: helper", "lang=zh", "style=concise", "direct"} {
+	for _, want := range []string{"name: meow", "role: helper", "personality: curious", "lang=zh", "style=concise"} {
 		if !strings.Contains(res.ProfileBrief, want) {
 			t.Errorf("ProfileBrief missing %q: %q", want, res.ProfileBrief)
 		}
-	}
-	if strings.Contains(res.ProfileBrief, "extra") {
-		t.Errorf("ProfileBrief should cap style traits at 3, got %q", res.ProfileBrief)
 	}
 	if res.Profile.Name != "meow" {
 		t.Errorf("full Profile must stay intact, got %+v", res.Profile)

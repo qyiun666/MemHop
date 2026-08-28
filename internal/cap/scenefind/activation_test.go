@@ -18,12 +18,12 @@ import (
 // exclusion, threshold pruning and the no-node/isolated empty results.
 func TestSpreadingActivation(t *testing.T) {
 	engine := newTestEngine(t)
-	sceneA := common.FormatHash(common.HashID("sceneA"))
-	sceneB := common.FormatHash(common.HashID("sceneB"))
-	sceneC := common.FormatHash(common.HashID("sceneC"))
-	sceneD := common.FormatHash(common.HashID("sceneD")) // isolated: node, no edges
+	sceneA := common.HashID("sceneA")
+	sceneB := common.HashID("sceneB")
+	sceneC := common.HashID("sceneC")
+	sceneD := common.HashID("sceneD") // isolated: node, no edges
 
-	mk := func(scene string, kws []string) {
+	mk := func(scene uint64, kws []string) {
 		t.Helper()
 		if !repo.CreateTopicL2(engine, core.DefaultAgentID, scene, kws, 1000, 0) {
 			t.Fatal("create topic")
@@ -40,13 +40,13 @@ func TestSpreadingActivation(t *testing.T) {
 		t.Fatalf("build edges: %v", err)
 	}
 	l2Meta := index.BuildL2MetaFromEngine(engine, core.DefaultAgentID)
-	sceneBHash := mustParse(t, sceneB)
-	sceneDHash := mustParse(t, sceneD)
+	sceneBHash := sceneB
+	sceneDHash := sceneD
 
 	// A-B share "memory" (J=1/3): activation = 1×1/3×0.5 ≈ 0.1667. The
 	// two-hop B→C path yields 0.1667×1/3×0.5 ≈ 0.0278 < l1ActivationThreshold
 	// (0.05) → pruned by the default walk limits.
-	hits := SpreadingActivation(core.DefaultAgentID, engine, l2Meta, mustParse(t, sceneA))
+	hits := SpreadingActivation(core.DefaultAgentID, engine, l2Meta, sceneA)
 	if len(hits) != 1 || hits[0].SceneID != sceneBHash {
 		t.Fatalf("want only scene B, got %+v", hits)
 	}
@@ -58,8 +58,8 @@ func TestSpreadingActivation(t *testing.T) {
 	}
 
 	// A scene without an L1 node (created after the last Dream) → empty.
-	sceneFresh := common.FormatHash(common.HashID("sceneFresh"))
-	if hits := SpreadingActivation(core.DefaultAgentID, engine, l2Meta, mustParse(t, sceneFresh)); len(hits) != 0 {
+	sceneFresh := common.HashID("sceneFresh")
+	if hits := SpreadingActivation(core.DefaultAgentID, engine, l2Meta, sceneFresh); len(hits) != 0 {
 		t.Fatalf("fresh scene must have no associations, got %+v", hits)
 	}
 

@@ -37,14 +37,14 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 
 - **Seven-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal → L6 Trajectory, with Dream consolidation
 - **Three-Channel RRF Retrieval** — BM25 (gse CJK) + f32 vector + fuzzy entity/term matching (entity index auto-fed from indexed topic terms), fused via Reciprocal Rank Fusion (k=60)
-- **V2 Storage** — `.meh` format (`FormatVersion=0x0008`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. Record frames carry an 8-byte `agent_id` (26-byte header) and the engine indexes every record by `(agent, idHash)` domain. **Not compatible with `0x0007` (or older) `.meh` data files** — they are rejected at Open with no migration path
+- **V2 Storage** — `.meh` format (`FormatVersion=0x0009`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. Record frames carry an 8-byte `agent_id` (26-byte header) and the engine indexes every record by `(agent, idHash)` domain. **Not compatible with `0x0008` (or older) `.meh` data files** — they are rejected at Open with no migration path
 - **Multi-Agent Domains** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`: many agents share one `.meh` file with fully isolated per-agent domains (indices, active scenes, Dream pipelines, domain locks); same-agent operations serialize, different agents run in parallel; idle domains reclaim memory on access cadence (`Defaults.AgentIdleTTLMs`) while their records stay on disk. Multi-agent is the only mode — every operation runs through a per-domain session
 - **L1 Scene Hypergraph + Spreading Activation** — Dream creates co-occurrence hyperedges between scenes whose topic keyword sets overlap (Jaccard ≥ `L1EdgeMinSimilarity`); Search association walks the graph from the hit scene, propagating activation (× edge weight × dampening per hop) and returns the top associated scenes' topics as `AssociatedContexts` — real cross-scene associative recall ("联想记忆"), with edge weights decayed and pruned by the Dream pipeline
-- **Dream Pipeline** — five stages over L0–L2: L2 compress → L1 rebuild → L1 decay → L0 profile → L0 distill (emotion/MBTI)
-- **L3 Knowledge Graph** — Multiple independent hypergraphs with node/edge import, CRUD, keyword/type lookup and BFS subgraph queries
+- **Dream Pipeline** — consolidation over L0–L2 plus L6 retention pruning: L2 compress → index rebuild → L1 nodes/hyperedges rebuild → L1 decay → L0 distill (emotion/MBTI) → L6 prune (drops trajectory events older than 7 days); returns a per-stage `DreamReport`
+- **L3 Knowledge Graph** — multiple independent hypergraphs with node import carrying positional source refs and relation edges, CRUD, keyword/type lookup and BFS subgraph queries
 - **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)
-- **Minimal & Embeddable** — 4 direct Go deps (xxhash, gse, go-openai, go-sdk); Ollama is accessed through its plain HTTP API, no Ollama SDK dependency, `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
-- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 33 MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts through one shared `.meh` file, each tenant isolated by URL path `/mcp/<tenant-id>` into its own agent domain (stable agentID per tenant name, `os.Root`-anchored db-dir)
+- **Minimal & Embeddable** — 5 direct Go deps (xxhash, gse, go-openai, go-sdk, golang.org/x/sys); Ollama is accessed through its plain HTTP API, no Ollama SDK dependency, `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
+- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 31 MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts through one shared `.meh` file, each tenant isolated by URL path `/mcp/<tenant-id>` into its own agent domain (stable agentID per tenant name, `os.Root`-anchored db-dir)
 - **Single Agent, Single File** — one agent = one `.meh` file by default, no server process, no background daemon; opt into multi-agent sharing with `OpenMulti`
 
 ## Quick Start
@@ -55,7 +55,6 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 ```go
 import (
     "context"
-    "fmt"
     "log"
     "os"
     "time"
@@ -104,14 +103,14 @@ if err != nil {
 }
 
 // Append the agent reply to the topic created by Search.
-// Update takes the topic ID as a 16-char hex string (NewTopicID is uint64).
-topicID := fmt.Sprintf("%016x", res.NewTopicID)
-if err = sess.Update(topicID, "Agent: ...", time.Now().UnixMilli()); err != nil {
+// NewTopicID is the 16-char hex topic id; every response id feeds back as-is.
+if err = sess.Update(res.NewTopicID, "Agent: ...", time.Now().UnixMilli()); err != nil {
     log.Fatal(err)
 }
 
 // Dream consolidation over active scenes (L0-L2); sceneID "" = all active scenes.
-ok, err := sess.Dream(context.Background(), "")
+// Returns a per-stage DreamReport for observability.
+report, err := sess.Dream(context.Background(), "")
 ```
 
 
@@ -129,11 +128,11 @@ Prerequisites: Go 1.27+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-
 | L3 Knowledge | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 Archive | `SearchL4` · `GetArchive` · `AppendL4Message` |
 | L5 Capability | `ImportCapability` · `GetCapability` · `UpdateCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` |
-| L6 Trajectory | `AppendTrajectory` · `ReadTrajectory` · `TrajectoryStats` · `DeleteTrajectory` · `Crystallize` |
+| L6 Trajectory | `AppendTrajectory` · `ReadTrajectory` · `ListTrajectorySessions` · `Crystallize` (7-day auto-retention, no delete API) |
 
 ### Built-in L5 Capabilities
 
-The root `capabilities/` directory ships **seven built-in capability cards** (`memhop-capability/v3`, embedded into the library at build time, English): `memhop-guide` (the loop split — Search/Update/Dream run host-side and must never be manual LLM calls — plus an index of the other six) and six LLM-callable manuals (knowledge, scene, archive, profile, trajectory, capability). Cards document the Go API (`type: "api"`, `ref: "api:MethodName"`) — the host calls the methods directly, no MCP layer involved. **Resources are tool declarations**: `name/desc/input/output` mirror the host tool spec (e.g. meowire `ToolSpec`) field-for-field, so a host projects them with a pure field copy and zero format conversion. **Tiered injection**: `ListCapabilities` / `GetCapability` serve the toolbox read-only (same filters as stored records, never persisted to the `.meh` file, deduped by ID against stored same-name records — stored wins, NOT attached to `Search` responses); inject only a one-line-per-card index (`id + name + summary + trigger`) plus the guide, and fetch full parameter schemas on demand via `GetCapability(id)`.
+The root `capabilities/` directory ships **six built-in capability cards** (`memhop-capability/v3`, embedded into the library at build time, English): `memhop-guide` (the loop split — Search/Update/Dream and trajectory recording run host-side and must never be manual LLM calls — plus an index of the other five) and five LLM-callable manuals (knowledge, scene, archive, profile, capability). Cards document the Go API (`type: "api"`, `ref: "api:MethodName"`) — the host calls the methods directly, no MCP layer involved. **Resources are tool declarations**: `name/desc/input/output` mirror the host tool spec (e.g. meowire `ToolSpec`) field-for-field, so a host projects them with a pure field copy and zero format conversion. **Tiered injection**: `ListCapabilities` / `GetCapability` serve the toolbox read-only (same filters as stored records, never persisted to the `.meh` file, deduped by ID against stored same-name records — stored wins, NOT attached to `Search` responses); inject only a one-line-per-card index (`id + name + summary + trigger`) plus the guide, and fetch full parameter schemas on demand via `GetCapability(id)`.
 
 ## Architecture
 
@@ -229,7 +228,7 @@ Dependency direction is strictly one-way: `api → internal → repo → core`, 
 
 - **Hot path** (`Search` + `Update`): one small keyword-extraction call each, capped at 512 output tokens. Typical cost is low; latency is the more visible factor.
 - **Dream**: one consolidation call per active scene with at least 20 topics (active-scene set bounded by `Capacity`, default 7), plus one distill call with at most 200 ranked L1 samples (up to 20 keywords each). Output caps: 8192 / 2048 tokens.
-- **Crystallize**: one explicit, host-triggered call per session trajectory.
+- **Crystallize**: one explicit, host-triggered call per turn trajectory; turns sharing an L2 topic fold into one prompt (capped at 128KB of payload, oldest dropped).
 - Use a small/fast chat model (e.g. a local Ollama model or a cheap API model) for the configured LLM when latency and cost matter; keyword extraction does not need a frontier model.
 
 ## Development
@@ -247,6 +246,7 @@ Integration tests run against real services (Ollama encoder + an OpenAI-compatib
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
+| v1.4.1 | 2026-08-28 | Type-contract cleanup: hex-ID DTOs, L0 profile v2, L3 hypergraph activation | api response DTOs are real structs — every ID field leaves as a 16-char hex string (`SearchResult.NewTopicID`, `AppendL4Message`, `AgentID()` included) with new `api.FormatID` / `api.ParseID` helpers · L0 profile v2 (`FormatVersion 0x0009`): field ownership (Name/Role/Preferences host-exclusive, Personality host-seeded + Dream-distilled), typed `EmotionState`/`MBTI` distillation signals, dead `lexicon`/`style_traits` removed · zero in-library hex round-trips (repo-layer ID params are uint64, centroid hash via `HashBytes`) · L3 import gains `source_ref` (positional reference) and `related` (same-graph hyperedges resolved by title, two-phase forward references, idempotent re-import; `edges_created` result field, `L3Relation` type exported) · `AppendL4Message` gains `contentType` (Content* constants exported; text/document/code carry the original text, image/audio/video carry a path/URI with mime/size/sha256 in Metadata), `L4Query.Type` filter and MCP `archive_search` `content_type` param · L6 one-trajectory-per-turn: SessionID is a turn key (search opens, update closes), events carry `TopicID` for cross-turn crystallization, external surface trimmed to append/query (`TrajectoryStats` / `DeleteTrajectory` / `PruneTrajectory` removed, 33 → 31 tools), Dream `l6_prune` auto-drops events older than 7 days · distill/consolidate LLM parsing gains a format-constrained retry · **breaking**: `.meh` files with `FormatVersion != 0x0009` (i.e. ≤ 0x0008) are rejected at Open, no migration |
 | v1.4.0 | 2026-08-26 | Multi-agent memory database | one `.meh` file carries many isolated agent domains: record frames gain `agent_id` (26-byte header), engine indexes and snapshots (0x02) are per-agent, tenant registry records map names to stable crypto/rand agentIDs · `api.OpenMulti` / `AgentSession` / `CreateAgent` / `ListAgents` / `DeleteAgent`; `Open` stays zero-change for single-agent hosts (default domain) · business layer rebuilt around per-agent `agentContext` with domain locks (same-agent serial, cross-agent parallel), idle-domain memory reclamation and scoped Dream pipelines · L7 trajectory layer renumbered to **L6** (cognitive layers converge to L0–L6) · MCP registry shares one `MultiAgentDB` (one `<db-dir>/memhop.meh`), `os.Root`-anchored db-dir · duplicate structs/conversion layers removed (`topicSlotJSON`, `topicToL2Meta`, single-value slice wrappers) · Go 1.23–1.26 stdlib modernization (`iter.Seq2`, `unique.Make`, `os.Root`) · zero new dependencies · **breaking**: `.meh` files with `FormatVersion <= 0x0007` are rejected at Open, no migration; promoted `internal.DB` methods on `api.DB` now carry an `agentID` parameter (facade methods unchanged), `Lock()` panics on a closed DB |
 | v1.3.4 | 2026-08-26 | L5 tool-declaration isomorphism | `memhop-capability` format v3: `ResourceRef` renamed `description` → `desc` and gained `input` (JSON Schema string) / `output` — the tool-declaration fields now mirror the host tool spec shape (meowire `ToolSpec`) exactly, so hosts project capabilities with a pure field copy and zero format conversion · `WorkflowStep` gained `args` — action chains carry step parameters officially (no private config formats) · crystallize prompt emits the v3 shape (`type`/`resources` instead of `kind`/`manifest`) · `validateCapabilityImport` now requires resource names and validates `input` as JSON · **breaking**: v2 cards are rejected at import (format must be `memhop-capability/v3`); stored capability records written by earlier versions lose `desc/input/output` on read · built-in capability toolbox (`capabilities/*.json`) fully rewritten to v3 with real JSON Schemas |
 | v1.3.3 | 2026-08-26 | Retrieval scoring normalization + defaults slimdown | vector floor fixed from overriding every other signal to lifting only below-threshold scenes (floor = threshold + cosine×0.5): real-signal ordering (RRF + keyword overlap + bonuses) wins, semantic fallback preserved · `MemHopDefaults` slimmed from 24 fields to 3 business knobs (`Capacity` / `DreamCompressMinTopics` / `SearchDreamContextThreshold`); 4 dead fields (`MaxResults` / `DefaultTimeoutSecs` / `DefaultMaxOutputTokens` / `MaxDepth`) removed and 16 tuning constants moved to package-private `internal/tuning.go` · `TopScene` / `SpreadingActivation` / `applySceneBonuses` / `rrfFuse` signatures dropped the defaults parameter · **breaking**: hosts referencing removed fields must clean up · no format change (stays `0x0007`) · MCP tool set unchanged (32) ·

@@ -1,26 +1,22 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Profile generation and distillation policy (moved out of the record layer
-// so the repository keeps record reads/writes only): the L0 digest is a
-// projection of the keyword distribution plus the distilled emotion/MBTI
-// signals of the L1 network.
+// Profile distillation policy (moved out of the record layer so the
+// repository keeps record reads/writes only): Dream distills emotion/MBTI
+// from L1 samples into the typed L0 profile signals; identity fields stay
+// host-authored.
 
 package profile
 
 import (
 	"cmp"
-	"fmt"
 	"math"
 	"slices"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // maxDistillSamples bounds both prompt cost and LLM input size for L0
@@ -35,43 +31,14 @@ const maxDistillKeywordsPerSample = 20
 // decoupled from the LambdaNode decay config).
 const distillSampleLambda = 0.01
 
-// Generate rebuilds the L0 profile from the sparse keyword distribution:
-// creates a default profile when absent, else refreshes personality and the
-// keyword/memory preference fields.
-func Generate(engine *core.StorageEngine, agentID uint64, sparse *index.SparseIndex) error {
-	topKeywords := sparse.TopTerms(20)
-	topTerms := make([]string, len(topKeywords))
-	for i, tk := range topKeywords {
-		topTerms[i] = tk.Term
-	}
-	totalEngrams := engine.AgentRecordCount(agentID)
-	slot, err := repo.GetProfileL0(engine, agentID)
-	if err != nil {
-		return repo.UpdateProfileL0(engine, agentID, Default(topTerms, totalEngrams))
-	}
-	slot.Personality = joinTopTerms(topTerms, 5)
-	if slot.Preferences == nil {
-		slot.Preferences = map[string]string{}
-	}
-	slot.Preferences["top_keywords"] = joinTopTerms(topTerms, 20)
-	slot.Preferences["total_engrams"] = fmt.Sprintf("%d", totalEngrams)
-	return repo.UpdateProfileL0(engine, agentID, slot)
-}
-
-// Default builds the first profile of a domain: a neutral assistant identity
-// seeded with the current keyword distribution.
-func Default(topTerms []string, totalEngrams uint32) *core.ProfileSlot {
+// Default builds the first profile of a domain: a neutral assistant
+// identity. Name/Role/Preferences are host-owned; Personality is seeded by
+// the host and evolved by Dream distillation.
+func Default() *core.ProfileSlot {
 	return &core.ProfileSlot{
 		Name:        "Agent",
 		Role:        "assistant",
-		Personality: joinTopTerms(topTerms, 5),
-		Preferences: map[string]string{
-			"top_keywords":  joinTopTerms(topTerms, 20),
-			"total_engrams": fmt.Sprintf("%d", totalEngrams),
-		},
-		Lexicon:         map[string]string{},
-		StyleTraits:     []string{},
-		EmotionPatterns: map[string]string{},
+		Preferences: map[string]string{},
 	}
 }
 
@@ -103,36 +70,21 @@ func SampleRank(s core.DistillSample, nowMs int64) float64 {
 	return float64(s.Importance) * math.Exp(-distillSampleLambda*common.ElapsedHours(nowMs, s.UpdatedAt))
 }
 
-// MergeDistill writes the distilled emotion and MBTI signals into the profile
-// without clearing other fields.
-func MergeDistill(engine *core.StorageEngine, agentID uint64, emo core.EmotionScore, mbti core.MBTIScore) error {
-	nowMs := time.Now().UnixMilli()
+// MergeDistill writes the distilled emotion, MBTI and personality summary
+// into the profile without touching host-owned fields (Name/Role/
+// Preferences). An empty personality keeps the host-seeded value untouched.
+func MergeDistill(engine *core.StorageEngine, agentID uint64, emo core.EmotionScore, mbti core.MBTIScore, personality string) error {
 	slot, err := repo.GetProfileL0(engine, agentID)
 	if err != nil {
-		slot = Default(nil, 0)
+		slot = Default()
 	}
-	applyDistill(slot, emo, mbti, nowMs)
+	slot.EmotionState = emo
+	slot.MBTI = mbti
+	if personality != "" {
+		slot.Personality = personality
+	}
+	slot.UpdatedAtMs = time.Now().UnixMilli()
 	return repo.UpdateProfileL0(engine, agentID, slot)
-}
-
-func applyDistill(slot *core.ProfileSlot, emo core.EmotionScore, mbti core.MBTIScore, nowMs int64) {
-	if slot.EmotionPatterns == nil {
-		slot.EmotionPatterns = map[string]string{}
-	}
-	if slot.Preferences == nil {
-		slot.Preferences = map[string]string{}
-	}
-	slot.EmotionPatterns["valence"] = ftoa(emo.Valence)
-	slot.EmotionPatterns["arousal"] = ftoa(emo.Arousal)
-	slot.EmotionPatterns["dominance"] = ftoa(emo.Dominance)
-	slot.EmotionPatterns["updated_at_ms"] = strconv.FormatInt(nowMs, 10)
-	slot.Preferences["mbti_type"] = mbti.Type
-	slot.Preferences["mbti_i_e"] = ftoa(mbti.IE)
-	slot.Preferences["mbti_n_s"] = ftoa(mbti.NS)
-	slot.Preferences["mbti_t_f"] = ftoa(mbti.TF)
-	slot.Preferences["mbti_j_p"] = ftoa(mbti.JP)
-	slot.Preferences["mbti_updated_at_ms"] = strconv.FormatInt(nowMs, 10)
-	slot.Personality = mbti.Type
 }
 
 func sampleKeywords(engine *core.StorageEngine, agentID uint64, topicIDs []uint64) []string {
@@ -151,17 +103,3 @@ func sampleKeywords(engine *core.StorageEngine, agentID uint64, topicIDs []uint6
 	}
 	return kws
 }
-
-func joinTopTerms(terms []string, n int) string {
-	limit := min(n, len(terms))
-	var result strings.Builder
-	for i := range limit {
-		if i > 0 {
-			result.WriteString(", ")
-		}
-		result.WriteString(terms[i])
-	}
-	return result.String()
-}
-
-func ftoa(v float64) string { return strconv.FormatFloat(v, 'f', 3, 64) }

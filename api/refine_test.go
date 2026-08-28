@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -73,11 +72,11 @@ func TestRefineTopicKeywordsFacade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	topicID := common.FormatHash(res.NewTopicID)
-	if _, err := db.AppendL4Message(topicID, "用户补充", ts+1, core.RoleUser); err != nil {
+	topicID := res.NewTopicID
+	if _, err := db.AppendL4Message(topicID, "用户补充", ts+1, core.RoleUser, core.ContentText); err != nil {
 		t.Fatalf("append user: %v", err)
 	}
-	if _, err := db.AppendL4Message(topicID, "补充说明", ts+2, core.RoleAgent); err != nil {
+	if _, err := db.AppendL4Message(topicID, "补充说明", ts+2, core.RoleAgent, core.ContentText); err != nil {
 		t.Fatalf("append agent: %v", err)
 	}
 	if err := db.RefineTopicKeywords(context.Background(), topicID); err != nil {
@@ -88,7 +87,7 @@ func TestRefineTopicKeywordsFacade(t *testing.T) {
 		t.Fatalf("second RefineTopicKeywords: %v", err)
 	}
 
-	sc, err := db.SceneContext(common.FormatHash(res.Contexts[0].SceneID))
+	sc, err := db.SceneContext(res.Contexts[0].SceneID)
 	if err != nil {
 		t.Fatalf("SceneContext: %v", err)
 	}

@@ -8,6 +8,7 @@ package api
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
@@ -17,12 +18,13 @@ func TestSurfaceL6TrajectoryLifecycle(t *testing.T) {
 	sessionA := common.FormatHash(common.HashID("lifecycle-a"))
 	sessionB := common.FormatHash(common.HashID("lifecycle-b"))
 	appendOne := func(id string, ts int64) {
-		if err := db.AppendTrajectory(id, TrajectorySlot{EventType: "turn_start", Timestamp: ts}); err != nil {
+		if err := db.AppendTrajectory(id, TrajectorySlot{EventType: "llm_request", Timestamp: ts}); err != nil {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
+	fresh := time.Now().Add(-time.Hour).UnixMilli()
 	appendOne(sessionA, 100)
-	appendOne(sessionA, 200)
+	appendOne(sessionA, fresh)
 	appendOne(sessionB, 1_700_000_050_000)
 
 	list, err := db.ListTrajectorySessions()
@@ -33,27 +35,25 @@ func TestSurfaceL6TrajectoryLifecycle(t *testing.T) {
 	for _, sum := range list {
 		byID[sum.SessionID] = sum
 	}
-	if sum := byID[sessionA]; sum.Steps != 2 || sum.LastAppendAt != 200 {
+	if sum := byID[sessionA]; sum.Steps != 2 || sum.LastAppendAt != fresh {
 		t.Fatalf("summary a mismatch: %+v", sum)
 	}
 	if sum := byID[sessionB]; sum.Steps != 1 || sum.LastAppendAt != 1_700_000_050_000 {
 		t.Fatalf("summary b mismatch: %+v", sum)
 	}
 
-	pruned, err := db.PruneTrajectory(1_000)
-	if err != nil || pruned != 2 {
-		t.Fatalf("prune = %d err=%v, want 2 old events removed", pruned, err)
+	// Dream drops events older than the 7-day retention window even when
+	// there is nothing to consolidate; no delete API is exposed.
+	if _, err := db.Dream(context.Background(), ""); err != nil {
+		t.Fatalf("dream: %v", err)
 	}
 	list, err = db.ListTrajectorySessions()
-	if err != nil || len(list) != 1 || list[0].SessionID != sessionB {
-		t.Fatalf("surviving list = %+v err=%v, want only sessionB", list, err)
+	if err != nil || len(list) != 1 || list[0].SessionID != sessionA || list[0].Steps != 1 {
+		t.Fatalf("surviving list = %+v err=%v, want only sessionA's fresh event", list, err)
 	}
-	// The enumerated hex ID must feed DeleteTrajectory directly.
-	if err := db.DeleteTrajectory(list[0].SessionID); err != nil {
-		t.Fatalf("delete enumerated session: %v", err)
-	}
-	if list, err = db.ListTrajectorySessions(); err != nil || len(list) != 0 {
-		t.Fatalf("final list = %+v err=%v, want empty", list, err)
+	// The enumerated hex ID must feed ReadTrajectory / Crystallize directly.
+	if got, err := db.ReadTrajectory(list[0].SessionID); err != nil || len(got) != 1 {
+		t.Fatalf("read enumerated session: %d err=%v", len(got), err)
 	}
 }
 
@@ -62,9 +62,9 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 	ctx := context.Background()
 	sessionID := common.FormatHash(common.HashID("session-42"))
 	events := []TrajectorySlot{
-		{EventType: "turn_start", Payload: "user asks", Timestamp: 1_700_000_040_000},
+		{EventType: "llm_request", Payload: "user asks", Timestamp: 1_700_000_040_000},
 		{EventType: "tool_call", Payload: "search", Timestamp: 1_700_000_040_100},
-		{EventType: "turn_end", Payload: "replied", Timestamp: 1_700_000_040_200},
+		{EventType: "llm_output", Payload: "replied", Timestamp: 1_700_000_040_200},
 	}
 	for _, ev := range events {
 		if err := db.AppendTrajectory(sessionID, ev); err != nil {
@@ -84,16 +84,9 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 			t.Fatalf("seq must be 1-based increasing, got %d at %d", e.Seq, i)
 		}
 	}
-	stats, err := db.TrajectoryStats(sessionID)
-	if err != nil || stats.Steps != len(events) || stats.ToolUsage == nil {
-		t.Fatalf("trajectory stats: %+v err=%v", stats, err)
-	}
 	// Crystallize runs (stub returns no candidates) and yields a well-formed result.
 	cr, err := db.Crystallize(ctx, sessionID)
 	if err != nil || cr == nil || cr.CreatedIDs == nil {
 		t.Fatalf("crystallize: %v", err)
-	}
-	if err := db.DeleteTrajectory(sessionID); err != nil {
-		t.Fatalf("delete trajectory: %v", err)
 	}
 }

@@ -11,15 +11,19 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
+// ProfileSlot is the L0 profile singleton of one agent domain. Ownership:
+// Name/Role/Preferences are host-authored and never touched by Dream;
+// Personality is seeded by the host and evolved by Dream distillation;
+// EmotionState/MBTI are distilled signals.
 type ProfileSlot struct {
-	IDHash          uint64            `json:"id_hash"`
-	Name            string            `json:"name"`
-	Role            string            `json:"role"`
-	Personality     string            `json:"personality"`
-	Preferences     map[string]string `json:"preferences"`
-	Lexicon         map[string]string `json:"lexicon"`
-	StyleTraits     []string          `json:"style_traits"`
-	EmotionPatterns map[string]string `json:"emotion_patterns"`
+	IDHash       uint64            `json:"id_hash"`
+	Name         string            `json:"name"`
+	Role         string            `json:"role"`
+	Personality  string            `json:"personality"`
+	EmotionState EmotionScore      `json:"emotion_state"`
+	MBTI         MBTIScore         `json:"mbti"`
+	Preferences  map[string]string `json:"preferences"`
+	UpdatedAtMs  int64             `json:"updated_at_ms"`
 }
 
 // SceneNode is an L1 hypergraph node linking multiple L2 topics.
@@ -289,15 +293,16 @@ type WorkflowStep struct {
 	Args   map[string]any `json:"args,omitempty"`
 }
 
-// TrajectorySlot is an L6 operation trajectory event appended by the host
-// during the agent loop; short-lived, purged by the host via DeleteTrajectory
-// or PruneTrajectoryBefore.
+// TrajectorySlot is an L6 operation trajectory event appended by the host;
+// one trajectory per agent turn (search starts it, update ends it), so
+// SessionID is a turn key and Seq only counts within the turn. Short-lived:
+// Dream purges events older than the 7-day retention window.
 type TrajectorySlot struct {
-	IDHash    uint64  `json:"id_hash"`          // hash(sessionID:seq)
-	SessionID uint64  `json:"session_id"`       // host-chosen trajectory session key (parsed from the api's 16-hex id)
-	Seq       uint64  `json:"seq"`              // per-session increasing sequence
-	EventType string  `json:"event_type"`       // turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end
-	Payload   string  `json:"payload"`          // event content (truncated to 4KB; no raw token stream)
-	L4Ref     *uint64 `json:"l4_ref,omitempty"` // reference to the L4 archive instead of duplicating dialogue
-	Timestamp int64   `json:"timestamp"`
+	IDHash    uint64 `json:"id_hash"`            // hash(sessionID:seq)
+	SessionID uint64 `json:"session_id"`         // host-chosen turn key (parsed from the api's 16-hex id)
+	Seq       uint64 `json:"seq"`                // per-turn increasing sequence
+	EventType string `json:"event_type"`         // llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply
+	Payload   string `json:"payload"`            // event content (truncated to 4KB; no raw token stream)
+	TopicID   uint64 `json:"topic_id,omitempty"` // L2 topic the turn resolves to (0 = unknown); set by the host from the search hit or the update's topic
+	Timestamp int64  `json:"timestamp"`
 }

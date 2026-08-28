@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
 // gatherLocomoContext flattens the returned topics' keyword tracks (user +
 // agent + fused) with their timestamps into one searchable text. It reflects
 // what a host sees after Search: the L2 keyword view of each returned topic.
-func gatherLocomoContext(_ *testsupport.Handle, res *internal.SearchResult) string {
+func gatherLocomoContext(_ *testsupport.Handle, res *api.SearchResult) string {
 	var sb strings.Builder
 	for i := range res.Contexts {
 		c := &res.Contexts[i]
@@ -87,16 +87,16 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 	// L0/L1/L4 consistency every few turns — the periodic verification a host
 	// should be able to rely on at any point in the loop.
 	base := time.Now().UnixMilli()
-	var sceneID uint64
+	var sceneID string
 	for i, f := range facts {
 		res, err := db.Search(context.Background(), internal.SearchQuery{Text: f, Timestamp: base + int64(i)*1000})
 		if err != nil {
 			t.Fatalf("search ingest %d: %v", i, err)
 		}
-		if len(res.Contexts) > 0 && sceneID == 0 {
+		if len(res.Contexts) > 0 && sceneID == "" {
 			sceneID = res.Contexts[0].SceneID
 		}
-		if err := db.Update(common.FormatHash(res.NewTopicID), "Agent: 明白了，已记录。", base+int64(i)*1000+500); err != nil {
+		if err := db.Update(res.NewTopicID, "Agent: 明白了，已记录。", base+int64(i)*1000+500); err != nil {
 			t.Fatalf("update ingest %d: %v", i, err)
 		}
 		// Periodic consistency check: L0 profile readable, L1 scene graph
@@ -109,7 +109,7 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 			if err != nil || len(scenes) == 0 {
 				t.Fatalf("ListScenes at turn %d: scenes=%d err=%v", i+1, len(scenes), err)
 			}
-			if sc, err := db.SceneContext(common.FormatHash(sceneID)); err != nil || sc.TopicCount == 0 {
+			if sc, err := db.SceneContext(sceneID); err != nil || sc.TopicCount == 0 {
 				t.Fatalf("SceneContext at turn %d: topics=%d err=%v", i+1, sc.TopicCount, err)
 			}
 			arc, err := db.SearchL4(internal.L4Query{
@@ -155,7 +155,7 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 	if err != nil || len(scenes) == 0 {
 		t.Fatalf("ListScenes after Dream: scenes=%d err=%v", len(scenes), err)
 	}
-	sc, err := db.SceneContext(common.FormatHash(sceneID))
+	sc, err := db.SceneContext(sceneID)
 	if err != nil || sc.TopicCount == 0 {
 		t.Fatalf("SceneContext after Dream: topics=%d err=%v", sc.TopicCount, err)
 	}

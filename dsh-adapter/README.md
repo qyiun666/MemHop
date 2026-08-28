@@ -3,7 +3,7 @@
 本文档定义 MemHop 接入 DeepSeek Harness（DSH）后的**工具分工**与**界面适配方案**：
 哪些工具暴露给用户（聊天界面 UI 化）、哪些保留给模型/宿主自动调用。
 
-对应版本：MemHop v1.2.4 · MCP 31 工具 · DSH cordis 接入（常驻多租户 memhop-mcp，streamable-http，serverName: memhop）
+对应版本：MemHop v1.4.1 · MCP 31 工具 · DSH cordis 接入（常驻多租户 memhop-mcp，streamable-http，serverName: memhop）
 
 ## 1. 31 个工具分类总表
 
@@ -22,7 +22,7 @@
 | `memhop_knowledge_delete` | 删除图谱 | 面板：删除按钮 + 确认 |
 | `memhop_archive_search` | 档案检索（关键词/时间区间/ID） | 面板：检索表单 + 结果列表 |
 | `memhop_archive_get` | 单条档案 | 面板：详情展开（对话原文） |
-| `memhop_capability_list` | 能力清单（内置 7 张 + 库存） | 面板：能力卡片网格，按 kind/status 过滤 |
+| `memhop_capability_list` | 能力清单（内置 6 张 + 库存） | 面板：能力卡片网格，按 kind/status 过滤 |
 | `memhop_capability_get` | 能力详情 | 面板：卡片详情（manual/atomic/composite） |
 | `memhop_capability_activate` | 激活 draft 能力 | 面板：draft 卡片上的激活按钮 |
 | `memhop_capability_import` | 导入能力文件 | 面板：文件选择 |
@@ -33,7 +33,7 @@
 | `memhop_checkpoint` | 落盘快照 | 面板：手动保存按钮 |
 | `memhop_dream` | 记忆巩固（五阶段） | 面板：**一键巩固按钮**（确认 + 进度提示，耗时较长） |
 | `memhop_crystallize` | 从轨迹结晶能力 | 面板：一键触发 + 结果草稿列表 |
-| `memhop_trajectory_sessions` | 会话轨迹清单 | 宿主：发现待结晶/待清理会话 |
+| `memhop_trajectory_sessions` | 轮轨迹清单 | 宿主：发现待结晶轮次（超 7 天 Dream 自动清理） |
 | `memhop_trajectory_read` | 轨迹查看 | 面板：会话轨迹时间线（诊断用） |
 
 ### B. 模型/宿主组（保持 MCP 工具，不 UI 化）
@@ -43,12 +43,11 @@
 | `memhop_search` | 核心记忆检索（回忆+存储） | **模型每轮调用**（AGENTS.md 引导）；UI 提供参数化搜索作为补充（见 §2） |
 | `memhop_update` | 回复回写 | 模型回答后调用 |
 | `memhop_capability_usage` | 能力使用反馈 | 模型使用能力后记录 |
-| `memhop_trajectory_append` | 操作轨迹记录 | 宿主/模型记录重要操作 |
-| `memhop_trajectory_delete` | 轨迹清理 | 宿主管理 |
+| `memhop_trajectory_append` | 操作轨迹记录 | 宿主逐事件自动记录（模型不调用） |
 
 ### C. 分工原则
 
-- **写循环**（Search/Update/Trajectory）归模型：每轮对话自动发生，用户无感知
+- **写循环**（Search/Update/Trajectory）归宿主：每轮对话自动发生，模型与用户无感知
 - **管理循环**（场景/知识/能力/档案/画像）归用户：面板可视化操作
 - **巩固循环**（Dream/Crystallize/Checkpoint）用户可一键触发，模型也可在引导下自动触发
 - 面板所有操作**复用同一套 MCP 工具**（host 半转发 ctx.tools），不重复实现逻辑

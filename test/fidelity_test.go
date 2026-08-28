@@ -16,8 +16,8 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
+	"github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -107,7 +107,7 @@ func fusedTopicKeywords(ts *internal.SearchResult) []string {
 
 // topicKeywords flattens a TopicSlot's keyword tracks into one set for
 // fidelity judgement (user + agent + fused).
-func topicKeywords(ts *internal.SearchResult) []string {
+func topicKeywords(ts *api.SearchResult) []string {
 	seen := map[string]struct{}{}
 	var out []string
 	add := func(kws []string) {
@@ -181,7 +181,7 @@ func TestKeywordPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("anchor Search: %v", err)
 	}
-	anchorTopic := common.FormatHash(res.NewTopicID)
+	anchorTopic := res.NewTopicID
 
 	// Noise: several unrelated Search/Update cycles.
 	noise := []string{
@@ -196,7 +196,7 @@ func TestKeywordPersistence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("noise Search: %v", err)
 		}
-		if err := db.Update(common.FormatHash(r.NewTopicID), "好的，记下了", ts+500); err != nil {
+		if err := db.Update(r.NewTopicID, "好的，记下了", ts+500); err != nil {
 			t.Fatalf("noise Update: %v", err)
 		}
 	}
@@ -221,16 +221,16 @@ func TestKeywordPersistence(t *testing.T) {
 // ingestSameScene feeds a group of related turns into one scene (first turn
 // AutoCreate, the rest directed), adding an agent Update after each user turn
 // so Dream fused-topic IDs do not collide with original topics. Returns the scene ID.
-func ingestSameScene(t *testing.T, db *testsupport.Handle, texts []string, base int64) uint64 {
+func ingestSameScene(t *testing.T, db *testsupport.Handle, texts []string, base int64) string {
 	t.Helper()
-	var sceneID uint64
+	var sceneID string
 	for i, text := range texts {
 		ts := base + int64(i)*1000
 		q := internal.SearchQuery{Text: text, Timestamp: ts}
 		if i == 0 {
 			q.AutoCreate = true
 		} else {
-			sid := common.FormatHash(sceneID)
+			sid := sceneID
 			q.DirectedL2ID = &sid
 		}
 		res, err := db.Search(context.Background(), q)
@@ -244,7 +244,7 @@ func ingestSameScene(t *testing.T, db *testsupport.Handle, texts []string, base 
 			sceneID = res.Contexts[0].SceneID
 		}
 		// Add the agent reply: every user turn has an agent response in real usage.
-		if err := db.Update(common.FormatHash(res.NewTopicID), "好的，我记下了。", ts+500); err != nil {
+		if err := db.Update(res.NewTopicID, "好的，我记下了。", ts+500); err != nil {
 			t.Fatalf("ingest Update: %v", err)
 		}
 	}

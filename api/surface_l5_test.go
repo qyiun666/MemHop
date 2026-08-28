@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -42,7 +41,7 @@ func TestSurfaceL5Capability(t *testing.T) {
 	if err != nil || cap == nil {
 		t.Fatalf("import capability: %v", err)
 	}
-	id := common.FormatHash(cap.IDHash)
+	id := cap.IDHash
 	if !isHexID(id) {
 		t.Fatalf("capability id not hex: %q", id)
 	}
@@ -87,7 +86,7 @@ func TestSurfaceL5Capability(t *testing.T) {
 	var builtinID string
 	for _, b := range builtins {
 		if b.Origin == core.CapabilityOriginBuiltin {
-			builtinID = common.FormatHash(b.IDHash)
+			builtinID = b.IDHash
 			break
 		}
 	}

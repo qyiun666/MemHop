@@ -54,18 +54,31 @@ type L3Graph struct {
 	Edges []HypergraphEdge
 }
 
+// L3ImportItem is one knowledge node of a batch import; SourceRef carries a
+// positional reference (file:line / URL) and Related declares same-graph
+// hyperedges resolved by title (targets may appear later in the batch).
 type L3ImportItem struct {
-	Title    string   `json:"title"`
-	Domain   string   `json:"domain"`
-	NodeType string   `json:"node_type"`
-	Content  string   `json:"content"`
-	Keywords []string `json:"keywords"`
+	Title     string       `json:"title"`
+	Domain    string       `json:"domain"`
+	NodeType  string       `json:"node_type"`
+	Content   string       `json:"content"`
+	Keywords  []string     `json:"keywords"`
+	SourceRef string       `json:"source_ref,omitempty"`
+	Related   []L3Relation `json:"related,omitempty"`
+}
+
+// L3Relation is one import-time hyperedge: a target node of the same graph
+// (by title) and the edge kind; empty kind means related.
+type L3Relation struct {
+	Title string        `json:"title"`
+	Kind  GraphEdgeKind `json:"kind,omitempty"`
 }
 
 type L3ImportResult struct {
 	CreatedIDs   []string `json:"created_ids"`
 	UpdatedIDs   []string `json:"updated_ids"`
 	SkippedCount int      `json:"skipped_count"`
+	EdgesCreated int      `json:"edges_created,omitempty"`
 	Errors       []string `json:"errors,omitempty"`
 }
 
@@ -84,13 +97,15 @@ type L3Subgraph struct {
 }
 
 // L4Query archive query: the three modes are exclusive with priority
-// Keyword > time range > IDs; TopicID filters in all modes.
+// Keyword > time range > IDs; TopicID filters in all modes, Type narrows by
+// content type.
 type L4Query struct {
-	Keyword string   `json:"keyword,omitempty"` // mode 1: content substring
-	Start   int64    `json:"start,omitempty"`   // mode 2: time range [Start, End] (ms)
-	End     int64    `json:"end,omitempty"`
-	IDs     []string `json:"ids,omitempty"`      // mode 3: by id
-	TopicID *string  `json:"topic_id,omitempty"` // extra: only archives of this topic
+	Keyword string       `json:"keyword,omitempty"` // mode 1: content substring
+	Start   int64        `json:"start,omitempty"`   // mode 2: time range [Start, End] (ms)
+	End     int64        `json:"end,omitempty"`
+	IDs     []string     `json:"ids,omitempty"`      // mode 3: by id
+	TopicID *string      `json:"topic_id,omitempty"` // extra: only archives of this topic
+	Type    *ContentType `json:"type,omitempty"`     // extra: only archives of this content type
 }
 
 // CapabilityImport is the memhop-capability/v3 JSON file loaded from a path.
@@ -127,18 +142,10 @@ type CapabilityPatch struct {
 	Workflow  *Workflow
 }
 
-// TrajectoryStats aggregates a session's L6 events for the host's
-// "is this session worth crystallizing" decision (event volume, tool-call
-// distribution, recency). Read-only; no engine state mutation.
-type TrajectoryStats struct {
-	Steps        int            `json:"steps"`          // 事件总数
-	ToolUsage    map[string]int `json:"tool_usage"`     // EventType → 计数（turn_start/tool_call/...）
-	LastAppendAt int64          `json:"last_append_at"` // 最后事件时间戳（Unix 毫秒）
-}
-
-// TrajectorySessionSummary is one L6 session's footprint; SessionID is the
-// external 16-hex form so it feeds ReadTrajectory / DeleteTrajectory /
-// Crystallize directly.
+// TrajectorySessionSummary is one L6 turn's footprint (one trajectory per
+// agent turn); SessionID is the external 16-hex form so it feeds
+// ReadTrajectory / Crystallize directly. Events older than the 7-day
+// retention window are dropped by Dream automatically.
 type TrajectorySessionSummary struct {
 	SessionID    string `json:"session_id"`     // 16 位 hex
 	Steps        int    `json:"steps"`          // 事件总数
@@ -167,7 +174,7 @@ type CrystallizeDetail struct {
 
 // DreamStage is one pipeline phase's outcome inside a DreamReport.
 type DreamStage struct {
-	Name       string `json:"name"`   // l2_compress/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_profile/l0_distill
+	Name       string `json:"name"`   // l2_compress/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_distill
 	Status     string `json:"status"` // ok | skipped | cancelled | error
 	DurationMs int64  `json:"duration_ms"`
 }

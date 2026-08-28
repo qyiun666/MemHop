@@ -21,6 +21,7 @@ type (
 	SceneContext             = core.SceneContext
 	L3Graph                  = core.L3Graph
 	L3ImportItem             = core.L3ImportItem
+	L3Relation               = core.L3Relation
 	L3ImportResult           = core.L3ImportResult
 	L3ImportMode             = core.L3ImportMode
 	L3NodeQuery              = core.L3NodeQuery
@@ -29,7 +30,6 @@ type (
 	CapabilityImport         = core.CapabilityImport
 	CapabilityPatch          = core.CapabilityPatch
 	CapabilityListQuery      = core.CapabilityListQuery
-	TrajectoryStats          = core.TrajectoryStats
 	TrajectorySessionSummary = core.TrajectorySessionSummary
 	DreamReport              = core.DreamReport
 	DreamStage               = core.DreamStage

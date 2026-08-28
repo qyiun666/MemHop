@@ -61,7 +61,7 @@ func TestReproDreamConsolidate(t *testing.T) {
 
 	// Full pipeline on a copy: exercises L2 consolidation (LLM), index
 	// rebuild, L1 sync/decay, L0 profile + distillation (LLM) end to end.
-	rep, err := db.RunDream(context.Background(), core.DefaultAgentID, "")
+	rep, err := db.RunDream(context.Background(), core.DefaultAgentID, 0)
 	t.Logf("RunDream(all): rep=%+v err=%v", rep, err)
 
 	dumpSceneContext(t, db, cfg, "after dream")
@@ -72,7 +72,7 @@ func TestReproDreamConsolidate(t *testing.T) {
 		topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 			Engine:  engine,
 			MetaIdx: nil,
-			SceneID: common.FormatHash(s.SceneID),
+			SceneID: s.SceneID,
 			Depth:   1,
 			Num:     2,
 		})
@@ -133,7 +133,7 @@ func dumpSceneContext(t *testing.T, db *DB, cfg *MemHopConfig, label string) {
 		topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 			Engine:  db.engine,
 			MetaIdx: nil,
-			SceneID: common.FormatHash(s.SceneID),
+			SceneID: s.SceneID,
 			Depth:   1,
 			Num:     2,
 		})

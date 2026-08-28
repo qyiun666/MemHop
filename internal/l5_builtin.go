@@ -15,7 +15,6 @@ package internal
 
 import (
 	"github.com/qyiun666/MemHop/internal/cap/capability"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -26,13 +25,9 @@ func (db *DB) SetBuiltinCapabilities(caps []core.Capability) {
 }
 
 // findBuiltinCapability returns a copy of the built-in capability with the
-// given 16-hex ID, or nil. A copy keeps the shared built-in set immutable:
+// given ID hash, or nil. A copy keeps the shared built-in set immutable:
 // callers must not be able to mutate state visible to other readers.
-func (db *DB) findBuiltinCapability(id string) *core.Capability {
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return nil
-	}
+func (db *DB) findBuiltinCapability(idHash uint64) *core.Capability {
 	for i := range db.builtinCapabilities {
 		if db.builtinCapabilities[i].IDHash == idHash {
 			b := db.builtinCapabilities[i]

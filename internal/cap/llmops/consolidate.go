@@ -71,8 +71,27 @@ func Consolidate(ctx context.Context, chat Chat, topics []core.TopicSlot) (*Cons
 	if err != nil {
 		return nil, err
 	}
-	return parseConsolidateResponse(response)
+	out, perr := parseConsolidateResponse(response)
+	if perr == nil {
+		return out, nil
+	}
+	// One format-constrained retry before failing the Dream stage (same
+	// self-healing pattern as keyword extraction).
+	retry, rerr := chat.Chat(ctx, SystemConsolidate, user+consolidateFormatRetry, ConsolidationMaxTokens, 0.0, 1.0)
+	if rerr != nil {
+		return nil, perr
+	}
+	if out, perr = parseConsolidateResponse(retry); perr != nil {
+		return nil, perr
+	}
+	return out, nil
 }
+
+// consolidateFormatRetry is appended to the user prompt for the
+// format-constrained retry.
+const consolidateFormatRetry = `
+
+Output ONLY valid JSON in the exact shape from the system prompt. No markdown, no code fences, no commentary.`
 
 // BuildConsolidatePrompt lists topics grouped by scene, sorted by user turn
 // time (adjacency matters for merge judgment).

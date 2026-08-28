@@ -162,6 +162,7 @@ func (db *DB) newAgentContextLocked(agentID uint64) *agentContext {
 		}
 	}
 	ac.l2Meta = index.BuildL2MetaFromEngine(db.engine, agentID)
+	ac.traj = index.BuildTrajFromEngine(db.engine, agentID)
 	return ac
 }
 
@@ -251,7 +252,7 @@ func (db *DB) HasActiveScenesFor(agentID uint64) bool {
 // missing or unreadable topic is rejected with ErrNotFound so no orphan
 // L4 archive or half-written refine is ever produced. Callers must hold
 // ac.mu.
-func (ac *agentContext) loadTopicForWrite(db *DB, topicID string) (*core.TopicSlot, error) {
+func (ac *agentContext) loadTopicForWrite(db *DB, topicID uint64) (*core.TopicSlot, error) {
 	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 		Engine:  db.engine,
 		AgentID: ac.id,

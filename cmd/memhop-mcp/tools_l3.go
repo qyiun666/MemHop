@@ -19,11 +19,20 @@ type knowledgeImportArgs struct {
 }
 
 type knowledgeImportItem struct {
-	Title    string   `json:"title"`
-	Domain   string   `json:"domain"`
-	NodeType string   `json:"node_type"`
-	Content  string   `json:"content"`
-	Keywords []string `json:"keywords"`
+	Title     string             `json:"title"`
+	Domain    string             `json:"domain"`
+	NodeType  string             `json:"node_type"`
+	Content   string             `json:"content"`
+	Keywords  []string           `json:"keywords"`
+	SourceRef string             `json:"source_ref,omitempty"`
+	Related   []knowledgeRelated `json:"related,omitempty"`
+}
+
+// knowledgeRelated is one import-time hyperedge: a same-graph target node
+// by title and an optional edge kind name (empty = related).
+type knowledgeRelated struct {
+	Title string `json:"title"`
+	Kind  string `json:"kind,omitempty"`
 }
 
 type knowledgeUpdateArgs struct {
@@ -126,16 +135,25 @@ func registerKnowledgeReadTools(s *mcp.Server, db *memhop.Session) {
 func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_import",
-		Description: "批量导入 L3 知识条目（按标题+领域匹配既有图）：mode=Skip 跳过已存在、Merge 合并节点、Overwrite 覆盖。返回创建/更新的图 ID 与跳过数。",
+		Description: "批量导入 L3 知识条目（按标题+领域匹配既有图）：mode=Skip 跳过已存在、Merge 合并节点、Overwrite 覆盖。source_ref 存位置引用（如 file:line）；related 在同图内按标题建边（目标可在同批后文），重导入同批不会重复建边。返回创建/更新的图 ID、建边数与跳过数。",
 		InputSchema: objSchema(map[string]any{
 			"items": map[string]any{
 				"type": "array",
 				"items": objSchema(map[string]any{
-					"title":     strProp("条目标题，必填"),
-					"domain":    strProp("所属领域，必填"),
-					"node_type": strProp("节点类型"),
-					"content":   strProp("条目内容，必填"),
-					"keywords":  arrProp("关键词列表", "string"),
+					"title":      strProp("条目标题，必填"),
+					"domain":     strProp("所属领域，必填"),
+					"node_type":  strProp("节点类型"),
+					"content":    strProp("条目内容，必填"),
+					"keywords":   arrProp("关键词列表", "string"),
+					"source_ref": strProp("位置引用（file:line / URL，可选）"),
+					"related": map[string]any{
+						"type": "array",
+						"items": objSchema(map[string]any{
+							"title": strProp("目标条目标题，必填（同图内，可在同批后文）"),
+							"kind":  strProp("边类型：related | causal | part_of | sequence | dependency | custom，缺省 related"),
+						}, "title"),
+						"description": "同图关系边列表（可选）",
+					},
 				}, "title", "domain", "content"),
 				"description": "知识条目列表，必填",
 			},
@@ -146,7 +164,11 @@ func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 		if err != nil {
 			return memhop.L3ImportResult{}, err
 		}
-		res, err := db.ImportL3(toImportItems(a.Items), mode)
+		items, err := toImportItems(a.Items)
+		if err != nil {
+			return memhop.L3ImportResult{}, err
+		}
+		res, err := db.ImportL3(items, mode)
 		if err != nil {
 			return memhop.L3ImportResult{}, err
 		}
@@ -154,19 +176,36 @@ func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 	}))
 }
 
-// toImportItems maps JSON import items to the api DTO.
-func toImportItems(in []knowledgeImportItem) []memhop.L3ImportItem {
+// toImportItems maps JSON import items to the api DTO; relation kinds are
+// validated before any DB call.
+func toImportItems(in []knowledgeImportItem) ([]memhop.L3ImportItem, error) {
 	items := make([]memhop.L3ImportItem, 0, len(in))
 	for _, it := range in {
-		items = append(items, memhop.L3ImportItem{
-			Title:    it.Title,
-			Domain:   it.Domain,
-			NodeType: it.NodeType,
-			Content:  it.Content,
-			Keywords: it.Keywords,
-		})
+		item := memhop.L3ImportItem{
+			Title:     it.Title,
+			Domain:    it.Domain,
+			NodeType:  it.NodeType,
+			Content:   it.Content,
+			Keywords:  it.Keywords,
+			SourceRef: it.SourceRef,
+		}
+		if len(it.Related) > 0 {
+			item.Related = make([]memhop.L3Relation, 0, len(it.Related))
+			for _, r := range it.Related {
+				kind := memhop.EdgeRelated
+				if r.Kind != "" {
+					v, ok := edgeKindNames[r.Kind]
+					if !ok {
+						return nil, fmt.Errorf("invalid relation kind %q in item %q (want related, causal, part_of, sequence, dependency or custom)", r.Kind, it.Title)
+					}
+					kind = v
+				}
+				item.Related = append(item.Related, memhop.L3Relation{Title: r.Title, Kind: kind})
+			}
+		}
+		items = append(items, item)
 	}
-	return items
+	return items, nil
 }
 
 func registerKnowledgeWriteTools(s *mcp.Server, db *memhop.Session) {

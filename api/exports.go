@@ -1,43 +1,15 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Re-exported data-model surface of the facade: L0–L6 slot models and the
-// enum constants accepted by the public methods. Every symbol forwards to
-// the internal re-export seam (internal/exports.go); the underlying
-// definitions live in internal/repo/core.
+// Re-exported data-model surface of the facade: enum constants and the error
+// contract. Response slot models are real structs in api/types.go so their
+// IDs are surfaced as 16-char hex strings.
 
 package api
 
 import "github.com/qyiun666/MemHop/internal"
 
-// ---- slot models (L0–L6) ----
-
-type (
-	ProfileSlot    = internal.ProfileSlot
-	SceneSlot      = internal.SceneSlot
-	HypergraphSlot = internal.HypergraphSlot
-	HypergraphNode = internal.HypergraphNode
-	ArchiveSlot    = internal.ArchiveSlot
-	Capability     = internal.Capability
-	TrajectorySlot = internal.TrajectorySlot
-	GraphEdgeKind  = internal.GraphEdgeKind
-	// TopicSlot is an L2 dual-track session node (user/agent); the element
-	// type of SearchResult.Contexts / AssociatedContexts.
-	TopicSlot = internal.TopicSlot
-	// ResourceRef is one wrapped resource (an MCP tool or a skill) inside a
-	// Capability; the element type of Capability.Resources.
-	ResourceRef = internal.ResourceRef
-)
-
 // ---- L5 capability enum constants ----
-
-// Enum types accepted by Capability fields and CapabilityListQuery /
-// CapabilityPatch pointer fields.
-type (
-	CapabilityType   = internal.CapabilityType
-	CapabilityStatus = internal.CapabilityStatus
-	CapabilityOrigin = internal.CapabilityOrigin
-)
 
 const (
 	CapabilityMCP       = internal.CapabilityMCP
@@ -68,4 +40,24 @@ const (
 	EdgeSequence   = internal.EdgeSequence
 	EdgeDependency = internal.EdgeDependency
 	EdgeCustom     = internal.EdgeCustom
+)
+
+// ---- L3 import mode constants ----
+
+const (
+	L3ImportSkip      = internal.L3ImportSkip
+	L3ImportMerge     = internal.L3ImportMerge
+	L3ImportOverwrite = internal.L3ImportOverwrite
+)
+
+// ---- L4 content type constants ----
+
+const (
+	ContentText     = internal.ContentText
+	ContentImage    = internal.ContentImage
+	ContentVideo    = internal.ContentVideo
+	ContentDocument = internal.ContentDocument
+	ContentAudio    = internal.ContentAudio
+	ContentCode     = internal.ContentCode
+	ContentOther    = internal.ContentOther
 )

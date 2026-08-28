@@ -2,17 +2,17 @@
 
 本目录是 MemHop 内置的 **L5 能力卡工具箱**，`memhop-capability/v3` 格式，通过 `capabilities.go` 的 `//go:embed` 内嵌进库。卡的受众是 **LLM**：宿主获取后投影为工具契约/说明书注入上下文，LLM 据此调用 MemHop。
 
-**只收录 LLM 可调用的能力**。宿主自动执行的核心循环（`OpenMulti` / `Search` / `Update` / `Dream` / `Checkpoint`）不做成卡——它们是宿主每轮的固定职责，不占 LLM 上下文；对应 Go API 与 MCP 工具不受影响。
+**只收录 LLM 可调用的能力**。宿主自动执行的核心循环（`OpenMulti` / `Search` / `Update` / `Dream` / 轨迹逐事件记录与 7 天自动清理 / `Checkpoint`）不做成卡——它们是宿主每轮的固定职责，不占 LLM 上下文；对应 Go API 与 MCP 工具不受影响。
 
 ## 卡定位：说明书，不是执行接口
 
-卡描述"该调哪个 API、传什么参数"（resource 的 `name/desc/input/output` 与宿主工具规格同构，`ref` 用 `api:MethodName` 指向 `api` 包方法），真正执行永远走 `api/` 的全部对外方法或 MCP 32 工具。
+卡描述"该调哪个 API、传什么参数"（resource 的 `name/desc/input/output` 与宿主工具规格同构，`ref` 用 `api:MethodName` 指向 `api` 包方法），真正执行永远走 `api/` 的全部对外方法或 MCP 31 工具。
 
 ## 分层注入契约（省 token）
 
-全量 7 张卡共 22.3KB、全英文（≈5–6K token，比中文版省约 15–25% 注入 token），**默认不要全量注入**：
+全量 6 张卡共 19.7KB、全英文（≈4.5–5.5K token，比中文版省约 15–25% 注入 token），**默认不要全量注入**：
 
-1. **默认注入**：`ListCapabilities` 结果投影成一行一卡索引（`id + name + summary + trigger`，7 张共 ≈300–500 token；**必须带 id**——`GetCapability` 只收 16 位 hex ID），外加 `memhop-guide` 的循环分工说明（约 2KB，也可只取其 summary/trigger 两行）
+1. **默认注入**：`ListCapabilities` 结果投影成一行一卡索引（`id + name + summary + trigger`，6 张共 ≈300–500 token；**必须带 id**——`GetCapability` 只收 16 位 hex ID），外加 `memhop-guide` 的循环分工说明（约 2KB，也可只取其 summary/trigger 两行）
 2. **按需取详情**：LLM 首次使用某张卡前，先 `GetCapability(id)`（MCP `memhop_capability_get`）取完整参数 schema，再调具体 API
 
 ## 工作方式：单独获取，零配置、零写入
@@ -24,16 +24,15 @@
 
 宿主可通过 `capabilities.FS` 读取这套内嵌文件（检查、扩展或自行入库）。
 
-## 清单（7 张）
+## 清单（6 张）
 
 | 文件 | 能力 | 内容 |
 |---|---|---|
-| `memhop-guide.json` | `memhop-guide` | 记忆循环分工总纲（Search/Update/Dream 宿主自动，LLM 勿手动调）+ 六张卡的索引 |
+| `memhop-guide.json` | `memhop-guide` | 记忆循环分工总纲（Search/Update/Dream/轨迹记录宿主自动，LLM 勿手动调）+ 五张卡的索引 |
 | `memhop-knowledge.json` | `memhop-knowledge` | L3 知识图谱：读取/列出/导入/更新/删除/节点查询/子图展开 |
 | `memhop-scene.json` | `memhop-scene` | L2 场景管理：列表/激活场景/话题上下文/合并/DeleteTopic/DeleteScene（记忆纠错） |
 | `memhop-archive.json` | `memhop-archive` | L4 档案：关键词/时间范围/ID 列表三种模式检索 + 单条读取 |
 | `memhop-profile.json` | `memhop-profile` | L0 画像读取与全量更新（GetL0 后回填再 UpdateL0） |
-| `memhop-trajectory.json` | `memhop-trajectory` | L6 轨迹：追加（event_type 约定、4KB 截断、Seq 自动分配）/读取/统计/删除 |
 | `memhop-capability.json` | `memhop-capability` | L5 能力闭环：Crystallize 结晶 → Activate 激活 → Usage 反馈 + Import 导入 + List/Get 索引与详情 + Update/Delete |
 
 ## 编写宿主自己的能力

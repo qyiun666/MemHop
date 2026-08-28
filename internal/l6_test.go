@@ -4,8 +4,10 @@
 package internal
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -15,7 +17,7 @@ func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(99)
 	for i := 1; i <= 3; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "turn_start", Timestamp: int64(i)}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "llm_request", Timestamp: int64(i)}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
@@ -58,16 +60,17 @@ func TestAppendTrajectoryPayloadTruncated(t *testing.T) {
 	}
 }
 
-func TestListAndPruneTrajectorySessions(t *testing.T) {
+func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	a, b := common.FormatHash(11), common.FormatHash(22)
+	fresh := time.Now().Add(-time.Hour).UnixMilli()
 	appendOne := func(id string, ts int64) {
-		if err := db.AppendTrajectory(core.DefaultAgentID, id, core.TrajectorySlot{EventType: "turn_start", Timestamp: ts}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, id, core.TrajectorySlot{EventType: "llm_request", Timestamp: ts}); err != nil {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
 	appendOne(a, 100)
-	appendOne(a, 900)
+	appendOne(a, fresh)
 	appendOne(b, 500)
 
 	list, err := db.ListTrajectorySessions(core.DefaultAgentID)
@@ -81,23 +84,21 @@ func TestListAndPruneTrajectorySessions(t *testing.T) {
 	for _, sum := range list {
 		byID[sum.SessionID] = sum
 	}
-	if sum := byID[a]; sum.Steps != 2 || sum.LastAppendAt != 900 {
+	if sum := byID[a]; sum.Steps != 2 || sum.LastAppendAt != fresh {
 		t.Fatalf("session a summary mismatch: %+v", sum)
 	}
 	if sum := byID[b]; sum.Steps != 1 || sum.LastAppendAt != 500 {
 		t.Fatalf("session b summary mismatch: %+v", sum)
 	}
 
-	pruned, err := db.PruneTrajectory(core.DefaultAgentID, 550)
-	if err != nil {
-		t.Fatalf("prune: %v", err)
-	}
-	if pruned != 2 {
-		t.Fatalf("pruned = %d, want 2 (a@100, b@500)", pruned)
+	// Dream drops events older than the 7-day retention window even when
+	// there is nothing to consolidate (no active scenes → early return).
+	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
+		t.Fatalf("dream: %v", err)
 	}
 	list, err = db.ListTrajectorySessions(core.DefaultAgentID)
-	if err != nil || len(list) != 1 || list[0].SessionID != a {
-		t.Fatalf("only session a survives: %+v err=%v", list, err)
+	if err != nil || len(list) != 1 || list[0].SessionID != a || list[0].Steps != 1 {
+		t.Fatalf("only session a's fresh event survives: %+v err=%v", list, err)
 	}
 	events, err := db.ReadTrajectory(core.DefaultAgentID, b)
 	if err != nil || len(events) != 0 {
@@ -105,59 +106,42 @@ func TestListAndPruneTrajectorySessions(t *testing.T) {
 	}
 }
 
-func TestDeleteTrajectorySub(t *testing.T) {
+func TestTrajectorySeqContinuesAfterContextRebuild(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(77)
-	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "turn_start", Timestamp: 1}); err != nil {
-		t.Fatalf("append: %v", err)
+	for i := 1; i <= 2; i++ {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "llm_request", Timestamp: int64(i)}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
 	}
-	if err := db.DeleteTrajectory(core.DefaultAgentID, session); err != nil {
-		t.Fatalf("delete: %v", err)
+	// Simulate the idle sweep dropping the agent context: the next access
+	// must rebuild the trajectory index from records and continue Seq.
+	delete(db.agents, core.DefaultAgentID)
+	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Timestamp: 3}); err != nil {
+		t.Fatalf("append after rebuild: %v", err)
 	}
 	events, err := db.ReadTrajectory(core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if len(events) != 0 {
-		t.Fatalf("want empty trajectory, got %d events", len(events))
+	if len(events) != 3 || events[2].Seq != 3 {
+		t.Fatalf("seq must continue after context rebuild: %+v", events)
 	}
 }
 
-func TestTrajectoryStats(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	session := common.FormatHash(55)
-
-	// Empty session: zero-valued stats, no error.
-	stats, err := db.TrajectoryStats(core.DefaultAgentID, session)
-	if err != nil {
-		t.Fatalf("stats on empty session: %v", err)
+func TestTrimTrajectoryByBudgetKeepsNewest(t *testing.T) {
+	events := []core.TrajectorySlot{
+		{Payload: strings.Repeat("a", 60)},
+		{Payload: strings.Repeat("b", 60)},
+		{Payload: strings.Repeat("c", 60)},
 	}
-	if stats.Steps != 0 || len(stats.ToolUsage) != 0 || stats.LastAppendAt != 0 {
-		t.Fatalf("empty stats = %+v, want zeros", stats)
+	if got := trimTrajectoryByBudget(events, 100); len(got) != 1 || got[0].Payload[0] != 'c' {
+		t.Fatalf("trim = %+v, want only the newest event", got)
 	}
-
-	// Mixed event types with out-of-order timestamps.
-	for _, ev := range []core.TrajectorySlot{
-		{EventType: "turn_start", Timestamp: 400},
-		{EventType: "tool_call", Timestamp: 100},
-		{EventType: "tool_call", Timestamp: 200},
-		{EventType: "tool_result", Timestamp: 300},
-	} {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, ev); err != nil {
-			t.Fatalf("append: %v", err)
-		}
+	if got := trimTrajectoryByBudget(events, 1000); len(got) != 3 {
+		t.Fatalf("under budget must keep all: %+v", got)
 	}
-	stats, err = db.TrajectoryStats(core.DefaultAgentID, session)
-	if err != nil {
-		t.Fatalf("stats: %v", err)
-	}
-	if stats.Steps != 4 {
-		t.Fatalf("Steps = %d, want 4", stats.Steps)
-	}
-	if stats.ToolUsage["tool_call"] != 2 || stats.ToolUsage["tool_result"] != 1 || stats.ToolUsage["turn_start"] != 1 {
-		t.Fatalf("ToolUsage = %v, want tool_call:2 tool_result:1 turn_start:1", stats.ToolUsage)
-	}
-	if stats.LastAppendAt != 400 {
-		t.Fatalf("LastAppendAt = %d, want 400 (max timestamp, not last append order)", stats.LastAppendAt)
+	if got := trimTrajectoryByBudget(events, 1); len(got) != 1 || got[0].Payload[0] != 'c' {
+		t.Fatalf("tiny budget must still keep the newest: %+v", got)
 	}
 }

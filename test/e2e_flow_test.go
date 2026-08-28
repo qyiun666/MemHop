@@ -13,7 +13,6 @@ import (
 	"time"
 
 	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
@@ -41,11 +40,11 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	if len(res.Contexts) == 0 {
 		t.Fatal("Search(AutoCreate) returned no contexts")
 	}
-	if res.NewTopicID == 0 {
+	if res.NewTopicID == "" {
 		t.Fatal("Search(AutoCreate) should set NewTopicID")
 	}
-	topicID := common.FormatHash(res.Contexts[0].ID)
-	t.Logf("created topic ID=%s NewTopicID=%d", topicID, res.NewTopicID)
+	topicID := res.Contexts[0].ID
+	t.Logf("created topic ID=%s NewTopicID=%s", topicID, res.NewTopicID)
 
 	// 2. Update: append the agent reply to the topic.
 	agentText := "海边晨跑很不错，空气清新还能看日出，记得做好防晒"
@@ -119,10 +118,10 @@ func TestE2ECapability(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImportCapability: %v", err)
 	}
-	if cap == nil || cap.IDHash == 0 {
+	if cap == nil || cap.IDHash == "" {
 		t.Fatal("ImportCapability returned empty capability")
 	}
-	id := common.FormatHash(cap.IDHash)
+	id := cap.IDHash
 
 	got, err := db.GetCapability(id)
 	if err != nil {

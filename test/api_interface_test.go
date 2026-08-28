@@ -16,7 +16,6 @@ import (
 	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // testDB is the offline test handle: an agent-domain session plus the
@@ -119,7 +118,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search(auto_create): %v", err)
 	}
-	if res.NewTopicID == 0 || len(res.Contexts) == 0 {
+	if res.NewTopicID == "" || len(res.Contexts) == 0 {
 		t.Fatalf("auto-create should return new topic and contexts: %+v", res)
 	}
 	// auto-create links an L4 archive to the new topic; verify the link so
@@ -136,7 +135,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 
 	// Update appends an agent reply to the topic.
-	topicID := common.FormatHash(res.NewTopicID)
+	topicID := res.NewTopicID
 	if err := db.Update(topicID, "好的,我来重构这段代码", ts+1000); err != nil {
 		t.Fatalf("Update should succeed on an existing topic: %v", err)
 	}
@@ -171,7 +170,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if len(arcs) == 0 {
 		t.Fatal("SearchL4 should find archives by keyword")
 	}
-	if _, err := db.GetArchive(common.FormatHash(arcs[0].IDHash)); err != nil {
+	if _, err := db.GetArchive(arcs[0].IDHash); err != nil {
 		t.Fatalf("GetArchive: %v", err)
 	}
 
@@ -183,10 +182,9 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 
 func TestInterfaceL0(t *testing.T) {
 	db, _ := openTestDB(t)
-	slot := &core.ProfileSlot{
+	slot := &memhop.ProfileSlot{
 		Name:        "测试画像",
 		Preferences: map[string]string{"language": "Go"},
-		StyleTraits: []string{"prefers_brevity"},
 	}
 	if err := db.UpdateL0(slot); err != nil {
 		t.Fatalf("UpdateL0: %v", err)

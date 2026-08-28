@@ -30,7 +30,7 @@ func openTestConfig(dbPath string) *internal.MemHopConfig {
 
 var builtinNames = []string{
 	"memhop-guide", "memhop-knowledge", "memhop-scene", "memhop-archive",
-	"memhop-profile", "memhop-trajectory", "memhop-capability",
+	"memhop-profile", "memhop-capability",
 }
 
 // OpenMulti attaches the toolbox in memory: ListCapabilities/GetCapability

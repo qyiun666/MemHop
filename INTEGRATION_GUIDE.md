@@ -25,7 +25,7 @@ host process
 | **Single instance** | One `.meh` file is locked exclusively; a second `*DB` on the same file fails. |
 | **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`. The host needs no external queue. `Lock()`/`Unlock()` remain for host-critical sections around raw file access — they serialize **the default domain only** and panic on a closed DB (`Unlock` on a closed DB is a no-op). |
 | **LLM is required** | Search / Update / RefineTopicKeywords do LLM keyword extraction and return an error when the LLM is down (no silent degradation). |
-| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque; format uint64 ids with `fmt.Sprintf("%016x", n)` (MemHop does not re-export id helpers). |
+| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: every response id feeds back as-is, and `api.FormatID` / `api.ParseID` / `api.FormatAgentID` / `api.ParseAgentID` exist for the rare case a host must convert. |
 | **Timestamps** | Unix milliseconds everywhere; `<= 0` is `ErrInvalidQuery`. |
 
 ---
@@ -161,11 +161,11 @@ triggered Dream — pass a request-scoped context.
 
 | Field | Meaning | Host use |
 |---|---|---|
-| `Profile` | L0 profile snapshot (name/role/personality/preferences/lexicon/style/emotions) | can be spliced into the system prompt |
-| `ProfileBrief` | Compact profile digest (name/role/top preferences/style/emotions, bounded) | lighter per-turn injection; full `Profile` only when needed |
+| `Profile` | L0 profile snapshot (name/role/personality/emotions/MBTI/preferences) | can be spliced into the system prompt |
+| `ProfileBrief` | Compact profile digest (name/role/personality/top preferences/emotions, bounded) | lighter per-turn injection; full `Profile` only when needed |
 | `Contexts` | Hit scene's context (`TopicSlot` list, depth ≤ 1) | **the memory to splice into this turn's LLM prompt** |
 | `AssociatedContexts` | Activated scene topics (L1 hypergraph spreading activation) | optional extra memory |
-| `NewTopicID` | ID of the topic created this round (16-hex); 0 = hit existing | feed to Update |
+| `NewTopicID` | ID of the topic created this round (16-hex); `""` = hit existing | feed to Update |
 
 **Side effects (Search writes, it is not read-only):** LLM keyword extraction →
 three-channel retrieval (BM25 + f32 vector + entity BK-Tree, RRF fusion) →
@@ -212,12 +212,16 @@ through Search and each message becomes its own topic, breaking the turn. Use
 ```go
 // 1. First message creates the topic via Search (get topicID).
 res, _ := db.Search(ctx, api.SearchQuery{Text: userMsg1, Timestamp: t1})
-topicID := fmt.Sprintf("%016x", res.NewTopicID)
+topicID := res.NewTopicID
 
 // 2. Remaining messages append to the same topic. role is a raw uint8:
 //    0 = user, 1 = agent, 2 = system, 3 = dream (values > 3 rejected).
-id1, err := db.AppendL4Message(topicID, userMsg2, t2, 0)   // user text
-id2, err := db.AppendL4Message(topicID, agentMsg, t3, 1)   // agent text
+//    contentType picks the record class: text-like types (text/document/
+//    code) store the original text in Content; media types (image/audio/
+//    video) store a path or URI the host resolves.
+id1, err := db.AppendL4Message(topicID, userMsg2, t2, 0, api.ContentText)
+id2, err := db.AppendL4Message(topicID, agentMsg, t3, 1, api.ContentText)
+id3, err := db.AppendL4Message(topicID, "img://shot.png", t3+1, 0, api.ContentImage)
 
 // 3. Archive the final reply (AppendL4Message or Update).
 db.Update(topicID, finalReply, t4)
@@ -227,10 +231,13 @@ db.Update(topicID, finalReply, t4)
 if err := db.RefineTopicKeywords(ctx, topicID); err != nil { /* LLM failure etc. */ }
 ```
 
-- `AppendL4Message(topicID, text, timestamp, role) (uint64, error)` — pure
-  storage append: **no LLM, no keyword extraction** (usable when the LLM is
-  down); the new id is appended to the topic's L4Refs. Returns the raw uint64
-  id — format with `fmt.Sprintf("%016x", id)`.
+- `AppendL4Message(topicID, text, timestamp, role, contentType) (string, error)`
+  — pure storage append: **no LLM, no keyword extraction** (usable when the
+  LLM is down); the new id is appended to the topic's L4Refs. Returns the new
+  archive id as a 16-hex string. Content-type convention: `text`/`document`/
+  `code` carry the original text in `Content`; `image`/`audio`/`video` carry
+  a path or URI (put mime/size/sha256 into `Metadata`). Undefined values are
+  rejected.
 - `RefineTopicKeywords(ctx, topicID) error` — guarded & idempotent: only runs
   when `L4Refs > 2` AND a user/agent keyword track is non-empty; otherwise a
   no-op returning nil. Merges all L4 originals in L4Refs order → LLM keywords →
@@ -273,9 +280,15 @@ res, err := db.ImportL3([]api.L3ImportItem{{
     NodeType: "project",              // person / project / preference ...
     Content:  "Alice is building MemHop",
     Keywords: []string{"Alice", "MemHop"},
+    SourceRef: "docs/alice.md:1",     // positional reference (optional)
+    Related:  []api.L3Relation{{Title: "Alice", Kind: api.EdgePartOf}}, // hyperedges (optional)
 }}, api.L3ImportMerge)                 // Skip / Merge / Overwrite
-// returns CreatedIDs / UpdatedIDs / SkippedCount / Errors
+// returns CreatedIDs / UpdatedIDs / SkippedCount / EdgesCreated / Errors
 ```
+
+`Related` targets resolve by title within the same graph and may appear later
+in the batch (two-phase import); re-importing the same batch does not
+duplicate edges; unresolvable / self / invalid-kind entries land in `Errors`.
 
 `GetL3 / ListL3 / QueryL3Nodes / QueryL3Subgraph / UpdateL3 / DeleteL3`.
 Search automatically links matching graphs onto new topics (`L3Refs`) — this is
@@ -289,12 +302,14 @@ arcs, err := db.SearchL4(api.L4Query{
     // Start: t0, End: t1,    // mode 2: time range (ms)
     // IDs: []string{...},    // mode 3: by id
     // TopicID: &topicHex,    // filter: only this topic's archives
+    // Type: &api.ContentImage, // filter: only this content type
 })
 ```
 
 `ArchiveSlot` fields: `ContentType` (text/image/video/document/audio/code),
 `Role` (0=user/1=agent/2=system/3=dream), `ContextID`, `CreatedAt`, `Content`,
-`Metadata`. Single record: `db.GetArchive(id)`.
+`Metadata` — for media types `Content` is a path or URI, not the binary.
+Single record: `db.GetArchive(id)`.
 
 ### L5 capabilities (register tools/skills to the LLM)
 
@@ -312,66 +327,59 @@ arcs, err := db.SearchL4(api.L4Query{
 ### L6 trajectory + crystallization (v1.2.7 additions)
 
 ```go
-// Record key operations (tool calls / sub-tasks / decisions).
-err := db.AppendTrajectory(sessionIDHex, api.TrajectorySlot{
-    EventType: "tool_call",   // turn_start / tool_call / tool_result /
+// One trajectory per agent turn: search starts the turn, update ends it —
+// derive a fresh turn ID each turn (e.g. hash of session + turn number).
+err := db.AppendTrajectory(turnIDHex, api.TrajectorySlot{
+    EventType: "tool_call",   // classifies each step of the turn:
+                              // llm_request / llm_output / tool_call / tool_result /
                               // subagent_spawn / subagent_done / context_inject /
-                              // llm_request / llm_output / turn_end
+                              // ask_user / user_reply (free-form; no whitelist)
     Payload:   "tool name + arg summary", // truncated to 4KB
-    // L4Ref: &archiveIDHex,  // optionally reference a dialogue archive
+    // TopicID: topicIDHex,  // L2 topic the turn resolves to (search hit or
+                              // update's new topic); crystallize folds sibling
+                              // turns of the same topic into one prompt
     Timestamp: time.Now().UnixMilli(),
 })
 // Seq / SessionID are engine-assigned; don't set them.
 
-// Decide whether a session is worth crystallizing:
-stats, err := db.TrajectoryStats(sessionIDHex)
-// stats.Steps      — total events
-// stats.ToolUsage  — EventType → count (map)
-// stats.LastAppendAt — last event timestamp (Unix ms)
-
-// L6 → L5: distill the trajectory into capability drafts.
-res, err := db.Crystallize(ctx, sessionIDHex)
+// L6 → L5: distill the turn's trajectory into capability drafts. Turns
+// carrying an L2 TopicID aggregate their sibling turns first (capped at
+// 128KB payload, oldest dropped).
+res, err := db.Crystallize(ctx, turnIDHex)
 // res.CreatedIDs / ReusedIDs / MergedIDs / Errors
 // res.Details — per-candidate disposition: []CrystallizeDetail{
 //   {Name, Action: "create|reuse|merge|skip", CapabilityID, Reason}}
 // Activate drafts with ActivateCapability afterwards.
 
-// Enumerate + time-based cleanup close the lifecycle loop.
+// Enumerate turns (e.g. to pick crystallize candidates).
 sessions, err := db.ListTrajectorySessions()
-// sessions[i] = TrajectorySessionSummary{SessionID hex, Steps, LastAppendAt}
-n, err := db.PruneTrajectory(beforeUnixMs)     // deletes events older than before
+// sessions[i] = TrajectorySessionSummary{SessionID hex (one per turn), Steps, LastAppendAt}
 ```
 
-`ReadTrajectory(sessionID)` reads events in Seq order; `DeleteTrajectory(sessionID)`
-cleans up one session; `PruneTrajectory(before)` sweeps every session at once
-(trajectories are short-lived — the host owns cleanup).
+`ReadTrajectory(turnID)` reads events in Seq order. Retention is internal:
+Dream drops events older than 7 days (L6 is a process index; durable
+products live in L4/L5) — there is no delete API.
 
 ---
 
-## 9. Exported types (v1.4.0)
+## 9. Exported types (v1.4.1)
 
-| Alias | Source | Use |
+| Kind | Names | Use |
 |---|---|---|
-| `MemHopConfig` / `Encoder` | internal | config + custom encoder contract |
-| **`LlmConfig`** | internal (new in v1.2.7) | build `MemHopConfig.LLM` by literal |
-| **`MemHopDefaults`** | internal (new in v1.2.7) | name the defaults type instead of copying |
-| `SearchQuery` / `SearchResult` | internal | search input/output |
-| `SceneContext` / `SceneSlot` | internal / core | scene views |
-| `L3Graph` / `L3ImportItem` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L3Subgraph` | internal | knowledge graph |
-| `L4Query` / `ArchiveSlot` | internal / core | archive search |
-| `Capability` / `CapabilityListQuery` / `CapabilityPatch` / `CrystallizeResult` / **`CrystallizeDetail`** | core / internal | capabilities |
-| **`TrajectoryStats`** / `TrajectorySlot` / `TrajectorySessionSummary` | internal / core | trajectory + stats |
-| **`DreamReport`** / `DreamStage` | core / internal (new in v1.4.0) | Dream pipeline report |
-| **`TopicSlot`** | core (new in v1.2.7) | element of `SearchResult.Contexts` |
-| **`ResourceRef`** | core (new in v1.2.7) | element of `Capability.Resources` |
-| `ProfileSlot` / `HypergraphSlot` / `HypergraphNode` / `GraphEdgeKind` | core | models |
+| config | `MemHopConfig` / `Encoder` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | config + custom encoder contract |
+| input aliases | `SearchQuery` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `CapabilityImport` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `Workflow` | inputs & id-free results (all string IDs are hex) |
+| response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | every ID field is a 16-hex string (v1.4.1) |
+| id helpers | **`FormatID`** / **`ParseID`** / **`FormatAgentID`** / **`ParseAgentID`** (new in v1.4.1) | hex ⇄ uint64 when a host must convert |
+| enums | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` | enum aliases |
 
 Enum constants are exported too: `L3ImportSkip/Merge/Overwrite`,
 `CapabilityMCP/Skill/API/Composite`, `CapabilityDraft/Active/Deprecated`,
-`CapabilityOrigin*`, `EdgeRelated...EdgeCustom`.
+`CapabilityOrigin*`, `EdgeRelated...EdgeCustom`,
+`ContentText/Image/Video/Document/Audio/Code/Other`.
 
 > Note: `Role*` constants are **not** re-exported — `AppendL4Message` takes a
-> raw `uint8` (0=user, 1=agent, 2=system, 3=dream).
+> raw `uint8` (0=user, 1=agent, 2=system, 3=dream); content types use the
+> exported `Content*` constants.
 
 ---
 
@@ -390,14 +398,13 @@ Codes: `ErrConfig`, `ErrVectorDimMismatch`, `ErrInvalidQuery`, `ErrNotFound`,
 
 ---
 
-## 11. Minimal runnable skeleton (v1.4.0 signatures)
+## 11. Minimal runnable skeleton (v1.4.1 signatures)
 
 ```go
 package main
 
 import (
     "context"
-    "fmt"
     "log"
     "os"
     "time"
@@ -435,10 +442,9 @@ func main() {
     if err != nil { log.Fatal(err) }
     _ = res // Profile + Contexts → splice into prompt
 
-    // Per turn: end. NewTopicID is a uint64 — format it to 16-hex first
-    // (0 means the turn hit an existing topic; pick its ID from Contexts).
-    topicID := fmt.Sprintf("%016x", res.NewTopicID)
-    if err := db.Update(topicID, "agent reply", time.Now().UnixMilli()); err != nil {
+    // Per turn: end. NewTopicID is the 16-hex topic id ("": the turn hit an
+    // existing topic; pick its ID from Contexts).
+    if err := db.Update(res.NewTopicID, "agent reply", time.Now().UnixMilli()); err != nil {
         log.Fatal(err)
     }
 
@@ -457,21 +463,20 @@ func main() {
    degrade. Have an LLM availability fallback before integrating.
 2. **Encoder dimension is locked**: `VectorDim` mismatch → Open fails
    (`ErrVectorDimMismatch`), no migration of old files: headers older than
-   format `0x0008` are rejected outright at Open.
+   format `0x0009` are rejected outright at Open.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`.
-4. **IDs are opaque 16-hex strings**: never splice/truncate them; generate them
-   with `fmt.Sprintf("%016x", n)` and validate with `strconv` when needed.
+4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
+   feed back as-is, and `api.FormatID` / `api.ParseID` cover rare conversions.
 5. **Search is a write**: to read history without creating memory, use
    `SceneContext` / `SearchL4`.
 6. **One file, many agent domains**: since v1.4 all tenants live inside one
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
-   isolated per domain; legacy single-agent files (`FormatVersion < 0x0008`)
-   cannot be opened or migrated.
+   isolated per domain; legacy files (`FormatVersion < 0x0009`) cannot be
+   opened or migrated.
 7. **Built-in capability cards are read-only**: `UpdateCapability` rejects them.
-8. **Trajectories are short-lived**: the host owns cleanup; MemHop never
-   auto-deletes. `DeleteTrajectory` clears one session;
-   `PruneTrajectory(beforeMs)` sweeps events older than `beforeMs` across
-   every session (enumerate first with `ListTrajectorySessions`).
+8. **Trajectories auto-expire**: Dream drops events older than 7 days;
+   the external surface is append + query only (`AppendTrajectory` /
+   `ReadTrajectory` / `ListTrajectorySessions`) — no delete API.
 9. **Capacity semantics (v1.2.7)**: the active set is unbounded; reaching
    `Capacity` makes Update trigger a Dream on the oldest scene — Dream is
    skipped when the scene is below `DreamCompressMinTopics` (pre-checked).

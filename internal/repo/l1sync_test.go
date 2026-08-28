@@ -31,7 +31,7 @@ func tempEngine(t *testing.T) *core.StorageEngine {
 // update and per-scene isolation.
 func TestSyncL1NodesFromL2(t *testing.T) {
 	engine := tempEngine(t)
-	sceneA := common.FormatHash(common.HashID("sceneA"))
+	sceneA := common.HashID("sceneA")
 
 	if !CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k1"}, 1000, 0) {
 		t.Fatal("create topic 1")
@@ -46,11 +46,11 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if changed != 1 {
 		t.Fatalf("want 1 node created, got %d", changed)
 	}
-	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+sceneA))
+	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+common.FormatHash(sceneA)))
 	if err != nil {
 		t.Fatal("l1 node missing")
 	}
-	if node.SceneID != mustParse(t, sceneA) || len(node.TopicIDs) != 2 {
+	if node.SceneID != sceneA || len(node.TopicIDs) != 2 {
 		t.Fatalf("node mismatch: %+v", node)
 	}
 	if node.Importance != 1.0 {
@@ -66,7 +66,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if changed != 0 {
 		t.Fatalf("want 0 changes, got %d", changed)
 	}
-	if node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+sceneA)); err == nil && node.UpdatedAt != firstUpdatedAt {
+	if node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+common.FormatHash(sceneA))); err == nil && node.UpdatedAt != firstUpdatedAt {
 		t.Fatalf("no-op sync must not refresh UpdatedAt")
 	}
 
@@ -81,7 +81,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if changed != 1 {
 		t.Fatalf("want 1 node updated, got %d", changed)
 	}
-	node, err = core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+sceneA))
+	node, err = core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+common.FormatHash(sceneA)))
 	if err != nil {
 		t.Fatalf("read node after update: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	}
 
 	// A second scene gets its own node.
-	sceneB := common.FormatHash(common.HashID("sceneB"))
+	sceneB := common.HashID("sceneB")
 	if !CreateTopicL2(engine, core.DefaultAgentID, sceneB, []string{"kb"}, 1000, 0) {
 		t.Fatal("create topic in scene B")
 	}
@@ -109,17 +109,14 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 
 // TestSyncL1NodesFromL2SkipsCompressed verifies depth>2 topics do not enter
 // nodes (compression groups are covered by their depth<=2 parent).
-
-// TestSyncL1NodesFromL2SkipsCompressed verifies depth>2 topics do not enter
-// nodes (compression groups are covered by their depth<=2 parent).
 func TestSyncL1NodesFromL2SkipsCompressed(t *testing.T) {
 	engine := tempEngine(t)
-	sceneA := common.FormatHash(common.HashID("sceneA"))
+	sceneA := common.HashID("sceneA")
 	CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k1"}, 1000, 0)
 
-	parentID := core.ComputeTopicID(common.HashID(sceneA), 1000, 2000)
+	parentID := core.ComputeTopicID(sceneA, 1000, 2000)
 	deep := core.TopicSlot{
-		ID: core.ComputeTopicID(common.HashID(sceneA), 1000, 2000), SceneID: common.HashID(sceneA),
+		ID: core.ComputeTopicID(sceneA, 1000, 2000), SceneID: sceneA,
 		ParentID: &parentID, Depth: 3, UserKeywords: []string{"deep"},
 		UserTimestamp: 1000, AgentTimestamp: 2000,
 	}
@@ -129,7 +126,7 @@ func TestSyncL1NodesFromL2SkipsCompressed(t *testing.T) {
 	if _, err := SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+sceneA))
+	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+common.FormatHash(sceneA)))
 	if err != nil || len(node.TopicIDs) != 1 {
 		t.Fatalf("depth-3 topic must be excluded from the node: %+v", node)
 	}

@@ -58,7 +58,7 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	if _, dup := common.ToSet(hashes)[primaryHash]; dup {
 		return common.NewError(common.ErrInvalidQuery, "primary scene id must not be a secondary", nil)
 	}
-	if !repo.MergeScenesL2(db.engine, agentID, primaryID, secondaryIDs) {
+	if !repo.MergeScenesL2(db.engine, agentID, primaryHash, hashes) {
 		return common.NewError(common.ErrIO, "merge scenes", nil)
 	}
 	removed := common.ToSet(hashes)
@@ -78,10 +78,11 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	if _, err := common.ParseID(sceneID); err != nil {
+	sceneHash, err := common.ParseID(sceneID)
+	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
-	scenes := repo.ListScenesL2(db.engine, agentID, []string{sceneID})
+	scenes := repo.ListScenesL2(db.engine, agentID, []uint64{sceneHash})
 	if len(scenes) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "scene not found", nil)
 	}
@@ -89,7 +90,7 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 		Engine:  db.engine,
 		AgentID: agentID,
 		MetaIdx: ac.l2Meta,
-		SceneID: sceneID,
+		SceneID: sceneHash,
 		Depth:   2,
 		Num:     2,
 	})
@@ -204,7 +205,7 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 			archives = append(archives, t.L4Refs...)
 		}
 	}
-	if !repo.DeleteL2(db.engine, agentID, []string{sceneID}, 1) {
+	if !repo.DeleteL2(db.engine, agentID, []uint64{sceneHash}, 1) {
 		return common.NewError(common.ErrIO, "delete scene", nil)
 	}
 	if err := repo.DeleteArchivesL4(db.engine, agentID, common.DedupSorted(archives)); err != nil {
@@ -223,11 +224,7 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 // deleteTopics removes the given topics (with their L2Meta/sparse entries)
 // and the given archives in one engine pass.
 func (ac *agentContext) deleteTopics(db *DB, agentID uint64, topics, archives []uint64) error {
-	ids := make([]string, 0, len(topics))
-	for _, id := range topics {
-		ids = append(ids, common.FormatHash(id))
-	}
-	if !repo.DeleteL2(db.engine, agentID, ids, 2) {
+	if !repo.DeleteL2(db.engine, agentID, topics, 2) {
 		return common.NewError(common.ErrIO, "delete topics", nil)
 	}
 	if err := repo.DeleteArchivesL4(db.engine, agentID, archives); err != nil {

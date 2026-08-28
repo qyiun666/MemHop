@@ -13,7 +13,6 @@ import (
 	"time"
 
 	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 )
 
 func TestInterfaceL3(t *testing.T) {
@@ -36,7 +35,7 @@ func TestInterfaceL3(t *testing.T) {
 	if len(graphs) != 1 {
 		t.Fatalf("want 1 graph, got %d", len(graphs))
 	}
-	graphID := common.FormatHash(graphs[0].IDHash)
+	graphID := graphs[0].IDHash
 
 	g, err := db.GetL3(graphID)
 	if err != nil {
@@ -54,7 +53,7 @@ func TestInterfaceL3(t *testing.T) {
 		t.Fatal("QueryL3Nodes should find the imported node")
 	}
 
-	subgraph, err := db.QueryL3Subgraph(graphID, common.FormatHash(nodes[0].IDHash), 2, nil)
+	subgraph, err := db.QueryL3Subgraph(graphID, nodes[0].IDHash, 2, nil)
 	if err != nil {
 		t.Fatalf("QueryL3Subgraph: %v", err)
 	}

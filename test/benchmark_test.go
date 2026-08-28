@@ -15,7 +15,6 @@ import (
 	"time"
 
 	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -79,7 +78,7 @@ func BenchmarkSearchAutoCreate(b *testing.B) {
 		if err != nil {
 			b.Fatalf("Search: %v", err)
 		}
-		if res.NewTopicID == 0 {
+		if res.NewTopicID == "" {
 			b.Fatal("expected NewTopicID")
 		}
 		i++
@@ -96,7 +95,7 @@ func BenchmarkSearchRetrieve(b *testing.B) {
 
 	// Seed: ingest every turn once via auto-create.
 	base := time.Now().UnixMilli()
-	var lastTopicID uint64
+	var lastTopicID string
 	i := 0
 	for _, s := range fx.Sessions {
 		for _, tn := range s.Turns {
@@ -113,7 +112,7 @@ func BenchmarkSearchRetrieve(b *testing.B) {
 			i++
 		}
 	}
-	if lastTopicID == 0 {
+	if lastTopicID == "" {
 		b.Fatal("seed produced no topic")
 	}
 
@@ -147,7 +146,7 @@ func BenchmarkUpdate(b *testing.B) {
 	if err != nil {
 		b.Fatalf("seed Search: %v", err)
 	}
-	topicID := common.FormatHash(res.Contexts[0].ID)
+	topicID := res.Contexts[0].ID
 
 	b.ResetTimer()
 	i := 0
@@ -179,14 +178,14 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 		"一周三次跑步不间断", "五公里跑完很爽", "蛋白粉是跑后必备", "早上公园跑步我很享受",
 	}
 	base := time.Now().UnixMilli()
-	var sceneID uint64
+	var sceneID string
 	for i, text := range related {
 		ts := base + int64(i)*1000
 		q := internal.SearchQuery{Text: text, Timestamp: ts}
 		if i == 0 {
 			q.AutoCreate = true
 		} else {
-			sid := common.FormatHash(sceneID)
+			sid := sceneID
 			q.DirectedL2ID = &sid
 		}
 		res, err := db.Search(context.Background(), q)
@@ -196,7 +195,7 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 		if i == 0 {
 			sceneID = res.Contexts[0].SceneID
 		}
-		if err := db.Update(common.FormatHash(res.NewTopicID), "好的", ts+500); err != nil {
+		if err := db.Update(res.NewTopicID, "好的", ts+500); err != nil {
 			b.Fatalf("seed Update: %v", err)
 		}
 	}
@@ -234,7 +233,7 @@ func BenchmarkMemoryLoop(b *testing.B) {
 		"跑步让我精神很好", "我买了新运动水壶",
 	}
 	base := time.Now().UnixMilli()
-	var sceneID uint64
+	var sceneID string
 	var dreams, checks int
 	prevDepth1 := -1
 	turns := 0
@@ -245,20 +244,20 @@ func BenchmarkMemoryLoop(b *testing.B) {
 		text := related[turns%len(related)]
 		ts := base + int64(turns)*1000
 		q := internal.SearchQuery{Text: text, Timestamp: ts}
-		if sceneID == 0 {
+		if sceneID == "" {
 			q.AutoCreate = true
 		} else {
-			sid := common.FormatHash(sceneID)
+			sid := sceneID
 			q.DirectedL2ID = &sid
 		}
 		res, err := db.Search(context.Background(), q)
 		if err != nil {
 			b.Fatalf("loop Search[%d]: %v", turns, err)
 		}
-		if sceneID == 0 && len(res.Contexts) > 0 {
+		if sceneID == "" && len(res.Contexts) > 0 {
 			sceneID = res.Contexts[0].SceneID
 		}
-		if err := db.Update(common.FormatHash(res.NewTopicID), "好的，记下了。", ts+500); err != nil {
+		if err := db.Update(res.NewTopicID, "好的，记下了。", ts+500); err != nil {
 			b.Fatalf("loop Update[%d]: %v", turns, err)
 		}
 		turns++
@@ -271,7 +270,7 @@ func BenchmarkMemoryLoop(b *testing.B) {
 			if err != nil || len(scenes) == 0 {
 				b.Fatalf("ListScenes after %d turns: scenes=%d err=%v", turns, len(scenes), err)
 			}
-			sc, err := db.SceneContext(common.FormatHash(sceneID))
+			sc, err := db.SceneContext(sceneID)
 			if err != nil || sc.TopicCount == 0 {
 				b.Fatalf("SceneContext after %d turns: topics=%d err=%v", turns, sc.TopicCount, err)
 			}
@@ -280,7 +279,7 @@ func BenchmarkMemoryLoop(b *testing.B) {
 		// Count auto-triggered Dreams by watching the depth-1 topic count drop:
 		// compression sinks merged topics below depth 1 (raw topics stay in
 		// depth 2+ and keep SceneContext.TopicCount growing).
-		sc, err := db.SceneContext(common.FormatHash(sceneID))
+		sc, err := db.SceneContext(sceneID)
 		if err == nil {
 			depth1 := 0
 			for _, tp := range sc.Topics {
@@ -319,7 +318,7 @@ func BenchmarkSearchLatency(b *testing.B) {
 		if err != nil {
 			b.Fatalf("seed: %v", err)
 		}
-		if err := db.Update(common.FormatHash(res.NewTopicID), "好的", ts+500); err != nil {
+		if err := db.Update(res.NewTopicID, "好的", ts+500); err != nil {
 			b.Fatalf("seed Update: %v", err)
 		}
 	}

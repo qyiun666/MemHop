@@ -83,7 +83,7 @@ func TestSearchLongInputNeverFails(t *testing.T) {
 		if err != nil {
 			t.Fatalf("attempt %d: Search returned error: %v", i, err)
 		}
-		if res.NewTopicID == 0 {
+		if res.NewTopicID == "" {
 			t.Fatalf("attempt %d: no topic created", i)
 		}
 	}

@@ -24,7 +24,11 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	case q.Start > 0 && q.End > 0:
 		out = repo.QueryArchiveL4(db.engine, agentID, 2, "", q.Start, q.End, nil)
 	case len(q.IDs) > 0:
-		out = repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, q.IDs)
+		ids, ok := common.ParseAll(q.IDs)
+		if !ok {
+			return nil, common.NewError(common.ErrInvalidQuery, "parse archive ids")
+		}
+		out = repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, ids)
 	default:
 		return []core.ArchiveSlot{}, nil
 	}
@@ -36,6 +40,15 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 		filtered := out[:0]
 		for _, arc := range out {
 			if arc.ContextID == topicHash {
+				filtered = append(filtered, arc)
+			}
+		}
+		out = filtered
+	}
+	if q.Type != nil {
+		filtered := out[:0]
+		for _, arc := range out {
+			if arc.ContentType == *q.Type {
 				filtered = append(filtered, arc)
 			}
 		}
@@ -53,7 +66,11 @@ func (db *DB) GetArchive(agentID uint64, id string) (*core.ArchiveSlot, error) {
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	out := repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, []string{id})
+	idHash, err := common.ParseID(id)
+	if err != nil {
+		return nil, common.NewError(common.ErrNotFound, "archive not found")
+	}
+	out := repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, []uint64{idHash})
 	if len(out) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "archive not found")
 	}

@@ -6,6 +6,7 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -21,6 +22,57 @@ func TestCrystallizeNoTrajectory(t *testing.T) {
 	_, err := db.Crystallize(context.Background(), core.DefaultAgentID, common.FormatHash(1))
 	if err == nil {
 		t.Fatal("crystallize on empty session should fail")
+	}
+}
+
+// TestCrystallizeAggregatesSiblingTurnsByTopic pins the cross-turn fold: the
+// LLM prompt for one turn must contain sibling turns sharing its TopicID and
+// exclude turns without it.
+func TestCrystallizeAggregatesSiblingTurnsByTopic(t *testing.T) {
+	var mu sync.Mutex
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotBody = string(body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"role": "assistant", "content": `{"capabilities":[]}`},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
+	db := newTestDB(t, newTestEngine(t))
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	const topic = uint64(4242)
+	turnA, turnB, orphan := common.FormatHash(1001), common.FormatHash(1002), common.FormatHash(1003)
+	for _, ev := range []struct {
+		session string
+		slot    core.TrajectorySlot
+	}{
+		{turnA, core.TrajectorySlot{EventType: "llm_request", Payload: "signal-turn-a", TopicID: topic, Timestamp: 100}},
+		{turnA, core.TrajectorySlot{EventType: "tool_call", Payload: "signal-turn-a-2", TopicID: topic, Timestamp: 150}},
+		{turnB, core.TrajectorySlot{EventType: "llm_output", Payload: "signal-turn-b", TopicID: topic, Timestamp: 200}},
+		{orphan, core.TrajectorySlot{EventType: "llm_output", Payload: "signal-orphan", Timestamp: 300}},
+	} {
+		if err := db.AppendTrajectory(core.DefaultAgentID, ev.session, ev.slot); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	if _, err := db.Crystallize(context.Background(), core.DefaultAgentID, turnA); err != nil {
+		t.Fatalf("crystallize: %v", err)
+	}
+	mu.Lock()
+	body := gotBody
+	mu.Unlock()
+	if !strings.Contains(body, "signal-turn-a") || !strings.Contains(body, "signal-turn-b") {
+		t.Fatalf("prompt must fold in sibling turns of the topic: %s", body)
+	}
+	if strings.Contains(body, "signal-orphan") {
+		t.Fatal("turns without the topic must not fold in")
 	}
 }
 

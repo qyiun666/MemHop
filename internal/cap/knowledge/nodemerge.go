@@ -16,22 +16,31 @@ import (
 
 // MergeFields folds imported values into an existing node: an empty imported
 // value keeps the current one, a non-empty NodeType replaces, content is
-// appended only when it adds information, keywords are unioned.
-func MergeFields(node *core.HypergraphNode, nodeType, content string, keywords []string, now int64) {
+// appended only when it adds information, keywords are unioned and a
+// non-empty sourceRef refreshes the positional reference.
+func MergeFields(node *core.HypergraphNode, nodeType, content string, keywords []string, sourceRef string, now int64) {
 	if nodeType != "" {
 		node.NodeType = nodeType
 	}
 	node.Content = mergeContent(node.Content, content)
 	node.Keywords = common.Union(node.Keywords, keywords)
+	if sourceRef != "" {
+		node.SourceRef = &sourceRef
+	}
 	node.UpdatedAt = now
 }
 
 // OverwriteFields replaces the mutable fields of an existing node. The ID and
-// graph membership are stable and untouched.
-func OverwriteFields(node *core.HypergraphNode, nodeType, content string, keywords []string, now int64) {
+// graph membership are stable and untouched; an empty sourceRef clears it.
+func OverwriteFields(node *core.HypergraphNode, nodeType, content string, keywords []string, sourceRef string, now int64) {
 	node.NodeType = nodeType
 	node.Content = content
 	node.Keywords = slices.Clone(keywords)
+	if sourceRef != "" {
+		node.SourceRef = &sourceRef
+	} else {
+		node.SourceRef = nil
+	}
 	node.UpdatedAt = now
 }
 

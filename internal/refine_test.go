@@ -30,26 +30,25 @@ func refineTestTopic(t *testing.T, db *DB, nL4 int) string {
 	if !repo.CreateTopicL2WithID(db.engine, core.DefaultAgentID, sceneID, topicID, []string{"user-kw"}, 1000, 0) {
 		t.Fatal("create topic")
 	}
-	topicIDStr := common.FormatHash(topicID)
 	role := core.RoleUser
 	ids := make([]uint64, 0, nL4)
 	for i := 0; i < nL4; i++ {
 		if i == nL4-1 {
 			role = core.RoleAgent
 		}
-		id, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicIDStr, role, core.ContentText, "msg-"+strings.Repeat("x", i+1), int64(1000+i))
+		id, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicID, role, core.ContentText, "msg-"+strings.Repeat("x", i+1), int64(1000+i))
 		if err != nil {
 			t.Fatalf("append l4: %v", err)
 		}
 		ids = append(ids, id)
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, topicIDStr, ids) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, topicID, ids) {
 		t.Fatal("update l4 refs")
 	}
-	if !repo.UpdateTopicL2(db.engine, core.DefaultAgentID, topicIDStr, []string{"agent-kw"}, 2000) {
+	if !repo.UpdateTopicL2(db.engine, core.DefaultAgentID, topicID, []string{"agent-kw"}, 2000) {
 		t.Fatal("update topic")
 	}
-	return topicIDStr
+	return common.FormatHash(topicID)
 }
 
 // countingLLMServer is mockLLMServer plus a call counter, used to prove the
@@ -120,11 +119,7 @@ func TestRefineTopicKeywords(t *testing.T) {
 		t.Errorf("Depth = %d, want 1", topic.Depth)
 	}
 	// All three L4 originals still readable.
-	ids := make([]string, 0, len(topic.L4Refs))
-	for _, id := range topic.L4Refs {
-		ids = append(ids, common.FormatHash(id))
-	}
-	if arcs := repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, ids); len(arcs) != 3 {
+	if arcs := repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, topic.L4Refs); len(arcs) != 3 {
 		t.Errorf("archives = %d, want 3", len(arcs))
 	}
 }

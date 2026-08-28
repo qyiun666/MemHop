@@ -41,9 +41,9 @@ func tempEngine(t *testing.T) *core.StorageEngine {
 // threshold filtering, idempotent refresh and weight strengthening (max wins).
 func TestBuildHyperedges(t *testing.T) {
 	engine := tempEngine(t)
-	sceneA := common.FormatHash(common.HashID("sceneA"))
-	sceneB := common.FormatHash(common.HashID("sceneB"))
-	sceneC := common.FormatHash(common.HashID("sceneC"))
+	sceneA := common.HashID("sceneA")
+	sceneB := common.HashID("sceneB")
+	sceneC := common.HashID("sceneC")
 
 	if !repo.CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"memory", "agent"}, 1000, 0) {
 		t.Fatal("create topic A1")
@@ -66,7 +66,7 @@ func TestBuildHyperedges(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("want 1 edge, got %d", n)
 	}
-	nodeA, err := core.ReadSceneNode(engine, core.DefaultAgentID, core.SceneNodeID(mustParse(t, sceneA)))
+	nodeA, err := core.ReadSceneNode(engine, core.DefaultAgentID, core.SceneNodeID(sceneA))
 	if err != nil || len(nodeA.EdgeIDs) != 1 {
 		t.Fatalf("node A should hold 1 edge: %+v err=%v", nodeA, err)
 	}
@@ -111,13 +111,4 @@ func TestBuildHyperedges(t *testing.T) {
 	if math.Abs(float64(edge.Weight)-2.0/3.0) > 1e-4 {
 		t.Fatalf("weight = %.4f, want 0.6667", edge.Weight)
 	}
-}
-
-func mustParse(t *testing.T, s string) uint64 {
-	t.Helper()
-	v, err := common.ParseID(s)
-	if err != nil {
-		t.Fatalf("parse %q: %v", s, err)
-	}
-	return v
 }

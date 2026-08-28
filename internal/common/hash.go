@@ -15,8 +15,18 @@ func HashID(s string) uint64 {
 	return xxhash.Sum64String(s)
 }
 
+// HashBytes computes xxhash64 of a byte slice; for identical bytes it produces
+// the same digest as HashID(string(b)).
+func HashBytes(b []byte) uint64 { return xxhash.Sum64(b) }
+
 func FormatHash(h uint64) string {
-	return fmt.Sprintf("%016x", h)
+	const digits = "0123456789abcdef"
+	var buf [16]byte
+	for i := 15; i >= 0; i-- {
+		buf[i] = digits[h&0xf]
+		h >>= 4
+	}
+	return string(buf[:])
 }
 
 // ParseID parses a 16-char hex string back to uint64; malformed IDs return an error.

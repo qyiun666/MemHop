@@ -1,10 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Public type surface of the MemHop facade: every alias forwards to the
-// internal package (method signatures of the handles); this package never
-// imports internal subpackages directly. Enum constants live in exports.go,
-// the error contract in errors.go, id rendering in ids.go.
+// Public type surface of the MemHop facade. Response DTOs that carry record
+// IDs use 16-char hex strings (api layer) while the internal/core layers stay
+// on uint64. Input-only types remain aliases to the internal seam.
 
 package api
 
@@ -32,33 +31,178 @@ type (
 // it to MemHopConfig.Defaults without naming the nested type.
 var DefaultMemHopDefaults = internal.DefaultMemHopDefaults
 
-// ---- internal-layer types (method signatures) ----
+// ---- input / shared aliases ----
 
 type (
 	SearchQuery              = internal.SearchQuery
-	SearchResult             = internal.SearchResult
-	SceneContext             = internal.SceneContext
-	L3Graph                  = internal.L3Graph
 	L3ImportItem             = internal.L3ImportItem
+	L3Relation               = internal.L3Relation
 	L3ImportMode             = internal.L3ImportMode
 	L3ImportResult           = internal.L3ImportResult
 	L3NodeQuery              = internal.L3NodeQuery
-	L3Subgraph               = internal.L3Subgraph
 	L4Query                  = internal.L4Query
 	CapabilityListQuery      = internal.CapabilityListQuery
 	CapabilityPatch          = internal.CapabilityPatch
-	CrystallizeResult        = internal.CrystallizeResult
-	CrystallizeDetail        = internal.CrystallizeDetail
-	TrajectoryStats          = internal.TrajectoryStats
+	CapabilityImport         = internal.CapabilityImport
 	TrajectorySessionSummary = internal.TrajectorySessionSummary
 	DreamReport              = internal.DreamReport
 	DreamStage               = internal.DreamStage
+	CrystallizeResult        = internal.CrystallizeResult
+	CrystallizeDetail        = internal.CrystallizeDetail
+	SceneContext             = internal.SceneContext
+	SceneContextTopic        = internal.SceneContextTopic
+	SceneMessage             = internal.SceneMessage
+	ResourceRef              = internal.ResourceRef
+	GraphEdgeKind            = internal.GraphEdgeKind
+	CapabilityType           = internal.CapabilityType
+	CapabilityStatus         = internal.CapabilityStatus
+	CapabilityOrigin         = internal.CapabilityOrigin
+	ContentType              = internal.ContentType
+	Workflow                 = internal.Workflow
 )
 
-// ---- L3 import mode constants ----
+// ---- response DTOs (ids are 16-char hex strings) ----
 
-const (
-	L3ImportSkip      = internal.L3ImportSkip
-	L3ImportMerge     = internal.L3ImportMerge
-	L3ImportOverwrite = internal.L3ImportOverwrite
-)
+// ProfileSlot is the public L0 profile singleton; the internal ID hash is
+// hidden because it is an implementation detail.
+type ProfileSlot struct {
+	Name         string                `json:"name"`
+	Role         string                `json:"role"`
+	Personality  string                `json:"personality"`
+	EmotionState internal.EmotionScore `json:"emotion_state"`
+	MBTI         internal.MBTIScore    `json:"mbti"`
+	Preferences  map[string]string     `json:"preferences"`
+	UpdatedAtMs  int64                 `json:"updated_at_ms"`
+}
+
+// SceneSlot is one L2 scene container.
+type SceneSlot struct {
+	SceneID    string `json:"scene_id"`
+	SceneName  string `json:"scene_name"`
+	TopicCount int    `json:"topic_count"`
+	HitCount   uint32 `json:"hit_count"`
+	LastHitAt  int64  `json:"last_hit_at"`
+}
+
+// TopicSlot is an L2 dual-track session node (user/agent).
+type TopicSlot struct {
+	ID              string   `json:"id"`
+	SceneID         string   `json:"scene_id"`
+	ParentID        *string  `json:"parent_id,omitempty"`
+	ChildrenIDs     []string `json:"children_ids"`
+	Depth           uint8    `json:"depth"`
+	UserKeywords    []string `json:"user_keywords"`
+	UserTimestamp   int64    `json:"user_timestamp"`
+	L4Refs          []string `json:"l4_refs"`
+	L3Refs          []string `json:"l3_refs"`
+	AgentKeywords   []string `json:"agent_keywords"`
+	AgentTimestamp  int64    `json:"agent_timestamp"`
+	FusedKeywords   []string `json:"fused_keywords"`
+	CentroidPageRef string   `json:"centroid_page_ref"`
+}
+
+// SearchResult is the response of Search/Update retrieval.
+type SearchResult struct {
+	Profile            ProfileSlot `json:"profile"`
+	ProfileBrief       string      `json:"profile_brief"`
+	Contexts           []TopicSlot `json:"contexts"`
+	AssociatedContexts []TopicSlot `json:"associated_contexts"`
+	NewTopicID         string      `json:"new_topic_id,omitempty"`
+}
+
+// HypergraphSource is the origin of an L3 hypergraph.
+type HypergraphSource struct {
+	Kind      string `json:"kind"`
+	Value     string `json:"value"`
+	ContextID string `json:"context_id"`
+}
+
+// HypergraphSlot holds L3 hypergraph container metadata.
+type HypergraphSlot struct {
+	IDHash    string           `json:"id_hash"`
+	Name      string           `json:"name"`
+	Source    HypergraphSource `json:"source"`
+	CreatedAt int64            `json:"created_at"`
+	UpdatedAt int64            `json:"updated_at"`
+}
+
+// HypergraphNode is a node within an L3 hypergraph.
+type HypergraphNode struct {
+	IDHash     string   `json:"id_hash"`
+	GraphID    string   `json:"graph_id"`
+	Title      string   `json:"title"`
+	NodeType   string   `json:"node_type"`
+	Content    string   `json:"content"`
+	Keywords   []string `json:"keywords"`
+	SourceRef  *string  `json:"source_ref,omitempty"`
+	Importance float32  `json:"importance"`
+	CreatedAt  int64    `json:"created_at"`
+	UpdatedAt  int64    `json:"updated_at"`
+}
+
+// HypergraphEdge is an edge within an L3 hypergraph.
+type HypergraphEdge struct {
+	IDHash    string        `json:"id_hash"`
+	GraphID   string        `json:"graph_id"`
+	Kind      GraphEdgeKind `json:"kind"`
+	NodeIDs   []string      `json:"node_ids"`
+	Weight    float32       `json:"weight"`
+	Label     *string       `json:"label,omitempty"`
+	CreatedAt int64         `json:"created_at"`
+}
+
+// L3Graph is the full view of one L3 hypergraph.
+type L3Graph struct {
+	Slot  HypergraphSlot   `json:"slot"`
+	Nodes []HypergraphNode `json:"nodes"`
+	Edges []HypergraphEdge `json:"edges"`
+}
+
+// L3Subgraph is a BFS subgraph view.
+type L3Subgraph struct {
+	Nodes []HypergraphNode `json:"nodes"`
+	Edges []HypergraphEdge `json:"edges"`
+}
+
+// ArchiveSlot stores a user/agent chat message under an L2 scene context.
+type ArchiveSlot struct {
+	IDHash      string      `json:"id_hash"`
+	ContentType ContentType `json:"content_type"`
+	Role        uint8       `json:"role"`
+	ContextID   string      `json:"context_id"`
+	CreatedAt   int64       `json:"created_at"`
+	Content     string      `json:"content"`
+	Metadata    *string     `json:"metadata,omitempty"`
+}
+
+// Capability is an L5 reusable capability.
+type Capability struct {
+	IDHash        string           `json:"id_hash"`
+	Name          string           `json:"name"`
+	Version       string           `json:"version"`
+	Type          CapabilityType   `json:"type"`
+	Summary       string           `json:"summary"`
+	Trigger       string           `json:"trigger"`
+	Resources     []ResourceRef    `json:"resources"`
+	Workflow      *Workflow        `json:"workflow,omitempty"`
+	Status        CapabilityStatus `json:"status"`
+	Origin        CapabilityOrigin `json:"origin"`
+	FileHash      string           `json:"file_hash,omitempty"`
+	SuccessRate   float32          `json:"success_rate"`
+	TriggerCount  uint32           `json:"trigger_count"`
+	LastTriggered int64            `json:"last_triggered"`
+	CreatedAt     int64            `json:"created_at"`
+	UpdatedAt     int64            `json:"updated_at"`
+}
+
+// TrajectorySlot is one L6 operation trajectory event; SessionID is a turn
+// key (one trajectory per agent turn, search starts it, update ends it).
+type TrajectorySlot struct {
+	IDHash    string `json:"id_hash"`
+	SessionID string `json:"session_id"`
+	Seq       uint64 `json:"seq"`
+	EventType string `json:"event_type"`
+	Payload   string `json:"payload"`
+	TopicID   string `json:"topic_id,omitempty"` // L2 topic the turn resolves to, 16-char hex
+	Timestamp int64  `json:"timestamp"`
+}

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 )
 
 func TestInterfaceDream(t *testing.T) {
@@ -31,7 +30,7 @@ func TestInterfaceDream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search #1: %v", err)
 	}
-	sceneID := common.FormatHash(res.Contexts[0].SceneID)
+	sceneID := res.Contexts[0].SceneID
 	if _, err := db.Search(context.Background(), internal.SearchQuery{
 		Text: "继续重构第二个模块", DirectedL2ID: &sceneID, Timestamp: ts + 1000,
 	}); err != nil {
@@ -75,7 +74,7 @@ func TestInterfaceDream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetL0 after dream: %v", err)
 	}
-	if profile.EmotionPatterns["valence"] == "" || profile.Personality == "" {
+	if profile.MBTI.Type == "" || profile.Personality == "" {
 		t.Fatalf("dream distill should backfill emotion/mbti: %+v", profile)
 	}
 

@@ -19,13 +19,15 @@ func TestDreamReportContract(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// Nothing to consolidate: a zero-valued success report, no stages.
+	// Nothing to consolidate: a zero-valued success report; the l6_prune
+	// retention stage still runs on every Dream.
 	rep, err := sess.Dream(ctx, "")
 	if err != nil || rep == nil {
 		t.Fatalf("dream on empty domain: rep=%v err=%v", rep, err)
 	}
-	if rep.ConsolidatedScenes != 0 || rep.L2TopicsCompressed != 0 || len(rep.Stages) != 0 {
-		t.Fatalf("noop report = %+v, want zero counts and no stages", rep)
+	if rep.ConsolidatedScenes != 0 || rep.L2TopicsCompressed != 0 ||
+		len(rep.Stages) != 1 || rep.Stages[0].Name != "l6_prune" || rep.Stages[0].Status != "ok" {
+		t.Fatalf("noop report = %+v, want zero counts and only the ok l6_prune stage", rep)
 	}
 
 	// Invalid scene id fails fast before any stage runs.

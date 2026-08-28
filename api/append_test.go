@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -56,23 +55,23 @@ func TestAppendL4MessageFacade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if res.NewTopicID == 0 {
+	if res.NewTopicID == "" {
 		t.Fatal("search created no topic")
 	}
-	topicID := common.FormatHash(res.NewTopicID)
+	topicID := res.NewTopicID
 
-	id, err := db.AppendL4Message(topicID, "用户补充", ts+1, core.RoleUser)
+	id, err := db.AppendL4Message(topicID, "用户补充", ts+1, core.RoleUser, core.ContentText)
 	if err != nil {
 		t.Fatalf("AppendL4Message: %v", err)
 	}
-	if id == 0 {
-		t.Fatal("AppendL4Message returned zero id")
+	if id == "" {
+		t.Fatal("AppendL4Message returned empty id")
 	}
-	arc, err := db.GetArchive(common.FormatHash(id))
+	arc, err := db.GetArchive(id)
 	if err != nil {
 		t.Fatalf("GetArchive: %v", err)
 	}
-	if arc.Role != core.RoleUser || arc.Content != "用户补充" || arc.ContextID != res.NewTopicID {
+	if arc.Role != core.RoleUser || arc.Content != "用户补充" || arc.ContextID != res.NewTopicID || arc.ContentType != core.ContentText {
 		t.Fatalf("unexpected archive: %+v", arc)
 	}
 }

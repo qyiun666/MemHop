@@ -11,7 +11,6 @@ import (
 	"cmp"
 	"slices"
 
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
@@ -128,7 +127,7 @@ func collectSceneHits(agentID uint64, engine *core.StorageEngine, l2Meta *index.
 			Engine:  engine,
 			AgentID: agentID,
 			MetaIdx: l2Meta,
-			SceneID: common.FormatHash(sid),
+			SceneID: sid,
 			Depth:   1,
 			Num:     2,
 		})

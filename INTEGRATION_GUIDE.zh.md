@@ -24,7 +24,7 @@
 | **单实例** | 一个 `.meh` 文件被排他锁独占；同一文件不能开第二个 `*DB` |
 | **串行调用** | 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行；宿主无需自行排队。`Lock()`/`Unlock()` 保留给宿主对文件做旁路写入的关键区——只串行化**默认域**，其他域照常运行；对已关闭的 DB 调用 `Lock()` 会 panic（此时 `Unlock()` 为空操作） |
 | **LLM 硬依赖** | Search / Update / RefineTopicKeywords 内部做关键词抽取，LLM 不可用直接报错（不降级） |
-| **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；宿主按不透明字符串传递，uint64 用 `fmt.Sprintf("%016x", n)` 格式化（api 未再导出 ID 工具函数） |
+| **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；宿主按不透明字符串传递，响应里的 id 原样回传即可；`api.FormatID` / `api.ParseID` / `api.FormatAgentID` / `api.ParseAgentID` 覆盖极少数转换场景 |
 | **时间戳** | 一律 Unix 毫秒；`<= 0` 视为非法参数（`ErrInvalidQuery`） |
 
 ---
@@ -146,11 +146,11 @@ res, err := db.Search(ctx, api.SearchQuery{
 
 | 字段 | 内容 | 宿主用途 |
 |---|---|---|
-| `Profile` | L0 画像快照（名字/角色/性格/偏好/词汇表/风格/情绪模式） | 可拼入系统提示词 |
-| `ProfileBrief` | 紧凑画像摘要（名字/角色/主要偏好/风格/情绪，有界） | 轻量按轮注入；仅在需要时拉完整 `Profile` |
+| `Profile` | L0 画像快照（名字/角色/性格/情绪/MBTI/偏好） | 可拼入系统提示词 |
+| `ProfileBrief` | 紧凑画像摘要（名字/角色/性格/主要偏好/情绪，有界） | 轻量按轮注入；仅在需要时拉完整 `Profile` |
 | `Contexts` | 命中场景的上下文（`TopicSlot` 列表，深度≤1） | **拼进本次 LLM prompt 的记忆** |
 | `AssociatedContexts` | 关联场景的主题（L1 超图扩散激活） | 可选附加记忆 |
-| `NewTopicID` | 本轮新建主题 ID（16 位 hex）；0=命中旧主题 | 传给 Update 使用 |
+| `NewTopicID` | 本轮新建主题 ID（16 位 hex）；`""`=命中旧主题 | 传给 Update 使用 |
 
 **副作用须知（Search 是写操作，不只读）**：LLM 抽关键词 → 三通道检索（BM25 + f32 向量 + 实体 BK-Tree，RRF 融合）→ 建主题 + 编码器算 centroid 向量 + 写一条 L4 原文存档 + 关联 L3 图谱 + 激活场景 + 场景使用计数（并入场景记录）。编码器不可用直接报错。
 
@@ -183,12 +183,15 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 巩固全部活跃场景
 ```go
 // 1. 第一条消息用 Search 建主题（拿到 topicID）。
 res, _ := db.Search(ctx, api.SearchQuery{Text: userMsg1, Timestamp: t1})
-topicID := fmt.Sprintf("%016x", res.NewTopicID)
+topicID := res.NewTopicID
 
 // 2. 后续消息追加到同一主题。role 是裸 uint8：
 //    0 = 用户，1 = agent，2 = system，3 = dream（>3 拒绝）。
-id1, err := db.AppendL4Message(topicID, userMsg2, t2, 0)   // 追加用户原文
-id2, err := db.AppendL4Message(topicID, agentMsg, t3, 1)   // 追加 agent 原文
+//    contentType 选记录类别：文本类（text/document/code）的 Content 存原文；
+//    媒体类（image/audio/video）的 Content 存路径或 URI，由宿主解析。
+id1, err := db.AppendL4Message(topicID, userMsg2, t2, 0, api.ContentText)
+id2, err := db.AppendL4Message(topicID, agentMsg, t3, 1, api.ContentText)
+id3, err := db.AppendL4Message(topicID, "img://shot.png", t3+1, 0, api.ContentImage)
 
 // 3. 归档最后回复（AppendL4Message 或 Update）。
 db.Update(topicID, finalReply, t4)
@@ -198,7 +201,7 @@ db.Update(topicID, finalReply, t4)
 if err := db.RefineTopicKeywords(ctx, topicID); err != nil { /* LLM 失败等 */ }
 ```
 
-- `AppendL4Message(topicID, text, timestamp, role) (uint64, error)` — 纯存储追加：**不抽关键词、不调 LLM**（LLM 不可用时仍可调用）；新 id 自动追加进主题 L4Refs。返回裸 uint64 id，用 `fmt.Sprintf("%016x", id)` 转 16 位 hex。
+- `AppendL4Message(topicID, text, timestamp, role, contentType) (string, error)` — 纯存储追加：**不抽关键词、不调 LLM**（LLM 不可用时仍可调用）；新 id 自动追加进主题 L4Refs。返回新档案的 16 位 hex id。内容类型约定：`text`/`document`/`code` 的 `Content` 存原文；`image`/`audio`/`video` 的 `Content` 存路径或 URI（mime/size/sha256 放 `Metadata`）。未定义值拒绝。
 - `RefineTopicKeywords(ctx, topicID) error` — 守卫 + 幂等：仅当 `L4Refs > 2` **且** user/agent 关键词轨任一非空时执行，否则 no-op 返回 nil。流程：按 L4Refs 顺序合并全量 L4 原文 → LLM 提取 → 存 `FusedKeywords` 并清空双轨（**保留时间戳**，Dream 压缩依赖）→ 重建 BM25。错误发生在写入前，主题保持原样。
 
 ---
@@ -235,9 +238,14 @@ res, err := db.ImportL3([]api.L3ImportItem{{
     NodeType: "project",            // person / project / preference ...
     Content:  "小明正在开发 MemHop",
     Keywords: []string{"小明", "MemHop"},
+    SourceRef: "docs/xiaoming.md:1", // 位置引用（可选）
+    Related:  []api.L3Relation{{Title: "小明", Kind: api.EdgePartOf}}, // 关系边（可选）
 }}, api.L3ImportMerge)                 // Skip / Merge / Overwrite
-// 返回 CreatedIDs / UpdatedIDs / SkippedCount / Errors
+// 返回 CreatedIDs / UpdatedIDs / SkippedCount / EdgesCreated / Errors
 ```
+
+`Related` 目标按标题在同图内解析，可在同批条目的后文（两阶段导入）；重导
+入同一批不会重复建边；无法解析 / 自引用 / 非法 kind 的条目记入 `Errors`。
 
 `GetL3 / ListL3 / QueryL3Nodes / QueryL3Subgraph / UpdateL3 / DeleteL3`。Search 检索时自动把匹配的图谱挂到新主题（L3Refs）——这正是 `DirectedL3ID` 限定检索的原理。
 
@@ -249,10 +257,11 @@ arcs, err := db.SearchL4(api.L4Query{
     // Start: t0, End: t1,  // 模式2：时间范围（ms）
     // IDs: []string{...},  // 模式3：按 ID
     // TopicID: &topicHex,  // 附加过滤：只查该主题的存档
+    // Type: &api.ContentImage, // 附加过滤：只查该内容类型
 })
 ```
 
-`ArchiveSlot` 字段：`ContentType`（text/image/video/document/audio/code）、`Role`（0=user/1=agent/2=system/3=dream）、`ContextID`、`CreatedAt`、`Content`、`Metadata`。单条读取用 `db.GetArchive(id)`。
+`ArchiveSlot` 字段：`ContentType`（text/image/video/document/audio/code）、`Role`（0=user/1=agent/2=system/3=dream）、`ContextID`、`CreatedAt`、`Content`、`Metadata`——媒体类型的 `Content` 是路径或 URI，不是二进制。单条读取用 `db.GetArchive(id)`。
 
 ### L5 能力卡（宿主把工具/技能登记给 LLM）
 
@@ -265,66 +274,54 @@ arcs, err := db.SearchL4(api.L4Query{
 | `db.ActivateCapability(id)` | 草稿 → 激活 |
 | `db.RecordCapabilityUsage(id, success)` | 使用后反馈 |
 
-> 内置能力工具箱（7 张英文卡：`memhop-guide` 总纲 + 6 张 LLM 可调用说明书）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；说明书卡 `type: "api"`、`ref: "api:MethodName"`，宿主在门面上直接调用。默认分层注入——只投影一行索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `GetCapability(id)` 获取。资源即工具声明（`name/desc/input/output` 与宿主工具规格同构；`input` 为 JSON Schema 字符串），宿主纯字段拷贝即可投影。
+> 内置能力工具箱（6 张英文卡：`memhop-guide` 总纲 + 5 张 LLM 可调用说明书）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；说明书卡 `type: "api"`、`ref: "api:MethodName"`，宿主在门面上直接调用。默认分层注入——只投影一行索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `GetCapability(id)` 获取。资源即工具声明（`name/desc/input/output` 与宿主工具规格同构；`input` 为 JSON Schema 字符串），宿主纯字段拷贝即可投影。
 
 ### L6 轨迹 + 结晶（v1.2.7 新增能力）
 
 ```go
-// 记录关键操作（工具调用 / 子任务 / 决策）。
-err := db.AppendTrajectory(sessionIDHex, api.TrajectorySlot{
-    EventType: "tool_call",   // turn_start / tool_call / tool_result /
+// 每轮一条轨迹：search 开启一轮、update 结束一轮——每轮派生新轮 ID（如 会话ID+轮次 的 hash）。
+err := db.AppendTrajectory(turnIDHex, api.TrajectorySlot{
+    EventType: "tool_call",   // 分类轮内每一步：
+                              // llm_request / llm_output / tool_call / tool_result /
                               // subagent_spawn / subagent_done / context_inject /
-                              // llm_request / llm_output / turn_end
+                              // ask_user / user_reply（自由字符串，库不做白名单校验）
     Payload:   "工具名+入参摘要", // 超 4KB 自动截断
-    // L4Ref: &archiveIDHex,  // 可关联对话存档，避免重复存对话
+    // TopicID: topicIDHex,  // 本轮命中的 L2 话题 ID（search 命中或 update 新建）；
+                              // 结晶时同话题的跨轮轨迹会合并进同一次 prompt
     Timestamp: time.Now().UnixMilli(),
 })
 // Seq / SessionID 由引擎自动分配，宿主不要填
 
-// 判断该会话是否值得结晶（事件量 / 工具调用分布 / 最近活跃度）：
-stats, err := db.TrajectoryStats(sessionIDHex)
-// stats.Steps         — 事件总数
-// stats.ToolUsage     — EventType → 计数（map）
-// stats.LastAppendAt  — 最后事件时间戳（Unix 毫秒）
-
-// L6 → L5：把轨迹沉淀为能力草稿。
-res, err := db.Crystallize(ctx, sessionIDHex)
+// L6 → L5：把轮轨迹沉淀为能力草稿。带 L2 TopicID 的轮会先聚合同话题的
+// 兄弟轮（payload 上限 128KB，超限从最旧丢弃）。
+res, err := db.Crystallize(ctx, turnIDHex)
 // res.CreatedIDs / ReusedIDs / MergedIDs / Errors
 // res.Details — 逐候选处置明细：[]CrystallizeDetail{
 //   {Name, Action: "create|reuse|merge|skip", CapabilityID, Reason}}
 // 草稿随后用 ActivateCapability 激活
 
-// 会话枚举 + 按时间批量清理补全生命周期闭环。
+// 轮枚举（如挑选可结晶轮次）。
 sessions, err := db.ListTrajectorySessions()
-// sessions[i] = TrajectorySessionSummary{SessionID hex, Steps, LastAppendAt}
-n, err := db.PruneTrajectory(beforeUnixMs)    // 删除早于 before 的所有事件
+// sessions[i] = TrajectorySessionSummary{SessionID hex（每轮一条）, Steps, LastAppendAt}
 ```
 
-`ReadTrajectory(sessionID)` 按 Seq 序读全部事件；`DeleteTrajectory(sessionID)` 清理单会话；`PruneTrajectory(before)` 一次清所有会话的旧事件（轨迹是短期数据，宿主负责清，MemHop 不自动清）。
+`ReadTrajectory(turnID)` 按 Seq 序读全部事件。保留期由库内管理：Dream 自动清理 7 天前的事件（L6 是过程索引，持久产物在 L4/L5），无删除接口。
 
 ---
 
-## 9. 导出类型清单（v1.4.0）
+## 9. 导出类型清单（v1.4.1）
 
-| 别名 | 来源 | 用途 |
+| 类别 | 名称 | 用途 |
 |---|---|---|
-| `MemHopConfig` / `Encoder` | internal | 配置 + 自研编码器契约 |
-| **`LlmConfig`** | internal（v1.2.7 新增导出） | `MemHopConfig.LLM` 可字面量构造 |
-| **`MemHopDefaults`** | internal（v1.2.7 新增导出） | 可命名默认配置类型，替代复制 |
-| `SearchQuery` / `SearchResult` | internal | 检索输入/输出 |
-| `SceneContext` / `SceneSlot` | internal / core | 场景视图 |
-| `L3Graph` / `L3ImportItem` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L3Subgraph` | internal | 知识图谱 |
-| `L4Query` / `ArchiveSlot` | internal / core | 原文检索 |
-| `Capability` / `CapabilityListQuery` / `CapabilityPatch` / `CrystallizeResult` / **`CrystallizeDetail`** | core / internal | 能力卡 |
-| **`TrajectoryStats`** / `TrajectorySlot` / `TrajectorySessionSummary` | internal / core | 轨迹 + 统计 |
-| **`DreamReport`** / `DreamStage` | core / internal（v1.4.0 新增） | Dream 巩固管线报告 |
-| **`TopicSlot`** | core（v1.2.7 新增导出） | `SearchResult.Contexts` 元素类型 |
-| **`ResourceRef`** | core（v1.2.7 新增导出） | `Capability.Resources` 元素类型 |
-| `ProfileSlot` / `HypergraphSlot` / `HypergraphNode` / `GraphEdgeKind` | core | 模型 |
+| 配置 | `MemHopConfig` / `Encoder` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | 配置 + 自研编码器契约 |
+| 输入别名 | `SearchQuery` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `CapabilityImport` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `Workflow` | 输入与无 ID 结果（string ID 均为 hex） |
+| 响应 DTO | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | 所有 ID 字段均为 16 位 hex 字符串（v1.4.1 起） |
+| ID 工具 | **`FormatID`** / **`ParseID`** / **`FormatAgentID`** / **`ParseAgentID`**（v1.4.1 新增） | 极少数场景的 hex ⇄ uint64 转换 |
+| 枚举 | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` | 枚举别名 |
 
-枚举常量同样导出：`L3ImportSkip/Merge/Overwrite`、`CapabilityMCP/Skill/API/Composite`、`CapabilityDraft/Active/Deprecated`、`CapabilityOrigin*`、`EdgeRelated...EdgeCustom`。
+枚举常量同样导出：`L3ImportSkip/Merge/Overwrite`、`CapabilityMCP/Skill/API/Composite`、`CapabilityDraft/Active/Deprecated`、`CapabilityOrigin*`、`EdgeRelated...EdgeCustom`、`ContentText/Image/Video/Document/Audio/Code/Other`。
 
-> 注意：`Role*` 常量**未**导出——`AppendL4Message` 直接收裸 `uint8`（0=用户，1=agent，2=system，3=dream）。
+> 注意：`Role*` 常量**未**导出——`AppendL4Message` 直接收裸 `uint8`（0=用户，1=agent，2=system，3=dream）；内容类型用导出的 `Content*` 常量。
 
 ---
 
@@ -340,14 +337,13 @@ if api.CodeOf(err) == api.ErrNotFound { ... }
 
 ---
 
-## 11. 最小可运行骨架（v1.4.0 签名）
+## 11. 最小可运行骨架（v1.4.1 签名）
 
 ```go
 package main
 
 import (
     "context"
-    "fmt"
     "log"
     "os"
     "time"
@@ -385,10 +381,9 @@ func main() {
     if err != nil { log.Fatal(err) }
     _ = res // Profile + Contexts → 拼进 prompt
 
-    // 每轮对话：结束。NewTopicID 是 uint64——先转 16 位 hex
-    // （0 表示命中旧主题，从 Contexts 取已有 ID）。
-    topicID := fmt.Sprintf("%016x", res.NewTopicID)
-    if err := db.Update(topicID, "Agent 回复原文", time.Now().UnixMilli()); err != nil {
+    // 每轮对话：结束。NewTopicID 就是 16 位 hex 主题 ID
+    // （"" 表示命中旧主题，从 Contexts 取已有 ID）。
+    if err := db.Update(res.NewTopicID, "Agent 回复原文", time.Now().UnixMilli()); err != nil {
         log.Fatal(err)
     }
 
@@ -404,12 +399,12 @@ func main() {
 ## 12. 陷阱清单
 
 1. **LLM 挂掉 = 记忆循环挂掉**：Search/Update/RefineTopicKeywords 不降级。集成前先做好 LLM 可用性兜底。
-2. **编码器维度锁死**：`VectorDim` 与模型输出不一致 → Open 失败（`ErrVectorDimMismatch`）；不迁移旧文件——`FormatVersion < 0x0008` 的旧库在 Open 时直接拒绝。
+2. **编码器维度锁死**：`VectorDim` 与模型输出不一致 → Open 失败（`ErrVectorDimMismatch`）；不迁移旧文件——`FormatVersion < 0x0009` 的旧库在 Open 时直接拒绝。
 3. **时间戳用 Unix 毫秒**，`<=0` 报 `ErrInvalidQuery`。
-4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；用 `fmt.Sprintf("%016x", n)` 生成，需要校验时用 `strconv`。
+4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，`api.FormatID` / `api.ParseID` 覆盖极少数转换。
 5. **Search 是写操作**：不需要新建记忆时，读历史用 `SceneContext` / `SearchL4`。
-6. **单文件多 agent 域**：v1.4 起所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），按域完全隔离；旧单 agent 库（`FormatVersion < 0x0008`）无法打开、不做迁移。
+6. **单文件多 agent 域**：v1.4 起所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），按域完全隔离；旧库（`FormatVersion < 0x0009`）无法打开、不做迁移。
 7. **内置能力卡只读**：`UpdateCapability` 对内置卡返回错误。
-8. **轨迹短期数据**：宿主负责清理，MemHop 不自动清——单会话用 `DeleteTrajectory`；全会话按时间批量清理用 `PruneTrajectory(beforeMs)`（可先用 `ListTrajectorySessions` 枚举）。
+8. **轨迹自动过期**：Dream 自动清理 7 天前的事件；对外只有追加与查询（`AppendTrajectory` / `ReadTrajectory` / `ListTrajectorySessions`），无删除接口。
 9. **Capacity 语义（v1.2.7）**：活跃集合无界累积；达到 `Capacity` 时 Update 对最老场景触发 Dream——场景话题数低于 `DreamCompressMinTopics` 时跳过（已预检）。
 10. **`SearchDreamContextThreshold` 默认 30**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用** Search 触发的 Dream——先赋 `*api.DefaultMemHopDefaults` 再覆盖。

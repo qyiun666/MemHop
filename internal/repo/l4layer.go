@@ -16,17 +16,13 @@ import (
 // L4 archive operations: AppendArchiveL4 stores a message (ID =
 // hash(contextID:createdAt:content)); QueryArchiveL4 queries by num
 // (1=keyword, 2=time range, 3=by id).
-func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, contextID string, role uint8, contentType core.ContentType, content string, createdAt int64) (uint64, error) {
-	ctxHash, err := common.ParseID(contextID)
-	if err != nil {
-		return 0, common.NewError(common.ErrInvalidQuery, "parse context id", err)
-	}
-	archiveID := common.HashID(fmt.Sprintf("%s:%d:%s", contextID, createdAt, content))
+func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, contextID uint64, role uint8, contentType core.ContentType, content string, createdAt int64) (uint64, error) {
+	archiveID := common.HashID(fmt.Sprintf("%s:%d:%s", common.FormatHash(contextID), createdAt, content))
 	arc := &core.ArchiveSlot{
 		IDHash:      archiveID,
 		ContentType: contentType,
 		Role:        role,
-		ContextID:   ctxHash,
+		ContextID:   contextID,
 		CreatedAt:   createdAt,
 		Content:     content,
 	}
@@ -50,7 +46,7 @@ func DeleteArchivesL4(engine *core.StorageEngine, agentID uint64, ids []uint64) 
 
 // QueryArchiveL4 queries archives: num==1 keyword substring match, num==2
 // time range [start, end] sorted by CreatedAt, num==3 by id (missing skipped).
-func QueryArchiveL4(engine *core.StorageEngine, agentID uint64, num uint8, keyword string, start, end int64, ids []string) []core.ArchiveSlot {
+func QueryArchiveL4(engine *core.StorageEngine, agentID uint64, num uint8, keyword string, start, end int64, ids []uint64) []core.ArchiveSlot {
 	switch num {
 	case 1: // keyword
 		var out []core.ArchiveSlot
@@ -73,11 +69,7 @@ func QueryArchiveL4(engine *core.StorageEngine, agentID uint64, num uint8, keywo
 		return out
 	case 3: // by id
 		var out []core.ArchiveSlot
-		for _, id := range ids {
-			idHash, err := common.ParseID(id)
-			if err != nil {
-				continue
-			}
+		for _, idHash := range ids {
 			arc, err := core.ReadArchiveSlot(engine, agentID, idHash)
 			if err != nil {
 				continue

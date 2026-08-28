@@ -13,6 +13,7 @@ import (
 	"context"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // Session binds every call to one agent domain.
@@ -54,8 +55,8 @@ func (s *Session) Update(topicID string, text string, timestamp int64) error {
 	return s.db.Update(s.agentID, topicID, text, timestamp)
 }
 
-func (s *Session) AppendL4Message(topicID string, text string, timestamp int64, role uint8) (uint64, error) {
-	return s.db.AppendL4Message(s.agentID, topicID, text, timestamp, role)
+func (s *Session) AppendL4Message(topicID string, text string, timestamp int64, role uint8, contentType core.ContentType) (uint64, error) {
+	return s.db.AppendL4Message(s.agentID, topicID, text, timestamp, role, contentType)
 }
 
 func (s *Session) RefineTopicKeywords(ctx context.Context, topicID string) error {
@@ -68,7 +69,15 @@ func (s *Session) RefineTopicKeywords(ctx context.Context, topicID string) error
 // scenes when sceneID is empty); RunDream takes the domain lock itself and
 // returns a zero-valued report when the domain has no active scenes.
 func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, error) {
-	return s.db.RunDream(ctx, s.agentID, sceneID)
+	var hash uint64
+	if sceneID != "" {
+		var err error
+		hash, err = common.ParseID(sceneID)
+		if err != nil {
+			return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+		}
+	}
+	return s.db.RunDream(ctx, s.agentID, hash)
 }
 
 // ---- L0 profile ----
@@ -203,25 +212,12 @@ func (s *Session) ReadTrajectory(sessionID string) ([]TrajectorySlot, error) {
 	return s.db.ReadTrajectory(s.agentID, sessionID)
 }
 
-func (s *Session) TrajectoryStats(sessionID string) (*TrajectoryStats, error) {
-	return s.db.TrajectoryStats(s.agentID, sessionID)
-}
-
-func (s *Session) DeleteTrajectory(sessionID string) error {
-	return s.db.DeleteTrajectory(s.agentID, sessionID)
-}
-
 // ListTrajectorySessions summarizes the domain's L6 sessions (steps and
-// last-append time each); the returned hex IDs feed DeleteTrajectory /
-// PruneTrajectory / Crystallize directly.
+// last-append time each); the returned hex IDs feed ReadTrajectory /
+// Crystallize directly. Events older than trajectoryRetention are dropped
+// by Dream automatically.
 func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 	return s.db.ListTrajectorySessions(s.agentID)
-}
-
-// PruneTrajectory batch-deletes trajectory events older than the Unix-ms
-// cutoff and reports how many were removed.
-func (s *Session) PruneTrajectory(before int64) (int, error) {
-	return s.db.PruneTrajectory(s.agentID, before)
 }
 
 func (s *Session) Crystallize(ctx context.Context, sessionID string) (*CrystallizeResult, error) {

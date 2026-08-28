@@ -29,31 +29,28 @@ func u64Ptr(v uint64) *uint64 { return new(v) }
 
 func TestProfileSlotRoundtrip(t *testing.T) {
 	p := ProfileSlot{
-		IDHash:          1,
-		Name:            "Meow",
-		Role:            "assistant",
-		Personality:     "friendly, helpful, curious",
-		Preferences:     map[string]string{"language": "Rust", "style": "concise"},
-		Lexicon:         map[string]string{"6": "厉害/牛"},
-		StyleTraits:     []string{"prefers_brevity"},
-		EmotionPatterns: map[string]string{"呵呵": "不满或敷衍"},
+		IDHash:       1,
+		Name:         "Meow",
+		Role:         "assistant",
+		Personality:  "friendly, helpful, curious",
+		EmotionState: EmotionScore{Valence: 0.8, Arousal: 0.4, Dominance: 0.6},
+		MBTI:         MBTIScore{IE: -0.5, NS: 0.2, TF: -0.3, JP: 0.1, Type: "INTJ"},
+		Preferences:  map[string]string{"language": "Rust", "style": "concise"},
+		UpdatedAtMs:  1700000000000,
 	}
 	var got ProfileSlot
 	jsonRoundtrip(t, p, &got)
-	if got.IDHash != p.IDHash || got.Name != p.Name {
+	if got.IDHash != p.IDHash || got.Name != p.Name || got.Personality != p.Personality {
 		t.Fatalf("mismatch: %+v", got)
+	}
+	if got.EmotionState != p.EmotionState || got.MBTI != p.MBTI {
+		t.Fatalf("distilled signals mismatch: %+v %+v", got.EmotionState, got.MBTI)
 	}
 	if got.Preferences["language"] != "Rust" {
 		t.Fatalf("preferences mismatch")
 	}
-	if got.Lexicon["6"] != "厉害/牛" {
-		t.Fatalf("lexicon mismatch")
-	}
-	if len(got.StyleTraits) != 1 || got.StyleTraits[0] != "prefers_brevity" {
-		t.Fatalf("style_traits mismatch")
-	}
-	if got.EmotionPatterns["呵呵"] != "不满或敷衍" {
-		t.Fatalf("emotion_patterns mismatch")
+	if got.UpdatedAtMs != p.UpdatedAtMs {
+		t.Fatalf("updated_at_ms mismatch")
 	}
 }
 
@@ -244,7 +241,7 @@ func TestArchiveSlotImagePath(t *testing.T) {
 func TestTrajectorySlotRoundtrip(t *testing.T) {
 	ev := TrajectorySlot{
 		IDHash: 1, SessionID: 42, Seq: 2, EventType: "tool_call",
-		Payload: `{"tool":"read"}`, L4Ref: new(uint64(7)), Timestamp: 1000,
+		Payload: `{"tool":"read"}`, TopicID: 7, Timestamp: 1000,
 	}
 	var got TrajectorySlot
 	jsonRoundtrip(t, ev, &got)
@@ -252,7 +249,7 @@ func TestTrajectorySlotRoundtrip(t *testing.T) {
 		got.EventType != ev.EventType || got.Payload != ev.Payload || got.Timestamp != ev.Timestamp {
 		t.Fatalf("mismatch: %+v", got)
 	}
-	if got.L4Ref == nil || *got.L4Ref != 7 {
-		t.Fatalf("l4_ref mismatch")
+	if got.TopicID != 7 {
+		t.Fatalf("topic_id mismatch: %+v", got)
 	}
 }

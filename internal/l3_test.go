@@ -139,3 +139,82 @@ func TestImportL3RejectsUnknownMode(t *testing.T) {
 		t.Fatalf("no graph should be created for invalid mode: %+v", got)
 	}
 }
+
+func TestImportL3SourceRef(t *testing.T) {
+	db := newL3TestDB(t)
+	items := []L3ImportItem{{
+		Title: "main.go", Domain: "proj", NodeType: "file",
+		Content: "entrypoint", SourceRef: "cmd/memhop-mcp/main.go:1",
+	}}
+	if _, err := db.ImportL3(core.DefaultAgentID, items, L3ImportOverwrite); err != nil {
+		t.Fatal(err)
+	}
+	graph := l3TestGraph(t, db)
+	if got := graph.Nodes[0].SourceRef; got == nil || *got != "cmd/memhop-mcp/main.go:1" {
+		t.Fatalf("source ref: %v", got)
+	}
+}
+
+// TestImportL3Relations: Related entries become graph hyperedges regardless
+// of item order (a relation may target a later item), and re-importing the
+// same batch does not duplicate edges (deterministic edge ids).
+func TestImportL3Relations(t *testing.T) {
+	db := newL3TestDB(t)
+	items := []L3ImportItem{
+		{Title: "main.go", Domain: "proj", NodeType: "file", Content: "m",
+			Related: []L3Relation{{Title: "later.go", Kind: GraphEdgeKind(EdgeDependency)}}},
+		{Title: "later.go", Domain: "proj", NodeType: "file", Content: "l"},
+	}
+	res, err := db.ImportL3(core.DefaultAgentID, items, L3ImportOverwrite)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.EdgesCreated != 1 {
+		t.Fatalf("edges created: %+v", res)
+	}
+	graph := l3TestGraph(t, db)
+	if len(graph.Edges) != 1 {
+		t.Fatalf("edges: %+v", graph.Edges)
+	}
+	if e := graph.Edges[0]; e.Kind != EdgeDependency || len(e.NodeIDs) != 2 {
+		t.Fatalf("edge: kind=%v nodes=%v", e.Kind, e.NodeIDs)
+	}
+
+	if _, err := db.ImportL3(core.DefaultAgentID, items, L3ImportOverwrite); err != nil {
+		t.Fatal(err)
+	}
+	if graph := l3TestGraph(t, db); len(graph.Edges) != 1 {
+		t.Fatalf("re-import duplicated edges: %+v", graph.Edges)
+	}
+}
+
+// TestImportL3RelationErrors: unresolvable, self-referencing and invalid-kind
+// relations are reported per entry while the node itself still imports.
+func TestImportL3RelationErrors(t *testing.T) {
+	db := newL3TestDB(t)
+	items := []L3ImportItem{{
+		Title: "a", Domain: "p", Content: "a",
+		Related: []L3Relation{
+			{Title: "ghost"},
+			{Title: "a", Kind: GraphEdgeKind(EdgeRelated)},
+			{Title: "a", Kind: GraphEdgeKind(99)},
+		},
+	}}
+	res, err := db.ImportL3(core.DefaultAgentID, items, L3ImportSkip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Errors) != 3 {
+		t.Fatalf("errors: %+v", res.Errors)
+	}
+	if res.EdgesCreated != 0 {
+		t.Fatalf("edges created: %+v", res)
+	}
+	graph := l3TestGraph(t, db)
+	if len(graph.Edges) != 0 {
+		t.Fatalf("edges: %+v", graph.Edges)
+	}
+	if len(graph.Nodes) != 1 {
+		t.Fatalf("node should still import: %+v", graph.Nodes)
+	}
+}

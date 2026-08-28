@@ -33,13 +33,13 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 		out = db.queryNodesByIDs(agentID, graphHash, q.IDs)
 	case q.Keyword != "":
 		kw := strings.ToLower(q.Keyword)
-		for _, n := range repo.ListNodeL3(db.engine, agentID, q.GraphID) {
+		for _, n := range repo.ListNodeL3(db.engine, agentID, graphHash) {
 			if nodeMatchesKeyword(n, kw) {
 				out = append(out, n)
 			}
 		}
 	case q.NodeType != "":
-		for _, n := range repo.ListNodeL3(db.engine, agentID, q.GraphID) {
+		for _, n := range repo.ListNodeL3(db.engine, agentID, graphHash) {
 			if n.NodeType == q.NodeType {
 				out = append(out, n)
 			}
@@ -97,7 +97,7 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	startHash, err := db.resolveSubgraphStart(agentID, graphID, startNodeID)
+	graphHash, startHash, err := db.resolveSubgraphStart(agentID, graphID, startNodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -106,7 +106,7 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 	}
 
 	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs fully connected.
-	adj, edges := db.subgraphAdjacency(agentID, graphID, edgeKinds)
+	adj, edges := db.subgraphAdjacency(agentID, graphHash, edgeKinds)
 
 	// BFS level order: maxDepth hops, one hop per round.
 	visited := bfsWithinDepth(startHash, adj, maxDepth)
@@ -129,30 +129,30 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 
 // resolveSubgraphStart parses the graph/start ids and verifies the start
 // node exists and belongs to the requested graph.
-func (db *DB) resolveSubgraphStart(agentID uint64, graphID, startNodeID string) (uint64, error) {
-	graphHash, err := common.ParseID(graphID)
+func (db *DB) resolveSubgraphStart(agentID uint64, graphID, startNodeID string) (graphHash, startHash uint64, err error) {
+	graphHash, err = common.ParseID(graphID)
 	if err != nil {
-		return 0, common.NewError(common.ErrInvalidQuery, "parse graph id", err)
+		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse graph id", err)
 	}
-	startHash, err := common.ParseID(startNodeID)
+	startHash, err = common.ParseID(startNodeID)
 	if err != nil {
-		return 0, common.NewError(common.ErrInvalidQuery, "parse start node id", err)
+		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse start node id", err)
 	}
 	startNode, err := core.ReadHypergraphNode(db.engine, agentID, startHash)
 	if err != nil {
-		return 0, common.NewError(common.ErrNotFound, "start node not found", err)
+		return 0, 0, common.NewError(common.ErrNotFound, "start node not found", err)
 	}
 	if startNode.GraphID != graphHash {
-		return 0, common.NewError(common.ErrInvalidQuery,
+		return 0, 0, common.NewError(common.ErrInvalidQuery,
 			"start node does not belong to the requested graph")
 	}
-	return startHash, nil
+	return graphHash, startHash, nil
 }
 
 // subgraphAdjacency builds the undirected adjacency map from the graph's
 // edges (restricted to edgeKinds when non-empty) and returns the kept
 // edges alongside.
-func (db *DB) subgraphAdjacency(agentID uint64, graphID string, edgeKinds []core.GraphEdgeKind) (map[uint64]map[uint64]struct{}, []core.HypergraphEdge) {
+func (db *DB) subgraphAdjacency(agentID uint64, graphID uint64, edgeKinds []core.GraphEdgeKind) (map[uint64]map[uint64]struct{}, []core.HypergraphEdge) {
 	adj := make(map[uint64]map[uint64]struct{})
 	var edges []core.HypergraphEdge
 	for _, e := range repo.ListEdgeL3(db.engine, agentID, graphID) {

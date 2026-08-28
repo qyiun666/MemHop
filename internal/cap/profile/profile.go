@@ -15,13 +15,14 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// Brief renders a compact profile digest for prompt injection: name,
-// role, top preferences, style traits and emotion patterns, bounded so the
-// per-turn Search payload stays small. Hosts needing the full profile read
-// it once via GetL0 instead of every turn.
+// Brief renders a compact profile digest for prompt injection: identity,
+// personality, MBTI, top preferences and the current emotional state,
+// bounded so the per-turn Search payload stays small. Hosts needing the
+// full profile read it once via GetL0 instead of every turn.
 func Brief(slot core.ProfileSlot) string {
-	if slot.Name == "" && slot.Role == "" && len(slot.Preferences) == 0 &&
-		len(slot.StyleTraits) == 0 && len(slot.EmotionPatterns) == 0 {
+	if slot.Name == "" && slot.Role == "" && slot.Personality == "" &&
+		slot.MBTI.Type == "" && len(slot.Preferences) == 0 &&
+		slot.EmotionState == (core.EmotionScore{}) {
 		return ""
 	}
 	var b strings.Builder
@@ -31,20 +32,20 @@ func Brief(slot core.ProfileSlot) string {
 	if slot.Role != "" {
 		fmt.Fprintf(&b, "role: %s\n", slot.Role)
 	}
+	if slot.Personality != "" {
+		fmt.Fprintf(&b, "personality: %s\n", slot.Personality)
+	}
+	if slot.MBTI.Type != "" {
+		fmt.Fprintf(&b, "mbti: %s\n", slot.MBTI.Type)
+	}
 	if len(slot.Preferences) > 0 {
 		b.WriteString("preferences: ")
 		writeKV(&b, slot.Preferences, 5)
 		b.WriteByte('\n')
 	}
-	if len(slot.StyleTraits) > 0 {
-		b.WriteString("style: ")
-		b.WriteString(strings.Join(head3(slot.StyleTraits), ", "))
-		b.WriteByte('\n')
-	}
-	if len(slot.EmotionPatterns) > 0 {
-		b.WriteString("emotions: ")
-		writeKV(&b, slot.EmotionPatterns, 3)
-		b.WriteByte('\n')
+	if slot.EmotionState != (core.EmotionScore{}) {
+		fmt.Fprintf(&b, "emotions: valence=%.2f arousal=%.2f dominance=%.2f\n",
+			slot.EmotionState.Valence, slot.EmotionState.Arousal, slot.EmotionState.Dominance)
 	}
 	return b.String()
 }
@@ -72,11 +73,4 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "…"
-}
-
-func head3(s []string) []string {
-	if len(s) <= 3 {
-		return s
-	}
-	return s[:3]
 }

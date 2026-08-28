@@ -37,7 +37,7 @@ func (db *DB) Update(agentID uint64, topicID string, text string, timestamp int6
 	}
 	// Validate the topic before any write or LLM call: a missing topic must
 	// not leave an orphan L4 archive behind.
-	topic, err := ac.loadTopicForWrite(db, topicID)
+	topic, err := ac.loadTopicForWrite(db, parsedID)
 	if err != nil {
 		return err
 	}
@@ -49,14 +49,14 @@ func (db *DB) Update(agentID uint64, topicID string, text string, timestamp int6
 	if err != nil {
 		return err
 	}
-	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, topicID, core.RoleAgent, core.ContentText, text, timestamp)
+	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, parsedID, core.RoleAgent, core.ContentText, text, timestamp)
 	if err != nil {
 		return err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, topicID, []uint64{archiveID}) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, parsedID, []uint64{archiveID}) {
 		return common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
-	if !repo.UpdateTopicL2(db.engine, agentID, topicID, keywords, timestamp) {
+	if !repo.UpdateTopicL2(db.engine, agentID, parsedID, keywords, timestamp) {
 		return common.NewError(common.ErrIO, "update topic keywords", nil)
 	}
 	// Update BM25: uncompressed topics carry User+Agent keywords (compressed
@@ -89,7 +89,7 @@ func (db *DB) triggerCapacityDream(ac *agentContext, agentID uint64) error {
 		Engine:  db.engine,
 		AgentID: agentID,
 		MetaIdx: ac.l2Meta,
-		SceneID: common.FormatHash(oldest),
+		SceneID: oldest,
 		Depth:   1,
 		Num:     2,
 	})
@@ -103,9 +103,11 @@ func (db *DB) triggerCapacityDream(ac *agentContext, agentID uint64) error {
 // append — no keyword extraction, no LLM call. The new record id is
 // appended to the topic's L4Refs (append + DedupSorted). role must be one
 // of core.RoleUser / core.RoleAgent (RoleSystem / RoleDream also defined);
-// undefined values are rejected. Returns the new L4 record id (uint64
+// contentType must be a defined core.ContentType — text-like types carry
+// the original text in Content, media types (image/audio/video) carry a
+// path or URI the host resolves. Returns the new L4 record id (uint64
 // hash); hosts format it with common.FormatHash.
-func (db *DB) AppendL4Message(agentID uint64, topicID string, text string, timestamp int64, role uint8) (uint64, error) {
+func (db *DB) AppendL4Message(agentID uint64, topicID string, text string, timestamp int64, role uint8, contentType core.ContentType) (uint64, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return 0, err
@@ -117,19 +119,23 @@ func (db *DB) AppendL4Message(agentID uint64, topicID string, text string, times
 	if role > core.RoleDream {
 		return 0, common.NewError(common.ErrInvalidQuery, "AppendL4Message: undefined role")
 	}
-	if _, err := common.ParseID(topicID); err != nil {
+	if contentType > core.ContentCode && contentType != core.ContentOther {
+		return 0, common.NewError(common.ErrInvalidQuery, "AppendL4Message: undefined content type")
+	}
+	parsedID, err := common.ParseID(topicID)
+	if err != nil {
 		return 0, err
 	}
 	// Validate the topic before any write: a missing topic must not leave
 	// an orphan L4 archive behind (same guard as Update).
-	if _, err := ac.loadTopicForWrite(db, topicID); err != nil {
+	if _, err := ac.loadTopicForWrite(db, parsedID); err != nil {
 		return 0, err
 	}
-	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, topicID, role, core.ContentText, text, timestamp)
+	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, parsedID, role, contentType, text, timestamp)
 	if err != nil {
 		return 0, err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, topicID, []uint64{archiveID}) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, parsedID, []uint64{archiveID}) {
 		return 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
 	return archiveID, nil
@@ -157,7 +163,7 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, agentID uint64, topicID s
 	}
 	// Validate the topic before any LLM call: a missing topic must not
 	// leave a half-written refine behind.
-	topic, err := ac.loadTopicForWrite(db, topicID)
+	topic, err := ac.loadTopicForWrite(db, parsedID)
 	if err != nil {
 		return err
 	}
@@ -181,7 +187,7 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, agentID uint64, topicID s
 	if len(keywords) == 0 {
 		return common.NewError(common.ErrLLM, "refine extracted no keywords")
 	}
-	if !repo.RefineTopicKeywordsL2(db.engine, agentID, topicID, keywords) {
+	if !repo.RefineTopicKeywordsL2(db.engine, agentID, parsedID, keywords) {
 		return common.NewError(common.ErrIO, "refine topic keywords", nil)
 	}
 	// Refresh the L2Meta entry then rebuild the BM25 document: AddDocument
@@ -195,11 +201,7 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, agentID uint64, topicID s
 // joinedL4Messages returns the topic's L4 archive contents concatenated in
 // L4Refs order (missing archives skipped) as the keyword extraction source.
 func (db *DB) joinedL4Messages(agentID uint64, topic *core.TopicSlot) string {
-	ids := make([]string, 0, len(topic.L4Refs))
-	for _, id := range topic.L4Refs {
-		ids = append(ids, common.FormatHash(id))
-	}
-	archives := repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, ids)
+	archives := repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, topic.L4Refs)
 	parts := make([]string, 0, len(archives))
 	for _, a := range archives {
 		parts = append(parts, a.Content)

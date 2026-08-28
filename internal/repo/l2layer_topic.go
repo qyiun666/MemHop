@@ -22,7 +22,7 @@ type TopicListQuery struct {
 	Engine  *core.StorageEngine
 	AgentID uint64
 	MetaIdx *index.L2MetaIndex
-	SceneID string
+	SceneID uint64
 	Depth   uint8
 	Num     uint8
 }
@@ -32,7 +32,6 @@ type TopicListQuery struct {
 // results sorted by UserTimestamp for modes 1/2.
 func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 	var idHash uint64
-	var err error
 	depth := q.Depth
 	if depth == 0 {
 		depth = 1
@@ -40,10 +39,7 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 		depth = MaxDepth
 	}
 	if q.Num != 1 {
-		idHash, err = common.ParseID(q.SceneID)
-		if err != nil {
-			return nil, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
-		}
+		idHash = q.SceneID
 	}
 	if q.Num == 3 {
 		slot, err := core.ReadTopicSlot(q.Engine, q.AgentID, idHash)
@@ -87,7 +83,7 @@ func WriteVecCentroid(engine *core.StorageEngine, agentID uint64, vec []float32)
 		return 0, common.NewError(common.ErrInvalidQuery, "empty centroid vector", nil)
 	}
 	data := common.F32SliceToBytes(vec)
-	idHash := common.HashID(string(data))
+	idHash := common.HashBytes(data)
 	if _, err := engine.WriteRecord(agentID, core.RecVecCentroid, idHash, data); err != nil {
 		return 0, err
 	}
@@ -96,12 +92,8 @@ func WriteVecCentroid(engine *core.StorageEngine, agentID uint64, vec []float32)
 
 // CreateTopicL2 creates a topic (ID from ComputeTopicID, depth 1);
 // centroidRef 0 means no vector.
-func CreateTopicL2(engine *core.StorageEngine, agentID uint64, sceneID string, userKeywords []string, userTS int64, centroidRef uint64) bool {
-	sceneHash, err := common.ParseID(sceneID)
-	if err != nil {
-		return false
-	}
-	return CreateTopicL2WithID(engine, agentID, sceneHash, core.ComputeTopicID(sceneHash, userTS, 0),
+func CreateTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint64, userKeywords []string, userTS int64, centroidRef uint64) bool {
+	return CreateTopicL2WithID(engine, agentID, sceneID, core.ComputeTopicID(sceneID, userTS, 0),
 		userKeywords, userTS, centroidRef)
 }
 
@@ -123,14 +115,10 @@ func CreateTopicL2WithID(engine *core.StorageEngine, agentID uint64, sceneHash u
 // CreateFusedTopicL2 creates a compressed topic (ID from ComputeTopicID,
 // depth 1): only FusedKeywords carry values; L3/L4 refs are added via
 // AppendTopicL3RefsL2 / UpdateTopicL4RefsL2.
-func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID string, fusedKeywords []string, userTS, agentTS int64, childrenIDs []uint64, centroidRef uint64) bool {
-	sceneHash, err := common.ParseID(sceneID)
-	if err != nil {
-		return false
-	}
+func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint64, fusedKeywords []string, userTS, agentTS int64, childrenIDs []uint64, centroidRef uint64) bool {
 	topic := core.TopicSlot{
-		ID:              core.ComputeTopicID(sceneHash, userTS, agentTS),
-		SceneID:         sceneHash,
+		ID:              core.ComputeTopicID(sceneID, userTS, agentTS),
+		SceneID:         sceneID,
 		Depth:           1,
 		UserTimestamp:   userTS,
 		AgentTimestamp:  agentTS,
@@ -142,17 +130,12 @@ func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID stri
 }
 
 // mutateTopic is the shared read-modify-write template for L2 topic fields:
-// parse the hex ID, leniently read the record, apply mutate, write back.
-// Returns false when the id is invalid, the record is unreadable or the
-// write fails.
+// leniently read the record by idHash, apply mutate, write back. Returns
+// false when the record is unreadable or the write fails.
 func mutateTopic(
-	engine *core.StorageEngine, agentID uint64, id string,
+	engine *core.StorageEngine, agentID uint64, idHash uint64,
 	mutate func(*core.TopicSlot),
 ) bool {
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return false
-	}
 	topic, err := core.ReadTopicLenient(engine, agentID, idHash)
 	if err != nil || topic == nil {
 		return false
@@ -161,19 +144,19 @@ func mutateTopic(
 	return core.WriteTopicSlot(engine, agentID, idHash, topic) == nil
 }
 
-func AppendTopicL3RefsL2(engine *core.StorageEngine, agentID uint64, id string, l3Refs []uint64) bool {
+func AppendTopicL3RefsL2(engine *core.StorageEngine, agentID uint64, id uint64, l3Refs []uint64) bool {
 	return mutateTopic(engine, agentID, id, func(t *core.TopicSlot) {
 		t.L3Refs = common.DedupSorted(append(t.L3Refs, l3Refs...))
 	})
 }
 
-func UpdateTopicL4RefsL2(engine *core.StorageEngine, agentID uint64, id string, l4Refs []uint64) bool {
+func UpdateTopicL4RefsL2(engine *core.StorageEngine, agentID uint64, id uint64, l4Refs []uint64) bool {
 	return mutateTopic(engine, agentID, id, func(t *core.TopicSlot) {
 		t.L4Refs = common.DedupSorted(append(t.L4Refs, l4Refs...))
 	})
 }
 
-func UpdateTopicL2(engine *core.StorageEngine, agentID uint64, id string, agentKeywords []string, agentTS int64) bool {
+func UpdateTopicL2(engine *core.StorageEngine, agentID uint64, id uint64, agentKeywords []string, agentTS int64) bool {
 	return mutateTopic(engine, agentID, id, func(t *core.TopicSlot) {
 		t.AgentKeywords = agentKeywords
 		t.AgentTimestamp = agentTS
@@ -183,7 +166,7 @@ func UpdateTopicL2(engine *core.StorageEngine, agentID uint64, id string, agentK
 // RefineTopicKeywordsL2 replaces the topic's keyword tracks with a fused
 // set: FusedKeywords = fused, User/AgentKeywords cleared. Timestamps are
 // preserved — Dream grouping (groupTimestamps) relies on them.
-func RefineTopicKeywordsL2(engine *core.StorageEngine, agentID uint64, id string, fusedKeywords []string) bool {
+func RefineTopicKeywordsL2(engine *core.StorageEngine, agentID uint64, id uint64, fusedKeywords []string) bool {
 	return mutateTopic(engine, agentID, id, func(t *core.TopicSlot) {
 		t.FusedKeywords = fusedKeywords
 		t.UserKeywords = nil
@@ -191,7 +174,7 @@ func RefineTopicKeywordsL2(engine *core.StorageEngine, agentID uint64, id string
 	})
 }
 
-func UpdateChildrenL2(engine *core.StorageEngine, agentID uint64, id string, childrenIDs []uint64) bool {
+func UpdateChildrenL2(engine *core.StorageEngine, agentID uint64, id uint64, childrenIDs []uint64) bool {
 	return mutateTopic(engine, agentID, id, func(t *core.TopicSlot) {
 		t.ChildrenIDs = childrenIDs
 	})

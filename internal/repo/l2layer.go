@@ -96,23 +96,19 @@ func finalizeCompressResult(result *CompressResult) {
 
 // DeleteL2 batch-deletes: num==1 treats ids as scene IDs (all topics of the
 // scene plus the scene record itself); num==2 treats them as topic IDs.
-func DeleteL2(engine *core.StorageEngine, agentID uint64, ids []string, num uint8) bool {
-	hashes, ok := common.ParseAll(ids)
-	if !ok {
-		return false
-	}
+func DeleteL2(engine *core.StorageEngine, agentID uint64, ids []uint64, num uint8) bool {
 	var targets []uint64
 	switch num {
 	case 1: // scenes
-		sceneSet := common.ToSet(hashes)
+		sceneSet := common.ToSet(ids)
 		for _, topic := range core.CollectAllTopics(engine, agentID) {
 			if _, ok := sceneSet[topic.SceneID]; ok {
 				targets = append(targets, topic.ID)
 			}
 		}
-		targets = append(targets, hashes...) // the scene records themselves
+		targets = append(targets, ids...) // the scene records themselves
 	case 2: // topics
-		idSet := common.ToSet(hashes)
+		idSet := common.ToSet(ids)
 		for _, topic := range core.CollectAllTopics(engine, agentID) {
 			if _, ok := idSet[topic.ID]; ok {
 				targets = append(targets, topic.ID)
@@ -127,22 +123,14 @@ func DeleteL2(engine *core.StorageEngine, agentID uint64, ids []string, num uint
 
 // MergeScenesL2 rewrites topics of the secondary scenes to the primary
 // scene in one batch, then deletes the secondary scene records (now empty).
-func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID string, secondaryIDs []string) bool {
-	primaryHash, err := common.ParseID(primaryID)
-	if err != nil {
-		return false
-	}
-	secondaryHashes, ok := common.ParseAll(secondaryIDs)
-	if !ok {
-		return false
-	}
-	secondarySet := common.ToSet(secondaryHashes)
+func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64, secondaryIDs []uint64) bool {
+	secondarySet := common.ToSet(secondaryIDs)
 	var writes []core.RecordEntry
 	for _, topic := range core.CollectAllTopics(engine, agentID) {
 		if _, ok := secondarySet[topic.SceneID]; !ok {
 			continue
 		}
-		topic.SceneID = primaryHash
+		topic.SceneID = primaryID
 		entry, err := core.TopicEntry(agentID, &topic)
 		if err != nil {
 			return false
@@ -171,13 +159,9 @@ func TouchSceneUsage(engine *core.StorageEngine, agentID uint64, sceneID uint64,
 	return core.WriteSceneSlot(engine, agentID, sceneID, slot)
 }
 
-func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []string) []core.SceneSlot {
+func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []uint64) []core.SceneSlot {
 	var out []core.SceneSlot
-	for _, id := range ids {
-		sceneHash, err := common.ParseID(id)
-		if err != nil {
-			continue
-		}
+	for _, sceneHash := range ids {
 		slot, err := core.ReadSceneSlot(engine, agentID, sceneHash)
 		if err != nil {
 			continue

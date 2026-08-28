@@ -10,7 +10,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -46,25 +45,17 @@ func UpsertCapabilityL5(engine *core.StorageEngine, agentID uint64, cap *core.Ca
 	return false, nil
 }
 
-func GetCapabilityL5(engine *core.StorageEngine, agentID uint64, id string) (*core.Capability, error) {
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
-	}
-	return core.ReadCapability(engine, agentID, idHash)
+func GetCapabilityL5(engine *core.StorageEngine, agentID uint64, id uint64) (*core.Capability, error) {
+	return core.ReadCapability(engine, agentID, id)
 }
 
-func DeleteCapabilityL5(engine *core.StorageEngine, agentID uint64, id string) bool {
-	capHash, err := common.ParseID(id)
-	if err != nil {
-		return false
-	}
-	_, err = engine.DeleteRecordBatch(agentID, []uint64{capHash})
+func DeleteCapabilityL5(engine *core.StorageEngine, agentID uint64, id uint64) bool {
+	_, err := engine.DeleteRecordBatch(agentID, []uint64{id})
 	return err == nil
 }
 
 // ActivateCapabilityL5 promotes a draft to active.
-func ActivateCapabilityL5(engine *core.StorageEngine, agentID uint64, id string) (*core.Capability, error) {
+func ActivateCapabilityL5(engine *core.StorageEngine, agentID uint64, id uint64) (*core.Capability, error) {
 	cap, err := GetCapabilityL5(engine, agentID, id)
 	if err != nil {
 		return nil, err
@@ -79,7 +70,7 @@ func ActivateCapabilityL5(engine *core.StorageEngine, agentID uint64, id string)
 
 // RecordCapabilityUsageL5 updates runtime feedback after a host uses a
 // capability.
-func RecordCapabilityUsageL5(engine *core.StorageEngine, agentID uint64, id string, success bool) (*core.Capability, error) {
+func RecordCapabilityUsageL5(engine *core.StorageEngine, agentID uint64, id uint64, success bool) (*core.Capability, error) {
 	cap, err := GetCapabilityL5(engine, agentID, id)
 	if err != nil {
 		return nil, err

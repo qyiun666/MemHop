@@ -8,18 +8,17 @@ package main
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	memhop "github.com/qyiun666/MemHop/api"
 )
 
 type trajectoryAppendArgs struct {
-	SessionID string  `json:"session_id"`
-	EventType string  `json:"event_type"`
-	Payload   string  `json:"payload,omitempty"`
-	L4Ref     *string `json:"l4_ref,omitempty"`
-	Timestamp int64   `json:"timestamp"`
+	SessionID string `json:"session_id"`
+	EventType string `json:"event_type"`
+	Payload   string `json:"payload,omitempty"`
+	TopicID   string `json:"topic_id,omitempty"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 type sessionIDArgs struct {
@@ -37,53 +36,38 @@ func registerL6Tools(s *mcp.Server, db *memhop.Session) {
 func registerTrajectoryAppendTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_append",
-		Description: "向会话追加一条 L6 操作轨迹事件（Seq 自动分配）。event_type 示例：turn_start/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/llm_request/llm_output/turn_end。Payload 超过 4KB 会被截断。",
+		Description: "向本轮轨迹追加一条 L6 操作事件（每轮一个会话 ID：search 开始、update 结束；Seq 自动分配）。event_type 分类轮内每一步：llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply。topic_id 填本轮 search 命中的 L2 话题 ID（结晶时按话题聚合跨轮轨迹）。Payload 超过 4KB 会被截断。",
 		InputSchema: objSchema(map[string]any{
-			"session_id": strProp("会话 ID（16 位 hex），必填"),
+			"session_id": strProp("本轮轨迹 ID（16 位 hex），必填"),
 			"event_type": strProp("事件类型，必填"),
 			"payload":    strProp("事件内容（不超过 4KB）"),
-			"l4_ref":     strProp("关联的 L4 档案 ID（16 位 hex，可选）"),
+			"topic_id":   strProp("本轮命中的 L2 话题 ID（16 位 hex，可选）"),
 			"timestamp":  intProp("Unix 毫秒时间戳，必填"),
 		}, "session_id", "event_type", "timestamp"),
 	}, handle[trajectoryAppendArgs, updateResult](func(a trajectoryAppendArgs) (updateResult, error) {
-		slot, err := toTrajectorySlot(a)
-		if err != nil {
-			return updateResult{}, err
-		}
+		slot := toTrajectorySlot(a)
 		return updateResult{OK: true}, db.AppendTrajectory(a.SessionID, slot)
 	}))
 }
 
-// toTrajectorySlot parses the hex session/l4 refs of an append request
-// into the api DTO (Seq is assigned by the store).
-func toTrajectorySlot(a trajectoryAppendArgs) (memhop.TrajectorySlot, error) {
-	sessionID, err := strconv.ParseUint(a.SessionID, 16, 64)
-	if err != nil {
-		return memhop.TrajectorySlot{}, err
-	}
-	var l4Ref *uint64
-	if a.L4Ref != nil {
-		v, err := strconv.ParseUint(*a.L4Ref, 16, 64)
-		if err != nil {
-			return memhop.TrajectorySlot{}, err
-		}
-		l4Ref = &v
-	}
+// toTrajectorySlot maps the JSON append request into the api DTO (Seq and
+// internal SessionID are assigned by the store).
+func toTrajectorySlot(a trajectoryAppendArgs) memhop.TrajectorySlot {
 	return memhop.TrajectorySlot{
-		SessionID: sessionID,
 		EventType: a.EventType,
 		Payload:   a.Payload,
-		L4Ref:     l4Ref,
+		TopicID:   a.TopicID,
 		Timestamp: a.Timestamp,
-	}, nil
+	}
 }
 
-// registerTrajectoryReadTools installs the trajectory read surface:
-// per-session read/stats/delete plus the domain-wide session list.
+// registerTrajectoryReadTools installs the trajectory read surface: the
+// domain-wide session list plus per-turn reads. Retention is automatic —
+// Dream drops events older than 7 days — so there are no delete tools.
 func registerTrajectoryReadTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_sessions",
-		Description: "列出本租户全部 L6 轨迹会话（16 位 hex 会话 ID、事件数、最后追加时间），用于发现可结晶或可清理的会话。",
+		Description: "列出本租户全部 L6 轮轨迹（每轮一条：16 位 hex 轮 ID、事件数、最后追加时间），用于发现可结晶的轮次；超过 7 天的轨迹由 Dream 自动清理。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs(func() ([]memhop.TrajectorySessionSummary, error) {
 		return db.ListTrajectorySessions()
@@ -91,43 +75,19 @@ func registerTrajectoryReadTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_read",
-		Description: "读取会话的 L6 操作轨迹（按 Seq 升序）。",
+		Description: "读取轮轨迹的全部操作事件（按 Seq 升序）。",
 		InputSchema: objSchema(map[string]any{
-			"session_id": strProp("会话 ID（16 位 hex），必填"),
+			"session_id": strProp("轮轨迹 ID（16 位 hex），必填"),
 		}, "session_id"),
 	}, handle[sessionIDArgs, []memhop.TrajectorySlot](func(a sessionIDArgs) ([]memhop.TrajectorySlot, error) {
 		return db.ReadTrajectory(a.SessionID)
-	}))
-
-	s.AddTool(&mcp.Tool{
-		Name:        "memhop_trajectory_stats",
-		Description: "返回会话 L6 轨迹统计：事件总数、各事件类型计数、最后事件时间戳，供宿主判断该会话是否值得结晶（工具调用数阈值）。",
-		InputSchema: objSchema(map[string]any{
-			"session_id": strProp("会话 ID（16 位 hex），必填"),
-		}, "session_id"),
-	}, handle[sessionIDArgs, memhop.TrajectoryStats](func(a sessionIDArgs) (memhop.TrajectoryStats, error) {
-		stats, err := db.TrajectoryStats(a.SessionID)
-		if err != nil {
-			return memhop.TrajectoryStats{}, err
-		}
-		return *stats, nil
-	}))
-
-	s.AddTool(&mcp.Tool{
-		Name:        "memhop_trajectory_delete",
-		Description: "删除会话的整条 L6 操作轨迹。",
-		InputSchema: objSchema(map[string]any{
-			"session_id": strProp("会话 ID（16 位 hex），必填"),
-		}, "session_id"),
-	}, handle[sessionIDArgs, updateResult](func(a sessionIDArgs) (updateResult, error) {
-		return updateResult{OK: true}, db.DeleteTrajectory(a.SessionID)
 	}))
 }
 
 func registerCrystallizeTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_crystallize",
-		Description: "从会话轨迹提取可复用 L5 能力候选（L6 → L5）。调用 LLM，耗时长；候选保存为 draft，需宿主激活；重复结晶按名称和指纹去重。",
+		Description: "从轮轨迹提取可复用 L5 能力候选（L6 → L5）。本轮轨迹带 L2 话题 ID 时自动聚合同话题的跨轮轨迹再蒸馏。调用 LLM，耗时长；候选保存为 draft，需宿主激活；重复结晶按名称和指纹去重。",
 		InputSchema: objSchema(map[string]any{
 			"session_id": strProp("会话 ID（16 位 hex），必填"),
 		}, "session_id"),

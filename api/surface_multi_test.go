@@ -55,18 +55,14 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session alice: %v", err)
 	}
-	aliceID, err := ParseAgentID(alice)
-	if err != nil {
-		t.Fatalf("parse alice id: %v", err)
-	}
-	if sess.AgentID() != aliceID {
-		t.Fatalf("session id mismatch: %d", sess.AgentID())
+	if sess.AgentID() != alice {
+		t.Fatalf("session id mismatch: %s", sess.AgentID())
 	}
 	res, err := sess.Search(context.Background(), SearchQuery{Text: "alice private memory", AutoCreate: true, Timestamp: 1_700_000_050_000})
 	if err != nil {
 		t.Fatalf("alice search: %v", err)
 	}
-	if err := sess.Update(common.FormatHash(res.NewTopicID), "alice reply", 1_700_000_050_500); err != nil {
+	if err := sess.Update(res.NewTopicID, "alice reply", 1_700_000_050_500); err != nil {
 		t.Fatalf("alice update: %v", err)
 	}
 	// Cross-agent isolation: bob sees none of alice's scenes.
@@ -100,12 +96,8 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	if m.IsClosed() {
 		t.Fatal("multi DB must be open before close")
 	}
-	bobID, err := ParseAgentID(bob)
-	if err != nil {
-		t.Fatalf("parse bob id: %v", err)
-	}
-	if got := internal.FormatAgentID(bobID); got != bob {
-		t.Fatalf("agent hex round-trip: %q != %q", got, bob)
+	if got := sess.AgentID(); !isHexID(got) {
+		t.Fatalf("agent id not hex: %q", got)
 	}
 	if _, err := m.Session("zzzz"); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("Session must reject non-hex ids, got %v", err)
@@ -149,14 +141,14 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session search: %v", err)
 	}
-	topicID := common.FormatHash(res.NewTopicID)
+	topicID := res.NewTopicID
 	if err := s.Update(topicID, "session reply", 1_700_000_060_500); err != nil {
 		t.Fatalf("session update: %v", err)
 	}
 	if err := s.RefineTopicKeywords(ctx, topicID); err != nil {
 		t.Fatalf("session refine: %v", err)
 	}
-	if _, err := s.AppendL4Message(topicID, "more", 1_700_000_060_600, 0); err != nil {
+	if _, err := s.AppendL4Message(topicID, "more", 1_700_000_060_600, 0, 0); err != nil {
 		t.Fatalf("session append: %v", err)
 	}
 	if _, err := s.SearchL4(L4Query{Keyword: "session"}); err != nil {
@@ -166,7 +158,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if err != nil || len(scenes) == 0 {
 		t.Fatalf("session listScenes: %d %v", len(scenes), err)
 	}
-	sceneID := common.FormatHash(scenes[0].SceneID)
+	sceneID := scenes[0].SceneID
 	if ids := s.ActiveSceneIDs(); ids != nil {
 		for _, x := range ids {
 			if !isHexID(x) {
@@ -193,15 +185,15 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session searchL4 reply: %v", err)
 	}
 	if len(arcs) > 0 {
-		if _, err := s.GetArchive(common.FormatHash(arcs[0].IDHash)); err != nil {
+		if _, err := s.GetArchive(arcs[0].IDHash); err != nil {
 			t.Fatalf("session getArchive: %v", err)
 		}
 	}
-	if err := s.MergeScenes(common.FormatHash(scenes[0].SceneID), []string{common.FormatHash(scenes[1].SceneID)}); err != nil {
+	if err := s.MergeScenes(scenes[0].SceneID, []string{scenes[1].SceneID}); err != nil {
 		t.Fatalf("session mergeScenes: %v", err)
 	}
 	// Re-fetch the primary scene list after merge (secondary is gone).
-	sceneID = common.FormatHash(scenes[0].SceneID)
+	sceneID = scenes[0].SceneID
 	// L3 knowledge via session.
 	if _, err := s.ImportL3([]L3ImportItem{{Title: "n1", Domain: "d", NodeType: "c", Content: "x", Keywords: []string{"k"}}}, L3ImportSkip); err != nil {
 		t.Fatalf("session importL3: %v", err)
@@ -210,7 +202,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if err != nil || len(graphs) == 0 {
 		t.Fatalf("session listL3: %d %v", len(graphs), err)
 	}
-	gid := common.FormatHash(graphs[0].IDHash)
+	gid := graphs[0].IDHash
 	if _, err := s.GetL3(gid); err != nil {
 		t.Fatalf("session getL3: %v", err)
 	}
@@ -222,7 +214,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if err != nil || len(nodes) == 0 {
 		t.Fatalf("session queryNodes: %d %v", len(nodes), err)
 	}
-	if _, err := s.QueryL3Subgraph(gid, common.FormatHash(nodes[0].IDHash), 1, nil); err != nil {
+	if _, err := s.QueryL3Subgraph(gid, nodes[0].IDHash, 1, nil); err != nil {
 		t.Fatalf("session querySubgraph: %v", err)
 	}
 	// L5 capability via session (import → get → activate → usage → delete).
@@ -231,7 +223,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session importCap: %v", err)
 	}
-	cid := common.FormatHash(c.IDHash)
+	cid := c.IDHash
 	if _, err := s.GetCapability(cid); err != nil {
 		t.Fatalf("session getCap: %v", err)
 	}
@@ -252,21 +244,15 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session deleteCap: %v", err)
 	}
 	// L6 trajectory via session.
-	traj := common.FormatHash(common.HashID("sess-traj"))
+	traj := internal.FormatAgentID(common.HashID("sess-traj"))
 	if err := s.AppendTrajectory(traj, TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1_700_000_061_000}); err != nil {
 		t.Fatalf("session appendTraj: %v", err)
 	}
 	if evs, err := s.ReadTrajectory(traj); err != nil || len(evs) != 1 {
 		t.Fatalf("session readTraj: %d %v", len(evs), err)
 	}
-	if _, err := s.TrajectoryStats(traj); err != nil {
-		t.Fatalf("session trajStats: %v", err)
-	}
 	if _, err := s.Crystallize(ctx, traj); err != nil {
 		t.Fatalf("session crystallize: %v", err)
-	}
-	if err := s.DeleteTrajectory(traj); err != nil {
-		t.Fatalf("session deleteTraj: %v", err)
 	}
 	// Deletion lifecycle: topic, scene, graph.
 	if err := s.DeleteTopic(topicID); err != nil {

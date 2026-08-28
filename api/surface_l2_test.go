@@ -8,8 +8,6 @@ package api
 import (
 	"context"
 	"testing"
-
-	"github.com/qyiun666/MemHop/internal/common"
 )
 
 func TestSurfaceL2Scenes(t *testing.T) {
@@ -29,7 +27,7 @@ func TestSurfaceL2Scenes(t *testing.T) {
 			t.Fatalf("active scene id not hex: %q", id)
 		}
 	}
-	sc, err := db.SceneContext(common.FormatHash(scenes[0].SceneID))
+	sc, err := db.SceneContext(scenes[0].SceneID)
 	if err != nil || sc == nil || sc.Topics == nil {
 		t.Fatalf("scene context: %v", err)
 	}
@@ -40,8 +38,8 @@ func TestSurfaceL2Scenes(t *testing.T) {
 		}
 	}
 	// Merge primary + secondary.
-	primary := common.FormatHash(scenes[0].SceneID)
-	secondary := common.FormatHash(scenes[1].SceneID)
+	primary := scenes[0].SceneID
+	secondary := scenes[1].SceneID
 	if err := db.MergeScenes(primary, []string{secondary}); err != nil {
 		t.Fatalf("merge scenes: %v", err)
 	}

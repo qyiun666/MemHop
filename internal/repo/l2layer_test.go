@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -79,7 +78,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		t.Fatalf("L2MetaIndex entries = %d, want %d", l2Meta.Len(), len(raw))
 	}
 
-	q := func(mode uint8, sceneID string, depth uint8) ([]core.TopicSlot, error) {
+	q := func(mode uint8, sceneID uint64, depth uint8) ([]core.TopicSlot, error) {
 		return ListTopicsL2(TopicListQuery{
 			Engine:  engine,
 			MetaIdx: l2Meta,
@@ -90,7 +89,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	}
 
 	t.Run("mode1_filters_depth_and_sorts_asc", func(t *testing.T) {
-		got, err := q(1, "", 2)
+		got, err := q(1, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -117,7 +116,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 
 	t.Run("mode2_filters_by_scene", func(t *testing.T) {
-		got, err := q(2, common.FormatHash(sceneA), 2)
+		got, err := q(2, sceneA, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -133,7 +132,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 
 	t.Run("mode3_reads_single_topic", func(t *testing.T) {
-		got, err := q(3, common.FormatHash(11), 0)
+		got, err := q(3, 11, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -143,7 +142,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 
 	t.Run("fields_match_record_exactly", func(t *testing.T) {
-		got, err := q(1, "", 2)
+		got, err := q(1, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -160,7 +159,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 
 	t.Run("nil_meta_falls_back_to_scan", func(t *testing.T) {
-		gotCache, err := q(1, "", 2)
+		gotCache, err := q(1, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -180,7 +179,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		tp := core.TopicSlot{ID: newID, SceneID: sceneB, Depth: 1,
 			UserKeywords: []string{"k5"}, UserTimestamp: 50}
 		l2Meta.Update(index.L2MetaFromTopic(&tp))
-		got, err := q(1, "", 2)
+		got, err := q(1, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -190,7 +189,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 				len(got), got[0].ID, newID)
 		}
 		l2Meta.Remove(newID)
-		got, err = q(1, "", 2)
+		got, err = q(1, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -18,17 +18,25 @@ import (
 // ---- slot models (method signatures of Session / DB) ----
 
 type (
-	ProfileSlot    = core.ProfileSlot
-	SceneSlot      = core.SceneSlot
-	HypergraphSlot = core.HypergraphSlot
-	HypergraphNode = core.HypergraphNode
-	ArchiveSlot    = core.ArchiveSlot
-	Capability     = core.Capability
-	TrajectorySlot = core.TrajectorySlot
-	GraphEdgeKind  = core.GraphEdgeKind
-	TopicSlot      = core.TopicSlot
-	ResourceRef    = core.ResourceRef
+	ProfileSlot      = core.ProfileSlot
+	SceneSlot        = core.SceneSlot
+	HypergraphSlot   = core.HypergraphSlot
+	HypergraphNode   = core.HypergraphNode
+	HypergraphEdge   = core.HypergraphEdge
+	HypergraphSource = core.HypergraphSource
+	ArchiveSlot      = core.ArchiveSlot
+	Capability       = core.Capability
+	TrajectorySlot   = core.TrajectorySlot
+	GraphEdgeKind    = core.GraphEdgeKind
+	TopicSlot        = core.TopicSlot
+	ResourceRef      = core.ResourceRef
+	ContentType      = core.ContentType
+	Workflow         = core.Workflow
 )
+
+// NewError re-exported so the api facade can build domain errors without
+// importing internal/common.
+var NewError = common.NewError
 
 // ---- error contract ----
 
@@ -97,6 +105,18 @@ const (
 	EdgeCustom     = core.EdgeCustom
 )
 
+// ---- L4 content type constants ----
+
+const (
+	ContentText     = core.ContentText
+	ContentImage    = core.ContentImage
+	ContentVideo    = core.ContentVideo
+	ContentDocument = core.ContentDocument
+	ContentAudio    = core.ContentAudio
+	ContentCode     = core.ContentCode
+	ContentOther    = core.ContentOther
+)
+
 // ---- external id rendering ----
 
 // FormatAgentID renders an agentID as its external 16-char hex form.
@@ -104,3 +124,9 @@ func FormatAgentID(agentID uint64) string { return common.FormatHash(agentID) }
 
 // ParseAgentID parses a 16-char hex agentID.
 func ParseAgentID(s string) (uint64, error) { return common.ParseID(s) }
+
+// FormatID renders any record ID as its external 16-char hex form.
+func FormatID(id uint64) string { return common.FormatHash(id) }
+
+// ParseID parses a 16-char hex record ID.
+func ParseID(s string) (uint64, error) { return common.ParseID(s) }

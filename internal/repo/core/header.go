@@ -30,9 +30,13 @@ const (
 // agent_id to the record frame (18 -> 26 bytes) so one file hosts
 // multiple physically separated agent domains, and renumbered the
 // trajectory layer down to L6 (RecL6Trajectory), converging the
-// cognitive stack to L0-L6. Files with 0x0007
-// (or older) are rejected at Open — there is no migration path.
-const FormatVersion uint16 = 0x0008
+// cognitive stack to L0-L6; 0x0009 re-shaped the L0 profile slot into
+// typed distilled signals (EmotionState/MBTI) with explicit field
+// ownership (host-authored identity vs distilled signals), removing the
+// string-encoded emotion_patterns/lexicon/style_traits maps and the
+// keyword-projection profile stage. Files with
+// 0x0008 (or older) are rejected at Open — there is no migration path.
+const FormatVersion uint16 = 0x0009
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

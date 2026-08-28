@@ -12,7 +12,7 @@ import (
 
 var builtinNames = []string{
 	"memhop-guide", "memhop-knowledge", "memhop-scene", "memhop-archive",
-	"memhop-profile", "memhop-trajectory", "memhop-capability",
+	"memhop-profile", "memhop-capability",
 }
 
 // The embedded toolbox must parse into valid active capabilities with

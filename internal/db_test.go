@@ -40,6 +40,7 @@ func testDefaultContext(db *DB) *agentContext {
 	ac := newAgentContext(core.DefaultAgentID, db.baseCtx)
 	ac.sparseIndex = index.NewSparseIndex()
 	ac.l2Meta = index.BuildL2MetaFromEngine(db.engine, core.DefaultAgentID)
+	ac.traj = index.BuildTrajFromEngine(db.engine, core.DefaultAgentID)
 	db.agents[core.DefaultAgentID] = ac
 	return ac
 }

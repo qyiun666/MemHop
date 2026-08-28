@@ -37,14 +37,14 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 
 - **七层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 轨迹，配合 Dream 巩固管线
 - **三通道 RRF 检索** — BM25（gse CJK 分词）+ f32 向量 + 实体/词项模糊匹配（实体索引由已索引 topic 词项自动灌入），通过 Reciprocal Rank Fusion（k=60）融合
-- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0008`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。**与 `0x0007`（及更早）的 `.meh` 数据文件不兼容**——Open 时显式拒绝，无迁移路径
+- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0009`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。**与 `0x0008`（及更早）的 `.meh` 数据文件不兼容**——Open 时显式拒绝，无迁移路径
 - **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（索引、活跃场景、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行
 - **L1 场景超图 + 扩散激活** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）；Search 联想从命中场景沿图扩散激活（每跳 × 边权 × 衰减系数），返回 Top 关联场景的话题作为 `AssociatedContexts`——真正的跨场景联想记忆，边权由 Dream 管线衰减剪枝
-- **Dream 巩固管线** — 仅作用于 L0–L2 的五阶段：L2 压缩 → L1 重建 → L1 衰减 → L0 画像 → L0 蒸馏（情绪/MBTI）
-- **L3 知识图谱** — 多独立超图，支持节点/边导入、CRUD、关键词/类型查询与 BFS 子图
+- **Dream 巩固管线** — 作用于 L0–L2 及 L6 保留期清理：L2 压缩 → 索引重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）→ L6 清理（自动丢弃 7 天前轨迹事件）；返回逐阶段 `DreamReport`
+- **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related），CRUD、关键词/类型查询与 BFS 子图
 - **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）
-- **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、gse、go-openai、go-sdk）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 33 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录）
+- **极简依赖、可内嵌** — 5 个直接 Go 依赖（xxhash、gse、go-openai、go-sdk、golang.org/x/sys）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
+- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 31 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录）
 - **单 Agent 单文件** — 默认一个 Agent = 一个 `.meh` 文件，无服务进程、无后台守护；用 `OpenMulti` 可选切换到多 agent 共享
 
 ## 快速开始
@@ -55,7 +55,6 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 ```go
 import (
     "context"
-    "fmt"
     "log"
     "os"
     "time"
@@ -104,14 +103,14 @@ if err != nil {
 }
 
 // 将 Agent 回复追加到 Search 创建的话题。
-// Update 的 topicID 参数为 16 位 hex 字符串（NewTopicID 是 uint64）。
-topicID := fmt.Sprintf("%016x", res.NewTopicID)
-if err = sess.Update(topicID, "Agent：...", time.Now().UnixMilli()); err != nil {
+// NewTopicID 即 16 位 hex 字符串，所有响应 ID 原样回传。
+if err = sess.Update(res.NewTopicID, "Agent：...", time.Now().UnixMilli()); err != nil {
     log.Fatal(err)
 }
 
-// Dream 巩固（作用于激活场景，L0-L2）；sceneID 传空串 = 全部激活场景
-ok, err := sess.Dream(context.Background(), "")
+// Dream 巩固（作用于激活场景，L0-L2）；sceneID 传空串 = 全部激活场景。
+// 返回逐阶段 DreamReport 供观测。
+report, err := sess.Dream(context.Background(), "")
 ```
 
 
@@ -129,11 +128,11 @@ ok, err := sess.Dream(context.Background(), "")
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 归档 | `SearchL4` · `GetArchive` · `AppendL4Message` |
 | L5 能力 | `ImportCapability` · `GetCapability` · `UpdateCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` |
-| L6 轨迹 | `AppendTrajectory` · `ReadTrajectory` · `TrajectoryStats` · `DeleteTrajectory` · `Crystallize` |
+| L6 轨迹 | `AppendTrajectory` · `ReadTrajectory` · `ListTrajectorySessions` · `Crystallize`（保留期 7 天自动清理，无删除接口） |
 
 ### 内置 L5 能力
 
-仓库根目录 `capabilities/` 内置 **7 张能力卡**（`memhop-capability/v3` 格式，构建时随库内嵌，英文）：`memhop-guide`（循环分工总纲——Search/Update/Dream 由宿主自动执行、LLM 勿手动调用——外加其余六张卡的索引）+ 六张 LLM 可调用说明书（knowledge、scene、archive、profile、trajectory、capability）。卡描述 Go API 调用契约（`type: "api"`、`ref: "api:MethodName"`），宿主直接调用，无需 MCP 层。**资源即工具声明**：`name/desc/input/output` 与宿主工具规格（meowire `ToolSpec`）字段完全同构，宿主纯字段拷贝即可投影、零格式转换。**分层注入**：`ListCapabilities`/`GetCapability` 只读返回内置卡（与库存能力同套过滤器，不落 `.meh` 文件，同名能力按 ID 去重库存优先，`Search` 响应不附带）；默认只投影一行一卡索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `GetCapability(id)` 获取。
+仓库根目录 `capabilities/` 内置 **6 张能力卡**（`memhop-capability/v3` 格式，构建时随库内嵌，英文）：`memhop-guide`（循环分工总纲——Search/Update/Dream 与轨迹记录由宿主自动执行、LLM 勿手动调用——外加其余五张卡的索引）+ 五张 LLM 可调用说明书（knowledge、scene、archive、profile、capability）。卡描述 Go API 调用契约（`type: "api"`、`ref: "api:MethodName"`），宿主直接调用，无需 MCP 层。**资源即工具声明**：`name/desc/input/output` 与宿主工具规格（meowire `ToolSpec`）字段完全同构，宿主纯字段拷贝即可投影、零格式转换。**分层注入**：`ListCapabilities`/`GetCapability` 只读返回内置卡（与库存能力同套过滤器，不落 `.meh` 文件，同名能力按 ID 去重库存优先，`Search` 响应不附带）；默认只投影一行一卡索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `GetCapability(id)` 获取。
 
 ## 架构
 
@@ -247,6 +246,7 @@ go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
+| v1.4.1 | 2026-08-28 | 类型契约清理：hex 出参 DTO、L0 画像 v2、L3 超图激活 | api 出参 DTO 改为真实 struct——所有 ID 字段以 16 位 hex 字符串出参（含 `SearchResult.NewTopicID` / `AppendL4Message` 返回值 / `AgentID()`），新增 `api.FormatID` / `api.ParseID` · L0 画像 v2（`FormatVersion 0x0009`）：字段所有权（Name/Role/Preferences 宿主独占，Personality 宿主播种 + Dream 蒸馏演化）、typed `EmotionState`/`MBTI` 蒸馏信号、删除死字段 lexicon/style_traits · 库内零 hex 往返（repo 层 ID 入参 uint64 化，质心哈希 `HashBytes` 直算）· L3 导入新增 `source_ref`（位置引用）与 `related`（同图内按标题建超边，两阶段解析支持前向引用、重导入幂等；结果含 `edges_created`，导出 `L3Relation` 类型）· `AppendL4Message` 新增 `contentType`（导出 Content* 七常量；text/document/code 存原文，image/audio/video 存路径或 URI，mime/size/sha256 走 Metadata）、`L4Query.Type` 过滤与 MCP `archive_search` 的 `content_type` 参数 · L6 每轮一条轨迹：SessionID 改为轮键（search 开轮、update 收轮），事件带 `TopicID` 支撑跨轮结晶，对外面收敛为追加+查询（删除 `TrajectoryStats` / `DeleteTrajectory` / `PruneTrajectory`，33 → 31 工具），Dream 新增 `l6_prune` 自动清理 7 天前事件 · distill/consolidate LLM 解析失败补一次格式约束重试 · **破坏性变更**：`FormatVersion != 0x0009`（即 ≤ 0x0008）的 `.meh` 文件在 Open 时被拒绝，无迁移 |
 | v1.4.0 | 2026-08-26 | 多 agent 记忆数据库 | 一个 `.meh` 文件承载多个完全隔离的 agent 域：记录帧新增 `agent_id`（26 字节帧头），引擎索引与快照（0x02）按 agent 分域，租户注册记录把名字映射到稳定的 crypto/rand agentID · `api.OpenMulti` / `AgentSession` / `CreateAgent` / `ListAgents` / `DeleteAgent`；`Open` 对单 agent 宿主零改动（默认域）· 业务层重构为按 agent 的 `agentContext` + 域级锁（同 agent 串行、跨 agent 并行）、空闲域内存回收与域化 Dream 管线 · L7 轨迹层改编号为 **L6**（认知层收敛为 L0–L6）· MCP registry 共享单个 `MultiAgentDB`（单文件 `<db-dir>/memhop.meh`），`os.Root` 锚定 db 目录 · 删除重复结构体/转换层（`topicSlotJSON`、`topicToL2Meta`、单元素切片包装）· Go 1.23–1.26 标准库现代化（`iter.Seq2`、`unique.Make`、`os.Root`）· 零新增依赖 · **破坏性变更**：`FormatVersion <= 0x0007` 的旧 `.meh` 文件在 Open 时被拒绝，无迁移；`api.DB` 上提升自 `internal.DB` 的方法新增 `agentID` 参数（门面方法签名不变），`Lock()` 对已关闭的 DB 会 panic |
 | v1.3.4 | 2026-08-26 | L5 工具声明同构 | `memhop-capability` 格式升级 v3：`ResourceRef` 的 `description` 改名 `desc` 并新增 `input`（JSON Schema 字符串）/`output`——工具声明字段与宿主工具规格（meowire `ToolSpec`）完全同构，宿主纯字段拷贝即可投影、零格式转换 · `WorkflowStep` 新增 `args`——动作链参数官方化（不再依赖私有 config 格式）· 结晶 prompt 输出 v3 形状（`type`/`resources` 取代 `kind`/`manifest`）· `validateCapabilityImport` 强制资源名非空并校验 `input` 为合法 JSON · **破坏性变更**：v2 卡导入被拒绝（format 必须为 `memhop-capability/v3`）；旧版本写入的存量能力记录读取时 `desc/input/output` 为空 · 内置能力工具箱（`capabilities/*.json`）全部重写为 v3 并携带真实 JSON Schema |
 | v1.3.3 | 2026-08-26 | 检索评分归一化 + 参数面收敛 | vector floor 从“覆盖式垄断”改为“仅抬升未过线场景”（floor = threshold + cosine×0.5）：真实信号（RRF + 关键词重叠 + 加分）决定排序，语义兜底保留 · `MemHopDefaults` 从 24 字段收敛到 3 个业务开关（`Capacity` / `DreamCompressMinTopics` / `SearchDreamContextThreshold`）；删除 4 个死字段（`MaxResults` / `DefaultTimeoutSecs` / `DefaultMaxOutputTokens` / `MaxDepth`），16 个调优常量移入包级私有 `internal/tuning.go` · `TopScene` / `SpreadingActivation` / `applySceneBonuses` / `rrfFuse` 签名去掉 defaults 参数 · **破坏性变更**：引用被删字段的宿主需同步清理 · 格式版本不变（仍为 `0x0007`）· MCP 工具集不变（32 个）·

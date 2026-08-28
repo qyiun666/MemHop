@@ -6,20 +6,15 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	memhop "github.com/qyiun666/MemHop/api"
 )
 
 type profileUpdateArgs struct {
-	Name            string            `json:"name,omitempty"`
-	Role            string            `json:"role,omitempty"`
-	Personality     string            `json:"personality,omitempty"`
-	Preferences     map[string]string `json:"preferences,omitempty"`
-	Lexicon         map[string]string `json:"lexicon,omitempty"`
-	StyleTraits     []string          `json:"style_traits,omitempty"`
-	EmotionPatterns map[string]string `json:"emotion_patterns,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Role        string            `json:"role,omitempty"`
+	Personality string            `json:"personality,omitempty"`
+	Preferences map[string]string `json:"preferences,omitempty"`
 }
 
 type sceneTopicsArgs struct {
@@ -56,23 +51,17 @@ func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 		Name:        "memhop_profile_update",
 		Description: "整体更新 L0 宿主画像（全量覆盖，缺省字段会被清空）。",
 		InputSchema: objSchema(map[string]any{
-			"name":             strProp("宿主名称"),
-			"role":             strProp("角色定位"),
-			"personality":      strProp("个性描述"),
-			"preferences":      mapProp("偏好键值对"),
-			"lexicon":          mapProp("专属词表"),
-			"style_traits":     arrProp("风格特征列表", "string"),
-			"emotion_patterns": mapProp("情绪模式"),
+			"name":        strProp("宿主名称"),
+			"role":        strProp("角色定位"),
+			"personality": strProp("个性描述"),
+			"preferences": mapProp("偏好键值对"),
 		}),
 	}, handle[profileUpdateArgs, updateResult](func(a profileUpdateArgs) (updateResult, error) {
 		return updateResult{OK: true}, db.UpdateL0(&memhop.ProfileSlot{
-			Name:            a.Name,
-			Role:            a.Role,
-			Personality:     a.Personality,
-			Preferences:     a.Preferences,
-			Lexicon:         a.Lexicon,
-			StyleTraits:     a.StyleTraits,
-			EmotionPatterns: a.EmotionPatterns,
+			Name:        a.Name,
+			Role:        a.Role,
+			Personality: a.Personality,
+			Preferences: a.Preferences,
 		})
 	}))
 }
@@ -105,7 +94,7 @@ func registerSceneListTools(s *mcp.Server, db *memhop.Session) {
 		}
 		out := make([]memhop.SceneSlot, 0, len(ids))
 		for _, sc := range all {
-			if active[fmt.Sprintf("%016x", sc.SceneID)] {
+			if active[sc.SceneID] {
 				out = append(out, sc)
 			}
 		}

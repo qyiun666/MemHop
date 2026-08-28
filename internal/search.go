@@ -139,7 +139,7 @@ func (ac *agentContext) createTopicInScene(db *DB, q SearchQuery, keywords []str
 		Engine:  db.engine,
 		AgentID: ac.id,
 		MetaIdx: ac.l2Meta,
-		SceneID: common.FormatHash(sceneID),
+		SceneID: sceneID,
 		Depth:   1,
 		Num:     2,
 	})
@@ -180,19 +180,18 @@ func (ac *agentContext) writeNewTopic(db *DB, q SearchQuery, keywords []string, 
 	if err != nil {
 		return 0, err
 	}
-	if !repo.CreateTopicL2(db.engine, ac.id, common.FormatHash(sceneID), keywords, q.Timestamp, centroidRef) {
+	if !repo.CreateTopicL2(db.engine, ac.id, sceneID, keywords, q.Timestamp, centroidRef) {
 		return 0, common.NewError(common.ErrIO, "create topic", nil)
 	}
-	topicIDStr := common.FormatHash(topicID)
-	archiveID, err := repo.AppendArchiveL4(db.engine, ac.id, topicIDStr, core.RoleUser, core.ContentText, q.Text, q.Timestamp)
+	archiveID, err := repo.AppendArchiveL4(db.engine, ac.id, topicID, core.RoleUser, core.ContentText, q.Text, q.Timestamp)
 	if err != nil {
 		return 0, err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, ac.id, topicIDStr, []uint64{archiveID}) {
+	if !repo.UpdateTopicL4RefsL2(db.engine, ac.id, topicID, []uint64{archiveID}) {
 		return 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
 	if ids := knowledge.MatchGraphs(db.engine, ac.id, keywords, q.Text); len(ids) > 0 {
-		if !repo.AppendTopicL3RefsL2(db.engine, ac.id, topicIDStr, ids) {
+		if !repo.AppendTopicL3RefsL2(db.engine, ac.id, topicID, ids) {
 			return 0, common.NewError(common.ErrIO, "link topic l3 refs", nil)
 		}
 	}
