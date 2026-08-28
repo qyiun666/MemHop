@@ -10,7 +10,7 @@ import (
 )
 
 func TestSurfaceL3Knowledge(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	items := []L3ImportItem{
 		{Title: "Rust ownership", Domain: "lang", NodeType: "concept", Content: "borrow checker", Keywords: []string{"rust", "ownership"}},
 		{Title: "Go routines", Domain: "lang", NodeType: "concept", Content: "scheduler", Keywords: []string{"go", "goroutine"}},

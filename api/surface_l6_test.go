@@ -14,7 +14,7 @@ import (
 )
 
 func TestSurfaceL6TrajectoryLifecycle(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	sessionA := common.FormatHash(common.HashID("lifecycle-a"))
 	sessionB := common.FormatHash(common.HashID("lifecycle-b"))
 	appendOne := func(id string, ts int64) {
@@ -58,7 +58,7 @@ func TestSurfaceL6TrajectoryLifecycle(t *testing.T) {
 }
 
 func TestSurfaceL6Trajectory(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	ctx := context.Background()
 	sessionID := common.FormatHash(common.HashID("session-42"))
 	events := []TrajectorySlot{

@@ -35,7 +35,7 @@ func writeCapability(t *testing.T, dir, name string) string {
 }
 
 func TestSurfaceL5Capability(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	dir := t.TempDir()
 	cap, err := db.ImportCapability(writeCapability(t, dir, "surface-cap"))
 	if err != nil || cap == nil {

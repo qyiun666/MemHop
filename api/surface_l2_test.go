@@ -11,7 +11,7 @@ import (
 )
 
 func TestSurfaceL2Scenes(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	ctx := context.Background()
 	_, _ = db.Search(ctx, SearchQuery{Text: "scene one topic", AutoCreate: true, Timestamp: 1_700_000_010_000})
 	_, _ = db.Search(ctx, SearchQuery{Text: "scene two topic", AutoCreate: true, Timestamp: 1_700_000_020_000})

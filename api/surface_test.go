@@ -79,12 +79,17 @@ func openMultiSession(t *testing.T, cfg *MemHopConfig, enc Encoder) (*MultiAgent
 	return m, sess
 }
 
-func openSurfaceDB(t *testing.T) (*Session, func()) {
+// openSurfaceDB opens the only supported mode (multi-agent) and binds a
+// session to a freshly registered tenant; the DB is closed via t.Cleanup so
+// the TempDir .meh file is released before removal (Windows unlink fails on
+// open handles).
+func openSurfaceDB(t *testing.T) *Session {
 	t.Helper()
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
 	m, sess := openMultiSession(t, surfaceConfig(t, llm.URL), &openTestEncoder{dim: 4})
-	return sess, func() { _ = m.Close() }
+	t.Cleanup(func() { _ = m.Close() })
+	return sess
 }
 
 // isHexID reports whether s is a canonical 16-char lowercase hex id.
@@ -97,7 +102,7 @@ func isHexID(s string) bool {
 }
 
 func TestSurfaceLifecycle(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	if db.IsClosed() {
 		t.Fatal("fresh DB must be open")
 	}
@@ -111,7 +116,7 @@ func TestSurfaceLifecycle(t *testing.T) {
 }
 
 func TestSurfaceL0Profile(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	prof, err := db.GetL0()
 	if err != nil || prof == nil {
 		t.Fatalf("GetL0 on fresh DB must return empty profile: %v", err)
@@ -159,7 +164,7 @@ func TestSurfaceClosedContract(t *testing.T) {
 }
 
 func TestSurfaceDreamEmptyDomain(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	// A domain with no active scenes succeeds without doing work.
 	rep, err := db.Dream(context.Background(), "")
 	if err != nil || rep == nil {

@@ -13,7 +13,7 @@ import (
 )
 
 func TestSurfaceSearchUpdateAppend(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	ctx := context.Background()
 
 	// AutoCreate path deterministically mints a scene + topic.

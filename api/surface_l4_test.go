@@ -11,7 +11,7 @@ import (
 )
 
 func TestSurfaceL4Archive(t *testing.T) {
-	db, _ := openSurfaceDB(t)
+	db := openSurfaceDB(t)
 	ctx := context.Background()
 	res, err := db.Search(ctx, SearchQuery{Text: "archive me", AutoCreate: true, Timestamp: 1_700_000_030_000})
 	if err != nil {
