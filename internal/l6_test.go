@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -143,5 +144,51 @@ func TestTrimTrajectoryByBudgetKeepsNewest(t *testing.T) {
 	}
 	if got := trimTrajectoryByBudget(events, 1); len(got) != 1 || got[0].Payload[0] != 'c' {
 		t.Fatalf("tiny budget must still keep the newest: %+v", got)
+	}
+}
+
+func TestPlanCommitUpdatesNode(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	pid := common.FormatHash(9)
+	if err := db.PlanCommit(core.DefaultAgentID, pid, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanDone, "made it"); err != nil {
+		t.Fatal(err)
+	}
+	id := core.HashPlanNode(9, "1")
+	node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.NodeType != core.NodeTypePlan {
+		t.Fatalf("want NodeTypePlan, got %d", node.NodeType)
+	}
+	if node.Status != core.StatusDone {
+		t.Fatalf("want done, got %d", node.Status)
+	}
+	if node.Summary != "made it" {
+		t.Fatalf("want made it, got %s", node.Summary)
+	}
+}
+
+func TestPlanAppendCreatesNodeAndEvent(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	pid := common.FormatHash(9)
+	if err := db.PlanAppend(core.DefaultAgentID, pid, "1.2.1", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1000}); err != nil {
+		t.Fatal(err)
+	}
+	// 节点应已创建为 pending
+	nodeID := core.HashPlanNode(9, "1.2.1")
+	node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.NodeType != core.NodeTypePlan || node.Status != core.StatusPending {
+		t.Fatalf("node not created as pending plan: %+v", node)
+	}
+	// 事件应挂到该节点
+	events := repo.CollectNodeEvents(db.engine, core.DefaultAgentID, nodeID)
+	if len(events) != 1 || events[0].EventType != "llm_request" {
+		t.Fatalf("want 1 llm_request event on node, got %+v", events)
 	}
 }

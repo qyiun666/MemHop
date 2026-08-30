@@ -35,6 +35,51 @@ const maxCrystallizePayload = 128 * 1024
 // than this. L6 is a process index — durable products live in L4/L5.
 const trajectoryRetention = 7 * 24 * time.Hour
 
+// PlanTree is the assembled plan view returned by PlanState. Its node
+// shape is filled in by Task 4; a minimal placeholder keeps the PlanState
+// signature stable in the interim.
+type PlanTree struct{}
+
+// PlanStatus is the string surface of a plan node's lifecycle.
+type PlanStatus string
+
+const (
+	PlanPending    PlanStatus = "pending"
+	PlanInProgress PlanStatus = "in_progress"
+	PlanDone       PlanStatus = "done"
+	PlanFailed     PlanStatus = "failed"
+)
+
+func toStatusU8(s PlanStatus) (uint8, error) {
+	switch s {
+	case PlanPending:
+		return core.StatusPending, nil
+	case PlanInProgress:
+		return core.StatusInProgress, nil
+	case PlanDone:
+		return core.StatusDone, nil
+	case PlanFailed:
+		return core.StatusFailed, nil
+	default:
+		return 0, common.NewError(common.ErrInvalidQuery, "invalid plan status: "+string(s))
+	}
+}
+
+func statusToString(u uint8) PlanStatus {
+	switch u {
+	case core.StatusPending:
+		return PlanPending
+	case core.StatusInProgress:
+		return PlanInProgress
+	case core.StatusDone:
+		return PlanDone
+	case core.StatusFailed:
+		return PlanFailed
+	default:
+		return PlanPending
+	}
+}
+
 // AppendTrajectory appends one event to a turn's trajectory; Seq comes from
 // the domain's TrajIndex (max + 1), so the host never counts sequences.
 func (db *DB) AppendTrajectory(agentID uint64, sessionID string, ev core.TrajectorySlot) error {
@@ -91,6 +136,136 @@ func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSu
 		return cmp.Compare(x.SessionID, y.SessionID)
 	})
 	return out, nil
+}
+
+// PlanAppend appends one event to a plan node (planID hex, nodePath like
+// "1.2.1") without advancing the plan. If the node does not exist it is
+// created as a pending plan node.
+func (db *DB) PlanAppend(agentID uint64, planID string, nodePath string, ev core.TrajectorySlot) error {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return err
+	}
+	defer ac.mu.Unlock()
+	ph, err := common.ParseID(planID)
+	if err != nil {
+		return common.NewError(common.ErrInvalidQuery, "parse plan id", err)
+	}
+	nodeID, err := db.ensurePlanNode(ac, agentID, ph, nodePath)
+	if err != nil {
+		return err
+	}
+	return db.appendPlanEventLocked(ac, agentID, ph, nodeID, ev)
+}
+
+// PlanCommit advances a plan node to a status (with optional summary) and
+// appends the step event. Folding of done children is wired in Task 4.
+func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core.TrajectorySlot, status PlanStatus, summary string) error {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return err
+	}
+	defer ac.mu.Unlock()
+	ph, err := common.ParseID(planID)
+	if err != nil {
+		return common.NewError(common.ErrInvalidQuery, "parse plan id", err)
+	}
+	u8, err := toStatusU8(status)
+	if err != nil {
+		return err
+	}
+	nodeID, err := db.ensurePlanNode(ac, agentID, ph, nodePath)
+	if err != nil {
+		return err
+	}
+	if err := db.updatePlanNodeLocked(ac, agentID, ph, nodeID, u8, summary); err != nil {
+		return err
+	}
+	return db.appendPlanEventLocked(ac, agentID, ph, nodeID, ev)
+}
+
+// PlanState returns the plan tree view (implemented in Task 4). Stub.
+func (db *DB) PlanState(agentID uint64, planID string) (*PlanTree, error) {
+	return nil, common.NewError(common.ErrInvalidQuery, "PlanState implemented in Task 4")
+}
+
+// ensurePlanNode resolves nodePath to a plan node id, creating the node
+// chain (root then children along path) as pending when missing.
+func (db *DB) ensurePlanNode(ac *agentContext, agentID uint64, planID uint64, nodePath string) (uint64, error) {
+	ids := splitNodePath(nodePath)
+	if len(ids) == 0 {
+		return 0, common.NewError(common.ErrInvalidQuery, "nodePath required")
+	}
+	var parentID uint64
+	var pathSoFar []string
+	for _, seg := range ids {
+		pathSoFar = append(pathSoFar, seg)
+		np := strings.Join(pathSoFar, ".")
+		id := core.HashPlanNode(planID, np)
+		node, err := core.ReadTrajectorySlot(db.engine, agentID, id)
+		if err != nil || node == nil || node.NodeType != core.NodeTypePlan {
+			node = &core.TrajectorySlot{
+				IDHash: id, SessionID: planID, Seq: uint64(len(pathSoFar)),
+				NodeType: core.NodeTypePlan, PlanID: planID, ParentID: parentID,
+				NodePath: np, Status: core.StatusPending,
+			}
+			if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
+				return 0, err
+			}
+		}
+		parentID = id
+	}
+	return parentID, nil
+}
+
+func splitNodePath(nodePath string) []string {
+	var out []string
+	for _, p := range strings.Split(nodePath, ".") {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// appendPlanEventLocked writes one event bound to a plan node by filling
+// PlanNodeRef, then reuses the existing per-turn Sequencer + TrajIndex.
+// The domain lock is already held (lockAgent path).
+func (db *DB) appendPlanEventLocked(ac *agentContext, agentID, planID, nodeID uint64, ev core.TrajectorySlot) error {
+	if ev.EventType == "" || ev.Timestamp <= 0 {
+		return common.NewError(common.ErrInvalidQuery, "EventType and Timestamp are required")
+	}
+	if len(ev.Payload) > maxTrajectoryPayload {
+		ev.Payload = common.TruncateUTF8(ev.Payload, maxTrajectoryPayload)
+	}
+	maxSeq, _ := ac.traj.MaxSeq(planID)
+	ev.SessionID = planID
+	ev.Seq = maxSeq + 1
+	ev.PlanNodeRef = nodeID
+	idHash, err := repo.AppendTrajectory(db.engine, agentID, ev)
+	if err != nil {
+		return err
+	}
+	ac.traj.Append(planID, ev.Seq, idHash, ev.Timestamp, ev.TopicID)
+	return nil
+}
+
+// updatePlanNodeLocked sets a plan node's status/summary, re-reading the
+// stored node so it preserves its derived IDHash.
+func (db *DB) updatePlanNodeLocked(ac *agentContext, agentID uint64, planID, nodeID uint64, status uint8, summary string) error {
+	node, err := core.ReadTrajectorySlot(db.engine, agentID, nodeID)
+	if err != nil {
+		return err
+	}
+	node.Status = status
+	if summary != "" {
+		node.Summary = summary
+	}
+	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
+		return err
+	}
+	ac.traj.Append(node.SessionID, node.Seq, node.IDHash, node.Timestamp, node.TopicID)
+	return nil
 }
 
 // Crystallize extracts L5 capability candidates from a turn's trajectory
