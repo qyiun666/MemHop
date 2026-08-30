@@ -274,3 +274,30 @@ func TestPlanStateFoldsDoneChildren(t *testing.T) {
 		t.Fatal("root summary should be concatenated from children summaries")
 	}
 }
+
+// Folding must propagate to ancestors in a single call: a commit of a deep
+// leaf folds the whole chain root→done.
+func TestPlanStateFoldsDeepChain(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	planID := common.FormatHash(9)
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Committing only the deep leaf (1.1.1 done) must fold root → done too.
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanDone, "step C"); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Root.Status != PlanDone {
+		t.Fatalf("deep chain root should fold to done in one call, got %s", tree.Root.Status)
+	}
+	if tree.TotalCount != 3 || tree.DoneCount != 3 {
+		t.Fatalf("counts: total=%d done=%d", tree.TotalCount, tree.DoneCount)
+	}
+}

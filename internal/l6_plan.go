@@ -160,9 +160,15 @@ func (db *DB) foldNodeLocked(ac *agentContext, agentID uint64, n *planNode) erro
 				parts = append(parts, c.summary)
 			}
 		}
-		if err := db.updatePlanNodeLocked(ac, agentID, n.id, core.StatusDone, strings.Join(parts, "; ")); err != nil {
+		summary := strings.Join(parts, "; ")
+		if err := db.updatePlanNodeLocked(ac, agentID, n.id, core.StatusDone, summary); err != nil {
 			return err
 		}
+		// Sync the in-memory status so the parent's allDone check sees the
+		// freshly-folded child, letting the fold propagate to ancestors in a
+		// single call (bottom-up reach).
+		n.status = core.StatusDone
+		n.summary = summary
 	}
 	return nil
 }
