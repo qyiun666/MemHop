@@ -70,7 +70,7 @@ type SceneSlot struct {
 	TopicCount int    `json:"topic_count"` // depth-1 root topics under this scene
 	HitCount   uint32 `json:"hit_count"`   // cumulative retrieval hit count
 	LastHitAt  int64  `json:"last_hit_at"` // last hit time (Unix ms)
-	L3ID       uint64 `json:"l3_id"`       // 新增：场景固定挂靠的目录/项目域 L3 图（N:1）
+	L3ID       uint64 `json:"l3_id"`       // 场景固定挂靠的目录/项目域 L3 图（N:1）
 }
 
 // NewSceneSlot builds a SceneSlot from a name; ID is the xxhash64 of the name.
@@ -317,7 +317,7 @@ type TrajectorySlot struct {
 	SessionID uint64 `json:"session_id"` // host-chosen turn key (parsed from the api's 16-hex id)
 	Seq       uint64 `json:"seq"`        // per-turn increasing sequence
 
-	NodeType    uint8  `json:"node_type"`               // 0=轨迹事件  1=计划节点
+	NodeType    uint8  `json:"node_type"`               // 0=轨迹事件 1=计划节点
 	PlanID      uint64 `json:"plan_id"`                 // 所属任务根（无任务=单个根）
 	ParentID    uint64 `json:"parent_id,omitempty"`     // 父节点（0=根）
 	NodePath    string `json:"node_path"`               // "1" / "1.2.1" / "1.2.2"

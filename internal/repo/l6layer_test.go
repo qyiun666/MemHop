@@ -5,7 +5,6 @@ package repo
 
 import (
 	"fmt"
-	"path/filepath"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -192,10 +191,7 @@ func TestCollectPlanNodesAndNodeEvents(t *testing.T) {
 }
 
 func TestPlanNodeID_DoesNotCollideWithEventID(t *testing.T) {
-	engine, err := core.Create(filepath.Join(t.TempDir(), "plan.meh"), 16)
-	if err != nil {
-		t.Fatal(err)
-	}
+	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
 	// 同一组 (planID=9, nodePath="1") 与 (sessionID=9, seq=1)
 	planNodeID := core.HashPlanNode(9, "1")
