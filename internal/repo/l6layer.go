@@ -8,7 +8,9 @@
 package repo
 
 import (
+	"cmp"
 	"fmt"
+	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -36,4 +38,48 @@ func DeleteTrajectoryByIDs(engine *core.StorageEngine, agentID uint64, idHashes 
 		return 0, common.NewError(common.ErrIO, "delete trajectory", err)
 	}
 	return n, nil
+}
+
+// WritePlanNode writes one plan-node record, preserving its caller-derived
+// IDHash (core.HashPlanNode(planID, nodePath)) so the node reference stays
+// stable across writes. Unlike AppendTrajectory it does NOT re-hash the id.
+func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.TrajectorySlot) (uint64, error) {
+	if node.IDHash == 0 {
+		return 0, common.NewError(common.ErrInvalidQuery, "plan node id required")
+	}
+	if node.NodeType != core.NodeTypePlan {
+		return 0, common.NewError(common.ErrInvalidQuery, "WritePlanNode requires NodeTypePlan")
+	}
+	if err := core.WriteTrajectorySlot(engine, agentID, node.IDHash, node); err != nil {
+		return 0, err
+	}
+	return node.IDHash, nil
+}
+
+// CollectPlanNodes returns the plan-node records of one plan (any NodePath),
+// sorted by Seq; events are excluded. Callers group the tree.
+func CollectPlanNodes(engine *core.StorageEngine, agentID uint64, planID uint64) []core.TrajectorySlot {
+	var out []core.TrajectorySlot
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		if ev.NodeType != core.NodeTypePlan || ev.PlanID != planID {
+			continue
+		}
+		out = append(out, ev)
+	}
+	slices.SortFunc(out, func(a, b core.TrajectorySlot) int { return cmp.Compare(a.Seq, b.Seq) })
+	return out
+}
+
+// CollectNodeEvents returns the event records (NodeType=event) pointing at a
+// plan node via PlanNodeRef, sorted by Seq; nil when none.
+func CollectNodeEvents(engine *core.StorageEngine, agentID uint64, nodeID uint64) []core.TrajectorySlot {
+	var out []core.TrajectorySlot
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		if ev.NodeType != core.NodeTypeEvent || ev.PlanNodeRef != nodeID {
+			continue
+		}
+		out = append(out, ev)
+	}
+	slices.SortFunc(out, func(a, b core.TrajectorySlot) int { return cmp.Compare(a.Seq, b.Seq) })
+	return out
 }

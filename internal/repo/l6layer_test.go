@@ -6,6 +6,7 @@ package repo
 import (
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -141,5 +142,49 @@ func TestDeleteCapabilityL5(t *testing.T) {
 	}
 	if DeleteCapabilityL5(engine, core.DefaultAgentID, cap.IDHash) == false {
 		t.Fatalf("second delete should stay idempotent")
+	}
+}
+
+func TestWritePlanNode_KeepsHashPlanNodeID(t *testing.T) {
+	engine := tempEngine(t)
+	agentID := core.DefaultAgentID
+	id := core.HashPlanNode(9, "1.2.1")
+	node := &core.TrajectorySlot{
+		IDHash: id, SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan,
+		PlanID: 9, ParentID: 0, NodePath: "1.2.1", Status: core.StatusInProgress,
+	}
+	if _, err := WritePlanNode(engine, agentID, node); err != nil {
+		t.Fatal(err)
+	}
+	got, err := core.ReadTrajectorySlot(engine, agentID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IDHash != id {
+		t.Fatalf("id overwritten: want %d, got %d", id, got.IDHash)
+	}
+	if got.NodeType != core.NodeTypePlan {
+		t.Fatalf("want NodeTypePlan, got %d", got.NodeType)
+	}
+}
+
+func TestCollectPlanNodesAndNodeEvents(t *testing.T) {
+	engine := tempEngine(t)
+	agentID := core.DefaultAgentID
+	root := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1", Status: core.StatusInProgress}
+	child := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1.1"), SessionID: 9, Seq: 2, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1.1", Status: core.StatusDone}
+	_, _ = WritePlanNode(engine, agentID, root)
+	_, _ = WritePlanNode(engine, agentID, child)
+	// 事件挂到 child 节点
+	ev := &core.TrajectorySlot{IDHash: common.HashID("ev:1"), SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanNodeRef: child.IDHash, EventType: "llm_request", Timestamp: 1000}
+	_, _ = AppendTrajectory(engine, agentID, *ev)
+
+	nodes := CollectPlanNodes(engine, agentID, 9)
+	if len(nodes) != 2 {
+		t.Fatalf("want 2 plan nodes, got %d", len(nodes))
+	}
+	events := CollectNodeEvents(engine, agentID, child.IDHash)
+	if len(events) != 1 || events[0].EventType != "llm_request" {
+		t.Fatalf("want 1 event llm_request, got %+v", events)
 	}
 }
