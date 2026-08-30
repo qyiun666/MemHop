@@ -59,6 +59,9 @@ func BuildTrajFromEngine(engine *core.StorageEngine, agentID uint64) *TrajIndex 
 		return cmp.Or(cmp.Compare(a.SessionID, b.SessionID), cmp.Compare(a.Seq, b.Seq))
 	})
 	for _, ev := range evs {
+		if ev.NodeType == core.NodeTypePlan {
+			continue // plan nodes are not per-turn events; they are read via CollectPlanNodes
+		}
 		idx.Append(ev.SessionID, ev.Seq, ev.IDHash, ev.Timestamp, ev.TopicID)
 	}
 	return idx

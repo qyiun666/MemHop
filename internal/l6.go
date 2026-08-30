@@ -178,7 +178,7 @@ func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core
 	if err != nil {
 		return err
 	}
-	if err := db.updatePlanNodeLocked(ac, agentID, ph, nodeID, u8, summary); err != nil {
+	if err := db.updatePlanNodeLocked(ac, agentID, nodeID, u8, summary); err != nil {
 		return err
 	}
 	return db.appendPlanEventLocked(ac, agentID, ph, nodeID, ev)
@@ -192,9 +192,9 @@ func (db *DB) PlanState(agentID uint64, planID string) (*PlanTree, error) {
 // ensurePlanNode resolves nodePath to a plan node id, creating the node
 // chain (root then children along path) as pending when missing.
 func (db *DB) ensurePlanNode(ac *agentContext, agentID uint64, planID uint64, nodePath string) (uint64, error) {
-	ids := splitNodePath(nodePath)
-	if len(ids) == 0 {
-		return 0, common.NewError(common.ErrInvalidQuery, "nodePath required")
+	ids, err := splitNodePath(nodePath)
+	if err != nil {
+		return 0, err
 	}
 	var parentID uint64
 	var pathSoFar []string
@@ -203,6 +203,13 @@ func (db *DB) ensurePlanNode(ac *agentContext, agentID uint64, planID uint64, no
 		np := strings.Join(pathSoFar, ".")
 		id := core.HashPlanNode(planID, np)
 		node, err := core.ReadTrajectorySlot(db.engine, agentID, id)
+		// A transient read error (IO/closed/corruption) is a real failure; only
+		// a genuine "record not found" means the node does not exist yet, so we
+		// create it. Swallowing transient errors would reset a live node back to
+		// pending.
+		if err != nil && common.CodeOf(err) != common.ErrNotFound {
+			return 0, err
+		}
 		if err != nil || node == nil || node.NodeType != core.NodeTypePlan {
 			node = &core.TrajectorySlot{
 				IDHash: id, SessionID: planID, Seq: uint64(len(pathSoFar)),
@@ -218,14 +225,19 @@ func (db *DB) ensurePlanNode(ac *agentContext, agentID uint64, planID uint64, no
 	return parentID, nil
 }
 
-func splitNodePath(nodePath string) []string {
-	var out []string
-	for _, p := range strings.Split(nodePath, ".") {
-		if p != "" {
-			out = append(out, p)
-		}
+func splitNodePath(nodePath string) ([]string, error) {
+	if nodePath == "" {
+		return nil, common.NewError(common.ErrInvalidQuery, "nodePath required")
 	}
-	return out
+	parts := strings.Split(nodePath, ".")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p == "" {
+			return nil, common.NewError(common.ErrInvalidQuery, "invalid nodePath: "+nodePath)
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }
 
 // appendPlanEventLocked writes one event bound to a plan node by filling
@@ -251,8 +263,11 @@ func (db *DB) appendPlanEventLocked(ac *agentContext, agentID, planID, nodeID ui
 }
 
 // updatePlanNodeLocked sets a plan node's status/summary, re-reading the
-// stored node so it preserves its derived IDHash.
-func (db *DB) updatePlanNodeLocked(ac *agentContext, agentID uint64, planID, nodeID uint64, status uint8, summary string) error {
+// stored node so it preserves its derived IDHash. It deliberately does NOT
+// touch the event TrajIndex: plan nodes are not per-turn events and must not
+// occupy their Seq space, otherwise a deep then shallow commit would collapse
+// the per-plan event Seq and overwrite a prior event.
+func (db *DB) updatePlanNodeLocked(ac *agentContext, agentID, nodeID uint64, status uint8, summary string) error {
 	node, err := core.ReadTrajectorySlot(db.engine, agentID, nodeID)
 	if err != nil {
 		return err
@@ -264,7 +279,6 @@ func (db *DB) updatePlanNodeLocked(ac *agentContext, agentID uint64, planID, nod
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}
-	ac.traj.Append(node.SessionID, node.Seq, node.IDHash, node.Timestamp, node.TopicID)
 	return nil
 }
 
