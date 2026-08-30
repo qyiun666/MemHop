@@ -247,57 +247,71 @@ func TestPlanEventSeqStartsAtOneNoCollision(t *testing.T) {
 	}
 }
 
-func TestPlanStateFoldsDoneChildren(t *testing.T) {
+// Model A: a parent becomes Done only when the host explicitly commits it.
+// Rollup merges Done children summaries into the host-completed parent.
+func TestPlanStateParentExplicitCompletion(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	planID := common.FormatHash(9)
-	// 根 1 pending → 子 1.1 done → 子 1.2 done → 父折叠为 done
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanInProgress, ""); err != nil {
-		t.Fatal(err)
-	}
+	// Children done first.
 	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanDone, "step A"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanDone, "step B"); err != nil {
 		t.Fatal(err)
 	}
+	// Parent is NOT auto-folded while not explicitly committed done.
 	tree, err := db.PlanState(core.DefaultAgentID, planID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if tree.Root.Status == PlanDone {
+		t.Fatalf("parent must NOT auto-fold: got %s", tree.Root.Status)
+	}
+	if tree.TotalCount != 3 {
+		t.Fatalf("total=%d, want 3 (root + 2 children)", tree.TotalCount)
+	}
+	// Host explicitly completes the parent → it becomes Done and rolls up.
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, PlanDone, ""); err != nil {
+		t.Fatal(err)
+	}
+	tree, err = db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if tree.Root.Status != PlanDone {
-		t.Fatalf("root should fold to done, got %s", tree.Root.Status)
+		t.Fatalf("root should be done after explicit commit, got %s", tree.Root.Status)
+	}
+	if tree.Root.Summary != "step A; step B" {
+		t.Fatalf("root summary should roll up children, got %q", tree.Root.Summary)
 	}
 	if tree.TotalCount != 3 || tree.DoneCount != 3 {
 		t.Fatalf("counts: total=%d done=%d", tree.TotalCount, tree.DoneCount)
 	}
-	if tree.Root.Summary == "" {
-		t.Fatal("root summary should be concatenated from children summaries")
-	}
 }
 
-// Folding must propagate to ancestors in a single call: a commit of a deep
-// leaf folds the whole chain root→done.
-func TestPlanStateFoldsDeepChain(t *testing.T) {
+// Model A: a parent whose children are only partially Done must NOT be
+// auto-folded; it stays in_progress until the host explicitly commits it Done.
+func TestPlanStateParentNotAutoFoldedPartial(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	planID := common.FormatHash(9)
 	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanInProgress, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanInProgress, ""); err != nil {
+	// Only one of two children is done; the other stays pending.
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanDone, "step A"); err != nil {
 		t.Fatal(err)
 	}
-	// Committing only the deep leaf (1.1.1 done) must fold root → done too.
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanDone, "step C"); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanPending, ""); err != nil {
 		t.Fatal(err)
 	}
 	tree, err := db.PlanState(core.DefaultAgentID, planID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tree.Root.Status != PlanDone {
-		t.Fatalf("deep chain root should fold to done in one call, got %s", tree.Root.Status)
+	if tree.Root.Status == PlanDone {
+		t.Fatalf("parent must NOT auto-fold while children only partially done, got %s", tree.Root.Status)
 	}
-	if tree.TotalCount != 3 || tree.DoneCount != 3 {
-		t.Fatalf("counts: total=%d done=%d", tree.TotalCount, tree.DoneCount)
+	if tree.TotalCount != 3 || tree.DoneCount != 1 {
+		t.Fatalf("counts: total=%d done=%d, want total=3 done=1", tree.TotalCount, tree.DoneCount)
 	}
 }

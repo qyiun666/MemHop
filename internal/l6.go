@@ -154,7 +154,9 @@ func (db *DB) PlanAppend(agentID uint64, planID string, nodePath string, ev core
 }
 
 // PlanCommit advances a plan node to a status (with optional summary) and
-// appends the step event, then folds any done parents bottom-up.
+// appends the step event, then rolls up Done children summaries into any
+// parent Summary (Model A: a parent becomes Done only when the host
+// explicitly commits it here).
 func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core.TrajectorySlot, status PlanStatus, summary string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -179,10 +181,11 @@ func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core
 	if err := db.appendPlanEventLocked(ac, agentID, ph, nodeID, ev); err != nil {
 		return err
 	}
-	return db.foldPlanTreeLocked(ac, agentID, ph)
+	return db.rollupPlanTreeLocked(ac, agentID, ph)
 }
 
-// PlanState returns the plan tree view, folding done parents bottom-up.
+// PlanState returns the plan tree view of the actual stored statuses (no
+// auto-fold: a parent becomes Done only via explicit host PlanCommit).
 func (db *DB) PlanState(agentID uint64, planID string) (*PlanTree, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -283,6 +286,20 @@ func (db *DB) updatePlanNodeLocked(ac *agentContext, agentID, nodeID uint64, sta
 	if summary != "" {
 		node.Summary = summary
 	}
+	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
+		return err
+	}
+	return nil
+}
+
+// updatePlanNodeSummaryLocked sets a plan node's Summary without touching its
+// Status (Model A: a node's Status changes only via explicit host commit).
+func (db *DB) updatePlanNodeSummaryLocked(ac *agentContext, agentID, nodeID uint64, summary string) error {
+	node, err := core.ReadTrajectorySlot(db.engine, agentID, nodeID)
+	if err != nil {
+		return err
+	}
+	node.Summary = summary
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}

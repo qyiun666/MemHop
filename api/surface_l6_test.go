@@ -92,12 +92,13 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 }
 
 // TestSurfacePlanTriForm exercises the plan tri-form end-to-end through the
-// api facade: PlanCommit advances a node, PlanState returns the folded tree
-// with string statuses and hex-free ids, and a nested commit folds to root.
+// api facade: PlanCommit advances a node, PlanState returns the tree with
+// string statuses and hex-free ids, and under Model A a parent becomes Done
+// only when the host explicitly commits it (then Done children roll up).
 func TestSurfacePlanTriForm(t *testing.T) {
 	db := openSurfaceDB(t)
 	planID := common.FormatHash(common.HashID("plan-1"))
-	// Root in_progress → child done → child done → root folds to done.
+	// Root in_progress → child done → child done → host completes root → done.
 	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, "in_progress", ""); err != nil {
 		t.Fatalf("commit root: %v", err)
 	}
@@ -107,12 +108,24 @@ func TestSurfacePlanTriForm(t *testing.T) {
 	if err := db.PlanCommit(planID, "1.2", TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, "done", "step B"); err != nil {
 		t.Fatalf("commit 1.2: %v", err)
 	}
+	// Model A: root is NOT auto-folded by its children; the host must commit it.
 	tree, err := db.PlanState(planID)
 	if err != nil {
 		t.Fatalf("plan state: %v", err)
 	}
+	if tree.Root.Status == "done" {
+		t.Fatalf("root must NOT auto-fold before explicit host commit, got %s", tree.Root.Status)
+	}
+	// Host explicitly completes the parent → it becomes Done and rolls up.
+	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, "done", ""); err != nil {
+		t.Fatalf("commit root done: %v", err)
+	}
+	tree, err = db.PlanState(planID)
+	if err != nil {
+		t.Fatalf("plan state: %v", err)
+	}
 	if tree.Root.Status != "done" {
-		t.Fatalf("root should fold to done, got %s", tree.Root.Status)
+		t.Fatalf("root should be done after explicit commit, got %s", tree.Root.Status)
 	}
 	if tree.TotalCount != 3 || tree.DoneCount != 3 {
 		t.Fatalf("counts: total=%d done=%d", tree.TotalCount, tree.DoneCount)

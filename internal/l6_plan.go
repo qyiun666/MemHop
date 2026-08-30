@@ -111,10 +111,12 @@ func countTree(v PlanNodeView) (done, total int) {
 	return done, total
 }
 
-// foldPlanTreeLocked folds every done-parent in the plan tree bottom-up:
-// a node whose children are all Done becomes Done with the concatenation of
-// its children summaries. It re-derives node ids from stored records.
-func (db *DB) foldPlanTreeLocked(ac *agentContext, agentID, planID uint64) error {
+// rollupPlanTreeLocked summarizes the given plan tree bottom-up: for every
+// node, its Summary becomes the concatenation of its Done children's
+// summaries. It NEVER changes a node's Status — a parent becomes Done only
+// when the host explicitly commits it (Model A). It re-derives node ids from
+// stored records.
+func (db *DB) rollupPlanTreeLocked(ac *agentContext, agentID, planID uint64) error {
 	nodes := repo.CollectPlanNodes(db.engine, agentID, planID)
 	byNode := make(map[uint64]*planNode, len(nodes))
 	for i := range nodes {
@@ -131,7 +133,6 @@ func (db *DB) foldPlanTreeLocked(ac *agentContext, agentID, planID uint64) error
 			p.children = append(p.children, byNode[nodes[i].IDHash])
 		}
 	}
-	// Find root and fold bottom-up.
 	var root *planNode
 	for _, n := range nodes {
 		if n.ParentID == 0 {
@@ -142,45 +143,37 @@ func (db *DB) foldPlanTreeLocked(ac *agentContext, agentID, planID uint64) error
 	if root == nil {
 		return nil
 	}
-	return db.foldNodeLocked(ac, agentID, root)
+	return db.rollupNodeLocked(ac, agentID, root)
 }
 
-// foldNodeLocked recursively folds children first, then, if all children are
-// Done and this node is not, sets it to Done with the concatenated summaries.
-func (db *DB) foldNodeLocked(ac *agentContext, agentID uint64, n *planNode) error {
+// rollupNodeLocked recurses children first, then sets the node's Summary to
+// the concatenation of its Done children's summaries. It only updates
+// Summary, never Status (Model A: explicit parent completion).
+func (db *DB) rollupNodeLocked(ac *agentContext, agentID uint64, n *planNode) error {
 	for _, c := range n.children {
-		if err := db.foldNodeLocked(ac, agentID, c); err != nil {
+		if err := db.rollupNodeLocked(ac, agentID, c); err != nil {
 			return err
 		}
 	}
-	if len(n.children) > 0 && allDone(n.children) && n.status != core.StatusDone {
-		var parts []string
-		for _, c := range n.children {
-			if c.summary != "" {
-				parts = append(parts, c.summary)
-			}
-		}
-		summary := strings.Join(parts, "; ")
-		if err := db.updatePlanNodeLocked(ac, agentID, n.id, core.StatusDone, summary); err != nil {
-			return err
-		}
-		// Sync the in-memory status so the parent's allDone check sees the
-		// freshly-folded child, letting the fold propagate to ancestors in a
-		// single call (bottom-up reach).
-		n.status = core.StatusDone
-		n.summary = summary
+	if len(n.children) == 0 {
+		return nil
 	}
+	var parts []string
+	for _, c := range n.children {
+		if c.status == core.StatusDone && c.summary != "" {
+			parts = append(parts, c.summary)
+		}
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	summary := strings.Join(parts, "; ")
+	if n.summary == summary {
+		return nil
+	}
+	if err := db.updatePlanNodeSummaryLocked(ac, agentID, n.id, summary); err != nil {
+		return err
+	}
+	n.summary = summary
 	return nil
-}
-
-func allDone(children []*planNode) bool {
-	if len(children) == 0 {
-		return false
-	}
-	for _, c := range children {
-		if c.status != core.StatusDone {
-			return false
-		}
-	}
-	return true
 }
