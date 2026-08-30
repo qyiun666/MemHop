@@ -148,7 +148,10 @@ func (db *DB) rollupPlanTreeLocked(ac *agentContext, agentID, planID uint64) err
 
 // rollupNodeLocked recurses children first, then sets the node's Summary to
 // the concatenation of its Done children's summaries. It only updates
-// Summary, never Status (Model A: explicit parent completion).
+// Summary, never Status (Model A: explicit parent completion). It does NOT
+// clobber a host-provided summary: when the node already has a Summary
+// (host-provided or previously rolled up), it is preserved; only an empty
+// Summary is backfilled from the Done children.
 func (db *DB) rollupNodeLocked(ac *agentContext, agentID uint64, n *planNode) error {
 	for _, c := range n.children {
 		if err := db.rollupNodeLocked(ac, agentID, c); err != nil {
@@ -156,6 +159,14 @@ func (db *DB) rollupNodeLocked(ac *agentContext, agentID uint64, n *planNode) er
 		}
 	}
 	if len(n.children) == 0 {
+		return nil
+	}
+	// Model A: a parent becomes Done only via explicit host commit. Only a
+	// Done parent folds its Done children's Summaries into its own; a
+	// not-yet-Done parent is left untouched so an incremental rollup (which
+	// runs after every PlanCommit) cannot pre-fill it and later fool the
+	// "preserve a host-provided Summary" check into keeping a stale value.
+	if n.status != core.StatusDone {
 		return nil
 	}
 	var parts []string
@@ -168,7 +179,7 @@ func (db *DB) rollupNodeLocked(ac *agentContext, agentID uint64, n *planNode) er
 		return nil
 	}
 	summary := strings.Join(parts, "; ")
-	if n.summary == summary {
+	if n.summary != "" || n.summary == summary {
 		return nil
 	}
 	if err := db.updatePlanNodeSummaryLocked(ac, agentID, n.id, summary); err != nil {

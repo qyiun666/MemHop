@@ -11,6 +11,8 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -72,7 +74,41 @@ func CollectPlanNodes(engine *core.StorageEngine, agentID uint64, planID uint64)
 		}
 		out = append(out, ev)
 	}
-	slices.SortFunc(out, func(a, b core.TrajectorySlot) int { return cmp.Compare(a.Seq, b.Seq) })
+	slices.SortFunc(out, func(a, b core.TrajectorySlot) int {
+		return cmp.Or(cmp.Compare(a.Seq, b.Seq), compareNodePath(a.NodePath, b.NodePath))
+	})
+	return out
+}
+
+// compareNodePath compares two node-path strings ("1", "1.2.1") numerically
+// segment by segment, so "1.10" sorts after "1.9" (not lexicographically
+// where "1.10" < "1.9"). Tie-breaks on length for equal numeric prefixes.
+func compareNodePath(a, b string) int {
+	as := splitDotSegments(a)
+	bs := splitDotSegments(b)
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		ai, _ := strconv.Atoi(as[i])
+		bi, _ := strconv.Atoi(bs[i])
+		if ai != bi {
+			return cmp.Compare(ai, bi)
+		}
+	}
+	return cmp.Compare(len(as), len(bs))
+}
+
+// splitDotSegments splits a node path on '.' returning non-empty numeric
+// segments; a path like "1.2.1" yields ["1","2","1"].
+func splitDotSegments(s string) []string {
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ".")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
 	return out
 }
 
