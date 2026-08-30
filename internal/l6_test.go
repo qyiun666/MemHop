@@ -339,3 +339,59 @@ func TestPlanStateParentNotAutoFoldedPartial(t *testing.T) {
 		t.Fatalf("counts: total=%d done=%d, want total=3 done=1", tree.TotalCount, tree.DoneCount)
 	}
 }
+
+// TestDreamPrunesExpiredPlanNodes verifies plan nodes age out with the same
+// 7-day retention as events: an expired plan node (Timestamp older than the
+// window) is swept by Dream even though it never enters the event TrajIndex.
+func TestDreamPrunesExpiredPlanNodes(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	planID := common.FormatHash(9)
+	old := time.Now().Add(-trajectoryRetention - time.Hour).UnixMilli()
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: old}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	// Age the node record directly (PlanCommit stamps it with "now").
+	id := core.HashPlanNode(9, "1")
+	if node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, id); err == nil {
+		node.Timestamp = old
+		_, _ = repo.WritePlanNode(db.engine, core.DefaultAgentID, node)
+	}
+	// Run Dream to trigger the prune sweep; with no active scenes the early
+	// return still runs the retention stage first.
+	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, id); err == nil {
+		t.Fatal("expired plan node should be pruned")
+	}
+}
+
+// TestPlanAppendCannotInjectNodeType verifies an appended plan event is forced
+// to NodeType=Event, so a host cannot inject a plan-node record that would
+// pollute the tree view.
+func TestPlanAppendCannotInjectNodeType(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	planID := common.FormatHash(9)
+	// Host tries to inject a plan-node Type on an event; it must be forced to Event.
+	if err := db.PlanAppend(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1000, NodeType: core.NodeTypePlan, Status: core.StatusDone}); err != nil {
+		t.Fatal(err)
+	}
+	nodes := repo.CollectPlanNodes(db.engine, core.DefaultAgentID, 9)
+	if len(nodes) != 1 {
+		t.Fatalf("want exactly 1 plan node, got %d", len(nodes))
+	}
+	if nodes[0].NodeType != core.NodeTypePlan {
+		t.Fatalf("plan node should be NodeTypePlan, got %d", nodes[0].NodeType)
+	}
+	// The appended event must be an Event, not a node.
+	evs := core.CollectAllTrajectories(db.engine, core.DefaultAgentID)
+	events := 0
+	for _, e := range evs {
+		if e.NodeType == core.NodeTypeEvent {
+			events++
+		}
+	}
+	if events != 1 {
+		t.Fatalf("want exactly 1 event, got %d", events)
+	}
+}

@@ -80,6 +80,21 @@ func CollectPlanNodes(engine *core.StorageEngine, agentID uint64, planID uint64)
 	return out
 }
 
+// CollectExpiredPlanNodes returns plan-node records (NodeType=Plan) whose
+// Timestamp is strictly older than before (Unix ms), across all plans of the
+// agent. Used by Dream's retention sweep since plan nodes are intentionally
+// kept out of the event TrajIndex.
+func CollectExpiredPlanNodes(engine *core.StorageEngine, agentID uint64, before int64) []core.TrajectorySlot {
+	var out []core.TrajectorySlot
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		if ev.NodeType != core.NodeTypePlan || ev.Timestamp >= before {
+			continue
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
 // compareNodePath compares two node-path strings ("1", "1.2.1") numerically
 // segment by segment, so "1.10" sorts after "1.9" (not lexicographically
 // where "1.10" < "1.9"). Tie-breaks on length for equal numeric prefixes.

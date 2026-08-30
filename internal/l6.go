@@ -92,6 +92,17 @@ func (db *DB) AppendTrajectory(agentID uint64, sessionID string, ev core.Traject
 	maxSeq, _ := ac.traj.MaxSeq(parsed)
 	ev.SessionID = parsed
 	ev.Seq = maxSeq + 1
+	// An appended event must never masquerade as a plan node: force the
+	// record to bare-event semantics so host-supplied plan-node fields
+	// (NodeType/PlanID/ParentID/NodePath/Status/Summary/PlanNodeRef) are
+	// always cleared on write.
+	ev.NodeType = core.NodeTypeEvent
+	ev.PlanID = 0
+	ev.ParentID = 0
+	ev.NodePath = ""
+	ev.Status = 0
+	ev.Summary = ""
+	ev.PlanNodeRef = 0
 	idHash, err := repo.AppendTrajectory(db.engine, agentID, ev)
 	if err != nil {
 		return err
@@ -224,7 +235,7 @@ func (db *DB) ensurePlanNode(ac *agentContext, agentID uint64, planID uint64, no
 			node = &core.TrajectorySlot{
 				IDHash: id, SessionID: planID, Seq: uint64(len(pathSoFar)),
 				NodeType: core.NodeTypePlan, PlanID: planID, ParentID: parentID,
-				NodePath: np, Status: core.StatusPending,
+				NodePath: np, Status: core.StatusPending, Timestamp: time.Now().UnixMilli(),
 			}
 			if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 				return 0, err
@@ -264,6 +275,15 @@ func (db *DB) appendPlanEventLocked(ac *agentContext, agentID, planID, nodeID ui
 	ev.SessionID = planID
 	ev.Seq = maxSeq + 1
 	ev.PlanNodeRef = nodeID
+	// An appended plan event is a plain event bound to the node: force the
+	// record to event semantics so a host cannot inject NodeType=Plan (or
+	// other plan-node fields) and pollute the tree view.
+	ev.NodeType = core.NodeTypeEvent
+	ev.PlanID = planID
+	ev.ParentID = 0
+	ev.NodePath = ""
+	ev.Status = 0
+	ev.Summary = ""
 	idHash, err := repo.AppendTrajectory(db.engine, agentID, ev)
 	if err != nil {
 		return err
@@ -286,6 +306,7 @@ func (db *DB) updatePlanNodeLocked(ac *agentContext, agentID, nodeID uint64, sta
 	if summary != "" {
 		node.Summary = summary
 	}
+	node.Timestamp = time.Now().UnixMilli()
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}
@@ -300,6 +321,7 @@ func (db *DB) updatePlanNodeSummaryLocked(ac *agentContext, agentID, nodeID uint
 		return err
 	}
 	node.Summary = summary
+	node.Timestamp = time.Now().UnixMilli()
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}

@@ -107,11 +107,24 @@ func dreamSceneSet(ac *agentContext, sceneID uint64) ([]uint64, error) {
 // never aborts Dream.
 func (db *DB) pruneTrajectoryStage(agentID uint64, ac *agentContext, rep *DreamReport) {
 	start := time.Now()
-	hashes := ac.traj.RemoveBefore(time.Now().Add(-trajectoryRetention).UnixMilli())
+	cutoff := time.Now().Add(-trajectoryRetention).UnixMilli()
+	hashes := ac.traj.RemoveBefore(cutoff)
 	var err error
 	if len(hashes) > 0 {
 		if _, err = repo.DeleteTrajectoryByIDs(db.engine, agentID, hashes); err != nil {
 			slog.Warn("dream: trajectory prune failed", "agent", common.FormatHash(agentID), "err", err)
+		}
+	}
+	// Plan nodes are intentionally kept out of the event TrajIndex, so sweep
+	// them separately by their own timestamp (also keeps the L6 store bounded).
+	expired := repo.CollectExpiredPlanNodes(db.engine, agentID, cutoff)
+	if len(expired) > 0 {
+		ids := make([]uint64, len(expired))
+		for i, n := range expired {
+			ids[i] = n.IDHash
+		}
+		if _, derr := repo.DeleteTrajectoryByIDs(db.engine, agentID, ids); derr != nil {
+			slog.Warn("dream: plan-node prune failed", "agent", common.FormatHash(agentID), "err", derr)
 		}
 	}
 	appendStage(rep, "l6_prune", start, err)
