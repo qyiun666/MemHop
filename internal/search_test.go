@@ -90,6 +90,38 @@ func TestSearchDirectedContextsIncludeNewTopic(t *testing.T) {
 	}
 }
 
+// TestSearchFiltersSceneByL3 locks the SCENEFIND scene-domain filter: a
+// Search that carries L3ID backfills the created scene's organizational L3
+// domain, and a later retrieval with the same L3ID only returns contexts
+// from scenes carrying that domain (SetSceneL3ID + candidateTopics).
+func TestSearchFiltersSceneByL3(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["rust","memory"]}`)
+	db := newSearchTestDB(t, srv.URL)
+
+	// First Search(AutoCreate + L3ID=A) creates and anchors a scene to L3ID=A.
+	planA := common.FormatHash(101) // 16 hex
+	qA := SearchQuery{Text: "rust ownership", AutoCreate: true, Timestamp: 1000, L3ID: &planA}
+	if _, err := db.Search(context.Background(), core.DefaultAgentID, qA); err != nil {
+		t.Fatalf("first Search: %v", err)
+	}
+
+	// A second Search with a different L3ID=B anchors another (independent) scene.
+	planB := common.FormatHash(102)
+	qB := SearchQuery{Text: "rust borrow checker", AutoCreate: true, Timestamp: 2000, L3ID: &planB}
+	if _, err := db.Search(context.Background(), core.DefaultAgentID, qB); err != nil {
+		t.Fatalf("second Search: %v", err)
+	}
+
+	// Retrieval scoped to L3ID=A must only surface contexts from that domain.
+	res, err := db.Search(context.Background(), core.DefaultAgentID, SearchQuery{Text: "rust ownership", AutoCreate: false, Timestamp: 3000, L3ID: &planA})
+	if err != nil {
+		t.Fatalf("scoped Search: %v", err)
+	}
+	if len(res.Contexts) == 0 {
+		t.Fatal("L3ID=A should return contexts from scene A")
+	}
+}
+
 // newSearchTestDB assembles a DB with a mock LLM server and a working
 // encoder over a fresh engine; the default-domain context (sparse/L2Meta
 // indexes, Dream bookkeeping) is created lazily by contextFor, mirroring

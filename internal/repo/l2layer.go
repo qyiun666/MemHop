@@ -180,6 +180,20 @@ func CreateSceneL2(engine *core.StorageEngine, agentID uint64, name string) (uin
 	return slot.SceneID, nil
 }
 
+// SetSceneL3ID assigns a scene's organizational L3 domain (project/目录) id.
+// Backfill is idempotent: a scene already carrying the same L3ID is untouched.
+func SetSceneL3ID(engine *core.StorageEngine, agentID uint64, sceneID uint64, l3ID uint64) error {
+	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
+	if err != nil {
+		return err
+	}
+	if slot.L3ID == l3ID {
+		return nil
+	}
+	slot.L3ID = l3ID
+	return core.WriteSceneSlot(engine, agentID, sceneID, slot)
+}
+
 // CollectAllScenesL2 returns every scene with TopicCount set to the number
 // of depth-1 root topics under it (single pass over all topics).
 func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) []core.SceneSlot {

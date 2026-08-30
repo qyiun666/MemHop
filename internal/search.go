@@ -109,7 +109,7 @@ func (ac *agentContext) searchDirected(db *DB, q SearchQuery, keywords []string)
 // depth<=1 topics plus the new topic ID.
 func (ac *agentContext) searchNormal(ctx context.Context, db *DB, q SearchQuery, keywords []string) ([]core.TopicSlot, uint64, error) {
 	hit, err := scenefind.TopScene(ctx, ac.id, db.engine, ac.l2Meta, ac.sparseIndex, db.encoder,
-		q.Text, keywords, ac.activeScenes, minSceneScore, q.DirectedL3ID)
+		q.Text, keywords, ac.activeScenes, minSceneScore, q.DirectedL3ID, q.L3ID)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -126,6 +126,17 @@ func (ac *agentContext) createTopicInScene(db *DB, q SearchQuery, keywords []str
 	sceneID, err := ac.ensureSceneForTopic(db, q, sceneID)
 	if err != nil {
 		return nil, 0, err
+	}
+	// 回填场景的组织归属 L3 域（若传入 L3ID）；SetSceneL3ID 幂等，命中老场景
+	// 无 L3ID 时同样补挂。
+	if q.L3ID != nil {
+		sceneHash, err := common.ParseID(*q.L3ID)
+		if err != nil {
+			return nil, 0, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
+		}
+		if err := repo.SetSceneL3ID(db.engine, ac.id, sceneID, sceneHash); err != nil {
+			return nil, 0, err
+		}
 	}
 	topicID, err := ac.writeNewTopic(db, q, keywords, sceneID)
 	if err != nil {

@@ -48,16 +48,18 @@ const (
 
 // TopScene scores all L2 topics via three concurrent channels, aggregates
 // by scene with bonuses, and returns the top scene above threshold.
-// activeSceneIDs get +0.2 once; l3ID restricts topics referencing that L3.
-// l2Meta supplies the candidate topics from the in-memory cache (nil falls
-// back to a full record scan). Scoring constants (RRF k, bonuses, vector
-// floor scale) are package-private tuning constants; threshold stays an
-// explicit parameter so tests can exercise it.
+// activeSceneIDs get +0.2 once; l3ID restricts topics referencing that L3;
+// sceneL3ID restricts candidate topics to scenes whose organizational L3
+// domain matches (backfilled by SetSceneL3ID). l2Meta supplies the candidate
+// topics from the in-memory cache (nil falls back to a full record scan).
+// Scoring constants (RRF k, bonuses, vector floor scale) are package-private
+// tuning constants; threshold stays an explicit parameter so tests can
+// exercise it.
 func TopScene(ctx context.Context, agentID uint64, engine *core.StorageEngine, l2Meta *index.L2MetaIndex,
 	sparse *index.SparseIndex,
 	enc Encoder, query string, keywords []string,
-	activeSceneIDs []uint64, threshold float32, l3ID *string) (SceneHit, error) {
-	topics, err := candidateTopics(agentID, engine, l2Meta, l3ID)
+	activeSceneIDs []uint64, threshold float32, l3ID *string, sceneL3ID *string) (SceneHit, error) {
+	topics, err := candidateTopics(agentID, engine, l2Meta, l3ID, sceneL3ID)
 	if err != nil {
 		return SceneHit{}, err
 	}
@@ -92,8 +94,10 @@ func TopScene(ctx context.Context, agentID uint64, engine *core.StorageEngine, l
 }
 
 // candidateTopics lists all depth<=2 topics (by UserTimestamp) and, when an
-// L3 filter is given, keeps only topics referencing that hypergraph.
-func candidateTopics(agentID uint64, engine *core.StorageEngine, l2Meta *index.L2MetaIndex, l3ID *string) ([]core.TopicSlot, error) {
+// L3 filter is given, keeps only topics referencing that hypergraph. When a
+// sceneL3ID is given, topics are first narrowed to scenes whose
+// organizational L3 domain (backfilled by SetSceneL3ID) matches.
+func candidateTopics(agentID uint64, engine *core.StorageEngine, l2Meta *index.L2MetaIndex, l3ID *string, sceneL3ID *string) ([]core.TopicSlot, error) {
 	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 		Engine:  engine,
 		AgentID: agentID,
@@ -104,6 +108,25 @@ func candidateTopics(agentID uint64, engine *core.StorageEngine, l2Meta *index.L
 	}) // all scenes, depth<=2, by UserTimestamp
 	if err != nil {
 		return nil, err
+	}
+	if sceneL3ID != nil {
+		sceneHash, err := common.ParseID(*sceneL3ID)
+		if err != nil {
+			return nil, common.NewError(common.ErrInvalidQuery, "parse scene l3 id", err)
+		}
+		keep := make(map[uint64]struct{})
+		for _, sc := range repo.CollectAllScenesL2(engine, agentID) {
+			if sc.L3ID == sceneHash {
+				keep[sc.SceneID] = struct{}{}
+			}
+		}
+		filtered := topics[:0]
+		for _, t := range topics {
+			if _, ok := keep[t.SceneID]; ok {
+				filtered = append(filtered, t)
+			}
+		}
+		topics = filtered
 	}
 	if l3ID == nil {
 		return topics, nil

@@ -12,6 +12,7 @@ type SearchQuery struct {
 	Text         string  `json:"text"`
 	DirectedL2ID *string `json:"directed_l2_id,omitempty"`
 	DirectedL3ID *string `json:"directed_l3_id,omitempty"`
+	L3ID         *string `json:"l3_id,omitempty"` // 场景挂靠的项目域 L3 图（16 位 hex），用于场景前置筛选与回填
 	AutoCreate   bool    `json:"auto_create,omitempty"`
 	Timestamp    int64   `json:"timestamp"`
 }
