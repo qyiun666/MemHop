@@ -74,6 +74,7 @@ func fromSceneSlot(s internal.SceneSlot) SceneSlot {
 		TopicCount: s.TopicCount,
 		HitCount:   s.HitCount,
 		LastHitAt:  s.LastHitAt,
+		L3ID:       formatOptionalID(s.L3ID),
 	}
 }
 
@@ -246,13 +247,20 @@ func parseOptionalID(s string) (uint64, error) {
 
 func fromTrajectorySlot(s internal.TrajectorySlot) TrajectorySlot {
 	return TrajectorySlot{
-		IDHash:    formatID(s.IDHash),
-		SessionID: formatID(s.SessionID),
-		Seq:       s.Seq,
-		EventType: s.EventType,
-		Payload:   s.Payload,
-		TopicID:   formatOptionalID(s.TopicID),
-		Timestamp: s.Timestamp,
+		IDHash:      formatID(s.IDHash),
+		SessionID:   formatID(s.SessionID),
+		Seq:         s.Seq,
+		EventType:   s.EventType,
+		Payload:     s.Payload,
+		TopicID:     formatOptionalID(s.TopicID),
+		Timestamp:   s.Timestamp,
+		NodeType:    s.NodeType,
+		PlanID:      formatOptionalID(s.PlanID),
+		ParentID:    formatOptionalID(s.ParentID),
+		NodePath:    s.NodePath,
+		Status:      s.Status,
+		Summary:     s.Summary,
+		PlanNodeRef: formatOptionalID(s.PlanNodeRef),
 	}
 }
 
@@ -261,12 +269,51 @@ func toCoreTrajectorySlot(s TrajectorySlot) (internal.TrajectorySlot, error) {
 	if err != nil {
 		return internal.TrajectorySlot{}, err
 	}
+	planID, err := parseOptionalID(s.PlanID)
+	if err != nil {
+		return internal.TrajectorySlot{}, err
+	}
+	parentID, err := parseOptionalID(s.ParentID)
+	if err != nil {
+		return internal.TrajectorySlot{}, err
+	}
+	planNodeRef, err := parseOptionalID(s.PlanNodeRef)
+	if err != nil {
+		return internal.TrajectorySlot{}, err
+	}
 	return internal.TrajectorySlot{
-		EventType: s.EventType,
-		Payload:   s.Payload,
-		TopicID:   topicID,
-		Timestamp: s.Timestamp,
+		EventType:   s.EventType,
+		Payload:     s.Payload,
+		TopicID:     topicID,
+		Timestamp:   s.Timestamp,
+		NodeType:    s.NodeType,
+		PlanID:      planID,
+		ParentID:    parentID,
+		NodePath:    s.NodePath,
+		Status:      s.Status,
+		Summary:     s.Summary,
+		PlanNodeRef: planNodeRef,
 	}, nil
+}
+
+func fromPlanTree(t *internal.PlanTree) PlanTree {
+	if t == nil {
+		return PlanTree{}
+	}
+	root := fromPlanNodeView(t.Root)
+	return PlanTree{Root: root, DoneCount: t.DoneCount, TotalCount: t.TotalCount}
+}
+
+func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
+	out := PlanNodeView{
+		NodePath: v.NodePath, Title: v.Title, Status: string(v.Status),
+		Summary: v.Summary, ChildCount: v.ChildCount, TrajCount: v.TrajCount,
+		LastSummary: v.LastSummary, Children: make([]PlanNodeView, 0, len(v.Children)),
+	}
+	for _, c := range v.Children {
+		out.Children = append(out.Children, fromPlanNodeView(c))
+	}
+	return out
 }
 
 func cloneStrings(in []string) []string {

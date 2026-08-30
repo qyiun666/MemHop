@@ -82,6 +82,7 @@ type SceneSlot struct {
 	TopicCount int    `json:"topic_count"`
 	HitCount   uint32 `json:"hit_count"`
 	LastHitAt  int64  `json:"last_hit_at"`
+	L3ID       string `json:"l3_id,omitempty"`
 }
 
 // TopicSlot is an L2 dual-track session node (user/agent).
@@ -205,4 +206,31 @@ type TrajectorySlot struct {
 	Payload   string `json:"payload"`
 	TopicID   string `json:"topic_id,omitempty"` // L2 topic the turn resolves to, 16-char hex
 	Timestamp int64  `json:"timestamp"`
+
+	NodeType    uint8  `json:"node_type,omitempty"`
+	PlanID      string `json:"plan_id,omitempty"`
+	ParentID    string `json:"parent_id,omitempty"`
+	NodePath    string `json:"node_path,omitempty"`
+	Status      uint8  `json:"status,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	PlanNodeRef string `json:"plan_node_ref,omitempty"`
+}
+
+// PlanNodeView is the external plan-tree node; Status is the string form.
+type PlanNodeView struct {
+	NodePath    string         `json:"node_path"`
+	Title       string         `json:"title"`
+	Status      string         `json:"status"`
+	Summary     string         `json:"summary"`
+	ChildCount  int            `json:"child_count"`
+	TrajCount   int            `json:"traj_count"`
+	LastSummary string         `json:"last_summary"`
+	Children    []PlanNodeView `json:"children"`
+}
+
+// PlanTree is the external plan tree root view.
+type PlanTree struct {
+	Root       PlanNodeView `json:"root"`
+	DoneCount  int          `json:"done_count"`
+	TotalCount int          `json:"total_count"`
 }

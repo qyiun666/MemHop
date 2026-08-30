@@ -232,3 +232,31 @@ func (s *Session) AppendTrajectory(sessionID string, ev TrajectorySlot) error {
 	}
 	return s.Session.AppendTrajectory(sessionID, coreEv)
 }
+
+// PlanAppend appends one event to a plan node (hex planID, nodePath).
+func (s *Session) PlanAppend(planID, nodePath string, ev TrajectorySlot) error {
+	coreEv, err := toCoreTrajectorySlot(ev)
+	if err != nil {
+		return err
+	}
+	return s.Session.PlanAppend(planID, nodePath, coreEv)
+}
+
+// PlanCommit advances a plan node to a status and appends the step event.
+func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status string, summary string) error {
+	coreEv, err := toCoreTrajectorySlot(ev)
+	if err != nil {
+		return err
+	}
+	return s.Session.PlanCommit(planID, nodePath, coreEv, internal.PlanStatus(status), summary)
+}
+
+// PlanState returns the plan tree with hex-free string statuses.
+func (s *Session) PlanState(planID string) (*PlanTree, error) {
+	t, err := s.Session.PlanState(planID)
+	if err != nil {
+		return nil, err
+	}
+	out := fromPlanTree(t)
+	return &out, nil
+}

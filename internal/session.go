@@ -223,3 +223,20 @@ func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 func (s *Session) Crystallize(ctx context.Context, sessionID string) (*CrystallizeResult, error) {
 	return s.db.Crystallize(ctx, s.agentID, sessionID)
 }
+
+// ---- L6 plan (tri-form) ----
+
+// PlanAppend appends one event to a plan node without advancing the plan.
+func (s *Session) PlanAppend(planID, nodePath string, ev TrajectorySlot) error {
+	return s.db.PlanAppend(s.agentID, planID, nodePath, ev)
+}
+
+// PlanCommit advances a plan node to a status and appends the step event.
+func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status PlanStatus, summary string) error {
+	return s.db.PlanCommit(s.agentID, planID, nodePath, ev, status, summary)
+}
+
+// PlanState returns the plan tree view.
+func (s *Session) PlanState(planID string) (*PlanTree, error) {
+	return s.db.PlanState(s.agentID, planID)
+}
