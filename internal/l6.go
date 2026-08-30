@@ -35,11 +35,6 @@ const maxCrystallizePayload = 128 * 1024
 // than this. L6 is a process index — durable products live in L4/L5.
 const trajectoryRetention = 7 * 24 * time.Hour
 
-// PlanTree is the assembled plan view returned by PlanState. Its node
-// shape is filled in by Task 4; a minimal placeholder keeps the PlanState
-// signature stable in the interim.
-type PlanTree struct{}
-
 // PlanStatus is the string surface of a plan node's lifecycle.
 type PlanStatus string
 
@@ -159,7 +154,7 @@ func (db *DB) PlanAppend(agentID uint64, planID string, nodePath string, ev core
 }
 
 // PlanCommit advances a plan node to a status (with optional summary) and
-// appends the step event. Folding of done children is wired in Task 4.
+// appends the step event, then folds any done parents bottom-up.
 func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core.TrajectorySlot, status PlanStatus, summary string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -181,12 +176,24 @@ func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core
 	if err := db.updatePlanNodeLocked(ac, agentID, nodeID, u8, summary); err != nil {
 		return err
 	}
-	return db.appendPlanEventLocked(ac, agentID, ph, nodeID, ev)
+	if err := db.appendPlanEventLocked(ac, agentID, ph, nodeID, ev); err != nil {
+		return err
+	}
+	return db.foldPlanTreeLocked(ac, agentID, ph)
 }
 
-// PlanState returns the plan tree view (implemented in Task 4). Stub.
+// PlanState returns the plan tree view, folding done parents bottom-up.
 func (db *DB) PlanState(agentID uint64, planID string) (*PlanTree, error) {
-	return nil, common.NewError(common.ErrInvalidQuery, "PlanState implemented in Task 4")
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer ac.mu.Unlock()
+	ph, err := common.ParseID(planID)
+	if err != nil {
+		return nil, common.NewError(common.ErrInvalidQuery, "parse plan id", err)
+	}
+	return db.buildPlanTreeLocked(ac, agentID, ph)
 }
 
 // ensurePlanNode resolves nodePath to a plan node id, creating the node

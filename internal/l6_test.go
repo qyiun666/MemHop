@@ -246,3 +246,31 @@ func TestPlanEventSeqStartsAtOneNoCollision(t *testing.T) {
 		t.Fatalf("event ids must not collide: %d", evs[0].IDHash)
 	}
 }
+
+func TestPlanStateFoldsDoneChildren(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	planID := common.FormatHash(9)
+	// 根 1 pending → 子 1.1 done → 子 1.2 done → 父折叠为 done
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanDone, "step A"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanDone, "step B"); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Root.Status != PlanDone {
+		t.Fatalf("root should fold to done, got %s", tree.Root.Status)
+	}
+	if tree.TotalCount != 3 || tree.DoneCount != 3 {
+		t.Fatalf("counts: total=%d done=%d", tree.TotalCount, tree.DoneCount)
+	}
+	if tree.Root.Summary == "" {
+		t.Fatal("root summary should be concatenated from children summaries")
+	}
+}
