@@ -90,3 +90,73 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 		t.Fatalf("crystallize: %v", err)
 	}
 }
+
+// TestSurfacePlanTriForm exercises the plan tri-form end-to-end through the
+// api facade: PlanCommit advances a node, PlanState returns the folded tree
+// with string statuses and hex-free ids, and a nested commit folds to root.
+func TestSurfacePlanTriForm(t *testing.T) {
+	db := openSurfaceDB(t)
+	planID := common.FormatHash(common.HashID("plan-1"))
+	// Root in_progress → child done → child done → root folds to done.
+	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, "in_progress", ""); err != nil {
+		t.Fatalf("commit root: %v", err)
+	}
+	if err := db.PlanCommit(planID, "1.1", TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, "done", "step A"); err != nil {
+		t.Fatalf("commit 1.1: %v", err)
+	}
+	if err := db.PlanCommit(planID, "1.2", TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, "done", "step B"); err != nil {
+		t.Fatalf("commit 1.2: %v", err)
+	}
+	tree, err := db.PlanState(planID)
+	if err != nil {
+		t.Fatalf("plan state: %v", err)
+	}
+	if tree.Root.Status != "done" {
+		t.Fatalf("root should fold to done, got %s", tree.Root.Status)
+	}
+	if tree.TotalCount != 3 || tree.DoneCount != 3 {
+		t.Fatalf("counts: total=%d done=%d", tree.TotalCount, tree.DoneCount)
+	}
+	if tree.Root.Summary == "" {
+		t.Fatal("root summary should be concatenated from children")
+	}
+	// Child nodes carry string status and are well-formed.
+	if len(tree.Root.Children) != 2 {
+		t.Fatalf("root should have 2 children, got %d", len(tree.Root.Children))
+	}
+	for _, c := range tree.Root.Children {
+		if c.Status != "done" || c.Summary == "" {
+			t.Fatalf("child should be done with summary: %+v", c)
+		}
+	}
+	// PlanAppend does not advance; it just binds an event to a node.
+	if err := db.PlanAppend(planID, "1.1.1", TrajectorySlot{EventType: "tool_call", Timestamp: 2000}); err != nil {
+		t.Fatalf("plan append: %v", err)
+	}
+}
+
+// TestSurfaceListScenesByL3 verifies scenes anchored to an L3 domain are
+// listed with hex ids after a scoped Search creates/anchors them.
+func TestSurfaceListScenesByL3(t *testing.T) {
+	db := openSurfaceDB(t)
+	ctx := context.Background()
+	l3A := common.FormatHash(common.HashID("l3-proj-a"))
+	if _, err := db.Search(ctx, SearchQuery{Text: "rust ownership", AutoCreate: true, Timestamp: 1000, L3ID: &l3A}); err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	scenes, err := db.ListScenesByL3(l3A)
+	if err != nil {
+		t.Fatalf("list by l3: %v", err)
+	}
+	if len(scenes) == 0 {
+		t.Fatal("ListScenesByL3 should return the anchored scene")
+	}
+	for _, sc := range scenes {
+		if sc.L3ID != l3A {
+			t.Fatalf("scene %s should be anchored to %s, got %s", sc.SceneID, l3A, sc.L3ID)
+		}
+		if !isHexID(sc.SceneID) {
+			t.Fatalf("scene id %s should be 16 hex", sc.SceneID)
+		}
+	}
+}

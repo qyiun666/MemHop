@@ -72,6 +72,19 @@ func (s *Session) ListScenes() ([]SceneSlot, error) {
 	return out, nil
 }
 
+// ListScenesByL3 returns scenes anchored to an L3 domain with hex IDs.
+func (s *Session) ListScenesByL3(l3ID string) ([]SceneSlot, error) {
+	scenes, err := s.Session.ListScenesByL3(l3ID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SceneSlot, len(scenes))
+	for i, sc := range scenes {
+		out[i] = fromSceneSlot(sc)
+	}
+	return out, nil
+}
+
 // GetL3 returns an L3 graph with hex IDs.
 func (s *Session) GetL3(id string) (*L3Graph, error) {
 	g, err := s.Session.GetL3(id)

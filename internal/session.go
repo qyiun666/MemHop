@@ -103,6 +103,11 @@ func (s *Session) ListScenes() ([]SceneSlot, error) {
 	return s.db.ListScenes(s.agentID)
 }
 
+// ListScenesByL3 returns scenes anchored to an L3 domain.
+func (s *Session) ListScenesByL3(l3ID string) ([]SceneSlot, error) {
+	return s.db.ListScenesByL3(s.agentID, l3ID)
+}
+
 // ActiveSceneIDs returns the active scene IDs as 16-char hex strings,
 // consistent with the hex ID parameters of SceneContext / MergeScenes /
 // Search.DirectedL2ID.

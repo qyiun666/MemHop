@@ -24,6 +24,31 @@ func (db *DB) ListScenes(agentID uint64) ([]core.SceneSlot, error) {
 	return all, nil
 }
 
+// ListScenesByL3 returns all scenes anchored to the given L3 domain
+// (project/目录) as their organizational anchor id.
+func (db *DB) ListScenesByL3(agentID uint64, l3ID string) ([]core.SceneSlot, error) {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return nil, err
+	}
+	defer ac.mu.Unlock()
+	hash, err := common.ParseID(l3ID)
+	if err != nil {
+		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
+	}
+	all := repo.CollectAllScenesL2(db.engine, agentID)
+	var out []core.SceneSlot
+	for _, s := range all {
+		if s.L3ID == hash {
+			out = append(out, s)
+		}
+	}
+	if out == nil {
+		return []core.SceneSlot{}, nil
+	}
+	return out, nil
+}
+
 // ActiveSceneIDs returns a copy of the agent's in-memory active scene IDs
 // (the Dream consolidation targets).
 func (db *DB) ActiveSceneIDs(agentID uint64) []uint64 {
