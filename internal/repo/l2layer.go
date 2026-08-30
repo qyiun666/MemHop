@@ -180,14 +180,16 @@ func CreateSceneL2(engine *core.StorageEngine, agentID uint64, name string) (uin
 	return slot.SceneID, nil
 }
 
-// SetSceneL3ID assigns a scene's organizational L3 domain (project/目录) id.
-// Backfill is idempotent: a scene already carrying the same L3ID is untouched.
+// SetSceneL3ID assigns a scene's organizational L3 domain (project/目录) id,
+// but only when the scene has no domain yet. A scene already owning a domain
+// (whether this one or another) is left untouched, so a Directed route can
+// never steal an already-anchored scene from its domain.
 func SetSceneL3ID(engine *core.StorageEngine, agentID uint64, sceneID uint64, l3ID uint64) error {
 	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
 	if err != nil {
 		return err
 	}
-	if slot.L3ID == l3ID {
+	if slot.L3ID != 0 {
 		return nil
 	}
 	slot.L3ID = l3ID

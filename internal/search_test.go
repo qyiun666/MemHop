@@ -120,6 +120,21 @@ func TestSearchFiltersSceneByL3(t *testing.T) {
 	if len(res.Contexts) == 0 {
 		t.Fatal("L3ID=A should return contexts from scene A")
 	}
+	// Every returned context topic must live in a scene anchored to domain A;
+	// a broken scene-domain filter would leak scene B's topics past this gate.
+	sceneHashA, err := common.ParseID(planA)
+	if err != nil {
+		t.Fatalf("parse planA: %v", err)
+	}
+	for _, c := range res.Contexts {
+		slot, err := core.ReadSceneSlot(db.engine, core.DefaultAgentID, c.SceneID)
+		if err != nil {
+			t.Fatalf("read scene slot for topic %d (scene %d): %v", c.ID, c.SceneID, err)
+		}
+		if slot.L3ID != sceneHashA {
+			t.Errorf("topic %d in scene %d has domain L3ID %d, want %d", c.ID, c.SceneID, slot.L3ID, sceneHashA)
+		}
+	}
 }
 
 // newSearchTestDB assembles a DB with a mock LLM server and a working

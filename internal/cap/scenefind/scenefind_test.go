@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -288,5 +289,58 @@ func TestTopSceneVectorFloorNoOverride(t *testing.T) {
 	want := float32(2.0) + 2.0/61.0 + 2.0/62.0 // two topics: keyword hit 1.0 each + RRF ranks 1/2 per channel
 	if hit.SceneID != 1 || !approx(hit.Score, want) {
 		t.Errorf("hit = %+v; want SceneID=1 Score=%v (real-signal scene not overridden by vector floor)", hit, want)
+	}
+}
+
+// TestCandidateTopicsSceneL3IDFilter locks the scene-domain (L3ID) filter: a
+// scene's organizational L3 anchor keeps only its own scenes' topics, so a
+// topic in scene B is excluded even when its content references domain A. It
+// also composes with the content-semantic l3ID filter as an intersection.
+func TestCandidateTopicsSceneL3IDFilter(t *testing.T) {
+	engine := newTestEngine(t)
+	agent := core.DefaultAgentID
+	l3A := core.HashPlanNode(201, "x")
+	l3B := core.HashPlanNode(202, "x")
+
+	sa := core.NewSceneSlot("scene-a")
+	sa.SceneID = 101
+	sa.L3ID = l3A
+	sb := core.NewSceneSlot("scene-b")
+	sb.SceneID = 102
+	sb.L3ID = l3B
+	if err := core.WriteSceneSlot(engine, agent, sa.SceneID, &sa); err != nil {
+		t.Fatal(err)
+	}
+	if err := core.WriteSceneSlot(engine, agent, sb.SceneID, &sb); err != nil {
+		t.Fatal(err)
+	}
+
+	// Topic 4001 belongs to scene A and references domain A; topic 4002
+	// belongs to scene B but references domain A in its content L3Refs.
+	t1 := newTopic(4001, 101, 100, []string{"rust"})
+	t1.L3Refs = []uint64{l3A}
+	writeTopic(t, engine, index.NewSparseIndex(), agent, t1)
+	t2 := newTopic(4002, 102, 200, []string{"rust"})
+	t2.L3Refs = []uint64{l3A}
+	writeTopic(t, engine, index.NewSparseIndex(), agent, t2)
+
+	l3AStr := common.FormatHash(l3A)
+	// scene-domain only: 4002 is excluded because its scene B is anchored to
+	// l3B, regardless of the l3A content ref.
+	got, err := candidateTopics(agent, engine, nil, nil, &l3AStr)
+	if err != nil {
+		t.Fatalf("candidateTopics(sceneL3ID=A): %v", err)
+	}
+	if len(got) != 1 || got[0].ID != 4001 {
+		t.Fatalf("sceneL3ID=A -> got %+v; want only topic 4001 (4002 belongs to scene B)", got)
+	}
+
+	// Intersection: scene-domain AND content l3ID both filter to domain A.
+	both, err := candidateTopics(agent, engine, nil, &l3AStr, &l3AStr)
+	if err != nil {
+		t.Fatalf("candidateTopics(sceneL3ID=A, l3ID=A): %v", err)
+	}
+	if len(both) != 1 || both[0].ID != 4001 {
+		t.Fatalf("sceneL3ID=A + l3ID=A -> got %+v; want only topic 4001", both)
 	}
 }
