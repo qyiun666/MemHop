@@ -182,8 +182,8 @@ func CreateSceneL2(engine *core.StorageEngine, agentID uint64, name string) (uin
 
 // SetSceneL3ID assigns a scene's organizational L3 domain (project/目录) id,
 // but only when the scene has no domain yet. A scene already owning a domain
-// (whether this one or another) is left untouched, so a Directed route can
-// never steal an already-anchored scene from its domain.
+// (whether the same one or a different one) is left untouched, so a Directed
+// route can never steal an already-anchored scene from its domain.
 func SetSceneL3ID(engine *core.StorageEngine, agentID uint64, sceneID uint64, l3ID uint64) error {
 	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
 	if err != nil {

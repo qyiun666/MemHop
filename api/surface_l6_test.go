@@ -136,27 +136,52 @@ func TestSurfacePlanTriForm(t *testing.T) {
 }
 
 // TestSurfaceListScenesByL3 verifies scenes anchored to an L3 domain are
-// listed with hex ids after a scoped Search creates/anchors them.
+// listed with hex ids after a scoped Search creates/anchors them, and that
+// two different L3 domains yield DISJOINT scene sets (the exclusion branch).
 func TestSurfaceListScenesByL3(t *testing.T) {
 	db := openSurfaceDB(t)
 	ctx := context.Background()
 	l3A := common.FormatHash(common.HashID("l3-proj-a"))
+	l3B := common.FormatHash(common.HashID("l3-proj-b"))
+	// Two separate scoped Searches anchor two distinct scenes to different
+	// L3 domains (distinct text+timestamp ⇒ distinct scene names/ids).
 	if _, err := db.Search(ctx, SearchQuery{Text: "rust ownership", AutoCreate: true, Timestamp: 1000, L3ID: &l3A}); err != nil {
-		t.Fatalf("search: %v", err)
+		t.Fatalf("search A: %v", err)
 	}
-	scenes, err := db.ListScenesByL3(l3A)
+	if _, err := db.Search(ctx, SearchQuery{Text: "rust borrow checker", AutoCreate: true, Timestamp: 2000, L3ID: &l3B}); err != nil {
+		t.Fatalf("search B: %v", err)
+	}
+	scenesA, err := db.ListScenesByL3(l3A)
 	if err != nil {
-		t.Fatalf("list by l3: %v", err)
+		t.Fatalf("list by l3 A: %v", err)
 	}
-	if len(scenes) == 0 {
-		t.Fatal("ListScenesByL3 should return the anchored scene")
+	if len(scenesA) == 0 {
+		t.Fatal("ListScenesByL3(A) should return the l3A-anchored scene")
 	}
-	for _, sc := range scenes {
+	for _, sc := range scenesA {
 		if sc.L3ID != l3A {
 			t.Fatalf("scene %s should be anchored to %s, got %s", sc.SceneID, l3A, sc.L3ID)
 		}
 		if !isHexID(sc.SceneID) {
 			t.Fatalf("scene id %s should be 16 hex", sc.SceneID)
+		}
+	}
+	scenesB, err := db.ListScenesByL3(l3B)
+	if err != nil {
+		t.Fatalf("list by l3 B: %v", err)
+	}
+	if len(scenesB) == 0 {
+		t.Fatal("ListScenesByL3(B) should return the l3B-anchored scene")
+	}
+	// Cross-cutting: the l3A list must not contain any scene the l3B list
+	// holds, i.e. the two domain lists are disjoint (exclusion branch).
+	sceneIDsB := make(map[string]struct{}, len(scenesB))
+	for _, sc := range scenesB {
+		sceneIDsB[sc.SceneID] = struct{}{}
+	}
+	for _, sc := range scenesA {
+		if _, dup := sceneIDsB[sc.SceneID]; dup {
+			t.Fatalf("scene %s leaked into both l3A and l3B lists", sc.SceneID)
 		}
 	}
 }

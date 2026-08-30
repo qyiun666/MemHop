@@ -24,8 +24,8 @@ func (db *DB) ListScenes(agentID uint64) ([]core.SceneSlot, error) {
 	return all, nil
 }
 
-// ListScenesByL3 returns all scenes anchored to the given L3 domain
-// (project/目录) as their organizational anchor id.
+// ListScenesByL3 returns all scenes anchored to the given L3 domain id
+// (project/目录), i.e. scenes whose organizational L3 anchor equals it.
 func (db *DB) ListScenesByL3(agentID uint64, l3ID string) ([]core.SceneSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
