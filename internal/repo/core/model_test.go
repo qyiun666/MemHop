@@ -253,3 +253,27 @@ func TestTrajectorySlotRoundtrip(t *testing.T) {
 		t.Fatalf("topic_id mismatch: %+v", got)
 	}
 }
+
+func TestSceneSlotL3ID(t *testing.T) {
+	s := NewSceneSlot("proj-a")
+	if s.L3ID != 0 {
+		t.Fatalf("fresh scene must have L3ID 0, got %d", s.L3ID)
+	}
+	s.L3ID = 42
+	if got := s.L3ID; got != 42 {
+		t.Fatalf("want 42, got %d", got)
+	}
+}
+
+func TestTrajectorySlotPlanFields(t *testing.T) {
+	ev := TrajectorySlot{SessionID: 1, Seq: 1, NodeType: NodeTypePlan, PlanID: 9, NodePath: "1.2.1", Status: StatusPending, Summary: "sum"}
+	if ev.NodeType != NodeTypePlan {
+		t.Fatalf("bad node type %d", ev.NodeType)
+	}
+	if ev.NodePath != "1.2.1" {
+		t.Fatalf("bad path %s", ev.NodePath)
+	}
+	if ev.Status != StatusPending {
+		t.Fatalf("bad status %d", ev.Status)
+	}
+}

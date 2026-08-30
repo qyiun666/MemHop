@@ -70,6 +70,7 @@ type SceneSlot struct {
 	TopicCount int    `json:"topic_count"` // depth-1 root topics under this scene
 	HitCount   uint32 `json:"hit_count"`   // cumulative retrieval hit count
 	LastHitAt  int64  `json:"last_hit_at"` // last hit time (Unix ms)
+	L3ID       uint64 `json:"l3_id"`       // 新增：场景固定挂靠的目录/项目域 L3 图（N:1）
 }
 
 // NewSceneSlot builds a SceneSlot from a name; ID is the xxhash64 of the name.
@@ -293,16 +294,44 @@ type WorkflowStep struct {
 	Args   map[string]any `json:"args,omitempty"`
 }
 
+// Plan node type for TrajectorySlot: either a raw trajectory event or a plan node.
+const (
+	NodeTypeEvent uint8 = 0 // 轨迹事件
+	NodeTypePlan  uint8 = 1 // 计划节点
+)
+
+// Plan node status (only meaningful for NodeTypePlan nodes).
+const (
+	StatusPending    uint8 = 0
+	StatusInProgress uint8 = 1
+	StatusDone       uint8 = 2
+	StatusFailed     uint8 = 3
+)
+
 // TrajectorySlot is an L6 operation trajectory event appended by the host;
 // one trajectory per agent turn (search starts it, update ends it), so
 // SessionID is a turn key and Seq only counts within the turn. Short-lived:
 // Dream purges events older than the 7-day retention window.
 type TrajectorySlot struct {
-	IDHash    uint64 `json:"id_hash"`            // hash(sessionID:seq)
-	SessionID uint64 `json:"session_id"`         // host-chosen turn key (parsed from the api's 16-hex id)
-	Seq       uint64 `json:"seq"`                // per-turn increasing sequence
+	IDHash    uint64 `json:"id_hash"`    // hash(sessionID:seq)
+	SessionID uint64 `json:"session_id"` // host-chosen turn key (parsed from the api's 16-hex id)
+	Seq       uint64 `json:"seq"`        // per-turn increasing sequence
+
+	NodeType    uint8  `json:"node_type"`               // 0=轨迹事件  1=计划节点
+	PlanID      uint64 `json:"plan_id"`                 // 所属任务根（无任务=单个根）
+	ParentID    uint64 `json:"parent_id,omitempty"`     // 父节点（0=根）
+	NodePath    string `json:"node_path"`               // "1" / "1.2.1" / "1.2.2"
+	Status      uint8  `json:"status,omitempty"`        // 仅节点：0=pending 1=in_progress 2=done 3=failed
+	Summary     string `json:"summary,omitempty"`       // 仅节点：完成缩写摘要
+	PlanNodeRef uint64 `json:"plan_node_ref,omitempty"` // 仅事件：挂到的计划节点（HashPlanNode(planID,nodePath)）
+
 	EventType string `json:"event_type"`         // llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply
 	Payload   string `json:"payload"`            // event content (truncated to 4KB; no raw token stream)
 	TopicID   uint64 `json:"topic_id,omitempty"` // L2 topic the turn resolves to (0 = unknown); set by the host from the search hit or the update's topic
 	Timestamp int64  `json:"timestamp"`
+}
+
+// HashPlanNode derives a plan node id from planID + nodePath.
+func HashPlanNode(planID uint64, nodePath string) uint64 {
+	return common.HashID(fmt.Sprintf("%d:%s", planID, nodePath))
 }
