@@ -331,7 +331,9 @@ type TrajectorySlot struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
-// HashPlanNode derives a plan node id from planID + nodePath.
+// HashPlanNode derives a plan node id from planID + nodePath, namespaced
+// under a "plan:" prefix so it never collides with a trajectory event id
+// (which is hash("sessionID:seq")).
 func HashPlanNode(planID uint64, nodePath string) uint64 {
-	return common.HashID(fmt.Sprintf("%d:%s", planID, nodePath))
+	return common.HashID("plan:" + fmt.Sprintf("%d:%s", planID, nodePath))
 }

@@ -44,11 +44,17 @@ func DeleteTrajectoryByIDs(engine *core.StorageEngine, agentID uint64, idHashes 
 // IDHash (core.HashPlanNode(planID, nodePath)) so the node reference stays
 // stable across writes. Unlike AppendTrajectory it does NOT re-hash the id.
 func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.TrajectorySlot) (uint64, error) {
+	if node == nil {
+		return 0, common.NewError(common.ErrInvalidQuery, "plan node is nil")
+	}
 	if node.IDHash == 0 {
 		return 0, common.NewError(common.ErrInvalidQuery, "plan node id required")
 	}
 	if node.NodeType != core.NodeTypePlan {
 		return 0, common.NewError(common.ErrInvalidQuery, "WritePlanNode requires NodeTypePlan")
+	}
+	if node.IDHash != core.HashPlanNode(node.PlanID, node.NodePath) {
+		return 0, common.NewError(common.ErrInvalidQuery, "plan node id does not match planID/nodePath")
 	}
 	if err := core.WriteTrajectorySlot(engine, agentID, node.IDHash, node); err != nil {
 		return 0, err

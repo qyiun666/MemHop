@@ -4,6 +4,8 @@
 package repo
 
 import (
+	"fmt"
+	"path/filepath"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -186,5 +188,42 @@ func TestCollectPlanNodesAndNodeEvents(t *testing.T) {
 	events := CollectNodeEvents(engine, agentID, child.IDHash)
 	if len(events) != 1 || events[0].EventType != "llm_request" {
 		t.Fatalf("want 1 event llm_request, got %+v", events)
+	}
+}
+
+func TestPlanNodeID_DoesNotCollideWithEventID(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "plan.meh"), 16)
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentID := core.DefaultAgentID
+	// 同一组 (planID=9, nodePath="1") 与 (sessionID=9, seq=1)
+	planNodeID := core.HashPlanNode(9, "1")
+	evID := common.HashID(fmt.Sprintf("%d:%d", 9, 1))
+	if planNodeID == evID {
+		t.Fatalf("plan node id %d must not collide with event id %d", planNodeID, evID)
+	}
+	// 写节点 + 写事件到同一 agent，两者并存不覆盖
+	node := &core.TrajectorySlot{IDHash: planNodeID, SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1", Status: core.StatusInProgress}
+	if _, err := WritePlanNode(engine, agentID, node); err != nil {
+		t.Fatal(err)
+	}
+	ev := &core.TrajectorySlot{IDHash: evID, SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanNodeRef: planNodeID, EventType: "llm_request", Timestamp: 1000}
+	if _, err := AppendTrajectory(engine, agentID, *ev); err != nil {
+		t.Fatal(err)
+	}
+	nodeGot, err := core.ReadTrajectorySlot(engine, agentID, planNodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nodeGot.NodeType != core.NodeTypePlan {
+		t.Fatalf("plan node overwritten by event: got %d", nodeGot.NodeType)
+	}
+	evGot, err := core.ReadTrajectorySlot(engine, agentID, evID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evGot.NodeType != core.NodeTypeEvent {
+		t.Fatalf("event overwritten: got %d", evGot.NodeType)
 	}
 }
