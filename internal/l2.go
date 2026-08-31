@@ -49,6 +49,31 @@ func (db *DB) ListScenesByL3(agentID uint64, l3ID string) ([]core.SceneSlot, err
 	return out, nil
 }
 
+// SetSceneL3ID anchors a scene to an L3 domain (project/目录). Normal
+// routing is write-once; pass force=true to correct a mis-anchored scene,
+// or an empty l3ID to clear the anchor (both take the overwrite path).
+func (db *DB) SetSceneL3ID(agentID uint64, sceneID string, l3ID string, force bool) error {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return err
+	}
+	defer ac.mu.Unlock()
+	sceneHash, err := common.ParseID(sceneID)
+	if err != nil {
+		return common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+	}
+	var l3Hash uint64
+	if l3ID != "" {
+		if l3Hash, err = common.ParseID(l3ID); err != nil {
+			return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
+		}
+	}
+	if force || l3Hash == 0 {
+		return repo.OverwriteSceneL3ID(db.engine, agentID, sceneHash, l3Hash)
+	}
+	return repo.SetSceneL3ID(db.engine, agentID, sceneHash, l3Hash)
+}
+
 // ActiveSceneIDs returns a copy of the agent's in-memory active scene IDs
 // (the Dream consolidation targets).
 func (db *DB) ActiveSceneIDs(agentID uint64) []uint64 {

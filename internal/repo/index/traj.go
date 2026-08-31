@@ -131,6 +131,25 @@ func (idx *TrajIndex) RemoveBefore(before int64) []uint64 {
 	return out
 }
 
+// RemoveSession drops one whole turn and returns its event ids in Seq
+// order; nil for unknown turns (idempotent). Used by PlanReplace, which
+// removes a plan's bound events wholesale and restarts its Seq space.
+func (idx *TrajIndex) RemoveSession(sessionID uint64) []uint64 {
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	turn := idx.byTurn[sessionID]
+	if turn == nil {
+		return nil
+	}
+	out := make([]uint64, len(turn.entries))
+	for i, e := range turn.entries {
+		out[i] = e.IDHash
+	}
+	delete(idx.byTurn, sessionID)
+	delete(idx.lastTurn, sessionID)
+	return out
+}
+
 // Summaries returns every turn's footprint (unordered).
 func (idx *TrajIndex) Summaries() []TrajSummary {
 	idx.mu.RLock()

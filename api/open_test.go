@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 type openTestEncoder struct{ dim int }
@@ -61,7 +60,7 @@ func TestOpenAttachesBuiltins(t *testing.T) {
 		t.Fatalf("want %d builtin capabilities served, got %d", want, len(caps))
 	}
 	for _, c := range caps {
-		if c.Origin != core.CapabilityOriginBuiltin {
+		if c.Origin != CapabilityOriginBuiltin {
 			t.Fatalf("fresh DB must serve only builtins: %+v", c)
 		}
 	}

@@ -92,7 +92,7 @@ func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 		AgentKeywords:   cloneStrings(t.AgentKeywords),
 		AgentTimestamp:  t.AgentTimestamp,
 		FusedKeywords:   cloneStrings(t.FusedKeywords),
-		CentroidPageRef: formatID(t.CentroidPageRef),
+		CentroidPageRef: formatOptionalID(t.CentroidPageRef),
 	}
 }
 
@@ -121,7 +121,7 @@ func fromHypergraphSource(s internal.HypergraphSource) HypergraphSource {
 	return HypergraphSource{
 		Kind:      s.Kind.String(),
 		Value:     s.Value,
-		ContextID: formatID(s.ContextID),
+		ContextID: formatOptionalID(s.ContextID),
 	}
 }
 
@@ -201,7 +201,7 @@ func fromArchiveSlot(s internal.ArchiveSlot) ArchiveSlot {
 		IDHash:      formatID(s.IDHash),
 		ContentType: s.ContentType,
 		Role:        s.Role,
-		ContextID:   formatID(s.ContextID),
+		ContextID:   formatOptionalID(s.ContextID),
 		CreatedAt:   s.CreatedAt,
 		Content:     s.Content,
 		Metadata:    s.Metadata,
@@ -260,7 +260,9 @@ func fromTrajectorySlot(s internal.TrajectorySlot) TrajectorySlot {
 		NodePath:    s.NodePath,
 		Status:      s.Status,
 		Summary:     s.Summary,
+		PlanType:    s.PlanType,
 		PlanNodeRef: formatOptionalID(s.PlanNodeRef),
+		FinishedAt:  s.FinishedAt,
 	}
 }
 
@@ -292,7 +294,9 @@ func toCoreTrajectorySlot(s TrajectorySlot) (internal.TrajectorySlot, error) {
 		NodePath:    s.NodePath,
 		Status:      s.Status,
 		Summary:     s.Summary,
+		PlanType:    s.PlanType,
 		PlanNodeRef: planNodeRef,
+		FinishedAt:  s.FinishedAt,
 	}, nil
 }
 
@@ -300,20 +304,47 @@ func fromPlanTree(t *internal.PlanTree) PlanTree {
 	if t == nil {
 		return PlanTree{}
 	}
-	root := fromPlanNodeView(t.Root)
-	return PlanTree{Root: root, DoneCount: t.DoneCount, TotalCount: t.TotalCount}
+	roots := make([]PlanNodeView, 0, len(t.Roots))
+	for _, r := range t.Roots {
+		roots = append(roots, fromPlanNodeView(r))
+	}
+	return PlanTree{Roots: roots, DoneCount: t.DoneCount, TotalCount: t.TotalCount}
 }
 
 func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
 	out := PlanNodeView{
 		NodePath: v.NodePath, Title: v.Title, Status: string(v.Status),
-		Summary: v.Summary, ChildCount: v.ChildCount, TrajCount: v.TrajCount,
-		LastSummary: v.LastSummary, Children: make([]PlanNodeView, 0, len(v.Children)),
+		Type: v.Type, Summary: v.Summary, FinishedAt: v.FinishedAt,
+		ChildCount: v.ChildCount, TrajCount: v.TrajCount,
+		Children: make([]PlanNodeView, 0, len(v.Children)),
 	}
 	for _, c := range v.Children {
 		out.Children = append(out.Children, fromPlanNodeView(c))
 	}
 	return out
+}
+
+func toInternalPlanNode(root *PlanNode) internal.PlanNode {
+	if root == nil {
+		return internal.PlanNode{}
+	}
+	children := make([]internal.PlanNode, 0, len(root.Children))
+	for i := range root.Children {
+		children = append(children, toInternalPlanNode(&root.Children[i]))
+	}
+	return internal.PlanNode{
+		NodePath: root.NodePath, Title: root.Title, PlanType: root.Type,
+		Status: internal.PlanStatus(root.Status), Summary: root.Summary,
+		Children: children,
+	}
+}
+
+func fromPlanSummary(s internal.PlanSummary) PlanSummary {
+	return PlanSummary{
+		PlanID: s.PlanID, CreatedAt: s.CreatedAt, LastActiveAt: s.LastActiveAt,
+		NodeCount: s.NodeCount, DoneCount: s.DoneCount, TotalCount: s.TotalCount,
+		Active: s.Active,
+	}
 }
 
 func cloneStrings(in []string) []string {

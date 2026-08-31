@@ -108,6 +108,12 @@ func (s *Session) ListScenesByL3(l3ID string) ([]SceneSlot, error) {
 	return s.db.ListScenesByL3(s.agentID, l3ID)
 }
 
+// SetSceneL3ID anchors a scene to an L3 domain (write-once unless force or
+// an empty l3ID clears it).
+func (s *Session) SetSceneL3ID(sceneID, l3ID string, force bool) error {
+	return s.db.SetSceneL3ID(s.agentID, sceneID, l3ID, force)
+}
+
 // ActiveSceneIDs returns the active scene IDs as 16-char hex strings,
 // consistent with the hex ID parameters of SceneContext / MergeScenes /
 // Search.DirectedL2ID.
@@ -244,4 +250,22 @@ func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status 
 // PlanState returns the plan tree view.
 func (s *Session) PlanState(planID string) (*PlanTree, error) {
 	return s.db.PlanState(s.agentID, planID)
+}
+
+// PlanReplace wipes a plan's nodes and bound events for re-planning,
+// keeping the planID; a non-empty rootTitle seeds a titled pending root.
+func (s *Session) PlanReplace(planID, rootTitle string) error {
+	return s.db.PlanReplace(s.agentID, planID, rootTitle)
+}
+
+// ListPlans summarizes every plan of the domain (restart recovery).
+func (s *Session) ListPlans() ([]PlanSummary, error) {
+	return s.db.ListPlans(s.agentID)
+}
+
+// SyncPlanTree replaces one plan's whole tree from the host's authoritative
+// snapshot: adds/updates nodes by path, deletes vanished nodes (with their
+// bound events) and never appends a plan_step event.
+func (s *Session) SyncPlanTree(planID string, root *PlanNode) error {
+	return s.db.SyncPlanTree(s.agentID, planID, root)
 }

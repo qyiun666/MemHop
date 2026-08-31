@@ -41,6 +41,7 @@ type PlanStatus string
 const (
 	PlanPending    PlanStatus = "pending"
 	PlanInProgress PlanStatus = "in_progress"
+	PlanRunning    PlanStatus = "running"
 	PlanDone       PlanStatus = "done"
 	PlanFailed     PlanStatus = "failed"
 )
@@ -51,6 +52,8 @@ func toStatusU8(s PlanStatus) (uint8, error) {
 		return core.StatusPending, nil
 	case PlanInProgress:
 		return core.StatusInProgress, nil
+	case PlanRunning:
+		return core.StatusRunning, nil
 	case PlanDone:
 		return core.StatusDone, nil
 	case PlanFailed:
@@ -66,6 +69,8 @@ func statusToString(u uint8) PlanStatus {
 		return PlanPending
 	case core.StatusInProgress:
 		return PlanInProgress
+	case core.StatusRunning:
+		return PlanRunning
 	case core.StatusDone:
 		return PlanDone
 	case core.StatusFailed:
@@ -73,6 +78,21 @@ func statusToString(u uint8) PlanStatus {
 	default:
 		return PlanPending
 	}
+}
+
+// parsePlanID parses a host plan id and rejects 0: AppendTrajectory writes
+// bare turn events with PlanID=0, so 0 is a reserved sentinel and never a
+// valid plan. Accepting it would let PlanReplace delete every bare event of
+// the domain (DeletePlanRecords matches those records).
+func parsePlanID(planID string) (uint64, error) {
+	ph, err := common.ParseID(planID)
+	if err != nil {
+		return 0, common.NewError(common.ErrInvalidQuery, "parse plan id", err)
+	}
+	if ph == 0 {
+		return 0, common.NewError(common.ErrInvalidQuery, "plan id 0000000000000000 is reserved")
+	}
+	return ph, nil
 }
 
 // AppendTrajectory appends one event to a turn's trajectory; Seq comes from
@@ -153,9 +173,9 @@ func (db *DB) PlanAppend(agentID uint64, planID string, nodePath string, ev core
 		return err
 	}
 	defer ac.mu.Unlock()
-	ph, err := common.ParseID(planID)
+	ph, err := parsePlanID(planID)
 	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse plan id", err)
+		return err
 	}
 	nodeID, err := db.ensurePlanNode(ac, agentID, ph, nodePath)
 	if err != nil {
@@ -174,9 +194,9 @@ func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core
 		return err
 	}
 	defer ac.mu.Unlock()
-	ph, err := common.ParseID(planID)
+	ph, err := parsePlanID(planID)
 	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse plan id", err)
+		return err
 	}
 	u8, err := toStatusU8(status)
 	if err != nil {
@@ -203,9 +223,9 @@ func (db *DB) PlanState(agentID uint64, planID string) (*PlanTree, error) {
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	ph, err := common.ParseID(planID)
+	ph, err := parsePlanID(planID)
 	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse plan id", err)
+		return nil, err
 	}
 	return db.buildPlanTreeLocked(ac, agentID, ph)
 }
@@ -240,6 +260,7 @@ func (db *DB) ensurePlanNode(ac *agentContext, agentID uint64, planID uint64, no
 			if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 				return 0, err
 			}
+			ac.plans.upsertNode(planID, node)
 		}
 		parentID = id
 	}
@@ -261,12 +282,24 @@ func splitNodePath(nodePath string) ([]string, error) {
 	return out, nil
 }
 
+// planEventTypes is the vocabulary for plan-bound events: the documented
+// trajectory step types plus plan_step for plan progress commits. Plain
+// AppendTrajectory stays free-form (host-owned turns).
+var planEventTypes = map[string]struct{}{
+	"llm_request": {}, "llm_output": {}, "tool_call": {}, "tool_result": {},
+	"subagent_spawn": {}, "subagent_done": {}, "context_inject": {},
+	"ask_user": {}, "user_reply": {}, "plan_step": {},
+}
+
 // appendPlanEventLocked writes one event bound to a plan node by filling
 // PlanNodeRef, then reuses the existing per-turn Sequencer + TrajIndex.
 // The domain lock is already held (lockAgent path).
 func (db *DB) appendPlanEventLocked(ac *agentContext, agentID, planID, nodeID uint64, ev core.TrajectorySlot) error {
 	if ev.EventType == "" || ev.Timestamp <= 0 {
 		return common.NewError(common.ErrInvalidQuery, "EventType and Timestamp are required")
+	}
+	if _, ok := planEventTypes[ev.EventType]; !ok {
+		return common.NewError(common.ErrInvalidQuery, "unknown plan event type: "+ev.EventType)
 	}
 	if len(ev.Payload) > maxTrajectoryPayload {
 		ev.Payload = common.TruncateUTF8(ev.Payload, maxTrajectoryPayload)
@@ -289,7 +322,14 @@ func (db *DB) appendPlanEventLocked(ac *agentContext, agentID, planID, nodeID ui
 		return err
 	}
 	ac.traj.Append(planID, ev.Seq, idHash, ev.Timestamp, ev.TopicID)
+	ac.plans.upsertEvent(planID, nodeID, ev)
 	return nil
+}
+
+// isTerminalStatus reports whether a plan-node status is a final state (done
+// or failed); only these record a FinishedAt.
+func isTerminalStatus(u uint8) bool {
+	return u == core.StatusDone || u == core.StatusFailed
 }
 
 // updatePlanNodeLocked sets a plan node's status/summary, re-reading the
@@ -306,10 +346,15 @@ func (db *DB) updatePlanNodeLocked(ac *agentContext, agentID, nodeID uint64, sta
 	if summary != "" {
 		node.Summary = summary
 	}
-	node.Timestamp = time.Now().UnixMilli()
+	now := time.Now().UnixMilli()
+	if isTerminalStatus(status) && node.FinishedAt == 0 {
+		node.FinishedAt = now
+	}
+	node.Timestamp = now
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}
+	ac.plans.upsertNode(node.PlanID, node)
 	return nil
 }
 
@@ -325,6 +370,7 @@ func (db *DB) updatePlanNodeSummaryLocked(ac *agentContext, agentID, nodeID uint
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}
+	ac.plans.upsertNode(node.PlanID, node)
 	return nil
 }
 

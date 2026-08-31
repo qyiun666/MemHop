@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // writeCapability drops a valid v3 skill-capability document and returns its path.
@@ -20,8 +19,8 @@ func writeCapability(t *testing.T, dir, name string) string {
 	t.Helper()
 	doc := internal.CapabilityImport{
 		Format: "memhop-capability/v3", Name: name, Version: "1",
-		Type: core.CapabilitySkill, Summary: "summarizes", Trigger: "when asked",
-		Resources: []core.ResourceRef{{Type: core.CapabilitySkill, Name: name, Desc: "call it"}},
+		Type: CapabilitySkill, Summary: "summarizes", Trigger: "when asked",
+		Resources: []ResourceRef{{Type: CapabilitySkill, Name: name, Desc: "call it"}},
 	}
 	data, err := json.Marshal(doc)
 	if err != nil {
@@ -54,8 +53,8 @@ func TestSurfaceL5Capability(t *testing.T) {
 		t.Fatalf("re-import must be idempotent: %v %+v", err, again)
 	}
 	// List filters: status, type and keyword variants.
-	active := core.CapabilityActive
-	skill := core.CapabilitySkill
+	active := CapabilityActive
+	skill := CapabilitySkill
 	for _, q := range []CapabilityListQuery{
 		{},
 		{Status: &active},
@@ -85,7 +84,7 @@ func TestSurfaceL5Capability(t *testing.T) {
 	builtins, _ := db.ListCapabilities(CapabilityListQuery{})
 	var builtinID string
 	for _, b := range builtins {
-		if b.Origin == core.CapabilityOriginBuiltin {
+		if b.Origin == CapabilityOriginBuiltin {
 			builtinID = b.IDHash
 			break
 		}

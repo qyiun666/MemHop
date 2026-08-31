@@ -163,6 +163,7 @@ func (db *DB) newAgentContextLocked(agentID uint64) *agentContext {
 	}
 	ac.l2Meta = index.BuildL2MetaFromEngine(db.engine, agentID)
 	ac.traj = index.BuildTrajFromEngine(db.engine, agentID)
+	ac.plans = buildPlanCache(db.engine, agentID)
 	return ac
 }
 

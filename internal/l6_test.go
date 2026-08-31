@@ -4,7 +4,10 @@
 package internal
 
 import (
+	"cmp"
 	"context"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +16,26 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
+
+// planNodeEvents reads one node's bound events (Seq ascending) through the
+// single-scan aggregate; the repo-level CollectNodeEvents was removed.
+func planNodeEvents(t *testing.T, db *DB, planID, nodeID uint64) []core.TrajectorySlot {
+	t.Helper()
+	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
+		if agg.PlanID != planID {
+			continue
+		}
+		var out []core.TrajectorySlot
+		for _, ev := range agg.Events {
+			if ev.PlanNodeRef == nodeID {
+				out = append(out, ev)
+			}
+		}
+		slices.SortFunc(out, func(a, b core.TrajectorySlot) int { return cmp.Compare(a.Seq, b.Seq) })
+		return out
+	}
+	return nil
+}
 
 func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
@@ -187,7 +210,7 @@ func TestPlanAppendCreatesNodeAndEvent(t *testing.T) {
 		t.Fatalf("node not created as pending plan: %+v", node)
 	}
 	// 事件应挂到该节点
-	events := repo.CollectNodeEvents(db.engine, core.DefaultAgentID, nodeID)
+	events := planNodeEvents(t, db, 9, nodeID)
 	if len(events) != 1 || events[0].EventType != "llm_request" {
 		t.Fatalf("want 1 llm_request event on node, got %+v", events)
 	}
@@ -228,7 +251,7 @@ func TestPlanEventSeqStartsAtOneNoCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafID := core.HashPlanNode(9, "1.2.1")
-	evs := repo.CollectNodeEvents(db.engine, core.DefaultAgentID, leafID)
+	evs := planNodeEvents(t, db, 9, leafID)
 	if len(evs) != 1 || evs[0].Seq != 1 {
 		t.Fatalf("first event seq should be 1, got %+v", evs)
 	}
@@ -237,7 +260,7 @@ func TestPlanEventSeqStartsAtOneNoCollision(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootID := core.HashPlanNode(9, "1")
-	rootEvs := repo.CollectNodeEvents(db.engine, core.DefaultAgentID, rootID)
+	rootEvs := planNodeEvents(t, db, 9, rootID)
 	if len(rootEvs) != 1 || rootEvs[0].Seq != 2 {
 		t.Fatalf("root event seq should be 2, got %+v", rootEvs)
 	}
@@ -264,8 +287,8 @@ func TestPlanStateParentExplicitCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tree.Root.Status == PlanDone {
-		t.Fatalf("parent must NOT auto-fold: got %s", tree.Root.Status)
+	if tree.Roots[0].Status == PlanDone {
+		t.Fatalf("parent must NOT auto-fold: got %s", tree.Roots[0].Status)
 	}
 	if tree.TotalCount != 3 {
 		t.Fatalf("total=%d, want 3 (root + 2 children)", tree.TotalCount)
@@ -278,11 +301,11 @@ func TestPlanStateParentExplicitCompletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tree.Root.Status != PlanDone {
-		t.Fatalf("root should be done after explicit commit, got %s", tree.Root.Status)
+	if tree.Roots[0].Status != PlanDone {
+		t.Fatalf("root should be done after explicit commit, got %s", tree.Roots[0].Status)
 	}
-	if tree.Root.Summary != "step A; step B" {
-		t.Fatalf("root summary should roll up children, got %q", tree.Root.Summary)
+	if tree.Roots[0].Summary != "step A; step B" {
+		t.Fatalf("root summary should roll up children, got %q", tree.Roots[0].Summary)
 	}
 	if tree.TotalCount != 3 || tree.DoneCount != 3 {
 		t.Fatalf("counts: total=%d done=%d", tree.TotalCount, tree.DoneCount)
@@ -308,8 +331,8 @@ func TestPlanStateRollupDoesNotOverwriteHostSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tree.Root.Summary != "custom parent summary" {
-		t.Fatalf("host parent summary must not be overwritten, got %q", tree.Root.Summary)
+	if tree.Roots[0].Summary != "custom parent summary" {
+		t.Fatalf("host parent summary must not be overwritten, got %q", tree.Roots[0].Summary)
 	}
 }
 
@@ -332,37 +355,77 @@ func TestPlanStateParentNotAutoFoldedPartial(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tree.Root.Status == PlanDone {
-		t.Fatalf("parent must NOT auto-fold while children only partially done, got %s", tree.Root.Status)
+	if tree.Roots[0].Status == PlanDone {
+		t.Fatalf("parent must NOT auto-fold while children only partially done, got %s", tree.Roots[0].Status)
 	}
 	if tree.TotalCount != 3 || tree.DoneCount != 1 {
 		t.Fatalf("counts: total=%d done=%d, want total=3 done=1", tree.TotalCount, tree.DoneCount)
 	}
 }
 
-// TestDreamPrunesExpiredPlanNodes verifies plan nodes age out with the same
-// 7-day retention as events: an expired plan node (Timestamp older than the
-// window) is swept by Dream even though it never enters the event TrajIndex.
+// TestDreamPrunesExpiredPlanNodes verifies the retention sweep semantics: an
+// expired plan whose nodes are all Done is swept together with its bound
+// events (cascade — no orphan PlanNodeRef), a plan that still holds a non-Done
+// node is exempt only while it is also active inside the window, and a
+// non-Done plan the host went silent on past the window is abandoned and swept
+// like any other record so L6 stays bounded.
 func TestDreamPrunesExpiredPlanNodes(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	planID := common.FormatHash(9)
+	doneID, activeID, staleID := common.FormatHash(9), common.FormatHash(8), common.FormatHash(7)
 	old := time.Now().Add(-trajectoryRetention - time.Hour).UnixMilli()
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: old}, PlanInProgress, ""); err != nil {
+	age := func(id uint64) {
+		node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, id)
+		if err != nil {
+			t.Fatalf("read node for aging: %v", err)
+		}
+		node.Timestamp = old
+		if _, err := repo.WritePlanNode(db.engine, core.DefaultAgentID, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Done plan: committed long ago, plus a FRESH event bound to the node
+	// (the cascade must remove it even though it is inside the window).
+	if err := db.PlanCommit(core.DefaultAgentID, doneID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: old}, PlanDone, "fin"); err != nil {
 		t.Fatal(err)
 	}
-	// Age the node record directly (PlanCommit stamps it with "now").
-	id := core.HashPlanNode(9, "1")
-	if node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, id); err == nil {
-		node.Timestamp = old
-		_, _ = repo.WritePlanNode(db.engine, core.DefaultAgentID, node)
+	doneNode := core.HashPlanNode(9, "1")
+	if err := db.PlanAppend(core.DefaultAgentID, doneID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
 	}
-	// Run Dream to trigger the prune sweep; with no active scenes the early
-	// return still runs the retention stage first.
+	age(doneNode)
+	// In-flight plan: expired node but a fresh bound event → still active, so
+	// the tree survives mid-task.
+	if err := db.PlanCommit(core.DefaultAgentID, activeID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: old}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	activeNode := core.HashPlanNode(8, "1")
+	if err := db.PlanAppend(core.DefaultAgentID, activeID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+	age(activeNode)
+	// Abandoned plan: non-Done and nothing touched it inside the window.
+	if err := db.PlanCommit(core.DefaultAgentID, staleID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: old}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	staleNode := core.HashPlanNode(7, "1")
+	age(staleNode)
+
 	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, id); err == nil {
-		t.Fatal("expired plan node should be pruned")
+	if _, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, doneNode); err == nil {
+		t.Fatal("expired all-done plan node should be pruned")
+	}
+	if _, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, staleNode); err == nil {
+		t.Fatal("non-Done plan silent past the window is abandoned and must be pruned")
+	}
+	for _, ev := range core.CollectAllTrajectories(db.engine, core.DefaultAgentID) {
+		if ev.PlanNodeRef == doneNode {
+			t.Fatalf("bound event must cascade with its pruned node: %+v", ev)
+		}
+	}
+	if _, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, activeNode); err != nil {
+		t.Fatalf("active plan node must be exempt from the sweep: %v", err)
 	}
 }
 
@@ -393,5 +456,338 @@ func TestPlanAppendCannotInjectNodeType(t *testing.T) {
 	}
 	if events != 1 {
 		t.Fatalf("want exactly 1 event, got %d", events)
+	}
+}
+
+// Forest contract: two top-level steps yield two roots, and Done/Total
+// covers both subtrees.
+func TestPlanStateForestMultipleRoots(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	planID := common.FormatHash(9)
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanDone, "step one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "2.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, PlanDone, "sub"); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Roots) != 2 {
+		t.Fatalf("want 2 roots, got %d", len(tree.Roots))
+	}
+	if tree.Roots[0].NodePath != "1" || tree.Roots[1].NodePath != "2" {
+		t.Fatalf("roots must be path-ordered: %+v", tree.Roots)
+	}
+	if len(tree.Roots[1].Children) != 1 || tree.Roots[1].Children[0].NodePath != "2.1" {
+		t.Fatalf("second root lost its subtree: %+v", tree.Roots[1])
+	}
+	if tree.TotalCount != 3 || tree.DoneCount != 2 {
+		t.Fatalf("forest stats total=%d done=%d, want 3/2", tree.TotalCount, tree.DoneCount)
+	}
+}
+
+// PlanReplace clears every node and bound event of a plan, keeps the
+// planID, seeds a titled root, and restarts the event Seq space.
+func TestPlanReplaceClearsAndSeedsRoot(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	planID := common.FormatHash(9)
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanDone, "old step"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanPending, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.PlanReplace(core.DefaultAgentID, planID, "rewritten plan"); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Roots) != 1 || tree.Roots[0].Title != "rewritten plan" || tree.Roots[0].Status != PlanPending {
+		t.Fatalf("replace must seed one titled pending root: %+v", tree.Roots)
+	}
+	if tree.TotalCount != 1 || tree.DoneCount != 0 {
+		t.Fatalf("stats must reset: total=%d done=%d", tree.TotalCount, tree.DoneCount)
+	}
+	// Old nodes and bound events are gone; the new event Seq restarts at 1.
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 2001}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	aggs := repo.CollectPlanAggregates(db.engine, core.DefaultAgentID)
+	if len(aggs) != 1 || len(aggs[0].Events) != 1 {
+		t.Fatalf("old events leaked into the replaced plan: %+v", aggs)
+	}
+	// Replacing without a title keeps the plan empty (no root seeded).
+	if err := db.PlanReplace(core.DefaultAgentID, planID, ""); err != nil {
+		t.Fatal(err)
+	}
+	tree, err = db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Roots) != 0 || tree.TotalCount != 0 {
+		t.Fatalf("title-less replace must leave an empty plan: %+v", tree)
+	}
+}
+
+// ListPlans lets a host discover every plan after a restart: id, activity
+// window, node stats and the active flag.
+func TestListPlansSummarizesEveryPlan(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	active, finished := common.FormatHash(11), common.FormatHash(22)
+	if err := db.PlanCommit(core.DefaultAgentID, active, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PlanCommit(core.DefaultAgentID, finished, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanDone, "done"); err != nil {
+		t.Fatal(err)
+	}
+	plans, err := db.ListPlans(core.DefaultAgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plans) != 2 {
+		t.Fatalf("want 2 plans, got %d", len(plans))
+	}
+	byID := map[string]PlanSummary{}
+	for _, p := range plans {
+		byID[p.PlanID] = p
+	}
+	a, f := byID[active], byID[finished]
+	if a.PlanID == "" || f.PlanID == "" || !a.Active || f.Active {
+		t.Fatalf("active flags wrong: %+v", plans)
+	}
+	if a.NodeCount != 1 || f.NodeCount != 1 || f.DoneCount != 1 || f.TotalCount != 1 {
+		t.Fatalf("node stats wrong: %+v", plans)
+	}
+	if a.CreatedAt != 1001 || a.LastActiveAt < 1001 {
+		t.Fatalf("activity window wrong: %+v", a)
+	}
+}
+
+// Plan events must use the documented vocabulary.
+func TestPlanEventVocabularyRejectsUnknown(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	planID := common.FormatHash(9)
+	if err := db.PlanAppend(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "made_up_event", Timestamp: 1000}); err == nil {
+		t.Fatal("unknown plan event type must be rejected")
+	}
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "nope", Timestamp: 1001}, PlanDone, ""); err == nil {
+		t.Fatal("unknown plan commit event type must be rejected")
+	}
+	if err := db.PlanAppend(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1002}); err != nil {
+		t.Fatalf("documented event type must be accepted: %v", err)
+	}
+}
+
+func TestSyncPlanTree_AddEditDelete(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	planID := common.FormatHash(9)
+	first := &PlanNode{
+		NodePath: "1", Title: "root", PlanType: "plan", Status: PlanPending,
+		Children: []PlanNode{
+			{NodePath: "1.1", Title: "step a", PlanType: "step", Status: PlanRunning, Summary: "s1"},
+			{NodePath: "1.2", Title: "step b", PlanType: "step", Status: PlanDone},
+		},
+	}
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, first); err != nil {
+		t.Fatal(err)
+	}
+	// Bind a real event to the node that will be deleted, so the cascade is asserted.
+	if err := db.PlanAppend(core.DefaultAgentID, planID, "1.2", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1500}); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Roots) != 1 || tree.Roots[0].Title != "root" || tree.Roots[0].Type != "plan" {
+		t.Fatalf("first sync root: %+v", tree.Roots)
+	}
+	if len(tree.Roots[0].Children) != 2 {
+		t.Fatalf("first sync children = %d want 2", len(tree.Roots[0].Children))
+	}
+	if got := tree.Roots[0].Children[0]; got.Title != "step a" || got.Status != PlanRunning || got.Type != "step" || got.Summary != "s1" {
+		t.Fatalf("step a: %+v", got)
+	}
+
+	second := &PlanNode{
+		NodePath: "1", Title: "root2", PlanType: "plan", Status: PlanDone,
+		Children: []PlanNode{
+			{NodePath: "1.1", Title: "step a v2", PlanType: "step", Status: PlanDone, Summary: "s1v2"},
+			{NodePath: "1.3", Title: "step c", PlanType: "step", Status: PlanPending},
+		},
+	}
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, second); err != nil {
+		t.Fatal(err)
+	}
+	tree2, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree2.Roots[0].Title != "root2" || tree2.Roots[0].Status != PlanDone {
+		t.Fatalf("second sync root: %+v", tree2.Roots[0])
+	}
+	if len(tree2.Roots[0].Children) != 2 {
+		t.Fatalf("second sync children = %d want 2", len(tree2.Roots[0].Children))
+	}
+	if got := tree2.Roots[0].Children[0]; got.Title != "step a v2" || got.Status != PlanDone || got.FinishedAt == 0 {
+		t.Fatalf("edited step a: %+v", got)
+	}
+	if got := tree2.Roots[0].Children[1]; got.NodePath != "1.3" || got.Status != PlanPending {
+		t.Fatalf("added step c: %+v", got)
+	}
+	// The deleted node record and its bound event are gone — no orphan PlanNodeRef.
+	gone := core.HashPlanNode(9, "1.2")
+	if _, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, gone); err == nil {
+		t.Fatal("deleted node record must be gone")
+	}
+	for _, ev := range core.CollectAllTrajectories(db.engine, core.DefaultAgentID) {
+		if ev.PlanNodeRef == gone {
+			t.Fatalf("orphan PlanNodeRef survived: %+v", ev)
+		}
+	}
+	// SyncPlanTree must never synthesize a plan_step event.
+	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
+		for _, e := range agg.Events {
+			if e.EventType == "plan_step" {
+				t.Fatalf("SyncPlanTree must not emit plan_step: %+v", e)
+			}
+		}
+	}
+}
+
+func TestSyncPlanTree_NoEventProduced(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	planID := common.FormatHash(9)
+	root := &PlanNode{
+		NodePath: "1", Title: "r", PlanType: "plan", Status: PlanPending,
+		Children: []PlanNode{{NodePath: "1.1", Title: "a", PlanType: "step", Status: PlanRunning}},
+	}
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, root); err != nil {
+		t.Fatal(err)
+	}
+	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
+		if agg.PlanID != 9 {
+			continue
+		}
+		if len(agg.Events) != 0 {
+			t.Fatalf("SyncPlanTree produced %d events: %+v", len(agg.Events), agg.Events)
+		}
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Roots[0].TrajCount != 0 {
+		t.Fatalf("TrajCount = %d want 0", tree.Roots[0].TrajCount)
+	}
+}
+
+func TestPlanCache_ConsistentWithDisk(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	planID := common.FormatHash(9)
+	root := &PlanNode{
+		NodePath: "1", Title: "r", PlanType: "plan", Status: PlanPending,
+		Children: []PlanNode{{NodePath: "1.1", Title: "a", PlanType: "step", Status: PlanDone, Summary: "s"}},
+	}
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, root); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PlanAppend(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1200}); err != nil {
+		t.Fatal(err)
+	}
+	ac := db.agents[core.DefaultAgentID]
+	if ac == nil {
+		t.Fatal("agent context missing")
+	}
+	cached := ac.plans.aggregate(9)
+	if cached == nil {
+		t.Fatal("cached aggregate missing")
+	}
+	var disk *repo.PlanAggregate
+	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
+		if agg.PlanID == 9 {
+			disk = &agg
+			break
+		}
+	}
+	if disk == nil {
+		t.Fatal("disk aggregate missing")
+	}
+	if !reflect.DeepEqual(cached.Nodes, disk.Nodes) {
+		t.Fatalf("Nodes mismatch:\n cached=%+v\n disk=%+v", cached.Nodes, disk.Nodes)
+	}
+	if !reflect.DeepEqual(cached.EventCount, disk.EventCount) {
+		t.Fatalf("EventCount mismatch: cached=%v disk=%v", cached.EventCount, disk.EventCount)
+	}
+}
+
+func TestPlanCommit_FinishedAt(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	planID := common.FormatHash(9)
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 100}, PlanDone, "fin"); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := tree.Roots[0].FinishedAt
+	if first == 0 {
+		t.Fatal("terminal commit must set FinishedAt")
+	}
+	// A non-terminal commit must not clear it.
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 200}, PlanInProgress, ""); err != nil {
+		t.Fatal(err)
+	}
+	tree2, _ := db.PlanState(core.DefaultAgentID, planID)
+	if tree2.Roots[0].FinishedAt != first {
+		t.Fatalf("non-terminal commit cleared FinishedAt: %d -> %d", first, tree2.Roots[0].FinishedAt)
+	}
+	// A re-terminal commit preserves the original FinishedAt.
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 300}, PlanDone, "fin2"); err != nil {
+		t.Fatal(err)
+	}
+	tree3, _ := db.PlanState(core.DefaultAgentID, planID)
+	if tree3.Roots[0].FinishedAt != first {
+		t.Fatalf("re-terminal commit changed FinishedAt: %d -> %d", first, tree3.Roots[0].FinishedAt)
+	}
+}
+
+func TestPlanStatusRunning(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	planID := common.FormatHash(9)
+	root := &PlanNode{NodePath: "1", Title: "t", PlanType: "step", Status: PlanRunning}
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, root); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Roots[0].Status != PlanRunning {
+		t.Fatalf("status = %q want %q", tree.Roots[0].Status, PlanRunning)
+	}
+	if got, _ := toStatusU8(PlanRunning); got != core.StatusRunning {
+		t.Fatalf("toStatusU8(running) = %d want %d", got, core.StatusRunning)
+	}
+	if statusToString(core.StatusRunning) != PlanRunning {
+		t.Fatalf("statusToString(4) = %q want %q", statusToString(core.StatusRunning), PlanRunning)
 	}
 }

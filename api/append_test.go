@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // mockLLM is an OpenAI-compatible chat completions stub for the keyword
@@ -60,7 +59,7 @@ func TestAppendL4MessageFacade(t *testing.T) {
 	}
 	topicID := res.NewTopicID
 
-	id, err := db.AppendL4Message(topicID, "用户补充", ts+1, core.RoleUser, core.ContentText)
+	id, err := db.AppendL4Message(topicID, "用户补充", ts+1, RoleUser, ContentText)
 	if err != nil {
 		t.Fatalf("AppendL4Message: %v", err)
 	}
@@ -71,7 +70,7 @@ func TestAppendL4MessageFacade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetArchive: %v", err)
 	}
-	if arc.Role != core.RoleUser || arc.Content != "用户补充" || arc.ContextID != res.NewTopicID || arc.ContentType != core.ContentText {
+	if arc.Role != RoleUser || arc.Content != "用户补充" || arc.ContextID != res.NewTopicID || arc.ContentType != ContentText {
 		t.Fatalf("unexpected archive: %+v", arc)
 	}
 }

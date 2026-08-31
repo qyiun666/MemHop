@@ -219,3 +219,36 @@ func TestTouchSceneUsageIncrements(t *testing.T) {
 		t.Fatalf("usage mismatch: %+v", slot)
 	}
 }
+
+func TestOverwriteSceneL3IDCorrection(t *testing.T) {
+	engine := tempEngine(t)
+	if _, err := CreateSceneL2(engine, core.DefaultAgentID, "scene-l3"); err != nil {
+		t.Fatalf("create scene: %v", err)
+	}
+	sceneID := core.NewSceneSlot("scene-l3").SceneID
+
+	// First anchor is write-once: a second normal Set cannot steal it.
+	if err := SetSceneL3ID(engine, core.DefaultAgentID, sceneID, 100); err != nil {
+		t.Fatalf("first anchor: %v", err)
+	}
+	if err := SetSceneL3ID(engine, core.DefaultAgentID, sceneID, 200); err != nil {
+		t.Fatalf("second set: %v", err)
+	}
+	if slot, _ := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); slot.L3ID != 100 {
+		t.Fatalf("write-once must keep 100, got %d", slot.L3ID)
+	}
+	// Overwrite corrects the anchor.
+	if err := OverwriteSceneL3ID(engine, core.DefaultAgentID, sceneID, 200); err != nil {
+		t.Fatalf("overwrite: %v", err)
+	}
+	if slot, _ := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); slot.L3ID != 200 {
+		t.Fatalf("overwrite must move to 200, got %d", slot.L3ID)
+	}
+	// Overwrite with 0 clears the anchor.
+	if err := OverwriteSceneL3ID(engine, core.DefaultAgentID, sceneID, 0); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if slot, _ := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); slot.L3ID != 0 {
+		t.Fatalf("clear must reset to 0, got %d", slot.L3ID)
+	}
+}

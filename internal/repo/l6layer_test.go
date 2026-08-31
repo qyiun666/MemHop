@@ -5,6 +5,7 @@ package repo
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -177,16 +178,17 @@ func TestCollectPlanNodesAndNodeEvents(t *testing.T) {
 	_, _ = WritePlanNode(engine, agentID, root)
 	_, _ = WritePlanNode(engine, agentID, child)
 	// 事件挂到 child 节点
-	ev := &core.TrajectorySlot{IDHash: common.HashID("ev:1"), SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanNodeRef: child.IDHash, EventType: "llm_request", Timestamp: 1000}
+	ev := &core.TrajectorySlot{IDHash: common.HashID("ev:1"), SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: child.IDHash, EventType: "llm_request", Timestamp: 1000}
 	_, _ = AppendTrajectory(engine, agentID, *ev)
 
 	nodes := CollectPlanNodes(engine, agentID, 9)
 	if len(nodes) != 2 {
 		t.Fatalf("want 2 plan nodes, got %d", len(nodes))
 	}
-	events := CollectNodeEvents(engine, agentID, child.IDHash)
-	if len(events) != 1 || events[0].EventType != "llm_request" {
-		t.Fatalf("want 1 event llm_request, got %+v", events)
+	aggs := CollectPlanAggregates(engine, agentID)
+	if len(aggs) != 1 || aggs[0].EventCount[child.IDHash] != 1 ||
+		len(aggs[0].Events) != 1 || aggs[0].Events[0].EventType != "llm_request" {
+		t.Fatalf("want 1 llm_request event bound to child, got %+v", aggs)
 	}
 }
 
@@ -221,5 +223,155 @@ func TestPlanNodeID_DoesNotCollideWithEventID(t *testing.T) {
 	}
 	if evGot.NodeType != core.NodeTypeEvent {
 		t.Fatalf("event overwritten: got %d", evGot.NodeType)
+	}
+}
+
+func TestCollectPlanAggregatesGroupsPlans(t *testing.T) {
+	engine := tempEngine(t)
+	agentID := core.DefaultAgentID
+	// plan 9: root "1" (pending) + child "1.1" (done), one event bound to each.
+	root9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1", Status: core.StatusPending, Timestamp: 100}
+	child9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1.1"), SessionID: 9, Seq: 2, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1.1", Status: core.StatusDone, Timestamp: 200}
+	// plan 3: single done root.
+	root3 := &core.TrajectorySlot{IDHash: core.HashPlanNode(3, "1"), SessionID: 3, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 3, NodePath: "1", Status: core.StatusDone, Timestamp: 50}
+	for _, n := range []*core.TrajectorySlot{root9, child9, root3} {
+		if _, err := WritePlanNode(engine, agentID, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ev9a := core.TrajectorySlot{SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 300}
+	ev9b := core.TrajectorySlot{SessionID: 9, Seq: 2, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 400}
+	ev9c := core.TrajectorySlot{SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: child9.IDHash, EventType: "plan_step", Timestamp: 500}
+	// A bare turn event (PlanID=0) must not leak into any aggregate.
+	bare := core.TrajectorySlot{SessionID: 5, Seq: 1, EventType: "llm_request", Timestamp: 900}
+	for _, ev := range []core.TrajectorySlot{ev9a, ev9b, ev9c, bare} {
+		if _, err := AppendTrajectory(engine, agentID, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	aggs := CollectPlanAggregates(engine, agentID)
+	if len(aggs) != 2 {
+		t.Fatalf("want 2 plan aggregates, got %d", len(aggs))
+	}
+	byPlan := map[uint64]PlanAggregate{}
+	for _, a := range aggs {
+		byPlan[a.PlanID] = a
+	}
+	p9, p3 := byPlan[9], byPlan[3]
+	if len(p9.Nodes) != 2 || len(p3.Nodes) != 1 {
+		t.Fatalf("node counts: plan9=%d plan3=%d", len(p9.Nodes), len(p3.Nodes))
+	}
+	if p9.Nodes[0].NodePath != "1" || p9.Nodes[1].NodePath != "1.1" {
+		t.Fatalf("plan9 nodes must be nodePath-sorted: %+v", p9.Nodes)
+	}
+	if p9.EventCount[root9.IDHash] != 2 || p9.EventCount[child9.IDHash] != 1 {
+		t.Fatalf("plan9 event counts: %+v", p9.EventCount)
+	}
+	if len(p9.Events) != 3 || len(p3.Events) != 0 {
+		t.Fatalf("event ids: plan9=%d plan3=%d", len(p9.Events), len(p3.Events))
+	}
+	if p9.CreatedAt != 100 || p9.LastActiveAt != 500 {
+		t.Fatalf("plan9 window = [%d,%d], want [100,500]", p9.CreatedAt, p9.LastActiveAt)
+	}
+	if !p9.HasNonDone {
+		t.Fatal("plan9 has a pending node, must be non-done")
+	}
+	if p3.HasNonDone {
+		t.Fatal("plan3 is all-done")
+	}
+}
+
+func TestDeletePlanRecordsRemovesNodesAndEvents(t *testing.T) {
+	engine := tempEngine(t)
+	agentID := core.DefaultAgentID
+	root9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1", Status: core.StatusPending, Timestamp: 100}
+	if _, err := WritePlanNode(engine, agentID, root9); err != nil {
+		t.Fatal(err)
+	}
+	root3 := &core.TrajectorySlot{IDHash: core.HashPlanNode(3, "1"), SessionID: 3, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 3, NodePath: "1", Status: core.StatusDone, Timestamp: 50}
+	if _, err := WritePlanNode(engine, agentID, root3); err != nil {
+		t.Fatal(err)
+	}
+	ev9 := core.TrajectorySlot{SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 300}
+	bare := core.TrajectorySlot{SessionID: 5, Seq: 1, EventType: "llm_request", Timestamp: 900}
+	for _, ev := range []core.TrajectorySlot{ev9, bare} {
+		if _, err := AppendTrajectory(engine, agentID, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	n, err := DeletePlanRecords(engine, agentID, 9)
+	if err != nil || n != 2 {
+		t.Fatalf("delete plan 9 = %d err=%v, want 2 (1 node + 1 event)", n, err)
+	}
+	left := core.CollectAllTrajectories(engine, agentID)
+	if len(left) != 2 {
+		t.Fatalf("want plan3 node + bare event left, got %d", len(left))
+	}
+	for _, ev := range left {
+		if ev.PlanID == 9 {
+			t.Fatalf("plan 9 record survived: %+v", ev)
+		}
+	}
+	// Idempotent: deleting again (or an unknown plan) removes nothing.
+	if n, err := DeletePlanRecords(engine, agentID, 9); err != nil || n != 0 {
+		t.Fatalf("second delete = %d err=%v, want 0", n, err)
+	}
+}
+
+func TestDeletePlanNodeBranchCascades(t *testing.T) {
+	engine := tempEngine(t)
+	agentID := core.DefaultAgentID
+	planID := uint64(9)
+	mkNode := func(nodePath string, parent uint64) uint64 {
+		id := core.HashPlanNode(planID, nodePath)
+		node := &core.TrajectorySlot{
+			IDHash: id, SessionID: planID, Seq: uint64(len(strings.Split(nodePath, "."))),
+			NodeType: core.NodeTypePlan, PlanID: planID, ParentID: parent,
+			NodePath: nodePath, Status: core.StatusPending, Timestamp: 100,
+		}
+		if _, err := WritePlanNode(engine, agentID, node); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	root := mkNode("1", 0)
+	c1 := mkNode("1.1", root)
+	mkNode("1.2", root)
+	mkNode("2", 0) // a sibling root outside the "1" branch
+	// Bind a real event to "1.1" so the cascade is observable on disk.
+	if _, err := AppendTrajectory(engine, agentID, core.TrajectorySlot{
+		SessionID: planID, Seq: 1, NodeType: core.NodeTypeEvent, PlanID: planID,
+		PlanNodeRef: c1, EventType: "llm_request", Payload: "x", Timestamp: 200,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := DeletePlanNodeBranch(engine, agentID, planID, "1")
+	if err != nil || n != 4 {
+		t.Fatalf("delete branch \"1\" = %d err=%v, want 4 (3 nodes + 1 bound event)", n, err)
+	}
+	nodes := CollectPlanNodes(engine, agentID, planID)
+	if len(nodes) != 1 || nodes[0].NodePath != "2" {
+		t.Fatalf("surviving nodes = %+v, want only sibling root \"2\"", nodes)
+	}
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		if ev.PlanNodeRef == c1 {
+			t.Fatalf("bound event must cascade with its pruned node: %+v", ev)
+		}
+	}
+	// Idempotent on a vanished path.
+	if n, err := DeletePlanNodeBranch(engine, agentID, planID, "1"); err != nil || n != 0 {
+		t.Fatalf("second delete = %d err=%v, want 0", n, err)
+	}
+	// Prefix boundaries: "1.1" must not be matched by a sibling like "1.10".
+	mkNode("1.1", 0)
+	mkNode("1.10", 0)
+	n10, err := DeletePlanNodeBranch(engine, agentID, planID, "1.1")
+	if err != nil || n10 != 1 {
+		t.Fatalf("delete \"1.1\" = %d err=%v, want 1 (exact node only)", n10, err)
+	}
+	if got := CollectPlanNodes(engine, agentID, planID); len(got) != 2 || got[0].NodePath != "2" || got[1].NodePath != "1.10" {
+		t.Fatalf("prefix sibling must survive: %+v", got)
 	}
 }

@@ -31,6 +31,12 @@ func TestSurfaceL3Knowledge(t *testing.T) {
 	if err != nil || len(graphs) == 0 {
 		t.Fatalf("list l3 graphs: %d err=%v", len(graphs), err)
 	}
+	// ImportL3 建 manual 图谱：Source.Manual 的 ContextID 恒为 0，api 面必须渲染
+	// 空串而非 16 个 0（formatOptionalID 语义）。
+	if got := graphs[0].Source; got.Kind != "manual" || got.ContextID != "" {
+		t.Fatalf("manual graph source should render kind=manual context_id=%q, got kind=%q context_id=%q",
+			"", got.Kind, got.ContextID)
+	}
 	graphID := graphs[0].IDHash
 	g, err := db.GetL3(graphID)
 	if err != nil || g == nil || g.Nodes == nil {

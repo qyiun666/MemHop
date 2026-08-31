@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // refineLLM returns different keywords depending on whether the request
@@ -73,10 +72,10 @@ func TestRefineTopicKeywordsFacade(t *testing.T) {
 		t.Fatalf("search: %v", err)
 	}
 	topicID := res.NewTopicID
-	if _, err := db.AppendL4Message(topicID, "用户补充", ts+1, core.RoleUser, core.ContentText); err != nil {
+	if _, err := db.AppendL4Message(topicID, "用户补充", ts+1, RoleUser, ContentText); err != nil {
 		t.Fatalf("append user: %v", err)
 	}
-	if _, err := db.AppendL4Message(topicID, "补充说明", ts+2, core.RoleAgent, core.ContentText); err != nil {
+	if _, err := db.AppendL4Message(topicID, "补充说明", ts+2, RoleAgent, ContentText); err != nil {
 		t.Fatalf("append agent: %v", err)
 	}
 	if err := db.RefineTopicKeywords(context.Background(), topicID); err != nil {

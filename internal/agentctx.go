@@ -23,6 +23,7 @@ type agentContext struct {
 	sparseIndex   *index.SparseIndex  // BM25 (domain-local IDF/avgDocLength)
 	l2Meta        *index.L2MetaIndex  // L2 topic metadata cache
 	traj          *index.TrajIndex    // L6 turn trajectory shape (Seq/hash/timestamp/topic)
+	plans         *planCache          // L6 plan->nodes/events aggregate (no engine scan per op)
 	activeScenes  []uint64            // insertion-ordered active scene list
 	dreamInFlight map[uint64]struct{} // scenes with a scheduled background Dream
 

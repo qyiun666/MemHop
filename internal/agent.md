@@ -33,6 +33,20 @@
 5. **DeleteAgent 顺序**：先摘租户映射（断绝新 `contextFor`）→
    `destroyContext`（取消 dreamCtx）→ `ac.deleted` 墓碑（`lockAgent` 拿锁后
    复检，与删除对撞的在飞操作被拒）→ `ac.mu` 屏障等待在飞操作 → 引擎域删除。
+6. **planCache 域内索引**：L6 计划聚合缓存 `ac.plans`（`plancache.go`）
+   **不内置锁**，完全依赖 `ac.mu` 串行（与 `activeScenes` 同模式，区别于自带
+   RWMutex 的 `TrajIndex`）。所有计划写路径（节点增删改、事件绑定、
+   `PlanReplace`、`SyncPlanTree`、Dream 清理）必须先取 `ac.mu` 再同步缓存；
+   `newAgentContextLocked` 构建，idle 重建时一并重建。`SyncPlanTree` 整树同步
+   只改节点结构/字段，**不产生 `plan_step` 事件**、不动事件 Seq 空间。
+7. **planID 全零保留**：`AppendTrajectory` 写入的裸轮次事件恒为
+   `PlanID=0`，故 `0000000000000000` 不是合法计划。五个计划入口
+   （`PlanAppend`/`PlanCommit`/`PlanState`/`PlanReplace`/`SyncPlanTree`）
+   一律经 `parsePlanID` 拒绝；绕过它直接调 `repo.DeletePlanRecords(0)`
+   会删掉整个域的全部轮次事件。
+8. **计划清理有界**：`l6_prune` 只豁免「持非 done 节点 **且** 窗口内仍有
+   活动」的计划；宿主中断或放弃而静默超 `trajectoryRetention` 的计划照常
+   清理并级联其绑定事件，否则废弃计划会让 L6 无界增长。
 
 ## 数据访问纪律
 

@@ -50,6 +50,46 @@ const (
 	L3ImportOverwrite = internal.L3ImportOverwrite
 )
 
+// ---- L4 message role constants ----
+
+const (
+	RoleUser   = internal.RoleUser
+	RoleAgent  = internal.RoleAgent
+	RoleSystem = internal.RoleSystem
+	RoleDream  = internal.RoleDream
+)
+
+// ---- L6 trajectory node type constants ----
+
+const (
+	NodeTypeEvent = internal.NodeTypeEvent
+	NodeTypePlan  = internal.NodeTypePlan
+)
+
+// Status* are the numeric codes carried by TrajectorySlot.Status, i.e.
+// read-side only: every write path overwrites that field, so a host compares
+// these against what ReadTrajectory returns and never passes them to a
+// write. The plan write/query surface uses the string form below.
+const (
+	StatusPending    = internal.StatusPending
+	StatusInProgress = internal.StatusInProgress
+	StatusDone       = internal.StatusDone
+	StatusFailed     = internal.StatusFailed
+	StatusRunning    = internal.StatusRunning
+)
+
+// PlanStatus* are the string lifecycle values PlanCommit accepts and
+// PlanState/ListPlans emit. They are assignable to the string parameter of
+// PlanCommit; the numeric Status* constants above are a different encoding of
+// the same states and are not interchangeable with them.
+const (
+	PlanStatusPending    PlanStatus = internal.PlanPending
+	PlanStatusInProgress PlanStatus = internal.PlanInProgress
+	PlanStatusRunning    PlanStatus = internal.PlanRunning
+	PlanStatusDone       PlanStatus = internal.PlanDone
+	PlanStatusFailed     PlanStatus = internal.PlanFailed
+)
+
 // ---- L4 content type constants ----
 
 const (

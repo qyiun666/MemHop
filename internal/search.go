@@ -46,13 +46,11 @@ func (db *DB) Search(ctx context.Context, agentID uint64, q SearchQuery) (*Searc
 	if err != nil {
 		return nil, err
 	}
-	// Add the new topic to the sparse index (only when created this round).
+	// Add the new topic to the sparse index (all routes create one).
 	// L2Meta was already refreshed inside createTopicInScene (before the
 	// depth<=1 listing); sparse comes last per storage → l2meta → sparse.
-	if newTopicID != 0 {
-		terms := index.Tokenize(strings.Join(keywords, " "))
-		ac.sparseIndex.AddDocument(newTopicID, terms, uint32(len(terms)))
-	}
+	terms := index.Tokenize(strings.Join(keywords, " "))
+	ac.sparseIndex.AddDocument(newTopicID, terms, uint32(len(terms)))
 	var associated []core.TopicSlot
 	if len(contexts) > 0 {
 		associated = ac.associatedContexts(db, contexts[0].SceneID)

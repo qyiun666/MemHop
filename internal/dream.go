@@ -115,16 +115,59 @@ func (db *DB) pruneTrajectoryStage(agentID uint64, ac *agentContext, rep *DreamR
 			slog.Warn("dream: trajectory prune failed", "agent", common.FormatHash(agentID), "err", err)
 		}
 	}
-	// Plan nodes are intentionally kept out of the event TrajIndex, so sweep
-	// them separately by their own timestamp (also keeps the L6 store bounded).
-	expired := repo.CollectExpiredPlanNodes(db.engine, agentID, cutoff)
-	if len(expired) > 0 {
-		ids := make([]uint64, len(expired))
-		for i, n := range expired {
-			ids[i] = n.IDHash
+	// Plan nodes sit outside the event TrajIndex, so sweep them by their own
+	// timestamp from the engine (authoritative — Dream is a disk maintainer,
+	// not a hot path). A plan is exempt only while it BOTH holds a non-Done
+	// node AND saw activity inside the retention window: an in-flight task
+	// must not lose its tree mid-task, but once a plan has been silent past
+	// the window it is abandoned and sweeps like any other record, so L6
+	// stays bounded. Expired nodes of the swept plans cascade their bound
+	// events so no orphan PlanNodeRef survives. The in-memory planCache is
+	// refreshed only after the disk sweep succeeds, keeping cache and engine
+	// in sync. Cascade-deleted events that are still fresh may linger in the
+	// TrajIndex until the periodic prune or a context rebuild; readers skip
+	// missing records, so the drift is benign.
+	type pruneDel struct {
+		planID   uint64
+		nodeDel  []uint64
+		eventDel []uint64
+	}
+	var prunes []pruneDel
+	var delIDs []uint64
+	for _, agg := range repo.CollectPlanAggregates(db.engine, agentID) {
+		if agg.HasNonDone && agg.LastActiveAt >= cutoff {
+			continue
 		}
-		if _, derr := repo.DeleteTrajectoryByIDs(db.engine, agentID, ids); derr != nil {
+		var nodeDel []uint64
+		for _, n := range agg.Nodes {
+			if n.Timestamp < cutoff {
+				nodeDel = append(nodeDel, n.IDHash)
+			}
+		}
+		if len(nodeDel) == 0 {
+			continue
+		}
+		expired := make(map[uint64]struct{}, len(nodeDel))
+		for _, id := range nodeDel {
+			expired[id] = struct{}{}
+		}
+		var eventDel []uint64
+		for _, ev := range agg.Events {
+			if _, ok := expired[ev.PlanNodeRef]; ok {
+				eventDel = append(eventDel, ev.IDHash)
+			}
+		}
+		delIDs = append(delIDs, nodeDel...)
+		delIDs = append(delIDs, eventDel...)
+		prunes = append(prunes, pruneDel{planID: agg.PlanID, nodeDel: nodeDel, eventDel: eventDel})
+	}
+	if len(delIDs) > 0 {
+		if _, derr := repo.DeleteTrajectoryByIDs(db.engine, agentID, delIDs); derr != nil {
 			slog.Warn("dream: plan-node prune failed", "agent", common.FormatHash(agentID), "err", derr)
+		} else {
+			for _, p := range prunes {
+				ac.plans.removePlanIDs(p.planID, p.nodeDel, p.eventDel)
+			}
 		}
 	}
 	appendStage(rep, "l6_prune", start, err)

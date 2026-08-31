@@ -45,6 +45,7 @@ type (
 	CapabilityPatch          = internal.CapabilityPatch
 	CapabilityImport         = internal.CapabilityImport
 	TrajectorySessionSummary = internal.TrajectorySessionSummary
+	PlanStatus               = internal.PlanStatus
 	DreamReport              = internal.DreamReport
 	DreamStage               = internal.DreamStage
 	CrystallizeResult        = internal.CrystallizeResult
@@ -166,6 +167,7 @@ type L3Subgraph struct {
 }
 
 // ArchiveSlot stores a user/agent chat message under an L2 scene context.
+// Role is one of RoleUser / RoleAgent / RoleSystem / RoleDream.
 type ArchiveSlot struct {
 	IDHash      string      `json:"id_hash"`
 	ContentType ContentType `json:"content_type"`
@@ -198,6 +200,12 @@ type Capability struct {
 
 // TrajectorySlot is one L6 operation trajectory event; SessionID is a turn
 // key (one trajectory per agent turn, search starts it, update ends it).
+// NodeType is NodeTypeEvent or NodeTypePlan; Status carries the numeric
+// StatusPending.. codes (only meaningful on nodes a plan wrote).
+// On the plan write paths (PlanAppend/PlanCommit) the record is forced to
+// bare-event semantics — NodeType/ParentID/NodePath/Status/Summary are
+// cleared and PlanID/PlanNodeRef/Seq are assigned by the library, so
+// caller-supplied values in those fields are ignored.
 type TrajectorySlot struct {
 	IDHash    string `json:"id_hash"`
 	SessionID string `json:"session_id"`
@@ -213,24 +221,51 @@ type TrajectorySlot struct {
 	NodePath    string `json:"node_path,omitempty"`
 	Status      uint8  `json:"status,omitempty"`
 	Summary     string `json:"summary,omitempty"`
+	PlanType    string `json:"plan_type,omitempty"`
 	PlanNodeRef string `json:"plan_node_ref,omitempty"`
+	FinishedAt  int64  `json:"finished_at,omitempty"`
 }
 
 // PlanNodeView is the external plan-tree node; Status is the string form.
 type PlanNodeView struct {
-	NodePath    string         `json:"node_path"`
-	Title       string         `json:"title"`
-	Status      string         `json:"status"`
-	Summary     string         `json:"summary"`
-	ChildCount  int            `json:"child_count"`
-	TrajCount   int            `json:"traj_count"`
-	LastSummary string         `json:"last_summary"`
-	Children    []PlanNodeView `json:"children"`
+	NodePath   string         `json:"node_path"`
+	Title      string         `json:"title"`
+	Status     string         `json:"status"`
+	Type       string         `json:"type"`
+	Summary    string         `json:"summary"`
+	FinishedAt int64          `json:"finished_at"`
+	ChildCount int            `json:"child_count"`
+	TrajCount  int            `json:"traj_count"`
+	Children   []PlanNodeView `json:"children"`
 }
 
-// PlanTree is the external plan tree root view.
+// PlanNode is the host-supplied full plan tree for SyncPlanTree; NodePath is
+// assigned by the host, and Status is the string surface (pending/in_progress/
+// running/done/failed; "" defaults to pending).
+type PlanNode struct {
+	NodePath string     `json:"node_path"`
+	Title    string     `json:"title"`
+	Type     string     `json:"type"`
+	Status   string     `json:"status"`
+	Summary  string     `json:"summary"`
+	Children []PlanNode `json:"children"`
+}
+
+// PlanTree is the external forest view of one plan: every top-level step is
+// a root, and Done/Total count all roots.
 type PlanTree struct {
-	Root       PlanNodeView `json:"root"`
-	DoneCount  int          `json:"done_count"`
-	TotalCount int          `json:"total_count"`
+	Roots      []PlanNodeView `json:"roots"`
+	DoneCount  int            `json:"done_count"`
+	TotalCount int            `json:"total_count"`
+}
+
+// PlanSummary is one plan's footprint returned by ListPlans.
+type PlanSummary struct {
+	PlanID       string `json:"plan_id"`
+	CreatedAt    int64  `json:"created_at"`
+	LastActiveAt int64  `json:"last_active_at"`
+	NodeCount    int    `json:"node_count"`
+	DoneCount    int    `json:"done_count"`
+	TotalCount   int    `json:"total_count"`
+	Active       bool   `json:"active"`
 }

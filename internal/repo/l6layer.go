@@ -75,30 +75,121 @@ func CollectPlanNodes(engine *core.StorageEngine, agentID uint64, planID uint64)
 		out = append(out, ev)
 	}
 	slices.SortFunc(out, func(a, b core.TrajectorySlot) int {
-		return cmp.Or(cmp.Compare(a.Seq, b.Seq), compareNodePath(a.NodePath, b.NodePath))
+		return cmp.Or(cmp.Compare(a.Seq, b.Seq), CompareNodePath(a.NodePath, b.NodePath))
 	})
 	return out
 }
 
-// CollectExpiredPlanNodes returns plan-node records (NodeType=Plan) whose
-// Timestamp is strictly older than before (Unix ms), across all plans of the
-// agent. Used by Dream's retention sweep since plan nodes are intentionally
-// kept out of the event TrajIndex.
-func CollectExpiredPlanNodes(engine *core.StorageEngine, agentID uint64, before int64) []core.TrajectorySlot {
-	var out []core.TrajectorySlot
+// PlanAggregate is one plan's stored footprint, computed in a single scan of
+// the domain's L6 records (no per-node rescans).
+type PlanAggregate struct {
+	PlanID       uint64
+	Nodes        []core.TrajectorySlot // NodeTypePlan, sorted by (Seq, NodePath)
+	EventCount   map[uint64]int        // node IDHash -> bound event count
+	Events       []core.TrajectorySlot // every bound event (cascade sweeps need the refs)
+	CreatedAt    int64                 // earliest node timestamp (Unix ms)
+	LastActiveAt int64                 // latest node/event timestamp (Unix ms)
+	HasNonDone   bool                  // any node carries a non-Done status
+}
+
+// CollectPlanAggregates groups every plan's nodes and bound events in ONE
+// pass over the agent domain's L6 records; bare turn events (PlanID==0) are
+// excluded. Result is PlanID-ascending for determinism.
+func CollectPlanAggregates(engine *core.StorageEngine, agentID uint64) []PlanAggregate {
+	byPlan := make(map[uint64]*PlanAggregate)
 	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.NodeType != core.NodeTypePlan || ev.Timestamp >= before {
+		if ev.PlanID == 0 {
 			continue
 		}
-		out = append(out, ev)
+		agg := byPlan[ev.PlanID]
+		if agg == nil {
+			agg = &PlanAggregate{PlanID: ev.PlanID, EventCount: make(map[uint64]int)}
+			byPlan[ev.PlanID] = agg
+		}
+		// Node timestamps are refreshed on every commit, so the earliest
+		// record across nodes AND bound events marks the plan's creation.
+		if agg.CreatedAt == 0 || ev.Timestamp < agg.CreatedAt {
+			agg.CreatedAt = ev.Timestamp
+		}
+		if ev.Timestamp > agg.LastActiveAt {
+			agg.LastActiveAt = ev.Timestamp
+		}
+		switch ev.NodeType {
+		case core.NodeTypePlan:
+			agg.Nodes = append(agg.Nodes, ev)
+			if ev.Status != core.StatusDone {
+				agg.HasNonDone = true
+			}
+		case core.NodeTypeEvent:
+			agg.Events = append(agg.Events, ev)
+			agg.EventCount[ev.PlanNodeRef]++
+		}
 	}
+	out := make([]PlanAggregate, 0, len(byPlan))
+	for _, agg := range byPlan {
+		slices.SortFunc(agg.Nodes, func(a, b core.TrajectorySlot) int {
+			return cmp.Or(cmp.Compare(a.Seq, b.Seq), CompareNodePath(a.NodePath, b.NodePath))
+		})
+		out = append(out, *agg)
+	}
+	slices.SortFunc(out, func(a, b PlanAggregate) int { return cmp.Compare(a.PlanID, b.PlanID) })
 	return out
 }
 
-// compareNodePath compares two node-path strings ("1", "1.2.1") numerically
+// DeletePlanRecords removes one plan's nodes and bound events in a single
+// scan and returns how many records were removed; unknown plans remove
+// nothing (idempotent).
+func DeletePlanRecords(engine *core.StorageEngine, agentID, planID uint64) (int, error) {
+	var ids []uint64
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		if ev.PlanID == planID {
+			ids = append(ids, ev.IDHash)
+		}
+	}
+	return DeleteTrajectoryByIDs(engine, agentID, ids)
+}
+
+// DeletePlanNodeBranch removes one plan node and its whole descendant subtree
+// along with every event bound to those nodes (PlanNodeRef within the branch).
+// nodePath matches itself and any "nodePath.N..." descendant; unknown paths or
+// plans remove nothing (idempotent).
+func DeletePlanNodeBranch(engine *core.StorageEngine, agentID, planID uint64, nodePath string) (int, error) {
+	if nodePath == "" {
+		return 0, common.NewError(common.ErrInvalidQuery, "nodePath required")
+	}
+	prefix := nodePath + "."
+	var nodeIDs []uint64
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		if ev.PlanID != planID || ev.NodeType != core.NodeTypePlan {
+			continue
+		}
+		if ev.NodePath == nodePath || strings.HasPrefix(ev.NodePath, prefix) {
+			nodeIDs = append(nodeIDs, ev.IDHash)
+		}
+	}
+	if len(nodeIDs) == 0 {
+		return 0, nil
+	}
+	target := make(map[uint64]struct{}, len(nodeIDs))
+	for _, id := range nodeIDs {
+		target[id] = struct{}{}
+	}
+	delIDs := append([]uint64(nil), nodeIDs...)
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		if ev.NodeType != core.NodeTypeEvent || ev.PlanID != planID {
+			continue
+		}
+		if _, ok := target[ev.PlanNodeRef]; ok {
+			delIDs = append(delIDs, ev.IDHash)
+		}
+	}
+	return DeleteTrajectoryByIDs(engine, agentID, delIDs)
+}
+
+// CompareNodePath compares two node-path strings ("1", "1.2.1") numerically
 // segment by segment, so "1.10" sorts after "1.9" (not lexicographically
 // where "1.10" < "1.9"). Tie-breaks on length for equal numeric prefixes.
-func compareNodePath(a, b string) int {
+func CompareNodePath(a, b string) int {
 	as := splitDotSegments(a)
 	bs := splitDotSegments(b)
 	for i := 0; i < len(as) && i < len(bs); i++ {
@@ -124,19 +215,5 @@ func splitDotSegments(s string) []string {
 			out = append(out, p)
 		}
 	}
-	return out
-}
-
-// CollectNodeEvents returns the event records (NodeType=event) pointing at a
-// plan node via PlanNodeRef, sorted by Seq; nil when none.
-func CollectNodeEvents(engine *core.StorageEngine, agentID uint64, nodeID uint64) []core.TrajectorySlot {
-	var out []core.TrajectorySlot
-	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.NodeType != core.NodeTypeEvent || ev.PlanNodeRef != nodeID {
-			continue
-		}
-		out = append(out, ev)
-	}
-	slices.SortFunc(out, func(a, b core.TrajectorySlot) int { return cmp.Compare(a.Seq, b.Seq) })
 	return out
 }

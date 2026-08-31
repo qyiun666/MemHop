@@ -105,6 +105,30 @@ const (
 	EdgeCustom     = core.EdgeCustom
 )
 
+// ---- L4 message role constants ----
+
+const (
+	RoleUser   = core.RoleUser
+	RoleAgent  = core.RoleAgent
+	RoleSystem = core.RoleSystem
+	RoleDream  = core.RoleDream
+)
+
+// ---- L6 trajectory node type / plan status constants ----
+
+const (
+	NodeTypeEvent = core.NodeTypeEvent
+	NodeTypePlan  = core.NodeTypePlan
+)
+
+const (
+	StatusPending    = core.StatusPending
+	StatusInProgress = core.StatusInProgress
+	StatusDone       = core.StatusDone
+	StatusFailed     = core.StatusFailed
+	StatusRunning    = core.StatusRunning
+)
+
 // ---- L4 content type constants ----
 
 const (

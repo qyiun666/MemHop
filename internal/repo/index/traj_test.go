@@ -63,6 +63,34 @@ func TestTrajIndexAppendAndQuery(t *testing.T) {
 	}
 }
 
+func TestTrajIndexRemoveSession(t *testing.T) {
+	idx := NewTrajIndex()
+	idx.Append(7, 1, 101, 100, 55)
+	idx.Append(7, 2, 102, 200, 0)
+	idx.Append(8, 1, 103, 300, 55)
+
+	got := idx.RemoveSession(7)
+	if len(got) != 2 || got[0] != 101 || got[1] != 102 {
+		t.Fatalf("RemoveSession(7) = %v, want [101 102]", got)
+	}
+	if _, ok := idx.MaxSeq(7); ok {
+		t.Fatal("removed turn must report ok=false")
+	}
+	if hashes := idx.EventHashes(7); hashes != nil {
+		t.Fatalf("EventHashes(7) = %v, want nil", hashes)
+	}
+	if topic := idx.TopicEvents(55); len(topic) != 1 || topic[0] != 103 {
+		t.Fatalf("TopicEvents(55) = %v, want only the surviving turn's event", topic)
+	}
+	if sums := idx.Summaries(); len(sums) != 1 || sums[0].SessionID != 8 {
+		t.Fatalf("Summaries = %+v, want only turn 8", sums)
+	}
+	// Removing the same (or an unknown) turn again is a no-op.
+	if got := idx.RemoveSession(7); got != nil {
+		t.Fatalf("second RemoveSession = %v, want nil", got)
+	}
+}
+
 func TestBuildTrajFromEngineRestoresTurns(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "traj.meh"), 768)
 	if err != nil {

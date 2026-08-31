@@ -306,6 +306,7 @@ const (
 	StatusInProgress uint8 = 1
 	StatusDone       uint8 = 2
 	StatusFailed     uint8 = 3
+	StatusRunning    uint8 = 4
 )
 
 // TrajectorySlot is an L6 operation trajectory event appended by the host;
@@ -321,9 +322,12 @@ type TrajectorySlot struct {
 	PlanID      uint64 `json:"plan_id"`                 // 所属任务根（无任务=单个根）
 	ParentID    uint64 `json:"parent_id,omitempty"`     // 父节点（0=根）
 	NodePath    string `json:"node_path"`               // "1" / "1.2.1" / "1.2.2"
-	Status      uint8  `json:"status,omitempty"`        // 仅节点：0=pending 1=in_progress 2=done 3=failed
+	Status      uint8  `json:"status,omitempty"`        // 仅节点：0=pending 1=in_progress 2=done 3=failed 4=running
 	Summary     string `json:"summary,omitempty"`       // 仅节点：完成缩写摘要
+	Title       string `json:"title,omitempty"`         // 仅节点：人类可读标题（空时视图回退 NodePath）
+	PlanType    string `json:"plan_type,omitempty"`     // 仅节点：语义类型 plan/step/tool_call（空=普通节点）
 	PlanNodeRef uint64 `json:"plan_node_ref,omitempty"` // 仅事件：挂到的计划节点（HashPlanNode(planID,nodePath)）
+	FinishedAt  int64  `json:"finished_at,omitempty"`   // 仅节点：终态完成时刻（Unix ms，终态写入、非终态不清除）
 
 	EventType string `json:"event_type"`         // llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply
 	Payload   string `json:"payload"`            // event content (truncated to 4KB; no raw token stream)

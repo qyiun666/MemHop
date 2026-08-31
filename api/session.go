@@ -85,6 +85,12 @@ func (s *Session) ListScenesByL3(l3ID string) ([]SceneSlot, error) {
 	return out, nil
 }
 
+// SetSceneL3ID anchors a scene to an L3 domain with hex IDs. Write-once by
+// default; force=true corrects a mis-anchor, an empty l3ID clears it.
+func (s *Session) SetSceneL3ID(sceneID, l3ID string, force bool) error {
+	return s.Session.SetSceneL3ID(sceneID, l3ID, force)
+}
+
 // GetL3 returns an L3 graph with hex IDs.
 func (s *Session) GetL3(id string) (*L3Graph, error) {
 	g, err := s.Session.GetL3(id)
@@ -246,7 +252,10 @@ func (s *Session) AppendTrajectory(sessionID string, ev TrajectorySlot) error {
 	return s.Session.AppendTrajectory(sessionID, coreEv)
 }
 
-// PlanAppend appends one event to a plan node (hex planID, nodePath).
+// PlanAppend appends one event to a plan node (hex planID, nodePath). The
+// record is forced to bare-event semantics: NodeType/ParentID/NodePath/
+// Status/Summary are cleared and PlanID/PlanNodeRef/Seq come from this call,
+// so caller-supplied values in those fields are ignored.
 func (s *Session) PlanAppend(planID, nodePath string, ev TrajectorySlot) error {
 	coreEv, err := toCoreTrajectorySlot(ev)
 	if err != nil {
@@ -256,6 +265,9 @@ func (s *Session) PlanAppend(planID, nodePath string, ev TrajectorySlot) error {
 }
 
 // PlanCommit advances a plan node to a status and appends the step event.
+// status takes the PlanStatus* string constants ("pending" / "in_progress" /
+// "running" / "done" / "failed"); an unknown value is rejected. The appended
+// event is forced to bare-event semantics as in PlanAppend.
 func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status string, summary string) error {
 	coreEv, err := toCoreTrajectorySlot(ev)
 	if err != nil {
@@ -264,7 +276,7 @@ func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status 
 	return s.Session.PlanCommit(planID, nodePath, coreEv, internal.PlanStatus(status), summary)
 }
 
-// PlanState returns the plan tree with hex-free string statuses.
+// PlanState returns the plan forest with hex-free string statuses.
 func (s *Session) PlanState(planID string) (*PlanTree, error) {
 	t, err := s.Session.PlanState(planID)
 	if err != nil {
@@ -272,4 +284,31 @@ func (s *Session) PlanState(planID string) (*PlanTree, error) {
 	}
 	out := fromPlanTree(t)
 	return &out, nil
+}
+
+// PlanReplace wipes a plan's nodes and bound events for re-planning,
+// keeping the planID; a non-empty rootTitle seeds a titled pending root.
+func (s *Session) PlanReplace(planID, rootTitle string) error {
+	return s.Session.PlanReplace(planID, rootTitle)
+}
+
+// ListPlans summarizes every plan of the agent domain (restart recovery).
+func (s *Session) ListPlans() ([]PlanSummary, error) {
+	plans, err := s.Session.ListPlans()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PlanSummary, 0, len(plans))
+	for _, p := range plans {
+		out = append(out, fromPlanSummary(p))
+	}
+	return out, nil
+}
+
+// SyncPlanTree replaces one plan's whole tree from the host's authoritative
+// snapshot: adds/updates nodes by path, deletes vanished nodes (with their
+// bound events) and never appends a plan_step event. planID is preserved.
+func (s *Session) SyncPlanTree(planID string, root *PlanNode) error {
+	in := toInternalPlanNode(root)
+	return s.Session.SyncPlanTree(planID, &in)
 }
