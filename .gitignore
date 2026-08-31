@@ -66,3 +66,6 @@ test/testsupport/key_config.json
 
 # Local Go build cache (sandboxed builds)
 /.gocache/
+
+# Local build artifacts
+/memhop-mcp

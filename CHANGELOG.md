@@ -3,6 +3,30 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## v1.4.2 — 2026-08-31
+
+**L6 计划树 + L2 目录归属**：轨迹层承载可折叠的任务树（三形态写入 + 整树同步），场景固定挂到 L3 项目域。
+
+### 新增
+
+- **L6 计划树（三形态）**：`TrajectorySlot` 用 `NodeType` 区分轨迹事件与计划节点，节点 ID 由 `HashPlanNode(planID, nodePath)` 稳定派生（`plan:` 前缀命名空间，不与事件 `hash(sessionID:seq)` 相撞），事件经 `PlanNodeRef` 挂节点
+  - `PlanAppend(planID, nodePath, ev)` 只追加一步不推进计划；`PlanCommit(..., status, summary)` 推进状态并追加一步；`PlanState(planID)` 读树。节点缺失时按路径逐级补建为 pending，宿主只管理 `NodePath`（`"1"` / `"1.2.1"`）
+  - **Model A 显式折叠**：父节点只由宿主显式 commit 为 `done`，库内不因"子节点全 done"自动提升；每次 commit 后自底向上把已 `done` 子节点的 `Summary` 以 `; ` 汇总进父节点（`NodePath` 数值段稳定排序，`1.10` 排在 `1.9` 后），且保留宿主自己的父摘要
+  - `PlanTree.Roots` 是**森林**：flat 步骤列表每个顶层步骤各为一个根，`DoneCount/TotalCount` 覆盖全部根；父记录缺失的节点提升为根而不丢弃子树
+- **计划重规划与整树同步**：`PlanReplace(planID, rootTitle)` 清空一个计划的节点与绑定事件、保留 planID（非空 `rootTitle` 播一个带标题的 pending 根）；`SyncPlanTree(planID, *PlanNode)` 以宿主快照为准整树增删改（按路径对齐、消失的分支连同绑定事件级联删除），**不产生 `plan_step` 事件**、不动事件 Seq 空间；`ListPlans()` 输出域内每个计划的足迹（planID / 节点数 / done 比 / 首末活动时间 / 是否仍活跃），供宿主重启后恢复树
+- **L2 场景 ↔ L3 目录域（N:1）**：`SceneSlot.L3ID` 为场景固定归属；`SearchQuery.L3ID` 可选——有值时候选场景先按项目域筛选，命中无锚点的场景时回填；`ListScenesByL3(l3ID)` 按项目列场景；`SetSceneL3ID(sceneID, l3ID, force)` 正常路由为写一次，`force=true` 纠正错挂、空 `l3ID` 清除锚点
+- **`planCache` 域内索引**（`internal/plancache.go`）：按域缓存每个计划的节点与绑定事件计数，`PlanState`/`ListPlans`/rollup 不再每次全扫引擎；随 `agentContext` 构建、idle 回收时一并重建；不内置锁，完全依赖域锁 `ac.mu` 串行
+- **api 常量导出**：`Role*`、`NodeType*`、数值 `Status*`（只用于读 `TrajectorySlot.Status`）与字符串 `PlanStatus*`（`PlanCommit` 入参 / `PlanState` 出参），并导出 `api.PlanStatus` 类型；`StatusRunning`（`running`）为第五个计划状态
+
+### 变更
+
+- **计划写入面收敛为权威语义**：`AppendTrajectory` / `PlanAppend` / `PlanCommit` 一律强制改写记录的 `NodeType/PlanID/ParentID/NodePath/Status/Summary`（及 `Seq`），宿主在这些字段上传值会被忽略——事件不能伪装成节点、节点树不会被注入脏记录；`PlanAppend`/`PlanCommit` 的事件 `EventType` 限定在既有 9 类加 `plan_step`
+- **`planID` 全零保留**：`0000000000000000` 是裸轮次事件的 `PlanID` 哨兵，五个计划入口一律以 `ErrInvalidQuery` 拒绝（此前 `PlanReplace` 传全零会删掉整个域的全部轨迹事件）
+- **`l6_prune` 计划豁免改为"活动期内"**：只豁免既持非 `done` 节点、又在 7 天窗口内有过活动的计划；宿主中断/放弃而静默超窗的计划按常规清理（连同绑定事件级联），保证 L6 有界
+- **`Search` 每轮必建新话题**：话题稀疏索引写入不再以"本轮新建"为条件（三条路由都建话题）
+- **无格式变更**（仍 `FormatVersion 0x0009` / `SnapshotVersion 0x0002`）：计划字段与 `L3ID` 都是 JSON 增量字段，v1.4.1 的 `.meh` 文件直接打开，无需迁移
+- **交付面**：计划树与 L3 场景锚定本次**只在 Go module 暴露**，`cmd/memhop-mcp` 的 31 个工具未接入，经 MCP 接入的宿主（DSH 插件）暂时拿不到这些能力
+
 ## v1.4.1 — 2026-08-28
 
 **类型契约清理**：api 出参 ID 全量 16 位 hex、L0 画像 v2（字段所有权）、库内零往返。
