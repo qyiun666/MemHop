@@ -74,32 +74,6 @@ func registerSceneListTools(s *mcp.Server, db *memhop.Session) {
 	}, handleNoArgs[[]memhop.SceneSlot](func() ([]memhop.SceneSlot, error) {
 		return db.ListScenes()
 	}))
-
-	s.AddTool(&mcp.Tool{
-		Name:        "memhop_scene_active_list",
-		Description: "列出内存中激活的 L2 场景（dream 巩固目标）及其 depth1 话题条数；未激活的场景可搜索但不可巩固。",
-		InputSchema: objSchema(nil),
-	}, handleNoArgs[[]memhop.SceneSlot](func() ([]memhop.SceneSlot, error) {
-		ids := db.ActiveSceneIDs()
-		if len(ids) == 0 {
-			return []memhop.SceneSlot{}, nil
-		}
-		active := make(map[string]bool, len(ids))
-		for _, id := range ids {
-			active[id] = true
-		}
-		all, err := db.ListScenes()
-		if err != nil {
-			return nil, err
-		}
-		out := make([]memhop.SceneSlot, 0, len(ids))
-		for _, sc := range all {
-			if active[sc.SceneID] {
-				out = append(out, sc)
-			}
-		}
-		return out, nil
-	}))
 }
 
 func registerSceneDetailTools(s *mcp.Server, db *memhop.Session) {

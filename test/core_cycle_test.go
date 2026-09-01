@@ -9,18 +9,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qyiun666/MemHop/api"
+	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
-// gatherLocomoContext flattens the returned topics' keyword tracks (user +
-// agent + fused) with their timestamps into one searchable text. It reflects
-// what a host sees after Search: the L2 keyword view of each returned topic.
-func gatherLocomoContext(_ *testsupport.Handle, res *api.SearchResult) string {
+// gatherSessionSurface renders the host session's read surface: each depth-1
+// topic with its turn timestamps and its single keyword track.
+func gatherSessionSurface(res *memhop.SearchResult) string {
 	var sb strings.Builder
-	for i := range res.Contexts {
-		c := &res.Contexts[i]
+	for i := range res.Topics {
+		c := &res.Topics[i]
 		if c.UserTimestamp > 0 {
 			fmt.Fprintf(&sb, "[user: %s] ", time.UnixMilli(c.UserTimestamp).UTC().Format("2006-01-02 15:04"))
 		}
@@ -28,14 +27,6 @@ func gatherLocomoContext(_ *testsupport.Handle, res *api.SearchResult) string {
 			fmt.Fprintf(&sb, "[agent: %s] ", time.UnixMilli(c.AgentTimestamp).UTC().Format("2006-01-02 15:04"))
 		}
 		sb.WriteByte('\n')
-		for _, kw := range c.UserKeywords {
-			sb.WriteString(kw)
-			sb.WriteByte(' ')
-		}
-		for _, kw := range c.AgentKeywords {
-			sb.WriteString(kw)
-			sb.WriteByte(' ')
-		}
 		for _, kw := range c.FusedKeywords {
 			sb.WriteString(kw)
 			sb.WriteByte(' ')
@@ -44,11 +35,12 @@ func gatherLocomoContext(_ *testsupport.Handle, res *api.SearchResult) string {
 	return sb.String()
 }
 
-// TestCoreCycleSearchUpdateDream exercises the full memory loop against real
-// services: N Search+Update turns ingested into one scene, then Dream
-// consolidation, then retrieval must still surface the consolidated facts
-// (the fused summary preserves details) plus the newest facts.
-func TestCoreCycleSearchUpdateDream(t *testing.T) {
+// TestCoreCycleUpdateDream exercises the full memory loop against real
+// services: N turns settled into one host session, then Dream consolidation.
+// It pins what the re-designed loop promises: originals stay verbatim in L4,
+// the read surface is the distilled keyword track, and consolidation shrinks
+// that surface without dropping the facts.
+func TestCoreCycleUpdateDream(t *testing.T) {
 	const turns = 24
 	facts := []string{
 		"我昨天（5月7日）去了 LGBTQ 支持小组，见到了 Caroline，她讲了很多鼓舞人心的故事。",
@@ -83,39 +75,31 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
-	// Phase 1: ingest via Search + Update (the real host pattern), checking
-	// L0/L1/L4 consistency every few turns — the periodic verification a host
-	// should be able to rely on at any point in the loop.
 	base := time.Now().UnixMilli()
-	var sceneID string
+	sceneID, err := db.OpenSession("core cycle")
+	if err != nil {
+		t.Fatalf("open session: %v", err)
+	}
+
+	// Phase 1: settle each turn with Update (the real host pattern), checking
+	// L0/L2/L4 consistency every few turns.
 	for i, f := range facts {
-		res, err := db.Search(context.Background(), internal.SearchQuery{Text: f, Timestamp: base + int64(i)*1000})
-		if err != nil {
-			t.Fatalf("search ingest %d: %v", i, err)
-		}
-		if len(res.Contexts) > 0 && sceneID == "" {
-			sceneID = res.Contexts[0].SceneID
-		}
-		if err := db.Update(res.NewTopicID, "Agent: 明白了，已记录。", base+int64(i)*1000+500); err != nil {
+		ts := base + int64(i)*1000
+		if _, err := db.Update(memhop.TurnUpdate{
+			SceneID: sceneID, UserText: f, UserTS: ts,
+			AgentText: "Agent: 明白了，已记录。", AgentTS: ts + 500,
+		}); err != nil {
 			t.Fatalf("update ingest %d: %v", i, err)
 		}
-		// Periodic consistency check: L0 profile readable, L1 scene graph
-		// present, L4 archive holds the just-ingested utterance verbatim.
 		if (i+1)%8 == 0 {
 			if _, err := db.GetL0(); err != nil {
 				t.Fatalf("GetL0 at turn %d: %v", i+1, err)
 			}
-			scenes, err := db.ListScenes()
-			if err != nil || len(scenes) == 0 {
-				t.Fatalf("ListScenes at turn %d: scenes=%d err=%v", i+1, len(scenes), err)
+			res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+			if err != nil || len(res.Topics) == 0 {
+				t.Fatalf("session read at turn %d: topics=%d err=%v", i+1, len(res.Topics), err)
 			}
-			if sc, err := db.SceneContext(sceneID); err != nil || sc.TopicCount == 0 {
-				t.Fatalf("SceneContext at turn %d: topics=%d err=%v", i+1, sc.TopicCount, err)
-			}
-			arc, err := db.SearchL4(internal.L4Query{
-				Start: base + int64(i)*1000 - 100,
-				End:   base + int64(i)*1000 + 600,
-			})
+			arc, err := db.SearchL4(internal.L4Query{Start: ts - 100, End: ts + 600})
 			if err != nil || len(arc) == 0 {
 				t.Fatalf("SearchL4 at turn %d: archives=%d err=%v", i+1, len(arc), err)
 			}
@@ -131,51 +115,58 @@ func TestCoreCycleSearchUpdateDream(t *testing.T) {
 			if !verbatim {
 				t.Errorf("L4 at turn %d does not hold the raw utterance verbatim", i+1)
 			}
-			t.Logf("periodic check @turn %d: L0 ok, scenes=%d, L4 verbatim=%v", i+1, len(scenes), verbatim)
+			t.Logf("periodic check @turn %d: L0 ok, surface=%d topics, L4 verbatim=%v", i+1, len(res.Topics), verbatim)
 		}
 	}
 
-	// Phase 2: Dream consolidation (LLM merge of the 24 same-topic turns).
-	rep, err := db.Dream(context.Background(), "")
+	before, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("session read before dream: %v", err)
+	}
+	surfaceBefore := len(before.Topics)
+
+	// Phase 2: Dream consolidation (LLM merge of the same-topic turns).
+	rep, err := db.Dream(context.Background(), sceneID)
 	if err != nil {
 		t.Fatalf("dream: %v", err)
 	}
-	if rep == nil || rep.ConsolidatedScenes == 0 {
-		t.Logf("dream reported no consolidation (no active scenes or below threshold): %+v", rep)
-	} else {
-		t.Logf("dream consolidated %d scene(s), compressed %d topic group(s)", rep.ConsolidatedScenes, rep.L2TopicsCompressed)
+	if rep == nil {
+		t.Fatal("dream returned no report")
 	}
+	t.Logf("dream consolidated %d scene(s), compressed %d topic group(s)", rep.ConsolidatedScenes, rep.L2TopicsCompressed)
 
-	// Phase 2.5: post-Dream L0/L1 consistency — profile still readable, the
-	// scene graph still exposes the consolidated scene with topics.
+	// Phase 2.5: post-Dream L0/L2 consistency — profile readable, the session
+	// still resolves and still has a surface.
 	if _, err := db.GetL0(); err != nil {
 		t.Fatalf("GetL0 after Dream: %v", err)
 	}
-	scenes, err := db.ListScenes()
-	if err != nil || len(scenes) == 0 {
-		t.Fatalf("ListScenes after Dream: scenes=%d err=%v", len(scenes), err)
-	}
-	sc, err := db.SceneContext(sceneID)
-	if err != nil || sc.TopicCount == 0 {
-		t.Fatalf("SceneContext after Dream: topics=%d err=%v", sc.TopicCount, err)
-	}
-	if sc.TopicCount >= len(facts) {
-		t.Logf("note: Dream merged nothing this run (topics=%d == ingested %d)", sc.TopicCount, len(facts))
-	} else {
-		t.Logf("post-Dream scene topics=%d (compressed from %d)", sc.TopicCount, len(facts))
-	}
-
-	// Phase 3: retrieval must still surface the facts, including the newest
-	// one added right before Dream and the merged summary details.
-	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "支持小组最近有什么安排？", Timestamp: base + 1_000_000})
+	after, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
-		t.Fatalf("post-dream search: %v", err)
+		t.Fatalf("session read after dream: %v", err)
 	}
-	ctxText := gatherLocomoContext(db, res)
-	for _, want := range []string{"5月7日", "David", "5000", "张律师", "社区中心"} {
-		if !strings.Contains(ctxText, want) {
-			t.Errorf("post-dream context missing %q", want)
+	if len(after.Topics) == 0 {
+		t.Fatal("session surface went empty after consolidation")
+	}
+	if rep.ConsolidatedScenes > 0 && len(after.Topics) >= surfaceBefore {
+		t.Errorf("consolidation reported work but the surface did not shrink: %d -> %d", surfaceBefore, len(after.Topics))
+	}
+	t.Logf("post-Dream surface = %d topics (was %d)", len(after.Topics), surfaceBefore)
+
+	// Phase 3: consolidation must not cost the host its facts. The originals
+	// are the source of truth in L4; the read surface must still carry the
+	// distilled keywords.
+	for _, want := range facts {
+		hit, err := db.SearchL4(internal.L4Query{Keyword: want[:18]})
+		if err != nil {
+			t.Fatalf("SearchL4 for %q: %v", want[:18], err)
+		}
+		if len(hit) == 0 {
+			t.Errorf("fact lost from L4 after consolidation: %.24s", want)
 		}
 	}
-	t.Logf("post-dream: %d contexts, %d chars, facts preserved", len(res.Contexts), len(ctxText))
+	surfaceText := gatherSessionSurface(after)
+	if strings.TrimSpace(surfaceText) == "" {
+		t.Error("post-dream surface carries no keywords")
+	}
+	t.Logf("post-dream surface: %d topics, %d chars of keywords", len(after.Topics), len(surfaceText))
 }

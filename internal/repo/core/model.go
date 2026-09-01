@@ -5,7 +5,9 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -28,16 +30,15 @@ type ProfileSlot struct {
 
 // SceneNode is an L1 hypergraph node linking multiple L2 topics.
 type SceneNode struct {
-	IDHash        uint64   `json:"id_hash"`
-	SceneID       uint64   `json:"scene_id"`
-	TopicIDs      []uint64 `json:"topic_ids"`
-	VectorPageRef uint64   `json:"vector_page_ref"`
-	Importance    float32  `json:"importance"`
-	Valence       float64  `json:"valence"`
-	Arousal       float64  `json:"arousal"`
-	CreatedAt     int64    `json:"created_at"`
-	UpdatedAt     int64    `json:"updated_at"`
-	EdgeIDs       []uint64 `json:"edge_ids"`
+	IDHash     uint64   `json:"id_hash"`
+	SceneID    uint64   `json:"scene_id"`
+	TopicIDs   []uint64 `json:"topic_ids"`
+	Importance float32  `json:"importance"`
+	Valence    float64  `json:"valence"`
+	Arousal    float64  `json:"arousal"`
+	CreatedAt  int64    `json:"created_at"`
+	UpdatedAt  int64    `json:"updated_at"`
+	EdgeIDs    []uint64 `json:"edge_ids"`
 	// LastDecayAt: last decay time (ms); 0 = never decayed, first decay starts from CreatedAt.
 	LastDecayAt int64 `json:"last_decay_at"`
 }
@@ -54,36 +55,40 @@ type SceneEdge struct {
 }
 
 // SceneNodeID derives the stable L1 node ID of a scene: hash("l1:"+hex(sceneID)).
-// The node is created/updated only during Dream, but the ID is computable at
-// query time without any index, which is what makes spreading-activation
-// association a pure storage-level graph walk.
+// The node is created/updated only during Dream, but the ID is computable
+// without any index — which is what lets DeleteScene drop it right away.
 func SceneNodeID(sceneID uint64) uint64 {
 	return common.HashID("l1:" + common.FormatHash(sceneID))
 }
 
-// SceneSlot is an L2 scene container holding multiple session topics;
-// HitCount/LastHitAt fold the former L6 scene-usage feedback into the scene
-// record (retrieval-hit statistics consumed by Dream's usage feedback).
+// SceneSlot is an L2 scene container — one host session's conversation. The
+// scene ID is the host's session id, never a hash of its name. HitCount /
+// LastHitAt fold the former L6 scene-usage feedback into the scene record
+// (read-side statistics consumed by Dream's usage feedback).
 type SceneSlot struct {
 	SceneID    uint64 `json:"scene_id"`
 	SceneName  string `json:"scene_name"`
 	TopicCount int    `json:"topic_count"` // depth-1 root topics under this scene
-	HitCount   uint32 `json:"hit_count"`   // cumulative retrieval hit count
-	LastHitAt  int64  `json:"last_hit_at"` // last hit time (Unix ms)
+	HitCount   uint32 `json:"hit_count"`   // times the scene was read by Search
+	LastHitAt  int64  `json:"last_hit_at"` // last Search read time (Unix ms)
 	L3ID       uint64 `json:"l3_id"`       // 场景固定挂靠的目录/项目域 L3 图（N:1）
 }
 
-// NewSceneSlot builds a SceneSlot from a name; ID is the xxhash64 of the name.
-func NewSceneSlot(name string) SceneSlot {
+// NewSceneSlot builds a scene record for a host-owned scene ID.
+func NewSceneSlot(sceneID uint64, name string) SceneSlot {
 	return SceneSlot{
-		SceneID:   common.HashID(name),
+		SceneID:   sceneID,
 		SceneName: name,
 	}
 }
 
-// TopicSlot is an L2 dual-track session node (user/agent). Tree: parent_id
-// (nil = depth-1 root) + children_ids. Depth 1 = raw turns, 2 = compression
-// groups, 3 = meta summaries; depth >= 4 triggers subtree deletion on Dream.
+// TopicSlot is one L2 conversation node: a single turn written by Update, or
+// a Dream-fused group of turns. A scene's depth-1 topic set IS the host's
+// context for that session, so a topic carries exactly one keyword track
+// (FusedKeywords); the originals live in the L4 archives listed in L4Refs.
+// Tree: parent_id (nil = depth-1 root) + children_ids. Depth 1 = current
+// surface (turns and fused groups), 2+ = sunk history; depth >= 4 is deleted
+// on Dream.
 type TopicSlot struct {
 	ID          uint64   `json:"id"`
 	SceneID     uint64   `json:"scene_id"`
@@ -91,34 +96,56 @@ type TopicSlot struct {
 	ChildrenIDs []uint64 `json:"children_ids"`
 	Depth       uint8    `json:"depth"`
 
-	UserKeywords  []string `json:"user_keywords"`
-	UserTimestamp int64    `json:"user_timestamp"` // Dream node = earliest user turn in group
-
-	L4Refs []uint64 `json:"l4_refs"`
-	L3Refs []uint64 `json:"l3_refs"`
-
-	AgentKeywords  []string `json:"agent_keywords"`
-	AgentTimestamp int64    `json:"agent_timestamp"` // Dream node = latest agent reply in group
-
 	FusedKeywords []string `json:"fused_keywords"`
 
-	CentroidPageRef uint64 `json:"centroid_page_ref"`
+	UserTimestamp  int64 `json:"user_timestamp"`  // turn: user message time; fused: earliest user turn in group
+	AgentTimestamp int64 `json:"agent_timestamp"` // turn: agent reply time; fused: latest agent turn in group
+
+	L4Refs []uint64 `json:"l4_refs"`
+}
+
+// topicJSON is TopicSlot without its methods: embedding the real type inside
+// UnmarshalJSON would promote the method back onto the wrapper and recurse.
+type topicJSON TopicSlot
+
+// UnmarshalJSON folds the retired dual keyword tracks of a pre-v1.5 record
+// into the single FusedKeywords track, so existing domains keep the keywords
+// they already distilled without a migration pass or a format bump; the next
+// write persists one track.
+func (t *TopicSlot) UnmarshalJSON(data []byte) error {
+	var legacy struct {
+		topicJSON
+		UserKeywords  []string `json:"user_keywords"`
+		AgentKeywords []string `json:"agent_keywords"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	*t = TopicSlot(legacy.topicJSON)
+	if len(t.FusedKeywords) == 0 {
+		kws := append(slices.Clone(legacy.UserKeywords), legacy.AgentKeywords...)
+		slices.Sort(kws)
+		t.FusedKeywords = slices.Compact(kws)
+	}
+	return nil
 }
 
 // ComputeTopicID derives a topic ID from sceneID and both timestamps.
 // Dream-created fused topics use this form for deterministic replay.
 func ComputeTopicID(sceneID uint64, userTS, agentTS int64) uint64 {
-	combined := fmt.Sprintf("%d:%d:%d", sceneID, userTS, agentTS)
-	return common.HashID(combined)
+	return common.HashID(ComputeTopicKey(sceneID, userTS, agentTS))
 }
 
-// ComputeTopicIDForText derives a Search-created topic ID that also binds
-// the user text. This keeps the timestamp-only ID stable for Dream, while
-// two different messages that happen to share scene and millisecond no
-// longer collide and overwrite each other.
-func ComputeTopicIDForText(sceneID uint64, userTS int64, text string) uint64 {
-	combined := fmt.Sprintf("%d:%d:0:%s", sceneID, userTS, text)
-	return common.HashID(combined)
+// ComputeTurnTopicID derives the ID of a turn topic written by Update. The
+// "turn:" namespace keeps it apart from ComputeTopicID, which Dream uses for
+// fused parents over the same (minTS, maxTS) pair.
+func ComputeTurnTopicID(sceneID uint64, userTS, agentTS int64) uint64 {
+	return common.HashID("turn:" + ComputeTopicKey(sceneID, userTS, agentTS))
+}
+
+// ComputeTopicKey is the shared timestamp key form of a topic ID.
+func ComputeTopicKey(sceneID uint64, userTS, agentTS int64) string {
+	return fmt.Sprintf("%d:%d:%d", sceneID, userTS, agentTS)
 }
 
 // HypergraphSource represents the origin of an L3 hypergraph.

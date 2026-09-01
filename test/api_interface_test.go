@@ -2,13 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Offline interface tests: exercise the public API surface through
-// memhop.OpenMultiWithEncoder with a mock encoder and a mock OpenAI-compatible
-// LLM server. No external services required; run with `go test ./test/...`.
+// memhop.OpenMulti with a mock OpenAI-compatible LLM server. No external
+// services required; run with `go test ./test/...`.
 
 package test
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -29,26 +28,24 @@ func (h *testDB) Checkpoint() error { return h.m.Checkpoint() }
 func (h *testDB) Close() error      { return h.m.Close() }
 func (h *testDB) IsClosed() bool    { return h.m.IsClosed() }
 
-// openMockMulti opens a multi-agent DB with the mock encoder + mock LLM at
-// path; multi-agent is the only mode, so every handle goes through
-// CreateAgent + Session. Opts tweak cfg.Defaults per scenario.
+// openMockMulti opens a multi-agent DB with the mock LLM at path; multi-agent
+// is the only mode, so every handle goes through CreateAgent + Session.
+// Opts tweak cfg.Defaults per scenario.
 func openMockMulti(t *testing.T, path, llmURL string, opts ...func(*internal.MemHopDefaults)) *memhop.MultiAgentDB {
 	t.Helper()
 	cfg := &internal.MemHopConfig{
-		DBPath:     path,
-		VectorDim:  16,
-		EmbedModel: "mock-embed",
+		DBPath: path,
 	}
 	cfg.LLM.APIURL = llmURL
-	cfg.LLM.APIKey = "mock-key"
+	cfg.LLM.APIKey = "mock"
 	cfg.LLM.Model = "mock-model"
 	cfg.Defaults = *internal.DefaultMemHopDefaults
 	for _, opt := range opts {
 		opt(&cfg.Defaults)
 	}
-	m, err := memhop.OpenMultiWithEncoder(cfg, &mockEncoder{dim: 16})
+	m, err := memhop.OpenMulti(cfg)
 	if err != nil {
-		t.Fatalf("OpenMultiWithEncoder: %v", err)
+		t.Fatalf("OpenMulti: %v", err)
 	}
 	return m
 }
@@ -69,7 +66,7 @@ func newTestDB(t *testing.T, m *memhop.MultiAgentDB) *testDB {
 	return &testDB{Session: sess, m: m}
 }
 
-// openTestDB opens a DB backed by mock encoder + mock LLM in a temp dir.
+// openTestDB opens a DB backed by the mock LLM in a temp dir.
 func openTestDB(t *testing.T) (*testDB, *mockLLM) {
 	t.Helper()
 	llm := newMockLLM(t)
@@ -79,27 +76,29 @@ func openTestDB(t *testing.T) (*testDB, *mockLLM) {
 	return h, llm
 }
 
-// mockEncoder implements internal.Encoder with a deterministic pseudo-vector.
-type mockEncoder struct{ dim int }
-
-func (m *mockEncoder) Encode(text string) ([]float32, error) {
-	vec := make([]float32, m.dim)
-	h := uint64(1469598103934665603) // FNV offset basis
-	for _, r := range text {
-		h = (h ^ uint64(r)) * 1099511628211
+// openSession asks the library for a fresh host session (scene) and returns
+// its hex id.
+func openSession(t *testing.T, db *testDB) string {
+	t.Helper()
+	res, err := db.Search(memhop.SearchQuery{SceneName: "offline session"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
 	}
-	for i := range vec {
-		vec[i] = float32((h>>(uint(i)%8*8))&0xff) / 255.0
-	}
-	return vec, nil
+	return res.Scene.SceneID
 }
 
-func (m *mockEncoder) IsAvailable() bool { return true }
+// turn builds one finished turn for the given session.
+func turn(sceneID, user, agent string) memhop.TurnUpdate {
+	ts := time.Now().UnixMilli()
+	return memhop.TurnUpdate{
+		SceneID: sceneID, UserText: user, UserTS: ts, AgentText: agent, AgentTS: ts + 1,
+	}
+}
 
 func TestInterfaceOpenClose(t *testing.T) {
 	db, _ := openTestDB(t)
 	if db.IsClosed() {
-		t.Fatal("db should be open after OpenWithEncoder")
+		t.Fatal("db should be open after OpenMulti")
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -109,60 +108,67 @@ func TestInterfaceOpenClose(t *testing.T) {
 	}
 }
 
+// The memory loop contract offline: an empty-id Search mints a session, one
+// Update settles one turn (topic + two originals + exactly one distillation),
+// and the same session read hands it back.
 func TestInterfaceSearchUpdateL2L4(t *testing.T) {
-	db, _ := openTestDB(t)
-	ts := time.Now().UnixMilli()
+	db, llm := openTestDB(t)
+	sceneID := openSession(t, db)
 
-	// Search with AutoCreate creates a scene + topic + L4 archive + centroid.
-	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
+	// A fresh session has no topics, and reading it distills nothing.
+	fresh, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
-		t.Fatalf("Search(auto_create): %v", err)
+		t.Fatalf("Search(scene): %v", err)
 	}
-	if res.NewTopicID == "" || len(res.Contexts) == 0 {
-		t.Fatalf("auto-create should return new topic and contexts: %+v", res)
+	if len(fresh.Topics) != 0 {
+		t.Fatalf("fresh session should be empty, got %+v", fresh.Topics)
 	}
-	// auto-create links an L4 archive to the new topic; verify the link so
-	// the host can expand the archive content from Contexts' L4Refs.
-	linked := false
-	for _, ctx := range res.Contexts {
-		if len(ctx.L4Refs) > 0 {
-			linked = true
-			break
-		}
-	}
-	if !linked {
-		t.Fatal("auto-create Search should link L4 archives to topics")
+	if calls := llm.calls["keywords"]; calls != 0 {
+		t.Fatalf("Search distilled %d times, want 0 (reads never distill)", calls)
 	}
 
-	// Update appends an agent reply to the topic.
-	topicID := res.NewTopicID
-	if err := db.Update(topicID, "好的,我来重构这段代码", ts+1000); err != nil {
-		t.Fatalf("Update should succeed on an existing topic: %v", err)
-	}
-	// Update on a missing topic must return an error.
-	if err := db.Update(common.FormatHash(999), "无主话题", ts+2000); err == nil {
-		t.Fatalf("Update on missing topic should fail")
-	}
-
-	// Normal Search retrieves the stored contexts.
-	res2, err := db.Search(context.Background(), internal.SearchQuery{Text: "重构代码", Timestamp: ts + 3000})
+	before := llm.calls["keywords"]
+	topicID, err := db.Update(turn(sceneID, "用户要求重构代码", "好的,我来重构这段代码"))
 	if err != nil {
-		t.Fatalf("Search(normal): %v", err)
+		t.Fatalf("Update: %v", err)
 	}
-	if len(res2.Contexts) == 0 {
-		t.Fatal("normal search should retrieve contexts")
+	if calls := llm.calls["keywords"]; calls != before+1 {
+		t.Fatalf("Update distilled %d times, want exactly one per turn", calls-before)
 	}
 
-	// L2: scenes created by Search are listable.
+	// The turn is now the session's read surface, with both originals linked.
+	after, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("Search after Update: %v", err)
+	}
+	if len(after.Topics) != 1 || after.Topics[0].ID != topicID {
+		t.Fatalf("surface = %+v, want the one turn topic %s", after.Topics, topicID)
+	}
+	if len(after.Topics[0].L4Refs) != 2 {
+		t.Fatalf("topic L4Refs = %v, want both originals", after.Topics[0].L4Refs)
+	}
+	if len(after.Topics[0].FusedKeywords) == 0 {
+		t.Fatal("the turn topic must carry its distilled keywords")
+	}
+
+	// A turn for a session nobody opened is rejected, and so is a malformed one.
+	if _, err := db.Update(turn(common.FormatHash(999), "无主话题", "无主回复")); err == nil {
+		t.Fatal("Update on an unknown scene should fail")
+	}
+	if _, err := db.Update(memhop.TurnUpdate{SceneID: sceneID, UserText: "", UserTS: 1, AgentText: "a", AgentTS: 2}); err == nil {
+		t.Fatal("empty user text should fail")
+	}
+
+	// L2: sessions opened by Search are listable.
 	scenes, err := db.ListScenes()
 	if err != nil {
 		t.Fatalf("ListScenes: %v", err)
 	}
 	if len(scenes) == 0 {
-		t.Fatal("ListScenes should return the scene created by Search")
+		t.Fatal("ListScenes should return the session opened by Search")
 	}
 
-	// L4: archives written by Search/Update are searchable.
+	// L4: the originals written by Update are searchable verbatim.
 	arcs, err := db.SearchL4(internal.L4Query{Keyword: "重构"})
 	if err != nil {
 		t.Fatalf("SearchL4: %v", err)
@@ -173,10 +179,29 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if _, err := db.GetArchive(arcs[0].IDHash); err != nil {
 		t.Fatalf("GetArchive: %v", err)
 	}
+}
 
-	// Validation: Timestamp is required.
-	if _, err := db.Search(context.Background(), internal.SearchQuery{Text: "重构"}); err == nil {
-		t.Fatal("Search without Timestamp should fail")
+// Update costs exactly one LLM round trip per turn — the point of the
+// re-designed write path, where the retired contract costed two.
+func TestInterfaceOneDistillationPerTurn(t *testing.T) {
+	db, llm := openTestDB(t)
+	sceneID := openSession(t, db)
+
+	start := llm.calls["keywords"]
+	for i := range 5 {
+		if _, err := db.Update(turn(sceneID, "问题 "+common.FormatHash(uint64(i)), "回复")); err != nil {
+			t.Fatalf("turn %d: %v", i, err)
+		}
+	}
+	if got := llm.calls["keywords"] - start; got != 5 {
+		t.Fatalf("5 turns cost %d distillations, want 5", got)
+	}
+	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(res.Topics) != 5 {
+		t.Fatalf("surface = %d topics, want 5 turns", len(res.Topics))
 	}
 }
 

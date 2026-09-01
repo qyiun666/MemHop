@@ -6,7 +6,7 @@
 
 ## 卡定位：说明书，不是执行接口
 
-卡描述"该调哪个 API、传什么参数"（resource 的 `name/desc/input/output` 与宿主工具规格同构，`ref` 用 `api:MethodName` 指向 `api` 包方法），真正执行永远走 `api/` 的全部对外方法或 MCP 31 工具。
+卡描述"该调哪个 API、传什么参数"（resource 的 `name/desc/input/output` 与宿主工具规格同构，`ref` 用 `api:MethodName` 指向 `api` 包方法），真正执行永远走 `api/` 的全部对外方法或 MCP 30 工具。
 
 ## 分层注入契约（省 token）
 

@@ -10,16 +10,9 @@ import (
 	"github.com/qyiun666/MemHop/internal"
 )
 
-type openTestEncoder struct{ dim int }
-
-func (m *openTestEncoder) Encode(string) ([]float32, error) { return make([]float32, m.dim), nil }
-func (m *openTestEncoder) IsAvailable() bool                { return true }
-
 func openTestConfig(dbPath string) *internal.MemHopConfig {
 	return &internal.MemHopConfig{
-		DBPath:     dbPath,
-		VectorDim:  4,
-		EmbedModel: "test-embed",
+		DBPath: dbPath,
 		LLM: internal.LlmConfig{
 			APIURL: "http://127.0.0.1:1", APIKey: "k", Model: "m",
 		},
@@ -39,7 +32,7 @@ var builtinNames = []string{
 // function itself (api is a pure forwarding facade).
 func TestOpenAttachesBuiltins(t *testing.T) {
 	cfg := openTestConfig(filepath.Join(t.TempDir(), "b.meh"))
-	m, err := OpenMultiWithEncoder(cfg, &openTestEncoder{dim: 4})
+	m, err := OpenMulti(cfg)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -67,7 +60,7 @@ func TestOpenAttachesBuiltins(t *testing.T) {
 	if err := m.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
-	m2, err := OpenMultiWithEncoder(cfg, &openTestEncoder{dim: 4})
+	m2, err := OpenMulti(cfg)
 	if err != nil {
 		t.Fatalf("reopen: %v", err)
 	}

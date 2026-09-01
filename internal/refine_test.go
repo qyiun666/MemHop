@@ -5,11 +5,7 @@ package internal
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
-	"net/http/httptest"
-	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -17,26 +13,26 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// refineTestTopic builds a scene + topic with nL4 L4 messages and a live
-// dual-track (UserKeywords/AgentKeywords), mirroring a Search →
-// AppendL4Message ×N → Update turn. Returns the topic id string.
+// refineTestTopic builds one turn topic carrying nL4 L4 messages, mirroring
+// a turn whose intermediate messages arrived via AppendL4Message. Returns the
+// topic id string.
 func refineTestTopic(t *testing.T, db *DB, nL4 int) string {
 	t.Helper()
-	sceneID, err := repo.CreateSceneL2(db.engine, core.DefaultAgentID, "refine-scene")
-	if err != nil {
-		t.Fatalf("create scene: %v", err)
-	}
-	topicID := common.HashID("refine-topic")
-	if !repo.CreateTopicL2WithID(db.engine, core.DefaultAgentID, sceneID, topicID, []string{"user-kw"}, 1000, 0) {
+	const sceneID = uint64(7)
+	mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "refine-scene")
+
+	topicID := core.ComputeTurnTopicID(sceneID, 1000, 2000)
+	if !repo.CreateTurnTopicL2(db.engine, core.DefaultAgentID, sceneID, topicID, []string{"turn-kw"}, 1000, 2000) {
 		t.Fatal("create topic")
 	}
-	role := core.RoleUser
 	ids := make([]uint64, 0, nL4)
-	for i := 0; i < nL4; i++ {
+	for i := range nL4 {
+		role := core.RoleUser
 		if i == nL4-1 {
 			role = core.RoleAgent
 		}
-		id, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicID, role, core.ContentText, "msg-"+strings.Repeat("x", i+1), int64(1000+i))
+		id, err := repo.AppendArchiveL4(db.engine, core.DefaultAgentID, topicID, role, core.ContentText,
+			"msg-"+string(rune('A'+i)), int64(1000+i))
 		if err != nil {
 			t.Fatalf("append l4: %v", err)
 		}
@@ -45,51 +41,11 @@ func refineTestTopic(t *testing.T, db *DB, nL4 int) string {
 	if !repo.UpdateTopicL4RefsL2(db.engine, core.DefaultAgentID, topicID, ids) {
 		t.Fatal("update l4 refs")
 	}
-	if !repo.UpdateTopicL2(db.engine, core.DefaultAgentID, topicID, []string{"agent-kw"}, 2000) {
-		t.Fatal("update topic")
-	}
 	return common.FormatHash(topicID)
 }
 
-// countingLLMServer is mockLLMServer plus a call counter, used to prove the
-// refine guard skips the LLM for topics that need no refining.
-func countingLLMServer(t *testing.T, content string) (*httptest.Server, *atomic.Int32) {
-	t.Helper()
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
-			http.NotFound(w, r)
-			return
-		}
-		calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"choices": []map[string]any{{
-				"message": map[string]any{"role": "assistant", "content": content},
-			}},
-		})
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &calls
-}
-
-// failingLLMServer returns status for every chat completion request
-// (non-retryable codes only, so tests do not wait out the backoff).
-func failingLLMServer(t *testing.T, status int) *httptest.Server {
-	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
-			http.NotFound(w, r)
-			return
-		}
-		http.Error(w, "mock llm failure", status)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-// TestRefineTopicKeywords re-extracts all L4 messages into FusedKeywords:
-// the dual-track is cleared (timestamps kept), depth unchanged, L4 intact.
+// Refine replaces the single keyword track by re-distilling every original;
+// depth and timestamps are untouched.
 func TestRefineTopicKeywords(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["fused1","fused2"]}`)
 	db := newSearchTestDB(t, srv.URL)
@@ -109,51 +65,23 @@ func TestRefineTopicKeywords(t *testing.T) {
 	if len(topic.FusedKeywords) != 2 || topic.FusedKeywords[0] != "fused1" || topic.FusedKeywords[1] != "fused2" {
 		t.Errorf("FusedKeywords = %v, want [fused1 fused2]", topic.FusedKeywords)
 	}
-	if len(topic.UserKeywords) != 0 || len(topic.AgentKeywords) != 0 {
-		t.Errorf("dual-track not cleared: user=%v agent=%v", topic.UserKeywords, topic.AgentKeywords)
-	}
 	if topic.UserTimestamp != 1000 || topic.AgentTimestamp != 2000 {
-		t.Errorf("timestamps not preserved: user=%d agent=%d", topic.UserTimestamp, topic.AgentTimestamp)
+		t.Errorf("timestamps not preserved: %+v", topic)
 	}
 	if topic.Depth != 1 {
 		t.Errorf("Depth = %d, want 1", topic.Depth)
 	}
-	// All three L4 originals still readable.
 	if arcs := repo.QueryArchiveL4(db.engine, core.DefaultAgentID, 3, "", 0, 0, topic.L4Refs); len(arcs) != 3 {
 		t.Errorf("archives = %d, want 3", len(arcs))
 	}
 }
 
-// TestRefineTopicKeywordsGuard1to1: a standard 1:1 topic (two L4 messages)
-// is not refined — no LLM call, keywords untouched.
-func TestRefineTopicKeywordsGuard1to1(t *testing.T) {
+// There is no guard any more: refining always costs one LLM call, whatever
+// the topic holds, and an empty L4 set is the only no-op.
+func TestRefineAlwaysReDistills(t *testing.T) {
 	srv, calls := countingLLMServer(t, `{"keywords":["fused1"]}`)
 	db := newSearchTestDB(t, srv.URL)
 	topicID := refineTestTopic(t, db, 2)
-
-	if err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, topicID); err != nil {
-		t.Fatalf("RefineTopicKeywords: %v", err)
-	}
-	if got := calls.Load(); got != 0 {
-		t.Fatalf("LLM called %d times, want 0", got)
-	}
-	parsedID, _ := common.ParseID(topicID)
-	topic, _ := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
-	if len(topic.UserKeywords) != 1 || topic.UserKeywords[0] != "user-kw" ||
-		len(topic.AgentKeywords) != 1 || topic.AgentKeywords[0] != "agent-kw" {
-		t.Errorf("dual-track changed: user=%v agent=%v", topic.UserKeywords, topic.AgentKeywords)
-	}
-	if len(topic.FusedKeywords) != 0 {
-		t.Errorf("FusedKeywords = %v, want empty", topic.FusedKeywords)
-	}
-}
-
-// TestRefineTopicKeywordsIdempotent: a second refine on an already refined
-// topic is a no-op — the LLM is not called again and FusedKeywords hold.
-func TestRefineTopicKeywordsIdempotent(t *testing.T) {
-	srv, calls := countingLLMServer(t, `{"keywords":["fused1","fused2"]}`)
-	db := newSearchTestDB(t, srv.URL)
-	topicID := refineTestTopic(t, db, 3)
 
 	if err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, topicID); err != nil {
 		t.Fatalf("first refine: %v", err)
@@ -161,18 +89,35 @@ func TestRefineTopicKeywordsIdempotent(t *testing.T) {
 	if err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, topicID); err != nil {
 		t.Fatalf("second refine: %v", err)
 	}
-	if got := calls.Load(); got != 1 {
-		t.Fatalf("LLM called %d times, want 1 (once for the first refine)", got)
-	}
-	parsedID, _ := common.ParseID(topicID)
-	topic, _ := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
-	if len(topic.FusedKeywords) != 2 || topic.FusedKeywords[0] != "fused1" {
-		t.Errorf("FusedKeywords changed on second refine: %v", topic.FusedKeywords)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("LLM called %d times, want 2 (one per refine)", got)
 	}
 }
 
-// TestRefineTopicKeywordsErrors covers the failure paths: missing topic,
-// LLM failure and empty extraction must all leave the topic untouched.
+func TestRefineSkipsTopicWithoutOriginals(t *testing.T) {
+	srv, calls := countingLLMServer(t, `{"keywords":["fused1"]}`)
+	db := newSearchTestDB(t, srv.URL)
+	const sceneID = uint64(7)
+	mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "s")
+	topicID := core.ComputeTurnTopicID(sceneID, 1000, 2000)
+	writeTopic(t, db.engine, core.DefaultAgentID, core.TopicSlot{
+		ID: topicID, SceneID: sceneID, Depth: 1,
+		FusedKeywords: []string{"keep"}, UserTimestamp: 1000, AgentTimestamp: 2000,
+	})
+
+	if err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, common.FormatHash(topicID)); err != nil {
+		t.Fatalf("refine with no originals: %v", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("LLM called %d times with nothing to distill", got)
+	}
+	topic, _ := core.ReadTopicLenient(db.engine, core.DefaultAgentID, topicID)
+	if len(topic.FusedKeywords) != 1 || topic.FusedKeywords[0] != "keep" {
+		t.Fatalf("keywords changed: %v", topic.FusedKeywords)
+	}
+}
+
+// The failure paths must leave the topic exactly as it was.
 func TestRefineTopicKeywordsErrors(t *testing.T) {
 	t.Run("missing topic", func(t *testing.T) {
 		srv := mockLLMServer(t, `{"keywords":["x"]}`)
@@ -190,12 +135,7 @@ func TestRefineTopicKeywordsErrors(t *testing.T) {
 		if common.CodeOf(err) != common.ErrLLM {
 			t.Fatalf("err = %v, want ErrLLM", err)
 		}
-		parsedID, _ := common.ParseID(topicID)
-		topic, _ := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
-		if len(topic.UserKeywords) != 1 || len(topic.AgentKeywords) != 1 || len(topic.FusedKeywords) != 0 {
-			t.Errorf("topic changed after llm failure: user=%v agent=%v fused=%v",
-				topic.UserKeywords, topic.AgentKeywords, topic.FusedKeywords)
-		}
+		assertKeywordsUnchanged(t, db, topicID, "turn-kw")
 	})
 	t.Run("empty extraction", func(t *testing.T) {
 		srv := mockLLMServer(t, `{"keywords":[]}`)
@@ -205,11 +145,21 @@ func TestRefineTopicKeywordsErrors(t *testing.T) {
 		if common.CodeOf(err) != common.ErrLLM {
 			t.Fatalf("err = %v, want ErrLLM", err)
 		}
-		parsedID, _ := common.ParseID(topicID)
-		topic, _ := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
-		if len(topic.UserKeywords) != 1 || len(topic.AgentKeywords) != 1 || len(topic.FusedKeywords) != 0 {
-			t.Errorf("topic changed after empty extraction: user=%v agent=%v fused=%v",
-				topic.UserKeywords, topic.AgentKeywords, topic.FusedKeywords)
-		}
+		assertKeywordsUnchanged(t, db, topicID, "turn-kw")
 	})
+}
+
+func assertKeywordsUnchanged(t *testing.T, db *DB, topicIDHex string, want string) {
+	t.Helper()
+	parsedID, err := common.ParseID(topicIDHex)
+	if err != nil {
+		t.Fatalf("parse id: %v", err)
+	}
+	topic, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, parsedID)
+	if err != nil || topic == nil {
+		t.Fatalf("read topic: %v", err)
+	}
+	if len(topic.FusedKeywords) != 1 || topic.FusedKeywords[0] != want {
+		t.Fatalf("topic keywords changed on failure: %v", topic.FusedKeywords)
+	}
 }

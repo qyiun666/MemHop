@@ -11,7 +11,7 @@ import (
 
 func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 	p := tempPath(t, "crash")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,12 +64,12 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 
 func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 	p := tempPath(t, "nocp")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("a"))
-	snap := &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
+	snap := &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
 	if err := eng.Checkpoint(snap); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 		t.Fatalf("commitID: want %d, got %d", commitID, got)
 	}
 	sd := eng2.SnapshotData()
-	if sd == nil || string(sd.SparseByAgent[DefaultAgentID]) != "sparse" {
+	if sd == nil || string(sd.BlobByAgent[DefaultAgentID]) != "sparse" {
 		t.Fatalf("snapshot lost: %+v", sd)
 	}
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "a" {
@@ -98,7 +98,7 @@ func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 
 func TestIndexCallbackMayReadRecord(t *testing.T) {
 	p := tempPath(t, "iterlock")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}

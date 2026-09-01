@@ -1,13 +1,11 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Regression tests for the Search write-path ordering: the L2MetaIndex
-// cache must be refreshed before createTopicInScene lists the scene's
-// topics, so the newly created topic is part of the returned Contexts.
+// Search is a scene-scoped read: a scene is the host's session, so Search
+// neither guesses which scene a message belongs to nor distills anything.
 package internal
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -16,34 +14,143 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// TestSearchAutoCreateContextsIncludeNewTopic locks the timing: on an empty
-// database the first Search(AutoCreate) must return the just-created topic
-// in Contexts. A stale L2MetaIndex (sync after the listing) returns zero
-// contexts and panics hosts indexing res.Contexts[0].
-func TestSearchAutoCreateContextsIncludeNewTopic(t *testing.T) {
-	srv := mockLLMServer(t, `{"keywords":["rust","memory"]}`)
-	db := newSearchTestDB(t, srv.URL)
+func newSearchTestDB(t *testing.T, llmURL string) *DB {
+	t.Helper()
+	db := newTestDB(t, newTestEngine(t))
+	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: llmURL, APIKey: "test", Model: "mock"}})
+	return db
+}
 
-	res, err := db.Search(context.Background(), core.DefaultAgentID, SearchQuery{Text: "hello world", AutoCreate: true, Timestamp: 1000})
+// An empty SceneID asks for a fresh scene: the record lands on disk, the
+// result carries its host-owned id, and the optional name/L3 anchor apply.
+func TestSearchCreatesSceneWhenIDEmpty(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["unused"]}`)
+	db := newSearchTestDB(t, srv.URL)
+	l3ID := common.FormatHash(101)
+
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneName: "购物助手", L3ID: l3ID})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if res.NewTopicID == 0 {
-		t.Fatal("Search should have created a topic")
+	if res.Scene.SceneID == 0 || len(res.Topics) != 0 {
+		t.Fatalf("fresh scene must come back empty, got %+v", res)
 	}
-	if len(res.Contexts) != 1 {
-		t.Fatalf("Contexts = %d topics, want 1 (the new topic)", len(res.Contexts))
+	slot, err := core.ReadSceneSlot(db.engine, core.DefaultAgentID, res.Scene.SceneID)
+	if err != nil {
+		t.Fatalf("scene not persisted: %v", err)
 	}
-	if res.Contexts[0].ID != res.NewTopicID {
-		t.Errorf("Contexts[0].ID = %d, want new topic %d", res.Contexts[0].ID, res.NewTopicID)
+	if slot.SceneName != "购物助手" {
+		t.Errorf("scene name = %q, want the host-provided one", slot.SceneName)
 	}
-	if got := res.Contexts[0].UserKeywords; len(got) != 2 || got[0] != "rust" {
-		t.Errorf("Contexts[0].UserKeywords = %v, want [rust memory]", got)
+	wantL3, err := common.ParseID(l3ID)
+	if err != nil {
+		t.Fatalf("parse l3 id: %v", err)
+	}
+	if slot.L3ID != wantL3 {
+		t.Errorf("scene L3 anchor = %d, want %d", slot.L3ID, wantL3)
 	}
 }
 
-// TestSearchReturnsProfileBrief a stored profile shows up as a compact
-// digest in ProfileBrief while the full Profile stays available.
+// Two empty-id Search calls are two sessions: each gets its own scene id.
+func TestSearchFreshScenesDoNotCollide(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["x"]}`)
+	db := newSearchTestDB(t, srv.URL)
+
+	first, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("first Search: %v", err)
+	}
+	second, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("second Search: %v", err)
+	}
+	if first.Scene.SceneID == second.Scene.SceneID {
+		t.Fatalf("both calls returned scene %d", first.Scene.SceneID)
+	}
+	if !strings.HasPrefix(second.Scene.SceneName, "session:") {
+		t.Errorf("an unnamed scene falls back to session:<id>, got %q", second.Scene.SceneName)
+	}
+}
+
+// A non-empty SceneID must already exist: the library never creates a scene
+// the host did not open, and Update relies on that to reject stray turns.
+func TestSearchRejectsUnknownScene(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["x"]}`)
+	db := newSearchTestDB(t, srv.URL)
+
+	_, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(4242)})
+	if common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("unknown scene err = %v, want ErrNotFound", err)
+	}
+}
+
+// The read surface is the scene's depth-1 set in turn order; sunk history
+// (depth 2+) stays out of the host's context.
+func TestSearchReadsSceneSurface(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["x"]}`)
+	db := newSearchTestDB(t, srv.URL)
+	const sceneID = uint64(7)
+	mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "session")
+
+	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(11, sceneID, 200, []string{"second"}))
+	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(12, sceneID, 100, []string{"first"}))
+	parent := uint64(11)
+	writeTopic(t, db.engine, core.DefaultAgentID, core.TopicSlot{
+		ID: 13, SceneID: sceneID, Depth: 2, ParentID: &parent, FusedKeywords: []string{"sunk"},
+	})
+	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(14, 999, 300, []string{"other scene"}))
+
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(res.Topics) != 2 {
+		t.Fatalf("Topics = %d, want the 2 depth-1 topics of this scene: %+v", len(res.Topics), res.Topics)
+	}
+	if res.Topics[0].ID != 12 || res.Topics[1].ID != 11 {
+		t.Errorf("topics not in turn order: %d then %d", res.Topics[0].ID, res.Topics[1].ID)
+	}
+	if got := res.Topics[0].FusedKeywords; len(got) != 1 || got[0] != "first" {
+		t.Errorf("keyword track lost: %v", got)
+	}
+}
+
+// Search costs no LLM call and writes no memory record: only the scene's
+// usage counters move.
+func TestSearchIsReadOnlyAndCallsNoLLM(t *testing.T) {
+	srv, calls := countingLLMServer(t, `{"keywords":["should not be called"]}`)
+	db := newSearchTestDB(t, srv.URL)
+	const sceneID = uint64(7)
+	mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "session")
+	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(11, sceneID, 100, []string{"first"}))
+
+	before := [3]int{
+		countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic),
+		countRecords(db.engine, core.DefaultAgentID, core.RecL2Scene),
+		countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive),
+	}
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("Search made %d LLM calls, want 0", got)
+	}
+	after := [3]int{
+		countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic),
+		countRecords(db.engine, core.DefaultAgentID, core.RecL2Scene),
+		countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive),
+	}
+	if after != before {
+		t.Fatalf("Search wrote records: before %v after %v", before, after)
+	}
+	if res.Scene.HitCount != 1 {
+		t.Errorf("usage counter should record the read, got %+v", res.Scene)
+	}
+}
+
+// A stored profile shows up as a compact digest in ProfileBrief while the
+// full Profile stays available.
 func TestSearchReturnsProfileBrief(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["rust"]}`)
 	db := newSearchTestDB(t, srv.URL)
@@ -56,7 +163,7 @@ func TestSearchReturnsProfileBrief(t *testing.T) {
 	if err := repo.UpdateProfileL0(db.engine, core.DefaultAgentID, &profile); err != nil {
 		t.Fatalf("UpdateProfileL0: %v", err)
 	}
-	res, err := db.Search(context.Background(), core.DefaultAgentID, SearchQuery{Text: "hello", AutoCreate: true, Timestamp: 1000})
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -70,81 +177,32 @@ func TestSearchReturnsProfileBrief(t *testing.T) {
 	}
 }
 
-// TestSearchDirectedContextsIncludeNewTopic covers the directed route: the
-// topic created into an existing scene must show up in Contexts too.
-func TestSearchDirectedContextsIncludeNewTopic(t *testing.T) {
-	srv := mockLLMServer(t, `{"keywords":["rust","memory"]}`)
+// Scene.TopicCount is host-visible and must agree with what the same read
+// returns: the record itself never stores the count, the read derives it.
+func TestSearchReportsSceneTopicCount(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["x"]}`)
 	db := newSearchTestDB(t, srv.URL)
+	const sceneID = uint64(7)
+	mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "session")
+	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(11, sceneID, 100, []string{"first"}))
+	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(12, sceneID, 200, []string{"second"}))
+	parent := uint64(11)
+	writeTopic(t, db.engine, core.DefaultAgentID, core.TopicSlot{
+		ID: 13, SceneID: sceneID, Depth: 2, ParentID: &parent, FusedKeywords: []string{"sunk"},
+	})
 
-	scene := core.NewSceneSlot("scene").SceneID
-	sceneID := common.FormatHash(scene)
-	res, err := db.Search(context.Background(), core.DefaultAgentID, SearchQuery{Text: "hello world", DirectedL2ID: &sceneID, Timestamp: 1000})
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(res.Contexts) != 1 {
-		t.Fatalf("Contexts = %d topics, want 1 (the new topic)", len(res.Contexts))
+	if res.Scene.TopicCount != 2 {
+		t.Fatalf("Scene.TopicCount = %d, want 2 (depth-1 only, sunk topic excluded)", res.Scene.TopicCount)
 	}
-	if res.Contexts[0].ID != res.NewTopicID {
-		t.Errorf("Contexts[0].ID = %d, want new topic %d", res.Contexts[0].ID, res.NewTopicID)
-	}
-}
-
-// TestSearchFiltersSceneByL3 locks the SCENEFIND scene-domain filter: a
-// Search that carries L3ID backfills the created scene's organizational L3
-// domain, and a later retrieval with the same L3ID only returns contexts
-// from scenes carrying that domain (SetSceneL3ID + candidateTopics).
-func TestSearchFiltersSceneByL3(t *testing.T) {
-	srv := mockLLMServer(t, `{"keywords":["rust","memory"]}`)
-	db := newSearchTestDB(t, srv.URL)
-
-	// First Search(AutoCreate + L3ID=A) creates and anchors a scene to L3ID=A.
-	planA := common.FormatHash(101) // 16 hex
-	qA := SearchQuery{Text: "rust ownership", AutoCreate: true, Timestamp: 1000, L3ID: &planA}
-	if _, err := db.Search(context.Background(), core.DefaultAgentID, qA); err != nil {
-		t.Fatalf("first Search: %v", err)
-	}
-
-	// A second Search with a different L3ID=B anchors another (independent) scene.
-	planB := common.FormatHash(102)
-	qB := SearchQuery{Text: "rust borrow checker", AutoCreate: true, Timestamp: 2000, L3ID: &planB}
-	if _, err := db.Search(context.Background(), core.DefaultAgentID, qB); err != nil {
-		t.Fatalf("second Search: %v", err)
-	}
-
-	// Retrieval scoped to L3ID=A must only surface contexts from that domain.
-	res, err := db.Search(context.Background(), core.DefaultAgentID, SearchQuery{Text: "rust ownership", AutoCreate: false, Timestamp: 3000, L3ID: &planA})
+	scenes, err := db.ListScenes(core.DefaultAgentID)
 	if err != nil {
-		t.Fatalf("scoped Search: %v", err)
+		t.Fatalf("ListScenes: %v", err)
 	}
-	if len(res.Contexts) == 0 {
-		t.Fatal("L3ID=A should return contexts from scene A")
+	if scenes[0].TopicCount != res.Scene.TopicCount {
+		t.Fatalf("ListScenes reports %d but Search reports %d", scenes[0].TopicCount, res.Scene.TopicCount)
 	}
-	// Every returned context topic must live in a scene anchored to domain A;
-	// a broken scene-domain filter would leak scene B's topics past this gate.
-	sceneHashA, err := common.ParseID(planA)
-	if err != nil {
-		t.Fatalf("parse planA: %v", err)
-	}
-	for _, c := range res.Contexts {
-		slot, err := core.ReadSceneSlot(db.engine, core.DefaultAgentID, c.SceneID)
-		if err != nil {
-			t.Fatalf("read scene slot for topic %d (scene %d): %v", c.ID, c.SceneID, err)
-		}
-		if slot.L3ID != sceneHashA {
-			t.Errorf("topic %d in scene %d has domain L3ID %d, want %d", c.ID, c.SceneID, slot.L3ID, sceneHashA)
-		}
-	}
-}
-
-// newSearchTestDB assembles a DB with a mock LLM server and a working
-// encoder over a fresh engine; the default-domain context (sparse/L2Meta
-// indexes, Dream bookkeeping) is created lazily by contextFor, mirroring
-// the Open assembly so background-Dream paths never hit nil state.
-func newSearchTestDB(t *testing.T, llmURL string) *DB {
-	t.Helper()
-	db := newTestDB(t, newTestEngine(t))
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: llmURL, APIKey: "test", Model: "mock"}})
-	db.encoder = &mockEncoder{vec: testVec}
-	return db
 }

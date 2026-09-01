@@ -326,8 +326,8 @@ function StatusSection({ rpc, agentId, toast }) {
         { style: { marginTop: 4 } },
         React.createElement("span", { style: chip }, s.ready ? "connected" : "connecting"),
         React.createElement("span", { style: chip }, "tools=" + str(s.toolsRegistered)),
-        React.createElement("span", { style: chip }, stt.Closed ? "closed" : "open"),
-        React.createElement("span", { style: chip }, stt.HasActiveScenes ? "has scenes" : "no scenes"),
+        React.createElement("span", { style: chip }, stt.closed ? "closed" : "open"),
+        React.createElement("span", { style: chip }, (stt.scene_count ?? 0) > 0 ? `scenes ${stt.scene_count}` : "no scenes"),
         s.lastError
           ? React.createElement("span", { style: { ...chip, color: c.danger } }, "err")
           : null
@@ -1089,19 +1089,19 @@ function ProfileSection({ rpc, agentId, toast }) {
   );
 }
 
-// ---------- 睡眠页签：勾选内存中激活的场景，执行记忆巩固（dream） ----------
-// 列表读 scene_active_list（内存激活场景 = dream 巩固目标）；没有激活场景
-// 或未勾选任何场景时，睡眠按钮禁用，不可点击。
+// ---------- 睡眠页签：勾选场景（= 宿主会话），执行记忆巩固（dream） ----------
+// 列表读 scene_list（域内全部场景都可巩固）；没有场景或未勾选任何场景时，
+// 睡眠按钮禁用，不可点击。
 
 function SleepSection({ rpc, agentId, toast }) {
-  const { data, error, loading, reload } = useLoad(rpc, "scene_active_list", {}, agentId);
+  const { data, error, loading, reload } = useLoad(rpc, "scene_list", {}, agentId);
   const [sel, setSel] = React.useState({});
   const [sleepBusy, setSleepBusy] = React.useState(false);
 
   const scenes = Array.isArray(data) ? data : [];
   const checked = scenes.filter((s) => sel[s.scene_id]);
   const allSelected = scenes.length > 0 && checked.length === scenes.length;
-  // 没有激活场景或全未勾选 → 睡眠不可点（dream 无目标，执行必然失败）。
+  // 没有场景或全未勾选 → 睡眠不可点（dream 无目标，执行必然失败）。
   const canSleep = scenes.length > 0 && checked.length > 0 && !sleepBusy;
 
   const toggleAll = () => {
@@ -1178,7 +1178,7 @@ function SleepSection({ rpc, agentId, toast }) {
     React.createElement(
       "div",
       { style: { ...faint, lineHeight: "16px", marginTop: 6 } },
-      "睡眠 = 记忆巩固（memhop_dream）：只对内存中激活的场景生效，勾选的场景逐个巩固，全选时一次巩固全部激活场景（不传 scene_id）；没有激活场景或未勾选时无法执行。"
+      "睡眠 = 记忆巩固（memhop_dream）：勾选的场景逐个巩固，不传 scene_id 则巩固该域内的全部场景；没有场景或未勾选时无法执行。"
     )
   );
 }
@@ -1186,7 +1186,6 @@ function SleepSection({ rpc, agentId, toast }) {
 // ---------- 搜索页签：自动 search 参数偏好（发送对话时携带） ----------
 
 function SearchPrefsSection({ rpc, agentId, toast }) {
-  const scenes = useLoad(rpc, "scene_list", {}, agentId);
   const graphs = useLoad(rpc, "knowledge_list", {}, agentId);
   const [prefs, setPrefs] = React.useState(null);
   const [error, setError] = React.useState(null);
@@ -1209,7 +1208,6 @@ function SearchPrefsSection({ rpc, agentId, toast }) {
   }, [rpc, agentId]);
 
   const p = prefs || {};
-  const sceneList = Array.isArray(scenes.data) ? scenes.data : [];
   const graphList = Array.isArray(graphs.data) ? graphs.data : [];
 
   const save = async () => {
@@ -1220,9 +1218,7 @@ function SearchPrefsSection({ rpc, agentId, toast }) {
         "prefs",
         {
           prefs: {
-            autoCreate: !!p.autoCreate,
-            directedL2Id: p.directedL2Id || null,
-            directedL3Id: p.directedL3Id || null,
+            l3Id: p.l3Id || null,
           },
         },
         agentId
@@ -1254,8 +1250,8 @@ function SearchPrefsSection({ rpc, agentId, toast }) {
       list.map((item) =>
         React.createElement(
           "option",
-          { key: item.scene_id || item.id_hash, value: item.scene_id || item.id_hash },
-          (item.scene_name || item.name || "(未命名)") + " · " + (item.scene_id || item.id_hash)
+          { key: item.id_hash, value: item.id_hash },
+          (item.name || "(未命名)") + " · " + item.id_hash
         )
       )
     );
@@ -1264,23 +1260,9 @@ function SearchPrefsSection({ rpc, agentId, toast }) {
     React.Fragment,
     null,
     React.createElement("div", { style: card },
-      React.createElement("div", { style: { fontWeight: 600, fontSize: 12, marginBottom: 6 } }, "自动 search 参数（每轮发送对话时携带）"),
-      React.createElement(
-        "div",
-        { style: { marginBottom: 8 } },
-        React.createElement("label", { style: { fontSize: 12, display: "flex", alignItems: "center", gap: 6 } },
-          React.createElement("input", {
-            type: "checkbox",
-            checked: p.autoCreate === true,
-            onChange: (e) => setPrefs({ ...p, autoCreate: e.target.checked }),
-          }),
-          "auto_create：匹配不到话题时自动新建（默认关闭）"
-        )
-      ),
-      React.createElement("div", { style: { ...muted, marginBottom: 4 } }, "定向 L2 场景（directed_l2_id）：只在指定场景子树内检索"),
-      scenes.loading ? React.createElement(Loading, { label: "场景" }) : sel(sceneList, p.directedL2Id, (v) => setPrefs({ ...p, directedL2Id: v }), "（不限定场景）"),
-      React.createElement("div", { style: { ...muted, marginTop: 8, marginBottom: 4 } }, "定向 L3 图谱（directed_l3_id）：只在指定知识图谱内检索"),
-      graphs.loading ? React.createElement(Loading, { label: "图谱" }) : sel(graphList, p.directedL3Id, (v) => setPrefs({ ...p, directedL3Id: v }), "（不限定图谱）"),
+      React.createElement("div", { style: { fontWeight: 600, fontSize: 12, marginBottom: 6 } }, "新建会话的项目域（l3_id）"),
+      React.createElement("div", { style: { ...muted, marginBottom: 4 } }, "该 agent 下一次新建记忆场景（= 宿主会话）时挂到哪个 L3 项目域；已有会话不受影响。"),
+      graphs.loading ? React.createElement(Loading, { label: "图谱" }) : sel(graphList, p.l3Id, (v) => setPrefs({ ...p, l3Id: v }), "（不挂项目域）"),
       React.createElement(ErrBox, { error }),
       React.createElement(
         "button",
@@ -1292,7 +1274,7 @@ function SearchPrefsSection({ rpc, agentId, toast }) {
         : null
     ),
     React.createElement("div", { style: { ...faint, lineHeight: "16px" } },
-      "说明：此处设置会持久化到插件内存（当前 agent），core 在每轮自动 search 时合并这些参数——你发送的每条对话都会带着它们检索记忆。定向场景/图谱可同时指定，或都留空表示全局检索。"
+      "说明：检索不再猜场景——core 每轮按该 agent 的场景直取记忆（宿主会话即场景），因此这里只影响新建场景的项目域归属；场景/话题的读取与删除请用场景页签。"
     )
   );
 }
@@ -1368,8 +1350,6 @@ function ServerSection({ rpc, toast }) {
       llmApiUrl: c.llmApiUrl || "",
       llmApiKey: "",
       llmModel: c.llmModel || "",
-      embedModel: c.embedModel || "",
-      encoderAddr: c.encoderAddr || "",
       dbDir: c.dbDir || "",
       port: c.port ? String(c.port) : "",
     });
@@ -1383,8 +1363,6 @@ function ServerSection({ rpc, toast }) {
         llmApiUrl: form.llmApiUrl || undefined,
         llmApiKey: form.llmApiKey || undefined,
         llmModel: form.llmModel || undefined,
-        embedModel: form.embedModel || undefined,
-        encoderAddr: form.encoderAddr || undefined,
         dbDir: form.dbDir || undefined,
         port: form.port ? Number(form.port) : undefined,
       });
@@ -1532,8 +1510,6 @@ function ServerSection({ rpc, toast }) {
                     cfgRow("LLM API URL", cfg && cfg.llmApiUrl),
                     cfgRow("LLM API Key", cfg && cfg.llmApiKeySet ? cfg.llmApiKeyMasked + " (已设置)" : "未设置"),
                     cfgRow("LLM 模型", cfg && cfg.llmModel),
-                    cfgRow("嵌入模型", cfg && cfg.embedModel),
-                    cfgRow("编码器地址 (ollama)", cfg && cfg.encoderAddr),
                     cfgRow("数据目录", cfg && cfg.dbDir),
                     cfgRow("监听端口", cfg && String(cfg.port)),
                     React.createElement("div", { style: { ...faint, marginTop: 4 } }, "env: " + (cfg && cfg.envFile ? cfg.envFile : "…") + " · wrapper: " + (cfg && cfg.wrapperPath ? cfg.wrapperPath : "…"))
@@ -1544,8 +1520,6 @@ function ServerSection({ rpc, toast }) {
                     cfgInput("LLM API URL(deepseek 等 OpenAI 兼容端点)", "llmApiUrl", "https://api.deepseek.com/v1"),
                     cfgInput("LLM API Key(留空保持不变)", "llmApiKey", cfg && cfg.llmApiKeySet ? "已设置,留空保持不变" : "sk-…", "password"),
                     cfgInput("LLM 模型", "llmModel", "deepseek-chat"),
-                    cfgInput("嵌入模型(ollama 模型名)", "embedModel", "qllama/bge-m3:q4_k_m"),
-                    cfgInput("编码器地址(ollama)", "encoderAddr", "http://127.0.0.1:11434"),
                     cfgInput("数据目录(db-dir)", "dbDir", "~/.memhop/agents"),
                     cfgInput("监听端口", "port", "3939"),
                     React.createElement("div", { style: { ...faint, lineHeight: "15px", marginTop: 2 } },
@@ -1612,10 +1586,10 @@ const tabStyle = (active) => ({
 /**
  * MemHop 记忆面板（P4 重做）：
  * - 状态页签：会话数据库自检（session + L0/L2/L3/L4/L5 读取工具连通性）
- * - 搜索页签：自动 search 参数偏好（auto_create / 定向 L2 / 定向 L3），
- *   保存后每轮发送对话都会携带这些参数
+ * - 搜索页签：新建记忆场景时挂靠的项目域偏好（l3_id）——检索本身已按该
+ *   agent 的场景直取，不需要检索参数
  * - 场景/知识/档案/能力/画像：浏览选中 agent 的 .meh 数据库各层内容
- * - 睡眠页签：勾选内存中的场景执行巩固（dream），可全选
+ * - 睡眠页签：勾选场景（= 宿主会话）执行巩固（dream），可全选
  * - 顶栏：agent 选择器（多会话切换）
  * 记忆循环（search/update）由宿主自动执行，面板只做浏览与管理。
  */
@@ -1821,8 +1795,8 @@ function MemhopTab({ rpc, sessionId }) {
 //#endregion
 
 //#region src/client/SearchChip.js
-// SearchChip.js — 输入框（conversation.composer.dock）内的自动 search 参数指示条。
-// 实时显示当前会话的检索偏好：auto_create 开/关 + 定向 L2 场景 + 定向 L3 图谱，
+// SearchChip.js — 输入框（conversation.composer.dock）内的记忆参数指示条。
+// 实时显示当前 agent 的项目域偏好（l3_id，仅在新建记忆场景时挂锚）；
 // 保存后（面板广播 memhop:prefs-saved 事件）立即刷新。
 // 错误处理原则：失败就显示错误，不做退避重试、不静默吞错。
 
@@ -1846,7 +1820,6 @@ const chipActiveStyle = {
 
 function SearchPrefsChip({ rpc, sessionId }) {
   const [prefs, setPrefs] = React.useState(null);
-  const [scenes, setScenes] = React.useState([]);
   const [graphs, setGraphs] = React.useState([]);
   const [error, setError] = React.useState(null);
 
@@ -1857,13 +1830,6 @@ function SearchPrefsChip({ rpc, sessionId }) {
     callMemhopJson(rpc, "prefs", {}, sessionId)
       .then((v) => {
         if (alive) setPrefs(v || {});
-      })
-      .catch((e) => {
-        if (alive) setError(e);
-      });
-    callMemhopJson(rpc, "scene_list", {}, sessionId)
-      .then((v) => {
-        if (alive) setScenes(Array.isArray(v) ? v : []);
       })
       .catch((e) => {
         if (alive) setError(e);
@@ -1898,9 +1864,7 @@ function SearchPrefsChip({ rpc, sessionId }) {
   if (!rpc || !sessionId) return null;
 
   const p = prefs || {};
-  const autoOn = p.autoCreate === true; // 默认关闭
-  const scene = scenes.find((s) => s.scene_id === p.directedL2Id);
-  const graph = graphs.find((g) => g.id_hash === p.directedL3Id);
+  const graph = graphs.find((g) => g.id_hash === p.l3Id);
 
   const chip = (text, active) =>
     React.createElement(
@@ -1917,16 +1881,15 @@ function SearchPrefsChip({ rpc, sessionId }) {
       ? React.createElement(
           "span",
           { style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary)" }, title: str(error) },
-          "检索参数加载失败: " + str(error)
+          "记忆参数加载失败: " + str(error)
         )
       : prefs === null
         ? React.createElement("span", { style: { fontSize: 11, color: "var(--dsw-alias-label-tertiary)" } }, "加载中…")
         : React.createElement(
             React.Fragment,
             null,
-            chip(autoOn ? "auto_create: 开" : "auto_create: 关", autoOn),
-            chip("场景: " + (scene ? scene.scene_name : "不限定"), !!scene),
-            chip("图谱: " + (graph ? graph.name : "不限定"), !!graph)
+            chip("检索本会话记忆（场景=宿主会话）", true),
+            chip("新项目域: " + (graph ? graph.name : "未设"), !!graph)
           )
   );
 }

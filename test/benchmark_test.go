@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	internal "github.com/qyiun666/MemHop/internal"
+	memhop "github.com/qyiun666/MemHop/api"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -46,15 +46,33 @@ func loadLocomoSmoke(tb testing.TB) *locomoFixture {
 	return &fx
 }
 
-// BenchmarkSearchAutoCreate measures the cost of the auto-create search route
-// (LLM keyword extraction + scene/topic creation + L4 archive write) over the
-// locomo smoke fixture. Each iteration ingests one user turn.
-func BenchmarkSearchAutoCreate(b *testing.B) {
+// benchTurn settles one finished turn in the host's session.
+func benchTurn(tb testing.TB, db *testsupport.Handle, sceneID, user, agent string, ts int64) {
+	tb.Helper()
+	if _, err := db.Update(memhop.TurnUpdate{
+		SceneID: sceneID, UserText: user, UserTS: ts, AgentText: agent, AgentTS: ts + 500,
+	}); err != nil {
+		tb.Fatalf("Update: %v", err)
+	}
+}
+
+// benchSession opens a host session (scene) and returns its id.
+func benchSession(tb testing.TB, db *testsupport.Handle, name string) string {
+	tb.Helper()
+	res, err := db.Search(memhop.SearchQuery{SceneName: name})
+	if err != nil {
+		tb.Fatalf("Search: %v", err)
+	}
+	return res.Scene.SceneID
+}
+
+// BenchmarkUpdateTurn measures the hot write path: one finished turn costs a
+// single LLM distillation plus a topic, two L4 archives and the cache sync.
+func BenchmarkUpdateTurn(b *testing.B) {
 	fx := loadLocomoSmoke(b)
 	db := testsupport.OpenMemHopB(b)
 	defer db.Close()
 
-	// Flatten all turns into a single ingestion stream.
 	var turns []string
 	for _, s := range fx.Sessions {
 		for _, tn := range s.Turns {
@@ -64,109 +82,81 @@ func BenchmarkSearchAutoCreate(b *testing.B) {
 	if len(turns) == 0 {
 		b.Fatal("no turns in fixture")
 	}
+	sceneID := benchSession(b, db, "locomo ingest")
 
 	base := time.Now().UnixMilli()
-	b.ResetTimer()
 	i := 0
 	for b.Loop() {
-		ts := base + int64(i)*1000
-		res, err := db.Search(context.Background(), internal.SearchQuery{
-			Text:       turns[i%len(turns)],
-			AutoCreate: true,
-			Timestamp:  ts,
-		})
-		if err != nil {
-			b.Fatalf("Search: %v", err)
-		}
-		if res.NewTopicID == "" {
-			b.Fatal("expected NewTopicID")
-		}
+		benchTurn(b, db, sceneID, turns[i%len(turns)], "好的，记下了。", base+int64(i)*1000)
 		i++
 	}
 }
 
-// BenchmarkSearchRetrieve measures the normal retrieval route (LLM keyword
-// extraction + three-channel search + topic creation in the hit scene) after
-// the fixture has been ingested.
-func BenchmarkSearchRetrieve(b *testing.B) {
+// BenchmarkSceneRead measures the session read: a cache-only lookup of the
+// scene's depth-1 surface, with no LLM call and no embedding.
+func BenchmarkSceneRead(b *testing.B) {
 	fx := loadLocomoSmoke(b)
 	db := testsupport.OpenMemHopB(b)
 	defer db.Close()
 
-	// Seed: ingest every turn once via auto-create.
 	base := time.Now().UnixMilli()
-	var lastTopicID string
+	sceneID := benchSession(b, db, "locomo seed")
 	i := 0
 	for _, s := range fx.Sessions {
 		for _, tn := range s.Turns {
-			ts := base + int64(i)*1000
-			res, err := db.Search(context.Background(), internal.SearchQuery{
-				Text:       tn.Text,
-				AutoCreate: true,
-				Timestamp:  ts,
-			})
-			if err != nil {
-				b.Fatalf("seed Search: %v", err)
-			}
-			lastTopicID = res.NewTopicID
+			benchTurn(b, db, sceneID, tn.Text, "好的", base+int64(i)*1000)
 			i++
 		}
 	}
-	if lastTopicID == "" {
-		b.Fatal("seed produced no topic")
+	if i == 0 {
+		b.Fatal("seed produced no turns")
 	}
 
-	query := fx.Sessions[0].Turns[0].Text
 	b.ResetTimer()
-	i = 0 // reuse seed counter; iteration timestamps restart from 1_000_000
 	for b.Loop() {
-		ts := base + int64(1_000_000+i)*1000
-		if _, err := db.Search(context.Background(), internal.SearchQuery{
-			Text:      query,
-			Timestamp: ts,
-		}); err != nil {
+		res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+		if err != nil {
 			b.Fatalf("Search: %v", err)
 		}
-		i++
+		if len(res.Topics) == 0 {
+			b.Fatal("session surface came back empty")
+		}
 	}
 }
 
-// BenchmarkUpdate measures appending an agent reply to an existing topic.
-func BenchmarkUpdate(b *testing.B) {
-	fx := loadLocomoSmoke(b)
+// BenchmarkAppendL4 measures the storage-only append path (no distillation)
+// hosts use for a turn's intermediate messages.
+func BenchmarkAppendL4(b *testing.B) {
 	db := testsupport.OpenMemHopB(b)
 	defer db.Close()
 
 	base := time.Now().UnixMilli()
-	res, err := db.Search(context.Background(), internal.SearchQuery{
-		Text:       fx.Sessions[0].Turns[0].Text,
-		AutoCreate: true,
-		Timestamp:  base,
+	sceneID := benchSession(b, db, "append bench")
+	topicID, err := db.Update(memhop.TurnUpdate{
+		SceneID: sceneID, UserText: "先看看日志", UserTS: base, AgentText: "已看完", AgentTS: base + 500,
 	})
 	if err != nil {
-		b.Fatalf("seed Search: %v", err)
+		b.Fatalf("seed Update: %v", err)
 	}
-	topicID := res.Contexts[0].ID
 
 	b.ResetTimer()
 	i := 0
 	for b.Loop() {
 		ts := base + int64(i+1)*1000
-		if err := db.Update(topicID, "agent reply for benchmark", ts); err != nil {
-			b.Fatalf("Update failed: %v", err)
+		if _, err := db.AppendL4Message(topicID, "agent reply for benchmark", ts, 1, 0); err != nil {
+			b.Fatalf("AppendL4Message: %v", err)
 		}
 		i++
 	}
 }
 
 // BenchmarkDreamConsolidation measures the Dream pipeline after seeding >20
-// related topics in one scene: real compression path with LLM consolidate,
-// summary archive, centroid encode, fused topic, child sink and index rebuild.
+// related turns in one session: real compression with LLM consolidate,
+// summary archive, fused topic, child sink, L1 rebuild and cache rebuild.
 func BenchmarkDreamConsolidation(b *testing.B) {
 	db := testsupport.OpenMemHopB(b)
 	defer db.Close()
 
-	// 25 same-topic turns trigger real compression.
 	related := []string{
 		"我喜欢早上六点去公园慢跑", "跑步的时候我习惯听播客", "我每周跑步大概三次，每次五公里",
 		"跑完步我会喝一杯蛋白粉", "我早上六点出门跑步", "慢跑时我听健身播客",
@@ -178,46 +168,28 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 		"一周三次跑步不间断", "五公里跑完很爽", "蛋白粉是跑后必备", "早上公园跑步我很享受",
 	}
 	base := time.Now().UnixMilli()
-	var sceneID string
+	sceneID := benchSession(b, db, "running habits")
 	for i, text := range related {
-		ts := base + int64(i)*1000
-		q := internal.SearchQuery{Text: text, Timestamp: ts}
-		if i == 0 {
-			q.AutoCreate = true
-		} else {
-			sid := sceneID
-			q.DirectedL2ID = &sid
-		}
-		res, err := db.Search(context.Background(), q)
-		if err != nil {
-			b.Fatalf("seed Search[%d]: %v", i, err)
-		}
-		if i == 0 {
-			sceneID = res.Contexts[0].SceneID
-		}
-		if err := db.Update(res.NewTopicID, "好的", ts+500); err != nil {
-			b.Fatalf("seed Update: %v", err)
-		}
+		benchTurn(b, db, sceneID, text, "好的", base+int64(i)*1000)
 	}
 
 	b.ResetTimer()
 	for b.Loop() {
-		if _, err := db.Dream(context.Background(), ""); err != nil {
+		if _, err := db.Dream(context.Background(), sceneID); err != nil {
 			b.Fatalf("Dream: %v", err)
 		}
 	}
 }
 
-// BenchmarkMemoryLoop measures the real host memory loop: N Search+Update
-// cycles with the automatic Dream the engine triggers internally once a scene
-// exceeds the compression threshold, plus periodic L0/L1 verification
-// (profile readable, scene graph intact). api-level only — no external judge.
+// BenchmarkMemoryLoop measures the real host memory loop: Update-only turns
+// in one session with the automatic Dream the engine schedules once the
+// session surface passes the threshold, plus periodic L0/L2 verification.
 func BenchmarkMemoryLoop(b *testing.B) {
 	db := testsupport.OpenMemHopB(b)
 	defer db.Close()
 
-	// Same-topic turns: >SearchDreamContextThreshold(30) contexts in one scene
-	// make Search auto-trigger Dream during ingestion (no explicit Dream call).
+	// Same-topic turns: once the session surface exceeds
+	// SceneDreamTopicThreshold(24), Update schedules a Dream on its own.
 	related := []string{
 		"我喜欢早上六点去公园慢跑", "跑步的时候我习惯听播客", "我每周跑步大概三次，每次五公里",
 		"跑完步我会喝一杯蛋白粉", "我早上六点出门跑步", "慢跑时我听健身播客",
@@ -233,78 +205,48 @@ func BenchmarkMemoryLoop(b *testing.B) {
 		"跑步让我精神很好", "我买了新运动水壶",
 	}
 	base := time.Now().UnixMilli()
-	var sceneID string
+	sceneID := benchSession(b, db, "loop session")
 	var dreams, checks int
 	prevDepth1 := -1
 	turns := 0
 	for b.Loop() {
-		// Unbounded loop: cycle the material by index so the benchmark measures
-		// steady-state cost; the scene keeps growing past the threshold and the
-		// engine's auto-triggered Dream keeps compressing it, as in real use.
+		// Cycle the material by index so the benchmark measures steady state:
+		// the session keeps growing past the threshold and the scheduled Dream
+		// keeps compressing it, as in real use.
 		text := related[turns%len(related)]
 		ts := base + int64(turns)*1000
-		q := internal.SearchQuery{Text: text, Timestamp: ts}
-		if sceneID == "" {
-			q.AutoCreate = true
-		} else {
-			sid := sceneID
-			q.DirectedL2ID = &sid
-		}
-		res, err := db.Search(context.Background(), q)
-		if err != nil {
-			b.Fatalf("loop Search[%d]: %v", turns, err)
-		}
-		if sceneID == "" && len(res.Contexts) > 0 {
-			sceneID = res.Contexts[0].SceneID
-		}
-		if err := db.Update(res.NewTopicID, "好的，记下了。", ts+500); err != nil {
-			b.Fatalf("loop Update[%d]: %v", turns, err)
-		}
+		benchTurn(b, db, sceneID, text, "好的，记下了。", ts)
 		turns++
-		// Periodic L0/L1 verification: profile readable, scene graph intact.
+		// Periodic L0/L2 verification: profile readable, session intact.
 		if turns%10 == 0 {
 			if _, err := db.GetL0(); err != nil {
 				b.Fatalf("GetL0 after %d turns: %v", turns, err)
 			}
-			scenes, err := db.ListScenes()
-			if err != nil || len(scenes) == 0 {
-				b.Fatalf("ListScenes after %d turns: scenes=%d err=%v", turns, len(scenes), err)
-			}
-			sc, err := db.SceneContext(sceneID)
-			if err != nil || sc.TopicCount == 0 {
-				b.Fatalf("SceneContext after %d turns: topics=%d err=%v", turns, sc.TopicCount, err)
+			res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+			if err != nil || len(res.Topics) == 0 {
+				b.Fatalf("session read after %d turns: topics=%d err=%v", turns, len(res.Topics), err)
 			}
 			checks++
 		}
-		// Count auto-triggered Dreams by watching the depth-1 topic count drop:
-		// compression sinks merged topics below depth 1 (raw topics stay in
-		// depth 2+ and keep SceneContext.TopicCount growing).
-		sc, err := db.SceneContext(sceneID)
+		// Count auto-consolidations by watching the depth-1 surface shrink.
+		res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 		if err == nil {
-			depth1 := 0
-			for _, tp := range sc.Topics {
-				if tp.Depth == 1 {
-					depth1++
-				}
-			}
-			if prevDepth1 >= 0 && depth1 < prevDepth1 {
+			if prevDepth1 >= 0 && len(res.Topics) < prevDepth1 {
 				dreams++
 			}
-			prevDepth1 = depth1
+			prevDepth1 = len(res.Topics)
 		}
 	}
-	b.ReportMetric(float64(dreams), "auto_dream_compressions")
-	b.ReportMetric(float64(checks), "l0l1_checks")
+	b.ReportMetric(float64(dreams), "auto_consolidations")
+	b.ReportMetric(float64(checks), "l0l2_checks")
 }
 
-// BenchmarkSearchLatency runs repeated retrieve-route searches and reports the
-// per-iteration latency distribution (min/p50/p95/max in ms) so stability is
-// visible, not just the mean that testing.B reports.
-func BenchmarkSearchLatency(b *testing.B) {
+// BenchmarkSceneReadLatency reports the session-read latency distribution
+// (min/p50/p95/max in ms) so stability is visible, not just the mean.
+func BenchmarkSceneReadLatency(b *testing.B) {
 	db := testsupport.OpenMemHopB(b)
 	defer db.Close()
 
-	// Seed a handful of topics so retrieve has something to hit.
 	base := time.Now().UnixMilli()
 	seeds := []string{
 		"我喜欢早上六点去公园慢跑",
@@ -312,26 +254,20 @@ func BenchmarkSearchLatency(b *testing.B) {
 		"我住在北京市朝阳区",
 		"我现在做后端开发工作",
 	}
+	scenes := make([]string, 0, len(seeds))
 	for i, s := range seeds {
 		ts := base + int64(i)*2000
-		res, err := db.Search(context.Background(), internal.SearchQuery{Text: s, AutoCreate: true, Timestamp: ts})
-		if err != nil {
-			b.Fatalf("seed: %v", err)
-		}
-		if err := db.Update(res.NewTopicID, "好的", ts+500); err != nil {
-			b.Fatalf("seed Update: %v", err)
-		}
+		sceneID := benchSession(b, db, "latency "+s)
+		benchTurn(b, db, sceneID, s, "好的", ts)
+		scenes = append(scenes, sceneID)
 	}
 
-	queries := []string{"我的跑步习惯", "我的狗叫什么", "我住在哪", "我做什么工作"}
 	lat := make([]time.Duration, 0, b.N)
 	b.ResetTimer()
 	i := 0
 	for b.Loop() {
-		q := queries[i%len(queries)]
-		ts := base + int64(1_000_000+i)*1000
 		start := time.Now()
-		if _, err := db.Search(context.Background(), internal.SearchQuery{Text: q, Timestamp: ts}); err != nil {
+		if _, err := db.Search(memhop.SearchQuery{SceneID: scenes[i%len(scenes)]}); err != nil {
 			b.Fatalf("Search: %v", err)
 		}
 		lat = append(lat, time.Since(start))

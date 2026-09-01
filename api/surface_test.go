@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Public API surface tests: exercise every exported Session /
-// MultiAgentDB method with valid and invalid parameters against a mock
-// encoder + a stub LLM server, asserting request/response shapes and the
-// numeric error-code contract. These run without external services.
+// MultiAgentDB method with valid and invalid parameters against a stub LLM
+// server, asserting request/response shapes and the numeric error-code
+// contract. These run without external services.
 
 package api
 
@@ -50,19 +50,17 @@ func stubLLM() *httptest.Server {
 func surfaceConfig(t *testing.T, llmURL string) *MemHopConfig {
 	t.Helper()
 	return &internal.MemHopConfig{
-		DBPath:     filepath.Join(t.TempDir(), "surface.meh"),
-		VectorDim:  4,
-		EmbedModel: "test-embed",
-		LLM:        internal.LlmConfig{APIURL: llmURL, APIKey: "k", Model: "m"},
-		Defaults:   *internal.DefaultMemHopDefaults,
+		DBPath:   filepath.Join(t.TempDir(), "surface.meh"),
+		LLM:      internal.LlmConfig{APIURL: llmURL, APIKey: "k", Model: "m"},
+		Defaults: *internal.DefaultMemHopDefaults,
 	}
 }
 
 // openMultiSession opens the only supported mode (multi-agent) and binds a
 // session to a freshly registered tenant.
-func openMultiSession(t *testing.T, cfg *MemHopConfig, enc Encoder) (*MultiAgentDB, *Session) {
+func openMultiSession(t *testing.T, cfg *MemHopConfig) (*MultiAgentDB, *Session) {
 	t.Helper()
-	m, err := OpenMultiWithEncoder(cfg, enc)
+	m, err := OpenMulti(cfg)
 	if err != nil {
 		t.Fatalf("open multi: %v", err)
 	}
@@ -87,7 +85,7 @@ func openSurfaceDB(t *testing.T) *Session {
 	t.Helper()
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
-	m, sess := openMultiSession(t, surfaceConfig(t, llm.URL), &openTestEncoder{dim: 4})
+	m, sess := openMultiSession(t, surfaceConfig(t, llm.URL))
 	t.Cleanup(func() { _ = m.Close() })
 	return sess
 }
@@ -141,7 +139,7 @@ func TestSurfaceL0Profile(t *testing.T) {
 func TestSurfaceClosedContract(t *testing.T) {
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
-	m, db := openMultiSession(t, surfaceConfig(t, llm.URL), &openTestEncoder{dim: 4})
+	m, db := openMultiSession(t, surfaceConfig(t, llm.URL))
 	if err := m.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -151,10 +149,10 @@ func TestSurfaceClosedContract(t *testing.T) {
 	if _, err := db.GetL0(); CodeOf(err) != ErrClosed {
 		t.Fatalf("GetL0 after close: want ErrClosed, got %v", err)
 	}
-	if _, err := db.Search(context.Background(), SearchQuery{Text: "x", Timestamp: 1}); CodeOf(err) != ErrClosed {
+	if _, err := db.Search(SearchQuery{}); CodeOf(err) != ErrClosed {
 		t.Fatalf("Search after close: want ErrClosed, got %v", err)
 	}
-	if err := db.Update("0000000000000001", "x", 2); CodeOf(err) != ErrClosed {
+	if _, err := db.Update(TurnUpdate{SceneID: "0000000000000001", UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2}); CodeOf(err) != ErrClosed {
 		t.Fatalf("Update after close: want ErrClosed, got %v", err)
 	}
 	// Double close is rejected with ErrClosed, not a panic.
@@ -165,7 +163,7 @@ func TestSurfaceClosedContract(t *testing.T) {
 
 func TestSurfaceDreamEmptyDomain(t *testing.T) {
 	db := openSurfaceDB(t)
-	// A domain with no active scenes succeeds without doing work.
+	// A domain with no scenes yet succeeds without doing work.
 	rep, err := db.Dream(context.Background(), "")
 	if err != nil || rep == nil {
 		t.Fatalf("dream on empty domain: rep=%v err=%v", rep, err)
@@ -179,8 +177,7 @@ func TestSurfaceDreamEmptyDomain(t *testing.T) {
 	}
 }
 
-// The Open path must validate config before building an encoder; an invalid
-// config is rejected without touching a real embedding service.
+// An invalid config is rejected by Validate before anything is opened.
 func TestSurfaceOpenValidatesConfig(t *testing.T) {
 	if _, err := OpenMulti(&MemHopConfig{}); err == nil {
 		t.Fatal("OpenMulti with empty config must fail validation")

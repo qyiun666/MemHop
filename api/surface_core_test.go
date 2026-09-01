@@ -16,60 +16,84 @@ func TestSurfaceSearchUpdateAppend(t *testing.T) {
 	db := openSurfaceDB(t)
 	ctx := context.Background()
 
-	// AutoCreate path deterministically mints a scene + topic.
-	res, err := db.Search(ctx, SearchQuery{Text: "remember the launch date", AutoCreate: true, Timestamp: 1_700_000_000_000})
+	// An empty SceneID mints a host session and answers with its empty surface.
+	res, err := db.Search(SearchQuery{SceneName: "launch planning"})
 	if err != nil {
-		t.Fatalf("search autocreate: %v", err)
+		t.Fatalf("search create: %v", err)
 	}
-	if res.NewTopicID == "" {
-		t.Fatal("autocreate search must return a new topic id")
+	if !isHexID(res.Scene.SceneID) {
+		t.Fatalf("scene id not hex: %q", res.Scene.SceneID)
 	}
-	if res.Contexts == nil {
-		t.Fatal("SearchResult.Contexts must be non-nil")
+	if res.Topics == nil {
+		t.Fatal("SearchResult.Topics must be non-nil")
 	}
-	topicID := res.NewTopicID
+	sceneID := res.Scene.SceneID
+
+	// One finished turn becomes one topic; the id the host gets is hex.
+	topicID, err := db.Update(TurnUpdate{
+		SceneID:   sceneID,
+		UserText:  "remember the launch date",
+		UserTS:    1_700_000_000_000,
+		AgentText: "noted, launching next monday",
+		AgentTS:   1_700_000_000_500,
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
 	if !isHexID(topicID) {
 		t.Fatalf("topic id not hex: %q", topicID)
 	}
 
-	// Update appends the agent reply to the freshly created topic.
-	if err := db.Update(topicID, "noted, launching next monday", 1_700_000_000_500); err != nil {
-		t.Fatalf("update: %v", err)
+	// The session read returns exactly that turn.
+	again, err := db.Search(SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("search scene: %v", err)
 	}
-	// Normal retrieval path over a populated domain.
-	if _, err := db.Search(ctx, SearchQuery{Text: "launch date", Timestamp: 1_700_000_001_000}); err != nil {
-		t.Fatalf("search normal: %v", err)
+	if len(again.Topics) != 1 || again.Topics[0].ID != topicID {
+		t.Fatalf("scene surface = %+v, want the one turn", again.Topics)
 	}
-	// Directed search into an existing scene.
-	scenes, err := db.ListScenes()
-	if err != nil || len(scenes) == 0 {
-		t.Fatalf("list scenes after writes: %d err=%v", len(scenes), err)
-	}
-	sceneID := scenes[0].SceneID
-	if _, err := db.Search(ctx, SearchQuery{Text: "monday", DirectedL2ID: &sceneID, Timestamp: 1_700_000_002_000}); err != nil {
-		t.Fatalf("search directed: %v", err)
+	if again.Scene.HitCount == 0 {
+		t.Fatal("reads must fold usage back into the scene record")
 	}
 
-	// AppendL4Message returns a new hex archive id.
-	arcID, err := db.AppendL4Message(topicID, "extra context line", 1_700_000_002_500, 1, 0)
+	// AppendL4Message returns a new hex archive id on the same topic.
+	arcID, err := db.AppendL4Message(topicID, "extra context line", 1_700_000_002_500, RoleAgent, ContentText)
 	if err != nil {
 		t.Fatalf("append l4: %v", err)
 	}
 	if !isHexID(arcID) {
 		t.Fatalf("archive id not hex: %s", arcID)
 	}
-	// Guard: unknown topic must be ErrNotFound, not an orphan write.
-	ghost := common.FormatHash(common.HashID("ghost-topic"))
-	if _, err := db.AppendL4Message(ghost, "x", 1_700_000_003_000, 0, 0); CodeOf(err) != ErrNotFound {
+
+	// Guards: an unknown scene and an unknown topic are lookups that miss,
+	// not orphan writes.
+	ghost := common.FormatHash(common.HashID("ghost-scene"))
+	if _, err := db.Search(SearchQuery{SceneID: ghost}); CodeOf(err) != ErrNotFound {
+		t.Fatalf("search unknown scene: want ErrNotFound, got %v", err)
+	}
+	if _, err := db.Update(turnUpdate(ghost, "u", "a")); CodeOf(err) != ErrNotFound {
+		t.Fatalf("update unknown scene: want ErrNotFound, got %v", err)
+	}
+	ghostTopic := common.FormatHash(common.HashID("ghost-topic"))
+	if _, err := db.AppendL4Message(ghostTopic, "x", 1_700_000_003_000, RoleUser, ContentText); CodeOf(err) != ErrNotFound {
 		t.Fatalf("append to missing topic: want ErrNotFound, got %v", err)
 	}
-	// Timestamp validation contract.
-	if _, err := db.Search(ctx, SearchQuery{Text: "no ts"}); CodeOf(err) != ErrInvalidQuery {
-		t.Fatalf("search missing timestamp: want ErrInvalidQuery, got %v", err)
+
+	// Malformed turns are rejected with ErrInvalidQuery.
+	badTurns := []TurnUpdate{
+		{SceneID: sceneID, UserText: "", UserTS: 1, AgentText: "a", AgentTS: 2},
+		{SceneID: sceneID, UserText: "u", UserTS: 0, AgentText: "a", AgentTS: 2},
+		{SceneID: sceneID, UserText: "u", UserTS: 5, AgentText: "a", AgentTS: 4},
+		{SceneID: "not-hex", UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
+	}
+	for i, in := range badTurns {
+		if _, err := db.Update(in); CodeOf(err) != ErrInvalidQuery {
+			t.Fatalf("bad turn %d: want ErrInvalidQuery, got %v", i, err)
+		}
 	}
 
-	// RefineTopicKeywords is a guarded no-op on a topic without >2 messages.
+	// Refine re-distills from every original of the topic.
 	if err := db.RefineTopicKeywords(ctx, topicID); err != nil {
-		t.Fatalf("refine (guarded no-op): %v", err)
+		t.Fatalf("refine: %v", err)
 	}
 }

@@ -3,7 +3,7 @@
   "name": "memhop-scene",
   "version": "3",
   "type": "composite",
-  "summary": "L2 scene manual: list all/active scenes, read topic context within a scene, merge duplicate scenes, delete topics and scenes (memory correction)",
+  "summary": "L2 scene manual: a scene is one host session — list scenes, read topic context within a scene, merge sessions into one, delete topics and scenes (memory correction)",
   "trigger": "need to view scene lists, read a scene's topic context, merge duplicate scenes or delete wrong memories; scene l2 topic merge delete context",
   "resources": [
     {
@@ -13,14 +13,6 @@
       "desc": "List all L2 scenes; returns SceneID/name/depth-1 topic count",
       "input": "{\"type\":\"object\",\"properties\":{}}",
       "output": "List of SceneSlot"
-    },
-    {
-      "type": "api",
-      "name": "ActiveSceneIDs",
-      "ref": "api:ActiveSceneIDs",
-      "desc": "List scene IDs currently active in memory (Dream consolidation targets); inactive scenes stay searchable but are never consolidated",
-      "input": "{\"type\":\"object\",\"properties\":{}}",
-      "output": "List of scene IDs (16-char hex)"
     },
     {
       "type": "api",

@@ -5,6 +5,7 @@ package core
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -66,8 +67,8 @@ func TestSceneNodeEmptyEdges(t *testing.T) {
 func TestSceneNodeRoundtrip(t *testing.T) {
 	n := SceneNode{
 		IDHash: 100, SceneID: 200, TopicIDs: []uint64{1, 2, 3},
-		VectorPageRef: 50, Importance: 0.9,
-		Valence: -0.3, Arousal: 0.7,
+		Importance: 0.9,
+		Valence:    -0.3, Arousal: 0.7,
 		CreatedAt: 1000, UpdatedAt: 2000,
 		EdgeIDs: []uint64{10, 20},
 	}
@@ -102,10 +103,10 @@ func TestSceneSlotRoundtrip(t *testing.T) {
 	}
 }
 
-func TestNewSceneSlot(t *testing.T) {
-	s := NewSceneSlot("购物助手")
-	if s.SceneID != common.HashID("购物助手") {
-		t.Fatalf("scene_id mismatch")
+func TestNewSceneSlotKeepsHostSceneID(t *testing.T) {
+	s := NewSceneSlot(4242, "购物助手")
+	if s.SceneID != 4242 {
+		t.Fatalf("the host owns the scene id; got %d", s.SceneID)
 	}
 	if s.SceneName != "购物助手" {
 		t.Fatalf("scene_name mismatch")
@@ -133,27 +134,44 @@ func TestTopicSlotRoundtripDepth2(t *testing.T) {
 	}
 }
 
-func TestTopicSlotEmptyKeywords(t *testing.T) {
+func TestTopicSlotRoundtripKeywords(t *testing.T) {
 	topic := makeTopic(333, 1)
-	topic.UserKeywords = []string{}
-	topic.AgentKeywords = []string{}
-	topic.FusedKeywords = []string{}
+	topic.FusedKeywords = []string{"场景 🚀", "回复内容", "压缩 🔥"}
 	var got TopicSlot
 	jsonRoundtrip(t, topic, &got)
-	if len(got.UserKeywords) != 0 || len(got.AgentKeywords) != 0 {
-		t.Fatalf("expected empty keywords")
+	if !slices.Equal(got.FusedKeywords, topic.FusedKeywords) {
+		t.Fatalf("keyword roundtrip mismatch: %v", got.FusedKeywords)
 	}
 }
 
-func TestTopicSlotUnicode(t *testing.T) {
-	topic := makeTopic(555, 2)
-	topic.UserKeywords = []string{"场景 🚀"}
-	topic.AgentKeywords = []string{"回复内容"}
-	topic.FusedKeywords = []string{"压缩 🔥"}
+// A pre-v1.5 record stored two keyword tracks and no fused one; decoding it
+// must fold both into the single track instead of losing them.
+func TestTopicSlotUnmarshalFoldsLegacyTracks(t *testing.T) {
+	raw := `{"id":7,"scene_id":3,"depth":1,` +
+		`"user_keywords":["登录","JWT"],"agent_keywords":["token"],` +
+		`"user_timestamp":1000,"agent_timestamp":1001,"l4_refs":[9]}`
 	var got TopicSlot
-	jsonRoundtrip(t, topic, &got)
-	if got.UserKeywords[0] != "场景 🚀" {
-		t.Fatalf("unicode keyword mismatch")
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("unmarshal legacy record: %v", err)
+	}
+	want := []string{"JWT", "token", "登录"}
+	if !slices.Equal(got.FusedKeywords, want) {
+		t.Fatalf("legacy tracks not folded: got %v want %v", got.FusedKeywords, want)
+	}
+	if got.UserTimestamp != 1000 || got.AgentTimestamp != 1001 {
+		t.Fatalf("timestamps lost: %+v", got)
+	}
+}
+
+// A record that already carries the fused track keeps it untouched.
+func TestTopicSlotUnmarshalKeepsFusedTrack(t *testing.T) {
+	raw := `{"id":7,"fused_keywords":["认证"],"user_keywords":["登录"]}`
+	var got TopicSlot
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !slices.Equal(got.FusedKeywords, []string{"认证"}) {
+		t.Fatalf("fused track must win: %v", got.FusedKeywords)
 	}
 }
 
@@ -174,23 +192,25 @@ func TestComputeTopicIDDifferent(t *testing.T) {
 }
 
 func TestComputeTopicIDConsistency(t *testing.T) {
-	// Verify ComputeTopicID matches Rust: hash_id(format!("{}:{}:{}", ...))
-	combined := "100:1000:1001"
-	expected := common.HashID(combined)
+	expected := common.HashID("100:1000:1001")
 	got := ComputeTopicID(100, 1000, 1001)
 	if got != expected {
 		t.Fatalf("ComputeTopicID mismatch: got %d, want %d", got, expected)
 	}
 }
 
-func TestComputeTopicIDForTextDifferentiatesContent(t *testing.T) {
-	id1 := ComputeTopicIDForText(100, 1000, "hello")
-	id2 := ComputeTopicIDForText(100, 1000, "world")
-	if id1 == id2 {
-		t.Fatalf("same timestamp but different text should not collide: %d", id1)
+// A turn and a Dream-fused group can share (scene, userTS, agentTS); the
+// "turn:" namespace is what keeps their IDs apart.
+func TestComputeTurnTopicIDNamespaced(t *testing.T) {
+	turn := ComputeTurnTopicID(100, 1000, 1001)
+	if turn == ComputeTopicID(100, 1000, 1001) {
+		t.Fatalf("turn topic id collides with the fused-topic id space")
 	}
-	if id1 != ComputeTopicIDForText(100, 1000, "hello") {
-		t.Fatal("text-based topic ID must stay deterministic")
+	if turn != ComputeTurnTopicID(100, 1000, 1001) {
+		t.Fatal("turn topic id must stay deterministic")
+	}
+	if turn == ComputeTurnTopicID(100, 1000, 1002) {
+		t.Fatal("a different agent timestamp must yield a different id")
 	}
 }
 
@@ -255,7 +275,7 @@ func TestTrajectorySlotRoundtrip(t *testing.T) {
 }
 
 func TestSceneSlotL3ID(t *testing.T) {
-	s := NewSceneSlot("proj-a")
+	s := NewSceneSlot(1, "proj-a")
 	if s.L3ID != 0 {
 		t.Fatalf("fresh scene must have L3ID 0, got %d", s.L3ID)
 	}

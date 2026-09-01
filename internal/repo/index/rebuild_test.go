@@ -13,7 +13,7 @@ import (
 
 func writeRawTopic(t *testing.T, engine *core.StorageEngine, id uint64, sceneID uint64, depth uint8, kws []string) {
 	t.Helper()
-	topic := core.TopicSlot{ID: id, SceneID: sceneID, Depth: depth, UserKeywords: kws}
+	topic := core.TopicSlot{ID: id, SceneID: sceneID, Depth: depth, FusedKeywords: kws}
 	data, err := json.Marshal(topic)
 	if err != nil {
 		t.Fatal(err)
@@ -23,32 +23,24 @@ func writeRawTopic(t *testing.T, engine *core.StorageEngine, id uint64, sceneID 
 	}
 }
 
-func TestRebuildSearchIndexes(t *testing.T) {
-	engine, err := core.Create(filepath.Join(t.TempDir(), "rebuild.meh"), 768)
+func TestBuildL2MetaIndexesEveryDepth(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "rebuild.meh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(&core.IndexSnapshotData{})
+	defer engine.Close(nil)
 
-	// depth 1/2 enter sparse; depth 3 does not; all three enter L2Meta.
 	writeRawTopic(t, engine, 1, 100, 1, []string{"alpha", "memory"})
 	writeRawTopic(t, engine, 2, 100, 2, []string{"beta", "rust"})
 	writeRawTopic(t, engine, 3, 200, 3, []string{"gamma", "deep"})
 
-	sparse, l2Meta := RebuildSearchIndexes(engine, core.DefaultAgentID)
-
-	// depth<=2 documents are BM25-searchable
-	if len(sparse.Search([]string{"memory"}, 10)) != 1 {
-		t.Error("depth-1 topic should be searchable")
-	}
-	if len(sparse.Search([]string{"rust"}, 10)) != 1 {
-		t.Error("depth-2 topic should be searchable")
-	}
-	if len(sparse.Search([]string{"deep"}, 10)) != 0 {
-		t.Error("depth-3 topic should NOT be in sparse index")
-	}
-	// L2Meta contains all three topics
+	l2Meta := BuildL2MetaFromEngine(engine, core.DefaultAgentID)
+	// The scene read is served by depth-1 entries, so every topic must be
+	// cached regardless of depth.
 	if l2Meta.Len() != 3 {
-		t.Errorf("l2Meta should have 3 entries, got %d", l2Meta.Len())
+		t.Errorf("expected 3 cached topics, got %d", l2Meta.Len())
+	}
+	if got := l2Meta.GetByScene(100); len(got) != 2 {
+		t.Errorf("scene 100 should hold 2 topics, got %v", got)
 	}
 }

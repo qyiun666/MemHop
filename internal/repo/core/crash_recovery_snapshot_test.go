@@ -20,14 +20,14 @@ import (
 // truncated, so new records landed behind it and were lost on full scan.
 func TestAppendAfterReopenWithTailSnapshotSurvivesCrash(t *testing.T) {
 	p := tempPath(t, "tailsnap")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.CloseNoCheckpoint(); err != nil {
@@ -64,17 +64,17 @@ func TestAppendAfterReopenWithTailSnapshotSurvivesCrash(t *testing.T) {
 // older snapshots behind and recreates the same data-loss window.
 func TestAppendAfterReopenWithMultipleTailSnapshotsSurvivesCrash(t *testing.T) {
 	p := tempPath(t, "multisnap")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.CloseNoCheckpoint(); err != nil {
@@ -108,17 +108,17 @@ func TestAppendAfterReopenWithMultipleTailSnapshotsSurvivesCrash(t *testing.T) {
 // must reconstruct the record-area end across chained snapshots.
 func TestAppendAfterReopenWithLegacyHeaderRecordEnd(t *testing.T) {
 	p := tempPath(t, "legacyend")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}}); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a pre-RecordEnd file: clear the field in the active header
@@ -165,14 +165,14 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 	for _, corruptOffset := range []int64{HeaderAOffset, HeaderBOffset} {
 		t.Run(fmt.Sprintf("corrupt-header-at-%d", corruptOffset), func(t *testing.T) {
 			p := tempPath(t, "onehdr")
-			eng, err := Create(p, 768)
+			eng, err := Create(p)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("keep me")); err != nil {
 				t.Fatal(err)
 			}
-			if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+			if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 				t.Fatal(err)
 			}
 			if err := eng.CloseNoCheckpoint(); err != nil {
@@ -215,7 +215,7 @@ func TestHeaderVersionRejected(t *testing.T) {
 	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x000A} {
 		t.Run(fmt.Sprintf("0x%04x", v), func(t *testing.T) {
 			p := tempPath(t, "ver")
-			eng, err := Create(p, 768)
+			eng, err := Create(p)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -223,7 +223,7 @@ func TestHeaderVersionRejected(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Rewrite both headers with the target version (valid CRC).
-			h := NewFileHeader(768)
+			h := NewFileHeader()
 			h.Version = v
 			buf := h.ToBytes()
 			f, err := os.OpenFile(p, os.O_RDWR, 0644)

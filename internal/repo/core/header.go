@@ -44,16 +44,20 @@ var (
 )
 
 // FileHeader is the on-disk file header (4096 bytes).
-// Layout: magic(4) version(2) vector_dim(2) commit_id(8) snapshot_off(8)
+// Layout: magic(4) version(2) reserved(2) commit_id(8) snapshot_off(8)
 // snapshot_len(4) record_count(4) flags(4) record_end(8) reserved
 // crc32(4) tail_magic(4).
+// The bytes at offset 6 held the vector dimension until v1.5.0 retired the
+// retrieval subsystem; nothing reads them now. New files write 0, files that
+// carry a legacy value keep it as-is — the field takes part in neither the
+// format version nor the A/B header choice (CRC + CommitID decide).
 // RecordEnd is the end of the record area (start of the first tail
 // snapshot). It is always written by 0x0005+ checkpoints; zero means
 // "unknown" and Open reconstructs it with a one-time scan as a defensive
 // measure against torn or hand-edited headers.
 type FileHeader struct {
 	Version        uint16
-	VectorDim      uint16
+	Reserved       uint16
 	CommitID       uint64
 	SnapshotOffset uint64
 	SnapshotLength uint32
@@ -63,15 +67,15 @@ type FileHeader struct {
 	CRC32          uint32
 }
 
-func NewFileHeader(vectorDim uint16) *FileHeader {
-	return &FileHeader{Version: FormatVersion, VectorDim: vectorDim}
+func NewFileHeader() *FileHeader {
+	return &FileHeader{Version: FormatVersion}
 }
 
 func (h *FileHeader) ToBytes() [HeaderSize]byte {
 	var buf [HeaderSize]byte
 	copy(buf[0:4], Magic[:])
 	binary.LittleEndian.PutUint16(buf[4:6], h.Version)
-	binary.LittleEndian.PutUint16(buf[6:8], h.VectorDim)
+	binary.LittleEndian.PutUint16(buf[6:8], h.Reserved)
 	binary.LittleEndian.PutUint64(buf[8:16], h.CommitID)
 	binary.LittleEndian.PutUint64(buf[16:24], h.SnapshotOffset)
 	binary.LittleEndian.PutUint32(buf[24:28], h.SnapshotLength)
@@ -103,7 +107,7 @@ func FileHeaderFromBytes(buf [HeaderSize]byte) (*FileHeader, error) {
 	}
 	return &FileHeader{
 		Version:        version,
-		VectorDim:      binary.LittleEndian.Uint16(buf[6:8]),
+		Reserved:       binary.LittleEndian.Uint16(buf[6:8]),
 		CommitID:       binary.LittleEndian.Uint64(buf[8:16]),
 		SnapshotOffset: binary.LittleEndian.Uint64(buf[16:24]),
 		SnapshotLength: binary.LittleEndian.Uint32(buf[24:28]),

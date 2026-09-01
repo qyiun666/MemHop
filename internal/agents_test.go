@@ -21,11 +21,10 @@ import (
 func openMultiTestDB(t *testing.T, path string) *DB {
 	t.Helper()
 	cfg := &MemHopConfig{
-		DBPath:    path,
-		VectorDim: 768,
-		Defaults:  *DefaultMemHopDefaults,
+		DBPath:   path,
+		Defaults: *DefaultMemHopDefaults,
 	}
-	db, err := Open(cfg, &mockEncoder{vec: testVec}, capabilities.FS)
+	db, err := Open(cfg, capabilities.FS)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

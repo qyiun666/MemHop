@@ -9,7 +9,7 @@ import (
 
 func TestCompact(t *testing.T) {
 	p := tempPath(t, "compact_src")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestCompact(t *testing.T) {
 	eng.Checkpoint(&IndexSnapshotData{})
 
 	compactPath := tempPath(t, "compact_dst")
-	snap := &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
+	snap := &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
 	if err := eng.Compact(compactPath, snap); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestCompact(t *testing.T) {
 	}
 	// The caller-provided snapshot must be carried into the compacted file.
 	sd := eng2.SnapshotData()
-	if sd == nil || string(sd.SparseByAgent[DefaultAgentID]) != "sparse" {
+	if sd == nil || string(sd.BlobByAgent[DefaultAgentID]) != "sparse" {
 		t.Fatalf("compacted snapshot lost: %+v", sd)
 	}
 	// A nil snapshot is a caller bug, not a silent empty checkpoint.

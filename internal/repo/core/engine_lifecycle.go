@@ -15,7 +15,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
-func Create(path string, vectorDim uint16) (*StorageEngine, error) {
+func Create(path string) (*StorageEngine, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return nil, common.NewError(common.ErrIO, "create file", err)
@@ -28,7 +28,7 @@ func Create(path string, vectorDim uint16) (*StorageEngine, error) {
 		f.Close()
 		return nil, common.NewError(common.ErrIO, "truncate", err)
 	}
-	hdr := NewFileHeader(vectorDim)
+	hdr := NewFileHeader()
 	hdrBytes := hdr.ToBytes()
 	if err := writeHeaderAt(f, HeaderAOffset, hdrBytes); err != nil {
 		f.Close()

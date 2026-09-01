@@ -20,7 +20,7 @@ func tempPath(t *testing.T, name string) string {
 
 func TestCreateWriteRead(t *testing.T) {
 	p := tempPath(t, "cwr")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,13 +52,13 @@ func TestCreateWriteRead(t *testing.T) {
 
 func TestABHeaderSwitch(t *testing.T) {
 	p := tempPath(t, "ab")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
 	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 1, []byte("a"))
-	snap := &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s")}}
+	snap := &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s")}}
 	for range 4 {
 		if err := eng.Checkpoint(snap); err != nil {
 			t.Fatal(err)
@@ -76,13 +76,13 @@ func TestABHeaderSwitch(t *testing.T) {
 
 func TestCheckpointReopen(t *testing.T) {
 	p := tempPath(t, "ckp")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 100, []byte("checkpoint data"))
 	snap := &IndexSnapshotData{
-		SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")},
+		BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")},
 	}
 	if err := eng.Checkpoint(snap); err != nil {
 		t.Fatal(err)
@@ -112,14 +112,14 @@ func TestCheckpointReopen(t *testing.T) {
 	if sd == nil {
 		t.Fatal("snapshot data is nil")
 	}
-	if string(sd.SparseByAgent[DefaultAgentID]) != "sparse" {
-		t.Fatalf("sparse: %q", sd.SparseByAgent[DefaultAgentID])
+	if string(sd.BlobByAgent[DefaultAgentID]) != "sparse" {
+		t.Fatalf("sparse: %q", sd.BlobByAgent[DefaultAgentID])
 	}
 }
 
 func TestDeleteRecord(t *testing.T) {
 	p := tempPath(t, "del")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestDeleteRecord(t *testing.T) {
 
 func TestDeleteRecordBatch(t *testing.T) {
 	p := tempPath(t, "del_batch")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +192,7 @@ func TestDeleteRecordBatch(t *testing.T) {
 
 func TestConcurrentReadWrite(t *testing.T) {
 	p := tempPath(t, "conc")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 
 func TestWriteRecordBatch(t *testing.T) {
 	p := tempPath(t, "batch")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestWriteRecordBatch(t *testing.T) {
 
 func TestFileSize(t *testing.T) {
 	p := tempPath(t, "size")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +276,7 @@ func TestFileSize(t *testing.T) {
 
 func TestContainsAndIndex(t *testing.T) {
 	p := tempPath(t, "iter")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}

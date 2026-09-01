@@ -12,8 +12,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	memhop "github.com/qyiun666/MemHop/api"
 )
 
 // TestStreamableMultiTenant boots the Streamable HTTP transport in-process
@@ -23,9 +21,6 @@ func TestStreamableMultiTenant(t *testing.T) {
 	dbDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	reg := newRegistry(testBase(t), dbDir, nil, logger)
-	reg.open = func(cfg *memhop.MemHopConfig) (*memhop.MultiAgentDB, error) {
-		return memhop.OpenMultiWithEncoder(cfg, &smokeEncoder{dim: cfg.VectorDim})
-	}
 	srv := httptest.NewServer(newStreamableHandler(reg))
 	t.Cleanup(func() {
 		srv.Close()

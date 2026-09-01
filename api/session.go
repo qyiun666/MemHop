@@ -9,8 +9,6 @@
 package api
 
 import (
-	"context"
-
 	"github.com/qyiun666/MemHop/internal"
 )
 
@@ -22,13 +20,24 @@ type Session struct {
 // AgentID returns the bound domain ID as a 16-char hex string.
 func (s *Session) AgentID() string { return internal.FormatAgentID(s.Session.AgentID()) }
 
-// Search runs three-route retrieval and returns IDs as hex strings.
-func (s *Session) Search(ctx context.Context, q SearchQuery) (*SearchResult, error) {
-	res, err := s.Session.Search(ctx, q)
+// Search reads one scene — the host's session: its record plus its depth-1
+// topics in turn order. An empty SearchQuery.SceneID allocates a fresh scene.
+func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
+	res, err := s.Session.Search(q)
 	if err != nil {
 		return nil, err
 	}
 	return fromSearchResult(res), nil
+}
+
+// Update sinks one finished turn (both originals plus their timestamps) into
+// the host's scene and returns the new topic's hex id.
+func (s *Session) Update(in TurnUpdate) (string, error) {
+	id, err := s.Session.Update(in)
+	if err != nil {
+		return "", err
+	}
+	return internal.FormatID(id), nil
 }
 
 // AppendL4Message returns the new L4 archive ID as a hex string.

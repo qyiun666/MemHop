@@ -11,8 +11,8 @@ import (
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
-// TestOpenSmoke verifies that a MemHop database can be opened against real
-// Ollama (encoder) and DeepSeek (LLM) services, and closed cleanly.
+// TestOpenSmoke verifies that a MemHop database can be opened against the real
+// LLM endpoint and closed cleanly.
 func TestOpenSmoke(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()

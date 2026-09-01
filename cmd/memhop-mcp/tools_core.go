@@ -14,17 +14,23 @@ import (
 )
 
 type searchArgs struct {
-	Text         string  `json:"text"`
-	DirectedL2ID *string `json:"directed_l2_id,omitempty"`
-	DirectedL3ID *string `json:"directed_l3_id,omitempty"`
-	AutoCreate   bool    `json:"auto_create,omitempty"`
-	Timestamp    int64   `json:"timestamp"`
+	SceneID   string `json:"scene_id"`
+	L3ID      string `json:"l3_id"`
+	SceneName string `json:"scene_name"`
 }
 
 type updateArgs struct {
-	TopicID   string `json:"topic_id"`
-	Text      string `json:"text"`
-	Timestamp int64  `json:"timestamp"`
+	SceneID   string `json:"scene_id"`
+	UserText  string `json:"user_text"`
+	UserTS    int64  `json:"user_ts"`
+	AgentText string `json:"agent_text"`
+	AgentTS   int64  `json:"agent_ts"`
+}
+
+// turnResult reports the topic one finished turn settled into.
+type turnResult struct {
+	OK      bool   `json:"ok"`
+	TopicID string `json:"topic_id,omitempty"`
 }
 
 type dreamArgs struct {
@@ -37,8 +43,8 @@ type dreamResult struct {
 }
 
 type statusResult struct {
-	Closed          bool `json:"closed"`
-	HasActiveScenes bool `json:"has_active_scenes"`
+	Closed     bool `json:"closed"`
+	SceneCount int  `json:"scene_count"`
 }
 
 // registerCoreTools installs the memory-loop entry points; one register
@@ -53,21 +59,17 @@ func registerCoreTools(s *mcp.Server, db *memhop.Session) {
 func registerSearchTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_search",
-		Description: "搜索记忆并写入用户原文：三通道混合检索（BM25 + 向量 + 实体模糊），RRF 融合。返回 L0 画像、命中的 L2 场景上下文与关联上下文；auto_create=true 时自动建新话题并返回 new_topic_id（16 位 hex）。timestamp 为 Unix 毫秒，必填。",
+		Description: "读取一个场景（= 宿主会话）的记忆：返回 L0 画像与该场景 depth-1 话题集（每个话题带提炼关键词与 L4 原文 ID），即宿主本轮的上下文。scene_id 为空时新建场景并返回其 id（16 位 hex）；非空时必须已存在。l3_id/scene_name 只在新建时生效。",
 		InputSchema: objSchema(map[string]any{
-			"text":           strProp("用户原文，必填"),
-			"directed_l2_id": strProp("限定在某个 L2 场景内检索（16 位 hex，可选）"),
-			"directed_l3_id": strProp("限定在引用该 L3 知识的话题内检索（16 位 hex，可选）"),
-			"auto_create":    boolProp("无命中时自动创建新话题（可选，默认 false）"),
-			"timestamp":      intProp("Unix 毫秒时间戳，必填"),
-		}, "text", "timestamp"),
-	}, handleWithCtx[searchArgs, memhop.SearchResult](func(ctx context.Context, a searchArgs) (memhop.SearchResult, error) {
-		res, err := db.Search(ctx, memhop.SearchQuery{
-			Text:         a.Text,
-			DirectedL2ID: a.DirectedL2ID,
-			DirectedL3ID: a.DirectedL3ID,
-			AutoCreate:   a.AutoCreate,
-			Timestamp:    a.Timestamp,
+			"scene_id":   strProp("场景 ID（16 位 hex），可选；留空 = 新建场景"),
+			"l3_id":      strProp("新建场景挂靠的 L3 项目域 ID（16 位 hex，可选）"),
+			"scene_name": strProp("新建场景的名字，可选（留空用 session:<id>）"),
+		}),
+	}, handle[searchArgs, memhop.SearchResult](func(a searchArgs) (memhop.SearchResult, error) {
+		res, err := db.Search(memhop.SearchQuery{
+			SceneID:   a.SceneID,
+			L3ID:      a.L3ID,
+			SceneName: a.SceneName,
 		})
 		if err != nil {
 			return memhop.SearchResult{}, err
@@ -79,15 +81,23 @@ func registerSearchTool(s *mcp.Server, db *memhop.Session) {
 func registerUpdateTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_update",
-		Description: "将一条对话消息写入既有话题（不建新话题）：更新 L2 话题元数据、L4 档案与检索索引。返回是否成功写入。",
+		Description: "沉淀一整轮对话：把用户原文与 agent 原文各写为 L4 档案，并用一次提炼产出该轮话题的关键词。scene_id 必须是已存在场景（先调 memhop_search 建立/读取）。返回新建话题的 topic_id（16 位 hex）。",
 		InputSchema: objSchema(map[string]any{
-			"topic_id":  strProp("话题 ID（16 位 hex），必填"),
-			"text":      strProp("消息内容，必填"),
-			"timestamp": intProp("Unix 毫秒时间戳，必填"),
-		}, "topic_id", "text", "timestamp"),
-	}, handle[updateArgs, updateResult](func(a updateArgs) (updateResult, error) {
-		err := db.Update(a.TopicID, a.Text, a.Timestamp)
-		return updateResult{OK: err == nil}, err
+			"scene_id":   strProp("场景 ID（16 位 hex），必填，须已存在"),
+			"user_text":  strProp("用户原文，必填"),
+			"user_ts":    intProp("用户消息 Unix 毫秒时间戳，必填"),
+			"agent_text": strProp("agent 回复原文，必填"),
+			"agent_ts":   intProp("agent 回复 Unix 毫秒时间戳，必填"),
+		}, "scene_id", "user_text", "user_ts", "agent_text", "agent_ts"),
+	}, handle[updateArgs, turnResult](func(a updateArgs) (turnResult, error) {
+		topicID, err := db.Update(memhop.TurnUpdate{
+			SceneID:   a.SceneID,
+			UserText:  a.UserText,
+			UserTS:    a.UserTS,
+			AgentText: a.AgentText,
+			AgentTS:   a.AgentTS,
+		})
+		return turnResult{OK: err == nil, TopicID: topicID}, err
 	}))
 }
 
@@ -113,7 +123,7 @@ func registerDreamTool(s *mcp.Server, db *memhop.Session) {
 func registerMaintenanceTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_checkpoint",
-		Description: "将当前状态持久化到磁盘（索引快照 + A/B header），不关闭数据库。",
+		Description: "将当前状态持久化到磁盘（记录索引 + A/B header），不关闭数据库。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[updateResult](func() (updateResult, error) {
 		return updateResult{OK: true}, db.Checkpoint()
@@ -121,9 +131,10 @@ func registerMaintenanceTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_status",
-		Description: "数据库健康状态：是否已关闭、是否有激活场景（dream 巩固目标）。",
+		Description: "数据库健康状态：是否已关闭、已登记多少场景（= 宿主会话数）。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[statusResult](func() (statusResult, error) {
-		return statusResult{Closed: db.IsClosed(), HasActiveScenes: db.HasActiveScenes()}, nil
+		scenes, err := db.ListScenes()
+		return statusResult{Closed: db.IsClosed(), SceneCount: len(scenes)}, err
 	}))
 }

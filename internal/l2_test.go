@@ -11,6 +11,16 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
+// mustScene writes a scene record under a host-chosen id and returns it.
+func mustScene(t *testing.T, engine *core.StorageEngine, sceneID uint64, name string) core.SceneSlot {
+	t.Helper()
+	slot := core.NewSceneSlot(sceneID, name)
+	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, sceneID, &slot); err != nil {
+		t.Fatalf("write scene %d: %v", sceneID, err)
+	}
+	return slot
+}
+
 // TestListScenesEmpty empty db returns an empty slice.
 func TestListScenesEmpty(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
@@ -27,14 +37,9 @@ func TestListScenesEmpty(t *testing.T) {
 func TestListScenesReturnsIDName(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
-	s1 := core.NewSceneSlot("工作")
-	s2 := core.NewSceneSlot("学习")
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, s1.SceneID, &s1); err != nil {
-		t.Fatal(err)
-	}
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, s2.SceneID, &s2); err != nil {
-		t.Fatal(err)
-	}
+	s1 := mustScene(t, engine, 11, "工作")
+	s2 := mustScene(t, engine, 12, "学习")
+
 	scenes, err := db.ListScenes(core.DefaultAgentID)
 	if err != nil {
 		t.Fatalf("ListScenes: %v", err)
@@ -55,35 +60,27 @@ func TestListScenesReturnsIDName(t *testing.T) {
 func TestMergeScenesMovesTopics(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
-	primary := core.NewSceneSlot("主场景")
-	secondary := core.NewSceneSlot("副场景")
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, primary.SceneID, &primary); err != nil {
-		t.Fatal(err)
-	}
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, secondary.SceneID, &secondary); err != nil {
-		t.Fatal(err)
-	}
+	primary := mustScene(t, engine, 21, "主场景")
+	secondary := mustScene(t, engine, 22, "副场景")
+
 	t1 := newTopic(common.HashID("t1"), secondary.SceneID, 1000, []string{"a"})
 	t2 := newTopic(common.HashID("t2"), secondary.SceneID, 2000, []string{"b"})
-	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, t1.ID, &t1); err != nil {
-		t.Fatal(err)
-	}
-	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, t2.ID, &t2); err != nil {
-		t.Fatal(err)
+	for _, tp := range []core.TopicSlot{t1, t2} {
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, tp.ID, &tp); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	if err := db.MergeScenes(core.DefaultAgentID, common.FormatHash(primary.SceneID), []string{common.FormatHash(secondary.SceneID)}); err != nil {
+	if err := db.MergeScenes(core.DefaultAgentID, common.FormatHash(primary.SceneID),
+		[]string{common.FormatHash(secondary.SceneID)}); err != nil {
 		t.Fatalf("MergeScenes: %v", err)
 	}
-	// Secondary scene record deleted.
 	if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, secondary.SceneID); err == nil {
 		t.Fatal("secondary scene should be deleted")
 	}
-	// Primary scene remains.
 	if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, primary.SceneID); err != nil {
 		t.Fatal("primary scene should remain")
 	}
-	// Topic ownership migrated.
 	for _, id := range []uint64{t1.ID, t2.ID} {
 		topics, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id)
 		if err != nil {
@@ -92,6 +89,32 @@ func TestMergeScenesMovesTopics(t *testing.T) {
 		if topics == nil || topics.SceneID != primary.SceneID {
 			t.Fatalf("topic %d scene: want %d", id, primary.SceneID)
 		}
+	}
+}
+
+// Merging also retargets the cached entries, otherwise the scene read keeps
+// serving topics under a scene id that no longer exists.
+func TestMergeScenesRetargetsCache(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	primary := mustScene(t, engine, 31, "主场景")
+	secondary := mustScene(t, engine, 32, "副场景")
+	topic := newTopic(common.HashID("cached"), secondary.SceneID, 1000, []string{"a"})
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topic.ID, &topic); err != nil {
+		t.Fatal(err)
+	}
+	ac := testDefaultContext(db)
+	ac.syncL2Meta(db, topic.ID)
+
+	if err := db.MergeScenes(core.DefaultAgentID, common.FormatHash(primary.SceneID),
+		[]string{common.FormatHash(secondary.SceneID)}); err != nil {
+		t.Fatalf("MergeScenes: %v", err)
+	}
+	if got := ac.l2Meta.Get(topic.ID); got == nil || got.SceneID != primary.SceneID {
+		t.Fatalf("cache not retargeted: %+v", got)
+	}
+	if ids := ac.l2Meta.GetByScene(secondary.SceneID); len(ids) != 0 {
+		t.Fatalf("merged scene still cached: %v", ids)
 	}
 }
 
@@ -110,21 +133,14 @@ func TestMergeScenesInvalid(t *testing.T) {
 func TestMergeScenesPrimaryInSecondary(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
-	primary := core.NewSceneSlot("主场景")
-	secondary := core.NewSceneSlot("副场景")
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, primary.SceneID, &primary); err != nil {
-		t.Fatal(err)
-	}
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, secondary.SceneID, &secondary); err != nil {
-		t.Fatal(err)
-	}
+	primary := mustScene(t, engine, 41, "主场景")
+	secondary := mustScene(t, engine, 42, "副场景")
 	t1 := newTopic(common.HashID("t1"), primary.SceneID, 1000, []string{"a"})
 	t2 := newTopic(common.HashID("t2"), secondary.SceneID, 2000, []string{"b"})
-	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, t1.ID, &t1); err != nil {
-		t.Fatal(err)
-	}
-	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, t2.ID, &t2); err != nil {
-		t.Fatal(err)
+	for _, tp := range []core.TopicSlot{t1, t2} {
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, tp.ID, &tp); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	// primary listed among secondaries -> rejected, nothing deleted.
@@ -133,38 +149,15 @@ func TestMergeScenesPrimaryInSecondary(t *testing.T) {
 	}); err == nil {
 		t.Fatal("want error when primary is also a secondary")
 	}
-	if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, primary.SceneID); err != nil {
-		t.Fatal("primary scene must remain after rejected merge")
-	}
-	if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, secondary.SceneID); err != nil {
-		t.Fatal("secondary scene must remain after rejected merge")
+	for _, s := range []core.SceneSlot{primary, secondary} {
+		if _, err := core.ReadSceneSlot(engine, core.DefaultAgentID, s.SceneID); err != nil {
+			t.Fatalf("scene %d must survive a rejected merge", s.SceneID)
+		}
 	}
 	for _, id := range []uint64{t1.ID, t2.ID} {
 		if _, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id); err != nil {
 			t.Fatalf("topic %d must remain after rejected merge", id)
 		}
-	}
-}
-
-// TestMergeScenesRemovesActiveScene merged secondary scenes drop from the active list.
-func TestMergeScenesRemovesActiveScene(t *testing.T) {
-	engine := newTestEngine(t)
-	db := newTestDB(t, engine)
-	primary := core.NewSceneSlot("主场景")
-	secondary := core.NewSceneSlot("副场景")
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, primary.SceneID, &primary); err != nil {
-		t.Fatal(err)
-	}
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, secondary.SceneID, &secondary); err != nil {
-		t.Fatal(err)
-	}
-	ac := testDefaultContext(db)
-	ac.activeScenes = []uint64{primary.SceneID, secondary.SceneID}
-	if err := db.MergeScenes(core.DefaultAgentID, common.FormatHash(primary.SceneID), []string{common.FormatHash(secondary.SceneID)}); err != nil {
-		t.Fatal(err)
-	}
-	if len(ac.activeScenes) != 1 || ac.activeScenes[0] != primary.SceneID {
-		t.Fatalf("active scenes: want [%d], got %v", primary.SceneID, ac.activeScenes)
 	}
 }
 
@@ -174,14 +167,10 @@ func TestMergeScenesRemovesActiveScene(t *testing.T) {
 func TestListScenesTopicCounts(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
-	s1 := core.NewSceneSlot("场景一")
-	s2 := core.NewSceneSlot("场景二")
-	s3 := core.NewSceneSlot("空场景")
-	for _, s := range []core.SceneSlot{s1, s2, s3} {
-		if err := core.WriteSceneSlot(engine, core.DefaultAgentID, s.SceneID, &s); err != nil {
-			t.Fatal(err)
-		}
-	}
+	s1 := mustScene(t, engine, 51, "场景一")
+	s2 := mustScene(t, engine, 52, "场景二")
+	s3 := mustScene(t, engine, 53, "空场景")
+
 	// s1: two depth-1 roots.
 	t1 := newTopic(common.HashID("s1t1"), s1.SceneID, 1000, []string{"a"})
 	t2 := newTopic(common.HashID("s1t2"), s1.SceneID, 2000, []string{"b"})
@@ -216,15 +205,13 @@ func TestListScenesTopicCounts(t *testing.T) {
 }
 
 // TestDeleteTopicRemovesSubtreeAndArchives deleting a topic removes its
-// subtree, the referenced L4 archives, and the L2Meta/sparse entries.
+// subtree, the referenced L4 archives, and its L2Meta entries.
 func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	ac := testDefaultContext(db)
-	scene := core.NewSceneSlot("工作")
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, scene.SceneID, &scene); err != nil {
-		t.Fatal(err)
-	}
+	scene := mustScene(t, engine, 61, "工作")
+
 	parentID := common.HashID("parent")
 	childID := common.HashID("child")
 	arcID := common.HashID("arc:1")
@@ -239,7 +226,9 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, childID, &child); err != nil {
 		t.Fatal(err)
 	}
-	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arcID, &core.ArchiveSlot{IDHash: arcID, ContextID: parentID, Content: "原文", CreatedAt: 1500}); err != nil {
+	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arcID, &core.ArchiveSlot{
+		IDHash: arcID, ContextID: parentID, Content: "原文", CreatedAt: 1500,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ac.l2Meta.Update(index.L2MetaFromTopic(&parent))
@@ -288,10 +277,8 @@ func TestDeleteTopicPrunesParentChild(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	_ = testDefaultContext(db)
-	scene := core.NewSceneSlot("工作")
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, scene.SceneID, &scene); err != nil {
-		t.Fatal(err)
-	}
+	scene := mustScene(t, engine, 71, "工作")
+
 	parentID := common.HashID("parent")
 	childID := common.HashID("child")
 	parent := newTopic(parentID, scene.SceneID, 1000, []string{"a"})
@@ -320,34 +307,29 @@ func TestDeleteTopicPrunesParentChild(t *testing.T) {
 }
 
 // TestDeleteSceneRemovesEverything deleting a scene removes its record, all
-// topics (all depths), archives, indexes and active-set membership.
+// topics (all depths), archives and their L2Meta entries.
 func TestDeleteSceneRemovesEverything(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	ac := testDefaultContext(db)
-	ac.activeScenes = []uint64{1, 2, 3}
-	scene := core.NewSceneSlot("工作")
-	scene.SceneID = 3
-	if err := core.WriteSceneSlot(engine, core.DefaultAgentID, scene.SceneID, &scene); err != nil {
-		t.Fatal(err)
-	}
+	scene := mustScene(t, engine, 3, "工作")
+
 	t1 := newTopic(common.HashID("t1"), scene.SceneID, 1000, []string{"a"})
 	t2 := newTopic(common.HashID("t2"), scene.SceneID, 2000, []string{"b"})
 	t3 := newTopic(common.HashID("t3"), scene.SceneID, 3000, []string{"c"})
 	t3.ParentID = &t2.ID
+	arcID := common.HashID("arc:2")
+	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arcID, &core.ArchiveSlot{
+		IDHash: arcID, ContextID: t1.ID, Content: "原文", CreatedAt: 1500,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t1.L4Refs = []uint64{arcID}
 	for _, topic := range []core.TopicSlot{t1, t2, t3} {
 		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topic.ID, &topic); err != nil {
 			t.Fatal(err)
 		}
 		ac.l2Meta.Update(index.L2MetaFromTopic(&topic))
-	}
-	arcID := common.HashID("arc:2")
-	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arcID, &core.ArchiveSlot{IDHash: arcID, ContextID: t1.ID, Content: "原文", CreatedAt: 1500}); err != nil {
-		t.Fatal(err)
-	}
-	t1.L4Refs = []uint64{arcID}
-	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, t1.ID, &t1); err != nil {
-		t.Fatal(err)
 	}
 
 	if err := db.DeleteScene(core.DefaultAgentID, common.FormatHash(scene.SceneID)); err != nil {
@@ -366,10 +348,5 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 	}
 	if arcs, err := core.ReadArchiveSlot(engine, core.DefaultAgentID, arcID); err == nil && arcs != nil {
 		t.Error("archive should be deleted")
-	}
-	for _, sid := range ac.activeScenes {
-		if sid == scene.SceneID {
-			t.Error("deleted scene must leave the active set")
-		}
 	}
 }

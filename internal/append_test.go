@@ -12,16 +12,15 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// newTopicForAppend creates a scene and a depth-1 topic with a known ID,
-// mirroring what Search produces for a topic to append to.
+// newTopicForAppend creates a scene and a depth-1 turn topic with a known ID,
+// mirroring what Update produces for a topic to append to.
 func newTopicForAppend(t *testing.T, engine *core.StorageEngine) string {
 	t.Helper()
-	sceneID, err := repo.CreateSceneL2(engine, core.DefaultAgentID, "append-scene")
-	if err != nil {
-		t.Fatalf("create scene: %v", err)
-	}
-	topicID := common.HashID("append-topic")
-	if !repo.CreateTopicL2WithID(engine, core.DefaultAgentID, sceneID, topicID, []string{"kw"}, 1000, 0) {
+	const sceneID = uint64(7)
+	mustWriteScene(t, engine, core.DefaultAgentID, sceneID, "append-scene")
+
+	topicID := core.ComputeTurnTopicID(sceneID, 1000, 2000)
+	if !repo.CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"kw"}, 1000, 2000) {
 		t.Fatal("create topic")
 	}
 	return common.FormatHash(topicID)

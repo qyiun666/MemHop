@@ -84,14 +84,13 @@ func TestTriggerSceneDreamSchedulesBackground(t *testing.T) {
 }
 
 // TestOpenInitializesDreamState locks the Open() contract that background
-// Dream state is ready before the first Search/Update trigger fires.
+// Dream state is ready before the first Update consolidation trigger fires.
 func TestOpenInitializesDreamState(t *testing.T) {
 	cfg := &MemHopConfig{
-		DBPath:    filepath.Join(t.TempDir(), "open.meh"),
-		VectorDim: 768,
-		Defaults:  *DefaultMemHopDefaults,
+		DBPath:   filepath.Join(t.TempDir(), "open.meh"),
+		Defaults: *DefaultMemHopDefaults,
 	}
-	db, err := Open(cfg, &mockEncoder{vec: testVec}, capabilities.FS)
+	db, err := Open(cfg, capabilities.FS)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

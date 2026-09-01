@@ -26,33 +26,15 @@ type MultiAgentDB struct {
 	db *internal.DB
 }
 
-// OpenMulti creates or opens a multi-agent MemHop database.
+// OpenMulti creates or opens a multi-agent MemHop database. internal.Open
+// performs all assembly (engine, per-domain caches, builtins); the embedded
+// capability toolbox is injected here because internal must not import the
+// capabilities data package.
 func OpenMulti(cfg *MemHopConfig) (*MultiAgentDB, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	enc, err := internal.CreateEncoder(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return openMultiWithEncoder(cfg, enc)
-}
-
-// OpenMultiWithEncoder creates or opens a multi-agent MemHop database with
-// a custom encoder (test seam for a mock vectorizer).
-func OpenMultiWithEncoder(cfg *MemHopConfig, enc Encoder) (*MultiAgentDB, error) {
-	if err := cfg.Validate(); err != nil {
-		return nil, err
-	}
-	return openMultiWithEncoder(cfg, enc)
-}
-
-// openMultiWithEncoder wraps the internal composition root; internal.Open
-// performs all assembly (engine, indices, builtins). The embedded capability
-// toolbox is injected here because internal must not import the
-// capabilities data package.
-func openMultiWithEncoder(cfg *MemHopConfig, enc Encoder) (*MultiAgentDB, error) {
-	d, err := internal.Open(cfg, enc, capabilities.FS)
+	d, err := internal.Open(cfg, capabilities.FS)
 	if err != nil {
 		return nil, err
 	}

@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Per-agent session handle: binds every operation to one agent domain and
-// renders the external hex-id surface (ActiveSceneIDs) so the api facade
-// stays pure forwarding. The public method set of api.Session is exactly
-// this type's method set; the domain lock is still taken per call by the
-// underlying DB methods.
+// renders the external hex-id surface so the api facade stays pure
+// forwarding. The public method set of api.Session is exactly this type's
+// method set; the domain lock is still taken per call by the underlying DB
+// methods.
 
 package internal
 
@@ -42,17 +42,19 @@ func (s *Session) Checkpoint() error { return s.db.Checkpoint() }
 // IsClosed reports whether the underlying database has been closed.
 func (s *Session) IsClosed() bool { return s.db.IsClosed() }
 
-// HasActiveScenes reports whether this domain has active scenes.
-func (s *Session) HasActiveScenes() bool { return s.db.HasActiveScenesFor(s.agentID) }
+// ---- scene read / turn write ----
 
-// ---- retrieval / write core ----
-
-func (s *Session) Search(ctx context.Context, q SearchQuery) (*SearchResult, error) {
-	return s.db.Search(ctx, s.agentID, q)
+// Search reads one scene (the host's session): its record and its depth-1
+// topics, whose count the result reports as TopicCount. An empty
+// SearchQuery.SceneID allocates a fresh scene.
+func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
+	return s.db.Search(s.agentID, q)
 }
 
-func (s *Session) Update(topicID string, text string, timestamp int64) error {
-	return s.db.Update(s.agentID, topicID, text, timestamp)
+// Update sinks one finished turn into the host's scene and returns the new
+// topic id.
+func (s *Session) Update(in TurnUpdate) (uint64, error) {
+	return s.db.Update(s.agentID, in)
 }
 
 func (s *Session) AppendL4Message(topicID string, text string, timestamp int64, role uint8, contentType core.ContentType) (uint64, error) {
@@ -65,9 +67,9 @@ func (s *Session) RefineTopicKeywords(ctx context.Context, topicID string) error
 
 // ---- Dream ----
 
-// Dream runs the consolidation pipeline over the given scene (or all active
-// scenes when sceneID is empty); RunDream takes the domain lock itself and
-// returns a zero-valued report when the domain has no active scenes.
+// Dream runs the consolidation pipeline over the given scene (or every scene
+// of the domain when sceneID is empty); RunDream takes the domain lock itself
+// and returns a zero-valued report when the domain has no scenes.
 func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, error) {
 	var hash uint64
 	if sceneID != "" {
@@ -114,13 +116,6 @@ func (s *Session) SetSceneL3ID(sceneID, l3ID string, force bool) error {
 	return s.db.SetSceneL3ID(s.agentID, sceneID, l3ID, force)
 }
 
-// ActiveSceneIDs returns the active scene IDs as 16-char hex strings,
-// consistent with the hex ID parameters of SceneContext / MergeScenes /
-// Search.DirectedL2ID.
-func (s *Session) ActiveSceneIDs() []string {
-	return common.FormatIDs(s.db.ActiveSceneIDs(s.agentID))
-}
-
 func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 	return s.db.SceneContext(s.agentID, sceneID)
 }
@@ -130,15 +125,15 @@ func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
 }
 
 // DeleteTopic removes a topic and its whole subtree (children at any
-// depth), the L4 archives they reference, and their L2Meta/sparse entries,
-// so the deleted topic no longer surfaces in retrieval.
+// depth), the L4 archives they reference, and their L2Meta cache entries,
+// so the deleted topic no longer surfaces in any scene read.
 func (s *Session) DeleteTopic(topicID string) error {
 	return s.db.DeleteTopic(s.agentID, topicID)
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
-// the referenced L4 archives, and the L2Meta/sparse entries, so the scene
-// disappears from listings and retrieval.
+// the referenced L4 archives, and the L2Meta cache entries, so the scene
+// disappears from listings and reads.
 func (s *Session) DeleteScene(sceneID string) error {
 	return s.db.DeleteScene(s.agentID, sceneID)
 }

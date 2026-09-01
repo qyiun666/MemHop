@@ -30,7 +30,7 @@ import (
 	"time"
 )
 
-const version = "v1.4.2"
+const version = "v1.5.0"
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))

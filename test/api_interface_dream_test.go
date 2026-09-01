@@ -1,9 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Offline interface tests: exercise the public API surface through
-// memhop.OpenMultiWithEncoder with a mock encoder and a mock OpenAI-compatible
-// LLM server. No external services required; run with `go test ./test/...`.
+// Offline interface tests for Dream consolidation and checkpoint persistence.
 
 package test
 
@@ -11,13 +9,13 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
-	"time"
 
+	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 )
 
 func TestInterfaceDream(t *testing.T) {
-	// Lower the compress threshold so two topics in one scene trigger the
+	// Lower the compress threshold so two turns in one session trigger the
 	// consolidate call.
 	llm := newMockLLM(t)
 	m := openMockMulti(t, filepath.Join(t.TempDir(), "test.meh"), llm.srv.URL,
@@ -25,16 +23,12 @@ func TestInterfaceDream(t *testing.T) {
 	db := newTestDB(t, m)
 	defer db.Close()
 
-	ts := time.Now().UnixMilli()
-	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "用户要求重构代码", AutoCreate: true, Timestamp: ts})
-	if err != nil {
-		t.Fatalf("Search #1: %v", err)
+	sceneID := openSession(t, db)
+	if _, err := db.Update(turn(sceneID, "用户要求重构代码", "好的,我来重构这段代码")); err != nil {
+		t.Fatalf("turn 1: %v", err)
 	}
-	sceneID := res.Contexts[0].SceneID
-	if _, err := db.Search(context.Background(), internal.SearchQuery{
-		Text: "继续重构第二个模块", DirectedL2ID: &sceneID, Timestamp: ts + 1000,
-	}); err != nil {
-		t.Fatalf("Search #2: %v", err)
+	if _, err := db.Update(turn(sceneID, "继续重构第二个模块", "第二个模块也补上测试")); err != nil {
+		t.Fatalf("turn 2: %v", err)
 	}
 
 	rep, err := db.Dream(context.Background(), "")
@@ -42,10 +36,19 @@ func TestInterfaceDream(t *testing.T) {
 		t.Fatalf("Dream: %v", err)
 	}
 	if rep == nil || rep.ConsolidatedScenes < 1 || rep.L2TopicsCompressed < 1 {
-		t.Fatalf("Dream should consolidate the active scene: %+v", rep)
+		t.Fatalf("Dream should consolidate the session: %+v", rep)
 	}
 	if llm.calls["consolidate"] < 1 {
-		t.Fatal("Dream should call consolidate on the active scene")
+		t.Fatal("Dream should call consolidate on the session")
+	}
+	// Consolidation fuses the group into one depth-1 topic, so the read
+	// surface shrinks below the two turns written.
+	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("Search after dream: %v", err)
+	}
+	if len(res.Topics) != 1 || len(res.Topics[0].ChildrenIDs) == 0 {
+		t.Fatalf("surface = %+v, want one fused topic owning the turns", res.Topics)
 	}
 	// Stage timeline covers the full pipeline, distillation included.
 	if len(rep.Stages) == 0 {
@@ -93,10 +96,10 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	m := openMockMulti(t, path, llm.srv.URL)
 
 	db := newTestDB(t, m)
-	if _, err := db.Search(context.Background(), internal.SearchQuery{
-		Text: "用户要求重构代码", AutoCreate: true, Timestamp: time.Now().UnixMilli(),
-	}); err != nil {
-		t.Fatalf("Search: %v", err)
+	sceneID := openSession(t, db)
+	topicID, err := db.Update(turn(sceneID, "用户要求重构代码", "好的,我来重构这段代码"))
+	if err != nil {
+		t.Fatalf("Update: %v", err)
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)
@@ -105,8 +108,8 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	// Reopen the same file: the tenant registry persists, so the same
-	// name resolves to the same domain and its scenes/archives survive.
+	// Reopen the same file: the tenant registry persists, so the same name
+	// resolves to the same domain, and the caches rebuild from the records.
 	m2 := openMockMulti(t, path, llm.srv.URL)
 	defer m2.Close()
 	db2 := newTestDB(t, m2)
@@ -117,6 +120,16 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	if len(scenes) == 0 {
 		t.Fatal("scenes should persist across reopen")
 	}
+	res, err := db2.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("Search after reopen: %v", err)
+	}
+	if len(res.Topics) != 1 || res.Topics[0].ID != topicID {
+		t.Fatalf("topics did not persist: %+v", res.Topics)
+	}
+	if len(res.Topics[0].FusedKeywords) == 0 {
+		t.Fatal("the keyword track must persist with the topic")
+	}
 	arcs, err := db2.SearchL4(internal.L4Query{Keyword: "重构"})
 	if err != nil {
 		t.Fatalf("SearchL4 after reopen: %v", err)
@@ -124,4 +137,6 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	if len(arcs) == 0 {
 		t.Fatal("archives should persist across reopen")
 	}
+	// Reading the host's own session id back from the reopened file is what
+	// proves the id survives a restart.
 }

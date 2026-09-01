@@ -48,20 +48,18 @@ func CodeOf(err error) Code { return common.CodeOf(err) }
 
 // Error codes; see internal/common/errors.go for the interval contract.
 const (
-	ErrConfig            = common.ErrConfig
-	ErrVectorDimMismatch = common.ErrVectorDimMismatch
-	ErrInvalidQuery      = common.ErrInvalidQuery
-	ErrNotFound          = common.ErrNotFound
-	ErrAgentNotFound     = common.ErrAgentNotFound
-	ErrIO                = common.ErrIO
-	ErrClosed            = common.ErrClosed
-	ErrInvalidMagic      = common.ErrInvalidMagic
-	ErrCRCMismatch       = common.ErrCRCMismatch
-	ErrCorruption        = common.ErrCorruption
-	ErrSerialization     = common.ErrSerialization
-	ErrDeserialization   = common.ErrDeserialization
-	ErrEncoder           = common.ErrEncoder
-	ErrLLM               = common.ErrLLM
+	ErrConfig          = common.ErrConfig
+	ErrInvalidQuery    = common.ErrInvalidQuery
+	ErrNotFound        = common.ErrNotFound
+	ErrAgentNotFound   = common.ErrAgentNotFound
+	ErrIO              = common.ErrIO
+	ErrClosed          = common.ErrClosed
+	ErrInvalidMagic    = common.ErrInvalidMagic
+	ErrCRCMismatch     = common.ErrCRCMismatch
+	ErrCorruption      = common.ErrCorruption
+	ErrSerialization   = common.ErrSerialization
+	ErrDeserialization = common.ErrDeserialization
+	ErrLLM             = common.ErrLLM
 )
 
 // ---- L5 capability enum constants ----

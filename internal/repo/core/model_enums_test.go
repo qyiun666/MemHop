@@ -134,16 +134,15 @@ func makeTopic(id uint64, depth uint8) TopicSlot {
 	if depth == 1 {
 		childrenIDs = []uint64{2, 3}
 	}
-	fusedKW := []string{}
+	keywords := []string{"登录", "JWT"}
 	if depth >= 2 {
-		fusedKW = []string{"认证"}
+		keywords = []string{"认证"}
 	}
 	return TopicSlot{
 		ID: id, SceneID: 100, ParentID: parentID,
 		ChildrenIDs: childrenIDs, Depth: depth,
-		UserKeywords: []string{"登录", "JWT"}, UserTimestamp: 1000,
-		L4Refs: []uint64{10}, L3Refs: []uint64{20, 21},
-		AgentKeywords: []string{"token"}, AgentTimestamp: 1001,
-		FusedKeywords: fusedKW, CentroidPageRef: 42,
+		FusedKeywords: keywords,
+		UserTimestamp: 1000, AgentTimestamp: 1001,
+		L4Refs: []uint64{10},
 	}
 }

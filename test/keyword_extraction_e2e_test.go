@@ -5,8 +5,8 @@
 
 // Real-LLM regression tests for the keyword-extraction non-JSON bug
 // (meowagent docs/issues/memhop_search_keywords_nonjson.md): long inputs
-// drift toward natural-language summaries; extraction must self-heal and
-// Search must never fail because of it.
+// drift toward natural-language summaries; extraction must self-heal, and the
+// turn write that depends on it must never fail because of it.
 
 package test
 
@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/test/testsupport"
@@ -70,21 +71,62 @@ func TestExtractKeywordsLongInputRealLLM(t *testing.T) {
 	}
 }
 
-// TestSearchLongInputNeverFails runs the full Search chain (real encoder +
-// real LLM) with whole-session long inputs. Search must never fail because
-// of keyword extraction; a topic must still be created each round.
-func TestSearchLongInputNeverFails(t *testing.T) {
+// TestUpdateLongTurnNeverFails runs the write chain (real LLM) with
+// whole-session long inputs. The turn must settle despite extraction drift —
+// a topic with its distilled keywords and both originals.
+func TestUpdateLongTurnNeverFails(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
+
 	texts := []string{longSessionText(t, 2), longSessionText(t, 0)}
+	sceneID, err := db.OpenSession("long turns")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
 	base := time.Now().UnixMilli()
 	for i, text := range texts {
-		res, err := db.Search(context.Background(), internal.SearchQuery{Text: text, Timestamp: base + int64(i)*1000})
+		ts := base + int64(i)*1000
+		topicID, err := db.Update(memhop.TurnUpdate{
+			SceneID: sceneID, UserText: text, UserTS: ts,
+			AgentText: "已了解这段长对话", AgentTS: ts + 500,
+		})
 		if err != nil {
-			t.Fatalf("attempt %d: Search returned error: %v", i, err)
+			t.Fatalf("attempt %d: Update returned error: %v", i, err)
 		}
-		if res.NewTopicID == "" {
+		if topicID == "" {
 			t.Fatalf("attempt %d: no topic created", i)
 		}
+	}
+	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("session read: %v", err)
+	}
+	if len(res.Topics) != len(texts) {
+		t.Fatalf("surface = %d topics, want %d", len(res.Topics), len(texts))
+	}
+	for _, tp := range res.Topics {
+		if len(tp.FusedKeywords) == 0 {
+			t.Errorf("long turn %s settled with no keywords", tp.ID)
+		}
+		if len(tp.L4Refs) != 2 {
+			t.Errorf("long turn %s lost its originals: %v", tp.ID, tp.L4Refs)
+		}
+	}
+}
+
+// TestExtractTurnKeywordsLongInput pins the capability contract directly: a
+// long turn pair must never surface an error, and must yield keywords.
+func TestExtractTurnKeywordsLongInput(t *testing.T) {
+	cfg := &internal.MemHopConfig{}
+	if err := testsupport.LoadLLMConfig(cfg); err != nil {
+		t.Skipf("LLM not configured: %v", err)
+	}
+	p := internal.New(cfg)
+	kw, err := llmops.ExtractTurnKeywords(context.Background(), p, longSessionText(t, 2), "收到")
+	if err != nil {
+		t.Fatalf("ExtractTurnKeywords: %v", err)
+	}
+	if len(kw) == 0 {
+		t.Fatal("long turn distilled to nothing")
 	}
 }

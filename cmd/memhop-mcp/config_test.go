@@ -18,10 +18,7 @@ func setLLMEnv(t *testing.T) {
 
 func TestLoadConfigRequired(t *testing.T) {
 	setLLMEnv(t)
-	cfg, err := loadConfig([]string{
-		"--db-dir", "/tmp/meh",
-		"--embed-model", "bge-m3",
-	})
+	cfg, err := loadConfig([]string{"--db-dir", "/tmp/meh"})
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
@@ -30,12 +27,6 @@ func TestLoadConfigRequired(t *testing.T) {
 	}
 	if cfg.Transport != "sse" {
 		t.Errorf("default transport = %q, want sse", cfg.Transport)
-	}
-	if cfg.Base.VectorDim != 1024 {
-		t.Errorf("default vector-dim = %d, want 1024", cfg.Base.VectorDim)
-	}
-	if cfg.Base.EmbedModel != "bge-m3" {
-		t.Errorf("embed-model = %q, want bge-m3", cfg.Base.EmbedModel)
 	}
 	if cfg.Base.LLM.APIURL != "http://llm:9999/v1" || cfg.Base.LLM.APIKey != "test-key" || cfg.Base.LLM.Model != "test-model" {
 		t.Errorf("LLM config from env mismatch: %+v", cfg.Base.LLM)
@@ -49,11 +40,9 @@ func TestLoadConfigFlagsWinOverEnv(t *testing.T) {
 	setLLMEnv(t)
 	cfg, err := loadConfig([]string{
 		"--db-dir", "/tmp/meh",
-		"--embed-model", "bge-m3",
 		"--listen", "0.0.0.0:9000",
 		"--transport", "streamable-http",
 		"--tenants", "alice,bob",
-		"--vector-dim", "512",
 		"--llm-model", "flag-model",
 	})
 	if err != nil {
@@ -68,9 +57,6 @@ func TestLoadConfigFlagsWinOverEnv(t *testing.T) {
 	if len(cfg.Tenants) != 2 || cfg.Tenants[0] != "alice" || cfg.Tenants[1] != "bob" {
 		t.Errorf("tenants = %v, want [alice bob]", cfg.Tenants)
 	}
-	if cfg.Base.VectorDim != 512 {
-		t.Errorf("vector-dim = %d, want 512", cfg.Base.VectorDim)
-	}
 	if cfg.Base.LLM.Model != "flag-model" {
 		t.Errorf("llm-model = %q, want flag-model (flag wins)", cfg.Base.LLM.Model)
 	}
@@ -80,7 +66,7 @@ func TestLoadConfigEnvInt(t *testing.T) {
 	setLLMEnv(t)
 	t.Setenv("MEMHOP_LLM_TIMEOUT_SECS", "60")
 	t.Setenv("MEMHOP_LLM_MAX_OUTPUT_TOKENS", "4096")
-	cfg, err := loadConfig([]string{"--db-dir", "/tmp/meh", "--embed-model", "bge-m3"})
+	cfg, err := loadConfig([]string{"--db-dir", "/tmp/meh"})
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
@@ -96,12 +82,12 @@ func TestLoadConfigErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{"missing db-dir", []string{"--embed-model", "bge-m3"}, "--db-dir is required"},
-		{"missing embed-model", []string{"--db-dir", "/tmp/meh"}, "--embed-model is required"},
-		{"bad transport", []string{"--db-dir", "/tmp/meh", "--embed-model", "bge-m3", "--transport", "stdio"}, "--transport must be sse or streamable-http"},
-		{"bad vector-dim", []string{"--db-dir", "/tmp/meh", "--embed-model", "bge-m3", "--vector-dim", "0"}, "vector-dim must be in range"},
-		{"bad tenant", []string{"--db-dir", "/tmp/meh", "--embed-model", "bge-m3", "--tenants", "alice/../root"}, "invalid tenant id"},
-		{"positional args", []string{"--db-dir", "/tmp/meh", "--embed-model", "bge-m3", "extra"}, "unexpected positional arguments"},
+		{"missing db-dir", nil, "--db-dir is required"},
+		{"unknown encoder flag", []string{"--db-dir", "/tmp/meh", "--embed-model", "bge-m3"}, "flag provided but not defined"},
+		{"unknown vector-dim flag", []string{"--db-dir", "/tmp/meh", "--vector-dim", "512"}, "flag provided but not defined"},
+		{"bad transport", []string{"--db-dir", "/tmp/meh", "--transport", "stdio"}, "--transport must be sse or streamable-http"},
+		{"bad tenant", []string{"--db-dir", "/tmp/meh", "--tenants", "alice/../root"}, "invalid tenant id"},
+		{"positional args", []string{"--db-dir", "/tmp/meh", "extra"}, "unexpected positional arguments"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -120,7 +106,7 @@ func TestLoadConfigMissingLLMEnv(t *testing.T) {
 	t.Setenv("MEMHOP_LLM_API_URL", "")
 	t.Setenv("MEMHOP_LLM_API_KEY", "")
 	t.Setenv("MEMHOP_LLM_MODEL", "")
-	_, err := loadConfig([]string{"--db-dir", "/tmp/meh", "--embed-model", "bge-m3"})
+	_, err := loadConfig([]string{"--db-dir", "/tmp/meh"})
 	if err == nil || !strings.Contains(err.Error(), "MEMHOP_LLM_API_URL") {
 		t.Errorf("expected missing LLM env error, got %v", err)
 	}
@@ -129,7 +115,7 @@ func TestLoadConfigMissingLLMEnv(t *testing.T) {
 func TestLoadConfigEnvIntInvalid(t *testing.T) {
 	setLLMEnv(t)
 	t.Setenv("MEMHOP_LLM_TIMEOUT_SECS", "not-a-number")
-	_, err := loadConfig([]string{"--db-dir", "/tmp/meh", "--embed-model", "bge-m3"})
+	_, err := loadConfig([]string{"--db-dir", "/tmp/meh"})
 	if err == nil || !strings.Contains(err.Error(), "MEMHOP_LLM_TIMEOUT_SECS") {
 		t.Errorf("expected env int error, got %v", err)
 	}

@@ -13,7 +13,7 @@ import (
 
 func newL3TestDB(t *testing.T) *DB {
 	t.Helper()
-	engine, err := core.Create(filepath.Join(t.TempDir(), "l3.meh"), 16)
+	engine, err := core.Create(filepath.Join(t.TempDir(), "l3.meh"))
 	if err != nil {
 		t.Fatal(err)
 	}

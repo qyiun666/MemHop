@@ -6,18 +6,17 @@
 package api
 
 import (
-	"context"
 	"testing"
 )
 
 func TestSurfaceL4Archive(t *testing.T) {
 	db := openSurfaceDB(t)
-	ctx := context.Background()
-	res, err := db.Search(ctx, SearchQuery{Text: "archive me", AutoCreate: true, Timestamp: 1_700_000_030_000})
+	res, err := db.Search(SearchQuery{SceneName: "archive session"})
 	if err != nil {
 		t.Fatalf("seed search: %v", err)
 	}
-	if err := db.Update(res.NewTopicID, "the archived reply", 1_700_000_030_500); err != nil {
+	topicID, err := db.Update(turnUpdate(res.Scene.SceneID, "archive me", "the archived reply"))
+	if err != nil {
 		t.Fatalf("seed update: %v", err)
 	}
 	byKeyword, err := db.SearchL4(L4Query{Keyword: "archived"})
@@ -26,6 +25,13 @@ func TestSurfaceL4Archive(t *testing.T) {
 	}
 	if len(byKeyword) == 0 {
 		t.Fatal("keyword search should find the reply archive")
+	}
+	byTopic, err := db.SearchL4(L4Query{Start: 1, End: 2_000_000_000_000, TopicID: &topicID})
+	if err != nil {
+		t.Fatalf("search l4 by topic: %v", err)
+	}
+	if len(byTopic) != 2 {
+		t.Fatalf("topic archives = %d, want the turn's two originals", len(byTopic))
 	}
 	if _, err := db.SearchL4(L4Query{}); err != nil {
 		t.Fatalf("empty l4 query must return empty set: %v", err)

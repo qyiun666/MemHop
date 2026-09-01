@@ -13,7 +13,7 @@ import (
 // on Open instead of the deleted record silently resurrecting.
 func TestTombstoneReplayAfterCrash(t *testing.T) {
 	p := tempPath(t, "tomb")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestTombstoneReplayAfterCrash(t *testing.T) {
 // A delete after a checkpoint must override the snapshotted index entry.
 func TestTombstoneReplayOverridesSnapshot(t *testing.T) {
 	p := tempPath(t, "tombsnap")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestTombstoneReplayOverridesSnapshot(t *testing.T) {
 // A torn tail frame (crash mid-append) must be truncated on Open, not fail it.
 func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 	p := tempPath(t, "torn")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,20 +131,20 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 // orphan blob at the tail; Open must recover instead of failing forever.
 func TestOrphanSnapshotBlobTruncatedOnOpen(t *testing.T) {
 	p := tempPath(t, "orphan")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one"))
 	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("two"))
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.CloseNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate the crash window: snapshot blob synced, header never flipped.
-	blob, err := BuildSnapshot(map[uint64]map[uint64]uint64{DefaultAgentID: {1: DataStart}}, &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}})
+	blob, err := BuildSnapshot(map[uint64]map[uint64]uint64{DefaultAgentID: {1: DataStart}}, &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestOrphanSnapshotBlobTruncatedOnOpen(t *testing.T) {
 	}
 	// The committed snapshot (s1) must still be the active one.
 	sd := eng2.SnapshotData()
-	if sd == nil || string(sd.SparseByAgent[DefaultAgentID]) != "s1" {
+	if sd == nil || string(sd.BlobByAgent[DefaultAgentID]) != "s1" {
 		t.Fatalf("active snapshot wrong: %+v", sd)
 	}
 }
@@ -168,7 +168,7 @@ func TestOrphanSnapshotBlobTruncatedOnOpen(t *testing.T) {
 // One agent binds one database: a second instance must be rejected.
 func TestSecondInstanceRejectedByLock(t *testing.T) {
 	p := tempPath(t, "lock")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -12,59 +12,56 @@ import (
 	"testing"
 	"time"
 
+	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
-// TestE2ESearchUpdateDream exercises the full memory loop against real
-// services: Search (auto-create) → Update (agent reply) → Search again →
-// Dream (consolidation) → L4 archive readback.
-func TestE2ESearchUpdateDream(t *testing.T) {
+// TestE2EUpdateDream exercises the full memory loop against a real LLM:
+// open the host session → settle one turn → read the session back → L4
+// archive readback → Dream on that session → readable afterwards.
+func TestE2EUpdateDream(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
 	ts := time.Now().UnixMilli()
 	userText := "我喜欢在周末去海边跑步，尤其是清晨人少的时候"
-
-	// 1. Search with AutoCreate: no match expected on a fresh DB, so this
-	//    creates a new scene + topic and returns it.
-	res, err := db.Search(context.Background(), internal.SearchQuery{
-		Text:       userText,
-		AutoCreate: true,
-		Timestamp:  ts,
-	})
-	if err != nil {
-		t.Fatalf("Search(AutoCreate): %v", err)
-	}
-	if len(res.Contexts) == 0 {
-		t.Fatal("Search(AutoCreate) returned no contexts")
-	}
-	if res.NewTopicID == "" {
-		t.Fatal("Search(AutoCreate) should set NewTopicID")
-	}
-	topicID := res.Contexts[0].ID
-	t.Logf("created topic ID=%s NewTopicID=%s", topicID, res.NewTopicID)
-
-	// 2. Update: append the agent reply to the topic.
 	agentText := "海边晨跑很不错，空气清新还能看日出，记得做好防晒"
-	if err := db.Update(topicID, agentText, ts+1000); err != nil {
-		t.Fatalf("Update(topicID=%s) failed: %v", topicID, err)
+
+	// 1. A fresh session has no surface yet.
+	sceneID, err := db.OpenSession("e2e running")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("Search(fresh): %v", err)
+	}
+	if len(res.Topics) != 0 {
+		t.Fatalf("fresh session returned %d topics", len(res.Topics))
 	}
 
-	// 3. Search again (normal route): should hit the existing scene.
-	res2, err := db.Search(context.Background(), internal.SearchQuery{
-		Text:      "周末海边跑步",
-		Timestamp: ts + 2000,
+	// 2. Update settles the turn: one topic, both originals, distilled keywords.
+	topicID, err := db.Update(memhop.TurnUpdate{
+		SceneID: sceneID, UserText: userText, UserTS: ts, AgentText: agentText, AgentTS: ts + 1000,
 	})
 	if err != nil {
-		t.Fatalf("Search(normal): %v", err)
+		t.Fatalf("Update: %v", err)
 	}
-	if len(res2.Contexts) == 0 {
-		t.Fatal("Search(normal) returned no contexts after data written")
+
+	// 3. The session read hands the turn back.
+	res2, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("Search(session): %v", err)
 	}
-	t.Logf("normal search hit %d contexts, %d associated",
-		len(res2.Contexts), len(res2.AssociatedContexts))
+	if len(res2.Topics) != 1 || res2.Topics[0].ID != topicID {
+		t.Fatalf("surface = %+v, want the one turn %s", res2.Topics, topicID)
+	}
+	if len(res2.Topics[0].FusedKeywords) == 0 {
+		t.Fatal("the turn topic carries no keywords")
+	}
+	t.Logf("topic %s keywords=%v", topicID, res2.Topics[0].FusedKeywords)
 
 	// 4. L4 archive readback: TopicID is an overlay filter, so combine it with
 	//    a primary mode (time range) to select the topic's archives.
@@ -76,13 +73,17 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchL4: %v", err)
 	}
-	if len(archives) < 2 {
-		t.Fatalf("expected >=2 archives for topic, got %d", len(archives))
+	if len(archives) != 2 {
+		t.Fatalf("expected 2 archives for the turn, got %d", len(archives))
 	}
-	t.Logf("L4 archives for topic: %d", len(archives))
+	for _, a := range archives {
+		if a.Content != userText && a.Content != agentText {
+			t.Errorf("archive content is not an original: %.40s", a.Content)
+		}
+	}
 
-	// 5. Dream: consolidate active scenes (L2 compression + L1 rebuild/decay).
-	rep, err := db.Dream(context.Background(), "")
+	// 5. Dream on this session (L2 compression + L1 rebuild/decay).
+	rep, err := db.Dream(context.Background(), sceneID)
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
@@ -91,15 +92,12 @@ func TestE2ESearchUpdateDream(t *testing.T) {
 	}
 	t.Logf("dream report: consolidated=%d compressed=%d stages=%d", rep.ConsolidatedScenes, rep.L2TopicsCompressed, len(rep.Stages))
 
-	// 6. After dream the DB must still be readable.
-	res3, err := db.Search(context.Background(), internal.SearchQuery{
-		Text:      "海边",
-		Timestamp: ts + 3000,
-	})
+	// 6. After Dream the session must still read back.
+	res3, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
 		t.Fatalf("Search after Dream: %v", err)
 	}
-	t.Logf("post-dream search returned %d contexts", len(res3.Contexts))
+	t.Logf("post-dream session has %d surface topic(s)", len(res3.Topics))
 }
 
 // TestE2ECapability covers L5 capability import (path) / query / delete

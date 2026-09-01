@@ -20,14 +20,14 @@
 </p>
 
 <p align="center">
-  <strong>当前版本：v1.4.2 · 最新稳定 tag：v1.4.2</strong>
+  <strong>当前版本：v1.5.0 · 最新稳定 tag：v1.5.0</strong>
 </p>
 
 ---
 
 MemHop 是一个面向 AI Agent / 大模型（LLM）应用的**嵌入式长期记忆数据库**，纯 Go 实现。它不是一个向量数据库——它是以人脑知识组织方式为蓝本的记忆系统：具备身份认同、情景回忆、语义压缩、知识图谱、归档存储和结晶化技能。一个 Agent，一个 `.meh` 文件，零基础设施。
 
-MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh` 文件，文件级排他锁保证同一文件同时只有一个实例（第二次 `Open` 直接报错）。支持 **Linux、macOS、Windows** 全平台，无 cgo，除嵌入/LLM 接口外无任何外部服务。
+MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh` 文件，文件级排他锁保证同一文件同时只有一个实例（第二次 `Open` 直接报错）。支持 **Linux、macOS、Windows** 全平台，无 cgo，除 LLM 接口外无任何外部服务。
 
 作为 [MeowAgent](https://github.com/meowagent/meowagent)（即将开源）的大脑记忆模块，MemHop 以内嵌器官而非独立服务的形式运行。无需启动服务器，无需管理配置——打开文件，Agent 便拥有记忆。
 
@@ -36,16 +36,15 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 ## 核心特性
 
 - **七层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 轨迹，配合 Dream 巩固管线
-- **三通道 RRF 检索** — BM25（gse CJK 分词）+ f32 向量 + 实体/词项模糊匹配（实体索引由已索引 topic 词项自动灌入），通过 Reciprocal Rank Fusion（k=60）融合
-- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0009`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。**与 `0x0008`（及更早）的 `.meh` 数据文件不兼容**——Open 时显式拒绝，无迁移路径
-- **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（索引、活跃场景、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行
-- **L1 场景超图 + 扩散激活** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）；Search 联想从命中场景沿图扩散激活（每跳 × 边权 × 衰减系数），返回 Top 关联场景的话题作为 `AssociatedContexts`——真正的跨场景联想记忆，边权由 Dream 管线衰减剪枝
-- **Dream 巩固管线** — 作用于 L0–L2 及 L6 保留期清理：L2 压缩 → 索引重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）→ L6 清理（自动丢弃 7 天前轨迹事件）；返回逐阶段 `DreamReport`
+- **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 按场景 id 直取该会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），`Update` 一次沉淀整轮（用户原文 + Agent 原文 + 双时间戳 → 一次提炼出话题关键词），话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
+- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0009`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。**与 `0x0008`（及更早）的 `.meh` 数据文件不兼容**——Open 时显式拒绝，无迁移路径。v1.5.0 的话题单轨化不 bump 格式版本：旧库的 `user_keywords`/`agent_keywords` 在解码点归一进 `fused_keywords`
+- **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（话题缓存、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行
+- **L1 场景超图** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）并按时间衰减剪枝；查询期扩散联想已随检索子系统退役，L1 当前由 Dream 维护、供显式图查询与后续关联消费
+- **Dream 巩固管线** — 作用于 L0–L2 及 L6 保留期清理：L2 压缩 → L2Meta 缓存重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）→ L6 清理（自动丢弃 7 天前轨迹事件）；某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold` 时由 `Update` 后台调度该场景巩固，返回逐阶段 `DreamReport`
 - **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related），CRUD、关键词/类型查询与 BFS 子图
-- **设计层面单实例** — 一个 Agent = 一个 `.meh` 文件，全平台文件排他锁强制（linux/darwin/windows）
-- **极简依赖、可内嵌** — 5 个直接 Go 依赖（xxhash、gse、go-openai、go-sdk、golang.org/x/sys）；Ollama 走原生 HTTP API，不引入 Ollama SDK，`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将全部公开 API 以 31 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录）
-- **单 Agent 单文件** — 默认一个 Agent = 一个 `.meh` 文件，无服务进程、无后台守护；用 `OpenMulti` 可选切换到多 agent 共享
+- **设计层面单实例** — 一个 `.meh` 文件只有一个持有者：全平台文件排他锁强制（linux/darwin/windows），第二次 `Open` 直接失败；内嵌形态无服务进程、无后台守护
+- **极简依赖、可内嵌** — 5 个直接 Go 依赖（xxhash、gse、go-openai、go-sdk、golang.org/x/sys）；gse 只剩一个读者——关键词提炼失败时的启发式分词兜底；**引擎不再联系任何 embedding / 向量服务**，配置里也没有维度要声明，`sync.RWMutex` + `atomic.Pointer`，零基础设施
+- **MCP Server** — `cmd/memhop-mcp` 将 42 个公开会话方法中的 30 个以 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录）。刻意只留在 Go 侧：L6 计划面（`PlanAppend`/`PlanCommit`/`PlanState`/`PlanReplace`/`SyncPlanTree`/`ListPlans`）、记忆纠错（`DeleteTopic`/`DeleteScene`）、轮内 `AppendL4Message`/`RefineTopicKeywords`、`SetSceneL3ID`、`ListScenesByL3`、`DistillL0`——这些要由持有会话状态的宿主来调
 
 ## 快速开始
 
@@ -63,11 +62,8 @@ import (
 )
 
 dbm, err := memhop.OpenMulti(&memhop.MemHopConfig{
-    DBPath:      "agent.meh",
-    VectorDim:   1024,
-    EncoderAddr: "http://127.0.0.1:11434",
-    EmbedModel:  "qllama/bge-m3:q4_k_m",
-    LLM: memhop.LlmConfig{ // 必填：Open 时校验
+    DBPath: "agent.meh", // 整个数据库就是这一个文件；无需服务，也不声明维度
+    LLM: memhop.LlmConfig{ // 必填：Open 时校验（Update 的一轮提炼用它）
         APIURL: "https://api.openai.com/v1",
         APIKey: os.Getenv("OPENAI_API_KEY"),
         Model:  "gpt-4o-mini",
@@ -90,41 +86,54 @@ if err != nil {
     log.Fatal(err)
 }
 
-// 检索 —— 三条路由：AutoCreate（跳过检索，直建新场景+话题）、
-// DirectedL2ID（定向写入指定场景）、默认三通道检索。
-// Timestamp 必填：消息的 Unix 毫秒时间戳；ctx 可取消 LLM 关键词提取、
-// 编码调用与内部触发的 Dream。
-res, err := sess.Search(ctx, memhop.SearchQuery{
-    Text:      "昨天我们讨论了什么？",
-    Timestamp: time.Now().UnixMilli(),
+// 读记忆 = 读一个场景（场景就是宿主的一个会话）。
+// SceneID 为空 → 库新建场景并返回其 id（L3ID 可选：挂到某个 L3 项目域）；
+// SceneID 非空 → 该场景必须已存在，否则 ErrNotFound。
+// 纯内存读：不调 LLM、不做向量编码、不打分。
+res, err := sess.Search(memhop.SearchQuery{SceneName: "chat-42"})
+if err != nil {
+    log.Fatal(err)
+}
+sceneID := res.Scene.SceneID
+for _, topic := range res.Topics { // 该会话的 depth-1 话题集 = 本轮上下文
+    _ = topic.FusedKeywords
+}
+
+// 一轮结束：整轮一次沉淀（用户原文 + Agent 原文 + 各自时间戳），
+// 库内一次提炼出该轮话题的关键词，返回新话题 id。
+topicID, err := sess.Update(memhop.TurnUpdate{
+    SceneID:   sceneID,
+    UserText:  "昨天我们讨论了什么？",
+    UserTS:    time.Now().UnixMilli(),
+    AgentText: "Agent：...",
+    AgentTS:   time.Now().UnixMilli(),
 })
 if err != nil {
     log.Fatal(err)
 }
 
-// 将 Agent 回复追加到 Search 创建的话题。
-// NewTopicID 即 16 位 hex 字符串，所有响应 ID 原样回传。
-if err = sess.Update(res.NewTopicID, "Agent：...", time.Now().UnixMilli()); err != nil {
-    log.Fatal(err)
-}
+// 本轮的中间消息（工具输出等）可继续挂到同一话题，不调 LLM。
+_, err = sess.AppendL4Message(topicID, "工具输出：...", time.Now().UnixMilli(),
+    memhop.RoleAgent, memhop.ContentText)
 
-// Dream 巩固（作用于激活场景，L0-L2）；sceneID 传空串 = 全部激活场景。
-// 返回逐阶段 DreamReport 供观测。
+// Dream 巩固（L0-L2）；sceneID 传空串 = 遍历域内全部场景。
+// 场景话题数超阈值时 Update 已会自行后台调度，通常无需手动调用。
 report, err := sess.Dream(context.Background(), "")
 ```
 
 
+
 > **并发契约。** 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行，宿主无需自行排队。`*memhop.Session` 除绑定的域 ID 外不携带任何跨域状态。文件排他锁仍保证一个 `.meh` 文件只能被一个进程打开；`*MultiAgentDB` 的 `Lock()`/`Unlock()` 保留供宿主关键区使用。
 
-前置条件：Go 1.27+，Ollama（`ollama pull qllama/bge-m3:q4_k_m`），OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）
+前置条件：Go 1.27+，OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）；无需任何 embedding / 向量服务
 
 ### API 概览
 
 | 分组 | 方法 |
 |------|------|
-| 核心循环 | `Search(ctx, q)` · `Update` · `Dream(ctx)` · `Checkpoint` · `Close` |
+| 核心循环 | `Search(q)` · `Update(TurnUpdate) → topicID` · `Dream(ctx)` · `Checkpoint` · `Close` |
 | L0 画像 | `GetL0` · `UpdateL0` |
-| L2 上下文 | `ListScenes` · `ListScenesByL3` · `SetSceneL3ID` · `SceneContext` · `ActiveSceneIDs` · `MergeScenes` · `DeleteTopic` · `DeleteScene` · `RefineTopicKeywords(ctx, id)` |
+| L2 上下文 | `ListScenes` · `ListScenesByL3` · `SetSceneL3ID` · `SceneContext` · `MergeScenes` · `DeleteTopic` · `DeleteScene` · `RefineTopicKeywords(ctx, id)` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 归档 | `SearchL4` · `GetArchive` · `AppendL4Message` |
 | L5 能力 | `ImportCapability` · `GetCapability` · `UpdateCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` |
@@ -145,59 +154,56 @@ report, err := sess.Dream(context.Background(), "")
  L4    Archive         长期记忆             原始对话日志与历史记录
  L3    Knowledge       语义记忆             多源超图知识库
  L2    Context         工作记忆             压缩的话题结构（4 级压缩深度）
- L1    Engram          场景超图             场景节点 + 关键词重叠超边；Search 联想时激活在此扩散
+ L1    Engram          场景超图             场景节点 + 关键词重叠超边；由 Dream 维护，供显式图查询
  L0    Profile         身份认同             Agent 人格、偏好与语言习惯
 ```
 
 ### Dream 管线
 
-Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历的机制启发。Dream **仅作用于 L0–L2**（L3 蒸馏与 L5 结晶为设计外），共五个阶段：
+Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历的机制启发。Dream **仅作用于 L0–L2**（L3 蒸馏与 L5 结晶为设计外）加 L6 保留期清理，共五个阶段：
 
-1. **L2 压缩** — LLM 归组合并相关话题，每个激活场景一个 goroutine 并行处理，降级陈旧上下文
-2. **L1 重建** — 从 L2 同步场景节点，并在同一趟扫盘中重建检索索引、创建/刷新场景间关键词重叠超边
+1. **L2 压缩** — LLM 归组合并相关话题，每个目标场景一个 goroutine 并行处理，把被合并的话题下沉为 depth-1 融合节点（子节点降级为历史）
+2. **L1 重建** — 从 L2 同步场景节点，并在同一趟扫盘中重建 L2Meta 话题缓存、创建/刷新场景间关键词重叠超边
 3. **L1 衰减** — 衰减场景重要性与边权，剪枝弱节点
 4. **L0 画像** — 基于巩固后的记忆重建 Agent 画像
 5. **L0 蒸馏** — 蒸馏情绪/MBTI 模式（恒执行；L1 采样为空时自动跳过）
 
-`Dream(ctx) (bool, error)` 整个周期持有写锁，无激活场景时直接返回成功，并在阶段间响应 `ctx` 取消。
+触发方式：某场景的 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold`（默认 24）时，`Update` 在后台调度该场景的 Dream；宿主也可显式调用。`Dream(ctx, sceneID) (*DreamReport, error)` 整个周期持有域锁，`sceneID` 传空 = 遍历域内全部场景（话题数不足 `DreamCompressMinTopics` 的场景自动跳过），并在阶段间响应 `ctx` 取消。
 
-### 检索
+### 读取与写入路径
 
-`Search` 分发到三条路由之一：`AutoCreate`（跳过检索，直建新场景+话题）、`DirectedL2ID`（定向写入指定场景）、默认检索路由（可通过 `DirectedL3ID` 限定范围）。检索路由使用**三通道 RRF 融合**（BM25 + 向量 + 实体/词项模糊匹配）：
+**没有打分检索。** 场景 = 宿主的会话，所以引擎不再猜"这条消息属于哪个场景"：
 
-| 通道 | 方法 |
-|------|------|
-| BM25 | 通过倒排索引进行关键词匹配（gse CJK 分词） |
-| 向量 | 通过 Ollama HTTP embed 接口进行 f32 单精度语义相似度检索 |
-| 实体 | 对已索引 topic 词项做模糊匹配（BK-Tree，编辑距离 ≤ 2） |
+| 路径 | 做什么 | 代价 |
+|------|--------|------|
+| `Search(SearchQuery{SceneID, L3ID, SceneName})` | 空 `SceneID` → 新建场景并返回其 id；非空 → 返回该场景的 depth-1 话题集（按用户消息时间升序）+ L0 画像 | 纯内存读（L2Meta 缓存），零 LLM、零 embedding、零打分；唯一写是场景命中计数 |
+| `Update(TurnUpdate{...})` | 整轮一次沉淀：双原文各写一条 L4 档案，一次 LLM 提炼出该轮话题的 `FusedKeywords`，返回话题 id | 每轮恰好 1 次 LLM 调用；提炼失败即报错且零写入 |
+| `AppendL4Message` / `RefineTopicKeywords` | 本轮中间消息续写 / 按全部原文重算关键词 | 前者零 LLM；后者每次 1 次 LLM |
 
-融合后处理：关键词重合打分 → 活跃/最近场景的加性场景加分 → L1 扩散激活（场景超图上的跨场景联想召回） → L5 能力匹配 → L0 画像组装。
+宿主注入的上下文就是该场景 depth-1 话题的关键词集合；要看某轮原文，按话题的 `L4Refs` 走 `GetArchive`/`SearchL4` 或 `SceneContext`。上下文规模由 Dream 保证有界（`Consolidate` 要求压缩后每场景话题数 ≤ 20）。
 
-
-`SearchResult` 返回 `Contexts`（命中场景深度≤1 的话题，每条携带 `L4Refs`）与 `AssociatedContexts`（扩散激活命中的关联场景话题）；宿主通过 `SceneContext` 或 `SearchL4` 拉取 L4 原文组装上下文。
-
-`Search` 创建 topic 时会同时匹配相关 L3 知识节点，并把图谱 ID 写入 `TopicSlot.L3Refs`；`DirectedL3ID` 就是基于这些引用做过滤。
+随检索一并移除的：三通道 RRF 打分、L1 扩散激活（`AssociatedContexts`）、话题向量质心与 embedding 依赖、`AutoCreate` / `DirectedL2ID` / `DirectedL3ID` 三条路由，以及话题级 `L3Refs`（L2↔L3 关系现只由场景锚点 `SceneSlot.L3ID` 承载）。
 ## 测试与基准
 
 MemHop 的测试套件只驱动公开 `api` 表面——即宿主（如 MeowAgent）实际发起的调用——并直接断言引擎自身的记忆结构，而非外部可答性 judge。
 
 ### 集成测试（`test/`，build tag `integration`）
 
-- **记忆循环**（`TestCoreCycleSearchUpdateDream`）：按真实宿主的调用方式灌入 N 轮 Search+Update，每几轮做一次**周期性 L0/L1/L4 一致性检查**——L0 画像可读、L1 场景图存在（`ListScenes`/`SceneContext`）、L4 保留原文逐字一致；Dream 巩固后场景必须仍暴露合并后的话题，且检索仍能浮出已存事实。
-- **关键词保真与持久**（`TestKeywordFidelity`/`TestKeywordPersistence`/`TestDreamCompressionFidelity`）：从对话话语中提取的关键词忠实承载其含义、在噪声轮次后仍可检索、并经受住 Dream 压缩的检验。
-- **API 契约**（`TestInterface*`）、**e2e 流程**（`TestE2E*`）、**关键词提取健壮性**（`TestExtractKeywordsLongInputRealLLM`/`TestSearchLongInputNeverFails`）。
+- **记忆循环**（`TestCoreCycleUpdateDream`）：按真实宿主的调用方式把 N 轮灌进一个场景，每几轮做一次**周期性 L0/L2/L4 一致性检查**——L0 画像可读、场景读回非空、L4 保留原文逐字一致；Dream 巩固后场景读回的 depth-1 话题集必须收缩，且事实仍能从 L4 原文取回。
+- **关键词保真与持久**（`TestKeywordFidelity`/`TestKeywordPersistence`/`TestDreamCompressionFidelity`）：一轮提炼出的关键词忠实承载该轮含义、在噪声轮次后仍在场景读回里、并经受住 Dream 压缩。
+- **API 契约**（`TestInterface*`：读路径零 LLM、写路径每轮恰好一次提炼、未知场景拒绝、检查点跨重启）、**e2e 流程**（`TestE2E*`）、**长输入健壮性**（`TestExtractKeywordsLongInputRealLLM`/`TestUpdateLongTurnNeverFails`）。
 
 ### 基准（`go test -tags integration -bench .`）
 
-所有基准都驱动真实 api 循环（真实编码器 + 真实 LLM，无外部 judge）：
+所有基准都驱动真实 api 循环（真实 LLM，无外部 judge）：
 
 | 基准 | 测量 |
 |------|------|
-| `BenchmarkMemoryLoop` | 稳态 Search+Update 记忆循环，含引擎**自动触发的 Dream**（场景 depth-1 上下文超过 30 话题阈值）与周期性 L0/L1 验证 |
-| `BenchmarkSearchAutoCreate` / `BenchmarkSearchRetrieve` | 首次写入 vs 检索式 Search 延迟 |
-| `BenchmarkUpdate` | 追加 agent 回复延迟 |
+| `BenchmarkMemoryLoop` | 稳态 Search+Update 记忆循环，含引擎**自动调度的 Dream**（场景 depth-1 话题数超过阈值）与周期性 L0/L2 验证 |
+| `BenchmarkUpdateTurn` | 一轮沉淀延迟（一次提炼 + 话题与两条 L4 写入） |
+| `BenchmarkSceneRead` / `BenchmarkSceneReadLatency` | 场景读回吞吐与延迟分布（min/p50/p95/max） |
+| `BenchmarkAppendL4` | 纯存储追加延迟（不调 LLM） |
 | `BenchmarkDreamConsolidation` | 完整 Dream 流水线延迟 |
-| `BenchmarkSearchLatency` | 检索延迟分布（min/p50/p95/max） |
 
 ### 为什么不跑外部数据集基准？
 
@@ -206,16 +212,18 @@ MemHop 的测试套件只驱动公开 `api` 表面——即宿主（如 MeowAgen
 ## 项目结构
 
 ```
-api/                         ← 公开门面：DB 句柄（open/search/update/dream/l0–l6）+ 多 agent 门面（openmulti/session/agents）+ 类型别名/构造器
-internal/                    ← 业务装配层：config / db / defaults / l0 / l2 / l3 / l3query /
-                               l4 / l5 / l6 / agents / agentctx / search / update / dream / scenefind / llm_client / llm_ops / encoder
-internal/repo/               ← 数据层：l0layer–l6layer + agentlayer（记录读写、向量存取）
-internal/repo/index/         ← 索引层：sparse（BM25）/ l1_reverse / l2meta / l3_index /
-                               entity / rebuild / tokenizer（gse）
+api/                         ← 公开门面：openmulti（入口 + 租户管理）/ session（唯一业务句柄，hex ID 面）
+                               / types / mapping / ids / errors / exports
+internal/                    ← 业务装配层：config / db / session / defaults / tuning /
+                               l0 / l2 / l3 / l3query / l4 / l5 / l6 / l6_plan / agents / agentctx /
+                               search / update / dream / plancache / llm_client / llm_ops / models / exports
+internal/repo/               ← 数据层：l0layer–l6layer + agentlayer（记录读写）
+internal/repo/index/         ← 索引层：l2meta（场景读回的唯一支撑）/ rebuild（单遍重建）/
+                               traj（L6 轨迹形状）/ tokenizer（gse，关键词兜底）
 internal/repo/core/          ← .meh 引擎：engine / frame / header / snapshot / reclaim /
                                record / model / mmap / filelock
-internal/common/             ← 最底层工具：bktree / cosine / enum / errors / hash /
-                               sliceutil / strutil / vec
+internal/common/             ← 最底层工具：enum / errors / hash /
+                               sliceutil / strutil / timeutil
 test/                         ← 集成测试（build tag：integration）
 benches/fixtures/             ← 基准数据集（locomo10、locomo_smoke、longmemeval_smoke）
 ```
@@ -227,10 +235,11 @@ benches/fixtures/             ← 基准数据集（locomo10、locomo_smoke、lo
 
 ### LLM 调用与成本模型
 
-- **热路径**（`Search` + `Update`）：每次各一次关键词提取小调用，输出上限 512 token。单次成本很低，主要感知是延迟。
-- **Dream**：每个达到 20 个 topic 的激活场景调用一次 L2 合并（激活场景集合受 `Capacity` 限制，默认 7），再加一次 L0 蒸馏（最多 200 个排序后的 L1 样本，每个样本最多 20 个关键词）。输出上限分别为 8192 / 2048 token。
+- **读路径**（`Search`）：**零 LLM、零 embedding**，只走 L2Meta 内存缓存。
+- **写路径**（`Update`）：每轮恰好一次关键词提炼（用户原文 + Agent 原文一起喂），输出上限 512 token 起、截断时逐级升预算，解析失败自降级为本地分词。
+- **Dream**：每次巩固对达到话题数下限（`DreamCompressMinTopics`，默认 20）的场景各调一次 L2 合并，再加一次 L0 蒸馏（最多 200 个排序后的 L1 样本，每个样本最多 20 个关键词）。输出上限分别为 8192 / 2048 token。
 - **Crystallize**：每次显式触发调用一次，按 session 轨迹输入。
-- 成本敏感时，给 `Config.LLM` 配一个快速小模型即可（本地 Ollama 模型或便宜 API 模型）；关键词提取不需要旗舰模型。
+- 成本敏感时，给 `Config.LLM` 配一个快速小模型即可（便宜 API 模型或本地兼容端点）；关键词提取不需要旗舰模型。
 
 ## 开发
 
@@ -238,15 +247,16 @@ benches/fixtures/             ← 基准数据集（locomo10、locomo_smoke、lo
 go build ./...                          # 构建
 go vet ./...                            # 静态分析
 go test ./internal/...                  # 单元测试（不依赖外部服务）
-go test -tags integration ./test/...    # 集成测试（需要 Ollama + LLM key）
+go test -tags integration ./test/...    # 集成测试（需要 LLM key）
 ```
 
-集成测试针对真实服务运行（Ollama 编码器 + OpenAI 兼容 LLM）。通过环境变量 `MEMHOP_TEST_LLM_KEY` / `MEMHOP_TEST_LLM_URL` / `MEMHOP_TEST_LLM_MODEL` 配置 LLM（仅设置 key 时默认使用 DeepSeek 接口），或通过 `test/testsupport/key_config.json` 配置。
+集成测试针对真实 LLM 运行（引擎侧不再需要任何 embedding 服务）。通过环境变量 `MEMHOP_TEST_LLM_KEY` / `MEMHOP_TEST_LLM_URL` / `MEMHOP_TEST_LLM_MODEL` 配置 LLM（仅设置 key 时默认使用 DeepSeek 接口），或通过 `test/testsupport/key_config.json` 配置。
 
 ## 版本历史
 
 | 版本 | 日期                 | 亮点 | 核心改动 |
 |------|----------------------|------|---------|
+| v1.5.0 | 2026-09-01 | L2 换轨：场景 = 宿主会话 | 1. **Search 重写为场景内直取**：入参只剩 `{scene_id, l3_id, scene_name}`，空 id = 新建场景，非空未知 id = `ErrNotFound`；返回 `{profile, profile_brief, scene, topics}`（该场景 depth-1 话题集），**删除** `contexts`/`associated_contexts`/`new_topic_id`/`auto_create`/`directed_l2_id`/`directed_l3_id` 与 `ctx` 参数——零 LLM、零 embedding、零打分<br>2. **Update 一次沉淀整轮**：入参 `TurnUpdate{scene_id, user_text, user_ts, agent_text, agent_ts}`，一次 LLM 提炼出该轮关键词并返回话题 id；提炼排在所有写入之前，失败零留痕<br>3. **话题单轨**：删除 `user_keywords`/`agent_keywords`/`centroid_page_ref`/`l3_refs`，只留 `fused_keywords`；Dream 压缩、L1 超边、宿主注入共用同一轨，不设摘要字段（原文在 L4）<br>4. **场景 ID 归宿主**：`NewSceneSlot(sceneID, name)` 不再哈希名字，`CreateSceneL2WithID` 幂等复用；`ensureSceneForTopic` 的 `timestamp:文本` 命名场景路径消失<br>5. **检索子系统整体删除**：`internal/cap/scenefind`（BM25+向量+实体三通道、RRF、场景加分、L1 扩散）、话题质心、`RecVecCentroid`、`Encoder`/`HttpEncoder`/`OpenMultiWithEncoder` 与 encoder 配置全部移除——**引擎不再联系任何 embedding 服务**；agent 级 BM25 失去读者，不再写入与落快照（失去读者的 BM25 / 实体模糊 / L3 索引岛一并删除——L3 节点查询本就是记录扫描）<br>6. **巩固触发改轴**：`activeScenes`/`Capacity` 窗口与 `ActiveSceneIDs`/`HasActiveScenes` 删除，`Update` 在场景 depth-1 话题数超 `SceneDreamTopicThreshold`（默认 24）时后台调度该场景 Dream；`Dream(ctx,"")` 遍历域内全部场景<br>7. `RefineTopicKeywords` 去掉幂等守卫，改为按 `L4Refs` 全量原文无条件重算<br>8. **不 bump 格式版本**：`TopicSlot.UnmarshalJSON` 在解码点把旧库两轨归一进 `fused_keywords`，老 `.meh` 直接打开不丢词<br>9. 轮次话题 ID 走 `"turn:"` 命名空间（与 Dream 融合节点分域）；删除零调用的 `ComputeTopicIDForText` 与死字段 `SceneNode.VectorPageRef`<br>10. 场景归并不再发生于 Dream（会删掉宿主正持有的 sceneID），`MergeScenes` 保留为显式接口；MCP `search`/`update` 入参换轨、`status` 改报 `scene_count`、删除 `memhop_scene_active_list`（31 → 30），DSH 插件循环与面板同步适配 |
 | v1.4.2 | 2026-08-31 | L6 计划树 + L2 目录归属 | 1. L6 承载任务树：`TrajectorySlot.NodeType` 区分轮次事件与计划节点，节点 ID 由 `HashPlanNode(planID, nodePath)` 在 `plan:` 命名空间下稳定派生，事件经 `PlanNodeRef` 挂节点<br>2. 三形态 `PlanAppend` / `PlanCommit` / `PlanState`，另加 `PlanReplace`（重规划、保留 planID）、`SyncPlanTree`（整树快照对齐，不产生 `plan_step`）、`ListPlans`（重启恢复）<br>3. **Model A 显式折叠**：父节点仅由宿主显式 commit 为 done；每次 commit 后把已 done 子节点摘要按 `NodePath` 数值序自底向上汇总进父摘要，不覆盖宿主写的父摘要<br>4. `PlanTree.Roots` 是**森林**（顶层步骤各为一根；父记录缺失的节点提升为根而非丢弃）<br>5. L2 场景 → L3 目录域（N:1）：`SceneSlot.L3ID`、可选 `SearchQuery.L3ID` 前置筛选并在命中时回填、`ListScenesByL3`、`SetSceneL3ID(sceneID, l3ID, force)`（默认写一次，force 纠错、空值清除）<br>6. 域级 `planCache`，`PlanState`/`ListPlans`/rollup 不再每次全扫引擎<br>7. api 导出常量：`Role*`、`NodeType*`、数值 `Status*`（读侧）、字符串 `PlanStatus*` 与 `PlanStatus` 类型（写/查询侧）；新增第五态 `running`<br>8. 写入面强制权威语义：所有计划节点字段与 `Seq` 在写入时被覆盖，计划事件 `EventType` 受白名单约束<br>9. 加固：`0000000000000000` 为裸事件 `PlanID` 保留值，五个计划入口一律拒绝（此前 `PlanReplace` 传全零会删掉全域轨迹事件）；Dream 的计划豁免收窄为「7 天窗口内仍活动」，被放弃的计划不再无限堆积<br>10. 无格式变更（仍 `0x0009`，字段为 JSON 增量，v1.4.1 文件直接打开），MCP 工具集不变（31）——计划面本期**仅 Go module 可用** |
 | v1.4.1 | 2026-08-28 | 类型契约清理：hex 出参 DTO、L0 画像 v2、L3 超图激活 | 1. api 出参 DTO 改为真实 struct——所有 ID 字段以 16 位 hex 字符串出参（含 `SearchResult.NewTopicID` / `AppendL4Message` 返回值 / `AgentID()`），新增 `api.FormatID` / `api.ParseID`<br>2. L0 画像 v2（`FormatVersion 0x0009`）：字段所有权（Name/Role/Preferences 宿主独占，Personality 宿主播种 + Dream 蒸馏演化）、typed `EmotionState`/`MBTI` 蒸馏信号、删除死字段 lexicon/style_traits<br>3. 库内零 hex 往返（repo 层 ID 入参 uint64 化，质心哈希 `HashBytes` 直算）<br>4. L3 导入新增 `source_ref`（位置引用）与 `related`（同图内按标题建超边，两阶段解析支持前向引用、重导入幂等；结果含 `edges_created`，导出 `L3Relation` 类型）<br>5. `AppendL4Message` 新增 `contentType`（导出 Content* 七常量；text/document/code 存原文，image/audio/video 存路径或 URI，mime/size/sha256 走 Metadata）、`L4Query.Type` 过滤与 MCP `archive_search` 的 `content_type` 参数<br>6. L6 每轮一条轨迹：SessionID 改为轮键（search 开轮、update 收轮），事件带 `TopicID` 支撑跨轮结晶，对外面收敛为追加+查询（删除 `TrajectoryStats` / `DeleteTrajectory` / `PruneTrajectory`，33 → 31 工具），Dream 新增 `l6_prune` 自动清理 7 天前事件<br>7. distill/consolidate LLM 解析失败补一次格式约束重试<br>8. **破坏性变更**：`FormatVersion != 0x0009`（即 ≤ 0x0008）的 `.meh` 文件在 Open 时被拒绝，无迁移 |
 | v1.4.0 | 2026-08-26 | 多 agent 记忆数据库 | 1. 一个 `.meh` 文件承载多个完全隔离的 agent 域：记录帧新增 `agent_id`（26 字节帧头），引擎索引与快照（0x02）按 agent 分域，租户注册记录把名字映射到稳定的 crypto/rand agentID<br>2. `api.OpenMulti` / `AgentSession` / `CreateAgent` / `ListAgents` / `DeleteAgent`；`Open` 对单 agent 宿主零改动（默认域）<br>3. 业务层重构为按 agent 的 `agentContext` + 域级锁（同 agent 串行、跨 agent 并行）、空闲域内存回收与域化 Dream 管线<br>4. L7 轨迹层改编号为 **L6**（认知层收敛为 L0–L6）<br>5. MCP registry 共享单个 `MultiAgentDB`（单文件 `<db-dir>/memhop.meh`），`os.Root` 锚定 db 目录<br>6. 删除重复结构体/转换层（`topicSlotJSON`、`topicToL2Meta`、单元素切片包装）<br>7. Go 1.23–1.26 标准库现代化（`iter.Seq2`、`unique.Make`、`os.Root`）<br>8. 零新增依赖<br>9. **破坏性变更**：`FormatVersion <= 0x0007` 的旧 `.meh` 文件在 Open 时被拒绝，无迁移；`api.DB` 上提升自 `internal.DB` 的方法新增 `agentID` 参数（门面方法签名不变），`Lock()` 对已关闭的 DB 会 panic |

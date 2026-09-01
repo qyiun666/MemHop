@@ -16,7 +16,7 @@ import (
 
 func tempEngine(t *testing.T) *core.StorageEngine {
 	t.Helper()
-	eng, err := core.Create(filepath.Join(t.TempDir(), "test.meh"), 128)
+	eng, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
 	if err != nil {
 		t.Fatalf("create engine: %v", err)
 	}
@@ -24,8 +24,16 @@ func tempEngine(t *testing.T) *core.StorageEngine {
 	return eng
 }
 
-// TestSyncL1NodesFromL2 covers node creation, idempotent no-op, topic-set
-// update and per-scene isolation.
+// mustCreateTurn writes one depth-1 turn topic under sceneID and returns its
+// id; the agent timestamp is derived so each call stays collision-free.
+func mustCreateTurn(t *testing.T, engine *core.StorageEngine, sceneID uint64, kws []string, userTS int64) uint64 {
+	t.Helper()
+	id := core.ComputeTurnTopicID(sceneID, userTS, userTS+1)
+	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, id, kws, userTS, userTS+1) {
+		t.Fatalf("create topic %v", kws)
+	}
+	return id
+}
 
 // TestSyncL1NodesFromL2 covers node creation, idempotent no-op, topic-set
 // update and per-scene isolation.
@@ -33,12 +41,8 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	engine := tempEngine(t)
 	sceneA := common.HashID("sceneA")
 
-	if !CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k1"}, 1000, 0) {
-		t.Fatal("create topic 1")
-	}
-	if !CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k2"}, 2000, 0) {
-		t.Fatal("create topic 2")
-	}
+	mustCreateTurn(t, engine, sceneA, []string{"k1"}, 1000)
+	mustCreateTurn(t, engine, sceneA, []string{"k2"}, 2000)
 	changed, err := SyncL1NodesFromL2(engine, core.DefaultAgentID)
 	if err != nil {
 		t.Fatalf("sync: %v", err)
@@ -71,9 +75,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	}
 
 	// A new topic in the scene updates the node in place.
-	if !CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k3"}, 3000, 0) {
-		t.Fatal("create topic 3")
-	}
+	mustCreateTurn(t, engine, sceneA, []string{"k3"}, 3000)
 	changed, err = SyncL1NodesFromL2(engine, core.DefaultAgentID)
 	if err != nil {
 		t.Fatalf("sync #3: %v", err)
@@ -91,9 +93,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 
 	// A second scene gets its own node.
 	sceneB := common.HashID("sceneB")
-	if !CreateTopicL2(engine, core.DefaultAgentID, sceneB, []string{"kb"}, 1000, 0) {
-		t.Fatal("create topic in scene B")
-	}
+	mustCreateTurn(t, engine, sceneB, []string{"kb"}, 1000)
 	changed, err = SyncL1NodesFromL2(engine, core.DefaultAgentID)
 	if err != nil {
 		t.Fatalf("sync #4: %v", err)
@@ -112,12 +112,12 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 func TestSyncL1NodesFromL2SkipsCompressed(t *testing.T) {
 	engine := tempEngine(t)
 	sceneA := common.HashID("sceneA")
-	CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"k1"}, 1000, 0)
+	mustCreateTurn(t, engine, sceneA, []string{"k1"}, 1000)
 
 	parentID := core.ComputeTopicID(sceneA, 1000, 2000)
 	deep := core.TopicSlot{
 		ID: core.ComputeTopicID(sceneA, 1000, 2000), SceneID: sceneA,
-		ParentID: &parentID, Depth: 3, UserKeywords: []string{"deep"},
+		ParentID: &parentID, Depth: 3, FusedKeywords: []string{"deep"},
 		UserTimestamp: 1000, AgentTimestamp: 2000,
 	}
 	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, deep.ID, &deep); err != nil {

@@ -22,7 +22,7 @@ func testAgentHex(s string) string {
 func TestSurfaceMultiAgent(t *testing.T) {
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
-	m, err := OpenMultiWithEncoder(surfaceConfig(t, llm.URL), &openTestEncoder{dim: 4})
+	m, err := OpenMulti(surfaceConfig(t, llm.URL))
 	if err != nil {
 		t.Fatalf("openmulti: %v", err)
 	}
@@ -58,11 +58,11 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	if sess.AgentID() != alice {
 		t.Fatalf("session id mismatch: %s", sess.AgentID())
 	}
-	res, err := sess.Search(context.Background(), SearchQuery{Text: "alice private memory", AutoCreate: true, Timestamp: 1_700_000_050_000})
+	res, err := sess.Search(SearchQuery{SceneName: "alice session"})
 	if err != nil {
 		t.Fatalf("alice search: %v", err)
 	}
-	if err := sess.Update(res.NewTopicID, "alice reply", 1_700_000_050_500); err != nil {
+	if _, err := sess.Update(turnUpdate(res.Scene.SceneID, "alice private memory", "alice reply")); err != nil {
 		t.Fatalf("alice update: %v", err)
 	}
 	// Cross-agent isolation: bob sees none of alice's scenes.
@@ -78,7 +78,7 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	if len(aliceScenes) == 0 {
 		t.Fatal("alice must see her own scene")
 	}
-	// Empty-scene dream succeeds via the session handle.
+	// A domain with no scenes still answers a dream cleanly.
 	if rep, err := bobSess.Dream(context.Background(), ""); err != nil || rep == nil {
 		t.Fatalf("bob empty dream: rep=%v err=%v", rep, err)
 	}
@@ -104,12 +104,23 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	}
 }
 
+// turnUpdate builds one finished turn inside the given scene.
+func turnUpdate(sceneID, userText, agentText string) TurnUpdate {
+	return TurnUpdate{
+		SceneID:   sceneID,
+		UserText:  userText,
+		UserTS:    1_700_000_060_000,
+		AgentText: agentText,
+		AgentTS:   1_700_000_060_500,
+	}
+}
+
 // TestSurfaceSessionMethods exercises the full Session surface of the
 // single-agent DB surface so the per-agent handle is covered end to end.
 func TestSurfaceSessionMethods(t *testing.T) {
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
-	m, err := OpenMultiWithEncoder(surfaceConfig(t, llm.URL), &openTestEncoder{dim: 4})
+	m, err := OpenMulti(surfaceConfig(t, llm.URL))
 	if err != nil {
 		t.Fatalf("openmulti: %v", err)
 	}
@@ -137,19 +148,24 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session getL0: %v", err)
 	}
 
-	res, err := s.Search(ctx, SearchQuery{Text: "session boot memory", AutoCreate: true, Timestamp: 1_700_000_060_000})
+	// Search opens the host session; Update settles one turn into it.
+	res, err := s.Search(SearchQuery{SceneName: "worker session"})
 	if err != nil {
 		t.Fatalf("session search: %v", err)
 	}
-	topicID := res.NewTopicID
-	if err := s.Update(topicID, "session reply", 1_700_000_060_500); err != nil {
+	sceneID := res.Scene.SceneID
+	topicID, err := s.Update(turnUpdate(sceneID, "session boot memory", "session reply"))
+	if err != nil {
 		t.Fatalf("session update: %v", err)
+	}
+	if !isHexID(topicID) {
+		t.Fatalf("update must return a hex topic id, got %q", topicID)
+	}
+	if _, err := s.AppendL4Message(topicID, "session extra", 1_700_000_060_600, 0, 0); err != nil {
+		t.Fatalf("session append: %v", err)
 	}
 	if err := s.RefineTopicKeywords(ctx, topicID); err != nil {
 		t.Fatalf("session refine: %v", err)
-	}
-	if _, err := s.AppendL4Message(topicID, "more", 1_700_000_060_600, 0, 0); err != nil {
-		t.Fatalf("session append: %v", err)
 	}
 	if _, err := s.SearchL4(L4Query{Keyword: "session"}); err != nil {
 		t.Fatalf("session searchL4: %v", err)
@@ -158,23 +174,25 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if err != nil || len(scenes) == 0 {
 		t.Fatalf("session listScenes: %d %v", len(scenes), err)
 	}
-	sceneID := scenes[0].SceneID
-	if ids := s.ActiveSceneIDs(); ids != nil {
-		for _, x := range ids {
-			if !isHexID(x) {
-				t.Fatalf("session active id not hex: %q", x)
-			}
-		}
-	}
 	if _, err := s.SceneContext(sceneID); err != nil {
 		t.Fatalf("session sceneContext: %v", err)
 	}
-	if !s.HasActiveScenes() {
-		t.Fatal("session should have an active scene after writes")
+	// The turn just written is what the host reads back for this session.
+	reread, err := s.Search(SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("session reread: %v", err)
 	}
-	// Second scene then merge + archive fetch to cover the remaining handles.
-	if _, err := s.Search(ctx, SearchQuery{Text: "second session scene", AutoCreate: true, Timestamp: 1_700_000_060_700}); err != nil {
+	if len(reread.Topics) != 1 || reread.Topics[0].ID != topicID {
+		t.Fatalf("scene surface = %+v, want the one turn", reread.Topics)
+	}
+
+	// Second session scene, then merge + archive fetch to cover the rest.
+	res2, err := s.Search(SearchQuery{SceneName: "second worker session"})
+	if err != nil {
 		t.Fatalf("session search2: %v", err)
+	}
+	if _, err := s.Update(turnUpdate(res2.Scene.SceneID, "second session scene", "second reply")); err != nil {
+		t.Fatalf("session update2: %v", err)
 	}
 	scenes, err = s.ListScenes()
 	if err != nil || len(scenes) < 2 {
@@ -189,11 +207,9 @@ func TestSurfaceSessionMethods(t *testing.T) {
 			t.Fatalf("session getArchive: %v", err)
 		}
 	}
-	if err := s.MergeScenes(scenes[0].SceneID, []string{scenes[1].SceneID}); err != nil {
+	if err := s.MergeScenes(sceneID, []string{res2.Scene.SceneID}); err != nil {
 		t.Fatalf("session mergeScenes: %v", err)
 	}
-	// Re-fetch the primary scene list after merge (secondary is gone).
-	sceneID = scenes[0].SceneID
 	// L3 knowledge via session.
 	if _, err := s.ImportL3([]L3ImportItem{{Title: "n1", Domain: "d", NodeType: "c", Content: "x", Keywords: []string{"k"}}}, L3ImportSkip); err != nil {
 		t.Fatalf("session importL3: %v", err)

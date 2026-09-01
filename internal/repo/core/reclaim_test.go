@@ -12,13 +12,13 @@ import (
 // to a single snapshot without losing any records.
 func TestCheckpointReclaim(t *testing.T) {
 	p := tempPath(t, "reclaim")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("first"))
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("second"))
-	snap := &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
+	snap := &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
 	// Consecutive checkpoints without writes pile up snapshots at the tail.
 	for i := range ReclaimMinSnapshots {
 		if err := eng.Checkpoint(snap); err != nil {
@@ -56,7 +56,7 @@ func TestCheckpointReclaim(t *testing.T) {
 			t.Errorf("record %d: got %q err=%v, want %q", id, data, err, want)
 		}
 	}
-	if sd := eng2.SnapshotData(); sd == nil || string(sd.SparseByAgent[DefaultAgentID]) != "sparse" {
+	if sd := eng2.SnapshotData(); sd == nil || string(sd.BlobByAgent[DefaultAgentID]) != "sparse" {
 		t.Fatalf("reclaimed snapshot lost: %+v", sd)
 	}
 }
@@ -65,12 +65,12 @@ func TestCheckpointReclaim(t *testing.T) {
 // without touching the file when the snapshot count is below the threshold.
 func TestCheckpointReclaimSkipsFewSnapshots(t *testing.T) {
 	p := tempPath(t, "reclaim_skip")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("first"))
-	snap := &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
+	snap := &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
 	for i := range ReclaimMinSnapshots - 1 {
 		if err := eng.Checkpoint(snap); err != nil {
 			t.Fatalf("checkpoint %d: %v", i, err)
@@ -107,12 +107,12 @@ func TestCheckpointReclaimSkipsFewSnapshots(t *testing.T) {
 // accumulate across checkpoint+write cycles.
 func TestTrimTailSnapshotOnWrite(t *testing.T) {
 	p := tempPath(t, "trim_tail")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("first"))
-	snap := &IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
+	snap := &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
 	if err := eng.Checkpoint(snap); err != nil {
 		t.Fatal(err)
 	}
@@ -152,13 +152,13 @@ func TestTrimTailSnapshotOnWrite(t *testing.T) {
 // deleted snapshot, and Open must fall back to a full scan.
 func TestOpenAfterReclaimTruncateWindow(t *testing.T) {
 	p := tempPath(t, "reclaim_window")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("first"))
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("second"))
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}); err != nil {
 		t.Fatal(err)
 	}
 	snapOff := int64(eng.activeHeaderRef().SnapshotOffset)
@@ -188,13 +188,13 @@ func TestOpenAfterReclaimTruncateWindow(t *testing.T) {
 // full scan and truncates the residue.
 func TestOpenFallsBackToFullScanOnCorruptSnapshot(t *testing.T) {
 	p := tempPath(t, "corrupt_snap")
-	eng, err := Create(p, 768)
+	eng, err := Create(p)
 	if err != nil {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("first"))
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 2, []byte("second"))
-	if err := eng.Checkpoint(&IndexSnapshotData{SparseByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}); err != nil {
+	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}); err != nil {
 		t.Fatal(err)
 	}
 	snapOff := int64(eng.activeHeaderRef().SnapshotOffset)

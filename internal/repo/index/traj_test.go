@@ -92,7 +92,7 @@ func TestTrajIndexRemoveSession(t *testing.T) {
 }
 
 func TestBuildTrajFromEngineRestoresTurns(t *testing.T) {
-	engine, err := core.Create(filepath.Join(t.TempDir(), "traj.meh"), 768)
+	engine, err := core.Create(filepath.Join(t.TempDir(), "traj.meh"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,18 +18,16 @@ func CodeOf(err error) Code { return internal.CodeOf(err) }
 
 // Error codes of the public contract.
 const (
-	ErrConfig            = internal.ErrConfig
-	ErrVectorDimMismatch = internal.ErrVectorDimMismatch
-	ErrInvalidQuery      = internal.ErrInvalidQuery
-	ErrNotFound          = internal.ErrNotFound
-	ErrAgentNotFound     = internal.ErrAgentNotFound
-	ErrIO                = internal.ErrIO
-	ErrClosed            = internal.ErrClosed
-	ErrInvalidMagic      = internal.ErrInvalidMagic
-	ErrCRCMismatch       = internal.ErrCRCMismatch
-	ErrCorruption        = internal.ErrCorruption
-	ErrSerialization     = internal.ErrSerialization
-	ErrDeserialization   = internal.ErrDeserialization
-	ErrEncoder           = internal.ErrEncoder
-	ErrLLM               = internal.ErrLLM
+	ErrConfig          = internal.ErrConfig
+	ErrInvalidQuery    = internal.ErrInvalidQuery
+	ErrNotFound        = internal.ErrNotFound
+	ErrAgentNotFound   = internal.ErrAgentNotFound
+	ErrIO              = internal.ErrIO
+	ErrClosed          = internal.ErrClosed
+	ErrInvalidMagic    = internal.ErrInvalidMagic
+	ErrCRCMismatch     = internal.ErrCRCMismatch
+	ErrCorruption      = internal.ErrCorruption
+	ErrSerialization   = internal.ErrSerialization
+	ErrDeserialization = internal.ErrDeserialization
+	ErrLLM             = internal.ErrLLM
 )

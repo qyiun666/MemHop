@@ -20,14 +20,14 @@
 </p>
 
 <p align="center">
-  <strong>Current: v1.4.2 · Latest stable tag: v1.4.2</strong>
+  <strong>Current: v1.5.0 · Latest stable tag: v1.5.0</strong>
 </p>
 
 ---
 
 MemHop is an **embedded long-term memory database for AI agents and LLM applications**, written in pure Go. It is not a vector database — it is a memory system modeled after how the human brain organizes knowledge, with identity, episodic recall, semantic compression, a knowledge graph, archival storage, and crystallized skills. One agent, one `.meh` file, zero infrastructure.
 
-MemHop is an **agent-dedicated** memory database: each agent binds to exactly one `.meh` file, and a file-level exclusive lock guarantees a single instance per file (a second `Open` fails fast). It runs on **Linux, macOS, and Windows** with no cgo and no external services beyond your embedding/LLM endpoints.
+MemHop is an **agent-dedicated** memory database: each agent binds to exactly one `.meh` file, and a file-level exclusive lock guarantees a single instance per file (a second `Open` fails fast). It runs on **Linux, macOS, and Windows** with no cgo and no external service beyond your LLM endpoint.
 
 Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent) (coming soon), MemHop works as an embedded organ rather than a standalone service. No server to run, no configuration to manage — just open a file and your agent has memory.
 
@@ -36,16 +36,15 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 ## Features
 
 - **Seven-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Crystal → L6 Trajectory, with Dream consolidation
-- **Three-Channel RRF Retrieval** — BM25 (gse CJK) + f32 vector + fuzzy entity/term matching (entity index auto-fed from indexed topic terms), fused via Reciprocal Rank Fusion (k=60)
+- **Scene-is-the-session memory loop** — one L2 scene = one host session. `Search` reads that scene's depth-1 topic set straight from the in-memory cache (zero LLM, zero embedding, no scoring), `Update` settles a whole finished turn (user text + agent text + both timestamps → one distillation into the topic's keywords). The scene's `FusedKeywords` set *is* the context a host injects
 - **V2 Storage** — `.meh` format (`FormatVersion=0x0009`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. Record frames carry an 8-byte `agent_id` (26-byte header) and the engine indexes every record by `(agent, idHash)` domain. **Not compatible with `0x0008` (or older) `.meh` data files** — they are rejected at Open with no migration path
-- **Multi-Agent Domains** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`: many agents share one `.meh` file with fully isolated per-agent domains (indices, active scenes, Dream pipelines, domain locks); same-agent operations serialize, different agents run in parallel; idle domains reclaim memory on access cadence (`Defaults.AgentIdleTTLMs`) while their records stay on disk. Multi-agent is the only mode — every operation runs through a per-domain session
-- **L1 Scene Hypergraph + Spreading Activation** — Dream creates co-occurrence hyperedges between scenes whose topic keyword sets overlap (Jaccard ≥ `L1EdgeMinSimilarity`); Search association walks the graph from the hit scene, propagating activation (× edge weight × dampening per hop) and returns the top associated scenes' topics as `AssociatedContexts` — real cross-scene associative recall ("联想记忆"), with edge weights decayed and pruned by the Dream pipeline
+- **Multi-Agent Domains** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`: many agents share one `.meh` file with fully isolated per-agent domains (caches, Dream pipelines, domain locks); same-agent operations serialize, different agents run in parallel; idle domains reclaim memory on access cadence (`Defaults.AgentIdleTTLMs`) while their records stay on disk. Multi-agent is the only mode — every operation runs through a per-domain session
+- **L1 Scene Hypergraph** — Dream creates co-occurrence hyperedges between scenes whose keyword sets overlap (Jaccard ≥ `L1EdgeMinSimilarity`) and decays/prunes them over time; query-time spreading activation retired with the scoring subsystem, so L1 is maintained by Dream for explicit graph queries and future association
 - **Dream Pipeline** — consolidation over L0–L2 plus L6 retention pruning: L2 compress → index rebuild → L1 nodes/hyperedges rebuild → L1 decay → L0 distill (emotion/MBTI) → L6 prune (drops trajectory events older than 7 days); returns a per-stage `DreamReport`
 - **L3 Knowledge Graph** — multiple independent hypergraphs with node import carrying positional source refs and relation edges, CRUD, keyword/type lookup and BFS subgraph queries
-- **Single Instance by Design** — one agent = one `.meh` file, enforced by a cross-platform file lock (linux/darwin/windows)
-- **Minimal & Embeddable** — 5 direct Go deps (xxhash, gse, go-openai, go-sdk, golang.org/x/sys); Ollama is accessed through its plain HTTP API, no Ollama SDK dependency, `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
-- **MCP Server** — `cmd/memhop-mcp` exposes the full public API as 31 MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts through one shared `.meh` file, each tenant isolated by URL path `/mcp/<tenant-id>` into its own agent domain (stable agentID per tenant name, `os.Root`-anchored db-dir)
-- **Single Agent, Single File** — one agent = one `.meh` file by default, no server process, no background daemon; opt into multi-agent sharing with `OpenMulti`
+- **Single Instance by Design** — one `.meh` file has exactly one owner: a cross-platform exclusive lock (linux/darwin/windows) makes a second open fail fast, and the embedded path runs with no server process and no background daemon
+- **Minimal & Embeddable** — 5 direct Go deps (xxhash, gse, go-openai, go-sdk, golang.org/x/sys); gse survives only as the tokeniser behind the keyword-extraction fallback — **the engine contacts no embedding / vector service at all**, and there is no dimension to declare in the config; `sync.RWMutex` + `atomic.Pointer`, zero infrastructure
+- **MCP Server** — `cmd/memhop-mcp` exposes 30 of the 42 public session methods as MCP tools over multi-tenant HTTP (SSE + streamable-http, official `modelcontextprotocol/go-sdk`): one process serves many hosts through one shared `.meh` file, each tenant isolated by URL path `/mcp/<tenant-id>` into its own agent domain (stable agentID per tenant name, `os.Root`-anchored db-dir). Go-only by design: the L6 plan surface (`PlanAppend`/`PlanCommit`/`PlanState`/`PlanReplace`/`SyncPlanTree`/`ListPlans`), memory correction (`DeleteTopic`/`DeleteScene`), turn-level `AppendL4Message`/`RefineTopicKeywords`, `SetSceneL3ID`, `ListScenesByL3` and `DistillL0` — those need a host that owns session state
 
 ## Quick Start
 
@@ -63,11 +62,8 @@ import (
 )
 
 dbm, err := memhop.OpenMulti(&memhop.MemHopConfig{
-    DBPath:      "agent.meh",
-    VectorDim:   1024,
-    EncoderAddr: "http://127.0.0.1:11434",
-    EmbedModel:  "qllama/bge-m3:q4_k_m",
-    LLM: memhop.LlmConfig{ // required: validated at Open
+    DBPath: "agent.meh", // the whole database; no server, no dimension to declare
+    LLM: memhop.LlmConfig{ // required, validated at Open (powers Update's distillation)
         APIURL: "https://api.openai.com/v1",
         APIKey: os.Getenv("OPENAI_API_KEY"),
         Model:  "gpt-4o-mini",
@@ -79,8 +75,8 @@ if err != nil {
 }
 defer dbm.Close()
 
-// One .meh file, one isolated domain per agent. CreateAgent returns a
-// stable 16-char hex agent id; Session binds every call to that domain.
+// One .meh file carries isolated domains. CreateAgent returns a stable
+// 16-char hex ID; Session binds every call to that domain.
 agentID, err := dbm.CreateAgent("my-agent")
 if err != nil {
     log.Fatal(err)
@@ -90,41 +86,56 @@ if err != nil {
     log.Fatal(err)
 }
 
-// Search — three routes: AutoCreate (skip retrieval, new scene+topic),
-// DirectedL2ID (append to a specific scene), or default three-channel retrieval.
-// Timestamp is required: Unix milliseconds of the message. ctx cancels LLM
-// keyword extraction, encoder calls and any internally triggered Dream.
-res, err := sess.Search(ctx, memhop.SearchQuery{
-    Text:      "What did we discuss?",
-    Timestamp: time.Now().UnixMilli(),
+// Read memory = read one scene (a scene IS a host session).
+// Empty SceneID → the library creates a scene and returns its id (L3ID
+// optionally anchors it to a project domain); a non-empty SceneID must
+// already exist, otherwise ErrNotFound. A pure in-memory read: no LLM,
+// no embedding, no scoring.
+res, err := sess.Search(memhop.SearchQuery{SceneName: "chat-42"})
+if err != nil {
+    log.Fatal(err)
+}
+sceneID := res.Scene.SceneID
+for _, topic := range res.Topics { // this session's depth-1 set = the context
+    _ = topic.FusedKeywords
+}
+
+// End of turn: settle the whole exchange in one call. Both originals become
+// L4 archives, one distillation produces the turn topic's keywords, and the
+// new topic id comes back.
+topicID, err := sess.Update(memhop.TurnUpdate{
+    SceneID:   sceneID,
+    UserText:  "What did we discuss yesterday?",
+    UserTS:    time.Now().UnixMilli(),
+    AgentText: "Agent: ...",
+    AgentTS:   time.Now().UnixMilli(),
 })
 if err != nil {
     log.Fatal(err)
 }
 
-// Append the agent reply to the topic created by Search.
-// NewTopicID is the 16-char hex topic id; every response id feeds back as-is.
-if err = sess.Update(res.NewTopicID, "Agent: ...", time.Now().UnixMilli()); err != nil {
-    log.Fatal(err)
-}
+// This turn's intermediate messages keep appending to the same topic, LLM-free.
+_, err = sess.AppendL4Message(topicID, "tool output: ...", time.Now().UnixMilli(),
+    memhop.RoleAgent, memhop.ContentText)
 
-// Dream consolidation over active scenes (L0-L2); sceneID "" = all active scenes.
-// Returns a per-stage DreamReport for observability.
+// Dream consolidation (L0-L2); an empty sceneID sweeps every scene of the
+// domain. Update already schedules it in the background once a scene's
+// topic count passes the threshold, so hosts rarely call it.
 report, err := sess.Dream(context.Background(), "")
 ```
 
 
 > **Concurrency contract.** Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`, so the host needs no external queue. `*memhop.Session` carries no cross-domain state beyond its bound id. The file's exclusive lock still allows only one process per `.meh` file; `Lock()`/`Unlock()` on `*MultiAgentDB` remain available for host-critical sections.
 
-Prerequisites: Go 1.27+, Ollama (`ollama pull qllama/bge-m3:q4_k_m`), an OpenAI-compatible LLM endpoint (`Config.LLM` is required)
+Prerequisites: Go 1.27+ and an OpenAI-compatible LLM endpoint (`Config.LLM` is required) — no embedding / vector service needed
 
 ### API Overview
 
 | Group | Methods |
 |-------|---------|
-| Core loop | `Search(ctx, q)` · `Update` · `Dream(ctx)` · `Checkpoint` · `Close` |
+| Core loop | `Search(q)` · `Update(TurnUpdate) → topicID` · `Dream(ctx)` · `Checkpoint` · `Close` |
 | L0 Profile | `GetL0` · `UpdateL0` |
-| L2 Context | `ListScenes` · `ListScenesByL3` · `SetSceneL3ID` · `SceneContext` · `ActiveSceneIDs` · `MergeScenes` · `DeleteTopic` · `DeleteScene` · `RefineTopicKeywords(ctx, id)` |
+| L2 Context | `ListScenes` · `ListScenesByL3` · `SetSceneL3ID` · `SceneContext` · `MergeScenes` · `DeleteTopic` · `DeleteScene` · `RefineTopicKeywords(ctx, id)` |
 | L3 Knowledge | `GetL3` · `ListL3` · `ImportL3` · `UpdateL3` · `DeleteL3` · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 Archive | `SearchL4` · `GetArchive` · `AppendL4Message` |
 | L5 Capability | `ImportCapability` · `GetCapability` · `UpdateCapability` · `DeleteCapability` · `ListCapabilities` · `ActivateCapability` · `RecordCapabilityUsage` |
@@ -145,59 +156,59 @@ Layer   Name             Human Parallel          Mechanism
  L4     Archive          Long-term memory        Raw dialogue logs & historical records
  L3     Knowledge        Semantic memory         Multi-source hypergraph knowledge base
  L2     Context          Working memory          Compressed topic structures (4 depth levels)
- L1     Engram           Scene hypergraph        Scene nodes + keyword-overlap hyperedges; activation spreads here during Search association
+ L1     Engram           Scene hypergraph        Scene nodes + keyword-overlap hyperedges; maintained by Dream for explicit graph queries
  L0     Profile          Identity                Agent personality, preferences & language habits
 ```
 
 ### Dream Pipeline
 
-The Dream cycle is an automatic memory consolidation process inspired by how the human brain processes experiences during sleep. It operates on **L0–L2 only** (L3 distillation and L5 crystallization are out of scope by design) and runs five stages:
+The Dream cycle is an automatic consolidation pass inspired by how sleep processes the day's experiences. It acts on **L0–L2 only** (L3 distillation and L5 crystallization are out of scope) plus L6 retention pruning:
 
-1. **L2 Compression** — LLM groups and merges related topics, one goroutine per active scene, demotes stale contexts
-2. **L1 Rebuild** — Sync L1 scene nodes from L2, rebuild search indexes, and create/refresh keyword-overlap hyperedges between scenes in the same pass
-3. **L1 Decay** — Decay scene importance and edge weights, prune weak nodes
-4. **L0 Profile** — Regenerate the agent profile from consolidated memory
-5. **L0 Distill** — Distill emotion/MBTI patterns (always runs; skipped automatically when no L1 samples exist)
+1. **L2 compression** — the LLM groups related topics per scene; each target scene runs in its own goroutine, sinking merged topics under a new depth-1 fused node
+2. **L1 rebuild** — scene nodes are synced from L2, the L2Meta topic cache is rebuilt in the same scan, and keyword-overlap hyperedges are created or refreshed
+3. **L1 decay** — scene importance and edge weights decay over time, weak nodes are pruned
+4. **L0 profile** — the agent profile is rebuilt from consolidated memory
+5. **L0 distill** — emotion/MBTI signals are distilled (always runs; skipped when the L1 sample set is empty)
 
-`Dream(ctx) (bool, error)` takes the write lock for the whole cycle, returns success immediately when no scenes are active, and honors `ctx` cancellation between stages.
+Trigger: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Update` schedules that scene's Dream in the background; hosts may also call it. `Dream(ctx, sceneID) (*DreamReport, error)` holds the domain lock for the whole cycle, sweeps every scene of the domain when `sceneID` is empty (scenes below `DreamCompressMinTopics` are skipped) and honours `ctx` cancellation between stages.
 
-### Search
+### Read & write path
 
-`Search` dispatches to one of three routes: `AutoCreate` (skip retrieval, create a fresh scene+topic), `DirectedL2ID` (append to a specific scene), or the default retrieval route (optionally scoped by `DirectedL3ID`). The retrieval route uses **three-channel RRF fusion** (BM25 + vector + entity fuzzy terms):
+**There is no scored retrieval.** A scene is a host session, so the engine never guesses which scene a message belongs to:
 
-| Channel | Method                                                              |
-| ------- | ------------------------------------------------------------------- |
-| BM25    | Keyword matching via inverted index (gse CJK tokenization)          |
-| Vector  | Semantic similarity with f32 single-precision via Ollama HTTP embed |
-| Entity  | Fuzzy term/entity matching over indexed topic terms (BK-Tree, edit distance ≤ 2) |
+| Path | What it does | Cost |
+|------|--------------|------|
+| `Search(SearchQuery{SceneID, L3ID, SceneName})` | empty `SceneID` → create a scene and return its id; otherwise → the scene's depth-1 topics (user-timestamp order) plus the L0 profile | in-memory read (L2Meta), zero LLM / embedding / scoring; the only write is the scene's hit counter |
+| `Update(TurnUpdate{...})` | settles one finished turn: two L4 archives plus a topic whose keywords come from a single distillation; returns the topic id | exactly one LLM call per turn; distillation runs before any write, so a failure leaves no trace |
+| `AppendL4Message` / `RefineTopicKeywords` | append this turn's intermediate messages / re-distill from all originals | LLM-free / one LLM call per invocation |
 
-Post-fusion: keyword-overlap scoring, additive scene bonuses for active/recent scenes, then L1 spreading activation (cross-scene associative recall over the scene hypergraph) + L5 capability matching + L0 profile assembly.
+What a host injects as context is the keyword set of that scene's depth-1 topics; to read a turn's original text, follow the topic's `L4Refs` through `GetArchive`/`SearchL4`, or use `SceneContext`. Dream keeps the injected size bounded (`Consolidate` requires at most 20 topics per scene after compression).
+
+Removed along with retrieval: three-channel RRF scoring, L1 spreading activation (`AssociatedContexts`), topic centroids and the embedding dependency, the `AutoCreate` / `DirectedL2ID` / `DirectedL3ID` routes, and topic-level `L3Refs` (L2↔L3 now lives solely on the scene anchor `SceneSlot.L3ID`).
 
 
-`SearchResult` returns `Contexts` (the hit scene's depth-≤1 topics, each carrying `L4Refs`) and `AssociatedContexts` (topics from the L1-associated scene); hosts pull the L4 original text via `SceneContext` or `SearchL4`.
-
-When `Search` creates a topic it also matches relevant L3 knowledge nodes and writes their graph IDs into `TopicSlot.L3Refs`; `DirectedL3ID` filters topics on these refs.
 ## Testing & Benchmarks
 
 MemHop's test suite exercises only the public `api` surface — exactly the calls a host (e.g. MeowAgent) makes — and asserts the engine's own memory structures, not external answerability judges.
 
 ### Integration tests (`test/`, build tag `integration`)
 
-- **Memory loop** (`TestCoreCycleSearchUpdateDream`): N Search+Update cycles ingested the way a real host does, with **periodic L0/L1/L4 consistency checks** every few turns — L0 profile readable, L1 scene graph present (`ListScenes`/`SceneContext`), L4 holding the raw utterance verbatim. After Dream consolidation the scene must still expose consolidated topics and retrieval must surface the stored facts.
-- **Keyword fidelity & persistence** (`TestKeywordFidelity`/`TestKeywordPersistence`/`TestDreamCompressionFidelity`): keywords extracted from a dialogue utterance faithfully carry its meaning, survive noise cycles, and stay faithful across Dream compression.
-- **API contracts** (`TestInterface*`), **e2e flows** (`TestE2E*`), **keyword-extraction robustness** (`TestExtractKeywordsLongInputRealLLM`/`TestSearchLongInputNeverFails`).
+- **Memory loop** (`TestCoreCycleUpdateDream`): N turns settled into one scene the way a real host does, with **periodic L0/L2/L4 consistency checks** every few turns — L0 profile readable, the scene read non-empty, L4 holding the raw utterance verbatim. After Dream consolidation the scene surface must shrink while every fact stays recoverable from L4.
+- **Keyword fidelity & persistence** (`TestKeywordFidelity`/`TestKeywordPersistence`/`TestDreamCompressionFidelity`): the keywords distilled from a turn faithfully carry its meaning, survive noise turns, and stay faithful across Dream compression.
+- **API contracts** (`TestInterface*`: reads make zero LLM calls, writes cost exactly one distillation per turn, unknown scenes are rejected, checkpoints survive a restart), **e2e flows** (`TestE2E*`), **long-input robustness** (`TestExtractKeywordsLongInputRealLLM`/`TestUpdateLongTurnNeverFails`).
 
 ### Benchmarks (`go test -tags integration -bench .`)
 
-All benchmarks drive the real api loop (real encoder + real LLM, no external judge):
+All benchmarks drive the real api loop (real LLM, no external judge):
 
 | Benchmark | Measures |
 |-----------|----------|
-| `BenchmarkMemoryLoop` | steady-state Search+Update memory loop with the engine's **auto-triggered Dream** (a scene's depth-1 context exceeding the 30-topic threshold) and periodic L0/L1 verification |
-| `BenchmarkSearchAutoCreate` / `BenchmarkSearchRetrieve` | first-write vs retrieval Search latency |
-| `BenchmarkUpdate` | agent-reply append latency |
+| `BenchmarkMemoryLoop` | steady-state Search+Update loop including the engine's **auto-scheduled Dream** (a scene's depth-1 topic count passing the threshold) and periodic L0/L2 verification |
+| `BenchmarkUpdateTurn` | one-turn settle latency (one distillation + topic + two L4 writes) |
+| `BenchmarkSceneRead` / `BenchmarkSceneReadLatency` | scene-read throughput and latency distribution (min/p50/p95/max) |
+| `BenchmarkAppendL4` | pure storage append latency (no LLM) |
 | `BenchmarkDreamConsolidation` | full Dream pipeline latency |
-| `BenchmarkSearchLatency` | retrieval latency distribution (min/p50/p95/max) |
+
 
 ### Why no external dataset benchmark?
 
@@ -206,16 +217,18 @@ Public memory benchmarks (LoCoMo, LongMemEval) evaluate "retrieval → LLM-judge
 ## Project Structure
 
 ```
-api/                         ← Public facade: DB handle (open/search/update/dream/l0–l6) + multi-agent facade (openmulti/session/agents) + type aliases/constructors
-internal/                    ← Business assembly: config / db / defaults / l0 / l2 / l3 / l3query /
-                               l4 / l5 / l6 / agents / agentctx / search / update / dream / scenefind / llm_client / llm_ops / encoder
-internal/repo/               ← Data layer: l0layer–l6layer + agentlayer (record read/write, vectors)
-internal/repo/index/         ← Index layer: sparse (BM25) / l1_reverse / l2meta / l3_index /
-                               entity / rebuild / tokenizer (gse)
+api/                         ← Public facade: openmulti (entry + tenant management) / session (the only
+                               business handle, hex-id surface) / types / mapping / ids / errors / exports
+internal/                    ← Business assembly: config / db / session / defaults / tuning /
+                               l0 / l2 / l3 / l3query / l4 / l5 / l6 / l6_plan / agents / agentctx /
+                               search / update / dream / plancache / llm_client / llm_ops / models / exports
+internal/repo/               ← Data layer: l0layer–l6layer + agentlayer (record read/write)
+internal/repo/index/         ← Index layer: l2meta / rebuild (single-pass scan) /
+                               traj (the L6 turn shape) / tokenizer (gse, keyword fallback)
 internal/repo/core/          ← .meh engine: engine / frame / header / snapshot / reclaim /
                                record / model / mmap / filelock
-internal/common/             ← Bottom-level utils: bktree / cosine / enum / errors / hash /
-                               sliceutil / strutil / vec
+internal/common/             ← Bottom-layer utilities: enum / errors / hash /
+                               sliceutil / strutil / timeutil
 test/                         ← Integration tests (build tag: integration)
 benches/fixtures/             ← Benchmark datasets (locomo10, locomo_smoke, longmemeval_smoke)
 ```
@@ -227,10 +240,11 @@ Dependency direction is strictly one-way: `api → internal → repo → core`, 
 
 ### LLM Call Cost Model
 
-- **Hot path** (`Search` + `Update`): one small keyword-extraction call each, capped at 512 output tokens. Typical cost is low; latency is the more visible factor.
-- **Dream**: one consolidation call per active scene with at least 20 topics (active-scene set bounded by `Capacity`, default 7), plus one distill call with at most 200 ranked L1 samples (up to 20 keywords each). Output caps: 8192 / 2048 tokens.
+- **Read path** (`Search`): **zero LLM, zero embedding** — served from the L2Meta cache alone.
+- **Write path** (`Update`): exactly one keyword distillation per turn (both originals fed together), 512-token output cap escalating on truncation, heuristic tokenisation on parse failure.
+- **Dream**: one consolidation call per scene reaching the topic floor (`DreamCompressMinTopics`, default 20), plus one distill call with at most 200 ranked L1 samples (up to 20 keywords each). Output caps: 8192 / 2048 tokens.
 - **Crystallize**: one explicit, host-triggered call per turn trajectory; turns sharing an L2 topic fold into one prompt (capped at 128KB of payload, oldest dropped).
-- Use a small/fast chat model (e.g. a local Ollama model or a cheap API model) for the configured LLM when latency and cost matter; keyword extraction does not need a frontier model.
+- Use a small/fast chat model (a cheap API model or a local OpenAI-compatible endpoint) for the configured LLM when latency and cost matter; keyword distillation does not need a frontier model.
 
 ## Development
 
@@ -238,15 +252,16 @@ Dependency direction is strictly one-way: `api → internal → repo → core`, 
 go build ./...                          # Build
 go vet ./...                            # Static analysis
 go test ./internal/...                  # Unit tests (no external services)
-go test -tags integration ./test/...    # Integration tests (requires Ollama + LLM key)
+go test -tags integration ./test/...    # Integration tests (requires an LLM key)
 ```
 
-Integration tests run against real services (Ollama encoder + an OpenAI-compatible LLM). Configure the LLM via environment variables `MEMHOP_TEST_LLM_KEY` / `MEMHOP_TEST_LLM_URL` / `MEMHOP_TEST_LLM_MODEL` (defaults to the DeepSeek endpoint when only the key is set), or via `test/testsupport/key_config.json`.
+Integration tests run against a real LLM (the engine needs no embedding service). Configure the LLM via environment variables `MEMHOP_TEST_LLM_KEY` / `MEMHOP_TEST_LLM_URL` / `MEMHOP_TEST_LLM_MODEL` (defaults to the DeepSeek endpoint when only the key is set), or via `test/testsupport/key_config.json`.
 
 ## Changelog
 
 | Version | Date | Highlight | Core Changes |
 |---------|------|-----------|--------------|
+| v1.5.0 | 2026-09-01 | L2 re-shape: a scene IS a host session | 1. **Search becomes a scene read**: input is only `{scene_id, l3_id, scene_name}` — empty id creates a scene, unknown id is `ErrNotFound`; the result is `{profile, profile_brief, scene, topics}` (the scene's depth-1 set). `contexts`/`associated_contexts`/`new_topic_id`/`auto_create`/`directed_l2_id`/`directed_l3_id` and the `ctx` parameter are gone — zero LLM, zero embedding, zero scoring<br>2. **Update settles a whole turn**: `TurnUpdate{scene_id, user_text, user_ts, agent_text, agent_ts}` → one distillation, returns the topic id; distillation runs before any write, so a failure leaves nothing behind<br>3. **Single keyword track**: `user_keywords`/`agent_keywords`/`centroid_page_ref`/`l3_refs` removed, only `fused_keywords` remains (same on-disk field name); Dream compression, L1 hyperedges and host injection all read that one track, no summary field — originals stay in L4<br>4. **Scene ids belong to the host**: `NewSceneSlot(sceneID, name)` no longer hashes the name; `CreateSceneL2WithID` reuses an existing scene idempotently; the `timestamp:text` auto-naming path disappears<br>5. **Retrieval subsystem deleted**: `internal/cap/scenefind` (three channels, RRF, scene bonuses, L1 spreading activation), topic centroids, `RecVecCentroid`, `Encoder`/`HttpEncoder`/`OpenMultiWithEncoder` and the encoder config — **the engine contacts no embedding service**; the per-agent BM25 index loses its reader and is no longer written or snapshotted (the orphaned BM25 / entity / L3-index island went with them — L3 node search scans records)<br>6. **Consolidation trigger re-axled**: `activeScenes`/`Capacity` plus `ActiveSceneIDs`/`HasActiveScenes` removed; `Update` schedules a scene's Dream once its depth-1 count passes `SceneDreamTopicThreshold` (default 24); `Dream(ctx, "")` sweeps every scene of the domain<br>7. `RefineTopicKeywords` drops its idempotence guard and re-distills from all `L4Refs` unconditionally<br>8. **No format bump**: `TopicSlot.UnmarshalJSON` folds an old file's two tracks into `fused_keywords` at decode time, so existing `.meh` files open without losing keywords<br>9. Turn topics derive their id under a `"turn:"` namespace (disjoint from Dream's fused-node ids); the unused `ComputeTopicIDForText` and the dead `SceneNode.VectorPageRef` are removed<br>10. Scene merging no longer happens inside Dream (it would delete a sceneId the host still holds); `MergeScenes` stays an explicit host API. MCP `search`/`update` inputs re-shaped, `status` reports `scene_count`, `memhop_scene_active_list` removed (31 → 30); the DSH plugin loop and panel follow |
 | v1.4.2 | 2026-08-31 | L6 plan tree + L2 directory anchor | 1. L6 carries a task tree: `TrajectorySlot.NodeType` splits turn events from plan nodes, node ids derived stably by `HashPlanNode(planID, nodePath)` under a `plan:` namespace, events bound via `PlanNodeRef`<br>2. three-form surface `PlanAppend` / `PlanCommit` / `PlanState` plus `PlanReplace` (re-plan, keeps planID), `SyncPlanTree` (whole-tree snapshot diff, emits no `plan_step`), `ListPlans` (restart recovery)<br>3. **Model A fold**: a parent turns `done` only on an explicit host commit; after each commit the `done` children's summaries roll up bottom-up in numeric `NodePath` order without clobbering a host-written parent summary<br>4. `PlanTree.Roots` is a **forest** (one root per top-level step; orphaned nodes surface as roots instead of vanishing)<br>5. L2 scene → L3 directory anchor (N:1): `SceneSlot.L3ID`, optional `SearchQuery.L3ID` pre-filter with backfill on hit, `ListScenesByL3`, `SetSceneL3ID(sceneID, l3ID, force)` write-once unless correcting or clearing<br>6. per-domain `planCache` so `PlanState`/`ListPlans`/rollup stop scanning the engine per call<br>7. api constants exported: `Role*`, `NodeType*`, numeric `Status*` (read-side), string `PlanStatus*` + `PlanStatus` type (write/query side); fifth status `running` added<br>8. write surface forced authoritative: all plan-node fields and `Seq` are overwritten on every append path, `EventType` restricted for plan events<br>9. hardening: `0000000000000000` is the reserved bare-event `PlanID` and rejected by all five plan entry points (`PlanReplace` on it used to delete every turn event of the domain); Dream's plan exemption narrowed to plans active inside the 7-day window, so abandoned plans no longer accumulate forever<br>10. no format change (stays `0x0009`, additive JSON fields, v1.4.1 files open as-is), MCP tool set unchanged (31) — the plan surface is **Go module only** this release |
 | v1.4.1 | 2026-08-28 | Type-contract cleanup: hex-ID DTOs, L0 profile v2, L3 hypergraph activation | 1. api response DTOs are real structs — every ID field leaves as a 16-char hex string (`SearchResult.NewTopicID`, `AppendL4Message`, `AgentID()` included) with new `api.FormatID` / `api.ParseID` helpers<br>2. L0 profile v2 (`FormatVersion 0x0009`): field ownership (Name/Role/Preferences host-exclusive, Personality host-seeded + Dream-distilled), typed `EmotionState`/`MBTI` distillation signals, dead `lexicon`/`style_traits` removed<br>3. zero in-library hex round-trips (repo-layer ID params are uint64, centroid hash via `HashBytes`)<br>4. L3 import gains `source_ref` (positional reference) and `related` (same-graph hyperedges resolved by title, two-phase forward references, idempotent re-import; `edges_created` result field, `L3Relation` type exported)<br>5. `AppendL4Message` gains `contentType` (Content* constants exported; text/document/code carry the original text, image/audio/video carry a path/URI with mime/size/sha256 in Metadata), `L4Query.Type` filter and MCP `archive_search` `content_type` param<br>6. L6 one-trajectory-per-turn: SessionID is a turn key (search opens, update closes), events carry `TopicID` for cross-turn crystallization, external surface trimmed to append/query (`TrajectoryStats` / `DeleteTrajectory` / `PruneTrajectory` removed, 33 → 31 tools), Dream `l6_prune` auto-drops events older than 7 days<br>7. distill/consolidate LLM parsing gains a format-constrained retry<br>8. **breaking**: `.meh` files with `FormatVersion != 0x0009` (i.e. ≤ 0x0008) are rejected at Open, no migration |
 | v1.4.0 | 2026-08-26 | Multi-agent memory database | 1. one `.meh` file carries many isolated agent domains: record frames gain `agent_id` (26-byte header), engine indexes and snapshots (0x02) are per-agent, tenant registry records map names to stable crypto/rand agentIDs<br>2. `api.OpenMulti` / `AgentSession` / `CreateAgent` / `ListAgents` / `DeleteAgent`; `Open` stays zero-change for single-agent hosts (default domain)<br>3. business layer rebuilt around per-agent `agentContext` with domain locks (same-agent serial, cross-agent parallel), idle-domain memory reclamation and scoped Dream pipelines<br>4. L7 trajectory layer renumbered to **L6** (cognitive layers converge to L0–L6)<br>5. MCP registry shares one `MultiAgentDB` (one `<db-dir>/memhop.meh`), `os.Root`-anchored db-dir<br>6. duplicate structs/conversion layers removed (`topicSlotJSON`, `topicToL2Meta`, single-value slice wrappers)<br>7. Go 1.23–1.26 stdlib modernization (`iter.Seq2`, `unique.Make`, `os.Root`)<br>8. zero new dependencies<br>9. **breaking**: `.meh` files with `FormatVersion <= 0x0007` are rejected at Open, no migration; promoted `internal.DB` methods on `api.DB` now carry an `agentID` parameter (facade methods unchanged), `Lock()` panics on a closed DB |

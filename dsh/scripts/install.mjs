@@ -49,8 +49,8 @@ const LEGACY_PKGS = ["dsh-memhop-core", "dsh-client-memhop-ui"];
 const LEGACY_IDS = ["memhop-core", "memhop-ui"];
 
 const NEW_INSERT = `# ---- MemHop 记忆子系统(单插件 dsh-memhop:控制面+UI+服务器管理)----
-# 一个 DSH 会话 = 一个 Agent = 一个独立 .meh(dbDir/<session-id>.meh)。
-# 插件职责:31 个 mcp__memhop__* 工具注册到 agent 作用域;每轮自动
+# 一个 DSH 会话 = 一个 Agent = 共享 dbDir/memhop.meh 内的独立 agent 域(tenant = 会话 ID)。
+# 插件职责:30 个 mcp__memhop__* 工具注册到 agent 作用域;每轮自动
 # search/update、按策略 dream;记忆快照注入 system prompt(P2)与
 # 历史窗口控制(P3);memhop-mcp 服务器/launchd 管理;Web「记忆」面板。
 - insert:
@@ -112,11 +112,9 @@ function plistTemplate() {
 }
 
 function wrapperTemplate(bin) {
-  const model = process.env.MEMHOP_EMBED_MODEL || "qllama/bge-m3:q4_k_m";
-  const enc = process.env.MEMHOP_ENCODER_ADDR || "http://127.0.0.1:11434";
   return `#!/bin/bash
 set -a; source "${ENV_FILE}"; set +a
-exec "${bin}" -db-dir "${DB_DIR}" -embed-model "${model}" -encoder-addr "${enc}" -transport streamable-http -listen "127.0.0.1:3939"
+exec "${bin}" -db-dir "${DB_DIR}" -transport streamable-http -listen "127.0.0.1:3939"
 `;
 }
 

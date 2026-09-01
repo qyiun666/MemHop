@@ -1,11 +1,14 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L2 scene operations of the internal layer: list / get / merge / active set.
+// L2 scene operations of the internal layer: list / anchor / merge / delete
+// and the deep scene-context read.
 
 package internal
 
 import (
+	"slices"
+
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -74,18 +77,6 @@ func (db *DB) SetSceneL3ID(agentID uint64, sceneID string, l3ID string, force bo
 	return repo.SetSceneL3ID(db.engine, agentID, sceneHash, l3Hash)
 }
 
-// ActiveSceneIDs returns a copy of the agent's in-memory active scene IDs
-// (the Dream consolidation targets).
-func (db *DB) ActiveSceneIDs(agentID uint64) []uint64 {
-	ac := db.peekContext(agentID)
-	if ac == nil {
-		return nil
-	}
-	ac.mu.Lock()
-	defer ac.mu.Unlock()
-	return append([]uint64(nil), ac.activeScenes...)
-}
-
 // MergeScenes rewrites all topics of secondary scenes to the primary scene
 // and deletes the secondary records.
 func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []string) error {
@@ -111,12 +102,9 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	if !repo.MergeScenesL2(db.engine, agentID, primaryHash, hashes) {
 		return common.NewError(common.ErrIO, "merge scenes", nil)
 	}
-	removed := common.ToSet(hashes)
-	// Mirror the scene retarget in the L2MetaIndex so cached candidates
-	// match the merged records (storage write already done).
-	ac.retargetL2Meta(primaryHash, removed)
-	// Drop merged secondary scenes so Dream does not spin empty goroutines.
-	ac.dropActiveScenes(removed)
+	// Mirror the scene retarget in the L2MetaIndex so cached topics match the
+	// merged records (storage write already done).
+	ac.retargetL2Meta(primaryHash, common.ToSet(hashes))
 	return nil
 }
 
@@ -161,14 +149,14 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 	return out, nil
 }
 
-// sceneContextTopic renders one topic of a scene context: merged keyword
-// tracks, child count, and its L4 messages (unreadable archives are
-// skipped, the id ref is still reported).
+// sceneContextTopic renders one topic of a scene context: its keyword track,
+// child count, and its L4 messages (unreadable archives are skipped, the id
+// ref is still reported).
 func (db *DB) sceneContextTopic(agentID uint64, t core.TopicSlot, children map[uint64]int) SceneContextTopic {
 	st := SceneContextTopic{
 		TopicID:    common.FormatHash(t.ID),
 		Depth:      int(t.Depth),
-		Keywords:   append(append(append([]string{}, t.FusedKeywords...), t.UserKeywords...), t.AgentKeywords...),
+		Keywords:   slices.Clone(t.FusedKeywords),
 		ChildCount: children[t.ID],
 		L4IDs:      make([]string, 0, len(t.L4Refs)),
 	}
@@ -184,8 +172,8 @@ func (db *DB) sceneContextTopic(agentID uint64, t core.TopicSlot, children map[u
 }
 
 // DeleteTopic removes a topic and its whole subtree (children at any
-// depth), the L4 archives they reference, and their L2Meta/sparse entries,
-// so the deleted topic no longer surfaces in retrieval. The surviving
+// depth), the L4 archives they reference, and their L2Meta cache entries,
+// so the deleted topic no longer surfaces in any scene read. The surviving
 // parent (if any) has its ChildrenIDs pruned. Deleting a missing topic
 // returns ErrNotFound.
 func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
@@ -230,8 +218,8 @@ func (ac *agentContext) pruneParentChild(db *DB, topicID uint64) error {
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
-// the referenced L4 archives, the L2Meta/sparse entries, and its active-set
-// membership, so the scene disappears from listings and retrieval.
+// the referenced L4 archives, and their L2Meta cache entries, so the scene
+// disappears from listings and reads.
 func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -267,11 +255,10 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 		return err
 	}
 	ac.removeTopicsFromIndices(topics)
-	ac.dropActiveScenes(map[uint64]struct{}{sceneHash: {}})
 	return nil
 }
 
-// deleteTopics removes the given topics (with their L2Meta/sparse entries)
+// deleteTopics removes the given topics (with their L2Meta cache entries)
 // and the given archives in one engine pass.
 func (ac *agentContext) deleteTopics(db *DB, agentID uint64, topics, archives []uint64) error {
 	if !repo.DeleteL2(db.engine, agentID, topics, 2) {

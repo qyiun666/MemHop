@@ -80,19 +80,15 @@ func fromSceneSlot(s internal.SceneSlot) SceneSlot {
 
 func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 	return TopicSlot{
-		ID:              formatID(t.ID),
-		SceneID:         formatID(t.SceneID),
-		ParentID:        formatPtr(t.ParentID),
-		ChildrenIDs:     formatIDs(t.ChildrenIDs),
-		Depth:           t.Depth,
-		UserKeywords:    cloneStrings(t.UserKeywords),
-		UserTimestamp:   t.UserTimestamp,
-		L4Refs:          formatIDs(t.L4Refs),
-		L3Refs:          formatIDs(t.L3Refs),
-		AgentKeywords:   cloneStrings(t.AgentKeywords),
-		AgentTimestamp:  t.AgentTimestamp,
-		FusedKeywords:   cloneStrings(t.FusedKeywords),
-		CentroidPageRef: formatOptionalID(t.CentroidPageRef),
+		ID:             formatID(t.ID),
+		SceneID:        formatID(t.SceneID),
+		ParentID:       formatPtr(t.ParentID),
+		ChildrenIDs:    formatIDs(t.ChildrenIDs),
+		Depth:          t.Depth,
+		FusedKeywords:  cloneStrings(t.FusedKeywords),
+		UserTimestamp:  t.UserTimestamp,
+		AgentTimestamp: t.AgentTimestamp,
+		L4Refs:         formatIDs(t.L4Refs),
 	}
 }
 
@@ -100,20 +96,15 @@ func fromSearchResult(r *internal.SearchResult) *SearchResult {
 	if r == nil {
 		return nil
 	}
-	contexts := make([]TopicSlot, len(r.Contexts))
-	for i, t := range r.Contexts {
-		contexts[i] = fromTopicSlot(t)
-	}
-	associated := make([]TopicSlot, len(r.AssociatedContexts))
-	for i, t := range r.AssociatedContexts {
-		associated[i] = fromTopicSlot(t)
+	topics := make([]TopicSlot, len(r.Topics))
+	for i, t := range r.Topics {
+		topics[i] = fromTopicSlot(t)
 	}
 	return &SearchResult{
-		Profile:            fromProfileSlot(r.Profile),
-		ProfileBrief:       r.ProfileBrief,
-		Contexts:           contexts,
-		AssociatedContexts: associated,
-		NewTopicID:         formatID(r.NewTopicID),
+		Profile:      fromProfileSlot(r.Profile),
+		ProfileBrief: r.ProfileBrief,
+		Scene:        fromSceneSlot(r.Scene),
+		Topics:       topics,
 	}
 }
 

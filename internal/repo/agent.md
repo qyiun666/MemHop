@@ -15,8 +15,9 @@
   `engine_read.go`（读/删除载荷扫描）、`engine_delete.go`（墓碑删除）、
   `engine_recovery.go`（扫描/撕裂尾帧截断/索引重建）；数据模型分
   `model.go`（Slot 结构）/ `model_enums.go`（枚举）。
-- `index/`：检索索引——BM25 sparse（`sparse.go` 活动路径 /
-  `sparse_serialize.go` 快照线格式）、L2Meta、L1 实体索引、重建。只依赖 `core`。
+- `index/`：索引——L2Meta（场景读回的唯一话题缓存，`rebuild.go` 全量重建）/
+  `traj.go`（L6 轮轨迹形状）/ `tokenizer.go`（gse 分词，唯一读者是 llmops 的关键词兜底）。
+  只依赖 `core`。检索退役后 BM25 / 实体模糊 / L3 图索引三块已作为死码删除。
 - 根目录 `l0layer.go` ~ `l6layer.go`、`agentlayer.go`：各层记录读写原语，
   一层一个文件组（单文件超 400 行时按功能拆分，命名
   `<layer>layer_<aspect>.go`：`l1layer_sync.go`、`l2layer_topic.go`），
@@ -31,7 +32,7 @@
 1. **域隔离**：所有读写必须携带 `agentID`；跨 agent 的联合查询/共享记忆
    不属于本层，禁止引入。同名记录在不同域内互不可见是正确行为。
 2. **无业务语义**：本层不做业务判断（何时压缩、何时结晶、容量策略等一律
-   由 `internal` 业务层决定），不调用 LLM/encoder。
+   由 `internal` 业务层决定），不调用 LLM。
 3. **实现不外露**：记录帧布局、快照格式、回收/压缩细节只在 `core` 内部
    流转；`internal` 业务层只能经本目录导出的函数访问数据，不得直接解析
    帧或操作 `StorageEngine` 未导出的状态。

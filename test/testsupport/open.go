@@ -1,8 +1,9 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package testsupport provides shared helpers for integration tests that
-// run against real Ollama (encoder) and DeepSeek (LLM) services.
+// Package testsupport provides shared helpers for integration tests that run
+// against a real LLM service (DeepSeek by default). Embeddings are no longer a
+// dependency of the engine.
 package testsupport
 
 import (
@@ -93,9 +94,8 @@ func (h *Handle) Checkpoint() error { return h.m.Checkpoint() }
 func (h *Handle) Close() error      { return h.m.Close() }
 func (h *Handle) IsClosed() bool    { return h.m.IsClosed() }
 
-// OpenMemHop opens a DB backed by real services (Ollama encoder + DeepSeek LLM)
-// in t.TempDir(); skips when LLM config is missing or Ollama unavailable, and
-// fatals otherwise. The caller must Close() it.
+// OpenMemHop opens a DB backed by a real LLM service in t.TempDir(); skips
+// when the LLM config is missing, fatals otherwise. The caller must Close() it.
 func OpenMemHop(t *testing.T) *Handle {
 	t.Helper()
 	return open(t)
@@ -107,14 +107,21 @@ func OpenMemHopB(b *testing.B) *Handle {
 	return open(b)
 }
 
+// OpenSession asks the engine for a fresh host session (scene) and returns its
+// hex id — the integration tests' shared way to enter the memory loop.
+func (h *Handle) OpenSession(name string) (string, error) {
+	res, err := h.Search(memhop.SearchQuery{SceneName: name})
+	if err != nil {
+		return "", err
+	}
+	return res.Scene.SceneID, nil
+}
+
 // open is the shared implementation for testing.T and testing.B.
 func open(tb testing.TB) *Handle {
 	cfg := &internal.MemHopConfig{
-		DBPath:      filepath.Join(tb.TempDir(), "test.meh"),
-		VectorDim:   1024,
-		EncoderAddr: "http://127.0.0.1:11434",
-		EmbedModel:  "qllama/bge-m3:q4_k_m",
-		Defaults:    *internal.DefaultMemHopDefaults,
+		DBPath:   filepath.Join(tb.TempDir(), "test.meh"),
+		Defaults: *internal.DefaultMemHopDefaults,
 	}
 	if err := loadLLMConfig(cfg); err != nil {
 		tb.Skipf("跳过真实依赖测试: %v", err)

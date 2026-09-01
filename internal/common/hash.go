@@ -15,10 +15,6 @@ func HashID(s string) uint64 {
 	return xxhash.Sum64String(s)
 }
 
-// HashBytes computes xxhash64 of a byte slice; for identical bytes it produces
-// the same digest as HashID(string(b)).
-func HashBytes(b []byte) uint64 { return xxhash.Sum64(b) }
-
 func FormatHash(h uint64) string {
 	const digits = "0123456789abcdef"
 	var buf [16]byte
@@ -52,12 +48,4 @@ func ParseAll(ids []string) ([]uint64, bool) {
 		out = append(out, h)
 	}
 	return out, true
-}
-
-func FormatIDs(ids []uint64) []string {
-	out := make([]string, len(ids))
-	for i, id := range ids {
-		out[i] = FormatHash(id)
-	}
-	return out
 }

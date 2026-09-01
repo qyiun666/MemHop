@@ -37,7 +37,7 @@ func call(t *testing.T, h mcp.ToolHandler, args string) (string, bool) {
 
 func TestHandleDecodesArgs(t *testing.T) {
 	h := handle[searchArgs, searchArgs](func(a searchArgs) (searchArgs, error) { return a, nil })
-	out, isErr := call(t, h, `{"text":"hi","timestamp":1700000000000,"auto_create":true}`)
+	out, isErr := call(t, h, `{"scene_id":"a1b2c3d4e5f67890","l3_id":"000000000000000f","scene_name":"chat-1"}`)
 	if isErr {
 		t.Fatalf("unexpected error result: %s", out)
 	}
@@ -45,14 +45,14 @@ func TestHandleDecodesArgs(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if got.Text != "hi" || got.Timestamp != 1700000000000 || !got.AutoCreate {
+	if got.SceneID != "a1b2c3d4e5f67890" || got.L3ID != "000000000000000f" || got.SceneName != "chat-1" {
 		t.Errorf("args not round-tripped: %+v", got)
 	}
 }
 
 func TestHandleInvalidArgs(t *testing.T) {
 	h := handle[searchArgs, searchArgs](func(a searchArgs) (searchArgs, error) { return a, nil })
-	out, isErr := call(t, h, `{"text":123}`) // type mismatch: text must be string
+	out, isErr := call(t, h, `{"scene_id":123}`) // type mismatch: scene_id must be string
 	if !isErr {
 		t.Fatalf("expected error result, got %s", out)
 	}
@@ -123,7 +123,7 @@ func TestHandlePropagatesError(t *testing.T) {
 	h := handle[updateArgs, updateResult](func(a updateArgs) (updateResult, error) {
 		return updateResult{}, sentinel
 	})
-	out, isErr := call(t, h, `{"topic_id":"a1b2c3d4e5f67890","text":"x","timestamp":1}`)
+	out, isErr := call(t, h, `{"scene_id":"a1b2c3d4e5f67890","user_text":"u","user_ts":1,"agent_text":"a","agent_ts":2}`)
 	if !isErr {
 		t.Fatal("expected error result")
 	}
@@ -134,7 +134,7 @@ func TestHandlePropagatesError(t *testing.T) {
 
 func TestHandleNoArgs(t *testing.T) {
 	h := handleNoArgs[statusResult](func() (statusResult, error) {
-		return statusResult{Closed: true, HasActiveScenes: true}, nil
+		return statusResult{Closed: true, SceneCount: 3}, nil
 	})
 	out, isErr := call(t, h, "")
 	if isErr {
@@ -144,7 +144,7 @@ func TestHandleNoArgs(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if !got.Closed || !got.HasActiveScenes {
+	if !got.Closed || got.SceneCount != 3 {
 		t.Errorf("result mismatch: %+v", got)
 	}
 }

@@ -14,10 +14,11 @@ import (
 // MaxDepth: topic depth threshold that triggers deletion on sinking.
 const MaxDepth = 4
 
+// CompressResult carries the timestamp bounds of one fused group, collected
+// while its member topics sink a level deeper.
 type CompressResult struct {
-	L3Refs         []uint64 // deduplicated merged L3 refs
-	UserTimestamp  int64    // earliest user timestamp
-	AgentTimestamp int64    // latest agent timestamp
+	UserTimestamp  int64 // earliest user timestamp
+	AgentTimestamp int64 // latest agent timestamp
 }
 
 // CompressTopicsL2 compresses topics under a scene.
@@ -45,8 +46,8 @@ func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, 
 }
 
 // planCompressedWrites sinks every existing topic one level deeper under
-// parentID (collecting its L3 refs and timestamp bounds into result) and
-// plans the batch: topics at MaxDepth are deleted instead of rewritten.
+// parentID (collecting timestamp bounds into result) and plans the batch:
+// topics at MaxDepth are deleted instead of rewritten.
 func planCompressedWrites(engine *core.StorageEngine, agentID uint64, ids []uint64, parentID uint64, result *CompressResult) ([]core.RecordEntry, []uint64, error) {
 	var writes []core.RecordEntry
 	var deletes []uint64
@@ -71,9 +72,9 @@ func planCompressedWrites(engine *core.StorageEngine, agentID uint64, ids []uint
 	return writes, deletes, nil
 }
 
-// foldCompressBounds accumulates one sunk topic into the group aggregate.
+// foldCompressBounds accumulates one sunk topic's timestamp bounds into the
+// group aggregate.
 func foldCompressBounds(result *CompressResult, topic *core.TopicSlot) {
-	result.L3Refs = append(result.L3Refs, topic.L3Refs...)
 	if topic.UserTimestamp < result.UserTimestamp {
 		result.UserTimestamp = topic.UserTimestamp
 	}
@@ -82,8 +83,7 @@ func foldCompressBounds(result *CompressResult, topic *core.TopicSlot) {
 	}
 }
 
-// finalizeCompressResult resets untouched sentinel bounds to zero and
-// deduplicates the collected L3 refs.
+// finalizeCompressResult resets untouched sentinel bounds to zero.
 func finalizeCompressResult(result *CompressResult) {
 	if result.UserTimestamp == math.MaxInt64 {
 		result.UserTimestamp = 0
@@ -91,7 +91,6 @@ func finalizeCompressResult(result *CompressResult) {
 	if result.AgentTimestamp == math.MinInt64 {
 		result.AgentTimestamp = 0
 	}
-	result.L3Refs = common.DedupSorted(result.L3Refs)
 }
 
 // DeleteL2 batch-deletes: num==1 treats ids as scene IDs (all topics of the
@@ -145,18 +144,22 @@ func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64,
 	return DeleteL2(engine, agentID, secondaryIDs, 1)
 }
 
-// TouchSceneUsage bumps the scene record's retrieval-hit counters (folded
-// from the former L6 usage record into SceneSlot). Best-effort by design:
-// concurrent hits may lose an increment; Dream only distinguishes
-// HitCount == 0, so the impact is nil.
-func TouchSceneUsage(engine *core.StorageEngine, agentID uint64, sceneID uint64, ts int64) error {
+// TouchSceneUsage bumps the scene record's usage counters and returns the
+// updated record, so the caller that reads the scene in the same breath does
+// not hand back a stale snapshot. Best-effort by design: concurrent reads may
+// lose an increment; Dream only distinguishes HitCount == 0, so the impact is
+// nil.
+func TouchSceneUsage(engine *core.StorageEngine, agentID uint64, sceneID uint64, ts int64) (*core.SceneSlot, error) {
 	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	slot.HitCount++
 	slot.LastHitAt = ts
-	return core.WriteSceneSlot(engine, agentID, sceneID, slot)
+	if err := core.WriteSceneSlot(engine, agentID, sceneID, slot); err != nil {
+		return nil, err
+	}
+	return slot, nil
 }
 
 func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []uint64) []core.SceneSlot {
@@ -171,13 +174,15 @@ func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []uint64) []co
 	return out
 }
 
-// CreateSceneL2 creates a scene; the ID is the hash of the name.
-func CreateSceneL2(engine *core.StorageEngine, agentID uint64, name string) (uint64, error) {
-	slot := core.NewSceneSlot(name)
-	if err := core.WriteSceneSlot(engine, agentID, slot.SceneID, &slot); err != nil {
-		return 0, err
+// CreateSceneL2WithID creates a scene under the ID the host owns (its session
+// id). An existing scene is reused as-is — the name is only ever written on
+// creation, so a repeated Search for the same session never renames it.
+func CreateSceneL2WithID(engine *core.StorageEngine, agentID uint64, sceneID uint64, name string) error {
+	if _, err := core.ReadSceneSlot(engine, agentID, sceneID); err == nil {
+		return nil
 	}
-	return slot.SceneID, nil
+	slot := core.NewSceneSlot(sceneID, name)
+	return core.WriteSceneSlot(engine, agentID, sceneID, &slot)
 }
 
 // SetSceneL3ID assigns a scene's organizational L3 domain (project/目录) id,

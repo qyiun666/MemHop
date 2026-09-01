@@ -237,19 +237,17 @@ func TestSurfaceSyncPlanTree(t *testing.T) {
 }
 
 // TestSurfaceListScenesByL3 verifies scenes anchored to an L3 domain are
-// listed with hex ids after a scoped Search creates/anchors them, and that
-// two different L3 domains yield DISJOINT scene sets (the exclusion branch).
+// listed with hex ids once a session opening anchors them, and that two
+// different L3 domains yield DISJOINT scene sets (the exclusion branch).
 func TestSurfaceListScenesByL3(t *testing.T) {
 	db := openSurfaceDB(t)
-	ctx := context.Background()
 	l3A := common.FormatHash(common.HashID("l3-proj-a"))
 	l3B := common.FormatHash(common.HashID("l3-proj-b"))
-	// Two separate scoped Searches anchor two distinct scenes to different
-	// L3 domains (distinct text+timestamp ⇒ distinct scene names/ids).
-	if _, err := db.Search(ctx, SearchQuery{Text: "rust ownership", AutoCreate: true, Timestamp: 1000, L3ID: &l3A}); err != nil {
+	// Two session openings, each anchored to its own L3 project domain.
+	if _, err := db.Search(SearchQuery{SceneName: "rust ownership", L3ID: l3A}); err != nil {
 		t.Fatalf("search A: %v", err)
 	}
-	if _, err := db.Search(ctx, SearchQuery{Text: "rust borrow checker", AutoCreate: true, Timestamp: 2000, L3ID: &l3B}); err != nil {
+	if _, err := db.Search(SearchQuery{SceneName: "rust borrow checker", L3ID: l3B}); err != nil {
 		t.Fatalf("search B: %v", err)
 	}
 	scenesA, err := db.ListScenesByL3(l3A)
@@ -292,10 +290,9 @@ func TestSurfaceListScenesByL3(t *testing.T) {
 // an empty l3ID clears the anchor.
 func TestSurfaceSetSceneL3IDCorrection(t *testing.T) {
 	db := openSurfaceDB(t)
-	ctx := context.Background()
 	l3A := common.FormatHash(common.HashID("cor-a"))
 	l3B := common.FormatHash(common.HashID("cor-b"))
-	if _, err := db.Search(ctx, SearchQuery{Text: "scene correction anchor", AutoCreate: true, Timestamp: 1000, L3ID: &l3A}); err != nil {
+	if _, err := db.Search(SearchQuery{SceneName: "scene correction anchor", L3ID: l3A}); err != nil {
 		t.Fatalf("search: %v", err)
 	}
 	scenesA, err := db.ListScenesByL3(l3A)

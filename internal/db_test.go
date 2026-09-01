@@ -9,7 +9,6 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // newTestDB wires an engine into the minimal multi-agent DB state the
@@ -21,26 +20,22 @@ func newTestDB(t *testing.T, engine *core.StorageEngine) *DB {
 	baseCtx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	return &DB{
-		engine:        engine,
-		config:        &MemHopConfig{Defaults: *DefaultMemHopDefaults},
-		baseCtx:       baseCtx,
-		baseCancel:    cancel,
-		agents:        make(map[uint64]*agentContext),
-		snapshotBlobs: make(map[uint64][]byte),
+		engine:     engine,
+		config:     &MemHopConfig{Defaults: *DefaultMemHopDefaults},
+		baseCtx:    baseCtx,
+		baseCancel: cancel,
+		agents:     make(map[uint64]*agentContext),
 	}
 }
 
 // testDefaultContext returns the default-domain context of db, creating it
-// with fresh indexes when absent (same shape as the lazy contextFor path);
-// tests that poke ac.l2Meta / ac.activeScenes directly use this handle.
+// with caches rebuilt from the records when absent (same shape as the lazy
+// contextFor path); tests that poke ac.l2Meta directly use this handle.
 func testDefaultContext(db *DB) *agentContext {
 	if ac := db.agents[core.DefaultAgentID]; ac != nil {
 		return ac
 	}
-	ac := newAgentContext(core.DefaultAgentID, db.baseCtx)
-	ac.sparseIndex = index.NewSparseIndex()
-	ac.l2Meta = index.BuildL2MetaFromEngine(db.engine, core.DefaultAgentID)
-	ac.traj = index.BuildTrajFromEngine(db.engine, core.DefaultAgentID)
+	ac := newAgentContext(core.DefaultAgentID, db.baseCtx, db.engine)
 	db.agents[core.DefaultAgentID] = ac
 	return ac
 }

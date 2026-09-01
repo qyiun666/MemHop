@@ -135,12 +135,6 @@ func (e *StorageEngine) RecordCount() uint32 {
 	return e.recordCount
 }
 
-func (e *StorageEngine) VectorDim() uint16 {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.activeHeaderRef().VectorDim
-}
-
 func (e *StorageEngine) FileSize() uint64 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

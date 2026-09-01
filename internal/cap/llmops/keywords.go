@@ -1,8 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// llm_keywords.go: semantic keyword extraction — the Search/Update
-// preprocessing call point.
+// llm_keywords.go: semantic keyword extraction — the write-path preprocessing
+// call point (one finished turn in, one keyword track out).
 
 package llmops
 
@@ -38,7 +38,7 @@ Rules:
 3. Include: named entities (people, places, orgs, products), specific topics, key actions with their objects, time expressions, locations, numbers, cause-effect relationships, emotional tone and attitude markers
 4. Use both individual keywords AND short phrases — phrases preserve context that single words lose (e.g. "cancel picnic due to rain" is more meaningful than just "rain" + "picnic")
 5. No limit on count — extract everything meaningful; for long text, extract proportionally more; never truncate or summarize — only remove noise (greetings, filler, repetition)
-6. Colloquial variants — for important terms, include common synonyms or colloquial alternatives (e.g. "肚子疼" → also add "胃痛"; "bug" → also add "缺陷") so different phrasings can match via BM25
+6. Colloquial variants — for important terms, include common synonyms or colloquial alternatives (e.g. "肚子疼" → also add "胃痛"; "bug" → also add "缺陷") so one idea is not split across differently worded turns
 7. Keep each entry concise: prefer keywords and short phrases, avoid full sentences
 8. Preserve original language; keep mixed-language terms as-is; preserve numbers and proper nouns exactly
 9. Exclude: greetings, filler words, question words (when/where/what/why/how/who/which), generic verbs (go/do/get/run/make/have/want/like/think) unless tied to a specific action
@@ -67,6 +67,14 @@ func ExtractKeywords(ctx context.Context, chat Chat, text string) ([]string, err
 		return extractKeywordsChunked(ctx, chat, trimmed)
 	}
 	return extractKeywordsWithRetry(ctx, chat, trimmed)
+}
+
+// ExtractTurnKeywords distills one finished turn into the single keyword
+// track of its topic. The speaker labels matter: without them the two sides
+// of an exchange collapse into one undifferentiated text and the extraction
+// loses who asserted what.
+func ExtractTurnKeywords(ctx context.Context, chat Chat, userText, agentText string) ([]string, error) {
+	return ExtractKeywords(ctx, chat, "User: "+userText+"\nAssistant: "+agentText)
 }
 
 // extractKeywordsWithRetry runs the single-pass path: token budgets for
@@ -185,9 +193,8 @@ func parseKeywords(response string) ([]string, bool) {
 }
 
 // fallbackKeywords degrades keyword extraction: heuristic tokenization
-// first (index-side pipeline, matching the BM25 vocabulary), then an empty
-// list so retrieval falls back to vector/BM25 over the raw query. Never
-// returns an error.
+// first, then an empty list — the keyword track is a tag set, not an index,
+// so an empty result only thins the scene's context. Never returns an error.
 func fallbackKeywords(text, raw string) []string {
 	if kw := heuristicKeywords(text); len(kw) > 0 {
 		slog.Warn("llm: keywords parse failed, fell back to heuristic keywords", "raw", common.SafeCharSlice(raw, 120))

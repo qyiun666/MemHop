@@ -16,6 +16,7 @@ import (
 type (
 	SearchQuery              = core.SearchQuery
 	SearchResult             = core.SearchResult
+	TurnUpdate               = core.TurnUpdate
 	SceneMessage             = core.SceneMessage
 	SceneContextTopic        = core.SceneContextTopic
 	SceneContext             = core.SceneContext
@@ -35,8 +36,6 @@ type (
 	DreamStage               = core.DreamStage
 	CrystallizeResult        = core.CrystallizeResult
 	CrystallizeDetail        = core.CrystallizeDetail
-	SceneHit                 = core.SceneHit
-	ScoredTopic              = core.ScoredTopic
 
 	// LLM capability contracts (prompt inputs / parsed outputs) live in the
 	// llmops capability package.

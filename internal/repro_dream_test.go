@@ -28,10 +28,7 @@ func TestReproDreamConsolidate(t *testing.T) {
 		t.Skip("REPRO_DB not set")
 	}
 	cfg := &MemHopConfig{
-		DBPath:      path,
-		VectorDim:   1024,
-		EncoderAddr: "http://127.0.0.1:11434",
-		EmbedModel:  "qllama/bge-m3:q4_k_m",
+		DBPath: path,
 		LLM: LlmConfig{
 			APIURL:          os.Getenv("MEMHOP_LLM_API_URL"),
 			APIKey:          os.Getenv("MEMHOP_LLM_API_KEY"),
@@ -47,15 +44,9 @@ func TestReproDreamConsolidate(t *testing.T) {
 	}
 	defer engine.CloseNoCheckpoint()
 
-	enc, err := NewHttpEncoder("http://127.0.0.1:11434", 1024, "qllama/bge-m3:q4_k_m", 20)
-	if err != nil {
-		t.Fatalf("encoder: %v", err)
-	}
-
 	db := newTestDB(t, engine)
 	db.config = cfg
 	db.llm = New(cfg)
-	db.encoder = enc
 
 	dumpSceneContext(t, db, cfg, "before dream")
 
@@ -148,7 +139,7 @@ func dumpSceneContext(t *testing.T, db *DB, cfg *MemHopConfig, label string) {
 			if len(tp.FusedKeywords) > 0 && len(tp.L4Refs) == 0 {
 				fused = " [FUSED, no archives]"
 			}
-			kwN := len(tp.UserKeywords) + len(tp.AgentKeywords) + len(tp.FusedKeywords)
+			kwN := len(tp.FusedKeywords)
 			t.Logf("  depth=%d id=%s kw=%d archives=%d child=%d%s",
 				tp.Depth, common.FormatHash(tp.ID), kwN, len(tp.L4Refs), len(tp.ChildrenIDs), fused)
 		}

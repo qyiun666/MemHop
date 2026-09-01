@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L1 hypergraph edge building: BuildHyperedges creates co-occurrence
-// edges between scenes whose topic keyword sets overlap. SceneNode writes
+// edges between scenes whose depth-1 keyword sets overlap. SceneNode writes
 // happen only during Dream via SyncL1NodesFromL2 (l1layer_sync.go); decay
-// and rebuild live in l1layer_decay.go; search walks the graph at query
-// time via SpreadingActivation (internal/scenefind.go).
+// and rebuild live in l1layer_decay.go.
 
 package engram
 
@@ -75,10 +74,8 @@ func collectNodeKeywordSets(engine *core.StorageEngine, agentID uint64, nodes []
 			if err != nil || topic == nil {
 				continue
 			}
-			for _, kws := range [][]string{topic.UserKeywords, topic.AgentKeywords, topic.FusedKeywords} {
-				for _, kw := range kws {
-					set[strings.ToLower(kw)] = struct{}{}
-				}
+			for _, kw := range topic.FusedKeywords {
+				set[strings.ToLower(kw)] = struct{}{}
 			}
 		}
 		if len(set) == 0 {

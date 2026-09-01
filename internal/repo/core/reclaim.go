@@ -150,14 +150,14 @@ func (e *StorageEngine) writeNullSnapshotHeader() error {
 
 // Compact creates a new file at newPath containing only live records,
 // preserving each record's agent domain. snap must carry the caller's
-// serialized indices or the per-agent sparse data is silently dropped.
+// serialized record index or the new file loses it.
 func (e *StorageEngine) Compact(newPath string, snap *IndexSnapshotData) error {
 	if snap == nil {
 		return common.NewError(common.ErrInvalidQuery, "compact requires an index snapshot")
 	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	newEng, err := Create(newPath, e.activeHeaderRef().VectorDim)
+	newEng, err := Create(newPath)
 	if err != nil {
 		return err
 	}

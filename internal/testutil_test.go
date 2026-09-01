@@ -4,37 +4,20 @@
 package internal
 
 import (
-	"context"
 	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
-
-// mockEncoder returns a fixed vector, simulating an available encoder.
-type mockEncoder struct {
-	vec []float32
-}
-
-func (m *mockEncoder) Encode(string) ([]float32, error) { return m.vec, nil }
-func (m *mockEncoder) Dim() int                         { return len(m.vec) }
-func (m *mockEncoder) Mode() string                     { return "mock" }
-func (m *mockEncoder) IsAvailable() bool                { return true }
-
-// testVec is shared with topic vector pages: identical 768-dim vector, cosine 1.0.
-var testVec = func() []float32 {
-	v := make([]float32, 768)
-	for i := range v {
-		v[i] = 0.5
-	}
-	return v
-}()
 
 func TestMain(m *testing.M) {
 	if err := index.InitTokenizer(index.EngineAuto); err != nil {
@@ -45,27 +28,24 @@ func TestMain(m *testing.M) {
 
 func newTestEngine(t *testing.T) *core.StorageEngine {
 	t.Helper()
-	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"), 768)
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
 	if err != nil {
 		t.Fatalf("create engine: %v", err)
 	}
-	t.Cleanup(func() { engine.Close(&core.IndexSnapshotData{}) })
+	t.Cleanup(func() { engine.Close(nil) })
 	return engine
 }
 
+// newTopic builds a depth-1 turn topic fixture stamped at ts.
 func newTopic(id, scene uint64, ts int64, kws []string) core.TopicSlot {
 	return core.TopicSlot{
-		ID:            id,
-		SceneID:       scene,
-		Depth:         1,
-		UserKeywords:  kws,
-		UserTimestamp: ts,
+		ID: id, SceneID: scene, Depth: 1,
+		FusedKeywords: kws, UserTimestamp: ts, AgentTimestamp: ts + 1,
 	}
 }
 
-// writeTopic writes a topic record + sparse index into one agent domain;
-// writes the fixed vector page when CentroidPageRef != 0.
-func writeTopic(t *testing.T, engine *core.StorageEngine, sparse *index.SparseIndex, agentID uint64, topic core.TopicSlot) {
+// writeTopic persists one topic record into an agent domain.
+func writeTopic(t *testing.T, engine *core.StorageEngine, agentID uint64, topic core.TopicSlot) {
 	t.Helper()
 	data, err := json.Marshal(topic)
 	if err != nil {
@@ -74,46 +54,62 @@ func writeTopic(t *testing.T, engine *core.StorageEngine, sparse *index.SparseIn
 	if _, err := engine.WriteRecord(agentID, core.RecL2Topic, topic.ID, data); err != nil {
 		t.Fatalf("write topic: %v", err)
 	}
-	fields := make([]string, 0, len(topic.FusedKeywords)+len(topic.UserKeywords)+len(topic.AgentKeywords))
-	fields = append(fields, topic.FusedKeywords...)
-	fields = append(fields, topic.UserKeywords...)
-	fields = append(fields, topic.AgentKeywords...)
-	terms := index.Tokenize(strings.Join(fields, " "))
-	sparse.AddDocument(topic.ID, terms, uint32(len(terms)))
-	if topic.CentroidPageRef != 0 {
-		if _, err := engine.WriteRecord(agentID, core.RecVecCentroid, topic.CentroidPageRef, common.F32SliceToBytes(testVec)); err != nil {
-			t.Fatalf("write vector: %v", err)
-		}
+}
+
+// mustWriteScene persists a scene record for a host session id.
+func mustWriteScene(t *testing.T, engine *core.StorageEngine, agentID uint64, sceneID uint64, name string) {
+	t.Helper()
+	if err := core.WriteSceneSlot(engine, agentID, sceneID, &core.SceneSlot{SceneID: sceneID, SceneName: name}); err != nil {
+		t.Fatalf("write scene: %v", err)
 	}
 }
 
 func approx(a, b float32) bool { return math.Abs(float64(a-b)) < 1e-4 }
 
-// TestActivateSceneDedup activation dedup: repeats keep first-order positions.
-func TestActivateSceneDedup(t *testing.T) {
-	ac := newAgentContext(core.DefaultAgentID, context.Background())
-	ac.activateScene(7)
-	ac.activateScene(7)
-	ac.activateScene(9)
-	if len(ac.activeScenes) != 2 {
-		t.Fatalf("len(activeScenes) = %d; want 2", len(ac.activeScenes))
-	}
-	if ac.activeScenes[0] != 7 || ac.activeScenes[1] != 9 {
-		t.Errorf("activeScenes = %v; want [7 9]", ac.activeScenes)
-	}
+// countingLLMServer answers every chat request with content and records how
+// many times it was called — the read path must leave the counter at zero.
+func countingLLMServer(t *testing.T, content string) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+	calls := &atomic.Int64{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"role": "assistant", "content": content},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, calls
 }
 
-// TestActivateSceneUnbounded verifies the active set grows past Capacity
-// without eviction: Dream size is controlled by Update, which triggers a
-// Dream on the oldest scene at Defaults.Capacity.
-func TestActivateSceneUnbounded(t *testing.T) {
-	ac := newAgentContext(core.DefaultAgentID, context.Background())
-	ac.activateScene(7)
-	ac.activateScene(9)
-	ac.activateScene(11)
-	if len(ac.activeScenes) != 3 || ac.activeScenes[0] != 7 || ac.activeScenes[1] != 9 || ac.activeScenes[2] != 11 {
-		t.Fatalf("activeScenes = %v; want [7 9 11]", ac.activeScenes)
+// failingLLMServer returns status for every chat completion request
+// (non-retryable codes only, so tests do not wait out the backoff).
+func failingLLMServer(t *testing.T, status int) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "mock llm failure", status)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// countRecords counts the live records of one type in an agent domain.
+func countRecords(engine *core.StorageEngine, agentID uint64, recordType uint8) int {
+	n := 0
+	for range engine.IndexByType(agentID, recordType) {
+		n++
 	}
+	return n
 }
 
 func mustParse(t *testing.T, s string) uint64 {

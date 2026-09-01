@@ -9,21 +9,20 @@ package api
 
 import "github.com/qyiun666/MemHop/internal"
 
-// ---- config / encoder ----
+// ---- config ----
 
 type (
 	// MemHopConfig configures a MemHop database; nested fields (LLM, Defaults)
-	// are assigned by field access, see DefaultMemHopDefaults.
+	// are assigned by field access, see DefaultMemHopDefaults. The LLM endpoint
+	// is the only external service the engine contacts — no embedding service.
 	MemHopConfig = internal.MemHopConfig
-	// Encoder is the embedding encoder contract required by OpenWithEncoder.
-	Encoder = internal.Encoder
 	// LlmConfig holds LLM provider settings; exported so hosts can build
 	// MemHopConfig.LLM by literal instead of field-by-field assignment.
 	LlmConfig = internal.LlmConfig
-	// MemHopDefaults holds the host-facing business knobs (Capacity,
-	// DreamCompressMinTopics, SearchDreamContextThreshold); engine tuning
-	// constants are package-private. Exported so hosts can name the type
-	// instead of copying DefaultMemHopDefaults.
+	// MemHopDefaults holds the host-facing business knobs (consolidation
+	// thresholds and the idle-domain TTL); engine tuning constants are
+	// package-private. Exported so hosts can name the type instead of copying
+	// DefaultMemHopDefaults.
 	MemHopDefaults = internal.MemHopDefaults
 )
 
@@ -35,6 +34,7 @@ var DefaultMemHopDefaults = internal.DefaultMemHopDefaults
 
 type (
 	SearchQuery              = internal.SearchQuery
+	TurnUpdate               = internal.TurnUpdate
 	L3ImportItem             = internal.L3ImportItem
 	L3Relation               = internal.L3Relation
 	L3ImportMode             = internal.L3ImportMode
@@ -76,7 +76,8 @@ type ProfileSlot struct {
 	UpdatedAtMs  int64                 `json:"updated_at_ms"`
 }
 
-// SceneSlot is one L2 scene container.
+// SceneSlot is one L2 scene container — a host session. L3ID is its optional
+// project-domain anchor.
 type SceneSlot struct {
 	SceneID    string `json:"scene_id"`
 	SceneName  string `json:"scene_name"`
@@ -86,30 +87,28 @@ type SceneSlot struct {
 	L3ID       string `json:"l3_id,omitempty"`
 }
 
-// TopicSlot is an L2 dual-track session node (user/agent).
+// TopicSlot is one L2 conversation node: a single turn written by Update, or
+// a Dream-fused group of turns. FusedKeywords is its only keyword track — the
+// set a host reads back as its conversation context.
 type TopicSlot struct {
-	ID              string   `json:"id"`
-	SceneID         string   `json:"scene_id"`
-	ParentID        *string  `json:"parent_id,omitempty"`
-	ChildrenIDs     []string `json:"children_ids"`
-	Depth           uint8    `json:"depth"`
-	UserKeywords    []string `json:"user_keywords"`
-	UserTimestamp   int64    `json:"user_timestamp"`
-	L4Refs          []string `json:"l4_refs"`
-	L3Refs          []string `json:"l3_refs"`
-	AgentKeywords   []string `json:"agent_keywords"`
-	AgentTimestamp  int64    `json:"agent_timestamp"`
-	FusedKeywords   []string `json:"fused_keywords"`
-	CentroidPageRef string   `json:"centroid_page_ref"`
+	ID             string   `json:"id"`
+	SceneID        string   `json:"scene_id"`
+	ParentID       *string  `json:"parent_id,omitempty"`
+	ChildrenIDs    []string `json:"children_ids"`
+	Depth          uint8    `json:"depth"`
+	FusedKeywords  []string `json:"fused_keywords"`
+	UserTimestamp  int64    `json:"user_timestamp"`
+	AgentTimestamp int64    `json:"agent_timestamp"`
+	L4Refs         []string `json:"l4_refs"`
 }
 
-// SearchResult is the response of Search/Update retrieval.
+// SearchResult is the read surface of one scene: the scene record, its
+// depth-1 topics in turn order, and the domain's L0 profile.
 type SearchResult struct {
-	Profile            ProfileSlot `json:"profile"`
-	ProfileBrief       string      `json:"profile_brief"`
-	Contexts           []TopicSlot `json:"contexts"`
-	AssociatedContexts []TopicSlot `json:"associated_contexts"`
-	NewTopicID         string      `json:"new_topic_id,omitempty"`
+	Profile      ProfileSlot `json:"profile"`
+	ProfileBrief string      `json:"profile_brief"`
+	Scene        SceneSlot   `json:"scene"`
+	Topics       []TopicSlot `json:"topics"`
 }
 
 // HypergraphSource is the origin of an L3 hypergraph.

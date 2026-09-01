@@ -1,5 +1,5 @@
-// SearchChip.js — 输入框（conversation.composer.dock）内的自动 search 参数指示条。
-// 实时显示当前会话的检索偏好：auto_create 开/关 + 定向 L2 场景 + 定向 L3 图谱，
+// SearchChip.js — 输入框（conversation.composer.dock）内的记忆参数指示条。
+// 实时显示当前 agent 的项目域偏好（l3_id，仅在新建记忆场景时挂锚）；
 // 保存后（面板广播 memhop:prefs-saved 事件）立即刷新。
 // 错误处理原则：失败就显示错误，不做退避重试、不静默吞错。
 
@@ -23,7 +23,6 @@ const chipActiveStyle = {
 
 function SearchPrefsChip({ rpc, sessionId }) {
   const [prefs, setPrefs] = React.useState(null);
-  const [scenes, setScenes] = React.useState([]);
   const [graphs, setGraphs] = React.useState([]);
   const [error, setError] = React.useState(null);
 
@@ -34,13 +33,6 @@ function SearchPrefsChip({ rpc, sessionId }) {
     callMemhopJson(rpc, "prefs", {}, sessionId)
       .then((v) => {
         if (alive) setPrefs(v || {});
-      })
-      .catch((e) => {
-        if (alive) setError(e);
-      });
-    callMemhopJson(rpc, "scene_list", {}, sessionId)
-      .then((v) => {
-        if (alive) setScenes(Array.isArray(v) ? v : []);
       })
       .catch((e) => {
         if (alive) setError(e);
@@ -75,9 +67,7 @@ function SearchPrefsChip({ rpc, sessionId }) {
   if (!rpc || !sessionId) return null;
 
   const p = prefs || {};
-  const autoOn = p.autoCreate === true; // 默认关闭
-  const scene = scenes.find((s) => s.scene_id === p.directedL2Id);
-  const graph = graphs.find((g) => g.id_hash === p.directedL3Id);
+  const graph = graphs.find((g) => g.id_hash === p.l3Id);
 
   const chip = (text, active) =>
     React.createElement(
@@ -94,16 +84,15 @@ function SearchPrefsChip({ rpc, sessionId }) {
       ? React.createElement(
           "span",
           { style: { fontSize: 11, color: "var(--dsw-alias-state-error-primary)" }, title: str(error) },
-          "检索参数加载失败: " + str(error)
+          "记忆参数加载失败: " + str(error)
         )
       : prefs === null
         ? React.createElement("span", { style: { fontSize: 11, color: "var(--dsw-alias-label-tertiary)" } }, "加载中…")
         : React.createElement(
             React.Fragment,
             null,
-            chip(autoOn ? "auto_create: 开" : "auto_create: 关", autoOn),
-            chip("场景: " + (scene ? scene.scene_name : "不限定"), !!scene),
-            chip("图谱: " + (graph ? graph.name : "不限定"), !!graph)
+            chip("检索本会话记忆（场景=宿主会话）", true),
+            chip("新项目域: " + (graph ? graph.name : "未设"), !!graph)
           )
   );
 }

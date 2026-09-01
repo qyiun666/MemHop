@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.3.4**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.5.0**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 ---
@@ -12,19 +12,19 @@
 host process
  ├─ go.mod: require github.com/qyiun666/MemHop (or go.work replace → local checkout)
  ├─ import only github.com/qyiun666/MemHop/api (never internal/)
- ├─ one Agent = one *api.DB = one .meh file
+ ├─ one .meh file = many isolated agent domains, addressed by Session(hexID)
  └─ external services:
-      ├─ Ollama (embeddings via native HTTP /api/embed, no SDK)
-      └─ OpenAI-compatible LLM (keyword extraction / Dream consolidation / Crystallize)
+      └─ ONE OpenAI-compatible LLM (turn distillation / Dream consolidation / Crystallize)
+      └─ no embedding / vector service (retired in v1.5.0)
 ```
 
 ### Hard contracts
 
 | Contract | Meaning |
 |---|---|
-| **Single instance** | One `.meh` file is locked exclusively; a second `*DB` on the same file fails. |
+| **Single instance** | One `.meh` file is locked exclusively; a second `OpenMulti` on the same file fails. Every call runs through a `Session` bound to one agent domain. |
 | **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`. The host needs no external queue. `Lock()`/`Unlock()` remain for host-critical sections around raw file access — they serialize **the default domain only** and panic on a closed DB (`Unlock` on a closed DB is a no-op). |
-| **LLM is required** | Search / Update / RefineTopicKeywords do LLM keyword extraction and return an error when the LLM is down (no silent degradation). |
+| **LLM on the write path** | `Update`, `RefineTopicKeywords`, `Dream` and `Crystallize` call the LLM and fail when it is down (no silent degradation). `Search` never calls it — a read cannot be blocked by the LLM. |
 | **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: every response id feeds back as-is, and `api.FormatID` / `api.ParseID` / `api.FormatAgentID` / `api.ParseAgentID` exist for the rare case a host must convert. |
 | **Timestamps** | Unix milliseconds everywhere; `<= 0` is `ErrInvalidQuery`. |
 
@@ -35,12 +35,11 @@ host process
 | Dependency | Requirement | Example |
 |---|---|---|
 | Go 1.27+ | build requirement | — |
-| Ollama | running embedding endpoint | `http://localhost:11434` + `nomic-embed-text` (dim 768) |
 | LLM | OpenAI-compatible API | DeepSeek / OpenAI / any compatible endpoint |
 
-You can also bring your own encoder: implement the `api.Encoder` interface
-(`Encode(text string) ([]float32, error)` + `IsAvailable() bool`) and inject it
-via `api.OpenMultiWithEncoder`.
+That is the whole list. MemHop contacts no embedding / vector service and
+needs no database, cache or server of its own: one writable file path plus one
+LLM endpoint.
 
 ---
 
@@ -68,11 +67,7 @@ re-exported from `api` as type aliases (see §9). No other import required.
 
 | Field | Type | Meaning |
 |---|---|---|
-| **DBPath** | string | `.meh` path. Created on first open; on reopen the vector dim is checked. |
-| **VectorDim** | int | Vector dimension, (0, 65535]. **Must match the Ollama model output** (`ErrVectorDimMismatch` otherwise; no migration). |
-| **EncoderAddr** | string | Ollama HTTP address, e.g. `http://localhost:11434`. |
-| **EmbedModel** | string | Embedding model name, e.g. `nomic-embed-text`. |
-| EncoderTimeoutSecs | int | Encoder timeout (≥0; 0 = default). |
+| **DBPath** | string | `.meh` path. Created on first open. |
 | **LLM** | LlmConfig | see below. |
 | Defaults | MemHopDefaults | Engine tuning; recommended `*api.DefaultMemHopDefaults` with selective overrides. |
 
@@ -88,16 +83,16 @@ re-exported from `api` as type aliases (see §9). No other import required.
 
 ### `MemHopDefaults` — common overrides (also exported since v1.2.7)
 
-`MemHopDefaults` exposes only the three business knobs. Engine tuning constants
-(RRF k, scene bonuses, decay lambdas, L1 activation limits, scoring thresholds)
-are package-private in `internal/tuning.go` and no longer configurable — hosts
+`MemHopDefaults` exposes exactly three business knobs. Everything else
+(consolidation prompt limits, decay lambdas, L1 edge thresholds) is
+package-private in `internal/tuning.go` and no longer configurable — hosts
 should not need to tune them; if you think you do, open an issue.
 
 | Field | Default | Meaning |
 |---|---|---|
-| Capacity | 7 | Active-scene bound. When the active set reaches it, **Update** triggers a Dream on the oldest scene (pre-checked for compressibility). |
-| SearchDreamContextThreshold | 30 | A Search triggers a scene Dream when the returned context exceeds this many topics. **0 disables the trigger** (relevant if you build a partial literal). |
+| SceneDreamTopicThreshold | 24 | Once a scene's depth-1 topic count passes this, `Update` schedules that scene's Dream in the background. **0 disables the trigger** (relevant when building a partial literal). |
 | DreamCompressMinTopics | 20 | Topics per scene before Dream will compress. |
+| AgentIdleTTLMs | 3600000 | An agent domain whose context has been idle this long is freed from memory (it rebuilds from its records on next use). 0 disables the sweep. |
 
 ---
 
@@ -105,10 +100,7 @@ should not need to tune them; if you think you do, open an issue.
 
 ```go
 cfg := &api.MemHopConfig{
-    DBPath:      "/data/agent.meh",
-    VectorDim:   768,
-    EncoderAddr: "http://localhost:11434",
-    EmbedModel:  "nomic-embed-text",
+    DBPath: "/data/agent.meh",
     LLM: api.LlmConfig{
         APIURL:          os.Getenv("LLM_URL"),
         APIKey:          os.Getenv("LLM_KEY"),
@@ -120,8 +112,8 @@ cfg := &api.MemHopConfig{
 }
 
 dbm, err := api.OpenMulti(cfg)
-if err != nil { /* ErrConfig / ErrVectorDimMismatch / ErrCorruption */ }
-defer dbm.Close() // checkpoint snapshot + close encoder + release mmap/file lock
+if err != nil { /* ErrConfig / ErrInvalidMagic / ErrCorruption */ }
+defer dbm.Close() // checkpoint snapshot + release mmap/file lock
 
 // Multi-agent is the only mode: bind a session to a stable hex agent id.
 agentID, err := dbm.CreateAgent("guide")
@@ -129,8 +121,7 @@ if err != nil { /* ... */ }
 db, err := dbm.Session(agentID)
 ```
 
-- `api.OpenMulti(cfg)` — default Ollama HTTP encoder.
-- `api.OpenMultiWithEncoder(cfg, enc)` — custom encoder (mock / local model).
+- `api.OpenMulti(cfg)` is the only entry point.
 - `OpenMulti` mounts the built-in read-only capability cards (nothing written to `.meh`).
 - Explicit flush: `db.Checkpoint()`.
 
@@ -138,113 +129,89 @@ db, err := dbm.Session(agentID)
 
 ## 6. Core memory loop (every turn)
 
-Drive the loop per turn: **Search at turn start (recall + store) → Update at
-turn end (archive reply) → Dream when idle (consolidate)**.
+The host drives per turn: **turn start `Search` (read this session's memory) → turn end `Update` (settle the whole turn)**. Consolidation is scheduled by the engine once a scene's topic count passes the threshold; hosts may also call `Dream` explicitly. **One L2 scene = one host session** — the host decides which scene to read; the engine never guesses.
 
-### 6.1 Turn start: `Search(ctx, q)`
+### 6.1 Turn start: `Search(q)`
 
 ```go
-res, err := db.Search(ctx, api.SearchQuery{
-    Text:      userRawText,            // this turn's raw user text, required
-    Timestamp: time.Now().UnixMilli(), // Unix ms, required > 0
-    // Optional routing (pick one; default is plain retrieval):
-    // DirectedL2ID: &sceneIDHex,  // force-write into a specific scene
-    // DirectedL3ID: &graphIDHex,  // only retrieve topics referencing that L3 graph
-    // AutoCreate:   true,         // skip retrieval, create a fresh scene+topic
+res, err := db.Search(api.SearchQuery{
+    SceneID:   sceneIDHex,  // empty = ask the library for a fresh scene (first turn of a session)
+    L3ID:      graphIDHex,  // optional: anchors a *newly created* scene to an L3 project domain
+    SceneName: "chat-42",   // optional: name for a newly created scene (else "session:<id>")
 })
 ```
 
-`ctx` cancels LLM keyword extraction, encoder calls and any internally
-triggered Dream — pass a request-scoped context.
+No `ctx` parameter — the read path holds no cancellable LLM or network work — and **no retrieval cost**: no LLM, no embedding, no scoring; the hit scene's topics come straight from the L2Meta cache. The only side effect is the scene's hit counter (which feeds Dream's importance feedback).
 
 **`SearchResult` fields:**
 
-| Field | Meaning | Host use |
+| Field | Content | Host use |
 |---|---|---|
-| `Profile` | L0 profile snapshot (name/role/personality/emotions/MBTI/preferences) | can be spliced into the system prompt |
-| `ProfileBrief` | Compact profile digest (name/role/personality/top preferences/emotions, bounded) | lighter per-turn injection; full `Profile` only when needed |
-| `Contexts` | Hit scene's context (`TopicSlot` list, depth ≤ 1) | **the memory to splice into this turn's LLM prompt** |
-| `AssociatedContexts` | Activated scene topics (L1 hypergraph spreading activation) | optional extra memory |
-| `NewTopicID` | ID of the topic created this round (16-hex); `""` = hit existing | feed to Update |
+| `Profile` | L0 profile snapshot | can go into the system prompt |
+| `ProfileBrief` | bounded compact profile digest | light per-turn injection; fetch full `Profile` only when needed |
+| `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID` / `TopicCount`) | keep `Scene.SceneID` — Update and later reads use it |
+| `Topics` | the scene's depth-1 topics in user-timestamp order, each with `FusedKeywords` and `L4Refs` | **the memory injected into this turn's prompt**; follow `L4Refs` via `GetArchive`/`SearchL4` for originals |
 
-**Side effects (Search writes, it is not read-only):** LLM keyword extraction →
-three-channel retrieval (BM25 + f32 vector + entity BK-Tree, RRF fusion) →
-topic creation + centroid encoding + one L4 archive + L3 graph linking + scene
-activation + scene usage count (folded into the scene record). An unavailable
-encoder is an error.
+An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one creates a scene and returns its id.
 
-### 6.2 Turn end: `Update`
+### 6.2 Turn end: `Update(TurnUpdate)`
 
 ```go
-err := db.Update(topicID, agentReplyText, time.Now().UnixMilli())
-// topicID: Search's NewTopicID, or an existing topic ID from Contexts (16-hex)
-// nil means appended + indexed; a missing topic returns ErrNotFound
+topicID, err := db.Update(api.TurnUpdate{
+    SceneID:   sceneIDHex,   // must already exist (created by Search)
+    UserText:  userRawText,  // required
+    UserTS:    userTS,       // Unix milliseconds, > 0
+    AgentText: agentReply,   // required
+    AgentTS:   agentTS,      // not earlier than UserTS
+})
 ```
 
-Appends a `Role=Agent` L4 archive → refreshes topic keywords and the BM25 index.
-Calls the LLM for keyword extraction.
+One call turns the exchange into **one depth-1 topic**: two L4 archives (`RoleUser` + `RoleAgent`) plus keywords from a single distillation, returning the 16-hex topic id (hand it to `AppendL4Message` for this turn's intermediate messages).
 
-### 6.3 Idle time: `Dream(ctx, sceneID)`
+Key property: **distillation runs before any write.** A failed LLM call or an empty extraction errors out and leaves nothing behind — never a half-recorded turn. Unknown scene → `ErrNotFound`; malformed texts/timestamps → `ErrInvalidQuery`.
+
+### 6.3 Consolidation: `Dream(ctx, sceneID)`
 
 ```go
-rep, err := db.Dream(ctx, "")      // "" = consolidate all active scenes
-// or db.Dream(ctx, sceneIDHex)   // one scene only
+rep, err := db.Dream(ctx, "")      // empty sceneID sweeps every scene of the domain
+// or db.Dream(ctx, sceneIDHex)    // one scene only
 ```
 
-Runs the L2 → L1 → L0 pipeline (compression / decay / profile distillation;
-multiple LLM calls — run it in a background goroutine or between turns).
-It returns a structured `*DreamReport` for observability:
-`ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed /
-L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status,
-DurationMs}` (statuses `ok | skipped | cancelled | error`). A zero report
-means nothing to consolidate, not an error; on a mid-pipeline failure the
-partially filled report comes back together with the error.
+Usually **the host does not need to call it**: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThreshold` (default 24), `Update` schedules that scene's Dream in the background (one in flight per scene).
+
+Runs L2→L1→L0 compression / decay / profile distillation (several LLM calls, slow) — keep it in a goroutine or between turns.
+Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / L1NodesAdded|Removed / L1EdgesAdded|Removed / L0Updated` plus `Stages []DreamStage{Name, Status, DurationMs}` (status `ok | skipped | cancelled | error`). An empty report is not an error; a mid-pipeline failure returns the partial report with the error. After compression each scene keeps at most 20 depth-1 topics (`Consolidate` rule), which is the size bound on what a host reads back.
 
 ---
 
 ## 7. N:N turns: `AppendL4Message` + `RefineTopicKeywords`
 
-Standard turns are 1:1 (one user message, one reply). When the user sends
-several messages and the agent replies once (or vice versa), run everything
-through Search and each message becomes its own topic, breaking the turn. Use
-`AppendL4Message` to append messages to **one existing topic**:
+A standard turn is 1:1 (one user message, one reply). When the user sends several messages and the agent answers once (or vice versa), settle the turn's outermost pair with `Update` and append every intermediate message to **that same topic** — the exchange then stays one record in memory.
 
 ```go
-// 1. First message creates the topic via Search (get topicID).
-res, _ := db.Search(ctx, api.SearchQuery{Text: userMsg1, Timestamp: t1})
-topicID := res.NewTopicID
+// 1. The turn's outermost pair goes through Update, giving the topic id.
+topicID, err := db.Update(api.TurnUpdate{
+    SceneID: sceneIDHex, UserText: userMsg1, UserTS: t1,
+    AgentText: finalReply, AgentTS: t4,
+})
 
-// 2. Remaining messages append to the same topic. role is a raw uint8:
-//    0 = user, 1 = agent, 2 = system, 3 = dream (values > 3 rejected).
-//    contentType picks the record class: text-like types (text/document/
-//    code) store the original text in Content; media types (image/audio/
-//    video) store a path or URI the host resolves.
+// 2. Intermediate messages append to the same topic. role is a bare uint8:
+//    0 = user, 1 = agent, 2 = system, 3 = dream (>3 rejected).
+//    contentType picks the record class: text-like (text/document/code) store
+//    the original text in Content; media (image/audio/video) store a path or URI.
 id1, err := db.AppendL4Message(topicID, userMsg2, t2, 0, api.ContentText)
-id2, err := db.AppendL4Message(topicID, agentMsg, t3, 1, api.ContentText)
+id2, err := db.AppendL4Message(topicID, "tool output...", t3, 1, api.ContentText)
 id3, err := db.AppendL4Message(topicID, "img://shot.png", t3+1, 0, api.ContentImage)
 
-// 3. Archive the final reply (AppendL4Message or Update).
-db.Update(topicID, finalReply, t4)
-
-// 4. N:N wrap-up: re-extract keywords from all L4 originals so the appended
-//    messages become keyword-searchable. Cancellable via ctx.
+// 3. Re-distill from all originals so the appended messages enter the context.
 if err := db.RefineTopicKeywords(ctx, topicID); err != nil { /* LLM failure etc. */ }
 ```
 
-- `AppendL4Message(topicID, text, timestamp, role, contentType) (string, error)`
-  — pure storage append: **no LLM, no keyword extraction** (usable when the
-  LLM is down); the new id is appended to the topic's L4Refs. Returns the new
-  archive id as a 16-hex string. Content-type convention: `text`/`document`/
-  `code` carry the original text in `Content`; `image`/`audio`/`video` carry
-  a path or URI (put mime/size/sha256 into `Metadata`). Undefined values are
-  rejected.
-- `RefineTopicKeywords(ctx, topicID) error` — guarded & idempotent: only runs
-  when `L4Refs > 2` AND a user/agent keyword track is non-empty; otherwise a
-  no-op returning nil. Merges all L4 originals in L4Refs order → LLM keywords →
-  `FusedKeywords` (user/agent tracks cleared, timestamps preserved) → BM25
-  rebuilt. Errors leave the topic untouched (extract-then-write).
+- `AppendL4Message(topicID, text, timestamp, role, contentType) (string, error)` — pure storage append: **no keyword extraction, no LLM** (works with the LLM down); the new id is appended to the topic's L4Refs and returned as 16-hex. Content contract: `text`/`document`/`code` carry the original; `image`/`audio`/`video` carry a path/URI (mime/size/sha256 in `Metadata`). Undefined values rejected. A missing topic returns `ErrNotFound` — no orphan archive.
+- `RefineTopicKeywords(ctx, topicID) error` — concatenates every L4 original in `L4Refs` order → LLM extraction → overwrites the topic's single `FusedKeywords` (**timestamps untouched**, Dream grouping relies on them). Since v1.5.0 there is **no idempotence guard**: every call costs one LLM round trip, and deciding when to call is the host's business (an empty `L4Refs` is a no-op). An empty extraction is refused so the track is never wiped.
 
 ---
+
 
 ## 8. Layer API quick reference
 
@@ -267,7 +234,7 @@ profile samples).
 | `db.ListScenes() ([]SceneSlot, error)` | scene list (`SceneID / SceneName / TopicCount`) |
 | `db.SceneContext(sceneID) (*SceneContext, error)` | full scene view (topics + L4 messages) — **use for session resume** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | merge scenes |
-| `db.ActiveSceneIDs() []string` | currently active scene IDs |
+| `db.ListScenesByL3(l3ID) []SceneSlot` | scenes anchored to one L3 project domain (= host sessions) |
 | `db.DeleteTopic(topicID) error` | delete a topic subtree + its L4 archives + indexes; prunes parent `ChildrenIDs` (memory correction) |
 | `db.DeleteScene(sceneID) error` | delete a scene + all topics/archives + L1 node; `ErrNotFound` if missing (memory correction) |
 
@@ -291,8 +258,11 @@ in the batch (two-phase import); re-importing the same batch does not
 duplicate edges; unresolvable / self / invalid-kind entries land in `Errors`.
 
 `GetL3 / ListL3 / QueryL3Nodes / QueryL3Subgraph / UpdateL3 / DeleteL3`.
-Search automatically links matching graphs onto new topics (`L3Refs`) — this is
-what makes `DirectedL3ID` scoping work.
+
+L2↔L3 is one relation, held by the scene: `SceneSlot.L3ID` anchors a session to
+a project domain (many scenes may share one graph). It is set when the scene is
+created (`SearchQuery.L3ID`) or later via `SetSceneL3ID`, and `ListScenesByL3`
+reads the domain back. Topics carry no graph references.
 
 ### L4 archive search (historical originals)
 
@@ -322,7 +292,7 @@ Single record: `db.GetArchive(id)`.
 | `db.ActivateCapability(id)` | draft → active |
 | `db.RecordCapabilityUsage(id, success)` | usage feedback |
 
-> The built-in toolbox (7 English cards: `memhop-guide` + 6 LLM-callable manuals) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `GetCapability(id)`. Resources are tool declarations (`name/desc/input/output` mirror the host tool spec; `input` is a JSON Schema string), so hosts project them with a pure field copy.
+> The built-in toolbox (6 English cards: `memhop-guide` + 5 LLM-callable manuals) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `GetCapability(id)`. Resources are tool declarations (`name/desc/input/output` mirror the host tool spec; `input` is a JSON Schema string), so hosts project them with a pure field copy.
 
 ### L6 trajectory + crystallization (v1.2.7 additions)
 
@@ -362,24 +332,25 @@ products live in L4/L5) — there is no delete API.
 
 ---
 
-## 9. Exported types (v1.4.1)
+## 9. Exported types (v1.5.0)
 
 | Kind | Names | Use |
 |---|---|---|
-| config | `MemHopConfig` / `Encoder` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | config + custom encoder contract |
-| input aliases | `SearchQuery` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `CapabilityImport` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `Workflow` | inputs & id-free results (all string IDs are hex) |
+| config | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the whole assembly surface |
+| input aliases | `SearchQuery` / `TurnUpdate` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `CapabilityImport` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `Workflow` | inputs & id-free results (all string IDs are hex) |
 | response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | every ID field is a 16-hex string (v1.4.1) |
 | id helpers | **`FormatID`** / **`ParseID`** / **`FormatAgentID`** / **`ParseAgentID`** (new in v1.4.1) | hex ⇄ uint64 when a host must convert |
-| enums | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` | enum aliases |
+| enums | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` / `PlanStatus` | enum aliases |
 
 Enum constants are exported too: `L3ImportSkip/Merge/Overwrite`,
 `CapabilityMCP/Skill/API/Composite`, `CapabilityDraft/Active/Deprecated`,
 `CapabilityOrigin*`, `EdgeRelated...EdgeCustom`,
 `ContentText/Image/Video/Document/Audio/Code/Other`.
 
-> Note: `Role*` constants are **not** re-exported — `AppendL4Message` takes a
-> raw `uint8` (0=user, 1=agent, 2=system, 3=dream); content types use the
-> exported `Content*` constants.
+> `AppendL4Message` takes `role` as a bare `uint8`; the exported constants are
+> `api.RoleUser` / `RoleAgent` / `RoleSystem` / `RoleDream` (values 0-3).
+> Plan trees use `api.NodeTypeEvent` / `NodeTypePlan`, the numeric read-side
+> `api.Status*` codes and the string write-side `api.PlanStatus*` values.
 
 ---
 
@@ -392,13 +363,15 @@ non-MemHop errors). Check with the exported constants:
 if api.CodeOf(err) == api.ErrNotFound { ... }
 ```
 
-Codes: `ErrConfig`, `ErrVectorDimMismatch`, `ErrInvalidQuery`, `ErrNotFound`,
+Codes: `ErrConfig`, `ErrInvalidQuery`, `ErrNotFound`,
 `ErrIO`, `ErrClosed`, `ErrInvalidMagic`, `ErrCRCMismatch`, `ErrCorruption`,
-`ErrSerialization`, `ErrDeserialization`, `ErrEncoder`, `ErrLLM`, `ErrAgentNotFound` (agentID not registered or deleted).
+`ErrSerialization`, `ErrDeserialization`, `ErrLLM`, `ErrAgentNotFound` (agentID not registered or deleted).
+Numbers are never reused: `1002` (vector-dimension mismatch) and `9001`
+(encoder) were retired with the retrieval subsystem.
 
 ---
 
-## 11. Minimal runnable skeleton (v1.4.1 signatures)
+## 11. Minimal runnable skeleton (v1.5.0 signatures)
 
 ```go
 package main
@@ -414,10 +387,7 @@ import (
 
 func main() {
     dbm, err := api.OpenMulti(&api.MemHopConfig{
-        DBPath:      os.Getenv("MEH_PATH"),        // /data/agent.meh
-        VectorDim:   768,
-        EncoderAddr: os.Getenv("OLLAMA_URL"),      // http://localhost:11434
-        EmbedModel:  "nomic-embed-text",
+        DBPath: os.Getenv("MEH_PATH"), // /data/agent.meh
         LLM: api.LlmConfig{
             APIURL: os.Getenv("LLM_URL"),
             APIKey: os.Getenv("LLM_KEY"),
@@ -434,21 +404,31 @@ func main() {
     db, err := dbm.Session(agentID)
     if err != nil { log.Fatal(err) }
 
-    // Per turn: start
-    res, err := db.Search(context.Background(), api.SearchQuery{
-        Text:      "user raw message",
-        Timestamp: time.Now().UnixMilli(),
+    // One host session = one scene. The first turn asks for a scene with an
+    // empty SceneID and keeps the returned id.
+    opened, err := db.Search(api.SearchQuery{SceneName: "chat-1"})
+    if err != nil { log.Fatal(err) }
+    sceneID := opened.Scene.SceneID
+
+    // Per turn: start — read this session's memory (zero LLM) and splice it in.
+    res, err := db.Search(api.SearchQuery{SceneID: sceneID})
+    if err != nil { log.Fatal(err) }
+    _ = res // Profile/ProfileBrief + Topics (FusedKeywords per topic)
+
+    // Per turn: end — settle the whole exchange, get the turn's topic id back.
+    userTS := time.Now().UnixMilli()
+    topicID, err := db.Update(api.TurnUpdate{
+        SceneID:   sceneID,
+        UserText:  "user raw message",
+        UserTS:    userTS,
+        AgentText: "agent reply",
+        AgentTS:   time.Now().UnixMilli(),
     })
     if err != nil { log.Fatal(err) }
-    _ = res // Profile + Contexts → splice into prompt
+    _ = topicID // feed AppendL4Message to keep adding this turn's messages
 
-    // Per turn: end. NewTopicID is the 16-hex topic id ("": the turn hit an
-    // existing topic; pick its ID from Contexts).
-    if err := db.Update(res.NewTopicID, "agent reply", time.Now().UnixMilli()); err != nil {
-        log.Fatal(err)
-    }
-
-    // Idle / scheduled
+    // Idle / scheduled (usually unnecessary: Update schedules consolidation
+    // once a scene's topic count passes the threshold).
     if _, err := db.Dream(context.Background(), ""); err != nil {
         log.Fatal(err)
     }
@@ -457,18 +437,28 @@ func main() {
 
 ---
 
+
 ## 12. Pitfalls
 
-1. **LLM down = memory loop down**: Search/Update/RefineTopicKeywords do not
-   degrade. Have an LLM availability fallback before integrating.
-2. **Encoder dimension is locked**: `VectorDim` mismatch → Open fails
-   (`ErrVectorDimMismatch`), no migration of old files: headers older than
-   format `0x0009` are rejected outright at Open.
-3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`.
+1. **The LLM only affects the write path**: `Search` makes zero LLM calls, so
+   reads can never be blocked by it. `Update` distils once per turn and, on
+   failure, returns an error having written nothing — no half-recorded turn.
+   Hosts should retry a failed settle.
+2. **No embedding service, no dimension to declare**: the two header bytes at
+   offset 6 held the vector dimension until v1.5.0 and are now reserved — files
+   written by v1.4.x open unchanged. The format version is still `0x0009`: the
+   single keyword track is folded in at decode time, so no migration runs and
+   none is needed. Headers older than `0x0009` remain rejected.
+3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`; the agent timestamp
+   must not precede the user timestamp.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
    feed back as-is, and `api.FormatID` / `api.ParseID` cover rare conversions.
-5. **Search is a write**: to read history without creating memory, use
-   `SceneContext` / `SearchL4`.
+5. **`Search` writes no memory content**: its only side effect is the scene hit
+   counter. To read originals use `SceneContext` / `SearchL4` / `GetArchive`;
+   to re-derive keywords use `RefineTopicKeywords`.
+   Replaying an `Update` with the same `SceneID` + both timestamps is
+   idempotent: the topic id is derived from that triple and the archives from
+   the topic id, so a retried settle overwrites instead of duplicating.
 6. **One file, many agent domains**: since v1.4 all tenants live inside one
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
    isolated per domain; legacy files (`FormatVersion < 0x0009`) cannot be
@@ -477,9 +467,13 @@ func main() {
 8. **Trajectories auto-expire**: Dream drops events older than 7 days;
    the external surface is append + query only (`AppendTrajectory` /
    `ReadTrajectory` / `ListTrajectorySessions`) — no delete API.
-9. **Capacity semantics (v1.2.7)**: the active set is unbounded; reaching
-   `Capacity` makes Update trigger a Dream on the oldest scene — Dream is
-   skipped when the scene is below `DreamCompressMinTopics` (pre-checked).
-10. **`SearchDreamContextThreshold` default 30**: a partial `MemHopDefaults`
-    literal leaves it 0, which **disables** the Search-triggered Dream — assign
-    `*api.DefaultMemHopDefaults` first, then override.
+9. **The host owns the scene id**: `Update` accepts only an existing scene
+   (obtained from `Search` → `Scene.SceneID`). The library never creates a
+   scene behind a settle, and Dream never merges scenes — merging is the
+   explicit `MergeScenes`, which deletes the merged-away records and thereby
+   invalidates any scene id the host still holds.
+10. **`SceneDreamTopicThreshold` defaults to 24**: a partial `MemHopDefaults`
+    literal leaves it 0, which **disables** automatic consolidation — assign
+    `*api.DefaultMemHopDefaults` first, then override. Context size stays
+    bounded only because Dream compresses each scene to ≤20 topics, so
+    switching it off lets the injected context grow without limit.

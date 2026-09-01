@@ -26,7 +26,7 @@ func TestMain(m *testing.M) {
 
 func tempEngine(t *testing.T) *core.StorageEngine {
 	t.Helper()
-	eng, err := core.Create(filepath.Join(t.TempDir(), "test.meh"), 128)
+	eng, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
 	if err != nil {
 		t.Fatalf("create engine: %v", err)
 	}
@@ -34,8 +34,15 @@ func tempEngine(t *testing.T) *core.StorageEngine {
 	return eng
 }
 
-// TestSyncL1NodesFromL2 covers node creation, idempotent no-op, topic-set
-// update and per-scene isolation.
+// mustCreateTopic writes one depth-1 turn topic under sceneID with the given
+// keywords; hyperedge construction reads exactly that single keyword track.
+func mustCreateTopic(t *testing.T, engine *core.StorageEngine, sceneID uint64, userTS int64, kws []string) {
+	t.Helper()
+	id := core.ComputeTurnTopicID(sceneID, userTS, userTS+1)
+	if !repo.CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, id, kws, userTS, userTS+1) {
+		t.Fatalf("create topic %v under scene %s", kws, common.FormatHash(sceneID))
+	}
+}
 
 // TestBuildHyperedges covers edge creation from keyword-overlap Jaccard,
 // threshold filtering, idempotent refresh and weight strengthening (max wins).
@@ -45,15 +52,9 @@ func TestBuildHyperedges(t *testing.T) {
 	sceneB := common.HashID("sceneB")
 	sceneC := common.HashID("sceneC")
 
-	if !repo.CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"memory", "agent"}, 1000, 0) {
-		t.Fatal("create topic A1")
-	}
-	if !repo.CreateTopicL2(engine, core.DefaultAgentID, sceneB, []string{"memory", "database"}, 1000, 0) {
-		t.Fatal("create topic B1")
-	}
-	if !repo.CreateTopicL2(engine, core.DefaultAgentID, sceneC, []string{"cooking", "food"}, 1000, 0) {
-		t.Fatal("create topic C1")
-	}
+	mustCreateTopic(t, engine, sceneA, 1000, []string{"memory", "agent"})
+	mustCreateTopic(t, engine, sceneB, 1000, []string{"memory", "database"})
+	mustCreateTopic(t, engine, sceneC, 1000, []string{"cooking", "food"})
 	if _, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
@@ -94,9 +95,7 @@ func TestBuildHyperedges(t *testing.T) {
 	}
 
 	// More shared terms strengthen the edge (max update wins).
-	if !repo.CreateTopicL2(engine, core.DefaultAgentID, sceneA, []string{"database"}, 2000, 0) {
-		t.Fatal("create topic A2")
-	}
+	mustCreateTopic(t, engine, sceneA, 2000, []string{"database"})
 	if _, err := repo.SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
 		t.Fatalf("sync #2: %v", err)
 	}

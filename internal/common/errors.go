@@ -17,9 +17,8 @@ type Code uint16
 var ErrTruncated = errors.New("llm response truncated")
 
 const (
-	ErrConfig            Code = 1001 // 1001 configuration error: missing or invalid parameters (config.go validation, encoder address/model, tokenizer init)
-	ErrVectorDimMismatch Code = 1002 // 1002 vector dimension mismatch: config vs engine (config.go)
-	ErrInvalidQuery      Code = 1003 // 1003 invalid query or ID parse failure (l1-l5layer/scenefind/hash parse, reclaim legacy layout)
+	ErrConfig       Code = 1001 // 1001 configuration error: missing or invalid parameters (config.go validation, tokenizer init)
+	ErrInvalidQuery Code = 1003 // 1003 invalid query or ID parse failure (hex id parse, layer read/write guards, reclaim legacy layout)
 
 	ErrNotFound      Code = 3001 // 3001 resource not found (profile missing, record lookup)
 	ErrAgentNotFound Code = 3002 // 3002 agent domain not found: unregistered or deleted agentID (contextFor, Session)
@@ -32,8 +31,11 @@ const (
 	ErrSerialization   Code = 5006 // 5006 serialization failure: marshal and index snapshot encoding errors (record layer, db.go snapshot)
 	ErrDeserialization Code = 5007 // 5007 deserialization failure: unmarshal and index parse errors (record layer, sparse.go, hypergraph)
 
-	ErrEncoder Code = 9001 // 9001 encoder error: external vector service failure (encoder.go)
-	ErrLLM     Code = 9002 // 9002 llm error: external model call/response parse failure (llm/ files)
+	ErrLLM Code = 9002 // 9002 llm error: external model call/response parse failure (llm/ files)
+	// 9001 (encoder error) was retired with the embedding-service dependency
+	// and 1002 (vector-dimension mismatch) with the retrieval subsystem that
+	// compared the configured dimension to the file header. Both numbers stay
+	// reserved and are never reused.
 )
 
 type Error struct {

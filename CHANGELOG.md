@@ -3,6 +3,48 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## v1.5.0 — 2026-09-01
+
+**L2 换轨：场景 = 宿主会话，检索不再猜场景**：Search 变成场景内只读直取，Update 一次沉淀整轮并做唯一一次提炼，话题只留一轨 `FusedKeywords`；三通道打分检索、L1 扩散、向量质心与 embedding 依赖整体退役。
+
+### 破坏性变更
+
+- **`Search` 语义重写**：`SearchQuery` 只剩 `{scene_id, l3_id, scene_name}`，**无文本、无打分、零 LLM、零 embedding**。`scene_id` 为空 = 请库新建场景（返回其 id）；非空但场景不存在 = `ErrNotFound`（库内不再有"检索未命中自动聚类出新场景"）。返回体改为 `{profile, profile_brief, scene, topics}` —— `topics` 是该场景的 depth-1 话题集（宿主本轮该注入的上下文），**删除** `contexts` / `associated_contexts` / `new_topic_id` / `auto_create` / `directed_l2_id` / `directed_l3_id`。门面签名同步去掉 `ctx`（读路径已无可取消的 LLM 调用）。
+- **`Update` 一次沉淀整轮**：入参 `TurnUpdate{scene_id, user_text, user_ts, agent_text, agent_ts}`，**返回新话题 id**（供 `AppendL4Message` 续写本轮中间消息）。一次 LLM 提炼出该轮关键词；提炼排在所有写入之前，失败即报错且零留痕（不再有"半轮记忆"）。未知场景拒绝。
+- **`TopicSlot` 单轨化**：删除 `user_keywords` / `agent_keywords` / `centroid_page_ref` / `l3_refs`，只留 `fused_keywords`（磁盘字段名不变）。Dream 压缩、L1 超边、宿主注入共用这一轨。不设摘要字段——原文始终在 L4。
+- **场景 ID 归宿主**：`NewSceneSlot(sceneID, name)` 不再由名字哈希派生 ID；`repo.CreateSceneL2` 换成 `CreateSceneL2WithID`（已存在即幂等复用、不改名）。老场景记录照旧可读。
+- **`RefineTopicKeywords` 去掉幂等守卫**：单轨后守卫失效，改为按 `L4Refs` 全量原文无条件重算（每次调用一次 LLM，何时调用由宿主决定）。
+- **检索子系统删除**：`internal/cap/scenefind`（三通道 BM25/向量/实体 + RRF 融合 + 场景加分 + L1 扩散）整包删除；话题质心、`RecVecCentroid` 记录类型、`Encoder`/`HttpEncoder` 与 `encoder_addr`/`embed_model`/`encoder_timeout_secs` 配置一并删除 —— **MemHop 不再需要 embedding 服务**。`gse` 只剩一个读者：`llmops` 关键词提炼失败时的启发式分词兜底。
+- **`VectorDim` 从配置面删除**：既然没有任何向量读者，声明维度就成了纯粹的负担——宿主必须填一个无意义的数，填错还会让 `Open` 拒绝一个完全可读的旧库。`MemHopConfig.VectorDim`、`CheckVectorDim`、`ErrVectorDimMismatch`（码 1002，编号不复用）与 MCP `--vector-dim` 全部删除；文件头偏移 6 的两字节改为保留位（新库写 0，旧库原值保留），格式版本仍 `0x0009`。
+- **死索引岛整体删除**：检索退役后 `index/sparse.go`（BM25）、`index/entity.go`（BK-tree 模糊匹配）、`index/l3_index.go` 与 `common/bktree.go` 在生产路径上零调用者——`QueryL3Nodes` 一直是记录扫描 + 子串匹配，从未走过这些索引。连带删除 `strutil` 的两个 Levenshtein 实现与零调用的 `common.FormatIDs`（约 800 行生产码 + 700 行测试）。**行为无变化**，只是不再让人误以为 L3 图检索有 BM25 排序。
+- **巩固触发改轴**：`activeScenes` 窗口与 `capacity` 旋钮废弃（`Session.ActiveSceneIDs` / `HasActiveScenes` 同步删除）；`Update` 在该场景 depth-1 话题数超过新旋钮 `scene_dream_topic_threshold`（默认 24）时调度该场景 Dream。`RunDream(sceneID=0)` 改为遍历域内全部场景。
+- **交付面**：MCP `memhop_search` / `memhop_update` 入参换轨、`memhop_status` 改报 `scene_count`、**删除 `memhop_scene_active_list`**（31 → 30 工具）；DSH 插件的记忆循环与面板同步适配。
+- **工具面覆盖澄清**：30 个 MCP 工具对应 42 个公开会话方法中的 30 个；刻意只留在 Go 侧的是 L6 计划面（`PlanAppend`/`PlanCommit`/`PlanState`/`PlanReplace`/`SyncPlanTree`/`ListPlans`）、记忆纠错（`DeleteTopic`/`DeleteScene`）、轮内 `AppendL4Message`/`RefineTopicKeywords`、`SetSceneL3ID`/`ListScenesByL3`/`DistillL0`。此前文档写"全部公开 API"是不准确的。
+
+### 修复
+
+- **`SearchResult.Scene.TopicCount` 恒为 0**：该字段是派生值（只有 `ListScenes` 现算），场景记录里从不落盘，于是文档承诺的"读回时带话题数"实际一直是 0。现在 `Search` 用同一批已加载的 depth-1 话题直接填，与 `ListScenes` 报同一个数（回归测试 `TestSearchReportsSceneTopicCount`）。
+- **DSH 插件无法起 server**：插件仍向 `memhop-mcp` 传已删除的 `-embed-model` / `-encoder-addr`，Go flag 解析器会以 "flag provided but not defined" 直接拒绝启动。embedder 相关配置从插件的 spawn 参数、wrapper 模板、配置读写与面板表单里全部删除；同时摘掉 `package.json` 指向不存在的 `scripts/install.mjs` 的 lifecycle 脚本。
+- **新场景 ID 分配不再吞掉真实故障**：`freshSceneID` 以前把"读场景报任何错"都当作"该 id 未占用"，引擎关闭或 IO 故障时会铸出一个可能与既有场景冲突的 ID（两个宿主会话静默合并）。现在只有 `ErrNotFound` 算可用，其他错误原样上抛。
+- **独立安装脚本的 wrapper 同样坏着**：`dsh/scripts/install.mjs` 生成的 launchd wrapper 仍带 `-embed-model` / `-encoder-addr`（它与插件那份 wrapper 是两处独立实现，上一版只修了插件那份）——npm lifecycle 脚本摘掉后这个文件仍可手动执行，一跑起服务就退出。现收敛为与插件相同的三参数形态（`-db-dir` / `-transport` / `-listen`）。
+- **MCP server 不再自报旧版本**：`initialize` 返回的 `serverInfo.version` 取自 `cmd/memhop-mcp` 的 `version` 常量，还停在 `v1.4.2`——据此判断兼容性的宿主会判错。现为 `v1.5.0`。
+- **DSH 侧"每租户一个 `.meh`"是假的**：插件头注释、`dsh/README` 部署模型与 installer 注入 `cordis.patch.yml` 的注释都写"独立 `.meh`（`dbDir/<session-id>.meh`）"，而 server 只在 `-db-dir` 下建**一个**共享 `memhop.meh`，租户是文件内的独立 agent 域（`cmd/memhop-mcp/registry.go:126`）。后果不止文档错：面板 `db:` 指向一个磁盘上永不存在的文件，turn 计数侧车也从这条假路径派生。现统一为"共享文件 + agent 域"表述，侧车改为直接按 tenant 键落盘（文件名与旧实现逐字节相同，无需迁移），`memhop__session` 增报 `tenant`。
+- **`memhop__session` 的 `topicId` 复活**：v1.5.0 起 `search` 不再返回话题 id，该字段只剩初值 `null`；改由 `update` 的返回值填充。
+- **交付文档的数字与死链**：`capabilities/README` 的"MCP 31 工具"改 30（与 `smoke_test.go:36` 的断言一致）；`dsh/README` 的 server 启动示例换成二进制真正接受的 flag（旧示例照抄必然起不来——它传的 `--embed-model` / `--encoder-addr` 已随 embedding 一起删除）；其首段指向 `docs/dsh-memhop-integration-plan.md` 的链接改为纯文本路径（`docs/` 有意不入库，公开 clone 里是死链）。
+
+### 兼容
+
+- **不 bump `FormatVersion`**：`TopicSlot.UnmarshalJSON` 在解码点把 v1.4.x 记录的 `user_keywords`/`agent_keywords` 归并进 `fused_keywords`，老 `.meh` 直接打开且不丢既有关键词；下一次写回自然收敛为单轨。
+- 话题 ID 新增 `"turn:"` 命名空间（`ComputeTurnTopicID`），与 Dream 融合节点的 `ComputeTopicID` 分域，避免同 (场景, 双时间戳) 相撞；删除生产零调用的 `ComputeTopicIDForText` 与死字段 `SceneNode.VectorPageRef`。
+- 场景归并不再发生在 Dream 内（会连带删掉宿主正持有的 sceneID），合并场景仍是宿主显式调用的对外接口 `MergeScenes`。
+- L1 层保留（节点同步 / 关键词 Jaccard 建边 / 衰减 / 重要性反馈，全部改吃单轨关键词），但删除扩散后库内暂无读者。
+
+### 实测基线
+
+热路径 LLM 调用从每轮 2 次（Search 提炼 + Update 提炼）降到每轮 1 次且只在写路径；Search 变为纯内存读（`L2MetaIndex.GetByScene`），不再联系 LLM 与 embedding 服务。检索质量类断言随之重定位：`test/` 黑盒不再测"跨会话召回"（该能力已按设计移除），改测整轮沉淀、场景读回与巩固后不丢事实。
+
+新增两条宿主可依赖的不变量测试：`TestUpdateReplayIsIdempotent`（同 `(场景, user_ts, agent_ts)` 重放 `Update` 只覆盖不叠加：1 个话题 + 2 条档案）与 `TestSearchReportsSceneTopicCount`（读回的 `TopicCount` 与 `ListScenes` 一致）。
+
 ## v1.4.2 — 2026-08-31
 
 **L6 计划树 + L2 目录归属**：轨迹层承载可折叠的任务树（三形态写入 + 整树同步），场景固定挂到 L3 项目域。

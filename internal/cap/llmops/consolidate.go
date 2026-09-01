@@ -118,8 +118,7 @@ func BuildConsolidatePrompt(topics []core.TopicSlot) string {
 		})
 		fmt.Fprintf(&b, "## scene_id = %d\n", sid)
 		for _, n := range nodes {
-			fmt.Fprintf(&b, "- id=%d depth=%d user_kw=%v agent_kw=%v fused_kw=%v\n",
-				n.ID, n.Depth, n.UserKeywords, n.AgentKeywords, n.FusedKeywords)
+			fmt.Fprintf(&b, "- id=%d depth=%d kw=%v\n", n.ID, n.Depth, n.FusedKeywords)
 		}
 		b.WriteByte('\n')
 	}

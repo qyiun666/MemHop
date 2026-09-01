@@ -23,7 +23,7 @@ type serverConfig struct {
 	Listen string // HTTP listen address
 	DBDir  string // root directory holding the shared memhop.meh multi-agent database
 	// Tenants is the optional tenant whitelist; empty allows any valid
-	// tenant id to create its database on first access.
+	// tenant id to open its agent domain on first access.
 	Tenants []string
 	// Transport selects the multi-tenant HTTP transport: "sse" (default,
 	// 2024-11-05 spec) or "streamable-http" (2025-03-26 spec, supported by
@@ -74,15 +74,11 @@ func splitTenants(raw string) ([]string, error) {
 
 // flagValues holds the parsed command-line flags of the server.
 type flagValues struct {
-	listen             string
-	dbDir              string
-	tenants            string
-	transport          string
-	vectorDim          int
-	encoderAddr        string
-	embedModel         string
-	encoderTimeoutSecs int
-	llmModel           string
+	listen    string
+	dbDir     string
+	tenants   string
+	transport string
+	llmModel  string
 }
 
 // parseFlags registers and parses the memhop-mcp command line, rejecting
@@ -94,10 +90,6 @@ func parseFlags(args []string) (*flagValues, error) {
 	fs.StringVar(&v.dbDir, "db-dir", "", "directory holding the shared multi-agent memhop.meh database (required)")
 	fs.StringVar(&v.tenants, "tenants", "", "optional comma-separated tenant whitelist")
 	fs.StringVar(&v.transport, "transport", "sse", "multi-tenant HTTP transport: sse or streamable-http")
-	fs.IntVar(&v.vectorDim, "vector-dim", 1024, "embedding vector dimension")
-	fs.StringVar(&v.encoderAddr, "encoder-addr", "", "embedding encoder HTTP address (e.g. http://127.0.0.1:11434)")
-	fs.StringVar(&v.embedModel, "embed-model", "", "embedding model name on the encoder (required)")
-	fs.IntVar(&v.encoderTimeoutSecs, "encoder-timeout-secs", 20, "encoder request timeout in seconds")
 	fs.StringVar(&v.llmModel, "llm-model", "", "LLM model name (overrides MEMHOP_LLM_MODEL)")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -126,26 +118,15 @@ func buildBaseConfig(v *flagValues) (memhop.MemHopConfig, error) {
 	if err != nil {
 		return base, err
 	}
-	base = memhop.MemHopConfig{
-		DBPath:             "", // filled per tenant by the registry
-		VectorDim:          v.vectorDim,
-		EncoderAddr:        v.encoderAddr,
-		EmbedModel:         v.embedModel,
-		EncoderTimeoutSecs: v.encoderTimeoutSecs,
-	}
+	// DBPath is filled by the registry with the shared <db-dir>/memhop.meh.
+	base = memhop.MemHopConfig{}
 	base.LLM.APIURL = envOr("MEMHOP_LLM_API_URL", "")
 	base.LLM.APIKey = os.Getenv("MEMHOP_LLM_API_KEY")
 	base.LLM.Model = firstNonEmpty(v.llmModel, os.Getenv("MEMHOP_LLM_MODEL"))
 	base.LLM.TimeoutSecs = llmTimeout
 	base.LLM.MaxOutputTokens = llmMaxTokens
 	// Field-level checks mirroring MemHopConfig.Validate minus DBPath
-	// (filled per tenant by the registry, which runs the full Validate).
-	if base.VectorDim <= 0 || base.VectorDim > 65535 {
-		return base, fmt.Errorf("vector-dim must be in range (0, 65535]")
-	}
-	if base.EmbedModel == "" {
-		return base, fmt.Errorf("--embed-model is required")
-	}
+	// (the registry fills the shared database path and runs the full Validate).
 	if base.LLM.APIURL == "" || base.LLM.APIKey == "" || base.LLM.Model == "" {
 		return base, fmt.Errorf("MEMHOP_LLM_API_URL, MEMHOP_LLM_API_KEY and MEMHOP_LLM_MODEL are required")
 	}

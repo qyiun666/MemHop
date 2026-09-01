@@ -23,54 +23,12 @@ func SafeCharSlice(s string, maxChars int) string {
 	return s
 }
 
-func LevenshteinDistance(a, b string) int {
-	d, _, _ := LevenshteinDistanceInto(a, b, nil, nil)
-	return d
-}
-
 // LevenshteinDistanceInto computes the edit distance between a and b
 // using caller-provided work buffers, growing them when capacity is
 // insufficient. The returned prev/curr slices are the (possibly grown)
 // buffers and may be passed back as arguments for zero-allocation reuse
 // across calls; on the empty-string fast paths they are returned
 // unchanged. The result is identical to LevenshteinDistance.
-func LevenshteinDistanceInto(a, b string, prev, curr []int) (int, []int, []int) {
-	aRunes := []rune(a)
-	bRunes := []rune(b)
-	m, n := len(aRunes), len(bRunes)
-	if m == 0 {
-		return n, prev, curr
-	}
-	if n == 0 {
-		return m, prev, curr
-	}
-	need := n + 1
-	if cap(prev) < need {
-		prev = make([]int, need)
-	} else {
-		prev = prev[:need]
-	}
-	if cap(curr) < need {
-		curr = make([]int, need)
-	} else {
-		curr = curr[:need]
-	}
-	for j := 0; j <= n; j++ {
-		prev[j] = j
-	}
-	for i := 1; i <= m; i++ {
-		curr[0] = i
-		for j := 1; j <= n; j++ {
-			cost := 1
-			if aRunes[i-1] == bRunes[j-1] {
-				cost = 0
-			}
-			curr[j] = min(prev[j]+1, curr[j-1]+1, prev[j-1]+cost)
-		}
-		prev, curr = curr, prev
-	}
-	return prev[n], prev, curr
-}
 
 // SplitCamelCase splits camelCase/PascalCase identifiers
 // ("fetchUserData" → [fetch, user, data], "JSONParser" → [json, parser]);

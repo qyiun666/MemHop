@@ -16,7 +16,7 @@ import (
 
 	openai "github.com/sashabaranov/go-openai"
 
-	"github.com/qyiun666/MemHop/api"
+	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
@@ -83,35 +83,13 @@ func stripJSONFence(s string) string {
 	return strings.TrimSpace(s)
 }
 
-// fusedTopicKeywords flattens only FusedKeywords from compressed topics.
-// The post-Dream Search also creates a fresh raw topic for the query itself;
-// its UserKeywords describe the query, not the compressed memory.
-func fusedTopicKeywords(ts *internal.SearchResult) []string {
+// surfaceKeywords flattens a session surface into one deduplicated keyword set:
+// every depth-1 topic's single keyword track, in turn order.
+func surfaceKeywords(res *memhop.SearchResult) []string {
 	seen := map[string]struct{}{}
 	var out []string
-	for i := range ts.Contexts {
-		for _, kw := range ts.Contexts[i].FusedKeywords {
-			kw = strings.TrimSpace(kw)
-			if kw == "" {
-				continue
-			}
-			if _, ok := seen[kw]; ok {
-				continue
-			}
-			seen[kw] = struct{}{}
-			out = append(out, kw)
-		}
-	}
-	return out
-}
-
-// topicKeywords flattens a TopicSlot's keyword tracks into one set for
-// fidelity judgement (user + agent + fused).
-func topicKeywords(ts *api.SearchResult) []string {
-	seen := map[string]struct{}{}
-	var out []string
-	add := func(kws []string) {
-		for _, k := range kws {
+	for i := range res.Topics {
+		for _, k := range res.Topics[i].FusedKeywords {
 			k = strings.TrimSpace(k)
 			if k == "" {
 				continue
@@ -123,39 +101,51 @@ func topicKeywords(ts *api.SearchResult) []string {
 			out = append(out, k)
 		}
 	}
-	for i := range ts.Contexts {
-		add(ts.Contexts[i].UserKeywords)
-		add(ts.Contexts[i].AgentKeywords)
-		add(ts.Contexts[i].FusedKeywords)
-	}
 	return out
 }
 
-// TestKeywordFidelity verifies point 1: the keywords MemHop extracts from a
-// dialogue utterance faithfully carry that utterance's meaning.
+// TestKeywordFidelity verifies point 1: the keywords Update distills from a
+// finished turn faithfully carry that turn's meaning — the keywords ARE the
+// host's context, so this is the quality bar of the whole design.
 func TestKeywordFidelity(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 	judge := newJudge(t)
 	model := judgeModel(t)
 
-	cases := []string{
-		"我喜欢在周末去海边跑步，尤其是清晨人少的时候",
-		"我去年五月七号去参加了 LGBTQ 支持小组的活动",
-		"我的猫叫咪咪，今年三岁，最喜欢吃三文鱼罐头",
+	cases := [][2]string{
+		{"我喜欢在周末去海边跑步，尤其是清晨人少的时候", "海边清晨人少时跑步最舒服，注意防晒"},
+		{"我去年五月七号去参加了 LGBTQ 支持小组的活动", "那是个支持性很强的场合，继续聊？"},
+		{"我的猫叫咪咪，今年三岁，最喜欢吃三文鱼罐头", "咪咪的口味很明确，三文鱼罐头是它的最爱"},
+	}
+	sceneID, err := db.OpenSession("keyword fidelity")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
 	}
 	base := time.Now().UnixMilli()
 	var faithful, total int
-	for i, text := range cases {
-		res, err := db.Search(context.Background(), internal.SearchQuery{Text: text, AutoCreate: true, Timestamp: base + int64(i)*1000})
+	for i, c := range cases {
+		ts := base + int64(i)*1000
+		topicID, err := db.Update(memhop.TurnUpdate{
+			SceneID: sceneID, UserText: c[0], UserTS: ts, AgentText: c[1], AgentTS: ts + 500,
+		})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 		if err != nil {
 			t.Fatalf("Search: %v", err)
 		}
-		kws := topicKeywords(res)
-		if len(kws) == 0 {
-			t.Fatalf("no keywords returned for %q", text)
+		var kws []string
+		for _, tp := range res.Topics {
+			if tp.ID == topicID {
+				kws = tp.FusedKeywords
+			}
 		}
-		v := judgeFaithful(t, judge, model, text, kws)
+		if len(kws) == 0 {
+			t.Fatalf("no keywords distilled for turn %d", i)
+		}
+		v := judgeFaithful(t, judge, model, c[0]+" / "+c[1], kws)
 		total++
 		if v.Faithful {
 			faithful++
@@ -168,22 +158,25 @@ func TestKeywordFidelity(t *testing.T) {
 	}
 }
 
-// TestKeywordPersistence verifies point 2: after several Search/Update cycles,
-// the keyword context stored earlier is still retrievable.
+// TestKeywordPersistence verifies point 2: within one host session, an anchor
+// fact's keywords are still on the surface after unrelated turns pile on top
+// of it (the surface is per-turn, so nothing overwrites the anchor).
 func TestKeywordPersistence(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
-	base := time.Now().UnixMilli()
-	// Store a distinctive fact early.
-	anchor := "我的狗叫旺财，是一只金毛，今年五岁了"
-	res, err := db.Search(context.Background(), internal.SearchQuery{Text: anchor, AutoCreate: true, Timestamp: base})
+	sceneID, err := db.OpenSession("persistence")
 	if err != nil {
-		t.Fatalf("anchor Search: %v", err)
+		t.Fatalf("OpenSession: %v", err)
 	}
-	anchorTopic := res.NewTopicID
+	base := time.Now().UnixMilli()
+	if _, err := db.Update(memhop.TurnUpdate{
+		SceneID: sceneID, UserText: "我的狗叫旺财，是一只金毛，今年五岁了", UserTS: base,
+		AgentText: "旺财这个名字很顺口", AgentTS: base + 500,
+	}); err != nil {
+		t.Fatalf("anchor Update: %v", err)
+	}
 
-	// Noise: several unrelated Search/Update cycles.
 	noise := []string{
 		"今天天气真不错，适合出门散步",
 		"我最近在学 Go 语言，觉得协程很有意思",
@@ -192,68 +185,52 @@ func TestKeywordPersistence(t *testing.T) {
 	}
 	for i, ntext := range noise {
 		ts := base + int64(i+1)*1000
-		r, err := db.Search(context.Background(), internal.SearchQuery{Text: ntext, AutoCreate: true, Timestamp: ts})
-		if err != nil {
-			t.Fatalf("noise Search: %v", err)
-		}
-		if err := db.Update(r.NewTopicID, "好的，记下了", ts+500); err != nil {
+		if _, err := db.Update(memhop.TurnUpdate{
+			SceneID: sceneID, UserText: ntext, UserTS: ts,
+			AgentText: "好的，记下了", AgentTS: ts + 500,
+		}); err != nil {
 			t.Fatalf("noise Update: %v", err)
 		}
 	}
-	// Also update the anchor topic to simulate continued activity.
-	if err := db.Update(anchorTopic, "旺财真可爱", base+100); err != nil {
-		t.Fatalf("anchor Update: %v", err)
-	}
 
-	// Retrieve with a query about the anchor fact.
-	got, err := db.Search(context.Background(), internal.SearchQuery{Text: "我的狗叫什么名字，多大了", Timestamp: base + 10000})
+	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
-		t.Fatalf("retrieve Search: %v", err)
+		t.Fatalf("session read: %v", err)
 	}
-	kws := topicKeywords(got)
+	if len(res.Topics) != 5 {
+		t.Fatalf("surface = %d topics, want all 5 turns kept", len(res.Topics))
+	}
+	kws := surfaceKeywords(res)
 	joined := strings.ToLower(strings.Join(kws, " "))
 	if !strings.Contains(joined, "旺财") {
-		t.Fatalf("anchor keyword 旺财 lost after noise cycles; got keywords=%v", kws)
+		t.Fatalf("anchor keyword 旺财 lost after noise turns; keywords=%v", kws)
 	}
-	t.Logf("persistence OK: anchor keywords still retrievable: %v", kws)
+	t.Logf("persistence OK: anchor keyword survived 4 noise turns: %v", kws)
 }
 
-// ingestSameScene feeds a group of related turns into one scene (first turn
-// AutoCreate, the rest directed), adding an agent Update after each user turn
-// so Dream fused-topic IDs do not collide with original topics. Returns the scene ID.
-func ingestSameScene(t *testing.T, db *testsupport.Handle, texts []string, base int64) string {
+// ingestSession feeds a group of related turns into one host session, each
+// closed with an agent reply. Returns the session id.
+func ingestSession(t *testing.T, db *testsupport.Handle, texts []string, base int64) string {
 	t.Helper()
-	var sceneID string
+	sceneID, err := db.OpenSession("ingest session")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
 	for i, text := range texts {
 		ts := base + int64(i)*1000
-		q := internal.SearchQuery{Text: text, Timestamp: ts}
-		if i == 0 {
-			q.AutoCreate = true
-		} else {
-			sid := sceneID
-			q.DirectedL2ID = &sid
-		}
-		res, err := db.Search(context.Background(), q)
-		if err != nil {
-			t.Fatalf("ingest Search[%d]: %v", i, err)
-		}
-		if i == 0 {
-			if len(res.Contexts) == 0 {
-				t.Fatal("first ingest returned no context")
-			}
-			sceneID = res.Contexts[0].SceneID
-		}
-		// Add the agent reply: every user turn has an agent response in real usage.
-		if err := db.Update(res.NewTopicID, "好的，我记下了。", ts+500); err != nil {
-			t.Fatalf("ingest Update: %v", err)
+		if _, err := db.Update(memhop.TurnUpdate{
+			SceneID: sceneID, UserText: text, UserTS: ts,
+			AgentText: "好的，我记下了。", AgentTS: ts + 500,
+		}); err != nil {
+			t.Fatalf("ingest Update[%d]: %v", i, err)
 		}
 	}
 	return sceneID
 }
 
-// TestDreamCompressionFidelity verifies real compression: >20 related
-// utterances in one scene are merged by Dream, and the fused topic's keywords
-// must faithfully summarize all merged details.
+// TestDreamCompressionFidelity verifies real consolidation: >20 related turns
+// in one session are merged by Dream, the surface shrinks, and the fused
+// topic's keywords still faithfully summarize the merged details.
 func TestDreamCompressionFidelity(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
@@ -261,8 +238,8 @@ func TestDreamCompressionFidelity(t *testing.T) {
 	model := judgeModel(t)
 
 	base := time.Now().UnixMilli()
-	// 25 same-topic (running habit) turns exceed DreamCompressMinTopics=20 and trigger
-	// real compression; overlapping semantics should make the LLM merge them.
+	// 25 same-topic (running habit) turns exceed DreamCompressMinTopics=20 and
+	// trigger real compression; overlapping semantics make the LLM merge them.
 	related := []string{
 		"我喜欢早上六点去公园慢跑",
 		"跑步的时候我习惯听播客",
@@ -290,47 +267,49 @@ func TestDreamCompressionFidelity(t *testing.T) {
 		"蛋白粉是跑后必备",
 		"早上公园跑步我很享受",
 	}
-	t.Logf("ingesting %d related utterances into one scene", len(related))
-	ingestSameScene(t, db, related, base)
+	t.Logf("ingesting %d related utterances into one session", len(related))
+	sceneID := ingestSession(t, db, related, base)
 
-	rep, err := db.Dream(context.Background(), "")
+	before, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("session read before dream: %v", err)
+	}
+	rep, err := db.Dream(context.Background(), sceneID)
 	if err != nil {
 		t.Fatalf("Dream: %v", err)
 	}
 	t.Logf("Dream consolidated=%d compressed_groups=%d stages=%d", rep.ConsolidatedScenes, rep.L2TopicsCompressed, len(rep.Stages))
 
-	// After Dream, retrieve on the theme and inspect the keywords now returned.
-	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "我的跑步习惯是怎样的", Timestamp: base + 60000})
+	after, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
-		t.Fatalf("post-dream Search: %v", err)
+		t.Fatalf("session read after dream: %v", err)
 	}
-	kws := topicKeywords(res)
+	kws := surfaceKeywords(after)
 	if len(kws) == 0 {
-		t.Fatal("no keywords after Dream")
+		t.Fatal("no keywords on the surface after Dream")
 	}
-	// Post-compression retrieval includes the fused topic (non-empty FusedKeywords);
-	// per the model, User/Agent tracks are empty when FusedKeywords carry values.
-	var fusedSeen bool
-	for i := range res.Contexts {
-		c := &res.Contexts[i]
-		if len(c.FusedKeywords) > 0 {
-			fusedSeen = true
-			if len(c.UserKeywords) > 0 || len(c.AgentKeywords) > 0 {
-				t.Errorf("fused topic should have empty User/Agent keywords, got user=%v agent=%v",
-					c.UserKeywords, c.AgentKeywords)
+	if rep.ConsolidatedScenes > 0 {
+		if len(after.Topics) >= len(before.Topics) {
+			t.Errorf("surface did not shrink: %d -> %d", len(before.Topics), len(after.Topics))
+		}
+		// The fused topic owns the merged turns and carries the single track.
+		var fusedSeen bool
+		for _, tp := range after.Topics {
+			if len(tp.ChildrenIDs) > 0 && len(tp.FusedKeywords) > 0 {
+				fusedSeen = true
 			}
 		}
-	}
-	if !fusedSeen {
-		t.Error("no fused topic in post-dream contexts")
+		if !fusedSeen {
+			t.Error("no fused topic (with children and keywords) on the post-dream surface")
+		}
 	}
 
-	// Judge whether the returned keywords faithfully summarize the running theme.
+	// Judge whether the surface keywords still carry the running theme.
 	source := strings.Join(related[:4], "；") // the core 4 turns hold all facts
 	v := judgeFaithful(t, judge, model, source, kws)
-	t.Logf("post-dream fidelity=%v kws=%v reason=%s", v.Faithful, kws, v.Reason)
+	t.Logf("post-dream fidelity=%v surface=%d topics kws=%v reason=%s", v.Faithful, len(after.Topics), kws, v.Reason)
 	if !v.Faithful {
-		t.Fatalf("keywords after Dream do not faithfully summarize compressed topics: %v", kws)
+		t.Fatalf("keywords after Dream do not faithfully summarize compressed turns: %v", kws)
 	}
 }
 

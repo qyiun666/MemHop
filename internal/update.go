@@ -1,10 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L2 topic write path: the three operations that mutate an existing topic
-// and refresh its retrieval indexes — Update (agent reply + keyword track),
-// AppendL4Message (pure storage append) and RefineTopicKeywords (N:N fused
-// keyword re-extraction). All three share the loadTopicForWrite guard.
+// L2 write path: Update sinks one finished turn into the host's scene (the
+// only distilling call of the hot path), AppendL4Message appends further
+// messages to an existing topic, and RefineTopicKeywords re-distills a topic
+// from all of its originals. All three share the loadTopicForWrite guard.
 
 package internal
 
@@ -16,87 +16,100 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// Update appends an agent reply to the specified topic. It returns an error
-// on any failure (validation, LLM, or storage); nil means the reply was
-// appended and all indexes were refreshed.
-func (db *DB) Update(agentID uint64, topicID string, text string, timestamp int64) error {
+// Update writes one finished turn: both originals become L4 archives under a
+// new depth-1 topic whose keywords come from a single distillation call. The
+// distill runs before any write, so a failed LLM call leaves the scene exactly
+// as it was — no orphan archive, no contentless topic. It returns the new
+// topic id so the host can keep appending this turn's intermediate messages
+// with AppendL4Message.
+func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer ac.mu.Unlock()
-	if text == "" || timestamp <= 0 {
-		return common.NewError(common.ErrInvalidQuery, "Update requires text and a positive timestamp")
-	}
-	parsedID, err := common.ParseID(topicID)
+
+	sceneID, err := turnSceneID(in)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	// Validate the topic before any write or LLM call: a missing topic must
-	// not leave an orphan L4 archive behind.
-	topic, err := ac.loadTopicForWrite(db, parsedID)
+	// A turn must land in a scene the host already opened with Search; an
+	// unknown id is rejected before any write so nothing settles in a scene
+	// nobody owns.
+	if _, err := core.ReadSceneSlot(db.engine, agentID, sceneID); err != nil {
+		return 0, err
+	}
+	// Extract on the domain's cancellable context: a Close/DeleteAgent racing
+	// an in-flight Update cancels the LLM call instead of waiting a full
+	// round-trip behind the lifecycle barrier.
+	keywords, err := llmops.ExtractTurnKeywords(ac.opCtx, db.llm, in.UserText, in.AgentText)
 	if err != nil {
-		return err
+		return 0, common.NewError(common.ErrLLM, "distill turn", err)
 	}
-	// Extract on the domain's cancellable context: a Close/DeleteAgent that
-	// races an in-flight Update cancels the LLM call instead of waiting a
-	// full round-trip behind the lifecycle barrier, and cancellation aborts
-	// before any record is written.
-	keywords, err := llmops.ExtractKeywords(ac.opCtx, db.llm, text)
+	if len(keywords) == 0 {
+		return 0, common.NewError(common.ErrLLM, "turn distillation produced no keywords", nil)
+	}
+	topicID := core.ComputeTurnTopicID(sceneID, in.UserTS, in.AgentTS)
+	if !repo.CreateTurnTopicL2(db.engine, agentID, sceneID, topicID, keywords, in.UserTS, in.AgentTS) {
+		return 0, common.NewError(common.ErrIO, "create turn topic", nil)
+	}
+	refs, err := db.writeTurnArchives(agentID, topicID, in)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, parsedID, core.RoleAgent, core.ContentText, text, timestamp)
-	if err != nil {
-		return err
+	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, topicID, refs) {
+		return 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, parsedID, []uint64{archiveID}) {
-		return common.NewError(common.ErrIO, "update topic l4 ref", nil)
-	}
-	if !repo.UpdateTopicL2(db.engine, agentID, parsedID, keywords, timestamp) {
-		return common.NewError(common.ErrIO, "update topic keywords", nil)
-	}
-	// Update BM25: uncompressed topics carry User+Agent keywords (compressed
-	// use FusedKeywords); topic.AgentKeywords is stale here, use fresh ones.
-	// Refresh the L2Meta entry first per the storage → l2meta → sparse order.
-	ac.syncL2Meta(db, parsedID)
-	all := make([]string, 0, len(topic.UserKeywords)+len(keywords)+len(topic.FusedKeywords))
-	all = append(all, topic.UserKeywords...)
-	all = append(all, keywords...)
-	all = append(all, topic.FusedKeywords...)
-	terms := index.Tokenize(strings.Join(all, " "))
-	ac.sparseIndex.AddDocument(parsedID, terms, uint32(len(terms)))
-	return db.triggerCapacityDream(ac, agentID)
+	ac.syncL2Meta(db, topicID)
+	db.consolidateScene(ac, sceneID)
+	return topicID, nil
 }
 
-// triggerCapacityDream keeps the active scene set within capacity: when the
-// set is full, the oldest scene gets a background Dream so the next
-// activation has room instead of silently evicting it (best-effort, never
-// fails Update). Pre-check compressibility: a full Dream runs index
-// rebuilds + LLM distill even when no group was merged, so scenes below the
-// compress threshold (few topics keep raw detail) are skipped here. The
-// Dream is scheduled in the background and never blocks the caller.
-func (db *DB) triggerCapacityDream(ac *agentContext, agentID uint64) error {
-	capacity := db.config.Defaults.Capacity
-	if capacity <= 0 || len(ac.activeScenes) < capacity {
-		return nil
+// turnSceneID validates a turn's payload and resolves its host scene id.
+func turnSceneID(in TurnUpdate) (uint64, error) {
+	if in.UserText == "" || in.AgentText == "" {
+		return 0, common.NewError(common.ErrInvalidQuery, "Update requires both the user and the agent text")
 	}
-	oldest := ac.activeScenes[0]
-	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
-		Engine:  db.engine,
-		AgentID: agentID,
-		MetaIdx: ac.l2Meta,
-		SceneID: oldest,
-		Depth:   1,
-		Num:     2,
-	})
-	if err == nil && len(topics) >= db.config.Defaults.DreamCompressMinTopics {
-		db.triggerSceneDream(ac, oldest)
+	if in.UserTS <= 0 || in.AgentTS <= 0 {
+		return 0, common.NewError(common.ErrInvalidQuery, "Update requires positive timestamps for both messages")
 	}
-	return nil
+	if in.AgentTS < in.UserTS {
+		return 0, common.NewError(common.ErrInvalidQuery, "Update requires the agent timestamp not earlier than the user timestamp")
+	}
+	id, err := common.ParseID(in.SceneID)
+	if err != nil {
+		return 0, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+	}
+	return id, nil
+}
+
+// writeTurnArchives appends the turn's two originals as L4 archives in speaker
+// order and returns their ids for the topic's L4Refs.
+func (db *DB) writeTurnArchives(agentID, topicID uint64, in TurnUpdate) ([]uint64, error) {
+	userRef, err := repo.AppendArchiveL4(db.engine, agentID, topicID, core.RoleUser, core.ContentText, in.UserText, in.UserTS)
+	if err != nil {
+		return nil, err
+	}
+	agentRef, err := repo.AppendArchiveL4(db.engine, agentID, topicID, core.RoleAgent, core.ContentText, in.AgentText, in.AgentTS)
+	if err != nil {
+		return nil, err
+	}
+	return []uint64{userRef, agentRef}, nil
+}
+
+// consolidateScene keeps one scene's read surface bounded: once its depth-1
+// topic count passes the threshold, a background Dream compresses it (the
+// scene is compressed by a later hit if this Dream is already in flight).
+// Best-effort and asynchronous — Update never waits on the pipeline. A zero
+// threshold disables the trigger.
+func (db *DB) consolidateScene(ac *agentContext, sceneID uint64) {
+	t := db.config.Defaults.SceneDreamTopicThreshold
+	if t <= 0 || len(ac.sceneSurfaceTopics(sceneID)) <= t {
+		return
+	}
+	db.triggerSceneDream(ac, sceneID)
 }
 
 // AppendL4Message appends one message to an existing topic: pure storage
@@ -141,16 +154,11 @@ func (db *DB) AppendL4Message(agentID uint64, topicID string, text string, times
 	return archiveID, nil
 }
 
-// RefineTopicKeywords re-extracts keywords from all L4 messages in the
-// topic (L4Refs order), stores them as FusedKeywords and clears the
-// user/agent keyword tracks (timestamps preserved). Pure refine: depth
-// unchanged, no compression, no scene effects. Guarded: only topics with
-// more than two L4 messages AND a non-empty user/agent track are refined;
-// everything else is a no-op returning nil (idempotent — a refined topic
-// has empty tracks and is skipped on later calls). Hosts call it after an
-// N:N turn where AppendL4Message appended messages that never entered the
-// keyword tracks (Search → AppendL4Message ×N → Update → refine). The ctx
-// cancels LLM keyword extraction.
+// RefineTopicKeywords re-distills one topic's keyword track from all of its L4
+// originals (L4Refs order), replacing what the turn-level extraction produced.
+// Hosts call it after an N:N turn where AppendL4Message added messages the
+// original distillation never saw; each call costs one LLM round trip and the
+// library does not infer when one is needed. The ctx cancels the extraction.
 func (db *DB) RefineTopicKeywords(ctx context.Context, agentID uint64, topicID string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -161,19 +169,14 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, agentID uint64, topicID s
 	if err != nil {
 		return err
 	}
-	// Validate the topic before any LLM call: a missing topic must not
-	// leave a half-written refine behind.
+	// Validate the topic before any LLM call: a missing topic must not leave
+	// a half-written refine behind.
 	topic, err := ac.loadTopicForWrite(db, parsedID)
 	if err != nil {
 		return err
 	}
-	// Guard: only N:N topics (more than one user+agent pair) with a live
-	// dual-track need refining. A 1:1 topic's tracks already cover its
-	// messages; a refined topic has empty tracks and must not be
-	// re-extracted (idempotent no-op). This also covers empty L4Refs.
-	if len(topic.L4Refs) <= 2 ||
-		(len(topic.UserKeywords) == 0 && len(topic.AgentKeywords) == 0) {
-		return nil
+	if len(topic.L4Refs) == 0 {
+		return nil // nothing to distill from
 	}
 	// Read all L4 originals in L4Refs order (mode 3 returns in input
 	// order, missing skipped) and join them as the extraction source.
@@ -181,20 +184,15 @@ func (db *DB) RefineTopicKeywords(ctx context.Context, agentID uint64, topicID s
 	if err != nil {
 		return err
 	}
-	// Never persist an empty extraction: the guard guarantees the dual
-	// track is non-empty, so clearing it with no replacement would be
-	// destructive and unrecoverable (later calls would skip as refined).
+	// Never persist an empty extraction: it would erase the topic's only
+	// keyword track with nothing to recover it from.
 	if len(keywords) == 0 {
 		return common.NewError(common.ErrLLM, "refine extracted no keywords")
 	}
 	if !repo.RefineTopicKeywordsL2(db.engine, agentID, parsedID, keywords) {
 		return common.NewError(common.ErrIO, "refine topic keywords", nil)
 	}
-	// Refresh the L2Meta entry then rebuild the BM25 document: AddDocument
-	// replaces the old user/agent terms. storage → l2meta → sparse order.
 	ac.syncL2Meta(db, parsedID)
-	terms := index.Tokenize(strings.Join(keywords, " "))
-	ac.sparseIndex.AddDocument(parsedID, terms, uint32(len(terms)))
 	return nil
 }
 

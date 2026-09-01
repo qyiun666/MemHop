@@ -18,23 +18,24 @@
    `ErrAgentNotFound`，域永不复活；与删除对撞的陈旧句柄由锁内墓碑复检拒绝。
    L6 会话族统一走 `db.lockSession(agentID, sessionID)`（lockAgent + hex
    解析，解析失败先解锁），门面侧的会话准入策略在 `CheckSession`。
-2. **索引锁序**：同一操作内更新索引遵循 **存储 -> l2meta -> sparse**
-   （先落记录帧，再 `ac.syncL2Meta`，最后更新稀疏索引）。
+2. **缓存刷新序**：写记录帧后紧跟 `ac.syncL2Meta`（**存储 -> l2meta**）；
+   话题 BM25 索引随检索子系统退役，已无第三层。
    **禁止在域锁内取 `db.agentsMu`**（锁序环：sweep 走 agentsMu -> ac.mu），
    域内簿记（如 `lastDreamAt`）直接写 atomic 字段。
 3. **Dream 域化**：`RunDream` 全程持本域锁；后台触发经
    `triggerSceneDream(ac, sceneID)`（调用方持 `ac.mu`），goroutine 运行在
-   `ac.dreamCtx` 下——`Close`/`DeleteAgent` 取消它，任何在飞 Dream 在下一
-   阶段边界退出，绝不写入已销毁的域。
+   `ac.opCtx` 下——`Close`/`DeleteAgent`/空闲回收取消它，任何在飞 Dream 在下一
+   阶段边界退出，绝不写入已销毁的域。域锁内的前台 LLM 调用（`Update` 的轮次
+   提炼）同样挂 `ac.opCtx`，避免生命周期屏障被一次完整往返阻塞。
 4. **空闲回收**：无后台定时器；`contextFor` 顺带清扫超
    `Defaults.AgentIdleTTLMs` 未访问的域（默认域豁免），回收前先对域锁
    `TryLock`：锁被占用（在飞操作）或 `dreamInFlight` 非空则跳过，留待下轮。
-   回收时快照 sparse blob 进缓存，数据仍在文件，下次访问透明重建。
+   回收时不快照任何东西：L2Meta 在下次访问时从记录重建，数据始终在文件里。
 5. **DeleteAgent 顺序**：先摘租户映射（断绝新 `contextFor`）→
-   `destroyContext`（取消 dreamCtx）→ `ac.deleted` 墓碑（`lockAgent` 拿锁后
+   `destroyContext`（取消 `ac.opCtx`）→ `ac.deleted` 墓碑（`lockAgent` 拿锁后
    复检，与删除对撞的在飞操作被拒）→ `ac.mu` 屏障等待在飞操作 → 引擎域删除。
 6. **planCache 域内索引**：L6 计划聚合缓存 `ac.plans`（`plancache.go`）
-   **不内置锁**，完全依赖 `ac.mu` 串行（与 `activeScenes` 同模式，区别于自带
+**不内置锁**，完全依赖 `ac.mu` 串行（区别于自带
    RWMutex 的 `TrajIndex`）。所有计划写路径（节点增删改、事件绑定、
    `PlanReplace`、`SyncPlanTree`、Dream 清理）必须先取 `ac.mu` 再同步缓存；
    `newAgentContextLocked` 构建，idle 重建时一并重建。`SyncPlanTree` 整树同步
@@ -52,28 +53,44 @@
 
 - 只经 `internal/repo`（及 `repo/core` 导出的 Slot 读写）访问数据；
   **禁止**直接操作帧、文件头、快照结构。
-- `StorageEngine` 句柄由装配层 `config.go` 的 `Open(cfg, enc, builtins)`
+- `StorageEngine` 句柄由装配层 `config.go` 的 `Open(cfg, builtins)`
   唯一持有并注入 `DB.engine`；业务代码不得自行打开/关闭引擎。内建能力
   工具箱由 `api` 门面以 `fs.FS` 注入（api 传 `capabilities.FS`），
   `Open` 负责解析并 attach——internal 不得 import `capabilities`。
 - **能力下沉**：算法与策略一律在 `internal/cap/<feature>` 能力包
-  （scenefind 三通道+RRF 评分、engram L1 建边与遗忘衰减、llmops 四类
+  （engram L1 建边与遗忘衰减、llmops 四类
   LLM 提示契约与解析、capability 能力卡解析校验合并、profile 画像摘要
-  与蒸馏生成、knowledge L3 匹配与节点合并策略）；本包保留"取数 → 调
+  与蒸馏生成、knowledge L3 节点合并策略）；本包保留"取数 → 调
   能力 → 落库"的编排，不做算法。LLM 传输策略（截断升级重试）在本包
   `llm_ops.go` 的 `Provider.ChatWithRetry`，prompt 构建属于 llmops。
 - 新增能力时：先建 `cap/<feature>` 包（依赖注入 + 窄接口，禁止 import
   internal 根），再由本层组装；共享 DTO 下沉 `repo/core/model_dto.go`
   / `model_distill.go`，本包以恒等别名引用（`models.go`）。
 - **会话面（session.go）**：`Session` 是绑定单个 agent 域的唯一对外操作
-  入口（含 ActiveSceneIDs 的外部 hex 渲染）；`api.Session` 只内嵌本类型做
+  入口；`api.Session` 只内嵌本类型做
   纯转发，api 侧禁止出现业务逻辑、格式化或域绑定代码。多 agent 是唯一
   模式：`NewSession(agentID)` 是唯一会话构造器，`DefaultSession` 已删除。
   `exports.go` 是给 api 门面的恒等再导出接缝（Slot 别名、枚举常量、
   Code/CodeOf、FormatAgentID/ParseAgentID）；`api` 包禁止直接 import
   `repo/core` 或 `common`。
-- LLM/encoder 为 DB 级共享（无租户状态），可在域锁内调用，但不得持存储
-  事务等待网络返回。
+- LLM 客户端是 DB 级共享（`db.llm`），由 `New(cfg)` 在装配时构造；任何域
+  不自己建客户端。
+
+
+## 读写路径契约（v1.5.0）
+
+1. **建场景是 `Search` 独占的能力**：`scene_id` 为空 → `freshSceneID` 铸一个
+   未被占用的 ID（`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误原样上抛）
+   并落场景记录；非空且不存在 → `ErrNotFound`。`Update`/`AppendL4Message`/
+   `RefineTopicKeywords` 一律拒绝未知场景/话题，库内不再猜场景。
+2. **`Search` 零 LLM**：只做 `TouchSceneUsage`（唯一写）+ 从 `ac.l2Meta` 取
+   depth-1 话题；`Scene.TopicCount` 用这批话题现算（该字段不落盘）。
+3. **`Update` 每轮一次提炼且排在写入前**：`ExtractTurnKeywords` 失败或空结果
+   直接报错，此时话题/档案/L2Meta 一个字都没动。话题 ID 走 `"turn:"` 命名空间，
+   档案 ID 由 `(topic, ts, content)` 派生，故同 `(场景, 双时间戳)` 重放幂等。
+4. **巩固按单场景规模触发**：`consolidateScene` 在 depth-1 话题数超
+   `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream；`activeScenes`/`Capacity`
+   窗口已删除，Dream 也不再合并场景（合并只走显式 `MergeScenes`）。
 
 ## 单向依赖
 

@@ -21,12 +21,12 @@ import (
 )
 
 // RunDream runs one full dream pipeline for a single agent domain: parallel
-// L2 compression on the given scene (or all active scenes when sceneID is
-// empty), then L1 rebuild/decay, L0 profile/distill; rebuilt sparse and
-// L2Meta indexes are installed into the agent context. Any stage failure
-// returns an error together with the partially filled DreamReport. The whole
-// pipeline holds the domain lock, so same-agent operations wait while
-// different agents run in parallel.
+// L2 compression on the given scene (or every scene of the domain when
+// sceneID is empty), then L1 rebuild/decay, L0 profile/distill; the rebuilt
+// L2Meta cache is installed into the agent context. Any stage failure returns
+// an error together with the partially filled DreamReport. The whole pipeline
+// holds the domain lock, so same-agent operations wait while different agents
+// run in parallel.
 func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*DreamReport, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -39,18 +39,13 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 	// nothing to consolidate (early return below).
 	db.pruneTrajectoryStage(agentID, ac, rep)
 
-	scenes, err := dreamSceneSet(ac, sceneID)
-	if err != nil {
-		return nil, err
-	}
-	if sceneID == 0 && len(scenes) == 0 {
-		// Nothing to consolidate: decide under the domain lock so a scene
-		// registered by a racing Update is never missed (check-then-act).
+	scenes := dreamSceneSet(db.engine, agentID, sceneID)
+	if len(scenes) == 0 {
 		return rep, nil
 	}
 
 	start := time.Now()
-	succeeded, failures := db.compressActiveScenes(ctx, ac, scenes, rep)
+	succeeded, failures := db.compressScenes(ctx, ac, scenes, rep)
 	if len(succeeded) == 0 && failures > 0 {
 		err = errors.New("dream: LLM consolidation failed for all scenes")
 		appendStage(rep, "l2_compress", start, err)
@@ -61,10 +56,6 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 	if cerr := ctx.Err(); cerr != nil {
 		return rep, fmt.Errorf("dream: cancelled after l2_compress stage: %w", cerr)
 	}
-	// Drop compressed scenes so Dream does not spin empty goroutines.
-	// Scenes skipped below the compress threshold stay active for the
-	// next Dream; Search re-activates a compressed scene on its next hit.
-	ac.dropActiveScenes(succeeded)
 
 	if err := db.dreamStructureStages(ctx, agentID, ac, rep); err != nil {
 		return rep, err
@@ -92,13 +83,20 @@ func appendStage(rep *DreamReport, name string, start time.Time, err error) {
 	rep.Stages = append(rep.Stages, DreamStage{Name: name, Status: stageStatus(err), DurationMs: time.Since(start).Milliseconds()})
 }
 
-// dreamSceneSet resolves the target scenes of one pass: a non-zero scene
-// id, or the domain's active scene set.
-func dreamSceneSet(ac *agentContext, sceneID uint64) ([]uint64, error) {
-	if sceneID == 0 {
-		return ac.activeScenes, nil
+// dreamSceneSet resolves the target scenes of one pass: a non-zero scene id,
+// or every scene of the domain. A scene is a host session, so a domain-wide
+// Dream sweeps them all and the compress threshold filters which ones are
+// worth visiting.
+func dreamSceneSet(engine *core.StorageEngine, agentID uint64, sceneID uint64) []uint64 {
+	if sceneID != 0 {
+		return []uint64{sceneID}
 	}
-	return []uint64{sceneID}, nil
+	scenes := repo.CollectAllScenesL2(engine, agentID)
+	out := make([]uint64, 0, len(scenes))
+	for _, s := range scenes {
+		out = append(out, s.SceneID)
+	}
+	return out
 }
 
 // pruneTrajectoryStage drops L6 trajectory events older than the retention
@@ -173,14 +171,13 @@ func (db *DB) pruneTrajectoryStage(agentID uint64, ac *agentContext, rep *DreamR
 	appendStage(rep, "l6_prune", start, err)
 }
 
-// dreamStructureStages runs stages 2 through 5 of the pipeline: index
-// rebuild, L1 sync/edges/rebuild/decay, L0 distillation, then installs
-// the rebuilt indexes into the agent context.
+// dreamStructureStages runs stages 2 through 5 of the pipeline: the L2Meta
+// rebuild, L1 sync/edges/rebuild/decay, L0 distillation, then installs the
+// rebuilt cache into the agent context.
 func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agentContext, rep *DreamReport) error {
 	start := time.Now()
-	// Stage 2: rebuild retrieval indexes (sparse/L2Meta) in one scan of the
-	// agent domain.
-	newSparse, newL2Meta := index.RebuildSearchIndexes(db.engine, agentID)
+	// Stage 2: rebuild the L2Meta cache in one scan of the agent domain.
+	newL2Meta := index.BuildL2MetaFromEngine(db.engine, agentID)
 	decayParams := engram.DecayParams{
 		LambdaNode:             float64(lambdaNode),
 		LambdaEdge:             float64(lambdaEdge),
@@ -190,8 +187,8 @@ func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agen
 		MinEdgeNodes:           minEdgeNodes,
 	}
 
-	// Stage 2.5: L6 usage feedback — adjust L1 importance from scene-level
-	// retrieval usage so the rebuild/decay below reflects actual usage.
+	// Stage 2.5: usage feedback — adjust L1 importance from how recently each
+	// scene was read, so the rebuild/decay below reflects actual usage.
 	db.applyUsageFeedback(agentID)
 	appendStage(rep, "index_rebuild", start, nil)
 
@@ -215,8 +212,7 @@ func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agen
 		return dErr
 	}
 
-	// Final: install the rebuilt indexes into the agent context.
-	ac.sparseIndex = newSparse
+	// Final: install the rebuilt cache into the agent context.
 	ac.l2Meta = newL2Meta
 	return nil
 }
@@ -311,12 +307,12 @@ func (db *DB) triggerSceneDream(ac *agentContext, sceneID uint64) {
 	}()
 }
 
-// compressActiveScenes runs one goroutine per scene: reads depth-1 topics,
-// asks the LLM for merge groups and applies them; returns the set of scenes
-// that had at least one group applied and the LLM failure count. Applied
-// groups accumulate into rep.L2TopicsCompressed under mu. All scenes belong
-// to ac's domain; cross-agent merging is structurally impossible.
-func (db *DB) compressActiveScenes(ctx context.Context, ac *agentContext, scenes []uint64, rep *DreamReport) (map[uint64]struct{}, int) {
+// compressScenes runs one goroutine per scene: reads depth-1 topics, asks the
+// LLM for merge groups and applies them; returns the set of scenes that had at
+// least one group applied and the LLM failure count. Applied groups
+// accumulate into rep.L2TopicsCompressed under mu. All scenes belong to ac's
+// domain; cross-agent merging is structurally impossible.
+func (db *DB) compressScenes(ctx context.Context, ac *agentContext, scenes []uint64, rep *DreamReport) (map[uint64]struct{}, int) {
 	var (
 		wg        sync.WaitGroup
 		mu        sync.Mutex
@@ -397,24 +393,18 @@ func (db *DB) applyOneGroup(ctx context.Context, agentID uint64, sceneID uint64,
 		return false
 	}
 
-	// Keywords of MergedSummary become FusedKeywords (it already merges both sides).
+	// Keywords of MergedSummary become the fused topic's single track.
 	keywords, err := llmops.ExtractKeywords(ctx, db.llm, g.MergedSummary)
 	if err != nil || len(keywords) == 0 {
 		slog.Warn("dream: extract keywords from merged summary failed, skip group", "parent", common.FormatHash(parentID), "err", err)
 		return false
 	}
 
-	centroidRef, err := db.writeCentroid(agentID, g.MergedSummary)
-	if err != nil {
-		slog.Warn("dream: encode merged summary centroid failed", "parent", common.FormatHash(parentID), "err", err)
-		return false
-	}
-
-	if !repo.CreateFusedTopicL2(db.engine, agentID, sceneID, keywords, minTS, maxTS, g.NodeHashes, centroidRef) {
+	if !repo.CreateFusedTopicL2(db.engine, agentID, sceneID, keywords, minTS, maxTS, g.NodeHashes) {
 		slog.Warn("dream: create fused topic failed", "parent", common.FormatHash(parentID))
 		return false
 	}
-	// Attach the summary archive ref so retrieval can return the full text.
+	// Attach the summary archive ref so the host can pull the fused text back.
 	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, parentID, []uint64{archiveID}) {
 		slog.Warn("dream: attach summary archive ref failed", "parent", common.FormatHash(parentID))
 		return false

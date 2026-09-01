@@ -8,21 +8,36 @@
 
 package core
 
+// SearchQuery is one scene-scoped read. SceneID is the host's session id:
+// empty asks the library for a fresh scene, non-empty must already exist.
+// L3ID optionally anchors a newly created scene to a project domain, and
+// SceneName labels it (the library falls back to "session:<id>"). Both are
+// read on creation only — an existing scene keeps its name and anchor.
 type SearchQuery struct {
-	Text         string  `json:"text"`
-	DirectedL2ID *string `json:"directed_l2_id,omitempty"`
-	DirectedL3ID *string `json:"directed_l3_id,omitempty"`
-	L3ID         *string `json:"l3_id,omitempty"` // 场景挂靠的项目域 L3 图（16 位 hex），用于场景前置筛选与回填
-	AutoCreate   bool    `json:"auto_create,omitempty"`
-	Timestamp    int64   `json:"timestamp"`
+	SceneID   string `json:"scene_id,omitempty"`
+	L3ID      string `json:"l3_id,omitempty"`
+	SceneName string `json:"scene_name,omitempty"`
 }
 
+// SearchResult carries the L0 profile plus the read surface of one scene: the
+// scene record and its depth-1 topics, which together are the host's context
+// for that session.
 type SearchResult struct {
-	Profile            ProfileSlot `json:"profile"`
-	ProfileBrief       string      `json:"profile_brief"`
-	Contexts           []TopicSlot `json:"contexts"`
-	AssociatedContexts []TopicSlot `json:"associated_contexts"`
-	NewTopicID         uint64      `json:"new_topic_id,omitempty"`
+	Profile      ProfileSlot `json:"profile"`
+	ProfileBrief string      `json:"profile_brief"`
+	Scene        SceneSlot   `json:"scene"`
+	Topics       []TopicSlot `json:"topics"`
+}
+
+// TurnUpdate is one finished turn handed to Update: the host's scene id plus
+// both originals with their own timestamps. The library distills them into
+// the topic's single keyword track; the originals are kept as L4 archives.
+type TurnUpdate struct {
+	SceneID   string `json:"scene_id"`
+	UserText  string `json:"user_text"`
+	UserTS    int64  `json:"user_ts"`
+	AgentText string `json:"agent_text"`
+	AgentTS   int64  `json:"agent_ts"`
 }
 
 // SceneMessage is one L4 archive message inside a scene context topic.
@@ -192,20 +207,6 @@ type DreamReport struct {
 	L1EdgesRemoved     int          `json:"l1_edges_removed"`
 	L0Updated          bool         `json:"l0_updated"` // 本轮执行了情感/MBTI 蒸馏并回写
 	Stages             []DreamStage `json:"stages,omitempty"`
-}
-
-// SceneHit is the retrieval result: the winning scene, its aggregated
-// score, and the scene's topics ordered by fused relevance.
-type SceneHit struct {
-	SceneID uint64
-	Score   float32
-	Topics  []ScoredTopic
-}
-
-// ScoredTopic is one topic of the hit scene with its fused relevance s
-type ScoredTopic struct {
-	Topic TopicSlot
-	Score float32
 }
 
 // L3ImportMode selects the conflict policy of ImportL3.

@@ -2,16 +2,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Offline interface tests: exercise the public API surface through
-// memhop.OpenWithEncoder with a mock encoder and a mock OpenAI-compatible
-// LLM server. No external services required; run with `go test ./test/...`.
+// memhop.OpenMulti with a mock OpenAI-compatible LLM server. No external
+// services required; run with `go test ./test/...`.
 
 package test
 
 import (
-	"context"
 	"testing"
-	"time"
 
+	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 )
 
@@ -61,25 +60,21 @@ func TestInterfaceL3(t *testing.T) {
 		t.Fatal("QueryL3Subgraph should return nodes")
 	}
 
-	// Search must link the matching L3 graph onto the new topic as L3Refs,
-	// which is what makes DirectedL3ID scoping work.
-	sres, err := db.Search(context.Background(), internal.SearchQuery{Text: "Go 内存模型", AutoCreate: true, Timestamp: time.Now().UnixMilli()})
+	// L2↔L3 lives on the scene: opening a session with an L3 id anchors it,
+	// and the domain listing finds that session back.
+	anchored, err := db.Search(memhop.SearchQuery{
+		SceneName: "go memory model session",
+		L3ID:      graphs[0].IDHash,
+	})
 	if err != nil {
-		t.Fatalf("Search after ImportL3: %v", err)
+		t.Fatalf("Search with l3 id: %v", err)
 	}
-	linked := false
-	for _, topic := range sres.Contexts {
-		if topic.ID != sres.NewTopicID {
-			continue
-		}
-		for _, ref := range topic.L3Refs {
-			if ref == graphs[0].IDHash {
-				linked = true
-			}
-		}
+	domainScenes, err := db.ListScenesByL3(graphs[0].IDHash)
+	if err != nil {
+		t.Fatalf("ListScenesByL3: %v", err)
 	}
-	if !linked {
-		t.Fatalf("Search should link matching L3 graph into topic L3Refs: %+v", sres.Contexts)
+	if len(domainScenes) != 1 || domainScenes[0].SceneID != anchored.Scene.SceneID {
+		t.Fatalf("anchored session missing from its domain: %+v", domainScenes)
 	}
 
 	newName := "改名"

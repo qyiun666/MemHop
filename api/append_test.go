@@ -4,19 +4,16 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/qyiun666/MemHop/internal"
 )
 
-// mockLLM is an OpenAI-compatible chat completions stub for the keyword
-// extraction inside Search (AppendL4Message itself never calls the LLM).
+// mockLLM is an OpenAI-compatible chat completions stub for the turn
+// distillation inside Update (AppendL4Message itself never calls the LLM).
 func mockLLM(t *testing.T, content string) *httptest.Server {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,31 +32,36 @@ func mockLLM(t *testing.T, content string) *httptest.Server {
 	return srv
 }
 
-// TestAppendL4MessageFacade: Search creates the topic, AppendL4Message
-// appends a user message to it, and the returned id round-trips through
+// TestAppendL4MessageFacade: Update creates the turn topic, AppendL4Message
+// appends another original to it, and the returned id round-trips through
 // GetArchive with the right role.
 func TestAppendL4MessageFacade(t *testing.T) {
 	srv := mockLLM(t, `{"keywords":["补充","消息"]}`)
 	cfg := openTestConfig(filepath.Join(t.TempDir(), "append.meh"))
 	cfg.LLM.APIURL = srv.URL
-	m, db := openMultiSession(t, cfg, &openTestEncoder{dim: 4})
+	m, db := openMultiSession(t, cfg)
 	defer func() {
 		if err := m.Close(); err != nil {
 			t.Fatalf("close: %v", err)
 		}
 	}()
 
-	ts := int64(1000)
-	res, err := db.Search(context.Background(), internal.SearchQuery{Text: "用户第一条消息", AutoCreate: true, Timestamp: ts})
+	res, err := db.Search(SearchQuery{SceneName: "append session"})
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	if res.NewTopicID == "" {
-		t.Fatal("search created no topic")
+	topicID, err := db.Update(TurnUpdate{
+		SceneID: res.Scene.SceneID, UserText: "用户第一条消息", UserTS: 1000,
+		AgentText: "先看看日志", AgentTS: 1001,
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
 	}
-	topicID := res.NewTopicID
+	if topicID == "" {
+		t.Fatal("update created no topic")
+	}
 
-	id, err := db.AppendL4Message(topicID, "用户补充", ts+1, RoleUser, ContentText)
+	id, err := db.AppendL4Message(topicID, "用户补充", 1002, RoleUser, ContentText)
 	if err != nil {
 		t.Fatalf("AppendL4Message: %v", err)
 	}
@@ -70,7 +72,7 @@ func TestAppendL4MessageFacade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetArchive: %v", err)
 	}
-	if arc.Role != RoleUser || arc.Content != "用户补充" || arc.ContextID != res.NewTopicID || arc.ContentType != ContentText {
+	if arc.Role != RoleUser || arc.Content != "用户补充" || arc.ContextID != topicID || arc.ContentType != ContentText {
 		t.Fatalf("unexpected archive: %+v", arc)
 	}
 }
