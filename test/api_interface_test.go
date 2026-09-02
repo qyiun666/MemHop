@@ -80,18 +80,29 @@ func openTestDB(t *testing.T) (*testDB, *mockLLM) {
 // its hex id.
 func openSession(t *testing.T, db *testDB) string {
 	t.Helper()
-	res, err := db.Search(memhop.SearchQuery{SceneName: "offline session"})
+	res, err := db.Search(memhop.SearchQuery{})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
 	return res.Scene.SceneID
 }
 
-// turn builds one finished turn for the given session.
-func turn(sceneID, user, agent string) memhop.TurnUpdate {
+// openTurn opens the next turn of a session and returns the topic id the
+// library issued for it — the id the turn must settle into.
+func openTurn(t *testing.T, db *testDB, sceneID string) string {
+	t.Helper()
+	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	if err != nil {
+		t.Fatalf("open turn: %v", err)
+	}
+	return res.NewTopicID
+}
+
+// turn builds one finished turn settling the given topic id.
+func turn(sceneID, topicID, user, agent string) memhop.TurnUpdate {
 	ts := time.Now().UnixMilli()
 	return memhop.TurnUpdate{
-		SceneID: sceneID, UserText: user, UserTS: ts, AgentText: agent, AgentTS: ts + 1,
+		SceneID: sceneID, TopicID: topicID, UserText: user, UserTS: ts, AgentText: agent, AgentTS: ts + 1,
 	}
 }
 
@@ -128,7 +139,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 
 	before := llm.calls["keywords"]
-	topicID, err := db.Update(turn(sceneID, "用户要求重构代码", "好的,我来重构这段代码"))
+	topicID, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), "用户要求重构代码", "好的,我来重构这段代码"))
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
@@ -152,7 +163,8 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 
 	// A turn for a session nobody opened is rejected, and so is a malformed one.
-	if _, err := db.Update(turn(common.FormatHash(999), "无主话题", "无主回复")); err == nil {
+	orphanTurn := common.FormatHash(common.HashID("unopened-turn"))
+	if _, err := db.Update(turn(common.FormatHash(999), orphanTurn, "无主话题", "无主回复")); err == nil {
 		t.Fatal("Update on an unknown scene should fail")
 	}
 	if _, err := db.Update(memhop.TurnUpdate{SceneID: sceneID, UserText: "", UserTS: 1, AgentText: "a", AgentTS: 2}); err == nil {
@@ -189,7 +201,7 @@ func TestInterfaceOneDistillationPerTurn(t *testing.T) {
 
 	start := llm.calls["keywords"]
 	for i := range 5 {
-		if _, err := db.Update(turn(sceneID, "问题 "+common.FormatHash(uint64(i)), "回复")); err != nil {
+		if _, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), "问题 "+common.FormatHash(uint64(i)), "回复")); err != nil {
 			t.Fatalf("turn %d: %v", i, err)
 		}
 	}

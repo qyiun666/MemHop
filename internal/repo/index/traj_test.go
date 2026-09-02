@@ -14,9 +14,9 @@ import (
 
 func TestTrajIndexAppendAndQuery(t *testing.T) {
 	idx := NewTrajIndex()
-	idx.Append(7, 1, 101, 100, 0)
-	idx.Append(7, 2, 102, 200, 55)
-	idx.Append(8, 1, 103, 300, 55)
+	idx.Append(7, 1, 101, 100)
+	idx.Append(7, 2, 102, 200)
+	idx.Append(8, 1, 103, 300)
 
 	if seq, ok := idx.MaxSeq(7); !ok || seq != 2 {
 		t.Fatalf("MaxSeq(7) = %d %v, want 2 true", seq, ok)
@@ -30,13 +30,6 @@ func TestTrajIndexAppendAndQuery(t *testing.T) {
 	if hashes := idx.EventHashes(9); hashes != nil {
 		t.Fatalf("EventHashes(9) = %v, want nil", hashes)
 	}
-	if topic := idx.TopicEvents(55); len(topic) != 2 || topic[0] != 102 || topic[1] != 103 {
-		t.Fatalf("TopicEvents(55) = %v", topic)
-	}
-	if topic := idx.TopicEvents(1); topic != nil {
-		t.Fatalf("TopicEvents(1) = %v, want nil", topic)
-	}
-
 	if got := idx.RemoveBefore(250); len(got) != 2 || got[0] != 101 || got[1] != 102 {
 		t.Fatalf("RemoveBefore = %v, want 101,102 (ts 100,200 < 250)", got)
 	}
@@ -47,7 +40,7 @@ func TestTrajIndexAppendAndQuery(t *testing.T) {
 		t.Fatal("ts 300 must survive prune")
 	}
 
-	idx.Append(7, 3, 104, 400, 0)
+	idx.Append(7, 3, 104, 400)
 	if got := idx.RemoveBefore(350); len(got) != 1 || got[0] != 103 {
 		t.Fatalf("RemoveBefore(350) = %v, want 103 (ts 300 < 350)", got)
 	}
@@ -65,9 +58,9 @@ func TestTrajIndexAppendAndQuery(t *testing.T) {
 
 func TestTrajIndexRemoveSession(t *testing.T) {
 	idx := NewTrajIndex()
-	idx.Append(7, 1, 101, 100, 55)
-	idx.Append(7, 2, 102, 200, 0)
-	idx.Append(8, 1, 103, 300, 55)
+	idx.Append(7, 1, 101, 100)
+	idx.Append(7, 2, 102, 200)
+	idx.Append(8, 1, 103, 300)
 
 	got := idx.RemoveSession(7)
 	if len(got) != 2 || got[0] != 101 || got[1] != 102 {
@@ -78,9 +71,6 @@ func TestTrajIndexRemoveSession(t *testing.T) {
 	}
 	if hashes := idx.EventHashes(7); hashes != nil {
 		t.Fatalf("EventHashes(7) = %v, want nil", hashes)
-	}
-	if topic := idx.TopicEvents(55); len(topic) != 1 || topic[0] != 103 {
-		t.Fatalf("TopicEvents(55) = %v, want only the surviving turn's event", topic)
 	}
 	if sums := idx.Summaries(); len(sums) != 1 || sums[0].SessionID != 8 {
 		t.Fatalf("Summaries = %+v, want only turn 8", sums)
@@ -100,8 +90,8 @@ func TestBuildTrajFromEngineRestoresTurns(t *testing.T) {
 	const agent = core.DefaultAgentID
 	for _, ev := range []core.TrajectorySlot{
 		{SessionID: 7, Seq: 1, EventType: "llm_request", Payload: "a", Timestamp: 100},
-		{SessionID: 7, Seq: 2, EventType: "tool_call", Payload: "b", Timestamp: 200, TopicID: 55},
-		{SessionID: 8, Seq: 1, EventType: "llm_output", Payload: "c", Timestamp: 300, TopicID: 55},
+		{SessionID: 7, Seq: 2, EventType: "tool_call", Payload: "b", Timestamp: 200, TopicID: 7},
+		{SessionID: 8, Seq: 1, EventType: "llm_output", Payload: "c", Timestamp: 300, TopicID: 8},
 	} {
 		if err := repoAppendTraj(engine, agent, ev); err != nil {
 			t.Fatalf("append: %v", err)
@@ -111,9 +101,6 @@ func TestBuildTrajFromEngineRestoresTurns(t *testing.T) {
 	idx := BuildTrajFromEngine(engine, agent)
 	if seq, ok := idx.MaxSeq(7); !ok || seq != 2 {
 		t.Fatalf("MaxSeq(7) = %d %v, want 2 true", seq, ok)
-	}
-	if topic := idx.TopicEvents(55); len(topic) != 2 {
-		t.Fatalf("TopicEvents(55) = %v, want 2 ids", topic)
 	}
 	if sums := idx.Summaries(); len(sums) != 2 {
 		t.Fatalf("Summaries = %+v, want 2 turns", sums)

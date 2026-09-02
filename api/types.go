@@ -103,12 +103,15 @@ type TopicSlot struct {
 }
 
 // SearchResult is the read surface of one scene: the scene record, its
-// depth-1 topics in turn order, and the domain's L0 profile.
+// depth-1 topics in turn order, the domain's L0 profile, and NewTopicID — the
+// topic this read opened for the turn the host is about to run. Update settles
+// that turn into it, and the L6 trajectory writes key on it.
 type SearchResult struct {
 	Profile      ProfileSlot `json:"profile"`
 	ProfileBrief string      `json:"profile_brief"`
 	Scene        SceneSlot   `json:"scene"`
 	Topics       []TopicSlot `json:"topics"`
+	NewTopicID   string      `json:"new_topic_id"`
 }
 
 // HypergraphSource is the origin of an L3 hypergraph.
@@ -197,8 +200,9 @@ type Capability struct {
 	UpdatedAt     int64            `json:"updated_at"`
 }
 
-// TrajectorySlot is one L6 operation trajectory event; SessionID is a turn
-// key (one trajectory per agent turn, search starts it, update ends it).
+// TrajectorySlot is one L6 operation trajectory event. SessionID is the
+// trajectory key: the turn's topic id Search minted for it (TopicID then
+// carries the same value), or the plan id of a plan-bound event.
 // NodeType is NodeTypeEvent or NodeTypePlan; Status carries the numeric
 // StatusPending.. codes (only meaningful on nodes a plan wrote).
 // On the plan write paths (PlanAppend/PlanCommit) the record is forced to

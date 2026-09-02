@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -189,29 +188,6 @@ func (db *DB) destroyContext(agentID uint64) *agentContext {
 		delete(db.agents, agentID)
 	}
 	return ac
-}
-
-// loadTopicForWrite resolves a hex topic ID to its stored slot before a
-// lifecycle write (AppendL4Message / RefineTopicKeywords): a missing or
-// unreadable topic is rejected with ErrNotFound so no orphan L4 archive or
-// half-written refine is ever produced. Callers must hold ac.mu.
-func (ac *agentContext) loadTopicForWrite(db *DB, topicID uint64) (*core.TopicSlot, error) {
-	topics, err := repo.ListTopicsL2(repo.TopicListQuery{
-		Engine:  db.engine,
-		AgentID: ac.id,
-		MetaIdx: ac.l2Meta,
-		SceneID: topicID,
-		Depth:   0,
-		Num:     3,
-	})
-	if err != nil {
-		return nil, err
-	}
-	if len(topics) == 0 {
-		return nil, common.NewError(common.ErrNotFound, "topic not found")
-	}
-	topic := topics[0]
-	return &topic, nil
 }
 
 // syncL2Meta refreshes one topic entry of the agent's L2MetaIndex from the

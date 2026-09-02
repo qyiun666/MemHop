@@ -186,7 +186,21 @@ func arrProp(desc, itemType string) map[string]any {
 	return map[string]any{"type": "array", "items": map[string]any{"type": itemType}, "description": desc}
 }
 
-// registerTools attaches all 33 tools to the server for one tenant DB.
+// resolveContentType maps an optional human-readable content-type argument to
+// a ContentType. An empty value means text; an unknown value is rejected
+// before touching the DB.
+func resolveContentType(name string) (memhop.ContentType, error) {
+	if name == "" {
+		return memhop.ContentText, nil
+	}
+	v, ok := contentTypeNames[name]
+	if !ok {
+		return 0, fmt.Errorf("invalid content_type %q (want text, image, video, document, audio, code or other)", name)
+	}
+	return v, nil
+}
+
+// registerTools attaches all 31 tools to the server for one tenant DB.
 func registerTools(s *mcp.Server, db *memhop.Session) {
 	registerCoreTools(s, db)
 	registerL2Tools(s, db)

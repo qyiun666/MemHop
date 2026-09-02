@@ -10,15 +10,15 @@
       "type": "api",
       "name": "Crystallize",
       "ref": "api:Crystallize",
-      "desc": "Call after a session has accumulated enough L6 trajectory (same kind of operation seen twice or more); not on the interactive hot path; the product is a draft and must be reviewed and activated via ActivateCapability",
-      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"Session ID with existing L6 trajectory (16-char hex)\"}},\"required\":[\"session_id\"]}",
+      "desc": "Distil one trajectory key's L6 events into capability drafts; pass the turn's topic id (the new_topic_id Search returned) for a single turn, or a plan id to aggregate every event bound to that plan. Not on the interactive hot path; the product is a draft and must be reviewed and activated via ActivateCapability",
+      "input": "{\"type\":\"object\",\"properties\":{\"session_id\":{\"type\":\"string\",\"description\":\"Trajectory key: the turn's topic id or a plan id (16-char hex)\"}},\"required\":[\"session_id\"]}",
       "output": "CrystallizeResult (CreatedIDs/ReusedIDs/MergedIDs/Errors/Details)"
     },
     {
       "type": "api",
       "name": "ActivateCapability",
       "ref": "api:ActivateCapability",
-      "desc": "Promote a draft capability (draft -> active); active capabilities participate in Search matching; crystallized products must be activated before use",
+      "desc": "Promote a draft capability (draft -> active); only active cards are listed for the host to project as tools and count by usage feedback, so crystallized products must be activated before use",
       "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Capability ID (16-char hex)\"}},\"required\":[\"id\"]}",
       "output": "Capability (Status=active)"
     },

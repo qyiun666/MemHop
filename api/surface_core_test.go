@@ -1,37 +1,40 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Search / Update / AppendL4Message surface tests.
+// Search / Update surface tests: the hot-path turn contract.
 
 package api
 
 import (
-	"context"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
-func TestSurfaceSearchUpdateAppend(t *testing.T) {
+func TestSurfaceTurnFlow(t *testing.T) {
 	db := openSurfaceDB(t)
-	ctx := context.Background()
 
-	// An empty SceneID mints a host session and answers with its empty surface.
-	res, err := db.Search(SearchQuery{SceneName: "launch planning"})
+	// An empty SceneID mints a host session, answers with its empty surface and
+	// issues the topic id of the turn being opened.
+	res, err := db.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("search create: %v", err)
 	}
 	if !isHexID(res.Scene.SceneID) {
 		t.Fatalf("scene id not hex: %q", res.Scene.SceneID)
 	}
+	if !isHexID(res.NewTopicID) {
+		t.Fatalf("issued topic id not hex: %q", res.NewTopicID)
+	}
 	if res.Topics == nil {
 		t.Fatal("SearchResult.Topics must be non-nil")
 	}
-	sceneID := res.Scene.SceneID
+	sceneID, openedTopic := res.Scene.SceneID, res.NewTopicID
 
-	// One finished turn becomes one topic; the id the host gets is hex.
+	// One finished turn settles into the topic that read opened.
 	topicID, err := db.Update(TurnUpdate{
 		SceneID:   sceneID,
+		TopicID:   openedTopic,
 		UserText:  "remember the launch date",
 		UserTS:    1_700_000_000_000,
 		AgentText: "noted, launching next monday",
@@ -40,8 +43,8 @@ func TestSurfaceSearchUpdateAppend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if !isHexID(topicID) {
-		t.Fatalf("topic id not hex: %q", topicID)
+	if topicID != openedTopic {
+		t.Fatalf("update settled %q, want the opened topic %q", topicID, openedTopic)
 	}
 
 	// The session read returns exactly that turn.
@@ -56,44 +59,28 @@ func TestSurfaceSearchUpdateAppend(t *testing.T) {
 		t.Fatal("reads must fold usage back into the scene record")
 	}
 
-	// AppendL4Message returns a new hex archive id on the same topic.
-	arcID, err := db.AppendL4Message(topicID, "extra context line", 1_700_000_002_500, RoleAgent, ContentText)
-	if err != nil {
-		t.Fatalf("append l4: %v", err)
-	}
-	if !isHexID(arcID) {
-		t.Fatalf("archive id not hex: %s", arcID)
-	}
-
-	// Guards: an unknown scene and an unknown topic are lookups that miss,
-	// not orphan writes.
+	// Guards: an unknown scene is a lookup that misses, not an orphan write.
 	ghost := common.FormatHash(common.HashID("ghost-scene"))
 	if _, err := db.Search(SearchQuery{SceneID: ghost}); CodeOf(err) != ErrNotFound {
 		t.Fatalf("search unknown scene: want ErrNotFound, got %v", err)
 	}
-	if _, err := db.Update(turnUpdate(ghost, "u", "a")); CodeOf(err) != ErrNotFound {
+	if _, err := db.Update(turnUpdate(ghost, openedTopic, "u", "a")); CodeOf(err) != ErrNotFound {
 		t.Fatalf("update unknown scene: want ErrNotFound, got %v", err)
-	}
-	ghostTopic := common.FormatHash(common.HashID("ghost-topic"))
-	if _, err := db.AppendL4Message(ghostTopic, "x", 1_700_000_003_000, RoleUser, ContentText); CodeOf(err) != ErrNotFound {
-		t.Fatalf("append to missing topic: want ErrNotFound, got %v", err)
 	}
 
 	// Malformed turns are rejected with ErrInvalidQuery.
 	badTurns := []TurnUpdate{
-		{SceneID: sceneID, UserText: "", UserTS: 1, AgentText: "a", AgentTS: 2},
-		{SceneID: sceneID, UserText: "u", UserTS: 0, AgentText: "a", AgentTS: 2},
-		{SceneID: sceneID, UserText: "u", UserTS: 5, AgentText: "a", AgentTS: 4},
-		{SceneID: "not-hex", UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
+		{SceneID: sceneID, TopicID: openedTopic, UserText: "", UserTS: 1, AgentText: "a", AgentTS: 2},
+		{SceneID: sceneID, TopicID: openedTopic, UserText: "u", UserTS: 0, AgentText: "a", AgentTS: 2},
+		{SceneID: sceneID, TopicID: openedTopic, UserText: "u", UserTS: 5, AgentText: "a", AgentTS: 4},
+		{SceneID: "not-hex", TopicID: openedTopic, UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
+		{SceneID: sceneID, UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
+		{SceneID: sceneID, TopicID: "0000000000000000", UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
+		{SceneID: sceneID, TopicID: "not-hex", UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
 	}
 	for i, in := range badTurns {
 		if _, err := db.Update(in); CodeOf(err) != ErrInvalidQuery {
 			t.Fatalf("bad turn %d: want ErrInvalidQuery, got %v", i, err)
 		}
-	}
-
-	// Refine re-distills from every original of the topic.
-	if err := db.RefineTopicKeywords(ctx, topicID); err != nil {
-		t.Fatalf("refine: %v", err)
 	}
 }

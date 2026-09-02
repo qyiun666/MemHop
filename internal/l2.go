@@ -77,6 +77,31 @@ func (db *DB) SetSceneL3ID(agentID uint64, sceneID string, l3ID string, force bo
 	return repo.SetSceneL3ID(db.engine, agentID, sceneHash, l3Hash)
 }
 
+// SetSceneName renames a scene. The library names a fresh scene
+// "session:<id>"; this is the host's chance to give it a human title. Every
+// later scene write (OpenSceneTurn bumps counters on the read-back slot) and
+// Dream leave SceneName alone, so the name persists until it is set again.
+func (db *DB) SetSceneName(agentID uint64, sceneID string, name string) error {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return err
+	}
+	defer ac.mu.Unlock()
+	sceneHash, err := common.ParseID(sceneID)
+	if err != nil {
+		return common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+	}
+	if name == "" {
+		return common.NewError(common.ErrInvalidQuery, "scene name is required")
+	}
+	slot, err := core.ReadSceneSlot(db.engine, agentID, sceneHash)
+	if err != nil {
+		return common.NewError(common.ErrNotFound, "scene not found")
+	}
+	slot.SceneName = name
+	return core.WriteSceneSlot(db.engine, agentID, sceneHash, slot)
+}
+
 // MergeScenes rewrites all topics of secondary scenes to the primary scene
 // and deletes the secondary records.
 func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []string) error {
@@ -166,7 +191,7 @@ func (db *DB) sceneContextTopic(agentID uint64, t core.TopicSlot, children map[u
 		if err != nil {
 			continue
 		}
-		st.Messages = append(st.Messages, SceneMessage{Role: arc.Role, Content: arc.Content, CreatedAt: arc.CreatedAt})
+		st.Messages = append(st.Messages, SceneMessage{Role: arc.Role, Type: arc.ContentType, Content: arc.Content, CreatedAt: arc.CreatedAt})
 	}
 	return st
 }

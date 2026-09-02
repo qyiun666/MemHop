@@ -46,24 +46,29 @@ func loadLocomoSmoke(tb testing.TB) *locomoFixture {
 	return &fx
 }
 
-// benchTurn settles one finished turn in the host's session.
+// benchTurn runs one host turn the way a host runs it: the opening read that
+// mints the turn's topic id, then the Update that settles it.
 func benchTurn(tb testing.TB, db *testsupport.Handle, sceneID, user, agent string, ts int64) {
 	tb.Helper()
+	_, turnID, err := db.OpenTurn(sceneID)
+	if err != nil {
+		tb.Fatalf("OpenTurn: %v", err)
+	}
 	if _, err := db.Update(memhop.TurnUpdate{
-		SceneID: sceneID, UserText: user, UserTS: ts, AgentText: agent, AgentTS: ts + 500,
+		SceneID: sceneID, TopicID: turnID, UserText: user, UserTS: ts, AgentText: agent, AgentTS: ts + 500,
 	}); err != nil {
 		tb.Fatalf("Update: %v", err)
 	}
 }
 
 // benchSession opens a host session (scene) and returns its id.
-func benchSession(tb testing.TB, db *testsupport.Handle, name string) string {
+func benchSession(tb testing.TB, db *testsupport.Handle) string {
 	tb.Helper()
-	res, err := db.Search(memhop.SearchQuery{SceneName: name})
+	sceneID, _, err := db.OpenTurn("")
 	if err != nil {
-		tb.Fatalf("Search: %v", err)
+		tb.Fatalf("open session: %v", err)
 	}
-	return res.Scene.SceneID
+	return sceneID
 }
 
 // BenchmarkUpdateTurn measures the hot write path: one finished turn costs a
@@ -82,7 +87,7 @@ func BenchmarkUpdateTurn(b *testing.B) {
 	if len(turns) == 0 {
 		b.Fatal("no turns in fixture")
 	}
-	sceneID := benchSession(b, db, "locomo ingest")
+	sceneID := benchSession(b, db)
 
 	base := time.Now().UnixMilli()
 	i := 0
@@ -100,7 +105,7 @@ func BenchmarkSceneRead(b *testing.B) {
 	defer db.Close()
 
 	base := time.Now().UnixMilli()
-	sceneID := benchSession(b, db, "locomo seed")
+	sceneID := benchSession(b, db)
 	i := 0
 	for _, s := range fx.Sessions {
 		for _, tn := range s.Turns {
@@ -124,32 +129,6 @@ func BenchmarkSceneRead(b *testing.B) {
 	}
 }
 
-// BenchmarkAppendL4 measures the storage-only append path (no distillation)
-// hosts use for a turn's intermediate messages.
-func BenchmarkAppendL4(b *testing.B) {
-	db := testsupport.OpenMemHopB(b)
-	defer db.Close()
-
-	base := time.Now().UnixMilli()
-	sceneID := benchSession(b, db, "append bench")
-	topicID, err := db.Update(memhop.TurnUpdate{
-		SceneID: sceneID, UserText: "先看看日志", UserTS: base, AgentText: "已看完", AgentTS: base + 500,
-	})
-	if err != nil {
-		b.Fatalf("seed Update: %v", err)
-	}
-
-	b.ResetTimer()
-	i := 0
-	for b.Loop() {
-		ts := base + int64(i+1)*1000
-		if _, err := db.AppendL4Message(topicID, "agent reply for benchmark", ts, 1, 0); err != nil {
-			b.Fatalf("AppendL4Message: %v", err)
-		}
-		i++
-	}
-}
-
 // BenchmarkDreamConsolidation measures the Dream pipeline after seeding >20
 // related turns in one session: real compression with LLM consolidate,
 // summary archive, fused topic, child sink, L1 rebuild and cache rebuild.
@@ -168,7 +147,7 @@ func BenchmarkDreamConsolidation(b *testing.B) {
 		"一周三次跑步不间断", "五公里跑完很爽", "蛋白粉是跑后必备", "早上公园跑步我很享受",
 	}
 	base := time.Now().UnixMilli()
-	sceneID := benchSession(b, db, "running habits")
+	sceneID := benchSession(b, db)
 	for i, text := range related {
 		benchTurn(b, db, sceneID, text, "好的", base+int64(i)*1000)
 	}
@@ -205,7 +184,7 @@ func BenchmarkMemoryLoop(b *testing.B) {
 		"跑步让我精神很好", "我买了新运动水壶",
 	}
 	base := time.Now().UnixMilli()
-	sceneID := benchSession(b, db, "loop session")
+	sceneID := benchSession(b, db)
 	var dreams, checks int
 	prevDepth1 := -1
 	turns := 0
@@ -257,7 +236,7 @@ func BenchmarkSceneReadLatency(b *testing.B) {
 	scenes := make([]string, 0, len(seeds))
 	for i, s := range seeds {
 		ts := base + int64(i)*2000
-		sceneID := benchSession(b, db, "latency "+s)
+		sceneID := benchSession(b, db)
 		benchTurn(b, db, sceneID, s, "好的", ts)
 		scenes = append(scenes, sceneID)
 	}

@@ -147,10 +147,6 @@ func WriteHypergraphNode(engine *StorageEngine, agentID, id uint64, slot *Hyperg
 	return writeJSON(engine, agentID, RecL3GraphNode, id, slot, "HypergraphNode")
 }
 
-func ReadHypergraphEdge(engine *StorageEngine, agentID, id uint64) (*HypergraphEdge, error) {
-	return readJSON[HypergraphEdge](engine, agentID, id, "HypergraphEdge")
-}
-
 func WriteHypergraphEdge(engine *StorageEngine, agentID, id uint64, slot *HypergraphEdge) error {
 	return writeJSON(engine, agentID, RecL3GraphEdge, id, slot, "HypergraphEdge")
 }

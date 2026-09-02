@@ -244,10 +244,10 @@ func TestSurfaceListScenesByL3(t *testing.T) {
 	l3A := common.FormatHash(common.HashID("l3-proj-a"))
 	l3B := common.FormatHash(common.HashID("l3-proj-b"))
 	// Two session openings, each anchored to its own L3 project domain.
-	if _, err := db.Search(SearchQuery{SceneName: "rust ownership", L3ID: l3A}); err != nil {
+	if _, err := db.Search(SearchQuery{L3ID: l3A}); err != nil {
 		t.Fatalf("search A: %v", err)
 	}
-	if _, err := db.Search(SearchQuery{SceneName: "rust borrow checker", L3ID: l3B}); err != nil {
+	if _, err := db.Search(SearchQuery{L3ID: l3B}); err != nil {
 		t.Fatalf("search B: %v", err)
 	}
 	scenesA, err := db.ListScenesByL3(l3A)
@@ -292,7 +292,7 @@ func TestSurfaceSetSceneL3IDCorrection(t *testing.T) {
 	db := openSurfaceDB(t)
 	l3A := common.FormatHash(common.HashID("cor-a"))
 	l3B := common.FormatHash(common.HashID("cor-b"))
-	if _, err := db.Search(SearchQuery{SceneName: "scene correction anchor", L3ID: l3A}); err != nil {
+	if _, err := db.Search(SearchQuery{L3ID: l3A}); err != nil {
 		t.Fatalf("search: %v", err)
 	}
 	scenesA, err := db.ListScenesByL3(l3A)

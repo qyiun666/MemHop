@@ -58,11 +58,11 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	if sess.AgentID() != alice {
 		t.Fatalf("session id mismatch: %s", sess.AgentID())
 	}
-	res, err := sess.Search(SearchQuery{SceneName: "alice session"})
+	res, err := sess.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("alice search: %v", err)
 	}
-	if _, err := sess.Update(turnUpdate(res.Scene.SceneID, "alice private memory", "alice reply")); err != nil {
+	if _, err := sess.Update(turnUpdate(res.Scene.SceneID, res.NewTopicID, "alice private memory", "alice reply")); err != nil {
 		t.Fatalf("alice update: %v", err)
 	}
 	// Cross-agent isolation: bob sees none of alice's scenes.
@@ -104,10 +104,12 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	}
 }
 
-// turnUpdate builds one finished turn inside the given scene.
-func turnUpdate(sceneID, userText, agentText string) TurnUpdate {
+// turnUpdate builds one finished turn: it settles the topic id Search opened
+// for the turn inside the given scene.
+func turnUpdate(sceneID, topicID, userText, agentText string) TurnUpdate {
 	return TurnUpdate{
 		SceneID:   sceneID,
+		TopicID:   topicID,
 		UserText:  userText,
 		UserTS:    1_700_000_060_000,
 		AgentText: agentText,
@@ -149,23 +151,17 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	}
 
 	// Search opens the host session; Update settles one turn into it.
-	res, err := s.Search(SearchQuery{SceneName: "worker session"})
+	res, err := s.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("session search: %v", err)
 	}
 	sceneID := res.Scene.SceneID
-	topicID, err := s.Update(turnUpdate(sceneID, "session boot memory", "session reply"))
+	topicID, err := s.Update(turnUpdate(sceneID, res.NewTopicID, "session boot memory", "session reply"))
 	if err != nil {
 		t.Fatalf("session update: %v", err)
 	}
 	if !isHexID(topicID) {
 		t.Fatalf("update must return a hex topic id, got %q", topicID)
-	}
-	if _, err := s.AppendL4Message(topicID, "session extra", 1_700_000_060_600, 0, 0); err != nil {
-		t.Fatalf("session append: %v", err)
-	}
-	if err := s.RefineTopicKeywords(ctx, topicID); err != nil {
-		t.Fatalf("session refine: %v", err)
 	}
 	if _, err := s.SearchL4(L4Query{Keyword: "session"}); err != nil {
 		t.Fatalf("session searchL4: %v", err)
@@ -187,11 +183,11 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	}
 
 	// Second session scene, then merge + archive fetch to cover the rest.
-	res2, err := s.Search(SearchQuery{SceneName: "second worker session"})
+	res2, err := s.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("session search2: %v", err)
 	}
-	if _, err := s.Update(turnUpdate(res2.Scene.SceneID, "second session scene", "second reply")); err != nil {
+	if _, err := s.Update(turnUpdate(res2.Scene.SceneID, res2.NewTopicID, "second session scene", "second reply")); err != nil {
 		t.Fatalf("session update2: %v", err)
 	}
 	scenes, err = s.ListScenes()

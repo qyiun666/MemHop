@@ -20,7 +20,6 @@ type trajEntry struct {
 	Seq       uint64
 	IDHash    uint64
 	Timestamp int64
-	TopicID   uint64
 }
 
 type trajTurn struct {
@@ -62,13 +61,13 @@ func BuildTrajFromEngine(engine *core.StorageEngine, agentID uint64) *TrajIndex 
 		if ev.NodeType == core.NodeTypePlan {
 			continue // plan nodes are not per-turn events; they are read via CollectPlanNodes
 		}
-		idx.Append(ev.SessionID, ev.Seq, ev.IDHash, ev.Timestamp, ev.TopicID)
+		idx.Append(ev.SessionID, ev.Seq, ev.IDHash, ev.Timestamp)
 	}
 	return idx
 }
 
 // Append records one event; entries stay Seq-ascending per turn.
-func (idx *TrajIndex) Append(sessionID, seq, idHash uint64, ts int64, topicID uint64) {
+func (idx *TrajIndex) Append(sessionID, seq, idHash uint64, ts int64) {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()
 	turn := idx.byTurn[sessionID]
@@ -76,7 +75,7 @@ func (idx *TrajIndex) Append(sessionID, seq, idHash uint64, ts int64, topicID ui
 		turn = &trajTurn{}
 		idx.byTurn[sessionID] = turn
 	}
-	turn.entries = append(turn.entries, trajEntry{Seq: seq, IDHash: idHash, Timestamp: ts, TopicID: topicID})
+	turn.entries = append(turn.entries, trajEntry{Seq: seq, IDHash: idHash, Timestamp: ts})
 	idx.lastTurn[sessionID] = turn.entries[len(turn.entries)-1]
 }
 
@@ -161,36 +160,6 @@ func (idx *TrajIndex) Summaries() []TrajSummary {
 			s.LastAt = turn.entries[len(turn.entries)-1].Timestamp
 		}
 		out = append(out, s)
-	}
-	return out
-}
-
-// TopicEvents returns event ids carrying the given L2 topic id across all
-// turns, in (turn, Seq) order; nil when none. Callers re-sort by timestamp
-// after reading the records.
-func (idx *TrajIndex) TopicEvents(topicID uint64) []uint64 {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	type hit struct {
-		sid, seq, hash uint64
-	}
-	var hits []hit
-	for sid, turn := range idx.byTurn {
-		for _, e := range turn.entries {
-			if e.TopicID == topicID {
-				hits = append(hits, hit{sid: sid, seq: e.Seq, hash: e.IDHash})
-			}
-		}
-	}
-	slices.SortFunc(hits, func(a, b hit) int {
-		return cmp.Or(cmp.Compare(a.sid, b.sid), cmp.Compare(a.seq, b.seq))
-	})
-	if len(hits) == 0 {
-		return nil
-	}
-	out := make([]uint64, len(hits))
-	for i, h := range hits {
-		out[i] = h.hash
 	}
 	return out
 }

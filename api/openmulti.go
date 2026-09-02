@@ -108,8 +108,12 @@ func (m *MultiAgentDB) Close() error { return m.db.Close() }
 // IsClosed reports whether the database has been closed.
 func (m *MultiAgentDB) IsClosed() bool { return m.db.IsClosed() }
 
-// Lock serializes the default agent domain against host-side writes to the
-// database file made outside the library; other domains keep running.
-// Unlock resumes. Panics on a closed DB (Unlock is then a no-op).
+// Lock freezes the default agent domain so the host can touch the .meh file
+// from outside the library (backup, copy, external compaction). It is not a
+// concurrency lock for the host's own calls: every business method already
+// serializes inside its agent domain, and different domains run concurrently.
+// Only the default (all-zero) domain is frozen — other tenants keep writing —
+// so a multi-tenant file is copied safely by Close, copy, Open.
+// Panics on a closed DB (Unlock is then a no-op).
 func (m *MultiAgentDB) Lock()   { m.db.Lock() }
 func (m *MultiAgentDB) Unlock() { m.db.Unlock() }

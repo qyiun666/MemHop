@@ -791,3 +791,48 @@ func TestPlanStatusRunning(t *testing.T) {
 		t.Fatalf("statusToString(4) = %q want %q", statusToString(core.StatusRunning), PlanRunning)
 	}
 }
+
+// One turn runs on one id: the topic Search opened is where the host's events
+// land, what Update settles, and what Crystallize reads back — no host-minted
+// turn key and no timestamp derivation anywhere in between.
+func TestTurnRunsOnOneTopicID(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	turnID := common.FormatHash(res.NewTopicID)
+
+	for _, ev := range []core.TrajectorySlot{
+		{EventType: "llm_request", Timestamp: 1000},
+		{EventType: "tool_call", Timestamp: 1500},
+	} {
+		if err := db.AppendTrajectory(core.DefaultAgentID, turnID, ev); err != nil {
+			t.Fatalf("append %s: %v", ev.EventType, err)
+		}
+	}
+	settled, err := db.Update(core.DefaultAgentID, turnOf(res.Scene.SceneID, res.NewTopicID))
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if settled != res.NewTopicID {
+		t.Fatalf("Update settled topic %d, want the opened %d", settled, res.NewTopicID)
+	}
+	if _, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, settled); err != nil {
+		t.Fatalf("the turn topic is not readable: %v", err)
+	}
+	events, err := db.ReadTrajectory(core.DefaultAgentID, turnID)
+	if err != nil {
+		t.Fatalf("read trajectory: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want the turn's 2", len(events))
+	}
+	for _, ev := range events {
+		if ev.TopicID != settled {
+			t.Fatalf("event %s bound to topic %d, want %d", ev.EventType, ev.TopicID, settled)
+		}
+	}
+}

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -28,13 +29,13 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 30 tools on the alice session.
+	// tools/list exposes all 31 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 30 {
-		t.Errorf("expected 30 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 31 {
+		t.Errorf("expected 31 tools, got %d", len(tools.Tools))
 	}
 	names := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -43,7 +44,7 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	for _, want := range []string{
 		"memhop_search", "memhop_update", "memhop_dream", "memhop_checkpoint", "memhop_status",
 		"memhop_profile_get", "memhop_profile_update", "memhop_scene_list", "memhop_scene_merge",
-		"memhop_scene_topics",
+		"memhop_scene_topics", "memhop_scene_rename",
 		"memhop_knowledge_get", "memhop_knowledge_list", "memhop_knowledge_import",
 		"memhop_knowledge_update", "memhop_knowledge_delete", "memhop_knowledge_nodes",
 		"memhop_knowledge_subgraph", "memhop_archive_search", "memhop_archive_get",
@@ -259,8 +260,15 @@ func newTestServer(t *testing.T, tenants []string) (*httptest.Server, string) {
 // newTestServerWithDir boots an in-process SSE server over the given db-dir.
 func newTestServerWithDir(t *testing.T, dbDir string, tenants []string) (*httptest.Server, string) {
 	t.Helper()
+	return newTestServerOver(t, testBase(t), dbDir, tenants), dbDir
+}
+
+// newTestServerOver boots the in-process SSE server from a caller-supplied
+// base config, so a test can point the engine at a stub LLM.
+func newTestServerOver(t *testing.T, base memhop.MemHopConfig, dbDir string, tenants []string) *httptest.Server {
+	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reg := newRegistry(testBase(t), dbDir, tenants, logger)
+	reg := newRegistry(base, dbDir, tenants, logger)
 	srv := httptest.NewServer(newSSEHandler(reg))
 	t.Cleanup(func() {
 		srv.Close()
@@ -268,7 +276,31 @@ func newTestServerWithDir(t *testing.T, dbDir string, tenants []string) (*httpte
 			t.Errorf("close all: %v", err)
 		}
 	})
-	return srv, dbDir
+	return srv
+}
+
+// stubLLMServer answers every chat completion with one keyword payload, so
+// Update's single distillation succeeds without an external LLM.
+func stubLLMServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{
+			map[string]any{"message": map[string]any{
+				"role": "assistant", "content": `{"keywords":["go","test"]}`,
+			}},
+		}})
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// turnTestBase is testBase rewired to the stub LLM endpoint.
+func turnTestBase(t *testing.T) memhop.MemHopConfig {
+	t.Helper()
+	base := testBase(t)
+	base.LLM.APIURL = stubLLMServer(t).URL + "/v1"
+	return base
 }
 
 // connectTenant opens an MCP session against /mcp/<tenant>.
@@ -353,5 +385,79 @@ func TestSSECloseAllPersists(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dbDir, "memhop.meh")); err != nil {
 		t.Errorf("expected memhop.meh persisted: %v", err)
+	}
+}
+
+// TestSSETurnFlow drives the hot path the way a host does, over MCP:
+// memhop_search opens a scene and issues the turn's topic id,
+// memhop_trajectory_append binds this turn's events to it, memhop_update
+// settles the turn into it, and the next read hands that turn back.
+func TestSSETurnFlow(t *testing.T) {
+	srv := newTestServerOver(t, turnTestBase(t), t.TempDir(), nil)
+	alice := connectTenant(t, srv.URL, "alice")
+
+	opened, err := callClient(t, alice, "memhop_search", map[string]any{})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	var turn struct {
+		Scene struct {
+			SceneID string `json:"scene_id"`
+		} `json:"scene"`
+		NewTopicID string            `json:"new_topic_id"`
+		Topics     []json.RawMessage `json:"topics"`
+	}
+	if err := json.Unmarshal([]byte(opened), &turn); err != nil {
+		t.Fatalf("search output: %v (%s)", err, opened)
+	}
+	if len(turn.NewTopicID) != 16 || turn.Scene.SceneID == "" {
+		t.Fatalf("search must open a turn: %s", opened)
+	}
+	if len(turn.Topics) != 0 {
+		t.Fatalf("opening a turn must create no topic, got %d", len(turn.Topics))
+	}
+
+	if _, err := callClient(t, alice, "memhop_trajectory_append", map[string]any{
+		"session_id": turn.NewTopicID, "event_type": "tool_call",
+		"payload": "go test ./...", "timestamp": 1500,
+	}); err != nil {
+		t.Fatalf("trajectory append: %v", err)
+	}
+
+	settled, err := callClient(t, alice, "memhop_update", map[string]any{
+		"scene_id": turn.Scene.SceneID, "topic_id": turn.NewTopicID,
+		"user_text": "go 项目怎么跑测试", "user_ts": 1000,
+		"agent_text": "go test ./...", "agent_ts": 2000,
+	})
+	if err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if !strings.Contains(settled, turn.NewTopicID) {
+		t.Fatalf("update settled %s, want the opened topic %s", settled, turn.NewTopicID)
+	}
+
+	reread, err := callClient(t, alice, "memhop_search", map[string]any{"scene_id": turn.Scene.SceneID})
+	if err != nil {
+		t.Fatalf("search again: %v", err)
+	}
+	if !strings.Contains(reread, turn.NewTopicID) {
+		t.Fatalf("the turn must be back in the session surface: %s", reread)
+	}
+
+	events, err := callClient(t, alice, "memhop_trajectory_read", map[string]any{"session_id": turn.NewTopicID})
+	if err != nil {
+		t.Fatalf("trajectory read: %v", err)
+	}
+	if !strings.Contains(events, "go test ./...") {
+		t.Fatalf("the turn's trajectory must read back by its topic id: %s", events)
+	}
+
+	// A turn cannot be settled without the id Search issued: the missing
+	// required argument is refused rather than silently minting a topic.
+	if _, err := callClient(t, alice, "memhop_update", map[string]any{
+		"scene_id": turn.Scene.SceneID, "user_text": "u", "user_ts": 1000,
+		"agent_text": "a", "agent_ts": 2000,
+	}); err == nil {
+		t.Fatal("update without topic_id must be rejected")
 	}
 }

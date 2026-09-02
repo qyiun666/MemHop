@@ -22,12 +22,6 @@ func jsonRoundtrip(t *testing.T, v any, out any) {
 	}
 }
 
-//go:fix inline
-func strPtr(s string) *string { return new(s) }
-
-//go:fix inline
-func u64Ptr(v uint64) *uint64 { return new(v) }
-
 func TestProfileSlotRoundtrip(t *testing.T) {
 	p := ProfileSlot{
 		IDHash:       1,
@@ -199,18 +193,22 @@ func TestComputeTopicIDConsistency(t *testing.T) {
 	}
 }
 
-// A turn and a Dream-fused group can share (scene, userTS, agentTS); the
-// "turn:" namespace is what keeps their IDs apart.
+// A turn topic and a Dream-fused group can share a scene; the "turn:"
+// namespace is what keeps their IDs apart. The turn counter, not the message
+// timestamps, is what makes consecutive turns distinct.
 func TestComputeTurnTopicIDNamespaced(t *testing.T) {
-	turn := ComputeTurnTopicID(100, 1000, 1001)
+	turn := ComputeTurnTopicID(100, 1)
 	if turn == ComputeTopicID(100, 1000, 1001) {
 		t.Fatalf("turn topic id collides with the fused-topic id space")
 	}
-	if turn != ComputeTurnTopicID(100, 1000, 1001) {
+	if turn != ComputeTurnTopicID(100, 1) {
 		t.Fatal("turn topic id must stay deterministic")
 	}
-	if turn == ComputeTurnTopicID(100, 1000, 1002) {
-		t.Fatal("a different agent timestamp must yield a different id")
+	if turn == ComputeTurnTopicID(100, 2) {
+		t.Fatal("the next turn of the same scene must get a different id")
+	}
+	if ComputeTurnTopicID(101, 1) == turn {
+		t.Fatal("the same turn seq in another scene must get a different id")
 	}
 }
 

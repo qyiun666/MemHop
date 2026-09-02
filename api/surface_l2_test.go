@@ -12,16 +12,16 @@ import (
 func TestSurfaceL2Scenes(t *testing.T) {
 	db := openSurfaceDB(t)
 
-	first, err := db.Search(SearchQuery{SceneName: "scene one"})
+	first, err := db.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("search scene one: %v", err)
 	}
-	second, err := db.Search(SearchQuery{SceneName: "scene two"})
+	second, err := db.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("search scene two: %v", err)
 	}
 	// A scene with content, so the context view has something to render.
-	if _, err := db.Update(turnUpdate(first.Scene.SceneID, "scene one topic", "noted")); err != nil {
+	if _, err := db.Update(turnUpdate(first.Scene.SceneID, first.NewTopicID, "scene one topic", "noted")); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 

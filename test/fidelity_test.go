@@ -118,16 +118,20 @@ func TestKeywordFidelity(t *testing.T) {
 		{"我去年五月七号去参加了 LGBTQ 支持小组的活动", "那是个支持性很强的场合，继续聊？"},
 		{"我的猫叫咪咪，今年三岁，最喜欢吃三文鱼罐头", "咪咪的口味很明确，三文鱼罐头是它的最爱"},
 	}
-	sceneID, err := db.OpenSession("keyword fidelity")
-	if err != nil {
-		t.Fatalf("OpenSession: %v", err)
-	}
 	base := time.Now().UnixMilli()
+	sceneID, _, err := db.OpenTurn("")
+	if err != nil {
+		t.Fatalf("OpenTurn: %v", err)
+	}
 	var faithful, total int
 	for i, c := range cases {
 		ts := base + int64(i)*1000
+		_, turnID, err := db.OpenTurn(sceneID)
+		if err != nil {
+			t.Fatalf("OpenTurn %d: %v", i, err)
+		}
 		topicID, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, UserText: c[0], UserTS: ts, AgentText: c[1], AgentTS: ts + 500,
+			SceneID: sceneID, TopicID: turnID, UserText: c[0], UserTS: ts, AgentText: c[1], AgentTS: ts + 500,
 		})
 		if err != nil {
 			t.Fatalf("Update: %v", err)
@@ -165,13 +169,13 @@ func TestKeywordPersistence(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
-	sceneID, err := db.OpenSession("persistence")
-	if err != nil {
-		t.Fatalf("OpenSession: %v", err)
-	}
 	base := time.Now().UnixMilli()
+	sceneID, anchorTurn, err := db.OpenTurn("")
+	if err != nil {
+		t.Fatalf("OpenTurn: %v", err)
+	}
 	if _, err := db.Update(memhop.TurnUpdate{
-		SceneID: sceneID, UserText: "我的狗叫旺财，是一只金毛，今年五岁了", UserTS: base,
+		SceneID: sceneID, TopicID: anchorTurn, UserText: "我的狗叫旺财，是一只金毛，今年五岁了", UserTS: base,
 		AgentText: "旺财这个名字很顺口", AgentTS: base + 500,
 	}); err != nil {
 		t.Fatalf("anchor Update: %v", err)
@@ -185,8 +189,12 @@ func TestKeywordPersistence(t *testing.T) {
 	}
 	for i, ntext := range noise {
 		ts := base + int64(i+1)*1000
+		_, turnID, err := db.OpenTurn(sceneID)
+		if err != nil {
+			t.Fatalf("noise OpenTurn %d: %v", i, err)
+		}
 		if _, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, UserText: ntext, UserTS: ts,
+			SceneID: sceneID, TopicID: turnID, UserText: ntext, UserTS: ts,
 			AgentText: "好的，记下了", AgentTS: ts + 500,
 		}); err != nil {
 			t.Fatalf("noise Update: %v", err)
@@ -212,14 +220,18 @@ func TestKeywordPersistence(t *testing.T) {
 // closed with an agent reply. Returns the session id.
 func ingestSession(t *testing.T, db *testsupport.Handle, texts []string, base int64) string {
 	t.Helper()
-	sceneID, err := db.OpenSession("ingest session")
+	sceneID, _, err := db.OpenTurn("")
 	if err != nil {
-		t.Fatalf("OpenSession: %v", err)
+		t.Fatalf("OpenTurn: %v", err)
 	}
 	for i, text := range texts {
 		ts := base + int64(i)*1000
+		_, turnID, err := db.OpenTurn(sceneID)
+		if err != nil {
+			t.Fatalf("OpenTurn[%d]: %v", i, err)
+		}
 		if _, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, UserText: text, UserTS: ts,
+			SceneID: sceneID, TopicID: turnID, UserText: text, UserTS: ts,
 			AgentText: "好的，我记下了。", AgentTS: ts + 500,
 		}); err != nil {
 			t.Fatalf("ingest Update[%d]: %v", i, err)

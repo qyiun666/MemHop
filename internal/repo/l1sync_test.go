@@ -25,10 +25,10 @@ func tempEngine(t *testing.T) *core.StorageEngine {
 }
 
 // mustCreateTurn writes one depth-1 turn topic under sceneID and returns its
-// id; the agent timestamp is derived so each call stays collision-free.
+// id; the caller's userTS doubles as the turn seq so each call stays unique.
 func mustCreateTurn(t *testing.T, engine *core.StorageEngine, sceneID uint64, kws []string, userTS int64) uint64 {
 	t.Helper()
-	id := core.ComputeTurnTopicID(sceneID, userTS, userTS+1)
+	id := core.ComputeTurnTopicID(sceneID, uint64(userTS))
 	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, id, kws, userTS, userTS+1) {
 		t.Fatalf("create topic %v", kws)
 	}

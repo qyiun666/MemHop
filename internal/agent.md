@@ -16,8 +16,10 @@
    存储读写；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent
    并行。`contextFor` 对非默认域校验注册表：未注册/已删除的 agentID 直接
    `ErrAgentNotFound`，域永不复活；与删除对撞的陈旧句柄由锁内墓碑复检拒绝。
-   L6 会话族统一走 `db.lockSession(agentID, sessionID)`（lockAgent + hex
-   解析，解析失败先解锁），门面侧的会话准入策略在 `CheckSession`。
+   L6 轨迹族统一走 `db.lockSession(agentID, turnID)`（lockAgent + hex 解析，
+   解析失败先解锁）：裸事件的键就是该轮话题 ID（`AppendTrajectory` 顺手把
+   `TopicID` 写成同一个值），计划绑定事件的键是计划 ID。门面侧的会话准入
+   策略在 `CheckSession`。
 2. **缓存刷新序**：写记录帧后紧跟 `ac.syncL2Meta`（**存储 -> l2meta**）；
    话题 BM25 索引随检索子系统退役，已无第三层。
    **禁止在域锁内取 `db.agentsMu`**（锁序环：sweep 走 agentsMu -> ac.mu），
@@ -79,18 +81,33 @@
 
 ## 读写路径契约（v1.5.0）
 
-1. **建场景是 `Search` 独占的能力**：`scene_id` 为空 → `freshSceneID` 铸一个
+1. **一次 `Search` = 读场景 + 开一轮**：`scene_id` 为空 → `freshSceneID` 铸一个
    未被占用的 ID（`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误原样上抛）
-   并落场景记录；非空且不存在 → `ErrNotFound`。`Update`/`AppendL4Message`/
-   `RefineTopicKeywords` 一律拒绝未知场景/话题，库内不再猜场景。
-2. **`Search` 零 LLM**：只做 `TouchSceneUsage`（唯一写）+ 从 `ac.l2Meta` 取
-   depth-1 话题；`Scene.TopicCount` 用这批话题现算（该字段不落盘）。
+   并落场景记录（名字一律库生成 `session:<id>`，入参不再有 `SceneName`）；
+   非空且不存在 → `ErrNotFound`。同一批调用还经 `repo.OpenSceneTurn` 把场景的
+   `TurnSeq` 推到下一轮，返回值 `NewTopicID = hash("turn:" + 场景:TurnSeq)`
+   就是本轮要沉淀进去的话题。`Update` 一律拒绝未知场景，库内不再猜场景。
+2. **`Search` 零 LLM、零话题写入**：唯一写是那一行场景记录（命中计数 + 轮次
+   计数，写失败即报错——轮次号是铸 ID 的依据，不能吞），话题从 `ac.l2Meta` 取
+   depth-1；`Scene.TopicCount` 用这批话题现算（该字段不落盘）。开了没沉淀的
+   轮次不留任何残渣，读两次只沉淀一次就是跳号。
 3. **`Update` 每轮一次提炼且排在写入前**：`ExtractTurnKeywords` 失败或空结果
-   直接报错，此时话题/档案/L2Meta 一个字都没动。话题 ID 走 `"turn:"` 命名空间，
-   档案 ID 由 `(topic, ts, content)` 派生，故同 `(场景, 双时间戳)` 重放幂等。
+   直接报错，此时话题/档案/L2Meta 一个字都没动。话题 ID 由宿主从 `Search`
+   原样带回（`TopicID`，`0`/非 hex 拒绝），档案 ID 由 `(topic, ts, content)`
+   派生，故同 `TopicID` 重放是覆盖而不是叠加。N:N 追加面（`AppendL4Message` /
+   `RefineTopicKeywords`）已删除：一轮的原文恒为两条，轮内过程走 L6 轨迹——
+   `AppendTrajectory`/`ReadTrajectory`/`Crystallize` 的轮键就是这个话题 id，
+   引擎把事件的 `topic_id` 回填成同一个值；计划绑定事件改按计划 id 落键，
+   一条事件只有一个归宿，不做双写。
 4. **巩固按单场景规模触发**：`consolidateScene` 在 depth-1 话题数超
    `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream；`activeScenes`/`Capacity`
    窗口已删除，Dream 也不再合并场景（合并只走显式 `MergeScenes`）。
+5. **L4 内容类型只在 `Update` 声明**：两侧档案按 `TurnUpdate.UserType` /
+   `AgentType` 落类型（零值 `ContentText`，非文本侧存路径/URL），Dream 的融合
+   摘要恒为 `text`。`SceneContext` 的 `Messages[].Type` 把它读回。
+6. **`SetSceneName` 是 `SceneName` 的唯一写者**：场景记录只被 `OpenSceneTurn`
+   读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
+   后续读取覆盖；`freshSceneID` 建新场景时才写默认名 `session:<id>`。
 
 ## 单向依赖
 

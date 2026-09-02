@@ -2,11 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L6 trajectory operations of the internal layer: host-appended event log
-// with one trajectory per agent turn (search starts it, update ends it),
-// plus Crystallize (L6 → L5) as an explicit host-triggered step that folds
-// in sibling turns of the same L2 topic. Retention is internal: Dream drops
-// events older than trajectoryRetention, and no delete API is exposed.
-// Every write keeps the domain's TrajIndex in sync under the domain lock.
+// with one trajectory per agent turn, keyed by that turn's L2 topic id
+// (Search issues the id, Update settles the turn into it), plus Crystallize
+// (L6 → L5) as an explicit host-triggered step over one turn's events. Plan
+// nodes share the record space under their own key (the plan id). Retention
+// is internal: Dream drops events older than trajectoryRetention, and no
+// delete API is exposed. Every write keeps the domain's TrajIndex in sync
+// under the domain lock.
 
 package internal
 
@@ -95,10 +97,11 @@ func parsePlanID(planID string) (uint64, error) {
 	return ph, nil
 }
 
-// AppendTrajectory appends one event to a turn's trajectory; Seq comes from
-// the domain's TrajIndex (max + 1), so the host never counts sequences.
-func (db *DB) AppendTrajectory(agentID uint64, sessionID string, ev core.TrajectorySlot) error {
-	ac, parsed, err := db.lockSession(agentID, sessionID)
+// AppendTrajectory appends one event to the turn opened by Search, keyed by
+// that turn's topic id; Seq comes from the domain's TrajIndex (max + 1), so
+// the host never counts sequences.
+func (db *DB) AppendTrajectory(agentID uint64, turnID string, ev core.TrajectorySlot) error {
+	ac, parsed, err := db.lockSession(agentID, turnID)
 	if err != nil {
 		return err
 	}
@@ -111,6 +114,9 @@ func (db *DB) AppendTrajectory(agentID uint64, sessionID string, ev core.Traject
 	}
 	maxSeq, _ := ac.traj.MaxSeq(parsed)
 	ev.SessionID = parsed
+	// The key IS the turn's topic, so the record's own topic link cannot
+	// disagree with it.
+	ev.TopicID = parsed
 	ev.Seq = maxSeq + 1
 	// An appended event must never masquerade as a plan node: force the
 	// record to bare-event semantics so host-supplied plan-node fields
@@ -127,13 +133,14 @@ func (db *DB) AppendTrajectory(agentID uint64, sessionID string, ev core.Traject
 	if err != nil {
 		return err
 	}
-	ac.traj.Append(parsed, ev.Seq, idHash, ev.Timestamp, ev.TopicID)
+	ac.traj.Append(parsed, ev.Seq, idHash, ev.Timestamp)
 	return nil
 }
 
-// ReadTrajectory returns a turn's trajectory events ordered by Seq.
-func (db *DB) ReadTrajectory(agentID uint64, sessionID string) ([]core.TrajectorySlot, error) {
-	ac, parsed, err := db.lockSession(agentID, sessionID)
+// ReadTrajectory returns one turn's trajectory events ordered by Seq; turnID
+// is the topic id Search issued for that turn.
+func (db *DB) ReadTrajectory(agentID uint64, turnID string) ([]core.TrajectorySlot, error) {
+	ac, parsed, err := db.lockSession(agentID, turnID)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +328,7 @@ func (db *DB) appendPlanEventLocked(ac *agentContext, agentID, planID, nodeID ui
 	if err != nil {
 		return err
 	}
-	ac.traj.Append(planID, ev.Seq, idHash, ev.Timestamp, ev.TopicID)
+	ac.traj.Append(planID, ev.Seq, idHash, ev.Timestamp)
 	ac.plans.upsertEvent(planID, nodeID, ev)
 	return nil
 }
@@ -374,22 +381,23 @@ func (db *DB) updatePlanNodeSummaryLocked(ac *agentContext, agentID, nodeID uint
 	return nil
 }
 
-// Crystallize extracts L5 capability candidates from a turn's trajectory
-// (L6 → L5); when the turn resolves to an L2 topic, sibling turns of the
-// same topic fold in, because capabilities are cross-turn patterns. The LLM
+// Crystallize extracts L5 capability candidates from one turn's trajectory
+// (L6 → L5), keyed by the topic id Search issued for that turn — or by a plan
+// id, when the host bound these turns' events to a plan tree. The LLM
 // receives the existing capability catalog so repeated crystallization
 // reuses or merges instead of duplicating. The whole pipeline runs under
 // the agent's domain lock; the LLM call holds no storage lock beyond the
 // engine's own short-lived record locks.
-func (db *DB) Crystallize(ctx context.Context, agentID uint64, sessionID string) (*CrystallizeResult, error) {
-	ac, parsed, err := db.lockSession(agentID, sessionID)
+func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*CrystallizeResult, error) {
+	ac, parsed, err := db.lockSession(agentID, turnID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.mu.Unlock()
-	events := db.trajectoryForCrystallize(ac, agentID, parsed)
+	// Events land in Seq order; only the payload budget can shorten the turn.
+	events := trimTrajectoryByBudget(readTurn(db.engine, agentID, ac, parsed), maxCrystallizePayload)
 	if len(events) == 0 {
-		return nil, common.NewError(common.ErrNotFound, "no trajectory for session")
+		return nil, common.NewError(common.ErrNotFound, "no trajectory for turn "+turnID)
 	}
 	existing := capability.ActiveOnly(core.CollectAllCapabilities(db.engine, agentID))
 	out, err := llmops.Crystallize(ctx, db.llm, events, existing)
@@ -402,61 +410,16 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, sessionID string)
 	}
 	result := &CrystallizeResult{CreatedIDs: []string{}, ReusedIDs: []string{}, MergedIDs: []string{}}
 	for _, cand := range out.Capabilities {
-		if err := db.applyCrystallizeCandidate(agentID, cand, sessionID, result); err != nil {
+		if err := db.applyCrystallizeCandidate(agentID, cand, turnID, result); err != nil {
 			return nil, err
 		}
 	}
 	return result, nil
 }
 
-// trajectoryForCrystallize loads the turn's trajectory under ac.mu; when the
-// turn carries an L2 topic id, sibling turns of the same topic fold in and
-// the oldest events drop beyond the payload budget.
-func (db *DB) trajectoryForCrystallize(ac *agentContext, agentID, sessionID uint64) []core.TrajectorySlot {
-	events := readTurn(db.engine, agentID, ac, sessionID)
-	if len(events) == 0 {
-		return nil
-	}
-	var topicID uint64
-	for _, ev := range events {
-		if ev.TopicID != 0 {
-			topicID = ev.TopicID
-			break
-		}
-	}
-	if topicID != 0 {
-		seen := make(map[uint64]struct{}, len(events))
-		for _, ev := range events {
-			seen[ev.IDHash] = struct{}{}
-		}
-		for _, h := range ac.traj.TopicEvents(topicID) {
-			if _, dup := seen[h]; dup {
-				continue
-			}
-			if ev, err := core.ReadTrajectorySlot(db.engine, agentID, h); err == nil {
-				events = append(events, *ev)
-			}
-		}
-	}
-	sortTrajectory(events)
-	return trimTrajectoryByBudget(events, maxCrystallizePayload)
-}
-
-// sortTrajectory orders events chronologically; the (turn, seq) tiebreak
-// keeps a turn's internal order when the host reuses timestamps.
-func sortTrajectory(events []core.TrajectorySlot) {
-	slices.SortFunc(events, func(a, b core.TrajectorySlot) int {
-		return cmp.Or(
-			cmp.Compare(a.Timestamp, b.Timestamp),
-			cmp.Compare(a.SessionID, b.SessionID),
-			cmp.Compare(a.Seq, b.Seq),
-		)
-	})
-}
-
 // trimTrajectoryByBudget keeps the newest events within budget payload
 // bytes (at least one). ponytail: dropping the oldest is lossy for very
-// long-running topics; map-reduce induction over chunks is the upgrade path.
+// long turns; map-reduce induction over chunks is the upgrade path.
 func trimTrajectoryByBudget(events []core.TrajectorySlot, budget int) []core.TrajectorySlot {
 	total := 0
 	start := len(events)
