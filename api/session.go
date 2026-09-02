@@ -21,7 +21,8 @@ type Session struct {
 func (s *Session) AgentID() string { return internal.FormatAgentID(s.Session.AgentID()) }
 
 // Search reads one scene — the host's session: its record plus its depth-1
-// topics in turn order. An empty SearchQuery.SceneID allocates a fresh scene.
+// topics in turn order, and the topic id this read opened for the turn the
+// host is about to run. An empty SearchQuery.SceneID allocates a fresh scene.
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	res, err := s.Session.Search(q)
 	if err != nil {
@@ -30,19 +31,10 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	return fromSearchResult(res), nil
 }
 
-// Update sinks one finished turn (both originals plus their timestamps) into
-// the host's scene and returns the new topic's hex id.
+// Update settles one finished turn (both originals plus their timestamps)
+// into the topic id Search issued for it, and returns that id.
 func (s *Session) Update(in TurnUpdate) (string, error) {
 	id, err := s.Session.Update(in)
-	if err != nil {
-		return "", err
-	}
-	return internal.FormatID(id), nil
-}
-
-// AppendL4Message returns the new L4 archive ID as a hex string.
-func (s *Session) AppendL4Message(topicID string, text string, timestamp int64, role uint8, contentType ContentType) (string, error) {
-	id, err := s.Session.AppendL4Message(topicID, text, timestamp, role, contentType)
 	if err != nil {
 		return "", err
 	}
@@ -239,9 +231,11 @@ func (s *Session) ListCapabilities(q CapabilityListQuery) ([]Capability, error) 
 	return out, nil
 }
 
-// ReadTrajectory returns trajectory events with hex IDs.
-func (s *Session) ReadTrajectory(sessionID string) ([]TrajectorySlot, error) {
-	events, err := s.Session.ReadTrajectory(sessionID)
+// ReadTrajectory returns one turn's trajectory events with hex IDs. turnID is
+// the topic id Search minted for that turn; plan-bound events are keyed by
+// their plan id, so a planID works here too.
+func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
+	events, err := s.Session.ReadTrajectory(turnID)
 	if err != nil {
 		return nil, err
 	}
@@ -252,13 +246,14 @@ func (s *Session) ReadTrajectory(sessionID string) ([]TrajectorySlot, error) {
 	return out, nil
 }
 
-// AppendTrajectory writes a public trajectory event, parsing hex refs.
-func (s *Session) AppendTrajectory(sessionID string, ev TrajectorySlot) error {
+// AppendTrajectory writes one event of the turn Search opened, keyed by that
+// turn's topic id, and stamps the record's topic_id with the same value.
+func (s *Session) AppendTrajectory(turnID string, ev TrajectorySlot) error {
 	coreEv, err := toCoreTrajectorySlot(ev)
 	if err != nil {
 		return err
 	}
-	return s.Session.AppendTrajectory(sessionID, coreEv)
+	return s.Session.AppendTrajectory(turnID, coreEv)
 }
 
 // PlanAppend appends one event to a plan node (hex planID, nodePath). The

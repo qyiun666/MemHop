@@ -350,3 +350,42 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 		t.Error("archive should be deleted")
 	}
 }
+
+// A scene is named by the library when it is created; SetSceneName is the
+// host's only way to title one. The title must survive a later Search, which
+// rewrites that very record to bump its hit counter and turn sequence.
+func TestSetSceneNameSurvivesLaterTurns(t *testing.T) {
+	srv, calls := countingLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("open scene: %v", err)
+	}
+	sceneHex := common.FormatHash(res.Scene.SceneID)
+	if _, err := db.Update(core.DefaultAgentID, turnOf(res.Scene.SceneID, res.NewTopicID)); err != nil {
+		t.Fatalf("settle turn: %v", err)
+	}
+	if err := db.SetSceneName(core.DefaultAgentID, sceneHex, "rust 学习"); err != nil {
+		t.Fatalf("SetSceneName: %v", err)
+	}
+	again, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: sceneHex})
+	if err != nil {
+		t.Fatalf("reopen scene: %v", err)
+	}
+	if again.Scene.SceneName != "rust 学习" {
+		t.Fatalf("name after reopen = %q, want the title to persist", again.Scene.SceneName)
+	}
+	if again.Scene.HitCount <= res.Scene.HitCount {
+		t.Fatalf("reopen did not bump HitCount: %d -> %d", res.Scene.HitCount, again.Scene.HitCount)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("LLM calls = %d, want 1 (only Update distills)", got)
+	}
+	if err := db.SetSceneName(core.DefaultAgentID, sceneHex, ""); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Errorf("empty title: want ErrInvalidQuery, got %v", err)
+	}
+	if err := db.SetSceneName(core.DefaultAgentID, common.FormatHash(common.HashID("ghost")), "x"); common.CodeOf(err) != common.ErrNotFound {
+		t.Errorf("unknown scene: want ErrNotFound, got %v", err)
+	}
+}

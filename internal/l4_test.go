@@ -85,5 +85,23 @@ func TestSearchL4TopicFilter(t *testing.T) {
 	}
 }
 
-//go:fix inline
-func strPtr(s string) *string { return new(s) }
+// TestSearchL4TypeFilter: the optional content-type filter narrows results
+// within the query modes.
+func TestSearchL4TypeFilter(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	topic := common.HashID("types")
+	text := core.ArchiveSlot{IDHash: common.HashID("m-text"), ContextID: topic, Content: "文字内容", CreatedAt: 2000, ContentType: core.ContentText}
+	image := core.ArchiveSlot{IDHash: common.HashID("m-img"), ContextID: topic, Content: "img://cat.png", CreatedAt: 3000, ContentType: core.ContentImage}
+	writeArchive(t, engine, &text)
+	writeArchive(t, engine, &image)
+
+	img := core.ContentImage
+	got, err := db.SearchL4(core.DefaultAgentID, L4Query{Start: 1000, End: 4000, Type: &img})
+	if err != nil {
+		t.Fatalf("SearchL4: %v", err)
+	}
+	if len(got) != 1 || got[0].ContentType != core.ContentImage {
+		t.Fatalf("type filter: %+v, want only the image archive", got)
+	}
+}

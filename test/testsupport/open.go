@@ -107,14 +107,16 @@ func OpenMemHopB(b *testing.B) *Handle {
 	return open(b)
 }
 
-// OpenSession asks the engine for a fresh host session (scene) and returns its
-// hex id — the integration tests' shared way to enter the memory loop.
-func (h *Handle) OpenSession(name string) (string, error) {
-	res, err := h.Search(memhop.SearchQuery{SceneName: name})
+// OpenTurn enters the memory loop the way a host does: an empty sceneID asks
+// for a fresh session (scene), a non-empty one continues it. It returns the
+// scene id and the topic id the engine just opened for the next turn — the id
+// Update settles that turn into — so a test calls it once per turn.
+func (h *Handle) OpenTurn(sceneID string) (string, string, error) {
+	res, err := h.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return res.Scene.SceneID, nil
+	return res.Scene.SceneID, res.NewTopicID, nil
 }
 
 // open is the shared implementation for testing.T and testing.B.

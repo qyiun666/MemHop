@@ -6,8 +6,6 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	memhop "github.com/qyiun666/MemHop/api"
 )
@@ -49,9 +47,9 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 	}, handle[archiveSearchArgs, []memhop.ArchiveSlot](func(a archiveSearchArgs) ([]memhop.ArchiveSlot, error) {
 		var ct *memhop.ContentType
 		if a.Type != nil {
-			v, ok := contentTypeNames[*a.Type]
-			if !ok {
-				return nil, fmt.Errorf("invalid content_type %q (want text, image, video, document, audio, code or other)", *a.Type)
+			v, err := resolveContentType(*a.Type)
+			if err != nil {
+				return nil, err
 			}
 			ct = &v
 		}

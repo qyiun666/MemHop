@@ -37,7 +37,7 @@ func TestCreateSceneL2WithIDIsIdempotent(t *testing.T) {
 func TestCreateTurnTopicL2WritesSingleTrack(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(7)
-	topicID := core.ComputeTurnTopicID(sceneID, 1000, 1001)
+	topicID := core.ComputeTurnTopicID(sceneID, 1001)
 	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID,
 		[]string{"登录", "JWT"}, 1000, 1001) {
 		t.Fatal("create turn topic")
@@ -215,28 +215,30 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 }
 
-func TestTouchSceneUsageIncrements(t *testing.T) {
+// One read of a scene opens one turn: the usage counters and the turn counter
+// move together, and the caller gets the bumped record back.
+func TestOpenSceneTurnAdvancesCounters(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(4242)
 	if err := CreateSceneL2WithID(engine, core.DefaultAgentID, sceneID, "scene-usage-1"); err != nil {
 		t.Fatalf("create scene: %v", err)
 	}
-	if _, err := TouchSceneUsage(engine, core.DefaultAgentID, sceneID, 1000); err != nil {
-		t.Fatalf("first touch: %v", err)
+	if _, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID, 1000); err != nil {
+		t.Fatalf("first turn: %v", err)
 	}
-	touched, err := TouchSceneUsage(engine, core.DefaultAgentID, sceneID, 2000)
+	opened, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID, 2000)
 	if err != nil {
-		t.Fatalf("second touch: %v", err)
+		t.Fatalf("second turn: %v", err)
 	}
-	if touched.HitCount != 2 || touched.LastHitAt != 2000 {
-		t.Fatalf("returned record not the bumped one: %+v", touched)
+	if opened.HitCount != 2 || opened.LastHitAt != 2000 || opened.TurnSeq != 2 {
+		t.Fatalf("returned record not the bumped one: %+v", opened)
 	}
 	slot, err := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID)
 	if err != nil {
 		t.Fatalf("read scene: %v", err)
 	}
-	if slot.HitCount != 2 || slot.LastHitAt != 2000 {
-		t.Fatalf("usage mismatch: %+v", slot)
+	if slot.HitCount != 2 || slot.LastHitAt != 2000 || slot.TurnSeq != 2 {
+		t.Fatalf("scene counters mismatch: %+v", slot)
 	}
 }
 

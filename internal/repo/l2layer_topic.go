@@ -127,14 +127,6 @@ func UpdateTopicL4RefsL2(engine *core.StorageEngine, agentID uint64, id uint64, 
 	})
 }
 
-// RefineTopicKeywordsL2 replaces the topic's keyword track with a freshly
-// distilled set.
-func RefineTopicKeywordsL2(engine *core.StorageEngine, agentID uint64, id uint64, fusedKeywords []string) bool {
-	return mutateTopic(engine, agentID, id, func(t *core.TopicSlot) {
-		t.FusedKeywords = fusedKeywords
-	})
-}
-
 func UpdateChildrenL2(engine *core.StorageEngine, agentID uint64, id uint64, childrenIDs []uint64) bool {
 	return mutateTopic(engine, agentID, id, func(t *core.TopicSlot) {
 		t.ChildrenIDs = childrenIDs

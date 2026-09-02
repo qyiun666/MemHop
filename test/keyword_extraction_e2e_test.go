@@ -79,15 +79,19 @@ func TestUpdateLongTurnNeverFails(t *testing.T) {
 	defer db.Close()
 
 	texts := []string{longSessionText(t, 2), longSessionText(t, 0)}
-	sceneID, err := db.OpenSession("long turns")
+	sceneID, _, err := db.OpenTurn("")
 	if err != nil {
-		t.Fatalf("OpenSession: %v", err)
+		t.Fatalf("OpenTurn: %v", err)
 	}
 	base := time.Now().UnixMilli()
 	for i, text := range texts {
 		ts := base + int64(i)*1000
+		_, turnID, err := db.OpenTurn(sceneID)
+		if err != nil {
+			t.Fatalf("OpenTurn %d: %v", i, err)
+		}
 		topicID, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, UserText: text, UserTS: ts,
+			SceneID: sceneID, TopicID: turnID, UserText: text, UserTS: ts,
 			AgentText: "已了解这段长对话", AgentTS: ts + 500,
 		})
 		if err != nil {

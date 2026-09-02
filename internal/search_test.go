@@ -21,14 +21,14 @@ func newSearchTestDB(t *testing.T, llmURL string) *DB {
 	return db
 }
 
-// An empty SceneID asks for a fresh scene: the record lands on disk, the
-// result carries its host-owned id, and the optional name/L3 anchor apply.
+// An empty SceneID asks for a fresh scene: the record lands on disk under a
+// library-generated name, and the optional L3 anchor applies.
 func TestSearchCreatesSceneWhenIDEmpty(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["unused"]}`)
 	db := newSearchTestDB(t, srv.URL)
 	l3ID := common.FormatHash(101)
 
-	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneName: "购物助手", L3ID: l3ID})
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{L3ID: l3ID})
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
@@ -39,8 +39,8 @@ func TestSearchCreatesSceneWhenIDEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("scene not persisted: %v", err)
 	}
-	if slot.SceneName != "购物助手" {
-		t.Errorf("scene name = %q, want the host-provided one", slot.SceneName)
+	if want := "session:" + common.FormatHash(res.Scene.SceneID); slot.SceneName != want {
+		t.Errorf("scene name = %q, want the library-generated %q", slot.SceneName, want)
 	}
 	wantL3, err := common.ParseID(l3ID)
 	if err != nil {
@@ -146,6 +146,49 @@ func TestSearchIsReadOnlyAndCallsNoLLM(t *testing.T) {
 	}
 	if res.Scene.HitCount != 1 {
 		t.Errorf("usage counter should record the read, got %+v", res.Scene)
+	}
+}
+
+// Each read opens exactly one turn: the topic id it hands back comes from the
+// scene's own turn counter, so reopens advance it and never repeat it. Opening
+// a turn mints no record — the surface stays as it was until Update settles.
+func TestSearchOpensOneTurnPerRead(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["x"]}`)
+	db := newSearchTestDB(t, srv.URL)
+
+	first, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("first Search: %v", err)
+	}
+	if want := core.ComputeTurnTopicID(first.Scene.SceneID, 1); first.NewTopicID != want {
+		t.Fatalf("a fresh scene must open turn 1: got %d, want %d", first.NewTopicID, want)
+	}
+	second, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(first.Scene.SceneID)})
+	if err != nil {
+		t.Fatalf("second Search: %v", err)
+	}
+	if second.NewTopicID == first.NewTopicID {
+		t.Fatal("two reads of one scene issued the same turn topic")
+	}
+	if len(second.Topics) != 0 || second.Scene.HitCount != 2 {
+		t.Fatalf("opening a turn must not create a topic, got %+v", second)
+	}
+
+	// Another scene counts its own turns from one; reopening the first scene
+	// continues where it left off.
+	other, err := db.Search(core.DefaultAgentID, SearchQuery{})
+	if err != nil {
+		t.Fatalf("other scene: %v", err)
+	}
+	if other.NewTopicID != core.ComputeTurnTopicID(other.Scene.SceneID, 1) {
+		t.Fatal("a new scene must start its own turn counter")
+	}
+	reopened, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(first.Scene.SceneID)})
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if reopened.NewTopicID != core.ComputeTurnTopicID(first.Scene.SceneID, 3) {
+		t.Fatalf("reopen must continue the counter, got %d", reopened.NewTopicID)
 	}
 }
 

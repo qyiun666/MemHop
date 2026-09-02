@@ -13,7 +13,6 @@ import (
 	"context"
 
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // Session binds every call to one agent domain.
@@ -46,23 +45,16 @@ func (s *Session) IsClosed() bool { return s.db.IsClosed() }
 
 // Search reads one scene (the host's session): its record and its depth-1
 // topics, whose count the result reports as TopicCount. An empty
-// SearchQuery.SceneID allocates a fresh scene.
+// SearchQuery.SceneID allocates a fresh scene. The result also carries the
+// topic id this read opened for the turn the host is about to run.
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	return s.db.Search(s.agentID, q)
 }
 
-// Update sinks one finished turn into the host's scene and returns the new
-// topic id.
+// Update settles one finished turn into the topic id Search issued for it and
+// returns that id.
 func (s *Session) Update(in TurnUpdate) (uint64, error) {
 	return s.db.Update(s.agentID, in)
-}
-
-func (s *Session) AppendL4Message(topicID string, text string, timestamp int64, role uint8, contentType core.ContentType) (uint64, error) {
-	return s.db.AppendL4Message(s.agentID, topicID, text, timestamp, role, contentType)
-}
-
-func (s *Session) RefineTopicKeywords(ctx context.Context, topicID string) error {
-	return s.db.RefineTopicKeywords(ctx, s.agentID, topicID)
 }
 
 // ---- Dream ----
@@ -114,6 +106,12 @@ func (s *Session) ListScenesByL3(l3ID string) ([]SceneSlot, error) {
 // an empty l3ID clears it).
 func (s *Session) SetSceneL3ID(sceneID, l3ID string, force bool) error {
 	return s.db.SetSceneL3ID(s.agentID, sceneID, l3ID, force)
+}
+
+// SetSceneName renames a scene (the library names a fresh one "session:<id>").
+// Pure string surface, so the api facade promotes it directly.
+func (s *Session) SetSceneName(sceneID, name string) error {
+	return s.db.SetSceneName(s.agentID, sceneID, name)
 }
 
 func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
@@ -210,24 +208,31 @@ func (s *Session) RecordCapabilityUsage(id string, success bool) (*Capability, e
 
 // ---- L6 trajectory ----
 
-func (s *Session) AppendTrajectory(sessionID string, ev TrajectorySlot) error {
-	return s.db.AppendTrajectory(s.agentID, sessionID, ev)
+// AppendTrajectory appends one event to the turn Search opened, keyed by that
+// turn's topic id; the record's TopicID is stamped with the same value.
+func (s *Session) AppendTrajectory(turnID string, ev TrajectorySlot) error {
+	return s.db.AppendTrajectory(s.agentID, turnID, ev)
 }
 
-func (s *Session) ReadTrajectory(sessionID string) ([]TrajectorySlot, error) {
-	return s.db.ReadTrajectory(s.agentID, sessionID)
+// ReadTrajectory returns one turn's events; turnID is the topic id Search
+// minted for it. Plan-bound events are keyed by their plan id, so a planID
+// works here too.
+func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
+	return s.db.ReadTrajectory(s.agentID, turnID)
 }
 
-// ListTrajectorySessions summarizes the domain's L6 sessions (steps and
-// last-append time each); the returned hex IDs feed ReadTrajectory /
-// Crystallize directly. Events older than trajectoryRetention are dropped
-// by Dream automatically.
+// ListTrajectorySessions summarizes every key of the domain's L6 log (turn
+// topic ids and plan ids) with its step count and last-append time; the
+// returned hex ids feed ReadTrajectory / Crystallize directly. Events older
+// than trajectoryRetention are dropped by Dream automatically.
 func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 	return s.db.ListTrajectorySessions(s.agentID)
 }
 
-func (s *Session) Crystallize(ctx context.Context, sessionID string) (*CrystallizeResult, error) {
-	return s.db.Crystallize(ctx, s.agentID, sessionID)
+// Crystallize turns one key's events into L5 capability drafts; pass a turn's
+// topic id for a single turn, or a plan id to aggregate the whole plan.
+func (s *Session) Crystallize(ctx context.Context, turnID string) (*CrystallizeResult, error) {
+	return s.db.Crystallize(ctx, s.agentID, turnID)
 }
 
 // ---- L6 plan (tri-form) ----

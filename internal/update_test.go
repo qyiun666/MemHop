@@ -1,12 +1,11 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Update is the single write of the hot path: one finished turn becomes one
-// depth-1 topic plus two L4 archives, distilled by exactly one LLM call.
+// Update is the single write of the hot path: the turn Search opened becomes
+// one depth-1 topic plus two L4 archives, distilled by exactly one LLM call.
 package internal
 
 import (
-	"context"
 	"net/http"
 	"testing"
 
@@ -16,19 +15,21 @@ import (
 
 const turnKeywords = `{"keywords":["rust","所有权"]}`
 
-// openScene gives a test the host session the turn must land in.
-func openScene(t *testing.T, db *DB, name string) uint64 {
+// openTurn gives a test the host session and the topic id Search issued for
+// the turn it is about to settle.
+func openTurn(t *testing.T, db *DB) (uint64, uint64) {
 	t.Helper()
-	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneName: name})
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{})
 	if err != nil {
 		t.Fatalf("open scene: %v", err)
 	}
-	return res.Scene.SceneID
+	return res.Scene.SceneID, res.NewTopicID
 }
 
-func turnOf(sceneID uint64) TurnUpdate {
+func turnOf(sceneID, topicID uint64) TurnUpdate {
 	return TurnUpdate{
 		SceneID:   common.FormatHash(sceneID),
+		TopicID:   common.FormatHash(topicID),
 		UserText:  "rust 的所有权规则是什么",
 		UserTS:    1000,
 		AgentText: "所有权系统靠移动语义保证内存安全",
@@ -36,16 +37,19 @@ func turnOf(sceneID uint64) TurnUpdate {
 	}
 }
 
-// One Update writes one topic (single keyword track, both timestamps) and its
-// two originals as L4 archives; the returned id accepts further messages.
+// One Update writes the topic Search opened: single keyword track, both
+// timestamps, and its two originals as L4 archives.
 func TestUpdateWritesOneTurnTopic(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
-	sceneID := openScene(t, db, "session")
+	sceneID, topicID := openTurn(t, db)
 
-	topicID, err := db.Update(core.DefaultAgentID, turnOf(sceneID))
+	got, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID))
 	if err != nil {
 		t.Fatalf("Update: %v", err)
+	}
+	if got != topicID {
+		t.Fatalf("Update returned topic %d, want the id Search issued (%d)", got, topicID)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("Update made %d LLM calls, want exactly 1", got)
@@ -93,26 +97,42 @@ func TestUpdateWritesOneTurnTopic(t *testing.T) {
 	}
 }
 
-// The returned topic id keeps accepting this turn's intermediate messages.
-func TestUpdateResultAcceptsAppendL4(t *testing.T) {
+// Successive turns of one session each settle into the topic id that read
+// issued, so their order in the surface follows the conversation, not the
+// clock the host happens to report.
+func TestUpdateSettlesEachScenesTurnsInOrder(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
-	sceneID := openScene(t, db, "session")
+	sceneID, firstID := openTurn(t, db)
 
-	topicID, err := db.Update(core.DefaultAgentID, turnOf(sceneID))
+	second, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
 	if err != nil {
-		t.Fatalf("Update: %v", err)
+		t.Fatalf("second Search: %v", err)
 	}
-	if _, err := db.AppendL4Message(core.DefaultAgentID, common.FormatHash(topicID),
-		"工具输出：编译通过", 2500, core.RoleAgent, core.ContentText); err != nil {
-		t.Fatalf("AppendL4Message: %v", err)
+	for _, settle := range []struct {
+		topicID uint64
+		userTS  int64
+	}{
+		{second.NewTopicID, 3000}, // the later turn settles first
+		{firstID, 1000},
+	} {
+		in := turnOf(sceneID, settle.topicID)
+		in.UserTS = settle.userTS
+		in.AgentTS = settle.userTS + 1000
+		if _, err := db.Update(core.DefaultAgentID, in); err != nil {
+			t.Fatalf("Update: %v", err)
+		}
 	}
-	topic, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, topicID)
-	if err != nil || topic == nil {
-		t.Fatalf("read topic: %v", err)
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
 	}
-	if len(topic.L4Refs) != 3 {
-		t.Fatalf("L4Refs = %d, want 3", len(topic.L4Refs))
+	if len(res.Topics) != 2 {
+		t.Fatalf("scene surface = %+v, want 2 turn topics", res.Topics)
+	}
+	if res.Topics[0].ID != firstID || res.Topics[1].ID != second.NewTopicID {
+		t.Fatalf("surface order = %d then %d, want %d then %d",
+			res.Topics[0].ID, res.Topics[1].ID, firstID, second.NewTopicID)
 	}
 }
 
@@ -122,7 +142,7 @@ func TestUpdateRejectsUnknownScene(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 
-	_, err := db.Update(core.DefaultAgentID, turnOf(4242))
+	_, err := db.Update(core.DefaultAgentID, turnOf(4242, 99))
 	if common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
@@ -138,8 +158,8 @@ func TestUpdateRejectsUnknownScene(t *testing.T) {
 func TestUpdateValidatesPayload(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
-	sceneID := openScene(t, db, "session")
-	base := turnOf(sceneID)
+	sceneID, topicID := openTurn(t, db)
+	base := turnOf(sceneID, topicID)
 
 	cases := []struct {
 		name  string
@@ -150,6 +170,9 @@ func TestUpdateValidatesPayload(t *testing.T) {
 		{"zero user timestamp", func(u *TurnUpdate) { u.UserTS = 0 }},
 		{"agent before user", func(u *TurnUpdate) { u.AgentTS = 999 }},
 		{"unparsable scene id", func(u *TurnUpdate) { u.SceneID = "not-hex" }},
+		{"missing topic id", func(u *TurnUpdate) { u.TopicID = "" }},
+		{"zero topic id", func(u *TurnUpdate) { u.TopicID = "0000000000000000" }},
+		{"unparsable topic id", func(u *TurnUpdate) { u.TopicID = "not-hex" }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -173,12 +196,12 @@ func TestUpdateValidatesPayload(t *testing.T) {
 func TestUpdateDistillFailureLeavesNoTrace(t *testing.T) {
 	srv := failingLLMServer(t, http.StatusBadRequest)
 	db := newSearchTestDB(t, srv.URL)
-	sceneID := openScene(t, db, "session")
+	sceneID, topicID := openTurn(t, db)
 
 	before := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic)
 	archivesBefore := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive)
 
-	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID)); common.CodeOf(err) != common.ErrLLM {
+	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); common.CodeOf(err) != common.ErrLLM {
 		t.Fatalf("err = %v, want ErrLLM", err)
 	}
 	if got := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); got != before {
@@ -193,9 +216,9 @@ func TestUpdateDistillFailureLeavesNoTrace(t *testing.T) {
 func TestUpdateRejectsEmptyExtraction(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":[]}`)
 	db := newSearchTestDB(t, srv.URL)
-	sceneID := openScene(t, db, "session")
+	sceneID, topicID := openTurn(t, db)
 
-	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID)); common.CodeOf(err) != common.ErrLLM {
+	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); common.CodeOf(err) != common.ErrLLM {
 		t.Fatalf("err = %v, want ErrLLM", err)
 	}
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); n != 0 {
@@ -258,58 +281,24 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 	})
 }
 
-// Refine re-distills from every original of the topic, so a turn whose extra
-// messages arrived after the fact gets them into the keyword track.
-func TestRefineAfterAppendUsesAllOriginals(t *testing.T) {
-	srv, calls := countingLLMServer(t, `{"keywords":["编译","移动语义"]}`)
-	db := newSearchTestDB(t, srv.URL)
-	sceneID := openScene(t, db, "session")
-	topicID, err := db.Update(core.DefaultAgentID, turnOf(sceneID))
-	if err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-	if _, err := db.AppendL4Message(core.DefaultAgentID, common.FormatHash(topicID),
-		"补充：还需要借用检查器", 2600, core.RoleUser, core.ContentText); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-	before := calls.Load()
-
-	if err := db.RefineTopicKeywords(context.Background(), core.DefaultAgentID, common.FormatHash(topicID)); err != nil {
-		t.Fatalf("RefineTopicKeywords: %v", err)
-	}
-	if calls.Load() != before+1 {
-		t.Fatalf("refine must re-distill once, calls %d -> %d", before, calls.Load())
-	}
-	topic, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, topicID)
-	if err != nil || topic == nil {
-		t.Fatalf("read topic: %v", err)
-	}
-	if len(topic.FusedKeywords) != 2 || topic.FusedKeywords[0] != "编译" {
-		t.Fatalf("keywords not replaced: %v", topic.FusedKeywords)
-	}
-	if topic.UserTimestamp != 1000 || topic.AgentTimestamp != 2000 {
-		t.Fatalf("refine must not move the turn timestamps: %+v", topic)
-	}
-}
-
-// A host that retries a settled turn (same scene and both timestamps) gets the
-// same topic and the same two archives back — the turn never accumulates
-// duplicates, so an at-least-once write loop stays safe.
+// A host that retries a settled turn (same topic id) gets that same topic and
+// the same two archives back — the turn never accumulates duplicates, so an
+// at-least-once write loop stays safe.
 func TestUpdateReplayIsIdempotent(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
-	sceneID := openScene(t, db, "session")
+	sceneID, topicID := openTurn(t, db)
 
-	first, err := db.Update(core.DefaultAgentID, turnOf(sceneID))
+	first, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID))
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	second, err := db.Update(core.DefaultAgentID, turnOf(sceneID))
+	second, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID))
 	if err != nil {
 		t.Fatalf("replay Update: %v", err)
 	}
 	if first != second {
-		t.Fatalf("replay derived a new topic id: %d vs %d", first, second)
+		t.Fatalf("replay settled a different topic: %d vs %d", first, second)
 	}
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); n != 1 {
 		t.Fatalf("topic records = %d, want 1", n)
@@ -323,5 +312,50 @@ func TestUpdateReplayIsIdempotent(t *testing.T) {
 	}
 	if len(res.Topics) != 1 || len(res.Topics[0].L4Refs) != 2 {
 		t.Fatalf("scene surface after replay = %+v", res.Topics)
+	}
+}
+
+// Update is the only L4 write path, so it is also where a non-text turn gets
+// its type: the slot is archived under the declared content type while the
+// other side keeps the text default, and the scene read reports it back.
+func TestUpdateStoresDeclaredContentTypes(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+
+	in := turnOf(sceneID, topicID)
+	in.UserText = "img://cat.png"
+	in.UserType = core.ContentImage
+	if _, err := db.Update(core.DefaultAgentID, in); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	topicHex := common.FormatHash(topicID)
+	byTopic := func(ct core.ContentType) []core.ArchiveSlot {
+		// topic_id and type are filters only: the query needs one of the
+		// three modes, so sweep the time range covering this turn.
+		q := L4Query{Start: 1, End: 10000, TopicID: &topicHex, Type: &ct}
+		got, err := db.SearchL4(core.DefaultAgentID, q)
+		if err != nil {
+			t.Fatalf("SearchL4 by type %d: %v", ct, err)
+		}
+		return got
+	}
+	images := byTopic(core.ContentImage)
+	if len(images) != 1 || images[0].Content != "img://cat.png" || images[0].Role != core.RoleUser {
+		t.Fatalf("image archive = %+v, want the user slot only", images)
+	}
+	texts := byTopic(core.ContentText)
+	if len(texts) != 1 || texts[0].Role != core.RoleAgent {
+		t.Fatalf("text archive = %+v, want the agent slot to keep the default type", texts)
+	}
+
+	ctx, err := db.SceneContext(core.DefaultAgentID, common.FormatHash(sceneID))
+	if err != nil {
+		t.Fatalf("SceneContext: %v", err)
+	}
+	msgs := ctx.Topics[0].Messages
+	if len(msgs) != 2 || msgs[0].Type != core.ContentImage || msgs[1].Type != core.ContentText {
+		t.Fatalf("scene context types = %+v, want image then text", msgs)
 	}
 }

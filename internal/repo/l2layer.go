@@ -144,18 +144,21 @@ func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64,
 	return DeleteL2(engine, agentID, secondaryIDs, 1)
 }
 
-// TouchSceneUsage bumps the scene record's usage counters and returns the
-// updated record, so the caller that reads the scene in the same breath does
-// not hand back a stale snapshot. Best-effort by design: concurrent reads may
-// lose an increment; Dream only distinguishes HitCount == 0, so the impact is
-// nil.
-func TouchSceneUsage(engine *core.StorageEngine, agentID uint64, sceneID uint64, ts int64) (*core.SceneSlot, error) {
+// OpenSceneTurn records one Search read of a scene and opens the turn it
+// starts: it bumps the usage counters and the turn counter, then returns the
+// updated record so the caller reads back the seq it just allocated rather
+// than a stale snapshot. Unlike the usage counters, TurnSeq is load-bearing —
+// the caller hashes it into the turn's topic id, so a failed write must
+// surface as an error, not a lost increment. Reads and writes of one domain
+// are serialized by its lock, so no increment is ever racing away.
+func OpenSceneTurn(engine *core.StorageEngine, agentID uint64, sceneID uint64, ts int64) (*core.SceneSlot, error) {
 	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
 	if err != nil {
 		return nil, err
 	}
 	slot.HitCount++
 	slot.LastHitAt = ts
+	slot.TurnSeq++
 	if err := core.WriteSceneSlot(engine, agentID, sceneID, slot); err != nil {
 		return nil, err
 	}

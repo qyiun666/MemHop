@@ -29,22 +29,25 @@ func TestE2EUpdateDream(t *testing.T) {
 	userText := "我喜欢在周末去海边跑步，尤其是清晨人少的时候"
 	agentText := "海边晨跑很不错，空气清新还能看日出，记得做好防晒"
 
-	// 1. A fresh session has no surface yet.
-	sceneID, err := db.OpenSession("e2e running")
-	if err != nil {
-		t.Fatalf("OpenSession: %v", err)
-	}
-	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
+	// 1. Opening a fresh session hands back its empty surface and the topic id
+	// of the turn it just opened.
+	res, err := db.Search(memhop.SearchQuery{})
 	if err != nil {
 		t.Fatalf("Search(fresh): %v", err)
 	}
+	sceneID := res.Scene.SceneID
 	if len(res.Topics) != 0 {
 		t.Fatalf("fresh session returned %d topics", len(res.Topics))
 	}
+	if res.NewTopicID == "" {
+		t.Fatal("the opening read must issue the turn's topic id")
+	}
 
-	// 2. Update settles the turn: one topic, both originals, distilled keywords.
+	// 2. Update settles the turn into that topic: one topic, both originals,
+	// distilled keywords.
 	topicID, err := db.Update(memhop.TurnUpdate{
-		SceneID: sceneID, UserText: userText, UserTS: ts, AgentText: agentText, AgentTS: ts + 1000,
+		SceneID: sceneID, TopicID: res.NewTopicID, UserText: userText, UserTS: ts,
+		AgentText: agentText, AgentTS: ts + 1000,
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)

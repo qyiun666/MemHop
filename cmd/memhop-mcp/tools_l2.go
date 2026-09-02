@@ -21,6 +21,11 @@ type sceneTopicsArgs struct {
 	SceneID string `json:"scene_id"`
 }
 
+type sceneRenameArgs struct {
+	SceneID string `json:"scene_id"`
+	Name    string `json:"name"`
+}
+
 type sceneMergeArgs struct {
 	PrimaryID    string   `json:"primary_id"`
 	SecondaryIDs []string `json:"secondary_ids"`
@@ -37,7 +42,7 @@ func registerL2Tools(s *mcp.Server, db *memhop.Session) {
 func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_profile_get",
-		Description: "读取 L0 宿主画像（角色、个性、偏好、词表、风格与情绪模式）。",
+		Description: "读取 L0 宿主画像（名称、角色、个性、偏好，以及 Dream 蒸馏出的情绪状态与 MBTI 倾向）。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[memhop.ProfileSlot](func() (memhop.ProfileSlot, error) {
 		slot, err := db.GetL0()
@@ -49,7 +54,7 @@ func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_profile_update",
-		Description: "整体更新 L0 宿主画像（全量覆盖，缺省字段会被清空）。",
+		Description: "更新 L0 宿主画像的名称、角色、个性与偏好四项。UpdateL0 本身是全量覆盖，所以本工具先读回现画像、只替换这四项，情绪状态与 MBTI 倾向按库内现值保留。",
 		InputSchema: objSchema(map[string]any{
 			"name":        strProp("宿主名称"),
 			"role":        strProp("角色定位"),
@@ -57,11 +62,17 @@ func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 			"preferences": mapProp("偏好键值对"),
 		}),
 	}, handle[profileUpdateArgs, updateResult](func(a profileUpdateArgs) (updateResult, error) {
+		cur, err := db.GetL0()
+		if err != nil {
+			return updateResult{}, err
+		}
 		return updateResult{OK: true}, db.UpdateL0(&memhop.ProfileSlot{
-			Name:        a.Name,
-			Role:        a.Role,
-			Personality: a.Personality,
-			Preferences: a.Preferences,
+			Name:         a.Name,
+			Role:         a.Role,
+			Personality:  a.Personality,
+			Preferences:  a.Preferences,
+			EmotionState: cur.EmotionState,
+			MBTI:         cur.MBTI,
 		})
 	}))
 }
@@ -94,6 +105,17 @@ func registerSceneDetailTools(s *mcp.Server, db *memhop.Session) {
 			ctx.Topics[i].Messages = nil
 		}
 		return *ctx, nil
+	}))
+
+	s.AddTool(&mcp.Tool{
+		Name:        "memhop_scene_rename",
+		Description: "给一个 L2 场景（= 宿主会话）改名。新建时库按 \"session:<id>\" 命名，本工具是宿主换成人类可读标题的唯一入口；改名后后续读取/沉淀不会覆盖它。未知场景返回错误。",
+		InputSchema: objSchema(map[string]any{
+			"scene_id": strProp("场景 ID（16 位 hex），必填"),
+			"name":     strProp("新场景名，必填非空"),
+		}, "scene_id", "name"),
+	}, handle[sceneRenameArgs, updateResult](func(a sceneRenameArgs) (updateResult, error) {
+		return updateResult{OK: true}, db.SetSceneName(a.SceneID, a.Name)
 	}))
 
 	s.AddTool(&mcp.Tool{

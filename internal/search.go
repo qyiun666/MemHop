@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Search of the composition root: a scene-scoped read of the host's own
-// session. A scene is a host session, so Search never guesses which scene a
-// message belongs to and never distills anything — it returns the scene's
-// depth-1 topic set, which is the host's context for that session.
+// session plus the turn it opens. A scene is a host session, so Search never
+// guesses which scene a message belongs to and never distills anything — it
+// returns the scene's depth-1 topic set (the host's context) and the topic id
+// the coming turn will settle into.
 
 package internal
 
@@ -12,7 +13,6 @@ import (
 	"cmp"
 	"crypto/rand"
 	"encoding/binary"
-	"log/slog"
 	"slices"
 	"time"
 
@@ -22,11 +22,13 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// Search reads one scene: its record plus its depth-1 topics in turn order.
-// An empty SceneID allocates a fresh scene (anchored to L3ID when given,
-// named SceneName or "session:<id>"); a non-empty SceneID must already exist,
-// so a session always reads the scene it owns. The only write is the scene's
-// usage counter, which feeds Dream's importance feedback.
+// Search reads one scene and opens the turn the host is about to run: it
+// returns the scene record, its depth-1 topics in turn order (the host's
+// context), the domain's L0 profile and the topic id this read minted for the
+// new turn — Update settles that turn into it and the L6 trajectory binds to
+// it. An empty SceneID allocates a fresh scene, anchored to L3ID when given
+// and named by the library; a non-empty SceneID must already exist, so a
+// session always reads the scene it owns.
 func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -38,12 +40,12 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The usage counter is the only record a read touches; it feeds Dream's
-	// importance feedback. Return the bumped record, never the pre-read copy.
-	if touched, terr := repo.TouchSceneUsage(db.engine, agentID, scene.SceneID, time.Now().UnixMilli()); terr != nil {
-		slog.Warn("search: record scene usage failed", "err", terr)
-	} else {
-		scene = touched
+	// Opening the turn is the one record a read writes: the usage counters
+	// feed Dream's importance feedback and the turn counter mints the topic
+	// id, so a failed write fails the read instead of reissuing an id.
+	scene, err = repo.OpenSceneTurn(db.engine, agentID, scene.SceneID, time.Now().UnixMilli())
+	if err != nil {
+		return nil, err
 	}
 	slot := db.readProfile(agentID)
 	topics := ac.sceneSurfaceTopics(scene.SceneID)
@@ -56,6 +58,7 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 		ProfileBrief: profile.Brief(slot),
 		Scene:        *scene,
 		Topics:       topics,
+		NewTopicID:   core.ComputeTurnTopicID(scene.SceneID, scene.TurnSeq),
 	}, nil
 }
 
@@ -74,16 +77,14 @@ func (db *DB) sceneForSearch(ac *agentContext, q SearchQuery) (*core.SceneSlot, 
 }
 
 // newScene allocates a scene id the host has not used yet, persists the scene
-// record and applies the optional L3 anchor (write-once semantics).
+// record under a library-generated name and applies the optional L3 anchor
+// (write-once semantics).
 func (db *DB) newScene(ac *agentContext, q SearchQuery) (*core.SceneSlot, error) {
 	id, err := db.freshSceneID(ac.id)
 	if err != nil {
 		return nil, err
 	}
-	name := q.SceneName
-	if name == "" {
-		name = "session:" + common.FormatHash(id)
-	}
+	name := "session:" + common.FormatHash(id)
 	if err := repo.CreateSceneL2WithID(db.engine, ac.id, id, name); err != nil {
 		return nil, err
 	}

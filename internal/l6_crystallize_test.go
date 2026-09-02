@@ -25,10 +25,10 @@ func TestCrystallizeNoTrajectory(t *testing.T) {
 	}
 }
 
-// TestCrystallizeAggregatesSiblingTurnsByTopic pins the cross-turn fold: the
-// LLM prompt for one turn must contain sibling turns sharing its TopicID and
-// exclude turns without it.
-func TestCrystallizeAggregatesSiblingTurnsByTopic(t *testing.T) {
+// A turn's trajectory is keyed by the topic id Search issued for it, so
+// Crystallize reads exactly that turn: no other turn folds in, and every
+// event's own topic link names the turn that holds it.
+func TestCrystallizeReadsOneTurnTopic(t *testing.T) {
 	var mu sync.Mutex
 	var gotBody string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -47,32 +47,44 @@ func TestCrystallizeAggregatesSiblingTurnsByTopic(t *testing.T) {
 
 	db := newTestDB(t, newTestEngine(t))
 	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	const topic = uint64(4242)
-	turnA, turnB, orphan := common.FormatHash(1001), common.FormatHash(1002), common.FormatHash(1003)
+	const turnA, turnB = uint64(4242), uint64(4243)
 	for _, ev := range []struct {
-		session string
-		slot    core.TrajectorySlot
+		turn uint64
+		slot core.TrajectorySlot
 	}{
-		{turnA, core.TrajectorySlot{EventType: "llm_request", Payload: "signal-turn-a", TopicID: topic, Timestamp: 100}},
-		{turnA, core.TrajectorySlot{EventType: "tool_call", Payload: "signal-turn-a-2", TopicID: topic, Timestamp: 150}},
-		{turnB, core.TrajectorySlot{EventType: "llm_output", Payload: "signal-turn-b", TopicID: topic, Timestamp: 200}},
-		{orphan, core.TrajectorySlot{EventType: "llm_output", Payload: "signal-orphan", Timestamp: 300}},
+		{turnA, core.TrajectorySlot{EventType: "llm_request", Payload: "signal-turn-a", Timestamp: 100}},
+		{turnA, core.TrajectorySlot{EventType: "tool_call", Payload: "signal-turn-a-2", Timestamp: 150}},
+		{turnB, core.TrajectorySlot{EventType: "llm_output", Payload: "signal-turn-b", Timestamp: 200}},
 	} {
-		if err := db.AppendTrajectory(core.DefaultAgentID, ev.session, ev.slot); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(ev.turn), ev.slot); err != nil {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	if _, err := db.Crystallize(context.Background(), core.DefaultAgentID, turnA); err != nil {
+	if _, err := db.Crystallize(context.Background(), core.DefaultAgentID, common.FormatHash(turnA)); err != nil {
 		t.Fatalf("crystallize: %v", err)
 	}
 	mu.Lock()
 	body := gotBody
 	mu.Unlock()
-	if !strings.Contains(body, "signal-turn-a") || !strings.Contains(body, "signal-turn-b") {
-		t.Fatalf("prompt must fold in sibling turns of the topic: %s", body)
+	if !strings.Contains(body, "signal-turn-a") || !strings.Contains(body, "signal-turn-a-2") {
+		t.Fatalf("prompt must carry the whole turn: %s", body)
 	}
-	if strings.Contains(body, "signal-orphan") {
-		t.Fatal("turns without the topic must not fold in")
+	if strings.Contains(body, "signal-turn-b") {
+		t.Fatal("another turn's events must not leak into this one")
+	}
+
+	events, err := db.ReadTrajectory(core.DefaultAgentID, common.FormatHash(turnA))
+	if err != nil {
+		t.Fatalf("read trajectory: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want the turn's 2", len(events))
+	}
+	for _, ev := range events {
+		if ev.SessionID != turnA || ev.TopicID != turnA {
+			t.Fatalf("event seq %d must key to its turn topic %d, got session=%d topic=%d",
+				ev.Seq, turnA, ev.SessionID, ev.TopicID)
+		}
 	}
 }
 

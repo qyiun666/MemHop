@@ -37,7 +37,7 @@ func call(t *testing.T, h mcp.ToolHandler, args string) (string, bool) {
 
 func TestHandleDecodesArgs(t *testing.T) {
 	h := handle[searchArgs, searchArgs](func(a searchArgs) (searchArgs, error) { return a, nil })
-	out, isErr := call(t, h, `{"scene_id":"a1b2c3d4e5f67890","l3_id":"000000000000000f","scene_name":"chat-1"}`)
+	out, isErr := call(t, h, `{"scene_id":"a1b2c3d4e5f67890","l3_id":"000000000000000f"}`)
 	if isErr {
 		t.Fatalf("unexpected error result: %s", out)
 	}
@@ -45,7 +45,7 @@ func TestHandleDecodesArgs(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if got.SceneID != "a1b2c3d4e5f67890" || got.L3ID != "000000000000000f" || got.SceneName != "chat-1" {
+	if got.SceneID != "a1b2c3d4e5f67890" || got.L3ID != "000000000000000f" {
 		t.Errorf("args not round-tripped: %+v", got)
 	}
 }

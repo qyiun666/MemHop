@@ -1298,7 +1298,8 @@ export function apply(ctx, config = {}) {
       const userTS = Date.now();
       const res = await conn.call("memhop_search", searchArgs);
       if (res?.scene?.scene_id) sceneByAgent.set(agentId, res.scene.scene_id);
-      pendingTurnByAgent.set(agentId, { userText, userTS });
+      // 这次读取同时开启了本轮:记下库铸出的话题 id,update 与轨迹都按它落笔。
+      pendingTurnByAgent.set(agentId, { userText, userTS, topicId: res?.new_topic_id ?? "" });
       conn.state.lastSearchAt = Date.now();
       conn.state.lastSearchResult = res;
       // P3:窗口控制——用快照遮蔽旧历史,保持上下文恒定。
@@ -1343,12 +1344,13 @@ export function apply(ctx, config = {}) {
         .trim();
       const pending = pendingTurnByAgent.get(agentId);
       const sceneId = sceneByAgent.get(agentId);
-      if (!replyText || !sceneId || !pending) return;
+      if (!replyText || !sceneId || !pending || !pending.topicId) return;
       pendingTurnByAgent.delete(agentId);
       const agentTS = Date.now();
       conn
         .call("memhop_update", {
           scene_id: sceneId,
+          topic_id: pending.topicId,
           user_text: pending.userText,
           user_ts: pending.userTS,
           agent_text: replyText,

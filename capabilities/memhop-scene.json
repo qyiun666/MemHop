@@ -3,8 +3,8 @@
   "name": "memhop-scene",
   "version": "3",
   "type": "composite",
-  "summary": "L2 scene manual: a scene is one host session — list scenes, read topic context within a scene, merge sessions into one, delete topics and scenes (memory correction)",
-  "trigger": "need to view scene lists, read a scene's topic context, merge duplicate scenes or delete wrong memories; scene l2 topic merge delete context",
+  "summary": "L2 scene manual: a scene is one host session — list scenes, read topic context within a scene, rename a scene, merge sessions into one, delete topics and scenes (memory correction)",
+  "trigger": "need to view scene lists, read a scene's topic context, name a session readably, merge duplicate scenes or delete wrong memories; scene l2 topic rename merge delete context",
   "resources": [
     {
       "type": "api",
@@ -21,6 +21,14 @@
       "desc": "Read scene context; returns SceneName/Topics (depth-1 topic metadata incl. L4IDs to fetch raw text by ID) and TopicCount",
       "input": "{\"type\":\"object\",\"properties\":{\"scene_id\":{\"type\":\"string\",\"description\":\"Scene ID (16-char hex)\"}},\"required\":[\"scene_id\"]}",
       "output": "SceneContext (SceneName/Topics/TopicCount)"
+    },
+    {
+      "type": "api",
+      "name": "SetSceneName",
+      "ref": "api:SetSceneName",
+      "desc": "Rename a scene: a fresh one is library-named \"session:<id>\", this is the only entry that gives it a human title. Blank name is rejected; unknown scene is ErrNotFound. The title survives later reads and settles",
+      "input": "{\"type\":\"object\",\"properties\":{\"scene_id\":{\"type\":\"string\",\"description\":\"Scene ID (16-char hex)\"},\"name\":{\"type\":\"string\",\"description\":\"New scene title (non-empty)\"}},\"required\":[\"scene_id\",\"name\"]}",
+      "output": "ok"
     },
     {
       "type": "api",
@@ -56,6 +64,10 @@
       {
         "ref": "SceneContext",
         "action": "Read the target scene's topic context"
+      },
+      {
+        "ref": "SetSceneName",
+        "action": "Title the session readably when its library-generated name is meaningless"
       },
       {
         "ref": "MergeScenes",

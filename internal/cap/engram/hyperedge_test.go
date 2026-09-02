@@ -38,7 +38,7 @@ func tempEngine(t *testing.T) *core.StorageEngine {
 // keywords; hyperedge construction reads exactly that single keyword track.
 func mustCreateTopic(t *testing.T, engine *core.StorageEngine, sceneID uint64, userTS int64, kws []string) {
 	t.Helper()
-	id := core.ComputeTurnTopicID(sceneID, userTS, userTS+1)
+	id := core.ComputeTurnTopicID(sceneID, uint64(userTS))
 	if !repo.CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, id, kws, userTS, userTS+1) {
 		t.Fatalf("create topic %v under scene %s", kws, common.FormatHash(sceneID))
 	}

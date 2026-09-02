@@ -11,11 +11,11 @@ import (
 
 func TestSurfaceL4Archive(t *testing.T) {
 	db := openSurfaceDB(t)
-	res, err := db.Search(SearchQuery{SceneName: "archive session"})
+	res, err := db.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("seed search: %v", err)
 	}
-	topicID, err := db.Update(turnUpdate(res.Scene.SceneID, "archive me", "the archived reply"))
+	topicID, err := db.Update(turnUpdate(res.Scene.SceneID, res.NewTopicID, "archive me", "the archived reply"))
 	if err != nil {
 		t.Fatalf("seed update: %v", err)
 	}

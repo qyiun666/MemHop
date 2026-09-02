@@ -62,10 +62,7 @@ func TestInterfaceL3(t *testing.T) {
 
 	// L2↔L3 lives on the scene: opening a session with an L3 id anchors it,
 	// and the domain listing finds that session back.
-	anchored, err := db.Search(memhop.SearchQuery{
-		SceneName: "go memory model session",
-		L3ID:      graphs[0].IDHash,
-	})
+	anchored, err := db.Search(memhop.SearchQuery{L3ID: graphs[0].IDHash})
 	if err != nil {
 		t.Fatalf("Search with l3 id: %v", err)
 	}

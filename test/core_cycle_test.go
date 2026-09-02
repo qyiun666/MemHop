@@ -76,7 +76,7 @@ func TestCoreCycleUpdateDream(t *testing.T) {
 	defer db.Close()
 
 	base := time.Now().UnixMilli()
-	sceneID, err := db.OpenSession("core cycle")
+	sceneID, _, err := db.OpenTurn("")
 	if err != nil {
 		t.Fatalf("open session: %v", err)
 	}
@@ -85,8 +85,12 @@ func TestCoreCycleUpdateDream(t *testing.T) {
 	// L0/L2/L4 consistency every few turns.
 	for i, f := range facts {
 		ts := base + int64(i)*1000
+		_, turnID, err := db.OpenTurn(sceneID)
+		if err != nil {
+			t.Fatalf("open turn %d: %v", i, err)
+		}
 		if _, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, UserText: f, UserTS: ts,
+			SceneID: sceneID, TopicID: turnID, UserText: f, UserTS: ts,
 			AgentText: "Agent: 明白了，已记录。", AgentTS: ts + 500,
 		}); err != nil {
 			t.Fatalf("update ingest %d: %v", i, err)

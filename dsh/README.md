@@ -14,7 +14,7 @@ MemHop 在 DeepSeek Harness 中的全面集成实现。完整规划见本地文�
 - 每个 agent 通过常驻多租户 memhop-mcp server 接入（`/mcp/<tenant-id>`，tenant = 会话 ID）；
   `dsh-memhop` 按生命周期建立/断开连接（`agent/session-start` → 连接 + 注册工具；
   `agent/disposed` → checkpoint 落盘 + 断开）
-- 30 个 `mcp__memhop__*` 工具注册到 **agent 作用域**（`agent.ctx.tools`，shadow 全局），
+- 31 个 `mcp__memhop__*` 工具注册到 **agent 作用域**（`agent.ctx.tools`，shadow 全局），
   另有 1 个宿主只读工具 `memhop__session`（UI 面板自检）
 - 记忆循环**宿主自动化**：turn 开始自动 `search`、最终回复后自动 `update`、
   按 `dreamEveryTurns` / `idleDreamMs` 调度 `dream` —— 不再依赖模型自觉
@@ -34,7 +34,7 @@ MemHop 在 DeepSeek Harness 中的全面集成实现。完整规划见本地文�
 一个包内部分工：
 
 - **harness 半**（`lib/index.js`）：per-agent 连接（多租户 streamable-http）、
-  31+1 工具注册、自动 search/update/dream、P2 `systemPrompt.context()` 快照段
+  31 工具注册、自动 search/update/dream、P2 `systemPrompt.context()` 快照段
   （per-agent，动态渲染）、P3 窗口控制、`ctx.memhop` 服务（状态/快照/参数偏好）、
   `ctx.memhopServer` 服务（进程/launchd/日志）、UI RPC 桥（`/api` 通道 `memhop/*`）。
 - **client 半**（`lib/client.js`，由 `src/client/` 打包）：会话「记忆」tab 面板
@@ -83,8 +83,9 @@ node dsh/scripts/install.mjs [--profiles <dir>] [--launchd]
 ```
 
 每个会话在 `memhop.meh` 内取得自己的 agent 域（`~/.memhop/agents/<tenant-id>.turns.json`
-是插件本地的 turn 计数侧车），且每轮对话自动产生 `search`（纯读场景，零写入）与
-`update`（一次沉淀本轮用户原文 + 回复）。
+是插件本地的 turn 计数侧车），且每轮对话自动产生 `search`（读场景 + 开启本轮，
+只写场景计数，不建任何话题）与 `update`（把本轮用户原文 + 回复一次沉淀进那次
+`search` 铸出的话题）。
 
 ## 服务器管理（UI「服务器」页签）
 
@@ -110,10 +111,12 @@ node dsh/scripts/install.mjs [--profiles <dir>] [--launchd]
   `agentState(agentId)` / `state.agents` / `getSearchPrefs`；`ctx.memhopServer`
   （Service）暴露 `status/start/stop/installLaunchd/uninstallLaunchd/logs`，
   供 UI 面板与其他插件消费。
-- **自动化时序**：`agent/pre-step`（step 1）取用户原文 → `search`（纯读该会话的场景，
-  返回 depth-1 话题集；`scene_id` 首次留空由库新建并按 agent 缓存，本轮原文暂存 pending）；
-  `session/event` `assistant/message`（无 tool-call 的最终回复）→ `update`
-  （一次沉淀本轮用户原文 + 回复并提炼关键词，返回话题 id）；`turn/end` 与空闲定时器 → `dream`。
+- **自动化时序**：`agent/pre-step`（step 1）取用户原文 → `search`（读该会话的场景，
+  返回 depth-1 话题集 + `new_topic_id`；`scene_id` 首次留空由库新建并按 agent 缓存，
+  本轮原文与那个话题 id 一起暂存 pending）；`session/event` `assistant/message`
+  （无 tool-call 的最终回复）→ `update`（把 pending 的话题 id 与双原文一次沉淀，
+  库内一次提炼关键词）；`turn/end` 与空闲定时器 → `dream`。缺 `new_topic_id`
+  的轮次直接跳过沉淀——话题 id 只能由库铸。
 - **P2 快照注入**：真 agent 到达时 `agent.ctx.systemPrompt.context()` 注册
   `memhop:snapshot` 段（order 150），text 动态渲染最近一次 search 结果；
   agent 作用域销毁自动清理。

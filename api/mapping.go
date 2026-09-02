@@ -29,17 +29,6 @@ func formatPtr(id *uint64) *string {
 	return &s
 }
 
-func parsePtr(s *string) (*uint64, error) {
-	if s == nil {
-		return nil, nil
-	}
-	id, err := internal.ParseID(*s)
-	if err != nil {
-		return nil, err
-	}
-	return &id, nil
-}
-
 func fromProfileSlot(s internal.ProfileSlot) ProfileSlot {
 	return ProfileSlot{
 		Name:         s.Name,
@@ -105,6 +94,7 @@ func fromSearchResult(r *internal.SearchResult) *SearchResult {
 		ProfileBrief: r.ProfileBrief,
 		Scene:        fromSceneSlot(r.Scene),
 		Topics:       topics,
+		NewTopicID:   formatID(r.NewTopicID),
 	}
 }
 
