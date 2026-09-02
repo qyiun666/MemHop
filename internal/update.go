@@ -88,9 +88,10 @@ func turnTargets(in TurnUpdate) (uint64, uint64, error) {
 	return sceneID, topicID, nil
 }
 
-// writeTurnArchives appends the turn's two originals as L4 archives in speaker
-// order (each under the content type the host declared) and returns their ids
-// for the topic's L4Refs.
+// writeTurnArchives appends the turn's two originals as L4 archives, each
+// under the content type the host declared. The returned ids go to the
+// topic's L4Refs, which persist id-sorted — conversation order comes from the
+// archives' timestamps, not from this slice.
 func (db *DB) writeTurnArchives(agentID, topicID uint64, in TurnUpdate) ([]uint64, error) {
 	userRef, err := repo.AppendArchiveL4(db.engine, agentID, topicID, core.RoleUser, in.UserType, in.UserText, in.UserTS)
 	if err != nil {

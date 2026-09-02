@@ -22,6 +22,7 @@ README 的版本表与 git log。
 - **`VectorDim` 从配置面删除**：既然没有任何向量读者，声明维度就成了纯粹的负担——宿主必须填一个无意义的数，填错还会让 `Open` 拒绝一个完全可读的旧库。`MemHopConfig.VectorDim`、`CheckVectorDim`、`ErrVectorDimMismatch`（码 1002，编号不复用）与 MCP `--vector-dim` 全部删除；文件头偏移 6 的两字节改为保留位（新库写 0，旧库原值保留），格式版本仍 `0x0009`。
 - **死索引岛整体删除**：检索退役后 `index/sparse.go`（BM25）、`index/entity.go`（BK-tree 模糊匹配）、`index/l3_index.go` 与 `common/bktree.go` 在生产路径上零调用者——`QueryL3Nodes` 一直是记录扫描 + 子串匹配，从未走过这些索引。连带删除 `strutil` 的两个 Levenshtein 实现与零调用的 `common.FormatIDs`（约 800 行生产码 + 700 行测试）。**行为无变化**，只是不再让人误以为 L3 图检索有 BM25 排序。
 - **巩固触发改轴**：`activeScenes` 窗口与 `capacity` 旋钮废弃（`Session.ActiveSceneIDs` / `HasActiveScenes` 同步删除）；`Update` 在该场景 depth-1 话题数超过新旋钮 `scene_dream_topic_threshold`（默认 24）时调度该场景 Dream。`RunDream(sceneID=0)` 改为遍历域内全部场景。
+- **DSH 插件面随本版本退役**：`dsh/`（mcp 插件的 lib、面板源码、bundle 与安装脚本）与 `dsh-adapter/` 设计文档整树删除。Go 码、Makefile 与 CI 都不读这两棵树，`cmd/memhop-mcp` 原样保留并继续提供同样的三种 transport；本文件其余涉及 DSH 的条目描述的是删除前在那棵树里做的工作。
 - **交付面**：MCP `memhop_search` 去掉 `scene_name`、出参带 `new_topic_id`，`memhop_update` 新增必填 `topic_id` 与可选 `user_type` / `agent_type`，轨迹类工具的 `session_id` 即该话题 id；新增 `memhop_scene_rename`；`memhop_status` 改报 `scene_count`；**删除 `memhop_scene_active_list`**（31 → 30 → 31 工具）；DSH 插件把铸出的 id 与本轮原文一起 pending（缺 id 就不沉淀），面板与循环同步适配。
 - **工具面覆盖澄清**：31 个 MCP 工具投影 43 个公开会话方法中的 31 个；没有工具入口的 12 个是 L6 计划面全部 6 个（`PlanAppend`/`PlanCommit`/`PlanState`/`PlanReplace`/`SyncPlanTree`/`ListPlans`）、记忆纠错 2 个（`DeleteTopic`/`DeleteScene`）、场景管理 2 个（`SetSceneL3ID`/`ListScenesByL3`）、`DistillL0` 与 `AgentID`。此前文档写"全部公开 API"是不准确的，且把 `MergeScenes` / `SceneContext` 误列为 Go-only——它们分别有 `memhop_scene_merge` / `memhop_scene_topics`。
 
@@ -45,6 +46,7 @@ README 的版本表与 git log。
 - **`memhop_profile_update` 会抹掉 Dream 蒸馏出的画像**：`UpdateL0` 是全量覆盖，而该工具只暴露名称/角色/个性/偏好四项、没有任何回填通道——LLM 改一次名字就会把该域的情绪状态与 MBTI 倾向清零。现在工具先 `GetL0` 读回现画像，只替换它有权改的四项，其余按库内现值写回。
 - **`memhop_profile_get` 描述在说谎**：仍列 v1.4.1 就删掉的"词表、风格与情绪模式"，说明书卡已改而工具描述漏改。现按 `ProfileSlot` 实际字段（含 Dream 蒸馏的情绪状态与 MBTI）表述。
 - **MCP 工具计数的注释与实际不符**：`registerTools` 注释写"33 tools"，实际注册 30 个（现 31）。计数唯一的机器校验在 `smoke_test.go` 的 `tools/list` 断言里，注释同步为实测值。
+- **`SceneContext` 的消息可能「答在问前」**：话题的 `L4Refs` 按 id `DedupSorted` 存储，而档案 id 由 `(话题, 时间戳, 内容)` 哈希得来——引用顺序与说话顺序毫无关系，场景 id 又每次新建都走 `crypto/rand`，于是同一份测试在不同库上会拿到不同顺序的消息。现在 `sceneContextTopic` 按档案时间戳稳定排序，会话恢复读回恒为「问在前」（回归测试 `TestUpdateStoresDeclaredContentTypes`）。
 - **`MultiAgentDB.Lock/Unlock` 的文档像并发锁**：原文"serializes the default agent domain against host-side writes"极易被读成"宿主调用前要自己加锁"。事实是每个业务方法已在所属域内串行、跨域本就可并发，这对方法只用于宿主在库外碰同一个 `.meh`（备份/复制），且只冻结默认域。实现不动，注释改为写清用途与不锁其他域的后果（多租户文件要备份请 `Close` → 复制 → `Open`）。
 
 ### 兼容
@@ -58,7 +60,7 @@ README 的版本表与 git log。
 
 热路径 LLM 调用从每轮 2 次（Search 提炼 + Update 提炼）降到每轮 1 次且只在写路径；`Search` 变为一次场景记录读改写 + 一次 L2Meta 内存读，不联系 LLM 与 embedding 服务。检索质量类断言随之重定位：`test/` 黑盒不再测"跨会话召回"（该能力已按设计移除），改测整轮沉淀、场景读回与巩固后不丢事实。
 
-宿主可依赖的不变量测试：`TestSearchOpensOneTurnPerRead`（一次读开一轮，且开轮不建任何话题记录）、`TestUpdateSettlesEachScenesTurnsInOrder`（各场景轮次互不串台、按序读回）、`TestUpdateReplayIsIdempotent`（同 `topic_id` 重放只覆盖不叠加：1 个话题 + 2 条档案）、`TestUpdateStoresDeclaredContentTypes`（两侧各按声明类型归档，未声明的一侧保持 `text`，场景上下文读回类型）、`TestSearchReportsSceneTopicCount`（读回的 `TopicCount` 与 `ListScenes` 一致）、`TestSetSceneNameSurvivesLaterTurns`（改名后被 `Search` 读改写命中/轮次计数覆盖不掉，且空名与未知场景各按码拒绝）、`TestTurnRunsOnOneTopicID` 与 `TestCrystallizeReadsOneTurnTopic`（轨迹追加/读取/结晶三条路径同键）、`TestSurfaceTurnFlow`（门面侧一轮闭环）、`TestSSETurnFlow`（MCP over SSE 端到端：`search` 铸 id → `trajectory_append` → `update` → 复读看到该话题，缺 `topic_id` 的 `update` 被拒）。
+宿主可依赖的不变量测试：`TestSearchOpensOneTurnPerRead`（一次读开一轮，且开轮不建任何话题记录）、`TestUpdateSettlesEachScenesTurnsInOrder`（各场景轮次互不串台、按序读回）、`TestUpdateReplayIsIdempotent`（同 `topic_id` 重放只覆盖不叠加：1 个话题 + 2 条档案）、`TestUpdateStoresDeclaredContentTypes`（两侧各按声明类型归档，未声明的一侧保持 `text`，场景上下文按时间戳读回「问在前 + 类型」）、`TestSearchReportsSceneTopicCount`（读回的 `TopicCount` 与 `ListScenes` 一致）、`TestSetSceneNameSurvivesLaterTurns`（改名后被 `Search` 读改写命中/轮次计数覆盖不掉，且空名与未知场景各按码拒绝）、`TestTurnRunsOnOneTopicID` 与 `TestCrystallizeReadsOneTurnTopic`（轨迹追加/读取/结晶三条路径同键）、`TestSurfaceTurnFlow`（门面侧一轮闭环）、`TestSSETurnFlow`（MCP over SSE 端到端：`search` 铸 id → `trajectory_append` → `update` → 复读看到该话题，缺 `topic_id` 的 `update` 被拒）。
 
 ## v1.4.2 — 2026-08-31
 

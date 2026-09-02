@@ -7,6 +7,7 @@
 package internal
 
 import (
+	"cmp"
 	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -193,6 +194,11 @@ func (db *DB) sceneContextTopic(agentID uint64, t core.TopicSlot, children map[u
 		}
 		st.Messages = append(st.Messages, SceneMessage{Role: arc.Role, Type: arc.ContentType, Content: arc.Content, CreatedAt: arc.CreatedAt})
 	}
+	// L4Refs are persisted id-sorted, which says nothing about who spoke
+	// first; a resumed conversation still has to read question-first.
+	slices.SortStableFunc(st.Messages, func(a, b SceneMessage) int {
+		return cmp.Compare(a.CreatedAt, b.CreatedAt)
+	})
 	return st
 }
 

@@ -355,7 +355,8 @@ func TestUpdateStoresDeclaredContentTypes(t *testing.T) {
 		t.Fatalf("SceneContext: %v", err)
 	}
 	msgs := ctx.Topics[0].Messages
-	if len(msgs) != 2 || msgs[0].Type != core.ContentImage || msgs[1].Type != core.ContentText {
-		t.Fatalf("scene context types = %+v, want image then text", msgs)
+	if len(msgs) != 2 || msgs[0].Role != core.RoleUser || msgs[0].Type != core.ContentImage ||
+		msgs[1].Role != core.RoleAgent || msgs[1].Type != core.ContentText {
+		t.Fatalf("scene context = %+v, want the user image first then the agent text", msgs)
 	}
 }

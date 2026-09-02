@@ -108,6 +108,10 @@
 6. **`SetSceneName` 是 `SceneName` 的唯一写者**：场景记录只被 `OpenSceneTurn`
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
    后续读取覆盖；`freshSceneID` 建新场景时才写默认名 `session:<id>`。
+7. **`L4Refs` 无对话顺序，读回面自己补**：`UpdateTopicL4RefsL2` 按 id
+   `DedupSorted` 存引用，而档案 id 由 `(话题, 时间戳, 内容)` 哈希得来，顺序与
+   谁先说话无关。`sceneContextTopic` 因此按档案时间戳稳定排序 `Messages`——
+   会话恢复必须"问在前、答在后"，别指望引用顺序。
 
 ## 单向依赖
 
