@@ -1,9 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L2 write path: Update sinks one finished turn into the topic Search opened
-// for it. One turn is one write — the turn's originals arrive in the same
-// call as its texts, so the hot path distills exactly once per turn.
+// Update of the composition root: sinks one finished turn into the topic
+// Search opened for it. One turn is one write — the turn's originals arrive
+// in the same call as its texts, so the hot path distills exactly once per
+// turn. The settle steps live in internal/turn.
 
 package internal
 
@@ -13,6 +14,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/turn"
 )
 
 // Update writes one finished turn into the topic id Search issued for it: both
@@ -29,7 +31,7 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	}
 	defer ac.Mu.Unlock()
 
-	sceneID, topicID, err := turnTargets(in)
+	sceneID, topicID, err := turn.Targets(in)
 	if err != nil {
 		return 0, err
 	}
@@ -51,21 +53,21 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	}
 	// The topic rewrite below clears L4Refs, so the refs of an earlier settle
 	// of this same turn must be read first: they are what this turn supersedes.
-	previous, err := turnL4Refs(db.engine, agentID, topicID)
+	previous, err := turn.PriorL4Refs(db.engine, agentID, topicID)
 	if err != nil {
 		return 0, err
 	}
 	if !repo.CreateTurnTopicL2(db.engine, agentID, sceneID, topicID, keywords, in.UserTS, in.AgentTS) {
 		return 0, common.NewError(common.ErrIO, "create turn topic", nil)
 	}
-	refs, err := db.writeTurnArchives(agentID, topicID, in)
+	refs, err := turn.WriteArchives(db.engine, agentID, topicID, in)
 	if err != nil {
 		return 0, err
 	}
 	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, topicID, refs) {
 		return 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
-	if dropped := dropRetained(previous, refs); len(dropped) > 0 {
+	if dropped := turn.DropRetained(previous, refs); len(dropped) > 0 {
 		if err := repo.DeleteArchivesL4(db.engine, agentID, dropped); err != nil {
 			return 0, err
 		}
@@ -73,79 +75,6 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	ac.SyncL2Meta(topicID)
 	db.consolidateScene(ac, sceneID)
 	return topicID, nil
-}
-
-// turnL4Refs returns the L4 refs stored on a turn topic; a topic that does not
-// exist yet (the first settle of a turn) yields nil.
-func turnL4Refs(engine *core.StorageEngine, agentID, topicID uint64) ([]uint64, error) {
-	topic, err := core.ReadTopicLenient(engine, agentID, topicID)
-	if err != nil {
-		if common.CodeOf(err) == common.ErrNotFound {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if topic == nil {
-		return nil, nil
-	}
-	return topic.L4Refs, nil
-}
-
-// dropRetained yields the ids of before that no longer appear in after.
-func dropRetained(before, after []uint64) []uint64 {
-	keep := common.ToSet(after)
-	var out []uint64
-	for _, id := range before {
-		if _, ok := keep[id]; !ok {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-// turnTargets validates a turn's payload and resolves the scene it settles
-// into plus the topic id Search minted for it.
-func turnTargets(in TurnUpdate) (uint64, uint64, error) {
-	if in.UserText == "" || in.AgentText == "" {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires both the user and the agent text")
-	}
-	if in.UserTS <= 0 || in.AgentTS <= 0 {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires positive timestamps for both messages")
-	}
-	if in.AgentTS < in.UserTS {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires the agent timestamp not earlier than the user timestamp")
-	}
-	if !in.UserType.Valid() || !in.AgentType.Valid() {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires a defined content type on both sides")
-	}
-	sceneID, err := common.ParseID(in.SceneID)
-	if err != nil {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
-	}
-	topicID, err := common.ParseID(in.TopicID)
-	if err != nil {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
-	}
-	if topicID == 0 {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires the topic id Search issued for this turn")
-	}
-	return sceneID, topicID, nil
-}
-
-// writeTurnArchives appends the turn's two originals as L4 archives, each
-// under the content type the host declared. The returned ids go to the
-// topic's L4Refs, which persist id-sorted — conversation order comes from the
-// archives' timestamps, not from this slice.
-func (db *DB) writeTurnArchives(agentID, topicID uint64, in TurnUpdate) ([]uint64, error) {
-	userRef, err := repo.AppendArchiveL4(db.engine, agentID, topicID, core.RoleUser, in.UserType, in.UserText, in.UserTS)
-	if err != nil {
-		return nil, err
-	}
-	agentRef, err := repo.AppendArchiveL4(db.engine, agentID, topicID, core.RoleAgent, in.AgentType, in.AgentText, in.AgentTS)
-	if err != nil {
-		return nil, err
-	}
-	return []uint64{userRef, agentRef}, nil
 }
 
 // consolidateScene keeps one scene's read surface bounded: once its depth-1

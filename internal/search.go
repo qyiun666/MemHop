@@ -21,6 +21,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/turn"
 )
 
 // Search reads one scene and opens the turn the host is about to run: it
@@ -48,7 +49,7 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	slot, err := db.readProfile(agentID)
+	slot, err := turn.ReadProfile(db.engine, agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -148,18 +149,4 @@ func sceneSurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 		return cmp.Compare(a.ID, b.ID)
 	})
 	return out
-}
-
-// readProfile loads the domain's L0 profile. A profile that was never written
-// reads as empty (the same surface GetL0 gives); any other failure aborts the
-// read, so Search never hands back a context silently missing its profile.
-func (db *DB) readProfile(agentID uint64) (core.ProfileSlot, error) {
-	slot, err := repo.GetProfileL0(db.engine, agentID)
-	if err != nil {
-		if common.CodeOf(err) == common.ErrNotFound {
-			return core.ProfileSlot{}, nil
-		}
-		return core.ProfileSlot{}, err
-	}
-	return *slot, nil
 }
