@@ -17,7 +17,6 @@ import (
 	"cmp"
 	"context"
 	"slices"
-	"time"
 
 	"github.com/qyiun666/MemHop/internal/cap/capability"
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
@@ -27,10 +26,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/trajectory"
 )
-
-// trajectoryRetention bounds the L6 event log: Dream drops events older
-// than this. L6 is a process index — durable products live in L4/L5.
-const trajectoryRetention = 7 * 24 * time.Hour
 
 // AppendTrajectory appends one event to the turn opened by Search, keyed by
 // that turn's topic id; Seq comes from the domain's TrajIndex (max + 1), so

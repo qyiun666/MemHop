@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/dream"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/trajectory"
@@ -356,7 +357,7 @@ func TestPlanStateParentNotAutoFoldedPartial(t *testing.T) {
 func TestDreamPrunesExpiredPlanNodes(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	doneID, activeID, staleID := common.FormatHash(9), common.FormatHash(8), common.FormatHash(7)
-	old := time.Now().Add(-trajectoryRetention - time.Hour).UnixMilli()
+	old := time.Now().Add(-dream.TrajectoryRetention - time.Hour).UnixMilli()
 	age := func(id uint64) {
 		node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, id)
 		if err != nil {

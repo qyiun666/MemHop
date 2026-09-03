@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/dream"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -70,6 +71,6 @@ func (db *DB) DistillL0(ctx context.Context, agentID uint64) error {
 		return err
 	}
 	defer ac.Mu.Unlock()
-	_, err = db.distillL0Stage(ctx, agentID)
+	_, err = dream.DistillL0Stage(ctx, ac, agentID)
 	return err
 }
