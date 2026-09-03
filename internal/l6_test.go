@@ -15,6 +15,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/trajectory"
 )
 
 // planNodeEvents reads one node's bound events (Seq ascending) through the
@@ -71,7 +72,7 @@ func TestAppendTrajectoryValidation(t *testing.T) {
 
 func TestAppendTrajectoryPayloadTruncated(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	long := strings.Repeat("x", maxTrajectoryPayload+100)
+	long := strings.Repeat("x", trajectory.MaxEventPayload+100)
 	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(3), core.TrajectorySlot{EventType: "tool_call", Payload: long, Timestamp: 1}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
@@ -79,7 +80,7 @@ func TestAppendTrajectoryPayloadTruncated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if len(events) != 1 || len(events[0].Payload) > maxTrajectoryPayload {
+	if len(events) != 1 || len(events[0].Payload) > trajectory.MaxEventPayload {
 		t.Fatalf("payload not truncated: %d bytes", len(events[0].Payload))
 	}
 }
@@ -820,12 +821,6 @@ func TestPlanStatusRunning(t *testing.T) {
 	}
 	if tree.Roots[0].Status != PlanRunning {
 		t.Fatalf("status = %q want %q", tree.Roots[0].Status, PlanRunning)
-	}
-	if got, _ := toStatusU8(PlanRunning); got != core.StatusRunning {
-		t.Fatalf("toStatusU8(running) = %d want %d", got, core.StatusRunning)
-	}
-	if statusToString(core.StatusRunning) != PlanRunning {
-		t.Fatalf("statusToString(4) = %q want %q", statusToString(core.StatusRunning), PlanRunning)
 	}
 }
 

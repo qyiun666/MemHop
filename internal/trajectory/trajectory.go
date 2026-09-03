@@ -18,6 +18,9 @@ import (
 // crystallize LLM call; over-budget events drop from the oldest.
 const MaxCrystallizePayload = 128 * 1024
 
+// MaxEventPayload caps a single event payload (no raw token streams).
+const MaxEventPayload = 4 * 1024
+
 // ReadTurn loads one turn's events (Seq ascending) via the domain index;
 // corrupt records are skipped, mirroring the scan-based reader it replaces.
 func ReadTurn(engine *core.StorageEngine, agentID uint64, ac *domain.Context, sessionID uint64) []core.TrajectorySlot {

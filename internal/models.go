@@ -10,6 +10,7 @@ package internal
 
 import (
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
+	"github.com/qyiun666/MemHop/internal/plan"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -37,6 +38,13 @@ type (
 	CrystallizeResult        = core.CrystallizeResult
 	CrystallizeDetail        = core.CrystallizeDetail
 
+	// Plan surface types live in the plan small-method package.
+	PlanStatus   = plan.PlanStatus
+	PlanTree     = plan.PlanTree
+	PlanNode     = plan.PlanNode
+	PlanNodeView = plan.PlanNodeView
+	PlanSummary  = plan.PlanSummary
+
 	// LLM capability contracts (prompt inputs / parsed outputs) live in the
 	// llmops capability package.
 	L1Sample              = llmops.L1Sample
@@ -55,4 +63,13 @@ const (
 	L3ImportSkip      = core.L3ImportSkip
 	L3ImportMerge     = core.L3ImportMerge
 	L3ImportOverwrite = core.L3ImportOverwrite
+)
+
+// Plan lifecycle constants (see plan.PlanStatus).
+const (
+	PlanPending    = plan.PlanPending
+	PlanInProgress = plan.PlanInProgress
+	PlanRunning    = plan.PlanRunning
+	PlanDone       = plan.PlanDone
+	PlanFailed     = plan.PlanFailed
 )
