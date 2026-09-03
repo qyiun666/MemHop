@@ -1,17 +1,16 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L3 hypergraph operations of the internal layer: view / import / update / delete.
+// L3 hypergraph big methods of the composition root: view / import / update
+// / delete. The import steps live in internal/graph.
 
 package internal
 
 import (
 	"fmt"
-	"slices"
-	"time"
 
-	"github.com/qyiun666/MemHop/internal/cap/knowledge"
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/graph"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -99,7 +98,7 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 		if items[i].Title == "" {
 			continue
 		}
-		ok, err := db.importOneL3Node(agentID, &items[i], mode, graphCache, nodeTitles, result)
+		ok, err := graph.ImportOneNode(db.engine, agentID, &items[i], mode, graphCache, nodeTitles, result)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", items[i].Title, err))
 			continue
@@ -110,92 +109,10 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 	// a skipped node contributes no edges.
 	for i := range items {
 		if imported[i] {
-			db.importL3Relations(agentID, &items[i], graphCache, nodeTitles, result)
+			graph.ImportRelations(db.engine, agentID, &items[i], graphCache, nodeTitles, result)
 		}
 	}
 	return result, nil
-}
-
-// importOneL3Node applies one item's node: graph slot create/reuse, then
-// node create/merge/overwrite per mode with its SourceRef. Reports whether
-// the node landed (false = skipped existing node in Skip mode).
-func (db *DB) importOneL3Node(agentID uint64, item *L3ImportItem, mode L3ImportMode, graphCache map[string]uint64, nodeTitles map[uint64]map[string]struct{}, result *L3ImportResult) (bool, error) {
-	graphID, ok := graphCache[item.Domain]
-	if !ok {
-		gid, err := repo.CreateGraphL3(db.engine, agentID, item.Domain, core.HypergraphSource{Kind: core.SourceManual})
-		if err != nil {
-			return false, err
-		}
-		graphID, graphCache[item.Domain] = gid, gid
-	}
-	if _, seen := nodeTitles[graphID]; !seen {
-		titles := make(map[string]struct{})
-		for _, n := range repo.ListNodeL3(db.engine, agentID, graphID) {
-			titles[n.Title] = struct{}{}
-		}
-		nodeTitles[graphID] = titles
-	}
-	nodeID := repo.NodeIDL3(graphID, item.Title)
-	if _, exists := nodeTitles[graphID][item.Title]; exists {
-		switch mode {
-		case L3ImportSkip:
-			result.SkippedCount++
-			return false, nil
-		case L3ImportMerge:
-			if err := mutateImportedNode(db, agentID, graphID, *item, knowledge.MergeFields); err != nil {
-				return false, err
-			}
-		case L3ImportOverwrite:
-			if err := mutateImportedNode(db, agentID, graphID, *item, knowledge.OverwriteFields); err != nil {
-				return false, err
-			}
-		}
-		result.UpdatedIDs = append(result.UpdatedIDs, common.FormatHash(nodeID))
-		return true, nil
-	}
-	id, err := repo.CreateNodeL3(db.engine, agentID, graphID, item.Title, item.NodeType, item.Content, item.Keywords, item.SourceRef)
-	if err != nil {
-		return false, err
-	}
-	nodeTitles[graphID][item.Title] = struct{}{}
-	result.CreatedIDs = append(result.CreatedIDs, common.FormatHash(id))
-	return true, nil
-}
-
-// importL3Relations resolves one item's Related entries against the graph's
-// node set and creates the hyperedges; every unresolvable entry is recorded
-// in result.Errors and the rest continue. Edge ids hash the sorted node
-// pair, so re-importing the same batch is idempotent.
-func (db *DB) importL3Relations(agentID uint64, item *L3ImportItem, graphCache map[string]uint64, nodeTitles map[uint64]map[string]struct{}, result *L3ImportResult) {
-	if len(item.Related) == 0 {
-		return
-	}
-	graphID, ok := graphCache[item.Domain]
-	if !ok {
-		return
-	}
-	fromID := repo.NodeIDL3(graphID, item.Title)
-	for _, rel := range item.Related {
-		switch {
-		case rel.Title == "" || rel.Title == item.Title:
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: relation %q: empty or self target", item.Title, rel.Title))
-			continue
-		case rel.Kind > core.EdgeCustom:
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: relation %q: invalid edge kind %d", item.Title, rel.Title, rel.Kind))
-			continue
-		}
-		if _, exists := nodeTitles[graphID][rel.Title]; !exists {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: relation %q: target node not found", item.Title, rel.Title))
-			continue
-		}
-		ids := []uint64{fromID, repo.NodeIDL3(graphID, rel.Title)}
-		slices.Sort(ids)
-		if _, err := repo.CreateEdgeL3(db.engine, agentID, graphID, rel.Kind, ids, 1.0); err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: relation %q: %v", item.Title, rel.Title, err))
-			continue
-		}
-		result.EdgesCreated++
-	}
 }
 
 // UpdateL3 partially updates a graph slot (currently Name only).
@@ -230,15 +147,4 @@ func (db *DB) DeleteL3(agentID uint64, id string) error {
 		return common.NewError(common.ErrIO, "delete graph", nil)
 	}
 	return nil
-}
-
-// mutateImportedNode applies one knowledge field-merge policy to the stored
-// node of an import item (record access and membership stay in the repo).
-func mutateImportedNode(db *DB, agentID uint64, graphID uint64, item L3ImportItem,
-	merge func(*core.HypergraphNode, string, string, []string, string, int64)) error {
-	now := time.Now().UnixMilli()
-	_, err := repo.MutateNodeL3(db.engine, agentID, graphID, item.Title, func(n *core.HypergraphNode) {
-		merge(n, item.NodeType, item.Content, item.Keywords, item.SourceRef, now)
-	})
-	return err
 }
