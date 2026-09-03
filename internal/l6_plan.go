@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -64,7 +65,7 @@ type PlanSummary struct {
 // buildPlanTreeLocked assembles the plan forest from ONE aggregate scan and
 // reads each node's bound-event count from the same pass (no per-node
 // rescans).
-func (db *DB) buildPlanTreeLocked(ac *agentContext, agentID, planID uint64) (*PlanTree, error) {
+func (db *DB) buildPlanTreeLocked(ac *domain.Context, agentID, planID uint64) (*PlanTree, error) {
 	nodes, eventCount := db.planAggregateLocked(ac, planID)
 	roots := planForest(nodes, eventCount)
 	views := make([]PlanNodeView, 0, len(roots))
@@ -78,8 +79,8 @@ func (db *DB) buildPlanTreeLocked(ac *agentContext, agentID, planID uint64) (*Pl
 // planAggregateLocked returns one plan's nodes and per-node event counts from
 // the agent's in-memory planCache (no engine scan per op); (nil, nil) when the
 // plan is unknown.
-func (db *DB) planAggregateLocked(ac *agentContext, planID uint64) ([]core.TrajectorySlot, map[uint64]int) {
-	agg := ac.plans.aggregate(planID)
+func (db *DB) planAggregateLocked(ac *domain.Context, planID uint64) ([]core.TrajectorySlot, map[uint64]int) {
+	agg := ac.Plans.Aggregate(planID)
 	if agg == nil {
 		return nil, nil
 	}
@@ -157,7 +158,7 @@ func countTree(v PlanNodeView) (done, total int) {
 // for every node, its Summary becomes the concatenation of its Done
 // children's summaries. It NEVER changes a node's Status — a parent becomes
 // Done only when the host explicitly commits it (Model A).
-func (db *DB) rollupPlanTreeLocked(ac *agentContext, agentID, planID uint64) error {
+func (db *DB) rollupPlanTreeLocked(ac *domain.Context, agentID, planID uint64) error {
 	nodes, _ := db.planAggregateLocked(ac, planID)
 	for _, root := range planForest(nodes, nil) {
 		if err := db.rollupNodeLocked(ac, agentID, root); err != nil {
@@ -173,7 +174,7 @@ func (db *DB) rollupPlanTreeLocked(ac *agentContext, agentID, planID uint64) err
 // clobber a host-provided summary: when the node already has a Summary
 // (host-provided or previously rolled up), it is preserved; only an empty
 // Summary is backfilled from the Done children.
-func (db *DB) rollupNodeLocked(ac *agentContext, agentID uint64, n *planNode) error {
+func (db *DB) rollupNodeLocked(ac *domain.Context, agentID uint64, n *planNode) error {
 	for _, c := range n.children {
 		if err := db.rollupNodeLocked(ac, agentID, c); err != nil {
 			return err
@@ -220,7 +221,7 @@ func (db *DB) PlanReplace(agentID uint64, planID string, rootTitle string) error
 	if err != nil {
 		return err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	ph, err := parsePlanID(planID)
 	if err != nil {
 		return err
@@ -228,8 +229,8 @@ func (db *DB) PlanReplace(agentID uint64, planID string, rootTitle string) error
 	if _, err := repo.DeletePlanRecords(db.engine, agentID, ph); err != nil {
 		return err
 	}
-	ac.traj.RemoveSession(ph)
-	ac.plans.removePlan(ph)
+	ac.Traj.RemoveSession(ph)
+	ac.Plans.RemovePlan(ph)
 	if rootTitle == "" {
 		return nil
 	}
@@ -246,7 +247,7 @@ func (db *DB) PlanReplace(agentID uint64, planID string, rootTitle string) error
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}
-	ac.plans.upsertNode(node.PlanID, node)
+	ac.Plans.UpsertNode(node.PlanID, node)
 	return nil
 }
 
@@ -258,8 +259,8 @@ func (db *DB) ListPlans(agentID uint64) ([]PlanSummary, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
-	aggs := ac.plans.all()
+	defer ac.Mu.Unlock()
+	aggs := ac.Plans.All()
 	out := make([]PlanSummary, 0, len(aggs))
 	for _, agg := range aggs {
 		var views []PlanNodeView
@@ -307,7 +308,7 @@ func (db *DB) SyncPlanTree(agentID uint64, planID string, root *PlanNode) error 
 	if err != nil {
 		return err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	ph, err := parsePlanID(planID)
 	if err != nil {
 		return err
@@ -342,7 +343,7 @@ func (db *DB) SyncPlanTree(agentID uint64, planID string, root *PlanNode) error 
 		if _, err := repo.DeletePlanNodeBranch(db.engine, agentID, ph, p); err != nil {
 			return err
 		}
-		ac.plans.removeNodeBranch(ph, p)
+		ac.Plans.RemoveNodeBranch(ph, p)
 	}
 	return nil
 }
@@ -352,7 +353,7 @@ func (db *DB) SyncPlanTree(agentID uint64, planID string, root *PlanNode) error 
 // exists; a field the input leaves blank inherits the stored value, so a
 // partial snapshot never rewinds a completed step or erases a folded summary.
 // A terminal input Status records FinishedAt exactly once.
-func (db *DB) syncPlanNodeLocked(ac *agentContext, agentID, planID uint64, n *PlanNode) error {
+func (db *DB) syncPlanNodeLocked(ac *domain.Context, agentID, planID uint64, n *PlanNode) error {
 	nodeID, err := db.ensurePlanNode(ac, agentID, planID, n.NodePath)
 	if err != nil {
 		return err
@@ -387,7 +388,7 @@ func (db *DB) syncPlanNodeLocked(ac *agentContext, agentID, planID uint64, n *Pl
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}
-	ac.plans.upsertNode(planID, node)
+	ac.Plans.UpsertNode(planID, node)
 	for i := range n.Children {
 		if err := db.syncPlanNodeLocked(ac, agentID, planID, &n.Children[i]); err != nil {
 			return err

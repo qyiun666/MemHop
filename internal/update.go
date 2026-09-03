@@ -10,6 +10,7 @@ package internal
 import (
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -26,7 +27,7 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 
 	sceneID, topicID, err := turnTargets(in)
 	if err != nil {
@@ -41,7 +42,7 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	// Extract on the domain's cancellable context: a Close/DeleteAgent racing
 	// an in-flight Update cancels the LLM call instead of waiting a full
 	// round-trip behind the lifecycle barrier.
-	keywords, err := llmops.ExtractTurnKeywords(ac.opCtx, db.llm, in.UserText, in.AgentText)
+	keywords, err := llmops.ExtractTurnKeywords(ac.OpCtx, db.llm, in.UserText, in.AgentText)
 	if err != nil {
 		return 0, common.NewError(common.ErrLLM, "distill turn", err)
 	}
@@ -69,7 +70,7 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 			return 0, err
 		}
 	}
-	ac.syncL2Meta(db, topicID)
+	ac.SyncL2Meta(topicID)
 	db.consolidateScene(ac, sceneID)
 	return topicID, nil
 }
@@ -152,9 +153,9 @@ func (db *DB) writeTurnArchives(agentID, topicID uint64, in TurnUpdate) ([]uint6
 // scene is compressed by a later hit if this Dream is already in flight).
 // Best-effort and asynchronous — Update never waits on the pipeline. A zero
 // threshold disables the trigger.
-func (db *DB) consolidateScene(ac *agentContext, sceneID uint64) {
+func (db *DB) consolidateScene(ac *domain.Context, sceneID uint64) {
 	t := db.config.Defaults.SceneDreamTopicThreshold
-	if t <= 0 || len(ac.sceneSurfaceTopics(sceneID)) <= t {
+	if t <= 0 || len(sceneSurfaceTopics(ac, sceneID)) <= t {
 		return
 	}
 	db.triggerSceneDream(ac, sceneID)

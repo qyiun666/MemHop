@@ -18,6 +18,7 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/llm"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -46,7 +47,7 @@ func TestReproDreamConsolidate(t *testing.T) {
 
 	db := newTestDB(t, engine)
 	db.config = cfg
-	db.llm = New(cfg)
+	db.llm = llm.New(cfg)
 
 	dumpSceneContext(t, db, cfg, "before dream")
 

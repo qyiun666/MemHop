@@ -22,6 +22,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/cap/capability"
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -105,14 +106,14 @@ func (db *DB) AppendTrajectory(agentID uint64, turnID string, ev core.Trajectory
 	if err != nil {
 		return err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	if ev.EventType == "" || ev.Timestamp <= 0 {
 		return common.NewError(common.ErrInvalidQuery, "EventType and Timestamp are required")
 	}
 	if len(ev.Payload) > maxTrajectoryPayload {
 		ev.Payload = common.TruncateUTF8(ev.Payload, maxTrajectoryPayload)
 	}
-	maxSeq, _ := ac.traj.MaxSeq(parsed)
+	maxSeq, _ := ac.Traj.MaxSeq(parsed)
 	ev.SessionID = parsed
 	// The key IS the turn's topic, so the record's own topic link cannot
 	// disagree with it.
@@ -133,7 +134,7 @@ func (db *DB) AppendTrajectory(agentID uint64, turnID string, ev core.Trajectory
 	if err != nil {
 		return err
 	}
-	ac.traj.Append(parsed, ev.Seq, idHash, ev.Timestamp)
+	ac.Traj.Append(parsed, ev.Seq, idHash, ev.Timestamp)
 	return nil
 }
 
@@ -144,7 +145,7 @@ func (db *DB) ReadTrajectory(agentID uint64, turnID string) ([]core.TrajectorySl
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	return readTurn(db.engine, agentID, ac, parsed), nil
 }
 
@@ -155,8 +156,8 @@ func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSu
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
-	sums := ac.traj.Summaries()
+	defer ac.Mu.Unlock()
+	sums := ac.Traj.Summaries()
 	out := make([]core.TrajectorySessionSummary, 0, len(sums))
 	for _, s := range sums {
 		out = append(out, core.TrajectorySessionSummary{
@@ -179,7 +180,7 @@ func (db *DB) PlanAppend(agentID uint64, planID string, nodePath string, ev core
 	if err != nil {
 		return err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	ph, err := parsePlanID(planID)
 	if err != nil {
 		return err
@@ -200,7 +201,7 @@ func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core
 	if err != nil {
 		return err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	ph, err := parsePlanID(planID)
 	if err != nil {
 		return err
@@ -229,7 +230,7 @@ func (db *DB) PlanState(agentID uint64, planID string) (*PlanTree, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	ph, err := parsePlanID(planID)
 	if err != nil {
 		return nil, err
@@ -239,7 +240,7 @@ func (db *DB) PlanState(agentID uint64, planID string) (*PlanTree, error) {
 
 // ensurePlanNode resolves nodePath to a plan node id, creating the node
 // chain (root then children along path) as pending when missing.
-func (db *DB) ensurePlanNode(ac *agentContext, agentID uint64, planID uint64, nodePath string) (uint64, error) {
+func (db *DB) ensurePlanNode(ac *domain.Context, agentID uint64, planID uint64, nodePath string) (uint64, error) {
 	ids, err := splitNodePath(nodePath)
 	if err != nil {
 		return 0, err
@@ -267,7 +268,7 @@ func (db *DB) ensurePlanNode(ac *agentContext, agentID uint64, planID uint64, no
 			if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 				return 0, err
 			}
-			ac.plans.upsertNode(planID, node)
+			ac.Plans.UpsertNode(planID, node)
 		}
 		parentID = id
 	}
@@ -301,7 +302,7 @@ var planEventTypes = map[string]struct{}{
 // appendPlanEventLocked writes one event bound to a plan node by filling
 // PlanNodeRef, then reuses the existing per-turn Sequencer + TrajIndex.
 // The domain lock is already held (lockAgent path).
-func (db *DB) appendPlanEventLocked(ac *agentContext, agentID, planID, nodeID uint64, ev core.TrajectorySlot) error {
+func (db *DB) appendPlanEventLocked(ac *domain.Context, agentID, planID, nodeID uint64, ev core.TrajectorySlot) error {
 	if ev.EventType == "" || ev.Timestamp <= 0 {
 		return common.NewError(common.ErrInvalidQuery, "EventType and Timestamp are required")
 	}
@@ -311,7 +312,7 @@ func (db *DB) appendPlanEventLocked(ac *agentContext, agentID, planID, nodeID ui
 	if len(ev.Payload) > maxTrajectoryPayload {
 		ev.Payload = common.TruncateUTF8(ev.Payload, maxTrajectoryPayload)
 	}
-	maxSeq, _ := ac.traj.MaxSeq(planID)
+	maxSeq, _ := ac.Traj.MaxSeq(planID)
 	ev.SessionID = planID
 	ev.Seq = maxSeq + 1
 	ev.PlanNodeRef = nodeID
@@ -328,8 +329,8 @@ func (db *DB) appendPlanEventLocked(ac *agentContext, agentID, planID, nodeID ui
 	if err != nil {
 		return err
 	}
-	ac.traj.Append(planID, ev.Seq, idHash, ev.Timestamp)
-	ac.plans.upsertEvent(planID, nodeID, ev)
+	ac.Traj.Append(planID, ev.Seq, idHash, ev.Timestamp)
+	ac.Plans.UpsertEvent(planID, nodeID, ev)
 	return nil
 }
 
@@ -344,7 +345,7 @@ func isTerminalStatus(u uint8) bool {
 // touch the event TrajIndex: plan nodes are not per-turn events and must not
 // occupy their Seq space, otherwise a deep then shallow commit would collapse
 // the per-plan event Seq and overwrite a prior event.
-func (db *DB) updatePlanNodeLocked(ac *agentContext, agentID, nodeID uint64, status uint8, summary string) error {
+func (db *DB) updatePlanNodeLocked(ac *domain.Context, agentID, nodeID uint64, status uint8, summary string) error {
 	node, err := core.ReadTrajectorySlot(db.engine, agentID, nodeID)
 	if err != nil {
 		return err
@@ -361,13 +362,13 @@ func (db *DB) updatePlanNodeLocked(ac *agentContext, agentID, nodeID uint64, sta
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}
-	ac.plans.upsertNode(node.PlanID, node)
+	ac.Plans.UpsertNode(node.PlanID, node)
 	return nil
 }
 
 // updatePlanNodeSummaryLocked sets a plan node's Summary without touching its
 // Status (Model A: a node's Status changes only via explicit host commit).
-func (db *DB) updatePlanNodeSummaryLocked(ac *agentContext, agentID, nodeID uint64, summary string) error {
+func (db *DB) updatePlanNodeSummaryLocked(ac *domain.Context, agentID, nodeID uint64, summary string) error {
 	node, err := core.ReadTrajectorySlot(db.engine, agentID, nodeID)
 	if err != nil {
 		return err
@@ -377,7 +378,7 @@ func (db *DB) updatePlanNodeSummaryLocked(ac *agentContext, agentID, nodeID uint
 	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
 		return err
 	}
-	ac.plans.upsertNode(node.PlanID, node)
+	ac.Plans.UpsertNode(node.PlanID, node)
 	return nil
 }
 
@@ -394,7 +395,7 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	// Events land in Seq order; only the payload budget can shorten the turn.
 	events := trimTrajectoryByBudget(readTurn(db.engine, agentID, ac, parsed), maxCrystallizePayload)
 	if len(events) == 0 {
@@ -440,8 +441,8 @@ func trimTrajectoryByBudget(events []core.TrajectorySlot, budget int) []core.Tra
 
 // readTurn loads one turn's events (Seq ascending) via the domain index;
 // corrupt records are skipped, mirroring the scan-based reader it replaces.
-func readTurn(engine *core.StorageEngine, agentID uint64, ac *agentContext, sessionID uint64) []core.TrajectorySlot {
-	hashes := ac.traj.EventHashes(sessionID)
+func readTurn(engine *core.StorageEngine, agentID uint64, ac *domain.Context, sessionID uint64) []core.TrajectorySlot {
+	hashes := ac.Traj.EventHashes(sessionID)
 	out := make([]core.TrajectorySlot, 0, len(hashes))
 	for _, h := range hashes {
 		if ev, err := core.ReadTrajectorySlot(engine, agentID, h); err == nil {

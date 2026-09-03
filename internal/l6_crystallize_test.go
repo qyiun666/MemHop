@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/llm"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -46,7 +47,7 @@ func TestCrystallizeReadsOneTurnTopic(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	db := newTestDB(t, newTestEngine(t))
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	const turnA, turnB = uint64(4242), uint64(4243)
 	for _, ev := range []struct {
 		turn uint64
@@ -109,7 +110,7 @@ func mockLLMServer(t *testing.T, content string) *httptest.Server {
 func TestCrystallizeFullFlow(t *testing.T) {
 	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"重构流程","type":"composite","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","config":"{\"file\":\"a.go\"}"},{"type":"mcp","name":"write_file"}]}}]}`)
 	db := newTestDB(t, newTestEngine(t))
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(123)
 	for i := 1; i <= 3; i++ {
 		if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Payload: "step", Timestamp: int64(i)}); err != nil {
@@ -143,7 +144,7 @@ func TestCrystallizeFullFlow(t *testing.T) {
 func TestCrystallizeReusesExisting(t *testing.T) {
 	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"发布流程","type":"mcp","summary":"发布","trigger":"准备发布时","resources":[{"type":"mcp","name":"run_test"}]}}]}`)
 	db := newTestDB(t, newTestEngine(t))
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(456)
 	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
 		t.Fatalf("append: %v", err)
@@ -158,7 +159,7 @@ func TestCrystallizeReusesExisting(t *testing.T) {
 
 	secondContent := `{"capabilities":[{"action":"reuse","reuse_id":"` + first.CreatedIDs[0] + `","capability":{"name":"发布流程","type":"mcp","summary":"发布","trigger":"准备发布时","resources":[{"type":"mcp","name":"run_test"}]}}]}`
 	srv2 := mockLLMServer(t, secondContent)
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
 	second, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("second crystallize: %v", err)
@@ -202,7 +203,7 @@ func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 func TestCrystallizeReuseMinimalPayload(t *testing.T) {
 	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"最小复用","type":"mcp","summary":"s","trigger":"t","resources":[{"type":"mcp","name":"x"}]}}]}`)
 	db := newTestDB(t, newTestEngine(t))
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(321)
 	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
 		t.Fatal(err)
@@ -217,7 +218,7 @@ func TestCrystallizeReuseMinimalPayload(t *testing.T) {
 	// validation.
 	secondContent := `{"capabilities":[{"action":"reuse","reuse_id":"` + first.CreatedIDs[0] + `","capability":{"name":"最小复用"}}]}`
 	srv2 := mockLLMServer(t, secondContent)
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
 	second, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("second crystallize: %v", err)
@@ -233,7 +234,7 @@ func TestCrystallizeReuseMinimalPayload(t *testing.T) {
 func TestCrystallizeCreateDoesNotOverwriteActiveByName(t *testing.T) {
 	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"已有能力","type":"mcp","summary":"新摘要","trigger":"新触发","resources":[{"type":"mcp","name":"new_tool"}]}}]}`)
 	db := newTestDB(t, newTestEngine(t))
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	cap := &core.Capability{
 		IDHash: core.CapabilityID("已有能力"), Name: "已有能力", Type: core.CapabilityMCP,
 		Summary: "旧摘要", Trigger: "旧触发", Status: core.CapabilityActive,
@@ -270,7 +271,7 @@ func TestCrystallizeDetails(t *testing.T) {
 		{"action":"create","capability":{"name":"无效能力","type":"mcp","summary":"s","trigger":"t"}}
 	]}`)
 	db := newTestDB(t, newTestEngine(t))
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(888)
 	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
 		t.Fatal(err)
@@ -300,7 +301,7 @@ func TestCrystallizeDetails(t *testing.T) {
 
 	// Phase 2: reuse the created capability → detail carries the reused ID.
 	srv2 := mockLLMServer(t, `{"capabilities":[{"action":"reuse","reuse_id":"`+first.CreatedIDs[0]+`","capability":{"name":"明细测试能力"}}]}`)
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
 	second, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatal(err)

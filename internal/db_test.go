@@ -7,6 +7,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -24,18 +25,18 @@ func newTestDB(t *testing.T, engine *core.StorageEngine) *DB {
 		config:     &MemHopConfig{Defaults: *DefaultMemHopDefaults},
 		baseCtx:    baseCtx,
 		baseCancel: cancel,
-		agents:     make(map[uint64]*agentContext),
+		agents:     make(map[uint64]*domain.Context),
 	}
 }
 
 // testDefaultContext returns the default-domain context of db, creating it
 // with caches rebuilt from the records when absent (same shape as the lazy
-// contextFor path); tests that poke ac.l2Meta directly use this handle.
-func testDefaultContext(db *DB) *agentContext {
+// contextFor path); tests that poke ac.L2Meta directly use this handle.
+func testDefaultContext(db *DB) *domain.Context {
 	if ac := db.agents[core.DefaultAgentID]; ac != nil {
 		return ac
 	}
-	ac := newAgentContext(core.DefaultAgentID, db.baseCtx, db.engine)
+	ac := domain.NewContext(core.DefaultAgentID, db.baseCtx, db.engine, db.llm, &db.config.Defaults)
 	db.agents[core.DefaultAgentID] = ac
 	return ac
 }

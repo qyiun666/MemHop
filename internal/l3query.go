@@ -19,7 +19,7 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	if q.GraphID == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "graph_id is required")
 	}
@@ -96,7 +96,7 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	graphHash, startHash, err := db.resolveSubgraphStart(agentID, graphID, startNodeID)
 	if err != nil {
 		return nil, err

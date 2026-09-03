@@ -239,10 +239,10 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 		mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "s")
 		for i := 1; i <= 3; i++ {
 			writeTopic(t, db.engine, core.DefaultAgentID, newTopic(uint64(10+i), sceneID, int64(i*100), []string{"kw"}))
-			ac.syncL2Meta(db, uint64(10+i))
+			ac.SyncL2Meta(uint64(10 + i))
 		}
 		db.consolidateScene(ac, sceneID)
-		if _, ok := ac.dreamInFlight[sceneID]; !ok {
+		if _, ok := ac.DreamInFlight[sceneID]; !ok {
 			t.Fatal("scene not scheduled for consolidation")
 		}
 	})
@@ -255,11 +255,11 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 		const sceneID = uint64(8)
 		mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "s")
 		writeTopic(t, db.engine, core.DefaultAgentID, newTopic(21, sceneID, 100, []string{"kw"}))
-		ac.syncL2Meta(db, 21)
+		ac.SyncL2Meta(21)
 
 		db.consolidateScene(ac, sceneID)
-		if len(ac.dreamInFlight) != 0 {
-			t.Fatalf("scene scheduled below threshold: %v", ac.dreamInFlight)
+		if len(ac.DreamInFlight) != 0 {
+			t.Fatalf("scene scheduled below threshold: %v", ac.DreamInFlight)
 		}
 	})
 
@@ -272,11 +272,11 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 		mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "s")
 		for i := 1; i <= 5; i++ {
 			writeTopic(t, db.engine, core.DefaultAgentID, newTopic(uint64(30+i), sceneID, int64(i*100), []string{"kw"}))
-			ac.syncL2Meta(db, uint64(30+i))
+			ac.SyncL2Meta(uint64(30 + i))
 		}
 		db.consolidateScene(ac, sceneID)
-		if len(ac.dreamInFlight) != 0 {
-			t.Fatalf("threshold 0 must never trigger, got %v", ac.dreamInFlight)
+		if len(ac.DreamInFlight) != 0 {
+			t.Fatalf("threshold 0 must never trigger, got %v", ac.DreamInFlight)
 		}
 	})
 }

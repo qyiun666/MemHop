@@ -12,8 +12,21 @@ package internal
 
 import (
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/config"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
+
+// ---- configuration types (real definitions in internal/config) ----
+
+type (
+	MemHopConfig   = config.MemHopConfig
+	LlmConfig      = config.LlmConfig
+	MemHopDefaults = config.MemHopDefaults
+)
+
+// DefaultMemHopDefaults is the shared default engine configuration; assign
+// it to MemHopConfig.Defaults without naming the nested type.
+var DefaultMemHopDefaults = config.DefaultMemHopDefaults
 
 // ---- slot models (method signatures of Session / DB) ----
 

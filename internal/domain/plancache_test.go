@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-package internal
+package domain
 
 import (
 	"testing"
@@ -20,13 +20,13 @@ func tnode(id, planID uint64, nodePath string, seq uint64, status uint8, ts int6
 }
 
 func TestPlanCacheUpsertKeepsOrderAndStats(t *testing.T) {
-	pc := &planCache{plans: make(map[uint64]*repo.PlanAggregate)}
-	pc.upsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
-	pc.upsertNode(9, tnode(12, 9, "2", 1, core.StatusDone, 200))
+	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
+	pc.UpsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
+	pc.UpsertNode(9, tnode(12, 9, "2", 1, core.StatusDone, 200))
 	// "1.1" has Seq=2, so it sorts after the Seq=1 roots "1" and "2" even
 	// though its path prefix is "1"; the cache mirrors the repo sort order.
-	pc.upsertNode(9, tnode(13, 9, "1.1", 2, core.StatusPending, 150))
-	agg := pc.aggregate(9)
+	pc.UpsertNode(9, tnode(13, 9, "1.1", 2, core.StatusPending, 150))
+	agg := pc.Aggregate(9)
 	if agg == nil {
 		t.Fatal("aggregate is nil")
 	}
@@ -43,14 +43,14 @@ func TestPlanCacheUpsertKeepsOrderAndStats(t *testing.T) {
 		t.Fatalf("stats created=%d last=%d", agg.CreatedAt, agg.LastActiveAt)
 	}
 	// Updating "1" to done keeps HasNonDone true while "1.1" is still pending.
-	pc.upsertNode(9, tnode(11, 9, "1", 1, core.StatusDone, 250))
-	agg = pc.aggregate(9)
+	pc.UpsertNode(9, tnode(11, 9, "1", 1, core.StatusDone, 250))
+	agg = pc.Aggregate(9)
 	if !agg.HasNonDone {
 		t.Fatal("HasNonDone should stay true while 1.1 is pending")
 	}
 	// Once every node is done, HasNonDone flips false.
-	pc.upsertNode(9, tnode(13, 9, "1.1", 2, core.StatusDone, 260))
-	agg = pc.aggregate(9)
+	pc.UpsertNode(9, tnode(13, 9, "1.1", 2, core.StatusDone, 260))
+	agg = pc.Aggregate(9)
 	if agg.HasNonDone {
 		t.Fatal("HasNonDone should be false once every node is done")
 	}
@@ -60,14 +60,14 @@ func TestPlanCacheUpsertKeepsOrderAndStats(t *testing.T) {
 }
 
 func TestPlanCacheUpsertEventAndRemoveBranch(t *testing.T) {
-	pc := &planCache{plans: make(map[uint64]*repo.PlanAggregate)}
-	pc.upsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
-	pc.upsertNode(9, tnode(12, 9, "1.1", 2, core.StatusPending, 150))
-	pc.upsertNode(9, tnode(13, 9, "1.1.1", 3, core.StatusPending, 180))
-	pc.upsertNode(9, tnode(14, 9, "2", 1, core.StatusPending, 200))
-	pc.upsertEvent(9, 12, core.TrajectorySlot{IDHash: 101, PlanID: 9, PlanNodeRef: 12, Timestamp: 300})
-	pc.upsertEvent(9, 14, core.TrajectorySlot{IDHash: 102, PlanID: 9, PlanNodeRef: 14, Timestamp: 400})
-	agg := pc.aggregate(9)
+	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
+	pc.UpsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
+	pc.UpsertNode(9, tnode(12, 9, "1.1", 2, core.StatusPending, 150))
+	pc.UpsertNode(9, tnode(13, 9, "1.1.1", 3, core.StatusPending, 180))
+	pc.UpsertNode(9, tnode(14, 9, "2", 1, core.StatusPending, 200))
+	pc.UpsertEvent(9, 12, core.TrajectorySlot{IDHash: 101, PlanID: 9, PlanNodeRef: 12, Timestamp: 300})
+	pc.UpsertEvent(9, 14, core.TrajectorySlot{IDHash: 102, PlanID: 9, PlanNodeRef: 14, Timestamp: 400})
+	agg := pc.Aggregate(9)
 	if agg.EventCount[12] != 1 || agg.EventCount[14] != 1 {
 		t.Fatalf("event counts: %v", agg.EventCount)
 	}
@@ -76,8 +76,8 @@ func TestPlanCacheUpsertEventAndRemoveBranch(t *testing.T) {
 	}
 	// Remove branch "1": nodes 1/1.1/1.1.1 and the event bound to 12 drop; the
 	// sibling "2" (and its event) survive.
-	pc.removeNodeBranch(9, "1")
-	agg = pc.aggregate(9)
+	pc.RemoveNodeBranch(9, "1")
+	agg = pc.Aggregate(9)
 	if agg == nil {
 		t.Fatal("aggregate should survive (node 2 remains)")
 	}
@@ -91,17 +91,17 @@ func TestPlanCacheUpsertEventAndRemoveBranch(t *testing.T) {
 		t.Fatalf("sibling event must stay: %v", agg.EventCount)
 	}
 	// Removing the last node detaches the whole aggregate.
-	pc.removeNodeBranch(9, "2")
-	if agg := pc.aggregate(9); agg != nil {
+	pc.RemoveNodeBranch(9, "2")
+	if agg := pc.Aggregate(9); agg != nil {
 		t.Fatal("empty plan must be detached")
 	}
 }
 
 func TestPlanCacheRemovePlanDetaches(t *testing.T) {
-	pc := &planCache{plans: make(map[uint64]*repo.PlanAggregate)}
-	pc.upsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
-	pc.removePlan(9)
-	if pc.aggregate(9) != nil {
+	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
+	pc.UpsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
+	pc.RemovePlan(9)
+	if pc.Aggregate(9) != nil {
 		t.Fatal("removePlan must drop the aggregate")
 	}
 }

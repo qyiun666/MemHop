@@ -38,7 +38,7 @@ func (db *DB) importCapabilityData(agentID uint64, data []byte, source string) (
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	cap, err := capability.Build(data, source)
 	if err != nil {
 		return nil, err
@@ -67,7 +67,7 @@ func (db *DB) GetCapability(agentID uint64, id string) (*core.Capability, error)
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	idHash, err := common.ParseID(id)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
@@ -91,7 +91,7 @@ func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch)
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	idHash, err := common.ParseID(id)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
@@ -146,7 +146,7 @@ func (db *DB) DeleteCapability(agentID uint64, id string) error {
 	if err != nil {
 		return err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	idHash, err := common.ParseID(id)
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse capability id", err)
@@ -166,7 +166,7 @@ func (db *DB) ListCapabilities(agentID uint64, q CapabilityListQuery) ([]core.Ca
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	kw := strings.ToLower(q.Keyword)
 	all := core.CollectAllCapabilities(db.engine, agentID)
 	filtered := make([]core.Capability, 0, len(all))
@@ -200,7 +200,7 @@ func (db *DB) ActivateCapability(agentID uint64, id string) (*core.Capability, e
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	idHash, err := common.ParseID(id)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
@@ -218,7 +218,7 @@ func (db *DB) RecordCapabilityUsage(agentID uint64, id string, success bool) (*c
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	idHash, err := common.ParseID(id)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)

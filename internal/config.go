@@ -1,6 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+// Open is the composition root's assembly point: tokenizer init, engine
+// open/create, tenant registry reload and the built-in capability toolbox
+// attachment. The configuration types themselves live in internal/config.
+
 package internal
 
 import (
@@ -11,41 +15,12 @@ import (
 	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
+	"github.com/qyiun666/MemHop/internal/llm"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
-
-// MemHopConfig configures a MemHop database. The only external service is the
-// LLM endpoint: the retrieval subsystem that used to consume encoded vectors
-// is gone, so no embedding service is contacted and no dimension is declared.
-type MemHopConfig struct {
-	DBPath   string         `json:"db_path"`
-	LLM      LlmConfig      `json:"llm"`
-	Defaults MemHopDefaults `json:"defaults"`
-}
-
-// LlmConfig holds LLM provider settings.
-type LlmConfig struct {
-	APIURL          string `json:"api_url"`
-	APIKey          string `json:"api_key"`
-	Model           string `json:"model"`
-	TimeoutSecs     int    `json:"timeout_secs"`
-	MaxOutputTokens int    `json:"max_output_tokens"`
-}
-
-func (c *MemHopConfig) Validate() error {
-	if c == nil {
-		return common.NewError(common.ErrConfig, "config is required")
-	}
-	if c.DBPath == "" {
-		return common.NewError(common.ErrConfig, "DBPath is required")
-	}
-	if c.LLM.APIURL == "" || c.LLM.APIKey == "" || c.LLM.Model == "" {
-		return common.NewError(common.ErrConfig, "LLM.APIURL, LLM.APIKey and LLM.Model are required")
-	}
-	return nil
-}
 
 func OpenOrCreateEngine(cfg *MemHopConfig) (*core.StorageEngine, error) {
 	if _, err := os.Stat(cfg.DBPath); err == nil {
@@ -86,12 +61,12 @@ func Open(cfg *MemHopConfig, builtins fs.FS) (*DB, error) {
 	db := &DB{
 		engine: engine,
 		config: cfg,
-		llm:    New(cfg),
+		llm:    llm.New(cfg),
 		// baseCtx bounds every per-agent opCtx; Close cancels it so
 		// in-flight Dreams exit at the next stage boundary.
 		baseCtx:    ctx,
 		baseCancel: cancel,
-		agents:     make(map[uint64]*agentContext),
+		agents:     make(map[uint64]*domain.Context),
 		nameToID:   nameToID,
 		idToName:   idToName,
 	}

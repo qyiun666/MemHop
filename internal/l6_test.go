@@ -768,7 +768,7 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	if ac == nil {
 		t.Fatal("agent context missing")
 	}
-	cached := ac.plans.aggregate(9)
+	cached := ac.Plans.Aggregate(9)
 	if cached == nil {
 		t.Fatal("cached aggregate missing")
 	}

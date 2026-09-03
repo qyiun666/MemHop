@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-package internal
+package domain
 
 import (
 	"cmp"
@@ -12,18 +12,19 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// planCache caches every plan's nodes and bound-event count in memory so
-// PlanState/ListPlans/rollup avoid a full engine scan per operation. Built from
-// the engine when the agent context is created (and rebuilt on idle reclaim)
-// and maintained incrementally by the internal layer, which owns every plan
-// write/delete under the same domain lock (ac.mu) — so the cache carries no
-// lock of its own and is only ever touched while the caller holds ac.mu.
-type planCache struct {
+// PlanCache caches every plan's nodes and bound-event count in memory so
+// PlanState/ListPlans/rollup avoid a full engine scan per operation. Built
+// from the engine when the agent context is created (and rebuilt on idle
+// reclaim) and maintained incrementally by the internal layer, which owns
+// every plan write/delete under the same domain lock (Context.Mu) — so the
+// cache carries no lock of its own and is only ever touched while the caller
+// holds Context.Mu.
+type PlanCache struct {
 	plans map[uint64]*repo.PlanAggregate
 }
 
-func buildPlanCache(engine *core.StorageEngine, agentID uint64) *planCache {
-	pc := &planCache{plans: make(map[uint64]*repo.PlanAggregate)}
+func buildPlanCache(engine *core.StorageEngine, agentID uint64) *PlanCache {
+	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
 	for _, agg := range repo.CollectPlanAggregates(engine, agentID) {
 		a := agg
 		pc.plans[a.PlanID] = &a
@@ -31,14 +32,14 @@ func buildPlanCache(engine *core.StorageEngine, agentID uint64) *planCache {
 	return pc
 }
 
-// aggregate returns the cached aggregate of one plan; nil when unknown.
-func (pc *planCache) aggregate(planID uint64) *repo.PlanAggregate {
+// Aggregate returns the cached aggregate of one plan; nil when unknown.
+func (pc *PlanCache) Aggregate(planID uint64) *repo.PlanAggregate {
 	return pc.plans[planID]
 }
 
-// all returns every cached aggregate in PlanID-ascending order (deterministic
+// All returns every cached aggregate in PlanID-ascending order (deterministic
 // ListPlans).
-func (pc *planCache) all() []*repo.PlanAggregate {
+func (pc *PlanCache) All() []*repo.PlanAggregate {
 	out := make([]*repo.PlanAggregate, 0, len(pc.plans))
 	for _, agg := range pc.plans {
 		out = append(out, agg)
@@ -47,11 +48,11 @@ func (pc *planCache) all() []*repo.PlanAggregate {
 	return out
 }
 
-// upsertNode inserts or updates a plan node in its aggregate, keeping Nodes
+// UpsertNode inserts or updates a plan node in its aggregate, keeping Nodes
 // sorted by (Seq, NodePath) so planForest can consume them directly. Node
 // identity is the stable derived IDHash (HashPlanNode), so an in-place
 // replacement preserves the reference.
-func (pc *planCache) upsertNode(planID uint64, node *core.TrajectorySlot) {
+func (pc *PlanCache) UpsertNode(planID uint64, node *core.TrajectorySlot) {
 	if node == nil {
 		return
 	}
@@ -77,10 +78,10 @@ func (pc *planCache) upsertNode(planID uint64, node *core.TrajectorySlot) {
 	recomputePlanAggStat(agg)
 }
 
-// upsertEvent appends a plan-bound event and bumps its node's count. Used by
+// UpsertEvent appends a plan-bound event and bumps its node's count. Used by
 // appendPlanEventLocked; the timestamp is monotonic, so CreatedAt/LastActiveAt
 // update incrementally instead of rescanning.
-func (pc *planCache) upsertEvent(planID, nodeID uint64, ev core.TrajectorySlot) {
+func (pc *PlanCache) UpsertEvent(planID, nodeID uint64, ev core.TrajectorySlot) {
 	agg := pc.plans[planID]
 	if agg == nil {
 		agg = &repo.PlanAggregate{PlanID: planID, EventCount: make(map[uint64]int)}
@@ -96,10 +97,10 @@ func (pc *planCache) upsertEvent(planID, nodeID uint64, ev core.TrajectorySlot) 
 	}
 }
 
-// removeNodeBranch drops the branch nodes and their bound events from the
+// RemoveNodeBranch drops the branch nodes and their bound events from the
 // cache, mirroring repo.DeletePlanNodeBranch (which removes them on disk).
 // Does not touch the engine.
-func (pc *planCache) removeNodeBranch(planID uint64, nodePath string) {
+func (pc *PlanCache) RemoveNodeBranch(planID uint64, nodePath string) {
 	agg := pc.plans[planID]
 	if agg == nil {
 		return
@@ -128,15 +129,15 @@ func (pc *planCache) removeNodeBranch(planID uint64, nodePath string) {
 	pc.detachIfEmpty(planID)
 }
 
-// removePlan drops a plan's whole aggregate; used by PlanReplace.
-func (pc *planCache) removePlan(planID uint64) {
+// RemovePlan drops a plan's whole aggregate; used by PlanReplace.
+func (pc *PlanCache) RemovePlan(planID uint64) {
 	delete(pc.plans, planID)
 }
 
-// removePlanIDs drops a specific set of nodes and bound events from the cache,
+// RemovePlanIDs drops a specific set of nodes and bound events from the cache,
 // used by the Dream retention sweep (expired nodes cascade their events, but
 // the surviving fresh subtree stays). Does not touch the engine.
-func (pc *planCache) removePlanIDs(planID uint64, nodeIDs, eventIDs []uint64) {
+func (pc *PlanCache) RemovePlanIDs(planID uint64, nodeIDs, eventIDs []uint64) {
 	agg := pc.plans[planID]
 	if agg == nil {
 		return
@@ -168,7 +169,7 @@ func (pc *planCache) removePlanIDs(planID uint64, nodeIDs, eventIDs []uint64) {
 
 // detachIfEmpty drops an aggregate that no longer holds any node so it stops
 // appearing in ListPlans (a plan whose whole tree was pruned is gone).
-func (pc *planCache) detachIfEmpty(planID uint64) {
+func (pc *PlanCache) detachIfEmpty(planID uint64) {
 	agg := pc.plans[planID]
 	if agg == nil || len(agg.Nodes) == 0 {
 		delete(pc.plans, planID)

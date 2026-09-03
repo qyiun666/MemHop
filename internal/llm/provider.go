@@ -1,10 +1,12 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// llm_client.go 封装 LLM 传输客户端：Provider 实现 cap/llmops 注入的 Chat
-// 契约（单次 chat、截断升级重试、输出上限），prompt 构建与解析属于能力层。
+// Package llm is the memory engine's LLM transport: Provider implements the
+// cap/llmops injected Chat contract (single chat, truncation-escalation
+// retry, output ceiling). Prompt construction and parsing belong to the
+// capability layer.
 
-package internal
+package llm
 
 import (
 	"context"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/config"
 	openai "github.com/sashabaranov/go-openai"
 )
 
@@ -33,7 +36,7 @@ type Provider struct {
 }
 
 // New 从配置创建 Provider。
-func New(cfg *MemHopConfig) *Provider {
+func New(cfg *config.MemHopConfig) *Provider {
 	timeoutSecs := cfg.LLM.TimeoutSecs
 	if timeoutSecs <= 0 {
 		timeoutSecs = defaultTimeoutSecs

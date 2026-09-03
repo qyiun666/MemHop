@@ -18,6 +18,7 @@ import (
 
 	"github.com/qyiun666/MemHop/internal/cap/profile"
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -34,7 +35,7 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 
 	scene, err := db.sceneForSearch(ac, q)
 	if err != nil {
@@ -51,7 +52,7 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	topics := ac.sceneSurfaceTopics(scene.SceneID)
+	topics := sceneSurfaceTopics(ac, scene.SceneID)
 	// TopicCount is derived, never stored: the scene's depth-1 set is exactly
 	// what ListScenes counts, so the read fills the same number from the
 	// topics it already loaded.
@@ -68,7 +69,7 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 // sceneForSearch resolves the scene a read is scoped to. Errors from the
 // record layer pass through unchanged so an unknown scene stays ErrNotFound
 // and a closing database stays ErrClosed.
-func (db *DB) sceneForSearch(ac *agentContext, q SearchQuery) (*core.SceneSlot, error) {
+func (db *DB) sceneForSearch(ac *domain.Context, q SearchQuery) (*core.SceneSlot, error) {
 	if q.SceneID == "" {
 		return db.newScene(ac, q)
 	}
@@ -76,19 +77,19 @@ func (db *DB) sceneForSearch(ac *agentContext, q SearchQuery) (*core.SceneSlot, 
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
-	return core.ReadSceneSlot(db.engine, ac.id, id)
+	return core.ReadSceneSlot(db.engine, ac.ID, id)
 }
 
 // newScene allocates a scene id the host has not used yet, persists the scene
 // record under a library-generated name and applies the optional L3 anchor
 // (write-once semantics).
-func (db *DB) newScene(ac *agentContext, q SearchQuery) (*core.SceneSlot, error) {
-	id, err := db.freshSceneID(ac.id)
+func (db *DB) newScene(ac *domain.Context, q SearchQuery) (*core.SceneSlot, error) {
+	id, err := db.freshSceneID(ac.ID)
 	if err != nil {
 		return nil, err
 	}
 	name := "session:" + common.FormatHash(id)
-	if err := repo.CreateSceneL2WithID(db.engine, ac.id, id, name); err != nil {
+	if err := repo.CreateSceneL2WithID(db.engine, ac.ID, id, name); err != nil {
 		return nil, err
 	}
 	if q.L3ID != "" {
@@ -96,11 +97,11 @@ func (db *DB) newScene(ac *agentContext, q SearchQuery) (*core.SceneSlot, error)
 		if err != nil {
 			return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 		}
-		if err := repo.SetSceneL3ID(db.engine, ac.id, id, l3Hash); err != nil {
+		if err := repo.SetSceneL3ID(db.engine, ac.ID, id, l3Hash); err != nil {
 			return nil, err
 		}
 	}
-	return core.ReadSceneSlot(db.engine, ac.id, id)
+	return core.ReadSceneSlot(db.engine, ac.ID, id)
 }
 
 // freshSceneID mints an unused 8-byte scene id. Zero is skipped: it is the
@@ -131,10 +132,10 @@ func (db *DB) freshSceneID(agentID uint64) (uint64, error) {
 // read surface a host injects as its conversation context. It is served from
 // the L2Meta cache, so a read costs no record scan; ties break by ID to keep
 // the order deterministic.
-func (ac *agentContext) sceneSurfaceTopics(sceneID uint64) []core.TopicSlot {
+func sceneSurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 	out := make([]core.TopicSlot, 0, 16)
-	for _, id := range ac.l2Meta.GetByScene(sceneID) {
-		meta := ac.l2Meta.Get(id)
+	for _, id := range ac.L2Meta.GetByScene(sceneID) {
+		meta := ac.L2Meta.Get(id)
 		if meta == nil || meta.Depth != 1 {
 			continue
 		}

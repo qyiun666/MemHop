@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/llm"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -17,7 +18,7 @@ import (
 func newSearchTestDB(t *testing.T, llmURL string) *DB {
 	t.Helper()
 	db := newTestDB(t, newTestEngine(t))
-	db.llm = New(&MemHopConfig{LLM: LlmConfig{APIURL: llmURL, APIKey: "test", Model: "mock"}})
+	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: llmURL, APIKey: "test", Model: "mock"}})
 	return db
 }
 

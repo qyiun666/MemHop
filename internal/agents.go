@@ -121,7 +121,7 @@ func (db *DB) CheckSession(agentID uint64) error {
 // context can be created mid-delete; the context's tombstone then rejects
 // stale handles, opCtx cancels so a pending Dream exits at its next
 // stage boundary, and the domain-lock barrier waits for any operation
-// still holding ac.mu before the engine deletes the records. Space is
+// still holding ac.Mu before the engine deletes the records. Space is
 // reclaimed by the engine's Compact path. The default domain cannot be
 // deleted.
 func (db *DB) DeleteAgent(agentID uint64) error {
@@ -139,9 +139,9 @@ func (db *DB) DeleteAgent(agentID uint64) error {
 	delete(db.idToName, agentID)
 	db.agentsMu.Unlock()
 	if ac := db.destroyContext(agentID); ac != nil {
-		ac.deleted.Store(true)
-		ac.mu.Lock()
-		ac.mu.Unlock() //nolint:staticcheck // barrier only
+		ac.Deleted.Store(true)
+		ac.Mu.Lock()
+		ac.Mu.Unlock() //nolint:staticcheck // barrier only
 	}
 	if _, err := db.engine.DeleteAgentRecords(agentID); err != nil {
 		// The record deletion failed: restore the tenant mapping so the

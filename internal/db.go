@@ -10,18 +10,19 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
+	"github.com/qyiun666/MemHop/internal/llm"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 // DB is the multi-agent database instance returned by Open. Business state
-// (L2Meta cache, Dream bookkeeping, locks) lives in one agentContext per
+// (L2Meta cache, Dream bookkeeping, locks) lives in one domain.Context per
 // agent; llm/builtinCapabilities are stateless or connection-level and stay
 // shared at the DB level.
 type DB struct {
 	engine *core.StorageEngine
 	config *MemHopConfig
-	llm    *Provider
+	llm    *llm.Provider
 	// builtinCapabilities are read-only reference capabilities attached to
 	// L5 query responses; they are never written to the file. Set once via
 	// SetBuiltinCapabilities before the DB is published.
@@ -37,12 +38,12 @@ type DB struct {
 	// agentsMu guards the agents registry and the tenant name maps
 	// (nameToID/idToName).
 	agentsMu sync.Mutex
-	agents   map[uint64]*agentContext
+	agents   map[uint64]*domain.Context
 	nameToID map[string]uint64 // tenant registry: name -> agentID
 	idToName map[uint64]string // tenant registry: agentID -> name
 
 	// mu serializes Close against itself; per-operation domain locking is on
-	// agentContext.mu instead of this DB-wide lock.
+	// domain.Context.Mu instead of this DB-wide lock.
 	mu sync.Mutex
 }
 
@@ -53,12 +54,12 @@ func (db *DB) Lock() {
 	if err != nil {
 		panic(err) // closed DB: same contract as the old unconditional lock
 	}
-	ac.mu.Lock()
+	ac.Mu.Lock()
 }
 
 func (db *DB) Unlock() {
 	if ac := db.peekContext(core.DefaultAgentID); ac != nil {
-		ac.mu.Unlock()
+		ac.Mu.Unlock()
 	}
 }
 
@@ -68,7 +69,7 @@ func (db *DB) IsClosed() bool { return db.closed.Load() }
 // access, and opportunistically sweeps idle domains. Non-default IDs must
 // be registered tenants: a stale handle to a deleted agent never revives
 // its domain.
-func (db *DB) contextFor(agentID uint64) (*agentContext, error) {
+func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	if db.closed.Load() {
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
@@ -85,10 +86,10 @@ func (db *DB) contextFor(agentID uint64) (*agentContext, error) {
 	db.sweepIdleLocked()
 	ac := db.agents[agentID]
 	if ac == nil {
-		ac = newAgentContext(agentID, db.baseCtx, db.engine)
+		ac = domain.NewContext(agentID, db.baseCtx, db.engine, db.llm, &db.config.Defaults)
 		db.agents[agentID] = ac
 	}
-	ac.lastActiveAt.Store(time.Now().UnixMilli())
+	ac.LastActiveAt.Store(time.Now().UnixMilli())
 	return ac, nil
 }
 
@@ -96,21 +97,21 @@ func (db *DB) contextFor(agentID uint64) (*agentContext, error) {
 // under it: a handle that raced a deletion is rejected instead of writing
 // into a tombstoned domain. Every business entry point must go through
 // this helper.
-func (db *DB) lockAgent(agentID uint64) (*agentContext, error) {
+func (db *DB) lockAgent(agentID uint64) (*domain.Context, error) {
 	ac, err := db.contextFor(agentID)
 	if err != nil {
 		return nil, err
 	}
-	ac.mu.Lock()
+	ac.Mu.Lock()
 	if db.closed.Load() {
 		// A caller that fetched its context before Close ran can still be
 		// waiting here when the barrier passes and the engine shuts down:
 		// reject instead of reporting success on a closed database.
-		ac.mu.Unlock()
+		ac.Mu.Unlock()
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
-	if ac.deleted.Load() {
-		ac.mu.Unlock()
+	if ac.Deleted.Load() {
+		ac.Mu.Unlock()
 		return nil, common.NewError(common.ErrAgentNotFound, "agent is being deleted")
 	}
 	return ac, nil
@@ -118,17 +119,17 @@ func (db *DB) lockAgent(agentID uint64) (*agentContext, error) {
 
 // lockSession is the shared prologue of the L6 session-scoped operations:
 // take the domain lock, then parse the hex session id. On a parse failure
-// the lock is released before returning, so callers add `defer ac.mu.Unlock()`
+// the lock is released before returning, so callers add `defer ac.Mu.Unlock()`
 // only after the error check. It returns the locked context and the parsed
 // session id.
-func (db *DB) lockSession(agentID uint64, sessionID string) (*agentContext, uint64, error) {
+func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, uint64, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, 0, err
 	}
 	parsed, err := common.ParseID(sessionID)
 	if err != nil {
-		ac.mu.Unlock()
+		ac.Mu.Unlock()
 		return nil, 0, common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
 	return ac, parsed, nil
@@ -136,7 +137,7 @@ func (db *DB) lockSession(agentID uint64, sessionID string) (*agentContext, uint
 
 // peekContext returns an existing context without creating one (nil when
 // absent or the DB is closed).
-func (db *DB) peekContext(agentID uint64) *agentContext {
+func (db *DB) peekContext(agentID uint64) *domain.Context {
 	if db.closed.Load() {
 		return nil
 	}
@@ -160,18 +161,18 @@ func (db *DB) sweepIdleLocked() {
 		if id == core.DefaultAgentID {
 			continue
 		}
-		if now-ac.lastActiveAt.Load() <= ttl {
+		if now-ac.LastActiveAt.Load() <= ttl {
 			continue
 		}
-		if !ac.mu.TryLock() { // an operation holds the domain lock: reclaim on a later pass
+		if !ac.Mu.TryLock() { // an operation holds the domain lock: reclaim on a later pass
 			continue
 		}
-		busy := len(ac.dreamInFlight) > 0
-		ac.mu.Unlock()
+		busy := len(ac.DreamInFlight) > 0
+		ac.Mu.Unlock()
 		if busy {
 			continue
 		}
-		ac.opCancel()
+		ac.OpCancel()
 		delete(db.agents, id)
 	}
 }
@@ -179,57 +180,15 @@ func (db *DB) sweepIdleLocked() {
 // destroyContext cancels the agent's cancellable work (Dreams and in-flight
 // LLM calls) and removes its context. Returns the destroyed context (nil when
 // absent) so callers can wait for in-flight work if needed.
-func (db *DB) destroyContext(agentID uint64) *agentContext {
+func (db *DB) destroyContext(agentID uint64) *domain.Context {
 	db.agentsMu.Lock()
 	defer db.agentsMu.Unlock()
 	ac := db.agents[agentID]
 	if ac != nil {
-		ac.opCancel()
+		ac.OpCancel()
 		delete(db.agents, agentID)
 	}
 	return ac
-}
-
-// syncL2Meta refreshes one topic entry of the agent's L2MetaIndex from the
-// record just written; call it right after the engine writes. On read failure
-// the entry is removed so stale metadata is never served.
-func (ac *agentContext) syncL2Meta(db *DB, idHash uint64) {
-	if ac.l2Meta == nil {
-		return
-	}
-	topic, err := core.ReadTopicLenient(db.engine, ac.id, idHash)
-	if err != nil || topic == nil {
-		ac.l2Meta.Remove(idHash)
-		return
-	}
-	ac.l2Meta.Update(index.L2MetaFromTopic(topic))
-}
-
-// removeTopicsFromIndices drops the given topics from the agent's L2Meta
-// cache; used by the DeleteScene / DeleteTopic paths after their records are
-// tombstoned. Callers hold ac.mu.
-func (ac *agentContext) removeTopicsFromIndices(ids []uint64) {
-	for _, id := range ids {
-		ac.l2Meta.Remove(id)
-	}
-}
-
-// retargetL2Meta moves every topic of the merged-away scenes to the primary
-// scene in the L2MetaIndex, mirroring repo.MergeScenesL2 after a merge.
-func (ac *agentContext) retargetL2Meta(primaryHash uint64, removed map[uint64]struct{}) {
-	if ac.l2Meta == nil {
-		return
-	}
-	for sid := range removed {
-		for _, id := range ac.l2Meta.GetByScene(sid) {
-			meta := ac.l2Meta.Remove(id)
-			if meta == nil {
-				continue
-			}
-			meta.SceneID = primaryHash
-			ac.l2Meta.Update(meta)
-		}
-	}
 }
 
 func (db *DB) Close() error {
@@ -243,14 +202,14 @@ func (db *DB) Close() error {
 	// mid-write when the engine closes.
 	db.baseCancel()
 	db.agentsMu.Lock()
-	acs := make([]*agentContext, 0, len(db.agents))
+	acs := make([]*domain.Context, 0, len(db.agents))
 	for _, ac := range db.agents {
 		acs = append(acs, ac)
 	}
 	db.agentsMu.Unlock()
 	for _, ac := range acs {
-		ac.mu.Lock()
-		ac.mu.Unlock() //nolint:staticcheck // barrier only
+		ac.Mu.Lock()
+		ac.Mu.Unlock() //nolint:staticcheck // barrier only
 	}
 	return db.engine.Close(nil)
 }

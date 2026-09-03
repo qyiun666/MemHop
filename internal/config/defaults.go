@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-package internal
+package config
 
 // MemHopDefaults holds the host-facing business knobs of the memory engine:
 // consolidation thresholds and the idle-domain TTL. Retrieval scoring tuning

@@ -18,6 +18,7 @@ import (
 	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
+	"github.com/qyiun666/MemHop/internal/llm"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -49,7 +50,7 @@ func TestExtractKeywordsLongInputRealLLM(t *testing.T) {
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		t.Skipf("LLM not configured: %v", err)
 	}
-	p := internal.New(cfg)
+	p := llm.New(cfg)
 	// Session 2 is 4322 chars (> keywordChunkRunes → chunked path).
 	longText := longSessionText(t, 2)
 	// Session 0 is 1560 chars (single-pass path with format retry).
@@ -125,7 +126,7 @@ func TestExtractTurnKeywordsLongInput(t *testing.T) {
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		t.Skipf("LLM not configured: %v", err)
 	}
-	p := internal.New(cfg)
+	p := llm.New(cfg)
 	kw, err := llmops.ExtractTurnKeywords(context.Background(), p, longSessionText(t, 2), "收到")
 	if err != nil {
 		t.Fatalf("ExtractTurnKeywords: %v", err)

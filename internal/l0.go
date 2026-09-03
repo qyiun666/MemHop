@@ -22,7 +22,7 @@ func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	slot, err := repo.GetProfileL0(db.engine, agentID)
 	if err != nil {
 		if common.CodeOf(err) == common.ErrNotFound {
@@ -43,7 +43,7 @@ func (db *DB) UpdateL0(agentID uint64, slot *core.ProfileSlot) error {
 	if err != nil {
 		return err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	if slot == nil {
 		return common.NewError(common.ErrInvalidQuery, "UpdateL0: slot is required")
 	}
@@ -69,7 +69,7 @@ func (db *DB) DistillL0(ctx context.Context, agentID uint64) error {
 	if err != nil {
 		return err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	_, err = db.distillL0Stage(ctx, agentID)
 	return err
 }

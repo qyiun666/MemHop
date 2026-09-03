@@ -16,7 +16,7 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	var out []core.ArchiveSlot
 	switch {
 	case q.Keyword != "":
@@ -65,7 +65,7 @@ func (db *DB) GetArchive(agentID uint64, id string) (*core.ArchiveSlot, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	idHash, err := common.ParseID(id)
 	if err != nil {
 		return nil, common.NewError(common.ErrNotFound, "archive not found")

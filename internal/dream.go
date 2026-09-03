@@ -15,6 +15,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/cap/profile"
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
@@ -32,7 +33,7 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 
 	rep := &DreamReport{}
 	// Retention first: the L6 prune runs on every Dream, even when there is
@@ -102,10 +103,10 @@ func dreamSceneSet(engine *core.StorageEngine, agentID uint64, sceneID uint64) [
 // window; durable products live in L4/L5, so L6 stays a bounded process
 // index. Best-effort: a failure is logged and recorded in the report but
 // never aborts Dream.
-func (db *DB) pruneTrajectoryStage(agentID uint64, ac *agentContext, rep *DreamReport) {
+func (db *DB) pruneTrajectoryStage(agentID uint64, ac *domain.Context, rep *DreamReport) {
 	start := time.Now()
 	cutoff := time.Now().Add(-trajectoryRetention).UnixMilli()
-	hashes := ac.traj.RemoveBefore(cutoff)
+	hashes := ac.Traj.RemoveBefore(cutoff)
 	var err error
 	if len(hashes) > 0 {
 		if _, err = repo.DeleteTrajectoryByIDs(db.engine, agentID, hashes); err != nil {
@@ -163,7 +164,7 @@ func (db *DB) pruneTrajectoryStage(agentID uint64, ac *agentContext, rep *DreamR
 			slog.Warn("dream: plan-node prune failed", "agent", common.FormatHash(agentID), "err", derr)
 		} else {
 			for _, p := range prunes {
-				ac.plans.removePlanIDs(p.planID, p.nodeDel, p.eventDel)
+				ac.Plans.RemovePlanIDs(p.planID, p.nodeDel, p.eventDel)
 			}
 		}
 	}
@@ -173,7 +174,7 @@ func (db *DB) pruneTrajectoryStage(agentID uint64, ac *agentContext, rep *DreamR
 // dreamStructureStages runs stages 2 through 5 of the pipeline: the L2Meta
 // rebuild, L1 sync/edges/rebuild/decay, L0 distillation, then installs the
 // rebuilt cache into the agent context.
-func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agentContext, rep *DreamReport) error {
+func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *domain.Context, rep *DreamReport) error {
 	start := time.Now()
 	// Stage 2: rebuild the L2Meta cache in one scan of the agent domain.
 	newL2Meta := index.BuildL2MetaFromEngine(db.engine, agentID)
@@ -197,7 +198,7 @@ func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agen
 	// Install the rebuilt cache as soon as the stages that produced it are
 	// done: L0 distillation only writes the profile and L1 emotions, so a
 	// failed LLM call there must not throw the whole rebuild away.
-	ac.l2Meta = newL2Meta
+	ac.L2Meta = newL2Meta
 
 	// Stage 5: L0 distillation (LLM emotion/MBTI, backfilled into L1).
 	start = time.Now()
@@ -284,22 +285,22 @@ func (db *DB) dreamL1Stages(ctx context.Context, agentID uint64, newL2Meta *inde
 // logged and never fail the caller. RunDream runs under the agent's
 // opCtx, cancelled at Close/DeleteAgent so a pending Dream never writes
 // to a destroyed domain nor blocks shutdown on LLM calls. Caller must hold
-// ac.mu.
-func (db *DB) triggerSceneDream(ac *agentContext, sceneID uint64) {
-	if _, ok := ac.dreamInFlight[sceneID]; ok {
+// ac.Mu.
+func (db *DB) triggerSceneDream(ac *domain.Context, sceneID uint64) {
+	if _, ok := ac.DreamInFlight[sceneID]; ok {
 		return
 	}
-	ac.dreamInFlight[sceneID] = struct{}{}
+	ac.DreamInFlight[sceneID] = struct{}{}
 
 	go func() {
 		defer func() {
-			ac.mu.Lock()
-			delete(ac.dreamInFlight, sceneID)
-			ac.mu.Unlock()
+			ac.Mu.Lock()
+			delete(ac.DreamInFlight, sceneID)
+			ac.Mu.Unlock()
 		}()
-		if _, err := db.RunDream(ac.opCtx, ac.id, sceneID); err != nil {
+		if _, err := db.RunDream(ac.OpCtx, ac.ID, sceneID); err != nil {
 			slog.Warn("dream: trigger failed",
-				"agent", common.FormatHash(ac.id), "scene", common.FormatHash(sceneID), "err", err)
+				"agent", common.FormatHash(ac.ID), "scene", common.FormatHash(sceneID), "err", err)
 		}
 	}()
 }
@@ -309,7 +310,7 @@ func (db *DB) triggerSceneDream(ac *agentContext, sceneID uint64) {
 // least one group applied and the LLM failure count. Applied groups
 // accumulate into rep.L2TopicsCompressed under mu. All scenes belong to ac's
 // domain; cross-agent merging is structurally impossible.
-func (db *DB) compressScenes(ctx context.Context, ac *agentContext, scenes []uint64, rep *DreamReport) (map[uint64]struct{}, int) {
+func (db *DB) compressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, rep *DreamReport) (map[uint64]struct{}, int) {
 	var (
 		wg        sync.WaitGroup
 		mu        sync.Mutex
@@ -322,8 +323,8 @@ func (db *DB) compressScenes(ctx context.Context, ac *agentContext, scenes []uin
 			defer wg.Done()
 			topics, err := repo.ListTopicsL2(repo.TopicListQuery{
 				Engine:  db.engine,
-				AgentID: ac.id,
-				MetaIdx: ac.l2Meta,
+				AgentID: ac.ID,
+				MetaIdx: ac.L2Meta,
 				SceneID: sceneID,
 				Depth:   1,
 				Num:     2,
@@ -342,7 +343,7 @@ func (db *DB) compressScenes(ctx context.Context, ac *agentContext, scenes []uin
 				mu.Unlock()
 				return
 			}
-			if applied := db.applyGroups(ctx, ac.id, sceneID, topics, out); applied > 0 {
+			if applied := db.applyGroups(ctx, ac.ID, sceneID, topics, out); applied > 0 {
 				mu.Lock()
 				succeeded[sceneID] = struct{}{}
 				rep.L2TopicsCompressed += int(applied)

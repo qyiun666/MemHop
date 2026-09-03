@@ -21,7 +21,7 @@ func (db *DB) GetL3(agentID uint64, id string) (*L3Graph, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	return db.getL3Graph(agentID, id)
 }
 
@@ -58,7 +58,7 @@ func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	all := core.CollectAllGraphSlots(db.engine, agentID)
 	if all == nil {
 		return []core.HypergraphSlot{}, nil
@@ -76,7 +76,7 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	if len(items) == 0 {
 		return nil, common.NewError(common.ErrInvalidQuery, "import: no items")
 	}
@@ -204,7 +204,7 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 	if err != nil {
 		return nil, err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	graphHash, err := common.ParseID(id)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
@@ -221,7 +221,7 @@ func (db *DB) DeleteL3(agentID uint64, id string) error {
 	if err != nil {
 		return err
 	}
-	defer ac.mu.Unlock()
+	defer ac.Mu.Unlock()
 	graphHash, err := common.ParseID(id)
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)

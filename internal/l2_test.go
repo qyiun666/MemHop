@@ -105,16 +105,16 @@ func TestMergeScenesRetargetsCache(t *testing.T) {
 		t.Fatal(err)
 	}
 	ac := testDefaultContext(db)
-	ac.syncL2Meta(db, topic.ID)
+	ac.SyncL2Meta(topic.ID)
 
 	if err := db.MergeScenes(core.DefaultAgentID, common.FormatHash(primary.SceneID),
 		[]string{common.FormatHash(secondary.SceneID)}); err != nil {
 		t.Fatalf("MergeScenes: %v", err)
 	}
-	if got := ac.l2Meta.Get(topic.ID); got == nil || got.SceneID != primary.SceneID {
+	if got := ac.L2Meta.Get(topic.ID); got == nil || got.SceneID != primary.SceneID {
 		t.Fatalf("cache not retargeted: %+v", got)
 	}
-	if ids := ac.l2Meta.GetByScene(secondary.SceneID); len(ids) != 0 {
+	if ids := ac.L2Meta.GetByScene(secondary.SceneID); len(ids) != 0 {
 		t.Fatalf("merged scene still cached: %v", ids)
 	}
 }
@@ -232,8 +232,8 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ac.l2Meta.Update(index.L2MetaFromTopic(&parent))
-	ac.l2Meta.Update(index.L2MetaFromTopic(&child))
+	ac.L2Meta.Update(index.L2MetaFromTopic(&parent))
+	ac.L2Meta.Update(index.L2MetaFromTopic(&child))
 
 	if err := db.DeleteTopic(core.DefaultAgentID, common.FormatHash(parentID)); err != nil {
 		t.Fatalf("DeleteTopic: %v", err)
@@ -242,7 +242,7 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 		if topics, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id); err == nil && topics != nil {
 			t.Errorf("topic %d should be deleted", id)
 		}
-		if ac.l2Meta.Get(id) != nil {
+		if ac.L2Meta.Get(id) != nil {
 			t.Errorf("l2meta entry %d should be removed", id)
 		}
 	}
@@ -330,7 +330,7 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topic.ID, &topic); err != nil {
 			t.Fatal(err)
 		}
-		ac.l2Meta.Update(index.L2MetaFromTopic(&topic))
+		ac.L2Meta.Update(index.L2MetaFromTopic(&topic))
 	}
 
 	if err := db.DeleteScene(core.DefaultAgentID, common.FormatHash(scene.SceneID)); err != nil {
@@ -343,7 +343,7 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 		if topics, err := core.ReadTopicSlot(engine, core.DefaultAgentID, topic.ID); err == nil && topics != nil {
 			t.Errorf("topic %d should be deleted", topic.ID)
 		}
-		if ac.l2Meta.Get(topic.ID) != nil {
+		if ac.L2Meta.Get(topic.ID) != nil {
 			t.Errorf("l2meta entry %d should be removed", topic.ID)
 		}
 	}

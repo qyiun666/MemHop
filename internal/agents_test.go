@@ -231,7 +231,7 @@ func TestDeleteAgentVsLockedDomain(t *testing.T) {
 	if err := repo.UpdateProfileL0(db.engine, a, &core.ProfileSlot{Name: "inflight"}); err != nil {
 		t.Fatalf("in-flight write under the domain lock: %v", err)
 	}
-	ac.mu.Unlock()
+	ac.Mu.Unlock()
 	if err := <-done; err != nil {
 		t.Fatalf("DeleteAgent: %v", err)
 	}

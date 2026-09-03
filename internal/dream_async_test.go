@@ -51,20 +51,20 @@ func TestTriggerSceneDreamSchedulesBackground(t *testing.T) {
 	}
 	sceneID := common.HashID("scene")
 
-	ac.mu.Lock()
+	ac.Mu.Lock()
 	db.triggerSceneDream(ac, sceneID)
 	// The trigger must have returned with the Dream still running.
-	_, inFlight := ac.dreamInFlight[sceneID]
-	ac.mu.Unlock()
+	_, inFlight := ac.DreamInFlight[sceneID]
+	ac.Mu.Unlock()
 	if !inFlight {
 		t.Fatal("trigger returned but the Dream is not in flight: expected async scheduling")
 	}
 
 	// A second trigger for the same scene must be a no-op (no stacking).
-	ac.mu.Lock()
+	ac.Mu.Lock()
 	db.triggerSceneDream(ac, sceneID)
-	count := len(ac.dreamInFlight)
-	ac.mu.Unlock()
+	count := len(ac.DreamInFlight)
+	ac.Mu.Unlock()
 	if count != 1 {
 		t.Fatalf("in-flight scenes = %d, want 1 (dedup)", count)
 	}
@@ -72,9 +72,9 @@ func TestTriggerSceneDreamSchedulesBackground(t *testing.T) {
 	// The background goroutine clears the marker after RunDream exits.
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		ac.mu.Lock()
-		_, still := ac.dreamInFlight[sceneID]
-		ac.mu.Unlock()
+		ac.Mu.Lock()
+		_, still := ac.DreamInFlight[sceneID]
+		ac.Mu.Unlock()
 		if !still {
 			return
 		}
@@ -106,7 +106,7 @@ func TestOpenInitializesDreamState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ac.mu.Lock()
+	ac.Mu.Lock()
 	db.triggerSceneDream(ac, common.HashID("scene"))
-	ac.mu.Unlock()
+	ac.Mu.Unlock()
 }
