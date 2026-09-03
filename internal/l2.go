@@ -1,19 +1,17 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L2 scene operations of the internal layer: list / anchor / merge / delete
-// and the deep scene-context read.
+// L2 scene big methods of the composition root: list / anchor / merge /
+// delete and the deep scene-context read. The scene steps live in
+// internal/scene.
 
 package internal
 
 import (
-	"cmp"
-	"slices"
-
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/scene"
 )
 
 func (db *DB) ListScenes(agentID uint64) ([]core.SceneSlot, error) {
@@ -170,48 +168,10 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 	}
 	out := &SceneContext{SceneName: scenes[0].SceneName}
 	for _, t := range topics {
-		out.Topics = append(out.Topics, db.sceneContextTopic(agentID, t, children))
+		out.Topics = append(out.Topics, scene.ContextTopic(db.engine, agentID, t, children))
 	}
 	out.TopicCount = len(out.Topics)
 	return out, nil
-}
-
-// sceneContextTopic renders one topic of a scene context: its keyword track,
-// child count, and its L4 messages (unreadable archives are skipped, the id
-// ref is still reported).
-func (db *DB) sceneContextTopic(agentID uint64, t core.TopicSlot, children map[uint64]int) SceneContextTopic {
-	st := SceneContextTopic{
-		TopicID:    common.FormatHash(t.ID),
-		Depth:      int(t.Depth),
-		Keywords:   slices.Clone(t.FusedKeywords),
-		ChildCount: children[t.ID],
-		L4IDs:      make([]string, 0, len(t.L4Refs)),
-	}
-	for _, ref := range t.L4Refs {
-		st.L4IDs = append(st.L4IDs, common.FormatHash(ref))
-		arc, err := core.ReadArchiveSlot(db.engine, agentID, ref)
-		if err != nil {
-			continue
-		}
-		st.Messages = append(st.Messages, SceneMessage{Role: arc.Role, Type: arc.ContentType, Content: arc.Content, CreatedAt: arc.CreatedAt})
-	}
-	// L4Refs are persisted id-sorted, which says nothing about who spoke
-	// first; a resumed conversation still has to read question-first.
-	sortSceneMessages(st.Messages)
-	return st
-}
-
-// sortSceneMessages puts a topic's L4 messages in speaking order: by timestamp,
-// with Role breaking ties (RoleUser precedes RoleAgent) because a host may
-// stamp both sides of a turn the same millisecond and the id order that
-// L4Refs carry is arbitrary.
-func sortSceneMessages(msgs []SceneMessage) {
-	slices.SortStableFunc(msgs, func(a, b SceneMessage) int {
-		if c := cmp.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Role, b.Role)
-	})
 }
 
 // DeleteTopic removes a topic and its whole subtree (children at any
@@ -233,31 +193,10 @@ func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 	if len(topics) == 0 {
 		return common.NewError(common.ErrNotFound, "topic not found")
 	}
-	if err := pruneParentChild(ac, parsedID); err != nil {
+	if err := scene.PruneParentChild(ac, parsedID); err != nil {
 		return err
 	}
-	return deleteTopics(ac, agentID, topics, archives)
-}
-
-// pruneParentChild removes the deleted topic from its surviving parent's
-// ChildrenIDs and refreshes the parent record and L2Meta entry, so no
-// dangling child reference survives the deletion.
-func pruneParentChild(ac *domain.Context, topicID uint64) error {
-	root, err := core.ReadTopicSlot(ac.Engine, ac.ID, topicID)
-	if err != nil || root == nil || root.ParentID == nil {
-		return err
-	}
-	parentID := *root.ParentID
-	parent, err := core.ReadTopicSlot(ac.Engine, ac.ID, parentID)
-	if err != nil || parent == nil {
-		return err
-	}
-	parent.ChildrenIDs = common.RemoveOnce(parent.ChildrenIDs, topicID)
-	if err := core.WriteTopicSlot(ac.Engine, ac.ID, parentID, parent); err != nil {
-		return err
-	}
-	ac.SyncL2Meta(parentID)
-	return nil
+	return scene.DeleteTopics(ac, agentID, topics, archives)
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
@@ -295,19 +234,6 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 	// Drop the L1 scene node right away (its ID is derivable without an
 	// index); incident hyperedges are cleaned by the next Dream's rebuild.
 	if err := repo.DeleteSceneNodeL1(db.engine, agentID, sceneHash); err != nil {
-		return err
-	}
-	ac.RemoveTopicsFromIndices(topics)
-	return nil
-}
-
-// deleteTopics removes the given topics (with their L2Meta cache entries)
-// and the given archives in one engine pass.
-func deleteTopics(ac *domain.Context, agentID uint64, topics, archives []uint64) error {
-	if !repo.DeleteL2(ac.Engine, agentID, topics, repo.DeleteTopicsL2) {
-		return common.NewError(common.ErrIO, "delete topics", nil)
-	}
-	if err := repo.DeleteArchivesL4(ac.Engine, agentID, archives); err != nil {
 		return err
 	}
 	ac.RemoveTopicsFromIndices(topics)

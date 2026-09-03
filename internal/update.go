@@ -14,6 +14,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/scene"
 	"github.com/qyiun666/MemHop/internal/turn"
 )
 
@@ -84,7 +85,7 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 // threshold disables the trigger.
 func (db *DB) consolidateScene(ac *domain.Context, sceneID uint64) {
 	t := db.config.Defaults.SceneDreamTopicThreshold
-	if t <= 0 || len(sceneSurfaceTopics(ac, sceneID)) <= t {
+	if t <= 0 || len(scene.SurfaceTopics(ac, sceneID)) <= t {
 		return
 	}
 	db.triggerSceneDream(ac, sceneID)
