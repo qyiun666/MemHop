@@ -315,6 +315,62 @@ func TestUpdateReplayIsIdempotent(t *testing.T) {
 	}
 }
 
+// Replaying a turn with different texts is still one turn: the topic keeps its
+// two refs and the superseded originals are tombstoned, so L4 never holds two
+// versions of the same turn and the old wording stops surfacing in a search.
+func TestUpdateReplaySupersedesPriorArchives(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+
+	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+		t.Fatalf("first Update: %v", err)
+	}
+	revised := turnOf(sceneID, topicID)
+	revised.UserText = "rust 的借用检查器怎么工作"
+	revised.AgentText = "同一时刻只允许一个可变借用"
+	if _, err := db.Update(core.DefaultAgentID, revised); err != nil {
+		t.Fatalf("revised Update: %v", err)
+	}
+
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); n != 2 {
+		t.Fatalf("live archives = %d, want 2: the superseded pair must be tombstoned", n)
+	}
+	if res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)}); err != nil {
+		t.Fatalf("Search: %v", err)
+	} else if len(res.Topics) != 1 || len(res.Topics[0].L4Refs) != 2 {
+		t.Fatalf("topic refs after replay = %+v", res.Topics)
+	}
+	if hits, err := db.SearchL4(core.DefaultAgentID, L4Query{Keyword: "所有权规则"}); err != nil {
+		t.Fatalf("SearchL4: %v", err)
+	} else if len(hits) != 0 {
+		t.Fatalf("superseded text still searchable: %+v", hits)
+	}
+	if hits, err := db.SearchL4(core.DefaultAgentID, L4Query{Keyword: "可变借用"}); err != nil {
+		t.Fatalf("SearchL4: %v", err)
+	} else if len(hits) != 1 {
+		t.Fatalf("revised text should be the surviving archive, got %+v", hits)
+	}
+}
+
+// The content type arrives with the turn, so Update owns its validity: an
+// undefined value is rejected at the boundary instead of being stored as a
+// type no reader can name.
+func TestUpdateRejectsUndefinedContentType(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+
+	in := turnOf(sceneID, topicID)
+	in.UserType = ContentType(7)
+	if _, err := db.Update(core.DefaultAgentID, in); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("undefined user type: want ErrInvalidQuery, got %v", err)
+	}
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); n != 0 {
+		t.Fatalf("rejected turn wrote %d archives, want 0", n)
+	}
+}
+
 // Update is the only L4 write path, so it is also where a non-text turn gets
 // its type: the slot is archived under the declared content type while the
 // other side keeps the text default, and the scene read reports it back.

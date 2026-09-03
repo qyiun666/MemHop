@@ -134,6 +134,34 @@ func TestSurfaceL0Profile(t *testing.T) {
 	}
 }
 
+// The distilled half of the profile is read-only on the host surface: a write
+// carrying emotion / MBTI values or its own timestamp cannot smuggle them in,
+// because Dream evolves the first two and the library stamps the last.
+func TestSurfaceL0DistilledHalfIsReadOnly(t *testing.T) {
+	db := openSurfaceDB(t)
+	if err := db.UpdateL0(&ProfileSlot{
+		Name:         "host",
+		EmotionState: internal.EmotionScore{Valence: 0.9},
+		MBTI:         internal.MBTIScore{Type: "SMUGGLED"},
+		UpdatedAtMs:  12345,
+	}); err != nil {
+		t.Fatalf("UpdateL0: %v", err)
+	}
+	got, err := db.GetL0()
+	if err != nil {
+		t.Fatalf("GetL0: %v", err)
+	}
+	if got.Name != "host" {
+		t.Fatalf("host field lost: %+v", got)
+	}
+	if got.EmotionState.Valence != 0 || got.MBTI.Type != "" {
+		t.Fatalf("caller-supplied distilled fields were written: %+v", got)
+	}
+	if got.UpdatedAtMs == 12345 || got.UpdatedAtMs == 0 {
+		t.Fatalf("UpdatedAtMs must be stamped by the library, got %d", got.UpdatedAtMs)
+	}
+}
+
 // Closed-instance contract: after Close every domain operation is rejected
 // with ErrClosed rather than touching a released engine.
 func TestSurfaceClosedContract(t *testing.T) {

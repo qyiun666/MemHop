@@ -93,12 +93,19 @@ func finalizeCompressResult(result *CompressResult) {
 	}
 }
 
-// DeleteL2 batch-deletes: num==1 treats ids as scene IDs (all topics of the
-// scene plus the scene record itself); num==2 treats them as topic IDs.
-func DeleteL2(engine *core.StorageEngine, agentID uint64, ids []uint64, num uint8) bool {
+// Delete targets of DeleteL2.
+const (
+	DeleteScenesL2 uint8 = iota + 1 // ids are scenes: their topics at every depth, then the scene records
+	DeleteTopicsL2                  // ids are topics
+)
+
+// DeleteL2 batch-deletes: DeleteScenesL2 treats ids as scene IDs (all topics
+// of the scene plus the scene record itself); DeleteTopicsL2 treats them as
+// topic IDs.
+func DeleteL2(engine *core.StorageEngine, agentID uint64, ids []uint64, target uint8) bool {
 	var targets []uint64
-	switch num {
-	case 1: // scenes
+	switch target {
+	case DeleteScenesL2: // scenes
 		sceneSet := common.ToSet(ids)
 		for _, topic := range core.CollectAllTopics(engine, agentID) {
 			if _, ok := sceneSet[topic.SceneID]; ok {
@@ -106,7 +113,7 @@ func DeleteL2(engine *core.StorageEngine, agentID uint64, ids []uint64, num uint
 			}
 		}
 		targets = append(targets, ids...) // the scene records themselves
-	case 2: // topics
+	case DeleteTopicsL2: // topics
 		idSet := common.ToSet(ids)
 		for _, topic := range core.CollectAllTopics(engine, agentID) {
 			if _, ok := idSet[topic.ID]; ok {
@@ -141,7 +148,7 @@ func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64,
 			return false
 		}
 	}
-	return DeleteL2(engine, agentID, secondaryIDs, 1)
+	return DeleteL2(engine, agentID, secondaryIDs, DeleteScenesL2)
 }
 
 // OpenSceneTurn records one Search read of a scene and opens the turn it
@@ -240,29 +247,6 @@ func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) []core.Scene
 		out[i].TopicCount = counts[out[i].SceneID]
 	}
 	return out
-}
-
-// RecoverDeletedScenesL2 re-appends the pre-delete payload of every L2
-// scene record whose newest frame is a tombstone, returning the restored
-// scene IDs. Frames reclaimed by compaction cannot be recovered.
-func RecoverDeletedScenesL2(engine *core.StorageEngine, agentID uint64) ([]uint64, error) {
-	payloads, err := engine.ScanDeletedPayloads(agentID, core.RecL2Scene)
-	if err != nil {
-		return nil, err
-	}
-	if len(payloads) == 0 {
-		return nil, nil
-	}
-	writes := make([]core.RecordEntry, 0, len(payloads))
-	ids := make([]uint64, 0, len(payloads))
-	for id, data := range payloads {
-		writes = append(writes, core.RecordEntry{AgentID: agentID, RecordType: core.RecL2Scene, IDHash: id, Data: data})
-		ids = append(ids, id)
-	}
-	if _, err := engine.WriteRecordBatch(writes); err != nil {
-		return nil, err
-	}
-	return ids, nil
 }
 
 // TopicClosureL2 gathers a topic, its recursive children (any depth) and the L4

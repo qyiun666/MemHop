@@ -25,7 +25,6 @@ type agentContext struct {
 	plans         *planCache          // L6 plan->nodes/events aggregate (no engine scan per op)
 	dreamInFlight map[uint64]struct{} // scenes with a scheduled background Dream
 
-	lastDreamAt  atomic.Int64 // Unix ms of the last successful Dream (0 = never)
 	lastActiveAt atomic.Int64 // Unix ms of the last context access (idle sweep)
 	deleted      atomic.Bool  // DeleteAgent tombstone: contextFor rejects a destroyed domain
 

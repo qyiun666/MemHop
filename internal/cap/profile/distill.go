@@ -76,6 +76,12 @@ func SampleRank(s core.DistillSample, nowMs int64) float64 {
 func MergeDistill(engine *core.StorageEngine, agentID uint64, emo core.EmotionScore, mbti core.MBTIScore, personality string) error {
 	slot, err := repo.GetProfileL0(engine, agentID)
 	if err != nil {
+		// Only a profile that was never written seeds a default one: treating a
+		// transient read failure as "absent" would rewrite the profile from an
+		// empty slot and drop the host-owned fields.
+		if common.CodeOf(err) != common.ErrNotFound {
+			return err
+		}
 		slot = Default()
 	}
 	slot.EmotionState = emo

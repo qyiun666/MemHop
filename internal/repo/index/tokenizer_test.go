@@ -51,15 +51,6 @@ func TestTokenize(t *testing.T) {
 	})
 }
 
-func TestTokenizeWords(t *testing.T) {
-	tokens := TokenizeWords("the quick brown fox")
-	assertContains(t, tokens, "the") // stop words kept
-
-	// camelCase still split in TokenizeWords
-	tokens2 := TokenizeWords("fetchUserData")
-	assertContains(t, tokens2, "fetch")
-}
-
 func TestTokenizeChineseRegression(t *testing.T) {
 	// CJK text must produce multiple tokens, not the whole string as one.
 	tokens := Tokenize("人工智能记忆系统")

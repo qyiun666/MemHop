@@ -18,8 +18,9 @@ import (
 // originals become L4 archives under a depth-1 topic whose keywords come from
 // a single distillation call. The distill runs before any write, so a failed
 // LLM call leaves the scene exactly as it was — no orphan archive, no
-// contentless topic. Settling the same topic id twice rewrites that turn
-// instead of duplicating it, so a host may retry a timed-out Update safely.
+// contentless topic. Settling the same topic id twice rewrites that turn: the
+// topic ends pointing at the new pair and the archives it no longer references
+// are tombstoned, so a retry that changed the texts leaves nothing behind.
 func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -47,6 +48,12 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	if len(keywords) == 0 {
 		return 0, common.NewError(common.ErrLLM, "turn distillation produced no keywords", nil)
 	}
+	// The topic rewrite below clears L4Refs, so the refs of an earlier settle
+	// of this same turn must be read first: they are what this turn supersedes.
+	previous, err := turnL4Refs(db.engine, agentID, topicID)
+	if err != nil {
+		return 0, err
+	}
 	if !repo.CreateTurnTopicL2(db.engine, agentID, sceneID, topicID, keywords, in.UserTS, in.AgentTS) {
 		return 0, common.NewError(common.ErrIO, "create turn topic", nil)
 	}
@@ -57,9 +64,42 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, topicID, refs) {
 		return 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
 	}
+	if dropped := dropRetained(previous, refs); len(dropped) > 0 {
+		if err := repo.DeleteArchivesL4(db.engine, agentID, dropped); err != nil {
+			return 0, err
+		}
+	}
 	ac.syncL2Meta(db, topicID)
 	db.consolidateScene(ac, sceneID)
 	return topicID, nil
+}
+
+// turnL4Refs returns the L4 refs stored on a turn topic; a topic that does not
+// exist yet (the first settle of a turn) yields nil.
+func turnL4Refs(engine *core.StorageEngine, agentID, topicID uint64) ([]uint64, error) {
+	topic, err := core.ReadTopicLenient(engine, agentID, topicID)
+	if err != nil {
+		if common.CodeOf(err) == common.ErrNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if topic == nil {
+		return nil, nil
+	}
+	return topic.L4Refs, nil
+}
+
+// dropRetained yields the ids of before that no longer appear in after.
+func dropRetained(before, after []uint64) []uint64 {
+	keep := common.ToSet(after)
+	var out []uint64
+	for _, id := range before {
+		if _, ok := keep[id]; !ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // turnTargets validates a turn's payload and resolves the scene it settles
@@ -73,6 +113,9 @@ func turnTargets(in TurnUpdate) (uint64, uint64, error) {
 	}
 	if in.AgentTS < in.UserTS {
 		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires the agent timestamp not earlier than the user timestamp")
+	}
+	if !in.UserType.Valid() || !in.AgentType.Valid() {
+		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires a defined content type on both sides")
 	}
 	sceneID, err := common.ParseID(in.SceneID)
 	if err != nil {

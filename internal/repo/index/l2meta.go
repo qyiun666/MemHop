@@ -99,12 +99,6 @@ func (idx *L2MetaIndex) Len() int {
 	return len(idx.entries)
 }
 
-func (idx *L2MetaIndex) IsEmpty() bool {
-	idx.mu.RLock()
-	defer idx.mu.RUnlock()
-	return len(idx.entries) == 0
-}
-
 // Iter iterates over all entries as a pull iterator; the read lock is held
 // for the whole loop, so yields must not call back into the index.
 func (idx *L2MetaIndex) Iter() iter.Seq2[uint64, *L2Meta] {

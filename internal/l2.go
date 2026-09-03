@@ -97,7 +97,7 @@ func (db *DB) SetSceneName(agentID uint64, sceneID string, name string) error {
 	}
 	slot, err := core.ReadSceneSlot(db.engine, agentID, sceneHash)
 	if err != nil {
-		return common.NewError(common.ErrNotFound, "scene not found")
+		return err
 	}
 	slot.SceneName = name
 	return core.WriteSceneSlot(db.engine, agentID, sceneHash, slot)
@@ -196,10 +196,21 @@ func (db *DB) sceneContextTopic(agentID uint64, t core.TopicSlot, children map[u
 	}
 	// L4Refs are persisted id-sorted, which says nothing about who spoke
 	// first; a resumed conversation still has to read question-first.
-	slices.SortStableFunc(st.Messages, func(a, b SceneMessage) int {
-		return cmp.Compare(a.CreatedAt, b.CreatedAt)
-	})
+	sortSceneMessages(st.Messages)
 	return st
+}
+
+// sortSceneMessages puts a topic's L4 messages in speaking order: by timestamp,
+// with Role breaking ties (RoleUser precedes RoleAgent) because a host may
+// stamp both sides of a turn the same millisecond and the id order that
+// L4Refs carry is arbitrary.
+func sortSceneMessages(msgs []SceneMessage) {
+	slices.SortStableFunc(msgs, func(a, b SceneMessage) int {
+		if c := cmp.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Role, b.Role)
+	})
 }
 
 // DeleteTopic removes a topic and its whole subtree (children at any
@@ -262,7 +273,7 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 		return common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
 	if _, err := core.ReadSceneSlot(db.engine, agentID, sceneHash); err != nil {
-		return common.NewError(common.ErrNotFound, "scene not found")
+		return err
 	}
 	var (
 		topics   []uint64
@@ -274,7 +285,7 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 			archives = append(archives, t.L4Refs...)
 		}
 	}
-	if !repo.DeleteL2(db.engine, agentID, []uint64{sceneHash}, 1) {
+	if !repo.DeleteL2(db.engine, agentID, []uint64{sceneHash}, repo.DeleteScenesL2) {
 		return common.NewError(common.ErrIO, "delete scene", nil)
 	}
 	if err := repo.DeleteArchivesL4(db.engine, agentID, common.DedupSorted(archives)); err != nil {
@@ -292,7 +303,7 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 // deleteTopics removes the given topics (with their L2Meta cache entries)
 // and the given archives in one engine pass.
 func (ac *agentContext) deleteTopics(db *DB, agentID uint64, topics, archives []uint64) error {
-	if !repo.DeleteL2(db.engine, agentID, topics, 2) {
+	if !repo.DeleteL2(db.engine, agentID, topics, repo.DeleteTopicsL2) {
 		return common.NewError(common.ErrIO, "delete topics", nil)
 	}
 	if err := repo.DeleteArchivesL4(db.engine, agentID, archives); err != nil {

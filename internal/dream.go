@@ -60,7 +60,6 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 	if err := db.dreamStructureStages(ctx, agentID, ac, rep); err != nil {
 		return rep, err
 	}
-	ac.lastDreamAt.Store(time.Now().UnixMilli()) // direct store: peekContext would take agentsMu under ac.mu (lock-order cycle)
 	return rep, nil
 }
 
@@ -195,6 +194,10 @@ func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agen
 	if err := db.dreamL1Stages(ctx, agentID, newL2Meta, &decayParams, rep); err != nil {
 		return err
 	}
+	// Install the rebuilt cache as soon as the stages that produced it are
+	// done: L0 distillation only writes the profile and L1 emotions, so a
+	// failed LLM call there must not throw the whole rebuild away.
+	ac.l2Meta = newL2Meta
 
 	// Stage 5: L0 distillation (LLM emotion/MBTI, backfilled into L1).
 	start = time.Now()
@@ -208,13 +211,7 @@ func (db *DB) dreamStructureStages(ctx context.Context, agentID uint64, ac *agen
 		}
 	}
 	rep.Stages = append(rep.Stages, DreamStage{Name: "l0_distill", Status: status, DurationMs: time.Since(start).Milliseconds()})
-	if dErr != nil {
-		return dErr
-	}
-
-	// Final: install the rebuilt cache into the agent context.
-	ac.l2Meta = newL2Meta
-	return nil
+	return dErr
 }
 
 // dreamL1Stages runs the L1 portion of the pipeline: scene nodes synced
@@ -383,8 +380,9 @@ func (db *DB) applyGroups(ctx context.Context, agentID uint64, sceneID uint64, t
 
 // applyOneGroup consolidates a single merge group: stores MergedSummary as
 // an L4 dream archive, extracts keywords for the fused topic, creates the
-// parent topic with the archive ref, then sinks the group nodes. Any failed
-// step skips the group (logged) and reports false.
+// parent topic with the archive ref, then sinks the group nodes. A failed step
+// rolls back what this group already wrote and reports false, so a group is
+// either fully applied or leaves nothing behind.
 func (db *DB) applyOneGroup(ctx context.Context, agentID uint64, sceneID uint64, g L2Group, minTS, maxTS int64) bool {
 	parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
 	archiveID, err := repo.AppendArchiveL4(db.engine, agentID, parentID, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
@@ -397,23 +395,40 @@ func (db *DB) applyOneGroup(ctx context.Context, agentID uint64, sceneID uint64,
 	keywords, err := llmops.ExtractKeywords(ctx, db.llm, g.MergedSummary)
 	if err != nil || len(keywords) == 0 {
 		slog.Warn("dream: extract keywords from merged summary failed, skip group", "parent", common.FormatHash(parentID), "err", err)
+		db.discardFusedGroup(agentID, parentID, archiveID)
 		return false
 	}
 
 	if !repo.CreateFusedTopicL2(db.engine, agentID, sceneID, keywords, minTS, maxTS, g.NodeHashes) {
 		slog.Warn("dream: create fused topic failed", "parent", common.FormatHash(parentID))
+		db.discardFusedGroup(agentID, parentID, archiveID)
 		return false
 	}
 	// Attach the summary archive ref so the host can pull the fused text back.
 	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, parentID, []uint64{archiveID}) {
 		slog.Warn("dream: attach summary archive ref failed", "parent", common.FormatHash(parentID))
+		db.discardFusedGroup(agentID, parentID, archiveID)
 		return false
 	}
 	if _, err := repo.CompressTopicsL2(db.engine, agentID, g.NodeHashes, parentID); err != nil {
 		slog.Warn("dream: compress child topics failed", "parent", common.FormatHash(parentID), "err", err)
+		db.discardFusedGroup(agentID, parentID, archiveID)
 		return false
 	}
 	return true
+}
+
+// discardFusedGroup rolls back a partially applied merge group: no orphan
+// summary archive and no fused parent sitting above children that were never
+// sunk. Rollback failures only warn — the children stay at depth 1, so the next
+// Dream re-picks the group.
+func (db *DB) discardFusedGroup(agentID, parentID, archiveID uint64) {
+	if !repo.DeleteL2(db.engine, agentID, []uint64{parentID}, repo.DeleteTopicsL2) {
+		slog.Warn("dream: rollback fused topic failed", "parent", common.FormatHash(parentID))
+	}
+	if err := repo.DeleteArchivesL4(db.engine, agentID, []uint64{archiveID}); err != nil {
+		slog.Warn("dream: rollback summary archive failed", "parent", common.FormatHash(parentID), "err", err)
+	}
 }
 
 func (db *DB) groupTimestamps(nodeHashes []uint64, byID map[uint64]core.TopicSlot) (minTS, maxTS int64, ok bool) {

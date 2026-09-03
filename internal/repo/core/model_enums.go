@@ -28,6 +28,13 @@ var contentTypeNames = map[ContentType]string{
 
 func (c ContentType) String() string { return common.EnumString(c, contentTypeNames, "ContentType") }
 
+// Valid reports whether c is one of the defined content types. The names table
+// is the single source of truth, so adding a type needs no second edit here.
+func (c ContentType) Valid() bool {
+	_, ok := contentTypeNames[c]
+	return ok
+}
+
 // CapabilityStatus represents the lifecycle state of an L5 capability.
 type CapabilityStatus uint8
 

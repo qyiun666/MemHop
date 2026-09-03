@@ -122,13 +122,6 @@ func (e *StorageEngine) IterAgents() iter.Seq[uint64] {
 	}
 }
 
-// AgentRecordCount returns the number of live records in one agent domain.
-func (e *StorageEngine) AgentRecordCount(agentID uint64) uint32 {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return uint32(len(e.index[agentID]))
-}
-
 func (e *StorageEngine) RecordCount() uint32 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()

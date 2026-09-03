@@ -51,7 +51,10 @@ func (s *Session) GetL0() (*ProfileSlot, error) {
 	return &out, nil
 }
 
-// UpdateL0 writes a public profile to the internal store.
+// UpdateL0 writes the host-owned profile fields (Name / Role / Personality /
+// Preferences). The two fields Dream evolves — EmotionState and MBTI — are kept
+// from the stored profile, and UpdatedAtMs is stamped by the library, so a
+// profile edit never wipes the distilled half.
 func (s *Session) UpdateL0(slot *ProfileSlot) error {
 	if slot == nil {
 		return internal.NewError(internal.ErrInvalidQuery, "UpdateL0: slot is required")
@@ -84,12 +87,6 @@ func (s *Session) ListScenesByL3(l3ID string) ([]SceneSlot, error) {
 		out[i] = fromSceneSlot(sc)
 	}
 	return out, nil
-}
-
-// SetSceneL3ID anchors a scene to an L3 domain with hex IDs. Write-once by
-// default; force=true corrects a mis-anchor, an empty l3ID clears it.
-func (s *Session) SetSceneL3ID(sceneID, l3ID string, force bool) error {
-	return s.Session.SetSceneL3ID(sceneID, l3ID, force)
 }
 
 // GetL3 returns an L3 graph with hex IDs.
@@ -288,12 +285,6 @@ func (s *Session) PlanState(planID string) (*PlanTree, error) {
 	}
 	out := fromPlanTree(t)
 	return &out, nil
-}
-
-// PlanReplace wipes a plan's nodes and bound events for re-planning,
-// keeping the planID; a non-empty rootTitle seeds a titled pending root.
-func (s *Session) PlanReplace(planID, rootTitle string) error {
-	return s.Session.PlanReplace(planID, rootTitle)
 }
 
 // ListPlans summarizes every plan of the agent domain (restart recovery).

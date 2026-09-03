@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Offline interface tests: exercise the public API surface through
-// memhop.OpenWithEncoder with a mock encoder and a mock OpenAI-compatible
-// LLM server. No external services required; run with `go test ./test/...`.
+// api.OpenMulti against a mock OpenAI-compatible LLM server. No external
+// services required; run with `go test ./test/...`.
 
 package test
 

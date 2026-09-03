@@ -92,6 +92,8 @@ const (
 
 // ---- L4 content type constants ----
 
+// These are the only valid ContentType values; Update rejects a turn whose
+// user_type or agent_type is anything else.
 const (
 	ContentText     = internal.ContentText
 	ContentImage    = internal.ContentImage

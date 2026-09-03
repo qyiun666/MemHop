@@ -283,7 +283,8 @@ func (db *DB) ListPlans(agentID uint64) ([]PlanSummary, error) {
 // PlanNode is the host-supplied full plan tree for SyncPlanTree; NodePath is
 // assigned by the host (meowagent keeps a monotonic ChildSeq allocator), and a
 // child's path must extend its parent's. Status is the string surface
-// (pending/in_progress/running/done/failed; "" defaults to pending).
+// (pending/in_progress/running/done/failed); a blank Title/PlanType/Status/
+// Summary inherits the stored node instead of clearing it.
 type PlanNode struct {
 	NodePath string
 	Title    string
@@ -295,8 +296,10 @@ type PlanNode struct {
 
 // SyncPlanTree replaces a whole plan tree from the host's authoritative
 // snapshot. It mutates only node structure/fields (add missing nodes, update
-// title/type/status/summary, delete vanished nodes with their bound events)
-// and never produces a plan_step event nor touches the event Seq space. A node
+// the fields the snapshot fills, delete vanished nodes with their bound events)
+// and never produces a plan_step event nor touches the event Seq space. A blank
+// Title/PlanType/Status/Summary inherits that node's stored value, so a partial
+// snapshot never rewinds a completed step or erases a folded summary. A node
 // reaches a terminal status via its input Status and records FinishedAt once.
 // The planID is preserved so host references survive a re-plan.
 func (db *DB) SyncPlanTree(agentID uint64, planID string, root *PlanNode) error {
@@ -346,8 +349,9 @@ func (db *DB) SyncPlanTree(agentID uint64, planID string, root *PlanNode) error 
 
 // syncPlanNodeLocked writes one PlanNode (then, depth-first, its children)
 // without appending any event. ensurePlanNode guarantees the parent chain
-// exists; the node's own fields are then overwritten from the input, and a
-// terminal input Status records FinishedAt exactly once.
+// exists; a field the input leaves blank inherits the stored value, so a
+// partial snapshot never rewinds a completed step or erases a folded summary.
+// A terminal input Status records FinishedAt exactly once.
 func (db *DB) syncPlanNodeLocked(ac *agentContext, agentID, planID uint64, n *PlanNode) error {
 	nodeID, err := db.ensurePlanNode(ac, agentID, planID, n.NodePath)
 	if err != nil {
@@ -359,17 +363,23 @@ func (db *DB) syncPlanNodeLocked(ac *agentContext, agentID, planID uint64, n *Pl
 	}
 	status := n.Status
 	if status == "" {
-		status = PlanPending
+		status = statusToString(node.Status)
 	}
 	u8, err := toStatusU8(status)
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "invalid status for "+n.NodePath, err)
 	}
 	now := time.Now().UnixMilli()
-	node.Title = n.Title
-	node.PlanType = n.PlanType
+	if n.Title != "" {
+		node.Title = n.Title
+	}
+	if n.PlanType != "" {
+		node.PlanType = n.PlanType
+	}
+	if n.Summary != "" {
+		node.Summary = n.Summary
+	}
 	node.Status = u8
-	node.Summary = n.Summary
 	if isTerminalStatus(u8) && node.FinishedAt == 0 {
 		node.FinishedAt = now
 	}

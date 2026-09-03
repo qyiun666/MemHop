@@ -668,6 +668,60 @@ func TestSyncPlanTree_AddEditDelete(t *testing.T) {
 	}
 }
 
+// A partial snapshot must never rewind finished work: the fields the host
+// leaves blank inherit what is stored, so re-syncing a tree without re-sending
+// every field keeps a done step done and keeps a folded summary intact.
+func TestSyncPlanTreeInheritsBlankFields(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	planID := common.FormatHash(11)
+	full := &PlanNode{
+		NodePath: "1", Title: "research", PlanType: "plan", Status: PlanDone,
+		Summary: "folded: three findings",
+		Children: []PlanNode{
+			{NodePath: "1.1", Title: "read", PlanType: "step", Status: PlanDone, Summary: "read 5 papers"},
+		},
+	}
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, full); err != nil {
+		t.Fatal(err)
+	}
+
+	blank := &PlanNode{NodePath: "1", Children: []PlanNode{{NodePath: "1.1"}}}
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, blank); err != nil {
+		t.Fatal(err)
+	}
+
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := tree.Roots[0]
+	if root.Status != PlanDone || root.Title != "research" || root.Type != "plan" ||
+		root.Summary != "folded: three findings" {
+		t.Fatalf("blank snapshot rewrote stored fields: %+v", root)
+	}
+	child := root.Children[0]
+	if child.Status != PlanDone || child.Summary != "read 5 papers" {
+		t.Fatalf("blank snapshot rewound a done child: %+v", child)
+	}
+	if root.FinishedAt == 0 {
+		t.Fatal("terminal status lost its FinishedAt")
+	}
+	// An explicit value still wins over the stored one.
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, &PlanNode{
+		NodePath: "1", Title: "renamed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tree, err = db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Roots[0].Title != "renamed" || tree.Roots[0].Status != PlanDone {
+		t.Fatalf("explicit update ignored or status rewound: %+v", tree.Roots[0])
+	}
+}
+
 func TestSyncPlanTree_NoEventProduced(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()

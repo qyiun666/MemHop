@@ -44,11 +44,19 @@ func DeleteArchivesL4(engine *core.StorageEngine, agentID uint64, ids []uint64) 
 	return nil
 }
 
-// QueryArchiveL4 queries archives: num==1 keyword substring match, num==2
-// time range [start, end] sorted by CreatedAt, num==3 by id (missing skipped).
-func QueryArchiveL4(engine *core.StorageEngine, agentID uint64, num uint8, keyword string, start, end int64, ids []uint64) []core.ArchiveSlot {
-	switch num {
-	case 1: // keyword
+// Archive query modes of QueryArchiveL4.
+const (
+	ArchiveByKeyword uint8 = iota + 1 // substring match on Content
+	ArchiveByTime                     // created within [start, end], sorted
+	ArchiveByID                       // by id, missing ids skipped
+)
+
+// QueryArchiveL4 queries archives by the given mode: ArchiveByKeyword
+// (substring match), ArchiveByTime (range [start, end] sorted by CreatedAt) or
+// ArchiveByID (missing ids skipped).
+func QueryArchiveL4(engine *core.StorageEngine, agentID uint64, mode uint8, keyword string, start, end int64, ids []uint64) []core.ArchiveSlot {
+	switch mode {
+	case ArchiveByKeyword:
 		var out []core.ArchiveSlot
 		for _, arc := range core.CollectAllArchives(engine, agentID) {
 			if strings.Contains(arc.Content, keyword) {
@@ -56,7 +64,7 @@ func QueryArchiveL4(engine *core.StorageEngine, agentID uint64, num uint8, keywo
 			}
 		}
 		return out
-	case 2: // time range
+	case ArchiveByTime:
 		var out []core.ArchiveSlot
 		for _, arc := range core.CollectAllArchives(engine, agentID) {
 			if arc.CreatedAt >= start && arc.CreatedAt <= end {
@@ -67,7 +75,7 @@ func QueryArchiveL4(engine *core.StorageEngine, agentID uint64, num uint8, keywo
 			return cmp.Compare(a.CreatedAt, b.CreatedAt)
 		})
 		return out
-	case 3: // by id
+	case ArchiveByID:
 		var out []core.ArchiveSlot
 		for _, idHash := range ids {
 			arc, err := core.ReadArchiveSlot(engine, agentID, idHash)

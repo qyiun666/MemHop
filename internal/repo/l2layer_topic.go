@@ -126,9 +126,3 @@ func UpdateTopicL4RefsL2(engine *core.StorageEngine, agentID uint64, id uint64, 
 		t.L4Refs = common.DedupSorted(append(t.L4Refs, l4Refs...))
 	})
 }
-
-func UpdateChildrenL2(engine *core.StorageEngine, agentID uint64, id uint64, childrenIDs []uint64) bool {
-	return mutateTopic(engine, agentID, id, func(t *core.TopicSlot) {
-		t.ChildrenIDs = childrenIDs
-	})
-}

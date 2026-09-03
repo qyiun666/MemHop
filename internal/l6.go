@@ -385,9 +385,10 @@ func (db *DB) updatePlanNodeSummaryLocked(ac *agentContext, agentID, nodeID uint
 // (L6 → L5), keyed by the topic id Search issued for that turn — or by a plan
 // id, when the host bound these turns' events to a plan tree. The LLM
 // receives the existing capability catalog so repeated crystallization
-// reuses or merges instead of duplicating. The whole pipeline runs under
-// the agent's domain lock; the LLM call holds no storage lock beyond the
-// engine's own short-lived record locks.
+// reuses or merges instead of duplicating. The whole pipeline holds the
+// domain lock, exactly as Update and Dream do: another operation on this
+// agent waits (so a slow LLM round-trip stalls same-domain writes), while
+// other domains stay parallel.
 func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*CrystallizeResult, error) {
 	ac, parsed, err := db.lockSession(agentID, turnID)
 	if err != nil {
@@ -410,7 +411,7 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 	}
 	result := &CrystallizeResult{CreatedIDs: []string{}, ReusedIDs: []string{}, MergedIDs: []string{}}
 	for _, cand := range out.Capabilities {
-		if err := db.applyCrystallizeCandidate(agentID, cand, turnID, result); err != nil {
+		if err := db.applyCrystallizeCandidate(agentID, cand, result); err != nil {
 			return nil, err
 		}
 	}
@@ -455,7 +456,7 @@ func readTurn(engine *core.StorageEngine, agentID uint64, ac *agentContext, sess
 // ReuseID, so their payload may be minimal (a reuse decision does not
 // require a full type/resources); only create candidates run the complete
 // import validation, otherwise the candidate is recorded as skipped.
-func (db *DB) applyCrystallizeCandidate(agentID uint64, cand CrystallizeCapability, sessionID string, result *CrystallizeResult) error {
+func (db *DB) applyCrystallizeCandidate(agentID uint64, cand CrystallizeCapability, result *CrystallizeResult) error {
 	action := strings.ToLower(strings.TrimSpace(cand.Action))
 	detail := CrystallizeDetail{Name: cand.Capability.Name}
 	if action != "reuse" && action != "merge" {
@@ -467,7 +468,7 @@ func (db *DB) applyCrystallizeCandidate(agentID uint64, cand CrystallizeCapabili
 			return nil
 		}
 	}
-	id, disposition, err := db.applyCrystallizedCapability(agentID, cand, sessionID)
+	id, disposition, err := db.applyCrystallizedCapability(agentID, cand)
 	if err != nil {
 		return err
 	}
@@ -485,7 +486,7 @@ func (db *DB) applyCrystallizeCandidate(agentID uint64, cand CrystallizeCapabili
 	return nil
 }
 
-func (db *DB) applyCrystallizedCapability(agentID uint64, cand CrystallizeCapability, sessionID string) (string, string, error) {
+func (db *DB) applyCrystallizedCapability(agentID uint64, cand CrystallizeCapability) (string, string, error) {
 	now := time.Now().UnixMilli()
 	action := strings.ToLower(strings.TrimSpace(cand.Action))
 	if action == "" {
@@ -496,7 +497,11 @@ func (db *DB) applyCrystallizedCapability(agentID uint64, cand CrystallizeCapabi
 	// Name is the canonical identity. A create candidate whose name already
 	// exists is always treated as reuse: crystallization must never silently
 	// overwrite an active capability.
-	if existing, id, ok := db.findCrystallizeTarget(agentID, cap, cand.ReuseID); ok {
+	existing, id, found, err := db.findCrystallizeTarget(agentID, cap, cand.ReuseID)
+	if err != nil {
+		return "", "", err
+	}
+	if found {
 		if action == "merge" {
 			capability.MergeDefinition(existing, cap, now)
 			if _, err := repo.UpsertCapabilityL5(db.engine, agentID, existing); err != nil {
@@ -514,19 +519,31 @@ func (db *DB) applyCrystallizedCapability(agentID uint64, cand CrystallizeCapabi
 
 // findCrystallizeTarget locates an existing capability by name ID (canonical
 // identity) then explicit ReuseID. found=false means a new record must be
-// created.
-func (db *DB) findCrystallizeTarget(agentID uint64, cap *core.Capability, reuseID string) (*core.Capability, string, bool) {
+// created. Only a genuine "no such capability" says so: treating a transient
+// read failure as absent would re-create an existing card and drop its usage
+// counters. A malformed ReuseID (LLM-supplied) is ignored, not fatal.
+func (db *DB) findCrystallizeTarget(agentID uint64, cap *core.Capability, reuseID string) (*core.Capability, string, bool, error) {
 	nameIDHash := core.CapabilityID(cap.Name)
-	if existing, err := repo.GetCapabilityL5(db.engine, agentID, nameIDHash); err == nil {
-		return existing, common.FormatHash(nameIDHash), true
+	existing, err := repo.GetCapabilityL5(db.engine, agentID, nameIDHash)
+	if err == nil {
+		return existing, common.FormatHash(nameIDHash), true, nil
 	}
-	if reuseID != "" {
-		reuseHash, err := common.ParseID(reuseID)
-		if err == nil {
-			if existing, err := repo.GetCapabilityL5(db.engine, agentID, reuseHash); err == nil {
-				return existing, common.FormatHash(existing.IDHash), true
-			}
+	if common.CodeOf(err) != common.ErrNotFound {
+		return nil, "", false, err
+	}
+	if reuseID == "" {
+		return nil, "", false, nil
+	}
+	reuseHash, err := common.ParseID(reuseID)
+	if err != nil {
+		return nil, "", false, nil
+	}
+	existing, err = repo.GetCapabilityL5(db.engine, agentID, reuseHash)
+	if err != nil {
+		if common.CodeOf(err) != common.ErrNotFound {
+			return nil, "", false, err
 		}
+		return nil, "", false, nil
 	}
-	return nil, "", false
+	return existing, common.FormatHash(existing.IDHash), true, nil
 }

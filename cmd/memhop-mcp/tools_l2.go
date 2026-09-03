@@ -54,7 +54,7 @@ func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_profile_update",
-		Description: "更新 L0 宿主画像的名称、角色、个性与偏好四项。UpdateL0 本身是全量覆盖，所以本工具先读回现画像、只替换这四项，情绪状态与 MBTI 倾向按库内现值保留。",
+		Description: "更新 L0 宿主画像的名称、角色、个性与偏好四项。Dream 蒸馏出的情绪状态与 MBTI 倾向由库内按现值保留，画像更新时间由库内戳写，本工具不碰这两项。",
 		InputSchema: objSchema(map[string]any{
 			"name":        strProp("宿主名称"),
 			"role":        strProp("角色定位"),
@@ -62,17 +62,11 @@ func registerProfileTools(s *mcp.Server, db *memhop.Session) {
 			"preferences": mapProp("偏好键值对"),
 		}),
 	}, handle[profileUpdateArgs, updateResult](func(a profileUpdateArgs) (updateResult, error) {
-		cur, err := db.GetL0()
-		if err != nil {
-			return updateResult{}, err
-		}
 		return updateResult{OK: true}, db.UpdateL0(&memhop.ProfileSlot{
-			Name:         a.Name,
-			Role:         a.Role,
-			Personality:  a.Personality,
-			Preferences:  a.Preferences,
-			EmotionState: cur.EmotionState,
-			MBTI:         cur.MBTI,
+			Name:        a.Name,
+			Role:        a.Role,
+			Personality: a.Personality,
+			Preferences: a.Preferences,
 		})
 	}))
 }

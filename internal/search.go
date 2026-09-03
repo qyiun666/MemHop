@@ -47,7 +47,10 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	slot := db.readProfile(agentID)
+	slot, err := db.readProfile(agentID)
+	if err != nil {
+		return nil, err
+	}
 	topics := ac.sceneSurfaceTopics(scene.SceneID)
 	// TopicCount is derived, never stored: the scene's depth-1 set is exactly
 	// what ListScenes counts, so the read fills the same number from the
@@ -146,10 +149,16 @@ func (ac *agentContext) sceneSurfaceTopics(sceneID uint64) []core.TopicSlot {
 	return out
 }
 
-func (db *DB) readProfile(agentID uint64) core.ProfileSlot {
+// readProfile loads the domain's L0 profile. A profile that was never written
+// reads as empty (the same surface GetL0 gives); any other failure aborts the
+// read, so Search never hands back a context silently missing its profile.
+func (db *DB) readProfile(agentID uint64) (core.ProfileSlot, error) {
 	slot, err := repo.GetProfileL0(db.engine, agentID)
 	if err != nil {
-		return core.ProfileSlot{}
+		if common.CodeOf(err) == common.ErrNotFound {
+			return core.ProfileSlot{}, nil
+		}
+		return core.ProfileSlot{}, err
 	}
-	return *slot
+	return *slot, nil
 }

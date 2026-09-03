@@ -134,18 +134,12 @@ func isStopWord(w string) bool {
 	return ok
 }
 
-// Tokenize runs unified tokenization with stop-word filtering
-// (pipeline in runPipeline).
+// Tokenize runs unified tokenization with stop-word filtering.
 func Tokenize(text string) []string {
-	return runPipeline(text, true)
+	return runPipeline(text)
 }
 
-// TokenizeWords tokenizes without stop-word filtering (for entity index).
-func TokenizeWords(text string) []string {
-	return runPipeline(text, false)
-}
-
-func runPipeline(text string, filterStop bool) []string {
+func runPipeline(text string) []string {
 	tok := getTokenizer()
 	if tok == nil {
 		return nil
@@ -153,7 +147,7 @@ func runPipeline(text string, filterStop bool) []string {
 	preprocessed := preSplitCamelCase(text)
 	protected := strings.ReplaceAll(preprocessed, "_", "\x01")
 	segments := tok.Cut(protected)
-	return processSegments(segments, filterStop)
+	return processSegments(segments)
 }
 
 func preSplitCamelCase(text string) string {
@@ -174,7 +168,7 @@ func preSplitCamelCase(text string) string {
 	return string(result)
 }
 
-func processSegments(segments []string, filterStop bool) []string {
+func processSegments(segments []string) []string {
 	var tokens []string
 	for _, s := range segments {
 		s = strings.ReplaceAll(s, "\x01", "_")
@@ -193,7 +187,7 @@ func processSegments(segments []string, filterStop bool) []string {
 			if cleaned == "" {
 				continue
 			}
-			if filterStop && isStopWord(cleaned) {
+			if isStopWord(cleaned) {
 				continue
 			}
 			result = append(result, cleaned)

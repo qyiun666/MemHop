@@ -20,15 +20,15 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	var out []core.ArchiveSlot
 	switch {
 	case q.Keyword != "":
-		out = repo.QueryArchiveL4(db.engine, agentID, 1, q.Keyword, 0, 0, nil)
+		out = repo.QueryArchiveL4(db.engine, agentID, repo.ArchiveByKeyword, q.Keyword, 0, 0, nil)
 	case q.Start > 0 && q.End > 0:
-		out = repo.QueryArchiveL4(db.engine, agentID, 2, "", q.Start, q.End, nil)
+		out = repo.QueryArchiveL4(db.engine, agentID, repo.ArchiveByTime, "", q.Start, q.End, nil)
 	case len(q.IDs) > 0:
 		ids, ok := common.ParseAll(q.IDs)
 		if !ok {
 			return nil, common.NewError(common.ErrInvalidQuery, "parse archive ids")
 		}
-		out = repo.QueryArchiveL4(db.engine, agentID, 3, "", 0, 0, ids)
+		out = repo.QueryArchiveL4(db.engine, agentID, repo.ArchiveByID, "", 0, 0, ids)
 	default:
 		return []core.ArchiveSlot{}, nil
 	}

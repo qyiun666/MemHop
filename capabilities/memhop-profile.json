@@ -18,8 +18,8 @@
       "type": "api",
       "name": "UpdateL0",
       "ref": "api:UpdateL0",
-      "desc": "Replace the L0 profile wholesale (full overwrite); omitted fields are cleared, so GetL0 first and fill values back. Preferences is a key-value map; EmotionState carries valence/arousal/dominance and MBTI carries the four i_e/n_s/t_f/j_p dimensions in [-1,1] with a derived type. Dream also evolves personality/emotion_state/mbti, so a host that only wants to change one field must still send the others back unchanged",
-      "input": "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"personality\":{\"type\":\"string\"},\"preferences\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}},\"emotion_state\":{\"type\":\"object\",\"properties\":{\"valence\":{\"type\":\"number\"},\"arousal\":{\"type\":\"number\"},\"dominance\":{\"type\":\"number\"}}},\"mbti\":{\"type\":\"object\",\"properties\":{\"i_e\":{\"type\":\"number\"},\"n_s\":{\"type\":\"number\"},\"t_f\":{\"type\":\"number\"},\"j_p\":{\"type\":\"number\"},\"type\":{\"type\":\"string\"}}}}}",
+      "desc": "Write the host-owned half of the profile: name, role, personality and preferences (a key-value map). EmotionState and MBTI belong to Dream's distillation and are always kept from the stored profile, and updated_at_ms is stamped by the library — neither is accepted on input, so there is no need to GetL0 and fill values back first",
+      "input": "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"personality\":{\"type\":\"string\"},\"preferences\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}}}}",
       "output": "ok"
     }
   ],
@@ -27,11 +27,11 @@
     "steps": [
       {
         "ref": "GetL0",
-        "action": "Read current values when profile info is needed or before updating"
+        "action": "Read the profile (identity, preferences, and the distilled emotion/MBTI state)"
       },
       {
         "ref": "UpdateL0",
-        "action": "Overwrite the profile with fully filled-back values"
+        "action": "Write only the host-owned fields; the distilled half is preserved by the library"
       }
     ]
   }

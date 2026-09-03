@@ -7,7 +7,6 @@
 package repo
 
 import (
-	"slices"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -87,14 +86,4 @@ func RecordCapabilityUsageL5(engine *core.StorageEngine, agentID uint64, id uint
 		return nil, err
 	}
 	return cap, nil
-}
-
-// CapabilityIDsFromNames is a small helper for tests and future graph views.
-func CapabilityIDsFromNames(names []string) []uint64 {
-	ids := make([]uint64, 0, len(names))
-	for _, name := range names {
-		ids = append(ids, core.CapabilityID(name))
-	}
-	slices.Sort(ids)
-	return ids
 }

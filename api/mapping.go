@@ -41,18 +41,18 @@ func fromProfileSlot(s internal.ProfileSlot) ProfileSlot {
 	}
 }
 
+// toCoreProfileSlot maps the host-writable half of the profile. EmotionState,
+// MBTI and UpdatedAtMs are read-only echoes (Dream evolves the first two, the
+// library stamps the last), so they are deliberately not carried inbound.
 func toCoreProfileSlot(s *ProfileSlot) internal.ProfileSlot {
 	if s == nil {
 		return internal.ProfileSlot{}
 	}
 	return internal.ProfileSlot{
-		Name:         s.Name,
-		Role:         s.Role,
-		Personality:  s.Personality,
-		EmotionState: s.EmotionState,
-		MBTI:         s.MBTI,
-		Preferences:  s.Preferences,
-		UpdatedAtMs:  s.UpdatedAtMs,
+		Name:        s.Name,
+		Role:        s.Role,
+		Personality: s.Personality,
+		Preferences: s.Preferences,
 	}
 }
 
