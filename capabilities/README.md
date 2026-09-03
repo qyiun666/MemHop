@@ -30,14 +30,14 @@
 |---|---|---|
 | `memhop-guide.json` | `memhop-guide` | 记忆循环分工总纲（Search/Update/Dream/轨迹记录宿主自动，LLM 勿手动调）+ 五张卡的索引 |
 | `memhop-knowledge.json` | `memhop-knowledge` | L3 知识图谱：读取/列出/导入/更新/删除/节点查询/子图展开 |
-| `memhop-scene.json` | `memhop-scene` | L2 场景管理：列表/激活场景/话题上下文/合并/DeleteTopic/DeleteScene（记忆纠错） |
+| `memhop-scene.json` | `memhop-scene` | L2 场景管理：列表/话题上下文/改名/合并/DeleteTopic/DeleteScene（记忆纠错） |
 | `memhop-archive.json` | `memhop-archive` | L4 档案：关键词/时间范围/ID 列表三种模式检索 + 单条读取 |
-| `memhop-profile.json` | `memhop-profile` | L0 画像读取与全量更新（GetL0 后回填再 UpdateL0） |
+| `memhop-profile.json` | `memhop-profile` | L0 画像：读取全量；UpdateL0 只写宿主四项（情绪状态与 MBTI 归 Dream 蒸馏，由库保留） |
 | `memhop-capability.json` | `memhop-capability` | L5 能力闭环：Crystallize 结晶 → Activate 激活 → Usage 反馈 + Import 导入 + List/Get 索引与详情 + Update/Delete |
 
 ## 编写宿主自己的能力
 
-宿主自己的能力走 `ImportCapability(path)` 入库（单文件，或含 `capability.json` 的目录），导入即 `active`、参与 Search 关键词匹配；内容未变（FileHash 相同）的重复导入会跳过，不产生新记录。
+宿主自己的能力走 `ImportCapability(path)` 入库（单文件，或含 `capability.json` 的目录），导入即 `active`；引擎不再拿它做任何匹配或打分（v1.5.0 起 `Search` 只读场景并开启一轮），消费方是宿主自己——经 `ListCapabilities`/`GetCapability` 读目录，或像 MeowAgent 那样把 active 卡转成工具。内容未变（FileHash 相同）的重复导入会跳过，不产生新记录。
 
 **资源即工具声明**：每个 resource 的 `name/desc/input/output` 与宿主工具规格（如 meowire `ToolSpec`）字段完全同构——宿主投影为自身工具时只需纯字段拷贝，零格式转换；`input` 为参数 JSON Schema 字符串，`ref` 为资源定位（MCP server 地址 / skill 路径 / api:Method / 命令），`config` 为连接配置。
 

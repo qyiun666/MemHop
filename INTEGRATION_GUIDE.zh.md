@@ -182,7 +182,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 
 两条消息**之间**发生的事（工具调用、中间输出、子 agent 结果）属于执行过程而不是对话内容，归本轮的 L6 轨迹：用同一个话题 id 走 `AppendTrajectory(topicID, …)`（见 §8 L6）。这就是原来 N:N 追加路径的去向。
 
-**v1.5.0 移除：** `AppendL4Message`（往已沉淀的话题继续追加消息）与 `RefineTopicKeywords`（按全量原文重算该话题关键词）。它们让「一轮要提炼几次」变成宿主的判断题；现在一轮恰好一次 LLM 调用，关键词也永不落后于本轮原文。L4 内容类型（`text`/`document`/`code`/`image`/`audio`/`video`）在**读侧**继续有效——`L4Query.Type` 过滤与 `ArchiveSlot.ContentType` 照样如实回报记录内容——只是引擎当前写进去的都是 `text`。
+**v1.5.0 移除：** `AppendL4Message`（往已沉淀的话题继续追加消息）与 `RefineTopicKeywords`（按全量原文重算该话题关键词）。它们让「一轮要提炼几次」变成宿主的判断题；现在一轮恰好一次 LLM 调用，关键词也永不落后于本轮原文。L4 内容类型（`text`/`image`/`video`/`document`/`audio`/`code`/`other`）由 `Update` 的 `user_type`/`agent_type` 在**写入侧**声明，读回侧原样报告（`L4Query.Type` 过滤、`ArchiveSlot.ContentType`、`SceneContext` 的 `Messages[].Type`）；未定义的值以 `ErrInvalidQuery` 拒绝而不是落库。Dream 的融合摘要是唯一类型固定的档案——恒为 `text`。
 
 ---
 
@@ -196,7 +196,7 @@ err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
 err = db.DistillL0(ctx)                       // 只跑 Dream 的情感/MBTI 蒸馏阶段
 ```
 
-日常由 Dream 自动蒸馏，仅强制写入时手动维护；`DistillL0` 是长对话后的轻量刷新入口（域内无画像样本时空转）。
+`UpdateL0` 只写宿主那一半——`Name`、`Role`、`Personality`、`Preferences`：`EmotionState` 与 `MBTI` 由库按画像现值保留（只有 Dream 会演化它们），`UpdatedAtMs` 由库戳写。因此不必先 `GetL0` 再回填，这三项传了也不生效。蒸馏那一半日常由 Dream 自动维护，`DistillL0` 是轻量刷新入口（域内无画像样本时空转）。
 
 ### L2 场景管理
 

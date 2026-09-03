@@ -79,6 +79,11 @@
   不自己建客户端。
 
 
+- **错误判定纪律**：区分「记录不存在」与「读不动」。`ErrNotFound` 只代表
+  前者；IO / 关闭 / 反序列化失败一律原样上抛，不得改写成 `ErrNotFound`，
+  也不得当成"不存在"后继续写（`ensurePlanNode`、`findCrystallizeTarget`、
+  `MergeDistill` 都按这条判定，误判会让活节点退回 pending 或画像被空值覆盖）。
+
 ## 读写路径契约（v1.5.0）
 
 1. **一次 `Search` = 读场景 + 开一轮**：`scene_id` 为空 → `freshSceneID` 铸一个
@@ -87,6 +92,8 @@
    非空且不存在 → `ErrNotFound`。同一批调用还经 `repo.OpenSceneTurn` 把场景的
    `TurnSeq` 推到下一轮，返回值 `NewTopicID = hash("turn:" + 场景:TurnSeq)`
    就是本轮要沉淀进去的话题。`Update` 一律拒绝未知场景，库内不再猜场景。
+   画像读取失败同样使本次读取失败（仅"画像尚未建立"按空画像继续），不再
+   静默返回缺 L0 的上下文。
 2. **`Search` 零 LLM、零话题写入**：唯一写是那一行场景记录（命中计数 + 轮次
    计数，写失败即报错——轮次号是铸 ID 的依据，不能吞），话题从 `ac.l2Meta` 取
    depth-1；`Scene.TopicCount` 用这批话题现算（该字段不落盘）。开了没沉淀的
@@ -94,24 +101,40 @@
 3. **`Update` 每轮一次提炼且排在写入前**：`ExtractTurnKeywords` 失败或空结果
    直接报错，此时话题/档案/L2Meta 一个字都没动。话题 ID 由宿主从 `Search`
    原样带回（`TopicID`，`0`/非 hex 拒绝），档案 ID 由 `(topic, ts, content)`
-   派生，故同 `TopicID` 重放是覆盖而不是叠加。N:N 追加面（`AppendL4Message` /
-   `RefineTopicKeywords`）已删除：一轮的原文恒为两条，轮内过程走 L6 轨迹——
+   派生，故同 `TopicID` 重放是覆盖而不是叠加：**重写前先读回该话题的旧引用，
+   落完新引用后把不再被引用的旧档案打墓碑**，所以"一轮恰好两条原文"在改写
+   文本的重放下也成立。N:N 追加面（`AppendL4Message` /
+   `RefineTopicKeywords`）已删除：轮内过程走 L6 轨迹——
    `AppendTrajectory`/`ReadTrajectory`/`Crystallize` 的轮键就是这个话题 id，
    引擎把事件的 `topic_id` 回填成同一个值；计划绑定事件改按计划 id 落键，
    一条事件只有一个归宿，不做双写。
 4. **巩固按单场景规模触发**：`consolidateScene` 在 depth-1 话题数超
    `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream；`activeScenes`/`Capacity`
    窗口已删除，Dream 也不再合并场景（合并只走显式 `MergeScenes`）。
-5. **L4 内容类型只在 `Update` 声明**：两侧档案按 `TurnUpdate.UserType` /
-   `AgentType` 落类型（零值 `ContentText`，非文本侧存路径/URL），Dream 的融合
-   摘要恒为 `text`。`SceneContext` 的 `Messages[].Type` 把它读回。
+   单个融合组是"摘要档案 → 提炼关键词 → 建父话题 → 挂引用 → 下沉子话题"
+   的串写，任一步失败都回滚本组已写的记录（`discardFusedGroup`）——
+   要么整体生效，要么不留孤儿档案 / 半成品父节点。
+5. **L4 内容类型只在 `Update` 声明并在其边界校验**：两侧档案按
+   `TurnUpdate.UserType` / `AgentType` 落类型（零值 `ContentText`，非文本侧存
+   路径/URL），未定义值以 `ErrInvalidQuery` 拒绝（`core.ContentType.Valid()`，
+   枚举表是唯一真源），Dream 的融合摘要恒为 `text`。`SceneContext` 的
+   `Messages[].Type` 把它读回。
 6. **`SetSceneName` 是 `SceneName` 的唯一写者**：场景记录只被 `OpenSceneTurn`
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
    后续读取覆盖；`freshSceneID` 建新场景时才写默认名 `session:<id>`。
 7. **`L4Refs` 无对话顺序，读回面自己补**：`UpdateTopicL4RefsL2` 按 id
    `DedupSorted` 存引用，而档案 id 由 `(话题, 时间戳, 内容)` 哈希得来，顺序与
-   谁先说话无关。`sceneContextTopic` 因此按档案时间戳稳定排序 `Messages`——
-   会话恢复必须"问在前、答在后"，别指望引用顺序。
+   谁先说话无关。`sceneContextTopic` 因此经 `sortSceneMessages` 稳定排序
+   `Messages`——先按档案时间戳，**同毫秒再按 Role（`RoleUser` 在 `RoleAgent`
+   之前）**；会话恢复必须"问在前、答在后"，别指望引用顺序。
+8. **L0 画像字段所有权在库内强制**：`UpdateL0` 只写宿主四项
+   （Name/Role/Personality/Preferences），`EmotionState`/`MBTI` 一律从库里现值
+   继承（只有它们的首次建立走蒸馏路径），`UpdatedAtMs` 由库戳写、不采信调用方
+   传值；api 侧的入站映射也不搬运这三项。`MergeDistill` 是反过来只写蒸馏项。
+   这条规则原先只在 `cmd/memhop-mcp` 的工具里以"先读回再改"实现，Go 宿主拿不到。
+9. **`SyncPlanTree` 未填即继承**：快照里空白的 Title/PlanType/Status/Summary
+   继承节点现值（空 Status 不再退回 pending、空 Summary 不再清空折叠结论），
+   宿主推部分快照不必先读旧树；显式传入的值仍然覆盖。
 
 ## 单向依赖
 

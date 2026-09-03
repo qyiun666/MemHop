@@ -195,7 +195,7 @@ A turn is one user message plus one agent reply, and it is exactly one topic. `U
 
 What happens *between* those two messages (tool calls, intermediate output, subagent results) is execution detail rather than conversation, and it belongs to the turn's L6 trajectory: append it under the same topic id with `AppendTrajectory(topicID, …)` (see §8 L6). That is where the retired N:N path now goes.
 
-**Retired in v1.5.0:** `AppendL4Message` (append extra messages to a settled topic) and `RefineTopicKeywords` (re-distill that topic from all of them). They made the number of distillations per turn a host decision; one turn now costs exactly one LLM call, and its keyword track never goes stale relative to its own originals. L4 content types (`text`/`document`/`code`/`image`/`audio`/`video`) survive on the read side — `L4Query.Type` filters and `ArchiveSlot.ContentType` still report what a record holds — while everything the engine writes today is `text`.
+**Retired in v1.5.0:** `AppendL4Message` (append extra messages to a settled topic) and `RefineTopicKeywords` (re-distill that topic from all of them). They made the number of distillations per turn a host decision; one turn now costs exactly one LLM call, and its keyword track never goes stale relative to its own originals. L4 content types (`text`/`image`/`video`/`document`/`audio`/`code`/`other`) are declared on the write side by `Update`'s `user_type`/`agent_type` and reported back verbatim on the read side (`L4Query.Type` filter, `ArchiveSlot.ContentType`, `SceneContext`'s `Messages[].Type`); an undefined value is rejected with `ErrInvalidQuery` rather than stored. Dream's fused summary is the one archive whose type is fixed — `text`.
 
 ---
 
@@ -209,9 +209,13 @@ err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
 err = db.DistillL0(ctx)                       // runs only Dream's emotion/MBTI stage
 ```
 
-Usually maintained by Dream automatically; manual writes only when forced.
-`DistillL0` is the lightweight refresh entry (no-op when the domain has no
-profile samples).
+`UpdateL0` writes the host-owned half — `Name`, `Role`, `Personality`,
+`Preferences` — and nothing else: `EmotionState` and `MBTI` are kept from the
+stored profile because only Dream evolves them, and `UpdatedAtMs` is stamped by
+the library. There is therefore no need to `GetL0` and fill values back; passing
+those three fields changes nothing. The distilled half refreshes automatically
+with Dream, and `DistillL0` is the lightweight manual entry (no-op when the
+domain has no profile samples).
 
 ### L2 scenes
 

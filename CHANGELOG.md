@@ -31,6 +31,9 @@ README 的版本表与 git log。
 - `repo.TouchSceneUsage` → `repo.OpenSceneTurn`：命中计数与轮次计数一次读改写，并把更新后的记录返回给调用方（读回自己刚分配的 seq，而不是旧快照）。
 - `core.ComputeTurnTopicID(sceneID, seq)` 取代 `(sceneID, userTS, agentTS)` 派生。
 - 随删除面一并清掉的孤儿码：`agentContext.loadTopicForWrite`、`repo.RefineTopicKeywordsL2`、`internal TrajectorySlot` 折叠用的 `sortTrajectory` / `trajectoryForCrystallize`、`TrajIndex` 的话题桶、`api/mapping.go:parsePtr`、`core.ReadHypergraphEdge`（本版发布前逐符号实测零调用后删除）。
+- **第二轮零调用清理**：检索退役后仍留在数据层的原语逐个实测后删除——`repo.UpdateChildrenL2`（`ChildrenIDs` 自 v1.5.0 只由 Dream 建组时写）、`repo.CapabilityIDsFromNames`、`core.AgentRecordCount`、`index.L2MetaIndex.IsEmpty`、`common.SetToSlice`、`agentContext.lastDreamAt`（写了没人读）、`index.TokenizeWords`（实体索引专用的免停用词分词，删后 `runPipeline`/`processSegments` 的 `filterStop` 参数一并消失）。连带删掉整条**场景恢复孤岛** `repo.RecoverDeletedScenesL2` → `core.ScanDeletedPayloads` → `scanDeletedFrames`：全仓库无任何调用方（含测试与 `cmd/`），却每次调用全文件扫描并给每个记录类型驻留一份 payload 拷贝——留着等于给一个没人走的分支付 O(文件大小) 的成本。
+- **模式类参数具名**：`QueryArchiveL4` 的 `num` 与 `DeleteL2` 的 `num` 收为 `ArchiveByKeyword` / `ArchiveByTime` / `ArchiveByID` 与 `DeleteScenesL2` / `DeleteTopicsL2`，调用点不再传裸 `1/2/3`（此前 `internal/l4.go` 三处与 L2 删除四处都靠注释说明那个数是什么）。
+- **公开方法集钉住**：新增 `api/surface_public_test.go`，按反射列出 `Session`（43 个）与 `MultiAgentDB`（9 个）的方法集并与清单比对。`api.Session` 靠内嵌 `*internal.Session` 提升方法，因此 internal 新增一个公开方法就等于给宿主新增一个可调 API——这条边界此前只在文档里，现在有测试把关。
 
 ### 修复
 
@@ -43,11 +46,16 @@ README 的版本表与 git log。
 - **`memhop__session` 的 `topicId` 有了真来源**：检索退役那一版起 `search` 一度不再返回话题 id，该字段只剩初值 `null`；现在由 `search` 的 `new_topic_id` 直接填充，宿主的面板轮次视图与引擎落笔的话题从此同源。
 - **交付文档的数字与死链**：`capabilities/README` 的"MCP 31 工具"先改 30（与当时 `smoke_test.go:36` 的断言一致，`memhop_scene_rename` 加入后为 31，两处同步）；`dsh/README` 的 server 启动示例换成二进制真正接受的 flag（旧示例照抄必然起不来——它传的 `--embed-model` / `--encoder-addr` 已随 embedding 一起删除）；其首段指向 `docs/dsh-memhop-integration-plan.md` 的链接改为纯文本路径（`docs/` 有意不入库，公开 clone 里是死链）。
 - **公开会话方法计数纠正**：文档写"30 个工具 / 42 个公开会话方法"，按 `api` + `internal` 导出方法集实测，在 `AppendL4Message` 与 `RefineTopicKeywords` 还在时是 44 个。这两个方法删除后为 42，与文档一致；本版加入 `SetSceneName` 后为 43。
-- **`memhop_profile_update` 会抹掉 Dream 蒸馏出的画像**：`UpdateL0` 是全量覆盖，而该工具只暴露名称/角色/个性/偏好四项、没有任何回填通道——LLM 改一次名字就会把该域的情绪状态与 MBTI 倾向清零。现在工具先 `GetL0` 读回现画像，只替换它有权改的四项，其余按库内现值写回。
+- **L0 画像的字段所有权收进库内**：`UpdateL0` 是全量覆盖，而 Dream 蒸馏出的 `EmotionState` / `MBTI` 宿主无从回填——改一次名字就把该域的情绪状态与 MBTI 倾向清零。第一版只在 `memhop_profile_update` 里以"先 `GetL0` 读回、只替换自己那四项"绕过，Go 宿主走 `api` 时仍然被抹。现在规则由库强制：`UpdateL0` 只写宿主四项（Name/Role/Personality/Preferences），两个蒸馏项一律从库里现值继承，`UpdatedAtMs` 由库戳写、不采信调用方传值；`api` 侧入站映射同样不搬运这三项，故宿主无论怎么传都写不进蒸馏半区（反向的 `MergeDistill` 仍只写蒸馏项）。MCP 工具随之退化为纯转发。回归测试 `TestUpdateL0KeepsDistilledHalf`（库内）与 `TestSurfaceL0DistilledHalfIsReadOnly`（门面）。
 - **`memhop_profile_get` 描述在说谎**：仍列 v1.4.1 就删掉的"词表、风格与情绪模式"，说明书卡已改而工具描述漏改。现按 `ProfileSlot` 实际字段（含 Dream 蒸馏的情绪状态与 MBTI）表述。
 - **MCP 工具计数的注释与实际不符**：`registerTools` 注释写"33 tools"，实际注册 30 个（现 31）。计数唯一的机器校验在 `smoke_test.go` 的 `tools/list` 断言里，注释同步为实测值。
-- **`SceneContext` 的消息可能「答在问前」**：话题的 `L4Refs` 按 id `DedupSorted` 存储，而档案 id 由 `(话题, 时间戳, 内容)` 哈希得来——引用顺序与说话顺序毫无关系，场景 id 又每次新建都走 `crypto/rand`，于是同一份测试在不同库上会拿到不同顺序的消息。现在 `sceneContextTopic` 按档案时间戳稳定排序，会话恢复读回恒为「问在前」（回归测试 `TestUpdateStoresDeclaredContentTypes`）。
+- **`SceneContext` 的消息可能「答在问前」**：话题的 `L4Refs` 按 id `DedupSorted` 存储，而档案 id 由 `(话题, 时间戳, 内容)` 哈希得来——引用顺序与说话顺序毫无关系，场景 id 又每次新建都走 `crypto/rand`，于是同一份测试在不同库上会拿到不同顺序的消息。现在 `sceneContextTopic` 经 `sortSceneMessages` 稳定排序：先按档案时间戳，**同毫秒再按 Role**（`RoleUser` < `RoleAgent` < `RoleSystem` < `RoleDream`，故融合摘要恒在原文之后）——宿主把一轮两侧戳成同一毫秒是合法输入，此时 id 顺序什么都说明不了。回归测试 `TestSceneContextTopicOrdersSameTimestampByRole`、`TestSortSceneMessagesSpeakingOrder`，正向时序由 `TestUpdateStoresDeclaredContentTypes` 一并钉住。
 - **`MultiAgentDB.Lock/Unlock` 的文档像并发锁**：原文"serializes the default agent domain against host-side writes"极易被读成"宿主调用前要自己加锁"。事实是每个业务方法已在所属域内串行、跨域本就可并发，这对方法只用于宿主在库外碰同一个 `.meh`（备份/复制），且只冻结默认域。实现不动，注释改为写清用途与不锁其他域的后果（多租户文件要备份请 `Close` → 复制 → `Open`）。
+- **`Update` 重放会留下被取代的原文**：同 `topic_id` 重放时话题的 `L4Refs` 被整份重写，旧档案却仍活着——`L4` 里从此每轮多出一对被不再引用的原文，"一轮恒为两条原文"只在文本没变的重试下成立。现在重写引用前先读回该话题的旧引用，落完新引用后把不再被引用者打墓碑（回归测试 `TestUpdateReplaySupersedesPriorArchives`）。首次沉淀没有旧引用，走原路径。
+- **`SyncPlanTree` 的部分快照会把已完成步骤退回未完成**：引擎对入参字段无条件覆写，空 `Status` 一律写成 pending、空 `Summary` 直接清空——而 MeowAgent 这类宿主推的是"本轮变化的树"，于是每次同步都把别处已完成的步骤打回，且 rollup 只回填空摘要，清空后永不复活。此前这个继承规则只能由宿主侧"写前先读旧树"绕过。现在库内直接实现：`Title`/`PlanType`/`Status`/`Summary` 空白即继承节点现值，显式传入仍然覆盖（回归测试 `TestSyncPlanTreeInheritsBlankFields`）。
+- **Dream 的一个融合组会留下半成品**：单组是"摘要档案 → 提炼关键词 → 建父话题 → 挂引用 → 下沉子话题"的串写，任一步失败原先只是跳过并留痕——最坏形态是一个空的融合父节点悬在从未下沉的子话题之上，下一轮 Dream 还会再挑中它。现在失败即回滚本组已写的记录（`discardFusedGroup`），要么整体生效要么零留痕。同处另修一处：重建后的 `L2Meta` 缓存原先在管线最末才安装，L0 蒸馏的 LLM 调用失败会让整次结构重建白做（且报告已写着各阶段成功），现改到结构阶段结束即安装。
+- **瞬时读失败被当成"记录不存在"的一族**：`ErrNotFound` 与"引擎关着 / IO 抖动 / 反序列化失败"是两件事，混起来的后果各不相同——`Search` 的画像读取吞错返回空画像（宿主拿到一份静默缺 L0 的上下文）；`MergeDistill` 把任何读失败当作画像缺失，从空槽重建画像，抹掉宿主写的 Name/Role/偏好；`findCrystallizeTarget` 把读失败当作卡片不存在，于是重新创建一张同名卡并丢掉其使用计数；`SetSceneName` / `DeleteScene` 把任何失败一律改写成 `ErrNotFound`。现统一为「只有 `ErrNotFound` 算不存在，其他错误原样上抛」。
+- **未定义的 L4 内容类型能落库**：`Update` 只把 `user_type` / `agent_type` 当 `ContentType` 用，从不校验，于是宿主传 `99` 会写出一条 `String()` 为 `ContentType(99)` 的档案，读回侧 `L4Query.Type` 永远过滤不到它。现在在 `Update` 边界即拒（`ErrInvalidQuery`），判定复用枚举名表 `core.ContentType.Valid()`——加新类型不需要第二处编辑（回归测试 `TestUpdateRejectsUndefinedContentType`）。
 
 ### 兼容
 

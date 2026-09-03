@@ -12,7 +12,7 @@
   `StorageEngine` 索引（`agent -> idHash -> offset` 两级分域）、Slot 数据模型。
   `StorageEngine` 按功能分文件：`engine.go`（索引模型/访问器）、
   `engine_lifecycle.go`（Create/Open/Checkpoint/Close）、`engine_write.go`（追加）、
-  `engine_read.go`（读/删除载荷扫描）、`engine_delete.go`（墓碑删除）、
+  `engine_read.go`（索引查找读）、`engine_delete.go`（墓碑删除）、
   `engine_recovery.go`（扫描/撕裂尾帧截断/索引重建）；数据模型分
   `model.go`（Slot 结构）/ `model_enums.go`（枚举）。
 - `index/`：索引——L2Meta（场景读回的唯一话题缓存，`rebuild.go` 全量重建）/
@@ -33,12 +33,21 @@
    不属于本层，禁止引入。同名记录在不同域内互不可见是正确行为。
 2. **无业务语义**：本层不做业务判断（何时压缩、何时结晶、容量策略等一律
    由 `internal` 业务层决定），不调用 LLM。
-3. **实现不外露**：记录帧布局、快照格式、回收/压缩细节只在 `core` 内部
+3. **原语必须有活调用方**：本层导出函数不得为"将来可能用到"预留
+   （检索退役后残留的 `UpdateChildrenL2`、`RecoverDeletedScenesL2` +
+   `ScanDeletedPayloads` 恢复链、`AgentRecordCount`、
+   `CapabilityIDsFromNames`、`SetToSlice`、`index.TokenizeWords`（实体索引
+   专用的免停用词分词，删后 `runPipeline`/`processSegments` 的 `filterStop`
+   参数一并消失）已一律删除）；模式类参数必须
+   具名——L4 查询用 `ArchiveByKeyword` / `ArchiveByTime` / `ArchiveByID`，
+   L2 批量删除用 `DeleteScenesL2` / `DeleteTopicsL2`，不再往调用点传裸
+   `1/2/3`。
+4. **实现不外露**：记录帧布局、快照格式、回收/压缩细节只在 `core` 内部
    流转；`internal` 业务层只能经本目录导出的函数访问数据，不得直接解析
    帧或操作 `StorageEngine` 未导出的状态。
-4. **单向依赖**：`repo -> repo/core`、`repo/index -> repo/core`、
+5. **单向依赖**：`repo -> repo/core`、`repo/index -> repo/core`、
    `repo -> common`；禁止反向依赖 `internal`、`api`、`cmd`。
-5. **默认域**：`core.DefaultAgentID = 0` 即全零 hex 域，公开 `Session("0000000000000000")` 可绑定；
+6. **默认域**：`core.DefaultAgentID = 0` 即全零 hex 域，公开 `Session("0000000000000000")` 可绑定；
    注册记录 `RecAgentRegistry (0x10)` 的 `idHash == agentID`，data 为
    agent 名 JSON，Open 时扫描重建 `name -> agentID` 映射。
 
