@@ -153,23 +153,6 @@ func TestTrajectorySeqContinuesAfterContextRebuild(t *testing.T) {
 	}
 }
 
-func TestTrimTrajectoryByBudgetKeepsNewest(t *testing.T) {
-	events := []core.TrajectorySlot{
-		{Payload: strings.Repeat("a", 60)},
-		{Payload: strings.Repeat("b", 60)},
-		{Payload: strings.Repeat("c", 60)},
-	}
-	if got := trimTrajectoryByBudget(events, 100); len(got) != 1 || got[0].Payload[0] != 'c' {
-		t.Fatalf("trim = %+v, want only the newest event", got)
-	}
-	if got := trimTrajectoryByBudget(events, 1000); len(got) != 3 {
-		t.Fatalf("under budget must keep all: %+v", got)
-	}
-	if got := trimTrajectoryByBudget(events, 1); len(got) != 1 || got[0].Payload[0] != 'c' {
-		t.Fatalf("tiny budget must still keep the newest: %+v", got)
-	}
-}
-
 func TestPlanCommitUpdatesNode(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()

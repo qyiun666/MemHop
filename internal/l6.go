@@ -25,14 +25,11 @@ import (
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/trajectory"
 )
 
 // maxTrajectoryPayload caps a single event payload (no raw token streams).
 const maxTrajectoryPayload = 4 * 1024
-
-// maxCrystallizePayload caps the trajectory payload bytes fed to one
-// crystallize LLM call; over-budget events drop from the oldest.
-const maxCrystallizePayload = 128 * 1024
 
 // trajectoryRetention bounds the L6 event log: Dream drops events older
 // than this. L6 is a process index — durable products live in L4/L5.
@@ -146,7 +143,7 @@ func (db *DB) ReadTrajectory(agentID uint64, turnID string) ([]core.TrajectorySl
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	return readTurn(db.engine, agentID, ac, parsed), nil
+	return trajectory.ReadTurn(db.engine, agentID, ac, parsed), nil
 }
 
 // ListTrajectorySessions summarizes every turn of the domain's L6 log under
@@ -397,7 +394,7 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 	}
 	defer ac.Mu.Unlock()
 	// Events land in Seq order; only the payload budget can shorten the turn.
-	events := trimTrajectoryByBudget(readTurn(db.engine, agentID, ac, parsed), maxCrystallizePayload)
+	events := trajectory.TrimByBudget(trajectory.ReadTurn(db.engine, agentID, ac, parsed), trajectory.MaxCrystallizePayload)
 	if len(events) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "no trajectory for turn "+turnID)
 	}
@@ -412,139 +409,9 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 	}
 	result := &CrystallizeResult{CreatedIDs: []string{}, ReusedIDs: []string{}, MergedIDs: []string{}}
 	for _, cand := range out.Capabilities {
-		if err := db.applyCrystallizeCandidate(agentID, cand, result); err != nil {
+		if err := trajectory.ApplyCandidate(db.engine, agentID, cand, result); err != nil {
 			return nil, err
 		}
 	}
 	return result, nil
-}
-
-// trimTrajectoryByBudget keeps the newest events within budget payload
-// bytes (at least one). ponytail: dropping the oldest is lossy for very
-// long turns; map-reduce induction over chunks is the upgrade path.
-func trimTrajectoryByBudget(events []core.TrajectorySlot, budget int) []core.TrajectorySlot {
-	total := 0
-	start := len(events)
-	for start > 0 {
-		p := len(events[start-1].Payload)
-		if total+p > budget {
-			break
-		}
-		total += p
-		start--
-	}
-	if start == len(events) && len(events) > 0 {
-		start = len(events) - 1
-	}
-	return events[start:]
-}
-
-// readTurn loads one turn's events (Seq ascending) via the domain index;
-// corrupt records are skipped, mirroring the scan-based reader it replaces.
-func readTurn(engine *core.StorageEngine, agentID uint64, ac *domain.Context, sessionID uint64) []core.TrajectorySlot {
-	hashes := ac.Traj.EventHashes(sessionID)
-	out := make([]core.TrajectorySlot, 0, len(hashes))
-	for _, h := range hashes {
-		if ev, err := core.ReadTrajectorySlot(engine, agentID, h); err == nil {
-			out = append(out, *ev)
-		}
-	}
-	return out
-}
-
-// applyCrystallizeCandidate folds one LLM candidate into the result.
-// reuse/merge candidates locate an existing capability by name or
-// ReuseID, so their payload may be minimal (a reuse decision does not
-// require a full type/resources); only create candidates run the complete
-// import validation, otherwise the candidate is recorded as skipped.
-func (db *DB) applyCrystallizeCandidate(agentID uint64, cand CrystallizeCapability, result *CrystallizeResult) error {
-	action := strings.ToLower(strings.TrimSpace(cand.Action))
-	detail := CrystallizeDetail{Name: cand.Capability.Name}
-	if action != "reuse" && action != "merge" {
-		if err := capability.Validate(&cand.Capability); err != nil {
-			result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())
-			detail.Action = "skip"
-			detail.Reason = err.Error()
-			result.Details = append(result.Details, detail)
-			return nil
-		}
-	}
-	id, disposition, err := db.applyCrystallizedCapability(agentID, cand)
-	if err != nil {
-		return err
-	}
-	detail.Action = disposition // create | reuse | merge
-	detail.CapabilityID = id
-	result.Details = append(result.Details, detail)
-	switch disposition {
-	case "reuse":
-		result.ReusedIDs = append(result.ReusedIDs, id)
-	case "merge":
-		result.MergedIDs = append(result.MergedIDs, id)
-	default:
-		result.CreatedIDs = append(result.CreatedIDs, id)
-	}
-	return nil
-}
-
-func (db *DB) applyCrystallizedCapability(agentID uint64, cand CrystallizeCapability) (string, string, error) {
-	now := time.Now().UnixMilli()
-	action := strings.ToLower(strings.TrimSpace(cand.Action))
-	if action == "" {
-		action = "create"
-	}
-	cap := capability.BuildCrystallized(&cand.Capability, now)
-
-	// Name is the canonical identity. A create candidate whose name already
-	// exists is always treated as reuse: crystallization must never silently
-	// overwrite an active capability.
-	existing, id, found, err := db.findCrystallizeTarget(agentID, cap, cand.ReuseID)
-	if err != nil {
-		return "", "", err
-	}
-	if found {
-		if action == "merge" {
-			capability.MergeDefinition(existing, cap, now)
-			if _, err := repo.UpsertCapabilityL5(db.engine, agentID, existing); err != nil {
-				return "", "", err
-			}
-			return id, "merge", nil
-		}
-		return id, "reuse", nil
-	}
-	if _, err := repo.UpsertCapabilityL5(db.engine, agentID, cap); err != nil {
-		return "", "", err
-	}
-	return common.FormatHash(cap.IDHash), "create", nil
-}
-
-// findCrystallizeTarget locates an existing capability by name ID (canonical
-// identity) then explicit ReuseID. found=false means a new record must be
-// created. Only a genuine "no such capability" says so: treating a transient
-// read failure as absent would re-create an existing card and drop its usage
-// counters. A malformed ReuseID (LLM-supplied) is ignored, not fatal.
-func (db *DB) findCrystallizeTarget(agentID uint64, cap *core.Capability, reuseID string) (*core.Capability, string, bool, error) {
-	nameIDHash := core.CapabilityID(cap.Name)
-	existing, err := repo.GetCapabilityL5(db.engine, agentID, nameIDHash)
-	if err == nil {
-		return existing, common.FormatHash(nameIDHash), true, nil
-	}
-	if common.CodeOf(err) != common.ErrNotFound {
-		return nil, "", false, err
-	}
-	if reuseID == "" {
-		return nil, "", false, nil
-	}
-	reuseHash, err := common.ParseID(reuseID)
-	if err != nil {
-		return nil, "", false, nil
-	}
-	existing, err = repo.GetCapabilityL5(db.engine, agentID, reuseHash)
-	if err != nil {
-		if common.CodeOf(err) != common.ErrNotFound {
-			return nil, "", false, err
-		}
-		return nil, "", false, nil
-	}
-	return existing, common.FormatHash(existing.IDHash), true, nil
 }
