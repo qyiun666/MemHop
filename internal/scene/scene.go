@@ -29,7 +29,26 @@ func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQue
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
-	return core.ReadSceneSlot(engine, agentID, id)
+	slot, err := core.ReadSceneSlot(engine, agentID, id)
+	if err != nil {
+		return nil, err
+	}
+	// The anchor is a creation-time field. Silently dropping it here would
+	// leave a host believing it had hung the session on a project domain, so a
+	// named graph has to at least resolve — and a scene that already exists
+	// keeps the anchor it has until UpdateScene moves it.
+	if q.L3ID != "" {
+		l3Hash, err := common.ParseID(q.L3ID)
+		if err != nil {
+			return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
+		}
+		if _, err := core.ReadGraphSlot(engine, agentID, l3Hash); err != nil {
+			return nil, err
+		}
+		return nil, common.NewError(common.ErrInvalidQuery,
+			"scene "+q.SceneID+" already exists; its L3 anchor is set at creation only (use UpdateScene)")
+	}
+	return slot, nil
 }
 
 // Create allocates a scene id the host has not used yet, persists the scene
@@ -48,6 +67,9 @@ func Create(engine *core.StorageEngine, agentID uint64, l3ID string) (*core.Scen
 		l3Hash, err := common.ParseID(l3ID)
 		if err != nil {
 			return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
+		}
+		if _, err := core.ReadGraphSlot(engine, agentID, l3Hash); err != nil {
+			return nil, err
 		}
 		if err := repo.SetSceneL3ID(engine, agentID, id, l3Hash); err != nil {
 			return nil, err

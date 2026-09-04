@@ -16,7 +16,7 @@ import (
 // testAgentHex renders the deterministic 16-char hex agent id for s (the
 // same form the public Session surface accepts).
 func testAgentHex(s string) string {
-	return internal.FormatAgentID(common.HashID(s))
+	return internal.FormatID(common.HashID(s))
 }
 
 func TestSurfaceMultiAgent(t *testing.T) {
@@ -55,9 +55,6 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session alice: %v", err)
 	}
-	if sess.AgentID() != alice {
-		t.Fatalf("session id mismatch: %s", sess.AgentID())
-	}
 	res, err := sess.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("alice search: %v", err)
@@ -67,14 +64,14 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	}
 	// Cross-agent isolation: bob sees none of alice's scenes.
 	bobSess, _ := m.Session(bob)
-	bobScenes, err := bobSess.ListScenes()
+	bobScenes, err := bobSess.ListScenes("")
 	if err != nil {
 		t.Fatalf("bob list scenes: %v", err)
 	}
 	if len(bobScenes) != 0 {
 		t.Fatalf("bob must not see alice scenes, got %d", len(bobScenes))
 	}
-	aliceScenes, _ := sess.ListScenes()
+	aliceScenes, _ := sess.ListScenes("")
 	if len(aliceScenes) == 0 {
 		t.Fatal("alice must see her own scene")
 	}
@@ -95,9 +92,6 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	}
 	if m.IsClosed() {
 		t.Fatal("multi DB must be open before close")
-	}
-	if got := sess.AgentID(); !isHexID(got) {
-		t.Fatalf("agent id not hex: %q", got)
 	}
 	if _, err := m.Session("zzzz"); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("Session must reject non-hex ids, got %v", err)
@@ -137,12 +131,6 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if err := s.Checkpoint(); err != nil {
-		t.Fatalf("session checkpoint: %v", err)
-	}
-	if s.IsClosed() {
-		t.Fatal("session must be open")
-	}
 	if err := s.UpdateL0(&ProfileSlot{Name: "worker"}); err != nil {
 		t.Fatalf("session updateL0: %v", err)
 	}
@@ -166,7 +154,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if _, err := s.SearchL4(L4Query{Keyword: "session"}); err != nil {
 		t.Fatalf("session searchL4: %v", err)
 	}
-	scenes, err := s.ListScenes()
+	scenes, err := s.ListScenes("")
 	if err != nil || len(scenes) == 0 {
 		t.Fatalf("session listScenes: %d %v", len(scenes), err)
 	}
@@ -190,7 +178,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if _, err := s.Update(turnUpdate(res2.Scene.SceneID, res2.NewTopicID, "second session scene", "second reply")); err != nil {
 		t.Fatalf("session update2: %v", err)
 	}
-	scenes, err = s.ListScenes()
+	scenes, err = s.ListScenes("")
 	if err != nil || len(scenes) < 2 {
 		t.Fatalf("session want 2 scenes: %d %v", len(scenes), err)
 	}
@@ -199,8 +187,9 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session searchL4 reply: %v", err)
 	}
 	if len(arcs) > 0 {
-		if _, err := s.GetArchive(arcs[0].IDHash); err != nil {
-			t.Fatalf("session getArchive: %v", err)
+		one, err := s.SearchL4(L4Query{IDs: []string{arcs[0].IDHash}})
+		if err != nil || len(one) != 1 {
+			t.Fatalf("session archive by id: %d found, err %v", len(one), err)
 		}
 	}
 	if err := s.MergeScenes(sceneID, []string{res2.Scene.SceneID}); err != nil {
@@ -236,8 +225,8 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session importCap: %v", err)
 	}
 	cid := c.IDHash
-	if _, err := s.GetCapability(cid); err != nil {
-		t.Fatalf("session getCap: %v", err)
+	if one, err := s.ListCapabilities(CapabilityListQuery{IDs: []string{cid}}); err != nil || len(one) != 1 {
+		t.Fatalf("session capability by id: %d found, err %v", len(one), err)
 	}
 	if _, err := s.ListCapabilities(CapabilityListQuery{Keyword: "sess"}); err != nil {
 		t.Fatalf("session listCap: %v", err)
@@ -256,8 +245,8 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session deleteCap: %v", err)
 	}
 	// L6 trajectory via session.
-	traj := internal.FormatAgentID(common.HashID("sess-traj"))
-	if err := s.AppendTrajectory(traj, TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1_700_000_061_000}); err != nil {
+	traj := internal.FormatID(common.HashID("sess-traj"))
+	if err := s.AppendTrajectory(traj, "", TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1_700_000_061_000}); err != nil {
 		t.Fatalf("session appendTraj: %v", err)
 	}
 	if evs, err := s.ReadTrajectory(traj); err != nil || len(evs) != 1 {

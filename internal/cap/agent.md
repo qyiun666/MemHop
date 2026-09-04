@@ -29,3 +29,4 @@
    `repo/core/model_dto.go`、`model_distill.go`（最底层纯数据），
    组合根与门面用恒等别名沿用历史命名。
 5. 每个能力包自带同包单元测试；改算法必须带测试并同步更新本文件分工条目。
+- engram 的 L1 衰减（`decayRemainingEdges`/`removeEdgeFromNode`）只在记录确实不存在时跳过那条：索引点名而引擎读不动就上报，否则一条边会被当作不存在而永不衰减、且节点可能留着指向已删边的引用。

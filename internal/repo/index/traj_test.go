@@ -81,6 +81,40 @@ func TestTrajIndexRemoveSession(t *testing.T) {
 	}
 }
 
+func TestTrajIndexRemoveEvents(t *testing.T) {
+	idx := NewTrajIndex()
+	idx.Append(7, 1, 101, 100)
+	idx.Append(7, 2, 102, 200)
+	idx.Append(7, 3, 103, 300)
+
+	// Dropping the newest event has to move the Seq cache with it: the next
+	// append reads MaxSeq to pick its own Seq.
+	if n := idx.RemoveEvents(7, []uint64{103, 999}); n != 1 {
+		t.Fatalf("RemoveEvents removed %d, want 1 (999 belongs to nobody)", n)
+	}
+	if hashes := idx.EventHashes(7); len(hashes) != 2 || hashes[0] != 101 || hashes[1] != 102 {
+		t.Fatalf("EventHashes(7) = %v, want [101 102] in Seq order", hashes)
+	}
+	if max, ok := idx.MaxSeq(7); !ok || max != 2 {
+		t.Fatalf("MaxSeq(7) = %d/%v after removing the newest event", max, ok)
+	}
+	if sums := idx.Summaries(); len(sums) != 1 || sums[0].Steps != 2 {
+		t.Fatalf("Summaries = %+v, want turn 7 with 2 steps", sums)
+	}
+
+	// Removing the rest deletes the turn, so it stops showing up as empty.
+	if n := idx.RemoveEvents(7, []uint64{101, 102}); n != 2 {
+		t.Fatalf("RemoveEvents removed %d, want 2", n)
+	}
+	if sums := idx.Summaries(); len(sums) != 0 {
+		t.Fatalf("Summaries = %+v, want the emptied turn gone", sums)
+	}
+	// Unknown turns and ids that are not events are no-ops.
+	if n := idx.RemoveEvents(7, []uint64{101}); n != 0 {
+		t.Fatalf("RemoveEvents on a gone turn = %d, want 0", n)
+	}
+}
+
 func TestBuildTrajFromEngineRestoresTurns(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "traj.meh"))
 	if err != nil {

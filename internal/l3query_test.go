@@ -22,9 +22,17 @@ func testNode(id, graphID uint64, title, nodeType, content string, kws []string)
 	}
 }
 
-// writeNode writes an L3 node record.
+// writeNode writes an L3 node record, materialising its graph slot first: a
+// node belonging to no graph is a state the engine never produces (ImportL3
+// creates the slot), and QueryL3Nodes refuses it like GetL3 does.
 func writeNode(t *testing.T, engine *core.StorageEngine, n *core.HypergraphNode) {
 	t.Helper()
+	if _, err := core.ReadGraphSlot(engine, core.DefaultAgentID, n.GraphID); err != nil {
+		slot := core.HypergraphSlot{IDHash: n.GraphID, Name: common.FormatHash(n.GraphID)}
+		if err := core.WriteGraphSlot(engine, core.DefaultAgentID, n.GraphID, &slot); err != nil {
+			t.Fatalf("write graph slot: %v", err)
+		}
+	}
 	if err := core.WriteHypergraphNode(engine, core.DefaultAgentID, n.IDHash, n); err != nil {
 		t.Fatalf("write node: %v", err)
 	}
@@ -90,6 +98,56 @@ func TestQueryL3NodesModes(t *testing.T) {
 	// GraphID required.
 	if _, err := db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{}); err == nil {
 		t.Fatal("want error for missing graph id")
+	}
+}
+
+// Every condition the query names applies, ANDing with the others: a caller
+// that asks for a keyword inside one node type must not get the whole keyword
+// hit list back.
+func TestQueryL3NodesFiltersAndTogether(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	graphID := common.HashID("graph")
+	nodeA := testNode(common.HashID("a"), graphID, "Rust 所有权", "concept", "所有权系统", []string{"rust", "memory"})
+	nodeB := testNode(common.HashID("b"), graphID, "Go 并发", "concept", "goroutine 与 channel", []string{"go"})
+	nodeC := testNode(common.HashID("c"), graphID, "数据库索引", "tool", "B+ 树", []string{"db"})
+	for _, n := range []core.HypergraphNode{nodeA, nodeB, nodeC} {
+		writeNode(t, engine, &n)
+	}
+	graphHex := common.FormatHash(graphID)
+
+	cases := []struct {
+		name  string
+		query L3NodeQuery
+		want  []uint64
+	}{
+		{"keyword+type", L3NodeQuery{GraphID: graphHex, Keyword: "RUST", NodeType: "concept"}, []uint64{nodeA.IDHash}},
+		{"keyword+type no match", L3NodeQuery{GraphID: graphHex, Keyword: "rust", NodeType: "tool"}, nil},
+		{"ids+type", L3NodeQuery{GraphID: graphHex, IDs: []string{common.FormatHash(nodeA.IDHash), common.FormatHash(nodeB.IDHash)}, NodeType: "tool"}, nil},
+		{"type only", L3NodeQuery{GraphID: graphHex, NodeType: "concept"}, []uint64{nodeA.IDHash, nodeB.IDHash}},
+		{"graph only lists every node", L3NodeQuery{GraphID: graphHex}, []uint64{nodeA.IDHash, nodeB.IDHash, nodeC.IDHash}},
+	}
+	for _, tc := range cases {
+		out, err := db.QueryL3Nodes(core.DefaultAgentID, tc.query)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(out) != len(tc.want) {
+			t.Fatalf("%s: want %d nodes, got %d (%+v)", tc.name, len(tc.want), len(out), out)
+		}
+		for _, id := range tc.want {
+			found := false
+			for _, n := range out {
+				found = found || n.IDHash == id
+			}
+			if !found {
+				t.Fatalf("%s: node %x missing from %+v", tc.name, id, out)
+			}
+		}
+	}
+
+	if out, err := db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{GraphID: graphHex, Limit: 1}); err != nil || len(out) != 1 {
+		t.Fatalf("limit over a whole-graph read: %d nodes, err %v", len(out), err)
 	}
 }
 
@@ -249,6 +307,12 @@ func TestQueryL3NodesIDsRespectGraphID(t *testing.T) {
 	otherID := common.HashID("graph-b")
 	node := testNode(common.HashID("n"), otherID, "N", "t", "", nil)
 	writeNode(t, engine, &node)
+	// graph-a exists and holds nothing: this is about filtering by graph, not
+	// about a graph that was never created.
+	emptySlot := core.HypergraphSlot{IDHash: graphID, Name: "graph-a"}
+	if err := core.WriteGraphSlot(engine, core.DefaultAgentID, graphID, &emptySlot); err != nil {
+		t.Fatalf("write graph slot: %v", err)
+	}
 
 	out, err := db.QueryL3Nodes(core.DefaultAgentID, L3NodeQuery{
 		GraphID: common.FormatHash(graphID),

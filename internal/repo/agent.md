@@ -39,9 +39,18 @@
    `CapabilityIDsFromNames`、`SetToSlice`、`index.TokenizeWords`（实体索引
    专用的免停用词分词，删后 `runPipeline`/`processSegments` 的 `filterStop`
    参数一并消失）已一律删除）；模式类参数必须
-   具名——L4 查询用 `ArchiveByKeyword` / `ArchiveByTime` / `ArchiveByID`，
+   具名或结构化——L4 查询收为 `ArchiveQuery`（填了的字段之间 AND，含
+   `Limit` 保最新 N 条；`Keyword` 两边 lowercase，与 L3 节点过滤一致），
    L2 批量删除用 `DeleteScenesL2` / `DeleteTopicsL2`，不再往调用点传裸
    `1/2/3`。
+3.1 **一个 id 只对应一种记录**：`core` 的 typed reader 一律带期望的
+   `Rec*`（`readJSON` 比对帧内类型，不符即 `ErrNotFound`）。丢掉这个校验
+   曾让 `UpdateL3(节点 id)` 读到"空名图槽"再把节点记录改写成图槽。
+3.2 **L3 超边身份 = 排序成员 + kind**：`CreateEdgeL3` 的 id 含 kind，
+   `EdgeKeyL3` 是同一身份的语义键，导入侧按它去重（旧文件的 pair-only
+   哈希边因此不会重复建边）。记录里的 `Importance`/`Weight`/`Label` 与
+   `ArchiveSlot.Metadata` 无写入路径，故意不进公开 DTO，字段留在记录里
+   只为解旧文件。
 4. **实现不外露**：记录帧布局、快照格式、回收/压缩细节只在 `core` 内部
    流转；`internal` 业务层只能经本目录导出的函数访问数据，不得直接解析
    帧或操作 `StorageEngine` 未导出的状态。
@@ -56,3 +65,7 @@
 改动本层导出签名、帧/快照格式或域语义时，必须同步更新本文件与
 `internal/agent.md` 中受影响的条目，并保证 `go vet ./...` 与
 `grep -rn 'L7\|RecL7' --include='*.go'` 零残留。
+
+<!-- 2026-09-04 接口去 fallback 与按层闭环修复 -->
+- `EnsureGraphL3`：槽存在就复用其 id、不覆写记录；`CreateGraphL3` 是无条件写槽，只用于确认不存在时。
+- L2/L4 读路径的错误策略：只有 `CodeOf(err)==ErrNotFound` 才跳过那一条，其余（IO/关闭/损坏）一律返回 error——宿主分不清「少一条」和「没有这一条」。`ListScenesL2`/`CollectAllScenesL2`/`QueryArchivesL4` 因此都带 error 返回。

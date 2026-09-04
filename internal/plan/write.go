@@ -61,32 +61,45 @@ func EnsureNode(ac *domain.Context, agentID uint64, planID uint64, nodePath stri
 	return parentID, nil
 }
 
-// AppendEventLocked writes one event bound to a plan node by filling
-// PlanNodeRef, then reuses the existing per-turn Sequencer + TrajIndex.
-// Callers hold ac.Mu.
-func AppendEventLocked(ac *domain.Context, agentID, planID, nodeID uint64, ev core.TrajectorySlot) error {
-	if ev.EventType == "" || ev.Timestamp <= 0 {
-		return common.NewError(common.ErrInvalidQuery, "EventType and Timestamp are required")
+// ValidateEvent checks everything a plan-bound event must carry. PlanCommit
+// runs it before it touches a node, so a rejected commit leaves the tree
+// exactly as it was — the status, the summary and the rollup all follow the
+// event, never the other way round.
+func ValidateEvent(ev core.TrajectorySlot) error {
+	if err := trajectory.ValidateEvent(ev); err != nil {
+		return err
 	}
 	if _, ok := planEventTypes[ev.EventType]; !ok {
 		return common.NewError(common.ErrInvalidQuery, "unknown plan event type: "+ev.EventType)
 	}
-	if len(ev.Payload) > trajectory.MaxEventPayload {
-		ev.Payload = common.TruncateUTF8(ev.Payload, trajectory.MaxEventPayload)
+	return nil
+}
+
+// AppendEventLocked writes one event bound to a plan node by filling
+// PlanNodeRef and the node's path, then reuses the existing per-turn Sequencer
+// + TrajIndex. nodePath is the caller's own path string: stamping it on the
+// record is what lets ReadTrajectory say which step an event belongs to, since
+// PlanNodeRef is a library hash nothing on the public surface derives.
+// Callers hold ac.Mu.
+func AppendEventLocked(ac *domain.Context, agentID, planID, nodeID uint64, nodePath string, ev core.TrajectorySlot) error {
+	if err := ValidateEvent(ev); err != nil {
+		return err
 	}
+	// An unknown key is the first event of that key, so Seq starts at 1.
 	maxSeq, _ := ac.Traj.MaxSeq(planID)
 	ev.SessionID = planID
 	ev.Seq = maxSeq + 1
 	ev.PlanNodeRef = nodeID
+	ev.NodePath = nodePath
 	// An appended plan event is a plain event bound to the node: force the
 	// record to event semantics so a host cannot inject NodeType=Plan (or
 	// other plan-node fields) and pollute the tree view.
 	ev.NodeType = core.NodeTypeEvent
 	ev.PlanID = planID
 	ev.ParentID = 0
-	ev.NodePath = ""
 	ev.Status = 0
 	ev.Summary = ""
+	ev.PlanType = ""
 	idHash, err := repo.AppendTrajectory(ac.Engine, agentID, ev)
 	if err != nil {
 		return err

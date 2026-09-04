@@ -27,7 +27,11 @@ func newSearchTestDB(t *testing.T, llmURL string) *DB {
 func TestSearchCreatesSceneWhenIDEmpty(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["unused"]}`)
 	db := newSearchTestDB(t, srv.URL)
-	l3ID := common.FormatHash(101)
+	// The anchor must be a project domain that exists; a dangling one is rejected.
+	if _, err := repo.CreateGraphL3(db.engine, core.DefaultAgentID, "proj-anchor", core.HypergraphSource{Kind: core.SourceManual}); err != nil {
+		t.Fatalf("create graph: %v", err)
+	}
+	l3ID := common.FormatHash(common.HashID("proj-anchor"))
 
 	res, err := db.Search(core.DefaultAgentID, SearchQuery{L3ID: l3ID})
 	if err != nil {
@@ -242,7 +246,7 @@ func TestSearchReportsSceneTopicCount(t *testing.T) {
 	if res.Scene.TopicCount != 2 {
 		t.Fatalf("Scene.TopicCount = %d, want 2 (depth-1 only, sunk topic excluded)", res.Scene.TopicCount)
 	}
-	scenes, err := db.ListScenes(core.DefaultAgentID)
+	scenes, err := db.ListScenes(core.DefaultAgentID, "")
 	if err != nil {
 		t.Fatalf("ListScenes: %v", err)
 	}

@@ -50,7 +50,7 @@ func (m *MultiAgentDB) CreateAgent(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return internal.FormatAgentID(id), nil
+	return internal.FormatID(id), nil
 }
 
 // AgentInfo is one registered agent on the public hex-id surface.
@@ -67,15 +67,17 @@ func (m *MultiAgentDB) ListAgents() ([]AgentInfo, error) {
 	}
 	out := make([]AgentInfo, len(agents))
 	for i, a := range agents {
-		out[i] = AgentInfo{ID: internal.FormatAgentID(a.ID), Name: a.Name}
+		out[i] = AgentInfo{ID: internal.FormatID(a.ID), Name: a.Name}
 	}
 	return out, nil
 }
 
-// DeleteAgent removes a tenant domain: in-flight Dreams are cancelled,
-// every record of the domain is tombstoned and the name mapping is dropped.
+// DeleteAgent removes a tenant domain: in-flight Dreams are cancelled, every
+// record of the domain is tombstoned and the name mapping is dropped. An id the
+// registry does not know — never issued, or already deleted — is an error, not a
+// no-op success. The implicit default domain cannot be deleted.
 func (m *MultiAgentDB) DeleteAgent(agentIDHex string) error {
-	id, err := internal.ParseAgentID(agentIDHex)
+	id, err := internal.ParseID(agentIDHex)
 	if err != nil {
 		return err
 	}
@@ -86,7 +88,7 @@ func (m *MultiAgentDB) DeleteAgent(agentIDHex string) error {
 // The id must address a registered tenant or the implicit default domain
 // (all-zero hex); admission is enforced in the internal layer.
 func (m *MultiAgentDB) Session(agentIDHex string) (*Session, error) {
-	id, err := internal.ParseAgentID(agentIDHex)
+	id, err := internal.ParseID(agentIDHex)
 	if err != nil {
 		return nil, err
 	}
@@ -102,18 +104,19 @@ func (m *MultiAgentDB) Session(agentIDHex string) (*Session, error) {
 // Checkpoint persists the per-agent index snapshots without closing.
 func (m *MultiAgentDB) Checkpoint() error { return m.db.Checkpoint() }
 
+// CompactTo writes a defragmented copy of the whole file at newPath — only
+// live records, in one fresh log with its own rebuilt index — and leaves the
+// open file untouched. Deletions are tombstones, so this is where a domain that
+// dropped scenes, graphs or capabilities gives the bytes back. newPath must not
+// exist yet, and the copy is a point-in-time snapshot: compact while the domains
+// are quiet (typically right before Close), then swap it in yourself.
+//
+// Go-side only, deliberately: an output path is an arbitrary-file-write
+// primitive, which is not something to hand a model over MCP.
+func (m *MultiAgentDB) CompactTo(newPath string) error { return m.db.CompactTo(newPath) }
+
 // Close checkpoints every agent domain and releases the file.
 func (m *MultiAgentDB) Close() error { return m.db.Close() }
 
 // IsClosed reports whether the database has been closed.
 func (m *MultiAgentDB) IsClosed() bool { return m.db.IsClosed() }
-
-// Lock freezes the default agent domain so the host can touch the .meh file
-// from outside the library (backup, copy, external compaction). It is not a
-// concurrency lock for the host's own calls: every business method already
-// serializes inside its agent domain, and different domains run concurrently.
-// Only the default (all-zero) domain is frozen — other tenants keep writing —
-// so a multi-tenant file is copied safely by Close, copy, Open.
-// Panics on a closed DB (Unlock is then a no-op).
-func (m *MultiAgentDB) Lock()   { m.db.Lock() }
-func (m *MultiAgentDB) Unlock() { m.db.Unlock() }

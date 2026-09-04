@@ -60,30 +60,6 @@ func (db *DB) importCapabilityData(agentID uint64, data []byte, source string) (
 	return cap, nil
 }
 
-// GetCapability reads one L5 capability by ID. IDs not stored in the file
-// fall back to the built-in toolbox, so listed built-ins stay retrievable.
-func (db *DB) GetCapability(agentID uint64, id string) (*core.Capability, error) {
-	ac, err := db.lockAgent(agentID)
-	if err != nil {
-		return nil, err
-	}
-	defer ac.Mu.Unlock()
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
-	}
-	cap, err := repo.GetCapabilityL5(db.engine, agentID, idHash)
-	if err != nil {
-		if common.CodeOf(err) == common.ErrNotFound {
-			if b := db.findBuiltinCapability(idHash); b != nil {
-				return b, nil
-			}
-		}
-		return nil, err
-	}
-	return cap, nil
-}
-
 // UpdateCapability partially updates a stored capability (built-ins are
 // read-only and rejected).
 func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch) (*core.Capability, error) {
@@ -153,6 +129,11 @@ func (db *DB) DeleteCapability(agentID uint64, id string) error {
 	}
 	if db.findBuiltinCapability(idHash) != nil {
 		return common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
+	}
+	// Deleting a card that is not there is reported, not accepted: a host
+	// reconciling its cards has to be able to tell a real deletion from a no-op.
+	if _, err := repo.GetCapabilityL5(db.engine, agentID, idHash); err != nil {
+		return err
 	}
 	if !repo.DeleteCapabilityL5(db.engine, agentID, idHash) {
 		return common.NewError(common.ErrIO, "delete capability", nil)

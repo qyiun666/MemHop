@@ -99,17 +99,29 @@ func isHexID(s string) bool {
 	return err == nil
 }
 
+// File-level lifecycle (Checkpoint/IsClosed/Close) lives on the DB handle, not
+// on a Session — see TestSurfaceMultiAgent. What the session must guarantee is
+// that a malformed id is rejected as a bad query, not reported as a miss.
+// l3Graph seeds a project domain named name with a one-node import and returns
+// its 16-hex id: a scene may only anchor to a domain that exists.
+func l3Graph(t *testing.T, db *Session, name string) string {
+	t.Helper()
+	if _, err := db.ImportL3([]L3ImportItem{{Title: name, Domain: name, NodeType: "concept", Content: "seed", Keywords: []string{"k"}}}, L3ImportSkip); err != nil {
+		t.Fatalf("seed graph %s: %v", name, err)
+	}
+	return common.FormatHash(common.HashID(name))
+}
+
 func TestSurfaceLifecycle(t *testing.T) {
 	db := openSurfaceDB(t)
-	if db.IsClosed() {
-		t.Fatal("fresh DB must be open")
+	if _, err := db.SearchL4(L4Query{IDs: []string{"nothex"}}); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("malformed archive id: code=%v err=%v", CodeOf(err), err)
 	}
-	if err := db.Checkpoint(); err != nil {
-		t.Fatalf("checkpoint: %v", err)
+	if _, err := db.SceneContext("nothex"); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("malformed scene id: code=%v err=%v", CodeOf(err), err)
 	}
-	// Contract: an unknown / malformed archive id is a lookup miss (ErrNotFound).
-	if _, err := db.GetArchive("nothex"); CodeOf(err) != ErrNotFound {
-		t.Fatalf("GetArchive bad id: code=%v err=%v", CodeOf(err), err)
+	if rep, err := db.Dream(context.Background(), "nothex"); CodeOf(err) != ErrInvalidQuery || rep != nil {
+		t.Fatalf("dream on malformed scene id: rep=%v err=%v", rep, err)
 	}
 }
 

@@ -15,9 +15,9 @@ package capabilities
 import "embed"
 
 // FS holds the built-in memhop-capability/v3 cards, one *.json file per
-// capability. Every Open attaches them automatically to the L5 read APIs
-// (ListCapabilities / GetCapability). They are read-only: lifecycle writes
-// (Activate/Usage/Delete/Update) reject them.
+// capability. Every OpenMulti attaches them automatically to the L5 read API
+// (ListCapabilities — a single card is that list filtered by id). They are
+// read-only: lifecycle writes (Activate/Usage/Delete/Update) reject them.
 //
 //go:embed *.json
 var FS embed.FS

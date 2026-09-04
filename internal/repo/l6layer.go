@@ -153,9 +153,14 @@ func DeletePlanRecords(engine *core.StorageEngine, agentID, planID uint64) (int,
 // along with every event bound to those nodes (PlanNodeRef within the branch).
 // nodePath matches itself and any "nodePath.N..." descendant; unknown paths or
 // plans remove nothing (idempotent).
-func DeletePlanNodeBranch(engine *core.StorageEngine, agentID, planID uint64, nodePath string) (int, error) {
+//
+// It hands back the ids it deleted (node records included) because the caller
+// owns the trajectory index: an entry left naming a deleted event makes every
+// later read of that key fail on a record that no longer exists. The index
+// holds only events, so the node ids in the list are no-ops there.
+func DeletePlanNodeBranch(engine *core.StorageEngine, agentID, planID uint64, nodePath string) ([]uint64, error) {
 	if nodePath == "" {
-		return 0, common.NewError(common.ErrInvalidQuery, "nodePath required")
+		return nil, common.NewError(common.ErrInvalidQuery, "nodePath required")
 	}
 	prefix := nodePath + "."
 	var nodeIDs []uint64
@@ -168,7 +173,7 @@ func DeletePlanNodeBranch(engine *core.StorageEngine, agentID, planID uint64, no
 		}
 	}
 	if len(nodeIDs) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	target := make(map[uint64]struct{}, len(nodeIDs))
 	for _, id := range nodeIDs {
@@ -183,7 +188,10 @@ func DeletePlanNodeBranch(engine *core.StorageEngine, agentID, planID uint64, no
 			delIDs = append(delIDs, ev.IDHash)
 		}
 	}
-	return DeleteTrajectoryByIDs(engine, agentID, delIDs)
+	if _, err := DeleteTrajectoryByIDs(engine, agentID, delIDs); err != nil {
+		return nil, err
+	}
+	return delIDs, nil
 }
 
 // CompareNodePath compares two node-path strings ("1", "1.2.1") numerically

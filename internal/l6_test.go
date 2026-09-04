@@ -43,7 +43,7 @@ func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(99)
 	for i := 1; i <= 3; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "llm_request", Timestamp: int64(i)}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "llm_request", Timestamp: int64(i)}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
@@ -63,26 +63,32 @@ func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
 
 func TestAppendTrajectoryValidation(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), core.TrajectorySlot{Timestamp: 1}); err == nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", core.TrajectorySlot{Timestamp: 1}); err == nil {
 		t.Fatal("empty event type should fail")
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), core.TrajectorySlot{EventType: "tool_call"}); err == nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", core.TrajectorySlot{EventType: "tool_call"}); err == nil {
 		t.Fatal("zero timestamp should fail")
 	}
 }
 
-func TestAppendTrajectoryPayloadTruncated(t *testing.T) {
+func TestAppendTrajectoryPayloadRefused(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
+	key := common.FormatHash(3)
 	long := strings.Repeat("x", trajectory.MaxEventPayload+100)
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(3), core.TrajectorySlot{EventType: "tool_call", Payload: long, Timestamp: 1}); err != nil {
-		t.Fatalf("append: %v", err)
+	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.TrajectorySlot{EventType: "tool_call", Payload: long, Timestamp: 1}); err == nil {
+		t.Fatal("an over-budget payload must be refused, not truncated")
 	}
-	events, err := db.ReadTrajectory(core.DefaultAgentID, common.FormatHash(3))
+	events, err := db.ReadTrajectory(core.DefaultAgentID, key)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if len(events) != 1 || len(events[0].Payload) > trajectory.MaxEventPayload {
-		t.Fatalf("payload not truncated: %d bytes", len(events[0].Payload))
+	if len(events) != 0 {
+		t.Fatalf("a refused append must store nothing, got %d events", len(events))
+	}
+	// exactly at the budget still writes
+	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.TrajectorySlot{
+		EventType: "tool_call", Payload: strings.Repeat("x", trajectory.MaxEventPayload), Timestamp: 1}); err != nil {
+		t.Fatalf("payload at the budget limit should append: %v", err)
 	}
 }
 
@@ -91,7 +97,7 @@ func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
 	a, b := common.FormatHash(11), common.FormatHash(22)
 	fresh := time.Now().Add(-time.Hour).UnixMilli()
 	appendOne := func(id string, ts int64) {
-		if err := db.AppendTrajectory(core.DefaultAgentID, id, core.TrajectorySlot{EventType: "llm_request", Timestamp: ts}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, id, "", core.TrajectorySlot{EventType: "llm_request", Timestamp: ts}); err != nil {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
@@ -136,14 +142,14 @@ func TestTrajectorySeqContinuesAfterContextRebuild(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(77)
 	for i := 1; i <= 2; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "llm_request", Timestamp: int64(i)}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "llm_request", Timestamp: int64(i)}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
 	// Simulate the idle sweep dropping the agent context: the next access
 	// must rebuild the trajectory index from records and continue Seq.
 	delete(db.agents, core.DefaultAgentID)
-	if err := db.AppendTrajectory(core.DefaultAgentID, session, core.TrajectorySlot{EventType: "tool_call", Timestamp: 3}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Timestamp: 3}); err != nil {
 		t.Fatalf("append after rebuild: %v", err)
 	}
 	events, err := db.ReadTrajectory(core.DefaultAgentID, session)
@@ -182,7 +188,7 @@ func TestPlanAppendCreatesNodeAndEvent(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	if err := db.PlanAppend(core.DefaultAgentID, pid, "1.2.1", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1000}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, pid, "1.2.1", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1000}); err != nil {
 		t.Fatal(err)
 	}
 	// 节点应已创建为 pending
@@ -204,7 +210,7 @@ func TestPlanAppendCreatesNodeAndEvent(t *testing.T) {
 // ensurePlanNode must build the parent chain with correct ParentID.
 func TestPlanAppendBuildsParentChain(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	if err := db.PlanAppend(core.DefaultAgentID, common.FormatHash(9), "1.2.1", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1000}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(9), "1.2.1", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1000}); err != nil {
 		t.Fatal(err)
 	}
 	rootID := core.HashPlanNode(9, "1")
@@ -374,7 +380,7 @@ func TestDreamPrunesExpiredPlanNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	doneNode := core.HashPlanNode(9, "1")
-	if err := db.PlanAppend(core.DefaultAgentID, doneID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: time.Now().UnixMilli()}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, doneID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
 	age(doneNode)
@@ -384,7 +390,7 @@ func TestDreamPrunesExpiredPlanNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	activeNode := core.HashPlanNode(8, "1")
-	if err := db.PlanAppend(core.DefaultAgentID, activeID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: time.Now().UnixMilli()}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, activeID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: time.Now().UnixMilli()}); err != nil {
 		t.Fatal(err)
 	}
 	age(activeNode)
@@ -415,13 +421,17 @@ func TestDreamPrunesExpiredPlanNodes(t *testing.T) {
 }
 
 // TestPlanAppendCannotInjectNodeType verifies an appended plan event is forced
-// to NodeType=Event, so a host cannot inject a plan-node record that would
-// pollute the tree view.
+// to bare-event semantics: no node-only field survives the write, so a host
+// cannot inject a plan-node record that would pollute the tree view.
 func TestPlanAppendCannotInjectNodeType(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	planID := common.FormatHash(9)
-	// Host tries to inject a plan-node Type on an event; it must be forced to Event.
-	if err := db.PlanAppend(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1000, NodeType: core.NodeTypePlan, Status: core.StatusDone}); err != nil {
+	// Host tries to inject plan-node fields on an event; all of them are forced
+	// back to event semantics.
+	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1", core.TrajectorySlot{
+		EventType: "llm_request", Timestamp: 1000, NodeType: core.NodeTypePlan,
+		Status: core.StatusDone, Summary: "injected", NodePath: "9.9", PlanType: "plan",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	nodes := repo.CollectPlanNodes(db.engine, core.DefaultAgentID, 9)
@@ -432,15 +442,39 @@ func TestPlanAppendCannotInjectNodeType(t *testing.T) {
 		t.Fatalf("plan node should be NodeTypePlan, got %d", nodes[0].NodeType)
 	}
 	// The appended event must be an Event, not a node.
-	evs := core.CollectAllTrajectories(db.engine, core.DefaultAgentID)
 	events := 0
-	for _, e := range evs {
-		if e.NodeType == core.NodeTypeEvent {
-			events++
+	for _, e := range core.CollectAllTrajectories(db.engine, core.DefaultAgentID) {
+		if e.NodeType != core.NodeTypeEvent {
+			continue
+		}
+		events++
+		// The library stamps the step the event actually bound to; the host's
+		// forged "9.9" must not survive.
+		if e.NodePath != "1" {
+			t.Fatalf("appended event must carry the bound node's path, got %q", e.NodePath)
+		}
+		if e.Status != 0 || e.Summary != "" || e.PlanType != "" || e.ParentID != 0 {
+			t.Fatalf("appended event kept node fields: %+v", e)
 		}
 	}
 	if events != 1 {
 		t.Fatalf("want exactly 1 event, got %d", events)
+	}
+
+	// The bare turn path forces the same shape.
+	turnID := common.FormatHash(77)
+	if err := db.AppendTrajectory(core.DefaultAgentID, turnID, "", core.TrajectorySlot{
+		EventType: "tool_call", Timestamp: 1100, PlanType: "step", Summary: "injected",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range core.CollectAllTrajectories(db.engine, core.DefaultAgentID) {
+		if e.SessionID != 77 {
+			continue
+		}
+		if e.PlanType != "" || e.Summary != "" || e.TopicID != 77 {
+			t.Fatalf("bare turn event shape: %+v", e)
+		}
 	}
 }
 
@@ -524,53 +558,18 @@ func TestPlanReplaceClearsAndSeedsRoot(t *testing.T) {
 	}
 }
 
-// ListPlans lets a host discover every plan after a restart: id, activity
-// window, node stats and the active flag.
-func TestListPlansSummarizesEveryPlan(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	defer db.Close()
-	active, finished := common.FormatHash(11), common.FormatHash(22)
-	if err := db.PlanCommit(core.DefaultAgentID, active, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanInProgress, ""); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.PlanCommit(core.DefaultAgentID, finished, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanDone, "done"); err != nil {
-		t.Fatal(err)
-	}
-	plans, err := db.ListPlans(core.DefaultAgentID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(plans) != 2 {
-		t.Fatalf("want 2 plans, got %d", len(plans))
-	}
-	byID := map[string]PlanSummary{}
-	for _, p := range plans {
-		byID[p.PlanID] = p
-	}
-	a, f := byID[active], byID[finished]
-	if a.PlanID == "" || f.PlanID == "" || !a.Active || f.Active {
-		t.Fatalf("active flags wrong: %+v", plans)
-	}
-	if a.NodeCount != 1 || f.NodeCount != 1 || f.DoneCount != 1 || f.TotalCount != 1 {
-		t.Fatalf("node stats wrong: %+v", plans)
-	}
-	if a.CreatedAt != 1001 || a.LastActiveAt < 1001 {
-		t.Fatalf("activity window wrong: %+v", a)
-	}
-}
-
 // Plan events must use the documented vocabulary.
 func TestPlanEventVocabularyRejectsUnknown(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	planID := common.FormatHash(9)
-	if err := db.PlanAppend(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "made_up_event", Timestamp: 1000}); err == nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "made_up_event", Timestamp: 1000}); err == nil {
 		t.Fatal("unknown plan event type must be rejected")
 	}
 	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "nope", Timestamp: 1001}, PlanDone, ""); err == nil {
 		t.Fatal("unknown plan commit event type must be rejected")
 	}
-	if err := db.PlanAppend(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1002}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1002}); err != nil {
 		t.Fatalf("documented event type must be accepted: %v", err)
 	}
 }
@@ -590,7 +589,7 @@ func TestSyncPlanTree_AddEditDelete(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Bind a real event to the node that will be deleted, so the cascade is asserted.
-	if err := db.PlanAppend(core.DefaultAgentID, planID, "1.2", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1500}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1.2", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1500}); err != nil {
 		t.Fatal(err)
 	}
 	tree, err := db.PlanState(core.DefaultAgentID, planID)
@@ -746,7 +745,7 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	if err := db.SyncPlanTree(core.DefaultAgentID, planID, root); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PlanAppend(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1200}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1200}); err != nil {
 		t.Fatal(err)
 	}
 	ac := db.agents[core.DefaultAgentID]
@@ -842,7 +841,7 @@ func TestTurnRunsOnOneTopicID(t *testing.T) {
 		{EventType: "llm_request", Timestamp: 1000},
 		{EventType: "tool_call", Timestamp: 1500},
 	} {
-		if err := db.AppendTrajectory(core.DefaultAgentID, turnID, ev); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, turnID, "", ev); err != nil {
 			t.Fatalf("append %s: %v", ev.EventType, err)
 		}
 	}

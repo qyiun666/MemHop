@@ -124,10 +124,11 @@ func TestE2ECapability(t *testing.T) {
 	}
 	id := cap.IDHash
 
-	got, err := db.GetCapability(id)
-	if err != nil {
-		t.Fatalf("GetCapability(%s): %v", id, err)
+	one, err := db.ListCapabilities(internal.CapabilityListQuery{IDs: []string{id}})
+	if err != nil || len(one) != 1 {
+		t.Fatalf("capability %s: %d found, err %v", id, len(one), err)
 	}
+	got := one[0]
 	if got.Name != "晨跑流程" || got.Type != core.CapabilitySkill {
 		t.Fatalf("unexpected capability: %+v", got)
 	}
@@ -146,8 +147,8 @@ func TestE2ECapability(t *testing.T) {
 	if err := db.DeleteCapability(id); err != nil {
 		t.Fatalf("DeleteCapability(%s): %v", id, err)
 	}
-	if _, err := db.GetCapability(id); err == nil {
-		t.Fatal("GetCapability after DeleteCapability should fail")
+	if none, _ := db.ListCapabilities(internal.CapabilityListQuery{IDs: []string{id}}); len(none) != 0 {
+		t.Fatalf("capability survived DeleteCapability: %+v", none)
 	}
 }
 

@@ -6,7 +6,6 @@ package plan
 import (
 	"strings"
 
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -50,17 +49,6 @@ type PlanTree struct {
 	TotalCount int            `json:"total_count"`
 }
 
-// PlanSummary is one plan's footprint for ListPlans (host restart recovery).
-type PlanSummary struct {
-	PlanID       string `json:"plan_id"`
-	CreatedAt    int64  `json:"created_at"`
-	LastActiveAt int64  `json:"last_active_at"`
-	NodeCount    int    `json:"node_count"`
-	DoneCount    int    `json:"done_count"`
-	TotalCount   int    `json:"total_count"`
-	Active       bool   `json:"active"`
-}
-
 // BuildTree assembles the plan forest from ONE aggregate scan and
 // reads each node's bound-event count from the same pass (no per-node
 // rescans). Callers hold ac.Mu.
@@ -73,30 +61,6 @@ func BuildTree(ac *domain.Context, agentID, planID uint64) (*PlanTree, error) {
 	}
 	done, total := CountForest(views)
 	return &PlanTree{Roots: views, DoneCount: done, TotalCount: total}, nil
-}
-
-// Summarize renders every plan of the domain from the in-memory plan
-// cache in a single pass. Callers hold ac.Mu.
-func Summarize(ac *domain.Context) []PlanSummary {
-	aggs := ac.Plans.All()
-	out := make([]PlanSummary, 0, len(aggs))
-	for _, agg := range aggs {
-		var views []PlanNodeView
-		for _, r := range Forest(agg.Nodes, agg.EventCount) {
-			views = append(views, ToNodeView(r))
-		}
-		done, total := CountForest(views)
-		out = append(out, PlanSummary{
-			PlanID:       common.FormatHash(agg.PlanID),
-			CreatedAt:    agg.CreatedAt,
-			LastActiveAt: agg.LastActiveAt,
-			NodeCount:    len(agg.Nodes),
-			DoneCount:    done,
-			TotalCount:   total,
-			Active:       agg.HasNonDone,
-		})
-	}
-	return out
 }
 
 // aggregate returns one plan's nodes and per-node event counts from

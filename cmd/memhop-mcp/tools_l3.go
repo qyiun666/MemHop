@@ -28,11 +28,12 @@ type knowledgeImportItem struct {
 	Related   []knowledgeRelated `json:"related,omitempty"`
 }
 
-// knowledgeRelated is one import-time hyperedge: a same-graph target node
-// by title and an optional edge kind name (empty = related).
+// knowledgeRelated is one import-time hyperedge: the far side of the relation
+// (one title = a binary edge, several = one N-ary hyperedge over the item plus
+// all of them) and an optional edge kind name (empty = related).
 type knowledgeRelated struct {
-	Title string `json:"title"`
-	Kind  string `json:"kind,omitempty"`
+	Titles []string `json:"titles"`
+	Kind   string   `json:"kind,omitempty"`
 }
 
 type knowledgeUpdateArgs struct {
@@ -135,7 +136,7 @@ func registerKnowledgeReadTools(s *mcp.Server, db *memhop.Session) {
 func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_import",
-		Description: "批量导入 L3 知识条目（按标题+领域匹配既有图）：mode=Skip 跳过已存在、Merge 合并节点、Overwrite 覆盖。source_ref 存位置引用（如 file:line）；related 在同图内按标题建边（目标可在同批后文），重导入同批不会重复建边。返回创建/更新的图 ID、建边数与跳过数。",
+		Description: "批量导入 L3 知识条目（按标题+领域匹配既有图）：mode=Skip 跳过已存在、Merge 合并节点、Overwrite 覆盖。source_ref 存位置引用（如 file:line）；related 在同图内按标题建边（目标可在同批后文），同一对节点可并存不同 kind 的关系，重导入同批不会重复建边。返回 graph_ids（本批写入的图，可直接用于把场景挂到图上）+ created_ids/updated_ids（**节点** ID，不是图 ID）+ edges_created/skipped_count；逐条失败进 errors，批次不中断。",
 		InputSchema: objSchema(map[string]any{
 			"items": map[string]any{
 				"type": "array",
@@ -149,10 +150,14 @@ func registerKnowledgeImportTool(s *mcp.Server, db *memhop.Session) {
 					"related": map[string]any{
 						"type": "array",
 						"items": objSchema(map[string]any{
-							"title": strProp("目标条目标题，必填（同图内，可在同批后文）"),
-							"kind":  strProp("边类型：related | causal | part_of | sequence | dependency | custom，缺省 related"),
-						}, "title"),
-						"description": "同图关系边列表（可选）",
+							"titles": map[string]any{
+								"type":        "array",
+								"items":       map[string]any{"type": "string"},
+								"description": "这条关系的另一侧节点标题，至少一个（同图内，可在同批后文）；给多个就是一条 N 元超边",
+							},
+							"kind": strProp("边类型：related | causal | part_of | sequence | dependency | custom，缺省 related"),
+						}, "titles"),
+						"description": "同图关系边列表（可选）。一条 related 项 = 一条超边，成员是本条目 + titles 全部目标；给两个以上目标就是 N 元事实（「这些属于同一组」），不拆成两两边。",
 					},
 				}, "title", "domain", "content"),
 				"description": "知识条目列表，必填",
@@ -200,7 +205,7 @@ func toImportItems(in []knowledgeImportItem) ([]memhop.L3ImportItem, error) {
 					}
 					kind = v
 				}
-				item.Related = append(item.Related, memhop.L3Relation{Title: r.Title, Kind: kind})
+				item.Related = append(item.Related, memhop.L3Relation{Titles: r.Titles, Kind: kind})
 			}
 		}
 		items = append(items, item)
@@ -211,7 +216,7 @@ func toImportItems(in []knowledgeImportItem) ([]memhop.L3ImportItem, error) {
 func registerKnowledgeWriteTools(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_update",
-		Description: "重命名一个 L3 知识超图（name 缺省则不修改）。",
+		Description: "重命名一个 L3 知识超图（name 缺省则不修改）。新名称不能被其他图占用——domain 标签就是 ImportL3 寻图的方式，撞名会报 ErrInvalidQuery 而不是让该 domain 每次解析到不同的图。改用自己当前的名字是成功的空操作。",
 		InputSchema: objSchema(map[string]any{
 			"id":   strProp("知识图 ID（16 位 hex），必填"),
 			"name": strProp("新名称（可选）"),
@@ -226,7 +231,7 @@ func registerKnowledgeWriteTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_knowledge_delete",
-		Description: "删除一个 L3 知识超图及其全部节点与边。",
+		Description: "删除一个 L3 知识超图及其全部节点与边，并清掉命名该图的 L2 场景锚点（删完不会有场景还挂在已消失的项目域下）。只想改单个节点用 memhop_knowledge_nodes + 删除节点，别用整图删除。",
 		InputSchema: objSchema(map[string]any{
 			"id": strProp("知识图 ID（16 位 hex），必填"),
 		}, "id"),

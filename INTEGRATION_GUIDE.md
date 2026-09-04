@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.5.0**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.6.0**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 ---
@@ -25,7 +25,7 @@ host process
 | **Single instance** | One `.meh` file is locked exclusively; a second `OpenMulti` on the same file fails. Every call runs through a `Session` bound to one agent domain. |
 | **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`. The host needs no external queue. `Lock()`/`Unlock()` remain for host-critical sections around raw file access — they serialize **the default domain only** and panic on a closed DB (`Unlock` on a closed DB is a no-op). |
 | **LLM on the write path** | `Update`, `Dream` and `Crystallize` call the LLM and fail when it is down (no silent degradation) — `Update` exactly once per turn. `Search` never calls it: a read cannot be blocked by the LLM. |
-| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: every response id feeds back as-is, and `api.FormatID` / `api.ParseID` / `api.FormatAgentID` / `api.ParseAgentID` exist for the rare case a host must convert. |
+| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: the library issues every id and a host only echoes it back — there is nothing to convert. `api.DefaultAgentID` names the implicit agent domain and `api.NewPlanID(name)` mints a plan id from a name you choose. |
 | **Timestamps** | Unix milliseconds everywhere; `<= 0` is `ErrInvalidQuery`. |
 
 ---
@@ -124,6 +124,7 @@ db, err := dbm.Session(agentID)
 - `api.OpenMulti(cfg)` is the only entry point.
 - `OpenMulti` mounts the built-in read-only capability cards (nothing written to `.meh`).
 - Explicit flush: `db.Checkpoint()`.
+- Space reclamation: `db.CompactTo(newPath)` writes a defragmented copy of the whole file (live records only, its own rebuilt index) and never touches the open one — `newPath` must not exist yet. Deletes are tombstones, so a domain that dropped scenes or graphs only gives bytes back here; the swap (Close → rename → Open) stays yours, which is why this call is Go-side and not an MCP tool.
 
 ---
 
@@ -140,7 +141,7 @@ res, err := db.Search(api.SearchQuery{
 })
 ```
 
-No `ctx` parameter — the read path holds no cancellable LLM or network work — and **no retrieval cost**: no LLM, no embedding, no scoring; the hit scene's topics come straight from the L2Meta cache. A new scene starts out named `session:<id>` by the library; `SetSceneName(sceneID, name)` is the host's one way to title it, and the title survives every later read (Search rewrites that same record to bump its counters, never the name). The only write is the scene record: its hit counters (feeding Dream's importance feedback) and its turn counter, which is what mints `NewTopicID`.
+No `ctx` parameter — the read path holds no cancellable LLM or network work — and **no retrieval cost**: no LLM, no embedding, no scoring; the hit scene's topics come straight from the L2Meta cache. A new scene starts out named `session:<id>` by the library; `UpdateScene(sceneID, ScenePatch{Name: &name})` is the host's one way to title it, and the title survives every later read (Search rewrites that same record to bump its counters, never the name). The only write is the scene record: its hit counters (feeding Dream's importance feedback) and its turn counter, which is what mints `NewTopicID`.
 
 **`SearchResult` fields:**
 
@@ -149,7 +150,7 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 | `Profile` | L0 profile snapshot | can go into the system prompt |
 | `ProfileBrief` | bounded compact profile digest | light per-turn injection; fetch full `Profile` only when needed |
 | `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID` / `TopicCount`) | keep `Scene.SceneID` — Update and later reads use it |
-| `Topics` | the scene's depth-1 topics in user-timestamp order, each with `FusedKeywords` and `L4Refs` | **the memory injected into this turn's prompt**; follow `L4Refs` via `GetArchive`/`SearchL4` for originals |
+| `Topics` | the scene's depth-1 topics in user-timestamp order, each with `FusedKeywords` and `L4Refs` | **the memory injected into this turn's prompt**; follow `L4Refs` via `SearchL4(L4Query{IDs: ...})` for originals |
 | `NewTopicID` | the topic this read opened for the turn about to run | hand it to `Update` and to `AppendTrajectory` — one turn, one id |
 
 An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one creates a scene and returns its id.
@@ -174,6 +175,8 @@ Both content types default to `ContentText` (their zero value), so a host that n
 One call turns the exchange into its topic: two L4 archives (`RoleUser` + `RoleAgent`) plus keywords from a single distillation, and it returns the same 16-hex id it was given. Settling a topic id twice **rewrites** that turn instead of duplicating it (the archives hash from the topic id and their text), so retrying a timed-out `Update` is safe.
 
 Key property: **distillation runs before any write.** A failed LLM call or an empty extraction errors out and leaves nothing behind — never a half-recorded turn. Unknown scene → `ErrNotFound`; malformed texts/timestamps → `ErrInvalidQuery`.
+
+What may be settled is bounded: the `TopicID` has to be **a turn this scene opened** (the id `Search` minted for one of the turns the scene has counted so far). A Dream-fused topic, another scene's turn, or an id you built yourself is `ErrInvalidQuery` — before the LLM call, so a refusal leaves nothing behind. Replaying the current turn and settling an earlier turn that is still open both stay valid, which is what keeps an at-least-once write loop safe without letting a stale retry rewrite a turn that already settled.
 
 ### 6.3 Consolidation: `Dream(ctx, sceneID)`
 
@@ -206,7 +209,6 @@ What happens *between* those two messages (tool calls, intermediate output, suba
 ```go
 slot, err := db.GetL0()                       // *api.ProfileSlot
 err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
-err = db.DistillL0(ctx)                       // runs only Dream's emotion/MBTI stage
 ```
 
 `UpdateL0` writes the host-owned half — `Name`, `Role`, `Personality`,
@@ -214,21 +216,28 @@ err = db.DistillL0(ctx)                       // runs only Dream's emotion/MBTI 
 stored profile because only Dream evolves them, and `UpdatedAtMs` is stamped by
 the library. There is therefore no need to `GetL0` and fill values back; passing
 those three fields changes nothing. The distilled half refreshes automatically
-with Dream, and `DistillL0` is the lightweight manual entry (no-op when the
-domain has no profile samples).
+with Dream: there is no standalone distill entry point.
 
 ### L2 scenes
 
 | Method | Meaning |
 |---|---|
-| `db.ListScenes() ([]SceneSlot, error)` | scene list (`SceneID / SceneName / TopicCount`) |
-| `db.SceneContext(sceneID) (*SceneContext, error)` | full scene view (topics + L4 messages) — **use for session resume** |
-| `db.SetSceneName(sceneID, name) error` | title a scene (blank name `ErrInvalidQuery`, unknown scene `ErrNotFound`; survives later reads) |
-| `db.SetSceneL3ID(sceneID, l3ID, force) error` | anchor a scene to an L3 project domain — write-once unless `force`, empty `l3ID` clears it |
+| `db.ListScenes(l3ID) ([]SceneSlot, error)` | scene list (`SceneID / SceneName / TopicCount`); a non-empty `l3ID` keeps only the scenes anchored to that project domain, `""` lists all |
+| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn opened, hit counters untouched; **use for session resume**. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back: entries carry `Depth` and `ChildCount` so a fused parent (whose message is Dream's summary) can be told from the turns it grouped. `TopicCount` counts the entries returned, not the scene's depth-1 roots |
+| `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | title it (`Name`), anchor it to an L3 project domain (`L3ID`), or clear the anchor (`L3ID: &""`); nil fields keep their stored value, and the **written scene comes back** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | merge scenes |
-| `db.ListScenesByL3(l3ID) []SceneSlot` | scenes anchored to one L3 project domain (= host sessions) |
 | `db.DeleteTopic(topicID) error` | delete a topic subtree + its L4 archives + indexes; prunes parent `ChildrenIDs` (memory correction) |
 | `db.DeleteScene(sceneID) error` | delete a scene + all topics/archives + L1 node; `ErrNotFound` if missing (memory correction) |
+
+Renaming and anchoring are one call: `UpdateScene` reads the scene once,
+applies the fields you named, writes it back and hands you the stored scene — so
+confirming an anchor never costs a `ListScenes` sweep. Blank title is
+`ErrInvalidQuery`, unknown scene is `ErrNotFound`, and an anchor must name a
+project domain that exists.
+Anchoring is write-once — pointing a scene that already has a **different**
+domain at a new one is rejected (`ErrInvalidQuery`) unless `Force` is set;
+clearing an anchor never needs `Force`, because the scene simply becomes
+unanchored again.
 
 ### L3 knowledge graphs (stable facts: people / projects / preferences)
 
@@ -240,67 +249,101 @@ res, err := db.ImportL3([]api.L3ImportItem{{
     Content:  "Alice is building MemHop",
     Keywords: []string{"Alice", "MemHop"},
     SourceRef: "docs/alice.md:1",     // positional reference (optional)
-    Related:  []api.L3Relation{{Title: "Alice", Kind: api.EdgePartOf}}, // hyperedges (optional)
+    Related:  []api.L3Relation{{Titles: []string{"Alice", "Projects"}, Kind: api.EdgePartOf}},
+    // one relation = one hyperedge over the item plus every title (1 title = a binary relation)
 }}, api.L3ImportMerge)                 // Skip / Merge / Overwrite
-// returns CreatedIDs / UpdatedIDs / SkippedCount / EdgesCreated / Errors
+// returns GraphIDs / CreatedIDs / UpdatedIDs / SkippedCount / EdgesCreated / Errors
 ```
 
 `Related` targets resolve by title within the same graph and may appear later
-in the batch (two-phase import); re-importing the same batch does not
-duplicate edges; unresolvable / self / invalid-kind entries land in `Errors`.
+in the batch (two-phase import). A hyperedge is identified by its member nodes
+**plus its kind**, so one node pair can hold `related` and `part_of` at the same
+time, and re-importing a batch does not duplicate edges (edges stored before the
+kind joined the id are recognised by the same semantic key). Unresolvable / self
+/ invalid-kind entries land in `Errors`.
 
-`GetL3 / ListL3 / QueryL3Nodes / QueryL3Subgraph / UpdateL3 / DeleteL3`.
+`GraphIDs` is what closes the loop: a graph id is `hash(Domain)` and no other
+public call renders that derivation, so without it a host could only find its
+imported graph again by listing the domain and matching names — and
+`SearchQuery.L3ID` / `UpdateScene` need the id.
+
+`GetL3 / ListL3 / QueryL3Nodes / QueryL3Subgraph / UpdateL3 / DeleteL3 /`
+`DeleteL3Nodes`.
+
+`QueryL3Nodes` filters AND together (`IDs` / `Keyword` / `NodeType`), so naming
+only `GraphID` lists that graph's nodes and `Keyword` is case-insensitive — like
+the L4 keyword filter. `DeleteL3` removes the graph with every node and edge;
+`DeleteL3Nodes(graphID, nodeIDs)` removes specific nodes and cascades the
+hyperedges touching them (Go-only, like the other memory-correction calls), so
+correcting one wrong fact no longer means rebuilding the graph and losing the
+edges bound to it. An id that names no node of that graph is refused and nothing
+is deleted.
+
+Every L3 id the library issued names exactly one record type: `GetL3(nodeID)`,
+`UpdateL3(nodeID, …)` or `UpdateScene(sceneID, ScenePatch{L3ID: &nodeID})`
+answer `ErrNotFound` rather than reading — or writing — across kinds.
 
 L2↔L3 is one relation, held by the scene: `SceneSlot.L3ID` anchors a session to
 a project domain (many scenes may share one graph). It is set when the scene is
-created (`SearchQuery.L3ID`) or later via `SetSceneL3ID`, and `ListScenesByL3`
-reads the domain back. Topics carry no graph references.
+created (`SearchQuery.L3ID`) or later via `UpdateScene`, and
+`ListScenes(l3ID)` reads the domain back. Topics carry no graph references.
 
 ### L4 archive search (historical originals)
 
 ```go
 arcs, err := db.SearchL4(api.L4Query{
-    Keyword: "keyword",        // mode 1: content substring
-    // Start: t0, End: t1,    // mode 2: time range (ms)
-    // IDs: []string{...},    // mode 3: by id
-    // TopicID: &topicHex,    // filter: only this topic's archives
-    // Type: &api.ContentImage, // filter: only this content type
+    Keyword: "keyword",          // case-insensitive substring of Content
+    // Start: t0, End: t1,       // created within [t0, t1] (ms)
+    // IDs: []string{...},       // by archive id (one id = one record)
+    // TopicID: &topicHex,       // only this topic's archives
+    // Type: &api.ContentImage,  // only this content type
+    // Limit: 50,                // keep the newest N matches (<=0: every match)
 })
 ```
 
 `ArchiveSlot` fields: `ContentType` (text/image/video/document/audio/code),
-`Role` (0=user/1=agent/2=system/3=dream), `ContextID`, `CreatedAt`, `Content`,
-`Metadata` — for media types `Content` is a path or URI, not the binary.
-Single record: `db.GetArchive(id)`.
+`Role` (`RoleUser`/`RoleAgent` written by `Update`, `RoleDream` by Dream),
+`ContextID`, `CreatedAt`, `Content` — for media types `Content` is a path or
+URI, not the binary.
+Every field is optional and the ones you set **AND** together — there are no
+modes to choose between — and the result is sorted by `CreatedAt`. So the read
+a host wants after a turn is one call: `SearchL4(L4Query{TopicID: &topicID})`
+returns exactly that turn's originals; `L4Query{IDs: []string{id}}` replaces
+the old single-record getter (a missing id yields an empty slice, a malformed
+one `ErrInvalidQuery`); an empty query returns the domain's whole archive set —
+read a time range or add `Limit` before doing that on a large domain, since the
+result is every original the file holds.
 
 ### L5 capabilities (register tools/skills to the LLM)
 
 | Method | Meaning |
 |---|---|
-| `db.ListCapabilities(CapabilityListQuery{Status, Type, Keyword})` | list capability cards |
-| `db.ImportCapability(path)` | import a memhop-capability/v3 JSON file |
-| `db.GetCapability(id)` / `db.DeleteCapability(id)` | read / delete |
+| `db.ListCapabilities(CapabilityListQuery{IDs, Status, Type, Keyword})` | list capability cards; conditions AND, so `IDs: []string{id}` reads one card |
+| `db.ImportCapability(path)` | import a memhop-capability/v3 JSON file (or a directory holding `capability.json`); the Go surface takes any path the host can name, and imported cards land **active** (a crystallized card lands draft) |
+| `db.DeleteCapability(id)` | delete |
 | `db.UpdateCapability(id, CapabilityPatch{...})` | partial update (built-ins rejected) |
 | `db.ActivateCapability(id)` | draft → active |
 | `db.RecordCapabilityUsage(id, success)` | usage feedback |
 
-> The built-in toolbox (6 English cards: `memhop-guide` + 5 LLM-callable manuals) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `GetCapability(id)`. Resources are tool declarations (`name/desc/input/output` mirror the host tool spec; `input` is a JSON Schema string), so hosts project them with a pure field copy.
+> The built-in toolbox (6 English cards: `memhop-guide` + 5 LLM-callable manuals) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `ListCapabilities(CapabilityListQuery{IDs: []string{id}})`. Resources are tool declarations (`name/desc/input/output` mirror the host tool spec; `input` is a JSON Schema string), so hosts project them with a pure field copy.
 
 ### L6 trajectory + crystallization (v1.2.7 additions)
 
 ```go
 // One trajectory per agent turn: the key is the NewTopicID Search returned
 // for this turn — the host no longer derives turn keys itself.
-err := db.AppendTrajectory(turnIDHex, api.TrajectorySlot{
+err := db.AppendTrajectory(turnIDHex, "", api.TrajectorySlot{
     EventType: "tool_call",   // classifies each step of the turn:
                               // llm_request / llm_output / tool_call / tool_result /
                               // subagent_spawn / subagent_done / context_inject /
                               // ask_user / user_reply (free-form; no whitelist)
-    Payload:   "tool name + arg summary", // truncated to 4KB
+    Payload:   "tool name + arg summary", // 4KB budget, over-budget is refused
     Timestamp: time.Now().UnixMilli(),
 })
 // Seq, SessionID and the event's TopicID are engine-assigned: the key you
 // append under IS the turn's topic id, so don't set them.
+// The second argument is the plan node path — see the plan surface below;
+// pass "" for a plain turn event.
 
 // L6 → L5: distill one turn's trajectory into capability drafts (capped at
 // 128KB payload, oldest events dropped). Pass the plan id instead of a topic
@@ -316,20 +359,47 @@ sessions, err := db.ListTrajectorySessions()
 // sessions[i] = TrajectorySessionSummary{SessionID hex (the turn's topic id), Steps, LastAppendAt}
 ```
 
-`ReadTrajectory(turnID)` reads events in Seq order. Retention is internal:
-Dream drops events older than 7 days (L6 is a process index; durable
-products live in L4/L5) — there is no delete API.
+`ReadTrajectory(key)` reads events in Seq order. The log is append-only and
+addressed **by key only**: nothing returns or takes an event id, because no
+public call consumes one — the read is the whole turn (or the whole plan), and
+Dream drops events older than the retention window (L6 is a process index;
+durable products live in L4/L5). Of an event you hand in, `EventType`,
+`Payload`, `Timestamp` and `FinishedAt` are used as given; `Seq`, the session
+id, the plan-node fields (`NodeType`/`PlanID`/`ParentID`/`NodePath`/`Status`/
+`Summary`/`PlanType`) are assigned or cleared by the library, and a `Payload`
+over 4 KiB is refused — a shortened event would read back exactly like a complete one.
+
+### L6 plan tree (Go host surface)
+
+One L6 key space carries both turns and the host's task tree. The library
+issues the plan id, so the host names the plan and gets a stable token back:
+
+```go
+planID := api.NewPlanID("cat-42")     // deterministic 16-hex; naming it again
+                                      // after a restart recovers the same tree
+```
+
+| Call | Meaning |
+|---|---|
+| `db.SyncPlanTree(planID, root *PlanNode)` | push the authoritative whole tree: adds/updates nodes by `NodePath`, deletes vanished nodes with their bound events, emits no `plan_step`. A blank `Title`/`Type`/`Status`/`Summary` inherits the stored value, so a partial snapshot never rewinds a finished step |
+| `db.AppendTrajectory(planID, nodePath, ev)` | record a step event against that node (creating the node chain as pending if missing). `nodePath` is **dotted** (`"1"`, `"1.2.1"`) and must sit under its parent's path; `EventType` must come from the plan vocabulary: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` (a bare turn event takes any `EventType` the host names) |
+| `db.PlanCommit(planID, nodePath, ev, api.PlanStatusDone, summary)` | advance a node's status and append its step event; `done` children's summaries roll up into their parent |
+| `db.PlanState(planID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`) — this is also how a host recovers its tree after a restart |
+| `db.PlanReplace(planID, rootTitle)` | wipe the tree and (optionally) seed a fresh titled root, keeping the id |
+
+`0000000000000000` is reserved (it is the bare-event sentinel) and every plan
+entry rejects it.
 
 ---
 
-## 9. Exported types (v1.5.0)
+## 9. Exported types (v1.6.0)
 
 | Kind | Names | Use |
 |---|---|---|
 | config | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the whole assembly surface |
-| input aliases | `SearchQuery` / `TurnUpdate` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `CapabilityImport` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `Workflow` | inputs & id-free results (all string IDs are hex) |
+| input aliases | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `Workflow` | inputs & id-free results (all string IDs are hex) |
 | response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | every ID field is a 16-hex string (v1.4.1) |
-| id helpers | **`FormatID`** / **`ParseID`** / **`FormatAgentID`** / **`ParseAgentID`** (new in v1.4.1) | hex ⇄ uint64 when a host must convert |
+| id surface | **`DefaultAgentID`** (the implicit domain) / **`NewPlanID(name)`** (mint a plan id) | the library issues ids; a host echoes them back and converts nothing |
 | enums | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` / `PlanStatus` | enum aliases |
 
 Enum constants are exported too: `L3ImportSkip/Merge/Overwrite`,
@@ -340,7 +410,7 @@ Enum constants are exported too: `L3ImportSkip/Merge/Overwrite`,
 > L4 `role` is a bare `uint8`; the exported constants are
 > `api.RoleUser` / `RoleAgent` / `RoleSystem` / `RoleDream` (values 0-3).
 > Plan trees use `api.NodeTypeEvent` / `NodeTypePlan`, the numeric read-side
-> `api.Status*` codes and the string write-side `api.PlanStatus*` values.
+> `api.PlanStatus*` string values (a plan node's status is only ever a string; the L6 event record carries no status field).
 
 ---
 
@@ -361,7 +431,7 @@ Numbers are never reused: `1002` (vector-dimension mismatch) and `9001`
 
 ---
 
-## 11. Minimal runnable skeleton (v1.5.0 signatures)
+## 11. Minimal runnable skeleton (v1.6.0 signatures)
 
 ```go
 package main
@@ -418,7 +488,7 @@ func main() {
     })
     if err != nil { log.Fatal(err) }
     // Everything the turn did in between belongs to that same topic:
-    _ = db.AppendTrajectory(topicID, api.TrajectorySlot{
+    _ = db.AppendTrajectory(topicID, "", api.TrajectorySlot{
         EventType: "tool_call", Payload: "grep ...", Timestamp: userTS + 1,
     })
 
@@ -447,11 +517,11 @@ func main() {
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`; the agent timestamp
    must not precede the user timestamp.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
-   feed back as-is, and `api.FormatID` / `api.ParseID` cover rare conversions.
+   feed back as-is; the facade exposes no hex ⇄ integer bridge.
 5. **`Search` writes no memory content**: it opens one turn (bumping the
    scene's hit and turn counters) and creates no topic record, so an abandoned
    turn leaves nothing behind. To read originals use `SceneContext` /
-   `SearchL4` / `GetArchive`.
+   `SearchL4`.
    Replaying an `Update` with the same `TopicID` is idempotent: the topic is
    that id and its archives hash from it, so a retried settle overwrites
    instead of duplicating.

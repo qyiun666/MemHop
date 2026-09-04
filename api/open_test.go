@@ -25,11 +25,11 @@ var builtinNames = []string{
 	"memhop-profile", "memhop-capability",
 }
 
-// OpenMulti attaches the toolbox in memory: ListCapabilities/GetCapability
-// serve it immediately, close/reopen stays clean, and nothing is persisted
-// (storage-only views are verified at the internal layer). The
-// loadBuiltinCapabilities shape check moved to the internal package with the
-// function itself (api is a pure forwarding facade).
+// OpenMulti attaches the toolbox in memory: ListCapabilities serves it
+// immediately (a single card by ID is an ID-filtered list query), close/reopen
+// stays clean, and nothing is persisted (storage-only views are verified at the
+// internal layer). The loadBuiltinCapabilities shape check moved to the internal
+// package with the function itself (api is a pure forwarding facade).
 func TestOpenAttachesBuiltins(t *testing.T) {
 	cfg := openTestConfig(filepath.Join(t.TempDir(), "b.meh"))
 	m, err := OpenMulti(cfg)

@@ -3,17 +3,16 @@
 
 // Tool registration for the memhop-mcp server. Every public DB method of
 // the api package is exposed as one MCP tool; arguments and results are
-// plain JSON (the DB DTOs carry json tags already). uint64 record IDs are
-// serialized as 16-char hex strings so JS hosts never lose precision.
+// plain JSON (the DB DTOs carry json tags already). Record IDs reach a
+// client as the 16-char hex strings the api DTOs render — no numeric id
+// crosses this boundary, which api/surface_public_test.go pins.
 
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	memhop "github.com/qyiun666/MemHop/api"
@@ -43,86 +42,9 @@ func handleNoArgs[Out any](fn func() (Out, error)) mcp.ToolHandler {
 	return handle(func(struct{}) (Out, error) { return fn() })
 }
 
-// idHexFields are the JSON keys whose values are MemHop record IDs. Only
-// these are converted to hex strings; everything else stays numeric.
-var idHexFields = map[string]bool{
-	"id":           true, // TopicSlot.ID
-	"id_hash":      true, // slots (L0/L1/L3/L4/L5/L6)
-	"scene_id":     true,
-	"parent_id":    true,
-	"new_topic_id": true,
-	"context_id":   true, // HypergraphSource / ArchiveSlot
-	"graph_id":     true, // L3 hypergraph + node
-	"topic_ids":    true, // L1 scene slot
-	"children_ids": true,
-	"edge_ids":     true, // L1 scene slot
-	"l4_refs":      true,
-	"l3_refs":      true,
-	"session_id":   true, // L6 TrajectorySlot
-	"l4_ref":       true, // L6 TrajectorySlot optional archive ref
-}
-
-// marshalResult marshals v with ID fields converted to hex strings.
-func marshalResult(v any) ([]byte, error) {
-	// Round-trip through json.Number so uint64 values never lose precision
-	// before the conversion (encoding/json decodes into float64 by default).
-	data, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.UseNumber()
-	var tree any
-	if err := dec.Decode(&tree); err != nil {
-		return nil, err
-	}
-	return json.Marshal(idsToHex(tree))
-}
-
-// idsToHex recursively converts ID fields (by key) and all elements of ID
-// arrays to 16-digit hex strings.
-func idsToHex(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		for k, val := range t {
-			if idHexFields[k] {
-				t[k] = idValueToHex(val)
-			} else {
-				t[k] = idsToHex(val)
-			}
-		}
-		return t
-	case []any:
-		for i, val := range t {
-			t[i] = idsToHex(val)
-		}
-		return t
-	default:
-		return v
-	}
-}
-
-// idValueToHex converts a uint64-ish JSON number (or array of them) to hex.
-func idValueToHex(v any) any {
-	switch t := v.(type) {
-	case json.Number:
-		if u, err := strconv.ParseUint(string(t), 10, 64); err == nil {
-			return fmt.Sprintf("%016x", u)
-		}
-		return t.String()
-	case []any:
-		for i, val := range t {
-			t[i] = idValueToHex(val)
-		}
-		return t
-	default:
-		return v
-	}
-}
-
 // okResult serializes v as the JSON text content of a successful result.
 func okResult(v any) *mcp.CallToolResult {
-	data, err := marshalResult(v)
+	data, err := json.Marshal(v)
 	if err != nil {
 		r := &mcp.CallToolResult{}
 		r.SetError(fmt.Errorf("encode result: %w", err))
@@ -201,11 +123,13 @@ func resolveContentType(name string) (memhop.ContentType, error) {
 }
 
 // registerTools attaches all 31 tools to the server for one tenant DB.
-func registerTools(s *mcp.Server, db *memhop.Session) {
-	registerCoreTools(s, db)
+// capDir is the directory memhop_capability_import resolves its path argument
+// inside; the other tools take ids only, which the library minted.
+func registerTools(s *mcp.Server, m *memhop.MultiAgentDB, db *memhop.Session, capDir string) {
+	registerCoreTools(s, m, db)
 	registerL2Tools(s, db)
 	registerL3Tools(s, db)
 	registerL4Tools(s, db)
-	registerL5Tools(s, db)
+	registerL5Tools(s, db, capDir)
 	registerL6Tools(s, db)
 }

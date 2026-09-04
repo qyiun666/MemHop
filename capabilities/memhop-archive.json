@@ -3,35 +3,23 @@
   "name": "memhop-archive",
   "version": "3",
   "type": "composite",
-  "summary": "L4 archive manual: search historical conversation text (keyword / time range / ID list modes), read single entries by ID",
+  "summary": "L4 archive manual: search historical conversation text by any combination of keyword / time range / ID / topic / content type. The entries below are Go api methods; an MCP client calls the same operation as memhop_archive_search (memhop_archive_get is the by-id convenience)",
   "trigger": "need to look up past conversation text or dig out old messages; archive l4 raw text history conversation search",
   "resources": [
     {
       "type": "api",
       "name": "SearchL4",
       "ref": "api:SearchL4",
-      "desc": "Search L4 raw text; pick one of three q modes: Keyword (substring), Start/End (millisecond time range), IDs (archive ID list); optionally narrow with TopicID (16-char hex) and Type (text|image|video|document|audio|code|other). For media types (image/audio/video) Content holds a path or URI, not binary",
-      "input": "{\"type\":\"object\",\"properties\":{\"keyword\":{\"type\":\"string\",\"description\":\"Substring match (mode 1)\"},\"start\":{\"type\":\"integer\",\"description\":\"Time range start in ms (mode 2)\"},\"end\":{\"type\":\"integer\",\"description\":\"Time range end in ms (mode 2)\"},\"ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Archive ID list (mode 3)\"},\"topic_id\":{\"type\":\"string\",\"description\":\"Limit to topic (16-char hex, optional)\"},\"type\":{\"type\":\"string\",\"description\":\"Content type filter: text|image|video|document|audio|code|other (optional)\"}}}",
+      "desc": "Search L4 raw text. Every condition is optional and the set ones AND together: Keyword (case-insensitive substring, like the L3 node keyword), Start/End (millisecond range), IDs (16-char hex archive ids), TopicID (only that turn's originals), Type (text|image|video|document|audio|code|other). An empty query returns the domain's whole archive set, sorted by CreatedAt oldest first; Limit keeps the newest N matches (<=0 means every match). For media types Content holds a path or URI, not binary",
+      "input": "{\"type\": \"object\", \"properties\": {\"keyword\": {\"type\": \"string\", \"description\": \"Substring match on Content (optional)\"}, \"start\": {\"type\": \"integer\", \"description\": \"Created at or after, unix ms (optional)\"}, \"end\": {\"type\": \"integer\", \"description\": \"Created at or before, unix ms (optional)\"}, \"ids\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"description\": \"Archive ids, 16-char hex (optional)\"}, \"topic_id\": {\"type\": \"string\", \"description\": \"Only this topic's archives, 16-char hex (optional)\"}, \"type\": {\"type\": \"string\", \"description\": \"Content type filter: text|image|video|document|audio|code|other (optional)\"}}}",
       "output": "List of ArchiveSlot (Content/Role/CreatedAt/Metadata)"
-    },
-    {
-      "type": "api",
-      "name": "GetArchive",
-      "ref": "api:GetArchive",
-      "desc": "Read one L4 entry by ID; unknown ID returns an error",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Archive ID (16-char hex)\"}},\"required\":[\"id\"]}",
-      "output": "ArchiveSlot"
     }
   ],
   "workflow": {
     "steps": [
       {
         "ref": "SearchL4",
-        "action": "Search archives by keyword/time/IDs"
-      },
-      {
-        "ref": "GetArchive",
-        "action": "Read one entry precisely by ID"
+        "action": "Search archives by any combination of conditions"
       }
     ]
   }

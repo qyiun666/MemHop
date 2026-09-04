@@ -10,3 +10,7 @@
   持域锁后调用本包；事件的 `topic_id`/`SessionID` 语义由大方法强制。
 - **陷阱**：`findTarget` 只有真正的"无此记录"才返回 found=false；瞬时读
   失败上抛（否则重建已有能力卡、丢使用计数）；畸形 ReuseID 忽略不致命。
+
+<!-- 2026-09-04 接口去 fallback 与按层闭环修复 -->
+- `ValidateEvent` 集中了 L6 写入的事件契约（EventType/Timestamp 必填、payload 不得超 `MaxEventPayload`）。**超预算是拒绝而不是截断**——被剪短的事件读回来与完整事件无法区分。
+- `ReadTurn` 返回 `([]slot, error)`：索引点名而引擎读不动的记录是错误，不是少几条的转录（对齐仓内「瞬时错误一律上报」）。

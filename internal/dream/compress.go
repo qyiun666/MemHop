@@ -6,6 +6,7 @@ package dream
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
@@ -27,6 +28,11 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 		succeeded = make(map[uint64]struct{})
 		failures  int
 	)
+	countFailure := func() {
+		mu.Lock()
+		failures++
+		mu.Unlock()
+	}
 	for _, sid := range scenes {
 		wg.Add(1)
 		go func(sceneID uint64) {
@@ -40,6 +46,8 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 				Num:     2,
 			})
 			if err != nil {
+				countFailure()
+				slog.Warn("dream: read scene topics failed", "scene", common.FormatHash(sceneID), "err", err)
 				return
 			}
 			// Skip below the compress threshold: few topics keep raw detail.
@@ -48,12 +56,18 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 			}
 			out, err := llmops.Consolidate(ctx, ac.LLM, topics)
 			if err != nil {
-				mu.Lock()
-				failures++
-				mu.Unlock()
+				countFailure()
 				return
 			}
-			if applied := applyGroups(ctx, ac, sceneID, topics, out); applied > 0 {
+			applied, rejected := applyGroups(ctx, ac, sceneID, topics, out)
+			for i := 0; i < rejected; i++ {
+				countFailure()
+			}
+			if rejected > 0 {
+				slog.Warn("dream: merge groups proposed but not applied",
+					"scene", common.FormatHash(sceneID), "applied", applied, "rejected", rejected)
+			}
+			if applied > 0 {
 				mu.Lock()
 				succeeded[sceneID] = struct{}{}
 				rep.L2TopicsCompressed += int(applied)
@@ -67,66 +81,78 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 
 // applyGroups applies one scene's groups: store MergedSummary as an L4
 // dream archive, extract keywords for the fused topic, create the parent
-// topic with the archive ref, then sink the group nodes.
-func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics []core.TopicSlot, out *llmops.ConsolidationOutput) uint32 {
+// topic with the archive ref, then sink the group nodes. It reports how many
+// groups landed and how many the model proposed but the engine could not
+// apply — the two are different facts, and a pass that applied nothing because
+// every proposed group was unusable must not look like a scene with nothing to
+// consolidate.
+func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics []core.TopicSlot, out *llmops.ConsolidationOutput) (uint32, int) {
 	byID := make(map[uint64]core.TopicSlot, len(topics))
 	for _, t := range topics {
 		byID[t.ID] = t
 	}
 	var count uint32
+	var rejected int
 	for _, g := range out.L2Groups {
 		if len(g.NodeHashes) < 2 {
 			continue
 		}
 		minTS, maxTS, ok := groupTimestamps(g.NodeHashes, byID)
 		if !ok {
+			rejected++
 			continue
 		}
-		if applyOneGroup(ctx, ac, sceneID, g, minTS, maxTS) {
-			count++
+		if err := applyOneGroup(ctx, ac, sceneID, g, minTS, maxTS); err != nil {
+			rejected++
+			continue
 		}
+		count++
 	}
-	return count
+	return count, rejected
 }
 
 // applyOneGroup consolidates a single merge group: stores MergedSummary as
 // an L4 dream archive, extracts keywords for the fused topic, creates the
-// parent topic with the archive ref, then sinks the group nodes. A failed step
-// rolls back what this group already wrote and reports false, so a group is
-// either fully applied or leaves nothing behind.
-func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g llmops.L2Group, minTS, maxTS int64) bool {
+// parent topic with the archive ref, then sinks the group nodes. Any step that
+// cannot be applied rolls back what this group already wrote and returns the
+// reason, so a group is either fully applied or leaves nothing behind.
+func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g llmops.L2Group, minTS, maxTS int64) error {
 	parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
 	archiveID, err := repo.AppendArchiveL4(ac.Engine, ac.ID, parentID, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
 	if err != nil {
-		slog.Warn("dream: archive merged summary failed", "parent", common.FormatHash(parentID), "err", err)
-		return false
+		return common.NewError(common.ErrIO, "dream: archive merged summary", err)
 	}
 
-	// Keywords of MergedSummary become the fused topic's single track.
+	// Keywords of MergedSummary become the fused topic's single track. An empty
+	// summary is not a group the engine can fuse: it would sink the children
+	// under a parent carrying nothing.
+	if strings.TrimSpace(g.MergedSummary) == "" {
+		discardFusedGroup(ac, parentID, archiveID)
+		return common.NewError(common.ErrLLM, "dream: merge group proposed an empty merged_summary", nil)
+	}
 	keywords, err := llmops.ExtractKeywords(ctx, ac.LLM, g.MergedSummary)
 	if err != nil || len(keywords) == 0 {
-		slog.Warn("dream: extract keywords from merged summary failed, skip group", "parent", common.FormatHash(parentID), "err", err)
 		discardFusedGroup(ac, parentID, archiveID)
-		return false
+		if err == nil {
+			err = common.NewError(common.ErrLLM, "extracted no keywords", nil)
+		}
+		return common.NewError(common.ErrLLM, "dream: extract keywords from merged summary", err)
 	}
 
 	if !repo.CreateFusedTopicL2(ac.Engine, ac.ID, sceneID, keywords, minTS, maxTS, g.NodeHashes) {
-		slog.Warn("dream: create fused topic failed", "parent", common.FormatHash(parentID))
 		discardFusedGroup(ac, parentID, archiveID)
-		return false
+		return common.NewError(common.ErrIO, "dream: create fused topic", nil)
 	}
 	// Attach the summary archive ref so the host can pull the fused text back.
 	if !repo.UpdateTopicL4RefsL2(ac.Engine, ac.ID, parentID, []uint64{archiveID}) {
-		slog.Warn("dream: attach summary archive ref failed", "parent", common.FormatHash(parentID))
 		discardFusedGroup(ac, parentID, archiveID)
-		return false
+		return common.NewError(common.ErrIO, "dream: attach summary archive ref", nil)
 	}
 	if _, err := repo.CompressTopicsL2(ac.Engine, ac.ID, g.NodeHashes, parentID); err != nil {
-		slog.Warn("dream: compress child topics failed", "parent", common.FormatHash(parentID), "err", err)
 		discardFusedGroup(ac, parentID, archiveID)
-		return false
+		return common.NewError(common.ErrIO, "dream: compress child topics", err)
 	}
-	return true
+	return nil
 }
 
 // discardFusedGroup rolls back a partially applied merge group: no orphan

@@ -3,7 +3,7 @@
   "name": "memhop-guide",
   "version": "3",
   "type": "composite",
-  "summary": "MemHop memory-loop overview: Search (read one scene and open the turn), Update (settle the finished turn into the topic Search minted), Dream (consolidation) and trajectory recording all run automatically on the host — the LLM must NOT call them manually (trajectories older than 7 days are pruned automatically); the abilities an LLM may call are the five cards indexed in resources; to use a card, resolve its 16-char hex capability id from the host card index (ListCapabilities projection carries id alongside name) and fetch the full parameter schema with GetCapability(id)",
+  "summary": "MemHop memory-loop overview: Search (read one scene and open the turn), Update (settle the finished turn into the topic Search minted), Dream (consolidation) and trajectory recording all run automatically on the host — the LLM must NOT call them manually (trajectories older than 7 days are pruned automatically); the abilities an LLM may call are the five cards indexed in resources; to use a card, resolve its 16-char hex capability id from the host card index (ListCapabilities projection carries id alongside name), then read that one card in full by listing with an id filter (Go ListCapabilities with IDs set to that single id; MCP tool memhop_capability_get) to get its parameter schemas",
   "trigger": "using the memhop memory system, unsure what is callable or which card fits the task; guide overview memory loop entry index",
   "resources": [
     {

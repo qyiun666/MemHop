@@ -13,6 +13,7 @@ package internal
 import (
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/config"
+	"github.com/qyiun666/MemHop/internal/plan"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -154,14 +155,16 @@ const (
 
 // ---- external id rendering ----
 
-// FormatAgentID renders an agentID as its external 16-char hex form.
-func FormatAgentID(agentID uint64) string { return common.FormatHash(agentID) }
-
-// ParseAgentID parses a 16-char hex agentID.
-func ParseAgentID(s string) (uint64, error) { return common.ParseID(s) }
-
-// FormatID renders any record ID as its external 16-char hex form.
+// FormatID renders any record or domain ID as its external 16-char hex form.
+// Hex strings are the only id shape the facade exchanges with a host: ids are
+// issued by the library (Search mints turn ids, MintPlanID derives plan ids),
+// so a host never has to build one from an integer.
 func FormatID(id uint64) string { return common.FormatHash(id) }
 
-// ParseID parses a 16-char hex record ID.
+// ParseID parses a 16-char hex ID.
 func ParseID(s string) (uint64, error) { return common.ParseID(s) }
+
+// MintPlanID derives the stable 16-char hex id of the plan a host names. The
+// mapping is deterministic, so a restart recovers the same tree without the
+// host storing the derived id.
+func MintPlanID(name string) string { return plan.MintID(name) }

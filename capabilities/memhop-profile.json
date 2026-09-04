@@ -3,7 +3,7 @@
   "name": "memhop-profile",
   "version": "3",
   "type": "composite",
-  "summary": "L0 profile manual: read/update the host identity profile (role, personality, emotion state, MBTI, preferences)",
+  "summary": "L0 profile manual: read/update the host identity profile (role, personality, emotion state, MBTI, preferences). The entries below are Go api methods; an MCP client calls the same operations as memhop_profile_get / memhop_profile_update",
   "trigger": "need to view or adjust the host profile, identity, preferences; profile l0 identity role personality emotion mbti preference",
   "resources": [
     {

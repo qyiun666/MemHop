@@ -160,9 +160,13 @@ func TestCoreCycleUpdateDream(t *testing.T) {
 	// are the source of truth in L4; the read surface must still carry the
 	// distilled keywords.
 	for _, want := range facts {
-		hit, err := db.SearchL4(internal.L4Query{Keyword: want[:18]})
+		// A rune-safe prefix: slicing bytes lands in the middle of a 3-byte CJK
+		// rune, and an invalid UTF-8 query can never match Content — which looks
+		// exactly like a lost archive.
+		probe := string([]rune(want)[:12])
+		hit, err := db.SearchL4(internal.L4Query{Keyword: probe})
 		if err != nil {
-			t.Fatalf("SearchL4 for %q: %v", want[:18], err)
+			t.Fatalf("SearchL4 for %q: %v", probe, err)
 		}
 		if len(hit) == 0 {
 			t.Errorf("fact lost from L4 after consolidation: %.24s", want)

@@ -3,7 +3,7 @@
   "name": "memhop-capability",
   "version": "3",
   "type": "composite",
-  "summary": "L5 capability loop manual: crystallize reusable abilities from L6 trajectories (draft) -> activate -> usage feedback, import external capability files, List/Get index and details (built-in cards are read-only)",
+  "summary": "L5 capability loop manual: crystallize reusable abilities from L6 trajectories (draft) -> activate -> usage feedback, import external capability files, List/Get index and details (built-in cards are read-only). The entries below are Go api methods; an MCP client calls the same operations as memhop_capability_list / _get / _import / _update / _activate / _delete / _usage and memhop_crystallize",
   "trigger": "need to distill reusable abilities, import capability definitions, activate drafts, record usage results, view the capability list or fetch card details; capability l5 crystallize import activate draft lifecycle",
   "resources": [
     {
@@ -42,17 +42,9 @@
       "type": "api",
       "name": "ListCapabilities",
       "ref": "api:ListCapabilities",
-      "desc": "List/filter capability cards (status/type/keyword filters); returns built-in read-only cards plus stored ones, each carrying its 16-char hex id for GetCapability",
-      "input": "{\"type\":\"object\",\"properties\":{\"status\":{\"type\":\"string\",\"description\":\"draft/active/deprecated filter (optional)\"},\"type\":{\"type\":\"string\",\"description\":\"mcp/skill/api/composite filter (optional)\"},\"keyword\":{\"type\":\"string\",\"description\":\"Keyword matched against name+summary+trigger (optional)\"}}}",
+      "desc": "List/filter capability cards. Every condition is optional and the set ones AND together: IDs (16-char hex — pass one id to read a single card), Status, Type, Keyword (matches name+summary+trigger). Built-in read-only reference cards are included",
+      "input": "{\"type\": \"object\", \"properties\": {\"ids\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"description\": \"Capability ids, 16-char hex (optional)\"}, \"status\": {\"type\": \"string\", \"description\": \"draft|active|deprecated (optional)\"}, \"type\": {\"type\": \"string\", \"description\": \"mcp|skill|api|composite (optional)\"}, \"keyword\": {\"type\": \"string\", \"description\": \"Substring of name+summary+trigger (optional)\"}}}",
       "output": "List of Capability (descending by UpdatedAt)"
-    },
-    {
-      "type": "api",
-      "name": "GetCapability",
-      "ref": "api:GetCapability",
-      "desc": "Read one capability card's full definition by ID (including resource input JSON Schemas); fetch the detail before calling concrete APIs the first time a card is used",
-      "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Capability ID (16-char hex)\"}},\"required\":[\"id\"]}",
-      "output": "Capability (full definition)"
     },
     {
       "type": "api",

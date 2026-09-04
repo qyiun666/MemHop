@@ -3,15 +3,15 @@
   "name": "memhop-scene",
   "version": "3",
   "type": "composite",
-  "summary": "L2 scene manual: a scene is one host session — list scenes, read topic context within a scene, rename a scene, merge sessions into one, delete topics and scenes (memory correction)",
+  "summary": "L2 scene manual: a scene is one host session — list scenes, read topic context within a scene, rename a scene, merge sessions into one, delete topics and scenes (memory correction). The entries below are Go api methods; an MCP client calls the same operations as memhop_scene_list / _topics / _rename / _merge, while DeleteTopic and DeleteScene stay Go-only (no MCP tool)",
   "trigger": "need to view scene lists, read a scene's topic context, name a session readably, merge duplicate scenes or delete wrong memories; scene l2 topic rename merge delete context",
   "resources": [
     {
       "type": "api",
       "name": "ListScenes",
       "ref": "api:ListScenes",
-      "desc": "List all L2 scenes; returns SceneID/name/depth-1 topic count",
-      "input": "{\"type\":\"object\",\"properties\":{}}",
+      "desc": "List L2 scenes; an optional l3_id keeps only the scenes anchored to that project domain. Returns SceneID/name/topic count",
+      "input": "{\"type\": \"object\", \"properties\": {\"l3_id\": {\"type\": \"string\", \"description\": \"Only scenes anchored to this L3 domain, 16-char hex (optional)\"}}}",
       "output": "List of SceneSlot"
     },
     {
@@ -24,10 +24,10 @@
     },
     {
       "type": "api",
-      "name": "SetSceneName",
-      "ref": "api:SetSceneName",
-      "desc": "Rename a scene: a fresh one is library-named \"session:<id>\", this is the only entry that gives it a human title. Blank name is rejected; unknown scene is ErrNotFound. The title survives later reads and settles",
-      "input": "{\"type\":\"object\",\"properties\":{\"scene_id\":{\"type\":\"string\",\"description\":\"Scene ID (16-char hex)\"},\"name\":{\"type\":\"string\",\"description\":\"New scene title (non-empty)\"}},\"required\":[\"scene_id\",\"name\"]}",
+      "name": "UpdateScene",
+      "ref": "api:UpdateScene",
+      "desc": "Patch a scene's host-facing metadata in one write and get the stored scene back. Name renames it (a fresh scene is library-named \"session:<id>\"); L3ID anchors it to an L3 project domain, and an empty L3ID clears the anchor. Omitted fields keep their stored value. Anchoring is write-once: moving a scene that already has a different domain needs Force. The target domain must exist",
+      "input": "{\"type\": \"object\", \"properties\": {\"scene_id\": {\"type\": \"string\", \"description\": \"Scene id, 16-char hex (required)\"}, \"name\": {\"type\": \"string\", \"description\": \"New title; omit to keep the current one\"}, \"l3_id\": {\"type\": \"string\", \"description\": \"L3 project domain to anchor (16-char hex); \\\"\\\" clears it; omit to keep\"}, \"force\": {\"type\": \"boolean\", \"description\": \"Allow replacing a different existing anchor\"}}, \"required\": [\"scene_id\"]}",
       "output": "ok"
     },
     {
@@ -66,7 +66,7 @@
         "action": "Read the target scene's topic context"
       },
       {
-        "ref": "SetSceneName",
+        "ref": "UpdateScene",
         "action": "Title the session readably when its library-generated name is meaningless"
       },
       {

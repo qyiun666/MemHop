@@ -1,8 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L6 plan big methods of the composition root: replace / list / whole-tree
-// sync. The plan mechanics live in internal/plan.
+// L6 plan big methods of the composition root: replace and whole-tree sync.
+// The plan mechanics live in internal/plan.
 
 package internal
 
@@ -55,18 +55,6 @@ func (db *DB) PlanReplace(agentID uint64, planID string, rootTitle string) error
 	return nil
 }
 
-// ListPlans summarizes every plan of the domain from the in-memory plan cache
-// in a single pass so a host can recover its plan trees after a restart
-// (planID discovery + PlanState).
-func (db *DB) ListPlans(agentID uint64) ([]PlanSummary, error) {
-	ac, err := db.lockAgent(agentID)
-	if err != nil {
-		return nil, err
-	}
-	defer ac.Mu.Unlock()
-	return plan.Summarize(ac), nil
-}
-
 // SyncPlanTree replaces a whole plan tree from the host's authoritative
 // snapshot. It mutates only node structure/fields (add missing nodes, update
 // the fields the snapshot fills, delete vanished nodes with their bound events)
@@ -112,10 +100,16 @@ func (db *DB) SyncPlanTree(agentID uint64, planID string, root *PlanNode) error 
 				}
 			}
 		}
-		if _, err := repo.DeletePlanNodeBranch(db.engine, agentID, ph, p); err != nil {
+		deleted, err := repo.DeletePlanNodeBranch(db.engine, agentID, ph, p)
+		if err != nil {
 			return err
 		}
+		// Mirror the removal in both caches that name those records: the plan
+		// cache for the tree view, the trajectory index for the event log. An
+		// index entry left pointing at a deleted record makes every later read
+		// of the plan's trajectory fail.
 		ac.Plans.RemoveNodeBranch(ph, p)
+		ac.Traj.RemoveEvents(ph, deleted)
 	}
 	return nil
 }

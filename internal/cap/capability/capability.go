@@ -149,8 +149,13 @@ func MergeDefinition(existing, incoming *core.Capability, now int64) {
 
 // Matches is the list-filter predicate shared by stored and built-in
 // capabilities: nil Status/Type filters pass everything, a non-empty
-// lowercased keyword must appear in name+summary+trigger.
+// lowercased keyword must appear in name+summary+trigger, and a non-empty IDs
+// set restricts the result to those 16-hex ids (a malformed id matches
+// nothing).
 func Matches(cap *core.Capability, q *core.CapabilityListQuery, kw string) bool {
+	if len(q.IDs) > 0 && !matchesID(cap.IDHash, q.IDs) {
+		return false
+	}
 	if q.Status != nil && cap.Status != *q.Status {
 		return false
 	}
@@ -161,6 +166,15 @@ func Matches(cap *core.Capability, q *core.CapabilityListQuery, kw string) bool 
 		return false
 	}
 	return true
+}
+
+func matchesID(idHash uint64, ids []string) bool {
+	for _, id := range ids {
+		if h, err := common.ParseID(id); err == nil && h == idHash {
+			return true
+		}
+	}
+	return false
 }
 
 // ActiveOnly keeps the active capabilities of caps (order preserved); used

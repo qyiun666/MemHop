@@ -5,6 +5,9 @@ package internal
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -45,22 +48,6 @@ type DB struct {
 	// mu serializes Close against itself; per-operation domain locking is on
 	// domain.Context.Mu instead of this DB-wide lock.
 	mu sync.Mutex
-}
-
-// Lock/Unlock keep the combined write-lock seam for hosts; they map to the
-// default agent domain.
-func (db *DB) Lock() {
-	ac, err := db.contextFor(core.DefaultAgentID)
-	if err != nil {
-		panic(err) // closed DB: same contract as the old unconditional lock
-	}
-	ac.Mu.Lock()
-}
-
-func (db *DB) Unlock() {
-	if ac := db.peekContext(core.DefaultAgentID); ac != nil {
-		ac.Mu.Unlock()
-	}
 }
 
 func (db *DB) IsClosed() bool { return db.closed.Load() }
@@ -133,17 +120,6 @@ func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, ui
 		return nil, 0, common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
 	return ac, parsed, nil
-}
-
-// peekContext returns an existing context without creating one (nil when
-// absent or the DB is closed).
-func (db *DB) peekContext(agentID uint64) *domain.Context {
-	if db.closed.Load() {
-		return nil
-	}
-	db.agentsMu.Lock()
-	defer db.agentsMu.Unlock()
-	return db.agents[agentID]
 }
 
 // sweepIdleLocked reclaims contexts idle longer than Defaults.AgentIdleTTLMs.
@@ -219,4 +195,46 @@ func (db *DB) Checkpoint() error {
 		return common.NewError(common.ErrClosed, "database is closed")
 	}
 	return db.engine.Checkpoint(nil)
+}
+
+// CompactTo writes a defragmented copy of the database at newPath: only live
+// records, in one fresh log, with that copy's own rebuilt index. Deletes are
+// tombstones — removing a scene, a graph or a capability frees no bytes until a
+// compaction rewrites the log — so this is the space-reclamation entry the
+// lifecycle surface otherwise lacks.
+//
+// It never touches the open file. newPath must not exist yet, which keeps the
+// copy from being destroyed by the rewrite and leaves the swap (close, rename,
+// reopen) to the host's own backup policy. The copy is a point-in-time snapshot:
+// records appended while it is being written are not in it, so compact when the
+// domain is quiet — typically just before Close.
+func (db *DB) CompactTo(newPath string) error {
+	if db.closed.Load() {
+		return common.NewError(common.ErrClosed, "database is closed")
+	}
+	if newPath == "" {
+		return common.NewError(common.ErrInvalidQuery, "compact: newPath is required")
+	}
+	if sameFile(newPath, db.config.DBPath) {
+		return common.NewError(common.ErrInvalidQuery, "compact: newPath must differ from the open database file")
+	}
+	if _, err := os.Stat(newPath); err == nil {
+		return common.NewError(common.ErrInvalidQuery, "compact: newPath already exists: "+newPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return common.NewError(common.ErrIO, "compact: stat newPath", err)
+	}
+	return db.engine.Compact(newPath, &core.IndexSnapshotData{})
+}
+
+// sameFile compares two paths for the engine-level check that a compaction
+// never targets the file it is reading.
+func sameFile(a, b string) bool {
+	abs := func(p string) string {
+		full, err := filepath.Abs(p)
+		if err != nil {
+			return filepath.Clean(p)
+		}
+		return full
+	}
+	return abs(a) == abs(b)
 }

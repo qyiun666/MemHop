@@ -99,21 +99,21 @@ func TestListCapabilitiesBuiltinDedup(t *testing.T) {
 	}
 }
 
-// GetCapability falls back to the built-in toolbox for IDs not stored in
-// the file, so every listed capability stays retrievable.
-func TestGetCapabilityBuiltinFallback(t *testing.T) {
+// The list query addresses built-ins by ID just like stored cards, so every
+// listed capability stays retrievable without a dedicated getter.
+func TestListCapabilityByIDIncludesBuiltin(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	db.SetBuiltinCapabilities(testBuiltinCapabilities())
 
 	id := common.FormatHash(core.CapabilityID("内置手册"))
-	cap, err := db.GetCapability(core.DefaultAgentID, id)
+	got, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{IDs: []string{id}})
 	if err != nil {
-		t.Fatalf("get builtin: %v", err)
+		t.Fatalf("list by id: %v", err)
 	}
-	if cap.Name != "内置手册" || cap.Origin != core.CapabilityOriginBuiltin {
-		t.Fatalf("builtin fallback mismatch: %+v", cap)
+	if len(got) != 1 || got[0].Name != "内置手册" || got[0].Origin != core.CapabilityOriginBuiltin {
+		t.Fatalf("builtin by id mismatch: %+v", got)
 	}
-	if _, err := db.GetCapability(core.DefaultAgentID, common.FormatHash(common.HashID("不存在"))); err == nil {
-		t.Fatal("unknown id must still fail")
+	if none, _ := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{IDs: []string{common.FormatHash(common.HashID("不存在"))}}); len(none) != 0 {
+		t.Fatalf("unknown id must list nothing, got %+v", none)
 	}
 }

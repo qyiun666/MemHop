@@ -44,48 +44,94 @@ func DeleteArchivesL4(engine *core.StorageEngine, agentID uint64, ids []uint64) 
 	return nil
 }
 
-// Archive query modes of QueryArchiveL4.
-const (
-	ArchiveByKeyword uint8 = iota + 1 // substring match on Content
-	ArchiveByTime                     // created within [start, end], sorted
-	ArchiveByID                       // by id, missing ids skipped
-)
+// ArchiveQuery is the L4 read filter: every field is optional and the set
+// conditions AND together, so an empty query selects the domain's whole
+// archive set. Keyword is matched case-insensitively against a lower-cased
+// query keyword (the L3 node filter matches the same way).
+type ArchiveQuery struct {
+	IDs     []uint64
+	TopicID *uint64
+	Type    *core.ContentType
+	Keyword string
+	Start   int64
+	End     int64
+	Limit   int
+}
 
-// QueryArchiveL4 queries archives by the given mode: ArchiveByKeyword
-// (substring match), ArchiveByTime (range [start, end] sorted by CreatedAt) or
-// ArchiveByID (missing ids skipped).
-func QueryArchiveL4(engine *core.StorageEngine, agentID uint64, mode uint8, keyword string, start, end int64, ids []uint64) []core.ArchiveSlot {
-	switch mode {
-	case ArchiveByKeyword:
-		var out []core.ArchiveSlot
-		for _, arc := range core.CollectAllArchives(engine, agentID) {
-			if strings.Contains(arc.Content, keyword) {
-				out = append(out, arc)
-			}
+// QueryArchivesL4 returns the archives matching every set condition, sorted by
+// CreatedAt. An ID that names no record is skipped (a replayed Update legally
+// retires the ids of the turn it replaced); a record that cannot be read is an
+// error. A lookup that only names IDs takes the record-read fast path instead
+// of scanning the domain. Limit keeps the newest matches, because the sort
+// order is oldest first.
+func QueryArchivesL4(engine *core.StorageEngine, agentID uint64, q ArchiveQuery) ([]core.ArchiveSlot, error) {
+	q.Keyword = strings.ToLower(q.Keyword)
+	if len(q.IDs) > 0 && q.TopicID == nil && q.Type == nil && q.Keyword == "" && q.Start == 0 && q.End == 0 {
+		out, err := archivesByIDOnly(engine, agentID, q.IDs)
+		if err != nil {
+			return nil, err
 		}
-		return out
-	case ArchiveByTime:
-		var out []core.ArchiveSlot
-		for _, arc := range core.CollectAllArchives(engine, agentID) {
-			if arc.CreatedAt >= start && arc.CreatedAt <= end {
-				out = append(out, arc)
-			}
+		if q.Limit <= 0 || len(out) <= q.Limit {
+			return out, nil
 		}
-		slices.SortFunc(out, func(a, b core.ArchiveSlot) int {
-			return cmp.Compare(a.CreatedAt, b.CreatedAt)
-		})
+		slices.SortFunc(out, compareByCreatedAt)
+		return newest(out, q.Limit), nil
+	}
+	var out []core.ArchiveSlot
+	for _, arc := range core.CollectAllArchives(engine, agentID) {
+		if matchesArchiveQuery(arc, q) {
+			out = append(out, arc)
+		}
+	}
+	slices.SortFunc(out, compareByCreatedAt)
+	return newest(out, q.Limit), nil
+}
+
+func compareByCreatedAt(a, b core.ArchiveSlot) int {
+	return cmp.Compare(a.CreatedAt, b.CreatedAt)
+}
+
+// newest keeps the last limit entries of a CreatedAt-ascending result.
+func newest(out []core.ArchiveSlot, limit int) []core.ArchiveSlot {
+	if limit <= 0 || len(out) <= limit {
 		return out
-	case ArchiveByID:
-		var out []core.ArchiveSlot
-		for _, idHash := range ids {
-			arc, err := core.ReadArchiveSlot(engine, agentID, idHash)
-			if err != nil {
+	}
+	return out[len(out)-limit:]
+}
+
+func archivesByIDOnly(engine *core.StorageEngine, agentID uint64, ids []uint64) ([]core.ArchiveSlot, error) {
+	var out []core.ArchiveSlot
+	for _, idHash := range ids {
+		arc, err := core.ReadArchiveSlot(engine, agentID, idHash)
+		if err != nil {
+			if common.CodeOf(err) == common.ErrNotFound {
 				continue
 			}
-			out = append(out, *arc)
+			return nil, err
 		}
-		return out
-	default:
-		return nil
+		out = append(out, *arc)
 	}
+	return out, nil
+}
+
+func matchesArchiveQuery(arc core.ArchiveSlot, q ArchiveQuery) bool {
+	if len(q.IDs) > 0 && !slices.Contains(q.IDs, arc.IDHash) {
+		return false
+	}
+	if q.TopicID != nil && arc.ContextID != *q.TopicID {
+		return false
+	}
+	if q.Type != nil && arc.ContentType != *q.Type {
+		return false
+	}
+	if q.Keyword != "" && !strings.Contains(strings.ToLower(arc.Content), q.Keyword) {
+		return false
+	}
+	if q.Start > 0 && arc.CreatedAt < q.Start {
+		return false
+	}
+	if q.End > 0 && arc.CreatedAt > q.End {
+		return false
+	}
+	return true
 }

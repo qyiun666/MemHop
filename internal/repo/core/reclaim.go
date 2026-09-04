@@ -149,8 +149,9 @@ func (e *StorageEngine) writeNullSnapshotHeader() error {
 }
 
 // Compact creates a new file at newPath containing only live records,
-// preserving each record's agent domain. snap must carry the caller's
-// serialized record index or the new file loses it.
+// preserving each record's agent domain; the new engine serializes its own
+// record index. snap carries only the per-agent opaque snapshot sections and
+// must not be nil.
 func (e *StorageEngine) Compact(newPath string, snap *IndexSnapshotData) error {
 	if snap == nil {
 		return common.NewError(common.ErrInvalidQuery, "compact requires an index snapshot")

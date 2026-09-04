@@ -11,6 +11,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -28,18 +29,19 @@ func TestInterfaceL5(t *testing.T) {
 		t.Fatalf("write capability file: %v", err)
 	}
 
-	cap, err := db.ImportCapability(path)
+	card, err := db.ImportCapability(path)
 	if err != nil {
 		t.Fatalf("ImportCapability: %v", err)
 	}
-	if cap == nil {
+	if card == nil {
 		t.Fatal("ImportCapability returned nil")
 	}
-	id := cap.IDHash
-	got, err := db.GetCapability(id)
-	if err != nil {
-		t.Fatalf("GetCapability: %v", err)
+	id := card.IDHash
+	one, err := db.ListCapabilities(internal.CapabilityListQuery{IDs: []string{id}})
+	if err != nil || len(one) != 1 {
+		t.Fatalf("capability %s: %d found, err %v", id, len(one), err)
 	}
+	got := one[0]
 	if got.Name != "重构流程" || got.Type != core.CapabilityMCP {
 		t.Fatalf("capability mismatch: %+v", got)
 	}
@@ -79,15 +81,27 @@ func TestInterfaceL5(t *testing.T) {
 
 func TestInterfaceL6(t *testing.T) {
 	db, _ := openTestDB(t)
-	session := "0000000000000001"
+	sceneID := openSession(t, db)
+	// The trajectory key is a turn's topic id — minted by Search, settled by
+	// Update, and never typed by hand.
+	session := openTurn(t, db, sceneID)
+	if _, err := db.Update(turn(sceneID, session, "读一下 a.go 并改掉拼写", "已读取 a.go 并改掉拼写")); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
 	ts := time.Now().UnixMilli()
 
-	if err := db.AppendTrajectory(session, api.TrajectorySlot{
+	if err := db.AppendTrajectory(session, "", api.TrajectorySlot{
 		EventType: "tool_call", Payload: `{"tool":"read_file","file":"a.go"}`, Timestamp: ts,
 	}); err != nil {
 		t.Fatalf("AppendTrajectory: %v", err)
 	}
-	if err := db.AppendTrajectory(session, api.TrajectorySlot{
+	// The key has to be a turn the library actually opened, or the rest of this
+	// test would only prove that a made-up id round-trips.
+	if surface, err := db.Search(api.SearchQuery{SceneID: sceneID}); err != nil ||
+		!slices.ContainsFunc(surface.Topics, func(topic api.TopicSlot) bool { return topic.ID == session }) {
+		t.Fatalf("key %s is not a topic of scene %s: %+v err %v", session, sceneID, surface.Topics, err)
+	}
+	if err := db.AppendTrajectory(session, "", api.TrajectorySlot{
 		EventType: "tool_result", Payload: "file content", Timestamp: ts + 500,
 	}); err != nil {
 		t.Fatalf("AppendTrajectory #2: %v", err)

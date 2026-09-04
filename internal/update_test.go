@@ -353,6 +353,55 @@ func TestUpdateReplaySupersedesPriorArchives(t *testing.T) {
 	}
 }
 
+// Update owns one contract on the write side: the topic it settles must be a
+// turn topic of the scene it names. A replayed turn and an opened-but-earlier
+// turn both qualify (pinned above); a Dream-fused topic does not — writing one
+// would reset its depth and orphan the turns it folded — and neither does a
+// turn of another scene.
+func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
+	srv, calls := countingLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+
+	// A fused group: depth-2 child under a depth-1 fused parent, as Dream leaves it.
+	fusedParent := core.ComputeTopicID(sceneID, 500, 600)
+	fusedChild := newTopic(core.ComputeTopicID(sceneID, 100, 200), sceneID, 100, []string{"kw"})
+	fusedChild.Depth = 2
+	fusedChild.ParentID = &fusedParent
+	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(fusedParent, sceneID, 500, []string{"kw"}))
+	writeTopic(t, db.engine, core.DefaultAgentID, fusedChild)
+
+	before := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive)
+	cases := []struct {
+		name    string
+		topicID uint64
+	}{
+		{"fused parent", fusedParent},
+		{"sunk child", fusedChild.ID},
+		{"another scene's turn", core.ComputeTurnTopicID(sceneID+1, 1)},
+		{"invented id", common.HashID("not-a-turn-this-scene-opened")},
+	}
+	for _, tc := range cases {
+		if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, tc.topicID)); common.CodeOf(err) != common.ErrInvalidQuery {
+			t.Fatalf("%s: err = %v, want ErrInvalidQuery", tc.name, err)
+		}
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("rejected turns reached the LLM %d times", got)
+	}
+	if got := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); got != before {
+		t.Fatalf("rejected turns wrote archives: %d -> %d", before, got)
+	}
+	if child, err := core.ReadTopicSlot(db.engine, core.DefaultAgentID, fusedChild.ID); err != nil || child.Depth != 2 {
+		t.Fatalf("sunk topic was modified: %+v (%v)", child, err)
+	}
+
+	// The turn Search actually opened still settles.
+	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+		t.Fatalf("Update of the opened turn: %v", err)
+	}
+}
+
 // The content type arrives with the turn, so Update owns its validity: an
 // undefined value is rejected at the boundary instead of being stored as a
 // type no reader can name.

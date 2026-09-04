@@ -20,7 +20,7 @@ import (
 func TestStreamableMultiTenant(t *testing.T) {
 	dbDir := t.TempDir()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reg := newRegistry(testBase(t), dbDir, nil, logger)
+	reg := newRegistry(testBase(t), dbDir, dbDir, nil, logger)
 	srv := httptest.NewServer(newStreamableHandler(reg))
 	t.Cleanup(func() {
 		srv.Close()

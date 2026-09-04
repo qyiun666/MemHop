@@ -5,7 +5,8 @@
 // renders the external hex-id surface so the api facade stays pure
 // forwarding. The public method set of api.Session is exactly this type's
 // method set; the domain lock is still taken per call by the underlying DB
-// methods.
+// methods. File-level lifecycle (Checkpoint/Close/IsClosed) is not repeated
+// here — it belongs to the DB handle the host opened.
 
 package internal
 
@@ -30,17 +31,6 @@ func (db *DB) NewSession(agentID uint64) (*Session, error) {
 	return &Session{db: db, agentID: agentID}, nil
 }
 
-// ---- lifecycle ----
-
-// AgentID returns the bound domain ID (render externally via FormatAgentID).
-func (s *Session) AgentID() uint64 { return s.agentID }
-
-// Checkpoint persists the per-agent index snapshots (DB-level operation).
-func (s *Session) Checkpoint() error { return s.db.Checkpoint() }
-
-// IsClosed reports whether the underlying database has been closed.
-func (s *Session) IsClosed() bool { return s.db.IsClosed() }
-
 // ---- scene read / turn write ----
 
 // Search reads one scene (the host's session): its record and its depth-1
@@ -61,7 +51,7 @@ func (s *Session) Update(in TurnUpdate) (uint64, error) {
 
 // Dream runs the consolidation pipeline over the given scene (or every scene
 // of the domain when sceneID is empty); RunDream takes the domain lock itself
-// and returns a zero-valued report when the domain has no scenes.
+// and errors when the named scene does not exist.
 func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, error) {
 	var hash uint64
 	if sceneID != "" {
@@ -84,34 +74,19 @@ func (s *Session) UpdateL0(slot *ProfileSlot) error {
 	return s.db.UpdateL0(s.agentID, slot)
 }
 
-// DistillL0 runs only Dream's L0 distillation stage (emotion/MBTI),
-// leaving L1/L2 untouched; skipped silently when the domain has no
-// profile samples.
-func (s *Session) DistillL0(ctx context.Context) error {
-	return s.db.DistillL0(ctx, s.agentID)
-}
-
 // ---- L2 scenes/topics ----
 
-func (s *Session) ListScenes() ([]SceneSlot, error) {
-	return s.db.ListScenes(s.agentID)
+// ListScenes lists the domain's scenes; a non-empty l3ID keeps only the
+// scenes anchored to that L3 project domain.
+func (s *Session) ListScenes(l3ID string) ([]SceneSlot, error) {
+	return s.db.ListScenes(s.agentID, l3ID)
 }
 
-// ListScenesByL3 returns scenes anchored to an L3 domain.
-func (s *Session) ListScenesByL3(l3ID string) ([]SceneSlot, error) {
-	return s.db.ListScenesByL3(s.agentID, l3ID)
-}
-
-// SetSceneL3ID anchors a scene to an L3 domain (write-once unless force or
-// an empty l3ID clears it).
-func (s *Session) SetSceneL3ID(sceneID, l3ID string, force bool) error {
-	return s.db.SetSceneL3ID(s.agentID, sceneID, l3ID, force)
-}
-
-// SetSceneName renames a scene (the library names a fresh one "session:<id>").
-// Pure string surface, so the api facade promotes it directly.
-func (s *Session) SetSceneName(sceneID, name string) error {
-	return s.db.SetSceneName(s.agentID, sceneID, name)
+// UpdateScene patches a scene's host-facing metadata (title, L3 anchor);
+// nil fields stay unchanged. The written scene comes back, so a host confirms
+// an anchor without listing the domain.
+func (s *Session) UpdateScene(sceneID string, patch ScenePatch) (SceneSlot, error) {
+	return s.db.UpdateScene(s.agentID, sceneID, patch)
 }
 
 func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
@@ -158,6 +133,14 @@ func (s *Session) DeleteL3(id string) error {
 	return s.db.DeleteL3(s.agentID, id)
 }
 
+// DeleteL3Nodes removes nodes from one graph and cascades the hyperedges that
+// touch them, so a wrong node can be corrected without rebuilding the graph.
+// Every id must name a node of this graph; an unknown or foreign id is refused
+// and nothing is deleted.
+func (s *Session) DeleteL3Nodes(graphID string, nodeIDs []string) error {
+	return s.db.DeleteL3Nodes(s.agentID, graphID, nodeIDs)
+}
+
 func (s *Session) QueryL3Nodes(q L3NodeQuery) ([]HypergraphNode, error) {
 	return s.db.QueryL3Nodes(s.agentID, q)
 }
@@ -168,19 +151,13 @@ func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edg
 
 // ---- L4 archive ----
 
+// SearchL4 reads archives by any combination of filters; they AND together,
+// so L4Query{TopicID: &turnID} returns exactly that turn's originals.
 func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return s.db.SearchL4(s.agentID, q)
 }
 
-func (s *Session) GetArchive(id string) (*ArchiveSlot, error) {
-	return s.db.GetArchive(s.agentID, id)
-}
-
 // ---- L5 capabilities ----
-
-func (s *Session) GetCapability(id string) (*Capability, error) {
-	return s.db.GetCapability(s.agentID, id)
-}
 
 func (s *Session) ImportCapability(path string) (*Capability, error) {
 	return s.db.ImportCapability(s.agentID, path)
@@ -194,6 +171,8 @@ func (s *Session) UpdateCapability(id string, patch CapabilityPatch) (*Capabilit
 	return s.db.UpdateCapability(s.agentID, id, patch)
 }
 
+// ListCapabilities filters the L5 catalog; CapabilityListQuery.IDs selects a
+// single card.
 func (s *Session) ListCapabilities(q CapabilityListQuery) ([]Capability, error) {
 	return s.db.ListCapabilities(s.agentID, q)
 }
@@ -208,10 +187,11 @@ func (s *Session) RecordCapabilityUsage(id string, success bool) (*Capability, e
 
 // ---- L6 trajectory ----
 
-// AppendTrajectory appends one event to the turn Search opened, keyed by that
-// turn's topic id; the record's TopicID is stamped with the same value.
-func (s *Session) AppendTrajectory(turnID string, ev TrajectorySlot) error {
-	return s.db.AppendTrajectory(s.agentID, turnID, ev)
+// AppendTrajectory appends one event under `key`: a turn's topic id for a
+// bare turn event, or a plan id together with the nodePath to bind the event
+// to that plan node.
+func (s *Session) AppendTrajectory(key, nodePath string, ev TrajectorySlot) error {
+	return s.db.AppendTrajectory(s.agentID, key, nodePath, ev)
 }
 
 // ReadTrajectory returns one turn's events; turnID is the topic id Search
@@ -237,11 +217,6 @@ func (s *Session) Crystallize(ctx context.Context, turnID string) (*CrystallizeR
 
 // ---- L6 plan (tri-form) ----
 
-// PlanAppend appends one event to a plan node without advancing the plan.
-func (s *Session) PlanAppend(planID, nodePath string, ev TrajectorySlot) error {
-	return s.db.PlanAppend(s.agentID, planID, nodePath, ev)
-}
-
 // PlanCommit advances a plan node to a status and appends the step event.
 func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status PlanStatus, summary string) error {
 	return s.db.PlanCommit(s.agentID, planID, nodePath, ev, status, summary)
@@ -256,11 +231,6 @@ func (s *Session) PlanState(planID string) (*PlanTree, error) {
 // keeping the planID; a non-empty rootTitle seeds a titled pending root.
 func (s *Session) PlanReplace(planID, rootTitle string) error {
 	return s.db.PlanReplace(s.agentID, planID, rootTitle)
-}
-
-// ListPlans summarizes every plan of the domain (restart recovery).
-func (s *Session) ListPlans() ([]PlanSummary, error) {
-	return s.db.ListPlans(s.agentID)
 }
 
 // SyncPlanTree replaces one plan's whole tree from the host's authoritative

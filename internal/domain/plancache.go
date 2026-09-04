@@ -13,7 +13,7 @@ import (
 )
 
 // PlanCache caches every plan's nodes and bound-event count in memory so
-// PlanState/ListPlans/rollup avoid a full engine scan per operation. Built
+// PlanState/rollup avoid a full engine scan per operation. Built
 // from the engine when the agent context is created (and rebuilt on idle
 // reclaim) and maintained incrementally by the internal layer, which owns
 // every plan write/delete under the same domain lock (Context.Mu) — so the
@@ -35,17 +35,6 @@ func buildPlanCache(engine *core.StorageEngine, agentID uint64) *PlanCache {
 // Aggregate returns the cached aggregate of one plan; nil when unknown.
 func (pc *PlanCache) Aggregate(planID uint64) *repo.PlanAggregate {
 	return pc.plans[planID]
-}
-
-// All returns every cached aggregate in PlanID-ascending order (deterministic
-// ListPlans).
-func (pc *PlanCache) All() []*repo.PlanAggregate {
-	out := make([]*repo.PlanAggregate, 0, len(pc.plans))
-	for _, agg := range pc.plans {
-		out = append(out, agg)
-	}
-	slices.SortFunc(out, func(a, b *repo.PlanAggregate) int { return cmp.Compare(a.PlanID, b.PlanID) })
-	return out
 }
 
 // UpsertNode inserts or updates a plan node in its aggregate, keeping Nodes
@@ -168,7 +157,7 @@ func (pc *PlanCache) RemovePlanIDs(planID uint64, nodeIDs, eventIDs []uint64) {
 }
 
 // detachIfEmpty drops an aggregate that no longer holds any node so it stops
-// appearing in ListPlans (a plan whose whole tree was pruned is gone).
+// as a live plan (a plan whose whole tree was pruned is gone).
 func (pc *PlanCache) detachIfEmpty(planID uint64) {
 	agg := pc.plans[planID]
 	if agg == nil || len(agg.Nodes) == 0 {

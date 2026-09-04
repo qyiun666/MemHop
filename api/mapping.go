@@ -118,16 +118,15 @@ func fromHypergraphSlot(s internal.HypergraphSlot) HypergraphSlot {
 
 func fromHypergraphNode(n internal.HypergraphNode) HypergraphNode {
 	return HypergraphNode{
-		IDHash:     formatID(n.IDHash),
-		GraphID:    formatID(n.GraphID),
-		Title:      n.Title,
-		NodeType:   n.NodeType,
-		Content:    n.Content,
-		Keywords:   cloneStrings(n.Keywords),
-		SourceRef:  n.SourceRef,
-		Importance: n.Importance,
-		CreatedAt:  n.CreatedAt,
-		UpdatedAt:  n.UpdatedAt,
+		IDHash:    formatID(n.IDHash),
+		GraphID:   formatID(n.GraphID),
+		Title:     n.Title,
+		NodeType:  n.NodeType,
+		Content:   n.Content,
+		Keywords:  cloneStrings(n.Keywords),
+		SourceRef: n.SourceRef,
+		CreatedAt: n.CreatedAt,
+		UpdatedAt: n.UpdatedAt,
 	}
 }
 
@@ -137,8 +136,6 @@ func fromHypergraphEdge(e internal.HypergraphEdge) HypergraphEdge {
 		GraphID:   formatID(e.GraphID),
 		Kind:      e.Kind,
 		NodeIDs:   formatIDs(e.NodeIDs),
-		Weight:    e.Weight,
-		Label:     e.Label,
 		CreatedAt: e.CreatedAt,
 	}
 }
@@ -185,7 +182,6 @@ func fromArchiveSlot(s internal.ArchiveSlot) ArchiveSlot {
 		ContextID:   formatOptionalID(s.ContextID),
 		CreatedAt:   s.CreatedAt,
 		Content:     s.Content,
-		Metadata:    s.Metadata,
 	}
 }
 
@@ -235,49 +231,27 @@ func fromTrajectorySlot(s internal.TrajectorySlot) TrajectorySlot {
 		Payload:     s.Payload,
 		TopicID:     formatOptionalID(s.TopicID),
 		Timestamp:   s.Timestamp,
-		NodeType:    s.NodeType,
 		PlanID:      formatOptionalID(s.PlanID),
-		ParentID:    formatOptionalID(s.ParentID),
 		NodePath:    s.NodePath,
-		Status:      s.Status,
-		Summary:     s.Summary,
-		PlanType:    s.PlanType,
 		PlanNodeRef: formatOptionalID(s.PlanNodeRef),
 		FinishedAt:  s.FinishedAt,
 	}
 }
 
+// toCoreTrajectorySlot maps the fields a host owns. The library assigns
+// Seq/SessionID/PlanID/NodePath/PlanNodeRef itself, so those are not even part
+// of what a caller can hand in.
 func toCoreTrajectorySlot(s TrajectorySlot) (internal.TrajectorySlot, error) {
 	topicID, err := parseOptionalID(s.TopicID)
 	if err != nil {
 		return internal.TrajectorySlot{}, err
 	}
-	planID, err := parseOptionalID(s.PlanID)
-	if err != nil {
-		return internal.TrajectorySlot{}, err
-	}
-	parentID, err := parseOptionalID(s.ParentID)
-	if err != nil {
-		return internal.TrajectorySlot{}, err
-	}
-	planNodeRef, err := parseOptionalID(s.PlanNodeRef)
-	if err != nil {
-		return internal.TrajectorySlot{}, err
-	}
 	return internal.TrajectorySlot{
-		EventType:   s.EventType,
-		Payload:     s.Payload,
-		TopicID:     topicID,
-		Timestamp:   s.Timestamp,
-		NodeType:    s.NodeType,
-		PlanID:      planID,
-		ParentID:    parentID,
-		NodePath:    s.NodePath,
-		Status:      s.Status,
-		Summary:     s.Summary,
-		PlanType:    s.PlanType,
-		PlanNodeRef: planNodeRef,
-		FinishedAt:  s.FinishedAt,
+		EventType:  s.EventType,
+		Payload:    s.Payload,
+		TopicID:    topicID,
+		Timestamp:  s.Timestamp,
+		FinishedAt: s.FinishedAt,
 	}, nil
 }
 
@@ -317,14 +291,6 @@ func toInternalPlanNode(root *PlanNode) internal.PlanNode {
 		NodePath: root.NodePath, Title: root.Title, PlanType: root.Type,
 		Status: internal.PlanStatus(root.Status), Summary: root.Summary,
 		Children: children,
-	}
-}
-
-func fromPlanSummary(s internal.PlanSummary) PlanSummary {
-	return PlanSummary{
-		PlanID: s.PlanID, CreatedAt: s.CreatedAt, LastActiveAt: s.LastActiveAt,
-		NodeCount: s.NodeCount, DoneCount: s.DoneCount, TotalCount: s.TotalCount,
-		Active: s.Active,
 	}
 }
 

@@ -9,6 +9,17 @@ package api
 
 import "github.com/qyiun666/MemHop/internal"
 
+// ---- id surface ----
+
+// DefaultAgentID is the 16-hex id of the implicit single-tenant domain: pass
+// it to MultiAgentDB.Session to work in the default agent domain.
+const DefaultAgentID = "0000000000000000"
+
+// NewPlanID derives the stable 16-hex id of a plan the host names. The
+// mapping is deterministic, so a host recovers the same plan tree after a
+// restart by naming the plan again — it never stores or builds an id.
+func NewPlanID(name string) string { return internal.MintPlanID(name) }
+
 // ---- L5 capability enum constants ----
 
 const (
@@ -52,36 +63,18 @@ const (
 
 // ---- L4 message role constants ----
 
+// These are the roles the engine writes: Update stores the turn's two originals
+// as RoleUser / RoleAgent, Dream stores a fused group's summary as RoleDream.
 const (
-	RoleUser   = internal.RoleUser
-	RoleAgent  = internal.RoleAgent
-	RoleSystem = internal.RoleSystem
-	RoleDream  = internal.RoleDream
-)
-
-// ---- L6 trajectory node type constants ----
-
-const (
-	NodeTypeEvent = internal.NodeTypeEvent
-	NodeTypePlan  = internal.NodeTypePlan
-)
-
-// Status* are the numeric codes carried by TrajectorySlot.Status, i.e.
-// read-side only: every write path overwrites that field, so a host compares
-// these against what ReadTrajectory returns and never passes them to a
-// write. The plan write/query surface uses the string form below.
-const (
-	StatusPending    = internal.StatusPending
-	StatusInProgress = internal.StatusInProgress
-	StatusDone       = internal.StatusDone
-	StatusFailed     = internal.StatusFailed
-	StatusRunning    = internal.StatusRunning
+	RoleUser  = internal.RoleUser
+	RoleAgent = internal.RoleAgent
+	RoleDream = internal.RoleDream
 )
 
 // PlanStatus* are the string lifecycle values PlanCommit accepts and
-// PlanState/ListPlans emit. They are assignable to the string parameter of
-// PlanCommit; the numeric Status* constants above are a different encoding of
-// the same states and are not interchangeable with them.
+// PlanState emits. A node's status is only ever expressed this way: the L6
+// event record carries no status field, because every write path assigns the
+// node's own state separately from the events bound to it.
 const (
 	PlanStatusPending    PlanStatus = internal.PlanPending
 	PlanStatusInProgress PlanStatus = internal.PlanInProgress

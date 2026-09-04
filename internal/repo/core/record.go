@@ -15,10 +15,18 @@ import (
 	"github.com/qyiun666/MemHop/internal/common"
 )
 
-func readJSON[T any](engine *StorageEngine, agentID, id uint64, label string) (*T, error) {
-	_, data, err := engine.ReadRecord(agentID, id)
+// readJSON decodes the record at id as T. rt is part of the read: an id names
+// exactly one record type, and a typed reader that ignored the frame's type
+// would decode a foreign slot into T — the caller's next write would then
+// convert that record. A mismatch reports ErrNotFound, the same answer an
+// absent id gives.
+func readJSON[T any](engine *StorageEngine, agentID, id uint64, rt uint8, label string) (*T, error) {
+	stored, data, err := engine.ReadRecord(agentID, id)
 	if err != nil {
 		return nil, err
+	}
+	if stored != rt {
+		return nil, common.NewError(common.ErrNotFound, "record not found")
 	}
 	var slot T
 	if err := json.Unmarshal(data, &slot); err != nil {
@@ -52,7 +60,7 @@ func TopicEntry(agentID uint64, topic *TopicSlot) (RecordEntry, error) {
 func IterAll[T any](engine *StorageEngine, agentID uint64, rt uint8) iter.Seq[T] {
 	return func(yield func(T) bool) {
 		for idHash := range engine.IndexByType(agentID, rt) {
-			slot, err := readJSON[T](engine, agentID, idHash, "")
+			slot, err := readJSON[T](engine, agentID, idHash, rt, "")
 			if err != nil {
 				continue // skip corrupt records; keep scanning
 			}
@@ -64,7 +72,7 @@ func IterAll[T any](engine *StorageEngine, agentID uint64, rt uint8) iter.Seq[T]
 }
 
 func ReadProfileSlot(engine *StorageEngine, agentID, id uint64) (*ProfileSlot, error) {
-	return readJSON[ProfileSlot](engine, agentID, id, "ProfileSlot")
+	return readJSON[ProfileSlot](engine, agentID, id, RecL0Profile, "ProfileSlot")
 }
 
 func WriteProfileSlot(engine *StorageEngine, agentID, id uint64, slot *ProfileSlot) error {
@@ -72,7 +80,7 @@ func WriteProfileSlot(engine *StorageEngine, agentID, id uint64, slot *ProfileSl
 }
 
 func ReadSceneNode(engine *StorageEngine, agentID, id uint64) (*SceneNode, error) {
-	return readJSON[SceneNode](engine, agentID, id, "SceneNode")
+	return readJSON[SceneNode](engine, agentID, id, RecL1SceneNode, "SceneNode")
 }
 
 func WriteSceneNode(engine *StorageEngine, agentID, id uint64, slot *SceneNode) error {
@@ -80,7 +88,7 @@ func WriteSceneNode(engine *StorageEngine, agentID, id uint64, slot *SceneNode) 
 }
 
 func ReadSceneEdge(engine *StorageEngine, agentID, id uint64) (*SceneEdge, error) {
-	return readJSON[SceneEdge](engine, agentID, id, "SceneEdge")
+	return readJSON[SceneEdge](engine, agentID, id, RecL1Hyperedge, "SceneEdge")
 }
 
 func WriteSceneEdge(engine *StorageEngine, agentID, id uint64, slot *SceneEdge) error {
@@ -92,18 +100,7 @@ func CollectAllSceneNodes(engine *StorageEngine, agentID uint64) []SceneNode {
 }
 
 func ReadSceneSlot(engine *StorageEngine, agentID, id uint64) (*SceneSlot, error) {
-	rt, data, err := engine.ReadRecord(agentID, id)
-	if err != nil {
-		return nil, err
-	}
-	if rt != RecL2Scene {
-		return nil, common.NewError(common.ErrNotFound, "record not found")
-	}
-	var slot SceneSlot
-	if err := json.Unmarshal(data, &slot); err != nil {
-		return nil, common.NewError(common.ErrDeserialization, "unmarshal SceneSlot", err)
-	}
-	return &slot, nil
+	return readJSON[SceneSlot](engine, agentID, id, RecL2Scene, "SceneSlot")
 }
 
 func WriteSceneSlot(engine *StorageEngine, agentID, id uint64, slot *SceneSlot) error {
@@ -111,7 +108,7 @@ func WriteSceneSlot(engine *StorageEngine, agentID, id uint64, slot *SceneSlot) 
 }
 
 func ReadTopicSlot(engine *StorageEngine, agentID, id uint64) (*TopicSlot, error) {
-	return readJSON[TopicSlot](engine, agentID, id, "TopicSlot")
+	return readJSON[TopicSlot](engine, agentID, id, RecL2Topic, "TopicSlot")
 }
 
 func WriteTopicSlot(engine *StorageEngine, agentID, id uint64, slot *TopicSlot) error {
@@ -140,7 +137,7 @@ func ReadTopicLenient(engine *StorageEngine, agentID, idHash uint64) (*TopicSlot
 }
 
 func ReadHypergraphNode(engine *StorageEngine, agentID, id uint64) (*HypergraphNode, error) {
-	return readJSON[HypergraphNode](engine, agentID, id, "HypergraphNode")
+	return readJSON[HypergraphNode](engine, agentID, id, RecL3GraphNode, "HypergraphNode")
 }
 
 func WriteHypergraphNode(engine *StorageEngine, agentID, id uint64, slot *HypergraphNode) error {
@@ -152,7 +149,7 @@ func WriteHypergraphEdge(engine *StorageEngine, agentID, id uint64, slot *Hyperg
 }
 
 func ReadGraphSlot(engine *StorageEngine, agentID, id uint64) (*HypergraphSlot, error) {
-	return readJSON[HypergraphSlot](engine, agentID, id, "HypergraphSlot")
+	return readJSON[HypergraphSlot](engine, agentID, id, RecL3GraphSlot, "HypergraphSlot")
 }
 
 func WriteGraphSlot(engine *StorageEngine, agentID, id uint64, slot *HypergraphSlot) error {
@@ -172,7 +169,7 @@ func CollectAllHypergraphEdges(engine *StorageEngine, agentID uint64) []Hypergra
 }
 
 func ReadArchiveSlot(engine *StorageEngine, agentID, id uint64) (*ArchiveSlot, error) {
-	return readJSON[ArchiveSlot](engine, agentID, id, "ArchiveSlot")
+	return readJSON[ArchiveSlot](engine, agentID, id, RecL4Archive, "ArchiveSlot")
 }
 
 func WriteArchiveSlot(engine *StorageEngine, agentID, id uint64, slot *ArchiveSlot) error {
@@ -184,7 +181,7 @@ func CollectAllArchives(engine *StorageEngine, agentID uint64) []ArchiveSlot {
 }
 
 func ReadCapability(engine *StorageEngine, agentID, id uint64) (*Capability, error) {
-	return readJSON[Capability](engine, agentID, id, "Capability")
+	return readJSON[Capability](engine, agentID, id, RecL5Capability, "Capability")
 }
 
 func WriteCapability(engine *StorageEngine, agentID, id uint64, slot *Capability) error {
@@ -196,7 +193,7 @@ func CollectAllCapabilities(engine *StorageEngine, agentID uint64) []Capability 
 }
 
 func ReadTrajectorySlot(engine *StorageEngine, agentID, id uint64) (*TrajectorySlot, error) {
-	return readJSON[TrajectorySlot](engine, agentID, id, "TrajectorySlot")
+	return readJSON[TrajectorySlot](engine, agentID, id, RecL6Trajectory, "TrajectorySlot")
 }
 
 func WriteTrajectorySlot(engine *StorageEngine, agentID, id uint64, slot *TrajectorySlot) error {

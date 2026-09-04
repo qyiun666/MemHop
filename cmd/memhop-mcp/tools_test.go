@@ -7,9 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	memhop "github.com/qyiun666/MemHop/api"
 )
 
 // call drives a ToolHandler with JSON args and returns the text content.
@@ -58,53 +61,47 @@ func TestHandleInvalidArgs(t *testing.T) {
 	}
 }
 
-func TestMarshalResultIDsAsHex(t *testing.T) {
-	// uint64 IDs must serialize as 16-digit hex strings (JS hosts lose
-	// precision on JSON numbers); timestamps and values stay numeric.
-	type sample struct {
-		ID        uint64   `json:"id"`
-		SceneID   uint64   `json:"scene_id"`
-		L4Refs    []uint64 `json:"l4_refs"`
-		CreatedAt int64    `json:"created_at"`
-		Score     float64  `json:"score"`
+// The id contract is rendered by the api DTOs (api/surface_public_test.go
+// rejects a numeric id in any host-visible signature), so a tool result is a
+// straight serialization of the DTO — including a zero id, which stays
+// hex-shaped rather than disappearing as a number.
+func TestOkResultCarriesHexIDStrings(t *testing.T) {
+	slot := memhop.SceneSlot{SceneID: "000000000000000f", L3ID: "77cf4d9fbc676640", TopicCount: 2, LastHitAt: 1786987484275}
+	got := okResult(slot)
+	if len(got.Content) != 1 {
+		t.Fatalf("content = %+v", got.Content)
 	}
-	data, err := marshalResult(sample{
-		ID: 0x506056d97468a833, SceneID: 0x77cf4d9fbc676640,
-		L4Refs: []uint64{0xeccd7bd4d0db74cc}, CreatedAt: 1786987484275, Score: 0.5,
-	})
-	if err != nil {
-		t.Fatalf("marshalResult: %v", err)
-	}
-	var got map[string]any
-	if err := json.Unmarshal(data, &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if got["id"] != "506056d97468a833" {
-		t.Errorf("id = %v, want hex string", got["id"])
-	}
-	if got["scene_id"] != "77cf4d9fbc676640" {
-		t.Errorf("scene_id = %v, want hex string", got["scene_id"])
-	}
-	refs, ok := got["l4_refs"].([]any)
-	if !ok || len(refs) != 1 || refs[0] != "eccd7bd4d0db74cc" {
-		t.Errorf("l4_refs = %v, want hex array", got["l4_refs"])
-	}
-	if got["created_at"] != float64(1786987484275) {
-		t.Errorf("created_at = %v, want numeric timestamp", got["created_at"])
-	}
-	if got["score"] != 0.5 {
-		t.Errorf("score = %v, want numeric", got["score"])
+	text := got.Content[0].(*mcp.TextContent).Text
+	want := `{"scene_id":"000000000000000f","scene_name":"","topic_count":2,"hit_count":0,"last_hit_at":1786987484275,"l3_id":"77cf4d9fbc676640"}`
+	if text != want {
+		t.Fatalf("result = %s, want %s", text, want)
 	}
 }
 
-func TestMarshalResultZeroIDs(t *testing.T) {
-	// Zero-value IDs (e.g. a fresh profile) must stay present and hex-shaped.
-	data, err := marshalResult(map[string]any{"id_hash": uint64(0)})
-	if err != nil {
-		t.Fatalf("marshalResult: %v", err)
+// contentTypeNames is the one vocabulary this package states by hand, so it is
+// where a new engine content type would silently go missing: enumerate the
+// defined values through String() instead of restating the list.
+func TestContentTypeNamesMatchTheEngine(t *testing.T) {
+	defined := map[string]bool{}
+	for i := 0; i <= math.MaxUint8; i++ {
+		name := memhop.ContentType(i).String()
+		if strings.HasPrefix(name, "ContentType(") {
+			continue // not a defined value
+		}
+		defined[name] = true
 	}
-	if string(data) != `{"id_hash":"0000000000000000"}` {
-		t.Errorf("zero id = %s, want 0000000000000000", data)
+	if len(defined) == 0 {
+		t.Fatal("no content type resolved — the unknown-value shape changed")
+	}
+	for name := range defined {
+		if _, ok := contentTypeNames[name]; !ok {
+			t.Errorf("engine defines content type %q but memhop_archive_search cannot name it", name)
+		}
+	}
+	for name := range contentTypeNames {
+		if !defined[name] {
+			t.Errorf("contentTypeNames accepts %q, which the engine does not define", name)
+		}
 	}
 }
 

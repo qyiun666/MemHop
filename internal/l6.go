@@ -21,49 +21,74 @@ import (
 	"github.com/qyiun666/MemHop/internal/cap/capability"
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/plan"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/trajectory"
 )
 
-// AppendTrajectory appends one event to the turn opened by Search, keyed by
-// that turn's topic id; Seq comes from the domain's TrajIndex (max + 1), so
-// the host never counts sequences.
-func (db *DB) AppendTrajectory(agentID uint64, turnID string, ev core.TrajectorySlot) error {
-	ac, parsed, err := db.lockSession(agentID, turnID)
+// AppendTrajectory appends one event to the L6 log of `key`, which is either a
+// turn's topic id (Search mints it) or, when nodePath names a plan node, the
+// plan's id. With an empty nodePath the record is a bare turn event keyed and
+// stamped with that topic id; with a nodePath it binds to that plan node,
+// which is created as pending when missing. Seq comes from the domain's
+// TrajIndex (max + 1), so the host never counts sequences. An event that does
+// not satisfy the write contract is refused before anything is stored.
+func (db *DB) AppendTrajectory(agentID uint64, key string, nodePath string, ev core.TrajectorySlot) error {
+	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
 	defer ac.Mu.Unlock()
-	if ev.EventType == "" || ev.Timestamp <= 0 {
-		return common.NewError(common.ErrInvalidQuery, "EventType and Timestamp are required")
+	if nodePath != "" {
+		ph, err := plan.ParsePlanID(key)
+		if err != nil {
+			return err
+		}
+		if err := plan.ValidateEvent(ev); err != nil {
+			return err
+		}
+		nodeID, err := plan.EnsureNode(ac, agentID, ph, nodePath)
+		if err != nil {
+			return err
+		}
+		return plan.AppendEventLocked(ac, agentID, ph, nodeID, nodePath, ev)
 	}
-	if len(ev.Payload) > trajectory.MaxEventPayload {
-		ev.Payload = common.TruncateUTF8(ev.Payload, trajectory.MaxEventPayload)
+	keyHash, err := common.ParseID(key)
+	if err != nil {
+		return common.NewError(common.ErrInvalidQuery, "parse session id", err)
 	}
-	maxSeq, _ := ac.Traj.MaxSeq(parsed)
-	ev.SessionID = parsed
+	return appendTurnEvent(ac, agentID, keyHash, ev)
+}
+
+// appendTurnEvent writes one bare turn event under the turn's topic id,
+// forcing event semantics so a host-supplied plan-node field cannot pollute
+// the plan tree. The domain lock must be held.
+func appendTurnEvent(ac *domain.Context, agentID, keyHash uint64, ev core.TrajectorySlot) error {
+	if err := trajectory.ValidateEvent(ev); err != nil {
+		return err
+	}
+	// An unknown key is the first event of that turn, so Seq starts at 1.
+	maxSeq, _ := ac.Traj.MaxSeq(keyHash)
+	ev.SessionID = keyHash
 	// The key IS the turn's topic, so the record's own topic link cannot
 	// disagree with it.
-	ev.TopicID = parsed
+	ev.TopicID = keyHash
 	ev.Seq = maxSeq + 1
-	// An appended event must never masquerade as a plan node: force the
-	// record to bare-event semantics so host-supplied plan-node fields
-	// (NodeType/PlanID/ParentID/NodePath/Status/Summary/PlanNodeRef) are
-	// always cleared on write.
 	ev.NodeType = core.NodeTypeEvent
 	ev.PlanID = 0
 	ev.ParentID = 0
 	ev.NodePath = ""
 	ev.Status = 0
 	ev.Summary = ""
+	ev.PlanType = ""
 	ev.PlanNodeRef = 0
-	idHash, err := repo.AppendTrajectory(db.engine, agentID, ev)
+	idHash, err := repo.AppendTrajectory(ac.Engine, agentID, ev)
 	if err != nil {
 		return err
 	}
-	ac.Traj.Append(parsed, ev.Seq, idHash, ev.Timestamp)
+	ac.Traj.Append(keyHash, ev.Seq, idHash, ev.Timestamp)
 	return nil
 }
 
@@ -75,7 +100,7 @@ func (db *DB) ReadTrajectory(agentID uint64, turnID string) ([]core.TrajectorySl
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	return trajectory.ReadTurn(db.engine, agentID, ac, parsed), nil
+	return trajectory.ReadTurn(db.engine, agentID, ac, parsed)
 }
 
 // ListTrajectorySessions summarizes every turn of the domain's L6 log under
@@ -101,30 +126,11 @@ func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSu
 	return out, nil
 }
 
-// PlanAppend appends one event to a plan node (planID hex, nodePath like
-// "1.2.1") without advancing the plan. If the node does not exist it is
-// created as a pending plan node.
-func (db *DB) PlanAppend(agentID uint64, planID string, nodePath string, ev core.TrajectorySlot) error {
-	ac, err := db.lockAgent(agentID)
-	if err != nil {
-		return err
-	}
-	defer ac.Mu.Unlock()
-	ph, err := plan.ParsePlanID(planID)
-	if err != nil {
-		return err
-	}
-	nodeID, err := plan.EnsureNode(ac, agentID, ph, nodePath)
-	if err != nil {
-		return err
-	}
-	return plan.AppendEventLocked(ac, agentID, ph, nodeID, ev)
-}
-
 // PlanCommit advances a plan node to a status (with optional summary) and
 // appends the step event, then rolls up Done children summaries into any
 // parent Summary (Model A: a parent becomes Done only when the host
-// explicitly commits it here).
+// explicitly commits it here). The event is validated first: a commit this
+// call refuses leaves the node's status, its summary and the rollup untouched.
 func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core.TrajectorySlot, status PlanStatus, summary string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -139,6 +145,9 @@ func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core
 	if err != nil {
 		return err
 	}
+	if err := plan.ValidateEvent(ev); err != nil {
+		return err
+	}
 	nodeID, err := plan.EnsureNode(ac, agentID, ph, nodePath)
 	if err != nil {
 		return err
@@ -146,7 +155,7 @@ func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core
 	if err := plan.UpdateNodeLocked(ac, agentID, nodeID, u8, summary); err != nil {
 		return err
 	}
-	if err := plan.AppendEventLocked(ac, agentID, ph, nodeID, ev); err != nil {
+	if err := plan.AppendEventLocked(ac, agentID, ph, nodeID, nodePath, ev); err != nil {
 		return err
 	}
 	return plan.RollupTree(ac, agentID, ph)
@@ -182,7 +191,11 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 	}
 	defer ac.Mu.Unlock()
 	// Events land in Seq order; only the payload budget can shorten the turn.
-	events := trajectory.TrimByBudget(trajectory.ReadTurn(db.engine, agentID, ac, parsed), trajectory.MaxCrystallizePayload)
+	stored, err := trajectory.ReadTurn(db.engine, agentID, ac, parsed)
+	if err != nil {
+		return nil, err
+	}
+	events := trajectory.TrimByBudget(stored, trajectory.MaxCrystallizePayload)
 	if len(events) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "no trajectory for turn "+turnID)
 	}

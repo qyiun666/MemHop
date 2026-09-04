@@ -43,3 +43,29 @@ func DeleteTopics(ac *domain.Context, agentID uint64, topics, archives []uint64)
 	ac.RemoveTopicsFromIndices(topics)
 	return nil
 }
+
+// DetachGraph clears the L3 anchor of every scene that named graphID. A scene's
+// anchor is the only inbound reference an L3 graph has, and both write paths
+// refuse a graph that does not exist — so deleting the graph has to drop the
+// anchors, otherwise ListScenes(l3ID) keeps listing sessions under a project
+// domain nothing resolves to and the scene reports an unopenable anchor.
+// Callers hold the domain lock.
+func DetachGraph(engine *core.StorageEngine, agentID uint64, graphID uint64) error {
+	var targets []uint64
+	for s := range core.IterAll[core.SceneSlot](engine, agentID, core.RecL2Scene) {
+		if s.L3ID == graphID {
+			targets = append(targets, s.SceneID)
+		}
+	}
+	for _, sceneID := range targets {
+		slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
+		if err != nil {
+			return err
+		}
+		slot.L3ID = 0
+		if err := core.WriteSceneSlot(engine, agentID, sceneID, slot); err != nil {
+			return err
+		}
+	}
+	return nil
+}

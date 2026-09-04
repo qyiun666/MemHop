@@ -42,9 +42,11 @@ func longSessionText(t *testing.T, sessionIdx int) string {
 }
 
 // TestExtractKeywordsLongInputRealLLM reproduces the original failure mode:
-// a >2000-char whole-session text handed to the real LLM. Before the fix
-// this returned keywords response parse failed; now it must never error
-// (LLM extraction, format retry, or heuristic fallback all acceptable).
+// a >2000-char whole-session text handed to the real LLM. Extraction now has
+// no local fallback, so the only acceptable outcome is the model's own keyword
+// track — an error here means the configured model cannot hold the JSON output
+// contract at this input length, which is a configuration problem to surface,
+// not something to paper over with tokenised text.
 func TestExtractKeywordsLongInputRealLLM(t *testing.T) {
 	cfg := &internal.MemHopConfig{}
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
@@ -72,10 +74,11 @@ func TestExtractKeywordsLongInputRealLLM(t *testing.T) {
 	}
 }
 
-// TestUpdateLongTurnNeverFails runs the write chain (real LLM) with
-// whole-session long inputs. The turn must settle despite extraction drift —
-// a topic with its distilled keywords and both originals.
-func TestUpdateLongTurnNeverFails(t *testing.T) {
+// TestUpdateLongTurnSettles runs the write chain (real LLM) with whole-session
+// long inputs. The invariant under test is the strict one: either the turn
+// settles with a real keyword track, or Update fails and settles nothing. A
+// topic written with degraded keywords is the outcome that must never happen.
+func TestUpdateLongTurnSettles(t *testing.T) {
 	db := testsupport.OpenMemHop(t)
 	defer db.Close()
 
@@ -96,7 +99,16 @@ func TestUpdateLongTurnNeverFails(t *testing.T) {
 			AgentText: "已了解这段长对话", AgentTS: ts + 500,
 		})
 		if err != nil {
-			t.Fatalf("attempt %d: Update returned error: %v", i, err)
+			// Failing loudly is allowed; settling a degraded turn is not.
+			res, rerr := db.Search(memhop.SearchQuery{SceneID: sceneID})
+			if rerr != nil {
+				t.Fatalf("attempt %d: Update failed (%v) and the scene cannot be read: %v", i, err, rerr)
+			}
+			if len(res.Topics) != i {
+				t.Fatalf("attempt %d: Update failed (%v) but settled %d topics, want %d", i, err, len(res.Topics), i)
+			}
+			t.Logf("attempt %d: Update refused without degrading the turn: %v", i, err)
+			continue
 		}
 		if topicID == "" {
 			t.Fatalf("attempt %d: no topic created", i)

@@ -44,6 +44,23 @@ func Targets(in core.TurnUpdate) (uint64, uint64, error) {
 	return sceneID, topicID, nil
 }
 
+// SettleTarget validates the topic a turn may settle into: the id has to be one
+// this scene opened — the turn topic minted for a turn count the scene has
+// already reached. That single rule covers every case where settling would do
+// damage: a Dream-fused group's parent (also depth 1, in this scene, but derived
+// from timestamps, not from the turn counter), a child the group sunk, another
+// scene's turn, and an id nobody issued. Replaying the current turn and settling
+// an opened-but-earlier turn both stay valid.
+func SettleTarget(sceneID, topicID, turnSeq uint64) error {
+	for seq := uint64(1); seq <= turnSeq; seq++ {
+		if core.ComputeTurnTopicID(sceneID, seq) == topicID {
+			return nil
+		}
+	}
+	return common.NewError(common.ErrInvalidQuery,
+		"Update: topic_id is not a turn this scene opened; settle the id Search returned")
+}
+
 // PriorL4Refs returns the L4 refs stored on a turn topic; a topic that does
 // not exist yet (the first settle of a turn) yields nil.
 func PriorL4Refs(engine *core.StorageEngine, agentID, topicID uint64) ([]uint64, error) {

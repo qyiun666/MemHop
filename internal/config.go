@@ -14,12 +14,10 @@ import (
 	"os"
 	"slices"
 
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/llm"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
 func OpenOrCreateEngine(cfg *MemHopConfig) (*core.StorageEngine, error) {
@@ -29,16 +27,6 @@ func OpenOrCreateEngine(cfg *MemHopConfig) (*core.StorageEngine, error) {
 	return core.Create(cfg.DBPath)
 }
 
-// InitTokenizer surfaces tokenizer configuration errors at Open time
-// instead of silently degrading to empty tokenization. The tokenizer's one
-// live consumer is the keyword-extraction heuristic fallback.
-func InitTokenizer(engine string) error {
-	if err := index.InitTokenizer(engine); err != nil {
-		return common.NewError(common.ErrConfig, "tokenizer init failed", err)
-	}
-	return nil
-}
-
 // Open assembles a DB instance: tokenizer init, engine open/create and
 // attachment of the built-in capability toolbox injected as an fs.FS by the
 // facade (internal must not import the capabilities package). Agent contexts
@@ -46,10 +34,6 @@ func InitTokenizer(engine string) error {
 // from its own domain's records.
 func Open(cfg *MemHopConfig, builtins fs.FS) (*DB, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	if err := InitTokenizer(defaultTokenizerEngine); err != nil {
-		cancel()
-		return nil, err
-	}
 	engine, err := OpenOrCreateEngine(cfg)
 	if err != nil {
 		cancel()

@@ -42,8 +42,8 @@ type (
 	L3NodeQuery              = internal.L3NodeQuery
 	L4Query                  = internal.L4Query
 	CapabilityListQuery      = internal.CapabilityListQuery
+	ScenePatch               = internal.ScenePatch
 	CapabilityPatch          = internal.CapabilityPatch
-	CapabilityImport         = internal.CapabilityImport
 	TrajectorySessionSummary = internal.TrajectorySessionSummary
 	PlanStatus               = internal.PlanStatus
 	DreamReport              = internal.DreamReport
@@ -132,26 +132,25 @@ type HypergraphSlot struct {
 
 // HypergraphNode is a node within an L3 hypergraph.
 type HypergraphNode struct {
-	IDHash     string   `json:"id_hash"`
-	GraphID    string   `json:"graph_id"`
-	Title      string   `json:"title"`
-	NodeType   string   `json:"node_type"`
-	Content    string   `json:"content"`
-	Keywords   []string `json:"keywords"`
-	SourceRef  *string  `json:"source_ref,omitempty"`
-	Importance float32  `json:"importance"`
-	CreatedAt  int64    `json:"created_at"`
-	UpdatedAt  int64    `json:"updated_at"`
+	IDHash    string   `json:"id_hash"`
+	GraphID   string   `json:"graph_id"`
+	Title     string   `json:"title"`
+	NodeType  string   `json:"node_type"`
+	Content   string   `json:"content"`
+	Keywords  []string `json:"keywords"`
+	SourceRef *string  `json:"source_ref,omitempty"`
+	CreatedAt int64    `json:"created_at"`
+	UpdatedAt int64    `json:"updated_at"`
 }
 
-// HypergraphEdge is an edge within an L3 hypergraph.
+// HypergraphEdge is a hyperedge within an L3 hypergraph: an unordered relation
+// over its member nodes, distinguished by Kind (the edge id covers members and
+// kind, so one node pair can carry several relations at once).
 type HypergraphEdge struct {
 	IDHash    string        `json:"id_hash"`
 	GraphID   string        `json:"graph_id"`
 	Kind      GraphEdgeKind `json:"kind"`
 	NodeIDs   []string      `json:"node_ids"`
-	Weight    float32       `json:"weight"`
-	Label     *string       `json:"label,omitempty"`
 	CreatedAt int64         `json:"created_at"`
 }
 
@@ -168,8 +167,9 @@ type L3Subgraph struct {
 	Edges []HypergraphEdge `json:"edges"`
 }
 
-// ArchiveSlot stores a user/agent chat message under an L2 scene context.
-// Role is one of RoleUser / RoleAgent / RoleSystem / RoleDream.
+// ArchiveSlot stores one L4 original of a turn. Role is one of RoleUser /
+// RoleAgent (written by Update) or RoleDream (a fused group's summary);
+// ContentType says whether Content is prose or a reference to media.
 type ArchiveSlot struct {
 	IDHash      string      `json:"id_hash"`
 	ContentType ContentType `json:"content_type"`
@@ -177,7 +177,6 @@ type ArchiveSlot struct {
 	ContextID   string      `json:"context_id"`
 	CreatedAt   int64       `json:"created_at"`
 	Content     string      `json:"content"`
-	Metadata    *string     `json:"metadata,omitempty"`
 }
 
 // Capability is an L5 reusable capability.
@@ -200,15 +199,20 @@ type Capability struct {
 	UpdatedAt     int64            `json:"updated_at"`
 }
 
-// TrajectorySlot is one L6 operation trajectory event. SessionID is the
-// trajectory key: the turn's topic id Search minted for it (TopicID then
-// carries the same value), or the plan id of a plan-bound event.
-// NodeType is NodeTypeEvent or NodeTypePlan; Status carries the numeric
-// StatusPending.. codes (only meaningful on nodes a plan wrote).
-// On the plan write paths (PlanAppend/PlanCommit) the record is forced to
-// bare-event semantics — NodeType/ParentID/NodePath/Status/Summary are
-// cleared and PlanID/PlanNodeRef/Seq are assigned by the library, so
-// caller-supplied values in those fields are ignored.
+// TrajectorySlot is one L6 operation trajectory event — the shape both write
+// and read use, so a field that no path can fill does not live here.
+// SessionID is the trajectory key: the turn's topic id Search minted for it
+// (TopicID then carries the same value), or the plan id of a plan-bound event.
+// PlanID echoes SessionID on a plan-bound event and is zero on a bare turn
+// event. NodePath names the plan step a bound event belongs to — the library
+// stamps it on write, so a host can attribute an event to a step without
+// deriving PlanNodeRef (a library hash nothing on the surface re-derives).
+// A bare turn event leaves NodePath and PlanNodeRef empty.
+//
+// On every write path (AppendTrajectory, PlanCommit) PlanID/NodePath/
+// PlanNodeRef/Seq are assigned by the library and are read-only here; of the
+// event you pass, EventType, Payload, Timestamp, FinishedAt and — for a
+// plan-bound event — TopicID are what gets stored.
 type TrajectorySlot struct {
 	IDHash    string `json:"id_hash"`
 	SessionID string `json:"session_id"`
@@ -218,13 +222,8 @@ type TrajectorySlot struct {
 	TopicID   string `json:"topic_id,omitempty"` // L2 topic the turn resolves to, 16-char hex
 	Timestamp int64  `json:"timestamp"`
 
-	NodeType    uint8  `json:"node_type,omitempty"`
 	PlanID      string `json:"plan_id,omitempty"`
-	ParentID    string `json:"parent_id,omitempty"`
 	NodePath    string `json:"node_path,omitempty"`
-	Status      uint8  `json:"status,omitempty"`
-	Summary     string `json:"summary,omitempty"`
-	PlanType    string `json:"plan_type,omitempty"`
 	PlanNodeRef string `json:"plan_node_ref,omitempty"`
 	FinishedAt  int64  `json:"finished_at,omitempty"`
 }
@@ -260,15 +259,4 @@ type PlanTree struct {
 	Roots      []PlanNodeView `json:"roots"`
 	DoneCount  int            `json:"done_count"`
 	TotalCount int            `json:"total_count"`
-}
-
-// PlanSummary is one plan's footprint returned by ListPlans.
-type PlanSummary struct {
-	PlanID       string `json:"plan_id"`
-	CreatedAt    int64  `json:"created_at"`
-	LastActiveAt int64  `json:"last_active_at"`
-	NodeCount    int    `json:"node_count"`
-	DoneCount    int    `json:"done_count"`
-	TotalCount   int    `json:"total_count"`
-	Active       bool   `json:"active"`
 }

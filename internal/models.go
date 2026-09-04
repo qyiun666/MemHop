@@ -21,6 +21,7 @@ type (
 	SceneMessage             = core.SceneMessage
 	SceneContextTopic        = core.SceneContextTopic
 	SceneContext             = core.SceneContext
+	ScenePatch               = core.ScenePatch
 	L3Graph                  = core.L3Graph
 	L3ImportItem             = core.L3ImportItem
 	L3Relation               = core.L3Relation
@@ -43,7 +44,6 @@ type (
 	PlanTree     = plan.PlanTree
 	PlanNode     = plan.PlanNode
 	PlanNodeView = plan.PlanNodeView
-	PlanSummary  = plan.PlanSummary
 
 	// LLM capability contracts (prompt inputs / parsed outputs) live in the
 	// llmops capability package.

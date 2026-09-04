@@ -172,16 +172,22 @@ func OpenSceneTurn(engine *core.StorageEngine, agentID uint64, sceneID uint64, t
 	return slot, nil
 }
 
-func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []uint64) []core.SceneSlot {
+// ListScenesL2 reads the named scenes. An id that names no scene is skipped;
+// a scene record that cannot be read is an error — a listing quietly missing
+// one session is indistinguishable from a session that was deleted.
+func ListScenesL2(engine *core.StorageEngine, agentID uint64, ids []uint64) ([]core.SceneSlot, error) {
 	var out []core.SceneSlot
 	for _, sceneHash := range ids {
 		slot, err := core.ReadSceneSlot(engine, agentID, sceneHash)
 		if err != nil {
-			continue
+			if common.CodeOf(err) == common.ErrNotFound {
+				continue
+			}
+			return nil, err
 		}
 		out = append(out, *slot)
 	}
-	return out
+	return out, nil
 }
 
 // CreateSceneL2WithID creates a scene under the ID the host owns (its session
@@ -211,31 +217,25 @@ func SetSceneL3ID(engine *core.StorageEngine, agentID uint64, sceneID uint64, l3
 	return core.WriteSceneSlot(engine, agentID, sceneID, slot)
 }
 
-// OverwriteSceneL3ID is the correction entry: it unconditionally sets the
-// scene's L3 anchor (0 clears it), overriding the write-once guard. Use only
-// to fix a mis-anchored scene; normal routing must stay on SetSceneL3ID.
-func OverwriteSceneL3ID(engine *core.StorageEngine, agentID uint64, sceneID uint64, l3ID uint64) error {
-	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
-	if err != nil {
-		return err
-	}
-	slot.L3ID = l3ID
-	return core.WriteSceneSlot(engine, agentID, sceneID, slot)
-}
-
 // CollectAllScenesL2 returns every scene with TopicCount set to the number
 // of depth-1 root topics under it (single pass over all topics).
-func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) []core.SceneSlot {
+func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) ([]core.SceneSlot, error) {
 	var out []core.SceneSlot
 	for idHash := range engine.IndexByType(agentID, core.RecL2Scene) {
 		slot, err := core.ReadSceneSlot(engine, agentID, idHash)
 		if err != nil {
-			continue
+			// The index names this record, so the engine failing to read it is
+			// not "no scenes" — reporting it keeps a corrupt domain from
+			// looking like an empty one.
+			if common.CodeOf(err) == common.ErrNotFound {
+				continue
+			}
+			return nil, err
 		}
 		out = append(out, *slot)
 	}
 	if len(out) == 0 {
-		return out
+		return out, nil
 	}
 	counts := make(map[uint64]int, len(out))
 	for _, topic := range core.CollectAllTopics(engine, agentID) {
@@ -246,7 +246,7 @@ func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) []core.Scene
 	for i := range out {
 		out[i].TopicCount = counts[out[i].SceneID]
 	}
-	return out
+	return out, nil
 }
 
 // TopicClosureL2 gathers a topic, its recursive children (any depth) and the L4

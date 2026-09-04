@@ -33,11 +33,17 @@ func TestSurfaceL4Archive(t *testing.T) {
 	if len(byTopic) != 2 {
 		t.Fatalf("topic archives = %d, want the turn's two originals", len(byTopic))
 	}
-	if _, err := db.SearchL4(L4Query{}); err != nil {
-		t.Fatalf("empty l4 query must return empty set: %v", err)
+	// An empty query names no condition, so it returns the domain's archives.
+	all, err := db.SearchL4(L4Query{})
+	if err != nil || len(all) < 2 {
+		t.Fatalf("empty l4 query: got %d archives, err %v", len(all), err)
 	}
-	got, err := db.GetArchive(byKeyword[0].IDHash)
-	if err != nil || got == nil {
-		t.Fatalf("get archive: %v", err)
+	// A single archive is a by-ID query — there is no dedicated getter.
+	got, err := db.SearchL4(L4Query{IDs: []string{byKeyword[0].IDHash}})
+	if err != nil || len(got) != 1 || got[0].IDHash != byKeyword[0].IDHash {
+		t.Fatalf("archive by id: %+v err %v", got, err)
+	}
+	if _, err := db.SearchL4(L4Query{IDs: []string{"nothex"}}); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("malformed archive id: want ErrInvalidQuery, got %v", err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/graph"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/scene"
 )
 
 func (db *DB) GetL3(agentID uint64, id string) (*L3Graph, error) {
@@ -67,9 +68,12 @@ func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 
 // ImportL3 batch-imports knowledge nodes: per-Domain graph slot create/reuse,
 // existing nodes handled by mode, then Related hyperedges resolved in a
-// second pass (a relation may target an item later in the batch). Per-item
-// failures are recorded in result.Errors and the batch continues; nil is
-// only returned on success.
+// second pass (a relation may target an item later in the batch). The batch is
+// validated up front — every item needs a Title and a Domain — so a malformed
+// request writes nothing at all; per-item storage failures are what
+// result.Errors reports. nil is only returned on success. The result carries
+// the graph ids the batch wrote into as well as the node ids, because a host
+// needs the former to hang the graph on a scene.
 func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -79,43 +83,44 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 	if len(items) == 0 {
 		return nil, common.NewError(common.ErrInvalidQuery, "import: no items")
 	}
+	for i := range items {
+		if items[i].Title == "" {
+			return nil, common.NewError(common.ErrInvalidQuery,
+				fmt.Sprintf("import: item %d has no title", i))
+		}
+		if items[i].Domain == "" {
+			return nil, common.NewError(common.ErrInvalidQuery,
+				fmt.Sprintf("import: item %q has no domain", items[i].Title))
+		}
+	}
 	switch mode {
-	case "":
-		mode = L3ImportOverwrite
 	case L3ImportSkip, L3ImportMerge, L3ImportOverwrite:
 	default:
 		return nil, common.NewError(common.ErrInvalidQuery,
 			"import mode must be Skip, Merge or Overwrite")
 	}
-	graphCache := make(map[string]uint64, len(items)) // Domain → graphID
-	for _, g := range core.CollectAllGraphSlots(db.engine, agentID) {
-		graphCache[g.Name] = g.IDHash
-	}
-	nodeTitles := make(map[uint64]map[string]struct{}) // graphID → existing node titles
-	result := &L3ImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}}
-	imported := make([]bool, len(items))
+	batch := graph.NewImportBatch(db.engine, agentID, mode)
 	for i := range items {
-		if items[i].Title == "" {
+		if err := batch.ImportNode(&items[i]); err != nil {
+			batch.Result().Errors = append(batch.Result().Errors, fmt.Sprintf("%s: %v", items[i].Title, err))
 			continue
 		}
-		ok, err := graph.ImportOneNode(db.engine, agentID, &items[i], mode, graphCache, nodeTitles, result)
-		if err != nil {
-			result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", items[i].Title, err))
-			continue
-		}
-		imported[i] = ok
 	}
-	// Relations only for items whose node landed (create/merge/overwrite):
-	// a skipped node contributes no edges.
+	// Relations for every item, including one whose node was skipped: edges
+	// are deduped by their sorted members plus kind, so re-declaring one is a
+	// no-op — while withholding it would silently drop the edges of a node an
+	// earlier DeleteL3Nodes had removed and this batch just brought back.
 	for i := range items {
-		if imported[i] {
-			graph.ImportRelations(db.engine, agentID, &items[i], graphCache, nodeTitles, result)
-		}
+		batch.ImportRelations(&items[i])
 	}
+	result := batch.Result()
+	result.GraphIDs = batch.GraphIDs()
 	return result, nil
 }
 
-// UpdateL3 partially updates a graph slot (currently Name only).
+// UpdateL3 partially updates a graph slot (currently Name only). The new name
+// has to be free: a domain label addresses a graph for the import path, so two
+// slots under one label would make that label resolve ambiguously.
 func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -126,13 +131,19 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
+	if name != nil {
+		if err := graph.CheckName(db.engine, agentID, graphHash, *name); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := repo.UpdateGraphL3(db.engine, agentID, graphHash, name); err != nil {
 		return nil, err
 	}
 	return db.getL3Graph(agentID, id)
 }
 
-// DeleteL3 cascades: deletes the graph with all its nodes and edges.
+// DeleteL3 cascades: deletes the graph with all its nodes and edges, and drops
+// the L2 anchors that named it.
 func (db *DB) DeleteL3(agentID uint64, id string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -143,8 +154,42 @@ func (db *DB) DeleteL3(agentID uint64, id string) error {
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
+	if _, err := core.ReadGraphSlot(db.engine, agentID, graphHash); err != nil {
+		return err
+	}
 	if !repo.DeleteGraphL3(db.engine, agentID, graphHash) {
 		return common.NewError(common.ErrIO, "delete graph", nil)
 	}
-	return nil
+	return scene.DetachGraph(db.engine, agentID, graphHash)
+}
+
+// DeleteL3Nodes removes nodes from one graph and cascades the hyperedges that
+// touch them, so correcting a knowledge node does not mean rebuilding the graph
+// (and losing the edges bound to it). Every id must name a node of this graph;
+// an unknown or foreign id is refused and nothing is deleted.
+func (db *DB) DeleteL3Nodes(agentID uint64, graphID string, nodeIDs []string) error {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return err
+	}
+	defer ac.Mu.Unlock()
+	if len(nodeIDs) == 0 {
+		return common.NewError(common.ErrInvalidQuery, "delete nodes: no node ids")
+	}
+	graphHash, err := common.ParseID(graphID)
+	if err != nil {
+		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
+	}
+	if _, err := core.ReadGraphSlot(db.engine, agentID, graphHash); err != nil {
+		return err
+	}
+	targets := make([]uint64, 0, len(nodeIDs))
+	for _, raw := range nodeIDs {
+		id, err := common.ParseID(raw)
+		if err != nil {
+			return common.NewError(common.ErrInvalidQuery, "parse node id", err)
+		}
+		targets = append(targets, id)
+	}
+	return repo.DeleteNodesL3(db.engine, agentID, graphHash, targets)
 }

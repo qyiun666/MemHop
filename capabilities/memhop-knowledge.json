@@ -3,7 +3,7 @@
   "name": "memhop-knowledge",
   "version": "3",
   "type": "composite",
-  "summary": "L3 knowledge-graph manual: read/list/import/update/delete semantic graphs, query nodes and expand subgraphs",
+  "summary": "L3 knowledge-graph manual: read/list/import/update/delete semantic graphs, query nodes and expand subgraphs. The entries below are Go api methods; an MCP client calls the same operations as memhop_knowledge_get / _list / _import / _update / _delete / _nodes / _subgraph.",
   "trigger": "need to manage or query the L3 semantic knowledge graph, structured knowledge; knowledge l3 graph semantic node edge hypergraph",
   "resources": [
     {
@@ -18,23 +18,23 @@
       "type": "api",
       "name": "ListL3",
       "ref": "api:ListL3",
-      "desc": "List all L3 knowledge graphs; returns graph summaries (ID/name/node-edge counts)",
+      "desc": "List all L3 knowledge graphs: graph containers only (id / name / source / timestamps) — no node or edge counts. Read one graph's size with GetL3, or list its nodes with QueryL3Nodes naming only the graph",
       "input": "{\"type\":\"object\",\"properties\":{}}",
-      "output": "List of HypergraphSlot (summaries)"
+      "output": "List of HypergraphSlot (containers)"
     },
     {
       "type": "api",
       "name": "ImportL3",
       "ref": "api:ImportL3",
-      "desc": "Bulk-import L3 knowledge entries: title/domain/node_type/content per node, keywords optional, source_ref optional positional reference (file:line / URL), related optional same-graph relation edges resolved by title (targets may appear later in the batch; kind is related|causal|part_of|sequence|dependency|custom, default related; re-importing the same batch does not duplicate edges) — empty title entries are skipped; mode is case-sensitive Skip|Merge|Overwrite; returns created/updated/edges_created/skipped stats",
+      "desc": "Bulk-import L3 knowledge entries: title/domain/node_type/content per node, keywords optional, source_ref optional positional reference (file:line / URL), related optional same-graph relation edges resolved by title (targets may appear later in the batch; kind is related|causal|part_of|sequence|dependency|custom, default related; an edge is identified by its member set plus kind, so the same nodes can carry several relations, and re-importing the same batch never duplicates an edge) — each relation names its far side in `titles` (one entry = a binary relation, several = one hyperedge spanning the item plus every target, so an n-node fact stays one fact); a relation with no target, an empty, duplicated or self-referencing title, or a target that is not in the graph, is reported in errors and creates nothing; every item must carry title and domain and mode is required (case-sensitive Skip|Merge|Overwrite) — a batch violating any of this is rejected and writes nothing; returns graph_ids (the graphs the batch wrote into — feed these to UpdateScene/Search to anchor a scene) plus created_ids/updated_ids (node ids), edges_created and skipped stats",
       "input": "{\"type\":\"object\",\"properties\":{\"items\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"domain\":{\"type\":\"string\"},\"node_type\":{\"type\":\"string\"},\"content\":{\"type\":\"string\"},\"keywords\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"source_ref\":{\"type\":\"string\",\"description\":\"Positional reference (file:line / URL)\"},\"related\":{\"type\":\"array\",\"items\":{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\",\"description\":\"Target node title (same graph, may appear later in the batch)\"},\"kind\":{\"type\":\"string\",\"description\":\"related|causal|part_of|sequence|dependency|custom (default related)\"}},\"required\":[\"title\"]}}},\"required\":[\"title\",\"domain\",\"node_type\",\"content\"]},\"description\":\"Knowledge entries (nodes) to import\"},\"mode\":{\"type\":\"string\",\"description\":\"Skip|Merge|Overwrite (case-sensitive)\"}},\"required\":[\"items\",\"mode\"]}",
-      "output": "L3ImportResult (created/updated/edges_created/skipped stats)"
+      "output": "L3ImportResult (graph_ids + created/updated node ids + edges_created/skipped stats)"
     },
     {
       "type": "api",
       "name": "UpdateL3",
       "ref": "api:UpdateL3",
-      "desc": "Update L3 graph metadata; name omitted means no rename",
+      "desc": "Rename an L3 graph; name omitted means no rename. The new label must not already be carried by another graph — a domain label is how ImportL3 addresses a graph, so a collision is refused with ErrInvalidQuery rather than making that domain resolve ambiguously",
       "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"},\"name\":{\"type\":\"string\",\"description\":\"New name (omit to keep)\"}},\"required\":[\"id\"]}",
       "output": "L3Graph (updated)"
     },
@@ -42,15 +42,23 @@
       "type": "api",
       "name": "DeleteL3",
       "ref": "api:DeleteL3",
-      "desc": "Delete an entire L3 knowledge graph",
+      "desc": "Delete an entire L3 knowledge graph — the slot plus every node and hyperedge in it, and the L2 scene anchors that named it (a deleted graph leaves no scene listing under it). To correct one node without losing the edges bound to the rest, use DeleteL3Nodes (Go-only, no MCP tool)",
       "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"}},\"required\":[\"id\"]}",
+      "output": "ok"
+    },
+    {
+      "type": "api",
+      "name": "DeleteL3Nodes",
+      "ref": "api:DeleteL3Nodes",
+      "desc": "Delete specific nodes from one L3 graph, cascading every hyperedge that touches them. Go-only (no MCP tool), like the other memory-correction calls. Every id must name a node of that graph; an unknown or foreign id is refused and nothing is deleted",
+      "input": "{\"type\":\"object\",\"properties\":{\"graph_id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"},\"node_ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Node IDs (16-char hex)\"}},\"required\":[\"graph_id\",\"node_ids\"]}",
       "output": "ok"
     },
     {
       "type": "api",
       "name": "QueryL3Nodes",
       "ref": "api:QueryL3Nodes",
-      "desc": "Query L3 nodes by condition; graph_id required, plus one or more of ids/keyword/node_type; limit caps the result count (<=0 means unlimited)",
+      "desc": "Query L3 nodes of one graph; graph_id required and every other condition that is set filters, so ids/keyword/node_type AND together (naming only the graph lists its nodes). Keyword is case-insensitive over title, content and keywords; limit caps the result count (<=0 means unlimited)",
       "input": "{\"type\":\"object\",\"properties\":{\"graph_id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"},\"ids\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Node ID list (16-char hex)\"},\"keyword\":{\"type\":\"string\",\"description\":\"Keyword match\"},\"node_type\":{\"type\":\"string\",\"description\":\"Node type filter\"},\"limit\":{\"type\":\"integer\",\"description\":\"Max results (<=0 unlimited)\"}},\"required\":[\"graph_id\"]}",
       "output": "List of HypergraphNode"
     },

@@ -12,25 +12,36 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// QueryNodesByIDs reads the requested nodes, keeping only the ones that
-// exist and belong to graphHash; unparsable/missing ids are skipped.
-func QueryNodesByIDs(engine *core.StorageEngine, agentID, graphHash uint64, ids []string) []core.HypergraphNode {
-	var out []core.HypergraphNode
-	for _, id := range ids {
-		idHash, err := common.ParseID(id)
-		if err != nil {
-			continue
-		}
-		node, err := core.ReadHypergraphNode(engine, agentID, idHash)
-		if err != nil || node.GraphID != graphHash {
-			continue
-		}
-		out = append(out, *node)
-	}
-	return out
+// NodeFilter is a graph-scoped node query with its conditions already parsed:
+// a nil IDs means no id filter, and Keyword is expected lower-cased. Every
+// condition that is set has to hold — Matches never picks a favourite and
+// ignores the rest.
+type NodeFilter struct {
+	IDs      map[uint64]struct{}
+	Keyword  string
+	NodeType string
 }
 
-func NodeMatchesKeyword(n core.HypergraphNode, kw string) bool {
+// Matches reports whether one node of the requested graph satisfies every
+// condition the filter sets.
+func (f NodeFilter) Matches(n core.HypergraphNode) bool {
+	if f.IDs != nil {
+		if _, ok := f.IDs[n.IDHash]; !ok {
+			return false
+		}
+	}
+	if f.NodeType != "" && n.NodeType != f.NodeType {
+		return false
+	}
+	if f.Keyword != "" && !matchesKeyword(n, f.Keyword) {
+		return false
+	}
+	return true
+}
+
+// matchesKeyword is a case-insensitive substring test over the node's title,
+// content and keyword track; kw must already be lower-cased.
+func matchesKeyword(n core.HypergraphNode, kw string) bool {
 	if strings.Contains(strings.ToLower(n.Title), kw) {
 		return true
 	}

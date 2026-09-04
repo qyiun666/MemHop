@@ -9,6 +9,8 @@
 package api
 
 import (
+	"context"
+
 	"github.com/qyiun666/MemHop/internal"
 )
 
@@ -16,9 +18,6 @@ import (
 type Session struct {
 	*internal.Session
 }
-
-// AgentID returns the bound domain ID as a 16-char hex string.
-func (s *Session) AgentID() string { return internal.FormatAgentID(s.Session.AgentID()) }
 
 // Search reads one scene — the host's session: its record plus its depth-1
 // topics in turn order, and the topic id this read opened for the turn the
@@ -63,9 +62,10 @@ func (s *Session) UpdateL0(slot *ProfileSlot) error {
 	return s.Session.UpdateL0(&coreSlot)
 }
 
-// ListScenes returns all scenes with hex IDs.
-func (s *Session) ListScenes() ([]SceneSlot, error) {
-	scenes, err := s.Session.ListScenes()
+// ListScenes returns scenes with hex IDs; a non-empty l3ID keeps only the
+// scenes anchored to that L3 project domain.
+func (s *Session) ListScenes(l3ID string) ([]SceneSlot, error) {
+	scenes, err := s.Session.ListScenes(l3ID)
 	if err != nil {
 		return nil, err
 	}
@@ -76,17 +76,15 @@ func (s *Session) ListScenes() ([]SceneSlot, error) {
 	return out, nil
 }
 
-// ListScenesByL3 returns scenes anchored to an L3 domain with hex IDs.
-func (s *Session) ListScenesByL3(l3ID string) ([]SceneSlot, error) {
-	scenes, err := s.Session.ListScenesByL3(l3ID)
+// UpdateScene patches one scene's host-facing metadata (title, L3 anchor) and
+// returns the scene as stored afterwards, so a host confirms an anchor without
+// listing the domain. Nil patch fields keep their stored value.
+func (s *Session) UpdateScene(sceneID string, patch ScenePatch) (SceneSlot, error) {
+	slot, err := s.Session.UpdateScene(sceneID, patch)
 	if err != nil {
-		return nil, err
+		return SceneSlot{}, err
 	}
-	out := make([]SceneSlot, len(scenes))
-	for i, sc := range scenes {
-		out[i] = fromSceneSlot(sc)
-	}
-	return out, nil
+	return fromSceneSlot(slot), nil
 }
 
 // GetL3 returns an L3 graph with hex IDs.
@@ -111,7 +109,11 @@ func (s *Session) ListL3() ([]HypergraphSlot, error) {
 	return out, nil
 }
 
-// UpdateL3 renames a graph and returns it with hex IDs.
+// UpdateL3 renames a graph and returns it with hex IDs. The new label has to be
+// free: a domain label is how ImportL3 addresses a graph, so renaming onto a
+// label another graph already carries is refused with ErrInvalidQuery instead of
+// leaving that domain ambiguous. Renaming onto the name the graph already has is
+// a no-op that succeeds.
 func (s *Session) UpdateL3(id string, name *string) (*L3Graph, error) {
 	g, err := s.Session.UpdateL3(id, name)
 	if err != nil {
@@ -153,26 +155,6 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 		out[i] = fromArchiveSlot(a)
 	}
 	return out, nil
-}
-
-// GetArchive returns one archive with hex IDs.
-func (s *Session) GetArchive(id string) (*ArchiveSlot, error) {
-	a, err := s.Session.GetArchive(id)
-	if err != nil {
-		return nil, err
-	}
-	out := fromArchiveSlot(*a)
-	return &out, nil
-}
-
-// GetCapability returns a capability with a hex ID.
-func (s *Session) GetCapability(id string) (*Capability, error) {
-	c, err := s.Session.GetCapability(id)
-	if err != nil {
-		return nil, err
-	}
-	out := fromCapability(*c)
-	return &out, nil
 }
 
 // ImportCapability imports a capability and returns it with a hex ID.
@@ -243,32 +225,47 @@ func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
 	return out, nil
 }
 
-// AppendTrajectory writes one event of the turn Search opened, keyed by that
-// turn's topic id, and stamps the record's topic_id with the same value.
-func (s *Session) AppendTrajectory(turnID string, ev TrajectorySlot) error {
+// AppendTrajectory writes one event under key: a turn's topic id (Search
+// mints it) with an empty nodePath, or a plan id with the dotted nodePath of
+// the plan node the event binds to ("1", "1.2"; a missing node is created
+// pending).
+//
+// The log is append-only and per-key: nothing returns or takes an event id,
+// because no public call consumes one — ReadTrajectory(key) gives the events
+// back in Seq order, and Dream drops ones past the retention window. Of the
+// event you pass, EventType, Payload, Timestamp, FinishedAt and — for a
+// plan-bound event — TopicID are stored. Seq, PlanID and PlanNodeRef are
+// assigned by the library, and so is the record's NodePath: a plan-bound event
+// is stamped with the step it landed on, which is how a host attributes an
+// event to a step afterwards. On a bare turn event TopicID comes from the key
+// — it cannot disagree with it — while a plan-bound event keeps the TopicID
+// named for the turn it happened in.
+//
+// A Payload over the 4 KiB budget is refused, not truncated: a shortened event
+// would read back exactly like a complete one. Nothing is written when this
+// call returns an error.
+//
+// A plan-bound event (non-empty nodePath) is validated against the plan step
+// vocabulary: plan_step, llm_request, llm_output, tool_call, tool_result,
+// subagent_spawn, subagent_done, context_inject, ask_user, user_reply. Anything
+// else is ErrInvalidQuery; a bare turn event takes any EventType the host
+// names.
+func (s *Session) AppendTrajectory(key, nodePath string, ev TrajectorySlot) error {
 	coreEv, err := toCoreTrajectorySlot(ev)
 	if err != nil {
 		return err
 	}
-	return s.Session.AppendTrajectory(turnID, coreEv)
+	return s.Session.AppendTrajectory(key, nodePath, coreEv)
 }
 
-// PlanAppend appends one event to a plan node (hex planID, nodePath). The
-// record is forced to bare-event semantics: NodeType/ParentID/NodePath/
-// Status/Summary are cleared and PlanID/PlanNodeRef/Seq come from this call,
-// so caller-supplied values in those fields are ignored.
-func (s *Session) PlanAppend(planID, nodePath string, ev TrajectorySlot) error {
-	coreEv, err := toCoreTrajectorySlot(ev)
-	if err != nil {
-		return err
-	}
-	return s.Session.PlanAppend(planID, nodePath, coreEv)
-}
-
-// PlanCommit advances a plan node to a status and appends the step event.
-// status takes the PlanStatus* string constants ("pending" / "in_progress" /
-// "running" / "done" / "failed"); an unknown value is rejected. The appended
-// event is forced to bare-event semantics as in PlanAppend.
+// PlanCommit advances a plan node to a status, appends the step event and rolls
+// Done children's summaries up into their parent. status takes the PlanStatus*
+// string constants ("pending" / "in_progress" / "running" / "done" / "failed");
+// an unknown value is rejected. nodePath is the dotted path the host assigned
+// with SyncPlanTree. Like the node-bound AppendTrajectory, the event is forced
+// to bare-event semantics and its EventType must come from the plan vocabulary
+// above; summary is the node's own conclusion, kept when a later sync leaves it
+// blank.
 func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status string, summary string) error {
 	coreEv, err := toCoreTrajectorySlot(ev)
 	if err != nil {
@@ -287,23 +284,145 @@ func (s *Session) PlanState(planID string) (*PlanTree, error) {
 	return &out, nil
 }
 
-// ListPlans summarizes every plan of the agent domain (restart recovery).
-func (s *Session) ListPlans() ([]PlanSummary, error) {
-	plans, err := s.Session.ListPlans()
-	if err != nil {
-		return nil, err
-	}
-	out := make([]PlanSummary, 0, len(plans))
-	for _, p := range plans {
-		out = append(out, fromPlanSummary(p))
-	}
-	return out, nil
-}
-
 // SyncPlanTree replaces one plan's whole tree from the host's authoritative
 // snapshot: adds/updates nodes by path, deletes vanished nodes (with their
 // bound events) and never appends a plan_step event. planID is preserved.
 func (s *Session) SyncPlanTree(planID string, root *PlanNode) error {
 	in := toInternalPlanNode(root)
 	return s.Session.SyncPlanTree(planID, &in)
+}
+
+// ---- Promoted surface, documented ----
+//
+// The methods below need no DTO mapping, so embedding alone already makes them
+// callable. They are declared here because internal is not a published package:
+// a host reading `go doc github.com/qyiun666/MemHop/api.Session` would
+// otherwise not see them at all, and these are the calls with the contracts a
+// host has to get right (locking, LLM cost, cascade scope). Each body is a
+// forwarding declaration that exists for its doc comment;
+// api/surface_public_test.go pins the resulting method set.
+
+// Dream runs the consolidation pass — the sleep analogue: it fuses and compresses
+// topics (L2), rebuilds and decays the L1 graph, distills the L0 profile, and
+// prunes trajectory events past their retention window. Pass a scene id to
+// consolidate one scene, or "" for every scene of the domain. It is the only
+// path that prunes L6 events and rebuilds L1, so a domain that stops being
+// written to still needs one Dream to shrink.
+//
+// It contacts the LLM and runs inside the domain lock: while it works, every
+// other call on this agent domain waits. The report counts what this pass did;
+// on a mid-pipeline failure the partially filled report comes back with the
+// error.
+func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, error) {
+	return s.Session.Dream(ctx, sceneID)
+}
+
+// SceneContext reads a scene's whole transcript without opening a turn: unlike
+// Search it writes nothing — no turn id is minted, HitCount and LastHitAt stay
+// alone — so it is the read for showing or exporting a conversation.
+//
+// It returns more than Search does, on purpose: a Dream-fused group keeps its
+// originals on the sunk child topics, and SceneContext is the only read that
+// flattens them back in (entries with Depth 2, reachable up to two levels).
+// Entries come in speaking order, each carrying its own L4 messages and
+// ChildCount, so a fused parent (whose message is Dream's summary) can be told
+// apart from the turns it grouped. TopicCount counts every entry returned —
+// SceneSlot.TopicCount from Search/ListScenes counts only the depth-1 roots.
+func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
+	return s.Session.SceneContext(sceneID)
+}
+
+// MergeScenes folds scenes together: every topic of each secondary scene is
+// retargeted to the primary scene, then the secondary scene records are
+// deleted. Use it when a host resumed one conversation under a new session id.
+// The primary's name and anchor win, and nothing comes back — re-read the
+// primary to see the merged history.
+func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
+	return s.Session.MergeScenes(primaryID, secondaryIDs)
+}
+
+// DeleteScene removes a scene for good: its record, every topic at any depth,
+// the L4 originals they reference and the L1 scene node, so it disappears from
+// listings and reads. Hyperedges that incidentally pointed at it are cleaned by
+// the next Dream's L1 rebuild.
+func (s *Session) DeleteScene(sceneID string) error {
+	return s.Session.DeleteScene(sceneID)
+}
+
+// DeleteTopic removes one topic and its whole subtree (children at any depth)
+// with the L4 originals they reference, and prunes it from its surviving
+// parent's child list — the memory-correction counterpart of Update. Deleting a
+// topic that does not exist is an error, not a no-op.
+func (s *Session) DeleteTopic(topicID string) error {
+	return s.Session.DeleteTopic(topicID)
+}
+
+// ImportL3 batch-imports knowledge nodes into one graph per Domain: a domain
+// name the graph already has extends it, a new one creates it. The mode is
+// required — Skip leaves existing nodes alone, Merge appends, Overwrite
+// replaces. Every item must name a Title and a Domain: a malformed batch is
+// refused and writes nothing at all, so result.Errors is reserved for a
+// per-item storage failure while the rest of the batch proceeds and the error
+// return means the call did nothing.
+//
+// A relation may target an item later in the same batch (edges resolve in a
+// second pass), and every item declares its edges — including one whose node
+// was skipped, because edges are deduped by their members plus kind. The
+// result reports the node ids created/updated, how many edges were created,
+// and GraphIDs: the graphs this batch wrote into, which a host needs to anchor
+// a scene on them (UpdateScene / SearchQuery.L3ID), since a graph id derives
+// from the domain name and no other public call renders that derivation.
+func (s *Session) ImportL3(items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error) {
+	return s.Session.ImportL3(items, mode)
+}
+
+// DeleteL3 removes a whole graph: the slot plus all of its nodes and hyperedges.
+// It also drops the L2 anchors that named the graph — a scene's L3ID is the only
+// inbound reference a graph has, and both anchor write paths require the graph to
+// exist, so no scene is left listing under a project domain nothing resolves to.
+// Reach for DeleteL3Nodes when only part of the graph is wrong — this call takes
+// the edges bound to every node in it, including the correct ones.
+func (s *Session) DeleteL3(id string) error {
+	return s.Session.DeleteL3(id)
+}
+
+// DeleteL3Nodes removes specific nodes from one graph, cascading every hyperedge
+// that touches them, so correcting a knowledge node does not mean rebuilding the
+// graph. Every id must name a node of that graph; an unknown or foreign id is
+// refused and nothing is deleted.
+func (s *Session) DeleteL3Nodes(graphID string, nodeIDs []string) error {
+	return s.Session.DeleteL3Nodes(graphID, nodeIDs)
+}
+
+// DeleteCapability removes an L5 card. Cards the engine ships (Origin builtin)
+// are the manual the host reads, not host data, so they are read-only and
+// deleting one is refused. Deleting a card that is not there is an error, not
+// a no-op.
+func (s *Session) DeleteCapability(id string) error {
+	return s.Session.DeleteCapability(id)
+}
+
+// ListTrajectorySessions summarizes every L6 key of the domain — turn topic ids
+// and plan ids — with its step count and last-append time. The returned ids feed
+// ReadTrajectory and Crystallize directly; events past the retention window drop
+// out at the next Dream.
+func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
+	return s.Session.ListTrajectorySessions()
+}
+
+// Crystallize turns one key's trajectory events into L5 capability cards: pass a
+// turn's topic id to work off a single turn, or a plan id to aggregate the whole
+// plan. It contacts the LLM inside the domain lock. New cards land in the draft
+// status — they are listed, but a host that only wires up active cards needs
+// ActivateCapability before one becomes usable.
+func (s *Session) Crystallize(ctx context.Context, turnID string) (*CrystallizeResult, error) {
+	return s.Session.Crystallize(ctx, turnID)
+}
+
+// PlanReplace wipes a plan — its nodes and the events bound to them — and keeps
+// the planID, so a host starts an unrelated task on the id it already holds
+// without the new nodes landing on the old tree by path. Pass a rootTitle to
+// seed one titled pending root, or "" for an empty plan.
+func (s *Session) PlanReplace(planID, rootTitle string) error {
+	return s.Session.PlanReplace(planID, rootTitle)
 }

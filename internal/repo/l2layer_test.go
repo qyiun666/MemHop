@@ -242,14 +242,15 @@ func TestOpenSceneTurnAdvancesCounters(t *testing.T) {
 	}
 }
 
-func TestOverwriteSceneL3IDCorrection(t *testing.T) {
+// SetSceneL3ID is the routing primitive: it claims an unanchored scene and
+// never moves one that already has a domain. Host corrections take the
+// read-modify-write path in the composition root instead.
+func TestSetSceneL3IDIsWriteOnce(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(99)
 	if err := CreateSceneL2WithID(engine, core.DefaultAgentID, sceneID, "scene-l3"); err != nil {
 		t.Fatalf("create scene: %v", err)
 	}
-
-	// First anchor is write-once: a second normal Set cannot steal it.
 	if err := SetSceneL3ID(engine, core.DefaultAgentID, sceneID, 100); err != nil {
 		t.Fatalf("first anchor: %v", err)
 	}
@@ -258,19 +259,5 @@ func TestOverwriteSceneL3IDCorrection(t *testing.T) {
 	}
 	if slot, _ := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); slot.L3ID != 100 {
 		t.Fatalf("write-once must keep 100, got %d", slot.L3ID)
-	}
-	// Overwrite corrects the anchor.
-	if err := OverwriteSceneL3ID(engine, core.DefaultAgentID, sceneID, 200); err != nil {
-		t.Fatalf("overwrite: %v", err)
-	}
-	if slot, _ := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); slot.L3ID != 200 {
-		t.Fatalf("overwrite must move to 200, got %d", slot.L3ID)
-	}
-	// Overwrite with 0 clears the anchor.
-	if err := OverwriteSceneL3ID(engine, core.DefaultAgentID, sceneID, 0); err != nil {
-		t.Fatalf("clear: %v", err)
-	}
-	if slot, _ := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID); slot.L3ID != 0 {
-		t.Fatalf("clear must reset to 0, got %d", slot.L3ID)
 	}
 }

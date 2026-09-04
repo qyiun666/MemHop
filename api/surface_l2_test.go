@@ -25,7 +25,7 @@ func TestSurfaceL2Scenes(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 
-	scenes, err := db.ListScenes()
+	scenes, err := db.ListScenes("")
 	if err != nil || len(scenes) < 2 {
 		t.Fatalf("want >=2 scenes, got %d err=%v", len(scenes), err)
 	}

@@ -77,7 +77,7 @@ func registerSceneListTools(s *mcp.Server, db *memhop.Session) {
 		Description: "列出所有 L2 场景（场景 ID、名称与 depth1 话题条数）。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[[]memhop.SceneSlot](func() ([]memhop.SceneSlot, error) {
-		return db.ListScenes()
+		return db.ListScenes("")
 	}))
 }
 
@@ -109,7 +109,8 @@ func registerSceneDetailTools(s *mcp.Server, db *memhop.Session) {
 			"name":     strProp("新场景名，必填非空"),
 		}, "scene_id", "name"),
 	}, handle[sceneRenameArgs, updateResult](func(a sceneRenameArgs) (updateResult, error) {
-		return updateResult{OK: true}, db.SetSceneName(a.SceneID, a.Name)
+		_, err := db.UpdateScene(a.SceneID, memhop.ScenePatch{Name: &a.Name})
+		return updateResult{OK: true}, err
 	}))
 
 	s.AddTool(&mcp.Tool{

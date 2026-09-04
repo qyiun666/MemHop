@@ -22,6 +22,10 @@ import (
 type serverConfig struct {
 	Listen string // HTTP listen address
 	DBDir  string // root directory holding the shared memhop.meh multi-agent database
+	// CapabilityDir anchors the paths memhop_capability_import may read. It
+	// defaults to DBDir: an LLM names the file it wants imported, so the
+	// directory has to be one the operator chose rather than one the model picks.
+	CapabilityDir string
 	// Tenants is the optional tenant whitelist; empty allows any valid
 	// tenant id to open its agent domain on first access.
 	Tenants []string
@@ -76,6 +80,7 @@ func splitTenants(raw string) ([]string, error) {
 type flagValues struct {
 	listen    string
 	dbDir     string
+	capDir    string
 	tenants   string
 	transport string
 	llmModel  string
@@ -88,6 +93,7 @@ func parseFlags(args []string) (*flagValues, error) {
 	v := &flagValues{}
 	fs.StringVar(&v.listen, "listen", "127.0.0.1:3939", "HTTP listen address")
 	fs.StringVar(&v.dbDir, "db-dir", "", "directory holding the shared multi-agent memhop.meh database (required)")
+	fs.StringVar(&v.capDir, "capability-dir", "", "directory memhop_capability_import paths are anchored to (default: --db-dir)")
 	fs.StringVar(&v.tenants, "tenants", "", "optional comma-separated tenant whitelist")
 	fs.StringVar(&v.transport, "transport", "sse", "multi-tenant HTTP transport: sse or streamable-http")
 	fs.StringVar(&v.llmModel, "llm-model", "", "LLM model name (overrides MEMHOP_LLM_MODEL)")
@@ -148,11 +154,12 @@ func loadConfig(args []string) (*serverConfig, error) {
 		return nil, err
 	}
 	return &serverConfig{
-		Listen:    v.listen,
-		DBDir:     v.dbDir,
-		Tenants:   allowed,
-		Transport: v.transport,
-		Base:      base,
+		Listen:        v.listen,
+		DBDir:         v.dbDir,
+		CapabilityDir: firstNonEmpty(v.capDir, os.Getenv("MEMHOP_CAPABILITY_DIR"), v.dbDir),
+		Tenants:       allowed,
+		Transport:     v.transport,
+		Base:          base,
 	}, nil
 }
 

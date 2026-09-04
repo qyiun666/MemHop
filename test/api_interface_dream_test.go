@@ -113,7 +113,7 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 	m2 := openMockMulti(t, path, llm.srv.URL)
 	defer m2.Close()
 	db2 := newTestDB(t, m2)
-	scenes, err := db2.ListScenes()
+	scenes, err := db2.ListScenes("")
 	if err != nil {
 		t.Fatalf("ListScenes after reopen: %v", err)
 	}

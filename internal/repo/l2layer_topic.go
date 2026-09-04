@@ -72,7 +72,14 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 		}
 	}
 	slices.SortFunc(out, func(a, b core.TopicSlot) int {
-		return cmp.Compare(a.UserTimestamp, b.UserTimestamp)
+		if c := cmp.Compare(a.UserTimestamp, b.UserTimestamp); c != 0 {
+			return c
+		}
+		// A fused parent is stamped with the group's earliest user timestamp,
+		// so it ties with the first turn it swallowed. Shallower first keeps the
+		// group's summary introducing its own originals instead of landing in
+		// the middle of them at the sort's whim.
+		return cmp.Compare(a.Depth, b.Depth)
 	})
 	return out, nil
 }

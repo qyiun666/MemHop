@@ -180,7 +180,13 @@ func decayRemainingEdges(engine *core.StorageEngine, agentID uint64, cfg *DecayP
 	for _, idHash := range entries {
 		edge, err := core.ReadSceneEdge(engine, agentID, idHash)
 		if err != nil {
-			continue
+			// The index names this edge, so not being able to read it must not
+			// decay into "nothing to do" — that would leave a live edge at full
+			// weight while the report claims the sweep ran.
+			if common.CodeOf(err) == common.ErrNotFound {
+				continue
+			}
+			return err
 		}
 		if err := decayOneEdge(engine, agentID, cfg, edge, idHash, removedNodeIDs, nowMs, report); err != nil {
 			return err
@@ -257,7 +263,13 @@ func removeNodeFromEdge(engine *core.StorageEngine, agentID uint64, edgeID, node
 func removeEdgeFromNode(engine *core.StorageEngine, agentID uint64, nodeID, edgeID uint64) error {
 	node, err := core.ReadSceneNode(engine, agentID, nodeID)
 	if err != nil {
-		return nil
+		// A node that is gone has no edge list left to prune; one that cannot be
+		// read is a real failure and must stop the cascade rather than leaving a
+		// node pointing at a deleted edge.
+		if common.CodeOf(err) == common.ErrNotFound {
+			return nil
+		}
+		return err
 	}
 	found := false
 	filtered := node.EdgeIDs[:0]

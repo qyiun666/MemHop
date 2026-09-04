@@ -34,10 +34,12 @@ func SurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 	return out
 }
 
-// ContextTopic renders one topic of a scene context: its keyword track,
-// child count, and its L4 messages (unreadable archives are skipped, the id
-// ref is still reported).
-func ContextTopic(engine *core.StorageEngine, agentID uint64, t core.TopicSlot, children map[uint64]int) core.SceneContextTopic {
+// ContextTopic renders one topic of a scene context: its keyword track, child
+// count, and its L4 messages. An archive ref that names no record is reported
+// in L4IDs without a message (a replayed Update legally retires the ids of the
+// turn it replaced); an archive that cannot be read is an error, because a
+// transcript missing one utterance looks exactly like a complete one.
+func ContextTopic(engine *core.StorageEngine, agentID uint64, t core.TopicSlot, children map[uint64]int) (core.SceneContextTopic, error) {
 	st := core.SceneContextTopic{
 		TopicID:    common.FormatHash(t.ID),
 		Depth:      int(t.Depth),
@@ -49,14 +51,17 @@ func ContextTopic(engine *core.StorageEngine, agentID uint64, t core.TopicSlot, 
 		st.L4IDs = append(st.L4IDs, common.FormatHash(ref))
 		arc, err := core.ReadArchiveSlot(engine, agentID, ref)
 		if err != nil {
-			continue
+			if common.CodeOf(err) == common.ErrNotFound {
+				continue
+			}
+			return core.SceneContextTopic{}, err
 		}
 		st.Messages = append(st.Messages, core.SceneMessage{Role: arc.Role, Type: arc.ContentType, Content: arc.Content, CreatedAt: arc.CreatedAt})
 	}
 	// L4Refs are persisted id-sorted, which says nothing about who spoke
 	// first; a resumed conversation still has to read question-first.
 	sortMessages(st.Messages)
-	return st
+	return st, nil
 }
 
 // sortMessages puts a topic's L4 messages in speaking order: by timestamp,

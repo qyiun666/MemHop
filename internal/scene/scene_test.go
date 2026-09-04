@@ -53,8 +53,11 @@ func TestSceneContextTopicOrdersSameTimestampByRole(t *testing.T) {
 		t.Fatal("fixture lost its teeth: no candidate archived the answer before the question")
 	}
 
-	st := ContextTopic(engine, core.DefaultAgentID,
+	st, err := ContextTopic(engine, core.DefaultAgentID,
 		core.TopicSlot{ID: topicID, SceneID: 0xbeef, Depth: 1, L4Refs: []uint64{agentRef, userRef}}, nil)
+	if err != nil {
+		t.Fatalf("ContextTopic: %v", err)
+	}
 	if len(st.Messages) != 2 {
 		t.Fatalf("messages = %d, want 2", len(st.Messages))
 	}

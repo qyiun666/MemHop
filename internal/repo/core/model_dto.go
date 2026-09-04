@@ -13,7 +13,7 @@ package core
 // L3ID optionally anchors a newly created scene to a project domain and is
 // read on creation only — an existing scene keeps its anchor. New scenes are
 // named by the library ("session:<id>"), never by the caller; the host
-// renames one afterwards with SetSceneName.
+// renames one afterwards with UpdateScene.
 type SearchQuery struct {
 	SceneID string `json:"scene_id,omitempty"`
 	L3ID    string `json:"l3_id,omitempty"`
@@ -58,7 +58,8 @@ type SceneMessage struct {
 	CreatedAt int64       `json:"created_at"`
 }
 
-// SceneContextTopic is one depth-1 topic with its L4 messages and child count.
+// SceneContextTopic is one topic of a scene context with its L4 messages and
+// its child count. Depth tells a fused parent (1) from a turn Dream sunk (2).
 type SceneContextTopic struct {
 	TopicID    string         `json:"topic_id"`
 	Depth      int            `json:"depth"`
@@ -68,7 +69,11 @@ type SceneContextTopic struct {
 	ChildCount int            `json:"child_count"`
 }
 
-// SceneContext is a scene's full depth-1 conversation context.
+// SceneContext is a scene's whole transcript, flattened to depth 2 on purpose:
+// a Dream-fused group keeps its originals on the child topics it sunk, and this
+// is the only read that brings them back. Search returns depth-1 topics only,
+// so it shows a fused group as its summary. TopicCount counts the entries
+// returned (roots and sunk children alike), not the scene's depth-1 roots.
 type SceneContext struct {
 	SceneName  string              `json:"scene_name"`
 	TopicCount int                 `json:"topic_count"`
@@ -94,14 +99,23 @@ type L3ImportItem struct {
 	Related   []L3Relation `json:"related,omitempty"`
 }
 
-// L3Relation is one import-time hyperedge: a target node of the same graph
-// (by title) and the edge kind; empty kind means related.
+// L3Relation is one import-time hyperedge: the member nodes of a single
+// relation, named by title inside the same graph. Titles lists the far side,
+// so the edge spans {item.Title} ∪ Titles — one entry is an ordinary binary
+// relation, several entries are one N-ary fact ("these belong together") that
+// stays a single edge instead of dissolving into pairs. Targets may appear
+// later in the same batch. Empty kind means related.
 type L3Relation struct {
-	Title string        `json:"title"`
-	Kind  GraphEdgeKind `json:"kind,omitempty"`
+	Titles []string      `json:"titles"`
+	Kind   GraphEdgeKind `json:"kind,omitempty"`
 }
 
+// L3ImportResult reports one import batch. CreatedIDs/UpdatedIDs are node ids;
+// GraphIDs are the graphs the batch wrote into (created or reused), which a
+// host needs to anchor a scene on the graph — a graph id is hash(Domain) and no
+// other public call derives it.
 type L3ImportResult struct {
+	GraphIDs     []string `json:"graph_ids,omitempty"`
 	CreatedIDs   []string `json:"created_ids"`
 	UpdatedIDs   []string `json:"updated_ids"`
 	SkippedCount int      `json:"skipped_count"`
@@ -109,7 +123,9 @@ type L3ImportResult struct {
 	Errors       []string `json:"errors,omitempty"`
 }
 
-// L3NodeQuery is a node query: GraphID required; one of IDs/Keyword/NodeType.
+// L3NodeQuery is a node query over one graph: GraphID is required and every
+// other condition that is set filters, so IDs/Keyword/NodeType AND together.
+// Keyword matches case-insensitively over title, content and the keyword track.
 type L3NodeQuery struct {
 	GraphID  string   `json:"graph_id"`
 	IDs      []string `json:"ids,omitempty"`
@@ -123,16 +139,20 @@ type L3Subgraph struct {
 	Edges []HypergraphEdge
 }
 
-// L4Query archive query: the three modes are exclusive with priority
-// Keyword > time range > IDs; TopicID filters in all modes, Type narrows by
-// content type.
+// L4Query archive query: every field is optional and the set conditions AND
+// together, so a topic-only or type-only read works. Results are sorted by
+// CreatedAt. Keyword is matched case-insensitively, the same way the L3 node
+// filter matches one. An empty query returns the domain's whole archive set —
+// that is a lot of text for a caller with a context window, so Limit caps the
+// result to its most recent matches.
 type L4Query struct {
-	Keyword string       `json:"keyword,omitempty"` // mode 1: content substring
-	Start   int64        `json:"start,omitempty"`   // mode 2: time range [Start, End] (ms)
-	End     int64        `json:"end,omitempty"`
-	IDs     []string     `json:"ids,omitempty"`      // mode 3: by id
-	TopicID *string      `json:"topic_id,omitempty"` // extra: only archives of this topic
-	Type    *ContentType `json:"type,omitempty"`     // extra: only archives of this content type
+	Keyword string       `json:"keyword,omitempty"`  // case-insensitive substring of Content
+	Start   int64        `json:"start,omitempty"`    // created at or after (ms)
+	End     int64        `json:"end,omitempty"`      // created at or before (ms)
+	IDs     []string     `json:"ids,omitempty"`      // 16 位 hex 档案 ID
+	TopicID *string      `json:"topic_id,omitempty"` // only archives of this topic
+	Type    *ContentType `json:"type,omitempty"`     // only archives of this content type
+	Limit   int          `json:"limit,omitempty"`    // keep the newest N matches; <=0 means every match
 }
 
 // CapabilityImport is the memhop-capability/v3 JSON file loaded from a path.
@@ -149,11 +169,22 @@ type CapabilityImport struct {
 	Workflow  *Workflow      `json:"workflow,omitempty"`
 }
 
-// CapabilityListQuery filters L5 capabilities.
+// CapabilityListQuery filters L5 capabilities; every field is optional and
+// the set conditions AND together. IDs selects by 16-hex capability id.
 type CapabilityListQuery struct {
+	IDs     []string          `json:"ids,omitempty"`
 	Status  *CapabilityStatus `json:"status,omitempty"`
 	Type    *CapabilityType   `json:"type,omitempty"`
 	Keyword string            `json:"keyword,omitempty"`
+}
+
+// ScenePatch is the partial-update payload of UpdateScene; nil fields are left
+// unchanged. An empty L3ID clears the anchor; Force is read only by the
+// re-anchor path.
+type ScenePatch struct {
+	Name  *string
+	L3ID  *string
+	Force bool
 }
 
 // CapabilityPatch is the partial-update payload of UpdateCapability; nil
@@ -201,7 +232,7 @@ type CrystallizeDetail struct {
 
 // DreamStage is one pipeline phase's outcome inside a DreamReport.
 type DreamStage struct {
-	Name       string `json:"name"`   // l2_compress/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_distill
+	Name       string `json:"name"`   // l2_compress/usage_feedback/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_distill
 	Status     string `json:"status"` // ok | skipped | cancelled | error
 	DurationMs int64  `json:"duration_ms"`
 }

@@ -15,6 +15,11 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
+// QueryL3Nodes reads one graph's nodes through every condition the query
+// names; the conditions AND together, and an unset condition does not filter.
+// Naming only the graph therefore lists its nodes. Results keep graph order
+// and Limit caps them. A malformed node id or a graph that does not exist is
+// an error — an empty result means the graph exists and nothing matched.
 func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -28,33 +33,40 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 	if err != nil {
 		return nil, err
 	}
-	var out []core.HypergraphNode
-	switch {
-	case len(q.IDs) > 0:
-		out = graph.QueryNodesByIDs(db.engine, agentID, graphHash, q.IDs)
-	case q.Keyword != "":
-		kw := strings.ToLower(q.Keyword)
-		for _, n := range repo.ListNodeL3(db.engine, agentID, graphHash) {
-			if graph.NodeMatchesKeyword(n, kw) {
-				out = append(out, n)
-			}
+	if _, err := core.ReadGraphSlot(db.engine, agentID, graphHash); err != nil {
+		return nil, err
+	}
+	filter, err := nodeFilter(q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]core.HypergraphNode, 0)
+	for _, n := range repo.ListNodeL3(db.engine, agentID, graphHash) {
+		if filter.Matches(n) {
+			out = append(out, n)
 		}
-	case q.NodeType != "":
-		for _, n := range repo.ListNodeL3(db.engine, agentID, graphHash) {
-			if n.NodeType == q.NodeType {
-				out = append(out, n)
-			}
-		}
-	default:
-		return []core.HypergraphNode{}, nil
 	}
 	if q.Limit > 0 && len(out) > q.Limit {
 		out = out[:q.Limit]
 	}
-	if out == nil {
-		return []core.HypergraphNode{}, nil
-	}
 	return out, nil
+}
+
+// nodeFilter parses the query's conditions; a node id that does not parse is
+// refused rather than dropped.
+func nodeFilter(q L3NodeQuery) (graph.NodeFilter, error) {
+	f := graph.NodeFilter{Keyword: strings.ToLower(q.Keyword), NodeType: q.NodeType}
+	if len(q.IDs) > 0 {
+		f.IDs = make(map[uint64]struct{}, len(q.IDs))
+		for _, id := range q.IDs {
+			idHash, err := common.ParseID(id)
+			if err != nil {
+				return graph.NodeFilter{}, common.NewError(common.ErrInvalidQuery, "parse node id", err)
+			}
+			f.IDs[idHash] = struct{}{}
+		}
+	}
+	return f, nil
 }
 
 // QueryL3Subgraph BFS from startNodeID up to maxDepth; edgeKinds restricts

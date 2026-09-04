@@ -268,7 +268,7 @@ func newTestServerWithDir(t *testing.T, dbDir string, tenants []string) (*httpte
 func newTestServerOver(t *testing.T, base memhop.MemHopConfig, dbDir string, tenants []string) *httptest.Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reg := newRegistry(base, dbDir, tenants, logger)
+	reg := newRegistry(base, dbDir, dbDir, tenants, logger)
 	srv := httptest.NewServer(newSSEHandler(reg))
 	t.Cleanup(func() {
 		srv.Close()
@@ -359,7 +359,7 @@ func (e errTool) Error() string { return string(e) }
 // in depth: even if a tenant id reached the registry, the resolved path
 // must stay inside db-dir.
 func TestSSERegistryRejectsPathTraversal(t *testing.T) {
-	reg := newRegistry(testBase(t), t.TempDir(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	reg := newRegistry(testBase(t), t.TempDir(), t.TempDir(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, id := range []string{"..", ".", "a/b", "a\\b"} {
 		if _, err := reg.get(id); err == nil {
 			t.Errorf("tenant id %q should be rejected", id)
@@ -370,7 +370,7 @@ func TestSSERegistryRejectsPathTraversal(t *testing.T) {
 // TestSSECloseAllPersists checks that CloseAll persists every open tenant.
 func TestSSECloseAllPersists(t *testing.T) {
 	dbDir := t.TempDir()
-	reg := newRegistry(testBase(t), dbDir, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	reg := newRegistry(testBase(t), dbDir, dbDir, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if _, err := reg.get("alice"); err != nil {
 		t.Fatalf("open alice: %v", err)
 	}

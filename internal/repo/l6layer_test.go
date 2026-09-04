@@ -5,6 +5,7 @@ package repo
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -320,6 +321,21 @@ func TestDeletePlanRecordsRemovesNodesAndEvents(t *testing.T) {
 	}
 }
 
+// mustEventRef returns the id of the single event bound to a plan node.
+func mustEventRef(t *testing.T, engine *core.StorageEngine, agentID, nodeRef uint64) uint64 {
+	t.Helper()
+	var found uint64
+	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
+		if ev.NodeType == core.NodeTypeEvent && ev.PlanNodeRef == nodeRef {
+			found = ev.IDHash
+		}
+	}
+	if found == 0 {
+		t.Fatalf("no event bound to node %d", nodeRef)
+	}
+	return found
+}
+
 func TestDeletePlanNodeBranchCascades(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
@@ -347,9 +363,13 @@ func TestDeletePlanNodeBranchCascades(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	n, err := DeletePlanNodeBranch(engine, agentID, planID, "1")
-	if err != nil || n != 4 {
-		t.Fatalf("delete branch \"1\" = %d err=%v, want 4 (3 nodes + 1 bound event)", n, err)
+	bound := mustEventRef(t, engine, agentID, c1)
+	deleted, err := DeletePlanNodeBranch(engine, agentID, planID, "1")
+	if err != nil || len(deleted) != 4 {
+		t.Fatalf("delete branch \"1\" = %d ids err=%v, want 4 (3 nodes + 1 bound event)", len(deleted), err)
+	}
+	if !slices.Contains(deleted, bound) {
+		t.Fatalf("the cascade must report the event id it deleted, got %v", deleted)
 	}
 	nodes := CollectPlanNodes(engine, agentID, planID)
 	if len(nodes) != 1 || nodes[0].NodePath != "2" {
@@ -361,15 +381,15 @@ func TestDeletePlanNodeBranchCascades(t *testing.T) {
 		}
 	}
 	// Idempotent on a vanished path.
-	if n, err := DeletePlanNodeBranch(engine, agentID, planID, "1"); err != nil || n != 0 {
-		t.Fatalf("second delete = %d err=%v, want 0", n, err)
+	if again, err := DeletePlanNodeBranch(engine, agentID, planID, "1"); err != nil || len(again) != 0 {
+		t.Fatalf("second delete = %d ids err=%v, want none", len(again), err)
 	}
 	// Prefix boundaries: "1.1" must not be matched by a sibling like "1.10".
 	mkNode("1.1", 0)
 	mkNode("1.10", 0)
-	n10, err := DeletePlanNodeBranch(engine, agentID, planID, "1.1")
-	if err != nil || n10 != 1 {
-		t.Fatalf("delete \"1.1\" = %d err=%v, want 1 (exact node only)", n10, err)
+	exact, err := DeletePlanNodeBranch(engine, agentID, planID, "1.1")
+	if err != nil || len(exact) != 1 {
+		t.Fatalf("delete \"1.1\" = %d ids err=%v, want 1 (exact node only)", len(exact), err)
 	}
 	if got := CollectPlanNodes(engine, agentID, planID); len(got) != 2 || got[0].NodePath != "2" || got[1].NodePath != "1.10" {
 		t.Fatalf("prefix sibling must survive: %+v", got)

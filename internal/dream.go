@@ -22,7 +22,8 @@ import (
 // L2 compression on the given scene (or every scene of the domain when
 // sceneID is empty), then L1 rebuild/decay, L0 profile/distill; the rebuilt
 // L2Meta cache is installed into the agent context. Any stage failure returns
-// an error together with the partially filled DreamReport. The whole pipeline
+// an error together with the partially filled DreamReport, and naming a scene
+// that does not exist is reported as ErrNotFound. The whole pipeline
 // holds the domain lock, so same-agent operations wait while different agents
 // run in parallel.
 func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*DreamReport, error) {
@@ -37,7 +38,10 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 	// nothing to consolidate (early return below).
 	dream.PruneTrajectoryStage(ac, agentID, rep)
 
-	scenes := dream.SceneSet(db.engine, agentID, sceneID)
+	scenes, err := dream.SceneSet(db.engine, agentID, sceneID)
+	if err != nil {
+		return rep, err
+	}
 	if len(scenes) == 0 {
 		return rep, nil
 	}

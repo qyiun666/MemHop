@@ -1,105 +1,103 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L2 scene big methods of the composition root: list / anchor / merge /
-// delete and the deep scene-context read. The scene steps live in
+// L2 scene big methods of the composition root: list / metadata patch /
+// merge / delete and the deep scene-context read. The scene steps live in
 // internal/scene.
 
 package internal
 
 import (
+	"fmt"
+
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/scene"
 )
 
-func (db *DB) ListScenes(agentID uint64) ([]core.SceneSlot, error) {
+// ListScenes returns the domain's scenes, optionally filtered by their L3
+// project-domain anchor: an empty l3ID lists every scene.
+func (db *DB) ListScenes(agentID uint64, l3ID string) ([]core.SceneSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	all := repo.CollectAllScenesL2(db.engine, agentID)
-	if all == nil {
-		return []core.SceneSlot{}, nil
-	}
-	return all, nil
-}
-
-// ListScenesByL3 returns all scenes anchored to the given L3 domain id
-// (project/目录), i.e. scenes whose organizational L3 anchor equals it.
-func (db *DB) ListScenesByL3(agentID uint64, l3ID string) ([]core.SceneSlot, error) {
-	ac, err := db.lockAgent(agentID)
+	all, err := repo.CollectAllScenesL2(db.engine, agentID)
 	if err != nil {
 		return nil, err
 	}
-	defer ac.Mu.Unlock()
-	hash, err := common.ParseID(l3ID)
+	if l3ID == "" {
+		if all == nil {
+			return []core.SceneSlot{}, nil
+		}
+		return all, nil
+	}
+	l3Hash, err := common.ParseID(l3ID)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
-	all := repo.CollectAllScenesL2(db.engine, agentID)
-	var out []core.SceneSlot
+	out := []core.SceneSlot{}
 	for _, s := range all {
-		if s.L3ID == hash {
+		if s.L3ID == l3Hash {
 			out = append(out, s)
 		}
-	}
-	if out == nil {
-		return []core.SceneSlot{}, nil
 	}
 	return out, nil
 }
 
-// SetSceneL3ID anchors a scene to an L3 domain (project/目录). Normal
-// routing is write-once; pass force=true to correct a mis-anchored scene,
-// or an empty l3ID to clear the anchor (both take the overwrite path).
-func (db *DB) SetSceneL3ID(agentID uint64, sceneID string, l3ID string, force bool) error {
+// UpdateScene corrects a scene's host-facing metadata in one write and returns
+// the scene as stored afterwards: a non-nil Name renames it, a non-nil L3ID
+// anchors it, and an empty L3ID clears the anchor. nil fields keep their stored
+// value, so the library's own "session:<id>" naming and the turn history are
+// never touched by accident. Anchoring is write-once: moving a scene that
+// already has a *different* domain over needs Force, while clearing always does.
+// Handing back the written scene is what makes a host's read-back cheap — it
+// does not have to list every scene to confirm one anchor.
+func (db *DB) UpdateScene(agentID uint64, sceneID string, patch ScenePatch) (core.SceneSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
-		return err
+		return core.SceneSlot{}, err
 	}
 	defer ac.Mu.Unlock()
+	if patch.Name != nil && *patch.Name == "" {
+		return core.SceneSlot{}, common.NewError(common.ErrInvalidQuery, "scene name is required")
+	}
 	sceneHash, err := common.ParseID(sceneID)
 	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse scene id", err)
+		return core.SceneSlot{}, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
 	var l3Hash uint64
-	if l3ID != "" {
-		if l3Hash, err = common.ParseID(l3ID); err != nil {
-			return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
+	if patch.L3ID != nil && *patch.L3ID != "" {
+		if l3Hash, err = common.ParseID(*patch.L3ID); err != nil {
+			return core.SceneSlot{}, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 		}
-	}
-	if force || l3Hash == 0 {
-		return repo.OverwriteSceneL3ID(db.engine, agentID, sceneHash, l3Hash)
-	}
-	return repo.SetSceneL3ID(db.engine, agentID, sceneHash, l3Hash)
-}
-
-// SetSceneName renames a scene. The library names a fresh scene
-// "session:<id>"; this is the host's chance to give it a human title. Every
-// later scene write (OpenSceneTurn bumps counters on the read-back slot) and
-// Dream leave SceneName alone, so the name persists until it is set again.
-func (db *DB) SetSceneName(agentID uint64, sceneID string, name string) error {
-	ac, err := db.lockAgent(agentID)
-	if err != nil {
-		return err
-	}
-	defer ac.Mu.Unlock()
-	sceneHash, err := common.ParseID(sceneID)
-	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse scene id", err)
-	}
-	if name == "" {
-		return common.NewError(common.ErrInvalidQuery, "scene name is required")
+		if _, err := core.ReadGraphSlot(db.engine, agentID, l3Hash); err != nil {
+			return core.SceneSlot{}, err
+		}
 	}
 	slot, err := core.ReadSceneSlot(db.engine, agentID, sceneHash)
 	if err != nil {
-		return err
+		return core.SceneSlot{}, err
 	}
-	slot.SceneName = name
-	return core.WriteSceneSlot(db.engine, agentID, sceneHash, slot)
+	if patch.Name != nil {
+		slot.SceneName = *patch.Name
+	}
+	if patch.L3ID != nil {
+		// Only replacing one anchor with another is destructive enough to
+		// need Force: the old value is lost. Clearing is reversible (the
+		// scene is unanchored and can take any domain again), so it does not.
+		if l3Hash != 0 && slot.L3ID != 0 && slot.L3ID != l3Hash && !patch.Force {
+			return core.SceneSlot{}, common.NewError(common.ErrInvalidQuery,
+				fmt.Sprintf("scene %s is anchored to %s; pass Force to re-anchor", sceneID, common.FormatHash(slot.L3ID)))
+		}
+		slot.L3ID = l3Hash
+	}
+	if err := core.WriteSceneSlot(db.engine, agentID, sceneHash, slot); err != nil {
+		return core.SceneSlot{}, err
+	}
+	return *slot, nil
 }
 
 // MergeScenes rewrites all topics of secondary scenes to the primary scene
@@ -124,6 +122,13 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	if _, dup := common.ToSet(hashes)[primaryHash]; dup {
 		return common.NewError(common.ErrInvalidQuery, "primary scene id must not be a secondary", nil)
 	}
+	// A merge destroys records, so every id it names must still be a scene.
+	// Naming one the host no longer holds is a mistake to report, not a fold to
+	// pretend succeeded: the batch delete below keys on these ids, so a stale
+	// one can otherwise take the primary's own record with it.
+	if err := db.requireScenes(agentID, append([]uint64{primaryHash}, hashes...)...); err != nil {
+		return err
+	}
 	if !repo.MergeScenesL2(db.engine, agentID, primaryHash, hashes) {
 		return common.NewError(common.ErrIO, "merge scenes", nil)
 	}
@@ -133,8 +138,31 @@ func (db *DB) MergeScenes(agentID uint64, primaryID string, secondaryIDs []strin
 	return nil
 }
 
-// SceneContext returns one scene's topics sorted by user timestamp with
-// their L4 messages; unknown scenes return an error.
+// requireScenes resolves every named id against the scene records and reports
+// the first that is not one. A read failure is returned as it stands: "cannot
+// read" is not "no such scene".
+func (db *DB) requireScenes(agentID uint64, ids ...uint64) error {
+	scenes, err := repo.ListScenesL2(db.engine, agentID, ids)
+	if err != nil {
+		return err
+	}
+	have := make(map[uint64]struct{}, len(scenes))
+	for _, s := range scenes {
+		have[s.SceneID] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := have[id]; !ok {
+			return common.NewError(common.ErrNotFound, "scene not found: "+common.FormatHash(id), nil)
+		}
+	}
+	return nil
+}
+
+// SceneContext returns one scene's transcript — topics with depth <= 2 in user
+// timestamp order plus their L4 messages — and writes nothing. The depth is
+// deliberate: a fused group's originals live on the children Dream sank, so
+// stopping at depth 1 (what Search returns) would hide them. Unknown scenes
+// return an error.
 func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -145,7 +173,10 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
-	scenes := repo.ListScenesL2(db.engine, agentID, []uint64{sceneHash})
+	scenes, err := repo.ListScenesL2(db.engine, agentID, []uint64{sceneHash})
+	if err != nil {
+		return nil, err
+	}
 	if len(scenes) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "scene not found", nil)
 	}
@@ -168,7 +199,11 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 	}
 	out := &SceneContext{SceneName: scenes[0].SceneName}
 	for _, t := range topics {
-		out.Topics = append(out.Topics, scene.ContextTopic(db.engine, agentID, t, children))
+		st, err := scene.ContextTopic(db.engine, agentID, t, children)
+		if err != nil {
+			return nil, err
+		}
+		out.Topics = append(out.Topics, st)
 	}
 	out.TopicCount = len(out.Topics)
 	return out, nil

@@ -160,23 +160,29 @@ func workflowProp() map[string]any {
 }
 
 // registerL5Tools installs the capability tools; each register function
-// owns one cohesive tool group.
-func registerL5Tools(s *mcp.Server, db *memhop.Session) {
-	registerCapabilityIOTools(s, db)
+// owns one cohesive tool group. capDir anchors the path memhop_capability_import
+// is given: the caller is an LLM, so the directory it may read from is the
+// operator's choice, not the model's.
+func registerL5Tools(s *mcp.Server, db *memhop.Session, capDir string) {
+	registerCapabilityIOTools(s, db, capDir)
 	registerCapabilityListTool(s, db)
 	registerCapabilityLifecycleTools(s, db)
 	registerCapabilityUpdateTool(s, db)
 }
 
-func registerCapabilityIOTools(s *mcp.Server, db *memhop.Session) {
+func registerCapabilityIOTools(s *mcp.Server, db *memhop.Session, capDir string) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_import",
-		Description: "导入 memhop-capability/v3 能力文件（文件或包含 capability.json 的目录）。能力是对宿主资源的封装：type=mcp（单个 mcp 工具）、type=skill（单个 skill）、type=api（单个 api 方法）、type=composite（多个 mcp/skill/api 集合，可选 workflow 编排）；资源即工具声明（name/desc/input/output 与宿主 ToolSpec 同构）。",
+		Description: fmt.Sprintf("导入 memhop-capability/v3 能力文件（文件或包含 capability.json 的目录）。能力是对宿主资源的封装：type=mcp（单个 mcp 工具）、type=skill（单个 skill）、type=api（单个 api 方法）、type=composite（多个 mcp/skill/api 集合，可选 workflow 编排）；资源即工具声明（name/desc/input/output 与宿主 ToolSpec 同构）。path 相对服务端能力目录（--capability-dir，缺省为 --db-dir=%s）解析，越出该目录即拒绝。", capDir),
 		InputSchema: objSchema(map[string]any{
-			"path": strProp("能力文件或目录路径，必填"),
+			"path": strProp("能力文件或目录路径（相对能力目录），必填"),
 		}, "path"),
 	}, handle[capabilityImportArgs, memhop.Capability](func(a capabilityImportArgs) (memhop.Capability, error) {
-		cap, err := db.ImportCapability(a.Path)
+		path, err := resolveCapabilityPath(capDir, a.Path)
+		if err != nil {
+			return memhop.Capability{}, err
+		}
+		cap, err := db.ImportCapability(path)
 		if err != nil {
 			return memhop.Capability{}, err
 		}
@@ -190,11 +196,14 @@ func registerCapabilityIOTools(s *mcp.Server, db *memhop.Session) {
 			"id": strProp("能力 ID（16 位 hex），必填"),
 		}, "id"),
 	}, handle[capabilityIDArgs, memhop.Capability](func(a capabilityIDArgs) (memhop.Capability, error) {
-		cap, err := db.GetCapability(a.ID)
+		caps, err := db.ListCapabilities(memhop.CapabilityListQuery{IDs: []string{a.ID}})
 		if err != nil {
 			return memhop.Capability{}, err
 		}
-		return *cap, nil
+		if len(caps) == 0 {
+			return memhop.Capability{}, fmt.Errorf("capability %s not found", a.ID)
+		}
+		return caps[0], nil
 	}))
 
 	s.AddTool(&mcp.Tool{

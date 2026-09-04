@@ -30,7 +30,7 @@ import (
 	"time"
 )
 
-const version = "v1.5.0"
+const version = "v1.6.0"
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
@@ -42,7 +42,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	reg := newRegistry(cfg.Base, cfg.DBDir, cfg.Tenants, logger)
+	reg := newRegistry(cfg.Base, cfg.DBDir, cfg.CapabilityDir, cfg.Tenants, logger)
 	handler, err := buildHandler(cfg, reg)
 	if err != nil {
 		logger.Error("unknown transport", "transport", cfg.Transport)

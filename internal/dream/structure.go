@@ -6,7 +6,6 @@ package dream
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/cap/engram"
@@ -54,8 +53,13 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 
 	// Stage 2.5: usage feedback — adjust L1 importance from how recently each
 	// scene was read, so the rebuild/decay below reflects actual usage.
-	applyUsageFeedback(ac, agentID)
+	feedbackStart := time.Now()
+	feedbackErr := applyUsageFeedback(ac, agentID)
+	AppendStage(rep, "usage_feedback", feedbackStart, feedbackErr)
 	AppendStage(rep, "index_rebuild", start, nil)
+	if feedbackErr != nil {
+		return feedbackErr
+	}
 
 	if err := l1Stages(ctx, ac, agentID, newL2Meta, &decayParams, rep); err != nil {
 		return err
@@ -178,12 +182,18 @@ func DistillL0Stage(ctx context.Context, ac *domain.Context, agentID uint64) (bo
 
 // applyUsageFeedback adjusts L1 node importance from scene usage stats
 // (folded into the L2 scene record): scenes hit within the usage TTL get
-// +0.05 (active), the rest get -0.05 (cold). Best-effort; failures only
-// warn and never abort Dream.
-func applyUsageFeedback(ac *domain.Context, agentID uint64) {
-	scenes := repo.CollectAllScenesL2(ac.Engine, agentID)
+// +0.05 (active), the rest get -0.05 (cold). A scene set that cannot be read
+// or a node that cannot be written is returned as an error and recorded as a
+// failed stage — the decay below keys off these importance values, so a pass
+// that silently skipped feedback would report a Dream that did less than it
+// claims.
+func applyUsageFeedback(ac *domain.Context, agentID uint64) error {
+	scenes, err := repo.CollectAllScenesL2(ac.Engine, agentID)
+	if err != nil {
+		return err
+	}
 	if len(scenes) == 0 {
-		return
+		return nil
 	}
 	now := time.Now().UnixMilli()
 	ttl := defaultTTLMs
@@ -210,7 +220,8 @@ func applyUsageFeedback(ac *domain.Context, agentID uint64) {
 		}
 		node.Importance = imp
 		if err := core.WriteSceneNode(ac.Engine, agentID, node.IDHash, &node); err != nil {
-			slog.Warn("dream: apply usage feedback failed", "node", node.IDHash, "err", err)
+			return common.NewError(common.ErrIO, "dream: apply usage feedback", err)
 		}
 	}
+	return nil
 }

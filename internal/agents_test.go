@@ -101,13 +101,13 @@ func TestAgentDomainIsolation(t *testing.T) {
 
 	// Same trajectory session id in both domains: events stay per-agent.
 	session := common.FormatHash(common.HashID("shared-session"))
-	if err := db.AppendTrajectory(a, session, core.TrajectorySlot{EventType: "tool_call", Payload: "a", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(a, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "a", Timestamp: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendTrajectory(b, session, core.TrajectorySlot{EventType: "tool_call", Payload: "b1", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(b, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "b1", Timestamp: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendTrajectory(b, session, core.TrajectorySlot{EventType: "tool_call", Payload: "b2", Timestamp: 2}); err != nil {
+	if err := db.AppendTrajectory(b, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "b2", Timestamp: 2}); err != nil {
 		t.Fatal(err)
 	}
 	ea, err := db.ReadTrajectory(a, session)

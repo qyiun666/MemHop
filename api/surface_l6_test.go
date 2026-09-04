@@ -18,7 +18,7 @@ func TestSurfaceL6TrajectoryLifecycle(t *testing.T) {
 	sessionA := common.FormatHash(common.HashID("lifecycle-a"))
 	sessionB := common.FormatHash(common.HashID("lifecycle-b"))
 	appendOne := func(id string, ts int64) {
-		if err := db.AppendTrajectory(id, TrajectorySlot{EventType: "llm_request", Timestamp: ts}); err != nil {
+		if err := db.AppendTrajectory(id, "", TrajectorySlot{EventType: "llm_request", Timestamp: ts}); err != nil {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
@@ -67,12 +67,12 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 		{EventType: "llm_output", Payload: "replied", Timestamp: 1_700_000_040_200},
 	}
 	for _, ev := range events {
-		if err := db.AppendTrajectory(sessionID, ev); err != nil {
+		if err := db.AppendTrajectory(sessionID, "", ev); err != nil {
 			t.Fatalf("append trajectory: %v", err)
 		}
 	}
 	// Missing required fields must be rejected.
-	if err := db.AppendTrajectory(sessionID, TrajectorySlot{Payload: "no type"}); CodeOf(err) != ErrInvalidQuery {
+	if err := db.AppendTrajectory(sessionID, "", TrajectorySlot{Payload: "no type"}); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("append invalid event: want ErrInvalidQuery, got %v", err)
 	}
 	got, err := db.ReadTrajectory(sessionID)
@@ -143,17 +143,17 @@ func TestSurfacePlanTriForm(t *testing.T) {
 		}
 	}
 	// PlanAppend does not advance; it just binds an event to a node.
-	if err := db.PlanAppend(planID, "1.1.1", TrajectorySlot{EventType: "tool_call", Timestamp: 2000}); err != nil {
+	if err := db.AppendTrajectory(planID, "1.1.1", TrajectorySlot{EventType: "tool_call", Timestamp: 2000}); err != nil {
 		t.Fatalf("plan append: %v", err)
 	}
 }
 
-// TestSurfacePlanReplaceAndListPlans covers the host restart-recovery loop:
-// two top-level steps form two roots, PlanReplace wipes and reseeds one
-// plan, and ListPlans discovers every plan with stats.
-func TestSurfacePlanReplaceAndListPlans(t *testing.T) {
+// TestSurfacePlanReplaceForest covers the host restart-recovery loop: two
+// top-level steps form a two-root forest, and PlanReplace wipes that tree and
+// reseeds a single pending root under the same plan id.
+func TestSurfacePlanReplaceForest(t *testing.T) {
 	db := openSurfaceDB(t)
-	planID := common.FormatHash(common.HashID("plan-replace"))
+	planID := NewPlanID("plan-replace")
 	for _, step := range []string{"1", "2"} {
 		if err := db.PlanCommit(planID, step, TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, "pending", ""); err != nil {
 			t.Fatalf("commit %s: %v", step, err)
@@ -172,13 +172,8 @@ func TestSurfacePlanReplaceAndListPlans(t *testing.T) {
 		t.Fatalf("reseeded root: %+v err=%v", tree.Roots, err)
 	}
 
-	plans, err := db.ListPlans()
-	if err != nil || len(plans) != 1 {
-		t.Fatalf("list plans: %+v err=%v", plans, err)
-	}
-	p := plans[0]
-	if p.PlanID != planID || p.NodeCount != 1 || p.TotalCount != 1 || !p.Active || !isHexID(p.PlanID) {
-		t.Fatalf("plan summary wrong: %+v", p)
+	if !isHexID(planID) {
+		t.Fatalf("plan id must be a 16-hex token: %q", planID)
 	}
 }
 
@@ -187,7 +182,7 @@ func TestSurfacePlanReplaceAndListPlans(t *testing.T) {
 // surfaces the node Type + FinishedAt fields.
 func TestSurfaceSyncPlanTree(t *testing.T) {
 	db := openSurfaceDB(t)
-	planID := common.FormatHash(common.HashID("sync-plan"))
+	planID := NewPlanID("sync-plan")
 	root := &PlanNode{
 		NodePath: "1", Title: "root", Type: "plan", Status: "running",
 		Children: []PlanNode{
@@ -230,19 +225,18 @@ func TestSurfaceSyncPlanTree(t *testing.T) {
 	if len(tree2.Roots[0].Children) != 1 || tree2.Roots[0].Children[0].NodePath != "1.1" {
 		t.Fatalf("delete not reflected: %+v", tree2.Roots[0].Children)
 	}
-	plans, err := db.ListPlans()
-	if err != nil || len(plans) != 1 || plans[0].NodeCount != 2 {
-		t.Fatalf("list plans: %+v err=%v", plans, err)
+	if tree2.Roots[0].TrajCount != 0 {
+		t.Fatalf("sync must not emit plan_step events: %+v", tree2.Roots[0])
 	}
 }
 
-// TestSurfaceListScenesByL3 verifies scenes anchored to an L3 domain are
+// TestSurfaceListScenesByProject verifies scenes anchored to an L3 domain are
 // listed with hex ids once a session opening anchors them, and that two
 // different L3 domains yield DISJOINT scene sets (the exclusion branch).
-func TestSurfaceListScenesByL3(t *testing.T) {
+func TestSurfaceListScenesByProject(t *testing.T) {
 	db := openSurfaceDB(t)
-	l3A := common.FormatHash(common.HashID("l3-proj-a"))
-	l3B := common.FormatHash(common.HashID("l3-proj-b"))
+	l3A := l3Graph(t, db, "l3-proj-a")
+	l3B := l3Graph(t, db, "l3-proj-b")
 	// Two session openings, each anchored to its own L3 project domain.
 	if _, err := db.Search(SearchQuery{L3ID: l3A}); err != nil {
 		t.Fatalf("search A: %v", err)
@@ -250,12 +244,12 @@ func TestSurfaceListScenesByL3(t *testing.T) {
 	if _, err := db.Search(SearchQuery{L3ID: l3B}); err != nil {
 		t.Fatalf("search B: %v", err)
 	}
-	scenesA, err := db.ListScenesByL3(l3A)
+	scenesA, err := db.ListScenes(l3A)
 	if err != nil {
 		t.Fatalf("list by l3 A: %v", err)
 	}
 	if len(scenesA) == 0 {
-		t.Fatal("ListScenesByL3(A) should return the l3A-anchored scene")
+		t.Fatal("ListScenes(A) should return the l3A-anchored scene")
 	}
 	for _, sc := range scenesA {
 		if sc.L3ID != l3A {
@@ -265,12 +259,12 @@ func TestSurfaceListScenesByL3(t *testing.T) {
 			t.Fatalf("scene id %s should be 16 hex", sc.SceneID)
 		}
 	}
-	scenesB, err := db.ListScenesByL3(l3B)
+	scenesB, err := db.ListScenes(l3B)
 	if err != nil {
 		t.Fatalf("list by l3 B: %v", err)
 	}
 	if len(scenesB) == 0 {
-		t.Fatal("ListScenesByL3(B) should return the l3B-anchored scene")
+		t.Fatal("ListScenes(B) should return the l3B-anchored scene")
 	}
 	// Cross-cutting: the l3A list must not contain any scene the l3B list
 	// holds, i.e. the two domain lists are disjoint (exclusion branch).
@@ -285,44 +279,52 @@ func TestSurfaceListScenesByL3(t *testing.T) {
 	}
 }
 
-// TestSurfaceSetSceneL3IDCorrection verifies the admin correction entry: a
-// non-force Set cannot move an anchored scene, force=true re-anchors it, and
-// an empty l3ID clears the anchor.
-func TestSurfaceSetSceneL3IDCorrection(t *testing.T) {
+// TestSurfaceUpdateSceneAnchor verifies the anchor correction path: re-anchoring
+// a scene that already has a different domain is rejected (never a silent
+// no-op), Force moves it, and an empty L3ID clears it.
+func TestSurfaceUpdateSceneAnchor(t *testing.T) {
 	db := openSurfaceDB(t)
-	l3A := common.FormatHash(common.HashID("cor-a"))
-	l3B := common.FormatHash(common.HashID("cor-b"))
+	l3A := l3Graph(t, db, "cor-a")
+	l3B := l3Graph(t, db, "cor-b")
 	if _, err := db.Search(SearchQuery{L3ID: l3A}); err != nil {
 		t.Fatalf("search: %v", err)
 	}
-	scenesA, err := db.ListScenesByL3(l3A)
+	scenesA, err := db.ListScenes(l3A)
 	if err != nil || len(scenesA) == 0 {
 		t.Fatalf("expected an l3A-anchored scene: %+v err=%v", scenesA, err)
 	}
 	sceneID := scenesA[0].SceneID
 
-	// Write-once: a non-force Set to another domain is a no-op.
-	if err := db.SetSceneL3ID(sceneID, l3B, false); err != nil {
-		t.Fatalf("non-force set: %v", err)
+	// Write-once: a non-force move to another domain is rejected and changes nothing.
+	if _, err := db.UpdateScene(sceneID, ScenePatch{L3ID: &l3B}); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("non-force re-anchor: want ErrInvalidQuery, got %v", err)
 	}
-	if scenes, _ := db.ListScenesByL3(l3A); len(scenes) != 1 {
+	if scenes, _ := db.ListScenes(l3A); len(scenes) != 1 {
 		t.Fatalf("non-force set must not move the anchor: %+v", scenes)
 	}
-	// Force re-anchors the scene to l3B.
-	if err := db.SetSceneL3ID(sceneID, l3B, true); err != nil {
-		t.Fatalf("force set: %v", err)
+	// Force re-anchors the scene to l3B and hands the written scene back, so the
+	// host reads its anchor off the reply instead of listing the domain.
+	got, err := db.UpdateScene(sceneID, ScenePatch{L3ID: &l3B, Force: true})
+	if err != nil {
+		t.Fatalf("force re-anchor: %v", err)
 	}
-	if scenes, _ := db.ListScenesByL3(l3A); len(scenes) != 0 {
-		t.Fatalf("force set must leave l3A: %+v", scenes)
+	if got.SceneID != sceneID || !isHexID(got.L3ID) {
+		t.Fatalf("written scene = %+v, want the same hex id + a hex anchor", got)
 	}
-	if scenes, _ := db.ListScenesByL3(l3B); len(scenes) != 1 {
+	if got.L3ID != l3B {
+		t.Fatalf("anchor = %q, want %q", got.L3ID, l3B)
+	}
+	if scenes, _ := db.ListScenes(l3B); len(scenes) != 1 {
 		t.Fatalf("force set must land in l3B: %+v", scenes)
 	}
-	// Empty l3ID clears the anchor.
-	if err := db.SetSceneL3ID(sceneID, "", false); err != nil {
-		t.Fatalf("clear: %v", err)
+	// Clearing needs no Force: the scene simply becomes unanchored again.
+	clearTo := ""
+	if got, err = db.UpdateScene(sceneID, ScenePatch{L3ID: &clearTo}); err != nil {
+		t.Fatalf("clear anchor: %v", err)
+	} else if got.L3ID != "" {
+		t.Fatalf("clear must drop the anchor, got %q", got.L3ID)
 	}
-	if scenes, _ := db.ListScenesByL3(l3B); len(scenes) != 0 {
+	if scenes, _ := db.ListScenes(l3B); len(scenes) != 0 {
 		t.Fatalf("clear must drop the anchor: %+v", scenes)
 	}
 }
@@ -337,13 +339,13 @@ func TestSurfaceReservedPlanID(t *testing.T) {
 	turn := common.FormatHash(common.HashID("reserved-plan-id"))
 	now := time.Now().UnixMilli()
 	for i := 0; i < 3; i++ {
-		if err := db.AppendTrajectory(turn, TrajectorySlot{EventType: "llm_request", Timestamp: now}); err != nil {
+		if err := db.AppendTrajectory(turn, "", TrajectorySlot{EventType: "llm_request", Timestamp: now}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	ev := TrajectorySlot{EventType: "plan_step", Timestamp: now}
 	calls := map[string]func() error{
-		"PlanAppend":  func() error { return db.PlanAppend(zero, "1", ev) },
+		"AppendNode":  func() error { return db.AppendTrajectory(zero, "1", ev) },
 		"PlanCommit":  func() error { return db.PlanCommit(zero, "1", ev, "done", "") },
 		"PlanState":   func() error { _, err := db.PlanState(zero); return err },
 		"PlanReplace": func() error { return db.PlanReplace(zero, "x") },
@@ -359,5 +361,90 @@ func TestSurfaceReservedPlanID(t *testing.T) {
 	got, err := db.ReadTrajectory(turn)
 	if err != nil || len(got) != 3 {
 		t.Fatalf("bare turn events must survive: %d err=%v", len(got), err)
+	}
+}
+
+// TestSurfaceAppendTrajectoryPlanBranch pins the merged write entry point: one
+// method covers both a bare turn event (empty nodePath) and an event bound to a
+// plan node, and the two land under different trajectory keys.
+func TestSurfaceAppendTrajectoryPlanBranch(t *testing.T) {
+	db := openSurfaceDB(t)
+	now := time.Now().UnixMilli()
+	turn := common.FormatHash(common.HashID("merged-turn"))
+	planID := NewPlanID("merged-plan")
+
+	if err := db.AppendTrajectory(turn, "", TrajectorySlot{EventType: "llm_request", Timestamp: now}); err != nil {
+		t.Fatalf("bare turn event: %v", err)
+	}
+	if err := db.AppendTrajectory(planID, "1.1", TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: now + 1}); err != nil {
+		t.Fatalf("plan-bound event: %v", err)
+	}
+
+	evs, err := db.ReadTrajectory(turn)
+	if err != nil || len(evs) != 1 || evs[0].TopicID != turn || evs[0].PlanID != "" {
+		t.Fatalf("turn key: %+v err=%v", evs, err)
+	}
+	evs, err = db.ReadTrajectory(planID)
+	if err != nil || len(evs) != 1 || evs[0].PlanID != planID || evs[0].TopicID != "" {
+		t.Fatalf("plan key: %+v err=%v", evs, err)
+	}
+	// The bound event created its node chain, so the tree view sees it.
+	tree, err := db.PlanState(planID)
+	if err != nil || tree.TotalCount != 2 {
+		t.Fatalf("node chain from the bound event: %+v err=%v", tree, err)
+	}
+	// Plan-bound events use the step vocabulary; a turn event does not.
+	if err := db.AppendTrajectory(planID, "1", TrajectorySlot{EventType: "whatever", Timestamp: now + 2}); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("unknown plan event type: want ErrInvalidQuery, got %v", err)
+	}
+}
+
+// TestSurfaceIDContract locks the host-facing id surface: the library issues
+// every id, so the facade exposes no integer-to-hex bridge. Plan names mint
+// stable hex tokens deterministically, and the default domain constant opens a
+// session.
+func TestSurfaceIDContract(t *testing.T) {
+	if got, want := NewPlanID("cat-42"), NewPlanID("cat-42"); got != want {
+		t.Fatalf("plan id must be deterministic: %s vs %s", want, got)
+	}
+	planID := NewPlanID("cat-42")
+	if !isHexID(planID) || planID == common.FormatHash(common.HashID("cat-42")) {
+		t.Fatalf("plan id %q is not a namespaced 16-hex token", planID)
+	}
+	if other := NewPlanID("cat-43"); other == planID {
+		t.Fatalf("distinct names must mint distinct ids")
+	}
+	if planID == DefaultAgentID {
+		t.Fatal("a minted plan id must never be the reserved all-zero token")
+	}
+
+	llm := stubLLM()
+	t.Cleanup(llm.Close)
+	m, err := OpenMulti(surfaceConfig(t, llm.URL))
+	if err != nil {
+		t.Fatalf("openmulti: %v", err)
+	}
+	defer m.Close()
+	sess, err := m.Session(DefaultAgentID)
+	if err != nil {
+		t.Fatalf("default domain session: %v", err)
+	}
+	if _, err := sess.Search(SearchQuery{}); err != nil {
+		t.Fatalf("default domain search: %v", err)
+	}
+}
+
+// TestSurfaceDreamUnknownScene: naming a scene that does not exist is an
+// error, not a zero-valued report that looks like a successful no-op.
+func TestSurfaceDreamUnknownScene(t *testing.T) {
+	db := openSurfaceDB(t)
+	ghost := common.FormatHash(common.HashID("no-such-scene"))
+	rep, err := db.Dream(context.Background(), ghost)
+	if CodeOf(err) != ErrNotFound {
+		t.Fatalf("dream unknown scene: rep=%v want ErrNotFound, got %v", rep, err)
+	}
+	// Dreaming an empty domain (no scene named) stays a clean no-op.
+	if rep, err := db.Dream(context.Background(), ""); err != nil || rep == nil {
+		t.Fatalf("dream empty domain: rep=%v err=%v", rep, err)
 	}
 }

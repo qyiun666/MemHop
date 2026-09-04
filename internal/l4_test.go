@@ -18,24 +18,54 @@ func writeArchive(t *testing.T, engine *core.StorageEngine, arc *core.ArchiveSlo
 	}
 }
 
-// TestGetArchive reads one archive by ID; missing returns ErrNotFound.
-func TestGetArchive(t *testing.T) {
+// TestSearchL4ByID reads archives by ID; a missing ID is simply skipped.
+func TestSearchL4ByID(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	topicHash := common.HashID("topic1")
 	a1 := core.ArchiveSlot{IDHash: common.HashID("m1"), ContextID: topicHash, Content: "hello", CreatedAt: 1000, Role: 0, ContentType: core.ContentText}
 	writeArchive(t, engine, &a1)
 
-	got, err := db.GetArchive(core.DefaultAgentID, common.FormatHash(a1.IDHash))
+	got, err := db.SearchL4(core.DefaultAgentID, L4Query{IDs: []string{common.FormatHash(a1.IDHash)}})
 	if err != nil {
-		t.Fatalf("GetArchive: %v", err)
+		t.Fatalf("SearchL4 by id: %v", err)
 	}
-	if got.Content != "hello" || got.ContextID != topicHash {
+	if len(got) != 1 || got[0].Content != "hello" || got[0].ContextID != topicHash {
 		t.Fatalf("unexpected archive: %+v", got)
 	}
 
-	if _, err := db.GetArchive(core.DefaultAgentID, common.FormatHash(12345)); err == nil {
-		t.Fatal("want error for missing archive")
+	miss, err := db.SearchL4(core.DefaultAgentID, L4Query{IDs: []string{common.FormatHash(12345)}})
+	if err != nil || len(miss) != 0 {
+		t.Fatalf("missing id: want empty result, got %v / %v", miss, err)
+	}
+	if _, err := db.SearchL4(core.DefaultAgentID, L4Query{IDs: []string{"nothex"}}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("malformed id: want ErrInvalidQuery, got %v", err)
+	}
+}
+
+// TestSearchL4TopicOnly pins the read a host needs after a turn: naming only
+// the topic (or only the content type) must resolve that turn's originals
+// instead of falling through to an empty result.
+func TestSearchL4TopicOnly(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	t1, t2 := common.HashID("only1"), common.HashID("only2")
+	writeArchive(t, engine, &core.ArchiveSlot{IDHash: common.HashID("o1"), ContextID: t1, Content: "u", CreatedAt: 1000})
+	writeArchive(t, engine, &core.ArchiveSlot{IDHash: common.HashID("o2"), ContextID: t1, Content: "a", CreatedAt: 1001})
+	writeArchive(t, engine, &core.ArchiveSlot{IDHash: common.HashID("o3"), ContextID: t2, Content: "other", CreatedAt: 1002})
+
+	t1Hex := common.FormatHash(t1)
+	got, err := db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &t1Hex})
+	if err != nil {
+		t.Fatalf("topic-only: %v", err)
+	}
+	if len(got) != 2 || got[0].IDHash != common.HashID("o1") || got[1].IDHash != common.HashID("o2") {
+		t.Fatalf("topic-only: want the two o1/o2 archives in time order, got %+v", got)
+	}
+
+	all, err := db.SearchL4(core.DefaultAgentID, L4Query{})
+	if err != nil || len(all) != 3 {
+		t.Fatalf("empty query: want every archive, got %d / %v", len(all), err)
 	}
 }
 
@@ -103,5 +133,41 @@ func TestSearchL4TypeFilter(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].ContentType != core.ContentImage {
 		t.Fatalf("type filter: %+v, want only the image archive", got)
+	}
+}
+
+// The archive keyword is matched case-insensitively, like the L3 node keyword:
+// a host that types "RUST" into either layer gets the same set back. Limit caps
+// the result from the newest end, because the read is ordered oldest first.
+func TestSearchL4KeywordCaseAndLimit(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	topic := common.HashID("case")
+	old := core.ArchiveSlot{IDHash: common.HashID("m-old"), ContextID: topic, Content: "Rust 所有权", CreatedAt: 1000}
+	fresh := core.ArchiveSlot{IDHash: common.HashID("m-new"), ContextID: topic, Content: "rust 生态", CreatedAt: 2000}
+	other := core.ArchiveSlot{IDHash: common.HashID("m-other"), ContextID: topic, Content: "go 并发", CreatedAt: 3000}
+	for _, a := range []core.ArchiveSlot{old, fresh, other} {
+		writeArchive(t, engine, &a)
+	}
+
+	for _, kw := range []string{"RUST", "rust", "Rust"} {
+		got, err := db.SearchL4(core.DefaultAgentID, L4Query{Keyword: kw})
+		if err != nil {
+			t.Fatalf("keyword %q: %v", kw, err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("keyword %q: want both rust archives, got %+v", kw, got)
+		}
+	}
+
+	capped, err := db.SearchL4(core.DefaultAgentID, L4Query{Keyword: "rust", Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(capped) != 1 || capped[0].IDHash != fresh.IDHash {
+		t.Fatalf("limit 1: want the newest match only, got %+v", capped)
+	}
+	if all, err := db.SearchL4(core.DefaultAgentID, L4Query{Limit: 2}); err != nil || len(all) != 2 || all[0].IDHash != fresh.IDHash {
+		t.Fatalf("limit over an unfiltered read: %+v / %v", all, err)
 	}
 }

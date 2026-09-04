@@ -130,6 +130,43 @@ func (idx *TrajIndex) RemoveBefore(before int64) []uint64 {
 	return out
 }
 
+// RemoveEvents drops specific events of one turn — the counterpart of a writer
+// that deletes those records — and returns how many went away. Leaving an
+// index entry that names a deleted record makes every later read of the turn
+// fail on a record that no longer exists.
+func (idx *TrajIndex) RemoveEvents(sessionID uint64, idHashes []uint64) int {
+	doomed := make(map[uint64]struct{}, len(idHashes))
+	for _, h := range idHashes {
+		doomed[h] = struct{}{}
+	}
+	idx.mu.Lock()
+	defer idx.mu.Unlock()
+	turn := idx.byTurn[sessionID]
+	if turn == nil {
+		return 0
+	}
+	kept := turn.entries[:0]
+	removed := 0
+	for _, e := range turn.entries {
+		if _, ok := doomed[e.IDHash]; ok {
+			removed++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	if removed == 0 {
+		return 0
+	}
+	if len(kept) == 0 {
+		delete(idx.byTurn, sessionID)
+		delete(idx.lastTurn, sessionID)
+		return removed
+	}
+	turn.entries = kept
+	idx.lastTurn[sessionID] = kept[len(kept)-1]
+	return removed
+}
+
 // RemoveSession drops one whole turn and returns its event ids in Seq
 // order; nil for unknown turns (idempotent). Used by PlanReplace, which
 // removes a plan's bound events wholesale and restarts its Seq space.

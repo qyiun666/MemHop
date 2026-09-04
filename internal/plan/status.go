@@ -3,9 +3,9 @@
 
 // Package plan holds the L6 plan-tree small methods: the status surface,
 // node-path mechanics, the node/event write steps, the forest build and
-// rollup, and the whole-tree sync. The big methods (PlanAppend, PlanCommit,
-// PlanState, PlanReplace, ListPlans, SyncPlanTree) stay in the composition
-// root with the domain lock.
+// rollup, and the whole-tree sync. The big methods (AppendTrajectory on its
+// plan branch, PlanCommit, PlanState, PlanReplace, SyncPlanTree) stay in the
+// composition root with the domain lock.
 
 package plan
 
@@ -65,6 +65,19 @@ func StatusToString(u uint8) PlanStatus {
 // or failed); only these record a FinishedAt.
 func IsTerminalStatus(u uint8) bool {
 	return u == core.StatusDone || u == core.StatusFailed
+}
+
+// MintID derives the external 16-hex id of the plan a host names. The "plan:"
+// namespace keeps a plan id out of every other layer's id space, and the
+// mapping is deterministic, so a host recovers its tree after a restart by
+// naming the plan again. A name whose hash lands on the reserved 0 borrows to
+// 1, so an id this function issues is always one ParsePlanID accepts.
+func MintID(name string) string {
+	h := common.HashID("plan:" + name)
+	if h == 0 {
+		h = 1
+	}
+	return common.FormatHash(h)
 }
 
 // ParsePlanID parses a host plan id and rejects 0: AppendTrajectory writes

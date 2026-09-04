@@ -7,22 +7,13 @@ package engram
 
 import (
 	"math"
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/repo/index"
 )
-
-func TestMain(m *testing.M) {
-	if err := index.InitTokenizer(index.EngineAuto); err != nil {
-		panic(err)
-	}
-	os.Exit(m.Run())
-}
 
 func tempEngine(t *testing.T) *core.StorageEngine {
 	t.Helper()

@@ -24,7 +24,9 @@ import (
 // LLM call leaves the scene exactly as it was — no orphan archive, no
 // contentless topic. Settling the same topic id twice rewrites that turn: the
 // topic ends pointing at the new pair and the archives it no longer references
-// are tombstoned, so a retry that changed the texts leaves nothing behind.
+// are tombstoned, so a retry that changed the texts leaves nothing behind. What
+// may be settled is a turn topic of the named scene only — a Dream-fused topic,
+// another scene's topic, or an id that names some other record is refused.
 func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -39,7 +41,11 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	// A turn must land in a scene the host already opened with Search; an
 	// unknown id is rejected before any write so nothing settles in a scene
 	// nobody owns.
-	if _, err := core.ReadSceneSlot(db.engine, agentID, sceneID); err != nil {
+	slot, err := core.ReadSceneSlot(db.engine, agentID, sceneID)
+	if err != nil {
+		return 0, err
+	}
+	if err := turn.SettleTarget(sceneID, topicID, slot.TurnSeq); err != nil {
 		return 0, err
 	}
 	// Extract on the domain's cancellable context: a Close/DeleteAgent racing

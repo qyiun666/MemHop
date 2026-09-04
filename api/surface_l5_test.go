@@ -44,8 +44,8 @@ func TestSurfaceL5Capability(t *testing.T) {
 	if !isHexID(id) {
 		t.Fatalf("capability id not hex: %q", id)
 	}
-	if _, err := db.GetCapability(id); err != nil {
-		t.Fatalf("get capability: %v", err)
+	if one, err := db.ListCapabilities(CapabilityListQuery{IDs: []string{id}}); err != nil || len(one) != 1 {
+		t.Fatalf("capability by id: %d found, err %v", len(one), err)
 	}
 	// Re-import byte-identical content is a no-op returning the stored record.
 	again, err := db.ImportCapability(writeCapability(t, dir, "surface-cap"))

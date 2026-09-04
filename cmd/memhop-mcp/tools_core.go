@@ -51,11 +51,11 @@ type statusResult struct {
 
 // registerCoreTools installs the memory-loop entry points; one register
 // function per tool keeps each declaration list short.
-func registerCoreTools(s *mcp.Server, db *memhop.Session) {
+func registerCoreTools(s *mcp.Server, m *memhop.MultiAgentDB, db *memhop.Session) {
 	registerSearchTool(s, db)
 	registerUpdateTool(s, db)
 	registerDreamTool(s, db)
-	registerMaintenanceTools(s, db)
+	registerMaintenanceTools(s, m, db)
 }
 
 func registerSearchTool(s *mcp.Server, db *memhop.Session) {
@@ -118,10 +118,10 @@ func registerUpdateTool(s *mcp.Server, db *memhop.Session) {
 func registerDreamTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_dream",
-		Description: "对指定场景执行梦境巩固（睡眠模拟）：L2 话题压缩融合、L1 节点同步、衰减与 L0 画像蒸馏。耗时较长；返回是否实际发生巩固（consolidated）与结构化报告 report（各阶段名称/状态/耗时、L2 压缩计数、L1 增删计数、L0 是否蒸馏）。",
+		Description: "执行梦境巩固（睡眠模拟）：L2 话题压缩融合、L1 节点同步、衰减与 L0 画像蒸馏，并清理超出保留窗口的 L6 事件。scene_id 留空即巩固本域的每一个场景——库只在 Dream 里做这些修剪与重建，一个不再写入的域也要至少一次 Dream 才会收缩。耗时较长；返回是否实际发生巩固（consolidated）与结构化报告 report（各阶段名称/状态/耗时、L2 压缩计数、L1 增删计数、L0 是否蒸馏）。",
 		InputSchema: objSchema(map[string]any{
-			"scene_id": strProp("场景 ID（16 位 hex），必填"),
-		}, "scene_id"),
+			"scene_id": strProp("场景 ID（16 位 hex），可选；留空即全域巩固"),
+		}),
 	}, handle[dreamArgs, dreamResult](func(a dreamArgs) (dreamResult, error) {
 		rep, err := db.Dream(context.Background(), a.SceneID)
 		out := dreamResult{}
@@ -134,13 +134,13 @@ func registerDreamTool(s *mcp.Server, db *memhop.Session) {
 }
 
 // registerMaintenanceTools installs the two no-argument lifecycle tools.
-func registerMaintenanceTools(s *mcp.Server, db *memhop.Session) {
+func registerMaintenanceTools(s *mcp.Server, m *memhop.MultiAgentDB, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_checkpoint",
 		Description: "将当前状态持久化到磁盘（记录索引 + A/B header），不关闭数据库。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[updateResult](func() (updateResult, error) {
-		return updateResult{OK: true}, db.Checkpoint()
+		return updateResult{OK: true}, m.Checkpoint()
 	}))
 
 	s.AddTool(&mcp.Tool{
@@ -148,7 +148,7 @@ func registerMaintenanceTools(s *mcp.Server, db *memhop.Session) {
 		Description: "数据库健康状态：是否已关闭、已登记多少场景（= 宿主会话数）。",
 		InputSchema: objSchema(nil),
 	}, handleNoArgs[statusResult](func() (statusResult, error) {
-		scenes, err := db.ListScenes()
-		return statusResult{Closed: db.IsClosed(), SceneCount: len(scenes)}, err
+		scenes, err := db.ListScenes("")
+		return statusResult{Closed: m.IsClosed(), SceneCount: len(scenes)}, err
 	}))
 }

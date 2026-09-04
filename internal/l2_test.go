@@ -24,7 +24,7 @@ func mustScene(t *testing.T, engine *core.StorageEngine, sceneID uint64, name st
 // TestListScenesEmpty empty db returns an empty slice.
 func TestListScenesEmpty(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	scenes, err := db.ListScenes(core.DefaultAgentID)
+	scenes, err := db.ListScenes(core.DefaultAgentID, "")
 	if err != nil {
 		t.Fatalf("ListScenes: %v", err)
 	}
@@ -40,7 +40,7 @@ func TestListScenesReturnsIDName(t *testing.T) {
 	s1 := mustScene(t, engine, 11, "工作")
 	s2 := mustScene(t, engine, 12, "学习")
 
-	scenes, err := db.ListScenes(core.DefaultAgentID)
+	scenes, err := db.ListScenes(core.DefaultAgentID, "")
 	if err != nil {
 		t.Fatalf("ListScenes: %v", err)
 	}
@@ -185,7 +185,7 @@ func TestListScenesTopicCounts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	scenes, err := db.ListScenes(core.DefaultAgentID)
+	scenes, err := db.ListScenes(core.DefaultAgentID, "")
 	if err != nil {
 		t.Fatalf("ListScenes: %v", err)
 	}
@@ -351,10 +351,10 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 	}
 }
 
-// A scene is named by the library when it is created; SetSceneName is the
+// A scene is named by the library when it is created; UpdateScene is the
 // host's only way to title one. The title must survive a later Search, which
 // rewrites that very record to bump its hit counter and turn sequence.
-func TestSetSceneNameSurvivesLaterTurns(t *testing.T) {
+func TestUpdateSceneNameSurvivesLaterTurns(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 
@@ -366,8 +366,9 @@ func TestSetSceneNameSurvivesLaterTurns(t *testing.T) {
 	if _, err := db.Update(core.DefaultAgentID, turnOf(res.Scene.SceneID, res.NewTopicID)); err != nil {
 		t.Fatalf("settle turn: %v", err)
 	}
-	if err := db.SetSceneName(core.DefaultAgentID, sceneHex, "rust 学习"); err != nil {
-		t.Fatalf("SetSceneName: %v", err)
+	title := "rust 学习"
+	if _, err := db.UpdateScene(core.DefaultAgentID, sceneHex, ScenePatch{Name: &title}); err != nil {
+		t.Fatalf("UpdateScene rename: %v", err)
 	}
 	again, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: sceneHex})
 	if err != nil {
@@ -382,10 +383,16 @@ func TestSetSceneNameSurvivesLaterTurns(t *testing.T) {
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("LLM calls = %d, want 1 (only Update distills)", got)
 	}
-	if err := db.SetSceneName(core.DefaultAgentID, sceneHex, ""); common.CodeOf(err) != common.ErrInvalidQuery {
+	blank := ""
+	if _, err := db.UpdateScene(core.DefaultAgentID, sceneHex, ScenePatch{Name: &blank}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Errorf("empty title: want ErrInvalidQuery, got %v", err)
 	}
-	if err := db.SetSceneName(core.DefaultAgentID, common.FormatHash(common.HashID("ghost")), "x"); common.CodeOf(err) != common.ErrNotFound {
+	ghost := "x"
+	if _, err := db.UpdateScene(core.DefaultAgentID, common.FormatHash(common.HashID("ghost")), ScenePatch{Name: &ghost}); common.CodeOf(err) != common.ErrNotFound {
 		t.Errorf("unknown scene: want ErrNotFound, got %v", err)
+	}
+	// A patch that names no field is a no-op, not a rewrite.
+	if _, err := db.UpdateScene(core.DefaultAgentID, sceneHex, ScenePatch{}); err != nil {
+		t.Fatalf("empty patch: %v", err)
 	}
 }

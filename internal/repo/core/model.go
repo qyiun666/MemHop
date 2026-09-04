@@ -170,7 +170,9 @@ type HypergraphSlot struct {
 	UpdatedAt int64            `json:"updated_at"`
 }
 
-// HypergraphNode is a node within an L3 hypergraph.
+// HypergraphNode is a node within an L3 hypergraph. Importance has no write
+// path in the engine and stays out of the public DTO; it remains here so a
+// record written by an older file still decodes.
 type HypergraphNode struct {
 	IDHash     uint64   `json:"id_hash"`
 	GraphID    uint64   `json:"graph_id"`
@@ -184,7 +186,10 @@ type HypergraphNode struct {
 	UpdatedAt  int64    `json:"updated_at"`
 }
 
-// HypergraphEdge is an edge within an L3 hypergraph (supports hyperedges).
+// HypergraphEdge is a hyperedge within an L3 hypergraph: an unordered relation
+// over its member nodes, identified by members plus Kind (see repo.CreateEdgeL3).
+// Weight and Label have no write path in the engine and stay out of the public
+// DTO; they remain here so older records still decode.
 type HypergraphEdge struct {
 	IDHash    uint64        `json:"id_hash"`
 	GraphID   uint64        `json:"graph_id"`
@@ -195,15 +200,9 @@ type HypergraphEdge struct {
 	CreatedAt int64         `json:"created_at"`
 }
 
-// AdjacencyEntry is one entry in the adjacency index for a node.
-type AdjacencyEntry struct {
-	NodeHash     uint64
-	EdgeHash     uint64
-	Kind         GraphEdgeKind
-	ConnectedIDs []uint64 // other nodes in this hyperedge (excluding NodeHash)
-}
-
-// Message roles in an ArchiveSlot.
+// Message roles in an ArchiveSlot. Update writes RoleUser / RoleAgent and Dream
+// writes RoleDream; RoleSystem has no writer in the engine and stays off the
+// public constants.
 const (
 	RoleUser   uint8 = 0
 	RoleAgent  uint8 = 1
@@ -211,7 +210,9 @@ const (
 	RoleDream  uint8 = 3
 )
 
-// ArchiveSlot stores a user/agent chat message under an L2 scene context.
+// ArchiveSlot stores one L4 original of a turn. Metadata has no writer in the
+// engine and stays off the public DTO; it remains here so records written by an
+// older version still decode.
 type ArchiveSlot struct {
 	IDHash      uint64      `json:"id_hash"`
 	ContentType ContentType `json:"content_type"`

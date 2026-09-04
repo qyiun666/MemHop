@@ -8,13 +8,13 @@
 package test
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 
 	memhop "github.com/qyiun666/MemHop/api"
 	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 )
 
 // testDB is the offline test handle: an agent-domain session plus the
@@ -27,6 +27,10 @@ type testDB struct {
 func (h *testDB) Checkpoint() error { return h.m.Checkpoint() }
 func (h *testDB) Close() error      { return h.m.Close() }
 func (h *testDB) IsClosed() bool    { return h.m.IsClosed() }
+
+// CompactTo is a file-level operation, so it lives on the MultiAgentDB handle
+// rather than the session.
+func (h *testDB) CompactTo(newPath string) error { return h.m.CompactTo(newPath) }
 
 // openMockMulti opens a multi-agent DB with the mock LLM at path; multi-agent
 // is the only mode, so every handle goes through CreateAgent + Session.
@@ -162,17 +166,22 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 		t.Fatal("the turn topic must carry its distilled keywords")
 	}
 
-	// A turn for a session nobody opened is rejected, and so is a malformed one.
-	orphanTurn := common.FormatHash(common.HashID("unopened-turn"))
-	if _, err := db.Update(turn(common.FormatHash(999), orphanTurn, "无主话题", "无主回复")); err == nil {
-		t.Fatal("Update on an unknown scene should fail")
+	// A turn id belongs to the scene that opened it: handing one to another
+	// scene is the mix-up a host with several sessions can really make, and so
+	// is a malformed turn.
+	other := openSession(t, db)
+	if _, err := db.Update(turn(other, topicID, "串台", "串到别的会话上")); err == nil {
+		t.Fatal("settling another scene's turn should fail")
+	}
+	if surface, err := db.Search(memhop.SearchQuery{SceneID: other}); err != nil || len(surface.Topics) != 0 {
+		t.Fatalf("the refused cross-scene turn landed somewhere: %d topics, err %v", len(surface.Topics), err)
 	}
 	if _, err := db.Update(memhop.TurnUpdate{SceneID: sceneID, UserText: "", UserTS: 1, AgentText: "a", AgentTS: 2}); err == nil {
 		t.Fatal("empty user text should fail")
 	}
 
 	// L2: sessions opened by Search are listable.
-	scenes, err := db.ListScenes()
+	scenes, err := db.ListScenes("")
 	if err != nil {
 		t.Fatalf("ListScenes: %v", err)
 	}
@@ -188,8 +197,8 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if len(arcs) == 0 {
 		t.Fatal("SearchL4 should find archives by keyword")
 	}
-	if _, err := db.GetArchive(arcs[0].IDHash); err != nil {
-		t.Fatalf("GetArchive: %v", err)
+	if one, err := db.SearchL4(internal.L4Query{IDs: []string{arcs[0].IDHash}}); err != nil || len(one) != 1 {
+		t.Fatalf("archive by id: %d found, err %v", len(one), err)
 	}
 }
 
@@ -201,7 +210,7 @@ func TestInterfaceOneDistillationPerTurn(t *testing.T) {
 
 	start := llm.calls["keywords"]
 	for i := range 5 {
-		if _, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), "问题 "+common.FormatHash(uint64(i)), "回复")); err != nil {
+		if _, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), fmt.Sprintf("问题 %d", i), "回复")); err != nil {
 			t.Fatalf("turn %d: %v", i, err)
 		}
 	}
