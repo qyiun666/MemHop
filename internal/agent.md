@@ -46,7 +46,12 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    L6 轨迹族统一走 `db.lockSession(agentID, turnID)`（lockAgent + hex 解析，
    解析失败先解锁）：裸事件的键就是该轮话题 ID（`AppendTrajectory` 顺手把
    `TopicID` 写成同一个值），计划绑定事件的键是计划 ID。门面侧的会话准入
-   策略在 `CheckSession`。
+   策略在 `CheckSession`。L3 八个方法是唯一例外：走
+   `db.lockSharedL3(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
+   保留公共域 `core.SharedL3AgentID`（L3 记录全部住该域，跨 agent 全局
+   串行；公共域无墓碑、免空闲回收）。锚点校验（`scene.Create`/
+   `ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级
+   互斥兜底。
 2. **缓存刷新序**：写记录帧后紧跟 `ac.SyncL2Meta`（**存储 -> l2meta**）。
    **禁止在域锁内取 `db.agentsMu`**（锁序环：sweep 走 agentsMu -> ac.Mu），
    域内簿记（如 `lastDreamAt`）直接写 atomic 字段。
@@ -57,7 +62,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    绝不写入已销毁的域。域锁内的前台 LLM 调用（`Update` 的轮次提炼）同样挂
    `ac.OpCtx`，避免生命周期屏障被一次完整往返阻塞。
 4. **空闲回收**：无后台定时器；`contextFor` 顺带清扫超
-   `Defaults.AgentIdleTTLMs` 未访问的域（默认域豁免），回收前先对域锁
+   `Defaults.AgentIdleTTLMs` 未访问的域（默认域与共享 L3 域豁免），回收前先对域锁
    `TryLock`：锁被占用（在飞操作）或 `dreamInFlight` 非空则跳过，留待下轮。
    回收时不快照任何东西：L2Meta 在下次访问时从记录重建，数据始终在文件里。
 5. **DeleteAgent 顺序**：先摘租户映射（断绝新 `contextFor`）→
@@ -164,7 +169,13 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    的 id 含 kind，导入按「排序成员 + kind」的语义键去重，故同一对节点可并存
    多种关系，且对旧边的 pair-only 哈希同样幂等。`ImportL3` 结果带 `GraphIDs`
    （图 id = `hash(Domain)`，没有别的公开调用能渲染它）；`DeleteL3Nodes`
-   做节点级删除并级联其超边。
+   做节点级删除并级联其超边。全部 L3 记录住保留公共域
+   `core.SharedL3AgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
+   三处豁免，`CreateAgent` 拒撞、`DeleteAgent` 拒删、`Session` 拒绑）。
+   `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域
+   `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁——代价是「删图后、
+   清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成
+   未锚定，可经 `UpdateScene` 重挂。
 10. **L6 事件写入的字段归属**：两条追加路径（`appendTurnEvent` /
    `plan.AppendEventLocked`）把记录强制成裸事件形状——`NodeType`/`PlanID`/
    `ParentID`/`NodePath`/`Status`/`Summary`/`PlanType` 一律清零（`PlanType`

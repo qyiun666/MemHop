@@ -95,6 +95,21 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 		t.Fatalf("beta saw alpha's profile: %+v err %v", got, err)
 	}
 
+	// L3 is the one file-wide pool: a graph alpha imports is visible to beta
+	// through list and query.
+	if _, err := sa.ImportL3([]internal.L3ImportItem{
+		{Title: "append-only", Domain: "engine", NodeType: "concept", Content: "single .meh"},
+	}, internal.L3ImportSkip); err != nil {
+		t.Fatalf("ImportL3: %v", err)
+	}
+	graphs, err := sb.ListL3()
+	if err != nil || len(graphs) != 1 {
+		t.Fatalf("beta cannot see alpha's graph: %+v err %v", graphs, err)
+	}
+	if nodes, err := sb.QueryL3Nodes(internal.L3NodeQuery{GraphID: graphs[0].IDHash}); err != nil || len(nodes) != 1 {
+		t.Fatalf("beta query over alpha's graph: %+v err %v", nodes, err)
+	}
+
 	// The registry lists every tenant by hex id and never the implicit default
 	// domain, which has no name to report.
 	agents, err := m.ListAgents()
@@ -138,6 +153,9 @@ func TestInterfaceAgentDomainsAreIsolated(t *testing.T) {
 	// report a failure, not answer with an empty result.
 	if _, err := sb.SearchL4(queryFor("beta 的专属")); err == nil {
 		t.Fatal("a handle to a deleted tenant must stop working")
+	}
+	if _, err := sb.ListL3(); err == nil {
+		t.Fatal("a handle to a deleted tenant must stop reaching the shared L3 pool")
 	}
 
 	// The implicit domain is not a tenant and cannot be destroyed by name, and

@@ -12,7 +12,7 @@
 host process
  ├─ go.mod: require github.com/qyiun666/MemHop (or go.work replace → local checkout)
  ├─ import only github.com/qyiun666/MemHop/api (never internal/)
- ├─ one .meh file = many isolated agent domains, addressed by Session(hexID)
+ ├─ one .meh file = many agent domains (isolated except the file-wide L3 pool), addressed by Session(hexID)
  └─ external services:
       └─ ONE OpenAI-compatible LLM (turn distillation / Dream consolidation / Crystallize)
       └─ no embedding / vector service (retired in v1.5.0)
@@ -240,6 +240,11 @@ clearing an anchor never needs `Force`, because the scene simply becomes
 unanchored again.
 
 ### L3 knowledge graphs (stable facts: people / projects / preferences)
+
+The graph pool is **file-wide**: every agent domain of the file shares one L3
+pool. Knowledge one agent imports is visible to — and anchorable by — every
+other agent, and deleting an agent never deletes the pool. Scenes, archives
+and profiles stay domain-local.
 
 ```go
 res, err := db.ImportL3([]api.L3ImportItem{{

@@ -34,9 +34,11 @@ const (
 // typed distilled signals (EmotionState/MBTI) with explicit field
 // ownership (host-authored identity vs distilled signals), removing the
 // string-encoded emotion_patterns/lexicon/style_traits maps and the
-// keyword-projection profile stage. Files with
-// 0x0008 (or older) are rejected at Open — there is no migration path.
-const FormatVersion uint16 = 0x0009
+// keyword-projection profile stage; 0x000A moved the L3 knowledge-graph
+// records into a reserved file-wide shared domain (SharedL3AgentID), so all
+// agent domains in one file share a single L3 pool. Files with 0x0009 (or
+// older) are rejected at Open — there is no migration path.
+const FormatVersion uint16 = 0x000A
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

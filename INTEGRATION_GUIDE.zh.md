@@ -11,7 +11,7 @@
 宿主进程
  ├─ go.mod: require github.com/qyiun666/MemHop（或 go.work replace → 本地 checkout）
  ├─ 只 import github.com/qyiun666/MemHop/api（禁止碰 internal/）
- ├─ 一个 .meh 文件 = 多个隔离 agent 域，调用一律经 Session(hexID) 定域
+ ├─ 一个 .meh 文件 = 多个 agent 域（除文件级 L3 公共池外相互隔离），调用一律经 Session(hexID) 定域
  └─ 外部服务依赖：
       └─ 只有一个 OpenAI 兼容 LLM（轮次提炼 / Dream 巩固 / Crystallize）
       └─ 无 embedding / 向量服务（v1.5.0 起随检索子系统一并退役）
@@ -218,6 +218,8 @@ err = db.UpdateL0(&api.ProfileSlot{Name: "..."})
 因为清除后场景回到未锚定状态，随时可以重新挂。
 
 ### L3 知识图谱（稳定事实：人物 / 项目 / 偏好）
+
+图池是**文件级**的：文件内所有 agent 域共享同一份 L3。某个 agent 导入的知识全家可见、可挂锚，删 agent 不删公共池；场景/原文/画像仍按域隔离。
 
 ```go
 res, err := db.ImportL3([]api.L3ImportItem{{

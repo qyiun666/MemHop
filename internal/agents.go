@@ -5,7 +5,9 @@
 // allocates a random 8-byte agentID and persists a registry record so the
 // name -> ID mapping survives restarts without stateless hashing; ListAgents
 // enumerates registered agents; DeleteAgent destroys the domain context and
-// tombstones every record of the domain.
+// tombstones every record of the domain. Two reserved domains are never
+// handed out: the default domain and the file-wide shared L3 domain
+// (core.SharedL3AgentID).
 
 package internal
 
@@ -57,7 +59,7 @@ func (db *DB) CreateAgent(name string) (uint64, error) {
 			return 0, common.NewError(common.ErrIO, "agent id allocation", err)
 		}
 		id := binary.LittleEndian.Uint64(b[:])
-		if id == core.DefaultAgentID {
+		if id == core.DefaultAgentID || id == core.SharedL3AgentID {
 			continue
 		}
 		if _, taken := db.idToName[id]; taken {
@@ -128,6 +130,9 @@ func (db *DB) CheckSession(agentID uint64) error {
 func (db *DB) DeleteAgent(agentID uint64) error {
 	if agentID == core.DefaultAgentID {
 		return common.NewError(common.ErrInvalidQuery, "the default domain cannot be deleted")
+	}
+	if agentID == core.SharedL3AgentID {
+		return common.NewError(common.ErrInvalidQuery, "the shared L3 domain cannot be deleted")
 	}
 	if db.closed.Load() {
 		return common.NewError(common.ErrClosed, "database is closed")

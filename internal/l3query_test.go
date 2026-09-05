@@ -24,16 +24,17 @@ func testNode(id, graphID uint64, title, nodeType, content string, kws []string)
 
 // writeNode writes an L3 node record, materialising its graph slot first: a
 // node belonging to no graph is a state the engine never produces (ImportL3
-// creates the slot), and QueryL3Nodes refuses it like GetL3 does.
+// creates the slot), and QueryL3Nodes refuses it like GetL3 does. Fixtures
+// land in the shared L3 domain — the one the query methods read.
 func writeNode(t *testing.T, engine *core.StorageEngine, n *core.HypergraphNode) {
 	t.Helper()
-	if _, err := core.ReadGraphSlot(engine, core.DefaultAgentID, n.GraphID); err != nil {
+	if _, err := core.ReadGraphSlot(engine, core.SharedL3AgentID, n.GraphID); err != nil {
 		slot := core.HypergraphSlot{IDHash: n.GraphID, Name: common.FormatHash(n.GraphID)}
-		if err := core.WriteGraphSlot(engine, core.DefaultAgentID, n.GraphID, &slot); err != nil {
+		if err := core.WriteGraphSlot(engine, core.SharedL3AgentID, n.GraphID, &slot); err != nil {
 			t.Fatalf("write graph slot: %v", err)
 		}
 	}
-	if err := core.WriteHypergraphNode(engine, core.DefaultAgentID, n.IDHash, n); err != nil {
+	if err := core.WriteHypergraphNode(engine, core.SharedL3AgentID, n.IDHash, n); err != nil {
 		t.Fatalf("write node: %v", err)
 	}
 }
@@ -41,7 +42,7 @@ func writeNode(t *testing.T, engine *core.StorageEngine, n *core.HypergraphNode)
 // writeEdge writes an L3 edge record.
 func writeEdge(t *testing.T, engine *core.StorageEngine, e *core.HypergraphEdge) {
 	t.Helper()
-	if err := core.WriteHypergraphEdge(engine, core.DefaultAgentID, e.IDHash, e); err != nil {
+	if err := core.WriteHypergraphEdge(engine, core.SharedL3AgentID, e.IDHash, e); err != nil {
 		t.Fatalf("write edge: %v", err)
 	}
 }
@@ -310,7 +311,7 @@ func TestQueryL3NodesIDsRespectGraphID(t *testing.T) {
 	// graph-a exists and holds nothing: this is about filtering by graph, not
 	// about a graph that was never created.
 	emptySlot := core.HypergraphSlot{IDHash: graphID, Name: "graph-a"}
-	if err := core.WriteGraphSlot(engine, core.DefaultAgentID, graphID, &emptySlot); err != nil {
+	if err := core.WriteGraphSlot(engine, core.SharedL3AgentID, graphID, &emptySlot); err != nil {
 		t.Fatalf("write graph slot: %v", err)
 	}
 

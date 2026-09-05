@@ -3,7 +3,7 @@
   "name": "memhop-knowledge",
   "version": "3",
   "type": "composite",
-  "summary": "L3 knowledge-graph manual: read/list/import/update/delete semantic graphs, query nodes and expand subgraphs. The entries below are Go api methods; an MCP client calls the same operations as memhop_knowledge_get / _list / _import / _update / _delete / _nodes / _subgraph.",
+  "summary": "L3 knowledge-graph manual: read/list/import/update/delete semantic graphs, query nodes and expand subgraphs. The graph pool is file-wide: every agent domain of the file shares one L3 pool (import once, visible to all; deleting an agent never deletes the pool). The entries below are Go api methods; an MCP client calls the same operations as memhop_knowledge_get / _list / _import / _update / _delete / _nodes / _subgraph.",
   "trigger": "need to manage or query the L3 semantic knowledge graph, structured knowledge; knowledge l3 graph semantic node edge hypergraph",
   "resources": [
     {
@@ -42,7 +42,7 @@
       "type": "api",
       "name": "DeleteL3",
       "ref": "api:DeleteL3",
-      "desc": "Delete an entire L3 knowledge graph — the slot plus every node and hyperedge in it, and the L2 scene anchors that named it (a deleted graph leaves no scene listing under it). To correct one node without losing the edges bound to the rest, use DeleteL3Nodes (Go-only, no MCP tool)",
+      "desc": "Delete an entire L3 knowledge graph — the slot plus every node and hyperedge in it, and the L2 scene anchors that named it across every agent domain of the file (graphs live in the file-wide shared pool, so a deleted graph leaves no scene listing under it anywhere). To correct one node without losing the edges bound to the rest, use DeleteL3Nodes (Go-only, no MCP tool)",
       "input": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"}},\"required\":[\"id\"]}",
       "output": "ok"
     },

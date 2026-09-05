@@ -73,7 +73,8 @@ func (db *DB) UpdateScene(agentID uint64, sceneID string, patch ScenePatch) (cor
 		if l3Hash, err = common.ParseID(*patch.L3ID); err != nil {
 			return core.SceneSlot{}, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 		}
-		if _, err := core.ReadGraphSlot(db.engine, agentID, l3Hash); err != nil {
+		// Graphs live in the file-wide shared L3 domain, not in the caller's own.
+		if _, err := core.ReadGraphSlot(db.engine, core.SharedL3AgentID, l3Hash); err != nil {
 			return core.SceneSlot{}, err
 		}
 	}

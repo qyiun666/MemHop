@@ -55,7 +55,8 @@ func (db *DB) IsClosed() bool { return db.closed.Load() }
 // contextFor returns the agent's context, creating it lazily on first
 // access, and opportunistically sweeps idle domains. Non-default IDs must
 // be registered tenants: a stale handle to a deleted agent never revives
-// its domain.
+// its domain. The reserved shared-L3 domain is exempt from the registry
+// check: it has no tenant record and is created on first L3 access.
 func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	if db.closed.Load() {
 		return nil, common.NewError(common.ErrClosed, "database is closed")
@@ -65,7 +66,7 @@ func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	if db.closed.Load() { // re-check under the lock: Close may have raced the check above
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
-	if agentID != core.DefaultAgentID {
+	if agentID != core.DefaultAgentID && agentID != core.SharedL3AgentID {
 		if _, ok := db.idToName[agentID]; !ok {
 			return nil, common.NewError(common.ErrAgentNotFound, "agent is not registered")
 		}
@@ -122,6 +123,28 @@ func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, ui
 	return ac, parsed, nil
 }
 
+// lockSharedL3 is the prologue of every L3 operation: the caller's own
+// domain must still be alive (a stale handle to a deleted agent must not
+// keep using the shared pool), then the shared L3 domain is locked. L3
+// records live in the file-wide shared domain, so L3 operations from
+// different agents serialize on its lock. The shared domain is never
+// deleted, so no tombstone re-check is needed.
+func (db *DB) lockSharedL3(callerID uint64) (*domain.Context, error) {
+	if err := db.CheckSession(callerID); err != nil {
+		return nil, err
+	}
+	ac, err := db.contextFor(core.SharedL3AgentID)
+	if err != nil {
+		return nil, err
+	}
+	ac.Mu.Lock()
+	if db.closed.Load() {
+		ac.Mu.Unlock()
+		return nil, common.NewError(common.ErrClosed, "database is closed")
+	}
+	return ac, nil
+}
+
 // sweepIdleLocked reclaims contexts idle longer than Defaults.AgentIdleTTLMs.
 // Nothing is persisted at reclaim time: the dropped L2Meta cache rebuilds from
 // the agent's records on the next access. Domains whose lock is currently held
@@ -134,7 +157,7 @@ func (db *DB) sweepIdleLocked() {
 	}
 	now := time.Now().UnixMilli()
 	for id, ac := range db.agents {
-		if id == core.DefaultAgentID {
+		if id == core.DefaultAgentID || id == core.SharedL3AgentID {
 			continue
 		}
 		if now-ac.LastActiveAt.Load() <= ttl {

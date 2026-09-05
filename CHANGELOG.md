@@ -3,6 +3,16 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## Unreleased — L3 知识图升级为文件级公共池
+
+**动机**：一个 `.meh` 承载主 agent + 多个子 agent（家族共用一份记忆文件）时，L3 是项目级知识/代码图——宿主导入、库只存——本就不该按 agent 复制。现在 L3 是**文件级公共池**：文件内所有 agent 域共享同一份知识图，导一次全家可见、可挂锚；删 agent（`DeleteAgent`）不动公共池。场景/原文/画像/能力/轨迹仍按域完全隔离。
+
+- **机制**：新增保留域 `core.SharedL3AgentID`（宿主不可见、不可删、`Session` 拒绑、`ListAgents` 不列、空闲回收豁免）；全部 L3 记录住该域，`internal` 根的 8 个 L3 大方法改走 `lockSharedL3`（先 `CheckSession` 校验调用方活着，再锁公共域——L3 操作跨 agent 全局串行，链路无 LLM、操作短）。graph/repo 小方法包零改动
+- **锚点跨域**：场景锚点校验（`Search{L3ID}` / `UpdateScene{L3ID}`）改读公共域记录；`DeleteL3` 两阶段——公共锁内删图，释放后遍历「默认域 + 注册表」逐域清锚（`detachGraphAnchors`），不嵌套双锁
+- **格式 0x0009 → 0x000A**：0x0009 及更早文件在 Open 时显式拒绝、不迁移（沿用先例；不升版本的替代会让旧按域 L3 记录变孤儿、同名重导入产出双份）
+- **MCP 语义变更**：单文件多租户下所有租户共享同一份 L3 池——原「no data is ever shared across tenants」承诺改写为「除 L3 外按域隔离」
+- 公开面不变（34 会话 + 8 DB 方法）；新增跨域共享/删档存活/保留域守卫/跨域清锚/重启回归/并发竞速六组测试（`internal/l3shared_test.go`），api 租户隔离用例补 L3 共享断言；决策档案 `notes/implemented/architecture/2026-09-05-l3-file-wide-shared-pool.md`
+
 ## v1.6.0 — 2026-09-04 — 接口去 fallback 与按层闭环修复（实测驱动）
 
 按层审查公开面（用 `ImportL3` 把本仓 24 个包 / 78 条依赖边真实导进 L3 超级图，79 条断言逐条实测），据结果修如下一轮；本轮的共同原则是**接口不允许任何 fallback：有问题就返回 error，被拒的写入一字节都不留**。

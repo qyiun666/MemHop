@@ -28,7 +28,8 @@ func TestSearchCreatesSceneWhenIDEmpty(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["unused"]}`)
 	db := newSearchTestDB(t, srv.URL)
 	// The anchor must be a project domain that exists; a dangling one is rejected.
-	if _, err := repo.CreateGraphL3(db.engine, core.DefaultAgentID, "proj-anchor", core.HypergraphSource{Kind: core.SourceManual}); err != nil {
+	// Graphs live in the file-wide shared L3 domain.
+	if _, err := repo.CreateGraphL3(db.engine, core.SharedL3AgentID, "proj-anchor", core.HypergraphSource{Kind: core.SourceManual}); err != nil {
 		t.Fatalf("create graph: %v", err)
 	}
 	l3ID := common.FormatHash(common.HashID("proj-anchor"))

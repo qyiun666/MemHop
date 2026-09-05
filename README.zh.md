@@ -37,14 +37,14 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 
 - **七层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 轨迹，配合 Dream 巩固管线
 - **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 按场景 id 直取该会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），并**顺手开启本轮**：返回本轮要落进去的话题 id。`Update` 把整轮沉淀进那个 id（用户原文 + Agent 原文 + 双时间戳 → 一次提炼出话题关键词），L6 轨迹事件也绑在同一个 id 上。话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
-- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0009`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。**与 `0x0008`（及更早）的 `.meh` 数据文件不兼容**——Open 时显式拒绝，无迁移路径。v1.5.0 的话题单轨化不 bump 格式版本：旧库的 `user_keywords`/`agent_keywords` 在解码点归一进 `fused_keywords`
-- **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（话题缓存、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行
+- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x000A`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。**与 `0x0009`（及更早）的 `.meh` 数据文件不兼容**——Open 时显式拒绝，无迁移路径（0x000A 把 L3 知识图记录移入文件级保留公共域；v1.5.0 的话题单轨化未 bump 版本，旧库的 `user_keywords`/`agent_keywords` 在解码点归一进 `fused_keywords`）
+- **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（话题缓存、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行。唯一例外是 L3（见下）：知识图是文件级公共池
 - **L1 场景超图** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）并按时间衰减剪枝；查询期扩散联想已随检索子系统退役，L1 当前由 Dream 维护、供显式图查询与后续关联消费
 - **Dream 巩固管线** — 作用于 L0–L2 及 L6 保留期清理：L2 压缩 → L2Meta 缓存重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）→ L6 清理（自动丢弃 7 天前轨迹事件）；某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold` 时由 `Update` 后台调度该场景巩固，返回逐阶段 `DreamReport`
-- **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related；边的身份是「成员节点 + kind」，同一对节点可并存多种关系），图与节点两级删除，关键词/类型/ID 条件按 AND 组合，BFS 子图查询
+- **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related；边的身份是「成员节点 + kind」，同一对节点可并存多种关系），图与节点两级删除，关键词/类型/ID 条件按 AND 组合，BFS 子图查询。图池是**文件级**的：文件内所有 agent 域共享一份 L3（项目知识导一次全家可见），删 agent 不删公共池
 - **设计层面单实例** — 一个 `.meh` 文件只有一个持有者：全平台文件排他锁强制（linux/darwin/windows），第二次 `Open` 直接失败；内嵌形态无服务进程、无后台守护
 - **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、go-openai、go-sdk、golang.org/x/sys）；关键词提炼没有本地兜底，LLM 返回不可解析就直接报错；**引擎不再联系任何 embedding / 向量服务**，配置里也没有维度要声明，`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将 34 个公开会话方法中的 27 个以 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录，`memhop_capability_import` 的路径再锚定到 `--capability-dir`，缺省即 db 目录）。刻意只留在 Go 侧：L6 计划写读面（`PlanCommit`/`PlanState`/`PlanReplace`/`SyncPlanTree`）、记忆纠错（`DeleteTopic`/`DeleteScene`/`DeleteL3Nodes`）与文件维护（`CompactTo`，入参就是一个输出路径）——这些要由持有会话状态、或该决定文件写到哪里的宿主来调
+- **MCP Server** — `cmd/memhop-mcp` 将 34 个公开会话方法中的 27 个以 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录，`memhop_capability_import` 的路径再锚定到 `--capability-dir`，缺省即 db 目录；L3 知识图是全租户共享的唯一池）。刻意只留在 Go 侧：L6 计划写读面（`PlanCommit`/`PlanState`/`PlanReplace`/`SyncPlanTree`）、记忆纠错（`DeleteTopic`/`DeleteScene`/`DeleteL3Nodes`）与文件维护（`CompactTo`，入参就是一个输出路径）——这些要由持有会话状态、或该决定文件写到哪里的宿主来调
 
 ## 快速开始
 
