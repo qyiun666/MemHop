@@ -38,6 +38,7 @@ __pycache__/
 .qoder/
 .qoder-cn/
 .qoderignore
+.serena/
 
 # Benchmarks
 .benchmarks/
