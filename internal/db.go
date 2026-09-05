@@ -128,7 +128,10 @@ func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, ui
 // keep using the shared pool), then the shared L3 domain is locked. L3
 // records live in the file-wide shared domain, so L3 operations from
 // different agents serialize on its lock. The shared domain is never
-// deleted, so no tombstone re-check is needed.
+// deleted, so no tombstone re-check is needed. The caller check is
+// point-in-time: a caller deleted mid-operation lets the call run to
+// completion, which is harmless — it touches only the shared pool, and
+// DeleteL3's anchor detach skips domains it can no longer lock.
 func (db *DB) lockSharedL3(callerID uint64) (*domain.Context, error) {
 	if err := db.CheckSession(callerID); err != nil {
 		return nil, err

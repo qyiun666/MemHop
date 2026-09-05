@@ -152,6 +152,51 @@ func TestDeleteL3DetachesAnchorsAcrossDomains(t *testing.T) {
 	}
 }
 
+// The hostile sibling of the sequential case above: a scene anchors the graph
+// while DeleteL3 is mid-detach. The anchor write holds its domain lock across
+// validation and write, and the detach phase takes that same lock, so an
+// anchor either fails validation (graph already gone) or is written first and
+// cleared by the detach — once DeleteL3 returns, no scene carries the deleted
+// id. Breaking either half of that lock discipline leaves a dangling anchor
+// and fails the per-round assertion.
+func TestDeleteL3RaceWithSceneAnchor(t *testing.T) {
+	srv := mockLLMServer(t, `{"keywords":["x"]}`)
+	db, _ := newSharedL3DB(t, srv.URL)
+	alpha, beta := createPair(t, db)
+
+	sc, err := db.Search(beta, SearchQuery{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sceneID := common.FormatHash(sc.Scene.SceneID)
+
+	const rounds = 50
+	for i := 0; i < rounds; i++ {
+		res, err := db.ImportL3(alpha, []L3ImportItem{{Title: "proj", Domain: "proj", Content: "c"}}, L3ImportSkip)
+		if err != nil {
+			t.Fatal(err)
+		}
+		graphID := res.GraphIDs[0]
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			_, _ = db.UpdateScene(beta, sceneID, ScenePatch{L3ID: &graphID})
+		}()
+		go func() {
+			defer wg.Done()
+			_ = db.DeleteL3(alpha, graphID)
+		}()
+		wg.Wait()
+
+		scenes, err := db.ListScenes(beta, graphID)
+		if err != nil || len(scenes) != 0 {
+			t.Fatalf("round %d: scene anchored to the deleted graph: %+v err %v", i, scenes, err)
+		}
+	}
+}
+
 // The shared pool rides the ordinary persistence path: close, reopen, and a
 // registered tenant sees its graphs again.
 func TestL3PoolSurvivesRestart(t *testing.T) {

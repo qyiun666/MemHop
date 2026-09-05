@@ -1,6 +1,6 @@
 # 决策档案: L3 知识图升级为文件级公共池
 
-Status: implemented — 0x000A 落地，`internal/l3shared_test.go` 六组用例与 api 隔离断言全绿
+Status: implemented
 
 ## Problem
 
@@ -24,5 +24,5 @@ Status: implemented — 0x000A 落地，`internal/l3shared_test.go` 六组用例
 
 - 换到：一份文件一份项目知识，家族/多租户共享；删档（克隆用完即弃）不误伤公共池。
 - 代价：打破「完全隔离」的一条缝——`DeleteL3Nodes`/合并策略是全家共享的，一个 agent 删节点影响所有 agent；MCP 多租户「no data is ever shared」承诺改写为「除 L3 外隔离」。
-- 已知窗口：`DeleteL3` 删图后、清锚前若有宿主同名重导入（图 id = hash(Domain) 同 id），该场景锚点会被清成未锚定，可经 `UpdateScene` 重挂——比嵌套双锁划算。
+- 已知窗口：`DeleteL3` 删图后、清锚前若有宿主同名重导入（图 id = hash(Domain) 同 id），该场景锚点会被清成未锚定，可经 `UpdateScene` 重挂——比嵌套双锁划算。清锚阶段本身部分失败（引擎 IO 错误经 `errors.Join` 上抛）时图已删，重跑 `DeleteL3` 只会 `ErrNotFound`：悬锚由宿主恢复——`UpdateScene` 空锚清除，或重导同名图后重跑 `DeleteL3` 补清。
 - 升级路径：0x0009 及更早文件不支持原地升级，宿主自行重导 L3（旧文件本就打不开）。
