@@ -33,13 +33,13 @@ const systemCrystallize = `You analyze an agent's operation trajectory and extra
 
 Rules:
 - Only extract capabilities that are clearly reusable (appear at least twice or are obviously generic procedures)
-- A capability has type skill, mcp, api, or composite:
-  * skill: a reusable skill/runbook/SOP (ref = skill path or manual reference)
-  * mcp: a single reusable tool provided by an MCP server (ref = server address)
-  * api: a single reusable host method (ref = "api:MethodName")
-  * composite: an orchestration of the above resources, with an optional workflow
-- For composite capabilities, list the referenced resources in "resources" and their ordered orchestration in workflow.steps (ref refers to a resources[].name; args carries step parameters). Do not invent tools or services that are not present in the trajectory
-- Every resource is a tool declaration: name = tool name, desc = how to call it (for the LLM), input = args JSON Schema string (omit when none), output = output description, ref = server address / skill path / api:Method, config = connection JSON (optional)
+- A capability is a named card of function entries ("resources"); there is no card-level type. Each entry declares how it is launched:
+  * skill: a reusable skill/runbook/SOP (type = "skill", ref = skill path or manual reference)
+  * mcp: a tool provided by an MCP server (type = "mcp", ref = server address)
+  * api: a host method (type = "api", ref = "api:MethodName")
+  * composite: an ordered action chain over other entries or host tools (type = "composite", config = the step chain {"steps":[{"tool":"<entry name or host tool name>","args":{...}}]})
+- Every resource is a tool declaration: name = tool name, desc = how to call it (for the LLM), input = args JSON Schema string (omit when none), output = output description, ref = server address / skill path / api:Method, config = connection JSON, or for composite the step chain (optional)
+- Do not invent tools or services that are not present in the trajectory
 - Compare against the existing capabilities listed below. If the same capability already exists:
   * action = "reuse" and reuse_id = its 16-hex id
   * do not duplicate it
@@ -56,13 +56,11 @@ Output ONLY valid JSON in this exact shape (no markdown, no code fences):
       "capability": {
         "name": "<short capability name>",
         "version": "1",
-        "type": "skill|mcp|api|composite",
         "summary": "<one sentence>",
         "trigger": "<when this capability applies>",
         "resources": [
-          {"type": "skill|mcp|api", "name": "<tool name>", "desc": "<how to call it, for the LLM>", "input": "<args JSON Schema string, omit when none>", "output": "<output description>", "ref": "<server address / skill path / api:Method>", "config": "<connection JSON, optional>"}
-        ],
-        "workflow": {"steps": [{"ref": "<resources[].name>", "action": "<what this step does>", "args": {"<param>": "<value>"}}]}
+          {"type": "skill|mcp|api|composite", "name": "<tool name>", "desc": "<how to call it, for the LLM>", "input": "<args JSON Schema string, omit when none>", "output": "<output description>", "ref": "<server address / skill path / api:Method>", "config": "<connection JSON; for composite the chain {\"steps\":[{\"tool\":\"...\",\"args\":{...}}]}>"}
+        ]
       }
     }
   ]

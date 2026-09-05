@@ -44,6 +44,8 @@ type (
 	CapabilityListQuery      = internal.CapabilityListQuery
 	ScenePatch               = internal.ScenePatch
 	CapabilityPatch          = internal.CapabilityPatch
+	CapabilityPackageDoc     = internal.CapabilityPackageDoc
+	CapabilityImportResult   = internal.CapabilityImportResult
 	TrajectorySessionSummary = internal.TrajectorySessionSummary
 	PlanStatus               = internal.PlanStatus
 	DreamReport              = internal.DreamReport
@@ -59,7 +61,6 @@ type (
 	CapabilityStatus         = internal.CapabilityStatus
 	CapabilityOrigin         = internal.CapabilityOrigin
 	ContentType              = internal.ContentType
-	Workflow                 = internal.Workflow
 )
 
 // ---- response DTOs (ids are 16-char hex strings) ----
@@ -179,16 +180,18 @@ type ArchiveSlot struct {
 	Content     string      `json:"content"`
 }
 
-// Capability is an L5 reusable capability.
+// Capability is an L5 reusable capability: a named card of function entries,
+// each entry self-describing launch (Type/Ref/Config), purpose (Desc) and
+// usage (Input/Output). Package names the plugin document it was imported
+// from; crystallized cards carry none.
 type Capability struct {
 	IDHash        string           `json:"id_hash"`
 	Name          string           `json:"name"`
 	Version       string           `json:"version"`
-	Type          CapabilityType   `json:"type"`
+	Package       string           `json:"package,omitempty"`
 	Summary       string           `json:"summary"`
 	Trigger       string           `json:"trigger"`
 	Resources     []ResourceRef    `json:"resources"`
-	Workflow      *Workflow        `json:"workflow,omitempty"`
 	Status        CapabilityStatus `json:"status"`
 	Origin        CapabilityOrigin `json:"origin"`
 	FileHash      string           `json:"file_hash,omitempty"`

@@ -35,10 +35,15 @@ const (
 // ownership (host-authored identity vs distilled signals), removing the
 // string-encoded emotion_patterns/lexicon/style_traits maps and the
 // keyword-projection profile stage; 0x000A moved the L3 knowledge-graph
-// records into a reserved file-wide shared domain (SharedL3AgentID), so all
-// agent domains in one file share a single L3 pool. Files with 0x0009 (or
-// older) are rejected at Open — there is no migration path.
-const FormatVersion uint16 = 0x000A
+// records into a reserved file-wide shared domain (SharedPoolAgentID), so all
+// agent domains in one file share a single L3 pool; 0x000B moved the L5
+// capability records into that same shared pool (every agent domain uses one
+// capability pool) and re-shaped the card into the uniform function-entry
+// model — no card-level type or workflow, action chains live in a resource
+// Config, and the memhop-capability/v4 document is a plugin package holding
+// 1..N cards. Files with 0x000A (or older) are rejected at Open — there is
+// no migration path.
+const FormatVersion uint16 = 0x000B
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

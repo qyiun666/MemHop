@@ -159,7 +159,7 @@ func TestImportL3RejectsUnknownMode(t *testing.T) {
 	if err == nil || common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("expected ErrInvalidQuery, got %v", err)
 	}
-	if got := core.CollectAllGraphSlots(db.engine, core.SharedL3AgentID); len(got) != 0 {
+	if got := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID); len(got) != 0 {
 		t.Fatalf("no graph should be created for invalid mode: %+v", got)
 	}
 }
@@ -308,10 +308,10 @@ func TestImportL3DedupesPairHashedLegacyEdge(t *testing.T) {
 		IDHash: legacyID, GraphID: graph.Edges[0].GraphID,
 		Kind: graph.Edges[0].Kind, NodeIDs: ids, CreatedAt: graph.Edges[0].CreatedAt,
 	}
-	if _, err := db.engine.DeleteRecordBatch(core.SharedL3AgentID, []uint64{graph.Edges[0].IDHash}); err != nil {
+	if _, err := db.engine.DeleteRecordBatch(core.SharedPoolAgentID, []uint64{graph.Edges[0].IDHash}); err != nil {
 		t.Fatal(err)
 	}
-	if err := core.WriteHypergraphEdge(db.engine, core.SharedL3AgentID, legacyID, &legacy); err != nil {
+	if err := core.WriteHypergraphEdge(db.engine, core.SharedPoolAgentID, legacyID, &legacy); err != nil {
 		t.Fatal(err)
 	}
 
@@ -610,7 +610,7 @@ func TestImportL3NameCollisionRoutesByDerivation(t *testing.T) {
 
 	// Force the duplicate label through the record layer.
 	taken := "beta"
-	if _, err := repo.UpdateGraphL3(db.engine, core.SharedL3AgentID, alpha, &taken); err != nil {
+	if _, err := repo.UpdateGraphL3(db.engine, core.SharedPoolAgentID, alpha, &taken); err != nil {
 		t.Fatalf("forced rename: %v", err)
 	}
 	res, err := db.ImportL3(core.DefaultAgentID, []L3ImportItem{

@@ -323,14 +323,14 @@ result is every original the file holds.
 
 | Method | Meaning |
 |---|---|
-| `db.ListCapabilities(CapabilityListQuery{IDs, Status, Type, Keyword})` | list capability cards; conditions AND, so `IDs: []string{id}` reads one card |
-| `db.ImportCapability(path)` | import a memhop-capability/v3 JSON file (or a directory holding `capability.json`); the Go surface takes any path the host can name, and imported cards land **active** (a crystallized card lands draft) |
+| `db.ListCapabilities(CapabilityListQuery{IDs, Status, Package, Keyword})` | list capability cards (the pool is file-wide: every agent domain shares it); conditions AND, so `IDs: []string{id}` reads one card |
+| `db.ImportCapability(path)` | import a memhop-capability/v4 plugin package (one document = package name + 1..N cards; or a directory holding `capability.json`); returns per-card `CapabilityImportResult{CreatedIDs/UpdatedIDs/Errors}`. The Go surface takes any path the host can name, while the MCP server anchors it at `--capability-dir`. Imported cards land **active** (a crystallized card lands draft); a byte-identical re-import writes nothing |
 | `db.DeleteCapability(id)` | delete |
-| `db.UpdateCapability(id, CapabilityPatch{...})` | partial update (built-ins rejected) |
+| `db.UpdateCapability(id, CapabilityPatch{...})` | partial update (built-ins rejected; Name/Package immutable) |
 | `db.ActivateCapability(id)` | draft → active |
 | `db.RecordCapabilityUsage(id, success)` | usage feedback |
 
-> The built-in toolbox (6 English cards: `memhop-guide` + 5 LLM-callable manuals) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `ListCapabilities(CapabilityListQuery{IDs: []string{id}})`. Resources are tool declarations (`name/desc/input/output` mirror the host tool spec; `input` is a JSON Schema string), so hosts project them with a pure field copy.
+> One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). The built-in toolbox (6 English cards: `memhop-guide` + 5 LLM-callable manuals) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `ListCapabilities(CapabilityListQuery{IDs: []string{id}})`. Also: a `plug/<package>/capability.json` folder next to the `.meh` file is auto-injected into the pool at every Open (a broken package is warned and skipped).
 
 ### L6 trajectory + crystallization (v1.2.7 additions)
 
@@ -397,12 +397,12 @@ entry rejects it.
 
 ---
 
-## 9. Exported types (v1.6.0)
+## 9. Exported types (v1.7.0)
 
 | Kind | Names | Use |
 |---|---|---|
 | config | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the whole assembly surface |
-| input aliases | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `Workflow` | inputs & id-free results (all string IDs are hex) |
+| input aliases | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `CapabilityPackageDoc` / `CapabilityImportResult` | inputs & id-free results (all string IDs are hex) |
 | response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | every ID field is a 16-hex string (v1.4.1) |
 | id surface | **`DefaultAgentID`** (the implicit domain) / **`NewPlanID(name)`** (mint a plan id) | the library issues ids; a host echoes them back and converts nothing |
 | enums | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` / `PlanStatus` | enum aliases |

@@ -54,7 +54,7 @@ func TestUpsertCapabilityL5PersistsDefinition(t *testing.T) {
 	engine := tempEngine(t)
 	cfg := `{"endpoint":"http://localhost:9000"}`
 	cap := &core.Capability{
-		Name: "整理代码", Type: core.CapabilityMCP, Summary: "整理代码",
+		Name: "整理代码", Summary: "整理代码",
 		Trigger: "用户要求重构", Status: core.CapabilityActive,
 		Origin: core.CapabilityOriginCrystallized,
 		Resources: []core.ResourceRef{
@@ -74,8 +74,7 @@ func TestUpsertCapabilityL5PersistsDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get capability: %v", err)
 	}
-	if got.Type != core.CapabilityMCP || len(got.Resources) != 3 ||
-		got.Resources[1].Name != "deploy-mcp" {
+	if len(got.Resources) != 3 || got.Resources[1].Name != "deploy-mcp" {
 		t.Fatalf("resources mismatch: %+v", got)
 	}
 }
@@ -83,7 +82,7 @@ func TestUpsertCapabilityL5PersistsDefinition(t *testing.T) {
 func TestUpsertCapabilityL5PreservesRuntimeFields(t *testing.T) {
 	engine := tempEngine(t)
 	cap := &core.Capability{
-		Name: "t", Type: core.CapabilityMCP, Summary: "s", Trigger: "tr",
+		Name: "t", Summary: "s", Trigger: "tr",
 		Status: core.CapabilityActive, Origin: core.CapabilityOriginHost,
 		Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "s1"}},
 	}
@@ -105,10 +104,9 @@ func TestUpsertCapabilityL5PreservesRuntimeFields(t *testing.T) {
 	}
 
 	cap2 := &core.Capability{
-		Name: "t", Version: "2", Type: core.CapabilityComposite, Summary: "s2",
+		Name: "t", Version: "2", Summary: "s2",
 		Trigger: "tr2", Status: core.CapabilityDraft, Origin: core.CapabilityOriginHost,
 		Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "tool"}},
-		Workflow:  &core.Workflow{Steps: []core.WorkflowStep{{Ref: "tool"}}},
 	}
 	existed, err = UpsertCapabilityL5(engine, core.DefaultAgentID, cap2)
 	if err != nil {
@@ -124,14 +122,14 @@ func TestUpsertCapabilityL5PreservesRuntimeFields(t *testing.T) {
 	if got.TriggerCount != 3 || got.SuccessRate != 0.75 {
 		t.Fatalf("runtime fields lost: %+v", got)
 	}
-	if got.Version != "2" || got.Type != core.CapabilityComposite || got.Status != core.CapabilityActive {
+	if got.Version != "2" || got.Status != core.CapabilityActive {
 		t.Fatalf("definition not refreshed: %+v", got)
 	}
 }
 
 func TestDeleteCapabilityL5(t *testing.T) {
 	engine := tempEngine(t)
-	cap := &core.Capability{Name: "t", Type: core.CapabilityMCP, Summary: "s", Trigger: "tr",
+	cap := &core.Capability{Name: "t", Summary: "s", Trigger: "tr",
 		Status: core.CapabilityDraft, Origin: core.CapabilityOriginHost,
 		Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "s1"}}}
 	if _, err := UpsertCapabilityL5(engine, core.DefaultAgentID, cap); err != nil {

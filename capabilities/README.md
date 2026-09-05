@@ -1,6 +1,6 @@
 # capabilities/ — 内置 L5 能力卡（LLM 可调用面）
 
-本目录是 MemHop 内置的 **L5 能力卡工具箱**，`memhop-capability/v3` 格式，通过 `capabilities.go` 的 `//go:embed` 内嵌进库。卡的受众是 **LLM**：宿主获取后投影为工具契约/说明书注入上下文，LLM 据此调用 MemHop。
+本目录是 MemHop 内置的 **L5 能力卡工具箱**，`memhop-capability/v4` 包格式（一个文档 = 一个插件包，含 1..N 张卡；本目录每张文件是单卡包），通过 `capabilities.go` 的 `//go:embed` 内嵌进库。卡的受众是 **LLM**：宿主获取后投影为工具契约/说明书注入上下文，LLM 据此调用 MemHop。
 
 **只收录 LLM 可调用的能力**。宿主自动执行的核心循环（`OpenMulti` / `Search` / `Update` / `Dream` / 轨迹逐事件记录与 7 天自动清理 / `Checkpoint`）不做成卡——它们是宿主每轮的固定职责，不占 LLM 上下文；对应 Go API 与 MCP 工具不受影响。
 
@@ -17,7 +17,7 @@
 
 ## 工作方式：单独获取，零配置、零写入
 
-- **获取通道**：`ListCapabilities` 直接返回内置卡，与库存能力共用同一套过滤器（ids / status / type / keyword，填了的之间 AND）
+- **获取通道**：`ListCapabilities` 直接返回内置卡，与库存能力共用同一套过滤器（ids / status / package / keyword，填了的之间 AND）
 - **不附带检索**：`Search` 响应不携带内置卡——检索只返回库内存储并按查询匹配的能力
 - **只读**：内置卡不落 `.meh` 文件、不参与 Activate / RecordCapabilityUsage / Update / Delete 生命周期
 - **去重**：宿主导入同名能力后，库存记录（含使用统计）优先，内置副本自动让位
@@ -37,22 +37,26 @@
 
 ## 编写宿主自己的能力
 
-宿主自己的能力走 `ImportCapability(path)` 入库（单文件，或含 `capability.json` 的目录），导入即 `active`；引擎不再拿它做任何匹配或打分（v1.5.0 起 `Search` 只读场景并开启一轮），消费方是宿主自己——经 `ListCapabilities` 读目录（可按 id 收窄到单卡），或像 MeowAgent 那样把 active 卡转成工具。内容未变（FileHash 相同）的重复导入会跳过，不产生新记录。
+宿主自己的能力走 `ImportCapability(path)` 入库（v4 包文档：单文件，或含 `capability.json` 的目录；一个包 = 名称 + 1..N 张卡），卡导入即 `active` 且进**文件级公共池**（一个 `.meh` 里所有 agent 共用，MCP 多租户同理）；引擎不再拿它做任何匹配或打分（v1.5.0 起 `Search` 只读场景并开启一轮），消费方是宿主自己——经 `ListCapabilities` 读目录（可按 id 收窄到单卡），或像 MeowAgent 那样把 active 卡转成工具。内容未变（FileHash 相同）的重复导入会跳过，不产生新记录；`<meh 同目录>/plug/<包>/capability.json` 的插件包在每次 Open 时自动注入（坏包告警跳过，不阻断 Open）。
 
-**资源即工具声明**：每个 resource 的 `name/desc/input/output` 与宿主工具规格（如 meowire `ToolSpec`）字段完全同构——宿主投影为自身工具时只需纯字段拷贝，零格式转换；`input` 为参数 JSON Schema 字符串，`ref` 为资源定位（MCP server 地址 / skill 路径 / api:Method / 命令），`config` 为连接配置。
+**资源即工具声明**：一张卡 = 名称 + N 个功能条目（resources，无卡片级 type），每个条目的 `name/desc/input/output` 与宿主工具规格（如 meowire `ToolSpec`）字段完全同构——宿主投影为自身工具时只需纯字段拷贝，零格式转换；`input` 为参数 JSON Schema 字符串，`ref` 为资源定位（MCP server 地址 / skill 路径 / api:Method / 命令），`config` 为连接配置；`type=composite` 的条目在 `config` 放动作链。
 
-最小 mcp 示例（`type: mcp` / `skill` / `api` 需要恰好一个同类型 resource）：
+最小 mcp 示例（单卡包）：
 
 ```json
 {
-  "format": "memhop-capability/v3",
+  "format": "memhop-capability/v4",
   "name": "my-runbook",
-  "version": "1",
-  "type": "mcp",
-  "summary": "一句话说明",
-  "trigger": "什么时候命中该能力（参与 Search 匹配的关键词）",
-  "resources": [
-    {"type": "mcp", "name": "my_tool", "desc": "工具契约（给 LLM）", "input": "{\"type\":\"object\",\"properties\":{\"arg\":{\"type\":\"string\"}},\"required\":[\"arg\"]}", "output": "工具输出描述", "ref": "harness:my_tool"}
+  "capabilities": [
+    {
+      "name": "my-tool-card",
+      "version": "1",
+      "summary": "一句话说明",
+      "trigger": "什么时候命中该能力（参与关键词过滤）",
+      "resources": [
+        {"type": "mcp", "name": "my_tool", "desc": "工具契约（给 LLM）", "input": "{\"type\":\"object\",\"properties\":{\"arg\":{\"type\":\"string\"}},\"required\":[\"arg\"]}", "output": "工具输出描述", "ref": "harness:my_tool"}
+      ]
+    }
   ]
 }
 ```
@@ -61,34 +65,40 @@
 
 ```json
 {
-  "format": "memhop-capability/v3",
+  "format": "memhop-capability/v4",
   "name": "my-memhop-api",
-  "version": "1",
-  "type": "api",
-  "summary": "封装一个 api 方法",
-  "trigger": "需要调用该方法时",
-  "resources": [
-    {"type": "api", "name": "GetL0", "ref": "api:GetL0", "desc": "读取 L0 画像的调用契约"}
+  "capabilities": [
+    {
+      "name": "my-api-card",
+      "summary": "封装一个 api 方法",
+      "trigger": "需要调用该方法时",
+      "resources": [
+        {"type": "api", "name": "GetL0", "ref": "api:GetL0", "desc": "读取 L0 画像的调用契约"}
+      ]
+    }
   ]
 }
 ```
 
-最小 composite 示例（`type: composite` 需要至少一个 resource；workflow 可选，若存在则每步 `ref` 必填，`args` 携带动作链参数）：
+动作链示例（composite 条目在 `config` 放步骤链，每步 `tool` 必填、`args` 携带参数；`tool` 命名同卡内其他条目或宿主工具注册表里的可调用名）：
 
 ```json
 {
-  "format": "memhop-capability/v3",
+  "format": "memhop-capability/v4",
   "name": "my-composite",
-  "version": "1",
-  "type": "composite",
-  "summary": "一句话说明",
-  "trigger": "命中关键词",
-  "resources": [
-    {"type": "skill", "name": "step1", "ref": "skills/step1.md", "desc": "第一步"},
-    {"type": "skill", "name": "step2", "ref": "skills/step2.md", "desc": "第二步"}
-  ],
-  "workflow": {"steps": [{"ref": "step1", "action": "run", "args": {"mode": "fast"}}, {"ref": "step2", "action": "run"}]}
+  "capabilities": [
+    {
+      "name": "my-chain-card",
+      "summary": "一句话说明",
+      "trigger": "命中关键词",
+      "resources": [
+        {"type": "skill", "name": "step1", "ref": "skills/step1.md", "desc": "第一步"},
+        {"type": "skill", "name": "step2", "ref": "skills/step2.md", "desc": "第二步"},
+        {"type": "composite", "name": "run_all", "desc": "按顺序执行 step1、step2", "config": "{\"steps\":[{\"tool\":\"step1\",\"args\":{\"mode\":\"fast\"}},{\"tool\":\"step2\"}]}"}
+      ]
+    }
+  ]
 }
 ```
 
-校验规则：`name` 必填；`trigger` 或 `summary` 至少一个；`mcp`/`skill`/`api` 恰好一个同类型 resource（`api` 的 `ref` 用 `api:MethodName`，如 `api:GetL3`，宿主通过 `api` 包直接调用）；`composite` 至少一个 resource；`workflow.steps[].ref` 必填；资源 `name` 必填，`input` 非空时必须是合法 JSON（Schema）。guide 卡的卡指针用 `type=api` + `ref=capability:<卡名>` 指向工具箱内另一张卡（校验不约束 ref 格式）；单卡详情经 `ListCapabilities` 的 id 过滤取得，id 取自 `ListCapabilities` 响应的 `id_hash`。MemHop 只存储与匹配能力，不执行其中引用的工具或服务。
+校验规则：包 `name` 必填且 `capabilities` 至少一张卡，卡名包内唯一（卡 ID 由卡名派生，撞名即身份冲突）；卡 `name` 必填，`trigger` 或 `summary` 至少一个，`resources` 至少一个条目；条目 `name` 必填，`input` 非空时必须是合法 JSON（Schema）；`config` 以 `{`/`[` 开头必须是合法 JSON，且含 `steps` 数组时每步必须带非空 `tool` 键（松散行形态交给宿主解析，不在库校验范围）。guide 卡的卡指针用 `type=api` + `ref=capability:<卡名>` 指向工具箱内另一张卡（校验不约束 ref 格式）；单卡详情经 `ListCapabilities` 的 id 过滤取得，id 取自 `ListCapabilities` 响应的 `id_hash`。MemHop 只存储与匹配能力，不执行其中引用的工具或服务。

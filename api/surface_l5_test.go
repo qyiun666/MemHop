@@ -14,13 +14,16 @@ import (
 	"github.com/qyiun666/MemHop/internal"
 )
 
-// writeCapability drops a valid v3 skill-capability document and returns its path.
+// writeCapability drops a valid v4 single-card package document and returns
+// its path.
 func writeCapability(t *testing.T, dir, name string) string {
 	t.Helper()
-	doc := internal.CapabilityImport{
-		Format: "memhop-capability/v3", Name: name, Version: "1",
-		Type: CapabilitySkill, Summary: "summarizes", Trigger: "when asked",
-		Resources: []ResourceRef{{Type: CapabilitySkill, Name: name, Desc: "call it"}},
+	doc := internal.CapabilityPackageDoc{
+		Format: "memhop-capability/v4", Name: name,
+		Capabilities: []internal.CapabilityImport{{
+			Name: name, Version: "1", Summary: "summarizes", Trigger: "when asked",
+			Resources: []ResourceRef{{Type: CapabilitySkill, Name: name, Desc: "call it"}},
+		}},
 	}
 	data, err := json.Marshal(doc)
 	if err != nil {
@@ -36,31 +39,31 @@ func writeCapability(t *testing.T, dir, name string) string {
 func TestSurfaceL5Capability(t *testing.T) {
 	db := openSurfaceDB(t)
 	dir := t.TempDir()
-	cap, err := db.ImportCapability(writeCapability(t, dir, "surface-cap"))
-	if err != nil || cap == nil {
-		t.Fatalf("import capability: %v", err)
+	res, err := db.ImportCapability(writeCapability(t, dir, "surface-cap"))
+	if err != nil || res == nil || len(res.CreatedIDs) != 1 {
+		t.Fatalf("import capability: %v %+v", err, res)
 	}
-	id := cap.IDHash
+	id := res.CreatedIDs[0]
 	if !isHexID(id) {
 		t.Fatalf("capability id not hex: %q", id)
 	}
 	if one, err := db.ListCapabilities(CapabilityListQuery{IDs: []string{id}}); err != nil || len(one) != 1 {
 		t.Fatalf("capability by id: %d found, err %v", len(one), err)
 	}
-	// Re-import byte-identical content is a no-op returning the stored record.
+	// Re-import byte-identical content is a no-op reporting the stored card.
 	again, err := db.ImportCapability(writeCapability(t, dir, "surface-cap"))
-	if err != nil || again.IDHash != cap.IDHash {
+	if err != nil || len(again.UpdatedIDs) != 1 || again.UpdatedIDs[0] != id {
 		t.Fatalf("re-import must be idempotent: %v %+v", err, again)
 	}
-	// List filters: status, type and keyword variants.
+	// List filters: status, package and keyword variants.
 	active := CapabilityActive
-	skill := CapabilitySkill
+	pkg := "surface-cap"
 	for _, q := range []CapabilityListQuery{
 		{},
 		{Status: &active},
-		{Type: &skill},
+		{Package: &pkg},
 		{Keyword: "surface"},
-		{Status: &active, Type: &skill, Keyword: "no-such-keyword"},
+		{Status: &active, Keyword: "no-such-keyword"},
 	} {
 		list, err := db.ListCapabilities(q)
 		if err != nil || list == nil {

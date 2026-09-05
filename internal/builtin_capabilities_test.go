@@ -38,17 +38,13 @@ func TestLoadBuiltinCapabilities(t *testing.T) {
 		if c.FileHash == "" {
 			t.Fatalf("builtin %s: missing file hash", c.Name)
 		}
-		switch c.Type {
-		case core.CapabilityMCP, core.CapabilitySkill, core.CapabilityAPI:
-			if len(c.Resources) != 1 || c.Resources[0].Type != c.Type {
-				t.Fatalf("builtin %s: resources mismatch %+v", c.Name, c)
-			}
-		case core.CapabilityComposite:
-			if len(c.Resources) == 0 {
-				t.Fatalf("builtin composite %s: no resources %+v", c.Name, c)
-			}
-		default:
-			t.Fatalf("builtin %s: unexpected type %v", c.Name, c.Type)
+		// Single-card v4 packages: the card carries its package stamp and at
+		// least one function entry.
+		if c.Package != c.Name {
+			t.Fatalf("builtin %s: package stamp %q", c.Name, c.Package)
+		}
+		if len(c.Resources) == 0 {
+			t.Fatalf("builtin %s: no resource entries", c.Name)
 		}
 	}
 	for _, name := range builtinNames {

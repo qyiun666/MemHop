@@ -1,8 +1,10 @@
 {
-  "format": "memhop-capability/v3",
+  "format": "memhop-capability/v4",
   "name": "memhop-archive",
-  "version": "3",
-  "type": "composite",
+  "capabilities": [
+    {
+      "name": "memhop-archive",
+      "version": "4",
   "summary": "L4 archive manual: search historical conversation text by any combination of keyword / time range / ID / topic / content type. The entries below are Go api methods; an MCP client calls the same operation as memhop_archive_search (memhop_archive_get is the by-id convenience)",
   "trigger": "need to look up past conversation text or dig out old messages; archive l4 raw text history conversation search",
   "resources": [
@@ -14,13 +16,7 @@
       "input": "{\"type\": \"object\", \"properties\": {\"keyword\": {\"type\": \"string\", \"description\": \"Substring match on Content (optional)\"}, \"start\": {\"type\": \"integer\", \"description\": \"Created at or after, unix ms (optional)\"}, \"end\": {\"type\": \"integer\", \"description\": \"Created at or before, unix ms (optional)\"}, \"ids\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}, \"description\": \"Archive ids, 16-char hex (optional)\"}, \"topic_id\": {\"type\": \"string\", \"description\": \"Only this topic's archives, 16-char hex (optional)\"}, \"type\": {\"type\": \"string\", \"description\": \"Content type filter: text|image|video|document|audio|code|other (optional)\"}}}",
       "output": "List of ArchiveSlot (Content/Role/CreatedAt/Metadata)"
     }
-  ],
-  "workflow": {
-    "steps": [
-      {
-        "ref": "SearchL4",
-        "action": "Search archives by any combination of conditions"
-      }
     ]
   }
+]
 }

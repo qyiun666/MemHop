@@ -223,17 +223,20 @@ type ArchiveSlot struct {
 	Metadata    *string     `json:"metadata,omitempty"`
 }
 
-// Capability is an L5 reusable capability: a wrapper around host resources
-// (MCP tools / skills) that MemHop stores and matches but never executes.
+// Capability is an L5 reusable capability: a named card of function entries
+// (ResourceRef) that MemHop stores and matches but never executes. One card
+// carries any number of entries; each entry self-describes how it is launched
+// (Type/Ref/Config), what it is (Desc) and how to call it (Input/Output).
+// Package names the plugin document the card was imported from; crystallized
+// cards carry none.
 type Capability struct {
 	IDHash        uint64           `json:"id_hash"`
 	Name          string           `json:"name"`
 	Version       string           `json:"version"`
-	Type          CapabilityType   `json:"type"`
+	Package       string           `json:"package,omitempty"`
 	Summary       string           `json:"summary"`
 	Trigger       string           `json:"trigger"`
 	Resources     []ResourceRef    `json:"resources"`
-	Workflow      *Workflow        `json:"workflow,omitempty"`
 	Status        CapabilityStatus `json:"status"`
 	Origin        CapabilityOrigin `json:"origin"`
 	FileHash      string           `json:"file_hash,omitempty"`
@@ -260,7 +263,9 @@ func (c Capability) PromptCard() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[capability: %s]\n", c.Name)
 	fmt.Fprintf(&b, "id: %s\n", common.FormatHash(c.IDHash))
-	fmt.Fprintf(&b, "type: %s\n", c.Type)
+	if c.Package != "" {
+		fmt.Fprintf(&b, "package: %s\n", c.Package)
+	}
 	if c.Version != "" {
 		fmt.Fprintf(&b, "version: %s\n", c.Version)
 	}
@@ -285,13 +290,9 @@ func (c Capability) PromptCard() string {
 		if r.Output != "" {
 			fmt.Fprintf(&b, "  output: %s\n", r.Output)
 		}
-	}
-	if c.Workflow != nil {
-		refs := make([]string, 0, len(c.Workflow.Steps))
-		for _, step := range c.Workflow.Steps {
-			refs = append(refs, step.Ref)
+		if steps := resourceSteps(r.Config); len(steps) > 0 {
+			fmt.Fprintf(&b, "  steps: %s\n", strings.Join(steps, " -> "))
 		}
-		fmt.Fprintf(&b, "flow: %s\n", strings.Join(refs, " -> "))
 	}
 	if c.TriggerCount > 0 || c.SuccessRate > 0 {
 		fmt.Fprintf(&b, "usage: %d, success_rate: %.2f\n", c.TriggerCount, c.SuccessRate)
@@ -299,33 +300,45 @@ func (c Capability) PromptCard() string {
 	return b.String()
 }
 
-// ResourceRef is one wrapped resource (an MCP tool, a skill, or an api
-// method). The tool-declaration fields (Name/Desc/Input/Output) mirror the
-// host tool spec shape exactly (meowire ToolSpec semantics): a host projects
-// a resource to its own tool declaration with a pure field copy, no format
-// conversion. MemHop stores these references but does not execute them.
+// resourceSteps extracts the action-chain tool names from a resource Config
+// of the canonical form {"steps":[{"tool":"...", ...}]}; other shapes (loose
+// line forms, natural language) yield nil. Rendering only — shape validation
+// lives in the cap/capability package at import time.
+func resourceSteps(cfg *string) []string {
+	if cfg == nil || !strings.HasPrefix(*cfg, "{") {
+		return nil
+	}
+	var obj struct {
+		Steps []struct {
+			Tool string `json:"tool"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(*cfg), &obj); err != nil || len(obj.Steps) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(obj.Steps))
+	for _, st := range obj.Steps {
+		if st.Tool != "" {
+			names = append(names, st.Tool)
+		}
+	}
+	return names
+}
+
+// ResourceRef is one function entry of a capability card (an MCP server, a
+// skill, an api method, or an action chain). The tool-declaration fields
+// (Name/Desc/Input/Output) mirror the host tool spec shape exactly (meowire
+// ToolSpec semantics): a host projects a resource to its own tool declaration
+// with a pure field copy, no format conversion. MemHop stores these references
+// but does not execute them.
 type ResourceRef struct {
-	Type   CapabilityType `json:"type"`             // mcp | skill | api
+	Type   CapabilityType `json:"type"`             // mcp | skill | api | composite
 	Name   string         `json:"name"`             // tool name (ToolSpec.Name)
 	Desc   string         `json:"desc"`             // call contract for the LLM (ToolSpec.Desc)
 	Input  string         `json:"input,omitempty"`  // args JSON Schema string (ToolSpec.Input)
 	Output string         `json:"output,omitempty"` // output description (ToolSpec.Output)
 	Ref    string         `json:"ref,omitempty"`    // MCP server address / skill path / api:Method / command
-	Config *string        `json:"config,omitempty"` // connection config (endpoint etc.), not an args schema
-}
-
-// Workflow is the ordered orchestration of a composite capability.
-type Workflow struct {
-	Steps []WorkflowStep `json:"steps"`
-}
-
-// WorkflowStep is one orchestration step referencing a resource (by
-// Resources[].Name) or another capability (by name). Args carries the step
-// parameters a host replays the action chain with (JSON Schema in Input).
-type WorkflowStep struct {
-	Ref    string         `json:"ref"`
-	Action string         `json:"action,omitempty"`
-	Args   map[string]any `json:"args,omitempty"`
+	Config *string        `json:"config,omitempty"` // connection config; a composite entry carries its action chain as {"steps":[{"tool":...}]}
 }
 
 // Plan node type for TrajectorySlot: either a raw trajectory event or a plan node.

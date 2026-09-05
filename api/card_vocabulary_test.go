@@ -31,18 +31,22 @@ func definedEnumNames[T ~uint8](unknown string, name func(T) string) []string {
 	return out
 }
 
-// cardEntry returns one resource's desc from a built-in card.
+// cardEntry returns one resource's desc from a built-in card (a v4 package
+// document; every shipped file holds exactly one card).
 func cardEntry(t *testing.T, card, resource string) string {
 	t.Helper()
 	data, err := capabilities.FS.ReadFile(card + ".json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	var parsed internal.CapabilityImport
+	var parsed internal.CapabilityPackageDoc
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("parse %s: %v", card, err)
 	}
-	for _, r := range parsed.Resources {
+	if len(parsed.Capabilities) != 1 {
+		t.Fatalf("%s: want a single-card package, got %d cards", card, len(parsed.Capabilities))
+	}
+	for _, r := range parsed.Capabilities[0].Resources {
 		if r.Name == resource {
 			return r.Desc
 		}

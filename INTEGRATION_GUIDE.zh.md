@@ -269,14 +269,14 @@ arcs, err := db.SearchL4(api.L4Query{
 
 | 方法 | 说明 |
 |---|---|
-| `db.ListCapabilities(CapabilityListQuery{IDs, Status, Type, Keyword})` | 列出能力卡；条件之间 AND，`IDs: []string{id}` 即读单张卡 |
-| `db.ImportCapability(path)` | 导入 memhop-capability/v3 JSON 文件（或含 `capability.json` 的目录）；Go 面接受宿主说得出的任何路径，而 MCP server 那一侧由 `--capability-dir` 锚定。导入的卡直接是 **active**（结晶出的卡是 draft） |
+| `db.ListCapabilities(CapabilityListQuery{IDs, Status, Package, Keyword})` | 列出能力卡（文件级公共池，所有 agent 共用）；条件之间 AND，`IDs: []string{id}` 即读单张卡 |
+| `db.ImportCapability(path)` | 导入 memhop-capability/v4 插件包（一个文档 = 包名 + 1..N 张卡；或含 `capability.json` 的目录）；返回逐卡 `CapabilityImportResult{CreatedIDs/UpdatedIDs/Errors}`。Go 面接受宿主说得出的任何路径，而 MCP server 那一侧由 `--capability-dir` 锚定。导入的卡直接是 **active**（结晶出的卡是 draft），同字节重导入零写入 |
 | `db.DeleteCapability(id)` | 删除 |
-| `db.UpdateCapability(id, CapabilityPatch{...})` | 部分更新（内置卡只读，被拒绝） |
+| `db.UpdateCapability(id, CapabilityPatch{...})` | 部分更新（内置卡只读，被拒绝；Name/Package 不可变） |
 | `db.ActivateCapability(id)` | 草稿 → 激活 |
 | `db.RecordCapabilityUsage(id, success)` | 使用后反馈 |
 
-> 内置能力工具箱（6 张英文卡：`memhop-guide` 总纲 + 5 张 LLM 可调用说明书）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；说明书卡 `type: "api"`、`ref: "api:MethodName"`，宿主在门面上直接调用。默认分层注入——只投影一行索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `ListCapabilities(CapabilityListQuery{IDs: []string{id}})` 获取。资源即工具声明（`name/desc/input/output` 与宿主工具规格同构；`input` 为 JSON Schema 字符串），宿主纯字段拷贝即可投影。
+> 一张卡 = 名称 + N 个功能条目（resources，无卡片级 type），每个条目自带启动方式（`type: mcp|skill|api|composite` + `ref`/`config`）/说明（`desc`）/怎么用（`input`/`output`），与宿主工具规格逐字段同构——纯字段拷贝即可投影；composite 条目的动作链放 `config` 的 `{"steps":[{"tool":"...","args":{...}}]}`（每步 `tool` 必填）。内置能力工具箱（6 张英文卡：`memhop-guide` 总纲 + 5 张 LLM 可调用说明书）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；说明书卡 `type: "api"`、`ref: "api:MethodName"`，宿主在门面上直接调用。默认分层注入——只投影一行索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `ListCapabilities(CapabilityListQuery{IDs: []string{id}})` 获取。另：`.meh` 同目录的 `plug/<包>/capability.json` 会在每次 Open 自动注入能力池（坏包告警跳过）。
 
 ### L6 轨迹 + 结晶（v1.2.7 新增能力）
 
@@ -328,12 +328,12 @@ planID := api.NewPlanID("cat-42")   // 确定性 16 位 hex；重启后按同一
 
 ---
 
-## 9. 导出类型清单（v1.6.0）
+## 9. 导出类型清单（v1.7.0）
 
 | 类别 | 名称 | 用途 |
 |---|---|---|
 | 配置 | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | 全部装配面 |
-| 输入别名 | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `Workflow` | 输入与无 ID 结果（string ID 均为 hex） |
+| 输入别名 | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `CapabilityPackageDoc` / `CapabilityImportResult` | 输入与无 ID 结果（string ID 均为 hex） |
 | 响应 DTO | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | 所有 ID 字段均为 16 位 hex 字符串（v1.4.1 起） |
 | ID 面 | **`DefaultAgentID`**（隐式域）/ **`NewPlanID(name)`**（铸计划 ID） | ID 一律由库发号，宿主只回传，不做任何进制转换 |
 | 枚举 | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` / `PlanStatus` | 枚举别名 |

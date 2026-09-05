@@ -66,7 +66,7 @@ func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	if db.closed.Load() { // re-check under the lock: Close may have raced the check above
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
-	if agentID != core.DefaultAgentID && agentID != core.SharedL3AgentID {
+	if agentID != core.DefaultAgentID && agentID != core.SharedPoolAgentID {
 		if _, ok := db.idToName[agentID]; !ok {
 			return nil, common.NewError(common.ErrAgentNotFound, "agent is not registered")
 		}
@@ -123,7 +123,7 @@ func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, ui
 	return ac, parsed, nil
 }
 
-// lockSharedL3 is the prologue of every L3 operation: the caller's own
+// lockSharedPool is the prologue of every L3 operation: the caller's own
 // domain must still be alive (a stale handle to a deleted agent must not
 // keep using the shared pool), then the shared L3 domain is locked. L3
 // records live in the file-wide shared domain, so L3 operations from
@@ -132,11 +132,11 @@ func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, ui
 // point-in-time: a caller deleted mid-operation lets the call run to
 // completion, which is harmless — it touches only the shared pool, and
 // DeleteL3's anchor detach skips domains it can no longer lock.
-func (db *DB) lockSharedL3(callerID uint64) (*domain.Context, error) {
+func (db *DB) lockSharedPool(callerID uint64) (*domain.Context, error) {
 	if err := db.CheckSession(callerID); err != nil {
 		return nil, err
 	}
-	ac, err := db.contextFor(core.SharedL3AgentID)
+	ac, err := db.contextFor(core.SharedPoolAgentID)
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +160,7 @@ func (db *DB) sweepIdleLocked() {
 	}
 	now := time.Now().UnixMilli()
 	for id, ac := range db.agents {
-		if id == core.DefaultAgentID || id == core.SharedL3AgentID {
+		if id == core.DefaultAgentID || id == core.SharedPoolAgentID {
 			continue
 		}
 		if now-ac.LastActiveAt.Load() <= ttl {

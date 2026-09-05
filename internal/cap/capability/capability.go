@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package capability is the L5 capability-definition capability: parsing,
-// validation, projection and filtering of memhop-capability/v3 documents.
-// It is stateless and identity-neutral — it receives documents and returns
-// records/verdicts; storage reads/writes and the domain lock stay in the
-// composition root.
+// validation, projection and filtering of memhop-capability/v4 package
+// documents. It is stateless and identity-neutral — it receives documents and
+// returns records/verdicts; storage reads/writes and the domain lock stay in
+// the composition root.
 package capability
 
 import (
@@ -21,8 +21,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// FormatV3 is the only supported capability document format.
-const FormatV3 = "memhop-capability/v3"
+// FormatV4 is the only supported capability document format: a plugin
+// package holding one or more capability cards.
+const FormatV4 = "memhop-capability/v4"
 
 // ReadFile loads a capability document from a path (a directory resolves to
 // its capability.json).
@@ -45,56 +46,71 @@ func ReadFile(path string) (data []byte, resolved string, err error) {
 	return data, resolved, nil
 }
 
-// Build parses and validates one memhop-capability/v3 document into an
-// in-memory Capability. It touches no storage: lifecycle fields
-// (Status/Origin/timestamps) and IDHash are left to the caller.
-func Build(data []byte, source string) (*core.Capability, error) {
-	var in core.CapabilityImport
+// BuildPackage parses and validates one memhop-capability/v4 package document
+// into its capability cards, each stamped with the package name. It touches no
+// storage: lifecycle fields (Status/Origin/timestamps) and IDHash are left to
+// the caller. FileHash is per card the hash of the whole document, so a
+// byte-identical re-import of an unchanged package is detectable per card.
+func BuildPackage(data []byte, source string) ([]*core.Capability, error) {
+	var in core.CapabilityPackageDoc
 	if err := json.Unmarshal(data, &in); err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse capability import file "+source, err)
+		return nil, common.NewError(common.ErrInvalidQuery, "parse capability package file "+source, err)
 	}
-	if in.Format != FormatV3 {
+	if in.Format != FormatV4 {
 		return nil, common.NewError(common.ErrInvalidQuery,
-			"capability file must declare format "+FormatV3)
+			"capability file must declare format "+FormatV4)
 	}
-	if err := Validate(&in); err != nil {
+	if err := ValidatePackage(&in); err != nil {
 		return nil, err
 	}
-	cap := FromImport(&in)
-	cap.FileHash = sha256Hex(data)
-	return cap, nil
+	hash := sha256Hex(data)
+	caps := make([]*core.Capability, 0, len(in.Capabilities))
+	for i := range in.Capabilities {
+		cap := FromImport(&in.Capabilities[i])
+		cap.Package = in.Name
+		cap.FileHash = hash
+		caps = append(caps, cap)
+	}
+	return caps, nil
 }
 
-// Validate checks a parsed import document: name, trigger/summary presence,
-// the type-dependent resource shape and JSON-Schema-shaped tool declarations.
-func Validate(in *core.CapabilityImport) error {
+// ValidatePackage checks a parsed package document: package name required,
+// 1..N cards, card names unique within the package (the card ID derives from
+// the name, so a duplicate would silently alias one record), and each card
+// validated.
+func ValidatePackage(in *core.CapabilityPackageDoc) error {
+	if strings.TrimSpace(in.Name) == "" {
+		return common.NewError(common.ErrInvalidQuery, "capability package name is required")
+	}
+	if len(in.Capabilities) == 0 {
+		return common.NewError(common.ErrInvalidQuery, "capability package requires at least one capability")
+	}
+	seen := make(map[string]struct{}, len(in.Capabilities))
+	for i := range in.Capabilities {
+		if err := ValidateCard(&in.Capabilities[i]); err != nil {
+			return err
+		}
+		key := core.NormalizeCapabilityName(in.Capabilities[i].Name)
+		if _, dup := seen[key]; dup {
+			return common.NewError(common.ErrInvalidQuery, "duplicate capability name in package: "+in.Capabilities[i].Name)
+		}
+		seen[key] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateCard checks one capability card: name, trigger/summary presence,
+// the resource shape and JSON-Schema-shaped tool declarations. One card
+// carries any number of function entries — there is no card-level type.
+func ValidateCard(in *core.CapabilityImport) error {
 	if strings.TrimSpace(in.Name) == "" {
 		return common.NewError(common.ErrInvalidQuery, "capability name is required")
 	}
 	if strings.TrimSpace(in.Trigger) == "" && strings.TrimSpace(in.Summary) == "" {
 		return common.NewError(common.ErrInvalidQuery, "capability trigger or summary is required")
 	}
-	switch in.Type {
-	case core.CapabilityMCP, core.CapabilitySkill, core.CapabilityAPI:
-		if len(in.Resources) != 1 || in.Resources[0].Type != in.Type {
-			return common.NewError(common.ErrInvalidQuery,
-				"capability of type "+string(in.Type)+" requires exactly one resource of the same type")
-		}
-	case core.CapabilityComposite:
-		if len(in.Resources) == 0 {
-			return common.NewError(common.ErrInvalidQuery, "composite capability requires at least one resource")
-		}
-		if in.Workflow != nil {
-			for _, step := range in.Workflow.Steps {
-				if strings.TrimSpace(step.Ref) == "" {
-					return common.NewError(common.ErrInvalidQuery, "workflow step ref is required")
-				}
-			}
-		}
-	case "":
-		return common.NewError(common.ErrInvalidQuery, "capability type is required")
-	default:
-		return common.NewError(common.ErrInvalidQuery, "unknown capability type: "+string(in.Type))
+	if len(in.Resources) == 0 {
+		return common.NewError(common.ErrInvalidQuery, "capability requires at least one resource entry")
 	}
 	for _, res := range in.Resources {
 		if strings.TrimSpace(res.Name) == "" {
@@ -103,6 +119,42 @@ func Validate(in *core.CapabilityImport) error {
 		if strings.TrimSpace(res.Input) != "" && !json.Valid([]byte(res.Input)) {
 			return common.NewError(common.ErrInvalidQuery,
 				"resource input must be a valid JSON Schema string: "+res.Name)
+		}
+		if err := validateConfig(res.Config, res.Name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateConfig checks a resource Config: a JSON-shaped value ({/[ prefix)
+// must parse, and an object carrying a canonical "steps" action chain must
+// have every step name its tool — the shape hosts replay. Loose line forms
+// and natural-language configs are the host's to parse and pass unchecked.
+func validateConfig(cfg *string, resName string) error {
+	if cfg == nil {
+		return nil
+	}
+	c := *cfg
+	if !strings.HasPrefix(c, "{") && !strings.HasPrefix(c, "[") {
+		return nil
+	}
+	if !json.Valid([]byte(c)) {
+		return common.NewError(common.ErrInvalidQuery, "resource config must be valid JSON: "+resName)
+	}
+	var obj struct {
+		Steps []json.RawMessage `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(c), &obj); err != nil || len(obj.Steps) == 0 {
+		return nil // not a steps object: other JSON payloads are opaque
+	}
+	for _, raw := range obj.Steps {
+		var st struct {
+			Tool string `json:"tool"`
+		}
+		if err := json.Unmarshal(raw, &st); err != nil || strings.TrimSpace(st.Tool) == "" {
+			return common.NewError(common.ErrInvalidQuery,
+				`resource config step must carry a non-empty "tool" key: `+resName)
 		}
 	}
 	return nil
@@ -115,11 +167,9 @@ func FromImport(in *core.CapabilityImport) *core.Capability {
 	return &core.Capability{
 		Name:      in.Name,
 		Version:   defaultString(in.Version, "1"),
-		Type:      in.Type,
 		Summary:   in.Summary,
 		Trigger:   in.Trigger,
 		Resources: in.Resources,
-		Workflow:  in.Workflow,
 	}
 }
 
@@ -135,20 +185,18 @@ func BuildCrystallized(in *core.CapabilityImport, now int64) *core.Capability {
 }
 
 // MergeDefinition overwrites the definition fields of an existing capability
-// with the incoming ones (usage statistics and identity are preserved). The
-// caller persists the result.
+// with the incoming ones (usage statistics and identity are preserved; the
+// package stamp is immutable). The caller persists the result.
 func MergeDefinition(existing, incoming *core.Capability, now int64) {
 	existing.Version = incoming.Version
-	existing.Type = incoming.Type
 	existing.Summary = incoming.Summary
 	existing.Trigger = incoming.Trigger
 	existing.Resources = incoming.Resources
-	existing.Workflow = incoming.Workflow
 	existing.UpdatedAt = now
 }
 
 // Matches is the list-filter predicate shared by stored and built-in
-// capabilities: nil Status/Type filters pass everything, a non-empty
+// capabilities: nil Status/Package filters pass everything, a non-empty
 // lowercased keyword must appear in name+summary+trigger, and a non-empty IDs
 // set restricts the result to those 16-hex ids (a malformed id matches
 // nothing).
@@ -159,7 +207,7 @@ func Matches(cap *core.Capability, q *core.CapabilityListQuery, kw string) bool 
 	if q.Status != nil && cap.Status != *q.Status {
 		return false
 	}
-	if q.Type != nil && cap.Type != *q.Type {
+	if q.Package != nil && cap.Package != *q.Package {
 		return false
 	}
 	if kw != "" && !strings.Contains(strings.ToLower(cap.Name+" "+cap.Summary+" "+cap.Trigger), kw) {

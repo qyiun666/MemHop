@@ -111,25 +111,25 @@ func TestE2ECapability(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "morning_run.json")
-	content := `{"format":"memhop-capability/v3","name":"晨跑流程","version":"1","type":"skill","summary":"周末海边晨跑","trigger":"用户提到周末海边跑步","resources":[{"type":"skill","name":"晨跑计划","desc":"周末清晨海边跑步","input":"{\"type\":\"object\",\"properties\":{\"time\":{\"type\":\"string\"}}}","output":"晨跑计划"}]}`
+	content := `{"format":"memhop-capability/v4","name":"晨跑包","capabilities":[{"name":"晨跑流程","version":"1","summary":"周末海边晨跑","trigger":"用户提到周末海边跑步","resources":[{"type":"skill","name":"晨跑计划","desc":"周末清晨海边跑步","input":"{\"type\":\"object\",\"properties\":{\"time\":{\"type\":\"string\"}}}","output":"晨跑计划"}]}]}`
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write import file: %v", err)
 	}
-	cap, err := db.ImportCapability(path)
+	result, err := db.ImportCapability(path)
 	if err != nil {
 		t.Fatalf("ImportCapability: %v", err)
 	}
-	if cap == nil || cap.IDHash == "" {
-		t.Fatal("ImportCapability returned empty capability")
+	if result == nil || len(result.CreatedIDs) != 1 {
+		t.Fatalf("ImportCapability result = %+v", result)
 	}
-	id := cap.IDHash
+	id := result.CreatedIDs[0]
 
 	one, err := db.ListCapabilities(internal.CapabilityListQuery{IDs: []string{id}})
 	if err != nil || len(one) != 1 {
 		t.Fatalf("capability %s: %d found, err %v", id, len(one), err)
 	}
 	got := one[0]
-	if got.Name != "晨跑流程" || got.Type != core.CapabilitySkill {
+	if got.Name != "晨跑流程" || got.Resources[0].Type != core.CapabilitySkill {
 		t.Fatalf("unexpected capability: %+v", got)
 	}
 	if len(got.Resources) != 1 || got.Resources[0].Name != "晨跑计划" {

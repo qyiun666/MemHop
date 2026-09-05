@@ -1,10 +1,12 @@
 {
-  "format": "memhop-capability/v3",
+  "format": "memhop-capability/v4",
   "name": "memhop-knowledge",
-  "version": "3",
-  "type": "composite",
-  "summary": "L3 knowledge-graph manual: read/list/import/update/delete semantic graphs, query nodes and expand subgraphs. The graph pool is file-wide: every agent domain of the file shares one L3 pool (import once, visible to all; deleting an agent never deletes the pool). The entries below are Go api methods; an MCP client calls the same operations as memhop_knowledge_get / _list / _import / _update / _delete / _nodes / _subgraph.",
-  "trigger": "need to manage or query the L3 semantic knowledge graph, structured knowledge; knowledge l3 graph semantic node edge hypergraph",
+  "capabilities": [
+    {
+      "name": "memhop-knowledge",
+      "version": "4",
+      "summary": "L3 knowledge-graph manual: read/list/import/update/delete semantic graphs, query nodes and expand subgraphs. The graph pool is file-wide: every agent domain of the file shares one L3 pool (import once, visible to all; deleting an agent never deletes the pool). The entries below are Go api methods; an MCP client calls the same operations as memhop_knowledge_get / _list / _import / _update / _delete / _nodes / _subgraph. Typical order: ListL3 -> ImportL3 -> QueryL3Subgraph -> GetL3 -> UpdateL3 -> DeleteL3.",
+      "trigger": "need to manage or query the L3 semantic knowledge graph, structured knowledge; knowledge l3 graph semantic node edge hypergraph",
   "resources": [
     {
       "type": "api",
@@ -70,33 +72,7 @@
       "input": "{\"type\":\"object\",\"properties\":{\"graph_id\":{\"type\":\"string\",\"description\":\"Graph ID (16-char hex)\"},\"start_node_id\":{\"type\":\"string\",\"description\":\"Start node ID (16-char hex)\"},\"max_depth\":{\"type\":\"integer\",\"description\":\"Max expansion depth\"},\"edge_kinds\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Edge kind filter\"}},\"required\":[\"graph_id\",\"start_node_id\",\"max_depth\"]}",
       "output": "L3Subgraph (nodes and edges)"
     }
-  ],
-  "workflow": {
-    "steps": [
-      {
-        "ref": "ListL3",
-        "action": "Browse all graphs"
-      },
-      {
-        "ref": "ImportL3",
-        "action": "Import new entities and relations"
-      },
-      {
-        "ref": "QueryL3Subgraph",
-        "action": "Expand related subgraph from a key node"
-      },
-      {
-        "ref": "GetL3",
-        "action": "Read one graph in detail"
-      },
-      {
-        "ref": "UpdateL3",
-        "action": "Rename a graph"
-      },
-      {
-        "ref": "DeleteL3",
-        "action": "Delete a deprecated graph"
-      }
     ]
   }
+]
 }

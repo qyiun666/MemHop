@@ -8,7 +8,7 @@ Status: implemented
 
 ## Decision
 
-- 保留域机制：新增 `core.SharedL3AgentID`（frame.go，宿主不可见/不可删/`Session` 拒绑/`ListAgents` 不列/空闲回收豁免/`CreateAgent` 拒撞），全部 L3 记录住该域；`internal` 根 8 个 L3 大方法改走 `lockSharedL3(callerID)`（先 `CheckSession` 校验调用方域活着，再锁公共域）。graph/repo 小方法包零改动——agentID 本就是参数。
+- 保留域机制：新增 `core.SharedPoolAgentID`（frame.go，宿主不可见/不可删/`Session` 拒绑/`ListAgents` 不列/空闲回收豁免/`CreateAgent` 拒撞；0x000B 起 L5 能力记录同入该域，常量由 `SharedL3AgentID` 更名、域值不变），全部 L3 记录住该域；`internal` 根 8 个 L3 大方法改走 `lockSharedPool(callerID)`（先 `CheckSession` 校验调用方域活着，再锁公共域；原 `lockSharedL3`）。graph/repo 小方法包零改动——agentID 本就是参数。
 - 锁语义：L3 操作跨 agent 在公共域锁上全局串行（L3 链路无 LLM、操作短，代价可接受）；锚点校验（`scene.Create`/`ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级互斥兜底，`TestL3PoolConcurrentImportAndAnchor` 供 `-race` 证明。
 - `DeleteL3` 两阶段：公共锁内删图 → 释放后遍历「默认域 + 注册表」逐域 `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁（锁序环风险归零，也不会把 L3 全局串行顶在一个慢域后面）。遍历对象不用 `engine.IterAgents()`：它含未注册域会让 `lockAgent` 报错，且默认域不在注册表而场景锚点可能落在默认域。
 - 格式 0x0009 → 0x000A，旧文件 Open 时显式拒绝、无迁移（沿用 0x0008 拒绝先例）。
@@ -23,6 +23,6 @@ Status: implemented
 ## Consequences
 
 - 换到：一份文件一份项目知识，家族/多租户共享；删档（克隆用完即弃）不误伤公共池。
-- 代价：打破「完全隔离」的一条缝——`DeleteL3Nodes`/合并策略是全家共享的，一个 agent 删节点影响所有 agent；MCP 多租户「no data is ever shared」承诺改写为「除 L3 外隔离」。
+- 代价：打破「完全隔离」的一条缝——`DeleteL3Nodes`/合并策略是全家共享的，一个 agent 删节点影响所有 agent；MCP 多租户「no data is ever shared」承诺改写为「除 L3（及 0x000B 起同域的 L5 能力池）外隔离」。
 - 已知窗口：`DeleteL3` 删图后、清锚前若有宿主同名重导入（图 id = hash(Domain) 同 id），该场景锚点会被清成未锚定，可经 `UpdateScene` 重挂——比嵌套双锁划算。清锚阶段本身部分失败（引擎 IO 错误经 `errors.Join` 上抛）时图已删，重跑 `DeleteL3` 只会 `ErrNotFound`：悬锚由宿主恢复——`UpdateScene` 空锚清除，或重导同名图后重跑 `DeleteL3` 补清。
 - 升级路径：0x0009 及更早文件不支持原地升级，宿主自行重导 L3（旧文件本就打不开）。

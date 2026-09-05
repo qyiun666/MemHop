@@ -45,7 +45,6 @@ type (
 	TopicSlot        = core.TopicSlot
 	ResourceRef      = core.ResourceRef
 	ContentType      = core.ContentType
-	Workflow         = core.Workflow
 )
 
 // NewError re-exported so the api facade can build domain errors without

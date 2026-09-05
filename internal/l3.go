@@ -3,7 +3,7 @@
 
 // L3 hypergraph big methods of the composition root: view / import / update
 // / delete. The import steps live in internal/graph. All L3 records live in
-// the file-wide shared domain (core.SharedL3AgentID): one file hosts a single
+// the file-wide shared domain (core.SharedPoolAgentID): one file hosts a single
 // L3 pool that every agent domain shares, and the agentID parameter of these
 // methods only proves that the caller's own domain is still alive.
 
@@ -21,7 +21,7 @@ import (
 )
 
 func (db *DB) GetL3(agentID uint64, id string) (*L3Graph, error) {
-	ac, err := db.lockSharedL3(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (db *DB) getL3Graph(id string) (*L3Graph, error) {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
 	var slot *core.HypergraphSlot
-	graphs := core.CollectAllGraphSlots(db.engine, core.SharedL3AgentID)
+	graphs := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID)
 	for i := range graphs {
 		if graphs[i].IDHash == graphHash {
 			slot = &graphs[i]
@@ -47,8 +47,8 @@ func (db *DB) getL3Graph(id string) (*L3Graph, error) {
 	if slot == nil {
 		return nil, common.NewError(common.ErrNotFound, "graph not found")
 	}
-	nodes := repo.ListNodeL3(db.engine, core.SharedL3AgentID, graphHash)
-	edges := repo.ListEdgeL3(db.engine, core.SharedL3AgentID, graphHash)
+	nodes := repo.ListNodeL3(db.engine, core.SharedPoolAgentID, graphHash)
+	edges := repo.ListEdgeL3(db.engine, core.SharedPoolAgentID, graphHash)
 	if nodes == nil {
 		nodes = []core.HypergraphNode{}
 	}
@@ -59,12 +59,12 @@ func (db *DB) getL3Graph(id string) (*L3Graph, error) {
 }
 
 func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
-	ac, err := db.lockSharedL3(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	all := core.CollectAllGraphSlots(db.engine, core.SharedL3AgentID)
+	all := core.CollectAllGraphSlots(db.engine, core.SharedPoolAgentID)
 	if all == nil {
 		return []core.HypergraphSlot{}, nil
 	}
@@ -81,7 +81,7 @@ func (db *DB) ListL3(agentID uint64) ([]core.HypergraphSlot, error) {
 // ids, because a host needs the former to hang the graph on a scene.
 // Graphs imported by one agent are visible to every agent of the file.
 func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) (*L3ImportResult, error) {
-	ac, err := db.lockSharedL3(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 		return nil, common.NewError(common.ErrInvalidQuery,
 			"import mode must be Skip, Merge or Overwrite")
 	}
-	batch := graph.NewImportBatch(db.engine, core.SharedL3AgentID, mode)
+	batch := graph.NewImportBatch(db.engine, core.SharedPoolAgentID, mode)
 	for i := range items {
 		if err := batch.ImportNode(&items[i]); err != nil {
 			batch.Result().Errors = append(batch.Result().Errors, fmt.Sprintf("%s: %v", items[i].Title, err))
@@ -128,7 +128,7 @@ func (db *DB) ImportL3(agentID uint64, items []L3ImportItem, mode L3ImportMode) 
 // has to be free: a domain label addresses a graph for the import path, so two
 // slots under one label would make that label resolve ambiguously.
 func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error) {
-	ac, err := db.lockSharedL3(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -138,11 +138,11 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 		return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
 	if name != nil {
-		if err := graph.CheckName(db.engine, core.SharedL3AgentID, graphHash, *name); err != nil {
+		if err := graph.CheckName(db.engine, core.SharedPoolAgentID, graphHash, *name); err != nil {
 			return nil, err
 		}
 	}
-	if _, err := repo.UpdateGraphL3(db.engine, core.SharedL3AgentID, graphHash, name); err != nil {
+	if _, err := repo.UpdateGraphL3(db.engine, core.SharedPoolAgentID, graphHash, name); err != nil {
 		return nil, err
 	}
 	return db.getL3Graph(id)
@@ -154,7 +154,7 @@ func (db *DB) UpdateL3(agentID uint64, id string, name *string) (*L3Graph, error
 // never hold two domain locks at once, so no agent domain can end up blocking
 // the shared pool behind a long operation.
 func (db *DB) DeleteL3(agentID uint64, id string) error {
-	ac, err := db.lockSharedL3(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return err
 	}
@@ -163,11 +163,11 @@ func (db *DB) DeleteL3(agentID uint64, id string) error {
 		ac.Mu.Unlock()
 		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
-	if _, err := core.ReadGraphSlot(db.engine, core.SharedL3AgentID, graphHash); err != nil {
+	if _, err := core.ReadGraphSlot(db.engine, core.SharedPoolAgentID, graphHash); err != nil {
 		ac.Mu.Unlock()
 		return err
 	}
-	if !repo.DeleteGraphL3(db.engine, core.SharedL3AgentID, graphHash) {
+	if !repo.DeleteGraphL3(db.engine, core.SharedPoolAgentID, graphHash) {
 		ac.Mu.Unlock()
 		return common.NewError(common.ErrIO, "delete graph", nil)
 	}
@@ -206,7 +206,7 @@ func (db *DB) detachGraphAnchors(graphHash uint64) error {
 // (and losing the edges bound to it). Every id must name a node of this graph;
 // an unknown or foreign id is refused and nothing is deleted.
 func (db *DB) DeleteL3Nodes(agentID uint64, graphID string, nodeIDs []string) error {
-	ac, err := db.lockSharedL3(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return err
 	}
@@ -218,7 +218,7 @@ func (db *DB) DeleteL3Nodes(agentID uint64, graphID string, nodeIDs []string) er
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 	}
-	if _, err := core.ReadGraphSlot(db.engine, core.SharedL3AgentID, graphHash); err != nil {
+	if _, err := core.ReadGraphSlot(db.engine, core.SharedPoolAgentID, graphHash); err != nil {
 		return err
 	}
 	targets := make([]uint64, 0, len(nodeIDs))
@@ -229,5 +229,5 @@ func (db *DB) DeleteL3Nodes(agentID uint64, graphID string, nodeIDs []string) er
 		}
 		targets = append(targets, id)
 	}
-	return repo.DeleteNodesL3(db.engine, core.SharedL3AgentID, graphHash, targets)
+	return repo.DeleteNodesL3(db.engine, core.SharedPoolAgentID, graphHash, targets)
 }

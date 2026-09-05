@@ -31,7 +31,8 @@ func OpenOrCreateEngine(cfg *MemHopConfig) (*core.StorageEngine, error) {
 // attachment of the built-in capability toolbox injected as an fs.FS by the
 // facade (internal must not import the capabilities package). Agent contexts
 // are created lazily on first access (contextFor), each rebuilding its caches
-// from its own domain's records.
+// from its own domain's records. After assembly the <meh dir>/plug plugin
+// packages are injected into the shared L5 pool (l5plug.go).
 func Open(cfg *MemHopConfig, builtins fs.FS) (*DB, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	engine, err := OpenOrCreateEngine(cfg)
@@ -62,6 +63,7 @@ func Open(cfg *MemHopConfig, builtins fs.FS) (*DB, error) {
 		return nil, err
 	}
 	db.SetBuiltinCapabilities(builtinCaps)
+	db.injectPlugDir(cfg.DBPath)
 	return db, nil
 }
 

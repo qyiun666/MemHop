@@ -31,14 +31,16 @@ func mustFindCapability(t *testing.T, sess *memhop.Session, id string) memhop.Ca
 	return got[0]
 }
 
-// writeCapabilityFile drops one memhop-capability/v3 document in dir and
-// returns its path. trigger varies so two writes are distinguishable files.
+// writeCapabilityFile drops one memhop-capability/v4 single-card package in
+// dir and returns its path. trigger varies so two writes are distinguishable
+// files.
 func writeCapabilityFile(t *testing.T, dir, name, trigger string) string {
 	t.Helper()
 	path := filepath.Join(dir, name+".json")
-	body := fmt.Sprintf(`{"format":"memhop-capability/v3","name":%q,"version":"1","type":"mcp",`+
+	body := fmt.Sprintf(`{"format":"memhop-capability/v4","name":%q,`+
+		`"capabilities":[{"name":%q,"version":"1",`+
 		`"summary":"读取文件内容","trigger":%q,`+
-		`"resources":[{"type":"mcp","name":"read_file","ref":"read_file","desc":"读一个文件"}]}`, name, trigger)
+		`"resources":[{"type":"mcp","name":"read_file","ref":"read_file","desc":"读一个文件"}]}]}`, name, name, trigger)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write capability file: %v", err)
 	}
@@ -47,21 +49,25 @@ func writeCapabilityFile(t *testing.T, dir, name, trigger string) string {
 
 func TestInterfaceCapabilityLifecycle(t *testing.T) {
 	db, _ := openTestDB(t)
-	imported, err := db.ImportCapability(writeCapabilityFile(t, t.TempDir(), "读文件", "用户要求读文件"))
+	result, err := db.ImportCapability(writeCapabilityFile(t, t.TempDir(), "读文件", "用户要求读文件"))
 	if err != nil {
 		t.Fatalf("ImportCapability: %v", err)
 	}
+	if len(result.CreatedIDs) != 1 {
+		t.Fatalf("import result = %+v", result)
+	}
+	id := result.CreatedIDs[0]
 	// An import lands active with no usage history yet: the host wires it up as
 	// a tool right away and starts recording runs against the id it got back.
+	imported := mustFindCapability(t, db.Session, id)
 	if imported.Status != memhop.CapabilityActive || imported.Origin != memhop.CapabilityOriginImported {
 		t.Fatalf("imported card = %+v", imported)
 	}
 	if imported.TriggerCount != 0 || imported.SuccessRate != 0 || imported.LastTriggered != 0 || imported.FileHash == "" {
 		t.Fatalf("fresh card = %+v, want no usage history and the file hash it came from", imported)
 	}
-	id := imported.IDHash
-	if got := mustFindCapability(t, db.Session, id); got.Name != "读文件" || got.Trigger != "用户要求读文件" {
-		t.Fatalf("imported card reads back %+v", got)
+	if imported.Name != "读文件" || imported.Trigger != "用户要求读文件" {
+		t.Fatalf("imported card reads back %+v", imported)
 	}
 
 	// The patch is partial, so every field it leaves nil survives. Name is not
@@ -138,43 +144,52 @@ func TestInterfaceCapabilityReimport(t *testing.T) {
 	// Untouched card: re-importing identical bytes writes nothing at all, so
 	// the file does not grow once per startup.
 	path := writeCapabilityFile(t, t.TempDir(), "稳定卡", "原触发词")
-	stable, err := db.ImportCapability(path)
+	stableRes, err := db.ImportCapability(path)
 	if err != nil {
 		t.Fatalf("ImportCapability: %v", err)
 	}
+	stableID := stableRes.CreatedIDs[0]
+	stable := mustFindCapability(t, db.Session, stableID)
 	again, err := db.ImportCapability(path)
 	if err != nil {
 		t.Fatalf("re-import identical bytes: %v", err)
 	}
-	if again.IDHash != stable.IDHash || again.CreatedAt != stable.CreatedAt || again.UpdatedAt != stable.UpdatedAt {
-		t.Fatalf("unchanged re-import rewrote the card: %+v vs %+v", again, stable)
+	if len(again.UpdatedIDs) != 1 || again.UpdatedIDs[0] != stableID {
+		t.Fatalf("unchanged re-import result = %+v", again)
+	}
+	rewritten := mustFindCapability(t, db.Session, stableID)
+	if rewritten.CreatedAt != stable.CreatedAt || rewritten.UpdatedAt != stable.UpdatedAt {
+		t.Fatalf("unchanged re-import rewrote the card: %+v vs %+v", rewritten, stable)
 	}
 
-	// A corrected card no longer matches the file, so the next startup import
-	// restores the shipped definition — while the usage history the host
-	// recorded survives the overwrite.
-	if _, err := db.RecordCapabilityUsage(stable.IDHash, true); err != nil {
+	// The usage history the host recorded survives the no-op re-import, and
+	// the card stays active in the shared pool.
+	if _, err := db.RecordCapabilityUsage(stableID, true); err != nil {
 		t.Fatalf("RecordCapabilityUsage: %v", err)
 	}
-	edited, err := db.ImportCapability(path)
-	if err != nil {
+	if _, err := db.ImportCapability(path); err != nil {
 		t.Fatalf("re-import after usage: %v", err)
 	}
-	if edited.TriggerCount != 1 || edited.SuccessRate != 1 || edited.CreatedAt != stable.CreatedAt {
-		t.Fatalf("re-import lost the usage history or the original card: %+v", edited)
+	used := mustFindCapability(t, db.Session, stableID)
+	if used.TriggerCount != 1 || used.SuccessRate != 1 || used.CreatedAt != stable.CreatedAt {
+		t.Fatalf("re-import lost the usage history or the original card: %+v", used)
 	}
 
 	// Importing under a name that already exists is an upsert on the same id,
-	// not a second card.
-	rewritten := writeCapabilityFile(t, t.TempDir(), "稳定卡", "改过的触发词")
-	second, err := db.ImportCapability(rewritten)
+	// not a second card — the file's definition wins, the stats stay.
+	rewrittenPath := writeCapabilityFile(t, t.TempDir(), "稳定卡", "改过的触发词")
+	second, err := db.ImportCapability(rewrittenPath)
 	if err != nil {
 		t.Fatalf("import same name, new content: %v", err)
 	}
-	if second.IDHash != stable.IDHash || second.Trigger != "改过的触发词" {
+	if len(second.UpdatedIDs) != 1 || second.UpdatedIDs[0] != stableID {
 		t.Fatalf("same-name import minted a second card: %+v", second)
 	}
-	if len(mustListAll(t, db.Session, internal.CapabilityListQuery{IDs: []string{stable.IDHash}})) != 1 {
+	final := mustFindCapability(t, db.Session, stableID)
+	if final.Trigger != "改过的触发词" || final.TriggerCount != 1 {
+		t.Fatalf("same-name import result = %+v", final)
+	}
+	if len(mustListAll(t, db.Session, internal.CapabilityListQuery{IDs: []string{stableID}})) != 1 {
 		t.Fatal("one name now addresses more than one stored card")
 	}
 }
@@ -212,12 +227,13 @@ func TestInterfaceCapabilityQueryAndPersistence(t *testing.T) {
 	importDir := t.TempDir()
 	m := openMockMulti(t, filePath, llm.srv.URL)
 	db := newTestDB(t, m)
-	imported, err := db.ImportCapability(writeCapabilityFile(t, importDir, "压缩场景", "用户要求压缩历史"))
+	importedRes, err := db.ImportCapability(writeCapabilityFile(t, importDir, "压缩场景", "用户要求压缩历史"))
 	if err != nil {
 		db.Close()
 		t.Fatalf("ImportCapability: %v", err)
 	}
-	if _, err := db.RecordCapabilityUsage(imported.IDHash, true); err != nil {
+	importedID := importedRes.CreatedIDs[0]
+	if _, err := db.RecordCapabilityUsage(importedID, true); err != nil {
 		db.Close()
 		t.Fatalf("RecordCapabilityUsage: %v", err)
 	}
@@ -250,7 +266,7 @@ func TestInterfaceCapabilityQueryAndPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Session after reopen: %v", err)
 	}
-	if got := mustFindCapability(t, sess, imported.IDHash); got.Name != "压缩场景" || got.TriggerCount != 1 {
+	if got := mustFindCapability(t, sess, importedID); got.Name != "压缩场景" || got.TriggerCount != 1 {
 		t.Fatalf("card after reopen = %+v", got)
 	}
 	if after := mustListStored(t, sess); len(after) != len(before) {
@@ -261,16 +277,11 @@ func TestInterfaceCapabilityQueryAndPersistence(t *testing.T) {
 	if len(byKeyword) != 1 || byKeyword[0].Name != "压缩场景" {
 		t.Fatalf("keyword filter matched %+v", byKeyword)
 	}
-	mcp := memhop.CapabilityMCP
 	active := memhop.CapabilityActive
-	byKind := mustListAll(t, sess, internal.CapabilityListQuery{Type: &mcp, Status: &active})
-	if len(byKind) < 2 {
-		t.Fatalf("type+status filter matched %d cards, want both imports with the built-ins", len(byKind))
-	}
-	for _, c := range byKind {
-		if c.Type != memhop.CapabilityMCP || c.Status != memhop.CapabilityActive {
-			t.Fatalf("filter leaked %+v", c)
-		}
+	pkg := "压缩场景"
+	byPkg := mustListAll(t, sess, internal.CapabilityListQuery{Package: &pkg, Status: &active})
+	if len(byPkg) != 1 || byPkg[0].Name != "压缩场景" {
+		t.Fatalf("package+status filter matched %+v", byPkg)
 	}
 }
 

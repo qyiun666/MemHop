@@ -220,11 +220,11 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	}
 	// L5 capability via session (import → get → activate → usage → delete).
 	sid := t.TempDir()
-	c, err := s.ImportCapability(writeCapability(t, sid, "sess-cap"))
+	capRes, err := s.ImportCapability(writeCapability(t, sid, "sess-cap"))
 	if err != nil {
 		t.Fatalf("session importCap: %v", err)
 	}
-	cid := c.IDHash
+	cid := capRes.CreatedIDs[0]
 	if one, err := s.ListCapabilities(CapabilityListQuery{IDs: []string{cid}}); err != nil || len(one) != 1 {
 		t.Fatalf("session capability by id: %d found, err %v", len(one), err)
 	}

@@ -22,7 +22,7 @@
   一层一个文件组（单文件超 400 行时按功能拆分，命名
   `<layer>layer_<aspect>.go`：`l1layer_sync.go`、`l2layer_topic.go`），
   所有函数以 `agentID` 为域参数。自 0x000A 起存在一个保留域
-  `core.SharedL3AgentID`（文件级公共 L3 池）：本层原语对它和普通域无差别
+  `core.SharedPoolAgentID`（文件级公共 L3 池）：本层原语对它和普通域无差别
   （`agentID` 只是参数），路由与守卫都在 `internal` 根。L1 建边/遗忘算法已上提至
   `internal/cap/engram`（ DecayNetwork/RebuildFromL2/BuildHyperedges）、
   L0 画像生成/蒸馏合并至 `internal/cap/profile`、L3 匹配与节点合并至

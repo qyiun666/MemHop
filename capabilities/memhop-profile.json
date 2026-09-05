@@ -1,10 +1,12 @@
 {
-  "format": "memhop-capability/v3",
+  "format": "memhop-capability/v4",
   "name": "memhop-profile",
-  "version": "3",
-  "type": "composite",
-  "summary": "L0 profile manual: read/update the host identity profile (role, personality, emotion state, MBTI, preferences). The entries below are Go api methods; an MCP client calls the same operations as memhop_profile_get / memhop_profile_update",
-  "trigger": "need to view or adjust the host profile, identity, preferences; profile l0 identity role personality emotion mbti preference",
+  "capabilities": [
+    {
+      "name": "memhop-profile",
+      "version": "4",
+      "summary": "L0 profile manual: read/update the host identity profile (role, personality, emotion state, MBTI, preferences). The entries below are Go api methods; an MCP client calls the same operations as memhop_profile_get / memhop_profile_update. Typical order: GetL0 -> UpdateL0.",
+      "trigger": "need to view or adjust the host profile, identity, preferences; profile l0 identity role personality emotion mbti preference",
   "resources": [
     {
       "type": "api",
@@ -22,17 +24,7 @@
       "input": "{\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\"},\"role\":{\"type\":\"string\"},\"personality\":{\"type\":\"string\"},\"preferences\":{\"type\":\"object\",\"additionalProperties\":{\"type\":\"string\"}}}}",
       "output": "ok"
     }
-  ],
-  "workflow": {
-    "steps": [
-      {
-        "ref": "GetL0",
-        "action": "Read the profile (identity, preferences, and the distilled emotion/MBTI state)"
-      },
-      {
-        "ref": "UpdateL0",
-        "action": "Write only the host-owned fields; the distilled half is preserved by the library"
-      }
     ]
   }
+]
 }

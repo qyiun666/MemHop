@@ -199,7 +199,12 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 	if len(events) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "no trajectory for turn "+turnID)
 	}
-	existing := capability.ActiveOnly(core.CollectAllCapabilities(db.engine, agentID))
+	// The capability catalog and the fold-back writes target the file-wide
+	// shared pool. Like the L3 anchor checks, they run while holding only the
+	// caller's session lock: single-record access is safe under the engine's
+	// per-record mutual exclusion, and nesting the pool lock here would
+	// serialize crystallization behind every shared-pool op.
+	existing := capability.ActiveOnly(core.CollectAllCapabilities(db.engine, core.SharedPoolAgentID))
 	out, err := llmops.Crystallize(ctx, db.llm, events, existing)
 	if err != nil {
 		return nil, err
@@ -210,7 +215,7 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 	}
 	result := &CrystallizeResult{CreatedIDs: []string{}, ReusedIDs: []string{}, MergedIDs: []string{}}
 	for _, cand := range out.Capabilities {
-		if err := trajectory.ApplyCandidate(db.engine, agentID, cand, result); err != nil {
+		if err := trajectory.ApplyCandidate(db.engine, core.SharedPoolAgentID, cand, result); err != nil {
 			return nil, err
 		}
 	}

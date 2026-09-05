@@ -14,13 +14,13 @@ func testBuiltinCapabilities() []core.Capability {
 	return []core.Capability{
 		{
 			IDHash: core.CapabilityID("内置手册"), Name: "内置手册",
-			Type: core.CapabilitySkill, Status: core.CapabilityActive,
+			Package: "manuals", Status: core.CapabilityActive,
 			Origin: core.CapabilityOriginBuiltin, Trigger: "检索 记忆",
 			Resources: []core.ResourceRef{{Type: core.CapabilitySkill, Name: "内置手册"}},
 		},
 		{
 			IDHash: core.CapabilityID("内置工具"), Name: "内置工具",
-			Type: core.CapabilityMCP, Status: core.CapabilityActive,
+			Status: core.CapabilityActive,
 			Origin: core.CapabilityOriginBuiltin, Trigger: "工具",
 			Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "内置工具"}},
 		},
@@ -33,7 +33,7 @@ func TestListCapabilitiesWithBuiltins(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	db.SetBuiltinCapabilities(testBuiltinCapabilities())
-	stored := core.Capability{IDHash: common.HashID("stored"), Name: "库存能力", Type: core.CapabilityMCP, Status: core.CapabilityActive, UpdatedAt: 1000}
+	stored := core.Capability{IDHash: common.HashID("stored"), Name: "库存能力", Status: core.CapabilityActive, UpdatedAt: 1000}
 	writeCapability(t, engine, &stored)
 
 	out, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{})
@@ -54,17 +54,18 @@ func TestListCapabilitiesWithBuiltins(t *testing.T) {
 		t.Fatalf("builtins must not match draft filter, got %d", len(out))
 	}
 
-	skill := core.CapabilitySkill
-	out, err = db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{Type: &skill})
+	// Filters apply to built-ins too: only the stamped package matches.
+	manuals := "manuals"
+	out, err = db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{Package: &manuals})
 	if err != nil {
-		t.Fatalf("list skill: %v", err)
+		t.Fatalf("list by package: %v", err)
 	}
 	if len(out) != 1 || out[0].Name != "内置手册" {
-		t.Fatalf("type filter mismatch: %v", idsOfCapabilities(out))
+		t.Fatalf("package filter mismatch: %v", idsOfCapabilities(out))
 	}
 
-	// Listing never persists built-ins.
-	if got := len(core.CollectAllCapabilities(engine, core.DefaultAgentID)); got != 1 {
+	// Listing never persists built-ins (the pool is the shared domain).
+	if got := len(core.CollectAllCapabilities(engine, core.SharedPoolAgentID)); got != 1 {
 		t.Fatalf("builtins must not be stored, want 1 stored record, got %d", got)
 	}
 }
@@ -76,7 +77,7 @@ func TestListCapabilitiesBuiltinDedup(t *testing.T) {
 	db.SetBuiltinCapabilities(testBuiltinCapabilities())
 	stored := core.Capability{
 		IDHash: core.CapabilityID("内置手册"), Name: "内置手册",
-		Type: core.CapabilitySkill, Status: core.CapabilityActive,
+		Status: core.CapabilityActive,
 		Origin: core.CapabilityOriginImported, TriggerCount: 7, UpdatedAt: 1000,
 	}
 	writeCapability(t, engine, &stored)

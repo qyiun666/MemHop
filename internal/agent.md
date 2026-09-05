@@ -47,8 +47,8 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    解析失败先解锁）：裸事件的键就是该轮话题 ID（`AppendTrajectory` 顺手把
    `TopicID` 写成同一个值），计划绑定事件的键是计划 ID。门面侧的会话准入
    策略在 `CheckSession`。L3 八个方法是唯一例外：走
-   `db.lockSharedL3(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
-   保留公共域 `core.SharedL3AgentID`（L3 记录全部住该域，跨 agent 全局
+   `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
+   保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent 全局
    串行；公共域无墓碑、免空闲回收）。锚点校验（`scene.Create`/
    `ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级
    互斥兜底。
@@ -170,7 +170,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    多种关系，且对旧边的 pair-only 哈希同样幂等。`ImportL3` 结果带 `GraphIDs`
    （图 id = `hash(Domain)`，没有别的公开调用能渲染它）；`DeleteL3Nodes`
    做节点级删除并级联其超边。全部 L3 记录住保留公共域
-   `core.SharedL3AgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
+   `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
    三处豁免，`CreateAgent` 拒撞、`DeleteAgent` 拒删、`Session` 拒绑）。
    `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域
    `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁——代价是「删图后、

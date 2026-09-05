@@ -3,11 +3,10 @@
 
 // L5 capability tools: import/get/delete/list/activate/usage/update.
 //
-// CapabilityPatch carries nested enum and struct fields that the api
-// package does not re-export by name; string params are mapped to the api
-// enum constants (typed by inference) and the nested resources/workflow
-// payloads are round-tripped through JSON, whose field names match the core
-// DTOs exactly.
+// CapabilityPatch carries nested struct fields that the api package does not
+// re-export by name; string params are mapped to the api enum constants
+// (typed by inference) and the nested resources payload is round-tripped
+// through JSON, whose field names match the core DTOs exactly.
 
 package main
 
@@ -34,7 +33,7 @@ type capabilityUsageArgs struct {
 
 type capabilityListArgs struct {
 	Status  string `json:"status,omitempty"`
-	Type    string `json:"type,omitempty"`
+	Package string `json:"package,omitempty"`
 	Keyword string `json:"keyword,omitempty"`
 }
 
@@ -43,12 +42,10 @@ type capabilityListArgs struct {
 type capabilityUpdateArgs struct {
 	ID        string        `json:"id"`
 	Version   string        `json:"version,omitempty"`
-	Type      string        `json:"type,omitempty"`
 	Summary   string        `json:"summary,omitempty"`
 	Trigger   string        `json:"trigger,omitempty"`
 	Status    string        `json:"status,omitempty"`
 	Resources []resourceArg `json:"resources,omitempty"`
-	Workflow  *workflowArg  `json:"workflow,omitempty"`
 }
 
 type resourceArg struct {
@@ -59,16 +56,6 @@ type resourceArg struct {
 	Output string  `json:"output,omitempty"`
 	Ref    string  `json:"ref,omitempty"`
 	Config *string `json:"config,omitempty"`
-}
-
-type workflowArg struct {
-	Steps []workflowStepArg `json:"steps"`
-}
-
-type workflowStepArg struct {
-	Ref    string         `json:"ref"`
-	Action string         `json:"action,omitempty"`
-	Args   map[string]any `json:"args,omitempty"`
 }
 
 // validCapabilityStatus validates a status string before the typed switch.
@@ -96,66 +83,20 @@ func parseCapabilityStatus(s string) (*memhop.CapabilityStatus, error) {
 	return &st, nil
 }
 
-// parseCapabilityType maps a validated type string to the api enum (shared
-// by list filtering and partial update).
-func parseCapabilityType(s string) (*memhop.CapabilityType, error) {
-	if err := validCapabilityType(s); err != nil {
-		return nil, err
-	}
-	typ := memhop.CapabilityMCP
-	switch s {
-	case "skill":
-		typ = memhop.CapabilitySkill
-	case "api":
-		typ = memhop.CapabilityAPI
-	case "composite":
-		typ = memhop.CapabilityComposite
-	}
-	return &typ, nil
-}
-
-// validCapabilityType validates a type string before the typed switch.
-func validCapabilityType(s string) error {
-	switch s {
-	case "mcp", "skill", "api", "composite":
-		return nil
-	}
-	return fmt.Errorf("invalid capability type %q (want mcp, skill, api or composite)", s)
-}
-
 // resourceArrayProp is the JSON Schema for a []ResourceRef.
 func resourceArrayProp(desc string) map[string]any {
 	return map[string]any{
 		"type": "array",
 		"items": objSchema(map[string]any{
-			"type":   strProp("mcp | skill | api"),
+			"type":   strProp("mcp | skill | api | composite"),
 			"name":   strProp("工具名（= ToolSpec.Name）"),
 			"desc":   strProp("怎么调用（给 LLM，= ToolSpec.Desc）"),
 			"input":  strProp("参数 JSON Schema 字符串（= ToolSpec.Input）"),
 			"output": strProp("输出描述（= ToolSpec.Output）"),
 			"ref":    strProp("mcp server 地址 / skill 路径 / api:Method / 命令"),
-			"config": strProp("连接配置（JSON，可选）"),
+			"config": strProp(`连接配置（JSON，可选）；composite 条目放动作链 {"steps":[{"tool":"...","args":{...}}]}`),
 		}),
 		"description": desc,
-	}
-}
-
-// workflowProp is the JSON Schema for a *Workflow.
-func workflowProp() map[string]any {
-	return map[string]any{
-		"type": "object",
-		"properties": map[string]any{
-			"steps": map[string]any{
-				"type": "array",
-				"items": objSchema(map[string]any{
-					"ref":    strProp("资源名（Resources[].Name）或另一能力名"),
-					"action": strProp("动作说明"),
-					"args":   strProp("步骤参数（JSON 对象，可选）"),
-				}),
-				"description": "有序编排步骤",
-			},
-		},
-		"description": "composite 能力的编排（可选）",
 	}
 }
 
@@ -173,20 +114,20 @@ func registerL5Tools(s *mcp.Server, db *memhop.Session, capDir string) {
 func registerCapabilityIOTools(s *mcp.Server, db *memhop.Session, capDir string) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_import",
-		Description: fmt.Sprintf("导入 memhop-capability/v3 能力文件（文件或包含 capability.json 的目录）。能力是对宿主资源的封装：type=mcp（单个 mcp 工具）、type=skill（单个 skill）、type=api（单个 api 方法）、type=composite（多个 mcp/skill/api 集合，可选 workflow 编排）；资源即工具声明（name/desc/input/output 与宿主 ToolSpec 同构）。path 相对服务端能力目录（--capability-dir，缺省为 --db-dir=%s）解析，越出该目录即拒绝。", capDir),
+		Description: fmt.Sprintf("导入 memhop-capability/v4 能力包文件（文件或包含 capability.json 的目录）。一个包 = 名称 + 1..N 张能力卡；一张卡 = 名称 + N 个功能条目（resources），每个条目自带启动方式（type=mcp/skill/api/composite + ref/config）/说明（desc）/怎么用（input/output），与宿主 ToolSpec 同构；composite 条目在 config 放动作链。导入进文件级公共池，所有 agent 可见；同包重导入按卡名刷新定义、保留使用统计。path 相对服务端能力目录（--capability-dir，缺省为 --db-dir=%s）解析，越出该目录即拒绝。", capDir),
 		InputSchema: objSchema(map[string]any{
-			"path": strProp("能力文件或目录路径（相对能力目录），必填"),
+			"path": strProp("能力包文件或目录路径（相对能力目录），必填"),
 		}, "path"),
-	}, handle[capabilityImportArgs, memhop.Capability](func(a capabilityImportArgs) (memhop.Capability, error) {
+	}, handle[capabilityImportArgs, memhop.CapabilityImportResult](func(a capabilityImportArgs) (memhop.CapabilityImportResult, error) {
 		path, err := resolveCapabilityPath(capDir, a.Path)
 		if err != nil {
-			return memhop.Capability{}, err
+			return memhop.CapabilityImportResult{}, err
 		}
-		cap, err := db.ImportCapability(path)
+		res, err := db.ImportCapability(path)
 		if err != nil {
-			return memhop.Capability{}, err
+			return memhop.CapabilityImportResult{}, err
 		}
-		return *cap, nil
+		return *res, nil
 	}))
 
 	s.AddTool(&mcp.Tool{
@@ -220,10 +161,10 @@ func registerCapabilityIOTools(s *mcp.Server, db *memhop.Session, capDir string)
 func registerCapabilityListTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_list",
-		Description: "列出 L5 能力（含内置能力卡）。可按状态（draft/active/deprecated）、类型（mcp/skill/api/composite）与关键词过滤。",
+		Description: "列出 L5 能力（含内置能力卡）。可按状态（draft/active/deprecated）、来源包（package）与关键词过滤。",
 		InputSchema: objSchema(map[string]any{
 			"status":  strProp("状态过滤：draft | active | deprecated"),
-			"type":    strProp("类型过滤：mcp | skill | api | composite"),
+			"package": strProp("来源包名过滤（导入文档的 name）"),
 			"keyword": strProp("名称关键词过滤"),
 		}),
 	}, handle[capabilityListArgs, []memhop.Capability](func(a capabilityListArgs) ([]memhop.Capability, error) {
@@ -235,12 +176,8 @@ func registerCapabilityListTool(s *mcp.Server, db *memhop.Session) {
 			}
 			q.Status = st
 		}
-		if a.Type != "" {
-			typ, err := parseCapabilityType(a.Type)
-			if err != nil {
-				return nil, err
-			}
-			q.Type = typ
+		if a.Package != "" {
+			q.Package = &a.Package
 		}
 		q.Keyword = a.Keyword
 		return db.ListCapabilities(q)
@@ -286,12 +223,10 @@ func registerCapabilityUpdateTool(s *mcp.Server, db *memhop.Session) {
 		InputSchema: objSchema(map[string]any{
 			"id":        strProp("能力 ID（16 位 hex），必填"),
 			"version":   strProp("版本号"),
-			"type":      strProp("类型：mcp | skill | api | composite"),
 			"summary":   strProp("能力摘要"),
 			"trigger":   strProp("触发条件描述"),
 			"status":    strProp("状态：draft | active | deprecated"),
-			"resources": resourceArrayProp("资源列表"),
-			"workflow":  workflowProp(),
+			"resources": resourceArrayProp("功能条目列表"),
 		}, "id"),
 	}, handle[capabilityUpdateArgs, memhop.Capability](func(a capabilityUpdateArgs) (memhop.Capability, error) {
 		patch, err := buildCapabilityPatch(a)
@@ -319,13 +254,6 @@ func buildCapabilityPatch(a capabilityUpdateArgs) (memhop.CapabilityPatch, error
 	if a.Trigger != "" {
 		patch.Trigger = &a.Trigger
 	}
-	if a.Type != "" {
-		typ, err := parseCapabilityType(a.Type)
-		if err != nil {
-			return patch, err
-		}
-		patch.Type = typ
-	}
 	if a.Status != "" {
 		st, err := parseCapabilityStatus(a.Status)
 		if err != nil {
@@ -333,30 +261,16 @@ func buildCapabilityPatch(a capabilityUpdateArgs) (memhop.CapabilityPatch, error
 		}
 		patch.Status = st
 	}
-	if len(a.Resources) > 0 || a.Workflow != nil {
-		if err := applyNestedPatch(&patch, a); err != nil {
+	if len(a.Resources) > 0 {
+		payload, err := json.Marshal(map[string]any{"resources": a.Resources})
+		if err != nil {
 			return patch, err
 		}
+		var nested memhop.CapabilityPatch
+		if err := json.Unmarshal(payload, &nested); err != nil {
+			return patch, err
+		}
+		patch.Resources = nested.Resources
 	}
 	return patch, nil
-}
-
-// applyNestedPatch round-trips the nested resources/workflow payloads
-// through JSON: resourceArg/workflowArg field names match the core
-// ResourceRef/Workflow DTOs exactly.
-func applyNestedPatch(patch *memhop.CapabilityPatch, a capabilityUpdateArgs) error {
-	payload, err := json.Marshal(map[string]any{
-		"resources": a.Resources,
-		"workflow":  a.Workflow,
-	})
-	if err != nil {
-		return err
-	}
-	var nested memhop.CapabilityPatch
-	if err := json.Unmarshal(payload, &nested); err != nil {
-		return err
-	}
-	patch.Resources = nested.Resources
-	patch.Workflow = nested.Workflow
-	return nil
 }

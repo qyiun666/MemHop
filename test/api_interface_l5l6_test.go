@@ -24,25 +24,25 @@ func TestInterfaceL5(t *testing.T) {
 	db, _ := openTestDB(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "capability.json")
-	content := `{"format":"memhop-capability/v3","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file"}]}`
+	content := `{"format":"memhop-capability/v4","name":"重构包","capabilities":[{"name":"重构流程","version":"1","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file"}]}]}`
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write capability file: %v", err)
 	}
 
-	card, err := db.ImportCapability(path)
+	result, err := db.ImportCapability(path)
 	if err != nil {
 		t.Fatalf("ImportCapability: %v", err)
 	}
-	if card == nil {
-		t.Fatal("ImportCapability returned nil")
+	if result == nil || len(result.CreatedIDs) != 1 {
+		t.Fatalf("ImportCapability result = %+v", result)
 	}
-	id := card.IDHash
+	id := result.CreatedIDs[0]
 	one, err := db.ListCapabilities(internal.CapabilityListQuery{IDs: []string{id}})
 	if err != nil || len(one) != 1 {
 		t.Fatalf("capability %s: %d found, err %v", id, len(one), err)
 	}
 	got := one[0]
-	if got.Name != "重构流程" || got.Type != core.CapabilityMCP {
+	if got.Name != "重构流程" || got.Package != "重构包" || got.Resources[0].Type != core.CapabilityMCP {
 		t.Fatalf("capability mismatch: %+v", got)
 	}
 	caps, err := db.ListCapabilities(internal.CapabilityListQuery{})

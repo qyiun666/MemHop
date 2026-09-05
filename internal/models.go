@@ -31,6 +31,8 @@ type (
 	L3Subgraph               = core.L3Subgraph
 	L4Query                  = core.L4Query
 	CapabilityImport         = core.CapabilityImport
+	CapabilityPackageDoc     = core.CapabilityPackageDoc
+	CapabilityImportResult   = core.CapabilityImportResult
 	CapabilityPatch          = core.CapabilityPatch
 	CapabilityListQuery      = core.CapabilityListQuery
 	TrajectorySessionSummary = core.TrajectorySessionSummary

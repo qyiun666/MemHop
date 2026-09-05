@@ -44,11 +44,13 @@ const (
 // compatibility path and legacy callers.
 const DefaultAgentID uint64 = 0
 
-// SharedL3AgentID is the reserved file-wide domain that holds the L3
-// knowledge graph: one file hosts a single shared L3 pool every agent domain
-// reads and writes. It is never handed out as a tenant, never listed, and
-// cannot be deleted or bound to a Session.
-const SharedL3AgentID uint64 = 0x4C33000000000000 // ASCII "L3"
+// SharedPoolAgentID is the reserved file-wide domain that holds the shared
+// record pools: the L3 knowledge graph and the L5 capability cards. One file
+// hosts a single pool of each that every agent domain reads and writes. It is
+// never handed out as a tenant, never listed, and cannot be deleted or bound
+// to a Session. (Held the L3 pool alone as SharedL3AgentID before 0x000B; the
+// underlying domain value is unchanged.)
+const SharedPoolAgentID uint64 = 0x4C33000000000000 // ASCII "L3"
 
 func EncodeRecord(agentID uint64, recordType, flags uint8, idHash uint64, data []byte) []byte {
 	buf := make([]byte, RecordHeaderSize+len(data))

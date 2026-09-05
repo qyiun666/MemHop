@@ -23,7 +23,7 @@ func ApplyCandidate(engine *core.StorageEngine, agentID uint64, cand llmops.Crys
 	action := strings.ToLower(strings.TrimSpace(cand.Action))
 	detail := core.CrystallizeDetail{Name: cand.Capability.Name}
 	if action != "reuse" && action != "merge" {
-		if err := capability.Validate(&cand.Capability); err != nil {
+		if err := capability.ValidateCard(&cand.Capability); err != nil {
 			result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())
 			detail.Action = "skip"
 			detail.Reason = err.Error()

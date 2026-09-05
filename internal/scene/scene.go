@@ -43,7 +43,7 @@ func ResolveForRead(engine *core.StorageEngine, agentID uint64, q core.SearchQue
 			return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 		}
 		// Graphs live in the file-wide shared L3 domain, not in the caller's own.
-		if _, err := core.ReadGraphSlot(engine, core.SharedL3AgentID, l3Hash); err != nil {
+		if _, err := core.ReadGraphSlot(engine, core.SharedPoolAgentID, l3Hash); err != nil {
 			return nil, err
 		}
 		return nil, common.NewError(common.ErrInvalidQuery,
@@ -70,7 +70,7 @@ func Create(engine *core.StorageEngine, agentID uint64, l3ID string) (*core.Scen
 			return nil, common.NewError(common.ErrInvalidQuery, "parse l3 id", err)
 		}
 		// Graphs live in the file-wide shared L3 domain, not in the caller's own.
-		if _, err := core.ReadGraphSlot(engine, core.SharedL3AgentID, l3Hash); err != nil {
+		if _, err := core.ReadGraphSlot(engine, core.SharedPoolAgentID, l3Hash); err != nil {
 			return nil, err
 		}
 		if err := repo.SetSceneL3ID(engine, agentID, id, l3Hash); err != nil {

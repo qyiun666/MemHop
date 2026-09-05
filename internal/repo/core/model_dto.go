@@ -155,26 +155,43 @@ type L4Query struct {
 	Limit   int          `json:"limit,omitempty"`    // keep the newest N matches; <=0 means every match
 }
 
-// CapabilityImport is the memhop-capability/v3 JSON file loaded from a path.
-// The resource tool-declaration fields (Name/Desc/Input/Output) mirror the
-// host tool spec shape so hosts project capabilities with a pure field copy.
+// CapabilityImport is one capability card inside a memhop-capability/v4
+// package document. The resource tool-declaration fields (Name/Desc/Input/
+// Output) mirror the host tool spec shape so hosts project capabilities with
+// a pure field copy.
 type CapabilityImport struct {
-	Format    string         `json:"format"`
-	Name      string         `json:"name"`
-	Version   string         `json:"version,omitempty"`
-	Type      CapabilityType `json:"type"`
-	Summary   string         `json:"summary"`
-	Trigger   string         `json:"trigger"`
-	Resources []ResourceRef  `json:"resources"`
-	Workflow  *Workflow      `json:"workflow,omitempty"`
+	Name      string        `json:"name"`
+	Version   string        `json:"version,omitempty"`
+	Summary   string        `json:"summary"`
+	Trigger   string        `json:"trigger"`
+	Resources []ResourceRef `json:"resources"`
+}
+
+// CapabilityPackageDoc is the memhop-capability/v4 JSON document: a plugin
+// package holding one or more capability cards. A single-card file is just a
+// package with one entry.
+type CapabilityPackageDoc struct {
+	Format       string             `json:"format"`
+	Name         string             `json:"name"`
+	Capabilities []CapabilityImport `json:"capabilities"`
+}
+
+// CapabilityImportResult reports one package import: per-card created/updated
+// ids (16-hex) and per-card errors. A partially failed import keeps the cards
+// that landed; the errors name the cards that did not.
+type CapabilityImportResult struct {
+	CreatedIDs []string `json:"created_ids"`
+	UpdatedIDs []string `json:"updated_ids"`
+	Errors     []string `json:"errors,omitempty"`
 }
 
 // CapabilityListQuery filters L5 capabilities; every field is optional and
-// the set conditions AND together. IDs selects by 16-hex capability id.
+// the set conditions AND together. IDs selects by 16-hex capability id,
+// Package by source package name.
 type CapabilityListQuery struct {
 	IDs     []string          `json:"ids,omitempty"`
 	Status  *CapabilityStatus `json:"status,omitempty"`
-	Type    *CapabilityType   `json:"type,omitempty"`
+	Package *string           `json:"package,omitempty"`
 	Keyword string            `json:"keyword,omitempty"`
 }
 
@@ -188,16 +205,15 @@ type ScenePatch struct {
 }
 
 // CapabilityPatch is the partial-update payload of UpdateCapability; nil
-// fields are left unchanged. Name is immutable: the ID derives from it, so
-// renaming means delete + import.
+// fields are left unchanged. Name and Package are immutable: the ID derives
+// from the name, and the package records the document a card came from —
+// either way changing them means delete + import.
 type CapabilityPatch struct {
 	Version   *string
-	Type      *CapabilityType
 	Summary   *string
 	Trigger   *string
 	Status    *CapabilityStatus
 	Resources *[]ResourceRef
-	Workflow  *Workflow
 }
 
 // TrajectorySessionSummary is one L6 turn's footprint (one trajectory per

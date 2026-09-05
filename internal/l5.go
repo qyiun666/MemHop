@@ -1,9 +1,12 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L5 capability operations of the internal layer: path import / query / lifecycle /
-// usage feedback. MemHop stores capabilities; the host executes them from
-// the referenced paths or registered MCP tools.
+// L5 capability operations of the internal layer: package import / query /
+// lifecycle / usage feedback. The L5 pool is file-wide: records live in the
+// reserved shared domain (core.SharedPoolAgentID) and every agent domain
+// operates on the same pool through lockSharedPool. MemHop stores
+// capabilities; the host executes them from the referenced paths or
+// registered MCP tools.
 
 package internal
 
@@ -19,51 +22,68 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ImportCapability reads a memhop-capability/v3 file (or a directory
-// containing capability.json) and upserts it into L5. Repeated imports by
-// the same name update the definition while preserving usage statistics.
-func (db *DB) ImportCapability(agentID uint64, path string) (*core.Capability, error) {
+// ImportCapability reads a memhop-capability/v4 package file (or a directory
+// containing capability.json) and upserts every card into the shared L5 pool.
+// Repeated imports by the same name update the definition while preserving
+// usage statistics; per-card failures are reported in the result, not fatal.
+func (db *DB) ImportCapability(agentID uint64, path string) (*core.CapabilityImportResult, error) {
 	data, resolved, err := capability.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return db.importCapabilityData(agentID, data, resolved)
-}
-
-// importCapabilityData upserts one imported capability document into L5.
-// Re-importing byte-identical content under the same name is a no-op: the
-// append-only file must not grow on every startup import.
-func (db *DB) importCapabilityData(agentID uint64, data []byte, source string) (*core.Capability, error) {
-	ac, err := db.lockAgent(agentID)
+	caps, err := capability.BuildPackage(data, resolved)
+	if err != nil {
+		return nil, err
+	}
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	cap, err := capability.Build(data, source)
-	if err != nil {
-		return nil, err
-	}
+	return db.importCapabilitiesLocked(caps), nil
+}
+
+// importCapabilitiesLocked upserts parsed cards into the shared pool. The
+// pool lock must already be held (lockSharedPool). A card whose stored copy
+// carries the same FileHash is left untouched: re-importing an unchanged
+// package (the plug/ scan runs on every Open) must not grow the append-only
+// file. Created/updated ids are 16-hex; a failed card is reported by name.
+func (db *DB) importCapabilitiesLocked(caps []*core.Capability) *core.CapabilityImportResult {
 	now := time.Now().UnixMilli()
-	cap.Status = core.CapabilityActive
-	cap.Origin = core.CapabilityOriginImported
-	cap.CreatedAt = now
-	cap.UpdatedAt = now
-	// Byte-identical re-import under the same name: return the stored
-	// record without appending, preserving usage stats and timestamps.
-	if existing, err := core.ReadCapability(db.engine, agentID, core.CapabilityID(cap.Name)); err == nil &&
-		existing.FileHash != "" && existing.FileHash == cap.FileHash {
-		return existing, nil
+	result := &core.CapabilityImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}}
+	for _, cap := range caps {
+		id := common.FormatHash(core.CapabilityID(cap.Name))
+		cap.IDHash = core.CapabilityID(cap.Name)
+		if existing, err := core.ReadCapability(db.engine, core.SharedPoolAgentID, cap.IDHash); err == nil &&
+			existing.FileHash != "" && existing.FileHash == cap.FileHash {
+			result.UpdatedIDs = append(result.UpdatedIDs, id)
+			continue
+		}
+		cap.Status = core.CapabilityActive
+		cap.Origin = core.CapabilityOriginImported
+		cap.CreatedAt = now
+		cap.UpdatedAt = now
+		created, err := repo.UpsertCapabilityL5(db.engine, core.SharedPoolAgentID, cap)
+		if err != nil {
+			result.Errors = append(result.Errors, cap.Name+": "+err.Error())
+			continue
+		}
+		// UpsertCapabilityL5 reports updated=true when a stored record was
+		// refreshed and false when the card is new.
+		if created {
+			result.UpdatedIDs = append(result.UpdatedIDs, id)
+		} else {
+			result.CreatedIDs = append(result.CreatedIDs, id)
+		}
 	}
-	if _, err := repo.UpsertCapabilityL5(db.engine, agentID, cap); err != nil {
-		return nil, err
-	}
-	return cap, nil
+	return result
 }
 
 // UpdateCapability partially updates a stored capability (built-ins are
-// read-only and rejected).
+// read-only and rejected). The pool is file-wide, so the update is visible to
+// every agent domain.
 func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch) (*core.Capability, error) {
-	ac, err := db.lockAgent(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -75,15 +95,12 @@ func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch)
 	if db.findBuiltinCapability(idHash) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	cap, err := repo.GetCapabilityL5(db.engine, agentID, idHash)
+	cap, err := repo.GetCapabilityL5(db.engine, core.SharedPoolAgentID, idHash)
 	if err != nil {
 		return nil, err
 	}
 	if patch.Version != nil {
 		cap.Version = *patch.Version
-	}
-	if patch.Type != nil {
-		cap.Type = *patch.Type
 	}
 	if patch.Summary != nil {
 		cap.Summary = *patch.Summary
@@ -97,28 +114,26 @@ func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch)
 	if patch.Resources != nil {
 		cap.Resources = *patch.Resources
 	}
-	if patch.Workflow != nil {
-		cap.Workflow = patch.Workflow
-	}
-	if err := capability.Validate(&CapabilityImport{
-		Name: cap.Name, Version: cap.Version, Type: cap.Type,
+	if err := capability.ValidateCard(&core.CapabilityImport{
+		Name: cap.Name, Version: cap.Version,
 		Summary: cap.Summary, Trigger: cap.Trigger,
-		Resources: cap.Resources, Workflow: cap.Workflow,
+		Resources: cap.Resources,
 	}); err != nil {
 		return nil, err
 	}
 	// The stored content is no longer the imported bytes.
 	cap.FileHash = ""
-	if _, err := repo.UpsertCapabilityL5(db.engine, agentID, cap); err != nil {
+	if _, err := repo.UpsertCapabilityL5(db.engine, core.SharedPoolAgentID, cap); err != nil {
 		return nil, err
 	}
 	return cap, nil
 }
 
-// DeleteCapability removes a capability record. Built-in capabilities are
-// read-only: deleting one is rejected instead of silently succeeding.
+// DeleteCapability removes a capability record from the shared pool. Built-in
+// capabilities are read-only: deleting one is rejected instead of silently
+// succeeding.
 func (db *DB) DeleteCapability(agentID uint64, id string) error {
-	ac, err := db.lockAgent(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return err
 	}
@@ -132,24 +147,24 @@ func (db *DB) DeleteCapability(agentID uint64, id string) error {
 	}
 	// Deleting a card that is not there is reported, not accepted: a host
 	// reconciling its cards has to be able to tell a real deletion from a no-op.
-	if _, err := repo.GetCapabilityL5(db.engine, agentID, idHash); err != nil {
+	if _, err := repo.GetCapabilityL5(db.engine, core.SharedPoolAgentID, idHash); err != nil {
 		return err
 	}
-	if !repo.DeleteCapabilityL5(db.engine, agentID, idHash) {
+	if !repo.DeleteCapabilityL5(db.engine, core.SharedPoolAgentID, idHash) {
 		return common.NewError(common.ErrIO, "delete capability", nil)
 	}
 	return nil
 }
 
-// ListCapabilities lists and filters L5 capabilities.
+// ListCapabilities lists and filters the shared L5 pool.
 func (db *DB) ListCapabilities(agentID uint64, q CapabilityListQuery) ([]core.Capability, error) {
-	ac, err := db.lockAgent(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
 	kw := strings.ToLower(q.Keyword)
-	all := core.CollectAllCapabilities(db.engine, agentID)
+	all := core.CollectAllCapabilities(db.engine, core.SharedPoolAgentID)
 	filtered := make([]core.Capability, 0, len(all))
 	for _, cap := range all {
 		if capability.Matches(&cap, &q, kw) {
@@ -159,7 +174,8 @@ func (db *DB) ListCapabilities(agentID uint64, q CapabilityListQuery) ([]core.Ca
 	// Merge the built-in toolbox through the same filters; a stored record
 	// with the same ID wins over its built-in twin. The dedup set is built
 	// from ALL stored records (not just the filtered ones) so a stored
-	// record filtered out by status/kind still suppresses its built-in twin.
+	// record filtered out by status/package still suppresses its built-in
+	// twin.
 	stored := make(map[uint64]struct{}, len(all))
 	for _, cap := range all {
 		stored[cap.IDHash] = struct{}{}
@@ -177,7 +193,7 @@ func (db *DB) ListCapabilities(agentID uint64, q CapabilityListQuery) ([]core.Ca
 // ActivateCapability promotes a draft capability to active. Built-in
 // capabilities are read-only and rejected.
 func (db *DB) ActivateCapability(agentID uint64, id string) (*core.Capability, error) {
-	ac, err := db.lockAgent(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -189,13 +205,13 @@ func (db *DB) ActivateCapability(agentID uint64, id string) (*core.Capability, e
 	if db.findBuiltinCapability(idHash) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	return repo.ActivateCapabilityL5(db.engine, agentID, idHash)
+	return repo.ActivateCapabilityL5(db.engine, core.SharedPoolAgentID, idHash)
 }
 
 // RecordCapabilityUsage records host feedback after a capability was used.
 // Built-in capabilities are read-only and rejected.
 func (db *DB) RecordCapabilityUsage(agentID uint64, id string, success bool) (*core.Capability, error) {
-	ac, err := db.lockAgent(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -207,5 +223,5 @@ func (db *DB) RecordCapabilityUsage(agentID uint64, id string, success bool) (*c
 	if db.findBuiltinCapability(idHash) != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
-	return repo.RecordCapabilityUsageL5(db.engine, agentID, idHash, success)
+	return repo.RecordCapabilityUsageL5(db.engine, core.SharedPoolAgentID, idHash, success)
 }

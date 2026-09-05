@@ -3,7 +3,7 @@
 
 // L3 query big methods of the composition root: node lookup and BFS
 // subgraph. The query steps live in internal/graph. Like every L3 method,
-// both read the file-wide shared domain (core.SharedL3AgentID); the agentID
+// both read the file-wide shared domain (core.SharedPoolAgentID); the agentID
 // parameter only proves that the caller's own domain is still alive.
 
 package internal
@@ -23,7 +23,7 @@ import (
 // and Limit caps them. A malformed node id or a graph that does not exist is
 // an error — an empty result means the graph exists and nothing matched.
 func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode, error) {
-	ac, err := db.lockSharedL3(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
@@ -35,7 +35,7 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 	if err != nil {
 		return nil, err
 	}
-	if _, err := core.ReadGraphSlot(db.engine, core.SharedL3AgentID, graphHash); err != nil {
+	if _, err := core.ReadGraphSlot(db.engine, core.SharedPoolAgentID, graphHash); err != nil {
 		return nil, err
 	}
 	filter, err := nodeFilter(q)
@@ -43,7 +43,7 @@ func (db *DB) QueryL3Nodes(agentID uint64, q L3NodeQuery) ([]core.HypergraphNode
 		return nil, err
 	}
 	out := make([]core.HypergraphNode, 0)
-	for _, n := range repo.ListNodeL3(db.engine, core.SharedL3AgentID, graphHash) {
+	for _, n := range repo.ListNodeL3(db.engine, core.SharedPoolAgentID, graphHash) {
 		if filter.Matches(n) {
 			out = append(out, n)
 		}
@@ -74,12 +74,12 @@ func nodeFilter(q L3NodeQuery) (graph.NodeFilter, error) {
 // QueryL3Subgraph BFS from startNodeID up to maxDepth; edgeKinds restricts
 // reachable edges (maxDepth<=0 means 1).
 func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDepth int, edgeKinds []core.GraphEdgeKind) (*L3Subgraph, error) {
-	ac, err := db.lockSharedL3(agentID)
+	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	graphHash, startHash, err := graph.ResolveSubgraphStart(db.engine, core.SharedL3AgentID, graphID, startNodeID)
+	graphHash, startHash, err := graph.ResolveSubgraphStart(db.engine, core.SharedPoolAgentID, graphID, startNodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +88,7 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 	}
 
 	// Adjacency: all graph edges (filtered by edgeKinds), hyperedge nodeIDs fully connected.
-	adj, edges := graph.SubgraphAdjacency(db.engine, core.SharedL3AgentID, graphHash, edgeKinds)
+	adj, edges := graph.SubgraphAdjacency(db.engine, core.SharedPoolAgentID, graphHash, edgeKinds)
 
 	// BFS level order: maxDepth hops, one hop per round.
 	visited := graph.BfsWithinDepth(startHash, adj, maxDepth)
@@ -96,7 +96,7 @@ func (db *DB) QueryL3Subgraph(agentID uint64, graphID, startNodeID string, maxDe
 	// Subgraph extraction: visited nodes plus edges with both ends visited.
 	nodes := make([]core.HypergraphNode, 0, len(visited))
 	for h := range visited {
-		if n, err := core.ReadHypergraphNode(db.engine, core.SharedL3AgentID, h); err == nil {
+		if n, err := core.ReadHypergraphNode(db.engine, core.SharedPoolAgentID, h); err == nil {
 			nodes = append(nodes, *n)
 		}
 	}

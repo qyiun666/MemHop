@@ -130,7 +130,7 @@ func TestCrystallizeFullFlow(t *testing.T) {
 	if cap.Status != core.CapabilityDraft || cap.Origin != core.CapabilityOriginCrystallized {
 		t.Fatalf("crystallized capability metadata mismatch: %+v", cap)
 	}
-	if cap.Type != core.CapabilityComposite || cap.Name != "重构流程" {
+	if cap.Name != "重构流程" {
 		t.Fatalf("capability fields mismatch: %+v", cap)
 	}
 	if len(cap.Resources) != 2 || cap.Resources[0].Name != "read_file" || cap.Resources[1].Name != "write_file" {
@@ -233,11 +233,11 @@ func TestCrystallizeCreateDoesNotOverwriteActiveByName(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	cap := &core.Capability{
-		IDHash: core.CapabilityID("已有能力"), Name: "已有能力", Type: core.CapabilityMCP,
+		IDHash: core.CapabilityID("已有能力"), Name: "已有能力",
 		Summary: "旧摘要", Trigger: "旧触发", Status: core.CapabilityActive,
 		Origin: core.CapabilityOriginImported, Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "old_tool"}},
 	}
-	if err := core.WriteCapability(db.engine, core.DefaultAgentID, cap.IDHash, cap); err != nil {
+	if err := core.WriteCapability(db.engine, core.SharedPoolAgentID, cap.IDHash, cap); err != nil {
 		t.Fatal(err)
 	}
 	session := common.FormatHash(789)

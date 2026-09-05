@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // The file-wide shared L3 pool: one file hosts a single knowledge-graph pool
-// (core.SharedL3AgentID) that every agent domain reads and writes, while
+// (core.SharedPoolAgentID) that every agent domain reads and writes, while
 // scenes, archives and profiles stay domain-local.
 
 package internal
@@ -106,10 +106,10 @@ func TestSharedL3DomainIsReserved(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":["x"]}`)
 	db, _ := newSharedL3DB(t, srv.URL)
 
-	if err := db.DeleteAgent(core.SharedL3AgentID); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.DeleteAgent(core.SharedPoolAgentID); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("delete the shared domain: %v", err)
 	}
-	if err := db.CheckSession(core.SharedL3AgentID); err == nil {
+	if err := db.CheckSession(core.SharedPoolAgentID); err == nil {
 		t.Fatal("Session on the shared domain must be refused")
 	}
 	if _, err := db.ListL3(core.DefaultAgentID); err != nil {

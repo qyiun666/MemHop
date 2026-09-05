@@ -7,7 +7,7 @@
 // enumerates registered agents; DeleteAgent destroys the domain context and
 // tombstones every record of the domain. Two reserved domains are never
 // handed out: the default domain and the file-wide shared L3 domain
-// (core.SharedL3AgentID).
+// (core.SharedPoolAgentID).
 
 package internal
 
@@ -59,7 +59,7 @@ func (db *DB) CreateAgent(name string) (uint64, error) {
 			return 0, common.NewError(common.ErrIO, "agent id allocation", err)
 		}
 		id := binary.LittleEndian.Uint64(b[:])
-		if id == core.DefaultAgentID || id == core.SharedL3AgentID {
+		if id == core.DefaultAgentID || id == core.SharedPoolAgentID {
 			continue
 		}
 		if _, taken := db.idToName[id]; taken {
@@ -131,7 +131,7 @@ func (db *DB) DeleteAgent(agentID uint64) error {
 	if agentID == core.DefaultAgentID {
 		return common.NewError(common.ErrInvalidQuery, "the default domain cannot be deleted")
 	}
-	if agentID == core.SharedL3AgentID {
+	if agentID == core.SharedPoolAgentID {
 		return common.NewError(common.ErrInvalidQuery, "the shared L3 domain cannot be deleted")
 	}
 	if db.closed.Load() {

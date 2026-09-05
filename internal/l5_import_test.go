@@ -8,17 +8,22 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 const testCapabilityJSON = `{
-  "format": "memhop-capability/v3",
-  "name": "测试工具",
-  "type": "mcp",
-  "summary": "测试用 mcp 封装能力",
-  "trigger": "测试触发",
-  "resources": [
-    {"type": "mcp", "name": "test_tool", "ref": "test-server", "desc": "测试用"}
+  "format": "memhop-capability/v4",
+  "name": "测试包",
+  "capabilities": [
+    {
+      "name": "测试工具",
+      "summary": "测试用 mcp 封装能力",
+      "trigger": "测试触发",
+      "resources": [
+        {"type": "mcp", "name": "test_tool", "ref": "test-server", "desc": "测试用"}
+      ]
+    }
   ]
 }`
 
@@ -31,47 +36,54 @@ func writeTempCapability(t *testing.T, dir, name, content string) string {
 	return p
 }
 
-// An api-typed capability (ref api:MethodName) imports like any other:
-// exactly one same-typed resource is required, more are rejected.
-func TestImportCapabilityAPIType(t *testing.T) {
+// A v4 package imports every card into the shared pool; api-typed entries
+// (ref api:MethodName) need no special casing, and the package name stamps
+// each card.
+func TestImportCapabilityPackage(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 
 	apiPath := writeTempCapability(t, t.TempDir(), "cap.json", `{
-  "format": "memhop-capability/v3",
-  "name": "api-测试卡",
-  "type": "api",
-  "summary": "封装一个 api 方法",
-  "trigger": "api 测试",
-  "resources": [
-    {"type": "api", "name": "GetL0", "ref": "api:GetL0", "desc": "读取画像"}
+  "format": "memhop-capability/v4",
+  "name": "api-测试包",
+  "capabilities": [
+    {"name": "api-测试卡", "summary": "封装一个 api 方法", "trigger": "api 测试",
+     "resources": [{"type": "api", "name": "GetL0", "ref": "api:GetL0", "desc": "读取画像"}]},
+    {"name": "api-第二卡", "summary": "同包第二张卡", "trigger": "api 测试",
+     "resources": [{"type": "api", "name": "UpdateL0", "ref": "api:UpdateL0", "desc": "b"}]}
   ]
 }`)
-	cap, err := db.ImportCapability(core.DefaultAgentID, apiPath)
+	result, err := db.ImportCapability(core.DefaultAgentID, apiPath)
 	if err != nil {
-		t.Fatalf("import api capability: %v", err)
+		t.Fatalf("import package: %v", err)
 	}
-	if cap.Type != core.CapabilityAPI || len(cap.Resources) != 1 || cap.Resources[0].Ref != "api:GetL0" {
-		t.Fatalf("api capability mismatch: %+v", cap)
+	if len(result.CreatedIDs) != 2 || len(result.UpdatedIDs) != 0 || len(result.Errors) != 0 {
+		t.Fatalf("package import result: %+v", result)
+	}
+	pkg := "api-测试包"
+	caps, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{Package: &pkg})
+	if err != nil {
+		t.Fatalf("list by package: %v", err)
+	}
+	if len(caps) != 2 || caps[0].Package != "api-测试包" {
+		t.Fatalf("package cards mismatch: %+v", caps)
 	}
 
-	badPath := writeTempCapability(t, t.TempDir(), "bad.json", `{
+	// A pre-v4 document is rejected explicitly, not silently coerced.
+	v3Path := writeTempCapability(t, t.TempDir(), "old.json", `{
   "format": "memhop-capability/v3",
-  "name": "api-坏卡",
+  "name": "旧卡",
   "type": "api",
-  "summary": "两个资源应被拒绝",
-  "trigger": "api 测试",
-  "resources": [
-    {"type": "api", "name": "GetL0", "ref": "api:GetL0", "desc": "a"},
-    {"type": "api", "name": "UpdateL0", "ref": "api:UpdateL0", "desc": "b"}
-  ]
+  "summary": "s",
+  "trigger": "t",
+  "resources": [{"type": "api", "name": "GetL0", "ref": "api:GetL0"}]
 }`)
-	if _, err := db.ImportCapability(core.DefaultAgentID, badPath); err == nil {
-		t.Fatal("api capability with two resources must be rejected")
+	if _, err := db.ImportCapability(core.DefaultAgentID, v3Path); err == nil {
+		t.Fatal("v3 document must be rejected")
 	}
 }
 
 // Byte-identical re-import under the same name must not append a record:
-// the file is append-only and hosts may re-import at every startup.
+// the file is append-only and the plug/ scan re-imports at every startup.
 func TestImportCapabilityUnchangedSkip(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	path := writeTempCapability(t, t.TempDir(), "cap.json", testCapabilityJSON)
@@ -80,17 +92,28 @@ func TestImportCapabilityUnchangedSkip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first import: %v", err)
 	}
-	if first.Status != core.CapabilityActive || first.Origin != core.CapabilityOriginImported {
-		t.Fatalf("first import: status=%v origin=%v", first.Status, first.Origin)
+	if len(first.CreatedIDs) != 1 {
+		t.Fatalf("first import: %+v", first)
+	}
+	stored, err := repo.GetCapabilityL5(db.engine, core.SharedPoolAgentID, core.CapabilityID("测试工具"))
+	if err != nil {
+		t.Fatalf("read stored: %v", err)
 	}
 	second, err := db.ImportCapability(core.DefaultAgentID, path)
 	if err != nil {
 		t.Fatalf("second import: %v", err)
 	}
-	if second.UpdatedAt != first.UpdatedAt {
-		t.Fatalf("unchanged re-import must be a no-op: UpdatedAt %d -> %d", first.UpdatedAt, second.UpdatedAt)
+	if len(second.UpdatedIDs) != 1 || len(second.CreatedIDs) != 0 {
+		t.Fatalf("unchanged re-import must be a no-op update: %+v", second)
 	}
-	if got := len(core.CollectAllCapabilities(db.engine, core.DefaultAgentID)); got != 1 {
+	after, err := repo.GetCapabilityL5(db.engine, core.SharedPoolAgentID, core.CapabilityID("测试工具"))
+	if err != nil {
+		t.Fatalf("read stored after: %v", err)
+	}
+	if after.UpdatedAt != stored.UpdatedAt {
+		t.Fatalf("unchanged re-import must not touch the record: %d -> %d", stored.UpdatedAt, after.UpdatedAt)
+	}
+	if got := len(core.CollectAllCapabilities(db.engine, core.SharedPoolAgentID)); got != 1 {
 		t.Fatalf("unchanged re-import appended a record: %d capabilities", got)
 	}
 }

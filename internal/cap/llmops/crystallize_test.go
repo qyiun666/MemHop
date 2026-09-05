@@ -13,7 +13,7 @@ import (
 func TestParseCrystallizeResponse(t *testing.T) {
 	resp := `{
   "capabilities": [
-    {"action": "create", "capability": {"name": "重构流程", "type": "composite", "summary": "重构", "trigger": "需要重构时", "resources": [
+    {"action": "create", "capability": {"name": "重构流程", "summary": "重构", "trigger": "需要重构时", "resources": [
       {"type": "mcp", "name": "read_file", "config": "{\"file\":\"a.go\"}"}, {"type": "mcp", "name": "write_file"},
       {"type": "skill", "name": "s1", "desc": "d"}
     ]}},
@@ -29,7 +29,7 @@ func TestParseCrystallizeResponse(t *testing.T) {
 		t.Fatalf("want 2 valid capabilities, got %d", len(out.Capabilities))
 	}
 	c := out.Capabilities[0]
-	if c.Action != "create" || c.Capability.Name != "重构流程" || c.Capability.Type != core.CapabilityComposite {
+	if c.Action != "create" || c.Capability.Name != "重构流程" || len(c.Capability.Resources) != 3 {
 		t.Fatalf("capability mismatch: %+v", c)
 	}
 	if len(c.Capability.Resources) != 3 || c.Capability.Resources[0].Name != "read_file" {
@@ -42,7 +42,7 @@ func TestBuildCrystallizePrompt(t *testing.T) {
 		{Seq: 1, EventType: "tool_call", Payload: "read file"},
 		{Seq: 2, EventType: "tool_result", Payload: "ok"},
 	}
-	existing := []core.Capability{{Name: "deploy-runbook", Type: core.CapabilitySkill, Summary: "部署", Trigger: "部署"}}
+	existing := []core.Capability{{Name: "deploy-runbook", Summary: "部署", Trigger: "部署"}}
 	prompt := buildCrystallizePrompt(events, existing)
 	if strings.Contains(prompt, "read file") == false || strings.Contains(prompt, "deploy-runbook") == false {
 		t.Fatalf("prompt missing inputs: %s", prompt)

@@ -157,14 +157,12 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return out, nil
 }
 
-// ImportCapability imports a capability and returns it with a hex ID.
-func (s *Session) ImportCapability(path string) (*Capability, error) {
-	c, err := s.Session.ImportCapability(path)
-	if err != nil {
-		return nil, err
-	}
-	out := fromCapability(*c)
-	return &out, nil
+// ImportCapability imports a memhop-capability/v4 package (a single-card file
+// is a one-card package) into the file-wide shared L5 pool and reports
+// per-card dispositions; every agent domain sees the imported cards. The
+// result carries hex ids, so the alias maps 1:1.
+func (s *Session) ImportCapability(path string) (*CapabilityImportResult, error) {
+	return s.Session.ImportCapability(path)
 }
 
 // UpdateCapability updates a capability and returns it with a hex ID.

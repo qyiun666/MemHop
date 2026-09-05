@@ -3,11 +3,25 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
-## Unreleased — L3 知识图升级为文件级公共池
+## Unreleased
+
+### L5 统一卡 + 能力池公共化 + plug/ 自动注入
+
+**动机**：能力卡的四种类型（mcp/skill/api/composite）各带一套校验，而宿主的执行路径只认资源条目本身——卡片级 type 与 Workflow 字段是宿主不读的双真相源（动作链实际住在资源 Config 里）。统一成一种形态后这些特判全部消失；同时 L5 像知识图一样天然是「一份文件一份能力」，插件目录让宿主零注入成本拿到能力。
+
+- **一卡统一形态**：卡 = 名称 + N 个功能条目（ResourceRef），无卡片级 type/Workflow；每个条目自带启动方式（type=mcp/skill/api/composite + ref/config）/说明（desc）/怎么用（input/output），与宿主 ToolSpec 逐字段同构。动作链唯一形态 = composite 条目 Config 的 `{"steps":[{"tool":...,"args":...}]}`（`tool` 键与宿主可执行解析器同款）；`Workflow`/`WorkflowStep` 类型与旧 `ref` 键形态删除。校验收敛为包级+卡级两条（name/trigger-summary/resources/卡名包内唯一），Config 以 `{`/`[` 开头须合法 JSON 且 steps 每步带非空 `tool` 键
+- **v4 插件包文档**：`memhop-capability/v4` = 一个文档 1..N 张卡（`name` + `capabilities[]`），卡 ID 仍由卡名派生、包内唯一，包名盖到每张卡的 `Package` 字段；v3 文档显式拒绝。`ImportCapability` 返回逐卡 `CapabilityImportResult{CreatedIDs/UpdatedIDs/Errors}`，同字节重导入零写入（追加日志不随启动膨胀）；`CapabilityListQuery` 的 `Type` 过滤换成 `Package` 过滤
+- **能力池文件级公共化**：L5 记录全部迁入保留公共域（`SharedL3AgentID` 改名 `SharedPoolAgentID`，底层域值不变），所有 L5 大方法走 `lockSharedPool`——能力池全 agent 共用，任何 agent 的写全家可见，`DeleteAgent` 不动池
+- **plug/ 自动注入**：`<meh 同目录>/plug/<包>/capability.json` 在每次 Open 注入共享池（Origin=imported、Package=包名；坏包 Warn 跳过不阻断 Open，同字节重注入零写入）
+- **格式 0x000A → 0x000B**：L5 记录换域 = 语义布局变更，旧文件 Open 时显式拒绝、不迁移
+- 结晶 prompt 改按新形态产出（功能条目数组 + config 动作链），PromptCard 渲染 `package:` 行与条目级 `steps:` 行（`a -> b -> c`）；内置 6 张卡转 v4 单卡包，链序并入 summary
+- 公开面方法数不变（34 会话 + 8 DB 方法）；MCP 工具数不变（31：capability list/update 的 type/workflow 参数删除、list 增 package、import 返回包摘要）；决策档案 `notes/implemented/architecture/2026-09-06-l5-uniform-card-shared-pool.md`
+
+### L3 知识图升级为文件级公共池
 
 **动机**：一个 `.meh` 承载主 agent + 多个子 agent（家族共用一份记忆文件）时，L3 是项目级知识/代码图——宿主导入、库只存——本就不该按 agent 复制。现在 L3 是**文件级公共池**：文件内所有 agent 域共享同一份知识图，导一次全家可见、可挂锚；删 agent（`DeleteAgent`）不动公共池。场景/原文/画像/能力/轨迹仍按域完全隔离。
 
-- **机制**：新增保留域 `core.SharedL3AgentID`（宿主不可见、不可删、`Session` 拒绑、`ListAgents` 不列、空闲回收豁免）；全部 L3 记录住该域，`internal` 根的 8 个 L3 大方法改走 `lockSharedL3`（先 `CheckSession` 校验调用方活着，再锁公共域——L3 操作跨 agent 全局串行，链路无 LLM、操作短）。graph/repo 小方法包零改动
+- **机制**：新增保留域 `core.SharedPoolAgentID`（宿主不可见、不可删、`Session` 拒绑、`ListAgents` 不列、空闲回收豁免；0x000B 起同时承载 L3 与 L5 公共池）；全部 L3 记录住该域，`internal` 根的 8 个 L3 大方法改走 `lockSharedPool`（先 `CheckSession` 校验调用方活着，再锁公共域——L3 操作跨 agent 全局串行，链路无 LLM、操作短）。graph/repo 小方法包零改动
 - **锚点跨域**：场景锚点校验（`Search{L3ID}` / `UpdateScene{L3ID}`）改读公共域记录；`DeleteL3` 两阶段——公共锁内删图，释放后遍历「默认域 + 注册表」逐域清锚（`detachGraphAnchors`），不嵌套双锁
 - **格式 0x0009 → 0x000A**：0x0009 及更早文件在 Open 时显式拒绝、不迁移（沿用先例；不升版本的替代会让旧按域 L3 记录变孤儿、同名重导入产出双份）
 - **MCP 语义变更**：单文件多租户下所有租户共享同一份 L3 池——原「no data is ever shared across tenants」承诺改写为「除 L3 外按域隔离」

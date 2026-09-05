@@ -159,7 +159,7 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 
 // ---- L5 capabilities ----
 
-func (s *Session) ImportCapability(path string) (*Capability, error) {
+func (s *Session) ImportCapability(path string) (*CapabilityImportResult, error) {
 	return s.db.ImportCapability(s.agentID, path)
 }
 
