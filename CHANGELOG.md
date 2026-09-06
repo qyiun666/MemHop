@@ -14,6 +14,7 @@ README 的版本表与 git log。
 - **能力池文件级公共化**：L5 记录全部迁入保留公共域（`SharedL3AgentID` 改名 `SharedPoolAgentID`，底层域值不变），所有 L5 大方法走 `lockSharedPool`——能力池全 agent 共用，任何 agent 的写全家可见，`DeleteAgent` 不动池
 - **plug/ 自动注入**：`<meh 同目录>/plug/<包>/capability.json` 在每次 Open 注入共享池（Origin=imported、Package=包名；坏包 Warn 跳过不阻断 Open，同字节重注入零写入）
 - **格式 0x000A → 0x000B**：L5 记录换域 = 语义布局变更，旧文件 Open 时显式拒绝、不迁移
+- 结晶与导入拒收与内置卡同名的卡（记进 `Errors`，不落库——存储影子卡将永远无法再更新或删除），结晶提示的现有目录并入内置卡；资源条目 `type` 限定 mcp/skill/api/composite 四值，merge 候选的资源条目走同一校验；`UpdateCapability` 保留 `FileHash`（包水位，非内容指纹）——未变更包的重导入是 no-op，宿主对卡的生命周期与定义修改存活到包内容真正变更；plug/ 目录读取失败（权限/IO）告警，缺目录仍为 no-op
 - 结晶 prompt 改按新形态产出（功能条目数组 + config 动作链），PromptCard 渲染 `package:` 行与条目级 `steps:` 行（`a -> b -> c`）；内置 6 张卡转 v4 单卡包，链序并入 summary
 - 公开面方法数不变（34 会话 + 8 DB 方法）；MCP 工具数不变（31：capability list/update 的 type/workflow 参数删除、list 增 package、import 返回包摘要）；决策档案 `notes/implemented/architecture/2026-09-06-l5-uniform-card-shared-pool.md`
 

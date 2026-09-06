@@ -5,7 +5,7 @@
 // memhop-capability/v4 package (capability.json) is imported into the shared
 // L5 pool at Open. A broken package is warned and skipped — a bad user plugin
 // must not brick the database open — while good packages land. Re-opening is
-// idempotent: a byte-identical re-import writes nothing (importCapabilities'
+// idempotent: a byte-identical re-import writes nothing (importCapabilitiesLocked's
 // FileHash guard), so the append-only file does not grow on every start.
 
 package internal

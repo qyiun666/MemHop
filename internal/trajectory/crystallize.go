@@ -33,6 +33,18 @@ func ApplyCandidate(engine *core.StorageEngine, agentID uint64, cand llmops.Crys
 		result.Details = append(result.Details, detail)
 		return nil
 	}
+	if action == "merge" {
+		// A merge overwrites the stored resources wholesale: the incoming
+		// entries must pass the same resource checks a create would, or the
+		// candidate is skipped instead of degrading a stored card.
+		if err := capability.ValidateResources(cand.Capability.Resources); err != nil {
+			detail.Action = "skip"
+			detail.Reason = err.Error()
+			result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())
+			result.Details = append(result.Details, detail)
+			return nil
+		}
+	}
 	if action != "reuse" && action != "merge" {
 		if err := capability.ValidateCard(&cand.Capability); err != nil {
 			result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())

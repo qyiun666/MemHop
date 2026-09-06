@@ -99,9 +99,9 @@ func ValidatePackage(in *core.CapabilityPackageDoc) error {
 	return nil
 }
 
-// ValidateCard checks one capability card: name, trigger/summary presence,
-// the resource shape and JSON-Schema-shaped tool declarations. One card
-// carries any number of function entries — there is no card-level type.
+// ValidateCard checks one capability card: name, trigger/summary presence
+// and the resource shape (via ValidateResources). One card carries any
+// number of function entries — there is no card-level type.
 func ValidateCard(in *core.CapabilityImport) error {
 	if strings.TrimSpace(in.Name) == "" {
 		return common.NewError(common.ErrInvalidQuery, "capability name is required")
@@ -112,7 +112,15 @@ func ValidateCard(in *core.CapabilityImport) error {
 	if len(in.Resources) == 0 {
 		return common.NewError(common.ErrInvalidQuery, "capability requires at least one resource entry")
 	}
-	for _, res := range in.Resources {
+	return ValidateResources(in.Resources)
+}
+
+// ValidateResources checks a card's function entries: non-empty names, a
+// type from the four-value enum, JSON-valid input declarations and step
+// chains. Merge candidates reuse it — they overwrite the stored resources
+// wholesale, so their entries must pass the same checks.
+func ValidateResources(resources []core.ResourceRef) error {
+	for _, res := range resources {
 		if strings.TrimSpace(res.Name) == "" {
 			return common.NewError(common.ErrInvalidQuery, "resource name is required")
 		}
