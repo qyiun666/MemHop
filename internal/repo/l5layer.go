@@ -53,20 +53,6 @@ func DeleteCapabilityL5(engine *core.StorageEngine, agentID uint64, id uint64) b
 	return err == nil
 }
 
-// ActivateCapabilityL5 promotes a draft to active.
-func ActivateCapabilityL5(engine *core.StorageEngine, agentID uint64, id uint64) (*core.Capability, error) {
-	cap, err := GetCapabilityL5(engine, agentID, id)
-	if err != nil {
-		return nil, err
-	}
-	cap.Status = core.CapabilityActive
-	cap.UpdatedAt = time.Now().UnixMilli()
-	if err := core.WriteCapability(engine, agentID, cap.IDHash, cap); err != nil {
-		return nil, err
-	}
-	return cap, nil
-}
-
 // RecordCapabilityUsageL5 updates runtime feedback after a host uses a
 // capability.
 func RecordCapabilityUsageL5(engine *core.StorageEngine, agentID uint64, id uint64, success bool) (*core.Capability, error) {

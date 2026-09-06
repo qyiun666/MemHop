@@ -168,8 +168,8 @@ func (idx *TrajIndex) RemoveEvents(sessionID uint64, idHashes []uint64) int {
 }
 
 // RemoveSession drops one whole turn and returns its event ids in Seq
-// order; nil for unknown turns (idempotent). Used by PlanReplace, which
-// removes a plan's bound events wholesale and restarts its Seq space.
+// order; nil for unknown turns (idempotent). Used by the SyncPlanTree wipe,
+// which removes a plan's bound events wholesale and restarts its Seq space.
 func (idx *TrajIndex) RemoveSession(sessionID uint64) []uint64 {
 	idx.mu.Lock()
 	defer idx.mu.Unlock()

@@ -218,7 +218,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if _, err := s.QueryL3Subgraph(gid, nodes[0].IDHash, 1, nil); err != nil {
 		t.Fatalf("session querySubgraph: %v", err)
 	}
-	// L5 capability via session (import → get → activate → usage → delete).
+	// L5 capability via session (import → get → patch-activate → usage → delete).
 	sid := t.TempDir()
 	capRes, err := s.ImportCapability(writeCapability(t, sid, "sess-cap"))
 	if err != nil {
@@ -235,7 +235,8 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if got, err := s.UpdateCapability(cid, CapabilityPatch{Summary: &sum}); err != nil || got.Summary != sum {
 		t.Fatalf("session updateCap: %v %+v", err, got)
 	}
-	if _, err := s.ActivateCapability(cid); err != nil {
+	activeStatus := CapabilityActive
+	if _, err := s.UpdateCapability(cid, CapabilityPatch{Status: &activeStatus}); err != nil {
 		t.Fatalf("session activate: %v", err)
 	}
 	if _, err := s.RecordCapabilityUsage(cid, true); err != nil {

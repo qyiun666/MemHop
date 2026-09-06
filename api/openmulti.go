@@ -14,7 +14,6 @@
 package api
 
 import (
-	"github.com/qyiun666/MemHop/capabilities"
 	"github.com/qyiun666/MemHop/internal"
 )
 
@@ -27,14 +26,13 @@ type MultiAgentDB struct {
 }
 
 // OpenMulti creates or opens a multi-agent MemHop database. internal.Open
-// performs all assembly (engine, per-domain caches, builtins); the embedded
-// capability toolbox is injected here because internal must not import the
-// capabilities data package.
+// performs all assembly (engine, per-domain caches, built-in capability
+// manuals, plug/ packages).
 func OpenMulti(cfg *MemHopConfig) (*MultiAgentDB, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	d, err := internal.Open(cfg, capabilities.FS)
+	d, err := internal.Open(cfg)
 	if err != nil {
 		return nil, err
 	}

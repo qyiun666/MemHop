@@ -30,13 +30,13 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 31 tools on the alice session.
+	// tools/list exposes all 30 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 31 {
-		t.Errorf("expected 31 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 30 {
+		t.Errorf("expected 30 tools, got %d", len(tools.Tools))
 	}
 	names := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -49,7 +49,7 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		"memhop_knowledge_get", "memhop_knowledge_list", "memhop_knowledge_import",
 		"memhop_knowledge_update", "memhop_knowledge_delete", "memhop_knowledge_nodes",
 		"memhop_knowledge_subgraph", "memhop_archive_search", "memhop_archive_get",
-		"memhop_capability_import", "memhop_capability_get", "memhop_capability_delete", "memhop_capability_list", "memhop_capability_update", "memhop_capability_activate", "memhop_capability_usage",
+		"memhop_capability_import", "memhop_capability_get", "memhop_capability_delete", "memhop_capability_list", "memhop_capability_update", "memhop_capability_usage",
 		"memhop_trajectory_append", "memhop_trajectory_read", "memhop_trajectory_sessions",
 		"memhop_crystallize",
 	} {

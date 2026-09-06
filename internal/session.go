@@ -177,10 +177,6 @@ func (s *Session) ListCapabilities(q CapabilityListQuery) ([]Capability, error) 
 	return s.db.ListCapabilities(s.agentID, q)
 }
 
-func (s *Session) ActivateCapability(id string) (*Capability, error) {
-	return s.db.ActivateCapability(s.agentID, id)
-}
-
 func (s *Session) RecordCapabilityUsage(id string, success bool) (*Capability, error) {
 	return s.db.RecordCapabilityUsage(s.agentID, id, success)
 }
@@ -215,7 +211,7 @@ func (s *Session) Crystallize(ctx context.Context, turnID string) (*CrystallizeR
 	return s.db.Crystallize(ctx, s.agentID, turnID)
 }
 
-// ---- L6 plan (tri-form) ----
+// ---- L6 plan ----
 
 // PlanCommit advances a plan node to a status and appends the step event.
 func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status PlanStatus, summary string) error {
@@ -227,15 +223,10 @@ func (s *Session) PlanState(planID string) (*PlanTree, error) {
 	return s.db.PlanState(s.agentID, planID)
 }
 
-// PlanReplace wipes a plan's nodes and bound events for re-planning,
-// keeping the planID; a non-empty rootTitle seeds a titled pending root.
-func (s *Session) PlanReplace(planID, rootTitle string) error {
-	return s.db.PlanReplace(s.agentID, planID, rootTitle)
-}
-
 // SyncPlanTree replaces one plan's whole tree from the host's authoritative
 // snapshot: adds/updates nodes by path, deletes vanished nodes (with their
-// bound events) and never appends a plan_step event.
+// bound events) and never appends a plan_step event. A nil root wipes the
+// plan (nodes and bound events) and keeps the planID.
 func (s *Session) SyncPlanTree(planID string, root *PlanNode) error {
 	return s.db.SyncPlanTree(s.agentID, planID, root)
 }

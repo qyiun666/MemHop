@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L5 capability tools: import/get/delete/list/activate/usage/update.
+// L5 capability tools: import/get/delete/list/usage/update.
 //
 // CapabilityPatch carries nested struct fields that the api package does not
 // re-export by name; string params are mapped to the api enum constants
@@ -149,7 +149,7 @@ func registerCapabilityIOTools(s *mcp.Server, db *memhop.Session, capDir string)
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_delete",
-		Description: "删除一个 L5 能力（内置能力卡只读，删除会被拒绝）。",
+		Description: "删除一个 L5 能力记录；删除不存在的卡会被报告（内置说明书卡不是存储记录，其 id 同样报 not-found）。",
 		InputSchema: objSchema(map[string]any{
 			"id": strProp("能力 ID（16 位 hex），必填"),
 		}, "id"),
@@ -184,22 +184,8 @@ func registerCapabilityListTool(s *mcp.Server, db *memhop.Session) {
 	}))
 }
 
-// registerCapabilityLifecycleTools installs activate/usage over one capability.
+// registerCapabilityLifecycleTools installs usage feedback over one capability.
 func registerCapabilityLifecycleTools(s *mcp.Server, db *memhop.Session) {
-	s.AddTool(&mcp.Tool{
-		Name:        "memhop_capability_activate",
-		Description: "激活一个 draft 能力（draft → active）。",
-		InputSchema: objSchema(map[string]any{
-			"id": strProp("能力 ID（16 位 hex），必填"),
-		}, "id"),
-	}, handle[capabilityIDArgs, memhop.Capability](func(a capabilityIDArgs) (memhop.Capability, error) {
-		cap, err := db.ActivateCapability(a.ID)
-		if err != nil {
-			return memhop.Capability{}, err
-		}
-		return *cap, nil
-	}))
-
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_usage",
 		Description: "记录一次能力调用结果（成功/失败），更新成功率与触发计数。",
@@ -219,7 +205,7 @@ func registerCapabilityLifecycleTools(s *mcp.Server, db *memhop.Session) {
 func registerCapabilityUpdateTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_capability_update",
-		Description: "部分更新一个 L5 能力（空字符串字段表示不修改；内置能力卡只读，更新会被拒绝）。",
+		Description: "部分更新一个 L5 能力（空字符串字段表示不修改；status 取 draft|active|deprecated，传 active 即激活 draft 卡）。",
 		InputSchema: objSchema(map[string]any{
 			"id":        strProp("能力 ID（16 位 hex），必填"),
 			"version":   strProp("版本号"),

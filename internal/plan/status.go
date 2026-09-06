@@ -4,7 +4,7 @@
 // Package plan holds the L6 plan-tree small methods: the status surface,
 // node-path mechanics, the node/event write steps, the forest build and
 // rollup, and the whole-tree sync. The big methods (AppendTrajectory on its
-// plan branch, PlanCommit, PlanState, PlanReplace, SyncPlanTree) stay in the
+// plan branch, PlanCommit, PlanState, SyncPlanTree) stay in the
 // composition root with the domain lock.
 
 package plan
@@ -82,8 +82,8 @@ func MintID(name string) string {
 
 // ParsePlanID parses a host plan id and rejects 0: AppendTrajectory writes
 // bare turn events with PlanID=0, so 0 is a reserved sentinel and never a
-// valid plan. Accepting it would let PlanReplace delete every bare event of
-// the domain (DeletePlanRecords matches those records).
+// valid plan. Accepting it would let a nil-tree sync delete every bare event
+// of the domain (DeletePlanRecords matches those records).
 func ParsePlanID(planID string) (uint64, error) {
 	ph, err := common.ParseID(planID)
 	if err != nil {

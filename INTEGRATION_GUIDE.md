@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.6.0**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.7.0**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 ---
@@ -122,7 +122,7 @@ db, err := dbm.Session(agentID)
 ```
 
 - `api.OpenMulti(cfg)` is the only entry point.
-- `OpenMulti` mounts the built-in read-only capability cards (nothing written to `.meh`).
+- `OpenMulti` assembles the built-in capability manuals in code — nine cards covering every session method, listed by `ListCapabilities` but never stored (nothing written to `.meh`).
 - Explicit flush: `db.Checkpoint()`.
 - Space reclamation: `db.CompactTo(newPath)` writes a defragmented copy of the whole file (live records only, its own rebuilt index) and never touches the open one — `newPath` must not exist yet. Deletes are tombstones, so a domain that dropped scenes or graphs only gives bytes back here; the swap (Close → rename → Open) stays yours, which is why this call is Go-side and not an MCP tool.
 
@@ -324,11 +324,10 @@ result is every original the file holds.
 | `db.ListCapabilities(CapabilityListQuery{IDs, Status, Package, Keyword})` | list capability cards (the pool is file-wide: every agent domain shares it); conditions AND, so `IDs: []string{id}` reads one card |
 | `db.ImportCapability(path)` | import a memhop-capability/v4 plugin package (one document = package name + 1..N cards; or a directory holding `capability.json`); returns per-card `CapabilityImportResult{CreatedIDs/UpdatedIDs/Errors}`. The Go surface takes any path the host can name, while the MCP server anchors it at `--capability-dir`. Imported cards land **active** (a crystallized card lands draft); a byte-identical re-import writes nothing |
 | `db.DeleteCapability(id)` | delete |
-| `db.UpdateCapability(id, CapabilityPatch{...})` | partial update (built-ins rejected; Name/Package immutable) |
-| `db.ActivateCapability(id)` | draft → active |
+| `db.UpdateCapability(id, CapabilityPatch{...})` | partial update (Name/Package immutable); the `Status` patch is the lifecycle switch — pass active to promote a draft |
 | `db.RecordCapabilityUsage(id, success)` | usage feedback |
 
-> One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). The built-in toolbox (6 English cards: `memhop-guide` + 5 LLM-callable manuals) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `ListCapabilities(CapabilityListQuery{IDs: []string{id}})`. Also: a `plug/<package>/capability.json` folder next to the `.meh` file is auto-injected into the pool at every Open (a broken package is warned and skipped).
+> One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). The built-in manuals (9 English cards: `memhop-guide` + 8 LLM-callable manuals — cycle, knowledge, scene, archive, profile, capability, trajectory, plan — covering every session method) are assembled in code at Open and served by `ListCapabilities` (never persisted to `.meh`; a write to one reports not-found; a stored same-name card shadows it, deleting it restores the manual); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `ListCapabilities(CapabilityListQuery{IDs: []string{id}})`. Also: a `plug/<package>/capability.json` folder next to the `.meh` file is auto-injected into the pool at every Open (a broken package is warned and skipped).
 
 ### L6 trajectory + crystallization
 
@@ -355,7 +354,7 @@ res, err := db.Crystallize(ctx, turnIDHex)
 // res.CreatedIDs / ReusedIDs / MergedIDs / Errors
 // res.Details — per-candidate disposition: []CrystallizeDetail{
 //   {Name, Action: "create|reuse|merge|skip", CapabilityID, Reason}}
-// Activate drafts with ActivateCapability afterwards.
+// Promote drafts with UpdateCapability{Status: &CapabilityActive} afterwards.
 
 // Enumerate turns (e.g. to pick crystallize candidates).
 sessions, err := db.ListTrajectorySessions()
@@ -384,18 +383,17 @@ planID := api.NewPlanID("cat-42")     // deterministic 16-hex; naming it again
 
 | Call | Meaning |
 |---|---|
-| `db.SyncPlanTree(planID, root *PlanNode)` | push the authoritative whole tree: adds/updates nodes by `NodePath`, deletes vanished nodes with their bound events, emits no `plan_step`. A blank `Title`/`Type`/`Status`/`Summary` inherits the stored value, so a partial snapshot never rewinds a finished step |
+| `db.SyncPlanTree(planID, root *PlanNode)` | push the authoritative whole tree: adds/updates nodes by `NodePath`, deletes vanished nodes with their bound events, emits no `plan_step`. A blank `Title`/`Type`/`Status`/`Summary` inherits the stored value, so a partial snapshot never rewinds a finished step. A **nil root wipes the plan** — every node and bound event is removed and the planID is kept; seed the next task's tree with a single-node sync (an empty status lands pending) |
 | `db.AppendTrajectory(planID, nodePath, ev)` | record a step event against that node (creating the node chain as pending if missing). `nodePath` is **dotted** (`"1"`, `"1.2.1"`) and must sit under its parent's path; `EventType` must come from the plan vocabulary: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` (a bare turn event takes any `EventType` the host names) |
 | `db.PlanCommit(planID, nodePath, ev, api.PlanStatusDone, summary)` | advance a node's status and append its step event; `done` children's summaries roll up into their parent |
 | `db.PlanState(planID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`) — this is also how a host recovers its tree after a restart |
-| `db.PlanReplace(planID, rootTitle)` | wipe the tree and (optionally) seed a fresh titled root, keeping the id |
 
 `0000000000000000` is reserved (it is the bare-event sentinel) and every plan
 entry rejects it.
 
 ---
 
-## 9. Exported types (v1.6.0)
+## 9. Exported types (v1.7.0)
 
 | Kind | Names | Use |
 |---|---|---|
@@ -531,7 +529,7 @@ func main() {
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
    isolated per domain except the file-wide L3/L5 pools; legacy files
    (`FormatVersion < 0x000B`) cannot be opened or migrated.
-7. **Built-in capability cards are read-only**: `UpdateCapability` rejects them.
+7. **The built-in manuals are not stored records**: they are listed by `ListCapabilities`, but a write to one (`UpdateCapability` / `DeleteCapability` / `RecordCapabilityUsage`) reports `ErrNotFound` like any record that is not there.
 8. **Trajectories auto-expire**: Dream drops events older than 7 days;
    the external surface is append + query only (`AppendTrajectory` /
    `ReadTrajectory` / `ListTrajectorySessions`) — no delete API. A turn's

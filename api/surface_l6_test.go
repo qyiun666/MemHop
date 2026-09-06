@@ -148,10 +148,10 @@ func TestSurfacePlanTriForm(t *testing.T) {
 	}
 }
 
-// TestSurfacePlanReplaceForest covers the host restart-recovery loop: two
-// top-level steps form a two-root forest, and PlanReplace wipes that tree and
-// reseeds a single pending root under the same plan id.
-func TestSurfacePlanReplaceForest(t *testing.T) {
+// TestSurfacePlanWipeAndReseed covers the host restart-recovery loop: two
+// top-level steps form a two-root forest, a nil-root sync wipes that tree,
+// and a single-node sync reseeds one pending root under the same plan id.
+func TestSurfacePlanWipeAndReseed(t *testing.T) {
 	db := openSurfaceDB(t)
 	planID := NewPlanID("plan-replace")
 	for _, step := range []string{"1", "2"} {
@@ -164,8 +164,16 @@ func TestSurfacePlanReplaceForest(t *testing.T) {
 		t.Fatalf("forest shape: roots=%d total=%d err=%v", len(tree.Roots), tree.TotalCount, err)
 	}
 
-	if err := db.PlanReplace(planID, "rewrite"); err != nil {
-		t.Fatalf("replace: %v", err)
+	if err := db.SyncPlanTree(planID, nil); err != nil {
+		t.Fatalf("wipe: %v", err)
+	}
+	tree, err = db.PlanState(planID)
+	if err != nil || len(tree.Roots) != 0 || tree.TotalCount != 0 {
+		t.Fatalf("wiped plan: %+v err=%v", tree.Roots, err)
+	}
+
+	if err := db.SyncPlanTree(planID, &PlanNode{NodePath: "1", Title: "rewrite"}); err != nil {
+		t.Fatalf("reseed: %v", err)
 	}
 	tree, err = db.PlanState(planID)
 	if err != nil || len(tree.Roots) != 1 || tree.Roots[0].Title != "rewrite" || tree.Roots[0].Status != "pending" {
@@ -331,8 +339,8 @@ func TestSurfaceUpdateSceneAnchor(t *testing.T) {
 
 // TestSurfaceReservedPlanID locks the planID=0 guard: the all-zero hex id is
 // the sentinel AppendTrajectory writes on bare turn events, so no plan entry
-// point may accept it — PlanReplace(0) used to delete every turn event of the
-// domain.
+// point may accept it — a nil-tree sync on 0 would delete every turn event
+// of the domain.
 func TestSurfaceReservedPlanID(t *testing.T) {
 	db := openSurfaceDB(t)
 	const zero = "0000000000000000"
@@ -345,11 +353,11 @@ func TestSurfaceReservedPlanID(t *testing.T) {
 	}
 	ev := TrajectorySlot{EventType: "plan_step", Timestamp: now}
 	calls := map[string]func() error{
-		"AppendNode":  func() error { return db.AppendTrajectory(zero, "1", ev) },
-		"PlanCommit":  func() error { return db.PlanCommit(zero, "1", ev, "done", "") },
-		"PlanState":   func() error { _, err := db.PlanState(zero); return err },
-		"PlanReplace": func() error { return db.PlanReplace(zero, "x") },
-		"SyncPlanTree": func() error {
+		"AppendNode":   func() error { return db.AppendTrajectory(zero, "1", ev) },
+		"PlanCommit":   func() error { return db.PlanCommit(zero, "1", ev, "done", "") },
+		"PlanState":    func() error { _, err := db.PlanState(zero); return err },
+		"SyncPlanTree": func() error { return db.SyncPlanTree(zero, nil) },
+		"SyncPlanTreeRoot": func() error {
 			return db.SyncPlanTree(zero, &PlanNode{NodePath: "1", Title: "t"})
 		},
 	}

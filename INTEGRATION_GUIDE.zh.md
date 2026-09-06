@@ -1,7 +1,7 @@
 # MemHop 宿主集成指南（Go API 方式）
 
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序（不经 MCP server）。
-> 适用版本：**v1.6.0**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 适用版本：**v1.7.0**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 ---
 
@@ -109,7 +109,7 @@ defer dbm.Close() // 写检查点快照 + 释放 mmap/文件锁
 ```
 
 - `api.OpenMulti(cfg)`：唯一入口。
-- Open 成功即自动挂载内置能力卡（只读，不写入 .meh）。
+- Open 成功即在代码里组装好内置说明书卡（9 张、覆盖全部会话方法，`ListCapabilities` 可列出但不落 `.meh`）。
 - 中途主动落盘：`db.Checkpoint()`。
 - 空间回收：`db.CompactTo(newPath)` 写出一份只含存活记录、自带重建索引的整理副本，**绝不碰正打开的文件**——`newPath` 必须还不存在。删除都是打墓碑，删过场景/图的域只在这里把字节还回来；换文件（Close → rename → Open）仍由宿主决定，这也是它留在 Go 侧、不做成 MCP 工具的原因（入参就是一个输出路径）。
 
@@ -272,11 +272,10 @@ arcs, err := db.SearchL4(api.L4Query{
 | `db.ListCapabilities(CapabilityListQuery{IDs, Status, Package, Keyword})` | 列出能力卡（文件级公共池，所有 agent 共用）；条件之间 AND，`IDs: []string{id}` 即读单张卡 |
 | `db.ImportCapability(path)` | 导入 memhop-capability/v4 插件包（一个文档 = 包名 + 1..N 张卡；或含 `capability.json` 的目录）；返回逐卡 `CapabilityImportResult{CreatedIDs/UpdatedIDs/Errors}`。Go 面接受宿主说得出的任何路径，而 MCP server 那一侧由 `--capability-dir` 锚定。导入的卡直接是 **active**（结晶出的卡是 draft），同字节重导入零写入 |
 | `db.DeleteCapability(id)` | 删除 |
-| `db.UpdateCapability(id, CapabilityPatch{...})` | 部分更新（内置卡只读，被拒绝；Name/Package 不可变） |
-| `db.ActivateCapability(id)` | 草稿 → 激活 |
+| `db.UpdateCapability(id, CapabilityPatch{...})` | 部分更新（Name/Package 不可变）；`status` 补丁是生命周期开关——传 active 即激活 draft |
 | `db.RecordCapabilityUsage(id, success)` | 使用后反馈 |
 
-> 一张卡 = 名称 + N 个功能条目（resources，无卡片级 type），每个条目自带启动方式（`type: mcp|skill|api|composite` + `ref`/`config`）/说明（`desc`）/怎么用（`input`/`output`），与宿主工具规格逐字段同构——纯字段拷贝即可投影；composite 条目的动作链放 `config` 的 `{"steps":[{"tool":"...","args":{...}}]}`（每步 `tool` 必填）。内置能力工具箱（6 张英文卡：`memhop-guide` 总纲 + 5 张 LLM 可调用说明书）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；说明书卡 `type: "api"`、`ref: "api:MethodName"`，宿主在门面上直接调用。默认分层注入——只投影一行索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `ListCapabilities(CapabilityListQuery{IDs: []string{id}})` 获取。另：`.meh` 同目录的 `plug/<包>/capability.json` 会在每次 Open 自动注入能力池（坏包告警跳过）。
+> 一张卡 = 名称 + N 个功能条目（resources，无卡片级 type），每个条目自带启动方式（`type: mcp|skill|api|composite` + `ref`/`config`）/说明（`desc`）/怎么用（`input`/`output`），与宿主工具规格逐字段同构——纯字段拷贝即可投影；composite 条目的动作链放 `config` 的 `{"steps":[{"tool":"...","args":{...}}]}`（每步 `tool` 必填）。内置说明书（9 张英文卡：`memhop-guide` 总纲 + cycle/knowledge/scene/archive/profile/capability/trajectory/plan 八张说明书，覆盖全部会话方法）在 Open 时代码组装，`ListCapabilities` 直接返回（不落 `.meh`；对内置卡 id 的写报 not-found；同名字卡入库即遮蔽内置卡，删除即还原）；说明书卡 `type: "api"`、`ref: "api:MethodName"`，宿主在门面上直接调用。默认分层注入——只投影一行索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `ListCapabilities(CapabilityListQuery{IDs: []string{id}})` 获取。另：`.meh` 同目录的 `plug/<包>/capability.json` 会在每次 Open 自动注入能力池（坏包告警跳过）。
 
 ### L6 轨迹 + 结晶
 
@@ -298,7 +297,7 @@ res, err := db.Crystallize(ctx, turnIDHex)
 // res.CreatedIDs / ReusedIDs / MergedIDs / Errors
 // res.Details — 逐候选处置明细：[]CrystallizeDetail{
 //   {Name, Action: "create|reuse|merge|skip", CapabilityID, Reason}}
-// 草稿随后用 ActivateCapability 激活
+// 草稿随后用 UpdateCapability{Status: &CapabilityActive} 激活
 
 // 轮枚举（如挑选可结晶轮次）。
 sessions, err := db.ListTrajectorySessions()
@@ -318,17 +317,16 @@ planID := api.NewPlanID("cat-42")   // 确定性 16 位 hex；重启后按同一
 
 | 调用 | 说明 |
 |---|---|
-| `db.SyncPlanTree(planID, root *PlanNode)` | 推送宿主权威整树：按 `NodePath` 增改节点、删除消失节点（连同其绑定事件）、不产生 `plan_step`。`Title`/`Type`/`Status`/`Summary` 留空即继承库里现值，所以部分快照不会把已完成步骤退回未完成 |
+| `db.SyncPlanTree(planID, root *PlanNode)` | 推送宿主权威整树：按 `NodePath` 增改节点、删除消失节点（连同其绑定事件）、不产生 `plan_step`。`Title`/`Type`/`Status`/`Summary` 留空即继承库里现值，所以部分快照不会把已完成步骤退回未完成；**root 传 nil 即清整树**——节点与绑定事件全删、保留 planID，播种下一个任务用单节点同步（空 status 落 pending） |
 | `db.AppendTrajectory(planID, nodePath, ev)` | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链）。`nodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且必须挂在父节点路径下；`EventType` 必须在计划词表内：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply`（裸轮次事件的 `EventType` 由宿主自定，不受该词表约束） |
 | `db.PlanCommit(planID, nodePath, ev, api.PlanStatusDone, summary)` | 推进节点状态并追加该步事件；`done` 子节点摘要自底向上折叠进父节点 |
 | `db.PlanState(planID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
-| `db.PlanReplace(planID, rootTitle)` | 清空整树并（可选）种一个带标题的 pending 根，保留 planID |
 
 `0000000000000000` 是保留值（裸轮次事件的 PlanID 哨兵），所有计划入口都拒绝它。
 
 ---
 
-## 9. 导出类型清单（v1.6.0）
+## 9. 导出类型清单（v1.7.0）
 
 | 类别 | 名称 | 用途 |
 |---|---|---|
@@ -433,7 +431,7 @@ func main() {
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，门面上不再有 hex ⇄ 整数转换函数。
 5. **`Search` 不写记忆内容**：它开启一个轮次（场景的命中计数与轮次计数各 +1），但不建任何话题记录——开了没沉淀的轮次不留残渣。想读原文用 `SceneContext` / `SearchL4`。重放同一个 `Update`（同 `TopicID`）是幂等的：话题就是那个 id，档案 id 由它派生，重试只会覆盖不会叠加。
 6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），除文件级 L3/L5 公共池外按域完全隔离；旧库（`FormatVersion < 0x000B`）无法打开、不做迁移。
-7. **内置能力卡只读**：`UpdateCapability` 对内置卡返回错误。
+7. **内置说明书卡不是存储记录**：`ListCapabilities` 会列出它们，但对内置卡 id 的写（`UpdateCapability` / `DeleteCapability` / `RecordCapabilityUsage`）与任何不存在的记录一样报 `ErrNotFound`。
 8. **轨迹自动过期**：Dream 自动清理 7 天前的事件；对外只有追加与查询（`AppendTrajectory` / `ReadTrajectory` / `ListTrajectorySessions`），无删除接口。一轮的轨迹按该轮话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
 9. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
 10. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `*api.DefaultMemHopDefaults` 再覆盖。上下文规模由 Dream 保证有界（压缩后每场景 ≤20），禁用自动巩固就等于让注入无界增长。

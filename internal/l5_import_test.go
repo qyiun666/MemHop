@@ -156,9 +156,10 @@ func TestImportCapabilityHostEditsSurviveReimport(t *testing.T) {
 	}
 }
 
-// A card naming a built-in card is rejected, not stored: a stored shadow of
-// a read-only built-in could never be updated or deleted again.
-func TestImportCapabilityRejectsBuiltinName(t *testing.T) {
+// A card naming a built-in manual stores a shadow: the stored copy wins in
+// listings (it carries usage statistics), and deleting it hands the listing
+// back to the built-in card.
+func TestImportCapabilityShadowsBuiltinName(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	db.SetBuiltinCapabilities(testBuiltinCapabilities())
 	path := writeTempCapability(t, t.TempDir(), "cap.json", `{
@@ -173,10 +174,35 @@ func TestImportCapabilityRejectsBuiltinName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("import: %v", err)
 	}
-	if len(result.CreatedIDs) != 0 || len(result.UpdatedIDs) != 0 || len(result.Errors) != 1 {
-		t.Fatalf("builtin-named card must be rejected: %+v", result)
+	if len(result.CreatedIDs) != 1 {
+		t.Fatalf("shadow card must be stored: %+v", result)
 	}
-	if got := len(core.CollectAllCapabilities(db.engine, core.SharedPoolAgentID)); got != 0 {
-		t.Fatalf("shadow card must not be stored: %d capabilities", got)
+	listed, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	shadows := 0
+	for _, c := range listed {
+		if c.IDHash == core.CapabilityID("内置手册") {
+			shadows++
+			if c.Origin != core.CapabilityOriginImported {
+				t.Fatalf("the stored copy must win the listing: %+v", c)
+			}
+		}
+	}
+	if shadows != 1 {
+		t.Fatalf("a stored shadow must suppress its built-in twin, got %d entries", shadows)
+	}
+	if err := db.DeleteCapability(core.DefaultAgentID, result.CreatedIDs[0]); err != nil {
+		t.Fatalf("delete shadow: %v", err)
+	}
+	listed, err = db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{})
+	if err != nil {
+		t.Fatalf("list after delete: %v", err)
+	}
+	for _, c := range listed {
+		if c.IDHash == core.CapabilityID("内置手册") && c.Origin != core.CapabilityOriginBuiltin {
+			t.Fatalf("after deleting the shadow the builtin must resurface: %+v", c)
+		}
 	}
 }

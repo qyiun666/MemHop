@@ -108,13 +108,15 @@ func TestCapabilityPoolSharedAcrossAgents(t *testing.T) {
 	}
 }
 
-func TestActivateCapability(t *testing.T) {
+func TestUpdateCapabilityActivates(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	cap := &core.Capability{Name: "待激活", Status: core.CapabilityDraft, IDHash: core.CapabilityID("待激活")}
+	cap := &core.Capability{Name: "待激活", Status: core.CapabilityDraft, IDHash: core.CapabilityID("待激活"), Summary: "s",
+		Resources: []core.ResourceRef{{Type: core.CapabilitySkill, Name: "r", Desc: "call it"}}}
 	writeCapability(t, db.engine, cap)
 	id := common.FormatHash(cap.IDHash)
 
-	got, err := db.ActivateCapability(core.DefaultAgentID, id)
+	active := core.CapabilityActive
+	got, err := db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{Status: &active})
 	if err != nil {
 		t.Fatalf("activate: %v", err)
 	}
@@ -125,11 +127,11 @@ func TestActivateCapability(t *testing.T) {
 		t.Fatalf("UpdatedAt not refreshed: %+v", got)
 	}
 	// Re-activating an active capability is idempotent.
-	if _, err := db.ActivateCapability(core.DefaultAgentID, id); err != nil {
+	if _, err := db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{Status: &active}); err != nil {
 		t.Fatalf("re-activate: %v", err)
 	}
 	// Unknown IDs surface ErrNotFound instead of inventing a record.
-	if _, err := db.ActivateCapability(core.DefaultAgentID, common.FormatHash(common.HashID("missing"))); common.CodeOf(err) != common.ErrNotFound {
+	if _, err := db.UpdateCapability(core.DefaultAgentID, common.FormatHash(common.HashID("missing")), CapabilityPatch{Status: &active}); common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("missing id: want ErrNotFound, got %v", err)
 	}
 }
@@ -215,24 +217,25 @@ func TestUpdateCapability(t *testing.T) {
 	}
 }
 
-func TestBuiltinCapabilitiesReadOnly(t *testing.T) {
+// The built-in manuals are not stored records: they show up in listings, but
+// every write path reports ErrNotFound for their ids, exactly like any record
+// that is not there.
+func TestBuiltinCardsNotStored(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	db.builtinCapabilities = []core.Capability{{
-		Name: "内置手册", Status: core.CapabilityActive,
-		Origin: core.CapabilityOriginBuiltin, IDHash: core.CapabilityID("内置手册"),
-	}}
-	id := common.FormatHash(core.CapabilityID("内置手册"))
-	if _, err := db.ActivateCapability(core.DefaultAgentID, id); common.CodeOf(err) != common.ErrInvalidQuery {
-		t.Fatalf("activate builtin: want ErrInvalidQuery, got %v", err)
+	db.builtinCapabilities = BuiltinCards()
+	id := common.FormatHash(core.CapabilityID("memhop-guide"))
+
+	if _, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{}); err != nil {
+		t.Fatalf("list: %v", err)
 	}
-	if _, err := db.RecordCapabilityUsage(core.DefaultAgentID, id, true); common.CodeOf(err) != common.ErrInvalidQuery {
-		t.Fatalf("usage builtin: want ErrInvalidQuery, got %v", err)
+	if _, err := db.RecordCapabilityUsage(core.DefaultAgentID, id, true); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("usage builtin: want ErrNotFound, got %v", err)
 	}
-	if err := db.DeleteCapability(core.DefaultAgentID, id); common.CodeOf(err) != common.ErrInvalidQuery {
-		t.Fatalf("delete builtin: want ErrInvalidQuery, got %v", err)
+	if err := db.DeleteCapability(core.DefaultAgentID, id); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("delete builtin: want ErrNotFound, got %v", err)
 	}
-	if _, err := db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{}); common.CodeOf(err) != common.ErrInvalidQuery {
-		t.Fatalf("update builtin: want ErrInvalidQuery, got %v", err)
+	if _, err := db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{}); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("update builtin: want ErrNotFound, got %v", err)
 	}
 }
 

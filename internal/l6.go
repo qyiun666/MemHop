@@ -217,7 +217,7 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
 	result := &CrystallizeResult{CreatedIDs: []string{}, ReusedIDs: []string{}, MergedIDs: []string{}}
-	reserved := func(idHash uint64) bool { return db.findBuiltinCapability(idHash) != nil }
+	reserved := func(idHash uint64) bool { return db.findBuiltinCapability(idHash) }
 	for _, cand := range out.Capabilities {
 		if err := trajectory.ApplyCandidate(db.engine, core.SharedPoolAgentID, cand, result, reserved); err != nil {
 			return nil, err

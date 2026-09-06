@@ -511,9 +511,10 @@ func TestPlanStateForestMultipleRoots(t *testing.T) {
 	}
 }
 
-// PlanReplace clears every node and bound event of a plan, keeps the
-// planID, seeds a titled root, and restarts the event Seq space.
-func TestPlanReplaceClearsAndSeedsRoot(t *testing.T) {
+// SyncPlanTree(nil) clears every node and bound event of a plan and keeps
+// the planID; a single-node sync reseeds a titled pending root, and the
+// event Seq space restarts at 1.
+func TestSyncPlanTreeNilWipesAndReseeds(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	planID := common.FormatHash(9)
@@ -524,15 +525,27 @@ func TestPlanReplaceClearsAndSeedsRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := db.PlanReplace(core.DefaultAgentID, planID, "rewritten plan"); err != nil {
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, nil); err != nil {
 		t.Fatal(err)
 	}
 	tree, err := db.PlanState(core.DefaultAgentID, planID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(tree.Roots) != 0 || tree.TotalCount != 0 {
+		t.Fatalf("nil sync must wipe the plan: %+v", tree)
+	}
+
+	// A single-node sync seeds the fresh tree: one titled pending root.
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, &PlanNode{NodePath: "1", Title: "rewritten plan"}); err != nil {
+		t.Fatal(err)
+	}
+	tree, err = db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(tree.Roots) != 1 || tree.Roots[0].Title != "rewritten plan" || tree.Roots[0].Status != PlanPending {
-		t.Fatalf("replace must seed one titled pending root: %+v", tree.Roots)
+		t.Fatalf("reseed must grow one titled pending root: %+v", tree.Roots)
 	}
 	if tree.TotalCount != 1 || tree.DoneCount != 0 {
 		t.Fatalf("stats must reset: total=%d done=%d", tree.TotalCount, tree.DoneCount)
@@ -543,10 +556,10 @@ func TestPlanReplaceClearsAndSeedsRoot(t *testing.T) {
 	}
 	aggs := repo.CollectPlanAggregates(db.engine, core.DefaultAgentID)
 	if len(aggs) != 1 || len(aggs[0].Events) != 1 {
-		t.Fatalf("old events leaked into the replaced plan: %+v", aggs)
+		t.Fatalf("old events leaked into the wiped plan: %+v", aggs)
 	}
-	// Replacing without a title keeps the plan empty (no root seeded).
-	if err := db.PlanReplace(core.DefaultAgentID, planID, ""); err != nil {
+	// A second nil sync leaves the plan empty again.
+	if err := db.SyncPlanTree(core.DefaultAgentID, planID, nil); err != nil {
 		t.Fatal(err)
 	}
 	tree, err = db.PlanState(core.DefaultAgentID, planID)
@@ -554,7 +567,7 @@ func TestPlanReplaceClearsAndSeedsRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(tree.Roots) != 0 || tree.TotalCount != 0 {
-		t.Fatalf("title-less replace must leave an empty plan: %+v", tree)
+		t.Fatalf("second wipe must leave an empty plan: %+v", tree)
 	}
 }
 

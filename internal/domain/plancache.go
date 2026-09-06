@@ -118,7 +118,7 @@ func (pc *PlanCache) RemoveNodeBranch(planID uint64, nodePath string) {
 	pc.detachIfEmpty(planID)
 }
 
-// RemovePlan drops a plan's whole aggregate; used by PlanReplace.
+// RemovePlan drops a plan's whole aggregate; used by the SyncPlanTree wipe.
 func (pc *PlanCache) RemovePlan(planID uint64) {
 	delete(pc.plans, planID)
 }

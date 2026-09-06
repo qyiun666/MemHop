@@ -1,59 +1,17 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L6 plan big methods of the composition root: replace and whole-tree sync.
+// L6 plan big methods of the composition root: whole-tree sync and wipe.
 // The plan mechanics live in internal/plan.
 
 package internal
 
 import (
-	"time"
-
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/plan"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
-
-// PlanReplace wipes one plan's whole node set and bound events (the host
-// re-plans by replacing the entire tree), keeping the planID so host
-// references survive. A non-empty rootTitle seeds a fresh pending root "1"
-// carrying the title; an empty title leaves the plan empty. The plan's event
-// Seq space restarts at 1 because every bound event is removed.
-func (db *DB) PlanReplace(agentID uint64, planID string, rootTitle string) error {
-	ac, err := db.lockAgent(agentID)
-	if err != nil {
-		return err
-	}
-	defer ac.Mu.Unlock()
-	ph, err := plan.ParsePlanID(planID)
-	if err != nil {
-		return err
-	}
-	if _, err := repo.DeletePlanRecords(db.engine, agentID, ph); err != nil {
-		return err
-	}
-	ac.Traj.RemoveSession(ph)
-	ac.Plans.RemovePlan(ph)
-	if rootTitle == "" {
-		return nil
-	}
-	rootID, err := plan.EnsureNode(ac, agentID, ph, "1")
-	if err != nil {
-		return err
-	}
-	node, err := core.ReadTrajectorySlot(db.engine, agentID, rootID)
-	if err != nil {
-		return err
-	}
-	node.Title = rootTitle
-	node.Timestamp = time.Now().UnixMilli()
-	if _, err := repo.WritePlanNode(db.engine, agentID, node); err != nil {
-		return err
-	}
-	ac.Plans.UpsertNode(node.PlanID, node)
-	return nil
-}
 
 // SyncPlanTree replaces a whole plan tree from the host's authoritative
 // snapshot. It mutates only node structure/fields (add missing nodes, update
@@ -63,6 +21,10 @@ func (db *DB) PlanReplace(agentID uint64, planID string, rootTitle string) error
 // snapshot never rewinds a completed step or erases a folded summary. A node
 // reaches a terminal status via its input Status and records FinishedAt once.
 // The planID is preserved so host references survive a re-plan.
+//
+// A nil root wipes the plan instead: every node and bound event is removed and
+// the event Seq space restarts at 1, while the planID is kept so the host's
+// next task can start on the id it already holds.
 func (db *DB) SyncPlanTree(agentID uint64, planID string, root *PlanNode) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -73,7 +35,15 @@ func (db *DB) SyncPlanTree(agentID uint64, planID string, root *PlanNode) error 
 	if err != nil {
 		return err
 	}
-	if root == nil || root.NodePath == "" {
+	if root == nil {
+		if _, err := repo.DeletePlanRecords(db.engine, agentID, ph); err != nil {
+			return err
+		}
+		ac.Traj.RemoveSession(ph)
+		ac.Plans.RemovePlan(ph)
+		return nil
+	}
+	if root.NodePath == "" {
 		return common.NewError(common.ErrInvalidQuery, "plan root required")
 	}
 	newPaths := make(map[string]struct{})

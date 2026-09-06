@@ -1,15 +1,15 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Built-in L5 capabilities: read-only reference capabilities shipped with
-// the project (see the root capabilities/ directory) — manuals for the
-// capabilities an LLM may call itself, plus the guide card indexing them
-// (Search / Update / Dream are host-driven loop operations and
-// intentionally carry no card). They form the toolbox served by the L5
-// read API (ListCapabilities), are never written to the
-// .meh file, and are NOT attached to Search responses (Search stays pure
-// retrieval of stored capabilities). Lifecycle writes (Activate/Usage/
-// Delete) do not apply to them.
+// Built-in L5 capabilities: read-only reference cards assembled in code by
+// BuiltinCards (builtin_capabilities.go) — manuals covering every api.Session
+// business method. They are served by the L5 read API (ListCapabilities),
+// never written to the .meh file, and NOT attached to Search responses
+// (Search stays pure retrieval of stored capabilities). A stored record with
+// the same id shadows its built-in twin in listings; a write to a
+// built-in-only id reports ErrNotFound like any record that is not there,
+// and Crystallize's fold-back rejects candidates whose id would shadow a
+// manual (findBuiltinCapability).
 
 package internal
 
@@ -24,17 +24,16 @@ func (db *DB) SetBuiltinCapabilities(caps []core.Capability) {
 	db.builtinCapabilities = caps
 }
 
-// findBuiltinCapability returns a copy of the built-in capability with the
-// given ID hash, or nil. A copy keeps the shared built-in set immutable:
-// callers must not be able to mutate state visible to other readers.
-func (db *DB) findBuiltinCapability(idHash uint64) *core.Capability {
+// findBuiltinCapability reports whether the id hash names a built-in card.
+// Used by Crystallize's fold-back: an LLM-minted candidate must never shadow
+// a manual in listings.
+func (db *DB) findBuiltinCapability(idHash uint64) bool {
 	for i := range db.builtinCapabilities {
 		if db.builtinCapabilities[i].IDHash == idHash {
-			b := db.builtinCapabilities[i]
-			return &b
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 // builtinMatchingList returns built-in capabilities passing the list

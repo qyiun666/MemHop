@@ -178,16 +178,6 @@ func (s *Session) UpdateCapability(id string, patch CapabilityPatch) (*Capabilit
 	return &out, nil
 }
 
-// ActivateCapability activates a capability and returns it with a hex ID.
-func (s *Session) ActivateCapability(id string) (*Capability, error) {
-	c, err := s.Session.ActivateCapability(id)
-	if err != nil {
-		return nil, err
-	}
-	out := fromCapability(*c)
-	return &out, nil
-}
-
 // RecordCapabilityUsage records usage and returns the capability with a hex ID.
 func (s *Session) RecordCapabilityUsage(id string, success bool) (*Capability, error) {
 	c, err := s.Session.RecordCapabilityUsage(id, success)
@@ -288,7 +278,14 @@ func (s *Session) PlanState(planID string) (*PlanTree, error) {
 // SyncPlanTree replaces one plan's whole tree from the host's authoritative
 // snapshot: adds/updates nodes by path, deletes vanished nodes (with their
 // bound events) and never appends a plan_step event. planID is preserved.
+// A nil root wipes the plan instead — every node and bound event is removed
+// while the planID is kept, so an unrelated next task can start on the id the
+// host already holds without landing on the old tree by path; seed the fresh
+// tree by syncing a single root node (an empty status lands pending).
 func (s *Session) SyncPlanTree(planID string, root *PlanNode) error {
+	if root == nil {
+		return s.Session.SyncPlanTree(planID, nil)
+	}
 	in := toInternalPlanNode(root)
 	return s.Session.SyncPlanTree(planID, &in)
 }
@@ -414,16 +411,8 @@ func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 // Crystallize turns one key's trajectory events into L5 capability cards: pass a
 // turn's topic id to work off a single turn, or a plan id to aggregate the whole
 // plan. It contacts the LLM inside the domain lock. New cards land in the draft
-// status — they are listed, but a host that only wires up active cards needs
-// ActivateCapability before one becomes usable.
+// status — they are listed, but a host that only wires up active cards must
+// flip the status first (UpdateCapability with Status CapabilityActive).
 func (s *Session) Crystallize(ctx context.Context, turnID string) (*CrystallizeResult, error) {
 	return s.Session.Crystallize(ctx, turnID)
-}
-
-// PlanReplace wipes a plan — its nodes and the events bound to them — and keeps
-// the planID, so a host starts an unrelated task on the id it already holds
-// without the new nodes landing on the old tree by path. Pass a rootTitle to
-// seed one titled pending root, or "" for an empty plan.
-func (s *Session) PlanReplace(planID, rootTitle string) error {
-	return s.Session.PlanReplace(planID, rootTitle)
 }

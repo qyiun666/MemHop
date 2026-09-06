@@ -21,15 +21,15 @@ func openTestConfig(dbPath string) *internal.MemHopConfig {
 }
 
 var builtinNames = []string{
-	"memhop-guide", "memhop-knowledge", "memhop-scene", "memhop-archive",
-	"memhop-profile", "memhop-capability",
+	"memhop-guide", "memhop-cycle", "memhop-profile", "memhop-scene",
+	"memhop-knowledge", "memhop-archive", "memhop-capability",
+	"memhop-trajectory", "memhop-plan",
 }
 
-// OpenMulti attaches the toolbox in memory: ListCapabilities serves it
+// OpenMulti attaches the manuals in memory: ListCapabilities serves them
 // immediately (a single card by ID is an ID-filtered list query), close/reopen
 // stays clean, and nothing is persisted (storage-only views are verified at the
-// internal layer). The loadBuiltinCapabilities shape check moved to the internal
-// package with the function itself (api is a pure forwarding facade).
+// internal layer).
 func TestOpenAttachesBuiltins(t *testing.T) {
 	cfg := openTestConfig(filepath.Join(t.TempDir(), "b.meh"))
 	m, err := OpenMulti(cfg)

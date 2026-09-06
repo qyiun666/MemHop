@@ -71,7 +71,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 6. **planCache 域内索引**：L6 计划聚合缓存 `ac.Plans`（`domain` 包）
    **不内置锁**，完全依赖 `ac.Mu` 串行（区别于自带
    RWMutex 的 `TrajIndex`）。所有计划写路径（节点增删改、事件绑定、
-   `PlanReplace`、`SyncPlanTree`、Dream 清理）必须先取 `ac.Mu` 再同步缓存；
+   `SyncPlanTree`、Dream 清理）必须先取 `ac.Mu` 再同步缓存；
    `domain.NewContext` 构建，idle 重建时一并重建。`SyncPlanTree` 整树同步
    只改节点结构/字段，**不产生 `plan_step` 事件**、不动事件 Seq 空间；但删掉
    vanished 分支时必须**两份缓存一起镜像**——`ac.Plans.RemoveNodeBranch` 与
@@ -80,7 +80,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    `ReadTrajectory`/`Crystallize` 都报 `ErrIO`，要等重启从记录重建索引才自愈。
 7. **planID 全零保留**：`AppendTrajectory` 写入的裸轮次事件恒为
    `PlanID=0`，故 `0000000000000000` 不是合法计划。计划入口
-   （`AppendTrajectory` 带 nodePath 时/`PlanCommit`/`PlanState`/`PlanReplace`/`SyncPlanTree`）
+   （`AppendTrajectory` 带 nodePath 时/`PlanCommit`/`PlanState`/`SyncPlanTree`）
    一律经 `plan.ParsePlanID` 拒绝；绕过它直接删会删掉整个域的全部轮次事件。
 8. **计划清理有界**：dream 的 `l6_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有活动」的计划；宿主中断或放弃而静默超 `TrajectoryRetention` 的计划
@@ -90,11 +90,11 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 
 - 只经 `internal/repo`（及 `repo/core` 导出的 Slot 读写）访问数据；
   **禁止**直接操作帧、文件头、快照结构。
-- `StorageEngine` 句柄由装配层 `config.go` 的 `Open(cfg, builtins)`
+- `StorageEngine` 句柄由装配层 `config.go` 的 `Open(cfg)`
   唯一持有：注入 `DB.engine`，并经 `domain.NewContext` 注入每个域；业务代码
-  不得自行打开/关闭引擎。内建能力工具箱由 `api` 门面以 `fs.FS` 注入
-  （api 传 `capabilities.FS`），`Open` 负责解析并 attach——internal 不得
-  import `capabilities`。
+  不得自行打开/关闭引擎。内建说明书卡由 `internal.BuiltinCards`
+  （builtin_capabilities.go）在 Open 时代码组装并 attach——只列不存，
+  对内置卡 id 的写一律 `ErrNotFound`（结晶折回的撞名拒绝是唯一例外点）。
 - **能力下沉**：算法与策略在 `internal/cap/<feature>` 能力包；小方法在
   `internal/{scene,turn,dream,graph,plan,trajectory}`；根只留"取数 → 调
   能力 → 落库"的大方法编排，不做算法。LLM 传输策略（截断升级重试）在

@@ -10,12 +10,10 @@
 package api
 
 import (
-	"encoding/json"
 	"math"
 	"strings"
 	"testing"
 
-	"github.com/qyiun666/MemHop/capabilities"
 	"github.com/qyiun666/MemHop/internal"
 )
 
@@ -31,27 +29,21 @@ func definedEnumNames[T ~uint8](unknown string, name func(T) string) []string {
 	return out
 }
 
-// cardEntry returns one resource's desc from a built-in card (a v4 package
-// document; every shipped file holds exactly one card).
+// cardEntry returns one resource's desc from the assembled built-in cards.
 func cardEntry(t *testing.T, card, resource string) string {
 	t.Helper()
-	data, err := capabilities.FS.ReadFile(card + ".json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var parsed internal.CapabilityPackageDoc
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("parse %s: %v", card, err)
-	}
-	if len(parsed.Capabilities) != 1 {
-		t.Fatalf("%s: want a single-card package, got %d cards", card, len(parsed.Capabilities))
-	}
-	for _, r := range parsed.Capabilities[0].Resources {
-		if r.Name == resource {
-			return r.Desc
+	for _, c := range internal.BuiltinCards() {
+		if c.Name != card {
+			continue
 		}
+		for _, r := range c.Resources {
+			if r.Name == resource {
+				return r.Desc
+			}
+		}
+		t.Fatalf("%s has no resource %q", card, resource)
 	}
-	t.Fatalf("%s has no resource %q", card, resource)
+	t.Fatalf("no built-in card %q", card)
 	return ""
 }
 

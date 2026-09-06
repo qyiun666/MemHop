@@ -115,12 +115,13 @@ func TestInterfaceCapabilityLifecycle(t *testing.T) {
 	if got := mustFindCapability(t, db.Session, id); got.Status != memhop.CapabilityDeprecated {
 		t.Fatalf("status after deprecate = %q", got.Status)
 	}
-	activated, err := db.ActivateCapability(id)
+	active := memhop.CapabilityActive
+	activated, err := db.UpdateCapability(id, memhop.CapabilityPatch{Status: &active})
 	if err != nil {
-		t.Fatalf("ActivateCapability: %v", err)
+		t.Fatalf("re-activate via status patch: %v", err)
 	}
 	if activated.Status != memhop.CapabilityActive || activated.TriggerCount != 2 {
-		t.Fatalf("activate echoed %+v", activated)
+		t.Fatalf("re-activate echoed %+v", activated)
 	}
 
 	if err := db.DeleteCapability(id); err != nil {
@@ -205,9 +206,6 @@ func TestInterfaceBuiltinCapabilitiesAreReadOnly(t *testing.T) {
 	summary := "覆盖官方卡"
 	if _, err := db.UpdateCapability(builtin.IDHash, memhop.CapabilityPatch{Summary: &summary}); err == nil {
 		t.Fatal("UpdateCapability on a built-in should be refused")
-	}
-	if _, err := db.ActivateCapability(builtin.IDHash); err == nil {
-		t.Fatal("ActivateCapability on a built-in should be refused")
 	}
 	if _, err := db.RecordCapabilityUsage(builtin.IDHash, true); err == nil {
 		t.Fatal("RecordCapabilityUsage on a built-in should be refused")

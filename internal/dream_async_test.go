@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qyiun666/MemHop/capabilities"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -90,7 +89,7 @@ func TestOpenInitializesDreamState(t *testing.T) {
 		DBPath:   filepath.Join(t.TempDir(), "open.meh"),
 		Defaults: *DefaultMemHopDefaults,
 	}
-	db, err := Open(cfg, capabilities.FS)
+	db, err := Open(cfg)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

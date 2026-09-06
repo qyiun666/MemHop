@@ -48,10 +48,9 @@ func (db *DB) ImportCapability(agentID uint64, path string) (*core.CapabilityImp
 // carries the same FileHash is left untouched: re-importing an unchanged
 // package (the plug/ scan runs on every Open) must not grow the append-only
 // file, and host edits to such a card survive until the package content
-// actually changes. A card whose name-derived id belongs to the read-only
-// built-in toolbox is rejected — a stored shadow could never be updated or
-// deleted again. Created/updated ids are 16-hex; a failed card is reported
-// by name.
+// actually changes. A stored record whose id matches a built-in manual
+// shadows it in listings (the stored copy wins). Created/updated ids are
+// 16-hex; a failed card is reported by name.
 func (db *DB) importCapabilitiesLocked(caps []*core.Capability) *core.CapabilityImportResult {
 	now := time.Now().UnixMilli()
 	result := &core.CapabilityImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}}
@@ -61,10 +60,6 @@ func (db *DB) importCapabilitiesLocked(caps []*core.Capability) *core.Capability
 		if existing, err := core.ReadCapability(db.engine, core.SharedPoolAgentID, cap.IDHash); err == nil &&
 			existing.FileHash != "" && existing.FileHash == cap.FileHash {
 			result.UpdatedIDs = append(result.UpdatedIDs, id)
-			continue
-		}
-		if db.findBuiltinCapability(cap.IDHash) != nil {
-			result.Errors = append(result.Errors, cap.Name+": name is reserved by a built-in card")
 			continue
 		}
 		cap.Status = core.CapabilityActive
@@ -87,9 +82,9 @@ func (db *DB) importCapabilitiesLocked(caps []*core.Capability) *core.Capability
 	return result
 }
 
-// UpdateCapability partially updates a stored capability (built-ins are
-// read-only and rejected). The pool is file-wide, so the update is visible to
-// every agent domain. The stored FileHash is kept: it is the package
+// UpdateCapability partially updates a stored capability. The pool is
+// file-wide, so the update is visible to every agent domain. The stored
+// FileHash is kept: it is the package
 // watermark, not a content fingerprint — re-importing the same package bytes
 // stays a no-op, so a host's deprecation or patched definition survives
 // restarts; a changed package overwrites the definition and lands active.
@@ -102,9 +97,6 @@ func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch)
 	idHash, err := common.ParseID(id)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
-	}
-	if db.findBuiltinCapability(idHash) != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
 	cap, err := repo.GetCapabilityL5(db.engine, core.SharedPoolAgentID, idHash)
 	if err != nil {
@@ -138,9 +130,7 @@ func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch)
 	return cap, nil
 }
 
-// DeleteCapability removes a capability record from the shared pool. Built-in
-// capabilities are read-only: deleting one is rejected instead of silently
-// succeeding.
+// DeleteCapability removes a capability record from the shared pool.
 func (db *DB) DeleteCapability(agentID uint64, id string) error {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -151,11 +141,9 @@ func (db *DB) DeleteCapability(agentID uint64, id string) error {
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse capability id", err)
 	}
-	if db.findBuiltinCapability(idHash) != nil {
-		return common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
-	}
 	// Deleting a card that is not there is reported, not accepted: a host
 	// reconciling its cards has to be able to tell a real deletion from a no-op.
+	// The built-in manuals are not stored records, so their ids land here too.
 	if _, err := repo.GetCapabilityL5(db.engine, core.SharedPoolAgentID, idHash); err != nil {
 		return err
 	}
@@ -199,26 +187,7 @@ func (db *DB) ListCapabilities(agentID uint64, q CapabilityListQuery) ([]core.Ca
 	return filtered, nil
 }
 
-// ActivateCapability promotes a draft capability to active. Built-in
-// capabilities are read-only and rejected.
-func (db *DB) ActivateCapability(agentID uint64, id string) (*core.Capability, error) {
-	ac, err := db.lockSharedPool(agentID)
-	if err != nil {
-		return nil, err
-	}
-	defer ac.Mu.Unlock()
-	idHash, err := common.ParseID(id)
-	if err != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
-	}
-	if db.findBuiltinCapability(idHash) != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
-	}
-	return repo.ActivateCapabilityL5(db.engine, core.SharedPoolAgentID, idHash)
-}
-
 // RecordCapabilityUsage records host feedback after a capability was used.
-// Built-in capabilities are read-only and rejected.
 func (db *DB) RecordCapabilityUsage(agentID uint64, id string, success bool) (*core.Capability, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -228,9 +197,6 @@ func (db *DB) RecordCapabilityUsage(agentID uint64, id string, success bool) (*c
 	idHash, err := common.ParseID(id)
 	if err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse capability id", err)
-	}
-	if db.findBuiltinCapability(idHash) != nil {
-		return nil, common.NewError(common.ErrInvalidQuery, "built-in capabilities are read-only")
 	}
 	return repo.RecordCapabilityUsageL5(db.engine, core.SharedPoolAgentID, idHash, success)
 }

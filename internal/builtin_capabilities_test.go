@@ -6,22 +6,20 @@ package internal
 import (
 	"testing"
 
-	"github.com/qyiun666/MemHop/capabilities"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 var builtinNames = []string{
-	"memhop-guide", "memhop-knowledge", "memhop-scene", "memhop-archive",
-	"memhop-profile", "memhop-capability",
+	"memhop-guide", "memhop-cycle", "memhop-profile", "memhop-scene",
+	"memhop-knowledge", "memhop-archive", "memhop-capability",
+	"memhop-trajectory", "memhop-plan",
 }
 
-// The embedded toolbox must parse into valid active capabilities with
-// stable name-derived IDs; a corrupted embedded file fails here.
-func TestLoadBuiltinCapabilities(t *testing.T) {
-	caps, err := loadBuiltinCapabilities(capabilities.FS)
-	if err != nil {
-		t.Fatalf("loadBuiltinCapabilities: %v", err)
-	}
+// The assembled manuals must be valid active capabilities with stable
+// name-derived IDs, one card per manual, each carrying at least one function
+// entry.
+func TestBuiltinCards(t *testing.T) {
+	caps := BuiltinCards()
 	want := len(builtinNames)
 	if len(caps) != want {
 		t.Fatalf("want %d builtin capabilities, got %d", want, len(caps))
@@ -35,16 +33,19 @@ func TestLoadBuiltinCapabilities(t *testing.T) {
 		if c.IDHash != core.CapabilityID(c.Name) {
 			t.Fatalf("builtin %s: unstable ID %d", c.Name, c.IDHash)
 		}
-		if c.FileHash == "" {
-			t.Fatalf("builtin %s: missing file hash", c.Name)
-		}
-		// Single-card v4 packages: the card carries its package stamp and at
-		// least one function entry.
 		if c.Package != c.Name {
 			t.Fatalf("builtin %s: package stamp %q", c.Name, c.Package)
 		}
+		if c.Summary == "" || c.Trigger == "" {
+			t.Fatalf("builtin %s: missing summary or trigger", c.Name)
+		}
 		if len(c.Resources) == 0 {
 			t.Fatalf("builtin %s: no resource entries", c.Name)
+		}
+		for _, r := range c.Resources {
+			if r.Type != core.CapabilityAPI || r.Ref == "" || r.Desc == "" {
+				t.Fatalf("builtin %s: malformed resource %+v", c.Name, r)
+			}
 		}
 	}
 	for _, name := range builtinNames {

@@ -65,10 +65,10 @@ func TestSessionPublicSurface(t *testing.T) {
 		"SearchL4",
 		// L5 capabilities
 		"ImportCapability", "UpdateCapability", "DeleteCapability",
-		"ListCapabilities", "ActivateCapability", "RecordCapabilityUsage",
+		"ListCapabilities", "RecordCapabilityUsage",
 		// L6 trajectory and plans
 		"ReadTrajectory", "AppendTrajectory", "ListTrajectorySessions", "Crystallize",
-		"PlanCommit", "PlanState", "PlanReplace", "SyncPlanTree",
+		"PlanCommit", "PlanState", "SyncPlanTree",
 		// consolidation
 		"Dream",
 	}

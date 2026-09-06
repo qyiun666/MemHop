@@ -4,10 +4,10 @@
 // Offline interface tests for the L6 plan tree and trajectory log. A host
 // drives this the way meowagent does: it names a plan, keeps its own dotted
 // step paths, writes a whole-tree snapshot every turn, commits the steps that
-// reached a terminal state, and after a restart recovers the tree by naming the
-// plan again. SyncPlanTree/PlanCommit/PlanReplace return nothing at all, so
-// every assertion below reads the tree back through PlanState instead of
-// trusting the call that changed it.
+// reached a terminal state, and after a restart recovers the tree by naming
+// the plan again. SyncPlanTree/PlanCommit return nothing at all, so every
+// assertion below reads the tree back through PlanState instead of trusting
+// the call that changed it.
 
 package test
 
@@ -293,9 +293,10 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	if draft.Status != memhop.CapabilityDraft {
 		t.Fatalf("crystallized card status = %q, want a draft the host activates", draft.Status)
 	}
-	activated, err := db.ActivateCapability(res.CreatedIDs[0])
+	active := memhop.CapabilityActive
+	activated, err := db.UpdateCapability(res.CreatedIDs[0], memhop.CapabilityPatch{Status: &active})
 	if err != nil {
-		t.Fatalf("ActivateCapability: %v", err)
+		t.Fatalf("activate via status patch: %v", err)
 	}
 	if activated.Status != memhop.CapabilityActive {
 		t.Fatalf("activate echoed %q", activated.Status)
@@ -311,7 +312,7 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	}
 }
 
-func TestInterfacePlanReplace(t *testing.T) {
+func TestInterfacePlanWipe(t *testing.T) {
 	db, _ := openTestDB(t)
 	planID := memhop.NewPlanID("旧任务")
 	ts := time.Now().UnixMilli()
@@ -323,25 +324,26 @@ func TestInterfacePlanReplace(t *testing.T) {
 	mustAppend(t, db, planID, "1.1", planEvent(ts, "tool_call", `{"tool":"file_read"}`))
 
 	// An unrelated next task must not land on the old tree by path, so the host
-	// wipes it and keeps the id it already holds.
-	if err := db.PlanReplace(planID, ""); err != nil {
-		t.Fatalf("PlanReplace: %v", err)
+	// wipes the tree with a nil snapshot and keeps the id it already holds.
+	if err := db.SyncPlanTree(planID, nil); err != nil {
+		t.Fatalf("nil wipe: %v", err)
 	}
 	if tree := mustPlanState(t, db, planID); len(tree.Roots) != 0 || tree.TotalCount != 0 {
-		t.Fatalf("replaced plan still has nodes: %+v", tree)
+		t.Fatalf("wiped plan still has nodes: %+v", tree)
 	}
 	if events := mustReadTrajectory(t, db, planID); len(events) != 0 {
-		t.Fatalf("replaced plan still has events: %+v", events)
+		t.Fatalf("wiped plan still has events: %+v", events)
 	}
 
 	mustAppend(t, db, planID, "1", planEvent(ts+1, "plan_step", "新任务的第一步"))
 	restarted := mustReadTrajectory(t, db, planID)
 	if len(restarted) != 1 || restarted[0].Seq != 1 {
-		t.Fatalf("after replace the Seq space did not restart: %+v", restarted)
+		t.Fatalf("after the wipe the Seq space did not restart: %+v", restarted)
 	}
 
-	if err := db.PlanReplace(planID, "另一个任务"); err != nil {
-		t.Fatalf("PlanReplace with a root title: %v", err)
+	// Seeding the next task's tree is a plain single-node sync.
+	if err := db.SyncPlanTree(planID, &memhop.PlanNode{NodePath: "1", Title: "另一个任务"}); err != nil {
+		t.Fatalf("seed root: %v", err)
 	}
 	seeded := mustPlanState(t, db, planID)
 	if seeded.TotalCount != 1 {
@@ -351,7 +353,7 @@ func TestInterfacePlanReplace(t *testing.T) {
 	if root.NodePath != "1" || root.Title != "另一个任务" || root.Status != string(memhop.PlanStatusPending) {
 		t.Fatalf("seeded root = %+v", root)
 	}
-	if events := mustReadTrajectory(t, db, planID); len(events) != 0 {
-		t.Fatalf("seeding a root left the previous events behind: %+v", events)
+	if events := mustReadTrajectory(t, db, planID); len(events) != 1 || events[0].Seq != 1 {
+		t.Fatalf("seeding must not disturb the restarted log: %+v", events)
 	}
 }

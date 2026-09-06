@@ -79,11 +79,12 @@ func TestSurfaceL5Capability(t *testing.T) {
 	if _, err := db.RecordCapabilityUsage(id, true); err != nil {
 		t.Fatalf("record usage: %v", err)
 	}
-	// Activate is idempotent on an already-active imported capability.
-	if _, err := db.ActivateCapability(id); err != nil {
+	// Activation is a status patch; re-activating an active card is a no-op.
+	if _, err := db.UpdateCapability(id, CapabilityPatch{Status: &active}); err != nil {
 		t.Fatalf("activate capability: %v", err)
 	}
-	// Built-in capabilities are read-only: patching one must be rejected.
+	// The built-in manuals are not stored records: a write to one reports
+	// ErrNotFound like any record that is not there.
 	builtins, _ := db.ListCapabilities(CapabilityListQuery{})
 	var builtinID string
 	for _, b := range builtins {
@@ -94,8 +95,8 @@ func TestSurfaceL5Capability(t *testing.T) {
 	}
 	if builtinID != "" {
 		s := "x"
-		if _, err := db.UpdateCapability(builtinID, CapabilityPatch{Summary: &s}); CodeOf(err) != ErrInvalidQuery {
-			t.Fatalf("patch builtin must be rejected: got %v", err)
+		if _, err := db.UpdateCapability(builtinID, CapabilityPatch{Summary: &s}); CodeOf(err) != ErrNotFound {
+			t.Fatalf("patch builtin must report not-found: got %v", err)
 		}
 	}
 	if err := db.DeleteCapability(id); err != nil {
