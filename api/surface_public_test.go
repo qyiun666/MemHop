@@ -63,8 +63,6 @@ func TestSessionPublicSurface(t *testing.T) {
 		"GetL3", "ListL3", "ImportL3", "QueryL3Nodes", "QueryL3Subgraph",
 		// L4 archives
 		"SearchL4",
-		// L5 capabilities
-		"ListCapabilities", "RecordCapabilityUsage",
 		// L6 trajectory and plans
 		"ReadTrajectory", "ListTrajectorySessions", "Crystallize",
 		"SyncPlanTree", "PlanCommit", "PlanState",
@@ -75,8 +73,6 @@ func TestSessionPublicSurface(t *testing.T) {
 		"UpdateScene", "MergeScenes", "DeleteScene", "DeleteTopic",
 		// L3 management and corrections
 		"UpdateL3", "DeleteL3", "DeleteL3Nodes",
-		// L5 package lifecycle
-		"ImportCapability", "UpdateCapability", "DeleteCapability",
 	}
 	sort.Strings(want)
 

@@ -3,7 +3,7 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
-## v1.6.1 — 2026-09-06 — 公开面收敛（34→32）、内置说明书卡删除、公开面按使用者分两类
+## v1.6.1 — 2026-09-06 — 公开面收敛（34→27）、内置说明书卡删除、公开面按使用者分两类、L5 记录层退役（目录即能力）
 
 ### 两个折叠（34→32）
 
@@ -17,16 +17,28 @@ README 的版本表与 git log。
 
 - **删除**：`internal.BuiltinCards()` 代码组装、`SetBuiltinCapabilities`/`findBuiltinCapability`/`builtinMatchingList` 装配与合并链、ListCapabilities 的 stored-shadow 去重段、结晶折回的保留名检查（`trajectory.ApplyCandidate` 删 `reserved` 谓词参数）、`CapabilityOriginBuiltin` 常量（core→internal→api 别名链一并删）
 - **能力池回归本意**：池里只有宿主导入的卡、结晶草稿与 `plug/` 注入；空库 `ListCapabilities` 返回 0 条；方法用法说明归 `go doc api.Session` 与 `INTEGRATION_GUIDE.md`（即主流的「文档检索通道」角色）
-- **对消费方 breaking**：meowagent 的 `Origin == builtin` skip 成死代码、`contracts.CapabilityOriginBuiltin` 编译断——归属主自己的适配轮次；MCP 工具面不变（30）
-- `plug/` 自动注入原样保留；`Origin` 枚举其余三值（imported/crystallized/host）不变
+- **对消费方 breaking**：meowagent 的 `Origin == builtin` skip 成死代码、`contracts.CapabilityOriginBuiltin` 编译断——归属主自己的适配轮次；`plug/` 自动注入与 `Origin` 枚举（imported/crystallized/host）未随本版本存活——连同整个 L5 记录层在下方「L5 记录层退役（目录即能力）」小节移除
 
 ### 公开面按使用者分两类（注释 + 文档层，代码零结构变化）
 
-- **任务面（22 个）**：宿主每轮驱动（`Search`/`Update`/`Dream`/`AppendTrajectory`）+ LLM 工具绑定的全部读写
-- **组装/管理面（10 个 + DB 8 个）**：会话边界与管理通道调用，不做成 LLM 工具（`UpdateScene`/`MergeScenes`/`DeleteScene`/`DeleteTopic`/`UpdateL3`/`DeleteL3`/`DeleteL3Nodes`/`ImportCapability`/`UpdateCapability`/`DeleteCapability`）
+- **任务面（20 个）**：宿主每轮驱动（`Search`/`Update`/`Dream`/`AppendTrajectory`）+ LLM 工具绑定的全部读写
+- **组装/管理面（7 个 + DB 8 个）**：会话边界与管理通道调用，不做成 LLM 工具（`UpdateScene`/`MergeScenes`/`DeleteScene`/`DeleteTopic`/`UpdateL3`/`DeleteL3`/`DeleteL3Nodes`）——能力方法 5 个随 L5 记录层退役移除（见下节）
 - 落点：`api/session.go` 头注释总表（go doc 可见）、`api/surface_public_test.go` want 列表分组钉住、`INTEGRATION_GUIDE.md` §8 两类速查
 
-无格式变化（保持 `0x000B`）、无迁移；决策档案 `notes/implemented/architecture/2026-09-06-remove-builtin-cards.md`（其前身的 embed→代码组装决策同日整体被取代，档案移入 `notes/rejected/`）。
+格式在本版本内最终落到 `0x000C`（`0x0F` 帧型随 L5 记录层退役，`0x000B` 及更早文件 Open 时显式拒绝）；决策档案 `notes/implemented/architecture/2026-09-06-remove-builtin-cards.md`（其前身的 embed→代码组装决策同日整体被取代，档案移入 `notes/rejected/`）与 `notes/implemented/architecture/2026-09-06-l5-record-layer-retirement.md`。
+
+### L5 记录层退役（目录即能力）
+
+**动机**：v1.6.1 时点 L5 池里存的已经是 plug/ 文件的副本——`FileHash` 水位、重注入零写入、patch 幸存、状态补丁全部为「文件 + 库双事实源同步」服务，而目录里的文件本身从未失去意义。双事实源的同步成本买不来库侧增值：把唯一事实源归还宿主目录，库只保留它真正的两块纯能力——v4 格式与纯提炼。
+
+- **目录即能力**：能力卡的唯一事实源 = 宿主自有的 `plug/<包>/capability.json` 目录；宿主自扫自装配、变更重启生效；结晶草稿落 `plug/draft/`，activate = 文件转正。引擎不再存储任何能力记录，Open 也不做任何目录扫描/注入
+- **删除**：五个会话方法（`ImportCapability`/`UpdateCapability`/`DeleteCapability`/`ListCapabilities`/`RecordCapabilityUsage`，公开面 32→27：任务面 22→20、管理面 10→7）、八个类型（`Capability`/`CapabilityImportResult`/`CapabilityListQuery`/`CapabilityPatch`/`CrystallizeResult`/`CrystallizeDetail` 与 `CapabilityStatus`/`CapabilityOrigin` 及其常量）、`internal/l5.go`/`l5plug.go`（Open 时注入、`FileHash` 水位、重注入零写入、patch 幸存）、`repo/l5layer.go` 与 core 记录层（`RecL5Capability`、typed 读写器、`CollectAllCapabilities`、`0x0F` 帧型）；MCP 六工具（含便捷工具 `memhop_capability_get`）与 `--capability-dir`/`MEMHOP_CAPABILITY_DIR` 随之删除，工具面 30 → 24
+- **保留并转为纯能力**：`capability` 包成为 v4 磁盘格式的唯一事实源，卡片文档类型（`CapabilityImport`/`CapabilityPackageDoc`/`ResourceRef`）迁入该包，经 api 导出包级函数 `CapabilityFormatV4` + `ParseCapabilityPackage(data, source)`（内走整包校验）+ `ValidateCapabilityCard(card)`——不加 api→cap 直连边，沿用恒等别名模式
+- **`Crystallize(ctx, turnID, existing)` 转纯提炼**：入参轨迹轮 id + 宿主现有卡清单（`[]CapabilityImport`），出参即候选列表（`CrystallizeOutput.Capabilities`：action=create|reuse|merge + reuse_id + 卡载荷）；删掉 ActiveOnly 读取与折回落库循环，`trajectory.ApplyCandidate`/`applyCrystallized`/`findTarget` 整链移除；ReadTurn/TrimByBudget 链原样保留（128KB 预算留在引擎内、锁内 LLM 契约不变）。**reuse_id 语义变更：从 16-hex 记录 id 改为已有卡名**（卡名是 v4 文档的唯一性保证、宿主目录可寻址身份），systemCrystallize 提示词同步改写；未过卡级校验的候选原样返回，过滤职责移交宿主。MCP `memhop_crystallize` 传 `existing=nil` 并在描述中声明「引擎不落盘、去重落盘归宿主」
+- **PromptCard 迁入 capability 包**：删去宿主无法复刻的 `id:`（hash 派生）/`package:`（目录名复述）/`usage:`（用量统计失去写入方）三行渲染
+- **格式 0x000B → 0x000C**：`0x0F` 帧型退役，引擎不再存储能力卡；`0x000B` 及更早文件 Open 时显式拒绝、不迁移（本仓先例）；`SnapshotVersion=0x02` 不变（索引结构无变化）
+- **对消费方 breaking**：meowagent 的五个能力调用点、八个类型与 `CapabilityOriginBuiltin` skip 在其自身适配轮次前编译会断（断点清单见决策档案）
+- 决策档案 `notes/implemented/architecture/2026-09-06-l5-record-layer-retirement.md`
 
 ## v1.6.0 — 2026-09-04 — 接口去 fallback、按层闭环修复与文件级 L3/L5 公共池（实测驱动）
 

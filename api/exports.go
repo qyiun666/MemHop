@@ -20,7 +20,7 @@ const DefaultAgentID = "0000000000000000"
 // restart by naming the plan again — it never stores or builds an id.
 func NewPlanID(name string) string { return internal.MintPlanID(name) }
 
-// ---- L5 capability enum constants ----
+// ---- L5 capability constants ----
 
 const (
 	CapabilityMCP       = internal.CapabilityMCP
@@ -29,17 +29,24 @@ const (
 	CapabilityComposite = internal.CapabilityComposite
 )
 
-const (
-	CapabilityDraft      = internal.CapabilityDraft
-	CapabilityActive     = internal.CapabilityActive
-	CapabilityDeprecated = internal.CapabilityDeprecated
-)
+// CapabilityFormatV4 is the format string a memhop-capability/v4 document
+// must declare.
+const CapabilityFormatV4 = internal.CapabilityFormatV4
 
-const (
-	CapabilityOriginImported     = internal.CapabilityOriginImported
-	CapabilityOriginCrystallized = internal.CapabilityOriginCrystallized
-	CapabilityOriginHost         = internal.CapabilityOriginHost
-)
+// ParseCapabilityPackage parses and validates one memhop-capability/v4
+// package document (the JSON bytes of a capability.json) into its capability
+// cards. The engine stores no capability records — a host owns its capability
+// directory, reads each capability.json and reuses this parser as the disk
+// format's single source of truth.
+func ParseCapabilityPackage(data []byte, source string) ([]CapabilityImport, error) {
+	return internal.ParseCapabilityPackage(data, source)
+}
+
+// ValidateCapabilityCard checks one capability card against the v4 rules
+// (name, trigger or summary, resource shape, action-chain tool keys).
+func ValidateCapabilityCard(card *CapabilityImport) error {
+	return internal.ValidateCapabilityCard(card)
+}
 
 // ---- L3 edge kind constants ----
 

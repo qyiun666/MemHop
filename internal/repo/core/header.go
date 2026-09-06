@@ -41,9 +41,11 @@ const (
 // capability pool) and re-shaped the card into the uniform function-entry
 // model — no card-level type or workflow, action chains live in a resource
 // Config, and the memhop-capability/v4 document is a plugin package holding
-// 1..N cards. Files with 0x000A (or older) are rejected at Open — there is
-// no migration path.
-const FormatVersion uint16 = 0x000B
+// 1..N cards; 0x000C retired the L5 capability record layer entirely (the
+// 0x0F frame type is gone): capabilities are host-owned memhop-capability/v4
+// documents and the engine no longer stores them. Files with 0x000B (or
+// older) are rejected at Open — there is no migration path.
+const FormatVersion uint16 = 0x000C
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

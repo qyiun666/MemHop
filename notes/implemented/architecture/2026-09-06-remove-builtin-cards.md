@@ -11,7 +11,7 @@ Status: implemented
 ## Decision
 
 - **内置说明书卡机制整体删除**：`internal/builtin_capabilities.go`（BuiltinCards 代码组装）、`internal/l5_builtin.go`（SetBuiltinCapabilities / findBuiltinCapability / builtinMatchingList / db.builtinCapabilities 字段）、ListCapabilities 的 stored-shadow 合并段、结晶折回的 `reserved` 谓词（`trajectory.ApplyCandidate` 签名去掉该参数）、`CapabilityOriginBuiltin` 常量（core → internal → api 别名链一并删）、五个测试文件/段落（词表测试、builtin 集合测试、影子卡测试、fresh-DB 测试改钉「空池」）。
-- **能力池回归本意**：池里只有宿主导入的卡（`ImportCapability` / `plug/` 注入）、结晶草稿（`Crystallize`）与宿主直写记录；空库 `ListCapabilities` 返回 0 条。`plug/` 自动注入机制原样保留；`Origin` 枚举其余三值（imported/crystallized/host）不变。
+- **能力池回归本意**：池里只有宿主导入的卡（`ImportCapability` / `plug/` 注入）、结晶草稿（`Crystallize`）与宿主直写记录；空库 `ListCapabilities` 返回 0 条。`plug/` 自动注入机制原样保留；`Origin` 枚举其余三值（imported/crystallized/host）不变。（该保留决定同日被 [L5 记录层退役](2026-09-06-l5-record-layer-retirement.md) 取代：plug/ 注入与 `Origin` 枚举连同整个记录层一并移除，能力唯一事实源归还宿主目录。）
 - **方法说明的归宿**：`go doc api.Session`（宿主唯一文档入口）与 `INTEGRATION_GUIDE.md`——即主流的「文档检索通道」角色；向 LLM 投影工具时先注入一行索引（id + name + summary + trigger），参数详情按需按 id 查。
 - **同批落地公开面按使用者分两类**（注释 + 文档层，代码零结构变化）：任务面 22（宿主每轮驱动 + LLM 工具绑定）与组装/管理面 10 + DB 8（会话边界与管理通道，不做成 LLM 工具）；钉在 `api/surface_public_test.go` 分组清单，声明在 `api/session.go` 头注释与 `INTEGRATION_GUIDE.md` §8。MCP 工具面维持 30 个不动（「刻意不收敛」既定决策）。
 

@@ -9,19 +9,18 @@ import (
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-func pkgDoc() core.CapabilityPackageDoc {
-	return core.CapabilityPackageDoc{
+func pkgDoc() CapabilityPackageDoc {
+	return CapabilityPackageDoc{
 		Format: FormatV4,
 		Name:   "fs-tools",
-		Capabilities: []core.CapabilityImport{
+		Capabilities: []CapabilityImport{
 			{
 				Name:      "read-file",
 				Summary:   "read a file",
 				Trigger:   "user asks to read",
-				Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "fs.read"}},
+				Resources: []ResourceRef{{Type: CapabilityMCP, Name: "fs.read"}},
 			},
 		},
 	}
@@ -40,11 +39,11 @@ func TestBuildPackageParsesValidDocument(t *testing.T) {
 		t.Fatalf("want 1 card, got %d", len(caps))
 	}
 	cap := caps[0]
-	if cap.Name != "read-file" || cap.Version != "1" || cap.Package != "fs-tools" {
+	if cap.Name != "read-file" || cap.Version != "" || cap.Summary != "read a file" {
 		t.Fatalf("definition mismatch: %+v", cap)
 	}
-	if len(cap.FileHash) != 64 {
-		t.Fatalf("file hash must be sha256 hex, got %q", cap.FileHash)
+	if len(cap.Resources) != 1 || cap.Resources[0].Type != CapabilityMCP {
+		t.Fatalf("resources mismatch: %+v", cap.Resources)
 	}
 }
 
@@ -56,8 +55,8 @@ func TestBuildPackageRejectsBadFormatAndDuplicates(t *testing.T) {
 		t.Fatalf("v3 document must be rejected explicitly, got %v", err)
 	}
 	dup := pkgDoc()
-	dup.Capabilities = append(dup.Capabilities, core.CapabilityImport{
-		Name: "READ-FILE", Summary: "dup", Resources: []core.ResourceRef{{Name: "x"}},
+	dup.Capabilities = append(dup.Capabilities, CapabilityImport{
+		Name: "READ-FILE", Summary: "dup", Resources: []ResourceRef{{Name: "x"}},
 	})
 	data, _ = json.Marshal(dup)
 	if _, err := BuildPackage(data, "t"); err == nil {
@@ -80,40 +79,40 @@ func TestBuildPackageRejectsBadFormatAndDuplicates(t *testing.T) {
 func TestValidateCardMatrix(t *testing.T) {
 	tests := []struct {
 		name    string
-		mutate  func(*core.CapabilityImport)
+		mutate  func(*CapabilityImport)
 		wantErr bool
 	}{
-		{"mixed-kind entries are one card", func(i *core.CapabilityImport) {
-			i.Resources = append(i.Resources, core.ResourceRef{Type: core.CapabilitySkill, Name: "b"})
+		{"mixed-kind entries are one card", func(i *CapabilityImport) {
+			i.Resources = append(i.Resources, ResourceRef{Type: CapabilitySkill, Name: "b"})
 		}, false},
-		{"composite chain with tool keys", func(i *core.CapabilityImport) {
+		{"composite chain with tool keys", func(i *CapabilityImport) {
 			cfg := `{"steps":[{"tool":"a"},{"tool":"b","args":{"x":1}}]}`
 			i.Resources[0].Config = &cfg
 		}, false},
-		{"composite chain missing tool key", func(i *core.CapabilityImport) {
+		{"composite chain missing tool key", func(i *CapabilityImport) {
 			cfg := `{"steps":[{"ref":"a"}]}`
 			i.Resources[0].Config = &cfg
 		}, true},
-		{"malformed json config", func(i *core.CapabilityImport) {
+		{"malformed json config", func(i *CapabilityImport) {
 			cfg := "{not json"
 			i.Resources[0].Config = &cfg
 		}, true},
-		{"loose line config passes unchecked", func(i *core.CapabilityImport) {
+		{"loose line config passes unchecked", func(i *CapabilityImport) {
 			cfg := "bash: ls -la"
 			i.Resources[0].Config = &cfg
 		}, false},
-		{"no resources", func(i *core.CapabilityImport) { i.Resources = nil }, true},
-		{"missing name", func(i *core.CapabilityImport) { i.Name = "  " }, true},
-		{"missing trigger and summary", func(i *core.CapabilityImport) {
+		{"no resources", func(i *CapabilityImport) { i.Resources = nil }, true},
+		{"missing name", func(i *CapabilityImport) { i.Name = "  " }, true},
+		{"missing trigger and summary", func(i *CapabilityImport) {
 			i.Trigger, i.Summary = "", ""
 		}, true},
-		{"unknown resource type", func(i *core.CapabilityImport) {
+		{"unknown resource type", func(i *CapabilityImport) {
 			i.Resources[0].Type = "mcp "
 		}, true},
-		{"missing resource type", func(i *core.CapabilityImport) {
+		{"missing resource type", func(i *CapabilityImport) {
 			i.Resources[0].Type = ""
 		}, true},
-		{"invalid json schema input", func(i *core.CapabilityImport) {
+		{"invalid json schema input", func(i *CapabilityImport) {
 			i.Resources[0].Input = "{not json"
 		}, true},
 	}
@@ -129,52 +128,30 @@ func TestValidateCardMatrix(t *testing.T) {
 	}
 }
 
-func TestMergeDefinitionKeepsIdentityAndUsage(t *testing.T) {
-	existing := &core.Capability{
-		Name: "keep", IDHash: 7, Status: core.CapabilityActive, Origin: core.CapabilityOriginImported,
-		TriggerCount: 12, SuccessRate: 0.9, Summary: "old", Version: "1", Package: "fs-tools",
+// TestPromptCardRendersCallContract pins the prompt rendering: the call
+// contract per resource (including the steps line) is in, and every
+// record-layer leftover (stored id / package stamp / usage statistics) is out.
+func TestPromptCardRendersCallContract(t *testing.T) {
+	cfg := `{"steps":[{"tool":"a"},{"tool":"b"}]}`
+	card := CapabilityImport{
+		Name: "deploy", Version: "2", Summary: "ship it", Trigger: "on release",
+		Resources: []ResourceRef{
+			{Type: CapabilitySkill, Name: "s", Desc: "run it"},
+			{Type: CapabilityComposite, Name: "chain", Config: &cfg},
+		},
 	}
-	incoming := BuildCrystallized(&core.CapabilityImport{
-		Name: "incoming", Summary: "new", Trigger: "trig",
-		Resources: []core.ResourceRef{{Type: core.CapabilitySkill, Name: "s"}},
-	}, 1000)
-	MergeDefinition(existing, incoming, 2000)
-	if existing.Summary != "new" || existing.Version != "1" || existing.Trigger != "trig" {
-		t.Fatalf("definition not merged: %+v", existing)
+	out := card.PromptCard()
+	for _, want := range []string{
+		"[capability: deploy]", "version: 2", "summary: ship it", "trigger: on release",
+		"resource: skill s", "  use: run it", "resource: composite chain", "  steps: a -> b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("PromptCard missing %q:\n%s", want, out)
+		}
 	}
-	if existing.IDHash != 7 || existing.Name != "keep" || existing.TriggerCount != 12 || existing.SuccessRate != 0.9 {
-		t.Fatalf("identity/usage must survive merge: %+v", existing)
-	}
-	if existing.Package != "fs-tools" {
-		t.Fatalf("package stamp must survive merge: %+v", existing)
-	}
-	if existing.UpdatedAt != 2000 {
-		t.Fatalf("UpdatedAt = %d; want 2000", existing.UpdatedAt)
-	}
-}
-
-func TestMatchesAndActiveOnly(t *testing.T) {
-	active := core.Capability{Name: "deploy-runbook", Summary: "ship it", Status: core.CapabilityActive, Package: "fs-tools"}
-	draft := core.Capability{Name: "old-card", Summary: "retired", Status: core.CapabilityDraft}
-	caps := []core.Capability{active, draft}
-	if got := ActiveOnly(append([]core.Capability(nil), caps...)); len(got) != 1 || got[0].Name != "deploy-runbook" {
-		t.Fatalf("ActiveOnly = %+v", got)
-	}
-	other := "other"
-	checks := []struct {
-		q    core.CapabilityListQuery
-		want bool
-	}{
-		{core.CapabilityListQuery{}, true},
-		{core.CapabilityListQuery{Keyword: "SHIP"}, true}, // case-insensitive over name+summary+trigger
-		{core.CapabilityListQuery{Keyword: "cooking"}, false},
-		{core.CapabilityListQuery{Status: &draft.Status}, false},
-		{core.CapabilityListQuery{Package: &active.Package}, true},
-		{core.CapabilityListQuery{Package: &other}, false},
-	}
-	for _, tc := range checks {
-		if got := Matches(&active, &tc.q, strings.ToLower(tc.q.Keyword)); got != tc.want {
-			t.Fatalf("Matches(%+v) = %v; want %v", tc.q, got, tc.want)
+	for _, banned := range []string{"id:", "package:", "usage:"} {
+		if strings.Contains(out, banned) {
+			t.Fatalf("PromptCard must not render %q (record-layer leftover):\n%s", banned, out)
 		}
 	}
 }

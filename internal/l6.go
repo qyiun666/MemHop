@@ -176,15 +176,17 @@ func (db *DB) PlanState(agentID uint64, planID string) (*PlanTree, error) {
 	return plan.BuildTree(ac, agentID, ph)
 }
 
-// Crystallize extracts L5 capability candidates from one turn's trajectory
-// (L6 → L5), keyed by the topic id Search issued for that turn — or by a plan
-// id, when the host bound these turns' events to a plan tree. The LLM
-// receives the existing capability catalog so repeated crystallization
-// reuses or merges instead of duplicating. The whole pipeline holds the
+// Crystallize extracts reusable capability candidates from one turn's
+// trajectory (L6 → host), keyed by the topic id Search issued for that turn —
+// or by a plan id, when the host bound these turns' events to a plan tree.
+// existing lists the cards the host already knows (its own capability
+// directory) so the LLM can reuse or merge instead of duplicating. The
+// engine returns candidates only: storing them is the host's job, so there
+// is no L5 record layer behind this call anymore. The pipeline holds the
 // domain lock, exactly as Update and Dream do: another operation on this
 // agent waits (so a slow LLM round-trip stalls same-domain writes), while
 // other domains stay parallel.
-func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*CrystallizeResult, error) {
+func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string, existing []capability.CapabilityImport) (*llmops.CrystallizeOutput, error) {
 	ac, parsed, err := db.lockSession(agentID, turnID)
 	if err != nil {
 		return nil, err
@@ -199,25 +201,5 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 	if len(events) == 0 {
 		return nil, common.NewError(common.ErrNotFound, "no trajectory for turn "+turnID)
 	}
-	// The capability catalog and the fold-back writes target the file-wide
-	// shared pool. Like the L3 anchor checks, they run while holding only the
-	// caller's session lock: single-record access is safe under the engine's
-	// per-record mutual exclusion, and nesting the pool lock here would
-	// serialize crystallization behind every shared-pool op.
-	existing := capability.ActiveOnly(core.CollectAllCapabilities(db.engine, core.SharedPoolAgentID))
-	out, err := llmops.Crystallize(ctx, db.llm, events, existing)
-	if err != nil {
-		return nil, err
-	}
-
-	if db.closed.Load() {
-		return nil, common.NewError(common.ErrClosed, "database is closed")
-	}
-	result := &CrystallizeResult{CreatedIDs: []string{}, ReusedIDs: []string{}, MergedIDs: []string{}}
-	for _, cand := range out.Capabilities {
-		if err := trajectory.ApplyCandidate(db.engine, core.SharedPoolAgentID, cand, result); err != nil {
-			return nil, err
-		}
-	}
-	return result, nil
+	return llmops.Crystallize(ctx, db.llm, events, existing)
 }

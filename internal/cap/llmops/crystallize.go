@@ -13,16 +13,19 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/qyiun666/MemHop/internal/cap/capability"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // CrystallizeCapability is one capability candidate extracted from a
-// trajectory. Action is create, reuse or merge.
+// trajectory. Action is create, reuse or merge; ReuseID names the existing
+// capability (its exact name) for reuse/merge — the host resolves it against
+// its own directory.
 type CrystallizeCapability struct {
-	Action     string                `json:"action"`
-	ReuseID    string                `json:"reuse_id,omitempty"`
-	Capability core.CapabilityImport `json:"capability"`
+	Action     string                      `json:"action"`
+	ReuseID    string                      `json:"reuse_id,omitempty"`
+	Capability capability.CapabilityImport `json:"capability"`
 }
 
 type CrystallizeOutput struct {
@@ -41,9 +44,9 @@ Rules:
 - Every resource is a tool declaration: name = tool name, desc = how to call it (for the LLM), input = args JSON Schema string (omit when none), output = output description, ref = server address / skill path / api:Method, config = connection JSON, or for composite the step chain (optional)
 - Do not invent tools or services that are not present in the trajectory
 - Compare against the existing capabilities listed below. If the same capability already exists:
-  * action = "reuse" and reuse_id = its 16-hex id
+  * action = "reuse" and reuse_id = its exact name
   * do not duplicate it
-- If a candidate is a newer variant of an existing capability, use action = "merge" and reuse_id = its existing id
+- If a candidate is a newer variant of an existing capability, use action = "merge" and reuse_id = the existing capability's name
 - Otherwise action = "create"
 - When no reusable capability exists, output capabilities as an empty array
 
@@ -52,7 +55,7 @@ Output ONLY valid JSON in this exact shape (no markdown, no code fences):
   "capabilities": [
     {
       "action": "create|reuse|merge",
-      "reuse_id": "16-hex-id when action is reuse or merge, otherwise omit",
+      "reuse_id": "existing capability name when action is reuse or merge, otherwise omit",
       "capability": {
         "name": "<short capability name>",
         "version": "1",
@@ -67,9 +70,9 @@ Output ONLY valid JSON in this exact shape (no markdown, no code fences):
 }`
 
 // Crystallize extracts reusable L5 capabilities from a trajectory event
-// batch. Existing capabilities are included in the prompt so the model can
-// reuse or merge instead of duplicating.
-func Crystallize(ctx context.Context, chat Chat, events []core.TrajectorySlot, existing []core.Capability) (*CrystallizeOutput, error) {
+// batch. Existing capabilities (the host's own catalog) are included in the
+// prompt so the model can reuse or merge instead of duplicating.
+func Crystallize(ctx context.Context, chat Chat, events []core.TrajectorySlot, existing []capability.CapabilityImport) (*CrystallizeOutput, error) {
 	if len(events) == 0 {
 		return &CrystallizeOutput{Capabilities: []CrystallizeCapability{}}, nil
 	}
@@ -81,9 +84,9 @@ func Crystallize(ctx context.Context, chat Chat, events []core.TrajectorySlot, e
 	return parseCrystallizeResponse(response)
 }
 
-// buildCrystallizePrompt lists trajectory events followed by existing L5
-// capability prompt cards.
-func buildCrystallizePrompt(events []core.TrajectorySlot, existing []core.Capability) string {
+// buildCrystallizePrompt lists trajectory events followed by the host's
+// existing capability prompt cards.
+func buildCrystallizePrompt(events []core.TrajectorySlot, existing []capability.CapabilityImport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Operation Trajectory (%d events)\n\n", len(events))
 	for _, ev := range events {
@@ -107,9 +110,9 @@ func parseCrystallizeResponse(response string) (*CrystallizeOutput, error) {
 	cleaned := stripCodeBlocks(response)
 	var raw struct {
 		Capabilities []struct {
-			Action     string                `json:"action"`
-			ReuseID    string                `json:"reuse_id,omitempty"`
-			Capability core.CapabilityImport `json:"capability"`
+			Action     string                      `json:"action"`
+			ReuseID    string                      `json:"reuse_id,omitempty"`
+			Capability capability.CapabilityImport `json:"capability"`
 		} `json:"capabilities"`
 	}
 	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {

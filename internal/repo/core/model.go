@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
@@ -221,124 +220,6 @@ type ArchiveSlot struct {
 	CreatedAt   int64       `json:"created_at"`
 	Content     string      `json:"content"`
 	Metadata    *string     `json:"metadata,omitempty"`
-}
-
-// Capability is an L5 reusable capability: a named card of function entries
-// (ResourceRef) that MemHop stores and matches but never executes. One card
-// carries any number of entries; each entry self-describes how it is launched
-// (Type/Ref/Config), what it is (Desc) and how to call it (Input/Output).
-// Package names the plugin document the card was imported from; crystallized
-// cards carry none.
-type Capability struct {
-	IDHash        uint64           `json:"id_hash"`
-	Name          string           `json:"name"`
-	Version       string           `json:"version"`
-	Package       string           `json:"package,omitempty"`
-	Summary       string           `json:"summary"`
-	Trigger       string           `json:"trigger"`
-	Resources     []ResourceRef    `json:"resources"`
-	Status        CapabilityStatus `json:"status"`
-	Origin        CapabilityOrigin `json:"origin"`
-	FileHash      string           `json:"file_hash,omitempty"`
-	SuccessRate   float32          `json:"success_rate"`
-	TriggerCount  uint32           `json:"trigger_count"`
-	LastTriggered int64            `json:"last_triggered"`
-	CreatedAt     int64            `json:"created_at"`
-	UpdatedAt     int64            `json:"updated_at"`
-}
-
-// NormalizeCapabilityName returns the canonical lowercase name used for IDs
-// and duplicate detection.
-func NormalizeCapabilityName(name string) string {
-	return strings.ToLower(strings.TrimSpace(name))
-}
-
-// CapabilityID derives the stable L5 record ID from a capability name.
-func CapabilityID(name string) uint64 {
-	return common.HashID("capability:" + NormalizeCapabilityName(name))
-}
-
-// PromptCard renders the concise capability view intended for an LLM prompt.
-func (c Capability) PromptCard() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "[capability: %s]\n", c.Name)
-	fmt.Fprintf(&b, "id: %s\n", common.FormatHash(c.IDHash))
-	if c.Package != "" {
-		fmt.Fprintf(&b, "package: %s\n", c.Package)
-	}
-	if c.Version != "" {
-		fmt.Fprintf(&b, "version: %s\n", c.Version)
-	}
-	if c.Summary != "" {
-		fmt.Fprintf(&b, "summary: %s\n", c.Summary)
-	}
-	if c.Trigger != "" {
-		fmt.Fprintf(&b, "trigger: %s\n", c.Trigger)
-	}
-	for _, r := range c.Resources {
-		fmt.Fprintf(&b, "resource: %s %s", r.Type, r.Name)
-		if r.Ref != "" {
-			fmt.Fprintf(&b, " (%s)", r.Ref)
-		}
-		b.WriteByte('\n')
-		if r.Desc != "" {
-			fmt.Fprintf(&b, "  use: %s\n", r.Desc)
-		}
-		if r.Input != "" {
-			fmt.Fprintf(&b, "  input: %s\n", r.Input)
-		}
-		if r.Output != "" {
-			fmt.Fprintf(&b, "  output: %s\n", r.Output)
-		}
-		if steps := resourceSteps(r.Config); len(steps) > 0 {
-			fmt.Fprintf(&b, "  steps: %s\n", strings.Join(steps, " -> "))
-		}
-	}
-	if c.TriggerCount > 0 || c.SuccessRate > 0 {
-		fmt.Fprintf(&b, "usage: %d, success_rate: %.2f\n", c.TriggerCount, c.SuccessRate)
-	}
-	return b.String()
-}
-
-// resourceSteps extracts the action-chain tool names from a resource Config
-// of the canonical form {"steps":[{"tool":"...", ...}]}; other shapes (loose
-// line forms, natural language) yield nil. Rendering only — shape validation
-// lives in the cap/capability package at import time.
-func resourceSteps(cfg *string) []string {
-	if cfg == nil || !strings.HasPrefix(*cfg, "{") {
-		return nil
-	}
-	var obj struct {
-		Steps []struct {
-			Tool string `json:"tool"`
-		} `json:"steps"`
-	}
-	if err := json.Unmarshal([]byte(*cfg), &obj); err != nil || len(obj.Steps) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(obj.Steps))
-	for _, st := range obj.Steps {
-		if st.Tool != "" {
-			names = append(names, st.Tool)
-		}
-	}
-	return names
-}
-
-// ResourceRef is one function entry of a capability card (an MCP server, a
-// skill, an api method, or an action chain). The tool-declaration fields
-// (Name/Desc/Input/Output) mirror the host tool spec shape exactly (meowire
-// ToolSpec semantics): a host projects a resource to its own tool declaration
-// with a pure field copy, no format conversion. MemHop stores these references
-// but does not execute them.
-type ResourceRef struct {
-	Type   CapabilityType `json:"type"`             // mcp | skill | api | composite
-	Name   string         `json:"name"`             // tool name (ToolSpec.Name)
-	Desc   string         `json:"desc"`             // call contract for the LLM (ToolSpec.Desc)
-	Input  string         `json:"input,omitempty"`  // args JSON Schema string (ToolSpec.Input)
-	Output string         `json:"output,omitempty"` // output description (ToolSpec.Output)
-	Ref    string         `json:"ref,omitempty"`    // MCP server address / skill path / api:Method / command
-	Config *string        `json:"config,omitempty"` // connection config; a composite entry carries its action chain as {"steps":[{"tool":...}]}
 }
 
 // Plan node type for TrajectorySlot: either a raw trajectory event or a plan node.

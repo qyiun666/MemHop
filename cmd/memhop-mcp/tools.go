@@ -122,14 +122,11 @@ func resolveContentType(name string) (memhop.ContentType, error) {
 	return v, nil
 }
 
-// registerTools attaches all 31 tools to the server for one tenant DB.
-// capDir is the directory memhop_capability_import resolves its path argument
-// inside; the other tools take ids only, which the library minted.
-func registerTools(s *mcp.Server, m *memhop.MultiAgentDB, db *memhop.Session, capDir string) {
+// registerTools attaches all tools to the server for one tenant DB.
+func registerTools(s *mcp.Server, m *memhop.MultiAgentDB, db *memhop.Session) {
 	registerCoreTools(s, m, db)
 	registerL2Tools(s, db)
 	registerL3Tools(s, db)
 	registerL4Tools(s, db)
-	registerL5Tools(s, db, capDir)
 	registerL6Tools(s, db)
 }

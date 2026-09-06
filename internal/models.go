@@ -9,6 +9,7 @@
 package internal
 
 import (
+	"github.com/qyiun666/MemHop/internal/cap/capability"
 	"github.com/qyiun666/MemHop/internal/cap/llmops"
 	"github.com/qyiun666/MemHop/internal/plan"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -30,16 +31,11 @@ type (
 	L3NodeQuery              = core.L3NodeQuery
 	L3Subgraph               = core.L3Subgraph
 	L4Query                  = core.L4Query
-	CapabilityImport         = core.CapabilityImport
-	CapabilityPackageDoc     = core.CapabilityPackageDoc
-	CapabilityImportResult   = core.CapabilityImportResult
-	CapabilityPatch          = core.CapabilityPatch
-	CapabilityListQuery      = core.CapabilityListQuery
+	CapabilityImport         = capability.CapabilityImport
+	CapabilityPackageDoc     = capability.CapabilityPackageDoc
 	TrajectorySessionSummary = core.TrajectorySessionSummary
 	DreamReport              = core.DreamReport
 	DreamStage               = core.DreamStage
-	CrystallizeResult        = core.CrystallizeResult
-	CrystallizeDetail        = core.CrystallizeDetail
 
 	// Plan surface types live in the plan small-method package.
 	PlanStatus   = plan.PlanStatus

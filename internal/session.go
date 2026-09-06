@@ -157,30 +157,6 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return s.db.SearchL4(s.agentID, q)
 }
 
-// ---- L5 capabilities ----
-
-func (s *Session) ImportCapability(path string) (*CapabilityImportResult, error) {
-	return s.db.ImportCapability(s.agentID, path)
-}
-
-func (s *Session) DeleteCapability(id string) error {
-	return s.db.DeleteCapability(s.agentID, id)
-}
-
-func (s *Session) UpdateCapability(id string, patch CapabilityPatch) (*Capability, error) {
-	return s.db.UpdateCapability(s.agentID, id, patch)
-}
-
-// ListCapabilities filters the L5 catalog; CapabilityListQuery.IDs selects a
-// single card.
-func (s *Session) ListCapabilities(q CapabilityListQuery) ([]Capability, error) {
-	return s.db.ListCapabilities(s.agentID, q)
-}
-
-func (s *Session) RecordCapabilityUsage(id string, success bool) (*Capability, error) {
-	return s.db.RecordCapabilityUsage(s.agentID, id, success)
-}
-
 // ---- L6 trajectory ----
 
 // AppendTrajectory appends one event under `key`: a turn's topic id for a
@@ -205,10 +181,14 @@ func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 	return s.db.ListTrajectorySessions(s.agentID)
 }
 
-// Crystallize turns one key's events into L5 capability drafts; pass a turn's
-// topic id for a single turn, or a plan id to aggregate the whole plan.
-func (s *Session) Crystallize(ctx context.Context, turnID string) (*CrystallizeResult, error) {
-	return s.db.Crystallize(ctx, s.agentID, turnID)
+// Crystallize extracts reusable capability candidates from one key's
+// trajectory events via the LLM: pass a turn's topic id for a single turn, or
+// a plan id to aggregate the whole plan. existing lists the cards the host
+// already knows (its own capability directory), so candidates can reuse or
+// merge them instead of duplicating. The engine returns candidates only —
+// persisting them is the host's job.
+func (s *Session) Crystallize(ctx context.Context, turnID string, existing []CapabilityImport) (*CrystallizeOutput, error) {
+	return s.db.Crystallize(ctx, s.agentID, turnID, existing)
 }
 
 // ---- L6 plan ----

@@ -6,9 +6,8 @@
 // through one shared multi-agent database: each tenant reaches its own
 // isolated agent domain through the URL path /mcp/<tenant-id> (a stable
 // agentID per tenant name inside the single <db-dir>/memhop.meh file), so
-// tenant data stays isolated — except the L3 knowledge graph and the L5
-// capability pool, two file-wide shared pools every tenant of the file
-// reads and writes.
+// tenant data stays isolated — except the L3 knowledge graph, one file-wide
+// shared pool every tenant of the file reads and writes.
 //
 // Two HTTP transports are supported:
 //
@@ -44,7 +43,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	reg := newRegistry(cfg.Base, cfg.DBDir, cfg.CapabilityDir, cfg.Tenants, logger)
+	reg := newRegistry(cfg.Base, cfg.DBDir, cfg.Tenants, logger)
 	handler, err := buildHandler(cfg, reg)
 	if err != nil {
 		logger.Error("unknown transport", "transport", cfg.Transport)

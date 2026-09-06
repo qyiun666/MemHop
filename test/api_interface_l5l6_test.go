@@ -9,61 +9,12 @@ package test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/qyiun666/MemHop/api"
-	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 )
-
-func TestInterfaceL5(t *testing.T) {
-	db, _ := openTestDB(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "capability.json")
-	content := `{"format":"memhop-capability/v4","name":"重构包","capabilities":[{"name":"重构流程","version":"1","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file"}]}]}`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write capability file: %v", err)
-	}
-
-	result, err := db.ImportCapability(path)
-	if err != nil {
-		t.Fatalf("ImportCapability: %v", err)
-	}
-	if result == nil || len(result.CreatedIDs) != 1 {
-		t.Fatalf("ImportCapability result = %+v", result)
-	}
-	id := result.CreatedIDs[0]
-	one, err := db.ListCapabilities(internal.CapabilityListQuery{IDs: []string{id}})
-	if err != nil || len(one) != 1 {
-		t.Fatalf("capability %s: %d found, err %v", id, len(one), err)
-	}
-	got := one[0]
-	if got.Name != "重构流程" || got.Package != "重构包" || got.Resources[0].Type != core.CapabilityMCP {
-		t.Fatalf("capability mismatch: %+v", got)
-	}
-	caps, err := db.ListCapabilities(internal.CapabilityListQuery{})
-	if err != nil {
-		t.Fatalf("ListCapabilities: %v", err)
-	}
-	if len(caps) != 1 || caps[0].Name != "重构流程" {
-		t.Fatalf("the imported card must be the only listing entry: %+v", caps)
-	}
-
-	if err := db.DeleteCapability(id); err != nil {
-		t.Fatalf("DeleteCapability: %v", err)
-	}
-	caps, err = db.ListCapabilities(internal.CapabilityListQuery{})
-	if err != nil {
-		t.Fatalf("ListCapabilities after delete: %v", err)
-	}
-	if len(caps) != 0 {
-		t.Fatalf("stored capability should be deleted: %+v", caps)
-	}
-}
 
 func TestInterfaceL6(t *testing.T) {
 	db, _ := openTestDB(t)
@@ -100,22 +51,21 @@ func TestInterfaceL6(t *testing.T) {
 		t.Fatalf("want 2 events with seq 1,2: %+v", events)
 	}
 
-	// Crystallize turns the trajectory into an L5 plugin via the mock LLM.
-	res, err := db.Crystallize(context.Background(), session)
+	// Crystallize returns candidates against a host-supplied catalog; the
+	// engine stores nothing, so the candidates are all there is.
+	existing := []api.CapabilityImport{{
+		Name: "已有能力", Summary: "已有", Trigger: "已有触发",
+		Resources: []api.ResourceRef{{Type: api.CapabilityMCP, Name: "old_tool"}},
+	}}
+	out, err := db.Crystallize(context.Background(), session, existing)
 	if err != nil {
 		t.Fatalf("Crystallize: %v", err)
 	}
-	if len(res.CreatedIDs) != 1 {
-		t.Fatalf("want 1 created capability id: %+v", res)
+	if len(out.Capabilities) != 1 {
+		t.Fatalf("want 1 capability candidate: %+v", out)
 	}
-	// Built-ins are all active, so filtering by draft isolates the
-	// crystallized capability.
-	draft := core.CapabilityDraft
-	caps, err := db.ListCapabilities(internal.CapabilityListQuery{Status: &draft})
-	if err != nil {
-		t.Fatalf("ListCapabilities after crystallize: %v", err)
-	}
-	if len(caps) != 1 || caps[0].Status != core.CapabilityDraft {
-		t.Fatalf("want 1 draft capability after crystallize, got %d", len(caps))
+	cand := out.Capabilities[0]
+	if cand.Action != "create" || cand.Capability.Name != "重构流程" {
+		t.Fatalf("candidate mismatch: %+v", cand)
 	}
 }

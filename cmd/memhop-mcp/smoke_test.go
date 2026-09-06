@@ -22,21 +22,21 @@ import (
 
 // TestSSEMultiTenantIsolation boots the SSE server in-process and verifies
 // that two tenants on one process are isolated (scenes, archives, profiles)
-// while the L3 knowledge graph and the L5 capability pool are the file-wide
-// shared pools, and that the full tool surface is present on each tenant.
+// while the L3 knowledge graph is the file-wide shared pool, and that the
+// full tool surface is present on each tenant.
 func TestSSEMultiTenantIsolation(t *testing.T) {
 	srv, dbDir := newTestServer(t, nil)
 
 	alice := connectTenant(t, srv.URL, "alice")
 	bob := connectTenant(t, srv.URL, "bob")
 
-	// tools/list exposes all 30 tools on the alice session.
+	// tools/list exposes all 24 tools on the alice session.
 	tools, err := alice.ListTools(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	if len(tools.Tools) != 30 {
-		t.Errorf("expected 30 tools, got %d", len(tools.Tools))
+	if len(tools.Tools) != 24 {
+		t.Errorf("expected 24 tools, got %d", len(tools.Tools))
 	}
 	names := make(map[string]bool, len(tools.Tools))
 	for _, tool := range tools.Tools {
@@ -49,7 +49,6 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		"memhop_knowledge_get", "memhop_knowledge_list", "memhop_knowledge_import",
 		"memhop_knowledge_update", "memhop_knowledge_delete", "memhop_knowledge_nodes",
 		"memhop_knowledge_subgraph", "memhop_archive_search", "memhop_archive_get",
-		"memhop_capability_import", "memhop_capability_get", "memhop_capability_delete", "memhop_capability_list", "memhop_capability_update", "memhop_capability_usage",
 		"memhop_trajectory_append", "memhop_trajectory_read", "memhop_trajectory_sessions",
 		"memhop_crystallize",
 	} {
@@ -269,7 +268,7 @@ func newTestServerWithDir(t *testing.T, dbDir string, tenants []string) (*httpte
 func newTestServerOver(t *testing.T, base memhop.MemHopConfig, dbDir string, tenants []string) *httptest.Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reg := newRegistry(base, dbDir, dbDir, tenants, logger)
+	reg := newRegistry(base, dbDir, tenants, logger)
 	srv := httptest.NewServer(newSSEHandler(reg))
 	t.Cleanup(func() {
 		srv.Close()
@@ -360,7 +359,7 @@ func (e errTool) Error() string { return string(e) }
 // in depth: even if a tenant id reached the registry, the resolved path
 // must stay inside db-dir.
 func TestSSERegistryRejectsPathTraversal(t *testing.T) {
-	reg := newRegistry(testBase(t), t.TempDir(), t.TempDir(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	reg := newRegistry(testBase(t), t.TempDir(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, id := range []string{"..", ".", "a/b", "a\\b"} {
 		if _, err := reg.get(id); err == nil {
 			t.Errorf("tenant id %q should be rejected", id)
@@ -371,7 +370,7 @@ func TestSSERegistryRejectsPathTraversal(t *testing.T) {
 // TestSSECloseAllPersists checks that CloseAll persists every open tenant.
 func TestSSECloseAllPersists(t *testing.T) {
 	dbDir := t.TempDir()
-	reg := newRegistry(testBase(t), dbDir, dbDir, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	reg := newRegistry(testBase(t), dbDir, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if _, err := reg.get("alice"); err != nil {
 		t.Fatalf("open alice: %v", err)
 	}

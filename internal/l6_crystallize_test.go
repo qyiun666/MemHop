@@ -20,7 +20,7 @@ import (
 
 func TestCrystallizeNoTrajectory(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	_, err := db.Crystallize(context.Background(), core.DefaultAgentID, common.FormatHash(1))
+	_, err := db.Crystallize(context.Background(), core.DefaultAgentID, common.FormatHash(1), nil)
 	if err == nil {
 		t.Fatal("crystallize on empty session should fail")
 	}
@@ -61,7 +61,7 @@ func TestCrystallizeReadsOneTurnTopic(t *testing.T) {
 			t.Fatalf("append: %v", err)
 		}
 	}
-	if _, err := db.Crystallize(context.Background(), core.DefaultAgentID, common.FormatHash(turnA)); err != nil {
+	if _, err := db.Crystallize(context.Background(), core.DefaultAgentID, common.FormatHash(turnA), nil); err != nil {
 		t.Fatalf("crystallize: %v", err)
 	}
 	mu.Lock()
@@ -107,72 +107,6 @@ func mockLLMServer(t *testing.T, content string) *httptest.Server {
 	return srv
 }
 
-func TestCrystallizeFullFlow(t *testing.T) {
-	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"重构流程","type":"composite","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","config":"{\"file\":\"a.go\"}"},{"type":"mcp","name":"write_file"}]}}]}`)
-	db := newTestDB(t, newTestEngine(t))
-	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	session := common.FormatHash(123)
-	for i := 1; i <= 3; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "step", Timestamp: int64(i)}); err != nil {
-			t.Fatalf("append %d: %v", i, err)
-		}
-	}
-
-	result, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
-	if err != nil {
-		t.Fatalf("crystallize: %v", err)
-	}
-	if len(result.CreatedIDs) != 1 || len(result.ReusedIDs) != 0 || len(result.MergedIDs) != 0 {
-		t.Fatalf("unexpected result: %+v", result)
-	}
-
-	cap := mustCapability(t, db, result.CreatedIDs[0])
-	if cap.Status != core.CapabilityDraft || cap.Origin != core.CapabilityOriginCrystallized {
-		t.Fatalf("crystallized capability metadata mismatch: %+v", cap)
-	}
-	if cap.Name != "重构流程" {
-		t.Fatalf("capability fields mismatch: %+v", cap)
-	}
-	if len(cap.Resources) != 2 || cap.Resources[0].Name != "read_file" || cap.Resources[1].Name != "write_file" {
-		t.Fatalf("resources mismatch: %+v", cap.Resources)
-	}
-}
-
-func TestCrystallizeReusesExisting(t *testing.T) {
-	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"发布流程","type":"mcp","summary":"发布","trigger":"准备发布时","resources":[{"type":"mcp","name":"run_test"}]}}]}`)
-	db := newTestDB(t, newTestEngine(t))
-	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	session := common.FormatHash(456)
-	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
-		t.Fatalf("append: %v", err)
-	}
-	first, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
-	if err != nil {
-		t.Fatalf("first crystallize: %v", err)
-	}
-	if len(first.CreatedIDs) != 1 {
-		t.Fatalf("first result: %+v", first)
-	}
-
-	secondContent := `{"capabilities":[{"action":"reuse","reuse_id":"` + first.CreatedIDs[0] + `","capability":{"name":"发布流程","type":"mcp","summary":"发布","trigger":"准备发布时","resources":[{"type":"mcp","name":"run_test"}]}}]}`
-	srv2 := mockLLMServer(t, secondContent)
-	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
-	second, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
-	if err != nil {
-		t.Fatalf("second crystallize: %v", err)
-	}
-	if len(second.CreatedIDs) != 0 || len(second.ReusedIDs) != 1 || second.ReusedIDs[0] != first.CreatedIDs[0] {
-		t.Fatalf("second result: %+v", second)
-	}
-	caps, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(caps) != 1 {
-		t.Fatalf("want 1 capability, got %d", len(caps))
-	}
-}
-
 func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 	t.Helper()
 	var mu sync.Mutex
@@ -197,83 +131,73 @@ func mockLLMServerSeq(t *testing.T, contents ...string) *httptest.Server {
 	return srv
 }
 
-func TestCrystallizeReuseMinimalPayload(t *testing.T) {
-	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"最小复用","type":"mcp","summary":"s","trigger":"t","resources":[{"type":"mcp","name":"x"}]}}]}`)
+// The engine extracts candidates only: the reply's cards come back as-is,
+// nothing is stored, and the host's existing catalog (passed in) is rendered
+// into the prompt so the model can reuse or merge by name.
+func TestCrystallizeReturnsCandidatesAgainstHostCatalog(t *testing.T) {
+	var mu sync.Mutex
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		gotBody = string(body)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"role": "assistant", "content": `{"capabilities":[
+					{"action":"reuse","reuse_id":"发布流程","capability":{"name":"发布流程"}},
+					{"action":"create","capability":{"name":"重构流程","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","config":"{\"file\":\"a.go\"}"},{"type":"mcp","name":"write_file"}]}}
+				]}`},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+
 	db := newTestDB(t, newTestEngine(t))
 	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	session := common.FormatHash(321)
-	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1}); err != nil {
-		t.Fatal(err)
-	}
-	first, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
-	if err != nil {
-		t.Fatalf("first crystallize: %v", err)
+	session := common.FormatHash(123)
+	for i := 1; i <= 3; i++ {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "step", Timestamp: int64(i)}); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
 	}
 
-	// A reuse decision carries a minimal payload (name only, no
-	// type/resources): it must be accepted, not rejected by import
-	// validation.
-	secondContent := `{"capabilities":[{"action":"reuse","reuse_id":"` + first.CreatedIDs[0] + `","capability":{"name":"最小复用"}}]}`
-	srv2 := mockLLMServer(t, secondContent)
-	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
-	second, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
+	existing := []CapabilityImport{{
+		Name: "发布流程", Summary: "发布", Trigger: "准备发布时",
+		Resources: []ResourceRef{{Type: CapabilityMCP, Name: "run_test"}},
+	}}
+	out, err := db.Crystallize(context.Background(), core.DefaultAgentID, session, existing)
 	if err != nil {
-		t.Fatalf("second crystallize: %v", err)
+		t.Fatalf("crystallize: %v", err)
 	}
-	if len(second.Errors) != 0 {
-		t.Fatalf("minimal reuse produced errors: %+v", second.Errors)
+	mu.Lock()
+	body := gotBody
+	mu.Unlock()
+	if !strings.Contains(body, "发布流程") {
+		t.Fatalf("prompt must render the host's existing catalog: %s", body)
 	}
-	if len(second.ReusedIDs) != 1 || second.ReusedIDs[0] != first.CreatedIDs[0] {
-		t.Fatalf("minimal reuse must be accepted: %+v", second)
+	if len(out.Capabilities) != 2 {
+		t.Fatalf("candidates = %d, want 2: %+v", len(out.Capabilities), out)
+	}
+	reuse := out.Capabilities[0]
+	if reuse.Action != "reuse" || reuse.ReuseID != "发布流程" {
+		t.Fatalf("reuse candidate mismatch: %+v", reuse)
+	}
+	create := out.Capabilities[1]
+	if create.Action != "create" || create.Capability.Name != "重构流程" {
+		t.Fatalf("create candidate mismatch: %+v", create)
+	}
+	if len(create.Capability.Resources) != 2 || create.Capability.Resources[0].Name != "read_file" {
+		t.Fatalf("create resources mismatch: %+v", create.Capability.Resources)
 	}
 }
 
-func TestCrystallizeCreateDoesNotOverwriteActiveByName(t *testing.T) {
-	srv := mockLLMServer(t, `{"capabilities":[{"action":"create","capability":{"name":"已有能力","type":"mcp","summary":"新摘要","trigger":"新触发","resources":[{"type":"mcp","name":"new_tool"}]}}]}`)
-	db := newTestDB(t, newTestEngine(t))
-	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
-	cap := &core.Capability{
-		IDHash: core.CapabilityID("已有能力"), Name: "已有能力",
-		Summary: "旧摘要", Trigger: "旧触发", Status: core.CapabilityActive,
-		Origin: core.CapabilityOriginImported, Resources: []core.ResourceRef{{Type: core.CapabilityMCP, Name: "old_tool"}},
-	}
-	if err := core.WriteCapability(db.engine, core.SharedPoolAgentID, cap.IDHash, cap); err != nil {
-		t.Fatal(err)
-	}
-	session := common.FormatHash(789)
-	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
-		t.Fatal(err)
-	}
-	result, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.CreatedIDs) != 0 || len(result.ReusedIDs) != 1 {
-		t.Fatalf("same-name create should be reuse: %+v", result)
-	}
-	got := mustCapability(t, db, common.FormatHash(cap.IDHash))
-	if got.Summary != "旧摘要" || got.Resources[0].Name != "old_tool" {
-		t.Fatalf("active capability was overwritten: %+v", got)
-	}
-}
-
-// mustCapability reads one card through the list query — the facade has no
-// single-getter entry point.
-func mustCapability(t *testing.T, db *DB, id string) core.Capability {
-	t.Helper()
-	got, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{IDs: []string{id}})
-	if err != nil || len(got) != 1 {
-		t.Fatalf("capability %s: %d found, err %v", id, len(got), err)
-	}
-	return got[0]
-}
-
-func TestCrystallizeDetails(t *testing.T) {
-	// Phase 1: one valid create + one invalid create (mcp type without the
-	// required resource → validate fails → skip detail).
+// Filtering is the host's job now: a candidate that fails card validation
+// (no resources) is returned unfiltered, not skipped.
+func TestCrystallizeCandidatesPassThroughUnvalidated(t *testing.T) {
 	srv := mockLLMServer(t, `{"capabilities":[
-		{"action":"create","capability":{"name":"明细测试能力","type":"composite","summary":"s","trigger":"t","resources":[{"type":"mcp","name":"x"}]}},
-		{"action":"create","capability":{"name":"无效能力","type":"mcp","summary":"s","trigger":"t"}}
+		{"action":"create","capability":{"name":"无效能力","summary":"s","trigger":"t"}}
 	]}`)
 	db := newTestDB(t, newTestEngine(t))
 	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
@@ -281,41 +205,11 @@ func TestCrystallizeDetails(t *testing.T) {
 	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
 		t.Fatal(err)
 	}
-	first, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
+	out, err := db.Crystallize(context.Background(), core.DefaultAgentID, session, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(first.CreatedIDs) != 1 || len(first.Errors) != 1 {
-		t.Fatalf("phase1 result: %+v", first)
-	}
-	if len(first.Details) != 2 {
-		t.Fatalf("phase1 Details = %d, want 2", len(first.Details))
-	}
-	byName := map[string]CrystallizeDetail{}
-	for _, d := range first.Details {
-		byName[d.Name] = d
-	}
-	create := byName["明细测试能力"]
-	if create.Action != "create" || create.CapabilityID != first.CreatedIDs[0] || create.Reason != "" {
-		t.Fatalf("create detail: %+v", create)
-	}
-	skip := byName["无效能力"]
-	if skip.Action != "skip" || skip.CapabilityID != "" || skip.Reason == "" {
-		t.Fatalf("skip detail: %+v", skip)
-	}
-
-	// Phase 2: reuse the created capability → detail carries the reused ID.
-	srv2 := mockLLMServer(t, `{"capabilities":[{"action":"reuse","reuse_id":"`+first.CreatedIDs[0]+`","capability":{"name":"明细测试能力"}}]}`)
-	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv2.URL, APIKey: "test", Model: "mock"}})
-	second, err := db.Crystallize(context.Background(), core.DefaultAgentID, session)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(second.ReusedIDs) != 1 || len(second.Details) != 1 {
-		t.Fatalf("phase2 result: %+v", second)
-	}
-	reuse := second.Details[0]
-	if reuse.Action != "reuse" || reuse.CapabilityID != first.CreatedIDs[0] || reuse.Reason != "" {
-		t.Fatalf("reuse detail: %+v", reuse)
+	if len(out.Capabilities) != 1 || out.Capabilities[0].Capability.Name != "无效能力" {
+		t.Fatalf("invalid candidate must pass through: %+v", out)
 	}
 }

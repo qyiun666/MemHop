@@ -6,16 +6,18 @@
 // set is exactly the externally callable surface. Every call is serialized
 // per agent domain by the internal domain lock.
 //
-// The methods split by audience. The runtime/task face (22) is what the host
+// The methods split by audience. The runtime/task face (20) is what the host
 // drives every turn and what LLM tools bind to: Search, Update, Dream,
 // AppendTrajectory (the host-driven loop), SceneContext, ListScenes, GetL0,
 // UpdateL0, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes, QueryL3Subgraph,
-// ListCapabilities, RecordCapabilityUsage, Crystallize, ReadTrajectory,
-// ListTrajectorySessions, SyncPlanTree, PlanCommit, PlanState. The
-// assembly/admin face (10, plus all of MultiAgentDB) is host code at session
-// boundaries and management channels only — never an LLM tool: UpdateScene,
-// MergeScenes, DeleteTopic, DeleteScene, UpdateL3, DeleteL3, DeleteL3Nodes,
-// ImportCapability, UpdateCapability, DeleteCapability.
+// Crystallize, ReadTrajectory, ListTrajectorySessions, SyncPlanTree,
+// PlanCommit, PlanState. The assembly/admin face (7, plus all of
+// MultiAgentDB) is host code at session boundaries and management channels
+// only — never an LLM tool: UpdateScene, MergeScenes, DeleteTopic,
+// DeleteScene, UpdateL3, DeleteL3, DeleteL3Nodes. The engine stores no
+// capability records: v4 parsing/validation is package-level
+// (ParseCapabilityPackage / ValidateCapabilityCard) and Crystallize returns
+// candidates the host persists itself.
 
 package api
 
@@ -164,50 +166,6 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	out := make([]ArchiveSlot, len(archives))
 	for i, a := range archives {
 		out[i] = fromArchiveSlot(a)
-	}
-	return out, nil
-}
-
-// ImportCapability imports a memhop-capability/v4 package (a single-card file
-// is a one-card package) into the file-wide shared L5 pool and reports
-// per-card dispositions; every agent domain sees the imported cards. A card
-// whose stored copy already carries the same package bytes is reported in
-// UpdatedIDs as a no-op refresh (nothing is written), so UpdatedIDs counts
-// "kept or refreshed", not "changed". The result carries hex ids, so the
-// alias maps 1:1.
-func (s *Session) ImportCapability(path string) (*CapabilityImportResult, error) {
-	return s.Session.ImportCapability(path)
-}
-
-// UpdateCapability updates a capability and returns it with a hex ID.
-func (s *Session) UpdateCapability(id string, patch CapabilityPatch) (*Capability, error) {
-	c, err := s.Session.UpdateCapability(id, patch)
-	if err != nil {
-		return nil, err
-	}
-	out := fromCapability(*c)
-	return &out, nil
-}
-
-// RecordCapabilityUsage records usage and returns the capability with a hex ID.
-func (s *Session) RecordCapabilityUsage(id string, success bool) (*Capability, error) {
-	c, err := s.Session.RecordCapabilityUsage(id, success)
-	if err != nil {
-		return nil, err
-	}
-	out := fromCapability(*c)
-	return &out, nil
-}
-
-// ListCapabilities returns capabilities with hex IDs.
-func (s *Session) ListCapabilities(q CapabilityListQuery) ([]Capability, error) {
-	caps, err := s.Session.ListCapabilities(q)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Capability, len(caps))
-	for i, c := range caps {
-		out[i] = fromCapability(c)
 	}
 	return out, nil
 }
@@ -403,13 +361,6 @@ func (s *Session) DeleteL3Nodes(graphID string, nodeIDs []string) error {
 	return s.Session.DeleteL3Nodes(graphID, nodeIDs)
 }
 
-// DeleteCapability removes an L5 card from the shared pool, so the deletion is
-// visible to every agent in the file. Deleting a card that is not there is an
-// error, not a no-op.
-func (s *Session) DeleteCapability(id string) error {
-	return s.Session.DeleteCapability(id)
-}
-
 // ListTrajectorySessions summarizes every L6 key of the domain — turn topic ids
 // and plan ids — with its step count and last-append time. The returned ids feed
 // ReadTrajectory and Crystallize directly; events past the retention window drop
@@ -418,11 +369,14 @@ func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 	return s.Session.ListTrajectorySessions()
 }
 
-// Crystallize turns one key's trajectory events into L5 capability cards: pass a
-// turn's topic id to work off a single turn, or a plan id to aggregate the whole
-// plan. It contacts the LLM inside the domain lock. New cards land in the draft
-// status — they are listed, but a host that only wires up active cards must
-// flip the status first (UpdateCapability with Status CapabilityActive).
-func (s *Session) Crystallize(ctx context.Context, turnID string) (*CrystallizeResult, error) {
-	return s.Session.Crystallize(ctx, turnID)
+// Crystallize extracts reusable capability candidates from one key's
+// trajectory events via the LLM: pass a turn's topic id to work off a single
+// turn, or a plan id to aggregate the whole plan. existing lists the cards
+// the host already knows (its own capability directory), so candidates can
+// reuse or merge them by name instead of duplicating. It contacts the LLM
+// inside the domain lock. The engine returns candidates only — validating,
+// filtering and persisting them (e.g. writing a draft document into the
+// host's capability directory) is the host's job.
+func (s *Session) Crystallize(ctx context.Context, turnID string, existing []CapabilityImport) (*CrystallizeOutput, error) {
+	return s.Session.Crystallize(ctx, turnID, existing)
 }

@@ -185,28 +185,6 @@ func fromArchiveSlot(s internal.ArchiveSlot) ArchiveSlot {
 	}
 }
 
-func fromCapability(c internal.Capability) Capability {
-	resources := make([]ResourceRef, len(c.Resources))
-	copy(resources, c.Resources)
-	return Capability{
-		IDHash:        formatID(c.IDHash),
-		Name:          c.Name,
-		Version:       c.Version,
-		Package:       c.Package,
-		Summary:       c.Summary,
-		Trigger:       c.Trigger,
-		Resources:     resources,
-		Status:        c.Status,
-		Origin:        c.Origin,
-		FileHash:      c.FileHash,
-		SuccessRate:   c.SuccessRate,
-		TriggerCount:  c.TriggerCount,
-		LastTriggered: c.LastTriggered,
-		CreatedAt:     c.CreatedAt,
-		UpdatedAt:     c.UpdatedAt,
-	}
-}
-
 func formatOptionalID(id uint64) string {
 	if id == 0 {
 		return ""

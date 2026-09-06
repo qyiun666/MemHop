@@ -35,46 +35,6 @@ func (c ContentType) Valid() bool {
 	return ok
 }
 
-// CapabilityStatus represents the lifecycle state of an L5 capability.
-type CapabilityStatus uint8
-
-const (
-	CapabilityDraft      CapabilityStatus = 0
-	CapabilityActive     CapabilityStatus = 1
-	CapabilityDeprecated CapabilityStatus = 2
-)
-
-var capabilityStatusNames = map[CapabilityStatus]string{
-	CapabilityDraft: "draft", CapabilityActive: "active", CapabilityDeprecated: "deprecated",
-}
-
-func (c CapabilityStatus) String() string {
-	return common.EnumString(c, capabilityStatusNames, "CapabilityStatus")
-}
-
-// CapabilityType describes how an L5 capability is implemented: a wrapper
-// around a single MCP tool, a single skill, or a composite of several
-// resources.
-type CapabilityType string
-
-const (
-	CapabilityMCP   CapabilityType = "mcp"
-	CapabilitySkill CapabilityType = "skill"
-	// CapabilityAPI wraps one method of the MemHop Go API (api package);
-	// the host calls it directly through the library facade.
-	CapabilityAPI       CapabilityType = "api"
-	CapabilityComposite CapabilityType = "composite"
-)
-
-// CapabilityOrigin records where a capability came from.
-type CapabilityOrigin string
-
-const (
-	CapabilityOriginImported     CapabilityOrigin = "imported"
-	CapabilityOriginCrystallized CapabilityOrigin = "crystallized"
-	CapabilityOriginHost         CapabilityOrigin = "host"
-)
-
 // HyperedgeKind classifies L1 hyperedges in the hypergraph skeleton.
 type HyperedgeKind uint8
 

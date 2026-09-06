@@ -18,11 +18,12 @@
 - `index/`：索引——L2Meta（场景读回的唯一话题缓存，`rebuild.go` 全量重建）/
   `traj.go`（L6 轮轨迹形状）。
   只依赖 `core`。
-- 根目录 `l0layer.go` ~ `l6layer.go`、`agentlayer.go`：各层记录读写原语，
+- 根目录 `l0layer.go`~`l4layer.go`/`l6layer.go`、`agentlayer.go`
+  （L5 层文件已随 L5 记录层退役整体移除）：各层记录读写原语，
   一层一个文件组（单文件超 400 行时按功能拆分，命名
   `<layer>layer_<aspect>.go`：`l1layer_sync.go`、`l2layer_topic.go`），
   所有函数以 `agentID` 为域参数。存在一个保留域
-  `core.SharedPoolAgentID`（文件级公共池：L3 知识图 + L5 能力卡）：本层原语对它和普通域无差别
+  `core.SharedPoolAgentID`（文件级公共池：L3 知识图）：本层原语对它和普通域无差别
   （`agentID` 只是参数），路由与守卫都在 `internal` 根。L1 建边/遗忘算法已上提至
   `internal/cap/engram`（ DecayNetwork/RebuildFromL2/BuildHyperedges）、
   L0 画像生成/蒸馏合并至 `internal/cap/profile`、L3 匹配与节点合并至

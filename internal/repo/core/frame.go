@@ -31,7 +31,6 @@ const (
 	RecL3GraphEdge  uint8 = 0x07
 	RecL4Archive    uint8 = 0x08
 	RecL3GraphSlot  uint8 = 0x0B
-	RecL5Capability uint8 = 0x0F // L5 capability record (id = hash("capability:"+name))
 	RecL6Trajectory uint8 = 0x0E // host-appended operation trajectory event
 	// RecAgentRegistry marks an agent's registration record: idHash equals
 	// the agentID itself and data carries the agent name JSON. One record

@@ -7,14 +7,10 @@ package test
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	memhop "github.com/qyiun666/MemHop/api"
-	internal "github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/test/testsupport"
 )
 
@@ -68,7 +64,7 @@ func TestE2EUpdateDream(t *testing.T) {
 
 	// 4. L4 archive readback: TopicID is an overlay filter, so combine it with
 	//    a primary mode (time range) to select the topic's archives.
-	archives, err := db.SearchL4(internal.L4Query{
+	archives, err := db.SearchL4(memhop.L4Query{
 		Start:   ts - 1000,
 		End:     ts + 5000,
 		TopicID: &topicID,
@@ -101,55 +97,6 @@ func TestE2EUpdateDream(t *testing.T) {
 		t.Fatalf("Search after Dream: %v", err)
 	}
 	t.Logf("post-dream session has %d surface topic(s)", len(res3.Topics))
-}
-
-// TestE2ECapability covers L5 capability import (path) / query / delete
-// against a live DB.
-func TestE2ECapability(t *testing.T) {
-	db := testsupport.OpenMemHop(t)
-	defer db.Close()
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "morning_run.json")
-	content := `{"format":"memhop-capability/v4","name":"晨跑包","capabilities":[{"name":"晨跑流程","version":"1","summary":"周末海边晨跑","trigger":"用户提到周末海边跑步","resources":[{"type":"skill","name":"晨跑计划","desc":"周末清晨海边跑步","input":"{\"type\":\"object\",\"properties\":{\"time\":{\"type\":\"string\"}}}","output":"晨跑计划"}]}]}`
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write import file: %v", err)
-	}
-	result, err := db.ImportCapability(path)
-	if err != nil {
-		t.Fatalf("ImportCapability: %v", err)
-	}
-	if result == nil || len(result.CreatedIDs) != 1 {
-		t.Fatalf("ImportCapability result = %+v", result)
-	}
-	id := result.CreatedIDs[0]
-
-	one, err := db.ListCapabilities(internal.CapabilityListQuery{IDs: []string{id}})
-	if err != nil || len(one) != 1 {
-		t.Fatalf("capability %s: %d found, err %v", id, len(one), err)
-	}
-	got := one[0]
-	if got.Name != "晨跑流程" || got.Resources[0].Type != core.CapabilitySkill {
-		t.Fatalf("unexpected capability: %+v", got)
-	}
-	if len(got.Resources) != 1 || got.Resources[0].Name != "晨跑计划" {
-		t.Fatalf("resources mismatch: %+v", got.Resources)
-	}
-
-	caps, err := db.ListCapabilities(internal.CapabilityListQuery{Keyword: "晨跑"})
-	if err != nil {
-		t.Fatalf("ListCapabilities: %v", err)
-	}
-	if len(caps) == 0 {
-		t.Fatal("ListCapabilities(Keyword=晨跑) returned no capabilities")
-	}
-
-	if err := db.DeleteCapability(id); err != nil {
-		t.Fatalf("DeleteCapability(%s): %v", id, err)
-	}
-	if none, _ := db.ListCapabilities(internal.CapabilityListQuery{IDs: []string{id}}); len(none) != 0 {
-		t.Fatalf("capability survived DeleteCapability: %+v", none)
-	}
 }
 
 // TestE2EL0Profile covers L0 profile read/update round-trip.

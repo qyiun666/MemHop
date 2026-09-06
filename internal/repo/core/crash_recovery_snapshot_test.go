@@ -207,11 +207,10 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 }
 
 // Files with an unsupported format version must be rejected explicitly at
-// Open: 0x000B (the shared-pool layout carrying the file-wide L3 and L5
-// pools) is the only accepted version — older layouts and future ones have
-// no migration path.
+// Open: 0x000C (the L5-capability-record-free layout) is the only accepted
+// version — older layouts and future ones have no migration path.
 func TestHeaderVersionRejected(t *testing.T) {
-	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000C} {
+	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000D} {
 		t.Run(fmt.Sprintf("0x%04x", v), func(t *testing.T) {
 			p := tempPath(t, "ver")
 			eng, err := Create(p)

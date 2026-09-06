@@ -20,29 +20,16 @@ func openTestConfig(dbPath string) *internal.MemHopConfig {
 	}
 }
 
-// A fresh database starts with an empty L5 pool: capabilities only exist
-// when a host imports them (or plug/ packages inject at Open), and
-// close/reopen stays clean.
-func TestOpenFreshPoolEmpty(t *testing.T) {
+// Close/reopen stays clean: no Open-time injection remains, so a reopened
+// database serves exactly what previous rounds wrote.
+func TestOpenCloseReopenCycle(t *testing.T) {
 	cfg := openTestConfig(filepath.Join(t.TempDir(), "b.meh"))
 	m, err := OpenMulti(cfg)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	id, err := m.CreateAgent("test")
-	if err != nil {
+	if _, err := m.CreateAgent("test"); err != nil {
 		t.Fatalf("create agent: %v", err)
-	}
-	sess, err := m.Session(id)
-	if err != nil {
-		t.Fatalf("session: %v", err)
-	}
-	caps, err := sess.ListCapabilities(internal.CapabilityListQuery{})
-	if err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if len(caps) != 0 {
-		t.Fatalf("fresh DB must serve an empty pool, got %+v", caps)
 	}
 	if err := m.Close(); err != nil {
 		t.Fatalf("close: %v", err)

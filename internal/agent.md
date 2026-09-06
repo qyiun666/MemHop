@@ -34,7 +34,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 | `dream` | 巩固阶段：SceneSet、PruneTrajectoryStage(TrajectoryRetention)、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage、usage feedback；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
 | `plan` | L6 计划树机制：PlanStatus 面、MintID/ParsePlanID/SplitNodePath、EnsureNode/AppendEventLocked/UpdateNode(Locked/SummaryLocked)、BuildTree/RollupTree、SyncNodeLocked/CollectPaths/ParentPath |
-| `trajectory` | 轨迹/结晶：ReadTurn、TrimByBudget、MaxEventPayload/MaxCrystallizePayload、ApplyCandidate(+apply/find 私有步) |
+| `trajectory` | 轨迹读取：ReadTurn、TrimByBudget、MaxEventPayload/MaxCrystallizePayload（payload 预算） |
 
 ## agentContext（domain.Context）域级锁纪律
 
@@ -46,9 +46,9 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    L6 轨迹族统一走 `db.lockSession(agentID, turnID)`（lockAgent + hex 解析，
    解析失败先解锁）：裸事件的键就是该轮话题 ID（`AppendTrajectory` 顺手把
    `TopicID` 写成同一个值），计划绑定事件的键是计划 ID。门面侧的会话准入
-   策略在 `CheckSession`。L3 八个方法与 L5 六个方法是唯一例外：走
+   策略在 `CheckSession`。L3 的方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
-   保留公共域 `core.SharedPoolAgentID`（L3 与 L5 记录全部住该域，跨 agent
+   保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent
    全局串行；公共域无墓碑、免空闲回收）。锚点校验（`scene.Create`/
    `ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级
    互斥兜底。
@@ -92,8 +92,8 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
   **禁止**直接操作帧、文件头、快照结构。
 - `StorageEngine` 句柄由装配层 `config.go` 的 `Open(cfg)`
   唯一持有：注入 `DB.engine`，并经 `domain.NewContext` 注入每个域；业务代码
-  不得自行打开/关闭引擎。Open 的最后一步经 `injectPlugDir` 把
-  `<meh 同目录>/plug/<包>/capability.json` 注入共享 L5 池（坏包 Warn 跳过）。
+  不得自行打开/关闭引擎。Open 不做任何目录扫描或能力注入——能力卡是宿主
+  自有的磁盘文档（目录即能力），库只提供 v4 解析校验导出。
 - **能力下沉**：算法与策略在 `internal/cap/<feature>` 能力包；小方法在
   `internal/{scene,turn,dream,graph,plan,trajectory}`；根只留"取数 → 调
   能力 → 落库"的大方法编排，不做算法。LLM 传输策略（截断升级重试）在
@@ -112,7 +112,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 
 - **错误判定纪律**：区分「记录不存在」与「读不动」。`ErrNotFound` 只代表
   前者；IO / 关闭 / 反序列化失败一律原样上抛，不得改写成 `ErrNotFound`，
-  也不得当成"不存在"后继续写（`plan.EnsureNode`、`trajectory.findTarget`、
+  也不得当成"不存在"后继续写（`plan.EnsureNode`、
   `profile.MergeDistill` 都按这条判定，误判会让活节点退回 pending 或画像
   被空值覆盖）。
 
@@ -168,7 +168,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    `CreateEdgeL3` 的 id 含 kind，导入按「排序成员 + kind」的语义键去重，
    故同一对节点可并存多种关系。`ImportL3` 结果带 `GraphIDs`
    （图 id = `hash(Domain)`，没有别的公开调用能渲染它）；`DeleteL3Nodes`
-   做节点级删除并级联其超边。全部 L3 与 L5 记录住保留公共域
+   做节点级删除并级联其超边。全部 L3 记录住保留公共域
    `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
    三处豁免，`CreateAgent` 拒撞、`DeleteAgent` 拒删、`Session` 拒绑）。
    `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域
@@ -192,7 +192,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    仍是一个场景（`requireScenes` 逐个回读比对），未知 id 报 `ErrNotFound`；
    底层 `DeleteL2(DeleteScenesL2)` 直接按传入 id 批量删，少这一步时一个陈旧
    的 secondary id 就能带走存活主场景自己的记录，而调用还返回成功。
-   `DeleteCapability` 同理由先读后删，`DeleteAgent` 也先查注册表（注册表不认识
+   `DeleteAgent` 也先查注册表（注册表不认识
    的 id 正是 `CheckSession` 拒的那个 id）——至此删除面没有一处把「记录不在」
    当成成功返回。
 14. **`SceneContext` 的说话顺序是读出来的语义**：融合父话题的时间戳就是它吞掉
@@ -208,4 +208,4 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 
 - 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（`Update` 那一轮不写），`internal` 根不初始化任何分词器。
 - `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），拒批即一字节不写；`result.Errors` 只表示单条存储失败。
-- 宿主面测试覆盖 34 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 计划树三形态 + 轨迹双键）、`api_interface_capability_test.go`（L5 生命周期/重导入/内建只读/重启）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。
+- 宿主面测试覆盖 27 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 计划树三形态 + 轨迹双键 + 纯提炼）、`api_interface_l5l6_test.go`（轨迹与纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

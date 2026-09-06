@@ -41,25 +41,21 @@ type (
 	L3ImportResult           = internal.L3ImportResult
 	L3NodeQuery              = internal.L3NodeQuery
 	L4Query                  = internal.L4Query
-	CapabilityListQuery      = internal.CapabilityListQuery
 	ScenePatch               = internal.ScenePatch
-	CapabilityPatch          = internal.CapabilityPatch
+	CapabilityImport         = internal.CapabilityImport
 	CapabilityPackageDoc     = internal.CapabilityPackageDoc
-	CapabilityImportResult   = internal.CapabilityImportResult
 	TrajectorySessionSummary = internal.TrajectorySessionSummary
 	PlanStatus               = internal.PlanStatus
 	DreamReport              = internal.DreamReport
 	DreamStage               = internal.DreamStage
-	CrystallizeResult        = internal.CrystallizeResult
-	CrystallizeDetail        = internal.CrystallizeDetail
+	CrystallizeOutput        = internal.CrystallizeOutput
+	CrystallizeCapability    = internal.CrystallizeCapability
 	SceneContext             = internal.SceneContext
 	SceneContextTopic        = internal.SceneContextTopic
 	SceneMessage             = internal.SceneMessage
 	ResourceRef              = internal.ResourceRef
 	GraphEdgeKind            = internal.GraphEdgeKind
 	CapabilityType           = internal.CapabilityType
-	CapabilityStatus         = internal.CapabilityStatus
-	CapabilityOrigin         = internal.CapabilityOrigin
 	ContentType              = internal.ContentType
 )
 
@@ -178,28 +174,6 @@ type ArchiveSlot struct {
 	ContextID   string      `json:"context_id"`
 	CreatedAt   int64       `json:"created_at"`
 	Content     string      `json:"content"`
-}
-
-// Capability is an L5 reusable capability: a named card of function entries,
-// each entry self-describing launch (Type/Ref/Config), purpose (Desc) and
-// usage (Input/Output). Package names the plugin document it was imported
-// from; crystallized cards carry none.
-type Capability struct {
-	IDHash        string           `json:"id_hash"`
-	Name          string           `json:"name"`
-	Version       string           `json:"version"`
-	Package       string           `json:"package,omitempty"`
-	Summary       string           `json:"summary"`
-	Trigger       string           `json:"trigger"`
-	Resources     []ResourceRef    `json:"resources"`
-	Status        CapabilityStatus `json:"status"`
-	Origin        CapabilityOrigin `json:"origin"`
-	FileHash      string           `json:"file_hash,omitempty"`
-	SuccessRate   float32          `json:"success_rate"`
-	TriggerCount  uint32           `json:"trigger_count"`
-	LastTriggered int64            `json:"last_triggered"`
-	CreatedAt     int64            `json:"created_at"`
-	UpdatedAt     int64            `json:"updated_at"`
 }
 
 // TrajectorySlot is one L6 operation trajectory event — the shape both write

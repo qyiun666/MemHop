@@ -84,15 +84,15 @@ func registerTrajectoryReadTools(s *mcp.Server, db *memhop.Session) {
 func registerCrystallizeTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_crystallize",
-		Description: "从轮轨迹提取可复用 L5 能力候选（L6 → L5）。本轮轨迹带 L2 话题 ID 时自动聚合同话题的跨轮轨迹再蒸馏。调用 LLM，耗时长；候选保存为 draft，需宿主激活；重复结晶按名称和指纹去重。",
+		Description: "从轮轨迹提取可复用能力候选（LLM 提炼，耗时长）：返回候选列表（action=create|reuse|merge + reuse_id=已有卡名 + 完整卡载荷）。引擎不落盘——校验、去重与写盘（如写 draft 文档）全部由宿主完成。",
 		InputSchema: objSchema(map[string]any{
 			"session_id": strProp("会话 ID（16 位 hex），必填"),
 		}, "session_id"),
-	}, handle[sessionIDArgs, memhop.CrystallizeResult](func(a sessionIDArgs) (memhop.CrystallizeResult, error) {
-		res, err := db.Crystallize(context.Background(), a.SessionID)
+	}, handle[sessionIDArgs, memhop.CrystallizeOutput](func(a sessionIDArgs) (memhop.CrystallizeOutput, error) {
+		out, err := db.Crystallize(context.Background(), a.SessionID, nil)
 		if err != nil {
-			return memhop.CrystallizeResult{}, err
+			return memhop.CrystallizeOutput{}, err
 		}
-		return *res, nil
+		return *out, nil
 	}))
 }

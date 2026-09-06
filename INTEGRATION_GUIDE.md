@@ -121,7 +121,7 @@ if err != nil { /* ... */ }
 db, err := dbm.Session(agentID)
 ```
 
-- `api.OpenMulti(cfg)` is the only entry point. The L5 capability pool starts empty: cards exist only after a host imports them, and every `plug/<package>/capability.json` folder next to the `.meh` file is injected at Open.
+- `api.OpenMulti(cfg)` is the only entry point. The engine stores no capability records: capability cards live in the host's own directory (e.g. `plug/<package>/capability.json` next to the `.meh` file) — the host scans that directory and assembles its tool surface itself; nothing is injected at Open.
 - Explicit flush: `db.Checkpoint()`.
 - Space reclamation: `db.CompactTo(newPath)` writes a defragmented copy of the whole file (live records only, its own rebuilt index) and never touches the open one — `newPath` must not exist yet. Deletes are tombstones, so a domain that dropped scenes or graphs only gives bytes back here; the swap (Close → rename → Open) stays yours, which is why this call is Go-side and not an MCP tool.
 
@@ -203,10 +203,10 @@ What happens *between* those two messages (tool calls, intermediate output, suba
 
 ## 8. Layer API quick reference
 
-The 32 session methods split by audience:
+The 27 session methods split by audience:
 
-- **Runtime/task face (22)** — the host drives these every turn and LLM tools bind to them: `Search` / `Update` / `Dream` / `AppendTrajectory` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ListCapabilities` / `RecordCapabilityUsage`, `ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`, `SyncPlanTree` / `PlanCommit` / `PlanState`.
-- **Assembly/admin face (10, plus all of `MultiAgentDB`)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3` / `DeleteL3Nodes`, `ImportCapability` / `UpdateCapability` / `DeleteCapability`.
+- **Runtime/task face (20)** — the host drives these every turn and LLM tools bind to them: `Search` / `Update` / `Dream` / `AppendTrajectory` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`, `SyncPlanTree` / `PlanCommit` / `PlanState`.
+- **Assembly/admin face (7, plus all of `MultiAgentDB`)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3` / `DeleteL3Nodes`. The capability format left the method surface entirely: `ParseCapabilityPackage` / `ValidateCapabilityCard` are package-level functions (§8 L5).
 
 ### L0 profile
 
@@ -321,17 +321,16 @@ one `ErrInvalidQuery`); an empty query returns the domain's whole archive set �
 read a time range or add `Limit` before doing that on a large domain, since the
 result is every original the file holds.
 
-### L5 capabilities (register tools/skills to the LLM)
+### L5 capabilities (directory-as-capability — the host owns the files)
 
-| Method | Meaning |
+The engine **stores no capability records**. The single source of truth is the host's own capability directory (e.g. `plug/<package>/capability.json` next to the `.meh` file): the host scans it, projects cards into its tool surface, and restart-picks-up changes; activating a draft is promoting its file. The library keeps the format itself, exported as package-level functions:
+
+| Function | Meaning |
 |---|---|
-| `db.ListCapabilities(CapabilityListQuery{IDs, Status, Package, Keyword})` | list capability cards (the pool is file-wide: every agent domain shares it); conditions AND, so `IDs: []string{id}` reads one card |
-| `db.ImportCapability(path)` | import a memhop-capability/v4 plugin package (one document = package name + 1..N cards; or a directory holding `capability.json`); returns per-card `CapabilityImportResult{CreatedIDs/UpdatedIDs/Errors}`. The Go surface takes any path the host can name, while the MCP server anchors it at `--capability-dir`. Imported cards land **active** (a crystallized card lands draft); a byte-identical re-import writes nothing |
-| `db.DeleteCapability(id)` | delete |
-| `db.UpdateCapability(id, CapabilityPatch{...})` | partial update (Name/Package immutable); the `Status` patch is the lifecycle switch — pass active to promote a draft |
-| `db.RecordCapabilityUsage(id, success)` | usage feedback |
+| `api.ParseCapabilityPackage(data, source)` | parse a `memhop-capability/v4` document (one file = one package, 1..N cards) into `[]CapabilityImport`, validating the whole package |
+| `api.ValidateCapabilityCard(card)` | check one card against the same contract (name, summary, resources, action chains) |
 
-> One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). The pool ships no manuals of its own: it holds only what a host imported, what crystallization drafted, and what `plug/` injected — when projecting cards into LLM tools, inject the one-line index (`id + name + summary + trigger`) first and fetch parameter details on demand via `ListCapabilities(CapabilityListQuery{IDs: []string{id}})`.
+> One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). For the LLM-facing block, the capability package's `PromptCard` renders one card: name, version, summary, trigger, then per-resource launch/description/input/output/steps — no `id:`/`package:`/`usage:` lines, since the host directory, not a stored record, is the card's identity.
 
 ### L6 trajectory + crystallization
 
@@ -351,14 +350,18 @@ err := db.AppendTrajectory(turnIDHex, "", api.TrajectorySlot{
 // The second argument is the plan node path — see the plan surface below;
 // pass "" for a plain turn event.
 
-// L6 → L5: distill one turn's trajectory into capability drafts (capped at
-// 128KB payload, oldest events dropped). Pass the plan id instead of a topic
-// id to crystallize everything a plan tree bound together.
-res, err := db.Crystallize(ctx, turnIDHex)
-// res.CreatedIDs / ReusedIDs / MergedIDs / Errors
-// res.Details — per-candidate disposition: []CrystallizeDetail{
-//   {Name, Action: "create|reuse|merge|skip", CapabilityID, Reason}}
-// Promote drafts with UpdateCapability{Status: &CapabilityActive} afterwards.
+// L6 → capability candidates: distill one turn's trajectory against the
+// host's current catalog (capped at 128KB payload, oldest events dropped).
+// Pass the plan id instead of a topic id to crystallize everything a plan
+// tree bound together.
+res, err := db.Crystallize(ctx, turnIDHex, existingCards)
+// existingCards []api.CapabilityImport — the host's current catalog, read
+// from its own directory (empty on first run).
+// res.Capabilities — []CrystallizeCapability: {Action: "create|reuse|merge",
+// ReuseID (the existing card's NAME, not a hex id), Reason} + the card
+// payload. The engine writes nothing: validate, dedupe against your
+// directory and persist drafts (e.g. plug/draft/) yourself — a file
+// promotion activates.
 
 // Enumerate turns (e.g. to pick crystallize candidates).
 sessions, err := db.ListTrajectorySessions()
@@ -402,15 +405,16 @@ entry rejects it.
 | Kind | Names | Use |
 |---|---|---|
 | config | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the whole assembly surface |
-| input aliases | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `CapabilityPackageDoc` / `CapabilityImportResult` | inputs & id-free results (all string IDs are hex) |
-| response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | every ID field is a 16-hex string |
+| input aliases | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `DreamReport` / `DreamStage` / `CapabilityImport` / `CapabilityPackageDoc` / `CrystallizeOutput` / `CrystallizeCapability` / `ResourceRef` | inputs & id-free results (all string IDs are hex) |
+| response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `TrajectorySlot` | every ID field is a 16-hex string |
 | id surface | **`DefaultAgentID`** (the implicit domain) / **`NewPlanID(name)`** (mint a plan id) | the library issues ids; a host echoes them back and converts nothing |
-| enums | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` / `PlanStatus` | enum aliases |
+| enums | `GraphEdgeKind` / `CapabilityType` / `ContentType` / `PlanStatus` | enum aliases |
 
 Enum constants are exported too: `L3ImportSkip/Merge/Overwrite`,
-`CapabilityMCP/Skill/API/Composite`, `CapabilityDraft/Active/Deprecated`,
-`CapabilityOrigin*`, `EdgeRelated...EdgeCustom`,
-`ContentText/Image/Video/Document/Audio/Code/Other`.
+`CapabilityMCP/Skill/API/Composite`, `EdgeRelated...EdgeCustom`,
+`ContentText/Image/Video/Document/Audio/Code/Other`. The capability format
+survived the record layer's retirement as package-level surface:
+`CapabilityFormatV4` + `ParseCapabilityPackage` / `ValidateCapabilityCard`.
 
 > L4 `role` is a bare `uint8`; the exported constants are
 > `api.RoleUser` / `RoleAgent` / `RoleSystem` / `RoleDream` (values 0-3).
@@ -514,10 +518,10 @@ func main() {
    failure, returns an error having written nothing — no half-recorded turn.
    Hosts should retry a failed settle.
 2. **No embedding service, no dimension to declare**: the two header bytes at
-   offset 6 are reserved. The format version is `0x000B`: the L3 knowledge
-   graph and the L5 capability pool live in the reserved shared domain
-   (`core.SharedPoolAgentID`), no migration runs — files older than `0x000B`
-   are rejected at Open.
+   offset 6 are reserved. The format version is `0x000C`: the L3 knowledge
+   graph lives in the reserved shared domain (`core.SharedPoolAgentID`); no
+   migration runs — files older than `0x000C` (capability records died with
+   `0x000B`) are rejected at Open.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`; the agent timestamp
    must not precede the user timestamp.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
@@ -531,8 +535,8 @@ func main() {
    instead of duplicating.
 6. **One file, many agent domains**: all tenants live inside one
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
-   isolated per domain except the file-wide L3/L5 pools; legacy files
-   (`FormatVersion < 0x000B`) cannot be opened or migrated.
+   isolated per domain except the file-wide L3 pool; legacy files
+   (`FormatVersion < 0x000C`) cannot be opened or migrated.
 7. **Trajectories auto-expire**: Dream drops events older than 7 days;
    the external surface is append + query only (`AppendTrajectory` /
    `ReadTrajectory` / `ListTrajectorySessions`) — no delete API. A turn's

@@ -7,11 +7,13 @@
 
 - `engram/`：L1 场景超图的共现建边（Jaccard）与遗忘衰减
   （`BuildHyperedges`/`DecayNetwork`/`RebuildFromL2`）。
-- `llmops/`：轮次关键词提炼（`ExtractTurnKeywords`，宿主热路径每轮恰好一次）/L2 巩固/L1→L0 蒸馏/L6→L5 结晶四类 LLM 调用点；
+- `llmops/`：轮次关键词提炼（`ExtractTurnKeywords`，宿主热路径每轮恰好一次）/L2 巩固/L1→L0 蒸馏/L6 轨迹纯提炼（`Crystallize`，出参即候选列表，候选原样返回宿主、不落库）四类 LLM 调用点；
   prompt 契约 + 输出解析 + 自愈重试预算全在此，传输经注入的
   `Chat` 接口（组合根 Provider 实现）。
-- `capability/`：memhop-capability/v3 文档的读取、校验（`Validate`）、
-  定义合并（`MergeDefinition`/`FromImport`）与列表过滤（`Matches`）。
+- `capability/`：memhop-capability/v4 文档类型（`CapabilityImport`/`CapabilityPackageDoc`/`ResourceRef`）、
+  解析校验（`BuildPackage`/`ValidatePackage`/`ValidateCard`）与提示渲染
+  （`PromptCard`）——纯计算，无任何持久化。L5 记录层退役（目录即能力）后，
+  本包是磁盘格式的唯一事实源，经 api 包级函数导出。
 - `profile/`：L0 画像摘要渲染（`Brief`）、关键词分布重建（`Generate`）、
   蒸馏信号写入（`Samples`/`MergeDistill`/`SampleRank`）。
 - `knowledge/`：L3 导入节点字段合并策略

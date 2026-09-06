@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Open is the composition root's assembly point: tokenizer init, engine
-// open/create, tenant registry reload and the built-in capability toolbox
-// attachment. The configuration types themselves live in internal/config.
+// open/create and tenant registry reload. The configuration types themselves
+// live in internal/config.
 
 package internal
 
@@ -28,9 +28,7 @@ func OpenOrCreateEngine(cfg *MemHopConfig) (*core.StorageEngine, error) {
 
 // Open assembles a DB instance: tokenizer init and engine open/create.
 // Agent contexts are created lazily on first access (contextFor), each
-// rebuilding its caches from its own domain's records. After assembly the
-// <meh dir>/plug plugin packages are injected into the shared L5 pool
-// (l5plug.go).
+// rebuilding its caches from its own domain's records.
 func Open(cfg *MemHopConfig) (*DB, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	engine, err := OpenOrCreateEngine(cfg)
@@ -53,7 +51,6 @@ func Open(cfg *MemHopConfig) (*DB, error) {
 		nameToID:   nameToID,
 		idToName:   idToName,
 	}
-	db.injectPlugDir(cfg.DBPath)
 	return db, nil
 }
 

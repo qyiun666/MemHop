@@ -11,6 +11,7 @@
 package internal
 
 import (
+	"github.com/qyiun666/MemHop/internal/cap/capability"
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/config"
 	"github.com/qyiun666/MemHop/internal/plan"
@@ -39,11 +40,10 @@ type (
 	HypergraphEdge   = core.HypergraphEdge
 	HypergraphSource = core.HypergraphSource
 	ArchiveSlot      = core.ArchiveSlot
-	Capability       = core.Capability
 	TrajectorySlot   = core.TrajectorySlot
 	GraphEdgeKind    = core.GraphEdgeKind
 	TopicSlot        = core.TopicSlot
-	ResourceRef      = core.ResourceRef
+	ResourceRef      = capability.ResourceRef
 	ContentType      = core.ContentType
 )
 
@@ -75,34 +75,35 @@ const (
 	ErrLLM             = common.ErrLLM
 )
 
-// ---- L5 capability enum constants ----
+// ---- L5 capability surface ----
 
-// Enum types of the constants below; re-exported so hosts can name
-// pointer fields (e.g. CapabilityListQuery.Status) without importing core.
-type (
-	CapabilityType   = core.CapabilityType
-	CapabilityStatus = core.CapabilityStatus
-	CapabilityOrigin = core.CapabilityOrigin
-)
+// The engine stores no capability records: a host owns its capability
+// directory and reuses the v4 parser as the disk format's single source of
+// truth. These forwarders expose the parse/validate half of the retired
+// record layer.
 
-const (
-	CapabilityMCP       = core.CapabilityMCP
-	CapabilitySkill     = core.CapabilitySkill
-	CapabilityAPI       = core.CapabilityAPI
-	CapabilityComposite = core.CapabilityComposite
-)
+type CapabilityType = capability.CapabilityType
 
 const (
-	CapabilityDraft      = core.CapabilityDraft
-	CapabilityActive     = core.CapabilityActive
-	CapabilityDeprecated = core.CapabilityDeprecated
+	CapabilityMCP       = capability.CapabilityMCP
+	CapabilitySkill     = capability.CapabilitySkill
+	CapabilityAPI       = capability.CapabilityAPI
+	CapabilityComposite = capability.CapabilityComposite
 )
 
-const (
-	CapabilityOriginImported     = core.CapabilityOriginImported
-	CapabilityOriginCrystallized = core.CapabilityOriginCrystallized
-	CapabilityOriginHost         = core.CapabilityOriginHost
-)
+// CapabilityFormatV4 is the format string a v4 document must declare.
+const CapabilityFormatV4 = capability.FormatV4
+
+// ParseCapabilityPackage parses and validates one memhop-capability/v4
+// package document into its capability cards.
+func ParseCapabilityPackage(data []byte, source string) ([]capability.CapabilityImport, error) {
+	return capability.BuildPackage(data, source)
+}
+
+// ValidateCapabilityCard checks one capability card against the v4 rules.
+func ValidateCapabilityCard(card *capability.CapabilityImport) error {
+	return capability.ValidateCard(card)
+}
 
 // ---- L3 edge kind constants ----
 

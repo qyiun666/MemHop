@@ -32,7 +32,7 @@ func TestTypedReadersRejectForeignRecordType(t *testing.T) {
 		read func() error
 	}{
 		{"graph slot over node", func() error { _, err := ReadGraphSlot(engine, DefaultAgentID, nodeID); return err }},
-		{"capability over node", func() error { _, err := ReadCapability(engine, DefaultAgentID, nodeID); return err }},
+		{"trajectory over node", func() error { _, err := ReadTrajectorySlot(engine, DefaultAgentID, nodeID); return err }},
 		{"archive over node", func() error { _, err := ReadArchiveSlot(engine, DefaultAgentID, nodeID); return err }},
 		{"scene slot over node", func() error { _, err := ReadSceneSlot(engine, DefaultAgentID, nodeID); return err }},
 	}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/cap/capability"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
@@ -42,7 +43,7 @@ func TestBuildCrystallizePrompt(t *testing.T) {
 		{Seq: 1, EventType: "tool_call", Payload: "read file"},
 		{Seq: 2, EventType: "tool_result", Payload: "ok"},
 	}
-	existing := []core.Capability{{Name: "deploy-runbook", Summary: "部署", Trigger: "部署"}}
+	existing := []capability.CapabilityImport{{Name: "deploy-runbook", Summary: "部署", Trigger: "部署"}}
 	prompt := buildCrystallizePrompt(events, existing)
 	if strings.Contains(prompt, "read file") == false || strings.Contains(prompt, "deploy-runbook") == false {
 		t.Fatalf("prompt missing inputs: %s", prompt)

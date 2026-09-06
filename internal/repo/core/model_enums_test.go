@@ -37,25 +37,6 @@ func TestContentTypeValues(t *testing.T) {
 	}
 }
 
-func TestCapabilityStatusValues(t *testing.T) {
-	tests := []struct {
-		cs   CapabilityStatus
-		val  uint8
-		name string
-	}{
-		{CapabilityDraft, 0, "draft"}, {CapabilityActive, 1, "active"},
-		{CapabilityDeprecated, 2, "deprecated"},
-	}
-	for _, tt := range tests {
-		if uint8(tt.cs) != tt.val {
-			t.Fatalf("%s: want %d got %d", tt.name, tt.val, uint8(tt.cs))
-		}
-		if tt.cs.String() != tt.name {
-			t.Fatalf("String() mismatch")
-		}
-	}
-}
-
 func TestHyperedgeKindValues(t *testing.T) {
 	kinds := []struct {
 		k   HyperedgeKind

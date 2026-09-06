@@ -180,18 +180,6 @@ func CollectAllArchives(engine *StorageEngine, agentID uint64) []ArchiveSlot {
 	return slices.Collect(IterAll[ArchiveSlot](engine, agentID, RecL4Archive))
 }
 
-func ReadCapability(engine *StorageEngine, agentID, id uint64) (*Capability, error) {
-	return readJSON[Capability](engine, agentID, id, RecL5Capability, "Capability")
-}
-
-func WriteCapability(engine *StorageEngine, agentID, id uint64, slot *Capability) error {
-	return writeJSON(engine, agentID, RecL5Capability, id, slot, "Capability")
-}
-
-func CollectAllCapabilities(engine *StorageEngine, agentID uint64) []Capability {
-	return slices.Collect(IterAll[Capability](engine, agentID, RecL5Capability))
-}
-
 func ReadTrajectorySlot(engine *StorageEngine, agentID, id uint64) (*TrajectorySlot, error) {
 	return readJSON[TrajectorySlot](engine, agentID, id, RecL6Trajectory, "TrajectorySlot")
 }

@@ -40,7 +40,6 @@ type tenantRegistry struct {
 	mu      sync.Mutex
 	base    memhop.MemHopConfig // shared engine config; DBPath set once at open
 	dbDir   string
-	capDir  string          // directory memhop_capability_import paths are anchored to
 	allowed map[string]bool // empty means any valid tenant id
 	db      *memhop.MultiAgentDB
 	entries map[string]*tenantEntry
@@ -52,12 +51,10 @@ type tenantRegistry struct {
 
 // newRegistry builds a tenant registry. allowed is the tenant whitelist;
 // when empty, any valid tenant id creates its agent domain on first access.
-// capDir anchors the file paths a tenant may import capabilities from.
-func newRegistry(base memhop.MemHopConfig, dbDir, capDir string, allowed []string, logger *slog.Logger) *tenantRegistry {
+func newRegistry(base memhop.MemHopConfig, dbDir string, allowed []string, logger *slog.Logger) *tenantRegistry {
 	r := &tenantRegistry{
 		base:    base,
 		dbDir:   dbDir,
-		capDir:  capDir,
 		entries: make(map[string]*tenantEntry),
 		logger:  logger,
 		open:    memhop.OpenMulti,
@@ -101,7 +98,7 @@ func (r *tenantRegistry) get(tenant string) (*tenantEntry, error) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "memhop", Version: version}, &mcp.ServerOptions{
 		Logger: r.logger,
 	})
-	registerTools(server, r.db, session, r.capDir)
+	registerTools(server, r.db, session)
 
 	e := &tenantEntry{session: session, server: server}
 	r.entries[tenant] = e

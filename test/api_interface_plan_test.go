@@ -165,7 +165,7 @@ func TestInterfaceSyncPlanTree(t *testing.T) {
 			}
 		}
 	}
-	if _, err := db.Crystallize(context.Background(), planID); err == nil {
+	if _, err := db.Crystallize(context.Background(), planID, nil); err == nil {
 		t.Fatal("crystallizing an emptied plan key should fail")
 	}
 }
@@ -281,33 +281,19 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 		t.Fatalf("trajectory sessions = %+v, want %s:1 step and %s:2 steps", sums, turnID, planID)
 	}
 
-	// Crystallizing a plan id aggregates the whole plan, not one turn.
-	res, err := db.Crystallize(context.Background(), planID)
+	// Crystallizing a plan id aggregates the whole plan, not one turn; the
+	// engine returns candidates only — nothing lands anywhere.
+	res, err := db.Crystallize(context.Background(), planID, nil)
 	if err != nil {
 		t.Fatalf("Crystallize(plan): %v", err)
 	}
-	if len(res.CreatedIDs) != 1 {
-		t.Fatalf("crystallize result = %+v, want one draft card", res)
-	}
-	draft := mustFindCapability(t, db.Session, res.CreatedIDs[0])
-	if draft.Status != memhop.CapabilityDraft {
-		t.Fatalf("crystallized card status = %q, want a draft the host activates", draft.Status)
-	}
-	active := memhop.CapabilityActive
-	activated, err := db.UpdateCapability(res.CreatedIDs[0], memhop.CapabilityPatch{Status: &active})
-	if err != nil {
-		t.Fatalf("activate via status patch: %v", err)
-	}
-	if activated.Status != memhop.CapabilityActive {
-		t.Fatalf("activate echoed %q", activated.Status)
-	}
-	if got := mustFindCapability(t, db.Session, res.CreatedIDs[0]); got.Status != memhop.CapabilityActive {
-		t.Fatalf("activated card reads back %q", got.Status)
+	if len(res.Capabilities) != 1 {
+		t.Fatalf("crystallize result = %+v, want one candidate card", res)
 	}
 
 	// A turn the host never logged has nothing to crystallize — reported, not
 	// answered with an empty result.
-	if _, err := db.Crystallize(context.Background(), openTurn(t, db, sceneID)); err == nil {
+	if _, err := db.Crystallize(context.Background(), openTurn(t, db, sceneID), nil); err == nil {
 		t.Fatal("crystallizing a key with no events should fail")
 	}
 }

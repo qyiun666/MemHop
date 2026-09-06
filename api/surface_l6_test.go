@@ -84,9 +84,9 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 			t.Fatalf("seq must be 1-based increasing, got %d at %d", e.Seq, i)
 		}
 	}
-	// Crystallize runs (stub returns no candidates) and yields a well-formed result.
-	cr, err := db.Crystallize(ctx, sessionID)
-	if err != nil || cr == nil || cr.CreatedIDs == nil {
+	// Crystallize runs (stub returns no candidates) and yields a well-formed output.
+	cr, err := db.Crystallize(ctx, sessionID, nil)
+	if err != nil || cr == nil || cr.Capabilities == nil {
 		t.Fatalf("crystallize: %v", err)
 	}
 }

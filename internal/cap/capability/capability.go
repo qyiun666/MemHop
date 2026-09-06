@@ -1,58 +1,87 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package capability is the L5 capability-definition capability: parsing,
-// validation, projection and filtering of memhop-capability/v4 package
-// documents. It is stateless and identity-neutral — it receives documents and
-// returns records/verdicts; storage reads/writes and the domain lock stay in
-// the composition root.
+// Package capability is the L5 capability-definition capability: the
+// memhop-capability/v4 document types with their parsing, validation and
+// prompt rendering. It is stateless and identity-neutral. The engine stores
+// no capability records — a host owns its capability directory, scans it and
+// reuses this parser as the disk format's single source of truth.
 package capability
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
-	"os"
-	"path/filepath"
-	"slices"
+	"fmt"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // FormatV4 is the only supported capability document format: a plugin
 // package holding one or more capability cards.
 const FormatV4 = "memhop-capability/v4"
 
-// ReadFile loads a capability document from a path (a directory resolves to
-// its capability.json).
-func ReadFile(path string) (data []byte, resolved string, err error) {
-	if path == "" {
-		return nil, "", common.NewError(common.ErrInvalidQuery, "capability path is required")
-	}
-	resolved = path
-	info, err := os.Stat(path)
-	if err != nil {
-		return nil, "", common.NewError(common.ErrIO, "stat capability path", err)
-	}
-	if info.IsDir() {
-		resolved = filepath.Join(path, "capability.json")
-	}
-	data, err = os.ReadFile(resolved)
-	if err != nil {
-		return nil, "", common.NewError(common.ErrIO, "read capability file", err)
-	}
-	return data, resolved, nil
+// CapabilityType describes how a capability resource is implemented: a wrapper
+// around a single MCP tool, a single skill, or a composite of several
+// resources.
+type CapabilityType string
+
+const (
+	CapabilityMCP   CapabilityType = "mcp"
+	CapabilitySkill CapabilityType = "skill"
+	// CapabilityAPI wraps one method of the MemHop Go API (api package);
+	// the host calls it directly through the library facade.
+	CapabilityAPI       CapabilityType = "api"
+	CapabilityComposite CapabilityType = "composite"
+)
+
+// ResourceRef is one function entry of a capability card (an MCP server, a
+// skill, an api method, or an action chain). The tool-declaration fields
+// (Name/Desc/Input/Output) mirror the host tool spec shape exactly (meowire
+// ToolSpec semantics): a host projects a resource to its own tool declaration
+// with a pure field copy, no format conversion. MemHop never executes these
+// references — launching them is the host's job.
+type ResourceRef struct {
+	Type   CapabilityType `json:"type"`             // mcp | skill | api | composite
+	Name   string         `json:"name"`             // tool name (ToolSpec.Name)
+	Desc   string         `json:"desc"`             // call contract for the LLM (ToolSpec.Desc)
+	Input  string         `json:"input,omitempty"`  // args JSON Schema string (ToolSpec.Input)
+	Output string         `json:"output,omitempty"` // output description (ToolSpec.Output)
+	Ref    string         `json:"ref,omitempty"`    // MCP server address / skill path / api:Method / command
+	Config *string        `json:"config,omitempty"` // connection config; a composite entry carries its action chain as {"steps":[{"tool":...}]}
 }
 
-// BuildPackage parses and validates one memhop-capability/v4 package document
-// into its capability cards, each stamped with the package name. It touches no
-// storage: lifecycle fields (Status/Origin/timestamps) and IDHash are left to
-// the caller. FileHash is per card the hash of the whole document, so a
-// byte-identical re-import of an unchanged package is detectable per card.
-func BuildPackage(data []byte, source string) ([]*core.Capability, error) {
-	var in core.CapabilityPackageDoc
+// CapabilityImport is one capability card inside a memhop-capability/v4
+// package document. The resource tool-declaration fields (Name/Desc/Input/
+// Output) mirror the host tool spec shape so hosts project capabilities with
+// a pure field copy.
+type CapabilityImport struct {
+	Name      string        `json:"name"`
+	Version   string        `json:"version,omitempty"`
+	Summary   string        `json:"summary"`
+	Trigger   string        `json:"trigger"`
+	Resources []ResourceRef `json:"resources"`
+}
+
+// CapabilityPackageDoc is the memhop-capability/v4 JSON document: a plugin
+// package holding one or more capability cards. A single-card file is just a
+// package with one entry.
+type CapabilityPackageDoc struct {
+	Format       string             `json:"format"`
+	Name         string             `json:"name"`
+	Capabilities []CapabilityImport `json:"capabilities"`
+}
+
+// NormalizeCapabilityName returns the canonical lowercase name used for
+// duplicate detection within a package.
+func NormalizeCapabilityName(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
+}
+
+// BuildPackage parses and validates one memhop-capability/v4 package
+// document into its capability cards. It touches no storage and no
+// filesystem: the caller reads the file and owns what happens to the cards.
+func BuildPackage(data []byte, source string) ([]CapabilityImport, error) {
+	var in CapabilityPackageDoc
 	if err := json.Unmarshal(data, &in); err != nil {
 		return nil, common.NewError(common.ErrInvalidQuery, "parse capability package file "+source, err)
 	}
@@ -63,22 +92,14 @@ func BuildPackage(data []byte, source string) ([]*core.Capability, error) {
 	if err := ValidatePackage(&in); err != nil {
 		return nil, err
 	}
-	hash := sha256Hex(data)
-	caps := make([]*core.Capability, 0, len(in.Capabilities))
-	for i := range in.Capabilities {
-		cap := FromImport(&in.Capabilities[i])
-		cap.Package = in.Name
-		cap.FileHash = hash
-		caps = append(caps, cap)
-	}
-	return caps, nil
+	return in.Capabilities, nil
 }
 
 // ValidatePackage checks a parsed package document: package name required,
-// 1..N cards, card names unique within the package (the card ID derives from
-// the name, so a duplicate would silently alias one record), and each card
-// validated.
-func ValidatePackage(in *core.CapabilityPackageDoc) error {
+// 1..N cards, card names unique within the package (the name is the card's
+// addressable identity, so a duplicate would silently alias one card), and
+// each card validated.
+func ValidatePackage(in *CapabilityPackageDoc) error {
 	if strings.TrimSpace(in.Name) == "" {
 		return common.NewError(common.ErrInvalidQuery, "capability package name is required")
 	}
@@ -90,7 +111,7 @@ func ValidatePackage(in *core.CapabilityPackageDoc) error {
 		if err := ValidateCard(&in.Capabilities[i]); err != nil {
 			return err
 		}
-		key := core.NormalizeCapabilityName(in.Capabilities[i].Name)
+		key := NormalizeCapabilityName(in.Capabilities[i].Name)
 		if _, dup := seen[key]; dup {
 			return common.NewError(common.ErrInvalidQuery, "duplicate capability name in package: "+in.Capabilities[i].Name)
 		}
@@ -103,7 +124,7 @@ func ValidatePackage(in *core.CapabilityPackageDoc) error {
 // the resource shape (non-empty names, a type from the four-value enum,
 // JSON-valid input declarations and step chains). One card carries any
 // number of function entries — there is no card-level type.
-func ValidateCard(in *core.CapabilityImport) error {
+func ValidateCard(in *CapabilityImport) error {
 	if strings.TrimSpace(in.Name) == "" {
 		return common.NewError(common.ErrInvalidQuery, "capability name is required")
 	}
@@ -118,7 +139,7 @@ func ValidateCard(in *core.CapabilityImport) error {
 			return common.NewError(common.ErrInvalidQuery, "resource name is required")
 		}
 		switch res.Type {
-		case core.CapabilityMCP, core.CapabilitySkill, core.CapabilityAPI, core.CapabilityComposite:
+		case CapabilityMCP, CapabilitySkill, CapabilityAPI, CapabilityComposite:
 		default:
 			return common.NewError(common.ErrInvalidQuery,
 				"resource type must be one of mcp|skill|api|composite: "+res.Name)
@@ -167,87 +188,65 @@ func validateConfig(cfg *string, resName string) error {
 	return nil
 }
 
-// FromImport copies the definition fields of an import document into a fresh
-// Capability; lifecycle fields, IDHash and FileHash are left to the caller
-// (import / crystallize set them differently).
-func FromImport(in *core.CapabilityImport) *core.Capability {
-	return &core.Capability{
-		Name:      in.Name,
-		Version:   defaultString(in.Version, "1"),
-		Summary:   in.Summary,
-		Trigger:   in.Trigger,
-		Resources: in.Resources,
+// PromptCard renders the concise capability view intended for an LLM prompt:
+// name, version, summary and trigger, then one block per resource with its
+// call contract. A card's addressable identity is its name — there is no
+// stored id to render.
+func (c *CapabilityImport) PromptCard() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "[capability: %s]\n", c.Name)
+	if c.Version != "" {
+		fmt.Fprintf(&b, "version: %s\n", c.Version)
 	}
-}
-
-// BuildCrystallized assembles the draft capability record from a crystallize
-// candidate: the shared definition copy plus crystallization lifecycle fields.
-func BuildCrystallized(in *core.CapabilityImport, now int64) *core.Capability {
-	cap := FromImport(in)
-	cap.Status = core.CapabilityDraft
-	cap.Origin = core.CapabilityOriginCrystallized
-	cap.CreatedAt = now
-	cap.UpdatedAt = now
-	return cap
-}
-
-// MergeDefinition overwrites the definition fields of an existing capability
-// with the incoming ones (usage statistics and identity are preserved; the
-// package stamp is immutable). The caller persists the result.
-func MergeDefinition(existing, incoming *core.Capability, now int64) {
-	existing.Version = incoming.Version
-	existing.Summary = incoming.Summary
-	existing.Trigger = incoming.Trigger
-	existing.Resources = incoming.Resources
-	existing.UpdatedAt = now
-}
-
-// Matches is the list-filter predicate shared by stored and built-in
-// capabilities: nil Status/Package filters pass everything, a non-empty
-// lowercased keyword must appear in name+summary+trigger, and a non-empty IDs
-// set restricts the result to those 16-hex ids (a malformed id matches
-// nothing).
-func Matches(cap *core.Capability, q *core.CapabilityListQuery, kw string) bool {
-	if len(q.IDs) > 0 && !matchesID(cap.IDHash, q.IDs) {
-		return false
+	if c.Summary != "" {
+		fmt.Fprintf(&b, "summary: %s\n", c.Summary)
 	}
-	if q.Status != nil && cap.Status != *q.Status {
-		return false
+	if c.Trigger != "" {
+		fmt.Fprintf(&b, "trigger: %s\n", c.Trigger)
 	}
-	if q.Package != nil && cap.Package != *q.Package {
-		return false
-	}
-	if kw != "" && !strings.Contains(strings.ToLower(cap.Name+" "+cap.Summary+" "+cap.Trigger), kw) {
-		return false
-	}
-	return true
-}
-
-func matchesID(idHash uint64, ids []string) bool {
-	for _, id := range ids {
-		if h, err := common.ParseID(id); err == nil && h == idHash {
-			return true
+	for _, r := range c.Resources {
+		fmt.Fprintf(&b, "resource: %s %s", r.Type, r.Name)
+		if r.Ref != "" {
+			fmt.Fprintf(&b, " (%s)", r.Ref)
+		}
+		b.WriteByte('\n')
+		if r.Desc != "" {
+			fmt.Fprintf(&b, "  use: %s\n", r.Desc)
+		}
+		if r.Input != "" {
+			fmt.Fprintf(&b, "  input: %s\n", r.Input)
+		}
+		if r.Output != "" {
+			fmt.Fprintf(&b, "  output: %s\n", r.Output)
+		}
+		if steps := resourceSteps(r.Config); len(steps) > 0 {
+			fmt.Fprintf(&b, "  steps: %s\n", strings.Join(steps, " -> "))
 		}
 	}
-	return false
+	return b.String()
 }
 
-// ActiveOnly keeps the active capabilities of caps (order preserved); used
-// by crystallization so the LLM catalog lists only usable cards.
-func ActiveOnly(caps []core.Capability) []core.Capability {
-	return slices.DeleteFunc(caps, func(c core.Capability) bool {
-		return c.Status != core.CapabilityActive
-	})
-}
-
-func defaultString(v, fallback string) string {
-	if v == "" {
-		return fallback
+// resourceSteps extracts the action-chain tool names from a resource Config
+// of the canonical form {"steps":[{"tool":"...", ...}]}; other shapes (loose
+// line forms, natural language) yield nil. Rendering only — shape validation
+// lives in ValidateCard at parse time.
+func resourceSteps(cfg *string) []string {
+	if cfg == nil || !strings.HasPrefix(*cfg, "{") {
+		return nil
 	}
-	return v
-}
-
-func sha256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
+	var obj struct {
+		Steps []struct {
+			Tool string `json:"tool"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(*cfg), &obj); err != nil || len(obj.Steps) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(obj.Steps))
+	for _, st := range obj.Steps {
+		if st.Tool != "" {
+			names = append(names, st.Tool)
+		}
+	}
+	return names
 }

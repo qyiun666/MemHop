@@ -218,33 +218,6 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if _, err := s.QueryL3Subgraph(gid, nodes[0].IDHash, 1, nil); err != nil {
 		t.Fatalf("session querySubgraph: %v", err)
 	}
-	// L5 capability via session (import → get → patch-activate → usage → delete).
-	sid := t.TempDir()
-	capRes, err := s.ImportCapability(writeCapability(t, sid, "sess-cap"))
-	if err != nil {
-		t.Fatalf("session importCap: %v", err)
-	}
-	cid := capRes.CreatedIDs[0]
-	if one, err := s.ListCapabilities(CapabilityListQuery{IDs: []string{cid}}); err != nil || len(one) != 1 {
-		t.Fatalf("session capability by id: %d found, err %v", len(one), err)
-	}
-	if _, err := s.ListCapabilities(CapabilityListQuery{Keyword: "sess"}); err != nil {
-		t.Fatalf("session listCap: %v", err)
-	}
-	sum := "patched via session"
-	if got, err := s.UpdateCapability(cid, CapabilityPatch{Summary: &sum}); err != nil || got.Summary != sum {
-		t.Fatalf("session updateCap: %v %+v", err, got)
-	}
-	activeStatus := CapabilityActive
-	if _, err := s.UpdateCapability(cid, CapabilityPatch{Status: &activeStatus}); err != nil {
-		t.Fatalf("session activate: %v", err)
-	}
-	if _, err := s.RecordCapabilityUsage(cid, true); err != nil {
-		t.Fatalf("session usage: %v", err)
-	}
-	if err := s.DeleteCapability(cid); err != nil {
-		t.Fatalf("session deleteCap: %v", err)
-	}
 	// L6 trajectory via session.
 	traj := internal.FormatID(common.HashID("sess-traj"))
 	if err := s.AppendTrajectory(traj, "", TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1_700_000_061_000}); err != nil {
@@ -253,7 +226,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if evs, err := s.ReadTrajectory(traj); err != nil || len(evs) != 1 {
 		t.Fatalf("session readTraj: %d %v", len(evs), err)
 	}
-	if _, err := s.Crystallize(ctx, traj); err != nil {
+	if _, err := s.Crystallize(ctx, traj, nil); err != nil {
 		t.Fatalf("session crystallize: %v", err)
 	}
 	// Deletion lifecycle: topic, scene, graph.
