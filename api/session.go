@@ -159,8 +159,11 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 
 // ImportCapability imports a memhop-capability/v4 package (a single-card file
 // is a one-card package) into the file-wide shared L5 pool and reports
-// per-card dispositions; every agent domain sees the imported cards. The
-// result carries hex ids, so the alias maps 1:1.
+// per-card dispositions; every agent domain sees the imported cards. A card
+// whose stored copy already carries the same package bytes is reported in
+// UpdatedIDs as a no-op refresh (nothing is written), so UpdatedIDs counts
+// "kept or refreshed", not "changed". The result carries hex ids, so the
+// alias maps 1:1.
 func (s *Session) ImportCapability(path string) (*CapabilityImportResult, error) {
 	return s.Session.ImportCapability(path)
 }

@@ -47,16 +47,24 @@ func (db *DB) ImportCapability(agentID uint64, path string) (*core.CapabilityImp
 // pool lock must already be held (lockSharedPool). A card whose stored copy
 // carries the same FileHash is left untouched: re-importing an unchanged
 // package (the plug/ scan runs on every Open) must not grow the append-only
-// file. Created/updated ids are 16-hex; a failed card is reported by name.
+// file, and host edits to such a card survive until the package content
+// actually changes. A card whose name-derived id belongs to the read-only
+// built-in toolbox is rejected — a stored shadow could never be updated or
+// deleted again. Created/updated ids are 16-hex; a failed card is reported
+// by name.
 func (db *DB) importCapabilitiesLocked(caps []*core.Capability) *core.CapabilityImportResult {
 	now := time.Now().UnixMilli()
 	result := &core.CapabilityImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}}
 	for _, cap := range caps {
-		id := common.FormatHash(core.CapabilityID(cap.Name))
 		cap.IDHash = core.CapabilityID(cap.Name)
+		id := common.FormatHash(cap.IDHash)
 		if existing, err := core.ReadCapability(db.engine, core.SharedPoolAgentID, cap.IDHash); err == nil &&
 			existing.FileHash != "" && existing.FileHash == cap.FileHash {
 			result.UpdatedIDs = append(result.UpdatedIDs, id)
+			continue
+		}
+		if db.findBuiltinCapability(cap.IDHash) != nil {
+			result.Errors = append(result.Errors, cap.Name+": name is reserved by a built-in card")
 			continue
 		}
 		cap.Status = core.CapabilityActive
@@ -81,7 +89,10 @@ func (db *DB) importCapabilitiesLocked(caps []*core.Capability) *core.Capability
 
 // UpdateCapability partially updates a stored capability (built-ins are
 // read-only and rejected). The pool is file-wide, so the update is visible to
-// every agent domain.
+// every agent domain. The stored FileHash is kept: it is the package
+// watermark, not a content fingerprint — re-importing the same package bytes
+// stays a no-op, so a host's deprecation or patched definition survives
+// restarts; a changed package overwrites the definition and lands active.
 func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch) (*core.Capability, error) {
 	ac, err := db.lockSharedPool(agentID)
 	if err != nil {
@@ -121,8 +132,6 @@ func (db *DB) UpdateCapability(agentID uint64, id string, patch CapabilityPatch)
 	}); err != nil {
 		return nil, err
 	}
-	// The stored content is no longer the imported bytes.
-	cap.FileHash = ""
 	if _, err := repo.UpsertCapabilityL5(db.engine, core.SharedPoolAgentID, cap); err != nil {
 		return nil, err
 	}

@@ -19,9 +19,20 @@ import (
 // ReuseID, so their payload may be minimal (a reuse decision does not
 // require a full type/resources); only create candidates run the complete
 // import validation, otherwise the candidate is recorded as skipped.
-func ApplyCandidate(engine *core.StorageEngine, agentID uint64, cand llmops.CrystallizeCapability, result *core.CrystallizeResult) error {
+// reserved reports whether a name-derived capability id belongs to the
+// read-only built-in toolbox; a candidate naming such a card is recorded
+// as skipped — a stored shadow of a built-in card could never be updated
+// or deleted again.
+func ApplyCandidate(engine *core.StorageEngine, agentID uint64, cand llmops.CrystallizeCapability, result *core.CrystallizeResult, reserved func(uint64) bool) error {
 	action := strings.ToLower(strings.TrimSpace(cand.Action))
 	detail := core.CrystallizeDetail{Name: cand.Capability.Name}
+	if reserved(core.CapabilityID(cand.Capability.Name)) {
+		detail.Action = "skip"
+		detail.Reason = "capability name is reserved by a built-in card"
+		result.Errors = append(result.Errors, cand.Capability.Name+": "+detail.Reason)
+		result.Details = append(result.Details, detail)
+		return nil
+	}
 	if action != "reuse" && action != "merge" {
 		if err := capability.ValidateCard(&cand.Capability); err != nil {
 			result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())

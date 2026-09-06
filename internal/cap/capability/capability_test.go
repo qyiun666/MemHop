@@ -107,6 +107,12 @@ func TestValidateCardMatrix(t *testing.T) {
 		{"missing trigger and summary", func(i *core.CapabilityImport) {
 			i.Trigger, i.Summary = "", ""
 		}, true},
+		{"unknown resource type", func(i *core.CapabilityImport) {
+			i.Resources[0].Type = "mcp "
+		}, true},
+		{"missing resource type", func(i *core.CapabilityImport) {
+			i.Resources[0].Type = ""
+		}, true},
 		{"invalid json schema input", func(i *core.CapabilityImport) {
 			i.Resources[0].Input = "{not json"
 		}, true},

@@ -11,6 +11,7 @@
 package internal
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -32,6 +33,12 @@ func (db *DB) injectPlugDir(mehPath string) {
 	plugDir := filepath.Join(filepath.Dir(mehPath), plugDirName)
 	entries, err := os.ReadDir(plugDir)
 	if err != nil {
+		// A missing plug directory is the normal case; any other read
+		// failure (permissions, IO) would silently disable the whole
+		// feature, so it is reported.
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Warn("plug: scan failed", "dir", plugDir, "error", err)
+		}
 		return
 	}
 	for _, e := range entries {

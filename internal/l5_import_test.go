@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -115,5 +116,67 @@ func TestImportCapabilityUnchangedSkip(t *testing.T) {
 	}
 	if got := len(core.CollectAllCapabilities(db.engine, core.SharedPoolAgentID)); got != 1 {
 		t.Fatalf("unchanged re-import appended a record: %d capabilities", got)
+	}
+}
+
+// A host edit (deprecation, patched trigger) must survive the byte-identical
+// re-import the plug/ scan performs on every Open: FileHash is the package
+// watermark, so the unchanged package hits the skip guard instead of
+// upserting a fresh active copy over the host's decision.
+func TestImportCapabilityHostEditsSurviveReimport(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	path := writeTempCapability(t, t.TempDir(), "cap.json", testCapabilityJSON)
+
+	if _, err := db.ImportCapability(core.DefaultAgentID, path); err != nil {
+		t.Fatalf("first import: %v", err)
+	}
+	id := common.FormatHash(core.CapabilityID("测试工具"))
+	patched := "宿主改过的触发词"
+	deprecated := core.CapabilityDeprecated
+	if _, err := db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{Trigger: &patched, Status: &deprecated}); err != nil {
+		t.Fatalf("host update: %v", err)
+	}
+	stored, err := repo.GetCapabilityL5(db.engine, core.SharedPoolAgentID, core.CapabilityID("测试工具"))
+	if err != nil {
+		t.Fatalf("read stored: %v", err)
+	}
+
+	if _, err := db.ImportCapability(core.DefaultAgentID, path); err != nil {
+		t.Fatalf("re-import: %v", err)
+	}
+	after, err := repo.GetCapabilityL5(db.engine, core.SharedPoolAgentID, core.CapabilityID("测试工具"))
+	if err != nil {
+		t.Fatalf("read stored after re-import: %v", err)
+	}
+	if after.Status != core.CapabilityDeprecated || after.Trigger != patched {
+		t.Fatalf("host edits must survive re-import, got %+v", after)
+	}
+	if after.UpdatedAt != stored.UpdatedAt {
+		t.Fatalf("unchanged re-import must not touch the record: %d -> %d", stored.UpdatedAt, after.UpdatedAt)
+	}
+}
+
+// A card naming a built-in card is rejected, not stored: a stored shadow of
+// a read-only built-in could never be updated or deleted again.
+func TestImportCapabilityRejectsBuiltinName(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	db.SetBuiltinCapabilities(testBuiltinCapabilities())
+	path := writeTempCapability(t, t.TempDir(), "cap.json", `{
+  "format": "memhop-capability/v4",
+  "name": "影子包",
+  "capabilities": [
+    {"name": "内置手册", "summary": "冒充内置卡", "trigger": "t",
+     "resources": [{"type": "api", "name": "GetL0", "ref": "api:GetL0"}]}
+  ]
+}`)
+	result, err := db.ImportCapability(core.DefaultAgentID, path)
+	if err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if len(result.CreatedIDs) != 0 || len(result.UpdatedIDs) != 0 || len(result.Errors) != 1 {
+		t.Fatalf("builtin-named card must be rejected: %+v", result)
+	}
+	if got := len(core.CollectAllCapabilities(db.engine, core.SharedPoolAgentID)); got != 0 {
+		t.Fatalf("shadow card must not be stored: %d capabilities", got)
 	}
 }

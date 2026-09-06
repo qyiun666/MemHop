@@ -80,8 +80,10 @@ func TestInterfaceCapabilityLifecycle(t *testing.T) {
 	if updated.Name != "读文件" || updated.Summary != "读取文件内容" || updated.Trigger != trigger {
 		t.Fatalf("patched card = %+v", updated)
 	}
-	// The stored definition no longer matches the bytes on disk.
-	if got := mustFindCapability(t, db.Session, id); got.Trigger != trigger || got.FileHash != "" {
+	// The stored copy keeps the package watermark: an unchanged re-import
+	// (the plug/ scan at every Open) stays a no-op, so the host's edit is
+	// not silently reverted at restart.
+	if got := mustFindCapability(t, db.Session, id); got.Trigger != trigger || got.FileHash == "" {
 		t.Fatalf("after update: %+v", got)
 	}
 

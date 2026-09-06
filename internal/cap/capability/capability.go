@@ -116,9 +116,15 @@ func ValidateCard(in *core.CapabilityImport) error {
 		if strings.TrimSpace(res.Name) == "" {
 			return common.NewError(common.ErrInvalidQuery, "resource name is required")
 		}
+		switch res.Type {
+		case core.CapabilityMCP, core.CapabilitySkill, core.CapabilityAPI, core.CapabilityComposite:
+		default:
+			return common.NewError(common.ErrInvalidQuery,
+				"resource type must be one of mcp|skill|api|composite: "+res.Name)
+		}
 		if strings.TrimSpace(res.Input) != "" && !json.Valid([]byte(res.Input)) {
 			return common.NewError(common.ErrInvalidQuery,
-				"resource input must be a valid JSON Schema string: "+res.Name)
+				"resource input must be valid JSON: "+res.Name)
 		}
 		if err := validateConfig(res.Config, res.Name); err != nil {
 			return err

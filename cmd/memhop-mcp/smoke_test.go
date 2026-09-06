@@ -21,9 +21,9 @@ import (
 )
 
 // TestSSEMultiTenantIsolation boots the SSE server in-process and verifies
-// that two tenants on one process are isolated (scenes, archives, profiles,
-// capabilities) while the L3 knowledge graph is the one file-wide shared
-// pool, and that the full tool surface is present on each tenant.
+// that two tenants on one process are isolated (scenes, archives, profiles)
+// while the L3 knowledge graph and the L5 capability pool are the file-wide
+// shared pools, and that the full tool surface is present on each tenant.
 func TestSSEMultiTenantIsolation(t *testing.T) {
 	srv, dbDir := newTestServer(t, nil)
 

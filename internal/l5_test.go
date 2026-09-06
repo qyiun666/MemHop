@@ -163,7 +163,7 @@ func TestRecordCapabilityUsage(t *testing.T) {
 
 func TestUpdateCapability(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	cap := &core.Capability{Name: "可更新", Status: core.CapabilityActive, IDHash: core.CapabilityID("可更新")}
+	cap := &core.Capability{Name: "可更新", Status: core.CapabilityActive, IDHash: core.CapabilityID("可更新"), FileHash: "pkg-hash"}
 	writeCapability(t, db.engine, cap)
 	id := common.FormatHash(cap.IDHash)
 
@@ -186,9 +186,11 @@ func TestUpdateCapability(t *testing.T) {
 	if len(got.Resources) != 2 {
 		t.Fatalf("resources not applied: %+v", got)
 	}
-	// The updated record is no longer byte-identical to an import.
-	if got.FileHash != "" {
-		t.Fatalf("FileHash must be cleared after update, got %q", got.FileHash)
+	// FileHash is the package watermark, not a content fingerprint: an
+	// update keeps it, so re-importing the same package bytes stays a no-op
+	// and the host's edit is not silently reverted at restart.
+	if got.FileHash != "pkg-hash" {
+		t.Fatalf("FileHash must survive an update, got %q", got.FileHash)
 	}
 
 	// Partial update leaves untouched fields unchanged.

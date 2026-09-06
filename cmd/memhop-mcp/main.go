@@ -6,8 +6,9 @@
 // through one shared multi-agent database: each tenant reaches its own
 // isolated agent domain through the URL path /mcp/<tenant-id> (a stable
 // agentID per tenant name inside the single <db-dir>/memhop.meh file), so
-// tenant data stays isolated — except the L3 knowledge graph, which is a
-// file-wide shared pool every tenant of the file reads and writes.
+// tenant data stays isolated — except the L3 knowledge graph and the L5
+// capability pool, two file-wide shared pools every tenant of the file
+// reads and writes.
 //
 // Two HTTP transports are supported:
 //
