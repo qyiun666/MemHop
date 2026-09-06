@@ -49,20 +49,8 @@ func TestInterfaceL5(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCapabilities: %v", err)
 	}
-	// The response includes the read-only built-in toolbox; the imported
-	// capability must be present and every other entry must be a built-in.
-	found := false
-	for _, c := range caps {
-		if c.Name == "重构流程" {
-			found = true
-			continue
-		}
-		if c.Origin != core.CapabilityOriginBuiltin {
-			t.Fatalf("unexpected non-builtin capability: %+v", c)
-		}
-	}
-	if !found {
-		t.Fatal("imported capability missing from list")
+	if len(caps) != 1 || caps[0].Name != "重构流程" {
+		t.Fatalf("the imported card must be the only listing entry: %+v", caps)
 	}
 
 	if err := db.DeleteCapability(id); err != nil {
@@ -72,10 +60,8 @@ func TestInterfaceL5(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListCapabilities after delete: %v", err)
 	}
-	for _, c := range caps {
-		if c.Origin != core.CapabilityOriginBuiltin {
-			t.Fatalf("stored capability should be deleted: %+v", c)
-		}
+	if len(caps) != 0 {
+		t.Fatalf("stored capability should be deleted: %+v", caps)
 	}
 }
 

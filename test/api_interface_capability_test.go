@@ -133,7 +133,7 @@ func TestInterfaceCapabilityLifecycle(t *testing.T) {
 	if err := db.DeleteCapability(id); err == nil {
 		t.Fatal("deleting a capability twice should be refused")
 	}
-	if left := mustListStored(t, db.Session); len(left) != 0 {
+	if left := mustListAll(t, db.Session, internal.CapabilityListQuery{}); len(left) != 0 {
 		t.Fatalf("cards left after delete: %+v", left)
 	}
 }
@@ -197,27 +197,6 @@ func TestInterfaceCapabilityReimport(t *testing.T) {
 	}
 }
 
-// The built-in toolbox is the manual the engine ships, not host data: every
-// write path refuses it, and a host that only reads is unaffected.
-func TestInterfaceBuiltinCapabilitiesAreReadOnly(t *testing.T) {
-	db, _ := openTestDB(t)
-	builtin := mustFindBuiltin(t, db.Session)
-
-	summary := "覆盖官方卡"
-	if _, err := db.UpdateCapability(builtin.IDHash, memhop.CapabilityPatch{Summary: &summary}); err == nil {
-		t.Fatal("UpdateCapability on a built-in should be refused")
-	}
-	if _, err := db.RecordCapabilityUsage(builtin.IDHash, true); err == nil {
-		t.Fatal("RecordCapabilityUsage on a built-in should be refused")
-	}
-	if err := db.DeleteCapability(builtin.IDHash); err == nil {
-		t.Fatal("DeleteCapability on a built-in should be refused")
-	}
-	if got := mustFindCapability(t, db.Session, builtin.IDHash); got.Summary != builtin.Summary || got.Origin != memhop.CapabilityOriginBuiltin {
-		t.Fatalf("a refused write moved a built-in card: %+v", got)
-	}
-}
-
 // Filtering is how a host finds the card it means without pulling the whole
 // toolbox, and the whole point of storing it is that the read survives a
 // restart with the same domain id and the same usage.
@@ -241,7 +220,7 @@ func TestInterfaceCapabilityQueryAndPersistence(t *testing.T) {
 		db.Close()
 		t.Fatalf("ImportCapability second card: %v", err)
 	}
-	before := mustListStored(t, db.Session)
+	before := mustListAll(t, db.Session, internal.CapabilityListQuery{})
 	if len(before) != 2 {
 		db.Close()
 		t.Fatalf("stored cards = %d, want the two imports", len(before))
@@ -269,7 +248,7 @@ func TestInterfaceCapabilityQueryAndPersistence(t *testing.T) {
 	if got := mustFindCapability(t, sess, importedID); got.Name != "压缩场景" || got.TriggerCount != 1 {
 		t.Fatalf("card after reopen = %+v", got)
 	}
-	if after := mustListStored(t, sess); len(after) != len(before) {
+	if after := mustListAll(t, sess, internal.CapabilityListQuery{}); len(after) != len(before) {
 		t.Fatalf("stored cards changed across the restart: %+v", after)
 	}
 
@@ -292,28 +271,4 @@ func mustListAll(t *testing.T, sess *memhop.Session, q internal.CapabilityListQu
 		t.Fatalf("ListCapabilities(%+v): %v", q, err)
 	}
 	return caps
-}
-
-// mustListStored returns the cards the host itself wrote, with the read-only
-// built-in toolbox filtered out.
-func mustListStored(t *testing.T, sess *memhop.Session) []memhop.Capability {
-	t.Helper()
-	var out []memhop.Capability
-	for _, c := range mustListAll(t, sess, internal.CapabilityListQuery{}) {
-		if c.Origin != memhop.CapabilityOriginBuiltin {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-func mustFindBuiltin(t *testing.T, sess *memhop.Session) memhop.Capability {
-	t.Helper()
-	for _, c := range mustListAll(t, sess, internal.CapabilityListQuery{}) {
-		if c.Origin == memhop.CapabilityOriginBuiltin {
-			return c
-		}
-	}
-	t.Fatal("no built-in capability was loaded at open")
-	return memhop.Capability{}
 }

@@ -1,6 +1,6 @@
 # 决策档案: 内置说明书卡从 embed 包改为代码组装
 
-Status: implemented
+Status: rejected — 同日被 [2026-09-06-remove-builtin-cards](../../implemented/architecture/2026-09-06-remove-builtin-cards.md) 整体取代：代码组装只换了装配方式，没有回答「说明书不是能力」的定位问题，内置卡机制最终整体删除。本档案保留 embed→代码组装的比较与守卫链事实，防止把「装配优化」误当成「定位正确」。
 
 ## Problem
 

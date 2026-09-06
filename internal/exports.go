@@ -102,7 +102,6 @@ const (
 	CapabilityOriginImported     = core.CapabilityOriginImported
 	CapabilityOriginCrystallized = core.CapabilityOriginCrystallized
 	CapabilityOriginHost         = core.CapabilityOriginHost
-	CapabilityOriginBuiltin      = core.CapabilityOriginBuiltin
 )
 
 // ---- L3 edge kind constants ----

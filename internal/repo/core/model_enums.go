@@ -73,9 +73,6 @@ const (
 	CapabilityOriginImported     CapabilityOrigin = "imported"
 	CapabilityOriginCrystallized CapabilityOrigin = "crystallized"
 	CapabilityOriginHost         CapabilityOrigin = "host"
-	// CapabilityOriginBuiltin marks the read-only reference manuals shipped
-	// with the project; they are attached to L5 responses, never stored.
-	CapabilityOriginBuiltin CapabilityOrigin = "builtin"
 )
 
 // HyperedgeKind classifies L1 hyperedges in the hypergraph skeleton.

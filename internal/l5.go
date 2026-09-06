@@ -48,9 +48,8 @@ func (db *DB) ImportCapability(agentID uint64, path string) (*core.CapabilityImp
 // carries the same FileHash is left untouched: re-importing an unchanged
 // package (the plug/ scan runs on every Open) must not grow the append-only
 // file, and host edits to such a card survive until the package content
-// actually changes. A stored record whose id matches a built-in manual
-// shadows it in listings (the stored copy wins). Created/updated ids are
-// 16-hex; a failed card is reported by name.
+// actually changes. Created/updated ids are 16-hex; a failed card is
+// reported by name.
 func (db *DB) importCapabilitiesLocked(caps []*core.Capability) *core.CapabilityImportResult {
 	now := time.Now().UnixMilli()
 	result := &core.CapabilityImportResult{CreatedIDs: []string{}, UpdatedIDs: []string{}}
@@ -143,7 +142,6 @@ func (db *DB) DeleteCapability(agentID uint64, id string) error {
 	}
 	// Deleting a card that is not there is reported, not accepted: a host
 	// reconciling its cards has to be able to tell a real deletion from a no-op.
-	// The built-in manuals are not stored records, so their ids land here too.
 	if _, err := repo.GetCapabilityL5(db.engine, core.SharedPoolAgentID, idHash); err != nil {
 		return err
 	}
@@ -168,22 +166,9 @@ func (db *DB) ListCapabilities(agentID uint64, q CapabilityListQuery) ([]core.Ca
 			filtered = append(filtered, cap)
 		}
 	}
-	// Merge the built-in toolbox through the same filters; a stored record
-	// with the same ID wins over its built-in twin. The dedup set is built
-	// from ALL stored records (not just the filtered ones) so a stored
-	// record filtered out by status/package still suppresses its built-in
-	// twin.
-	stored := make(map[uint64]struct{}, len(all))
-	for _, cap := range all {
-		stored[cap.IDHash] = struct{}{}
-	}
-	filtered = append(filtered, db.builtinMatchingList(q, kw, stored)...)
 	slices.SortFunc(filtered, func(a, b core.Capability) int {
 		return cmp.Compare(b.UpdatedAt, a.UpdatedAt)
 	})
-	if filtered == nil {
-		return []core.Capability{}, nil
-	}
 	return filtered, nil
 }
 

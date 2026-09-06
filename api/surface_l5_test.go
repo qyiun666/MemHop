@@ -83,22 +83,6 @@ func TestSurfaceL5Capability(t *testing.T) {
 	if _, err := db.UpdateCapability(id, CapabilityPatch{Status: &active}); err != nil {
 		t.Fatalf("activate capability: %v", err)
 	}
-	// The built-in manuals are not stored records: a write to one reports
-	// ErrNotFound like any record that is not there.
-	builtins, _ := db.ListCapabilities(CapabilityListQuery{})
-	var builtinID string
-	for _, b := range builtins {
-		if b.Origin == CapabilityOriginBuiltin {
-			builtinID = b.IDHash
-			break
-		}
-	}
-	if builtinID != "" {
-		s := "x"
-		if _, err := db.UpdateCapability(builtinID, CapabilityPatch{Summary: &s}); CodeOf(err) != ErrNotFound {
-			t.Fatalf("patch builtin must report not-found: got %v", err)
-		}
-	}
 	if err := db.DeleteCapability(id); err != nil {
 		t.Fatalf("delete capability: %v", err)
 	}

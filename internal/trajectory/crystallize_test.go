@@ -24,7 +24,6 @@ func TestApplyCandidateValidationGating(t *testing.T) {
 	}
 	defer engine.Close(nil)
 
-	reserved := func(uint64) bool { return false }
 	cases := []struct {
 		name string
 		cand llmops.CrystallizeCapability
@@ -44,7 +43,7 @@ func TestApplyCandidateValidationGating(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			result := &core.CrystallizeResult{}
-			if err := ApplyCandidate(engine, core.SharedPoolAgentID, tc.cand, result, reserved); err != nil {
+			if err := ApplyCandidate(engine, core.SharedPoolAgentID, tc.cand, result); err != nil {
 				t.Fatalf("apply: %v", err)
 			}
 			if len(result.Errors) != 1 || len(result.CreatedIDs)+len(result.MergedIDs)+len(result.ReusedIDs) != 0 {

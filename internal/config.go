@@ -26,12 +26,11 @@ func OpenOrCreateEngine(cfg *MemHopConfig) (*core.StorageEngine, error) {
 	return core.Create(cfg.DBPath)
 }
 
-// Open assembles a DB instance: tokenizer init, engine open/create and
-// attachment of the built-in capability manuals (assembled in code by
-// BuiltinCards). Agent contexts are created lazily on first access
-// (contextFor), each rebuilding its caches from its own domain's records.
-// After assembly the <meh dir>/plug plugin packages are injected into the
-// shared L5 pool (l5plug.go).
+// Open assembles a DB instance: tokenizer init and engine open/create.
+// Agent contexts are created lazily on first access (contextFor), each
+// rebuilding its caches from its own domain's records. After assembly the
+// <meh dir>/plug plugin packages are injected into the shared L5 pool
+// (l5plug.go).
 func Open(cfg *MemHopConfig) (*DB, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	engine, err := OpenOrCreateEngine(cfg)
@@ -54,9 +53,6 @@ func Open(cfg *MemHopConfig) (*DB, error) {
 		nameToID:   nameToID,
 		idToName:   idToName,
 	}
-	// Attach the built-in capability manuals: read-only reference cards
-	// served by the L5 read APIs, never written into the .meh file.
-	db.SetBuiltinCapabilities(BuiltinCards())
 	db.injectPlugDir(cfg.DBPath)
 	return db, nil
 }

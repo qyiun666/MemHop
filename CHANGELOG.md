@@ -3,6 +3,31 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## v1.6.1 — 2026-09-06 — 公开面收敛（34→32）、内置说明书卡删除、公开面按使用者分两类
+
+### 两个折叠（34→32）
+
+- **`ActivateCapability` 删除**：repo 层的激活是读卡→置 active→写回，与 `UpdateCapability(id, CapabilityPatch{Status: &CapabilityActive})` 完全同形——同一能力只留一个实现；激活并入 `UpdateCapability`（同过卡片校验，缺 summary/resources 的裸夹具即拒）
+- **`PlanReplace` 删除**：`SyncPlanTree(planID, nil)` 清整树（节点与绑定事件全删、planID 保留、事件 Seq 从 1 重排）；下一任务的播种 = 单节点同步（空 status 落 pending）；`0000000000000000` 拒绝语义不变（ParsePlanID 在 nil 判断之前）
+- MCP 工具 31 → 30：`memhop_capability_activate` 并入 `memhop_capability_update` 的 `status` 参数
+
+### 内置说明书卡删除（对标主流能力面设计）
+
+**动机**：对主流 agent 能力面设计（Claude Code / OpenClaw 的 skill、MCP 工具面、Manus 的上下文工程）调研的结论是——能力池只装 **LLM 可触发单元**（工具 schema / skill 文件 / 动作链），说明书按需检索不驻留，渐进披露（一行描述常驻 + 正文按需）。引擎内置卡（9 张覆盖 32 个库方法用法，约 28KB）是「宿主方法说明常驻能力池」——主流生态无先例的第三种形态：宿主要么整体 skip（meowagent），要么与 MCP 工具描述双份重复；10 个纯管理方法还混进了 LLM 视野。
+
+- **删除**：`internal.BuiltinCards()` 代码组装、`SetBuiltinCapabilities`/`findBuiltinCapability`/`builtinMatchingList` 装配与合并链、ListCapabilities 的 stored-shadow 去重段、结晶折回的保留名检查（`trajectory.ApplyCandidate` 删 `reserved` 谓词参数）、`CapabilityOriginBuiltin` 常量（core→internal→api 别名链一并删）
+- **能力池回归本意**：池里只有宿主导入的卡、结晶草稿与 `plug/` 注入；空库 `ListCapabilities` 返回 0 条；方法用法说明归 `go doc api.Session` 与 `INTEGRATION_GUIDE.md`（即主流的「文档检索通道」角色）
+- **对消费方 breaking**：meowagent 的 `Origin == builtin` skip 成死代码、`contracts.CapabilityOriginBuiltin` 编译断——归属主自己的适配轮次；MCP 工具面不变（30）
+- `plug/` 自动注入原样保留；`Origin` 枚举其余三值（imported/crystallized/host）不变
+
+### 公开面按使用者分两类（注释 + 文档层，代码零结构变化）
+
+- **任务面（22 个）**：宿主每轮驱动（`Search`/`Update`/`Dream`/`AppendTrajectory`）+ LLM 工具绑定的全部读写
+- **组装/管理面（10 个 + DB 8 个）**：会话边界与管理通道调用，不做成 LLM 工具（`UpdateScene`/`MergeScenes`/`DeleteScene`/`DeleteTopic`/`UpdateL3`/`DeleteL3`/`DeleteL3Nodes`/`ImportCapability`/`UpdateCapability`/`DeleteCapability`）
+- 落点：`api/session.go` 头注释总表（go doc 可见）、`api/surface_public_test.go` want 列表分组钉住、`INTEGRATION_GUIDE.md` §8 两类速查
+
+无格式变化（保持 `0x000B`）、无迁移；决策档案 `notes/implemented/architecture/2026-09-06-remove-builtin-cards.md`（其前身的 embed→代码组装决策同日整体被取代，档案移入 `notes/rejected/`）。
+
 ## v1.6.0 — 2026-09-04 — 接口去 fallback、按层闭环修复与文件级 L3/L5 公共池（实测驱动）
 
 ### L5 统一卡 + 能力池公共化 + plug/ 自动注入

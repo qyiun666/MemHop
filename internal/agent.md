@@ -92,9 +92,8 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
   **禁止**直接操作帧、文件头、快照结构。
 - `StorageEngine` 句柄由装配层 `config.go` 的 `Open(cfg)`
   唯一持有：注入 `DB.engine`，并经 `domain.NewContext` 注入每个域；业务代码
-  不得自行打开/关闭引擎。内建说明书卡由 `internal.BuiltinCards`
-  （builtin_capabilities.go）在 Open 时代码组装并 attach——只列不存，
-  对内置卡 id 的写一律 `ErrNotFound`（结晶折回的撞名拒绝是唯一例外点）。
+  不得自行打开/关闭引擎。Open 的最后一步经 `injectPlugDir` 把
+  `<meh 同目录>/plug/<包>/capability.json` 注入共享 L5 池（坏包 Warn 跳过）。
 - **能力下沉**：算法与策略在 `internal/cap/<feature>` 能力包；小方法在
   `internal/{scene,turn,dream,graph,plan,trajectory}`；根只留"取数 → 调
   能力 → 落库"的大方法编排，不做算法。LLM 传输策略（截断升级重试）在

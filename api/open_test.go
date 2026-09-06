@@ -20,17 +20,10 @@ func openTestConfig(dbPath string) *internal.MemHopConfig {
 	}
 }
 
-var builtinNames = []string{
-	"memhop-guide", "memhop-cycle", "memhop-profile", "memhop-scene",
-	"memhop-knowledge", "memhop-archive", "memhop-capability",
-	"memhop-trajectory", "memhop-plan",
-}
-
-// OpenMulti attaches the manuals in memory: ListCapabilities serves them
-// immediately (a single card by ID is an ID-filtered list query), close/reopen
-// stays clean, and nothing is persisted (storage-only views are verified at the
-// internal layer).
-func TestOpenAttachesBuiltins(t *testing.T) {
+// A fresh database starts with an empty L5 pool: capabilities only exist
+// when a host imports them (or plug/ packages inject at Open), and
+// close/reopen stays clean.
+func TestOpenFreshPoolEmpty(t *testing.T) {
 	cfg := openTestConfig(filepath.Join(t.TempDir(), "b.meh"))
 	m, err := OpenMulti(cfg)
 	if err != nil {
@@ -48,14 +41,8 @@ func TestOpenAttachesBuiltins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	want := len(builtinNames)
-	if len(caps) != want {
-		t.Fatalf("want %d builtin capabilities served, got %d", want, len(caps))
-	}
-	for _, c := range caps {
-		if c.Origin != CapabilityOriginBuiltin {
-			t.Fatalf("fresh DB must serve only builtins: %+v", c)
-		}
+	if len(caps) != 0 {
+		t.Fatalf("fresh DB must serve an empty pool, got %+v", caps)
 	}
 	if err := m.Close(); err != nil {
 		t.Fatalf("close: %v", err)

@@ -3,9 +3,8 @@
 - **职责**：`ReadTurn`（经域 `Traj` 索引读一轮事件，坏记录跳过）、
   `TrimByBudget`（预算内保最新，至少留一条；升级路径见函数注
   释）、`MaxEventPayload`（单事件载荷上限，裸事件与计划事件共用）/
-  `MaxCrystallizePayload`；结晶写步 `ApplyCandidate`（签名多收一个由组合根
-  注入的 `reserved func(uint64) bool` 判定内置卡名——候选名命中即记 skip；
-  卡级校验按落盘点分闸：create/merge 整卡覆写走前置 `capability.ValidateCard`，
+  `MaxCrystallizePayload`；结晶写步 `ApplyCandidate`（卡级校验按落盘点分闸：
+  create/merge 整卡覆写走前置 `capability.ValidateCard`，
   reuse 命中不落盘免校验（最小 name-only 载荷是钉死的契约），reuse 未命中
   降级 create 在 `applyCrystallized` 落库前过闸，失败经 `candidateRejected`
   折成 skip）与私有 `applyCrystallized`/`findTarget`。

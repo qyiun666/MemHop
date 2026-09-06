@@ -5,6 +5,17 @@
 // internal domain-bound session (internal.Session), so the promoted method
 // set is exactly the externally callable surface. Every call is serialized
 // per agent domain by the internal domain lock.
+//
+// The methods split by audience. The runtime/task face (22) is what the host
+// drives every turn and what LLM tools bind to: Search, Update, Dream,
+// AppendTrajectory (the host-driven loop), SceneContext, ListScenes, GetL0,
+// UpdateL0, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes, QueryL3Subgraph,
+// ListCapabilities, RecordCapabilityUsage, Crystallize, ReadTrajectory,
+// ListTrajectorySessions, SyncPlanTree, PlanCommit, PlanState. The
+// assembly/admin face (10, plus all of MultiAgentDB) is host code at session
+// boundaries and management channels only — never an LLM tool: UpdateScene,
+// MergeScenes, DeleteTopic, DeleteScene, UpdateL3, DeleteL3, DeleteL3Nodes,
+// ImportCapability, UpdateCapability, DeleteCapability.
 
 package api
 

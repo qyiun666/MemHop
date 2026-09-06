@@ -205,9 +205,6 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 	// per-record mutual exclusion, and nesting the pool lock here would
 	// serialize crystallization behind every shared-pool op.
 	existing := capability.ActiveOnly(core.CollectAllCapabilities(db.engine, core.SharedPoolAgentID))
-	// The built-in cards join the catalog: the LLM must see the names it
-	// must not mint (reserved ids are rejected on fold-back anyway).
-	existing = append(existing, db.builtinCapabilities...)
 	out, err := llmops.Crystallize(ctx, db.llm, events, existing)
 	if err != nil {
 		return nil, err
@@ -217,9 +214,8 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string) (*
 		return nil, common.NewError(common.ErrClosed, "database is closed")
 	}
 	result := &CrystallizeResult{CreatedIDs: []string{}, ReusedIDs: []string{}, MergedIDs: []string{}}
-	reserved := func(idHash uint64) bool { return db.findBuiltinCapability(idHash) }
 	for _, cand := range out.Capabilities {
-		if err := trajectory.ApplyCandidate(db.engine, core.SharedPoolAgentID, cand, result, reserved); err != nil {
+		if err := trajectory.ApplyCandidate(db.engine, core.SharedPoolAgentID, cand, result); err != nil {
 			return nil, err
 		}
 	}

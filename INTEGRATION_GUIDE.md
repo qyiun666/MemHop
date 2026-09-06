@@ -121,8 +121,7 @@ if err != nil { /* ... */ }
 db, err := dbm.Session(agentID)
 ```
 
-- `api.OpenMulti(cfg)` is the only entry point.
-- `OpenMulti` assembles the built-in capability manuals in code — nine cards covering every session method, listed by `ListCapabilities` but never stored (nothing written to `.meh`).
+- `api.OpenMulti(cfg)` is the only entry point. The L5 capability pool starts empty: cards exist only after a host imports them, and every `plug/<package>/capability.json` folder next to the `.meh` file is injected at Open.
 - Explicit flush: `db.Checkpoint()`.
 - Space reclamation: `db.CompactTo(newPath)` writes a defragmented copy of the whole file (live records only, its own rebuilt index) and never touches the open one — `newPath` must not exist yet. Deletes are tombstones, so a domain that dropped scenes or graphs only gives bytes back here; the swap (Close → rename → Open) stays yours, which is why this call is Go-side and not an MCP tool.
 
@@ -203,6 +202,11 @@ What happens *between* those two messages (tool calls, intermediate output, suba
 ---
 
 ## 8. Layer API quick reference
+
+The 32 session methods split by audience:
+
+- **Runtime/task face (22)** — the host drives these every turn and LLM tools bind to them: `Search` / `Update` / `Dream` / `AppendTrajectory` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ListCapabilities` / `RecordCapabilityUsage`, `ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`, `SyncPlanTree` / `PlanCommit` / `PlanState`.
+- **Assembly/admin face (10, plus all of `MultiAgentDB`)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3` / `DeleteL3Nodes`, `ImportCapability` / `UpdateCapability` / `DeleteCapability`.
 
 ### L0 profile
 
@@ -327,7 +331,7 @@ result is every original the file holds.
 | `db.UpdateCapability(id, CapabilityPatch{...})` | partial update (Name/Package immutable); the `Status` patch is the lifecycle switch — pass active to promote a draft |
 | `db.RecordCapabilityUsage(id, success)` | usage feedback |
 
-> One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). The built-in manuals (9 English cards: `memhop-guide` + 8 LLM-callable manuals — cycle, knowledge, scene, archive, profile, capability, trajectory, plan — covering every session method) are assembled in code at Open and served by `ListCapabilities` (never persisted to `.meh`; a write to one reports not-found; a stored same-name card shadows it, deleting it restores the manual); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `ListCapabilities(CapabilityListQuery{IDs: []string{id}})`. Also: a `plug/<package>/capability.json` folder next to the `.meh` file is auto-injected into the pool at every Open (a broken package is warned and skipped).
+> One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). The pool ships no manuals of its own: it holds only what a host imported, what crystallization drafted, and what `plug/` injected — when projecting cards into LLM tools, inject the one-line index (`id + name + summary + trigger`) first and fetch parameter details on demand via `ListCapabilities(CapabilityListQuery{IDs: []string{id}})`.
 
 ### L6 trajectory + crystallization
 
@@ -529,13 +533,12 @@ func main() {
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
    isolated per domain except the file-wide L3/L5 pools; legacy files
    (`FormatVersion < 0x000B`) cannot be opened or migrated.
-7. **The built-in manuals are not stored records**: they are listed by `ListCapabilities`, but a write to one (`UpdateCapability` / `DeleteCapability` / `RecordCapabilityUsage`) reports `ErrNotFound` like any record that is not there.
-8. **Trajectories auto-expire**: Dream drops events older than 7 days;
+7. **Trajectories auto-expire**: Dream drops events older than 7 days;
    the external surface is append + query only (`AppendTrajectory` /
    `ReadTrajectory` / `ListTrajectorySessions`) — no delete API. A turn's
    trajectory is keyed by its topic id, so append before `Update` settles the
    turn (the id is already in hand from `Search`) and never invent one.
-9. **The library owns the turn id**: `Update` accepts only an existing scene
+8. **The library owns the turn id**: `Update` accepts only an existing scene
    (`Search` → `Scene.SceneID`) and a topic id that read issued — a turn cannot
    be settled without first being opened. The library never creates a scene
    behind a settle, and Dream never merges scenes — merging is the explicit
@@ -544,7 +547,7 @@ func main() {
    Each `Search` opens exactly one turn: a host that reads a scene twice and
    settles once simply skips a turn number — gaps cost nothing, and no read
    ever reissues an id already given out.
-10. **`SceneDreamTopicThreshold` defaults to 24**: a partial `MemHopDefaults`
+9. **`SceneDreamTopicThreshold` defaults to 24**: a partial `MemHopDefaults`
     literal leaves it 0, which **disables** automatic consolidation — assign
     `*api.DefaultMemHopDefaults` first, then override. Context size stays
     bounded only because Dream compresses each scene to ≤20 topics, so

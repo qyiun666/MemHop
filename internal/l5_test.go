@@ -217,28 +217,6 @@ func TestUpdateCapability(t *testing.T) {
 	}
 }
 
-// The built-in manuals are not stored records: they show up in listings, but
-// every write path reports ErrNotFound for their ids, exactly like any record
-// that is not there.
-func TestBuiltinCardsNotStored(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	db.builtinCapabilities = BuiltinCards()
-	id := common.FormatHash(core.CapabilityID("memhop-guide"))
-
-	if _, err := db.ListCapabilities(core.DefaultAgentID, CapabilityListQuery{}); err != nil {
-		t.Fatalf("list: %v", err)
-	}
-	if _, err := db.RecordCapabilityUsage(core.DefaultAgentID, id, true); common.CodeOf(err) != common.ErrNotFound {
-		t.Fatalf("usage builtin: want ErrNotFound, got %v", err)
-	}
-	if err := db.DeleteCapability(core.DefaultAgentID, id); common.CodeOf(err) != common.ErrNotFound {
-		t.Fatalf("delete builtin: want ErrNotFound, got %v", err)
-	}
-	if _, err := db.UpdateCapability(core.DefaultAgentID, id, CapabilityPatch{}); common.CodeOf(err) != common.ErrNotFound {
-		t.Fatalf("update builtin: want ErrNotFound, got %v", err)
-	}
-}
-
 func idsOfCapabilities(caps []core.Capability) []uint64 {
 	out := make([]uint64, len(caps))
 	for i, c := range caps {

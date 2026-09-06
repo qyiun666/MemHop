@@ -108,8 +108,7 @@ if err != nil { /* 处理 ErrConfig / ErrInvalidMagic / ErrCorruption */ }
 defer dbm.Close() // 写检查点快照 + 释放 mmap/文件锁
 ```
 
-- `api.OpenMulti(cfg)`：唯一入口。
-- Open 成功即在代码里组装好内置说明书卡（9 张、覆盖全部会话方法，`ListCapabilities` 可列出但不落 `.meh`）。
+- `api.OpenMulti(cfg)`：唯一入口。L5 能力池初始为空：卡只在宿主导入后才存在，`.meh` 同目录的每个 `plug/<包>/capability.json` 在 Open 时注入。
 - 中途主动落盘：`db.Checkpoint()`。
 - 空间回收：`db.CompactTo(newPath)` 写出一份只含存活记录、自带重建索引的整理副本，**绝不碰正打开的文件**——`newPath` 必须还不存在。删除都是打墓碑，删过场景/图的域只在这里把字节还回来；换文件（Close → rename → Open）仍由宿主决定，这也是它留在 Go 侧、不做成 MCP 工具的原因（入参就是一个输出路径）。
 
@@ -190,6 +189,11 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 ---
 
 ## 8. 各层 API 速查
+
+32 个会话方法按使用者分两类：
+
+- **任务面（22 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `Update` / `Dream` / `AppendTrajectory`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`ListCapabilities` / `RecordCapabilityUsage`、`ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`、`SyncPlanTree` / `PlanCommit` / `PlanState`。
+- **组装/管理面（10 个，外加 `MultiAgentDB` 全部 8 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3` / `DeleteL3Nodes`、`ImportCapability` / `UpdateCapability` / `DeleteCapability`。
 
 ### L0 画像
 
@@ -275,7 +279,7 @@ arcs, err := db.SearchL4(api.L4Query{
 | `db.UpdateCapability(id, CapabilityPatch{...})` | 部分更新（Name/Package 不可变）；`status` 补丁是生命周期开关——传 active 即激活 draft |
 | `db.RecordCapabilityUsage(id, success)` | 使用后反馈 |
 
-> 一张卡 = 名称 + N 个功能条目（resources，无卡片级 type），每个条目自带启动方式（`type: mcp|skill|api|composite` + `ref`/`config`）/说明（`desc`）/怎么用（`input`/`output`），与宿主工具规格逐字段同构——纯字段拷贝即可投影；composite 条目的动作链放 `config` 的 `{"steps":[{"tool":"...","args":{...}}]}`（每步 `tool` 必填）。内置说明书（9 张英文卡：`memhop-guide` 总纲 + cycle/knowledge/scene/archive/profile/capability/trajectory/plan 八张说明书，覆盖全部会话方法）在 Open 时代码组装，`ListCapabilities` 直接返回（不落 `.meh`；对内置卡 id 的写报 not-found；同名字卡入库即遮蔽内置卡，删除即还原）；说明书卡 `type: "api"`、`ref: "api:MethodName"`，宿主在门面上直接调用。默认分层注入——只投影一行索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `ListCapabilities(CapabilityListQuery{IDs: []string{id}})` 获取。另：`.meh` 同目录的 `plug/<包>/capability.json` 会在每次 Open 自动注入能力池（坏包告警跳过）。
+> 一张卡 = 名称 + N 个功能条目（resources，无卡片级 type），每个条目自带启动方式（`type: mcp|skill|api|composite` + `ref`/`config`）/说明（`desc`）/怎么用（`input`/`output`），与宿主工具规格逐字段同构——纯字段拷贝即可投影；composite 条目的动作链放 `config` 的 `{"steps":[{"tool":"...","args":{...}}]}`（每步 `tool` 必填）。能力池不带任何说明书：池里只有宿主导入的、结晶产出的与 `plug/` 注入的卡——向 LLM 投影工具时先注入一行索引（`id + name + summary + trigger`），参数详情按需 `ListCapabilities(CapabilityListQuery{IDs: []string{id}})` 获取。
 
 ### L6 轨迹 + 结晶
 
@@ -431,7 +435,6 @@ func main() {
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，门面上不再有 hex ⇄ 整数转换函数。
 5. **`Search` 不写记忆内容**：它开启一个轮次（场景的命中计数与轮次计数各 +1），但不建任何话题记录——开了没沉淀的轮次不留残渣。想读原文用 `SceneContext` / `SearchL4`。重放同一个 `Update`（同 `TopicID`）是幂等的：话题就是那个 id，档案 id 由它派生，重试只会覆盖不会叠加。
 6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），除文件级 L3/L5 公共池外按域完全隔离；旧库（`FormatVersion < 0x000B`）无法打开、不做迁移。
-7. **内置说明书卡不是存储记录**：`ListCapabilities` 会列出它们，但对内置卡 id 的写（`UpdateCapability` / `DeleteCapability` / `RecordCapabilityUsage`）与任何不存在的记录一样报 `ErrNotFound`。
-8. **轨迹自动过期**：Dream 自动清理 7 天前的事件；对外只有追加与查询（`AppendTrajectory` / `ReadTrajectory` / `ListTrajectorySessions`），无删除接口。一轮的轨迹按该轮话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
-9. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
-10. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `*api.DefaultMemHopDefaults` 再覆盖。上下文规模由 Dream 保证有界（压缩后每场景 ≤20），禁用自动巩固就等于让注入无界增长。
+7. **轨迹自动过期**：Dream 自动清理 7 天前的事件；对外只有追加与查询（`AppendTrajectory` / `ReadTrajectory` / `ListTrajectorySessions`），无删除接口。一轮的轨迹按该轮话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
+8. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
+9. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `*api.DefaultMemHopDefaults` 再覆盖。上下文规模由 Dream 保证有界（压缩后每场景 ≤20），禁用自动巩固就等于让注入无界增长。

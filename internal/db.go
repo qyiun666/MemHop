@@ -20,16 +20,12 @@ import (
 
 // DB is the multi-agent database instance returned by Open. Business state
 // (L2Meta cache, Dream bookkeeping, locks) lives in one domain.Context per
-// agent; llm/builtinCapabilities are stateless or connection-level and stay
-// shared at the DB level.
+// agent; the llm provider is connection-level and stays shared at the DB
+// level.
 type DB struct {
 	engine *core.StorageEngine
 	config *MemHopConfig
 	llm    *llm.Provider
-	// builtinCapabilities are read-only reference capabilities attached to
-	// L5 query responses; they are never written to the file. Set once via
-	// SetBuiltinCapabilities before the DB is published.
-	builtinCapabilities []core.Capability
 
 	closed atomic.Bool
 

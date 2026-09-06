@@ -51,26 +51,32 @@ func diffNames(want, got []string) (missing, extra []string) {
 
 func TestSessionPublicSurface(t *testing.T) {
 	want := []string{
-		// scene read / turn write
-		"Search", "Update",
+		// runtime/task face — the host drives these every turn and LLM tools
+		// bind to them
+		// core cycle (host-driven)
+		"Search", "Update", "Dream", "AppendTrajectory",
 		// L0 profile
 		"GetL0", "UpdateL0",
-		// L2 scenes and topics
-		"ListScenes", "UpdateScene", "SceneContext", "MergeScenes",
-		"DeleteScene", "DeleteTopic",
-		// L3 hypergraphs
-		"GetL3", "ListL3", "ImportL3", "UpdateL3", "DeleteL3",
-		"DeleteL3Nodes", "QueryL3Nodes", "QueryL3Subgraph",
+		// L2 scene reads
+		"ListScenes", "SceneContext",
+		// L3 knowledge
+		"GetL3", "ListL3", "ImportL3", "QueryL3Nodes", "QueryL3Subgraph",
 		// L4 archives
 		"SearchL4",
 		// L5 capabilities
-		"ImportCapability", "UpdateCapability", "DeleteCapability",
 		"ListCapabilities", "RecordCapabilityUsage",
 		// L6 trajectory and plans
-		"ReadTrajectory", "AppendTrajectory", "ListTrajectorySessions", "Crystallize",
-		"PlanCommit", "PlanState", "SyncPlanTree",
-		// consolidation
-		"Dream",
+		"ReadTrajectory", "ListTrajectorySessions", "Crystallize",
+		"SyncPlanTree", "PlanCommit", "PlanState",
+
+		// assembly/admin face — host code at session boundaries and management
+		// channels only, never an LLM tool
+		// L2 scene management and corrections
+		"UpdateScene", "MergeScenes", "DeleteScene", "DeleteTopic",
+		// L3 management and corrections
+		"UpdateL3", "DeleteL3", "DeleteL3Nodes",
+		// L5 package lifecycle
+		"ImportCapability", "UpdateCapability", "DeleteCapability",
 	}
 	sort.Strings(want)
 
@@ -81,6 +87,8 @@ func TestSessionPublicSurface(t *testing.T) {
 }
 
 func TestMultiAgentDBPublicSurface(t *testing.T) {
+	// The whole DB handle is the assembly/lifecycle face: host code sets up
+	// and tears down domains, no LLM tool binds here.
 	want := []string{
 		"CreateAgent", "ListAgents", "DeleteAgent", "Session",
 		"Checkpoint", "CompactTo", "Close", "IsClosed",

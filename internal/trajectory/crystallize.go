@@ -27,21 +27,13 @@ func (e candidateRejected) Error() string { return e.reason }
 // a reuse that hits its target writes nothing and is accepted as-is (the
 // prompt may emit a minimal name-only payload), while a reuse that misses
 // degrades into a create and is gated inside applyCrystallized instead.
-// reserved reports whether a name-derived capability id belongs to the
-// read-only built-in toolbox; a candidate naming such a card is recorded
-// as skipped — a stored shadow of a built-in card could never be updated
-// or deleted again.
-func ApplyCandidate(engine *core.StorageEngine, agentID uint64, cand llmops.CrystallizeCapability, result *core.CrystallizeResult, reserved func(uint64) bool) error {
+func ApplyCandidate(engine *core.StorageEngine, agentID uint64, cand llmops.CrystallizeCapability, result *core.CrystallizeResult) error {
 	detail := core.CrystallizeDetail{Name: cand.Capability.Name}
 	recordSkip := func(reason string) {
 		detail.Action = "skip"
 		detail.Reason = reason
 		result.Errors = append(result.Errors, detail.Name+": "+reason)
 		result.Details = append(result.Details, detail)
-	}
-	if reserved(core.CapabilityID(cand.Capability.Name)) {
-		recordSkip("capability name is reserved by a built-in card")
-		return nil
 	}
 	action := strings.ToLower(strings.TrimSpace(cand.Action))
 	if action != "reuse" {
