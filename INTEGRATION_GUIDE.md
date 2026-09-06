@@ -358,7 +358,7 @@ res, err := db.Crystallize(ctx, turnIDHex, existingCards)
 // existingCards []api.CapabilityImport — the host's current catalog, read
 // from its own directory (empty on first run).
 // res.Capabilities — []CrystallizeCapability: {Action: "create|reuse|merge",
-// ReuseID (the existing card's NAME, not a hex id), Reason} + the card
+// ReuseID (the existing card's NAME, not a hex id)} + the card
 // payload. The engine writes nothing: validate, dedupe against your
 // directory and persist drafts (e.g. plug/draft/) yourself — a file
 // promotion activates.
@@ -520,8 +520,9 @@ func main() {
 2. **No embedding service, no dimension to declare**: the two header bytes at
    offset 6 are reserved. The format version is `0x000C`: the L3 knowledge
    graph lives in the reserved shared domain (`core.SharedPoolAgentID`); no
-   migration runs — files older than `0x000C` (capability records died with
-   `0x000B`) are rejected at Open.
+   migration runs — files older than `0x000C` are rejected at Open (the
+   capability record layer was removed by this bump, so a `0x000B` file
+   still carries `0x0F` records).
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`; the agent timestamp
    must not precede the user timestamp.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids

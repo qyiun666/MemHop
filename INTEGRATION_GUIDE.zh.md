@@ -301,7 +301,7 @@ res, err := db.Crystallize(ctx, turnIDHex, existingCards)
 // existingCards []api.CapabilityImport —— 宿主当前卡目录，从自己的能力
 // 目录读出（首次运行为空）。
 // res.Capabilities —— []CrystallizeCapability：{Action: "create|reuse|merge",
-// ReuseID（已有卡的名称，不是 16-hex id），Reason} + 卡载荷。
+// ReuseID（已有卡的名称，不是 16-hex id）} + 卡载荷。
 // 引擎不落盘：校验、对照目录去重、把草稿写进（如）plug/draft/ 全归宿主
 // ——文件转正即激活。
 
@@ -432,7 +432,7 @@ func main() {
 ## 12. 陷阱清单
 
 1. **LLM 只影响写路径**：`Search` 零 LLM，读永不被 LLM 拖垮；`Update` 每轮一次提炼，失败即报错且零写入（不会留半轮记忆）。宿主需为沉淀失败做好重试——重试同一个 `TopicID` 是安全的。
-2. **没有 embedding 服务，也没有维度要声明**：文件头偏移 6 的两字节是保留位。格式版本为 `0x000C`：L3 知识图驻留保留共享域（`core.SharedPoolAgentID`），不跑迁移——`0x000C` 之前的文件在 Open 时被拒绝（能力记录随 `0x000B` 一并退役）。
+2. **没有 embedding 服务，也没有维度要声明**：文件头偏移 6 的两字节是保留位。格式版本为 `0x000C`：L3 知识图驻留保留共享域（`core.SharedPoolAgentID`），不跑迁移——`0x000C` 之前的文件在 Open 时被拒绝（能力记录层随 `0x000C` 退役，`0x000B` 文件仍含 0x0F 记录）。
 3. **时间戳用 Unix 毫秒**，`<=0` 报 `ErrInvalidQuery`。
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，门面上不再有 hex ⇄ 整数转换函数。
 5. **`Search` 不写记忆内容**：它开启一个轮次（场景的命中计数与轮次计数各 +1），但不建任何话题记录——开了没沉淀的轮次不留残渣。想读原文用 `SceneContext` / `SearchL4`。重放同一个 `Update`（同 `TopicID`）是幂等的：话题就是那个 id，档案 id 由它派生，重试只会覆盖不会叠加。

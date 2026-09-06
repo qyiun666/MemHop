@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// llm_crystallize.go: L6→L5 capability crystallization call point — the
+// crystallize.go: L6→L5 capability crystallization call point — the
 // LLM extracts reusable capability cards from an operation trajectory and
 // compares them against the existing catalog (create / reuse / merge).
 

@@ -52,7 +52,7 @@ func (db *DB) IsClosed() bool { return db.closed.Load() }
 // access, and opportunistically sweeps idle domains. Non-default IDs must
 // be registered tenants: a stale handle to a deleted agent never revives
 // its domain. The reserved shared-pool domain is exempt from the registry
-// check: it has no tenant record and is created on first L3/L5 access.
+// check: it has no tenant record and is created on first L3 access.
 func (db *DB) contextFor(agentID uint64) (*domain.Context, error) {
 	if db.closed.Load() {
 		return nil, common.NewError(common.ErrClosed, "database is closed")
@@ -119,10 +119,10 @@ func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, ui
 	return ac, parsed, nil
 }
 
-// lockSharedPool is the prologue of every L3/L5 operation: the caller's own
+// lockSharedPool is the prologue of every L3 operation: the caller's own
 // domain must still be alive (a stale handle to a deleted agent must not
 // keep using the shared pool), then the shared pool domain is locked. The
-// L3 and L5 records live in the file-wide shared domain, so shared-pool
+// L3 records live in the file-wide shared domain, so shared-pool
 // operations from different agents serialize on its lock. The shared domain
 // is never deleted, so no tombstone re-check is needed. The caller check is
 // point-in-time: a caller deleted mid-operation lets the call run to
@@ -221,7 +221,7 @@ func (db *DB) Checkpoint() error {
 
 // CompactTo writes a defragmented copy of the database at newPath: only live
 // records, in one fresh log, with that copy's own rebuilt index. Deletes are
-// tombstones — removing a scene, a graph or a capability frees no bytes until a
+// tombstones — removing a scene or a graph frees no bytes until a
 // compaction rewrites the log — so this is the space-reclamation entry the
 // lifecycle surface otherwise lacks.
 //
