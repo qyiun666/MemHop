@@ -17,7 +17,7 @@ import (
 // both malformed payloads are recorded as a skip. A reuse that hits its
 // target writes nothing and needs no validation — pinned separately by
 // TestCrystallizeReuseMinimalPayload.
-func TestApplyCandidateValidatesEveryAction(t *testing.T) {
+func TestApplyCandidateValidationGating(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "t.meh"))
 	if err != nil {
 		t.Fatalf("create engine: %v", err)
