@@ -3,7 +3,7 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
-## Unreleased
+## v1.6.0 — 2026-09-04 — 接口去 fallback、按层闭环修复与文件级 L3/L5 公共池（实测驱动）
 
 ### L5 统一卡 + 能力池公共化 + plug/ 自动注入
 
@@ -27,7 +27,7 @@ README 的版本表与 git log。
 - **MCP 语义变更**：单文件多租户下所有租户共享同一份 L3 池——原「no data is ever shared across tenants」承诺改写为「除 L3 外按域隔离」
 - 公开面不变（34 会话 + 8 DB 方法）；新增跨域共享/删档存活/保留域守卫/跨域清锚/重启回归/并发竞速六组测试（`internal/l3shared_test.go`），api 租户隔离用例补 L3 共享断言；决策档案 `notes/implemented/architecture/2026-09-05-l3-file-wide-shared-pool.md`
 
-## v1.6.0 — 2026-09-04 — 接口去 fallback 与按层闭环修复（实测驱动）
+### 接口去 fallback 与按层闭环修复
 
 按层审查公开面（用 `ImportL3` 把本仓 24 个包 / 78 条依赖边真实导进 L3 超级图，79 条断言逐条实测），据结果修如下一轮；本轮的共同原则是**接口不允许任何 fallback：有问题就返回 error，被拒的写入一字节都不留**。
 

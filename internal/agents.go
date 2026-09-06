@@ -6,8 +6,9 @@
 // name -> ID mapping survives restarts without stateless hashing; ListAgents
 // enumerates registered agents; DeleteAgent destroys the domain context and
 // tombstones every record of the domain. Two reserved domains are never
-// handed out: the default domain and the file-wide shared L3 domain
-// (core.SharedPoolAgentID).
+// handed out: the default domain and the file-wide shared pool domain
+// (core.SharedPoolAgentID, carrying the L3 knowledge graph and the L5
+// capability pool).
 
 package internal
 
@@ -132,7 +133,7 @@ func (db *DB) DeleteAgent(agentID uint64) error {
 		return common.NewError(common.ErrInvalidQuery, "the default domain cannot be deleted")
 	}
 	if agentID == core.SharedPoolAgentID {
-		return common.NewError(common.ErrInvalidQuery, "the shared L3 domain cannot be deleted")
+		return common.NewError(common.ErrInvalidQuery, "the shared pool domain cannot be deleted")
 	}
 	if db.closed.Load() {
 		return common.NewError(common.ErrClosed, "database is closed")

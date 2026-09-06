@@ -48,8 +48,7 @@ const DefaultAgentID uint64 = 0
 // record pools: the L3 knowledge graph and the L5 capability cards. One file
 // hosts a single pool of each that every agent domain reads and writes. It is
 // never handed out as a tenant, never listed, and cannot be deleted or bound
-// to a Session. (Held the L3 pool alone as SharedL3AgentID before 0x000B; the
-// underlying domain value is unchanged.)
+// to a Session.
 const SharedPoolAgentID uint64 = 0x4C33000000000000 // ASCII "L3"
 
 func EncodeRecord(agentID uint64, recordType, flags uint8, idHash uint64, data []byte) []byte {

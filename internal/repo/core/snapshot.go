@@ -14,16 +14,14 @@ import (
 const SnapshotMagic uint32 = 0x534E4150
 
 // SnapshotVersion 0x02 serializes the record index plus one opaque blob per
-// agent domain. Since v1.5.0 the business layer writes that section empty —
-// the topic index it used to carry went with the retrieval subsystem — but
-// the layout is unchanged, so 0x02 files keep opening without a format bump.
-// 0x01 (single flat index + sparse/L3 blobs) is rejected together with
-// pre-0x0008 files.
+// agent domain; the business layer writes that section empty and the engine
+// round-trips it unchanged. 0x01 (single flat index + sparse/L3 blobs) is
+// rejected together with pre-0x0008 files.
 const SnapshotVersion uint8 = 0x02
 
 // IndexSnapshotData carries the per-agent opaque snapshot sections. The
-// engine round-trips them at Checkpoint/Close and Open; since v1.5.0 the
-// business layer has nothing to put in them and passes an empty map.
+// engine round-trips them at Checkpoint/Close and Open; the business layer
+// has nothing to put in them and passes an empty map.
 type IndexSnapshotData struct {
 	BlobByAgent map[uint64][]byte // agentID → opaque section bytes
 }

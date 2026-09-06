@@ -12,10 +12,10 @@
 host process
  ├─ go.mod: require github.com/qyiun666/MemHop (or go.work replace → local checkout)
  ├─ import only github.com/qyiun666/MemHop/api (never internal/)
- ├─ one .meh file = many agent domains (isolated except the file-wide L3 pool), addressed by Session(hexID)
+ ├─ one .meh file = many agent domains (isolated except the file-wide L3/L5 pools), addressed by Session(hexID)
  └─ external services:
       └─ ONE OpenAI-compatible LLM (turn distillation / Dream consolidation / Crystallize)
-      └─ no embedding / vector service (retired in v1.5.0)
+      └─ no embedding / vector service
 ```
 
 ### Hard contracts
@@ -71,7 +71,7 @@ re-exported from `api` as type aliases (see §9). No other import required.
 | **LLM** | LlmConfig | see below. |
 | Defaults | MemHopDefaults | Engine tuning; recommended `*api.DefaultMemHopDefaults` with selective overrides. |
 
-### `LlmConfig` (exported since v1.2.7 — build it by literal)
+### `LlmConfig` (build it by literal)
 
 | Field | Required | Meaning |
 |---|---|---|
@@ -81,7 +81,7 @@ re-exported from `api` as type aliases (see §9). No other import required.
 | TimeoutSecs | — | LLM call timeout. |
 | MaxOutputTokens | — | Max output tokens. |
 
-### `MemHopDefaults` — common overrides (also exported since v1.2.7)
+### `MemHopDefaults` — common overrides
 
 `MemHopDefaults` exposes exactly three business knobs. Everything else
 (consolidation prompt limits, decay lambdas, L1 edge thresholds) is
@@ -196,9 +196,9 @@ Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / 
 
 A turn is one user message plus one agent reply, and it is exactly one topic. `Update` stores both originals as L4 archives, so a turn's raw text stays recoverable through its `L4Refs` — nothing else is written there.
 
-What happens *between* those two messages (tool calls, intermediate output, subagent results) is execution detail rather than conversation, and it belongs to the turn's L6 trajectory: append it under the same topic id with `AppendTrajectory(topicID, …)` (see §8 L6). That is where the retired N:N path now goes.
+What happens *between* those two messages (tool calls, intermediate output, subagent results) is execution detail rather than conversation, and it belongs to the turn's L6 trajectory: append it under the same topic id with `AppendTrajectory(topicID, …)` (see §8 L6).
 
-**Retired in v1.5.0:** `AppendL4Message` (append extra messages to a settled topic) and `RefineTopicKeywords` (re-distill that topic from all of them). They made the number of distillations per turn a host decision; one turn now costs exactly one LLM call, and its keyword track never goes stale relative to its own originals. L4 content types (`text`/`image`/`video`/`document`/`audio`/`code`/`other`) are declared on the write side by `Update`'s `user_type`/`agent_type` and reported back verbatim on the read side (`L4Query.Type` filter, `ArchiveSlot.ContentType`, `SceneContext`'s `Messages[].Type`); an undefined value is rejected with `ErrInvalidQuery` rather than stored. Dream's fused summary is the one archive whose type is fixed — `text`.
+**No N:N append surface:** there is no `AppendL4Message` / `RefineTopicKeywords` — one turn costs exactly one LLM call, and its keyword track never goes stale relative to its own originals. L4 content types (`text`/`image`/`video`/`document`/`audio`/`code`/`other`) are declared on the write side by `Update`'s `user_type`/`agent_type` and reported back verbatim on the read side (`L4Query.Type` filter, `ArchiveSlot.ContentType`, `SceneContext`'s `Messages[].Type`); an undefined value is rejected with `ErrInvalidQuery` rather than stored. Dream's fused summary is the one archive whose type is fixed — `text`.
 
 ---
 
@@ -263,14 +263,12 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 `Related` targets resolve by title within the same graph and may appear later
 in the batch (two-phase import). A hyperedge is identified by its member nodes
 **plus its kind**, so one node pair can hold `related` and `part_of` at the same
-time, and re-importing a batch does not duplicate edges (edges stored before the
-kind joined the id are recognised by the same semantic key). Unresolvable / self
-/ invalid-kind entries land in `Errors`.
+time, and re-importing a batch does not duplicate edges (deduped on sorted
+members + kind). Unresolvable / self / invalid-kind entries land in `Errors`.
 
 `GraphIDs` is what closes the loop: a graph id is `hash(Domain)` and no other
-public call renders that derivation, so without it a host could only find its
-imported graph again by listing the domain and matching names — and
-`SearchQuery.L3ID` / `UpdateScene` need the id.
+public call renders that derivation, so `ImportL3` reports it directly —
+`SearchQuery.L3ID` / `UpdateScene` need that id.
 
 `GetL3 / ListL3 / QueryL3Nodes / QueryL3Subgraph / UpdateL3 / DeleteL3 /`
 `DeleteL3Nodes`.
@@ -332,7 +330,7 @@ result is every original the file holds.
 
 > One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). The built-in toolbox (6 English cards: `memhop-guide` + 5 LLM-callable manuals) is mounted at Open and served by `ListCapabilities` (read-only, never persisted to `.meh`); manual cards use `type: "api"` with `ref: "api:MethodName"` — call them directly on the api facade. Inject only the one-line index (`id + name + summary + trigger`) plus the guide, and fetch parameter details on demand via `ListCapabilities(CapabilityListQuery{IDs: []string{id}})`. Also: a `plug/<package>/capability.json` folder next to the `.meh` file is auto-injected into the pool at every Open (a broken package is warned and skipped).
 
-### L6 trajectory + crystallization (v1.2.7 additions)
+### L6 trajectory + crystallization
 
 ```go
 // One trajectory per agent turn: the key is the NewTopicID Search returned
@@ -397,13 +395,13 @@ entry rejects it.
 
 ---
 
-## 9. Exported types (v1.7.0)
+## 9. Exported types (v1.6.0)
 
 | Kind | Names | Use |
 |---|---|---|
 | config | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the whole assembly surface |
 | input aliases | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `CapabilityPackageDoc` / `CapabilityImportResult` | inputs & id-free results (all string IDs are hex) |
-| response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | every ID field is a 16-hex string (v1.4.1) |
+| response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | every ID field is a 16-hex string |
 | id surface | **`DefaultAgentID`** (the implicit domain) / **`NewPlanID(name)`** (mint a plan id) | the library issues ids; a host echoes them back and converts nothing |
 | enums | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` / `PlanStatus` | enum aliases |
 
@@ -431,12 +429,11 @@ if api.CodeOf(err) == api.ErrNotFound { ... }
 Codes: `ErrConfig`, `ErrInvalidQuery`, `ErrNotFound`,
 `ErrIO`, `ErrClosed`, `ErrInvalidMagic`, `ErrCRCMismatch`, `ErrCorruption`,
 `ErrSerialization`, `ErrDeserialization`, `ErrLLM`, `ErrAgentNotFound` (agentID not registered or deleted).
-Numbers are never reused: `1002` (vector-dimension mismatch) and `9001`
-(encoder) were retired with the retrieval subsystem.
+Numbers are never reused: `1002` and `9001` are retired and will not be reissued.
 
 ---
 
-## 11. Minimal runnable skeleton (v1.6.0 signatures)
+## 11. Minimal runnable skeleton
 
 ```go
 package main
@@ -515,10 +512,10 @@ func main() {
    failure, returns an error having written nothing — no half-recorded turn.
    Hosts should retry a failed settle.
 2. **No embedding service, no dimension to declare**: the two header bytes at
-   offset 6 held the vector dimension until v1.5.0 and are now reserved — files
-   written by v1.4.x open unchanged. The format version is still `0x0009`: the
-   single keyword track is folded in at decode time, so no migration runs and
-   none is needed. Headers older than `0x0009` remain rejected.
+   offset 6 are reserved. The format version is `0x000B`: the L3 knowledge
+   graph and the L5 capability pool live in the reserved shared domain
+   (`core.SharedPoolAgentID`), no migration runs — files older than `0x000B`
+   are rejected at Open.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`; the agent timestamp
    must not precede the user timestamp.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
@@ -530,10 +527,10 @@ func main() {
    Replaying an `Update` with the same `TopicID` is idempotent: the topic is
    that id and its archives hash from it, so a retried settle overwrites
    instead of duplicating.
-6. **One file, many agent domains**: since v1.4 all tenants live inside one
+6. **One file, many agent domains**: all tenants live inside one
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
-   isolated per domain; legacy files (`FormatVersion < 0x0009`) cannot be
-   opened or migrated.
+   isolated per domain except the file-wide L3/L5 pools; legacy files
+   (`FormatVersion < 0x000B`) cannot be opened or migrated.
 7. **Built-in capability cards are read-only**: `UpdateCapability` rejects them.
 8. **Trajectories auto-expire**: Dream drops events older than 7 days;
    the external surface is append + query only (`AppendTrajectory` /

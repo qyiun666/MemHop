@@ -46,10 +46,10 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    L6 轨迹族统一走 `db.lockSession(agentID, turnID)`（lockAgent + hex 解析，
    解析失败先解锁）：裸事件的键就是该轮话题 ID（`AppendTrajectory` 顺手把
    `TopicID` 写成同一个值），计划绑定事件的键是计划 ID。门面侧的会话准入
-   策略在 `CheckSession`。L3 八个方法是唯一例外：走
+   策略在 `CheckSession`。L3 八个方法与 L5 六个方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
-   保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent 全局
-   串行；公共域无墓碑、免空闲回收）。锚点校验（`scene.Create`/
+   保留公共域 `core.SharedPoolAgentID`（L3 与 L5 记录全部住该域，跨 agent
+   全局串行；公共域无墓碑、免空闲回收）。锚点校验（`scene.Create`/
    `ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级
    互斥兜底。
 2. **缓存刷新序**：写记录帧后紧跟 `ac.SyncL2Meta`（**存储 -> l2meta**）。
@@ -117,7 +117,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
   `profile.MergeDistill` 都按这条判定，误判会让活节点退回 pending 或画像
   被空值覆盖）。
 
-## 读写路径契约（v1.5.0）
+## 读写路径契约
 
 1. **一次 `Search` = 读场景 + 开一轮**：`scene_id` 为空 → `scene.FreshID`
    铸一个未被占用的 ID（`0` 跳过；只有 `ErrNotFound` 才算可用，其他读错误
@@ -165,11 +165,11 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    调用方传值；api 侧的入站映射也不搬运这三项。`MergeDistill` 是反过来只写
    蒸馏项。
 9. **L3 的 id 与边身份**：`core.readJSON` 校验帧内记录类型，种类不符即
-   `ErrNotFound`（`UpdateL3(节点 id)` 曾把节点记录改写成图槽）；`CreateEdgeL3`
-   的 id 含 kind，导入按「排序成员 + kind」的语义键去重，故同一对节点可并存
-   多种关系，且对旧边的 pair-only 哈希同样幂等。`ImportL3` 结果带 `GraphIDs`
+   `ErrNotFound`（否则 `UpdateL3(节点 id)` 会把节点记录改写成图槽）；
+   `CreateEdgeL3` 的 id 含 kind，导入按「排序成员 + kind」的语义键去重，
+   故同一对节点可并存多种关系。`ImportL3` 结果带 `GraphIDs`
    （图 id = `hash(Domain)`，没有别的公开调用能渲染它）；`DeleteL3Nodes`
-   做节点级删除并级联其超边。全部 L3 记录住保留公共域
+   做节点级删除并级联其超边。全部 L3 与 L5 记录住保留公共域
    `core.SharedPoolAgentID`（文件级公共池：`contextFor`/空闲回收/租户注册表
    三处豁免，`CreateAgent` 拒撞、`DeleteAgent` 拒删、`Session` 拒绑）。
    `DeleteL3` 两阶段：公共锁内删图，释放后遍历「默认域 + 注册表」逐域
@@ -207,7 +207,6 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 `internal/repo/agent.md` 中受影响的条目；在小方法包里改动契约时，同步该包
 自己的 `agent.md`。
 
-<!-- 2026-09-04 接口去 fallback 与按层闭环修复 -->
-- `Open` 不再初始化分词器：关键词提炼的启发式兜底已删除（不可解析即 `ErrLLM`），`index.Tokenize` 失去唯一生产读者，`index/tokenizer.go`、`internal/tuning.go`、`common.TruncateUTF8` 随之下线，直接依赖 5 → 4。
-- `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），拒批即一字节不写；`result.Errors` 从此只表示单条存储失败。
-- 宿主面测试补到 34 个会话方法 + 8 个 `MultiAgentDB` 方法全覆盖，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 计划树三形态 + 轨迹双键）、`api_interface_capability_test.go`（L5 生命周期/重导入/内建只读/重启）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id——`api_interface_l5l6_test.go` 里手打的轮键已换掉。
+- 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（`Update` 那一轮不写），`internal` 根不初始化任何分词器。
+- `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），拒批即一字节不写；`result.Errors` 只表示单条存储失败。
+- 宿主面测试覆盖 34 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 计划树三形态 + 轨迹双键）、`api_interface_capability_test.go`（L5 生命周期/重导入/内建只读/重启）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

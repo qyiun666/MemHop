@@ -29,8 +29,8 @@ func (db *DB) GetL3(agentID uint64, id string) (*L3Graph, error) {
 	return db.getL3Graph(id)
 }
 
-// getL3Graph is the lock-free impl shared by GetL3 and UpdateL3 (shared-L3
-// domain lock held by the caller).
+// getL3Graph is the lock-free impl shared by GetL3 and UpdateL3 (shared
+// pool domain lock held by the caller).
 func (db *DB) getL3Graph(id string) (*L3Graph, error) {
 	graphHash, err := common.ParseID(id)
 	if err != nil {

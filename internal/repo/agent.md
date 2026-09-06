@@ -16,13 +16,13 @@
   `engine_recovery.go`（扫描/撕裂尾帧截断/索引重建）；数据模型分
   `model.go`（Slot 结构）/ `model_enums.go`（枚举）。
 - `index/`：索引——L2Meta（场景读回的唯一话题缓存，`rebuild.go` 全量重建）/
-  `traj.go`（L6 轮轨迹形状）/ `tokenizer.go`（gse 分词，唯一读者是 llmops 的关键词兜底）。
-  只依赖 `core`。检索退役后 BM25 / 实体模糊 / L3 图索引三块已作为死码删除。
+  `traj.go`（L6 轮轨迹形状）。
+  只依赖 `core`。
 - 根目录 `l0layer.go` ~ `l6layer.go`、`agentlayer.go`：各层记录读写原语，
   一层一个文件组（单文件超 400 行时按功能拆分，命名
   `<layer>layer_<aspect>.go`：`l1layer_sync.go`、`l2layer_topic.go`），
-  所有函数以 `agentID` 为域参数。自 0x000A 起存在一个保留域
-  `core.SharedPoolAgentID`（文件级公共 L3 池）：本层原语对它和普通域无差别
+  所有函数以 `agentID` 为域参数。存在一个保留域
+  `core.SharedPoolAgentID`（文件级公共池：L3 知识图 + L5 能力卡）：本层原语对它和普通域无差别
   （`agentID` 只是参数），路由与守卫都在 `internal` 根。L1 建边/遗忘算法已上提至
   `internal/cap/engram`（ DecayNetwork/RebuildFromL2/BuildHyperedges）、
   L0 画像生成/蒸馏合并至 `internal/cap/profile`、L3 匹配与节点合并至
@@ -35,24 +35,19 @@
    不属于本层，禁止引入。同名记录在不同域内互不可见是正确行为。
 2. **无业务语义**：本层不做业务判断（何时压缩、何时结晶、容量策略等一律
    由 `internal` 业务层决定），不调用 LLM。
-3. **原语必须有活调用方**：本层导出函数不得为"将来可能用到"预留
-   （检索退役后残留的 `UpdateChildrenL2`、`RecoverDeletedScenesL2` +
-   `ScanDeletedPayloads` 恢复链、`AgentRecordCount`、
-   `CapabilityIDsFromNames`、`SetToSlice`、`index.TokenizeWords`（实体索引
-   专用的免停用词分词，删后 `runPipeline`/`processSegments` 的 `filterStop`
-   参数一并消失）已一律删除）；模式类参数必须
+3. **原语必须有活调用方**：本层导出函数不得为"将来可能用到"预留；
+   模式类参数必须
    具名或结构化——L4 查询收为 `ArchiveQuery`（填了的字段之间 AND，含
    `Limit` 保最新 N 条；`Keyword` 两边 lowercase，与 L3 节点过滤一致），
    L2 批量删除用 `DeleteScenesL2` / `DeleteTopicsL2`，不再往调用点传裸
    `1/2/3`。
 3.1 **一个 id 只对应一种记录**：`core` 的 typed reader 一律带期望的
    `Rec*`（`readJSON` 比对帧内类型，不符即 `ErrNotFound`）。丢掉这个校验
-   曾让 `UpdateL3(节点 id)` 读到"空名图槽"再把节点记录改写成图槽。
+   会让 `UpdateL3(节点 id)` 读到"空名图槽"再把节点记录改写成图槽。
 3.2 **L3 超边身份 = 排序成员 + kind**：`CreateEdgeL3` 的 id 含 kind，
-   `EdgeKeyL3` 是同一身份的语义键，导入侧按它去重（旧文件的 pair-only
-   哈希边因此不会重复建边）。记录里的 `Importance`/`Weight`/`Label` 与
-   `ArchiveSlot.Metadata` 无写入路径，故意不进公开 DTO，字段留在记录里
-   只为解旧文件。
+   `EdgeKeyL3` 是同一身份的语义键，导入侧按它去重。记录里的
+   `Importance`/`Weight`/`Label` 与 `ArchiveSlot.Metadata` 无写入路径，
+   故意不进公开 DTO。
 4. **实现不外露**：记录帧布局、快照格式、回收/压缩细节只在 `core` 内部
    流转；`internal` 业务层只能经本目录导出的函数访问数据，不得直接解析
    帧或操作 `StorageEngine` 未导出的状态。

@@ -37,7 +37,7 @@
 
 ## 编写宿主自己的能力
 
-宿主自己的能力走 `ImportCapability(path)` 入库（v4 包文档：单文件，或含 `capability.json` 的目录；一个包 = 名称 + 1..N 张卡），卡导入即 `active` 且进**文件级公共池**（一个 `.meh` 里所有 agent 共用，MCP 多租户同理）；引擎不再拿它做任何匹配或打分（v1.5.0 起 `Search` 只读场景并开启一轮），消费方是宿主自己——经 `ListCapabilities` 读目录（可按 id 收窄到单卡），或像 MeowAgent 那样把 active 卡转成工具。内容未变（FileHash 相同）的重复导入会跳过，不产生新记录；`<meh 同目录>/plug/<包>/capability.json` 的插件包在每次 Open 时自动注入（坏包告警跳过，不阻断 Open）。
+宿主自己的能力走 `ImportCapability(path)` 入库（v4 包文档：单文件，或含 `capability.json` 的目录；一个包 = 名称 + 1..N 张卡），卡导入即 `active` 且进**文件级公共池**（一个 `.meh` 里所有 agent 共用，MCP 多租户同理）；引擎不拿它做任何匹配或打分（`Search` 只读场景并开启一轮），消费方是宿主自己——经 `ListCapabilities` 读目录（可按 id 收窄到单卡），或像 MeowAgent 那样把 active 卡转成工具。内容未变（FileHash 相同）的重复导入会跳过，不产生新记录；`<meh 同目录>/plug/<包>/capability.json` 的插件包在每次 Open 时自动注入（坏包告警跳过，不阻断 Open）。
 
 **资源即工具声明**：一张卡 = 名称 + N 个功能条目（resources，无卡片级 type），每个条目的 `name/desc/input/output` 与宿主工具规格（如 meowire `ToolSpec`）字段完全同构——宿主投影为自身工具时只需纯字段拷贝，零格式转换；`input` 为参数 JSON Schema 字符串，`ref` 为资源定位（MCP server 地址 / skill 路径 / api:Method / 命令），`config` 为连接配置；`type=composite` 的条目在 `config` 放动作链。
 

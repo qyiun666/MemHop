@@ -11,10 +11,10 @@
 宿主进程
  ├─ go.mod: require github.com/qyiun666/MemHop（或 go.work replace → 本地 checkout）
  ├─ 只 import github.com/qyiun666/MemHop/api（禁止碰 internal/）
- ├─ 一个 .meh 文件 = 多个 agent 域（除文件级 L3 公共池外相互隔离），调用一律经 Session(hexID) 定域
+ ├─ 一个 .meh 文件 = 多个 agent 域（除文件级 L3/L5 公共池外相互隔离），调用一律经 Session(hexID) 定域
  └─ 外部服务依赖：
       └─ 只有一个 OpenAI 兼容 LLM（轮次提炼 / Dream 巩固 / Crystallize）
-      └─ 无 embedding / 向量服务（v1.5.0 起随检索子系统一并退役）
+      └─ 无 embedding / 向量服务
 ```
 
 ### 硬性契约（宿主必须遵守）
@@ -66,7 +66,7 @@ import "github.com/qyiun666/MemHop/api"
 | **LLM** | LlmConfig | 见下 |
 | Defaults | MemHopDefaults | 引擎调优参数，推荐 `*api.DefaultMemHopDefaults` 后按需覆盖 |
 
-### `LlmConfig`（v1.2.7 起导出，可字面量构造）
+### `LlmConfig`（可字面量构造）
 
 | 字段 | 必填 | 内容 |
 |---|---|---|
@@ -76,7 +76,7 @@ import "github.com/qyiun666/MemHop/api"
 | TimeoutSecs | 否 | LLM 调用超时秒数 |
 | MaxOutputTokens | 否 | 最大输出 token 数 |
 
-### `MemHopDefaults` 常用覆盖项（v1.2.7 起导出）
+### `MemHopDefaults` 常用覆盖项
 
 `MemHopDefaults` 只暴露三个业务开关。其余调优常量（巩固 prompt 上限、衰减速率、L1 建边阈值）已内部化为 `internal/tuning.go` 包级常量，不再可配置——宿主不应需要调整；如有调整诉求请提 issue。
 
@@ -183,9 +183,9 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 
 一轮就是一条用户消息加一条回复，对应**恰好一个话题**。`Update` 把这两条原文写成两条 L4 档案，所以一轮的原文永远可以从话题的 `L4Refs` 取回——L4 里不再有别的东西。
 
-两条消息**之间**发生的事（工具调用、中间输出、子 agent 结果）属于执行过程而不是对话内容，归本轮的 L6 轨迹：用同一个话题 id 走 `AppendTrajectory(topicID, "", …)`（见 §8 L6）。这就是原来 N:N 追加路径的去向。
+两条消息**之间**发生的事（工具调用、中间输出、子 agent 结果）属于执行过程而不是对话内容，归本轮的 L6 轨迹：用同一个话题 id 走 `AppendTrajectory(topicID, "", …)`（见 §8 L6）。
 
-**v1.5.0 移除：** `AppendL4Message`（往已沉淀的话题继续追加消息）与 `RefineTopicKeywords`（按全量原文重算该话题关键词）。它们让「一轮要提炼几次」变成宿主的判断题；现在一轮恰好一次 LLM 调用，关键词也永不落后于本轮原文。L4 内容类型（`text`/`image`/`video`/`document`/`audio`/`code`/`other`）由 `Update` 的 `user_type`/`agent_type` 在**写入侧**声明，读回侧原样报告（`L4Query.Type` 过滤、`ArchiveSlot.ContentType`、`SceneContext` 的 `Messages[].Type`）；未定义的值以 `ErrInvalidQuery` 拒绝而不是落库。Dream 的融合摘要是唯一类型固定的档案——恒为 `text`。
+**没有 N:N 追加面：** 不存在 `AppendL4Message` / `RefineTopicKeywords`——一轮恰好一次 LLM 调用，关键词也永不落后于本轮原文。L4 内容类型（`text`/`image`/`video`/`document`/`audio`/`code`/`other`）由 `Update` 的 `user_type`/`agent_type` 在**写入侧**声明，读回侧原样报告（`L4Query.Type` 过滤、`ArchiveSlot.ContentType`、`SceneContext` 的 `Messages[].Type`）；未定义的值以 `ErrInvalidQuery` 拒绝而不是落库。Dream 的融合摘要是唯一类型固定的档案——恒为 `text`。
 
 ---
 
@@ -235,9 +235,9 @@ res, err := db.ImportL3([]api.L3ImportItem{{
 // 返回 GraphIDs / CreatedIDs / UpdatedIDs / SkippedCount / EdgesCreated / Errors
 ```
 
-`Related` 目标按标题在同图内解析，可在同批条目的后文（两阶段导入）。超边的身份是「成员节点 **+ kind**」，所以同一对节点可以同时挂 `related` 与 `part_of`；重导入同一批不会重复建边（按排序成员 + kind 去重，旧文件里以 pair-only 哈希写下的边也认得，不会因为换公式而重复建）。无法解析 / 自引用 / 非法 kind 的条目记入 `Errors`。
+`Related` 目标按标题在同图内解析，可在同批条目的后文（两阶段导入）。超边的身份是「成员节点 **+ kind**」，所以同一对节点可以同时挂 `related` 与 `part_of`；重导入同一批不会重复建边（按排序成员 + kind 去重）。无法解析 / 自引用 / 非法 kind 的条目记入 `Errors`。
 
-`GraphIDs` 才让这条路闭环：图 id = `hash(Domain)`，公开面上没有任何调用能渲染这个派生，此前宿主只能 `ListL3` 按名字反查——而把场景挂到图上（`SearchQuery.L3ID` / `UpdateScene`）要的正是这个 id。
+`GraphIDs` 让这条路闭环：图 id = `hash(Domain)`，公开面上没有任何调用能渲染这个派生，所以 `ImportL3` 直接把它报出来——把场景挂到图上（`SearchQuery.L3ID` / `UpdateScene`）要的正是这个 id。
 
 `GetL3 / ListL3 / QueryL3Nodes / QueryL3Subgraph / UpdateL3 / DeleteL3 / DeleteL3Nodes`。
 
@@ -278,7 +278,7 @@ arcs, err := db.SearchL4(api.L4Query{
 
 > 一张卡 = 名称 + N 个功能条目（resources，无卡片级 type），每个条目自带启动方式（`type: mcp|skill|api|composite` + `ref`/`config`）/说明（`desc`）/怎么用（`input`/`output`），与宿主工具规格逐字段同构——纯字段拷贝即可投影；composite 条目的动作链放 `config` 的 `{"steps":[{"tool":"...","args":{...}}]}`（每步 `tool` 必填）。内置能力工具箱（6 张英文卡：`memhop-guide` 总纲 + 5 张 LLM 可调用说明书）Open 时自动挂载，`ListCapabilities` 直接返回（只读、不落 `.meh`）；说明书卡 `type: "api"`、`ref: "api:MethodName"`，宿主在门面上直接调用。默认分层注入——只投影一行索引（`id + name + summary + trigger`）+ guide 卡，参数详情按需 `ListCapabilities(CapabilityListQuery{IDs: []string{id}})` 获取。另：`.meh` 同目录的 `plug/<包>/capability.json` 会在每次 Open 自动注入能力池（坏包告警跳过）。
 
-### L6 轨迹 + 结晶（v1.2.7 新增能力）
+### L6 轨迹 + 结晶
 
 ```go
 // 每轮一条轨迹：轮 ID 就是 Search 返回的 NewTopicID（宿主不再自己派生轮键）。
@@ -328,13 +328,13 @@ planID := api.NewPlanID("cat-42")   // 确定性 16 位 hex；重启后按同一
 
 ---
 
-## 9. 导出类型清单（v1.7.0）
+## 9. 导出类型清单（v1.6.0）
 
 | 类别 | 名称 | 用途 |
 |---|---|---|
 | 配置 | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | 全部装配面 |
 | 输入别名 | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `CapabilityListQuery` / `CapabilityPatch` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `CrystallizeResult` / `CrystallizeDetail` / `DreamReport` / `DreamStage` / `ResourceRef` / `CapabilityPackageDoc` / `CapabilityImportResult` | 输入与无 ID 结果（string ID 均为 hex） |
-| 响应 DTO | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | 所有 ID 字段均为 16 位 hex 字符串（v1.4.1 起） |
+| 响应 DTO | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `Capability` / `TrajectorySlot` | 所有 ID 字段均为 16 位 hex 字符串 |
 | ID 面 | **`DefaultAgentID`**（隐式域）/ **`NewPlanID(name)`**（铸计划 ID） | ID 一律由库发号，宿主只回传，不做任何进制转换 |
 | 枚举 | `GraphEdgeKind` / `CapabilityType` / `CapabilityStatus` / `CapabilityOrigin` / `ContentType` / `PlanStatus` | 枚举别名 |
 
@@ -352,11 +352,11 @@ planID := api.NewPlanID("cat-42")   // 确定性 16 位 hex；重启后按同一
 if api.CodeOf(err) == api.ErrNotFound { ... }
 ```
 
-错误码：`ErrConfig`、`ErrInvalidQuery`、`ErrNotFound`、`ErrAgentNotFound`（agentID 未注册或已删除）、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrLLM`。编号永不复用：`1002`（向量维度不匹配）与 `9001`（编码器）已随检索子系统一并退役。
+错误码：`ErrConfig`、`ErrInvalidQuery`、`ErrNotFound`、`ErrAgentNotFound`（agentID 未注册或已删除）、`ErrIO`、`ErrClosed`、`ErrInvalidMagic`、`ErrCRCMismatch`、`ErrCorruption`、`ErrSerialization`、`ErrDeserialization`、`ErrLLM`。编号永不复用：`1002` 与 `9001` 已退役、不再重新发放。
 
 ---
 
-## 11. 最小可运行骨架（v1.6.0 签名）
+## 11. 最小可运行骨架
 
 ```go
 package main
@@ -428,11 +428,11 @@ func main() {
 ## 12. 陷阱清单
 
 1. **LLM 只影响写路径**：`Search` 零 LLM，读永不被 LLM 拖垮；`Update` 每轮一次提炼，失败即报错且零写入（不会留半轮记忆）。宿主需为沉淀失败做好重试——重试同一个 `TopicID` 是安全的。
-2. **没有 embedding 服务，也没有维度要声明**：文件头偏移 6 的两字节在 v1.5.0 前存向量维度，现在是保留位——v1.4.x 写的库照样打开。格式版本仍是 `0x0009`：单轨关键词在解码点归一，不跑迁移也不需要；`FormatVersion < 0x0009` 的旧库依旧拒绝。
+2. **没有 embedding 服务，也没有维度要声明**：文件头偏移 6 的两字节是保留位。格式版本为 `0x000B`：L3 知识图与 L5 能力池驻留保留共享域（`core.SharedPoolAgentID`），不跑迁移——`0x000B` 之前的文件在 Open 时被拒绝。
 3. **时间戳用 Unix 毫秒**，`<=0` 报 `ErrInvalidQuery`。
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，门面上不再有 hex ⇄ 整数转换函数。
 5. **`Search` 不写记忆内容**：它开启一个轮次（场景的命中计数与轮次计数各 +1），但不建任何话题记录——开了没沉淀的轮次不留残渣。想读原文用 `SceneContext` / `SearchL4`。重放同一个 `Update`（同 `TopicID`）是幂等的：话题就是那个 id，档案 id 由它派生，重试只会覆盖不会叠加。
-6. **单文件多 agent 域**：v1.4 起所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），按域完全隔离；旧库（`FormatVersion < 0x0009`）无法打开、不做迁移。
+6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），除文件级 L3/L5 公共池外按域完全隔离；旧库（`FormatVersion < 0x000B`）无法打开、不做迁移。
 7. **内置能力卡只读**：`UpdateCapability` 对内置卡返回错误。
 8. **轨迹自动过期**：Dream 自动清理 7 天前的事件；对外只有追加与查询（`AppendTrajectory` / `ReadTrajectory` / `ListTrajectorySessions`），无删除接口。一轮的轨迹按该轮话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
 9. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
