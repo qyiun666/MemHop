@@ -147,6 +147,7 @@ func TestCrystallizeReturnsCandidatesAgainstHostCatalog(t *testing.T) {
 			"choices": []map[string]any{{
 				"message": map[string]any{"role": "assistant", "content": `{"capabilities":[
 					{"action":"reuse","reuse_id":"发布流程","capability":{"name":"发布流程"}},
+					{"action":"merge","reuse_id":"发布流程","capability":{"name":"发布流程","version":"2","summary":"并入回滚步骤","resources":[{"type":"mcp","name":"rollback"}]}},
 					{"action":"create","capability":{"name":"重构流程","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","config":"{\"file\":\"a.go\"}"},{"type":"mcp","name":"write_file"}]}}
 				]}`},
 			}},
@@ -177,14 +178,20 @@ func TestCrystallizeReturnsCandidatesAgainstHostCatalog(t *testing.T) {
 	if !strings.Contains(body, "发布流程") {
 		t.Fatalf("prompt must render the host's existing catalog: %s", body)
 	}
-	if len(out.Capabilities) != 2 {
-		t.Fatalf("candidates = %d, want 2: %+v", len(out.Capabilities), out)
+	if len(out.Capabilities) != 3 {
+		t.Fatalf("candidates = %d, want 3: %+v", len(out.Capabilities), out)
 	}
 	reuse := out.Capabilities[0]
 	if reuse.Action != "reuse" || reuse.ReuseID != "发布流程" {
 		t.Fatalf("reuse candidate mismatch: %+v", reuse)
 	}
-	create := out.Capabilities[1]
+	merge := out.Capabilities[1]
+	if merge.Action != "merge" || merge.ReuseID != "发布流程" ||
+		merge.Capability.Summary != "并入回滚步骤" || len(merge.Capability.Resources) != 1 ||
+		merge.Capability.Resources[0].Name != "rollback" {
+		t.Fatalf("merge candidate mismatch: %+v", merge)
+	}
+	create := out.Capabilities[2]
 	if create.Action != "create" || create.Capability.Name != "重构流程" {
 		t.Fatalf("create candidate mismatch: %+v", create)
 	}

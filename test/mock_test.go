@@ -60,7 +60,11 @@ func newMockLLM(t *testing.T) *mockLLM {
 			content = `{"emotion":{"valence":0.8,"arousal":0.6,"dominance":0.5},"mbti":{"i_e":0.2,"n_s":0.3,"t_f":-0.1,"j_p":0.4,"type":"ESFP"},"personality":"务实直接，注重代码质量，面对重构任务条理清晰，习惯先补测试再动手","per_node":[]}`
 		case strings.Contains(lower, "operation trajectory"):
 			m.calls["crystallize"]++
-			content = `{"capabilities":[{"action":"create","capability":{"format":"memhop-capability/v3","name":"重构流程","version":"1","type":"mcp","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","ref":"read_file","desc":"读文件","input":"{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}","output":"内容","config":"{\"file\":\"a.go\"}"}]}}]}`
+			content = `{"capabilities":[
+  {"action":"reuse","reuse_id":"已有能力","capability":{"name":"已有能力","version":"1"}},
+  {"action":"merge","reuse_id":"已有能力","capability":{"name":"已有能力","version":"2","summary":"并入新步骤的发布流程","trigger":"准备发布时","resources":[{"type":"mcp","name":"old_tool","ref":"mcp://tools","desc":"老工具","output":"内容"}]}},
+  {"action":"create","capability":{"name":"重构流程","version":"1","summary":"重构代码","trigger":"用户要求重构","resources":[{"type":"mcp","name":"read_file","ref":"read_file","desc":"读文件","input":"{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"}},\"required\":[\"path\"]}","output":"内容","config":"{\"file\":\"a.go\"}"}]}}
+]}`
 		default:
 			t.Errorf("mockLLM: unknown system prompt: %.80s", sys)
 			w.WriteHeader(http.StatusInternalServerError)

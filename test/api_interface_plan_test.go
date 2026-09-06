@@ -282,13 +282,16 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	}
 
 	// Crystallizing a plan id aggregates the whole plan, not one turn; the
-	// engine returns candidates only — nothing lands anywhere.
+	// engine returns candidates only — nothing lands anywhere. The mock
+	// replies with a fixed three-action roster without reading the (nil)
+	// existing catalog, so the reuse/merge candidates here also pin the
+	// passthrough contract.
 	res, err := db.Crystallize(context.Background(), planID, nil)
 	if err != nil {
 		t.Fatalf("Crystallize(plan): %v", err)
 	}
-	if len(res.Capabilities) != 1 {
-		t.Fatalf("crystallize result = %+v, want one candidate card", res)
+	if len(res.Capabilities) != 3 {
+		t.Fatalf("crystallize result = %+v, want the mock's three candidates", res)
 	}
 
 	// A turn the host never logged has nothing to crystallize — reported, not
