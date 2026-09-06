@@ -11,30 +11,45 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// A merge candidate overwrites the stored resources wholesale, so its
-// entries must pass the same resource checks a create would — an invalid
-// one is recorded as a skip, not folded into a stored card.
-func TestApplyCandidateMergeValidatesResources(t *testing.T) {
+// Validation is gated by where a candidate can reach the store: merge
+// overwrites the stored card wholesale (upfront check) and a reuse that
+// misses its target degrades into a create (gated before the upsert), so
+// both malformed payloads are recorded as a skip. A reuse that hits its
+// target writes nothing and needs no validation — pinned separately by
+// TestCrystallizeReuseMinimalPayload.
+func TestApplyCandidateValidatesEveryAction(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "t.meh"))
 	if err != nil {
 		t.Fatalf("create engine: %v", err)
 	}
 	defer engine.Close(nil)
 
-	result := &core.CrystallizeResult{}
-	cand := llmops.CrystallizeCapability{
-		Action: "merge",
-		Capability: core.CapabilityImport{
-			Name:      "x",
-			Summary:   "s",
-			Resources: []core.ResourceRef{{Type: "bogus", Name: "r"}},
-		},
-	}
 	reserved := func(uint64) bool { return false }
-	if err := ApplyCandidate(engine, core.SharedPoolAgentID, cand, result, reserved); err != nil {
-		t.Fatalf("apply: %v", err)
+	cases := []struct {
+		name string
+		cand llmops.CrystallizeCapability
+	}{
+		{"merge with unknown resource type", llmops.CrystallizeCapability{
+			Action: "merge",
+			Capability: core.CapabilityImport{
+				Name: "x", Summary: "s", Trigger: "t",
+				Resources: []core.ResourceRef{{Type: "bogus", Name: "r"}},
+			},
+		}},
+		{"reuse miss with no resources", llmops.CrystallizeCapability{
+			Action: "reuse", ReuseID: "0000000000000000",
+			Capability: core.CapabilityImport{Name: "y"},
+		}},
 	}
-	if len(result.Errors) != 1 || len(result.MergedIDs)+len(result.CreatedIDs) != 0 {
-		t.Fatalf("invalid merge must be skipped: %+v", result)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := &core.CrystallizeResult{}
+			if err := ApplyCandidate(engine, core.SharedPoolAgentID, tc.cand, result, reserved); err != nil {
+				t.Fatalf("apply: %v", err)
+			}
+			if len(result.Errors) != 1 || len(result.CreatedIDs)+len(result.MergedIDs)+len(result.ReusedIDs) != 0 {
+				t.Fatalf("malformed candidate must be skipped: %+v", result)
+			}
+		})
 	}
 }

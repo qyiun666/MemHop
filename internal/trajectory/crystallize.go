@@ -4,6 +4,7 @@
 package trajectory
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -14,48 +15,48 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ApplyCandidate folds one LLM candidate into the result.
-// reuse/merge candidates locate an existing capability by name or
-// ReuseID, so their payload may be minimal (a reuse decision does not
-// require a full type/resources); only create candidates run the complete
-// import validation, otherwise the candidate is recorded as skipped.
+// candidateRejected marks a reuse candidate whose target is gone and whose
+// payload then failed card validation on the degrade-to-create path;
+// ApplyCandidate records it as a skip while other errors are fatal.
+type candidateRejected struct{ reason string }
+
+func (e candidateRejected) Error() string { return e.reason }
+
+// ApplyCandidate folds one LLM candidate into the result. create and merge
+// overwrite the stored card wholesale, so they run card validation upfront;
+// a reuse that hits its target writes nothing and is accepted as-is (the
+// prompt may emit a minimal name-only payload), while a reuse that misses
+// degrades into a create and is gated inside applyCrystallized instead.
 // reserved reports whether a name-derived capability id belongs to the
 // read-only built-in toolbox; a candidate naming such a card is recorded
 // as skipped — a stored shadow of a built-in card could never be updated
 // or deleted again.
 func ApplyCandidate(engine *core.StorageEngine, agentID uint64, cand llmops.CrystallizeCapability, result *core.CrystallizeResult, reserved func(uint64) bool) error {
-	action := strings.ToLower(strings.TrimSpace(cand.Action))
 	detail := core.CrystallizeDetail{Name: cand.Capability.Name}
-	if reserved(core.CapabilityID(cand.Capability.Name)) {
+	recordSkip := func(reason string) {
 		detail.Action = "skip"
-		detail.Reason = "capability name is reserved by a built-in card"
-		result.Errors = append(result.Errors, cand.Capability.Name+": "+detail.Reason)
+		detail.Reason = reason
+		result.Errors = append(result.Errors, detail.Name+": "+reason)
 		result.Details = append(result.Details, detail)
+	}
+	if reserved(core.CapabilityID(cand.Capability.Name)) {
+		recordSkip("capability name is reserved by a built-in card")
 		return nil
 	}
-	if action == "merge" {
-		// A merge overwrites the stored resources wholesale: the incoming
-		// entries must pass the same resource checks a create would, or the
-		// candidate is skipped instead of degrading a stored card.
-		if err := capability.ValidateResources(cand.Capability.Resources); err != nil {
-			detail.Action = "skip"
-			detail.Reason = err.Error()
-			result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())
-			result.Details = append(result.Details, detail)
-			return nil
-		}
-	}
-	if action != "reuse" && action != "merge" {
+	action := strings.ToLower(strings.TrimSpace(cand.Action))
+	if action != "reuse" {
 		if err := capability.ValidateCard(&cand.Capability); err != nil {
-			result.Errors = append(result.Errors, cand.Capability.Name+": "+err.Error())
-			detail.Action = "skip"
-			detail.Reason = err.Error()
-			result.Details = append(result.Details, detail)
+			recordSkip(err.Error())
 			return nil
 		}
 	}
 	id, disposition, err := applyCrystallized(engine, agentID, cand)
 	if err != nil {
+		var rejected candidateRejected
+		if errors.As(err, &rejected) {
+			recordSkip(rejected.reason)
+			return nil
+		}
 		return err
 	}
 	detail.Action = disposition // create | reuse | merge
@@ -96,6 +97,14 @@ func applyCrystallized(engine *core.StorageEngine, agentID uint64, cand llmops.C
 			return id, "merge", nil
 		}
 		return id, "reuse", nil
+	}
+	if action == "reuse" {
+		// The reuse target is gone and the candidate degrades into a
+		// create; its payload skipped upfront validation, so gate it here
+		// before it reaches the store.
+		if err := capability.ValidateCard(&cand.Capability); err != nil {
+			return "", "", candidateRejected{err.Error()}
+		}
 	}
 	if _, err := repo.UpsertCapabilityL5(engine, agentID, cap); err != nil {
 		return "", "", err

@@ -5,9 +5,10 @@
   释）、`MaxEventPayload`（单事件载荷上限，裸事件与计划事件共用）/
   `MaxCrystallizePayload`；结晶写步 `ApplyCandidate`（签名多收一个由组合根
   注入的 `reserved func(uint64) bool` 判定内置卡名——候选名命中即记 skip；
-  create 走完整校验；merge 候选的资源条目走 `capability.ValidateResources`，
-  不过即记 skip——`MergeDefinition` 无条件覆写存储 Resources）与私有
-  `applyCrystallized`/`findTarget`。
+  卡级校验按落盘点分闸：create/merge 整卡覆写走前置 `capability.ValidateCard`，
+  reuse 命中不落盘免校验（最小 name-only 载荷是钉死的契约），reuse 未命中
+  降级 create 在 `applyCrystallized` 落库前过闸，失败经 `candidateRejected`
+  折成 skip）与私有 `applyCrystallized`/`findTarget`。
 - **契约**：大方法（AppendTrajectory/ReadTrajectory/Crystallize）在根里
   持域锁后调用本包；事件的 `topic_id`/`SessionID` 语义由大方法强制。
 - **陷阱**：`findTarget` 只有真正的"无此记录"才返回 found=false；瞬时读
