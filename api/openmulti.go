@@ -26,8 +26,7 @@ type MultiAgentDB struct {
 }
 
 // OpenMulti creates or opens a multi-agent MemHop database. internal.Open
-// performs all assembly (engine, per-domain caches, built-in capability
-// manuals, plug/ packages).
+// performs all assembly (engine, per-domain caches, plug/ packages).
 func OpenMulti(cfg *MemHopConfig) (*MultiAgentDB, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err

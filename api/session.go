@@ -403,10 +403,9 @@ func (s *Session) DeleteL3Nodes(graphID string, nodeIDs []string) error {
 	return s.Session.DeleteL3Nodes(graphID, nodeIDs)
 }
 
-// DeleteCapability removes an L5 card. Cards the engine ships (Origin builtin)
-// are the manual the host reads, not host data, so they are read-only and
-// deleting one is refused. Deleting a card that is not there is an error, not
-// a no-op.
+// DeleteCapability removes an L5 card from the shared pool, so the deletion is
+// visible to every agent in the file. Deleting a card that is not there is an
+// error, not a no-op.
 func (s *Session) DeleteCapability(id string) error {
 	return s.Session.DeleteCapability(id)
 }
