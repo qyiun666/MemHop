@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.7.0**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.6.1**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 ---
@@ -393,7 +393,7 @@ entry rejects it.
 
 ---
 
-## 9. Exported types (v1.7.0)
+## 9. Exported types (v1.6.1)
 
 | Kind | Names | Use |
 |---|---|---|

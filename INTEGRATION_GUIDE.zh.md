@@ -1,7 +1,7 @@
 # MemHop 宿主集成指南（Go API 方式）
 
 > 面向直接以 **Go module 内嵌**方式集成 MemHop 的宿主程序（不经 MCP server）。
-> 适用版本：**v1.7.0**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
+> 适用版本：**v1.6.1**。模块路径 `github.com/qyiun666/MemHop`，只允许 import `api` 包。
 
 ---
 
@@ -326,7 +326,7 @@ planID := api.NewPlanID("cat-42")   // 确定性 16 位 hex；重启后按同一
 
 ---
 
-## 9. 导出类型清单（v1.7.0）
+## 9. 导出类型清单（v1.6.1）
 
 | 类别 | 名称 | 用途 |
 |---|---|---|

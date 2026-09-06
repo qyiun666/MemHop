@@ -10,7 +10,7 @@ Status: implemented
 
 - **`ActivateCapability` 删除**（api/internal/repo 三层 + `repo.ActivateCapabilityL5` 整函数）：激活走 `UpdateCapability(id, CapabilityPatch{Status: &core.CapabilityActive})`。并入后同过卡片校验（ValidateCard 要求 trigger/summary 至少一、条目 ≥1）——旧 Activate 不校验，行为差异是显式收紧而非回归。MCP `memhop_capability_activate` 工具删除，激活走 `memhop_capability_update` 的 `status` 参数（工具数 31 → 30）。
 - **`PlanReplace` 删除**（api/internal 两层）：`SyncPlanTree(planID, nil)` = 清整树（`repo.DeletePlanRecords` + `Traj.RemoveSession` + `Plans.RemovePlan`，保留 planID，事件 Seq 归 1）；播种下一个任务 = 单节点同步（空 status 落 pending）。`ParsePlanID` 的零 planID 拒绝保持在 nil 判断之前，`0000000000000000` 保留语义不变。`plan.Replace` 语义并入后 `SyncPlanTree` 的非 nil 空 NodePath 仍拒绝。PlanReplace 本就不在 MCP 工具面，工具数不受影响。
-- 公开面清单同步 `api/surface_public_test.go`（Session 34 → 32）；版本表新增 v1.7.0 条目。
+- 公开面清单同步 `api/surface_public_test.go`（Session 34 → 32）；版本表新增 v1.6.1 条目。
 
 ## Alternatives considered
 
