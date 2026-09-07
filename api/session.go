@@ -205,11 +205,13 @@ func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
 // would read back exactly like a complete one. Nothing is written when this
 // call returns an error.
 //
-// A plan-bound event (non-empty nodePath) is validated against the plan step
-// vocabulary: plan_step, llm_request, llm_output, tool_call, tool_result,
-// subagent_spawn, subagent_done, context_inject, ask_user, user_reply. Anything
-// else is ErrInvalidQuery; a bare turn event takes any EventType the host
-// names.
+// EventType names the step and is the host's own word for it on both paths: a
+// plan-bound event takes any non-empty name a bare turn event takes. The engine
+// never branches on it — the name comes back through ReadTrajectory and reaches
+// the Crystallize prompt verbatim — so these conventions are a shared vocabulary
+// for the reader, not an accepted set: plan_step, llm_request, llm_output,
+// tool_call, tool_result, subagent_spawn, subagent_done, context_inject,
+// ask_user, user_reply. An empty EventType is ErrInvalidQuery.
 func (s *Session) AppendTrajectory(key, nodePath string, ev TrajectorySlot) error {
 	coreEv, err := toCoreTrajectorySlot(ev)
 	if err != nil {
@@ -223,9 +225,9 @@ func (s *Session) AppendTrajectory(key, nodePath string, ev TrajectorySlot) erro
 // string constants ("pending" / "in_progress" / "running" / "done" / "failed");
 // an unknown value is rejected. nodePath is the dotted path the host assigned
 // with SyncPlanTree. Like the node-bound AppendTrajectory, the event is forced
-// to bare-event semantics and its EventType must come from the plan vocabulary
-// above; summary is the node's own conclusion, kept when a later sync leaves it
-// blank.
+// to bare-event semantics and names itself: any non-empty EventType the host
+// chooses is accepted. summary is the node's own conclusion, kept when a later
+// sync leaves it blank.
 func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status string, summary string) error {
 	coreEv, err := toCoreTrajectorySlot(ev)
 	if err != nil {

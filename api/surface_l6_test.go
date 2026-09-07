@@ -401,9 +401,13 @@ func TestSurfaceAppendTrajectoryPlanBranch(t *testing.T) {
 	if err != nil || tree.TotalCount != 2 {
 		t.Fatalf("node chain from the bound event: %+v err=%v", tree, err)
 	}
-	// Plan-bound events use the step vocabulary; a turn event does not.
-	if err := db.AppendTrajectory(planID, "1", TrajectorySlot{EventType: "whatever", Timestamp: now + 2}); CodeOf(err) != ErrInvalidQuery {
-		t.Fatalf("unknown plan event type: want ErrInvalidQuery, got %v", err)
+	// The plan path names events exactly as the bare path does: the engine takes
+	// the host's own word and refuses only an empty one.
+	if err := db.AppendTrajectory(planID, "1", TrajectorySlot{EventType: "sandbox_ask", Timestamp: now + 2}); err != nil {
+		t.Fatalf("host-named plan event: %v", err)
+	}
+	if err := db.AppendTrajectory(planID, "1", TrajectorySlot{Timestamp: now + 3}); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("empty plan event type: want ErrInvalidQuery, got %v", err)
 	}
 }
 

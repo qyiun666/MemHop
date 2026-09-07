@@ -156,7 +156,7 @@ topicID, err := db.Update(api.TurnUpdate{
 })
 ```
 
-两个类型字段的零值就是 `ContentText`，不填的宿主与上一版记录结果完全一致。`Update` 是引擎唯一的 L4 写入口，因此一轮的内容类型只在这里声明；读回走 `ArchiveSlot.ContentType`、`L4Query.Type` 过滤，或 `SceneContext` 的 `Messages[].Type`。
+两个类型字段的零值就是 `ContentText`，不填的宿主与显式填 `ContentText` 的宿主记录结果完全一致。`Update` 是引擎唯一的 L4 写入口，因此一轮的内容类型只在这里声明；读回走 `ArchiveSlot.ContentType`、`L4Query.Type` 过滤，或 `SceneContext` 的 `Messages[].Type`。
 
 一次调用把整轮落进那个话题：两条 L4 原文档案（`RoleUser` + `RoleAgent`）+ 一次 LLM 提炼出的话题关键词，返回值就是传进去的 16 位 hex id。同一个 `TopicID` 沉淀两次是**覆盖**而不是新增（档案 id 由话题 id 与原文哈希得出），所以超时的 `Update` 可以放心重试。
 
@@ -324,7 +324,7 @@ planID := api.NewPlanID("cat-42")   // 确定性 16 位 hex；重启后按同一
 | 调用 | 说明 |
 |---|---|
 | `db.SyncPlanTree(planID, root *PlanNode)` | 推送宿主权威整树：按 `NodePath` 增改节点、删除消失节点（连同其绑定事件）、不产生 `plan_step`。`Title`/`Type`/`Status`/`Summary` 留空即继承库里现值，所以部分快照不会把已完成步骤退回未完成；**root 传 nil 即清整树**——节点与绑定事件全删、保留 planID，播种下一个任务用单节点同步（空 status 落 pending） |
-| `db.AppendTrajectory(planID, nodePath, ev)` | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链）。`nodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且必须挂在父节点路径下；`EventType` 必须在计划词表内：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply`（裸轮次事件的 `EventType` 由宿主自定，不受该词表约束） |
+| `db.AppendTrajectory(planID, nodePath, ev)` | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链）。`nodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且必须挂在父节点路径下；`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `ReadTrajectory` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
 | `db.PlanCommit(planID, nodePath, ev, api.PlanStatusDone, summary)` | 推进节点状态并追加该步事件；`done` 子节点摘要自底向上折叠进父节点 |
 | `db.PlanState(planID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
 

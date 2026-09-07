@@ -180,6 +180,9 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    `ParentID`/`NodePath`/`Status`/`Summary`/`PlanType` 一律清零（`PlanType`
    按记录契约只属于计划节点），`Seq`/会话 id 由库赋值，`Payload` 超
    `trajectory.MaxEventPayload` 即拒绝（不截断：截短的事件读起来和完整的一样）。
+   `EventType` 是宿主自定的步骤名，计划绑定事件与裸轮次事件同口径：引擎从不按它
+   分支（只有 `ReadTrajectory` 原样回显与结晶 prompt 的一行格式化），唯一约束是
+   非空，校验点只有 `trajectory.ValidateEvent` 一处。
    轨迹只按 key 整体寻址：公开面上没有任何
    调用接受单条事件 id，所以写入不返回句柄（加了就是一桩没人消费的新契约）。
 11. **`MultiAgentDB.CompactTo`**：core 的 `Compact` 用 `Create`（带

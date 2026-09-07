@@ -14,15 +14,6 @@ import (
 	"github.com/qyiun666/MemHop/internal/trajectory"
 )
 
-// planEventTypes is the vocabulary for plan-bound events: the documented
-// trajectory step types plus plan_step for plan progress commits. Plain
-// AppendTrajectory stays free-form (host-owned turns).
-var planEventTypes = map[string]struct{}{
-	"llm_request": {}, "llm_output": {}, "tool_call": {}, "tool_result": {},
-	"subagent_spawn": {}, "subagent_done": {}, "context_inject": {},
-	"ask_user": {}, "user_reply": {}, "plan_step": {},
-}
-
 // EnsureNode resolves nodePath to a plan node id, creating the node
 // chain (root then children along path) as pending when missing. Callers
 // hold ac.Mu.
@@ -61,28 +52,18 @@ func EnsureNode(ac *domain.Context, agentID uint64, planID uint64, nodePath stri
 	return parentID, nil
 }
 
-// ValidateEvent checks everything a plan-bound event must carry. PlanCommit
-// runs it before it touches a node, so a rejected commit leaves the tree
-// exactly as it was — the status, the summary and the rollup all follow the
-// event, never the other way round.
-func ValidateEvent(ev core.TrajectorySlot) error {
-	if err := trajectory.ValidateEvent(ev); err != nil {
-		return err
-	}
-	if _, ok := planEventTypes[ev.EventType]; !ok {
-		return common.NewError(common.ErrInvalidQuery, "unknown plan event type: "+ev.EventType)
-	}
-	return nil
-}
-
 // AppendEventLocked writes one event bound to a plan node by filling
 // PlanNodeRef and the node's path, then reuses the existing per-turn Sequencer
 // + TrajIndex. nodePath is the caller's own path string: stamping it on the
 // record is what lets ReadTrajectory say which step an event belongs to, since
-// PlanNodeRef is a library hash nothing on the public surface derives.
+// PlanNodeRef is a library hash nothing on the public surface derives. A plan
+// bound event names itself: the engine never branches on EventType, so it takes
+// any non-empty name a bare turn event takes. Callers that create or advance a
+// node first run the same check before they touch the tree, so a refused write
+// leaves the status, the summary and the rollup exactly as they were.
 // Callers hold ac.Mu.
 func AppendEventLocked(ac *domain.Context, agentID, planID, nodeID uint64, nodePath string, ev core.TrajectorySlot) error {
-	if err := ValidateEvent(ev); err != nil {
+	if err := trajectory.ValidateEvent(ev); err != nil {
 		return err
 	}
 	// An unknown key is the first event of that key, so Seq starts at 1.

@@ -571,19 +571,40 @@ func TestSyncPlanTreeNilWipesAndReseeds(t *testing.T) {
 	}
 }
 
-// Plan events must use the documented vocabulary.
-func TestPlanEventVocabularyRejectsUnknown(t *testing.T) {
+// A plan-bound event names itself: any EventType a bare turn event takes is
+// accepted here too and stored verbatim, while the write contract that remains
+// is still checked before the tree moves.
+func TestPlanEventNamesAreHostOwned(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	planID := common.FormatHash(9)
-	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "made_up_event", Timestamp: 1000}); err == nil {
-		t.Fatal("unknown plan event type must be rejected")
+	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1",
+		core.TrajectorySlot{EventType: "sandbox_ask", Timestamp: 1000}); err != nil {
+		t.Fatalf("a host-named plan event must be accepted: %v", err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "nope", Timestamp: 1001}, PlanDone, ""); err == nil {
-		t.Fatal("unknown plan commit event type must be rejected")
+	if err := db.PlanCommit(core.DefaultAgentID, planID, "1",
+		core.TrajectorySlot{EventType: "host_step", Timestamp: 1001}, PlanDone, ""); err != nil {
+		t.Fatalf("host-named commit event: %v", err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1002}); err != nil {
-		t.Fatalf("documented event type must be accepted: %v", err)
+	events, err := db.ReadTrajectory(core.DefaultAgentID, planID)
+	if err != nil || len(events) != 2 {
+		t.Fatalf("plan events: %+v err=%v", events, err)
+	}
+	if events[0].EventType != "sandbox_ask" || events[1].EventType != "host_step" {
+		t.Fatalf("the engine rewrote the host's event names: %q %q",
+			events[0].EventType, events[1].EventType)
+	}
+
+	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "2.1",
+		core.TrajectorySlot{Timestamp: 1002}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.TotalCount != 1 {
+		t.Fatalf("a refused append built a node chain: total=%d", tree.TotalCount)
 	}
 }
 

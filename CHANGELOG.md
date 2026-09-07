@@ -3,6 +3,18 @@
 MemHop 遵循语义化版本。本文件记录每个版本的核心改动；完整历史见
 README 的版本表与 git log。
 
+## v1.6.2 — 2026-09-07 — 计划事件不再受词表约束（`EventType` 归宿主）
+
+`internal/plan` 的 `ValidateEvent` 包装与它背后的 10 词 `planEventTypes` 名单一并删除：计划绑定事件的 `EventType` 与裸轮次事件同口径——任意非空宿主命名即接受，原样存回。理由是这条约束不挣自己的饭钱：引擎从不按 `EventType` 分支，全仓非测试引用只有 `ReadTrajectory` 的字段回显与结晶 prompt 里的一行格式化，所以名单唯一的行为就是拒写；代价全落在宿主侧——自己的事件名被拒后轨迹静默少一条，而库并没有因此保住任何结构（`AppendEventLocked` 已强制 `NodeType=Event` 并清零全部节点字段，宿主伪装不了树视图）。
+
+- **校验点回归一处**：`trajectory.ValidateEvent`（非空 `EventType` + `Timestamp` > 0 + payload ≤ 4KB）。`AppendTrajectory` 的计划分支与 `PlanCommit` 仍在 `EnsureNode` / `UpdateNodeLocked` **之前**调用它，被拒的写零留痕；v1.6.1 修掉的那条「校验晚于改树」顺序不变量原样保留
+- **MCP 面无改动**：`memhop_trajectory_append` 的描述本就写着 `event_type` 由宿主自定，而计划写面（`PlanCommit`/`PlanState`/`SyncPlanTree`）不在 MCP 工具面上。这轮是把 Go 面对齐到交付面已有的口径，24 个工具不变
+- **公开面与格式不变**：`api.Session` 仍 27 个业务方法 + `MultiAgentDB` 8 个；`0x000C` 不变——`event_type` 是记录内的 JSON 字符串字段，收紧与放宽都不触及记录布局
+- **对宿主是放宽方向**：原本被拒的写入现在成功，无需宿主改调用点即可受益；meowagent 的沙箱裁决反问（`sandbox_ask`）由此可直接入计划轨迹
+- **测试**：`internal/l6_test.go` 的 `TestPlanEventVocabularyRejectsUnknown` 改写为 `TestPlanEventNamesAreHostOwned`（钉住宿主命名被接受、名字原样回读、被拒仍不建节点链）；`api` 面两处拒写断言改钉空 `EventType`（`surface_l6_test.go`、`surface_closed_loop_test.go`）；`test/api_interface_plan_test.go` 的「被拒不改动树」例子改用缺 `EventType` 的事件
+- **文档同步**：`api/session.go` 的 `AppendTrajectory` / `PlanCommit` 注释、`INTEGRATION_GUIDE.md` 与 `.zh.md` 的 L6 计划面表格、`internal/plan/agent.md`
+- 决策档案：`notes/implemented/simplification/2026-09-07-plan-event-vocabulary-retirement.md`
+
 ## v1.6.1 — 2026-09-06 — 公开面收敛（34→27）、内置说明书卡删除、公开面按使用者分两类、L5 记录层退役（目录即能力）
 
 ### 两个折叠（34→32）

@@ -46,7 +46,7 @@ func (db *DB) AppendTrajectory(agentID uint64, key string, nodePath string, ev c
 		if err != nil {
 			return err
 		}
-		if err := plan.ValidateEvent(ev); err != nil {
+		if err := trajectory.ValidateEvent(ev); err != nil {
 			return err
 		}
 		nodeID, err := plan.EnsureNode(ac, agentID, ph, nodePath)
@@ -145,7 +145,7 @@ func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core
 	if err != nil {
 		return err
 	}
-	if err := plan.ValidateEvent(ev); err != nil {
+	if err := trajectory.ValidateEvent(ev); err != nil {
 		return err
 	}
 	nodeID, err := plan.EnsureNode(ac, agentID, ph, nodePath)

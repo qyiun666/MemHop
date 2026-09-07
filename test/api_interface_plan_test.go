@@ -214,8 +214,8 @@ func TestInterfacePlanCommitRollup(t *testing.T) {
 	if err := commit("1", "finished", "越权摘要", planEvent(ts+300, "plan_step", "x")); err == nil {
 		t.Fatal("an unknown plan status should be refused")
 	}
-	if err := commit("1", string(memhop.PlanStatusDone), "越权摘要", planEvent(ts+300, "host_step", "x")); err == nil {
-		t.Fatal("an event type outside the plan vocabulary should be refused")
+	if err := commit("1", string(memhop.PlanStatusDone), "越权摘要", planEvent(ts+300, "", "x")); err == nil {
+		t.Fatal("an event without an EventType should be refused")
 	}
 	after := findPlanNode(t, mustPlanState(t, db, planID), "1")
 	if after.Summary != done.Summary || after.FinishedAt != done.FinishedAt {

@@ -309,7 +309,6 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 	}{
 		{"no timestamp", TrajectorySlot{EventType: "plan_step"}},
 		{"no event type", TrajectorySlot{Timestamp: 7}},
-		{"event type outside the plan vocabulary", TrajectorySlot{EventType: "whatever", Timestamp: 7}},
 		{"payload over budget", TrajectorySlot{EventType: "plan_step", Timestamp: 7,
 			Payload: strings.Repeat("x", 5*1024)}},
 	}
@@ -364,8 +363,8 @@ func TestAppendTrajectoryRefusesAndStoresNothing(t *testing.T) {
 		Payload: strings.Repeat("a", 4*1024)}); err != nil {
 		t.Fatalf("payload at the budget limit: %v", err)
 	}
-	if err := sess.AppendTrajectory(key, "1", TrajectorySlot{EventType: "nope", Timestamp: 1}); err == nil {
-		t.Fatal("a plan-bound event must be validated against the plan vocabulary")
+	if err := sess.AppendTrajectory(key, "1", TrajectorySlot{Timestamp: 1}); err == nil {
+		t.Fatal("a plan-bound event must satisfy the same write contract")
 	}
 }
 
