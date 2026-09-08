@@ -59,7 +59,7 @@ func BuildTrajFromEngine(engine *core.StorageEngine, agentID uint64) *TrajIndex 
 	})
 	for _, ev := range evs {
 		if ev.NodeType == core.NodeTypePlan {
-			continue // plan nodes are not per-turn events; they are read via CollectPlanNodes
+			continue // plan nodes hold no event Seq slot; the plan cache reads them
 		}
 		idx.Append(ev.SessionID, ev.Seq, ev.IDHash, ev.Timestamp)
 	}
@@ -165,25 +165,6 @@ func (idx *TrajIndex) RemoveEvents(sessionID uint64, idHashes []uint64) int {
 	turn.entries = kept
 	idx.lastTurn[sessionID] = kept[len(kept)-1]
 	return removed
-}
-
-// RemoveSession drops one whole turn and returns its event ids in Seq
-// order; nil for unknown turns (idempotent). Used by the SyncPlanTree wipe,
-// which removes a plan's bound events wholesale and restarts its Seq space.
-func (idx *TrajIndex) RemoveSession(sessionID uint64) []uint64 {
-	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	turn := idx.byTurn[sessionID]
-	if turn == nil {
-		return nil
-	}
-	out := make([]uint64, len(turn.entries))
-	for i, e := range turn.entries {
-		out[i] = e.IDHash
-	}
-	delete(idx.byTurn, sessionID)
-	delete(idx.lastTurn, sessionID)
-	return out
 }
 
 // Summaries returns every turn's footprint (unordered).

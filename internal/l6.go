@@ -70,6 +70,7 @@ func appendTurnEvent(ac *domain.Context, agentID, topicID uint64, ev core.Trajec
 	ev.NodePath = ""
 	ev.Status = 0
 	ev.Summary = ""
+	ev.Title = ""
 	ev.PlanType = ""
 	ev.PlanNodeRef = 0
 	idHash, err := repo.AppendTrajectory(ac.Engine, agentID, ev)
@@ -114,14 +115,15 @@ func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSu
 	return out, nil
 }
 
-// PlanCommit advances a plan node to a status (with optional summary) and
-// appends the step event, then rolls up Done children summaries into any
-// parent Summary (Model A: a parent becomes Done only when the host
-// explicitly commits it here). `topicID` names the turn that owns the plan,
-// and a node missing along nodePath is created — this is how a host adds a
-// step. The event is validated first: a commit this call refuses leaves the
-// node's status, its summary and the rollup untouched.
-func (db *DB) PlanCommit(agentID uint64, topicID string, nodePath string, ev core.TrajectorySlot, status PlanStatus, summary string) error {
+// PlanCommit advances a plan node and appends the step event, then rolls up
+// Done children summaries into any parent Summary (Model A: a parent becomes
+// Done only when the host explicitly commits it here). `topicID` names the turn
+// that owns the plan, and a node missing along nodePath is created — this is
+// how a host adds a step. step carries the node's own fields; one left blank
+// keeps what is stored. Both the status and the event are validated first: a
+// commit this call refuses leaves the node's status, its summary and the
+// rollup untouched.
+func (db *DB) PlanCommit(agentID uint64, topicID string, nodePath string, ev core.TrajectorySlot, step plan.Step) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
@@ -131,8 +133,9 @@ func (db *DB) PlanCommit(agentID uint64, topicID string, nodePath string, ev cor
 	if err != nil {
 		return err
 	}
-	u8, err := plan.StatusToU8(status)
-	if err != nil {
+	// Checked before the tree moves: an unknown status must not leave a node
+	// chain created behind it.
+	if _, err := plan.StatusToU8(step.Status); err != nil {
 		return err
 	}
 	if err := trajectory.ValidateEvent(ev); err != nil {
@@ -142,7 +145,7 @@ func (db *DB) PlanCommit(agentID uint64, topicID string, nodePath string, ev cor
 	if err != nil {
 		return err
 	}
-	if err := plan.UpdateNodeLocked(ac, agentID, nodeID, u8, summary); err != nil {
+	if err := plan.CommitNode(ac, agentID, nodeID, step); err != nil {
 		return err
 	}
 	if err := plan.AppendEventLocked(ac, agentID, th, nodePath, ev); err != nil {

@@ -4,11 +4,10 @@
 // Offline interface tests for the L6 plan tree and trajectory log. A host
 // drives this the way meowagent does: `Search` opens a turn and hands back that
 // turn's topic id, which is also the key of the plan tree the turn works on. The
-// host keeps its own dotted step paths, writes a whole-tree snapshot every turn,
-// commits the steps that reached a terminal state, and after a restart reads the
-// tree back with a turn topic it already holds. SyncPlanTree/PlanCommit return
-// nothing at all, so every assertion below reads the tree back through PlanState
-// instead of trusting the call that changed it.
+// host keeps its own dotted step paths and commits each step as it advances,
+// and after a restart reads the tree back with a turn topic it already holds.
+// PlanCommit returns nothing at all, so every assertion below reads the tree
+// back through PlanState instead of trusting the call that changed it.
 
 package test
 
@@ -98,146 +97,65 @@ func TestInterfacePlanTreeLivesOnItsTurn(t *testing.T) {
 	}
 }
 
-func TestInterfaceSyncPlanTree(t *testing.T) {
-	db, _ := openTestDB(t)
-	sceneID := openSession(t, db)
-	topicID := openTurn(t, db, sceneID)
-	ts := time.Now().UnixMilli()
-
-	root := memhop.PlanNode{NodePath: "1", Title: "重构引擎", Type: "plan", Children: []memhop.PlanNode{
-		{NodePath: "1.1", Title: "拆包", Type: "step", Status: string(memhop.PlanStatusDone), Summary: "小方法已下沉"},
-		{NodePath: "1.2", Title: "补测试", Type: "step"},
-	}}
-	if err := db.SyncPlanTree(topicID, &root); err != nil {
-		t.Fatalf("SyncPlanTree: %v", err)
-	}
-	tree := mustPlanState(t, db, topicID)
-	if tree.TotalCount != 3 || tree.DoneCount != 1 {
-		t.Fatalf("tree = %d nodes %d done, want 3/1: %+v", tree.TotalCount, tree.DoneCount, tree)
-	}
-	if got := findPlanNode(t, tree, "1"); got.Title != "重构引擎" || got.Type != "plan" || got.ChildCount != 2 ||
-		got.Status != string(memhop.PlanStatusPending) {
-		t.Fatalf("root = %+v", got)
-	}
-	if got := findPlanNode(t, tree, "1.1"); got.Summary != "小方法已下沉" || got.FinishedAt == 0 {
-		t.Fatalf("done child = %+v, want its summary and a stamped FinishedAt", got)
-	}
-
-	// The call a host makes on every turn: a partial snapshot. A blank field
-	// inherits the stored value, otherwise re-syncing rewinds a step the host
-	// already finished and erases the conclusion folded into it.
-	err := db.SyncPlanTree(topicID, &memhop.PlanNode{NodePath: "1", Children: []memhop.PlanNode{
-		{NodePath: "1.1"}, {NodePath: "1.2"},
-	}})
-	if err != nil {
-		t.Fatalf("re-sync with blank fields: %v", err)
-	}
-	kept := mustPlanState(t, db, topicID)
-	if got := findPlanNode(t, kept, "1.1"); got.Status != string(memhop.PlanStatusDone) || got.Summary != "小方法已下沉" {
-		t.Fatalf("blank re-sync rewound a done step: %+v", got)
-	}
-	if got := findPlanNode(t, kept, "1"); got.Title != "重构引擎" {
-		t.Fatalf("blank re-sync erased the root title: %+v", got)
-	}
-
-	// A snapshot whose paths do not nest is refused before anything is written.
-	if err := db.SyncPlanTree(topicID, &memhop.PlanNode{NodePath: "1", Children: []memhop.PlanNode{
-		{NodePath: "9.9"},
-	}}); err == nil {
-		t.Fatal("a child path outside its parent should be refused")
-	}
-	if got := mustPlanState(t, db, topicID); got.TotalCount != 3 {
-		t.Fatalf("the refused snapshot changed the tree: %+v", got)
-	}
-
-	// Dropping a step deletes it along with the events bound to it.
-	mustAppend(t, db, topicID, "1.2", planEvent(ts, "tool_call", `{"tool":"grep","pattern":"SyncPlanTree"}`))
-	if got := findPlanNode(t, mustPlanState(t, db, topicID), "1.2"); got.TrajCount != 1 {
-		t.Fatalf("step 1.2 TrajCount = %d, want the one bound event counted", got.TrajCount)
-	}
-	if err := db.SyncPlanTree(topicID, &memhop.PlanNode{NodePath: "1", Children: []memhop.PlanNode{
-		{NodePath: "1.1"},
-	}}); err != nil {
-		t.Fatalf("SyncPlanTree dropping 1.2: %v", err)
-	}
-	dropped := mustPlanState(t, db, topicID)
-	if dropped.TotalCount != 2 {
-		t.Fatalf("tree still has %d nodes after dropping a step: %+v", dropped.TotalCount, dropped)
-	}
-	if events := mustReadTrajectory(t, db, topicID); len(events) != 0 {
-		t.Fatalf("the deleted step left its bound events behind: %+v", events)
-	}
-	// The key itself is now empty. It must stop being advertised, and an
-	// attempt to crystallize it must be reported as "nothing there" rather
-	// than as a read failure over a record that no longer exists.
-	if sums, err := db.ListTrajectorySessions(); err != nil {
-		t.Fatalf("ListTrajectorySessions: %v", err)
-	} else {
-		for _, s := range sums {
-			if s.SessionID == topicID {
-				t.Fatalf("the emptied plan key is still listed: %+v", s)
-			}
-		}
-	}
-	if _, err := db.Crystallize(context.Background(), topicID, nil); err == nil {
-		t.Fatal("crystallizing an emptied plan key should fail")
-	}
-}
-
 // Committing a plan is how a parent's conclusion gets folded out of its
-// children — and how a refused commit is required to leave nothing behind.
+// children — and how a refused commit is required to leave nothing behind. The
+// tree itself is grown by committing steps, keyed by the turn that opened it.
 func TestInterfacePlanCommitRollup(t *testing.T) {
 	db, _ := openTestDB(t)
 	sceneID := openSession(t, db)
 	topicID := openTurn(t, db, sceneID)
 	ts := time.Now().UnixMilli()
-	if err := db.SyncPlanTree(topicID, &memhop.PlanNode{NodePath: "1", Title: "父", Children: []memhop.PlanNode{
-		{NodePath: "1.1", Title: "子一"}, {NodePath: "1.2", Title: "子二"},
-	}}); err != nil {
-		t.Fatalf("SyncPlanTree: %v", err)
-	}
 
-	commit := func(path, status, summary string, ev memhop.TrajectorySlot) error {
-		return db.PlanCommit(topicID, path, ev, status, summary)
+	commit := func(path, title, status, summary string, ev memhop.TrajectorySlot) error {
+		return db.PlanCommit(topicID, path, ev, memhop.PlanStep{
+			Title: title, Type: "step", Status: status, Summary: summary})
 	}
-	if err := commit("1.1", string(memhop.PlanStatusDone), "改动收敛到 3 个文件", planEvent(ts, "plan_step", "第一步完成")); err != nil {
+	pending, done := string(memhop.PlanStatusPending), string(memhop.PlanStatusDone)
+	if err := commit("1", "父", pending, "", planEvent(ts, "plan_step", "开工")); err != nil {
+		t.Fatalf("commit parent: %v", err)
+	}
+	if err := commit("1.1", "子一", done, "改动收敛到 3 个文件", planEvent(ts+100, "plan_step", "第一步完成")); err != nil {
 		t.Fatalf("commit child 1.1: %v", err)
 	}
-	if err := commit("1.2", string(memhop.PlanStatusDone), "测试全绿", planEvent(ts+100, "plan_step", "第二步完成")); err != nil {
+	if err := commit("1.2", "子二", done, "测试全绿", planEvent(ts+200, "plan_step", "第二步完成")); err != nil {
 		t.Fatalf("commit child 1.2: %v", err)
 	}
 
 	// The rollup runs after every commit, so it must not pre-fill a parent the
 	// host has not committed: a parent is Done only because the host said so.
-	if got := findPlanNode(t, mustPlanState(t, db, topicID), "1"); got.Status != string(memhop.PlanStatusPending) || got.Summary != "" {
+	if got := findPlanNode(t, mustPlanState(t, db, topicID), "1"); got.Status != pending || got.Summary != "" {
 		t.Fatalf("an uncommitted parent was folded: %+v", got)
 	}
 
-	if err := commit("1", string(memhop.PlanStatusDone), "", planEvent(ts+200, "plan_step", "全部完成")); err != nil {
-		t.Fatalf("commit parent: %v", err)
+	// Committing the parent again with a blank title keeps the stored one.
+	if err := commit("1", "", done, "", planEvent(ts+300, "plan_step", "全部完成")); err != nil {
+		t.Fatalf("commit parent done: %v", err)
 	}
-	done := findPlanNode(t, mustPlanState(t, db, topicID), "1")
-	if done.Summary != "改动收敛到 3 个文件; 测试全绿" {
-		t.Fatalf("rolled-up summary = %q", done.Summary)
+	folded := findPlanNode(t, mustPlanState(t, db, topicID), "1")
+	if folded.Summary != "改动收敛到 3 个文件; 测试全绿" {
+		t.Fatalf("rolled-up summary = %q", folded.Summary)
 	}
-	if done.FinishedAt == 0 {
+	if folded.Title != "父" {
+		t.Fatalf("a blank title erased the stored one: %+v", folded)
+	}
+	if folded.FinishedAt == 0 {
 		t.Fatal("a terminal commit must stamp FinishedAt once")
 	}
 
 	// Both refusals are checked before the node is touched, so the status, the
 	// rolled-up summary and the event log all stay exactly as they were.
-	if err := commit("1", "finished", "越权摘要", planEvent(ts+300, "plan_step", "x")); err == nil {
+	if err := commit("1", "", "finished", "越权摘要", planEvent(ts+400, "plan_step", "x")); err == nil {
 		t.Fatal("an unknown plan status should be refused")
 	}
-	if err := commit("1", string(memhop.PlanStatusDone), "越权摘要", planEvent(ts+300, "", "x")); err == nil {
+	if err := commit("1", "", done, "越权摘要", planEvent(ts+400, "", "x")); err == nil {
 		t.Fatal("an event without an EventType should be refused")
 	}
 	after := findPlanNode(t, mustPlanState(t, db, topicID), "1")
-	if after.Summary != done.Summary || after.FinishedAt != done.FinishedAt {
+	if after.Summary != folded.Summary || after.FinishedAt != folded.FinishedAt {
 		t.Fatalf("a refused commit moved the node: %+v", after)
 	}
 	events := mustReadTrajectory(t, db, topicID)
-	if len(events) != 3 {
+	if len(events) != 4 {
 		t.Fatalf("refused commits wrote events: %+v", events)
 	}
 	// The read says which step each event belongs to — the host cannot derive
@@ -313,52 +231,5 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	// answered with an empty result.
 	if _, err := db.Crystallize(context.Background(), openTurn(t, db, sceneID), nil); err == nil {
 		t.Fatal("crystallizing a key with no events should fail")
-	}
-}
-
-func TestInterfacePlanWipe(t *testing.T) {
-	db, _ := openTestDB(t)
-	sceneID := openSession(t, db)
-	topicID := openTurn(t, db, sceneID)
-	ts := time.Now().UnixMilli()
-	if err := db.SyncPlanTree(topicID, &memhop.PlanNode{NodePath: "1", Title: "旧任务", Children: []memhop.PlanNode{
-		{NodePath: "1.1", Title: "旧步骤"},
-	}}); err != nil {
-		t.Fatalf("SyncPlanTree: %v", err)
-	}
-	mustAppend(t, db, topicID, "1.1", planEvent(ts, "tool_call", `{"tool":"file_read"}`))
-
-	// An unrelated next task must not land on the old tree by path, so the host
-	// wipes the tree with a nil snapshot and keeps the key it already holds.
-	if err := db.SyncPlanTree(topicID, nil); err != nil {
-		t.Fatalf("nil wipe: %v", err)
-	}
-	if tree := mustPlanState(t, db, topicID); len(tree.Roots) != 0 || tree.TotalCount != 0 {
-		t.Fatalf("wiped plan still has nodes: %+v", tree)
-	}
-	if events := mustReadTrajectory(t, db, topicID); len(events) != 0 {
-		t.Fatalf("wiped plan still has events: %+v", events)
-	}
-
-	mustAppend(t, db, topicID, "1", planEvent(ts+1, "plan_step", "新任务的第一步"))
-	restarted := mustReadTrajectory(t, db, topicID)
-	if len(restarted) != 1 || restarted[0].Seq != 1 {
-		t.Fatalf("after the wipe the Seq space did not restart: %+v", restarted)
-	}
-
-	// Seeding the next task's tree is a plain single-node sync.
-	if err := db.SyncPlanTree(topicID, &memhop.PlanNode{NodePath: "1", Title: "另一个任务"}); err != nil {
-		t.Fatalf("seed root: %v", err)
-	}
-	seeded := mustPlanState(t, db, topicID)
-	if seeded.TotalCount != 1 {
-		t.Fatalf("seeded plan = %+v, want one root", seeded)
-	}
-	root := seeded.Roots[0]
-	if root.NodePath != "1" || root.Title != "另一个任务" || root.Status != string(memhop.PlanStatusPending) {
-		t.Fatalf("seeded root = %+v", root)
-	}
-	if events := mustReadTrajectory(t, db, topicID); len(events) != 1 || events[0].Seq != 1 {
-		t.Fatalf("seeding must not disturb the restarted log: %+v", events)
 	}
 }

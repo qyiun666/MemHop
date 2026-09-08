@@ -71,17 +71,16 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 6. **planCache 域内索引**：L6 计划聚合缓存 `ac.Plans`（`domain` 包）
    **不内置锁**，完全依赖 `ac.Mu` 串行（区别于自带
    RWMutex 的 `TrajIndex`）。所有计划写路径（节点增删改、事件绑定、
-   `SyncPlanTree`、Dream 清理）必须先取 `ac.Mu` 再同步缓存；
-   `domain.NewContext` 构建，idle 重建时一并重建。`SyncPlanTree` 整树同步
-   只改节点结构/字段，**不产生 `plan_step` 事件**、不动事件 Seq 空间；但删掉
-   vanished 分支时必须**两份缓存一起镜像**——`ac.Plans.RemoveNodeBranch` 与
-   `ac.Traj.RemoveEvents`（`repo.DeletePlanNodeBranch` 返回它删掉的记录 id）。
-   只镜像计划缓存的话，事件索引仍命名已删记录，该 plan key 之后每次
+   Dream 清理）必须先取 `ac.Mu` 再同步缓存；`domain.NewContext` 构建，
+   idle 重建时一并重建。**一个键算不算一棵活树的判据是「键下还有节点」**——
+   `repo.CollectPlanAggregates` 与 `detachIfEmpty` 用同一条，裸轮次事件不引用
+   节点因此不成树。任何删记录的路径都要**两份缓存一起镜像**（`ac.Plans` 与
+   `ac.Traj`）：只镜像一边的话，事件索引仍命名已删记录，该键之后每次
    `ReadTrajectory`/`Crystallize` 都报 `ErrIO`，要等重启从记录重建索引才自愈。
 7. **L6 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
    合法的 L6 键。读写两侧一律经 `trajectory.ParseTopicID` 拒它
    （`AppendTrajectory`/`ReadTrajectory`/`PlanCommit`/`PlanState`/
-   `Crystallize`/`SyncPlanTree`）——只在写侧拒，全零键下就会攒出永远读不出的记录。
+   `Crystallize`）——只在写侧拒，全零键下就会攒出永远读不出的记录。
 8. **计划清理有界**：dream 的 `l6_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有活动」的计划；宿主中断或放弃而静默超 `TrajectoryRetention` 的计划
    照常清理并级联其绑定事件，否则废弃计划会让 L6 无界增长。

@@ -100,13 +100,13 @@ func TestSurfacePlanTriForm(t *testing.T) {
 	db := openSurfaceDB(t)
 	planID := mustTurnKey(t, db)
 	// Root in_progress → child done → child done → host completes root → done.
-	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, "in_progress", ""); err != nil {
+	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanStep{Status: "in_progress", Summary: ""}); err != nil {
 		t.Fatalf("commit root: %v", err)
 	}
-	if err := db.PlanCommit(planID, "1.1", TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, "done", "step A"); err != nil {
+	if err := db.PlanCommit(planID, "1.1", TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanStep{Status: "done", Summary: "step A"}); err != nil {
 		t.Fatalf("commit 1.1: %v", err)
 	}
-	if err := db.PlanCommit(planID, "1.2", TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, "done", "step B"); err != nil {
+	if err := db.PlanCommit(planID, "1.2", TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanStep{Status: "done", Summary: "step B"}); err != nil {
 		t.Fatalf("commit 1.2: %v", err)
 	}
 	// Model A: root is NOT auto-folded by its children; the host must commit it.
@@ -118,7 +118,7 @@ func TestSurfacePlanTriForm(t *testing.T) {
 		t.Fatalf("root must NOT auto-fold before explicit host commit, got %s", tree.Roots[0].Status)
 	}
 	// Host explicitly completes the parent → it becomes Done and rolls up.
-	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, "done", ""); err != nil {
+	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, PlanStep{Status: "done", Summary: ""}); err != nil {
 		t.Fatalf("commit root done: %v", err)
 	}
 	tree, err = db.PlanState(planID)
@@ -146,96 +146,6 @@ func TestSurfacePlanTriForm(t *testing.T) {
 	// PlanAppend does not advance; it just binds an event to a node.
 	if err := db.AppendTrajectory(planID, "1.1.1", TrajectorySlot{EventType: "tool_call", Timestamp: 2000}); err != nil {
 		t.Fatalf("plan append: %v", err)
-	}
-}
-
-// TestSurfacePlanWipeAndReseed covers the host restart-recovery loop: two
-// top-level steps form a two-root forest, a nil-root sync wipes that tree,
-// and a single-node sync reseeds one pending root under the same plan id.
-func TestSurfacePlanWipeAndReseed(t *testing.T) {
-	db := openSurfaceDB(t)
-	planID := common.FormatHash(common.HashID("plan-replace"))
-	for _, step := range []string{"1", "2"} {
-		if err := db.PlanCommit(planID, step, TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, "pending", ""); err != nil {
-			t.Fatalf("commit %s: %v", step, err)
-		}
-	}
-	tree, err := db.PlanState(planID)
-	if err != nil || len(tree.Roots) != 2 || tree.TotalCount != 2 {
-		t.Fatalf("forest shape: roots=%d total=%d err=%v", len(tree.Roots), tree.TotalCount, err)
-	}
-
-	if err := db.SyncPlanTree(planID, nil); err != nil {
-		t.Fatalf("wipe: %v", err)
-	}
-	tree, err = db.PlanState(planID)
-	if err != nil || len(tree.Roots) != 0 || tree.TotalCount != 0 {
-		t.Fatalf("wiped plan: %+v err=%v", tree.Roots, err)
-	}
-
-	if err := db.SyncPlanTree(planID, &PlanNode{NodePath: "1", Title: "rewrite"}); err != nil {
-		t.Fatalf("reseed: %v", err)
-	}
-	tree, err = db.PlanState(planID)
-	if err != nil || len(tree.Roots) != 1 || tree.Roots[0].Title != "rewrite" || tree.Roots[0].Status != "pending" {
-		t.Fatalf("reseeded root: %+v err=%v", tree.Roots, err)
-	}
-
-	if !isHexID(planID) {
-		t.Fatalf("plan id must be a 16-hex token: %q", planID)
-	}
-}
-
-// TestSurfaceSyncPlanTree locks the public contract: SyncPlanTree writes a
-// whole tree (add/edit/delete) without emitting plan_step, and PlanState
-// surfaces the node Type + FinishedAt fields.
-func TestSurfaceSyncPlanTree(t *testing.T) {
-	db := openSurfaceDB(t)
-	planID := common.FormatHash(common.HashID("sync-plan"))
-	root := &PlanNode{
-		NodePath: "1", Title: "root", Type: "plan", Status: "running",
-		Children: []PlanNode{
-			{NodePath: "1.1", Title: "step a", Type: "step", Status: "done", Summary: "s"},
-			{NodePath: "1.2", Title: "tool x", Type: "tool_call", Status: "failed"},
-		},
-	}
-	if err := db.SyncPlanTree(planID, root); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-	tree, err := db.PlanState(planID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tree.Roots) != 1 || tree.Roots[0].Title != "root" || tree.Roots[0].Type != "plan" || tree.Roots[0].Status != "running" {
-		t.Fatalf("root: %+v", tree.Roots)
-	}
-	children := tree.Roots[0].Children
-	if len(children) != 2 {
-		t.Fatalf("children = %d want 2", len(children))
-	}
-	if children[0].Status != "done" || children[0].Type != "step" || children[0].FinishedAt == 0 || children[0].Summary != "s" {
-		t.Fatalf("step a: %+v", children[0])
-	}
-	if children[1].Type != "tool_call" || children[1].Status != "failed" || children[1].FinishedAt == 0 {
-		t.Fatalf("tool x: %+v", children[1])
-	}
-	// Second sync deletes a node and edits the root; must reflect.
-	root2 := &PlanNode{
-		NodePath: "1", Title: "root", Type: "plan", Status: "done",
-		Children: []PlanNode{{NodePath: "1.1", Title: "step a", Type: "step", Status: "done"}},
-	}
-	if err := db.SyncPlanTree(planID, root2); err != nil {
-		t.Fatalf("sync2: %v", err)
-	}
-	tree2, err := db.PlanState(planID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tree2.Roots[0].Children) != 1 || tree2.Roots[0].Children[0].NodePath != "1.1" {
-		t.Fatalf("delete not reflected: %+v", tree2.Roots[0].Children)
-	}
-	if tree2.Roots[0].TrajCount != 0 {
-		t.Fatalf("sync must not emit plan_step events: %+v", tree2.Roots[0])
 	}
 }
 
@@ -356,14 +266,10 @@ func TestSurfaceReservedTopicID(t *testing.T) {
 	calls := map[string]func() error{
 		"AppendBare":     func() error { return db.AppendTrajectory(zero, "", ev) },
 		"AppendNode":     func() error { return db.AppendTrajectory(zero, "1", ev) },
-		"PlanCommit":     func() error { return db.PlanCommit(zero, "1", ev, "done", "") },
+		"PlanCommit":     func() error { return db.PlanCommit(zero, "1", ev, PlanStep{Status: "done", Summary: ""}) },
 		"PlanState":      func() error { _, err := db.PlanState(zero); return err },
 		"ReadTrajectory": func() error { _, err := db.ReadTrajectory(zero); return err },
 		"Crystallize":    func() error { _, err := db.Crystallize(ctx, zero, nil); return err },
-		"SyncPlanTree":   func() error { return db.SyncPlanTree(zero, nil) },
-		"SyncPlanTreeRoot": func() error {
-			return db.SyncPlanTree(zero, &PlanNode{NodePath: "1", Title: "t"})
-		},
 	}
 	for name, call := range calls {
 		if err := call(); common.CodeOf(err) != common.ErrInvalidQuery {

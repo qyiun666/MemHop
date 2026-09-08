@@ -59,7 +59,7 @@ func TestPlanCacheUpsertKeepsOrderAndStats(t *testing.T) {
 	}
 }
 
-func TestPlanCacheUpsertEventAndRemoveBranch(t *testing.T) {
+func TestPlanCacheUpsertEventAndDetachWhenEmpty(t *testing.T) {
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
 	pc.UpsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
 	pc.UpsertNode(9, tnode(12, 9, "1.1", 2, core.StatusPending, 150))
@@ -74,9 +74,10 @@ func TestPlanCacheUpsertEventAndRemoveBranch(t *testing.T) {
 	if agg.LastActiveAt != 400 {
 		t.Fatalf("LastActiveAt=%d want 400", agg.LastActiveAt)
 	}
-	// Remove branch "1": nodes 1/1.1/1.1.1 and the event bound to 12 drop; the
-	// sibling "2" (and its event) survive.
-	pc.RemoveNodeBranch(9, "1")
+
+	// A plan is a live plan only while a node of it exists: dropping the last
+	// one detaches the aggregate, so an expired tree stops being addressed.
+	pc.RemovePlanIDs(9, []uint64{11, 12, 13}, []uint64{101})
 	agg = pc.Aggregate(9)
 	if agg == nil {
 		t.Fatal("aggregate should survive (node 2 remains)")
@@ -85,23 +86,13 @@ func TestPlanCacheUpsertEventAndRemoveBranch(t *testing.T) {
 		t.Fatalf("surviving nodes: %v", agg.Nodes)
 	}
 	if _, ok := agg.EventCount[12]; ok {
-		t.Fatalf("removed branch event must be dropped: %v", agg.EventCount)
+		t.Fatalf("dropped node's event count must go: %v", agg.EventCount)
 	}
 	if agg.EventCount[14] != 1 {
 		t.Fatalf("sibling event must stay: %v", agg.EventCount)
 	}
-	// Removing the last node detaches the whole aggregate.
-	pc.RemoveNodeBranch(9, "2")
+	pc.RemovePlanIDs(9, []uint64{14}, []uint64{102})
 	if agg := pc.Aggregate(9); agg != nil {
-		t.Fatal("empty plan must be detached")
-	}
-}
-
-func TestPlanCacheRemovePlanDetaches(t *testing.T) {
-	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
-	pc.UpsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
-	pc.RemovePlan(9)
-	if pc.Aggregate(9) != nil {
-		t.Fatal("removePlan must drop the aggregate")
+		t.Fatal("a plan whose last node is gone must be detached")
 	}
 }

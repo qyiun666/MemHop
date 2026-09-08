@@ -193,20 +193,12 @@ func (s *Session) Crystallize(ctx context.Context, turnID string, existing []Cap
 
 // PlanCommit advances a plan node to a status and appends the step event.
 // topicID names the turn that opened the plan.
-func (s *Session) PlanCommit(topicID, nodePath string, ev TrajectorySlot, status PlanStatus, summary string) error {
-	return s.db.PlanCommit(s.agentID, topicID, nodePath, ev, status, summary)
+func (s *Session) PlanCommit(topicID, nodePath string, ev TrajectorySlot, step PlanStep) error {
+	return s.db.PlanCommit(s.agentID, topicID, nodePath, ev, step)
 }
 
 // PlanState returns the plan tree of one turn, keyed by the topic id that
 // opened it.
 func (s *Session) PlanState(topicID string) (*PlanTree, error) {
 	return s.db.PlanState(s.agentID, topicID)
-}
-
-// SyncPlanTree replaces one plan's whole tree from the host's authoritative
-// snapshot: adds/updates nodes by path, deletes vanished nodes (with their
-// bound events) and never appends a plan_step event. A nil root wipes the
-// plan (nodes and bound events) and keeps the key.
-func (s *Session) SyncPlanTree(topicID string, root *PlanNode) error {
-	return s.db.SyncPlanTree(s.agentID, topicID, root)
 }

@@ -56,31 +56,6 @@ func TestTrajIndexAppendAndQuery(t *testing.T) {
 	}
 }
 
-func TestTrajIndexRemoveSession(t *testing.T) {
-	idx := NewTrajIndex()
-	idx.Append(7, 1, 101, 100)
-	idx.Append(7, 2, 102, 200)
-	idx.Append(8, 1, 103, 300)
-
-	got := idx.RemoveSession(7)
-	if len(got) != 2 || got[0] != 101 || got[1] != 102 {
-		t.Fatalf("RemoveSession(7) = %v, want [101 102]", got)
-	}
-	if _, ok := idx.MaxSeq(7); ok {
-		t.Fatal("removed turn must report ok=false")
-	}
-	if hashes := idx.EventHashes(7); hashes != nil {
-		t.Fatalf("EventHashes(7) = %v, want nil", hashes)
-	}
-	if sums := idx.Summaries(); len(sums) != 1 || sums[0].SessionID != 8 {
-		t.Fatalf("Summaries = %+v, want only turn 8", sums)
-	}
-	// Removing the same (or an unknown) turn again is a no-op.
-	if got := idx.RemoveSession(7); got != nil {
-		t.Fatalf("second RemoveSession = %v, want nil", got)
-	}
-}
-
 func TestTrajIndexRemoveEvents(t *testing.T) {
 	idx := NewTrajIndex()
 	idx.Append(7, 1, 101, 100)

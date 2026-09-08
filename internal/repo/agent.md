@@ -67,4 +67,4 @@
 <!-- 2026-09-04 接口去 fallback 与按层闭环修复 -->
 - `EnsureGraphL3`：槽存在就复用其 id、不覆写记录；`CreateGraphL3` 是无条件写槽，只用于确认不存在时。
 - L2/L4 读路径的错误策略：只有 `CodeOf(err)==ErrNotFound` 才跳过那一条，其余（IO/关闭/损坏）一律返回 error——宿主分不清「少一条」和「没有这一条」。`ListScenesL2`/`CollectAllScenesL2`/`QueryArchivesL4` 因此都带 error 返回。
-- L6 只有一组记录、一个键（`l6layer.go`）：轨迹事件与计划节点同住 `SessionID`，该键就是开出这一轮的话题 id。`CollectPlanAggregates` 按它分组，一条记录只有**本身就是节点**或**引用了节点**（`PlanNodeRef`）时才进聚合——裸轮次事件不属于任何树，键下节点清空即不再有聚合。`WritePlanNode` 校验 `IDHash == HashPlanNode(SessionID, NodePath)`：节点身份是派生的，本层不接受调用方自备的第二把键。
+- L6 只有一组记录、一个键（`l6layer.go`）：轨迹事件与计划节点同住 `SessionID`，该键就是开出这一轮的话题 id。`CollectPlanAggregates` 按它分组，一条记录只有**本身就是节点**或**引用了节点**（`PlanNodeRef`）时才进聚合——裸轮次事件不属于任何树，键下节点清空即不再有聚合。`WritePlanNode` 校验 `IDHash == HashPlanNode(SessionID, NodePath)`：节点身份是派生的，本层不接受调用方自备的第二把键。删除只有 `DeleteTrajectoryByIDs` 一条（Dream 保留窗按 id 批删）；本层没有「擦掉一棵树」「删某分支」的原语，树的作废发生在键上，不在记录上。

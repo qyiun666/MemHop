@@ -4,8 +4,10 @@
   `L2Meta`/`Traj`/`Plans` 缓存、`DreamInFlight`、`OpCtx`/`OpCancel`、
   `LastActiveAt`/`Deleted`，以及构造时注入的 `Engine`/`LLM`/`Defaults`。
   另有 `PlanCache`（无自带锁，靠 `Context.Mu` 串行；键是**开出该计划的那一轮**的
-  话题 ID，一个聚合存在当且仅当该键下还有节点）与 L2Meta 缓存维护
-  （`SyncL2Meta`/`RemoveTopicsFromIndices`/`RetargetL2Meta`）。
+  话题 ID，一个聚合存在当且仅当该键下还有节点）。面只有
+  `Aggregate`/`UpsertNode`/`UpsertEvent`/`RemovePlanIDs` 四个：树的作废不走缓存删除
+  通道（换轮次键即换树，旧树由 Dream 保留窗经 `RemovePlanIDs` 回收）。另有
+  L2Meta 缓存维护（`SyncL2Meta`/`RemoveTopicsFromIndices`/`RetargetL2Meta`）。
 - **纪律**：所有字段只在持有 `Mu` 时读写（组合根在大方法入口拿锁）。
   本包不拿引擎以外的资源，不做业务编排——编排是小方法包与根的事。
 - **陷阱**：写记录帧后必须紧跟 `SyncL2Meta`（存储 → 缓存序）；

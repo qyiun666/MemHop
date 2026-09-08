@@ -6,7 +6,6 @@ package domain
 import (
 	"cmp"
 	"slices"
-	"strings"
 
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
@@ -85,43 +84,6 @@ func (pc *PlanCache) UpsertEvent(topicID, nodeID uint64, ev core.TrajectorySlot)
 	if ev.Timestamp > agg.LastActiveAt {
 		agg.LastActiveAt = ev.Timestamp
 	}
-}
-
-// RemoveNodeBranch drops the branch nodes and their bound events from the
-// cache, mirroring repo.DeletePlanNodeBranch (which removes them on disk).
-// Does not touch the engine.
-func (pc *PlanCache) RemoveNodeBranch(topicID uint64, nodePath string) {
-	agg := pc.plans[topicID]
-	if agg == nil {
-		return
-	}
-	prefix := nodePath + "."
-	target := make(map[uint64]struct{})
-	agg.Nodes = slices.DeleteFunc(agg.Nodes, func(n core.TrajectorySlot) bool {
-		if n.NodePath == nodePath || strings.HasPrefix(n.NodePath, prefix) {
-			target[n.IDHash] = struct{}{}
-			return true
-		}
-		return false
-	})
-	agg.Events = slices.DeleteFunc(agg.Events, func(e core.TrajectorySlot) bool {
-		if _, ok := target[e.PlanNodeRef]; ok {
-			return true
-		}
-		return false
-	})
-	for id := range target {
-		delete(agg.EventCount, id)
-	}
-	if len(target) > 0 {
-		recomputePlanAggStat(agg)
-	}
-	pc.detachIfEmpty(topicID)
-}
-
-// RemovePlan drops a plan's whole aggregate; used by the SyncPlanTree wipe.
-func (pc *PlanCache) RemovePlan(topicID uint64) {
-	delete(pc.plans, topicID)
 }
 
 // RemovePlanIDs drops a specific set of nodes and bound events from the cache,

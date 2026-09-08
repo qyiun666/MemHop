@@ -64,22 +64,6 @@ func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.Trajec
 	return node.IDHash, nil
 }
 
-// CollectPlanNodes returns the plan-node records of one turn's plan (any
-// NodePath), sorted by Seq; events are excluded. Callers group the tree.
-func CollectPlanNodes(engine *core.StorageEngine, agentID uint64, topicID uint64) []core.TrajectorySlot {
-	var out []core.TrajectorySlot
-	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.NodeType != core.NodeTypePlan || ev.SessionID != topicID {
-			continue
-		}
-		out = append(out, ev)
-	}
-	slices.SortFunc(out, func(a, b core.TrajectorySlot) int {
-		return cmp.Or(cmp.Compare(a.Seq, b.Seq), CompareNodePath(a.NodePath, b.NodePath))
-	})
-	return out
-}
-
 // PlanAggregate is one turn's plan footprint, computed in a single scan of the
 // domain's L6 records (no per-node rescans).
 type PlanAggregate struct {
@@ -140,64 +124,6 @@ func CollectPlanAggregates(engine *core.StorageEngine, agentID uint64) []PlanAgg
 	}
 	slices.SortFunc(out, func(a, b PlanAggregate) int { return cmp.Compare(a.TopicID, b.TopicID) })
 	return out
-}
-
-// DeletePlanRecords removes one turn's plan nodes and bound events in a single
-// scan and returns how many records were removed; unknown plans remove
-// nothing (idempotent).
-func DeletePlanRecords(engine *core.StorageEngine, agentID, topicID uint64) (int, error) {
-	var ids []uint64
-	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.SessionID == topicID {
-			ids = append(ids, ev.IDHash)
-		}
-	}
-	return DeleteTrajectoryByIDs(engine, agentID, ids)
-}
-
-// DeletePlanNodeBranch removes one plan node and its whole descendant subtree
-// along with every event bound to those nodes (PlanNodeRef within the branch).
-// nodePath matches itself and any "nodePath.N..." descendant; unknown paths or
-// plans remove nothing (idempotent).
-//
-// It hands back the ids it deleted (node records included) because the caller
-// owns the trajectory index: an entry left naming a deleted event makes every
-// later read of that key fail on a record that no longer exists. The index
-// holds only events, so the node ids in the list are no-ops there.
-func DeletePlanNodeBranch(engine *core.StorageEngine, agentID, topicID uint64, nodePath string) ([]uint64, error) {
-	if nodePath == "" {
-		return nil, common.NewError(common.ErrInvalidQuery, "nodePath required")
-	}
-	prefix := nodePath + "."
-	var nodeIDs []uint64
-	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.SessionID != topicID || ev.NodeType != core.NodeTypePlan {
-			continue
-		}
-		if ev.NodePath == nodePath || strings.HasPrefix(ev.NodePath, prefix) {
-			nodeIDs = append(nodeIDs, ev.IDHash)
-		}
-	}
-	if len(nodeIDs) == 0 {
-		return nil, nil
-	}
-	target := make(map[uint64]struct{}, len(nodeIDs))
-	for _, id := range nodeIDs {
-		target[id] = struct{}{}
-	}
-	delIDs := append([]uint64(nil), nodeIDs...)
-	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.NodeType != core.NodeTypeEvent || ev.SessionID != topicID {
-			continue
-		}
-		if _, ok := target[ev.PlanNodeRef]; ok {
-			delIDs = append(delIDs, ev.IDHash)
-		}
-	}
-	if _, err := DeleteTrajectoryByIDs(engine, agentID, delIDs); err != nil {
-		return nil, err
-	}
-	return delIDs, nil
 }
 
 // CompareNodePath compares two node-path strings ("1", "1.2.1") numerically

@@ -65,7 +65,7 @@ func TestSessionPublicSurface(t *testing.T) {
 		"SearchL4",
 		// L6 trajectory and plans
 		"ReadTrajectory", "ListTrajectorySessions", "Crystallize",
-		"SyncPlanTree", "PlanCommit", "PlanState",
+		"PlanCommit", "PlanState",
 
 		// assembly/admin face — host code at session boundaries and management
 		// channels only, never an LLM tool

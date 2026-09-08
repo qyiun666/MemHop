@@ -293,15 +293,27 @@ func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
 func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 	sess := openSurface(t)
 	pid := mustTurnKey(t, sess)
-	root := &PlanNode{NodePath: "1", Title: "root", Type: "task", Status: "in_progress",
-		Children: []PlanNode{{NodePath: "1.1", Title: "leaf", Type: "task", Status: "pending"}}}
-	if err := sess.SyncPlanTree(pid, root); err != nil {
-		t.Fatalf("SyncPlanTree: %v", err)
+	// Committing a step is what adds it: the node chain is created along the
+	// path, and the node keeps the title and type the host named it with.
+	seed := []struct{ path, title, status string }{
+		{"1", "root", "in_progress"}, {"1.1", "leaf", "pending"},
+	}
+	for i, s := range seed {
+		if err := sess.PlanCommit(pid, s.path,
+			TrajectorySlot{EventType: "plan_step", Timestamp: int64(100 + i)},
+			PlanStep{Title: s.title, Type: "task", Status: s.status}); err != nil {
+			t.Fatalf("commit seed %s: %v", s.path, err)
+		}
 	}
 	before, err := sess.PlanState(pid)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if before.TotalCount != 2 || before.Roots[0].Title != "root" || before.Roots[0].Type != "task" {
+		t.Fatalf("seeded tree = %+v, want a titled root plus its leaf", before)
+	}
+	// Two seeds, so two step events already landed.
+	const seededEvents = 2
 
 	rejected := []struct {
 		name string
@@ -311,9 +323,14 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 		{"no event type", TrajectorySlot{Timestamp: 7}},
 		{"payload over budget", TrajectorySlot{EventType: "plan_step", Timestamp: 7,
 			Payload: strings.Repeat("x", 5*1024)}},
+		{"unknown status", TrajectorySlot{EventType: "plan_step", Timestamp: 7}},
 	}
 	for _, tc := range rejected {
-		if err := sess.PlanCommit(pid, "1.1", tc.ev, "done", "should-not-stick"); err == nil {
+		step := PlanStep{Status: "done", Summary: "should-not-stick"}
+		if tc.name == "unknown status" {
+			step.Status = "finished"
+		}
+		if err := sess.PlanCommit(pid, "1.1", tc.ev, step); err == nil {
 			t.Fatalf("%s: want an error", tc.name)
 		}
 		after, err := sess.PlanState(pid)
@@ -324,12 +341,12 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 			t.Fatalf("%s: a refused commit moved the tree\n before %s\n after  %s",
 				tc.name, render(before.Roots), render(after.Roots))
 		}
-		if evs, err := sess.ReadTrajectory(pid); err != nil || len(evs) != 0 {
+		if evs, err := sess.ReadTrajectory(pid); err != nil || len(evs) != seededEvents {
 			t.Fatalf("%s: a refused commit stored %d events (err=%v)", tc.name, len(evs), err)
 		}
 	}
 
-	if err := sess.PlanCommit(pid, "1.1", TrajectorySlot{EventType: "plan_step", Timestamp: 7}, "done", "leaf done"); err != nil {
+	if err := sess.PlanCommit(pid, "1.1", TrajectorySlot{EventType: "plan_step", Timestamp: 7}, PlanStep{Status: "done", Summary: "leaf done"}); err != nil {
 		t.Fatalf("valid commit: %v", err)
 	}
 	after, _ := sess.PlanState(pid)
@@ -337,12 +354,12 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 		t.Fatalf("valid commit must advance the tree: %d → %d", before.DoneCount, after.DoneCount)
 	}
 	evs, err := sess.ReadTrajectory(pid)
-	if err != nil || len(evs) != 1 {
-		t.Fatalf("want 1 event, got %d err=%v", len(evs), err)
+	if err != nil || len(evs) != seededEvents+1 {
+		t.Fatalf("want %d events, got %d err=%v", seededEvents+1, len(evs), err)
 	}
 	// an event bound to a step reads back attributed to that step
-	if evs[0].NodePath != "1.1" || evs[0].SessionID != pid {
-		t.Fatalf("event not attributed to its step: %+v", evs[0])
+	if last := evs[len(evs)-1]; last.NodePath != "1.1" || last.SessionID != pid {
+		t.Fatalf("event not attributed to its step: %+v", last)
 	}
 }
 

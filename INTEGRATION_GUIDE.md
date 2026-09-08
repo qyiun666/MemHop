@@ -205,7 +205,7 @@ What happens *between* those two messages (tool calls, intermediate output, suba
 
 The 27 session methods split by audience:
 
-- **Runtime/task face (20)** — the host drives these every turn and LLM tools bind to them: `Search` / `Update` / `Dream` / `AppendTrajectory` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`, `SyncPlanTree` / `PlanCommit` / `PlanState`.
+- **Runtime/task face (19)** — the host drives these every turn and LLM tools bind to them: `Search` / `Update` / `Dream` / `AppendTrajectory` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`, `PlanCommit` / `PlanState`.
 - **Assembly/admin face (7, plus all of `MultiAgentDB`)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3` / `DeleteL3Nodes`. The capability format left the method surface entirely: `ParseCapabilityPackage` / `ValidateCapabilityCard` are package-level functions (§8 L5).
 
 ### L0 profile
@@ -388,9 +388,8 @@ and its nodes alike. The host assigns each node a **dotted `NodePath`** (`"1"`,
 | Call | Meaning |
 |---|---|
 | `db.AppendTrajectory(topicID, nodePath, ev)` | record a step event against that node, creating the node chain as pending if missing — this is also how a step is added. `nodePath` must sit under its parent's path; `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `ReadTrajectory` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
-| `db.PlanCommit(topicID, nodePath, ev, api.PlanStatusDone, summary)` | advance a node's status and append its step event; `done` children's summaries roll up into their parent (a parent turns `done` only when the host commits it) |
+| `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "research", Type: "step", Status: api.PlanStatusDone, Summary: s})` | commit one step: advance the node's status, append its event, and roll `done` children's summaries up into their parent (a parent turns `done` only when the host commits it). A `nodePath` missing along the dotted path is created as pending — this is how a step is added. A blank `Title`/`Type`/`Summary` keeps what the node already holds; an unknown `Status` is refused before the tree moves |
 | `db.PlanState(topicID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`) — also the restart recovery path |
-| `db.SyncPlanTree(topicID, root *PlanNode)` | push the authoritative whole tree: adds/updates nodes by `NodePath`, deletes vanished nodes with their bound events, emits no `plan_step`. A blank `Title`/`Type`/`Status`/`Summary` inherits the stored value, so a partial snapshot never rewinds a finished step. A **nil root wipes the plan** — every node and bound event is removed while the key is kept |
 
 `0000000000000000` is reserved (it is the value a record leaves its key unset
 with) and every L6 entry rejects it — reads included.

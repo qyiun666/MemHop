@@ -6,12 +6,12 @@
 // set is exactly the externally callable surface. Every call is serialized
 // per agent domain by the internal domain lock.
 //
-// The methods split by audience. The runtime/task face (20) is what the host
+// The methods split by audience. The runtime/task face (19) is what the host
 // drives every turn and what LLM tools bind to: Search, Update, Dream,
 // AppendTrajectory (the host-driven loop), SceneContext, ListScenes, GetL0,
 // UpdateL0, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes, QueryL3Subgraph,
-// Crystallize, ReadTrajectory, ListTrajectorySessions, SyncPlanTree,
-// PlanCommit, PlanState. The assembly/admin face (7, plus all of
+// Crystallize, ReadTrajectory, ListTrajectorySessions, PlanCommit, PlanState.
+// The assembly/admin face (7, plus all of
 // MultiAgentDB) is host code at session boundaries and management channels
 // only — never an LLM tool: UpdateScene, MergeScenes, DeleteTopic,
 // DeleteScene, UpdateL3, DeleteL3, DeleteL3Nodes. The engine stores no
@@ -212,18 +212,17 @@ func (s *Session) AppendTrajectory(topicID, nodePath string, ev TrajectorySlot) 
 	return s.Session.AppendTrajectory(topicID, nodePath, toCoreTrajectorySlot(ev))
 }
 
-// PlanCommit advances a plan node to a status, appends the step event and rolls
+// PlanCommit advances one plan node and appends its step event, then rolls
 // Done children's summaries up into their parent. topicID is the turn that
-// opened the plan; nodePath is the dotted path the host assigns within it (a
-// missing node along the path is created, so this is how a step is added).
-// status takes the PlanStatus* string constants ("pending" / "in_progress" /
-// "running" / "done" / "failed"); an unknown value is rejected. Like the
-// node-bound AppendTrajectory, the event is forced to bare-event semantics and
-// names itself: any non-empty EventType the host chooses is accepted. summary
-// is the node's own conclusion: a later commit that leaves it blank keeps what
-// is stored, so it never rewinds a folded summary.
-func (s *Session) PlanCommit(topicID, nodePath string, ev TrajectorySlot, status string, summary string) error {
-	return s.Session.PlanCommit(topicID, nodePath, toCoreTrajectorySlot(ev), internal.PlanStatus(status), summary)
+// opened the plan; nodePath is the dotted path the host assigns within it
+// ("1", "1.2.1") — a node missing along that path is created as pending, which
+// is how a step is added. Like the node-bound AppendTrajectory, the event is
+// forced to bare-event semantics and names itself: any non-empty EventType the
+// host chooses is accepted. step carries the node's own fields; an unknown
+// Status is refused before the tree moves, and a field left blank keeps what is
+// stored, so a later commit never rewinds a finished step.
+func (s *Session) PlanCommit(topicID, nodePath string, ev TrajectorySlot, step PlanStep) error {
+	return s.Session.PlanCommit(topicID, nodePath, toCoreTrajectorySlot(ev), toInternalPlanStep(step))
 }
 
 // PlanState returns the plan tree of one turn — keyed by the topic id that
@@ -235,22 +234,6 @@ func (s *Session) PlanState(topicID string) (*PlanTree, error) {
 	}
 	out := fromPlanTree(t)
 	return &out, nil
-}
-
-// SyncPlanTree replaces one plan's whole tree from the host's authoritative
-// snapshot: adds/updates nodes by path, deletes vanished nodes (with their
-// bound events) and never appends a plan_step event. topicID is the turn that
-// opened the plan.
-// A nil root wipes the plan instead — every node and bound event is removed
-// while the key is kept, so an unrelated next task can start on the id the
-// host already holds without landing on the old tree by path; seed the fresh
-// tree by syncing a single root node (an empty status lands pending).
-func (s *Session) SyncPlanTree(topicID string, root *PlanNode) error {
-	if root == nil {
-		return s.Session.SyncPlanTree(topicID, nil)
-	}
-	in := toInternalPlanNode(root)
-	return s.Session.SyncPlanTree(topicID, &in)
 }
 
 // ---- Promoted surface, documented ----

@@ -215,16 +215,17 @@ type PlanNodeView struct {
 	Children   []PlanNodeView `json:"children"`
 }
 
-// PlanNode is the host-supplied full plan tree for SyncPlanTree; NodePath is
-// assigned by the host, and Status is the string surface (pending/in_progress/
-// running/done/failed; "" defaults to pending).
-type PlanNode struct {
-	NodePath string     `json:"node_path"`
-	Title    string     `json:"title"`
-	Type     string     `json:"type"`
-	Status   string     `json:"status"`
-	Summary  string     `json:"summary"`
-	Children []PlanNode `json:"children"`
+// PlanStep is one host commit's node-side fields, passed to PlanCommit for the
+// node named by NodePath (a node missing along the path is created as pending,
+// which is how a step is added). Status is the string surface (pending /
+// in_progress / running / done / failed); an unknown value is refused before
+// the tree moves. A blank Title/Type/Summary keeps what the node already holds,
+// so committing a step again never rewinds its title or erases a folded summary.
+type PlanStep struct {
+	Title   string `json:"title"`
+	Type    string `json:"type"` // plan/step/tool_call; empty = plain node
+	Status  string `json:"status"`
+	Summary string `json:"summary"`
 }
 
 // PlanTree is the external forest view of one plan: every top-level step is

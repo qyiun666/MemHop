@@ -78,6 +78,7 @@ func AppendEventLocked(ac *domain.Context, agentID, topicID uint64, nodePath str
 	ev.ParentID = 0
 	ev.Status = 0
 	ev.Summary = ""
+	ev.Title = ""
 	ev.PlanType = ""
 	idHash, err := repo.AppendTrajectory(ac.Engine, agentID, ev)
 	if err != nil {
@@ -88,22 +89,35 @@ func AppendEventLocked(ac *domain.Context, agentID, topicID uint64, nodePath str
 	return nil
 }
 
-// UpdateNodeLocked sets a plan node's status/summary, re-reading the
-// stored node so it preserves its derived IDHash. It deliberately does NOT
-// touch the event TrajIndex: plan nodes are not per-turn events and must not
-// occupy their Seq space, otherwise a deep then shallow commit would collapse
-// the per-plan event Seq and overwrite a prior event. Callers hold ac.Mu.
-func UpdateNodeLocked(ac *domain.Context, agentID, nodeID uint64, status uint8, summary string) error {
+// CommitNode applies one host commit to a plan node: its status plus the
+// node's own Title/PlanType/Summary, where a field Step leaves blank keeps what
+// is stored — re-committing a step never erases its title or a summary already
+// folded into it. An unknown status is refused before anything is written. A
+// terminal status records FinishedAt exactly once. It deliberately does NOT
+// touch the event TrajIndex: plan nodes are not events and must not occupy the
+// Seq space, otherwise a deep then shallow commit would collapse it and
+// overwrite a prior event. Callers hold ac.Mu.
+func CommitNode(ac *domain.Context, agentID, nodeID uint64, step Step) error {
+	u8, err := StatusToU8(step.Status)
+	if err != nil {
+		return err
+	}
 	node, err := core.ReadTrajectorySlot(ac.Engine, agentID, nodeID)
 	if err != nil {
 		return err
 	}
-	node.Status = status
-	if summary != "" {
-		node.Summary = summary
+	node.Status = u8
+	if step.Summary != "" {
+		node.Summary = step.Summary
+	}
+	if step.Title != "" {
+		node.Title = step.Title
+	}
+	if step.PlanType != "" {
+		node.PlanType = step.PlanType
 	}
 	now := time.Now().UnixMilli()
-	if IsTerminalStatus(status) && node.FinishedAt == 0 {
+	if IsTerminalStatus(node.Status) && node.FinishedAt == 0 {
 		node.FinishedAt = now
 	}
 	node.Timestamp = now

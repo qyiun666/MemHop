@@ -249,18 +249,10 @@ func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
 	return out
 }
 
-func toInternalPlanNode(root *PlanNode) internal.PlanNode {
-	if root == nil {
-		return internal.PlanNode{}
-	}
-	children := make([]internal.PlanNode, 0, len(root.Children))
-	for i := range root.Children {
-		children = append(children, toInternalPlanNode(&root.Children[i]))
-	}
-	return internal.PlanNode{
-		NodePath: root.NodePath, Title: root.Title, PlanType: root.Type,
-		Status: internal.PlanStatus(root.Status), Summary: root.Summary,
-		Children: children,
+func toInternalPlanStep(s PlanStep) internal.PlanStep {
+	return internal.PlanStep{
+		Status: internal.PlanStatus(s.Status), Title: s.Title,
+		PlanType: s.Type, Summary: s.Summary,
 	}
 }
 

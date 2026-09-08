@@ -5,8 +5,6 @@ package repo
 
 import (
 	"fmt"
-	"slices"
-	"strings"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -73,7 +71,7 @@ func TestWritePlanNode_KeepsHashPlanNodeID(t *testing.T) {
 	}
 }
 
-func TestCollectPlanNodesAndNodeEvents(t *testing.T) {
+func TestPlanAggregateCountsNodesAndEvents(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
 	root := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusInProgress}
@@ -84,12 +82,11 @@ func TestCollectPlanNodesAndNodeEvents(t *testing.T) {
 	ev := &core.TrajectorySlot{IDHash: common.HashID("ev:1"), SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanNodeRef: child.IDHash, EventType: "llm_request", Timestamp: 1000}
 	_, _ = AppendTrajectory(engine, agentID, *ev)
 
-	nodes := CollectPlanNodes(engine, agentID, 9)
-	if len(nodes) != 2 {
-		t.Fatalf("want 2 plan nodes, got %d", len(nodes))
-	}
 	aggs := CollectPlanAggregates(engine, agentID)
-	if len(aggs) != 1 || aggs[0].EventCount[child.IDHash] != 1 ||
+	if len(aggs) != 1 || len(aggs[0].Nodes) != 2 {
+		t.Fatalf("want 1 plan of 2 nodes, got %+v", aggs)
+	}
+	if aggs[0].EventCount[child.IDHash] != 1 ||
 		len(aggs[0].Events) != 1 || aggs[0].Events[0].EventType != "llm_request" {
 		t.Fatalf("want 1 llm_request event bound to child, got %+v", aggs)
 	}
@@ -182,118 +179,5 @@ func TestCollectPlanAggregatesGroupsPlans(t *testing.T) {
 	}
 	if p3.HasNonDone {
 		t.Fatal("plan3 is all-done")
-	}
-}
-
-func TestDeletePlanRecordsRemovesNodesAndEvents(t *testing.T) {
-	engine := tempEngine(t)
-	agentID := core.DefaultAgentID
-	root9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusPending, Timestamp: 100}
-	if _, err := WritePlanNode(engine, agentID, root9); err != nil {
-		t.Fatal(err)
-	}
-	root3 := &core.TrajectorySlot{IDHash: core.HashPlanNode(3, "1"), SessionID: 3, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusDone, Timestamp: 50}
-	if _, err := WritePlanNode(engine, agentID, root3); err != nil {
-		t.Fatal(err)
-	}
-	ev9 := core.TrajectorySlot{SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 300}
-	bare := core.TrajectorySlot{SessionID: 5, Seq: 1, EventType: "llm_request", Timestamp: 900}
-	for _, ev := range []core.TrajectorySlot{ev9, bare} {
-		if _, err := AppendTrajectory(engine, agentID, ev); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	n, err := DeletePlanRecords(engine, agentID, 9)
-	if err != nil || n != 2 {
-		t.Fatalf("delete plan 9 = %d err=%v, want 2 (1 node + 1 event)", n, err)
-	}
-	left := core.CollectAllTrajectories(engine, agentID)
-	if len(left) != 2 {
-		t.Fatalf("want plan3 node + bare event left, got %d", len(left))
-	}
-	for _, ev := range left {
-		if ev.SessionID == 9 {
-			t.Fatalf("plan 9 record survived: %+v", ev)
-		}
-	}
-	// Idempotent: deleting again (or an unknown plan) removes nothing.
-	if n, err := DeletePlanRecords(engine, agentID, 9); err != nil || n != 0 {
-		t.Fatalf("second delete = %d err=%v, want 0", n, err)
-	}
-}
-
-// mustEventRef returns the id of the single event bound to a plan node.
-func mustEventRef(t *testing.T, engine *core.StorageEngine, agentID, nodeRef uint64) uint64 {
-	t.Helper()
-	var found uint64
-	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.NodeType == core.NodeTypeEvent && ev.PlanNodeRef == nodeRef {
-			found = ev.IDHash
-		}
-	}
-	if found == 0 {
-		t.Fatalf("no event bound to node %d", nodeRef)
-	}
-	return found
-}
-
-func TestDeletePlanNodeBranchCascades(t *testing.T) {
-	engine := tempEngine(t)
-	agentID := core.DefaultAgentID
-	planID := uint64(9)
-	mkNode := func(nodePath string, parent uint64) uint64 {
-		id := core.HashPlanNode(planID, nodePath)
-		node := &core.TrajectorySlot{
-			IDHash: id, SessionID: planID, Seq: uint64(len(strings.Split(nodePath, "."))),
-			NodeType: core.NodeTypePlan, ParentID: parent,
-			NodePath: nodePath, Status: core.StatusPending, Timestamp: 100,
-		}
-		if _, err := WritePlanNode(engine, agentID, node); err != nil {
-			t.Fatal(err)
-		}
-		return id
-	}
-	root := mkNode("1", 0)
-	c1 := mkNode("1.1", root)
-	mkNode("1.2", root)
-	mkNode("2", 0) // a sibling root outside the "1" branch
-	// Bind a real event to "1.1" so the cascade is observable on disk.
-	if _, err := AppendTrajectory(engine, agentID, core.TrajectorySlot{
-		SessionID: planID, Seq: 1, NodeType: core.NodeTypeEvent,
-		PlanNodeRef: c1, EventType: "llm_request", Payload: "x", Timestamp: 200,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	bound := mustEventRef(t, engine, agentID, c1)
-	deleted, err := DeletePlanNodeBranch(engine, agentID, planID, "1")
-	if err != nil || len(deleted) != 4 {
-		t.Fatalf("delete branch \"1\" = %d ids err=%v, want 4 (3 nodes + 1 bound event)", len(deleted), err)
-	}
-	if !slices.Contains(deleted, bound) {
-		t.Fatalf("the cascade must report the event id it deleted, got %v", deleted)
-	}
-	nodes := CollectPlanNodes(engine, agentID, planID)
-	if len(nodes) != 1 || nodes[0].NodePath != "2" {
-		t.Fatalf("surviving nodes = %+v, want only sibling root \"2\"", nodes)
-	}
-	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.PlanNodeRef == c1 {
-			t.Fatalf("bound event must cascade with its pruned node: %+v", ev)
-		}
-	}
-	// Idempotent on a vanished path.
-	if again, err := DeletePlanNodeBranch(engine, agentID, planID, "1"); err != nil || len(again) != 0 {
-		t.Fatalf("second delete = %d ids err=%v, want none", len(again), err)
-	}
-	// Prefix boundaries: "1.1" must not be matched by a sibling like "1.10".
-	mkNode("1.1", 0)
-	mkNode("1.10", 0)
-	exact, err := DeletePlanNodeBranch(engine, agentID, planID, "1.1")
-	if err != nil || len(exact) != 1 {
-		t.Fatalf("delete \"1.1\" = %d ids err=%v, want 1 (exact node only)", len(exact), err)
-	}
-	if got := CollectPlanNodes(engine, agentID, planID); len(got) != 2 || got[0].NodePath != "2" || got[1].NodePath != "1.10" {
-		t.Fatalf("prefix sibling must survive: %+v", got)
 	}
 }

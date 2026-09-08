@@ -192,7 +192,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 
 27 个会话方法按使用者分两类：
 
-- **任务面（20 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `Update` / `Dream` / `AppendTrajectory`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`、`SyncPlanTree` / `PlanCommit` / `PlanState`。
+- **任务面（19 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `Update` / `Dream` / `AppendTrajectory`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`、`PlanCommit` / `PlanState`。
 - **组装/管理面（7 个，外加 `MultiAgentDB` 全部 8 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3` / `DeleteL3Nodes`。能力格式整体离开了方法面：`ParseCapabilityPackage` / `ValidateCapabilityCard` 是包级函数（§8 L5）。
 
 ### L0 画像
@@ -318,9 +318,8 @@ sessions, err := db.ListTrajectorySessions()
 | 调用 | 说明 |
 |---|---|
 | `db.AppendTrajectory(topicID, nodePath, ev)` | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链），这也是**追加一步**的入口。`nodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且必须挂在父节点路径下；`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `ReadTrajectory` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
-| `db.PlanCommit(topicID, nodePath, ev, api.PlanStatusDone, summary)` | 推进节点状态并追加该步事件；`done` 子节点摘要自底向上折叠进父节点（父节点转为 `done` 只由宿主显式提交） |
+| `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "调研", Type: "step", Status: api.PlanStatusDone, Summary: s})` | 提交一步：推进节点状态、追加该步事件，`done` 子节点摘要自底向上折叠进父节点（父节点转为 `done` 只由宿主显式提交）。`nodePath` 沿点号路径缺失的节点按 pending 建出来——这就是追加一步的入口。`Title`/`Type`/`Summary` 留空即继承现值；未知 `Status` 在动树之前就被拒 |
 | `db.PlanState(topicID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
-| `db.SyncPlanTree(topicID, root *PlanNode)` | 推送宿主权威整树：按 `NodePath` 增改节点、删除消失节点（连同其绑定事件）、不产生 `plan_step`。`Title`/`Type`/`Status`/`Summary` 留空即继承库里现值，所以部分快照不会把已完成步骤退回未完成；**root 传 nil 即清整树**——节点与绑定事件全删、键保留 |
 
 `0000000000000000` 是保留值（记录未赋键时的值），L6 的读写入口一律拒绝它。
 

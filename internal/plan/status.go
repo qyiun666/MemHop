@@ -1,11 +1,12 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package plan holds the L6 plan-tree small methods: the status surface,
-// node-path mechanics, the node/event write steps, the forest build and
-// rollup, and the whole-tree sync. The big methods (AppendTrajectory on its
-// plan branch, PlanCommit, PlanState, SyncPlanTree) stay in the
-// composition root with the domain lock.
+// Package plan holds the L6 plan-tree small methods: the status surface and
+// Step, node-path mechanics, the node/event write steps, and the forest build
+// with its rollup. A plan is keyed by the turn that opened it, so the key
+// itself is parsed by trajectory.ParseTopicID. The big methods
+// (AppendTrajectory, PlanCommit, PlanState) stay in the composition root with
+// the domain lock.
 
 package plan
 
@@ -59,6 +60,16 @@ func StatusToString(u uint8) PlanStatus {
 	default:
 		return PlanPending
 	}
+}
+
+// Step is one host commit's node-side fields. Status is the string surface; a
+// blank Title/PlanType/Summary inherits what the node already holds, so
+// committing a step again never rewinds its title or erases a folded summary.
+type Step struct {
+	Status   PlanStatus
+	Title    string
+	PlanType string // plan/step/tool_call; empty = plain node
+	Summary  string
 }
 
 // IsTerminalStatus reports whether a plan-node status is a final state (done

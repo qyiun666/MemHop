@@ -40,7 +40,7 @@ type (
 	// Plan surface types live in the plan small-method package.
 	PlanStatus   = plan.PlanStatus
 	PlanTree     = plan.PlanTree
-	PlanNode     = plan.PlanNode
+	PlanStep     = plan.Step
 	PlanNodeView = plan.PlanNodeView
 
 	// LLM capability contracts (prompt inputs / parsed outputs) live in the

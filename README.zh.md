@@ -44,7 +44,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related；边的身份是「成员节点 + kind」，同一对节点可并存多种关系），图与节点两级删除，关键词/类型/ID 条件按 AND 组合，BFS 子图查询。图池是**文件级**的：文件内所有 agent 域共享一份 L3（项目知识导一次全家可见），删 agent 不删公共池
 - **设计层面单实例** — 一个 `.meh` 文件只有一个持有者：全平台文件排他锁强制（linux/darwin/windows），第二次 `Open` 直接失败；内嵌形态无服务进程、无后台守护
 - **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、go-openai、go-sdk、golang.org/x/sys）；关键词提炼没有本地兜底，LLM 返回不可解析就直接报错；**引擎不联系任何 embedding / 向量服务**，配置里也没有维度要声明，`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将 27 个公开会话方法中的 21 个以 24 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录；L3 知识图是全租户共享的唯一公共池）。刻意只留在 Go 侧：L6 计划写读面（`PlanCommit`/`PlanState`/`SyncPlanTree`）、记忆纠错（`DeleteTopic`/`DeleteScene`/`DeleteL3Nodes`）与文件维护（`CompactTo`，入参就是一个输出路径）——这些要由持有会话状态、或该决定文件写到哪里的宿主来调
+- **MCP Server** — `cmd/memhop-mcp` 将 26 个公开会话方法中的 21 个以 24 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录；L3 知识图是全租户共享的唯一公共池）。刻意只留在 Go 侧：L6 计划写读面（`PlanCommit`/`PlanState`）、记忆纠错（`DeleteTopic`/`DeleteScene`/`DeleteL3Nodes`）与文件维护（`CompactTo`，入参就是一个输出路径）——这些要由持有会话状态、或该决定文件写到哪里的宿主来调
 
 ## 快速开始
 
@@ -143,7 +143,7 @@ report, err := sess.Dream(context.Background(), "")
 | L4 归档 | `SearchL4(q)` — 唯一读取面；关键词（忽略大小写）/ 时间段 / id / 话题 / 内容类型都是条件而不是模式，`Limit` 只留最新 N 条命中 |
 | L5 能力 | 目录即能力，库不存记录：`ParseCapabilityPackage(data, source)` · `ValidateCapabilityCard(card)`（包级 v4 解析校验）· `Crystallize(turnID, existing)` 返回候选——落盘归宿主 |
 | L6 轨迹 | `AppendTrajectory(topicID, [nodePath])` · `ReadTrajectory(topicID)` · `ListTrajectorySessions` · `Crystallize(topicID)` —— 一轮一个键：Search 为该轮开出的话题 id（保留期 7 天自动清理，无删除接口） |
-| L6 计划树 | `PlanCommit` · `PlanState` · `SyncPlanTree`（nil 根 = 清整树）—— 按「开出这棵树的轮次话题 id」寻址，一轮的节点与事件同键读回；追加一步 = `AppendTrajectory(topicID, nodePath, ev)`（仅 Go module 暴露，MCP 工具集未接入） |
+| L6 计划树 | `PlanCommit(topicID, nodePath, ev, PlanStep{...})` · `PlanState(topicID)` —— 轮次话题 id 就是树的键，一轮的节点与事件同键读回；提交一个尚不存在的 `nodePath` 即追加一步（仅 Go module 暴露，MCP 工具集未接入） |
 | DB 句柄 | `OpenMulti` · `CreateAgent` · `ListAgents` · `DeleteAgent` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，仅 Go） · `Close` · `IsClosed` · `api.DefaultAgentID` |
 
 ### L5 能力 —— 目录即能力
