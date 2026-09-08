@@ -214,4 +214,4 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 
 - 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（`Update` 那一轮不写），`internal` 根不初始化任何分词器。
 - `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），拒批即一字节不写；`result.Errors` 只表示单条存储失败。
-- 宿主面测试覆盖 26 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 计划树三形态 + 轨迹双键 + 纯提炼）、`api_interface_l5l6_test.go`（轨迹与纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。
+- 宿主面测试覆盖 26 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 一轮一键的树、Model A 折叠与节点字段回读、轨迹键与纯提炼、重开后读回）、`api_interface_l5l6_test.go`（轨迹与纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

@@ -270,96 +270,57 @@ func TestPlanEventSeqStartsAtOneNoCollision(t *testing.T) {
 	}
 }
 
-// Model A: a parent becomes Done only when the host explicitly commits it.
-// Rollup merges Done children summaries into the host-completed parent.
-func TestPlanStateParentExplicitCompletion(t *testing.T) {
+// Model A: a parent becomes Done only when the host commits it, and the
+// bottom-up rollup of Done children's summaries fills an empty parent Summary
+// without ever overwriting one the host wrote.
+func TestPlanCommitRollupModelA(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	planID := common.FormatHash(9)
-	// Children done first.
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanStep{Status: PlanDone, Summary: "step A"}); err != nil {
-		t.Fatal(err)
+	commit := func(topicID, path string, status PlanStatus, summary string, ts int64) {
+		t.Helper()
+		err := db.PlanCommit(core.DefaultAgentID, topicID, path,
+			core.TrajectorySlot{EventType: "plan_step", Timestamp: ts},
+			PlanStep{Status: status, Summary: summary})
+		if err != nil {
+			t.Fatalf("commit %s: %v", path, err)
+		}
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanStep{Status: PlanDone, Summary: "step B"}); err != nil {
-		t.Fatal(err)
+	state := func(topicID string) *PlanTree {
+		t.Helper()
+		tree, err := db.PlanState(core.DefaultAgentID, topicID)
+		if err != nil {
+			t.Fatalf("PlanState(%s): %v", topicID, err)
+		}
+		return tree
 	}
-	// Parent is NOT auto-folded while not explicitly committed done.
-	tree, err := db.PlanState(core.DefaultAgentID, planID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tree.Roots[0].Status == PlanDone {
-		t.Fatalf("parent must NOT auto-fold: got %s", tree.Roots[0].Status)
-	}
-	if tree.TotalCount != 3 {
-		t.Fatalf("total=%d, want 3 (root + 2 children)", tree.TotalCount)
-	}
-	// Host explicitly completes the parent → it becomes Done and rolls up.
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, PlanStep{Status: PlanDone, Summary: ""}); err != nil {
-		t.Fatal(err)
-	}
-	tree, err = db.PlanState(core.DefaultAgentID, planID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tree.Roots[0].Status != PlanDone {
-		t.Fatalf("root should be done after explicit commit, got %s", tree.Roots[0].Status)
-	}
-	if tree.Roots[0].Summary != "step A; step B" {
-		t.Fatalf("root summary should roll up children, got %q", tree.Roots[0].Summary)
-	}
-	if tree.TotalCount != 3 || tree.DoneCount != 3 {
-		t.Fatalf("counts: total=%d done=%d", tree.TotalCount, tree.DoneCount)
-	}
-}
 
-// Model A: a host-provided parent Summary must NOT be overwritten by the
-// Done-children rollup.
-func TestPlanStateRollupDoesNotOverwriteHostSummary(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	planID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanStep{Status: PlanDone, Summary: "step A"}); err != nil {
-		t.Fatal(err)
+	partial := common.FormatHash(9)
+	// One child still pending: the parent is not Done and the counts say so.
+	commit(partial, "1", PlanInProgress, "", 1000)
+	commit(partial, "1.1", PlanDone, "step A", 1001)
+	commit(partial, "1.2", PlanPending, "", 1002)
+	if tree := state(partial); tree.Roots[0].Status == PlanDone ||
+		tree.TotalCount != 3 || tree.DoneCount != 1 {
+		t.Fatalf("a partially done parent was folded: %+v", tree)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanStep{Status: PlanDone, Summary: "step B"}); err != nil {
-		t.Fatal(err)
+	// Every child Done still leaves the parent as the host left it.
+	commit(partial, "1.2", PlanDone, "step B", 1003)
+	if tree := state(partial); tree.Roots[0].Status != PlanInProgress {
+		t.Fatalf("parent auto-folded without a host commit: %+v", tree.Roots[0])
 	}
-	// Host commits the parent done WITH its own summary → must be preserved.
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, PlanStep{Status: PlanDone, Summary: "custom parent summary"}); err != nil {
-		t.Fatal(err)
+	// The host commits the parent with a blank Summary → Done children fold up.
+	commit(partial, "1", PlanDone, "", 1004)
+	if tree := state(partial); tree.DoneCount != 3 ||
+		tree.Roots[0].Summary != "step A; step B" {
+		t.Fatalf("rollup into a blank parent summary: %+v", tree.Roots[0])
 	}
-	tree, err := db.PlanState(core.DefaultAgentID, planID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tree.Roots[0].Summary != "custom parent summary" {
-		t.Fatalf("host parent summary must not be overwritten, got %q", tree.Roots[0].Summary)
-	}
-}
 
-// Model A: a parent whose children are only partially Done must NOT be
-// auto-folded; it stays in_progress until the host explicitly commits it Done.
-func TestPlanStateParentNotAutoFoldedPartial(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	planID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
-		t.Fatal(err)
-	}
-	// Only one of two children is done; the other stays pending.
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanStep{Status: PlanDone, Summary: "step A"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanStep{Status: PlanPending, Summary: ""}); err != nil {
-		t.Fatal(err)
-	}
-	tree, err := db.PlanState(core.DefaultAgentID, planID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tree.Roots[0].Status == PlanDone {
-		t.Fatalf("parent must NOT auto-fold while children only partially done, got %s", tree.Roots[0].Status)
-	}
-	if tree.TotalCount != 3 || tree.DoneCount != 1 {
-		t.Fatalf("counts: total=%d done=%d, want total=3 done=1", tree.TotalCount, tree.DoneCount)
+	// A summary the host wrote in the same commit survives the rollup.
+	own := common.FormatHash(6)
+	commit(own, "1.1", PlanDone, "step A", 1011)
+	commit(own, "1.2", PlanDone, "step B", 1012)
+	commit(own, "1", PlanDone, "parent's own words", 1013)
+	if tree := state(own); tree.Roots[0].Summary != "parent's own words" {
+		t.Fatalf("rollup overwrote the host summary: %+v", tree.Roots[0])
 	}
 }
 
@@ -481,10 +442,10 @@ func TestDreamPruneCascadesMirrorTheIndex(t *testing.T) {
 // cannot inject a plan-node record that would pollute the tree view.
 func TestPlanAppendCannotInjectNodeType(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	planID := common.FormatHash(9)
+	topicID := common.FormatHash(9)
 	// Host tries to inject plan-node fields on an event; all of them are forced
 	// back to event semantics.
-	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1", core.TrajectorySlot{
+	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{
 		EventType: "llm_request", Timestamp: 1000, NodeType: core.NodeTypePlan,
 		Status: core.StatusDone, Summary: "injected", NodePath: "9.9", PlanType: "plan",
 	}); err != nil {
@@ -541,17 +502,17 @@ func TestPlanAppendCannotInjectNodeType(t *testing.T) {
 func TestPlanStateForestMultipleRoots(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
-	planID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanStep{Status: PlanDone, Summary: "step one"}); err != nil {
+	topicID := common.FormatHash(9)
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanStep{Status: PlanDone, Summary: "step one"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "2.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, PlanStep{Status: PlanDone, Summary: "sub"}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "2.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, PlanStep{Status: PlanDone, Summary: "sub"}); err != nil {
 		t.Fatal(err)
 	}
-	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	tree, err := db.PlanState(core.DefaultAgentID, topicID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,16 +536,16 @@ func TestPlanStateForestMultipleRoots(t *testing.T) {
 func TestPlanEventNamesAreHostOwned(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
-	planID := common.FormatHash(9)
-	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1",
+	topicID := common.FormatHash(9)
+	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1",
 		core.TrajectorySlot{EventType: "sandbox_ask", Timestamp: 1000}); err != nil {
 		t.Fatalf("a host-named plan event must be accepted: %v", err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1",
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1",
 		core.TrajectorySlot{EventType: "host_step", Timestamp: 1001}, PlanStep{Status: PlanDone}); err != nil {
 		t.Fatalf("host-named commit event: %v", err)
 	}
-	events, err := db.ReadTrajectory(core.DefaultAgentID, planID)
+	events, err := db.ReadTrajectory(core.DefaultAgentID, topicID)
 	if err != nil || len(events) != 2 {
 		t.Fatalf("plan events: %+v err=%v", events, err)
 	}
@@ -593,11 +554,11 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 			events[0].EventType, events[1].EventType)
 	}
 
-	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "2.1",
+	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "2.1",
 		core.TrajectorySlot{Timestamp: 1002}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
 	}
-	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	tree, err := db.PlanState(core.DefaultAgentID, topicID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,18 +570,18 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
-	planID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1",
+	topicID := common.FormatHash(9)
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1",
 		core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000},
 		PlanStep{Title: "r", PlanType: "plan", Status: PlanPending}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1.1",
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1.1",
 		core.TrajectorySlot{EventType: "plan_step", Timestamp: 1100},
 		PlanStep{Title: "a", PlanType: "step", Status: PlanDone, Summary: "s"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, planID, "1.1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1200}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1.1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1200}); err != nil {
 		t.Fatal(err)
 	}
 	ac := db.agents[core.DefaultAgentID]
@@ -652,11 +613,11 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 func TestPlanCommit_FinishedAt(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
-	planID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 100}, PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
+	topicID := common.FormatHash(9)
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 100}, PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
 		t.Fatal(err)
 	}
-	tree, err := db.PlanState(core.DefaultAgentID, planID)
+	tree, err := db.PlanState(core.DefaultAgentID, topicID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -665,18 +626,18 @@ func TestPlanCommit_FinishedAt(t *testing.T) {
 		t.Fatal("terminal commit must set FinishedAt")
 	}
 	// A non-terminal commit must not clear it.
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 200}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 200}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
 		t.Fatal(err)
 	}
-	tree2, _ := db.PlanState(core.DefaultAgentID, planID)
+	tree2, _ := db.PlanState(core.DefaultAgentID, topicID)
 	if tree2.Roots[0].FinishedAt != first {
 		t.Fatalf("non-terminal commit cleared FinishedAt: %d -> %d", first, tree2.Roots[0].FinishedAt)
 	}
 	// A re-terminal commit preserves the original FinishedAt.
-	if err := db.PlanCommit(core.DefaultAgentID, planID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 300}, PlanStep{Status: PlanDone, Summary: "fin2"}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 300}, PlanStep{Status: PlanDone, Summary: "fin2"}); err != nil {
 		t.Fatal(err)
 	}
-	tree3, _ := db.PlanState(core.DefaultAgentID, planID)
+	tree3, _ := db.PlanState(core.DefaultAgentID, topicID)
 	if tree3.Roots[0].FinishedAt != first {
 		t.Fatalf("re-terminal commit changed FinishedAt: %d -> %d", first, tree3.Roots[0].FinishedAt)
 	}

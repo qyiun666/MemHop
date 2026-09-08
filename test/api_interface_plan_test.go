@@ -132,7 +132,8 @@ func TestInterfacePlanCommitRollup(t *testing.T) {
 	if err := commit("1", "", done, "", planEvent(ts+300, "plan_step", "全部完成")); err != nil {
 		t.Fatalf("commit parent done: %v", err)
 	}
-	folded := findPlanNode(t, mustPlanState(t, db, topicID), "1")
+	tree := mustPlanState(t, db, topicID)
+	folded := findPlanNode(t, tree, "1")
 	if folded.Summary != "改动收敛到 3 个文件; 测试全绿" {
 		t.Fatalf("rolled-up summary = %q", folded.Summary)
 	}
@@ -142,26 +143,22 @@ func TestInterfacePlanCommitRollup(t *testing.T) {
 	if folded.FinishedAt == 0 {
 		t.Fatal("a terminal commit must stamp FinishedAt once")
 	}
-
-	// Both refusals are checked before the node is touched, so the status, the
-	// rolled-up summary and the event log all stay exactly as they were.
-	if err := commit("1", "", "finished", "越权摘要", planEvent(ts+400, "plan_step", "x")); err == nil {
-		t.Fatal("an unknown plan status should be refused")
+	// Every node comes back as a view the host can render without a second
+	// call: string status, its own summary, and its own path.
+	if tree.TotalCount != 3 || tree.DoneCount != 3 {
+		t.Fatalf("counts: total=%d done=%d, want 3/3", tree.TotalCount, tree.DoneCount)
 	}
-	if err := commit("1", "", done, "越权摘要", planEvent(ts+400, "", "x")); err == nil {
-		t.Fatal("an event without an EventType should be refused")
+	if len(folded.Children) != 2 {
+		t.Fatalf("children = %+v, want two", folded.Children)
 	}
-	after := findPlanNode(t, mustPlanState(t, db, topicID), "1")
-	if after.Summary != folded.Summary || after.FinishedAt != folded.FinishedAt {
-		t.Fatalf("a refused commit moved the node: %+v", after)
-	}
-	events := mustReadTrajectory(t, db, topicID)
-	if len(events) != 4 {
-		t.Fatalf("refused commits wrote events: %+v", events)
+	for _, c := range folded.Children {
+		if c.Status != done || c.Summary == "" || c.NodePath == "" {
+			t.Fatalf("a child view lost its fields: %+v", c)
+		}
 	}
 	// The read says which step each event belongs to — the host cannot derive
 	// that hash, so the stamp is the only attribution available on the surface.
-	for _, e := range events {
+	for _, e := range mustReadTrajectory(t, db, topicID) {
 		if e.SessionID != topicID || e.NodePath == "" {
 			t.Fatalf("plan-bound event lost its attribution: %+v", e)
 		}

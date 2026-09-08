@@ -95,7 +95,7 @@ func TestPlanAggregateCountsNodesAndEvents(t *testing.T) {
 func TestPlanNodeID_DoesNotCollideWithEventID(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
-	// 同一组 (planID=9, nodePath="1") 与 (sessionID=9, seq=1)
+	// 同一个键（话题 id=9）下的节点 (nodePath="1") 与事件 (seq=1)
 	planNodeID := core.HashPlanNode(9, "1")
 	evID := common.HashID(fmt.Sprintf("%d:%d", 9, 1))
 	if planNodeID == evID {

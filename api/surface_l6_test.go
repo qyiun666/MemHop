@@ -100,64 +100,6 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 	}
 }
 
-// TestSurfacePlanTriForm exercises the plan tri-form end-to-end through the
-// api facade: a plan is keyed by the turn Search opened (the host holds no
-// other id), PlanCommit advances a node, PlanState returns the tree with
-// string statuses and hex-free ids, and under Model A a parent becomes Done
-// only when the host explicitly commits it (then Done children roll up).
-func TestSurfacePlanTriForm(t *testing.T) {
-	db := openSurfaceDB(t)
-	planID := mustTurnKey(t, db)
-	// Root in_progress → child done → child done → host completes root → done.
-	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanStep{Status: "in_progress", Summary: ""}); err != nil {
-		t.Fatalf("commit root: %v", err)
-	}
-	if err := db.PlanCommit(planID, "1.1", TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanStep{Status: "done", Summary: "step A"}); err != nil {
-		t.Fatalf("commit 1.1: %v", err)
-	}
-	if err := db.PlanCommit(planID, "1.2", TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanStep{Status: "done", Summary: "step B"}); err != nil {
-		t.Fatalf("commit 1.2: %v", err)
-	}
-	// Model A: root is NOT auto-folded by its children; the host must commit it.
-	tree, err := db.PlanState(planID)
-	if err != nil {
-		t.Fatalf("plan state: %v", err)
-	}
-	if tree.Roots[0].Status == "done" {
-		t.Fatalf("root must NOT auto-fold before explicit host commit, got %s", tree.Roots[0].Status)
-	}
-	// Host explicitly completes the parent → it becomes Done and rolls up.
-	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, PlanStep{Status: "done", Summary: ""}); err != nil {
-		t.Fatalf("commit root done: %v", err)
-	}
-	tree, err = db.PlanState(planID)
-	if err != nil {
-		t.Fatalf("plan state: %v", err)
-	}
-	if tree.Roots[0].Status != "done" {
-		t.Fatalf("root should be done after explicit commit, got %s", tree.Roots[0].Status)
-	}
-	if tree.TotalCount != 3 || tree.DoneCount != 3 {
-		t.Fatalf("counts: total=%d done=%d", tree.TotalCount, tree.DoneCount)
-	}
-	if tree.Roots[0].Summary == "" {
-		t.Fatal("root summary should be concatenated from children")
-	}
-	// Child nodes carry string status and are well-formed.
-	if len(tree.Roots[0].Children) != 2 {
-		t.Fatalf("root should have 2 children, got %d", len(tree.Roots[0].Children))
-	}
-	for _, c := range tree.Roots[0].Children {
-		if c.Status != "done" || c.Summary == "" {
-			t.Fatalf("child should be done with summary: %+v", c)
-		}
-	}
-	// PlanAppend does not advance; it just binds an event to a node.
-	if err := db.AppendTrajectory(planID, "1.1.1", TrajectorySlot{EventType: "tool_call", Timestamp: 2000}); err != nil {
-		t.Fatalf("plan append: %v", err)
-	}
-}
-
 // TestSurfaceListScenesByProject verifies scenes anchored to an L3 domain are
 // listed with hex ids once a session opening anchors them, and that two
 // different L3 domains yield DISJOINT scene sets (the exclusion branch).
