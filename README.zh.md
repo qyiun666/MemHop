@@ -37,7 +37,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 
 - **七层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 轨迹，配合 Dream 巩固管线
 - **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 按场景 id 直取该会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），并**顺手开启本轮**：返回本轮要落进去的话题 id。`Update` 把整轮沉淀进那个 id（用户原文 + Agent 原文 + 双时间戳 → 一次提炼出话题关键词），L6 轨迹事件也绑在同一个 id 上。话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
-- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x000C`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。L3 知识图记录驻留文件级保留公共域（能力记录已不存在——目录即能力，见下）。**仅认 `0x000C`**——更早的 `.meh` 数据文件 Open 时显式拒绝，无迁移路径
+- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x000D`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。L3 知识图记录驻留文件级保留公共域（能力记录已不存在——目录即能力，见下）。**仅认 `0x000D`**——更早的 `.meh` 数据文件 Open 时显式拒绝，无迁移路径
 - **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（话题缓存、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行。例外是 L3（见下）：知识图是文件级公共池
 - **L1 场景超图** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）并按时间衰减剪枝；L1 由 Dream 维护，供显式图查询与后续关联消费——读取路径不打分、不扩散
 - **Dream 巩固管线** — 作用于 L0–L2 及 L6 保留期清理：L2 压缩 → L2Meta 缓存重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）→ L6 清理（自动丢弃 7 天前轨迹事件）；某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold` 时由 `Update` 后台调度该场景巩固，返回逐阶段 `DreamReport`
@@ -220,7 +220,7 @@ MemHop 的测试套件只驱动公开 `api` 表面——即宿主（如 MeowAgen
 api/                         ← 公开门面：openmulti（入口 + 租户管理）/ session（唯一业务句柄，hex ID 面）
                                / types / mapping / ids / errors / exports
 internal/                    ← 业务装配层：config / db / session / defaults / tuning /
-                               l0 / l2 / l3 / l3query / l4 / l5 / l6 / l6_plan / agents / agentctx /
+                               l0 / l2 / l3 / l3query / l4 / l6 / agents / agentctx /
                                search / update / dream / plancache / llm_client / llm_ops / models / exports
 internal/repo/               ← 数据层：l0layer–l6layer + agentlayer（记录读写）
 internal/repo/index/         ← 索引层：l2meta（场景读回的唯一支撑）/ rebuild（单遍重建）/

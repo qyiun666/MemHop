@@ -14,7 +14,7 @@
   互不相干的节点。本包既不发号也不接受调用方自备的第二个 ID：键的解析与拒零在
   `trajectory.ParseTopicID`，读写两侧共用它。
 - **契约**：所有 `*Locked` 都要求调用方持 `ac.Mu`；缓存同步经
-  `ac.Plans`（无自带锁）。`PlanStatus`/`PlanTree`/`PlanNode`/
+  `ac.Plans`（无自带锁）。`PlanStatus`/`PlanTree`/`PlanStep`/
   `PlanNodeView` 的唯一定义处，根经 `models.go` 恒等别名。
 - **陷阱**：节点更新不得触碰事件 TrajIndex（节点不占事件 Seq 空间，
   否则深浅提交互相覆盖）；`RollupTree` 在非 done 父节点上什么都不做

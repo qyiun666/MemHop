@@ -187,9 +187,13 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 11. **`MultiAgentDB.CompactTo`**：core 的 `Compact` 用 `Create`（带
    `O_TRUNC`）在新路径写整理副本，故根层先拒空路径、拒当前库文件
    （`sameFile` 走绝对路径归一）与拒已存在的目标，绝不覆盖任何既有文件。
-12. **`SyncPlanTree` 未填即继承**：快照里空白的 Title/PlanType/Status/Summary
-   继承节点现值（空 Status 不再退回 pending、空 Summary 不再清空折叠结论），
-   宿主推部分快照不必先读旧树；显式传入的值仍然覆盖。
+12. **`PlanCommit` 未填即继承，路径即结构**：`plan.Step` 里空白的
+   Title/PlanType/Summary 继承节点现值（空 Status 会被 `StatusToU8` 拒——状态是
+   每次必须给的危害字段，不是"不改"），宿主推进一步不必先读旧树；显式传入的值
+   仍然覆盖。`nodePath` 自己决定树形：`EnsureNode` 沿点号路径把缺失段一律建成
+   pending，所以**打错一段路径会凭空多出一棵树**，而 L6 没有任何删节点入口
+   （作废靠换轮次键，旧树由 `l6_prune` 的保留窗回收）——这是选「提交即追加」而
+   弃「整树 diff 同步」时付出的代价，写进门面注释与 GUIDE 而不是留给宿主踩。
 13. **破坏性写入先验 id**：`MergeScenes` 会删记录，所以主/次每个 id 都必须
    仍是一个场景（`requireScenes` 逐个回读比对），未知 id 报 `ErrNotFound`；
    底层 `DeleteL2(DeleteScenesL2)` 直接按传入 id 批量删，少这一步时一个陈旧
@@ -210,4 +214,4 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 
 - 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（`Update` 那一轮不写），`internal` 根不初始化任何分词器。
 - `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），拒批即一字节不写；`result.Errors` 只表示单条存储失败。
-- 宿主面测试覆盖 27 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 计划树三形态 + 轨迹双键 + 纯提炼）、`api_interface_l5l6_test.go`（轨迹与纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。
+- 宿主面测试覆盖 26 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 计划树三形态 + 轨迹双键 + 纯提炼）、`api_interface_l5l6_test.go`（轨迹与纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

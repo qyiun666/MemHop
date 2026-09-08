@@ -35,11 +35,11 @@ func registerL6Tools(s *mcp.Server, db *memhop.Session) {
 func registerTrajectoryAppendTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_append",
-		Description: "向本轮轨迹追加一条 L6 操作事件（每轮一个键：本轮 memhop_search 铸出的话题 ID，Seq 自动分配）。本工具只写轮内事件，event_type 由宿主自定（惯例：llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply）；事件的 topic_id 一律由该键回填，不用也不要传。Payload 超过 4KB 会被截断；轨迹只追加，超出保留窗口由 Dream 自动清理。",
+		Description: "向本轮轨迹追加一条 L6 操作事件（每轮一个键：本轮 memhop_search 铸出的话题 ID，Seq 自动分配）。本工具只写轮内事件，event_type 由宿主自定（惯例：llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply）；事件不需要也不要传任何 id：键与 Seq 都由库发。Payload 超过 4KB 直接拒写（不是截断）；轨迹只追加，超出保留窗口由 Dream 自动清理。",
 		InputSchema: objSchema(map[string]any{
 			"session_id": strProp("本轮轨迹键 = 本轮 search 铸出的话题 ID（16 位 hex），必填"),
 			"event_type": strProp("事件类型，必填"),
-			"payload":    strProp("事件内容（超过 4KB 截断）"),
+			"payload":    strProp("事件内容（超过 4KB 拒写，不截断）"),
 			"timestamp":  intProp("Unix 毫秒时间戳，必填"),
 		}, "session_id", "event_type", "timestamp"),
 	}, handle[trajectoryAppendArgs, updateResult](func(a trajectoryAppendArgs) (updateResult, error) {

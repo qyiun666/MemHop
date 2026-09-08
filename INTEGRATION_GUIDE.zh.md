@@ -190,7 +190,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 
 ## 8. 各层 API 速查
 
-27 个会话方法按使用者分两类：
+26 个会话方法按使用者分两类：
 
 - **任务面（19 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `Update` / `Dream` / `AppendTrajectory`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`、`PlanCommit` / `PlanState`。
 - **组装/管理面（7 个，外加 `MultiAgentDB` 全部 8 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3` / `DeleteL3Nodes`。能力格式整体离开了方法面：`ParseCapabilityPackage` / `ValidateCapabilityCard` 是包级函数（§8 L5）。
@@ -317,7 +317,7 @@ sessions, err := db.ListTrajectorySessions()
 
 | 调用 | 说明 |
 |---|---|
-| `db.AppendTrajectory(topicID, nodePath, ev)` | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链），这也是**追加一步**的入口。`nodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且必须挂在父节点路径下；`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `ReadTrajectory` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
+| `db.AppendTrajectory(topicID, nodePath, ev)` | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链），这也是**追加一步**的入口。`nodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且**它自己决定树形**：路径上缺失的每一段都会被建成 pending，所以打错一段就会多开一棵树，而 L6 不提供删节点的接口（旧树等所属轮次掉出保留窗由 Dream 回收）。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `ReadTrajectory` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
 | `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "调研", Type: "step", Status: api.PlanStatusDone, Summary: s})` | 提交一步：推进节点状态、追加该步事件，`done` 子节点摘要自底向上折叠进父节点（父节点转为 `done` 只由宿主显式提交）。`nodePath` 沿点号路径缺失的节点按 pending 建出来——这就是追加一步的入口。`Title`/`Type`/`Summary` 留空即继承现值；未知 `Status` 在动树之前就被拒 |
 | `db.PlanState(topicID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
 
@@ -425,11 +425,11 @@ func main() {
 ## 12. 陷阱清单
 
 1. **LLM 只影响写路径**：`Search` 零 LLM，读永不被 LLM 拖垮；`Update` 每轮一次提炼，失败即报错且零写入（不会留半轮记忆）。宿主需为沉淀失败做好重试——重试同一个 `TopicID` 是安全的。
-2. **没有 embedding 服务，也没有维度要声明**：文件头偏移 6 的两字节是保留位。格式版本为 `0x000C`：L3 知识图驻留保留共享域（`core.SharedPoolAgentID`），不跑迁移——`0x000C` 之前的文件在 Open 时被拒绝（能力记录层随 `0x000C` 退役，`0x000B` 文件仍含 0x0F 记录）。
+2. **没有 embedding 服务，也没有维度要声明**：文件头偏移 6 的两字节是保留位。格式版本为 `0x000D`：L3 知识图驻留保留共享域（`core.SharedPoolAgentID`），不跑迁移——`0x000D` 之前的文件在 Open 时被拒绝（`0x000D` 改的是 L6 记录的键含义：旧文件里计划节点的 `session_id` 装的是宿主自铸的 plan id，按新规则不指向任何东西）。
 3. **时间戳用 Unix 毫秒**，`<=0` 报 `ErrInvalidQuery`。
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，门面上不再有 hex ⇄ 整数转换函数。
 5. **`Search` 不写记忆内容**：它开启一个轮次（场景的命中计数与轮次计数各 +1），但不建任何话题记录——开了没沉淀的轮次不留残渣。想读原文用 `SceneContext` / `SearchL4`。重放同一个 `Update`（同 `TopicID`）是幂等的：话题就是那个 id，档案 id 由它派生，重试只会覆盖不会叠加。
-6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x000C`）无法打开、不做迁移。
+6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x000D`）无法打开、不做迁移。
 7. **轨迹自动过期**：Dream 自动清理 7 天前的事件；对外只有追加与查询（`AppendTrajectory` / `ReadTrajectory` / `ListTrajectorySessions`），无删除接口。一轮的轨迹按该轮话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
 8. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
 9. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `*api.DefaultMemHopDefaults` 再覆盖。上下文规模由 Dream 保证有界（压缩后每场景 ≤20），禁用自动巩固就等于让注入无界增长。

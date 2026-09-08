@@ -170,9 +170,10 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return out, nil
 }
 
-// ReadTrajectory returns one turn's L6 records with hex IDs, in Seq order:
-// that turn's operation events plus the plan nodes its steps created. turnID
-// is the topic id Search minted for the turn.
+// ReadTrajectory returns one turn's L6 trajectory events with hex IDs, in Seq
+// order. turnID is the topic id Search minted for the turn. The plan nodes that
+// turn opened are not part of this read — the trajectory index carries events
+// only; a node's status and summary come back from PlanState.
 func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
 	events, err := s.Session.ReadTrajectory(turnID)
 	if err != nil {
@@ -190,13 +191,18 @@ func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
 // a nodePath it hangs on that plan step, which is created as pending when
 // missing — so this call is also how a host adds a step to the turn's plan.
 //
+// nodePath shapes the tree itself: each missing segment along the dotted path
+// is created, so a typo opens a second tree, and L6 exposes no node-delete
+// call — a stale tree goes only when the turn that opened it falls out of the
+// retention window.
+//
 // The log is append-only and per-turn: nothing returns or takes an event id,
 // because no public call consumes one — ReadTrajectory(topicID) gives the
 // records back in Seq order, and Dream drops ones past the retention window.
-// Of the event you pass, only EventType, Payload, Timestamp and FinishedAt are
-// stored; Seq, SessionID, NodePath and PlanNodeRef are assigned by the library,
-// and the record's NodePath is the step it landed on, which is how a host
-// attributes an event to a step afterwards.
+// Of the event you pass, only EventType, Payload and Timestamp are stored;
+// Seq, SessionID, NodePath and PlanNodeRef are assigned by the library, and the
+// record's NodePath is the step it landed on, which is how a host attributes an
+// event to a step afterwards.
 //
 // A Payload over the 4 KiB budget is refused, not truncated: a shortened event
 // would read back exactly like a complete one. Nothing is written when this

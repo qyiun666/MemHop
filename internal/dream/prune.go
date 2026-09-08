@@ -38,11 +38,13 @@ func PruneTrajectoryStage(ac *domain.Context, agentID uint64, rep *core.DreamRep
 	// must not lose its tree mid-task, but once a plan has been silent past
 	// the window it is abandoned and sweeps like any other record, so L6
 	// stays bounded. Expired nodes of the swept plans cascade their bound
-	// events so no orphan PlanNodeRef survives. The in-memory planCache is
-	// refreshed only after the disk sweep succeeds, keeping cache and engine
-	// in sync. Cascade-deleted events that are still fresh may linger in the
-	// TrajIndex until the periodic prune or a context rebuild; readers skip
-	// missing records, so the drift is benign.
+	// events so no orphan PlanNodeRef survives. Both in-memory views are
+	// refreshed only after the disk sweep succeeds, keeping cache, index and
+	// engine in sync. The index mirror is load-bearing, not a tidiness step: a
+	// cascaded event that is still inside the retention window is absent from
+	// RemoveBefore's sweep, and an index entry naming a deleted record makes
+	// every later ReadTrajectory/Crystallize of that key fail with ErrIO until
+	// the domain context is rebuilt.
 	type pruneDel struct {
 		topicID  uint64
 		nodeDel  []uint64
@@ -83,6 +85,7 @@ func PruneTrajectoryStage(ac *domain.Context, agentID uint64, rep *core.DreamRep
 		} else {
 			for _, p := range prunes {
 				ac.Plans.RemovePlanIDs(p.topicID, p.nodeDel, p.eventDel)
+				ac.Traj.RemoveEvents(p.topicID, p.eventDel)
 			}
 		}
 	}

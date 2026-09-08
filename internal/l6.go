@@ -71,6 +71,7 @@ func appendTurnEvent(ac *domain.Context, agentID, topicID uint64, ev core.Trajec
 	ev.Status = 0
 	ev.Summary = ""
 	ev.Title = ""
+	ev.FinishedAt = 0
 	ev.PlanType = ""
 	ev.PlanNodeRef = 0
 	idHash, err := repo.AppendTrajectory(ac.Engine, agentID, ev)

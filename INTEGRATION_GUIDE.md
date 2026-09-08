@@ -203,7 +203,7 @@ What happens *between* those two messages (tool calls, intermediate output, suba
 
 ## 8. Layer API quick reference
 
-The 27 session methods split by audience:
+The 26 session methods split by audience:
 
 - **Runtime/task face (19)** — the host drives these every turn and LLM tools bind to them: `Search` / `Update` / `Dream` / `AppendTrajectory` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`, `PlanCommit` / `PlanState`.
 - **Assembly/admin face (7, plus all of `MultiAgentDB`)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3` / `DeleteL3Nodes`. The capability format left the method surface entirely: `ParseCapabilityPackage` / `ValidateCapabilityCard` are package-level functions (§8 L5).
@@ -387,7 +387,7 @@ and its nodes alike. The host assigns each node a **dotted `NodePath`** (`"1"`,
 
 | Call | Meaning |
 |---|---|
-| `db.AppendTrajectory(topicID, nodePath, ev)` | record a step event against that node, creating the node chain as pending if missing — this is also how a step is added. `nodePath` must sit under its parent's path; `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `ReadTrajectory` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
+| `db.AppendTrajectory(topicID, nodePath, ev)` | record a step event against that node, creating the node chain as pending if missing — this is also how a step is added. `nodePath` **shapes the tree itself**: every missing ancestor segment is created as pending, so a typo in a path opens a second tree, and L6 exposes no node-delete call (a stale tree is reclaimed by the retention window once the turn that opened it falls out of it). `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `ReadTrajectory` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
 | `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "research", Type: "step", Status: api.PlanStatusDone, Summary: s})` | commit one step: advance the node's status, append its event, and roll `done` children's summaries up into their parent (a parent turns `done` only when the host commits it). A `nodePath` missing along the dotted path is created as pending — this is how a step is added. A blank `Title`/`Type`/`Summary` keeps what the node already holds; an unknown `Status` is refused before the tree moves |
 | `db.PlanState(topicID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`) — also the restart recovery path |
 
@@ -514,9 +514,9 @@ func main() {
    failure, returns an error having written nothing — no half-recorded turn.
    Hosts should retry a failed settle.
 2. **No embedding service, no dimension to declare**: the two header bytes at
-   offset 6 are reserved. The format version is `0x000C`: the L3 knowledge
+   offset 6 are reserved. The format version is `0x000D`: the L3 knowledge
    graph lives in the reserved shared domain (`core.SharedPoolAgentID`); no
-   migration runs — files older than `0x000C` are rejected at Open (the
+   migration runs — files older than `0x000D` are rejected at Open (the
    capability record layer was removed by this bump, so a `0x000B` file
    still carries `0x0F` records).
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`; the agent timestamp
@@ -533,7 +533,7 @@ func main() {
 6. **One file, many agent domains**: all tenants live inside one
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
    isolated per domain except the file-wide L3 pool; legacy files
-   (`FormatVersion < 0x000C`) cannot be opened or migrated.
+   (`FormatVersion < 0x000D`) cannot be opened or migrated.
 7. **Trajectories auto-expire**: Dream drops events older than 7 days;
    the external surface is append + query only (`AppendTrajectory` /
    `ReadTrajectory` / `ListTrajectorySessions`) — no delete API. A turn's

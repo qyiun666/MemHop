@@ -79,6 +79,7 @@ func AppendEventLocked(ac *domain.Context, agentID, topicID uint64, nodePath str
 	ev.Status = 0
 	ev.Summary = ""
 	ev.Title = ""
+	ev.FinishedAt = 0
 	ev.PlanType = ""
 	idHash, err := repo.AppendTrajectory(ac.Engine, agentID, ev)
 	if err != nil {

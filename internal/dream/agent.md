@@ -14,3 +14,4 @@
 - `applyUsageFeedback` 返回 error 并单列一个 `usage_feedback` 阶段：L1 重建与衰减按这些 importance 走，静默跳过会让 Dream 报告声称做了实际没做。
 - `applyOneGroup` 返回 error（含「模型提了组但 merged_summary 是空的」这类），`applyGroups` 分报 applied/rejected，rejected 计入 `failures`——「没什么可压缩」和「组没法应用」是两件事。
 - 计划清扫没有独立的计划登记表：可清扫单位就是 `repo.CollectPlanAggregates` 给的按键聚合（键 = 开出该计划的轮次话题 id，键下无节点即不成聚合），豁免与级联都在其上判断。
+- **级联删事件要镜像两份内存视图**：磁盘删成功后 `ac.Plans.RemovePlanIDs` 与 `ac.Traj.RemoveEvents` 都得走。一条仍在保留窗内的绑定事件会被过期节点的级联带走（`RemoveBefore` 按时间扫，够不着它），索引里残留的条目点名已删记录，此后该轮每次 `ReadTrajectory`/`Crystallize` 都返回 `ErrIO`，只有域上下文重建才自愈（实测复现于 `TestDreamPruneCascadesMirrorTheIndex`）。

@@ -176,19 +176,20 @@ type ArchiveSlot struct {
 	Content     string      `json:"content"`
 }
 
-// TrajectorySlot is one L6 record — a turn's operation event, or a plan node
-// — the shape both write and read use, so a field that no path can fill does
-// not live here. SessionID is the L6 key: the topic id Search minted for the
-// turn, which holds both that turn's events and the plan tree it opened.
-// NodePath names the plan step a record is about — for an event the library
-// stamps it on write, so a host can attribute an event to a step without
-// deriving PlanNodeRef (a library hash nothing on the surface re-derives); for
-// a node it is the host-assigned dotted path. A bare turn event leaves
+// TrajectorySlot is one L6 trajectory event — the shape both write and read
+// use, so a field that no path can fill does not live here. SessionID is the L6
+// key: the topic id Search minted for the turn, which holds both that turn's
+// events and the plan tree it opened. Plan nodes are read through PlanState
+// (PlanNodeView), not here: the trajectory index carries events only.
+//
+// NodePath names the step an event belongs to — the library stamps it on write,
+// so a host can attribute an event to a step without deriving PlanNodeRef (a
+// library hash nothing on the surface re-derives). A bare turn event leaves
 // NodePath and PlanNodeRef empty.
 //
 // On every write path (AppendTrajectory, PlanCommit) SessionID/NodePath/
 // PlanNodeRef/Seq are assigned by the library and are read-only here; of the
-// event you pass, only EventType, Payload, Timestamp and FinishedAt are stored.
+// event you pass, only EventType, Payload and Timestamp are stored.
 type TrajectorySlot struct {
 	IDHash    string `json:"id_hash"`
 	SessionID string `json:"session_id"`
@@ -199,7 +200,6 @@ type TrajectorySlot struct {
 
 	NodePath    string `json:"node_path,omitempty"`
 	PlanNodeRef string `json:"plan_node_ref,omitempty"`
-	FinishedAt  int64  `json:"finished_at,omitempty"`
 }
 
 // PlanNodeView is the external plan-tree node; Status is the string form.
@@ -217,10 +217,13 @@ type PlanNodeView struct {
 
 // PlanStep is one host commit's node-side fields, passed to PlanCommit for the
 // node named by NodePath (a node missing along the path is created as pending,
-// which is how a step is added). Status is the string surface (pending /
-// in_progress / running / done / failed); an unknown value is refused before
-// the tree moves. A blank Title/Type/Summary keeps what the node already holds,
-// so committing a step again never rewinds its title or erases a folded summary.
+// which is how a step is added).
+//
+// The fields are not symmetric. A blank Title/Type/Summary keeps what the node
+// already holds, so committing a step again never rewinds its title or erases a
+// folded summary. Status has no blank meaning: it is the string surface
+// (pending / in_progress / running / done / failed), every commit states it
+// explicitly, and an unknown value is refused before the tree moves.
 type PlanStep struct {
 	Title   string `json:"title"`
 	Type    string `json:"type"` // plan/step/tool_call; empty = plain node

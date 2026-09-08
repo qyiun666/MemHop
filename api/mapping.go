@@ -192,13 +192,6 @@ func formatOptionalID(id uint64) string {
 	return formatID(id)
 }
 
-func parseOptionalID(s string) (uint64, error) {
-	if s == "" {
-		return 0, nil
-	}
-	return internal.ParseID(s)
-}
-
 func fromTrajectorySlot(s internal.TrajectorySlot) TrajectorySlot {
 	return TrajectorySlot{
 		IDHash:      formatID(s.IDHash),
@@ -209,19 +202,18 @@ func fromTrajectorySlot(s internal.TrajectorySlot) TrajectorySlot {
 		Timestamp:   s.Timestamp,
 		NodePath:    s.NodePath,
 		PlanNodeRef: formatOptionalID(s.PlanNodeRef),
-		FinishedAt:  s.FinishedAt,
 	}
 }
 
 // toCoreTrajectorySlot maps the fields a host owns. The library assigns
 // Seq/SessionID/NodePath/PlanNodeRef itself, so those are not even part of
-// what a caller can hand in.
+// what a caller can hand in. FinishedAt is a node-only field and stays off the
+// event path.
 func toCoreTrajectorySlot(s TrajectorySlot) internal.TrajectorySlot {
 	return internal.TrajectorySlot{
-		EventType:  s.EventType,
-		Payload:    s.Payload,
-		Timestamp:  s.Timestamp,
-		FinishedAt: s.FinishedAt,
+		EventType: s.EventType,
+		Payload:   s.Payload,
+		Timestamp: s.Timestamp,
 	}
 }
 

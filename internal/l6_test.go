@@ -420,6 +420,53 @@ func TestDreamPrunesExpiredPlanNodes(t *testing.T) {
 	}
 }
 
+// Dream's plan sweep cascades a node's bound events away with it. An event
+// still inside the retention window survives RemoveBefore's sweep, so the
+// cascade has to mirror it out of the TrajIndex as well: an index entry naming a
+// deleted record makes every later ReadTrajectory/Crystallize of that key fail
+// with ErrIO until the domain context is rebuilt.
+func TestDreamPruneCascadesMirrorTheIndex(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	topic := common.FormatHash(9)
+	old := time.Now().Add(-dream.TrajectoryRetention - time.Hour).UnixMilli()
+	if err := db.PlanCommit(core.DefaultAgentID, topic, "1",
+		core.TrajectorySlot{EventType: "plan_step", Timestamp: old},
+		PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
+		t.Fatal(err)
+	}
+	nodeID := core.HashPlanNode(9, "1")
+	ac := db.agents[core.DefaultAgentID]
+	node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node.Timestamp = old // a commit stamps now; age the node past the window
+	if _, err := repo.WritePlanNode(db.engine, core.DefaultAgentID, node); err != nil {
+		t.Fatal(err)
+	}
+	ac.Plans.UpsertNode(9, node)
+	// A fresh annotation lands on that long-finished step.
+	if err := db.AppendTrajectory(core.DefaultAgentID, topic, "1",
+		core.TrajectorySlot{EventType: "note", Timestamp: time.Now().UnixMilli()}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if hashes := ac.Traj.EventHashes(9); len(hashes) != 0 {
+		t.Fatalf("cascade left %d index entries naming deleted records: %v", len(hashes), hashes)
+	}
+	evs, err := db.ReadTrajectory(core.DefaultAgentID, topic)
+	if err != nil {
+		t.Fatalf("the key is unreadable after its own cascade: %v", err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("cascaded events still read back: %+v", evs)
+	}
+}
+
 // TestPlanAppendCannotInjectNodeType verifies an appended plan event is forced
 // to bare-event semantics: no node-only field survives the write, so a host
 // cannot inject a plan-node record that would pollute the tree view.
