@@ -1,14 +1,15 @@
 .PHONY: build build-mcp test test-e2e test-integration test-unit test-mcp test-affected bench lint fmt clean help doctor
 
-# --- Prerequisites for interface tests -----------------------------------
-# 1) Ollama daemon:      `ollama serve`
-# 2) Embedding model:    `ollama pull qllama/bge-m3:q4_k_m`  (1024d)
-# 3) LLM credentials via env vars (see test/testsupport/open.go):
-#    MEMHOP_TEST_LLM_KEY / MEMHOP_TEST_LLM_URL / MEMHOP_TEST_LLM_MODEL
-#    (or test/testsupport/key_config.json)
+# --- Prerequisites -------------------------------------------------------
+# `make test-unit` is fully offline: the api/internal suites plus the mock-backed
+# files under test/** need no network at all.
 #
-# All test/ files carry the `integration` build tag. When the LLM config is
-# missing the suite skips (exit 0), not fails.
+# Only seven test/ files carry the `integration` build tag and require a real
+# endpoint (that is `make test-e2e`): benchmark / core_cycle / e2e_flow /
+# fidelity / fixture / keyword_extraction_e2e / open. Credentials come from
+# MEMHOP_TEST_LLM_KEY / MEMHOP_TEST_LLM_URL / MEMHOP_TEST_LLM_MODEL (or
+# test/testsupport/key_config.json). There is no embedding model to pull — the
+# engine contacts none.
 
 # ---- Targets -----------------------------------------------------------
 
@@ -16,9 +17,10 @@
 build:
 	go build ./...
 
-## unit tests — internal white-box tests
+## offline gate — public facade, internal white-box, and the mock-backed
+## interface suite under test/**
 test-unit:
-	go test -race ./internal/...
+	go test -race ./api/... ./internal/... ./test/...
 
 ## build the MCP server binary
 build-mcp:

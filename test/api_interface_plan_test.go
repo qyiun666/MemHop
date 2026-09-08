@@ -13,6 +13,7 @@ package test
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -231,5 +232,49 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	// answered with an empty result.
 	if _, err := db.Crystallize(context.Background(), openTurn(t, db, sceneID), nil); err == nil {
 		t.Fatal("crystallizing a key with no events should fail")
+	}
+}
+
+// The turn topic id is the only handle a host holds, so a restart must recover
+// both faces of that key from disk: the trajectory events in Seq order with
+// their payloads intact, and the plan tree with each node's own title, type,
+// status and folded summary. Rebuilding the trajectory index and the plan cache
+// is exactly where a re-keyed layer breaks silently.
+func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
+	llm := newMockLLM(t)
+	path := filepath.Join(t.TempDir(), "reopen.meh")
+	db := newTestDB(t, openMockMulti(t, path, llm.srv.URL))
+	sceneID := openSession(t, db)
+	turnID := openTurn(t, db, sceneID)
+	ts := time.Now().UnixMilli()
+
+	mustAppend(t, db, turnID, "", planEvent(ts, "tool_call", `{"tool":"bash"}`))
+	if err := db.PlanCommit(turnID, "1.1", planEvent(ts+1, "plan_step", "第一步"),
+		memhop.PlanStep{Title: "调研", Type: "step",
+			Status: string(memhop.PlanStatusDone), Summary: "结论一"}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := db.Checkpoint(); err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	reopened := newTestDB(t, openMockMulti(t, path, llm.srv.URL))
+	events := mustReadTrajectory(t, reopened, turnID)
+	if len(events) != 2 || events[0].Seq != 1 || events[1].Seq != 2 {
+		t.Fatalf("events after reopen = %+v, want both in Seq order", events)
+	}
+	if events[0].EventType != "tool_call" || events[0].Payload != `{"tool":"bash"}` {
+		t.Fatalf("the event body did not survive the reopen: %+v", events[0])
+	}
+	if events[0].SessionID != turnID {
+		t.Fatalf("rebuilt index keyed the event away from its turn: %+v", events[0])
+	}
+	leaf := findPlanNode(t, mustPlanState(t, reopened, turnID), "1.1")
+	if leaf.Status != string(memhop.PlanStatusDone) || leaf.Title != "调研" ||
+		leaf.Type != "step" || leaf.Summary != "结论一" || leaf.FinishedAt == 0 {
+		t.Fatalf("node fields lost on reopen: %+v", leaf)
 	}
 }

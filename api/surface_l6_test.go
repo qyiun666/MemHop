@@ -80,8 +80,17 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 		t.Fatalf("read trajectory: got %d err=%v", len(got), err)
 	}
 	for i, e := range got {
+		want := events[i]
 		if e.Seq != uint64(i+1) {
 			t.Fatalf("seq must be 1-based increasing, got %d at %d", e.Seq, i)
+		}
+		// The read must hand back what was written, field for field: a facade
+		// mapping that drops a column is otherwise invisible at this surface.
+		if e.EventType != want.EventType || e.Payload != want.Payload || e.Timestamp != want.Timestamp {
+			t.Fatalf("event[%d] lost its body on the way back: got %+v want %+v", i, e, want)
+		}
+		if !isHexID(e.IDHash) || e.SessionID != sessionID {
+			t.Fatalf("event[%d] ids: hash=%q session=%q", i, e.IDHash, e.SessionID)
 		}
 	}
 	// Crystallize runs (stub returns no candidates) and yields a well-formed output.
@@ -324,6 +333,23 @@ func TestSurfaceAppendTrajectoryPlanBranch(t *testing.T) {
 	}
 	if err := db.AppendTrajectory(planTurn, "1", TrajectorySlot{Timestamp: now + 3}); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("empty plan event type: want ErrInvalidQuery, got %v", err)
+	}
+	// A malformed dotted path is refused before the tree is touched. nodePath
+	// shapes the tree itself (every missing segment is created), so an empty
+	// segment must never reach storage as a nameless step.
+	for _, bad := range []string{"1..2", "1.", ".1", "1.1."} {
+		if err := db.AppendTrajectory(planTurn, bad, TrajectorySlot{EventType: "x", Timestamp: now + 4}); CodeOf(err) != ErrInvalidQuery {
+			t.Fatalf("nodePath %q: want ErrInvalidQuery, got %v", bad, err)
+		}
+		if still, err := db.PlanState(planTurn); err != nil || still.TotalCount != 2 {
+			t.Fatalf("nodePath %q left a half-built chain: %+v err=%v", bad, still, err)
+		}
+	}
+	// The step handle is a hex token: PlanNodeRef is a library hash, and the
+	// path beside it is the only human-readable attribution a host gets.
+	if evs, err := db.ReadTrajectory(planTurn); err != nil || len(evs) != 2 ||
+		!isHexID(evs[1].PlanNodeRef) || evs[1].PlanNodeRef == "" {
+		t.Fatalf("plan-bound event lost its step handle: %+v err=%v", evs, err)
 	}
 }
 

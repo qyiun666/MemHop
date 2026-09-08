@@ -16,15 +16,6 @@ import (
 	"testing"
 )
 
-// openSurface opens a tenant session backed by the stub LLM.
-func openSurface(t *testing.T) *Session {
-	t.Helper()
-	srv := stubLLM()
-	t.Cleanup(srv.Close)
-	_, sess := openMultiSession(t, surfaceConfig(t, srv.URL))
-	return sess
-}
-
 // garbageLLM answers a well-formed chat completion whose content is prose,
 // never JSON — the shape a model that cannot follow the output contract
 // actually returns.
@@ -72,7 +63,7 @@ func importGraph(t *testing.T, sess *Session, mode L3ImportMode) (*L3ImportResul
 }
 
 func TestImportL3RejectsMalformedBatch(t *testing.T) {
-	sess := openSurface(t)
+	sess := openSurfaceDB(t)
 	before, _ := sess.ListL3()
 
 	bad := []struct {
@@ -113,7 +104,7 @@ func TestImportL3RejectsMalformedBatch(t *testing.T) {
 }
 
 func TestImportL3ReadsBackEveryField(t *testing.T) {
-	sess := openSurface(t)
+	sess := openSurfaceDB(t)
 	res, gid := importGraph(t, sess, L3ImportOverwrite)
 	if len(res.CreatedIDs) != 3 || res.EdgesCreated != 2 {
 		t.Fatalf("want 3 nodes / 2 edges, got %d / %d", len(res.CreatedIDs), res.EdgesCreated)
@@ -162,7 +153,7 @@ func TestImportL3ReadsBackEveryField(t *testing.T) {
 }
 
 func TestImportL3SkipRestoresEdgesOfADeletedNode(t *testing.T) {
-	sess := openSurface(t)
+	sess := openSurfaceDB(t)
 	_, gid := importGraph(t, sess, L3ImportOverwrite)
 
 	full, _ := sess.GetL3(gid)
@@ -194,7 +185,7 @@ func TestImportL3SkipRestoresEdgesOfADeletedNode(t *testing.T) {
 }
 
 func TestUpdateL3RenameSurvivesReimport(t *testing.T) {
-	sess := openSurface(t)
+	sess := openSurfaceDB(t)
 	_, gid := importGraph(t, sess, L3ImportOverwrite)
 	renamed, err := sess.UpdateL3(gid, ptr("proj/renamed"))
 	if err != nil || renamed.Slot.Name != "proj/renamed" || renamed.Slot.IDHash != gid {
@@ -225,7 +216,7 @@ func TestUpdateL3RenameSurvivesReimport(t *testing.T) {
 }
 
 func TestQueryL3NodesRefusesUnknownGraphAndBadIds(t *testing.T) {
-	sess := openSurface(t)
+	sess := openSurfaceDB(t)
 	_, gid := importGraph(t, sess, L3ImportOverwrite)
 	if _, err := sess.QueryL3Nodes(L3NodeQuery{GraphID: gid, IDs: []string{"not-hex"}}); err == nil {
 		t.Fatal("an unparsable node id must be an error, not an empty result")
@@ -249,7 +240,7 @@ func TestQueryL3NodesRefusesUnknownGraphAndBadIds(t *testing.T) {
 }
 
 func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
-	sess := openSurface(t)
+	sess := openSurfaceDB(t)
 	_, gid := importGraph(t, sess, L3ImportOverwrite)
 
 	sr, err := sess.Search(SearchQuery{L3ID: gid})
@@ -291,7 +282,7 @@ func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
 }
 
 func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
-	sess := openSurface(t)
+	sess := openSurfaceDB(t)
 	pid := mustTurnKey(t, sess)
 	// Committing a step is what adds it: the node chain is created along the
 	// path, and the node keeps the title and type the host named it with.
@@ -318,20 +309,26 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 	rejected := []struct {
 		name string
 		ev   TrajectorySlot
+		step PlanStep
+		want Code
 	}{
-		{"no timestamp", TrajectorySlot{EventType: "plan_step"}},
-		{"no event type", TrajectorySlot{Timestamp: 7}},
+		{"no timestamp", TrajectorySlot{EventType: "plan_step"},
+			PlanStep{Status: "done", Summary: "should-not-stick"}, ErrInvalidQuery},
+		{"no event type", TrajectorySlot{Timestamp: 7},
+			PlanStep{Status: "done", Summary: "should-not-stick"}, ErrInvalidQuery},
 		{"payload over budget", TrajectorySlot{EventType: "plan_step", Timestamp: 7,
-			Payload: strings.Repeat("x", 5*1024)}},
-		{"unknown status", TrajectorySlot{EventType: "plan_step", Timestamp: 7}},
+			Payload: strings.Repeat("x", 5*1024)}, PlanStep{Status: "done"}, ErrInvalidQuery},
+		{"unknown status", TrajectorySlot{EventType: "plan_step", Timestamp: 7},
+			PlanStep{Status: "finished", Summary: "越权摘要"}, ErrInvalidQuery},
+		// Status has no blank meaning (unlike Title/Type/Summary): a commit that
+		// omits it is refused rather than silently read as "leave it pending".
+		{"blank status", TrajectorySlot{EventType: "plan_step", Timestamp: 7},
+			PlanStep{Summary: "s"}, ErrInvalidQuery},
+		{"blank event", TrajectorySlot{}, PlanStep{Status: "done"}, ErrInvalidQuery},
 	}
 	for _, tc := range rejected {
-		step := PlanStep{Status: "done", Summary: "should-not-stick"}
-		if tc.name == "unknown status" {
-			step.Status = "finished"
-		}
-		if err := sess.PlanCommit(pid, "1.1", tc.ev, step); err == nil {
-			t.Fatalf("%s: want an error", tc.name)
+		if err := sess.PlanCommit(pid, "1.1", tc.ev, tc.step); CodeOf(err) != tc.want {
+			t.Fatalf("%s: want %v, got %v", tc.name, tc.want, err)
 		}
 		after, err := sess.PlanState(pid)
 		if err != nil {
@@ -364,7 +361,7 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 }
 
 func TestAppendTrajectoryRefusesAndStoresNothing(t *testing.T) {
-	sess := openSurface(t)
+	sess := openSurfaceDB(t)
 	turn := mustTurnKey(t, sess)
 	key := mustTurnKey(t, sess) // a second turn carries the plan-bound step below
 	over := strings.Repeat("字", 3000)
@@ -457,14 +454,14 @@ func mustTurnKey(t *testing.T, sess *Session) string {
 func render(ns []PlanNodeView) string {
 	var b strings.Builder
 	for _, n := range ns {
-		b.WriteString(n.NodePath + "=" + n.Status + "/" + n.Summary + " ")
+		b.WriteString(n.NodePath + "=" + n.Status + "/" + n.Summary + "/" + n.Title + ":" + n.Type + " ")
 		b.WriteString(render(n.Children))
 	}
 	return b.String()
 }
 
 func TestImportL3HyperedgeStaysOneEdge(t *testing.T) {
-	sess := openSurface(t)
+	sess := openSurfaceDB(t)
 	res, err := sess.ImportL3([]L3ImportItem{
 		{Title: "auth-module", Domain: "proj/arch", NodeType: "module", Content: "the whole",
 			Related: []L3Relation{{Titles: []string{"login", "token", "session"}, Kind: EdgePartOf}}},

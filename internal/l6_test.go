@@ -63,11 +63,20 @@ func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
 
 func TestAppendTrajectoryValidation(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", core.TrajectorySlot{Timestamp: 1}); err == nil {
-		t.Fatal("empty event type should fail")
+	bare := core.TrajectorySlot{Timestamp: 1}
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", bare); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", core.TrajectorySlot{EventType: "tool_call"}); err == nil {
-		t.Fatal("zero timestamp should fail")
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", core.TrajectorySlot{EventType: "tool_call"}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("zero timestamp: want ErrInvalidQuery, got %v", err)
+	}
+	// A plan-bound write is refused by the same contract, and the zero key is
+	// refused before it: neither may create a node on its way out.
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "1", bare); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("bound empty type: want ErrInvalidQuery, got %v", err)
+	}
+	if err := db.AppendTrajectory(core.DefaultAgentID, "0000000000000000", "", core.TrajectorySlot{EventType: "x", Timestamp: 1}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("reserved key: want ErrInvalidQuery, got %v", err)
 	}
 }
 
@@ -75,8 +84,8 @@ func TestAppendTrajectoryPayloadRefused(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	key := common.FormatHash(3)
 	long := strings.Repeat("x", trajectory.MaxEventPayload+100)
-	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.TrajectorySlot{EventType: "tool_call", Payload: long, Timestamp: 1}); err == nil {
-		t.Fatal("an over-budget payload must be refused, not truncated")
+	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.TrajectorySlot{EventType: "tool_call", Payload: long, Timestamp: 1}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an over-budget payload must be refused with ErrInvalidQuery, got %v", err)
 	}
 	events, err := db.ReadTrajectory(core.DefaultAgentID, key)
 	if err != nil {
