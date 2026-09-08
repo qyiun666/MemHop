@@ -170,9 +170,9 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return out, nil
 }
 
-// ReadTrajectory returns one turn's trajectory events with hex IDs. turnID is
-// the topic id Search minted for that turn; plan-bound events are keyed by
-// their plan id, so a planID works here too.
+// ReadTrajectory returns one turn's L6 records with hex IDs, in Seq order:
+// that turn's operation events plus the plan nodes its steps created. turnID
+// is the topic id Search minted for the turn.
 func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
 	events, err := s.Session.ReadTrajectory(turnID)
 	if err != nil {
@@ -185,60 +185,51 @@ func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
 	return out, nil
 }
 
-// AppendTrajectory writes one event under key: a turn's topic id (Search
-// mints it) with an empty nodePath, or a plan id with the dotted nodePath of
-// the plan node the event binds to ("1", "1.2"; a missing node is created
-// pending).
+// AppendTrajectory writes one event under topicID: the turn's topic id Search
+// minted for it. With an empty nodePath the record is a bare turn event; with
+// a nodePath it hangs on that plan step, which is created as pending when
+// missing — so this call is also how a host adds a step to the turn's plan.
 //
-// The log is append-only and per-key: nothing returns or takes an event id,
-// because no public call consumes one — ReadTrajectory(key) gives the events
-// back in Seq order, and Dream drops ones past the retention window. Of the
-// event you pass, EventType, Payload, Timestamp, FinishedAt and — for a
-// plan-bound event — TopicID are stored. Seq, PlanID and PlanNodeRef are
-// assigned by the library, and so is the record's NodePath: a plan-bound event
-// is stamped with the step it landed on, which is how a host attributes an
-// event to a step afterwards. On a bare turn event TopicID comes from the key
-// — it cannot disagree with it — while a plan-bound event keeps the TopicID
-// named for the turn it happened in.
+// The log is append-only and per-turn: nothing returns or takes an event id,
+// because no public call consumes one — ReadTrajectory(topicID) gives the
+// records back in Seq order, and Dream drops ones past the retention window.
+// Of the event you pass, only EventType, Payload, Timestamp and FinishedAt are
+// stored; Seq, SessionID, NodePath and PlanNodeRef are assigned by the library,
+// and the record's NodePath is the step it landed on, which is how a host
+// attributes an event to a step afterwards.
 //
 // A Payload over the 4 KiB budget is refused, not truncated: a shortened event
 // would read back exactly like a complete one. Nothing is written when this
-// call returns an error.
+// call returns an error — including no node created along nodePath.
 //
-// EventType names the step and is the host's own word for it on both paths: a
-// plan-bound event takes any non-empty name a bare turn event takes. The engine
-// never branches on it — the name comes back through ReadTrajectory and reaches
-// the Crystallize prompt verbatim — so these conventions are a shared vocabulary
-// for the reader, not an accepted set: plan_step, llm_request, llm_output,
-// tool_call, tool_result, subagent_spawn, subagent_done, context_inject,
-// ask_user, user_reply. An empty EventType is ErrInvalidQuery.
-func (s *Session) AppendTrajectory(key, nodePath string, ev TrajectorySlot) error {
-	coreEv, err := toCoreTrajectorySlot(ev)
-	if err != nil {
-		return err
-	}
-	return s.Session.AppendTrajectory(key, nodePath, coreEv)
+// EventType names the step and is the host's own word for it on both paths: the
+// engine never branches on it — the name comes back through ReadTrajectory and
+// reaches the Crystallize prompt verbatim — so these conventions are a shared
+// vocabulary for the reader, not an accepted set: plan_step, llm_request,
+// llm_output, tool_call, tool_result, subagent_spawn, subagent_done,
+// context_inject, ask_user, user_reply. An empty EventType is ErrInvalidQuery.
+func (s *Session) AppendTrajectory(topicID, nodePath string, ev TrajectorySlot) error {
+	return s.Session.AppendTrajectory(topicID, nodePath, toCoreTrajectorySlot(ev))
 }
 
 // PlanCommit advances a plan node to a status, appends the step event and rolls
-// Done children's summaries up into their parent. status takes the PlanStatus*
-// string constants ("pending" / "in_progress" / "running" / "done" / "failed");
-// an unknown value is rejected. nodePath is the dotted path the host assigned
-// with SyncPlanTree. Like the node-bound AppendTrajectory, the event is forced
-// to bare-event semantics and names itself: any non-empty EventType the host
-// chooses is accepted. summary is the node's own conclusion, kept when a later
-// sync leaves it blank.
-func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status string, summary string) error {
-	coreEv, err := toCoreTrajectorySlot(ev)
-	if err != nil {
-		return err
-	}
-	return s.Session.PlanCommit(planID, nodePath, coreEv, internal.PlanStatus(status), summary)
+// Done children's summaries up into their parent. topicID is the turn that
+// opened the plan; nodePath is the dotted path the host assigns within it (a
+// missing node along the path is created, so this is how a step is added).
+// status takes the PlanStatus* string constants ("pending" / "in_progress" /
+// "running" / "done" / "failed"); an unknown value is rejected. Like the
+// node-bound AppendTrajectory, the event is forced to bare-event semantics and
+// names itself: any non-empty EventType the host chooses is accepted. summary
+// is the node's own conclusion: a later commit that leaves it blank keeps what
+// is stored, so it never rewinds a folded summary.
+func (s *Session) PlanCommit(topicID, nodePath string, ev TrajectorySlot, status string, summary string) error {
+	return s.Session.PlanCommit(topicID, nodePath, toCoreTrajectorySlot(ev), internal.PlanStatus(status), summary)
 }
 
-// PlanState returns the plan forest with hex-free string statuses.
-func (s *Session) PlanState(planID string) (*PlanTree, error) {
-	t, err := s.Session.PlanState(planID)
+// PlanState returns the plan tree of one turn — keyed by the topic id that
+// opened it — with hex-free string statuses.
+func (s *Session) PlanState(topicID string) (*PlanTree, error) {
+	t, err := s.Session.PlanState(topicID)
 	if err != nil {
 		return nil, err
 	}
@@ -248,17 +239,18 @@ func (s *Session) PlanState(planID string) (*PlanTree, error) {
 
 // SyncPlanTree replaces one plan's whole tree from the host's authoritative
 // snapshot: adds/updates nodes by path, deletes vanished nodes (with their
-// bound events) and never appends a plan_step event. planID is preserved.
+// bound events) and never appends a plan_step event. topicID is the turn that
+// opened the plan.
 // A nil root wipes the plan instead — every node and bound event is removed
-// while the planID is kept, so an unrelated next task can start on the id the
+// while the key is kept, so an unrelated next task can start on the id the
 // host already holds without landing on the old tree by path; seed the fresh
 // tree by syncing a single root node (an empty status lands pending).
-func (s *Session) SyncPlanTree(planID string, root *PlanNode) error {
+func (s *Session) SyncPlanTree(topicID string, root *PlanNode) error {
 	if root == nil {
-		return s.Session.SyncPlanTree(planID, nil)
+		return s.Session.SyncPlanTree(topicID, nil)
 	}
 	in := toInternalPlanNode(root)
-	return s.Session.SyncPlanTree(planID, &in)
+	return s.Session.SyncPlanTree(topicID, &in)
 }
 
 // ---- Promoted surface, documented ----

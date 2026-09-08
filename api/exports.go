@@ -15,11 +15,6 @@ import "github.com/qyiun666/MemHop/internal"
 // it to MultiAgentDB.Session to work in the default agent domain.
 const DefaultAgentID = "0000000000000000"
 
-// NewPlanID derives the stable 16-hex id of a plan the host names. The
-// mapping is deterministic, so a host recovers the same plan tree after a
-// restart by naming the plan again — it never stores or builds an id.
-func NewPlanID(name string) string { return internal.MintPlanID(name) }
-
 // ---- L5 capability constants ----
 
 const (

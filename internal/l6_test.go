@@ -21,10 +21,10 @@ import (
 
 // planNodeEvents reads one node's bound events (Seq ascending) through the
 // single-scan aggregate; the repo-level CollectNodeEvents was removed.
-func planNodeEvents(t *testing.T, db *DB, planID, nodeID uint64) []core.TrajectorySlot {
+func planNodeEvents(t *testing.T, db *DB, topicID, nodeID uint64) []core.TrajectorySlot {
 	t.Helper()
 	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
-		if agg.PlanID != planID {
+		if agg.TopicID != topicID {
 			continue
 		}
 		var out []core.TrajectorySlot
@@ -472,7 +472,7 @@ func TestPlanAppendCannotInjectNodeType(t *testing.T) {
 		if e.SessionID != 77 {
 			continue
 		}
-		if e.PlanType != "" || e.Summary != "" || e.TopicID != 77 {
+		if e.PlanType != "" || e.Summary != "" || e.PlanNodeRef != 0 || e.NodePath != "" {
 			t.Fatalf("bare turn event shape: %+v", e)
 		}
 	}
@@ -752,7 +752,7 @@ func TestSyncPlanTree_NoEventProduced(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
-		if agg.PlanID != 9 {
+		if agg.TopicID != 9 {
 			continue
 		}
 		if len(agg.Events) != 0 {
@@ -792,7 +792,7 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	}
 	var disk *repo.PlanAggregate
 	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
-		if agg.PlanID == 9 {
+		if agg.TopicID == 9 {
 			disk = &agg
 			break
 		}
@@ -897,8 +897,8 @@ func TestTurnRunsOnOneTopicID(t *testing.T) {
 		t.Fatalf("events = %d, want the turn's 2", len(events))
 	}
 	for _, ev := range events {
-		if ev.TopicID != settled {
-			t.Fatalf("event %s bound to topic %d, want %d", ev.EventType, ev.TopicID, settled)
+		if ev.SessionID != settled {
+			t.Fatalf("event %s landed under key %d, want the turn's %d", ev.EventType, ev.SessionID, settled)
 		}
 	}
 }

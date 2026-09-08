@@ -176,30 +176,27 @@ type ArchiveSlot struct {
 	Content     string      `json:"content"`
 }
 
-// TrajectorySlot is one L6 operation trajectory event — the shape both write
-// and read use, so a field that no path can fill does not live here.
-// SessionID is the trajectory key: the turn's topic id Search minted for it
-// (TopicID then carries the same value), or the plan id of a plan-bound event.
-// PlanID echoes SessionID on a plan-bound event and is zero on a bare turn
-// event. NodePath names the plan step a bound event belongs to — the library
+// TrajectorySlot is one L6 record — a turn's operation event, or a plan node
+// — the shape both write and read use, so a field that no path can fill does
+// not live here. SessionID is the L6 key: the topic id Search minted for the
+// turn, which holds both that turn's events and the plan tree it opened.
+// NodePath names the plan step a record is about — for an event the library
 // stamps it on write, so a host can attribute an event to a step without
-// deriving PlanNodeRef (a library hash nothing on the surface re-derives).
-// A bare turn event leaves NodePath and PlanNodeRef empty.
+// deriving PlanNodeRef (a library hash nothing on the surface re-derives); for
+// a node it is the host-assigned dotted path. A bare turn event leaves
+// NodePath and PlanNodeRef empty.
 //
-// On every write path (AppendTrajectory, PlanCommit) PlanID/NodePath/
+// On every write path (AppendTrajectory, PlanCommit) SessionID/NodePath/
 // PlanNodeRef/Seq are assigned by the library and are read-only here; of the
-// event you pass, EventType, Payload, Timestamp, FinishedAt and — for a
-// plan-bound event — TopicID are what gets stored.
+// event you pass, only EventType, Payload, Timestamp and FinishedAt are stored.
 type TrajectorySlot struct {
 	IDHash    string `json:"id_hash"`
 	SessionID string `json:"session_id"`
 	Seq       uint64 `json:"seq"`
 	EventType string `json:"event_type"`
 	Payload   string `json:"payload"`
-	TopicID   string `json:"topic_id,omitempty"` // L2 topic the turn resolves to, 16-char hex
 	Timestamp int64  `json:"timestamp"`
 
-	PlanID      string `json:"plan_id,omitempty"`
 	NodePath    string `json:"node_path,omitempty"`
 	PlanNodeRef string `json:"plan_node_ref,omitempty"`
 	FinishedAt  int64  `json:"finished_at,omitempty"`

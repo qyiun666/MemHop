@@ -56,7 +56,7 @@ func TestWritePlanNode_KeepsHashPlanNodeID(t *testing.T) {
 	id := core.HashPlanNode(9, "1.2.1")
 	node := &core.TrajectorySlot{
 		IDHash: id, SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan,
-		PlanID: 9, ParentID: 0, NodePath: "1.2.1", Status: core.StatusInProgress,
+		ParentID: 0, NodePath: "1.2.1", Status: core.StatusInProgress,
 	}
 	if _, err := WritePlanNode(engine, agentID, node); err != nil {
 		t.Fatal(err)
@@ -76,12 +76,12 @@ func TestWritePlanNode_KeepsHashPlanNodeID(t *testing.T) {
 func TestCollectPlanNodesAndNodeEvents(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
-	root := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1", Status: core.StatusInProgress}
-	child := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1.1"), SessionID: 9, Seq: 2, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1.1", Status: core.StatusDone}
+	root := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusInProgress}
+	child := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1.1"), SessionID: 9, Seq: 2, NodeType: core.NodeTypePlan, NodePath: "1.1", Status: core.StatusDone}
 	_, _ = WritePlanNode(engine, agentID, root)
 	_, _ = WritePlanNode(engine, agentID, child)
 	// 事件挂到 child 节点
-	ev := &core.TrajectorySlot{IDHash: common.HashID("ev:1"), SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: child.IDHash, EventType: "llm_request", Timestamp: 1000}
+	ev := &core.TrajectorySlot{IDHash: common.HashID("ev:1"), SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanNodeRef: child.IDHash, EventType: "llm_request", Timestamp: 1000}
 	_, _ = AppendTrajectory(engine, agentID, *ev)
 
 	nodes := CollectPlanNodes(engine, agentID, 9)
@@ -105,7 +105,7 @@ func TestPlanNodeID_DoesNotCollideWithEventID(t *testing.T) {
 		t.Fatalf("plan node id %d must not collide with event id %d", planNodeID, evID)
 	}
 	// 写节点 + 写事件到同一 agent，两者并存不覆盖
-	node := &core.TrajectorySlot{IDHash: planNodeID, SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1", Status: core.StatusInProgress}
+	node := &core.TrajectorySlot{IDHash: planNodeID, SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusInProgress}
 	if _, err := WritePlanNode(engine, agentID, node); err != nil {
 		t.Fatal(err)
 	}
@@ -133,19 +133,19 @@ func TestCollectPlanAggregatesGroupsPlans(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
 	// plan 9: root "1" (pending) + child "1.1" (done), one event bound to each.
-	root9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1", Status: core.StatusPending, Timestamp: 100}
-	child9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1.1"), SessionID: 9, Seq: 2, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1.1", Status: core.StatusDone, Timestamp: 200}
+	root9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusPending, Timestamp: 100}
+	child9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1.1"), SessionID: 9, Seq: 2, NodeType: core.NodeTypePlan, NodePath: "1.1", Status: core.StatusDone, Timestamp: 200}
 	// plan 3: single done root.
-	root3 := &core.TrajectorySlot{IDHash: core.HashPlanNode(3, "1"), SessionID: 3, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 3, NodePath: "1", Status: core.StatusDone, Timestamp: 50}
+	root3 := &core.TrajectorySlot{IDHash: core.HashPlanNode(3, "1"), SessionID: 3, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusDone, Timestamp: 50}
 	for _, n := range []*core.TrajectorySlot{root9, child9, root3} {
 		if _, err := WritePlanNode(engine, agentID, n); err != nil {
 			t.Fatal(err)
 		}
 	}
-	ev9a := core.TrajectorySlot{SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 300}
-	ev9b := core.TrajectorySlot{SessionID: 9, Seq: 2, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 400}
-	ev9c := core.TrajectorySlot{SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: child9.IDHash, EventType: "plan_step", Timestamp: 500}
-	// A bare turn event (PlanID=0) must not leak into any aggregate.
+	ev9a := core.TrajectorySlot{SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 300}
+	ev9b := core.TrajectorySlot{SessionID: 9, Seq: 2, NodeType: core.NodeTypeEvent, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 400}
+	ev9c := core.TrajectorySlot{SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanNodeRef: child9.IDHash, EventType: "plan_step", Timestamp: 500}
+	// A bare turn event references no node, so it must join no aggregate.
 	bare := core.TrajectorySlot{SessionID: 5, Seq: 1, EventType: "llm_request", Timestamp: 900}
 	for _, ev := range []core.TrajectorySlot{ev9a, ev9b, ev9c, bare} {
 		if _, err := AppendTrajectory(engine, agentID, ev); err != nil {
@@ -157,11 +157,11 @@ func TestCollectPlanAggregatesGroupsPlans(t *testing.T) {
 	if len(aggs) != 2 {
 		t.Fatalf("want 2 plan aggregates, got %d", len(aggs))
 	}
-	byPlan := map[uint64]PlanAggregate{}
+	byTopic := map[uint64]PlanAggregate{}
 	for _, a := range aggs {
-		byPlan[a.PlanID] = a
+		byTopic[a.TopicID] = a
 	}
-	p9, p3 := byPlan[9], byPlan[3]
+	p9, p3 := byTopic[9], byTopic[3]
 	if len(p9.Nodes) != 2 || len(p3.Nodes) != 1 {
 		t.Fatalf("node counts: plan9=%d plan3=%d", len(p9.Nodes), len(p3.Nodes))
 	}
@@ -188,15 +188,15 @@ func TestCollectPlanAggregatesGroupsPlans(t *testing.T) {
 func TestDeletePlanRecordsRemovesNodesAndEvents(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
-	root9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 9, NodePath: "1", Status: core.StatusPending, Timestamp: 100}
+	root9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusPending, Timestamp: 100}
 	if _, err := WritePlanNode(engine, agentID, root9); err != nil {
 		t.Fatal(err)
 	}
-	root3 := &core.TrajectorySlot{IDHash: core.HashPlanNode(3, "1"), SessionID: 3, Seq: 1, NodeType: core.NodeTypePlan, PlanID: 3, NodePath: "1", Status: core.StatusDone, Timestamp: 50}
+	root3 := &core.TrajectorySlot{IDHash: core.HashPlanNode(3, "1"), SessionID: 3, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusDone, Timestamp: 50}
 	if _, err := WritePlanNode(engine, agentID, root3); err != nil {
 		t.Fatal(err)
 	}
-	ev9 := core.TrajectorySlot{SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanID: 9, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 300}
+	ev9 := core.TrajectorySlot{SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 300}
 	bare := core.TrajectorySlot{SessionID: 5, Seq: 1, EventType: "llm_request", Timestamp: 900}
 	for _, ev := range []core.TrajectorySlot{ev9, bare} {
 		if _, err := AppendTrajectory(engine, agentID, ev); err != nil {
@@ -213,7 +213,7 @@ func TestDeletePlanRecordsRemovesNodesAndEvents(t *testing.T) {
 		t.Fatalf("want plan3 node + bare event left, got %d", len(left))
 	}
 	for _, ev := range left {
-		if ev.PlanID == 9 {
+		if ev.SessionID == 9 {
 			t.Fatalf("plan 9 record survived: %+v", ev)
 		}
 	}
@@ -246,7 +246,7 @@ func TestDeletePlanNodeBranchCascades(t *testing.T) {
 		id := core.HashPlanNode(planID, nodePath)
 		node := &core.TrajectorySlot{
 			IDHash: id, SessionID: planID, Seq: uint64(len(strings.Split(nodePath, "."))),
-			NodeType: core.NodeTypePlan, PlanID: planID, ParentID: parent,
+			NodeType: core.NodeTypePlan, ParentID: parent,
 			NodePath: nodePath, Status: core.StatusPending, Timestamp: 100,
 		}
 		if _, err := WritePlanNode(engine, agentID, node); err != nil {
@@ -260,7 +260,7 @@ func TestDeletePlanNodeBranchCascades(t *testing.T) {
 	mkNode("2", 0) // a sibling root outside the "1" branch
 	// Bind a real event to "1.1" so the cascade is observable on disk.
 	if _, err := AppendTrajectory(engine, agentID, core.TrajectorySlot{
-		SessionID: planID, Seq: 1, NodeType: core.NodeTypeEvent, PlanID: planID,
+		SessionID: planID, Seq: 1, NodeType: core.NodeTypeEvent,
 		PlanNodeRef: c1, EventType: "llm_request", Payload: "x", Timestamp: 200,
 	}); err != nil {
 		t.Fatal(err)

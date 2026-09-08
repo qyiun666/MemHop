@@ -12,13 +12,14 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// PlanCache caches every plan's nodes and bound-event count in memory so
+// PlanCache caches each turn's plan nodes and bound-event count in memory so
 // PlanState/rollup avoid a full engine scan per operation. Built
 // from the engine when the agent context is created (and rebuilt on idle
 // reclaim) and maintained incrementally by the internal layer, which owns
 // every plan write/delete under the same domain lock (Context.Mu) — so the
 // cache carries no lock of its own and is only ever touched while the caller
-// holds Context.Mu.
+// holds Context.Mu. A plan is keyed by the topic of the turn that opened it,
+// so a key exists exactly while at least one of its nodes does.
 type PlanCache struct {
 	plans map[uint64]*repo.PlanAggregate
 }
@@ -27,28 +28,28 @@ func buildPlanCache(engine *core.StorageEngine, agentID uint64) *PlanCache {
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
 	for _, agg := range repo.CollectPlanAggregates(engine, agentID) {
 		a := agg
-		pc.plans[a.PlanID] = &a
+		pc.plans[a.TopicID] = &a
 	}
 	return pc
 }
 
-// Aggregate returns the cached aggregate of one plan; nil when unknown.
-func (pc *PlanCache) Aggregate(planID uint64) *repo.PlanAggregate {
-	return pc.plans[planID]
+// Aggregate returns the cached aggregate of one turn's plan; nil when unknown.
+func (pc *PlanCache) Aggregate(topicID uint64) *repo.PlanAggregate {
+	return pc.plans[topicID]
 }
 
 // UpsertNode inserts or updates a plan node in its aggregate, keeping Nodes
 // sorted by (Seq, NodePath) so planForest can consume them directly. Node
 // identity is the stable derived IDHash (HashPlanNode), so an in-place
 // replacement preserves the reference.
-func (pc *PlanCache) UpsertNode(planID uint64, node *core.TrajectorySlot) {
+func (pc *PlanCache) UpsertNode(topicID uint64, node *core.TrajectorySlot) {
 	if node == nil {
 		return
 	}
-	agg := pc.plans[planID]
+	agg := pc.plans[topicID]
 	if agg == nil {
-		agg = &repo.PlanAggregate{PlanID: planID, EventCount: make(map[uint64]int)}
-		pc.plans[planID] = agg
+		agg = &repo.PlanAggregate{TopicID: topicID, EventCount: make(map[uint64]int)}
+		pc.plans[topicID] = agg
 	}
 	found := false
 	for i := range agg.Nodes {
@@ -68,13 +69,13 @@ func (pc *PlanCache) UpsertNode(planID uint64, node *core.TrajectorySlot) {
 }
 
 // UpsertEvent appends a plan-bound event and bumps its node's count. Used by
-// appendPlanEventLocked; the timestamp is monotonic, so CreatedAt/LastActiveAt
+// plan.AppendEventLocked; the timestamp is monotonic, so CreatedAt/LastActiveAt
 // update incrementally instead of rescanning.
-func (pc *PlanCache) UpsertEvent(planID, nodeID uint64, ev core.TrajectorySlot) {
-	agg := pc.plans[planID]
+func (pc *PlanCache) UpsertEvent(topicID, nodeID uint64, ev core.TrajectorySlot) {
+	agg := pc.plans[topicID]
 	if agg == nil {
-		agg = &repo.PlanAggregate{PlanID: planID, EventCount: make(map[uint64]int)}
-		pc.plans[planID] = agg
+		agg = &repo.PlanAggregate{TopicID: topicID, EventCount: make(map[uint64]int)}
+		pc.plans[topicID] = agg
 	}
 	agg.Events = append(agg.Events, ev)
 	agg.EventCount[nodeID]++
@@ -89,8 +90,8 @@ func (pc *PlanCache) UpsertEvent(planID, nodeID uint64, ev core.TrajectorySlot) 
 // RemoveNodeBranch drops the branch nodes and their bound events from the
 // cache, mirroring repo.DeletePlanNodeBranch (which removes them on disk).
 // Does not touch the engine.
-func (pc *PlanCache) RemoveNodeBranch(planID uint64, nodePath string) {
-	agg := pc.plans[planID]
+func (pc *PlanCache) RemoveNodeBranch(topicID uint64, nodePath string) {
+	agg := pc.plans[topicID]
 	if agg == nil {
 		return
 	}
@@ -115,19 +116,19 @@ func (pc *PlanCache) RemoveNodeBranch(planID uint64, nodePath string) {
 	if len(target) > 0 {
 		recomputePlanAggStat(agg)
 	}
-	pc.detachIfEmpty(planID)
+	pc.detachIfEmpty(topicID)
 }
 
 // RemovePlan drops a plan's whole aggregate; used by the SyncPlanTree wipe.
-func (pc *PlanCache) RemovePlan(planID uint64) {
-	delete(pc.plans, planID)
+func (pc *PlanCache) RemovePlan(topicID uint64) {
+	delete(pc.plans, topicID)
 }
 
 // RemovePlanIDs drops a specific set of nodes and bound events from the cache,
 // used by the Dream retention sweep (expired nodes cascade their events, but
 // the surviving fresh subtree stays). Does not touch the engine.
-func (pc *PlanCache) RemovePlanIDs(planID uint64, nodeIDs, eventIDs []uint64) {
-	agg := pc.plans[planID]
+func (pc *PlanCache) RemovePlanIDs(topicID uint64, nodeIDs, eventIDs []uint64) {
+	agg := pc.plans[topicID]
 	if agg == nil {
 		return
 	}
@@ -153,15 +154,15 @@ func (pc *PlanCache) RemovePlanIDs(planID uint64, nodeIDs, eventIDs []uint64) {
 		})
 	}
 	recomputePlanAggStat(agg)
-	pc.detachIfEmpty(planID)
+	pc.detachIfEmpty(topicID)
 }
 
 // detachIfEmpty drops an aggregate that no longer holds any node so it stops
 // as a live plan (a plan whose whole tree was pruned is gone).
-func (pc *PlanCache) detachIfEmpty(planID uint64) {
-	agg := pc.plans[planID]
+func (pc *PlanCache) detachIfEmpty(topicID uint64) {
+	agg := pc.plans[topicID]
 	if agg == nil || len(agg.Nodes) == 0 {
-		delete(pc.plans, planID)
+		delete(pc.plans, topicID)
 	}
 }
 

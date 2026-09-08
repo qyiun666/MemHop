@@ -49,11 +49,11 @@ type PlanTree struct {
 	TotalCount int            `json:"total_count"`
 }
 
-// BuildTree assembles the plan forest from ONE aggregate scan and
+// BuildTree assembles one turn's plan forest from ONE aggregate scan and
 // reads each node's bound-event count from the same pass (no per-node
 // rescans). Callers hold ac.Mu.
-func BuildTree(ac *domain.Context, agentID, planID uint64) (*PlanTree, error) {
-	nodes, eventCount := aggregate(ac, planID)
+func BuildTree(ac *domain.Context, agentID, topicID uint64) (*PlanTree, error) {
+	nodes, eventCount := aggregate(ac, topicID)
 	roots := Forest(nodes, eventCount)
 	views := make([]PlanNodeView, 0, len(roots))
 	for _, r := range roots {
@@ -63,11 +63,11 @@ func BuildTree(ac *domain.Context, agentID, planID uint64) (*PlanTree, error) {
 	return &PlanTree{Roots: views, DoneCount: done, TotalCount: total}, nil
 }
 
-// aggregate returns one plan's nodes and per-node event counts from
-// the agent's in-memory plan cache (no engine scan per op); (nil, nil) when
-// the plan is unknown.
-func aggregate(ac *domain.Context, planID uint64) ([]core.TrajectorySlot, map[uint64]int) {
-	agg := ac.Plans.Aggregate(planID)
+// aggregate returns the plan of one turn — its nodes and per-node event
+// counts — from the agent's in-memory plan cache (no engine scan per op);
+// (nil, nil) when no node lives under that topic.
+func aggregate(ac *domain.Context, topicID uint64) ([]core.TrajectorySlot, map[uint64]int) {
+	agg := ac.Plans.Aggregate(topicID)
 	if agg == nil {
 		return nil, nil
 	}
@@ -146,8 +146,8 @@ func countTree(v PlanNodeView) (done, total int) {
 // children's summaries. It NEVER changes a node's Status — a parent becomes
 // Done only when the host explicitly commits it (Model A). Callers hold
 // ac.Mu.
-func RollupTree(ac *domain.Context, agentID, planID uint64) error {
-	nodes, _ := aggregate(ac, planID)
+func RollupTree(ac *domain.Context, agentID, topicID uint64) error {
+	nodes, _ := aggregate(ac, topicID)
 	for _, root := range Forest(nodes, nil) {
 		if err := rollupNode(ac, agentID, root); err != nil {
 			return err

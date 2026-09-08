@@ -237,36 +237,35 @@ const (
 	StatusRunning    uint8 = 4
 )
 
-// TrajectorySlot is an L6 operation trajectory event appended by the host;
-// one trajectory per agent turn, keyed by the L2 topic id Search issued for
-// that turn (a plan-bound turn keys by its plan id instead), so Seq only
-// counts within the turn. Short-lived:
-// Dream purges events older than the 7-day retention window.
+// TrajectorySlot is one L6 record — a trajectory event appended by the host,
+// or a plan node. SessionID is the single L6 key: the topic id Search issued
+// for the turn that produced the record. A plan therefore lives under the turn
+// that opened it, so one key yields both a turn's events and its node tree;
+// Seq counts within that key (an event is max+1, a node carries its depth).
+// Short-lived: Dream purges records older than the 7-day retention window.
 type TrajectorySlot struct {
-	IDHash    uint64 `json:"id_hash"`    // hash(sessionID:seq)
-	SessionID uint64 `json:"session_id"` // trajectory key: the turn's L2 topic id (Search-issued), or the plan id for plan-bound events
-	Seq       uint64 `json:"seq"`        // per-turn increasing sequence
+	IDHash    uint64 `json:"id_hash"`    // 事件 hash(sessionID:seq)；节点 HashPlanNode
+	SessionID uint64 `json:"session_id"` // 唯一的 L6 键：本轮的 L2 话题 id
+	Seq       uint64 `json:"seq"`        // 事件：键内递增；节点：路径深度
 
 	NodeType    uint8  `json:"node_type"`               // 0=轨迹事件 1=计划节点
-	PlanID      uint64 `json:"plan_id"`                 // 所属任务根（无任务=单个根）
-	ParentID    uint64 `json:"parent_id,omitempty"`     // 父节点（0=根）
-	NodePath    string `json:"node_path"`               // "1" / "1.2.1" / "1.2.2"
+	ParentID    uint64 `json:"parent_id,omitempty"`     // 仅节点：父节点（0=根）
+	NodePath    string `json:"node_path"`               // "1" / "1.2.1"；事件为它所挂的节点
 	Status      uint8  `json:"status,omitempty"`        // 仅节点：0=pending 1=in_progress 2=done 3=failed 4=running
 	Summary     string `json:"summary,omitempty"`       // 仅节点：完成缩写摘要
 	Title       string `json:"title,omitempty"`         // 仅节点：人类可读标题（空时视图回退 NodePath）
 	PlanType    string `json:"plan_type,omitempty"`     // 仅节点：语义类型 plan/step/tool_call（空=普通节点）
-	PlanNodeRef uint64 `json:"plan_node_ref,omitempty"` // 仅事件：挂到的计划节点（HashPlanNode(planID,nodePath)）
+	PlanNodeRef uint64 `json:"plan_node_ref,omitempty"` // 仅事件：挂到的节点（HashPlanNode(topicID,nodePath)）
 	FinishedAt  int64  `json:"finished_at,omitempty"`   // 仅节点：终态完成时刻（Unix ms，终态写入、非终态不清除）
 
-	EventType string `json:"event_type"`         // llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply
-	Payload   string `json:"payload"`            // event content (truncated to 4KB; no raw token stream)
-	TopicID   uint64 `json:"topic_id,omitempty"` // 仅事件：本轮的 L2 话题 id，由 AppendTrajectory 按轮键回填；计划绑定事件为 0
+	EventType string `json:"event_type"` // llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply
+	Payload   string `json:"payload"`    // event content (max 4KB; no raw token stream)
 	Timestamp int64  `json:"timestamp"`
 }
 
-// HashPlanNode derives a plan node id from planID + nodePath, namespaced
-// under a "plan:" prefix so it never collides with a trajectory event id
-// (which is hash("sessionID:seq")).
-func HashPlanNode(planID uint64, nodePath string) uint64 {
-	return common.HashID("plan:" + fmt.Sprintf("%d:%s", planID, nodePath))
+// HashPlanNode derives a plan node id from the owning topic + nodePath,
+// namespaced under a "plan:" prefix so it never collides with a trajectory
+// event id (which is hash("sessionID:seq")).
+func HashPlanNode(topicID uint64, nodePath string) uint64 {
+	return common.HashID("plan:" + fmt.Sprintf("%d:%s", topicID, nodePath))
 }

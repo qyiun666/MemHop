@@ -16,6 +16,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/llm"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/trajectory"
 )
 
 // DB is the multi-agent database instance returned by Open. Business state
@@ -101,20 +102,21 @@ func (db *DB) lockAgent(agentID uint64) (*domain.Context, error) {
 	return ac, nil
 }
 
-// lockSession is the shared prologue of the L6 session-scoped operations:
-// take the domain lock, then parse the hex session id. On a parse failure
+// lockSession is the shared prologue of the L6 turn-keyed operations: take
+// the domain lock, then parse the topic id of the turn. On a parse failure
 // the lock is released before returning, so callers add `defer ac.Mu.Unlock()`
 // only after the error check. It returns the locked context and the parsed
-// session id.
+// key. The parse is the write path's own (trajectory.ParseTopicID), so a
+// reserved all-zero key is refused the same way on both sides of the log.
 func (db *DB) lockSession(agentID uint64, sessionID string) (*domain.Context, uint64, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, 0, err
 	}
-	parsed, err := common.ParseID(sessionID)
+	parsed, err := trajectory.ParseTopicID(sessionID)
 	if err != nil {
 		ac.Mu.Unlock()
-		return nil, 0, common.NewError(common.ErrInvalidQuery, "parse session id", err)
+		return nil, 0, err
 	}
 	return ac, parsed, nil
 }

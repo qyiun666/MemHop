@@ -92,12 +92,13 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 }
 
 // TestSurfacePlanTriForm exercises the plan tri-form end-to-end through the
-// api facade: PlanCommit advances a node, PlanState returns the tree with
+// api facade: a plan is keyed by the turn Search opened (the host holds no
+// other id), PlanCommit advances a node, PlanState returns the tree with
 // string statuses and hex-free ids, and under Model A a parent becomes Done
 // only when the host explicitly commits it (then Done children roll up).
 func TestSurfacePlanTriForm(t *testing.T) {
 	db := openSurfaceDB(t)
-	planID := common.FormatHash(common.HashID("plan-1"))
+	planID := mustTurnKey(t, db)
 	// Root in_progress → child done → child done → host completes root → done.
 	if err := db.PlanCommit(planID, "1", TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, "in_progress", ""); err != nil {
 		t.Fatalf("commit root: %v", err)
@@ -153,7 +154,7 @@ func TestSurfacePlanTriForm(t *testing.T) {
 // and a single-node sync reseeds one pending root under the same plan id.
 func TestSurfacePlanWipeAndReseed(t *testing.T) {
 	db := openSurfaceDB(t)
-	planID := NewPlanID("plan-replace")
+	planID := common.FormatHash(common.HashID("plan-replace"))
 	for _, step := range []string{"1", "2"} {
 		if err := db.PlanCommit(planID, step, TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, "pending", ""); err != nil {
 			t.Fatalf("commit %s: %v", step, err)
@@ -190,7 +191,7 @@ func TestSurfacePlanWipeAndReseed(t *testing.T) {
 // surfaces the node Type + FinishedAt fields.
 func TestSurfaceSyncPlanTree(t *testing.T) {
 	db := openSurfaceDB(t)
-	planID := NewPlanID("sync-plan")
+	planID := common.FormatHash(common.HashID("sync-plan"))
 	root := &PlanNode{
 		NodePath: "1", Title: "root", Type: "plan", Status: "running",
 		Children: []PlanNode{
@@ -337,14 +338,13 @@ func TestSurfaceUpdateSceneAnchor(t *testing.T) {
 	}
 }
 
-// TestSurfaceReservedPlanID locks the planID=0 guard: the all-zero hex id is
-// the sentinel AppendTrajectory writes on bare turn events, so no plan entry
-// point may accept it — a nil-tree sync on 0 would delete every turn event
-// of the domain.
-func TestSurfaceReservedPlanID(t *testing.T) {
+// TestSurfaceReservedTopicID locks the all-zero guard: 0 is the value every
+// record leaves its L6 key unset with, so no entry point — write or read — may
+// accept it.
+func TestSurfaceReservedTopicID(t *testing.T) {
 	db := openSurfaceDB(t)
 	const zero = "0000000000000000"
-	turn := common.FormatHash(common.HashID("reserved-plan-id"))
+	turn := mustTurnKey(t, db)
 	now := time.Now().UnixMilli()
 	for i := 0; i < 3; i++ {
 		if err := db.AppendTrajectory(turn, "", TrajectorySlot{EventType: "llm_request", Timestamp: now}); err != nil {
@@ -352,18 +352,22 @@ func TestSurfaceReservedPlanID(t *testing.T) {
 		}
 	}
 	ev := TrajectorySlot{EventType: "plan_step", Timestamp: now}
+	ctx := context.Background()
 	calls := map[string]func() error{
-		"AppendNode":   func() error { return db.AppendTrajectory(zero, "1", ev) },
-		"PlanCommit":   func() error { return db.PlanCommit(zero, "1", ev, "done", "") },
-		"PlanState":    func() error { _, err := db.PlanState(zero); return err },
-		"SyncPlanTree": func() error { return db.SyncPlanTree(zero, nil) },
+		"AppendBare":     func() error { return db.AppendTrajectory(zero, "", ev) },
+		"AppendNode":     func() error { return db.AppendTrajectory(zero, "1", ev) },
+		"PlanCommit":     func() error { return db.PlanCommit(zero, "1", ev, "done", "") },
+		"PlanState":      func() error { _, err := db.PlanState(zero); return err },
+		"ReadTrajectory": func() error { _, err := db.ReadTrajectory(zero); return err },
+		"Crystallize":    func() error { _, err := db.Crystallize(ctx, zero, nil); return err },
+		"SyncPlanTree":   func() error { return db.SyncPlanTree(zero, nil) },
 		"SyncPlanTreeRoot": func() error {
 			return db.SyncPlanTree(zero, &PlanNode{NodePath: "1", Title: "t"})
 		},
 	}
 	for name, call := range calls {
 		if err := call(); common.CodeOf(err) != common.ErrInvalidQuery {
-			t.Fatalf("%s(zero planID): err=%v, want ErrInvalidQuery", name, err)
+			t.Fatalf("%s(zero topic id): err=%v, want ErrInvalidQuery", name, err)
 		}
 	}
 	got, err := db.ReadTrajectory(turn)
@@ -374,62 +378,54 @@ func TestSurfaceReservedPlanID(t *testing.T) {
 
 // TestSurfaceAppendTrajectoryPlanBranch pins the merged write entry point: one
 // method covers both a bare turn event (empty nodePath) and an event bound to a
-// plan node, and the two land under different trajectory keys.
+// plan step, and the two land under the two different turns that produced them.
 func TestSurfaceAppendTrajectoryPlanBranch(t *testing.T) {
 	db := openSurfaceDB(t)
 	now := time.Now().UnixMilli()
-	turn := common.FormatHash(common.HashID("merged-turn"))
-	planID := NewPlanID("merged-plan")
+	turn := mustTurnKey(t, db)
+	planTurn := mustTurnKey(t, db)
 
 	if err := db.AppendTrajectory(turn, "", TrajectorySlot{EventType: "llm_request", Timestamp: now}); err != nil {
 		t.Fatalf("bare turn event: %v", err)
 	}
-	if err := db.AppendTrajectory(planID, "1.1", TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: now + 1}); err != nil {
+	if err := db.AppendTrajectory(planTurn, "1.1", TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: now + 1}); err != nil {
 		t.Fatalf("plan-bound event: %v", err)
 	}
 
 	evs, err := db.ReadTrajectory(turn)
-	if err != nil || len(evs) != 1 || evs[0].TopicID != turn || evs[0].PlanID != "" {
+	if err != nil || len(evs) != 1 || evs[0].SessionID != turn || evs[0].NodePath != "" {
 		t.Fatalf("turn key: %+v err=%v", evs, err)
 	}
-	evs, err = db.ReadTrajectory(planID)
-	if err != nil || len(evs) != 1 || evs[0].PlanID != planID || evs[0].TopicID != "" {
+	// A turn that only logged plain events owns no tree: a bare event references
+	// no node, so its key is not a plan at all.
+	if bare, err := db.PlanState(turn); err != nil || bare.TotalCount != 0 {
+		t.Fatalf("bare turn events invented a plan: %+v err=%v", bare, err)
+	}
+	evs, err = db.ReadTrajectory(planTurn)
+	if err != nil || len(evs) != 1 || evs[0].SessionID != planTurn || evs[0].NodePath != "1.1" {
 		t.Fatalf("plan key: %+v err=%v", evs, err)
 	}
-	// The bound event created its node chain, so the tree view sees it.
-	tree, err := db.PlanState(planID)
+	// The bound event created its node chain, so the tree view sees it — under
+	// the very key the event was written with.
+	tree, err := db.PlanState(planTurn)
 	if err != nil || tree.TotalCount != 2 {
 		t.Fatalf("node chain from the bound event: %+v err=%v", tree, err)
 	}
 	// The plan path names events exactly as the bare path does: the engine takes
 	// the host's own word and refuses only an empty one.
-	if err := db.AppendTrajectory(planID, "1", TrajectorySlot{EventType: "sandbox_ask", Timestamp: now + 2}); err != nil {
+	if err := db.AppendTrajectory(planTurn, "1", TrajectorySlot{EventType: "sandbox_ask", Timestamp: now + 2}); err != nil {
 		t.Fatalf("host-named plan event: %v", err)
 	}
-	if err := db.AppendTrajectory(planID, "1", TrajectorySlot{Timestamp: now + 3}); CodeOf(err) != ErrInvalidQuery {
+	if err := db.AppendTrajectory(planTurn, "1", TrajectorySlot{Timestamp: now + 3}); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("empty plan event type: want ErrInvalidQuery, got %v", err)
 	}
 }
 
 // TestSurfaceIDContract locks the host-facing id surface: the library issues
-// every id, so the facade exposes no integer-to-hex bridge. Plan names mint
-// stable hex tokens deterministically, and the default domain constant opens a
-// session.
+// every id, so the facade exposes no integer-to-hex bridge, and the turn key a
+// plan is addressed by is one of them — hex-rendered, library-minted, and never
+// the reserved all-zero token. The default domain constant opens a session.
 func TestSurfaceIDContract(t *testing.T) {
-	if got, want := NewPlanID("cat-42"), NewPlanID("cat-42"); got != want {
-		t.Fatalf("plan id must be deterministic: %s vs %s", want, got)
-	}
-	planID := NewPlanID("cat-42")
-	if !isHexID(planID) || planID == common.FormatHash(common.HashID("cat-42")) {
-		t.Fatalf("plan id %q is not a namespaced 16-hex token", planID)
-	}
-	if other := NewPlanID("cat-43"); other == planID {
-		t.Fatalf("distinct names must mint distinct ids")
-	}
-	if planID == DefaultAgentID {
-		t.Fatal("a minted plan id must never be the reserved all-zero token")
-	}
-
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
 	m, err := OpenMulti(surfaceConfig(t, llm.URL))
@@ -441,8 +437,12 @@ func TestSurfaceIDContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("default domain session: %v", err)
 	}
-	if _, err := sess.Search(SearchQuery{}); err != nil {
+	res, err := sess.Search(SearchQuery{})
+	if err != nil {
 		t.Fatalf("default domain search: %v", err)
+	}
+	if !isHexID(res.NewTopicID) || res.NewTopicID == DefaultAgentID {
+		t.Fatalf("turn topic %q is not a library-minted non-zero hex token", res.NewTopicID)
 	}
 }
 

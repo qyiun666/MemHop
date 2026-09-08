@@ -206,9 +206,7 @@ func fromTrajectorySlot(s internal.TrajectorySlot) TrajectorySlot {
 		Seq:         s.Seq,
 		EventType:   s.EventType,
 		Payload:     s.Payload,
-		TopicID:     formatOptionalID(s.TopicID),
 		Timestamp:   s.Timestamp,
-		PlanID:      formatOptionalID(s.PlanID),
 		NodePath:    s.NodePath,
 		PlanNodeRef: formatOptionalID(s.PlanNodeRef),
 		FinishedAt:  s.FinishedAt,
@@ -216,20 +214,15 @@ func fromTrajectorySlot(s internal.TrajectorySlot) TrajectorySlot {
 }
 
 // toCoreTrajectorySlot maps the fields a host owns. The library assigns
-// Seq/SessionID/PlanID/NodePath/PlanNodeRef itself, so those are not even part
-// of what a caller can hand in.
-func toCoreTrajectorySlot(s TrajectorySlot) (internal.TrajectorySlot, error) {
-	topicID, err := parseOptionalID(s.TopicID)
-	if err != nil {
-		return internal.TrajectorySlot{}, err
-	}
+// Seq/SessionID/NodePath/PlanNodeRef itself, so those are not even part of
+// what a caller can hand in.
+func toCoreTrajectorySlot(s TrajectorySlot) internal.TrajectorySlot {
 	return internal.TrajectorySlot{
 		EventType:  s.EventType,
 		Payload:    s.Payload,
-		TopicID:    topicID,
 		Timestamp:  s.Timestamp,
 		FinishedAt: s.FinishedAt,
-	}, nil
+	}
 }
 
 func fromPlanTree(t *internal.PlanTree) PlanTree {

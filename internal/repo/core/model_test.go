@@ -259,16 +259,13 @@ func TestArchiveSlotImagePath(t *testing.T) {
 func TestTrajectorySlotRoundtrip(t *testing.T) {
 	ev := TrajectorySlot{
 		IDHash: 1, SessionID: 42, Seq: 2, EventType: "tool_call",
-		Payload: `{"tool":"read"}`, TopicID: 7, Timestamp: 1000,
+		Payload: `{"tool":"read"}`, Timestamp: 1000,
 	}
 	var got TrajectorySlot
 	jsonRoundtrip(t, ev, &got)
 	if got.IDHash != ev.IDHash || got.SessionID != ev.SessionID || got.Seq != ev.Seq ||
 		got.EventType != ev.EventType || got.Payload != ev.Payload || got.Timestamp != ev.Timestamp {
 		t.Fatalf("mismatch: %+v", got)
-	}
-	if got.TopicID != 7 {
-		t.Fatalf("topic_id mismatch: %+v", got)
 	}
 }
 
@@ -284,12 +281,17 @@ func TestSceneSlotL3ID(t *testing.T) {
 }
 
 func TestTrajectorySlotPlanFields(t *testing.T) {
-	ev := TrajectorySlot{SessionID: 1, Seq: 1, NodeType: NodeTypePlan, PlanID: 9, NodePath: "1.2.1", Status: StatusPending, Summary: "sum"}
+	ev := TrajectorySlot{SessionID: 9, Seq: 3, NodeType: NodeTypePlan, NodePath: "1.2.1", Status: StatusPending, Summary: "sum"}
 	if ev.NodeType != NodeTypePlan {
 		t.Fatalf("bad node type %d", ev.NodeType)
 	}
 	if ev.NodePath != "1.2.1" {
 		t.Fatalf("bad path %s", ev.NodePath)
+	}
+	// Nodes and events share one topic key now, so the node id must fold that
+	// key in: the same path under two turns is two distinct nodes.
+	if HashPlanNode(9, "1") == HashPlanNode(10, "1") {
+		t.Fatal("the same nodePath under two topics must not share a node id")
 	}
 	if ev.Status != StatusPending {
 		t.Fatalf("bad status %d", ev.Status)

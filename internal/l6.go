@@ -1,15 +1,15 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L6 big methods of the composition root: host-appended event log with one
-// trajectory per agent turn, keyed by that turn's L2 topic id (Search issues
-// the id, Update settles the turn into it), plus Crystallize (L6 → L5) as an
-// explicit host-triggered step over one turn's events. Plan nodes share the
-// record space under their own key (the plan id). Retention is internal:
-// Dream drops events older than trajectoryRetention, and no delete API is
-// exposed. Every write keeps the domain's TrajIndex in sync under the
-// domain lock. The plan and trajectory steps live in internal/plan and
-// internal/trajectory.
+// L6 big methods of the composition root: one key per agent turn — the topic
+// id Search issues for it and Update settles it — holding that turn's
+// trajectory events and the plan tree it opened, so a single read of a turn
+// yields both its event log and its step statuses. Crystallize is an explicit
+// host-triggered step over one key's events. Retention is internal: Dream
+// drops records older than the retention window, and no delete API is
+// exposed. Every write keeps the domain's TrajIndex and PlanCache in sync
+// under the domain lock. The plan and trajectory steps live in internal/plan
+// and internal/trajectory.
 
 package internal
 
@@ -28,56 +28,44 @@ import (
 	"github.com/qyiun666/MemHop/internal/trajectory"
 )
 
-// AppendTrajectory appends one event to the L6 log of `key`, which is either a
-// turn's topic id (Search mints it) or, when nodePath names a plan node, the
-// plan's id. With an empty nodePath the record is a bare turn event keyed and
-// stamped with that topic id; with a nodePath it binds to that plan node,
-// which is created as pending when missing. Seq comes from the domain's
-// TrajIndex (max + 1), so the host never counts sequences. An event that does
-// not satisfy the write contract is refused before anything is stored.
-func (db *DB) AppendTrajectory(agentID uint64, key string, nodePath string, ev core.TrajectorySlot) error {
+// AppendTrajectory appends one event to the L6 log of `topicID`, the turn
+// Search issued it for. With an empty nodePath the record is a bare turn
+// event; with a nodePath it hangs on that plan node, which is created as
+// pending when missing — so this is also how a host adds a step. Seq comes
+// from the domain's TrajIndex (max + 1), so the host never counts sequences.
+// An event that does not satisfy the write contract is refused before
+// anything is stored, including before a node is created or advanced.
+func (db *DB) AppendTrajectory(agentID uint64, topicID string, nodePath string, ev core.TrajectorySlot) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
 	defer ac.Mu.Unlock()
-	if nodePath != "" {
-		ph, err := plan.ParsePlanID(key)
-		if err != nil {
-			return err
-		}
-		if err := trajectory.ValidateEvent(ev); err != nil {
-			return err
-		}
-		nodeID, err := plan.EnsureNode(ac, agentID, ph, nodePath)
-		if err != nil {
-			return err
-		}
-		return plan.AppendEventLocked(ac, agentID, ph, nodeID, nodePath, ev)
-	}
-	keyHash, err := common.ParseID(key)
+	th, err := trajectory.ParseTopicID(topicID)
 	if err != nil {
-		return common.NewError(common.ErrInvalidQuery, "parse session id", err)
+		return err
 	}
-	return appendTurnEvent(ac, agentID, keyHash, ev)
-}
-
-// appendTurnEvent writes one bare turn event under the turn's topic id,
-// forcing event semantics so a host-supplied plan-node field cannot pollute
-// the plan tree. The domain lock must be held.
-func appendTurnEvent(ac *domain.Context, agentID, keyHash uint64, ev core.TrajectorySlot) error {
 	if err := trajectory.ValidateEvent(ev); err != nil {
 		return err
 	}
+	if nodePath == "" {
+		return appendTurnEvent(ac, agentID, th, ev)
+	}
+	if _, err := plan.EnsureNode(ac, agentID, th, nodePath); err != nil {
+		return err
+	}
+	return plan.AppendEventLocked(ac, agentID, th, nodePath, ev)
+}
+
+// appendTurnEvent writes one bare turn event under its topic id, forcing
+// event semantics so a host-supplied plan-node field cannot pollute the tree.
+// The domain lock must be held.
+func appendTurnEvent(ac *domain.Context, agentID, topicID uint64, ev core.TrajectorySlot) error {
 	// An unknown key is the first event of that turn, so Seq starts at 1.
-	maxSeq, _ := ac.Traj.MaxSeq(keyHash)
-	ev.SessionID = keyHash
-	// The key IS the turn's topic, so the record's own topic link cannot
-	// disagree with it.
-	ev.TopicID = keyHash
+	maxSeq, _ := ac.Traj.MaxSeq(topicID)
+	ev.SessionID = topicID
 	ev.Seq = maxSeq + 1
 	ev.NodeType = core.NodeTypeEvent
-	ev.PlanID = 0
 	ev.ParentID = 0
 	ev.NodePath = ""
 	ev.Status = 0
@@ -88,12 +76,12 @@ func appendTurnEvent(ac *domain.Context, agentID, keyHash uint64, ev core.Trajec
 	if err != nil {
 		return err
 	}
-	ac.Traj.Append(keyHash, ev.Seq, idHash, ev.Timestamp)
+	ac.Traj.Append(topicID, ev.Seq, idHash, ev.Timestamp)
 	return nil
 }
 
-// ReadTrajectory returns one turn's trajectory events ordered by Seq; turnID
-// is the topic id Search issued for that turn.
+// ReadTrajectory returns one turn's L6 records ordered by Seq; turnID is the
+// topic id Search issued for that turn.
 func (db *DB) ReadTrajectory(agentID uint64, turnID string) ([]core.TrajectorySlot, error) {
 	ac, parsed, err := db.lockSession(agentID, turnID)
 	if err != nil {
@@ -129,15 +117,17 @@ func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSu
 // PlanCommit advances a plan node to a status (with optional summary) and
 // appends the step event, then rolls up Done children summaries into any
 // parent Summary (Model A: a parent becomes Done only when the host
-// explicitly commits it here). The event is validated first: a commit this
-// call refuses leaves the node's status, its summary and the rollup untouched.
-func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core.TrajectorySlot, status PlanStatus, summary string) error {
+// explicitly commits it here). `topicID` names the turn that owns the plan,
+// and a node missing along nodePath is created — this is how a host adds a
+// step. The event is validated first: a commit this call refuses leaves the
+// node's status, its summary and the rollup untouched.
+func (db *DB) PlanCommit(agentID uint64, topicID string, nodePath string, ev core.TrajectorySlot, status PlanStatus, summary string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
 	}
 	defer ac.Mu.Unlock()
-	ph, err := plan.ParsePlanID(planID)
+	th, err := trajectory.ParseTopicID(topicID)
 	if err != nil {
 		return err
 	}
@@ -148,37 +138,37 @@ func (db *DB) PlanCommit(agentID uint64, planID string, nodePath string, ev core
 	if err := trajectory.ValidateEvent(ev); err != nil {
 		return err
 	}
-	nodeID, err := plan.EnsureNode(ac, agentID, ph, nodePath)
+	nodeID, err := plan.EnsureNode(ac, agentID, th, nodePath)
 	if err != nil {
 		return err
 	}
 	if err := plan.UpdateNodeLocked(ac, agentID, nodeID, u8, summary); err != nil {
 		return err
 	}
-	if err := plan.AppendEventLocked(ac, agentID, ph, nodeID, nodePath, ev); err != nil {
+	if err := plan.AppendEventLocked(ac, agentID, th, nodePath, ev); err != nil {
 		return err
 	}
-	return plan.RollupTree(ac, agentID, ph)
+	return plan.RollupTree(ac, agentID, th)
 }
 
-// PlanState returns the plan tree view of the actual stored statuses (no
-// auto-fold: a parent becomes Done only via explicit host PlanCommit).
-func (db *DB) PlanState(agentID uint64, planID string) (*PlanTree, error) {
+// PlanState returns the plan tree of one turn (the topic id that opened it) as
+// the actual stored statuses — no auto-fold: a parent becomes Done only via
+// explicit host PlanCommit.
+func (db *DB) PlanState(agentID uint64, topicID string) (*PlanTree, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	ph, err := plan.ParsePlanID(planID)
+	th, err := trajectory.ParseTopicID(topicID)
 	if err != nil {
 		return nil, err
 	}
-	return plan.BuildTree(ac, agentID, ph)
+	return plan.BuildTree(ac, agentID, th)
 }
 
 // Crystallize extracts reusable capability candidates from one turn's
-// trajectory (L6 → host), keyed by the topic id Search issued for that turn —
-// or by a plan id, when the host bound these turns' events to a plan tree.
+// trajectory (L6 → host), keyed by the topic id Search issued for that turn.
 // existing lists the cards the host already knows (its own capability
 // directory) so the LLM can reuse or merge instead of duplicating. The
 // engine returns candidates only: storing them is the host's job, so there

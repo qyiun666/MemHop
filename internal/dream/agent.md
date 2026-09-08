@@ -13,3 +13,4 @@
   成功后装回（L0 蒸馏失败不推翻重建）。
 - `applyUsageFeedback` 返回 error 并单列一个 `usage_feedback` 阶段：L1 重建与衰减按这些 importance 走，静默跳过会让 Dream 报告声称做了实际没做。
 - `applyOneGroup` 返回 error（含「模型提了组但 merged_summary 是空的」这类），`applyGroups` 分报 applied/rejected，rejected 计入 `failures`——「没什么可压缩」和「组没法应用」是两件事。
+- 计划清扫没有独立的计划登记表：可清扫单位就是 `repo.CollectPlanAggregates` 给的按键聚合（键 = 开出该计划的轮次话题 id，键下无节点即不成聚合），豁免与级联都在其上判断。

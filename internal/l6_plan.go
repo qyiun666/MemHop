@@ -11,6 +11,7 @@ import (
 	"github.com/qyiun666/MemHop/internal/plan"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
+	"github.com/qyiun666/MemHop/internal/trajectory"
 )
 
 // SyncPlanTree replaces a whole plan tree from the host's authoritative
@@ -31,7 +32,7 @@ func (db *DB) SyncPlanTree(agentID uint64, planID string, root *PlanNode) error 
 		return err
 	}
 	defer ac.Mu.Unlock()
-	ph, err := plan.ParsePlanID(planID)
+	ph, err := trajectory.ParseTopicID(planID)
 	if err != nil {
 		return err
 	}

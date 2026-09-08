@@ -12,9 +12,9 @@ import (
 
 // tnode builds a plan-node slot with stable derived IDHash semantics for the
 // cache tests (identity is IDHash, not path).
-func tnode(id, planID uint64, nodePath string, seq uint64, status uint8, ts int64) *core.TrajectorySlot {
+func tnode(id, topicID uint64, nodePath string, seq uint64, status uint8, ts int64) *core.TrajectorySlot {
 	return &core.TrajectorySlot{
-		IDHash: id, PlanID: planID, NodePath: nodePath, Seq: seq,
+		IDHash: id, SessionID: topicID, NodePath: nodePath, Seq: seq,
 		NodeType: core.NodeTypePlan, Status: status, Timestamp: ts,
 	}
 }
@@ -65,8 +65,8 @@ func TestPlanCacheUpsertEventAndRemoveBranch(t *testing.T) {
 	pc.UpsertNode(9, tnode(12, 9, "1.1", 2, core.StatusPending, 150))
 	pc.UpsertNode(9, tnode(13, 9, "1.1.1", 3, core.StatusPending, 180))
 	pc.UpsertNode(9, tnode(14, 9, "2", 1, core.StatusPending, 200))
-	pc.UpsertEvent(9, 12, core.TrajectorySlot{IDHash: 101, PlanID: 9, PlanNodeRef: 12, Timestamp: 300})
-	pc.UpsertEvent(9, 14, core.TrajectorySlot{IDHash: 102, PlanID: 9, PlanNodeRef: 14, Timestamp: 400})
+	pc.UpsertEvent(9, 12, core.TrajectorySlot{IDHash: 101, PlanNodeRef: 12, Timestamp: 300})
+	pc.UpsertEvent(9, 14, core.TrajectorySlot{IDHash: 102, PlanNodeRef: 14, Timestamp: 400})
 	agg := pc.Aggregate(9)
 	if agg.EventCount[12] != 1 || agg.EventCount[14] != 1 {
 		t.Fatalf("event counts: %v", agg.EventCount)

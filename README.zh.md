@@ -142,8 +142,8 @@ report, err := sess.Dream(context.Background(), "")
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3`（返回本批写入的 `graph_ids`） · `UpdateL3` · `DeleteL3` · `DeleteL3Nodes`（仅 Go） · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 归档 | `SearchL4(q)` — 唯一读取面；关键词（忽略大小写）/ 时间段 / id / 话题 / 内容类型都是条件而不是模式，`Limit` 只留最新 N 条命中 |
 | L5 能力 | 目录即能力，库不存记录：`ParseCapabilityPackage(data, source)` · `ValidateCapabilityCard(card)`（包级 v4 解析校验）· `Crystallize(turnID, existing)` 返回候选——落盘归宿主 |
-| L6 轨迹 | `AppendTrajectory(key, [nodePath])` · `ReadTrajectory(key)` · `ListTrajectorySessions` · `Crystallize(turnID)` —— 一轮的轨迹按该轮话题 id 绑定（保留期 7 天自动清理，无删除接口） |
-| L6 计划树 | `PlanCommit` · `PlanState` · `SyncPlanTree`（nil 根 = 清整树，保留 planID），计划 id 由 `api.NewPlanID(name)` 铸造（仅 Go module 暴露，MCP 工具集未接入） |
+| L6 轨迹 | `AppendTrajectory(topicID, [nodePath])` · `ReadTrajectory(topicID)` · `ListTrajectorySessions` · `Crystallize(topicID)` —— 一轮一个键：Search 为该轮开出的话题 id（保留期 7 天自动清理，无删除接口） |
+| L6 计划树 | `PlanCommit` · `PlanState` · `SyncPlanTree`（nil 根 = 清整树）—— 按「开出这棵树的轮次话题 id」寻址，一轮的节点与事件同键读回；追加一步 = `AppendTrajectory(topicID, nodePath, ev)`（仅 Go module 暴露，MCP 工具集未接入） |
 | DB 句柄 | `OpenMulti` · `CreateAgent` · `ListAgents` · `DeleteAgent` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，仅 Go） · `Close` · `IsClosed` · `api.DefaultAgentID` |
 
 ### L5 能力 —— 目录即能力

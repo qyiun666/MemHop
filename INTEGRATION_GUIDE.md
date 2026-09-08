@@ -25,7 +25,7 @@ host process
 | **Single instance** | One `.meh` file is locked exclusively; a second `OpenMulti` on the same file fails. Every call runs through a `Session` bound to one agent domain. |
 | **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`. The host needs no external queue. `Lock()`/`Unlock()` remain for host-critical sections around raw file access — they serialize **the default domain only** and panic on a closed DB (`Unlock` on a closed DB is a no-op). |
 | **LLM on the write path** | `Update`, `Dream` and `Crystallize` call the LLM and fail when it is down (no silent degradation) — `Update` exactly once per turn. `Search` never calls it: a read cannot be blocked by the LLM. |
-| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: the library issues every id and a host only echoes it back — there is nothing to convert. `api.DefaultAgentID` names the implicit agent domain and `api.NewPlanID(name)` mints a plan id from a name you choose. |
+| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: the library issues every id and a host only echoes it back — there is nothing to convert. `api.DefaultAgentID` names the implicit agent domain, and the turn topic id `Search` returns is what addresses that turn's L6 trajectory and the plan tree it opened. |
 | **Timestamps** | Unix milliseconds everywhere; `<= 0` is `ErrInvalidQuery`. |
 
 ---
@@ -345,15 +345,13 @@ err := db.AppendTrajectory(turnIDHex, "", api.TrajectorySlot{
     Payload:   "tool name + arg summary", // 4KB budget, over-budget is refused
     Timestamp: time.Now().UnixMilli(),
 })
-// Seq, SessionID and the event's TopicID are engine-assigned: the key you
-// append under IS the turn's topic id, so don't set them.
+// Seq and SessionID are engine-assigned: the key you append under IS the turn's
+// topic id, and the plan nodes that turn opened live under the same key.
 // The second argument is the plan node path — see the plan surface below;
 // pass "" for a plain turn event.
 
 // L6 → capability candidates: distill one turn's trajectory against the
 // host's current catalog (capped at 128KB payload, oldest events dropped).
-// Pass the plan id instead of a topic id to crystallize everything a plan
-// tree bound together.
 res, err := db.Crystallize(ctx, turnIDHex, existingCards)
 // existingCards []api.CapabilityImport — the host's current catalog, read
 // from its own directory (empty on first run).
@@ -368,35 +366,34 @@ sessions, err := db.ListTrajectorySessions()
 // sessions[i] = TrajectorySessionSummary{SessionID hex (the turn's topic id), Steps, LastAppendAt}
 ```
 
-`ReadTrajectory(key)` reads events in Seq order. The log is append-only and
-addressed **by key only**: nothing returns or takes an event id, because no
-public call consumes one — the read is the whole turn (or the whole plan), and
-Dream drops events older than the retention window (L6 is a process index;
-durable products live in L4/L5). Of an event you hand in, `EventType`,
-`Payload`, `Timestamp` and `FinishedAt` are used as given; `Seq`, the session
-id, the plan-node fields (`NodeType`/`PlanID`/`ParentID`/`NodePath`/`Status`/
-`Summary`/`PlanType`) are assigned or cleared by the library, and a `Payload`
-over 4 KiB is refused — a shortened event would read back exactly like a complete one.
+`ReadTrajectory(topicID)` reads a turn's records in Seq order. The log is
+append-only and addressed **by turn key only**: nothing returns or takes an
+event id, because no public call consumes one — the read is the whole turn (its
+events and the plan nodes it opened), and Dream drops records older than the
+retention window (L6 is a process index; durable products live in L4/L5). Of an
+event you hand in, `EventType`, `Payload`, `Timestamp` and `FinishedAt` are used
+as given; `Seq`, the key and the plan-node fields (`NodeType`/`ParentID`/
+`NodePath`/`Status`/`Summary`/`PlanType`) are assigned or cleared by the
+library, and a `Payload` over 4 KiB is refused — a shortened event would read
+back exactly like a complete one.
 
 ### L6 plan tree (Go host surface)
 
-One L6 key space carries both turns and the host's task tree. The library
-issues the plan id, so the host names the plan and gets a stable token back:
-
-```go
-planID := api.NewPlanID("cat-42")     // deterministic 16-hex; naming it again
-                                      // after a restart recovers the same tree
-```
+A plan tree belongs to the turn that opened it: **the L6 key is that turn's
+topic id** — the one `Search` hands back — and it addresses the turn's events
+and its nodes alike. The host assigns each node a **dotted `NodePath`** (`"1"`,
+`"1.2.1"`) and holds nothing else: there is no plan id to mint, and
+`PlanState(topicID)` is how a tree comes back.
 
 | Call | Meaning |
 |---|---|
-| `db.SyncPlanTree(planID, root *PlanNode)` | push the authoritative whole tree: adds/updates nodes by `NodePath`, deletes vanished nodes with their bound events, emits no `plan_step`. A blank `Title`/`Type`/`Status`/`Summary` inherits the stored value, so a partial snapshot never rewinds a finished step. A **nil root wipes the plan** — every node and bound event is removed and the planID is kept; seed the next task's tree with a single-node sync (an empty status lands pending) |
-| `db.AppendTrajectory(planID, nodePath, ev)` | record a step event against that node (creating the node chain as pending if missing). `nodePath` is **dotted** (`"1"`, `"1.2.1"`) and must sit under its parent's path; `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `ReadTrajectory` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
-| `db.PlanCommit(planID, nodePath, ev, api.PlanStatusDone, summary)` | advance a node's status and append its step event; `done` children's summaries roll up into their parent |
-| `db.PlanState(planID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`) — this is also how a host recovers its tree after a restart |
+| `db.AppendTrajectory(topicID, nodePath, ev)` | record a step event against that node, creating the node chain as pending if missing — this is also how a step is added. `nodePath` must sit under its parent's path; `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `ReadTrajectory` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
+| `db.PlanCommit(topicID, nodePath, ev, api.PlanStatusDone, summary)` | advance a node's status and append its step event; `done` children's summaries roll up into their parent (a parent turns `done` only when the host commits it) |
+| `db.PlanState(topicID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`) — also the restart recovery path |
+| `db.SyncPlanTree(topicID, root *PlanNode)` | push the authoritative whole tree: adds/updates nodes by `NodePath`, deletes vanished nodes with their bound events, emits no `plan_step`. A blank `Title`/`Type`/`Status`/`Summary` inherits the stored value, so a partial snapshot never rewinds a finished step. A **nil root wipes the plan** — every node and bound event is removed while the key is kept |
 
-`0000000000000000` is reserved (it is the bare-event sentinel) and every plan
-entry rejects it.
+`0000000000000000` is reserved (it is the value a record leaves its key unset
+with) and every L6 entry rejects it — reads included.
 
 ---
 
@@ -407,7 +404,7 @@ entry rejects it.
 | config | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the whole assembly surface |
 | input aliases | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `DreamReport` / `DreamStage` / `CapabilityImport` / `CapabilityPackageDoc` / `CrystallizeOutput` / `CrystallizeCapability` / `ResourceRef` | inputs & id-free results (all string IDs are hex) |
 | response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `TrajectorySlot` | every ID field is a 16-hex string |
-| id surface | **`DefaultAgentID`** (the implicit domain) / **`NewPlanID(name)`** (mint a plan id) | the library issues ids; a host echoes them back and converts nothing |
+| id surface | **`DefaultAgentID`** (the implicit domain) | the library issues every id — turn topics included; a host echoes them back and converts nothing |
 | enums | `GraphEdgeKind` / `CapabilityType` / `ContentType` / `PlanStatus` | enum aliases |
 
 Enum constants are exported too: `L3ImportSkip/Merge/Overwrite`,

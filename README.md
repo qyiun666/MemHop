@@ -145,8 +145,8 @@ Prerequisites: Go 1.27+ and an OpenAI-compatible LLM endpoint (`Config.LLM` is r
 | L3 Knowledge | `GetL3` · `ListL3` · `ImportL3` (returns the graph ids it wrote) · `UpdateL3` · `DeleteL3` · `DeleteL3Nodes` (Go only) · `QueryL3Nodes` · `QueryL3Subgraph` |
 | L4 Archive | `SearchL4(q)` — one read surface; keyword (case-insensitive), time range, ids, topic and content type are conditions, not modes; `Limit` keeps the newest matches |
 | L5 Capability | Directory-as-capability, no stored records: `ParseCapabilityPackage(data, source)` · `ValidateCapabilityCard(card)` (package-level v4 parse/validate) · `Crystallize(turnID, existing)` returns candidates — persisting them is the host's job |
-| L6 Trajectory | `AppendTrajectory(key, [nodePath])` · `ReadTrajectory(key)` · `ListTrajectorySessions` · `Crystallize(key)` — a turn's events key on its topic id (7-day auto-retention, no delete API) |
-| L6 Plan tree | `PlanCommit` · `PlanState` · `SyncPlanTree` (a nil root wipes the tree, planID kept), ids from `api.NewPlanID(name)` (Go API only, not in the MCP tool set) |
+| L6 Trajectory | `AppendTrajectory(topicID, [nodePath])` · `ReadTrajectory(topicID)` · `ListTrajectorySessions` · `Crystallize(topicID)` — one key per turn: the topic id Search issued for it (7-day auto-retention, no delete API) |
+| L6 Plan tree | `PlanCommit` · `PlanState` · `SyncPlanTree` — addressed by the topic id of the turn that opened the tree, so a turn's nodes and its events read back from one key; a step is added by `AppendTrajectory(topicID, nodePath, ev)` (Go API only, not in the MCP tool set) |
 | DB handle | `OpenMulti` · `CreateAgent` · `ListAgents` · `DeleteAgent` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)` (defragmented copy; Go only) · `Close` · `IsClosed` · `api.DefaultAgentID` |
 
 ### L5 Capability — Directory as the Capability

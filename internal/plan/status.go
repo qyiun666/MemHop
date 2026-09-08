@@ -67,34 +67,6 @@ func IsTerminalStatus(u uint8) bool {
 	return u == core.StatusDone || u == core.StatusFailed
 }
 
-// MintID derives the external 16-hex id of the plan a host names. The "plan:"
-// namespace keeps a plan id out of every other layer's id space, and the
-// mapping is deterministic, so a host recovers its tree after a restart by
-// naming the plan again. A name whose hash lands on the reserved 0 borrows to
-// 1, so an id this function issues is always one ParsePlanID accepts.
-func MintID(name string) string {
-	h := common.HashID("plan:" + name)
-	if h == 0 {
-		h = 1
-	}
-	return common.FormatHash(h)
-}
-
-// ParsePlanID parses a host plan id and rejects 0: AppendTrajectory writes
-// bare turn events with PlanID=0, so 0 is a reserved sentinel and never a
-// valid plan. Accepting it would let a nil-tree sync delete every bare event
-// of the domain (DeletePlanRecords matches those records).
-func ParsePlanID(planID string) (uint64, error) {
-	ph, err := common.ParseID(planID)
-	if err != nil {
-		return 0, common.NewError(common.ErrInvalidQuery, "parse plan id", err)
-	}
-	if ph == 0 {
-		return 0, common.NewError(common.ErrInvalidQuery, "plan id 0000000000000000 is reserved")
-	}
-	return ph, nil
-}
-
 func SplitNodePath(nodePath string) ([]string, error) {
 	if nodePath == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "nodePath required")

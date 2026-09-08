@@ -1,11 +1,13 @@
-# internal/trajectory — 轨迹小方法
+# internal/trajectory — L6 键与轨迹小方法
 
-- **职责**：`ReadTurn`（经域 `Traj` 索引读一轮事件，坏记录跳过）、
+- **职责**：`ParseTopicID`（L6 唯一键的解析 + 拒零，读写两侧共用一个入口）、
+  `ReadTurn`（经域 `Traj` 索引读一键下的事件，坏记录跳过）、
   `TrimByBudget`（预算内保最新，至少留一条；升级路径见函数注
   释）、`MaxEventPayload`（单事件载荷上限，裸事件与计划事件共用）/
   `MaxCrystallizePayload`（结晶读侧的轨迹预算）。
-- **契约**：大方法（AppendTrajectory/ReadTrajectory/Crystallize）在根里
-  持域锁后调用本包；事件的 `topic_id`/`SessionID` 语义由大方法强制。
+- **契约**：L6 只有一个键——本轮话题 ID，该轮的事件与它开出的计划节点同住；
+  大方法（AppendTrajectory/ReadTrajectory/PlanCommit/PlanState/Crystallize）在根里
+  持域锁后调用本包，记录的 `SessionID` 由大方法强制等于该键。
   Crystallize 只做纯提炼（ReadTurn → TrimByBudget → llmops.Crystallize），
   候选列表原样返回宿主：L5 记录层已退役（目录即能力），落盘/去重/激活
   全归宿主，本包没有结晶写步。

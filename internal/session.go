@@ -159,34 +159,32 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 
 // ---- L6 trajectory ----
 
-// AppendTrajectory appends one event under `key`: a turn's topic id for a
-// bare turn event, or a plan id together with the nodePath to bind the event
-// to that plan node.
-func (s *Session) AppendTrajectory(key, nodePath string, ev TrajectorySlot) error {
-	return s.db.AppendTrajectory(s.agentID, key, nodePath, ev)
+// AppendTrajectory appends one event under the topic id of the turn Search
+// issued: a bare turn event with an empty nodePath, or one bound to a plan
+// node — created when missing — with that node's nodePath.
+func (s *Session) AppendTrajectory(topicID, nodePath string, ev TrajectorySlot) error {
+	return s.db.AppendTrajectory(s.agentID, topicID, nodePath, ev)
 }
 
-// ReadTrajectory returns one turn's events; turnID is the topic id Search
-// minted for it. Plan-bound events are keyed by their plan id, so a planID
-// works here too.
+// ReadTrajectory returns one turn's L6 records in Seq order; turnID is the
+// topic id Search minted for it.
 func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
 	return s.db.ReadTrajectory(s.agentID, turnID)
 }
 
-// ListTrajectorySessions summarizes every key of the domain's L6 log (turn
-// topic ids and plan ids) with its step count and last-append time; the
-// returned hex ids feed ReadTrajectory / Crystallize directly. Events older
-// than trajectoryRetention are dropped by Dream automatically.
+// ListTrajectorySessions summarizes every turn of the domain's L6 log with its
+// step count and last-append time; the returned hex ids feed ReadTrajectory /
+// Crystallize directly. Records older than the retention window are dropped by
+// Dream automatically.
 func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 	return s.db.ListTrajectorySessions(s.agentID)
 }
 
-// Crystallize extracts reusable capability candidates from one key's
-// trajectory events via the LLM: pass a turn's topic id for a single turn, or
-// a plan id to aggregate the whole plan. existing lists the cards the host
-// already knows (its own capability directory), so candidates can reuse or
-// merge them instead of duplicating. The engine returns candidates only —
-// persisting them is the host's job.
+// Crystallize extracts reusable capability candidates from one turn's
+// trajectory events via the LLM, keyed by the topic id Search issued for it.
+// existing lists the cards the host already knows (its own capability
+// directory), so candidates can reuse or merge them instead of duplicating.
+// The engine returns candidates only — persisting them is the host's job.
 func (s *Session) Crystallize(ctx context.Context, turnID string, existing []CapabilityImport) (*CrystallizeOutput, error) {
 	return s.db.Crystallize(ctx, s.agentID, turnID, existing)
 }
@@ -194,19 +192,21 @@ func (s *Session) Crystallize(ctx context.Context, turnID string, existing []Cap
 // ---- L6 plan ----
 
 // PlanCommit advances a plan node to a status and appends the step event.
-func (s *Session) PlanCommit(planID, nodePath string, ev TrajectorySlot, status PlanStatus, summary string) error {
-	return s.db.PlanCommit(s.agentID, planID, nodePath, ev, status, summary)
+// topicID names the turn that opened the plan.
+func (s *Session) PlanCommit(topicID, nodePath string, ev TrajectorySlot, status PlanStatus, summary string) error {
+	return s.db.PlanCommit(s.agentID, topicID, nodePath, ev, status, summary)
 }
 
-// PlanState returns the plan tree view.
-func (s *Session) PlanState(planID string) (*PlanTree, error) {
-	return s.db.PlanState(s.agentID, planID)
+// PlanState returns the plan tree of one turn, keyed by the topic id that
+// opened it.
+func (s *Session) PlanState(topicID string) (*PlanTree, error) {
+	return s.db.PlanState(s.agentID, topicID)
 }
 
 // SyncPlanTree replaces one plan's whole tree from the host's authoritative
 // snapshot: adds/updates nodes by path, deletes vanished nodes (with their
 // bound events) and never appends a plan_step event. A nil root wipes the
-// plan (nodes and bound events) and keeps the planID.
-func (s *Session) SyncPlanTree(planID string, root *PlanNode) error {
-	return s.db.SyncPlanTree(s.agentID, planID, root)
+// plan (nodes and bound events) and keeps the key.
+func (s *Session) SyncPlanTree(topicID string, root *PlanNode) error {
+	return s.db.SyncPlanTree(s.agentID, topicID, root)
 }

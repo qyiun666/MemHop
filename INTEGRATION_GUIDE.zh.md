@@ -24,7 +24,7 @@
 | **单实例** | 一个 `.meh` 文件被排他锁独占；同一文件不能开第二个 `OpenMulti`。每次调用都跑在绑定某个 agent 域的 `Session` 上 |
 | **串行调用** | 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行；宿主无需自行排队。`Lock()`/`Unlock()` 保留给宿主对文件做旁路写入的关键区——只串行化**默认域**，其他域照常运行；对已关闭的 DB 调用 `Lock()` 会 panic（此时 `Unlock()` 为空操作） |
 | **LLM 只在写路径** | `Update` / `Dream` / `Crystallize` 会调 LLM，不可用即报错（不降级），`Update` 每轮恰好一次；`Search` 一次都不调——读路径永不被 LLM 拖住 |
-| **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；ID 一律由库发号，宿主按不透明字符串原样回传即可，没有任何进制转换要做。`api.DefaultAgentID` 是隐式域，`api.NewPlanID(name)` 由宿主取的名字铸出计划 ID。 |
+| **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；ID 一律由库发号，宿主按不透明字符串原样回传即可，没有任何进制转换要做。`api.DefaultAgentID` 是隐式域；`Search` 返回的轮次话题 id 就是该轮 L6 轨迹与它所开计划树的寻址键。 |
 | **时间戳** | 一律 Unix 毫秒；`<= 0` 视为非法参数（`ErrInvalidQuery`） |
 
 ---
@@ -292,11 +292,10 @@ err := db.AppendTrajectory(turnIDHex, "", api.TrajectorySlot{
     Payload:   "工具名+入参摘要", // 4KB 预算，超了直接拒
     Timestamp: time.Now().UnixMilli(),
 })
-// Seq / SessionID / TopicID 都由引擎按轮键填好，宿主不要自己填
+// Seq / SessionID 都由引擎按轮键填好；这一轮开出的计划节点也在同一个键下
 
 // L6 → 能力候选：把一轮的轨迹对照宿主现有卡清单做纯提炼
-// （payload 上限 128KB，超限从最旧丢弃）。传计划 id 而不是话题 id，
-// 就把整棵计划树绑定事件一起提炼。
+// （payload 上限 128KB，超限从最旧丢弃）。
 res, err := db.Crystallize(ctx, turnIDHex, existingCards)
 // existingCards []api.CapabilityImport —— 宿主当前卡目录，从自己的能力
 // 目录读出（首次运行为空）。
@@ -310,25 +309,20 @@ sessions, err := db.ListTrajectorySessions()
 // sessions[i] = TrajectorySessionSummary{SessionID hex（= 该轮话题 id）, Steps, LastAppendAt}
 ```
 
-`ReadTrajectory(key)` 按 Seq 序读全部事件。轨迹是**只追加、按 key 整体寻址**的：没有任何调用返回或接受单条事件的 id，因为公开面上没有读者——读就是读整轮（或整个计划），Dream 自动清理超出保留窗口的事件（L6 是过程索引，持久产物在 L4/L5），不提供删除接口。宿主传入的事件里，`EventType` / `Payload` / `Timestamp` / `FinishedAt` 按原样采用；`Seq`、会话 id 与计划节点字段（`NodeType`/`PlanID`/`ParentID`/`NodePath`/`Status`/`Summary`/`PlanType`）由库赋值或清零；`Payload` 超过 4 KiB 会被拒绝而不是截断——被剪短的事件读回来和完整事件无法区分。
+`ReadTrajectory(key)` 按 Seq 序读全部事件。轨迹是**只追加、按 key 整体寻址**的：没有任何调用返回或接受单条事件的 id，因为公开面上没有读者——读就是读整轮（或整个计划），Dream 自动清理超出保留窗口的事件（L6 是过程索引，持久产物在 L4/L5），不提供删除接口。宿主传入的事件里，`EventType` / `Payload` / `Timestamp` / `FinishedAt` 按原样采用；`Seq`、键与计划节点字段（`NodeType`/`ParentID`/`NodePath`/`Status`/`Summary`/`PlanType`）由库赋值或清零；`Payload` 超过 4 KiB 会被拒绝而不是截断——被剪短的事件读回来和完整事件无法区分。
 
 ### L6 计划树（Go 宿主面）
 
-同一个 L6 键空间既装轮次事件也装宿主的任务树。计划 ID 由库发号——宿主只给它取名字：
-
-```go
-planID := api.NewPlanID("cat-42")   // 确定性 16 位 hex；重启后按同一个名字
-                                    // 就能找回同一棵树，无需自己存 id
-```
+一棵计划树归属于开出它的那一轮：**L6 的键就是该轮的话题 id**（`Search` 返回的那一个），它同时寻址该轮的事件与节点。宿主只给每个节点分配一个**点号 `NodePath`**（`"1"`、`"1.2.1"`），此外什么都不必持有——没有要铸的计划 id，读回树走 `PlanState(topicID)`。
 
 | 调用 | 说明 |
 |---|---|
-| `db.SyncPlanTree(planID, root *PlanNode)` | 推送宿主权威整树：按 `NodePath` 增改节点、删除消失节点（连同其绑定事件）、不产生 `plan_step`。`Title`/`Type`/`Status`/`Summary` 留空即继承库里现值，所以部分快照不会把已完成步骤退回未完成；**root 传 nil 即清整树**——节点与绑定事件全删、保留 planID，播种下一个任务用单节点同步（空 status 落 pending） |
-| `db.AppendTrajectory(planID, nodePath, ev)` | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链）。`nodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且必须挂在父节点路径下；`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `ReadTrajectory` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
-| `db.PlanCommit(planID, nodePath, ev, api.PlanStatusDone, summary)` | 推进节点状态并追加该步事件；`done` 子节点摘要自底向上折叠进父节点 |
-| `db.PlanState(planID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
+| `db.AppendTrajectory(topicID, nodePath, ev)` | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链），这也是**追加一步**的入口。`nodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且必须挂在父节点路径下；`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `ReadTrajectory` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
+| `db.PlanCommit(topicID, nodePath, ev, api.PlanStatusDone, summary)` | 推进节点状态并追加该步事件；`done` 子节点摘要自底向上折叠进父节点（父节点转为 `done` 只由宿主显式提交） |
+| `db.PlanState(topicID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
+| `db.SyncPlanTree(topicID, root *PlanNode)` | 推送宿主权威整树：按 `NodePath` 增改节点、删除消失节点（连同其绑定事件）、不产生 `plan_step`。`Title`/`Type`/`Status`/`Summary` 留空即继承库里现值，所以部分快照不会把已完成步骤退回未完成；**root 传 nil 即清整树**——节点与绑定事件全删、键保留 |
 
-`0000000000000000` 是保留值（裸轮次事件的 PlanID 哨兵），所有计划入口都拒绝它。
+`0000000000000000` 是保留值（记录未赋键时的值），L6 的读写入口一律拒绝它。
 
 ---
 
@@ -339,7 +333,7 @@ planID := api.NewPlanID("cat-42")   // 确定性 16 位 hex；重启后按同一
 | 配置 | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | 全部装配面 |
 | 输入别名 | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `DreamReport` / `DreamStage` / `CapabilityImport` / `CapabilityPackageDoc` / `CrystallizeOutput` / `CrystallizeCapability` / `ResourceRef` | 输入与无 ID 结果（string ID 均为 hex） |
 | 响应 DTO | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `TrajectorySlot` | 所有 ID 字段均为 16 位 hex 字符串 |
-| ID 面 | **`DefaultAgentID`**（隐式域）/ **`NewPlanID(name)`**（铸计划 ID） | ID 一律由库发号，宿主只回传，不做任何进制转换 |
+| ID 面 | **`DefaultAgentID`**（隐式域） | ID 一律由库发号（含轮次话题 id），宿主只回传，不做任何进制转换 |
 | 枚举 | `GraphEdgeKind` / `CapabilityType` / `ContentType` / `PlanStatus` | 枚举别名 |
 
 枚举常量同样导出：`L3ImportSkip/Merge/Overwrite`、`CapabilityMCP/Skill/API/Composite`、`EdgeRelated...EdgeCustom`、`ContentText/Image/Video/Document/Audio/Code/Other`。能力格式随记录层退役转为包级面存活：`CapabilityFormatV4` + `ParseCapabilityPackage` / `ValidateCapabilityCard`。

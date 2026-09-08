@@ -43,8 +43,8 @@ func DeleteTrajectoryByIDs(engine *core.StorageEngine, agentID uint64, idHashes 
 }
 
 // WritePlanNode writes one plan-node record, preserving its caller-derived
-// IDHash (core.HashPlanNode(planID, nodePath)) so the node reference stays
-// stable across writes. Unlike AppendTrajectory it does NOT re-hash the id.
+// IDHash (core.HashPlanNode(node.SessionID, nodePath)) so the node reference
+// stays stable across writes. Unlike AppendTrajectory it does NOT re-hash the id.
 func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.TrajectorySlot) (uint64, error) {
 	if node == nil {
 		return 0, common.NewError(common.ErrInvalidQuery, "plan node is nil")
@@ -55,8 +55,8 @@ func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.Trajec
 	if node.NodeType != core.NodeTypePlan {
 		return 0, common.NewError(common.ErrInvalidQuery, "WritePlanNode requires NodeTypePlan")
 	}
-	if node.IDHash != core.HashPlanNode(node.PlanID, node.NodePath) {
-		return 0, common.NewError(common.ErrInvalidQuery, "plan node id does not match planID/nodePath")
+	if node.IDHash != core.HashPlanNode(node.SessionID, node.NodePath) {
+		return 0, common.NewError(common.ErrInvalidQuery, "plan node id does not match topic/nodePath")
 	}
 	if err := core.WriteTrajectorySlot(engine, agentID, node.IDHash, node); err != nil {
 		return 0, err
@@ -64,12 +64,12 @@ func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.Trajec
 	return node.IDHash, nil
 }
 
-// CollectPlanNodes returns the plan-node records of one plan (any NodePath),
-// sorted by Seq; events are excluded. Callers group the tree.
-func CollectPlanNodes(engine *core.StorageEngine, agentID uint64, planID uint64) []core.TrajectorySlot {
+// CollectPlanNodes returns the plan-node records of one turn's plan (any
+// NodePath), sorted by Seq; events are excluded. Callers group the tree.
+func CollectPlanNodes(engine *core.StorageEngine, agentID uint64, topicID uint64) []core.TrajectorySlot {
 	var out []core.TrajectorySlot
 	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.NodeType != core.NodeTypePlan || ev.PlanID != planID {
+		if ev.NodeType != core.NodeTypePlan || ev.SessionID != topicID {
 			continue
 		}
 		out = append(out, ev)
@@ -80,31 +80,34 @@ func CollectPlanNodes(engine *core.StorageEngine, agentID uint64, planID uint64)
 	return out
 }
 
-// PlanAggregate is one plan's stored footprint, computed in a single scan of
-// the domain's L6 records (no per-node rescans).
+// PlanAggregate is one turn's plan footprint, computed in a single scan of the
+// domain's L6 records (no per-node rescans).
 type PlanAggregate struct {
-	PlanID       uint64
+	TopicID      uint64
 	Nodes        []core.TrajectorySlot // NodeTypePlan, sorted by (Seq, NodePath)
 	EventCount   map[uint64]int        // node IDHash -> bound event count
-	Events       []core.TrajectorySlot // every bound event (cascade sweeps need the refs)
-	CreatedAt    int64                 // earliest node timestamp (Unix ms)
+	Events       []core.TrajectorySlot // every node-bound event (cascade sweeps need the refs)
+	CreatedAt    int64                 // earliest record timestamp (Unix ms)
 	LastActiveAt int64                 // latest node/event timestamp (Unix ms)
 	HasNonDone   bool                  // any node carries a non-Done status
 }
 
-// CollectPlanAggregates groups every plan's nodes and bound events in ONE
-// pass over the agent domain's L6 records; bare turn events (PlanID==0) are
-// excluded. Result is PlanID-ascending for determinism.
+// CollectPlanAggregates groups every plan's nodes and bound events in ONE pass
+// over the agent domain's L6 records, keyed by the turn that opened the plan.
+// A record joins a plan only when it is a node or hangs on one: a bare turn
+// event references no node and belongs to no tree. A key whose nodes have all
+// expired yields no aggregate — a plan with no nodes is gone. Result is
+// TopicID-ascending for determinism.
 func CollectPlanAggregates(engine *core.StorageEngine, agentID uint64) []PlanAggregate {
-	byPlan := make(map[uint64]*PlanAggregate)
+	byTopic := make(map[uint64]*PlanAggregate)
 	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.PlanID == 0 {
+		if ev.NodeType != core.NodeTypePlan && ev.PlanNodeRef == 0 {
 			continue
 		}
-		agg := byPlan[ev.PlanID]
+		agg := byTopic[ev.SessionID]
 		if agg == nil {
-			agg = &PlanAggregate{PlanID: ev.PlanID, EventCount: make(map[uint64]int)}
-			byPlan[ev.PlanID] = agg
+			agg = &PlanAggregate{TopicID: ev.SessionID, EventCount: make(map[uint64]int)}
+			byTopic[ev.SessionID] = agg
 		}
 		// Node timestamps are refreshed on every commit, so the earliest
 		// record across nodes AND bound events marks the plan's creation.
@@ -125,24 +128,27 @@ func CollectPlanAggregates(engine *core.StorageEngine, agentID uint64) []PlanAgg
 			agg.EventCount[ev.PlanNodeRef]++
 		}
 	}
-	out := make([]PlanAggregate, 0, len(byPlan))
-	for _, agg := range byPlan {
+	out := make([]PlanAggregate, 0, len(byTopic))
+	for _, agg := range byTopic {
+		if len(agg.Nodes) == 0 {
+			continue
+		}
 		slices.SortFunc(agg.Nodes, func(a, b core.TrajectorySlot) int {
 			return cmp.Or(cmp.Compare(a.Seq, b.Seq), CompareNodePath(a.NodePath, b.NodePath))
 		})
 		out = append(out, *agg)
 	}
-	slices.SortFunc(out, func(a, b PlanAggregate) int { return cmp.Compare(a.PlanID, b.PlanID) })
+	slices.SortFunc(out, func(a, b PlanAggregate) int { return cmp.Compare(a.TopicID, b.TopicID) })
 	return out
 }
 
-// DeletePlanRecords removes one plan's nodes and bound events in a single
+// DeletePlanRecords removes one turn's plan nodes and bound events in a single
 // scan and returns how many records were removed; unknown plans remove
 // nothing (idempotent).
-func DeletePlanRecords(engine *core.StorageEngine, agentID, planID uint64) (int, error) {
+func DeletePlanRecords(engine *core.StorageEngine, agentID, topicID uint64) (int, error) {
 	var ids []uint64
 	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.PlanID == planID {
+		if ev.SessionID == topicID {
 			ids = append(ids, ev.IDHash)
 		}
 	}
@@ -158,14 +164,14 @@ func DeletePlanRecords(engine *core.StorageEngine, agentID, planID uint64) (int,
 // owns the trajectory index: an entry left naming a deleted event makes every
 // later read of that key fail on a record that no longer exists. The index
 // holds only events, so the node ids in the list are no-ops there.
-func DeletePlanNodeBranch(engine *core.StorageEngine, agentID, planID uint64, nodePath string) ([]uint64, error) {
+func DeletePlanNodeBranch(engine *core.StorageEngine, agentID, topicID uint64, nodePath string) ([]uint64, error) {
 	if nodePath == "" {
 		return nil, common.NewError(common.ErrInvalidQuery, "nodePath required")
 	}
 	prefix := nodePath + "."
 	var nodeIDs []uint64
 	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.PlanID != planID || ev.NodeType != core.NodeTypePlan {
+		if ev.SessionID != topicID || ev.NodeType != core.NodeTypePlan {
 			continue
 		}
 		if ev.NodePath == nodePath || strings.HasPrefix(ev.NodePath, prefix) {
@@ -181,7 +187,7 @@ func DeletePlanNodeBranch(engine *core.StorageEngine, agentID, planID uint64, no
 	}
 	delIDs := append([]uint64(nil), nodeIDs...)
 	for _, ev := range core.CollectAllTrajectories(engine, agentID) {
-		if ev.NodeType != core.NodeTypeEvent || ev.PlanID != planID {
+		if ev.NodeType != core.NodeTypeEvent || ev.SessionID != topicID {
 			continue
 		}
 		if _, ok := target[ev.PlanNodeRef]; ok {

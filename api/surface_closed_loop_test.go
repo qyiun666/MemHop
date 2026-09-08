@@ -292,7 +292,7 @@ func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
 
 func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 	sess := openSurface(t)
-	pid := NewPlanID("atomic-audit")
+	pid := mustTurnKey(t, sess)
 	root := &PlanNode{NodePath: "1", Title: "root", Type: "task", Status: "in_progress",
 		Children: []PlanNode{{NodePath: "1.1", Title: "leaf", Type: "task", Status: "pending"}}}
 	if err := sess.SyncPlanTree(pid, root); err != nil {
@@ -341,15 +341,15 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 		t.Fatalf("want 1 event, got %d err=%v", len(evs), err)
 	}
 	// an event bound to a step reads back attributed to that step
-	if evs[0].NodePath != "1.1" || evs[0].PlanID != pid || evs[0].SessionID != pid {
+	if evs[0].NodePath != "1.1" || evs[0].SessionID != pid {
 		t.Fatalf("event not attributed to its step: %+v", evs[0])
 	}
 }
 
 func TestAppendTrajectoryRefusesAndStoresNothing(t *testing.T) {
 	sess := openSurface(t)
-	key := NewPlanID("unused") + "" // any 16-hex key works for a bare turn event
 	turn := mustTurnKey(t, sess)
+	key := mustTurnKey(t, sess) // a second turn carries the plan-bound step below
 	over := strings.Repeat("字", 3000)
 	if err := sess.AppendTrajectory(turn, "", TrajectorySlot{EventType: "x", Timestamp: 1, Payload: over}); err == nil {
 		t.Fatal("an over-budget payload must be refused")

@@ -33,8 +33,8 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 | `turn` | 轮次沉淀：Targets 校验、SettleTarget（可沉淀的轮次范围）、PriorL4Refs、WriteArchives、DropRetained、ReadProfile |
 | `dream` | 巩固阶段：SceneSet、PruneTrajectoryStage(TrajectoryRetention)、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage、usage feedback；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
-| `plan` | L6 计划树机制：PlanStatus 面、MintID/ParsePlanID/SplitNodePath、EnsureNode/AppendEventLocked/UpdateNode(Locked/SummaryLocked)、BuildTree/RollupTree、SyncNodeLocked/CollectPaths/ParentPath |
-| `trajectory` | 轨迹读取：ReadTurn、TrimByBudget、MaxEventPayload/MaxCrystallizePayload（payload 预算） |
+| `plan` | L6 计划树机制（一棵树归属于打开它的轮次）：PlanStatus 面、SplitNodePath、EnsureNode/AppendEventLocked/UpdateNode(Locked/SummaryLocked)、BuildTree/RollupTree、SyncNodeLocked/CollectPaths/ParentPath |
+| `trajectory` | L6 键与读取：ParseTopicID（全键的解析与拒零，读写两侧共用）、ReadTurn、TrimByBudget、MaxEventPayload/MaxCrystallizePayload（payload 预算） |
 
 ## agentContext（domain.Context）域级锁纪律
 
@@ -43,10 +43,10 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    方法；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent 并行。
    `contextFor` 对非默认域校验注册表：未注册/已删除的 agentID 直接
    `ErrAgentNotFound`，域永不复活；与删除对撞的陈旧句柄由锁内墓碑复检拒绝。
-   L6 轨迹族统一走 `db.lockSession(agentID, turnID)`（lockAgent + hex 解析，
-   解析失败先解锁）：裸事件的键就是该轮话题 ID（`AppendTrajectory` 顺手把
-   `TopicID` 写成同一个值），计划绑定事件的键是计划 ID。门面侧的会话准入
-   策略在 `CheckSession`。L3 的方法是唯一例外：走
+   L6 族统一走 `db.lockSession(agentID, turnID)`（lockAgent +
+   `trajectory.ParseTopicID`，解析失败先解锁）：L6 只有一个键——本轮话题 ID，
+   该轮的事件与它开出的计划节点同住，一次 `ReadTrajectory(topic)` 两者齐。
+   门面侧的会话准入策略在 `CheckSession`。L3 的方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
    保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent
    全局串行；公共域无墓碑、免空闲回收）。锚点校验（`scene.Create`/
@@ -78,10 +78,10 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    `ac.Traj.RemoveEvents`（`repo.DeletePlanNodeBranch` 返回它删掉的记录 id）。
    只镜像计划缓存的话，事件索引仍命名已删记录，该 plan key 之后每次
    `ReadTrajectory`/`Crystallize` 都报 `ErrIO`，要等重启从记录重建索引才自愈。
-7. **planID 全零保留**：`AppendTrajectory` 写入的裸轮次事件恒为
-   `PlanID=0`，故 `0000000000000000` 不是合法计划。计划入口
-   （`AppendTrajectory` 带 nodePath 时/`PlanCommit`/`PlanState`/`SyncPlanTree`）
-   一律经 `plan.ParsePlanID` 拒绝；绕过它直接删会删掉整个域的全部轮次事件。
+7. **L6 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
+   合法的 L6 键。读写两侧一律经 `trajectory.ParseTopicID` 拒它
+   （`AppendTrajectory`/`ReadTrajectory`/`PlanCommit`/`PlanState`/
+   `Crystallize`/`SyncPlanTree`）——只在写侧拒，全零键下就会攒出永远读不出的记录。
 8. **计划清理有界**：dream 的 `l6_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有活动」的计划；宿主中断或放弃而静默超 `TrajectoryRetention` 的计划
    照常清理并级联其绑定事件，否则废弃计划会让 L6 无界增长。

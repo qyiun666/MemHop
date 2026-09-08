@@ -26,15 +26,3 @@ func TestStatusRoundTrip(t *testing.T) {
 		t.Fatal("pending is not terminal")
 	}
 }
-
-func TestParsePlanIDRejectsReservedZero(t *testing.T) {
-	if _, err := ParsePlanID("0000000000000000"); err == nil {
-		t.Fatal("the all-zero plan id is reserved")
-	}
-	if _, err := ParsePlanID("not-hex"); err == nil {
-		t.Fatal("non-hex plan id must be rejected")
-	}
-	if got, err := ParsePlanID("0000000000000009"); err != nil || got != 9 {
-		t.Fatalf("ParsePlanID = %d, %v", got, err)
-	}
-}

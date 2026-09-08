@@ -124,8 +124,8 @@ func TestBuildTrajFromEngineRestoresTurns(t *testing.T) {
 	const agent = core.DefaultAgentID
 	for _, ev := range []core.TrajectorySlot{
 		{SessionID: 7, Seq: 1, EventType: "llm_request", Payload: "a", Timestamp: 100},
-		{SessionID: 7, Seq: 2, EventType: "tool_call", Payload: "b", Timestamp: 200, TopicID: 7},
-		{SessionID: 8, Seq: 1, EventType: "llm_output", Payload: "c", Timestamp: 300, TopicID: 8},
+		{SessionID: 7, Seq: 2, EventType: "tool_call", Payload: "b", Timestamp: 200},
+		{SessionID: 8, Seq: 1, EventType: "llm_output", Payload: "c", Timestamp: 300},
 	} {
 		if err := repoAppendTraj(engine, agent, ev); err != nil {
 			t.Fatalf("append: %v", err)

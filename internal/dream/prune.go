@@ -44,7 +44,7 @@ func PruneTrajectoryStage(ac *domain.Context, agentID uint64, rep *core.DreamRep
 	// TrajIndex until the periodic prune or a context rebuild; readers skip
 	// missing records, so the drift is benign.
 	type pruneDel struct {
-		planID   uint64
+		topicID  uint64
 		nodeDel  []uint64
 		eventDel []uint64
 	}
@@ -75,14 +75,14 @@ func PruneTrajectoryStage(ac *domain.Context, agentID uint64, rep *core.DreamRep
 		}
 		delIDs = append(delIDs, nodeDel...)
 		delIDs = append(delIDs, eventDel...)
-		prunes = append(prunes, pruneDel{planID: agg.PlanID, nodeDel: nodeDel, eventDel: eventDel})
+		prunes = append(prunes, pruneDel{topicID: agg.TopicID, nodeDel: nodeDel, eventDel: eventDel})
 	}
 	if len(delIDs) > 0 {
 		if _, derr := repo.DeleteTrajectoryByIDs(ac.Engine, agentID, delIDs); derr != nil {
 			slog.Warn("dream: plan-node prune failed", "agent", common.FormatHash(agentID), "err", derr)
 		} else {
 			for _, p := range prunes {
-				ac.Plans.RemovePlanIDs(p.planID, p.nodeDel, p.eventDel)
+				ac.Plans.RemovePlanIDs(p.topicID, p.nodeDel, p.eventDel)
 			}
 		}
 	}

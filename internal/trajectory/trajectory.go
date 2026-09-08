@@ -1,11 +1,12 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package trajectory holds the L6 turn-trajectory small methods: reading
-// one turn's events through the domain index, the payload-budget trim and
-// the crystallize write steps that fold LLM candidates into L5. The big
-// methods (AppendTrajectory, ReadTrajectory, Crystallize, ...) stay in the
-// composition root with the domain lock.
+// Package trajectory holds the L6 small methods: the key parse, the event
+// write contract, reading one key's records through the domain index and the
+// payload-budget trim. Crystallize is a pure read — the engine stores no
+// capability records, so this package has no write step. The big methods
+// (AppendTrajectory, ReadTrajectory, PlanCommit, PlanState, Crystallize) stay
+// in the composition root with the domain lock.
 
 package trajectory
 
@@ -16,6 +17,21 @@ import (
 	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
+
+// ParseTopicID parses the one L6 key — the topic id Search issued for a turn,
+// under which both that turn's events and the plan tree it opened live — and
+// rejects 0. Zero is the unset value of every record's SessionID, so admitting
+// it would let a caller address the unkeyed residue of a domain.
+func ParseTopicID(topicID string) (uint64, error) {
+	h, err := common.ParseID(topicID)
+	if err != nil {
+		return 0, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
+	}
+	if h == 0 {
+		return 0, common.NewError(common.ErrInvalidQuery, "topic id 0000000000000000 is reserved")
+	}
+	return h, nil
+}
 
 // MaxCrystallizePayload caps the trajectory payload bytes fed to one
 // crystallize LLM call; over-budget events drop from the oldest.

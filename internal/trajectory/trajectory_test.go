@@ -10,6 +10,18 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
+func TestParseTopicIDRejectsReservedZero(t *testing.T) {
+	if _, err := ParseTopicID("0000000000000000"); err == nil {
+		t.Fatal("the all-zero topic id is reserved")
+	}
+	if _, err := ParseTopicID("not-hex"); err == nil {
+		t.Fatal("non-hex topic id must be rejected")
+	}
+	if got, err := ParseTopicID("0000000000000009"); err != nil || got != 9 {
+		t.Fatalf("ParseTopicID = %d, %v", got, err)
+	}
+}
+
 func TestTrimByBudgetKeepsNewest(t *testing.T) {
 	events := []core.TrajectorySlot{
 		{Payload: strings.Repeat("a", 60)},
