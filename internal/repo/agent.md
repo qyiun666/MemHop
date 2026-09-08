@@ -10,6 +10,10 @@
 - `core/`：.meh 引擎——记录帧（26 字节：type/flags/length/agent_id/
   id_hash/crc32）、A/B 文件头、快照（0x02 分域）、空间回收、
   `StorageEngine` 索引（`agent -> idHash -> offset` 两级分域）、Slot 数据模型。
+  `FormatVersion` 是 `0x000D`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
+  无迁移路径。这次上抬改的不是帧布局而是字段含义——L6 记录自 0x000D 起以
+  「产生它的那一轮的话题 id」为唯一键，旧文件里计划节点的 `SessionID` 装的是
+  宿主自铸的 plan id，按新规则解析会静默指向不存在的键。
   `StorageEngine` 按功能分文件：`engine.go`（索引模型/访问器）、
   `engine_lifecycle.go`（Create/Open/Checkpoint/Close）、`engine_write.go`（追加）、
   `engine_read.go`（索引查找读）、`engine_delete.go`（墓碑删除）、

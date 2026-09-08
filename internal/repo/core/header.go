@@ -43,9 +43,15 @@ const (
 // Config, and the memhop-capability/v4 document is a plugin package holding
 // 1..N cards; 0x000C retired the L5 capability record layer entirely (the
 // 0x0F frame type is gone): capabilities are host-owned memhop-capability/v4
-// documents and the engine no longer stores them. Files with 0x000B (or
-// older) are rejected at Open — there is no migration path.
-const FormatVersion uint16 = 0x000C
+// documents and the engine no longer stores them; 0x000D re-keyed L6 into one
+// record space under one key — the topic id of the turn that produced the
+// record — so a turn's trajectory events and the plan nodes it opened live
+// together and a node's id is derived from that key. This moves record
+// *meaning*, not layout: an older file's plan nodes carry a host-minted plan id
+// where the key now goes, which addresses nothing under the new rule, so they
+// cannot be read correctly. Files with 0x000C (or older) are rejected at Open —
+// there is no migration path.
+const FormatVersion uint16 = 0x000D
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

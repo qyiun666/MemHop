@@ -207,10 +207,10 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 }
 
 // Files with an unsupported format version must be rejected explicitly at
-// Open: 0x000C (the L5-capability-record-free layout) is the only accepted
+// Open: 0x000D (L6 re-keyed onto the turn's topic id) is the only accepted
 // version — older layouts and future ones have no migration path.
 func TestHeaderVersionRejected(t *testing.T) {
-	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000D} {
+	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000E} {
 		t.Run(fmt.Sprintf("0x%04x", v), func(t *testing.T) {
 			p := tempPath(t, "ver")
 			eng, err := Create(p)

@@ -338,18 +338,18 @@ func (s *Session) DeleteL3Nodes(graphID string, nodeIDs []string) error {
 	return s.Session.DeleteL3Nodes(graphID, nodeIDs)
 }
 
-// ListTrajectorySessions summarizes every L6 key of the domain — turn topic ids
-// and plan ids — with its step count and last-append time. The returned ids feed
-// ReadTrajectory and Crystallize directly; events past the retention window drop
-// out at the next Dream.
+// ListTrajectorySessions summarizes every L6 key of the domain — the turn topic
+// ids that carry a log — with its step count and last-append time. The returned
+// ids feed ReadTrajectory and Crystallize directly; records past the retention
+// window drop out at the next Dream.
 func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 	return s.Session.ListTrajectorySessions()
 }
 
-// Crystallize extracts reusable capability candidates from one key's
-// trajectory events via the LLM: pass a turn's topic id to work off a single
-// turn, or a plan id to aggregate the whole plan. existing lists the cards
-// the host already knows (its own capability directory), so candidates can
+// Crystallize extracts reusable capability candidates from one turn's
+// trajectory events via the LLM, keyed by the topic id Search issued for it —
+// including the step events that turn committed. existing lists the cards the
+// host already knows (its own capability directory), so candidates can
 // reuse or merge them by name instead of duplicating. It contacts the LLM
 // inside the domain lock. The engine returns candidates only — validating,
 // filtering and persisting them (e.g. writing a draft document into the
