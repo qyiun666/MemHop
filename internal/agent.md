@@ -33,7 +33,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 | `turn` | 轮次沉淀：Targets 校验、SettleTarget（可沉淀的轮次范围）、PriorL4Refs、WriteArchives、DropRetained、ReadProfile |
 | `dream` | 巩固阶段：SceneSet、PruneTrajectoryStage(TrajectoryRetention)、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage、usage feedback；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
-| `plan` | L6 计划树机制（一棵树归属于打开它的轮次）：PlanStatus 面、SplitNodePath、EnsureNode/AppendEventLocked/UpdateNode(Locked/SummaryLocked)、BuildTree/RollupTree、SyncNodeLocked/CollectPaths/ParentPath |
+| `plan` | L6 计划树机制（一棵树归属于打开它的轮次）：PlanStatus 面、SplitNodePath、EnsureNode/AppendEventLocked/UpdateNode(Locked/SummaryLocked)、BuildTree/RollupTree |
 | `trajectory` | L6 键与读取：ParseTopicID（全键的解析与拒零，读写两侧共用）、ReadTurn、TrimByBudget、MaxEventPayload/MaxCrystallizePayload（payload 预算） |
 
 ## agentContext（domain.Context）域级锁纪律

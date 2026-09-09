@@ -51,8 +51,7 @@
    会让 `UpdateL3(节点 id)` 读到"空名图槽"再把节点记录改写成图槽。
 3.2 **L3 超边身份 = 排序成员 + kind**：`CreateEdgeL3` 的 id 含 kind，
    `EdgeKeyL3` 是同一身份的语义键，导入侧按它去重。记录里的
-   `Importance`/`Weight`/`Label` 与 `ArchiveSlot.Metadata` 无写入路径，
-   故意不进公开 DTO。
+   `Importance`/`Weight`/`Label` 无写入路径，故意不进公开 DTO。
 4. **实现不外露**：记录帧布局、快照格式、回收/压缩细节只在 `core` 内部
    流转；`internal` 业务层只能经本目录导出的函数访问数据，不得直接解析
    帧或操作 `StorageEngine` 未导出的状态。

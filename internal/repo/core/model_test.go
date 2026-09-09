@@ -138,37 +138,6 @@ func TestTopicSlotRoundtripKeywords(t *testing.T) {
 	}
 }
 
-// A pre-v1.5 record stored two keyword tracks and no fused one; decoding it
-// must fold both into the single track instead of losing them.
-func TestTopicSlotUnmarshalFoldsLegacyTracks(t *testing.T) {
-	raw := `{"id":7,"scene_id":3,"depth":1,` +
-		`"user_keywords":["登录","JWT"],"agent_keywords":["token"],` +
-		`"user_timestamp":1000,"agent_timestamp":1001,"l4_refs":[9]}`
-	var got TopicSlot
-	if err := json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatalf("unmarshal legacy record: %v", err)
-	}
-	want := []string{"JWT", "token", "登录"}
-	if !slices.Equal(got.FusedKeywords, want) {
-		t.Fatalf("legacy tracks not folded: got %v want %v", got.FusedKeywords, want)
-	}
-	if got.UserTimestamp != 1000 || got.AgentTimestamp != 1001 {
-		t.Fatalf("timestamps lost: %+v", got)
-	}
-}
-
-// A record that already carries the fused track keeps it untouched.
-func TestTopicSlotUnmarshalKeepsFusedTrack(t *testing.T) {
-	raw := `{"id":7,"fused_keywords":["认证"],"user_keywords":["登录"]}`
-	var got TopicSlot
-	if err := json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if !slices.Equal(got.FusedKeywords, []string{"认证"}) {
-		t.Fatalf("fused track must win: %v", got.FusedKeywords)
-	}
-}
-
 func TestComputeTopicIDDeterministic(t *testing.T) {
 	id1 := ComputeTopicID(100, 1000, 1001)
 	id2 := ComputeTopicID(100, 1000, 1001)
@@ -216,38 +185,22 @@ func TestArchiveSlotRoundtrip(t *testing.T) {
 	a := ArchiveSlot{
 		IDHash: 1, ContentType: ContentText, Role: 0,
 		ContextID: 20, CreatedAt: 1000,
-		Content: "hello", Metadata: nil,
+		Content: "hello",
 	}
 	var got ArchiveSlot
 	jsonRoundtrip(t, a, &got)
 	if got.ContentType != ContentText || got.Content != "hello" {
 		t.Fatalf("mismatch: %+v", got)
 	}
-	if got.Metadata != nil {
-		t.Fatalf("expected nil metadata")
-	}
 }
 
-func TestArchiveSlotWithMetadata(t *testing.T) {
-	a := ArchiveSlot{
-		IDHash: 2, ContentType: ContentCode, Role: 1,
-		ContextID: 30, CreatedAt: 2000,
-		Content:  "fn main() {}",
-		Metadata: new(`{"lang":"rust"}`),
-	}
-	var got ArchiveSlot
-	jsonRoundtrip(t, a, &got)
-	if got.Metadata == nil || *got.Metadata != `{"lang":"rust"}` {
-		t.Fatalf("metadata mismatch")
-	}
-}
-
+// The only archive case carrying a non-zero ContentType: value 0 would
+// round-trip even if the tag were wrong.
 func TestArchiveSlotImagePath(t *testing.T) {
 	a := ArchiveSlot{
 		IDHash: 3, ContentType: ContentImage, Role: 0,
 		ContextID: 20, CreatedAt: 1000,
-		Content:  "/img/screenshot.png",
-		Metadata: new(`{"w":1920,"h":1080}`),
+		Content: "/img/screenshot.png",
 	}
 	var got ArchiveSlot
 	jsonRoundtrip(t, a, &got)

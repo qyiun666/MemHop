@@ -81,30 +81,6 @@ func TestGraphEdgeKindValues(t *testing.T) {
 	}
 }
 
-func TestLayerValues(t *testing.T) {
-	layers := []struct {
-		l    Layer
-		val  uint8
-		name string
-	}{
-		{LayerL0, 0, "L0"}, {LayerL1, 1, "L1"}, {LayerL2, 2, "L2"},
-		{LayerL3, 3, "L3"}, {LayerL4, 4, "L4"}, {LayerL5, 5, "L5"},
-	}
-	for _, tt := range layers {
-		if uint8(tt.l) != tt.val || tt.l.String() != tt.name {
-			t.Fatalf("Layer %s: val=%d str=%s", tt.name, tt.val, tt.l.String())
-		}
-		data, _ := json.Marshal(tt.l)
-		var back Layer
-		if err := json.Unmarshal(data, &back); err != nil {
-			t.Fatalf("roundtrip %s: %v", tt.name, err)
-		}
-		if back != tt.l {
-			t.Fatalf("roundtrip mismatch")
-		}
-	}
-}
-
 func makeTopic(id uint64, depth uint8) TopicSlot {
 	var parentID *uint64
 	if depth > 1 {

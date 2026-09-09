@@ -5,9 +5,7 @@
 package core
 
 import (
-	"encoding/json"
 	"fmt"
-	"slices"
 
 	"github.com/qyiun666/MemHop/internal/common"
 )
@@ -107,32 +105,6 @@ type TopicSlot struct {
 	L4Refs []uint64 `json:"l4_refs"`
 }
 
-// topicJSON is TopicSlot without its methods: embedding the real type inside
-// UnmarshalJSON would promote the method back onto the wrapper and recurse.
-type topicJSON TopicSlot
-
-// UnmarshalJSON folds the retired dual keyword tracks of a pre-v1.5 record
-// into the single FusedKeywords track, so existing domains keep the keywords
-// they already distilled without a migration pass or a format bump; the next
-// write persists one track.
-func (t *TopicSlot) UnmarshalJSON(data []byte) error {
-	var legacy struct {
-		topicJSON
-		UserKeywords  []string `json:"user_keywords"`
-		AgentKeywords []string `json:"agent_keywords"`
-	}
-	if err := json.Unmarshal(data, &legacy); err != nil {
-		return err
-	}
-	*t = TopicSlot(legacy.topicJSON)
-	if len(t.FusedKeywords) == 0 {
-		kws := append(slices.Clone(legacy.UserKeywords), legacy.AgentKeywords...)
-		slices.Sort(kws)
-		t.FusedKeywords = slices.Compact(kws)
-	}
-	return nil
-}
-
 // ComputeTopicID derives a topic ID from sceneID and both timestamps.
 // Dream-created fused topics use this form for deterministic replay.
 func ComputeTopicID(sceneID uint64, userTS, agentTS int64) uint64 {
@@ -209,9 +181,7 @@ const (
 	RoleDream  uint8 = 3
 )
 
-// ArchiveSlot stores one L4 original of a turn. Metadata has no writer in the
-// engine and stays off the public DTO; it remains here so records written by an
-// older version still decode.
+// ArchiveSlot stores one L4 original of a turn.
 type ArchiveSlot struct {
 	IDHash      uint64      `json:"id_hash"`
 	ContentType ContentType `json:"content_type"`
@@ -219,7 +189,6 @@ type ArchiveSlot struct {
 	ContextID   uint64      `json:"context_id"`
 	CreatedAt   int64       `json:"created_at"`
 	Content     string      `json:"content"`
-	Metadata    *string     `json:"metadata,omitempty"`
 }
 
 // Plan node type for TrajectorySlot: either a raw trajectory event or a plan node.

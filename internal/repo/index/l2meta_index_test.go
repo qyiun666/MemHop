@@ -97,26 +97,3 @@ func TestBuildL2MetaFromEngine(t *testing.T) {
 		t.Errorf("expected the keyword track, got %v", meta.FusedKeywords)
 	}
 }
-
-// A pre-v1.5 record on disk carries two keyword tracks; the cache must expose
-// them as the single track rather than an empty one.
-func TestBuildL2MetaFromEngineFoldsLegacyRecord(t *testing.T) {
-	dir := t.TempDir()
-	engine, err := core.Create(filepath.Join(dir, "legacy.meh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer engine.Close(nil)
-
-	raw := `{"id":201,"scene_id":1,"depth":1,"user_keywords":["a"],"agent_keywords":["b"]}`
-	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, 201, []byte(raw)); err != nil {
-		t.Fatalf("write legacy record: %v", err)
-	}
-	meta := BuildL2MetaFromEngine(engine, core.DefaultAgentID).Get(201)
-	if meta == nil {
-		t.Fatal("legacy record not indexed")
-	}
-	if !slices.Equal(meta.FusedKeywords, []string{"a", "b"}) {
-		t.Fatalf("legacy tracks not folded: %v", meta.FusedKeywords)
-	}
-}
