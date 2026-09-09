@@ -200,7 +200,7 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 	}
 	out := &SceneContext{SceneName: scenes[0].SceneName}
 	for _, t := range topics {
-		st, err := scene.ContextTopic(db.engine, agentID, t, children)
+		st, err := scene.ContextTopic(ac, agentID, t, children)
 		if err != nil {
 			return nil, err
 		}
@@ -211,7 +211,7 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 }
 
 // DeleteTopic removes a topic and its whole subtree (children at any
-// depth), the L4 archives they reference, and their L2Meta cache entries,
+// depth), the L4 archives they own, and their L2Meta cache entries,
 // so the deleted topic no longer surfaces in any scene read. The surviving
 // parent (if any) has its ChildrenIDs pruned. Deleting a missing topic
 // returns ErrNotFound.
@@ -225,19 +225,19 @@ func (db *DB) DeleteTopic(agentID uint64, topicID string) error {
 	if err != nil {
 		return common.NewError(common.ErrInvalidQuery, "parse topic id", err)
 	}
-	topics, archives := repo.TopicClosureL2(db.engine, agentID, parsedID)
+	topics := repo.TopicClosureL2(db.engine, agentID, parsedID)
 	if len(topics) == 0 {
 		return common.NewError(common.ErrNotFound, "topic not found")
 	}
 	if err := scene.PruneParentChild(ac, parsedID); err != nil {
 		return err
 	}
-	return scene.DeleteTopics(ac, agentID, topics, archives)
+	return scene.DeleteTopics(ac, agentID, topics)
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
-// the referenced L4 archives, and their L2Meta cache entries, so the scene
-// disappears from listings and reads.
+// the L4 archives those topics own, and their L2Meta cache entries, so the
+// scene disappears from listings and reads.
 func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -251,27 +251,19 @@ func (db *DB) DeleteScene(agentID uint64, sceneID string) error {
 	if _, err := core.ReadSceneSlot(db.engine, agentID, sceneHash); err != nil {
 		return err
 	}
-	var (
-		topics   []uint64
-		archives []uint64
-	)
+	var topics []uint64
 	for _, t := range core.CollectAllTopics(db.engine, agentID) {
 		if t.SceneID == sceneHash {
 			topics = append(topics, t.ID)
-			archives = append(archives, t.L4Refs...)
 		}
 	}
 	if !repo.DeleteL2(db.engine, agentID, []uint64{sceneHash}, repo.DeleteScenesL2) {
 		return common.NewError(common.ErrIO, "delete scene", nil)
 	}
-	if err := repo.DeleteArchivesL4(db.engine, agentID, common.DedupSorted(archives)); err != nil {
+	if err := scene.DeleteTopics(ac, agentID, topics); err != nil {
 		return err
 	}
 	// Drop the L1 scene node right away (its ID is derivable without an
 	// index); incident hyperedges are cleaned by the next Dream's rebuild.
-	if err := repo.DeleteSceneNodeL1(db.engine, agentID, sceneHash); err != nil {
-		return err
-	}
-	ac.RemoveTopicsFromIndices(topics)
-	return nil
+	return repo.DeleteSceneNodeL1(db.engine, agentID, sceneHash)
 }

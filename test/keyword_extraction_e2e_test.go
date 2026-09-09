@@ -125,8 +125,9 @@ func TestUpdateLongTurnSettles(t *testing.T) {
 		if len(tp.FusedKeywords) == 0 {
 			t.Errorf("long turn %s settled with no keywords", tp.ID)
 		}
-		if len(tp.L4Refs) != 2 {
-			t.Errorf("long turn %s lost its originals: %v", tp.ID, tp.L4Refs)
+		id := tp.ID
+		if owned, err := db.SearchL4(memhop.L4Query{TopicID: &id}); err != nil || len(owned) != 2 {
+			t.Errorf("long turn %s lost its originals: %d owned, err %v", tp.ID, len(owned), err)
 		}
 	}
 }

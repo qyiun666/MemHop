@@ -149,7 +149,7 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 | `Profile` | L0 profile snapshot | can go into the system prompt |
 | `ProfileBrief` | bounded compact profile digest | light per-turn injection; fetch full `Profile` only when needed |
 | `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID` / `TopicCount`) | keep `Scene.SceneID` — Update and later reads use it |
-| `Topics` | the scene's depth-1 topics in user-timestamp order, each with `FusedKeywords` and `L4Refs` | **the memory injected into this turn's prompt**; follow `L4Refs` via `SearchL4(L4Query{IDs: ...})` for originals |
+| `Topics` | the scene's depth-1 topics in user-timestamp order, each with its `FusedKeywords` | **the memory injected into this turn's prompt**; originals are addressed by a turn's own topic id — `SearchL4(L4Query{TopicID})` |
 | `NewTopicID` | the topic this read opened for the turn about to run | hand it to `Update` and to `AppendTrajectory` — one turn, one id |
 
 An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one creates a scene and returns its id.
@@ -193,7 +193,7 @@ Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / 
 
 ## 7. One turn, one topic
 
-A turn is one user message plus one agent reply, and it is exactly one topic. `Update` stores both originals as L4 archives, so a turn's raw text stays recoverable through its `L4Refs` — nothing else is written there.
+A turn is one user message plus one agent reply, and it is exactly one topic. `Update` stores both originals as L4 archives under that topic's id, so a turn's raw text stays recoverable by addressing L4 with the id — nothing else is written there.
 
 What happens *between* those two messages (tool calls, intermediate output, subagent results) is execution detail rather than conversation, and it belongs to the turn's L6 trajectory: append it under the same topic id with `AppendTrajectory(topicID, …)` (see §8 L6).
 

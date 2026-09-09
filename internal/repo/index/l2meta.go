@@ -24,7 +24,6 @@ type L2Meta struct {
 	FusedKeywords  []string
 	UserTimestamp  int64
 	AgentTimestamp int64
-	L4Refs         []uint64
 }
 
 type L2MetaIndex struct {
@@ -54,7 +53,6 @@ func L2MetaFromTopic(t *core.TopicSlot) *L2Meta {
 		FusedKeywords:  t.FusedKeywords,
 		UserTimestamp:  t.UserTimestamp,
 		AgentTimestamp: t.AgentTimestamp,
-		L4Refs:         t.L4Refs,
 	}
 }
 
@@ -142,6 +140,5 @@ func (m *L2Meta) ToTopicSlot() core.TopicSlot {
 		FusedKeywords:  m.FusedKeywords,
 		UserTimestamp:  m.UserTimestamp,
 		AgentTimestamp: m.AgentTimestamp,
-		L4Refs:         m.L4Refs,
 	}
 }

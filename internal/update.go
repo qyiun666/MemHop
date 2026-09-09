@@ -19,12 +19,12 @@ import (
 )
 
 // Update writes one finished turn into the topic id Search issued for it: both
-// originals become L4 archives under a depth-1 topic whose keywords come from
-// a single distillation call. The distill runs before any write, so a failed
-// LLM call leaves the scene exactly as it was — no orphan archive, no
+// originals become L4 archives under the topic, and the topic's keywords come
+// from a single distillation call. The distill runs before any write, so a
+// failed LLM call leaves the scene exactly as it was — no orphan archive, no
 // contentless topic. Settling the same topic id twice rewrites that turn: the
-// topic ends pointing at the new pair and the archives it no longer references
-// are tombstoned, so a retry that changed the texts leaves nothing behind. What
+// archives this settle does not write again are tombstoned, so a retry that
+// changed the texts leaves nothing behind. What
 // may be settled is a turn topic of the named scene only — a Dream-fused topic,
 // another scene's topic, or an id that names some other record is refused.
 func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
@@ -58,24 +58,18 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	if len(keywords) == 0 {
 		return 0, common.NewError(common.ErrLLM, "turn distillation produced no keywords", nil)
 	}
-	// The topic rewrite below clears L4Refs, so the refs of an earlier settle
-	// of this same turn must be read first: they are what this turn supersedes.
-	previous, err := turn.PriorL4Refs(db.engine, agentID, topicID)
-	if err != nil {
-		return 0, err
-	}
+	// What this turn owned before is what this settle supersedes; the archive
+	// index is the list, so no ref has to be read back off the topic record.
+	previous := turn.PriorArchives(ac, topicID)
 	if !repo.CreateTurnTopicL2(db.engine, agentID, sceneID, topicID, keywords, in.UserTS, in.AgentTS) {
 		return 0, common.NewError(common.ErrIO, "create turn topic", nil)
 	}
-	refs, err := turn.WriteArchives(db.engine, agentID, topicID, in)
+	refs, err := turn.WriteArchives(ac, agentID, topicID, in)
 	if err != nil {
 		return 0, err
 	}
-	if !repo.UpdateTopicL4RefsL2(db.engine, agentID, topicID, refs) {
-		return 0, common.NewError(common.ErrIO, "update topic l4 ref", nil)
-	}
 	if dropped := turn.DropRetained(previous, refs); len(dropped) > 0 {
-		if err := repo.DeleteArchivesL4(db.engine, agentID, dropped); err != nil {
+		if err := repo.DropArchivesL4(db.engine, agentID, ac.Arch, topicID, dropped); err != nil {
 			return 0, err
 		}
 	}

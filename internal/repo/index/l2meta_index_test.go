@@ -5,7 +5,9 @@ package index
 
 import (
 	"encoding/json"
+	"maps"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -48,17 +50,45 @@ func TestL2MetaIndex(t *testing.T) {
 		want := core.TopicSlot{
 			ID: 42, SceneID: 100, ParentID: &parent, Depth: 2,
 			ChildrenIDs: []uint64{1, 2}, FusedKeywords: []string{"登录"},
-			UserTimestamp: 1000, AgentTimestamp: 1001, L4Refs: []uint64{9},
+			UserTimestamp: 1000, AgentTimestamp: 1001,
 		}
 		got := L2MetaFromTopic(&want).ToTopicSlot()
 		if got.ID != want.ID || *got.ParentID != parent || got.Depth != want.Depth ||
 			!slices.Equal(got.FusedKeywords, want.FusedKeywords) ||
 			!slices.Equal(got.ChildrenIDs, want.ChildrenIDs) ||
-			!slices.Equal(got.L4Refs, want.L4Refs) ||
 			got.UserTimestamp != want.UserTimestamp || got.AgentTimestamp != want.AgentTimestamp {
 			t.Fatalf("cached slot differs from the record: %+v", got)
 		}
 	})
+
+	// The whole point of the cache is rebuilding a topic slot without reading
+	// the record, so the two field sets must not drift apart. Listing them in
+	// an assertion cannot catch it — both sides would simply omit the field —
+	// so compare the structures themselves.
+	t.Run("cache_covers_every_topic_field", func(t *testing.T) {
+		record := fieldNames(reflect.TypeFor[core.TopicSlot]())
+		cached := fieldNames(reflect.TypeFor[L2Meta]())
+		delete(record, "ID")
+		delete(cached, "IDHash") // L2Meta.IDHash <-> TopicSlot.ID
+		if !maps.Equal(record, cached) {
+			t.Fatalf("L2Meta and core.TopicSlot fields drifted:\n record=%v\n cache =%v",
+				slices.Sorted(maps.Keys(record)), slices.Sorted(maps.Keys(cached)))
+		}
+	})
+}
+
+// fieldNames maps each exported field to its type, so the cache structure can
+// be compared against the record it stands in for.
+func fieldNames(typ reflect.Type) map[string]string {
+	out := make(map[string]string, typ.NumField())
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		out[f.Name] = f.Type.String()
+	}
+	return out
 }
 
 func TestBuildL2MetaFromEngine(t *testing.T) {

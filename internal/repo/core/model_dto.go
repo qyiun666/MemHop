@@ -64,7 +64,6 @@ type SceneContextTopic struct {
 	TopicID    string         `json:"topic_id"`
 	Depth      int            `json:"depth"`
 	Keywords   []string       `json:"keywords"`
-	L4IDs      []string       `json:"l4_ids,omitempty"` // 话题内的 L4 档案 ID,供按 ID 拉取原文
 	Messages   []SceneMessage `json:"messages,omitempty"`
 	ChildCount int            `json:"child_count"`
 }

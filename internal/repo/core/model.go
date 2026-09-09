@@ -83,10 +83,11 @@ func NewSceneSlot(sceneID uint64, name string) SceneSlot {
 	}
 }
 
-// TopicSlot is one L2 conversation node: a single turn written by Update, or
-// a Dream-fused group of turns. A scene's depth-1 topic set IS the host's
+// TopicSlot is one L2 conversation node: a single turn settled by Update, or a
+// Dream-fused group of turns. A scene's depth-1 topic set IS the host's
 // context for that session, so a topic carries exactly one keyword track
-// (FusedKeywords); the originals live in the L4 archives listed in L4Refs.
+// (FusedKeywords). What was said lives in the L4 archives keyed by this topic's
+// own ID — a topic lists none of them.
 // Tree: parent_id (nil = depth-1 root) + children_ids. Depth 1 = current
 // surface (turns and fused groups), 2+ = sunk history; depth >= 4 is deleted
 // on Dream.
@@ -101,8 +102,6 @@ type TopicSlot struct {
 
 	UserTimestamp  int64 `json:"user_timestamp"`  // turn: user message time; fused: earliest user turn in group
 	AgentTimestamp int64 `json:"agent_timestamp"` // turn: agent reply time; fused: latest agent turn in group
-
-	L4Refs []uint64 `json:"l4_refs"`
 }
 
 // ComputeTopicID derives a topic ID from sceneID and both timestamps.

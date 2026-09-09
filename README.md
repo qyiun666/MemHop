@@ -188,7 +188,7 @@ Trigger: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThre
 | `Search(SearchQuery{SceneID, L3ID})` | empty `SceneID` → create a scene (named by the library) and return its id; otherwise → the scene's depth-1 topics (user-timestamp order) plus the L0 profile — and `NewTopicID`, the topic this read opens for the coming turn | in-memory read (L2Meta), zero LLM / embedding / scoring; the only write is the scene record (hit counters + turn counter) |
 | `Update(TurnUpdate{SceneID, TopicID, ...})` | settles one finished turn into the topic Search opened: two L4 archives plus a topic whose keywords come from a single distillation | exactly one LLM call per turn; distillation runs before any write, so a failure leaves no trace. Same `TopicID` = rewrite, never duplicate |
 
-What a host injects as context is the keyword set of that scene's depth-1 topics; to read a turn's original text, follow the topic's `L4Refs` through `SearchL4`, or use `SceneContext`. Dream keeps the injected size bounded (`Consolidate` requires at most 20 topics per scene after compression).
+What a host injects as context is the keyword set of that scene's depth-1 topics; to read a turn's original text, address L4 by that turn's topic id — `SearchL4(L4Query{TopicID})` — or use `SceneContext`, which already carries the messages. Dream keeps the injected size bounded (`Consolidate` requires at most 20 topics per scene after compression).
 
 Removed along with retrieval: three-channel RRF scoring, L1 spreading activation (`AssociatedContexts`), topic centroids and the embedding dependency, the `AutoCreate` / `DirectedL2ID` / `DirectedL3ID` routes, and topic-level `L3Refs` (L2↔L3 now lives solely on the scene anchor `SceneSlot.L3ID`).
 

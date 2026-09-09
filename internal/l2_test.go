@@ -205,7 +205,7 @@ func TestListScenesTopicCounts(t *testing.T) {
 }
 
 // TestDeleteTopicRemovesSubtreeAndArchives deleting a topic removes its
-// subtree, the referenced L4 archives, and its L2Meta entries.
+// subtree, the L4 archives it owns, and its L2Meta entries.
 func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
@@ -216,7 +216,6 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	childID := common.HashID("child")
 	arcID := common.HashID("arc:1")
 	parent := newTopic(parentID, scene.SceneID, 1000, []string{"a"})
-	parent.L4Refs = []uint64{arcID}
 	parent.ChildrenIDs = []uint64{childID}
 	child := newTopic(childID, scene.SceneID, 2000, []string{"b"})
 	child.ParentID = &parentID
@@ -231,6 +230,7 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	ac.Arch.Append(parentID, arcID, 1500)
 	ac.L2Meta.Update(index.L2MetaFromTopic(&parent))
 	ac.L2Meta.Update(index.L2MetaFromTopic(&child))
 
@@ -324,7 +324,7 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	t1.L4Refs = []uint64{arcID}
+	ac.Arch.Append(t1.ID, arcID, 1500)
 	for _, topic := range []core.TopicSlot{t1, t2, t3} {
 		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topic.ID, &topic); err != nil {
 			t.Fatal(err)

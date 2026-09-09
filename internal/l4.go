@@ -20,7 +20,7 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	rq := repo.ArchiveQuery{Keyword: q.Keyword, Start: q.Start, End: q.End, Type: q.Type, Limit: q.Limit}
+	rq := repo.ArchiveQuery{Keyword: q.Keyword, Start: q.Start, End: q.End, Type: q.Type, Limit: q.Limit, Index: ac.Arch}
 	if len(q.IDs) > 0 {
 		ids, ok := common.ParseAll(q.IDs)
 		if !ok {

@@ -115,11 +115,17 @@ func clip(s string, lo, hi int) string {
 }
 
 // dumpSceneContext prints the scene shape reachable from the DB: scenes
-// with depth-1 topic counts, and per-topic keywords, archive refs and
+// with depth-1 topic counts, and per-topic keywords, archive counts and
 // children, so the real database state can be inspected against the
 // rendering path ("scene 查看" → ListScenes).
 func dumpSceneContext(t *testing.T, db *DB, cfg *MemHopConfig, label string) {
 	t.Logf("--- %s ---", label)
+	// A topic owns whatever was archived under its id; the archive count comes
+	// off the records themselves, since a topic lists none of them.
+	archived := make(map[uint64]int)
+	for _, arc := range core.CollectAllArchives(db.engine, core.DefaultAgentID) {
+		archived[arc.ContextID]++
+	}
 	scenes, _ := repo.CollectAllScenesL2(db.engine, core.DefaultAgentID)
 	for _, s := range scenes {
 		topics, err := repo.ListTopicsL2(repo.TopicListQuery{
@@ -137,12 +143,12 @@ func dumpSceneContext(t *testing.T, db *DB, cfg *MemHopConfig, label string) {
 			s.SceneName, len(topics), s.TopicCount)
 		for _, tp := range topics {
 			fused := ""
-			if len(tp.FusedKeywords) > 0 && len(tp.L4Refs) == 0 {
+			if len(tp.FusedKeywords) > 0 && archived[tp.ID] == 0 {
 				fused = " [FUSED, no archives]"
 			}
 			kwN := len(tp.FusedKeywords)
 			t.Logf("  depth=%d id=%s kw=%d archives=%d child=%d%s",
-				tp.Depth, common.FormatHash(tp.ID), kwN, len(tp.L4Refs), len(tp.ChildrenIDs), fused)
+				tp.Depth, common.FormatHash(tp.ID), kwN, archived[tp.ID], len(tp.ChildrenIDs), fused)
 		}
 	}
 }

@@ -80,12 +80,11 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 }
 
 // applyGroups applies one scene's groups: store MergedSummary as an L4
-// dream archive, extract keywords for the fused topic, create the parent
-// topic with the archive ref, then sink the group nodes. It reports how many
-// groups landed and how many the model proposed but the engine could not
-// apply — the two are different facts, and a pass that applied nothing because
-// every proposed group was unusable must not look like a scene with nothing to
-// consolidate.
+// archive of the fused topic, extract keywords for that topic, create it, then
+// sink the group nodes. It reports how many groups landed and how many the
+// model proposed but the engine could not apply — the two are different facts,
+// and a pass that applied nothing because every proposed group was unusable
+// must not look like a scene with nothing to consolidate.
 func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics []core.TopicSlot, out *llmops.ConsolidationOutput) (uint32, int) {
 	byID := make(map[uint64]core.TopicSlot, len(topics))
 	for _, t := range topics {
@@ -111,14 +110,15 @@ func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics
 	return count, rejected
 }
 
-// applyOneGroup consolidates a single merge group: stores MergedSummary as
-// an L4 dream archive, extracts keywords for the fused topic, creates the
-// parent topic with the archive ref, then sinks the group nodes. Any step that
-// cannot be applied rolls back what this group already wrote and returns the
-// reason, so a group is either fully applied or leaves nothing behind.
+// applyOneGroup consolidates a single merge group: stores MergedSummary as an
+// L4 archive under the fused topic's own id, extracts keywords for that topic,
+// creates it, then sinks the group nodes. Any step that cannot be applied
+// rolls back what this group already wrote and returns the reason, so a group
+// is either fully applied or leaves nothing behind.
 func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g llmops.L2Group, minTS, maxTS int64) error {
 	parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
-	archiveID, err := repo.AppendArchiveL4(ac.Engine, ac.ID, parentID, core.RoleDream, core.ContentText, g.MergedSummary, maxTS)
+	archiveID, err := repo.AppendArchiveL4(ac.Engine, ac.ID, ac.Arch, repo.ArchiveContent{
+		TopicID: parentID, Role: core.RoleDream, Type: core.ContentText, Text: g.MergedSummary, CreatedAt: maxTS})
 	if err != nil {
 		return common.NewError(common.ErrIO, "dream: archive merged summary", err)
 	}
@@ -143,11 +143,6 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 		discardFusedGroup(ac, parentID, archiveID)
 		return common.NewError(common.ErrIO, "dream: create fused topic", nil)
 	}
-	// Attach the summary archive ref so the host can pull the fused text back.
-	if !repo.UpdateTopicL4RefsL2(ac.Engine, ac.ID, parentID, []uint64{archiveID}) {
-		discardFusedGroup(ac, parentID, archiveID)
-		return common.NewError(common.ErrIO, "dream: attach summary archive ref", nil)
-	}
 	if _, err := repo.CompressTopicsL2(ac.Engine, ac.ID, g.NodeHashes, parentID); err != nil {
 		discardFusedGroup(ac, parentID, archiveID)
 		return common.NewError(common.ErrIO, "dream: compress child topics", err)
@@ -163,7 +158,7 @@ func discardFusedGroup(ac *domain.Context, parentID, archiveID uint64) {
 	if !repo.DeleteL2(ac.Engine, ac.ID, []uint64{parentID}, repo.DeleteTopicsL2) {
 		slog.Warn("dream: rollback fused topic failed", "parent", common.FormatHash(parentID))
 	}
-	if err := repo.DeleteArchivesL4(ac.Engine, ac.ID, []uint64{archiveID}); err != nil {
+	if err := repo.DropArchivesL4(ac.Engine, ac.ID, ac.Arch, parentID, []uint64{archiveID}); err != nil {
 		slog.Warn("dream: rollback summary archive failed", "parent", common.FormatHash(parentID), "err", err)
 	}
 }

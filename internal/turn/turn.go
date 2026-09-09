@@ -2,15 +2,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package turn holds the small methods that settle one finished turn into
-// the topic Search opened for it: payload validation, the superseded-ref
-// read, the archive writes and the tombstone diff. The Update big method in
-// the composition root locks the domain and composes them around the single
-// keyword-distillation call.
+// the topic Search opened for it: payload validation, the read of what that
+// turn already owns, the archive writes and the tombstone diff. The Update
+// big method in the composition root locks the domain and composes them
+// around the single keyword-distillation call.
 
 package turn
 
 import (
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -61,20 +62,11 @@ func SettleTarget(sceneID, topicID, turnSeq uint64) error {
 		"Update: topic_id is not a turn this scene opened; settle the id Search returned")
 }
 
-// PriorL4Refs returns the L4 refs stored on a turn topic; a topic that does
-// not exist yet (the first settle of a turn) yields nil.
-func PriorL4Refs(engine *core.StorageEngine, agentID, topicID uint64) ([]uint64, error) {
-	topic, err := core.ReadTopicLenient(engine, agentID, topicID)
-	if err != nil {
-		if common.CodeOf(err) == common.ErrNotFound {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if topic == nil {
-		return nil, nil
-	}
-	return topic.L4Refs, nil
+// PriorArchives returns the archives this topic already owns — what a settle
+// of the same turn supersedes. The domain's archive index is the list, and a
+// topic nobody has settled yet owns nothing rather than erroring.
+func PriorArchives(ac *domain.Context, topicID uint64) []uint64 {
+	return ac.Arch.Hashes(topicID)
 }
 
 // DropRetained yields the ids of before that no longer appear in after.
@@ -89,16 +81,18 @@ func DropRetained(before, after []uint64) []uint64 {
 	return out
 }
 
-// WriteArchives appends the turn's two originals as L4 archives, each
-// under the content type the host declared. The returned ids go to the
-// topic's L4Refs, which persist id-sorted — conversation order comes from
-// the archives' timestamps, not from this slice.
-func WriteArchives(engine *core.StorageEngine, agentID, topicID uint64, in core.TurnUpdate) ([]uint64, error) {
-	userRef, err := repo.AppendArchiveL4(engine, agentID, topicID, core.RoleUser, in.UserType, in.UserText, in.UserTS)
+// WriteArchives appends the turn's originals as L4 archives under the topic
+// that owns them, each under the content type the host declared. The returned
+// ids are only what this settle wrote: the caller diffs them against what the
+// turn owned before, and tombstones what fell out.
+func WriteArchives(ac *domain.Context, agentID, topicID uint64, in core.TurnUpdate) ([]uint64, error) {
+	userRef, err := repo.AppendArchiveL4(ac.Engine, agentID, ac.Arch, repo.ArchiveContent{
+		TopicID: topicID, Role: core.RoleUser, Type: in.UserType, Text: in.UserText, CreatedAt: in.UserTS})
 	if err != nil {
 		return nil, err
 	}
-	agentRef, err := repo.AppendArchiveL4(engine, agentID, topicID, core.RoleAgent, in.AgentType, in.AgentText, in.AgentTS)
+	agentRef, err := repo.AppendArchiveL4(ac.Engine, agentID, ac.Arch, repo.ArchiveContent{
+		TopicID: topicID, Role: core.RoleAgent, Type: in.AgentType, Text: in.AgentText, CreatedAt: in.AgentTS})
 	if err != nil {
 		return nil, err
 	}

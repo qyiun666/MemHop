@@ -37,8 +37,21 @@ func turnOf(sceneID, topicID uint64) TurnUpdate {
 	}
 }
 
+// archivesOfTopic reads what a topic owns straight off the archive records, so
+// a test never asks the index it is checking.
+func archivesOfTopic(t *testing.T, engine *core.StorageEngine, topicID uint64) []core.ArchiveSlot {
+	t.Helper()
+	var out []core.ArchiveSlot
+	for _, arc := range core.CollectAllArchives(engine, core.DefaultAgentID) {
+		if arc.ContextID == topicID {
+			out = append(out, arc)
+		}
+	}
+	return out
+}
+
 // One Update writes the topic Search opened: single keyword track, both
-// timestamps, and its two originals as L4 archives.
+// timestamps, and this turn's two originals archived under the topic's id.
 func TestUpdateWritesOneTurnTopic(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
@@ -67,15 +80,12 @@ func TestUpdateWritesOneTurnTopic(t *testing.T) {
 	if topic.UserTimestamp != 1000 || topic.AgentTimestamp != 2000 {
 		t.Fatalf("timestamp mismatch: %+v", topic)
 	}
-	if len(topic.L4Refs) != 2 {
-		t.Fatalf("L4Refs = %v, want both originals", topic.L4Refs)
+	owned := archivesOfTopic(t, db.engine, topicID)
+	if len(owned) != 2 {
+		t.Fatalf("topic owns %d archives, want both originals", len(owned))
 	}
 	gotUser, gotAgent := false, false
-	for _, ref := range topic.L4Refs {
-		arc, err := core.ReadArchiveSlot(db.engine, core.DefaultAgentID, ref)
-		if err != nil {
-			t.Fatalf("read archive %d: %v", ref, err)
-		}
+	for _, arc := range owned {
 		switch arc.Role {
 		case core.RoleUser:
 			gotUser = arc.Content == "rust 的所有权规则是什么"
@@ -310,14 +320,18 @@ func TestUpdateReplayIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	if len(res.Topics) != 1 || len(res.Topics[0].L4Refs) != 2 {
+	if len(res.Topics) != 1 {
 		t.Fatalf("scene surface after replay = %+v", res.Topics)
+	}
+	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 2 {
+		t.Fatalf("topic owns %d archives after replay, want 2", len(owned))
 	}
 }
 
 // Replaying a turn with different texts is still one turn: the topic keeps its
-// two refs and the superseded originals are tombstoned, so L4 never holds two
-// versions of the same turn and the old wording stops surfacing in a search.
+// id and this turn still owns exactly two archives — the superseded originals
+// are tombstoned, so L4 never holds two versions of the same turn and the old
+// wording stops surfacing in a search.
 func TestUpdateReplaySupersedesPriorArchives(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
@@ -338,8 +352,11 @@ func TestUpdateReplaySupersedesPriorArchives(t *testing.T) {
 	}
 	if res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)}); err != nil {
 		t.Fatalf("Search: %v", err)
-	} else if len(res.Topics) != 1 || len(res.Topics[0].L4Refs) != 2 {
-		t.Fatalf("topic refs after replay = %+v", res.Topics)
+	} else if len(res.Topics) != 1 {
+		t.Fatalf("scene surface after replay = %+v", res.Topics)
+	}
+	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 2 {
+		t.Fatalf("topic owns %d archives after replay, want the revised pair only", len(owned))
 	}
 	if hits, err := db.SearchL4(core.DefaultAgentID, L4Query{Keyword: "所有权规则"}); err != nil {
 		t.Fatalf("SearchL4: %v", err)

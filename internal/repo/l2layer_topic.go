@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // L2 topic record primitives: listing, creation and the read-modify-write
-// mutations of the keyword track, L4 refs and tree links. Scene primitives
+// mutations of the keyword track and tree links. Scene primitives
 // stay in l2layer.go.
 package repo
 
@@ -10,7 +10,6 @@ import (
 	"cmp"
 	"slices"
 
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
@@ -99,7 +98,8 @@ func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, to
 }
 
 // CreateFusedTopicL2 creates a compressed topic (depth 1) whose Keywords are
-// the fusion of its children; L4 refs are added via UpdateTopicL4RefsL2.
+// the fusion of its children. The group's reconstructed text is an ordinary L4
+// archive under the parent's own id, so the topic needs no follow-up write.
 func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint64, fusedKeywords []string, userTS, agentTS int64, childrenIDs []uint64) bool {
 	topic := core.TopicSlot{
 		ID:             core.ComputeTopicID(sceneID, userTS, agentTS),
@@ -111,25 +111,4 @@ func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint
 		ChildrenIDs:    childrenIDs,
 	}
 	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic) == nil
-}
-
-// mutateTopic is the shared read-modify-write template for L2 topic fields:
-// leniently read the record by idHash, apply mutate, write back. Returns
-// false when the record is unreadable or the write fails.
-func mutateTopic(
-	engine *core.StorageEngine, agentID uint64, idHash uint64,
-	mutate func(*core.TopicSlot),
-) bool {
-	topic, err := core.ReadTopicLenient(engine, agentID, idHash)
-	if err != nil || topic == nil {
-		return false
-	}
-	mutate(topic)
-	return core.WriteTopicSlot(engine, agentID, idHash, topic) == nil
-}
-
-func UpdateTopicL4RefsL2(engine *core.StorageEngine, agentID uint64, id uint64, l4Refs []uint64) bool {
-	return mutateTopic(engine, agentID, id, func(t *core.TopicSlot) {
-		t.L4Refs = common.DedupSorted(append(t.L4Refs, l4Refs...))
-	})
 }

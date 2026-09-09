@@ -100,6 +100,5 @@ func makeTopic(id uint64, depth uint8) TopicSlot {
 		ChildrenIDs: childrenIDs, Depth: depth,
 		FusedKeywords: keywords,
 		UserTimestamp: 1000, AgentTimestamp: 1001,
-		L4Refs: []uint64{10},
 	}
 }

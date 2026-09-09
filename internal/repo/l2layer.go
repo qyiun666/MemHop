@@ -249,28 +249,26 @@ func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) ([]core.Scen
 	return out, nil
 }
 
-// TopicClosureL2 gathers a topic, its recursive children (any depth) and the L4
-// archives referenced by any of them; topics is empty when the root topic
-// does not exist (DeleteTopic then reports ErrNotFound).
-func TopicClosureL2(engine *core.StorageEngine, agentID uint64, root uint64) (topics, archives []uint64) {
-	all := core.CollectAllTopics(engine, agentID)
-	byID := make(map[uint64]core.TopicSlot, len(all))
-	children := make(map[uint64][]uint64, len(all))
-	for _, t := range all {
-		byID[t.ID] = t
+// TopicClosureL2 gathers a topic and its recursive children (any depth); the
+// result is empty when the root topic does not exist (DeleteTopic then reports
+// ErrNotFound). The archives each topic owns are not collected here: they are
+// addressed by the topic's own id, so the caller hands it this closure and the
+// archive index supplies the rest.
+func TopicClosureL2(engine *core.StorageEngine, agentID uint64, root uint64) []uint64 {
+	have := make(map[uint64]struct{})
+	children := make(map[uint64][]uint64)
+	for _, t := range core.CollectAllTopics(engine, agentID) {
+		have[t.ID] = struct{}{}
 		if t.ParentID != nil {
 			children[*t.ParentID] = append(children[*t.ParentID], t.ID)
 		}
 	}
-	if _, ok := byID[root]; !ok {
-		return nil, nil
+	if _, ok := have[root]; !ok {
+		return nil
 	}
-	topics = append(topics, root)
+	topics := []uint64{root}
 	for i := 0; i < len(topics); i++ {
 		topics = append(topics, children[topics[i]]...)
 	}
-	for _, id := range topics {
-		archives = append(archives, byID[id].L4Refs...)
-	}
-	return topics, common.DedupSorted(archives)
+	return topics
 }

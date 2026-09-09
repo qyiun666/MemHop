@@ -2,8 +2,10 @@
 
 - **职责**：Dream 流水线的阶段实现：`SceneSet`、`PruneTrajectoryStage`
   （`TrajectoryRetention` 保留窗 + 计划节点清理，豁免条件＝持非 done 节点
-  且窗口内活跃）、`CompressScenes`（每场景一 goroutine；融合组串写，
-  任一步失败经 `discardFusedGroup` 回滚）、`StructureStages`（L2Meta 重建
+  且窗口内活跃）、`CompressScenes`（每场景一 goroutine；融合组串写——摘要是
+  以父话题 id 为键的一条 L4 归档，话题上不再有引用清单可回填，任一步失败经
+  `discardFusedGroup` 回滚、删档走 `repo.DropArchivesL4` 同步摘镜像）、
+  `StructureStages`（L2Meta 重建
   → usage feedback → L1 各阶段 → 装回缓存 → L0 蒸馏）、`DistillL0Stage`
   （只由 `RunDream` 调，根上不再有独立的蒸馏入口）、阶段报告（`AppendStage`/
   `StageCancelled`）。L1 衰减/建边/相似度/反馈窗的调参常量随阶段在本包。

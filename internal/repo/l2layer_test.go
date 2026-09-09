@@ -75,7 +75,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	// out by depth<=2 modes; full field set checks cache-vs-record fidelity.
 	raw := []core.TopicSlot{
 		{ID: 11, SceneID: sceneA, Depth: 1, FusedKeywords: []string{"k1"},
-			UserTimestamp: 300, L4Refs: []uint64{601}},
+			UserTimestamp: 300},
 		{ID: 12, SceneID: sceneB, Depth: 1, FusedKeywords: []string{"k2", "a2"},
 			AgentTimestamp: 400, UserTimestamp: 100, ChildrenIDs: []uint64{13}},
 		{ID: 13, SceneID: sceneA, Depth: 2, FusedKeywords: []string{"f3"},

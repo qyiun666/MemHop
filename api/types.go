@@ -84,9 +84,10 @@ type SceneSlot struct {
 	L3ID       string `json:"l3_id,omitempty"`
 }
 
-// TopicSlot is one L2 conversation node: a single turn written by Update, or
-// a Dream-fused group of turns. FusedKeywords is its only keyword track — the
-// set a host reads back as its conversation context.
+// TopicSlot is one L2 conversation node: a single turn settled by Update, or a
+// Dream-fused group of turns. FusedKeywords is its only keyword track — the
+// set a host reads back as its conversation context. What was said is not on
+// the topic: the L4 archives a turn owns are addressed by that topic's id.
 type TopicSlot struct {
 	ID             string   `json:"id"`
 	SceneID        string   `json:"scene_id"`
@@ -96,7 +97,6 @@ type TopicSlot struct {
 	FusedKeywords  []string `json:"fused_keywords"`
 	UserTimestamp  int64    `json:"user_timestamp"`
 	AgentTimestamp int64    `json:"agent_timestamp"`
-	L4Refs         []string `json:"l4_refs"`
 }
 
 // SearchResult is the read surface of one scene: the scene record, its

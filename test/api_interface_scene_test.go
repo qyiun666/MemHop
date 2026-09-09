@@ -220,9 +220,6 @@ func TestInterfaceSceneContextReadsThroughFusion(t *testing.T) {
 		if got.Messages[1].Role != memhop.RoleAgent || got.Messages[1].Content != want.agent {
 			t.Fatalf("entry %d agent message = %+v", i, got.Messages[1])
 		}
-		if len(got.L4IDs) != 2 {
-			t.Fatalf("entry %d L4IDs = %v, want the two originals", i, got.L4IDs)
-		}
 	}
 
 	// Search mints a turn on every read; SceneContext must not advance it.
@@ -356,23 +353,24 @@ func TestInterfaceDeleteSceneAndTopic(t *testing.T) {
 	keepB := settleTurn(t, db, keep, "要删掉的那一轮", "删掉")
 	dropA := settleTurn(t, db, drop, "整个场景作废", "一起作废")
 
-	surfaceRefs := func(topicID string) []string {
+	// A turn's originals are addressed by its own topic id — that is the whole
+	// replacement for the reference list topics used to carry.
+	ownedIDs := func(topicID string) []string {
 		t.Helper()
-		res, err := db.Search(memhop.SearchQuery{SceneID: keep})
+		id := topicID
+		hits, err := db.SearchL4(internal.L4Query{TopicID: &id})
 		if err != nil {
-			t.Fatalf("Search: %v", err)
+			t.Fatalf("SearchL4(topic %s): %v", topicID, err)
 		}
-		for _, tp := range res.Topics {
-			if tp.ID == topicID {
-				return tp.L4Refs
-			}
+		out := make([]string, 0, len(hits))
+		for _, h := range hits {
+			out = append(out, h.IDHash)
 		}
-		t.Fatalf("topic %s missing from the surface", topicID)
-		return nil
+		return out
 	}
 
 	// DeleteTopic: only that turn leaves, its sibling stays addressable.
-	refs := surfaceRefs(keepB)
+	refs := ownedIDs(keepB)
 	if len(refs) != 2 {
 		t.Fatalf("turn %s carries %d originals", keepB, len(refs))
 	}
@@ -404,11 +402,7 @@ func TestInterfaceDeleteSceneAndTopic(t *testing.T) {
 		if len(c.Topics) != 1 || c.Topics[0].TopicID != dropA {
 			t.Fatalf("scene to delete holds %+v, want the one turn %s", c.Topics, dropA)
 		}
-		var out []string
-		for _, e := range c.Topics {
-			out = append(out, e.L4IDs...)
-		}
-		return out
+		return ownedIDs(dropA)
 	}
 	refsOfDoom := dropRefs()
 	before := len(mustScenes(t, db))

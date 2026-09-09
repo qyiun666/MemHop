@@ -77,7 +77,6 @@ func fromTopicSlot(t internal.TopicSlot) TopicSlot {
 		FusedKeywords:  cloneStrings(t.FusedKeywords),
 		UserTimestamp:  t.UserTimestamp,
 		AgentTimestamp: t.AgentTimestamp,
-		L4Refs:         formatIDs(t.L4Refs),
 	}
 }
 

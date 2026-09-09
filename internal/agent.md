@@ -28,9 +28,9 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 
 | 包 | 职责 |
 |---|---|
-| `domain` | 域状态容器 `Context`（Mu/L2Meta/Traj/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta） |
+| `domain` | 域状态容器 `Context`（Mu/L2Meta/Arch/Traj/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`Arch` 是「话题 → 它名下的 L4 归档」的镜像 |
 | `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/PruneParentChild/DeleteTopics |
-| `turn` | 轮次沉淀：Targets 校验、SettleTarget（可沉淀的轮次范围）、PriorL4Refs、WriteArchives、DropRetained、ReadProfile |
+| `turn` | 轮次沉淀：Targets 校验、SettleTarget（可沉淀的轮次范围）、PriorArchives（本话题已拥有的归档，走 `ac.Arch`）、WriteArchives、DropRetained、ReadProfile |
 | `dream` | 巩固阶段：SceneSet、PruneTrajectoryStage(TrajectoryRetention)、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage、usage feedback；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
 | `plan` | L6 计划树机制（一棵树归属于打开它的轮次）：PlanStatus 面、SplitNodePath、EnsureNode/AppendEventLocked/UpdateNode(Locked/SummaryLocked)、BuildTree/RollupTree |
@@ -133,8 +133,9 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    结果直接报错，此时话题/档案/L2Meta 一个字都没动。话题 ID 由宿主从
    `Search` 原样带回（`TopicID`，`0`/非 hex 拒绝），档案 ID 由
    `(topic, ts, content)` 派生，故同 `TopicID` 重放是覆盖而不是叠加：
-   **重写前先读回该话题的旧引用（`turn.PriorL4Refs`），落完新引用后把不再
-   被引用的旧档案打墓碑（`turn.DropRetained`）**，所以"一轮恰好两条原文"
+   **重写前先问 `ac.Arch` 该话题已拥有哪些归档（`turn.PriorArchives`），落完
+   新归档后把本次没再写出的那些打墓碑（`turn.DropRetained` +
+   `repo.DropArchivesL4`，磁盘删成功才摘镜像）**，所以"一轮恰好两条原文"
    在改写文本的重放下也成立。轮内过程走 L6 轨迹。
    `turn.SettleTarget` 另外钉住可沉淀的范围：`TopicID` 必须是
    `hash("turn:" + 场景:k)` 且 `k <= 场景.TurnSeq`，即该场景真开出过的某一轮
@@ -153,10 +154,17 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 6. **`UpdateScene` 是 `SceneName` 的唯一宿主写者**：场景记录只被 `OpenSceneTurn`
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
    后续读取覆盖；`scene.Create` 建新场景时才写默认名 `session:<id>`。
-7. **`L4Refs` 无对话顺序，读回面自己补**：`UpdateTopicL4RefsL2` 按 id
-   `DedupSorted` 存引用。`scene.ContextTopic` 因此经内部 `sortMessages`
-   稳定排序 `Messages`——先按档案时间戳，**同毫秒再按 Role（`RoleUser` 在
-   `RoleAgent` 之前）**；会话恢复必须"问在前、答在后"，别指望引用顺序。
+7. **归档靠话题 id 被寻址，镜像必须跟着删**：一条归档的归属是它的
+   `ContextID`，话题不列举任何东西；档案 ID 哈希了 `(topic, ts, content)`，
+   从话题 id **推不出地址**，所以「这个话题有哪些归档」唯一的来源是域内的
+   `ac.Arch`——它是寻址手段，不是加速器。由此得出与 L6 两份镜像同一条纪律：
+   任何删归档的路径都必须在**磁盘删成功后**同步摘镜像
+   （`repo.DropArchivesL4` / `repo.DeleteTopicArchives` 已内置这一步），漏一处
+   就让该话题之后每次读都撞「索引点名已不存在的记录」而硬 `ErrIO`；索引在
+   `domain.NewContext` 从记录重建，故重启自愈、运行期不自愈。读回顺序仍由
+   `scene.ContextTopic` 经 `sortMessages` 稳定排序——先按档案时间戳，**同毫秒
+   再按 Role（`RoleUser` 在 `RoleAgent` 之前）**：索引给出的是创建序，不保证
+   谁先说话，会话恢复必须"问在前、答在后"。
 8. **L0 画像字段所有权在库内强制**：`UpdateL0` 只写宿主四项
    （Name/Role/Personality/Preferences），`EmotionState`/`MBTI` 一律从库里
    现值继承（只有它们的首次建立走蒸馏路径），`UpdatedAtMs` 由库戳写、不采信

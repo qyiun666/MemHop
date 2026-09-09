@@ -22,46 +22,32 @@ func newTestEngine(t *testing.T) *core.StorageEngine {
 }
 
 // When a host stamps both sides of a turn the same millisecond, the reading
-// order must still be question-first. L4Refs are stored id-sorted and an
-// archive id hashes from (topic, timestamp, content), so the fixture picks the
-// case where that order says "answer first" — only the role tie-break can
-// rescue it.
+// order must still be question-first. The archive index hands a topic's records
+// back in write order, so the adversarial case is an answer archived before its
+// question — only the role tie-break can rescue it.
 func TestSceneContextTopicOrdersSameTimestampByRole(t *testing.T) {
 	engine := newTestEngine(t)
+	ac := newTestContext(t, engine)
 	const topicID uint64 = 0xfeed
 	const ts int64 = 1500
 
-	var userRef, agentRef uint64
-	var userText, agentText string
-	for i := 0; i < 64; i++ {
-		suffix := string(rune('a'+i%26)) + string(rune('0'+i/26))
-		userText, agentText = "question "+suffix, "answer "+suffix
-		u, err := repo.AppendArchiveL4(engine, core.DefaultAgentID, topicID, core.RoleUser, core.ContentText, userText, ts)
-		if err != nil {
-			t.Fatalf("archive question: %v", err)
-		}
-		a, err := repo.AppendArchiveL4(engine, core.DefaultAgentID, topicID, core.RoleAgent, core.ContentText, agentText, ts)
-		if err != nil {
-			t.Fatalf("archive answer: %v", err)
-		}
-		if a < u {
-			userRef, agentRef = u, a
-			break
+	for _, in := range []repo.ArchiveContent{
+		{TopicID: topicID, Role: core.RoleAgent, Type: core.ContentText, Text: "answer", CreatedAt: ts},
+		{TopicID: topicID, Role: core.RoleUser, Type: core.ContentText, Text: "question", CreatedAt: ts},
+	} {
+		if _, err := repo.AppendArchiveL4(engine, core.DefaultAgentID, ac.Arch, in); err != nil {
+			t.Fatalf("archive %q: %v", in.Text, err)
 		}
 	}
-	if userRef == 0 {
-		t.Fatal("fixture lost its teeth: no candidate archived the answer before the question")
-	}
-
-	st, err := ContextTopic(engine, core.DefaultAgentID,
-		core.TopicSlot{ID: topicID, SceneID: 0xbeef, Depth: 1, L4Refs: []uint64{agentRef, userRef}}, nil)
+	st, err := ContextTopic(ac, core.DefaultAgentID,
+		core.TopicSlot{ID: topicID, SceneID: 0xbeef, Depth: 1}, nil)
 	if err != nil {
 		t.Fatalf("ContextTopic: %v", err)
 	}
 	if len(st.Messages) != 2 {
 		t.Fatalf("messages = %d, want 2", len(st.Messages))
 	}
-	if st.Messages[0].Content != userText || st.Messages[1].Content != agentText {
+	if st.Messages[0].Content != "question" || st.Messages[1].Content != "answer" {
 		t.Fatalf("same-millisecond turn read answer-first: %+v", st.Messages)
 	}
 }

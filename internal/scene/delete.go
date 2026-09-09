@@ -31,13 +31,15 @@ func PruneParentChild(ac *domain.Context, topicID uint64) error {
 	return nil
 }
 
-// DeleteTopics removes the given topics (with their L2Meta cache entries)
-// and the given archives in one engine pass. Callers hold ac.Mu.
-func DeleteTopics(ac *domain.Context, agentID uint64, topics, archives []uint64) error {
+// DeleteTopics removes the given topics together with the L4 archives they
+// own and their L2Meta cache entries, in one engine pass. Records go first and
+// the archive mirror is dropped only after the disk agrees, so a failed pass
+// never leaves an index entry naming a deleted record. Callers hold ac.Mu.
+func DeleteTopics(ac *domain.Context, agentID uint64, topics []uint64) error {
 	if !repo.DeleteL2(ac.Engine, agentID, topics, repo.DeleteTopicsL2) {
 		return common.NewError(common.ErrIO, "delete topics", nil)
 	}
-	if err := repo.DeleteArchivesL4(ac.Engine, agentID, archives); err != nil {
+	if err := repo.DeleteTopicArchives(ac.Engine, agentID, ac.Arch, topics); err != nil {
 		return err
 	}
 	ac.RemoveTopicsFromIndices(topics)

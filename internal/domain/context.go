@@ -35,6 +35,7 @@ type Context struct {
 	Defaults *config.MemHopDefaults
 
 	L2Meta        *index.L2MetaIndex  // L2 topic metadata cache (serves the scene read)
+	Arch          *index.ArchiveIndex // L4 archives each topic owns (serves the content read)
 	Traj          *index.TrajIndex    // L6 turn trajectory shape (Seq/hash/timestamp/topic)
 	Plans         *PlanCache          // L6 plan->nodes/events aggregate (no engine scan per op)
 	DreamInFlight map[uint64]struct{} // scenes with a scheduled background Dream
@@ -61,6 +62,7 @@ func NewContext(id uint64, parent context.Context, engine *core.StorageEngine, l
 		LLM:           llm,
 		Defaults:      defaults,
 		L2Meta:        index.BuildL2MetaFromEngine(engine, id),
+		Arch:          index.BuildArchiveFromEngine(engine, id),
 		Traj:          index.BuildTrajFromEngine(engine, id),
 		Plans:         buildPlanCache(engine, id),
 		DreamInFlight: make(map[uint64]struct{}),

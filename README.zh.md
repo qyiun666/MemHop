@@ -185,7 +185,7 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 | `Search(SearchQuery{SceneID, L3ID})` | 空 `SceneID` → 新建场景（名字由库生成）并返回其 id；非空 → 返回该场景的 depth-1 话题集（按用户消息时间升序）+ L0 画像，外加 `NewTopicID`：本次读取为即将进行的这一轮开出的话题 | 纯内存读（L2Meta 缓存），零 LLM、零 embedding、零打分；唯一写是场景记录（命中计数 + 轮次计数） |
 | `Update(TurnUpdate{SceneID, TopicID, ...})` | 整轮沉淀进 Search 开出的那个话题：双原文各写一条 L4 档案，一次 LLM 提炼出该轮话题的 `FusedKeywords` | 每轮恰好 1 次 LLM 调用；提炼失败即报错且零写入。同一 `TopicID` 再沉淀是覆盖不是重复，超时后可安全重试 |
 
-宿主注入的上下文就是该场景 depth-1 话题的关键词集合；要看某轮原文，按话题的 `L4Refs` 走 `SearchL4(L4Query{IDs: ...})` 或 `SceneContext`。上下文规模由 Dream 保证有界（`Consolidate` 要求压缩后每场景话题数 ≤ 20）。
+宿主注入的上下文就是该场景 depth-1 话题的关键词集合；要看某轮原文，用那一轮的话题 id 去寻址 L4——`SearchL4(L4Query{TopicID})`——或直接用已经带回消息的 `SceneContext`。上下文规模由 Dream 保证有界（`Consolidate` 要求压缩后每场景话题数 ≤ 20）。
 
 随检索一并移除的：三通道 RRF 打分、L1 扩散激活（`AssociatedContexts`）、话题向量质心与 embedding 依赖、`AutoCreate` / `DirectedL2ID` / `DirectedL3ID` 三条路由，以及话题级 `L3Refs`（L2↔L3 关系现只由场景锚点 `SceneSlot.L3ID` 承载）。
 ## 测试与基准

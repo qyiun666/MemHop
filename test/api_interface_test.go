@@ -151,7 +151,8 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 		t.Fatalf("Update distilled %d times, want exactly one per turn", calls-before)
 	}
 
-	// The turn is now the session's read surface, with both originals linked.
+	// The turn is now the session's read surface, with both originals archived
+	// under its own id.
 	after, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
 		t.Fatalf("Search after Update: %v", err)
@@ -159,8 +160,8 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	if len(after.Topics) != 1 || after.Topics[0].ID != topicID {
 		t.Fatalf("surface = %+v, want the one turn topic %s", after.Topics, topicID)
 	}
-	if len(after.Topics[0].L4Refs) != 2 {
-		t.Fatalf("topic L4Refs = %v, want both originals", after.Topics[0].L4Refs)
+	if owned, err := db.SearchL4(memhop.L4Query{TopicID: &topicID}); err != nil || len(owned) != 2 {
+		t.Fatalf("turn %s owns %d originals, want 2 (err %v)", topicID, len(owned), err)
 	}
 	if len(after.Topics[0].FusedKeywords) == 0 {
 		t.Fatal("the turn topic must carry its distilled keywords")
