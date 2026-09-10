@@ -231,7 +231,7 @@ api/                         ← 公开门面：openmulti（入口 + 租户管�
 internal/                    ← 业务装配层：config / db / session / defaults / tuning /
                                l0 / l2 / l3 / l3query / l4 / l6 / agents / agentctx /
                                search / update / dream / plancache / llm_client / llm_ops / models / exports
-internal/repo/               ← 数据层：l0layer–l6layer + agentlayer（记录读写）
+internal/repo/               ← 数据层：l0layer–l5layer + agentlayer（记录读写）
 internal/repo/index/         ← 索引层：l2meta（场景读回的唯一支撑）/ rebuild（单遍重建）/
                                l4（一个话题拥有哪些内容）
 internal/repo/core/          ← .meh 引擎：engine / frame / header / snapshot / reclaim /

@@ -16,7 +16,7 @@ import (
 	"github.com/qyiun666/MemHop/api"
 )
 
-func TestInterfaceL6(t *testing.T) {
+func TestInterfaceTurnEventsAndCrystallize(t *testing.T) {
 	db, _ := openTestDB(t)
 	sceneID := openSession(t, db)
 	// The content key is a turn's topic id — minted by Search and never typed by

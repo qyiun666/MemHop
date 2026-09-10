@@ -237,7 +237,7 @@ api/                         ← Public facade: openmulti (entry + tenant manage
 internal/                    ← Business assembly: config / db / session / defaults / tuning /
                                l0 / l2 / l3 / l3query / l4 / l6 / agents / agentctx /
                                search / update / dream / plancache / llm_client / llm_ops / models / exports
-internal/repo/               ← Data layer: l0layer–l6layer + agentlayer (record read/write)
+internal/repo/               ← Data layer: l0layer–l5layer + agentlayer (record read/write)
 internal/repo/index/         ← Index layer: l2meta / rebuild (single-pass scan) /
                                l4 (the content each topic owns)
 internal/repo/core/          ← .meh engine: engine / frame / header / snapshot / reclaim /

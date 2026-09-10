@@ -25,7 +25,7 @@
 - `index/`：索引——L2Meta（场景读回的唯一话题缓存，`rebuild.go` 全量重建）/
   `l4.go`（`L4Index`：一个话题名下有哪些内容槽位，按 Seq 升序、条目带 `Kind`）。
   只依赖 `core`。
-- 根目录 `l0layer.go`~`l4layer.go`/`l6layer.go`、`agentlayer.go`
+- 根目录 `l0layer.go`~`l5layer.go`、`agentlayer.go`
   （能力层的文件已随其记录层退役一并移除）：各层记录读写原语，
   一层一个文件组（单文件超 400 行时按功能拆分，命名
   `<layer>layer_<aspect>.go`：`l1layer_sync.go`、`l2layer_topic.go`），
@@ -78,4 +78,4 @@
 - `Kind` 是**条件**而不是模式：`ArchiveQuery.Kind == nil` 表示「两种都要」，非 nil 表示「只要这一种」。它必须在每一条读路径上都生效，包括只给 id 的那条快路径——快路径绕过过滤谓词就是这个条件最容易静默失灵的地方（`TestSearchL4KindCondition` 的 `events, by id` 分支专门盯它）。
 - L4 原语的签名带着归属信息：`AppendArchiveL4(engine, agentID, idx, ArchiveContent)` 以 `core.HashContent(TopicID, Seq)` 发号、落盘后同步 `index.L4Index`。写同一个 (话题, Seq) 是**原地覆写**而不是追加第二条——这就是重放一轮能收敛的机制，本层因此没有也不需要「先列出这个话题旧有的归档、再删掉没被重写的那几条」这类原语（第二真相的活形式）。
 - 删除只有两条入口，都内置「磁盘删成功后才摘镜像」这一步序：带话题的 `DeleteTopicArchives`（整话题连删带摘）、按保留窗的 `DropExpiredArchives`（先 `ExpiredBefore` 只读地拿 id，删成后逐话题 `RemoveIDs`）。`TopicClosureL2` 只返回话题闭包——内容由闭包里的每个 id 去索引取回。
-- L5 只剩计划节点（`l6layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组，`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——没有事件计数、没有事件清单：事件在 L4，树不拥有它们。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, NodePath)`：节点身份是派生的，本层不接受调用方自备的第二把键。删除有 `DeletePlanNodesByIDs`（Dream 保留窗按 id 批删）与 `DeletePlanNodesByTopicIDs`（删话题/场景时连它的树一起走，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上。
+- L5 只剩计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组，`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——没有事件计数、没有事件清单：事件在 L4，树不拥有它们。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, NodePath)`：节点身份是派生的，本层不接受调用方自备的第二把键。删除有 `DeletePlanNodesByIDs`（Dream 保留窗按 id 批删）与 `DeletePlanNodesByTopicIDs`（删话题/场景时连它的树一起走，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上。

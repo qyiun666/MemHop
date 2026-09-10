@@ -1,9 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Offline interface tests for the L6 plan tree and trajectory log. A host
-// drives this the way meowagent does: `Search` opens a turn and hands back that
-// turn's topic id, which is also the key of the plan tree the turn works on. The
+// Offline interface tests for the L5 plan tree and the turn's event track (L4
+// content). A host drives this the way meowagent does: `Search` opens a turn
+// and hands back that turn's topic id, which is also the key of the plan tree
+// the turn works on. The
 // host keeps its own dotted step paths and commits each step as it advances,
 // and after a restart reads the tree back with a turn topic it already holds.
 // PlanCommit returns nothing at all, so every assertion below reads the tree

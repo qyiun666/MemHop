@@ -19,9 +19,9 @@ type sessionIDArgs struct {
 	SessionID string `json:"session_id"`
 }
 
-// registerL6Tools installs the trajectory read surface and crystallize; each
+// registerTrajectoryTools installs the trajectory read surface and crystallize; each
 // register function owns one cohesive tool group.
-func registerL6Tools(s *mcp.Server, db *memhop.Session) {
+func registerTrajectoryTools(s *mcp.Server, db *memhop.Session) {
 	registerTrajectoryReadTools(s, db)
 	registerCrystallizeTool(s, db)
 }
