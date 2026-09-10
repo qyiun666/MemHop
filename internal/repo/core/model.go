@@ -51,11 +51,13 @@ type SceneEdge struct {
 	LastDecayAt int64 `json:"last_decay_at"`
 }
 
-// SceneNodeID derives the stable L1 node ID of a scene: hash("l1:"+hex(sceneID)).
-// The node is created/updated only during Dream, but the ID is computable
-// without any index — which is what lets DeleteScene drop it right away.
+// SceneNodeID derives the stable L1 node ID of a scene:
+// hash("scene-node:"+hex(sceneID)). The namespace carries no layer number so a
+// renumbering never re-keys it. The node is created/updated only during Dream,
+// but the ID is computable without any index — which is what lets DeleteScene
+// drop it right away.
 func SceneNodeID(sceneID uint64) uint64 {
-	return common.HashID("l1:" + common.FormatHash(sceneID))
+	return common.HashID("scene-node:" + common.FormatHash(sceneID))
 }
 
 // SceneSlot is an L2 scene container — one host session's conversation. The
@@ -211,12 +213,12 @@ type ArchiveSlot struct {
 }
 
 // HashContent derives the id of one topic's content slot:
-// hash("l4:"+topicID+":"+seq). The id is positional rather than content-derived:
+// hash("content:"+topicID+":"+seq). The id is positional rather than content-derived:
 // writing the same (topic, seq) again lands on the same record, which the engine
 // re-points instead of keeping a second live copy. That is what lets a replayed
 // turn converge without a list of the ids it supersedes.
 func HashContent(topicID, seq uint64) uint64 {
-	return common.HashID(fmt.Sprintf("l4:%d:%d", topicID, seq))
+	return common.HashID(fmt.Sprintf("content:%d:%d", topicID, seq))
 }
 
 // Plan node status.
@@ -250,7 +252,7 @@ type PlanNode struct {
 
 // HashPlanNode derives a plan node id from the owning topic + nodePath,
 // namespaced under a "plan:" prefix so it never collides with a content id
-// (hash("l4:"+topic+":"+seq)) or a turn topic (hash("turn:"+scene:seq)).
+// (hash("content:"+topic+":"+seq)) or a turn topic (hash("turn:"+scene:seq)).
 func HashPlanNode(topicID uint64, nodePath string) uint64 {
 	return common.HashID("plan:" + fmt.Sprintf("%d:%s", topicID, nodePath))
 }

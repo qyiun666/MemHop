@@ -57,9 +57,17 @@ const (
 // past the same 7-day window L6 already had, so a topic older than the window
 // keeps its keyword track and nothing else. A 0x000D file stores its events in a
 // record type that no longer exists and its archives under text-derived ids, so
-// neither addresses anything under the new rule. Files with 0x000D (or older)
-// are rejected at Open — there is no migration path.
-const FormatVersion uint16 = 0x000E
+// neither addresses anything under the new rule. 0x000F took the layer numbers
+// out of the last two id namespaces that baked them in — a scene's L1 node hashes
+// from "scene-node:"+sceneID and a content slot from "content:"+topic+":"+seq —
+// so renaming a layer no longer re-keys records; renamed the archive's owning
+// field to what it always held (context_id → topic_id); and dropped the scene's
+// read-side counters (hit_count, last_hit_at, topic_count) along with the Dream
+// stage that read them. A 0x000E file decodes its archive's owner into a field the
+// new reader never fills, and its records sit under prefixes that no longer
+// derive, so neither addresses anything under the new rule. Files with 0x000E (or
+// older) are rejected at Open — there is no migration path.
+const FormatVersion uint16 = 0x000F
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

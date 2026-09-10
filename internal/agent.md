@@ -165,7 +165,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
    后续读取覆盖；`scene.Create` 建新场景时才写默认名 `session:<id>`。
 7. **内容由 (话题, Seq) 寻址，枚举仍靠镜像**：一条内容的地址就是
-   `hash("l4:"+话题+":"+seq)`，`TopicID` 是它归属的话题；单条能推出来，
+   `hash("content:"+话题+":"+seq)`，`TopicID` 是它归属的话题；单条能推出来，
    「这个话题一共有哪几条」推不出来，唯一的来源还是域内的 `ac.L4`——它是枚举
    手段，不是加速器。由此得出镜像纪律：任何删内容的路径都必须在**磁盘删
    成功后**同步摘镜像（`repo.DeleteTopicArchives` / `repo.DropExpiredArchives`

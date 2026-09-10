@@ -207,11 +207,11 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 }
 
 // Files with an unsupported format version must be rejected explicitly at
-// Open: 0x000E (a turn's content merged into L4, L6 left with plan nodes only)
-// is the only accepted version — older layouts and future ones have no migration
-// path.
+// Open: 0x000F (layer numbers out of the id namespaces, the archive's owner named
+// TopicID, the scene's read-side counters gone) is the only accepted version —
+// older layouts and future ones have no migration path.
 func TestHeaderVersionRejected(t *testing.T) {
-	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000F} {
+	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, 0x0010} {
 		t.Run(fmt.Sprintf("0x%04x", v), func(t *testing.T) {
 			p := tempPath(t, "ver")
 			eng, err := Create(p)

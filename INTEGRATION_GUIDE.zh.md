@@ -464,11 +464,11 @@ func main() {
 ## 12. 陷阱清单
 
 1. **LLM 只影响 `Update` 与 `Dream`**：`Search` 与 `AppendArchive` 零 LLM，记录与读取永不被 LLM 拖垮；`Update` 每轮一次提炼，失败即报错且不落该轮话题——你先前 append 的记录原样留着。宿主需为收口失败做好重试：重试同一个 `TopicID` 是安全的。
-格式版本为 `0x000E`：L3 知识图驻留保留共享域（`core.SharedPoolAgentID`），不跑迁移——`0x000D` 及更早的文件在 Open 时被拒绝：它们把一轮的事件存在一个已不存在的记录类型里、把归档按正文哈希发号，按当前规则哪一条都指不到东西。
+格式版本为 `0x000F`：L3 知识图驻留保留共享域（`core.SharedPoolAgentID`），不跑迁移——`0x000E` 及更早的文件在 Open 时被拒绝：它们的归档把归属话题记在 `context_id` 这个当前记录已没有的键下、记录 id 又派生自 `l1:` / `l4:` 这两个已不存在的命名空间，按当前规则哪一条都指不到东西。
 3. **时间戳用 Unix 毫秒**，`<=0` 报 `ErrInvalidQuery`。
 4. **ID 是不透明 16 位 hex**：不要自行拼接/截断；响应里的 id 原样回传即可，门面上不再有 hex ⇄ 整数转换函数。
 5. **`Search` 不写记忆内容**：它开启一个轮次（场景的轮次计数 +1），但不建任何话题记录——开了没沉淀的轮次不留残渣。想读原文用 `SceneContext` / `SearchL4`。重放一次 append（同 `(话题, Seq)`）是幂等的：记录 id 由那一对派生，重试只会覆盖不会叠加；而重放不再去填的槽位不会被回收。
-6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x000E`）既打不开也不迁移。
+6. **单文件多 agent 域**：所有租户驻留同一个 `.meh` 文件（`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`），除文件级 L3 公共池外按域完全隔离；旧库（`FormatVersion < 0x000F`）既打不开也不迁移。
 7. **内容与计划自动过期**：Dream 清掉 7 天前的话题内容与 7 天前的计划节点（仍在途的树豁免）；显式纠正走 `DeleteTopic` / `DeleteScene`。过了窗的话题只剩关键词轨，`Messages` 读回来是空的或 `Seq` 上有洞——那是合法的终局，不是读取失败。一切都按轮次话题 id 绑定，所以 `Update` 前后都能追加（id 在 `Search` 时已在手），但绝不要自造轮键。
 8. **场景 id 由宿主保管，话题 id 由库保管**：`Update` 只接受已存在场景（先 `Search` 得到 `Scene.SceneID`）+ 该次读铸出的话题 id——没开轮就沉淀不了。库不会为一次沉淀自动建场景，也不会在 Dream 里合并场景——合并只走显式 `MergeScenes`，而它会把被并场景连记录删掉，宿主手里的旧 id 随即失效。每次 `Search` 恰好开启一个轮次：读两次只沉淀一次，就是跳掉一个轮次号，空洞不产生成本，且已给出的 id 永不重复。
 9. **`SceneDreamTopicThreshold` 默认 24**：用部分字面量构造 `MemHopDefaults` 时该字段为 0，会**禁用**自动巩固——先赋 `*api.DefaultMemHopDefaults` 再覆盖。上下文规模由 Dream 保证有界（压缩后每场景 ≤20），禁用自动巩固就等于让注入无界增长。

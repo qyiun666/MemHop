@@ -50,7 +50,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if changed != 1 {
 		t.Fatalf("want 1 node created, got %d", changed)
 	}
-	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+common.FormatHash(sceneA)))
+	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("scene-node:"+common.FormatHash(sceneA)))
 	if err != nil {
 		t.Fatal("l1 node missing")
 	}
@@ -70,7 +70,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if changed != 0 {
 		t.Fatalf("want 0 changes, got %d", changed)
 	}
-	if node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+common.FormatHash(sceneA))); err == nil && node.UpdatedAt != firstUpdatedAt {
+	if node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("scene-node:"+common.FormatHash(sceneA))); err == nil && node.UpdatedAt != firstUpdatedAt {
 		t.Fatalf("no-op sync must not refresh UpdatedAt")
 	}
 
@@ -83,7 +83,7 @@ func TestSyncL1NodesFromL2(t *testing.T) {
 	if changed != 1 {
 		t.Fatalf("want 1 node updated, got %d", changed)
 	}
-	node, err = core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+common.FormatHash(sceneA)))
+	node, err = core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("scene-node:"+common.FormatHash(sceneA)))
 	if err != nil {
 		t.Fatalf("read node after update: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestSyncL1NodesFromL2SkipsCompressed(t *testing.T) {
 	if _, err := SyncL1NodesFromL2(engine, core.DefaultAgentID); err != nil {
 		t.Fatalf("sync: %v", err)
 	}
-	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("l1:"+common.FormatHash(sceneA)))
+	node, err := core.ReadSceneNode(engine, core.DefaultAgentID, common.HashID("scene-node:"+common.FormatHash(sceneA)))
 	if err != nil || len(node.TopicIDs) != 1 {
 		t.Fatalf("depth-3 topic must be excluded from the node: %+v", node)
 	}

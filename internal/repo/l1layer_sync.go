@@ -25,7 +25,7 @@ func DeleteSceneNodeL1(engine *core.StorageEngine, agentID uint64, sceneID uint6
 
 // SyncL1NodesFromL2 rebuilds one L1 node per scene from the current
 // depth<=2 topics; L1 is written/updated only during Dream. The node ID
-// (hash("l1:"+sceneID)) is stable across dreams: existing nodes keep
+// (hash("scene-node:"+sceneID)) is stable across dreams: existing nodes keep
 // Importance/Valence/Arousal (decay belongs to DecayL1Network) and are
 // refreshed only when the topic set changed, so UpdatedAt keeps
 // accumulating decay. Returns the number of nodes created or updated.

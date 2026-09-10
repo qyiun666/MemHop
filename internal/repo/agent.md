@@ -10,11 +10,12 @@
 - `core/`：.meh 引擎——记录帧（26 字节：type/flags/length/agent_id/
   id_hash/crc32）、A/B 文件头、快照（0x02 分域）、空间回收、
   `StorageEngine` 索引（`agent -> idHash -> offset` 两级分域）、Slot 数据模型。
-  `FormatVersion` 是 `0x000E`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
-  无迁移路径。这次上抬改的仍不是帧布局而是记录含义——一轮的内容自 0x000E 起
-  同住 L4（`Kind` 区分原文与事件，id 由 `hash("l4:"+topic+":"+seq)` 派生），
-  L6 只剩计划节点、搬到新帧型 `RecL6PlanNode 0x0F`。旧文件把事件存在一个已不存在
-  的记录类型里、把归档按正文哈希发号，按新规则哪一条都指不到东西。
+  `FormatVersion` 是 `0x000F`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
+  无迁移路径。上抬改的仍不是帧布局而是记录含义与键：一轮的内容同住 L4（`Kind`
+  区分原文与事件，id 由 `hash("content:"+topic+":"+seq)` 派生），L6 只剩计划节点、
+  走帧型 `RecL6PlanNode 0x0F`；自 0x000F 起 id 命名空间不再烘层号（场景节点
+  `scene-node:`、内容槽 `content:`），归档的归属字段叫 `topic_id`，场景记录
+  只剩 `turn_seq` 一个计数器。旧文件的那些键与前缀按新规则都指不到东西。
   `StorageEngine` 按功能分文件：`engine.go`（索引模型/访问器）、
   `engine_lifecycle.go`（Create/Open/Checkpoint/Close）、`engine_write.go`（追加）、
   `engine_read.go`（索引查找读）、`engine_delete.go`（墓碑删除）、

@@ -564,11 +564,12 @@ func main() {
    distils once per turn and, on failure, returns an error having written no topic —
    the records you appended earlier stay. Hosts should retry a failed settle.
 2. **No embedding service, no dimension to declare**: the two header bytes at
-   offset 6 are reserved. The format version is `0x000E`: the L3 knowledge
+   offset 6 are reserved. The format version is `0x000F`: the L3 knowledge
    graph lives in the reserved shared domain (`core.SharedPoolAgentID`); no
-   migration runs — `0x000D` and older files are rejected at Open, because they
-   store a turn's events in a record type that no longer exists and its archives
-   under text-derived ids, neither of which the current rules can address.
+   migration runs — `0x000E` and older files are rejected at Open, because their
+   archives name the owning topic under a key the current record does not carry
+   (`context_id`) and their ids derive from namespaces that no longer exist
+   (`l1:`, `l4:`). Neither can be addressed under the current rules.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery` on every record you append;
    a turn's topic is stamped with the earliest and latest of its content.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
@@ -583,7 +584,7 @@ func main() {
 6. **One file, many agent domains**: all tenants live inside one
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
    isolated per domain except the file-wide L3 pool; legacy files
-   (`FormatVersion < 0x000E`) cannot be opened or migrated.
+   (`FormatVersion < 0x000F`) cannot be opened or migrated.
 7. **Content and plans auto-expire**: Dream drops a topic's content older than 7
    days and plan nodes older than 7 days (a tree still in flight is exempt);
    `DeleteTopic` / `DeleteScene` are the explicit corrections. Past the window a
