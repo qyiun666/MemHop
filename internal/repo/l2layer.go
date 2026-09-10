@@ -157,7 +157,7 @@ func MergeScenesL2(engine *core.StorageEngine, agentID uint64, primaryID uint64,
 // caller hashes it into the turn's topic id, so a failed write must surface as
 // an error, not a lost increment. Reads and writes of one domain are serialized
 // by its lock, so no increment is ever racing away.
-func OpenSceneTurn(engine *core.StorageEngine, agentID uint64, sceneID uint64, ts int64) (*core.SceneSlot, error) {
+func OpenSceneTurn(engine *core.StorageEngine, agentID uint64, sceneID uint64) (*core.SceneSlot, error) {
 	slot, err := core.ReadSceneSlot(engine, agentID, sceneID)
 	if err != nil {
 		return nil, err

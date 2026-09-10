@@ -11,8 +11,6 @@
 package internal
 
 import (
-	"time"
-
 	"github.com/qyiun666/MemHop/internal/cap/profile"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 	"github.com/qyiun666/MemHop/internal/scene"
@@ -37,7 +35,7 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	sceneSlot, err := scene.OpenTurn(db.engine, agentID, resolved.SceneID, time.Now().UnixMilli())
+	sceneSlot, err := scene.OpenTurn(db.engine, agentID, resolved.SceneID)
 	if err != nil {
 		return nil, err
 	}

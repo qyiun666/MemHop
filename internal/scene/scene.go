@@ -105,9 +105,8 @@ func FreshID(engine *core.StorageEngine, agentID uint64) (uint64, error) {
 }
 
 // OpenTurn pushes the scene's turn counter to the next turn: the one record
-// a read writes. The usage counters feed Dream's importance feedback and the
-// turn counter mints the topic id, so a failed write fails the read instead
-// of reissuing an id.
-func OpenTurn(engine *core.StorageEngine, agentID, sceneID uint64, nowMs int64) (*core.SceneSlot, error) {
-	return repo.OpenSceneTurn(engine, agentID, sceneID, nowMs)
+// a read writes. The counter mints the turn's topic id, so a failed write
+// fails the read instead of reissuing an id.
+func OpenTurn(engine *core.StorageEngine, agentID, sceneID uint64) (*core.SceneSlot, error) {
+	return repo.OpenSceneTurn(engine, agentID, sceneID)
 }

@@ -223,10 +223,10 @@ func TestOpenSceneTurnAdvancesTurnSeq(t *testing.T) {
 	if err := CreateSceneL2WithID(engine, core.DefaultAgentID, sceneID, "scene-usage-1"); err != nil {
 		t.Fatalf("create scene: %v", err)
 	}
-	if _, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID, 1000); err != nil {
+	if _, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID); err != nil {
 		t.Fatalf("first turn: %v", err)
 	}
-	opened, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID, 2000)
+	opened, err := OpenSceneTurn(engine, core.DefaultAgentID, sceneID)
 	if err != nil {
 		t.Fatalf("second turn: %v", err)
 	}
