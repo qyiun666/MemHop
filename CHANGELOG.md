@@ -15,27 +15,28 @@ README 的版本表与 git log。
 - **文档同步**：`api/session.go` 的 `AppendTrajectory` / `PlanCommit` 注释、`INTEGRATION_GUIDE.md` 与 `.zh.md` 的 L6 计划面表格、`internal/plan/agent.md`
 - 决策档案：`notes/implemented/simplification/2026-09-07-plan-event-vocabulary-retirement.md`
 
-## v1.6.3 — 2026-09-10 — L4 是一轮唯一的内容层，L6 只剩计划树，`Update` 只蒸馏
+## v1.6.3 — 2026-09-10 — L4 是一轮唯一的内容层，L5 只剩计划树，`Update` 只蒸馏
 
-一轮发生过什么，此前被劈在两层：L4 存两条对话原文，L6 存轨迹事件与计划节点。两层早就共用
+一轮发生过什么，此前被劈在两层：L4 存两条对话原文，轨迹层存事件与计划节点。两层早就共用
 同一个键（`Search` 为这一轮铸出的话题 id），却仍是两种记录、两套扫描、两条生命周期，并且 L2
 话题要靠一份 `L4Refs` 第二真相指向自己的原文。本版本把它们收敛成一个判据：**内容是内容，
 计划是计划**——凡「一轮里的内容」（说了什么 + 做了什么）同住 L4、以 (话题, `Kind`, `Seq`)
-寻址；L6 只剩每个话题一棵计划树；话题不再持有内容引用。
+寻址；计划层只剩每个话题一棵计划树（该层在本版本内由 L6 改号为 L5）；话题不再持有内容引用。
 
-### 记录与格式（`FormatVersion 0x000D → 0x000E`）
+### 记录与格式（`FormatVersion 0x000D → 0x000F`）
 
 - `ArchiveSlot` 吸收事件侧字段：`Kind`（`KindUtterance` / `KindEvent`）、`Seq`、`EventType`、
-  `NodePath`。归档 id 从「正文哈希」改为**位置式** `hash("l4:"+话题+":"+seq)`，于是同 (话题, Seq)
+  `NodePath`。归档 id 从「正文哈希」改为**位置式** `hash("content:"+话题+":"+seq)`，于是同 (话题, Seq)
   重写就是原地覆写——重放一轮能收敛，靠的是这个键，不再靠「先列出旧的、再给没重写到的打墓碑」
   那套差分（连同它需要的第二份清单一起删除）。
-- L6 的新记录类型 `core.PlanNode`（帧型 `RecL6PlanNode = 0x0F`，随 L5 退役空出来的号）：一节点
+- 计划树的新记录类型 `core.PlanNode`（帧值 `0x0F`，随能力记录层退役空出来的号）：一节点
   一条，去掉 `Seq`、`CreatedAt` 改 `UpdatedAt`。`TrajectorySlot` / `NodeType*` / `PlanNodeRef` 消失。
-- `0x000D` 及更早的文件在 `Open` 显式拒绝、无迁移：它们把事件存在一个已不存在的记录类型里、
-  把归档按正文哈希发号，按新规则哪一条都指不到东西。
+- `0x000D` 与 `0x000E` 都在 `Open` 显式拒绝、无迁移：前者把事件存在一个已不存在的记录类型里、
+  把归档按正文哈希发号；后者的归档把归属话题记在 `context_id` 键下、记录按 `l1:` / `l4:` 前缀
+  派生——按最终规则两条都指不到东西（`0x000E` 是本版本开发序列中的中间版，从未随 tag 发布）。
 - `index/traj.go` 就地改造为 `index/l4.go` 的 `L4Index`，**条目带 `Kind`**——否则「哪些轮记了事件」
   会把只有对话的轮也报出来，而场景读回会为一轮两句话读出几十条事件。
-- Dream 的清理拆成 `l4_prune`（按内容时间戳）与 `l6_prune`（按计划节点 `UpdatedAt`，仍豁免在途
+- Dream 的清理拆成 `l4_prune`（按内容时间戳）与 `l5_prune`（按计划节点 `UpdatedAt`，仍豁免在途
   树）；跨层级联删除整段退役——树与事件既然分居两层，节点过期就不该带走正文。
   `TrajectoryRetention` 更名 `ContentRetention`，值仍是 7 天，两侧共用。
 
@@ -61,7 +62,7 @@ README 的版本表与 git log。
   （`SearchL4{TopicID, Kind}` 完全覆盖，与当年删 `GetArchive` 同判据）、**新增** `AppendArchive`；
   `Update` 改为两参且不再回 id（话题 id 是 `Search` 给的）。`MultiAgentDB` 8 个不变。
 - DTO：删 `api.TrajectorySlot`、`TurnUpdate`；`ArchiveSlot` 升为写读两用（写侧忽略 `IDHash`/
-  `ContextID`，所以「读回来改一句写回原槽」天然成立）；`L4Query` 加 `Kind` 条件、
+  `TopicID`，所以「读回来改一句写回原槽」天然成立）；`L4Query` 加 `Kind` 条件、
   `SceneMessage` 加 `Seq`（空洞由此可判别）；`PlanCommit` 的事件入参换 `ArchiveSlot`；
   `TrajectorySessionSummary.Steps` 改名 `Events`（它统计的一直只是事件）。
 - 常量：补 `KindUtterance`/`KindEvent`/`RoleSystem`，**收回 `RoleDream`**。
@@ -83,16 +84,52 @@ README 的版本表与 git log。
 - `test/core_cycle_test.go` 的「细节保留」语义从「原文长寿」变成「当轮细节保留」。
 - 宿主热路径的一轮从 1 次调用变成 3 次（`AppendArchive` ×2 + `Update`）。
 
+### 字段与层号收敛（同版本内的第二轮）
+
+- **Dream 的 usage-feedback 阶段退役**：它读的是场景记录上的 `HitCount`/`LastHitAt`，判定只是给
+  L1 节点 `Importance` ±0.05——在 `nodeRemoveThreshold` 0.05、λ 0.01/h 之下这是 5% 量程的慢游走，
+  左右不了节点存活。L1 重要性此后只有两个来源：同步新建时的 `1.0` 与时间衰减。代价说明白：
+  引擎不再能分辨「被读过」与「最近有写入」。
+- **场景记录删三键**：`hit_count`、`last_hit_at` 随上述消费者消失；`topic_count` 从来没落过盘
+  （`NewSceneSlot` 不置它，读改写路径回写的也是刚读到的那条），每次都是读后现算——因此
+  `CollectAllScenesL2` 里「全扫话题现算每场景根数」那段填充与 `Search` 的回填一起删除。
+  `api.SceneSlot` 同步收窄为 `{scene_id, scene_name, l3_id}`。`SceneContext.TopicCount` 是本次
+  返回的条目数，语义真实，保留。
+- **`ArchiveSlot.ContextID` → `TopicID`**（Go 字段与 JSON tag 同时）：它存的一直是拥有这条记录的
+  那个轮次话题，而 `context` 在引擎里已无对应概念。L3 的 `HypergraphSource.ContextID` 是另一件
+  事（`SourceContext` 的语境 id），未改名。
+- **id 命名空间去层号**：`l1:` → `scene-node:`、`l4:` → `content:`；`turn:` / `plan:` / `profile`
+  与 L3 的两个派生式本就不含层号。前缀担的是防碰撞，把层号烘进主键意味着下次改层号要重算全部
+  记录 id。
+- **L6 → L5 改号**：能力记录层退役后 L5 号位空着，而引擎真实记录的这一层仍叫 L6——认知栈由七层
+  （L0–L6）收敛为六层（L0–L5）。`RecL6PlanNode` → `RecL5PlanNode`（帧值仍 `0x0F`）、
+  `l6_prune` → `l5_prune`、`internal/l6.go` → `l5.go`、`repo/l6layer.go` → `l5layer.go`；payload
+  字段一概未动。撞词一并清掉：结晶的 prompt 文本与「L5 能力」这类标题都不再带层号——能力不是
+  引擎的一层。
+- **`L4Query` 新增 `NodePath` 条件**：事件的归因此前只能靠宿主把整轮拉回后自筛。填了 `NodePath`
+  却没给 `TopicID` 直接 `ErrInvalidQuery`（步骤是轮次内的地址，缺话题这一读会退化成全域扫），
+  路径形状复用 `plan.SplitNodePath` 与写侧同一词表。方法数不变：Go 面仍 25 + 8，MCP 仍 24
+  （`L4Query` 是别名链，MCP 侧只多一个入参属性）。
+
 ### 对宿主的破坏性变更（跟版清单）
 
 `TurnUpdate` / `api.TrajectorySlot` / `AppendTrajectory` / `ReadTrajectory` 四个符号消失；
 `Update` 签名与返回值变更；`PlanCommit` 的事件入参换类型；`TrajectorySessionSummary.Steps` →
-`Events`；`api.RoleDream` 不再导出；`0x000D` 及更早的 `.meh` 拒绝打开（无迁移）。
+`Events`；`api.RoleDream` 不再导出；`api.SceneSlot` 去掉 `topic_count`/`hit_count`/`last_hit_at`
+三字段；`api.ArchiveSlot.ContextID` 改名 `TopicID`（Go 字段与 JSON 键同时变）；`DreamStage` 词表
+去 `usage_feedback`、`l6_prune` 改号 `l5_prune`；格式版本 `0x000F`——`0x000E` 及更早的 `.meh`
+拒绝打开（无迁移）。
 
 ### 测试与档案
 
-- 新增派生式 id 命名空间的穷举互斥测试（`turn:` / `l4:` / `plan:` / `l1:` + Dream 的无前缀融合键，
-  同一输入空间两两不撞）；`0x000D` 进版本拒绝列表并做过「旧版本被拒」断言真红一次的负例证明。
+- 新增派生式 id 命名空间的穷举互斥测试（`turn:` / `content:` / `plan:` / `scene-node:` + Dream 的
+  无前缀融合键，同一输入空间两两不撞）；`0x000D` 与 `0x000E` 都在版本拒绝列表内，且做过
+  「旧版本被拒」断言真红一次的负例证明。
+- 第二轮新增：`TestSceneContextOpensNoTurn`（「SceneContext 不开轮次」此前钉在宿主可见的计数字段
+  上，该字段消失后搬到能读到 `TurnSeq` 的地方，并断言下一轮拿到的正是紧邻的那个 id）、
+  `TestSearchL4ByNodePath` 与 `TestNodePathFilterNeedsTopicID`（后者兼作「漏带话题就退化成全域扫」
+  的守卫；前者的谓词做过变异检验——摘掉即变红）、`TestOpenSceneTurnAdvancesTurnSeq`；
+  两个只为读侧计数存在的用例随之删除。
 - `Update` 侧的落盘断言方向反转（失败不再要求零内容留痕），新增「内容为空 ⇒ 零 LLM 调用」、
   `ValidateAppend` 逐条拒因、跨 Kind 的 Seq 覆写、`RenderForDistill` 的角色标签、
   过期转录读回为空且不报错的端到端一条。
