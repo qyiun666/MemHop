@@ -192,7 +192,7 @@ const (
 
 // ArchiveSlot stores one piece of a topic's content: a dialogue original
 // (KindUtterance) or an operation event the host recorded (KindEvent).
-// (ContextID, Seq) addresses it, so re-writing one Seq overwrites in place.
+// (TopicID, Seq) addresses it, so re-writing one Seq overwrites in place.
 // Role, ContentType and EventType are orthogonal axes, not three names for one
 // thing: Role says who spoke (utterances only), ContentType says what Content
 // *is* (prose or a reference to media), EventType says what *happened* — events
@@ -203,7 +203,7 @@ type ArchiveSlot struct {
 	Seq         uint64      `json:"seq"`
 	ContentType ContentType `json:"content_type"`
 	Role        uint8       `json:"role"`
-	ContextID   uint64      `json:"context_id"`
+	TopicID     uint64      `json:"topic_id"`
 	EventType   string      `json:"event_type,omitempty"`
 	NodePath    string      `json:"node_path,omitempty"`
 	CreatedAt   int64       `json:"created_at"`

@@ -31,7 +31,7 @@ func TestAppendArchiveAdoptsDeclaredUtteranceFields(t *testing.T) {
 
 	if err := db.AppendArchive(core.DefaultAgentID, hex, core.ArchiveSlot{
 		Kind: core.KindUtterance, Seq: core.SeqUser, Role: core.RoleSystem,
-		ContentType: core.ContentImage, IDHash: 4242, ContextID: 4242,
+		ContentType: core.ContentImage, IDHash: 4242, TopicID: 4242,
 		Content: "img://cat.png", CreatedAt: 1000,
 	}); err != nil {
 		t.Fatalf("append: %v", err)
@@ -44,7 +44,7 @@ func TestAppendArchiveAdoptsDeclaredUtteranceFields(t *testing.T) {
 	if got.Role != core.RoleSystem || got.ContentType != core.ContentImage || got.Seq != core.SeqUser {
 		t.Fatalf("declared axes lost: %+v", got)
 	}
-	if got.ContextID != topicID || got.IDHash != core.HashContent(topicID, core.SeqUser) {
+	if got.TopicID != topicID || got.IDHash != core.HashContent(topicID, core.SeqUser) {
 		t.Fatalf("an append must be addressed by the topic it named, not by what it passed: %+v", got)
 	}
 }

@@ -184,7 +184,7 @@ func TestComputeTurnTopicIDNamespaced(t *testing.T) {
 func TestArchiveSlotRoundtrip(t *testing.T) {
 	a := ArchiveSlot{
 		IDHash: 1, ContentType: ContentText, Role: 0,
-		ContextID: 20, CreatedAt: 1000,
+		TopicID: 20, CreatedAt: 1000,
 		Content: "hello",
 	}
 	var got ArchiveSlot
@@ -199,7 +199,7 @@ func TestArchiveSlotRoundtrip(t *testing.T) {
 func TestArchiveSlotImagePath(t *testing.T) {
 	a := ArchiveSlot{
 		IDHash: 3, ContentType: ContentImage, Role: 0,
-		ContextID: 20, CreatedAt: 1000,
+		TopicID: 20, CreatedAt: 1000,
 		Content: "/img/screenshot.png",
 	}
 	var got ArchiveSlot
@@ -214,7 +214,7 @@ func TestArchiveSlotImagePath(t *testing.T) {
 func TestArchiveEventRoundtrip(t *testing.T) {
 	ev := ArchiveSlot{
 		IDHash: HashContent(42, 3), Kind: KindEvent, Seq: 3, ContentType: ContentText,
-		ContextID: 42, EventType: "tool_call", NodePath: "1.1",
+		TopicID: 42, EventType: "tool_call", NodePath: "1.1",
 		CreatedAt: 1000, Content: `{"tool":"read"}`,
 	}
 	var got ArchiveSlot

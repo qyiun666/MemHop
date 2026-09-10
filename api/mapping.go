@@ -177,7 +177,7 @@ func fromArchiveSlot(s internal.ArchiveSlot) ArchiveSlot {
 		Seq:         s.Seq,
 		ContentType: s.ContentType,
 		Role:        s.Role,
-		ContextID:   formatOptionalID(s.ContextID),
+		TopicID:     formatOptionalID(s.TopicID),
 		EventType:   s.EventType,
 		NodePath:    s.NodePath,
 		CreatedAt:   s.CreatedAt,
@@ -195,7 +195,7 @@ func formatOptionalID(id uint64) string {
 // toCoreAppendSlot maps the fields a host owns onto a content slot for the append
 // path. The owning topic comes from the argument the call is keyed by, and the
 // record id follows from (topic, Seq), so neither is part of what a caller hands in
-// — IDHash and ContextID are read from the slot and dropped.
+// — IDHash and TopicID are read from the slot and dropped.
 func toCoreAppendSlot(s ArchiveSlot) internal.ArchiveSlot {
 	return internal.ArchiveSlot{
 		Kind:        s.Kind,

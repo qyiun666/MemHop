@@ -46,7 +46,7 @@ func nodeEvents(t *testing.T, db *DB, topicID uint64, nodePath string) []core.Ar
 	t.Helper()
 	var out []core.ArchiveSlot
 	for _, arc := range core.CollectAllArchives(db.engine, core.DefaultAgentID) {
-		if arc.ContextID == topicID && arc.Kind == core.KindEvent && arc.NodePath == nodePath {
+		if arc.TopicID == topicID && arc.Kind == core.KindEvent && arc.NodePath == nodePath {
 			out = append(out, arc)
 		}
 	}
@@ -471,7 +471,7 @@ func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	topicID := common.FormatHash(9)
 	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(core.ArchiveSlot{
-		Kind: core.KindEvent, ContextID: 4242,
+		Kind: core.KindEvent, TopicID: 4242,
 		Role: core.RoleDream, ContentType: core.ContentVideo,
 		EventType: "llm_request", Content: "payload", CreatedAt: 1000,
 	}, "1")); err != nil {
@@ -498,7 +498,7 @@ func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	if landed == nil {
 		t.Fatal("the event record is missing")
 	}
-	if landed.ContextID != 9 || landed.IDHash != core.HashContent(9, landed.Seq) {
+	if landed.TopicID != 9 || landed.IDHash != core.HashContent(9, landed.Seq) {
 		t.Fatalf("an append must land under the topic it addressed: %+v", landed)
 	}
 	if landed.Seq != core.LastUtteranceSeq+1 {
@@ -709,8 +709,8 @@ func TestTurnRunsOnOneTopicID(t *testing.T) {
 		t.Fatalf("events = %d, want the turn's 2", len(events))
 	}
 	for _, e := range events {
-		if e.ContextID != settled {
-			t.Fatalf("event %s landed under key %d, want the turn's %d", e.EventType, e.ContextID, settled)
+		if e.TopicID != settled {
+			t.Fatalf("event %s landed under key %d, want the turn's %d", e.EventType, e.TopicID, settled)
 		}
 	}
 }

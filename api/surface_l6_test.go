@@ -116,8 +116,8 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 			e.CreatedAt != want.CreatedAt {
 			t.Fatalf("event[%d] lost its body on the way back: got %+v want %+v", i, e, want)
 		}
-		if !isHexID(e.IDHash) || e.ContextID != sessionID {
-			t.Fatalf("event[%d] ids: hash=%q context=%q", i, e.IDHash, e.ContextID)
+		if !isHexID(e.IDHash) || e.TopicID != sessionID {
+			t.Fatalf("event[%d] ids: hash=%q context=%q", i, e.IDHash, e.TopicID)
 		}
 	}
 	// Crystallize runs (stub returns no candidates) and yields a well-formed output.
@@ -275,7 +275,7 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	}
 
 	evs := eventsOf(t, db, turn)
-	if len(evs) != 1 || evs[0].ContextID != turn || evs[0].NodePath != "" {
+	if len(evs) != 1 || evs[0].TopicID != turn || evs[0].NodePath != "" {
 		t.Fatalf("turn key: %+v", evs)
 	}
 	// A turn that only logged plain events owns no tree: a bare event references
@@ -284,7 +284,7 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 		t.Fatalf("bare turn events invented a plan: %+v err=%v", bare, err)
 	}
 	evs = eventsOf(t, db, planTurn)
-	if len(evs) != 1 || evs[0].ContextID != planTurn || evs[0].NodePath != "1.1" {
+	if len(evs) != 1 || evs[0].TopicID != planTurn || evs[0].NodePath != "1.1" {
 		t.Fatalf("plan key: %+v", evs)
 	}
 	// The bound event created its node chain, so the tree view sees it — under

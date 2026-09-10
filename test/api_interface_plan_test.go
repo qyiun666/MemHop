@@ -98,7 +98,7 @@ func TestInterfacePlanTreeLivesOnItsTurn(t *testing.T) {
 	// The turn's own read carries both faces of that key: the step event and the
 	// node the event created.
 	events := mustEvents(t, db, first)
-	if len(events) != 1 || events[0].ContextID != first || events[0].NodePath != "1" {
+	if len(events) != 1 || events[0].TopicID != first || events[0].NodePath != "1" {
 		t.Fatalf("turn records = %+v, want the step event keyed to %s", events, first)
 	}
 }
@@ -164,7 +164,7 @@ func TestInterfacePlanCommitRollup(t *testing.T) {
 	// The read says which step each event belongs to — the host cannot derive
 	// that hash, so the stamp is the only attribution available on the surface.
 	for _, e := range mustEvents(t, db, topicID) {
-		if e.ContextID != topicID || e.NodePath == "" {
+		if e.TopicID != topicID || e.NodePath == "" {
 			t.Fatalf("plan-bound event lost its attribution: %+v", e)
 		}
 	}
@@ -184,7 +184,7 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	if len(turnEvents) != 1 {
 		t.Fatalf("turn events = %+v, want the one appended", turnEvents)
 	}
-	if e := turnEvents[0]; e.ContextID != turnID || e.NodePath != "" {
+	if e := turnEvents[0]; e.TopicID != turnID || e.NodePath != "" {
 		t.Fatalf("bare turn event = %+v, want keyed to %s and bound to no step", e, turnID)
 	}
 
@@ -275,7 +275,7 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 	if events[0].EventType != "tool_call" || events[0].Content != `{"tool":"bash"}` {
 		t.Fatalf("the event body did not survive the reopen: %+v", events[0])
 	}
-	if events[0].ContextID != turnID {
+	if events[0].TopicID != turnID {
 		t.Fatalf("rebuilt index keyed the event away from its turn: %+v", events[0])
 	}
 	leaf := findPlanNode(t, mustPlanState(t, reopened, turnID), "1.1")

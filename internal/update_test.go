@@ -58,7 +58,7 @@ func archivesOfTopic(t *testing.T, engine *core.StorageEngine, topicID uint64) [
 	t.Helper()
 	var out []core.ArchiveSlot
 	for _, arc := range core.CollectAllArchives(engine, core.DefaultAgentID) {
-		if arc.ContextID == topicID {
+		if arc.TopicID == topicID {
 			out = append(out, arc)
 		}
 	}

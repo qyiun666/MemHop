@@ -48,7 +48,7 @@ func NewL4Index() *L4Index {
 func BuildL4FromEngine(engine *core.StorageEngine, agentID uint64) *L4Index {
 	idx := NewL4Index()
 	for _, arc := range core.CollectAllArchives(engine, agentID) {
-		idx.Append(arc.ContextID, arc.Seq, arc.IDHash, arc.Kind, arc.CreatedAt)
+		idx.Append(arc.TopicID, arc.Seq, arc.IDHash, arc.Kind, arc.CreatedAt)
 	}
 	return idx
 }

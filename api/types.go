@@ -163,9 +163,9 @@ type L3Subgraph struct {
 
 // ArchiveSlot is one record of a topic's L4 content: a dialogue original
 // (KindUtterance) or an operation event (KindEvent) — and the same shape
-// AppendArchive takes, where IDHash and ContextID are ignored and a Seq of 0 asks
-// the library for a slot. ContextID is the topic that owns a stored record and Seq
-// the slot it owns there, so (ContextID, Seq) is the address a replay rewrites.
+// AppendArchive takes, where IDHash and TopicID are ignored and a Seq of 0 asks
+// the library for a slot. TopicID is the topic that owns a stored record and Seq
+// the slot it owns there, so (TopicID, Seq) is the address a replay rewrites.
 // Role is one of RoleUser / RoleAgent / RoleSystem and qualifies utterances only:
 // an event leaves it 0. ContentType says whether Content is prose or a reference to
 // media; EventType names an event and is the host's own word for it.
@@ -175,7 +175,7 @@ type ArchiveSlot struct {
 	Seq         uint64      `json:"seq"`
 	ContentType ContentType `json:"content_type"`
 	Role        uint8       `json:"role"`
-	ContextID   string      `json:"context_id"`
+	TopicID     string      `json:"topic_id"`
 	EventType   string      `json:"event_type,omitempty"`
 	NodePath    string      `json:"node_path,omitempty"`
 	CreatedAt   int64       `json:"created_at"`

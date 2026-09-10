@@ -47,7 +47,7 @@ func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, idx *index.L4In
 		Seq:         in.Seq,
 		ContentType: in.Type,
 		Role:        in.Role,
-		ContextID:   in.TopicID,
+		TopicID:     in.TopicID,
 		EventType:   in.EventType,
 		NodePath:    in.NodePath,
 		CreatedAt:   in.CreatedAt,
@@ -212,7 +212,7 @@ func matchesArchiveQuery(arc core.ArchiveSlot, q ArchiveQuery) bool {
 	if len(q.IDs) > 0 && !slices.Contains(q.IDs, arc.IDHash) {
 		return false
 	}
-	if q.TopicID != nil && arc.ContextID != *q.TopicID {
+	if q.TopicID != nil && arc.TopicID != *q.TopicID {
 		return false
 	}
 	if q.Kind != nil && arc.Kind != *q.Kind {

@@ -124,7 +124,7 @@ func dumpSceneContext(t *testing.T, db *DB, cfg *MemHopConfig, label string) {
 	// off the records themselves, since a topic lists none of them.
 	archived := make(map[uint64]int)
 	for _, arc := range core.CollectAllArchives(db.engine, core.DefaultAgentID) {
-		archived[arc.ContextID]++
+		archived[arc.TopicID]++
 	}
 	scenes, _ := repo.CollectAllScenesL2(db.engine, core.DefaultAgentID)
 	for _, s := range scenes {

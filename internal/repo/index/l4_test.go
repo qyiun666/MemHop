@@ -166,8 +166,8 @@ func TestBuildL4FromEngineIndexesBothKinds(t *testing.T) {
 
 	const topic = uint64(7)
 	for _, slot := range []core.ArchiveSlot{
-		{IDHash: core.HashContent(topic, core.SeqUser), Kind: core.KindUtterance, Seq: core.SeqUser, ContextID: topic, CreatedAt: 1000},
-		{IDHash: core.HashContent(topic, 3), Kind: core.KindEvent, Seq: 3, ContextID: topic, CreatedAt: 1100},
+		{IDHash: core.HashContent(topic, core.SeqUser), Kind: core.KindUtterance, Seq: core.SeqUser, TopicID: topic, CreatedAt: 1000},
+		{IDHash: core.HashContent(topic, 3), Kind: core.KindEvent, Seq: 3, TopicID: topic, CreatedAt: 1100},
 	} {
 		rec := slot
 		if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, rec.IDHash, &rec); err != nil {

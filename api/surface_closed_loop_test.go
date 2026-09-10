@@ -355,7 +355,7 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 		t.Fatalf("want %d events, got %d", seededEvents+1, len(evs))
 	}
 	// an event bound to a step reads back attributed to that step
-	if last := evs[len(evs)-1]; last.NodePath != "1.1" || last.ContextID != pid {
+	if last := evs[len(evs)-1]; last.NodePath != "1.1" || last.TopicID != pid {
 		t.Fatalf("event not attributed to its step: %+v", last)
 	}
 }

@@ -159,13 +159,13 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    路径/URL），未定义值以 `ErrInvalidQuery` 拒绝；`RoleDream` 是库给融合摘要
    自己盖的标记，公开常量里没有它、append 也拒它，否则宿主能伪造巩固产物。
    事件侧不接受这两项：`content.Append` 一律写 `Kind=event` + `ContentText` +
-   `Role=0`，宿主在事件上给的 `Role`/`ContentType`/`ContextID`/`IDHash`
+   `Role=0`，宿主在事件上给的 `Role`/`ContentType`/`TopicID`/`IDHash`
    一律不被采信（`TestAppendEventCannotForgeContentFields`）。
 6. **`UpdateScene` 是 `SceneName` 的唯一宿主写者**：场景记录只被 `OpenSceneTurn`
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
    后续读取覆盖；`scene.Create` 建新场景时才写默认名 `session:<id>`。
 7. **内容由 (话题, Seq) 寻址，枚举仍靠镜像**：一条内容的地址就是
-   `hash("l4:"+话题+":"+seq)`，`ContextID` 是它归属的话题；单条能推出来，
+   `hash("l4:"+话题+":"+seq)`，`TopicID` 是它归属的话题；单条能推出来，
    「这个话题一共有哪几条」推不出来，唯一的来源还是域内的 `ac.L4`——它是枚举
    手段，不是加速器。由此得出镜像纪律：任何删内容的路径都必须在**磁盘删
    成功后**同步摘镜像（`repo.DeleteTopicArchives` / `repo.DropExpiredArchives`

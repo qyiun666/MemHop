@@ -178,7 +178,7 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // plan tree sharing the key comes back from PlanState.
 //
 // What is stored is Kind, Seq, Role, ContentType, EventType, NodePath, Content and
-// CreatedAt; IDHash and ContextID are ignored, which is what makes the round trip
+// CreatedAt; IDHash and TopicID are ignored, which is what makes the round trip
 // work — read a record back, change one field, write it to the slot it came from.
 //
 // Seq 0 allocates: the record lands one slot above everything the topic holds, and

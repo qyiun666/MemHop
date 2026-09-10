@@ -185,7 +185,7 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 	}
 	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arcID, &core.ArchiveSlot{
 		IDHash: arcID, Kind: core.KindUtterance, Seq: core.SeqUser,
-		ContextID: parentID, Content: "原文", CreatedAt: 1500,
+		TopicID: parentID, Content: "原文", CreatedAt: 1500,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 	arcID := core.HashContent(t1.ID, core.SeqUser)
 	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arcID, &core.ArchiveSlot{
 		IDHash: arcID, Kind: core.KindUtterance, Seq: core.SeqUser,
-		ContextID: t1.ID, Content: "原文", CreatedAt: 1500,
+		TopicID: t1.ID, Content: "原文", CreatedAt: 1500,
 	}); err != nil {
 		t.Fatal(err)
 	}

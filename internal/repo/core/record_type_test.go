@@ -69,7 +69,7 @@ func TestContentAndPlanNodeDoNotReadAsEachOther(t *testing.T) {
 	const topic = uint64(9)
 	contentID := HashContent(topic, SeqUser)
 	if err := WriteArchiveSlot(engine, DefaultAgentID, contentID, &ArchiveSlot{
-		IDHash: contentID, Kind: KindUtterance, Seq: SeqUser, ContextID: topic, Content: "原文",
+		IDHash: contentID, Kind: KindUtterance, Seq: SeqUser, TopicID: topic, Content: "原文",
 	}); err != nil {
 		t.Fatal(err)
 	}

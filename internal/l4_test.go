@@ -19,7 +19,7 @@ func writeSlot(t *testing.T, engine *core.StorageEngine, topicID, seq uint64,
 	t.Helper()
 	arc := core.ArchiveSlot{
 		IDHash: core.HashContent(topicID, seq), Kind: kind, Seq: seq,
-		ContentType: ctype, ContextID: topicID, Content: content, CreatedAt: createdAt,
+		ContentType: ctype, TopicID: topicID, Content: content, CreatedAt: createdAt,
 	}
 	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arc.IDHash, &arc); err != nil {
 		t.Fatalf("write slot %d: %v", seq, err)
@@ -38,7 +38,7 @@ func TestSearchL4ByID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SearchL4 by id: %v", err)
 	}
-	if len(got) != 1 || got[0].Content != "hello" || got[0].ContextID != topicHash {
+	if len(got) != 1 || got[0].Content != "hello" || got[0].TopicID != topicHash {
 		t.Fatalf("unexpected archive: %+v", got)
 	}
 

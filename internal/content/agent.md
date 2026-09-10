@@ -18,7 +18,7 @@
   落盘/去重/激活全归宿主，本包没有结晶写步。
 - **字段归属**：`Kind` 决定采信哪一组。原文侧照收宿主的 `Role`/`ContentType`；
   事件侧 `Kind` 恒为 event、`ContentType` 恒为 text、`Role` 恒为 0——说了发生了什么
-  的东西没有说话者，也没有媒介。`IDHash` 与 `ContextID` 两侧都不采信：前者由
+  的东西没有说话者，也没有媒介。`IDHash` 与 `TopicID` 两侧都不采信：前者由
   (话题, Seq) 派生，后者就是调用键本身。宿主可伪装的只有被丢弃的字段，
   所以不必为它增设校验分支（`TestAppendEventCannotForgeContentFields` 钉住）。
   反过来，越界的轴是**拒**的：原文带 `EventType` 或 `NodePath`、或自称 `RoleDream`

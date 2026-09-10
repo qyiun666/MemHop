@@ -153,7 +153,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	// Update writes no content: the turn's records are the ones the host appended,
 	// and a keyword search finds them under the key Search issued.
 	hits, err := s.SearchL4(L4Query{Keyword: "session boot"})
-	if err != nil || len(hits) != 1 || hits[0].ContextID != topicID {
+	if err != nil || len(hits) != 1 || hits[0].TopicID != topicID {
 		t.Fatalf("settled turn content = %+v err=%v", hits, err)
 	}
 	if _, err := s.SearchL4(L4Query{Keyword: "session"}); err != nil {

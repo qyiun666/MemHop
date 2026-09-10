@@ -82,9 +82,9 @@ func TestCrystallizeReadsOneTurnTopic(t *testing.T) {
 		t.Fatalf("events = %d, want the turn's 2", len(events))
 	}
 	for _, ev := range events {
-		if ev.ContextID != turnA {
+		if ev.TopicID != turnA {
 			t.Fatalf("event seq %d must key to its turn topic %d, got session=%d",
-				ev.Seq, turnA, ev.ContextID)
+				ev.Seq, turnA, ev.TopicID)
 		}
 	}
 }

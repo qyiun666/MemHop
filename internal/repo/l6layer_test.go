@@ -58,7 +58,7 @@ func TestPlanNodeAndContentCoexistUnderOneTopic(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := core.WriteArchiveSlot(engine, agentID, contentID, &core.ArchiveSlot{
-		IDHash: contentID, Kind: core.KindEvent, Seq: 1, ContextID: 9, EventType: "llm_request",
+		IDHash: contentID, Kind: core.KindEvent, Seq: 1, TopicID: 9, EventType: "llm_request",
 	}); err != nil {
 		t.Fatal(err)
 	}
