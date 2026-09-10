@@ -95,7 +95,9 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 	turnID := openTurn(t, db, sceneID)
 	ts := time.Now().UnixMilli()
 
-	// An event logged mid-turn, bound to a step that does not exist yet.
+	// The step is planned first, then the event logged against it: a plan node is
+	// only ever created by a declaration.
+	mustDeclare(t, db, turnID, api.PlanStep{NodePath: "1.1", Status: "in_progress"})
 	if err := db.AppendArchive(turnID, api.ArchiveSlot{
 		Kind: api.KindEvent, EventType: "tool_call", NodePath: "1.1",
 		Content: `{"tool":"bash","cmd":"go test"}`, CreatedAt: ts,
