@@ -4,6 +4,7 @@
 package internal
 
 import (
+	"context"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -396,5 +397,55 @@ func TestUpdateSceneNameSurvivesLaterTurns(t *testing.T) {
 	// A patch that names no field is a no-op, not a rewrite.
 	if _, err := db.UpdateScene(core.DefaultAgentID, sceneHex, ScenePatch{}); err != nil {
 		t.Fatalf("empty patch: %v", err)
+	}
+}
+
+// The capability regression this layer accepts, proved end to end: once the
+// retention window passes, a topic keeps the keyword track Dream folded out of it
+// and its transcript comes back **empty, not failed** — an expired turn is a legal
+// end state, and a host has to be able to tell that apart from a read that lost a
+// line (which stays a hard ErrIO, see TestContextTopicIndexDriftIsAnError).
+func TestSceneContextAfterContentRetentionIsEmptyNotAnError(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+
+	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 2 {
+		t.Fatalf("a settled turn should own its two originals, got %d", len(owned))
+	}
+
+	// turnOf stamps 1000/2000 ms since the epoch, so both originals are already
+	// far outside any 7-day window: one Dream pass is the whole expiry path.
+	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
+		t.Fatalf("dream: %v", err)
+	}
+	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 0 {
+		t.Fatalf("expired content survived the sweep: %d record(s)", len(owned))
+	}
+
+	cctx, err := db.SceneContext(core.DefaultAgentID, common.FormatHash(sceneID))
+	if err != nil {
+		t.Fatalf("an expired transcript must not fail the read: %v", err)
+	}
+	var found *SceneContextTopic
+	for i := range cctx.Topics {
+		if cctx.Topics[i].TopicID == common.FormatHash(topicID) {
+			found = &cctx.Topics[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("the topic itself vanished from the scene context: %+v", cctx.Topics)
+	}
+	if len(found.Messages) != 0 {
+		t.Fatalf("swept content still rendered: %+v", found.Messages)
+	}
+	// The keyword track is the durable product, and it is what survives: without
+	// this the read would be indistinguishable from a scene that never had the
+	// turn at all.
+	if len(found.Keywords) == 0 {
+		t.Fatalf("the topic lost the one thing that outlives its content: %+v", found)
 	}
 }

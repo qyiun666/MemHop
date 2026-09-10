@@ -293,6 +293,11 @@ func TestSettledTurnKeepsEventsAppendedBeforeIt(t *testing.T) {
 	if len(owned) != 4 {
 		t.Fatalf("topic owns %d records, want 2 originals + 2 events", len(owned))
 	}
+	// archivesOfTopic is a deliberate index-free record scan, so it yields map
+	// order: what this pins is **which slots exist**, not the order they come back
+	// in. Read-path ordering is the index's contract and is pinned where it is
+	// actually owed — TestQueryArchivesL4OrdersBySeqNotTimestamp (repo) and
+	// TestSceneContextTopicOrdersBySeqNotWriteOrder (scene).
 	var utterances, eventSeqs []uint64
 	for _, arc := range owned {
 		if arc.Kind == core.KindEvent {
@@ -301,6 +306,8 @@ func TestSettledTurnKeepsEventsAppendedBeforeIt(t *testing.T) {
 		}
 		utterances = append(utterances, arc.Seq)
 	}
+	slices.Sort(utterances)
+	slices.Sort(eventSeqs)
 	if len(utterances) != 2 || utterances[0] != core.SeqUser || utterances[1] != core.SeqAgent {
 		t.Fatalf("originals must hold Seq 1 and 2: %v", utterances)
 	}
