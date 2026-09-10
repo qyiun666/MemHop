@@ -7,7 +7,7 @@
 
 - `engram/`：L1 场景超图的共现建边（Jaccard）与遗忘衰减
   （`BuildHyperedges`/`DecayNetwork`/`RebuildFromL2`）。
-- `llmops/`：轮次关键词提炼（`ExtractTurnKeywords`，宿主热路径每轮恰好一次）/L2 巩固/L1→L0 蒸馏/轮内事件纯提炼（`Crystallize`，出参即候选列表，候选原样返回宿主、不落库）四类 LLM 调用点；
+- `llmops/`：关键词提炼（`ExtractKeywords`，一段文本进、一串关键词出——`Update` 每轮拿渲染好的转录喂它恰好一次，Dream 的 L2 融合拿摘要喂它）/L1→L0 蒸馏/轮内事件纯提炼（`Crystallize`，出参即候选列表，候选原样返回宿主、不落库）三类 LLM 调用点；
   prompt 契约 + 输出解析 + 自愈重试预算全在此，传输经注入的
   `Chat` 接口（组合根 Provider 实现）。
 - `capability/`：memhop-capability/v4 文档类型（`CapabilityImport`/`CapabilityPackageDoc`/`ResourceRef`）、

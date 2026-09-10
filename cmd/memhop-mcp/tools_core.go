@@ -19,20 +19,8 @@ type searchArgs struct {
 }
 
 type updateArgs struct {
-	SceneID   string `json:"scene_id"`
-	TopicID   string `json:"topic_id"`
-	UserText  string `json:"user_text"`
-	UserTS    int64  `json:"user_ts"`
-	UserType  string `json:"user_type,omitempty"`
-	AgentText string `json:"agent_text"`
-	AgentTS   int64  `json:"agent_ts"`
-	AgentType string `json:"agent_type,omitempty"`
-}
-
-// turnResult reports the topic one finished turn settled into.
-type turnResult struct {
-	OK      bool   `json:"ok"`
-	TopicID string `json:"topic_id,omitempty"`
+	SceneID string `json:"scene_id"`
+	TopicID string `json:"topic_id"`
 }
 
 type dreamArgs struct {
@@ -81,37 +69,13 @@ func registerSearchTool(s *mcp.Server, db *memhop.Session) {
 func registerUpdateTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_update",
-		Description: "沉淀一整轮对话：把用户原文与 agent 原文各写为 L4 档案，并用一次提炼产出该轮话题的关键词。topic_id 用 memhop_search 返回的 new_topic_id（一轮一个话题）；scene_id 必须是已存在场景。同一 topic_id 重复沉淀是覆盖而不是新增，所以超时后可安全重试。user_type/agent_type 声明该侧内容的类型（text/image/video/document/audio/code/other，缺省 text），非文本侧把媒体路径或 URL 写在对应 text 字段里，关键词仍从该字段提炼。返回该话题的 topic_id（16 位 hex）。",
+		Description: "为本轮收口：把该轮话题已存下的内容（由 memhop_archive_append 逐条写入）用一次提炼写成该话题的关键词。本工具不写内容、不返回 id；topic_id 用 memhop_search 返回的 new_topic_id（一轮一个话题），scene_id 必须是已存在场景。同一 topic_id 重复收口只是重新提炼它当前的内容，所以超时后可安全重试。该轮内容已被 7 天保留窗裁光时直接拒绝（ErrInvalidQuery）且不发起任何 LLM 调用。",
 		InputSchema: objSchema(map[string]any{
-			"scene_id":   strProp("场景 ID（16 位 hex），必填，须已存在"),
-			"topic_id":   strProp("本轮话题 ID（16 位 hex），必填，取自 memhop_search 的 new_topic_id"),
-			"user_text":  strProp("用户原文（非文本时填媒体路径/URL），必填"),
-			"user_ts":    intProp("用户消息 Unix 毫秒时间戳，必填"),
-			"user_type":  strProp("用户侧内容类型（可选）：text | image | video | document | audio | code | other，缺省 text"),
-			"agent_text": strProp("agent 回复原文（非文本时填媒体路径/URL），必填"),
-			"agent_ts":   intProp("agent 回复 Unix 毫秒时间戳，必填"),
-			"agent_type": strProp("agent 侧内容类型（可选）：text | image | video | document | audio | code | other，缺省 text"),
-		}, "scene_id", "topic_id", "user_text", "user_ts", "agent_text", "agent_ts"),
-	}, handle[updateArgs, turnResult](func(a updateArgs) (turnResult, error) {
-		userType, err := resolveContentType(a.UserType)
-		if err != nil {
-			return turnResult{}, err
-		}
-		agentType, err := resolveContentType(a.AgentType)
-		if err != nil {
-			return turnResult{}, err
-		}
-		topicID, err := db.Update(memhop.TurnUpdate{
-			SceneID:   a.SceneID,
-			TopicID:   a.TopicID,
-			UserText:  a.UserText,
-			UserTS:    a.UserTS,
-			UserType:  userType,
-			AgentText: a.AgentText,
-			AgentTS:   a.AgentTS,
-			AgentType: agentType,
-		})
-		return turnResult{OK: err == nil, TopicID: topicID}, err
+			"scene_id": strProp("场景 ID（16 位 hex），必填，须已存在"),
+			"topic_id": strProp("本轮话题 ID（16 位 hex），必填，取自 memhop_search 的 new_topic_id"),
+		}, "scene_id", "topic_id"),
+	}, handle[updateArgs, updateResult](func(a updateArgs) (updateResult, error) {
+		return updateResult{OK: true}, db.Update(a.SceneID, a.TopicID)
 	}))
 }
 

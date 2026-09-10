@@ -130,11 +130,9 @@ func TestKeywordFidelity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenTurn %d: %v", i, err)
 		}
-		topicID, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, TopicID: turnID, UserText: c[0], UserTS: ts, AgentText: c[1], AgentTS: ts + 500,
-		})
-		if err != nil {
-			t.Fatalf("Update: %v", err)
+		topicID := turnID
+		if err := db.SettleTurn(sceneID, turnID, c[0], c[1], ts); err != nil {
+			t.Fatalf("settle turn: %v", err)
 		}
 		res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 		if err != nil {
@@ -174,11 +172,8 @@ func TestKeywordPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenTurn: %v", err)
 	}
-	if _, err := db.Update(memhop.TurnUpdate{
-		SceneID: sceneID, TopicID: anchorTurn, UserText: "我的狗叫旺财，是一只金毛，今年五岁了", UserTS: base,
-		AgentText: "旺财这个名字很顺口", AgentTS: base + 500,
-	}); err != nil {
-		t.Fatalf("anchor Update: %v", err)
+	if err := db.SettleTurn(sceneID, anchorTurn, "我的狗叫旺财，是一只金毛，今年五岁了", "旺财这个名字很顺口", base); err != nil {
+		t.Fatalf("anchor turn: %v", err)
 	}
 
 	noise := []string{
@@ -193,11 +188,8 @@ func TestKeywordPersistence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("noise OpenTurn %d: %v", i, err)
 		}
-		if _, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, TopicID: turnID, UserText: ntext, UserTS: ts,
-			AgentText: "好的，记下了", AgentTS: ts + 500,
-		}); err != nil {
-			t.Fatalf("noise Update: %v", err)
+		if err := db.SettleTurn(sceneID, turnID, ntext, "好的，记下了", ts); err != nil {
+			t.Fatalf("noise turn: %v", err)
 		}
 	}
 
@@ -230,11 +222,8 @@ func ingestSession(t *testing.T, db *testsupport.Handle, texts []string, base in
 		if err != nil {
 			t.Fatalf("OpenTurn[%d]: %v", i, err)
 		}
-		if _, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, TopicID: turnID, UserText: text, UserTS: ts,
-			AgentText: "好的，我记下了。", AgentTS: ts + 500,
-		}); err != nil {
-			t.Fatalf("ingest Update[%d]: %v", i, err)
+		if err := db.SettleTurn(sceneID, turnID, text, "好的，我记下了。", ts); err != nil {
+			t.Fatalf("ingest turn %d: %v", i, err)
 		}
 	}
 	return sceneID

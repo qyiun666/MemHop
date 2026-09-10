@@ -120,7 +120,7 @@ func TestHandlePropagatesError(t *testing.T) {
 	h := handle[updateArgs, updateResult](func(a updateArgs) (updateResult, error) {
 		return updateResult{}, sentinel
 	})
-	out, isErr := call(t, h, `{"scene_id":"a1b2c3d4e5f67890","user_text":"u","user_ts":1,"agent_text":"a","agent_ts":2}`)
+	out, isErr := call(t, h, `{"scene_id":"a1b2c3d4e5f67890","topic_id":"0000000000000001"}`)
 	if !isErr {
 		t.Fatal("expected error result")
 	}

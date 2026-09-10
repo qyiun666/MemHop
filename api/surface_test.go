@@ -192,7 +192,7 @@ func TestSurfaceClosedContract(t *testing.T) {
 	if _, err := db.Search(SearchQuery{}); CodeOf(err) != ErrClosed {
 		t.Fatalf("Search after close: want ErrClosed, got %v", err)
 	}
-	if _, err := db.Update(TurnUpdate{SceneID: "0000000000000001", UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2}); CodeOf(err) != ErrClosed {
+	if err := db.Update("0000000000000001", "0000000000000002"); CodeOf(err) != ErrClosed {
 		t.Fatalf("Update after close: want ErrClosed, got %v", err)
 	}
 	// Double close is rejected with ErrClosed, not a panic.

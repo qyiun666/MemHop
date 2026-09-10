@@ -89,11 +89,8 @@ func TestCoreCycleUpdateDream(t *testing.T) {
 		if err != nil {
 			t.Fatalf("open turn %d: %v", i, err)
 		}
-		if _, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, TopicID: turnID, UserText: f, UserTS: ts,
-			AgentText: "Agent: 明白了，已记录。", AgentTS: ts + 500,
-		}); err != nil {
-			t.Fatalf("update ingest %d: %v", i, err)
+		if err := db.SettleTurn(sceneID, turnID, f, "Agent: 明白了，已记录。", ts); err != nil {
+			t.Fatalf("turn ingest %d: %v", i, err)
 		}
 		if (i+1)%8 == 0 {
 			if _, err := db.GetL0(); err != nil {

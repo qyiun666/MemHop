@@ -73,14 +73,6 @@ func ExtractKeywords(ctx context.Context, chat Chat, text string) ([]string, err
 	return extractKeywordsWithRetry(ctx, chat, trimmed)
 }
 
-// ExtractTurnKeywords distills one finished turn into the single keyword
-// track of its topic. The speaker labels matter: without them the two sides
-// of an exchange collapse into one undifferentiated text and the extraction
-// loses who asserted what.
-func ExtractTurnKeywords(ctx context.Context, chat Chat, userText, agentText string) ([]string, error) {
-	return ExtractKeywords(ctx, chat, "User: "+userText+"\nAssistant: "+agentText)
-}
-
 // extractOne runs the full attempt ladder for one prompt: escalating token
 // budgets (a reasoning model can spend the first budget on reasoning and
 // truncate the reply), then one format-constrained retry that restates the

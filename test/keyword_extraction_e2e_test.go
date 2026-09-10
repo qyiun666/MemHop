@@ -94,11 +94,7 @@ func TestUpdateLongTurnSettles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OpenTurn %d: %v", i, err)
 		}
-		topicID, err := db.Update(memhop.TurnUpdate{
-			SceneID: sceneID, TopicID: turnID, UserText: text, UserTS: ts,
-			AgentText: "已了解这段长对话", AgentTS: ts + 500,
-		})
-		if err != nil {
+		if err := db.SettleTurn(sceneID, turnID, text, "已了解这段长对话", ts); err != nil {
 			// Failing loudly is allowed; settling a degraded turn is not.
 			res, rerr := db.Search(memhop.SearchQuery{SceneID: sceneID})
 			if rerr != nil {
@@ -109,9 +105,6 @@ func TestUpdateLongTurnSettles(t *testing.T) {
 			}
 			t.Logf("attempt %d: Update refused without degrading the turn: %v", i, err)
 			continue
-		}
-		if topicID == "" {
-			t.Fatalf("attempt %d: no topic created", i)
 		}
 	}
 	res, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
@@ -132,17 +125,17 @@ func TestUpdateLongTurnSettles(t *testing.T) {
 	}
 }
 
-// TestExtractTurnKeywordsLongInput pins the capability contract directly: a
-// long turn pair must never surface an error, and must yield keywords.
-func TestExtractTurnKeywordsLongInput(t *testing.T) {
+// TestExtractKeywordsLongInput pins the capability contract directly: a long
+// rendered transcript must never surface an error, and must yield keywords.
+func TestExtractKeywordsLongInput(t *testing.T) {
 	cfg := &internal.MemHopConfig{}
 	if err := testsupport.LoadLLMConfig(cfg); err != nil {
 		t.Skipf("LLM not configured: %v", err)
 	}
 	p := llm.New(cfg)
-	kw, err := llmops.ExtractTurnKeywords(context.Background(), p, longSessionText(t, 2), "收到")
+	kw, err := llmops.ExtractKeywords(context.Background(), p, "User: "+longSessionText(t, 2)+"\nAssistant: 收到")
 	if err != nil {
-		t.Fatalf("ExtractTurnKeywords: %v", err)
+		t.Fatalf("ExtractKeywords: %v", err)
 	}
 	if len(kw) == 0 {
 		t.Fatal("long turn distilled to nothing")

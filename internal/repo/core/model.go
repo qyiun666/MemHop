@@ -170,9 +170,11 @@ type HypergraphEdge struct {
 	CreatedAt int64         `json:"created_at"`
 }
 
-// Message roles in an ArchiveSlot. Update writes RoleUser / RoleAgent and Dream
-// writes RoleDream; RoleSystem has no writer in the engine and stays off the
-// public constants. Role qualifies an utterance — an event record leaves it 0.
+// Message roles in an ArchiveSlot. A host declaring an utterance picks one of
+// RoleUser / RoleAgent / RoleSystem; the append boundary refuses RoleDream, which
+// is the library's own stamp on a fused group's summary and stays off the public
+// constants, so a host cannot write a record that reads as consolidated. Role
+// qualifies an utterance — an event record leaves it 0.
 const (
 	RoleUser   uint8 = 0
 	RoleAgent  uint8 = 1
@@ -180,10 +182,11 @@ const (
 	RoleDream  uint8 = 3
 )
 
-// Utterances hold Seq 1 and 2 of their topic. A host appends events while the
-// turn runs and settles the turn afterwards, so event allocation starts above
-// these two slots: otherwise the first event lands where the user's text will
-// go and the settle silently overwrites it.
+// Utterances hold Seq 1 and 2 of their topic. Auto-allocation starts above these
+// two slots: a host records events while the turn runs and appends the originals
+// whenever it chooses, and the dialogue still lands on the slots a reader looks
+// for them on. Naming a reserved Seq explicitly writes that slot, overwriting
+// whatever kind holds it.
 const (
 	SeqUser  uint64 = 1
 	SeqAgent uint64 = 2

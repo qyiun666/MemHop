@@ -366,7 +366,8 @@ func TestUpdateSceneNameSurvivesLaterTurns(t *testing.T) {
 		t.Fatalf("open scene: %v", err)
 	}
 	sceneHex := common.FormatHash(res.Scene.SceneID)
-	if _, err := db.Update(core.DefaultAgentID, turnOf(res.Scene.SceneID, res.NewTopicID)); err != nil {
+	appendTurn(t, db, res.NewTopicID, 1000)
+	if err := settle(db, res.Scene.SceneID, res.NewTopicID); err != nil {
 		t.Fatalf("settle turn: %v", err)
 	}
 	title := "rust 学习"
@@ -410,15 +411,17 @@ func TestSceneContextAfterContentRetentionIsEmptyNotAnError(t *testing.T) {
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
 
-	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+	appendTurn(t, db, topicID, 1000)
+	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 2 {
 		t.Fatalf("a settled turn should own its two originals, got %d", len(owned))
 	}
 
-	// turnOf stamps 1000/2000 ms since the epoch, so both originals are already
-	// far outside any 7-day window: one Dream pass is the whole expiry path.
+	// The appended originals sit at 1000/2000 ms since the epoch, so they are
+	// already far outside any 7-day window: one Dream pass is the whole expiry
+	// path.
 	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
 		t.Fatalf("dream: %v", err)
 	}

@@ -21,7 +21,7 @@ func TestSurfaceL2Scenes(t *testing.T) {
 		t.Fatalf("search scene two: %v", err)
 	}
 	// A scene with content, so the context view has something to render.
-	if _, err := db.Update(turnUpdate(first.Scene.SceneID, first.NewTopicID, "scene one topic", "noted")); err != nil {
+	if err := settleTurn(db, first.Scene.SceneID, first.NewTopicID, "scene one topic", "noted"); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 

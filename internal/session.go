@@ -41,10 +41,10 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	return s.db.Search(s.agentID, q)
 }
 
-// Update settles one finished turn into the topic id Search issued for it and
-// returns that id.
-func (s *Session) Update(in TurnUpdate) (uint64, error) {
-	return s.db.Update(s.agentID, in)
+// Update distills the content this turn appended under topicID into that
+// topic's keyword track; sceneID names the scene Search read.
+func (s *Session) Update(sceneID, topicID string) error {
+	return s.db.Update(s.agentID, sceneID, topicID)
 }
 
 // ---- Dream ----
@@ -158,25 +158,21 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return s.db.SearchL4(s.agentID, q)
 }
 
-// ---- L6 trajectory ----
-
-// AppendTrajectory appends one event under the topic id of the turn Search
-// issued: a bare turn event with an empty nodePath, or one bound to a plan
-// node — created when missing — with that node's nodePath.
-func (s *Session) AppendTrajectory(topicID, nodePath string, ev ArchiveSlot) error {
-	return s.db.AppendTrajectory(s.agentID, topicID, nodePath, ev)
+// AppendArchive writes one piece of content — a dialogue original or an
+// operation event — under the topic id Search issued for this turn. Seq 0 lets the
+// library allocate the slot; a non-empty NodePath on an event hangs it on that plan
+// step, creating the step as pending when missing. Nothing is written when this
+// call returns an error, including no node created along NodePath.
+func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
+	return s.db.AppendArchive(s.agentID, topicID, slot)
 }
 
-// ReadTrajectory returns one turn's event records in Seq order; turnID is the
-// topic id Search minted for it.
-func (s *Session) ReadTrajectory(turnID string) ([]ArchiveSlot, error) {
-	return s.db.ReadTrajectory(s.agentID, turnID)
-}
+// ---- L6 trajectory & plan ----
 
-// ListTrajectorySessions summarizes every turn of the domain's L6 log with its
-// step count and last-append time; the returned hex ids feed ReadTrajectory /
-// Crystallize directly. Records older than the retention window are dropped by
-// Dream automatically.
+// ListTrajectorySessions enumerates the turns of this domain that hold events,
+// each with its event count and last-append time; the returned hex ids feed
+// AppendArchive / Crystallize directly. Records older than the retention window
+// are dropped by Dream automatically.
 func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 	return s.db.ListTrajectorySessions(s.agentID)
 }

@@ -31,11 +31,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 |---|---|
 | `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
 | `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/PruneParentChild/DeleteTopics |
-| `turn` | 轮次沉淀：Targets 校验、SettleTarget（可沉淀的轮次范围）、WriteArchives（一轮两条原文占该话题的 Seq 1/2）、ReadProfile |
+| `turn` | 轮次归属：Targets（解析 Update 的两个 hex 入参）、SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l6_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage、usage feedback；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
 | `plan` | L6 计划树机制（一棵树归属于打开它的轮次；L6 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、SplitNodePath、EnsureNode/CommitNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
-| `content` | 话题内容与键：ParseTopicID（键的解析与拒零，读写两侧共用）、ValidateEvent、AppendEvent（事件追加的唯一实现，分配跨 Kind 的 Seq）、ReadEvents、TrimByBudget、MaxEventPayload/MaxCrystallizePayload |
+| `content` | 话题内容与键：ParseTopicID（键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append（写一条内容的唯一实现，必要时跨 Kind 分配 Seq）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、TrimByBudget、MaxEventPayload/MaxUtterancePayload/MaxCrystallizePayload |
 
 ## agentContext（domain.Context）域级锁纪律
 
@@ -46,8 +46,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `ErrAgentNotFound`，域永不复活；与删除对撞的陈旧句柄由锁内墓碑复检拒绝。
    L6 族统一走 `db.lockSession(agentID, turnID)`（lockAgent +
    `content.ParseTopicID`，解析失败先解锁）：一个话题键同时寻址两样东西——
-   它的事件轨（L4 的 `Kind=event`）与它开出的计划树（L6 节点），
-   `ReadTrajectory(topic)` 给事件、`PlanState(topic)` 给树。
+   它的内容（L4 的原文与事件，`SearchL4{TopicID, Kind}` 按 Kind 取）与它开出的
+   计划树（L6 节点，`PlanState(topic)` 给树）。
    门面侧的会话准入策略在 `CheckSession`。L3 的方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
    保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent
@@ -81,9 +81,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    漏摘 `Plans` 与漏摘 `L4` 的代价不对称：后者让该话题每次读都报 `ErrIO`
    直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
 7. **L6 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
-   合法的 L6 键。读写两侧一律经 `trajectory.ParseTopicID` 拒它
-   （`AppendTrajectory`/`ReadTrajectory`/`PlanCommit`/`PlanState`/
-   `Crystallize`）——只在写侧拒，全零键下就会攒出永远读不出的记录。
+   合法的 L6 键。读写两侧一律经 `content.ParseTopicID` 拒它
+   （`AppendArchive`/`PlanCommit`/`PlanState`/`Crystallize`）——只在写侧拒，
+   全零键下就会攒出永远读不出的记录。
 8. **计划清理有界**：dream 的 `l6_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有节点活动」的计划，其中活动只看节点自己的 `UpdatedAt`；宿主中断或放弃而
    静默超 `ContentRetention` 的计划照常清理。豁免保住的是**整棵活树**（含早已
@@ -134,15 +134,16 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    计数，写失败即报错——轮次号是铸 ID 的依据，不能吞），话题从 `ac.L2Meta`
    取 depth-1；`Scene.TopicCount` 用这批话题现算（该字段不落盘）。开了没
    沉淀的轮次不留任何残渣，读两次只沉淀一次就是跳号。
-3. **`Update` 每轮一次提炼且排在写入前**：`ExtractTurnKeywords` 失败或空
-   结果直接报错，此时话题/内容/L2Meta 一个字都没动。话题 ID 由宿主从
-   `Search` 原样带回（`TopicID`，`0`/非 hex 拒绝），两条原文的档案 ID 由
-   `(topic, seq)` 派生且 seq 固定（用户 1、回复 2），故同 `TopicID` 重放就是
-   **原地覆写**：不需要先枚举该话题拥有过什么，也不需要在落完新档案后给没被
-   重写的那些打墓碑——那套差分连同它的「第二份清单」一起没了。
-   覆写的边界也要说清：本轮没写到的槽位（例如重放时少给了一条）不会被回收，
-   库不追踪「本轮写了哪几条」，所以改写文本的重放可能让一句已撤回的回复继续
-   出现在转录里，直到话题被删或过保留窗。轮内过程走同一话题的 L4 事件轨。
+3. **`Update` 每轮一次提炼，且排在话题写入前**：它读该话题已有的
+   `Kind=utterance` 记录（几种都行，一轮不再恒两条），渲染成带说话者标签的转录
+   交 `llmops.ExtractKeywords`；提炼失败或空结果直接报错，此时话题与 L2Meta
+   一个字都没动，而**宿主先前 append 的内容原样留着**——Update 不拥有它，
+   失败回滚它就要把「本轮写了哪几条」再记一份。一条内容都没读到
+   （被保留窗裁光）时以 `ErrInvalidQuery` 拒绝且**不碰 LLM**：给一个说不出
+   话的轮次写空关键词轨，读回来像是真提炼过。
+   覆写的边界在 append 这一侧：写一个已被占用的 Seq 是原地覆写而非报错，
+   本轮没写到的槽位也不会被回收，所以改一轮的文本可能让一句已撤回的回复继续
+   出现在转录里，直到话题被删或过保留窗（这条写进 `AppendArchive` 的门面注释）。
    `turn.SettleTarget` 另外钉住可沉淀的范围：`TopicID` 必须是
    `hash("turn:" + 场景:k)` 且 `k <= 场景.TurnSeq`，即该场景真开出过的某一轮
    ——写 Dream 融合节点（同 depth、同场景，但由时间戳派生）、跨场景 id、宿主
@@ -154,24 +155,25 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    失败都回滚本组已写的记录（`dream.discardFusedGroup` 按父话题键整删它名下的
    内容与缓存，不需要携带任何 id 才能撤销一次写）——要么整体生效，
    要么不留孤儿记录 / 半成品父节点。
-5. **L4 内容类型只在 `Update` 声明并在其边界校验**：两侧原文按
-   `TurnUpdate.UserType` / `AgentType` 落类型（零值 `ContentText`，非文本
-   侧存路径/URL），未定义值以 `ErrInvalidQuery` 拒绝，Dream 的融合摘要恒为
-   `text`。事件不参与这条声明：`content.AppendEvent` 一律写 `Kind=event` +
-   `ContentText`，宿主在事件上给的 `Kind`/`Role`/`ContentType`/`Seq`/
-   `ContextID` 全部不被采信（`TestAppendEventCannotForgeContentFields`）。
+5. **内容类型与说话者在 `AppendArchive` 逐条声明并在其边界校验**：原文侧照收
+   `Role`（user/agent/system）与 `ContentType`（零值 `ContentText`，非文本侧存
+   路径/URL），未定义值以 `ErrInvalidQuery` 拒绝；`RoleDream` 是库给融合摘要
+   自己盖的标记，公开常量里没有它、append 也拒它，否则宿主能伪造巩固产物。
+   事件侧不接受这两项：`content.Append` 一律写 `Kind=event` + `ContentText` +
+   `Role=0`，宿主在事件上给的 `Role`/`ContentType`/`ContextID`/`IDHash`
+   一律不被采信（`TestAppendEventCannotForgeContentFields`）。
 6. **`UpdateScene` 是 `SceneName` 的唯一宿主写者**：场景记录只被 `OpenSceneTurn`
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
    后续读取覆盖；`scene.Create` 建新场景时才写默认名 `session:<id>`。
 7. **内容由 (话题, Seq) 寻址，枚举仍靠镜像**：一条内容的地址就是
    `hash("l4:"+话题+":"+seq)`，`ContextID` 是它归属的话题；单条能推出来，
    「这个话题一共有哪几条」推不出来，唯一的来源还是域内的 `ac.L4`——它是枚举
-   手段，不是加速器。由此得出老那条镜像纪律：任何删内容的路径都必须在**磁盘删
+   手段，不是加速器。由此得出镜像纪律：任何删内容的路径都必须在**磁盘删
    成功后**同步摘镜像（`repo.DeleteTopicArchives` / `repo.DropExpiredArchives`
    已内置这一步），漏一处就让该话题之后每次读都撞「索引点名已不存在的记录」而
    硬 `ErrIO`；索引在 `domain.NewContext` 从记录重建，故重启自愈、运行期不
-   自愈。读回顺序只看 `Seq`：沉淀把用户说的钉在 1、回复钉在 2，所以「问在前、
-   答在后」由写入侧构造保证，不需要时间戳、更不需要拿 `Role` 打平（事件的
+   自愈。读回顺序只看 `Seq`：按惯例用户说的占 1、回复占 2，所以「问在前、
+   答在后」由写入侧选的槽位保证，不需要时间戳、更不需要拿 `Role` 打平（事件的
    `Role` 未设即 0，正是 `RoleUser`，一旦混进对话读法就会把一次工具调用显示成
    用户发言）。`SceneMessage.Seq` 因此是**契约字段**：空洞就是被保留窗裁过的
    证据，宿主据此把「裁掉了」与「没说过」分开。
@@ -192,20 +194,17 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁——代价是「删图后、
    清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成
    未锚定，可经 `UpdateScene` 重挂。
-10. **事件写入的字段归属**：事件追加只有 `content.AppendEvent` 一处实现，
-   `AppendTrajectory` 的裸事件分支与 `PlanCommit` 的步进事件都走它，因此
-   `Kind`/`ContentType` 恒为 event/text，`Seq` 与话题 id 由它赋值，
-   `NodePath` 取调用参数而不是采信宿主传值（伪造的 `Seq=1`、`Role=Dream`、
-   `ContextID=别人的话题` 都落不了地）。`Content` 超 `content.MaxEventPayload`
-   即拒绝（不截断：截短的事件读起来和完整的一样）。
-   `Seq` 是**话题内跨 Kind 共享的单一空间**：下限取 `max(话题现有 Seq, 2)+1`，
-   因为宿主先记事件、后 `Update` 沉淀，而沉淀固定写 1/2——不设这个下限，第一条
-   事件会被用户原文原地覆掉（`TestSettledTurnKeepsEventsAppendedBeforeIt`）。
+10. **一次内容写入，两个入口**：`content.Append` 是唯一写路径，
+   `AppendArchive`（对话原文与裸事件，`NodePath` 就写在记录上）与 `PlanCommit`
+   （步进事件，`NodePath` 取调用参数并强制 `Kind=event`）都走它。
+   `content.ValidateAppend` 是唯一的校验点，且**排在 `plan.EnsureNode` 之前**——
+   被拒的写入不留下它顺路建出的节点链。两种 Kind 各自的字段归属、
+   4 KiB/64 KiB 预算与跨 Kind 的 Seq 覆写语义记在
+   `internal/content/agent.md` 与门面注释里，根不复述。
    `EventType` 是宿主自定的步骤名，计划绑定事件与裸事件同口径：引擎从不按它
-   分支（只有 `ReadTrajectory` 原样回显与结晶 prompt 的一行格式化），唯一约束是
-   非空，校验点只有 `content.ValidateEvent` 一处。
-   事件只按话题键整体寻址：公开面上没有任何调用接受单条事件 id，所以写入不返回
-   句柄（加了就是一桩没人消费的新契约）。
+   分支（只有读回时原样回显与结晶 prompt 的一行格式化），唯一约束是非空。
+   内容只按话题键整体寻址：公开面上没有任何调用接受单条记录的 id 去写，
+   所以写入不返回句柄（加了就是一桩没人消费的新契约）。
 11. **`MultiAgentDB.CompactTo`**：core 的 `Compact` 用 `Create`（带
    `O_TRUNC`）在新路径写整理副本，故根层先拒空路径、拒当前库文件
    （`sameFile` 走绝对路径归一）与拒已存在的目标，绝不覆盖任何既有文件。
@@ -234,6 +233,6 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 `internal/repo/agent.md` 中受影响的条目；在小方法包里改动契约时，同步该包
 自己的 `agent.md`。
 
-- 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（`Update` 那一轮不写），`internal` 根不初始化任何分词器。
+- 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（这一轮不产生话题），`internal` 根不初始化任何分词器。一轮的提炼与 Dream 的融合提炼共用 `llmops.ExtractKeywords`——它只吃一段文本，不认识记录结构。
 - `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），拒批即一字节不写；`result.Errors` 只表示单条存储失败。
-- 宿主面测试覆盖 26 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 一轮一键的树、Model A 折叠与节点字段回读、轨迹键与纯提炼、重开后读回）、`api_interface_l5l6_test.go`（轨迹与纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。
+- 宿主面测试覆盖 25 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 一轮一键的树、Model A 折叠与节点字段回读、事件键与纯提炼、重开后读回）、`api_interface_l5l6_test.go`（一轮一键下原文与事件各归各的读法、纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

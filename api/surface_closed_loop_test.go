@@ -291,7 +291,7 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 	}
 	for i, s := range seed {
 		if err := sess.PlanCommit(pid, s.path,
-			TrajectorySlot{EventType: "plan_step", Timestamp: int64(100 + i)},
+			event("plan_step", "committed", int64(100+i)),
 			PlanStep{Title: s.title, Type: "task", Status: s.status}); err != nil {
 			t.Fatalf("commit seed %s: %v", s.path, err)
 		}
@@ -308,23 +308,23 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 
 	rejected := []struct {
 		name string
-		ev   TrajectorySlot
+		ev   ArchiveSlot
 		step PlanStep
 		want Code
 	}{
-		{"no timestamp", TrajectorySlot{EventType: "plan_step"},
+		{"no timestamp", ArchiveSlot{Kind: KindEvent, EventType: "plan_step", Content: "c"},
 			PlanStep{Status: "done", Summary: "should-not-stick"}, ErrInvalidQuery},
-		{"no event type", TrajectorySlot{Timestamp: 7},
+		{"no event type", ArchiveSlot{Kind: KindEvent, Content: "c", CreatedAt: 7},
 			PlanStep{Status: "done", Summary: "should-not-stick"}, ErrInvalidQuery},
-		{"payload over budget", TrajectorySlot{EventType: "plan_step", Timestamp: 7,
-			Payload: strings.Repeat("x", 5*1024)}, PlanStep{Status: "done"}, ErrInvalidQuery},
-		{"unknown status", TrajectorySlot{EventType: "plan_step", Timestamp: 7},
+		{"payload over budget", ArchiveSlot{Kind: KindEvent, EventType: "plan_step",
+			Content: strings.Repeat("x", 5*1024), CreatedAt: 7}, PlanStep{Status: "done"}, ErrInvalidQuery},
+		{"unknown status", event("plan_step", "c", 7),
 			PlanStep{Status: "finished", Summary: "越权摘要"}, ErrInvalidQuery},
 		// Status has no blank meaning (unlike Title/Type/Summary): a commit that
 		// omits it is refused rather than silently read as "leave it pending".
-		{"blank status", TrajectorySlot{EventType: "plan_step", Timestamp: 7},
+		{"blank status", event("plan_step", "c", 7),
 			PlanStep{Summary: "s"}, ErrInvalidQuery},
-		{"blank event", TrajectorySlot{}, PlanStep{Status: "done"}, ErrInvalidQuery},
+		{"blank event", ArchiveSlot{}, PlanStep{Status: "done"}, ErrInvalidQuery},
 	}
 	for _, tc := range rejected {
 		if err := sess.PlanCommit(pid, "1.1", tc.ev, tc.step); CodeOf(err) != tc.want {
@@ -338,47 +338,57 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 			t.Fatalf("%s: a refused commit moved the tree\n before %s\n after  %s",
 				tc.name, render(before.Roots), render(after.Roots))
 		}
-		if evs, err := sess.ReadTrajectory(pid); err != nil || len(evs) != seededEvents {
-			t.Fatalf("%s: a refused commit stored %d events (err=%v)", tc.name, len(evs), err)
+		if evs := eventsOf(t, sess, pid); len(evs) != seededEvents {
+			t.Fatalf("%s: a refused commit stored %d events", tc.name, len(evs))
 		}
 	}
 
-	if err := sess.PlanCommit(pid, "1.1", TrajectorySlot{EventType: "plan_step", Timestamp: 7}, PlanStep{Status: "done", Summary: "leaf done"}); err != nil {
+	if err := sess.PlanCommit(pid, "1.1", event("plan_step", "leaf", 7), PlanStep{Status: "done", Summary: "leaf done"}); err != nil {
 		t.Fatalf("valid commit: %v", err)
 	}
 	after, _ := sess.PlanState(pid)
 	if after.DoneCount != before.DoneCount+1 {
 		t.Fatalf("valid commit must advance the tree: %d → %d", before.DoneCount, after.DoneCount)
 	}
-	evs, err := sess.ReadTrajectory(pid)
-	if err != nil || len(evs) != seededEvents+1 {
-		t.Fatalf("want %d events, got %d err=%v", seededEvents+1, len(evs), err)
+	evs := eventsOf(t, sess, pid)
+	if len(evs) != seededEvents+1 {
+		t.Fatalf("want %d events, got %d", seededEvents+1, len(evs))
 	}
 	// an event bound to a step reads back attributed to that step
-	if last := evs[len(evs)-1]; last.NodePath != "1.1" || last.SessionID != pid {
+	if last := evs[len(evs)-1]; last.NodePath != "1.1" || last.ContextID != pid {
 		t.Fatalf("event not attributed to its step: %+v", last)
 	}
 }
 
-func TestAppendTrajectoryRefusesAndStoresNothing(t *testing.T) {
+func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	sess := openSurfaceDB(t)
 	turn := mustTurnKey(t, sess)
 	key := mustTurnKey(t, sess) // a second turn carries the plan-bound step below
 	over := strings.Repeat("字", 3000)
-	if err := sess.AppendTrajectory(turn, "", TrajectorySlot{EventType: "x", Timestamp: 1, Payload: over}); err == nil {
-		t.Fatal("an over-budget payload must be refused")
+	if err := sess.AppendArchive(turn, event("x", over, 1)); err == nil {
+		t.Fatal("an over-budget event payload must be refused")
 	}
-	if evs, err := sess.ReadTrajectory(turn); err != nil || len(evs) != 0 {
-		t.Fatalf("a refused append stored %d events (err=%v)", len(evs), err)
+	if evs := eventsOf(t, sess, turn); len(evs) != 0 {
+		t.Fatalf("a refused append stored %d events", len(evs))
 	}
 	// exactly at the budget is accepted
-	if err := sess.AppendTrajectory(turn, "", TrajectorySlot{
-		EventType: "x", Timestamp: 1,
-		Payload: strings.Repeat("a", 4*1024)}); err != nil {
-		t.Fatalf("payload at the budget limit: %v", err)
+	if err := sess.AppendArchive(turn, event("x", strings.Repeat("a", 4*1024), 1)); err != nil {
+		t.Fatalf("event at the budget limit: %v", err)
 	}
-	if err := sess.AppendTrajectory(key, "1", TrajectorySlot{Timestamp: 1}); err == nil {
+	if err := sess.AppendArchive(key, onNode(ArchiveSlot{Kind: KindEvent, CreatedAt: 1}, "1")); err == nil {
 		t.Fatal("a plan-bound event must satisfy the same write contract")
+	}
+	// A dialogue original gets its own budget, and the same refuse-don't-truncate
+	// rule: 64 KiB is accepted, one rune more is not.
+	if err := sess.AppendArchive(turn, ArchiveSlot{
+		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024), CreatedAt: 2,
+	}); err != nil {
+		t.Fatalf("utterance at the budget limit: %v", err)
+	}
+	if err := sess.AppendArchive(turn, ArchiveSlot{
+		Kind: KindUtterance, Role: RoleUser, Content: strings.Repeat("a", 64*1024+1), CreatedAt: 3,
+	}); err == nil {
+		t.Fatal("an over-budget utterance must be refused, not truncated")
 	}
 }
 
@@ -390,15 +400,21 @@ func TestUpdateFailsLoudlyWhenTheLLMCannotExtract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
-	_, err = sess.Update(TurnUpdate{
-		SceneID: sr.Scene.SceneID, TopicID: sr.NewTopicID,
-		UserText: "我们聊聊 Rust 的所有权", UserTS: 1,
-		AgentText: "所有权规则保证了内存安全", AgentTS: 2,
-	})
+	if err := sess.AppendArchive(sr.NewTopicID, ArchiveSlot{
+		Kind: KindUtterance, Seq: 1, Role: RoleUser, Content: "我们聊聊 Rust 的所有权", CreatedAt: 1,
+	}); err != nil {
+		t.Fatalf("append user side: %v", err)
+	}
+	if err := sess.AppendArchive(sr.NewTopicID, ArchiveSlot{
+		Kind: KindUtterance, Seq: 2, Role: RoleAgent, Content: "所有权规则保证了内存安全", CreatedAt: 2,
+	}); err != nil {
+		t.Fatalf("append agent side: %v", err)
+	}
+	err = sess.Update(sr.Scene.SceneID, sr.NewTopicID)
 	if err == nil {
 		t.Fatal("Update must fail when keyword extraction degrades, not settle a turn with fake keywords")
 	}
-	// nothing settled: the scene still has no topics, and no archive exists
+	// nothing settled: the scene still has no topics
 	again, err := sess.Search(SearchQuery{SceneID: sr.Scene.SceneID})
 	if err != nil {
 		t.Fatalf("re-read: %v", err)
@@ -406,8 +422,10 @@ func TestUpdateFailsLoudlyWhenTheLLMCannotExtract(t *testing.T) {
 	if len(again.Topics) != 0 {
 		t.Fatalf("a failed Update settled %d topics", len(again.Topics))
 	}
-	if arcs, err := sess.SearchL4(L4Query{}); err != nil || len(arcs) != 0 {
-		t.Fatalf("a failed Update archived %d originals (err=%v)", len(arcs), err)
+	// The content the host appended survives: Update never owned it and has no
+	// business undoing it, so the retry distills what is still there.
+	if arcs, err := sess.SearchL4(L4Query{}); err != nil || len(arcs) != 2 {
+		t.Fatalf("a failed Update disturbed the turn's content: %d (err=%v)", len(arcs), err)
 	}
 }
 

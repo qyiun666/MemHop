@@ -19,10 +19,24 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// ev builds the event a host hands to an append: of an event, only these three
-// fields are the host's to supply.
+// ev builds the event a host hands to an append: an event declares its kind, names
+// itself, and carries content and a timestamp.
 func ev(eventType string, ts int64) core.ArchiveSlot {
-	return core.ArchiveSlot{EventType: eventType, Content: eventType, CreatedAt: ts}
+	return core.ArchiveSlot{Kind: core.KindEvent, EventType: eventType, Content: eventType, CreatedAt: ts}
+}
+
+// onNode names the plan step an event belongs to: the path goes on the record, and
+// a step missing along it is what creates the step.
+func onNode(slot core.ArchiveSlot, nodePath string) core.ArchiveSlot {
+	slot.NodePath = nodePath
+	return slot
+}
+
+// eventsOf reads one topic's event track the way a host does: the same key with the
+// kind condition, in Seq order.
+func (db *DB) eventsOf(agentID uint64, topicHex string) ([]core.ArchiveSlot, error) {
+	kind := core.KindEvent
+	return db.SearchL4(agentID, L4Query{TopicID: &topicHex, Kind: &kind})
 }
 
 // nodeEvents reads the events bound to one node path from the topic's content
@@ -40,23 +54,24 @@ func nodeEvents(t *testing.T, db *DB, topicID uint64, nodePath string) []core.Ar
 	return out
 }
 
-func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
+func TestAppendArchiveAllocatesAboveDialogueSlots(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(99)
 	for i := 1; i <= 3; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", ev("llm_request", int64(i))); err != nil {
+		if err := db.AppendArchive(core.DefaultAgentID, session, ev("llm_request", int64(i))); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
-	events, err := db.ReadTrajectory(core.DefaultAgentID, session)
+	events, err := db.eventsOf(core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
 	if len(events) != 3 {
 		t.Fatalf("want 3 events, got %d", len(events))
 	}
-	// Seq 1 and 2 belong to the turn's two originals even before the turn is
-	// settled, so an event appended mid-turn cannot be overwritten by the settle.
+	// Slots 1 and 2 belong to dialogue, so an event appended before a single
+	// original is spoken still lands above them: the two tracks cannot collide by
+	// accident, whichever order the host appends in.
 	for i, e := range events {
 		if want := uint64(i) + core.LastUtteranceSeq + 1; e.Seq != want {
 			t.Fatalf("seq[%d] = %d, want %d", i, e.Seq, want)
@@ -64,35 +79,35 @@ func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
 	}
 }
 
-func TestAppendTrajectoryValidation(t *testing.T) {
+func TestAppendArchiveValidation(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	bare := core.ArchiveSlot{CreatedAt: 1}
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", bare); common.CodeOf(err) != common.ErrInvalidQuery {
+	bare := core.ArchiveSlot{Kind: core.KindEvent, Content: "step", CreatedAt: 1}
+	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(1), bare); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", core.ArchiveSlot{EventType: "tool_call"}); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(1), core.ArchiveSlot{Kind: core.KindEvent, Content: "step", EventType: "tool_call"}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("zero timestamp: want ErrInvalidQuery, got %v", err)
 	}
 	// A plan-bound write is refused by the same contract, and the zero key is
 	// refused before it: neither may create a node on its way out.
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "1", bare); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(1), onNode(bare, "1")); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("bound empty type: want ErrInvalidQuery, got %v", err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, "0000000000000000", "", ev("x", 1)); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.AppendArchive(core.DefaultAgentID, "0000000000000000", ev("x", 1)); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("reserved key: want ErrInvalidQuery, got %v", err)
 	}
 }
 
-func TestAppendTrajectoryPayloadRefused(t *testing.T) {
+func TestAppendEventPayloadRefused(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	key := common.FormatHash(3)
 	long := strings.Repeat("x", content.MaxEventPayload+100)
-	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.ArchiveSlot{
-		EventType: "tool_call", Content: long, CreatedAt: 1,
+	if err := db.AppendArchive(core.DefaultAgentID, key, core.ArchiveSlot{
+		Kind: core.KindEvent, EventType: "tool_call", Content: long, CreatedAt: 1,
 	}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("an over-budget payload must be refused with ErrInvalidQuery, got %v", err)
 	}
-	events, err := db.ReadTrajectory(core.DefaultAgentID, key)
+	events, err := db.eventsOf(core.DefaultAgentID, key)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -100,8 +115,8 @@ func TestAppendTrajectoryPayloadRefused(t *testing.T) {
 		t.Fatalf("a refused append must store nothing, got %d events", len(events))
 	}
 	// exactly at the budget still writes
-	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.ArchiveSlot{
-		EventType: "tool_call", Content: strings.Repeat("x", content.MaxEventPayload), CreatedAt: 1,
+	if err := db.AppendArchive(core.DefaultAgentID, key, core.ArchiveSlot{
+		Kind: core.KindEvent, EventType: "tool_call", Content: strings.Repeat("x", content.MaxEventPayload), CreatedAt: 1,
 	}); err != nil {
 		t.Fatalf("payload at the budget limit should append: %v", err)
 	}
@@ -112,7 +127,7 @@ func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
 	a, b := common.FormatHash(11), common.FormatHash(22)
 	fresh := time.Now().Add(-time.Hour).UnixMilli()
 	appendOne := func(id string, ts int64) {
-		if err := db.AppendTrajectory(core.DefaultAgentID, id, "", ev("llm_request", ts)); err != nil {
+		if err := db.AppendArchive(core.DefaultAgentID, id, ev("llm_request", ts)); err != nil {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
@@ -131,10 +146,10 @@ func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
 	for _, sum := range list {
 		byID[sum.SessionID] = sum
 	}
-	if sum := byID[a]; sum.Steps != 2 || sum.LastAppendAt != fresh {
+	if sum := byID[a]; sum.Events != 2 || sum.LastAppendAt != fresh {
 		t.Fatalf("session a summary mismatch: %+v", sum)
 	}
-	if sum := byID[b]; sum.Steps != 1 || sum.LastAppendAt != 500 {
+	if sum := byID[b]; sum.Events != 1 || sum.LastAppendAt != 500 {
 		t.Fatalf("session b summary mismatch: %+v", sum)
 	}
 
@@ -144,10 +159,10 @@ func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
 		t.Fatalf("dream: %v", err)
 	}
 	list, err = db.ListTrajectorySessions(core.DefaultAgentID)
-	if err != nil || len(list) != 1 || list[0].SessionID != a || list[0].Steps != 1 {
+	if err != nil || len(list) != 1 || list[0].SessionID != a || list[0].Events != 1 {
 		t.Fatalf("only session a's fresh event survives: %+v err=%v", list, err)
 	}
-	events, err := db.ReadTrajectory(core.DefaultAgentID, b)
+	events, err := db.eventsOf(core.DefaultAgentID, b)
 	if err != nil || len(events) != 0 {
 		t.Fatalf("pruned session must read empty: %+v err=%v", events, err)
 	}
@@ -160,7 +175,8 @@ func TestListTrajectorySessionsIgnoresDialogueOnlyTurn(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+	appendTurn(t, db, topicID, 1000)
+	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 2 {
@@ -179,17 +195,17 @@ func TestTrajectorySeqContinuesAfterContextRebuild(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(77)
 	for i := 1; i <= 2; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", ev("llm_request", int64(i))); err != nil {
+		if err := db.AppendArchive(core.DefaultAgentID, session, ev("llm_request", int64(i))); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
 	// Simulate the idle sweep dropping the agent context: the next access
 	// must rebuild the content index from records and continue Seq.
 	delete(db.agents, core.DefaultAgentID)
-	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", ev("tool_call", 3)); err != nil {
+	if err := db.AppendArchive(core.DefaultAgentID, session, ev("tool_call", 3)); err != nil {
 		t.Fatalf("append after rebuild: %v", err)
 	}
-	events, err := db.ReadTrajectory(core.DefaultAgentID, session)
+	events, err := db.eventsOf(core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -222,7 +238,7 @@ func TestPlanAppendCreatesNodeAndEvent(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	if err := db.AppendTrajectory(core.DefaultAgentID, pid, "1.2.1", ev("llm_request", 1000)); err != nil {
+	if err := db.AppendArchive(core.DefaultAgentID, pid, onNode(ev("llm_request", 1000), "1.2.1")); err != nil {
 		t.Fatal(err)
 	}
 	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1.2.1"))
@@ -241,7 +257,7 @@ func TestPlanAppendCreatesNodeAndEvent(t *testing.T) {
 // EnsureNode must build the parent chain with correct ParentID.
 func TestPlanAppendBuildsParentChain(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(9), "1.2.1", ev("llm_request", 1000)); err != nil {
+	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(9), onNode(ev("llm_request", 1000), "1.2.1")); err != nil {
 		t.Fatal(err)
 	}
 	rootID := core.HashPlanNode(9, "1")
@@ -264,25 +280,25 @@ func TestPlanAppendBuildsParentChain(t *testing.T) {
 	}
 }
 
-// Seq is one space a topic shares between its originals and its events, so an
-// event appended before the turn is settled must still be there afterwards: the
-// settle writes Seq 1 and 2 and must not reach down into the event range.
+// Seq is one space a topic shares between its originals and its events, so events
+// appended while a turn runs are still there after its dialogue lands: the originals
+// take Seq 1 and 2 and never reach down into the event range.
 func TestSettledTurnKeepsEventsAppendedBeforeIt(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
 
 	for i, name := range []string{"llm_request", "tool_call"} {
-		if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(topicID), "",
-			ev(name, int64(100+i))); err != nil {
+		if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(topicID), ev(name, int64(100+i))); err != nil {
 			t.Fatalf("append %s: %v", name, err)
 		}
 	}
-	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+	appendTurn(t, db, topicID, 1000)
+	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
-	events, err := db.ReadTrajectory(core.DefaultAgentID, common.FormatHash(topicID))
+	events, err := db.eventsOf(core.DefaultAgentID, common.FormatHash(topicID))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -395,7 +411,7 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 		PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, doneID, "1", ev("note", now)); err != nil {
+	if err := db.AppendArchive(core.DefaultAgentID, doneID, onNode(ev("note", now), "1")); err != nil {
 		t.Fatal(err)
 	}
 	doneNode := core.HashPlanNode(9, "1")
@@ -438,7 +454,7 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 	}
 	// The swept node cascades nothing: the event bound to it is content, ages on
 	// its own clock, and is still readable.
-	events, err := db.ReadTrajectory(core.DefaultAgentID, doneID)
+	events, err := db.eventsOf(core.DefaultAgentID, doneID)
 	if err != nil {
 		t.Fatalf("the turn's event track must survive its own pruned tree: %v", err)
 	}
@@ -447,18 +463,18 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 	}
 }
 
-// An appended event is forced to content-of-kind-event semantics: the fields a
-// host has no business choosing — Kind, its Seq, the topic it belongs to, the
-// role and the medium — are assigned by the library, so an append cannot smuggle
-// a record into the transcript or forge a plan node.
+// An event append is forced to content-of-kind-event semantics: the topic it belongs
+// to and the slot it lands in are the library's, and so are the speaker and the
+// medium an event has no use for — an append cannot smuggle a record into the
+// transcript. The kinds also cannot wear each other's axes.
 func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	topicID := common.FormatHash(9)
-	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1", core.ArchiveSlot{
-		Kind: core.KindUtterance, Seq: core.SeqUser, ContextID: 4242,
-		Role: core.RoleDream, ContentType: core.ContentVideo, NodePath: "9.9",
+	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(core.ArchiveSlot{
+		Kind: core.KindEvent, ContextID: 4242,
+		Role: core.RoleDream, ContentType: core.ContentVideo,
 		EventType: "llm_request", Content: "payload", CreatedAt: 1000,
-	}); err != nil {
+	}, "1")); err != nil {
 		t.Fatal(err)
 	}
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL6PlanNode); n != 1 {
@@ -493,6 +509,21 @@ func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	}
 	if landed.NodePath != "1" {
 		t.Fatalf("event must carry the step it actually bound to, got %q", landed.NodePath)
+	}
+
+	// The axes stay apart: an utterance that names an event, hangs on a step, or
+	// claims the consolidation role is refused outright, and so is a record whose
+	// kind nobody can name.
+	for name, slot := range map[string]core.ArchiveSlot{
+		"utterance with an event name": {Kind: core.KindUtterance, Role: core.RoleUser, EventType: "tool_call", Content: "x", CreatedAt: 1},
+		"utterance on a plan step":     {Kind: core.KindUtterance, Role: core.RoleUser, NodePath: "1", Content: "x", CreatedAt: 1},
+		"host-written dream role":      {Kind: core.KindUtterance, Role: core.RoleDream, Content: "x", CreatedAt: 1},
+		"undefined kind":               {Kind: core.ArchiveKind(7), EventType: "tool_call", Content: "x", CreatedAt: 1},
+		"empty content":                {Kind: core.KindEvent, EventType: "tool_call", CreatedAt: 1},
+	} {
+		if err := db.AppendArchive(core.DefaultAgentID, topicID, slot); common.CodeOf(err) != common.ErrInvalidQuery {
+			t.Fatalf("%s: want ErrInvalidQuery, got %v", name, err)
+		}
 	}
 }
 
@@ -539,14 +570,14 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1", ev("sandbox_ask", 1000)); err != nil {
+	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(ev("sandbox_ask", 1000), "1")); err != nil {
 		t.Fatalf("a host-named plan event must be accepted: %v", err)
 	}
 	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("host_step", 1001),
 		PlanStep{Status: PlanDone}); err != nil {
 		t.Fatalf("host-named commit event: %v", err)
 	}
-	events, err := db.ReadTrajectory(core.DefaultAgentID, topicID)
+	events, err := db.eventsOf(core.DefaultAgentID, topicID)
 	if err != nil || len(events) != 2 {
 		t.Fatalf("plan events: %+v err=%v", events, err)
 	}
@@ -555,8 +586,7 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 			events[0].EventType, events[1].EventType)
 	}
 
-	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "2.1",
-		core.ArchiveSlot{CreatedAt: 1002}); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(core.ArchiveSlot{Kind: core.KindEvent, Content: "step", CreatedAt: 1002}, "2.1")); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
 	}
 	tree, err := db.PlanState(core.DefaultAgentID, topicID)
@@ -580,7 +610,7 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 		PlanStep{Title: "a", PlanType: "step", Status: PlanDone, Summary: "s"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1.1", ev("tool_call", 1200)); err != nil {
+	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(ev("tool_call", 1200), "1.1")); err != nil {
 		t.Fatal(err)
 	}
 	ac := db.agents[core.DefaultAgentID]
@@ -645,9 +675,9 @@ func TestPlanCommit_FinishedAt(t *testing.T) {
 	}
 }
 
-// One turn runs on one id: the topic Search opened is where the host's events
-// land, what Update settles, and what Crystallize reads back — no host-minted
-// turn key and no timestamp derivation anywhere in between.
+// One turn runs on one id: the topic Search opened is where the host's events and
+// dialogue land, what Update distills, and what Crystallize reads back — no
+// host-minted turn key and no timestamp derivation anywhere in between.
 func TestTurnRunsOnOneTopicID(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
@@ -659,21 +689,19 @@ func TestTurnRunsOnOneTopicID(t *testing.T) {
 	turnID := common.FormatHash(res.NewTopicID)
 
 	for _, name := range []string{"llm_request", "tool_call"} {
-		if err := db.AppendTrajectory(core.DefaultAgentID, turnID, "", ev(name, 1000)); err != nil {
+		if err := db.AppendArchive(core.DefaultAgentID, turnID, ev(name, 1000)); err != nil {
 			t.Fatalf("append %s: %v", name, err)
 		}
 	}
-	settled, err := db.Update(core.DefaultAgentID, turnOf(res.Scene.SceneID, res.NewTopicID))
-	if err != nil {
+	settled := res.NewTopicID
+	appendTurn(t, db, settled, 1000)
+	if err := settle(db, res.Scene.SceneID, settled); err != nil {
 		t.Fatalf("update: %v", err)
-	}
-	if settled != res.NewTopicID {
-		t.Fatalf("Update settled topic %d, want the opened %d", settled, res.NewTopicID)
 	}
 	if _, err := core.ReadTopicLenient(db.engine, core.DefaultAgentID, settled); err != nil {
 		t.Fatalf("the turn topic is not readable: %v", err)
 	}
-	events, err := db.ReadTrajectory(core.DefaultAgentID, turnID)
+	events, err := db.eventsOf(core.DefaultAgentID, turnID)
 	if err != nil {
 		t.Fatalf("read trajectory: %v", err)
 	}

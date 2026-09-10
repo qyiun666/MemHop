@@ -39,14 +39,11 @@ func TestE2EUpdateDream(t *testing.T) {
 		t.Fatal("the opening read must issue the turn's topic id")
 	}
 
-	// 2. Update settles the turn into that topic: one topic, both originals,
-	// distilled keywords.
-	topicID, err := db.Update(memhop.TurnUpdate{
-		SceneID: sceneID, TopicID: res.NewTopicID, UserText: userText, UserTS: ts,
-		AgentText: agentText, AgentTS: ts + 1000,
-	})
-	if err != nil {
-		t.Fatalf("Update: %v", err)
+	// 2. The turn's content is appended under that topic, then settled: one
+	// topic with distilled keywords over the two originals.
+	topicID := res.NewTopicID
+	if err := db.SettleTurn(sceneID, topicID, userText, agentText, ts); err != nil {
+		t.Fatalf("settle turn: %v", err)
 	}
 
 	// 3. The session read hands the turn back.

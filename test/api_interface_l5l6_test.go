@@ -19,18 +19,18 @@ import (
 func TestInterfaceL6(t *testing.T) {
 	db, _ := openTestDB(t)
 	sceneID := openSession(t, db)
-	// The trajectory key is a turn's topic id — minted by Search, settled by
-	// Update, and never typed by hand.
+	// The content key is a turn's topic id — minted by Search and never typed by
+	// hand.
 	session := openTurn(t, db, sceneID)
-	if _, err := db.Update(turn(sceneID, session, "读一下 a.go 并改掉拼写", "已读取 a.go 并改掉拼写")); err != nil {
-		t.Fatalf("Update: %v", err)
+	if err := turn(db.Session, sceneID, session, "读一下 a.go 并改掉拼写", "已读取 a.go 并改掉拼写"); err != nil {
+		t.Fatalf("turn: %v", err)
 	}
 	ts := time.Now().UnixMilli()
 
-	if err := db.AppendTrajectory(session, "", api.TrajectorySlot{
-		EventType: "tool_call", Payload: `{"tool":"read_file","file":"a.go"}`, Timestamp: ts,
+	if err := db.AppendArchive(session, api.ArchiveSlot{
+		Kind: api.KindEvent, EventType: "tool_call", Content: `{"tool":"read_file","file":"a.go"}`, CreatedAt: ts,
 	}); err != nil {
-		t.Fatalf("AppendTrajectory: %v", err)
+		t.Fatalf("AppendArchive: %v", err)
 	}
 	// The key has to be a turn the library actually opened, or the rest of this
 	// test would only prove that a made-up id round-trips.
@@ -38,17 +38,18 @@ func TestInterfaceL6(t *testing.T) {
 		!slices.ContainsFunc(surface.Topics, func(topic api.TopicSlot) bool { return topic.ID == session }) {
 		t.Fatalf("key %s is not a topic of scene %s: %+v err %v", session, sceneID, surface.Topics, err)
 	}
-	if err := db.AppendTrajectory(session, "", api.TrajectorySlot{
-		EventType: "tool_result", Payload: "file content", Timestamp: ts + 500,
+	if err := db.AppendArchive(session, api.ArchiveSlot{
+		Kind: api.KindEvent, EventType: "tool_result", Content: "file content", CreatedAt: ts + 500,
 	}); err != nil {
-		t.Fatalf("AppendTrajectory #2: %v", err)
+		t.Fatalf("AppendArchive #2: %v", err)
 	}
-	events, err := db.ReadTrajectory(session)
+	kind := api.KindEvent
+	events, err := db.SearchL4(api.L4Query{TopicID: &session, Kind: &kind})
 	if err != nil {
-		t.Fatalf("ReadTrajectory: %v", err)
+		t.Fatalf("read events: %v", err)
 	}
-	// Slots 1 and 2 are reserved for the turn's two originals, so the library
-	// allocates a topic's first event at 3.
+	// Slots 1 and 2 are reserved for the turn's dialogue, so the library allocates
+	// a topic's first event at 3.
 	if len(events) != 2 || events[0].Seq != 3 || events[1].Seq != 4 {
 		t.Fatalf("want 2 events with seq 3,4: %+v", events)
 	}
@@ -81,5 +82,74 @@ func TestInterfaceL6(t *testing.T) {
 	if create := byAction["create"]; create.Capability.Name != "重构流程" ||
 		len(create.Capability.Resources) != 1 || create.Capability.Resources[0].Name != "read_file" {
 		t.Fatalf("create candidate mismatch: %+v", create)
+	}
+}
+
+// One turn, one key: what the turn said and what it did are the same topic's
+// content, and no read confuses them — the scene context shows only the dialogue,
+// the kind-filtered read only the event, the plan view only the step the event
+// named, and the one distillation sees exactly the dialogue.
+func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
+	db, llm := openTestDB(t)
+	sceneID := openSession(t, db)
+	turnID := openTurn(t, db, sceneID)
+	ts := time.Now().UnixMilli()
+
+	// An event logged mid-turn, bound to a step that does not exist yet.
+	if err := db.AppendArchive(turnID, api.ArchiveSlot{
+		Kind: api.KindEvent, EventType: "tool_call", NodePath: "1.1",
+		Content: `{"tool":"bash","cmd":"go test"}`, CreatedAt: ts,
+	}); err != nil {
+		t.Fatalf("append event: %v", err)
+	}
+	before := llm.calls["keywords"]
+	if err := turn(db.Session, sceneID, turnID, "跑一下测试", "go test ./... 全绿"); err != nil {
+		t.Fatalf("settle turn: %v", err)
+	}
+	if got := llm.calls["keywords"] - before; got != 1 {
+		t.Fatalf("settling cost %d distillations, want 1", got)
+	}
+
+	ctx, err := db.SceneContext(sceneID)
+	if err != nil {
+		t.Fatalf("scene context: %v", err)
+	}
+	if len(ctx.Topics) != 1 {
+		t.Fatalf("scene surface = %+v, want the one turn", ctx.Topics)
+	}
+	msgs := ctx.Topics[0].Messages
+	if len(msgs) != 2 || msgs[0].Seq != 1 || msgs[1].Seq != 2 ||
+		msgs[0].Role != api.RoleUser || msgs[1].Role != api.RoleAgent {
+		t.Fatalf("dialogue read = %+v, want the two originals on slots 1 and 2", msgs)
+	}
+	for _, m := range msgs {
+		if m.Content == `{"tool":"bash","cmd":"go test"}` {
+			t.Fatalf("the event leaked into the transcript: %+v", msgs)
+		}
+	}
+
+	event := api.KindEvent
+	uttered := api.KindUtterance
+	evs, err := db.SearchL4(api.L4Query{TopicID: &turnID, Kind: &event})
+	if err != nil || len(evs) != 1 {
+		t.Fatalf("event read = %+v err=%v", evs, err)
+	}
+	// Dialogue took slots 1 and 2, so the event logged before them landed at 3.
+	if evs[0].Seq != 3 || evs[0].NodePath != "1.1" || evs[0].EventType != "tool_call" {
+		t.Fatalf("event = %+v, want seq 3 bound to 1.1", evs[0])
+	}
+	if only, err := db.SearchL4(api.L4Query{TopicID: &turnID, Kind: &uttered}); err != nil || len(only) != 2 {
+		t.Fatalf("utterance read = %+v err=%v, want the two originals", only, err)
+	}
+	if all, err := db.SearchL4(api.L4Query{TopicID: &turnID}); err != nil || len(all) != 3 {
+		t.Fatalf("unfiltered topic read = %+v err=%v, want all three records", all, err)
+	}
+
+	tree, err := db.PlanState(turnID)
+	if err != nil {
+		t.Fatalf("plan state: %v", err)
+	}
+	if tree.TotalCount != 2 {
+		t.Fatalf("plan tree = %+v, want the step 1.1 and the parent the path created", tree)
 	}
 }

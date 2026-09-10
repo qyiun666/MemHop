@@ -54,10 +54,8 @@ func benchTurn(tb testing.TB, db *testsupport.Handle, sceneID, user, agent strin
 	if err != nil {
 		tb.Fatalf("OpenTurn: %v", err)
 	}
-	if _, err := db.Update(memhop.TurnUpdate{
-		SceneID: sceneID, TopicID: turnID, UserText: user, UserTS: ts, AgentText: agent, AgentTS: ts + 500,
-	}); err != nil {
-		tb.Fatalf("Update: %v", err)
+	if err := db.SettleTurn(sceneID, turnID, user, agent, ts); err != nil {
+		tb.Fatalf("settle turn: %v", err)
 	}
 }
 

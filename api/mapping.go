@@ -195,28 +195,20 @@ func formatOptionalID(id uint64) string {
 	return formatID(id)
 }
 
-// fromTrajectorySlot renders one L4 event record as the turn-event view: the
-// same content, named the way a host named it on the way in.
-func fromTrajectorySlot(s internal.ArchiveSlot) TrajectorySlot {
-	return TrajectorySlot{
-		IDHash:    formatID(s.IDHash),
-		SessionID: formatID(s.ContextID),
-		Seq:       s.Seq,
-		EventType: s.EventType,
-		Payload:   s.Content,
-		Timestamp: s.CreatedAt,
-		NodePath:  s.NodePath,
-	}
-}
-
-// toCoreTrajectorySlot maps the fields a host owns onto a content slot. The
-// library assigns Kind, Seq, the owning topic and NodePath itself, so those are
-// not even part of what a caller can hand in.
-func toCoreTrajectorySlot(s TrajectorySlot) internal.ArchiveSlot {
+// toCoreAppendSlot maps the fields a host owns onto a content slot for the append
+// path. The owning topic comes from the argument the call is keyed by, and the
+// record id follows from (topic, Seq), so neither is part of what a caller hands in
+// — IDHash and ContextID are read from the slot and dropped.
+func toCoreAppendSlot(s ArchiveSlot) internal.ArchiveSlot {
 	return internal.ArchiveSlot{
-		EventType: s.EventType,
-		Content:   s.Payload,
-		CreatedAt: s.Timestamp,
+		Kind:        s.Kind,
+		Seq:         s.Seq,
+		ContentType: s.ContentType,
+		Role:        s.Role,
+		EventType:   s.EventType,
+		NodePath:    s.NodePath,
+		CreatedAt:   s.CreatedAt,
+		Content:     s.Content,
 	}
 }
 

@@ -31,20 +31,10 @@ func TestSurfaceTurnFlow(t *testing.T) {
 	}
 	sceneID, openedTopic := res.Scene.SceneID, res.NewTopicID
 
-	// One finished turn settles into the topic that read opened.
-	topicID, err := db.Update(TurnUpdate{
-		SceneID:   sceneID,
-		TopicID:   openedTopic,
-		UserText:  "remember the launch date",
-		UserTS:    1_700_000_000_000,
-		AgentText: "noted, launching next monday",
-		AgentTS:   1_700_000_000_500,
-	})
-	if err != nil {
+	// One finished turn: its content is appended, then it settles into the topic
+	// that read opened.
+	if err := settleTurn(db, sceneID, openedTopic, "remember the launch date", "noted, launching next monday"); err != nil {
 		t.Fatalf("update: %v", err)
-	}
-	if topicID != openedTopic {
-		t.Fatalf("update settled %q, want the opened topic %q", topicID, openedTopic)
 	}
 
 	// The session read returns exactly that turn.
@@ -52,7 +42,7 @@ func TestSurfaceTurnFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("search scene: %v", err)
 	}
-	if len(again.Topics) != 1 || again.Topics[0].ID != topicID {
+	if len(again.Topics) != 1 || again.Topics[0].ID != openedTopic {
 		t.Fatalf("scene surface = %+v, want the one turn", again.Topics)
 	}
 	if again.Scene.HitCount == 0 {
@@ -64,23 +54,35 @@ func TestSurfaceTurnFlow(t *testing.T) {
 	if _, err := db.Search(SearchQuery{SceneID: ghost}); CodeOf(err) != ErrNotFound {
 		t.Fatalf("search unknown scene: want ErrNotFound, got %v", err)
 	}
-	if _, err := db.Update(turnUpdate(ghost, openedTopic, "u", "a")); CodeOf(err) != ErrNotFound {
+	if err := db.Update(ghost, openedTopic); CodeOf(err) != ErrNotFound {
 		t.Fatalf("update unknown scene: want ErrNotFound, got %v", err)
 	}
 
-	// Malformed turns are rejected with ErrInvalidQuery.
-	badTurns := []TurnUpdate{
-		{SceneID: sceneID, TopicID: openedTopic, UserText: "", UserTS: 1, AgentText: "a", AgentTS: 2},
-		{SceneID: sceneID, TopicID: openedTopic, UserText: "u", UserTS: 0, AgentText: "a", AgentTS: 2},
-		{SceneID: sceneID, TopicID: openedTopic, UserText: "u", UserTS: 5, AgentText: "a", AgentTS: 4},
-		{SceneID: "not-hex", TopicID: openedTopic, UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
-		{SceneID: sceneID, UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
-		{SceneID: sceneID, TopicID: "0000000000000000", UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
-		{SceneID: sceneID, TopicID: "not-hex", UserText: "u", UserTS: 1, AgentText: "a", AgentTS: 2},
+	// A turn named by an id the library never issued is refused with
+	// ErrInvalidQuery, and Update never sees content it did not read.
+	for i, bad := range [][2]string{
+		{"not-hex", openedTopic},
+		{sceneID, ""},
+		{sceneID, "0000000000000000"},
+		{sceneID, "not-hex"},
+	} {
+		if err := db.Update(bad[0], bad[1]); CodeOf(err) != ErrInvalidQuery {
+			t.Fatalf("bad turn ids %d: want ErrInvalidQuery, got %v", i, err)
+		}
 	}
-	for i, in := range badTurns {
-		if _, err := db.Update(in); CodeOf(err) != ErrInvalidQuery {
-			t.Fatalf("bad turn %d: want ErrInvalidQuery, got %v", i, err)
+
+	// What a turn is made of is refused at the append boundary: a record with no
+	// content, the library's own consolidation role (named by value here, since it
+	// is deliberately not a public constant), an event that never says what
+	// happened, and a kind no reader can name.
+	for i, bad := range []ArchiveSlot{
+		{Kind: KindUtterance, Role: RoleUser, CreatedAt: 1},
+		{Kind: KindUtterance, Role: 3, Content: "u", CreatedAt: 1},
+		{Kind: KindEvent, Content: "c", CreatedAt: 1},
+		{Kind: ArchiveKind(9), EventType: "x", Content: "c", CreatedAt: 1},
+	} {
+		if err := db.AppendArchive(openedTopic, bad); CodeOf(err) != ErrInvalidQuery {
+			t.Fatalf("bad content %d: want ErrInvalidQuery, got %v", i, err)
 		}
 	}
 }

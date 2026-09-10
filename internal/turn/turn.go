@@ -1,48 +1,37 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package turn holds the small methods that settle one finished turn into
-// the topic Search opened for it: payload validation, the gate on which topic
-// may be settled, and the two content slots the turn's originals occupy. The
-// Update big method in the composition root locks the domain and composes them
-// around the single keyword-distillation call.
+// Package turn holds the small methods that settle one finished turn into the
+// topic Search opened for it: resolving the two ids the settle names, and the
+// gate on which topic may be settled. The Update big method in the composition
+// root locks the domain and composes them around the one keyword-distillation
+// call that gives the turn its keyword track.
 
 package turn
 
 import (
 	"github.com/qyiun666/MemHop/internal/common"
-	"github.com/qyiun666/MemHop/internal/domain"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// Targets validates a turn's payload and resolves the scene it settles
-// into plus the topic id Search minted for it.
-func Targets(in core.TurnUpdate) (uint64, uint64, error) {
-	if in.UserText == "" || in.AgentText == "" {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires both the user and the agent text")
-	}
-	if in.UserTS <= 0 || in.AgentTS <= 0 {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires positive timestamps for both messages")
-	}
-	if in.AgentTS < in.UserTS {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires the agent timestamp not earlier than the user timestamp")
-	}
-	if !in.UserType.Valid() || !in.AgentType.Valid() {
-		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires a defined content type on both sides")
-	}
-	sceneID, err := common.ParseID(in.SceneID)
+// Targets resolves the scene a turn settles into plus the topic id Search minted
+// for it. Both are ids the library issued and the host hands back, so nothing here
+// interprets them: an unparsable id or the reserved zero topic is refused before
+// any record is read.
+func Targets(sceneID, topicID string) (uint64, uint64, error) {
+	parsedScene, err := common.ParseID(sceneID)
 	if err != nil {
 		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse scene id", err)
 	}
-	topicID, err := common.ParseID(in.TopicID)
+	parsedTopic, err := common.ParseID(topicID)
 	if err != nil {
 		return 0, 0, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
 	}
-	if topicID == 0 {
+	if parsedTopic == 0 {
 		return 0, 0, common.NewError(common.ErrInvalidQuery, "Update requires the topic id Search issued for this turn")
 	}
-	return sceneID, topicID, nil
+	return parsedScene, parsedTopic, nil
 }
 
 // SettleTarget validates the topic a turn may settle into: the id has to be one
@@ -60,31 +49,6 @@ func SettleTarget(sceneID, topicID, turnSeq uint64) error {
 	}
 	return common.NewError(common.ErrInvalidQuery,
 		"Update: topic_id is not a turn this scene opened; settle the id Search returned")
-}
-
-// WriteArchives settles a turn's originals into the two content slots their topic
-// reserves for them — Seq 1 for what the user said, Seq 2 for the reply — each
-// under the content type the host declared. The slots are addressed by position,
-// so re-settling a turn rewrites the same two records: nothing has to be listed
-// as owned before it can be replaced.
-//
-// That is also the limit of what a settle reclaims. Rewriting a turn with fewer
-// or different texts never deletes what an earlier settle left in a slot this one
-// does not fill, so a revised turn can keep surfacing a withdrawn reply until the
-// topic is deleted or the retention window passes. The library does not track
-// "the set this turn wrote" a second time to undo it.
-func WriteArchives(ac *domain.Context, agentID, topicID uint64, in core.TurnUpdate) error {
-	if _, err := repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, repo.ArchiveContent{
-		TopicID: topicID, Seq: core.SeqUser, Kind: core.KindUtterance,
-		Role: core.RoleUser, Type: in.UserType, Text: in.UserText, CreatedAt: in.UserTS,
-	}); err != nil {
-		return err
-	}
-	_, err := repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, repo.ArchiveContent{
-		TopicID: topicID, Seq: core.SeqAgent, Kind: core.KindUtterance,
-		Role: core.RoleAgent, Type: in.AgentType, Text: in.AgentText, CreatedAt: in.AgentTS,
-	})
-	return err
 }
 
 // ReadProfile loads the domain's L0 profile. A profile that was never

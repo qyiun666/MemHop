@@ -1,12 +1,14 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Update is the single write of the hot path: the turn Search opened becomes
-// one depth-1 topic plus two L4 archives, distilled by exactly one LLM call.
+// Update is the read side of the hot path: the content a turn appended under its
+// own topic id becomes one depth-1 topic, distilled by exactly one LLM call.
+// Update writes no content, so every test here appends first.
 package internal
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -14,6 +16,11 @@ import (
 )
 
 const turnKeywords = `{"keywords":["rust","所有权"]}`
+
+const (
+	userTurnText  = "rust 的所有权规则是什么"
+	agentTurnText = "所有权系统靠移动语义保证内存安全"
+)
 
 // openTurn gives a test the host session and the topic id Search issued for
 // the turn it is about to settle.
@@ -26,15 +33,23 @@ func openTurn(t *testing.T, db *DB) (uint64, uint64) {
 	return res.Scene.SceneID, res.NewTopicID
 }
 
-func turnOf(sceneID, topicID uint64) TurnUpdate {
-	return TurnUpdate{
-		SceneID:   common.FormatHash(sceneID),
-		TopicID:   common.FormatHash(topicID),
-		UserText:  "rust 的所有权规则是什么",
-		UserTS:    1000,
-		AgentText: "所有权系统靠移动语义保证内存安全",
-		AgentTS:   2000,
+// appendTurn is the host's half of a turn: the two originals in the two slots
+// dialogue owns, under the timestamps the topic will report.
+func appendTurn(t *testing.T, db *DB, topicID uint64, userTS int64) {
+	t.Helper()
+	slots := []core.ArchiveSlot{
+		{Kind: core.KindUtterance, Seq: core.SeqUser, Role: core.RoleUser, Content: userTurnText, CreatedAt: userTS},
+		{Kind: core.KindUtterance, Seq: core.SeqAgent, Role: core.RoleAgent, Content: agentTurnText, CreatedAt: userTS + 1000},
 	}
+	for _, slot := range slots {
+		if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(topicID), slot); err != nil {
+			t.Fatalf("AppendArchive seq %d: %v", slot.Seq, err)
+		}
+	}
+}
+
+func settle(db *DB, sceneID, topicID uint64) error {
+	return db.Update(core.DefaultAgentID, common.FormatHash(sceneID), common.FormatHash(topicID))
 }
 
 // archivesOfTopic reads what a topic owns straight off the archive records, so
@@ -50,19 +65,17 @@ func archivesOfTopic(t *testing.T, engine *core.StorageEngine, topicID uint64) [
 	return out
 }
 
-// One Update writes the topic Search opened: single keyword track, both
-// timestamps, and this turn's two originals archived under the topic's id.
+// Settling a turn whose content is appended gives that turn one topic: single
+// keyword track, the timestamps of the content it read, and nothing written by
+// Update itself.
 func TestUpdateWritesOneTurnTopic(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
+	appendTurn(t, db, topicID, 1000)
 
-	got, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID))
-	if err != nil {
+	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("Update: %v", err)
-	}
-	if got != topicID {
-		t.Fatalf("Update returned topic %d, want the id Search issued (%d)", got, topicID)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("Update made %d LLM calls, want exactly 1", got)
@@ -82,19 +95,19 @@ func TestUpdateWritesOneTurnTopic(t *testing.T) {
 	}
 	owned := archivesOfTopic(t, db.engine, topicID)
 	if len(owned) != 2 {
-		t.Fatalf("topic owns %d archives, want both originals", len(owned))
+		t.Fatalf("topic owns %d archives, want the two appended originals", len(owned))
 	}
 	gotUser, gotAgent := false, false
 	for _, arc := range owned {
 		switch arc.Role {
 		case core.RoleUser:
-			gotUser = arc.Content == "rust 的所有权规则是什么"
+			gotUser = arc.Content == userTurnText
 		case core.RoleAgent:
-			gotAgent = arc.Content == "所有权系统靠移动语义保证内存安全"
+			gotAgent = arc.Content == agentTurnText
 		}
 	}
 	if !gotUser || !gotAgent {
-		t.Fatalf("originals not archived verbatim: user=%v agent=%v", gotUser, gotAgent)
+		t.Fatalf("originals not stored verbatim: user=%v agent=%v", gotUser, gotAgent)
 	}
 
 	// The turn is now part of what a host reads back for that session.
@@ -119,17 +132,15 @@ func TestUpdateSettlesEachScenesTurnsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second Search: %v", err)
 	}
-	for _, settle := range []struct {
+	for _, settleTurn := range []struct {
 		topicID uint64
 		userTS  int64
 	}{
 		{second.NewTopicID, 3000}, // the later turn settles first
 		{firstID, 1000},
 	} {
-		in := turnOf(sceneID, settle.topicID)
-		in.UserTS = settle.userTS
-		in.AgentTS = settle.userTS + 1000
-		if _, err := db.Update(core.DefaultAgentID, in); err != nil {
+		appendTurn(t, db, settleTurn.topicID, settleTurn.userTS)
+		if err := settle(db, sceneID, settleTurn.topicID); err != nil {
 			t.Fatalf("Update: %v", err)
 		}
 	}
@@ -152,8 +163,7 @@ func TestUpdateRejectsUnknownScene(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 
-	_, err := db.Update(core.DefaultAgentID, turnOf(4242, 99))
-	if common.CodeOf(err) != common.ErrNotFound {
+	if err := settle(db, 4242, 99); common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("err = %v, want ErrNotFound", err)
 	}
 	if got := calls.Load(); got != 0 {
@@ -164,31 +174,28 @@ func TestUpdateRejectsUnknownScene(t *testing.T) {
 	}
 }
 
-// A malformed turn is refused before any record or LLM call exists.
-func TestUpdateValidatesPayload(t *testing.T) {
+// A malformed id is refused before any record or LLM call exists. An empty
+// scene id means "settle into the domain's own id space", which is a scene that
+// does not exist, so it is the unknown-scene path rather than this one.
+func TestUpdateValidatesIds(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-	base := turnOf(sceneID, topicID)
+	sceneHex, topicHex := common.FormatHash(sceneID), common.FormatHash(topicID)
 
 	cases := []struct {
-		name  string
-		patch func(*TurnUpdate)
+		name         string
+		scene, topic string
 	}{
-		{"empty user text", func(u *TurnUpdate) { u.UserText = "" }},
-		{"empty agent text", func(u *TurnUpdate) { u.AgentText = "" }},
-		{"zero user timestamp", func(u *TurnUpdate) { u.UserTS = 0 }},
-		{"agent before user", func(u *TurnUpdate) { u.AgentTS = 999 }},
-		{"unparsable scene id", func(u *TurnUpdate) { u.SceneID = "not-hex" }},
-		{"missing topic id", func(u *TurnUpdate) { u.TopicID = "" }},
-		{"zero topic id", func(u *TurnUpdate) { u.TopicID = "0000000000000000" }},
-		{"unparsable topic id", func(u *TurnUpdate) { u.TopicID = "not-hex" }},
+		{"unparsable scene id", "not-hex", topicHex},
+		{"missing topic id", sceneHex, ""},
+		{"zero topic id", sceneHex, "0000000000000000"},
+		{"unparsable topic id", sceneHex, "not-hex"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			in := base
-			tc.patch(&in)
-			if _, err := db.Update(core.DefaultAgentID, in); common.CodeOf(err) != common.ErrInvalidQuery {
+			appendTurn(t, db, topicID, 1000)
+			if err := db.Update(core.DefaultAgentID, tc.scene, tc.topic); common.CodeOf(err) != common.ErrInvalidQuery {
 				t.Fatalf("err = %v, want ErrInvalidQuery", err)
 			}
 		})
@@ -201,24 +208,44 @@ func TestUpdateValidatesPayload(t *testing.T) {
 	}
 }
 
-// The distillation runs before any write: an LLM failure must not leave a
-// half-written turn (orphan archive or keywordless topic) behind.
-func TestUpdateDistillFailureLeavesNoTrace(t *testing.T) {
-	srv := failingLLMServer(t, http.StatusBadRequest)
+// A turn whose content is gone is refused without spending an LLM call: an empty
+// keyword track written now would read back as the real distillation of a turn
+// nobody can any longer quote.
+func TestUpdateRejectsTurnWithNoContent(t *testing.T) {
+	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
 
-	before := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic)
-	archivesBefore := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive)
+	if err := settle(db, sceneID, topicID); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("err = %v, want ErrInvalidQuery", err)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("contentless turn reached the LLM %d times", got)
+	}
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); n != 0 {
+		t.Fatalf("contentless turn wrote %d topics", n)
+	}
+}
 
-	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); common.CodeOf(err) != common.ErrLLM {
+// The distillation runs before the topic is written: an LLM failure must not
+// leave a keywordless topic behind. The content the host appended earlier stays —
+// Update never owned it and has no business undoing it — and the retry converges
+// on the turn rather than duplicating it.
+func TestUpdateDistillFailureLeavesNoTopic(t *testing.T) {
+	srv := failingLLMServer(t, http.StatusBadRequest)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+	appendTurn(t, db, topicID, 1000)
+
+	archivesBefore := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive)
+	if err := settle(db, sceneID, topicID); common.CodeOf(err) != common.ErrLLM {
 		t.Fatalf("err = %v, want ErrLLM", err)
 	}
-	if got := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); got != before {
-		t.Fatalf("failed turn wrote topics: %d -> %d", before, got)
+	if got := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); got != 0 {
+		t.Fatalf("failed turn wrote topics: %d", got)
 	}
 	if got := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); got != archivesBefore {
-		t.Fatalf("failed turn wrote archives: %d -> %d", archivesBefore, got)
+		t.Fatalf("failed turn cost content: %d -> %d", archivesBefore, got)
 	}
 }
 
@@ -227,12 +254,36 @@ func TestUpdateRejectsEmptyExtraction(t *testing.T) {
 	srv := mockLLMServer(t, `{"keywords":[]}`)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
+	appendTurn(t, db, topicID, 1000)
 
-	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); common.CodeOf(err) != common.ErrLLM {
+	if err := settle(db, sceneID, topicID); common.CodeOf(err) != common.ErrLLM {
 		t.Fatalf("err = %v, want ErrLLM", err)
 	}
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); n != 0 {
 		t.Fatalf("empty extraction wrote %d topics", n)
+	}
+}
+
+// A turn that distills only what its own utterances say: the label the record
+// carries is what keeps the two sides apart in the prompt, so an extraction that
+// sees both speakers is the check that the transcript was rendered, not glued.
+func TestUpdateDistillsRenderedTranscript(t *testing.T) {
+	srv, seen := recordingLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+	appendTurn(t, db, topicID, 1000)
+
+	if err := settle(db, sceneID, topicID); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	bodies := seen.snapshot()
+	if len(bodies) != 1 {
+		t.Fatalf("distillation sent %d requests, want 1", len(bodies))
+	}
+	for _, want := range []string{"User: " + userTurnText, "Assistant: " + agentTurnText} {
+		if !strings.Contains(bodies[0], want) {
+			t.Fatalf("transcript missing %q; sent: %s", want, bodies[0])
+		}
 	}
 }
 
@@ -291,30 +342,25 @@ func TestConsolidateSceneThreshold(t *testing.T) {
 	})
 }
 
-// A host that retries a settled turn (same topic id) gets that same topic and
-// the same two archives back — the turn never accumulates duplicates, so an
-// at-least-once write loop stays safe.
+// Settling the same turn twice re-derives its track from the content the topic
+// holds and creates no second topic — so an at-least-once write loop stays safe.
 func TestUpdateReplayIsIdempotent(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
+	appendTurn(t, db, topicID, 1000)
 
-	first, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID))
-	if err != nil {
+	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	second, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID))
-	if err != nil {
+	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("replay Update: %v", err)
-	}
-	if first != second {
-		t.Fatalf("replay settled a different topic: %d vs %d", first, second)
 	}
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); n != 1 {
 		t.Fatalf("topic records = %d, want 1", n)
 	}
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); n != 2 {
-		t.Fatalf("archive records = %d, want 2 (the turn's two originals)", n)
+		t.Fatalf("content records = %d, want the two appended originals", n)
 	}
 	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
 	if err != nil {
@@ -323,41 +369,39 @@ func TestUpdateReplayIsIdempotent(t *testing.T) {
 	if len(res.Topics) != 1 {
 		t.Fatalf("scene surface after replay = %+v", res.Topics)
 	}
-	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 2 {
-		t.Fatalf("topic owns %d archives after replay, want 2", len(owned))
-	}
 }
 
-// Replaying a turn with different texts is still one turn: the topic keeps its
-// id and its two originals keep occupying Seq 1 and 2, so the revised texts are
-// written over the old ones in place. L4 therefore never holds two versions of
-// one turn and the superseded wording stops surfacing in a search — nothing had
-// to be listed as owned beforehand and then tombstoned.
-func TestUpdateReplayOverwritesPriorArchives(t *testing.T) {
+// A revised turn is revised by rewriting the slots it occupies: appending over
+// Seq 1 and 2 replaces the originals in place, and settling again distills the
+// new pair. The superseded wording stops being searchable and L4 holds one
+// version of the turn — nothing had to be listed as owned beforehand.
+func TestUpdateReplayOverwritesPriorContent(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
-
-	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+	appendTurn(t, db, topicID, 1000)
+	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("first Update: %v", err)
 	}
-	revised := turnOf(sceneID, topicID)
-	revised.UserText = "rust 的借用检查器怎么工作"
-	revised.AgentText = "同一时刻只允许一个可变借用"
-	if _, err := db.Update(core.DefaultAgentID, revised); err != nil {
+
+	revised := []core.ArchiveSlot{
+		{Kind: core.KindUtterance, Seq: core.SeqUser, Role: core.RoleUser, Content: "rust 的借用检查器怎么工作", CreatedAt: 1000},
+		{Kind: core.KindUtterance, Seq: core.SeqAgent, Role: core.RoleAgent, Content: "同一时刻只允许一个可变借用", CreatedAt: 2000},
+	}
+	for _, slot := range revised {
+		if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(topicID), slot); err != nil {
+			t.Fatalf("revised append: %v", err)
+		}
+	}
+	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("revised Update: %v", err)
 	}
 
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); n != 2 {
-		t.Fatalf("live archives = %d, want 2: the superseded pair must be tombstoned", n)
-	}
-	if res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)}); err != nil {
-		t.Fatalf("Search: %v", err)
-	} else if len(res.Topics) != 1 {
-		t.Fatalf("scene surface after replay = %+v", res.Topics)
+		t.Fatalf("live content records = %d, want 2: the rewrite landed in place", n)
 	}
 	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 2 {
-		t.Fatalf("topic owns %d archives after replay, want the revised pair only", len(owned))
+		t.Fatalf("topic owns %d records after replay, want the revised pair only", len(owned))
 	}
 	if hits, err := db.SearchL4(core.DefaultAgentID, L4Query{Keyword: "所有权规则"}); err != nil {
 		t.Fatalf("SearchL4: %v", err)
@@ -367,7 +411,7 @@ func TestUpdateReplayOverwritesPriorArchives(t *testing.T) {
 	if hits, err := db.SearchL4(core.DefaultAgentID, L4Query{Keyword: "可变借用"}); err != nil {
 		t.Fatalf("SearchL4: %v", err)
 	} else if len(hits) != 1 {
-		t.Fatalf("revised text should be the surviving archive, got %+v", hits)
+		t.Fatalf("revised text should be the surviving record, got %+v", hits)
 	}
 }
 
@@ -380,6 +424,7 @@ func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 	srv, calls := countingLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)
+	appendTurn(t, db, topicID, 1000)
 
 	// A fused group: depth-2 child under a depth-1 fused parent, as Dream leaves it.
 	fusedParent := core.ComputeTopicID(sceneID, 500, 600)
@@ -389,7 +434,7 @@ func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(fusedParent, sceneID, 500, []string{"kw"}))
 	writeTopic(t, db.engine, core.DefaultAgentID, fusedChild)
 
-	before := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive)
+	before := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic)
 	cases := []struct {
 		name    string
 		topicID uint64
@@ -400,86 +445,22 @@ func TestUpdateRejectsForeignOrFusedTopic(t *testing.T) {
 		{"invented id", common.HashID("not-a-turn-this-scene-opened")},
 	}
 	for _, tc := range cases {
-		if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, tc.topicID)); common.CodeOf(err) != common.ErrInvalidQuery {
+		if err := settle(db, sceneID, tc.topicID); common.CodeOf(err) != common.ErrInvalidQuery {
 			t.Fatalf("%s: err = %v, want ErrInvalidQuery", tc.name, err)
 		}
 	}
 	if got := calls.Load(); got != 0 {
 		t.Fatalf("rejected turns reached the LLM %d times", got)
 	}
-	if got := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); got != before {
-		t.Fatalf("rejected turns wrote archives: %d -> %d", before, got)
+	if got := countRecords(db.engine, core.DefaultAgentID, core.RecL2Topic); got != before {
+		t.Fatalf("rejected turns wrote topics: %d -> %d", before, got)
 	}
 	if child, err := core.ReadTopicSlot(db.engine, core.DefaultAgentID, fusedChild.ID); err != nil || child.Depth != 2 {
 		t.Fatalf("sunk topic was modified: %+v (%v)", child, err)
 	}
 
 	// The turn Search actually opened still settles.
-	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+	if err := settle(db, sceneID, topicID); err != nil {
 		t.Fatalf("Update of the opened turn: %v", err)
-	}
-}
-
-// The content type arrives with the turn, so Update owns its validity: an
-// undefined value is rejected at the boundary instead of being stored as a
-// type no reader can name.
-func TestUpdateRejectsUndefinedContentType(t *testing.T) {
-	srv := mockLLMServer(t, turnKeywords)
-	db := newSearchTestDB(t, srv.URL)
-	sceneID, topicID := openTurn(t, db)
-
-	in := turnOf(sceneID, topicID)
-	in.UserType = ContentType(7)
-	if _, err := db.Update(core.DefaultAgentID, in); common.CodeOf(err) != common.ErrInvalidQuery {
-		t.Fatalf("undefined user type: want ErrInvalidQuery, got %v", err)
-	}
-	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); n != 0 {
-		t.Fatalf("rejected turn wrote %d archives, want 0", n)
-	}
-}
-
-// Update is the only L4 write path, so it is also where a non-text turn gets
-// its type: the slot is archived under the declared content type while the
-// other side keeps the text default, and the scene read reports it back.
-func TestUpdateStoresDeclaredContentTypes(t *testing.T) {
-	srv := mockLLMServer(t, turnKeywords)
-	db := newSearchTestDB(t, srv.URL)
-	sceneID, topicID := openTurn(t, db)
-
-	in := turnOf(sceneID, topicID)
-	in.UserText = "img://cat.png"
-	in.UserType = core.ContentImage
-	if _, err := db.Update(core.DefaultAgentID, in); err != nil {
-		t.Fatalf("Update: %v", err)
-	}
-
-	topicHex := common.FormatHash(topicID)
-	byTopic := func(ct core.ContentType) []core.ArchiveSlot {
-		// topic_id and type are filters only: the query needs one of the
-		// three modes, so sweep the time range covering this turn.
-		q := L4Query{Start: 1, End: 10000, TopicID: &topicHex, Type: &ct}
-		got, err := db.SearchL4(core.DefaultAgentID, q)
-		if err != nil {
-			t.Fatalf("SearchL4 by type %d: %v", ct, err)
-		}
-		return got
-	}
-	images := byTopic(core.ContentImage)
-	if len(images) != 1 || images[0].Content != "img://cat.png" || images[0].Role != core.RoleUser {
-		t.Fatalf("image archive = %+v, want the user slot only", images)
-	}
-	texts := byTopic(core.ContentText)
-	if len(texts) != 1 || texts[0].Role != core.RoleAgent {
-		t.Fatalf("text archive = %+v, want the agent slot to keep the default type", texts)
-	}
-
-	ctx, err := db.SceneContext(core.DefaultAgentID, common.FormatHash(sceneID))
-	if err != nil {
-		t.Fatalf("SceneContext: %v", err)
-	}
-	msgs := ctx.Topics[0].Messages
-	if len(msgs) != 2 || msgs[0].Role != core.RoleUser || msgs[0].Type != core.ContentImage ||
-		msgs[1].Role != core.RoleAgent || msgs[1].Type != core.ContentText {
-		t.Fatalf("scene context = %+v, want the user image first then the agent text", msgs)
 	}
 }

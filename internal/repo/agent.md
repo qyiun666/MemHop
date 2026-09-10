@@ -19,7 +19,8 @@
   `engine_lifecycle.go`（Create/Open/Checkpoint/Close）、`engine_write.go`（追加）、
   `engine_read.go`（索引查找读）、`engine_delete.go`（墓碑删除）、
   `engine_recovery.go`（扫描/撕裂尾帧截断/索引重建）；数据模型分
-  `model.go`（Slot 结构）/ `model_enums.go`（枚举）。
+  `model.go`（Slot 结构）/ `model_enums.go`（枚举）/ `model_dto.go` 与
+  `model_distill.go`（跨包使用的请求与响应结构，最底层纯数据）。
 - `index/`：索引——L2Meta（场景读回的唯一话题缓存，`rebuild.go` 全量重建）/
   `l4.go`（`L4Index`：一个话题名下有哪些内容槽位，按 Seq 升序、条目带 `Kind`）。
   只依赖 `core`。

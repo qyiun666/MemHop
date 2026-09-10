@@ -34,7 +34,6 @@ var DefaultMemHopDefaults = internal.DefaultMemHopDefaults
 
 type (
 	SearchQuery              = internal.SearchQuery
-	TurnUpdate               = internal.TurnUpdate
 	L3ImportItem             = internal.L3ImportItem
 	L3Relation               = internal.L3Relation
 	L3ImportMode             = internal.L3ImportMode
@@ -166,12 +165,13 @@ type L3Subgraph struct {
 }
 
 // ArchiveSlot is one record of a topic's L4 content: a dialogue original
-// (KindUtterance) or an operation event (KindEvent). ContextID is the topic that
-// owns it and Seq the slot it owns there, so (ContextID, Seq) is the address a
-// replay can rewrite. Role is one of RoleUser / RoleAgent (settled by Update) or
-// RoleDream (a fused group's summary) and qualifies utterances only; ContentType
-// says whether Content is prose or a reference to media; EventType names an
-// event and is the host's own word for it.
+// (KindUtterance) or an operation event (KindEvent) — and the same shape
+// AppendArchive takes, where IDHash and ContextID are ignored and a Seq of 0 asks
+// the library for a slot. ContextID is the topic that owns a stored record and Seq
+// the slot it owns there, so (ContextID, Seq) is the address a replay rewrites.
+// Role is one of RoleUser / RoleAgent / RoleSystem and qualifies utterances only:
+// an event leaves it 0. ContentType says whether Content is prose or a reference to
+// media; EventType names an event and is the host's own word for it.
 type ArchiveSlot struct {
 	IDHash      string      `json:"id_hash"`
 	Kind        ArchiveKind `json:"kind"`
@@ -183,29 +183,6 @@ type ArchiveSlot struct {
 	NodePath    string      `json:"node_path,omitempty"`
 	CreatedAt   int64       `json:"created_at"`
 	Content     string      `json:"content"`
-}
-
-// TrajectorySlot is one turn event — the read view of an L4 record of kind
-// event. SessionID is the topic id Search minted for the turn, which holds both
-// that turn's events and the plan tree it opened. Plan nodes are read through
-// PlanState (PlanNodeView), not here: they are L6 records, not content.
-//
-// NodePath names the step an event belongs to; the library stamps it on write, so
-// a host can attribute an event to a step without deriving anything. A bare turn
-// event leaves it empty.
-//
-// On every write path (AppendTrajectory, PlanCommit) SessionID/NodePath/Seq are
-// assigned by the library and are read-only here; of the event you pass, only
-// EventType, Payload and Timestamp are stored.
-type TrajectorySlot struct {
-	IDHash    string `json:"id_hash"`
-	SessionID string `json:"session_id"`
-	Seq       uint64 `json:"seq"`
-	EventType string `json:"event_type"`
-	Payload   string `json:"payload"`
-	Timestamp int64  `json:"timestamp"`
-
-	NodePath string `json:"node_path,omitempty"`
 }
 
 // PlanNodeView is the external plan-tree node; Status is the string form.

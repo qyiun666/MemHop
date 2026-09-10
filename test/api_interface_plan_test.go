@@ -51,23 +51,28 @@ func findPlanNode(t *testing.T, tree memhop.PlanTree, path string) memhop.PlanNo
 	return *found
 }
 
-func mustReadTrajectory(t *testing.T, db *testDB, key string) []memhop.TrajectorySlot {
+// mustEvents reads one topic's event track: the same key with the kind condition,
+// which is all a host has left for that read.
+func mustEvents(t *testing.T, db *testDB, key string) []memhop.ArchiveSlot {
 	t.Helper()
-	events, err := db.ReadTrajectory(key)
+	kind := memhop.KindEvent
+	events, err := db.SearchL4(memhop.L4Query{TopicID: &key, Kind: &kind})
 	if err != nil {
-		t.Fatalf("ReadTrajectory(%s): %v", key, err)
+		t.Fatalf("read events of %s: %v", key, err)
 	}
 	return events
 }
 
-func planEvent(ts int64, kind, payload string) memhop.TrajectorySlot {
-	return memhop.TrajectorySlot{EventType: kind, Payload: payload, Timestamp: ts}
+func planEvent(ts int64, kind, payload string) memhop.ArchiveSlot {
+	return memhop.ArchiveSlot{Kind: memhop.KindEvent, EventType: kind, Content: payload, CreatedAt: ts}
 }
 
-func mustAppend(t *testing.T, db *testDB, key, nodePath string, ev memhop.TrajectorySlot) {
+// mustAppend writes one event, binding it to a plan step when nodePath names one.
+func mustAppend(t *testing.T, db *testDB, key, nodePath string, ev memhop.ArchiveSlot) {
 	t.Helper()
-	if err := db.AppendTrajectory(key, nodePath, ev); err != nil {
-		t.Fatalf("AppendTrajectory(%s, %q): %v", key, nodePath, err)
+	ev.NodePath = nodePath
+	if err := db.AppendArchive(key, ev); err != nil {
+		t.Fatalf("AppendArchive(%s, %q): %v", key, nodePath, err)
 	}
 }
 
@@ -92,8 +97,8 @@ func TestInterfacePlanTreeLivesOnItsTurn(t *testing.T) {
 	}
 	// The turn's own read carries both faces of that key: the step event and the
 	// node the event created.
-	events := mustReadTrajectory(t, db, first)
-	if len(events) != 1 || events[0].SessionID != first || events[0].NodePath != "1" {
+	events := mustEvents(t, db, first)
+	if len(events) != 1 || events[0].ContextID != first || events[0].NodePath != "1" {
 		t.Fatalf("turn records = %+v, want the step event keyed to %s", events, first)
 	}
 }
@@ -107,7 +112,7 @@ func TestInterfacePlanCommitRollup(t *testing.T) {
 	topicID := openTurn(t, db, sceneID)
 	ts := time.Now().UnixMilli()
 
-	commit := func(path, title, status, summary string, ev memhop.TrajectorySlot) error {
+	commit := func(path, title, status, summary string, ev memhop.ArchiveSlot) error {
 		return db.PlanCommit(topicID, path, ev, memhop.PlanStep{
 			Title: title, Type: "step", Status: status, Summary: summary})
 	}
@@ -158,8 +163,8 @@ func TestInterfacePlanCommitRollup(t *testing.T) {
 	}
 	// The read says which step each event belongs to — the host cannot derive
 	// that hash, so the stamp is the only attribution available on the surface.
-	for _, e := range mustReadTrajectory(t, db, topicID) {
-		if e.SessionID != topicID || e.NodePath == "" {
+	for _, e := range mustEvents(t, db, topicID) {
+		if e.ContextID != topicID || e.NodePath == "" {
 			t.Fatalf("plan-bound event lost its attribution: %+v", e)
 		}
 	}
@@ -175,29 +180,31 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	// A bare turn event takes any EventType the host names and is keyed to the
 	// turn it logs, so the log cannot disagree with the turn.
 	mustAppend(t, db, turnID, "", planEvent(ts, "host_note", "本轮没有工具调用"))
-	turnEvents := mustReadTrajectory(t, db, turnID)
+	turnEvents := mustEvents(t, db, turnID)
 	if len(turnEvents) != 1 {
 		t.Fatalf("turn events = %+v, want the one appended", turnEvents)
 	}
-	if e := turnEvents[0]; e.SessionID != turnID || e.NodePath != "" {
+	if e := turnEvents[0]; e.ContextID != turnID || e.NodePath != "" {
 		t.Fatalf("bare turn event = %+v, want keyed to %s and bound to no step", e, turnID)
 	}
 
 	mustAppend(t, db, planTurn, "1", planEvent(ts+1, "plan_step", "开始"))
 	mustAppend(t, db, planTurn, "1", planEvent(ts+2, "tool_call", `{"tool":"bash","cmd":"go test"}`))
-	planEvents := mustReadTrajectory(t, db, planTurn)
-	// Seq is one space a topic shares with its originals, which hold slots 1
-	// and 2, so a topic's first event is 3.
+	planEvents := mustEvents(t, db, planTurn)
+	// Seq is one space a topic shares with its dialogue, which holds slots 1 and 2,
+	// so a topic's first event is 3.
 	if len(planEvents) != 2 || planEvents[0].Seq != 3 || planEvents[1].Seq != 4 {
 		t.Fatalf("plan events = %+v, want Seq 3 and 4", planEvents)
 	}
 
 	// Over budget is refused rather than shortened: a truncated event reads
 	// exactly like a complete one, and nothing is written either way.
-	if err := db.AppendTrajectory(planTurn, "1", planEvent(ts+3, "tool_result", strings.Repeat("x", 4097))); err == nil {
+	tooBig := planEvent(ts+3, "tool_result", strings.Repeat("x", 4097))
+	tooBig.NodePath = "1"
+	if err := db.AppendArchive(planTurn, tooBig); err == nil {
 		t.Fatal("a payload over the 4 KiB event budget should be refused")
 	}
-	if again := mustReadTrajectory(t, db, planTurn); len(again) != 2 {
+	if again := mustEvents(t, db, planTurn); len(again) != 2 {
 		t.Fatalf("the refused event landed anyway: %+v", again)
 	}
 
@@ -206,12 +213,12 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTrajectorySessions: %v", err)
 	}
-	steps := map[string]int{}
+	eventCount := map[string]int{}
 	for _, s := range sums {
-		steps[s.SessionID] = s.Steps
+		eventCount[s.SessionID] = s.Events
 	}
-	if steps[turnID] != 1 || steps[planTurn] != 2 {
-		t.Fatalf("trajectory sessions = %+v, want %s:1 step and %s:2 steps", sums, turnID, planTurn)
+	if eventCount[turnID] != 1 || eventCount[planTurn] != 2 {
+		t.Fatalf("trajectory sessions = %+v, want %s:1 event and %s:2 events", sums, turnID, planTurn)
 	}
 
 	// Crystallizing a turn works off everything that turn logged — its plain
@@ -261,14 +268,14 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 	}
 
 	reopened := newTestDB(t, openMockMulti(t, path, llm.srv.URL))
-	events := mustReadTrajectory(t, reopened, turnID)
+	events := mustEvents(t, reopened, turnID)
 	if len(events) != 2 || events[0].Seq != 3 || events[1].Seq != 4 {
 		t.Fatalf("events after reopen = %+v, want Seq 3 and 4 rebuilt from records", events)
 	}
-	if events[0].EventType != "tool_call" || events[0].Payload != `{"tool":"bash"}` {
+	if events[0].EventType != "tool_call" || events[0].Content != `{"tool":"bash"}` {
 		t.Fatalf("the event body did not survive the reopen: %+v", events[0])
 	}
-	if events[0].SessionID != turnID {
+	if events[0].ContextID != turnID {
 		t.Fatalf("rebuilt index keyed the event away from its turn: %+v", events[0])
 	}
 	leaf := findPlanNode(t, mustPlanState(t, reopened, turnID), "1.1")

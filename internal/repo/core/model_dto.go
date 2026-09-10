@@ -21,32 +21,14 @@ type SearchQuery struct {
 
 // SearchResult carries the L0 profile plus the read surface of one scene: the
 // scene record, its depth-1 topics (the host's context for that session) and
-// NewTopicID — the turn topic this read opened. The host runs its turn and
-// hands that ID back to Update and to the L6 trajectory writes.
+// NewTopicID — the turn topic this read opened. The host runs its turn, appends
+// what happened under that id, and hands it back to Update.
 type SearchResult struct {
 	Profile      ProfileSlot `json:"profile"`
 	ProfileBrief string      `json:"profile_brief"`
 	Scene        SceneSlot   `json:"scene"`
 	Topics       []TopicSlot `json:"topics"`
 	NewTopicID   uint64      `json:"new_topic_id"`
-}
-
-// TurnUpdate is one finished turn handed to Update: the topic id Search
-// issued, the host's scene id, and both originals with their own timestamps.
-// The library distills them into the topic's single keyword track; the
-// originals are kept as L4 archives. Update is the only L4 write path, so the
-// two content types are how a non-text turn gets recorded: both default to
-// ContentText (the zero value) and a non-text slot carries its reference (a
-// path or URL) in place of the text.
-type TurnUpdate struct {
-	SceneID   string      `json:"scene_id"`
-	TopicID   string      `json:"topic_id"`
-	UserText  string      `json:"user_text"`
-	UserTS    int64       `json:"user_ts"`
-	UserType  ContentType `json:"user_type,omitempty"`
-	AgentText string      `json:"agent_text"`
-	AgentTS   int64       `json:"agent_ts"`
-	AgentType ContentType `json:"agent_type,omitempty"`
 }
 
 // SceneMessage is one L4 utterance inside a scene context topic. Type tells the
@@ -171,12 +153,12 @@ type ScenePatch struct {
 
 // TrajectorySessionSummary is one turn's event footprint (one topic's worth of
 // events per agent turn); SessionID is the external 16-hex form so it feeds
-// ReadTrajectory / Crystallize directly. It counts events only — a turn whose two
-// originals are all L4 holds is not a turn with a trajectory. Events older than
-// the 7-day retention window are dropped by Dream automatically.
+// AppendArchive / Crystallize directly. Events counts records of kind event only —
+// a turn whose dialogue is all L4 holds is not a turn with a trajectory. Events
+// older than the 7-day retention window are dropped by Dream automatically.
 type TrajectorySessionSummary struct {
 	SessionID    string `json:"session_id"`     // 16 位 hex
-	Steps        int    `json:"steps"`          // 事件总数
+	Events       int    `json:"events"`         // 事件总数
 	LastAppendAt int64  `json:"last_append_at"` // 最近事件时间戳（Unix 毫秒）
 }
 

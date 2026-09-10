@@ -1,16 +1,15 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L6 big methods of the composition root. One key per agent turn — the topic id
-// Search issues for it and Update settles it — addresses two stores at once: the
-// turn's plan tree, which is what L6 itself records, and its event track, which is
-// L4 content of kind event. So a single read of a turn still yields both its event
-// log and its step statuses, but they come from different layers. Crystallize is an
-// explicit host-triggered step over one key's events. Retention is internal: Dream
-// drops records older than the retention window, and no delete API is exposed.
-// Every write keeps the domain's L4Index and PlanCache in sync under the domain
-// lock. The plan steps live in internal/plan, the content steps in
-// internal/content.
+// L6 big methods of the composition root. L6 records one thing per agent turn: the
+// plan tree keyed by the topic id Search issues for it. The event track that shares
+// that key is L4 content — written by AppendArchive and read back through SearchL4
+// with a Kind condition — so this file keeps only the enumeration no L4 read gives
+// (which turns hold events) and the plan steps. Crystallize is an explicit
+// host-triggered step over one key's events. Retention is internal: Dream drops
+// records older than the retention window, and no delete API is exposed. Every
+// write keeps the domain's L4Index and PlanCache in sync under the domain lock. The
+// plan steps live in internal/plan, the content steps in internal/content.
 
 package internal
 
@@ -27,56 +26,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// AppendTrajectory appends one event to the L4 event track of `topicID`, the turn
-// Search issued it for. With an empty nodePath the record is a bare turn
-// event; with a nodePath it names the plan step it belongs to, and that step's
-// chain is created as pending when missing — so this is also how a host adds a
-// step. Seq comes from the topic's own content (one slot above whatever it holds
-// already), so the host never counts sequences and an event cannot land on the two
-// slots the turn's originals keep.
-//
-// An event that does not satisfy the write contract is refused before anything is
-// stored, including before a node is created or advanced.
-func (db *DB) AppendTrajectory(agentID uint64, topicID string, nodePath string, ev core.ArchiveSlot) error {
-	ac, err := db.lockAgent(agentID)
-	if err != nil {
-		return err
-	}
-	defer ac.Mu.Unlock()
-	th, err := content.ParseTopicID(topicID)
-	if err != nil {
-		return err
-	}
-	// Checked before the tree moves: a refused event must not leave a node chain
-	// created behind it.
-	if err := content.ValidateEvent(ev); err != nil {
-		return err
-	}
-	if nodePath != "" {
-		if _, err := plan.EnsureNode(ac, agentID, th, nodePath); err != nil {
-			return err
-		}
-	}
-	_, err = content.AppendEvent(ac, agentID, th, nodePath, ev)
-	return err
-}
-
-// ReadTrajectory returns one turn's events in Seq order; turnID is the topic id
-// Search issued for that turn. The plan nodes that turn opened are not part of
-// this read: they are L6 records, and a node's status and summary come back from
-// PlanState.
-func (db *DB) ReadTrajectory(agentID uint64, turnID string) ([]core.ArchiveSlot, error) {
-	ac, parsed, err := db.lockSession(agentID, turnID)
-	if err != nil {
-		return nil, err
-	}
-	defer ac.Mu.Unlock()
-	return content.ReadEvents(db.engine, agentID, ac, parsed)
-}
-
-// ListTrajectorySessions summarizes every turn that holds events under the domain
-// lock (same serialization contract as Append). A turn holding only its two
-// originals is absent from this list — it recorded no operations.
+// ListTrajectorySessions enumerates the turns that hold events under the domain
+// lock (same serialization contract as AppendArchive). A turn holding only
+// dialogue is absent from this list — it recorded no operations.
 func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSummary, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -88,7 +40,7 @@ func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSu
 	for _, s := range sums {
 		out = append(out, core.TrajectorySessionSummary{
 			SessionID:    common.FormatHash(s.TopicID),
-			Steps:        s.Events,
+			Events:       s.Events,
 			LastAppendAt: s.LastAt,
 		})
 	}
@@ -121,7 +73,11 @@ func (db *DB) PlanCommit(agentID uint64, topicID string, nodePath string, ev cor
 	if _, err := plan.StatusToU8(step.Status); err != nil {
 		return err
 	}
-	if err := content.ValidateEvent(ev); err != nil {
+	// The step being committed owns these two fields: the event is an event, and
+	// it belongs to this node whatever the caller named on the record.
+	ev.Kind = core.KindEvent
+	ev.NodePath = nodePath
+	if err := content.ValidateAppend(ev); err != nil {
 		return err
 	}
 	nodeID, err := plan.EnsureNode(ac, agentID, th, nodePath)
@@ -131,7 +87,7 @@ func (db *DB) PlanCommit(agentID uint64, topicID string, nodePath string, ev cor
 	if err := plan.CommitNode(ac, agentID, nodeID, step); err != nil {
 		return err
 	}
-	if _, err := content.AppendEvent(ac, agentID, th, nodePath, ev); err != nil {
+	if _, err := content.Append(ac, agentID, th, ev); err != nil {
 		return err
 	}
 	return plan.RollupTree(ac, agentID, th)
@@ -170,7 +126,7 @@ func (db *DB) Crystallize(ctx context.Context, agentID uint64, turnID string, ex
 	}
 	defer ac.Mu.Unlock()
 	// Events land in Seq order; only the payload budget can shorten the turn.
-	stored, err := content.ReadEvents(db.engine, agentID, ac, parsed)
+	stored, err := content.Read(db.engine, agentID, ac, parsed, core.KindEvent)
 	if err != nil {
 		return nil, err
 	}

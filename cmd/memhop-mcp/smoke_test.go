@@ -49,8 +49,8 @@ func TestSSEMultiTenantIsolation(t *testing.T) {
 		"memhop_knowledge_get", "memhop_knowledge_list", "memhop_knowledge_import",
 		"memhop_knowledge_update", "memhop_knowledge_delete", "memhop_knowledge_nodes",
 		"memhop_knowledge_subgraph", "memhop_archive_search", "memhop_archive_get",
-		"memhop_trajectory_append", "memhop_trajectory_read", "memhop_trajectory_sessions",
-		"memhop_crystallize",
+		"memhop_archive_append",
+		"memhop_trajectory_read", "memhop_trajectory_sessions", "memhop_crystallize",
 	} {
 		if !names[want] {
 			t.Errorf("missing tool %q", want)
@@ -389,9 +389,9 @@ func TestSSECloseAllPersists(t *testing.T) {
 }
 
 // TestSSETurnFlow drives the hot path the way a host does, over MCP:
-// memhop_search opens a scene and issues the turn's topic id,
-// memhop_trajectory_append binds this turn's events to it, memhop_update
-// settles the turn into it, and the next read hands that turn back.
+// memhop_search opens a scene and issues the turn's topic id, memhop_archive_append
+// records what the turn said and what it did under that one key, memhop_update
+// distills it, and the next read hands that turn back.
 func TestSSETurnFlow(t *testing.T) {
 	srv := newTestServerOver(t, turnTestBase(t), t.TempDir(), nil)
 	alice := connectTenant(t, srv.URL, "alice")
@@ -417,23 +417,38 @@ func TestSSETurnFlow(t *testing.T) {
 		t.Fatalf("opening a turn must create no topic, got %d", len(turn.Topics))
 	}
 
-	if _, err := callClient(t, alice, "memhop_trajectory_append", map[string]any{
-		"session_id": turn.NewTopicID, "event_type": "tool_call",
-		"payload": "go test ./...", "timestamp": 1500,
-	}); err != nil {
-		t.Fatalf("trajectory append: %v", err)
+	// The turn's own record: two spoken lines and one operation, all under the key
+	// Search issued, differentiated only by kind.
+	appends := []map[string]any{
+		{"topic_id": turn.NewTopicID, "kind": "utterance", "role": "user",
+			"content": "go 项目怎么跑测试", "timestamp": 1000},
+		{"topic_id": turn.NewTopicID, "kind": "utterance", "role": "agent",
+			"content": "go test ./...", "timestamp": 2000},
+		{"topic_id": turn.NewTopicID, "kind": "event", "event_type": "tool_call",
+			"content": "ran go test", "timestamp": 1500},
+	}
+	for _, args := range appends {
+		if _, err := callClient(t, alice, "memhop_archive_append", args); err != nil {
+			t.Fatalf("archive append %v: %v", args["kind"], err)
+		}
+	}
+	// An utterance that does not say who spoke is refused: a label-less transcript
+	// is the thing keyword extraction cannot recover.
+	if _, err := callClient(t, alice, "memhop_archive_append", map[string]any{
+		"topic_id": turn.NewTopicID, "kind": "utterance",
+		"content": "anonymous", "timestamp": 2100,
+	}); err == nil {
+		t.Fatal("an utterance without a role must be refused")
 	}
 
 	settled, err := callClient(t, alice, "memhop_update", map[string]any{
 		"scene_id": turn.Scene.SceneID, "topic_id": turn.NewTopicID,
-		"user_text": "go 项目怎么跑测试", "user_ts": 1000,
-		"agent_text": "go test ./...", "agent_ts": 2000,
 	})
 	if err != nil {
 		t.Fatalf("update: %v", err)
 	}
-	if !strings.Contains(settled, turn.NewTopicID) {
-		t.Fatalf("update settled %s, want the opened topic %s", settled, turn.NewTopicID)
+	if !strings.Contains(settled, `"ok":true`) {
+		t.Fatalf("update reported %s, want ok", settled)
 	}
 
 	reread, err := callClient(t, alice, "memhop_search", map[string]any{"scene_id": turn.Scene.SceneID})
@@ -448,15 +463,24 @@ func TestSSETurnFlow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("trajectory read: %v", err)
 	}
-	if !strings.Contains(events, "go test ./...") {
-		t.Fatalf("the turn's trajectory must read back by its topic id: %s", events)
+	if !strings.Contains(events, "ran go test") {
+		t.Fatalf("the turn's events must read back by its topic id: %s", events)
+	}
+	// The read is the event track, not the whole topic: what was spoken stays out
+	// of it, which is what lets Crystallize see operations only.
+	if strings.Contains(events, "怎么跑测试") {
+		t.Fatalf("trajectory read leaked the dialogue: %s", events)
+	}
+	if got, err := callClient(t, alice, "memhop_archive_search", map[string]any{
+		"topic_id": turn.NewTopicID, "kind": "utterance",
+	}); err != nil || !strings.Contains(got, "怎么跑测试") {
+		t.Fatalf("utterances of the turn: %s err=%v", got, err)
 	}
 
 	// A turn cannot be settled without the id Search issued: the missing
 	// required argument is refused rather than silently minting a topic.
 	if _, err := callClient(t, alice, "memhop_update", map[string]any{
-		"scene_id": turn.Scene.SceneID, "user_text": "u", "user_ts": 1000,
-		"agent_text": "a", "agent_ts": 2000,
+		"scene_id": turn.Scene.SceneID,
 	}); err == nil {
 		t.Fatal("update without topic_id must be rejected")
 	}

@@ -59,7 +59,7 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("alice search: %v", err)
 	}
-	if _, err := sess.Update(turnUpdate(res.Scene.SceneID, res.NewTopicID, "alice private memory", "alice reply")); err != nil {
+	if err := settleTurn(sess, res.Scene.SceneID, res.NewTopicID, "alice private memory", "alice reply"); err != nil {
 		t.Fatalf("alice update: %v", err)
 	}
 	// Cross-agent isolation: bob sees none of alice's scenes.
@@ -98,17 +98,19 @@ func TestSurfaceMultiAgent(t *testing.T) {
 	}
 }
 
-// turnUpdate builds one finished turn: it settles the topic id Search opened
-// for the turn inside the given scene.
-func turnUpdate(sceneID, topicID, userText, agentText string) TurnUpdate {
-	return TurnUpdate{
-		SceneID:   sceneID,
-		TopicID:   topicID,
-		UserText:  userText,
-		UserTS:    1_700_000_060_000,
-		AgentText: agentText,
-		AgentTS:   1_700_000_060_500,
+// settleTurn runs a whole turn the way a host now does: the two originals land in
+// the slots dialogue owns, then the turn is settled into the topic Search opened.
+func settleTurn(sess *Session, sceneID, topicID, userText, agentText string) error {
+	utterances := []ArchiveSlot{
+		{Kind: KindUtterance, Seq: 1, Role: RoleUser, Content: userText, CreatedAt: 1_700_000_060_000},
+		{Kind: KindUtterance, Seq: 2, Role: RoleAgent, Content: agentText, CreatedAt: 1_700_000_060_500},
 	}
+	for _, u := range utterances {
+		if err := sess.AppendArchive(topicID, u); err != nil {
+			return err
+		}
+	}
+	return sess.Update(sceneID, topicID)
 }
 
 // TestSurfaceSessionMethods exercises the full Session surface of the
@@ -144,12 +146,15 @@ func TestSurfaceSessionMethods(t *testing.T) {
 		t.Fatalf("session search: %v", err)
 	}
 	sceneID := res.Scene.SceneID
-	topicID, err := s.Update(turnUpdate(sceneID, res.NewTopicID, "session boot memory", "session reply"))
-	if err != nil {
+	topicID := res.NewTopicID
+	if err := settleTurn(s, sceneID, topicID, "session boot memory", "session reply"); err != nil {
 		t.Fatalf("session update: %v", err)
 	}
-	if !isHexID(topicID) {
-		t.Fatalf("update must return a hex topic id, got %q", topicID)
+	// Update writes no content: the turn's records are the ones the host appended,
+	// and a keyword search finds them under the key Search issued.
+	hits, err := s.SearchL4(L4Query{Keyword: "session boot"})
+	if err != nil || len(hits) != 1 || hits[0].ContextID != topicID {
+		t.Fatalf("settled turn content = %+v err=%v", hits, err)
 	}
 	if _, err := s.SearchL4(L4Query{Keyword: "session"}); err != nil {
 		t.Fatalf("session searchL4: %v", err)
@@ -175,7 +180,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if err != nil {
 		t.Fatalf("session search2: %v", err)
 	}
-	if _, err := s.Update(turnUpdate(res2.Scene.SceneID, res2.NewTopicID, "second session scene", "second reply")); err != nil {
+	if err := settleTurn(s, res2.Scene.SceneID, res2.NewTopicID, "second session scene", "second reply"); err != nil {
 		t.Fatalf("session update2: %v", err)
 	}
 	scenes, err = s.ListScenes("")
@@ -220,11 +225,11 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	}
 	// L6 trajectory via session.
 	traj := internal.FormatID(common.HashID("sess-traj"))
-	if err := s.AppendTrajectory(traj, "", TrajectorySlot{EventType: "tool_call", Payload: "p", Timestamp: 1_700_000_061_000}); err != nil {
-		t.Fatalf("session appendTraj: %v", err)
+	if err := s.AppendArchive(traj, event("tool_call", "p", 1_700_000_061_000)); err != nil {
+		t.Fatalf("session appendArchive: %v", err)
 	}
-	if evs, err := s.ReadTrajectory(traj); err != nil || len(evs) != 1 {
-		t.Fatalf("session readTraj: %d %v", len(evs), err)
+	if evs := eventsOf(t, s, traj); len(evs) != 1 {
+		t.Fatalf("session events of %s: %d", traj, len(evs))
 	}
 	if _, err := s.Crystallize(ctx, traj, nil); err != nil {
 		t.Fatalf("session crystallize: %v", err)

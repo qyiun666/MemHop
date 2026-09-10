@@ -6,11 +6,11 @@
 // set is exactly the externally callable surface. Every call is serialized
 // per agent domain by the internal domain lock.
 //
-// The methods split by audience. The runtime/task face (19) is what the host
+// The methods split by audience. The runtime/task face (18) is what the host
 // drives every turn and what LLM tools bind to: Search, Update, Dream,
-// AppendTrajectory (the host-driven loop), SceneContext, ListScenes, GetL0,
+// AppendArchive (the host-driven loop), SceneContext, ListScenes, GetL0,
 // UpdateL0, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes, QueryL3Subgraph,
-// Crystallize, ReadTrajectory, ListTrajectorySessions, PlanCommit, PlanState.
+// Crystallize, ListTrajectorySessions, PlanCommit, PlanState.
 // The assembly/admin face (7, plus all of
 // MultiAgentDB) is host code at session boundaries and management channels
 // only — never an LLM tool: UpdateScene, MergeScenes, DeleteTopic,
@@ -43,14 +43,13 @@ func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	return fromSearchResult(res), nil
 }
 
-// Update settles one finished turn (both originals plus their timestamps)
-// into the topic id Search issued for it, and returns that id.
-func (s *Session) Update(in TurnUpdate) (string, error) {
-	id, err := s.Session.Update(in)
-	if err != nil {
-		return "", err
-	}
-	return internal.FormatID(id), nil
+// Update distills one finished turn into the keyword track of topicID, the id
+// Search opened for it, and reads that topic's appended utterances as the turn's
+// content: it writes no content of its own. One LLM call, inside the domain lock.
+// A turn whose content the retention window already reclaimed is refused with
+// ErrInvalidQuery instead of getting an empty track.
+func (s *Session) Update(sceneID, topicID string) error {
+	return s.Session.Update(sceneID, topicID)
 }
 
 // GetL0 returns the profile without the internal id_hash.
@@ -172,69 +171,58 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return out, nil
 }
 
-// ReadTrajectory returns one turn's events with hex IDs, in Seq order. turnID is
-// the topic id Search minted for the turn. The plan nodes that turn opened are not
-// part of this read — they are L6 records, not content; a node's status and
-// summary come back from PlanState.
-func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
-	events, err := s.Session.ReadTrajectory(turnID)
-	if err != nil {
-		return nil, err
-	}
-	out := make([]TrajectorySlot, len(events))
-	for i, e := range events {
-		out[i] = fromTrajectorySlot(e)
-	}
-	return out, nil
-}
-
-// AppendTrajectory writes one event under topicID: the turn's topic id Search
-// minted for it. With an empty nodePath the record is a bare turn event; with
-// a nodePath it hangs on that plan step, which is created as pending when
-// missing — so this call is also how a host adds a step to the turn's plan.
+// AppendArchive writes one piece of a turn's content under topicID — the id Search
+// opened for it — and is the only way content enters a topic. KindUtterance is
+// something somebody said; KindEvent is something that happened while they said it.
+// Update distills the utterances of that key, Crystallize reads its events, and the
+// plan tree sharing the key comes back from PlanState.
 //
-// nodePath shapes the tree itself: each missing segment along the dotted path
-// is created, so a typo opens a second tree, and L6 exposes no node-delete
-// call — a stale tree goes only when the turn that opened it falls out of the
-// retention window.
+// What is stored is Kind, Seq, Role, ContentType, EventType, NodePath, Content and
+// CreatedAt; IDHash and ContextID are ignored, which is what makes the round trip
+// work — read a record back, change one field, write it to the slot it came from.
 //
-// The log is per-turn: nothing returns or takes an event id, because no public
-// call consumes one — ReadTrajectory(topicID) gives the records back in Seq
-// order, and Dream drops ones past the retention window. Of the event you pass,
-// only EventType, Payload and Timestamp are stored; Seq, SessionID and NodePath
-// are assigned by the library, and the record's NodePath is the step it landed
-// on, which is how a host attributes an event to a step afterwards.
+// Seq 0 allocates: the record lands one slot above everything the topic holds, and
+// above Seq 1 and 2, which belong to dialogue — so the first event of a turn is
+// Seq 3. A Seq you name is written as named, and taking a held slot overwrites it
+// instead of erroring, across kinds: that is what lets a replayed turn converge
+// rather than accumulate versions. Nothing reclaims a slot a replay stopped
+// filling, so a withdrawn line stays until DeleteTopic or the retention window.
 //
-// Seq is one space a topic shares with its own originals: Update keeps slots 1
-// and 2 for what the user said and the reply, so the first event of a turn is 3.
-// Rewriting a Seq that is already taken is an overwrite, not an error — that is
-// what lets a replayed turn converge instead of accumulating versions.
+// Every rule below is refused before any record or plan node is touched. An event
+// names itself with a non-empty EventType and has no speaker; an utterance declares
+// Role (RoleUser / RoleAgent / RoleSystem) and ContentType and carries neither
+// EventType nor NodePath. RoleDream is refused: it is the library's own mark on a
+// consolidated summary, and a host that could write one makes that mark meaningless.
+// Content over budget is refused, not truncated — 4 KiB per event, 64 KiB per
+// utterance — because a shortened record reads back exactly like a complete one, and
+// an unbounded utterance turns one distillation into an unbounded number of LLM
+// calls holding the domain lock.
 //
-// A Payload over the 4 KiB budget is refused, not truncated: a shortened event
-// would read back exactly like a complete one. Nothing is written when this
-// call returns an error — including no node created along nodePath.
+// NodePath shapes the tree itself: each missing segment of the dotted path is
+// created as pending, so a mistyped segment opens a second tree, and L6 exposes no
+// node-delete call — a stale tree goes only when its turn falls out of the retention
+// window.
 //
-// EventType names the step and is the host's own word for it on both paths: the
-// engine never branches on it — the name comes back through ReadTrajectory and
-// reaches the Crystallize prompt verbatim — so these conventions are a shared
-// vocabulary for the reader, not an accepted set: plan_step, llm_request,
-// llm_output, tool_call, tool_result, subagent_spawn, subagent_done,
-// context_inject, ask_user, user_reply. An empty EventType is ErrInvalidQuery.
-func (s *Session) AppendTrajectory(topicID, nodePath string, ev TrajectorySlot) error {
-	return s.Session.AppendTrajectory(topicID, nodePath, toCoreTrajectorySlot(ev))
+// EventType is the host's own word for the step: the engine never branches on it, it
+// comes back verbatim through SearchL4 and reaches the Crystallize prompt verbatim.
+// These conventions are a shared vocabulary for the reader, not an accepted set:
+// plan_step, llm_request, llm_output, tool_call, tool_result, subagent_spawn,
+// subagent_done, context_inject, ask_user, user_reply.
+func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
+	return s.Session.AppendArchive(topicID, toCoreAppendSlot(slot))
 }
 
 // PlanCommit advances one plan node and appends its step event, then rolls
-// Done children's summaries up into their parent. topicID is the turn that
+// Done children's summaries up into their parent. topicID names the turn that
 // opened the plan; nodePath is the dotted path the host assigns within it
 // ("1", "1.2.1") — a node missing along that path is created as pending, which
-// is how a step is added. Like the node-bound AppendTrajectory, the event is
-// forced to bare-event semantics and names itself: any non-empty EventType the
-// host chooses is accepted. step carries the node's own fields; an unknown
-// Status is refused before the tree moves, and a field left blank keeps what is
-// stored, so a later commit never rewinds a finished step.
-func (s *Session) PlanCommit(topicID, nodePath string, ev TrajectorySlot, step PlanStep) error {
-	return s.Session.PlanCommit(topicID, nodePath, toCoreTrajectorySlot(ev), toInternalPlanStep(step))
+// is how a step is added. The event is forced to bare-event semantics and names
+// itself: any non-empty EventType the host chooses is accepted. step carries the
+// node's own fields; an unknown Status is refused before the tree moves, and a
+// field left blank keeps what is stored, so a later commit never rewinds a
+// finished step.
+func (s *Session) PlanCommit(topicID, nodePath string, ev ArchiveSlot, step PlanStep) error {
+	return s.Session.PlanCommit(topicID, nodePath, toCoreAppendSlot(ev), toInternalPlanStep(step))
 }
 
 // PlanState returns the plan tree of one turn — keyed by the topic id that
@@ -350,9 +338,9 @@ func (s *Session) DeleteL3Nodes(graphID string, nodeIDs []string) error {
 	return s.Session.DeleteL3Nodes(graphID, nodeIDs)
 }
 
-// ListTrajectorySessions summarizes every L6 key of the domain — the turn topic
-// ids that carry a log — with its step count and last-append time. The returned
-// ids feed ReadTrajectory and Crystallize directly; records past the retention
+// ListTrajectorySessions enumerates the turn topic ids of the domain that carry an
+// event log, each with its event count and last-append time. The returned
+// ids feed AppendArchive and Crystallize directly; records past the retention
 // window drop out at the next Dream.
 func (s *Session) ListTrajectorySessions() ([]TrajectorySessionSummary, error) {
 	return s.Session.ListTrajectorySessions()

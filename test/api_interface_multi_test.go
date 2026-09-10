@@ -34,8 +34,8 @@ func settleOneTurn(t *testing.T, sess *memhop.Session, user, agent string) strin
 		t.Fatalf("Search: %v", err)
 	}
 	sceneID := res.Scene.SceneID
-	if _, err := sess.Update(turn(sceneID, res.NewTopicID, user, agent)); err != nil {
-		t.Fatalf("Update: %v", err)
+	if err := turn(sess, sceneID, res.NewTopicID, user, agent); err != nil {
+		t.Fatalf("turn: %v", err)
 	}
 	return sceneID
 }

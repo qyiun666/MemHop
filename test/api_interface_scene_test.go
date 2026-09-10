@@ -39,13 +39,14 @@ func findScene(t *testing.T, db *testDB, sceneID string) memhop.SceneSlot {
 	return memhop.SceneSlot{}
 }
 
-// settleTurn runs one full turn the way a host does: read the session (which
-// opens the turn), then settle it. It returns the topic id that now carries it.
+// settleTurn runs one full turn the way a host does: read the session (which opens
+// the turn), append what the turn said, then settle it. It returns the topic id
+// that now carries it.
 func settleTurn(t *testing.T, db *testDB, sceneID, user, agent string) string {
 	t.Helper()
-	id, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), user, agent))
-	if err != nil {
-		t.Fatalf("Update(%q): %v", user, err)
+	id := openTurn(t, db, sceneID)
+	if err := turn(db.Session, sceneID, id, user, agent); err != nil {
+		t.Fatalf("turn(%q): %v", user, err)
 	}
 	return id
 }

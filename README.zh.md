@@ -36,7 +36,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 ## 核心特性
 
 - **七层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 计划，配合 Dream 巩固管线
-- **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 按场景 id 直取该会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），并**顺手开启本轮**：返回本轮要落进去的话题 id。`Update` 把整轮沉淀进那个 id（用户原文 + Agent 原文 + 双时间戳 → 一次提炼出话题关键词）。一轮拥有的东西全在这个 id 下：两条原文与操作事件同为 L4 内容、只差一个 `Kind`，该轮开出的任务树才是 L6。话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
+- **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 按场景 id 直取该会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），并**顺手开启本轮**：返回本轮要落进去的话题 id。随后由宿主自己记录这一轮——`AppendArchive` 写下说了什么与做了什么（对话原文与操作事件同为 L4 内容、只差一个 `Kind`），`Update` 再把这一轮的原文一次提炼成该话题的关键词收口。一轮拥有的东西全在这个 id 下，该轮开出的任务树才是 L6。话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
 - **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x000E`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。L3 知识图记录驻留文件级保留公共域（能力记录已不存在——目录即能力，见下）。**仅认 `0x000E`**——`0x000D` 及更早的 `.meh` 数据文件 Open 时显式拒绝、无迁移路径：`0x000D` 把一轮的事件存在一个已不存在的记录类型里、把归档按正文哈希发号，按新规则哪一条都指不到东西
 - **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（话题缓存、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行。例外是 L3（见下）：知识图是文件级公共池
 - **L1 场景超图** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）并按时间衰减剪枝；L1 由 Dream 维护，供显式图查询与后续关联消费——读取路径不打分、不扩散
@@ -44,7 +44,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related；边的身份是「成员节点 + kind」，同一对节点可并存多种关系），图与节点两级删除，关键词/类型/ID 条件按 AND 组合，BFS 子图查询。图池是**文件级**的：文件内所有 agent 域共享一份 L3（项目知识导一次全家可见），删 agent 不删公共池
 - **设计层面单实例** — 一个 `.meh` 文件只有一个持有者：全平台文件排他锁强制（linux/darwin/windows），第二次 `Open` 直接失败；内嵌形态无服务进程、无后台守护
 - **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、go-openai、go-sdk、golang.org/x/sys）；关键词提炼没有本地兜底，LLM 返回不可解析就直接报错；**引擎不联系任何 embedding / 向量服务**，配置里也没有维度要声明，`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将 26 个公开会话方法中的 21 个以 24 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录；L3 知识图是全租户共享的唯一公共池）。刻意只留在 Go 侧：L6 计划写读面（`PlanCommit`/`PlanState`）、记忆纠错（`DeleteTopic`/`DeleteScene`/`DeleteL3Nodes`）与文件维护（`CompactTo`，入参就是一个输出路径）——这些要由持有会话状态、或该决定文件写到哪里的宿主来调
+- **MCP Server** — `cmd/memhop-mcp` 将 25 个公开会话方法中的 20 个以 24 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录；L3 知识图是全租户共享的唯一公共池）。刻意只留在 Go 侧：L6 计划写读面（`PlanCommit`/`PlanState`）、记忆纠错（`DeleteTopic`/`DeleteScene`/`DeleteL3Nodes`）与文件维护（`CompactTo`，入参就是一个输出路径）——这些要由持有会话状态、或该决定文件写到哪里的宿主来调
 
 ## 快速开始
 
@@ -99,27 +99,36 @@ for _, topic := range res.Topics { // 该会话的 depth-1 话题集 = 本轮上
     _ = topic.FusedKeywords
 }
 
-// 一轮结束：整轮沉淀进 Search 开出的那个话题
-// （用户原文 + Agent 原文 + 各自时间戳），库内一次提炼出该轮话题的关键词。
-// 同一个 TopicID 再沉淀一次是覆盖而不是新增，超时后可安全重试。
-topicID, err := sess.Update(memhop.TurnUpdate{
-    SceneID:   sceneID,
-    TopicID:   res.NewTopicID,
-    UserText:  "昨天我们讨论了什么？",
-    UserTS:    time.Now().UnixMilli(),
-    AgentText: "Agent：...",
-    AgentTS:   time.Now().UnixMilli(),
+// 一轮进行中：宿主把这一轮的所见所行写进 Search 开出的那个话题。
+// 对话与事件是同一类记录，只差一个 Kind。
+topicID := res.NewTopicID
+_ = sess.AppendArchive(topicID, memhop.ArchiveSlot{
+    Kind:      memhop.KindUtterance,
+    Seq:       1, // 槽位 1 与 2 属于对话
+    Role:      memhop.RoleUser,
+    Content:   "昨天我们讨论了什么？",
+    CreatedAt: time.Now().UnixMilli(),
 })
+_ = sess.AppendArchive(topicID, memhop.ArchiveSlot{
+    Kind:      memhop.KindUtterance,
+    Seq:       2,
+    Role:      memhop.RoleAgent,
+    Content:   "Agent：...",
+    CreatedAt: time.Now().UnixMilli(),
+})
+_ = sess.AppendArchive(topicID, memhop.ArchiveSlot{
+    Kind:      memhop.KindEvent,
+    EventType: "tool_call",
+    Content:   `{"tool":"grep"}`,
+    CreatedAt: time.Now().UnixMilli(),
+})
+
+// 一轮结束：Update 把这些原文一次提炼成该轮话题的关键词。
+// 显式重写同一个 Seq 是覆盖而不是新增，超时后整轮可安全重放。
+err := sess.Update(sceneID, topicID)
 if err != nil {
     log.Fatal(err)
 }
-
-// 本轮的轨迹事件（工具调用等）绑同一个话题 id。
-_ = sess.AppendTrajectory(topicID, "", memhop.TrajectorySlot{
-    EventType: "tool_call",
-    Payload:   `{"tool":"grep"}`,
-    Timestamp: time.Now().UnixMilli(),
-})
 
 // Dream 巩固（L0-L2）；sceneID 传空串 = 遍历域内全部场景。
 // 场景话题数超阈值时 Update 已会自行后台调度，通常无需手动调用。
@@ -136,14 +145,14 @@ report, err := sess.Dream(context.Background(), "")
 
 | 分组 | 方法 |
 |------|------|
-| 核心循环 | `Search(q)` · `Update(TurnUpdate) → topicID` · `Dream(ctx, sceneID)` |
+| 核心循环 | `Search(q) → topicID` · `AppendArchive(topicID, ArchiveSlot{...})` · `Update(sceneID, topicID)` · `Dream(ctx, sceneID)` |
 | L0 画像 | `GetL0` · `UpdateL0` |
 | L2 上下文 | `ListScenes([l3ID])` · `UpdateScene(id, {Name, L3ID, Force})` · `SceneContext` · `MergeScenes` · `DeleteTopic` · `DeleteScene` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3`（返回本批写入的 `graph_ids`） · `UpdateL3` · `DeleteL3` · `DeleteL3Nodes`（仅 Go） · `QueryL3Nodes` · `QueryL3Subgraph` |
-| L4 归档 | `SearchL4(q)` — 唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 只留 Seq 最高的 N 条命中 |
+| L4 归档 | `AppendArchive(topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodePath, Content, CreatedAt})` 是一条记录进入话题的唯一途径（`Seq: 0` 由库分配；写一个已被占用的槽位就是覆写）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 只留 Seq 最高的 N 条命中 |
 | L5 能力 | 目录即能力，库不存记录：`ParseCapabilityPackage(data, source)` · `ValidateCapabilityCard(card)`（包级 v4 解析校验）· `Crystallize(turnID, existing)` 返回候选——落盘归宿主 |
-| L6 事件面 | `AppendTrajectory(topicID, [nodePath])` · `ReadTrajectory(topicID)` · `ListTrajectorySessions` · `Crystallize(topicID)` —— 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），7 天自动清理、无删除接口。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于它的两条原文 |
-| L6 计划树 | `PlanCommit(topicID, nodePath, ev, PlanStep{...})` · `PlanState(topicID)` —— 计划树是 L6 唯一自己的记录：一节点一条，键就是开出它的那一轮，所以 `PlanState(topic)` 与 `ReadTrajectory(topic)` 是同一个键、两层存储；提交一个尚不存在的 `nodePath` 即追加一步（仅 Go module 暴露，MCP 工具集未接入） |
+| 轮内事件（L4 的 `Kind=event`） | `ListTrajectorySessions` · `Crystallize(topicID)` —— 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），7 天自动清理、无删除接口，读它用 `SearchL4(L4Query{TopicID, Kind: &KindEvent})`，写它用 `AppendArchive`。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于对话。`Crystallize` 只读事件轨，说了什么不进 prompt |
+| L6 计划树 | `PlanCommit(topicID, nodePath, ev, PlanStep{...})` · `PlanState(topicID)` —— 计划树是 L6 唯一自己的记录：一节点一条，键就是开出它的那一轮，所以 `PlanState(topic)` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储；提交一个尚不存在的 `nodePath` 即追加一步（仅 Go module 暴露，MCP 工具集未接入） |
 | DB 句柄 | `OpenMulti` · `CreateAgent` · `ListAgents` · `DeleteAgent` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，仅 Go） · `Close` · `IsClosed` · `api.DefaultAgentID` |
 
 ### L5 能力 —— 目录即能力
@@ -183,7 +192,8 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 | 路径 | 做什么 | 代价 |
 |------|--------|------|
 | `Search(SearchQuery{SceneID, L3ID})` | 空 `SceneID` → 新建场景（名字由库生成）并返回其 id；非空 → 返回该场景的 depth-1 话题集（按用户消息时间升序）+ L0 画像，外加 `NewTopicID`：本次读取为即将进行的这一轮开出的话题 | 纯内存读（L2Meta 缓存），零 LLM、零 embedding、零打分；唯一写是场景记录（命中计数 + 轮次计数） |
-| `Update(TurnUpdate{SceneID, TopicID, ...})` | 整轮沉淀进 Search 开出的那个话题：双原文各写一条 L4 档案，一次 LLM 提炼出该轮话题的 `FusedKeywords` | 每轮恰好 1 次 LLM 调用；提炼失败即报错且零写入。同一 `TopicID` 再沉淀是覆盖不是重复，超时后可安全重试 |
+| `AppendArchive(topicID, ArchiveSlot{Kind, ...})` | 一轮内容的唯一写入面：原文声明谁说的、是什么媒介；事件自己命名，并可挂在某个计划步骤上。`Seq: 0` 在两个对话槽之上分配 | 零 LLM；被拒的记录一字节不留（含顺路要建的节点）。事件 4 KiB、原文 64 KiB，超预算是拒写不是截断 |
+| `Update(sceneID, topicID)` | 把该话题已有的原文蒸馏成它的 `FusedKeywords`；它自己不写任何内容 | 每轮恰好 1 次 LLM 调用，且排在该轮话题落盘之前，失败不留半成品话题。内容已被 7 天窗裁光的轮次直接 `ErrInvalidQuery`，一次 LLM 也不调用 |
 
 宿主注入的上下文就是该场景 depth-1 话题的关键词集合；要看某轮原文，用那一轮的话题 id 去寻址 L4——`SearchL4(L4Query{TopicID})`——或直接用已经带回消息的 `SceneContext`。上下文规模由 Dream 保证有界（`Consolidate` 要求压缩后每场景话题数 ≤ 20）。
 

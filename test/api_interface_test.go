@@ -102,12 +102,22 @@ func openTurn(t *testing.T, db *testDB, sceneID string) string {
 	return res.NewTopicID
 }
 
-// turn builds one finished turn settling the given topic id.
-func turn(sceneID, topicID, user, agent string) memhop.TurnUpdate {
+// turn runs one finished turn the way a host does: the two originals land in the
+// slots dialogue owns under the topic id Search opened, and the turn is then
+// settled into it. The error is whichever step refused, so a caller can pin a
+// rejection by naming the step it expects to fail on.
+func turn(db *memhop.Session, sceneID, topicID, user, agent string) error {
 	ts := time.Now().UnixMilli()
-	return memhop.TurnUpdate{
-		SceneID: sceneID, TopicID: topicID, UserText: user, UserTS: ts, AgentText: agent, AgentTS: ts + 1,
+	utterances := []memhop.ArchiveSlot{
+		{Kind: memhop.KindUtterance, Seq: 1, Role: memhop.RoleUser, Content: user, CreatedAt: ts},
+		{Kind: memhop.KindUtterance, Seq: 2, Role: memhop.RoleAgent, Content: agent, CreatedAt: ts + 1},
 	}
+	for _, u := range utterances {
+		if err := db.AppendArchive(topicID, u); err != nil {
+			return err
+		}
+	}
+	return db.Update(sceneID, topicID)
 }
 
 func TestInterfaceOpenClose(t *testing.T) {
@@ -143,16 +153,16 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 
 	before := llm.calls["keywords"]
-	topicID, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), "用户要求重构代码", "好的,我来重构这段代码"))
-	if err != nil {
-		t.Fatalf("Update: %v", err)
+	topicID := openTurn(t, db, sceneID)
+	if err := turn(db.Session, sceneID, topicID, "用户要求重构代码", "好的,我来重构这段代码"); err != nil {
+		t.Fatalf("turn: %v", err)
 	}
 	if calls := llm.calls["keywords"]; calls != before+1 {
 		t.Fatalf("Update distilled %d times, want exactly one per turn", calls-before)
 	}
 
-	// The turn is now the session's read surface, with both originals archived
-	// under its own id.
+	// The turn is now the session's read surface, with the content it appended
+	// held under its own id.
 	after, err := db.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
 		t.Fatalf("Search after Update: %v", err)
@@ -167,18 +177,22 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 		t.Fatal("the turn topic must carry its distilled keywords")
 	}
 
-	// A turn id belongs to the scene that opened it: handing one to another
-	// scene is the mix-up a host with several sessions can really make, and so
-	// is a malformed turn.
+	// A turn id belongs to the scene that opened it: handing one to another scene
+	// is the mix-up a host with several sessions can really make. The settle is
+	// what refuses it — content is addressed by topic alone, so running the whole
+	// host loop here would rewrite the turn under test before failing.
 	other := openSession(t, db)
-	if _, err := db.Update(turn(other, topicID, "串台", "串到别的会话上")); err == nil {
+	if err := db.Update(other, topicID); err == nil {
 		t.Fatal("settling another scene's turn should fail")
 	}
 	if surface, err := db.Search(memhop.SearchQuery{SceneID: other}); err != nil || len(surface.Topics) != 0 {
 		t.Fatalf("the refused cross-scene turn landed somewhere: %d topics, err %v", len(surface.Topics), err)
 	}
-	if _, err := db.Update(memhop.TurnUpdate{SceneID: sceneID, UserText: "", UserTS: 1, AgentText: "a", AgentTS: 2}); err == nil {
-		t.Fatal("empty user text should fail")
+	// An empty record is refused where it is written, not where it is distilled.
+	if err := db.AppendArchive(topicID, memhop.ArchiveSlot{
+		Kind: memhop.KindUtterance, Role: memhop.RoleUser, CreatedAt: 1,
+	}); err == nil {
+		t.Fatal("an utterance with no content should fail")
 	}
 
 	// L2: sessions opened by Search are listable.
@@ -190,7 +204,7 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 		t.Fatal("ListScenes should return the session opened by Search")
 	}
 
-	// L4: the originals written by Update are searchable verbatim.
+	// L4: the originals the host appended are searchable verbatim.
 	arcs, err := db.SearchL4(internal.L4Query{Keyword: "重构"})
 	if err != nil {
 		t.Fatalf("SearchL4: %v", err)
@@ -203,15 +217,15 @@ func TestInterfaceSearchUpdateL2L4(t *testing.T) {
 	}
 }
 
-// Update costs exactly one LLM round trip per turn — the point of the
-// re-designed write path, where the retired contract costed two.
+// One turn costs exactly one LLM round trip: the distillation of what the turn
+// appended, however many records that is.
 func TestInterfaceOneDistillationPerTurn(t *testing.T) {
 	db, llm := openTestDB(t)
 	sceneID := openSession(t, db)
 
 	start := llm.calls["keywords"]
 	for i := range 5 {
-		if _, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), fmt.Sprintf("问题 %d", i), "回复")); err != nil {
+		if err := turn(db.Session, sceneID, openTurn(t, db, sceneID), fmt.Sprintf("问题 %d", i), "回复"); err != nil {
 			t.Fatalf("turn %d: %v", i, err)
 		}
 	}

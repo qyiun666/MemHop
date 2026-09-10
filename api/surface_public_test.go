@@ -54,7 +54,7 @@ func TestSessionPublicSurface(t *testing.T) {
 		// runtime/task face — the host drives these every turn and LLM tools
 		// bind to them
 		// core cycle (host-driven)
-		"Search", "Update", "Dream", "AppendTrajectory",
+		"Search", "Update", "Dream", "AppendArchive",
 		// L0 profile
 		"GetL0", "UpdateL0",
 		// L2 scene reads
@@ -64,7 +64,7 @@ func TestSessionPublicSurface(t *testing.T) {
 		// L4 archives
 		"SearchL4",
 		// L6 trajectory and plans
-		"ReadTrajectory", "ListTrajectorySessions", "Crystallize",
+		"ListTrajectorySessions", "Crystallize",
 		"PlanCommit", "PlanState",
 
 		// assembly/admin face — host code at session boundaries and management
@@ -99,8 +99,8 @@ func TestMultiAgentDBPublicSurface(t *testing.T) {
 
 // TestPublicSignaturesCarryNoNumericIds pins the other half of the facade
 // contract: every id a host can see is a 16-char hex string. Input-only types
-// are deliberately aliases of their internal seam (SearchQuery, TurnUpdate,
-// L4Query…), so the package path is not what matters — a uint64 field is.
+// are deliberately aliases of their internal seam (SearchQuery, L4Query…), so the
+// package path is not what matters — a uint64 field is.
 // The one that started this was UpdateScene, which without its facade override
 // handed back a core.SceneSlot whose SceneID and L3ID are uint64.
 func TestPublicSignaturesCarryNoNumericIds(t *testing.T) {

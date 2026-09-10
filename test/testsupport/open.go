@@ -110,13 +110,31 @@ func OpenMemHopB(b *testing.B) *Handle {
 // OpenTurn enters the memory loop the way a host does: an empty sceneID asks
 // for a fresh session (scene), a non-empty one continues it. It returns the
 // scene id and the topic id the engine just opened for the next turn — the id
-// Update settles that turn into — so a test calls it once per turn.
+// that turn's content and its distillation are both keyed by — so a test calls
+// it once per turn.
 func (h *Handle) OpenTurn(sceneID string) (string, string, error) {
 	res, err := h.Search(memhop.SearchQuery{SceneID: sceneID})
 	if err != nil {
 		return "", "", err
 	}
 	return res.Scene.SceneID, res.NewTopicID, nil
+}
+
+// SettleTurn runs one finished turn the way a host does: the two originals land
+// in the slots dialogue owns under turnID, then Update distills them into that
+// topic's keyword track. Every scenario here needs all three steps to have
+// happened, and Update no longer carries the texts.
+func (h *Handle) SettleTurn(sceneID, turnID, user, agent string, ts int64) error {
+	utterances := []memhop.ArchiveSlot{
+		{Kind: memhop.KindUtterance, Seq: 1, Role: memhop.RoleUser, Content: user, CreatedAt: ts},
+		{Kind: memhop.KindUtterance, Seq: 2, Role: memhop.RoleAgent, Content: agent, CreatedAt: ts + 500},
+	}
+	for _, u := range utterances {
+		if err := h.AppendArchive(turnID, u); err != nil {
+			return err
+		}
+	}
+	return h.Update(sceneID, turnID)
 }
 
 // open is the shared implementation for testing.T and testing.B.

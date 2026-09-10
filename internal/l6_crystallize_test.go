@@ -53,11 +53,11 @@ func TestCrystallizeReadsOneTurnTopic(t *testing.T) {
 		turn uint64
 		slot core.ArchiveSlot
 	}{
-		{turnA, core.ArchiveSlot{EventType: "llm_request", Content: "signal-turn-a", CreatedAt: 100}},
-		{turnA, core.ArchiveSlot{EventType: "tool_call", Content: "signal-turn-a-2", CreatedAt: 150}},
-		{turnB, core.ArchiveSlot{EventType: "llm_output", Content: "signal-turn-b", CreatedAt: 200}},
+		{turnA, core.ArchiveSlot{Kind: core.KindEvent, EventType: "llm_request", Content: "signal-turn-a", CreatedAt: 100}},
+		{turnA, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "signal-turn-a-2", CreatedAt: 150}},
+		{turnB, core.ArchiveSlot{Kind: core.KindEvent, EventType: "llm_output", Content: "signal-turn-b", CreatedAt: 200}},
 	} {
-		if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(ev.turn), "", ev.slot); err != nil {
+		if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(ev.turn), ev.slot); err != nil {
 			t.Fatalf("append: %v", err)
 		}
 	}
@@ -74,7 +74,7 @@ func TestCrystallizeReadsOneTurnTopic(t *testing.T) {
 		t.Fatal("another turn's events must not leak into this one")
 	}
 
-	events, err := db.ReadTrajectory(core.DefaultAgentID, common.FormatHash(turnA))
+	events, err := db.eventsOf(core.DefaultAgentID, common.FormatHash(turnA))
 	if err != nil {
 		t.Fatalf("read trajectory: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestCrystallizeReturnsCandidatesAgainstHostCatalog(t *testing.T) {
 	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(123)
 	for i := 1; i <= 3; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.ArchiveSlot{EventType: "tool_call", Content: "step", CreatedAt: int64(i)}); err != nil {
+		if err := db.AppendArchive(core.DefaultAgentID, session, core.ArchiveSlot{Kind: core.KindEvent, EventType: "tool_call", Content: "step", CreatedAt: int64(i)}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
@@ -209,7 +209,9 @@ func TestCrystallizeCandidatesPassThroughUnvalidated(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(888)
-	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.ArchiveSlot{EventType: "tool_call", CreatedAt: 1}); err != nil {
+	if err := db.AppendArchive(core.DefaultAgentID, session, core.ArchiveSlot{
+		Kind: core.KindEvent, EventType: "tool_call", Content: "step", CreatedAt: 1,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	out, err := db.Crystallize(context.Background(), core.DefaultAgentID, session, nil)

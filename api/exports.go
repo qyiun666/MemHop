@@ -64,12 +64,13 @@ const (
 
 // ---- L4 message role constants ----
 
-// These are the roles the engine writes: Update stores the turn's two originals
-// as RoleUser / RoleAgent, Dream stores a fused group's summary as RoleDream.
+// These are the roles a host may declare for an utterance it appends. RoleDream is
+// deliberately absent: Dream marks a fused group's summary with it, and the append
+// boundary refuses it, so a host cannot write a record that reads as consolidated.
 const (
-	RoleUser  = internal.RoleUser
-	RoleAgent = internal.RoleAgent
-	RoleDream = internal.RoleDream
+	RoleUser   = internal.RoleUser
+	RoleAgent  = internal.RoleAgent
+	RoleSystem = internal.RoleSystem
 )
 
 // PlanStatus* are the string lifecycle values PlanCommit accepts and

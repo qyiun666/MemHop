@@ -24,10 +24,10 @@ func TestInterfaceDream(t *testing.T) {
 	defer db.Close()
 
 	sceneID := openSession(t, db)
-	if _, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), "用户要求重构代码", "好的,我来重构这段代码")); err != nil {
+	if err := turn(db.Session, sceneID, openTurn(t, db, sceneID), "用户要求重构代码", "好的,我来重构这段代码"); err != nil {
 		t.Fatalf("turn 1: %v", err)
 	}
-	if _, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), "继续重构第二个模块", "第二个模块也补上测试")); err != nil {
+	if err := turn(db.Session, sceneID, openTurn(t, db, sceneID), "继续重构第二个模块", "第二个模块也补上测试"); err != nil {
 		t.Fatalf("turn 2: %v", err)
 	}
 
@@ -97,9 +97,9 @@ func TestInterfaceCheckpointPersist(t *testing.T) {
 
 	db := newTestDB(t, m)
 	sceneID := openSession(t, db)
-	topicID, err := db.Update(turn(sceneID, openTurn(t, db, sceneID), "用户要求重构代码", "好的,我来重构这段代码"))
-	if err != nil {
-		t.Fatalf("Update: %v", err)
+	topicID := openTurn(t, db, sceneID)
+	if err := turn(db.Session, sceneID, topicID, "用户要求重构代码", "好的,我来重构这段代码"); err != nil {
+		t.Fatalf("turn: %v", err)
 	}
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("Checkpoint: %v", err)

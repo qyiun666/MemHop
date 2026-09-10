@@ -5,11 +5,13 @@ package internal
 
 import (
 	"encoding/json"
+	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -77,6 +79,49 @@ func countingLLMServer(t *testing.T, content string) (*httptest.Server, *atomic.
 	}))
 	t.Cleanup(srv.Close)
 	return srv, calls
+}
+
+// recordedRequests collects the bodies one mock server was sent.
+type recordedRequests struct {
+	mu     sync.Mutex
+	bodies []string
+}
+
+func (r *recordedRequests) add(body string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.bodies = append(r.bodies, body)
+}
+
+// snapshot returns every body recorded so far, without racing the server goroutine.
+func (r *recordedRequests) snapshot() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.bodies...)
+}
+
+// recordingLLMServer answers every chat request with content and keeps each
+// request body, so a test can assert what the engine actually sent — that a
+// transcript reached the prompt with its speakers labelled, for instance.
+func recordingLLMServer(t *testing.T, content string) (*httptest.Server, *recordedRequests) {
+	t.Helper()
+	var seen recordedRequests
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/chat/completions") {
+			http.NotFound(w, r)
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		seen.add(string(body))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"role": "assistant", "content": content},
+			}},
+		})
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &seen
 }
 
 // failingLLMServer returns status for every chat completion request
