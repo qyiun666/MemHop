@@ -58,7 +58,7 @@ type SceneContextTopic struct {
 // a Dream-fused group keeps its originals on the child topics it sunk, and this
 // is the only read that brings them back. Search returns depth-1 topics only,
 // so it shows a fused group as its summary. TopicCount counts the entries
-// returned (roots and sunk children alike), not the scene's depth-1 roots.
+// returned — roots and sunk children alike.
 type SceneContext struct {
 	SceneName  string              `json:"scene_name"`
 	TopicCount int                 `json:"topic_count"`

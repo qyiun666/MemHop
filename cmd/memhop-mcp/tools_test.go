@@ -66,13 +66,13 @@ func TestHandleInvalidArgs(t *testing.T) {
 // straight serialization of the DTO — including a zero id, which stays
 // hex-shaped rather than disappearing as a number.
 func TestOkResultCarriesHexIDStrings(t *testing.T) {
-	slot := memhop.SceneSlot{SceneID: "000000000000000f", L3ID: "77cf4d9fbc676640", TopicCount: 2}
+	slot := memhop.SceneSlot{SceneID: "000000000000000f", L3ID: "77cf4d9fbc676640"}
 	got := okResult(slot)
 	if len(got.Content) != 1 {
 		t.Fatalf("content = %+v", got.Content)
 	}
 	text := got.Content[0].(*mcp.TextContent).Text
-	want := `{"scene_id":"000000000000000f","scene_name":"","topic_count":2,"l3_id":"77cf4d9fbc676640"}`
+	want := `{"scene_id":"000000000000000f","scene_name":"","l3_id":"77cf4d9fbc676640"}`
 	if text != want {
 		t.Fatalf("result = %s, want %s", text, want)
 	}

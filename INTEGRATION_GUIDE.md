@@ -148,7 +148,7 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 |---|---|---|
 | `Profile` | L0 profile snapshot | can go into the system prompt |
 | `ProfileBrief` | bounded compact profile digest | light per-turn injection; fetch full `Profile` only when needed |
-| `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID` / `TopicCount`) | keep `Scene.SceneID` — Update and later reads use it |
+| `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID`) | keep `Scene.SceneID` — Update and later reads use it |
 | `Topics` | the scene's depth-1 topics in user-timestamp order, each with its `FusedKeywords` | **the memory injected into this turn's prompt**; originals are addressed by a turn's own topic id — `SearchL4(L4Query{TopicID})` |
 | `NewTopicID` | the topic this read opened for the turn about to run | hand it to `AppendArchive` and to `Update` — one turn, one id |
 
@@ -272,8 +272,8 @@ with Dream: there is no standalone distill entry point.
 
 | Method | Meaning |
 |---|---|
-| `db.ListScenes(l3ID) ([]SceneSlot, error)` | scene list (`SceneID / SceneName / TopicCount`); a non-empty `l3ID` keeps only the scenes anchored to that project domain, `""` lists all |
-| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back: entries carry `Depth` and `ChildCount` so a fused parent (whose message is Dream's summary) can be told from the turns it grouped. `TopicCount` counts the entries returned, not the scene's depth-1 roots |
+| `db.ListScenes(l3ID) ([]SceneSlot, error)` | scene list (`SceneID / SceneName / L3ID`); a non-empty `l3ID` keeps only the scenes anchored to that project domain, `""` lists all |
+| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back: entries carry `Depth` and `ChildCount` so a fused parent (whose message is Dream's summary) can be told from the turns it grouped. `TopicCount` counts the entries returned — roots and the sunk children this read alone brings back, alike |
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | title it (`Name`), anchor it to an L3 project domain (`L3ID`), or clear the anchor (`L3ID: &""`); nil fields keep their stored value, and the **written scene comes back** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | merge scenes |
 | `db.DeleteTopic(topicID) error` | delete a topic subtree + its L4 archives + indexes; prunes parent `ChildrenIDs` (memory correction) |

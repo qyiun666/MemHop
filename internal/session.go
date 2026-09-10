@@ -34,9 +34,8 @@ func (db *DB) NewSession(agentID uint64) (*Session, error) {
 // ---- scene read / turn write ----
 
 // Search reads one scene (the host's session): its record and its depth-1
-// topics, whose count the result reports as TopicCount. An empty
-// SearchQuery.SceneID allocates a fresh scene. The result also carries the
-// topic id this read opened for the turn the host is about to run.
+// topics. An empty SearchQuery.SceneID allocates a fresh scene. The result also
+// carries the topic id this read opened for the turn the host is about to run.
 func (s *Session) Search(q SearchQuery) (*SearchResult, error) {
 	return s.db.Search(s.agentID, q)
 }

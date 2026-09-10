@@ -214,8 +214,9 @@ func SetSceneL3ID(engine *core.StorageEngine, agentID uint64, sceneID uint64, l3
 	return core.WriteSceneSlot(engine, agentID, sceneID, slot)
 }
 
-// CollectAllScenesL2 returns every scene with TopicCount set to the number
-// of depth-1 root topics under it (single pass over all topics).
+// CollectAllScenesL2 returns every scene record of the agent domain. How many
+// topics a scene holds is derived by whoever needs it — the surface read already
+// has the topic set in hand — so this layer does not scan topics to fill a count.
 func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) ([]core.SceneSlot, error) {
 	var out []core.SceneSlot
 	for idHash := range engine.IndexByType(agentID, core.RecL2Scene) {
@@ -230,18 +231,6 @@ func CollectAllScenesL2(engine *core.StorageEngine, agentID uint64) ([]core.Scen
 			return nil, err
 		}
 		out = append(out, *slot)
-	}
-	if len(out) == 0 {
-		return out, nil
-	}
-	counts := make(map[uint64]int, len(out))
-	for _, topic := range core.CollectAllTopics(engine, agentID) {
-		if topic.Depth == 1 {
-			counts[topic.SceneID]++
-		}
-	}
-	for i := range out {
-		out[i].TopicCount = counts[out[i].SceneID]
 	}
 	return out, nil
 }

@@ -162,49 +162,6 @@ func TestMergeScenesPrimaryInSecondary(t *testing.T) {
 	}
 }
 
-// TestListScenesTopicCounts: ListScenes fills TopicCount with depth-1 root
-// topics only; compressed (depth>=2) nodes do not inflate it, and scenes
-// without topics report 0.
-func TestListScenesTopicCounts(t *testing.T) {
-	engine := newTestEngine(t)
-	db := newTestDB(t, engine)
-	s1 := mustScene(t, engine, 51, "场景一")
-	s2 := mustScene(t, engine, 52, "场景二")
-	s3 := mustScene(t, engine, 53, "空场景")
-
-	// s1: two depth-1 roots.
-	t1 := newTopic(common.HashID("s1t1"), s1.SceneID, 1000, []string{"a"})
-	t2 := newTopic(common.HashID("s1t2"), s1.SceneID, 2000, []string{"b"})
-	// s2: one root + one compressed node (depth 2, parented).
-	t3 := newTopic(common.HashID("s2t1"), s2.SceneID, 3000, []string{"c"})
-	parent := common.HashID("s2t2-parent")
-	t4 := newTopic(common.HashID("s2t2"), s2.SceneID, 4000, []string{"d"})
-	t4.Depth = 2
-	t4.ParentID = &parent
-	for _, tp := range []core.TopicSlot{t1, t2, t3, t4} {
-		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, tp.ID, &tp); err != nil {
-			t.Fatal(err)
-		}
-	}
-	scenes, err := db.ListScenes(core.DefaultAgentID, "")
-	if err != nil {
-		t.Fatalf("ListScenes: %v", err)
-	}
-	got := map[uint64]int{}
-	for _, s := range scenes {
-		got[s.SceneID] = s.TopicCount
-	}
-	if got[s1.SceneID] != 2 {
-		t.Errorf("场景一: want 2, got %d", got[s1.SceneID])
-	}
-	if got[s2.SceneID] != 1 {
-		t.Errorf("场景二: want 1 (depth-1 roots only), got %d", got[s2.SceneID])
-	}
-	if got[s3.SceneID] != 0 {
-		t.Errorf("空场景: want 0, got %d", got[s3.SceneID])
-	}
-}
-
 // TestDeleteTopicRemovesSubtreeAndArchives deleting a topic removes its
 // subtree, the L4 archives it owns, and its L2Meta entries.
 func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {

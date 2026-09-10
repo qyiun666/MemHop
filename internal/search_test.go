@@ -225,33 +225,3 @@ func TestSearchReturnsProfileBrief(t *testing.T) {
 		t.Errorf("full Profile must stay intact, got %+v", res.Profile)
 	}
 }
-
-// Scene.TopicCount is host-visible and must agree with what the same read
-// returns: the record itself never stores the count, the read derives it.
-func TestSearchReportsSceneTopicCount(t *testing.T) {
-	srv := mockLLMServer(t, `{"keywords":["x"]}`)
-	db := newSearchTestDB(t, srv.URL)
-	const sceneID = uint64(7)
-	mustWriteScene(t, db.engine, core.DefaultAgentID, sceneID, "session")
-	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(11, sceneID, 100, []string{"first"}))
-	writeTopic(t, db.engine, core.DefaultAgentID, newTopic(12, sceneID, 200, []string{"second"}))
-	parent := uint64(11)
-	writeTopic(t, db.engine, core.DefaultAgentID, core.TopicSlot{
-		ID: 13, SceneID: sceneID, Depth: 2, ParentID: &parent, FusedKeywords: []string{"sunk"},
-	})
-
-	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
-	if err != nil {
-		t.Fatalf("Search: %v", err)
-	}
-	if res.Scene.TopicCount != 2 {
-		t.Fatalf("Scene.TopicCount = %d, want 2 (depth-1 only, sunk topic excluded)", res.Scene.TopicCount)
-	}
-	scenes, err := db.ListScenes(core.DefaultAgentID, "")
-	if err != nil {
-		t.Fatalf("ListScenes: %v", err)
-	}
-	if scenes[0].TopicCount != res.Scene.TopicCount {
-		t.Fatalf("ListScenes reports %d but Search reports %d", scenes[0].TopicCount, res.Scene.TopicCount)
-	}
-}

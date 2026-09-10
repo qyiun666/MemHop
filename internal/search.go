@@ -44,10 +44,6 @@ func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {
 		return nil, err
 	}
 	topics := scene.SurfaceTopics(ac, sceneSlot.SceneID)
-	// TopicCount is derived, never stored: the scene's depth-1 set is exactly
-	// what ListScenes counts, so the read fills the same number from the
-	// topics it already loaded.
-	sceneSlot.TopicCount = len(topics)
 	return &SearchResult{
 		Profile:      slot,
 		ProfileBrief: profile.Brief(slot),

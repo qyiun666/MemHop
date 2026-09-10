@@ -58,10 +58,9 @@ func toCoreProfileSlot(s *ProfileSlot) internal.ProfileSlot {
 
 func fromSceneSlot(s internal.SceneSlot) SceneSlot {
 	return SceneSlot{
-		SceneID:    formatID(s.SceneID),
-		SceneName:  s.SceneName,
-		TopicCount: s.TopicCount,
-		L3ID:       formatOptionalID(s.L3ID),
+		SceneID:   formatID(s.SceneID),
+		SceneName: s.SceneName,
+		L3ID:      formatOptionalID(s.L3ID),
 	}
 }
 

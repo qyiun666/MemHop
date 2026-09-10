@@ -61,9 +61,8 @@ func SceneNodeID(sceneID uint64) uint64 {
 // SceneSlot is an L2 scene container — one host session's conversation. The
 // scene ID is the host's session id, never a hash of its name.
 type SceneSlot struct {
-	SceneID    uint64 `json:"scene_id"`
-	SceneName  string `json:"scene_name"`
-	TopicCount int    `json:"topic_count"` // depth-1 root topics under this scene
+	SceneID   uint64 `json:"scene_id"`
+	SceneName string `json:"scene_name"`
 	// TurnSeq counts turns Search has opened here: each read bumps it and
 	// returns hash("turn:"+sceneID:TurnSeq) as the topic id Update settles
 	// into, so turn ids never depend on message timestamps. Absent = 0.

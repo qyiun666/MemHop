@@ -76,10 +76,9 @@ type ProfileSlot struct {
 // SceneSlot is one L2 scene container — a host session. L3ID is its optional
 // project-domain anchor.
 type SceneSlot struct {
-	SceneID    string `json:"scene_id"`
-	SceneName  string `json:"scene_name"`
-	TopicCount int    `json:"topic_count"`
-	L3ID       string `json:"l3_id,omitempty"`
+	SceneID   string `json:"scene_id"`
+	SceneName string `json:"scene_name"`
+	L3ID      string `json:"l3_id,omitempty"`
 }
 
 // TopicSlot is one L2 conversation node: a single turn settled by Update, or a

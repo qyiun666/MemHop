@@ -139,8 +139,7 @@ func dumpSceneContext(t *testing.T, db *DB, cfg *MemHopConfig, label string) {
 			t.Logf("scene %q: ListTopicsL2 error: %v", s.SceneName, err)
 			continue
 		}
-		t.Logf("scene %q topics=%d (topic_count=%d)",
-			s.SceneName, len(topics), s.TopicCount)
+		t.Logf("scene %q topics=%d", s.SceneName, len(topics))
 		for _, tp := range topics {
 			fused := ""
 			if len(tp.FusedKeywords) > 0 && archived[tp.ID] == 0 {

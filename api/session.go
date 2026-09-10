@@ -271,7 +271,7 @@ func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, erro
 // Entries come in speaking order, each carrying its own L4 messages and
 // ChildCount, so a fused parent (whose message is Dream's summary) can be told
 // apart from the turns it grouped. TopicCount counts every entry returned —
-// SceneSlot.TopicCount from Search/ListScenes counts only the depth-1 roots.
+// roots and the sunk children this read alone brings back, alike.
 func (s *Session) SceneContext(sceneID string) (*SceneContext, error) {
 	return s.Session.SceneContext(sceneID)
 }
