@@ -18,9 +18,9 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// Internal tuning of the consolidation stages: the L1 decay parameters, the
-// scene-similarity floor of hyperedge construction and the usage-feedback
-// window. Hosts configure only the business knobs in config.MemHopDefaults.
+// Internal tuning of the consolidation stages: the L1 decay parameters and the
+// scene-similarity floor of hyperedge construction. Hosts configure only the
+// business knobs in config.MemHopDefaults.
 const (
 	// L1 decay.
 	lambdaNode              float32 = 0.01
@@ -31,8 +31,6 @@ const (
 	minEdgeNodes            int     = 2
 	// L1 scene hypergraph construction.
 	l1EdgeMinSimilarity float32 = 0.15
-	// Infrastructure.
-	defaultTTLMs int64 = 3600000 // 1 hour: scene-usage feedback window
 )
 
 // StructureStages runs stages 2 through 5 of the pipeline: the L2Meta
@@ -50,16 +48,7 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 		EdgeRemoveThreshold:    edgeRemoveThreshold,
 		MinEdgeNodes:           minEdgeNodes,
 	}
-
-	// Stage 2.5: usage feedback — adjust L1 importance from how recently each
-	// scene was read, so the rebuild/decay below reflects actual usage.
-	feedbackStart := time.Now()
-	feedbackErr := applyUsageFeedback(ac, agentID)
-	AppendStage(rep, "usage_feedback", feedbackStart, feedbackErr)
 	AppendStage(rep, "index_rebuild", start, nil)
-	if feedbackErr != nil {
-		return feedbackErr
-	}
 
 	if err := l1Stages(ctx, ac, agentID, newL2Meta, &decayParams, rep); err != nil {
 		return err
@@ -178,50 +167,4 @@ func DistillL0Stage(ctx context.Context, ac *domain.Context, agentID uint64) (bo
 		return false, fmt.Errorf("distill l0: backfill l1 emotions: %w", err)
 	}
 	return true, nil
-}
-
-// applyUsageFeedback adjusts L1 node importance from scene usage stats
-// (folded into the L2 scene record): scenes hit within the usage TTL get
-// +0.05 (active), the rest get -0.05 (cold). A scene set that cannot be read
-// or a node that cannot be written is returned as an error and recorded as a
-// failed stage — the decay below keys off these importance values, so a pass
-// that silently skipped feedback would report a Dream that did less than it
-// claims.
-func applyUsageFeedback(ac *domain.Context, agentID uint64) error {
-	scenes, err := repo.CollectAllScenesL2(ac.Engine, agentID)
-	if err != nil {
-		return err
-	}
-	if len(scenes) == 0 {
-		return nil
-	}
-	now := time.Now().UnixMilli()
-	ttl := defaultTTLMs
-	byScene := make(map[uint64]core.SceneSlot, len(scenes))
-	for _, s := range scenes {
-		byScene[s.SceneID] = s
-	}
-	const step = 0.05
-	for _, node := range core.CollectAllSceneNodes(ac.Engine, agentID) {
-		u, ok := byScene[node.SceneID]
-		imp := node.Importance
-		switch {
-		case !ok || u.HitCount == 0 || now-u.LastHitAt >= ttl:
-			if imp -= step; imp < 0 {
-				imp = 0
-			}
-		default:
-			if imp += step; imp > 1 {
-				imp = 1
-			}
-		}
-		if imp == node.Importance {
-			continue
-		}
-		node.Importance = imp
-		if err := core.WriteSceneNode(ac.Engine, agentID, node.IDHash, &node); err != nil {
-			return common.NewError(common.ErrIO, "dream: apply usage feedback", err)
-		}
-	}
-	return nil
 }

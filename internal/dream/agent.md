@@ -7,9 +7,9 @@
   `Seq=1`、`Kind=utterance`、`Role=dream` 的一条 L4 内容，`RoleDream` 只由本层
   戳写（宿主传什么都不会被采信为融合正文），话题上不存在引用清单可回填，任一步失败经
   `discardFusedGroup` 按话题键回滚）、
-  `StructureStages`（L2Meta 重建 → usage feedback → L1 各阶段 → 装回缓存 →
+  `StructureStages`（L2Meta 重建 → L1 各阶段 → 装回缓存 →
   L0 蒸馏）、`DistillL0Stage`（只由 `RunDream` 调，根上不再有独立的蒸馏入口）、
-  阶段报告（`AppendStage`/`StageCancelled`）。L1 衰减/建边/相似度/反馈窗的调参
+  阶段报告（`AppendStage`/`StageCancelled`）。L1 衰减/建边/相似度的调参
   常量随阶段在本包。
 - **契约**：所有阶段都在调用方已持域锁的前提下运行（根的 `RunDream`）；
   LLM 经 `ac.LLM`，取消挂 `ctx`（即 `ac.OpCtx`）。两个清扫阶段都是 best-effort：
@@ -26,6 +26,6 @@
   节点（含早已不更新的 done 父节点），而不是让高频写事件的死树续命——事件不再
   参与这个判断，这一点与合并前相反，是刻意取舍：一棵树该不该活着，只有对它做过的
   提交能回答。
-- `applyUsageFeedback` 返回 error 并单列一个 `usage_feedback` 阶段：L1 重建与衰减按这些 importance 走，静默跳过会让 Dream 报告声称做了实际没做。
+- **L1 重要性只有两个来源**：同步新建时的 `1.0`（`repo/l1layer_sync.go`）与时间衰减。没有「被读过就活得更久」这类反馈，场景记录也不挂读侧计数器——「被读过」与「最近有写入」在这里不可分辨，是刻意取舍：±0.05 量级的慢游走左右不了节点存活判定，而为一个阶段留两个热路径写入字段不值。
 - `applyOneGroup` 返回 error（含「模型提了组但 merged_summary 是空的」这类），`applyGroups` 分报 applied/rejected，rejected 计入 `failures`——「没什么可压缩」和「组没法应用」是两件事。
 - 计划清扫没有独立的计划登记表：可清扫单位就是 `repo.CollectPlanNodes` 给的按键聚合（键 = 开出该计划的轮次话题 id，键下无节点即不成聚合）。它读引擎而不读 `ac.Plans`：Dream 是磁盘维护者，不是热路径，清扫不该被一份可能滞后的缓存塑形。
