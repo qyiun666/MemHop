@@ -1,12 +1,15 @@
 # internal/plan — L5 计划树小方法
 
 - **职责**：`PlanStatus` 字符串面与 `StatusToU8`/`StatusToString`/
-  `IsTerminalStatus`；`Step`（一次提交的节点侧字段：状态 + Title + Summary）；
+  `IsTerminalStatus`；`Step`（声明里的一项：`NodePath` + 状态 + Title + Summary）；
   `SplitNodePath`；
-  写步 `EnsureNode`（沿路径建 pending 节点链，`NodePath` 点号分隔）/
-  `CommitNode`（状态 + 节点自身字段，留空即继承现值，终态只戳一次
-  `FinishedAt`）/`UpdateNodeSummaryLocked`；树构建 `BuildTree`/`Forest`/
-  `ToNodeView`/`CountForest`；`RollupTree`（只回填空 Summary，永不改 Status）。
+  写步 `ValidateDeclaration`（写入前查完整棵声明：每条路径形状合法、状态叫得出
+  名字、同一 `NodePath` 不在一次声明里出现两次）/`EnsureNode`（沿路径建 pending
+  节点链）/`SetNodes`（逐个 `EnsureNode` 后复述该节点）/`CommitNode`（状态 +
+  节点自身字段，留空即继承现值，终态只戳一次 `FinishedAt`，被重述回非终态则清
+  0）/`UpdateNodeSummaryLocked`；树构建 `BuildTree`/`Forest`/
+  `ToNodeView`/`CountForest`；`RollupTree`（永不改 Status，只在直接子全部终态时
+  回填空 Summary）。
 - **L5 只有计划节点**：一轮的事件是对话原文的同层邻居（L4 的 `Kind=event`），
   不在本包。一棵树属于打开它的那一轮——键就是那个轮次话题 ID，所以
   `PlanState(topic)` 与 `SearchL4{TopicID, Kind=event}` 用同一个键取两件不同的

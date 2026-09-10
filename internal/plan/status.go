@@ -62,13 +62,15 @@ func StatusToString(u uint8) (PlanStatus, error) {
 	return s, nil
 }
 
-// Step is one declared node's fields. Status is the string surface; a blank
-// Title or Summary inherits what the node already holds, so restating a step
-// never rewinds its title or erases a folded summary.
+// Step is one node in a host's declaration of a turn's plan: NodePath says
+// which node, Status says where it got to. A blank Title or Summary inherits
+// what the node already holds, so restating a step never rewinds its title or
+// erases a folded summary.
 type Step struct {
-	Status  PlanStatus
-	Title   string
-	Summary string
+	NodePath string
+	Status   PlanStatus
+	Title    string
+	Summary  string
 }
 
 // IsTerminalStatus reports whether a plan-node status is a final state (done

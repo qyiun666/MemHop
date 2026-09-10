@@ -50,13 +50,57 @@ func EnsureNode(ac *domain.Context, agentID uint64, topicID uint64, nodePath str
 	return parentID, nil
 }
 
-// CommitNode applies one host commit to a plan node: its status plus the node's
+// ValidateDeclaration checks a host's whole-tree declaration before anything is
+// written: every step names a well-formed path and a status the engine can name,
+// and no path is named twice in one declaration. A declaration this refuses
+// leaves the tree exactly as it was — half an applied restatement would leave
+// the host unable to tell which of its steps landed.
+func ValidateDeclaration(steps []Step) error {
+	seen := make(map[string]struct{}, len(steps))
+	for _, s := range steps {
+		if _, err := SplitNodePath(s.NodePath); err != nil {
+			return err
+		}
+		if _, err := StatusToU8(s.Status); err != nil {
+			return err
+		}
+		if _, dup := seen[s.NodePath]; dup {
+			return common.NewError(common.ErrInvalidQuery,
+				"the plan declares the same step twice: "+s.NodePath)
+		}
+		seen[s.NodePath] = struct{}{}
+	}
+	return nil
+}
+
+// SetNodes applies one declaration of a turn's plan: every named node is created
+// along its path when missing, then restated. Nodes the declaration does not
+// mention are left exactly as they are — the library never infers from an absent
+// step that the host withdrew it, because "the host stopped listing it" and
+// "the host only restated part of the tree" look identical from here. Withdrawing
+// a step is what declaring a new turn's tree does. Callers hold ac.Mu.
+func SetNodes(ac *domain.Context, agentID, topicID uint64, steps []Step) error {
+	for _, s := range steps {
+		id, err := EnsureNode(ac, agentID, topicID, s.NodePath)
+		if err != nil {
+			return err
+		}
+		if err := CommitNode(ac, agentID, id, s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CommitNode applies one declared step to a plan node: its status plus the node's
 // own Title/Summary, where a field Step leaves blank keeps what is
-// stored — re-committing a step never erases its title or a summary already
-// folded into it. An unknown status is refused before anything is written. A
-// terminal status records FinishedAt exactly once. Writing a node never touches
-// the L4 content track: a step's events are separate records, so committing a
-// tree cannot add, reorder or overwrite a turn's content. Callers hold ac.Mu.
+// stored — restating a step never erases its title or a summary already
+// folded into it. A terminal status records FinishedAt exactly once, and a step
+// restated back to a non-terminal status loses it: a completion time left on a
+// step that is running again would read as a finished one. Writing a node never
+// touches the L4 content track — a step's events are separate records, so
+// restating a tree cannot add, reorder or overwrite what a turn recorded.
+// Callers hold ac.Mu.
 func CommitNode(ac *domain.Context, agentID, nodeID uint64, step Step) error {
 	u8, err := StatusToU8(step.Status)
 	if err != nil {
@@ -74,8 +118,12 @@ func CommitNode(ac *domain.Context, agentID, nodeID uint64, step Step) error {
 		node.Title = step.Title
 	}
 	now := time.Now().UnixMilli()
-	if IsTerminalStatus(node.Status) && node.FinishedAt == 0 {
-		node.FinishedAt = now
+	if IsTerminalStatus(node.Status) {
+		if node.FinishedAt == 0 {
+			node.FinishedAt = now
+		}
+	} else {
+		node.FinishedAt = 0
 	}
 	node.UpdatedAt = now
 	if _, err := repo.WritePlanNode(ac.Engine, agentID, node); err != nil {

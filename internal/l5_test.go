@@ -655,23 +655,27 @@ func TestPlanCommit_FinishedAt(t *testing.T) {
 	if first == 0 {
 		t.Fatal("terminal commit must set FinishedAt")
 	}
-	// A non-terminal commit must not clear it.
+	// Restating the step as work in progress clears it. FinishedAt answers "when
+	// did this step finish", and a step the host re-opened has not finished —
+	// keeping the earlier stamp would hand back a completed-looking node that the
+	// same tree says is still running.
 	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 200),
 		PlanStep{Status: PlanInProgress}); err != nil {
 		t.Fatal(err)
 	}
 	tree2, _ := db.PlanState(core.DefaultAgentID, topicID)
-	if tree2.Roots[0].FinishedAt != first {
-		t.Fatalf("non-terminal commit cleared FinishedAt: %d -> %d", first, tree2.Roots[0].FinishedAt)
+	if tree2.Roots[0].FinishedAt != 0 {
+		t.Fatalf("re-opening a step must clear FinishedAt: %d -> %d", first, tree2.Roots[0].FinishedAt)
 	}
-	// A re-terminal commit preserves the original FinishedAt.
+	// Finishing it again is a new completion, so it carries a new time rather
+	// than the stamp of the one the host withdrew.
 	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 300),
 		PlanStep{Status: PlanDone, Summary: "fin2"}); err != nil {
 		t.Fatal(err)
 	}
 	tree3, _ := db.PlanState(core.DefaultAgentID, topicID)
-	if tree3.Roots[0].FinishedAt != first {
-		t.Fatalf("re-terminal commit changed FinishedAt: %d -> %d", first, tree3.Roots[0].FinishedAt)
+	if tree3.Roots[0].FinishedAt < first {
+		t.Fatalf("a re-completed step lost its completion time: %d", tree3.Roots[0].FinishedAt)
 	}
 }
 

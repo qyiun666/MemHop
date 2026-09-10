@@ -360,7 +360,7 @@ sessions, err := db.ListTrajectorySessions()
 | 调用 | 说明 |
 |---|---|
 | `db.AppendArchive(topicID, ev)`（`ev.NodePath` 非空） | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链），这也是**追加一步**的入口。`NodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且**它自己决定树形**：路径上缺失的每一段都会被建成 pending，所以打错一段就会多开一棵树，而 L5 不提供删节点的接口（旧树等所属轮次掉出保留窗由 Dream 回收）。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `SearchL4` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
-| `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "调研", Type: "step", Status: api.PlanStatusDone, Summary: s})` | 提交一步：推进节点状态、追加该步事件，`done` 子节点摘要自底向上折叠进父节点（父节点转为 `done` 只由宿主显式提交）。`nodePath` 沿点号路径缺失的节点按 pending 建出来——这就是追加一步的入口。`Title`/`Type`/`Summary` 留空即继承现值；未知 `Status` 在动树之前就被拒 |
+| `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "调研", Status: api.PlanStatusDone, Summary: s})` | 提交一步：推进节点状态、追加该步事件；**当一个父节点的直接子全部到达终态**（`done` 或 `failed`）时，才把子的摘要折成父的 Summary（父节点转为 `done` 只由宿主显式提交；只要有一个子还开着就折，得到的是一份读起来像结论的半成品）。`nodePath` 沿点号路径缺失的节点按 pending 建出来——这就是追加一步的入口。`Title`/`Summary` 留空即继承现值；未知 `Status` 在动树之前就被拒 |
 | `db.PlanState(topicID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
 
 `0000000000000000` 是保留值（记录未赋键时的值），L5 的读写入口一律拒绝它。

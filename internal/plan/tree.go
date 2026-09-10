@@ -151,11 +151,10 @@ func countTree(v PlanNodeView) (done, total int) {
 	return done, total
 }
 
-// RollupTree summarizes every root of the plan forest bottom-up:
-// for every node, its Summary becomes the concatenation of its Done
-// children's summaries. It NEVER changes a node's Status — a parent becomes
-// Done only when the host explicitly commits it (Model A). Callers hold
-// ac.Mu.
+// RollupTree walks one turn's plan forest bottom-up: a node's Summary becomes
+// the concatenation of its children's summaries. It NEVER changes a node's
+// Status — a parent becomes Done only when the host declares it so (Model A).
+// Callers hold ac.Mu.
 func RollupTree(ac *domain.Context, agentID, topicID uint64) error {
 	for _, root := range Forest(aggregate(ac, topicID)) {
 		if err := rollupNode(ac, agentID, root); err != nil {
@@ -165,42 +164,39 @@ func RollupTree(ac *domain.Context, agentID, topicID uint64) error {
 	return nil
 }
 
-// rollupNode recurses children first, then sets the node's Summary to
-// the concatenation of its Done children's summaries. It only updates
-// Summary, never Status (Model A: explicit parent completion). It does NOT
-// clobber a host-provided summary: when the node already has a Summary
-// (host-provided or previously rolled up), it is preserved; only an empty
-// Summary is backfilled from the Done children.
+// rollupNode recurses children first, then backfills this node's Summary from
+// its children's. Three things must hold for a fold: the node itself is Done
+// (Model A — an unfinished parent has no conclusion to carry), its own Summary
+// is empty (a host-written or previously folded one is never clobbered), and
+// every direct child has reached a final state. That last one is why a partial
+// fold is worse than none: "did three things; two of them" is a summary that
+// reads exactly like a complete one, and nothing on the parent says the third
+// child was still open when it was written. A failed child with no summary
+// contributes no text but still settles its branch.
 func rollupNode(ac *domain.Context, agentID uint64, n *planNode) error {
 	for _, c := range n.children {
 		if err := rollupNode(ac, agentID, c); err != nil {
 			return err
 		}
 	}
-	if len(n.children) == 0 {
+	if len(n.children) == 0 || n.status != core.StatusDone || n.summary != "" {
 		return nil
 	}
-	// Model A: a parent becomes Done only via explicit host commit. Only a
-	// Done parent folds its Done children's Summaries into its own; a
-	// not-yet-Done parent is left untouched so an incremental rollup (which
-	// runs after every PlanCommit) cannot pre-fill it and later fool the
-	// "preserve a host-provided Summary" check into keeping a stale value.
-	if n.status != core.StatusDone {
-		return nil
-	}
-	var parts []string
+	parts := make([]string, 0, len(n.children))
 	for _, c := range n.children {
-		if c.status == core.StatusDone && c.summary != "" {
+		if !IsTerminalStatus(c.status) {
+			return nil
+		}
+		if c.summary != "" {
 			parts = append(parts, c.summary)
 		}
 	}
 	if len(parts) == 0 {
 		return nil
 	}
+	// Children arrive in NodePath order, so a folded summary reads in the order
+	// the steps were planned, not the order they happened to be written.
 	summary := strings.Join(parts, "; ")
-	if n.summary != "" {
-		return nil
-	}
 	if err := UpdateNodeSummaryLocked(ac, agentID, n.id, summary); err != nil {
 		return err
 	}
