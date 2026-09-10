@@ -10,8 +10,12 @@
 - `core/`：.meh 引擎——记录帧（26 字节：type/flags/length/agent_id/
   id_hash/crc32）、A/B 文件头、快照（0x02 分域）、空间回收、
   `StorageEngine` 索引（`agent -> idHash -> offset` 两级分域）、Slot 数据模型。
-  `FormatVersion` 是 `0x000F`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
-  无迁移路径。上抬改的仍不是帧布局而是记录含义与键：一轮的内容同住 L4（`Kind`
+  `FormatVersion` 是 `0x0010`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
+  无迁移路径。上抬改的仍不是 26 字节帧布局而是记录含义与状态词表：计划节点不再带
+  `plan_type`，状态词表去掉了与 `in_progress` 同义的 `running`（**值 4 从此是未定义
+  存储值**：记录解码不看状态含义，是渲染成对外视图那一步 `plan.StatusToString` 把它
+  报成 `ErrDeserialization` 而不是回落 pending，于是一次 `PlanState` 直接失败），一轮的树由一次
+  声明建立而不是逐步提交。再往前：一轮的内容同住 L4（`Kind`
   区分原文与事件，id 由 `hash("content:"+topic+":"+seq)` 派生），L5 只剩计划节点、
   走帧型 `RecL5PlanNode 0x0F`；自 0x000F 起 id 命名空间不再烘层号（场景节点
   `scene-node:`、内容槽 `content:`），归档的归属字段叫 `topic_id`，场景记录

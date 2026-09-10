@@ -568,18 +568,21 @@ func main() {
    distils once per turn and, on failure, returns an error having written no topic —
    the records you appended earlier stay. Hosts should retry a failed settle.
 2. **No embedding service, no dimension to declare**: the two header bytes at
-   offset 6 are reserved. The format version is `0x000F`: the L3 knowledge
+   offset 6 are reserved. The format version is `0x0010`: the L3 knowledge
    graph lives in the reserved shared domain (`core.SharedPoolAgentID`); no
-   migration runs — `0x000E` and older files are rejected at Open, because their
-   archives name the owning topic under a key the current record does not carry
-   (`context_id`) and their ids derive from namespaces that no longer exist
-   (`l1:`, `l4:`). Neither can be addressed under the current rules.
+   migration runs — `0x000F` and older files are rejected at Open, because a plan
+   node may carry the retired `running` status (which the current vocabulary
+   reports as an undefined stored value) and an event may be attributed to a step
+   no declaration ever made. `0x000E` and earlier additionally name the archive's
+   owning topic under a key the current record does not carry (`context_id`) and
+   derive their ids from namespaces that no longer exist (`l1:`, `l4:`). None of
+   it can be addressed under the current rules.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery` on every record you append;
    a turn's topic is stamped with the earliest and latest of its content.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
    feed back as-is; the facade exposes no hex ⇄ integer bridge.
-5. **`Search` writes no memory content**: it opens one turn (bumping the
-   scene's hit and turn counters) and creates no topic record, so an abandoned
+5. **`Search` writes no memory content**: it opens one turn (advancing the
+   scene's turn counter) and creates no topic record, so an abandoned
    turn leaves nothing behind. To read originals use `SceneContext` /
    `SearchL4`.
    Replaying an append with the same `(TopicID, Seq)` is idempotent: the record
@@ -588,7 +591,7 @@ func main() {
 6. **One file, many agent domains**: all tenants live inside one
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
    isolated per domain except the file-wide L3 pool; legacy files
-   (`FormatVersion < 0x000F`) cannot be opened or migrated.
+   (`FormatVersion < 0x0010`) cannot be opened or migrated.
 7. **Content and plans auto-expire**: Dream drops a topic's content older than 7
    days and plan nodes older than 7 days (a tree still in flight is exempt);
    `DeleteTopic` / `DeleteScene` are the explicit corrections. Past the window a

@@ -65,9 +65,17 @@ const (
 // read-side counters (hit_count, last_hit_at, topic_count) along with the Dream
 // stage that read them. A 0x000E file decodes its archive's owner into a field the
 // new reader never fills, and its records sit under prefixes that no longer
-// derive, so neither addresses anything under the new rule. Files with 0x000E (or
-// older) are rejected at Open — there is no migration path.
-const FormatVersion uint16 = 0x000F
+// derive, so neither addresses anything under the new rule. 0x0010 re-shaped the
+// plan layer's record and its writer at once: a plan node no longer carries a
+// plan_type, `running` left the status vocabulary (in_progress is the one word for
+// work under way), and a turn's tree is declared in one call instead of stepped
+// through, so an event can no longer create the step it names. A 0x000F file may
+// hold a node whose status is the retired value 4 — which the current vocabulary
+// reports as an undefined stored status rather than guessing — and may hold events
+// attributed to steps no declaration ever made, so neither reads correctly under
+// the new rule. Files with 0x000F (or older) are rejected at Open — there is no
+// migration path.
+const FormatVersion uint16 = 0x0010
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}
