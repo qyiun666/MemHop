@@ -359,7 +359,7 @@ sessions, err := db.ListTrajectorySessions()
 
 | 调用 | 说明 |
 |---|---|
-| `db.AppendArchive(topicID, ev)`（`ev.NodePath` 非空） | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链），这也是**追加一步**的入口。`NodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且**它自己决定树形**：路径上缺失的每一段都会被建成 pending，所以打错一段就会多开一棵树，而 L5 不提供删节点的接口（旧树等所属轮次掉出保留窗由 Dream 回收）。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `SearchL4` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
+| `db.AppendArchive(topicID, ev)`（`ev.NodePath` 非空） | 把事件绑到**本轮计划里已声明过的某一步**。那一步必须先存在：`NodePath` 指向一个从没声明过的步骤时整条记录被拒（`ErrInvalidQuery`）且零留痕——事件指了一个计划里没有的步骤，就是计划与记录对不上，树是 `PlanSet` 的事；这同时关掉了旧的那个口子（打错一段路径静悄悄多开一棵树）。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `SearchL4` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
 | `db.PlanSet(topicID, []api.PlanStep{{NodePath: "1", Title: "调研", Status: api.PlanStatusDone, Summary: s}, {NodePath: "1.1", …}})` | **声明**本轮的计划：一次调用交入宿主 LLM 规划出的那些步骤（点号分隔的 `NodePath` 任意深度），路径上缺失的段按 pending 建出来。声明里没列出的节点保持现值——库不把「没列出」读成「被撤掉」（部分重述与完整重述在库这边长得一样）；撤回一步的手段是**下一轮声明一棵新树**（宿主每轮重规划）。一步之内：`Status` 必填，`Title`/`Summary` 留空即继承现值；未知状态、路径形状不合法、同一路径在一次声明里出现两次，都在**动树之前**整份拒掉，被拒的声明零留痕。父摘要要等**直接子全部到达终态**才折。这个调用不写任何内容 |
 | `db.PlanState(topicID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
 

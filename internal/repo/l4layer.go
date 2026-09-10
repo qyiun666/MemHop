@@ -115,7 +115,10 @@ func DropExpiredArchives(engine *core.StorageEngine, agentID uint64, idx *index.
 // Index lets a topic-scoped read go through the domain's content cache instead
 // of scanning the whole bucket; it only applies when TopicID is set.
 // NodePath filters on the record's attribution field — an address inside one
-// turn, so the caller is expected to have set TopicID alongside it.
+// turn, so the caller is expected to have set TopicID alongside it. It selects
+// that step **and every step below it**: once a step is split into sub-steps the
+// work it did lives on the children, and "what did this step do" that answers
+// only for the parent's own line is a partial answer.
 type ArchiveQuery struct {
 	IDs      []uint64
 	TopicID  *uint64
@@ -221,7 +224,7 @@ func matchesArchiveQuery(arc core.ArchiveSlot, q ArchiveQuery) bool {
 	if q.Kind != nil && arc.Kind != *q.Kind {
 		return false
 	}
-	if q.NodePath != "" && arc.NodePath != q.NodePath {
+	if q.NodePath != "" && !NodePathUnder(arc.NodePath, q.NodePath) {
 		return false
 	}
 	if q.Type != nil && arc.ContentType != *q.Type {

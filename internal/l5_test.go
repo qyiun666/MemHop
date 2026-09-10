@@ -282,31 +282,46 @@ func TestPlanSetRefusesAmbiguousDeclaration(t *testing.T) {
 	}
 }
 
-func TestPlanAppendCreatesNodeAndEvent(t *testing.T) {
+// An event binds to a step the host planned; it never grows the tree. Naming a
+// step the plan never declared is the plan and the record disagreeing, so the
+// append reports that instead of quietly inventing a step.
+func TestEventBindsOnlyToADeclaredStep(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	if err := db.AppendArchive(core.DefaultAgentID, pid, onNode(ev("llm_request", 1000), "1.2.1")); err != nil {
+	if err := db.AppendArchive(core.DefaultAgentID, pid, onNode(ev("llm_request", 1000), "1.2.1")); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an event on an undeclared step: want ErrInvalidQuery, got %v", err)
+	}
+	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1.2.1")); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("the refused append created a node: %v", err)
+	}
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); n != 0 {
+		t.Fatalf("the refused append stored %d content records", n)
+	}
+
+	if err := db.PlanSet(core.DefaultAgentID, pid, []PlanStep{
+		{NodePath: "1.2.1", Status: PlanInProgress}}); err != nil {
 		t.Fatal(err)
 	}
-	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1.2.1"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if node.Status != core.StatusPending {
-		t.Fatalf("node not created as pending: %+v", node)
+	if err := db.AppendArchive(core.DefaultAgentID, pid, onNode(ev("llm_request", 1001), "1.2.1")); err != nil {
+		t.Fatalf("binding to a declared step: %v", err)
 	}
 	events := nodeEvents(t, db, 9, "1.2.1")
 	if len(events) != 1 || events[0].EventType != "llm_request" {
-		t.Fatalf("want 1 llm_request event on node, got %+v", events)
+		t.Fatalf("want 1 llm_request event on the step, got %+v", events)
 	}
 }
 
-// EnsureNode must build the parent chain with correct ParentID.
-func TestPlanAppendBuildsParentChain(t *testing.T) {
+// Naming a deep path in a declaration is enough: the ancestors it implies are
+// created as pending steps with the right ParentID.
+func TestPlanSetBuildsParentChain(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(9), onNode(ev("llm_request", 1000), "1.2.1")); err != nil {
+	if err := db.PlanSet(core.DefaultAgentID, common.FormatHash(9), []PlanStep{
+		{NodePath: "1.2.1", Status: PlanInProgress}}); err != nil {
 		t.Fatal(err)
+	}
+	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(9), onNode(ev("llm_request", 1000), "1.2.1")); err != nil {
+		t.Fatalf("an event on a step the declaration implied: %v", err)
 	}
 	rootID := core.HashPlanNode(9, "1")
 	midID := core.HashPlanNode(9, "1.2")
@@ -323,8 +338,13 @@ func TestPlanAppendBuildsParentChain(t *testing.T) {
 	if leaf.ParentID != midID {
 		t.Fatalf("leaf parent should be midID %d, got %d", midID, leaf.ParentID)
 	}
-	if leaf.Status != core.StatusPending {
-		t.Fatalf("leaf not pending plan node: %+v", leaf)
+	// The leaf carries what the host declared; only the ancestors it implied are
+	// left pending.
+	if leaf.Status != core.StatusInProgress {
+		t.Fatalf("leaf not restated: %+v", leaf)
+	}
+	if root.Status != core.StatusPending {
+		t.Fatalf("an implied ancestor is not pending: %+v", root)
 	}
 }
 
@@ -547,6 +567,10 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	topicID := common.FormatHash(9)
+	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
+		{NodePath: "1", Status: PlanPending}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(core.ArchiveSlot{
 		Kind: core.KindEvent, TopicID: 4242,
 		Role: core.RoleDream, ContentType: core.ContentVideo,
@@ -554,15 +578,18 @@ func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	}, "1")); err != nil {
 		t.Fatal(err)
 	}
+	// The content write left the tree exactly where the declaration put it: one
+	// node, still pending. An append that could advance or add a step would make
+	// the plan a second record of what happened instead of the host's intent.
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL5PlanNode); n != 1 {
-		t.Fatalf("plan nodes = %d, want the single node the path created", n)
+		t.Fatalf("plan nodes = %d, want only the declared one", n)
 	}
 	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1"))
 	if err != nil {
-		t.Fatalf("node for path 1 not created: %v", err)
+		t.Fatalf("the declared node vanished: %v", err)
 	}
 	if node.Status != core.StatusPending {
-		t.Fatalf("created node must be pending, got %d", node.Status)
+		t.Fatalf("an event append advanced its step: %d", node.Status)
 	}
 
 	var landed *core.ArchiveSlot

@@ -100,29 +100,39 @@ func TestSearchL4ByNodePath(t *testing.T) {
 	db := newTestDB(t, engine)
 	topic := common.HashID("turn-tree")
 	writeSlot(t, engine, topic, core.SeqUser, core.KindUtterance, "u", 1000, core.ContentText)
-	e11 := writeEvent(t, engine, topic, 3, "1.1", "cargo build")
-	e12 := writeEvent(t, engine, topic, 4, "1.2", "cargo test")
-	writeEvent(t, engine, topic, 5, "", "unattributed")
+	own := writeEvent(t, engine, topic, 3, "1", "the step's own line")
+	child := writeEvent(t, engine, topic, 4, "1.1", "cargo build")
+	grand := writeEvent(t, engine, topic, 5, "1.1.1", "cargo build --release")
+	writeEvent(t, engine, topic, 6, "30", "a sibling that merely shares the digit")
+	writeEvent(t, engine, topic, 7, "", "unattributed")
 
 	topicHex := common.FormatHash(topic)
-	event := core.KindEvent
-	out, err := db.SearchL4(core.DefaultAgentID,
-		L4Query{TopicID: &topicHex, Kind: &event, NodePath: "1.1"})
-	if err != nil {
-		t.Fatalf("node-path read: %v", err)
+	evKind := core.KindEvent
+	want := func(nodePath string, ids ...uint64) {
+		t.Helper()
+		out, err := db.SearchL4(core.DefaultAgentID,
+			L4Query{TopicID: &topicHex, Kind: &evKind, NodePath: nodePath})
+		if err != nil {
+			t.Fatalf("node-path %q read: %v", nodePath, err)
+		}
+		if len(out) != len(ids) {
+			t.Fatalf("node-path %q: want %d events, got %+v", nodePath, len(ids), out)
+		}
+		for i, id := range ids {
+			if out[i].IDHash != id {
+				t.Fatalf("node-path %q entry %d: want %x, got %x", nodePath, i, id, out[i].IDHash)
+			}
+		}
 	}
-	if len(out) != 1 || out[0].IDHash != e11.IDHash {
-		t.Fatalf("want only the 1.1 event, got %+v", out)
-	}
-	// A step nothing was bound to reads back empty — not the whole turn, and not
-	// the unattributed event that shares its prefix.
-	if out, err = db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &topicHex, NodePath: "1"}); err != nil || len(out) != 0 {
-		t.Fatalf("root step: want no match, got %d / %v", len(out), err)
-	}
-	if out, err = db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &topicHex, NodePath: "1.2"}); err != nil ||
-		len(out) != 1 || out[0].IDHash != e12.IDHash {
-		t.Fatalf("1.2: want the single event, got %+v / %v", out, err)
-	}
+	// A step's work includes what its sub-steps did: once "1" is split, the
+	// events land on the children, and a read that answered only for the parent's
+	// own line would report a step that did one thing when it did three.
+	want("1", own.IDHash, child.IDHash, grand.IDHash)
+	want("1.1", child.IDHash, grand.IDHash)
+	want("1.1.1", grand.IDHash)
+	// Segment boundary, not string prefix: "3" is not the parent of "30", so it
+	// matches nothing here.
+	want("3")
 }
 
 // A step address means nothing outside the turn holding its records, and a read

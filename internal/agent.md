@@ -197,7 +197,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    唯一的调用者（对话原文与事件都走这一条，`NodePath` 就写在记录上）。计划写面
    不碰内容：`PlanSet` 只动树，一步做过什么永远是宿主自己 append 的那些记录。
    `content.ValidateAppend` 是唯一的校验点，且**排在任何落盘之前**——被拒的写入
-   一条记录也不留。两种 Kind 各自的字段归属、
+   一条记录也不留。事件若绑了 `NodePath`，本话题的树上必须已有那一步
+   （`ac.Plans.HasNode`）：一条路径指向计划里没有的步骤，是宿主的计划与它的记录
+   对不上，报出来比顺手长出一棵树诚实。这道检查也排在落盘之前。
+   两种 Kind 各自的字段归属、
    4 KiB/64 KiB 预算与跨 Kind 的 Seq 覆写语义记在
    `internal/content/agent.md` 与门面注释里，根不复述。
    `EventType` 是宿主自定的步骤名，计划绑定事件与裸事件同口径：引擎从不按它

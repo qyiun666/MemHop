@@ -19,8 +19,9 @@ import (
 // conditions AND together, so an empty query returns the domain's whole content
 // set — utterances AND events alike, which is why Kind is one of the conditions.
 // Keyword is case-insensitive and Limit keeps the newest matches. NodePath keeps
-// only the records attributed to one plan step, and a step is addressed inside a
-// turn, so it is refused without TopicID.
+// only the work of one plan step — the step and every step nested under it, since
+// splitting "3" into "3.1"/"3.2" moves its events onto the children — and a step
+// is addressed inside a turn, so it is refused without TopicID.
 func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -72,10 +73,11 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 // error — that is what lets a replayed append converge instead of accumulating
 // versions.
 //
-// An event whose NodePath names a plan step hangs on it, and a step missing along
-// that dotted path is created as pending: this is also how a host adds a step to
-// the turn's plan. A record that does not satisfy the write contract is refused
-// before anything is stored, including before a node is created or advanced.
+// An event may name the plan step it belongs to, and that step has to exist
+// already: the tree is what PlanSet declares, and an event naming a step nobody
+// planned is the host's plan and record disagreeing, which is a mistake to report
+// rather than a tree to grow. A record that does not satisfy the write contract is
+// refused before anything is stored.
 func (db *DB) AppendArchive(agentID uint64, topicID string, slot core.ArchiveSlot) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -86,15 +88,15 @@ func (db *DB) AppendArchive(agentID uint64, topicID string, slot core.ArchiveSlo
 	if err != nil {
 		return err
 	}
-	// Checked before the tree moves: a refused record must not leave a node chain
-	// created behind it.
+	// Both checks run before the first byte is written: a refused record must not
+	// land, and must not touch the tree either.
 	if err := content.ValidateAppend(slot); err != nil {
 		return err
 	}
-	if slot.Kind == core.KindEvent && slot.NodePath != "" {
-		if _, err := plan.EnsureNode(ac, agentID, th, slot.NodePath); err != nil {
-			return err
-		}
+	if slot.Kind == core.KindEvent && slot.NodePath != "" &&
+		!ac.Plans.HasNode(th, slot.NodePath) {
+		return common.NewError(common.ErrInvalidQuery,
+			"the event names a step this turn's plan never declared: "+slot.NodePath)
 	}
 	_, err = content.Append(ac, agentID, th, slot)
 	return err

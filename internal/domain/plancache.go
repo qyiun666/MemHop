@@ -36,6 +36,23 @@ func (pc *PlanCache) Aggregate(topicID uint64) *repo.PlanAggregate {
 	return pc.plans[topicID]
 }
 
+// HasNode reports whether one topic's live plan tree holds a node at nodePath.
+// The content side asks it before binding an event to a step: a step nobody
+// declared is not conjured by an event naming it, because "the host's steps run
+// according to the plan" only means something if the plan came first.
+func (pc *PlanCache) HasNode(topicID uint64, nodePath string) bool {
+	agg := pc.plans[topicID]
+	if agg == nil {
+		return false
+	}
+	for i := range agg.Nodes {
+		if agg.Nodes[i].NodePath == nodePath {
+			return true
+		}
+	}
+	return false
+}
+
 // UpsertNode inserts or updates one node in its aggregate, keeping the nodes
 // NodePath-ordered so planForest can consume them directly. Node identity is the
 // stable derived IDHash, so an in-place replacement preserves the address.

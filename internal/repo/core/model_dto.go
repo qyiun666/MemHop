@@ -141,7 +141,7 @@ type L4Query struct {
 	TopicID  *string      `json:"topic_id,omitempty"`  // only archives of this topic
 	Type     *ContentType `json:"type,omitempty"`      // only archives of this content type
 	Kind     *ArchiveKind `json:"kind,omitempty"`      // utterance or event; unset selects both
-	NodePath string       `json:"node_path,omitempty"` // only records bound to this step; needs TopicID
+	NodePath string       `json:"node_path,omitempty"` // this step and every step under it; needs TopicID
 	Limit    int          `json:"limit,omitempty"`     // keep the newest N matches; <=0 means every match
 }
 

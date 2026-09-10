@@ -113,6 +113,14 @@ func CollectPlanNodes(engine *core.StorageEngine, agentID uint64) []PlanAggregat
 	return out
 }
 
+// NodePathUnder reports whether nodePath is root itself or lives somewhere
+// below it. The dot is a segment boundary on both sides, so one string prefix
+// test is already a whole-segment test: "3" covers "3", "3.1" and "3.2.1" but
+// not "30".
+func NodePathUnder(nodePath, root string) bool {
+	return nodePath == root || strings.HasPrefix(nodePath, root+".")
+}
+
 // CompareNodePath compares two node-path strings ("1", "1.2.1") numerically
 // segment by segment, so "1.10" sorts after "1.9" (not lexicographically
 // where "1.10" < "1.9"). Tie-breaks on length for equal numeric prefixes.
