@@ -281,20 +281,16 @@ func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
 	}
 }
 
-func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
+func TestPlanSetRejectedLeavesTreeUntouched(t *testing.T) {
 	sess := openSurfaceDB(t)
 	pid := mustTurnKey(t, sess)
-	// Committing a step is what adds it: the node chain is created along the
-	// path, and the node keeps the title the host named it with.
-	seed := []struct{ path, title, status string }{
-		{"1", "root", "in_progress"}, {"1.1", "leaf", "pending"},
-	}
-	for i, s := range seed {
-		if err := sess.PlanCommit(pid, s.path,
-			event("plan_step", "committed", int64(100+i)),
-			PlanStep{Title: s.title, Status: s.status}); err != nil {
-			t.Fatalf("commit seed %s: %v", s.path, err)
-		}
+	// One declaration builds the tree: a step missing along the dotted path is
+	// created as pending, so naming it is how a step is added.
+	if err := sess.PlanSet(pid, []PlanStep{
+		{NodePath: "1", Title: "root", Status: "in_progress"},
+		{NodePath: "1.1", Title: "leaf", Status: "pending"},
+	}); err != nil {
+		t.Fatal(err)
 	}
 	before, err := sess.PlanState(pid)
 	if err != nil {
@@ -303,59 +299,53 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 	if before.TotalCount != 2 || before.Roots[0].Title != "root" {
 		t.Fatalf("seeded tree = %+v, want a titled root plus its leaf", before)
 	}
-	// Two seeds, so two step events already landed.
-	const seededEvents = 2
 
-	rejected := []struct {
-		name string
-		ev   ArchiveSlot
-		step PlanStep
-		want Code
+	refused := []struct {
+		name  string
+		steps []PlanStep
 	}{
-		{"no timestamp", ArchiveSlot{Kind: KindEvent, EventType: "plan_step", Content: "c"},
-			PlanStep{Status: "done", Summary: "should-not-stick"}, ErrInvalidQuery},
-		{"no event type", ArchiveSlot{Kind: KindEvent, Content: "c", CreatedAt: 7},
-			PlanStep{Status: "done", Summary: "should-not-stick"}, ErrInvalidQuery},
-		{"payload over budget", ArchiveSlot{Kind: KindEvent, EventType: "plan_step",
-			Content: strings.Repeat("x", 5*1024), CreatedAt: 7}, PlanStep{Status: "done"}, ErrInvalidQuery},
-		{"unknown status", event("plan_step", "c", 7),
-			PlanStep{Status: "finished", Summary: "越权摘要"}, ErrInvalidQuery},
-		// Status has no blank meaning (unlike Title/Summary): a commit that
-		// omits it is refused rather than silently read as "leave it pending".
-		{"blank status", event("plan_step", "c", 7),
-			PlanStep{Summary: "s"}, ErrInvalidQuery},
-		{"blank event", ArchiveSlot{}, PlanStep{Status: "done"}, ErrInvalidQuery},
+		{"unknown status", []PlanStep{{NodePath: "1.1", Status: "finished", Summary: "越权摘要"}}},
+		// Status has no blank meaning (unlike Title/Summary): a step that omits it
+		// is refused rather than silently read as "leave it pending".
+		{"blank status", []PlanStep{{NodePath: "1.1", Summary: "s"}}},
+		{"empty path", []PlanStep{{Status: "done"}}},
+		{"blank path segment", []PlanStep{{NodePath: "1..2", Status: "done"}}},
+		// One step named twice in a single declaration has no defensible reading,
+		// and a last-one-wins rule would make the order of the list a silent contract.
+		{"same step twice", []PlanStep{{NodePath: "1", Status: "done"}, {NodePath: "1", Status: "pending"}}},
 	}
-	for _, tc := range rejected {
-		if err := sess.PlanCommit(pid, "1.1", tc.ev, tc.step); CodeOf(err) != tc.want {
-			t.Fatalf("%s: want %v, got %v", tc.name, tc.want, err)
+	for _, tc := range refused {
+		err := sess.PlanSet(pid, tc.steps)
+		if CodeOf(err) != ErrInvalidQuery {
+			t.Fatalf("%s: want ErrInvalidQuery, got %v", tc.name, err)
 		}
 		after, err := sess.PlanState(pid)
 		if err != nil {
 			t.Fatalf("%s: PlanState: %v", tc.name, err)
 		}
 		if render(after.Roots) != render(before.Roots) {
-			t.Fatalf("%s: a refused commit moved the tree\n before %s\n after  %s",
+			t.Fatalf("%s: a refused declaration moved the tree\n before %s\n after  %s",
 				tc.name, render(before.Roots), render(after.Roots))
-		}
-		if evs := eventsOf(t, sess, pid); len(evs) != seededEvents {
-			t.Fatalf("%s: a refused commit stored %d events", tc.name, len(evs))
 		}
 	}
 
-	if err := sess.PlanCommit(pid, "1.1", event("plan_step", "leaf", 7), PlanStep{Status: "done", Summary: "leaf done"}); err != nil {
-		t.Fatalf("valid commit: %v", err)
+	if err := sess.PlanSet(pid, []PlanStep{{NodePath: "1.1", Status: "done", Summary: "leaf done"}}); err != nil {
+		t.Fatalf("valid declaration: %v", err)
 	}
 	after, _ := sess.PlanState(pid)
 	if after.DoneCount != before.DoneCount+1 {
-		t.Fatalf("valid commit must advance the tree: %d → %d", before.DoneCount, after.DoneCount)
+		t.Fatalf("valid declaration must advance the tree: %d → %d", before.DoneCount, after.DoneCount)
+	}
+	// The step's own work is content, written on the content surface and read
+	// back attributed to the step it names.
+	if err := sess.AppendArchive(pid, onNode(event("tool_call", "ran", 7), "1.1")); err != nil {
+		t.Fatalf("append step event: %v", err)
 	}
 	evs := eventsOf(t, sess, pid)
-	if len(evs) != seededEvents+1 {
-		t.Fatalf("want %d events, got %d", seededEvents+1, len(evs))
+	if len(evs) != 1 {
+		t.Fatalf("want 1 event, got %d", len(evs))
 	}
-	// an event bound to a step reads back attributed to that step
-	if last := evs[len(evs)-1]; last.NodePath != "1.1" || last.TopicID != pid {
+	if last := evs[0]; last.NodePath != "1.1" || last.TopicID != pid {
 		t.Fatalf("event not attributed to its step: %+v", last)
 	}
 }

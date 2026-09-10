@@ -4,7 +4,7 @@
 // Package plan holds the L5 plan-tree small methods: the status surface and
 // Step, node-path mechanics, the node write steps, and the forest build with its
 // rollup. A plan is keyed by the turn that opened it, so the key itself is
-// parsed by content.ParseTopicID. The big methods (PlanCommit, PlanState) stay in
+// parsed by content.ParseTopicID. The big methods (PlanSet, PlanState) stay in
 // the composition root with the domain lock; a turn's events are L4 content,
 // written by the content package rather than here.
 

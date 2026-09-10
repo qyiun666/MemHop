@@ -10,7 +10,7 @@
 // drives every turn and what LLM tools bind to: Search, Update, Dream,
 // AppendArchive (the host-driven loop), SceneContext, ListScenes, GetL0,
 // UpdateL0, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes, QueryL3Subgraph,
-// Crystallize, ListTrajectorySessions, PlanCommit, PlanState.
+// Crystallize, ListTrajectorySessions, PlanSet, PlanState.
 // The assembly/admin face (7, plus all of
 // MultiAgentDB) is host code at session boundaries and management channels
 // only — never an LLM tool: UpdateScene, MergeScenes, DeleteTopic,
@@ -212,17 +212,24 @@ func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
 	return s.Session.AppendArchive(topicID, toCoreAppendSlot(slot))
 }
 
-// PlanCommit advances one plan node and appends its step event, then rolls
-// Done children's summaries up into their parent. topicID names the turn that
-// opened the plan; nodePath is the dotted path the host assigns within it
-// ("1", "1.2.1") — a node missing along that path is created as pending, which
-// is how a step is added. The event is forced to bare-event semantics and names
-// itself: any non-empty EventType the host chooses is accepted. step carries the
-// node's own fields; an unknown Status is refused before the tree moves, and a
-// field left blank keeps what is stored, so a later commit never rewinds a
-// finished step.
-func (s *Session) PlanCommit(topicID, nodePath string, ev ArchiveSlot, step PlanStep) error {
-	return s.Session.PlanCommit(topicID, nodePath, toCoreAppendSlot(ev), toInternalPlanStep(step))
+// PlanSet declares one turn's plan tree. topicID names the turn that opened it.
+// Each listed step carries the dotted NodePath the host assigns inside it
+// ("1", "1.2.1"); a node missing along that path is created as pending, which is
+// how a step is added — and how the host restates its whole plan in a later turn
+// under the new turn's id. Steps the declaration omits keep their stored state:
+// leaving a step out is not how you withdraw it.
+//
+// A malformed path, a status the engine cannot name, or the same path listed
+// twice is refused before the tree moves, and a refused declaration leaves the
+// tree exactly as it was. Within a step, Status always states where that step
+// got to (there is no "leave it as it was" spelling), while a blank Title or
+// Summary keeps what the node already holds — so restating a step never rewinds
+// its title or erases a folded summary. Restating a settled step as pending or
+// in_progress re-opens it, and that drops its FinishedAt. This call writes no
+// content: the events a step produced are L4 records, appended with
+// AppendArchive under the same topic id.
+func (s *Session) PlanSet(topicID string, steps []PlanStep) error {
+	return s.Session.PlanSet(topicID, toInternalPlanSteps(steps))
 }
 
 // PlanState returns the plan tree of one turn — keyed by the topic id that

@@ -11,7 +11,7 @@
 // Kind, and a plan tree hangs off that same key. Update writes no content, so
 // this package's Append is the only way a record gets into a topic.
 //
-// The big methods (AppendArchive, SearchL4, PlanCommit, PlanState, Crystallize)
+// The big methods (AppendArchive, SearchL4, PlanSet, PlanState, Crystallize)
 // stay in the composition root with the domain lock.
 package content
 

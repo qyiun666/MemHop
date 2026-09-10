@@ -193,19 +193,21 @@ type PlanNodeView struct {
 	Children   []PlanNodeView `json:"children"`
 }
 
-// PlanStep is one host commit's node-side fields, passed to PlanCommit for the
-// node named by NodePath (a node missing along the path is created as pending,
-// which is how a step is added).
+// PlanStep is one node in a host's declaration of a turn's plan, passed to
+// PlanSet. NodePath is the dotted address the host assigns inside that turn's
+// tree ("1", "1.2.1"); a node missing along the path is created as pending, so
+// naming one is how a step is added.
 //
 // The fields are not symmetric. A blank Title/Summary keeps what the node
-// already holds, so committing a step again never rewinds its title or erases a
-// folded summary. Status has no blank meaning: it is the string surface
-// (pending / in_progress / done / failed), every commit states it
-// explicitly, and an unknown value is refused before the tree moves.
+// already holds, so restating a step never rewinds its title or erases a folded
+// summary. Status has no blank meaning: it is the string surface
+// (pending / in_progress / done / failed), every step states it, and an unknown
+// value is refused before the tree moves.
 type PlanStep struct {
-	Title   string `json:"title"`
-	Status  string `json:"status"`
-	Summary string `json:"summary"`
+	NodePath string `json:"node_path"`
+	Title    string `json:"title"`
+	Status   string `json:"status"`
+	Summary  string `json:"summary"`
 }
 
 // PlanTree is the external forest view of one plan: every top-level step is

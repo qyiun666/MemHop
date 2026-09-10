@@ -223,7 +223,7 @@ rep, err := db.Dream(ctx, "")       // sceneID 传 "" = 遍历域内全部场景
 
 25 个会话方法按使用者分两类：
 
-- **任务面（18 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `AppendArchive` / `Update` / `Dream`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`ListTrajectorySessions` / `Crystallize`、`PlanCommit` / `PlanState`。
+- **任务面（18 个）**——宿主每轮驱动、LLM 工具绑定的方法：`Search` / `AppendArchive` / `Update` / `Dream`（宿主自动循环）、`GetL0` / `UpdateL0`、`ListScenes` / `SceneContext`、`GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`、`SearchL4`、`ListTrajectorySessions` / `Crystallize`、`PlanSet` / `PlanState`。
 - **组装/管理面（7 个，外加 `MultiAgentDB` 全部 8 个）**——宿主代码在会话边界与管理通道调用，**不做成 LLM 工具**：`UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`、`UpdateL3` / `DeleteL3` / `DeleteL3Nodes`。能力格式整体离开了方法面：`ParseCapabilityPackage` / `ValidateCapabilityCard` 是包级函数（§8 L5）。
 
 ### L0 画像
@@ -360,7 +360,7 @@ sessions, err := db.ListTrajectorySessions()
 | 调用 | 说明 |
 |---|---|
 | `db.AppendArchive(topicID, ev)`（`ev.NodePath` 非空） | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链），这也是**追加一步**的入口。`NodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且**它自己决定树形**：路径上缺失的每一段都会被建成 pending，所以打错一段就会多开一棵树，而 L5 不提供删节点的接口（旧树等所属轮次掉出保留窗由 Dream 回收）。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `SearchL4` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
-| `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "调研", Status: api.PlanStatusDone, Summary: s})` | 提交一步：推进节点状态、追加该步事件；**当一个父节点的直接子全部到达终态**（`done` 或 `failed`）时，才把子的摘要折成父的 Summary（父节点转为 `done` 只由宿主显式提交；只要有一个子还开着就折，得到的是一份读起来像结论的半成品）。`nodePath` 沿点号路径缺失的节点按 pending 建出来——这就是追加一步的入口。`Title`/`Summary` 留空即继承现值；未知 `Status` 在动树之前就被拒 |
+| `db.PlanSet(topicID, []api.PlanStep{{NodePath: "1", Title: "调研", Status: api.PlanStatusDone, Summary: s}, {NodePath: "1.1", …}})` | **声明**本轮的计划：一次调用交入宿主 LLM 规划出的那些步骤（点号分隔的 `NodePath` 任意深度），路径上缺失的段按 pending 建出来。声明里没列出的节点保持现值——库不把「没列出」读成「被撤掉」（部分重述与完整重述在库这边长得一样）；撤回一步的手段是**下一轮声明一棵新树**（宿主每轮重规划）。一步之内：`Status` 必填，`Title`/`Summary` 留空即继承现值；未知状态、路径形状不合法、同一路径在一次声明里出现两次，都在**动树之前**整份拒掉，被拒的声明零留痕。父摘要要等**直接子全部到达终态**才折。这个调用不写任何内容 |
 | `db.PlanState(topicID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
 
 `0000000000000000` 是保留值（记录未赋键时的值），L5 的读写入口一律拒绝它。
@@ -379,7 +379,7 @@ sessions, err := db.ListTrajectorySessions()
 
 枚举常量同样导出：`L3ImportSkip/Merge/Overwrite`、`CapabilityMCP/Skill/API/Composite`、`EdgeRelated...EdgeCustom`、`ContentText/Image/Video/Document/Audio/Code/Other`。能力格式随记录层退役转为包级面存活：`CapabilityFormatV4` + `ParseCapabilityPackage` / `ValidateCapabilityCard`。
 
-> 记录的 `Kind` 是 `api.KindUtterance` / `api.KindEvent`。L4 的 `role` 是裸 `uint8`，宿主可声明的三个是 `api.RoleUser` / `RoleAgent` / `RoleSystem`；值 3 是库给融合摘要自己盖的标记，刻意不作公开常量、`AppendArchive` 也拒它，所以宿主写不出一个「看起来像被巩固过」的记录。计划状态只有字符串一种编码：`api.PlanStatus*`（`PlanCommit` 入参 / `PlanState` 出参）。
+> 记录的 `Kind` 是 `api.KindUtterance` / `api.KindEvent`。L4 的 `role` 是裸 `uint8`，宿主可声明的三个是 `api.RoleUser` / `RoleAgent` / `RoleSystem`；值 3 是库给融合摘要自己盖的标记，刻意不作公开常量、`AppendArchive` 也拒它，所以宿主写不出一个「看起来像被巩固过」的记录。计划状态只有字符串一种编码：`api.PlanStatus*`（`PlanSet` 入参 / `PlanState` 出参）。
 
 ---
 

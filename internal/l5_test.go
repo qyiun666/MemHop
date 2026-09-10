@@ -214,12 +214,12 @@ func TestTrajectorySeqContinuesAfterContextRebuild(t *testing.T) {
 	}
 }
 
-func TestPlanCommitUpdatesNode(t *testing.T) {
+func TestPlanSetRestatesNode(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, pid, "1", ev("plan_step", 1000),
-		PlanStep{Status: PlanDone, Summary: "made it"}); err != nil {
+	if err := db.PlanSet(core.DefaultAgentID, pid, []PlanStep{
+		{NodePath: "1", Status: PlanDone, Summary: "made it"}}); err != nil {
 		t.Fatal(err)
 	}
 	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1"))
@@ -231,6 +231,54 @@ func TestPlanCommitUpdatesNode(t *testing.T) {
 	}
 	if node.Summary != "made it" {
 		t.Fatalf("want made it, got %s", node.Summary)
+	}
+}
+
+// A declaration says what it lists and nothing else. Leaving a step out is not
+// how the host withdraws it — the library would have to read a partial
+// restatement and a complete one the same way — so the unlisted node keeps its
+// stored state and withdrawing is done by declaring a new turn's tree.
+func TestPlanSetLeavesUndeclaredNodesAlone(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	pid := common.FormatHash(9)
+	if err := db.PlanSet(core.DefaultAgentID, pid, []PlanStep{
+		{NodePath: "1", Status: PlanInProgress}, {NodePath: "2", Status: PlanDone, Summary: "keep me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PlanSet(core.DefaultAgentID, pid, []PlanStep{
+		{NodePath: "1", Status: PlanDone, Summary: "first"}}); err != nil {
+		t.Fatal(err)
+	}
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "2"))
+	if err != nil {
+		t.Fatalf("the unlisted node is gone: %v", err)
+	}
+	if node.Status != core.StatusDone || node.Summary != "keep me" {
+		t.Fatalf("an unlisted step was restated: %+v", node)
+	}
+}
+
+// A declaration is refused as a whole: nothing it names lands on the tree, so a
+// host never has to diff its own plan against the store to find what applied.
+func TestPlanSetRefusesAmbiguousDeclaration(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	pid := common.FormatHash(9)
+	refused := map[string][]PlanStep{
+		"same step twice": {{NodePath: "1", Status: PlanDone}, {NodePath: "1", Status: PlanPending}},
+		"blank segment":   {{NodePath: "1..2", Status: PlanDone}},
+		"empty path":      {{Status: PlanDone}},
+		"unknown status":  {{NodePath: "1", Status: PlanStatus("finished")}},
+		"blank status":    {{NodePath: "1"}},
+	}
+	for name, steps := range refused {
+		if err := db.PlanSet(core.DefaultAgentID, pid, steps); common.CodeOf(err) != common.ErrInvalidQuery {
+			t.Fatalf("%s: want ErrInvalidQuery, got %v", name, err)
+		}
+	}
+	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1")); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("a refused declaration left a node behind: %v", err)
 	}
 }
 
@@ -332,17 +380,15 @@ func TestSettledTurnKeepsEventsAppendedBeforeIt(t *testing.T) {
 	}
 }
 
-// Model A: a parent becomes Done only when the host commits it, and the
-// bottom-up rollup of Done children's summaries fills an empty parent Summary
-// without ever overwriting one the host wrote.
-func TestPlanCommitRollupModelA(t *testing.T) {
+// Model A: a parent becomes Done only when the host declares it so, and the
+// bottom-up rollup of settled children's summaries fills an empty parent
+// Summary without ever overwriting one the host wrote.
+func TestPlanSetRollupModelA(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	commit := func(topicID, path string, status PlanStatus, summary string, ts int64) {
+	declare := func(topicID string, steps ...PlanStep) {
 		t.Helper()
-		err := db.PlanCommit(core.DefaultAgentID, topicID, path, ev("plan_step", ts),
-			PlanStep{Status: status, Summary: summary})
-		if err != nil {
-			t.Fatalf("commit %s: %v", path, err)
+		if err := db.PlanSet(core.DefaultAgentID, topicID, steps); err != nil {
+			t.Fatalf("declare %v: %v", steps, err)
 		}
 	}
 	state := func(topicID string) *PlanTree {
@@ -355,33 +401,66 @@ func TestPlanCommitRollupModelA(t *testing.T) {
 	}
 
 	partial := common.FormatHash(9)
-	// One child still pending: the parent is not Done and the counts say so.
-	commit(partial, "1", PlanInProgress, "", 1000)
-	commit(partial, "1.1", PlanDone, "step A", 1001)
-	commit(partial, "1.2", PlanPending, "", 1002)
+	// One child still open: the parent is not Done and the counts say so.
+	declare(partial, PlanStep{NodePath: "1", Status: PlanInProgress},
+		PlanStep{NodePath: "1.1", Status: PlanDone, Summary: "step A"},
+		PlanStep{NodePath: "1.2", Status: PlanPending})
 	if tree := state(partial); tree.Roots[0].Status == PlanDone ||
 		tree.TotalCount != 3 || tree.DoneCount != 1 {
 		t.Fatalf("a partially done parent was folded: %+v", tree)
 	}
-	// Every child Done still leaves the parent as the host left it.
-	commit(partial, "1.2", PlanDone, "step B", 1003)
+	// Every child settled still leaves the parent as the host left it.
+	declare(partial, PlanStep{NodePath: "1.2", Status: PlanDone, Summary: "step B"})
 	if tree := state(partial); tree.Roots[0].Status != PlanInProgress {
-		t.Fatalf("parent auto-folded without a host commit: %+v", tree.Roots[0])
+		t.Fatalf("parent auto-folded without a host declaration: %+v", tree.Roots[0])
 	}
-	// The host commits the parent with a blank Summary → Done children fold up.
-	commit(partial, "1", PlanDone, "", 1004)
+	// The host declares the parent Done with a blank Summary → children fold up.
+	declare(partial, PlanStep{NodePath: "1", Status: PlanDone})
 	if tree := state(partial); tree.DoneCount != 3 ||
 		tree.Roots[0].Summary != "step A; step B" {
 		t.Fatalf("rollup into a blank parent summary: %+v", tree.Roots[0])
 	}
 
-	// A summary the host wrote in the same commit survives the rollup.
+	// A summary the host declared alongside the parent survives the rollup.
 	own := common.FormatHash(6)
-	commit(own, "1.1", PlanDone, "step A", 1011)
-	commit(own, "1.2", PlanDone, "step B", 1012)
-	commit(own, "1", PlanDone, "parent's own words", 1013)
+	declare(own, PlanStep{NodePath: "1.1", Status: PlanDone, Summary: "step A"},
+		PlanStep{NodePath: "1.2", Status: PlanDone, Summary: "step B"},
+		PlanStep{NodePath: "1", Status: PlanDone, Summary: "parent's own words"})
 	if tree := state(own); tree.Roots[0].Summary != "parent's own words" {
 		t.Fatalf("rollup overwrote the host summary: %+v", tree.Roots[0])
+	}
+}
+
+// A fold taken while a child is still open is a partial answer wearing a
+// finished one's clothes, so the parent waits for every branch to settle.
+func TestPlanSetRollupWaitsForEveryChild(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	topicID := common.FormatHash(4)
+	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
+		{NodePath: "1", Status: PlanDone},
+		{NodePath: "1.1", Status: PlanDone, Summary: "settled"},
+		{NodePath: "1.2", Status: PlanInProgress},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tree, err := db.PlanState(core.DefaultAgentID, topicID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tree.Roots[0].Summary != "" {
+		t.Fatalf("a parent with an open child was folded: %+v", tree.Roots[0])
+	}
+	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
+		{NodePath: "1.2", Status: PlanFailed, Summary: "gave up"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := db.PlanState(core.DefaultAgentID, topicID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := reopened.Roots[0]; got.Summary != "settled; gave up" {
+		t.Fatalf("fold once every child settled = %q", got.Summary)
 	}
 }
 
@@ -405,10 +484,10 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 		}
 	}
 
-	// Done plan committed long ago, with a FRESH event bound to the step.
+	// All-Done plan declared long ago, with a FRESH event bound to the step.
 	doneID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, doneID, "1", ev("plan_step", old),
-		PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
+	if err := db.PlanSet(core.DefaultAgentID, doneID, []PlanStep{
+		{NodePath: "1", Status: PlanDone, Summary: "fin"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.AppendArchive(core.DefaultAgentID, doneID, onNode(ev("note", now), "1")); err != nil {
@@ -417,24 +496,22 @@ func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 	doneNode := core.HashPlanNode(9, "1")
 	age(doneNode)
 
-	// In-flight plan: an aged Done root plus a child committed just now. The
+	// In-flight plan: an aged Done root plus a child declared just now. The
 	// tree is exempt as a whole, so the stale root survives with it.
 	liveID := common.FormatHash(8)
-	if err := db.PlanCommit(core.DefaultAgentID, liveID, "1", ev("plan_step", old),
-		PlanStep{Status: PlanDone, Summary: "root"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.PlanCommit(core.DefaultAgentID, liveID, "1.1", ev("plan_step", now),
-		PlanStep{Status: PlanInProgress}); err != nil {
+	if err := db.PlanSet(core.DefaultAgentID, liveID, []PlanStep{
+		{NodePath: "1", Status: PlanDone, Summary: "root"},
+		{NodePath: "1.1", Status: PlanInProgress},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	liveRoot := core.HashPlanNode(8, "1")
 	age(liveRoot)
 
-	// Abandoned plan: non-Done and nothing committed inside the window.
+	// Abandoned plan: non-Done and nothing declared inside the window.
 	staleID := common.FormatHash(7)
-	if err := db.PlanCommit(core.DefaultAgentID, staleID, "1", ev("plan_step", old),
-		PlanStep{Status: PlanInProgress}); err != nil {
+	if err := db.PlanSet(core.DefaultAgentID, staleID, []PlanStep{
+		{NodePath: "1", Status: PlanInProgress}}); err != nil {
 		t.Fatal(err)
 	}
 	staleNode := core.HashPlanNode(7, "1")
@@ -533,16 +610,11 @@ func TestPlanStateForestMultipleRoots(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 1001),
-		PlanStep{Status: PlanDone, Summary: "step one"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "2", ev("plan_step", 1002),
-		PlanStep{Status: PlanInProgress}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "2.1", ev("plan_step", 1003),
-		PlanStep{Status: PlanDone, Summary: "sub"}); err != nil {
+	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
+		{NodePath: "1", Status: PlanDone, Summary: "step one"},
+		{NodePath: "2", Status: PlanInProgress},
+		{NodePath: "2.1", Status: PlanDone, Summary: "sub"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	tree, err := db.PlanState(core.DefaultAgentID, topicID)
@@ -563,19 +635,22 @@ func TestPlanStateForestMultipleRoots(t *testing.T) {
 	}
 }
 
-// A plan-bound event names itself: any EventType a bare turn event takes is
-// accepted here too and stored verbatim, while the write contract that remains
-// is still checked before the tree moves.
+// A step event names itself: any EventType a bare turn event takes is accepted
+// here too and stored verbatim, and the content contract is still checked before
+// anything lands on the tree.
 func TestPlanEventNamesAreHostOwned(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(ev("sandbox_ask", 1000), "1")); err != nil {
-		t.Fatalf("a host-named plan event must be accepted: %v", err)
+	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
+		{NodePath: "1", Status: PlanDone}}); err != nil {
+		t.Fatal(err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("host_step", 1001),
-		PlanStep{Status: PlanDone}); err != nil {
-		t.Fatalf("host-named commit event: %v", err)
+	for i, name := range []string{"sandbox_ask", "host_step"} {
+		if err := db.AppendArchive(core.DefaultAgentID, topicID,
+			onNode(ev(name, int64(1000+i)), "1")); err != nil {
+			t.Fatalf("a host-named plan event must be accepted: %v", err)
+		}
 	}
 	events, err := db.eventsOf(core.DefaultAgentID, topicID)
 	if err != nil || len(events) != 2 {
@@ -602,12 +677,10 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 1000),
-		PlanStep{Title: "r", Status: PlanPending}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1.1", ev("plan_step", 1100),
-		PlanStep{Title: "a", Status: PlanDone, Summary: "s"}); err != nil {
+	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
+		{NodePath: "1", Title: "r", Status: PlanPending},
+		{NodePath: "1.1", Title: "a", Status: PlanDone, Summary: "s"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(ev("tool_call", 1200), "1.1")); err != nil {
@@ -639,40 +712,38 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	}
 }
 
-func TestPlanCommit_FinishedAt(t *testing.T) {
+func TestPlanSetFinishedAt(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 100),
-		PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
-		t.Fatal(err)
+	declare := func(status PlanStatus, summary string) {
+		t.Helper()
+		if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
+			{NodePath: "1", Status: status, Summary: summary}}); err != nil {
+			t.Fatal(err)
+		}
 	}
+	declare(PlanDone, "fin")
 	tree, err := db.PlanState(core.DefaultAgentID, topicID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	first := tree.Roots[0].FinishedAt
 	if first == 0 {
-		t.Fatal("terminal commit must set FinishedAt")
+		t.Fatal("a declared terminal step must carry a completion time")
 	}
 	// Restating the step as work in progress clears it. FinishedAt answers "when
 	// did this step finish", and a step the host re-opened has not finished —
 	// keeping the earlier stamp would hand back a completed-looking node that the
 	// same tree says is still running.
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 200),
-		PlanStep{Status: PlanInProgress}); err != nil {
-		t.Fatal(err)
-	}
+	declare(PlanInProgress, "")
 	tree2, _ := db.PlanState(core.DefaultAgentID, topicID)
 	if tree2.Roots[0].FinishedAt != 0 {
 		t.Fatalf("re-opening a step must clear FinishedAt: %d -> %d", first, tree2.Roots[0].FinishedAt)
 	}
 	// Finishing it again is a new completion, so it carries a new time rather
 	// than the stamp of the one the host withdrew.
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 300),
-		PlanStep{Status: PlanDone, Summary: "fin2"}); err != nil {
-		t.Fatal(err)
-	}
+	declare(PlanDone, "fin2")
 	tree3, _ := db.PlanState(core.DefaultAgentID, topicID)
 	if tree3.Roots[0].FinishedAt < first {
 		t.Fatalf("a re-completed step lost its completion time: %d", tree3.Roots[0].FinishedAt)

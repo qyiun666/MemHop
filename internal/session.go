@@ -187,10 +187,10 @@ func (s *Session) Crystallize(ctx context.Context, turnID string, existing []Cap
 
 // ---- L5 plan tree ----
 
-// PlanCommit advances a plan node to a status and appends the step event.
-// topicID names the turn that opened the plan.
-func (s *Session) PlanCommit(topicID, nodePath string, ev ArchiveSlot, step PlanStep) error {
-	return s.db.PlanCommit(s.agentID, topicID, nodePath, ev, step)
+// PlanSet declares a turn's plan tree: every listed step is created if missing
+// and restated. topicID names the turn that owns the plan.
+func (s *Session) PlanSet(topicID string, steps []PlanStep) error {
+	return s.db.PlanSet(s.agentID, topicID, steps)
 }
 
 // PlanState returns the plan tree of one turn, keyed by the topic id that

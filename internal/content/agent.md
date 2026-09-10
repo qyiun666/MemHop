@@ -12,7 +12,7 @@
   不是六层里的某一层。
 - **契约**：一个话题的键就是 Search 为那一轮铸出的话题 ID；该轮的原文、事件与它开出
   的计划树同住这个键下。`Update` 不写内容，所以 `Append` 是一条记录进入话题的
-  唯一途径。大方法（AppendArchive/SearchL4/PlanCommit/PlanState/Crystallize）在根里
+  唯一途径。大方法（AppendArchive/SearchL4/PlanSet/PlanState/Crystallize）在根里
   持域锁后调用本包。Crystallize 只做纯提炼（`Read(event)` → `TrimByBudget` →
   `llmops.Crystallize`），候选列表原样返回宿主：能力面没有记录层（目录即能力），
   落盘/去重/激活全归宿主，本包没有结晶写步。

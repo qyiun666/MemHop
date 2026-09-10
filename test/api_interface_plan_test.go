@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Offline interface tests for the L5 plan tree and the turn's event track (L4
-// content). A host drives this the way meowagent does: `Search` opens a turn
-// and hands back that turn's topic id, which is also the key of the plan tree
-// the turn works on. The
-// host keeps its own dotted step paths and commits each step as it advances,
-// and after a restart reads the tree back with a turn topic it already holds.
-// PlanCommit returns nothing at all, so every assertion below reads the tree
-// back through PlanState instead of trusting the call that changed it.
+// content). A host drives this the way meowagent does, one loop iteration per
+// turn: `Search` reads the scene and hands back the topic id of the turn about
+// to run, `PlanSet` declares that turn's whole plan (the LLM re-plans every
+// turn, so the tree is restated rather than stepped through), each step's work
+// goes into L4 with `AppendArchive` bound to one declared step, and `Update`
+// settles the turn's dialogue into its topic. After a restart the host reads the
+// tree back with a turn topic it already holds: PlanSet returns nothing, so every
+// assertion below reads the tree through PlanState instead of trusting the call
+// that changed it.
 
 package test
 
@@ -21,6 +23,15 @@ import (
 
 	memhop "github.com/qyiun666/MemHop/api"
 )
+
+// mustDeclare states one turn's plan: the steps the host's LLM planned, at
+// whatever depth its dotted paths nest.
+func mustDeclare(t *testing.T, db *testDB, key string, steps ...memhop.PlanStep) {
+	t.Helper()
+	if err := db.PlanSet(key, steps); err != nil {
+		t.Fatalf("PlanSet(%s, %v): %v", key, steps, err)
+	}
+}
 
 func mustPlanState(t *testing.T, db *testDB, topicID string) memhop.PlanTree {
 	t.Helper()
@@ -77,6 +88,22 @@ func mustAppend(t *testing.T, db *testDB, key, nodePath string, ev memhop.Archiv
 	}
 }
 
+// renderTree flattens a plan forest into one line, so a before/after comparison
+// says what moved instead of leaking a Go map diff.
+func renderTree(t *testing.T, db *testDB, key string) string {
+	t.Helper()
+	var b strings.Builder
+	var walk func([]memhop.PlanNodeView)
+	walk = func(nodes []memhop.PlanNodeView) {
+		for _, n := range nodes {
+			b.WriteString(n.NodePath + "=" + n.Status + "/" + n.Summary + "/" + n.Title + " ")
+			walk(n.Children)
+		}
+	}
+	walk(mustPlanState(t, db, key).Roots)
+	return b.String()
+}
+
 // One turn is one plan, and the turn's topic id is the only handle: the tree it
 // opens reads back from that id, and two turns never share a tree.
 func TestInterfacePlanTreeLivesOnItsTurn(t *testing.T) {
@@ -89,6 +116,7 @@ func TestInterfacePlanTreeLivesOnItsTurn(t *testing.T) {
 	}
 	ts := time.Now().UnixMilli()
 
+	mustDeclare(t, db, first, memhop.PlanStep{NodePath: "1", Title: "第一步", Status: "in_progress"})
 	mustAppend(t, db, first, "1", planEvent(ts, "plan_step", "第一步"))
 	if got := mustPlanState(t, db, first); got.TotalCount != 1 {
 		t.Fatalf("first turn's tree = %+v, want one node", got)
@@ -97,57 +125,45 @@ func TestInterfacePlanTreeLivesOnItsTurn(t *testing.T) {
 		t.Fatalf("the next turn inherited a tree: %+v", other)
 	}
 	// The turn's own read carries both faces of that key: the step event and the
-	// node the event created.
+	// node the host declared.
 	events := mustEvents(t, db, first)
 	if len(events) != 1 || events[0].TopicID != first || events[0].NodePath != "1" {
 		t.Fatalf("turn records = %+v, want the step event keyed to %s", events, first)
 	}
 }
 
-// Committing a plan is how a parent's conclusion gets folded out of its
-// children — and how a refused commit is required to leave nothing behind. The
-// tree itself is grown by committing steps, keyed by the turn that opened it.
-func TestInterfacePlanCommitRollup(t *testing.T) {
+// A declared tree folds a parent's conclusion out of its children once every
+// child has settled, and a refused declaration leaves nothing behind.
+func TestInterfacePlanDeclareAndFold(t *testing.T) {
 	db, _ := openTestDB(t)
 	sceneID := openSession(t, db)
 	topicID := openTurn(t, db, sceneID)
-	ts := time.Now().UnixMilli()
 
-	commit := func(path, title, status, summary string, ev memhop.ArchiveSlot) error {
-		return db.PlanCommit(topicID, path, ev, memhop.PlanStep{
-			Title: title, Status: status, Summary: summary})
-	}
 	pending, done := string(memhop.PlanStatusPending), string(memhop.PlanStatusDone)
-	if err := commit("1", "父", pending, "", planEvent(ts, "plan_step", "开工")); err != nil {
-		t.Fatalf("commit parent: %v", err)
-	}
-	if err := commit("1.1", "子一", done, "改动收敛到 3 个文件", planEvent(ts+100, "plan_step", "第一步完成")); err != nil {
-		t.Fatalf("commit child 1.1: %v", err)
-	}
-	if err := commit("1.2", "子二", done, "测试全绿", planEvent(ts+200, "plan_step", "第二步完成")); err != nil {
-		t.Fatalf("commit child 1.2: %v", err)
-	}
-
-	// The rollup runs after every commit, so it must not pre-fill a parent the
-	// host has not committed: a parent is Done only because the host said so.
+	mustDeclare(t, db, topicID,
+		memhop.PlanStep{NodePath: "1", Title: "父", Status: pending},
+		memhop.PlanStep{NodePath: "1.1", Title: "子一", Status: done, Summary: "改动收敛到 3 个文件"},
+		memhop.PlanStep{NodePath: "1.2", Title: "子二", Status: done, Summary: "测试全绿"},
+	)
+	// The fold is not a verdict on the parent: a parent is Done only because the
+	// host declared it so, so an open parent keeps an empty Summary even with
+	// every child settled.
 	if got := findPlanNode(t, mustPlanState(t, db, topicID), "1"); got.Status != pending || got.Summary != "" {
-		t.Fatalf("an uncommitted parent was folded: %+v", got)
+		t.Fatalf("an undeclared-done parent was folded: %+v", got)
 	}
+	mustDeclare(t, db, topicID, memhop.PlanStep{NodePath: "1", Status: done})
 
-	// Committing the parent again with a blank title keeps the stored one.
-	if err := commit("1", "", done, "", planEvent(ts+300, "plan_step", "全部完成")); err != nil {
-		t.Fatalf("commit parent done: %v", err)
-	}
 	tree := mustPlanState(t, db, topicID)
 	folded := findPlanNode(t, tree, "1")
 	if folded.Summary != "改动收敛到 3 个文件; 测试全绿" {
 		t.Fatalf("rolled-up summary = %q", folded.Summary)
 	}
+	// Restating a step with a blank title keeps the stored one.
 	if folded.Title != "父" {
 		t.Fatalf("a blank title erased the stored one: %+v", folded)
 	}
 	if folded.FinishedAt == 0 {
-		t.Fatal("a terminal commit must stamp FinishedAt once")
+		t.Fatal("a declared terminal step must carry a completion time")
 	}
 	// Every node comes back as a view the host can render without a second
 	// call: string status, its own summary, and its own path.
@@ -162,12 +178,74 @@ func TestInterfacePlanCommitRollup(t *testing.T) {
 			t.Fatalf("a child view lost its fields: %+v", c)
 		}
 	}
-	// The read says which step each event belongs to — the host cannot derive
-	// that hash, so the stamp is the only attribution available on the surface.
-	for _, e := range mustEvents(t, db, topicID) {
-		if e.TopicID != topicID || e.NodePath == "" {
-			t.Fatalf("plan-bound event lost its attribution: %+v", e)
+	// A refused declaration moves nothing: an unknown status, a path with a blank
+	// segment, and one step named twice are all refused before the tree moves.
+	before := renderTree(t, db, topicID)
+	for name, steps := range map[string][]memhop.PlanStep{
+		"unknown status":  {{NodePath: "1.1", Status: "finished"}},
+		"blank segment":   {{NodePath: "1..3", Status: done}},
+		"same step twice": {{NodePath: "1", Status: pending}, {NodePath: "1", Status: done}},
+	} {
+		if err := db.PlanSet(topicID, steps); err == nil {
+			t.Fatalf("%s: a refused declaration was accepted", name)
 		}
+		if got := renderTree(t, db, topicID); got != before {
+			t.Fatalf("%s: a refused declaration moved the tree\n before %s\n after  %s", name, before, got)
+		}
+	}
+}
+
+// The host's LLM re-plans every turn, so a turn's tree is a restatement of the
+// plan as of that turn: step 3 exists alone first, gains siblings, then splits
+// into its own sub-steps. Each turn owns a tree, and no later turn's
+// restatement rewrites an earlier turn's nodes.
+func TestInterfacePlanReplannedAcrossTurns(t *testing.T) {
+	db, _ := openTestDB(t)
+	sceneID := openSession(t, db)
+	first := openTurn(t, db, sceneID)
+	second := openTurn(t, db, sceneID)
+	third := openTurn(t, db, sceneID)
+	done := string(memhop.PlanStatusDone)
+
+	mustDeclare(t, db, first, memhop.PlanStep{NodePath: "1", Title: "还没想清楚", Status: done})
+	mustDeclare(t, db, second,
+		memhop.PlanStep{NodePath: "1", Status: done},
+		memhop.PlanStep{NodePath: "2", Status: done},
+		memhop.PlanStep{NodePath: "3", Title: "跑测试", Status: done, Summary: "全绿"},
+		memhop.PlanStep{NodePath: "4", Status: done},
+	)
+	// Step 3 is the one that turned out to have parts. The parent is declared as
+	// soon as its children are, so the fold can name what the whole step did.
+	mustDeclare(t, db, third,
+		memhop.PlanStep{NodePath: "1", Status: done},
+		memhop.PlanStep{NodePath: "2", Status: done},
+		memhop.PlanStep{NodePath: "3", Title: "跑测试", Status: done},
+		memhop.PlanStep{NodePath: "3.1", Status: done, Summary: "单测"},
+		memhop.PlanStep{NodePath: "3.2", Status: done, Summary: "集成"},
+		memhop.PlanStep{NodePath: "3.3", Status: done, Summary: "基准"},
+		memhop.PlanStep{NodePath: "4", Status: done},
+	)
+
+	secondTree := mustPlanState(t, db, second)
+	if secondTree.TotalCount != 4 || len(secondTree.Roots) != 4 {
+		t.Fatalf("second turn's flat plan = %+v, want four roots", secondTree)
+	}
+	// The earlier turn's node for step 3 keeps the summary that turn declared; a
+	// restatement under a new topic id never reaches back into it.
+	if got := findPlanNode(t, secondTree, "3").Summary; got != "全绿" {
+		t.Fatalf("a later turn rewrote the earlier tree: %q", got)
+	}
+
+	thirdTree := mustPlanState(t, db, third)
+	step3 := findPlanNode(t, thirdTree, "3")
+	if len(step3.Children) != 3 {
+		t.Fatalf("step 3 did not split: %+v", step3.Children)
+	}
+	if step3.Summary != "单测; 集成; 基准" {
+		t.Fatalf("the split step folded to %q", step3.Summary)
+	}
+	if firstTree := mustPlanState(t, db, first); firstTree.TotalCount != 1 {
+		t.Fatalf("the first turn's tree grew: %+v", firstTree)
 	}
 }
 
@@ -189,6 +267,7 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 		t.Fatalf("bare turn event = %+v, want keyed to %s and bound to no step", e, turnID)
 	}
 
+	mustDeclare(t, db, planTurn, memhop.PlanStep{NodePath: "1", Status: "in_progress"})
 	mustAppend(t, db, planTurn, "1", planEvent(ts+1, "plan_step", "开始"))
 	mustAppend(t, db, planTurn, "1", planEvent(ts+2, "tool_call", `{"tool":"bash","cmd":"go test"}`))
 	planEvents := mustEvents(t, db, planTurn)
@@ -256,11 +335,9 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 	ts := time.Now().UnixMilli()
 
 	mustAppend(t, db, turnID, "", planEvent(ts, "tool_call", `{"tool":"bash"}`))
-	if err := db.PlanCommit(turnID, "1.1", planEvent(ts+1, "plan_step", "第一步"),
-		memhop.PlanStep{Title: "调研",
-			Status: string(memhop.PlanStatusDone), Summary: "结论一"}); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
+	mustDeclare(t, db, turnID, memhop.PlanStep{NodePath: "1.1", Title: "调研",
+		Status: string(memhop.PlanStatusDone), Summary: "结论一"})
+	mustAppend(t, db, turnID, "1.1", planEvent(ts+1, "plan_step", "第一步"))
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
 	}

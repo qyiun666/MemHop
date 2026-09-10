@@ -82,7 +82,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
 7. **L5 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
    合法的 L5 键。读写两侧一律经 `content.ParseTopicID` 拒它
-   （`AppendArchive`/`PlanCommit`/`PlanState`/`Crystallize`）——只在写侧拒，
+   （`AppendArchive`/`PlanSet`/`PlanState`/`Crystallize`）——只在写侧拒，
    全零键下就会攒出永远读不出的记录。
 8. **计划清理有界**：dream 的 `l5_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有节点活动」的计划，其中活动只看节点自己的 `UpdatedAt`；宿主中断或放弃而
@@ -193,11 +193,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁——代价是「删图后、
    清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成
    未锚定，可经 `UpdateScene` 重挂。
-10. **一次内容写入，两个入口**：`content.Append` 是唯一写路径，
-   `AppendArchive`（对话原文与裸事件，`NodePath` 就写在记录上）与 `PlanCommit`
-   （步进事件，`NodePath` 取调用参数并强制 `Kind=event`）都走它。
-   `content.ValidateAppend` 是唯一的校验点，且**排在 `plan.EnsureNode` 之前**——
-   被拒的写入不留下它顺路建出的节点链。两种 Kind 各自的字段归属、
+10. **内容只有一个写入口**：`content.Append` 是唯一写路径，`AppendArchive` 是它
+   唯一的调用者（对话原文与事件都走这一条，`NodePath` 就写在记录上）。计划写面
+   不碰内容：`PlanSet` 只动树，一步做过什么永远是宿主自己 append 的那些记录。
+   `content.ValidateAppend` 是唯一的校验点，且**排在任何落盘之前**——被拒的写入
+   一条记录也不留。两种 Kind 各自的字段归属、
    4 KiB/64 KiB 预算与跨 Kind 的 Seq 覆写语义记在
    `internal/content/agent.md` 与门面注释里，根不复述。
    `EventType` 是宿主自定的步骤名，计划绑定事件与裸事件同口径：引擎从不按它
@@ -207,13 +207,13 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 11. **`MultiAgentDB.CompactTo`**：core 的 `Compact` 用 `Create`（带
    `O_TRUNC`）在新路径写整理副本，故根层先拒空路径、拒当前库文件
    （`sameFile` 走绝对路径归一）与拒已存在的目标，绝不覆盖任何既有文件。
-12. **`PlanCommit` 未填即继承，路径即结构**：`plan.Step` 里空白的
-   Title/Summary 继承节点现值（空 Status 会被 `StatusToU8` 拒——状态是
-   每次必须给的危害字段，不是"不改"），宿主推进一步不必先读旧树；显式传入的值
-   仍然覆盖。`nodePath` 自己决定树形：`EnsureNode` 沿点号路径把缺失段一律建成
-   pending，所以**打错一段路径会凭空多出一棵树**，而 L5 没有任何删节点入口
-   （作废靠换轮次键，旧树由 `l5_prune` 的保留窗回收）——这是选「提交即追加」而
-   弃「整树 diff 同步」时付出的代价，写进门面注释与 GUIDE 而不是留给宿主踩。
+12. **`PlanSet` 声明整棵，未列出的节点不动**：宿主每轮重述自己的计划（LLM 会
+   改主意、会把一步拆成几步），所以写面是「声明」而不是「逐步提交」。一条声明
+   里：`Status` 每次必须给（留空会被 `StatusToU8` 整份拒掉——它没有"不改"这种
+   写法），`Title`/`Summary` 留空继承现值，缺失的路径段按 pending 建出来。
+   **库不从「这次没列出」推断「这一步被撤掉了」**——部分重述与完整重述在库里长得
+   一模一样，猜错就是静默删掉宿主的步骤；撤回的正规手段是下一轮声明一棵新树，旧树
+   由 `l5_prune` 的保留窗回收。校验排在任何节点写入之前，所以一份被拒的声明零留痕。
 13. **破坏性写入先验 id**：`MergeScenes` 会删记录，所以主/次每个 id 都必须
    仍是一个场景（`requireScenes` 逐个回读比对），未知 id 报 `ErrNotFound`；
    底层 `DeleteL2(DeleteScenesL2)` 直接按传入 id 批量删，少这一步时一个陈旧

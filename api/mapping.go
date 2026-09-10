@@ -233,10 +233,21 @@ func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
 	return out
 }
 
+func toInternalPlanSteps(in []PlanStep) []internal.PlanStep {
+	if in == nil {
+		return nil
+	}
+	out := make([]internal.PlanStep, len(in))
+	for i, s := range in {
+		out[i] = toInternalPlanStep(s)
+	}
+	return out
+}
+
 func toInternalPlanStep(s PlanStep) internal.PlanStep {
 	return internal.PlanStep{
-		Status: internal.PlanStatus(s.Status), Title: s.Title,
-		Summary: s.Summary,
+		NodePath: s.NodePath, Status: internal.PlanStatus(s.Status),
+		Title: s.Title, Summary: s.Summary,
 	}
 }
 

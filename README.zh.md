@@ -44,7 +44,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related；边的身份是「成员节点 + kind」，同一对节点可并存多种关系），图与节点两级删除，关键词/类型/ID 条件按 AND 组合，BFS 子图查询。图池是**文件级**的：文件内所有 agent 域共享一份 L3（项目知识导一次全家可见），删 agent 不删公共池
 - **设计层面单实例** — 一个 `.meh` 文件只有一个持有者：全平台文件排他锁强制（linux/darwin/windows），第二次 `Open` 直接失败；内嵌形态无服务进程、无后台守护
 - **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、go-openai、go-sdk、golang.org/x/sys）；关键词提炼没有本地兜底，LLM 返回不可解析就直接报错；**引擎不联系任何 embedding / 向量服务**，配置里也没有维度要声明，`sync.RWMutex` + `atomic.Pointer`，零基础设施
-- **MCP Server** — `cmd/memhop-mcp` 将 25 个公开会话方法中的 20 个以 24 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录；L3 知识图是全租户共享的唯一公共池）。刻意只留在 Go 侧：L5 计划写读面（`PlanCommit`/`PlanState`）、记忆纠错（`DeleteTopic`/`DeleteScene`/`DeleteL3Nodes`）与文件维护（`CompactTo`，入参就是一个输出路径）——这些要由持有会话状态、或该决定文件写到哪里的宿主来调
+- **MCP Server** — `cmd/memhop-mcp` 将 25 个公开会话方法中的 20 个以 24 个 MCP 工具通过多租户 HTTP 暴露（SSE + streamable-http，官方 `modelcontextprotocol/go-sdk`）：单进程服务多个宿主，共享一个 `.meh` 文件，每个租户按 URL 路径 `/mcp/<tenant-id>` 隔离到独立 agent 域（租户名 → 稳定 agentID，`os.Root` 锚定 db 目录；L3 知识图是全租户共享的唯一公共池）。刻意只留在 Go 侧：L5 计划写读面（`PlanSet`/`PlanState`）、记忆纠错（`DeleteTopic`/`DeleteScene`/`DeleteL3Nodes`）与文件维护（`CompactTo`，入参就是一个输出路径）——这些要由持有会话状态、或该决定文件写到哪里的宿主来调
 
 ## 快速开始
 
@@ -152,7 +152,7 @@ report, err := sess.Dream(context.Background(), "")
 | L4 归档 | `AppendArchive(topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodePath, Content, CreatedAt})` 是一条记录进入话题的唯一途径（`Seq: 0` 由库分配；写一个已被占用的槽位就是覆写）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ `NodePath`（只取归因到某一步的记录，步骤只在它那一轮内成立）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 只留 Seq 最高的 N 条命中 |
 | 能力（不是引擎的一层） | 目录即能力，库不存记录：`ParseCapabilityPackage(data, source)` · `ValidateCapabilityCard(card)`（包级 v4 解析校验）· `Crystallize(turnID, existing)` 返回候选——落盘归宿主 |
 | 轮内事件（L4 的 `Kind=event`） | `ListTrajectorySessions` · `Crystallize(topicID)` —— 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），7 天自动清理、无删除接口，读它用 `SearchL4(L4Query{TopicID, Kind: &KindEvent})`，写它用 `AppendArchive`。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于对话。`Crystallize` 只读事件轨，说了什么不进 prompt |
-| L5 计划树 | `PlanCommit(topicID, nodePath, ev, PlanStep{...})` · `PlanState(topicID)` —— 计划树是 L5 唯一自己的记录：一节点一条，键就是开出它的那一轮，所以 `PlanState(topic)` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储，而 `SearchL4{TopicID, NodePath}` 能单独读回某一步做过的事；提交一个尚不存在的 `nodePath` 即追加一步（仅 Go module 暴露，MCP 工具集未接入） |
+| L5 计划树 | `PlanSet(topicID, []PlanStep{{NodePath, Title, Status, Summary}, …})` · `PlanState(topicID)` —— 计划树是 L5 唯一自己的记录：一节点一条，键就是开出它的那一轮，所以 `PlanState(topic)` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储，而 `SearchL4{TopicID, NodePath}` 能单独读回某一步做过的事。写面是**声明**：一次调用交入本轮规划的那些步骤（点号路径任意深度），路径上缺失的段按 pending 建出来。声明里没列出的节点保持现值——**撤回一步的手段是下一轮声明一棵新树**（宿主的 LLM 每轮重规划，库不从「没列出」猜「被撤掉」）。计划写面不落任何内容：一步的轨迹是宿主自己 append 的 L4 记录（仅 Go module 暴露，MCP 工具集未接入） |
 | DB 句柄 | `OpenMulti` · `CreateAgent` · `ListAgents` · `DeleteAgent` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，仅 Go） · `Close` · `IsClosed` · `api.DefaultAgentID` |
 
 ### 能力 —— 目录即能力

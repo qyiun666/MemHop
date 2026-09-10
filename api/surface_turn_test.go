@@ -244,7 +244,7 @@ func TestSurfaceReservedTopicID(t *testing.T) {
 	calls := map[string]func() error{
 		"AppendBare":  func() error { return db.AppendArchive(zero, ev) },
 		"AppendNode":  func() error { return db.AppendArchive(zero, onNode(ev, "1")) },
-		"PlanCommit":  func() error { return db.PlanCommit(zero, "1", ev, PlanStep{Status: "done", Summary: ""}) },
+		"PlanSet":     func() error { return db.PlanSet(zero, []PlanStep{{NodePath: "1", Status: "done"}}) },
 		"PlanState":   func() error { _, err := db.PlanState(zero); return err },
 		"Crystallize": func() error { _, err := db.Crystallize(ctx, zero, nil); return err },
 	}

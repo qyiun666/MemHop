@@ -63,9 +63,9 @@ func TestSessionPublicSurface(t *testing.T) {
 		"GetL3", "ListL3", "ImportL3", "QueryL3Nodes", "QueryL3Subgraph",
 		// L4 archives
 		"SearchL4",
-		// turn events and the plan tree
+		// L4 content and the plan tree: one write per turn for the tree, one per record for content
 		"ListTrajectorySessions", "Crystallize",
-		"PlanCommit", "PlanState",
+		"PlanSet", "PlanState",
 
 		// assembly/admin face — host code at session boundaries and management
 		// channels only, never an LLM tool

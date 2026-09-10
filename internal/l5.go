@@ -50,15 +50,15 @@ func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSu
 	return out, nil
 }
 
-// PlanCommit advances a plan node and appends the step event, then rolls up
-// Done children summaries into any parent Summary (Model A: a parent becomes
-// Done only when the host explicitly commits it here). `topicID` names the turn
-// that owns the plan, and a node missing along nodePath is created — this is
-// how a host adds a step. step carries the node's own fields; one left blank
-// keeps what is stored. Both the status and the event are validated first: a
-// commit this call refuses leaves the node's status, its summary and the
-// rollup exactly as they were.
-func (db *DB) PlanCommit(agentID uint64, topicID string, nodePath string, ev core.ArchiveSlot, step plan.Step) error {
+// PlanSet declares one turn's plan tree. `topicID` names the turn that owns it;
+// every listed step is created along its dotted path when missing and then
+// restated, so this is also how a step is added and how the host replays the
+// whole plan a turn later. Steps the declaration leaves out keep their stored
+// state: an omission is not a withdrawal — declaring a new turn's tree is. A
+// declaration this refuses leaves the tree exactly as it was, and nothing here
+// touches the turn's content: the events a step produced are L4 records the host
+// appends itself, so restating a tree can never rewrite what a turn recorded.
+func (db *DB) PlanSet(agentID uint64, topicID string, steps []plan.Step) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
@@ -68,34 +68,20 @@ func (db *DB) PlanCommit(agentID uint64, topicID string, nodePath string, ev cor
 	if err != nil {
 		return err
 	}
-	// Checked before the tree moves: an unknown status must not leave a node
-	// chain created behind it.
-	if _, err := plan.StatusToU8(step.Status); err != nil {
+	// Checked before the tree moves: a half-applied declaration would leave the
+	// host unable to tell which of its steps landed.
+	if err := plan.ValidateDeclaration(steps); err != nil {
 		return err
 	}
-	// The step being committed owns these two fields: the event is an event, and
-	// it belongs to this node whatever the caller named on the record.
-	ev.Kind = core.KindEvent
-	ev.NodePath = nodePath
-	if err := content.ValidateAppend(ev); err != nil {
-		return err
-	}
-	nodeID, err := plan.EnsureNode(ac, agentID, th, nodePath)
-	if err != nil {
-		return err
-	}
-	if err := plan.CommitNode(ac, agentID, nodeID, step); err != nil {
-		return err
-	}
-	if _, err := content.Append(ac, agentID, th, ev); err != nil {
+	if err := plan.SetNodes(ac, agentID, th, steps); err != nil {
 		return err
 	}
 	return plan.RollupTree(ac, agentID, th)
 }
 
 // PlanState returns the plan tree of one turn (the topic id that opened it) as
-// the actual stored statuses — no auto-fold: a parent becomes Done only via
-// explicit host PlanCommit.
+// the actual stored statuses — no auto-fold: a parent becomes Done only where
+// the host declared it so.
 func (db *DB) PlanState(agentID uint64, topicID string) (*PlanTree, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
