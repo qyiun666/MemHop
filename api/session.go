@@ -6,11 +6,12 @@
 // set is exactly the externally callable surface. Every call is serialized
 // per agent domain by the internal domain lock.
 //
-// The methods split by audience. The runtime/task face (18) is what the host
+// The methods split by audience. The runtime/task face (20) is what the host
 // drives every turn and what LLM tools bind to: Search, Update, Dream,
 // AppendArchive (the host-driven loop), SceneContext, ListScenes, GetL0,
 // UpdateL0, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes, QueryL3Subgraph,
-// Crystallize, ListTrajectorySessions, PlanSet, PlanState.
+// Crystallize, ListTrajectorySessions, PlanCreate, PlanNodeAdd,
+// PlanNodeUpdate, PlanState.
 // The assembly/admin face (7, plus all of
 // MultiAgentDB) is host code at session boundaries and management channels
 // only — never an LLM tool: UpdateScene, MergeScenes, DeleteTopic,
@@ -177,7 +178,7 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // Update distills the utterances of that key, Crystallize reads its events, and the
 // plan tree sharing the key comes back from PlanState.
 //
-// What is stored is Kind, Seq, Role, ContentType, EventType, NodePath, Content and
+// What is stored is Kind, Seq, Role, ContentType, EventType, NodeSeq, Content and
 // CreatedAt; IDHash and TopicID are ignored, which is what makes the round trip
 // work — read a record back, change one field, write it to the slot it came from.
 //
@@ -191,17 +192,18 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // Every rule below is refused before any record or plan node is touched. An event
 // names itself with a non-empty EventType and has no speaker; an utterance declares
 // Role (RoleUser / RoleAgent / RoleSystem) and ContentType and carries neither
-// EventType nor NodePath. RoleDream is refused: it is the library's own mark on a
+// EventType nor NodeSeq. RoleDream is refused: it is the library's own mark on a
 // consolidated summary, and a host that could write one makes that mark meaningless.
 // Content over budget is refused, not truncated — 4 KiB per event, 64 KiB per
 // utterance — because a shortened record reads back exactly like a complete one, and
 // an unbounded utterance turns one distillation into an unbounded number of LLM
 // calls holding the domain lock.
 //
-// NodePath shapes the tree itself: each missing segment of the dotted path is
-// created as pending, so a mistyped segment opens a second tree, and L5 exposes no
-// node-delete call — a stale tree goes only when its turn falls out of the retention
-// window.
+// NodeSeq attributes an event to one step of this turn's plan tree, and that step
+// has to exist already: PlanCreate and PlanNodeAdd are the only writes that ever
+// create a step, so an event naming an ordinal nobody created is refused rather
+// than answered with a fresh branch, and a mistyped ordinal cannot open a second
+// tree. 0 attributes the event to no step at all.
 //
 // EventType is the host's own word for the step: the engine never branches on it, it
 // comes back verbatim through SearchL4 and reaches the Crystallize prompt verbatim.
@@ -212,24 +214,48 @@ func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
 	return s.Session.AppendArchive(topicID, toCoreAppendSlot(slot))
 }
 
-// PlanSet declares one turn's plan tree. topicID names the turn that opened it.
-// Each listed step carries the dotted NodePath the host assigns inside it
-// ("1", "1.2.1"); a node missing along that path is created as pending, which is
-// how a step is added — and how the host restates its whole plan in a later turn
-// under the new turn's id. Steps the declaration omits keep their stored state:
-// leaving a step out is not how you withdraw it.
+// PlanCreate opens a turn's plan tree by creating its first step, and returns the
+// ordinal that step is addressed by from here on. topicID names the turn that
+// opened the tree — the id Search handed out for it, which the host only ever
+// passes back. A tree starts with no steps at all, so this is also how a plan
+// first appears under a turn.
 //
-// A malformed path, a status the engine cannot name, or the same path listed
-// twice is refused before the tree moves, and a refused declaration leaves the
-// tree exactly as it was. Within a step, Status always states where that step
-// got to (there is no "leave it as it was" spelling), while a blank Title or
-// Summary keeps what the node already holds — so restating a step never rewinds
-// its title or erases a folded summary. Restating a settled step as pending or
-// in_progress re-opens it, and that drops its FinishedAt. This call writes no
-// content: the events a step produced are L4 records, appended with
-// AppendArchive under the same topic id.
-func (s *Session) PlanSet(topicID string, steps []PlanStep) error {
-	return s.Session.PlanSet(topicID, toInternalPlanSteps(steps))
+// The returned ordinal is the library's to hand out and the host's to keep: it is
+// never derived from a title, and two steps of one turn never share one.
+func (s *Session) PlanCreate(topicID string, title string) (uint32, error) {
+	return s.Session.PlanCreate(topicID, title)
+}
+
+// PlanNodeAdd adds one step to a turn's plan tree and returns its ordinal.
+// parentSeq 0 hangs the step at the top level, so this is also how a second root
+// joins the forest; any other value must name a step this tree already holds —
+// PlanNodeAdd under an unknown parent is refused rather than answered by growing
+// one.
+//
+// This is the only way a step comes into existence. Nothing is written when either
+// create call returns an error, and a step's title may be filled in later by
+// PlanNodeUpdate, which is why an empty title here is allowed: the view falls back
+// to the ordinal until the host names the step.
+func (s *Session) PlanNodeAdd(topicID string, parentSeq uint32, title string) (uint32, error) {
+	return s.Session.PlanNodeAdd(topicID, parentSeq, title)
+}
+
+// PlanNodeUpdate restates one step of a turn's plan tree: its status, and its own
+// Title/Summary. Status always states where that step got to (there is no "leave
+// it as it was" spelling), while a blank Title or Summary keeps what the node
+// already holds — so updating a step never rewinds its title or erases a folded
+// summary. Restating a settled step as in_progress re-opens it, and that drops its
+// FinishedAt.
+//
+// An update the engine cannot honour is refused before the node is touched: a
+// status outside in_progress / done / failed, or a step this turn never created,
+// leaves the tree exactly as it was. A step that reaches a terminal status can
+// settle its parent: once every direct child of a Done parent is itself terminal,
+// the parent's Summary folds up from its children's. This call writes no content:
+// the events a step produced are L4 records, appended with AppendArchive under the
+// same topic id.
+func (s *Session) PlanNodeUpdate(topicID string, step PlanStep) error {
+	return s.Session.PlanNodeUpdate(topicID, toInternalPlanStep(step))
 }
 
 // PlanState returns the plan tree of one turn — keyed by the topic id that

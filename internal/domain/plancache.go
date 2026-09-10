@@ -4,6 +4,7 @@
 package domain
 
 import (
+	"cmp"
 	"slices"
 
 	"github.com/qyiun666/MemHop/internal/repo"
@@ -36,26 +37,73 @@ func (pc *PlanCache) Aggregate(topicID uint64) *repo.PlanAggregate {
 	return pc.plans[topicID]
 }
 
-// HasNode reports whether one topic's live plan tree holds a node at nodePath.
-// The content side asks it before binding an event to a step: a step nobody
-// declared is not conjured by an event naming it, because "the host's steps run
-// according to the plan" only means something if the plan came first.
-func (pc *PlanCache) HasNode(topicID uint64, nodePath string) bool {
+// HasSeq reports whether one topic's live plan tree holds a node at seq. The
+// content side asks it before binding an event to a step: a step nobody created
+// is not conjured by an event naming it, because "the host's steps run according
+// to the plan" only means something if the plan came first.
+func (pc *PlanCache) HasSeq(topicID uint64, seq uint32) bool {
 	agg := pc.plans[topicID]
 	if agg == nil {
 		return false
 	}
 	for i := range agg.Nodes {
-		if agg.Nodes[i].NodePath == nodePath {
+		if agg.Nodes[i].Seq == seq {
 			return true
 		}
 	}
 	return false
 }
 
+// Subtree returns the ordinals of one step and every step nested under it,
+// Seq-ascending and including the step itself. A tree read by ordinal has no
+// prefix to match on, so the whole branch is walked here — this is what lets
+// "what did this step do" cover the work a split step moved onto its children.
+// An unknown root yields just itself: a step whose record expired still names
+// its own events. Callers hold Context.Mu.
+func (pc *PlanCache) Subtree(topicID uint64, root uint32) []uint32 {
+	agg := pc.plans[topicID]
+	if agg == nil {
+		return []uint32{root}
+	}
+	children := make(map[uint32][]uint32, len(agg.Nodes))
+	for _, n := range agg.Nodes {
+		children[n.ParentSeq] = append(children[n.ParentSeq], n.Seq)
+	}
+	out := []uint32{root}
+	for queue := []uint32{root}; len(queue) > 0; {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, kid := range children[cur] {
+			out = append(out, kid)
+			queue = append(queue, kid)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// NextSeq hands out the next ordinal of one topic's tree.
+// ponytail: derived from the live nodes, so a retention sweep that drops the
+// highest step lets that ordinal be handed out again; the upgrade path is a
+// persisted per-topic high-water record. Callers hold Context.Mu.
+func (pc *PlanCache) NextSeq(topicID uint64) uint32 {
+	agg := pc.plans[topicID]
+	if agg == nil {
+		return 1
+	}
+	var top uint32
+	for _, n := range agg.Nodes {
+		if n.Seq > top {
+			top = n.Seq
+		}
+	}
+	return top + 1
+}
+
 // UpsertNode inserts or updates one node in its aggregate, keeping the nodes
-// NodePath-ordered so planForest can consume them directly. Node identity is the
-// stable derived IDHash, so an in-place replacement preserves the address.
+// Seq-ordered so planForest can consume them directly. A node's ordinal is never
+// rewritten, so an in-place replacement keeps the same derived IDHash and the
+// same address.
 func (pc *PlanCache) UpsertNode(topicID uint64, node *core.PlanNode) {
 	if node == nil {
 		return
@@ -77,7 +125,7 @@ func (pc *PlanCache) UpsertNode(topicID uint64, node *core.PlanNode) {
 		agg.Nodes = append(agg.Nodes, *node)
 	}
 	slices.SortFunc(agg.Nodes, func(a, b core.PlanNode) int {
-		return repo.CompareNodePath(a.NodePath, b.NodePath)
+		return cmp.Compare(a.Seq, b.Seq)
 	})
 	recomputePlanAggStat(agg)
 }

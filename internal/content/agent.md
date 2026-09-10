@@ -21,7 +21,7 @@
   的东西没有说话者，也没有媒介。`IDHash` 与 `TopicID` 两侧都不采信：前者由
   (话题, Seq) 派生，后者就是调用键本身。宿主可伪装的只有被丢弃的字段，
   所以不必为它增设校验分支（`TestAppendEventCannotForgeContentFields` 钉住）。
-  反过来，越界的轴是**拒**的：原文带 `EventType` 或 `NodePath`、或自称 `RoleDream`
+  反过来，越界的轴是**拒**的：原文带 `EventType` 或 `NodeSeq`、或自称 `RoleDream`
   （融合摘要的标记，库自己盖），都是 `ErrInvalidQuery`。
 - **Seq 是一个话题内跨 Kind 共享的单一空间**：显式 `Seq=0` 才分配，且
   `seq = max(话题现有 Seq, 2) + 1`。下限 2 是给对话预留的位置：无论宿主先记事件

@@ -29,7 +29,7 @@ type ArchiveContent struct {
 	Role      uint8
 	Type      core.ContentType
 	EventType string
-	NodePath  string
+	NodeSeq   uint32
 	Text      string
 	CreatedAt int64
 }
@@ -49,7 +49,7 @@ func AppendArchiveL4(engine *core.StorageEngine, agentID uint64, idx *index.L4In
 		Role:        in.Role,
 		TopicID:     in.TopicID,
 		EventType:   in.EventType,
-		NodePath:    in.NodePath,
+		NodeSeq:     in.NodeSeq,
 		CreatedAt:   in.CreatedAt,
 		Content:     in.Text,
 	}
@@ -114,17 +114,18 @@ func DropExpiredArchives(engine *core.StorageEngine, agentID uint64, idx *index.
 //
 // Index lets a topic-scoped read go through the domain's content cache instead
 // of scanning the whole bucket; it only applies when TopicID is set.
-// NodePath filters on the record's attribution field — an address inside one
-// turn, so the caller is expected to have set TopicID alongside it. It selects
-// that step **and every step below it**: once a step is split into sub-steps the
-// work it did lives on the children, and "what did this step do" that answers
-// only for the parent's own line is a partial answer.
+// NodeSeqs filters on the record's attribution field — ordinals inside one
+// turn, so the caller is expected to have set TopicID alongside it. It holds the
+// whole subtree already: a step's own ordinal plus every ordinal nested under it,
+// which the caller walks over the plan tree's parent links. Once a step is split
+// into sub-steps the work it did lives on the children, and "what did this step
+// do" that answers only for the parent's own line is a partial answer.
 type ArchiveQuery struct {
 	IDs      []uint64
 	TopicID  *uint64
 	Type     *core.ContentType
 	Kind     *core.ArchiveKind
-	NodePath string
+	NodeSeqs []uint32
 	Keyword  string
 	Start    int64
 	End      int64
@@ -148,7 +149,7 @@ func QueryArchivesL4(engine *core.StorageEngine, agentID uint64, q ArchiveQuery)
 	case q.TopicID != nil && q.Index != nil:
 		out, err = archivesByTopic(engine, agentID, q.Index.AllIDs(*q.TopicID))
 	case len(q.IDs) > 0 && q.TopicID == nil && q.Type == nil && q.Kind == nil &&
-		q.NodePath == "" && q.Keyword == "" && q.Start == 0 && q.End == 0:
+		len(q.NodeSeqs) == 0 && q.Keyword == "" && q.Start == 0 && q.End == 0:
 		out, err = archivesByIDOnly(engine, agentID, q.IDs)
 	default:
 		out = core.CollectAllArchives(engine, agentID)
@@ -224,7 +225,7 @@ func matchesArchiveQuery(arc core.ArchiveSlot, q ArchiveQuery) bool {
 	if q.Kind != nil && arc.Kind != *q.Kind {
 		return false
 	}
-	if q.NodePath != "" && !NodePathUnder(arc.NodePath, q.NodePath) {
+	if len(q.NodeSeqs) > 0 && !slices.Contains(q.NodeSeqs, arc.NodeSeq) {
 		return false
 	}
 	if q.Type != nil && arc.ContentType != *q.Type {

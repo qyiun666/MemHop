@@ -19,9 +19,9 @@ func event(eventType, payload string, ts int64) ArchiveSlot {
 	return ArchiveSlot{Kind: KindEvent, EventType: eventType, Content: payload, CreatedAt: ts}
 }
 
-// onNode names the plan step an event belongs to.
-func onNode(slot ArchiveSlot, nodePath string) ArchiveSlot {
-	slot.NodePath = nodePath
+// onStep names the plan step an event belongs to.
+func onStep(slot ArchiveSlot, seq uint32) ArchiveSlot {
+	slot.NodeSeq = seq
 	return slot
 }
 
@@ -242,11 +242,13 @@ func TestSurfaceReservedTopicID(t *testing.T) {
 	ev := event("plan_step", "stepped", now)
 	ctx := context.Background()
 	calls := map[string]func() error{
-		"AppendBare":  func() error { return db.AppendArchive(zero, ev) },
-		"AppendNode":  func() error { return db.AppendArchive(zero, onNode(ev, "1")) },
-		"PlanSet":     func() error { return db.PlanSet(zero, []PlanStep{{NodePath: "1", Status: "done"}}) },
-		"PlanState":   func() error { _, err := db.PlanState(zero); return err },
-		"Crystallize": func() error { _, err := db.Crystallize(ctx, zero, nil); return err },
+		"AppendBare":     func() error { return db.AppendArchive(zero, ev) },
+		"AppendStep":     func() error { return db.AppendArchive(zero, onStep(ev, 1)) },
+		"PlanCreate":     func() error { _, err := db.PlanCreate(zero, "一步"); return err },
+		"PlanNodeAdd":    func() error { _, err := db.PlanNodeAdd(zero, 0, "一步"); return err },
+		"PlanNodeUpdate": func() error { return db.PlanNodeUpdate(zero, PlanStep{Seq: 1, Status: "done"}) },
+		"PlanState":      func() error { _, err := db.PlanState(zero); return err },
+		"Crystallize":    func() error { _, err := db.Crystallize(ctx, zero, nil); return err },
 	}
 	for name, call := range calls {
 		if err := call(); common.CodeOf(err) != common.ErrInvalidQuery {
@@ -258,10 +260,10 @@ func TestSurfaceReservedTopicID(t *testing.T) {
 	}
 }
 
-// TestSurfaceAppendArchivePlanBranch pins the split write surface: PlanSet declares
-// the tree and AppendArchive writes content — both a bare turn event (no NodePath)
-// and an event bound to one declared step — and the two land under the two
-// different turns that produced them.
+// TestSurfaceAppendArchivePlanBranch pins the split write surface: the plan write
+// face creates a tree one step at a time and AppendArchive writes content — both a
+// bare turn event (no NodeSeq) and an event bound to one created step — and the
+// two land under the two different turns that produced them.
 func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 	db := openSurfaceDB(t)
 	now := time.Now().UnixMilli()
@@ -272,63 +274,65 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 		t.Fatalf("bare turn event: %v", err)
 	}
 	// A turn that only logged plain events owns no tree: a bare event references
-	// no node, so its key is not a plan at all.
+	// no step, so its key is not a plan at all.
 	if bare, err := db.PlanState(turn); err != nil || bare.TotalCount != 0 {
 		t.Fatalf("bare turn events invented a plan: %+v err=%v", bare, err)
 	}
-	// An event cannot open a step. Declaring first is the whole point: a step the
-	// plan never named is the host's plan and its record disagreeing.
-	if err := db.AppendArchive(planTurn, onNode(event("tool_call", "p", now+1), "1.1")); CodeOf(err) != ErrInvalidQuery {
-		t.Fatalf("event on an undeclared step: want ErrInvalidQuery, got %v", err)
+	// An event cannot open a step. Creating the step first is the whole point: a
+	// step the plan does not hold is the host's plan and its record disagreeing.
+	if err := db.AppendArchive(planTurn, onStep(event("tool_call", "p", now+1), 2)); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("event on a step that does not exist: want ErrInvalidQuery, got %v", err)
 	}
 	if empty, err := db.PlanState(planTurn); err != nil || empty.TotalCount != 0 {
-		t.Fatalf("the refused event built a node chain: %+v err=%v", empty, err)
+		t.Fatalf("the refused event built a step: %+v err=%v", empty, err)
 	}
-	if err := db.PlanSet(planTurn, []PlanStep{
-		{NodePath: "1", Status: "in_progress"},
-		{NodePath: "1.1", Status: "in_progress"},
-	}); err != nil {
+
+	root, err := db.PlanCreate(planTurn, "父")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendArchive(planTurn, onNode(event("tool_call", "p", now+1), "1.1")); err != nil {
-		t.Fatalf("plan-bound event: %v", err)
+	child, err := db.PlanNodeAdd(planTurn, root, "子")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AppendArchive(planTurn, onStep(event("tool_call", "p", now+1), child)); err != nil {
+		t.Fatalf("step-bound event: %v", err)
 	}
 	evs := eventsOf(t, db, planTurn)
-	if len(evs) != 1 || evs[0].TopicID != planTurn || evs[0].NodePath != "1.1" {
+	if len(evs) != 1 || evs[0].TopicID != planTurn || evs[0].NodeSeq != child {
 		t.Fatalf("plan key: %+v", evs)
 	}
 	// The plan branch takes the host's own event name exactly as the bare path
 	// does, and refuses only an empty one.
-	if err := db.AppendArchive(planTurn, onNode(event("sandbox_ask", "asked", now+2), "1")); err != nil {
+	if err := db.AppendArchive(planTurn, onStep(event("sandbox_ask", "asked", now+2), root)); err != nil {
 		t.Fatalf("host-named plan event: %v", err)
 	}
-	if err := db.AppendArchive(planTurn, onNode(ArchiveSlot{Kind: KindEvent, Content: "x", CreatedAt: now + 3}, "1")); CodeOf(err) != ErrInvalidQuery {
+	if err := db.AppendArchive(planTurn, onStep(ArchiveSlot{Kind: KindEvent, Content: "x", CreatedAt: now + 3}, root)); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("empty plan event type: want ErrInvalidQuery, got %v", err)
 	}
-	// A malformed dotted path can never name a declared step either, so the same
-	// rule refuses it — and no empty-segment step reaches storage from either side.
-	for _, bad := range []string{"1..2", "1.", ".1", "1.1."} {
-		if err := db.AppendArchive(planTurn, onNode(event("x", "p", now+4), bad)); CodeOf(err) != ErrInvalidQuery {
-			t.Fatalf("NodePath %q: want ErrInvalidQuery, got %v", bad, err)
-		}
-		if still, err := db.PlanState(planTurn); err != nil || still.TotalCount != 2 {
-			t.Fatalf("NodePath %q left a half-built chain: %+v err=%v", bad, still, err)
-		}
+	// An ordinal no step of this turn holds can never name one, so the same rule
+	// refuses it — and nothing about the tree changes on the way out. An integer
+	// address has no malformed spelling to catch: a step either exists or does not.
+	if err := db.AppendArchive(planTurn, onStep(event("x", "p", now+4), 77)); CodeOf(err) != ErrInvalidQuery {
+		t.Fatalf("an ordinal nobody created: want ErrInvalidQuery, got %v", err)
+	}
+	if still, err := db.PlanState(planTurn); err != nil || still.TotalCount != 2 {
+		t.Fatalf("a refused event changed the tree: %+v err=%v", still, err)
 	}
 	// An event that claims the dialogue track while naming a step is refused: the
 	// two kinds do not share axes.
-	if err := db.AppendArchive(planTurn, onNode(ArchiveSlot{
+	if err := db.AppendArchive(planTurn, onStep(ArchiveSlot{
 		Kind: KindUtterance, Role: RoleUser, EventType: "tool_call", Content: "x", CreatedAt: now + 5,
-	}, "1")); CodeOf(err) != ErrInvalidQuery {
+	}, root)); CodeOf(err) != ErrInvalidQuery {
 		t.Fatalf("utterance wearing an event: want ErrInvalidQuery, got %v", err)
 	}
-	// A plan-bound event carries the step it landed on, and the id it comes back
-	// with is a library-issued hex token the host never builds.
+	// A bound event carries the step it landed on, and the id it comes back with is
+	// a library-issued hex token the host never builds.
 	bound := eventsOf(t, db, planTurn)
 	if len(bound) != 2 {
 		t.Fatalf("plan-bound events: %+v", bound)
 	}
-	if bound[1].NodePath == "" || bound[1].NodePath == bound[0].NodePath {
+	if bound[0].NodeSeq == 0 || bound[0].NodeSeq == bound[1].NodeSeq {
 		t.Fatalf("plan-bound event lost its step attribution: %+v", bound)
 	}
 	if !isHexID(bound[1].IDHash) {

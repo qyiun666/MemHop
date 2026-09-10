@@ -34,7 +34,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | `turn` | 轮次归属：Targets（解析 Update 的两个 hex 入参）、SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；本包不碰内容 |
 | `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
-| `plan` | L5 计划树机制（一棵树归属于打开它的轮次；L5 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、SplitNodePath、EnsureNode/CommitNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
+| `plan` | L5 计划树机制（一棵树归属于打开它的轮次；L5 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、NodeSpec/Step 两个入参形状、CreateNode/UpdateNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
 | `content` | 话题内容与键：ParseTopicID（键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append（写一条内容的唯一实现，必要时跨 Kind 分配 Seq）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、TrimByBudget、MaxEventPayload/MaxUtterancePayload/MaxCrystallizePayload |
 
 ## agentContext（domain.Context）域级锁纪律
@@ -82,7 +82,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
 7. **L5 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
    合法的 L5 键。读写两侧一律经 `content.ParseTopicID` 拒它
-   （`AppendArchive`/`PlanSet`/`PlanState`/`Crystallize`）——只在写侧拒，
+   （`AppendArchive`/`PlanCreate`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`/
+   `Crystallize`）——只在写侧拒，
    全零键下就会攒出永远读不出的记录。
 8. **计划清理有界**：dream 的 `l5_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有节点活动」的计划，其中活动只看节点自己的 `UpdatedAt`；宿主中断或放弃而
@@ -116,9 +117,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 - **错误判定纪律**：区分「记录不存在」与「读不动」。`ErrNotFound` 只代表
   前者；IO / 关闭 / 反序列化失败一律原样上抛，不得改写成 `ErrNotFound`，
-  也不得当成"不存在"后继续写（`plan.EnsureNode`、
-  `profile.MergeDistill` 都按这条判定，误判会让活节点退回 pending 或画像
-  被空值覆盖）。
+  也不得当成"不存在"后继续写（`content.Read`、`profile.MergeDistill` 都按这条判定，
+  误判会让一次读不动被报成「这条记录没有」，或画像被空值覆盖）。
 
 ## 读写路径契约
 
@@ -194,11 +194,11 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成
    未锚定，可经 `UpdateScene` 重挂。
 10. **内容只有一个写入口**：`content.Append` 是唯一写路径，`AppendArchive` 是它
-   唯一的调用者（对话原文与事件都走这一条，`NodePath` 就写在记录上）。计划写面
-   不碰内容：`PlanSet` 只动树，一步做过什么永远是宿主自己 append 的那些记录。
+   唯一的调用者（对话原文与事件都走这一条，`NodeSeq` 就写在记录上）。计划写面
+   不碰内容：三个写口只动树，一步做过什么永远是宿主自己 append 的那些记录。
    `content.ValidateAppend` 是唯一的校验点，且**排在任何落盘之前**——被拒的写入
-   一条记录也不留。事件若绑了 `NodePath`，本话题的树上必须已有那一步
-   （`ac.Plans.HasNode`）：一条路径指向计划里没有的步骤，是宿主的计划与它的记录
+   一条记录也不留。事件若绑了 `NodeSeq`，本话题的树上必须已有那一步
+   （`ac.Plans.HasSeq`）：一个序号指向计划里没有的步骤，是宿主的计划与它的记录
    对不上，报出来比顺手长出一棵树诚实。这道检查也排在落盘之前。
    两种 Kind 各自的字段归属、
    4 KiB/64 KiB 预算与跨 Kind 的 Seq 覆写语义记在
@@ -210,13 +210,16 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 11. **`MultiAgentDB.CompactTo`**：core 的 `Compact` 用 `Create`（带
    `O_TRUNC`）在新路径写整理副本，故根层先拒空路径、拒当前库文件
    （`sameFile` 走绝对路径归一）与拒已存在的目标，绝不覆盖任何既有文件。
-12. **`PlanSet` 声明整棵，未列出的节点不动**：宿主每轮重述自己的计划（LLM 会
-   改主意、会把一步拆成几步），所以写面是「声明」而不是「逐步提交」。一条声明
-   里：`Status` 每次必须给（留空会被 `StatusToU8` 整份拒掉——它没有"不改"这种
-   写法），`Title`/`Summary` 留空继承现值，缺失的路径段按 pending 建出来。
-   **库不从「这次没列出」推断「这一步被撤掉了」**——部分重述与完整重述在库里长得
-   一模一样，猜错就是静默删掉宿主的步骤；撤回的正规手段是下一轮声明一棵新树，旧树
-   由 `l5_prune` 的保留窗回收。校验排在任何节点写入之前，所以一份被拒的声明零留痕。
+12. **节点只由创建口带出来，重述口只改字段**：`PlanCreate`/`PlanNodeAdd` 是唯一
+   能让一个步骤存在的两个入口，序号由 `PlanCache.NextSeq` 在该轮的树上从 1 起顺序
+   发号，宿主只回传、不自造。`parentSeq` 指向树上没有的一步是 `ErrNotFound`：一步
+   的父是谁只有宿主知道，为它补出一个父节点是猜，猜错就长出一枝没人计划过的树。
+   `PlanNodeUpdate` 只改已存在的这一步——`Status` 每次必须给（留空会被
+   `StatusToU8` 拒掉——它没有"不改"这种写法），`Title`/`Summary` 留空继承现值，
+   被重述回进行中的步骤清掉 `FinishedAt`。新建的步骤零值即 `in_progress`，所以
+   创建口不要求宿主先给状态。校验与父序号判定都排在任何节点读写之前，一次被拒的
+   写零留痕。**没有节点删除口，也不需要一个**：树跟着开它的那一轮走，宿主放弃
+   一步的手段就是不在此后的轮里再创建它，旧树由 `l5_prune` 的保留窗回收。
 13. **破坏性写入先验 id**：`MergeScenes` 会删记录，所以主/次每个 id 都必须
    仍是一个场景（`requireScenes` 逐个回读比对），未知 id 报 `ErrNotFound`；
    底层 `DeleteL2(DeleteScenesL2)` 直接按传入 id 批量删，少这一步时一个陈旧

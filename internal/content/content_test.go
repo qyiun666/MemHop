@@ -55,7 +55,7 @@ func TestValidateAppendRefusals(t *testing.T) {
 		{"event without a name", core.ArchiveSlot{Kind: core.KindEvent, Content: "c", CreatedAt: 1}},
 		{"event over budget", core.ArchiveSlot{Kind: core.KindEvent, EventType: "x", Content: long, CreatedAt: 1}},
 		{"utterance with an event name", core.ArchiveSlot{Kind: core.KindUtterance, Role: core.RoleUser, EventType: "x", Content: "c", CreatedAt: 1}},
-		{"utterance on a plan step", core.ArchiveSlot{Kind: core.KindUtterance, Role: core.RoleUser, NodePath: "1", Content: "c", CreatedAt: 1}},
+		{"utterance on a plan step", core.ArchiveSlot{Kind: core.KindUtterance, Role: core.RoleUser, NodeSeq: 1, Content: "c", CreatedAt: 1}},
 		{"utterance as the library's dream role", core.ArchiveSlot{Kind: core.KindUtterance, Role: core.RoleDream, Content: "c", CreatedAt: 1}},
 		{"utterance with an unnameable role", core.ArchiveSlot{Kind: core.KindUtterance, Role: 77, Content: "c", CreatedAt: 1}},
 	}

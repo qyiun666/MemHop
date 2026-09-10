@@ -95,11 +95,11 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 	turnID := openTurn(t, db, sceneID)
 	ts := time.Now().UnixMilli()
 
-	// The step is planned first, then the event logged against it: a plan node is
-	// only ever created by a declaration.
-	mustDeclare(t, db, turnID, api.PlanStep{NodePath: "1.1", Status: "in_progress"})
+	// The step is created first, then the event logged against it: a plan node is
+	// only ever created by the plan write surface.
+	step := mustCreate(t, db, turnID, 0, "")
 	if err := db.AppendArchive(turnID, api.ArchiveSlot{
-		Kind: api.KindEvent, EventType: "tool_call", NodePath: "1.1",
+		Kind: api.KindEvent, EventType: "tool_call", NodeSeq: step,
 		Content: `{"tool":"bash","cmd":"go test"}`, CreatedAt: ts,
 	}); err != nil {
 		t.Fatalf("append event: %v", err)
@@ -137,8 +137,8 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 		t.Fatalf("event read = %+v err=%v", evs, err)
 	}
 	// Dialogue took slots 1 and 2, so the event logged before them landed at 3.
-	if evs[0].Seq != 3 || evs[0].NodePath != "1.1" || evs[0].EventType != "tool_call" {
-		t.Fatalf("event = %+v, want seq 3 bound to 1.1", evs[0])
+	if evs[0].Seq != 3 || evs[0].NodeSeq != step || evs[0].EventType != "tool_call" {
+		t.Fatalf("event = %+v, want seq 3 bound to step %d", evs[0], step)
 	}
 	if only, err := db.SearchL4(api.L4Query{TopicID: &turnID, Kind: &uttered}); err != nil || len(only) != 2 {
 		t.Fatalf("utterance read = %+v err=%v, want the two originals", only, err)
@@ -151,7 +151,9 @@ func TestInterfaceTurnContentSharesOneKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("plan state: %v", err)
 	}
-	if tree.TotalCount != 2 {
-		t.Fatalf("plan tree = %+v, want the step 1.1 and the parent the path created", tree)
+	// The tree holds the one step that was created: binding an event to a step
+	// adds no parent above it, and nothing implies one any more.
+	if tree.TotalCount != 1 || tree.Roots[0].Seq != step {
+		t.Fatalf("plan tree = %+v, want just the step the event bound to", tree)
 	}
 }

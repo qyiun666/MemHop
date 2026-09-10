@@ -50,15 +50,48 @@ func (db *DB) ListTrajectorySessions(agentID uint64) ([]core.TrajectorySessionSu
 	return out, nil
 }
 
-// PlanSet declares one turn's plan tree. `topicID` names the turn that owns it;
-// every listed step is created along its dotted path when missing and then
-// restated, so this is also how a step is added and how the host replays the
-// whole plan a turn later. Steps the declaration leaves out keep their stored
-// state: an omission is not a withdrawal — declaring a new turn's tree is. A
-// declaration this refuses leaves the tree exactly as it was, and nothing here
-// touches the turn's content: the events a step produced are L4 records the host
-// appends itself, so restating a tree can never rewrite what a turn recorded.
-func (db *DB) PlanSet(agentID uint64, topicID string, steps []plan.Step) error {
+// PlanCreate opens a turn's plan tree: it creates the turn's first root step and
+// returns that step's ordinal. A turn's tree is keyed by the topic id Search
+// issued for it, so `topicID` is the whole address of the tree — and the ordinal
+// the call hands back is what later reads and updates that step by.
+func (db *DB) PlanCreate(agentID uint64, topicID, title string) (uint32, error) {
+	return db.PlanNodeAdd(agentID, topicID, 0, title)
+}
+
+// PlanNodeAdd adds one step to a turn's plan tree and returns its ordinal. A
+// parentSeq of 0 hangs it at the top level, so this is also how a second root
+// joins the forest; any other value names a step this tree already holds —
+// CreateNode refuses a step whose parent is missing rather than quietly growing a
+// branch to hang it on. This is the only way a node comes into existence: no
+// write elsewhere, an event included, creates one.
+func (db *DB) PlanNodeAdd(agentID uint64, topicID string, parentSeq uint32, title string) (uint32, error) {
+	ac, err := db.lockAgent(agentID)
+	if err != nil {
+		return 0, err
+	}
+	defer ac.Mu.Unlock()
+	th, err := content.ParseTopicID(topicID)
+	if err != nil {
+		return 0, err
+	}
+	// A new step lands in progress, so its parent cannot fold a summary from it:
+	// the rollup would run and change nothing, which is why no RollupTree call
+	// follows a create.
+	return plan.CreateNode(ac, agentID, plan.NodeSpec{
+		TopicID: th, ParentSeq: parentSeq, Title: title,
+	})
+}
+
+// PlanNodeUpdate restates one step of a turn's tree: its status, and its own
+// Title/Summary, where a field left blank keeps what the node holds. Then the
+// tree is rolled up bottom-up, because this is the write that can settle a
+// branch: once every direct child of a Done parent has reached a terminal
+// status, the parent gets its summary. A refused update changes nothing — the
+// status word is checked before the node is read, so no half-applied step can
+// leave the host unsure which of its writes landed. Nothing here touches the
+// turn's content: the events a step produced are L4 records the host appends
+// itself, so restating a step can never rewrite what a turn recorded.
+func (db *DB) PlanNodeUpdate(agentID uint64, topicID string, step plan.Step) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return err
@@ -68,12 +101,8 @@ func (db *DB) PlanSet(agentID uint64, topicID string, steps []plan.Step) error {
 	if err != nil {
 		return err
 	}
-	// Checked before the tree moves: a half-applied declaration would leave the
-	// host unable to tell which of its steps landed.
-	if err := plan.ValidateDeclaration(steps); err != nil {
-		return err
-	}
-	if err := plan.SetNodes(ac, agentID, th, steps); err != nil {
+	step.TopicID = th
+	if err := plan.UpdateNode(ac, agentID, step); err != nil {
 		return err
 	}
 	return plan.RollupTree(ac, agentID, th)

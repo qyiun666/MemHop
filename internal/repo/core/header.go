@@ -73,9 +73,16 @@ const (
 // hold a node whose status is the retired value 4 — which the current vocabulary
 // reports as an undefined stored status rather than guessing — and may hold events
 // attributed to steps no declaration ever made, so neither reads correctly under
-// the new rule. Files with 0x000F (or older) are rejected at Open — there is no
+// the new rule. 0x0011 addressed plan nodes by a per-topic ordinal instead of a
+// dotted path, cut the status vocabulary to three states with 0 meaning
+// in_progress, and made a plan's tree grow node by node rather than in one
+// declared restatement. A 0x0010 file stores its nodes under a path string this
+// reader never consults, so every one of them arrives with seq 0 — not an address
+// anything can be found under — and its status bytes carry the retired numbering,
+// where 0 meant pending and 2 meant done, so a finished step reads as an
+// in-progress one. Files with 0x0010 (or older) are rejected at Open — there is no
 // migration path.
-const FormatVersion uint16 = 0x0010
+const FormatVersion uint16 = 0x0011
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

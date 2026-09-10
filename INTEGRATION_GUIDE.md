@@ -12,7 +12,7 @@
 host process
  ├─ go.mod: require github.com/qyiun666/MemHop (or go.work replace → local checkout)
  ├─ import only github.com/qyiun666/MemHop/api (never internal/)
- ├─ one .meh file = many agent domains (isolated except the file-wide L3/L5 pools), addressed by Session(hexID)
+ ├─ one .meh file = many agent domains (isolated except the file-wide L3 pool), addressed by Session(hexID)
  └─ external services:
       └─ ONE OpenAI-compatible LLM (turn distillation / Dream consolidation / Crystallize)
       └─ no embedding / vector service
@@ -172,7 +172,8 @@ err := db.AppendArchive(topicIDHex, api.ArchiveSlot{
 err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
     Kind:      api.KindEvent,
     EventType: "tool_call",       // event only; free-form, no whitelist
-    NodePath:  "1.1",             // optional: a step this turn's PlanSet declared
+    NodeSeq:   2,                 // optional: the ordinal PlanCreate/PlanNodeAdd handed out for this turn
+                                  // (0 = the event is bound to no step)
     Content:   `{"tool":"grep"}`,
     CreatedAt: time.Now().UnixMilli(),
 })
@@ -187,12 +188,14 @@ replay story: a retried turn rewrites its slots instead of accumulating versions
 a replay does not do is reclaim a slot it stopped filling, so a withdrawn line stays
 until `DeleteTopic` or the retention window.
 
-The refusals, all of them before anything is written (including before a `NodePath`
-creates a step): an undefined `Kind`, empty `Content`, `CreatedAt <= 0`, an undefined
-`ContentType`, an event with no `EventType`, an utterance carrying an `EventType` or a
-`NodePath`, the consolidation role `3` (the library marks its own summaries with it),
-and content over budget — 4 KiB per event, 64 KiB per utterance. Over budget is
-**refused, never truncated**: a shortened record reads back exactly like a complete one.
+The refusals, all of them before anything is written (an append never creates a plan
+step — only `PlanCreate` and `PlanNodeAdd` do): an undefined `Kind`, empty `Content`,
+`CreatedAt <= 0`, an undefined `ContentType`, an event with no `EventType`, an utterance
+carrying an `EventType` or a `NodeSeq`, an event whose `NodeSeq` names a step this turn
+never created (`ErrInvalidQuery`, and nothing lands), the consolidation role `3` (the
+library marks its own summaries with it), and content over budget — 4 KiB per event, 64
+KiB per utterance. Over budget is **refused, never truncated**: a shortened record reads
+back exactly like a complete one.
 
 ### 6.3 Turn end: `Update(sceneID, topicID)`
 
@@ -249,9 +252,9 @@ summary is the one record whose type and role the library fixes — `text`, role
 
 ## 8. Layer API quick reference
 
-The 25 session methods split by audience:
+The 27 session methods split by audience:
 
-- **Runtime/task face (18)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ListTrajectorySessions` / `Crystallize`, `PlanSet` / `PlanState`.
+- **Runtime/task face (20)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ListTrajectorySessions` / `Crystallize`, `PlanCreate` / `PlanNodeAdd` / `PlanNodeUpdate` / `PlanState`.
 - **Assembly/admin face (7, plus all of `MultiAgentDB`)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3` / `DeleteL3Nodes`. The capability format left the method surface entirely: `ParseCapabilityPackage` / `ValidateCapabilityCard` are package-level functions (§8 L5).
 
 ### L0 profile
@@ -349,7 +352,7 @@ arcs, err := db.SearchL4(api.L4Query{
     // Start: t0, End: t1,       // created within [t0, t1] (ms)
     // IDs: []string{...},       // by archive id (one id = one record)
     // TopicID: &topicHex,       // only this topic's archives
-    // NodePath: "1.1",          // only records attributed to this plan step
+    // NodeSeq: 2,               // only records attributed to this step or any step under it
     //                             // (needs TopicID: a step is addressed inside a turn)
     // Type: &api.ContentImage,  // only this content type
     // Limit: 50,                // keep the newest N matches (<=0: every match)
@@ -365,9 +368,9 @@ Every query field is optional and the ones you set **AND** together — there ar
 modes to choose between — and the result is sorted by `Seq`. So the reads a host
 wants after a turn are one call each: `SearchL4(L4Query{TopicID: &topicID, Kind:
 &utterance})` gives what was said, the same with `Kind: &event` gives what happened,
-and without `Kind` both; adding `NodePath: "1.2"` cuts that event track down to the
-records attributed to one plan step, so a step's work reads back without pulling the
-whole turn; `L4Query{IDs: []string{id}}` gets a single record back by
+and without `Kind` both; adding `NodeSeq: 2` cuts that event track down to the records
+attributed to one plan step and every step under it, so a step's work reads back without
+pulling the whole turn; `L4Query{IDs: []string{id}}` gets a single record back by
 id (a missing id yields an empty slice, a malformed one `ErrInvalidQuery`). An empty
 query returns the domain's whole content set — bound it with a time range or `Limit`
 on a large domain.
@@ -399,8 +402,8 @@ err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
 })
 // Seq and the owning topic are engine-assigned: the key you append under IS the
 // turn's topic id, and the plan nodes that turn opened live under the same key.
-// `NodePath` is what binds an event to a step — see the plan surface below;
-// leave it empty for a plain turn event.
+// `NodeSeq` is what binds an event to a step — see the plan surface below;
+// leave it 0 for a plain turn event.
 
 // Turn events → capability candidates: distill one turn's trajectory against the
 // host's current catalog (capped at 128KB payload, oldest events dropped).
@@ -421,7 +424,7 @@ sessions, err := db.ListTrajectorySessions()
 A turn's event track reads back with `SearchL4(L4Query{TopicID: &topicID, Kind:
 &event})` in Seq order. The track is addressed **by turn key only**: nothing returns an
 event handle on write, because no public call takes one, and Dream drops content
-older than the retention window. Of an event you hand in, `EventType`, `NodePath`,
+older than the retention window. Of an event you hand in, `EventType`, `NodeSeq`,
 `Content` and `CreatedAt` are used as given; the library assigns `Seq` and the owning
 topic and forces `ContentType` to `text` with no speaker — a thing that happened has
 neither. Content over 4 KiB is refused: a shortened event would read back exactly
@@ -432,17 +435,30 @@ crystallization candidates without remembering which ids it logged.
 
 ### L5 plan tree (Go host surface)
 
-A plan tree belongs to the turn that opened it: **the L5 key is that turn's
+A plan belongs to the turn that opened it: **the L5 key is that turn's
 topic id** — the one `Search` hands back — and it addresses the turn's nodes, while
-the same key addresses the turn's content in L4. The host assigns each node a **dotted `NodePath`** (`"1"`,
-`"1.2.1"`) and holds nothing else: there is no plan id to mint, and
+the same key addresses the turn's content in L4. A step is addressed by a **per-turn
+ordinal** (`Seq`, a `uint32` the library hands out from 1 and the host only ever echoes
+back: the create calls return it), and `ParentSeq` says which step it hangs under
+(`0` = a root). There is no plan id and no path string to mint, and
 `PlanState(topicID)` is how a tree comes back.
 
 | Call | Meaning |
 |---|---|
-| `db.AppendArchive(topicID, ev)` with a non-empty `ev.NodePath` | record a step event against one declared step. The step has to exist already: a `NodePath` the plan never declared refuses the whole record (`ErrInvalidQuery`) and stores nothing, because an event naming a step nobody planned is the plan and the record disagreeing — the tree is `PlanSet`'s to build, and this also closes the old hole where a typo in a path silently opened a second one. `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `SearchL4` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
-| `db.PlanSet(topicID, []api.PlanStep{{NodePath: "1", Title: "research", Status: api.PlanStatusDone, Summary: s}, {NodePath: "1.1", …}})` | **declare** this turn's plan: one call states the steps the host's LLM planned, at whatever depth the dotted `NodePath`s nest, and a step missing along a declared path is created as pending. Nodes the declaration omits keep their stored state — the library does not read "not listed" as "withdrawn" (a partial restatement and a complete one are indistinguishable from here); withdrawing a step is what declaring the **next turn's** tree does, because the host re-plans every turn. Within a step, `Status` is mandatory and `Title`/`Summary` blank keeps what is stored; an unknown status, a malformed path or one path named twice is refused **before the tree moves**, so a refused declaration leaves nothing behind. A fold needs every direct child settled. This call writes no content |
-| `db.PlanState(topicID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`) — also the restart recovery path |
+| `seq, err := db.PlanCreate(topicID, title)` | open this turn's tree by creating its first step, and take back the ordinal that step is addressed by from here on. A turn's tree starts with no steps, so this is also how a plan first appears under a turn |
+| `seq, err := db.PlanNodeAdd(topicID, parentSeq, title)` | add one step to the tree and get its ordinal. `parentSeq` `0` hangs it at the top level, so this is also how a second root joins the forest; any other value must name a step this tree already holds — `PlanNodeAdd` under an unknown parent is `ErrNotFound` and grows nothing. A step is created `in_progress`, so no status is asked for here; a title may be left empty and filled in later, and the view falls back to the ordinal until the host names the step |
+| `err := db.PlanNodeUpdate(topicID, api.PlanStep{Seq: seq, Status: api.PlanStatusDone, Summary: s})` | restate one step: its `Status` plus the node's own `Title`/`Summary`. `Status` is stated every time (there is no "leave it as it was" spelling) while a blank `Title`/`Summary` keeps what the node holds, so updating a step never rewinds its title or erases a folded summary. A step reaching a terminal status records `FinishedAt`; restating a settled step as `in_progress` re-opens it and drops that timestamp. Once every direct child of a `Done` parent is itself terminal, the parent's summary folds up from its children's. A status outside `in_progress` / `done` / `failed`, or an ordinal this turn never created (`ErrNotFound`), is refused **before the node is touched** and leaves the tree exactly as it was. This call writes no content |
+| `tree, err := db.PlanState(topicID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`; every `PlanNodeView` carries `Seq` / `ParentSeq` / `Status` / `Summary` / `ChildCount` / `Children`) — also the restart recovery path |
+| `db.AppendArchive(topicID, ev)` with a non-zero `ev.NodeSeq` | record a step event against one step of this turn's tree. The step has to exist already: an ordinal nobody created refuses the whole record (`ErrInvalidQuery`) and stores nothing, because an event naming a step the plan never holds is the plan and the record disagreeing — the tree is `PlanCreate` / `PlanNodeAdd`'s to build, and a mistyped ordinal cannot quietly open a second one. `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `SearchL4` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
+
+Status has three values and one string encoding each: `api.PlanStatusInProgress`
+(`in_progress`), `api.PlanStatusDone` (`done`), `api.PlanStatusFailed` (`failed`). The
+engine keeps no "planned but not started" state — a step exists because the host created
+it, and it exists in progress.
+
+The plan write surface is Go-only: `api.Session`'s 20 task-face methods include it, but
+the MCP tool face exposes no plan call, because a tree has to be built by a caller that
+holds the turn it belongs to.
 
 `0000000000000000` is reserved (it is the value a record leaves its key unset
 with) and every L5 entry rejects it — reads included.
@@ -543,19 +559,20 @@ func main() {
     _ = db.AppendArchive(topicID, api.ArchiveSlot{Kind: api.KindUtterance, Seq: 1,
         Role: api.RoleUser, Content: "user raw message", CreatedAt: userTS})
 
-    // The plan comes first: a step exists because it was declared here, and an
-    // event can only be attributed to a step the plan already holds. The host's
-    // LLM re-plans every turn, so this one call restates the whole tree.
-    _ = db.PlanSet(topicID, []api.PlanStep{
-        {NodePath: "1", Title: "locate the regression", Status: api.PlanStatusDone, Summary: "…"},
-        {NodePath: "2", Title: "fix", Status: api.PlanStatusInProgress},
-        {NodePath: "2.1", Status: api.PlanStatusInProgress},
-    })
+    // The plan comes first: a step exists because it was created here, one call
+    // per step, and an event can only be attributed to a step the tree already
+    // holds. The create calls hand back the ordinal that step is addressed by.
+    fix, err := db.PlanCreate(topicID, "locate the regression")
+    if err != nil { log.Fatal(err) }
+    leaf, err := db.PlanNodeAdd(topicID, fix, "fix")
+    if err != nil { log.Fatal(err) }
     _ = db.AppendArchive(topicID, api.ArchiveSlot{Kind: api.KindEvent,
-        EventType: "tool_call", NodePath: "2.1",
+        EventType: "tool_call", NodeSeq: leaf,
         Content: "grep ...", CreatedAt: userTS + 1})
     _ = db.AppendArchive(topicID, api.ArchiveSlot{Kind: api.KindUtterance, Seq: 2,
         Role: api.RoleAgent, Content: "agent reply", CreatedAt: time.Now().UnixMilli()})
+    _ = db.PlanNodeUpdate(topicID, api.PlanStep{Seq: leaf, Status: api.PlanStatusDone,
+        Summary: "…"})
 
     // Per turn: end — distill that topic's utterances into its keywords.
     if err := db.Update(sceneID, topicID); err != nil { log.Fatal(err) }
@@ -578,15 +595,20 @@ func main() {
    distils once per turn and, on failure, returns an error having written no topic —
    the records you appended earlier stay. Hosts should retry a failed settle.
 2. **No embedding service, no dimension to declare**: the two header bytes at
-   offset 6 are reserved. The format version is `0x0010`: the L3 knowledge
+   offset 6 are reserved. The format version is `0x0011`: the L3 knowledge
    graph lives in the reserved shared domain (`core.SharedPoolAgentID`); no
-   migration runs — `0x000F` and older files are rejected at Open, because a plan
-   node may carry the retired `running` status (which the current vocabulary
-   reports as an undefined stored value) and an event may be attributed to a step
-   no declaration ever made. `0x000E` and earlier additionally name the archive's
-   owning topic under a key the current record does not carry (`context_id`) and
-   derive their ids from namespaces that no longer exist (`l1:`, `l4:`). None of
-   it can be addressed under the current rules.
+   migration runs — `0x0010` and older files are rejected at Open. A `0x0010`
+   file stores its plan nodes under a dotted path string this reader never
+   consults, so every node arrives with ordinal `0` — not an address anything can
+   be found under — and its status bytes use the retired numbering, where `0`
+   meant pending and `2` meant done, so a finished step reads as an in-progress
+   one. `0x000F` and earlier may additionally hold a node with the retired
+   `running` status (which the current vocabulary reports as an undefined stored
+   value) and events attributed to steps no declaration ever made. `0x000E` and
+   earlier also name the archive's owning topic under a key the current record
+   does not carry (`context_id`) and derive their ids from namespaces that no
+   longer exist (`l1:`, `l4:`). None of it can be addressed under the current
+   rules.
 3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery` on every record you append;
    a turn's topic is stamped with the earliest and latest of its content.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
@@ -601,7 +623,7 @@ func main() {
 6. **One file, many agent domains**: all tenants live inside one
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
    isolated per domain except the file-wide L3 pool; legacy files
-   (`FormatVersion < 0x0010`) cannot be opened or migrated.
+   (`FormatVersion < 0x0011`) cannot be opened or migrated.
 7. **Content and plans auto-expire**: Dream drops a topic's content older than 7
    days and plan nodes older than 7 days (a tree still in flight is exempt);
    `DeleteTopic` / `DeleteScene` are the explicit corrections. Past the window a

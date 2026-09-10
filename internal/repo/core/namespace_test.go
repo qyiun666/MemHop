@@ -22,7 +22,7 @@ import (
 func TestDerivedIdNamespacesAreDisjoint(t *testing.T) {
 	scenes := []uint64{0, 1, 7, 42, 0xdeadbeef, 1 << 40}
 	seqs := []uint64{0, 1, 2, 3, 10, 1000}
-	paths := []string{"1", "2", "1.1", "1.2.1", "10", "1.10", "2.1"}
+	stepSeqs := []uint32{0, 1, 2, 3, 10, 1000}
 	times := []int64{0, 1, 2, 1000, 1_700_000_000_000, -1}
 
 	families := map[string]func() []uint64{
@@ -47,8 +47,8 @@ func TestDerivedIdNamespacesAreDisjoint(t *testing.T) {
 		"plan": func() []uint64 {
 			var out []uint64
 			for _, s := range scenes {
-				for _, p := range paths {
-					out = append(out, HashPlanNode(s, p))
+				for _, q := range stepSeqs {
+					out = append(out, HashPlanNode(s, q))
 				}
 			}
 			return out
@@ -112,7 +112,7 @@ func TestDerivedIdFamiliesAreInjective(t *testing.T) {
 			turns = append(turns, ComputeTurnTopicID(s, q))
 			contents = append(contents, HashContent(s, q))
 		}
-		for _, p := range []string{"1", "2", "1.1", "1.2", "1.10", "2.1", "1.2.3"} {
+		for _, p := range []uint32{1, 2, 3, 10, 11, 70, 1000} {
 			plans = append(plans, HashPlanNode(s, p))
 		}
 		nodes = append(nodes, SceneNodeID(s))

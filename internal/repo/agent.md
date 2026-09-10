@@ -10,16 +10,21 @@
 - `core/`：.meh 引擎——记录帧（26 字节：type/flags/length/agent_id/
   id_hash/crc32）、A/B 文件头、快照（0x02 分域）、空间回收、
   `StorageEngine` 索引（`agent -> idHash -> offset` 两级分域）、Slot 数据模型。
-  `FormatVersion` 是 `0x0010`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
-  无迁移路径。上抬改的仍不是 26 字节帧布局而是记录含义与状态词表：计划节点不再带
-  `plan_type`，状态词表去掉了与 `in_progress` 同义的 `running`（**值 4 从此是未定义
-  存储值**：记录解码不看状态含义，是渲染成对外视图那一步 `plan.StatusToString` 把它
-  报成 `ErrDeserialization` 而不是回落 pending，于是一次 `PlanState` 直接失败），一轮的树由一次
-  声明建立而不是逐步提交。再往前：一轮的内容同住 L4（`Kind`
+  `FormatVersion` 是 `0x0011`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
+  无迁移路径。上抬改的仍不是 26 字节帧布局而是记录含义与状态词表：计划节点由
+  `(topic_id, seq)` 寻址——`seq` 是该轮内库发号的序号、`parent_seq` 指向父步骤、
+  0 即根，节点记录上不再有路径字符串，事件记录的归因字段因此叫 `node_seq`；状态
+  词表只剩三态且 `in_progress` 占值 0（新建的节点零值即合法状态）。**值 3 起从此是
+  未定义存储值**：记录解码不看状态含义，是渲染成对外视图那一步
+  `plan.StatusToString` 把它报成 `ErrDeserialization` 而不是回落成某个叫得出名字的
+  状态，于是一次 `PlanState` 直接失败。一轮的树按步骤逐个建立，节点不再由一次声明
+  批量写出。再往前：一轮的内容同住 L4（`Kind`
   区分原文与事件，id 由 `hash("content:"+topic+":"+seq)` 派生），L5 只剩计划节点、
   走帧型 `RecL5PlanNode 0x0F`；自 0x000F 起 id 命名空间不再烘层号（场景节点
-  `scene-node:`、内容槽 `content:`），归档的归属字段叫 `topic_id`，场景记录
-  只剩 `turn_seq` 一个计数器。旧文件的那些键与前缀按新规则都指不到东西。
+  `scene-node:`、内容槽 `content:`、计划节点 `plan:`），归档的归属字段叫
+  `topic_id`，场景记录
+  只剩 `turn_seq` 一个计数器。旧文件的那些键与前缀按新规则都指不到东西（`plan:`
+  的后缀形状也变了：路径串换成了序号）。
   `StorageEngine` 按功能分文件：`engine.go`（索引模型/访问器）、
   `engine_lifecycle.go`（Create/Open/Checkpoint/Close）、`engine_write.go`（追加）、
   `engine_read.go`（索引查找读）、`engine_delete.go`（墓碑删除）、
@@ -82,4 +87,4 @@
 - `Kind` 是**条件**而不是模式：`ArchiveQuery.Kind == nil` 表示「两种都要」，非 nil 表示「只要这一种」。它必须在每一条读路径上都生效，包括只给 id 的那条快路径——快路径绕过过滤谓词就是这个条件最容易静默失灵的地方（`TestSearchL4KindCondition` 的 `events, by id` 分支专门盯它）。
 - L4 原语的签名带着归属信息：`AppendArchiveL4(engine, agentID, idx, ArchiveContent)` 以 `core.HashContent(TopicID, Seq)` 发号、落盘后同步 `index.L4Index`。写同一个 (话题, Seq) 是**原地覆写**而不是追加第二条——这就是重放一轮能收敛的机制，本层因此没有也不需要「先列出这个话题旧有的归档、再删掉没被重写的那几条」这类原语（第二真相的活形式）。
 - 删除只有两条入口，都内置「磁盘删成功后才摘镜像」这一步序：带话题的 `DeleteTopicArchives`（整话题连删带摘）、按保留窗的 `DropExpiredArchives`（先 `ExpiredBefore` 只读地拿 id，删成后逐话题 `RemoveIDs`）。`TopicClosureL2` 只返回话题闭包——内容由闭包里的每个 id 去索引取回。
-- L5 只剩计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组，`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——没有事件计数、没有事件清单：事件在 L4，树不拥有它们。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, NodePath)`：节点身份是派生的，本层不接受调用方自备的第二把键。删除有 `DeletePlanNodesByIDs`（Dream 保留窗按 id 批删）与 `DeletePlanNodesByTopicIDs`（删话题/场景时连它的树一起走，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上。节点路径的两个纯字符串工具同住本层——`CompareNodePath`（排序）与 `NodePathUnder`（L4 读侧按它做子树过滤：点号是段边界，一次 `root+"."` 前缀判断就足以让 "3" 命中 "3.1" 而不命中 "30"）。
+- L5 只剩计划节点（`l5layer.go`）：一个节点一条记录，键是开出这一轮的话题 id。`CollectPlanNodes` 按它分组（组内按 `Seq` 升序，即创建顺序），`PlanAggregate` 只带 `{TopicID, Nodes, LastActiveAt, HasNonDone}`——没有事件计数、没有事件清单：事件在 L4，树不拥有它们。`WritePlanNode` 校验 `IDHash == HashPlanNode(TopicID, Seq)` 且 `Seq != 0`：节点身份是从序号派生的，本层不接受调用方自备的第二把键，而 0 是「没赋值」不是一个可寻址的步骤。删除有 `DeletePlanNodesByIDs`（Dream 保留窗按 id 批删）与 `DeletePlanNodesByTopicIDs`（删话题/场景时连它的树一起走，靠扫节点桶按 `TopicID` 过滤——树没有内容侧那样的位置键可推）。本层没有「删某分支」的原语：作废发生在键上，不在记录上。本层不再有任何路径字符串：一步的取值范围（它自己加整棵子树）由 `domain.PlanCache.Subtree` 沿 `ParentSeq` 求闭包，得到的序号集合交给 L4 读侧做成员判断。

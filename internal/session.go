@@ -159,9 +159,9 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 
 // AppendArchive writes one piece of content — a dialogue original or an
 // operation event — under the topic id Search issued for this turn. Seq 0 lets the
-// library allocate the slot; a non-empty NodePath on an event hangs it on that plan
-// step, creating the step as pending when missing. Nothing is written when this
-// call returns an error, including no node created along NodePath.
+// library allocate the slot; a non-zero NodeSeq on an event hangs it on that plan
+// step, which has to exist already. Nothing is written when this call returns an
+// error, and no step is ever created here.
 func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
 	return s.db.AppendArchive(s.agentID, topicID, slot)
 }
@@ -187,10 +187,24 @@ func (s *Session) Crystallize(ctx context.Context, turnID string, existing []Cap
 
 // ---- L5 plan tree ----
 
-// PlanSet declares a turn's plan tree: every listed step is created if missing
-// and restated. topicID names the turn that owns the plan.
-func (s *Session) PlanSet(topicID string, steps []PlanStep) error {
-	return s.db.PlanSet(s.agentID, topicID, steps)
+// PlanCreate opens a turn's plan tree by creating its first root step, and
+// returns the ordinal that step is addressed by from now on. topicID names the
+// turn that owns the plan.
+func (s *Session) PlanCreate(topicID, title string) (uint32, error) {
+	return s.db.PlanCreate(s.agentID, topicID, title)
+}
+
+// PlanNodeAdd adds one step to a turn's plan tree and returns its ordinal.
+// parentSeq 0 puts it at the top level; any other value must name a step the tree
+// already holds. A step has no other way into the tree.
+func (s *Session) PlanNodeAdd(topicID string, parentSeq uint32, title string) (uint32, error) {
+	return s.db.PlanNodeAdd(s.agentID, topicID, parentSeq, title)
+}
+
+// PlanNodeUpdate restates one step of a turn's plan tree. The step's ordinal is
+// the library's, never the host's; a blank Title/Summary keeps what is stored.
+func (s *Session) PlanNodeUpdate(topicID string, step PlanStep) error {
+	return s.db.PlanNodeUpdate(s.agentID, topicID, step)
 }
 
 // PlanState returns the plan tree of one turn, keyed by the topic id that

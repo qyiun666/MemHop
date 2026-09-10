@@ -5,9 +5,12 @@
   `LastActiveAt`/`Deleted`，以及构造时注入的 `Engine`/`LLM`/`Defaults`。
   另有 `PlanCache`（无自带锁，靠 `Context.Mu` 串行；键是**开出该计划的那一轮**的
   话题 ID，一个聚合存在当且仅当该键下还有节点）。面只有
-  `Aggregate`/`HasNode`/`UpsertNode`/`RemoveNodes`/`RemoveTopic` 五个：树不接收事件——
-  事件是 L4 内容，不进这张缓存。`HasNode` 是缓存被内容侧**单向问一次**（一条事件要
-  绑的步骤在不在树上），问完仍由内容侧自己决定拒不拒写，缓存不因此知道任何事件。
+  `Aggregate`/`HasSeq`/`Subtree`/`NextSeq`/`UpsertNode`/`RemoveNodes`/
+  `RemoveTopic`：树不接收事件——
+  事件是 L4 内容，不进这张缓存。`HasSeq` 是缓存被内容侧**单向问一次**（一条事件要
+  绑的步骤在不在树上），问完仍由内容侧自己决定拒不拒写，缓存不因此知道任何事件；
+  `Subtree` 给读侧当过滤集合（一步加它整棵子树的序号，沿 `ParentSeq` 求闭包——
+  序号没有前缀形状可匹配，树的形状只有这里知道），`NextSeq` 给写侧当发号器。
   另有 L2Meta 缓存维护
   （`SyncL2Meta`/`RemoveTopicsFromIndices`/`RetargetL2Meta`）。
 - **纪律**：所有字段只在持有 `Mu` 时读写（组合根在大方法入口拿锁）。

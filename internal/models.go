@@ -64,7 +64,6 @@ const (
 
 // Plan lifecycle constants (see plan.PlanStatus).
 const (
-	PlanPending    = plan.PlanPending
 	PlanInProgress = plan.PlanInProgress
 	PlanDone       = plan.PlanDone
 	PlanFailed     = plan.PlanFailed

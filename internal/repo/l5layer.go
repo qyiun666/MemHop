@@ -4,33 +4,33 @@
 // L5 plan-node primitives: write one node, batch delete by id or by owning
 // topic, and group a domain's nodes into per-topic aggregates. L5 holds nothing
 // but plan nodes — a turn's events are L4 content beside its dialogue originals.
-// The tree view and the retention sweep go through the domain's PlanCache in the
-// internal layer, which owns every plan write and delete under the domain lock.
+// The tree view, the subtree walk and the retention sweep go through the domain's
+// PlanCache in the internal layer, which owns every plan write and delete under
+// the domain lock.
 package repo
 
 import (
 	"cmp"
 	"slices"
-	"strconv"
-	"strings"
 
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
 // WritePlanNode writes one node record, preserving its caller-derived IDHash
-// (core.HashPlanNode(node.TopicID, nodePath)) so the node's address stays stable
-// across writes. A node has no id a caller may invent: it is derived from the
-// topic and the path, and a mismatch is refused rather than written sideways.
+// (core.HashPlanNode(node.TopicID, node.Seq)) so the node's address stays stable
+// across writes. A node has no ordinal a caller may invent: the plan cache hands
+// it out, the id follows from it, and a mismatch is refused rather than written
+// sideways onto another step.
 func WritePlanNode(engine *core.StorageEngine, agentID uint64, node *core.PlanNode) (uint64, error) {
 	if node == nil {
 		return 0, common.NewError(common.ErrInvalidQuery, "plan node is nil")
 	}
-	if node.IDHash == 0 {
-		return 0, common.NewError(common.ErrInvalidQuery, "plan node id required")
+	if node.Seq == 0 {
+		return 0, common.NewError(common.ErrInvalidQuery, "plan node seq required")
 	}
-	if node.IDHash != core.HashPlanNode(node.TopicID, node.NodePath) {
-		return 0, common.NewError(common.ErrInvalidQuery, "plan node id does not match topic/nodePath")
+	if node.IDHash != core.HashPlanNode(node.TopicID, node.Seq) {
+		return 0, common.NewError(common.ErrInvalidQuery, "plan node id does not match topic/seq")
 	}
 	if err := core.WritePlanNode(engine, agentID, node.IDHash, node); err != nil {
 		return 0, err
@@ -75,7 +75,7 @@ func DeletePlanNodesByTopicIDs(engine *core.StorageEngine, agentID uint64, topic
 // still in flight, which the window exempts while it is also active.
 type PlanAggregate struct {
 	TopicID      uint64
-	Nodes        []core.PlanNode // NodePath-ascending
+	Nodes        []core.PlanNode // Seq-ascending, the order they were created in
 	LastActiveAt int64
 	HasNonDone   bool
 }
@@ -97,7 +97,7 @@ func CollectPlanNodes(engine *core.StorageEngine, agentID uint64) []PlanAggregat
 	out := make([]PlanAggregate, 0, len(byTopic))
 	for _, agg := range byTopic {
 		slices.SortFunc(agg.Nodes, func(a, b core.PlanNode) int {
-			return CompareNodePath(a.NodePath, b.NodePath)
+			return cmp.Compare(a.Seq, b.Seq)
 		})
 		for _, n := range agg.Nodes {
 			if n.UpdatedAt > agg.LastActiveAt {
@@ -110,45 +110,5 @@ func CollectPlanNodes(engine *core.StorageEngine, agentID uint64) []PlanAggregat
 		out = append(out, *agg)
 	}
 	slices.SortFunc(out, func(a, b PlanAggregate) int { return cmp.Compare(a.TopicID, b.TopicID) })
-	return out
-}
-
-// NodePathUnder reports whether nodePath is root itself or lives somewhere
-// below it. The dot is a segment boundary on both sides, so one string prefix
-// test is already a whole-segment test: "3" covers "3", "3.1" and "3.2.1" but
-// not "30".
-func NodePathUnder(nodePath, root string) bool {
-	return nodePath == root || strings.HasPrefix(nodePath, root+".")
-}
-
-// CompareNodePath compares two node-path strings ("1", "1.2.1") numerically
-// segment by segment, so "1.10" sorts after "1.9" (not lexicographically
-// where "1.10" < "1.9"). Tie-breaks on length for equal numeric prefixes.
-func CompareNodePath(a, b string) int {
-	as := splitDotSegments(a)
-	bs := splitDotSegments(b)
-	for i := 0; i < len(as) && i < len(bs); i++ {
-		ai, _ := strconv.Atoi(as[i])
-		bi, _ := strconv.Atoi(bs[i])
-		if ai != bi {
-			return cmp.Compare(ai, bi)
-		}
-	}
-	return cmp.Compare(len(as), len(bs))
-}
-
-// splitDotSegments splits a node path on '.' returning non-empty numeric
-// segments; a path like "1.2.1" yields ["1","2","1"].
-func splitDotSegments(s string) []string {
-	if s == "" {
-		return nil
-	}
-	parts := strings.Split(s, ".")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p != "" {
-			out = append(out, p)
-		}
-	}
 	return out
 }

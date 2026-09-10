@@ -214,7 +214,7 @@ func TestArchiveSlotImagePath(t *testing.T) {
 func TestArchiveEventRoundtrip(t *testing.T) {
 	ev := ArchiveSlot{
 		IDHash: HashContent(42, 3), Kind: KindEvent, Seq: 3, ContentType: ContentText,
-		TopicID: 42, EventType: "tool_call", NodePath: "1.1",
+		TopicID: 42, EventType: "tool_call", NodeSeq: 3,
 		CreatedAt: 1000, Content: `{"tool":"read"}`,
 	}
 	var got ArchiveSlot
@@ -249,17 +249,18 @@ func TestSceneSlotL3ID(t *testing.T) {
 	}
 }
 
-// A plan node is its own record type now: no node/event discriminator, no event
-// fields, and an identity derived from the topic that owns the tree.
+// A plan node is its own record type: no node/event discriminator, no event
+// fields, and an identity derived from the topic that owns the tree plus the step
+// ordinal inside it.
 func TestPlanNodeIdentity(t *testing.T) {
 	node := PlanNode{
-		IDHash: HashPlanNode(9, "1.2.1"), TopicID: 9, NodePath: "1.2.1",
-		Status: StatusInProgress, Summary: "sum", UpdatedAt: 1000,
+		IDHash: HashPlanNode(9, 12), TopicID: 9, Seq: 12, ParentSeq: 3,
+		Status: StatusInProgress, Summary: "sum", CreatedAt: 900, UpdatedAt: 1000,
 	}
 	// Content and nodes share one topic key now, so the node id must fold that
-	// key in: the same path under two turns is two distinct nodes.
-	if HashPlanNode(9, "1") == HashPlanNode(10, "1") {
-		t.Fatal("the same nodePath under two topics must not share a node id")
+	// key in: the same ordinal under two turns is two distinct nodes.
+	if HashPlanNode(9, 1) == HashPlanNode(10, 1) {
+		t.Fatal("the same step ordinal under two topics must not share a node id")
 	}
 	var got PlanNode
 	jsonRoundtrip(t, node, &got)

@@ -73,9 +73,9 @@ func TestContentAndPlanNodeDoNotReadAsEachOther(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	nodeID := HashPlanNode(topic, "1")
+	nodeID := HashPlanNode(topic, 1)
 	if err := WritePlanNode(engine, DefaultAgentID, nodeID, &PlanNode{
-		IDHash: nodeID, TopicID: topic, NodePath: "1", Status: StatusDone,
+		IDHash: nodeID, TopicID: topic, Seq: 1, Status: StatusDone,
 	}); err != nil {
 		t.Fatal(err)
 	}

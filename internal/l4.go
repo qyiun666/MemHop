@@ -8,9 +8,10 @@
 package internal
 
 import (
+	"fmt"
+
 	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/content"
-	"github.com/qyiun666/MemHop/internal/plan"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
@@ -18,27 +19,23 @@ import (
 // SearchL4 reads the content records matching every condition of q; the
 // conditions AND together, so an empty query returns the domain's whole content
 // set — utterances AND events alike, which is why Kind is one of the conditions.
-// Keyword is case-insensitive and Limit keeps the newest matches. NodePath keeps
+// Keyword is case-insensitive and Limit keeps the newest matches. NodeSeq keeps
 // only the work of one plan step — the step and every step nested under it, since
-// splitting "3" into "3.1"/"3.2" moves its events onto the children — and a step
-// is addressed inside a turn, so it is refused without TopicID.
+// splitting a step into sub-steps moves its work onto the children — and a step
+// is addressed inside a turn, so it is refused without TopicID. Zero leaves the
+// condition unset.
 func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	if q.NodePath != "" {
-		if q.TopicID == nil {
-			return nil, common.NewError(common.ErrInvalidQuery,
-				"a node-path filter needs its turn's topic id")
-		}
-		if _, err := plan.SplitNodePath(q.NodePath); err != nil {
-			return nil, err
-		}
+	if q.NodeSeq != 0 && q.TopicID == nil {
+		return nil, common.NewError(common.ErrInvalidQuery,
+			"a step filter needs its turn's topic id")
 	}
 	rq := repo.ArchiveQuery{Keyword: q.Keyword, Start: q.Start, End: q.End, Type: q.Type,
-		Kind: q.Kind, NodePath: q.NodePath, Limit: q.Limit, Index: ac.L4}
+		Kind: q.Kind, Limit: q.Limit, Index: ac.L4}
 	if len(q.IDs) > 0 {
 		ids, ok := common.ParseAll(q.IDs)
 		if !ok {
@@ -52,6 +49,11 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 			return nil, common.NewError(common.ErrInvalidQuery, "parse topic id", err)
 		}
 		rq.TopicID = &topicHash
+		if q.NodeSeq != 0 {
+			// The whole branch is expanded here so the data layer only ever
+			// matches set membership: it has no view of the tree.
+			rq.NodeSeqs = ac.Plans.Subtree(topicHash, q.NodeSeq)
+		}
 	}
 	out, err := repo.QueryArchivesL4(db.engine, agentID, rq)
 	if err != nil {
@@ -74,10 +76,10 @@ func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 // versions.
 //
 // An event may name the plan step it belongs to, and that step has to exist
-// already: the tree is what PlanSet declares, and an event naming a step nobody
-// planned is the host's plan and record disagreeing, which is a mistake to report
-// rather than a tree to grow. A record that does not satisfy the write contract is
-// refused before anything is stored.
+// already: the tree is what the plan write face creates, and an event naming a
+// step nobody created is the host's plan and record disagreeing, which is a
+// mistake to report rather than a tree to grow. A record that does not satisfy
+// the write contract is refused before anything is stored.
 func (db *DB) AppendArchive(agentID uint64, topicID string, slot core.ArchiveSlot) error {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -93,10 +95,11 @@ func (db *DB) AppendArchive(agentID uint64, topicID string, slot core.ArchiveSlo
 	if err := content.ValidateAppend(slot); err != nil {
 		return err
 	}
-	if slot.Kind == core.KindEvent && slot.NodePath != "" &&
-		!ac.Plans.HasNode(th, slot.NodePath) {
+	if slot.Kind == core.KindEvent && slot.NodeSeq != 0 &&
+		!ac.Plans.HasSeq(th, slot.NodeSeq) {
 		return common.NewError(common.ErrInvalidQuery,
-			"the event names a step this turn's plan never declared: "+slot.NodePath)
+			fmt.Sprintf("the event names step %d, which this turn's plan never created",
+				slot.NodeSeq))
 	}
 	_, err = content.Append(ac, agentID, th, slot)
 	return err

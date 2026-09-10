@@ -14,15 +14,15 @@ import (
 )
 
 type archiveSearchArgs struct {
-	Keyword  string   `json:"keyword,omitempty"`
-	Start    int64    `json:"start,omitempty"`
-	End      int64    `json:"end,omitempty"`
-	IDs      []string `json:"ids,omitempty"`
-	TopicID  *string  `json:"topic_id,omitempty"`
-	Kind     *string  `json:"kind,omitempty"`
-	NodePath string   `json:"node_path,omitempty"`
-	Type     *string  `json:"content_type,omitempty"`
-	Limit    int      `json:"limit,omitempty"`
+	Keyword string   `json:"keyword,omitempty"`
+	Start   int64    `json:"start,omitempty"`
+	End     int64    `json:"end,omitempty"`
+	IDs     []string `json:"ids,omitempty"`
+	TopicID *string  `json:"topic_id,omitempty"`
+	Kind    *string  `json:"kind,omitempty"`
+	NodeSeq uint32   `json:"node_seq,omitempty"`
+	Type    *string  `json:"content_type,omitempty"`
+	Limit   int      `json:"limit,omitempty"`
 }
 
 // archiveAppendArgs is one content record as a host hands it over the wire: kind
@@ -36,7 +36,7 @@ type archiveAppendArgs struct {
 	Role        string `json:"role,omitempty"`
 	ContentType string `json:"content_type,omitempty"`
 	EventType   string `json:"event_type,omitempty"`
-	NodePath    string `json:"node_path,omitempty"`
+	NodeSeq     uint32 `json:"node_seq,omitempty"`
 	Seq         uint64 `json:"seq,omitempty"`
 }
 
@@ -71,7 +71,7 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 	// lands directly in an LLM's context.
 	const archiveSearchDefaultLimit = 50
 
-	description := fmt.Sprintf("检索 L4 内容（一轮的对话原文与其操作事件同住此层）：keyword（子串，忽略大小写）/ 时间范围 [start,end]（毫秒）/ ID 列表 / topic_id / kind / node_path / content_type 都是过滤条件，填了的全部按 AND 组合；一个都不填即全域扫描。node_path 是轮次内的步骤地址，取该步及其全部子步归因的记录，必须与 topic_id 同填。结果按 Seq 升序，limit 只保留最新的 N 条（缺省 %d，可填更大值）。text/document/code 存原文，image/audio/video 等媒体类型的 content 为路径。", archiveSearchDefaultLimit)
+	description := fmt.Sprintf("检索 L4 内容（一轮的对话原文与其操作事件同住此层）：keyword（子串，忽略大小写）/ 时间范围 [start,end]（毫秒）/ ID 列表 / topic_id / kind / node_seq / content_type 都是过滤条件，填了的全部按 AND 组合；一个都不填即全域扫描。node_seq 是轮次内的步骤序号（由 Go 侧计划写面发号），取该步及其全部子步归因的记录，必须与 topic_id 同填。结果按 Seq 升序，limit 只保留最新的 N 条（缺省 %d，可填更大值）。text/document/code 存原文，image/audio/video 等媒体类型的 content 为路径。", archiveSearchDefaultLimit)
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_archive_search",
@@ -83,7 +83,7 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 			"ids":          arrProp("档案 ID 列表", "string"),
 			"topic_id":     strProp("限定话题 ID（16 位 hex）"),
 			"kind":         strProp("内容种类过滤：utterance（对话原文）| event（操作事件）；不填即两种都要"),
-			"node_path":    strProp("只取该计划步骤及其全部子步归因的记录（点号路径，如 1.1）；须与 topic_id 同填"),
+			"node_seq":     intProp("只取该计划步骤及其全部子步归因的记录（轮次内步骤序号，如 1、2）；须与 topic_id 同填，不填即不加这条约束"),
 			"content_type": strProp("内容类型过滤：text | image | video | document | audio | code | other"),
 			"limit":        intProp("只返回最新 N 条（缺省 50；<=0 也按缺省处理）"),
 		}),
@@ -109,15 +109,15 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 			limit = archiveSearchDefaultLimit
 		}
 		return db.SearchL4(memhop.L4Query{
-			Keyword:  a.Keyword,
-			Start:    a.Start,
-			End:      a.End,
-			IDs:      a.IDs,
-			TopicID:  a.TopicID,
-			Kind:     kind,
-			NodePath: a.NodePath,
-			Type:     ct,
-			Limit:    limit,
+			Keyword: a.Keyword,
+			Start:   a.Start,
+			End:     a.End,
+			IDs:     a.IDs,
+			TopicID: a.TopicID,
+			Kind:    kind,
+			NodeSeq: a.NodeSeq,
+			Type:    ct,
+			Limit:   limit,
 		})
 	}))
 
@@ -147,7 +147,7 @@ func registerL4Tools(s *mcp.Server, db *memhop.Session) {
 func registerArchiveAppendTool(s *mcp.Server, db *memhop.Session) {
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_archive_append",
-		Description: "向本轮写一条 L4 内容（每轮一个键：本轮 memhop_search 铸出的话题 ID）。kind=utterance 写谁说了什么（role 必填：user/agent/system），kind=event 写发生了什么（event_type 必填，由宿主自定；惯例：llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply）。seq 不填即库分配：事件恒从 3 起，槽 1/2 留给对话；显式写一个已被占用的 seq 是覆写而非报错（重放因此收敛）。内容超预算直接拒写、不截断（事件 4KB、原文 64KB）。带 node_path 的事件必须绑到本轮计划里已声明过的步骤——计划由 Go 侧 PlanSet 声明（本工具面不暴露计划写面），所以纯 MCP 宿主用不了 node_path。一切校验先于写入，被拒不留下任何记录与节点。",
+		Description: "向本轮写一条 L4 内容（每轮一个键：本轮 memhop_search 铸出的话题 ID）。kind=utterance 写谁说了什么（role 必填：user/agent/system），kind=event 写发生了什么（event_type 必填，由宿主自定；惯例：llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply）。seq 不填即库分配：事件恒从 3 起，槽 1/2 留给对话；显式写一个已被占用的 seq 是覆写而非报错（重放因此收敛）。内容超预算直接拒写、不截断（事件 4KB、原文 64KB）。带 node_seq 的事件必须绑到本轮计划里已创建的步骤——步骤由 Go 侧 PlanCreate/PlanNodeAdd 创建（本工具面不暴露计划写面），所以纯 MCP 宿主用不了 node_seq。一切校验先于写入，被拒不留下任何记录与节点。",
 		InputSchema: objSchema(map[string]any{
 			"topic_id":     strProp("本轮话题 ID（16 位 hex），必填"),
 			"kind":         strProp("utterance（对话原文，缺省）| event（操作事件）"),
@@ -155,7 +155,7 @@ func registerArchiveAppendTool(s *mcp.Server, db *memhop.Session) {
 			"content":      strProp("内容本体；媒体类型的 content 存路径"),
 			"content_type": strProp("text（缺省）| image | video | document | audio | code | other"),
 			"event_type":   strProp("事件名（kind=event 必填，任意非空宿主命名）"),
-			"node_path":    strProp("事件绑到哪一步（仅 kind=event，如 1 / 1.2.1）；该步必须已由 Go 侧 PlanSet 声明，本工具面不建节点"),
+			"node_seq":     intProp("事件绑到哪一步（仅 kind=event，轮次内步骤序号）；该步必须已由 Go 侧 PlanCreate/PlanNodeAdd 创建，本工具面不建节点"),
 			"seq":          intProp("写入的槽位；0/不填 = 库自动分配（自动分配跳过 1/2）"),
 			"timestamp":    intProp("Unix 毫秒时间戳，必填"),
 		}, "topic_id", "content", "timestamp"),
@@ -182,7 +182,7 @@ func toAppendSlot(a archiveAppendArgs) (memhop.ArchiveSlot, error) {
 	}
 	slot := memhop.ArchiveSlot{
 		Kind: kind, Seq: a.Seq, ContentType: ct,
-		EventType: a.EventType, NodePath: a.NodePath,
+		EventType: a.EventType, NodeSeq: a.NodeSeq,
 		CreatedAt: a.Timestamp, Content: a.Content,
 	}
 	if kind != memhop.KindUtterance {

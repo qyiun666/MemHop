@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -281,15 +282,17 @@ func TestSceneAnchorAgreesWithTheGraphSurface(t *testing.T) {
 	}
 }
 
-func TestPlanSetRejectedLeavesTreeUntouched(t *testing.T) {
+// A refused plan write is a whole refusal: whichever way a host is told no, the
+// tree it reads back afterwards is the tree it had before.
+func TestPlanWritesRejectedLeaveTreeUntouched(t *testing.T) {
 	sess := openSurfaceDB(t)
 	pid := mustTurnKey(t, sess)
-	// One declaration builds the tree: a step missing along the dotted path is
-	// created as pending, so naming it is how a step is added.
-	if err := sess.PlanSet(pid, []PlanStep{
-		{NodePath: "1", Title: "root", Status: "in_progress"},
-		{NodePath: "1.1", Title: "leaf", Status: "pending"},
-	}); err != nil {
+	root, err := sess.PlanCreate(pid, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := sess.PlanNodeAdd(pid, root, "leaf")
+	if err != nil {
 		t.Fatal(err)
 	}
 	before, err := sess.PlanState(pid)
@@ -301,51 +304,60 @@ func TestPlanSetRejectedLeavesTreeUntouched(t *testing.T) {
 	}
 
 	refused := []struct {
-		name  string
-		steps []PlanStep
+		name string
+		call func() error
 	}{
-		{"unknown status", []PlanStep{{NodePath: "1.1", Status: "finished", Summary: "越权摘要"}}},
-		// Status has no blank meaning (unlike Title/Summary): a step that omits it
-		// is refused rather than silently read as "leave it pending".
-		{"blank status", []PlanStep{{NodePath: "1.1", Summary: "s"}}},
-		{"empty path", []PlanStep{{Status: "done"}}},
-		{"blank path segment", []PlanStep{{NodePath: "1..2", Status: "done"}}},
-		// One step named twice in a single declaration has no defensible reading,
-		// and a last-one-wins rule would make the order of the list a silent contract.
-		{"same step twice", []PlanStep{{NodePath: "1", Status: "done"}, {NodePath: "1", Status: "pending"}}},
+		{"unknown status", func() error {
+			return sess.PlanNodeUpdate(pid, PlanStep{Seq: leaf, Status: "finished", Summary: "越权摘要"})
+		}},
+		// Status has no blank meaning (unlike Title/Summary): a restatement that
+		// omits it is refused rather than silently read as "leave it as it was".
+		{"blank status", func() error {
+			return sess.PlanNodeUpdate(pid, PlanStep{Seq: leaf, Summary: "s"})
+		}},
+		{"updating a step nobody created", func() error {
+			return sess.PlanNodeUpdate(pid, PlanStep{Seq: 77, Status: "done"})
+		}},
+		{"a step under a parent that does not exist", func() error {
+			_, err := sess.PlanNodeAdd(pid, 77, "orphan")
+			return err
+		}},
 	}
 	for _, tc := range refused {
-		err := sess.PlanSet(pid, tc.steps)
-		if CodeOf(err) != ErrInvalidQuery {
-			t.Fatalf("%s: want ErrInvalidQuery, got %v", tc.name, err)
+		// An address the tree does not hold answers ErrNotFound; a value the engine
+		// cannot name answers ErrInvalidQuery. Both are refusals, and which one a
+		// host gets is not this test's subject — that the tree did not move is.
+		err := tc.call()
+		if code := CodeOf(err); code != ErrInvalidQuery && code != ErrNotFound {
+			t.Fatalf("%s: want a refusal, got %v", tc.name, err)
 		}
 		after, err := sess.PlanState(pid)
 		if err != nil {
 			t.Fatalf("%s: PlanState: %v", tc.name, err)
 		}
 		if render(after.Roots) != render(before.Roots) {
-			t.Fatalf("%s: a refused declaration moved the tree\n before %s\n after  %s",
+			t.Fatalf("%s: a refused write moved the tree\n before %s\n after  %s",
 				tc.name, render(before.Roots), render(after.Roots))
 		}
 	}
 
-	if err := sess.PlanSet(pid, []PlanStep{{NodePath: "1.1", Status: "done", Summary: "leaf done"}}); err != nil {
-		t.Fatalf("valid declaration: %v", err)
+	if err := sess.PlanNodeUpdate(pid, PlanStep{Seq: leaf, Status: "done", Summary: "leaf done"}); err != nil {
+		t.Fatalf("valid update: %v", err)
 	}
 	after, _ := sess.PlanState(pid)
 	if after.DoneCount != before.DoneCount+1 {
-		t.Fatalf("valid declaration must advance the tree: %d → %d", before.DoneCount, after.DoneCount)
+		t.Fatalf("a valid update must advance the tree: %d → %d", before.DoneCount, after.DoneCount)
 	}
 	// The step's own work is content, written on the content surface and read
 	// back attributed to the step it names.
-	if err := sess.AppendArchive(pid, onNode(event("tool_call", "ran", 7), "1.1")); err != nil {
+	if err := sess.AppendArchive(pid, onStep(event("tool_call", "ran", 7), leaf)); err != nil {
 		t.Fatalf("append step event: %v", err)
 	}
 	evs := eventsOf(t, sess, pid)
 	if len(evs) != 1 {
 		t.Fatalf("want 1 event, got %d", len(evs))
 	}
-	if last := evs[0]; last.NodePath != "1.1" || last.TopicID != pid {
+	if last := evs[0]; last.NodeSeq != leaf || last.TopicID != pid {
 		t.Fatalf("event not attributed to its step: %+v", last)
 	}
 }
@@ -365,7 +377,13 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 	if err := sess.AppendArchive(turn, event("x", strings.Repeat("a", 4*1024), 1)); err != nil {
 		t.Fatalf("event at the budget limit: %v", err)
 	}
-	if err := sess.AppendArchive(key, onNode(ArchiveSlot{Kind: KindEvent, CreatedAt: 1}, "1")); err == nil {
+	// A step-bound event answers to the same content contract as a bare one: the
+	// step being real does not excuse a record missing its own name.
+	keyStep, err := sess.PlanCreate(key, "一步")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sess.AppendArchive(key, onStep(ArchiveSlot{Kind: KindEvent, CreatedAt: 1}, keyStep)); err == nil {
 		t.Fatal("a plan-bound event must satisfy the same write contract")
 	}
 	// A dialogue original gets its own budget, and the same refuse-don't-truncate
@@ -462,7 +480,7 @@ func mustTurnKey(t *testing.T, sess *Session) string {
 func render(ns []PlanNodeView) string {
 	var b strings.Builder
 	for _, n := range ns {
-		b.WriteString(n.NodePath + "=" + n.Status + "/" + n.Summary + "/" + n.Title + " ")
+		b.WriteString(strconv.FormatUint(uint64(n.Seq), 10) + "=" + n.Status + "/" + n.Summary + "/" + n.Title + " ")
 		b.WriteString(render(n.Children))
 	}
 	return b.String()

@@ -207,14 +207,15 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 }
 
 // Files with an unsupported format version must be rejected explicitly at
-// Open: 0x0010 (the plan node's plan_type gone, `running` out of the status
-// vocabulary, a turn's tree declared rather than stepped through) is the only
-// accepted version — older layouts and future ones have no migration path.
+// Open: 0x0011 (plan nodes addressed by a per-topic ordinal rather than a dotted
+// path, a three-state status whose zero value is in_progress, a tree grown one
+// step at a time) is the only accepted version — older layouts and future ones
+// have no migration path.
 // The rejection names both versions it saw and wanted, so this asserts the pair
 // per case: "an error mentioning a version" would also pass on an unrelated
 // failure, and a stale FormatVersion would otherwise go unnoticed.
 func TestHeaderVersionRejected(t *testing.T) {
-	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, 0x000F, 0x0011} {
+	for _, v := range []uint16{0x0004, 0x0005, 0x0006, 0x0007, 0x0008, 0x0009, 0x000A, 0x000B, 0x000C, 0x000D, 0x000E, 0x000F, 0x0010, 0x0012} {
 		t.Run(fmt.Sprintf("0x%04x", v), func(t *testing.T) {
 			p := tempPath(t, "ver")
 			eng, err := Create(p)

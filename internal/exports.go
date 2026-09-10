@@ -134,7 +134,6 @@ const (
 // ---- L5 plan status constants (read side; the write surface is a string) ----
 
 const (
-	StatusPending    = core.StatusPending
 	StatusInProgress = core.StatusInProgress
 	StatusDone       = core.StatusDone
 	StatusFailed     = core.StatusFailed

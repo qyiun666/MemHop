@@ -177,37 +177,41 @@ type ArchiveSlot struct {
 	Role        uint8       `json:"role"`
 	TopicID     string      `json:"topic_id"`
 	EventType   string      `json:"event_type,omitempty"`
-	NodePath    string      `json:"node_path,omitempty"`
+	NodeSeq     uint32      `json:"node_seq,omitempty"`
 	CreatedAt   int64       `json:"created_at"`
 	Content     string      `json:"content"`
 }
 
-// PlanNodeView is the external plan-tree node; Status is the string form.
+// PlanNodeView is the external plan-tree node; Status is the string form. A step
+// is addressed by Seq inside its turn, and ParentSeq is the step it hangs under
+// (0 = a root).
 type PlanNodeView struct {
-	NodePath   string         `json:"node_path"`
+	Seq        uint32         `json:"seq"`
+	ParentSeq  uint32         `json:"parent_seq"`
 	Title      string         `json:"title"`
 	Status     string         `json:"status"`
 	Summary    string         `json:"summary"`
+	CreatedAt  int64          `json:"created_at"`
 	FinishedAt int64          `json:"finished_at"`
+	UpdatedAt  int64          `json:"updated_at"`
 	ChildCount int            `json:"child_count"`
 	Children   []PlanNodeView `json:"children"`
 }
 
-// PlanStep is one node in a host's declaration of a turn's plan, passed to
-// PlanSet. NodePath is the dotted address the host assigns inside that turn's
-// tree ("1", "1.2.1"); a node missing along the path is created as pending, so
-// naming one is how a step is added.
+// PlanStep is one step restated for PlanNodeUpdate. Seq is the ordinal the
+// library handed out when the step was created — a host never invents one — and
+// it addresses a step inside the turn named by the call's topicID.
 //
 // The fields are not symmetric. A blank Title/Summary keeps what the node
 // already holds, so restating a step never rewinds its title or erases a folded
 // summary. Status has no blank meaning: it is the string surface
-// (pending / in_progress / done / failed), every step states it, and an unknown
-// value is refused before the tree moves.
+// (in_progress / done / failed), every update states it, and an unknown value is
+// refused before the node is touched.
 type PlanStep struct {
-	NodePath string     `json:"node_path"`
-	Title    string     `json:"title"`
-	Status   PlanStatus `json:"status"`
-	Summary  string     `json:"summary"`
+	Seq     uint32     `json:"seq"`
+	Title   string     `json:"title"`
+	Status  PlanStatus `json:"status"`
+	Summary string     `json:"summary"`
 }
 
 // PlanTree is the external forest view of one plan: every top-level step is

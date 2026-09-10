@@ -179,7 +179,7 @@ func fromArchiveSlot(s internal.ArchiveSlot) ArchiveSlot {
 		Role:        s.Role,
 		TopicID:     formatOptionalID(s.TopicID),
 		EventType:   s.EventType,
-		NodePath:    s.NodePath,
+		NodeSeq:     s.NodeSeq,
 		CreatedAt:   s.CreatedAt,
 		Content:     s.Content,
 	}
@@ -203,7 +203,7 @@ func toCoreAppendSlot(s ArchiveSlot) internal.ArchiveSlot {
 		ContentType: s.ContentType,
 		Role:        s.Role,
 		EventType:   s.EventType,
-		NodePath:    s.NodePath,
+		NodeSeq:     s.NodeSeq,
 		CreatedAt:   s.CreatedAt,
 		Content:     s.Content,
 	}
@@ -222,8 +222,9 @@ func fromPlanTree(t *internal.PlanTree) PlanTree {
 
 func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
 	out := PlanNodeView{
-		NodePath: v.NodePath, Title: v.Title, Status: string(v.Status),
-		Summary: v.Summary, FinishedAt: v.FinishedAt,
+		Seq: v.Seq, ParentSeq: v.ParentSeq, Title: v.Title, Status: string(v.Status),
+		Summary: v.Summary, CreatedAt: v.CreatedAt,
+		FinishedAt: v.FinishedAt, UpdatedAt: v.UpdatedAt,
 		ChildCount: v.ChildCount,
 		Children:   make([]PlanNodeView, 0, len(v.Children)),
 	}
@@ -233,20 +234,9 @@ func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
 	return out
 }
 
-func toInternalPlanSteps(in []PlanStep) []internal.PlanStep {
-	if in == nil {
-		return nil
-	}
-	out := make([]internal.PlanStep, len(in))
-	for i, s := range in {
-		out[i] = toInternalPlanStep(s)
-	}
-	return out
-}
-
 func toInternalPlanStep(s PlanStep) internal.PlanStep {
 	return internal.PlanStep{
-		NodePath: s.NodePath, Status: s.Status,
+		Seq: s.Seq, Status: s.Status,
 		Title: s.Title, Summary: s.Summary,
 	}
 }

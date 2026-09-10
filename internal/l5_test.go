@@ -25,11 +25,32 @@ func ev(eventType string, ts int64) core.ArchiveSlot {
 	return core.ArchiveSlot{Kind: core.KindEvent, EventType: eventType, Content: eventType, CreatedAt: ts}
 }
 
-// onNode names the plan step an event belongs to: the path goes on the record, and
-// a step missing along it is what creates the step.
-func onNode(slot core.ArchiveSlot, nodePath string) core.ArchiveSlot {
-	slot.NodePath = nodePath
+// onStep names the plan step an event belongs to: the ordinal goes on the record,
+// and it never creates the step.
+func onStep(slot core.ArchiveSlot, seq uint32) core.ArchiveSlot {
+	slot.NodeSeq = seq
 	return slot
+}
+
+// add creates one step of a turn's tree and fails the test if the call was
+// refused, so a tree-shaped test reads as the sequence of steps it builds.
+func add(t *testing.T, db *DB, topicID string, parentSeq uint32, title string) uint32 {
+	t.Helper()
+	seq, err := db.PlanNodeAdd(core.DefaultAgentID, topicID, parentSeq, title)
+	if err != nil {
+		t.Fatalf("PlanNodeAdd(parent=%d, title=%q): %v", parentSeq, title, err)
+	}
+	return seq
+}
+
+// restate applies one step's status (and optional summary) to a tree.
+func restate(t *testing.T, db *DB, topicID string, seq uint32, status PlanStatus, summary string) {
+	t.Helper()
+	err := db.PlanNodeUpdate(core.DefaultAgentID, topicID, PlanStep{
+		Seq: seq, Status: status, Summary: summary})
+	if err != nil {
+		t.Fatalf("PlanNodeUpdate(step=%d, status=%s): %v", seq, status, err)
+	}
 }
 
 // eventsOf reads one topic's event track the way a host does: the same key with the
@@ -39,14 +60,14 @@ func (db *DB) eventsOf(agentID uint64, topicHex string) ([]core.ArchiveSlot, err
 	return db.SearchL4(agentID, L4Query{TopicID: &topicHex, Kind: &kind})
 }
 
-// nodeEvents reads the events bound to one node path from the topic's content
-// track, Seq ascending. A node holds no list of its events: the path is stamped on
-// the event, and that is all the attribution a reader needs.
-func nodeEvents(t *testing.T, db *DB, topicID uint64, nodePath string) []core.ArchiveSlot {
+// stepEvents reads the events bound to one step from the topic's content track,
+// Seq ascending. A node holds no list of its events: the ordinal is stamped on the
+// event, and that is all the attribution a reader needs.
+func stepEvents(t *testing.T, db *DB, topicID uint64, seq uint32) []core.ArchiveSlot {
 	t.Helper()
 	var out []core.ArchiveSlot
 	for _, arc := range core.CollectAllArchives(db.engine, core.DefaultAgentID) {
-		if arc.TopicID == topicID && arc.Kind == core.KindEvent && arc.NodePath == nodePath {
+		if arc.TopicID == topicID && arc.Kind == core.KindEvent && arc.NodeSeq == seq {
 			out = append(out, arc)
 		}
 	}
@@ -90,7 +111,7 @@ func TestAppendArchiveValidation(t *testing.T) {
 	}
 	// A plan-bound write is refused by the same contract, and the zero key is
 	// refused before it: neither may create a node on its way out.
-	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(1), onNode(bare, "1")); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(1), onStep(bare, 1)); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("bound empty type: want ErrInvalidQuery, got %v", err)
 	}
 	if err := db.AppendArchive(core.DefaultAgentID, "0000000000000000", ev("x", 1)); common.CodeOf(err) != common.ErrInvalidQuery {
@@ -214,137 +235,467 @@ func TestTrajectorySeqContinuesAfterContextRebuild(t *testing.T) {
 	}
 }
 
-func TestPlanSetRestatesNode(t *testing.T) {
+// A tree starts empty and a step's ordinal is the library's to hand out: the first
+// create of a turn is step 1 and each step after it is one higher, so a host can
+// address what it created without reading the tree back.
+func TestPlanCreateHandsOutOrdinals(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	if err := db.PlanSet(core.DefaultAgentID, pid, []PlanStep{
-		{NodePath: "1", Status: PlanDone, Summary: "made it"}}); err != nil {
-		t.Fatal(err)
-	}
-	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1"))
+	first, err := db.PlanCreate(core.DefaultAgentID, pid, "第一步")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if node.Status != core.StatusDone {
-		t.Fatalf("want done, got %d", node.Status)
+	if first != 1 {
+		t.Fatalf("a turn's first step = %d, want 1", first)
 	}
-	if node.Summary != "made it" {
-		t.Fatalf("want made it, got %s", node.Summary)
+	if second := add(t, db, pid, 0, "第二步"); second != 2 {
+		t.Fatalf("second root = %d, want 2", second)
+	}
+	if child := add(t, db, pid, 2, "子步"); child != 3 {
+		t.Fatalf("a child continues the same count: %d, want 3", child)
+	}
+	// A second turn counts from its own start: ordinals are per tree, not global.
+	other := common.FormatHash(10)
+	if got, err := db.PlanCreate(core.DefaultAgentID, other, "别的轮"); err != nil || got != 1 {
+		t.Fatalf("another turn's first step = %d/%v, want 1", got, err)
+	}
+
+	restate(t, db, pid, first, PlanDone, "made it")
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Status != core.StatusDone || node.Summary != "made it" {
+		t.Fatalf("step restatement lost: %+v", node)
 	}
 }
 
-// A declaration says what it lists and nothing else. Leaving a step out is not
-// how the host withdraws it — the library would have to read a partial
-// restatement and a complete one the same way — so the unlisted node keeps its
-// stored state and withdrawing is done by declaring a new turn's tree.
-func TestPlanSetLeavesUndeclaredNodesAlone(t *testing.T) {
+// A step is created in progress with no status to state, and it keeps its own
+// creation time while a later update moves only the update time.
+func TestPlanNodeCreateStampsTimes(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	pid := common.FormatHash(9)
+	seq, err := db.PlanCreate(core.DefaultAgentID, pid, "r")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, seq))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Status != core.StatusInProgress {
+		t.Fatalf("a fresh step starts as %d, want in progress", node.Status)
+	}
+	if node.CreatedAt == 0 || node.UpdatedAt != node.CreatedAt {
+		t.Fatalf("a created step carries one timestamp pair: %+v", node)
+	}
+	restate(t, db, pid, seq, PlanDone, "fin")
+	aged, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, seq))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aged.CreatedAt != node.CreatedAt {
+		t.Fatalf("an update moved CreatedAt: %d -> %d", node.CreatedAt, aged.CreatedAt)
+	}
+	if aged.FinishedAt == 0 {
+		t.Fatal("a step driven to done carries a completion time")
+	}
+}
+
+// Updating one step reaches no other: there is no whole-tree restatement whose
+// omissions a host must reason about, so the only step that moves is the one named.
+func TestPlanNodeUpdateLeavesOtherStepsAlone(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	if err := db.PlanSet(core.DefaultAgentID, pid, []PlanStep{
-		{NodePath: "1", Status: PlanInProgress}, {NodePath: "2", Status: PlanDone, Summary: "keep me"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.PlanSet(core.DefaultAgentID, pid, []PlanStep{
-		{NodePath: "1", Status: PlanDone, Summary: "first"}}); err != nil {
-		t.Fatal(err)
-	}
-	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "2"))
+	first := add(t, db, pid, 0, "一")
+	second := add(t, db, pid, 0, "二")
+	restate(t, db, pid, second, PlanDone, "keep me")
+	restate(t, db, pid, first, PlanDone, "first")
+
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, second))
 	if err != nil {
-		t.Fatalf("the unlisted node is gone: %v", err)
+		t.Fatalf("the other step is gone: %v", err)
 	}
 	if node.Status != core.StatusDone || node.Summary != "keep me" {
-		t.Fatalf("an unlisted step was restated: %+v", node)
+		t.Fatalf("an untouched step was restated: %+v", node)
 	}
 }
 
-// A declaration is refused as a whole: nothing it names lands on the tree, so a
-// host never has to diff its own plan against the store to find what applied.
-func TestPlanSetRefusesAmbiguousDeclaration(t *testing.T) {
+// Every refusal the plan write face makes is a whole refusal: nothing lands, so a
+// host never has to diff its own writes against the store to find what applied.
+func TestPlanWritesRefuseWithoutLeavingTrace(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	refused := map[string][]PlanStep{
-		"same step twice": {{NodePath: "1", Status: PlanDone}, {NodePath: "1", Status: PlanPending}},
-		"blank segment":   {{NodePath: "1..2", Status: PlanDone}},
-		"empty path":      {{Status: PlanDone}},
-		"unknown status":  {{NodePath: "1", Status: PlanStatus("finished")}},
-		"blank status":    {{NodePath: "1"}},
+	seq := add(t, db, pid, 0, "一")
+
+	if _, err := db.PlanNodeAdd(core.DefaultAgentID, pid, 77, "挂在没有的步骤下"); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("a step under an unknown parent: want ErrNotFound, got %v", err)
 	}
-	for name, steps := range refused {
-		if err := db.PlanSet(core.DefaultAgentID, pid, steps); common.CodeOf(err) != common.ErrInvalidQuery {
-			t.Fatalf("%s: want ErrInvalidQuery, got %v", name, err)
-		}
+	if err := db.PlanNodeUpdate(core.DefaultAgentID, pid,
+		PlanStep{Seq: seq, Status: PlanStatus("finished")}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("unknown status: want ErrInvalidQuery, got %v", err)
 	}
-	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1")); common.CodeOf(err) != common.ErrNotFound {
-		t.Fatalf("a refused declaration left a node behind: %v", err)
+	if err := db.PlanNodeUpdate(core.DefaultAgentID, pid,
+		PlanStep{Seq: seq}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("blank status: want ErrInvalidQuery, got %v", err)
+	}
+	if err := db.PlanNodeUpdate(core.DefaultAgentID, pid,
+		PlanStep{Seq: 77, Status: PlanDone}); common.CodeOf(err) != common.ErrNotFound {
+		t.Fatalf("updating a step nobody created: want ErrNotFound, got %v", err)
+	}
+	// The one step this test created is still the only record on disk, and still
+	// in progress: every refusal above left the tree exactly as it found it.
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL5PlanNode); n != 1 {
+		t.Fatalf("refused writes left %d plan nodes, want 1", n)
+	}
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, seq))
+	if err != nil || node.Status != core.StatusInProgress {
+		t.Fatalf("a refused update moved a step: %+v err=%v", node, err)
 	}
 }
 
-// An event binds to a step the host planned; it never grows the tree. Naming a
-// step the plan never declared is the plan and the record disagreeing, so the
+// An event binds to a step the host created; it never grows the tree. Naming a
+// step the plan does not hold is the plan and the record disagreeing, so the
 // append reports that instead of quietly inventing a step.
-func TestEventBindsOnlyToADeclaredStep(t *testing.T) {
+func TestEventBindsOnlyToACreatedStep(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	if err := db.AppendArchive(core.DefaultAgentID, pid, onNode(ev("llm_request", 1000), "1.2.1")); common.CodeOf(err) != common.ErrInvalidQuery {
-		t.Fatalf("an event on an undeclared step: want ErrInvalidQuery, got %v", err)
+	if err := db.AppendArchive(core.DefaultAgentID, pid, onStep(ev("llm_request", 1000), 3)); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("an event on a step that does not exist: want ErrInvalidQuery, got %v", err)
 	}
-	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1.2.1")); common.CodeOf(err) != common.ErrNotFound {
-		t.Fatalf("the refused append created a node: %v", err)
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL5PlanNode); n != 0 {
+		t.Fatalf("the refused append created %d nodes", n)
 	}
 	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL4Archive); n != 0 {
 		t.Fatalf("the refused append stored %d content records", n)
 	}
 
-	if err := db.PlanSet(core.DefaultAgentID, pid, []PlanStep{
-		{NodePath: "1.2.1", Status: PlanInProgress}}); err != nil {
-		t.Fatal(err)
+	seq := add(t, db, pid, 0, "一步")
+	if err := db.AppendArchive(core.DefaultAgentID, pid, onStep(ev("llm_request", 1001), seq)); err != nil {
+		t.Fatalf("binding to a created step: %v", err)
 	}
-	if err := db.AppendArchive(core.DefaultAgentID, pid, onNode(ev("llm_request", 1001), "1.2.1")); err != nil {
-		t.Fatalf("binding to a declared step: %v", err)
-	}
-	events := nodeEvents(t, db, 9, "1.2.1")
+	events := stepEvents(t, db, 9, seq)
 	if len(events) != 1 || events[0].EventType != "llm_request" {
 		t.Fatalf("want 1 llm_request event on the step, got %+v", events)
 	}
 }
 
-// Naming a deep path in a declaration is enough: the ancestors it implies are
-// created as pending steps with the right ParentID.
-func TestPlanSetBuildsParentChain(t *testing.T) {
+// A step's read covers its branch: once a step is split, the work it did is
+// attributed to the children, so "what did this step do" that answers only for the
+// parent's own records is a partial answer.
+func TestStepReadCoversItsSubtree(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	if err := db.PlanSet(core.DefaultAgentID, common.FormatHash(9), []PlanStep{
-		{NodePath: "1.2.1", Status: PlanInProgress}}); err != nil {
+	defer db.Close()
+	pid := common.FormatHash(9)
+	root := add(t, db, pid, 0, "调研")
+	child := add(t, db, pid, root, "读码")
+	grandchild := add(t, db, pid, child, "改码")
+	sibling := add(t, db, pid, 0, "别的活")
+
+	for _, seq := range []uint32{root, child, grandchild, sibling} {
+		if err := db.AppendArchive(core.DefaultAgentID, pid, onStep(ev("tool_call", int64(1000+seq)), seq)); err != nil {
+			t.Fatalf("append on step %d: %v", seq, err)
+		}
+	}
+	kind := core.KindEvent
+	topic := pid
+	inRoot, err := db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &topic, Kind: &kind, NodeSeq: root})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendArchive(core.DefaultAgentID, common.FormatHash(9), onNode(ev("llm_request", 1000), "1.2.1")); err != nil {
-		t.Fatalf("an event on a step the declaration implied: %v", err)
+	if len(inRoot) != 3 {
+		t.Fatalf("step %d's read covers %d records, want its whole branch (3)", root, len(inRoot))
 	}
-	rootID := core.HashPlanNode(9, "1")
-	midID := core.HashPlanNode(9, "1.2")
-	leafID := core.HashPlanNode(9, "1.2.1")
-	root, _ := core.ReadPlanNode(db.engine, core.DefaultAgentID, rootID)
-	mid, _ := core.ReadPlanNode(db.engine, core.DefaultAgentID, midID)
-	leaf, _ := core.ReadPlanNode(db.engine, core.DefaultAgentID, leafID)
-	if root.ParentID != 0 {
-		t.Fatalf("root parent should be 0, got %d", root.ParentID)
+	inChild, err := db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &topic, Kind: &kind, NodeSeq: child})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if mid.ParentID != rootID {
-		t.Fatalf("mid parent should be rootID %d, got %d", rootID, mid.ParentID)
+	if len(inChild) != 2 || inChild[1].NodeSeq != grandchild {
+		t.Fatalf("a step's branch = %+v, want itself and its child", inChild)
 	}
-	if leaf.ParentID != midID {
-		t.Fatalf("leaf parent should be midID %d, got %d", midID, leaf.ParentID)
+	// A leaf reads only its own, and the other root's work stays out of it.
+	inLeaf, err := db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &topic, Kind: &kind, NodeSeq: grandchild})
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The leaf carries what the host declared; only the ancestors it implied are
-	// left pending.
-	if leaf.Status != core.StatusInProgress {
-		t.Fatalf("leaf not restated: %+v", leaf)
+	if len(inLeaf) != 1 || inLeaf[0].NodeSeq != grandchild {
+		t.Fatalf("a leaf's read = %+v, want just its own record", inLeaf)
 	}
-	if root.Status != core.StatusPending {
-		t.Fatalf("an implied ancestor is not pending: %+v", root)
+	// A step filter without the turn it lives inside addresses nothing, so it is
+	// refused rather than answered with a domain-wide scan.
+	if _, err := db.SearchL4(core.DefaultAgentID, L4Query{NodeSeq: root}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("a step filter with no turn: want ErrInvalidQuery, got %v", err)
+	}
+}
+
+// Forest contract: two top-level steps yield two roots, the nesting a host created
+// comes back as Children, and Done/Total covers both subtrees.
+func TestPlanStateForestMultipleRoots(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	defer db.Close()
+	topicID := common.FormatHash(9)
+	r1 := add(t, db, topicID, 0, "step one")
+	r2 := add(t, db, topicID, 0, "two")
+	sub := add(t, db, topicID, r2, "sub")
+	restate(t, db, topicID, r1, PlanDone, "step one")
+	restate(t, db, topicID, sub, PlanDone, "sub")
+
+	tree, err := db.PlanState(core.DefaultAgentID, topicID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.Roots) != 2 {
+		t.Fatalf("want 2 roots, got %d", len(tree.Roots))
+	}
+	if tree.Roots[0].Seq != r1 || tree.Roots[1].Seq != r2 {
+		t.Fatalf("roots must be creation-ordered: %+v", tree.Roots)
+	}
+	if tree.Roots[1].ParentSeq != 0 {
+		t.Fatalf("a root must say it has no parent, got %d", tree.Roots[1].ParentSeq)
+	}
+	if len(tree.Roots[1].Children) != 1 ||
+		tree.Roots[1].Children[0].Seq != sub || tree.Roots[1].Children[0].ParentSeq != r2 {
+		t.Fatalf("second root lost its subtree: %+v", tree.Roots[1])
+	}
+	if tree.TotalCount != 3 || tree.DoneCount != 2 {
+		t.Fatalf("forest stats total=%d done=%d, want 3/2", tree.TotalCount, tree.DoneCount)
+	}
+	// A title the host never gave falls back to the ordinal rather than going blank.
+	nameless := add(t, db, topicID, 0, "")
+	if tree := mustTree(t, db, topicID); !slices.ContainsFunc(tree.Roots,
+		func(r PlanNodeView) bool { return r.Seq == nameless && r.Title == "4" }) {
+		t.Fatalf("an untitled step must render by its ordinal: %+v", tree.Roots)
+	}
+}
+
+func mustTree(t *testing.T, db *DB, topicID string) *PlanTree {
+	t.Helper()
+	tree, err := db.PlanState(core.DefaultAgentID, topicID)
+	if err != nil {
+		t.Fatalf("PlanState(%s): %v", topicID, err)
+	}
+	return tree
+}
+
+// A child whose parent record expired still reads back as a root with its own
+// subtree: an unresolved parent link must not hide the work the tree still holds.
+func TestPlanStateOrphansSurfaceAsRoots(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	topicID := common.FormatHash(9)
+	parent := add(t, db, topicID, 0, "父")
+	child := add(t, db, topicID, parent, "子")
+	parentID := core.HashPlanNode(9, parent)
+	if _, err := repo.DeletePlanNodesByIDs(db.engine, core.DefaultAgentID,
+		[]uint64{parentID}); err != nil {
+		t.Fatal(err)
+	}
+	db.agents[core.DefaultAgentID].Plans.RemoveNodes(9, []uint64{parentID})
+
+	tree := mustTree(t, db, topicID)
+	if len(tree.Roots) != 1 || tree.Roots[0].Seq != child {
+		t.Fatalf("the orphaned child must surface as a root: %+v", tree.Roots)
+	}
+}
+
+// Model A: a parent becomes Done only where the host says so, and the bottom-up
+// rollup of settled children's summaries fills an empty parent Summary without
+// ever overwriting one the host wrote.
+func TestPlanRollupModelA(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+
+	partial := common.FormatHash(9)
+	root := add(t, db, partial, 0, "父")
+	a := add(t, db, partial, root, "子A")
+	b := add(t, db, partial, root, "子B")
+	// One child still open: the parent is not Done and the counts say so.
+	restate(t, db, partial, a, PlanDone, "step A")
+	if tree := mustTree(t, db, partial); tree.Roots[0].Status == PlanDone ||
+		tree.TotalCount != 3 || tree.DoneCount != 1 {
+		t.Fatalf("a partially done parent was folded: %+v", tree)
+	}
+	// Every child settled still leaves the parent as the host left it.
+	restate(t, db, partial, b, PlanDone, "step B")
+	if tree := mustTree(t, db, partial); tree.Roots[0].Status != PlanInProgress {
+		t.Fatalf("parent auto-folded without a host declaration: %+v", tree.Roots[0])
+	}
+	// The host declares the parent Done with a blank Summary → children fold up.
+	restate(t, db, partial, root, PlanDone, "")
+	if tree := mustTree(t, db, partial); tree.DoneCount != 3 ||
+		tree.Roots[0].Summary != "step A; step B" {
+		t.Fatalf("rollup into a blank parent summary: %+v", tree.Roots[0])
+	}
+
+	// A summary the host wrote on the parent survives the rollup.
+	own := common.FormatHash(6)
+	ownRoot := add(t, db, own, 0, "父")
+	ownA := add(t, db, own, ownRoot, "a")
+	ownB := add(t, db, own, ownRoot, "b")
+	restate(t, db, own, ownA, PlanDone, "step A")
+	restate(t, db, own, ownB, PlanDone, "step B")
+	restate(t, db, own, ownRoot, PlanDone, "parent's own words")
+	if tree := mustTree(t, db, own); tree.Roots[0].Summary != "parent's own words" {
+		t.Fatalf("rollup overwrote the host summary: %+v", tree.Roots[0])
+	}
+}
+
+// A fold taken while a child is still open is a partial answer wearing a
+// finished one's clothes, so the parent waits for every branch to settle — and a
+// failed child settles its branch just as a done one does.
+func TestPlanRollupWaitsForEveryChild(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	topicID := common.FormatHash(4)
+	root := add(t, db, topicID, 0, "root")
+	c1 := add(t, db, topicID, root, "c1")
+	c2 := add(t, db, topicID, root, "c2")
+	restate(t, db, topicID, root, PlanDone, "")
+	restate(t, db, topicID, c1, PlanDone, "settled")
+
+	if tree := mustTree(t, db, topicID); tree.Roots[0].Summary != "" {
+		t.Fatalf("a parent with an open child was folded: %+v", tree.Roots[0])
+	}
+	restate(t, db, topicID, c2, PlanFailed, "gave up")
+	if got := mustTree(t, db, topicID).Roots[0]; got.Summary != "settled; gave up" {
+		t.Fatalf("fold once every child settled = %q", got.Summary)
+	}
+}
+
+// Retention semantics: a plan node ages on its own clock and takes nothing with
+// it. An expired tree is swept while the turn's events stay readable; an in-flight
+// plan keeps even its stale nodes, and events arriving on a dead tree no longer
+// hold that tree alive.
+func TestDreamPrunePlanNodesAndContent(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	old := time.Now().Add(-dream.ContentRetention - time.Hour).UnixMilli()
+	now := time.Now().UnixMilli()
+	age := func(topicID uint64, seq uint32) {
+		t.Helper()
+		node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(topicID, seq))
+		if err != nil {
+			t.Fatalf("read node for aging: %v", err)
+		}
+		node.UpdatedAt = old
+		if _, err := repo.WritePlanNode(db.engine, core.DefaultAgentID, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// All-Done plan created long ago, with a FRESH event bound to the step.
+	doneID := common.FormatHash(9)
+	doneStep := add(t, db, doneID, 0, "fin")
+	restate(t, db, doneID, doneStep, PlanDone, "fin")
+	if err := db.AppendArchive(core.DefaultAgentID, doneID, onStep(ev("note", now), doneStep)); err != nil {
+		t.Fatal(err)
+	}
+	age(9, doneStep)
+
+	// In-flight plan: an aged Done root plus a child created just now. The tree is
+	// exempt as a whole, so the stale root survives with it.
+	liveID := common.FormatHash(8)
+	liveRoot := add(t, db, liveID, 0, "root")
+	restate(t, db, liveID, liveRoot, PlanDone, "root")
+	add(t, db, liveID, liveRoot, "child")
+	age(8, liveRoot)
+
+	// Abandoned plan: not done, and nothing written inside the window.
+	staleID := common.FormatHash(7)
+	staleStep := add(t, db, staleID, 0, "half")
+	age(7, staleStep)
+
+	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID,
+		core.HashPlanNode(9, doneStep)); err == nil {
+		t.Fatal("expired all-done plan node should be pruned")
+	}
+	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID,
+		core.HashPlanNode(7, staleStep)); err == nil {
+		t.Fatal("a plan silent past the window is abandoned and must be pruned")
+	}
+	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID,
+		core.HashPlanNode(8, liveRoot)); err != nil {
+		t.Fatalf("an in-flight plan must keep even its stale root: %v", err)
+	}
+	// The swept node cascades nothing: the event bound to it is content, ages on
+	// its own clock, and is still readable.
+	events, err := db.eventsOf(core.DefaultAgentID, doneID)
+	if err != nil {
+		t.Fatalf("the turn's event track must survive its own pruned tree: %v", err)
+	}
+	if len(events) != 1 || events[0].EventType != "note" {
+		t.Fatalf("want the fresh note event only, got %+v", events)
+	}
+}
+
+// An event append is forced to content-of-kind-event semantics: the topic it belongs
+// to and the slot it lands in are the library's, and so are the speaker and the
+// medium an event has no use for — an append cannot smuggle a record into the
+// transcript. The kinds also cannot wear each other's axes.
+func TestAppendEventCannotForgeContentFields(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	topicID := common.FormatHash(9)
+	seq := add(t, db, topicID, 0, "一步")
+	if err := db.AppendArchive(core.DefaultAgentID, topicID, onStep(core.ArchiveSlot{
+		Kind: core.KindEvent, TopicID: 4242,
+		Role: core.RoleDream, ContentType: core.ContentVideo,
+		EventType: "llm_request", Content: "payload", CreatedAt: 1000,
+	}, seq)); err != nil {
+		t.Fatal(err)
+	}
+	// The content write left the tree exactly where the create put it: one step,
+	// still in progress. An append that could advance or add a step would make the
+	// plan a second record of what happened instead of the host's intent.
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL5PlanNode); n != 1 {
+		t.Fatalf("plan nodes = %d, want only the created one", n)
+	}
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, seq))
+	if err != nil {
+		t.Fatalf("the created step vanished: %v", err)
+	}
+	if node.Status != core.StatusInProgress {
+		t.Fatalf("an event append advanced its step: %d", node.Status)
+	}
+
+	var landed *core.ArchiveSlot
+	for _, arc := range core.CollectAllArchives(db.engine, core.DefaultAgentID) {
+		if arc.Kind == core.KindEvent {
+			clone := arc
+			landed = &clone
+		}
+	}
+	if landed == nil {
+		t.Fatal("the event record is missing")
+	}
+	if landed.TopicID != 9 || landed.IDHash != core.HashContent(9, landed.Seq) {
+		t.Fatalf("an append must land under the topic it addressed: %+v", landed)
+	}
+	if landed.Seq != core.LastUtteranceSeq+1 {
+		t.Fatalf("forged Seq survived: %d", landed.Seq)
+	}
+	if landed.Role != 0 || landed.ContentType != core.ContentText {
+		t.Fatalf("forged role or medium survived: %+v", landed)
+	}
+	if landed.NodeSeq != seq {
+		t.Fatalf("event must carry the step it actually bound to, got %d", landed.NodeSeq)
+	}
+
+	// The axes stay apart: an utterance that names an event, hangs on a step, or
+	// claims the consolidation role is refused outright, and so is a record whose
+	// kind nobody can name.
+	for name, slot := range map[string]core.ArchiveSlot{
+		"utterance with an event name": {Kind: core.KindUtterance, Role: core.RoleUser, EventType: "tool_call", Content: "x", CreatedAt: 1},
+		"utterance on a plan step":     {Kind: core.KindUtterance, Role: core.RoleUser, NodeSeq: 1, Content: "x", CreatedAt: 1},
+		"host-written dream role":      {Kind: core.KindUtterance, Role: core.RoleDream, Content: "x", CreatedAt: 1},
+		"undefined kind":               {Kind: core.ArchiveKind(7), EventType: "tool_call", Content: "x", CreatedAt: 1},
+		"empty content":                {Kind: core.KindEvent, EventType: "tool_call", CreatedAt: 1},
+	} {
+		if err := db.AppendArchive(core.DefaultAgentID, topicID, slot); common.CodeOf(err) != common.ErrInvalidQuery {
+			t.Fatalf("%s: want ErrInvalidQuery, got %v", name, err)
+		}
 	}
 }
 
@@ -400,268 +751,6 @@ func TestSettledTurnKeepsEventsAppendedBeforeIt(t *testing.T) {
 	}
 }
 
-// Model A: a parent becomes Done only when the host declares it so, and the
-// bottom-up rollup of settled children's summaries fills an empty parent
-// Summary without ever overwriting one the host wrote.
-func TestPlanSetRollupModelA(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	declare := func(topicID string, steps ...PlanStep) {
-		t.Helper()
-		if err := db.PlanSet(core.DefaultAgentID, topicID, steps); err != nil {
-			t.Fatalf("declare %v: %v", steps, err)
-		}
-	}
-	state := func(topicID string) *PlanTree {
-		t.Helper()
-		tree, err := db.PlanState(core.DefaultAgentID, topicID)
-		if err != nil {
-			t.Fatalf("PlanState(%s): %v", topicID, err)
-		}
-		return tree
-	}
-
-	partial := common.FormatHash(9)
-	// One child still open: the parent is not Done and the counts say so.
-	declare(partial, PlanStep{NodePath: "1", Status: PlanInProgress},
-		PlanStep{NodePath: "1.1", Status: PlanDone, Summary: "step A"},
-		PlanStep{NodePath: "1.2", Status: PlanPending})
-	if tree := state(partial); tree.Roots[0].Status == PlanDone ||
-		tree.TotalCount != 3 || tree.DoneCount != 1 {
-		t.Fatalf("a partially done parent was folded: %+v", tree)
-	}
-	// Every child settled still leaves the parent as the host left it.
-	declare(partial, PlanStep{NodePath: "1.2", Status: PlanDone, Summary: "step B"})
-	if tree := state(partial); tree.Roots[0].Status != PlanInProgress {
-		t.Fatalf("parent auto-folded without a host declaration: %+v", tree.Roots[0])
-	}
-	// The host declares the parent Done with a blank Summary → children fold up.
-	declare(partial, PlanStep{NodePath: "1", Status: PlanDone})
-	if tree := state(partial); tree.DoneCount != 3 ||
-		tree.Roots[0].Summary != "step A; step B" {
-		t.Fatalf("rollup into a blank parent summary: %+v", tree.Roots[0])
-	}
-
-	// A summary the host declared alongside the parent survives the rollup.
-	own := common.FormatHash(6)
-	declare(own, PlanStep{NodePath: "1.1", Status: PlanDone, Summary: "step A"},
-		PlanStep{NodePath: "1.2", Status: PlanDone, Summary: "step B"},
-		PlanStep{NodePath: "1", Status: PlanDone, Summary: "parent's own words"})
-	if tree := state(own); tree.Roots[0].Summary != "parent's own words" {
-		t.Fatalf("rollup overwrote the host summary: %+v", tree.Roots[0])
-	}
-}
-
-// A fold taken while a child is still open is a partial answer wearing a
-// finished one's clothes, so the parent waits for every branch to settle.
-func TestPlanSetRollupWaitsForEveryChild(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	topicID := common.FormatHash(4)
-	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
-		{NodePath: "1", Status: PlanDone},
-		{NodePath: "1.1", Status: PlanDone, Summary: "settled"},
-		{NodePath: "1.2", Status: PlanInProgress},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	tree, err := db.PlanState(core.DefaultAgentID, topicID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tree.Roots[0].Summary != "" {
-		t.Fatalf("a parent with an open child was folded: %+v", tree.Roots[0])
-	}
-	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
-		{NodePath: "1.2", Status: PlanFailed, Summary: "gave up"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := db.PlanState(core.DefaultAgentID, topicID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := reopened.Roots[0]; got.Summary != "settled; gave up" {
-		t.Fatalf("fold once every child settled = %q", got.Summary)
-	}
-}
-
-// Retention semantics after the merge: a plan node ages on its own clock and
-// takes nothing with it. An expired tree is swept while the turn's events stay
-// readable; an in-flight plan keeps even its stale nodes, and events arriving on
-// a dead tree no longer hold that tree alive.
-func TestDreamPrunePlanNodesAndContent(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	old := time.Now().Add(-dream.ContentRetention - time.Hour).UnixMilli()
-	now := time.Now().UnixMilli()
-	age := func(id uint64) {
-		t.Helper()
-		node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, id)
-		if err != nil {
-			t.Fatalf("read node for aging: %v", err)
-		}
-		node.UpdatedAt = old
-		if _, err := repo.WritePlanNode(db.engine, core.DefaultAgentID, node); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	// All-Done plan declared long ago, with a FRESH event bound to the step.
-	doneID := common.FormatHash(9)
-	if err := db.PlanSet(core.DefaultAgentID, doneID, []PlanStep{
-		{NodePath: "1", Status: PlanDone, Summary: "fin"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AppendArchive(core.DefaultAgentID, doneID, onNode(ev("note", now), "1")); err != nil {
-		t.Fatal(err)
-	}
-	doneNode := core.HashPlanNode(9, "1")
-	age(doneNode)
-
-	// In-flight plan: an aged Done root plus a child declared just now. The
-	// tree is exempt as a whole, so the stale root survives with it.
-	liveID := common.FormatHash(8)
-	if err := db.PlanSet(core.DefaultAgentID, liveID, []PlanStep{
-		{NodePath: "1", Status: PlanDone, Summary: "root"},
-		{NodePath: "1.1", Status: PlanInProgress},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	liveRoot := core.HashPlanNode(8, "1")
-	age(liveRoot)
-
-	// Abandoned plan: non-Done and nothing declared inside the window.
-	staleID := common.FormatHash(7)
-	if err := db.PlanSet(core.DefaultAgentID, staleID, []PlanStep{
-		{NodePath: "1", Status: PlanInProgress}}); err != nil {
-		t.Fatal(err)
-	}
-	staleNode := core.HashPlanNode(7, "1")
-	age(staleNode)
-
-	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, doneNode); err == nil {
-		t.Fatal("expired all-done plan node should be pruned")
-	}
-	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, staleNode); err == nil {
-		t.Fatal("non-Done plan silent past the window is abandoned and must be pruned")
-	}
-	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, liveRoot); err != nil {
-		t.Fatalf("an in-flight plan must keep even its stale root: %v", err)
-	}
-	// The swept node cascades nothing: the event bound to it is content, ages on
-	// its own clock, and is still readable.
-	events, err := db.eventsOf(core.DefaultAgentID, doneID)
-	if err != nil {
-		t.Fatalf("the turn's event track must survive its own pruned tree: %v", err)
-	}
-	if len(events) != 1 || events[0].EventType != "note" {
-		t.Fatalf("want the fresh note event only, got %+v", events)
-	}
-}
-
-// An event append is forced to content-of-kind-event semantics: the topic it belongs
-// to and the slot it lands in are the library's, and so are the speaker and the
-// medium an event has no use for — an append cannot smuggle a record into the
-// transcript. The kinds also cannot wear each other's axes.
-func TestAppendEventCannotForgeContentFields(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	topicID := common.FormatHash(9)
-	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
-		{NodePath: "1", Status: PlanPending}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(core.ArchiveSlot{
-		Kind: core.KindEvent, TopicID: 4242,
-		Role: core.RoleDream, ContentType: core.ContentVideo,
-		EventType: "llm_request", Content: "payload", CreatedAt: 1000,
-	}, "1")); err != nil {
-		t.Fatal(err)
-	}
-	// The content write left the tree exactly where the declaration put it: one
-	// node, still pending. An append that could advance or add a step would make
-	// the plan a second record of what happened instead of the host's intent.
-	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL5PlanNode); n != 1 {
-		t.Fatalf("plan nodes = %d, want only the declared one", n)
-	}
-	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1"))
-	if err != nil {
-		t.Fatalf("the declared node vanished: %v", err)
-	}
-	if node.Status != core.StatusPending {
-		t.Fatalf("an event append advanced its step: %d", node.Status)
-	}
-
-	var landed *core.ArchiveSlot
-	for _, arc := range core.CollectAllArchives(db.engine, core.DefaultAgentID) {
-		if arc.Kind == core.KindEvent {
-			clone := arc
-			landed = &clone
-		}
-	}
-	if landed == nil {
-		t.Fatal("the event record is missing")
-	}
-	if landed.TopicID != 9 || landed.IDHash != core.HashContent(9, landed.Seq) {
-		t.Fatalf("an append must land under the topic it addressed: %+v", landed)
-	}
-	if landed.Seq != core.LastUtteranceSeq+1 {
-		t.Fatalf("forged Seq survived: %d", landed.Seq)
-	}
-	if landed.Role != 0 || landed.ContentType != core.ContentText {
-		t.Fatalf("forged role or medium survived: %+v", landed)
-	}
-	if landed.NodePath != "1" {
-		t.Fatalf("event must carry the step it actually bound to, got %q", landed.NodePath)
-	}
-
-	// The axes stay apart: an utterance that names an event, hangs on a step, or
-	// claims the consolidation role is refused outright, and so is a record whose
-	// kind nobody can name.
-	for name, slot := range map[string]core.ArchiveSlot{
-		"utterance with an event name": {Kind: core.KindUtterance, Role: core.RoleUser, EventType: "tool_call", Content: "x", CreatedAt: 1},
-		"utterance on a plan step":     {Kind: core.KindUtterance, Role: core.RoleUser, NodePath: "1", Content: "x", CreatedAt: 1},
-		"host-written dream role":      {Kind: core.KindUtterance, Role: core.RoleDream, Content: "x", CreatedAt: 1},
-		"undefined kind":               {Kind: core.ArchiveKind(7), EventType: "tool_call", Content: "x", CreatedAt: 1},
-		"empty content":                {Kind: core.KindEvent, EventType: "tool_call", CreatedAt: 1},
-	} {
-		if err := db.AppendArchive(core.DefaultAgentID, topicID, slot); common.CodeOf(err) != common.ErrInvalidQuery {
-			t.Fatalf("%s: want ErrInvalidQuery, got %v", name, err)
-		}
-	}
-}
-
-// Forest contract: two top-level steps yield two roots, and Done/Total
-// covers both subtrees.
-func TestPlanStateForestMultipleRoots(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	defer db.Close()
-	topicID := common.FormatHash(9)
-	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
-		{NodePath: "1", Status: PlanDone, Summary: "step one"},
-		{NodePath: "2", Status: PlanInProgress},
-		{NodePath: "2.1", Status: PlanDone, Summary: "sub"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	tree, err := db.PlanState(core.DefaultAgentID, topicID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(tree.Roots) != 2 {
-		t.Fatalf("want 2 roots, got %d", len(tree.Roots))
-	}
-	if tree.Roots[0].NodePath != "1" || tree.Roots[1].NodePath != "2" {
-		t.Fatalf("roots must be path-ordered: %+v", tree.Roots)
-	}
-	if len(tree.Roots[1].Children) != 1 || tree.Roots[1].Children[0].NodePath != "2.1" {
-		t.Fatalf("second root lost its subtree: %+v", tree.Roots[1])
-	}
-	if tree.TotalCount != 3 || tree.DoneCount != 2 {
-		t.Fatalf("forest stats total=%d done=%d, want 3/2", tree.TotalCount, tree.DoneCount)
-	}
-}
-
 // A step event names itself: any EventType a bare turn event takes is accepted
 // here too and stored verbatim, and the content contract is still checked before
 // anything lands on the tree.
@@ -669,13 +758,10 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
-		{NodePath: "1", Status: PlanDone}}); err != nil {
-		t.Fatal(err)
-	}
+	seq := add(t, db, topicID, 0, "一步")
 	for i, name := range []string{"sandbox_ask", "host_step"} {
 		if err := db.AppendArchive(core.DefaultAgentID, topicID,
-			onNode(ev(name, int64(1000+i)), "1")); err != nil {
+			onStep(ev(name, int64(1000+i)), seq)); err != nil {
 			t.Fatalf("a host-named plan event must be accepted: %v", err)
 		}
 	}
@@ -688,15 +774,11 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 			events[0].EventType, events[1].EventType)
 	}
 
-	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(core.ArchiveSlot{Kind: core.KindEvent, Content: "step", CreatedAt: 1002}, "2.1")); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.AppendArchive(core.DefaultAgentID, topicID, onStep(core.ArchiveSlot{Kind: core.KindEvent, Content: "step", CreatedAt: 1002}, 9)); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
 	}
-	tree, err := db.PlanState(core.DefaultAgentID, topicID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if tree.TotalCount != 1 {
-		t.Fatalf("a refused append built a node chain: total=%d", tree.TotalCount)
+	if tree := mustTree(t, db, topicID); tree.TotalCount != 1 {
+		t.Fatalf("a refused append built a step: total=%d", tree.TotalCount)
 	}
 }
 
@@ -704,13 +786,10 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
-		{NodePath: "1", Title: "r", Status: PlanPending},
-		{NodePath: "1.1", Title: "a", Status: PlanDone, Summary: "s"},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(ev("tool_call", 1200), "1.1")); err != nil {
+	root := add(t, db, topicID, 0, "r")
+	child := add(t, db, topicID, root, "a")
+	restate(t, db, topicID, child, PlanDone, "s")
+	if err := db.AppendArchive(core.DefaultAgentID, topicID, onStep(ev("tool_call", 1200), child)); err != nil {
 		t.Fatal(err)
 	}
 	ac := db.agents[core.DefaultAgentID]
@@ -739,41 +818,30 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	}
 }
 
-func TestPlanSetFinishedAt(t *testing.T) {
+func TestPlanNodeUpdateFinishedAt(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	declare := func(status PlanStatus, summary string) {
-		t.Helper()
-		if err := db.PlanSet(core.DefaultAgentID, topicID, []PlanStep{
-			{NodePath: "1", Status: status, Summary: summary}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	declare(PlanDone, "fin")
-	tree, err := db.PlanState(core.DefaultAgentID, topicID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := tree.Roots[0].FinishedAt
+	seq := add(t, db, topicID, 0, "一步")
+	restate(t, db, topicID, seq, PlanDone, "fin")
+
+	first := mustTree(t, db, topicID).Roots[0].FinishedAt
 	if first == 0 {
-		t.Fatal("a declared terminal step must carry a completion time")
+		t.Fatal("a step driven to a terminal status must carry a completion time")
 	}
-	// Restating the step as work in progress clears it. FinishedAt answers "when
-	// did this step finish", and a step the host re-opened has not finished —
-	// keeping the earlier stamp would hand back a completed-looking node that the
-	// same tree says is still running.
-	declare(PlanInProgress, "")
-	tree2, _ := db.PlanState(core.DefaultAgentID, topicID)
-	if tree2.Roots[0].FinishedAt != 0 {
-		t.Fatalf("re-opening a step must clear FinishedAt: %d -> %d", first, tree2.Roots[0].FinishedAt)
+	// Re-opening the step clears it. FinishedAt answers "when did this step
+	// finish", and a step the host re-opened has not finished — keeping the earlier
+	// stamp would hand back a completed-looking node that the same tree says is
+	// still running.
+	restate(t, db, topicID, seq, PlanInProgress, "")
+	if got := mustTree(t, db, topicID).Roots[0].FinishedAt; got != 0 {
+		t.Fatalf("re-opening a step must clear FinishedAt: %d -> %d", first, got)
 	}
 	// Finishing it again is a new completion, so it carries a new time rather
 	// than the stamp of the one the host withdrew.
-	declare(PlanDone, "fin2")
-	tree3, _ := db.PlanState(core.DefaultAgentID, topicID)
-	if tree3.Roots[0].FinishedAt < first {
-		t.Fatalf("a re-completed step lost its completion time: %d", tree3.Roots[0].FinishedAt)
+	restate(t, db, topicID, seq, PlanDone, "fin2")
+	if got := mustTree(t, db, topicID).Roots[0].FinishedAt; got < first {
+		t.Fatalf("a re-completed step lost its completion time: %d", got)
 	}
 }
 

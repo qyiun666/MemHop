@@ -131,18 +131,20 @@ type L3Subgraph struct {
 // Keyword is matched case-insensitively, the same way the L3 node filter matches
 // one. An empty query returns the domain's whole archive set — that is a lot of
 // text for a caller with a context window, so Limit caps the result to its most
-// recent matches. NodePath keeps only the records bound to one plan step; a step
-// is addressed inside a turn, so it means nothing without TopicID.
+// recent matches. NodeSeq keeps only the records bound to one plan step — that
+// step and every step under it; a step is addressed inside a turn, so it means
+// nothing without TopicID. Zero leaves the condition unset, which is safe because
+// the library hands step ordinals out from 1.
 type L4Query struct {
-	Keyword  string       `json:"keyword,omitempty"`   // case-insensitive substring of Content
-	Start    int64        `json:"start,omitempty"`     // created at or after (ms)
-	End      int64        `json:"end,omitempty"`       // created at or before (ms)
-	IDs      []string     `json:"ids,omitempty"`       // 16 位 hex 档案 ID
-	TopicID  *string      `json:"topic_id,omitempty"`  // only archives of this topic
-	Type     *ContentType `json:"type,omitempty"`      // only archives of this content type
-	Kind     *ArchiveKind `json:"kind,omitempty"`      // utterance or event; unset selects both
-	NodePath string       `json:"node_path,omitempty"` // this step and every step under it; needs TopicID
-	Limit    int          `json:"limit,omitempty"`     // keep the newest N matches; <=0 means every match
+	Keyword string       `json:"keyword,omitempty"`  // case-insensitive substring of Content
+	Start   int64        `json:"start,omitempty"`    // created at or after (ms)
+	End     int64        `json:"end,omitempty"`      // created at or before (ms)
+	IDs     []string     `json:"ids,omitempty"`      // 16 位 hex 档案 ID
+	TopicID *string      `json:"topic_id,omitempty"` // only archives of this topic
+	Type    *ContentType `json:"type,omitempty"`     // only archives of this content type
+	Kind    *ArchiveKind `json:"kind,omitempty"`     // utterance or event; unset selects both
+	NodeSeq uint32       `json:"node_seq,omitempty"` // this step and every step under it; needs TopicID
+	Limit   int          `json:"limit,omitempty"`    // keep the newest N matches; <=0 means every match
 }
 
 // ScenePatch is the partial-update payload of UpdateScene; nil fields are left

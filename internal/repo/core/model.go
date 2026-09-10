@@ -207,7 +207,7 @@ type ArchiveSlot struct {
 	Role        uint8       `json:"role"`
 	TopicID     uint64      `json:"topic_id"`
 	EventType   string      `json:"event_type,omitempty"`
-	NodePath    string      `json:"node_path,omitempty"`
+	NodeSeq     uint32      `json:"node_seq,omitempty"`
 	CreatedAt   int64       `json:"created_at"`
 	Content     string      `json:"content"`
 }
@@ -221,37 +221,42 @@ func HashContent(topicID, seq uint64) uint64 {
 	return common.HashID(fmt.Sprintf("content:%d:%d", topicID, seq))
 }
 
-// Plan node status. in_progress is the one "this step is being worked on" value:
-// a second synonym would give a host two words the engine cannot tell apart.
+// Plan node status. Three states, and a created node starts in the first one:
+// there is no "planned but not started" state, so the zero value is the state a
+// fresh node is really in. in_progress is the one "this step is being worked on"
+// value: a second synonym would give a host two words the engine cannot tell
+// apart. done and failed are the two terminal states.
 const (
-	StatusPending    uint8 = 0
-	StatusInProgress uint8 = 1
-	StatusDone       uint8 = 2
-	StatusFailed     uint8 = 3
+	StatusInProgress uint8 = 0
+	StatusDone       uint8 = 1
+	StatusFailed     uint8 = 2
 )
 
-// PlanNode is one node of an L5 plan tree. L5 holds nothing but these: a turn's
-// events live in L4 beside its dialogue originals. TopicID is the turn topic
-// that opened the tree and NodePath the host's dotted address inside it, so
-// naming the turn is all a read needs to get its whole tree back.
-// UpdatedAt is what the retention window reads — a commit stamps it, so a plan
-// the host went quiet on stops being exempt once its last commit falls outside
-// the window, while an in-flight one keeps its tree mid-task.
+// PlanNode is one node of an L5 plan tree, and one node is one record: L5 holds
+// nothing but these. A node is addressed by Seq, a per-topic ordinal the library
+// hands out (1, 2, 3 …), and ParentSeq names the step it hangs on, 0 being a
+// root. TopicID is the turn topic that owns the tree, so naming the turn is all a
+// read needs to get its whole tree back.
+// UpdatedAt is what the retention window reads — every write stamps it, so a plan
+// the host went quiet on stops being exempt once its last write falls outside the
+// window, while an in-flight one keeps its tree mid-task.
 type PlanNode struct {
 	IDHash     uint64 `json:"id_hash"`
 	TopicID    uint64 `json:"topic_id"`
-	ParentID   uint64 `json:"parent_id,omitempty"` // 0 = root
-	NodePath   string `json:"node_path"`           // "1" / "1.2.1"
+	Seq        uint32 `json:"seq"`        // ordinal inside the topic, never 0
+	ParentSeq  uint32 `json:"parent_seq"` // 0 = root
 	Status     uint8  `json:"status"`
-	Title      string `json:"title,omitempty"`       // empty = the view falls back to NodePath
+	Title      string `json:"title,omitempty"`       // empty = the view falls back to Seq
 	Summary    string `json:"summary,omitempty"`     // completion abbreviation
+	CreatedAt  int64  `json:"created_at"`            // stamped once, when the node is created
 	FinishedAt int64  `json:"finished_at,omitempty"` // stamped on a terminal status only
 	UpdatedAt  int64  `json:"updated_at"`
 }
 
-// HashPlanNode derives a plan node id from the owning topic + nodePath,
+// HashPlanNode derives a plan node id from the owning topic + step ordinal,
 // namespaced under a "plan:" prefix so it never collides with a content id
 // (hash("content:"+topic+":"+seq)) or a turn topic (hash("turn:"+scene:seq)).
-func HashPlanNode(topicID uint64, nodePath string) uint64 {
-	return common.HashID("plan:" + fmt.Sprintf("%d:%s", topicID, nodePath))
+// The ordinal is an address inside one turn; this is the record key under it.
+func HashPlanNode(topicID uint64, seq uint32) uint64 {
+	return common.HashID(fmt.Sprintf("plan:%d:%d", topicID, seq))
 }

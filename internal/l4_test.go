@@ -77,76 +77,83 @@ func TestSearchL4TopicOnly(t *testing.T) {
 	}
 }
 
-// writeEvent records one operation event in the topic's own Seq space, optionally
-// attributed to a plan step — the axis the content read filters on.
-func writeEvent(t *testing.T, engine *core.StorageEngine, topicID, seq uint64,
-	nodePath, text string) core.ArchiveSlot {
-	t.Helper()
-	arc := core.ArchiveSlot{
-		IDHash: core.HashContent(topicID, seq), Kind: core.KindEvent, Seq: seq,
-		TopicID: topicID, NodePath: nodePath, EventType: "tool_call",
-		Content: text, CreatedAt: int64(2000 + seq),
-	}
-	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arc.IDHash, &arc); err != nil {
-		t.Fatalf("write event %d: %v", seq, err)
-	}
-	return arc
-}
-
-// One turn's events are a plan step at a time for the host: NodePath filters the
-// attribution down to the step it belongs to, inside the turn that owns them.
-func TestSearchL4ByNodePath(t *testing.T) {
+// One turn's events are a plan step at a time for the host: the step's ordinal
+// filters the attribution down to what belongs to it, inside the turn that owns
+// them — and a step's read covers its whole branch, which is only knowable from
+// the tree, so the steps have to have been created there.
+func TestSearchL4ByNodeSeq(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	topic := common.HashID("turn-tree")
-	writeSlot(t, engine, topic, core.SeqUser, core.KindUtterance, "u", 1000, core.ContentText)
-	own := writeEvent(t, engine, topic, 3, "1", "the step's own line")
-	child := writeEvent(t, engine, topic, 4, "1.1", "cargo build")
-	grand := writeEvent(t, engine, topic, 5, "1.1.1", "cargo build --release")
-	writeEvent(t, engine, topic, 6, "30", "a sibling that merely shares the digit")
-	writeEvent(t, engine, topic, 7, "", "unattributed")
-
 	topicHex := common.FormatHash(topic)
+
+	// The branch this read must walk: step 1 → 2 → 3, and a second top-level step
+	// with no link to it.
+	root := add(t, db, topicHex, 0, "一步")
+	child := add(t, db, topicHex, root, "子")
+	grand := add(t, db, topicHex, child, "孙")
+	sibling := add(t, db, topicHex, 0, "另起的")
+
+	appendEvent := func(slotSeq uint64, nodeSeq uint32) uint64 {
+		t.Helper()
+		slot := core.ArchiveSlot{
+			Kind: core.KindEvent, EventType: "tool_call", Content: "work",
+			CreatedAt: int64(2000 + slotSeq), Seq: slotSeq, NodeSeq: nodeSeq,
+		}
+		if err := db.AppendArchive(core.DefaultAgentID, topicHex, slot); err != nil {
+			t.Fatalf("append on step %d: %v", nodeSeq, err)
+		}
+		return core.HashContent(topic, slotSeq)
+	}
+	own := appendEvent(3, root)
+	kid := appendEvent(4, child)
+	leaf := appendEvent(5, grand)
+	other := appendEvent(6, sibling)
+	// A record no step did: it belongs to the turn and to no step's read.
+	appendEvent(7, 0)
+
 	evKind := core.KindEvent
-	want := func(nodePath string, ids ...uint64) {
+	want := func(nodeSeq uint32, ids ...uint64) {
 		t.Helper()
 		out, err := db.SearchL4(core.DefaultAgentID,
-			L4Query{TopicID: &topicHex, Kind: &evKind, NodePath: nodePath})
+			L4Query{TopicID: &topicHex, Kind: &evKind, NodeSeq: nodeSeq})
 		if err != nil {
-			t.Fatalf("node-path %q read: %v", nodePath, err)
+			t.Fatalf("step %d read: %v", nodeSeq, err)
 		}
 		if len(out) != len(ids) {
-			t.Fatalf("node-path %q: want %d events, got %+v", nodePath, len(ids), out)
+			t.Fatalf("step %d: want %d events, got %+v", nodeSeq, len(ids), out)
 		}
 		for i, id := range ids {
 			if out[i].IDHash != id {
-				t.Fatalf("node-path %q entry %d: want %x, got %x", nodePath, i, id, out[i].IDHash)
+				t.Fatalf("step %d entry %d: want %x, got %x", nodeSeq, i, id, out[i].IDHash)
 			}
 		}
 	}
-	// A step's work includes what its sub-steps did: once "1" is split, the
-	// events land on the children, and a read that answered only for the parent's
-	// own line would report a step that did one thing when it did three.
-	want("1", own.IDHash, child.IDHash, grand.IDHash)
-	want("1.1", child.IDHash, grand.IDHash)
-	want("1.1.1", grand.IDHash)
-	// Segment boundary, not string prefix: "3" is not the parent of "30", so it
-	// matches nothing here.
-	want("3")
+	// A step's work includes what its sub-steps did: once a step is split, the
+	// events land on the children, and a read answering only for the parent's own
+	// line would report a step that did one thing when it did three.
+	want(root, own, kid, leaf)
+	want(child, kid, leaf)
+	want(grand, leaf)
+	// An unrelated step of the same turn keeps its own records and nothing else —
+	// with ordinals there is no shared digit prefix to tell apart from a parent.
+	want(sibling, other)
+
+	// A step that was never created selects no records: the filter answers with
+	// an empty read rather than inventing a branch to justify itself.
+	if got, err := db.SearchL4(core.DefaultAgentID,
+		L4Query{TopicID: &topicHex, Kind: &evKind, NodeSeq: 99}); err != nil || len(got) != 0 {
+		t.Fatalf("an unknown step = %+v / %v, want no records", got, err)
+	}
 }
 
 // A step address means nothing outside the turn holding its records, and a read
 // that took one without a topic would sweep the whole domain.
-func TestNodePathFilterNeedsTopicID(t *testing.T) {
+func TestNodeSeqFilterNeedsTopicID(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
-	if _, err := db.SearchL4(core.DefaultAgentID, L4Query{NodePath: "1.1"}); common.CodeOf(err) != common.ErrInvalidQuery {
-		t.Fatalf("node path without a topic: want ErrInvalidQuery, got %v", err)
-	}
-	topicHex := common.FormatHash(common.HashID("shape"))
-	if _, err := db.SearchL4(core.DefaultAgentID,
-		L4Query{TopicID: &topicHex, NodePath: "1..2"}); common.CodeOf(err) != common.ErrInvalidQuery {
-		t.Fatalf("malformed node path: want ErrInvalidQuery, got %v", err)
+	if _, err := db.SearchL4(core.DefaultAgentID, L4Query{NodeSeq: 1}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("a step filter with no turn: want ErrInvalidQuery, got %v", err)
 	}
 }
 

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Superseded by: 2026-09-10-plan-step-addressed-by-ordinal.md
+
 ## Problem
 
 宿主跑的是一个 LLM loop：每一轮先读场景拿到本轮的话题 id，让模型规划「当前执行哪些步骤」，

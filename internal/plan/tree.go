@@ -4,6 +4,7 @@
 package plan
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/qyiun666/MemHop/internal/domain"
@@ -15,30 +16,37 @@ import (
 // UpdateNodeSummaryLocked.
 type planNode struct {
 	id         uint64
-	nodePath   string
+	seq        uint32
+	parentSeq  uint32
 	title      string
 	status     uint8
 	summary    string
+	createdAt  int64
 	finishedAt int64
+	updatedAt  int64
 	children   []*planNode
 }
 
-// PlanNodeView is the external tree node; nodes are keyed by the
-// host-assigned NodePath, no numeric IDs are exposed.
+// PlanNodeView is the external tree node; a step is addressed by Seq, the
+// ordinal the library handed out inside its turn, and ParentSeq says which step
+// it hangs under (0 = a root). No record hash crosses the surface.
 type PlanNodeView struct {
-	NodePath   string         `json:"node_path"`
+	Seq        uint32         `json:"seq"`
+	ParentSeq  uint32         `json:"parent_seq"`
 	Title      string         `json:"title"`
 	Status     PlanStatus     `json:"status"`
 	Summary    string         `json:"summary"`
+	CreatedAt  int64          `json:"created_at"`
 	FinishedAt int64          `json:"finished_at"`
+	UpdatedAt  int64          `json:"updated_at"`
 	ChildCount int            `json:"child_count"`
 	Children   []PlanNodeView `json:"children"`
 }
 
 // PlanTree is the external forest view of one plan. A plan may hold several
-// roots (flat step lists produce one root per top-level step); Done/Total
-// cover every root. Nodes whose parent record is missing surface as roots
-// too, so an expired root never hides its live subtree.
+// roots (each root a step created with no parent); Done/Total cover every root.
+// Nodes whose parent record is missing surface as roots too, so an expired root
+// never hides its live subtree.
 type PlanTree struct {
 	Roots      []PlanNodeView `json:"roots"`
 	DoneCount  int            `json:"done_count"`
@@ -73,26 +81,29 @@ func aggregate(ac *domain.Context, topicID uint64) []core.PlanNode {
 	return agg.Nodes
 }
 
-// Forest links stored nodes into root trees. Nodes arrive NodePath-ordered, so
-// roots keep their creation order. A node whose parent record is missing is
-// surfaced as a root instead of vanishing.
+// Forest links stored nodes into root trees by their parent ordinal. Nodes
+// arrive Seq-ascending, so roots and children alike keep the order they were
+// created in. A node whose parent record is missing is surfaced as a root instead
+// of vanishing.
 func Forest(nodes []core.PlanNode) []*planNode {
-	byNode := make(map[uint64]*planNode, len(nodes))
+	bySeq := make(map[uint32]*planNode, len(nodes))
 	for i := range nodes {
-		byNode[nodes[i].IDHash] = &planNode{
-			id: nodes[i].IDHash, nodePath: nodes[i].NodePath, title: nodes[i].Title,
-			status: nodes[i].Status, summary: nodes[i].Summary,
-			finishedAt: nodes[i].FinishedAt,
+		n := nodes[i]
+		bySeq[n.Seq] = &planNode{
+			id: n.IDHash, seq: n.Seq, parentSeq: n.ParentSeq, title: n.Title,
+			status: n.Status, summary: n.Summary,
+			createdAt: n.CreatedAt, finishedAt: n.FinishedAt,
+			updatedAt: n.UpdatedAt,
 		}
 	}
 	var roots []*planNode
 	for i := range nodes {
-		cur := byNode[nodes[i].IDHash]
-		if nodes[i].ParentID == 0 {
+		cur := bySeq[nodes[i].Seq]
+		if nodes[i].ParentSeq == 0 {
 			roots = append(roots, cur)
 			continue
 		}
-		if p, ok := byNode[nodes[i].ParentID]; ok {
+		if p, ok := bySeq[nodes[i].ParentSeq]; ok {
 			p.children = append(p.children, cur)
 		} else {
 			roots = append(roots, cur)
@@ -111,11 +122,12 @@ func ToNodeView(n *planNode) (PlanNodeView, error) {
 	}
 	title := n.title
 	if title == "" {
-		title = n.nodePath
+		title = strconv.FormatUint(uint64(n.seq), 10)
 	}
 	out := PlanNodeView{
-		NodePath: n.nodePath, Title: title, Status: status,
-		Summary: n.summary, FinishedAt: n.finishedAt,
+		Seq: n.seq, ParentSeq: n.parentSeq, Title: title, Status: status,
+		Summary: n.summary, CreatedAt: n.createdAt,
+		FinishedAt: n.finishedAt, UpdatedAt: n.updatedAt,
 		ChildCount: len(n.children),
 		Children:   make([]PlanNodeView, 0, len(n.children)),
 	}
@@ -194,7 +206,7 @@ func rollupNode(ac *domain.Context, agentID uint64, n *planNode) error {
 	if len(parts) == 0 {
 		return nil
 	}
-	// Children arrive in NodePath order, so a folded summary reads in the order
+	// Children arrive in creation order, so a folded summary reads in the order
 	// the steps were planned, not the order they happened to be written.
 	summary := strings.Join(parts, "; ")
 	if err := UpdateNodeSummaryLocked(ac, agentID, n.id, summary); err != nil {

@@ -11,8 +11,9 @@
 // Kind, and a plan tree hangs off that same key. Update writes no content, so
 // this package's Append is the only way a record gets into a topic.
 //
-// The big methods (AppendArchive, SearchL4, PlanSet, PlanState, Crystallize)
-// stay in the composition root with the domain lock.
+// The big methods (AppendArchive, SearchL4, PlanCreate, PlanNodeAdd,
+// PlanNodeUpdate, PlanState, Crystallize) stay in the composition root with the
+// domain lock.
 package content
 
 import (
@@ -87,7 +88,7 @@ func ValidateAppend(in core.ArchiveSlot) error {
 	if in.EventType != "" {
 		return common.NewError(common.ErrInvalidQuery, "an utterance carries no EventType")
 	}
-	if in.NodePath != "" {
+	if in.NodeSeq != 0 {
 		return common.NewError(common.ErrInvalidQuery, "an utterance hangs on no plan node")
 	}
 	switch in.Role {
@@ -108,7 +109,7 @@ func checkPayload(content string, budget int, what string) error {
 }
 
 // Append writes one record into the topic's content track and returns the Seq it
-// landed on. nodePath lives on the record: a non-empty one names the plan step an
+// landed on. NodeSeq lives on the record: a non-zero one names the plan step an
 // event belongs to, which is how a read attributes an event to a step afterwards.
 //
 // Field ownership is the contract. Of the record a host passes, the ones the
@@ -135,7 +136,7 @@ func Append(ac *domain.Context, agentID, topicID uint64, in core.ArchiveSlot) (u
 	}
 	slot := repo.ArchiveContent{
 		TopicID: topicID, Seq: seq, Kind: in.Kind,
-		Type: core.ContentText, EventType: in.EventType, NodePath: in.NodePath,
+		Type: core.ContentText, EventType: in.EventType, NodeSeq: in.NodeSeq,
 		Text: in.Content, CreatedAt: in.CreatedAt,
 	}
 	if in.Kind == core.KindUtterance {
