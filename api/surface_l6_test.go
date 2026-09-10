@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L6 trajectory and crystallize surface tests.
+// Turn-keyed surface: event enumeration, crystallize, and the plan tree.
 
 package api
 
@@ -37,7 +37,7 @@ func eventsOf(t *testing.T, db *Session, topicID string) []ArchiveSlot {
 	return out
 }
 
-func TestSurfaceL6TrajectoryLifecycle(t *testing.T) {
+func TestSurfaceTrajectoryLifecycle(t *testing.T) {
 	db := openSurfaceDB(t)
 	sessionA := common.FormatHash(common.HashID("lifecycle-a"))
 	sessionB := common.FormatHash(common.HashID("lifecycle-b"))
@@ -81,7 +81,7 @@ func TestSurfaceL6TrajectoryLifecycle(t *testing.T) {
 	}
 }
 
-func TestSurfaceL6Trajectory(t *testing.T) {
+func TestSurfaceTrajectoryAppendAndRead(t *testing.T) {
 	db := openSurfaceDB(t)
 	ctx := context.Background()
 	sessionID := common.FormatHash(common.HashID("session-42"))
@@ -227,7 +227,7 @@ func TestSurfaceUpdateSceneAnchor(t *testing.T) {
 }
 
 // TestSurfaceReservedTopicID locks the all-zero guard: 0 is the value every
-// record leaves its L6 key unset with, so no entry point that addresses a turn —
+// record leaves its turn key unset with, so no entry point that addresses a turn —
 // write or read — may accept it.
 func TestSurfaceReservedTopicID(t *testing.T) {
 	db := openSurfaceDB(t)

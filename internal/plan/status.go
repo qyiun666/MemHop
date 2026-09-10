@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Package plan holds the L6 plan-tree small methods: the status surface and
+// Package plan holds the L5 plan-tree small methods: the status surface and
 // Step, node-path mechanics, the node write steps, and the forest build with its
 // rollup. A plan is keyed by the turn that opened it, so the key itself is
 // parsed by content.ParseTopicID. The big methods (PlanCommit, PlanState) stay in

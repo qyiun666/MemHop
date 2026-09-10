@@ -223,7 +223,7 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if _, err := s.QueryL3Subgraph(gid, nodes[0].IDHash, 1, nil); err != nil {
 		t.Fatalf("session querySubgraph: %v", err)
 	}
-	// L6 trajectory via session.
+	// Turn events via session.
 	traj := internal.FormatID(common.HashID("sess-traj"))
 	if err := s.AppendArchive(traj, event("tool_call", "p", 1_700_000_061_000)); err != nil {
 		t.Fatalf("session appendArchive: %v", err)

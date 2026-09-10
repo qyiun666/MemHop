@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Enumerations of the L0-L6 data model: content-medium, edge-kind and
+// Enumerations of the L0-L5 data model: content-medium, edge-kind and
 // source tags with their string forms. Slot structures live in model.go.
 package core
 

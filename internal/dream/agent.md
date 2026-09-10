@@ -1,7 +1,7 @@
 # internal/dream — 巩固阶段小方法
 
 - **职责**：Dream 流水线的阶段实现：`SceneSet`、两个保留窗阶段
-  （`PruneContentStage` 报 `l4_prune`、`PrunePlanStage` 报 `l6_prune`，共用
+  （`PruneContentStage` 报 `l4_prune`、`PrunePlanStage` 报 `l5_prune`，共用
   `ContentRetention` 这一个 7 天窗口但各读自己的时间戳）、
   `CompressScenes`（每场景一 goroutine；融合组串写——摘要是父话题名下
   `Seq=1`、`Kind=utterance`、`Role=dream` 的一条 L4 内容，`RoleDream` 只由本层
@@ -13,7 +13,7 @@
   常量随阶段在本包。
 - **契约**：所有阶段都在调用方已持域锁的前提下运行（根的 `RunDream`）；
   LLM 经 `ac.LLM`，取消挂 `ctx`（即 `ac.OpCtx`）。两个清扫阶段都是 best-effort：
-  失败记 `slog.Warn` 并进报告，绝不中断 Dream。`l4_prune`/`l6_prune` 排在
+  失败记 `slog.Warn` 并进报告，绝不中断 Dream。`l4_prune`/`l5_prune` 排在
   「有没有场景可压缩」的判断之前，所以无事可巩固的域照样按时清理。
 - **陷阱**：`l2_compress` 全场景失败要上抛错误；L2Meta 新缓存只在 L1 阶段
   成功后装回（L0 蒸馏失败不推翻重建）。

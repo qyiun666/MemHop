@@ -63,7 +63,7 @@ func TestSessionPublicSurface(t *testing.T) {
 		"GetL3", "ListL3", "ImportL3", "QueryL3Nodes", "QueryL3Subgraph",
 		// L4 archives
 		"SearchL4",
-		// L6 trajectory and plans
+		// turn events and the plan tree
 		"ListTrajectorySessions", "Crystallize",
 		"PlanCommit", "PlanState",
 

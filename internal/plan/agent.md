@@ -1,4 +1,4 @@
-# internal/plan — L6 计划树小方法
+# internal/plan — L5 计划树小方法
 
 - **职责**：`PlanStatus` 字符串面与 `StatusToU8`/`StatusToString`/
   `IsTerminalStatus`；`Step`（一次提交的节点侧字段）；`SplitNodePath`；
@@ -6,10 +6,10 @@
   `CommitNode`（状态 + 节点自身字段，留空即继承现值，终态只戳一次
   `FinishedAt`）/`UpdateNodeSummaryLocked`；树构建 `BuildTree`/`Forest`/
   `ToNodeView`/`CountForest`；`RollupTree`（只回填空 Summary，永不改 Status）。
-- **L6 只有计划节点**：一轮的事件是对话原文的同层邻居（L4 的 `Kind=event`），
+- **L5 只有计划节点**：一轮的事件是对话原文的同层邻居（L4 的 `Kind=event`），
   不在本包。一棵树属于打开它的那一轮——键就是那个轮次话题 ID，所以
   `PlanState(topic)` 与 `SearchL4{TopicID, Kind=event}` 用同一个键取两件不同的
-  东西：树来自 L6 节点记录，事件来自 L4 内容轨。节点 ID 由
+  东西：树来自 L5 节点记录，事件来自 L4 内容轨。节点 ID 由
   `HashPlanNode(topicID, nodePath)` 派生，同一个 `NodePath` 在两轮下是两个互不
   相干的节点。本包既不发号也不接受调用方自备的第二个 ID：键的解析与拒零在
   `content.ParseTopicID`，读写两侧共用它。

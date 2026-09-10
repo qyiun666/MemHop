@@ -12,7 +12,7 @@
   `Chat` 接口（组合根 Provider 实现）。
 - `capability/`：memhop-capability/v4 文档类型（`CapabilityImport`/`CapabilityPackageDoc`/`ResourceRef`）、
   解析校验（`BuildPackage`/`ValidatePackage`/`ValidateCard`）与提示渲染
-  （`PromptCard`）——纯计算，无任何持久化。L5 记录层退役（目录即能力）后，
+  （`PromptCard`）——纯计算，无任何持久化。能力记录层退役（目录即能力）后，
   本包是磁盘格式的唯一事实源，经 api 包级函数导出。
 - `profile/`：L0 画像摘要渲染（`Brief`）、关键词分布重建（`Generate`）、
   蒸馏信号写入（`Samples`/`MergeDistill`/`SampleRank`）。

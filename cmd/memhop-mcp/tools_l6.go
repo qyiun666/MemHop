@@ -1,10 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L6 tools: the trajectory enumeration a stateless host needs to find work, plus
+// Turn-trajectory tools: the enumeration a stateless host needs to find work, plus
 // crystallize. A turn's operation events are L4 content of kind event — written by
-// memhop_archive_append and read by memhop_trajectory_read — so what is left in the
-// L6 layer itself is the plan tree, whose write and read faces stay on the Go side.
+// memhop_archive_append and read by memhop_trajectory_read — so what is left of the
+// L5 layer itself is the plan tree, whose write and read faces stay on the Go side.
 
 package main
 
@@ -40,7 +40,7 @@ func registerTrajectoryReadTools(s *mcp.Server, db *memhop.Session) {
 
 	s.AddTool(&mcp.Tool{
 		Name:        "memhop_trajectory_read",
-		Description: "读取本轮的全部操作事件（按 Seq 升序）。本轮的计划节点不在这一读里——它们住在 L6，Go 侧用 PlanState 取。",
+		Description: "读取本轮的全部操作事件（按 Seq 升序）。本轮的计划节点不在这一读里——它们住在 L5，Go 侧用 PlanState 取。",
 		InputSchema: objSchema(map[string]any{
 			"session_id": strProp("轮轨迹 ID（16 位 hex），必填"),
 		}, "session_id"),

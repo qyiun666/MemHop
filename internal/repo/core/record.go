@@ -181,13 +181,13 @@ func CollectAllArchives(engine *StorageEngine, agentID uint64) []ArchiveSlot {
 }
 
 func ReadPlanNode(engine *StorageEngine, agentID, id uint64) (*PlanNode, error) {
-	return readJSON[PlanNode](engine, agentID, id, RecL6PlanNode, "PlanNode")
+	return readJSON[PlanNode](engine, agentID, id, RecL5PlanNode, "PlanNode")
 }
 
 func WritePlanNode(engine *StorageEngine, agentID, id uint64, node *PlanNode) error {
-	return writeJSON(engine, agentID, RecL6PlanNode, id, node, "PlanNode")
+	return writeJSON(engine, agentID, RecL5PlanNode, id, node, "PlanNode")
 }
 
 func CollectAllPlanNodes(engine *StorageEngine, agentID uint64) []PlanNode {
-	return slices.Collect(IterAll[PlanNode](engine, agentID, RecL6PlanNode))
+	return slices.Collect(IterAll[PlanNode](engine, agentID, RecL5PlanNode))
 }

@@ -20,8 +20,9 @@ import (
 // Search reads one scene and opens the turn the host is about to run: it
 // returns the scene record, its depth-1 topics in turn order (the host's
 // context), the domain's L0 profile and the topic id this read minted for the
-// new turn — Update settles that turn into it and the L6 trajectory binds to
-// it. An empty SceneID allocates a fresh scene, anchored to L3ID when given
+// new turn — Update settles that turn into it, and everything the turn records
+// (its L4 content, its L5 plan tree) keys on it. An empty SceneID allocates a
+// fresh scene, anchored to L3ID when given
 // and named by the library; a non-empty SceneID must already exist, so a
 // session always reads the scene it owns.
 func (db *DB) Search(agentID uint64, q SearchQuery) (*SearchResult, error) {

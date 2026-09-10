@@ -167,7 +167,7 @@ type TrajectorySessionSummary struct {
 
 // DreamStage is one pipeline phase's outcome inside a DreamReport.
 type DreamStage struct {
-	Name       string `json:"name"`   // l4_prune/l6_prune/l2_compress/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_distill
+	Name       string `json:"name"`   // l4_prune/l5_prune/l2_compress/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_distill
 	Status     string `json:"status"` // ok | skipped | cancelled | error
 	DurationMs int64  `json:"duration_ms"`
 }

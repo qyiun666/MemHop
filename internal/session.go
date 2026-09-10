@@ -166,7 +166,7 @@ func (s *Session) AppendArchive(topicID string, slot ArchiveSlot) error {
 	return s.db.AppendArchive(s.agentID, topicID, slot)
 }
 
-// ---- L6 trajectory & plan ----
+// ---- turn events (L4) and crystallization ----
 
 // ListTrajectorySessions enumerates the turns of this domain that hold events,
 // each with its event count and last-append time; the returned hex ids feed
@@ -185,7 +185,7 @@ func (s *Session) Crystallize(ctx context.Context, turnID string, existing []Cap
 	return s.db.Crystallize(ctx, s.agentID, turnID, existing)
 }
 
-// ---- L6 plan ----
+// ---- L5 plan tree ----
 
 // PlanCommit advances a plan node to a status and appends the step event.
 // topicID names the turn that opened the plan.

@@ -1,8 +1,8 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L6 plan-node primitives: write one node, batch delete by id or by owning
-// topic, and group a domain's nodes into per-topic aggregates. L6 holds nothing
+// L5 plan-node primitives: write one node, batch delete by id or by owning
+// topic, and group a domain's nodes into per-topic aggregates. L5 holds nothing
 // but plan nodes — a turn's events are L4 content beside its dialogue originals.
 // The tree view and the retention sweep go through the domain's PlanCache in the
 // internal layer, which owns every plan write and delete under the domain lock.

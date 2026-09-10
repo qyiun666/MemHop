@@ -55,7 +55,7 @@ func TestTypedReadersRejectForeignRecordType(t *testing.T) {
 	}
 }
 
-// A topic's L4 content and its L6 plan tree are addressed by the same topic id
+// A topic's L4 content and its L5 plan tree are addressed by the same topic id
 // and nothing else, so the two newest record types have the most to lose from a
 // reader that ignored the frame type: decoding a node into an archive slot and
 // writing it back would convert a live tree node into a content record.

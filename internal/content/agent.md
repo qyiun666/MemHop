@@ -8,13 +8,13 @@
   `MaxEventPayload`（单事件 4 KiB）/`MaxUtterancePayload`（单条原文 64 KiB）/
   `MaxCrystallizePayload`（结晶读侧的 128 KiB 预算）。
 - **为什么叫 content 而不叫 trajectory**：一轮的对话原文与操作事件同住 L4，只差一个
-  `Kind`；计划节点挂在同一个话题键上但住在 L6。本包服务的是「内容与它的键」，
-  不是七层里的某一层。
+  `Kind`；计划节点挂在同一个话题键上但住在 L5。本包服务的是「内容与它的键」，
+  不是六层里的某一层。
 - **契约**：一个话题的键就是 Search 为那一轮铸出的话题 ID；该轮的原文、事件与它开出
   的计划树同住这个键下。`Update` 不写内容，所以 `Append` 是一条记录进入话题的
   唯一途径。大方法（AppendArchive/SearchL4/PlanCommit/PlanState/Crystallize）在根里
   持域锁后调用本包。Crystallize 只做纯提炼（`Read(event)` → `TrimByBudget` →
-  `llmops.Crystallize`），候选列表原样返回宿主：L5 没有记录层（目录即能力），
+  `llmops.Crystallize`），候选列表原样返回宿主：能力面没有记录层（目录即能力），
   落盘/去重/激活全归宿主，本包没有结晶写步。
 - **字段归属**：`Kind` 决定采信哪一组。原文侧照收宿主的 `Role`/`ContentType`；
   事件侧 `Kind` 恒为 event、`ContentType` 恒为 text、`Role` 恒为 0——说了发生了什么

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L0-L6 data models for the MemHop memory database.
+// L0-L5 data models for the MemHop memory database.
 package core
 
 import (
@@ -230,7 +230,7 @@ const (
 	StatusRunning    uint8 = 4
 )
 
-// PlanNode is one node of an L6 plan tree. L6 holds nothing but these: a turn's
+// PlanNode is one node of an L5 plan tree. L5 holds nothing but these: a turn's
 // events live in L4 beside its dialogue originals. TopicID is the turn topic
 // that opened the tree and NodePath the host's dotted address inside it, so
 // naming the turn is all a read needs to get its whole tree back.

@@ -74,7 +74,7 @@ const (
 )
 
 // PlanStatus* are the string lifecycle values PlanCommit accepts and
-// PlanState emits. A node's status is only ever expressed this way: the L6
+// PlanState emits. A node's status is only ever expressed this way: the L4
 // event record carries no status field, because every write path assigns the
 // node's own state separately from the events bound to it.
 const (

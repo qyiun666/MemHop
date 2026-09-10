@@ -25,7 +25,7 @@ host process
 | **Single instance** | One `.meh` file is locked exclusively; a second `OpenMulti` on the same file fails. Every call runs through a `Session` bound to one agent domain. |
 | **Serial calls** | Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`. The host needs no external queue. `Lock()`/`Unlock()` remain for host-critical sections around raw file access — they serialize **the default domain only** and panic on a closed DB (`Unlock` on a closed DB is a no-op). |
 | **LLM on the write path** | `Update`, `Dream` and `Crystallize` call the LLM and fail when it is down (no silent degradation) — `Update` exactly once per turn. `Search` never calls it: a read cannot be blocked by the LLM. |
-| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: the library issues every id and a host only echoes it back — there is nothing to convert. `api.DefaultAgentID` names the implicit agent domain, and the turn topic id `Search` returns is what addresses that turn's L6 trajectory and the plan tree it opened. |
+| **ID shape** | All external IDs are 16-char lowercase hex strings (xxhash64). Treat them as opaque: the library issues every id and a host only echoes it back — there is nothing to convert. `api.DefaultAgentID` names the implicit agent domain, and the turn topic id `Search` returns is what addresses that turn's L4 content and the L5 plan tree it opened. |
 | **Timestamps** | Unix milliseconds everywhere; `<= 0` is `ErrInvalidQuery`. |
 
 ---
@@ -372,7 +372,7 @@ id (a missing id yields an empty slice, a malformed one `ErrInvalidQuery`). An e
 query returns the domain's whole content set — bound it with a time range or `Limit`
 on a large domain.
 
-### L5 capabilities (directory-as-capability — the host owns the files)
+### Capabilities (directory-as-capability — the host owns the files)
 
 The engine **stores no capability records**. The single source of truth is the host's own capability directory (e.g. `plug/<package>/capability.json` next to the `.meh` file): the host scans it, projects cards into its tool surface, and restart-picks-up changes; activating a draft is promoting its file. The library keeps the format itself, exported as package-level functions:
 
@@ -402,7 +402,7 @@ err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
 // `NodePath` is what binds an event to a step — see the plan surface below;
 // leave it empty for a plain turn event.
 
-// L6 → capability candidates: distill one turn's trajectory against the
+// Turn events → capability candidates: distill one turn's trajectory against the
 // host's current catalog (capped at 128KB payload, oldest events dropped).
 res, err := db.Crystallize(ctx, turnIDHex, existingCards)
 // existingCards []api.CapabilityImport — the host's current catalog, read
@@ -430,9 +430,9 @@ like a complete one.
 `ListTrajectorySessions` enumerates the turns that hold events, so a host can find
 crystallization candidates without remembering which ids it logged.
 
-### L6 plan tree (Go host surface)
+### L5 plan tree (Go host surface)
 
-A plan tree belongs to the turn that opened it: **the L6 key is that turn's
+A plan tree belongs to the turn that opened it: **the L5 key is that turn's
 topic id** — the one `Search` hands back — and it addresses the turn's nodes, while
 the same key addresses the turn's content in L4. The host assigns each node a **dotted `NodePath`** (`"1"`,
 `"1.2.1"`) and holds nothing else: there is no plan id to mint, and
@@ -440,12 +440,12 @@ the same key addresses the turn's content in L4. The host assigns each node a **
 
 | Call | Meaning |
 |---|---|
-| `db.AppendArchive(topicID, ev)` with a non-empty `ev.NodePath` | record a step event against that node, creating the node chain as pending if missing — this is also how a step is added. `NodePath` **shapes the tree itself**: every missing ancestor segment is created as pending, so a typo in a path opens a second tree, and L6 exposes no node-delete call (a stale tree is reclaimed by the retention window once the turn that opened it falls out of it). `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `SearchL4` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
+| `db.AppendArchive(topicID, ev)` with a non-empty `ev.NodePath` | record a step event against that node, creating the node chain as pending if missing — this is also how a step is added. `NodePath` **shapes the tree itself**: every missing ancestor segment is created as pending, so a typo in a path opens a second tree, and L5 exposes no node-delete call (a stale tree is reclaimed by the retention window once the turn that opened it falls out of it). `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `SearchL4` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
 | `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "research", Type: "step", Status: api.PlanStatusDone, Summary: s})` | commit one step: advance the node's status, append its event, and roll `done` children's summaries up into their parent (a parent turns `done` only when the host commits it). A `nodePath` missing along the dotted path is created as pending — this is how a step is added. A blank `Title`/`Type`/`Summary` keeps what the node already holds; an unknown `Status` is refused before the tree moves |
 | `db.PlanState(topicID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`) — also the restart recovery path |
 
 `0000000000000000` is reserved (it is the value a record leaves its key unset
-with) and every L6 entry rejects it — reads included.
+with) and every L5 entry rejects it — reads included.
 
 ---
 

@@ -102,7 +102,7 @@ func (db *DB) lockAgent(agentID uint64) (*domain.Context, error) {
 	return ac, nil
 }
 
-// lockSession is the shared prologue of the L6 turn-keyed operations: take
+// lockSession is the shared prologue of the L5 turn-keyed operations: take
 // the domain lock, then parse the topic id of the turn. On a parse failure
 // the lock is released before returning, so callers add `defer ac.Mu.Unlock()`
 // only after the error check. It returns the locked context and the parsed

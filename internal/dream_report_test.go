@@ -28,7 +28,7 @@ func TestDreamReportContract(t *testing.T) {
 	}
 	if rep.ConsolidatedScenes != 0 || rep.L2TopicsCompressed != 0 ||
 		len(rep.Stages) != 2 || rep.Stages[0].Name != "l4_prune" || rep.Stages[0].Status != "ok" ||
-		rep.Stages[1].Name != "l6_prune" || rep.Stages[1].Status != "ok" {
+		rep.Stages[1].Name != "l5_prune" || rep.Stages[1].Status != "ok" {
 		t.Fatalf("noop report = %+v, want zero counts and the two ok prune stages", rep)
 	}
 

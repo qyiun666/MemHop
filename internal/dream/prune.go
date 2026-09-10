@@ -38,7 +38,7 @@ func PruneContentStage(ac *domain.Context, agentID uint64, rep *core.DreamReport
 // PrunePlanStage sweeps plan nodes past the window. A plan is exempt only while
 // it BOTH holds a non-Done node AND saw activity inside the window: an in-flight
 // task must not lose its tree mid-task, but once a plan has been silent past the
-// window it is abandoned and sweeps like any other record, so L6 stays bounded.
+// window it is abandoned and sweeps like any other record, so L5 stays bounded.
 //
 // Nodes are swept on their own clock and touch no content: a step expiring takes
 // the tree with it and leaves the turn's events exactly where they are.
@@ -81,5 +81,5 @@ func PrunePlanStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
 			slog.Info("dream: plan nodes pruned", "agent", common.FormatHash(agentID), "nodes", len(doomed))
 		}
 	}
-	AppendStage(rep, "l6_prune", start, err)
+	AppendStage(rep, "l5_prune", start, err)
 }

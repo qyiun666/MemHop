@@ -199,7 +199,7 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // calls holding the domain lock.
 //
 // NodePath shapes the tree itself: each missing segment of the dotted path is
-// created as pending, so a mistyped segment opens a second tree, and L6 exposes no
+// created as pending, so a mistyped segment opens a second tree, and L5 exposes no
 // node-delete call — a stale tree goes only when its turn falls out of the retention
 // window.
 //
@@ -248,10 +248,10 @@ func (s *Session) PlanState(topicID string) (*PlanTree, error) {
 
 // Dream runs the consolidation pass — the sleep analogue: it fuses and compresses
 // topics (L2), rebuilds and decays the L1 graph, distills the L0 profile, and
-// prunes trajectory events past their retention window. Pass a scene id to
-// consolidate one scene, or "" for every scene of the domain. It is the only
-// path that prunes L6 events and rebuilds L1, so a domain that stops being
-// written to still needs one Dream to shrink.
+// prunes content (L4) and plan nodes (L5) past their retention window. Pass a
+// scene id to consolidate one scene, or "" for every scene of the domain. It is
+// the only path that prunes either layer or rebuilds L1, so a domain that stops
+// being written to still needs one Dream to shrink.
 //
 // It contacts the LLM and runs inside the domain lock: while it works, every
 // other call on this agent domain waits. The report counts what this pass did;

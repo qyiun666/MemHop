@@ -21,9 +21,9 @@ const RecordHeaderSize = 26
 const FlagDeleted uint8 = 0x01
 
 // Record type constants. 0x0E (a trajectory event) is retired now that a
-// turn's events live in L4; 0x0F came free with the retired L5 capability layer
-// and is in use again for plan nodes, which is safe because files carrying the
-// old 0x0F are rejected at Open.
+// turn's events live in L4. 0x0F carries plan nodes; the number came free when the
+// engine stopped storing capability records, and files written under that older
+// payload are rejected at Open.
 const (
 	RecL0Profile   uint8 = 0x01
 	RecL1SceneNode uint8 = 0x02
@@ -34,7 +34,7 @@ const (
 	RecL3GraphEdge uint8 = 0x07
 	RecL4Archive   uint8 = 0x08
 	RecL3GraphSlot uint8 = 0x0B
-	RecL6PlanNode  uint8 = 0x0F // one node of an L6 plan tree
+	RecL5PlanNode  uint8 = 0x0F // one node of an L5 plan tree
 	// RecAgentRegistry marks an agent's registration record: idHash equals
 	// the agentID itself and data carries the agent name JSON. One record
 	// per agent, stored inside the agent's own domain; DeleteAgent
@@ -46,11 +46,10 @@ const (
 // compatibility path and legacy callers.
 const DefaultAgentID uint64 = 0
 
-// SharedPoolAgentID is the reserved file-wide domain that holds the shared
-// record pools: the L3 knowledge graph and the L5 capability cards. One file
-// hosts a single pool of each that every agent domain reads and writes. It is
-// never handed out as a tenant, never listed, and cannot be deleted or bound
-// to a Session.
+// SharedPoolAgentID is the reserved file-wide domain that holds the shared record
+// pool: the L3 knowledge graph. One file hosts a single pool that every agent
+// domain reads and writes. It is never handed out as a tenant, never listed, and
+// cannot be deleted or bound to a Session.
 const SharedPoolAgentID uint64 = 0x4C33000000000000 // ASCII "L3"
 
 func EncodeRecord(agentID uint64, recordType, flags uint8, idHash uint64, data []byte) []byte {

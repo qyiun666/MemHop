@@ -3,7 +3,7 @@
 
 // Package llmops hosts the LLM-assisted cognitive capabilities of the
 // memory engine: keyword extraction, L2 consolidation, L1->L0 distillation
-// and L6->L5 crystallization. Each is a self-contained prompt contract plus
+// and capability crystallization. Each is a self-contained prompt contract plus
 // response parser; the transport is injected as Chat, so the package never
 // depends on the composition root or a specific provider.
 package llmops

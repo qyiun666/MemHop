@@ -24,7 +24,7 @@
 | **单实例** | 一个 `.meh` 文件被排他锁独占；同一文件不能开第二个 `OpenMulti`。每次调用都跑在绑定某个 agent 域的 `Session` 上 |
 | **串行调用** | 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行；宿主无需自行排队。`Lock()`/`Unlock()` 保留给宿主对文件做旁路写入的关键区——只串行化**默认域**，其他域照常运行；对已关闭的 DB 调用 `Lock()` 会 panic（此时 `Unlock()` 为空操作） |
 | **LLM 只在写路径** | `Update` / `Dream` / `Crystallize` 会调 LLM，不可用即报错（不降级），`Update` 每轮恰好一次；`Search` 一次都不调——读路径永不被 LLM 拖住 |
-| **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；ID 一律由库发号，宿主按不透明字符串原样回传即可，没有任何进制转换要做。`api.DefaultAgentID` 是隐式域；`Search` 返回的轮次话题 id 就是该轮 L6 轨迹与它所开计划树的寻址键。 |
+| **ID 形态** | 所有对外 ID 均为 16 位小写 hex 字符串（xxhash64）；ID 一律由库发号，宿主按不透明字符串原样回传即可，没有任何进制转换要做。`api.DefaultAgentID` 是隐式域；`Search` 返回的轮次话题 id 就是该轮 L4 内容与 L5 计划树的寻址键。 |
 | **时间戳** | 一律 Unix 毫秒；`<= 0` 视为非法参数（`ErrInvalidQuery`） |
 
 ---
@@ -301,7 +301,7 @@ arcs, err := db.SearchL4(api.L4Query{
 `L4Query{IDs: []string{id}}` 取代原来的单条 getter（ID 不存在返回空列表，格式不合法返回 `ErrInvalidQuery`）；
 空查询返回该域全部原文——域大了请先加时间范围或 `Limit`，否则这就是文件里的每一条原文。
 
-### L5 能力（目录即能力——文件归宿主）
+### 能力（目录即能力——文件归宿主）
 
 引擎**不存储任何能力记录**。能力卡的唯一事实源是宿主自有的能力目录（如 `.meh` 同目录的 `plug/<包>/capability.json`）：宿主自扫自装配、变更重启生效；草稿转正 = 文件转正。库保留格式本身，以包级函数导出：
 
@@ -353,17 +353,17 @@ sessions, err := db.ListTrajectorySessions()
 `ListTrajectorySessions` 枚举记了事件的轮次，宿主因此不必记住自己给哪些轮写过日志。
 
 
-### L6 计划树（Go 宿主面）
+### L5 计划树（Go 宿主面）
 
 该轮的节点由它寻址，同一键下的内容（原文与事件）住在 L4。
 
 | 调用 | 说明 |
 |---|---|
-| `db.AppendArchive(topicID, ev)`（`ev.NodePath` 非空） | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链），这也是**追加一步**的入口。`NodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且**它自己决定树形**：路径上缺失的每一段都会被建成 pending，所以打错一段就会多开一棵树，而 L6 不提供删节点的接口（旧树等所属轮次掉出保留窗由 Dream 回收）。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `SearchL4` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
+| `db.AppendArchive(topicID, ev)`（`ev.NodePath` 非空） | 把步骤事件绑到该节点（节点缺失时按 pending 逐级建链），这也是**追加一步**的入口。`NodePath` 是**点号分隔**（`"1"`、`"1.2.1"`）且**它自己决定树形**：路径上缺失的每一段都会被建成 pending，所以打错一段就会多开一棵树，而 L5 不提供删节点的接口（旧树等所属轮次掉出保留窗由 Dream 回收）。`EventType` **由宿主自定**，与裸轮次事件同口径——引擎不按它分支，只在 `SearchL4` 与结晶 prompt 里原样回显，空值即 `ErrInvalidQuery`。惯例名（给读者的共享词表，不是许可集）：`plan_step`、`llm_request`、`llm_output`、`tool_call`、`tool_result`、`subagent_spawn`、`subagent_done`、`context_inject`、`ask_user`、`user_reply` |
 | `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "调研", Type: "step", Status: api.PlanStatusDone, Summary: s})` | 提交一步：推进节点状态、追加该步事件，`done` 子节点摘要自底向上折叠进父节点（父节点转为 `done` 只由宿主显式提交）。`nodePath` 沿点号路径缺失的节点按 pending 建出来——这就是追加一步的入口。`Title`/`Type`/`Summary` 留空即继承现值；未知 `Status` 在动树之前就被拒 |
 | `db.PlanState(topicID)` | 读森林视图（`PlanTree.Roots` + `DoneCount` / `TotalCount`）——重启恢复计划树也走这个 |
 
-`0000000000000000` 是保留值（记录未赋键时的值），L6 的读写入口一律拒绝它。
+`0000000000000000` 是保留值（记录未赋键时的值），L5 的读写入口一律拒绝它。
 
 ---
 

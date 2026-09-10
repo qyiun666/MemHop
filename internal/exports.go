@@ -131,7 +131,7 @@ const (
 	KindEvent     = core.KindEvent
 )
 
-// ---- L6 plan status constants (read side; the write surface is a string) ----
+// ---- L5 plan status constants (read side; the write surface is a string) ----
 
 const (
 	StatusPending    = core.StatusPending

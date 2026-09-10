@@ -477,7 +477,7 @@ func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	}, "1")); err != nil {
 		t.Fatal(err)
 	}
-	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL6PlanNode); n != 1 {
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL5PlanNode); n != 1 {
 		t.Fatalf("plan nodes = %d, want the single node the path created", n)
 	}
 	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1"))

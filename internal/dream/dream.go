@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package dream holds the consolidation pipeline's stage small methods:
-// scene-set resolution, the L6 retention prune, the per-scene LLM
-// compression with group apply/rollback, the L2Meta rebuild and L1
-// sync/edges/rebuild/decay stages, the L0 distillation and the usage
-// feedback. The RunDream big method keeps the domain lock and composes the
+// scene-set resolution, the two retention prunes (L4 content, L5 plan nodes),
+// the per-scene LLM compression with group apply/rollback, the L2Meta rebuild
+// and L1 sync/edges/rebuild/decay stages, and the L0 distillation. The
+// RunDream big method keeps the domain lock and composes the
 // stages; the background trigger stays in the composition root.
 
 package dream

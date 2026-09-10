@@ -99,7 +99,7 @@ type TopicSlot struct {
 // SearchResult is the read surface of one scene: the scene record, its
 // depth-1 topics in turn order, the domain's L0 profile, and NewTopicID — the
 // topic this read opened for the turn the host is about to run. Update settles
-// that turn into it, and the L6 trajectory writes key on it.
+// that turn into it, and the L4 records and L5 plan tree of that turn key on it.
 type SearchResult struct {
 	Profile      ProfileSlot `json:"profile"`
 	ProfileBrief string      `json:"profile_brief"`

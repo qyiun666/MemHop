@@ -22,7 +22,7 @@ import (
 )
 
 // Context is the per-agent business state: the L2Meta topic cache, the L4
-// content mirror, the L6 plan cache, Dream bookkeeping and its own lock.
+// content mirror, the L5 plan cache, Dream bookkeeping and its own lock.
 // Same-agent operations are serialized on Mu (inheriting the single-instance
 // serial contract); different agents run in parallel. Callers reach every field
 // only while holding Mu (the composition root takes it before dispatching).
@@ -36,7 +36,7 @@ type Context struct {
 
 	L2Meta        *index.L2MetaIndex  // L2 topic metadata cache (serves the scene read)
 	L4            *index.L4Index      // content each topic owns: utterances AND events
-	Plans         *PlanCache          // L6 plan tree per topic (no engine scan per op)
+	Plans         *PlanCache          // L5 plan tree per topic (no engine scan per op)
 	DreamInFlight map[uint64]struct{} // scenes with a scheduled background Dream
 
 	LastActiveAt atomic.Int64 // Unix ms of the last context access (idle sweep)

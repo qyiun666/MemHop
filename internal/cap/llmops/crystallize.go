@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// crystallize.go: L6→L5 capability crystallization call point — the
+// crystallize.go: capability crystallization call point — the
 // LLM extracts reusable capability cards from an operation trajectory and
 // compares them against the existing catalog (create / reuse / merge).
 
@@ -32,7 +32,7 @@ type CrystallizeOutput struct {
 	Capabilities []CrystallizeCapability `json:"capabilities"`
 }
 
-const systemCrystallize = `You analyze an agent's operation trajectory and extract reusable L5 capabilities.
+const systemCrystallize = `You analyze an agent's operation trajectory and extract reusable capabilities.
 
 Rules:
 - Only extract capabilities that are clearly reusable (appear at least twice or are obviously generic procedures)
@@ -69,7 +69,7 @@ Output ONLY valid JSON in this exact shape (no markdown, no code fences):
   ]
 }`
 
-// Crystallize extracts reusable L5 capabilities from a trajectory event
+// Crystallize extracts reusable capabilities from a trajectory event
 // batch. Existing capabilities (the host's own catalog) are included in the
 // prompt so the model can reuse or merge instead of duplicating.
 func Crystallize(ctx context.Context, chat Chat, events []core.ArchiveSlot, existing []capability.CapabilityImport) (*CrystallizeOutput, error) {
@@ -92,7 +92,7 @@ func buildCrystallizePrompt(events []core.ArchiveSlot, existing []capability.Cap
 	for _, ev := range events {
 		fmt.Fprintf(&b, "[seq=%d type=%s] %s\n", ev.Seq, ev.EventType, ev.Content)
 	}
-	b.WriteString("\n# Existing L5 capabilities\n")
+	b.WriteString("\n# Existing capabilities\n")
 	if len(existing) == 0 {
 		b.WriteString("(none)\n")
 	} else {

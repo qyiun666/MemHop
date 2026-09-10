@@ -16,7 +16,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
                 internal/cap 纯功能；internal/repo(+core) 连数据库内核的功能层
 ```
 
-- 大方法（`Search`/`Update`/`RunDream`/`Crystallize`/L0-L6 各面/
+- 大方法（`Search`/`Update`/`RunDream`/`Crystallize`/L0-L5 各面/
   `CreateAgent` 等）只做：`db.lockAgent` 取域 → 顺序调小方法 → 组装返回。
   细节逻辑（循环、重试、缓存维护、ID 铸造、回滚）一律在小方法包。
 - 小方法包之间互不 import，一条都不例外（事件载荷预算原先由 `plan` 读
@@ -32,9 +32,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 | `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
 | `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/PruneParentChild/DeleteTopics |
 | `turn` | 轮次归属：Targets（解析 Update 的两个 hex 入参）、SettleTarget（可沉淀的轮次范围）、ReadProfile（Search 的 L0 读面）；本包不碰内容 |
-| `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l6_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
+| `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l5_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
-| `plan` | L6 计划树机制（一棵树归属于打开它的轮次；L6 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、SplitNodePath、EnsureNode/CommitNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
+| `plan` | L5 计划树机制（一棵树归属于打开它的轮次；L5 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、SplitNodePath、EnsureNode/CommitNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
 | `content` | 话题内容与键：ParseTopicID（键的解析与拒零，读写两侧共用）、ValidateAppend（两种 Kind 各自的写入契约）、Append（写一条内容的唯一实现，必要时跨 Kind 分配 Seq）、Read（按 Kind 读回）、RenderForDistill（把一个话题的原文渲染成提炼读的转录）、TrimByBudget、MaxEventPayload/MaxUtterancePayload/MaxCrystallizePayload |
 
 ## agentContext（domain.Context）域级锁纪律
@@ -44,10 +44,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    方法；引擎自带的锁在内层，顺序不可颠倒。同 agent 串行、跨 agent 并行。
    `contextFor` 对非默认域校验注册表：未注册/已删除的 agentID 直接
    `ErrAgentNotFound`，域永不复活；与删除对撞的陈旧句柄由锁内墓碑复检拒绝。
-   L6 族统一走 `db.lockSession(agentID, turnID)`（lockAgent +
+   L5 族统一走 `db.lockSession(agentID, turnID)`（lockAgent +
    `content.ParseTopicID`，解析失败先解锁）：一个话题键同时寻址两样东西——
    它的内容（L4 的原文与事件，`SearchL4{TopicID, Kind}` 按 Kind 取）与它开出的
-   计划树（L6 节点，`PlanState(topic)` 给树）。
+   计划树（L5 节点，`PlanState(topic)` 给树）。
    门面侧的会话准入策略在 `CheckSession`。L3 的方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
    保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent
@@ -70,21 +70,21 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 5. **DeleteAgent 顺序**：先摘租户映射（断绝新 `contextFor`）→
    `destroyContext`（取消 `ac.OpCtx`）→ `ac.Deleted` 墓碑（`lockAgent` 拿锁后
    复检，与删除对撞的在飞操作被拒）→ `ac.Mu` 屏障等待在飞操作 → 引擎域删除。
-6. **planCache 域内索引**：L6 计划聚合缓存 `ac.Plans`（`domain` 包）
+6. **planCache 域内索引**：L5 计划聚合缓存 `ac.Plans`（`domain` 包）
    **不内置锁**，完全依赖 `ac.Mu` 串行（区别于自带 RWMutex 的 `L4Index`）。
    所有计划写路径（节点增删改、Dream 清理）必须先取 `ac.Mu` 再同步缓存；
    `domain.NewContext` 构建，idle 重建时一并重建。**一个键算不算一棵活树的
    判据是「键下还有节点」**——`repo.CollectPlanNodes` 与 `PlanCache` 用同一条，
    事件不再进这张缓存。每份镜像各有一个属主，不要交叉补写：`ac.Plans` 由
-   `RemoveTopicsFromIndices` 与 `l6_prune` 摘，`ac.L4` 由删内容的那条路径
+   `RemoveTopicsFromIndices` 与 `l5_prune` 摘，`ac.L4` 由删内容的那条路径
    （`DeleteTopicArchives` / `DropExpiredArchives`）在**磁盘删成功后**摘。
    漏摘 `Plans` 与漏摘 `L4` 的代价不对称：后者让该话题每次读都报 `ErrIO`
    直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
-7. **L6 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
-   合法的 L6 键。读写两侧一律经 `content.ParseTopicID` 拒它
+7. **L5 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
+   合法的 L5 键。读写两侧一律经 `content.ParseTopicID` 拒它
    （`AppendArchive`/`PlanCommit`/`PlanState`/`Crystallize`）——只在写侧拒，
    全零键下就会攒出永远读不出的记录。
-8. **计划清理有界**：dream 的 `l6_prune` 只豁免「持非 done 节点 **且** 窗口内
+8. **计划清理有界**：dream 的 `l5_prune` 只豁免「持非 done 节点 **且** 窗口内
    仍有节点活动」的计划，其中活动只看节点自己的 `UpdatedAt`；宿主中断或放弃而
    静默超 `ContentRetention` 的计划照常清理。豁免保住的是**整棵活树**（含早已
    不更新的 done 父节点），不是「有事件在写所以树还活着」——事件住在 L4，
@@ -211,8 +211,8 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    Title/PlanType/Summary 继承节点现值（空 Status 会被 `StatusToU8` 拒——状态是
    每次必须给的危害字段，不是"不改"），宿主推进一步不必先读旧树；显式传入的值
    仍然覆盖。`nodePath` 自己决定树形：`EnsureNode` 沿点号路径把缺失段一律建成
-   pending，所以**打错一段路径会凭空多出一棵树**，而 L6 没有任何删节点入口
-   （作废靠换轮次键，旧树由 `l6_prune` 的保留窗回收）——这是选「提交即追加」而
+   pending，所以**打错一段路径会凭空多出一棵树**，而 L5 没有任何删节点入口
+   （作废靠换轮次键，旧树由 `l5_prune` 的保留窗回收）——这是选「提交即追加」而
    弃「整树 diff 同步」时付出的代价，写进门面注释与 GUIDE 而不是留给宿主踩。
 13. **破坏性写入先验 id**：`MergeScenes` 会删记录，所以主/次每个 id 都必须
    仍是一个场景（`requireScenes` 逐个回读比对），未知 id 报 `ErrNotFound`；
@@ -234,4 +234,4 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 
 - 关键词提炼无本地兜底：LLM 输出不可解析即 `ErrLLM`（这一轮不产生话题），`internal` 根不初始化任何分词器。一轮的提炼与 Dream 的融合提炼共用 `llmops.ExtractKeywords`——它只吃一段文本，不认识记录结构。
 - `ImportL3` 的批校验在 composition root 完成（Title/Domain 必填、mode 不接受空值），拒批即一字节不写；`result.Errors` 只表示单条存储失败。
-- 宿主面测试覆盖 25 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L6 一轮一键的树、Model A 折叠与节点字段回读、事件键与纯提炼、重开后读回）、`api_interface_l5l6_test.go`（一轮一键下原文与事件各归各的读法、纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。
+- 宿主面测试覆盖 25 个会话方法 + 8 个 `MultiAgentDB` 方法，按层分文件：`test/api_interface_scene_test.go`（L2 场景生命周期）、`api_interface_plan_test.go`（L5 一轮一键的树、Model A 折叠与节点字段回读、事件键与纯提炼、重开后读回）、`api_interface_l5l6_test.go`（一轮一键下原文与事件各归各的读法、纯结晶面）、`api_interface_multi_test.go`（租户隔离与 `CompactTo`）。这些用例只使用库铸造并回传给宿主的 id。

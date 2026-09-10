@@ -1,7 +1,7 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// L6 big methods of the composition root. L6 records one thing per agent turn: the
+// L5 big methods of the composition root. L5 records one thing per agent turn: the
 // plan tree keyed by the topic id Search issues for it. The event track that shares
 // that key is L4 content — written by AppendArchive and read back through SearchL4
 // with a Kind condition — so this file keeps only the enumeration no L4 read gives
