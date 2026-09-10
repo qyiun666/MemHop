@@ -1,7 +1,7 @@
 # MemHop Host Integration Guide (Go API)
 
 > How to embed MemHop **directly as a Go module** (no MCP server) from your host
-> process. Applies to **v1.6.1**. Module path `github.com/qyiun666/MemHop` — you
+> process. Applies to **v1.6.3**. Module path `github.com/qyiun666/MemHop` — you
 > only ever import the `api` package.
 
 ---
@@ -150,34 +150,68 @@ No `ctx` parameter — the read path holds no cancellable LLM or network work �
 | `ProfileBrief` | bounded compact profile digest | light per-turn injection; fetch full `Profile` only when needed |
 | `Scene` | the scene just read (`SceneID` / `SceneName` / `L3ID` / `TopicCount`) | keep `Scene.SceneID` — Update and later reads use it |
 | `Topics` | the scene's depth-1 topics in user-timestamp order, each with its `FusedKeywords` | **the memory injected into this turn's prompt**; originals are addressed by a turn's own topic id — `SearchL4(L4Query{TopicID})` |
-| `NewTopicID` | the topic this read opened for the turn about to run | hand it to `Update` and to `AppendTrajectory` — one turn, one id |
+| `NewTopicID` | the topic this read opened for the turn about to run | hand it to `AppendArchive` and to `Update` — one turn, one id |
 
 An unknown `SceneID` returns `ErrNotFound` (the library will not create a scene you asked to read); an empty one creates a scene and returns its id.
 
-### 6.2 Turn end: `Update(TurnUpdate)`
+### 6.2 During the turn: `AppendArchive(topicID, ArchiveSlot)`
+
+The host records the turn itself, one call per record, under the topic id `Search`
+issued. `AppendArchive` is the only way content enters a topic.
 
 ```go
-topicID, err := db.Update(api.TurnUpdate{
-    SceneID:   sceneIDHex,    // must already exist (created by Search)
-    TopicID:   topicIDHex,    // required: Search's NewTopicID — the topic this turn lives in
-    UserText:  userRawText,   // required; a non-text user slot puts its media path/URL here
-    UserTS:    userTS,        // Unix milliseconds, > 0
-    UserType:  api.ContentText, // optional: image/video/document/audio/code/other
-    AgentText: agentReply,    // required
-    AgentTS:   agentTS,       // not earlier than UserTS
-    AgentType: api.ContentText, // optional, same set as UserType
+err := db.AppendArchive(topicIDHex, api.ArchiveSlot{
+    Kind:      api.KindUtterance, // or api.KindEvent
+    Seq:       1,                 // 0 lets the library allocate the slot
+    Role:      api.RoleUser,      // utterance only: RoleUser / RoleAgent / RoleSystem
+    ContentType: api.ContentText, // utterance only; a non-text slot carries its media path/URL in Content
+    Content:   userRawText,       // required
+    CreatedAt: userTS,            // Unix milliseconds, > 0
+})
+// An event names itself instead of taking a speaker, and may hang on a plan step:
+err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
+    Kind:      api.KindEvent,
+    EventType: "tool_call",       // event only; free-form, no whitelist
+    NodePath:  "1.1",             // optional: creates that step as pending
+    Content:   `{"tool":"grep"}`,
+    CreatedAt: time.Now().UnixMilli(),
 })
 ```
 
-Both content types default to `ContentText` (their zero value), so a host that never touches them records exactly what it recorded before. This is the engine's only L4 write path, so it is also the only place a turn's content type gets declared — read it back through `ArchiveSlot.ContentType`, the `L4Query.Type` filter, or `SceneContext`'s `Messages[].Type`.
+`IDHash` and `ContextID` are ignored on the way in: the topic comes from the
+argument and the record id follows from `(topic, Seq)`, which is what lets a host
+read a record back, change one field and write it to the slot it came from. `Seq: 0`
+allocates above every held slot, skipping 1 and 2, which are the dialogue's; naming a
+held `Seq` **overwrites** it rather than erroring — across kinds too. That is the whole
+replay story: a retried turn rewrites its slots instead of accumulating versions. What
+a replay does not do is reclaim a slot it stopped filling, so a withdrawn line stays
+until `DeleteTopic` or the retention window.
 
-One call turns the exchange into its topic: two L4 archives (`RoleUser` + `RoleAgent`) plus keywords from a single distillation, and it returns the same 16-hex id it was given. Settling a topic id twice **rewrites** that turn instead of duplicating it (the archives hash from the topic id and their text), so retrying a timed-out `Update` is safe.
+The refusals, all of them before anything is written (including before a `NodePath`
+creates a step): an undefined `Kind`, empty `Content`, `CreatedAt <= 0`, an undefined
+`ContentType`, an event with no `EventType`, an utterance carrying an `EventType` or a
+`NodePath`, the consolidation role `3` (the library marks its own summaries with it),
+and content over budget — 4 KiB per event, 64 KiB per utterance. Over budget is
+**refused, never truncated**: a shortened record reads back exactly like a complete one.
 
-Key property: **distillation runs before any write.** A failed LLM call or an empty extraction errors out and leaves nothing behind — never a half-recorded turn. Unknown scene → `ErrNotFound`; malformed texts/timestamps → `ErrInvalidQuery`.
+### 6.3 Turn end: `Update(sceneID, topicID)`
+
+```go
+err := db.Update(sceneIDHex, topicIDHex)
+```
+
+One distillation over the utterances that topic holds produces its keywords, and
+`Update` writes no content of its own: exactly one LLM call per turn, and it runs
+before the topic is written, so a failed call or an empty extraction leaves no
+half-recorded topic — while the records the host appended earlier stay where it put
+them. Unknown scene → `ErrNotFound`; a `topicID` that is not a turn of that scene, or
+a topic with no content left to distill → `ErrInvalidQuery`, the latter without
+reaching the LLM at all. Settling the same topic twice re-derives its track from what
+the topic holds now, so retrying a timed-out `Update` is safe.
 
 What may be settled is bounded: the `TopicID` has to be **a turn this scene opened** (the id `Search` minted for one of the turns the scene has counted so far). A Dream-fused topic, another scene's turn, or an id you built yourself is `ErrInvalidQuery` — before the LLM call, so a refusal leaves nothing behind. Replaying the current turn and settling an earlier turn that is still open both stay valid, which is what keeps an at-least-once write loop safe without letting a stale retry rewrite a turn that already settled.
 
-### 6.3 Consolidation: `Dream(ctx, sceneID)`
+### 6.4 Consolidation: `Dream(ctx, sceneID)`
 
 ```go
 rep, err := db.Dream(ctx, "")      // empty sceneID sweeps every scene of the domain
@@ -193,19 +227,31 @@ Returns a structured `*DreamReport`: `ConsolidatedScenes / L2TopicsCompressed / 
 
 ## 7. One turn, one topic
 
-A turn is one user message plus one agent reply, and it is exactly one topic. `Update` stores both originals as L4 archives under that topic's id, so a turn's raw text stays recoverable by addressing L4 with the id — nothing else is written there.
+A turn is one topic: the id `Search` minted for it, and everything the host records
+about it lives under that id. Dialogue originals and operation events are the same
+kind of record differing only by `Kind`, so a turn can hold as many of either as the
+host recorded, and one `Update` distills them into one keyword track.
 
-What happens *between* those two messages (tool calls, intermediate output, subagent results) is execution detail rather than conversation, and it belongs to the turn's L6 trajectory: append it under the same topic id with `AppendTrajectory(topicID, …)` (see §8 L6).
+What happens *while* the turn runs (tool calls, intermediate output, subagent results)
+is not conversation, so it goes in as `Kind: api.KindEvent` beside the utterances —
+under the same key, and out of the transcript reads: `SceneContext` and
+`SearchL4(L4Query{TopicID, Kind: &KindUtterance})` show what was said,
+`SearchL4{..., Kind: &KindEvent}` shows what happened, and `Crystallize` reads only
+the events.
 
-**No N:N append surface:** there is no `AppendL4Message` / `RefineTopicKeywords` — one turn costs exactly one LLM call, and its keyword track never goes stale relative to its own originals. L4 content types (`text`/`image`/`video`/`document`/`audio`/`code`/`other`) are declared on the write side by `Update`'s `user_type`/`agent_type` and reported back verbatim on the read side (`L4Query.Type` filter, `ArchiveSlot.ContentType`, `SceneContext`'s `Messages[].Type`); an undefined value is rejected with `ErrInvalidQuery` rather than stored. Dream's fused summary is the one archive whose type is fixed — `text`.
+The write side owns the axes: content type (`text`/`image`/`video`/`document`/`audio`/
+`code`/`other`) and speaker are declared per record by `AppendArchive` and reported
+back verbatim (`ArchiveSlot.ContentType`, `L4Query.Type`, `SceneContext`'s
+`Messages[].Type`); an undefined value is refused rather than stored. Dream's fused
+summary is the one record whose type and role the library fixes — `text`, role 3.
 
 ---
 
 ## 8. Layer API quick reference
 
-The 26 session methods split by audience:
+The 25 session methods split by audience:
 
-- **Runtime/task face (19)** — the host drives these every turn and LLM tools bind to them: `Search` / `Update` / `Dream` / `AppendTrajectory` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ReadTrajectory` / `ListTrajectorySessions` / `Crystallize`, `PlanCommit` / `PlanState`.
+- **Runtime/task face (18)** — the host drives these every turn and LLM tools bind to them: `Search` / `AppendArchive` / `Update` / `Dream` (the host-driven loop), `GetL0` / `UpdateL0`, `ListScenes` / `SceneContext`, `GetL3` / `ListL3` / `ImportL3` / `QueryL3Nodes` / `QueryL3Subgraph`, `SearchL4`, `ListTrajectorySessions` / `Crystallize`, `PlanCommit` / `PlanState`.
 - **Assembly/admin face (7, plus all of `MultiAgentDB`)** — host code at session boundaries and management channels only, never an LLM tool: `UpdateScene` / `MergeScenes` / `DeleteScene` / `DeleteTopic`, `UpdateL3` / `DeleteL3` / `DeleteL3Nodes`. The capability format left the method surface entirely: `ParseCapabilityPackage` / `ValidateCapabilityCard` are package-level functions (§8 L5).
 
 ### L0 profile
@@ -308,18 +354,19 @@ arcs, err := db.SearchL4(api.L4Query{
 })
 ```
 
-`ArchiveSlot` fields: `ContentType` (text/image/video/document/audio/code),
-`Role` (`RoleUser`/`RoleAgent` written by `Update`, `RoleDream` by Dream),
-`ContextID`, `CreatedAt`, `Content` — for media types `Content` is a path or
-URI, not the binary.
-Every field is optional and the ones you set **AND** together — there are no
-modes to choose between — and the result is sorted by `CreatedAt`. So the read
-a host wants after a turn is one call: `SearchL4(L4Query{TopicID: &topicID})`
-returns exactly that turn's originals; `L4Query{IDs: []string{id}}` replaces
-the old single-record getter (a missing id yields an empty slice, a malformed
-one `ErrInvalidQuery`); an empty query returns the domain's whole archive set —
-read a time range or add `Limit` before doing that on a large domain, since the
-result is every original the file holds.
+`ArchiveSlot` carries `Kind` (utterance / event), `Seq`, `ContentType`
+(text/image/video/document/audio/code/other), `Role` (`RoleUser` / `RoleAgent` /
+`RoleSystem`; the library's own consolidation role is not a public constant),
+`ContextID`, `CreatedAt` and `Content` — for media types `Content` is a path or URI,
+not the binary.
+Every query field is optional and the ones you set **AND** together — there are no
+modes to choose between — and the result is sorted by `Seq`. So the reads a host
+wants after a turn are one call each: `SearchL4(L4Query{TopicID: &topicID, Kind:
+&utterance})` gives what was said, the same with `Kind: &event` gives what happened,
+and without `Kind` both; `L4Query{IDs: []string{id}}` gets a single record back by
+id (a missing id yields an empty slice, a malformed one `ErrInvalidQuery`). An empty
+query returns the domain's whole content set — bound it with a time range or `Limit`
+on a large domain.
 
 ### L5 capabilities (directory-as-capability — the host owns the files)
 
@@ -332,23 +379,24 @@ The engine **stores no capability records**. The single source of truth is the h
 
 > One card = a name + any number of function entries (`resources`, no card-level type); each entry self-describes its launch (`type: mcp|skill|api|composite` + `ref`/`config`), purpose (`desc`) and usage (`input`/`output`), mirroring the host tool spec field-for-field — hosts project them with a pure field copy. A composite entry carries its action chain in `config` as `{"steps":[{"tool":"...","args":{...}}]}` (every step needs a non-empty `tool`). For the LLM-facing block, the capability package's `PromptCard` renders one card: name, version, summary, trigger, then per-resource launch/description/input/output/steps — no `id:`/`package:`/`usage:` lines, since the host directory, not a stored record, is the card's identity.
 
-### L6 trajectory + crystallization
+### Turn events + crystallization
 
 ```go
-// One trajectory per agent turn: the key is the NewTopicID Search returned
-// for this turn — the host no longer derives turn keys itself.
-err := db.AppendTrajectory(turnIDHex, "", api.TrajectorySlot{
-    EventType: "tool_call",   // classifies each step of the turn:
+// A turn's events are L4 content of kind event, under the NewTopicID Search
+// returned for this turn — the host never derives a turn key itself.
+err := db.AppendArchive(turnIDHex, api.ArchiveSlot{
+    Kind:      api.KindEvent,
+    EventType: "tool_call",   // names the step:
                               // llm_request / llm_output / tool_call / tool_result /
                               // subagent_spawn / subagent_done / context_inject /
                               // ask_user / user_reply (free-form; no whitelist)
-    Payload:   "tool name + arg summary", // 4KB budget, over-budget is refused
-    Timestamp: time.Now().UnixMilli(),
+    Content:   "tool name + arg summary", // 4 KiB budget, over-budget is refused
+    CreatedAt: time.Now().UnixMilli(),
 })
-// Seq and SessionID are engine-assigned: the key you append under IS the turn's
-// topic id, and the plan nodes that turn opened live under the same key.
-// The second argument is the plan node path — see the plan surface below;
-// pass "" for a plain turn event.
+// Seq and the owning topic are engine-assigned: the key you append under IS the
+// turn's topic id, and the plan nodes that turn opened live under the same key.
+// `NodePath` is what binds an event to a step — see the plan surface below;
+// leave it empty for a plain turn event.
 
 // L6 → capability candidates: distill one turn's trajectory against the
 // host's current catalog (capped at 128KB payload, oldest events dropped).
@@ -363,31 +411,32 @@ res, err := db.Crystallize(ctx, turnIDHex, existingCards)
 
 // Enumerate turns (e.g. to pick crystallize candidates).
 sessions, err := db.ListTrajectorySessions()
-// sessions[i] = TrajectorySessionSummary{SessionID hex (the turn's topic id), Steps, LastAppendAt}
+// sessions[i] = TrajectorySessionSummary{SessionID hex (the turn's topic id), Events, LastAppendAt}
 ```
 
-`ReadTrajectory(topicID)` reads a turn's records in Seq order. The log is
-append-only and addressed **by turn key only**: nothing returns or takes an
-event id, because no public call consumes one — the read is the whole turn (its
-events and the plan nodes it opened), and Dream drops records older than the
-retention window (L6 is a process index; durable products live in L4/L5). Of an
-event you hand in, `EventType`, `Payload`, `Timestamp` and `FinishedAt` are used
-as given; `Seq`, the key and the plan-node fields (`NodeType`/`ParentID`/
-`NodePath`/`Status`/`Summary`/`PlanType`) are assigned or cleared by the
-library, and a `Payload` over 4 KiB is refused — a shortened event would read
-back exactly like a complete one.
+A turn's event track reads back with `SearchL4(L4Query{TopicID: &topicID, Kind:
+&event})` in Seq order. The track is addressed **by turn key only**: nothing returns an
+event handle on write, because no public call takes one, and Dream drops content
+older than the retention window. Of an event you hand in, `EventType`, `NodePath`,
+`Content` and `CreatedAt` are used as given; the library assigns `Seq` and the owning
+topic and forces `ContentType` to `text` with no speaker — a thing that happened has
+neither. Content over 4 KiB is refused: a shortened event would read back exactly
+like a complete one.
+
+`ListTrajectorySessions` enumerates the turns that hold events, so a host can find
+crystallization candidates without remembering which ids it logged.
 
 ### L6 plan tree (Go host surface)
 
 A plan tree belongs to the turn that opened it: **the L6 key is that turn's
-topic id** — the one `Search` hands back — and it addresses the turn's events
-and its nodes alike. The host assigns each node a **dotted `NodePath`** (`"1"`,
+topic id** — the one `Search` hands back — and it addresses the turn's nodes, while
+the same key addresses the turn's content in L4. The host assigns each node a **dotted `NodePath`** (`"1"`,
 `"1.2.1"`) and holds nothing else: there is no plan id to mint, and
 `PlanState(topicID)` is how a tree comes back.
 
 | Call | Meaning |
 |---|---|
-| `db.AppendTrajectory(topicID, nodePath, ev)` | record a step event against that node, creating the node chain as pending if missing — this is also how a step is added. `nodePath` **shapes the tree itself**: every missing ancestor segment is created as pending, so a typo in a path opens a second tree, and L6 exposes no node-delete call (a stale tree is reclaimed by the retention window once the turn that opened it falls out of it). `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `ReadTrajectory` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
+| `db.AppendArchive(topicID, ev)` with a non-empty `ev.NodePath` | record a step event against that node, creating the node chain as pending if missing — this is also how a step is added. `NodePath` **shapes the tree itself**: every missing ancestor segment is created as pending, so a typo in a path opens a second tree, and L6 exposes no node-delete call (a stale tree is reclaimed by the retention window once the turn that opened it falls out of it). `EventType` is **the host's own name for the step**, on this path exactly as on a bare turn event — the engine never branches on it (it comes back through `SearchL4` and into the Crystallize prompt verbatim) and only refuses an empty one. Convention names for readers: `plan_step`, `llm_request`, `llm_output`, `tool_call`, `tool_result`, `subagent_spawn`, `subagent_done`, `context_inject`, `ask_user`, `user_reply` |
 | `db.PlanCommit(topicID, nodePath, ev, api.PlanStep{Title: "research", Type: "step", Status: api.PlanStatusDone, Summary: s})` | commit one step: advance the node's status, append its event, and roll `done` children's summaries up into their parent (a parent turns `done` only when the host commits it). A `nodePath` missing along the dotted path is created as pending — this is how a step is added. A blank `Title`/`Type`/`Summary` keeps what the node already holds; an unknown `Status` is refused before the tree moves |
 | `db.PlanState(topicID)` | read the forest view (`PlanTree.Roots` + `DoneCount` / `TotalCount`) — also the restart recovery path |
 
@@ -396,13 +445,13 @@ with) and every L6 entry rejects it — reads included.
 
 ---
 
-## 9. Exported types (v1.6.1)
+## 9. Exported types (v1.6.3)
 
 | Kind | Names | Use |
 |---|---|---|
 | config | `MemHopConfig` / **`LlmConfig`** / `MemHopDefaults` + `DefaultMemHopDefaults` | the whole assembly surface |
-| input aliases | `SearchQuery` / `TurnUpdate` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `DreamReport` / `DreamStage` / `CapabilityImport` / `CapabilityPackageDoc` / `CrystallizeOutput` / `CrystallizeCapability` / `ResourceRef` | inputs & id-free results (all string IDs are hex) |
-| response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` / `TrajectorySlot` | every ID field is a 16-hex string |
+| input aliases | `SearchQuery` / `ScenePatch` / `L3ImportItem` / `L3Relation` / `L3ImportMode` / `L3ImportResult` / `L3NodeQuery` / `L4Query` / `SceneContext` / `SceneMessage` / `TrajectorySessionSummary` / `DreamReport` / `DreamStage` / `CapabilityImport` / `CapabilityPackageDoc` / `CrystallizeOutput` / `CrystallizeCapability` / `ResourceRef` | inputs & id-free results (all string IDs are hex) |
+| response DTOs | `ProfileSlot` / `SceneSlot` / `TopicSlot` / `SearchResult` / `HypergraphSlot` / `HypergraphNode` / `HypergraphEdge` / `HypergraphSource` / `L3Graph` / `L3Subgraph` / `ArchiveSlot` (write and read) | every ID field is a 16-hex string |
 | id surface | **`DefaultAgentID`** (the implicit domain) | the library issues every id — turn topics included; a host echoes them back and converts nothing |
 | enums | `GraphEdgeKind` / `CapabilityType` / `ContentType` / `PlanStatus` | enum aliases |
 
@@ -412,10 +461,14 @@ Enum constants are exported too: `L3ImportSkip/Merge/Overwrite`,
 survived the record layer's retirement as package-level surface:
 `CapabilityFormatV4` + `ParseCapabilityPackage` / `ValidateCapabilityCard`.
 
-> L4 `role` is a bare `uint8`; the exported constants are
-> `api.RoleUser` / `RoleAgent` / `RoleSystem` / `RoleDream` (values 0-3).
-> Plan trees use `api.NodeTypeEvent` / `NodeTypePlan`, the numeric read-side
-> `api.PlanStatus*` string values (a plan node's status is only ever a string; the L6 event record carries no status field).
+> A record's kind is `api.KindUtterance` / `api.KindEvent`. L4 `role` is a bare
+> `uint8`, and the three a host may declare on an appended utterance are
+> `api.RoleUser` / `RoleAgent` / `RoleSystem`. The fourth value, 3, is the library's
+> own mark on a consolidated summary: it is deliberately not exported and
+> `AppendArchive` refuses it, so a host cannot write a record that reads as
+> consolidated.
+> A plan node's status is only ever a string — the `api.PlanStatus*` constants — since
+> the engine assigns a node's state separately from the events bound to it.
 
 ---
 
@@ -480,21 +533,18 @@ func main() {
     if err != nil { log.Fatal(err) }
     _ = res // Profile/ProfileBrief + Topics (FusedKeywords per topic)
 
-    // Per turn: end — settle the whole exchange into that topic id.
+    // Per turn: record what was said and what happened, under that topic id.
+    topicID := res.NewTopicID
     userTS := time.Now().UnixMilli()
-    topicID, err := db.Update(api.TurnUpdate{
-        SceneID:   sceneID,
-        TopicID:   res.NewTopicID,
-        UserText:  "user raw message",
-        UserTS:    userTS,
-        AgentText: "agent reply",
-        AgentTS:   time.Now().UnixMilli(),
-    })
-    if err != nil { log.Fatal(err) }
-    // Everything the turn did in between belongs to that same topic:
-    _ = db.AppendTrajectory(topicID, "", api.TrajectorySlot{
-        EventType: "tool_call", Payload: "grep ...", Timestamp: userTS + 1,
-    })
+    _ = db.AppendArchive(topicID, api.ArchiveSlot{Kind: api.KindUtterance, Seq: 1,
+        Role: api.RoleUser, Content: "user raw message", CreatedAt: userTS})
+    _ = db.AppendArchive(topicID, api.ArchiveSlot{Kind: api.KindEvent,
+        EventType: "tool_call", Content: "grep ...", CreatedAt: userTS + 1})
+    _ = db.AppendArchive(topicID, api.ArchiveSlot{Kind: api.KindUtterance, Seq: 2,
+        Role: api.RoleAgent, Content: "agent reply", CreatedAt: time.Now().UnixMilli()})
+
+    // Per turn: end — distill that topic's utterances into its keywords.
+    if err := db.Update(sceneID, topicID); err != nil { log.Fatal(err) }
 
     // Idle / scheduled (usually unnecessary: Update schedules consolidation
     // once a scene's topic count passes the threshold).
@@ -509,36 +559,38 @@ func main() {
 
 ## 12. Pitfalls
 
-1. **The LLM only affects the write path**: `Search` makes zero LLM calls, so
-   reads can never be blocked by it. `Update` distils once per turn and, on
-   failure, returns an error having written nothing — no half-recorded turn.
-   Hosts should retry a failed settle.
+1. **The LLM only affects `Update` and `Dream`**: `Search` and `AppendArchive` make
+   zero LLM calls, so recording and reading can never be blocked by it. `Update`
+   distils once per turn and, on failure, returns an error having written no topic —
+   the records you appended earlier stay. Hosts should retry a failed settle.
 2. **No embedding service, no dimension to declare**: the two header bytes at
-   offset 6 are reserved. The format version is `0x000D`: the L3 knowledge
+   offset 6 are reserved. The format version is `0x000E`: the L3 knowledge
    graph lives in the reserved shared domain (`core.SharedPoolAgentID`); no
-   migration runs — files older than `0x000D` are rejected at Open (the
-   capability record layer was removed by this bump, so a `0x000B` file
-   still carries `0x0F` records).
-3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery`; the agent timestamp
-   must not precede the user timestamp.
+   migration runs — `0x000D` and older files are rejected at Open, because they
+   store a turn's events in a record type that no longer exists and its archives
+   under text-derived ids, neither of which the current rules can address.
+3. **Timestamps in Unix ms**, `<= 0` → `ErrInvalidQuery` on every record you append;
+   a turn's topic is stamped with the earliest and latest of its content.
 4. **IDs are opaque 16-hex strings**: never splice/truncate them; response ids
    feed back as-is; the facade exposes no hex ⇄ integer bridge.
 5. **`Search` writes no memory content**: it opens one turn (bumping the
    scene's hit and turn counters) and creates no topic record, so an abandoned
    turn leaves nothing behind. To read originals use `SceneContext` /
    `SearchL4`.
-   Replaying an `Update` with the same `TopicID` is idempotent: the topic is
-   that id and its archives hash from it, so a retried settle overwrites
-   instead of duplicating.
+   Replaying an append with the same `(TopicID, Seq)` is idempotent: the record
+   hashes from that pair, so a retry rewrites it instead of duplicating — and a
+   slot the replay stops filling is not reclaimed.
 6. **One file, many agent domains**: all tenants live inside one
    `.meh` file (`OpenMulti` → `CreateAgent(name)` → `Session(hexID)`), fully
    isolated per domain except the file-wide L3 pool; legacy files
-   (`FormatVersion < 0x000D`) cannot be opened or migrated.
-7. **Trajectories auto-expire**: Dream drops events older than 7 days;
-   the external surface is append + query only (`AppendTrajectory` /
-   `ReadTrajectory` / `ListTrajectorySessions`) — no delete API. A turn's
-   trajectory is keyed by its topic id, so append before `Update` settles the
-   turn (the id is already in hand from `Search`) and never invent one.
+   (`FormatVersion < 0x000E`) cannot be opened or migrated.
+7. **Content and plans auto-expire**: Dream drops a topic's content older than 7
+   days and plan nodes older than 7 days (a tree still in flight is exempt);
+   `DeleteTopic` / `DeleteScene` are the explicit corrections. Past the window a
+   topic keeps its keyword track and its `Messages` come back empty or with gaps in
+   `Seq` — a legal end state, not a failed read. Everything is keyed by the turn's
+   topic id, so append before `Update` closes the turn (the id is already in hand
+   from `Search`) and never invent one.
 8. **The library owns the turn id**: `Update` accepts only an existing scene
    (`Search` → `Scene.SceneID`) and a topic id that read issued — a turn cannot
    be settled without first being opened. The library never creates a scene

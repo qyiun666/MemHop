@@ -24,9 +24,9 @@ Status: implemented
 ## Decision
 
 - **删除 `planEventTypes` 名单与 `plan.ValidateEvent` 包装**（`internal/plan/write.go`）。名单外的 `EventType` 一律接受，原样存回；计划绑定事件与裸轮次事件同口径。
-- **校验点回归一处**：`trajectory.ValidateEvent`（非空 `EventType` + `Timestamp > 0` + payload ≤ 4KB）。`AppendTrajectory` 计划分支与 `PlanCommit` 仍在 `EnsureNode` / `UpdateNodeLocked` **之前**调用它，被拒的写零留痕（v1.6.1 修掉的「校验晚于改树」顺序不变量原样保留，`TestPlanCommitRejectedLeavesTreeUntouched` 继续钉）。
+- **校验点回归一处**：内容写入侧的统一校验（非空 `EventType` + 正时间戳 + payload ≤ 4KB），事件的每条写入路径都在改树**之前**调用它，被拒的写零留痕（v1.6.1 修掉的「校验晚于改树」顺序不变量原样保留，并有专测钉住）。
 - **公开面与格式不变**：`api.Session` 仍 27 + `MultiAgentDB` 8；`FormatVersion` 仍 `0x000C`——`event_type` 是记录内的 JSON 字符串字段，放宽不触及记录布局。MCP 24 工具不变。
-- **惯例名留在文档里，降格为「给读者的共享词表」**：`api/session.go` 的 `AppendTrajectory` / `PlanCommit` 注释、`INTEGRATION_GUIDE.md` / `.zh.md` 的 L6 计划面表格、`internal/plan/agent.md`。`internal/repo/core/model.go` 的字段注释本就是惯例清单，不动。
+- **惯例名留在文档里，降格为「给读者的共享词表」**：门面侧内容追加与计划提交的注释、集成指南（中英）的 L6 计划面表格、计划小方法的 `agent.md`；记录层的字段注释本就是惯例清单，不动。
 
 ## Alternatives considered
 

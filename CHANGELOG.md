@@ -5,15 +5,103 @@ README 的版本表与 git log。
 
 ## v1.6.2 — 2026-09-07 — 计划事件不再受词表约束（`EventType` 归宿主）
 
-`internal/plan` 的 `ValidateEvent` 包装与它背后的 10 词 `planEventTypes` 名单一并删除：计划绑定事件的 `EventType` 与裸轮次事件同口径——任意非空宿主命名即接受，原样存回。理由是这条约束不挣自己的饭钱：引擎从不按 `EventType` 分支，全仓非测试引用只有 `ReadTrajectory` 的字段回显与结晶 prompt 里的一行格式化，所以名单唯一的行为就是拒写；代价全落在宿主侧——自己的事件名被拒后轨迹静默少一条，而库并没有因此保住任何结构（`AppendEventLocked` 已强制 `NodeType=Event` 并清零全部节点字段，宿主伪装不了树视图）。
+`internal/plan` 的 `ValidateEvent` 包装与它背后的 10 词 `planEventTypes` 名单一并删除：计划绑定事件的 `EventType` 与裸轮次事件同口径——任意非空宿主命名即接受，原样存回。理由是这条约束不挣自己的饭钱：引擎从不按 `EventType` 分支，全仓非测试引用只有 `ReadTrajectory` 的字段回显与结晶 prompt 里的一行格式化，所以名单唯一的行为就是拒写；代价全落在宿主侧——自己的事件名被拒后轨迹静默少一条，而库并没有因此保住任何结构（写入路径自己决定记录形状并清零全部节点字段，宿主伪装不了树视图）。
 
-- **校验点回归一处**：`trajectory.ValidateEvent`（非空 `EventType` + `Timestamp` > 0 + payload ≤ 4KB）。`AppendTrajectory` 的计划分支与 `PlanCommit` 仍在 `EnsureNode` / `UpdateNodeLocked` **之前**调用它，被拒的写零留痕；v1.6.1 修掉的那条「校验晚于改树」顺序不变量原样保留
+- **校验点只有一处**：内容写入的 `content.ValidateAppend`（非空 `EventType` + `CreatedAt` > 0 + payload ≤ 4 KiB）。追加与 `PlanCommit` 都在 `EnsureNode` 之前调用它，被拒的写零留痕；v1.6.1 修掉的那条「校验晚于改树」顺序不变量原样保留
 - **MCP 面无改动**：`memhop_trajectory_append` 的描述本就写着 `event_type` 由宿主自定，而计划写面（`PlanCommit`/`PlanState`）不在 MCP 工具面上。这轮是把 Go 面对齐到交付面已有的口径，24 个工具不变
 - **本改动不增删方法、不触及记录布局**：`event_type` 是记录内的 JSON 字符串字段，收紧与放宽都不改变帧结构
 - **对宿主是放宽方向**：原本被拒的写入现在成功，无需宿主改调用点即可受益；meowagent 的沙箱裁决反问（`sandbox_ask`）由此可直接入计划轨迹
 - **测试**：`internal/l6_test.go` 的 `TestPlanEventVocabularyRejectsUnknown` 改写为 `TestPlanEventNamesAreHostOwned`（钉住宿主命名被接受、名字原样回读、被拒仍不建节点链）；`api` 面两处拒写断言改钉空 `EventType`（`surface_l6_test.go`、`surface_closed_loop_test.go`）；`test/api_interface_plan_test.go` 的「被拒不改动树」例子改用缺 `EventType` 的事件
 - **文档同步**：`api/session.go` 的 `AppendTrajectory` / `PlanCommit` 注释、`INTEGRATION_GUIDE.md` 与 `.zh.md` 的 L6 计划面表格、`internal/plan/agent.md`
 - 决策档案：`notes/implemented/simplification/2026-09-07-plan-event-vocabulary-retirement.md`
+
+## v1.6.3 — 2026-09-10 — L4 是一轮唯一的内容层，L6 只剩计划树，`Update` 只蒸馏
+
+一轮发生过什么，此前被劈在两层：L4 存两条对话原文，L6 存轨迹事件与计划节点。两层早就共用
+同一个键（`Search` 为这一轮铸出的话题 id），却仍是两种记录、两套扫描、两条生命周期，并且 L2
+话题要靠一份 `L4Refs` 第二真相指向自己的原文。本版本把它们收敛成一个判据：**内容是内容，
+计划是计划**——凡「一轮里的内容」（说了什么 + 做了什么）同住 L4、以 (话题, `Kind`, `Seq`)
+寻址；L6 只剩每个话题一棵计划树；话题不再持有内容引用。
+
+### 记录与格式（`FormatVersion 0x000D → 0x000E`）
+
+- `ArchiveSlot` 吸收事件侧字段：`Kind`（`KindUtterance` / `KindEvent`）、`Seq`、`EventType`、
+  `NodePath`。归档 id 从「正文哈希」改为**位置式** `hash("l4:"+话题+":"+seq)`，于是同 (话题, Seq)
+  重写就是原地覆写——重放一轮能收敛，靠的是这个键，不再靠「先列出旧的、再给没重写到的打墓碑」
+  那套差分（连同它需要的第二份清单一起删除）。
+- L6 的新记录类型 `core.PlanNode`（帧型 `RecL6PlanNode = 0x0F`，随 L5 退役空出来的号）：一节点
+  一条，去掉 `Seq`、`CreatedAt` 改 `UpdatedAt`。`TrajectorySlot` / `NodeType*` / `PlanNodeRef` 消失。
+- `0x000D` 及更早的文件在 `Open` 显式拒绝、无迁移：它们把事件存在一个已不存在的记录类型里、
+  把归档按正文哈希发号，按新规则哪一条都指不到东西。
+- `index/traj.go` 就地改造为 `index/l4.go` 的 `L4Index`，**条目带 `Kind`**——否则「哪些轮记了事件」
+  会把只有对话的轮也报出来，而场景读回会为一轮两句话读出几十条事件。
+- Dream 的清理拆成 `l4_prune`（按内容时间戳）与 `l6_prune`（按计划节点 `UpdatedAt`，仍豁免在途
+  树）；跨层级联删除整段退役——树与事件既然分居两层，节点过期就不该带走正文。
+  `TrajectoryRetention` 更名 `ContentRetention`，值仍是 7 天，两侧共用。
+
+### 写路径换主：`Update` 不再生产内容
+
+- **`AppendArchive(topicID, ArchiveSlot)` 是一条记录进入话题的唯一途径**。`content.ValidateAppend`
+  集中全部宿主不可信字段：`Kind` 必须已定义、`Role` 只能是 user/agent/system（值 3 是库给融合摘要
+  自己盖的标记，拒）、`ContentType` 必须已定义、`EventType` 非空 **iff** 事件、`NodePath` 仅事件侧、
+  超预算拒写不截断（事件 4 KiB、原文 64 KiB——原文上限的理由是分片提炼会把锁内 LLM 调用数推到
+  无界）。校验严格排在 `EnsureNode` 之前。
+- `Seq` 是一个话题内跨 Kind 共享的单一空间：`0` 自动分配且从不说谎地跳过 1/2（那两个位置属于
+  对话）；显式命名的槽位被占用即覆写，跨 Kind 也覆写。
+- **`Update(sceneID, topicID)` 只蒸馏**：读该话题的全部 `Kind=utterance` 记录、按 `Seq` 序渲染成带
+  说话者标签的转录、一次 `llmops.ExtractKeywords` 出关键词轨。一条内容都没读到就
+  `ErrInvalidQuery` 且不碰 LLM；提炼失败时宿主先前 append 的内容原样留着（回收它就要再记一份
+  「本轮写了哪几条」，那是被本版本明确否掉的第二真相）。
+- 删除：`TurnUpdate`（含 `core` 侧 DTO）、`turn.WriteArchives`、`llmops.ExtractTurnKeywords`
+  （`Update` 与 Dream 从此共用同一个 `ExtractKeywords` 入口）。
+
+### 公开面收敛：`api.Session` 26 → 25
+
+- 删 `AppendTrajectory`（能力并入 `AppendArchive`）、删 `ReadTrajectory`
+  （`SearchL4{TopicID, Kind}` 完全覆盖，与当年删 `GetArchive` 同判据）、**新增** `AppendArchive`；
+  `Update` 改为两参且不再回 id（话题 id 是 `Search` 给的）。`MultiAgentDB` 8 个不变。
+- DTO：删 `api.TrajectorySlot`、`TurnUpdate`；`ArchiveSlot` 升为写读两用（写侧忽略 `IDHash`/
+  `ContextID`，所以「读回来改一句写回原槽」天然成立）；`L4Query` 加 `Kind` 条件、
+  `SceneMessage` 加 `Seq`（空洞由此可判别）；`PlanCommit` 的事件入参换 `ArchiveSlot`；
+  `TrajectorySessionSummary.Steps` 改名 `Events`（它统计的一直只是事件）。
+- 常量：补 `KindUtterance`/`KindEvent`/`RoleSystem`，**收回 `RoleDream`**。
+- 场景读回的完整性判据改写：「索引点名、记录读不到」= 镜像漂移，仍硬 `ErrIO`；
+  「话题在、内容为空或有洞」= 合法的过期终局，不报错。
+- `internal/trajectory` 包更名 `internal/content`——它服务的不再只是轨迹。
+
+### MCP（24 个工具不变，名字变）
+
+- `memhop_trajectory_append` → **`memhop_archive_append`**（`kind` 缺省 utterance、原文必须说
+  话者、`role=dream` 在边界拒）；`memhop_update` 入参收缩到 `{scene_id, topic_id}`；
+  `memhop_trajectory_read` 留作便捷工具、实现改走 `SearchL4{TopicID, Kind:event}`
+  （Go 面删、MCP 面留，是 `AGENTS.md` 已确立的对称）；`memhop_archive_search` 补 `kind` 过滤。
+
+### 已接受的能力回退（不是 bug）
+
+- 超过 7 天的轮次与融合话题**正文永久不可回读**，只剩关键词轨——依据是 Dream 的融合链从不
+  回读 L4 原文，关键词轨本来就是唯一长寿产物。融合摘要因此降为 7 天寿命的中间产物。
+- `test/core_cycle_test.go` 的「细节保留」语义从「原文长寿」变成「当轮细节保留」。
+- 宿主热路径的一轮从 1 次调用变成 3 次（`AppendArchive` ×2 + `Update`）。
+
+### 对宿主的破坏性变更（跟版清单）
+
+`TurnUpdate` / `api.TrajectorySlot` / `AppendTrajectory` / `ReadTrajectory` 四个符号消失；
+`Update` 签名与返回值变更；`PlanCommit` 的事件入参换类型；`TrajectorySessionSummary.Steps` →
+`Events`；`api.RoleDream` 不再导出；`0x000D` 及更早的 `.meh` 拒绝打开（无迁移）。
+
+### 测试与档案
+
+- 新增派生式 id 命名空间的穷举互斥测试（`turn:` / `l4:` / `plan:` / `l1:` + Dream 的无前缀融合键，
+  同一输入空间两两不撞）；`0x000D` 进版本拒绝列表并做过「旧版本被拒」断言真红一次的负例证明。
+- `Update` 侧的落盘断言方向反转（失败不再要求零内容留痕），新增「内容为空 ⇒ 零 LLM 调用」、
+  `ValidateAppend` 逐条拒因、跨 Kind 的 Seq 覆写、`RenderForDistill` 的角色标签、
+  过期转录读回为空且不报错的端到端一条。
+- 决策档案（2026-09-09/10）：`notes/implemented/architecture/2026-09-09-l4-content-layer-and-plan-only-l6.md`、
+  `notes/implemented/simplification/2026-09-09-addressing-content-by-topic-and-kind.md`、
+  `notes/implemented/simplification/2026-09-09-l4-seven-day-retention-and-transcript-completeness.md`、
+  `notes/implemented/simplification/2026-09-09-update-distills-its-own-topic.md`、
+  `notes/implemented/architecture/2026-09-09-turn-topic-id-is-the-only-join-key.md`、
+  `notes/rejected/architecture/2026-09-09-plan-whole-tree-record-and-cross-layer-cascade.md`。
 
 ## v1.6.1 — 2026-09-06 — 公开面收敛（34→27）、内置说明书卡删除、公开面按使用者分两类、L5 记录层退役（目录即能力）
 
