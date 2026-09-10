@@ -114,16 +114,19 @@ func DropExpiredArchives(engine *core.StorageEngine, agentID uint64, idx *index.
 //
 // Index lets a topic-scoped read go through the domain's content cache instead
 // of scanning the whole bucket; it only applies when TopicID is set.
+// NodePath filters on the record's attribution field — an address inside one
+// turn, so the caller is expected to have set TopicID alongside it.
 type ArchiveQuery struct {
-	IDs     []uint64
-	TopicID *uint64
-	Type    *core.ContentType
-	Kind    *core.ArchiveKind
-	Keyword string
-	Start   int64
-	End     int64
-	Limit   int
-	Index   *index.L4Index
+	IDs      []uint64
+	TopicID  *uint64
+	Type     *core.ContentType
+	Kind     *core.ArchiveKind
+	NodePath string
+	Keyword  string
+	Start    int64
+	End      int64
+	Limit    int
+	Index    *index.L4Index
 }
 
 // QueryArchivesL4 returns the content records matching every set condition,
@@ -142,7 +145,7 @@ func QueryArchivesL4(engine *core.StorageEngine, agentID uint64, q ArchiveQuery)
 	case q.TopicID != nil && q.Index != nil:
 		out, err = archivesByTopic(engine, agentID, q.Index.AllIDs(*q.TopicID))
 	case len(q.IDs) > 0 && q.TopicID == nil && q.Type == nil && q.Kind == nil &&
-		q.Keyword == "" && q.Start == 0 && q.End == 0:
+		q.NodePath == "" && q.Keyword == "" && q.Start == 0 && q.End == 0:
 		out, err = archivesByIDOnly(engine, agentID, q.IDs)
 	default:
 		out = core.CollectAllArchives(engine, agentID)
@@ -216,6 +219,9 @@ func matchesArchiveQuery(arc core.ArchiveSlot, q ArchiveQuery) bool {
 		return false
 	}
 	if q.Kind != nil && arc.Kind != *q.Kind {
+		return false
+	}
+	if q.NodePath != "" && arc.NodePath != q.NodePath {
 		return false
 	}
 	if q.Type != nil && arc.ContentType != *q.Type {

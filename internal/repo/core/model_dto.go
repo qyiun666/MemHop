@@ -127,19 +127,22 @@ type L3Subgraph struct {
 // L4Query archive query: every field is optional and the set conditions AND
 // together, so a topic-only or type-only read works. L4 holds both kinds of a
 // turn's content, so Kind is a condition like any other — leaving it unset means
-// an empty query selects utterances AND events. Results are sorted by Seq. Keyword is matched case-insensitively, the same way the L3 node
-// filter matches one. An empty query returns the domain's whole archive set —
-// that is a lot of text for a caller with a context window, so Limit caps the
-// result to its most recent matches.
+// an empty query selects utterances AND events. Results are sorted by Seq.
+// Keyword is matched case-insensitively, the same way the L3 node filter matches
+// one. An empty query returns the domain's whole archive set — that is a lot of
+// text for a caller with a context window, so Limit caps the result to its most
+// recent matches. NodePath keeps only the records bound to one plan step; a step
+// is addressed inside a turn, so it means nothing without TopicID.
 type L4Query struct {
-	Keyword string       `json:"keyword,omitempty"`  // case-insensitive substring of Content
-	Start   int64        `json:"start,omitempty"`    // created at or after (ms)
-	End     int64        `json:"end,omitempty"`      // created at or before (ms)
-	IDs     []string     `json:"ids,omitempty"`      // 16 位 hex 档案 ID
-	TopicID *string      `json:"topic_id,omitempty"` // only archives of this topic
-	Type    *ContentType `json:"type,omitempty"`     // only archives of this content type
-	Kind    *ArchiveKind `json:"kind,omitempty"`     // utterance or event; unset selects both
-	Limit   int          `json:"limit,omitempty"`    // keep the newest N matches; <=0 means every match
+	Keyword  string       `json:"keyword,omitempty"`   // case-insensitive substring of Content
+	Start    int64        `json:"start,omitempty"`     // created at or after (ms)
+	End      int64        `json:"end,omitempty"`       // created at or before (ms)
+	IDs      []string     `json:"ids,omitempty"`       // 16 位 hex 档案 ID
+	TopicID  *string      `json:"topic_id,omitempty"`  // only archives of this topic
+	Type     *ContentType `json:"type,omitempty"`      // only archives of this content type
+	Kind     *ArchiveKind `json:"kind,omitempty"`      // utterance or event; unset selects both
+	NodePath string       `json:"node_path,omitempty"` // only records bound to this step; needs TopicID
+	Limit    int          `json:"limit,omitempty"`     // keep the newest N matches; <=0 means every match
 }
 
 // ScenePatch is the partial-update payload of UpdateScene; nil fields are left

@@ -149,10 +149,10 @@ report, err := sess.Dream(context.Background(), "")
 | L0 画像 | `GetL0` · `UpdateL0` |
 | L2 上下文 | `ListScenes([l3ID])` · `UpdateScene(id, {Name, L3ID, Force})` · `SceneContext` · `MergeScenes` · `DeleteTopic` · `DeleteScene` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3`（返回本批写入的 `graph_ids`） · `UpdateL3` · `DeleteL3` · `DeleteL3Nodes`（仅 Go） · `QueryL3Nodes` · `QueryL3Subgraph` |
-| L4 归档 | `AppendArchive(topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodePath, Content, CreatedAt})` 是一条记录进入话题的唯一途径（`Seq: 0` 由库分配；写一个已被占用的槽位就是覆写）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 只留 Seq 最高的 N 条命中 |
+| L4 归档 | `AppendArchive(topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodePath, Content, CreatedAt})` 是一条记录进入话题的唯一途径（`Seq: 0` 由库分配；写一个已被占用的槽位就是覆写）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ `NodePath`（只取归因到某一步的记录，步骤只在它那一轮内成立）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 只留 Seq 最高的 N 条命中 |
 | L5 能力 | 目录即能力，库不存记录：`ParseCapabilityPackage(data, source)` · `ValidateCapabilityCard(card)`（包级 v4 解析校验）· `Crystallize(turnID, existing)` 返回候选——落盘归宿主 |
 | 轮内事件（L4 的 `Kind=event`） | `ListTrajectorySessions` · `Crystallize(topicID)` —— 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），7 天自动清理、无删除接口，读它用 `SearchL4(L4Query{TopicID, Kind: &KindEvent})`，写它用 `AppendArchive`。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于对话。`Crystallize` 只读事件轨，说了什么不进 prompt |
-| L6 计划树 | `PlanCommit(topicID, nodePath, ev, PlanStep{...})` · `PlanState(topicID)` —— 计划树是 L6 唯一自己的记录：一节点一条，键就是开出它的那一轮，所以 `PlanState(topic)` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储；提交一个尚不存在的 `nodePath` 即追加一步（仅 Go module 暴露，MCP 工具集未接入） |
+| L6 计划树 | `PlanCommit(topicID, nodePath, ev, PlanStep{...})` · `PlanState(topicID)` —— 计划树是 L6 唯一自己的记录：一节点一条，键就是开出它的那一轮，所以 `PlanState(topic)` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储，而 `SearchL4{TopicID, NodePath}` 能单独读回某一步做过的事；提交一个尚不存在的 `nodePath` 即追加一步（仅 Go module 暴露，MCP 工具集未接入） |
 | DB 句柄 | `OpenMulti` · `CreateAgent` · `ListAgents` · `DeleteAgent` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，仅 Go） · `Close` · `IsClosed` · `api.DefaultAgentID` |
 
 ### L5 能力 —— 目录即能力

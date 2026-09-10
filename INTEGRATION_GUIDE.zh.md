@@ -165,7 +165,7 @@ err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
 })
 ```
 
-`IDHash` 与 `ContextID` 写入时被忽略：话题来自调用的键，记录 id 由 (话题, Seq) 派生——
+`IDHash` 与 `TopicID` 写入时被忽略：话题来自调用的键，记录 id 由 (话题, Seq) 派生——
 这正是「读回来、改一个字段、写回它原来那个槽位」能成立的原因。`Seq: 0` 在该话题已有
 槽位之上分配，并跳过 1 与 2（那两个属于对话）；显式写一个已被占用的 Seq 是**覆写**而
 不是报错，跨 Kind 也一样。这就是重放的全部语义：重试的一轮改写自己的槽位而不是叠加
@@ -290,12 +290,13 @@ arcs, err := db.SearchL4(api.L4Query{
     // Start: t0, End: t1,  // 时间范围（ms）
     // IDs: []string{...},  // 按 ID
     // TopicID: &topicHex,  // 只查该主题的存档
+    // NodePath: "1.1",     // 只取归因到该计划步骤的记录（须与 TopicID 同填）
     // Type: &api.ContentImage, // 只查该内容类型
     // Limit: 50,           // 只保留最新 N 条命中（<=0 为全部）
 })
 ```
 
-`ArchiveSlot` 带 `Kind`（原文 / 事件）、`Seq`、`ContentType`（text/image/video/document/audio/code/other）、`Role`（`RoleUser` / `RoleAgent` / `RoleSystem`；库自己那个融合角色不作公开常量）、`ContextID`、`CreatedAt`、`Content`——媒体类型的 `Content` 是路径或 URI，不是二进制。每个查询字段都可选，填了的条件之间是 **AND** 关系——不分「三种模式」——结果按 `Seq` 升序。
+`ArchiveSlot` 带 `Kind`（原文 / 事件）、`Seq`、`ContentType`（text/image/video/document/audio/code/other）、`Role`（`RoleUser` / `RoleAgent` / `RoleSystem`；库自己那个融合角色不作公开常量）、`TopicID`、`CreatedAt`、`Content`——媒体类型的 `Content` 是路径或 URI，不是二进制。每个查询字段都可选，填了的条件之间是 **AND** 关系——不分「三种模式」——结果按 `Seq` 升序；`NodePath` 只取归因到某个计划步骤的记录（步骤是轮次内的地址，因此必须与 `TopicID` 同填），于是一步做过什么能单独读回，不必先把整轮拉回来。
 所以宿主最常用的读取各一次就够：`SearchL4(L4Query{TopicID: &topicID, Kind: &utterance})` 拿这一轮说了什么，换成 `&event` 拿做了什么，`Kind` 不填即两种都要；
 `L4Query{IDs: []string{id}}` 取代原来的单条 getter（ID 不存在返回空列表，格式不合法返回 `ErrInvalidQuery`）；
 空查询返回该域全部原文——域大了请先加时间范围或 `Limit`，否则这就是文件里的每一条原文。

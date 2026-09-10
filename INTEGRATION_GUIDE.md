@@ -178,7 +178,7 @@ err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
 })
 ```
 
-`IDHash` and `ContextID` are ignored on the way in: the topic comes from the
+`IDHash` and `TopicID` are ignored on the way in: the topic comes from the
 argument and the record id follows from `(topic, Seq)`, which is what lets a host
 read a record back, change one field and write it to the slot it came from. `Seq: 0`
 allocates above every held slot, skipping 1 and 2, which are the dialogue's; naming a
@@ -349,6 +349,8 @@ arcs, err := db.SearchL4(api.L4Query{
     // Start: t0, End: t1,       // created within [t0, t1] (ms)
     // IDs: []string{...},       // by archive id (one id = one record)
     // TopicID: &topicHex,       // only this topic's archives
+    // NodePath: "1.1",          // only records attributed to this plan step
+    //                             // (needs TopicID: a step is addressed inside a turn)
     // Type: &api.ContentImage,  // only this content type
     // Limit: 50,                // keep the newest N matches (<=0: every match)
 })
@@ -357,13 +359,15 @@ arcs, err := db.SearchL4(api.L4Query{
 `ArchiveSlot` carries `Kind` (utterance / event), `Seq`, `ContentType`
 (text/image/video/document/audio/code/other), `Role` (`RoleUser` / `RoleAgent` /
 `RoleSystem`; the library's own consolidation role is not a public constant),
-`ContextID`, `CreatedAt` and `Content` — for media types `Content` is a path or URI,
+`TopicID`, `CreatedAt` and `Content` — for media types `Content` is a path or URI,
 not the binary.
 Every query field is optional and the ones you set **AND** together — there are no
 modes to choose between — and the result is sorted by `Seq`. So the reads a host
 wants after a turn are one call each: `SearchL4(L4Query{TopicID: &topicID, Kind:
 &utterance})` gives what was said, the same with `Kind: &event` gives what happened,
-and without `Kind` both; `L4Query{IDs: []string{id}}` gets a single record back by
+and without `Kind` both; adding `NodePath: "1.2"` cuts that event track down to the
+records attributed to one plan step, so a step's work reads back without pulling the
+whole turn; `L4Query{IDs: []string{id}}` gets a single record back by
 id (a missing id yields an empty slice, a malformed one `ErrInvalidQuery`). An empty
 query returns the domain's whole content set — bound it with a time range or `Limit`
 on a large domain.

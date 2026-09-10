@@ -77,6 +77,69 @@ func TestSearchL4TopicOnly(t *testing.T) {
 	}
 }
 
+// writeEvent records one operation event in the topic's own Seq space, optionally
+// attributed to a plan step — the axis the content read filters on.
+func writeEvent(t *testing.T, engine *core.StorageEngine, topicID, seq uint64,
+	nodePath, text string) core.ArchiveSlot {
+	t.Helper()
+	arc := core.ArchiveSlot{
+		IDHash: core.HashContent(topicID, seq), Kind: core.KindEvent, Seq: seq,
+		TopicID: topicID, NodePath: nodePath, EventType: "tool_call",
+		Content: text, CreatedAt: int64(2000 + seq),
+	}
+	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arc.IDHash, &arc); err != nil {
+		t.Fatalf("write event %d: %v", seq, err)
+	}
+	return arc
+}
+
+// One turn's events are a plan step at a time for the host: NodePath filters the
+// attribution down to the step it belongs to, inside the turn that owns them.
+func TestSearchL4ByNodePath(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	topic := common.HashID("turn-tree")
+	writeSlot(t, engine, topic, core.SeqUser, core.KindUtterance, "u", 1000, core.ContentText)
+	e11 := writeEvent(t, engine, topic, 3, "1.1", "cargo build")
+	e12 := writeEvent(t, engine, topic, 4, "1.2", "cargo test")
+	writeEvent(t, engine, topic, 5, "", "unattributed")
+
+	topicHex := common.FormatHash(topic)
+	event := core.KindEvent
+	out, err := db.SearchL4(core.DefaultAgentID,
+		L4Query{TopicID: &topicHex, Kind: &event, NodePath: "1.1"})
+	if err != nil {
+		t.Fatalf("node-path read: %v", err)
+	}
+	if len(out) != 1 || out[0].IDHash != e11.IDHash {
+		t.Fatalf("want only the 1.1 event, got %+v", out)
+	}
+	// A step nothing was bound to reads back empty — not the whole turn, and not
+	// the unattributed event that shares its prefix.
+	if out, err = db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &topicHex, NodePath: "1"}); err != nil || len(out) != 0 {
+		t.Fatalf("root step: want no match, got %d / %v", len(out), err)
+	}
+	if out, err = db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &topicHex, NodePath: "1.2"}); err != nil ||
+		len(out) != 1 || out[0].IDHash != e12.IDHash {
+		t.Fatalf("1.2: want the single event, got %+v / %v", out, err)
+	}
+}
+
+// A step address means nothing outside the turn holding its records, and a read
+// that took one without a topic would sweep the whole domain.
+func TestNodePathFilterNeedsTopicID(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	if _, err := db.SearchL4(core.DefaultAgentID, L4Query{NodePath: "1.1"}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("node path without a topic: want ErrInvalidQuery, got %v", err)
+	}
+	topicHex := common.FormatHash(common.HashID("shape"))
+	if _, err := db.SearchL4(core.DefaultAgentID,
+		L4Query{TopicID: &topicHex, NodePath: "1..2"}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("malformed node path: want ErrInvalidQuery, got %v", err)
+	}
+}
+
 // TestSearchL4TopicFilter three modes combined with TopicID filtering.
 func TestSearchL4TopicFilter(t *testing.T) {
 	engine := newTestEngine(t)

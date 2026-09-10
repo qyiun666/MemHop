@@ -18,15 +18,26 @@ import (
 // SearchL4 reads the content records matching every condition of q; the
 // conditions AND together, so an empty query returns the domain's whole content
 // set — utterances AND events alike, which is why Kind is one of the conditions.
-// Keyword is case-insensitive and Limit keeps the newest matches.
+// Keyword is case-insensitive and Limit keeps the newest matches. NodePath keeps
+// only the records attributed to one plan step, and a step is addressed inside a
+// turn, so it is refused without TopicID.
 func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
+	if q.NodePath != "" {
+		if q.TopicID == nil {
+			return nil, common.NewError(common.ErrInvalidQuery,
+				"a node-path filter needs its turn's topic id")
+		}
+		if _, err := plan.SplitNodePath(q.NodePath); err != nil {
+			return nil, err
+		}
+	}
 	rq := repo.ArchiveQuery{Keyword: q.Keyword, Start: q.Start, End: q.End, Type: q.Type,
-		Kind: q.Kind, Limit: q.Limit, Index: ac.L4}
+		Kind: q.Kind, NodePath: q.NodePath, Limit: q.Limit, Index: ac.L4}
 	if len(q.IDs) > 0 {
 		ids, ok := common.ParseAll(q.IDs)
 		if !ok {
