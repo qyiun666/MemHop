@@ -23,7 +23,7 @@ README 的版本表与 git log。
 计划是计划**——凡「一轮里的内容」（说了什么 + 做了什么）同住 L4、以 (话题, `Kind`, `Seq`)
 寻址；计划层只剩每个话题一棵计划树（该层在本版本内由 L6 改号为 L5）；话题不再持有内容引用。
 
-### 记录与格式（`FormatVersion 0x000D → 0x000F`）
+### 记录与格式（该两轮 `FormatVersion 0x000D → 0x000F`；本版本最终为 `0x0010`，见下文第三轮）
 
 - `ArchiveSlot` 吸收事件侧字段：`Kind`（`KindUtterance` / `KindEvent`）、`Seq`、`EventType`、
   `NodePath`。归档 id 从「正文哈希」改为**位置式** `hash("content:"+话题+":"+seq)`，于是同 (话题, Seq)
@@ -46,7 +46,7 @@ README 的版本表与 git log。
   集中全部宿主不可信字段：`Kind` 必须已定义、`Role` 只能是 user/agent/system（值 3 是库给融合摘要
   自己盖的标记，拒）、`ContentType` 必须已定义、`EventType` 非空 **iff** 事件、`NodePath` 仅事件侧、
   超预算拒写不截断（事件 4 KiB、原文 64 KiB——原文上限的理由是分片提炼会把锁内 LLM 调用数推到
-  无界）。校验严格排在 `EnsureNode` 之前。
+  无界）。校验严格排在任何写入之前。
 - `Seq` 是一个话题内跨 Kind 共享的单一空间：`0` 自动分配且从不说谎地跳过 1/2（那两个位置属于
   对话）；显式命名的槽位被占用即覆写，跨 Kind 也覆写。
 - **`Update(sceneID, topicID)` 只蒸馏**：读该话题的全部 `Kind=utterance` 记录、按 `Seq` 序渲染成带
@@ -63,7 +63,7 @@ README 的版本表与 git log。
   `Update` 改为两参且不再回 id（话题 id 是 `Search` 给的）。`MultiAgentDB` 8 个不变。
 - DTO：删 `api.TrajectorySlot`、`TurnUpdate`；`ArchiveSlot` 升为写读两用（写侧忽略 `IDHash`/
   `TopicID`，所以「读回来改一句写回原槽」天然成立）；`L4Query` 加 `Kind` 条件、
-  `SceneMessage` 加 `Seq`（空洞由此可判别）；`PlanCommit` 的事件入参换 `ArchiveSlot`；
+  `SceneMessage` 加 `Seq`（空洞由此可判别）；计划写面的事件入参换 `ArchiveSlot`（该写面在第三轮被 `PlanSet` 取代）；
   `TrajectorySessionSummary.Steps` 改名 `Events`（它统计的一直只是事件）。
 - 常量：补 `KindUtterance`/`KindEvent`/`RoleSystem`，**收回 `RoleDream`**。
 - 场景读回的完整性判据改写：「索引点名、记录读不到」= 镜像漂移，仍硬 `ErrIO`；
@@ -111,13 +111,50 @@ README 的版本表与 git log。
   路径形状复用 `plan.SplitNodePath` 与写侧同一词表。方法数不变：Go 面仍 25 + 8，MCP 仍 24
   （`L4Query` 是别名链，MCP 侧只多一个入参属性）。
 
+### 计划层重做：一轮一棵树，一次声明整棵（同版本内的第三轮）
+
+上一段把「跨轮持续演化的计划树」列为放弃项，留给宿主的替代手段是**每轮回放自己的计划**——但库
+没有给回放的工具：唯一的树写面 `PlanCommit` 一次只走一步，并且**强制绑一条事件**（事件侧
+`Content` 与 `EventType` 都非空才过闸）。于是第 N 轮要把计划重述成 `1,2,3.1,3.2,3.3,4`，宿主得发
+六次调用，还得给早已完成的 `1`、`2` **各编一条假事件**才能把 `done` 落进这一轮的树。
+
+- **`api.Session.PlanSet(topicID, []PlanStep)` 顶替 `PlanCommit`**：一次声明本轮规划的这些步骤，
+  点号路径任意深度，路径上缺失的段按 pending 建出来。方法数一进一出，Go 面仍 **25 + 8**。
+- **不做「声明里没出现的节点即删除」**：`6c1aa7d` 退役 `SyncPlanTree` 时那条理由仍然成立——部分
+  重述与完整重述在库这边长得一模一样，猜错就是静默删掉宿主的一步。撤回一步的手段是**下一轮声明
+  一棵新树**（旧树由 `l5_prune` 的保留窗回收），这与 L4 刚定过的「重放不再去填的槽位不回收」
+  同一个姿态。
+- **节点只由声明建立**：`AppendArchive` 不再顺手 `EnsureNode`，事件绑到一个从没声明过的步骤即
+  `ErrInvalidQuery` 且记录与节点都不留。判据是产品语义本身——步骤按计划执行要求计划先于步骤存在；
+  副产品是关掉了「打错一段路径凭空多出一棵树」这个上一版自认的已知代价。
+- **读侧 `NodePath` 改子树匹配**（`repo.NodePathUnder`）：一步拆成子步之后它做过的事在孩子身上，
+  精确匹配读不回父步。点号是段边界，所以一次 `root+"."` 前缀判断就足够，`"3"` 不会误命中 `"30"`。
+  代价：拿不到「只属于这一步、不含子步」那个切面。
+- **计划节点去 `plan_type`**：三个库定值 `plan/step/tool_call` 无任何读者——`Status` 担生命周期、
+  `Title`/`Summary` 担语义，「调了哪个工具」本来就记在该步事件的 `EventType` 上。与退役
+  `planEventTypes` 名单同一条论证。
+- **状态词表去 `running`**：与 `in_progress` 同义而引擎分辨不出差别。词表从五个收成四个，且
+  **不加状态迁移表**——快照式写面下状态是宿主声明的事实，库不裁决它能不能跳。
+- **折叠判据收紧**：父节点只在自身 `done`、自身 `Summary` 为空**且全部直接子到达终态**时才折
+  （此前有一个 done 子就拼）。半成品拼出来的摘要读起来与成品无异，而父节点上没有任何东西说明
+  第三个子当时还开着。
+- **步骤被重开时清 `FinishedAt`**：原先钉的是「首次完成时间永不改写」，但那会让一条自称
+  `in_progress` 的记录带着完成时间回给读者。摘要文本由宿主在声明里带；**L5 不调 LLM**——
+  节点完成与 `Update` 那一轮的话题蒸馏是两件事，压缩总结的归属仍在 `Update`。
+- 格式版本 `0x000F → 0x0010`：退役的状态值 4 在存量记录里会被渲染成「未定义存储值」而让一次
+  `PlanState` 失败，事件也可能指向从未声明的步骤，两者按新规则都读不对；`0x000F` 及更早拒绝打开、
+  无迁移。
+
 ### 对宿主的破坏性变更（跟版清单）
 
 `TurnUpdate` / `api.TrajectorySlot` / `AppendTrajectory` / `ReadTrajectory` 四个符号消失；
-`Update` 签名与返回值变更；`PlanCommit` 的事件入参换类型；`TrajectorySessionSummary.Steps` →
-`Events`；`api.RoleDream` 不再导出；`api.SceneSlot` 去掉 `topic_count`/`hit_count`/`last_hit_at`
-三字段；`api.ArchiveSlot.ContextID` 改名 `TopicID`（Go 字段与 JSON 键同时变）；`DreamStage` 词表
-去 `usage_feedback`、`l6_prune` 改号 `l5_prune`；格式版本 `0x000F`——`0x000E` 及更早的 `.meh`
+`Update` 签名与返回值变更；`TrajectorySessionSummary.Steps` → `Events`；`api.RoleDream` 不再导出；
+`api.SceneSlot` 去掉 `topic_count`/`hit_count`/`last_hit_at` 三字段；
+`api.ArchiveSlot.ContextID` 改名 `TopicID`（Go 字段与 JSON 键同时变）；`DreamStage` 词表
+去 `usage_feedback`、`l6_prune` 改号 `l5_prune`；**`PlanCommit` 整体消失**、换 `PlanSet`，
+`api.PlanStep` 加 `NodePath` 去 `Type`，`api.PlanNodeView` 去 `Type`，`api.PlanStatusRunning`
+常量退役；**事件写必须先 `PlanSet`**（纯 MCP 宿主因此用不了 `memhop_archive_append` 的
+`node_path`，工具面与工具数不变）；格式版本最终为 `0x0010`——`0x000F` 及更早的 `.meh`
 拒绝打开（无迁移）。
 
 ### 测试与档案
@@ -133,6 +170,22 @@ README 的版本表与 git log。
 - `Update` 侧的落盘断言方向反转（失败不再要求零内容留痕），新增「内容为空 ⇒ 零 LLM 调用」、
   `ValidateAppend` 逐条拒因、跨 Kind 的 Seq 覆写、`RenderForDistill` 的角色标签、
   过期转录读回为空且不报错的端到端一条。
+- 第三轮新增：`TestPlanSetLeavesUndeclaredNodesAlone`（**没有这条，整棵声明就退回到被否决过的整树
+  diff 同步**）、`TestPlanSetRefusesAmbiguousDeclaration`（重复命名同一步 / 空路径 / 空段 / 未知状态 /
+  空状态，五种拒因各钉「树上零留痕」）、`TestEventBindsOnlyToADeclaredStep`（绑到未声明步骤的事件
+  既不落记录也不长节点）、`TestSearchL4ByNodePath` 按子树语义逐条改写（父/子/孙三层各查一遍，并
+  钉住同前缀兄弟 `"30"` 不被 `"3"` 误伤）、`TestPlanSetRollupWaitsForEveryChild`、`TestPlanSetFinishedAt`
+  （原 `TestPlanCommit_FinishedAt` 钉的是「非终态提交不清完成时间」，与本判据正面相反，按新规则改写）。
+- 版本拒绝用例的断言加牙并做过变异检验：逐条核对错误消息里的实际版本与期望版本，把
+  `FormatVersion` 临时改回 `0x000F` 时 `0x000f` 子例立刻变红——只判「消息里有 version 字样」的话，
+  一个常量漏改会静默通过。
+- **`test/` 里的 `api_interface_*` 那一批走包内 mock LLM，可本机离线跑**
+  （`go test -tags integration ./test/ -run TestInterface` → 21 条）；要真额度的只有
+  `core_cycle` / `e2e_flow` / `fidelity` / `keyword_extraction_e2e` / `benchmark`。本轮正是跑这一批
+  才发现 `TestInterfaceTurnContentSharesOneKey` 的前提（事件绑到一个还不存在的步骤）已被推翻。
+- 决策档案第三轮：`notes/implemented/architecture/2026-09-10-plan-tree-declared-per-turn.md`；
+  `notes/rejected/architecture/2026-09-09-plan-whole-tree-record-and-cross-layer-cascade.md` 里
+  「提交即追加胜出」与「纠正手段是作废整轮」两条按本轮现状改写（整树一记录那条否决仍然成立）。
 - 决策档案（2026-09-09/10）：`notes/implemented/architecture/2026-09-09-l4-content-layer-and-plan-only-l6.md`、
   `notes/implemented/simplification/2026-09-09-addressing-content-by-topic-and-kind.md`、
   `notes/implemented/simplification/2026-09-09-l4-seven-day-retention-and-transcript-completeness.md`、

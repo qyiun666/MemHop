@@ -172,7 +172,7 @@ err := db.AppendArchive(topicIDHex, api.ArchiveSlot{
 err = db.AppendArchive(topicIDHex, api.ArchiveSlot{
     Kind:      api.KindEvent,
     EventType: "tool_call",       // event only; free-form, no whitelist
-    NodePath:  "1.1",             // optional: creates that step as pending
+    NodePath:  "1.1",             // optional: a step this turn's PlanSet declared
     Content:   `{"tool":"grep"}`,
     CreatedAt: time.Now().UnixMilli(),
 })
@@ -542,8 +542,18 @@ func main() {
     userTS := time.Now().UnixMilli()
     _ = db.AppendArchive(topicID, api.ArchiveSlot{Kind: api.KindUtterance, Seq: 1,
         Role: api.RoleUser, Content: "user raw message", CreatedAt: userTS})
+
+    // The plan comes first: a step exists because it was declared here, and an
+    // event can only be attributed to a step the plan already holds. The host's
+    // LLM re-plans every turn, so this one call restates the whole tree.
+    _ = db.PlanSet(topicID, []api.PlanStep{
+        {NodePath: "1", Title: "locate the regression", Status: api.PlanStatusDone, Summary: "…"},
+        {NodePath: "2", Title: "fix", Status: api.PlanStatusInProgress},
+        {NodePath: "2.1", Status: api.PlanStatusInProgress},
+    })
     _ = db.AppendArchive(topicID, api.ArchiveSlot{Kind: api.KindEvent,
-        EventType: "tool_call", Content: "grep ...", CreatedAt: userTS + 1})
+        EventType: "tool_call", NodePath: "2.1",
+        Content: "grep ...", CreatedAt: userTS + 1})
     _ = db.AppendArchive(topicID, api.ArchiveSlot{Kind: api.KindUtterance, Seq: 2,
         Role: api.RoleAgent, Content: "agent reply", CreatedAt: time.Now().UnixMilli()})
 

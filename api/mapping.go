@@ -246,7 +246,7 @@ func toInternalPlanSteps(in []PlanStep) []internal.PlanStep {
 
 func toInternalPlanStep(s PlanStep) internal.PlanStep {
 	return internal.PlanStep{
-		NodePath: s.NodePath, Status: internal.PlanStatus(s.Status),
+		NodePath: s.NodePath, Status: s.Status,
 		Title: s.Title, Summary: s.Summary,
 	}
 }

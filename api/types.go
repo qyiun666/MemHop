@@ -204,10 +204,10 @@ type PlanNodeView struct {
 // (pending / in_progress / done / failed), every step states it, and an unknown
 // value is refused before the tree moves.
 type PlanStep struct {
-	NodePath string `json:"node_path"`
-	Title    string `json:"title"`
-	Status   string `json:"status"`
-	Summary  string `json:"summary"`
+	NodePath string     `json:"node_path"`
+	Title    string     `json:"title"`
+	Status   PlanStatus `json:"status"`
+	Summary  string     `json:"summary"`
 }
 
 // PlanTree is the external forest view of one plan: every top-level step is

@@ -139,7 +139,7 @@ func TestInterfacePlanDeclareAndFold(t *testing.T) {
 	sceneID := openSession(t, db)
 	topicID := openTurn(t, db, sceneID)
 
-	pending, done := string(memhop.PlanStatusPending), string(memhop.PlanStatusDone)
+	pending, done := memhop.PlanStatusPending, memhop.PlanStatusDone
 	mustDeclare(t, db, topicID,
 		memhop.PlanStep{NodePath: "1", Title: "父", Status: pending},
 		memhop.PlanStep{NodePath: "1.1", Title: "子一", Status: done, Summary: "改动收敛到 3 个文件"},
@@ -148,7 +148,7 @@ func TestInterfacePlanDeclareAndFold(t *testing.T) {
 	// The fold is not a verdict on the parent: a parent is Done only because the
 	// host declared it so, so an open parent keeps an empty Summary even with
 	// every child settled.
-	if got := findPlanNode(t, mustPlanState(t, db, topicID), "1"); got.Status != pending || got.Summary != "" {
+	if got := findPlanNode(t, mustPlanState(t, db, topicID), "1"); got.Status != string(pending) || got.Summary != "" {
 		t.Fatalf("an undeclared-done parent was folded: %+v", got)
 	}
 	mustDeclare(t, db, topicID, memhop.PlanStep{NodePath: "1", Status: done})
@@ -174,7 +174,7 @@ func TestInterfacePlanDeclareAndFold(t *testing.T) {
 		t.Fatalf("children = %+v, want two", folded.Children)
 	}
 	for _, c := range folded.Children {
-		if c.Status != done || c.Summary == "" || c.NodePath == "" {
+		if c.Status != string(done) || c.Summary == "" || c.NodePath == "" {
 			t.Fatalf("a child view lost its fields: %+v", c)
 		}
 	}
@@ -205,7 +205,7 @@ func TestInterfacePlanReplannedAcrossTurns(t *testing.T) {
 	first := openTurn(t, db, sceneID)
 	second := openTurn(t, db, sceneID)
 	third := openTurn(t, db, sceneID)
-	done := string(memhop.PlanStatusDone)
+	done := memhop.PlanStatusDone
 
 	mustDeclare(t, db, first, memhop.PlanStep{NodePath: "1", Title: "还没想清楚", Status: done})
 	mustDeclare(t, db, second,
@@ -336,7 +336,7 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 
 	mustAppend(t, db, turnID, "", planEvent(ts, "tool_call", `{"tool":"bash"}`))
 	mustDeclare(t, db, turnID, memhop.PlanStep{NodePath: "1.1", Title: "调研",
-		Status: string(memhop.PlanStatusDone), Summary: "结论一"})
+		Status: memhop.PlanStatusDone, Summary: "结论一"})
 	mustAppend(t, db, turnID, "1.1", planEvent(ts+1, "plan_step", "第一步"))
 	if err := db.Checkpoint(); err != nil {
 		t.Fatalf("checkpoint: %v", err)
