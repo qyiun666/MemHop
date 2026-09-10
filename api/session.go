@@ -262,8 +262,8 @@ func (s *Session) Dream(ctx context.Context, sceneID string) (*DreamReport, erro
 }
 
 // SceneContext reads a scene's whole transcript without opening a turn: unlike
-// Search it writes nothing — no turn id is minted, HitCount and LastHitAt stay
-// alone — so it is the read for showing or exporting a conversation.
+// Search it writes nothing — no turn id is minted and the scene's turn counter
+// stays where it is — so it is the read for showing or exporting a conversation.
 //
 // It returns more than Search does, on purpose: a Dream-fused group keeps its
 // originals on the sunk child topics, and SceneContext is the only read that

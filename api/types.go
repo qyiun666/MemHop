@@ -79,8 +79,6 @@ type SceneSlot struct {
 	SceneID    string `json:"scene_id"`
 	SceneName  string `json:"scene_name"`
 	TopicCount int    `json:"topic_count"`
-	HitCount   uint32 `json:"hit_count"`
-	LastHitAt  int64  `json:"last_hit_at"`
 	L3ID       string `json:"l3_id,omitempty"`
 }
 

@@ -61,8 +61,6 @@ func fromSceneSlot(s internal.SceneSlot) SceneSlot {
 		SceneID:    formatID(s.SceneID),
 		SceneName:  s.SceneName,
 		TopicCount: s.TopicCount,
-		HitCount:   s.HitCount,
-		LastHitAt:  s.LastHitAt,
 		L3ID:       formatOptionalID(s.L3ID),
 	}
 }

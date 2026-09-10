@@ -140,7 +140,7 @@ res, err := db.Search(api.SearchQuery{
 })
 ```
 
-No `ctx` parameter — the read path holds no cancellable LLM or network work — and **no retrieval cost**: no LLM, no embedding, no scoring; the hit scene's topics come straight from the L2Meta cache. A new scene starts out named `session:<id>` by the library; `UpdateScene(sceneID, ScenePatch{Name: &name})` is the host's one way to title it, and the title survives every later read (Search rewrites that same record to bump its counters, never the name). The only write is the scene record: its hit counters (feeding Dream's importance feedback) and its turn counter, which is what mints `NewTopicID`.
+No `ctx` parameter — the read path holds no cancellable LLM or network work — and **no retrieval cost**: no LLM, no embedding, no scoring; the hit scene's topics come straight from the L2Meta cache. A new scene starts out named `session:<id>` by the library; `UpdateScene(sceneID, ScenePatch{Name: &name})` is the host's one way to title it, and the title survives every later read (Search rewrites that same record to advance its turn counter, never the name). The only write is that counter: it is what mints `NewTopicID`.
 
 **`SearchResult` fields:**
 
@@ -273,7 +273,7 @@ with Dream: there is no standalone distill entry point.
 | Method | Meaning |
 |---|---|
 | `db.ListScenes(l3ID) ([]SceneSlot, error)` | scene list (`SceneID / SceneName / TopicCount`); a non-empty `l3ID` keeps only the scenes anchored to that project domain, `""` lists all |
-| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn opened, hit counters untouched; **use for session resume**. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back: entries carry `Depth` and `ChildCount` so a fused parent (whose message is Dream's summary) can be told from the turns it grouped. `TopicCount` counts the entries returned, not the scene's depth-1 roots |
+| `db.SceneContext(sceneID) (*SceneContext, error)` | the scene's whole transcript (topics + their L4 originals) and **no write at all** — no turn is opened; **use for session resume**. Unlike `Search` it flattens to depth 2, because a Dream-fused group keeps its originals on the children it sank, and this is the only read that brings them back: entries carry `Depth` and `ChildCount` so a fused parent (whose message is Dream's summary) can be told from the turns it grouped. `TopicCount` counts the entries returned, not the scene's depth-1 roots |
 | `db.UpdateScene(sceneID, api.ScenePatch{Name, L3ID, Force}) (SceneSlot, error)` | title it (`Name`), anchor it to an L3 project domain (`L3ID`), or clear the anchor (`L3ID: &""`); nil fields keep their stored value, and the **written scene comes back** |
 | `db.MergeScenes(primaryID, []secondaryIDs) error` | merge scenes |
 | `db.DeleteTopic(topicID) error` | delete a topic subtree + its L4 archives + indexes; prunes parent `ChildrenIDs` (memory correction) |

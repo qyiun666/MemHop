@@ -381,8 +381,8 @@ func TestUpdateSceneNameSurvivesLaterTurns(t *testing.T) {
 	if again.Scene.SceneName != "rust 学习" {
 		t.Fatalf("name after reopen = %q, want the title to persist", again.Scene.SceneName)
 	}
-	if again.Scene.HitCount <= res.Scene.HitCount {
-		t.Fatalf("reopen did not bump HitCount: %d -> %d", res.Scene.HitCount, again.Scene.HitCount)
+	if again.Scene.TurnSeq <= res.Scene.TurnSeq {
+		t.Fatalf("reopen did not advance TurnSeq: %d -> %d", res.Scene.TurnSeq, again.Scene.TurnSeq)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("LLM calls = %d, want 1 (only Update distills)", got)
@@ -450,5 +450,35 @@ func TestSceneContextAfterContentRetentionIsEmptyNotAnError(t *testing.T) {
 	// turn at all.
 	if len(found.Keywords) == 0 {
 		t.Fatalf("the topic lost the one thing that outlives its content: %+v", found)
+	}
+}
+
+// SceneContext is the recovery read: it opens no turn. The turn counter is not
+// on the host-visible scene record, so the contract is pinned here, where the
+// record itself is readable. A read that consumed a turn would hand the host's
+// next Search an id for a turn nobody opened, and the one it skipped would never
+// settle.
+func TestSceneContextOpensNoTurn(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, _ := openTurn(t, db)
+
+	if _, err := db.SceneContext(core.DefaultAgentID, common.FormatHash(sceneID)); err != nil {
+		t.Fatalf("scene context: %v", err)
+	}
+	slot, err := core.ReadSceneSlot(db.engine, core.DefaultAgentID, sceneID)
+	if err != nil {
+		t.Fatalf("read scene: %v", err)
+	}
+	if slot.TurnSeq != 1 {
+		t.Fatalf("SceneContext opened a turn: TurnSeq = %d, want 1", slot.TurnSeq)
+	}
+
+	res, err := db.Search(core.DefaultAgentID, SearchQuery{SceneID: common.FormatHash(sceneID)})
+	if err != nil {
+		t.Fatalf("search after SceneContext: %v", err)
+	}
+	if want := core.ComputeTurnTopicID(sceneID, 2); res.NewTopicID != want {
+		t.Fatalf("next read issued %d, want turn 2 (%d)", res.NewTopicID, want)
 	}
 }

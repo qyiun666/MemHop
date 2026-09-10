@@ -215,9 +215,9 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 }
 
-// One read of a scene opens one turn: the usage counters and the turn counter
-// move together, and the caller gets the bumped record back.
-func TestOpenSceneTurnAdvancesCounters(t *testing.T) {
+// One read of a scene opens one turn: the turn counter moves and the caller
+// gets the bumped record back.
+func TestOpenSceneTurnAdvancesTurnSeq(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(4242)
 	if err := CreateSceneL2WithID(engine, core.DefaultAgentID, sceneID, "scene-usage-1"); err != nil {
@@ -230,15 +230,15 @@ func TestOpenSceneTurnAdvancesCounters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("second turn: %v", err)
 	}
-	if opened.HitCount != 2 || opened.LastHitAt != 2000 || opened.TurnSeq != 2 {
+	if opened.TurnSeq != 2 {
 		t.Fatalf("returned record not the bumped one: %+v", opened)
 	}
 	slot, err := core.ReadSceneSlot(engine, core.DefaultAgentID, sceneID)
 	if err != nil {
 		t.Fatalf("read scene: %v", err)
 	}
-	if slot.HitCount != 2 || slot.LastHitAt != 2000 || slot.TurnSeq != 2 {
-		t.Fatalf("scene counters mismatch: %+v", slot)
+	if slot.TurnSeq != 2 {
+		t.Fatalf("stored turn counter: %+v", slot)
 	}
 }
 

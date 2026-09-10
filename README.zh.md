@@ -191,7 +191,7 @@ Dream 周期是一个自动记忆巩固过程，受人脑睡眠中处理经历�
 
 | 路径 | 做什么 | 代价 |
 |------|--------|------|
-| `Search(SearchQuery{SceneID, L3ID})` | 空 `SceneID` → 新建场景（名字由库生成）并返回其 id；非空 → 返回该场景的 depth-1 话题集（按用户消息时间升序）+ L0 画像，外加 `NewTopicID`：本次读取为即将进行的这一轮开出的话题 | 纯内存读（L2Meta 缓存），零 LLM、零 embedding、零打分；唯一写是场景记录（命中计数 + 轮次计数） |
+| `Search(SearchQuery{SceneID, L3ID})` | 空 `SceneID` → 新建场景（名字由库生成）并返回其 id；非空 → 返回该场景的 depth-1 话题集（按用户消息时间升序）+ L0 画像，外加 `NewTopicID`：本次读取为即将进行的这一轮开出的话题 | 纯内存读（L2Meta 缓存），零 LLM、零 embedding、零打分；唯一写是场景记录（轮次计数） |
 | `AppendArchive(topicID, ArchiveSlot{Kind, ...})` | 一轮内容的唯一写入面：原文声明谁说的、是什么媒介；事件自己命名，并可挂在某个计划步骤上。`Seq: 0` 在两个对话槽之上分配 | 零 LLM；被拒的记录一字节不留（含顺路要建的节点）。事件 4 KiB、原文 64 KiB，超预算是拒写不是截断 |
 | `Update(sceneID, topicID)` | 把该话题已有的原文蒸馏成它的 `FusedKeywords`；它自己不写任何内容 | 每轮恰好 1 次 LLM 调用，且排在该轮话题落盘之前，失败不留半成品话题。内容已被 7 天窗裁光的轮次直接 `ErrInvalidQuery`，一次 LLM 也不调用 |
 

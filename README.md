@@ -194,7 +194,7 @@ Trigger: once a scene's depth-1 topic count passes `Defaults.SceneDreamTopicThre
 
 | Path | What it does | Cost |
 |------|--------------|------|
-| `Search(SearchQuery{SceneID, L3ID})` | empty `SceneID` → create a scene (named by the library) and return its id; otherwise → the scene's depth-1 topics (user-timestamp order) plus the L0 profile — and `NewTopicID`, the topic this read opens for the coming turn | in-memory read (L2Meta), zero LLM / embedding / scoring; the only write is the scene record (hit counters + turn counter) |
+| `Search(SearchQuery{SceneID, L3ID})` | empty `SceneID` → create a scene (named by the library) and return its id; otherwise → the scene's depth-1 topics (user-timestamp order) plus the L0 profile — and `NewTopicID`, the topic this read opens for the coming turn | in-memory read (L2Meta), zero LLM / embedding / scoring; the only write is the scene record (its turn counter) |
 | `AppendArchive(topicID, ArchiveSlot{Kind, ...})` | the turn's only content write: an utterance declares who spoke and what the content is; an event names itself and may hang on a plan step. `Seq: 0` allocates above the two dialogue slots | zero LLM; a refused record stores nothing, including no node along `NodePath`; budgets are 4 KiB per event and 64 KiB per utterance, refused rather than truncated |
 | `Update(sceneID, topicID)` | distills the utterances that topic holds into its keyword track; it writes no content of its own | exactly one LLM call per turn, and it runs before the topic is written, so a failure leaves no topic. A turn whose content the 7-day window already reclaimed is refused with `ErrInvalidQuery` without reaching the LLM |
 

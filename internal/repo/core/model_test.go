@@ -89,10 +89,10 @@ func TestSceneEdgeRoundtrip(t *testing.T) {
 }
 
 func TestSceneSlotRoundtrip(t *testing.T) {
-	s := SceneSlot{SceneID: 12345, SceneName: "测试场景", HitCount: 3, LastHitAt: 1000}
+	s := SceneSlot{SceneID: 12345, SceneName: "测试场景", TurnSeq: 3}
 	var got SceneSlot
 	jsonRoundtrip(t, s, &got)
-	if got.SceneID != s.SceneID || got.SceneName != s.SceneName || got.HitCount != s.HitCount || got.LastHitAt != s.LastHitAt {
+	if got.SceneID != s.SceneID || got.SceneName != s.SceneName || got.TurnSeq != s.TurnSeq {
 		t.Fatalf("mismatch: %+v", got)
 	}
 }

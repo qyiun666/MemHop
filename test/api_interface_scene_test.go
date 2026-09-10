@@ -223,14 +223,9 @@ func TestInterfaceSceneContextReadsThroughFusion(t *testing.T) {
 		}
 	}
 
-	// Search mints a turn on every read; SceneContext must not advance it.
-	turnBefore := findScene(t, db, sceneID)
-	if _, err := db.SceneContext(sceneID); err != nil {
-		t.Fatalf("SceneContext: %v", err)
-	}
-	if turnAfter := findScene(t, db, sceneID); turnAfter.HitCount != turnBefore.HitCount || turnAfter.LastHitAt != turnBefore.LastHitAt {
-		t.Fatalf("SceneContext moved the usage counters: %+v vs %+v", turnAfter, turnBefore)
-	}
+	// SceneContext opens no turn. The turn counter is not on the host-visible
+	// scene record, so that contract is pinned where it is readable:
+	// TestSceneContextOpensNoTurn in internal.
 
 	// After consolidation the ordinary read shows one fused group, while
 	// SceneContext still hands back the originals on the children it sunk.

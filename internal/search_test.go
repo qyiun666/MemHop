@@ -121,8 +121,8 @@ func TestSearchReadsSceneSurface(t *testing.T) {
 	}
 }
 
-// Search costs no LLM call and writes no memory record: only the scene's
-// usage counters move.
+// Search costs no LLM call and writes no memory record: the scene record is the
+// only thing it touches, and only to open a turn.
 func TestSearchIsReadOnlyAndCallsNoLLM(t *testing.T) {
 	srv, calls := countingLLMServer(t, `{"keywords":["should not be called"]}`)
 	db := newSearchTestDB(t, srv.URL)
@@ -150,8 +150,8 @@ func TestSearchIsReadOnlyAndCallsNoLLM(t *testing.T) {
 	if after != before {
 		t.Fatalf("Search wrote records: before %v after %v", before, after)
 	}
-	if res.Scene.HitCount != 1 {
-		t.Errorf("usage counter should record the read, got %+v", res.Scene)
+	if res.Scene.TurnSeq != 1 {
+		t.Errorf("read must open one turn, got %+v", res.Scene)
 	}
 }
 
@@ -176,7 +176,7 @@ func TestSearchOpensOneTurnPerRead(t *testing.T) {
 	if second.NewTopicID == first.NewTopicID {
 		t.Fatal("two reads of one scene issued the same turn topic")
 	}
-	if len(second.Topics) != 0 || second.Scene.HitCount != 2 {
+	if len(second.Topics) != 0 || second.Scene.TurnSeq != 2 {
 		t.Fatalf("opening a turn must not create a topic, got %+v", second)
 	}
 

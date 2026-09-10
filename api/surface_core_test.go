@@ -45,9 +45,6 @@ func TestSurfaceTurnFlow(t *testing.T) {
 	if len(again.Topics) != 1 || again.Topics[0].ID != openedTopic {
 		t.Fatalf("scene surface = %+v, want the one turn", again.Topics)
 	}
-	if again.Scene.HitCount == 0 {
-		t.Fatal("reads must fold usage back into the scene record")
-	}
 
 	// Guards: an unknown scene is a lookup that misses, not an orphan write.
 	ghost := common.FormatHash(common.HashID("ghost-scene"))
