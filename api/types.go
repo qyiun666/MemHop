@@ -187,7 +187,6 @@ type PlanNodeView struct {
 	NodePath   string         `json:"node_path"`
 	Title      string         `json:"title"`
 	Status     string         `json:"status"`
-	Type       string         `json:"type"`
 	Summary    string         `json:"summary"`
 	FinishedAt int64          `json:"finished_at"`
 	ChildCount int            `json:"child_count"`
@@ -198,14 +197,13 @@ type PlanNodeView struct {
 // node named by NodePath (a node missing along the path is created as pending,
 // which is how a step is added).
 //
-// The fields are not symmetric. A blank Title/Type/Summary keeps what the node
+// The fields are not symmetric. A blank Title/Summary keeps what the node
 // already holds, so committing a step again never rewinds its title or erases a
 // folded summary. Status has no blank meaning: it is the string surface
-// (pending / in_progress / running / done / failed), every commit states it
+// (pending / in_progress / done / failed), every commit states it
 // explicitly, and an unknown value is refused before the tree moves.
 type PlanStep struct {
 	Title   string `json:"title"`
-	Type    string `json:"type"` // plan/step/tool_call; empty = plain node
 	Status  string `json:"status"`
 	Summary string `json:"summary"`
 }

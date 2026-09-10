@@ -10,20 +10,28 @@ import (
 )
 
 func TestStatusRoundTrip(t *testing.T) {
-	if got, _ := StatusToU8(PlanRunning); got != core.StatusRunning {
-		t.Fatalf("StatusToU8(running) = %d want %d", got, core.StatusRunning)
+	if got, _ := StatusToU8(PlanInProgress); got != core.StatusInProgress {
+		t.Fatalf("StatusToU8(in_progress) = %d want %d", got, core.StatusInProgress)
 	}
-	if got, err := StatusToString(core.StatusRunning); err != nil || got != PlanRunning {
-		t.Fatalf("StatusToString(%d) = %q, %v want %q", core.StatusRunning, got, err, PlanRunning)
+	if got, err := StatusToString(core.StatusInProgress); err != nil || got != PlanInProgress {
+		t.Fatalf("StatusToString(%d) = %q, %v want %q", core.StatusInProgress, got, err, PlanInProgress)
 	}
 	if _, err := StatusToU8(PlanStatus("bogus")); err == nil {
 		t.Fatal("unknown status must be rejected")
+	}
+	// in_progress is the only "being worked on" value: the retired synonym has to
+	// be refused on the write side, not quietly accepted under another name.
+	if _, err := StatusToU8(PlanStatus("running")); err == nil {
+		t.Fatal("the retired running status must be rejected")
 	}
 	// The read side must refuse too: Status is the one bare uint8 in a plan node
 	// whose meaning crosses file versions, and falling back to pending would
 	// render a step the engine cannot name as one that has not started.
 	if _, err := StatusToString(9); err == nil {
 		t.Fatal("an undefined stored status must be reported, not defaulted")
+	}
+	if _, err := StatusToString(4); err == nil {
+		t.Fatal("the retired status value must be reported as an undefined stored value")
 	}
 	if !IsTerminalStatus(core.StatusDone) || !IsTerminalStatus(core.StatusFailed) {
 		t.Fatal("done/failed are terminal")

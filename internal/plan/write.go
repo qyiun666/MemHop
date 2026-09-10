@@ -51,7 +51,7 @@ func EnsureNode(ac *domain.Context, agentID uint64, topicID uint64, nodePath str
 }
 
 // CommitNode applies one host commit to a plan node: its status plus the node's
-// own Title/PlanType/Summary, where a field Step leaves blank keeps what is
+// own Title/Summary, where a field Step leaves blank keeps what is
 // stored — re-committing a step never erases its title or a summary already
 // folded into it. An unknown status is refused before anything is written. A
 // terminal status records FinishedAt exactly once. Writing a node never touches
@@ -72,9 +72,6 @@ func CommitNode(ac *domain.Context, agentID, nodeID uint64, step Step) error {
 	}
 	if step.Title != "" {
 		node.Title = step.Title
-	}
-	if step.PlanType != "" {
-		node.PlanType = step.PlanType
 	}
 	now := time.Now().UnixMilli()
 	if IsTerminalStatus(node.Status) && node.FinishedAt == 0 {

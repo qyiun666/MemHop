@@ -208,7 +208,7 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `O_TRUNC`）在新路径写整理副本，故根层先拒空路径、拒当前库文件
    （`sameFile` 走绝对路径归一）与拒已存在的目标，绝不覆盖任何既有文件。
 12. **`PlanCommit` 未填即继承，路径即结构**：`plan.Step` 里空白的
-   Title/PlanType/Summary 继承节点现值（空 Status 会被 `StatusToU8` 拒——状态是
+   Title/Summary 继承节点现值（空 Status 会被 `StatusToU8` 拒——状态是
    每次必须给的危害字段，不是"不改"），宿主推进一步不必先读旧树；显式传入的值
    仍然覆盖。`nodePath` 自己决定树形：`EnsureNode` 沿点号路径把缺失段一律建成
    pending，所以**打错一段路径会凭空多出一棵树**，而 L5 没有任何删节点入口

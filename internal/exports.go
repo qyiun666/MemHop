@@ -138,7 +138,6 @@ const (
 	StatusInProgress = core.StatusInProgress
 	StatusDone       = core.StatusDone
 	StatusFailed     = core.StatusFailed
-	StatusRunning    = core.StatusRunning
 )
 
 // ---- L4 content type constants ----

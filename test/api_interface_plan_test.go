@@ -115,7 +115,7 @@ func TestInterfacePlanCommitRollup(t *testing.T) {
 
 	commit := func(path, title, status, summary string, ev memhop.ArchiveSlot) error {
 		return db.PlanCommit(topicID, path, ev, memhop.PlanStep{
-			Title: title, Type: "step", Status: status, Summary: summary})
+			Title: title, Status: status, Summary: summary})
 	}
 	pending, done := string(memhop.PlanStatusPending), string(memhop.PlanStatusDone)
 	if err := commit("1", "父", pending, "", planEvent(ts, "plan_step", "开工")); err != nil {
@@ -244,7 +244,7 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 
 // The turn topic id is the only handle a host holds, so a restart must recover
 // both faces of that key from disk: the trajectory events in Seq order with
-// their payloads intact, and the plan tree with each node's own title, type,
+// their payloads intact, and the plan tree with each node's own title,
 // status and folded summary. Rebuilding the trajectory index and the plan cache
 // is exactly where a re-keyed layer breaks silently.
 func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
@@ -257,7 +257,7 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 
 	mustAppend(t, db, turnID, "", planEvent(ts, "tool_call", `{"tool":"bash"}`))
 	if err := db.PlanCommit(turnID, "1.1", planEvent(ts+1, "plan_step", "第一步"),
-		memhop.PlanStep{Title: "调研", Type: "step",
+		memhop.PlanStep{Title: "调研",
 			Status: string(memhop.PlanStatusDone), Summary: "结论一"}); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 	}
 	leaf := findPlanNode(t, mustPlanState(t, reopened, turnID), "1.1")
 	if leaf.Status != string(memhop.PlanStatusDone) || leaf.Title != "调研" ||
-		leaf.Type != "step" || leaf.Summary != "结论一" || leaf.FinishedAt == 0 {
+		leaf.Summary != "结论一" || leaf.FinishedAt == 0 {
 		t.Fatalf("node fields lost on reopen: %+v", leaf)
 	}
 }

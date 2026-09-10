@@ -19,7 +19,6 @@ type planNode struct {
 	title      string
 	status     uint8
 	summary    string
-	planType   string
 	finishedAt int64
 	children   []*planNode
 }
@@ -30,7 +29,6 @@ type PlanNodeView struct {
 	NodePath   string         `json:"node_path"`
 	Title      string         `json:"title"`
 	Status     PlanStatus     `json:"status"`
-	Type       string         `json:"type"`
 	Summary    string         `json:"summary"`
 	FinishedAt int64          `json:"finished_at"`
 	ChildCount int            `json:"child_count"`
@@ -83,7 +81,7 @@ func Forest(nodes []core.PlanNode) []*planNode {
 	for i := range nodes {
 		byNode[nodes[i].IDHash] = &planNode{
 			id: nodes[i].IDHash, nodePath: nodes[i].NodePath, title: nodes[i].Title,
-			status: nodes[i].Status, summary: nodes[i].Summary, planType: nodes[i].PlanType,
+			status: nodes[i].Status, summary: nodes[i].Summary,
 			finishedAt: nodes[i].FinishedAt,
 		}
 	}
@@ -117,7 +115,7 @@ func ToNodeView(n *planNode) (PlanNodeView, error) {
 	}
 	out := PlanNodeView{
 		NodePath: n.nodePath, Title: title, Status: status,
-		Type: n.planType, Summary: n.summary, FinishedAt: n.finishedAt,
+		Summary: n.summary, FinishedAt: n.finishedAt,
 		ChildCount: len(n.children),
 		Children:   make([]PlanNodeView, 0, len(n.children)),
 	}

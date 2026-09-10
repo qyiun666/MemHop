@@ -66,7 +66,6 @@ const (
 const (
 	PlanPending    = plan.PlanPending
 	PlanInProgress = plan.PlanInProgress
-	PlanRunning    = plan.PlanRunning
 	PlanDone       = plan.PlanDone
 	PlanFailed     = plan.PlanFailed
 )

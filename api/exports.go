@@ -73,14 +73,13 @@ const (
 	RoleSystem = internal.RoleSystem
 )
 
-// PlanStatus* are the string lifecycle values PlanCommit accepts and
+// PlanStatus* are the string lifecycle values the plan write surface accepts and
 // PlanState emits. A node's status is only ever expressed this way: the L4
 // event record carries no status field, because every write path assigns the
 // node's own state separately from the events bound to it.
 const (
 	PlanStatusPending    PlanStatus = internal.PlanPending
 	PlanStatusInProgress PlanStatus = internal.PlanInProgress
-	PlanStatusRunning    PlanStatus = internal.PlanRunning
 	PlanStatusDone       PlanStatus = internal.PlanDone
 	PlanStatusFailed     PlanStatus = internal.PlanFailed
 )

@@ -1,7 +1,8 @@
 # internal/plan — L5 计划树小方法
 
 - **职责**：`PlanStatus` 字符串面与 `StatusToU8`/`StatusToString`/
-  `IsTerminalStatus`；`Step`（一次提交的节点侧字段）；`SplitNodePath`；
+  `IsTerminalStatus`；`Step`（一次提交的节点侧字段：状态 + Title + Summary）；
+  `SplitNodePath`；
   写步 `EnsureNode`（沿路径建 pending 节点链，`NodePath` 点号分隔）/
   `CommitNode`（状态 + 节点自身字段，留空即继承现值，终态只戳一次
   `FinishedAt`）/`UpdateNodeSummaryLocked`；树构建 `BuildTree`/`Forest`/
@@ -19,6 +20,11 @@
 - **陷阱**：`Status` 是节点里唯一跨文件版本解读的裸 uint8，词表只有一张
   （`statusNames`，双向都读它）：未定义的存储值在 `StatusToString` 报错而不是
   回落 `pending`——回落会把「引擎叫不出名字的一步」显示成「还没开始的一步」。
+  状态面只有 `pending`/`in_progress`/`done`/`failed`：`running` 与 `in_progress`
+  同义而引擎分辨不出差别，留两个词等于让宿主掷硬币。节点也不再带类型字段——
+  「这一步是什么」由 `Title`/`Summary` 说，「调了哪个工具」记在该步事件的
+  `EventType` 上。**收词表不是改个常量**：被删的那个存储值（4）在存量记录里
+  会走进上面那条报错路径，所以它落在格式版本上而不是落在兼容里。
   `RollupTree` 在非 done 父节点上什么都不做（Model A：父节点完成只由宿主显式
   提交）。写节点永不触碰 L4 内容轨：提交一步不会新增、重排或覆写任何内容记录。
 - 事件的写入契约不在本包：`content.ValidateAppend`（两种 Kind 各自的轴 + 4KB

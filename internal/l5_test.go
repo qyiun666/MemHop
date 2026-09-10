@@ -603,11 +603,11 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	defer db.Close()
 	topicID := common.FormatHash(9)
 	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 1000),
-		PlanStep{Title: "r", PlanType: "plan", Status: PlanPending}); err != nil {
+		PlanStep{Title: "r", Status: PlanPending}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1.1", ev("plan_step", 1100),
-		PlanStep{Title: "a", PlanType: "step", Status: PlanDone, Summary: "s"}); err != nil {
+		PlanStep{Title: "a", Status: PlanDone, Summary: "s"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.AppendArchive(core.DefaultAgentID, topicID, onNode(ev("tool_call", 1200), "1.1")); err != nil {

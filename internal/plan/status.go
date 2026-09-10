@@ -24,7 +24,6 @@ type PlanStatus string
 const (
 	PlanPending    PlanStatus = "pending"
 	PlanInProgress PlanStatus = "in_progress"
-	PlanRunning    PlanStatus = "running"
 	PlanDone       PlanStatus = "done"
 	PlanFailed     PlanStatus = "failed"
 )
@@ -37,7 +36,6 @@ const (
 var statusNames = map[uint8]PlanStatus{
 	core.StatusPending:    PlanPending,
 	core.StatusInProgress: PlanInProgress,
-	core.StatusRunning:    PlanRunning,
 	core.StatusDone:       PlanDone,
 	core.StatusFailed:     PlanFailed,
 }
@@ -64,14 +62,13 @@ func StatusToString(u uint8) (PlanStatus, error) {
 	return s, nil
 }
 
-// Step is one host commit's node-side fields. Status is the string surface; a
-// blank Title/PlanType/Summary inherits what the node already holds, so
-// committing a step again never rewinds its title or erases a folded summary.
+// Step is one declared node's fields. Status is the string surface; a blank
+// Title or Summary inherits what the node already holds, so restating a step
+// never rewinds its title or erases a folded summary.
 type Step struct {
-	Status   PlanStatus
-	Title    string
-	PlanType string // plan/step/tool_call; empty = plain node
-	Summary  string
+	Status  PlanStatus
+	Title   string
+	Summary string
 }
 
 // IsTerminalStatus reports whether a plan-node status is a final state (done

@@ -221,13 +221,13 @@ func HashContent(topicID, seq uint64) uint64 {
 	return common.HashID(fmt.Sprintf("content:%d:%d", topicID, seq))
 }
 
-// Plan node status.
+// Plan node status. in_progress is the one "this step is being worked on" value:
+// a second synonym would give a host two words the engine cannot tell apart.
 const (
 	StatusPending    uint8 = 0
 	StatusInProgress uint8 = 1
 	StatusDone       uint8 = 2
 	StatusFailed     uint8 = 3
-	StatusRunning    uint8 = 4
 )
 
 // PlanNode is one node of an L5 plan tree. L5 holds nothing but these: a turn's
@@ -244,7 +244,6 @@ type PlanNode struct {
 	NodePath   string `json:"node_path"`           // "1" / "1.2.1"
 	Status     uint8  `json:"status"`
 	Title      string `json:"title,omitempty"`       // empty = the view falls back to NodePath
-	PlanType   string `json:"plan_type,omitempty"`   // plan/step/tool_call; empty = plain node
 	Summary    string `json:"summary,omitempty"`     // completion abbreviation
 	FinishedAt int64  `json:"finished_at,omitempty"` // stamped on a terminal status only
 	UpdatedAt  int64  `json:"updated_at"`

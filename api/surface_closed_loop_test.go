@@ -285,14 +285,14 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 	sess := openSurfaceDB(t)
 	pid := mustTurnKey(t, sess)
 	// Committing a step is what adds it: the node chain is created along the
-	// path, and the node keeps the title and type the host named it with.
+	// path, and the node keeps the title the host named it with.
 	seed := []struct{ path, title, status string }{
 		{"1", "root", "in_progress"}, {"1.1", "leaf", "pending"},
 	}
 	for i, s := range seed {
 		if err := sess.PlanCommit(pid, s.path,
 			event("plan_step", "committed", int64(100+i)),
-			PlanStep{Title: s.title, Type: "task", Status: s.status}); err != nil {
+			PlanStep{Title: s.title, Status: s.status}); err != nil {
 			t.Fatalf("commit seed %s: %v", s.path, err)
 		}
 	}
@@ -300,7 +300,7 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if before.TotalCount != 2 || before.Roots[0].Title != "root" || before.Roots[0].Type != "task" {
+	if before.TotalCount != 2 || before.Roots[0].Title != "root" {
 		t.Fatalf("seeded tree = %+v, want a titled root plus its leaf", before)
 	}
 	// Two seeds, so two step events already landed.
@@ -320,7 +320,7 @@ func TestPlanCommitRejectedLeavesTreeUntouched(t *testing.T) {
 			Content: strings.Repeat("x", 5*1024), CreatedAt: 7}, PlanStep{Status: "done"}, ErrInvalidQuery},
 		{"unknown status", event("plan_step", "c", 7),
 			PlanStep{Status: "finished", Summary: "越权摘要"}, ErrInvalidQuery},
-		// Status has no blank meaning (unlike Title/Type/Summary): a commit that
+		// Status has no blank meaning (unlike Title/Summary): a commit that
 		// omits it is refused rather than silently read as "leave it pending".
 		{"blank status", event("plan_step", "c", 7),
 			PlanStep{Summary: "s"}, ErrInvalidQuery},
@@ -472,7 +472,7 @@ func mustTurnKey(t *testing.T, sess *Session) string {
 func render(ns []PlanNodeView) string {
 	var b strings.Builder
 	for _, n := range ns {
-		b.WriteString(n.NodePath + "=" + n.Status + "/" + n.Summary + "/" + n.Title + ":" + n.Type + " ")
+		b.WriteString(n.NodePath + "=" + n.Status + "/" + n.Summary + "/" + n.Title + " ")
 		b.WriteString(render(n.Children))
 	}
 	return b.String()

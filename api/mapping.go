@@ -223,7 +223,7 @@ func fromPlanTree(t *internal.PlanTree) PlanTree {
 func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
 	out := PlanNodeView{
 		NodePath: v.NodePath, Title: v.Title, Status: string(v.Status),
-		Type: v.Type, Summary: v.Summary, FinishedAt: v.FinishedAt,
+		Summary: v.Summary, FinishedAt: v.FinishedAt,
 		ChildCount: v.ChildCount,
 		Children:   make([]PlanNodeView, 0, len(v.Children)),
 	}
@@ -236,7 +236,7 @@ func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
 func toInternalPlanStep(s PlanStep) internal.PlanStep {
 	return internal.PlanStep{
 		Status: internal.PlanStatus(s.Status), Title: s.Title,
-		PlanType: s.Type, Summary: s.Summary,
+		Summary: s.Summary,
 	}
 }
 
