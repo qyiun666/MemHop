@@ -11,16 +11,18 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// SearchL4 reads the archives matching every condition of q; the conditions AND
-// together, so an empty query returns the domain's whole archive set. Keyword is
-// case-insensitive and Limit keeps the newest matches.
+// SearchL4 reads the content records matching every condition of q; the
+// conditions AND together, so an empty query returns the domain's whole content
+// set — utterances AND events alike, which is why Kind is one of the conditions.
+// Keyword is case-insensitive and Limit keeps the newest matches.
 func (db *DB) SearchL4(agentID uint64, q L4Query) ([]core.ArchiveSlot, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer ac.Mu.Unlock()
-	rq := repo.ArchiveQuery{Keyword: q.Keyword, Start: q.Start, End: q.End, Type: q.Type, Limit: q.Limit, Index: ac.Arch}
+	rq := repo.ArchiveQuery{Keyword: q.Keyword, Start: q.Start, End: q.End, Type: q.Type,
+		Kind: q.Kind, Limit: q.Limit, Index: ac.L4}
 	if len(q.IDs) > 0 {
 		ids, ok := common.ParseAll(q.IDs)
 		if !ok {

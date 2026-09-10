@@ -7,7 +7,7 @@
 
 - `engram/`：L1 场景超图的共现建边（Jaccard）与遗忘衰减
   （`BuildHyperedges`/`DecayNetwork`/`RebuildFromL2`）。
-- `llmops/`：轮次关键词提炼（`ExtractTurnKeywords`，宿主热路径每轮恰好一次）/L2 巩固/L1→L0 蒸馏/L6 轨迹纯提炼（`Crystallize`，出参即候选列表，候选原样返回宿主、不落库）四类 LLM 调用点；
+- `llmops/`：轮次关键词提炼（`ExtractTurnKeywords`，宿主热路径每轮恰好一次）/L2 巩固/L1→L0 蒸馏/轮内事件纯提炼（`Crystallize`，出参即候选列表，候选原样返回宿主、不落库）四类 LLM 调用点；
   prompt 契约 + 输出解析 + 自愈重试预算全在此，传输经注入的
   `Chat` 接口（组合根 Provider 实现）。
 - `capability/`：memhop-capability/v4 文档类型（`CapabilityImport`/`CapabilityPackageDoc`/`ResourceRef`）、
@@ -31,4 +31,5 @@
    `repo/core/model_dto.go`、`model_distill.go`（最底层纯数据），
    组合根与门面用恒等别名沿用历史命名。
 5. 每个能力包自带同包单元测试；改算法必须带测试并同步更新本文件分工条目。
+- `llmops.Crystallize` 收的是「一段事件」（`[]core.ArchiveSlot`，调用方已按 `Kind=event` 筛好），prompt 每行取 `Seq`/`EventType`/`Content`。能力包不认识层：读哪一层、按什么预算裁剪，都是组合根与 `internal/content` 的事。
 - engram 的 L1 衰减（`decayRemainingEdges`/`removeEdgeFromNode`）只在记录确实不存在时跳过那条：索引点名而引擎读不动就上报，否则一条边会被当作不存在而永不衰减、且节点可能留着指向已删边的引用。

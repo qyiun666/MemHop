@@ -10,12 +10,21 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// writeArchive writes an L4 archive record.
-func writeArchive(t *testing.T, engine *core.StorageEngine, arc *core.ArchiveSlot) {
+// writeSlot fabricates one content record the way the library would have written
+// it: a Seq of its own, and the id that (topic, Seq) hashes to. A hand-invented id
+// names a record no slot addresses, and a repeated Seq now means one slot being
+// rewritten, so a fixture that ignores both stops describing the store.
+func writeSlot(t *testing.T, engine *core.StorageEngine, topicID, seq uint64,
+	kind core.ArchiveKind, content string, createdAt int64, ctype core.ContentType) core.ArchiveSlot {
 	t.Helper()
-	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arc.IDHash, arc); err != nil {
-		t.Fatalf("write archive: %v", err)
+	arc := core.ArchiveSlot{
+		IDHash: core.HashContent(topicID, seq), Kind: kind, Seq: seq,
+		ContentType: ctype, ContextID: topicID, Content: content, CreatedAt: createdAt,
 	}
+	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arc.IDHash, &arc); err != nil {
+		t.Fatalf("write slot %d: %v", seq, err)
+	}
+	return arc
 }
 
 // TestSearchL4ByID reads archives by ID; a missing ID is simply skipped.
@@ -23,8 +32,7 @@ func TestSearchL4ByID(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	topicHash := common.HashID("topic1")
-	a1 := core.ArchiveSlot{IDHash: common.HashID("m1"), ContextID: topicHash, Content: "hello", CreatedAt: 1000, Role: 0, ContentType: core.ContentText}
-	writeArchive(t, engine, &a1)
+	a1 := writeSlot(t, engine, topicHash, core.SeqUser, core.KindUtterance, "hello", 1000, core.ContentText)
 
 	got, err := db.SearchL4(core.DefaultAgentID, L4Query{IDs: []string{common.FormatHash(a1.IDHash)}})
 	if err != nil {
@@ -50,22 +58,22 @@ func TestSearchL4TopicOnly(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	t1, t2 := common.HashID("only1"), common.HashID("only2")
-	writeArchive(t, engine, &core.ArchiveSlot{IDHash: common.HashID("o1"), ContextID: t1, Content: "u", CreatedAt: 1000})
-	writeArchive(t, engine, &core.ArchiveSlot{IDHash: common.HashID("o2"), ContextID: t1, Content: "a", CreatedAt: 1001})
-	writeArchive(t, engine, &core.ArchiveSlot{IDHash: common.HashID("o3"), ContextID: t2, Content: "other", CreatedAt: 1002})
+	o1 := writeSlot(t, engine, t1, core.SeqUser, core.KindUtterance, "u", 1000, core.ContentText)
+	o2 := writeSlot(t, engine, t1, core.SeqAgent, core.KindUtterance, "a", 1001, core.ContentText)
+	writeSlot(t, engine, t2, core.SeqUser, core.KindUtterance, "other", 1002, core.ContentText)
 
 	t1Hex := common.FormatHash(t1)
 	got, err := db.SearchL4(core.DefaultAgentID, L4Query{TopicID: &t1Hex})
 	if err != nil {
 		t.Fatalf("topic-only: %v", err)
 	}
-	if len(got) != 2 || got[0].IDHash != common.HashID("o1") || got[1].IDHash != common.HashID("o2") {
-		t.Fatalf("topic-only: want the two o1/o2 archives in time order, got %+v", got)
+	if len(got) != 2 || got[0].IDHash != o1.IDHash || got[1].IDHash != o2.IDHash {
+		t.Fatalf("topic-only: want the two slots of t1 in Seq order, got %+v", got)
 	}
 
 	all, err := db.SearchL4(core.DefaultAgentID, L4Query{})
 	if err != nil || len(all) != 3 {
-		t.Fatalf("empty query: want every archive, got %d / %v", len(all), err)
+		t.Fatalf("empty query: want every content record, got %d / %v", len(all), err)
 	}
 }
 
@@ -74,12 +82,9 @@ func TestSearchL4TopicFilter(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	t1, t2 := common.HashID("t1"), common.HashID("t2")
-	a1 := core.ArchiveSlot{IDHash: common.HashID("m1"), ContextID: t1, Content: "rust 所有权", CreatedAt: 1000, Role: 0, ContentType: core.ContentText}
-	a2 := core.ArchiveSlot{IDHash: common.HashID("m2"), ContextID: t1, Content: "生命周期", CreatedAt: 2000, Role: 1, ContentType: core.ContentText}
-	a3 := core.ArchiveSlot{IDHash: common.HashID("m3"), ContextID: t2, Content: "rust 生态", CreatedAt: 3000, Role: 0, ContentType: core.ContentText}
-	writeArchive(t, engine, &a1)
-	writeArchive(t, engine, &a2)
-	writeArchive(t, engine, &a3)
+	a1 := writeSlot(t, engine, t1, core.SeqUser, core.KindUtterance, "rust 所有权", 1000, core.ContentText)
+	a2 := writeSlot(t, engine, t1, core.SeqAgent, core.KindUtterance, "生命周期", 2000, core.ContentText)
+	a3 := writeSlot(t, engine, t2, core.SeqUser, core.KindUtterance, "rust 生态", 3000, core.ContentText)
 	t1Hex, t2Hex := common.FormatHash(t1), common.FormatHash(t2)
 
 	// Keyword + TopicID: a1 hits (a3 belongs to t2 and is excluded).
@@ -88,7 +93,7 @@ func TestSearchL4TopicFilter(t *testing.T) {
 		t.Fatalf("SearchL4 keyword+topic: %v", err)
 	}
 	if len(out) != 1 || out[0].IDHash != a1.IDHash {
-		t.Fatalf("keyword+topic: want [m1], got %v", out)
+		t.Fatalf("keyword+topic: want [a1], got %v", out)
 	}
 
 	// Time range + TopicID: a1 only (Start must be > 0; 0 means unset).
@@ -97,16 +102,18 @@ func TestSearchL4TopicFilter(t *testing.T) {
 		t.Fatalf("SearchL4 range+topic: %v", err)
 	}
 	if len(out) != 1 || out[0].IDHash != a1.IDHash {
-		t.Fatalf("range+topic: want [m1], got %v", out)
+		t.Fatalf("range+topic: want [a1], got %v", out)
 	}
 
 	// IDs mode + TopicID: only a3.
-	out, err = db.SearchL4(core.DefaultAgentID, L4Query{IDs: []string{common.FormatHash(a1.IDHash), common.FormatHash(a2.IDHash), common.FormatHash(a3.IDHash)}, TopicID: &t2Hex})
+	out, err = db.SearchL4(core.DefaultAgentID, L4Query{
+		IDs:     []string{common.FormatHash(a1.IDHash), common.FormatHash(a2.IDHash), common.FormatHash(a3.IDHash)},
+		TopicID: &t2Hex})
 	if err != nil {
 		t.Fatalf("SearchL4 ids+topic: %v", err)
 	}
 	if len(out) != 1 || out[0].IDHash != a3.IDHash {
-		t.Fatalf("ids+topic: want [m3], got %v", out)
+		t.Fatalf("ids+topic: want [a3], got %v", out)
 	}
 
 	// Invalid TopicID errors.
@@ -121,18 +128,59 @@ func TestSearchL4TypeFilter(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	topic := common.HashID("types")
-	text := core.ArchiveSlot{IDHash: common.HashID("m-text"), ContextID: topic, Content: "文字内容", CreatedAt: 2000, ContentType: core.ContentText}
-	image := core.ArchiveSlot{IDHash: common.HashID("m-img"), ContextID: topic, Content: "img://cat.png", CreatedAt: 3000, ContentType: core.ContentImage}
-	writeArchive(t, engine, &text)
-	writeArchive(t, engine, &image)
+	writeSlot(t, engine, topic, core.SeqUser, core.KindUtterance, "文字内容", 2000, core.ContentText)
+	image := writeSlot(t, engine, topic, core.SeqAgent, core.KindUtterance, "img://cat.png", 3000, core.ContentImage)
 
 	img := core.ContentImage
 	got, err := db.SearchL4(core.DefaultAgentID, L4Query{Start: 1000, End: 4000, Type: &img})
 	if err != nil {
 		t.Fatalf("SearchL4: %v", err)
 	}
-	if len(got) != 1 || got[0].ContentType != core.ContentImage {
-		t.Fatalf("type filter: %+v, want only the image archive", got)
+	if len(got) != 1 || got[0].IDHash != image.IDHash {
+		t.Fatalf("type filter: %+v, want only the image slot", got)
+	}
+}
+
+// Kind is a condition like any other, and a topic's two kinds are now stored
+// together — so an unfiltered read of a topic has to return both, and each Kind
+// has to cut the other away on every read route.
+func TestSearchL4KindCondition(t *testing.T) {
+	engine := newTestEngine(t)
+	db := newTestDB(t, engine)
+	topic := common.HashID("mixed")
+	utter := writeSlot(t, engine, topic, core.SeqUser, core.KindUtterance, "说了什么", 1000, core.ContentText)
+	ev := writeSlot(t, engine, topic, core.LastUtteranceSeq+1, core.KindEvent, "发生了什么", 1001, core.ContentText)
+	ev2 := writeSlot(t, engine, topic, core.LastUtteranceSeq+2, core.KindEvent, "又发生了什么", 1002, core.ContentText)
+	topicHex := common.FormatHash(topic)
+
+	utterance, event := core.KindUtterance, core.KindEvent
+	cases := []struct {
+		name string
+		q    L4Query
+		want []core.ArchiveSlot
+	}{
+		{"unset kind, by topic", L4Query{TopicID: &topicHex}, []core.ArchiveSlot{utter, ev, ev2}},
+		{"utterance only", L4Query{TopicID: &topicHex, Kind: &utterance}, []core.ArchiveSlot{utter}},
+		{"events only", L4Query{TopicID: &topicHex, Kind: &event}, []core.ArchiveSlot{ev, ev2}},
+		{"unset kind, scanned", L4Query{}, []core.ArchiveSlot{utter, ev, ev2}},
+		{"events, scanned", L4Query{Kind: &event}, []core.ArchiveSlot{ev, ev2}},
+		{"events, by id", L4Query{IDs: []string{
+			common.FormatHash(utter.IDHash), common.FormatHash(ev.IDHash)}, Kind: &event},
+			[]core.ArchiveSlot{ev}},
+	}
+	for _, tc := range cases {
+		got, err := db.SearchL4(core.DefaultAgentID, tc.q)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if len(got) != len(tc.want) {
+			t.Fatalf("%s = %+v, want %d record(s)", tc.name, got, len(tc.want))
+		}
+		for i := range got {
+			if got[i].IDHash != tc.want[i].IDHash {
+				t.Fatalf("%s order/selection = %+v, want %+v", tc.name, got, tc.want)
+			}
+		}
 	}
 }
 
@@ -143,12 +191,9 @@ func TestSearchL4KeywordCaseAndLimit(t *testing.T) {
 	engine := newTestEngine(t)
 	db := newTestDB(t, engine)
 	topic := common.HashID("case")
-	old := core.ArchiveSlot{IDHash: common.HashID("m-old"), ContextID: topic, Content: "Rust 所有权", CreatedAt: 1000}
-	fresh := core.ArchiveSlot{IDHash: common.HashID("m-new"), ContextID: topic, Content: "rust 生态", CreatedAt: 2000}
-	other := core.ArchiveSlot{IDHash: common.HashID("m-other"), ContextID: topic, Content: "go 并发", CreatedAt: 3000}
-	for _, a := range []core.ArchiveSlot{old, fresh, other} {
-		writeArchive(t, engine, &a)
-	}
+	writeSlot(t, engine, topic, 1, core.KindUtterance, "Rust 所有权", 1000, core.ContentText)
+	fresh := writeSlot(t, engine, topic, 2, core.KindUtterance, "rust 生态", 2000, core.ContentText)
+	writeSlot(t, engine, topic, 3, core.KindUtterance, "go 并发", 3000, core.ContentText)
 
 	for _, kw := range []string{"RUST", "rust", "Rust"} {
 		got, err := db.SearchL4(core.DefaultAgentID, L4Query{Keyword: kw})

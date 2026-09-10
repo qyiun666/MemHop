@@ -209,16 +209,32 @@ func TestArchiveSlotImagePath(t *testing.T) {
 	}
 }
 
-func TestTrajectorySlotRoundtrip(t *testing.T) {
-	ev := TrajectorySlot{
-		IDHash: 1, SessionID: 42, Seq: 2, EventType: "tool_call",
-		Payload: `{"tool":"read"}`, Timestamp: 1000,
+// An operation event is an L4 record now, so the fields only events carry
+// survive the same round trip as the utterances beside them.
+func TestArchiveEventRoundtrip(t *testing.T) {
+	ev := ArchiveSlot{
+		IDHash: HashContent(42, 3), Kind: KindEvent, Seq: 3, ContentType: ContentText,
+		ContextID: 42, EventType: "tool_call", NodePath: "1.1",
+		CreatedAt: 1000, Content: `{"tool":"read"}`,
 	}
-	var got TrajectorySlot
+	var got ArchiveSlot
 	jsonRoundtrip(t, ev, &got)
-	if got.IDHash != ev.IDHash || got.SessionID != ev.SessionID || got.Seq != ev.Seq ||
-		got.EventType != ev.EventType || got.Payload != ev.Payload || got.Timestamp != ev.Timestamp {
-		t.Fatalf("mismatch: %+v", got)
+	if got != ev {
+		t.Fatalf("event archive mismatch: %+v", got)
+	}
+}
+
+// Kind is the axis separating a turn's originals from its events, and the
+// undefined end of it must be catchable at the boundary rather than stored.
+func TestArchiveKindValid(t *testing.T) {
+	if !KindUtterance.Valid() || !KindEvent.Valid() {
+		t.Fatal("defined kinds must validate")
+	}
+	if KindUtterance.String() != "utterance" || KindEvent.String() != "event" {
+		t.Fatalf("kind names: %q / %q", KindUtterance, KindEvent)
+	}
+	if ArchiveKind(9).Valid() {
+		t.Fatal("an undefined kind must not validate")
 	}
 }
 
@@ -233,20 +249,21 @@ func TestSceneSlotL3ID(t *testing.T) {
 	}
 }
 
-func TestTrajectorySlotPlanFields(t *testing.T) {
-	ev := TrajectorySlot{SessionID: 9, Seq: 3, NodeType: NodeTypePlan, NodePath: "1.2.1", Status: StatusPending, Summary: "sum"}
-	if ev.NodeType != NodeTypePlan {
-		t.Fatalf("bad node type %d", ev.NodeType)
+// A plan node is its own record type now: no node/event discriminator, no event
+// fields, and an identity derived from the topic that owns the tree.
+func TestPlanNodeIdentity(t *testing.T) {
+	node := PlanNode{
+		IDHash: HashPlanNode(9, "1.2.1"), TopicID: 9, NodePath: "1.2.1",
+		Status: StatusInProgress, Summary: "sum", UpdatedAt: 1000,
 	}
-	if ev.NodePath != "1.2.1" {
-		t.Fatalf("bad path %s", ev.NodePath)
-	}
-	// Nodes and events share one topic key now, so the node id must fold that
+	// Content and nodes share one topic key now, so the node id must fold that
 	// key in: the same path under two turns is two distinct nodes.
 	if HashPlanNode(9, "1") == HashPlanNode(10, "1") {
 		t.Fatal("the same nodePath under two topics must not share a node id")
 	}
-	if ev.Status != StatusPending {
-		t.Fatalf("bad status %d", ev.Status)
+	var got PlanNode
+	jsonRoundtrip(t, node, &got)
+	if got != node {
+		t.Fatalf("plan node mismatch: %+v", got)
 	}
 }

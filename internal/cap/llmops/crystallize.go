@@ -72,7 +72,7 @@ Output ONLY valid JSON in this exact shape (no markdown, no code fences):
 // Crystallize extracts reusable L5 capabilities from a trajectory event
 // batch. Existing capabilities (the host's own catalog) are included in the
 // prompt so the model can reuse or merge instead of duplicating.
-func Crystallize(ctx context.Context, chat Chat, events []core.TrajectorySlot, existing []capability.CapabilityImport) (*CrystallizeOutput, error) {
+func Crystallize(ctx context.Context, chat Chat, events []core.ArchiveSlot, existing []capability.CapabilityImport) (*CrystallizeOutput, error) {
 	if len(events) == 0 {
 		return &CrystallizeOutput{Capabilities: []CrystallizeCapability{}}, nil
 	}
@@ -86,11 +86,11 @@ func Crystallize(ctx context.Context, chat Chat, events []core.TrajectorySlot, e
 
 // buildCrystallizePrompt lists trajectory events followed by the host's
 // existing capability prompt cards.
-func buildCrystallizePrompt(events []core.TrajectorySlot, existing []capability.CapabilityImport) string {
+func buildCrystallizePrompt(events []core.ArchiveSlot, existing []capability.CapabilityImport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Operation Trajectory (%d events)\n\n", len(events))
 	for _, ev := range events {
-		fmt.Fprintf(&b, "[seq=%d type=%s] %s\n", ev.Seq, ev.EventType, ev.Payload)
+		fmt.Fprintf(&b, "[seq=%d type=%s] %s\n", ev.Seq, ev.EventType, ev.Content)
 	}
 	b.WriteString("\n# Existing L5 capabilities\n")
 	if len(existing) == 0 {

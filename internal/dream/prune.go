@@ -13,80 +13,72 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// TrajectoryRetention bounds the L6 event log: Dream drops events older
-// than this. L6 is a process index — durable products live in L4/L5.
-const TrajectoryRetention = 7 * 24 * time.Hour
+// ContentRetention bounds how long a turn's records outlive it: Dream drops L4
+// content older than this, and plan nodes past it too. Both layers share the one
+// window because both hold the same thing — what happened in one turn — and a
+// topic that keeps neither originals nor events is left with the keyword track
+// that Dream folded out of them, which is the durable product.
+const ContentRetention = 7 * 24 * time.Hour
 
-// PruneTrajectoryStage drops L6 trajectory events older than the retention
-// window; durable products live in L4/L5, so L6 stays a bounded process
-// index. Best-effort: a failure is logged and recorded in the report but
-// never aborts Dream. Callers hold ac.Mu.
-func PruneTrajectoryStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
+// PruneContentStage drops the L4 records past the retention window, utterances
+// and events alike, and reports how many went away. Best-effort: a failure is
+// logged and recorded in the report but never aborts Dream. Callers hold ac.Mu.
+func PruneContentStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
 	start := time.Now()
-	cutoff := time.Now().Add(-TrajectoryRetention).UnixMilli()
-	hashes := ac.Traj.RemoveBefore(cutoff)
-	var err error
-	if len(hashes) > 0 {
-		if _, err = repo.DeleteTrajectoryByIDs(ac.Engine, agentID, hashes); err != nil {
-			slog.Warn("dream: trajectory prune failed", "agent", common.FormatHash(agentID), "err", err)
-		}
+	cutoff := time.Now().Add(-ContentRetention).UnixMilli()
+	dropped, err := repo.DropExpiredArchives(ac.Engine, agentID, ac.L4, cutoff)
+	if err != nil {
+		slog.Warn("dream: content prune failed", "agent", common.FormatHash(agentID), "err", err)
+	} else if dropped > 0 {
+		slog.Info("dream: content pruned", "agent", common.FormatHash(agentID), "records", dropped)
 	}
-	// Plan nodes sit outside the event TrajIndex, so sweep them by their own
-	// timestamp from the engine (authoritative — Dream is a disk maintainer,
-	// not a hot path). A plan is exempt only while it BOTH holds a non-Done
-	// node AND saw activity inside the retention window: an in-flight task
-	// must not lose its tree mid-task, but once a plan has been silent past
-	// the window it is abandoned and sweeps like any other record, so L6
-	// stays bounded. Expired nodes of the swept plans cascade their bound
-	// events so no orphan PlanNodeRef survives. Both in-memory views are
-	// refreshed only after the disk sweep succeeds, keeping cache, index and
-	// engine in sync. The index mirror is load-bearing, not a tidiness step: a
-	// cascaded event that is still inside the retention window is absent from
-	// RemoveBefore's sweep, and an index entry naming a deleted record makes
-	// every later ReadTrajectory/Crystallize of that key fail with ErrIO until
-	// the domain context is rebuilt.
-	type pruneDel struct {
-		topicID  uint64
-		nodeDel  []uint64
-		eventDel []uint64
+	AppendStage(rep, "l4_prune", start, err)
+}
+
+// PrunePlanStage sweeps plan nodes past the window. A plan is exempt only while
+// it BOTH holds a non-Done node AND saw activity inside the window: an in-flight
+// task must not lose its tree mid-task, but once a plan has been silent past the
+// window it is abandoned and sweeps like any other record, so L6 stays bounded.
+//
+// Nodes are swept on their own clock and touch no content: a step expiring takes
+// the tree with it and leaves the turn's events exactly where they are.
+// Best-effort, like the content stage. Callers hold ac.Mu.
+func PrunePlanStage(ac *domain.Context, agentID uint64, rep *core.DreamReport) {
+	start := time.Now()
+	cutoff := time.Now().Add(-ContentRetention).UnixMilli()
+	type sweep struct {
+		topicID uint64
+		ids     []uint64
 	}
-	var prunes []pruneDel
-	var delIDs []uint64
-	for _, agg := range repo.CollectPlanAggregates(ac.Engine, agentID) {
+	var sweeps []sweep
+	var doomed []uint64
+	// The engine is read rather than the cache: Dream is a disk maintainer, not a
+	// hot path, and the sweep must not be shaped by a cache that could be behind.
+	for _, agg := range repo.CollectPlanNodes(ac.Engine, agentID) {
 		if agg.HasNonDone && agg.LastActiveAt >= cutoff {
 			continue
 		}
-		var nodeDel []uint64
+		var ids []uint64
 		for _, n := range agg.Nodes {
-			if n.Timestamp < cutoff {
-				nodeDel = append(nodeDel, n.IDHash)
+			if n.UpdatedAt < cutoff {
+				ids = append(ids, n.IDHash)
 			}
 		}
-		if len(nodeDel) == 0 {
+		if len(ids) == 0 {
 			continue
 		}
-		expired := make(map[uint64]struct{}, len(nodeDel))
-		for _, id := range nodeDel {
-			expired[id] = struct{}{}
-		}
-		var eventDel []uint64
-		for _, ev := range agg.Events {
-			if _, ok := expired[ev.PlanNodeRef]; ok {
-				eventDel = append(eventDel, ev.IDHash)
-			}
-		}
-		delIDs = append(delIDs, nodeDel...)
-		delIDs = append(delIDs, eventDel...)
-		prunes = append(prunes, pruneDel{topicID: agg.TopicID, nodeDel: nodeDel, eventDel: eventDel})
+		sweeps = append(sweeps, sweep{topicID: agg.TopicID, ids: ids})
+		doomed = append(doomed, ids...)
 	}
-	if len(delIDs) > 0 {
-		if _, derr := repo.DeleteTrajectoryByIDs(ac.Engine, agentID, delIDs); derr != nil {
-			slog.Warn("dream: plan-node prune failed", "agent", common.FormatHash(agentID), "err", derr)
+	var err error
+	if len(doomed) > 0 {
+		if _, err = repo.DeletePlanNodesByIDs(ac.Engine, agentID, doomed); err != nil {
+			slog.Warn("dream: plan-node prune failed", "agent", common.FormatHash(agentID), "err", err)
 		} else {
-			for _, p := range prunes {
-				ac.Plans.RemovePlanIDs(p.topicID, p.nodeDel, p.eventDel)
-				ac.Traj.RemoveEvents(p.topicID, p.eventDel)
+			for _, s := range sweeps {
+				ac.Plans.RemoveNodes(s.topicID, s.ids)
 			}
+			slog.Info("dream: plan nodes pruned", "agent", common.FormatHash(agentID), "nodes", len(doomed))
 		}
 	}
 	AppendStage(rep, "l6_prune", start, err)

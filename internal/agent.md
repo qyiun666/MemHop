@@ -9,7 +9,7 @@
 api/            对外门面：纯透传 + DTO 映射，禁止业务逻辑
 internal/ 根    大方法层：接收 api 透传，每个大方法 = 拿域锁 + 组装小方法
                 + 组合根装配（Open/DB/Session/agents/exports/models）
-internal/{domain,scene,turn,dream,graph,plan,trajectory}
+internal/{domain,scene,turn,dream,graph,plan,content}
                 小方法包：每个小方法只组装功能（repo/core 记录读写、
                 cap 纯计算、llmops 提示契约），不自己拿域锁
 内部底座        internal/{config,llm} 配置类型与 LLM 传输；
@@ -19,8 +19,9 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 - 大方法（`Search`/`Update`/`RunDream`/`Crystallize`/L0-L6 各面/
   `CreateAgent` 等）只做：`db.lockAgent` 取域 → 顺序调小方法 → 组装返回。
   细节逻辑（循环、重试、缓存维护、ID 铸造、回滚）一律在小方法包。
-- 小方法包之间互不 import（`plan` 读 `trajectory.MaxEventPayload` 是仅有
-  的常量级例外）；需要交互时回到根的大方法组装。
+- 小方法包之间互不 import，一条都不例外（事件载荷预算原先由 `plan` 读
+  `trajectory` 的常量，现在事件写入整体归 `content`，那个例外随之消失）；
+  需要交互时回到根的大方法组装。
 - 依赖方向单向：`根 -> 小方法包 -> {domain, cap, repo, llm} -> repo/core,index
   -> common`，禁止反向。
 
@@ -28,13 +29,13 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
 
 | 包 | 职责 |
 |---|---|
-| `domain` | 域状态容器 `Context`（Mu/L2Meta/Arch/Traj/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`Arch` 是「话题 → 它名下的 L4 归档」的镜像 |
+| `domain` | 域状态容器 `Context`（Mu/L2Meta/L4/Plans/DreamInFlight/OpCtx，持 Engine/LLM/Defaults 注入）+ PlanCache + L2Meta 缓存维护（SyncL2Meta/RemoveTopicsFromIndices/RetargetL2Meta）；`L4` 是「话题 → 它名下的内容槽位（原文 + 事件）」的镜像 |
 | `scene` | L2 场景读写面：ResolveForRead/Create/FreshID/OpenTurn/SurfaceTopics/ContextTopic/PruneParentChild/DeleteTopics |
-| `turn` | 轮次沉淀：Targets 校验、SettleTarget（可沉淀的轮次范围）、PriorArchives（本话题已拥有的归档，走 `ac.Arch`）、WriteArchives、DropRetained、ReadProfile |
-| `dream` | 巩固阶段：SceneSet、PruneTrajectoryStage(TrajectoryRetention)、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage、usage feedback；调参常量随阶段在此 |
+| `turn` | 轮次沉淀：Targets 校验、SettleTarget（可沉淀的轮次范围）、WriteArchives（一轮两条原文占该话题的 Seq 1/2）、ReadProfile |
+| `dream` | 巩固阶段：SceneSet、PruneContentStage(`l4_prune`) 与 PrunePlanStage(`l6_prune`)（共用 `ContentRetention` 窗口、各读自己的时间戳）、CompressScenes(+组回滚)、StructureStages、L1 各阶段、DistillL0Stage、usage feedback；调参常量随阶段在此 |
 | `graph` | L3 导入/查询：`ImportBatch`（一次批次的 mode + result + 三张缓存，方法 ImportNode/ImportRelations/GraphIDs）、NodeFilter.Matches/ResolveSubgraphStart/SubgraphAdjacency/BfsWithinDepth/AllNodesVisited |
-| `plan` | L6 计划树机制（一棵树归属于打开它的轮次）：PlanStatus 面、SplitNodePath、EnsureNode/AppendEventLocked/UpdateNode(Locked/SummaryLocked)、BuildTree/RollupTree |
-| `trajectory` | L6 键与读取：ParseTopicID（全键的解析与拒零，读写两侧共用）、ReadTurn、TrimByBudget、MaxEventPayload/MaxCrystallizePayload（payload 预算） |
+| `plan` | L6 计划树机制（一棵树归属于打开它的轮次；L6 只剩节点记录）：PlanStatus 面（单张词表、双向都查它）、SplitNodePath、EnsureNode/CommitNode/UpdateNodeSummaryLocked、BuildTree/Forest/ToNodeView/RollupTree |
+| `content` | 话题内容与键：ParseTopicID（键的解析与拒零，读写两侧共用）、ValidateEvent、AppendEvent（事件追加的唯一实现，分配跨 Kind 的 Seq）、ReadEvents、TrimByBudget、MaxEventPayload/MaxCrystallizePayload |
 
 ## agentContext（domain.Context）域级锁纪律
 
@@ -44,8 +45,9 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    `contextFor` 对非默认域校验注册表：未注册/已删除的 agentID 直接
    `ErrAgentNotFound`，域永不复活；与删除对撞的陈旧句柄由锁内墓碑复检拒绝。
    L6 族统一走 `db.lockSession(agentID, turnID)`（lockAgent +
-   `trajectory.ParseTopicID`，解析失败先解锁）：L6 只有一个键——本轮话题 ID，
-   该轮的事件与它开出的计划节点同住，一次 `ReadTrajectory(topic)` 两者齐。
+   `content.ParseTopicID`，解析失败先解锁）：一个话题键同时寻址两样东西——
+   它的事件轨（L4 的 `Kind=event`）与它开出的计划树（L6 节点），
+   `ReadTrajectory(topic)` 给事件、`PlanState(topic)` 给树。
    门面侧的会话准入策略在 `CheckSession`。L3 的方法是唯一例外：走
    `db.lockSharedPool(callerID)`——先 `CheckSession` 校验调用方域活着，再锁
    保留公共域 `core.SharedPoolAgentID`（L3 记录全部住该域，跨 agent
@@ -69,21 +71,24 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    `destroyContext`（取消 `ac.OpCtx`）→ `ac.Deleted` 墓碑（`lockAgent` 拿锁后
    复检，与删除对撞的在飞操作被拒）→ `ac.Mu` 屏障等待在飞操作 → 引擎域删除。
 6. **planCache 域内索引**：L6 计划聚合缓存 `ac.Plans`（`domain` 包）
-   **不内置锁**，完全依赖 `ac.Mu` 串行（区别于自带
-   RWMutex 的 `TrajIndex`）。所有计划写路径（节点增删改、事件绑定、
-   Dream 清理）必须先取 `ac.Mu` 再同步缓存；`domain.NewContext` 构建，
-   idle 重建时一并重建。**一个键算不算一棵活树的判据是「键下还有节点」**——
-   `repo.CollectPlanAggregates` 与 `detachIfEmpty` 用同一条，裸轮次事件不引用
-   节点因此不成树。任何删记录的路径都要**两份缓存一起镜像**（`ac.Plans` 与
-   `ac.Traj`）：只镜像一边的话，事件索引仍命名已删记录，该键之后每次
-   `ReadTrajectory`/`Crystallize` 都报 `ErrIO`，要等重启从记录重建索引才自愈。
+   **不内置锁**，完全依赖 `ac.Mu` 串行（区别于自带 RWMutex 的 `L4Index`）。
+   所有计划写路径（节点增删改、Dream 清理）必须先取 `ac.Mu` 再同步缓存；
+   `domain.NewContext` 构建，idle 重建时一并重建。**一个键算不算一棵活树的
+   判据是「键下还有节点」**——`repo.CollectPlanNodes` 与 `PlanCache` 用同一条，
+   事件不再进这张缓存。每份镜像各有一个属主，不要交叉补写：`ac.Plans` 由
+   `RemoveTopicsFromIndices` 与 `l6_prune` 摘，`ac.L4` 由删内容的那条路径
+   （`DeleteTopicArchives` / `DropExpiredArchives`）在**磁盘删成功后**摘。
+   漏摘 `Plans` 与漏摘 `L4` 的代价不对称：后者让该话题每次读都报 `ErrIO`
+   直到重启重建索引，前者留下一条陈旧的 `LastActiveAt` 让死树长期豁免清扫。
 7. **L6 键全零保留**：`0` 是每条记录未赋键时的值，故 `0000000000000000` 不是
    合法的 L6 键。读写两侧一律经 `trajectory.ParseTopicID` 拒它
    （`AppendTrajectory`/`ReadTrajectory`/`PlanCommit`/`PlanState`/
    `Crystallize`）——只在写侧拒，全零键下就会攒出永远读不出的记录。
 8. **计划清理有界**：dream 的 `l6_prune` 只豁免「持非 done 节点 **且** 窗口内
-   仍有活动」的计划；宿主中断或放弃而静默超 `TrajectoryRetention` 的计划
-   照常清理并级联其绑定事件，否则废弃计划会让 L6 无界增长。
+   仍有节点活动」的计划，其中活动只看节点自己的 `UpdatedAt`；宿主中断或放弃而
+   静默超 `ContentRetention` 的计划照常清理。豁免保住的是**整棵活树**（含早已
+   不更新的 done 父节点），不是「有事件在写所以树还活着」——事件住在 L4，
+   不参与这个判断，也不再被节点的清扫带走。
 
 ## 数据访问纪律
 
@@ -94,7 +99,7 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
   不得自行打开/关闭引擎。Open 不做任何目录扫描或能力注入——能力卡是宿主
   自有的磁盘文档（目录即能力），库只提供 v4 解析校验导出。
 - **能力下沉**：算法与策略在 `internal/cap/<feature>` 能力包；小方法在
-  `internal/{scene,turn,dream,graph,plan,trajectory}`；根只留"取数 → 调
+  `internal/{scene,turn,dream,graph,plan,content}`；根只留"取数 → 调
   能力 → 落库"的大方法编排，不做算法。LLM 传输策略（截断升级重试）在
   `internal/llm` 的 `Provider.ChatWithRetry`，prompt 构建属于 `cap/llmops`。
 - 新增功能时：先问属于哪一层——记录读写进 `repo`、纯算法进 `cap`、
@@ -130,13 +135,14 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    取 depth-1；`Scene.TopicCount` 用这批话题现算（该字段不落盘）。开了没
    沉淀的轮次不留任何残渣，读两次只沉淀一次就是跳号。
 3. **`Update` 每轮一次提炼且排在写入前**：`ExtractTurnKeywords` 失败或空
-   结果直接报错，此时话题/档案/L2Meta 一个字都没动。话题 ID 由宿主从
-   `Search` 原样带回（`TopicID`，`0`/非 hex 拒绝），档案 ID 由
-   `(topic, ts, content)` 派生，故同 `TopicID` 重放是覆盖而不是叠加：
-   **重写前先问 `ac.Arch` 该话题已拥有哪些归档（`turn.PriorArchives`），落完
-   新归档后把本次没再写出的那些打墓碑（`turn.DropRetained` +
-   `repo.DropArchivesL4`，磁盘删成功才摘镜像）**，所以"一轮恰好两条原文"
-   在改写文本的重放下也成立。轮内过程走 L6 轨迹。
+   结果直接报错，此时话题/内容/L2Meta 一个字都没动。话题 ID 由宿主从
+   `Search` 原样带回（`TopicID`，`0`/非 hex 拒绝），两条原文的档案 ID 由
+   `(topic, seq)` 派生且 seq 固定（用户 1、回复 2），故同 `TopicID` 重放就是
+   **原地覆写**：不需要先枚举该话题拥有过什么，也不需要在落完新档案后给没被
+   重写的那些打墓碑——那套差分连同它的「第二份清单」一起没了。
+   覆写的边界也要说清：本轮没写到的槽位（例如重放时少给了一条）不会被回收，
+   库不追踪「本轮写了哪几条」，所以改写文本的重放可能让一句已撤回的回复继续
+   出现在转录里，直到话题被删或过保留窗。轮内过程走同一话题的 L4 事件轨。
    `turn.SettleTarget` 另外钉住可沉淀的范围：`TopicID` 必须是
    `hash("turn:" + 场景:k)` 且 `k <= 场景.TurnSeq`，即该场景真开出过的某一轮
    ——写 Dream 融合节点（同 depth、同场景，但由时间戳派生）、跨场景 id、宿主
@@ -144,27 +150,31 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    仍然合法（`TestUpdateSettlesEachScenesTurnsInOrder`）。
 4. **巩固按单场景规模触发**：`consolidateScene` 在 depth-1 话题数超
    `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream；单个融合组是
-   "摘要档案 → 提炼关键词 → 建父话题 → 挂引用 → 下沉子话题"的串写，任一步
-   失败都回滚本组已写的记录（`dream.discardFusedGroup`）——要么整体生效，
-   要么不留孤儿档案 / 半成品父节点。
-5. **L4 内容类型只在 `Update` 声明并在其边界校验**：两侧档案按
+   "摘要内容 → 提炼关键词 → 建父话题 → 下沉子话题"的串写，任一步
+   失败都回滚本组已写的记录（`dream.discardFusedGroup` 按父话题键整删它名下的
+   内容与缓存，不需要携带任何 id 才能撤销一次写）——要么整体生效，
+   要么不留孤儿记录 / 半成品父节点。
+5. **L4 内容类型只在 `Update` 声明并在其边界校验**：两侧原文按
    `TurnUpdate.UserType` / `AgentType` 落类型（零值 `ContentText`，非文本
    侧存路径/URL），未定义值以 `ErrInvalidQuery` 拒绝，Dream 的融合摘要恒为
-   `text`。
+   `text`。事件不参与这条声明：`content.AppendEvent` 一律写 `Kind=event` +
+   `ContentText`，宿主在事件上给的 `Kind`/`Role`/`ContentType`/`Seq`/
+   `ContextID` 全部不被采信（`TestAppendEventCannotForgeContentFields`）。
 6. **`UpdateScene` 是 `SceneName` 的唯一宿主写者**：场景记录只被 `OpenSceneTurn`
    读改写（它回填整条记录、只动计数），Dream 从不写场景记录，故改名不会被
    后续读取覆盖；`scene.Create` 建新场景时才写默认名 `session:<id>`。
-7. **归档靠话题 id 被寻址，镜像必须跟着删**：一条归档的归属是它的
-   `ContextID`，话题不列举任何东西；档案 ID 哈希了 `(topic, ts, content)`，
-   从话题 id **推不出地址**，所以「这个话题有哪些归档」唯一的来源是域内的
-   `ac.Arch`——它是寻址手段，不是加速器。由此得出与 L6 两份镜像同一条纪律：
-   任何删归档的路径都必须在**磁盘删成功后**同步摘镜像
-   （`repo.DropArchivesL4` / `repo.DeleteTopicArchives` 已内置这一步），漏一处
-   就让该话题之后每次读都撞「索引点名已不存在的记录」而硬 `ErrIO`；索引在
-   `domain.NewContext` 从记录重建，故重启自愈、运行期不自愈。读回顺序仍由
-   `scene.ContextTopic` 经 `sortMessages` 稳定排序——先按档案时间戳，**同毫秒
-   再按 Role（`RoleUser` 在 `RoleAgent` 之前）**：索引给出的是创建序，不保证
-   谁先说话，会话恢复必须"问在前、答在后"。
+7. **内容由 (话题, Seq) 寻址，枚举仍靠镜像**：一条内容的地址就是
+   `hash("l4:"+话题+":"+seq)`，`ContextID` 是它归属的话题；单条能推出来，
+   「这个话题一共有哪几条」推不出来，唯一的来源还是域内的 `ac.L4`——它是枚举
+   手段，不是加速器。由此得出老那条镜像纪律：任何删内容的路径都必须在**磁盘删
+   成功后**同步摘镜像（`repo.DeleteTopicArchives` / `repo.DropExpiredArchives`
+   已内置这一步），漏一处就让该话题之后每次读都撞「索引点名已不存在的记录」而
+   硬 `ErrIO`；索引在 `domain.NewContext` 从记录重建，故重启自愈、运行期不
+   自愈。读回顺序只看 `Seq`：沉淀把用户说的钉在 1、回复钉在 2，所以「问在前、
+   答在后」由写入侧构造保证，不需要时间戳、更不需要拿 `Role` 打平（事件的
+   `Role` 未设即 0，正是 `RoleUser`，一旦混进对话读法就会把一次工具调用显示成
+   用户发言）。`SceneMessage.Seq` 因此是**契约字段**：空洞就是被保留窗裁过的
+   证据，宿主据此把「裁掉了」与「没说过」分开。
 8. **L0 画像字段所有权在库内强制**：`UpdateL0` 只写宿主四项
    （Name/Role/Personality/Preferences），`EmotionState`/`MBTI` 一律从库里
    现值继承（只有它们的首次建立走蒸馏路径），`UpdatedAtMs` 由库戳写、不采信
@@ -182,16 +192,20 @@ internal/{domain,scene,turn,dream,graph,plan,trajectory}
    `lockAgent` 清锚（`detachGraphAnchors`），不嵌套双锁——代价是「删图后、
    清锚前」窗口内同名重导入（图 id = hash(Domain) 同 id）的锚点会被清成
    未锚定，可经 `UpdateScene` 重挂。
-10. **L6 事件写入的字段归属**：两条追加路径（`appendTurnEvent` /
-   `plan.AppendEventLocked`）把记录强制成裸事件形状——`NodeType`/`PlanID`/
-   `ParentID`/`NodePath`/`Status`/`Summary`/`PlanType` 一律清零（`PlanType`
-   按记录契约只属于计划节点），`Seq`/会话 id 由库赋值，`Payload` 超
-   `trajectory.MaxEventPayload` 即拒绝（不截断：截短的事件读起来和完整的一样）。
-   `EventType` 是宿主自定的步骤名，计划绑定事件与裸轮次事件同口径：引擎从不按它
+10. **事件写入的字段归属**：事件追加只有 `content.AppendEvent` 一处实现，
+   `AppendTrajectory` 的裸事件分支与 `PlanCommit` 的步进事件都走它，因此
+   `Kind`/`ContentType` 恒为 event/text，`Seq` 与话题 id 由它赋值，
+   `NodePath` 取调用参数而不是采信宿主传值（伪造的 `Seq=1`、`Role=Dream`、
+   `ContextID=别人的话题` 都落不了地）。`Content` 超 `content.MaxEventPayload`
+   即拒绝（不截断：截短的事件读起来和完整的一样）。
+   `Seq` 是**话题内跨 Kind 共享的单一空间**：下限取 `max(话题现有 Seq, 2)+1`，
+   因为宿主先记事件、后 `Update` 沉淀，而沉淀固定写 1/2——不设这个下限，第一条
+   事件会被用户原文原地覆掉（`TestSettledTurnKeepsEventsAppendedBeforeIt`）。
+   `EventType` 是宿主自定的步骤名，计划绑定事件与裸事件同口径：引擎从不按它
    分支（只有 `ReadTrajectory` 原样回显与结晶 prompt 的一行格式化），唯一约束是
-   非空，校验点只有 `trajectory.ValidateEvent` 一处。
-   轨迹只按 key 整体寻址：公开面上没有任何
-   调用接受单条事件 id，所以写入不返回句柄（加了就是一桩没人消费的新契约）。
+   非空，校验点只有 `content.ValidateEvent` 一处。
+   事件只按话题键整体寻址：公开面上没有任何调用接受单条事件 id，所以写入不返回
+   句柄（加了就是一桩没人消费的新契约）。
 11. **`MultiAgentDB.CompactTo`**：core 的 `Compact` 用 `Create`（带
    `O_TRUNC`）在新路径写整理副本，故根层先拒空路径、拒当前库文件
    （`sameFile` 走绝对路径归一）与拒已存在的目标，绝不覆盖任何既有文件。

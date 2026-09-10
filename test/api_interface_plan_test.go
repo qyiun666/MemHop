@@ -179,15 +179,17 @@ func TestInterfaceTrajectoryKeysAndCrystallize(t *testing.T) {
 	if len(turnEvents) != 1 {
 		t.Fatalf("turn events = %+v, want the one appended", turnEvents)
 	}
-	if e := turnEvents[0]; e.SessionID != turnID || e.NodePath != "" || e.PlanNodeRef != "" {
-		t.Fatalf("bare turn event = %+v, want keyed to %s with no plan fields", e, turnID)
+	if e := turnEvents[0]; e.SessionID != turnID || e.NodePath != "" {
+		t.Fatalf("bare turn event = %+v, want keyed to %s and bound to no step", e, turnID)
 	}
 
 	mustAppend(t, db, planTurn, "1", planEvent(ts+1, "plan_step", "开始"))
 	mustAppend(t, db, planTurn, "1", planEvent(ts+2, "tool_call", `{"tool":"bash","cmd":"go test"}`))
 	planEvents := mustReadTrajectory(t, db, planTurn)
-	if len(planEvents) != 2 || planEvents[0].Seq != 1 || planEvents[1].Seq != 2 {
-		t.Fatalf("plan events = %+v, want one Seq space per plan starting at 1", planEvents)
+	// Seq is one space a topic shares with its originals, which hold slots 1
+	// and 2, so a topic's first event is 3.
+	if len(planEvents) != 2 || planEvents[0].Seq != 3 || planEvents[1].Seq != 4 {
+		t.Fatalf("plan events = %+v, want Seq 3 and 4", planEvents)
 	}
 
 	// Over budget is refused rather than shortened: a truncated event reads
@@ -260,8 +262,8 @@ func TestInterfacePlanAndTrajectorySurviveReopen(t *testing.T) {
 
 	reopened := newTestDB(t, openMockMulti(t, path, llm.srv.URL))
 	events := mustReadTrajectory(t, reopened, turnID)
-	if len(events) != 2 || events[0].Seq != 1 || events[1].Seq != 2 {
-		t.Fatalf("events after reopen = %+v, want both in Seq order", events)
+	if len(events) != 2 || events[0].Seq != 3 || events[1].Seq != 4 {
+		t.Fatalf("events after reopen = %+v, want Seq 3 and 4 rebuilt from records", events)
 	}
 	if events[0].EventType != "tool_call" || events[0].Payload != `{"tool":"bash"}` {
 		t.Fatalf("the event body did not survive the reopen: %+v", events[0])

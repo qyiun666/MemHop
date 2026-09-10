@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
 // Package turn holds the small methods that settle one finished turn into
-// the topic Search opened for it: payload validation, the read of what that
-// turn already owns, the archive writes and the tombstone diff. The Update
-// big method in the composition root locks the domain and composes them
+// the topic Search opened for it: payload validation, the gate on which topic
+// may be settled, and the two content slots the turn's originals occupy. The
+// Update big method in the composition root locks the domain and composes them
 // around the single keyword-distillation call.
 
 package turn
@@ -62,41 +62,29 @@ func SettleTarget(sceneID, topicID, turnSeq uint64) error {
 		"Update: topic_id is not a turn this scene opened; settle the id Search returned")
 }
 
-// PriorArchives returns the archives this topic already owns — what a settle
-// of the same turn supersedes. The domain's archive index is the list, and a
-// topic nobody has settled yet owns nothing rather than erroring.
-func PriorArchives(ac *domain.Context, topicID uint64) []uint64 {
-	return ac.Arch.Hashes(topicID)
-}
-
-// DropRetained yields the ids of before that no longer appear in after.
-func DropRetained(before, after []uint64) []uint64 {
-	keep := common.ToSet(after)
-	var out []uint64
-	for _, id := range before {
-		if _, ok := keep[id]; !ok {
-			out = append(out, id)
-		}
+// WriteArchives settles a turn's originals into the two content slots their topic
+// reserves for them — Seq 1 for what the user said, Seq 2 for the reply — each
+// under the content type the host declared. The slots are addressed by position,
+// so re-settling a turn rewrites the same two records: nothing has to be listed
+// as owned before it can be replaced.
+//
+// That is also the limit of what a settle reclaims. Rewriting a turn with fewer
+// or different texts never deletes what an earlier settle left in a slot this one
+// does not fill, so a revised turn can keep surfacing a withdrawn reply until the
+// topic is deleted or the retention window passes. The library does not track
+// "the set this turn wrote" a second time to undo it.
+func WriteArchives(ac *domain.Context, agentID, topicID uint64, in core.TurnUpdate) error {
+	if _, err := repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, repo.ArchiveContent{
+		TopicID: topicID, Seq: core.SeqUser, Kind: core.KindUtterance,
+		Role: core.RoleUser, Type: in.UserType, Text: in.UserText, CreatedAt: in.UserTS,
+	}); err != nil {
+		return err
 	}
-	return out
-}
-
-// WriteArchives appends the turn's originals as L4 archives under the topic
-// that owns them, each under the content type the host declared. The returned
-// ids are only what this settle wrote: the caller diffs them against what the
-// turn owned before, and tombstones what fell out.
-func WriteArchives(ac *domain.Context, agentID, topicID uint64, in core.TurnUpdate) ([]uint64, error) {
-	userRef, err := repo.AppendArchiveL4(ac.Engine, agentID, ac.Arch, repo.ArchiveContent{
-		TopicID: topicID, Role: core.RoleUser, Type: in.UserType, Text: in.UserText, CreatedAt: in.UserTS})
-	if err != nil {
-		return nil, err
-	}
-	agentRef, err := repo.AppendArchiveL4(ac.Engine, agentID, ac.Arch, repo.ArchiveContent{
-		TopicID: topicID, Role: core.RoleAgent, Type: in.AgentType, Text: in.AgentText, CreatedAt: in.AgentTS})
-	if err != nil {
-		return nil, err
-	}
-	return []uint64{userRef, agentRef}, nil
+	_, err := repo.AppendArchiveL4(ac.Engine, agentID, ac.L4, repo.ArchiveContent{
+		TopicID: topicID, Seq: core.SeqAgent, Kind: core.KindUtterance,
+		Role: core.RoleAgent, Type: in.AgentType, Text: in.AgentText, CreatedAt: in.AgentTS,
+	})
+	return err
 }
 
 // ReadProfile loads the domain's L0 profile. A profile that was never

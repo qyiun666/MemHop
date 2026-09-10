@@ -4,50 +4,48 @@
 package domain
 
 import (
-	"cmp"
 	"slices"
 
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// PlanCache caches each turn's plan nodes and bound-event count in memory so
-// PlanState/rollup avoid a full engine scan per operation. Built
-// from the engine when the agent context is created (and rebuilt on idle
-// reclaim) and maintained incrementally by the internal layer, which owns
-// every plan write/delete under the same domain lock (Context.Mu) — so the
-// cache carries no lock of its own and is only ever touched while the caller
-// holds Context.Mu. A plan is keyed by the topic of the turn that opened it,
-// so a key exists exactly while at least one of its nodes does.
+// PlanCache caches each topic's plan tree in memory so PlanState and the rollup
+// avoid a full engine scan per operation. Built from the engine when the agent
+// context is created (and rebuilt on idle reclaim) and maintained incrementally
+// by the internal layer, which owns every plan write and delete under the same
+// domain lock (Context.Mu) — so the cache carries no lock of its own and is only
+// ever touched while the caller holds Context.Mu. A tree is keyed by the topic of
+// the turn that opened it, so a key exists exactly while at least one of its
+// nodes does.
 type PlanCache struct {
 	plans map[uint64]*repo.PlanAggregate
 }
 
 func buildPlanCache(engine *core.StorageEngine, agentID uint64) *PlanCache {
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
-	for _, agg := range repo.CollectPlanAggregates(engine, agentID) {
+	for _, agg := range repo.CollectPlanNodes(engine, agentID) {
 		a := agg
 		pc.plans[a.TopicID] = &a
 	}
 	return pc
 }
 
-// Aggregate returns the cached aggregate of one turn's plan; nil when unknown.
+// Aggregate returns the cached tree of one topic's plan; nil when unknown.
 func (pc *PlanCache) Aggregate(topicID uint64) *repo.PlanAggregate {
 	return pc.plans[topicID]
 }
 
-// UpsertNode inserts or updates a plan node in its aggregate, keeping Nodes
-// sorted by (Seq, NodePath) so planForest can consume them directly. Node
-// identity is the stable derived IDHash (HashPlanNode), so an in-place
-// replacement preserves the reference.
-func (pc *PlanCache) UpsertNode(topicID uint64, node *core.TrajectorySlot) {
+// UpsertNode inserts or updates one node in its aggregate, keeping the nodes
+// NodePath-ordered so planForest can consume them directly. Node identity is the
+// stable derived IDHash, so an in-place replacement preserves the address.
+func (pc *PlanCache) UpsertNode(topicID uint64, node *core.PlanNode) {
 	if node == nil {
 		return
 	}
 	agg := pc.plans[topicID]
 	if agg == nil {
-		agg = &repo.PlanAggregate{TopicID: topicID, EventCount: make(map[uint64]int)}
+		agg = &repo.PlanAggregate{TopicID: topicID}
 		pc.plans[topicID] = agg
 	}
 	found := false
@@ -61,97 +59,52 @@ func (pc *PlanCache) UpsertNode(topicID uint64, node *core.TrajectorySlot) {
 	if !found {
 		agg.Nodes = append(agg.Nodes, *node)
 	}
-	slices.SortFunc(agg.Nodes, func(a, b core.TrajectorySlot) int {
-		return cmp.Or(cmp.Compare(a.Seq, b.Seq), repo.CompareNodePath(a.NodePath, b.NodePath))
+	slices.SortFunc(agg.Nodes, func(a, b core.PlanNode) int {
+		return repo.CompareNodePath(a.NodePath, b.NodePath)
 	})
 	recomputePlanAggStat(agg)
 }
 
-// UpsertEvent appends a plan-bound event and bumps its node's count. Used by
-// plan.AppendEventLocked; the timestamp is monotonic, so CreatedAt/LastActiveAt
-// update incrementally instead of rescanning.
-func (pc *PlanCache) UpsertEvent(topicID, nodeID uint64, ev core.TrajectorySlot) {
-	agg := pc.plans[topicID]
-	if agg == nil {
-		agg = &repo.PlanAggregate{TopicID: topicID, EventCount: make(map[uint64]int)}
-		pc.plans[topicID] = agg
-	}
-	agg.Events = append(agg.Events, ev)
-	agg.EventCount[nodeID]++
-	if agg.CreatedAt == 0 || ev.Timestamp < agg.CreatedAt {
-		agg.CreatedAt = ev.Timestamp
-	}
-	if ev.Timestamp > agg.LastActiveAt {
-		agg.LastActiveAt = ev.Timestamp
-	}
-}
-
-// RemovePlanIDs drops a specific set of nodes and bound events from the cache,
-// used by the Dream retention sweep (expired nodes cascade their events, but
-// the surviving fresh subtree stays). Does not touch the engine.
-func (pc *PlanCache) RemovePlanIDs(topicID uint64, nodeIDs, eventIDs []uint64) {
+// RemoveNodes drops specific nodes from the cache, the counterpart of a retention
+// sweep that tombstoned them; a subtree that loses its last node stops being a
+// live plan. Does not touch the engine.
+func (pc *PlanCache) RemoveNodes(topicID uint64, nodeIDs []uint64) {
 	agg := pc.plans[topicID]
 	if agg == nil {
 		return
 	}
-	nodeTarget := make(map[uint64]struct{}, len(nodeIDs))
+	doomed := make(map[uint64]struct{}, len(nodeIDs))
 	for _, id := range nodeIDs {
-		nodeTarget[id] = struct{}{}
+		doomed[id] = struct{}{}
 	}
-	agg.Nodes = slices.DeleteFunc(agg.Nodes, func(n core.TrajectorySlot) bool {
-		_, ok := nodeTarget[n.IDHash]
+	agg.Nodes = slices.DeleteFunc(agg.Nodes, func(n core.PlanNode) bool {
+		_, ok := doomed[n.IDHash]
 		return ok
 	})
-	for _, id := range nodeIDs {
-		delete(agg.EventCount, id)
-	}
-	if len(eventIDs) > 0 {
-		eventTarget := make(map[uint64]struct{}, len(eventIDs))
-		for _, id := range eventIDs {
-			eventTarget[id] = struct{}{}
-		}
-		agg.Events = slices.DeleteFunc(agg.Events, func(e core.TrajectorySlot) bool {
-			_, ok := eventTarget[e.IDHash]
-			return ok
-		})
+	if len(agg.Nodes) == 0 {
+		delete(pc.plans, topicID)
+		return
 	}
 	recomputePlanAggStat(agg)
-	pc.detachIfEmpty(topicID)
 }
 
-// detachIfEmpty drops an aggregate that no longer holds any node so it stops
-// as a live plan (a plan whose whole tree was pruned is gone).
-func (pc *PlanCache) detachIfEmpty(topicID uint64) {
-	agg := pc.plans[topicID]
-	if agg == nil || len(agg.Nodes) == 0 {
-		delete(pc.plans, topicID)
-	}
+// RemoveTopic drops a whole tree from the cache, the counterpart of deleting the
+// turn that owned it.
+func (pc *PlanCache) RemoveTopic(topicID uint64) {
+	delete(pc.plans, topicID)
 }
 
-// recomputePlanAggStat rescans an aggregate's nodes and events to recompute
-// CreatedAt/LastActiveAt/HasNonDone after a node mutation (insert/update/
-// branch delete), where statuses and extreme timestamps may have changed.
+// recomputePlanAggStat rescans an aggregate after a node mutation (insert,
+// update, delete), where statuses and the newest timestamp may have changed.
 func recomputePlanAggStat(agg *repo.PlanAggregate) {
-	agg.CreatedAt = 0
 	agg.LastActiveAt = 0
 	agg.HasNonDone = false
 	for _, n := range agg.Nodes {
-		if agg.CreatedAt == 0 || n.Timestamp < agg.CreatedAt {
-			agg.CreatedAt = n.Timestamp
-		}
-		if n.Timestamp > agg.LastActiveAt {
-			agg.LastActiveAt = n.Timestamp
+		if n.UpdatedAt > agg.LastActiveAt {
+			agg.LastActiveAt = n.UpdatedAt
 		}
 		if n.Status != core.StatusDone {
 			agg.HasNonDone = true
-		}
-	}
-	for _, e := range agg.Events {
-		if agg.CreatedAt == 0 || e.Timestamp < agg.CreatedAt {
-			agg.CreatedAt = e.Timestamp
-		}
-		if e.Timestamp > agg.LastActiveAt {
-			agg.LastActiveAt = e.Timestamp
 		}
 	}
 }

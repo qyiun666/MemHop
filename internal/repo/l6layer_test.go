@@ -4,155 +4,100 @@
 package repo
 
 import (
-	"fmt"
 	"testing"
 
-	"github.com/qyiun666/MemHop/internal/common"
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
-
-func TestAppendTrajectoryThenReadBack(t *testing.T) {
-	engine := tempEngine(t)
-	for _, ev := range []core.TrajectorySlot{
-		{SessionID: 7, Seq: 1, EventType: "llm_request", Payload: "a", Timestamp: 100},
-		{SessionID: 7, Seq: 2, EventType: "tool_call", Payload: "b", Timestamp: 200},
-	} {
-		if _, err := AppendTrajectory(engine, core.DefaultAgentID, ev); err != nil {
-			t.Fatalf("append: %v", err)
-		}
-	}
-	got := core.CollectAllTrajectories(engine, core.DefaultAgentID)
-	if len(got) != 2 {
-		t.Fatalf("want 2 events, got %+v", got)
-	}
-	bySeq := map[uint64]core.TrajectorySlot{}
-	for _, ev := range got {
-		if ev.SessionID != 7 {
-			t.Fatalf("foreign session leaked: %+v", ev)
-		}
-		bySeq[ev.Seq] = ev
-	}
-	if bySeq[1].Payload != "a" || bySeq[2].Payload != "b" {
-		t.Fatalf("payload mismatch: %+v", bySeq)
-	}
-	if bySeq[1].IDHash == 0 || bySeq[1].IDHash == bySeq[2].IDHash {
-		t.Fatalf("id hashes must be set and distinct: %+v", bySeq)
-	}
-
-	n, err := DeleteTrajectoryByIDs(engine, core.DefaultAgentID, []uint64{bySeq[1].IDHash})
-	if err != nil || n != 1 {
-		t.Fatalf("delete by ids = %d err=%v, want 1", n, err)
-	}
-	if left := core.CollectAllTrajectories(engine, core.DefaultAgentID); len(left) != 1 || left[0].Seq != 2 {
-		t.Fatalf("seq1 must be gone: %+v", left)
-	}
-}
 
 func TestWritePlanNode_KeepsHashPlanNodeID(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
 	id := core.HashPlanNode(9, "1.2.1")
-	node := &core.TrajectorySlot{
-		IDHash: id, SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan,
-		ParentID: 0, NodePath: "1.2.1", Status: core.StatusInProgress,
+	node := &core.PlanNode{
+		IDHash: id, TopicID: 9, NodePath: "1.2.1",
+		Status: core.StatusInProgress, UpdatedAt: 100,
 	}
 	if _, err := WritePlanNode(engine, agentID, node); err != nil {
 		t.Fatal(err)
 	}
-	got, err := core.ReadTrajectorySlot(engine, agentID, id)
+	got, err := core.ReadPlanNode(engine, agentID, id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.IDHash != id {
-		t.Fatalf("id overwritten: want %d, got %d", id, got.IDHash)
-	}
-	if got.NodeType != core.NodeTypePlan {
-		t.Fatalf("want NodeTypePlan, got %d", got.NodeType)
+	if got.IDHash != id || got.NodePath != "1.2.1" {
+		t.Fatalf("node identity lost: %+v", got)
 	}
 }
 
-func TestPlanAggregateCountsNodesAndEvents(t *testing.T) {
+// A node's id is derived, so writing one whose id was built from a different
+// topic or path is refused rather than silently landing somewhere else.
+func TestWritePlanNodeRejectsAForeignID(t *testing.T) {
 	engine := tempEngine(t)
-	agentID := core.DefaultAgentID
-	root := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusInProgress}
-	child := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1.1"), SessionID: 9, Seq: 2, NodeType: core.NodeTypePlan, NodePath: "1.1", Status: core.StatusDone}
-	_, _ = WritePlanNode(engine, agentID, root)
-	_, _ = WritePlanNode(engine, agentID, child)
-	// 事件挂到 child 节点
-	ev := &core.TrajectorySlot{IDHash: common.HashID("ev:1"), SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanNodeRef: child.IDHash, EventType: "llm_request", Timestamp: 1000}
-	_, _ = AppendTrajectory(engine, agentID, *ev)
-
-	aggs := CollectPlanAggregates(engine, agentID)
-	if len(aggs) != 1 || len(aggs[0].Nodes) != 2 {
-		t.Fatalf("want 1 plan of 2 nodes, got %+v", aggs)
+	node := &core.PlanNode{
+		IDHash: core.HashPlanNode(9, "2"), TopicID: 9, NodePath: "1",
+		Status: core.StatusPending,
 	}
-	if aggs[0].EventCount[child.IDHash] != 1 ||
-		len(aggs[0].Events) != 1 || aggs[0].Events[0].EventType != "llm_request" {
-		t.Fatalf("want 1 llm_request event bound to child, got %+v", aggs)
+	if _, err := WritePlanNode(engine, core.DefaultAgentID, node); err == nil {
+		t.Fatal("an id that does not match the node's own topic/path must be refused")
 	}
 }
 
-func TestPlanNodeID_DoesNotCollideWithEventID(t *testing.T) {
+// A plan node and a content slot are addressed by the same topic id and nothing
+// else, so the two derivations must stay apart — and the typed readers must keep
+// a node from being overwritten by an event of the same number.
+func TestPlanNodeAndContentCoexistUnderOneTopic(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
-	// 同一个键（话题 id=9）下的节点 (nodePath="1") 与事件 (seq=1)
-	planNodeID := core.HashPlanNode(9, "1")
-	evID := common.HashID(fmt.Sprintf("%d:%d", 9, 1))
-	if planNodeID == evID {
-		t.Fatalf("plan node id %d must not collide with event id %d", planNodeID, evID)
+	nodeID := core.HashPlanNode(9, "1")
+	contentID := core.HashContent(9, 1)
+	if nodeID == contentID {
+		t.Fatalf("plan node id %d must not collide with content id %d", nodeID, contentID)
 	}
-	// 写节点 + 写事件到同一 agent，两者并存不覆盖
-	node := &core.TrajectorySlot{IDHash: planNodeID, SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusInProgress}
+	node := &core.PlanNode{IDHash: nodeID, TopicID: 9, NodePath: "1", Status: core.StatusInProgress}
 	if _, err := WritePlanNode(engine, agentID, node); err != nil {
 		t.Fatal(err)
 	}
-	ev := &core.TrajectorySlot{IDHash: evID, SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanNodeRef: planNodeID, EventType: "llm_request", Timestamp: 1000}
-	if _, err := AppendTrajectory(engine, agentID, *ev); err != nil {
+	if err := core.WriteArchiveSlot(engine, agentID, contentID, &core.ArchiveSlot{
+		IDHash: contentID, Kind: core.KindEvent, Seq: 1, ContextID: 9, EventType: "llm_request",
+	}); err != nil {
 		t.Fatal(err)
 	}
-	nodeGot, err := core.ReadTrajectorySlot(engine, agentID, planNodeID)
+	gotNode, err := core.ReadPlanNode(engine, agentID, nodeID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if nodeGot.NodeType != core.NodeTypePlan {
-		t.Fatalf("plan node overwritten by event: got %d", nodeGot.NodeType)
+	if gotNode.Status != core.StatusInProgress {
+		t.Fatalf("plan node overwritten by the content record: %+v", gotNode)
 	}
-	evGot, err := core.ReadTrajectorySlot(engine, agentID, evID)
+	gotEv, err := core.ReadArchiveSlot(engine, agentID, contentID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if evGot.NodeType != core.NodeTypeEvent {
-		t.Fatalf("event overwritten: got %d", evGot.NodeType)
+	if gotEv.Kind != core.KindEvent {
+		t.Fatalf("content overwritten: %+v", gotEv)
 	}
 }
 
-func TestCollectPlanAggregatesGroupsPlans(t *testing.T) {
+// An aggregate exists exactly while a topic owns at least one node: a turn's
+// events no longer join it, and neither ordering nor the recency the retention
+// exemption reads depends on them.
+func TestCollectPlanNodesGroupsTrees(t *testing.T) {
 	engine := tempEngine(t)
 	agentID := core.DefaultAgentID
-	// plan 9: root "1" (pending) + child "1.1" (done), one event bound to each.
-	root9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1"), SessionID: 9, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusPending, Timestamp: 100}
-	child9 := &core.TrajectorySlot{IDHash: core.HashPlanNode(9, "1.1"), SessionID: 9, Seq: 2, NodeType: core.NodeTypePlan, NodePath: "1.1", Status: core.StatusDone, Timestamp: 200}
-	// plan 3: single done root.
-	root3 := &core.TrajectorySlot{IDHash: core.HashPlanNode(3, "1"), SessionID: 3, Seq: 1, NodeType: core.NodeTypePlan, NodePath: "1", Status: core.StatusDone, Timestamp: 50}
-	for _, n := range []*core.TrajectorySlot{root9, child9, root3} {
+	nodes := []*core.PlanNode{
+		{IDHash: core.HashPlanNode(9, "1"), TopicID: 9, NodePath: "1", Status: core.StatusPending, UpdatedAt: 100},
+		{IDHash: core.HashPlanNode(9, "1.1"), TopicID: 9, NodePath: "1.1", Status: core.StatusDone, UpdatedAt: 500},
+		{IDHash: core.HashPlanNode(3, "1"), TopicID: 3, NodePath: "1", Status: core.StatusDone, UpdatedAt: 50},
+	}
+	for _, n := range nodes {
 		if _, err := WritePlanNode(engine, agentID, n); err != nil {
 			t.Fatal(err)
 		}
 	}
-	ev9a := core.TrajectorySlot{SessionID: 9, Seq: 1, NodeType: core.NodeTypeEvent, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 300}
-	ev9b := core.TrajectorySlot{SessionID: 9, Seq: 2, NodeType: core.NodeTypeEvent, PlanNodeRef: root9.IDHash, EventType: "plan_step", Timestamp: 400}
-	ev9c := core.TrajectorySlot{SessionID: 9, Seq: 3, NodeType: core.NodeTypeEvent, PlanNodeRef: child9.IDHash, EventType: "plan_step", Timestamp: 500}
-	// A bare turn event references no node, so it must join no aggregate.
-	bare := core.TrajectorySlot{SessionID: 5, Seq: 1, EventType: "llm_request", Timestamp: 900}
-	for _, ev := range []core.TrajectorySlot{ev9a, ev9b, ev9c, bare} {
-		if _, err := AppendTrajectory(engine, agentID, ev); err != nil {
-			t.Fatal(err)
-		}
-	}
 
-	aggs := CollectPlanAggregates(engine, agentID)
+	aggs := CollectPlanNodes(engine, agentID)
 	if len(aggs) != 2 {
-		t.Fatalf("want 2 plan aggregates, got %d", len(aggs))
+		t.Fatalf("want 2 plans, got %+v", aggs)
 	}
 	byTopic := map[uint64]PlanAggregate{}
 	for _, a := range aggs {
@@ -165,19 +110,55 @@ func TestCollectPlanAggregatesGroupsPlans(t *testing.T) {
 	if p9.Nodes[0].NodePath != "1" || p9.Nodes[1].NodePath != "1.1" {
 		t.Fatalf("plan9 nodes must be nodePath-sorted: %+v", p9.Nodes)
 	}
-	if p9.EventCount[root9.IDHash] != 2 || p9.EventCount[child9.IDHash] != 1 {
-		t.Fatalf("plan9 event counts: %+v", p9.EventCount)
-	}
-	if len(p9.Events) != 3 || len(p3.Events) != 0 {
-		t.Fatalf("event ids: plan9=%d plan3=%d", len(p9.Events), len(p3.Events))
-	}
-	if p9.CreatedAt != 100 || p9.LastActiveAt != 500 {
-		t.Fatalf("plan9 window = [%d,%d], want [100,500]", p9.CreatedAt, p9.LastActiveAt)
+	if p9.LastActiveAt != 500 {
+		t.Fatalf("plan9 LastActiveAt=%d want 500", p9.LastActiveAt)
 	}
 	if !p9.HasNonDone {
 		t.Fatal("plan9 has a pending node, must be non-done")
 	}
 	if p3.HasNonDone {
 		t.Fatal("plan3 is all-done")
+	}
+}
+
+func TestDeletePlanNodesByTopicIDsTakesWholeTrees(t *testing.T) {
+	engine := tempEngine(t)
+	agentID := core.DefaultAgentID
+	for _, n := range []*core.PlanNode{
+		{IDHash: core.HashPlanNode(9, "1"), TopicID: 9, NodePath: "1"},
+		{IDHash: core.HashPlanNode(9, "1.1"), TopicID: 9, NodePath: "1.1"},
+		{IDHash: core.HashPlanNode(10, "1"), TopicID: 10, NodePath: "1"},
+	} {
+		if _, err := WritePlanNode(engine, agentID, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := DeletePlanNodesByTopicIDs(engine, agentID, []uint64{9})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("deleted %d nodes, want the two of topic 9", n)
+	}
+	left := CollectPlanNodes(engine, agentID)
+	if len(left) != 1 || left[0].TopicID != 10 {
+		t.Fatalf("another turn's tree must survive: %+v", left)
+	}
+	if n, err := DeletePlanNodesByTopicIDs(engine, agentID, nil); err != nil || n != 0 {
+		t.Fatalf("no topics = no writes, got %d/%v", n, err)
+	}
+}
+
+// CompareNodePath orders numerically, so a step list past nine does not fold
+// "1.10" in front of "1.9".
+func TestCompareNodePathIsNumericPerSegment(t *testing.T) {
+	if CompareNodePath("1.10", "1.9") <= 0 {
+		t.Fatal("1.10 must sort after 1.9")
+	}
+	if CompareNodePath("1", "1.1") >= 0 {
+		t.Fatal("a parent must sort before its child")
+	}
+	if CompareNodePath("2", "1.9") <= 0 {
+		t.Fatal("segment one decides first")
 	}
 }

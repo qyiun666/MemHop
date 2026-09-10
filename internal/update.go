@@ -19,14 +19,15 @@ import (
 )
 
 // Update writes one finished turn into the topic id Search issued for it: both
-// originals become L4 archives under the topic, and the topic's keywords come
-// from a single distillation call. The distill runs before any write, so a
-// failed LLM call leaves the scene exactly as it was — no orphan archive, no
-// contentless topic. Settling the same topic id twice rewrites that turn: the
-// archives this settle does not write again are tombstoned, so a retry that
-// changed the texts leaves nothing behind. What
-// may be settled is a turn topic of the named scene only — a Dream-fused topic,
-// another scene's topic, or an id that names some other record is refused.
+// originals become the topic's two L4 content slots, and the topic's keywords
+// come from a single distillation call. The distill runs before any write, so a
+// failed LLM call leaves the scene exactly as it was — no orphan record, no
+// contentless topic. Settling the same topic id twice rewrites that turn in
+// place, so a retry that changed the texts leaves no second version behind; what
+// it does not rewrite is a slot this turn never filled, which stays until the
+// topic is deleted or the retention window passes. What may be settled is a turn
+// topic of the named scene only — a Dream-fused topic, another scene's topic, or
+// an id that names some other record is refused.
 func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	ac, err := db.lockAgent(agentID)
 	if err != nil {
@@ -58,20 +59,13 @@ func (db *DB) Update(agentID uint64, in TurnUpdate) (uint64, error) {
 	if len(keywords) == 0 {
 		return 0, common.NewError(common.ErrLLM, "turn distillation produced no keywords", nil)
 	}
-	// What this turn owned before is what this settle supersedes; the archive
-	// index is the list, so no ref has to be read back off the topic record.
-	previous := turn.PriorArchives(ac, topicID)
 	if !repo.CreateTurnTopicL2(db.engine, agentID, sceneID, topicID, keywords, in.UserTS, in.AgentTS) {
 		return 0, common.NewError(common.ErrIO, "create turn topic", nil)
 	}
-	refs, err := turn.WriteArchives(ac, agentID, topicID, in)
-	if err != nil {
+	// The two originals land on the topic's own Seq 1 and 2, so a replayed turn
+	// rewrites them where they stand: nothing has to be enumerated and retired.
+	if err := turn.WriteArchives(ac, agentID, topicID, in); err != nil {
 		return 0, err
-	}
-	if dropped := turn.DropRetained(previous, refs); len(dropped) > 0 {
-		if err := repo.DropArchivesL4(db.engine, agentID, ac.Arch, topicID, dropped); err != nil {
-			return 0, err
-		}
 	}
 	ac.SyncL2Meta(topicID)
 	db.consolidateScene(ac, sceneID)

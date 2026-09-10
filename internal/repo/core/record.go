@@ -180,14 +180,14 @@ func CollectAllArchives(engine *StorageEngine, agentID uint64) []ArchiveSlot {
 	return slices.Collect(IterAll[ArchiveSlot](engine, agentID, RecL4Archive))
 }
 
-func ReadTrajectorySlot(engine *StorageEngine, agentID, id uint64) (*TrajectorySlot, error) {
-	return readJSON[TrajectorySlot](engine, agentID, id, RecL6Trajectory, "TrajectorySlot")
+func ReadPlanNode(engine *StorageEngine, agentID, id uint64) (*PlanNode, error) {
+	return readJSON[PlanNode](engine, agentID, id, RecL6PlanNode, "PlanNode")
 }
 
-func WriteTrajectorySlot(engine *StorageEngine, agentID, id uint64, slot *TrajectorySlot) error {
-	return writeJSON(engine, agentID, RecL6Trajectory, id, slot, "TrajectorySlot")
+func WritePlanNode(engine *StorageEngine, agentID, id uint64, node *PlanNode) error {
+	return writeJSON(engine, agentID, RecL6PlanNode, id, node, "PlanNode")
 }
 
-func CollectAllTrajectories(engine *StorageEngine, agentID uint64) []TrajectorySlot {
-	return slices.Collect(IterAll[TrajectorySlot](engine, agentID, RecL6Trajectory))
+func CollectAllPlanNodes(engine *StorageEngine, agentID uint64) []PlanNode {
+	return slices.Collect(IterAll[PlanNode](engine, agentID, RecL6PlanNode))
 }

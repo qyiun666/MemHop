@@ -329,10 +329,11 @@ func TestUpdateReplayIsIdempotent(t *testing.T) {
 }
 
 // Replaying a turn with different texts is still one turn: the topic keeps its
-// id and this turn still owns exactly two archives — the superseded originals
-// are tombstoned, so L4 never holds two versions of the same turn and the old
-// wording stops surfacing in a search.
-func TestUpdateReplaySupersedesPriorArchives(t *testing.T) {
+// id and its two originals keep occupying Seq 1 and 2, so the revised texts are
+// written over the old ones in place. L4 therefore never holds two versions of
+// one turn and the superseded wording stops surfacing in a search — nothing had
+// to be listed as owned beforehand and then tombstoned.
+func TestUpdateReplayOverwritesPriorArchives(t *testing.T) {
 	srv := mockLLMServer(t, turnKeywords)
 	db := newSearchTestDB(t, srv.URL)
 	sceneID, topicID := openTurn(t, db)

@@ -176,9 +176,13 @@ func fromL3Subgraph(g *internal.L3Subgraph) *L3Subgraph {
 func fromArchiveSlot(s internal.ArchiveSlot) ArchiveSlot {
 	return ArchiveSlot{
 		IDHash:      formatID(s.IDHash),
+		Kind:        s.Kind,
+		Seq:         s.Seq,
 		ContentType: s.ContentType,
 		Role:        s.Role,
 		ContextID:   formatOptionalID(s.ContextID),
+		EventType:   s.EventType,
+		NodePath:    s.NodePath,
 		CreatedAt:   s.CreatedAt,
 		Content:     s.Content,
 	}
@@ -191,28 +195,28 @@ func formatOptionalID(id uint64) string {
 	return formatID(id)
 }
 
-func fromTrajectorySlot(s internal.TrajectorySlot) TrajectorySlot {
+// fromTrajectorySlot renders one L4 event record as the turn-event view: the
+// same content, named the way a host named it on the way in.
+func fromTrajectorySlot(s internal.ArchiveSlot) TrajectorySlot {
 	return TrajectorySlot{
-		IDHash:      formatID(s.IDHash),
-		SessionID:   formatID(s.SessionID),
-		Seq:         s.Seq,
-		EventType:   s.EventType,
-		Payload:     s.Payload,
-		Timestamp:   s.Timestamp,
-		NodePath:    s.NodePath,
-		PlanNodeRef: formatOptionalID(s.PlanNodeRef),
+		IDHash:    formatID(s.IDHash),
+		SessionID: formatID(s.ContextID),
+		Seq:       s.Seq,
+		EventType: s.EventType,
+		Payload:   s.Content,
+		Timestamp: s.CreatedAt,
+		NodePath:  s.NodePath,
 	}
 }
 
-// toCoreTrajectorySlot maps the fields a host owns. The library assigns
-// Seq/SessionID/NodePath/PlanNodeRef itself, so those are not even part of
-// what a caller can hand in. FinishedAt is a node-only field and stays off the
-// event path.
-func toCoreTrajectorySlot(s TrajectorySlot) internal.TrajectorySlot {
-	return internal.TrajectorySlot{
+// toCoreTrajectorySlot maps the fields a host owns onto a content slot. The
+// library assigns Kind, Seq, the owning topic and NodePath itself, so those are
+// not even part of what a caller can hand in.
+func toCoreTrajectorySlot(s TrajectorySlot) internal.ArchiveSlot {
+	return internal.ArchiveSlot{
 		EventType: s.EventType,
-		Payload:   s.Payload,
-		Timestamp: s.Timestamp,
+		Content:   s.Payload,
+		CreatedAt: s.Timestamp,
 	}
 }
 
@@ -231,8 +235,8 @@ func fromPlanNodeView(v internal.PlanNodeView) PlanNodeView {
 	out := PlanNodeView{
 		NodePath: v.NodePath, Title: v.Title, Status: string(v.Status),
 		Type: v.Type, Summary: v.Summary, FinishedAt: v.FinishedAt,
-		ChildCount: v.ChildCount, TrajCount: v.TrajCount,
-		Children: make([]PlanNodeView, 0, len(v.Children)),
+		ChildCount: v.ChildCount,
+		Children:   make([]PlanNodeView, 0, len(v.Children)),
 	}
 	for _, c := range v.Children {
 		out.Children = append(out.Children, fromPlanNodeView(c))

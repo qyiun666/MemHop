@@ -49,9 +49,17 @@ const (
 // together and a node's id is derived from that key. This moves record
 // *meaning*, not layout: an older file's plan nodes carry a host-minted plan id
 // where the key now goes, which addresses nothing under the new rule, so they
-// cannot be read correctly. Files with 0x000C (or older) are rejected at Open —
-// there is no migration path.
-const FormatVersion uint16 = 0x000D
+// cannot be read correctly. 0x000E moved a turn's content into one layer: an L4
+// archive now carries either a dialogue original or an operation event (Kind),
+// id'd by hash("l4:"+topic+":"+seq) so re-writing one Seq overwrites in place,
+// and L6 keeps nothing but plan nodes, on the 0x0F frame type the retired L5
+// capability record vacated. L4 became bounded with it — Dream drops content
+// past the same 7-day window L6 already had, so a topic older than the window
+// keeps its keyword track and nothing else. A 0x000D file stores its events in a
+// record type that no longer exists and its archives under text-derived ids, so
+// neither addresses anything under the new rule. Files with 0x000D (or older)
+// are rejected at Open — there is no migration path.
+const FormatVersion uint16 = 0x000E
 
 var (
 	Magic     = [4]byte{'M', 'E', 'H', '2'}

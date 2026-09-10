@@ -110,16 +110,19 @@ func applyGroups(ctx context.Context, ac *domain.Context, sceneID uint64, topics
 	return count, rejected
 }
 
-// applyOneGroup consolidates a single merge group: stores MergedSummary as an
-// L4 archive under the fused topic's own id, extracts keywords for that topic,
-// creates it, then sinks the group nodes. Any step that cannot be applied
-// rolls back what this group already wrote and returns the reason, so a group
-// is either fully applied or leaves nothing behind.
+// applyOneGroup consolidates a single merge group: stores MergedSummary as the
+// fused topic's own content slot, extracts keywords for that topic, creates it,
+// then sinks the group nodes. Any step that cannot be applied rolls back what
+// this group already wrote and returns the reason, so a group is either fully
+// applied or leaves nothing behind.
 func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g llmops.L2Group, minTS, maxTS int64) error {
 	parentID := core.ComputeTopicID(sceneID, minTS, maxTS)
-	archiveID, err := repo.AppendArchiveL4(ac.Engine, ac.ID, ac.Arch, repo.ArchiveContent{
-		TopicID: parentID, Role: core.RoleDream, Type: core.ContentText, Text: g.MergedSummary, CreatedAt: maxTS})
-	if err != nil {
+	// The fused group's summary is the parent topic's own utterance: it occupies
+	// the slot a turn's user side would, and no reference list points at it.
+	if _, err := repo.AppendArchiveL4(ac.Engine, ac.ID, ac.L4, repo.ArchiveContent{
+		TopicID: parentID, Seq: core.SeqUser, Kind: core.KindUtterance,
+		Role: core.RoleDream, Type: core.ContentText, Text: g.MergedSummary, CreatedAt: maxTS,
+	}); err != nil {
 		return common.NewError(common.ErrIO, "dream: archive merged summary", err)
 	}
 
@@ -127,12 +130,12 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 	// summary is not a group the engine can fuse: it would sink the children
 	// under a parent carrying nothing.
 	if strings.TrimSpace(g.MergedSummary) == "" {
-		discardFusedGroup(ac, parentID, archiveID)
+		discardFusedGroup(ac, parentID)
 		return common.NewError(common.ErrLLM, "dream: merge group proposed an empty merged_summary", nil)
 	}
 	keywords, err := llmops.ExtractKeywords(ctx, ac.LLM, g.MergedSummary)
 	if err != nil || len(keywords) == 0 {
-		discardFusedGroup(ac, parentID, archiveID)
+		discardFusedGroup(ac, parentID)
 		if err == nil {
 			err = common.NewError(common.ErrLLM, "extracted no keywords", nil)
 		}
@@ -140,26 +143,28 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 	}
 
 	if !repo.CreateFusedTopicL2(ac.Engine, ac.ID, sceneID, keywords, minTS, maxTS, g.NodeHashes) {
-		discardFusedGroup(ac, parentID, archiveID)
+		discardFusedGroup(ac, parentID)
 		return common.NewError(common.ErrIO, "dream: create fused topic", nil)
 	}
 	if _, err := repo.CompressTopicsL2(ac.Engine, ac.ID, g.NodeHashes, parentID); err != nil {
-		discardFusedGroup(ac, parentID, archiveID)
+		discardFusedGroup(ac, parentID)
 		return common.NewError(common.ErrIO, "dream: compress child topics", err)
 	}
 	return nil
 }
 
 // discardFusedGroup rolls back a partially applied merge group: no orphan
-// summary archive and no fused parent sitting above children that were never
-// sunk. Rollback failures only warn — the children stay at depth 1, so the next
-// Dream re-picks the group.
-func discardFusedGroup(ac *domain.Context, parentID, archiveID uint64) {
+// summary content and no fused parent sitting above children that were never
+// sunk. The fused topic owns exactly the one slot this group wrote, so dropping
+// the topic's content by key is the whole rollback — no id has to be carried
+// forward to undo a write. Rollback failures only warn — the children stay at
+// depth 1, so the next Dream re-picks the group.
+func discardFusedGroup(ac *domain.Context, parentID uint64) {
 	if !repo.DeleteL2(ac.Engine, ac.ID, []uint64{parentID}, repo.DeleteTopicsL2) {
 		slog.Warn("dream: rollback fused topic failed", "parent", common.FormatHash(parentID))
 	}
-	if err := repo.DropArchivesL4(ac.Engine, ac.ID, ac.Arch, parentID, []uint64{archiveID}); err != nil {
-		slog.Warn("dream: rollback summary archive failed", "parent", common.FormatHash(parentID), "err", err)
+	if err := repo.DeleteTopicArchives(ac.Engine, ac.ID, ac.L4, []uint64{parentID}); err != nil {
+		slog.Warn("dream: rollback summary content failed", "parent", common.FormatHash(parentID), "err", err)
 	}
 }
 

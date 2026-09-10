@@ -35,6 +35,29 @@ func (c ContentType) Valid() bool {
 	return ok
 }
 
+// ArchiveKind says which of a topic's L4 records a slot is: something somebody
+// said, or something that happened while they said it. It is orthogonal to
+// ContentType, which names the medium of Content.
+type ArchiveKind uint8
+
+const (
+	KindUtterance ArchiveKind = 0 // a dialogue original, or a Dream-fused summary
+	KindEvent     ArchiveKind = 1 // a host-recorded operation event
+)
+
+var archiveKindNames = map[ArchiveKind]string{
+	KindUtterance: "utterance", KindEvent: "event",
+}
+
+func (k ArchiveKind) String() string { return common.EnumString(k, archiveKindNames, "ArchiveKind") }
+
+// Valid reports whether k is a defined content kind, reading the same table the
+// string form comes from.
+func (k ArchiveKind) Valid() bool {
+	_, ok := archiveKindNames[k]
+	return ok
+}
+
 // HyperedgeKind classifies L1 hyperedges in the hypergraph skeleton.
 type HyperedgeKind uint8
 

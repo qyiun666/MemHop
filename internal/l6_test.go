@@ -13,37 +13,38 @@ import (
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
+	"github.com/qyiun666/MemHop/internal/content"
 	"github.com/qyiun666/MemHop/internal/dream"
 	"github.com/qyiun666/MemHop/internal/repo"
 	"github.com/qyiun666/MemHop/internal/repo/core"
-	"github.com/qyiun666/MemHop/internal/trajectory"
 )
 
-// planNodeEvents reads one node's bound events (Seq ascending) through the
-// single-scan aggregate; the repo-level CollectNodeEvents was removed.
-func planNodeEvents(t *testing.T, db *DB, topicID, nodeID uint64) []core.TrajectorySlot {
+// ev builds the event a host hands to an append: of an event, only these three
+// fields are the host's to supply.
+func ev(eventType string, ts int64) core.ArchiveSlot {
+	return core.ArchiveSlot{EventType: eventType, Content: eventType, CreatedAt: ts}
+}
+
+// nodeEvents reads the events bound to one node path from the topic's content
+// track, Seq ascending. A node holds no list of its events: the path is stamped on
+// the event, and that is all the attribution a reader needs.
+func nodeEvents(t *testing.T, db *DB, topicID uint64, nodePath string) []core.ArchiveSlot {
 	t.Helper()
-	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
-		if agg.TopicID != topicID {
-			continue
+	var out []core.ArchiveSlot
+	for _, arc := range core.CollectAllArchives(db.engine, core.DefaultAgentID) {
+		if arc.ContextID == topicID && arc.Kind == core.KindEvent && arc.NodePath == nodePath {
+			out = append(out, arc)
 		}
-		var out []core.TrajectorySlot
-		for _, ev := range agg.Events {
-			if ev.PlanNodeRef == nodeID {
-				out = append(out, ev)
-			}
-		}
-		slices.SortFunc(out, func(a, b core.TrajectorySlot) int { return cmp.Compare(a.Seq, b.Seq) })
-		return out
 	}
-	return nil
+	slices.SortFunc(out, func(a, b core.ArchiveSlot) int { return cmp.Compare(a.Seq, b.Seq) })
+	return out
 }
 
 func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(99)
 	for i := 1; i <= 3; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "llm_request", Timestamp: int64(i)}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", ev("llm_request", int64(i))); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
@@ -54,20 +55,22 @@ func TestAppendTrajectorySeqAutoIncrement(t *testing.T) {
 	if len(events) != 3 {
 		t.Fatalf("want 3 events, got %d", len(events))
 	}
-	for i, ev := range events {
-		if ev.Seq != uint64(i+1) {
-			t.Fatalf("seq[%d] = %d, want %d", i, ev.Seq, i+1)
+	// Seq 1 and 2 belong to the turn's two originals even before the turn is
+	// settled, so an event appended mid-turn cannot be overwritten by the settle.
+	for i, e := range events {
+		if want := uint64(i) + core.LastUtteranceSeq + 1; e.Seq != want {
+			t.Fatalf("seq[%d] = %d, want %d", i, e.Seq, want)
 		}
 	}
 }
 
 func TestAppendTrajectoryValidation(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	bare := core.TrajectorySlot{Timestamp: 1}
+	bare := core.ArchiveSlot{CreatedAt: 1}
 	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", bare); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", core.TrajectorySlot{EventType: "tool_call"}); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "", core.ArchiveSlot{EventType: "tool_call"}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("zero timestamp: want ErrInvalidQuery, got %v", err)
 	}
 	// A plan-bound write is refused by the same contract, and the zero key is
@@ -75,7 +78,7 @@ func TestAppendTrajectoryValidation(t *testing.T) {
 	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(1), "1", bare); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("bound empty type: want ErrInvalidQuery, got %v", err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, "0000000000000000", "", core.TrajectorySlot{EventType: "x", Timestamp: 1}); common.CodeOf(err) != common.ErrInvalidQuery {
+	if err := db.AppendTrajectory(core.DefaultAgentID, "0000000000000000", "", ev("x", 1)); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("reserved key: want ErrInvalidQuery, got %v", err)
 	}
 }
@@ -83,8 +86,10 @@ func TestAppendTrajectoryValidation(t *testing.T) {
 func TestAppendTrajectoryPayloadRefused(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	key := common.FormatHash(3)
-	long := strings.Repeat("x", trajectory.MaxEventPayload+100)
-	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.TrajectorySlot{EventType: "tool_call", Payload: long, Timestamp: 1}); common.CodeOf(err) != common.ErrInvalidQuery {
+	long := strings.Repeat("x", content.MaxEventPayload+100)
+	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.ArchiveSlot{
+		EventType: "tool_call", Content: long, CreatedAt: 1,
+	}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("an over-budget payload must be refused with ErrInvalidQuery, got %v", err)
 	}
 	events, err := db.ReadTrajectory(core.DefaultAgentID, key)
@@ -95,8 +100,9 @@ func TestAppendTrajectoryPayloadRefused(t *testing.T) {
 		t.Fatalf("a refused append must store nothing, got %d events", len(events))
 	}
 	// exactly at the budget still writes
-	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.TrajectorySlot{
-		EventType: "tool_call", Payload: strings.Repeat("x", trajectory.MaxEventPayload), Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, key, "", core.ArchiveSlot{
+		EventType: "tool_call", Content: strings.Repeat("x", content.MaxEventPayload), CreatedAt: 1,
+	}); err != nil {
 		t.Fatalf("payload at the budget limit should append: %v", err)
 	}
 }
@@ -106,7 +112,7 @@ func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
 	a, b := common.FormatHash(11), common.FormatHash(22)
 	fresh := time.Now().Add(-time.Hour).UnixMilli()
 	appendOne := func(id string, ts int64) {
-		if err := db.AppendTrajectory(core.DefaultAgentID, id, "", core.TrajectorySlot{EventType: "llm_request", Timestamp: ts}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, id, "", ev("llm_request", ts)); err != nil {
 			t.Fatalf("append %s: %v", id, err)
 		}
 	}
@@ -132,7 +138,7 @@ func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
 		t.Fatalf("session b summary mismatch: %+v", sum)
 	}
 
-	// Dream drops events older than the 7-day retention window even when
+	// Dream drops content older than the 7-day retention window even when
 	// there is nothing to consolidate (no active scenes → early return).
 	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
 		t.Fatalf("dream: %v", err)
@@ -147,25 +153,47 @@ func TestListAndDreamPruneTrajectorySessions(t *testing.T) {
 	}
 }
 
+// A turn that only ever spoke has no trajectory. Listing it would tell a host the
+// turn recorded operations it never did — the content index carries both kinds, so
+// the event tally has to be the one that filters.
+func TestListTrajectorySessionsIgnoresDialogueOnlyTurn(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	if owned := archivesOfTopic(t, db.engine, topicID); len(owned) != 2 {
+		t.Fatalf("the settled turn should own its two originals, got %d", len(owned))
+	}
+	list, err := db.ListTrajectorySessions(core.DefaultAgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("a dialogue-only turn was reported as having a trajectory: %+v", list)
+	}
+}
+
 func TestTrajectorySeqContinuesAfterContextRebuild(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	session := common.FormatHash(77)
 	for i := 1; i <= 2; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "llm_request", Timestamp: int64(i)}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", ev("llm_request", int64(i))); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
 	// Simulate the idle sweep dropping the agent context: the next access
-	// must rebuild the trajectory index from records and continue Seq.
+	// must rebuild the content index from records and continue Seq.
 	delete(db.agents, core.DefaultAgentID)
-	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Timestamp: 3}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", ev("tool_call", 3)); err != nil {
 		t.Fatalf("append after rebuild: %v", err)
 	}
 	events, err := db.ReadTrajectory(core.DefaultAgentID, session)
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
-	if len(events) != 3 || events[2].Seq != 3 {
+	if len(events) != 3 || events[2].Seq != 5 {
 		t.Fatalf("seq must continue after context rebuild: %+v", events)
 	}
 }
@@ -174,16 +202,13 @@ func TestPlanCommitUpdatesNode(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, pid, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanStep{Status: PlanDone, Summary: "made it"}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, pid, "1", ev("plan_step", 1000),
+		PlanStep{Status: PlanDone, Summary: "made it"}); err != nil {
 		t.Fatal(err)
 	}
-	id := core.HashPlanNode(9, "1")
-	node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, id)
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1"))
 	if err != nil {
 		t.Fatal(err)
-	}
-	if node.NodeType != core.NodeTypePlan {
-		t.Fatalf("want NodeTypePlan, got %d", node.NodeType)
 	}
 	if node.Status != core.StatusDone {
 		t.Fatalf("want done, got %d", node.Status)
@@ -197,37 +222,34 @@ func TestPlanAppendCreatesNodeAndEvent(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	pid := common.FormatHash(9)
-	if err := db.AppendTrajectory(core.DefaultAgentID, pid, "1.2.1", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1000}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, pid, "1.2.1", ev("llm_request", 1000)); err != nil {
 		t.Fatal(err)
 	}
-	// 节点应已创建为 pending
-	nodeID := core.HashPlanNode(9, "1.2.1")
-	node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, nodeID)
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1.2.1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if node.NodeType != core.NodeTypePlan || node.Status != core.StatusPending {
-		t.Fatalf("node not created as pending plan: %+v", node)
+	if node.Status != core.StatusPending {
+		t.Fatalf("node not created as pending: %+v", node)
 	}
-	// 事件应挂到该节点
-	events := planNodeEvents(t, db, 9, nodeID)
+	events := nodeEvents(t, db, 9, "1.2.1")
 	if len(events) != 1 || events[0].EventType != "llm_request" {
 		t.Fatalf("want 1 llm_request event on node, got %+v", events)
 	}
 }
 
-// ensurePlanNode must build the parent chain with correct ParentID.
+// EnsureNode must build the parent chain with correct ParentID.
 func TestPlanAppendBuildsParentChain(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(9), "1.2.1", core.TrajectorySlot{EventType: "llm_request", Timestamp: 1000}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(9), "1.2.1", ev("llm_request", 1000)); err != nil {
 		t.Fatal(err)
 	}
 	rootID := core.HashPlanNode(9, "1")
 	midID := core.HashPlanNode(9, "1.2")
 	leafID := core.HashPlanNode(9, "1.2.1")
-	root, _ := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, rootID)
-	mid, _ := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, midID)
-	leaf, _ := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, leafID)
+	root, _ := core.ReadPlanNode(db.engine, core.DefaultAgentID, rootID)
+	mid, _ := core.ReadPlanNode(db.engine, core.DefaultAgentID, midID)
+	leaf, _ := core.ReadPlanNode(db.engine, core.DefaultAgentID, leafID)
 	if root.ParentID != 0 {
 		t.Fatalf("root parent should be 0, got %d", root.ParentID)
 	}
@@ -237,36 +259,53 @@ func TestPlanAppendBuildsParentChain(t *testing.T) {
 	if leaf.ParentID != midID {
 		t.Fatalf("leaf parent should be midID %d, got %d", midID, leaf.ParentID)
 	}
-	if leaf.NodeType != core.NodeTypePlan || leaf.Status != core.StatusPending {
+	if leaf.Status != core.StatusPending {
 		t.Fatalf("leaf not pending plan node: %+v", leaf)
 	}
 }
 
-// Events must start at Seq 1 and never collide with a plan-node Seq,
-// whether nodes are committed shallow or deep first.
-func TestPlanEventSeqStartsAtOneNoCollision(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	// 先提交一个深节点，事件 Seq 应为 1（不被节点 Seq=3 污染）
-	if err := db.PlanCommit(core.DefaultAgentID, common.FormatHash(9), "1.2.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
-		t.Fatal(err)
+// Seq is one space a topic shares between its originals and its events, so an
+// event appended before the turn is settled must still be there afterwards: the
+// settle writes Seq 1 and 2 and must not reach down into the event range.
+func TestSettledTurnKeepsEventsAppendedBeforeIt(t *testing.T) {
+	srv := mockLLMServer(t, turnKeywords)
+	db := newSearchTestDB(t, srv.URL)
+	sceneID, topicID := openTurn(t, db)
+
+	for i, name := range []string{"llm_request", "tool_call"} {
+		if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(topicID), "",
+			ev(name, int64(100+i))); err != nil {
+			t.Fatalf("append %s: %v", name, err)
+		}
 	}
-	leafID := core.HashPlanNode(9, "1.2.1")
-	evs := planNodeEvents(t, db, 9, leafID)
-	if len(evs) != 1 || evs[0].Seq != 1 {
-		t.Fatalf("first event seq should be 1, got %+v", evs)
+	if _, err := db.Update(core.DefaultAgentID, turnOf(sceneID, topicID)); err != nil {
+		t.Fatalf("update: %v", err)
 	}
-	// 再回提提交浅层根节点，事件 Seq 应继续从 2 起，不发生覆盖
-	if err := db.PlanCommit(core.DefaultAgentID, common.FormatHash(9), "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 2000}, PlanStep{Status: PlanDone, Summary: "root done"}); err != nil {
-		t.Fatal(err)
+
+	events, err := db.ReadTrajectory(core.DefaultAgentID, common.FormatHash(topicID))
+	if err != nil {
+		t.Fatalf("read: %v", err)
 	}
-	rootID := core.HashPlanNode(9, "1")
-	rootEvs := planNodeEvents(t, db, 9, rootID)
-	if len(rootEvs) != 1 || rootEvs[0].Seq != 2 {
-		t.Fatalf("root event seq should be 2, got %+v", rootEvs)
+	if len(events) != 2 {
+		t.Fatalf("settling the turn cost %d event(s): %+v", 2-len(events), events)
 	}
-	// 两个事件 ID 必须不同（未被覆盖）
-	if evs[0].IDHash == rootEvs[0].IDHash {
-		t.Fatalf("event ids must not collide: %d", evs[0].IDHash)
+	owned := archivesOfTopic(t, db.engine, topicID)
+	if len(owned) != 4 {
+		t.Fatalf("topic owns %d records, want 2 originals + 2 events", len(owned))
+	}
+	var utterances, eventSeqs []uint64
+	for _, arc := range owned {
+		if arc.Kind == core.KindEvent {
+			eventSeqs = append(eventSeqs, arc.Seq)
+			continue
+		}
+		utterances = append(utterances, arc.Seq)
+	}
+	if len(utterances) != 2 || utterances[0] != core.SeqUser || utterances[1] != core.SeqAgent {
+		t.Fatalf("originals must hold Seq 1 and 2: %v", utterances)
+	}
+	if len(eventSeqs) != 2 || eventSeqs[0] != 3 || eventSeqs[1] != 4 {
+		t.Fatalf("events must sit above the utterance slots: %v", eventSeqs)
 	}
 }
 
@@ -277,8 +316,7 @@ func TestPlanCommitRollupModelA(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	commit := func(topicID, path string, status PlanStatus, summary string, ts int64) {
 		t.Helper()
-		err := db.PlanCommit(core.DefaultAgentID, topicID, path,
-			core.TrajectorySlot{EventType: "plan_step", Timestamp: ts},
+		err := db.PlanCommit(core.DefaultAgentID, topicID, path, ev("plan_step", ts),
 			PlanStep{Status: status, Summary: summary})
 		if err != nil {
 			t.Fatalf("commit %s: %v", path, err)
@@ -324,48 +362,56 @@ func TestPlanCommitRollupModelA(t *testing.T) {
 	}
 }
 
-// TestDreamPrunesExpiredPlanNodes verifies the retention sweep semantics: an
-// expired plan whose nodes are all Done is swept together with its bound
-// events (cascade — no orphan PlanNodeRef), a plan that still holds a non-Done
-// node is exempt only while it is also active inside the window, and a
-// non-Done plan the host went silent on past the window is abandoned and swept
-// like any other record so L6 stays bounded.
-func TestDreamPrunesExpiredPlanNodes(t *testing.T) {
+// Retention semantics after the merge: a plan node ages on its own clock and
+// takes nothing with it. An expired tree is swept while the turn's events stay
+// readable; an in-flight plan keeps even its stale nodes, and events arriving on
+// a dead tree no longer hold that tree alive.
+func TestDreamPrunePlanNodesAndContent(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
-	doneID, activeID, staleID := common.FormatHash(9), common.FormatHash(8), common.FormatHash(7)
-	old := time.Now().Add(-dream.TrajectoryRetention - time.Hour).UnixMilli()
+	old := time.Now().Add(-dream.ContentRetention - time.Hour).UnixMilli()
+	now := time.Now().UnixMilli()
 	age := func(id uint64) {
-		node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, id)
+		t.Helper()
+		node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, id)
 		if err != nil {
 			t.Fatalf("read node for aging: %v", err)
 		}
-		node.Timestamp = old
+		node.UpdatedAt = old
 		if _, err := repo.WritePlanNode(db.engine, core.DefaultAgentID, node); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// Done plan: committed long ago, plus a FRESH event bound to the node
-	// (the cascade must remove it even though it is inside the window).
-	if err := db.PlanCommit(core.DefaultAgentID, doneID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: old}, PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
+
+	// Done plan committed long ago, with a FRESH event bound to the step.
+	doneID := common.FormatHash(9)
+	if err := db.PlanCommit(core.DefaultAgentID, doneID, "1", ev("plan_step", old),
+		PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AppendTrajectory(core.DefaultAgentID, doneID, "1", ev("note", now)); err != nil {
 		t.Fatal(err)
 	}
 	doneNode := core.HashPlanNode(9, "1")
-	if err := db.AppendTrajectory(core.DefaultAgentID, doneID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: time.Now().UnixMilli()}); err != nil {
-		t.Fatal(err)
-	}
 	age(doneNode)
-	// In-flight plan: expired node but a fresh bound event → still active, so
-	// the tree survives mid-task.
-	if err := db.PlanCommit(core.DefaultAgentID, activeID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: old}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
+
+	// In-flight plan: an aged Done root plus a child committed just now. The
+	// tree is exempt as a whole, so the stale root survives with it.
+	liveID := common.FormatHash(8)
+	if err := db.PlanCommit(core.DefaultAgentID, liveID, "1", ev("plan_step", old),
+		PlanStep{Status: PlanDone, Summary: "root"}); err != nil {
 		t.Fatal(err)
 	}
-	activeNode := core.HashPlanNode(8, "1")
-	if err := db.AppendTrajectory(core.DefaultAgentID, activeID, "1", core.TrajectorySlot{EventType: "llm_request", Timestamp: time.Now().UnixMilli()}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, liveID, "1.1", ev("plan_step", now),
+		PlanStep{Status: PlanInProgress}); err != nil {
 		t.Fatal(err)
 	}
-	age(activeNode)
-	// Abandoned plan: non-Done and nothing touched it inside the window.
-	if err := db.PlanCommit(core.DefaultAgentID, staleID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: old}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
+	liveRoot := core.HashPlanNode(8, "1")
+	age(liveRoot)
+
+	// Abandoned plan: non-Done and nothing committed inside the window.
+	staleID := common.FormatHash(7)
+	if err := db.PlanCommit(core.DefaultAgentID, staleID, "1", ev("plan_step", old),
+		PlanStep{Status: PlanInProgress}); err != nil {
 		t.Fatal(err)
 	}
 	staleNode := core.HashPlanNode(7, "1")
@@ -374,126 +420,72 @@ func TestDreamPrunesExpiredPlanNodes(t *testing.T) {
 	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, doneNode); err == nil {
+	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, doneNode); err == nil {
 		t.Fatal("expired all-done plan node should be pruned")
 	}
-	if _, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, staleNode); err == nil {
+	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, staleNode); err == nil {
 		t.Fatal("non-Done plan silent past the window is abandoned and must be pruned")
 	}
-	for _, ev := range core.CollectAllTrajectories(db.engine, core.DefaultAgentID) {
-		if ev.PlanNodeRef == doneNode {
-			t.Fatalf("bound event must cascade with its pruned node: %+v", ev)
-		}
+	if _, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, liveRoot); err != nil {
+		t.Fatalf("an in-flight plan must keep even its stale root: %v", err)
 	}
-	if _, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, activeNode); err != nil {
-		t.Fatalf("active plan node must be exempt from the sweep: %v", err)
+	// The swept node cascades nothing: the event bound to it is content, ages on
+	// its own clock, and is still readable.
+	events, err := db.ReadTrajectory(core.DefaultAgentID, doneID)
+	if err != nil {
+		t.Fatalf("the turn's event track must survive its own pruned tree: %v", err)
+	}
+	if len(events) != 1 || events[0].EventType != "note" {
+		t.Fatalf("want the fresh note event only, got %+v", events)
 	}
 }
 
-// Dream's plan sweep cascades a node's bound events away with it. An event
-// still inside the retention window survives RemoveBefore's sweep, so the
-// cascade has to mirror it out of the TrajIndex as well: an index entry naming a
-// deleted record makes every later ReadTrajectory/Crystallize of that key fail
-// with ErrIO until the domain context is rebuilt.
-func TestDreamPruneCascadesMirrorTheIndex(t *testing.T) {
-	db := newTestDB(t, newTestEngine(t))
-	defer db.Close()
-	topic := common.FormatHash(9)
-	old := time.Now().Add(-dream.TrajectoryRetention - time.Hour).UnixMilli()
-	if err := db.PlanCommit(core.DefaultAgentID, topic, "1",
-		core.TrajectorySlot{EventType: "plan_step", Timestamp: old},
-		PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
-		t.Fatal(err)
-	}
-	nodeID := core.HashPlanNode(9, "1")
-	ac := db.agents[core.DefaultAgentID]
-	node, err := core.ReadTrajectorySlot(db.engine, core.DefaultAgentID, nodeID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	node.Timestamp = old // a commit stamps now; age the node past the window
-	if _, err := repo.WritePlanNode(db.engine, core.DefaultAgentID, node); err != nil {
-		t.Fatal(err)
-	}
-	ac.Plans.UpsertNode(9, node)
-	// A fresh annotation lands on that long-finished step.
-	if err := db.AppendTrajectory(core.DefaultAgentID, topic, "1",
-		core.TrajectorySlot{EventType: "note", Timestamp: time.Now().UnixMilli()}); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := db.RunDream(context.Background(), core.DefaultAgentID, 0); err != nil {
-		t.Fatal(err)
-	}
-	if hashes := ac.Traj.EventHashes(9); len(hashes) != 0 {
-		t.Fatalf("cascade left %d index entries naming deleted records: %v", len(hashes), hashes)
-	}
-	evs, err := db.ReadTrajectory(core.DefaultAgentID, topic)
-	if err != nil {
-		t.Fatalf("the key is unreadable after its own cascade: %v", err)
-	}
-	if len(evs) != 0 {
-		t.Fatalf("cascaded events still read back: %+v", evs)
-	}
-}
-
-// TestPlanAppendCannotInjectNodeType verifies an appended plan event is forced
-// to bare-event semantics: no node-only field survives the write, so a host
-// cannot inject a plan-node record that would pollute the tree view.
-func TestPlanAppendCannotInjectNodeType(t *testing.T) {
+// An appended event is forced to content-of-kind-event semantics: the fields a
+// host has no business choosing — Kind, its Seq, the topic it belongs to, the
+// role and the medium — are assigned by the library, so an append cannot smuggle
+// a record into the transcript or forge a plan node.
+func TestAppendEventCannotForgeContentFields(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	topicID := common.FormatHash(9)
-	// Host tries to inject plan-node fields on an event; all of them are forced
-	// back to event semantics.
-	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{
-		EventType: "llm_request", Timestamp: 1000, NodeType: core.NodeTypePlan,
-		Status: core.StatusDone, Summary: "injected", NodePath: "9.9", PlanType: "plan",
+	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1", core.ArchiveSlot{
+		Kind: core.KindUtterance, Seq: core.SeqUser, ContextID: 4242,
+		Role: core.RoleDream, ContentType: core.ContentVideo, NodePath: "9.9",
+		EventType: "llm_request", Content: "payload", CreatedAt: 1000,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var nodes []core.TrajectorySlot
-	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
-		if agg.TopicID == 9 {
-			nodes = agg.Nodes
-		}
+	if n := countRecords(db.engine, core.DefaultAgentID, core.RecL6PlanNode); n != 1 {
+		t.Fatalf("plan nodes = %d, want the single node the path created", n)
 	}
-	if len(nodes) != 1 || nodes[0].NodeType != core.NodeTypePlan {
-		t.Fatalf("want exactly 1 plan node under the turn, got %+v", nodes)
+	node, err := core.ReadPlanNode(db.engine, core.DefaultAgentID, core.HashPlanNode(9, "1"))
+	if err != nil {
+		t.Fatalf("node for path 1 not created: %v", err)
 	}
-	// The appended event must be an Event, not a node.
-	events := 0
-	for _, e := range core.CollectAllTrajectories(db.engine, core.DefaultAgentID) {
-		if e.NodeType != core.NodeTypeEvent {
-			continue
-		}
-		events++
-		// The library stamps the step the event actually bound to; the host's
-		// forged "9.9" must not survive.
-		if e.NodePath != "1" {
-			t.Fatalf("appended event must carry the bound node's path, got %q", e.NodePath)
-		}
-		if e.Status != 0 || e.Summary != "" || e.PlanType != "" || e.ParentID != 0 {
-			t.Fatalf("appended event kept node fields: %+v", e)
-		}
-	}
-	if events != 1 {
-		t.Fatalf("want exactly 1 event, got %d", events)
+	if node.Status != core.StatusPending {
+		t.Fatalf("created node must be pending, got %d", node.Status)
 	}
 
-	// The bare turn path forces the same shape.
-	turnID := common.FormatHash(77)
-	if err := db.AppendTrajectory(core.DefaultAgentID, turnID, "", core.TrajectorySlot{
-		EventType: "tool_call", Timestamp: 1100, PlanType: "step", Summary: "injected",
-	}); err != nil {
-		t.Fatal(err)
+	var landed *core.ArchiveSlot
+	for _, arc := range core.CollectAllArchives(db.engine, core.DefaultAgentID) {
+		if arc.Kind == core.KindEvent {
+			clone := arc
+			landed = &clone
+		}
 	}
-	for _, e := range core.CollectAllTrajectories(db.engine, core.DefaultAgentID) {
-		if e.SessionID != 77 {
-			continue
-		}
-		if e.PlanType != "" || e.Summary != "" || e.PlanNodeRef != 0 || e.NodePath != "" {
-			t.Fatalf("bare turn event shape: %+v", e)
-		}
+	if landed == nil {
+		t.Fatal("the event record is missing")
+	}
+	if landed.ContextID != 9 || landed.IDHash != core.HashContent(9, landed.Seq) {
+		t.Fatalf("an append must land under the topic it addressed: %+v", landed)
+	}
+	if landed.Seq != core.LastUtteranceSeq+1 {
+		t.Fatalf("forged Seq survived: %d", landed.Seq)
+	}
+	if landed.Role != 0 || landed.ContentType != core.ContentText {
+		t.Fatalf("forged role or medium survived: %+v", landed)
+	}
+	if landed.NodePath != "1" {
+		t.Fatalf("event must carry the step it actually bound to, got %q", landed.NodePath)
 	}
 }
 
@@ -503,13 +495,16 @@ func TestPlanStateForestMultipleRoots(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1001}, PlanStep{Status: PlanDone, Summary: "step one"}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 1001),
+		PlanStep{Status: PlanDone, Summary: "step one"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "2", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1002}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "2", ev("plan_step", 1002),
+		PlanStep{Status: PlanInProgress}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "2.1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 1003}, PlanStep{Status: PlanDone, Summary: "sub"}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "2.1", ev("plan_step", 1003),
+		PlanStep{Status: PlanDone, Summary: "sub"}); err != nil {
 		t.Fatal(err)
 	}
 	tree, err := db.PlanState(core.DefaultAgentID, topicID)
@@ -537,12 +532,11 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1",
-		core.TrajectorySlot{EventType: "sandbox_ask", Timestamp: 1000}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1", ev("sandbox_ask", 1000)); err != nil {
 		t.Fatalf("a host-named plan event must be accepted: %v", err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1",
-		core.TrajectorySlot{EventType: "host_step", Timestamp: 1001}, PlanStep{Status: PlanDone}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("host_step", 1001),
+		PlanStep{Status: PlanDone}); err != nil {
 		t.Fatalf("host-named commit event: %v", err)
 	}
 	events, err := db.ReadTrajectory(core.DefaultAgentID, topicID)
@@ -555,7 +549,7 @@ func TestPlanEventNamesAreHostOwned(t *testing.T) {
 	}
 
 	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "2.1",
-		core.TrajectorySlot{Timestamp: 1002}); common.CodeOf(err) != common.ErrInvalidQuery {
+		core.ArchiveSlot{CreatedAt: 1002}); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("empty event type: want ErrInvalidQuery, got %v", err)
 	}
 	tree, err := db.PlanState(core.DefaultAgentID, topicID)
@@ -571,17 +565,15 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1",
-		core.TrajectorySlot{EventType: "plan_step", Timestamp: 1000},
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 1000),
 		PlanStep{Title: "r", PlanType: "plan", Status: PlanPending}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1.1",
-		core.TrajectorySlot{EventType: "plan_step", Timestamp: 1100},
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1.1", ev("plan_step", 1100),
 		PlanStep{Title: "a", PlanType: "step", Status: PlanDone, Summary: "s"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1.1", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1200}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, topicID, "1.1", ev("tool_call", 1200)); err != nil {
 		t.Fatal(err)
 	}
 	ac := db.agents[core.DefaultAgentID]
@@ -593,7 +585,7 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 		t.Fatal("cached aggregate missing")
 	}
 	var disk *repo.PlanAggregate
-	for _, agg := range repo.CollectPlanAggregates(db.engine, core.DefaultAgentID) {
+	for _, agg := range repo.CollectPlanNodes(db.engine, core.DefaultAgentID) {
 		if agg.TopicID == 9 {
 			disk = &agg
 			break
@@ -605,8 +597,8 @@ func TestPlanCache_ConsistentWithDisk(t *testing.T) {
 	if !reflect.DeepEqual(cached.Nodes, disk.Nodes) {
 		t.Fatalf("Nodes mismatch:\n cached=%+v\n disk=%+v", cached.Nodes, disk.Nodes)
 	}
-	if !reflect.DeepEqual(cached.EventCount, disk.EventCount) {
-		t.Fatalf("EventCount mismatch: cached=%v disk=%v", cached.EventCount, disk.EventCount)
+	if cached.HasNonDone != disk.HasNonDone {
+		t.Fatalf("HasNonDone mismatch: cached=%v disk=%v", cached.HasNonDone, disk.HasNonDone)
 	}
 }
 
@@ -614,7 +606,8 @@ func TestPlanCommit_FinishedAt(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	defer db.Close()
 	topicID := common.FormatHash(9)
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 100}, PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 100),
+		PlanStep{Status: PlanDone, Summary: "fin"}); err != nil {
 		t.Fatal(err)
 	}
 	tree, err := db.PlanState(core.DefaultAgentID, topicID)
@@ -626,7 +619,8 @@ func TestPlanCommit_FinishedAt(t *testing.T) {
 		t.Fatal("terminal commit must set FinishedAt")
 	}
 	// A non-terminal commit must not clear it.
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 200}, PlanStep{Status: PlanInProgress, Summary: ""}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 200),
+		PlanStep{Status: PlanInProgress}); err != nil {
 		t.Fatal(err)
 	}
 	tree2, _ := db.PlanState(core.DefaultAgentID, topicID)
@@ -634,7 +628,8 @@ func TestPlanCommit_FinishedAt(t *testing.T) {
 		t.Fatalf("non-terminal commit cleared FinishedAt: %d -> %d", first, tree2.Roots[0].FinishedAt)
 	}
 	// A re-terminal commit preserves the original FinishedAt.
-	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", core.TrajectorySlot{EventType: "plan_step", Timestamp: 300}, PlanStep{Status: PlanDone, Summary: "fin2"}); err != nil {
+	if err := db.PlanCommit(core.DefaultAgentID, topicID, "1", ev("plan_step", 300),
+		PlanStep{Status: PlanDone, Summary: "fin2"}); err != nil {
 		t.Fatal(err)
 	}
 	tree3, _ := db.PlanState(core.DefaultAgentID, topicID)
@@ -656,12 +651,9 @@ func TestTurnRunsOnOneTopicID(t *testing.T) {
 	}
 	turnID := common.FormatHash(res.NewTopicID)
 
-	for _, ev := range []core.TrajectorySlot{
-		{EventType: "llm_request", Timestamp: 1000},
-		{EventType: "tool_call", Timestamp: 1500},
-	} {
-		if err := db.AppendTrajectory(core.DefaultAgentID, turnID, "", ev); err != nil {
-			t.Fatalf("append %s: %v", ev.EventType, err)
+	for _, name := range []string{"llm_request", "tool_call"} {
+		if err := db.AppendTrajectory(core.DefaultAgentID, turnID, "", ev(name, 1000)); err != nil {
+			t.Fatalf("append %s: %v", name, err)
 		}
 	}
 	settled, err := db.Update(core.DefaultAgentID, turnOf(res.Scene.SceneID, res.NewTopicID))
@@ -681,9 +673,9 @@ func TestTurnRunsOnOneTopicID(t *testing.T) {
 	if len(events) != 2 {
 		t.Fatalf("events = %d, want the turn's 2", len(events))
 	}
-	for _, ev := range events {
-		if ev.SessionID != settled {
-			t.Fatalf("event %s landed under key %d, want the turn's %d", ev.EventType, ev.SessionID, settled)
+	for _, e := range events {
+		if e.ContextID != settled {
+			t.Fatalf("event %s landed under key %d, want the turn's %d", e.EventType, e.ContextID, settled)
 		}
 	}
 }

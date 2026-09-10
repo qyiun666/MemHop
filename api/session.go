@@ -157,7 +157,9 @@ func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edg
 	return fromL3Subgraph(sub), nil
 }
 
-// SearchL4 returns archives with hex IDs.
+// SearchL4 returns content records with hex IDs, ordered by Seq. L4 holds a
+// turn's dialogue originals and its operation events alike, so Kind is a condition
+// like any other: leaving it unset selects both.
 func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	archives, err := s.Session.SearchL4(q)
 	if err != nil {
@@ -170,10 +172,10 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return out, nil
 }
 
-// ReadTrajectory returns one turn's L6 trajectory events with hex IDs, in Seq
-// order. turnID is the topic id Search minted for the turn. The plan nodes that
-// turn opened are not part of this read — the trajectory index carries events
-// only; a node's status and summary come back from PlanState.
+// ReadTrajectory returns one turn's events with hex IDs, in Seq order. turnID is
+// the topic id Search minted for the turn. The plan nodes that turn opened are not
+// part of this read — they are L6 records, not content; a node's status and
+// summary come back from PlanState.
 func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
 	events, err := s.Session.ReadTrajectory(turnID)
 	if err != nil {
@@ -196,13 +198,17 @@ func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
 // call — a stale tree goes only when the turn that opened it falls out of the
 // retention window.
 //
-// The log is append-only and per-turn: nothing returns or takes an event id,
-// because no public call consumes one — ReadTrajectory(topicID) gives the
-// records back in Seq order, and Dream drops ones past the retention window.
-// Of the event you pass, only EventType, Payload and Timestamp are stored;
-// Seq, SessionID, NodePath and PlanNodeRef are assigned by the library, and the
-// record's NodePath is the step it landed on, which is how a host attributes an
-// event to a step afterwards.
+// The log is per-turn: nothing returns or takes an event id, because no public
+// call consumes one — ReadTrajectory(topicID) gives the records back in Seq
+// order, and Dream drops ones past the retention window. Of the event you pass,
+// only EventType, Payload and Timestamp are stored; Seq, SessionID and NodePath
+// are assigned by the library, and the record's NodePath is the step it landed
+// on, which is how a host attributes an event to a step afterwards.
+//
+// Seq is one space a topic shares with its own originals: Update keeps slots 1
+// and 2 for what the user said and the reply, so the first event of a turn is 3.
+// Rewriting a Seq that is already taken is an overwrite, not an error — that is
+// what lets a replayed turn converge instead of accumulating versions.
 //
 // A Payload over the 4 KiB budget is refused, not truncated: a shortened event
 // would read back exactly like a complete one. Nothing is written when this

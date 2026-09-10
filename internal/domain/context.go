@@ -21,11 +21,11 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/index"
 )
 
-// Context is the per-agent business state: the L2Meta topic cache, the
-// L6 indices, Dream bookkeeping and its own lock. Same-agent operations are
-// serialized on Mu (inheriting the single-instance serial contract);
-// different agents run in parallel. Callers reach every field only while
-// holding Mu (the composition root takes it before dispatching).
+// Context is the per-agent business state: the L2Meta topic cache, the L4
+// content mirror, the L6 plan cache, Dream bookkeeping and its own lock.
+// Same-agent operations are serialized on Mu (inheriting the single-instance
+// serial contract); different agents run in parallel. Callers reach every field
+// only while holding Mu (the composition root takes it before dispatching).
 type Context struct {
 	ID uint64
 	Mu sync.Mutex // domain lock: same agent serial, across agents parallel
@@ -35,9 +35,8 @@ type Context struct {
 	Defaults *config.MemHopDefaults
 
 	L2Meta        *index.L2MetaIndex  // L2 topic metadata cache (serves the scene read)
-	Arch          *index.ArchiveIndex // L4 archives each topic owns (serves the content read)
-	Traj          *index.TrajIndex    // L6 turn trajectory shape (Seq/hash/timestamp/topic)
-	Plans         *PlanCache          // L6 plan->nodes/events aggregate (no engine scan per op)
+	L4            *index.L4Index      // content each topic owns: utterances AND events
+	Plans         *PlanCache          // L6 plan tree per topic (no engine scan per op)
 	DreamInFlight map[uint64]struct{} // scenes with a scheduled background Dream
 
 	LastActiveAt atomic.Int64 // Unix ms of the last context access (idle sweep)
@@ -62,8 +61,7 @@ func NewContext(id uint64, parent context.Context, engine *core.StorageEngine, l
 		LLM:           llm,
 		Defaults:      defaults,
 		L2Meta:        index.BuildL2MetaFromEngine(engine, id),
-		Arch:          index.BuildArchiveFromEngine(engine, id),
-		Traj:          index.BuildTrajFromEngine(engine, id),
+		L4:            index.BuildL4FromEngine(engine, id),
 		Plans:         buildPlanCache(engine, id),
 		DreamInFlight: make(map[uint64]struct{}),
 		OpCtx:         ctx,

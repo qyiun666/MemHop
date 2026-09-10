@@ -57,6 +57,7 @@ type (
 	GraphEdgeKind            = internal.GraphEdgeKind
 	CapabilityType           = internal.CapabilityType
 	ContentType              = internal.ContentType
+	ArchiveKind              = internal.ArchiveKind
 )
 
 // ---- response DTOs (ids are 16-char hex strings) ----
@@ -164,32 +165,38 @@ type L3Subgraph struct {
 	Edges []HypergraphEdge `json:"edges"`
 }
 
-// ArchiveSlot stores one L4 original of a turn. Role is one of RoleUser /
-// RoleAgent (written by Update) or RoleDream (a fused group's summary);
-// ContentType says whether Content is prose or a reference to media.
+// ArchiveSlot is one record of a topic's L4 content: a dialogue original
+// (KindUtterance) or an operation event (KindEvent). ContextID is the topic that
+// owns it and Seq the slot it owns there, so (ContextID, Seq) is the address a
+// replay can rewrite. Role is one of RoleUser / RoleAgent (settled by Update) or
+// RoleDream (a fused group's summary) and qualifies utterances only; ContentType
+// says whether Content is prose or a reference to media; EventType names an
+// event and is the host's own word for it.
 type ArchiveSlot struct {
 	IDHash      string      `json:"id_hash"`
+	Kind        ArchiveKind `json:"kind"`
+	Seq         uint64      `json:"seq"`
 	ContentType ContentType `json:"content_type"`
 	Role        uint8       `json:"role"`
 	ContextID   string      `json:"context_id"`
+	EventType   string      `json:"event_type,omitempty"`
+	NodePath    string      `json:"node_path,omitempty"`
 	CreatedAt   int64       `json:"created_at"`
 	Content     string      `json:"content"`
 }
 
-// TrajectorySlot is one L6 trajectory event — the shape both write and read
-// use, so a field that no path can fill does not live here. SessionID is the L6
-// key: the topic id Search minted for the turn, which holds both that turn's
-// events and the plan tree it opened. Plan nodes are read through PlanState
-// (PlanNodeView), not here: the trajectory index carries events only.
+// TrajectorySlot is one turn event — the read view of an L4 record of kind
+// event. SessionID is the topic id Search minted for the turn, which holds both
+// that turn's events and the plan tree it opened. Plan nodes are read through
+// PlanState (PlanNodeView), not here: they are L6 records, not content.
 //
-// NodePath names the step an event belongs to — the library stamps it on write,
-// so a host can attribute an event to a step without deriving PlanNodeRef (a
-// library hash nothing on the surface re-derives). A bare turn event leaves
-// NodePath and PlanNodeRef empty.
+// NodePath names the step an event belongs to; the library stamps it on write, so
+// a host can attribute an event to a step without deriving anything. A bare turn
+// event leaves it empty.
 //
-// On every write path (AppendTrajectory, PlanCommit) SessionID/NodePath/
-// PlanNodeRef/Seq are assigned by the library and are read-only here; of the
-// event you pass, only EventType, Payload and Timestamp are stored.
+// On every write path (AppendTrajectory, PlanCommit) SessionID/NodePath/Seq are
+// assigned by the library and are read-only here; of the event you pass, only
+// EventType, Payload and Timestamp are stored.
 type TrajectorySlot struct {
 	IDHash    string `json:"id_hash"`
 	SessionID string `json:"session_id"`
@@ -198,8 +205,7 @@ type TrajectorySlot struct {
 	Payload   string `json:"payload"`
 	Timestamp int64  `json:"timestamp"`
 
-	NodePath    string `json:"node_path,omitempty"`
-	PlanNodeRef string `json:"plan_node_ref,omitempty"`
+	NodePath string `json:"node_path,omitempty"`
 }
 
 // PlanNodeView is the external plan-tree node; Status is the string form.
@@ -211,7 +217,6 @@ type PlanNodeView struct {
 	Summary    string         `json:"summary"`
 	FinishedAt int64          `json:"finished_at"`
 	ChildCount int            `json:"child_count"`
-	TrajCount  int            `json:"traj_count"`
 	Children   []PlanNodeView `json:"children"`
 }
 

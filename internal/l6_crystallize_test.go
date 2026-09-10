@@ -51,11 +51,11 @@ func TestCrystallizeReadsOneTurnTopic(t *testing.T) {
 	const turnA, turnB = uint64(4242), uint64(4243)
 	for _, ev := range []struct {
 		turn uint64
-		slot core.TrajectorySlot
+		slot core.ArchiveSlot
 	}{
-		{turnA, core.TrajectorySlot{EventType: "llm_request", Payload: "signal-turn-a", Timestamp: 100}},
-		{turnA, core.TrajectorySlot{EventType: "tool_call", Payload: "signal-turn-a-2", Timestamp: 150}},
-		{turnB, core.TrajectorySlot{EventType: "llm_output", Payload: "signal-turn-b", Timestamp: 200}},
+		{turnA, core.ArchiveSlot{EventType: "llm_request", Content: "signal-turn-a", CreatedAt: 100}},
+		{turnA, core.ArchiveSlot{EventType: "tool_call", Content: "signal-turn-a-2", CreatedAt: 150}},
+		{turnB, core.ArchiveSlot{EventType: "llm_output", Content: "signal-turn-b", CreatedAt: 200}},
 	} {
 		if err := db.AppendTrajectory(core.DefaultAgentID, common.FormatHash(ev.turn), "", ev.slot); err != nil {
 			t.Fatalf("append: %v", err)
@@ -82,9 +82,9 @@ func TestCrystallizeReadsOneTurnTopic(t *testing.T) {
 		t.Fatalf("events = %d, want the turn's 2", len(events))
 	}
 	for _, ev := range events {
-		if ev.SessionID != turnA {
+		if ev.ContextID != turnA {
 			t.Fatalf("event seq %d must key to its turn topic %d, got session=%d",
-				ev.Seq, turnA, ev.SessionID)
+				ev.Seq, turnA, ev.ContextID)
 		}
 	}
 }
@@ -159,7 +159,7 @@ func TestCrystallizeReturnsCandidatesAgainstHostCatalog(t *testing.T) {
 	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(123)
 	for i := 1; i <= 3; i++ {
-		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "step", Timestamp: int64(i)}); err != nil {
+		if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.ArchiveSlot{EventType: "tool_call", Content: "step", CreatedAt: int64(i)}); err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}
 	}
@@ -209,7 +209,7 @@ func TestCrystallizeCandidatesPassThroughUnvalidated(t *testing.T) {
 	db := newTestDB(t, newTestEngine(t))
 	db.llm = llm.New(&MemHopConfig{LLM: LlmConfig{APIURL: srv.URL, APIKey: "test", Model: "mock"}})
 	session := common.FormatHash(888)
-	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.TrajectorySlot{EventType: "tool_call", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(core.DefaultAgentID, session, "", core.ArchiveSlot{EventType: "tool_call", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
 	out, err := db.Crystallize(context.Background(), core.DefaultAgentID, session, nil)

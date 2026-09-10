@@ -39,7 +39,7 @@ type (
 	HypergraphEdge   = core.HypergraphEdge
 	HypergraphSource = core.HypergraphSource
 	ArchiveSlot      = core.ArchiveSlot
-	TrajectorySlot   = core.TrajectorySlot
+	ArchiveKind      = core.ArchiveKind
 	GraphEdgeKind    = core.GraphEdgeKind
 	TopicSlot        = core.TopicSlot
 	ResourceRef      = capability.ResourceRef
@@ -124,12 +124,14 @@ const (
 	RoleDream  = core.RoleDream
 )
 
-// ---- L6 trajectory node type / plan status constants ----
+// ---- L4 content kind constants ----
 
 const (
-	NodeTypeEvent = core.NodeTypeEvent
-	NodeTypePlan  = core.NodeTypePlan
+	KindUtterance = core.KindUtterance
+	KindEvent     = core.KindEvent
 )
+
+// ---- L6 plan status constants (read side; the write surface is a string) ----
 
 const (
 	StatusPending    = core.StatusPending

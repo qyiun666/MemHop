@@ -97,16 +97,16 @@ func (s *Session) MergeScenes(primaryID string, secondaryIDs []string) error {
 	return s.db.MergeScenes(s.agentID, primaryID, secondaryIDs)
 }
 
-// DeleteTopic removes a topic and its whole subtree (children at any
-// depth), the L4 archives they reference, and their L2Meta cache entries,
+// DeleteTopic removes a topic and its whole subtree (children at any depth),
+// the L4 content they own, the plan trees they opened and their cache entries,
 // so the deleted topic no longer surfaces in any scene read.
 func (s *Session) DeleteTopic(topicID string) error {
 	return s.db.DeleteTopic(s.agentID, topicID)
 }
 
 // DeleteScene removes a scene: its scene record, every topic (all depths),
-// the referenced L4 archives, and the L2Meta cache entries, so the scene
-// disappears from listings and reads.
+// the L4 content and plan trees those topics own, and the cache entries, so the
+// scene disappears from listings and reads.
 func (s *Session) DeleteScene(sceneID string) error {
 	return s.db.DeleteScene(s.agentID, sceneID)
 }
@@ -151,8 +151,9 @@ func (s *Session) QueryL3Subgraph(graphID, startNodeID string, maxDepth int, edg
 
 // ---- L4 archive ----
 
-// SearchL4 reads archives by any combination of filters; they AND together,
-// so L4Query{TopicID: &turnID} returns exactly that turn's originals.
+// SearchL4 reads content records by any combination of filters; they AND
+// together, so L4Query{TopicID: &turnID} returns exactly that turn's originals or
+// its events depending on Kind — unset Kind selects both kinds.
 func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 	return s.db.SearchL4(s.agentID, q)
 }
@@ -162,13 +163,13 @@ func (s *Session) SearchL4(q L4Query) ([]ArchiveSlot, error) {
 // AppendTrajectory appends one event under the topic id of the turn Search
 // issued: a bare turn event with an empty nodePath, or one bound to a plan
 // node — created when missing — with that node's nodePath.
-func (s *Session) AppendTrajectory(topicID, nodePath string, ev TrajectorySlot) error {
+func (s *Session) AppendTrajectory(topicID, nodePath string, ev ArchiveSlot) error {
 	return s.db.AppendTrajectory(s.agentID, topicID, nodePath, ev)
 }
 
-// ReadTrajectory returns one turn's L6 records in Seq order; turnID is the
+// ReadTrajectory returns one turn's event records in Seq order; turnID is the
 // topic id Search minted for it.
-func (s *Session) ReadTrajectory(turnID string) ([]TrajectorySlot, error) {
+func (s *Session) ReadTrajectory(turnID string) ([]ArchiveSlot, error) {
 	return s.db.ReadTrajectory(s.agentID, turnID)
 }
 
@@ -193,7 +194,7 @@ func (s *Session) Crystallize(ctx context.Context, turnID string, existing []Cap
 
 // PlanCommit advances a plan node to a status and appends the step event.
 // topicID names the turn that opened the plan.
-func (s *Session) PlanCommit(topicID, nodePath string, ev TrajectorySlot, step PlanStep) error {
+func (s *Session) PlanCommit(topicID, nodePath string, ev ArchiveSlot, step PlanStep) error {
 	return s.db.PlanCommit(s.agentID, topicID, nodePath, ev, step)
 }
 

@@ -81,8 +81,10 @@ func TestSurfaceL6Trajectory(t *testing.T) {
 	}
 	for i, e := range got {
 		want := events[i]
-		if e.Seq != uint64(i+1) {
-			t.Fatalf("seq must be 1-based increasing, got %d at %d", e.Seq, i)
+		// Slots 1 and 2 belong to the turn's two originals, so the library
+		// starts a topic's events at 3 and counts up from there.
+		if e.Seq != uint64(i+3) {
+			t.Fatalf("seq must ascend from the first free slot, got %d at %d", e.Seq, i)
 		}
 		// The read must hand back what was written, field for field: a facade
 		// mapping that drops a column is otherwise invisible at this surface.
@@ -287,11 +289,17 @@ func TestSurfaceAppendTrajectoryPlanBranch(t *testing.T) {
 			t.Fatalf("nodePath %q left a half-built chain: %+v err=%v", bad, still, err)
 		}
 	}
-	// The step handle is a hex token: PlanNodeRef is a library hash, and the
-	// path beside it is the only human-readable attribution a host gets.
-	if evs, err := db.ReadTrajectory(planTurn); err != nil || len(evs) != 2 ||
-		!isHexID(evs[1].PlanNodeRef) || evs[1].PlanNodeRef == "" {
-		t.Fatalf("plan-bound event lost its step handle: %+v err=%v", evs, err)
+	// A plan-bound event carries the step it landed on, and the id it comes back
+	// with is a library-issued hex token the host never builds.
+	bound, berr := db.ReadTrajectory(planTurn)
+	if berr != nil || len(bound) != 2 {
+		t.Fatalf("plan-bound events: %+v err=%v", bound, berr)
+	}
+	if bound[1].NodePath == "" || bound[1].NodePath == bound[0].NodePath {
+		t.Fatalf("plan-bound event lost its step attribution: %+v", bound)
+	}
+	if !isHexID(bound[1].IDHash) {
+		t.Fatalf("event id is not a library hex token: %q", bound[1].IDHash)
 	}
 }
 

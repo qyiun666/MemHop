@@ -97,3 +97,11 @@ const (
 	ContentCode     = internal.ContentCode
 	ContentOther    = internal.ContentOther
 )
+
+// KindUtterance and KindEvent tell a topic's L4 content apart: what somebody
+// said, versus what happened while they said it. SearchL4's Kind is a condition
+// like any other, so leaving it unset selects both.
+const (
+	KindUtterance = internal.KindUtterance
+	KindEvent     = internal.KindEvent
+)

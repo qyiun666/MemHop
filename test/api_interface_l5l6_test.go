@@ -47,8 +47,10 @@ func TestInterfaceL6(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadTrajectory: %v", err)
 	}
-	if len(events) != 2 || events[0].Seq != 1 || events[1].Seq != 2 {
-		t.Fatalf("want 2 events with seq 1,2: %+v", events)
+	// Slots 1 and 2 are reserved for the turn's two originals, so the library
+	// allocates a topic's first event at 3.
+	if len(events) != 2 || events[0].Seq != 3 || events[1].Seq != 4 {
+		t.Fatalf("want 2 events with seq 3,4: %+v", events)
 	}
 
 	// Crystallize returns candidates against a host-supplied catalog; the

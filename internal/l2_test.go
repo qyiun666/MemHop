@@ -214,7 +214,7 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 
 	parentID := common.HashID("parent")
 	childID := common.HashID("child")
-	arcID := common.HashID("arc:1")
+	arcID := core.HashContent(parentID, core.SeqUser)
 	parent := newTopic(parentID, scene.SceneID, 1000, []string{"a"})
 	parent.ChildrenIDs = []uint64{childID}
 	child := newTopic(childID, scene.SceneID, 2000, []string{"b"})
@@ -226,11 +226,12 @@ func TestDeleteTopicRemovesSubtreeAndArchives(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arcID, &core.ArchiveSlot{
-		IDHash: arcID, ContextID: parentID, Content: "原文", CreatedAt: 1500,
+		IDHash: arcID, Kind: core.KindUtterance, Seq: core.SeqUser,
+		ContextID: parentID, Content: "原文", CreatedAt: 1500,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ac.Arch.Append(parentID, arcID, 1500)
+	ac.L4.Append(parentID, core.SeqUser, arcID, core.KindUtterance, 1500)
 	ac.L2Meta.Update(index.L2MetaFromTopic(&parent))
 	ac.L2Meta.Update(index.L2MetaFromTopic(&child))
 
@@ -318,13 +319,14 @@ func TestDeleteSceneRemovesEverything(t *testing.T) {
 	t2 := newTopic(common.HashID("t2"), scene.SceneID, 2000, []string{"b"})
 	t3 := newTopic(common.HashID("t3"), scene.SceneID, 3000, []string{"c"})
 	t3.ParentID = &t2.ID
-	arcID := common.HashID("arc:2")
+	arcID := core.HashContent(t1.ID, core.SeqUser)
 	if err := core.WriteArchiveSlot(engine, core.DefaultAgentID, arcID, &core.ArchiveSlot{
-		IDHash: arcID, ContextID: t1.ID, Content: "原文", CreatedAt: 1500,
+		IDHash: arcID, Kind: core.KindUtterance, Seq: core.SeqUser,
+		ContextID: t1.ID, Content: "原文", CreatedAt: 1500,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	ac.Arch.Append(t1.ID, arcID, 1500)
+	ac.L4.Append(t1.ID, core.SeqUser, arcID, core.KindUtterance, 1500)
 	for _, topic := range []core.TopicSlot{t1, t2, t3} {
 		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, topic.ID, &topic); err != nil {
 			t.Fatal(err)

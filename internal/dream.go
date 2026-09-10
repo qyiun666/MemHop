@@ -34,9 +34,12 @@ func (db *DB) RunDream(ctx context.Context, agentID uint64, sceneID uint64) (*Dr
 	defer ac.Mu.Unlock()
 
 	rep := &DreamReport{}
-	// Retention first: the L6 prune runs on every Dream, even when there is
-	// nothing to consolidate (early return below).
-	dream.PruneTrajectoryStage(ac, agentID, rep)
+	// Retention first: both prunes run on every Dream, even when there is
+	// nothing to consolidate (early return below). Content and plan trees share
+	// one window but not one clock — an L4 record ages on when it was said, a
+	// node on when it was last committed.
+	dream.PruneContentStage(ac, agentID, rep)
+	dream.PrunePlanStage(ac, agentID, rep)
 
 	scenes, err := dream.SceneSet(db.engine, agentID, sceneID)
 	if err != nil {

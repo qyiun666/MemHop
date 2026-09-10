@@ -35,12 +35,12 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 
 ## 核心特性
 
-- **七层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 轨迹，配合 Dream 巩固管线
-- **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 按场景 id 直取该会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），并**顺手开启本轮**：返回本轮要落进去的话题 id。`Update` 把整轮沉淀进那个 id（用户原文 + Agent 原文 + 双时间戳 → 一次提炼出话题关键词），L6 轨迹事件也绑在同一个 id 上。话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
-- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x000D`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。L3 知识图记录驻留文件级保留公共域（能力记录已不存在——目录即能力，见下）。**仅认 `0x000D`**——更早的 `.meh` 数据文件 Open 时显式拒绝，无迁移路径
+- **七层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 结晶 → L6 计划，配合 Dream 巩固管线
+- **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 按场景 id 直取该会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），并**顺手开启本轮**：返回本轮要落进去的话题 id。`Update` 把整轮沉淀进那个 id（用户原文 + Agent 原文 + 双时间戳 → 一次提炼出话题关键词）。一轮拥有的东西全在这个 id 下：两条原文与操作事件同为 L4 内容、只差一个 `Kind`，该轮开出的任务树才是 L6。话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
+- **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x000E`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。L3 知识图记录驻留文件级保留公共域（能力记录已不存在——目录即能力，见下）。**仅认 `0x000E`**——`0x000D` 及更早的 `.meh` 数据文件 Open 时显式拒绝、无迁移路径：`0x000D` 把一轮的事件存在一个已不存在的记录类型里、把归档按正文哈希发号，按新规则哪一条都指不到东西
 - **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents` / `DeleteAgent`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（话题缓存、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行。例外是 L3（见下）：知识图是文件级公共池
 - **L1 场景超图** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）并按时间衰减剪枝；L1 由 Dream 维护，供显式图查询与后续关联消费——读取路径不打分、不扩散
-- **Dream 巩固管线** — 作用于 L0–L2 及 L6 保留期清理：L2 压缩 → L2Meta 缓存重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）→ L6 清理（自动丢弃 7 天前轨迹事件）；某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold` 时由 `Update` 后台调度该场景巩固，返回逐阶段 `DreamReport`
+- **Dream 巩固管线** — 作用于 L0–L2，另对内容与计划树各做一次保留期清理：`l4_prune`（丢弃 7 天前的话题内容）与 `l6_prune`（丢弃 7 天前的计划节点，仍在途的树豁免）排在最前，随后 L2 压缩 → L2Meta 缓存重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）；某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold` 时由 `Update` 后台调度该场景巩固，返回逐阶段 `DreamReport`
 - **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related；边的身份是「成员节点 + kind」，同一对节点可并存多种关系），图与节点两级删除，关键词/类型/ID 条件按 AND 组合，BFS 子图查询。图池是**文件级**的：文件内所有 agent 域共享一份 L3（项目知识导一次全家可见），删 agent 不删公共池
 - **设计层面单实例** — 一个 `.meh` 文件只有一个持有者：全平台文件排他锁强制（linux/darwin/windows），第二次 `Open` 直接失败；内嵌形态无服务进程、无后台守护
 - **极简依赖、可内嵌** — 4 个直接 Go 依赖（xxhash、go-openai、go-sdk、golang.org/x/sys）；关键词提炼没有本地兜底，LLM 返回不可解析就直接报错；**引擎不联系任何 embedding / 向量服务**，配置里也没有维度要声明，`sync.RWMutex` + `atomic.Pointer`，零基础设施
@@ -140,10 +140,10 @@ report, err := sess.Dream(context.Background(), "")
 | L0 画像 | `GetL0` · `UpdateL0` |
 | L2 上下文 | `ListScenes([l3ID])` · `UpdateScene(id, {Name, L3ID, Force})` · `SceneContext` · `MergeScenes` · `DeleteTopic` · `DeleteScene` |
 | L3 知识 | `GetL3` · `ListL3` · `ImportL3`（返回本批写入的 `graph_ids`） · `UpdateL3` · `DeleteL3` · `DeleteL3Nodes`（仅 Go） · `QueryL3Nodes` · `QueryL3Subgraph` |
-| L4 归档 | `SearchL4(q)` — 唯一读取面；关键词（忽略大小写）/ 时间段 / id / 话题 / 内容类型都是条件而不是模式，`Limit` 只留最新 N 条命中 |
+| L4 归档 | `SearchL4(q)` — 唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 只留 Seq 最高的 N 条命中 |
 | L5 能力 | 目录即能力，库不存记录：`ParseCapabilityPackage(data, source)` · `ValidateCapabilityCard(card)`（包级 v4 解析校验）· `Crystallize(turnID, existing)` 返回候选——落盘归宿主 |
-| L6 轨迹 | `AppendTrajectory(topicID, [nodePath])` · `ReadTrajectory(topicID)` · `ListTrajectorySessions` · `Crystallize(topicID)` —— 一轮一个键：Search 为该轮开出的话题 id（保留期 7 天自动清理，无删除接口） |
-| L6 计划树 | `PlanCommit(topicID, nodePath, ev, PlanStep{...})` · `PlanState(topicID)` —— 轮次话题 id 就是树的键，一轮的节点与事件同键读回；提交一个尚不存在的 `nodePath` 即追加一步（仅 Go module 暴露，MCP 工具集未接入） |
+| L6 事件面 | `AppendTrajectory(topicID, [nodePath])` · `ReadTrajectory(topicID)` · `ListTrajectorySessions` · `Crystallize(topicID)` —— 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），7 天自动清理、无删除接口。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于它的两条原文 |
+| L6 计划树 | `PlanCommit(topicID, nodePath, ev, PlanStep{...})` · `PlanState(topicID)` —— 计划树是 L6 唯一自己的记录：一节点一条，键就是开出它的那一轮，所以 `PlanState(topic)` 与 `ReadTrajectory(topic)` 是同一个键、两层存储；提交一个尚不存在的 `nodePath` 即追加一步（仅 Go module 暴露，MCP 工具集未接入） |
 | DB 句柄 | `OpenMulti` · `CreateAgent` · `ListAgents` · `DeleteAgent` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，仅 Go） · `Close` · `IsClosed` · `api.DefaultAgentID` |
 
 ### L5 能力 —— 目录即能力
@@ -157,7 +157,7 @@ report, err := sess.Dream(context.Background(), "")
 ───── ────────────── ───────────────────  ─────────────────────────────────────────────
  L6    Trajectory      程序性日志             宿主追加的操作轨迹事件，结晶为能力候选（落盘归宿主）
  L5    Crystal         肌肉记忆             目录即能力：宿主自有能力文件，引擎不存记录
- L4    Archive         长期记忆             原始对话日志与历史记录
+ L4    Archive         轮内内容             一轮的对话原文与操作事件（Kind），按 (话题, Seq) 寻址；7 天窗口——越过它的只有关键词轨存活
  L3    Knowledge       语义记忆             多源超图知识库
  L2    Context         工作记忆             压缩的话题结构（4 级压缩深度）
  L1    Engram          场景超图             场景节点 + 关键词重叠超边；由 Dream 维护，供显式图查询
@@ -224,7 +224,7 @@ internal/                    ← 业务装配层：config / db / session / defau
                                search / update / dream / plancache / llm_client / llm_ops / models / exports
 internal/repo/               ← 数据层：l0layer–l6layer + agentlayer（记录读写）
 internal/repo/index/         ← 索引层：l2meta（场景读回的唯一支撑）/ rebuild（单遍重建）/
-                               traj（L6 轨迹形状）
+                               l4（一个话题拥有哪些内容）
 internal/repo/core/          ← .meh 引擎：engine / frame / header / snapshot / reclaim /
                                record / model / mmap / filelock
 internal/common/             ← 最底层工具：enum / errors / hash /

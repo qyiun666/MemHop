@@ -20,18 +20,21 @@ const RecordHeaderSize = 26
 
 const FlagDeleted uint8 = 0x01
 
-// Record type constants.
+// Record type constants. 0x0E (a trajectory event) is retired now that a
+// turn's events live in L4; 0x0F came free with the retired L5 capability layer
+// and is in use again for plan nodes, which is safe because files carrying the
+// old 0x0F are rejected at Open.
 const (
-	RecL0Profile    uint8 = 0x01
-	RecL1SceneNode  uint8 = 0x02
-	RecL1Hyperedge  uint8 = 0x03
-	RecL2Topic      uint8 = 0x04
-	RecL2Scene      uint8 = 0x05
-	RecL3GraphNode  uint8 = 0x06
-	RecL3GraphEdge  uint8 = 0x07
-	RecL4Archive    uint8 = 0x08
-	RecL3GraphSlot  uint8 = 0x0B
-	RecL6Trajectory uint8 = 0x0E // host-appended operation trajectory event
+	RecL0Profile   uint8 = 0x01
+	RecL1SceneNode uint8 = 0x02
+	RecL1Hyperedge uint8 = 0x03
+	RecL2Topic     uint8 = 0x04
+	RecL2Scene     uint8 = 0x05
+	RecL3GraphNode uint8 = 0x06
+	RecL3GraphEdge uint8 = 0x07
+	RecL4Archive   uint8 = 0x08
+	RecL3GraphSlot uint8 = 0x0B
+	RecL6PlanNode  uint8 = 0x0F // one node of an L6 plan tree
 	// RecAgentRegistry marks an agent's registration record: idHash equals
 	// the agentID itself and data carries the agent name JSON. One record
 	// per agent, stored inside the agent's own domain; DeleteAgent

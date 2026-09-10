@@ -10,46 +10,48 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// tnode builds a plan-node slot with stable derived IDHash semantics for the
-// cache tests (identity is IDHash, not path).
-func tnode(id, topicID uint64, nodePath string, seq uint64, status uint8, ts int64) *core.TrajectorySlot {
-	return &core.TrajectorySlot{
-		IDHash: id, SessionID: topicID, NodePath: nodePath, Seq: seq,
-		NodeType: core.NodeTypePlan, Status: status, Timestamp: ts,
+// tnode builds a plan node for the cache tests. Identity is the derived IDHash,
+// not the path, so the tests can reuse one id to mean one node being committed
+// again.
+func tnode(id, topicID uint64, nodePath string, status uint8, ts int64) *core.PlanNode {
+	return &core.PlanNode{
+		IDHash: id, TopicID: topicID, NodePath: nodePath,
+		Status: status, UpdatedAt: ts,
 	}
 }
 
 func TestPlanCacheUpsertKeepsOrderAndStats(t *testing.T) {
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
-	pc.UpsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
-	pc.UpsertNode(9, tnode(12, 9, "2", 1, core.StatusDone, 200))
-	// "1.1" has Seq=2, so it sorts after the Seq=1 roots "1" and "2" even
-	// though its path prefix is "1"; the cache mirrors the repo sort order.
-	pc.UpsertNode(9, tnode(13, 9, "1.1", 2, core.StatusPending, 150))
+	pc.UpsertNode(9, tnode(11, 9, "1", core.StatusPending, 100))
+	pc.UpsertNode(9, tnode(12, 9, "2", core.StatusDone, 200))
+	// Nodes are ordered by node path alone now: a Seq field no longer exists on a
+	// node to sort by, and the path is what the tree is addressed by.
+	pc.UpsertNode(9, tnode(13, 9, "1.1", core.StatusPending, 150))
 	agg := pc.Aggregate(9)
 	if agg == nil {
 		t.Fatal("aggregate is nil")
 	}
-	want := []string{"1", "2", "1.1"}
+	want := []string{"1", "1.1", "2"}
 	for i, p := range want {
 		if agg.Nodes[i].NodePath != p {
 			t.Fatalf("order[%d]=%s want %s (nodes=%v)", i, agg.Nodes[i].NodePath, p, agg.Nodes)
 		}
 	}
+	if agg.LastActiveAt != 200 {
+		t.Fatalf("LastActiveAt=%d want 200", agg.LastActiveAt)
+	}
 	if !agg.HasNonDone {
 		t.Fatal("HasNonDone should be true (a pending node remains)")
 	}
-	if agg.CreatedAt != 100 || agg.LastActiveAt != 200 {
-		t.Fatalf("stats created=%d last=%d", agg.CreatedAt, agg.LastActiveAt)
-	}
 	// Updating "1" to done keeps HasNonDone true while "1.1" is still pending.
-	pc.UpsertNode(9, tnode(11, 9, "1", 1, core.StatusDone, 250))
+	pc.UpsertNode(9, tnode(11, 9, "1", core.StatusDone, 250))
 	agg = pc.Aggregate(9)
 	if !agg.HasNonDone {
 		t.Fatal("HasNonDone should stay true while 1.1 is pending")
 	}
-	// Once every node is done, HasNonDone flips false.
-	pc.UpsertNode(9, tnode(13, 9, "1.1", 2, core.StatusDone, 260))
+	// Once every node is done, HasNonDone flips false — the exemption that keeps
+	// the whole tree alive is gone.
+	pc.UpsertNode(9, tnode(13, 9, "1.1", core.StatusDone, 260))
 	agg = pc.Aggregate(9)
 	if agg.HasNonDone {
 		t.Fatal("HasNonDone should be false once every node is done")
@@ -59,40 +61,42 @@ func TestPlanCacheUpsertKeepsOrderAndStats(t *testing.T) {
 	}
 }
 
-func TestPlanCacheUpsertEventAndDetachWhenEmpty(t *testing.T) {
+// A plan is a live plan only while a node of it exists: dropping the last one
+// detaches the aggregate, so a tree whose whole branch was swept stops being
+// addressed at all.
+func TestPlanCacheRemoveNodesAndDetachWhenEmpty(t *testing.T) {
 	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
-	pc.UpsertNode(9, tnode(11, 9, "1", 1, core.StatusPending, 100))
-	pc.UpsertNode(9, tnode(12, 9, "1.1", 2, core.StatusPending, 150))
-	pc.UpsertNode(9, tnode(13, 9, "1.1.1", 3, core.StatusPending, 180))
-	pc.UpsertNode(9, tnode(14, 9, "2", 1, core.StatusPending, 200))
-	pc.UpsertEvent(9, 12, core.TrajectorySlot{IDHash: 101, PlanNodeRef: 12, Timestamp: 300})
-	pc.UpsertEvent(9, 14, core.TrajectorySlot{IDHash: 102, PlanNodeRef: 14, Timestamp: 400})
-	agg := pc.Aggregate(9)
-	if agg.EventCount[12] != 1 || agg.EventCount[14] != 1 {
-		t.Fatalf("event counts: %v", agg.EventCount)
-	}
-	if agg.LastActiveAt != 400 {
-		t.Fatalf("LastActiveAt=%d want 400", agg.LastActiveAt)
-	}
+	pc.UpsertNode(9, tnode(11, 9, "1", core.StatusDone, 100))
+	pc.UpsertNode(9, tnode(12, 9, "1.1", core.StatusDone, 150))
+	pc.UpsertNode(9, tnode(13, 9, "1.1.1", core.StatusDone, 180))
+	pc.UpsertNode(9, tnode(14, 9, "2", core.StatusPending, 200))
 
-	// A plan is a live plan only while a node of it exists: dropping the last
-	// one detaches the aggregate, so an expired tree stops being addressed.
-	pc.RemovePlanIDs(9, []uint64{11, 12, 13}, []uint64{101})
-	agg = pc.Aggregate(9)
+	pc.RemoveNodes(9, []uint64{11, 12, 13})
+	agg := pc.Aggregate(9)
 	if agg == nil {
 		t.Fatal("aggregate should survive (node 2 remains)")
 	}
 	if len(agg.Nodes) != 1 || agg.Nodes[0].NodePath != "2" {
 		t.Fatalf("surviving nodes: %v", agg.Nodes)
 	}
-	if _, ok := agg.EventCount[12]; ok {
-		t.Fatalf("dropped node's event count must go: %v", agg.EventCount)
+	if agg.LastActiveAt != 200 {
+		t.Fatalf("LastActiveAt=%d want 200 (swept nodes must not keep the tree exempt)", agg.LastActiveAt)
 	}
-	if agg.EventCount[14] != 1 {
-		t.Fatalf("sibling event must stay: %v", agg.EventCount)
-	}
-	pc.RemovePlanIDs(9, []uint64{14}, []uint64{102})
+	pc.RemoveNodes(9, []uint64{14})
 	if agg := pc.Aggregate(9); agg != nil {
 		t.Fatal("a plan whose last node is gone must be detached")
+	}
+}
+
+func TestPlanCacheRemoveTopicDropsTheWholeTree(t *testing.T) {
+	pc := &PlanCache{plans: make(map[uint64]*repo.PlanAggregate)}
+	pc.UpsertNode(9, tnode(11, 9, "1", core.StatusPending, 100))
+	pc.UpsertNode(10, tnode(21, 10, "1", core.StatusPending, 100))
+	pc.RemoveTopic(9)
+	if pc.Aggregate(9) != nil {
+		t.Fatal("deleted topic still holds a cached tree")
+	}
+	if pc.Aggregate(10) == nil {
+		t.Fatal("RemoveTopic must not touch another turn's plan")
 	}
 }

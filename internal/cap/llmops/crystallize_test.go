@@ -39,9 +39,9 @@ func TestParseCrystallizeResponse(t *testing.T) {
 }
 
 func TestBuildCrystallizePrompt(t *testing.T) {
-	events := []core.TrajectorySlot{
-		{Seq: 1, EventType: "tool_call", Payload: "read file"},
-		{Seq: 2, EventType: "tool_result", Payload: "ok"},
+	events := []core.ArchiveSlot{
+		{Seq: 1, Kind: core.KindEvent, EventType: "tool_call", Content: "read file"},
+		{Seq: 2, Kind: core.KindEvent, EventType: "tool_result", Content: "ok"},
 	}
 	existing := []capability.CapabilityImport{{Name: "deploy-runbook", Summary: "部署", Trigger: "部署"}}
 	prompt := buildCrystallizePrompt(events, existing)

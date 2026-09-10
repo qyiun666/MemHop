@@ -49,12 +49,16 @@ type TurnUpdate struct {
 	AgentType ContentType `json:"agent_type,omitempty"`
 }
 
-// SceneMessage is one L4 archive message inside a scene context topic. Type
-// tells the host whether the content is prose or a reference to media.
+// SceneMessage is one L4 utterance inside a scene context topic. Type tells the
+// host whether the content is prose or a reference to media. Seq is the slot the
+// utterance holds in its topic, and it is what makes a gap visible: Seq skipping
+// a value means the retention window reclaimed that utterance, which is a legal
+// end state for a turn, not a read that lost a line.
 type SceneMessage struct {
 	Role      uint8       `json:"role"`
 	Type      ContentType `json:"type"`
 	Content   string      `json:"content"`
+	Seq       uint64      `json:"seq"`
 	CreatedAt int64       `json:"created_at"`
 }
 
@@ -139,8 +143,9 @@ type L3Subgraph struct {
 }
 
 // L4Query archive query: every field is optional and the set conditions AND
-// together, so a topic-only or type-only read works. Results are sorted by
-// CreatedAt. Keyword is matched case-insensitively, the same way the L3 node
+// together, so a topic-only or type-only read works. L4 holds both kinds of a
+// turn's content, so Kind is a condition like any other — leaving it unset means
+// an empty query selects utterances AND events. Results are sorted by Seq. Keyword is matched case-insensitively, the same way the L3 node
 // filter matches one. An empty query returns the domain's whole archive set —
 // that is a lot of text for a caller with a context window, so Limit caps the
 // result to its most recent matches.
@@ -151,6 +156,7 @@ type L4Query struct {
 	IDs     []string     `json:"ids,omitempty"`      // 16 位 hex 档案 ID
 	TopicID *string      `json:"topic_id,omitempty"` // only archives of this topic
 	Type    *ContentType `json:"type,omitempty"`     // only archives of this content type
+	Kind    *ArchiveKind `json:"kind,omitempty"`     // utterance or event; unset selects both
 	Limit   int          `json:"limit,omitempty"`    // keep the newest N matches; <=0 means every match
 }
 
@@ -163,10 +169,11 @@ type ScenePatch struct {
 	Force bool
 }
 
-// TrajectorySessionSummary is one L6 turn's footprint (one trajectory per
-// agent turn); SessionID is the external 16-hex form so it feeds
-// ReadTrajectory / Crystallize directly. Events older than the 7-day
-// retention window are dropped by Dream automatically.
+// TrajectorySessionSummary is one turn's event footprint (one topic's worth of
+// events per agent turn); SessionID is the external 16-hex form so it feeds
+// ReadTrajectory / Crystallize directly. It counts events only — a turn whose two
+// originals are all L4 holds is not a turn with a trajectory. Events older than
+// the 7-day retention window are dropped by Dream automatically.
 type TrajectorySessionSummary struct {
 	SessionID    string `json:"session_id"`     // 16 位 hex
 	Steps        int    `json:"steps"`          // 事件总数
@@ -175,7 +182,7 @@ type TrajectorySessionSummary struct {
 
 // DreamStage is one pipeline phase's outcome inside a DreamReport.
 type DreamStage struct {
-	Name       string `json:"name"`   // l2_compress/usage_feedback/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_distill
+	Name       string `json:"name"`   // l4_prune/l6_prune/l2_compress/usage_feedback/index_rebuild/l1_nodes/l1_hyperedges/l1_rebuild/l1_decay/l0_distill
 	Status     string `json:"status"` // ok | skipped | cancelled | error
 	DurationMs int64  `json:"duration_ms"`
 }

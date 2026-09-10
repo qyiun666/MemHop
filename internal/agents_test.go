@@ -100,24 +100,24 @@ func TestAgentDomainIsolation(t *testing.T) {
 
 	// Same trajectory session id in both domains: events stay per-agent.
 	session := common.FormatHash(common.HashID("shared-session"))
-	if err := db.AppendTrajectory(a, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "a", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(a, session, "", core.ArchiveSlot{EventType: "tool_call", Content: "a", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendTrajectory(b, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "b1", Timestamp: 1}); err != nil {
+	if err := db.AppendTrajectory(b, session, "", core.ArchiveSlot{EventType: "tool_call", Content: "b1", CreatedAt: 1}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.AppendTrajectory(b, session, "", core.TrajectorySlot{EventType: "tool_call", Payload: "b2", Timestamp: 2}); err != nil {
+	if err := db.AppendTrajectory(b, session, "", core.ArchiveSlot{EventType: "tool_call", Content: "b2", CreatedAt: 2}); err != nil {
 		t.Fatal(err)
 	}
 	ea, err := db.ReadTrajectory(a, session)
-	if err != nil || len(ea) != 1 || ea[0].Payload != "a" {
+	if err != nil || len(ea) != 1 || ea[0].Content != "a" {
 		t.Fatalf("ReadTrajectory(a) = %+v err=%v, want 1 event 'a'", ea, err)
 	}
 	eb, err := db.ReadTrajectory(b, session)
 	if err != nil || len(eb) != 2 {
 		t.Fatalf("ReadTrajectory(b) = %+v err=%v, want 2 events", eb, err)
 	}
-	if eb[0].Seq != 1 || eb[1].Seq != 2 {
+	if eb[0].Seq != core.LastUtteranceSeq+1 || eb[1].Seq != core.LastUtteranceSeq+2 {
 		t.Errorf("b Seq allocation leaked across domains: %d %d", eb[0].Seq, eb[1].Seq)
 	}
 }

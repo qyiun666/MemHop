@@ -35,13 +35,19 @@ func SurfaceTopics(ac *domain.Context, sceneID uint64) []core.TopicSlot {
 }
 
 // ContextTopic renders one topic of a scene context: its keyword track, child
-// count, and the L4 archives it owns. The domain's archive index is what makes
-// a topic's own content findable — an archive id hashes its text, so nothing
-// derives it from the topic. An archive the index names but the engine cannot
-// read is an error, not a shorter transcript: a conversation missing one
-// utterance looks exactly like a complete one.
+// count, and the utterances it owns. The domain's content index is what makes a
+// topic's own content findable, and it names the topic's slots in Seq order — the
+// order the originals were spoken in, with nothing to tie-break on.
+//
+// Two read outcomes look alike and must not be judged alike. A slot the index
+// names that the engine cannot read is mirror drift: the transcript would be short
+// one line and read as complete, so it is a hard ErrIO. A topic whose content is
+// empty, or whose Seq has a gap in it, is a turn the retention window has
+// already reclaimed — a legal end state, reported as what it is rather than as a
+// failure. Seq rides along on every message precisely so that gap stays
+// distinguishable from a turn that never said those words.
 func ContextTopic(ac *domain.Context, agentID uint64, t core.TopicSlot, children map[uint64]int) (core.SceneContextTopic, error) {
-	refs := ac.Arch.Hashes(t.ID)
+	refs := ac.L4.IDs(t.ID, core.KindUtterance)
 	st := core.SceneContextTopic{
 		TopicID:    common.FormatHash(t.ID),
 		Depth:      int(t.Depth),
@@ -54,27 +60,14 @@ func ContextTopic(ac *domain.Context, agentID uint64, t core.TopicSlot, children
 		if err != nil {
 			if common.CodeOf(err) == common.ErrNotFound {
 				return core.SceneContextTopic{}, common.NewError(common.ErrIO,
-					"archive index names a missing record", err)
+					"content index names a missing record", err)
 			}
 			return core.SceneContextTopic{}, err
 		}
-		st.Messages = append(st.Messages, core.SceneMessage{Role: arc.Role, Type: arc.ContentType, Content: arc.Content, CreatedAt: arc.CreatedAt})
+		st.Messages = append(st.Messages, core.SceneMessage{
+			Role: arc.Role, Type: arc.ContentType, Content: arc.Content,
+			Seq: arc.Seq, CreatedAt: arc.CreatedAt,
+		})
 	}
-	// The index lists a topic's archives by creation time, which does not say
-	// who spoke first; a resumed conversation still has to read question-first.
-	sortMessages(st.Messages)
 	return st, nil
-}
-
-// sortMessages puts a topic's L4 messages in speaking order: by timestamp,
-// with Role breaking ties (RoleUser precedes RoleAgent) because a host may
-// stamp both sides of a turn the same millisecond and creation time alone
-// cannot order them.
-func sortMessages(msgs []core.SceneMessage) {
-	slices.SortStableFunc(msgs, func(a, b core.SceneMessage) int {
-		if c := cmp.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.Role, b.Role)
-	})
 }

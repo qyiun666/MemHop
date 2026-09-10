@@ -172,7 +172,7 @@ type HypergraphEdge struct {
 
 // Message roles in an ArchiveSlot. Update writes RoleUser / RoleAgent and Dream
 // writes RoleDream; RoleSystem has no writer in the engine and stays off the
-// public constants.
+// public constants. Role qualifies an utterance — an event record leaves it 0.
 const (
 	RoleUser   uint8 = 0
 	RoleAgent  uint8 = 1
@@ -180,23 +180,48 @@ const (
 	RoleDream  uint8 = 3
 )
 
-// ArchiveSlot stores one L4 original of a turn.
+// Utterances hold Seq 1 and 2 of their topic. A host appends events while the
+// turn runs and settles the turn afterwards, so event allocation starts above
+// these two slots: otherwise the first event lands where the user's text will
+// go and the settle silently overwrites it.
+const (
+	SeqUser  uint64 = 1
+	SeqAgent uint64 = 2
+	// LastUtteranceSeq is the highest slot an utterance may occupy; the first
+	// event of a topic is one past it.
+	LastUtteranceSeq = SeqAgent
+)
+
+// ArchiveSlot stores one piece of a topic's content: a dialogue original
+// (KindUtterance) or an operation event the host recorded (KindEvent).
+// (ContextID, Seq) addresses it, so re-writing one Seq overwrites in place.
+// Role, ContentType and EventType are orthogonal axes, not three names for one
+// thing: Role says who spoke (utterances only), ContentType says what Content
+// *is* (prose or a reference to media), EventType says what *happened* — events
+// only, and the host names it.
 type ArchiveSlot struct {
 	IDHash      uint64      `json:"id_hash"`
+	Kind        ArchiveKind `json:"kind"`
+	Seq         uint64      `json:"seq"`
 	ContentType ContentType `json:"content_type"`
 	Role        uint8       `json:"role"`
 	ContextID   uint64      `json:"context_id"`
+	EventType   string      `json:"event_type,omitempty"`
+	NodePath    string      `json:"node_path,omitempty"`
 	CreatedAt   int64       `json:"created_at"`
 	Content     string      `json:"content"`
 }
 
-// Plan node type for TrajectorySlot: either a raw trajectory event or a plan node.
-const (
-	NodeTypeEvent uint8 = 0 // 轨迹事件
-	NodeTypePlan  uint8 = 1 // 计划节点
-)
+// HashContent derives the id of one topic's content slot:
+// hash("l4:"+topicID+":"+seq). The id is positional rather than content-derived:
+// writing the same (topic, seq) again lands on the same record, which the engine
+// re-points instead of keeping a second live copy. That is what lets a replayed
+// turn converge without a list of the ids it supersedes.
+func HashContent(topicID, seq uint64) uint64 {
+	return common.HashID(fmt.Sprintf("l4:%d:%d", topicID, seq))
+}
 
-// Plan node status (only meaningful for NodeTypePlan nodes).
+// Plan node status.
 const (
 	StatusPending    uint8 = 0
 	StatusInProgress uint8 = 1
@@ -205,35 +230,29 @@ const (
 	StatusRunning    uint8 = 4
 )
 
-// TrajectorySlot is one L6 record — a trajectory event appended by the host,
-// or a plan node. SessionID is the single L6 key: the topic id Search issued
-// for the turn that produced the record. A plan therefore lives under the turn
-// that opened it, so one key yields both a turn's events and its node tree;
-// Seq counts within that key (an event is max+1, a node carries its depth).
-// Short-lived: Dream purges records older than the 7-day retention window.
-type TrajectorySlot struct {
-	IDHash    uint64 `json:"id_hash"`    // 事件 hash(sessionID:seq)；节点 HashPlanNode
-	SessionID uint64 `json:"session_id"` // 唯一的 L6 键：本轮的 L2 话题 id
-	Seq       uint64 `json:"seq"`        // 事件：键内递增；节点：路径深度
-
-	NodeType    uint8  `json:"node_type"`               // 0=轨迹事件 1=计划节点
-	ParentID    uint64 `json:"parent_id,omitempty"`     // 仅节点：父节点（0=根）
-	NodePath    string `json:"node_path"`               // "1" / "1.2.1"；事件为它所挂的节点
-	Status      uint8  `json:"status,omitempty"`        // 仅节点：0=pending 1=in_progress 2=done 3=failed 4=running
-	Summary     string `json:"summary,omitempty"`       // 仅节点：完成缩写摘要
-	Title       string `json:"title,omitempty"`         // 仅节点：人类可读标题（空时视图回退 NodePath）
-	PlanType    string `json:"plan_type,omitempty"`     // 仅节点：语义类型 plan/step/tool_call（空=普通节点）
-	PlanNodeRef uint64 `json:"plan_node_ref,omitempty"` // 仅事件：挂到的节点（HashPlanNode(topicID,nodePath)）
-	FinishedAt  int64  `json:"finished_at,omitempty"`   // 仅节点：终态完成时刻（Unix ms，终态写入、非终态不清除）
-
-	EventType string `json:"event_type"` // llm_request/llm_output/tool_call/tool_result/subagent_spawn/subagent_done/context_inject/ask_user/user_reply
-	Payload   string `json:"payload"`    // event content (max 4KB; no raw token stream)
-	Timestamp int64  `json:"timestamp"`
+// PlanNode is one node of an L6 plan tree. L6 holds nothing but these: a turn's
+// events live in L4 beside its dialogue originals. TopicID is the turn topic
+// that opened the tree and NodePath the host's dotted address inside it, so
+// naming the turn is all a read needs to get its whole tree back.
+// UpdatedAt is what the retention window reads — a commit stamps it, so a plan
+// the host went quiet on stops being exempt once its last commit falls outside
+// the window, while an in-flight one keeps its tree mid-task.
+type PlanNode struct {
+	IDHash     uint64 `json:"id_hash"`
+	TopicID    uint64 `json:"topic_id"`
+	ParentID   uint64 `json:"parent_id,omitempty"` // 0 = root
+	NodePath   string `json:"node_path"`           // "1" / "1.2.1"
+	Status     uint8  `json:"status"`
+	Title      string `json:"title,omitempty"`       // empty = the view falls back to NodePath
+	PlanType   string `json:"plan_type,omitempty"`   // plan/step/tool_call; empty = plain node
+	Summary    string `json:"summary,omitempty"`     // completion abbreviation
+	FinishedAt int64  `json:"finished_at,omitempty"` // stamped on a terminal status only
+	UpdatedAt  int64  `json:"updated_at"`
 }
 
 // HashPlanNode derives a plan node id from the owning topic + nodePath,
-// namespaced under a "plan:" prefix so it never collides with a trajectory
-// event id (which is hash("sessionID:seq")).
+// namespaced under a "plan:" prefix so it never collides with a content id
+// (hash("l4:"+topic+":"+seq)) or a turn topic (hash("turn:"+scene:seq)).
 func HashPlanNode(topicID uint64, nodePath string) uint64 {
 	return common.HashID("plan:" + fmt.Sprintf("%d:%s", topicID, nodePath))
 }

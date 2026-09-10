@@ -21,21 +21,21 @@ func newTestEngine(t *testing.T) *core.StorageEngine {
 	return engine
 }
 
-// When a host stamps both sides of a turn the same millisecond, the reading
-// order must still be question-first. The archive index hands a topic's records
-// back in write order, so the adversarial case is an answer archived before its
-// question — only the role tie-break can rescue it.
-func TestSceneContextTopicOrdersSameTimestampByRole(t *testing.T) {
+// A turn's reading order is question-first by construction, not by tie-break: the
+// settle puts the user's text on Seq 1 and the reply on Seq 2. This case writes
+// them in the hostile order — answer archived first, same millisecond — which is
+// exactly what a timestamp-then-role sort had to rescue.
+func TestSceneContextTopicOrdersBySeqNotWriteOrder(t *testing.T) {
 	engine := newTestEngine(t)
 	ac := newTestContext(t, engine)
 	const topicID uint64 = 0xfeed
 	const ts int64 = 1500
 
 	for _, in := range []repo.ArchiveContent{
-		{TopicID: topicID, Role: core.RoleAgent, Type: core.ContentText, Text: "answer", CreatedAt: ts},
-		{TopicID: topicID, Role: core.RoleUser, Type: core.ContentText, Text: "question", CreatedAt: ts},
+		{TopicID: topicID, Seq: core.SeqAgent, Kind: core.KindUtterance, Role: core.RoleAgent, Type: core.ContentText, Text: "answer", CreatedAt: ts},
+		{TopicID: topicID, Seq: core.SeqUser, Kind: core.KindUtterance, Role: core.RoleUser, Type: core.ContentText, Text: "question", CreatedAt: ts},
 	} {
-		if _, err := repo.AppendArchiveL4(engine, core.DefaultAgentID, ac.Arch, in); err != nil {
+		if _, err := repo.AppendArchiveL4(engine, core.DefaultAgentID, ac.L4, in); err != nil {
 			t.Fatalf("archive %q: %v", in.Text, err)
 		}
 	}
@@ -48,29 +48,68 @@ func TestSceneContextTopicOrdersSameTimestampByRole(t *testing.T) {
 		t.Fatalf("messages = %d, want 2", len(st.Messages))
 	}
 	if st.Messages[0].Content != "question" || st.Messages[1].Content != "answer" {
-		t.Fatalf("same-millisecond turn read answer-first: %+v", st.Messages)
+		t.Fatalf("turn read answer-first: %+v", st.Messages)
+	}
+	if st.Messages[0].Seq != core.SeqUser || st.Messages[1].Seq != core.SeqAgent {
+		t.Fatalf("Seq must ride along so a gap is visible: %+v", st.Messages)
 	}
 }
 
-// A resumed topic reads question-first: the timestamp decides, and when a host
-// stamped both sides of a turn the same millisecond the role decides — never
-// the arbitrary order the archive ids happen to hash into.
-func TestSortSceneMessagesSpeakingOrder(t *testing.T) {
-	same := []core.SceneMessage{
-		{Role: core.RoleAgent, Content: "answer", CreatedAt: 1500},
-		{Role: core.RoleUser, Content: "question", CreatedAt: 1500},
-	}
-	sortMessages(same)
-	if same[0].Content != "question" || same[1].Content != "answer" {
-		t.Fatalf("same-millisecond turn not question-first: %+v", same)
-	}
+// L4 holds a turn's events beside its originals. A conversation context is the
+// dialogue, so the event kind must stay out of it — reading them in would show a
+// host dozens of lines for a two-line turn.
+func TestSceneContextTopicExcludesEvents(t *testing.T) {
+	engine := newTestEngine(t)
+	ac := newTestContext(t, engine)
+	const topicID uint64 = 0xfeed
 
-	across := []core.SceneMessage{
-		{Role: core.RoleUser, Content: "next question", CreatedAt: 2000},
-		{Role: core.RoleAgent, Content: "earlier answer", CreatedAt: 1000},
+	write := func(seq uint64, kind core.ArchiveKind, text string) {
+		t.Helper()
+		if _, err := repo.AppendArchiveL4(engine, core.DefaultAgentID, ac.L4, repo.ArchiveContent{
+			TopicID: topicID, Seq: seq, Kind: kind, Type: core.ContentText,
+			EventType: "tool_call", Text: text, CreatedAt: 1000 + int64(seq),
+		}); err != nil {
+			t.Fatalf("write %s slot %d: %v", kind, seq, err)
+		}
 	}
-	sortMessages(across)
-	if across[0].Content != "earlier answer" {
-		t.Fatalf("role tie-break overrode the timestamps: %+v", across)
+	write(core.SeqUser, core.KindUtterance, "question")
+	for seq := uint64(3); seq < 33; seq++ {
+		write(seq, core.KindEvent, "an operation")
+	}
+	write(core.SeqAgent, core.KindUtterance, "answer")
+
+	st, err := ContextTopic(ac, core.DefaultAgentID,
+		core.TopicSlot{ID: topicID, SceneID: 0xbeef, Depth: 1}, nil)
+	if err != nil {
+		t.Fatalf("ContextTopic: %v", err)
+	}
+	if len(st.Messages) != 2 {
+		t.Fatalf("messages = %d, want the two originals only: %+v", len(st.Messages), st.Messages)
+	}
+}
+
+// A gap in Seq is how a reclaimed utterance looks. It is a legal end state for an
+// old turn, so it must not be an error — and it must be distinguishable, which is
+// what the Seq on each message is for.
+func TestSceneContextTopicExposesSeqGaps(t *testing.T) {
+	engine := newTestEngine(t)
+	ac := newTestContext(t, engine)
+	const topicID uint64 = 0xfeed
+
+	for _, seq := range []uint64{core.SeqUser, 3} {
+		if _, err := repo.AppendArchiveL4(engine, core.DefaultAgentID, ac.L4, repo.ArchiveContent{
+			TopicID: topicID, Seq: seq, Kind: core.KindUtterance, Type: core.ContentText,
+			Text: "kept", CreatedAt: 1000,
+		}); err != nil {
+			t.Fatalf("write slot %d: %v", seq, err)
+		}
+	}
+	st, err := ContextTopic(ac, core.DefaultAgentID,
+		core.TopicSlot{ID: topicID, SceneID: 0xbeef, Depth: 1}, nil)
+	if err != nil {
+		t.Fatalf("a reclaimed slot is not a read failure: %v", err)
+	}
+	if len(st.Messages) != 2 || st.Messages[0].Seq != 1 || st.Messages[1].Seq != 3 {
+		t.Fatalf("gap not visible in the reported Seq: %+v", st.Messages)
 	}
 }
