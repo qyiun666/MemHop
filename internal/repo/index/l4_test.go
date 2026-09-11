@@ -162,7 +162,7 @@ func TestBuildL4FromEngineIndexesBothKinds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(&core.IndexSnapshotData{})
+	defer engine.Close()
 
 	const topic = uint64(7)
 	for _, slot := range []core.ArchiveSlot{

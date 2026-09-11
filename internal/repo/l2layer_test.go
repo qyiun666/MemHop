@@ -66,7 +66,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { engine.Close(nil) })
+	t.Cleanup(func() { engine.Close() })
 
 	sceneA := core.NewSceneSlot(1, "a").SceneID
 	sceneB := core.NewSceneSlot(2, "b").SceneID

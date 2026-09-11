@@ -21,7 +21,7 @@ func newL3TestDB(t *testing.T) *DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := engine.Close(&core.IndexSnapshotData{}); err != nil {
+		if err := engine.Close(); err != nil {
 			t.Errorf("close engine: %v", err)
 		}
 	})

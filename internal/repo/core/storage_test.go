@@ -24,7 +24,7 @@ func TestCreateWriteRead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	data := []byte("hello storage engine")
 	offset, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 12345, data)
 	if err != nil {
@@ -56,11 +56,10 @@ func TestABHeaderSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 1, []byte("a"))
-	snap := &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s")}}
 	for range 4 {
-		if err := eng.Checkpoint(snap); err != nil {
+		if err := eng.Checkpoint(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -81,19 +80,16 @@ func TestCheckpointReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 100, []byte("checkpoint data"))
-	snap := &IndexSnapshotData{
-		BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")},
-	}
-	if err := eng.Checkpoint(snap); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	eng.Close(snap)
+	eng.Close()
 
 	eng2, err := Open(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng2.Close(&IndexSnapshotData{})
+	defer eng2.Close()
 	if eng2.RecordCount() != 1 {
 		t.Fatalf("recordCount: want 1, got %d", eng2.RecordCount())
 	}
@@ -107,13 +103,11 @@ func TestCheckpointReopen(t *testing.T) {
 	if string(data) != "checkpoint data" {
 		t.Fatalf("data: %q", data)
 	}
-	// Verify snapshot data survived.
-	sd := eng2.SnapshotData()
-	if sd == nil {
-		t.Fatal("snapshot data is nil")
-	}
-	if string(sd.BlobByAgent[DefaultAgentID]) != "sparse" {
-		t.Fatalf("sparse: %q", sd.BlobByAgent[DefaultAgentID])
+	// The index came back from the checkpoint's snapshot, not from a full scan:
+	// a snapshot Open cannot read is cleared, leaving the header pointing at
+	// nothing.
+	if eng2.activeHeaderRef().SnapshotOffset == 0 {
+		t.Fatal("snapshot was not consumed; Open fell back to a full scan")
 	}
 }
 
@@ -123,7 +117,7 @@ func TestDeleteRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("first"))
 	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("second"))
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("third"))
@@ -154,7 +148,7 @@ func TestDeleteRecordBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("first"))
 	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("second"))
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("third"))
@@ -196,7 +190,7 @@ func TestConcurrentReadWrite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	// Seed some records.
 	for i := range uint64(100) {
 		eng.WriteRecord(DefaultAgentID, RecL0Profile, i, fmt.Appendf(nil, "seed-%d", i))
@@ -238,7 +232,7 @@ func TestWriteRecordBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	records := []RecordEntry{
 		{RecordType: RecL0Profile, IDHash: 10, Data: []byte("ten")},
 		{RecordType: RecL1SceneNode, IDHash: 20, Data: []byte("twenty")},
@@ -268,7 +262,7 @@ func TestFileSize(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	if eng.FileSize() != DataStart {
 		t.Fatalf("initial size: %d", eng.FileSize())
 	}
@@ -280,7 +274,7 @@ func TestContainsAndIndex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 42, []byte("x"))
 	if !eng.Contains(DefaultAgentID, 42) {
 		t.Fatal("should contain 42")

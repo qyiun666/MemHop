@@ -152,14 +152,15 @@ func (e *StorageEngine) restoreFromSnapshot(active *FileHeader) (scanStart uint6
 		return DataStart, false, false
 	}
 	if err := e.loadSnapshot(); err != nil {
-		// Snapshot corrupt or out of bounds (reclaim checkpoint truncation
-		// window): fall back to a full scan instead of refusing to open.
+		// Snapshot unreadable: a version this build does not read, a corrupt
+		// blob, an out-of-bounds pointer, or a truncation window. Fall back to
+		// a full scan instead of refusing to open — an older file costs one
+		// slow Open and re-checkpoints in the current format on the next one.
 		// Loud, so corruption never stays invisible behind a healthy Open.
 		slog.Warn("engine: snapshot unreadable, rebuilding index by full scan",
 			"err", err)
 		e.index = make(map[uint64]map[uint64]uint64)
 		e.recordCount = 0
-		e.snapshotData = nil
 		return DataStart, false, true
 	}
 	// Recover records appended after the snapshot (crash without checkpoint).
@@ -192,26 +193,26 @@ func (e *StorageEngine) abortOpen() {
 }
 
 // Checkpoint persists the index snapshot and switches A/B headers.
-func (e *StorageEngine) Checkpoint(snap *IndexSnapshotData) error {
+func (e *StorageEngine) Checkpoint() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return common.NewError(common.ErrClosed, "engine is closed")
 	}
-	return e.checkpoint(snap)
+	return e.appendSnapshot(BuildSnapshot(e.index))
 }
 
 // Close checkpoints, unmaps, and closes the file. All steps run even on
 // failure; the first error wins (checkpoint > unmap > sync > close) so
 // no mmap region or descriptor leaks.
-func (e *StorageEngine) Close(snap *IndexSnapshotData) error {
+func (e *StorageEngine) Close() error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.closed {
 		return common.NewError(common.ErrClosed, "engine is closed")
 	}
 	e.closed = true
-	ckptErr := e.checkpoint(snap)
+	ckptErr := e.appendSnapshot(BuildSnapshot(e.index))
 	shutErr := e.shutdownHandles()
 	if ckptErr != nil {
 		return ckptErr
@@ -256,16 +257,6 @@ func (e *StorageEngine) CloseNoCheckpoint() error {
 		return err
 	}
 	return e.file.Close()
-}
-
-// checkpoint appends the snapshot blob and flips the A/B header. Caller
-// must hold e.mu.
-func (e *StorageEngine) checkpoint(snap *IndexSnapshotData) error {
-	blob, err := BuildSnapshot(e.index, snap)
-	if err != nil {
-		return err
-	}
-	return e.appendSnapshot(blob)
 }
 
 // appendSnapshot writes blob as the single tail snapshot behind the record
@@ -320,13 +311,12 @@ func (e *StorageEngine) loadSnapshot() error {
 	}
 	raw := make([]byte, length)
 	copy(raw, e.mmap[off:off+length])
-	idx, snap, err := ParseSnapshot(raw)
+	idx, err := ParseSnapshot(raw)
 	if err != nil {
 		return err
 	}
 	e.index = idx
 	e.recordCount = uint32(e.totalRecordsLocked())
-	e.snapshotData = snap
 	return nil
 }
 

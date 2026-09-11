@@ -37,8 +37,6 @@ type SceneNode struct {
 	CreatedAt  int64    `json:"created_at"`
 	UpdatedAt  int64    `json:"updated_at"`
 	EdgeIDs    []uint64 `json:"edge_ids"`
-	// LastDecayAt: last decay time (ms); 0 = never decayed, first decay starts from CreatedAt.
-	LastDecayAt int64 `json:"last_decay_at"`
 }
 
 // SceneEdge is an L1 hyperedge used by upper-layer decay logic.

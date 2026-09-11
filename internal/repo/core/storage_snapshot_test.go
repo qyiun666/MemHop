@@ -15,11 +15,11 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	// First batch, then checkpoint.
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one"))
 	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("two"))
-	if err := eng.Checkpoint(&IndexSnapshotData{}); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
 	// Second batch appended after the checkpoint (includes an overwrite).
@@ -59,7 +59,7 @@ func TestOpenRecoversRecordsAfterSnapshot(t *testing.T) {
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 4); err != nil || string(data) != "four" {
 		t.Fatalf("record 4: data=%q err=%v", data, err)
 	}
-	eng2.Close(&IndexSnapshotData{})
+	eng2.Close()
 }
 
 func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
@@ -69,11 +69,11 @@ func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 		t.Fatal(err)
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("a"))
-	snap := &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
-	if err := eng.Checkpoint(snap); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	commitID := eng.activeHeaderRef().CommitID
+	hdr := eng.activeHeaderRef()
+	commitID, snapOff, snapLen := hdr.CommitID, hdr.SnapshotOffset, hdr.SnapshotLength
 	if err := eng.CloseNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
@@ -82,14 +82,17 @@ func TestCloseNoCheckpointPreservesDiskState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng2.Close(&IndexSnapshotData{})
-	// Header must not have flipped and the snapshot must be intact.
-	if got := eng2.activeHeaderRef().CommitID; got != commitID {
-		t.Fatalf("commitID: want %d, got %d", commitID, got)
+	defer eng2.Close()
+	// The header must not have flipped, and the snapshot must still be where
+	// that header says it is: an unreadable snapshot is cleared and replaced by
+	// a full scan, so a surviving pointer means Open consumed it.
+	hdr2 := eng2.activeHeaderRef()
+	if hdr2.CommitID != commitID {
+		t.Fatalf("commitID: want %d, got %d", commitID, hdr2.CommitID)
 	}
-	sd := eng2.SnapshotData()
-	if sd == nil || string(sd.BlobByAgent[DefaultAgentID]) != "sparse" {
-		t.Fatalf("snapshot lost: %+v", sd)
+	if hdr2.SnapshotOffset != snapOff || hdr2.SnapshotLength != snapLen {
+		t.Fatalf("snapshot pointer moved: want off=%d len=%d, got off=%d len=%d",
+			snapOff, snapLen, hdr2.SnapshotOffset, hdr2.SnapshotLength)
 	}
 	if _, data, err := eng2.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "a" {
 		t.Fatalf("record 1: data=%q err=%v", data, err)
@@ -139,5 +142,5 @@ func TestIndexCallbackMayReadRecord(t *testing.T) {
 	if count != 3 {
 		t.Fatalf("early stop: want 3 yields, got %d", count)
 	}
-	eng.Close(&IndexSnapshotData{})
+	eng.Close()
 }

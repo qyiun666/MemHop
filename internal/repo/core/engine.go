@@ -36,7 +36,6 @@ type StorageEngine struct {
 	byAgentType  map[uint64]map[uint8]map[uint64]struct{} // agentID → recordType → idHashes
 	recordCount  uint32
 	nextOffset   uint64
-	snapshotData *IndexSnapshotData
 	dirty        bool // records written/deleted since the last checkpoint
 	closed       bool // Close called; all operations return ErrClosed
 	mu           sync.RWMutex
@@ -132,12 +131,6 @@ func (e *StorageEngine) FileSize() uint64 {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return uint64(len(e.mmap))
-}
-
-func (e *StorageEngine) SnapshotData() *IndexSnapshotData {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	return e.snapshotData
 }
 
 func (e *StorageEngine) activeHeaderRef() *FileHeader {

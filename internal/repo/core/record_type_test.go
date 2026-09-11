@@ -18,7 +18,7 @@ func TestTypedReadersRejectForeignRecordType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { engine.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { engine.Close() })
 
 	const nodeID = uint64(7001)
 	if err := WriteHypergraphNode(engine, DefaultAgentID, nodeID, &HypergraphNode{
@@ -64,7 +64,7 @@ func TestContentAndPlanNodeDoNotReadAsEachOther(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { engine.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { engine.Close() })
 
 	const topic = uint64(9)
 	contentID := HashContent(topic, SeqUser)

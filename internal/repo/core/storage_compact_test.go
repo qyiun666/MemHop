@@ -13,7 +13,7 @@ func TestCompact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { eng.Close(&IndexSnapshotData{}) })
+	t.Cleanup(func() { eng.Close() })
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("keep"))
 	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("delete me"))
 	eng.WriteRecord(DefaultAgentID, RecL2Topic, 3, []byte("also keep"))
@@ -22,11 +22,10 @@ func TestCompact(t *testing.T) {
 	eng.DeleteRecord(DefaultAgentID, 2)
 	eng.DeleteRecord(DefaultAgentID, 5)
 	// Checkpoint so original has a snapshot (fair comparison).
-	eng.Checkpoint(&IndexSnapshotData{})
+	eng.Checkpoint()
 
 	compactPath := tempPath(t, "compact_dst")
-	snap := &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("sparse")}}
-	if err := eng.Compact(compactPath, snap); err != nil {
+	if err := eng.Compact(compactPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -35,7 +34,7 @@ func TestCompact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng2.Close(&IndexSnapshotData{})
+	defer eng2.Close()
 	if eng2.RecordCount() != 3 {
 		t.Fatalf("compact count: %d", eng2.RecordCount())
 	}
@@ -54,14 +53,10 @@ func TestCompact(t *testing.T) {
 	if err != nil || string(data3) != "also keep" {
 		t.Fatal("record 3 missing or wrong")
 	}
-	// The caller-provided snapshot must be carried into the compacted file.
-	sd := eng2.SnapshotData()
-	if sd == nil || string(sd.BlobByAgent[DefaultAgentID]) != "sparse" {
-		t.Fatalf("compacted snapshot lost: %+v", sd)
-	}
-	// A nil snapshot is a caller bug, not a silent empty checkpoint.
-	if err := eng.Compact(tempPath(t, "compact_nil"), nil); err == nil {
-		t.Fatal("expected error for nil snapshot")
+	// The compacted file carries its own snapshot, so opening it restores the
+	// index from that snapshot rather than scanning the whole log.
+	if eng2.activeHeaderRef().SnapshotOffset == 0 {
+		t.Fatal("compacted file has no snapshot")
 	}
 
 	// Compacted file should be smaller (fewer records + no dead records).

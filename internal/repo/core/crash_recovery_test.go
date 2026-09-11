@@ -31,7 +31,7 @@ func TestTombstoneReplayAfterCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng2.Close(&IndexSnapshotData{})
+	defer eng2.Close()
 	if eng2.Contains(DefaultAgentID, 1) {
 		t.Fatal("deleted record resurrected after reopen")
 	}
@@ -52,7 +52,7 @@ func TestTombstoneReplayOverridesSnapshot(t *testing.T) {
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one"))
 	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("two"))
-	if err := eng.Checkpoint(&IndexSnapshotData{}); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
 	if ok, err := eng.DeleteRecord(DefaultAgentID, 1); err != nil || !ok {
@@ -66,7 +66,7 @@ func TestTombstoneReplayOverridesSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng2.Close(&IndexSnapshotData{})
+	defer eng2.Close()
 	if eng2.Contains(DefaultAgentID, 1) {
 		t.Fatal("tombstone did not override snapshot entry")
 	}
@@ -121,7 +121,7 @@ func TestTornTailFrameTruncatedOnOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open after partial frame: %v", err)
 	}
-	defer eng3.Close(&IndexSnapshotData{})
+	defer eng3.Close()
 	if !eng3.Contains(DefaultAgentID, 1) || !eng3.Contains(DefaultAgentID, 3) {
 		t.Fatal("live records lost after partial-frame recovery")
 	}
@@ -137,31 +137,30 @@ func TestOrphanSnapshotBlobTruncatedOnOpen(t *testing.T) {
 	}
 	eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one"))
 	eng.WriteRecord(DefaultAgentID, RecL1SceneNode, 2, []byte("two"))
-	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
+	committedOff := eng.activeHeaderRef().SnapshotOffset
 	if err := eng.CloseNoCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate the crash window: snapshot blob synced, header never flipped.
-	blob, err := BuildSnapshot(map[uint64]map[uint64]uint64{DefaultAgentID: {1: DataStart}}, &IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	blob := BuildSnapshot(map[uint64]map[uint64]uint64{DefaultAgentID: {1: DataStart}})
 	appendBytes(t, p, blob)
 
 	eng2, err := Open(p)
 	if err != nil {
 		t.Fatalf("open with orphan snapshot blob: %v", err)
 	}
-	defer eng2.Close(&IndexSnapshotData{})
+	defer eng2.Close()
 	if !eng2.Contains(DefaultAgentID, 1) || !eng2.Contains(DefaultAgentID, 2) {
 		t.Fatal("records lost after orphan blob recovery")
 	}
-	// The committed snapshot (s1) must still be the active one.
-	sd := eng2.SnapshotData()
-	if sd == nil || string(sd.BlobByAgent[DefaultAgentID]) != "s1" {
-		t.Fatalf("active snapshot wrong: %+v", sd)
+	// The committed snapshot is still the active one: the orphan appended
+	// behind it was recognised and truncated rather than adopted. Adopting it
+	// would move this offset and lose record 2, which its index never named.
+	if got := eng2.activeHeaderRef().SnapshotOffset; got != committedOff {
+		t.Fatalf("active snapshot moved: want %d, got %d", committedOff, got)
 	}
 }
 
@@ -177,7 +176,7 @@ func TestSecondInstanceRejectedByLock(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "already open") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if err := eng.Close(&IndexSnapshotData{}); err != nil {
+	if err := eng.Close(); err != nil {
 		t.Fatal(err)
 	}
 	// After Close the lock is released and Open succeeds.
@@ -185,7 +184,7 @@ func TestSecondInstanceRejectedByLock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open after close: %v", err)
 	}
-	eng2.Close(&IndexSnapshotData{})
+	eng2.Close()
 }
 
 // appendBytes appends raw bytes to the file, simulating crash residue.

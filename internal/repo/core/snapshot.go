@@ -13,26 +13,19 @@ import (
 
 const SnapshotMagic uint32 = 0x534E4150
 
-// SnapshotVersion 0x02 serializes the record index plus one opaque blob per
-// agent domain; the business layer writes that section empty and the engine
-// round-trips it unchanged. 0x01 (single flat index + sparse/L3 blobs) is
-// rejected together with pre-0x0008 files.
-const SnapshotVersion uint8 = 0x02
+// SnapshotVersion 0x03 serializes the per-agent record index and nothing else.
+// 0x02 carried one opaque blob per agent domain beside the index, a channel
+// whose only producer (the sparse and L3 sections of 0x01) was retired; the
+// engine round-tripped it and no caller ever filled it. 0x02 and earlier are
+// rejected together with pre-0x0008 files — a rejected snapshot costs one full
+// record scan at Open, not the file (see restoreFromSnapshot).
+const SnapshotVersion uint8 = 0x03
 
-// IndexSnapshotData carries the per-agent opaque snapshot sections. The
-// engine round-trips them at Checkpoint/Close and Open; the business layer
-// has nothing to put in them and passes an empty map.
-type IndexSnapshotData struct {
-	BlobByAgent map[uint64][]byte // agentID → opaque section bytes
-}
-
-// BuildSnapshot serializes the per-agent index and snapshot data into a
-// single blob. Format: MAGIC(4) VERSION(1) AGENT_COUNT(4) then per agent
-// AGENT_ID(8) COUNT(4) entries(16 each) blob(len+data), CRC32(4).
-func BuildSnapshot(index map[uint64]map[uint64]uint64, snap *IndexSnapshotData) ([]byte, error) {
-	if snap == nil {
-		snap = &IndexSnapshotData{}
-	}
+// BuildSnapshot serializes the per-agent record index into a single blob.
+// Format: MAGIC(4) VERSION(1) AGENT_COUNT(4) then per agent AGENT_ID(8)
+// COUNT(4) entries(16 each), CRC32(4). A domain with no live records is
+// omitted, so an empty index serializes to the envelope alone.
+func BuildSnapshot(index map[uint64]map[uint64]uint64) []byte {
 	agents := make([]uint64, 0, len(index))
 	total := 0
 	for agentID, m := range index {
@@ -42,12 +35,7 @@ func BuildSnapshot(index map[uint64]map[uint64]uint64, snap *IndexSnapshotData) 
 		agents = append(agents, agentID)
 		total += len(m)
 	}
-	// Estimate capacity: header + per-agent framing + entries + blobs.
-	capacity := 9 + len(agents)*(8+4) + total*16 + len(agents)*4 + 4
-	for _, blob := range snap.BlobByAgent {
-		capacity += len(blob)
-	}
-	buf := make([]byte, 0, capacity)
+	buf := make([]byte, 0, 9+len(agents)*(8+4)+total*16+4)
 	buf = appendU32LE(buf, SnapshotMagic)
 	buf = append(buf, SnapshotVersion)
 	buf = appendU32LE(buf, uint32(len(agents)))
@@ -59,34 +47,27 @@ func BuildSnapshot(index map[uint64]map[uint64]uint64, snap *IndexSnapshotData) 
 			buf = appendU64LE(buf, id)
 			buf = appendU64LE(buf, off)
 		}
-		buf = appendBlob(buf, snap.BlobByAgent[agentID])
 	}
-	crc := crc32.ChecksumIEEE(buf)
-	buf = appendU32LE(buf, crc)
-	return buf, nil
+	return appendU32LE(buf, crc32.ChecksumIEEE(buf))
 }
 
-// ParseSnapshot restores the per-agent record index and snapshot blobs.
-func ParseSnapshot(raw []byte) (map[uint64]map[uint64]uint64, *IndexSnapshotData, error) {
+// ParseSnapshot restores the per-agent record index.
+func ParseSnapshot(raw []byte) (map[uint64]map[uint64]uint64, error) {
 	if err := checkSnapshotEnvelope(raw); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	agentCount := int(binary.LittleEndian.Uint32(raw[5:9]))
 	pos := 9
 	idx := make(map[uint64]map[uint64]uint64, agentCount)
-	snap := &IndexSnapshotData{BlobByAgent: make(map[uint64][]byte, agentCount)}
 	for range agentCount {
-		agentID, m, blob, next, err := parseSnapshotAgent(raw, pos)
+		agentID, m, next, err := parseSnapshotAgent(raw, pos)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		idx[agentID] = m
-		if len(blob) > 0 {
-			snap.BlobByAgent[agentID] = blob
-		}
 		pos = next
 	}
-	return idx, snap, nil
+	return idx, nil
 }
 
 // checkSnapshotEnvelope validates length, CRC, magic and version of a
@@ -110,17 +91,17 @@ func checkSnapshotEnvelope(raw []byte) error {
 	return nil
 }
 
-// parseSnapshotAgent reads one agent section (id header, offset entries,
-// opaque blob) starting at pos; next is the offset after the section.
-func parseSnapshotAgent(raw []byte, pos int) (agentID uint64, m map[uint64]uint64, blob []byte, next int, err error) {
+// parseSnapshotAgent reads one agent section (id header then offset entries)
+// starting at pos; next is the offset after the section.
+func parseSnapshotAgent(raw []byte, pos int) (agentID uint64, m map[uint64]uint64, next int, err error) {
 	if pos+12 > len(raw)-4 {
-		return 0, nil, nil, 0, common.NewError(common.ErrCorruption, "snapshot agent header truncated")
+		return 0, nil, 0, common.NewError(common.ErrCorruption, "snapshot agent header truncated")
 	}
 	agentID = binary.LittleEndian.Uint64(raw[pos : pos+8])
 	count := int(binary.LittleEndian.Uint32(raw[pos+8 : pos+12]))
 	pos += 12
 	if pos+count*16 > len(raw)-4 {
-		return 0, nil, nil, 0, common.NewError(common.ErrCorruption, "snapshot entries truncated")
+		return 0, nil, 0, common.NewError(common.ErrCorruption, "snapshot entries truncated")
 	}
 	m = make(map[uint64]uint64, count)
 	for range count {
@@ -129,11 +110,7 @@ func parseSnapshotAgent(raw []byte, pos int) (agentID uint64, m map[uint64]uint6
 		m[idHash] = offset
 		pos += 16
 	}
-	blob, pos, err = readBlob(raw, pos)
-	if err != nil {
-		return 0, nil, nil, 0, err
-	}
-	return agentID, m, blob, pos, nil
+	return agentID, m, pos, nil
 }
 
 func appendU32LE(buf []byte, v uint32) []byte {
@@ -146,23 +123,4 @@ func appendU64LE(buf []byte, v uint64) []byte {
 	var b [8]byte
 	binary.LittleEndian.PutUint64(b[:], v)
 	return append(buf, b[:]...)
-}
-
-func appendBlob(buf []byte, data []byte) []byte {
-	buf = appendU32LE(buf, uint32(len(data)))
-	return append(buf, data...)
-}
-
-func readBlob(raw []byte, pos int) ([]byte, int, error) {
-	if pos+4 > len(raw)-4 {
-		return nil, 0, common.NewError(common.ErrCorruption, "snapshot blob length truncated")
-	}
-	blen := int(binary.LittleEndian.Uint32(raw[pos : pos+4]))
-	pos += 4
-	if pos+blen > len(raw)-4 {
-		return nil, 0, common.NewError(common.ErrCorruption, "snapshot blob data truncated")
-	}
-	data := make([]byte, blen)
-	copy(data, raw[pos:pos+blen])
-	return data, pos + blen, nil
 }

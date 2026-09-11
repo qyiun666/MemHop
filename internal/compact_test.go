@@ -21,7 +21,7 @@ func TestCompactToWritesLiveRecordsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { engine.Close(nil) })
+	t.Cleanup(func() { engine.Close() })
 	db := newTestDB(t, engine)
 	db.config.DBPath = live
 
@@ -55,7 +55,7 @@ func TestCompactToWritesLiveRecordsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open compact copy: %v", err)
 	}
-	t.Cleanup(func() { reopened.Close(nil) })
+	t.Cleanup(func() { reopened.Close() })
 	if n := countRecords(reopened, core.DefaultAgentID, core.RecL2Topic); n != 1 {
 		t.Fatalf("compact copy holds %d topics, want only the live one", n)
 	}

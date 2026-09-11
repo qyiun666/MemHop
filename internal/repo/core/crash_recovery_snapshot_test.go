@@ -27,7 +27,7 @@ func TestAppendAfterReopenWithTailSnapshotSurvivesCrash(t *testing.T) {
 	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.CloseNoCheckpoint(); err != nil {
@@ -50,7 +50,7 @@ func TestAppendAfterReopenWithTailSnapshotSurvivesCrash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen after crash: %v", err)
 	}
-	defer eng3.Close(&IndexSnapshotData{})
+	defer eng3.Close()
 	if _, data, err := eng3.ReadRecord(DefaultAgentID, 1); err != nil || string(data) != "one" {
 		t.Fatalf("record 1: data=%q err=%v", data, err)
 	}
@@ -71,10 +71,10 @@ func TestAppendAfterReopenWithMultipleTailSnapshotsSurvivesCrash(t *testing.T) {
 	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}}); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.CloseNoCheckpoint(); err != nil {
@@ -96,7 +96,7 @@ func TestAppendAfterReopenWithMultipleTailSnapshotsSurvivesCrash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng3.Close(&IndexSnapshotData{})
+	defer eng3.Close()
 	for id, want := range map[uint64]string{1: "one", 2: "two"} {
 		if _, data, err := eng3.ReadRecord(DefaultAgentID, id); err != nil || string(data) != want {
 			t.Fatalf("record %d: data=%q err=%v", id, data, err)
@@ -115,10 +115,10 @@ func TestAppendAfterReopenWithLegacyHeaderRecordEnd(t *testing.T) {
 	if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s2")}}); err != nil {
+	if err := eng.Checkpoint(); err != nil {
 		t.Fatal(err)
 	}
 	// Simulate a pre-RecordEnd file: clear the field in the active header
@@ -151,7 +151,7 @@ func TestAppendAfterReopenWithLegacyHeaderRecordEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer eng3.Close(&IndexSnapshotData{})
+	defer eng3.Close()
 	for id, want := range map[uint64]string{1: "one", 2: "two"} {
 		if _, data, err := eng3.ReadRecord(DefaultAgentID, id); err != nil || string(data) != want {
 			t.Fatalf("record %d: data=%q err=%v", id, data, err)
@@ -172,7 +172,7 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 			if _, err := eng.WriteRecord(DefaultAgentID, RecL0Profile, 1, []byte("keep me")); err != nil {
 				t.Fatal(err)
 			}
-			if err := eng.Checkpoint(&IndexSnapshotData{BlobByAgent: map[uint64][]byte{DefaultAgentID: []byte("s1")}}); err != nil {
+			if err := eng.Checkpoint(); err != nil {
 				t.Fatal(err)
 			}
 			if err := eng.CloseNoCheckpoint(); err != nil {
@@ -199,7 +199,7 @@ func TestOpenRecoversWhenOneHeaderCorrupt(t *testing.T) {
 				eng2.CloseNoCheckpoint()
 				t.Fatalf("record 1: data=%q err=%v", data, err)
 			}
-			if err := eng2.Close(&IndexSnapshotData{}); err != nil {
+			if err := eng2.Close(); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -222,7 +222,7 @@ func TestHeaderVersionRejected(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := eng.Close(&IndexSnapshotData{}); err != nil {
+			if err := eng.Close(); err != nil {
 				t.Fatal(err)
 			}
 			// Rewrite both headers with the target version (valid CRC).
@@ -251,16 +251,20 @@ func TestHeaderVersionRejected(t *testing.T) {
 	}
 }
 
-// A snapshot blob with an unsupported version must be rejected explicitly.
+// A snapshot blob with an unsupported version must be rejected explicitly,
+// while the version this build writes parses.
 func TestSnapshotVersionRejected(t *testing.T) {
-	blob, err := BuildSnapshot(map[uint64]map[uint64]uint64{DefaultAgentID: {1: DataStart}}, &IndexSnapshotData{})
-	if err != nil {
-		t.Fatal(err)
+	blob := BuildSnapshot(map[uint64]map[uint64]uint64{DefaultAgentID: {1: DataStart}})
+	if blob[4] != SnapshotVersion {
+		t.Fatalf("blob carries 0x%02x, want the current 0x%02x", blob[4], SnapshotVersion)
+	}
+	if _, err := ParseSnapshot(blob); err != nil {
+		t.Fatalf("the version this build writes must parse: %v", err)
 	}
 	blob[4] = 0x7F // tamper version, then fix the CRC
 	crc := crc32.ChecksumIEEE(blob[:len(blob)-4])
 	binary.LittleEndian.PutUint32(blob[len(blob)-4:], crc)
-	if _, _, err := ParseSnapshot(blob); err == nil {
+	if _, err := ParseSnapshot(blob); err == nil {
 		t.Fatal("expected snapshot version error")
 	} else if common.CodeOf(err) != common.ErrCorruption {
 		t.Fatalf("unexpected error: %v", err)

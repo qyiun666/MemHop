@@ -215,7 +215,7 @@ func TestL3PoolSurvivesRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = engine.Close(&core.IndexSnapshotData{}) })
+	t.Cleanup(func() { _ = engine.Close() })
 	db2 := newTestDB(t, engine)
 	// The real Open assembly reloads the tenant registry; mirror it here.
 	db2.idToName, db2.nameToID = loadTenantRegistry(engine)

@@ -28,7 +28,7 @@ func TestBuildL2MetaIndexesEveryDepth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(nil)
+	defer engine.Close()
 
 	writeRawTopic(t, engine, 1, 100, 1, []string{"alpha", "memory"})
 	writeRawTopic(t, engine, 2, 100, 2, []string{"beta", "rust"})

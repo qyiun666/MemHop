@@ -98,7 +98,7 @@ func TestBuildL2MetaFromEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(nil)
+	defer engine.Close()
 
 	topic := core.TopicSlot{
 		ID: 101, SceneID: 1, Depth: 1,

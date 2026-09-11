@@ -23,7 +23,7 @@ func newTestEngine(t *testing.T) *core.StorageEngine {
 	if err != nil {
 		t.Fatalf("create engine: %v", err)
 	}
-	t.Cleanup(func() { engine.Close(nil) })
+	t.Cleanup(func() { engine.Close() })
 	return engine
 }
 

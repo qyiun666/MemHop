@@ -8,7 +8,7 @@
 按 **agent 域**（`agentID uint64`）提供记录的读、写、遍历与检索原语：
 
 - `core/`：.meh 引擎——记录帧（26 字节：type/flags/length/agent_id/
-  id_hash/crc32）、A/B 文件头、快照（0x02 分域）、空间回收、
+  id_hash/crc32）、A/B 文件头、快照（0x03 分域，只存记录索引）、空间回收、
   `StorageEngine` 索引（`agent -> idHash -> offset` 两级分域）、Slot 数据模型。
   `FormatVersion` 是 `0x0011`：Open 对任何其它版本（更旧**或**更新）都显式拒绝、
   无迁移路径。上抬改的仍不是 26 字节帧布局而是记录含义与状态词表：计划节点由
@@ -25,6 +25,11 @@
   `topic_id`，场景记录
   只剩 `turn_seq` 一个计数器。旧文件的那些键与前缀按新规则都指不到东西（`plan:`
   的后缀形状也变了：路径串换成了序号）。
+  **`SnapshotVersion` 与 `FormatVersion` 不是一回事**：快照版本不符只让 Open 丢掉
+  那份快照、回退一次全量记录扫描重建索引并打一条 WARN，文件照开、记录一条不少，
+  下一次 checkpoint 就写成当前布局。所以改快照布局的代价是「旧文件首次 Open 慢
+  一次」，改记录布局的代价才是「旧文件打不开」；当前布局是每个 agent 段只有
+  id 头加偏移条目，末尾那段不透明 blob 已随它退役的生产者一起删除。
   `StorageEngine` 按功能分文件：`engine.go`（索引模型/访问器）、
   `engine_lifecycle.go`（Create/Open/Checkpoint/Close）、`engine_write.go`（追加）、
   `engine_read.go`（索引查找读）、`engine_delete.go`（墓碑删除）、

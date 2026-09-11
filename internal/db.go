@@ -211,14 +211,14 @@ func (db *DB) Close() error {
 		ac.Mu.Lock()
 		ac.Mu.Unlock() //nolint:staticcheck // barrier only
 	}
-	return db.engine.Close(nil)
+	return db.engine.Close()
 }
 
 func (db *DB) Checkpoint() error {
 	if db.closed.Load() {
 		return common.NewError(common.ErrClosed, "database is closed")
 	}
-	return db.engine.Checkpoint(nil)
+	return db.engine.Checkpoint()
 }
 
 // CompactTo writes a defragmented copy of the database at newPath: only live
@@ -247,7 +247,7 @@ func (db *DB) CompactTo(newPath string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return common.NewError(common.ErrIO, "compact: stat newPath", err)
 	}
-	return db.engine.Compact(newPath, &core.IndexSnapshotData{})
+	return db.engine.Compact(newPath)
 }
 
 // sameFile compares two paths for the engine-level check that a compaction
