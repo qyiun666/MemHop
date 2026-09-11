@@ -72,7 +72,9 @@ type ProfileSlot struct {
 
 // ProfileInput is the profile as a host writes it — the argument to Open,
 // SubAgent and UpdateL0. It holds exactly the fields the host owns: a domain's
-// name, its role, its personality and its preferences.
+// name, its role, its personality and its preferences. Name is required at all
+// three entries (a blank one is refused) because it is how the domain is
+// addressed; the other three may be left empty.
 //
 // The library-owned fields are absent rather than ignored. On an inbound record
 // a blank EmotionState or a zero UpdatedAtMs cannot be told apart from "leave

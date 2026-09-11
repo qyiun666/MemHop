@@ -173,13 +173,19 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `hash("turn:" + 场景:k)` 且 `k <= 场景.TurnSeq`，即该场景真开出过的某一轮
    ——写 Dream 融合节点（同 depth、同场景，但由时间戳派生）、跨场景 id、宿主
    自造 id 都在 LLM 调用之前被拒，零留痕。重放当前轮与"先开两轮再乱序结算"
-   仍然合法（`TestUpdateSettlesEachScenesTurnsInOrder`）。
+   仍然合法（`TestUpdateSettlesEachScenesTurnsInOrder`）；重放重写的是引擎那半
+   （关键词轨、两个时间界、depth、场景归属），宿主给的 `name` 从存量记录里带
+   过来——否则把一轮重述一次就把它悄悄改了名（`TestCreateTurnTopicL2ReplayKeepsHostName`）。
 4. **巩固按单场景规模触发**：`consolidateScene` 在 depth-1 话题数超
    `Defaults.SceneDreamTopicThreshold` 时调度该场景 Dream；单个融合组是
    "摘要内容 → 提炼关键词 → 建父话题 → 下沉子话题"的串写，任一步
    失败都回滚本组已写的记录（`dream.discardFusedGroup` 按父话题键整删它名下的
    内容与缓存，不需要携带任何 id 才能撤销一次写）——要么整体生效，
-   要么不留孤儿记录 / 半成品父节点。
+   要么不留孤儿记录 / 半成品父节点。下沉这一步本身就是全有或全无：
+   `repo.CompressTopicsL2` 把改写攒到最后一次批写，成员读不动（`ErrNotFound`
+   以外的任何错误，或索引点名却不是话题记录）就整组不动、把错误交回上面回滚，
+   只有「已经不在」的成员从组里退出——吞掉一次读失败会留下父摘要与那一条自己的
+   原文同时在场景里，正是一个半成品父节点（`TestCompressTopicsL2RefusesUnreadableMember`）。
 5. **内容类型与说话者在 `AppendArchive` 逐条声明并在其边界校验**：原文侧照收
    `Role`（user/agent/system）与 `ContentType`（零值 `ContentText`，非文本侧存
    路径/URL），未定义值以 `ErrInvalidQuery` 拒绝；`RoleDream` 是库给融合摘要
@@ -207,6 +213,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    现值继承（只有它们的首次建立走蒸馏路径），`UpdatedAtMs` 由库戳写。门面不再靠
    入站映射丢弃那三项——宿主能传的 `api.ProfileInput` 就只有那四项，库自有的三项
    不是「传了不采信」而是没有位置可传。`MergeDistill` 是反过来只写蒸馏项。
+   `Name` 是三个写画像的入口（`Open` 播种主域、`SubAgent` 建/取注册域、
+   `UpdateL0` 改）共同的必填项：域就靠它被称呼，`UpdateL0` 是唯一能把它清掉的
+   口，所以空白名一律 `ErrInvalidQuery` 拒绝，而不是存下一个无从指认的画像。
 9. **L3 的 id 与边身份**：`core.readJSON` 校验帧内记录类型，种类不符即
    `ErrNotFound`（否则 `UpdateL3(节点 id)` 会把节点记录改写成图槽）；
    `CreateEdgeL3` 的 id 含 kind，导入按「排序成员 + kind」的语义键去重，

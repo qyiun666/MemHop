@@ -59,11 +59,12 @@ func (s *Session) GetL0() (*ProfileSlot, error) {
 }
 
 // UpdateL0 writes the host-owned profile fields (Name / Role / Personality /
-// Preferences) — the whole of ProfileInput. The library-owned half of the stored
-// profile is inherited by the write itself: EmotionState and MBTI, which Dream
-// evolves, and AgentType, stamped once when the domain was created. UpdatedAtMs is
-// stamped here. So a profile edit never wipes the distilled half, and never moves a
-// domain between primary and sub.
+// Preferences) — the whole of ProfileInput. Name is required here as it is at
+// Open and SubAgent: a blank name is refused, not stored. The library-owned half
+// of the stored profile is inherited by the write itself: EmotionState and MBTI,
+// which Dream evolves, and AgentType, stamped once when the domain was created.
+// UpdatedAtMs is stamped here. So a profile edit never wipes the distilled half,
+// and never moves a domain between primary and sub.
 func (s *Session) UpdateL0(profile *ProfileInput) error {
 	if profile == nil {
 		return internal.NewError(internal.ErrInvalidQuery, "UpdateL0: profile is required")

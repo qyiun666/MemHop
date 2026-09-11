@@ -21,8 +21,19 @@ func CompressTopicsL2(engine *core.StorageEngine, agentID uint64, ids []uint64, 
 	var deletes []uint64
 	for _, id := range ids {
 		topic, err := core.ReadTopicLenient(engine, agentID, id)
-		if err != nil || topic == nil {
-			continue // skip missing or non-topic records
+		switch {
+		case err != nil && common.CodeOf(err) == common.ErrNotFound:
+			continue // already gone: this member just drops out of the group
+		case err != nil:
+			// The fused parent is already on disk by the time this runs. Skipping
+			// a member we could not read would leave the scene showing both the
+			// group's summary and that member's own originals, so the read
+			// failure is the caller's to roll back, not to swallow.
+			return common.NewError(common.ErrIO, "read topic to sink", err)
+		case topic == nil:
+			// The ids come from the topic listing, so one naming a foreign record
+			// is the cache and the disk disagreeing.
+			return common.NewError(common.ErrIO, common.FormatHash(id)+" names no topic record", nil)
 		}
 		topic.Depth++
 		topic.ParentID = &parentID

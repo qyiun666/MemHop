@@ -9,23 +9,23 @@ README 的版本表与 git log。
 2. **域以句柄交回，agent id 不再越门面**：`Primary()` 拿文件被打开所依据的那个域，`SubAgent(llm, profile)` 按 `profile.Name` 幂等建/取一个子域并挂上它自己的 LLM 端点。`CreateAgent`/`ListAgents`/`Session(hexID)`/`DefaultAgentID` 删除——宿主不再持有也不再回传任何域 id，名字是它唯一的把手。
 3. **L0 画像新增 `AgentType`**（0=主 agent / 1=子 agent）：建域时由库盖章，宿主写画像时由库继承现值，所以改画像动不了域身份。
 4. **L1 开只读面**：新增 `ListL1() → []SceneNodeView`，返回本域全部场景节点、顺序稳定、id 为 hex。节点与共现边仍只由 Dream 建立与衰减，**没有 L1 写接口**；`EdgeIDs` 没有独立的读取口，两个节点共享同一个 id 即意味着 Dream 判定它们相关。
-5. **L2 新增 `RenameTopic(topicID, name)`**：话题名归宿主，引擎不派生，所以巩固与合并重写记录时不会覆盖它；空名被拒（空是「还没命名」而不是一个名字），未知话题报 `ErrNotFound`。新名字在 `Search` 与 `SceneContext` 上立刻可见。
+5. **L2 新增 `RenameTopic(topicID, name)`**：话题名归宿主，引擎不派生，所以三条会重写话题记录的路径都不碰它——巩固建父、压缩下沉子话题、以及重放同一轮（`Update` 第二次结算同一个轮次键时只重写引擎那半，名字从存量记录带过来）；空名被拒（空是「还没命名」而不是一个名字），未知话题报 `ErrNotFound`。新名字在 `Search` 与 `SceneContext` 上立刻可见。
 6. **整体退役**：能力面（`Crystallize`、`ParseCapabilityPackage`/`ValidateCapabilityCard`、`internal/cap/capability` 整包）、`ListTrajectorySessions`（读事件轨走 `SearchL4{TopicID, Kind:event}`）、`DeleteL3Nodes`（L3 删除只剩整图一个粒度）、`DeleteAgent` 与它背后的整域删除链。公开面 27 + 8 → **26 + 6**。
 7. **磁盘格式 `0x0011` → `0x0012`**：`0x0011` 及更早的文件在 `Open` 时被显式拒绝、不迁移。理由是硬的——旧文件的画像没有 `agent_type`，解码后每个域都读作主 agent，而新语义要求「一个文件恰好一个主」，容错打开会无声地违反这条不变量。
 8. **MCP 仍是 24 个工具**：删 `memhop_crystallize` 与 `memhop_trajectory_sessions`，新增 `memhop_l1_nodes` 与 `memhop_topic_rename`。多租户改为：进程启动时 `Open` 落定主域，每个 `/mcp/<tenant>` 首次访问经 `SubAgent(name=tenant)` 建/取自己的子域——租户名就是域的地址，重连回到同一个域。共享库在启动时打开，配置不可用则进程拒绝启动，而不是等第一个请求报 500。
 9. **`DefaultMemHopDefaults` 从指针改为值**：宿主要调参就复制一份改，不再能经由一个导出的全局改到所有调用方读到的默认值。
-10. **画像的读错误分类回到读侧**：`repo.GetProfileL0` 不再把一切改写成 `ErrNotFound`——读不动报 `ErrIO`、解不开报 `ErrDeserialization`。三处上游的分支（`GetL0` 何时给空画像、`UpdateL0` 何时不继承蒸馏半区、Dream 蒸馏遇瞬时失败是否重写画像）此前**永不触发**，其中一处的注释还正以那条分支为立论依据。被修掉的后果是一次瞬时读失败就能让 `UpdateL0` 抹掉该域的 `EmotionState`/`MBTI`/域身份；契约测试 `TestUnreadableProfileIsNotAbsentProfile` 钉住「解不开的画像不落盘」。
+10. **读错误分类回到读侧（两处）**：`repo.GetProfileL0` 不再把一切改写成 `ErrNotFound`——读不动报 `ErrIO`、解不开报 `ErrDeserialization`。三处上游的分支（`GetL0` 何时给空画像、`UpdateL0` 何时不继承蒸馏半区、Dream 蒸馏遇瞬时失败是否重写画像）此前**永不触发**，其中一处的注释还正以那条分支为立论依据。被修掉的后果是一次瞬时读失败就能让 `UpdateL0` 抹掉该域的 `EmotionState`/`MBTI`/域身份；契约测试 `TestUnreadableProfileIsNotAbsentProfile` 钉住「解不开的画像不落盘」。同一分类补到压缩下沉：`repo.CompressTopicsL2` 此前把「点名却读不动」的组成员当成已经消失而跳过，于是父摘要与该条自己的原文会同时留在场景里——现在改写攒到最后一次批写，成员读不动就整组不动、把错误交回巩固侧回滚（`TestCompressTopicsL2RefusesUnreadableMember`）。
 11. **Dream 的缓存重建不再被 L1 失败带走**：L2Meta 整表重建一算出来就装回域上下文，排在 L1 各阶段之前——L1 只写 L1 记录，一次 L1 失败不会让按当前 L2 记录算出的缓存失效。反向的漏项补进文档：本包的压缩改写话题深度时**没有任何增量镜像步**，那次重建就是唯一的对账点（`TestStructureStagesKeepsRebuildAcrossL1Failure`）。
 12. **轮次键的取锁与解析各只剩一处**：`db.lockSession`（取域锁 → 解析轮键 → 解析失败先解锁）此前全仓零调用而 L4/L5 各口手写同一段前言，现由 `AppendArchive`/`PlanNodeAdd`/`PlanNodeUpdate`/`PlanState`/`Update` 共用；「解析话题键并拒保留全零」在 `turn` 与 `content` 各写一份的两份合一到 `content.ParseTopicID`，并补上 `RenameTopic`/`DeleteTopic` 两处只解析不拒零的入口。
 13. **同一判断与同一形状合一**：「索引点名却读不到 = `ErrIO`」的三份等价实现收成 `repo.ReadArchivesByIDs` 一处，`scene.ContextTopic` 退成纯渲染（不再自己读记录，小包也就不再跨层调 `core`）；`repo.ArchiveContent` 这个与 `core.ArchiveSlot` 同形的中间结构删除（每条内容此前被复制两趟）；`CompressTopicsL2` 不再返回无人读取的时间界（同一件事 Dream 自己算过，且算出的值才拿去铸父 id）；L1 情感回填从「L0 profile primitives」模块迁回 L1 文件，并停止把读失败说成「节点不存在」。
-14. **死代码与无读者字段净删**：引擎内手工加减的记录计数器（header 里的计数由索引现算，Open 时那次读入没有消费者）、`ListTopicsL2` 的 mode 3、`MemHopConfig.Validate`、`L2MetaIndex.Len`、L3 的 `Node.Importance`/`Edge.Weight`/`Edge.Label`（无写入路径或只写常量、不进公开 DTO）、core 侧与 `llmops.L1Sample` 同形的 `DistillSample`（改为恒等别名，与 `EmotionScore`/`MBTIScore` 同一先例）。**磁盘格式与 `FormatVersion` 一律不动**：旧文件里多出的 JSON 键本来就被解码跳过。
+14. **死代码与无读者字段净删**：引擎内手工加减的记录计数器（header 里的计数由索引现算，Open 时那次读入没有消费者）、`ListTopicsL2` 里按 id 读单个话题的那个模式取值、`MemHopConfig.Validate`、`L2MetaIndex.Len`、L3 的 `Node.Importance`/`Edge.Weight`/`Edge.Label`（无写入路径或只写常量、不进公开 DTO）、core 侧与 `llmops.L1Sample` 同形的 `DistillSample`（改为恒等别名，与 `EmotionScore`/`MBTIScore` 同一先例）。**磁盘格式与 `FormatVersion` 一律不动**：旧文件里多出的 JSON 键本来就被解码跳过。
 15. **公开面收敛（本轮的 breaking 部分）**：
     - **话题不再存子话题清单**：`TopicSlot.ChildrenIDs` 连宿主可见的 `children_ids` 键一起删除。引擎内没有任何一处遍历它——子树闭包与 `child_count` 都由子话题自己的 `parent_id` 现算——它只贡献了删除时的一次修剪步、缓存里多镜像的一个字段，以及「与 `parent_id` 说法不一致」的可能。随它删除 `scene.PruneParentChild` 与失去唯一调用者的 `common.RemoveOnce`。
-    - **画像写入换 `api.ProfileInput`**：`Open`/`SubAgent`/`UpdateL0` 的入参只含宿主四项（`Name`/`Role`/`Personality`/`Preferences`）。库自有的 `EmotionState`/`MBTI`/`AgentType`/`UpdatedAtMs` 从「传了不采信」变成没有位置可传；读回形状仍是全量。
+    - **画像写入换 `api.ProfileInput`**：`Open`/`SubAgent`/`UpdateL0` 的入参只含宿主四项（`Name`/`Role`/`Personality`/`Preferences`）。库自有的 `EmotionState`/`MBTI`/`AgentType`/`UpdatedAtMs` 从「传了不采信」变成没有位置可传；读回形状仍是全量。`Name` 是这三个入口共同的必填项（域就靠它被称呼），`UpdateL0` 收到空白名报 `ErrInvalidQuery` 而不是存下一个无从指认的画像（`TestUpdateL0RequiresName`）。
     - **两个纯 `len` 键删除**：`PlanNodeView.child_count`（同一视图里 `Children` 全量返回）与 `SceneContext.topic_count`（就是本次返回的条目数）。`SceneContextTopic.child_count` **保留**——它由 `parent_id` 数出来，宿主自行要重扫整份平铺列表。
     - **图槽的 `updated_at` 改为内容变化钟**：一次导入对真写过内容的每张图各推进一次（一图一次写，不是每条记录一次），只被读到而没被写过的图不动，skip 模式重导不再让图看起来刚变过。
 16. **文档与实现对齐**：`PlanTree.DoneCount/TotalCount` 的说明此前两处都写「数根」，实现 `CountForest` 是沿每棵树递归汇总（口径以 `TestPlanStateForestMultipleRoots` 为准）；L5 族那份「统一前言」文档写的是全仓零调用的函数、"内容只有一个写入口"被巩固摘要的写入打破——两处都按现状改写。
-17. **对消费方 breaking**：入口、句柄类型、方法集与磁盘格式版本同时变，加上第 15 项的三个 JSON 键消失与 `ProfileInput` 换型，宿主 meowagent 需在其自身的跟版轮次里适配。
+17. **对消费方 breaking**：入口、句柄类型、方法集与磁盘格式版本同时变，加上第 15 项的三个 JSON 键消失、`ProfileInput` 换型与 `UpdateL0` 开始拒空白名（此前会存下无名画像），宿主 meowagent 需在其自身的跟版轮次里适配。
 
 ## v1.6.2 — 2026-09-07 — 计划事件不再受词表约束（`EventType` 归宿主）
 

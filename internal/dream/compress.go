@@ -43,7 +43,7 @@ func CompressScenes(ctx context.Context, ac *domain.Context, scenes []uint64, re
 				MetaIdx: ac.L2Meta,
 				SceneID: sceneID,
 				Depth:   1,
-				Num:     2,
+				ByScene: true,
 			})
 			if err != nil {
 				countFailure()

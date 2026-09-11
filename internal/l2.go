@@ -216,7 +216,7 @@ func (db *DB) SceneContext(agentID uint64, sceneID string) (*SceneContext, error
 		MetaIdx: ac.L2Meta,
 		SceneID: sceneHash,
 		Depth:   2,
-		Num:     2,
+		ByScene: true,
 	})
 	if err != nil {
 		return nil, err

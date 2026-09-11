@@ -68,9 +68,9 @@ func TestCreateTurnTopicL2WritesSingleTrack(t *testing.T) {
 }
 
 // TestListTopicsL2FromL2Meta verifies listing consumes the L2MetaIndex cache
-// with identical semantics to the record scan: depth filtering (mode 1),
-// scene filtering (mode 2), UserTimestamp ascending sort, single-topic
-// lookup (mode 3) and full field fidelity.
+// with identical semantics to the record scan: depth filtering, scene
+// filtering when asked for one scene, UserTimestamp ascending sort and full
+// field fidelity.
 func TestListTopicsL2FromL2Meta(t *testing.T) {
 	engine, err := core.Create(filepath.Join(t.TempDir(), "list.meh"))
 	if err != nil {
@@ -82,7 +82,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	sceneB := core.NewSceneSlot(2, "b").SceneID
 	parentID := uint64(12)
 	// Timestamps written out of order on purpose; depth 3 must be filtered
-	// out by depth<=2 modes; full field set checks cache-vs-record fidelity.
+	// out of a depth<=2 listing; full field set checks cache-vs-record fidelity.
 	raw := []core.TopicSlot{
 		{ID: 11, SceneID: sceneA, Depth: 1, FusedKeywords: []string{"k1"},
 			UserTimestamp: 300},
@@ -104,18 +104,18 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		t.Fatalf("L2MetaIndex entries = %d, want %d", countL2Meta(l2Meta), len(raw))
 	}
 
-	q := func(mode uint8, sceneID uint64, depth uint8) ([]core.TopicSlot, error) {
+	q := func(byScene bool, sceneID uint64, depth uint8) ([]core.TopicSlot, error) {
 		return ListTopicsL2(TopicListQuery{
 			Engine:  engine,
 			MetaIdx: l2Meta,
 			SceneID: sceneID,
 			Depth:   depth,
-			Num:     mode,
+			ByScene: byScene,
 		})
 	}
 
-	t.Run("mode1_filters_depth_and_sorts_asc", func(t *testing.T) {
-		got, err := q(1, 0, 2)
+	t.Run("domain_wide_filters_depth_and_sorts_asc", func(t *testing.T) {
+		got, err := q(false, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -136,13 +136,13 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		}
 		for _, tp := range got {
 			if tp.Depth > 2 {
-				t.Errorf("depth-3 topic %d leaked into mode 1", tp.ID)
+				t.Errorf("depth-3 topic %d leaked into the domain-wide listing", tp.ID)
 			}
 		}
 	})
 
-	t.Run("mode2_filters_by_scene", func(t *testing.T) {
-		got, err := q(2, sceneA, 2)
+	t.Run("by_scene_filters", func(t *testing.T) {
+		got, err := q(true, sceneA, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -158,7 +158,7 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 
 	t.Run("fields_match_record_exactly", func(t *testing.T) {
-		got, err := q(1, 0, 2)
+		got, err := q(false, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -175,11 +175,11 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 	})
 
 	t.Run("nil_meta_falls_back_to_scan", func(t *testing.T) {
-		gotCache, err := q(1, 0, 2)
+		gotCache, err := q(false, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
-		gotScan, err := ListTopicsL2(TopicListQuery{Engine: engine, Depth: 2, Num: 1})
+		gotScan, err := ListTopicsL2(TopicListQuery{Engine: engine, Depth: 2})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -195,17 +195,17 @@ func TestListTopicsL2FromL2Meta(t *testing.T) {
 		tp := core.TopicSlot{ID: newID, SceneID: sceneB, Depth: 1,
 			FusedKeywords: []string{"k5"}, UserTimestamp: 50}
 		l2Meta.Update(index.L2MetaFromTopic(&tp))
-		got, err := q(1, 0, 2)
+		got, err := q(false, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// mode 1 depth<=2 sees 3 of the 4 raw topics; +1 after Update.
+		// A domain-wide depth<=2 listing sees 3 of the 4 raw topics; +1 after Update.
 		if len(got) != 4 || got[0].ID != newID {
 			t.Errorf("after Update: got %d topics, first=%d; want 4 topics, first=%d",
 				len(got), got[0].ID, newID)
 		}
 		l2Meta.Remove(newID)
-		got, err = q(1, 0, 2)
+		got, err = q(false, 0, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -302,5 +302,68 @@ func TestRenameTopicL2MissingTopic(t *testing.T) {
 	}
 	if _, err := core.ReadTopicSlot(engine, core.DefaultAgentID, missing); common.CodeOf(err) != common.ErrNotFound {
 		t.Fatalf("the refused rename must leave no record behind, got %v", err)
+	}
+}
+
+// Settling a turn twice is the replay path, and only the engine-owned half is
+// rewritten: the label the host gave that turn is not the engine's to erase, so
+// re-distilling the keywords must leave it in place.
+func TestCreateTurnTopicL2ReplayKeepsHostName(t *testing.T) {
+	engine := tempEngine(t)
+	const sceneID = uint64(7)
+	topicID := core.ComputeTurnTopicID(sceneID, 1)
+	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001) {
+		t.Fatal("first settle")
+	}
+	const hostName = "把登录链路讲清楚的那一轮"
+	if _, err := RenameTopicL2(engine, core.DefaultAgentID, topicID, hostName); err != nil {
+		t.Fatalf("rename: %v", err)
+	}
+	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"刷新", "token"}, 1000, 1100) {
+		t.Fatal("replay settle")
+	}
+	got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, topicID)
+	if err != nil {
+		t.Fatalf("read replayed topic: %v", err)
+	}
+	if got.Name != hostName {
+		t.Fatalf("replay un-named the turn the host named: %+v", got)
+	}
+	if !slices.Equal(got.FusedKeywords, []string{"刷新", "token"}) {
+		t.Fatalf("replay must rewrite the keyword track, got %v", got.FusedKeywords)
+	}
+}
+
+// A group member the listing names but the payload will not decode is a read
+// failure, not a member that went away. The parent summary is already on disk
+// when this runs, so sinking the rest would leave the scene showing both the
+// group's summary and that member's originals — the whole sink has to stop.
+func TestCompressTopicsL2RefusesUnreadableMember(t *testing.T) {
+	engine := tempEngine(t)
+	const sceneID = uint64(7)
+	readable := core.TopicSlot{ID: 21, SceneID: sceneID, Depth: 1,
+		FusedKeywords: []string{"k1"}, UserTimestamp: 100}
+	corrupt := core.TopicSlot{ID: 22, SceneID: sceneID, Depth: 1,
+		FusedKeywords: []string{"k2"}, UserTimestamp: 200}
+	for _, tp := range []core.TopicSlot{readable, corrupt} {
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, tp.ID, &tp); err != nil {
+			t.Fatalf("write topic %d: %v", tp.ID, err)
+		}
+	}
+	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, corrupt.ID,
+		[]byte(`{"id":`)); err != nil {
+		t.Fatalf("replace the payload with an undecodable one: %v", err)
+	}
+
+	err := CompressTopicsL2(engine, core.DefaultAgentID, []uint64{readable.ID, corrupt.ID}, 99)
+	if common.CodeOf(err) != common.ErrIO {
+		t.Fatalf("want ErrIO for an unreadable member, got %v", err)
+	}
+	got, rerr := core.ReadTopicSlot(engine, core.DefaultAgentID, readable.ID)
+	if rerr != nil {
+		t.Fatalf("read the untouched sibling: %v", rerr)
+	}
+	if got.Depth != 1 || got.ParentID != nil {
+		t.Fatalf("a refused sink must move nothing, got %+v", got)
 	}
 }

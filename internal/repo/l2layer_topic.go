@@ -15,20 +15,21 @@ import (
 )
 
 // TopicListQuery carries ListTopicsL2 inputs. MetaIdx is the L2MetaIndex
-// cache: modes 1/2 rebuild candidates from it instead of unmarshalling
+// cache: when set, candidates are rebuilt from it instead of unmarshalling
 // every topic record; a nil MetaIdx falls back to the full record scan
-// with identical semantics.
+// with identical semantics. ByScene restricts the listing to SceneID; unset
+// lists the whole domain.
 type TopicListQuery struct {
 	Engine  *core.StorageEngine
 	AgentID uint64
 	MetaIdx *index.L2MetaIndex
 	SceneID uint64
 	Depth   uint8
-	Num     uint8
+	ByScene bool
 }
 
-// ListTopicsL2 lists topics by mode: 1 = all topics up to depth, 2 = same but
-// restricted to sceneID. depth is clamped to [1, MaxDepth]; results sorted by
+// ListTopicsL2 lists the topics of one scene (ByScene) or of the whole domain,
+// up to depth. depth is clamped to [1, MaxDepth]; results sorted by
 // UserTimestamp.
 func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 	depth := q.Depth
@@ -43,7 +44,7 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 			if meta.Depth > depth {
 				continue
 			}
-			if q.Num == 2 && meta.SceneID != q.SceneID {
+			if q.ByScene && meta.SceneID != q.SceneID {
 				continue
 			}
 			out = append(out, meta.ToTopicSlot())
@@ -53,7 +54,7 @@ func ListTopicsL2(q TopicListQuery) ([]core.TopicSlot, error) {
 			if topic.Depth > depth {
 				continue
 			}
-			if q.Num == 2 && topic.SceneID != q.SceneID {
+			if q.ByScene && topic.SceneID != q.SceneID {
 				continue
 			}
 			out = append(out, topic)
@@ -90,7 +91,10 @@ func RenameTopicL2(engine *core.StorageEngine, agentID uint64, topicID uint64, n
 }
 
 // CreateTurnTopicL2 writes one turn topic (depth 1) under sceneHash with its
-// single keyword track and both message timestamps.
+// single keyword track and both message timestamps. It is also the replay path:
+// settling a topic id that already holds a topic rewrites the engine-owned half,
+// so the host's own label is read off the stored record and carried forward —
+// otherwise re-settling the turn it was named in would silently unname it.
 func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, topicID uint64, keywords []string, userTS, agentTS int64) bool {
 	topic := core.TopicSlot{
 		ID:             topicID,
@@ -99,6 +103,9 @@ func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, to
 		FusedKeywords:  keywords,
 		UserTimestamp:  userTS,
 		AgentTimestamp: agentTS,
+	}
+	if stored, err := core.ReadTopicLenient(engine, agentID, topicID); err == nil && stored != nil {
+		topic.Name = stored.Name
 	}
 	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic) == nil
 }

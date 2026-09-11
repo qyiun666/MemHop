@@ -6,6 +6,7 @@
 package internal
 
 import (
+	"strings"
 	"time"
 
 	"github.com/qyiun666/MemHop/internal/common"
@@ -33,7 +34,9 @@ func (db *DB) GetL0(agentID uint64) (*core.ProfileSlot, error) {
 }
 
 // UpdateL0 writes the host-owned half of the profile (Name/Role/Personality/
-// Preferences). The three fields the library owns are inherited from the stored
+// Preferences). Name is required here as it is at the two creation entries: a
+// domain whose profile lost its name cannot be named back by anything that reads
+// the profile. The three fields the library owns are inherited from the stored
 // record: EmotionState and MBTI, which Dream evolves, and AgentType, stamped
 // when the domain was created — so a host editing its profile never wipes the
 // distilled half and never moves its domain between primary and sub.
@@ -47,6 +50,9 @@ func (db *DB) UpdateL0(agentID uint64, slot *core.ProfileSlot) error {
 	defer ac.Mu.Unlock()
 	if slot == nil {
 		return common.NewError(common.ErrInvalidQuery, "UpdateL0: slot is required")
+	}
+	if strings.TrimSpace(slot.Name) == "" {
+		return common.NewError(common.ErrInvalidQuery, "UpdateL0: profile Name is required")
 	}
 	cur, err := repo.GetProfileL0(db.engine, agentID)
 	if err != nil {

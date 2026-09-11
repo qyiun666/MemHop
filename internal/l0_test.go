@@ -85,3 +85,28 @@ func TestUnreadableProfileIsNotAbsentProfile(t *testing.T) {
 		t.Fatalf("an aborted UpdateL0 must leave no trace, got %v", err)
 	}
 }
+
+// All three entries that write a profile require a name, because the name is how
+// a domain is addressed at all. UpdateL0 is the one that can clear it, so it
+// refuses a blank the way Open and SubAgent do rather than storing an
+// unaddressable profile.
+func TestUpdateL0RequiresName(t *testing.T) {
+	db := newTestDB(t, newTestEngine(t))
+	if err := db.UpdateL0(core.DefaultAgentID, &core.ProfileSlot{
+		Name: "keeper", Personality: "steady",
+	}); err != nil {
+		t.Fatalf("seed profile: %v", err)
+	}
+	if err := db.UpdateL0(core.DefaultAgentID, &core.ProfileSlot{
+		Name: "   ", Personality: "nameless",
+	}); common.CodeOf(err) != common.ErrInvalidQuery {
+		t.Fatalf("want ErrInvalidQuery for a blank name, got %v", err)
+	}
+	got, err := db.GetL0(core.DefaultAgentID)
+	if err != nil {
+		t.Fatalf("read profile: %v", err)
+	}
+	if got.Name != "keeper" || got.Personality != "steady" {
+		t.Fatalf("the refused edit must have written nothing, got %+v", got)
+	}
+}
