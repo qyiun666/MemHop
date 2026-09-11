@@ -100,3 +100,65 @@ func TestApplyGroupsRejectsOverlappingGroups(t *testing.T) {
 		t.Fatalf("the refused group left a fused parent behind: %+v err=%v", refused, err)
 	}
 }
+
+// Members can be disjoint and still collide: the parent id is the group's
+// timestamp bounds, and a host that stamps several turns with one timestamp gives
+// two groups the same bounds. Only the first may land — otherwise one parent record
+// ends up summarising one group while the other group's originals hang beneath it.
+func TestApplyGroupsRefusesCollidingParentID(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const sceneID = uint64(7)
+	turnIDs := []uint64{21, 22, 23, 24}
+	topics := make([]core.TopicSlot, 0, len(turnIDs))
+	for _, id := range turnIDs {
+		topic := core.TopicSlot{
+			ID: id, SceneID: sceneID, Depth: 1,
+			FusedKeywords: []string{"原文"}, UserTimestamp: 1000, AgentTimestamp: 2000,
+		}
+		if err := core.WriteTopicSlot(engine, core.DefaultAgentID, id, &topic); err != nil {
+			t.Fatalf("write topic %d: %v", id, err)
+		}
+		topics = append(topics, topic)
+	}
+	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
+
+	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
+		{SceneID: sceneID, NodeHashes: []uint64{21, 22}, MergedSummary: "第一组：登录链路"},
+		{SceneID: sceneID, NodeHashes: []uint64{23, 24}, MergedSummary: "第二组：完全不同的话题，但时间界一模一样"},
+	}}
+	applied, rejected := applyGroups(context.Background(), ac, sceneID, topics, out)
+	if applied != 1 || rejected != 1 {
+		t.Fatalf("the colliding group must be refused, got applied=%d rejected=%d", applied, rejected)
+	}
+
+	collisionParent := core.ComputeTopicID(sceneID, 1000, 2000)
+	parent, err := core.ReadTopicSlot(engine, core.DefaultAgentID, collisionParent)
+	if err != nil {
+		t.Fatalf("read the landed parent: %v", err)
+	}
+	if parent.Depth != 1 {
+		t.Fatalf("a fused parent belongs to the surface, got depth %d", parent.Depth)
+	}
+	for _, id := range []uint64{23, 24} {
+		got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, id)
+		if err != nil {
+			t.Fatalf("read %d: %v", id, err)
+		}
+		if got.Depth != 1 || got.ParentID != nil {
+			t.Fatalf("the refused group moved %d: depth=%d parent=%v", id, got.Depth, got.ParentID)
+		}
+	}
+	summary, err := core.ReadArchiveSlot(engine, core.DefaultAgentID,
+		core.HashContent(collisionParent, core.SeqUser))
+	if err != nil {
+		t.Fatalf("read the parent's summary slot: %v", err)
+	}
+	if summary.Content != "第一组：登录链路" {
+		t.Fatalf("the landed parent must still carry the first group's summary, got %q", summary.Content)
+	}
+}

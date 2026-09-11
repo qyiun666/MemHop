@@ -189,6 +189,10 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    分组，相邻两条线程可以都点名同一轮，而两组都应用等于把那一轮沉两次——第二次改父
    指向，第一个组的摘要于是管着一个不再应答它的子，那一轮也落到最深的读路径之下，
    所以后到的重叠组按「提出但未应用」计入 rejected（`TestApplyGroupsRejectsOverlappingGroups`）。
+   父话题 id 就是组的时间界派生的，成员互斥也挡不住两个不相交的组撞出同一个 id——
+   宿主打时间戳粗到几轮共一时很容易发生——所以父 id 已被一个话题占用时本组同样拒（落在
+   它写任何记录之前，无回滚），撞上一个不是话题的记录也拒而不覆写（一个 id 只对应一种
+   记录）（`TestApplyGroupsRefusesCollidingParentID`）。
    下沉这一步本身就是全有或全无：
    `repo.CompressTopicsL2` 把改写攒到最后一次批写，成员读不动（`ErrNotFound`
    以外的任何错误，或索引点名却不是话题记录）就整组不动、把错误交回上面回滚，

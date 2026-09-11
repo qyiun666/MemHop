@@ -146,6 +146,21 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 	if strings.TrimSpace(g.MergedSummary) == "" {
 		return common.NewError(common.ErrLLM, "dream: merge group proposed an empty merged_summary", nil)
 	}
+	// The parent id is the group's timestamp bounds, so two disjoint groups whose
+	// members share those bounds hash to the same one — a host that stamps a batch
+	// of turns with one timestamp makes that likely. Landing the second would
+	// re-scope a parent over a different set of children: the summary then
+	// describes one group while the other's originals hide under it.
+	switch stored, err := core.ReadTopicLenient(ac.Engine, ac.ID, parentID); {
+	case err != nil && common.CodeOf(err) != common.ErrNotFound:
+		return common.NewError(common.ErrIO, "dream: read the parent id this group would create", err)
+	case err != nil:
+		// Nothing stored: the ordinary case, this group creates the parent.
+	case stored == nil:
+		return common.NewError(common.ErrIO, "dream: the parent id this group would create already names a record that is not a topic", nil)
+	default:
+		return common.NewError(common.ErrLLM, "dream: merge group's bounds collide with an existing topic", nil)
+	}
 	// The fused group's summary is the parent topic's own utterance: it occupies
 	// the slot a turn's user side would, and no reference list points at it.
 	if err := repo.AppendArchiveL4(ac.Engine, ac.ID, ac.L4, &core.ArchiveSlot{

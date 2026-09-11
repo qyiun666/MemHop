@@ -28,7 +28,7 @@ README 的版本表与 git log。
 17. **对消费方 breaking**：入口、句柄类型、方法集与磁盘格式版本同时变，加上第 15 项的三个 JSON 键消失、`ProfileInput` 换型与 `UpdateL0` 开始拒空白名（此前会存下无名画像），宿主 meowagent 需在其自身的跟版轮次里适配。
 18. **审查轮补的读面三处**：L3 的三份列举此前直接交出哈希表扫描的顺序，同一个调用两次可以给出两个顺序，`QueryL3Nodes` 的 `Limit` 因此落在任意子集上——现在节点、边、图槽都按 id 升序，`Limit` 是这条确定顺序的前 N 个（`TestL3ReadsAreOrderStable`）；`QueryL3Subgraph` 此前把「BFS 走到却读不动」的节点静默跳过、交回一张小一号的图，而那个节点是某条边点名的成员，现在如实上报读失败（`TestQueryL3SubgraphReportsUnreadableNode`）；`SearchL4` 的话题过滤只做 hex 解析、不拒保留的全零键，一个没拿到轮次键的查询会收到空清单、与「这一轮真没内容」分不清，现在与写侧同口径拒绝（`TestSearchL4RefusesReservedZeroTopic`）。
 19. **审查轮补的记忆质量四处**（这一轮问的是「一轮记忆写进去之后还回不回得来」，不是接口能不能调）：
-    - **一个场景落地的融合组成员互斥**：模型按对话线程分组，相邻两条线程可以都点名同一轮，而两组都应用等于把那一轮沉两次——第二次改父指向，第一个组的摘要于是管着一个不再应答它的子，那一轮也落到最深的读路径之下。现在组按提出顺序应用，点名已落地成员的组计入「提出但未应用」（`TestApplyGroupsRejectsOverlappingGroups`）。
+    - **一个场景落地的融合组成员互斥**：模型按对话线程分组，相邻两条线程可以都点名同一轮，而两组都应用等于把那一轮沉两次——第二次改父指向，第一个组的摘要于是管着一个不再应答它的子，那一轮也落到最深的读路径之下。现在组按提出顺序应用，点名已落地成员的组计入「提出但未应用」（`TestApplyGroupsRejectsOverlappingGroups`）。同一保证的下半句是**父 id 未被占用**：父话题 id 由组的时间界派生，两个成员互斥的组照样可能算出同一个（宿主打时间戳粗到几轮共一时很容易），落第二个就是让一份摘要描述一组、另一组的原文藏在它下面——父 id 已被一个话题占用、或已被一个不是话题的记录占用，本组都拒，且拒在写任何记录之前（`TestApplyGroupsRefusesCollidingParentID`）。
     - **重放一轮不再把已沉入组的轮次拉回 surface**：`depth` 与 `parent_id` 连同宿主的 `name` 一起从存量记录带过来，否则第二次结算会让那一轮的原文与取代它的那份组摘要并排出现、组还少一个子；存量记录读不回时这次沉淀**拒绝**而不是猜一个位置（`TestCreateTurnTopicL2ReplayKeepsSunkPosition`）。
     - **衰减级联不再把读不动的边说成「已剪好」**：`removeNodeFromEdge` 此前把任何读失败都返回成「没删、也没错」，于是一个节点继续指向一张没人剪过的边；现在与它的对向函数同一口径（只有 `ErrNotFound` 算已消失，其余上报），两处手写的「从切片里摘掉一个 id 并记住有没有摘到」换成 `slices.DeleteFunc`（`TestRemoveNodeFromEdgeReportsUnreadableEdge`）。
     - **话题列举给出确定顺序**：排序键是 (UserTimestamp, Depth)，而融合父与它吞下的首轮可以在两个键上同时打平——现在以记录 id 收尾，同一个场景两次读给出同一个顺序（`TestListTopicsL2BreaksTiesOnID`）。
