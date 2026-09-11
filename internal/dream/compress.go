@@ -180,9 +180,9 @@ func applyOneGroup(ctx context.Context, ac *domain.Context, sceneID uint64, g ll
 		return common.NewError(common.ErrLLM, "dream: extract keywords from merged summary", err)
 	}
 
-	if !repo.CreateFusedTopicL2(ac.Engine, ac.ID, sceneID, keywords, minTS, maxTS) {
+	if err := repo.CreateFusedTopicL2(ac.Engine, ac.ID, sceneID, keywords, minTS, maxTS); err != nil {
 		discardFusedGroup(ac, parentID)
-		return common.NewError(common.ErrIO, "dream: create fused topic", nil)
+		return common.NewError(common.CodeOf(err), "dream: create fused topic", err)
 	}
 	if err := repo.CompressTopicsL2(ac.Engine, ac.ID, g.NodeHashes, parentID); err != nil {
 		discardFusedGroup(ac, parentID)
@@ -207,11 +207,16 @@ func discardFusedGroup(ac *domain.Context, parentID uint64) {
 	}
 }
 
+// groupTimestamps returns the bounds a fused parent is keyed by. It refuses a group
+// whose members the engine cannot all see: the listing handed to the model is the
+// only source of these ids, so an id it invented or one that has since gone would
+// otherwise buy a summary over turns nobody counted — and a two-name group with one
+// resolvable member is a parent standing over a single child.
 func groupTimestamps(nodeHashes []uint64, byID map[uint64]core.TopicSlot) (minTS, maxTS int64, ok bool) {
 	for _, id := range nodeHashes {
 		t, found := byID[id]
 		if !found {
-			continue
+			return 0, 0, false
 		}
 		if !ok || t.UserTimestamp < minTS {
 			minTS = t.UserTimestamp

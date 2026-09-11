@@ -30,7 +30,7 @@ func tempEngine(t *testing.T) *core.StorageEngine {
 func mustCreateTopic(t *testing.T, engine *core.StorageEngine, sceneID uint64, userTS int64, kws []string) {
 	t.Helper()
 	id := core.ComputeTurnTopicID(sceneID, uint64(userTS))
-	if !repo.CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, id, kws, userTS, userTS+1) {
+	if err := repo.CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, id, kws, userTS, userTS+1); err != nil {
 		t.Fatalf("create topic %v under scene %s", kws, common.FormatHash(sceneID))
 	}
 }

@@ -48,8 +48,8 @@ func TestCreateTurnTopicL2WritesSingleTrack(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(7)
 	topicID := core.ComputeTurnTopicID(sceneID, 1001)
-	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID,
-		[]string{"登录", "JWT"}, 1000, 1001) {
+	if err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID,
+		[]string{"登录", "JWT"}, 1000, 1001); err != nil {
 		t.Fatal("create turn topic")
 	}
 	got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, topicID)
@@ -269,7 +269,7 @@ func TestRenameTopicL2KeepsTheRestOfTheRecord(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(7)
 	topicID := core.ComputeTurnTopicID(sceneID, 1)
-	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录", "JWT"}, 1000, 1001) {
+	if err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录", "JWT"}, 1000, 1001); err != nil {
 		t.Fatal("create turn topic")
 	}
 	const want = "决定把 L5 让给计划树的那一轮"
@@ -312,14 +312,14 @@ func TestCreateTurnTopicL2ReplayKeepsHostName(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(7)
 	topicID := core.ComputeTurnTopicID(sceneID, 1)
-	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001) {
+	if err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001); err != nil {
 		t.Fatal("first settle")
 	}
 	const hostName = "把登录链路讲清楚的那一轮"
 	if _, err := RenameTopicL2(engine, core.DefaultAgentID, topicID, hostName); err != nil {
 		t.Fatalf("rename: %v", err)
 	}
-	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"刷新", "token"}, 1000, 1100) {
+	if err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"刷新", "token"}, 1000, 1100); err != nil {
 		t.Fatal("replay settle")
 	}
 	got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, topicID)
@@ -343,13 +343,13 @@ func TestCreateTurnTopicL2ReplayKeepsSunkPosition(t *testing.T) {
 	const sceneID = uint64(7)
 	const parentID = uint64(555)
 	topicID := core.ComputeTurnTopicID(sceneID, 1)
-	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001) {
+	if err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001); err != nil {
 		t.Fatal("first settle")
 	}
 	if err := CompressTopicsL2(engine, core.DefaultAgentID, []uint64{topicID}, parentID); err != nil {
 		t.Fatalf("sink the turn: %v", err)
 	}
-	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"刷新", "token"}, 1000, 1100) {
+	if err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"刷新", "token"}, 1000, 1100); err != nil {
 		t.Fatal("replay settle")
 	}
 	got, err := core.ReadTopicSlot(engine, core.DefaultAgentID, topicID)
@@ -372,15 +372,15 @@ func TestCreateTurnTopicL2RefusesUndecodableRecord(t *testing.T) {
 	engine := tempEngine(t)
 	const sceneID = uint64(7)
 	topicID := core.ComputeTurnTopicID(sceneID, 1)
-	if !CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001) {
+	if err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"登录"}, 1000, 1001); err != nil {
 		t.Fatal("first settle")
 	}
 	if _, err := engine.WriteRecord(core.DefaultAgentID, core.RecL2Topic, topicID,
 		[]byte(`{"id":`)); err != nil {
 		t.Fatalf("replace the payload with an undecodable one: %v", err)
 	}
-	if CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"刷新"}, 1000, 1100) {
-		t.Fatal("a replay must refuse to place a turn whose stored record will not read")
+	if err := CreateTurnTopicL2(engine, core.DefaultAgentID, sceneID, topicID, []string{"刷新"}, 1000, 1100); common.CodeOf(err) != common.ErrDeserialization {
+		t.Fatalf("a replay must refuse to place a turn whose stored record will not read, and say why, got %v", err)
 	}
 	if _, err := core.ReadTopicLenient(engine, core.DefaultAgentID, topicID); common.CodeOf(err) != common.ErrDeserialization {
 		t.Fatalf("the read must report a decode failure by name, got %v", err)

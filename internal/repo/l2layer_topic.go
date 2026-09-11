@@ -107,7 +107,7 @@ func RenameTopicL2(engine *core.StorageEngine, agentID uint64, topicID uint64, n
 // the summary that replaced it. A stored record that cannot be read refuses the
 // settle: writing depth 1 over a position nobody knows would put a second version
 // of that turn on the read path.
-func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, topicID uint64, keywords []string, userTS, agentTS int64) bool {
+func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, topicID uint64, keywords []string, userTS, agentTS int64) error {
 	topic := core.TopicSlot{
 		ID:             topicID,
 		SceneID:        sceneHash,
@@ -121,21 +121,21 @@ func CreateTurnTopicL2(engine *core.StorageEngine, agentID uint64, sceneHash, to
 		// Nothing stored is this turn's first settle; a record that will not read
 		// back is a turn whose place in the tree nobody knows, and guessing it
 		// could put two versions of one turn on the read path.
-		return false
+		return err
 	}
 	if stored != nil {
 		topic.Name = stored.Name
 		topic.Depth = stored.Depth
 		topic.ParentID = stored.ParentID
 	}
-	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic) == nil
+	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic)
 }
 
 // CreateFusedTopicL2 creates a compressed topic (depth 1) whose Keywords are
 // the fusion of its children. The group's reconstructed text is an ordinary L4
 // archive under the parent's own id, so the topic needs no follow-up write.
 // The children are addressed by their own ParentID, never by a list here.
-func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint64, fusedKeywords []string, userTS, agentTS int64) bool {
+func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint64, fusedKeywords []string, userTS, agentTS int64) error {
 	topic := core.TopicSlot{
 		ID:             core.ComputeTopicID(sceneID, userTS, agentTS),
 		SceneID:        sceneID,
@@ -144,5 +144,5 @@ func CreateFusedTopicL2(engine *core.StorageEngine, agentID uint64, sceneID uint
 		AgentTimestamp: agentTS,
 		FusedKeywords:  fusedKeywords,
 	}
-	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic) == nil
+	return core.WriteTopicSlot(engine, agentID, topic.ID, &topic)
 }

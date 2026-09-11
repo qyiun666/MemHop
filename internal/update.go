@@ -70,9 +70,13 @@ func (db *DB) Update(agentID uint64, sceneID, topicID string) error {
 	if len(keywords) == 0 {
 		return common.NewError(common.ErrLLM, "turn distillation produced no keywords", nil)
 	}
-	if !repo.CreateTurnTopicL2(db.engine, agentID, parsedScene, parsedTopic, keywords,
-		slices.MinFunc(utterances, byCreatedAt).CreatedAt, slices.MaxFunc(utterances, byCreatedAt).CreatedAt) {
-		return common.NewError(common.ErrIO, "create turn topic", nil)
+	if err := repo.CreateTurnTopicL2(db.engine, agentID, parsedScene, parsedTopic, keywords,
+		slices.MinFunc(utterances, byCreatedAt).CreatedAt,
+		slices.MaxFunc(utterances, byCreatedAt).CreatedAt); err != nil {
+		// The settle is the last step of a turn: whatever stopped it — a stored
+		// record that will not read back or a write that failed — is the reason the
+		// host hears, with its own code.
+		return common.NewError(common.CodeOf(err), "create turn topic", err)
 	}
 	ac.SyncL2Meta(parsedTopic)
 	db.consolidateScene(ac, parsedScene)

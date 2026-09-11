@@ -215,3 +215,45 @@ func TestApplyGroupsRollsBackTheGroupWhenASinkRefuses(t *testing.T) {
 		t.Fatalf("a rejected group moves no member: depth=%d parent=%v", member.Depth, member.ParentID)
 	}
 }
+
+// A group the engine cannot see whole is not a group it may fuse. The listing handed
+// to the model is the only source of these ids, so a name it invented (or one whose
+// topic has since gone) would otherwise contribute nothing to the bounds the parent
+// is keyed by, and the sink step would drop it without a word: a summary of two
+// turns left standing over one.
+func TestApplyGroupsRefusesAGroupItCannotSeeWhole(t *testing.T) {
+	engine, err := core.Create(filepath.Join(t.TempDir(), "test.meh"))
+	if err != nil {
+		t.Fatalf("create engine: %v", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+
+	const sceneID = uint64(7)
+	seen := core.TopicSlot{
+		ID: 41, SceneID: sceneID, Depth: 1, FusedKeywords: []string{"原文"},
+		UserTimestamp: 1000, AgentTimestamp: 2001,
+	}
+	if err := core.WriteTopicSlot(engine, core.DefaultAgentID, 41, &seen); err != nil {
+		t.Fatalf("write topic: %v", err)
+	}
+	ac := domain.NewContext(core.DefaultAgentID, context.Background(), engine, anyKeywords{}, &config.MemHopDefaults{})
+
+	out := &llmops.ConsolidationOutput{L2Groups: []llmops.L2Group{
+		{SceneID: sceneID, NodeHashes: []uint64{41, 42}, MergedSummary: "两轮的内容，其中一轮引擎看不见"},
+	}}
+	applied, rejected := applyGroups(context.Background(), ac, sceneID, []core.TopicSlot{seen}, out)
+	if applied != 0 || rejected != 1 {
+		t.Fatalf("a group with an unseen member must be refused, got applied=%d rejected=%d", applied, rejected)
+	}
+	if stored, err := core.ReadTopicLenient(engine, core.DefaultAgentID,
+		core.ComputeTopicID(sceneID, 1000, 2001)); common.CodeOf(err) != common.ErrNotFound || stored != nil {
+		t.Fatalf("a refused group leaves no fused parent: %+v err=%v", stored, err)
+	}
+	member, err := core.ReadTopicSlot(engine, core.DefaultAgentID, 41)
+	if err != nil {
+		t.Fatalf("read the member: %v", err)
+	}
+	if member.Depth != 1 || member.ParentID != nil {
+		t.Fatalf("a refused group sinks nothing: depth=%d parent=%v", member.Depth, member.ParentID)
+	}
+}
