@@ -32,13 +32,21 @@ const (
 	l1EdgeMinSimilarity float32 = 0.15
 )
 
-// StructureStages runs stages 2 through 5 of the pipeline: the L2Meta
-// rebuild, L1 sync/edges/rebuild/decay, L0 distillation, then installs the
-// rebuilt cache into the agent context. Callers hold ac.Mu.
+// StructureStages runs stages 2 through 5 of the pipeline: rebuild the L2Meta
+// cache from the records and install it, run the L1 sync/edges/rebuild/decay
+// stages off that copy, then L0 distillation. Callers hold ac.Mu.
 func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, rep *core.DreamReport) error {
 	start := time.Now()
 	// Stage 2: rebuild the L2Meta cache in one scan of the agent domain.
 	newL2Meta := index.BuildL2MetaFromEngine(ac.Engine, agentID)
+	// Install it here rather than after the L1 stages: the rebuild reads the
+	// records as they now stand and every L1 stage works from the copy passed
+	// below, so nothing an L1 failure leaves behind makes this cache wrong.
+	// Installing late keeps the domain serving a cache from before a compression
+	// whose records are already on disk — its topic depths and child links then
+	// read stale until the next successful pass, while every stage that just ran
+	// used the fresh one.
+	ac.L2Meta = newL2Meta
 	decayParams := engram.DecayParams{
 		LambdaNode:             float64(lambdaNode),
 		LambdaEdge:             float64(lambdaEdge),
@@ -52,10 +60,6 @@ func StructureStages(ctx context.Context, ac *domain.Context, agentID uint64, re
 	if err := l1Stages(ctx, ac, agentID, newL2Meta, &decayParams, rep); err != nil {
 		return err
 	}
-	// Install the rebuilt cache as soon as the stages that produced it are
-	// done: L0 distillation only writes the profile and L1 emotions, so a
-	// failed LLM call there must not throw the whole rebuild away.
-	ac.L2Meta = newL2Meta
 
 	// Stage 5: L0 distillation (LLM emotion/MBTI, backfilled into L1).
 	start = time.Now()

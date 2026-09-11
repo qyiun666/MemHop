@@ -9,7 +9,7 @@
   名下 `Seq=SeqUser`、`Kind=KindUtterance`、`Role=RoleDream` 的一条 L4 内容，
   `RoleDream` 只由本包戳写；话题上没有引用清单可回填，任一步失败经
   `discardFusedGroup` 按话题键回滚整组。
-- `StructureStages`：L2Meta 重建 → L1 同步/建边/重建/衰减 → 装回缓存 → L0 蒸馏。
+- `StructureStages`：L2Meta 重建并即刻装回 → L1 同步/建边/重建/衰减（用装回那份）→ L0 蒸馏。
 - `DistillL0Stage`：L0 蒸馏，只被本包的 `StructureStages` 调用。
 - 阶段报告：`AppendStage`/`StageCancelled`/`stageStatus`。
 - L1 衰减与建边的调参常量随阶段在本包。
@@ -26,8 +26,10 @@
 
 ## 陷阱
 
-- `l2_compress` 全场景失败要上抛错误；新的 L2Meta 缓存只在 L1 阶段成功后装回——
-  L0 蒸馏只写画像与 L1 情绪，一次失败的 LLM 调用不该推翻整次重建。
+- `l2_compress` 全场景失败要上抛错误。L2Meta 的重建**一算出来就装回**，不等 L1 阶段：
+  L1 各阶段只写 L1 记录，一次 L1 失败不会让一份按当前 L2 记录算出的缓存失效；反过来
+  延后装回会让本域继续读到本次已沉下去的压缩之前的深度与子链。本包的压缩改写话题深度
+  时不带任何增量镜像步，这次整表重建就是它唯一的对账点。
 - 计划节点的清扫只带走它自己：节点按自己的 `UpdatedAt` aging，所以一棵过期树上
   绑着的新事件必须存活。
 - 在途豁免读的是节点时钟：`HasNonDone && LastActiveAt >= cutoff`，其中

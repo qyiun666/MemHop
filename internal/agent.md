@@ -55,6 +55,9 @@ internal/{domain,scene,turn,dream,graph,plan,content}
    `ResolveForRead`/`UpdateScene`）持调用方锁无锁读公共域记录，由引擎级
    互斥兜底。
 2. **缓存刷新序**：写记录帧后紧跟 `ac.SyncL2Meta`（**存储 -> l2meta**）。
+   唯一的例外是 Dream 的 L2 压缩：它改写话题的深度与父子链而不逐条 `SyncL2Meta`，
+   对账靠 `dream.StructureStages` 的整表重建——所以那份重建一算出来就要装回 `ac.L2Meta`，
+   不得被其后任何阶段的失败丢弃（L1 各阶段只写 L1 记录，丢不掉它的正确性）。
    **禁止在域锁内取 `db.agentsMu`**（锁序环：sweep 走 agentsMu -> ac.Mu），
    域内簿记（如 `lastDreamAt`）直接写 atomic 字段。
 3. **Dream 域化**：`RunDream` 全程持本域锁；后台触发经
