@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Superseded by: 2026-09-11-capability-surface-retirement.md
+
 ## Problem
 
 L5 能力卡有四型卡片级特判（mcp/skill/api/composite）外加卡片级 `Workflow` 字段：同一动作链存在两份真相源（卡 `Workflow` 与条目 `Config`），而宿主 meowagent 的执行路径只读 Config 里的 `tool` 键步骤、从不读 Workflow——四型特判与双真相源都是纯负重。导入面一次只能进一张卡，主流形态「一个插件包含多张 skill 卡」没有归宿；L5 又按 agent 域隔离存储，家族里每个子 agent 要重复导入同一批能力、互相看不见。

@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Superseded by: 2026-09-11-capability-surface-retirement.md
+
 ## Problem
 
 v1.6.0 建成的 L5 记录层（[统一卡 + 公共池 + plug/ 注入](2026-09-06-l5-uniform-card-shared-pool.md)）在同版本内被两轮收敛推到终局：内置说明书卡删除（[前一份档案](2026-09-06-remove-builtin-cards.md)）之后，池里存的**已经是 plug/ 文件的副本**。为维持「文件 + 库」双事实源同步，机制清单还在增长：`FileHash` 水位（包级幂等）、同字节重注入零写入、patch 幸存（宿主对状态与定义的修改存活到包内容真正变更）、draft→active→deprecated 状态补丁。每一条机制都不是能力本身，而是两个事实源对齐的代价；宿主侧（meowagent）为消费池还叠了 skip/遮蔽/保留名等补丁链。

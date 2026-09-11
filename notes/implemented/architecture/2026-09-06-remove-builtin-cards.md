@@ -2,6 +2,8 @@
 
 Status: implemented
 
+Superseded by: 2026-09-11-capability-surface-retirement.md
+
 ## Problem
 
 用户对 L5 的定位：能力目录——装「LLM 能用的东西，或者能识别的东西」，`plug/` 同理，对标主流 agent 把插件/skill 汇总进一个能力面的做法。对主流设计调研（Claude Code / OpenClaw 的 skill 渐进披露、MCP 工具面与 Tool Search、Manus 上下文工程、OpenAI function calling 实践）得到的共性结论：**能力面只装 LLM 可触发单元**（工具 schema / skill 文件 / 动作链）；「怎么做」的知识是 skill 文档、按需加载；库/API 自身的用法说明走文档检索通道（llms.txt / Context7 类），从不驻留能力池——没有任何主流框架把引擎自身方法的用法说明塞进能力面。
