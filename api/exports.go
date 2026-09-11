@@ -9,12 +9,6 @@ package api
 
 import "github.com/qyiun666/MemHop/internal"
 
-// ---- id surface ----
-
-// DefaultAgentID is the 16-hex id of the implicit single-tenant domain: pass
-// it to MultiAgentDB.Session to work in the default agent domain.
-const DefaultAgentID = "0000000000000000"
-
 // ---- agent domain identity ----
 
 // AgentTypePrimary marks the domain a file is opened on, so a file holds exactly

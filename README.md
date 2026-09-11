@@ -38,7 +38,7 @@ Built as the brain memory of [MeowAgent](https://github.com/meowagent/meowagent)
 - **Six-Layer Architecture** — L0 Profile → L1 Engram → L2 Context → L3 Knowledge → L4 Archive → L5 Plan, with Dream consolidation
 - **Scene-is-the-session memory loop** — one L2 scene = one host session. `Search` reads that scene's depth-1 topic set straight from the in-memory cache (zero LLM, zero embedding, no scoring) *and opens the turn*: it hands back the topic id the turn will live in. The host then records the turn itself — `AppendArchive` writes what was said and what happened, dialogue originals and operation events being L4 content that differs only by `Kind` — and `Update` closes the turn by distilling its utterances into that topic's keywords in exactly one LLM call. Everything a turn holds lives under that one id, and the task tree it opened is L5. The scene's `FusedKeywords` set *is* the context a host injects
 - **V2 Storage** — `.meh` format (`FormatVersion=0x0012`) with A/B dual headers, per-record CRC32 + torn-write truncation recovery, mmap zero-copy, snapshot/checkpoint. Record frames carry an 8-byte `agent_id` (26-byte header) and the engine indexes every record by `(agent, idHash)` domain. The L3 knowledge graph lives in the file-wide reserved shared domain, which holds nothing else. **Only `0x0012` opens** — files at `0x0011` or older are rejected, with no migration path: an older file's profiles carry no `agent_type`, so every domain in it decodes as the primary agent — not one wrong value somewhere but the same wrong value in every domain at once, against a rule that a file has exactly one
-- **Multi-Agent Domains** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents`: many agents share one `.meh` file with fully isolated per-agent domains (caches, Dream pipelines, domain locks); same-agent operations serialize, different agents run in parallel; idle domains reclaim memory on access cadence (`Defaults.AgentIdleTTLMs`) while their records stay on disk. Multi-agent is the only mode — every operation runs through a per-domain session. One exception (below): the L3 knowledge graph is file-wide shared
+- **Multi-Agent Domains** — `Open(path, llm, defaults, profile)` → a DB handle whose domains are reached as handles, never as ids: `Primary()` for the domain the file was opened on, `SubAgent(llm, profile)` for one created under it and addressed by its name. Many agents share one `.meh` file with fully isolated per-agent domains (caches, Dream pipelines, domain locks); same-agent operations serialize, different agents run in parallel; idle domains reclaim memory on access cadence (`Defaults.AgentIdleTTLMs`) while their records stay on disk. One exception (below): the L3 knowledge graph is file-wide shared
 - **L1 Scene Hypergraph** — Dream creates co-occurrence hyperedges between scenes whose keyword sets overlap (Jaccard ≥ `L1EdgeMinSimilarity`) and decays/prunes them over time; L1 is maintained by Dream for explicit graph queries and future association — reads never score or spread activation
 - **Dream Pipeline** — consolidation over L0–L2 plus retention on both content and plan: L2 compress → index rebuild → L1 nodes/hyperedges rebuild → L1 decay → L0 distill (emotion/MBTI), with `l4_prune` (drops a topic's content older than 7 days) and `l5_prune` (drops plan nodes older than 7 days, exempting a tree still in flight) on every pass; returns a per-stage `DreamReport`
 - **L3 Knowledge Graph** — multiple independent hypergraphs with node import carrying positional source refs and relation edges (an edge is its members plus its kind, so one node pair can hold several relations), graph deletion, keyword/type/id lookup that ANDs together, and BFS subgraph queries. The graph pool is **file-wide**: every agent domain of the file shares one L3 pool (project knowledge is imported once, visible to all), and the pool's lifetime is the file's, not any one domain's
@@ -61,27 +61,27 @@ import (
     memhop "github.com/qyiun666/MemHop/api"
 )
 
-dbm, err := memhop.OpenMulti(&memhop.MemHopConfig{
-    DBPath: "agent.meh", // the whole database; no server, no dimension to declare
-    LLM: memhop.LlmConfig{ // required, validated at Open (powers Update's distillation)
+db, err := memhop.Open(
+    "agent.meh", // the whole database; no server, no dimension to declare
+    memhop.LlmConfig{ // required, validated before the path is touched
         APIURL: "https://api.openai.com/v1",
         APIKey: os.Getenv("OPENAI_API_KEY"),
         Model:  "gpt-4o-mini",
     },
-    Defaults: memhop.DefaultMemHopDefaults,
-})
+    memhop.DefaultMemHopDefaults,
+    // Required for a file that is not there yet: opening one has to know whose
+    // memory it is. An existing file keeps the primary it already has.
+    &memhop.ProfileSlot{Name: "my-agent", Role: "assistant"},
+)
 if err != nil {
     log.Fatal(err)
 }
-defer dbm.Close()
+defer db.Close()
 
-// One .meh file carries isolated domains. CreateAgent returns a stable
-// 16-char hex ID; Session binds every call to that domain.
-agentID, err := dbm.CreateAgent("my-agent")
-if err != nil {
-    log.Fatal(err)
-}
-sess, err := dbm.Session(agentID)
+// One .meh file carries isolated domains, and they come back as handles rather
+// than as ids. Primary is the domain the file was opened on; SubAgent creates
+// (or returns) one addressed by name, optionally on its own LLM endpoint.
+sess, err := db.Primary()
 if err != nil {
     log.Fatal(err)
 }
@@ -140,7 +140,7 @@ report, err := sess.Dream(context.Background(), "")
 ```
 
 
-> **Concurrency contract.** Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*MultiAgentDB`, so the host needs no external queue. `*memhop.Session` carries no cross-domain state beyond its bound id. The file's exclusive lock still allows only one process per `.meh` file; `MultiAgentDB` exposes no locking API: the domain lock is the library's, and a host critical section needs its own.
+> **Concurrency contract.** Same-agent operations (Search / Update / Dream / write APIs) are serialized by the library's per-agent domain lock; different agents run in parallel on a `*DB`, so the host needs no external queue. `*memhop.Session` carries no cross-domain state beyond its bound domain. The file's exclusive lock still allows only one process per `.meh` file; `DB` exposes no locking API: the domain lock is the library's, and a host critical section needs its own.
 
 Prerequisites: Go 1.27+ and an OpenAI-compatible LLM endpoint (`Config.LLM` is required) — no embedding / vector service needed
 
@@ -156,7 +156,7 @@ Prerequisites: Go 1.27+ and an OpenAI-compatible LLM endpoint (`Config.LLM` is r
 | L4 Archive | `AppendArchive(topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodeSeq, Content, CreatedAt})` is the only way content enters a topic (`Seq: 0` allocates; naming a held slot rewrites it), and an event's `NodeSeq` has to name a step this turn created (`0` binds it to nothing). `SearchL4(q)` is the one read over both kinds: keyword (case-insensitive), time range, ids, topic, `Kind` (utterance / event), `NodeSeq` (one plan step **and every step under it**, which means nothing outside its turn; `0` leaves the condition unset) and content type are conditions, not modes — an unset `Kind` selects both; `Limit` keeps the newest matches |
 | Turn events (L4, kind `event`) | A turn's events are L4 content of kind `event` under the topic id Search issued for it (7-day auto-retention, no delete API); read them with `SearchL4(L4Query{TopicID, Kind: &KindEvent})`, append them with `AppendArchive`. A topic's first event is Seq 3, because slots 1 and 2 belong to its dialogue |
 | L5 Plan tree | `PlanCreate(topicID, title) → seq` · `PlanNodeAdd(topicID, parentSeq, title) → seq` · `PlanNodeUpdate(topicID, PlanStep{Seq, Status, Title, Summary})` · `PlanState(topicID)` — the tree is what L5 itself records: one node per record, addressed by the turn's topic id **plus a step ordinal the library hands out** (`1, 2, 3 …` inside that turn), so `PlanState(topic)` and `SearchL4{TopicID, Kind}` name one key and two stores, and `SearchL4{TopicID, NodeSeq}` reads back the work of one step and every step under it. A node exists only because something created it: a `parentSeq` naming a step the tree does not hold is refused rather than answered by growing one, and `PlanNodeUpdate` restates a step that is already there — `Status` every time (`in_progress` / `done` / `failed`, there is no "leave it" spelling), `Title`/`Summary` kept when left blank. A created step starts `in_progress`, so the model has no "planned but not started" state. A plan write stores no content: a step's events are L4 records the host appends itself (Go API only, not in the MCP tool set) |
-| DB handle | `OpenMulti` · `CreateAgent` · `ListAgents` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)` (defragmented copy; Go only) · `Close` · `IsClosed` · `api.DefaultAgentID` |
+| DB handle | `Open(path, llm, defaults, profile)` · `Primary()` · `SubAgent(llm, profile)` · `Checkpoint` · `CompactTo(newPath)` (defragmented copy; Go only) · `Close` · `IsClosed` |
 
 ## Architecture
 

@@ -93,13 +93,13 @@ internal/{domain,scene,turn,dream,graph,plan,content}
 - 只经 `internal/repo`（及 `repo/core` 导出的 Slot 读写）访问数据；
   **禁止**直接操作帧、文件头、快照结构。
 - `StorageEngine` 句柄由装配层 `config.go` 唯一持有：注入 `DB.engine`，并经
-  `domain.NewContext` 注入每个域；业务代码不得自行打开/关闭引擎。两个入口共用
-  `openEngine`（三态判定）与 `assemble`（装配）：`Open(cfg)` 无条件允许建文件，
-  `OpenDB(path, llm, defaults, primary)` 只在自己带了主域画像时才允许，且先校验
-  后建文件——被拒的打开不在宿主的路径上留任何东西。**建文件是带截断的**，所以
-  `openEngine` 只在 `errors.Is(err, os.ErrNotExist)` 时才走创建分支，其它 stat
-  失败一律上报；路径是目录时显式拒绝，否则 `core.Open` 会回一句误导的「文件太小
-  放不下双头」。
+  `domain.NewContext` 注入每个域；业务代码不得自行打开/关闭引擎。
+  **唯一入口是 `OpenDB(path, llm, defaults, primary)`**：先用 `openEngine` 做三态
+  判定（只在自己带了主域画像时才允许建文件），再 `assemble` 装配，最后按主域画像
+  在不在落定 a/b/e 三条规则。**先校验后建文件**——被拒的打开不在宿主的路径上留
+  任何东西。**建文件是带截断的**，所以 `openEngine` 只在
+  `errors.Is(err, os.ErrNotExist)` 时才走创建分支，其它 stat 失败一律上报；路径是
+  目录时显式拒绝，否则 `core.Open` 会回一句误导的「文件太小放不下双头」。
 - **域身份两个入口**：`Primary()` 返回零号域（一个文件恰好一个主域，无需扫描），
   `SubAgent(llm, profile)` 按 `profile.Name` 幂等建/取一个注册域并挂上它自己的
   LLM 端点。`SubAgent` 的顺序是硬约束：注册（`agentsMu`）→ 挂端点（`agentsMu`）

@@ -368,7 +368,7 @@ func TestAppendArchiveRefusesAndStoresNothing(t *testing.T) {
 func TestUpdateFailsLoudlyWhenTheLLMCannotExtract(t *testing.T) {
 	srv := garbageLLM(t)
 	t.Cleanup(srv.Close)
-	_, sess := openMultiSession(t, surfaceConfig(t, srv.URL))
+	_, sess := openSurfaceSession(t, srv.URL)
 	sr, err := sess.Search(SearchQuery{})
 	if err != nil {
 		t.Fatalf("Search: %v", err)

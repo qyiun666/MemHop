@@ -14,67 +14,71 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-func openMultiTestDB(t *testing.T, path string) *DB {
+func openPrimaryTestDB(t *testing.T, path string) *DB {
 	t.Helper()
-	cfg := &MemHopConfig{
-		DBPath:   path,
-		Defaults: DefaultMemHopDefaults,
-	}
-	db, err := Open(cfg)
+	db, err := OpenDB(path, testLLMConfig(), DefaultMemHopDefaults, primaryProfile("primary"))
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("OpenDB: %v", err)
 	}
 	return db
 }
 
-// TestAgentRegistryStableAcrossRestart CreateAgent hands out the same ID
-// for the same name after a restart (rebuilt from on-file registry
-// records), and different names never collide.
-func TestAgentRegistryStableAcrossRestart(t *testing.T) {
+// A name is a domain's address, so it resolves to the same domain after a
+// restart — the mapping is rebuilt from the on-file registry records — and two
+// names never land in one place. Ids no longer cross the boundary, so sameness is
+// shown by what the domain holds.
+func TestSubAgentNameResolvesToTheSameDomainAcrossRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "registry.meh")
-	db := openMultiTestDB(t, path)
-	alice, err := db.CreateAgent("alice")
+	llm := testLLMConfig()
+	db := openPrimaryTestDB(t, path)
+	alice, err := db.SubAgent(llm, core.ProfileSlot{Name: "alice", Role: "first"})
 	if err != nil {
-		t.Fatalf("CreateAgent alice: %v", err)
+		t.Fatalf("SubAgent alice: %v", err)
 	}
-	bob, err := db.CreateAgent("bob")
+	bob, err := db.SubAgent(llm, core.ProfileSlot{Name: "bob"})
 	if err != nil {
-		t.Fatalf("CreateAgent bob: %v", err)
+		t.Fatalf("SubAgent bob: %v", err)
 	}
-	if alice == bob || alice == core.DefaultAgentID || bob == core.DefaultAgentID {
-		t.Fatalf("agent IDs must be distinct and non-default: %d %d", alice, bob)
+	if err := alice.UpdateL0(&ProfileSlot{Name: "alice", Role: "edited"}); err != nil {
+		t.Fatalf("alice UpdateL0: %v", err)
 	}
-	if again, err := db.CreateAgent("alice"); err != nil || again != alice {
-		t.Fatalf("CreateAgent alice again: id=%d err=%v, want %d", again, err, alice)
+	if err := bob.UpdateL0(&ProfileSlot{Name: "bob", Role: "other"}); err != nil {
+		t.Fatalf("bob UpdateL0: %v", err)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	db2 := openMultiTestDB(t, path)
+	db2 := openPrimaryTestDB(t, path)
 	t.Cleanup(func() { _ = db2.Close() })
-	if again, err := db2.CreateAgent("alice"); err != nil || again != alice {
-		t.Fatalf("after restart CreateAgent alice: id=%d err=%v, want %d", again, err, alice)
-	}
-	agents, err := db2.ListAgents()
+	back, err := db2.SubAgent(llm, core.ProfileSlot{Name: "alice"})
 	if err != nil {
-		t.Fatalf("ListAgents: %v", err)
+		t.Fatalf("SubAgent alice after restart: %v", err)
 	}
-	if len(agents) != 2 {
-		t.Fatalf("ListAgents = %d agents, want 2", len(agents))
+	if got, err := back.GetL0(); err != nil || got.Role != "edited" {
+		t.Fatalf("the name did not resolve to the domain it did before: %+v err=%v", got, err)
+	}
+	// A name nobody registered is a fresh, empty domain rather than an error or
+	// somebody else's memory.
+	fresh, err := db2.SubAgent(llm, core.ProfileSlot{Name: "carol"})
+	if err != nil {
+		t.Fatalf("SubAgent carol: %v", err)
+	}
+	if got, err := fresh.GetL0(); err != nil || got.Name != "carol" || got.Role == "edited" {
+		t.Fatalf("carol did not get a domain of her own: %+v err=%v", got, err)
 	}
 }
 
 // TestAgentDomainIsolation two agents writing the same idHash into one
 // shared file never see each other's records.
 func TestAgentDomainIsolation(t *testing.T) {
-	db := openMultiTestDB(t, filepath.Join(t.TempDir(), "isolation.meh"))
+	db := openPrimaryTestDB(t, filepath.Join(t.TempDir(), "isolation.meh"))
 	t.Cleanup(func() { _ = db.Close() })
-	a, err := db.CreateAgent("iso-a")
+	a, err := db.ensureRegistered("iso-a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := db.CreateAgent("iso-b")
+	b, err := db.ensureRegistered("iso-b")
 	if err != nil {
 		t.Fatal(err)
 	}

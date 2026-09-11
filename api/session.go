@@ -11,10 +11,9 @@
 // AppendArchive (the host-driven loop), SceneContext, ListScenes, GetL0,
 // UpdateL0, ListL1, SearchL4, GetL3, ListL3, ImportL3, QueryL3Nodes,
 // QueryL3Subgraph, PlanCreate, PlanNodeAdd, PlanNodeUpdate, PlanState.
-// The assembly/admin face (7, plus all of
-// MultiAgentDB) is host code at session boundaries and management channels
-// only — never an LLM tool: UpdateScene, RenameTopic, MergeScenes, DeleteTopic,
-// DeleteScene, UpdateL3, DeleteL3.
+// The assembly/admin face (7) is host code at session boundaries and management
+// channels only — never an LLM tool: UpdateScene, RenameTopic, MergeScenes,
+// DeleteTopic, DeleteScene, UpdateL3, DeleteL3.
 
 package api
 

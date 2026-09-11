@@ -144,8 +144,14 @@ func TestOpenDBKeepsTheStoredPrimary(t *testing.T) {
 // A file that exists but holds no primary profile — one created by a path that
 // never settled it — needs the argument, and is refused without one.
 func TestOpenDBSeedsAnExistingFileWithNoPrimary(t *testing.T) {
+	// A file that exists and holds nothing: open the engine and close it again
+	// without settling a primary, which is the state a path that never seeded one
+	// leaves behind.
 	path := filepath.Join(t.TempDir(), "bare.meh")
-	bare := openMultiTestDB(t, path)
+	bare, err := openEngine(path, true)
+	if err != nil {
+		t.Fatalf("create the bare file: %v", err)
+	}
 	if err := bare.Close(); err != nil {
 		t.Fatalf("close the bare file: %v", err)
 	}

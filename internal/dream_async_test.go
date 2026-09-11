@@ -82,16 +82,13 @@ func TestTriggerSceneDreamSchedulesBackground(t *testing.T) {
 	t.Fatal("in-flight marker never cleared: the background Dream goroutine did not exit")
 }
 
-// TestOpenInitializesDreamState locks the Open() contract that background
-// Dream state is ready before the first Update consolidation trigger fires.
+// TestOpenInitializesDreamState locks the open contract that background Dream
+// state is ready before the first Update consolidation trigger fires.
 func TestOpenInitializesDreamState(t *testing.T) {
-	cfg := &MemHopConfig{
-		DBPath:   filepath.Join(t.TempDir(), "open.meh"),
-		Defaults: DefaultMemHopDefaults,
-	}
-	db, err := Open(cfg)
+	path := filepath.Join(t.TempDir(), "open.meh")
+	db, err := OpenDB(path, testLLMConfig(), DefaultMemHopDefaults, primaryProfile("primary"))
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("OpenDB: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if db.agents == nil {

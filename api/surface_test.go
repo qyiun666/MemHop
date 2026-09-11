@@ -1,10 +1,10 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Public API surface tests: exercise every exported Session /
-// MultiAgentDB method with valid and invalid parameters against a stub LLM
-// server, asserting request/response shapes and the numeric error-code
-// contract. These run without external services.
+// Public API surface tests: exercise every exported Session and DB method with
+// valid and invalid parameters against a stub LLM server, asserting
+// request/response shapes and the numeric error-code contract. These run without
+// external services.
 
 package api
 
@@ -47,45 +47,41 @@ func stubLLM() *httptest.Server {
 	}))
 }
 
-func surfaceConfig(t *testing.T, llmURL string) *MemHopConfig {
-	t.Helper()
-	return &internal.MemHopConfig{
-		DBPath:   filepath.Join(t.TempDir(), "surface.meh"),
-		LLM:      internal.LlmConfig{APIURL: llmURL, APIKey: "k", Model: "m"},
-		Defaults: internal.DefaultMemHopDefaults,
-	}
+// surfaceLLM is the stub endpoint configuration every surface scenario uses.
+func surfaceLLM(url string) LlmConfig {
+	return LlmConfig{APIURL: url, APIKey: "k", Model: "m"}
 }
 
-// openMultiSession opens the only supported mode (multi-agent) and binds a
-// session to a freshly registered tenant.
-func openMultiSession(t *testing.T, cfg *MemHopConfig) (*MultiAgentDB, *Session) {
+// surfaceProfile is the primary profile a fresh file is opened with.
+func surfaceProfile() *ProfileSlot {
+	return &ProfileSlot{Name: "surface-primary", Role: "surface fixture"}
+}
+
+// openSurfaceSession opens a database in a fresh temp dir and binds a session to
+// a sub-agent domain, which is how a host that wants an isolated domain does it.
+func openSurfaceSession(t *testing.T, llmURL string) (*DB, *Session) {
 	t.Helper()
-	m, err := OpenMulti(cfg)
+	m, err := Open(filepath.Join(t.TempDir(), "surface.meh"), surfaceLLM(llmURL),
+		DefaultMemHopDefaults, surfaceProfile())
 	if err != nil {
-		t.Fatalf("open multi: %v", err)
+		t.Fatalf("Open: %v", err)
 	}
-	id, err := m.CreateAgent("surface")
+	sess, err := m.SubAgent(surfaceLLM(llmURL), ProfileSlot{Name: "surface"})
 	if err != nil {
 		m.Close()
-		t.Fatalf("create agent: %v", err)
-	}
-	sess, err := m.Session(id)
-	if err != nil {
-		m.Close()
-		t.Fatalf("session: %v", err)
+		t.Fatalf("SubAgent: %v", err)
 	}
 	return m, sess
 }
 
-// openSurfaceDB opens the only supported mode (multi-agent) and binds a
-// session to a freshly registered tenant; the DB is closed via t.Cleanup so
-// the TempDir .meh file is released before removal (Windows unlink fails on
-// open handles).
+// openSurfaceDB opens a database and binds a session to a sub-agent domain; the
+// DB is closed via t.Cleanup so the TempDir .meh file is released before removal
+// (Windows unlink fails on open handles).
 func openSurfaceDB(t *testing.T) *Session {
 	t.Helper()
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
-	m, sess := openMultiSession(t, surfaceConfig(t, llm.URL))
+	m, sess := openSurfaceSession(t, llm.URL)
 	t.Cleanup(func() { _ = m.Close() })
 	return sess
 }
@@ -146,15 +142,17 @@ func TestSurfaceL0Profile(t *testing.T) {
 	}
 }
 
-// The distilled half of the profile is read-only on the host surface: a write
-// carrying emotion / MBTI values or its own timestamp cannot smuggle them in,
-// because Dream evolves the first two and the library stamps the last.
+// The library-owned half of the profile is read-only on the host surface: a
+// write carrying emotion / MBTI values, a domain identity or its own timestamp
+// cannot smuggle them in, because Dream evolves the first two, the domain's
+// identity was stamped when it was created, and the library stamps the last.
 func TestSurfaceL0DistilledHalfIsReadOnly(t *testing.T) {
 	db := openSurfaceDB(t)
 	if err := db.UpdateL0(&ProfileSlot{
 		Name:         "host",
 		EmotionState: internal.EmotionScore{Valence: 0.9},
 		MBTI:         internal.MBTIScore{Type: "SMUGGLED"},
+		AgentType:    AgentTypePrimary,
 		UpdatedAtMs:  12345,
 	}); err != nil {
 		t.Fatalf("UpdateL0: %v", err)
@@ -169,6 +167,11 @@ func TestSurfaceL0DistilledHalfIsReadOnly(t *testing.T) {
 	if got.EmotionState.Valence != 0 || got.MBTI.Type != "" {
 		t.Fatalf("caller-supplied distilled fields were written: %+v", got)
 	}
+	// This handle is bound to a sub-agent domain, so the smuggled identity must
+	// not have taken: a host write cannot move a domain between the two.
+	if got.AgentType != AgentTypeSub {
+		t.Fatalf("caller-supplied agent type was written: %+v", got)
+	}
 	if got.UpdatedAtMs == 12345 || got.UpdatedAtMs == 0 {
 		t.Fatalf("UpdatedAtMs must be stamped by the library, got %d", got.UpdatedAtMs)
 	}
@@ -179,7 +182,7 @@ func TestSurfaceL0DistilledHalfIsReadOnly(t *testing.T) {
 func TestSurfaceClosedContract(t *testing.T) {
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
-	m, db := openMultiSession(t, surfaceConfig(t, llm.URL))
+	m, db := openSurfaceSession(t, llm.URL)
 	if err := m.Close(); err != nil {
 		t.Fatalf("close: %v", err)
 	}
@@ -217,9 +220,16 @@ func TestSurfaceDreamEmptyDomain(t *testing.T) {
 	}
 }
 
-// An invalid config is rejected by Validate before anything is opened.
-func TestSurfaceOpenValidatesConfig(t *testing.T) {
-	if _, err := OpenMulti(&MemHopConfig{}); err == nil {
-		t.Fatal("OpenMulti with empty config must fail validation")
+// An unusable set of arguments is rejected before anything is opened.
+func TestSurfaceOpenValidatesArguments(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Open("", surfaceLLM("http://127.0.0.1:1"), DefaultMemHopDefaults, surfaceProfile()); err == nil {
+		t.Fatal("Open with an empty path must fail")
+	}
+	if _, err := Open(filepath.Join(dir, "a.meh"), LlmConfig{}, DefaultMemHopDefaults, surfaceProfile()); err == nil {
+		t.Fatal("Open with an unspecified endpoint must fail")
+	}
+	if _, err := Open(filepath.Join(dir, "b.meh"), surfaceLLM("http://127.0.0.1:1"), DefaultMemHopDefaults, nil); err == nil {
+		t.Fatal("Open on a file that is not there yet, with no primary profile, must fail")
 	}
 }

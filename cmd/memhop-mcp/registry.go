@@ -38,13 +38,14 @@ var primaryProfile = memhop.ProfileSlot{
 // tenantRegistry opens the shared DB and serves one MCP server per tenant bound
 // to that tenant's sub-agent domain.
 type tenantRegistry struct {
-	mu      sync.Mutex
-	base    memhop.MemHopConfig // LLM endpoint and tuning knobs; DBPath is the registry's
-	dbDir   string
-	allowed map[string]bool // empty means any valid tenant id
-	db      *memhop.DB
-	entries map[string]*mcp.Server
-	logger  *slog.Logger
+	mu       sync.Mutex
+	llm      memhop.LlmConfig
+	defaults memhop.MemHopDefaults
+	dbDir    string
+	allowed  map[string]bool // empty means any valid tenant id
+	db       *memhop.DB
+	entries  map[string]*mcp.Server
+	logger   *slog.Logger
 	// open is a small injection seam for offline tests; production always
 	// uses memhop.Open.
 	open func(path string, llm memhop.LlmConfig, defaults memhop.MemHopDefaults, profile *memhop.ProfileSlot) (*memhop.DB, error)
@@ -52,13 +53,14 @@ type tenantRegistry struct {
 
 // newRegistry builds a tenant registry. allowed is the tenant whitelist;
 // when empty, any valid tenant id creates its agent domain on first access.
-func newRegistry(base memhop.MemHopConfig, dbDir string, allowed []string, logger *slog.Logger) *tenantRegistry {
+func newRegistry(llm memhop.LlmConfig, defaults memhop.MemHopDefaults, dbDir string, allowed []string, logger *slog.Logger) *tenantRegistry {
 	r := &tenantRegistry{
-		base:    base,
-		dbDir:   dbDir,
-		entries: make(map[string]*mcp.Server),
-		logger:  logger,
-		open:    memhop.Open,
+		llm:      llm,
+		defaults: defaults,
+		dbDir:    dbDir,
+		entries:  make(map[string]*mcp.Server),
+		logger:   logger,
+		open:     memhop.Open,
 	}
 	if len(allowed) > 0 {
 		r.allowed = make(map[string]bool, len(allowed))
@@ -90,7 +92,7 @@ func (r *tenantRegistry) get(tenant string) (*mcp.Server, error) {
 	}
 	// The tenant name is the domain's address, so a reconnecting tenant lands on
 	// the domain it already had rather than minting a second one.
-	session, err := r.db.SubAgent(r.base.LLM, memhop.ProfileSlot{Name: tenant, Role: "MCP tenant"})
+	session, err := r.db.SubAgent(r.llm, memhop.ProfileSlot{Name: tenant, Role: "MCP tenant"})
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +136,7 @@ func (r *tenantRegistry) openShared() error {
 		return err
 	}
 	primary := primaryProfile
-	db, err := r.open(filepath.Join(r.dbDir, dbFileName), r.base.LLM, r.base.Defaults, &primary)
+	db, err := r.open(filepath.Join(r.dbDir, dbFileName), r.llm, r.defaults, &primary)
 	if err != nil {
 		return err
 	}

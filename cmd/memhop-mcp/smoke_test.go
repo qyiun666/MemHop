@@ -239,22 +239,22 @@ func TestSSETenantConcurrentFirstConnect(t *testing.T) {
 
 // ---- helpers ----
 
-// testBase returns the shared engine config for offline tests. LLM
-// credentials are test-only placeholders injected via environment
-// variables, mirroring how the server reads them in production.
-func testBase(t *testing.T) memhop.MemHopConfig {
+// testLLM returns the LLM endpoint for offline tests. Credentials are test-only
+// placeholders injected via environment variables, mirroring how the server reads
+// them in production.
+func testLLM(t *testing.T) memhop.LlmConfig {
 	t.Helper()
 	t.Setenv("MEMHOP_LLM_API_URL", "http://localhost:9999/v1")
 	t.Setenv("MEMHOP_LLM_API_KEY", "smoke-cred")
 	t.Setenv("MEMHOP_LLM_MODEL", "smoke-model")
 
-	base := memhop.MemHopConfig{}
-	base.LLM.APIURL = os.Getenv("MEMHOP_LLM_API_URL")
-	base.LLM.APIKey = os.Getenv("MEMHOP_LLM_API_KEY")
-	base.LLM.Model = os.Getenv("MEMHOP_LLM_MODEL")
-	base.LLM.TimeoutSecs = 30
-	base.LLM.MaxOutputTokens = 2048
-	return base
+	return memhop.LlmConfig{
+		APIURL:          os.Getenv("MEMHOP_LLM_API_URL"),
+		APIKey:          os.Getenv("MEMHOP_LLM_API_KEY"),
+		Model:           os.Getenv("MEMHOP_LLM_MODEL"),
+		TimeoutSecs:     30,
+		MaxOutputTokens: 2048,
+	}
 }
 
 // newTestServer boots an in-process SSE server over a temp db-dir.
@@ -266,15 +266,16 @@ func newTestServer(t *testing.T, tenants []string) (*httptest.Server, string) {
 // newTestServerWithDir boots an in-process SSE server over the given db-dir.
 func newTestServerWithDir(t *testing.T, dbDir string, tenants []string) (*httptest.Server, string) {
 	t.Helper()
-	return newTestServerOver(t, testBase(t), dbDir, tenants), dbDir
+	return newTestServerOver(t, testLLM(t), dbDir, tenants), dbDir
 }
 
-// newTestServerOver boots the in-process SSE server from a caller-supplied
-// base config, so a test can point the engine at a stub LLM.
-func newTestServerOver(t *testing.T, base memhop.MemHopConfig, dbDir string, tenants []string) *httptest.Server {
+// newTestServerOver boots the in-process SSE server from a caller-supplied LLM
+// endpoint, so a test can point the engine at a stub. The tuning knobs stay at
+// their zero value, which is what the server itself runs with.
+func newTestServerOver(t *testing.T, llm memhop.LlmConfig, dbDir string, tenants []string) *httptest.Server {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	reg := newRegistry(base, dbDir, tenants, logger)
+	reg := newRegistry(llm, memhop.MemHopDefaults{}, dbDir, tenants, logger)
 	srv := httptest.NewServer(newSSEHandler(reg))
 	t.Cleanup(func() {
 		srv.Close()
@@ -301,12 +302,12 @@ func stubLLMServer(t *testing.T) *httptest.Server {
 	return srv
 }
 
-// turnTestBase is testBase rewired to the stub LLM endpoint.
-func turnTestBase(t *testing.T) memhop.MemHopConfig {
+// turnTestLLM is testLLM rewired to the stub LLM endpoint.
+func turnTestLLM(t *testing.T) memhop.LlmConfig {
 	t.Helper()
-	base := testBase(t)
-	base.LLM.APIURL = stubLLMServer(t).URL + "/v1"
-	return base
+	llm := testLLM(t)
+	llm.APIURL = stubLLMServer(t).URL + "/v1"
+	return llm
 }
 
 // connectTenant opens an MCP session against /mcp/<tenant>.
@@ -365,7 +366,7 @@ func (e errTool) Error() string { return string(e) }
 // in depth: even if a tenant id reached the registry, the resolved path
 // must stay inside db-dir.
 func TestSSERegistryRejectsPathTraversal(t *testing.T) {
-	reg := newRegistry(testBase(t), t.TempDir(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	reg := newRegistry(testLLM(t), memhop.MemHopDefaults{}, t.TempDir(), nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for _, id := range []string{"..", ".", "a/b", "a\\b"} {
 		if _, err := reg.get(id); err == nil {
 			t.Errorf("tenant id %q should be rejected", id)
@@ -376,7 +377,7 @@ func TestSSERegistryRejectsPathTraversal(t *testing.T) {
 // TestSSECloseAllPersists checks that CloseAll persists every open tenant.
 func TestSSECloseAllPersists(t *testing.T) {
 	dbDir := t.TempDir()
-	reg := newRegistry(testBase(t), dbDir, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	reg := newRegistry(testLLM(t), memhop.MemHopDefaults{}, dbDir, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if _, err := reg.get("alice"); err != nil {
 		t.Fatalf("open alice: %v", err)
 	}
@@ -399,7 +400,7 @@ func TestSSECloseAllPersists(t *testing.T) {
 // records what the turn said and what it did under that one key, memhop_update
 // distills it, and the next read hands that turn back.
 func TestSSETurnFlow(t *testing.T) {
-	srv := newTestServerOver(t, turnTestBase(t), t.TempDir(), nil)
+	srv := newTestServerOver(t, turnTestLLM(t), t.TempDir(), nil)
 	alice := connectTenant(t, srv.URL, "alice")
 
 	opened, err := callClient(t, alice, "memhop_search", map[string]any{})

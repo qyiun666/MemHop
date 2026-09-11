@@ -12,12 +12,8 @@ import "github.com/qyiun666/MemHop/internal"
 // ---- config ----
 
 type (
-	// MemHopConfig configures a MemHop database; nested fields (LLM, Defaults)
-	// are assigned by field access, see DefaultMemHopDefaults. The LLM endpoint
-	// is the only external service the engine contacts — no embedding service.
-	MemHopConfig = internal.MemHopConfig
-	// LlmConfig holds LLM provider settings; exported so hosts can build
-	// MemHopConfig.LLM by literal instead of field-by-field assignment.
+	// LlmConfig holds LLM provider settings: the engine's only external
+	// service, with no embedding service and no dimension to declare.
 	LlmConfig = internal.LlmConfig
 	// MemHopDefaults holds the host-facing business knobs (consolidation
 	// thresholds and the idle-domain TTL); engine tuning constants are

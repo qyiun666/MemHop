@@ -173,10 +173,11 @@ func TestSubAgentHealsADomainLeftWithoutAProfile(t *testing.T) {
 	primarySrv, _ := countingLLMServer(t, turnKeywords)
 	db := openPrimaryOn(t, t.TempDir(), primarySrv.URL)
 
-	// Only the first half: a registry record, no profile.
-	id, err := db.CreateAgent("worker")
+	// Only the first half: a registry record, no profile. This is exactly where
+	// the two writes stop if the process dies between them.
+	id, err := db.ensureRegistered("worker")
 	if err != nil {
-		t.Fatalf("CreateAgent: %v", err)
+		t.Fatalf("ensureRegistered: %v", err)
 	}
 	if has, err := repo.HasProfileL0(db.engine, id); err != nil || has {
 		t.Fatalf("the half-created domain should hold no profile: has=%v err=%v", has, err)
@@ -216,11 +217,7 @@ func TestSubAgentRefusesAnUnusableName(t *testing.T) {
 	if _, err := db.SubAgent(sub, core.ProfileSlot{Name: string(long)}); err == nil {
 		t.Fatal("a name past the cap must be refused")
 	}
-	agents, err := db.ListAgents()
-	if err != nil {
-		t.Fatalf("ListAgents: %v", err)
-	}
-	if len(agents) != 0 {
-		t.Fatalf("a refused SubAgent left %d domains behind: %+v", len(agents), agents)
+	if listed := repo.ListAgentRegistry(db.engine); len(listed) != 0 {
+		t.Fatalf("a refused SubAgent left %d domains on disk: %+v", len(listed), listed)
 	}
 }

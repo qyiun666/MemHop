@@ -28,8 +28,8 @@ func TestLoadConfigRequired(t *testing.T) {
 	if cfg.Transport != "sse" {
 		t.Errorf("default transport = %q, want sse", cfg.Transport)
 	}
-	if cfg.Base.LLM.APIURL != "http://llm:9999/v1" || cfg.Base.LLM.APIKey != "test-key" || cfg.Base.LLM.Model != "test-model" {
-		t.Errorf("LLM config from env mismatch: %+v", cfg.Base.LLM)
+	if cfg.LLM.APIURL != "http://llm:9999/v1" || cfg.LLM.APIKey != "test-key" || cfg.LLM.Model != "test-model" {
+		t.Errorf("LLM config from env mismatch: %+v", cfg.LLM)
 	}
 	if len(cfg.Tenants) != 0 {
 		t.Errorf("tenants = %v, want empty", cfg.Tenants)
@@ -57,8 +57,8 @@ func TestLoadConfigFlagsWinOverEnv(t *testing.T) {
 	if len(cfg.Tenants) != 2 || cfg.Tenants[0] != "alice" || cfg.Tenants[1] != "bob" {
 		t.Errorf("tenants = %v, want [alice bob]", cfg.Tenants)
 	}
-	if cfg.Base.LLM.Model != "flag-model" {
-		t.Errorf("llm-model = %q, want flag-model (flag wins)", cfg.Base.LLM.Model)
+	if cfg.LLM.Model != "flag-model" {
+		t.Errorf("llm-model = %q, want flag-model (flag wins)", cfg.LLM.Model)
 	}
 }
 
@@ -70,8 +70,8 @@ func TestLoadConfigEnvInt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
-	if cfg.Base.LLM.TimeoutSecs != 60 || cfg.Base.LLM.MaxOutputTokens != 4096 {
-		t.Errorf("LLM env ints = %d/%d, want 60/4096", cfg.Base.LLM.TimeoutSecs, cfg.Base.LLM.MaxOutputTokens)
+	if cfg.LLM.TimeoutSecs != 60 || cfg.LLM.MaxOutputTokens != 4096 {
+		t.Errorf("LLM env ints = %d/%d, want 60/4096", cfg.LLM.TimeoutSecs, cfg.LLM.MaxOutputTokens)
 	}
 }
 

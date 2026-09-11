@@ -33,11 +33,11 @@ func newSharedL3DB(t *testing.T, llmURL string) (*DB, string) {
 
 func createPair(t *testing.T, db *DB) (alpha, beta uint64) {
 	t.Helper()
-	alpha, err := db.CreateAgent("alpha")
+	alpha, err := db.ensureRegistered("alpha")
 	if err != nil {
 		t.Fatal(err)
 	}
-	beta, err = db.CreateAgent("beta")
+	beta, err = db.ensureRegistered("beta")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,9 +90,10 @@ func TestSharedL3DomainIsReserved(t *testing.T) {
 	if _, err := db.ListL3(core.DefaultAgentID); err != nil {
 		t.Fatalf("a live caller must reach the pool: %v", err)
 	}
-	agents, err := db.ListAgents()
-	if err != nil || len(agents) != 0 {
-		t.Fatalf("ListAgents must not list the shared domain: %+v err %v", agents, err)
+	// The reserved shared domain is not a tenant: it carries no registry record,
+	// so nothing can address it as one.
+	if db.HasAgent(core.SharedPoolAgentID) {
+		t.Fatal("the shared pool domain must not be a registered agent")
 	}
 }
 

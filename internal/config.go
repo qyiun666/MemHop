@@ -132,19 +132,8 @@ func OpenDB(path string, llmCfg LlmConfig, defaults MemHopDefaults, primary *cor
 	return db, nil
 }
 
-// Open assembles a DB instance from a host config. Agent contexts are created
-// lazily on first access (contextFor), each rebuilding its caches from its own
-// domain's records.
-func Open(cfg *MemHopConfig) (*DB, error) {
-	engine, err := openEngine(cfg.DBPath, true)
-	if err != nil {
-		return nil, err
-	}
-	return assemble(engine, cfg), nil
-}
-
 // loadTenantRegistry rebuilds the tenant name maps from the on-file
-// registry records so CreateAgent reuses stable IDs across restarts.
+// registry records so ensureRegistered reuses stable IDs across restarts.
 func loadTenantRegistry(engine *core.StorageEngine) (idToName map[uint64]string, nameToID map[string]uint64) {
 	listed := repo.ListAgentRegistry(engine)
 	idToName = make(map[uint64]string, len(listed))

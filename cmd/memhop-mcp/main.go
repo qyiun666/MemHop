@@ -43,7 +43,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	reg := newRegistry(cfg.Base, cfg.DBDir, cfg.Tenants, logger)
+	reg := newRegistry(cfg.LLM, cfg.Defaults, cfg.DBDir, cfg.Tenants, logger)
 	// Open the shared database now: an unusable --db-dir or a half-specified LLM
 	// endpoint should stop the process here rather than answer the first request
 	// with a 500.

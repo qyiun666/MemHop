@@ -38,7 +38,7 @@ MemHop 是 **Agent 专用**记忆数据库：每个 Agent 绑定唯一的 `.meh`
 - **六层认知架构** — L0 画像 → L1 纠缠图 → L2 上下文 → L3 知识 → L4 归档 → L5 计划，配合 Dream 巩固管线
 - **场景即会话的记忆循环** — 一个 L2 场景 = 宿主的一个会话。`Search` 按场景 id 直取该会话的 depth-1 话题集（纯内存读，零 LLM、零 embedding），并**顺手开启本轮**：返回本轮要落进去的话题 id。随后由宿主自己记录这一轮——`AppendArchive` 写下说了什么与做了什么（对话原文与操作事件同为 L4 内容、只差一个 `Kind`），`Update` 再把这一轮的原文一次提炼成该话题的关键词收口。一轮拥有的东西全在这个 id 下，该轮开出的任务树才是 L5。话题的 `FusedKeywords` 集合就是宿主每轮注入的上下文
 - **V2 追加写入存储** — `.meh` 格式（`FormatVersion=0x0012`），A/B 双头 + 记录级 CRC32 + 撕裂尾帧截断恢复，mmap 零拷贝读取，快照/检查点。记录帧携带 8 字节 `agent_id`（26 字节帧头），引擎按 `(agent, idHash)` 域索引全部记录。L3 知识图记录驻留文件级保留公共域，该域不再承载别的东西。**仅认 `0x0012`**——`0x0011` 及更早的 `.meh` 数据文件 Open 时显式拒绝、无迁移路径：那批文件的画像上没有 `agent_type`，解码回来每个域都读作主 agent——错的不是某一个值而是每个域同时错，而当前规则要求一个文件恰好一个主
-- **多 Agent 域** — `OpenMulti` + `CreateAgent(name)` / `Session(agentID)` / `ListAgents`：多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（话题缓存、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。多 agent 是唯一模式——所有操作都经由按域绑定的会话执行。例外是 L3（见下）：知识图是文件级公共池
+- **多 Agent 域** — `Open(path, llm, defaults, profile)` 返回库句柄，域一律以句柄形式取、不以 id 取：`Primary()` 是文件被打开所依据的那个域，`SubAgent(llm, profile)` 是按名字建/取的子域。多个 agent 共享一个 `.meh` 文件，各自拥有完全隔离的域（话题缓存、Dream 管线、域级锁）；同 agent 串行、跨 agent 并行；空闲域按访问节奏回收内存（`Defaults.AgentIdleTTLMs`），记录仍在文件。例外是 L3（见下）：知识图是文件级公共池
 - **L1 场景超图** — Dream 在关键词集合重叠的场景间创建共现超边（Jaccard ≥ `L1EdgeMinSimilarity`）并按时间衰减剪枝；L1 由 Dream 维护，供显式图查询与后续关联消费——读取路径不打分、不扩散
 - **Dream 巩固管线** — 作用于 L0–L2，另对内容与计划树各做一次保留期清理：`l4_prune`（丢弃 7 天前的话题内容）与 `l5_prune`（丢弃 7 天前的计划节点，仍在途的树豁免）排在最前，随后 L2 压缩 → L2Meta 缓存重建 → L1 节点/超边重建 → L1 衰减 → L0 蒸馏（情绪/MBTI）；某场景 depth-1 话题数超过 `Defaults.SceneDreamTopicThreshold` 时由 `Update` 后台调度该场景巩固，返回逐阶段 `DreamReport`
 - **L3 知识图谱** — 多独立超图，节点导入支持位置引用（source_ref）与关系边（related；边的身份是「成员节点 + kind」，同一对节点可并存多种关系），整图删除，关键词/类型/ID 条件按 AND 组合，BFS 子图查询。图池是**文件级**的：文件内所有 agent 域共享一份 L3（项目知识导一次全家可见），公共池的寿命跟文件走、不跟任何单个域走
@@ -61,27 +61,27 @@ import (
     memhop "github.com/qyiun666/MemHop/api"
 )
 
-dbm, err := memhop.OpenMulti(&memhop.MemHopConfig{
-    DBPath: "agent.meh", // 整个数据库就是这一个文件；无需服务，也不声明维度
-    LLM: memhop.LlmConfig{ // 必填：Open 时校验（Update 的一轮提炼用它）
+db, err := memhop.Open(
+    "agent.meh", // 整个数据库就是这一个文件；无需服务，也不声明维度
+    memhop.LlmConfig{ // 必填：在碰文件系统之前就校验
         APIURL: "https://api.openai.com/v1",
         APIKey: os.Getenv("OPENAI_API_KEY"),
         Model:  "gpt-4o-mini",
     },
-    Defaults: memhop.DefaultMemHopDefaults,
-})
+    memhop.DefaultMemHopDefaults,
+    // 文件还不存在时必填：打开一个文件总得知道这是谁的记忆。已存在的文件
+    // 保留它自己那份主域画像，这个入参不被采纳。
+    &memhop.ProfileSlot{Name: "my-agent", Role: "assistant"},
+)
 if err != nil {
     log.Fatal(err)
 }
-defer dbm.Close()
+defer db.Close()
 
-// 一个 .meh 文件承载多个隔离域。CreateAgent 返回稳定的 16 位 hex ID；
-// Session 把每次调用绑定到该域。
-agentID, err := dbm.CreateAgent("my-agent")
-if err != nil {
-    log.Fatal(err)
-}
-sess, err := dbm.Session(agentID)
+// 一个 .meh 文件承载多个隔离域，而且域以句柄而不是 id 的形式交回。Primary
+// 是文件被打开所依据的那个域；SubAgent 按名字建/取一个子域，可选地给它
+// 挂自己的 LLM 端点。
+sess, err := db.Primary()
 if err != nil {
     log.Fatal(err)
 }
@@ -137,7 +137,7 @@ report, err := sess.Dream(context.Background(), "")
 
 
 
-> **并发契约。** 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*MultiAgentDB` 上并行，宿主无需自行排队。`*memhop.Session` 除绑定的域 ID 外不携带任何跨域状态。文件排他锁仍保证一个 `.meh` 文件只能被一个进程打开；`*MultiAgentDB` 不暴露任何锁接口——域锁是库的，宿主自己的临界区请自行加锁。
+> **并发契约。** 同一 agent 的操作（Search / Update / Dream / 写 API）由库内域级锁串行，跨 agent 在 `*DB` 上并行，宿主无需自行排队。`*memhop.Session` 除绑定的域外不携带任何跨域状态。文件排他锁仍保证一个 `.meh` 文件只能被一个进程打开；`*DB` 不暴露任何锁接口——域锁是库的，宿主自己的临界区请自行加锁。
 
 前置条件：Go 1.27+，OpenAI 兼容的 LLM 接口（`Config.LLM` 必填）；无需任何 embedding / 向量服务
 
@@ -153,7 +153,7 @@ report, err := sess.Dream(context.Background(), "")
 | L4 归档 | `AppendArchive(topicID, ArchiveSlot{Kind, Seq, Role, ContentType, EventType, NodeSeq, Content, CreatedAt})` 是一条记录进入话题的唯一途径（`Seq: 0` 由库分配；写一个已被占用的槽位就是覆写），事件的 `NodeSeq` 必须指向本轮计划里已创建的那一步（`0` 即不绑任何步骤）。`SearchL4(q)` 是唯一读取面，两类内容都在里面；关键词（忽略大小写）/ 时间段 / id / 话题 / `Kind`（原文 or 事件）/ `NodeSeq`（**某一步及其全部子步**归因的记录，步骤只在它那一轮内成立；`0` 即不加这条约束）/ 内容类型都是条件而不是模式，`Kind` 不填即两种都要，`Limit` 只留 Seq 最高的 N 条命中 |
 | 轮内事件（L4 的 `Kind=event`） | 一轮一个键：Search 为该轮开出的话题 id；事件本身住在 L4（`Kind=event`），7 天自动清理、无删除接口，读它用 `SearchL4(L4Query{TopicID, Kind: &KindEvent})`，写它用 `AppendArchive`。一个话题的首条事件是 `Seq=3`，因为槽位 1 与 2 属于对话 |
 | L5 计划树 | `PlanCreate(topicID, title) → seq` · `PlanNodeAdd(topicID, parentSeq, title) → seq` · `PlanNodeUpdate(topicID, PlanStep{Seq, Status, Title, Summary})` · `PlanState(topicID)` —— 计划树是 L5 唯一自己的记录：一节点一条，一个步骤由「开出它的那一轮 + 该轮内库顺序发号的序号」说清（`ParentSeq` 指它挂在谁下面，0 即根），所以 `PlanState(topic)` 与 `SearchL4{TopicID, Kind}` 是同一个键、两层存储，而 `SearchL4{TopicID, NodeSeq}` 能单独读回某一步及其全部子步做过的事。节点**只因被创建而存在**：`parentSeq` 指向树上没有的步骤是拒绝，而不是顺手补出一个父节点（因此打错一个序号不会长出第二棵树）。`PlanNodeUpdate` 只重述已在树上的那一步——`Status` 每次必须给（没有「保持不变」这种写法），`Title`/`Summary` 留空继承现值。新建的步骤就是 `in_progress`，模型里没有「已计划未开始」这一档；撤回一步没有接口，也不需要一个：手段就是不在此后的轮里再创建它。计划写面不落任何内容：一步的轨迹是宿主自己 append 的 L4 记录（仅 Go module 暴露，MCP 工具集未接入） |
-| DB 句柄 | `OpenMulti` · `CreateAgent` · `ListAgents` · `Session(id)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，仅 Go） · `Close` · `IsClosed` · `api.DefaultAgentID` |
+| DB 句柄 | `Open(path, llm, defaults, profile)` · `Primary()` · `SubAgent(llm, profile)` · `Checkpoint` · `CompactTo(newPath)`（写出整理后的副本，仅 Go） · `Close` · `IsClosed` |
 
 ## 架构
 

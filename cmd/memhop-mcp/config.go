@@ -29,9 +29,16 @@ type serverConfig struct {
 	// 2024-11-05 spec) or "streamable-http" (2025-03-26 spec, supported by
 	// dsh-mcp-client and other modern MCP clients).
 	Transport string
-	// Base is the shared engine configuration. DBPath is left empty here and
-	// filled once by the registry with <DBDir>/memhop.meh.
-	Base memhop.MemHopConfig
+	// LLM is the endpoint every tenant domain runs on. DBPath is not here: the
+	// registry resolves it to <DBDir>/memhop.meh.
+	LLM memhop.LlmConfig
+	// Defaults is the engine's tuning knobs. It stays at its zero value, which
+	// is what this server has always run with: no automatic consolidation
+	// trigger (SceneDreamTopicThreshold <= 0 disables it), a compress floor of
+	// zero, and no idle-domain reclaim. Whether it should instead run on
+	// memhop.DefaultMemHopDefaults is a behaviour change, not a facade one, so
+	// it is left as it is and called out here rather than changed in passing.
+	Defaults memhop.MemHopDefaults
 }
 
 // envOr returns the environment value when set, otherwise the fallback.
@@ -106,30 +113,33 @@ func parseFlags(args []string) (*flagValues, error) {
 	return v, nil
 }
 
-// buildBaseConfig assembles the shared engine config from flags plus the
-// MEMHOP_* environment (LLM credentials come from the environment only).
-func buildBaseConfig(v *flagValues) (memhop.MemHopConfig, error) {
-	var base memhop.MemHopConfig
+// buildBaseLLM assembles the LLM endpoint from flags plus the MEMHOP_*
+// environment (credentials come from the environment only). The endpoint is
+// validated here rather than left to Open, so a half-specified one stops the
+// process at startup instead of the first request.
+func buildBaseLLM(v *flagValues) (memhop.LlmConfig, error) {
 	llmTimeout, err := envInt("MEMHOP_LLM_TIMEOUT_SECS", 30)
 	if err != nil {
-		return base, err
+		return memhop.LlmConfig{}, err
 	}
 	llmMaxTokens, err := envInt("MEMHOP_LLM_MAX_OUTPUT_TOKENS", 8192)
 	if err != nil {
-		return base, err
+		return memhop.LlmConfig{}, err
 	}
-	// DBPath is filled by the registry with the shared <db-dir>/memhop.meh.
-	base.LLM.APIURL = envOr("MEMHOP_LLM_API_URL", "")
-	base.LLM.APIKey = os.Getenv("MEMHOP_LLM_API_KEY")
-	base.LLM.Model = firstNonEmpty(v.llmModel, os.Getenv("MEMHOP_LLM_MODEL"))
-	base.LLM.TimeoutSecs = llmTimeout
-	base.LLM.MaxOutputTokens = llmMaxTokens
-	// Field-level checks mirroring MemHopConfig.Validate minus DBPath
-	// (the registry fills the shared database path and runs the full Validate).
-	if base.LLM.APIURL == "" || base.LLM.APIKey == "" || base.LLM.Model == "" {
-		return base, fmt.Errorf("MEMHOP_LLM_API_URL, MEMHOP_LLM_API_KEY and MEMHOP_LLM_MODEL are required")
+	llm := memhop.LlmConfig{
+		APIURL:          envOr("MEMHOP_LLM_API_URL", ""),
+		APIKey:          os.Getenv("MEMHOP_LLM_API_KEY"),
+		Model:           firstNonEmpty(v.llmModel, os.Getenv("MEMHOP_LLM_MODEL")),
+		TimeoutSecs:     llmTimeout,
+		MaxOutputTokens: llmMaxTokens,
 	}
-	return base, nil
+	if err := llm.Validate(); err != nil {
+		// The rule is the library's; the actionable names are this binary's, so a
+		// misconfigured server says which environment variables to set.
+		return memhop.LlmConfig{}, fmt.Errorf(
+			"LLM endpoint is not configured: set MEMHOP_LLM_API_URL, MEMHOP_LLM_API_KEY and MEMHOP_LLM_MODEL: %w", err)
+	}
+	return llm, nil
 }
 
 // loadConfig parses flags and environment into a serverConfig.
@@ -138,7 +148,7 @@ func loadConfig(args []string) (*serverConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	base, err := buildBaseConfig(v)
+	base, err := buildBaseLLM(v)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +161,7 @@ func loadConfig(args []string) (*serverConfig, error) {
 		DBDir:     v.dbDir,
 		Tenants:   allowed,
 		Transport: v.transport,
-		Base:      base,
+		LLM:       base,
 	}, nil
 }
 

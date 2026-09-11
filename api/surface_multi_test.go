@@ -1,95 +1,14 @@
 // Copyright (c) 2026 qyiun666
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
-// Multi-agent DB and per-agent session surface tests.
+// Session surface tests: every exported method of the domain handle, exercised
+// against a stub LLM.
 
 package api
 
 import (
-	"context"
 	"testing"
-
-	"github.com/qyiun666/MemHop/internal"
-	"github.com/qyiun666/MemHop/internal/common"
 )
-
-// testAgentHex renders the deterministic 16-char hex agent id for s (the
-// same form the public Session surface accepts).
-func testAgentHex(s string) string {
-	return internal.FormatID(common.HashID(s))
-}
-
-func TestSurfaceMultiAgent(t *testing.T) {
-	llm := stubLLM()
-	t.Cleanup(llm.Close)
-	m, err := OpenMulti(surfaceConfig(t, llm.URL))
-	if err != nil {
-		t.Fatalf("openmulti: %v", err)
-	}
-	defer m.Close()
-
-	alice, err := m.CreateAgent("alice")
-	if err != nil {
-		t.Fatalf("create alice: %v", err)
-	}
-	bob, err := m.CreateAgent("bob")
-	if err != nil {
-		t.Fatalf("create bob: %v", err)
-	}
-	if alice == bob {
-		t.Fatal("distinct names must get distinct ids")
-	}
-	if !isHexID(alice) {
-		t.Fatalf("agent id render: %q", alice)
-	}
-	agents, err := m.ListAgents()
-	if err != nil || len(agents) < 2 {
-		t.Fatalf("list agents: %d err=%v", len(agents), err)
-	}
-	// Session for an unknown agent must be rejected.
-	if _, err := m.Session(testAgentHex("nobody")); CodeOf(err) != ErrAgentNotFound {
-		t.Fatalf("unknown session: want ErrAgentNotFound, got %v", err)
-	}
-
-	sess, err := m.Session(alice)
-	if err != nil {
-		t.Fatalf("session alice: %v", err)
-	}
-	res, err := sess.Search(SearchQuery{})
-	if err != nil {
-		t.Fatalf("alice search: %v", err)
-	}
-	if err := settleTurn(sess, res.Scene.SceneID, res.NewTopicID, "alice private memory", "alice reply"); err != nil {
-		t.Fatalf("alice update: %v", err)
-	}
-	// Cross-agent isolation: bob sees none of alice's scenes.
-	bobSess, _ := m.Session(bob)
-	bobScenes, err := bobSess.ListScenes("")
-	if err != nil {
-		t.Fatalf("bob list scenes: %v", err)
-	}
-	if len(bobScenes) != 0 {
-		t.Fatalf("bob must not see alice scenes, got %d", len(bobScenes))
-	}
-	aliceScenes, _ := sess.ListScenes("")
-	if len(aliceScenes) == 0 {
-		t.Fatal("alice must see her own scene")
-	}
-	// A domain with no scenes still answers a dream cleanly.
-	if rep, err := bobSess.Dream(context.Background(), ""); err != nil || rep == nil {
-		t.Fatalf("bob empty dream: rep=%v err=%v", rep, err)
-	}
-	// Multi-agent DB-level ops and hex id helpers.
-	if err := m.Checkpoint(); err != nil {
-		t.Fatalf("multi checkpoint: %v", err)
-	}
-	if m.IsClosed() {
-		t.Fatal("multi DB must be open before close")
-	}
-	if _, err := m.Session("zzzz"); CodeOf(err) != ErrInvalidQuery {
-		t.Fatalf("Session must reject non-hex ids, got %v", err)
-	}
-}
 
 // settleTurn runs a whole turn the way a host now does: the two originals land in
 // the slots dialogue owns, then the turn is settled into the topic Search opened.
@@ -106,24 +25,13 @@ func settleTurn(sess *Session, sceneID, topicID, userText, agentText string) err
 	return sess.Update(sceneID, topicID)
 }
 
-// TestSurfaceSessionMethods exercises the full Session surface of the
-// single-agent DB surface so the per-agent handle is covered end to end.
+// TestSurfaceSessionMethods exercises the full Session surface of one domain
+// handle so every method is covered end to end.
 func TestSurfaceSessionMethods(t *testing.T) {
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
-	m, err := OpenMulti(surfaceConfig(t, llm.URL))
-	if err != nil {
-		t.Fatalf("openmulti: %v", err)
-	}
+	m, s := openSurfaceSession(t, llm.URL)
 	defer m.Close()
-	id, err := m.CreateAgent("worker")
-	if err != nil {
-		t.Fatalf("create agent: %v", err)
-	}
-	s, err := m.Session(id)
-	if err != nil {
-		t.Fatalf("session: %v", err)
-	}
 
 	if err := s.UpdateL0(&ProfileSlot{Name: "worker"}); err != nil {
 		t.Fatalf("session updateL0: %v", err)
@@ -215,13 +123,12 @@ func TestSurfaceSessionMethods(t *testing.T) {
 	if _, err := s.QueryL3Subgraph(gid, nodes[0].IDHash, 1, nil); err != nil {
 		t.Fatalf("session querySubgraph: %v", err)
 	}
-	// Turn events via session.
-	traj := internal.FormatID(common.HashID("sess-traj"))
-	if err := s.AppendArchive(traj, event("tool_call", "p", 1_700_000_061_000)); err != nil {
+	// Turn events via session, under the turn key Search already handed back.
+	if err := s.AppendArchive(topicID, event("tool_call", "p", 1_700_000_061_000)); err != nil {
 		t.Fatalf("session appendArchive: %v", err)
 	}
-	if evs := eventsOf(t, s, traj); len(evs) != 1 {
-		t.Fatalf("session events of %s: %d", traj, len(evs))
+	if evs := eventsOf(t, s, topicID); len(evs) != 1 {
+		t.Fatalf("session events of %s: %d", topicID, len(evs))
 	}
 	// Deletion lifecycle: topic, scene, graph.
 	if err := s.DeleteTopic(topicID); err != nil {

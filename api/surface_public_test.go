@@ -100,21 +100,6 @@ func TestDBPublicSurface(t *testing.T) {
 	}
 }
 
-func TestMultiAgentDBPublicSurface(t *testing.T) {
-	// The whole DB handle is the assembly/lifecycle face: host code sets up
-	// and tears down domains, no LLM tool binds here.
-	want := []string{
-		"CreateAgent", "ListAgents", "Session",
-		"Checkpoint", "CompactTo", "Close", "IsClosed",
-	}
-	sort.Strings(want)
-
-	missing, extra := diffNames(want, methodNames(&MultiAgentDB{}))
-	if len(missing) > 0 || len(extra) > 0 {
-		t.Fatalf("MultiAgentDB public surface drifted: missing=%v unexpected=%v", missing, extra)
-	}
-}
-
 // TestPublicSignaturesCarryNoNumericIds pins the other half of the facade
 // contract: every id a host can see is a 16-char hex string. Input-only types
 // are deliberately aliases of their internal seam (SearchQuery, L4Query…), so the
@@ -128,7 +113,6 @@ func TestPublicSignaturesCarryNoNumericIds(t *testing.T) {
 	}{
 		{"Session", &Session{}},
 		{"DB", &DB{}},
-		{"MultiAgentDB", &MultiAgentDB{}},
 	} {
 		typ := reflect.TypeOf(handle.v)
 		for i := 0; i < typ.NumMethod(); i++ {

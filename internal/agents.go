@@ -12,11 +12,9 @@
 package internal
 
 import (
-	"cmp"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -25,20 +23,13 @@ import (
 	"github.com/qyiun666/MemHop/internal/repo/core"
 )
 
-// AgentInfo is one registered agent as reported by ListAgents.
-type AgentInfo struct {
-	ID   uint64 `json:"id"`
-	Name string `json:"name"`
-}
-
-// CreateAgent returns the stable agentID for name, allocating a fresh
-// crypto/rand ID (and writing its registry record) on first use. Different
-// names never share an ID; the default domain is never handed out. The
-// registry record is written under agentsMu so an ID becomes visible only
-// after it is persisted; the fsync briefly blocks every domain lookup
-// (agentsMu also guards contextFor) — accepted because CreateAgent is a
-// low-frequency lifecycle operation.
-func (db *DB) CreateAgent(name string) (uint64, error) {
+// ensureRegistered returns the stable agentID for name, allocating a fresh
+// crypto/rand ID (and writing its registry record) on first use. Different names
+// never share an ID; the two reserved domains are never handed out. The registry
+// record is written under agentsMu so an ID becomes visible only after it is
+// persisted; the fsync briefly blocks every domain lookup (agentsMu also guards
+// contextFor) — accepted because creating a domain is a low-frequency operation.
+func (db *DB) ensureRegistered(name string) (uint64, error) {
 	if db.closed.Load() {
 		return 0, common.NewError(common.ErrClosed, "database is closed")
 	}
@@ -74,24 +65,6 @@ func (db *DB) CreateAgent(name string) (uint64, error) {
 		db.idToName[id] = name
 		return id, nil
 	}
-}
-
-// ListAgents returns every registered agent sorted by ID; the default
-// domain is implicit and not listed.
-func (db *DB) ListAgents() ([]AgentInfo, error) {
-	if db.closed.Load() {
-		return nil, common.NewError(common.ErrClosed, "database is closed")
-	}
-	db.agentsMu.Lock()
-	defer db.agentsMu.Unlock()
-	out := make([]AgentInfo, 0, len(db.idToName))
-	for id, name := range db.idToName {
-		out = append(out, AgentInfo{ID: id, Name: name})
-	}
-	slices.SortFunc(out, func(a, b AgentInfo) int {
-		return cmp.Compare(a.ID, b.ID)
-	})
-	return out, nil
 }
 
 // HasAgent reports whether agentID is the default domain or a registered
@@ -148,7 +121,7 @@ func (db *DB) SubAgent(llmCfg LlmConfig, profile core.ProfileSlot) (*Session, er
 		return nil, common.NewError(common.ErrInvalidQuery,
 			fmt.Sprintf("sub-agent name exceeds %d bytes", maxSubAgentNameBytes))
 	}
-	id, err := db.CreateAgent(name)
+	id, err := db.ensureRegistered(name)
 	if err != nil {
 		return nil, err
 	}

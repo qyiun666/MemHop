@@ -324,24 +324,17 @@ func TestSurfaceAppendArchivePlanBranch(t *testing.T) {
 // TestSurfaceIDContract locks the host-facing id surface: the library issues
 // every id, so the facade exposes no integer-to-hex bridge, and the turn key a
 // plan is addressed by is one of them — hex-rendered, library-minted, and never
-// the reserved all-zero token. The default domain constant opens a session.
+// the reserved all-zero token.
 func TestSurfaceIDContract(t *testing.T) {
 	llm := stubLLM()
 	t.Cleanup(llm.Close)
-	m, err := OpenMulti(surfaceConfig(t, llm.URL))
-	if err != nil {
-		t.Fatalf("openmulti: %v", err)
-	}
+	m, sess := openSurfaceSession(t, llm.URL)
 	defer m.Close()
-	sess, err := m.Session(DefaultAgentID)
-	if err != nil {
-		t.Fatalf("default domain session: %v", err)
-	}
 	res, err := sess.Search(SearchQuery{})
 	if err != nil {
-		t.Fatalf("default domain search: %v", err)
+		t.Fatalf("search: %v", err)
 	}
-	if !isHexID(res.NewTopicID) || res.NewTopicID == DefaultAgentID {
+	if !isHexID(res.NewTopicID) || res.NewTopicID == "0000000000000000" {
 		t.Fatalf("turn topic %q is not a library-minted non-zero hex token", res.NewTopicID)
 	}
 }
