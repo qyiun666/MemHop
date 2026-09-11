@@ -84,6 +84,22 @@ func TestSessionPublicSurface(t *testing.T) {
 	}
 }
 
+func TestDBPublicSurface(t *testing.T) {
+	// Two ways in — the domain the file was opened on, and one created under it
+	// by name — plus the file-level lifecycle. No agent id crosses either, and
+	// no LLM tool binds here.
+	want := []string{
+		"Primary", "SubAgent",
+		"Checkpoint", "CompactTo", "Close", "IsClosed",
+	}
+	sort.Strings(want)
+
+	missing, extra := diffNames(want, methodNames(&DB{}))
+	if len(missing) > 0 || len(extra) > 0 {
+		t.Fatalf("DB public surface drifted: missing=%v unexpected=%v", missing, extra)
+	}
+}
+
 func TestMultiAgentDBPublicSurface(t *testing.T) {
 	// The whole DB handle is the assembly/lifecycle face: host code sets up
 	// and tears down domains, no LLM tool binds here.
@@ -111,6 +127,7 @@ func TestPublicSignaturesCarryNoNumericIds(t *testing.T) {
 		v    any
 	}{
 		{"Session", &Session{}},
+		{"DB", &DB{}},
 		{"MultiAgentDB", &MultiAgentDB{}},
 	} {
 		typ := reflect.TypeOf(handle.v)

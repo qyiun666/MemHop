@@ -68,7 +68,7 @@ dbm, err := memhop.OpenMulti(&memhop.MemHopConfig{
         APIKey: os.Getenv("OPENAI_API_KEY"),
         Model:  "gpt-4o-mini",
     },
-    Defaults: *memhop.DefaultMemHopDefaults,
+    Defaults: memhop.DefaultMemHopDefaults,
 })
 if err != nil {
     log.Fatal(err)

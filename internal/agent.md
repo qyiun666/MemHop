@@ -120,8 +120,12 @@ internal/{domain,scene,turn,dream,graph,plan,content}
   格式化或域绑定代码。多 agent 是唯一模式：`NewSession(agentID)` 是唯一
   会话构造器。`exports.go` 是给 api 门面的恒等再导出接缝；`api` 包禁止
   直接 import `repo/core` 或 `common`。
-- LLM 客户端由 `Open` 在装配时用 `internal/llm.New(cfg.LLM)` 构造（`db.llm`），
-  经 `domain.NewContext` 注入每个域上下文的 `ac.LLM`；任何域不自己建客户端。
+- LLM 客户端由装配函数 `assemble` 用 `internal/llm.New(cfg.LLM)` 构造（`db.llm`，
+  两个入口共用），经 `domain.NewContext` 注入每个域上下文的 `ac.LLM`；域不自己建
+  客户端。一个域可以有自己的端点：`db.llmByAgent` 是覆盖表，`db.providers` 按
+  `LlmConfig` 值去重（上百个租户共用一个端点时只有一个 http.Client）。**两张表都
+  刻意比域上下文活得久**——空闲回收丢掉上下文后 `contextFor` 会重建它，覆盖若挂在
+  上下文上，一个闲置超过 TTL 的域会静默退回库级端点。
   **所有 LLM 调用点一律读 `ac.LLM`，不读 `db.llm`**——库级那一个只是注入的默认
   值，绕过注入位的调用点在「每个域同一个端点」时看不出问题，只在某个域带自己的
   端点时才显形，而且显形成同一个域的两类调用打到两个端点。

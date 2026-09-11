@@ -22,7 +22,7 @@ func newTestDB(t *testing.T, engine *core.StorageEngine) *DB {
 	t.Cleanup(cancel)
 	return &DB{
 		engine:     engine,
-		config:     &MemHopConfig{Defaults: *DefaultMemHopDefaults},
+		config:     &MemHopConfig{Defaults: DefaultMemHopDefaults},
 		baseCtx:    baseCtx,
 		baseCancel: cancel,
 		agents:     make(map[uint64]*domain.Context),

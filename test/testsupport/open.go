@@ -141,7 +141,7 @@ func (h *Handle) SettleTurn(sceneID, turnID, user, agent string, ts int64) error
 func open(tb testing.TB) *Handle {
 	cfg := &internal.MemHopConfig{
 		DBPath:   filepath.Join(tb.TempDir(), "test.meh"),
-		Defaults: *internal.DefaultMemHopDefaults,
+		Defaults: internal.DefaultMemHopDefaults,
 	}
 	if err := loadLLMConfig(cfg); err != nil {
 		tb.Skipf("跳过真实依赖测试: %v", err)

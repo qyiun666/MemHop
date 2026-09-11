@@ -87,7 +87,7 @@ func TestTriggerSceneDreamSchedulesBackground(t *testing.T) {
 func TestOpenInitializesDreamState(t *testing.T) {
 	cfg := &MemHopConfig{
 		DBPath:   filepath.Join(t.TempDir(), "open.meh"),
-		Defaults: *DefaultMemHopDefaults,
+		Defaults: DefaultMemHopDefaults,
 	}
 	db, err := Open(cfg)
 	if err != nil {

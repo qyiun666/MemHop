@@ -52,7 +52,7 @@ func surfaceConfig(t *testing.T, llmURL string) *MemHopConfig {
 	return &internal.MemHopConfig{
 		DBPath:   filepath.Join(t.TempDir(), "surface.meh"),
 		LLM:      internal.LlmConfig{APIURL: llmURL, APIKey: "k", Model: "m"},
-		Defaults: *internal.DefaultMemHopDefaults,
+		Defaults: internal.DefaultMemHopDefaults,
 	}
 }
 

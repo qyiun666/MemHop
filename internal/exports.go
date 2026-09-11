@@ -24,8 +24,8 @@ type (
 	MemHopDefaults = config.MemHopDefaults
 )
 
-// DefaultMemHopDefaults is the shared default engine configuration; assign
-// it to MemHopConfig.Defaults without naming the nested type.
+// DefaultMemHopDefaults is the shared default engine configuration. It is a
+// value: pass it as-is, or copy it and edit the copy to tune one open.
 var DefaultMemHopDefaults = config.DefaultMemHopDefaults
 
 // ---- slot models (method signatures of Session / DB) ----

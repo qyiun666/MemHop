@@ -10,4 +10,6 @@
   直接 import 本包）、`internal/llm`（构造 Provider）、`internal/domain`
   （Context.Defaults 注入）。
 - **陷阱**：新增宿主旋钮必须有真实消费者（读它的阶段），并同步
-  `DefaultMemHopDefaults`。
+  `DefaultMemHopDefaults`。`DefaultMemHopDefaults` 是**值**不是指针：调用点直接
+  赋值，宿主要调参就复制一份改。导出的指针全局谁都能改坏，而且改的是所有其它
+  调用方读到的那份默认值。

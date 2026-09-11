@@ -46,7 +46,7 @@ func openPrimaryOn(t *testing.T, dir, endpoint string) *DB {
 	t.Helper()
 	db, err := OpenDB(filepath.Join(dir, "db.meh"),
 		LlmConfig{APIURL: endpoint, APIKey: "test", Model: "mock"},
-		*DefaultMemHopDefaults, primaryProfile("primary"))
+		DefaultMemHopDefaults, primaryProfile("primary"))
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestSubAgentEndpointSurvivesIdleReclaim(t *testing.T) {
 	primarySrv, primaryCalls := countingLLMServer(t, turnKeywords)
 	subSrv, subCalls := countingLLMServer(t, turnKeywords)
 
-	defaults := *DefaultMemHopDefaults
+	defaults := DefaultMemHopDefaults
 	defaults.AgentIdleTTLMs = 1 // reclaim on the next access after any pause at all
 	db, err := OpenDB(filepath.Join(t.TempDir(), "idle.meh"),
 		LlmConfig{APIURL: primarySrv.URL, APIKey: "test", Model: "mock"},

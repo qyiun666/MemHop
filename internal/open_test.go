@@ -74,7 +74,7 @@ func TestOpenEngineCreatesOnlyOnAConfirmedAbsence(t *testing.T) {
 // different error for the same mistake.
 func TestOpenDBRefusesToCreateWithoutAProfile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "absent.meh")
-	if _, err := OpenDB(path, testLLMConfig(), *DefaultMemHopDefaults, nil); err == nil {
+	if _, err := OpenDB(path, testLLMConfig(), DefaultMemHopDefaults, nil); err == nil {
 		t.Fatal("a new database with no primary profile must be refused")
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -88,7 +88,7 @@ func TestOpenDBCreatesAndSeedsThePrimary(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fresh.meh")
 	slot := primaryProfile("Meow")
 	slot.AgentType = core.AgentTypeSub
-	db, err := OpenDB(path, testLLMConfig(), *DefaultMemHopDefaults, slot)
+	db, err := OpenDB(path, testLLMConfig(), DefaultMemHopDefaults, slot)
 	if err != nil {
 		t.Fatalf("OpenDB: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestOpenDBCreatesAndSeedsThePrimary(t *testing.T) {
 // consulted, so opening a file never rewrites whose memory it holds.
 func TestOpenDBKeepsTheStoredPrimary(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "seeded.meh")
-	first, err := OpenDB(path, testLLMConfig(), *DefaultMemHopDefaults, primaryProfile("Original"))
+	first, err := OpenDB(path, testLLMConfig(), DefaultMemHopDefaults, primaryProfile("Original"))
 	if err != nil {
 		t.Fatalf("first open: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestOpenDBKeepsTheStoredPrimary(t *testing.T) {
 		t.Fatalf("close: %v", err)
 	}
 
-	second, err := OpenDB(path, testLLMConfig(), *DefaultMemHopDefaults, primaryProfile("Usurper"))
+	second, err := OpenDB(path, testLLMConfig(), DefaultMemHopDefaults, primaryProfile("Usurper"))
 	if err != nil {
 		t.Fatalf("second open: %v", err)
 	}
@@ -150,12 +150,12 @@ func TestOpenDBSeedsAnExistingFileWithNoPrimary(t *testing.T) {
 		t.Fatalf("close the bare file: %v", err)
 	}
 
-	if _, err := OpenDB(path, testLLMConfig(), *DefaultMemHopDefaults, nil); err == nil {
+	if _, err := OpenDB(path, testLLMConfig(), DefaultMemHopDefaults, nil); err == nil {
 		t.Fatal("an existing file with no primary profile must be refused without one")
 	}
 	// The refusal must not have disturbed the file: it still opens, and still
 	// has no profile.
-	db, err := OpenDB(path, testLLMConfig(), *DefaultMemHopDefaults, primaryProfile("Late"))
+	db, err := OpenDB(path, testLLMConfig(), DefaultMemHopDefaults, primaryProfile("Late"))
 	if err != nil {
 		t.Fatalf("OpenDB with a profile: %v", err)
 	}
@@ -173,13 +173,13 @@ func TestOpenDBSeedsAnExistingFileWithNoPrimary(t *testing.T) {
 // is refused before anything touches the filesystem.
 func TestOpenDBRefusesIncompleteArguments(t *testing.T) {
 	dir := t.TempDir()
-	if _, err := OpenDB("", testLLMConfig(), *DefaultMemHopDefaults, primaryProfile("x")); common.CodeOf(err) != common.ErrConfig {
+	if _, err := OpenDB("", testLLMConfig(), DefaultMemHopDefaults, primaryProfile("x")); common.CodeOf(err) != common.ErrConfig {
 		t.Fatalf("an empty path: want ErrConfig, got %v", err)
 	}
-	if _, err := OpenDB(filepath.Join(dir, "a.meh"), LlmConfig{APIURL: "http://x"}, *DefaultMemHopDefaults, nil); common.CodeOf(err) != common.ErrConfig {
+	if _, err := OpenDB(filepath.Join(dir, "a.meh"), LlmConfig{APIURL: "http://x"}, DefaultMemHopDefaults, nil); common.CodeOf(err) != common.ErrConfig {
 		t.Fatalf("a half-specified endpoint: want ErrConfig, got %v", err)
 	}
-	if _, err := OpenDB(filepath.Join(dir, "b.meh"), testLLMConfig(), *DefaultMemHopDefaults, primaryProfile("   ")); common.CodeOf(err) != common.ErrInvalidQuery {
+	if _, err := OpenDB(filepath.Join(dir, "b.meh"), testLLMConfig(), DefaultMemHopDefaults, primaryProfile("   ")); common.CodeOf(err) != common.ErrInvalidQuery {
 		t.Fatalf("a blank profile name: want ErrInvalidQuery, got %v", err)
 	}
 	entries, err := os.ReadDir(dir)

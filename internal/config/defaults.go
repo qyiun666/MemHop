@@ -23,8 +23,10 @@ type MemHopDefaults struct {
 
 // DefaultMemHopDefaults is the single hardcoded source of engine defaults.
 // The trigger sits just above the compress floor so a scheduled Dream always
-// has something to consolidate.
-var DefaultMemHopDefaults = &MemHopDefaults{
+// has something to consolidate. It is a value, not a pointer: a host that wants
+// different knobs copies it and edits the copy, so no caller can change the
+// defaults every other caller reads.
+var DefaultMemHopDefaults = MemHopDefaults{
 	SceneDreamTopicThreshold: 24,
 	DreamCompressMinTopics:   20,
 	AgentIdleTTLMs:           3600000, // 60 minutes of inactivity frees the agent's in-memory indices

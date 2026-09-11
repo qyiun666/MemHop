@@ -43,7 +43,7 @@ func openMockMulti(t *testing.T, path, llmURL string, opts ...func(*internal.Mem
 	cfg.LLM.APIURL = llmURL
 	cfg.LLM.APIKey = "mock"
 	cfg.LLM.Model = "mock-model"
-	cfg.Defaults = *internal.DefaultMemHopDefaults
+	cfg.Defaults = internal.DefaultMemHopDefaults
 	for _, opt := range opts {
 		opt(&cfg.Defaults)
 	}

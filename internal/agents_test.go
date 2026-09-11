@@ -18,7 +18,7 @@ func openMultiTestDB(t *testing.T, path string) *DB {
 	t.Helper()
 	cfg := &MemHopConfig{
 		DBPath:   path,
-		Defaults: *DefaultMemHopDefaults,
+		Defaults: DefaultMemHopDefaults,
 	}
 	db, err := Open(cfg)
 	if err != nil {
